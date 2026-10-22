@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator;
@@ -57,6 +58,8 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
+import com.intellij.ui.scale.JBUIScale;
+import com.intellij.ide.ui.laf.darcula.DarculaUIUtil;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
 import kotlin.Pair;
@@ -124,7 +127,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             CALLER_BASE_MAPPER, "baseMapper：ServiceImpl 的 baseMapper 字段（生成 baseMapper.selectList(...) / baseMapper.insert(...) 等）"
     );
 
-    /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。 */
+    /** 类选择字段圆角直径（保留给旧调用点；实际绘制走 [paintPickerFieldSurface] 的平台口径）。 */
     private static final int PICKER_CORNER = 10;
 
     /** T-MapResultVo v4：返回类型选择器的 Map/Objs 预置声明（生成器按含 Map/含 Object 派生族）。 */
@@ -603,20 +606,13 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             refresh();
         }
 
-        /** 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）。 */
+        /**
+         * 输入框观感：圆角底色 + 主题边框（对齐 IDEA TextField；只读无焦点态）。
+         * 实现在共享的 [paintPickerFieldSurface]（两处选择框共用，UI-045）。
+         */
         @Override
         public void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(UIUtil.getTextFieldBackground());
-                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, PICKER_CORNER, PICKER_CORNER);
-                // T-DarkTheme：命名色优先 + JBColor.border() 兜底（亮/暗主题自适应，与 IDEA TextField 边框一致）
-                g2.setColor(JBColor.namedColor("Component.borderColor", JBColor.border()));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, PICKER_CORNER, PICKER_CORNER);
-            } finally {
-                g2.dispose();
-            }
+            paintPickerFieldSurface(this, g);
         }
 
         /** 对外文本（生成器读取类名；测试 setText 兼容——直接赋值不触发变更回调）。 */
@@ -1123,20 +1119,11 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
 
         /**
          * 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）——
-         * 与 {@link ClassPickerField} 逐行同源，保证「调用类」「返回类型」两行观感一致。
+         * 与 {@link ClassPickerField} 共用 [paintPickerFieldSurface]，保证两行观感一致（UI-045 抽出）。
          */
         @Override
         public void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(UIUtil.getTextFieldBackground());
-                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, PICKER_CORNER, PICKER_CORNER);
-                g2.setColor(JBColor.namedColor("Component.borderColor", JBColor.border()));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, PICKER_CORNER, PICKER_CORNER);
-            } finally {
-                g2.dispose();
-            }
+            paintPickerFieldSurface(this, g);
         }
 
         /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
@@ -1559,7 +1546,8 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                         pair.getFirst(),
                         pair.getSecond(),
                         format,
-                        buildInvocation());
+                        buildInvocation(),
+                        reverseLogicDeleteValue());
                 // T-TS-03：写体显式过闸（setResultText 内同样过闸，这里是「哪次活动在写」的语义
                 // 声明点：本拍由 BGT 派发，模态进度下 defaultModalityState 可能取到写不安全模态）
                 setResultText(code, request);
@@ -1758,7 +1746,24 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         for (ColumnInfo col : candidate.tableInfo().getColumns()) {
             columnToField.put(col.getColumnName(), col.getFieldName());
         }
-        return new JavaCodeGenerator.EntityTarget(className, columnToField);
+        return new JavaCodeGenerator.EntityTarget(
+                className, columnToField, Map.of(),
+                candidate.tableInfo().getLogicDeleteColumn(), reverseLogicDeleteValue());
+    }
+
+    /**
+     * T-ReverseGroupLogicDelete：逻辑删除「未删除」值（项目级优先 → 全局 → 兜底 "0"）——
+     * 生成器据此识别 MP 依据 {@code @TableLogic} 自动注入的 {@code AND <列> = <值>} 并跳过。
+     * 与正向注入 {@code effectiveLogicDeleteValue().ifBlank { "0" }} 同口径。
+     */
+    private String reverseLogicDeleteValue() {
+        try {
+            String value = ProjectPluginSettings.getInstance(project).effectiveLogicDeleteValue();
+            if (value != null && !value.isBlank()) return value;
+        } catch (Throwable ignored) {
+            // 项目级服务未注册（测试环境）等——回落全局兜底
+        }
+        return SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE;
     }
 
     /**
@@ -1998,7 +2003,8 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
             SqlToJavaConverter.EntityCandidate candidate,
             ReverseWrapperFormat format,
             Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
-        return SqlToJavaConverter.INSTANCE.generateCode(result, candidate, format, buildInvocation(), subEntities);
+        return SqlToJavaConverter.INSTANCE.generateCode(result, candidate, format, buildInvocation(), subEntities,
+                reverseLogicDeleteValue());
     }
 
     /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
@@ -2008,6 +2014,69 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
         } catch (Throwable ignored) {
             return ReverseWrapperFormat.AUTO;
         }
+    }
+
+    /**
+     * 两个类选择字段（「调用类」/「返回类型」）共用的输入框外观（UI-045）。
+     *
+     * <p>按平台口径复刻 {@code DarculaUIUtil.doPaint}（2024.3.7.1 字节码实证，k2j 侧 javap 复核：
+     * {@code DarculaUIUtil.BW} 为 {@code JBValue}，其 {@code get()} 返回 int），两个关键量：
+     * <ul>
+     * <li><b>描边宽度</b> {@code BW} = {@code Component.focusWidth}，默认 <b>2px</b>（不是 1px）；</li>
+     * <li><b>圆角半径</b> 平台硬编码 {@code JBUIScale.scale(7.0f)}（<b>不是</b> {@code Component.arc = 5}），
+     * 且用 {@code Path2D.quadTo} 画<b>二次贝塞尔</b>而非 {@code drawRoundRect} 的圆弧——同一半径下
+     * 贝塞尔的过渡更平缓，圆弧在拐点处更「急」，肉眼能看出区别。</li>
+     * </ul>
+     * 早期这里用 {@code drawRoundRect(…, PICKER_CORNER, PICKER_CORNER)} 画 1px 圆弧：描边偏淡
+     * （浅色主题实测平台框边框 215,217,222 vs 自绘框 227,228,231）、圆角观感偏硬。
+     *
+     * <p>不直接调 {@code paintOutlineBorder}：它要求传 {@code Outline} 枚举，而该枚举只有
+     * error/warning/defaultButton/focus 四档（javap 实证），没有「普通态」成员。</p>
+     */
+    static void paintPickerFieldSurface(javax.swing.JComponent target, Graphics g) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int bw = DarculaUIUtil.BW.get();
+            float r = JBUIScale.scale(7f);
+            float w = (float) target.getWidth();
+            float h = (float) target.getHeight();
+            // 底色：圆角矩形（填充用同一贝塞尔轮廓，保证内外一致）
+            g2.setColor(UIUtil.getTextFieldBackground());
+            g2.fill(roundedOutline(0f, 0f, w - 1f, h - 1f, r));
+            // 描边：平台同款 2px 宽 + Component.borderColor
+            g2.setColor(JBColor.namedColor("Component.borderColor", JBColor.border()));
+            java.awt.Stroke saved = g2.getStroke();
+            g2.setStroke(new java.awt.BasicStroke((float) bw));
+            float inset = bw / 2f;
+            g2.draw(roundedOutline(inset, inset, w - 1f - inset * 2, h - 1f - inset * 2, r));
+            g2.setStroke(saved);
+        } finally {
+            g2.dispose();
+        }
+    }
+
+    /**
+     * 圆角矩形轮廓（二次贝塞尔四角，对齐平台 {@code DarculaUIUtil.doPaint} 的 {@code Path2D} 构造）。
+     *
+     * <p>平台在角上各放一个 {@code quadTo}（控制点=角点），等价于「圆角半径 r 的四分之一圆弧」，
+     * 但曲率过渡比 {@code RoundRectangle2D} 的椭圆弧更平缓——这是两个框观感差异的根因。</p>
+     */
+    private static java.awt.Shape roundedOutline(float x, float y, float w, float h, float r) {
+        java.awt.geom.Path2D.Float p = new java.awt.geom.Path2D.Float();
+        float x2 = x + w;
+        float y2 = y + h;
+        p.moveTo(x + r, y);
+        p.lineTo(x2 - r, y);
+        p.quadTo(x2, y, x2, y + r);
+        p.lineTo(x2, y2 - r);
+        p.quadTo(x2, y2, x2 - r, y2);
+        p.lineTo(x + r, y2);
+        p.quadTo(x, y2, x, y2 - r);
+        p.lineTo(x, y + r);
+        p.quadTo(x, y, x + r, y);
+        p.closePath();
+        return p;
     }
 
     private PluginSettings.State settingsState() {
