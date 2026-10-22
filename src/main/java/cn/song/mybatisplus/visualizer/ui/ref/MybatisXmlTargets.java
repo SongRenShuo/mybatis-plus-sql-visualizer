@@ -112,19 +112,39 @@ public final class MybatisXmlTargets {
         return findIdAttributeInFile(contextFile, tagName, refId);
     }
 
-    /** 按 namespace 找 mapper XML 文件（索引 + 根元素预筛，单槽 TTL 缓存，模式同 MapperXmlLocator）。 */
+    /**
+     * 按 namespace 找 mapper XML 文件（索引 + 根元素预筛，文件清单单槽 TTL 缓存 +
+     * <b>namespace→文件结果级 memo</b>，见 [namespaceSlot]）。
+     *
+     * <p>F96（T-PerfSweep26）：只有文件清单缓存时，同一 namespace 的重复 resolve 每次都要
+     * 逐文件 {@code PsiManager.findFile} + {@code rootTag.namespace} 比对；查找用法/重命名会批量触发，
+     * 成本相乘。结果级 memo 以<b>文件清单代</b>为戳（清单重建即失效），负结果一并缓存。
+     */
     @Nullable
     public static XmlFile findMapperFileByNamespace(Project project, String namespace) {
         if (namespace.isEmpty()) return null;
-        for (VirtualFile vf : mapperXmlVirtualFiles(project)) {
+        Listing listing = mapperXmlListing(project);
+        NamespaceSlot slot = namespaceSlot;
+        if (slot != null
+                && slot.project.get() == project
+                && slot.listingGeneration == listing.generation
+                && slot.namespace.equals(namespace)) {
+            return slot.file != null && slot.file.isValid() ? slot.file : null;
+        }
+        namespaceScanCount.incrementAndGet();
+        XmlFile found = null;
+        for (VirtualFile vf : listing.files) {
+            if (!vf.isValid()) continue;
             PsiFile pf = PsiManager.getInstance(project).findFile(vf);
             if (!(pf instanceof XmlFile)) continue;
             XmlFile xmlFile = (XmlFile) pf;
             if (xmlFile.getRootTag() != null && namespace.equals(xmlFile.getRootTag().getAttributeValue("namespace"))) {
-                return xmlFile;
+                found = xmlFile;
+                break;
             }
         }
-        return null;
+        namespaceSlot = new NamespaceSlot(new WeakReference<>(project), listing.generation, namespace, found);
+        return found;
     }
 
     /**
@@ -141,6 +161,7 @@ public final class MybatisXmlTargets {
         int lb = name.indexOf('[');
         if (lb >= 0) name = name.substring(0, lb);
         if (project == null || name.isEmpty()) return null;
+        classResolveCount.incrementAndGet();
         JavaPsiFacade facade = JavaPsiFacade.getInstance(project);
         GlobalSearchScope scope = GlobalSearchScope.allScope(project);
         int lastDot = name.lastIndexOf('.');
@@ -286,11 +307,46 @@ public final class MybatisXmlTargets {
         final WeakReference<Project> project;
         final List<VirtualFile> files;
         final long atMs;
+        final long generation;
 
-        FileListSlot(WeakReference<Project> project, List<VirtualFile> files, long atMs) {
+        FileListSlot(WeakReference<Project> project, List<VirtualFile> files, long atMs, long generation) {
             this.project = project;
             this.files = files;
             this.atMs = atMs;
+            this.generation = generation;
+        }
+    }
+
+    /**
+     * F96（T-PerfSweep26）：namespace → mapper 文件的<b>单槽结果级 memo</b>。
+     *
+     * <p>失效戳=文件清单代 [FileListSlot] 的 {@code generation}（清单重建即换代，含新增/删除 mapper XML 后
+     * TTL 过期重扫）；文件对象自身 invalid（被删/移动）时回落重查。单槽容量=最近一个 namespace
+     * ——引用解析天然按 refid 顺序访问、局部性强，且槽内只持一个 XmlFile 强引用（PSI 强引用
+     * 生命周期与项目一致，不额外钉住文件）。
+     */
+    private static final class NamespaceSlot {
+        final WeakReference<Project> project;
+        final long listingGeneration;
+        final String namespace;
+        @Nullable final XmlFile file;
+
+        NamespaceSlot(WeakReference<Project> project, long listingGeneration, String namespace, @Nullable XmlFile file) {
+            this.project = project;
+            this.listingGeneration = listingGeneration;
+            this.namespace = namespace;
+            this.file = file;
+        }
+    }
+
+    /** 文件清单 + 其代（代在每次重扫时递增；namespace memo 以此为失效戳）。 */
+    private static final class Listing {
+        final List<VirtualFile> files;
+        final long generation;
+
+        Listing(List<VirtualFile> files, long generation) {
+            this.files = files;
+            this.generation = generation;
         }
     }
 
@@ -301,13 +357,24 @@ public final class MybatisXmlTargets {
 
     public static final AtomicInteger indexScanCount = new AtomicInteger(0);
 
+    /** F96 测试缝：namespace→文件实查次数（memo 命中不计数）。 */
+    public static final AtomicInteger namespaceScanCount = new AtomicInteger(0);
+
+    /** F97 测试缝：{@code resolveClass} 实际执行次数（批内 memo 命中不计数）。 */
+    public static final AtomicInteger classResolveCount = new AtomicInteger(0);
+
     private static volatile FileListSlot fileListSlot = null;
+
+    private static volatile NamespaceSlot namespaceSlot = null;
+
+    private static long listingGenerationCounter = 0L;
 
     public static void clearFileListCacheForTest() {
         fileListSlot = null;
+        namespaceSlot = null;
     }
 
-    private static List<VirtualFile> mapperXmlVirtualFiles(Project project) {
+    private static Listing mapperXmlListing(Project project) {
         long now = clockMs.getAsLong();
         FileListSlot slot = fileListSlot;
         if (slot != null) {
@@ -319,7 +386,7 @@ public final class MybatisXmlTargets {
                 }
             }
             if (slot.project.get() == project && now - slot.atMs <= fileListTtlMs && allValid) {
-                return slot.files;
+                return new Listing(slot.files, slot.generation);
             }
         }
         indexScanCount.incrementAndGet();
@@ -340,8 +407,9 @@ public final class MybatisXmlTargets {
         } catch (Throwable t) {
             files = List.of();
         }
-        fileListSlot = new FileListSlot(new WeakReference<>(project), files, now);
-        return files;
+        long generation = ++listingGenerationCounter;
+        fileListSlot = new FileListSlot(new WeakReference<>(project), files, now, generation);
+        return new Listing(files, generation);
     }
 
     /** 测试缝：PsiElement 归属的 mapper 文件（供用例断言解析落点）。 */

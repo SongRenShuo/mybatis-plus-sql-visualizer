@@ -44,12 +44,17 @@ public class BeanPropertyReference extends SoftXmlAttributeReference {
                 && ((XmlAttribute) value.getParent()).getParent() instanceof XmlTag
                 ? (XmlTag) ((XmlAttribute) value.getParent()).getParent() : null;
         int depth = 0;
+        // F97（T-PerfSweep26）：同一 resolve 会话内的类名解析结果 memo——祖先链每层最多问
+        // HOLDER_ATTRIBUTES.size 个属性，最坏 24×5 次 resolveClass；同层多属性常解析出同一类，
+        // 局部 Map 把重复 resolveClass 压成查表（会话级、无 stale 面：跨 resolve 不保留）。
+        java.util.HashMap<String, @Nullable PsiClass> resolved = new java.util.HashMap<>(HOLDER_ATTRIBUTES.size() * 2);
         while (tag != null && depth++ < MAX_ANCESTOR_DEPTH) {
             for (String name : HOLDER_ATTRIBUTES) {
                 String raw = tag.getAttributeValue(name);
                 if (raw == null) continue;
-                PsiClass resolved = MybatisXmlTargets.resolveClass(project, value, raw);
-                if (resolved != null) return resolved;
+                PsiClass hit = resolved.containsKey(raw) ? resolved.get(raw) : MybatisXmlTargets.resolveClass(project, value, raw);
+                resolved.put(raw, hit);
+                if (hit != null) return hit;
             }
             tag = tag.getParentTag();
         }
