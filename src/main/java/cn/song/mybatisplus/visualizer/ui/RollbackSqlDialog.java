@@ -693,6 +693,7 @@ public class RollbackSqlDialog extends DialogWrapper {
         }
         app.executeOnPooledThread(() -> {
             VirtualFile vf = writeSnapshotTempFile(file, text);
+            // write-safe: 回调体仅 JLabel 警示文案与编辑器打开（非文档写）——master 同点即 ModalityState.any()
             app.invokeLater(() -> {
                 if (vf == null) {
                     warningLabel.setText("<html>" + escapeHtml(

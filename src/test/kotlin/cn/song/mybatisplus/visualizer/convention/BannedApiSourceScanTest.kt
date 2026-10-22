@@ -1259,7 +1259,8 @@ class BannedApiSourceScanTest {
         // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
         // T-EnhancedCaptureDefaultOn（2026-10-19）：consent 机器整段摘除（确认弹窗/预热确认/复用授权
         //   冷却链随之删除），该处 fatal 判定一并移除——基线重登为 9（master 侧同轮次摘除）。
-        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 9,
+        // T-JRebelPremainCrash C 案（premain 降级感知）净增 1 处 fatal 判定：10。
+        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         // 3 处：agent 会话（读取/写入循环的 fatal 透传）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentSession.java" to 3,
         // 8 处：运行配置监听（T-FP-02 落地批）；
@@ -1336,7 +1337,7 @@ class BannedApiSourceScanTest {
      */
     // T-SyncK2JMaster496：k2j 树把每个 Kotlin `runCatching` 落成 try/catch(Throwable)，站点数随
     // 移植增量上升——本次实测 833（763 → 833）。新增/删除捕获点须重新登记本基线。
-    private val fatalCatchSiteTotalBaseline = 833
+    private val fatalCatchSiteTotalBaseline = 852
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
