@@ -25,14 +25,14 @@ class ShareDialogTest : BasePlatformTestCase() {
         return list
     }
 
-    fun test构造_四个分享选项且默认选中Markdown() {
+    fun test构造_七个分享选项且默认选中Markdown() {
         val panel = SqlPreviewPanel(myFixture.project)
         try {
             val dialog = ShareDialog(myFixture.project, panel)
             // DialogWrapper 的 rootPane/contentPane 仅在 show() 时构建，headless 下用测试缝取中心面板
             val pane = dialog.centerPanelForTest()
             val radios = allComponents(pane).filterIsInstance<JRadioButton>()
-            assertEquals("应有 4 个分享选项", 4, radios.size)
+            assertEquals("应有 7 个分享选项（R50 诊断 Markdown/HTML + R94 诊断反馈）", 7, radios.size)
             val selected = radios.filter { it.isSelected }
             assertEquals("默认应仅选中 1 个", 1, selected.size)
             val markdownText = MpSqlVisualizerBundle.message("share.dialog.markdown")

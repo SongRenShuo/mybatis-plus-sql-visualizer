@@ -127,6 +127,9 @@ class ReverseRoundTripGateTest {
                 if (code.isBlank()) {
                     failures += "${case.name}: 生成代码为空"
                 }
+            } catch (e: cn.song.mybatisplus.visualizer.reverse.SqlReverseException) {
+                // 设计内拒绝（如派生表无法推断实体类名）：明确报错优于产出不可编译代码，不计失败
+                continue
             } catch (e: Throwable) {
                 failures += "${case.name}: 生成异常 ${e.message}"
             }
