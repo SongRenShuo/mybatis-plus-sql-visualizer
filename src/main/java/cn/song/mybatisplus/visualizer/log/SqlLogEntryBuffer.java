@@ -109,13 +109,52 @@ public class SqlLogEntryBuffer {
      */
     private final HashMap<String, LogSqlEntry> dedupeIndex = new HashMap<>();
 
+    /**
+     * T-PerfSweep26-01（F83）：dedupeKey → <b>队内现存条数</b>计数——淘汰回扫的短路判据。被淘汰者恰为
+     * 索引最新时，仅当同键仍有余条（计数 &gt;0）才付 O(maxEntries) 全队反扫重指次新；唯一键稳态计数
+     * 归零，直接摘索引跳过必空的反扫（原状：唯一键下每接受一条新 SQL 都在 {@code synchronized(entries)}
+     * 内付一次 O(maxEntries) 反扫且结果必空）。
+     *
+     * <p>有界性：键域 = {@link #dedupeIndex} 键域（canDedupe 条目的 dedupeKey），随索引同步增删、
+     * {@link #clear} 一并清空，不引入新增长面。维护面（全部在 {@code synchronized(entries)} 内、与索引
+     * 同条件）：接受入队 +1 / 头部淘汰 -1（先减后判）/ removeEntry -1 / {@link #rebuildDedupeIndexLocked}
+     * 与 {@link #rebuildDedupeIndexAfterHandoff} 全量重建 / clear 清空。dedupeEnabled=false 期间不维护
+     * 也不读（stale 值零消费，重开时随索引补账）；接管沿重建按「队内现存」口径补账（索引按 grace 截断
+     * 只留新鲜键，条目仍留队的陈旧键计数不缺账）。融合（mergeDuplicateEntry）原位替换不改键
+     * （restoredSql 保留），计数不动。
+     */
+    private final HashMap<String, Integer> dedupeKeyPresence = new HashMap<>();
+
+    /** T-PerfSweep26-01（F83）测试缝：淘汰路径全队反扫（{@code lastEntryWithKey} 扫描）执行计数——
+     *  唯一键稳态下应恒 0，仅测试断言用（V38 计数缝同款形态），生产零读。 */
+    private final java.util.concurrent.atomic.AtomicInteger evictionRescanCount = new java.util.concurrent.atomic.AtomicInteger();
+
+    public int getEvictionRescanCountForTest() {
+        return evictionRescanCount.get();
+    }
+
     private void rebuildDedupeIndexLocked() {
         dedupeIndex.clear();
+        rebuildDedupeKeyPresenceLocked(); // F83：计数随索引一并全量重建
         for (LogSqlEntry e : entries) {
+            if (!canDedupe(e)) continue;
             LogSqlEntry latest = dedupeIndex.get(e.dedupeKey());
             if (latest == null || e.timestamp() > latest.timestamp()) {
                 dedupeIndex.put(e.dedupeKey(), e);
             }
+        }
+    }
+
+    /**
+     * F83：键级在队计数全量重建——按「队内现存」口径统计（不看索引成员资格：接管沿重建只把陈旧键
+     * 摘出索引、条目仍留队，计数必须把这类在队不在索引的实例也补上）。调用方须已持 {@code synchronized(entries)}。
+     */
+    private void rebuildDedupeKeyPresenceLocked() {
+        dedupeKeyPresence.clear();
+        for (LogSqlEntry e : entries) {
+            if (!canDedupe(e)) continue;
+            Integer current = dedupeKeyPresence.get(e.dedupeKey());
+            dedupeKeyPresence.put(e.dedupeKey(), (current != null ? current : 0) + 1);
         }
     }
 
@@ -160,9 +199,10 @@ public class SqlLogEntryBuffer {
         synchronized (entries) {
             dedupeIndex.clear();
             if (!dedupeEnabled) return;
+            rebuildDedupeKeyPresenceLocked(); // F83：计数按队内现存全量补账（与索引的 grace 截断口径不同，条目仍留队的陈旧键不缺账）
             long cutoff = nowMs - graceMs;
             for (LogSqlEntry entry : entries) {
-                if (entry.timestamp() < cutoff) continue;
+                if (!canDedupe(entry) || entry.timestamp() < cutoff) continue;
                 LogSqlEntry latest = dedupeIndex.get(entry.dedupeKey());
                 if (latest == null || entry.timestamp() > latest.timestamp()) {
                     dedupeIndex.put(entry.dedupeKey(), entry);
@@ -489,17 +529,35 @@ public class SqlLogEntryBuffer {
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
                     dedupeIndex.put(added.dedupeKey(), added);
+                    // F83：键级在队计数 +1（与索引同条件同锁维护）
+                    Integer current = dedupeKeyPresence.get(added.dedupeKey());
+                    dedupeKeyPresence.put(added.dedupeKey(), (current != null ? current : 0) + 1);
                 }
                 while (entries.size() > maxEntries) {
                     LogSqlEntry evicted = entries.removeFirst();
                     if (dedupeEnabled) {
-                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」时间戳，仅当被淘汰者恰为
-                        // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         String k = evicted.dedupeKey();
+                        // F83：键级在队计数随淘汰同步 -1（canDedupe=false 条目从未入计）。先减后判：
+                        // 淘汰者自身出队后剩余 >0 才算「队内仍有同键余条」。
+                        if (canDedupe(evicted)) {
+                            Integer presence = dedupeKeyPresence.get(k);
+                            int remaining = (presence != null ? presence : 0) - 1;
+                            if (remaining > 0) dedupeKeyPresence.put(k, remaining);
+                            else dedupeKeyPresence.remove(k);
+                        }
+                        // T-SqlLogPerf P6：索引存的是「最近」实例，仅当被淘汰者恰为该键最新时才需要重算；
+                        // F83：队内仍有同键余条（计数 >0）才付 O(maxEntries) 反扫重指次新（超窗重复入队
+                        // 形态，低频）——唯一键稳态计数归零，直接摘索引跳过必空的反扫（每接受一条省一次锁内全队扫）。
                         if (dedupeIndex.get(k) == evicted) {
-                            LogSqlEntry stillThere = lastEntryWithKey(k, SqlLogEntryBuffer::canDedupe);
-                            if (stillThere != null) {
-                                dedupeIndex.put(k, stillThere);
+                            Integer presence = dedupeKeyPresence.get(k);
+                            if (presence != null && presence > 0) {
+                                evictionRescanCount.incrementAndGet(); // F83 测试缝：全队反扫执行计数
+                                LogSqlEntry stillThere = lastEntryWithKey(k, SqlLogEntryBuffer::canDedupe);
+                                if (stillThere != null) {
+                                    dedupeIndex.put(k, stillThere);
+                                } else {
+                                    dedupeIndex.remove(k);
+                                }
                             } else {
                                 dedupeIndex.remove(k);
                             }
@@ -768,6 +826,7 @@ public class SqlLogEntryBuffer {
         synchronized (entries) {
             entries.clear();
             dedupeIndex.clear(); // T-SqlLogPerf P6：索引随队清空
+            dedupeKeyPresence.clear(); // F83：键级在队计数随队清空
         }
         resetDedupeCounts();
         sequenceCounter.set(0);
@@ -828,6 +887,11 @@ public class SqlLogEntryBuffer {
             // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
             if (removed && dedupeEnabled && canDedupe(entry)) {
                 String k = entry.dedupeKey();
+                // F83：键级在队计数 -1（回扫本身用户右键低频保留 O(n) 一次，不属本券热路径）
+                Integer presence = dedupeKeyPresence.get(k);
+                int remaining = (presence != null ? presence : 0) - 1;
+                if (remaining > 0) dedupeKeyPresence.put(k, remaining);
+                else dedupeKeyPresence.remove(k);
                 LogSqlEntry stillThere = lastEntryWithKey(k);
                 if (stillThere != null) {
                     dedupeIndex.put(k, stillThere);
