@@ -74,10 +74,11 @@ class AgentUrlDecoupleGuardTest {
             "设置页推断状态行不得实例化 AgentManager（仅展示状态不该带起守护线程）",
             !inferredBody.contains("AgentManager"),
         )
-        assertTrue(
-            "设置页推断状态行应经持有者读取",
-            containsMemberAccess(inferredBody, "AgentUrlRegistry", "lastConnectionUrl"),
-        )
+        // master 82ee88b1：方言决策/状态文案统一走 DialectRegistry.decision + DialectSettingsStatusText
+        assertTrue("设置页必须以项目为单位取得方言决策",
+            inferredBody.contains("DialectRegistry.INSTANCE") && inferredBody.contains("decision("))
+        assertTrue("设置页必须将同一决策交给状态文案层",
+            inferredBody.contains("DialectSettingsStatusText.describe(projects.size(), decision)"))
     }
 
     @Test
