@@ -40,9 +40,11 @@ import java.util.regex.PatternSyntaxException;
  * 来源位置/耗时/落盘文件）+ 命中计数；<b>不返回全文</b>——agent 需要更多上下文时自行缩小关键词
  * 再查。{@code maxResults} 越界钳制不抛错；命中按时间戳<b>最新在前</b>，超限置 {@code truncated}。</p>
  *
- * <p><b>性能预算</b>：读取走 Reader 的流式逐行解析（峰值≈单条 SQL，T-SqlHistoryFull 先例）；
- * 扫描条目封顶 [MAX_SCAN_ENTRIES]，超限置 {@code scanTruncated} 不再读后续文件——目录被
- * 保留上限失控（maxFiles=0 全量保留）时检索仍有时界。目录不存在/空目录 = 合法零命中
+ * <p><b>性能预算（F55/F56/F65 三合一后）</b>：目录扫描走 [SqlLogFileReader.forEachEntry] 条目粒度
+ * 流式解析（单条 SQL 级峰值）＋边读边滤只留命中（内存只驻命中集）＋文件名倒序（封顶截断丢的
+ * 是最旧侧，最新数据永远先入）＋名日期/mtime 双旧的文件零 IO 预跳过（默认「今日」不再读全目录）；
+ * 扫描条目封顶 [MAX_SCAN_ENTRIES]（条目粒度计数，解析条目数恒 ≤ 上限），超限置 {@code scanTruncated}
+ * 即停——目录被保留上限失控（maxFiles=0 全量保留）时检索仍有时界。目录不存在/空目录 = 合法零命中
  * （自动保存开关默认关，历史可能确实不存在——零命中是正常结果不是错误）。</p>
  *
  * <p><b>排序兜底（V14b）</b>：多文件读取顺序与滚动块排序语义不做保证，命中输出前按
@@ -166,14 +168,35 @@ public final class HistorySearchService {
     }
 
     /**
-     * 文件目录入口：扫目录下全部 .sql（大小写不敏感，文件名序），逐文件流式解析后进入纯逻辑核。
+     * 文件目录入口（F55/F56/F65 三合一重写，D31 道 A）：扫目录下全部 .sql（大小写不敏感），
+     * <b>文件名倒序（新→旧）</b>逐文件<b>条目粒度</b>流式解析（[SqlLogFileReader.forEachEntry]），
+     * 边读边滤只留命中——一次改动同收三发现：
+     * <ul>
+     *   <li>F55 截断丢旧不丢新：旧环升序读盘，封顶截掉的恰是最新文件（默认「今日」极端情形
+     *       旧文件耗尽预算读不到今天的文件，与「默认当日防倾泻」意图相悖）；</li>
+     *   <li>F56 封顶前不再整文件驻留：旧环 readFromFile 全量物化后 perFile 持有全部已读条目
+     *       （最坏峰值＝200k 条+最后文件全量），现内存只驻命中条目（峰值≈命中集）；</li>
+     *   <li>F65 默认今日省 IO：名日期与 mtime 均早于范围起点的文件零 IO 预跳过（[preSkippable]），
+     *       旧环 allDates=false 仍要读全目录才能按 timestamp 筛。</li>
+     * </ul>
      */
     public static Result search(String dir, Query query) {
         return search(dir, query, System.currentTimeMillis());
     }
 
-    /** 全参形态（Kotlin nowMs 默认参数显式入口）。 */
+    /** 全参形态（Kotlin nowMs 默认参数显式入口；scanEntryCap 缺省 [MAX_SCAN_ENTRIES]）。 */
     public static Result search(String dir, Query query, long nowMs) {
+        return search(dir, query, nowMs, MAX_SCAN_ENTRIES);
+    }
+
+    /**
+     * 全参形态（scanEntryCap = 扫描条目封顶测试缝）。
+     *
+     * @param scanEntryCap 扫描条目封顶（默认 [MAX_SCAN_ENTRIES]；测试缝）——<b>条目粒度</b>计数，
+     *                    解析条目数恒 ≤ cap，超限置 scanTruncated 即停（后续文件/条目都不再读）
+     */
+    public static Result search(String dir, Query query, long nowMs, int scanEntryCap) {
+        CompiledFilters compiled = CompiledFilters.of(query, nowMs);
         File directory = new File(dir);
         File[] listed = directory.listFiles(f -> f.isFile() && extensionOf(f).equalsIgnoreCase("sql"));
         List<File> files = new ArrayList<>();
@@ -182,28 +205,43 @@ public final class HistorySearchService {
                 files.add(f);
             }
         }
-        files.sort(Comparator.comparing(File::getName));
-        int scannedEntries = 0;
-        boolean scanTruncated = false;
-        List<Pair<String, List<LogSqlEntry>>> perFile = new ArrayList<>();
+        files.sort(Comparator.comparing(File::getName).reversed()); // F55：新→旧（默认日期命名下即最新文件优先）
+        // Java 闭包不可捕获可变局部（Kotlin 可），计数/截断标记用单元素数组承载
+        int[] scannedEntries = {0};
+        boolean[] scanTruncated = {false};
+        List<Pair<String, LogSqlEntry>> matched = new ArrayList<>();
         for (File f : files) {
-            if (scannedEntries >= MAX_SCAN_ENTRIES) {
-                scanTruncated = true;
-                perFile.add(new Pair<>(f.getName(), List.of()));
-            } else {
-                List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(f);
-                scannedEntries += entries.size();
-                if (scannedEntries > MAX_SCAN_ENTRIES) {
-                    scanTruncated = true;
+            // F65：预跳过先于封顶判定——范围外的文件零 IO 跳过，不占扫描预算也不触发截断标记
+            // （「截断」语义＝可能有相关数据未读；预跳过文件按判据不含范围内数据）
+            if (preSkippable(f, compiled.scopeFrom)) {
+                continue;
+            }
+            if (scannedEntries[0] >= scanEntryCap) {
+                scanTruncated[0] = true;
+                break;
+            }
+            boolean[] stop = {false};
+            SqlLogFileReader.INSTANCE.forEachEntry(f, e -> {
+                if (scannedEntries[0] >= scanEntryCap) { // F56：条目粒度封顶（下一条都不再解析）
+                    scanTruncated[0] = true;
+                    stop[0] = true;
+                    return false;
                 }
-                perFile.add(new Pair<>(f.getName(), entries));
+                scannedEntries[0]++;
+                if (compiled.matches(e)) {
+                    matched.add(new Pair<>(f.getName(), e)); // 边读边滤只留命中
+                }
+                return true;
+            });
+            if (stop[0]) {
+                break;
             }
         }
-        return search(
-            perFile, query, nowMs,
+        return buildResult(
+            matched, compiled,
             files.size(),
-            scannedEntries,
-            scanTruncated
+            scannedEntries[0],
+            scanTruncated[0]
         );
     }
 
@@ -218,6 +256,8 @@ public final class HistorySearchService {
 
     /**
      * 纯逻辑核（域中立测试缝）：已在内存的「落盘文件名 → 条目」清单上执行四维过滤。
+     * F55 三合一后与目录扫描环共用 [CompiledFilters]（一次编译逐条匹配）与 [buildResult]
+     * （排序/截断/摘要收口）——两入口的过滤与输出语义单一实现源。
      */
     public static Result search(
         List<Pair<String, List<LogSqlEntry>>> perFile,
@@ -227,63 +267,119 @@ public final class HistorySearchService {
         int scannedEntries,
         boolean scanTruncated
     ) {
-        int maxResults = Math.max(1, Math.min(HARD_MAX_RESULTS, query.maxResults()));
-        String keyword = trimmedOrNull(query.keyword());
-        Pattern regex = null;
-        String regexPattern = trimmedOrNull(query.regex());
-        if (regexPattern != null) {
-            try {
-                regex = Pattern.compile(regexPattern, Pattern.CASE_INSENSITIVE);
-            } catch (PatternSyntaxException e) {
-                throw new InvalidQueryException("invalid regex '" + regexPattern + "': " + e.getMessage());
-            }
-        }
-        String sourceFileFilter = trimmedOrNull(query.sourceFile());
-        if (query.fromMs() != null && query.toMs() != null && query.fromMs() > query.toMs()) {
-            throw new InvalidQueryException(
-                "invalid time range: fromMs (" + query.fromMs() + ") > toMs (" + query.toMs() + ")");
-        }
-        // D1=A：默认范围下界 = 当日本地零点；allDates 或显式更晚的 fromMs 才放宽
-        long todayStart = startOfLocalDay(nowMs);
-        Long scopeFrom;
-        if (query.allDates()) {
-            scopeFrom = query.fromMs();
-        } else {
-            scopeFrom = Math.max(todayStart, query.fromMs() != null ? query.fromMs() : Long.MIN_VALUE);
-        }
-
+        CompiledFilters compiled = CompiledFilters.of(query, nowMs);
         List<Pair<String, LogSqlEntry>> matched = new ArrayList<>();
         for (Pair<String, List<LogSqlEntry>> fileEntry : perFile) {
             String fileName = fileEntry.getFirst();
             for (LogSqlEntry e : fileEntry.getSecond()) {
-                if (!(scopeFrom == null || e.timestamp() >= scopeFrom)) {
-                    continue;
+                if (compiled.matches(e)) {
+                    matched.add(new Pair<>(fileName, e));
                 }
-                if (!(query.toMs() == null || e.timestamp() <= query.toMs())) {
-                    continue;
-                }
-                if (!textMatches(e, keyword, regex)) {
-                    continue;
-                }
-                if (!(sourceFileFilter == null
-                    || (e.sourceFile() != null && containsIgnoreCase(e.sourceFile(), sourceFileFilter)))) {
-                    continue;
-                }
-                matched.add(new Pair<>(fileName, e));
             }
         }
+        return buildResult(
+            matched, compiled,
+            scannedFiles,
+            scannedEntries,
+            scanTruncated
+        );
+    }
 
-        // V14b：输出前自行按时间戳排序（最新在前，稳定序：同毫秒按落盘文件名 + 文件内序号）
-        matched.sort(
+    /**
+     * 编译后的过滤条件（目录扫描环与纯逻辑核共用）——入参校验（非法正则/时间倒置抛
+     * [InvalidQueryException]）与条件编译只做一次，扫描环内逐条 O(1) 匹配。
+     */
+    private static final class CompiledFilters {
+        final int maxResults;
+        final String keyword;
+        final Pattern regex;
+        final String sourceFileFilter;
+        final Long scopeFrom;
+        final Long toMs;
+
+        CompiledFilters(int maxResults, String keyword, Pattern regex, String sourceFileFilter, Long scopeFrom, Long toMs) {
+            this.maxResults = maxResults;
+            this.keyword = keyword;
+            this.regex = regex;
+            this.sourceFileFilter = sourceFileFilter;
+            this.scopeFrom = scopeFrom;
+            this.toMs = toMs;
+        }
+
+        /** 四维匹配（范围/关键词/正则/来源文件）——语义与旧纯核的 inScope+textMatches+sourceFilter 逐字一致。 */
+        boolean matches(LogSqlEntry e) {
+            if (scopeFrom != null && e.timestamp() < scopeFrom) {
+                return false;
+            }
+            if (toMs != null && e.timestamp() > toMs) {
+                return false;
+            }
+            if (keyword != null) {
+                boolean keywordHit = containsIgnoreCase(e.rawSql(), keyword)
+                    || containsIgnoreCase(e.restoredSql(), keyword)
+                    || (e.mapperStatement() != null && containsIgnoreCase(e.mapperStatement(), keyword));
+                if (!keywordHit) {
+                    return false;
+                }
+            }
+            if (regex != null && !regex.matcher(e.rawSql()).find() && !regex.matcher(e.restoredSql()).find()) {
+                return false;
+            }
+            return sourceFileFilter == null
+                || (e.sourceFile() != null && containsIgnoreCase(e.sourceFile(), sourceFileFilter));
+        }
+
+        static CompiledFilters of(Query query, long nowMs) {
+            int maxResults = Math.max(1, Math.min(HARD_MAX_RESULTS, query.maxResults()));
+            String keyword = trimmedOrNull(query.keyword());
+            Pattern regex = null;
+            String regexPattern = trimmedOrNull(query.regex());
+            if (regexPattern != null) {
+                try {
+                    regex = Pattern.compile(regexPattern, Pattern.CASE_INSENSITIVE);
+                } catch (PatternSyntaxException e) {
+                    throw new InvalidQueryException("invalid regex '" + regexPattern + "': " + e.getMessage());
+                }
+            }
+            String sourceFileFilter = trimmedOrNull(query.sourceFile());
+            if (query.fromMs() != null && query.toMs() != null && query.fromMs() > query.toMs()) {
+                throw new InvalidQueryException(
+                    "invalid time range: fromMs (" + query.fromMs() + ") > toMs (" + query.toMs() + ")");
+            }
+            // D1=A：默认范围下界 = 当日本地零点；allDates 或显式更晚的 fromMs 才放宽
+            long todayStart = startOfLocalDay(nowMs);
+            Long scopeFrom;
+            if (query.allDates()) {
+                scopeFrom = query.fromMs();
+            } else {
+                scopeFrom = Math.max(todayStart, query.fromMs() != null ? query.fromMs() : Long.MIN_VALUE);
+            }
+            return new CompiledFilters(maxResults, keyword, regex, sourceFileFilter, scopeFrom, query.toMs());
+        }
+    }
+
+    /**
+     * 命中排序（V14b：输出前按时间戳自行排——最新在前，稳定序：同毫秒按落盘文件名 + 文件内序号）
+     * + 截断 + 摘要组装（目录扫描环与纯逻辑核共用收口）。
+     */
+    private static Result buildResult(
+        List<Pair<String, LogSqlEntry>> matched,
+        CompiledFilters compiled,
+        int scannedFiles,
+        int scannedEntries,
+        boolean scanTruncated
+    ) {
+        List<Pair<String, LogSqlEntry>> ordered = new ArrayList<>(matched);
+        ordered.sort(
             Comparator.<Pair<String, LogSqlEntry>>comparingLong(p -> p.getSecond().timestamp()).reversed()
                 .thenComparing(p -> p.getFirst())
                 .thenComparingLong(p -> p.getSecond().sequenceNumber())
         );
 
         List<Hit> hits = new ArrayList<>();
-        int limit = Math.min(maxResults, matched.size());
+        int limit = Math.min(compiled.maxResults, ordered.size());
         for (int i = 0; i < limit; i++) {
-            Pair<String, LogSqlEntry> fileEntry = matched.get(i);
+            Pair<String, LogSqlEntry> fileEntry = ordered.get(i);
             String fileName = fileEntry.getFirst();
             LogSqlEntry e = fileEntry.getSecond();
             hits.add(new Hit(
@@ -300,29 +396,56 @@ public final class HistorySearchService {
             ));
         }
         return new Result(
-            matched.size(),
+            ordered.size(),
             hits.size(),
-            matched.size() > hits.size(),
+            ordered.size() > hits.size(),
             scannedFiles,
             scannedEntries,
             scanTruncated,
-            scopeFrom,
+            compiled.scopeFrom,
             hits
         );
     }
 
-    /** 关键词/正则/来源文件三者的文本匹配核（keyword 与 regex 均为 null 时恒真）。 */
-    private static boolean textMatches(LogSqlEntry e, String keyword, Pattern regex) {
-        boolean keywordHit = keyword == null
-            || containsIgnoreCase(e.rawSql(), keyword)
-            || containsIgnoreCase(e.restoredSql(), keyword)
-            || (e.mapperStatement() != null && containsIgnoreCase(e.mapperStatement(), keyword));
-        if (!keywordHit) {
+    /** 文件名携带的日期（yyyy-MM-dd 首个匹配；滚动块 {@code .2.sql} 后缀不影响）——无日期返回 null。 */
+    private static final Pattern FILE_NAME_DAY_REGEX = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
+
+    private static Long fileNameDayStartMs(String name) {
+        java.util.regex.Matcher mr = FILE_NAME_DAY_REGEX.matcher(name);
+        if (!mr.find()) {
+            return null;
+        }
+        try {
+            return java.time.LocalDate.of(
+                    Integer.parseInt(mr.group(1)), Integer.parseInt(mr.group(2)), Integer.parseInt(mr.group(3)))
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * F65 预跳过判据（测试直测缝）：文件可整体跳过不读盘，当且仅当——范围下界存在，
+     * 且文件<b>名日期日</b>与 <b>mtime</b> 都早于该起点。
+     *
+     * <p>为什么必须 mtime 兜底（对「仅凭名日期」的收敛，防跨天追加误伤）：滚动块按体积滚动、
+     * 名字是<b>开块日</b>——名为昨日但今日凌晨仍被追加的文件真实存在（D1=A 当年正因此选择按条目
+     * 时间戳过滤而非按文件名挑当日文件）。mtime 早于范围起点 ⇒ 起点后从未写入 ⇒ 全部条目
+     * 时间戳 < 起点，跳过零误伤；名日期判据覆盖默认模板主场景（旧日期文件且未被追加＝两名双旧
+     * 即跳）。名字无日期（自定义模板）不跳——正确性优先于优化面。</p>
+     */
+    public static boolean preSkippable(File file, Long scopeFrom) {
+        if (scopeFrom == null) {
             return false;
         }
-        return regex == null
-            || regex.matcher(e.rawSql()).find()
-            || regex.matcher(e.restoredSql()).find();
+        if (file.lastModified() >= scopeFrom) {
+            return false;
+        }
+        Long nameDay = fileNameDayStartMs(file.getName());
+        if (nameDay == null) {
+            return false;
+        }
+        return nameDay < startOfLocalDay(scopeFrom);
     }
 
     /** 当日本地零点（epoch 毫秒）。 */
