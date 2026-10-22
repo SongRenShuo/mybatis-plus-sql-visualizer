@@ -24,6 +24,7 @@ public final class ModuleDataSourceBindingStore implements PersistentStateCompon
     private State state = new State();
 
     @Override
+    @NotNull
     public State getState() {
         return state;
     }

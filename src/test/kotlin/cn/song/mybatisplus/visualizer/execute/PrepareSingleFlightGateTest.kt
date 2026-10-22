@@ -28,18 +28,18 @@ class PrepareSingleFlightGateTest {
     // ------------------------------------------------------------------
 
     private fun intent(tag: String = "i") = QueuedExecuteIntent(
-        onConsole = null,
-        onEditor = null,
-        onError = { msg -> "[$tag] $msg" },
-        onErrorRich = null,
-        wholeScriptExec = false,
+        null,
+        null,
+        { msg -> "[$tag] $msg" },
+        null,
+        false,
     )
 
     @Test
     fun `单飞_空闲时链持有门`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, intent = owner, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, owner, 0))
         gate.finishPrepare(owner)
         assertTrue("复位后门应空闲", !gate.prepareInFlight.get())
     }
@@ -48,10 +48,10 @@ class PrepareSingleFlightGateTest {
     fun `单飞_在飞时执行意图排队不再进第二链`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, intent = owner, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, owner, 0))
         // 准备链（预览）在飞期间用户点「执行 SQL」→ 只排队，不建第二条临时文件/会话/控制台
         val queued = intent("exec")
-        val decision = gate.tryEnter(executeAfterPrepare = true, intent = queued, nowMs = 10)
+        val decision = gate.tryEnter(true, queued, 10)
         assertEquals(PrepareGateDecision.QUEUE_ONLY, decision)
         assertTrue("排队标记应在位", gate.pendingExecute.get())
         // 完成准备时消费：拿到的是排队时那个意图，且一次性
@@ -64,10 +64,10 @@ class PrepareSingleFlightGateTest {
     fun `排队_同窗口连点后到意图覆盖先到`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        gate.tryEnter(executeAfterPrepare = false, intent = owner, nowMs = 0)
-        gate.tryEnter(executeAfterPrepare = true, intent = intent("first"), nowMs = 10)
+        gate.tryEnter(false, owner, 0)
+        gate.tryEnter(true, intent("first"), 10)
         val second = intent("second")
-        assertEquals(PrepareGateDecision.QUEUE_ONLY, gate.tryEnter(executeAfterPrepare = true, intent = second, nowMs = 20))
+        assertEquals(PrepareGateDecision.QUEUE_ONLY, gate.tryEnter(true, second, 20))
         assertSame("最新用户意图优先", second, gate.consumePendingExecute(owner))
     }
 
@@ -75,10 +75,10 @@ class PrepareSingleFlightGateTest {
     fun `预览在飞时直通不排队不取所有权`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, intent = owner, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, owner, 0))
         // 另一条预览准备到达：PASS_THROUGH——不拦截（拦截会丢切换预览条目的 SQL 同步）、
         // 不取所有权、不置排队
-        assertEquals(PrepareGateDecision.PASS_THROUGH, gate.tryEnter(executeAfterPrepare = false, nowMs = 10))
+        assertEquals(PrepareGateDecision.PASS_THROUGH, gate.tryEnter(false, null, 10))
         assertFalse(gate.pendingExecute.get())
         assertNull(gate.consumePendingExecute(owner))
         // 直通链不得动门：finishPrepare 只归持有链（此处模拟持有链仍在飞）
@@ -89,34 +89,34 @@ class PrepareSingleFlightGateTest {
     fun `finishPrepare_复位后新链可重新持有`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = true, intent = owner, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, owner, 0))
         gate.finishPrepare(owner)
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = true, intent = intent("next"), nowMs = 10))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, intent("next"), 10))
     }
 
     @Test
     fun `卡死逃生_悬挂超窗后放行新链并清陈旧排队`() {
         val gate = PrepareSingleFlightGate()
         val owner = intent("owner")
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, intent = owner, nowMs = 0))
-        gate.tryEnter(executeAfterPrepare = true, intent = intent("stale"), nowMs = 10)
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, owner, 0))
+        gate.tryEnter(true, intent("stale"), 10)
         // 门持有链消亡未复位（runner 失败无 session 回调族）——窗口过后新执行链接管自愈
         val takeover = intent("fresh")
         assertEquals(
             PrepareGateDecision.PROCEED,
-            gate.tryEnter(executeAfterPrepare = true, intent = takeover, nowMs = PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1),
+            gate.tryEnter(true, takeover, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1),
         )
         assertNull("陈旧排队意图应被清空（旧链已死，消费无意义）", gate.consumePendingExecute(owner))
         // 接管后终结复位照常
         assertTrue(gate.finishPrepare(takeover))
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = PrepareSingleFlightGate.STUCK_ESCAPE_MS + 2))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 2))
     }
 
     private class RequestProbe {
         val outcomes = mutableListOf<ExecutionSubmission>()
         val errors = mutableListOf<String>()
-        val request = QueuedExecuteIntent(null, null, { errors += it }, null, false,
-            submissionSink = { outcomes += it })
+        val request = QueuedExecuteIntent(null, null, { errors += it }, null, false, null, null,
+            { outcomes += it })
     }
 
     @Test
@@ -127,7 +127,7 @@ class PrepareSingleFlightGateTest {
         val b = RequestProbe()
         gate.tryEnter(false, a.request, 0)
         gate.tryEnter(true, b.request, 10)
-        gate.abort(owner, ExecutionSubmission.CANCELLED)
+        gate.abort(owner, ExecutionSubmission.CANCELLED, null)
         assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
         assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
         assertFalse(gate.pendingExecute.get())
@@ -151,15 +151,15 @@ class PrepareSingleFlightGateTest {
         assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
         val queued = gate.consumePendingExecute(owner)
         assertSame(c.request, queued)
-        val receipt = selectPrepareSubmission(queued, a.request.onSubmission)
+        val receipt = PrepareSingleFlightGateKt.selectPrepareSubmission(queued, a.request.onSubmission())
         assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
         assertTrue(c.outcomes.isEmpty())
-        receipt!!.invoke(ExecutionSubmission.SUBMITTED)
+        receipt!!.accept(ExecutionSubmission.SUBMITTED)
         gate.finishPrepare(owner)
         // 迟到回执不得翻转被替代请求，也不能产生第二个终态。
-        a.request.onSubmission(ExecutionSubmission.SUBMITTED)
-        b.request.onSubmission(ExecutionSubmission.SUBMITTED)
-        c.request.onSubmission(ExecutionSubmission.BLOCKED)
+        a.request.onSubmission().accept(ExecutionSubmission.SUBMITTED)
+        b.request.onSubmission().accept(ExecutionSubmission.SUBMITTED)
+        c.request.onSubmission().accept(ExecutionSubmission.BLOCKED)
         assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
         assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
         assertEquals(listOf(ExecutionSubmission.SUBMITTED), c.outcomes)
@@ -214,7 +214,7 @@ class PrepareSingleFlightGateTest {
         gate.tryEnter(true, a.request, 0)
         gate.tryEnter(true, b.request, 10)
         val pending = if (consumed) gate.consumePendingExecute(owner) else null
-        failPrepareRequests(gate, owner, a.request.onSubmission, a.request.onError, pending, message)
+        PrepareSingleFlightGateKt.failPrepareRequests(gate, owner, a.request.onSubmission(), a.request.onError(), pending, message)
         assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
         assertEquals(listOf(ExecutionSubmission.BLOCKED), b.outcomes)
         assertEquals(listOf(message), a.errors)
@@ -233,7 +233,7 @@ class PrepareSingleFlightGateTest {
         gate.expire(a.request, 60_001)
         assertTrue(gate.isOwner(a.request))
         assertTrue(a.outcomes.isEmpty())
-        a.request.onSubmission(ExecutionSubmission.CANCELLED)
+        a.request.onSubmission().accept(ExecutionSubmission.CANCELLED)
         gate.finishPrepare(owner)
         assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
     }
@@ -243,7 +243,7 @@ class PrepareSingleFlightGateTest {
         val gate = PrepareSingleFlightGate()
         val a = RequestProbe()
         val owner = a.request
-        failPrepareRequests(gate, null, a.request.onSubmission, a.request.onError, null, "missing")
+        PrepareSingleFlightGateKt.failPrepareRequests(gate, null, a.request.onSubmission(), a.request.onError(), null, "missing")
         assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
         assertEquals(listOf("missing"), a.errors)
     }
@@ -263,7 +263,7 @@ class PrepareSingleFlightGateTest {
             if (lateFailure) {
                 // 对应 prepareInConsole 的同步等待失败/异常出口及后段异常出口。
                 assertFalse(gate.abort(a.request, ExecutionSubmission.BLOCKED, "late A failure"))
-                failPrepareRequests(gate, a.request, a.request.onSubmission, a.request.onError, null, "late A failure")
+                PrepareSingleFlightGateKt.failPrepareRequests(gate, a.request, a.request.onSubmission(), a.request.onError(), null, "late A failure")
             }
             // 对应 prepareAfterEditorResolved 的正常收尾；失败后也可能再次到达。
             assertFalse(gate.finishPrepare(a.request))
@@ -279,7 +279,7 @@ class PrepareSingleFlightGateTest {
             assertEquals(1, a.errors.size) // 仅后台超时原因，迟到 A 失败不覆写
             // B 自身正常消费、提交和收尾照常，不被旧 A 的 false 返回污染。
             assertSame(queuedB.request, gate.consumePendingExecute(b.request))
-            selectPrepareSubmission(queuedB.request, b.request.onSubmission)!!.invoke(ExecutionSubmission.SUBMITTED)
+            PrepareSingleFlightGateKt.selectPrepareSubmission(queuedB.request, b.request.onSubmission())!!.accept(ExecutionSubmission.SUBMITTED)
             assertTrue(gate.finishPrepare(b.request))
             assertFalse(gate.prepareInFlight.get())
             assertFalse(gate.pendingExecute.get())
@@ -305,7 +305,7 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `用户选择超过一分钟仍有效且B排队不能超时接管A`() {
         var now = 0L
-        val gate = PrepareSingleFlightGate(clock = { now }, timeoutMessage = { "background timeout" })
+        val gate = PrepareSingleFlightGate({ now }, { "background timeout" })
         val a = RequestProbe()
         val b = RequestProbe()
         gate.tryEnter(true, a.request)
@@ -327,7 +327,7 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `后台仍会到期且消息明确不是主动取消`() {
         var now = 0L
-        val gate = PrepareSingleFlightGate(clock = { now }, timeoutMessage = { "background timeout" })
+        val gate = PrepareSingleFlightGate({ now }, { "background timeout" })
         val a = RequestProbe()
         gate.tryEnter(true, a.request)
         gate.beginInteraction(a.request)
@@ -377,10 +377,10 @@ class PrepareSingleFlightGateTest {
         val console = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt")
         for (branch in listOf("if (scriptModel == null)", "if (editorComponentRaw == null)")) {
             val body = console.substringAfter(branch).substringBefore("return")
-            assertTrue("$branch 必须结算当前及排队", body.contains("failPrepareRequests("))
+            assertTrue("$branch 必须结算当前及排队", body.contains("PrepareSingleFlightGateKt.failPrepareRequests("))
             assertTrue(body.contains("onSubmission, onError, queuedIntent"))
         }
-        assertTrue(console.contains("selectPrepareSubmission(queuedIntent, onSubmission)"))
+        assertTrue(console.contains("PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission)"))
         assertTrue(console.contains("if (!isPrepareActive()) return@invokeLater"))
         val signatures = sourceOf("src/test/java/PlatformSignatureChecker.java")
         assertTrue(signatures.contains("missing += checkRunnerFinalStepApi(loader)"))
@@ -393,19 +393,19 @@ class PrepareSingleFlightGateTest {
 
     @Test
     fun `embedMode_EXECUTE_恒展开`() {
-        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(resultAreaHasContent = false))
-        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(resultAreaHasContent = true))
+        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(false))
+        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(true))
     }
 
     @Test
     fun `embedMode_PREVIEW_无内容折叠`() {
-        assertTrue(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent = false))
+        assertTrue(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(false))
     }
 
     @Test
     fun `embedMode_PREVIEW_有内容不折叠`() {
         // 竞态窗口（执行中快速切换预览条目）内结果已就位 → 不吞用户可见的结果
-        assertFalse(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent = true))
+        assertFalse(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(true))
     }
 
     // ------------------------------------------------------------------
