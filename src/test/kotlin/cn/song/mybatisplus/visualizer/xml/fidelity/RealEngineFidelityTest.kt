@@ -167,7 +167,10 @@ class RealEngineFidelityTest {
         val p20Mine = mine(p20)
         assertEquals("P20 自研整段不展开", "SELECT * FROM t", compact(p20Mine.sql))
         assertEquals("P20 自研无参数", emptyList<String>(), p20Mine.mappings.map { it.property })
-        assertEquals("P20 自研 errors 为空（差异静默，无提示）", emptyList<String>(), p20Mine.errors)
+        assertTrue(
+            "P20 无法静态读取 DTO 属性时必须显式警示：${p20Mine.errors}",
+            p20Mine.errors.any { it.contains("u.name") && it.contains("无法静态读取对象属性") },
+        )
 
         // ---- P30 `${}` 求值为空：SQL 两侧相同，自研多一条提示 errors ----
         val p30 = known.getValue("P30")
