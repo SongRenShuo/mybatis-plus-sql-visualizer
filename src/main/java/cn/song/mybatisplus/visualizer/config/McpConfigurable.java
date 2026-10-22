@@ -1,4 +1,5 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt 移植
+// T-SyncK2JMaster496 对齐 master 当前形态（R60 T-LaneB D96 MCP 输出脱敏开关 + UI011 三行能力横幅）
 package cn.song.mybatisplus.visualizer.config;
 
 import cn.song.mybatisplus.visualizer.mcp.McpToolGate;
@@ -39,21 +40,39 @@ import javax.swing.JPanel;
  */
 public class McpConfigurable implements Configurable {
 
+    private final java.util.function.BooleanSupplier platformCapability;
+
+    /** 平台 MCP toolset API 可达性探测（生产默认形态——与 McpToolsetDynamicRegistrar 同一探测口径）。 */
+    public McpConfigurable() {
+        this(() -> cn.song.mybatisplus.visualizer.mcp.McpToolsetDynamicRegistrarKt.findMcpToolsetClass() != null);
+    }
+
+    /** internal 构造缝（测试注入 platformCapability 探测结果；同模块可见）。 */
+    McpConfigurable(java.util.function.BooleanSupplier platformCapability) {
+        this.platformCapability = platformCapability;
+    }
+
     private JPanel panel = null;
 
     /** 总开关复选框（apply 时写 state.mcpToolsEnabled）。 */
     private JBCheckBox masterCheckBox = null;
 
+    /** R60（T-LaneB D96）：MCP 输出脱敏复选框（apply 时写 state.mcpMaskEnabled；默认关）。 */
+    private JBCheckBox maskLiteralsCheckBox = null;
+
     /** 工具级复选框（工具名 → 勾选态=启用；apply 时反向写 mcpDisabledTools）。 */
     private final Map<String, JBCheckBox> toolCheckBoxes = new LinkedHashMap<>();
 
-    /** 全部启用/全部禁用状态切换单按钮（全勾→「全部禁用」点击清空，否则「全部启用」补满）。 */
+    /** 全部启用/全部禁用状态切换单按钮（全勾→「全部禁用」点击清空，否则「全部启用」点击补满）。 */
     private JButton toggleAllButton = null;
 
-    /** P1-3：就绪横幅标题行（静态渲染快照，测试断言用）。 */
+    /** 工具声明数量，不表示运行时注册数量。 */
     private JBLabel bannerHeadline = null;
 
-    /** P1-3：就绪横幅门控现状行（静态渲染快照，测试断言用）。 */
+    /** 只读平台能力提示，与插件开关独立展示。 */
+    private JBLabel bannerPlatformLine = null;
+
+    /** 页内开关选择状态，应用后生效。 */
     private JBLabel bannerGateLine = null;
 
     @Override
@@ -94,23 +113,28 @@ public class McpConfigurable implements Configurable {
             // 服务未注册 → 保持 null
         }
 
-        // P1-3（批次9 波次2）：页内就绪横幅——差异化最强的功能面此前在页内零自我陈述（第十轮
-        // 摩擦 #2「MCP 工具可发现性黑洞」，锚点 :62-73 仅 jumpRow、:92-99 复选框循环、:146 才有
-        // warning）。形态照抄 R20 落地页零监听器定例：**静态构建时按门控现状渲染，不做动态刷新
-        // 监听**（工具数动态取 McpToolGate.TOOL_NAMES 的 size，不写死数字——R14 十工具升十一
-        // 工具时旧写死文案即过期）。横幅是页内静态提示不是弹窗，不触 BannedApiSourceScanTest
-        // 弹窗白名单（弹窗克制红线：文案只指向下方开关，不弹任何对话框）。
+        // UI011：声明数、平台能力、插件开关是三个独立事实；不从工具清单推断注册或可调用。
+        // 沿用现有 JBLabel 横幅样式，仅只读探测接口可达性，不注册工具、不启动 MCP Server。
         bannerHeadline = new JBLabel(
             MpSqlVisualizerBundle.message(
-                "settings.mcp.banner.ready",
+                "settings.mcp.banner.declared",
                 String.valueOf(McpToolGate.TOOL_NAMES.size())
             )
         );
-        bannerGateLine = new JBLabel(bannerGateHint(state));
+        bannerPlatformLine = new JBLabel(
+            MpSqlVisualizerBundle.message(
+                platformCapability.getAsBoolean()
+                        ? "settings.mcp.banner.platformPresent"
+                        : "settings.mcp.banner.platformUnavailable"
+            )
+        );
+        bannerPlatformLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
+        bannerGateLine = new JBLabel();
         bannerGateLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
         JPanel banner = new JPanel(new GridLayout(0, 1));
         banner.setBorder(JBUI.Borders.emptyBottom(10));
         banner.add(bannerHeadline);
+        banner.add(bannerPlatformLine);
         banner.add(bannerGateLine);
 
         masterCheckBox = new JBCheckBox(
@@ -119,10 +143,19 @@ public class McpConfigurable implements Configurable {
         );
         masterCheckBox.setToolTipText(MpSqlVisualizerBundle.message("settings.mcp.enable.master.desc"));
 
+        // R60（T-LaneB D96）：MCP 输出脱敏（sqlv_render_logs 还原语句打码；默认关——脱敏降低
+        // AI 诊断价值，承审计册口径，工具描述已声明）
+        maskLiteralsCheckBox = new JBCheckBox(
+            MpSqlVisualizerBundle.message("settings.mcp.maskLiterals"),
+            state != null ? state.getMcpMaskEnabled() : false
+        );
+        maskLiteralsCheckBox.setToolTipText(MpSqlVisualizerBundle.message("settings.mcp.maskLiterals.desc"));
+
         FormBuilder builder = FormBuilder.createFormBuilder()
             .addComponent(banner)
             .addComponent(jumpRow)
-            .addComponent(masterCheckBox);
+            .addComponent(masterCheckBox)
+            .addComponent(maskLiteralsCheckBox);
         for (String toolName : McpToolGate.TOOL_NAMES) {
             // 复选框只表达「工具级未禁用」，与总开关正交（否则 master off 时复选框全不勾，
             // apply 会把全部工具误写进禁用清单）
@@ -138,11 +171,14 @@ public class McpConfigurable implements Configurable {
         builder.addComponent(toggleRow, 10);
         syncToggleAllLabel();
 
+        // UI011：单项、总开关、全选和 reset 均按页内选择刷新；不将未 Apply 的选择说成已生效。
+        refreshBannerGateLine();
+
         // 20261008 dev-bak 验收（缺陷 #2）：横幅按 R20 落地页「零监听器」定例构建后不再更新——
         // 勾掉工具 / 关总开关乃至 Apply，横幅在同会话内恒显构建时快照（重开整个设置对话框才刷新）。
         // 验收文档 3.21 预期「横幅切到部分禁用/总开关关闭态」。门控复选框是页内唯一写入方，
         // 对它们挂 ActionListener 即时重算门控行（读复选框现状而非持久化 state，三态口径与
-        // bannerGateHint 同源；headline 的就绪文案保持静态——工具注册数不随开关变化）。
+        // refreshBannerGateLine 同源；headline 的声明数文案保持静态——工具声明数不随开关变化）。
         Runnable bannerRefresher = this::refreshBannerGateLine;
         if (masterCheckBox != null) masterCheckBox.addActionListener(event -> bannerRefresher.run());
         toolCheckBoxes.values().forEach(cb -> cb.addActionListener(event -> bannerRefresher.run()));
@@ -161,27 +197,8 @@ public class McpConfigurable implements Configurable {
     }
 
     /**
-     * P1-3：就绪横幅门控现状行（纯函数，三态与 {@link #isToolListedInState} 同一真相源）——
-     * 总开关关 &gt; 工具级有禁用 &gt; 全启用。state=null（测试环境服务未注册）按全启用兜底，
-     * 与门控默认口径一致。
-     */
-    private String bannerGateHint(PluginSettings.State state) {
-        if (state != null && !state.getMcpToolsEnabled()) {
-            return MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff");
-        }
-        int disabledCount = 0;
-        for (String toolName : McpToolGate.TOOL_NAMES) {
-            if (!isToolListedInState(state, toolName)) disabledCount++;
-        }
-        if (disabledCount == 0) {
-            return MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled");
-        }
-        return MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", String.valueOf(disabledCount));
-    }
-
-    /**
-     * 20261008 验收缺陷 #2 修复：横幅门控行按复选框**现状**即时重算（总开关关 &gt; 工具级有禁用 &gt;
-     * 全启用，与 {@link #bannerGateHint} 三态同源——数据源从持久化 state 换成页内复选框）。
+     * 页内门控选择三态（总开关关 &gt; 工具级有禁用 &gt; 全启用，不代表平台调用状态）——按复选框
+     * **现状**即时重算（数据源为页内复选框，不将未 Apply 的选择说成已生效）。
      */
     private void refreshBannerGateLine() {
         JBLabel gate = bannerGateLine;
@@ -289,6 +306,8 @@ public class McpConfigurable implements Configurable {
         }
         boolean masterSelected = masterCheckBox != null ? masterCheckBox.isSelected() : state.getMcpToolsEnabled();
         boolean masterDirty = masterSelected != state.getMcpToolsEnabled();
+        boolean maskSelected = maskLiteralsCheckBox != null ? maskLiteralsCheckBox.isSelected() : state.getMcpMaskEnabled();
+        boolean maskDirty = maskSelected != state.getMcpMaskEnabled();
         boolean toolsDirty = false;
         for (String toolName : McpToolGate.TOOL_NAMES) {
             JBCheckBox checkBox = toolCheckBoxes.get(toolName);
@@ -299,13 +318,14 @@ public class McpConfigurable implements Configurable {
                 break;
             }
         }
-        return masterDirty || toolsDirty;
+        return masterDirty || maskDirty || toolsDirty;
     }
 
     @Override
     public void apply() {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         state.setMcpToolsEnabled(masterCheckBox != null ? masterCheckBox.isSelected() : true);
+        state.setMcpMaskEnabled(maskLiteralsCheckBox != null ? maskLiteralsCheckBox.isSelected() : false);
         java.util.List<String> disabled = new java.util.ArrayList<>();
         for (String toolName : McpToolGate.TOOL_NAMES) {
             JBCheckBox checkBox = toolCheckBoxes.get(toolName);
@@ -330,6 +350,9 @@ public class McpConfigurable implements Configurable {
         if (masterCheckBox != null) {
             masterCheckBox.setSelected(state.getMcpToolsEnabled());
         }
+        if (maskLiteralsCheckBox != null) {
+            maskLiteralsCheckBox.setSelected(state.getMcpMaskEnabled());
+        }
         for (String toolName : McpToolGate.TOOL_NAMES) {
             JBCheckBox checkBox = toolCheckBoxes.get(toolName);
             if (checkBox != null) {
@@ -343,8 +366,10 @@ public class McpConfigurable implements Configurable {
     public void disposeUIResources() {
         panel = null;
         masterCheckBox = null;
+        maskLiteralsCheckBox = null;
         toggleAllButton = null;
         bannerHeadline = null;
+        bannerPlatformLine = null;
         bannerGateLine = null;
         toolCheckBoxes.clear();
     }
@@ -365,12 +390,17 @@ public class McpConfigurable implements Configurable {
         return toggleAllButton;
     }
 
-    /** P1-3：就绪横幅标题行文案（null = 横幅未构建/已释放）。 */
+    /** 声明数量文案（null = 横幅未构建/已释放）。 */
     public String bannerHeadlineForTest() {
         return bannerHeadline != null ? bannerHeadline.getText() : null;
     }
 
-    /** P1-3：就绪横幅门控现状行文案。 */
+    /** 只读平台能力提示行文案（UI011）。 */
+    public String bannerPlatformLineForTest() {
+        return bannerPlatformLine != null ? bannerPlatformLine.getText() : null;
+    }
+
+    /** 页内门控选择文案。 */
     public String bannerGateLineForTest() {
         return bannerGateLine != null ? bannerGateLine.getText() : null;
     }
