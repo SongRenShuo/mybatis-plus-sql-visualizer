@@ -53,7 +53,7 @@ class SqlCaptureGateSniffTest {
         ).flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
         assertTrue("接管期间控制台链不产出条目", entries.isEmpty())
         assertEquals(1, LogTimeCorrelator.size())
-        val got = LogTimeCorrelator.take(keyOf("SELECT * FROM user WHERE id = ?"))!!
+        val got = LogTimeCorrelator.take(keyOf("SELECT * FROM user WHERE id = ?"), "1")!!
         assertEquals("回填的是日志行原始时间（Preparing 行）", sdf.parse(ts).time, got)
     }
 
@@ -69,15 +69,16 @@ class SqlCaptureGateSniffTest {
     }
 
     @Test
-    fun `无日志时间戳的行_回落条目捕获时间`() {
+    fun `无日志时间戳的行_不把IDE解析时间入册`() {
         SqlCaptureGate.paused.set(true)
         val ctx = newCtx()
         listOf(
             "==>  Preparing: SELECT * FROM t WHERE id = ?",
             "==>  Parameters: 9(Long)",
         ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
-        val ts = LogTimeCorrelator.take(keyOf("SELECT * FROM t WHERE id = ?"))
-        assertTrue("未解析到时间戳时回落条目捕获时间（>0）", ts != null && ts > 0)
+        assertEquals("无真实日志时间不能制造候选", 0, LogTimeCorrelator.size())
+        val ts = LogTimeCorrelator.take(keyOf("SELECT * FROM t WHERE id = ?"), "9")
+        assertNull("无真实日志时间时未命中，由agent保持执行开始时间", ts)
     }
 
     @Test

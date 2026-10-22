@@ -55,6 +55,7 @@ class PluginXmlExtensionPointResolutionTest {
         // （`<extensionPoint qualifiedName="com.intellij.database.modelRelationProvider" …>`，
         //  本机 IU 2024.3.7.1 安装目录实测命中 1 处）；测试沙盒 classpath 不含 Database 插件故缺席。
         "com.intellij.database.modelRelationProvider",
+        "com.intellij.sql.dialect",
     )
 
     // ------------------------------------------------------------------
