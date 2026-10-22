@@ -678,24 +678,48 @@ public final class SqlPreviewPanelExecutionKt {
      * @param dmlConfirmed    DML 二次确认豁免（回滚弹窗「执行回滚」已过用户显式确认链）
      * @param rollbackOfEntry 本次执行本身是回滚语句时指向被回滚的原快照条目（F6 留痕链）
      */
-    /** Kotlin 默认参数等价重载：dmlConfirmed=false、rollbackOfEntry=null。 */
+    /** Kotlin 默认参数等价重载：dmlConfirmed=false、rollbackOfEntry=null、onSubmission=null。 */
     public static void executeAdhocSql(@NotNull SqlPreviewPanel p, @NotNull String sql) {
         executeAdhocSql(p, sql, false, null);
     }
 
-    /** Kotlin 默认参数等价重载：rollbackOfEntry=null。 */
+    /** Kotlin 默认参数等价重载：rollbackOfEntry=null、onSubmission=null。 */
     public static void executeAdhocSql(@NotNull SqlPreviewPanel p, @NotNull String sql, boolean dmlConfirmed) {
         executeAdhocSql(p, sql, dmlConfirmed, null);
     }
 
+    /** Kotlin 默认参数等价重载：onSubmission=null。 */
     public static void executeAdhocSql(
             @NotNull SqlPreviewPanel p,
             @NotNull String sql,
             boolean dmlConfirmed,
             @Nullable cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry rollbackOfEntry) {
+        executeAdhocSql(p, sql, dmlConfirmed, rollbackOfEntry, null);
+    }
+
+    /**
+     * T-RollbackSql F4（onSubmission 回执形态，master 对齐）：每次请求仅结算一次——
+     * 回执经 {@link AtomicBoolean} 单发，上层（RollbackSqlDialog.rollbackSubmissionReceipt）
+     * 据此驱动 F6 留痕（SUBMITTED 才 markRollbackExecuted）与横幅更新；早退/取消
+     * 分别回 BLOCKED/CANCELLED，与 master 语义一致。
+     */
+    public static void executeAdhocSql(
+            @NotNull SqlPreviewPanel p,
+            @NotNull String sql,
+            boolean dmlConfirmed,
+            @Nullable cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry rollbackOfEntry,
+            @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        final AtomicBoolean completed = new AtomicBoolean(false);
+        final Consumer<ExecutionSubmission> receipt = outcome -> {
+            if (completed.compareAndSet(false, true) && onSubmission != null) {
+                onSubmission.accept(outcome);
+            }
+        };
         Project proj = p.project;
-        if (proj == null) return;
-        if (sql.isBlank()) return;
+        if (proj == null || sql.isBlank()) {
+            receipt.accept(ExecutionSubmission.BLOCKED);
+            return;
+        }
         boolean isQuery = SqlTypeClassifier.isQuery(sql);
         // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
         // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
@@ -710,7 +734,10 @@ public final class SqlPreviewPanelExecutionKt {
                     cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
                     MpSqlVisualizerBundle.message("execute.confirm.dml"),
                     Messages.getWarningIcon());
-            if (confirm != Messages.YES) return;
+            if (confirm != Messages.YES) {
+                receipt.accept(ExecutionSubmission.CANCELLED);
+                return;
+            }
         }
         // P2-F5/F6：经执行按钮执行的 UPDATE/DELETE 执行前登记快照条目（回滚语句登记留痕链）
         registerRollbackSnapshotIfNeeded(p, sql, rollbackOfEntry);
@@ -728,7 +755,8 @@ public final class SqlPreviewPanelExecutionKt {
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
                             errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
-                            wholeScriptExec);
+                            wholeScriptExec,
+                            null, null, receipt, false);
                     return;
                 }
             }
@@ -746,7 +774,8 @@ public final class SqlPreviewPanelExecutionKt {
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
                     errorMsg -> p.resultPanel.showError(errorMsg),
                     info -> showErrorRichWithLocate(p, info),
-                    wholeScriptExec);
+                    wholeScriptExec,
+                    null, null, receipt);
             if (executed) return;
         }
         SqlExecutor.execute(
@@ -755,7 +784,8 @@ public final class SqlPreviewPanelExecutionKt {
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
                 errorMsg -> p.resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(p, info),
-                wholeScriptExec);
+                wholeScriptExec,
+                null, null, receipt, false);
     }
 
     /**
