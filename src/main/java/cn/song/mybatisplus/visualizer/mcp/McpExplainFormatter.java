@@ -1,6 +1,10 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpExplainFormatter.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
+import cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor;
+import cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo;
+
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 
 /**
@@ -155,5 +159,34 @@ public final class McpExplainFormatter {
             return "";
         }
         return "\nerrorPosition: " + (position.getSecond() ? "char" : "line") + " " + position.getFirst();
+    }
+
+    /** T-M19-McpErrorMeta：先拆反射包装，再保留驱动状态码、厂商码与原有位置文案；缺失字段不追加。 */
+    public static String formatFailure(Throwable error, String dialectName, String explainSql) {
+        Throwable cause = error instanceof InvocationTargetException ite ? ite.getTargetException() : error;
+        String causeMsg = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+        ExecutionErrorInfo info = ErrorPositionExtractor.buildInfo(cause, causeMsg, explainSql.length());
+        kotlin.Triple<Integer, Boolean, String> pos = ErrorPositionExtractor.extractPosition(causeMsg, explainSql.length());
+        String firstLine = firstNonBlankLine(causeMsg);
+        StringBuilder sb = new StringBuilder("EXPLAIN failed on '").append(dialectName)
+                .append("' data source: ").append(firstLine);
+        if (info.sqlState() != null) {
+            sb.append("\nsqlState: ").append(info.sqlState());
+        }
+        if (info.errorCode() != null) {
+            sb.append("\nerrorCode: ").append(info.errorCode());
+        }
+        sb.append(formatErrorPosition(pos));
+        return McpToolErrors.code(McpToolErrors.DATASOURCE_UNREACHABLE, sb.toString());
+    }
+
+    /** Kotlin {@code lineSequence().firstOrNull { it.isNotBlank() } ?: causeMsg} 等价。 */
+    private static String firstNonBlankLine(String message) {
+        for (String line : message.split("\\R")) {
+            if (!line.isBlank()) {
+                return line;
+            }
+        }
+        return message;
     }
 }

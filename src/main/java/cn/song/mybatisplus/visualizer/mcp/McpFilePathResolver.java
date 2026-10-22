@@ -5,6 +5,8 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.regex.Pattern;
 
 /**
@@ -55,7 +57,7 @@ public final class McpFilePathResolver {
             return null;
         }
         String unified = trimmed.replace('\\', '/');
-        if (unified.contains("..")) {
+        if (unified.contains("..") || unified.startsWith("//")) {
             return null;
         }
         // Kotlin：projectBasePath?.replace('\\','/')?.trimEnd('/')?.takeIf { it.isNotEmpty() }
@@ -75,7 +77,7 @@ public final class McpFilePathResolver {
             return null;
         }
 
-        if (WINDOWS_DRIVE.matcher(unified).find()) {
+        if (WINDOWS_DRIVE.matcher(unified).find() || (base.startsWith("/") && unified.startsWith("/"))) {
             // 绝对路径：必须落在项目根之下（含项目根本身的情况由 findFileByPath 判目录后自然失败）
             return unified.startsWith(base + "/") ? unified : null;
         }
@@ -87,12 +89,34 @@ public final class McpFilePathResolver {
         return rel.isEmpty() ? null : base + "/" + rel;
     }
 
-    /** 平台：解析并取文件；null = 形态非法 / 越出项目 / 不存在（调用方统一给 SOURCE_NOT_FOUND）。 */
-    public static VirtualFile resolveFile(Project project, String rawPath) {
-        String inside = resolveInsideProject(project.getBasePath(), rawPath);
-        if (inside == null) {
+    /** 先解析实际磁盘目标，项目内符号链接若指向外部则不能成为 MCP 文件入口。 */
+    public static String canonicalProjectFile(String projectBasePath, String resolvedPath) {
+        try {
+            Path root = Path.of(projectBasePath).toRealPath();
+            Path target = Path.of(resolvedPath).toRealPath();
+            if (!target.startsWith(root) || !Files.isRegularFile(target)) {
+                return null;
+            }
+            return target.toString().replace('\\', '/');
+        } catch (Exception e) {
             return null;
         }
-        return LocalFileSystem.getInstance().findFileByPath(inside);
+    }
+
+    /** 平台：解析并取文件；null = 形态非法 / 越出项目 / 不存在（调用方统一给 SOURCE_NOT_FOUND）。 */
+    public static VirtualFile resolveFile(Project project, String rawPath) {
+        String base = project.getBasePath();
+        if (base == null) {
+            return null;
+        }
+        String resolved = resolveInsideProject(base, rawPath);
+        if (resolved == null) {
+            return null;
+        }
+        String canonical = canonicalProjectFile(base, resolved);
+        if (canonical == null) {
+            return null;
+        }
+        return LocalFileSystem.getInstance().findFileByPath(canonical);
     }
 }
