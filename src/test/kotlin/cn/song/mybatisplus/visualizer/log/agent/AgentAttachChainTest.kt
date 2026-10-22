@@ -20,6 +20,8 @@ class AgentAttachChainTest : BasePlatformTestCase() {
 
     private lateinit var manager: AgentManager
 
+    private val NOOP_STATE_CHANGE = java.lang.Runnable { }
+
     override fun setUp() {
         super.setUp()
         manager = AgentManager.getInstance(project)
@@ -83,7 +85,8 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         val accepted = server.accept()
         try {
             // AgentSession internal 同包可构造（同 AgentListenSyncTest 惯例）
-            val session = AgentSession(project, 5555L, accepted, {})
+            // 提为字段：局部尾随 lambda 会合成 test 前缀私有方法，被 JUnit3 TestSuite 误当用例
+            val session = AgentSession(project, 5555L, accepted, NOOP_STATE_CHANGE)
             manager.sessions.add(session)
             manager.attachedPids[5555L] = 123L
             session.close() // 置 alive=false（死会话）
@@ -125,7 +128,7 @@ class AgentAttachChainTest : BasePlatformTestCase() {
      */
     fun test设置变更上升沿接线_在跑进程补挂调用在场() {
         val src = java.io.File(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java",
         ).readText()
         assertTrue("上升沿扫描入口调用应在场", "scanAndAttachRunningProcesses" in src)
         assertTrue("调用应带 settings-rescan 场景标签", "settings-rescan" in src)

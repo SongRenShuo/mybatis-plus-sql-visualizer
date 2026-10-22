@@ -66,7 +66,7 @@ class LogTimeCorrelatorTest {
         LogTimeCorrelator.clear()
         val t1 = now() - 10
         LogTimeCorrelator.put("fp", t1, "1")
-        assertEquals("渲染口径分叉时退化为队首配对（近似优于空）", t1, LogTimeCorrelator.take("fp", "不认识的签名")!!)
+        assertNull("签名已知不一致，不能借用其他执行的时间（master 严格语义）", LogTimeCorrelator.take("fp", "不认识的签名"))
     }
 
     @Test
