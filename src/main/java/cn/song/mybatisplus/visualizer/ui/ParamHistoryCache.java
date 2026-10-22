@@ -1,6 +1,8 @@
 // T-SyncK2JMaster482 波D2 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ParamHistoryCache.kt
 // （R22 T-04 命名方案 + T-DevAcceptFix2 ①按键激活指针 + F49/F50 增量同步）
 // 自 master 同文件 T-M19-StorageClear + F54 增量移植（桶外粗锁 + 存储代际 + 应用级清理）
+// T-SyncK2JMaster496 自 master 同文件 T-PresetMethodScope/T-PresetMethodBinding 增量移植
+//（computeKey 第三维 scope + 旧键回落 + 方案×方法最近保存键指针表及其持久化）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
@@ -69,6 +71,17 @@ public class ParamHistoryCache {
     /** T-DevAcceptFix2 ①：按键激活指针的测试环境静态存储键（IDE 环境走 PluginSettings 同名字段）。 */
     private static final String ACTIVE_BY_KEY_STORAGE_KEY = "paramActiveSchemeByKey";
 
+    /** T-PresetMethodBinding：方案×方法最近保存键的测试环境静态存储键（IDE 环境走同名字段）。 */
+    private static final String RECENT_KEY_STORAGE_KEY = "paramSchemeRecentKey";
+
+    /**
+     * T-PresetMethodScope：声明作用域在缓存键里的分隔符。
+     *
+     * <p>选 {@code |@} 而不是单字符：旧键形如 {@code tableName:<hex>} / {@code sql:<hex>}，
+     * 表名与指纹都不会含本串；回落用 {@link #legacyKeyOf} 一次切分即可拿回旧键，不需要解析结构。</p>
+     */
+    public static final String SCOPE_SEPARATOR = "|@";
+
     /** 持久化 key（IDE 环境：PluginSettings.State.paramHistoryJson 字段；测试环境：静态存储 key）。 */
     private static final String STORAGE_KEY = "paramHistory";
 
@@ -118,6 +131,7 @@ public class ParamHistoryCache {
                 state.setParamSchemesJson("");
                 state.setParamActiveScheme(DEFAULT_SCHEME);
                 state.setParamActiveSchemeByKey("");
+                state.setParamSchemeRecentKey("");
             } catch (Throwable t) {
                 stateFailure = t;
             }
@@ -137,6 +151,7 @@ public class ParamHistoryCache {
                 fallbackStorage.put(SCHEMES_STORAGE_KEY, "");
                 fallbackStorage.put(ACTIVE_SCHEME_STORAGE_KEY, DEFAULT_SCHEME);
                 fallbackStorage.put(ACTIVE_BY_KEY_STORAGE_KEY, "");
+                fallbackStorage.put(RECENT_KEY_STORAGE_KEY, "");
             }
         }
     }
@@ -188,6 +203,17 @@ public class ParamHistoryCache {
     private final ConcurrentHashMap<String, String> activeSchemeByKey = new ConcurrentHashMap<>();
 
     /**
+     * T-PresetMethodBinding：方案 × 声明作用域 → 该预设在该方法下**最近一次保存**的完整键。
+     *
+     * <p>用途与「改 SQL 不丢」：同一方法里改了 SQL（键的 SQL 指纹段变化），精确键未命中时按本表
+     * 找回上次那份快照。与 {@link #activeSchemeByKey} 同层（都是指针，不存内容），随命名方案一起持久化。
+     * 顶层 CHM + 内层 CHM：写只在保存路径（持 {@link #STORAGE_MUTATION_LOCK}），读在召回路径
+     * （{@link #bucketLock} 内探测）。</p>
+     */
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> recentKeyBySchemeScope =
+            new ConcurrentHashMap<>();
+
+    /**
      * 旧全局单值激活方案（持久化兼容 + 未记录键的回落；语义见 {@link #activeSchemeFor}）。
      * F54 微（性能十八轮）：volatile——EDT 写 / pooled 读窗口窄但真实（写未发布时
      * 读侧可能长眼看旧值），引用写原子性由 volatile 发布补齐。
@@ -223,14 +249,87 @@ public class ParamHistoryCache {
      * **无表名 = {@code sql:} + SQL 文本规范化指纹**（dedupeKey 同源口径——{@code normalizeSqlWhitespace}
      * + {@code sqlFingerprint}），纯文本/自定义 DAO 预览的调试参数不再丢失。
      *
+     * <p>T-PresetMethodScope：第三维 {@code scope}（声明作用域 = 项目身份 + 相对路径 + 方法签名）非空时
+     * 追加 {@code |@<scope>}——同一段 SQL 写在两个方法里时，键不再相同，预设与参数历史按方法隔离。
+     * scope 为空返回旧格式，既有调用点与存量持久化数据逐字节不变。</p>
+     *
      * @param tableName 表名（null 表示纯文本预览——R22 起以规范化指纹为键持久化）
      * @param rawSql    原始 SQL（用于计算指纹）
      * @return 缓存键（恒非 null——rawSql 空串也有指纹；调用方仍可按需判空）
      */
     public String computeKey(String tableName, String rawSql) {
-        if (tableName != null && !tableName.isEmpty()) return tableName + ":" + fingerprint(rawSql);
-        String normalized = LogSqlModelsKt.normalizeSqlWhitespace(rawSql);
-        return "sql:" + LogSqlModelsKt.sqlFingerprint(normalized);
+        return computeKey(tableName, rawSql, null);
+    }
+
+    /**
+     * @param scope 声明作用域（{@code cn.song.mybatisplus.visualizer.psi.PreviewOriginScope} 产出；null = 无方法上下文）
+     */
+    public String computeKey(String tableName, String rawSql, String scope) {
+        String legacy;
+        if (tableName != null && !tableName.isEmpty()) {
+            legacy = tableName + ":" + fingerprint(rawSql);
+        } else {
+            String normalized = LogSqlModelsKt.normalizeSqlWhitespace(rawSql);
+            legacy = "sql:" + LogSqlModelsKt.sqlFingerprint(normalized);
+        }
+        if (scope == null || scope.isBlank()) return legacy;
+        return legacy + SCOPE_SEPARATOR + scope.replace(SCOPE_SEPARATOR, "|_");
+    }
+
+    /**
+     * T-PresetMethodScope：带 scope 键 → 旧键（无 scope）。存量数据（升级前写入）全部挂在旧键上，
+     * 读路径据此回落，避免升级后预设「消失」。
+     */
+    public String legacyKeyOf(String key) {
+        int idx = key.indexOf(SCOPE_SEPARATOR);
+        return idx < 0 ? key : key.substring(0, idx);
+    }
+
+    /** T-PresetMethodBinding：键里的声明作用域（无 scope 键返回 null）。 */
+    public String scopeOf(String key) {
+        int idx = key.indexOf(SCOPE_SEPARATOR);
+        return idx >= 0 ? key.substring(idx + SCOPE_SEPARATOR.length()) : null;
+    }
+
+    /**
+     * T-PresetMethodBinding：记录「该方案在该方法下最近一次保存的键」。无 scope 键（日志/历史
+     * 双击链路）不记——它们没有方法归属，回落目标只对方法键有意义。调用方须持 {@link #bucketLock}。
+     */
+    private void recordRecentKeyLocked(String scheme, String key) {
+        String scope = scopeOf(key);
+        if (scope == null) return;
+        recentKeyBySchemeScope
+                .computeIfAbsent(scheme, k -> new ConcurrentHashMap<>())
+                .put(scope, key);
+    }
+
+    /**
+     * T-PresetMethodBinding：**改 SQL 不丢**的召回入口——按当前键的作用域找该预设（当前激活方案）
+     * 最近一次保存的快照。
+     *
+     * <p>与 {@link #recall} 的分工：{@code recall} 只做精确键 + 旧键回落（语义是「同一条 SQL 的快照」）；
+     * 本方法才跨 SQL 形态，返回的是「这个方法上次用的参数」。面板据此只恢复参数值与 FieldFill，
+     * 结构态（勾选/foreach）不参与——Wrapper 条件 id 是按解析序递增的，跨 SQL 套用会错位。</p>
+     *
+     * @return 回落快照；无指针 / 指针键就是精确键或旧键（已由 recall 覆盖）/ 桶内已淘汰 → null
+     */
+    public Map<String, String> recallRecent(String key) {
+        String scope = scopeOf(key);
+        if (scope == null) return null;
+        String legacy = legacyKeyOf(key);
+        synchronized (bucketLock) {
+            String active = activeSchemeFor(key);
+            ConcurrentHashMap<String, String> scopeKeys = recentKeyBySchemeScope.get(active);
+            String recentKey = scopeKeys != null ? scopeKeys.get(scope) : null;
+            if (recentKey == null) return null;
+            if (recentKey.equals(key) || recentKey.equals(legacy)) return null;
+            LinkedHashMap<String, Map<String, String>> entries =
+                    DEFAULT_SCHEME.equals(active) ? cache : schemes.get(active);
+            if (entries == null) return null;
+            Map<String, String> hit = entries.get(recentKey);
+            if (hit != null) enforceMaxSize(entries);
+            return hit;
+        }
     }
 
     /**
@@ -274,6 +373,8 @@ public class ParamHistoryCache {
                 LinkedHashMap<String, Map<String, String>> entries = entriesForScheme(scheme);
                 entries.put(key, params);
                 enforceMaxSize(entries);
+                // T-PresetMethodBinding：记下「该方案在该方法下最近保存的键」，供改 SQL 后回落
+                recordRecentKeyLocked(scheme, key);
             }
             persistToStorage();
             return true;
@@ -293,7 +394,9 @@ public class ParamHistoryCache {
             LinkedHashMap<String, Map<String, String>> entries =
                     DEFAULT_SCHEME.equals(active) ? cache : schemes.get(active);
             if (entries == null) return null;
+            // T-PresetMethodScope：精确键优先，未命中回落旧键（升级前的存量快照）
             Map<String, String> value = entries.get(key);
+            if (value == null) value = entries.get(legacyKeyOf(key));
             if (value != null) {
                 // 访问后 LinkedHashMap 自动更新顺序（accessOrder=true），无需手动处理
                 enforceMaxSize(entries);
@@ -338,6 +441,7 @@ public class ParamHistoryCache {
             schemes.clear();
             schemeOrder.clear();
             activeSchemeByKey.clear();
+            recentKeyBySchemeScope.clear();
             legacyActiveScheme = DEFAULT_SCHEME;
         }
     }
@@ -377,17 +481,60 @@ public class ParamHistoryCache {
      * UI（面板下拉/管理对话框）只列「在本方法下确有条目」的预设，达成「每个方法一套预设、互不干扰」。
      * key 为 null/空（无预览上下文）→ 空表（只有默认方案）。
      * F54：桶级 containsKey 探测入临界区（读侧与桶扩容/结构写互斥）。
+     *
+     * <p>T-PresetMethodScope：带 scope 键没有直接条目时回落旧键（升级前的存量预设），并把命中的
+     * 快照**惰性复制**到新键——首次打开该方法后两侧各自独立，旧预设不再持续共享。</p>
      */
     public List<String> schemeNamesFor(String key) {
         if (key == null || key.isEmpty()) return List.of();
+        String legacy = legacyKeyOf(key);
         List<String> names = orderedSchemeNames();
+        List<String> direct = new ArrayList<>();
         synchronized (bucketLock) {
-            List<String> out = new ArrayList<>();
             for (String name : names) {
                 LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
-                if (entries != null && entries.containsKey(key)) out.add(name);
+                if (entries != null && entries.containsKey(key)) direct.add(name);
             }
-            return out;
+        }
+        if (!direct.isEmpty() || legacy.equals(key)) return direct;
+        List<String> fallback = new ArrayList<>();
+        synchronized (bucketLock) {
+            for (String name : names) {
+                LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+                if (entries != null && entries.containsKey(legacy)) fallback.add(name);
+            }
+        }
+        if (!fallback.isEmpty()) migrateLegacyFor(key, legacy, fallback);
+        return fallback;
+    }
+
+    /**
+     * T-PresetMethodScope：把 {@code names} 各方案在旧键 {@code legacy} 下的快照复制到带 scope 键 {@code key}。
+     * 只在「新键无条目、旧键有条目」时发生（{@link #schemeNamesFor} 回落分支），每个方法至多一次；
+     * 复制后两侧独立编辑，不再互相覆盖。激活指针随迁（仅当新键尚无指针）。
+     */
+    private void migrateLegacyFor(String key, String legacy, List<String> names) {
+        synchronized (STORAGE_MUTATION_LOCK) {
+            if (observedStorageGeneration != STORAGE_GENERATION.get()) return;
+            boolean migrated = false;
+            synchronized (bucketLock) {
+                for (String name : names) {
+                    LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+                    if (entries == null) continue;
+                    if (entries.containsKey(key)) continue;
+                    Map<String, String> snapshot = entries.get(legacy);
+                    if (snapshot == null) continue;
+                    entries.put(key, snapshot);
+                    enforceMaxSize(entries);
+                    recordRecentKeyLocked(name, key);
+                    migrated = true;
+                }
+                if (migrated && !activeSchemeByKey.containsKey(key)) {
+                    String legacyPointer = activeSchemeByKey.get(legacy);
+                    if (legacyPointer != null) activeSchemeByKey.put(key, legacyPointer);
+                }
+            }
+            if (migrated) persistToStorage();
         }
     }
 
@@ -395,18 +542,36 @@ public class ParamHistoryCache {
      * T-DevAcceptFix2 ①：指定缓存键的激活方案名。取值链：按键记录 → 旧全局值回落 → 默认方案；
      * 回落值仅在「该名字在该键下确有条目」时生效（否则默认方案）——迁移安全（V92）。
      * key 为 null/空 → 默认方案。F54：桶级探测入临界区。
+     *
+     * <p>T-PresetMethodScope：带 scope 键未记录指针时，先回落同一条 SQL 的旧键指针，再回落全局值。</p>
      */
     public String activeSchemeFor(String key) {
         if (key == null || key.isEmpty()) return DEFAULT_SCHEME;
+        String legacy = legacyKeyOf(key);
+        String scope = scopeOf(key);
         String stored = activeSchemeByKey.get(key);
+        if (stored == null) stored = activeSchemeByKey.get(legacy);
         if (stored == null) stored = legacyActiveScheme;
         if (DEFAULT_SCHEME.equals(stored)) return DEFAULT_SCHEME;
-        boolean hit;
+        boolean hasEntry;
         synchronized (bucketLock) {
             LinkedHashMap<String, Map<String, String>> entries = schemes.get(stored);
-            hit = entries != null && entries.containsKey(key);
+            if (entries == null) {
+                hasEntry = false;
+            } else if (entries.containsKey(key) || entries.containsKey(legacy)) {
+                hasEntry = true;
+            } else {
+                // T-PresetMethodBinding：改了 SQL 的键在桶里没有条目，但指针指向该方案在本方法下最近
+                // 保存的键——仍视为「该方案在此键下有效」，否则回落链会在 activeSchemeFor 处断掉。
+                String recentKey = null;
+                if (scope != null) {
+                    ConcurrentHashMap<String, String> scopeKeys = recentKeyBySchemeScope.get(stored);
+                    recentKey = scopeKeys != null ? scopeKeys.get(scope) : null;
+                }
+                hasEntry = recentKey != null && entries.containsKey(recentKey);
+            }
         }
-        return hit ? stored : DEFAULT_SCHEME;
+        return hasEntry ? stored : DEFAULT_SCHEME;
     }
 
     /** 是否存在指定命名方案。 */
@@ -479,6 +644,8 @@ public class ParamHistoryCache {
                 LinkedHashMap<String, Map<String, String>> entries = entriesForScheme(name);
                 entries.put(key, params);
                 enforceMaxSize(entries);
+                // T-PresetMethodBinding：另存为同时刷新「最近保存键」指针
+                recordRecentKeyLocked(name, key);
             }
             activeSchemeByKey.put(key, name);
             legacyActiveScheme = name;
@@ -487,11 +654,34 @@ public class ParamHistoryCache {
         }
     }
 
-    /** 召回指定方案的 {@code key} 快照（方案不存在/键未命中返回 null）。F54：get 读即回写 → 临界区。 */
+    /**
+     * 召回指定方案的 {@code key} 快照（方案不存在/键未命中返回 null）。F54：get 读即回写 → 临界区。
+     * T-PresetMethodScope：带 scope 键未命中回落旧键（存量快照）。
+     */
     public Map<String, String> recallFromScheme(String name, String key) {
         synchronized (bucketLock) {
             LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
-            return entries != null ? entries.get(key) : null;
+            if (entries == null) return null;
+            Map<String, String> hit = entries.get(key);
+            return hit != null ? hit : entries.get(legacyKeyOf(key));
+        }
+    }
+
+    /**
+     * T-PresetMethodScope 测试缝：指定方案在指定键下**直接**有条目（不含旧键回落）。
+     * 惰性迁移的判据——迁移前带 scope 键无直接条目，迁移后才有。
+     */
+    public boolean schemeHasDirectEntry(String name, String key) {
+        synchronized (bucketLock) {
+            LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+            return entries != null && entries.containsKey(key);
+        }
+    }
+
+    /** T-PresetMethodScope 测试缝：默认方案桶在指定键下是否直接有条目（不含旧键回落）。 */
+    public boolean hasDirectEntry(String key) {
+        synchronized (bucketLock) {
+            return cache.containsKey(key);
         }
     }
 
@@ -562,10 +752,14 @@ public class ParamHistoryCache {
         }
     }
 
-    /** 是否包含指定键（该键的激活方案；测试断言用，触发 LRU 顺序更新）。 */
+    /**
+     * 是否包含指定键（该键的激活方案；测试断言用，触发 LRU 顺序更新）。
+     * T-PresetMethodScope：带 scope 键未命中回落旧键。
+     */
     public boolean containsKey(String key) {
         synchronized (bucketLock) {
-            return entriesForScheme(activeSchemeFor(key)).containsKey(key);
+            LinkedHashMap<String, Map<String, String>> entries = entriesForScheme(activeSchemeFor(key));
+            return entries.containsKey(key) || entries.containsKey(legacyKeyOf(key));
         }
     }
 
@@ -612,12 +806,15 @@ public class ParamHistoryCache {
         }
         String active = legacyActiveScheme;
         String activeByKey = serializeActiveByKey();
+        // T-PresetMethodBinding：指针表随方案集合一起落盘（内容未变时也重序列化，量小可忽略）
+        String recentKeys = serializeRecentKeys();
         boolean written;
         try {
             PluginSettings.State state = PluginSettings.getInstance().getState();
             state.setParamSchemesJson(schemesJson);
             state.setParamActiveScheme(active);
             state.setParamActiveSchemeByKey(activeByKey);
+            state.setParamSchemeRecentKey(recentKeys);
             written = true;
         } catch (Throwable t) {
             written = false;
@@ -628,6 +825,7 @@ public class ParamHistoryCache {
                 fallbackStorage.put(SCHEMES_STORAGE_KEY, schemesJson);
                 fallbackStorage.put(ACTIVE_SCHEME_STORAGE_KEY, active);
                 fallbackStorage.put(ACTIVE_BY_KEY_STORAGE_KEY, activeByKey);
+                fallbackStorage.put(RECENT_KEY_STORAGE_KEY, recentKeys);
             }
         }
         // 旧字段保持既有语义：默认方案快照继续写 paramHistoryJson（旧版构建可读，存量零迁移的另一面）
@@ -705,6 +903,58 @@ public class ParamHistoryCache {
     }
 
     /**
+     * T-PresetMethodBinding：{@code {"方案名":{"<scope>":"<键>"}}} 序列化。
+     * 空表返回空串（对齐其余参数字段「无数据 = 空串」）；方案与 scope 均排序，持久化不漂移。
+     */
+    private String serializeRecentKeys() {
+        if (recentKeyBySchemeScope.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("{");
+        boolean firstScheme = true;
+        List<String> schemeNamesSorted = new ArrayList<>(recentKeyBySchemeScope.keySet());
+        Collections.sort(schemeNamesSorted);
+        for (String scheme : schemeNamesSorted) {
+            ConcurrentHashMap<String, String> scopeKeys = recentKeyBySchemeScope.get(scheme);
+            if (scopeKeys == null || scopeKeys.isEmpty()) continue;
+            if (!firstScheme) sb.append(",");
+            firstScheme = false;
+            sb.append("\"").append(escapeJson(scheme)).append("\":{");
+            boolean firstScope = true;
+            List<String> scopesSorted = new ArrayList<>(scopeKeys.keySet());
+            Collections.sort(scopesSorted);
+            for (String scope : scopesSorted) {
+                String key = scopeKeys.get(scope);
+                if (key == null) continue;
+                if (!firstScope) sb.append(",");
+                firstScope = false;
+                sb.append("\"").append(escapeJson(scope)).append("\":\"").append(escapeJson(key)).append("\"");
+            }
+            sb.append("}");
+        }
+        sb.append("}");
+        return firstScheme ? "" : sb.toString();
+    }
+
+    /** T-PresetMethodBinding：最近键指针反序列化（损坏/空 → 空表，不崩溃）。 */
+    private Map<String, Map<String, String>> deserializeRecentKeys(String json) {
+        String trimmed = json.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return Map.of();
+        Map<String, Map<String, String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : splitTopLevelEntries(trimmed.substring(1, trimmed.length() - 1))) {
+            String valueText = e.getValue();
+            if (!valueText.startsWith("{") || !valueText.endsWith("}")) continue;
+            Map<String, String> inner = new LinkedHashMap<>();
+            for (Map.Entry<String, String> innerEntry
+                    : splitTopLevelEntries(valueText.substring(1, valueText.length() - 1))) {
+                String key = unescapeJson(removeSurrounding(innerEntry.getValue(), "\""));
+                String scopeName = unescapeJson(innerEntry.getKey());
+                if (!scopeName.isEmpty() && !key.isEmpty()) inner.put(scopeName, key);
+            }
+            if (!inner.isEmpty()) result.put(unescapeJson(e.getKey()), inner);
+        }
+        return result;
+    }
+
+    /**
      * 从持久化恢复内存缓存（IDE 环境）；测试环境回落静态存储。
      * R22 T-04（D2 定案）：旧 {@code paramHistoryJson} 数据自动成为「默认方案」——零迁移损失，老用户无感。
      */
@@ -747,6 +997,18 @@ public class ParamHistoryCache {
                     activeSchemeByKey.put(e.getKey(), e.getValue());
                 }
             } catch (Throwable ignored) {
+            }
+        }
+        // T-PresetMethodBinding：最近保存键指针恢复（缺字段/损坏 → 空表，回落链退化为「精确 + 旧键」）
+        String recentJson = readPersisted(RECENT_KEY_STORAGE_KEY,
+                () -> PluginSettings.getInstance().getState().getParamSchemeRecentKey());
+        if (recentJson != null && !recentJson.isBlank()) {
+            try {
+                for (Map.Entry<String, Map<String, String>> e : deserializeRecentKeys(recentJson).entrySet()) {
+                    recentKeyBySchemeScope.put(e.getKey(), new ConcurrentHashMap<>(e.getValue()));
+                }
+            } catch (Throwable t) {
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw (Error) t;
             }
         }
         // 全方案统一执行上限（含 D2 迁入的默认方案）；F54：构造期 this 未逃逸、并发未起，
