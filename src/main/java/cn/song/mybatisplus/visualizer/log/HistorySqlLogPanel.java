@@ -415,12 +415,15 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         }
     };
 
-    public List<AnAction> navigationActionsForTest() {
+    /**
+     * 测试缝：导航工具栏动作组。
+     *
+     * <p>{@code ActionGroup.getChildren} 是 override-only API，不能在插件字节码里出现（Marketplace
+     * 校验报 override-only usage）——生产侧只暴露组对象，取子项由测试代码自行调用。</p>
+     */
+    public ActionGroup navigationToolbarGroupForTest() {
         ActionToolbar toolbar = _navToolbarRef;
-        if (toolbar == null) return List.of();
-        ActionGroup group = (ActionGroup) toolbar.getActionGroup();
-        AnAction[] children = group.getChildren(null);
-        return children == null ? List.of() : new ArrayList<>(Arrays.asList(children));
+        return toolbar != null ? toolbar.getActionGroup() : null;
     }
 
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */

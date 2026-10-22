@@ -57,6 +57,13 @@ public final class SqlDockedPreview implements Disposable {
     public String getDisplayedSqlForTest() { return content != null && displayedEntry != null ? content.editor().getDocument().getText() : null; }
     public Editor getEditorForTest() { return content != null ? content.editor() : null; }
     public boolean isPinnedForTest() { return isPinned(); }
+
+    /** T-PerfSweep26-05（F98）测试缝：isPinned() 调用计数（内部含 document.text 全文读）——
+     *  同一条目展示中二次事件经同一性短路后不得再增长。 */
+    private int isPinnedCallCountForTest;
+
+    public int getIsPinnedCallCountForTest() { return isPinnedCallCountForTest; }
+
     public void restoreAndFollowForTest() { restoreAndFollow(); }
 
     public void open() { opened = true; refreshSelection(); }
@@ -77,7 +84,14 @@ public final class SqlDockedPreview implements Disposable {
     }
 
     public void refreshSelection() {
-        if (!opened || isPinned()) return;
+        if (!opened) return;
+        // T-PerfSweep26-05（F98）：同一条目已展示且仍是唯一选中 → 走到下方既有 `displayedEntry == entry`
+        // 处本来就会原样返回，pin 态重算无任何旁路影响——提前返回，免付 isPinned() 的
+        // document.text 全文拷贝（流式灌入每拍 ListDataEvent 都进这里）。两道守卫保证与原语义逐字
+        // 等价：displayedEntry==null 不得短路（否则 null==null 命中，空态/多条选中态的状态文案
+        // 不再刷新）；多选（selectedIndices.length!=1）不得短路（原路径会把预览清掉改显「已选多条」）。
+        if (displayedEntry != null && list.getSelectedIndices().length == 1 && displayedEntry == list.getSelectedValue()) return;
+        if (isPinned()) return;
         LogSqlEntry entry = list.getSelectedIndices().length == 1 ? list.getSelectedValue() : null;
         if (entry == null) {
             displayedEntry = null;
@@ -110,6 +124,7 @@ public final class SqlDockedPreview implements Disposable {
     }
 
     private boolean isPinned() {
+        isPinnedCallCountForTest++; // F98 测试缝
         return displayedEntry != null && !Objects.equals(content != null ? content.editor().getDocument().getText() : null, originalSql);
     }
 

@@ -28,6 +28,10 @@ public final class SqlLogPanelKt {
     private SqlLogPanelKt() {
     }
 
+    /** T-PerfSweep26-07（F105）：报错片段空白折叠正则提文件级常量——原 inline 构造在渲染热路径每次重建（Java 侧 {@code String.replaceAll} 每调用重编 Pattern，同病），提常量后一次复用。 */
+    private static final java.util.regex.Pattern ERROR_FRAGMENT_WHITESPACE_REGEX =
+            java.util.regex.Pattern.compile("\\s+");
+
     /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
     public static String withTerminator(String sql) {
         return (sql.isEmpty() || sql.endsWith(";")) ? sql : sql + ";";
@@ -706,7 +710,7 @@ public final class SqlLogPanelKt {
         if (err == null) {
             return null;
         }
-        String oneLine = err.replaceAll("\\s+", " ");
+        String oneLine = ERROR_FRAGMENT_WHITESPACE_REGEX.matcher(err).replaceAll(" ");
         String text = oneLine.length() > 80 ? oneLine.substring(0, 80) + "…" : oneLine;
         return new kotlin.Pair<>("⛔ " + text + " ",
                 new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0xD32F2F)));
