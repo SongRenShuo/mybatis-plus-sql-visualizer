@@ -37,15 +37,26 @@ public final class JavaCodeGenerator {
     /**
      * Lambda 模式实体上下文（列名 → 字段名映射；T-M37 含联表副实体）。
      *
-     * @param className     实体类名
-     * @param columnToField 列名 → 字段名映射
-     * @param subEntities   联表副实体（键 = SQL 表别名）
+     * @param className        实体类名
+     * @param columnToField    列名 → 字段名映射
+     * @param subEntities      联表副实体（键 = SQL 表别名）
+     * @param logicDeleteColumn T-ReverseGroupLogicDelete：逻辑删除列（实体侧 {@code @TableLogic}，由 EntityResolver 解析）。
+     *                          MP 会在 select/update/delete 上自动追加 {@code AND <列> = <未删除值>}，反向生成时该条件与
+     *                          select 投影都属「框架注入」而非用户手写——命中即跳过，避免生成 {@code deleted = 0} 冗余条件。
+     * @param logicDeleteValue 逻辑删除的「未删除」值（设置页 {@code logicDeleteValue}，默认 "0"）——只有值相等才判定为
+     *                          框架注入条件；用户手写 {@code deleted = 1} 这类真过滤条件不受影响。
      */
     public record EntityTarget(
             String className,
             Map<String, String> columnToField,
-            Map<String, EntityTarget> subEntities
+            Map<String, EntityTarget> subEntities,
+            String logicDeleteColumn,
+            String logicDeleteValue
     ) {
+        public EntityTarget(String className, Map<String, String> columnToField, Map<String, EntityTarget> subEntities) {
+            this(className, columnToField, subEntities, null, "0");
+        }
+
         public EntityTarget(String className, Map<String, String> columnToField) {
             this(className, columnToField, Map.of());
         }
@@ -110,6 +121,8 @@ public final class JavaCodeGenerator {
             GeneratedWrapper wrapperKind,
             InvocationTarget invocation
     ) {
+        // 派生表无实体上下文时无法推断类名——在分发前拦下，避免产出不可编译代码
+        requireConcreteTable(result.tableName(), entity);
         return switch (result.kind()) {
             case SELECT -> generateSelect(result, entity, wrapperKind, invocation);
             case UPDATE -> generateUpdate(result, entity, wrapperKind, invocation);
@@ -158,7 +171,10 @@ public final class JavaCodeGenerator {
         // select 调用，MP 全列语义）
         List<SelectColumn> selectColumns = result.selectColumns();
         if (selectColumns != null) {
-            selectColumns = selectColumns.stream().filter(c -> !isIgnoredColumn(c.expr())).toList();
+            // T-ReverseGroupLogicDelete：逻辑删除列由 MP 全列展开自动带出，显式再 select 一遍无意义
+            selectColumns = selectColumns.stream()
+                    .filter(c -> !isIgnoredColumn(c.expr()) && !isInjectedLogicDeleteProjection(c, entity))
+                    .toList();
         }
         // MP core 的 Lambda 列参数只接受 SFunction；别名/表达式/未映射投影和分组
         // 必须整链使用字符串 Wrapper，不能只把单个列参数换成字符串。
@@ -191,7 +207,7 @@ public final class JavaCodeGenerator {
         EntityTarget columnEntity = stringCore ? null : entity;
         boolean rawMode = effectiveKind == GeneratedWrapper.MPJ_QUERY;
         StringBuilder chain = new StringBuilder();
-        List<Condition> conditions = filterConditions(result.conditions());
+        List<Condition> conditions = filterConditions(result.conditions(), entity);
         if (isJoin) {
             if (selectColumns == null || selectColumns.isEmpty()) {
                 chain.append("\n    .selectAll(").append(entity != null ? entity.className() : entityClassName(result.tableName())).append(".class)");
@@ -477,7 +493,7 @@ public final class JavaCodeGenerator {
                         .append(set.value() != null ? javaValue(set.value()) : "null").append(")");
             }
         }
-        for (Condition c : filterConditions(result.conditions())) chain.append("\n    .").append(renderCondition(c, entity));
+        for (Condition c : filterConditions(result.conditions(), entity)) chain.append("\n    .").append(renderCondition(c, entity));
         for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
         if (result.limit() != null) {
             chain.append("\n    .last(\"").append(javaEscape(renderLimit(result.limit()))).append("\")");
@@ -525,14 +541,15 @@ public final class JavaCodeGenerator {
                         .append(")");
             }
             for (String j : renderJoins(result, entity)) chain.append("\n    .").append(j);
-            for (Condition c : filterConditions(result.conditions())) chain.append("\n    .").append(renderCondition(c, entity));
+            for (Condition c : filterConditions(result.conditions(), entity)) chain.append("\n    .").append(renderCondition(c, entity));
             return appendWrapperAndInvocation(sb, "DeleteJoinWrapper", entity.className(), wrapperKind,
                     chain.toString(), invocation,
                     () -> "new DeleteJoinWrapper<>(" + entity.className() + ".class)",
                     () -> callerVar(invocation) + ".deleteJoin(wrapper);");
         }
+        // 单表删除：现状不变
         StringBuilder chain = new StringBuilder();
-        for (Condition c : filterConditions(result.conditions())) chain.append("\n    .").append(renderCondition(c, entity));
+        for (Condition c : filterConditions(result.conditions(), entity)) chain.append("\n    .").append(renderCondition(c, entity));
         for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
         if (result.limit() != null) {
             chain.append("\n    .last(\"").append(javaEscape(renderLimit(result.limit()))).append("\")");
@@ -804,6 +821,11 @@ public final class JavaCodeGenerator {
                 sb.append("// 注意：以下列未在实体中找到对应字段，已回落字符串列名：")
                         .append(String.join(", ", unmapped)).append("\n");
             }
+            // T-ReverseGroupLogicDelete：交代被跳过的逻辑删除条件，避免用户误以为生成器漏了条件
+            if (entity.logicDeleteColumn() != null) {
+                sb.append("// 逻辑删除列 ").append(entity.logicDeleteColumn())
+                        .append(" 由 MP 依据 @TableLogic 自动追加，未重复生成该条件与投影\n");
+            }
         }
         if (wrapperKind == GeneratedWrapper.MPJ_LAMBDA && entity != null) {
             sb.append("// 需引入 MyBatis-Plus-Join（MPJ）依赖\n");
@@ -867,20 +889,32 @@ public final class JavaCodeGenerator {
         return s.equals("serialversionuid");
     }
 
-    /** 条件树过滤（命中 serialVersionUID 列的 Simple/In/Between/Like/Unary 跳过；Group 递归过滤）。 */
+    /** 条件树过滤（T-M42：默认参重载，entity = null）。 */
     private static List<Condition> filterConditions(List<Condition> conditions) {
+        return filterConditions(conditions, null);
+    }
+
+    /**
+     * 条件树过滤（T-M42）：命中 serialVersionUID 列的 Simple/In/Between/Like/Unary 条件跳过；
+     * Group 递归过滤（子条件全被过滤的组整组跳过，避免生成空 nested/not lambda）。
+     *
+     * <p>T-ReverseGroupLogicDelete：{@code entity} 非 null 时额外跳过「逻辑删除注入条件」——MP 依据
+     * {@code @TableLogic} 在 select/update/delete 上自动追加 {@code AND <列> = <未删除值>}，反解出的 SQL 里
+     * 该条件同样存在，但用户代码从未手写它，再生成一遍就是冗余（{@code deleted = 0 AND deleted = 0}）。
+     */
+    private static List<Condition> filterConditions(List<Condition> conditions, EntityTarget entity) {
         List<Condition> out = new ArrayList<>();
         for (Condition condition : conditions) {
             if (condition instanceof Condition.Group g) {
-                List<Condition> children = filterConditions(g.getChildren());
+                List<Condition> children = filterConditions(g.getChildren(), entity);
                 if (children.isEmpty()) continue;
                 out.add(new Condition.Group(g.getConnector(), children, g.getToggle(), g.getNegated()));
             } else if (condition instanceof Condition.Simple s) {
-                if (!isIgnoredColumn(s.getColumn().getColumnName())) out.add(condition);
+                if (!isIgnoredColumn(s.getColumn().getColumnName()) && !isInjectedLogicDelete(s, entity)) out.add(condition);
             } else if (condition instanceof Condition.Unary u) {
                 if (!isIgnoredColumn(u.getColumn().getColumnName())) out.add(condition);
             } else if (condition instanceof Condition.In in) {
-                if (!isIgnoredColumn(in.getColumn().getColumnName())) out.add(condition);
+                if (!isIgnoredColumn(in.getColumn().getColumnName()) && !isInjectedLogicDelete(in, entity)) out.add(condition);
             } else if (condition instanceof Condition.Between b) {
                 if (!isIgnoredColumn(b.getColumn().getColumnName())) out.add(condition);
             } else if (condition instanceof Condition.Like l) {
@@ -1079,20 +1113,35 @@ public final class JavaCodeGenerator {
         return "";
     }
 
-    /** 组渲染：括号组 / OR 分组 → nested / not lambda。 */
+    /** 组渲染（T-M36.1）：`(a = 1 OR b = 2)` → `nested(w -> w.eq(...))`；`NOT (...)` → `not(w -> ...)`；组内嵌套子组见 [renderGroupChildren]。 */
     private static String renderGroup(Condition.Group group, EntityTarget entity) {
         String wrapper = group.getNegated() ? "not" : "nested";
         return wrapper + "(w -> w" + renderGroupChildren(group, 2, entity) + ")";
     }
 
-    /** 组内子条件链。 */
+    /**
+     * 组内子条件链（nextVarIndex：嵌套 lambda 变量名序号，w2/w3...）。
+     *
+     * <p>子组的方法选择按语义分三档（MP 3.5.15 {@code NormalSegmentList.transformList} 实证）：
+     * <ul>
+     *   <li>子组取反 → {@code not(wN -> ...)}：negated 必须体现在方法名上，否则 NOT 整个丢失；</li>
+     *   <li>父组 OR 连接 → {@code or(wN -> ...)}：<b>用带 consumer 的 or 直接承载连接</b>，不再预发无参 {@code .or()}。
+     *       预发 {@code .or()} 再发 {@code .and(...)} 会命中 MP 的「上一分隔符 OR、新分隔符 AND → 移除 OR」逻辑，
+     *       把 OR 静默改成 AND（{@code a = 1 OR (b = 2 AND c = 3)} 会渲染成 {@code a = 1 AND (b = 2 AND c = 3)}）；</li>
+     *   <li>其余 → {@code nested(wN -> ...)}：等价于旧 {@code .and(wN -> ...)}，但不依赖「链首 AND 被丢弃」这一巧合。</li>
+     * </ul>
+     */
     private static String renderGroupChildren(Condition.Group group, int nextVarIndex, EntityTarget entity) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < group.getChildren().size(); i++) {
             Condition child = group.getChildren().get(i);
-            if (i > 0 && group.getConnector() == Connector.OR) sb.append("\n        .or()");
+            // OR 组内子组自带 or 连接（见下），无需再预发分隔符
+            if (i > 0 && group.getConnector() == Connector.OR && !isOrJoinedGroup(child)) sb.append("\n        .or()");
             if (child instanceof Condition.Group g) {
-                String method = g.getConnector() == Connector.OR ? "or" : "and";
+                String method;
+                if (g.getNegated()) method = "not";
+                else if (group.getConnector() == Connector.OR) method = "or";
+                else method = "nested";
                 String varName = "w" + nextVarIndex;
                 sb.append("\n        .").append(method).append("(").append(varName).append(" -> ").append(varName)
                         .append(renderGroupChildren(g, nextVarIndex + 1, entity)).append(")");
@@ -1101,6 +1150,69 @@ public final class JavaCodeGenerator {
             }
         }
         return sb.toString();
+    }
+
+    /** 该子组是否以带 consumer 的 `or(wN -> ...)` 承载父组的 OR 连接（此时不预发 `.or()` 分隔符）。 */
+    private static boolean isOrJoinedGroup(Condition condition) {
+        return condition instanceof Condition.Group g && !g.getNegated();
+    }
+
+    /**
+     * T-ReverseGroupLogicDelete：该条件是否为 MP 依据 `@TableLogic` 自动注入的逻辑删除条件。
+     *
+     * <p>判定三要素同时满足才算：列名命中实体的逻辑删除列、运算符为 `=`、值等于「未删除值」。
+     * 用户手写 `deleted = 1`（查已删除数据）不满足值条件，照常生成。
+     */
+    private static boolean isInjectedLogicDelete(Condition.Simple condition, EntityTarget entity) {
+        if (entity == null) return false;
+        String column = entity.logicDeleteColumn();
+        if (column == null) return false;
+        if (!"=".equals(condition.getOp())) return false;
+        if (!columnNameMatches(condition.getColumn().getColumnName(), column)) return false;
+        if (!(condition.getValue() instanceof SqlValue.Literal lit)) return false;
+        return trimQuotes(lit.getRaw().trim())
+                .equalsIgnoreCase(trimQuotes(entity.logicDeleteValue().trim()));
+    }
+
+    /** IN 形态（`deleted IN (0)`）同样属注入——MP 个别场景以单值 IN 表达。 */
+    private static boolean isInjectedLogicDelete(Condition.In condition, EntityTarget entity) {
+        if (entity == null) return false;
+        String column = entity.logicDeleteColumn();
+        if (column == null) return false;
+        if (condition.getNegated() || condition.getValues().size() != 1) return false;
+        if (!columnNameMatches(condition.getColumn().getColumnName(), column)) return false;
+        if (!(condition.getValues().get(0) instanceof SqlValue.Literal lit)) return false;
+        return trimQuotes(lit.getRaw().trim())
+                .equalsIgnoreCase(trimQuotes(entity.logicDeleteValue().trim()));
+    }
+
+    /** 列名匹配（复用 T-FixCamelMap 归一：原样 / snake_case / camelCase 三形态互认）。 */
+    private static boolean columnNameMatches(String actual, String expected) {
+        for (String variant : columnKeyVariants(actual)) {
+            if (variant.equalsIgnoreCase(expected)) return true;
+        }
+        for (String variant : columnKeyVariants(expected)) {
+            if (variant.equalsIgnoreCase(actual)) return true;
+        }
+        return false;
+    }
+
+    /** T-ReverseGroupLogicDelete：select 投影中的逻辑删除列（MP 全列展开已含，显式再列冗余）。 */
+    private static boolean isInjectedLogicDeleteProjection(SelectColumn sel, EntityTarget entity) {
+        if (entity == null) return false;
+        String column = entity.logicDeleteColumn();
+        if (column == null) return false;
+        String name = stripBt(afterLast(sel.expr(), '.'));
+        return columnNameMatches(name, column);
+    }
+
+    /** Kotlin `trim('\'')`：剥首尾单引号（可重复剥）。 */
+    private static String trimQuotes(String s) {
+        int start = 0;
+        int end = s.length();
+        while (start < end && s.charAt(start) == '\'') start++;
+        while (end > start && s.charAt(end - 1) == '\'') end--;
+        return s.substring(start, end);
     }
 
     /** 二元比较操作符 → 方法名。 */
@@ -1116,10 +1228,20 @@ public final class JavaCodeGenerator {
         };
     }
 
-    /** 值渲染：字符串 → Java 字符串字面量；数字/布尔 → 原样。 */
+    /**
+     * 值渲染：字符串（引号字面量）→ Java 字符串；数字/布尔 → 原样。
+     *
+     * <p>ANSI 类型字面量（{@code DATE '2024-01-01'} / {@code TIMESTAMP '...'}，解析侧 raw 保留前缀）不能原样
+     * 拼进 Java——{@code DATE '2024-01-01'} 在 Java 里是未闭合字符字面量，编译不过。这里只取引号内的
+     * 值渲染为字符串，交由驱动/数据库按列类型隐式转换（与 MP 传 String 参数的实际用法一致）。
+     */
     private static String javaValue(SqlValue value) {
         if (value instanceof SqlValue.Placeholder) return "\"?\"";
         if (value instanceof SqlValue.Literal lit) {
+            java.util.regex.Matcher ansiTyped = ANSI_TYPED_LITERAL.matcher(lit.getRaw().trim());
+            if (ansiTyped.matches()) {
+                return javaString(ansiTyped.group(2).replace("''", "'"));
+            }
             if (lit.getRaw().startsWith("'") && lit.getRaw().endsWith("'") && lit.getRaw().length() >= 2) {
                 return javaString(lit.getUnquoted());
             }
@@ -1127,6 +1249,10 @@ public final class JavaCodeGenerator {
         }
         return "";
     }
+
+    /** ANSI 类型字面量：`DATE '2024-01-01'` / `TIMESTAMP '2024-01-01 10:00:00'`（分组 2 = 引号内原文）。 */
+    private static final java.util.regex.Pattern ANSI_TYPED_LITERAL = java.util.regex.Pattern.compile(
+            "^(DATE|TIME|TIMESTAMP|DATETIME)\\s+'((?:[^']|'')*)'$", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     // ------------------------------------------------------------------
     // 参数化 apply（T-SqlToJavaPromote G7）
@@ -1361,6 +1487,21 @@ public final class JavaCodeGenerator {
             return Long.parseLong(s);
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    /**
+     * 派生表（`FROM (SELECT …) t`）无法推断实体类名——生成 `QueryWrapper<(SELECT …)>` 必然编译不过。
+     * 无实体上下文时明确报错，优于产出不可编译代码（有实体上下文则由用户选定实体，不受影响）。
+     */
+    private static void requireConcreteTable(String tableName, EntityTarget entity) {
+        if (entity != null) return;
+        if (tableName != null && tableName.stripLeading().startsWith("(")) {
+            throw new SqlReverseException(
+                    0,
+                    SqlReverseParser.KEY_UNSUPPORTED,
+                    "FROM 派生表（子查询）无法推断实体类名，请选择实体或改写为 JOIN 形态"
+            );
         }
     }
 }

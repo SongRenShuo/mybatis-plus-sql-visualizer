@@ -33,6 +33,9 @@ public final class SqlToJavaConverter {
     /** 单例（Kotlin object 转换）。 */
     public static final SqlToJavaConverter INSTANCE = new SqlToJavaConverter();
 
+    /** 逻辑删除「未删除」值默认值（与 MP `logic-not-delete-value` 默认一致）。 */
+    public static final String DEFAULT_LOGIC_DELETE_VALUE = "0";
+
     private SqlToJavaConverter() {
     }
 
@@ -94,13 +97,24 @@ public final class SqlToJavaConverter {
         return new Pair<>(mainCandidates, subCandidates);
     }
 
-    /** 批量生成代码（单条失败输出错误注释占位）。 */
+    /** 批量生成代码（单条失败输出错误注释占位；Kotlin 默认参重载，logicDeleteValue = 默认值）。 */
     public static String generateBatchCode(
             List<BatchItemResult> results,
             Map<Integer, List<EntityCandidate>> mainCandidates,
             Map<Integer, Map<String, List<EntityCandidate>>> subCandidates,
             ReverseWrapperFormat format,
             JavaCodeGenerator.InvocationTarget invocation) {
+        return generateBatchCode(results, mainCandidates, subCandidates, format, invocation, DEFAULT_LOGIC_DELETE_VALUE);
+    }
+
+    /** 批量生成代码（单条失败输出错误注释占位）。 */
+    public static String generateBatchCode(
+            List<BatchItemResult> results,
+            Map<Integer, List<EntityCandidate>> mainCandidates,
+            Map<Integer, Map<String, List<EntityCandidate>>> subCandidates,
+            ReverseWrapperFormat format,
+            JavaCodeGenerator.InvocationTarget invocation,
+            String logicDeleteValue) {
         List<String> parts = new ArrayList<>();
         for (int index = 0; index < results.size(); index++) {
             BatchItemResult item = results.get(index);
@@ -123,9 +137,12 @@ public final class SqlToJavaConverter {
                     for (ColumnInfo col : first.tableInfo().getColumns()) {
                         columnToField.put(col.getColumnName(), col.getFieldName());
                     }
-                    subEntities.put(en.getKey(), new JavaCodeGenerator.EntityTarget(className, columnToField));
+                    subEntities.put(en.getKey(), new JavaCodeGenerator.EntityTarget(
+                            className, columnToField, Map.of(),
+                            first.tableInfo().getLogicDeleteColumn(), logicDeleteValue));
                 }
-                parts.add(generateCode(result, candidates.isEmpty() ? null : candidates.get(0), format, invocation, subEntities));
+                parts.add(generateCode(result, candidates.isEmpty() ? null : candidates.get(0), format, invocation,
+                        subEntities, logicDeleteValue));
             }
         }
         return String.join("\n\n", parts);
@@ -264,6 +281,26 @@ public final class SqlToJavaConverter {
             ReverseWrapperFormat format,
             JavaCodeGenerator.InvocationTarget invocation,
             Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
+        return generateCode(result, candidate, format, invocation, subEntities, DEFAULT_LOGIC_DELETE_VALUE);
+    }
+
+    /**
+     * 生成代码（T-ReverseGroupLogicDelete：logicDeleteValue 全参形态）。
+     *
+     * @param format          设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
+     * @param invocation      T-M36.7：调用上下文（Service/Mapper + 可选 VO），null → 纯表达式
+     * @param subEntities     T-M37：联表副实体（别名 → 实体），多表列归属用
+     * @param logicDeleteValue T-ReverseGroupLogicDelete：逻辑删除「未删除」值（设置页
+     *                        {@code logicDeleteValue}，默认 "0"）——生成器据此识别 MP 自动注入的
+     *                        {@code AND <列> = <值>} 并跳过；由调用方读取配置传入，保持本组件纯函数。
+     */
+    public static String generateCode(
+            SqlReverseResult result,
+            EntityCandidate candidate,
+            ReverseWrapperFormat format,
+            JavaCodeGenerator.InvocationTarget invocation,
+            Map<String, JavaCodeGenerator.EntityTarget> subEntities,
+            String logicDeleteValue) {
         boolean isJoin = !result.joins().isEmpty();
         GeneratedWrapper wrapper = isJoin && candidate != null ? GeneratedWrapper.MPJ_LAMBDA
                 : isJoin ? GeneratedWrapper.MPJ_QUERY
@@ -276,7 +313,8 @@ public final class SqlToJavaConverter {
             for (ColumnInfo col : candidate.tableInfo().getColumns()) {
                 columnToField.put(col.getColumnName(), col.getFieldName());
             }
-            target = new JavaCodeGenerator.EntityTarget(className, columnToField, subEntities);
+            target = new JavaCodeGenerator.EntityTarget(className, columnToField, subEntities,
+                    candidate.tableInfo().getLogicDeleteColumn(), logicDeleteValue);
         }
         return JavaCodeGenerator.generate(result, target, wrapper, invocation);
     }
