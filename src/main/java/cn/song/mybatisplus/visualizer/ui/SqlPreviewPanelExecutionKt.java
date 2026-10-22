@@ -232,7 +232,7 @@ public final class SqlPreviewPanelExecutionKt {
                     MpSqlVisualizerBundle.message("dml.impact.notApplicable.title"),
                     MpSqlVisualizerBundle.message(notApplicable.reasonKey()));
             // 覆盖上一次的内联结果，避免 SQL 已不可试算时仍显示旧行数。
-            showDmlImpactResult(p,MpSqlVisualizerBundle.message(notApplicable.reasonKey()), true, null);
+            SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message(notApplicable.reasonKey()), true, null);
             return;
         }
         if (!(plan instanceof cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Applicable applicable)) {
@@ -272,11 +272,11 @@ public final class SqlPreviewPanelExecutionKt {
             if (allowDataSourcePrompt) {
                 promptDataSourceThenRetryImpact(p, proj, sql);
             } else {
-                showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+                SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
             }
             return;
         }
-        showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.running"), false, null);
+        SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.running"), false, null);
         PreviewSideQuery.run(proj, target, probe.probeSql(), dialectGateRequest, true, (result -> {
             if (result instanceof PreviewSideQuery.Scalar scalar) {
                 Long cap = probe.rowCap();
@@ -284,14 +284,14 @@ public final class SqlPreviewPanelExecutionKt {
                         ? MpSqlVisualizerBundle.message("dml.impact.inline.capped",
                                 Math.min(scalar.value(), cap))
                         : MpSqlVisualizerBundle.message("dml.impact.inline", scalar.value());
-                showDmlImpactResult(p,text, false, probeBody);
+                SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,text, false, probeBody);
             } else if (result instanceof PreviewSideQuery.Blocked blocked) {
-                showDmlImpactResult(p,blocked.message(), true, null);
+                SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,blocked.message(), true, null);
             } else if (result instanceof PreviewSideQuery.Failed failed) {
-                showDmlImpactResult(p,
+                SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,
                         MpSqlVisualizerBundle.message("dml.impact.inline.error", failed.message()), true, null);
             } else if (result instanceof PreviewSideQuery.Table) {
-                showDmlImpactResult(p,
+                SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,
                         MpSqlVisualizerBundle.message("dml.impact.inline.error", "unexpected tabular result"),
                         true, null);
             }
@@ -304,7 +304,7 @@ public final class SqlPreviewPanelExecutionKt {
      */
     public static void promptDataSourceThenRetryImpact(@NotNull SqlPreviewPanel p,
                                                        @NotNull Project proj, @NotNull String previewSql) {
-        showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.binding"), false, null);
+        SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.binding"), false, null);
         int generation = p.explainStructuredGeneration;
         AtomicBoolean errorShown = new AtomicBoolean(false);
         if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
@@ -314,14 +314,14 @@ public final class SqlPreviewPanelExecutionKt {
             if (promptForTest != null) {
                 promptForTest.prompt(proj, previewSql, message -> {
                     errorShown.set(true);
-                    showDmlImpactResult(p,message, true, null);
+                    SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,message, true, null);
                 });
             } else {
                 cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
                         proj, previewSql, null, null,
                         message -> {
                             errorShown.set(true);
-                            showDmlImpactResult(p,message, true, null);
+                            SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,message, true, null);
                         },
                         null, null, null, false);
             }
@@ -332,7 +332,7 @@ public final class SqlPreviewPanelExecutionKt {
                     () -> estimateDmlImpact(p, false),
                     () -> {
                         if (!errorShown.get()) {
-                            showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+                            SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
                         }
                     });
         } else {
@@ -340,7 +340,7 @@ public final class SqlPreviewPanelExecutionKt {
                     () -> estimateDmlImpact(p, false),
                     () -> {
                         if (!errorShown.get()) {
-                            showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+                            SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
                         }
                     });
         }
@@ -1726,30 +1726,9 @@ public final class SqlPreviewPanelExecutionKt {
         executeSql(p);
     }
 
-    /** R42：影响面预演的内联结果（不触碰编辑器/控制台）——参数面板左下角单行。 */
-    private static void showDmlImpactResult(SqlPreviewPanel p, String text, boolean error, String tooltip) {
-        javax.swing.JLabel label = null;
-        for (java.awt.Component c : p.paramPanel.getComponents()) {
-            if (c instanceof javax.swing.JLabel j && "dmlImpactResult".equals(j.getName())) {
-                label = j;
-                break;
-            }
-        }
-        if (label == null) {
-            label = new javax.swing.JLabel();
-            label.setName("dmlImpactResult");
-            label.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-            label.setBorder(com.intellij.util.ui.JBUI.Borders.empty(4, 16, 4, 8));
-            p.paramPanel.add(label);
-        }
-        label.setText(text.length() > 260 ? text.substring(0, 260) : text);
-        label.setToolTipText(tooltip != null ? tooltip : text);
-        label.setForeground(error
-                ? com.intellij.ui.JBColor.RED
-                : com.intellij.util.ui.UIUtil.getContextHelpForeground());
-        p.paramPanel.revalidate();
-        p.paramPanel.repaint();
-    }
+    // R42：影响面预演的内联结果（不触碰编辑器/控制台）——正式承载已迁
+    // SqlPreviewPanelParamPanelKt.showDmlImpactResult（T-DmlImpactProminence 起同时挂顶部横幅），
+    // 本文件原最小版（逐次扫描 paramPanel 建标签、无横幅）已删除，调用点全部改指正式版。
 
     /** 数据源绑定等待（生产路径，T-PreviewSideQuery P1）：250ms 轮询 + 480 次超时。 */
     public static void awaitDataSourceBoundThen(@NotNull SqlPreviewPanel p, @NotNull Project proj, int generation,

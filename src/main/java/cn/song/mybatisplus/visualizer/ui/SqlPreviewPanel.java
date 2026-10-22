@@ -505,6 +505,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** R48 自动填充预演载体（FieldFill 面板与预览结果回填链路）。 */
     public cn.song.mybatisplus.visualizer.model.PreviewResult fieldFillPreview = null;
 
+    /** T-PreviewSideQuery P1：预估影响行数的内联结果行（不进入控制台/结果区）。 */
+    public JBLabel impactResultLabel = null;
+
     /** 当前方言决策（meta 行方言段重组的事实源）。 */
     public cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision currentDialectDecision = null;
 
@@ -623,6 +626,28 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
     // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
     public final DegradationBanner degradationBanner = createDegradationBanner();
+
+    /**
+     * T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：影响行数试算结果独立横幅行——
+     * 与降级/渲染警示**并存**（各自占一行，不抢同一显示位），蓝色加粗；失败红色。
+     */
+    public final JBPanel<JBPanel<?>> dmlImpactBanner = createDmlImpactBanner();
+    public final JBLabel dmlImpactBannerLabel = createDmlImpactBannerLabel();
+
+    private static JBPanel<JBPanel<?>> createDmlImpactBanner() {
+        JBPanel<JBPanel<?>> banner = new JBPanel<>(new BorderLayout());
+        banner.setOpaque(false);
+        banner.setVisible(false);
+        return banner;
+    }
+
+    private static JBLabel createDmlImpactBannerLabel() {
+        JBLabel label = new JBLabel();
+        label.putClientProperty("html.disable", true);
+        label.setBorder(JBUI.Borders.empty(4, 8, 4, 8));
+        label.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.BLUE));
+        return label;
+    }
 
     /** 组装横幅（T-DollarInjectMark ✕ 回调：关闭 → 会话级记忆 + 清除本类别）。 */
     private static DegradationBanner createDegradationBanner() {
@@ -748,7 +773,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         northHost.setOpaque(false);
         northHost.add(topRow, BorderLayout.NORTH);
         northHost.add(SqlPreviewPanelParamPanelKt.buildBindStateRow(this), BorderLayout.CENTER);
-        northHost.add(degradationBanner, BorderLayout.SOUTH);
+        // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
+        dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER);
+        JBPanel<JBPanel<?>> bannerStack = new JBPanel<JBPanel<?>>(new BorderLayout());
+        bannerStack.setOpaque(false);
+        bannerStack.add(degradationBanner, BorderLayout.NORTH);
+        bannerStack.add(dmlImpactBanner, BorderLayout.CENTER);
+        northHost.add(bannerStack, BorderLayout.SOUTH);
         add(northHost, BorderLayout.NORTH);
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
         topRow.addComponentListener(new ComponentAdapter() {
@@ -1374,6 +1405,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
     public DegradationBanner degradationBannerForTest() {
         return degradationBanner;
+    }
+
+    /** T-DmlImpactProminence：影响行数结果横幅（显隐断言用）。 */
+    public JBPanel<JBPanel<?>> dmlImpactBannerForTest() {
+        return dmlImpactBanner;
+    }
+
+    /** T-DmlImpactProminence：影响行数结果横幅文案（断言用）。 */
+    public String dmlImpactBannerTextForTest() {
+        return dmlImpactBannerLabel.getText();
     }
 
     /** P-05：当前 paramValues 快照（断言用）。 */

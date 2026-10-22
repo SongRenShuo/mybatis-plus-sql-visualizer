@@ -283,8 +283,13 @@ public final class SqlPreviewPanelParamPanelKt {
             DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
             model.addElement(ParamHistoryCache.DEFAULT_SCHEME);
             for (String n : p.paramHistoryCache.schemeNamesFor(key)) model.addElement(n);
-            combo.setModel(model);
             String active = p.paramHistoryCache.activeSchemeFor(key);
+            // T-PresetMethodBinding：同一方法改了 SQL 后，该方案在新键下没有快照（靠最近键指针回落），
+            // 名单按键过滤会漏掉它，而激活态仍是它——补进名单，避免「下拉看不到却显示选中」。
+            if (!ParamHistoryCache.DEFAULT_SCHEME.equals(active) && model.getIndexOf(active) < 0) {
+                model.addElement(active);
+            }
+            combo.setModel(model);
             combo.setSelectedItem(active);
             p.lastShownActiveScheme = active;
         } finally {
@@ -1425,9 +1430,42 @@ public final class SqlPreviewPanelParamPanelKt {
         if (result == null) return null;
         String tableName = result.getTableName();
         // 缺陷②修复：优先用「注入前」稳定文本当指纹种子——逻辑删除/多租户等拦截器模拟会改写
-        // result.sql，直接拿它算键会让开关一切换就召回 miss（已回填参数退回占位符）。
+        // result.sql，直接拿它算键会让开关一切切换就召回 miss（已回填参数退回占位符）。
         String rawSql = result.getHistoryFingerprintSeed() != null ? result.getHistoryFingerprintSeed() : result.getSql();
-        return p.paramHistoryCache.computeKey(tableName, rawSql);
+        // T-PresetMethodScope：追加声明作用域——同一段 SQL 写在两个方法里不再共用预设与参数历史；
+        // 无方法上下文（日志/历史双击）保持旧键。
+        String scope = result.getOriginScopeKey();
+        return p.paramHistoryCache.computeKey(tableName, rawSql, scope == null || scope.isEmpty() ? null : scope);
+    }
+
+    /**
+     * T-PresetMethodBinding：当前预览实际存在的参数来源（回落白名单——只回填这些行）。
+     *
+     * <p>为什么不用 {@code paramValues.keys}：方案切换路径先 {@code clearParamStateForSchemeSwitch} 清场，
+     * 到召回时 paramValues 已空，白名单会把所有参数都挡掉。这里从结果模型取「当前 SQL 有哪些来源」。</p>
+     */
+    public static Set<String> currentParamSources(@NotNull SqlPreviewPanel p) {
+        PreviewResult result = p.current;
+        if (result == null) return Set.of();
+        Set<String> sources = new LinkedHashSet<>();
+        sources.addAll(result.getUnresolvedParams());
+        if (result.getPreviewModel() != null) {
+            for (ConditionView view : result.getPreviewModel().getConditionViews()) {
+                sources.addAll(view.getValueSources());
+                if (view.getValueSource() != null) sources.add(view.getValueSource());
+            }
+        }
+        BatchModel model = result.getBatchModel();
+        if (model != null) {
+            for (BatchColumn col : model.getToggleColumns()) sources.add(col.getSource());
+            for (BatchColumn col : model.getFixedColumns()) sources.add(col.getSource());
+        }
+        if (result.getXmlModel() != null) {
+            for (XmlForEachView view : result.getXmlModel().getForEachViews()) {
+                sources.add(view.collectionExpr());
+            }
+        }
+        return sources;
     }
 
     /**
@@ -1443,39 +1481,55 @@ public final class SqlPreviewPanelParamPanelKt {
     public static void recallFromHistory(@NotNull SqlPreviewPanel p) {
         String key = historyCacheKey(p);
         if (key == null) return;
-        Map<String, String> history = p.paramHistoryCache.recall(key);
+        Map<String, String> cached = p.paramHistoryCache.recall(key);
+        // T-PresetMethodBinding：同一方法里改了 SQL（键的 SQL 指纹段变化）时，精确键与旧键都未命中，
+        // 按「该方案在该方法下最近一次保存」回落。回落只恢复参数值——结构态（勾选/foreach）
+        // 不参与，见下方分支；且只回填当前面板存在的 source（白名单），防止旧参数名越积越多。
+        Map<String, String> recovered = cached == null ? p.paramHistoryCache.recallRecent(key) : null;
+        Map<String, String> history = cached != null ? cached : recovered;
         if (history == null) return;
         if (history.isEmpty()) return;
+        // 回落来源只回填当前预览真实存在的参数（不能用 paramValues.keys：方案切换前刚被清场）
+        Set<String> allowedSources = recovered != null ? currentParamSources(p) : Set.of();
         int applied = 0;
         boolean stateRestored = false;
         for (Map.Entry<String, String> e : history.entrySet()) {
             String source = e.getKey();
             String value = e.getValue();
             if (source.startsWith(SqlPreviewPanel.SNAPSHOT_CHK)) {
-                String id = source.substring(SqlPreviewPanel.SNAPSHOT_CHK.length());
-                if ("1".equals(value)) p.enabledIds.add(id);
-                else p.enabledIds.remove(id);
-                stateRestored = true;
-            } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FNULL)) {
-                String expr = source.substring(SqlPreviewPanel.SNAPSHOT_FNULL.length());
-                if ("1".equals(value)) p.xmlForEachNulls.add(expr);
-                else p.xmlForEachNulls.remove(expr);
-                stateRestored = true;
-            } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FEV)) {
-                String expr = source.substring(SqlPreviewPanel.SNAPSHOT_FEV.length());
-                List<String> values = splitTrimmed(value);
-                if (!values.isEmpty()) {
-                    p.xmlForEachValues.put(expr, values);
-                    for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) {
-                        if (pair.getFirst().equals(expr)) {
-                            pair.getSecond().setText(value);
-                            break;
-                        }
-                    }
+                // T-PresetMethodBinding：跨 SQL 回落不恢复勾选态——条件 id 是按解析序递增的序号，
+                // SQL 增删条件后整体移位，套用旧快照会把勾选落到别的条件上（错位比丢失更难排查）。
+                if (recovered == null) {
+                    String id = source.substring(SqlPreviewPanel.SNAPSHOT_CHK.length());
+                    if ("1".equals(value)) p.enabledIds.add(id);
+                    else p.enabledIds.remove(id);
                     stateRestored = true;
                 }
+            } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FNULL)) {
+                if (recovered == null) {
+                    String expr = source.substring(SqlPreviewPanel.SNAPSHOT_FNULL.length());
+                    if ("1".equals(value)) p.xmlForEachNulls.add(expr);
+                    else p.xmlForEachNulls.remove(expr);
+                    stateRestored = true;
+                }
+            } else if (source.startsWith(SqlPreviewPanel.SNAPSHOT_FEV)) {
+                if (recovered == null) {
+                    String expr = source.substring(SqlPreviewPanel.SNAPSHOT_FEV.length());
+                    List<String> values = splitTrimmed(value);
+                    if (!values.isEmpty()) {
+                        p.xmlForEachValues.put(expr, values);
+                        for (Pair<String, JBTextField> pair : p.xmlForEachValueFields) {
+                            if (pair.getFirst().equals(expr)) {
+                                pair.getSecond().setText(value);
+                                break;
+                            }
+                        }
+                        stateRestored = true;
+                    }
+                }
             } else {
-                // 用户已输入值优先（不覆盖）
+                // 用户已输入值优先（不覆盖）；回落来源只认当前预览存在的参数名
+                if (recovered != null && !allowedSources.contains(source)) continue;
                 String existing = p.paramValues.get(source);
                 if (existing == null || existing.isEmpty()) {
                     p.paramValues.put(source, value);
@@ -1488,6 +1542,82 @@ public final class SqlPreviewPanelParamPanelKt {
         if (applied > 0 || stateRestored) {
             SqlPreviewPanelSqlViewKt.renderSql(p);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewSideQuery P1 / T-DmlImpactProminence：预估影响行数内联结果与独立横幅
+    // ------------------------------------------------------------------
+
+    /**
+     * UI-006: keep the safety explanation visible, including unbroken identifiers in errors.
+     * 像素宽度折行 + HTML 转义（{@code <br>} 断行）——长文本（错误说明等）不撑破参数面板。
+     */
+    static String fieldFillText(String text, Font font, int limitPx) {
+        FontMetrics metrics = new javax.swing.JLabel().getFontMetrics(font);
+        List<String> lines = new ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char character = text.charAt(i);
+            if (character == '\n'
+                    || (line.length() > 0 && metrics.stringWidth(line.toString() + character) > limitPx)) {
+                lines.add(line.toString());
+                line = new StringBuilder();
+            }
+            if (character != '\n') line.append(character);
+        }
+        lines.add(line.toString());
+        StringBuilder out = new StringBuilder("<html>");
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) out.append("<br>");
+            String it = lines.get(i);
+            out.append(it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"));
+        }
+        out.append("</html>");
+        return out.toString();
+    }
+
+    /** T-PreviewSideQuery P1：预估影响行数内联结果（Kotlin 默认参 {@code tooltip=null} 形态）。 */
+    public static void showDmlImpactResult(@NotNull SqlPreviewPanel p, String text, boolean error) {
+        showDmlImpactResult(p, text, error, null);
+    }
+
+    /** T-PreviewSideQuery P1：预估影响行数内联结果；不触碰编辑器/控制台。 */
+    public static void showDmlImpactResult(@NotNull SqlPreviewPanel p, String text, boolean error, @Nullable String tooltip) {
+        JBLabel label = p.impactResultLabel;
+        if (label == null) {
+            label = new JBLabel();
+            label.setName("dmlImpactResult");
+            label.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+            label.setBorder(JBUI.Borders.empty(4, 16, 4, 8));
+            p.paramPanel.add(label);
+            p.impactResultLabel = label;
+        }
+        label.setText(fieldFillText(text, label.getFont(), JBUI.scale(260)));
+        label.setToolTipText(tooltip != null ? tooltip : text);
+        label.setForeground(error ? JBColor.RED : UIUtil.getContextHelpForeground());
+        // T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：结果同时挂到顶部独立横幅
+        // （蓝色加粗；失败红色），与降级/渲染警示各占一行、互不抢位。
+        showDmlImpactBanner(p, text, error);
+        p.paramPanel.revalidate();
+        p.paramPanel.repaint();
+    }
+
+    /** T-DmlImpactProminence：影响行数结果横幅显隐与配色（独立行，见 SqlPreviewPanel.dmlImpactBanner）。 */
+    public static void showDmlImpactBanner(@NotNull SqlPreviewPanel p, String text, boolean error) {
+        p.dmlImpactBannerLabel.setText(text);
+        p.dmlImpactBannerLabel.setForeground(error
+                ? JBColor.RED
+                : JBColor.namedColor("Link.activeForeground", JBColor.BLUE));
+        Font base = UIUtil.getLabelFont();
+        p.dmlImpactBannerLabel.setFont(error ? base : base.deriveFont(Font.BOLD));
+        p.dmlImpactBanner.setVisible(true);
+        p.dmlImpactBanner.revalidate();
+        p.dmlImpactBanner.repaint();
+    }
+
+    public static void clearDmlImpactBanner(@NotNull SqlPreviewPanel p) {
+        p.dmlImpactBanner.setVisible(false);
+        p.dmlImpactBannerLabel.setText("");
     }
 
     /**
