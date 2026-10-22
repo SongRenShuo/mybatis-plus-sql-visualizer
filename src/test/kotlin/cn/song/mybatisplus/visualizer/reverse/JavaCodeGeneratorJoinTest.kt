@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
 import cn.song.mybatisplus.visualizer.reverse.ReverseSet
 import cn.song.mybatisplus.visualizer.reverse.ReverseStatementKind
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -523,8 +524,9 @@ class JavaCodeGeneratorJoinTest {
             emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
         )
         val code = JavaCodeGenerator.generate(result, JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name")), GeneratedWrapper.LAMBDA, null)
-        assertTrue(code, code.contains(".selectAs(User::getName, \"productName\")"))
-        assertTrue(code, code.contains(".select(User::getId)"))
+        // MP core 无 selectAs 重载（javap 3.5.14/3.5.17 实证），带别名投影整链回落字符串 select
+        assertTrue(code, code.contains(".select(\"t.name AS productName\", \"id\")"))
+        assertFalse("MP core 无 selectAs 重载，生成物不得引用", code.contains("selectAs"))
     }
 
     @Test

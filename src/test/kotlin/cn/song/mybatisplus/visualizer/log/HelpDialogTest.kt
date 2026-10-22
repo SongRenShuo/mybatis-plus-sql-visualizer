@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -24,16 +25,19 @@ class HelpDialogTest : BasePlatformTestCase() {
         try {
             // 用户 2026-10-14：「不要这个更多」——全部动作直达工具栏，帮助也在组内（窄宽由平台溢出折叠）
             val children = panel.toolbarGroup.getChildren(null).toList()
-            assertEquals("加入交流群入口归入左侧动作组后共 10 个动作", 10, children.size)
+            assertEquals("增强捕获暂停、快速预览与交流群入口合流后共 11 个动作", 11, children.size)
+            assertTrue("捕捉动作应位于工具栏首位", children[0] === panel.captureToggleAction)
+            assertTrue("增强捕获暂停动作应紧随捕捉动作", children[1] === panel.agentPauseAction)
             assertTrue("快速预览仍应是独立动作", children.contains(panel.previewToggleAction))
+            assertTrue("工具栏组应包含交流群入口", children.any { it is SqlLogPanel.CommunityAction })
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {
                 AnActionEvent.createFromAnAction(it, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
             }
             children.forEachIndexed { i, action -> action.update(events[i]) }
-            val helpIndex = events.indexOfFirst { it.presentation.icon === AllIcons.Actions.Help }
-            assertTrue("工具栏组应含帮助入口（? 图标，设置按钮旁）", helpIndex >= 0)
+            val helpIndex = events.indexOfFirst { it.presentation.icon === MpvsIcons.Help }
+            assertEquals("帮助动作应位于工具栏末尾", children.lastIndex, helpIndex)
             assertEquals(
                 MpSqlVisualizerBundle.message("log.panel.help"),
                 events[helpIndex].presentation.text,

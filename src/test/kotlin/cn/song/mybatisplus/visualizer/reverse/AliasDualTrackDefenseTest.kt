@@ -51,11 +51,11 @@ class AliasDualTrackDefenseTest {
         // 解析层即双字段分离（expr 实名原文 / alias 展示名）
         assertEquals(listOf(SelectColumn("psn_no", "psn"), SelectColumn("psn_name", null)), result.selectColumns)
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA, null)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue(code, code.contains(".select(Personnel::getPsnName)"))
+        // MP core 无 selectAs 重载（javap 实证）——带别名投影整链回落字符串 select（master 82ee88b1 语义）
+        assertTrue(code, code.contains(".select(\"psn_no AS psn\", \"psn_name\")"))
+        assertFalse("MP core 无 selectAs 重载，生成物不得引用", code.contains("selectAs"))
         // 别名不得冒充实名进入列归属（不存在 Personnel::getPsn 字段的引用形态）
         assertFalse("别名不得进入 lambda 实名轨", code.contains("Personnel::getPsn)"))
-        assertFalse("lambda 模式不得回落整串形态", code.contains("psn_no AS psn"))
     }
 
     // ---------- 路径 2：rawMode 整串保留（有意行为，测试按现状锁） ----------
@@ -94,7 +94,8 @@ class AliasDualTrackDefenseTest {
         // 实体映射失败 → 整串回落字符串（含表别名前缀），别名仍独立第二参——回落不合并双轨
         val result = SqlReverseParser.INSTANCE.parse("SELECT t.unknown_col AS total FROM personnel t")
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA, null)
-        assertTrue(code, code.contains(".selectAs(\"t.unknown_col\", \"total\")"))
+        // MP core 无 selectAs(String, String)：别名随表达式并入 select 串
+        assertTrue(code, code.contains(".select(\"t.unknown_col AS total\")"))
     }
 
     // ---------- 路径 4：WHERE / ORDER BY 取实名，别名不污染条件轨 ----------
@@ -103,9 +104,11 @@ class AliasDualTrackDefenseTest {
     fun `路径4_WHERE与ORDER BY取实名_lambda化不受别名干扰`() {
         val result = SqlReverseParser.INSTANCE.parse("SELECT psn_no AS psn FROM personnel WHERE psn_no = '1' ORDER BY psn_no")
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA, null)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue("WHERE 条件列实名 lambda", code.contains(".eq(Personnel::getPsnNo, \"1\")"))
-        assertTrue("ORDER BY 列实名 lambda", code.contains("orderByAsc(Personnel::getPsnNo)"))
+        assertTrue(code, code.contains(".select(\"psn_no AS psn\")"))
+        // 别名投影整链回落字符串 Wrapper：列归属仍取 WHERE/ORDER BY 实名原文（master 82ee88b1 语义）
+        assertTrue("WHERE 条件列取实名", code.contains(".eq(\"psn_no\", \"1\")"))
+        assertTrue("ORDER BY 列取实名", code.contains("orderByAsc(\"psn_no\")"))
+        assertFalse("别名不得污染条件轨", code.contains(".eq(\"psn\""))
     }
 
     @Test
