@@ -346,6 +346,16 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private String paramActiveSchemeByKey = "";
 
+        /**
+         * T-PresetMethodBinding：<b>方案 × 方法 → 最近一次保存的完整缓存键</b>，形态
+         * {@code {"方案名":{"<scope>":"<缓存键>"}, ...}}（嵌套 JSON，避免方案名与 scope 拼串）。
+         *
+         * <p>用途：同一方法里改了 SQL（键的 SQL 指纹段变了）后，精确键未命中时按本表把该预设
+         * 在该方法下最近一次保存的快照找回来——「预设永久绑定方法、改 SQL 也不丢」。
+         * 消费方 = {@code cn.song.mybatisplus.visualizer.ui.ParamHistoryCache.recallRecent}。</p>
+         */
+        private String paramSchemeRecentKey = "";
+
         private boolean logHibernateEnabled = true;
         private String logHibernateSqlPrefix = DEFAULT_LOG_HIBERNATE_SQL_PREFIX;
         private String logHibernateParamPrefix = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX;
@@ -759,6 +769,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getParamActiveSchemeByKey() { return paramActiveSchemeByKey; }
         public void setParamActiveSchemeByKey(String paramActiveSchemeByKey) { this.paramActiveSchemeByKey = paramActiveSchemeByKey; }
 
+        public String getParamSchemeRecentKey() { return paramSchemeRecentKey; }
+        public void setParamSchemeRecentKey(String paramSchemeRecentKey) { this.paramSchemeRecentKey = paramSchemeRecentKey; }
+
         public boolean getLogHibernateEnabled() { return logHibernateEnabled; }
         public void setLogHibernateEnabled(boolean logHibernateEnabled) { this.logHibernateEnabled = logHibernateEnabled; }
 
@@ -929,6 +942,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.paramSchemesJson = paramSchemesJson;
             c.paramActiveScheme = paramActiveScheme;
             c.paramActiveSchemeByKey = paramActiveSchemeByKey;
+            c.paramSchemeRecentKey = paramSchemeRecentKey;
             c.logHibernateEnabled = logHibernateEnabled;
             c.logHibernateSqlPrefix = logHibernateSqlPrefix;
             c.logHibernateParamPrefix = logHibernateParamPrefix;
@@ -1056,6 +1070,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(paramSchemesJson, that.paramSchemesJson)
                     && Objects.equals(paramActiveScheme, that.paramActiveScheme)
                     && Objects.equals(paramActiveSchemeByKey, that.paramActiveSchemeByKey)
+                    && Objects.equals(paramSchemeRecentKey, that.paramSchemeRecentKey)
                     && Objects.equals(crudColorStyle, that.crudColorStyle)
                     && Objects.equals(crudColorSelect, that.crudColorSelect)
                     && Objects.equals(crudColorInsert, that.crudColorInsert)
@@ -1092,7 +1107,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logAutoSaveMaxFiles, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     dataSourceBadgeDetail,
                     crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
-                    paramHistoryJson, paramSchemesJson, paramActiveScheme, paramActiveSchemeByKey,
+                    paramHistoryJson, paramSchemesJson, paramActiveScheme, paramActiveSchemeByKey, paramSchemeRecentKey,
                     logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled, logShardingSphereEnabled,
                     jdbcSqlPreviewEnabled, executionTimeoutSeconds,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
