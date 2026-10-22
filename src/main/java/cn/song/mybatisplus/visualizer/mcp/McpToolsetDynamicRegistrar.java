@@ -56,7 +56,6 @@ public final class McpToolsetDynamicRegistrar {
     private static final Logger LOG = Logger.getInstance(McpToolsetDynamicRegistrar.class);
 
     private static final String TOOLSET_EP_NAME = "com.intellij.mcpServer.mcpToolset";
-    private static final String TOOLSET_IFACE_FQN = "com.intellij.mcpserver.McpToolset";
 
     private static final AtomicBoolean registered = new AtomicBoolean(false);
 
@@ -95,11 +94,9 @@ public final class McpToolsetDynamicRegistrar {
         if (registered.get()) {
             return;
         }
-        Class<?> toolsetIface;
-        try {
-            toolsetIface = Class.forName(TOOLSET_IFACE_FQN);
-        } catch (Throwable ignored) {
-            return; // runCatching{...}.getOrNull() ?: return（243/251 旧形态静默跳过）
+        Class<?> toolsetIface = McpToolsetDynamicRegistrarKt.findMcpToolsetClass();
+        if (toolsetIface == null) {
+            return;
         }
         try {
             for (Class<?> toolClass : TOOL_CLASSES) {

@@ -188,25 +188,9 @@ public class SqlVisualizerExplainTool extends McpToolsetSupport {
                     : null
             );
         } catch (Throwable e) {
-            // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
-            // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
-            // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
-            String causeMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            // T-ErrorLocateUsability T-ELU-03（O-49）：接上**被提交文本**长度（EXPLAIN 包装句——
-            // 驱动报的位置指向它，不是原始 selectSql），使越界钳制从「仅单测生效」变为生产生效。
-            kotlin.Triple<Integer, Boolean, String> pos =
-                cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(
-                    causeMsg, target.explainSql.length());
-            throwExpected(
-                McpToolErrors.code(
-                    McpToolErrors.DATASOURCE_UNREACHABLE,
-                    "EXPLAIN failed on '" + target.dialectName + "' data source: " + firstLine(causeMsg)
-                        // T-Round10FU（独立复核 ⑨）：文案形态抽到纯逻辑层
-                        // （McpExplainFormatter.formatErrorPosition），由 McpErrorPositionTextTest
-                        // 逐字断言——本行此前内联，故该文案形态全仓无用例、验收「mcp 用例全绿」是空绿。
-                        + McpExplainFormatter.formatErrorPosition(pos)
-                )
-            );
+            // 反射层 message 恒 null：格式化入口解包目标异常后提取驱动位置；超时异常
+            // 已在执行通道转为带 timed out 标记的 SQLException，此处保持原有错误码。
+            throwExpected(McpExplainFormatter.formatFailure(e, target.dialectName, target.explainSql));
             return null; // 不可达：throwExpected 必抛
         }
     }
