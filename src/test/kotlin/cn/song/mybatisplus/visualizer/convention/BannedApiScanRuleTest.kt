@@ -695,8 +695,9 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         "src/main/java/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromDbTableAction.java" to
             CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
         // 5 处：后台候选收集失败返回空（k2j 翻译把 runCatching 落成 try/catch，站点数 1→5）。
+        // 6 处（T-SyncK2JMaster496：reverseLogicDeleteValue 项目级设置读取失败回落默认值为第 6 处）
         "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.java" to
-            CatchExemption(5, "后台候选收集失败返回空列表（动作提示无候选；runCatching 翻译站点全数降级）"),
+            CatchExemption(6, "后台候选收集失败返回空列表；去掉配置读取失败回落默认值/关（纯降级，无 fatal 语义）"),
     )
 
     /**
@@ -818,7 +819,8 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             assertTrue("豁免理由不得为空：$path", exemption.reason.isNotBlank())
         }
 
-        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：T-SyncK2JMaster90 实测 428→423
+        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：T-SyncK2JMaster90 实测 428→423；
+        // T-SyncK2JMaster496 移植增量后重登 423→456（与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步）
         // （SqlClickPreview 交互浮层整类退役，降级站点随之消失；Java 注释语义掩码）。
         // 全量对账（Kotlin 守卫读数）：全量 777 = 豁免登记 + 落地文件站点与判定 + 其余未判定 + 其余已判定。
         val exemptSites = throwableCatchExemptions.values.sumOf { it.sites }
@@ -832,12 +834,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            423,
+            456,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            763,
+            852,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
