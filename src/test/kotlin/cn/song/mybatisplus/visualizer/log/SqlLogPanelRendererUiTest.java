@@ -88,7 +88,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     /** agent 通道形态条目（source=AGENT，可带目标库/影响行数/报错）。 */
     private static LogSqlEntry agentEntry(String sql, String databaseName, Long updateCount, String errorText) {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), 1_700_000_000_000L, null,
-                LogSqlEntry.computeSummary(sql), SqlSource.AGENT, null, null, 0, List.of(), List.of(), null, 0L,
+                LogSqlEntry.summarizeSql(sql), SqlSource.AGENT, null, null, 0, List.of(), List.of(), null, 0L,
                 null, errorText, null, updateCount, databaseName);
     }
 
@@ -137,7 +137,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
                 List.<LogSqlParam>of(),
                 1_700_000_000_000L,
                 null,
-                LogSqlEntry.computeSummary("SELECT id FROM user WHERE id = 1"),
+                LogSqlEntry.summarizeSql("SELECT id FROM user WHERE id = 1"),
                 SqlSource.MCP,
                 7L,
                 null,
@@ -165,7 +165,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
                 List.<LogSqlParam>of(),
                 1_700_000_000_000L,
                 null,
-                LogSqlEntry.computeSummary("SELECT 1"),
+                LogSqlEntry.summarizeSql("SELECT 1"),
                 SqlSource.MYBATIS,
                 null,
                 null,

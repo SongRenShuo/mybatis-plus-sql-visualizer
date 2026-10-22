@@ -85,7 +85,7 @@ class SqlLogParamCodecTest {
             emptyList(),
             System.currentTimeMillis(),
             null,
-            LogSqlEntry.computeSummary("UPDATE t SET a = 1"),
+            LogSqlEntry.summarizeSql("UPDATE t SET a = 1"),
             SqlSource.UNKNOWN,
             null,
             null,

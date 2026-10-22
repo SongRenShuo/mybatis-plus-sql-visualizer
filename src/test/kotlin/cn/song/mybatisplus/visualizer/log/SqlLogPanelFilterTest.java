@@ -226,7 +226,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     /** 构造带扩展字段的条目。 */
     private static LogSqlEntry focusedEntry(String sql, String mapperStatement, String requestTag) {
         return new LogSqlEntry(sql, sql, List.of(), System.currentTimeMillis(), null,
-                LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
+                LogSqlEntry.summarizeSql(sql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
                 mapperStatement, null, requestTag, null, null);
     }
 

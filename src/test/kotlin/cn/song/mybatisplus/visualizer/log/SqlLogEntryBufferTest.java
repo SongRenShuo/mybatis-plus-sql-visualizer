@@ -731,7 +731,7 @@ public class SqlLogEntryBufferTest {
 
     private LogSqlEntry consoleProvEntry(String sql, long ts) {
         return new LogSqlEntry(sql, sql, List.of(), ts, null,
-            LogSqlEntry.computeSummary(sql), SqlSource.MYBATIS, null, null, 0,
+            LogSqlEntry.summarizeSql(sql), SqlSource.MYBATIS, null, null, 0,
             List.of(), List.of(), null, 0L, null, null, null, null, null,
             null, CaptureProvenance.CONSOLE_BRIDGE);
     }
@@ -742,7 +742,7 @@ public class SqlLogEntryBufferTest {
 
     private LogSqlEntry agentProvEntry(String sql, long ts, String sourceFile, Long durationMs) {
         return new LogSqlEntry(sql, sql, List.of(), ts, null,
-            LogSqlEntry.computeSummary(sql), SqlSource.AGENT, durationMs,
+            LogSqlEntry.summarizeSql(sql), SqlSource.AGENT, durationMs,
             sourceFile, 67, List.of(new kotlin.Pair<>(sourceFile, 67)),
             List.of("com.example.RefundOrderService"), null, 0L,
             null, null, null, null, "PostgreSQL · cyzc@localhost:5432",
@@ -801,7 +801,7 @@ public class SqlLogEntryBufferTest {
         buf.setDedupeWindowMs(60_000L);
         String sql = "SELECT COUNT(*) FROM biz";
         LogSqlEntry paginated = new LogSqlEntry(sql, sql, List.of(), 1_000L, null,
-            LogSqlEntry.computeSummary(sql), SqlSource.MYBATIS, null,
+            LogSqlEntry.summarizeSql(sql), SqlSource.MYBATIS, null,
             SourceMarkers.MP_PAGINATION_COUNT, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null, null, CaptureProvenance.CONSOLE_EP);
         assertTrue(buf.addEntry(paginated));

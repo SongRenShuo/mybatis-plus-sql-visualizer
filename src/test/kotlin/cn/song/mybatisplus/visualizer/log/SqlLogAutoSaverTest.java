@@ -331,7 +331,7 @@ public class SqlLogAutoSaverTest {
                 List.<LogSqlParam>of(),
                 1724567890000L,
                 null,
-                LogSqlEntry.computeSummary("SELECT id, name FROM user WHERE id = 1"),
+                LogSqlEntry.summarizeSql("SELECT id, name FROM user WHERE id = 1"),
                 source,
                 7L,
                 null,

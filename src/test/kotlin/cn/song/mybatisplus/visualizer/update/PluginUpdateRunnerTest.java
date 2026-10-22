@@ -41,29 +41,29 @@ public class PluginUpdateRunnerTest {
 
     @Test
     public void checkFetchFailureIsFailure() throws Exception {
-        CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> null);
+        CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> new UpdateApi.FetchOutcome.NetworkError("null"));
         assertTrue(result instanceof CheckResult.Failure);
     }
 
     @Test
     public void checkMalformedManifestIsFailure() throws Exception {
-        CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> "not json");
+        CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> new UpdateApi.FetchOutcome.Success("not json"));
         assertTrue(result instanceof CheckResult.Failure);
     }
 
     @Test
     public void checkNewerVersionIsAvailable() throws Exception {
         CheckResult result = PluginUpdateRunner.check("2026.8.14", s ->
-                "{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}");
+                new UpdateApi.FetchOutcome.Success("{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}"));
         assertEquals(new CheckResult.Available(manifest), result);
     }
 
     @Test
     public void checkSameOrOlderIsUpToDate() throws Exception {
         CheckResult same = PluginUpdateRunner.check("2026.8.15", s ->
-                "{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}");
+                new UpdateApi.FetchOutcome.Success("{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}"));
         CheckResult older = PluginUpdateRunner.check("2026.8.16", s ->
-                "{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}");
+                new UpdateApi.FetchOutcome.Success("{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}"));
         assertTrue(same instanceof CheckResult.UpToDate);
         assertTrue(older instanceof CheckResult.UpToDate);
     }

@@ -432,7 +432,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
                 List.<LogSqlParam>of(),
                 TEST_TIMESTAMP,
                 null,
-                LogSqlEntry.computeSummary("SELECT id FROM user WHERE id = 1"),
+                LogSqlEntry.summarizeSql("SELECT id FROM user WHERE id = 1"),
                 SqlSource.MCP,
                 7L,
                 null,

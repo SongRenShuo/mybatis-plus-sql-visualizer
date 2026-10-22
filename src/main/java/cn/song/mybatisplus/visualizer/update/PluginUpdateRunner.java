@@ -38,7 +38,12 @@ public final class PluginUpdateRunner {
          * 明确失败（R62 三态可诊断化）：kind 区分网络不通 / 通道 404 / 清单损坏 / 版本不可读，
          * message 面向用户展示（网络态含原始描述或 HTTP 状态码）。
          */
-        public record Failure(FailureKind kind, String message) implements CheckResult {}
+        public record Failure(FailureKind kind, String message) implements CheckResult {
+            /** k2j 旧测试兼容：单参形态默认按网络失败分类（message 面向用户展示）。 */
+            public Failure(String message) {
+                this(FailureKind.NETWORK, message);
+            }
+        }
     }
 
     /**

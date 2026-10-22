@@ -51,7 +51,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     private static LogSqlEntry entryWithCandidates(String restoredSql, String sourceFile, int sourceLine,
                                                    List<kotlin.Pair<String, Integer>> candidates) {
         return new LogSqlEntry(restoredSql, restoredSql, List.<LogSqlParam>of(), 1L, null,
-                LogSqlEntry.computeSummary(restoredSql), SqlSource.UNKNOWN, null, sourceFile, sourceLine,
+                LogSqlEntry.summarizeSql(restoredSql), SqlSource.UNKNOWN, null, sourceFile, sourceLine,
                 candidates, List.of(), null, 0L, null, null, null, null, null);
     }
 

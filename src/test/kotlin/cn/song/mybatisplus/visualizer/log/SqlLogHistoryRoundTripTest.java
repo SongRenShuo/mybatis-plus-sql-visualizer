@@ -238,7 +238,7 @@ public class SqlLogHistoryRoundTripTest {
                 List.of(),
                 1724567890000L,
                 null,
-                LogSqlEntry.computeSummary("UPDATE user SET name = 'x' WHERE id = 7"),
+                LogSqlEntry.summarizeSql("UPDATE user SET name = 'x' WHERE id = 7"),
                 SqlSource.UNKNOWN,
                 2L,
                 null,
@@ -275,7 +275,7 @@ public class SqlLogHistoryRoundTripTest {
                 List.of(),
                 1724567890001L,
                 null,
-                LogSqlEntry.computeSummary("SELECT * FROM no_such_table"),
+                LogSqlEntry.summarizeSql("SELECT * FROM no_such_table"),
                 SqlSource.UNKNOWN,
                 null,
                 null,
@@ -307,7 +307,7 @@ public class SqlLogHistoryRoundTripTest {
     /** MCP 条目写入侧的常态形态：无参数、无占位符、无 mapperStatement——pd 行完全靠 source==MCP 触发。 */
     private static LogSqlEntry mcpEntry(String sql, long timestamp) {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), timestamp, null,
-                LogSqlEntry.computeSummary(sql), SqlSource.MCP, 7L, null, 0, List.of(), List.of(), null, 0L,
+                LogSqlEntry.summarizeSql(sql), SqlSource.MCP, 7L, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, "demo-mysql");
     }
 

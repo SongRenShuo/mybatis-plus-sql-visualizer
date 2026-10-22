@@ -16,7 +16,7 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
     @Test
     fun test共同元信息顺序与日志独有字段() {
         val entry = LogSqlEntry("SELECT 1", "SELECT 1", emptyList(), 1L,
-            null, LogSqlEntry.computeSummary("SELECT 1"), SqlSource.UNKNOWN, 21L,
+            null, LogSqlEntry.summarizeSql("SELECT 1"), SqlSource.UNKNOWN, 21L,
             "src/main/OrderService.java", 42, emptyList(), emptyList(), null, 17L,
             null, null, null, 2L, "PostgreSQL")
         val settings = PluginSettings.getInstance()
@@ -45,7 +45,7 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
             settings.getState().setSlowQueryThresholdMs(1000)
             fun duration(ms: Long?, selected: Boolean = false): SqlTextFragment {
                 val entry = LogSqlEntry("SELECT 1", "SELECT 1", emptyList(), System.currentTimeMillis(),
-                    null, LogSqlEntry.computeSummary("SELECT 1"), SqlSource.UNKNOWN, ms,
+                    null, LogSqlEntry.summarizeSql("SELECT 1"), SqlSource.UNKNOWN, ms,
                     null, 0, emptyList(), emptyList(), null, 0L,
                     null, null, null, null, null)
                 return SqlEntryPresentation.metadata(entry, selected, true, emptyMap())

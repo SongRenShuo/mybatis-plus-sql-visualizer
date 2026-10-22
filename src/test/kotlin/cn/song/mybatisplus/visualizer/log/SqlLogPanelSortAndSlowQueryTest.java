@@ -147,7 +147,7 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
     /** agent 通道形态：耗时只在结构化 executionTimeMs，SQL 文本内无耗时。 */
     private static LogSqlEntry agentEntry(String sql, long ms, long ts) {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), ts, null,
-                LogSqlEntry.computeSummary(sql), SqlSource.AGENT, ms, null, 0, List.of(), List.of(), null, 0L,
+                LogSqlEntry.summarizeSql(sql), SqlSource.AGENT, ms, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
     }
 

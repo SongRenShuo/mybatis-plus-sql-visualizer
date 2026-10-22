@@ -171,7 +171,7 @@ class SqlLogEntryBufferDedupeIndexTest {
         // now=100_010、grace=5s → ts=100_000 ≥ 95_010，保留
         b.rebuildDedupeIndexAfterHandoff(5_000, 100_010)
         val agentCopy = LogSqlEntry(sql, sql, emptyList(), 100_030, null,
-            LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, 3L,
+            LogSqlEntry.summarizeSql(sql), SqlSource.UNKNOWN, 3L,
             "a/A.java", 7, emptyList(), emptyList(), null, 0L,
             null, null, null, null, null, null, CaptureProvenance.AGENT)
         assertFalse("同一次执行的 agent 副本应融合（不新开行）", b.addEntry(agentCopy))

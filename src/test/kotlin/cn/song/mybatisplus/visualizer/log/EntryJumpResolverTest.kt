@@ -21,7 +21,7 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
 
     /**
      * 空壳条目（Java record 全参构造：master 侧 data class 具名默认参数的位置实参等价形态，
-     * 缺省值与三参便捷构造一致——summary 取 computeSummary(restoredSql)、source=UNKNOWN）。
+     * 缺省值与三参便捷构造一致——summary 取 summarizeSql(restoredSql)、source=UNKNOWN）。
      */
     private fun entry(
         sourceFile: String? = null,
