@@ -23,7 +23,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Resolve entity names inside the query's module, dependencies and libraries.
@@ -125,22 +124,44 @@ public final class EntityClassResolver {
      *  @param entityName queried name
      *  @param candidates candidate file URLs */
     private record NoticeKey(Module module, String entityName, List<String> candidates) {}
-    private static final Key<Set<NoticeKey>> AMBIGUITY_NOTIFIED_KEY = Key.create("mp-visualizer.entityNameAmbiguityNotified");
+    private static final Key<Map<NoticeKey, Boolean>> AMBIGUITY_NOTIFIED_KEY = Key.create("mp-visualizer.entityNameAmbiguityNotified");
+
+    /** F102：歧义提示去重集容量上界（超出按 LRU 淘汰最旧）。 */
+    private static final int AMBIGUITY_NOTICE_MAX = 64;
+
     private static final String PREVIEW_NOTIFICATION_GROUP = "cn.song.mybatisplus.visualizer.preview";
     public static volatile Function4<Project, String, String, List<String>, Unit> ambiguitySinkForTest;
 
     private static void notifyAmbiguityOnce(Project project, String entityName, Module module, List<PsiClass> pool) {
         List<String> names = pool.stream().map(c -> Objects.toString(c.getQualifiedName(), Objects.toString(c.getName(), "?"))).toList();
         NoticeKey key = new NoticeKey(module, entityName, pool.stream().map(c -> virtualFile(c) == null ? "" : virtualFile(c).getUrl()).toList());
-        Set<NoticeKey> seen;
+        // F102（T-PerfSweep26）：去重集改有界 LRU——此前按 (module, entity, urls) 元组在项目
+        // 生命周期内只增不减（量级=项目内歧义实体数，实际很小但无上界）。超出 MAX 后淘汰最旧，
+        // 代价=极老歧义项可能再次提示一次（可接受：提示是幂等告知，非状态机）。
+        Map<NoticeKey, Boolean> seen;
         synchronized (project) {
             seen = project.getUserData(AMBIGUITY_NOTIFIED_KEY);
             if (seen == null) {
-                seen = ConcurrentHashMap.newKeySet();
+                seen = new LinkedHashMap<>(AMBIGUITY_NOTICE_MAX + 1, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(Map.Entry<NoticeKey, Boolean> eldest) {
+                        return size() > AMBIGUITY_NOTICE_MAX;
+                    }
+                };
                 project.putUserData(AMBIGUITY_NOTIFIED_KEY, seen);
             }
         }
-        if (!seen.add(key)) return;
+        boolean firstTime;
+        synchronized (seen) {
+            if (seen.containsKey(key)) {
+                seen.put(key, true); // accessOrder：命中即刷新 LRU 位置
+                firstTime = false;
+            } else {
+                seen.put(key, true);
+                firstTime = true;
+            }
+        }
+        if (!firstTime) return;
         String scopeDescription = module != null ? module.getName() : "project / libraries";
         LOG.info("Entity name " + entityName + " is ambiguous in " + scopeDescription + "; no class selected: " + String.join(", ", names));
         var sink = ambiguitySinkForTest;
@@ -153,5 +174,18 @@ public final class EntityClassResolver {
 
     public static void clearAmbiguityNotifiedForTest(Project project) {
         synchronized (project) { project.putUserData(AMBIGUITY_NOTIFIED_KEY, null); }
+    }
+
+    /** F102 测试缝：当前去重集条目数（有界性断言用；未初始化返回 0）。 */
+    public static int ambiguityNoticeCountForTest(Project project) {
+        synchronized (project) {
+            Map<NoticeKey, Boolean> seen = project.getUserData(AMBIGUITY_NOTIFIED_KEY);
+            return seen != null ? seen.size() : 0;
+        }
+    }
+
+    /** F102 测试缝：去重集容量上界（与实现常量同源，避免用例写死数字漂移）。 */
+    public static int ambiguityNoticeMaxForTest() {
+        return AMBIGUITY_NOTICE_MAX;
     }
 }
