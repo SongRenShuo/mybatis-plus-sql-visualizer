@@ -2333,8 +2333,20 @@ public final class SqlPreviewService {
             SqlHistoryEntry entry = new SqlHistoryEntry("", result.getSql(), result.getCompactSql(), System.currentTimeMillis(),
                     sourceFile, sourceLine, tableName, false, List.of());
             entry.setExecutionTimeMs(executionTimeMs);
-            // TODO(history)：master 另传 projectIdentity = ExplainPlanKey.projectIdentity(project.basePath)
-            //  （SqlHistoryEntry.kt:50 字段）——history 包归主控批次，字段就位后在此接线。
+            entry.setProjectIdentity(cn.song.mybatisplus.visualizer.history.ExplainPlanKey
+                    .projectIdentity(anchor.getProject().getBasePath()));
+            // T-PresetMethodScope：方法身份随结果与历史条目落库——面板据此算带作用域的缓存键，
+            // R51 历史快照回落按同一口径匹配条目。
+            String originScopeKey;
+            try {
+                originScopeKey = cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(
+                        PsiTreeUtil.getParentOfType(anchor, PsiMethod.class, false),
+                        anchor.getProject());
+            } catch (Throwable t) {
+                originScopeKey = "";
+            }
+            result.setOriginScopeKey(originScopeKey);
+            entry.setOriginScopeKey(originScopeKey);
             result.setHistoryEntryId(manager.add(entry).getId());
         } catch (Throwable e) {
             // 服务不可用时静默跳过（不阻塞预览）

@@ -142,6 +142,16 @@ public final class PreviewResult {
     private String historyEntryId = "";
     /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
     private String actualSql;
+    /**
+     * T-PresetMethodScope：参数预设/历史缓存键的<b>声明作用域</b>
+     * （{@code cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of}）。
+     *
+     * <p>空串 = 无方法上下文（日志/历史双击、纯文本预览等），键退回「表名 + SQL 指纹」旧格式。
+     * 非空时键尾追加 {@code |@<scope>}，同一段 SQL 写在两个方法里不再共享预设与参数历史。
+     * 可变字段供 {@code cn.song.mybatisplus.visualizer.ui.SqlPreviewService} 的 recordHistory
+     * 回写（同 {@link #historyEntryId}）。</p>
+     */
+    private String originScopeKey = "";
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -455,6 +465,14 @@ public final class PreviewResult {
 
     public void setActualSql(String actualSql) {
         this.actualSql = actualSql;
+    }
+
+    public String getOriginScopeKey() {
+        return originScopeKey;
+    }
+
+    public void setOriginScopeKey(String originScopeKey) {
+        this.originScopeKey = originScopeKey != null ? originScopeKey : "";
     }
 
     /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */

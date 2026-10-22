@@ -53,6 +53,13 @@ public final class SqlHistoryEntry {
     /** R90：本条目的 EXPLAIN 计划快照（最新在前；预算上限见 SqlHistoryManager.enforcePlanBounds）。 */
     private List<ExplainPlanSnapshot> explainPlans = new ArrayList<>();
 
+    /**
+     * T-PresetMethodScope：预览语句的声明作用域（方法身份短哈希，见
+     * {@code cn.song.mybatisplus.visualizer.psi.PreviewOriginScope}）。参数快照回落（R51）按同一口径
+     * 匹配历史条目；旧条目缺省空 → 只参与旧键匹配，不参与带 scope 键的精确匹配。
+     */
+    private String originScopeKey = "";
+
     public SqlHistoryEntry() {
     }
 
@@ -177,6 +184,14 @@ public final class SqlHistoryEntry {
 
     public void setExplainPlans(List<ExplainPlanSnapshot> explainPlans) {
         this.explainPlans = explainPlans != null ? explainPlans : new ArrayList<>();
+    }
+
+    public String getOriginScopeKey() {
+        return originScopeKey;
+    }
+
+    public void setOriginScopeKey(String originScopeKey) {
+        this.originScopeKey = originScopeKey != null ? originScopeKey : "";
     }
 
     public void setPinned(boolean pinned) {

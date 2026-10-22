@@ -80,12 +80,15 @@ public final class ModuleIdentityResolver {
                     "external-path:" + systemId + ":" + normalizePath(linkedProjectPath),
                     PreviewSourceContext.ModuleKeySource.EXTERNAL_SYSTEM_PATH);
         }
-        String moduleFilePath = module.getModuleFilePath().trim();
-        if (!moduleFilePath.isEmpty()) {
+        // 模块目录走公开 API（ModuleUtilCore.getModuleDirPath）；Module.getModuleFilePath /
+        // getModuleNioFile 均标 @Internal，插件字节码不得直接调用（Marketplace 校验会点名）。
+        // 「目录 + 模块名」在同一项目内唯一，且目录比可被单独改名的 .iml 更稳定。
+        String moduleDirPath = trimToEmpty(ModuleUtilCore.getModuleDirPath(module));
+        if (!moduleDirPath.isEmpty()) {
             return new PreviewSourceContext.ModuleIdentity(
                     module,
-                    "module-file:" + normalizePath(moduleFilePath),
-                    PreviewSourceContext.ModuleKeySource.MODULE_FILE);
+                    "module-dir:" + normalizePath(moduleDirPath) + "/" + module.getName(),
+                    PreviewSourceContext.ModuleKeySource.MODULE_DIR);
         }
         return new PreviewSourceContext.ModuleIdentity(
                 module, "module-name:" + module.getName(), PreviewSourceContext.ModuleKeySource.MODULE_NAME);

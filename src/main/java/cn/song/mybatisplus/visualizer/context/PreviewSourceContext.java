@@ -122,7 +122,7 @@ public record PreviewSourceContext(
     }
 
     public enum ModuleKeySource {
-        EXTERNAL_SYSTEM_ID, EXTERNAL_SYSTEM_PATH, MODULE_FILE, MODULE_NAME,
+        EXTERNAL_SYSTEM_ID, EXTERNAL_SYSTEM_PATH, MODULE_DIR, MODULE_NAME,
     }
 
     /** 模块归属解析结果（sealed：None / Unique / Ambiguous）。 */

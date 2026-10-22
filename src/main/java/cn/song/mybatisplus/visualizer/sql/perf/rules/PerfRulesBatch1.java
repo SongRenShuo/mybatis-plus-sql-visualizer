@@ -73,8 +73,10 @@ public final class PerfRulesBatch1 {
             if (!isUpdate && !isDelete) {
                 return List.of();
             }
-            // 检测顶层 WHERE（不在括号内）
-            if (hasTopLevelKeyword(normalized, "WHERE")) {
+            // 检测顶层 WHERE（不在括号内）。T-McpPerfWhereCase：hasTopLevelKeyword 按大写比对
+            // （形参名 upperSql 即约定），此处必须传大写串——SQL 关键字大小写不敏感，而 mapper
+            // 渲染产物普遍小写（`update ... where id = ?`），传原文会导致「有 WHERE 却报全表操作」。
+            if (hasTopLevelKeyword(normalized.toUpperCase(), "WHERE")) {
                 return List.of();
             }
             String stmtType = isUpdate ? "UPDATE" : "DELETE";
