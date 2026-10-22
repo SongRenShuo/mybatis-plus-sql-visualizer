@@ -192,6 +192,13 @@ public final class SqlPreviewPanelResultViewKt {
      */
     public static void showResult(@NotNull SqlPreviewPanel p, PreviewResult result) {
         p.current = result;
+        // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
+        p.executionDialectRenderMode = p.project != null
+                ? (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(p.project)
+                        .effectiveDialectAuto()
+                        ? cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO
+                        : cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL)
+                : cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN;
         // 参数值按 source 初始化（T-M42：优先取预填初始值——日志识别 `param1` → 日志参数值；
         // 其余空字符串；多条件复用同一 source 共享一个值）
         p.paramValues.clear();

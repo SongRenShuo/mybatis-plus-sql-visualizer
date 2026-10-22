@@ -420,6 +420,23 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      */
     public String lastRenderedSql = null;
 
+    /** R90：同目标会话基线与持久化历史协调；未知 UUID 仅按目标对象身份比较。 */
+    public final cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession explainPlanHistorySession =
+            new cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession();
+
+    /** R91：本次预览已确认的 EXPLAIN 目标；绝不从项目最近使用来源推断。 */
+    public AiContextTarget aiContextTarget = null;
+
+    /** R91：本面板最近一次获取的计划，历史清空/加载换代即失效。 */
+    public kotlin.Pair<Long, cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> aiContextPlan = null;
+
+    /** R91：AI 上下文计划的确认目标（预览 + 计划键 + 仍有效判定）。 */
+    public record AiContextTarget(
+            PreviewResult preview,
+            cn.song.mybatisplus.visualizer.history.ExplainPlanKey key,
+            java.util.function.Supplier<Boolean> stillCurrent) {
+    }
+
     /**
      * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
      *

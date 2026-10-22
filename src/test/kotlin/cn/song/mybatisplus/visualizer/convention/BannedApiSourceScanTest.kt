@@ -242,6 +242,10 @@ class BannedApiSourceScanTest {
             // 主文件 `ui/SqlPreviewPanel.java` 已无模态调用点，故本表不再为它加白。
             "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
             "src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java",
+            // O-145 W6：清除本项目模块数据源绑定须用户确认，拒绝后不改变任何绑定。
+            "src/main/java/cn/song/mybatisplus/visualizer/config/ProjectPluginSettingsConfigurable.java",
+            // O-145 W7：仅未知方言的原始查询须用户确认；已知冲突和未知写操作直接阻断。
+            "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java",
             "src/main/java/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.java",
             "src/main/java/cn/song/mybatisplus/visualizer/config/McpConfigurable.java",
             "src/main/java/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.java",
@@ -1253,7 +1257,9 @@ class BannedApiSourceScanTest {
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
         // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
-        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
+        // T-EnhancedCaptureDefaultOn（2026-10-19）：consent 机器整段摘除（确认弹窗/预热确认/复用授权
+        //   冷却链随之删除），该处 fatal 判定一并移除——基线重登为 9（master 侧同轮次摘除）。
+        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 9,
         // 3 处：agent 会话（读取/写入循环的 fatal 透传）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentSession.java" to 3,
         // 8 处：运行配置监听（T-FP-02 落地批）；
@@ -1328,7 +1334,9 @@ class BannedApiSourceScanTest {
      * DataSourceSelector 预热预算化的 ExecutionException 拆包为 fatal 透传（非 Throwable 站点，
      * 不入本口径，已登记 [fatalPassthroughGuardedFiles] Selector 1→2）。715 个 .java 文件实测 763。
      */
-    private val fatalCatchSiteTotalBaseline = 763
+    // T-SyncK2JMaster496：k2j 树把每个 Kotlin `runCatching` 落成 try/catch(Throwable)，站点数随
+    // 移植增量上升——本次实测 833（763 → 833）。新增/删除捕获点须重新登记本基线。
+    private val fatalCatchSiteTotalBaseline = 833
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

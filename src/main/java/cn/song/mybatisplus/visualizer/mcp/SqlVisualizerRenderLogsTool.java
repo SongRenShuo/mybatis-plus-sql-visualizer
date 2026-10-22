@@ -102,7 +102,7 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             mixedPrefixMatching, null);
     }
 
-    /** 全参形态（Kotlin defaults 参数显式入口；测试直调）。 */
+    /** Kotlin 默认参数 {@code maskLiterals = null} 的显式重载。 */
     public String renderLogs(
         String logText,
         String sqlPrefix,
@@ -111,6 +111,25 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         String hibernateParamPrefix,
         Boolean mixedPrefixMatching,
         LogPrefixDefaults defaults
+    ) {
+        return renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
+            mixedPrefixMatching, defaults, null);
+    }
+
+    /**
+     * 全参形态（Kotlin defaults 参数显式入口；测试直调）。
+     *
+     * @param maskLiterals R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置 mcpMaskEnabled（默认关，审计册口径）
+     */
+    public String renderLogs(
+        String logText,
+        String sqlPrefix,
+        String paramPrefix,
+        String hibernateSqlPrefix,
+        String hibernateParamPrefix,
+        Boolean mixedPrefixMatching,
+        LogPrefixDefaults defaults,
+        Boolean maskLiterals
     ) {
         if (logText.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "logText is empty."));
@@ -143,6 +162,19 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
                 + "'" + effectiveDefaults.paramPrefix() + "' pairs (or Hibernate / JdbcTemplate formats) with SQL and "
                 + "parameters on adjacent lines. Check the prefixes or pass explicit overrides.";
         }
+        // R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置（服务未注册兜底关），只打码输出文本
+        final boolean maskOn;
+        if (maskLiterals != null) {
+            maskOn = maskLiterals;
+        } else {
+            boolean resolved;
+            try {
+                resolved = PluginSettings.getInstance().getState().getMcpMaskEnabled();
+            } catch (Throwable ignored) {
+                resolved = false;
+            }
+            maskOn = resolved;
+        }
         StringBuilder out = new StringBuilder();
         out.append("Restored ").append(entries.size()).append(" statement(s):\n\n");
         for (int index = 0; index < entries.size(); index++) {
@@ -160,7 +192,8 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             if (statementName != null) {
                 out.append(" [").append(statementName).append("]");
             }
-            out.append("\n").append(entry.restoredSql());
+            out.append("\n").append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(
+                    entry.restoredSql(), maskOn));
             if (index < entries.size() - 1) {
                 out.append("\n\n");
             }
@@ -202,11 +235,13 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             defaults.maxParseLength()
         );
         logText.lines().forEach(line -> {
-            myBatis.feed(line);
-            hibernate.feed(line);
-            jdbc.feed(line);
+            // F58（T-PerfSweep18 压轴）：同一行喂四解析器——线程 token 每行只提一次下传
+            String threadToken = cn.song.mybatisplus.visualizer.log.LogThreadRouter.threadTokenOf(line);
+            myBatis.feed(line, threadToken);
+            hibernate.feed(line, threadToken);
+            jdbc.feed(line, threadToken);
             if (defaults.shardingEnabled()) {
-                sharding.feed(line);
+                sharding.feed(line, threadToken);
             }
         });
         myBatis.closePending();

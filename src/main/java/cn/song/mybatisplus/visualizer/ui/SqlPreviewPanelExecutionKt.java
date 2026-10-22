@@ -1762,4 +1762,46 @@ public final class SqlPreviewPanelExecutionKt {
         timer.start();
     }
 
+
+    /** O-145/R90：EXPLAIN 计划历史捕获入口（retention 关时只建会话不补建历史条目）。 */
+    public static cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request captureExplainPlanHistory(
+            @NotNull SqlPreviewPanel p,
+            @NotNull cn.song.mybatisplus.visualizer.history.SqlHistoryManager history,
+            @NotNull cn.song.mybatisplus.visualizer.history.ExplainPlanKey planKey,
+            @NotNull Object target,
+            @NotNull java.util.function.Supplier<Boolean> targetStillCurrent) {
+        PreviewResult originalPreview = p.current;
+        boolean retentionEnabled = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+                .getState().getExplainPlanRetentionEnabled();
+        p.aiContextTarget = new SqlPreviewPanel.AiContextTarget(originalPreview, planKey, targetStillCurrent);
+        // XML/日志纯文本预览没有经过 recordHistory；首次 EXPLAIN 复用同一历史域建条目。
+        // 已有 ID 即使被用户删除也绝不补建，防删除后在途结果复活。
+        if (retentionEnabled && originalPreview != null
+                && originalPreview.getHistoryEntryId().isEmpty() && planKey.isPersistable()) {
+            // Kotlin 命名参数形态的 Java 等价：无参构造 + 逐字段写入（其余字段取默认）
+            cn.song.mybatisplus.visualizer.history.SqlHistoryEntry entry =
+                    new cn.song.mybatisplus.visualizer.history.SqlHistoryEntry();
+            entry.setSql(originalPreview.getSql());
+            entry.setCompactSql(originalPreview.getCompactSql());
+            entry.setTimestamp(System.currentTimeMillis());
+            entry.setTableName(originalPreview.getTableName() != null ? originalPreview.getTableName() : "");
+            entry.setProjectIdentity(planKey.projectIdentity());
+            originalPreview.setHistoryEntryId(history.add(entry).getId());
+        }
+        return p.explainPlanHistorySession.begin(
+                history, originalPreview != null ? originalPreview.getSql() : "", planKey, target,
+                originalPreview != null ? originalPreview.getHistoryEntryId() : "", retentionEnabled);
+    }
+
+    /** 成功回调重新读取当前设置，不能使用提交前的 State 引用（期间可能 apply/loadState）。 */
+    public static cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Completion completeExplainPlanHistory(
+            @NotNull SqlPreviewPanel p,
+            @NotNull cn.song.mybatisplus.visualizer.history.SqlHistoryManager history,
+            @NotNull cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request request,
+            @NotNull cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult raw) {
+        return p.explainPlanHistorySession.complete(history, request, raw,
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+                        .getState().getExplainPlanRetentionEnabled());
+    }
+
 }

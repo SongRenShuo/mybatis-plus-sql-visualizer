@@ -98,7 +98,11 @@ class SettingsRealityGuardTest {
         // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.java / HistorySqlLogPanel.java）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
         val alias = mapOf("logListSqlDisplayMode" to "sqlListDisplayMode")
-        val dead = fields.filter { f ->
+        // T-EnhancedCaptureDefaultOn（2026-10-19）：两个字段只用于旧配置兼容归一——loadState 内
+        // 写为固定值、运行期零读取，因此没有也不应有非 config 消费点。保留字段是为了旧 XML/JSON
+        // 与旧版本回退，不是假配置；下线条件 = 确认不再需要兼容旧配置。显式登记而非泛化匹配。
+        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs")
+        val dead = fields.filter { it !in compatOnly }.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
             val identifier = Regex("""(?<![\w$])${Regex.escape(probe)}(?![\w$])""")
@@ -130,9 +134,12 @@ class SettingsRealityGuardTest {
             "updateSection", "shortcutEditor", "reverseShortcutEditor",
             // T-SettingsTruth P1：autoInjectInterceptorCheck 为纯动作开关（勾选即注入、无论成败终态复位），不进 apply/reset
             "autoInjectInterceptorCheck",
-            // T-CaptureTruth T-CT-02：enhancedReauthButton 为纯动作按钮（点击即清零拒绝冷却并重走确认流，
-            // 无自身状态可存可回填），与 clearCacheButton / crudColorResetButton 同类。
-            "enhancedReauthButton",
+            // T-M19-StorageClear：三按钮点击即执行本地动作，状态行只显示结果；
+            // PluginSettingsPanelUiTest 另验确认/清理，不属于 apply/reset 持久化字段。
+            "openCaptureDirectoryButton", "clearPreviewHistoryButton", "clearParamHistoryButton",
+            "storageActionStatusLabel",
+            // R90：只读隐私披露标签，不是可编辑设置；保留开关自身仍须 apply/reset。
+            "explainPlanRetentionDisclosure",
             // T-PrefixValidate（master 7b51d57，20260926）：前缀校验结果行与一键修复按钮——
             // label 纯展示（可见性随校验结果翻转）、button 纯动作（点击回写两栏后自隐），
             // 均无自身状态可存可回填，按本白名单既有口径豁免（20260927 T-TestPerf7 合流树首轮全量红补登记）
@@ -353,6 +360,24 @@ class SettingsRealityGuardTest {
             "settings.mcp.tool.desc.reversesql",
             "settings.mcp.tool.desc.mappercheck",
             "settings.mcp.tool.desc.historysearch",
+            // T-SyncK2JMaster496：下列键对应「尚未移植的 UI 面」，落位后须从本白名单移除
+            // （UPDATE 失败分型文案 / MCP 脱敏开关与能力横幅 / T-M19-StorageClear 三按钮 / R90 保留开关文案）：
+            "settings.update.fail.network", "settings.update.fail.channel404",
+            "settings.update.fallback.marketplace", "settings.update.fallback.gitee",
+            "settings.mcp.maskLiterals", "settings.mcp.maskLiterals.desc",
+            "settings.mcp.banner.declared", "settings.mcp.banner.platformPresent",
+            "settings.mcp.banner.platformUnavailable",
+            "settings.storage.captureFiles", "settings.storage.captureFiles.open",
+            "settings.storage.captureFiles.open.tip", "settings.storage.captureFiles.opened",
+            "settings.storage.captureFiles.open.failed",
+            "settings.storage.previewHistory", "settings.storage.previewHistory.clear",
+            "settings.storage.previewHistory.clear.tip", "settings.storage.previewHistory.clear.confirm",
+            "settings.storage.previewHistory.cleared",
+            "settings.storage.paramHistory", "settings.storage.paramHistory.clear",
+            "settings.storage.paramHistory.clear.tip", "settings.storage.paramHistory.clear.confirm",
+            "settings.storage.paramHistory.cleared",
+            "settings.storage.clear.title", "settings.storage.clear.failed", "settings.storage.clearBoundary",
+            "settings.explain.retention", "settings.explain.retention.disclosure",
         )
         val texts = mainSources()
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()

@@ -376,6 +376,23 @@ class EnumReachabilityGuardTest {
         val WHITELIST = mapOf(
             "SubmitPhase.SUCCESS" to
                 "KDoc 明示预留：成功即关窗，不需要写状态行（ErrorReportDialog.submitStatusText 分支返回 null）",
+            // R52（master 同条）：能力矩阵需单列 EXPLAIN 行以保矩阵完整，但该枚举刻意不产出 EXPLAIN
+            // 缺口——缺口归既有 ExplainGate 轻通知（不重复进执行确认弹窗），消费点＝矩阵渲染。不是静默失效。
+            "Capability.EXPLAIN" to
+                "有意保留的未产出位（R52）：矩阵单列 EXPLAIN 保完整，缺口归 ExplainGate 轻通知、不进确认弹窗",
+            // 以下四类是「产出点在未移植的预览降级/模板意图链」——落位后须删除本条目（守卫会红提示）。
+            "PreviewDegradationReason.FILE_UNAVAILABLE" to
+                "产出点在未移植的降级预览链（T-DegradedPreviewUx 侧），落位后删本条",
+            "PreviewDegradationReason.VFS_UNAVAILABLE" to
+                "产出点在未移植的降级预览链，落位后删本条",
+            "PreviewDegradationReason.PSI_UNAVAILABLE" to
+                "产出点在未移植的降级预览链，落位后删本条",
+            "PreviewDegradationReason.PRODUCT_CONSUMED" to
+                "产出点在未移植的降级预览链，落位后删本条",
+            "PreviewDegradationReason.MEMORY_PSI_FAILED" to
+                "产出点在未移植的降级预览链，落位后删本条",
+            "Intent.TEMPLATE" to
+                "产出点在未移植的执行意图分型链（SqlPreviewPanelExecution 尾款），落位后删本条",
         )
     }
 }
