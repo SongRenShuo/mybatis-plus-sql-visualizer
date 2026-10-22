@@ -248,3 +248,17 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
   （证据 `dev-support/e2e-fake-ide/evidence/p1-stack-evidence.txt`）。原先只有静态推断，现为真机实证。
 - 车道 C 的 IDE 侧 gradle 曾多次 `BUILD FAILED` 于 `Unable to delete ~/.gradle/caches/9.7.0/transforms/…/ideaIU-2024.3.7.1-win`（另一车道占用 `jbr/bin/*.dll`），与改动无关；反向臂 C 因此改为直接用 JBR JDK21 运行**已编译的守卫类**（该守卫是源码扫描型，运行时读磁盘源码，等价于真跑），并以提交态对照证明红由漂移引起。收口门禁需注意同类锁竞争，撞到先重试。
 - D3 定案（保守选项）建议维持；若日后要单一事实源，只能走「生成式常量 + 同一扫描守卫」，因为 agent 不可引 IDE 类。
+
+### 六、后续订正（2026-10-14）：移除 T-05 的无条件摘要
+
+- **触发**：用户报障宿主控制台刷出 `[T-AgentSourceLocateStale] 入口键非业务帧（一次性摘要，entry=…CarStationInfoServiceImpl$$SpringCGLIB$$0#getById primary=…StationInfoManagementService.java:622 via=L1）`。
+- **判据**：T-05 的设计前提是「入口键身份 ≠ 主位置身份 ⇒ 异常（入口键落在共享库帧）」。但 T-SrcGenFrame 之后，
+  Spring 代理调用必然构成「入口键＝`$$SpringCGLIB$$0` 生成类帧、主位置＝真实业务帧」——这是**常态健康形态**
+  （生成类帧 SourceFile 恒为 `<generated>`，按设计不作主位置）。于是摘要对每个被代理的 Service 方法各打一条，
+  由「异常信号」退化为宿主控制台噪音；且它与 T-02/T-01 的收敛方向相反（前者让入口键更常落业务帧，后者让生成类帧必然让位）。
+- **处置**：整条路径删除（`reportEntryKeyMismatch`、`ENTRY_MISMATCH_REPORTED` 去重集合与三处调用点，含 `java.util.Set` 导入）。
+  entryKey/pool 的诊断能力不变——`diagnose()`（`logLevel=info`）本就输出 `entry=` 与 pool 帧，是唯一诊断出口；
+  产线固定 `logLevel=warn`，宿主控制台自此零定位打点。
+- **回归**：`StackLocatorCacheStalenessTest` 用例⑤由「warn 档打一条摘要」翻转为「warn 档零输出 + info 档有 `[T-SourceJumpFunnel]`
+  且已移除的 `[T-AgentSourceLocateStale]` 不得复活」，宿主零噪音契约自此由测试锁定。
+- **未动**：`StackLocator` 其余 `System.err` 打点（attach/首条事件/登记盲区等）均为一次性告警，非本条噪音源，不在本次范围。

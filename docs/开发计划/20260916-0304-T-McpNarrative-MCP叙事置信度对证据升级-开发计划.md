@@ -59,7 +59,7 @@ T-MN-01（失真修正）→ T-MN-02（标准句三处落点+sweep）→ T-MN-03
 
 **2026-09-17 实施完毕（提交 6a7dff7，dev 分支直接交付）**
 
-- **T-MN-01**：RenderSqlTool @McpDescription 删「多语句按 `-- SQL #N` 分隔」失真句（实现为单语句渲染、Outcome 单 sql），改如实口径「一次一条，多候选取首个并在输出注明，多语句日志走 mpsv_render_logs」；plugin.xml 注释「SqlVisualizerToolset 三只读工具」旧口径更新为「十个只读工具，一工具一 toolset 类」。
+- **T-MN-01**：RenderSqlTool @McpDescription 删「多语句按 `-- SQL #N` 分隔」失真句（实现为单语句渲染、Outcome 单 sql），改如实口径「一次一条，多候选取首个并在输出注明，多语句日志走 sqlv_render_logs」；plugin.xml 注释「SqlVisualizerToolset 三只读工具」旧口径更新为「十个只读工具，一工具一 toolset 类」。
 - **T-MN-02**：置信度 vs 证据标准句定稿（以 MapperCheckTool 证据句为底本）——英文「validators return a confidence score; this returns deterministic evidence a static-only validator cannot produce」/中文「校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证」，三处措辞一致落地：mapper_check @McpDescription 升格、README MCP 小节、marketplace 页 MCP 行（中英两侧同步替换）；其余九工具 @McpDescription 一致性 sweep 完成——deterministic 家族词十工具全覆盖（grep 实证）、无「三只读」残留、无失真句，克制不加长。
 - **T-MN-03**：bundle 零动键（parity 守卫 5 例绿）；CHANGELOG [Unreleased] Changed 条目与第五轮报告 N-19 状态回填随本轮文档批次执行（报告回填留主会话）。
 - **测试**：BundleParityGuardTest 5 + MapperCheckToolTest 4 + RenderLogsToolTest 4 定向全绿。

@@ -30,7 +30,7 @@
 |---|------|------|---------|
 | 1 | 可写 CTE / EXPLAIN ANALYZE / SELECT INTO 不再免确认 | 预览执行上述三类语句时弹确认（此前直通） | T-TxnReadOnlyProof |
 | 2 | 设置项「执行超时（秒，0=不限）」 | 设置页 → SQL 预览分组（JdbcTemplate 预览行之后） | T-ExecTimeoutGuard |
-| 3 | MCP explain 超时护栏（挂死查询不再无限等待） | MCP `mpsv_explain` 输出错误尾附 `timed out after Ns` | T-ExecTimeoutGuard |
+| 3 | MCP explain 超时护栏（挂死查询不再无限等待） | MCP `sqlv_explain` 输出错误尾附 `timed out after Ns` | T-ExecTimeoutGuard |
 | 4 | 增强捕获确认弹窗不再反复打扰：非主配置进程不弹、拒绝后 24h 冷却 | 首次 Run 项目（仅主配置启动触发一次） | T-PerfSweep4-01 |
 | 5 | 双路解析封口（捕捉开启 × 控制台已存时序每行不再 ×2 解析） | 无观感，行为/性能观察项 | T-PerfSweep4-02 |
 | 6 | 同 pid 3s 内重复 Run 不再重复排队 attach | 同一应用快速重启场景日志 | T-PerfSweep4-03 |
@@ -69,7 +69,7 @@
 
 | 步骤 | 操作 | 预期 |
 |------|------|------|
-| 1 | MCP `mpsv_explain` 跑一条 `SELECT SLEEP(60)`（直连链） | 约 30s 后返回错误，消息含 `timed out after 30s (cancel requested)`（agent 可读，不悬挂） |
+| 1 | MCP `sqlv_explain` 跑一条 `SELECT SLEEP(60)`（直连链） | 约 30s 后返回错误，消息含 `timed out after 30s (cancel requested)`（agent 可读，不悬挂） |
 | 2 | 设置页把「执行超时」改为 0 并 Apply | 再跑同查询：不超时（0=不限），跑完正常返回 |
 | 3 | 改回 30，跑正常查询 | 行为零变化（超时只在异常态触发） |
 | 4 | 预览面板/日志转 SQL 执行慢查询（共享控制台链） | 如实观察：该链 DBN 托管暂无语句级超时（v1 登记不覆盖，不得虚标已护栏）；行为与此前一致 |

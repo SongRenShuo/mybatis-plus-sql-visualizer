@@ -15,14 +15,14 @@
 
 | # | 原建议口径 | 核实事实 | 影响 |
 |---|-----------|---------|------|
-| 1 | 「MCP **十工具**的执行类调用落历史」 | **十个工具里只有 1 个有执行面**：`mpsv_explain`（`mcp/ExplainTool.kt:18`）。其余九个为纯静态分析（PSI/JSqlParser/文本），`mcp/CheckSqlTool.kt:14-16` KDoc 明示「纯文本判定，绝不执行」 | 范围从「十工具」收窄为「执行类工具（当前仅 `mpsv_explain`）」 |
+| 1 | 「MCP **十工具**的执行类调用落历史」 | **十个工具里只有 1 个有执行面**：`sqlv_explain`（`mcp/ExplainTool.kt:18`）。其余九个为纯静态分析（PSI/JSqlParser/文本），`mcp/CheckSqlTool.kt:14-16` KDoc 明示「纯文本判定，绝不执行」 | 范围从「十工具」收窄为「执行类工具（当前仅 `sqlv_explain`）」 |
 | 2 | 落「执行过的 SQL」 | 执行的不是用户原句，而是 `DialectRegistry.byName(dialectName).renderExplainStatement(selectSql)` 包出的 `EXPLAIN <select>`（`ExplainTool.kt:102`），原始 `selectSql` 只作参数存在、当前零留痕 | 落历史必须落**原始 `selectSql`**，见 §三 T-MAT-02 |
 | 3 | 复用既有「来源」字段即可 | 历史模型有**两套**：预览历史 `SqlHistoryEntry`（`history/SqlHistoryEntry.kt:22-33`，**无任何 source 字段**）与日志历史 `LogSqlEntry`（`log/LogSqlModels.kt:26-115`，**已有** `SqlSource` 枚举 `:50` = MYBATIS/HIBERNATE/JDBC/AGENT/UNKNOWN）。但后者**根本不持久化**：`.sql` 头部 `source:` 段被 `SqlLogFileReader.kt:241-249` `parseSource()` 占用为「源码文件:行号」，读回路径 `:195-215`/`:218-236` **从不设置 `source` 字段** → round-trip 后必然退化为 `UNKNOWN` | 「加个枚举值」不够，必须同时解决持久化通道，见 T-MAT-03 |
 | 4 | 「每调用已有 `[MCP-AUDIT]` 审计」 | 审计行存在但**不含入参**：`mcp/McpToolsetSupport.kt:68` 成功路径把字面量 `"ok"` 当 `argsSummary` 传入，`mcp/McpAuditLog.kt:24` 的 `summarize(vararg pairs)` 工具函数**全仓零调用点**（grep 仅定义处） | 「审计闭环」的一半是空的，须补入参接线，见 T-MAT-04 |
 
 **现成资产（决定本计划成本低的原因）**：
 
-- **执行链已有单点入口**：`mcp/McpDbExecutor.kt:120` `executeQuery(project, dataSource, sql, maxRows, timeoutSeconds)`，`:151` `REMOTE_STATEMENT.executeQuery(sql)`；全仓唯一调用点是 `ExplainTool.kt:117-121`。`McpSelectGuard.kt:10` KDoc 已把该通道定义为「mpsv_explain / **未来任何执行类工具共用**」——挂这一层，未来新增执行工具自动获得历史。
+- **执行链已有单点入口**：`mcp/McpDbExecutor.kt:120` `executeQuery(project, dataSource, sql, maxRows, timeoutSeconds)`，`:151` `REMOTE_STATEMENT.executeQuery(sql)`；全仓唯一调用点是 `ExplainTool.kt:117-121`。`McpSelectGuard.kt:10` KDoc 已把该通道定义为「sqlv_explain / **未来任何执行类工具共用**」——挂这一层，未来新增执行工具自动获得历史。
 - **面板已有徽标渲染范式**：`log/HistorySqlLogPanel.kt:858-859` 目标库角标、`:855` 时间戳、`:856` 耗时、`:860` 来源、`:850-851` 行号，全部走 `log/SqlLogPanel.kt` 的 `internal` 片段工厂（`formatDatabaseFragment:1959`、`formatUpdateCountFragment:1974`、`formatErrorFragment:1984`、`formatSourceFragment:1993`），协议统一为 `Pair<String, SimpleTextAttributes>?`。加「MCP」徽标是**填空式增量**。
 - **扩展载荷通道已存在且容错**：`-- pd: <base64> --` 行（写端 `log/SqlLogAutoSaver.kt:371-375`、编解码 `log/SqlLogParamCodec.kt:72`/`:119`），`decode` 全程 `runCatching` 失败返 null、读端降级为普通注释行（`SqlLogFileReader.kt:175-179`）。
 - **分类器已是多消费方成熟资产**，无需新建：风险/类型面 `execute/SqlTypeClassifier.kt:67` `classify(): SqlType`（QUERY/DML/DDL/UNKNOWN，含只读二级证明 fail-closed `:96-108`）；渲染染色面 `log/LogStatementClassifier.kt:30` `classify(): StatementType`。
@@ -34,7 +34,7 @@
 
 ## 二、目标与非目标
 
-**目标**：`mpsv_explain` 的每次真实执行在 IDE 内留下可查痕迹（历史面板可见、带来源徽标、带耗时与成败），且 MCP 审计行带上真实入参摘要。
+**目标**：`sqlv_explain` 的每次真实执行在 IDE 内留下可查痕迹（历史面板可见、带来源徽标、带耗时与成败），且 MCP 审计行带上真实入参摘要。
 
 **非目标**：不给其余九个工具造历史（它们不执行，无历史可言）；不新建独立 MCP 历史存储（`SqlHistoryManager` 的面板不读它、`HistorySqlLogPanel` 只读 `.sql` 文件，另起一套会让徽标无处渲染）；不改执行语义与门控（`McpSelectGuard` 强只读闸门原样）；不动 MCP 工具签名（参数面变更归 T-McpRowBudget）。
 
@@ -54,11 +54,11 @@
 
 **T-MAT-05（面板徽标）**：新增 `formatMcpFragment`，照 `formatDatabaseFragment`（`SqlLogPanel.kt:1959`）的 `Pair<String, SimpleTextAttributes>?` 协议，插在 `HistorySqlLogPanel.kt:858-859`（目标库角标）之后、`:860`（来源）之前。未知/非 MCP 返回 null 不显示（与目标库角标同规）。日志页同类渲染器（`SqlLogPanel.kt:2080-2090`）是否同步：先核实该处渲染的是否同一模型，是则一并接。
 
-**T-MAT-06（测试与文档）**：用例覆盖——①`mpsv_explain` 执行后历史出现条目且 `source=MCP`；②round-trip 后 `source` 仍为 `MCP`（钉住 T-MAT-03 的持久化，这是当前 `SqlSource` 的既有缺陷面）；③无参数/无占位符场景 pd 行仍写出（钉住 T-MAT-03 的配套必改）；④染色：MCP 条目的 `statementType` 不为 `OTHER`（钉住 T-MAT-02）；⑤审计行含入参摘要、`summarize` 不再是死代码（补消费点守卫）；⑥失败路径落 `errorText`。文档：CHANGELOG `[Unreleased]` + 变更记录行 + 第八轮报告 §8 #38 落地备注。
+**T-MAT-06（测试与文档）**：用例覆盖——①`sqlv_explain` 执行后历史出现条目且 `source=MCP`；②round-trip 后 `source` 仍为 `MCP`（钉住 T-MAT-03 的持久化，这是当前 `SqlSource` 的既有缺陷面）；③无参数/无占位符场景 pd 行仍写出（钉住 T-MAT-03 的配套必改）；④染色：MCP 条目的 `statementType` 不为 `OTHER`（钉住 T-MAT-02）；⑤审计行含入参摘要、`summarize` 不再是死代码（补消费点守卫）；⑥失败路径落 `errorText`。文档：CHANGELOG `[Unreleased]` + 变更记录行 + 第八轮报告 §8 #38 落地备注。
 
 ## 四、验收标准
 
-1. `mpsv_explain` 成功执行一次 → 历史面板可见该条、带 MCP 徽标与耗时；IDE 重启后仍在（持久化成立）。
+1. `sqlv_explain` 成功执行一次 → 历史面板可见该条、带 MCP 徽标与耗时；IDE 重启后仍在（持久化成立）。
 2. `source=MCP` 经 `.sql` round-trip 后**不退化**为 `UNKNOWN`（对照当前 `SqlSource` 的既有缺陷，先红后绿）。
 3. 无参数、无占位符的 SELECT 场景来源标记不丢（T-MAT-03 配套必改的专属用例）。
 4. 其余九个工具行为逐字节不变（无历史写入、审计行格式除入参段外不变）。**限定（独立复核轮订正）**：「逐字节不变」只对 **OK 路径**成立——错误路径的入参段格式十个工具统一变化（由「只放错误文本」改为 `args=<摘要> error=<文本>`），九静态工具的错误行同样变了字节；变化只落在审计入参段，工具结果与审计行其余字段不变。
@@ -67,7 +67,7 @@
 
 ## 五、真机走查清单（留人工）
 
-1. 真机 `mpsv_explain` 执行 → 历史面板出现条目、徽标与耗时正确；重启 IDE 后条目仍在且徽标未退化为无。
+1. 真机 `sqlv_explain` 执行 → 历史面板出现条目、徽标与耗时正确；重启 IDE 后条目仍在且徽标未退化为无。
 2. 无参数 mapper 的 SELECT 走 MCP EXPLAIN → 来源标记保留。
 3. idea.log 的 `[MCP-AUDIT]` 行含 dataSource/dialect/SQL 摘要，且摘要已截断（不超 120 字符）。
 4. 历史面板筛选（类型过滤）对 MCP 条目行为正常（不因 `source` 新值异常）。
@@ -97,11 +97,11 @@ T-MAT-04 与 01/03/05 写集不相交（`mcp/McpToolsetSupport.kt` / `mcp/McpAud
 | T-MAT-01 | `2a1bf53` | 回调签名 `onExecuted: ((ExecutedOutcome) -> Unit)? = null`——可选参数而非全局钩子/接口：null 时零行为差异（执行本体原样搬进 private `executeQueryInternal`），成功与失败两条路径各回调一次，钩子自身异常 `runCatching` 只记日志（审计不得成为门控）。**headless 可测性结论**：`ExecutedOutcome` 只含 String/Long（不引平台类型），McpDbExecutor 仍零 IDE 服务依赖；落库接线做成**顶层函数** `recordMcpExecution`（与 `mcpHistoryEntry` 同在 McpToolsetSupport.kt 门面类）——平台测试可直调，不必加载抽象基类（其 mcpserver 接口来自可选插件，McpDbExecutor.drainWarnings 同款先例）。取服务用 `project.getService`（Kotlin 类无平台生成的 `getInstance` 静态，首版误用致编译失败，已订正）。**口径限定（独立复核轮订正）**：「成功与失败两条路径各回调一次」不覆盖 fatal——`McpDbExecutor.kt:180-181` 的 fatal 分支**跳过审计钩子**（`FatalErrors.isFatal` 命中即原样透传，不构造 `ExecutedOutcome`、不落历史），这是 T-FP-03 守卫（`catch (…: Throwable)` 块体必须含 `FatalErrors.isFatal(`）强制的结果，不是自选口径 |
 | T-MAT-02 | `2a1bf53` | 入 `rawSql`/`restoredSql` 的是 `selectSql.trim()`；EXPLAIN 包装句只经 `outcome.executedSql` 暴露且 ExplainTool **显式不消费**（KDoc 写明勿落）。「已 EXPLAIN 包装」的独立标记由 `SqlSource.MCP` 承担（该来源仅 explain 通道产出）。**未新增 dialect 字段**：新增构造参数会改 data class equals（T-LogRowNumber 的 sequenceNumber 教训），且读端回填被并行占用文件阻塞 → 零可观测收益，故不做 |
 | T-MAT-03 | `e8ce911` | pd 短键 = **`s`**（值 = 枚举名而非序号：新增常量不使旧文件失效）；`DecodedPayload` 增 `source: SqlSource?`（缺键/未知枚举名 → null，只丢来源标记不丢整条）。`SqlLogAutoSaver` pd 条件追加 **`entry.source == SqlSource.MCP`**——刻意**不**放宽为 `!= UNKNOWN`（否则给既有 MYBATIS/AGENT 条目凭空加 pd 行，读端口径被动扩张）。**读端未接**（SqlLogFileReader 被并行任务占用）：见 §九 |
-| T-MAT-04 | `2a1bf53` | 顶层 `executionArgsSummary`（dataSource/dialect/sql 三段，空白回落 `auto`，换行压平）；`McpAuditLog.clip`/`SUMMARY_LIMIT` 改 internal 以便断言。**截断实测**：长 SQL 样例（三段全量 **562 字符**）经 `clip` 后 **121 字符**（= 120 + 省略号，McpAuditLogTest 钉住；计划 §五 走查 3 的「不超 120」由本函数保证）。其余九个纯静态工具保持字面量默认值 → 审计行逐字节不变（§验收 4）；预期错误路径由「只放错误文本」改为「入参摘要 + `error=<文本>`」（**限定**：九静态工具信息不减；`mpsv_explain` 长 SQL 场景下 error 文本此前可能被截——SQL 段 >80 字符起截、≥113 字符整段消失，本轮已修，见 §九 ⑧） |
+| T-MAT-04 | `2a1bf53` | 顶层 `executionArgsSummary`（dataSource/dialect/sql 三段，空白回落 `auto`，换行压平）；`McpAuditLog.clip`/`SUMMARY_LIMIT` 改 internal 以便断言。**截断实测**：长 SQL 样例（三段全量 **562 字符**）经 `clip` 后 **121 字符**（= 120 + 省略号，McpAuditLogTest 钉住；计划 §五 走查 3 的「不超 120」由本函数保证）。其余九个纯静态工具保持字面量默认值 → 审计行逐字节不变（§验收 4）；预期错误路径由「只放错误文本」改为「入参摘要 + `error=<文本>`」（**限定**：九静态工具信息不减；`sqlv_explain` 长 SQL 场景下 error 文本此前可能被截——SQL 段 >80 字符起截、≥113 字符整段消失，本轮已修，见 §九 ⑧） |
 | T-MAT-05 | `c51b505` | **日志页是否同步的核实结论：是**——日志页 `LogEntryListCellRenderer`（SqlLogPanel.kt）与历史页 `HistoryCellRenderer`（HistorySqlLogPanel.kt）渲染的是**同一模型** `LogSqlEntry`，故两页都接 `formatMcpFragment`（落点：目标库角标后、来源前，与既有角标同款协议）。历史页元信息行自建、不调 `formatSourceFragment`，故两处各自显式插一行，顺序与协议对齐避免两页不一致 |
 | T-MAT-06 | 本提交 | **门禁读数**：`testShards` **5196/0/0/6**（= 交付基线 5176 + 本任务新增 20 例精确吻合：codec +4、autosaver +2、McpAuditLogTest +6、McpHistoryIngestTest +4、两渲染器各 +2）、`testDatabase` **10/0/0/0**、agent **58/0/0**（首跑 1 例墙钟 flake，见 §九）。定向读数：SqlLogParamCodecTest 14/0/0/0、SqlLogAutoSaverTest 25/0/0/0、McpAuditLogTest 6/0/0/0、McpHistoryIngestTest 4/0/0/0、SqlLogPanelRendererUiTest 33/0/0/0、HistoryCellRendererTest 26/0/0/0。**先红后绿实录**：①用例 3（MCP 无参无占位符仍写 pd 行）在条件未加 `source == MCP` 时必红——该条是 T-MAT-03 配套必改的专属判据；②`summarize` 消费点守卫（源码级）在 ExplainTool 未接线时必红——纯行为断言测不出「没人调用」，故按 T-ConsentTruth 口径补源码级守卫。本轮两条断言均随实现一次落绿（未留红态提交） |
-| T-MAT-07（合流轮补记） | `cc6b152` + `ffb4b58` | **并入 master 与读端补齐**。① **合并**：`git merge --no-ff t-r8-mcp-audit-trail`，冲突 2 处——`mcp/ExplainTool.kt` 与 `mcp/McpDbExecutor.kt`，均按语义取并集：ExplainTool 保留 T-McpRowBudget 的 `maxRows` 形参 + `clampMaxRows` 钳制 + `format(raw, target.maxRows)`，同时接本任务的 `audit(..., executionArgsSummary(...))` 与 `executeExplain(target, selectSql)` 原始语句透传；McpDbExecutor 的 `executeQuery` KDoc 两段并存（行预算兜底钳制 + `onExecuted` 出口钩子）。派发方预期的冲突点 `mcp/McpToolsetSupport.kt` 登记表 KDoc 实际由 git **自动合并**，已复核两处改动同时在位（「行默认 ≤200 / 上限 1000」与 mpsv_explain 审计入参说明）。② **读端回填**：`log/SqlLogFileReader.kt` `parseBlock` 两条头部分支各加一行 `source = decodedExt?.source ?: SqlSource.UNKNOWN`（新版分支落 `executionTimeMs` 之后，旧版 F-43 分支落 `timestamp` 之后；`SqlSource` 与本文件同包，无需 import）。③ **合并后新暴露的两处门禁红**（均非读端改动引起，见 §九 ⑦）：fatal 捕获守卫命中 `McpDbExecutor.executeQuery`、去重用例受同 JVM 前置类的项目服务级状态污染。④ **门禁读数**：`testShards` **5261/0/0/6**、`testDatabase` **10/0/0/0**（5 类 10 例）。定向读数：SqlLogHistoryRoundTripTest **12/0/0/0**（合流前 9 + 本轮 3）、HistoryCellRendererTest **27/0/0/0**（合流前 26 + 本轮 1）。**先红后绿实录**：读端补两行前三条新用例全红——`expected:<MCP> but was:<UNKNOWN>` ×2（新版分支 round-trip、旧版头部分支）、`读回条目来源应仍为 MCP: UNKNOWN` ×1（渲染链），补后两文件 **39/0/0/0** 全绿 |
-| T-MAT-04 回退修复（独立复核轮） | `8501730` | **问题**（独立验证者实测 + 代码推演）：`McpAuditLog.call` 对整串 `<摘要> error=<文本>` 施加 120 字符 clip，入参摘要（`dataSource=… dialect=… sql=…`，头 33 字符）先占满预算 → `mpsv_explain` 的 SQL 段 >80 字符起错误文本被截、≥113 字符**整段消失**；九静态工具因 `ok ` 前缀只占 4 字符，实质信息不减。**修法**：`mcp/McpAuditLog.kt` 新增顶层 `errorArgsSummary`（两段分预算：错误文本优先、摘要保底 16 字符、错误文本短时余量还给摘要、总长仍 ≤120），`AuditTicket.expectedError` 改调它；OK 路径零改动。**不取「error 段前置」**的理由与未改项见 §九 ⑧。**先红后绿**：`./gradlew test --tests "cn.song.mybatisplus.visualizer.mcp.*"` 红 **104/6**（错误路径 6 例全红，报文里审计槽位只剩 `dataSource=demo dialect=MySQL sql=…`，92 字符错误文本整段不在）→ 绿 **104/0/0/0**（McpAuditLogTest **11/0/0/0**，改造前 6 例 + 本轮 5 例） |
+| T-MAT-07（合流轮补记） | `cc6b152` + `ffb4b58` | **并入 master 与读端补齐**。① **合并**：`git merge --no-ff t-r8-mcp-audit-trail`，冲突 2 处——`mcp/ExplainTool.kt` 与 `mcp/McpDbExecutor.kt`，均按语义取并集：ExplainTool 保留 T-McpRowBudget 的 `maxRows` 形参 + `clampMaxRows` 钳制 + `format(raw, target.maxRows)`，同时接本任务的 `audit(..., executionArgsSummary(...))` 与 `executeExplain(target, selectSql)` 原始语句透传；McpDbExecutor 的 `executeQuery` KDoc 两段并存（行预算兜底钳制 + `onExecuted` 出口钩子）。派发方预期的冲突点 `mcp/McpToolsetSupport.kt` 登记表 KDoc 实际由 git **自动合并**，已复核两处改动同时在位（「行默认 ≤200 / 上限 1000」与 sqlv_explain 审计入参说明）。② **读端回填**：`log/SqlLogFileReader.kt` `parseBlock` 两条头部分支各加一行 `source = decodedExt?.source ?: SqlSource.UNKNOWN`（新版分支落 `executionTimeMs` 之后，旧版 F-43 分支落 `timestamp` 之后；`SqlSource` 与本文件同包，无需 import）。③ **合并后新暴露的两处门禁红**（均非读端改动引起，见 §九 ⑦）：fatal 捕获守卫命中 `McpDbExecutor.executeQuery`、去重用例受同 JVM 前置类的项目服务级状态污染。④ **门禁读数**：`testShards` **5261/0/0/6**、`testDatabase` **10/0/0/0**（5 类 10 例）。定向读数：SqlLogHistoryRoundTripTest **12/0/0/0**（合流前 9 + 本轮 3）、HistoryCellRendererTest **27/0/0/0**（合流前 26 + 本轮 1）。**先红后绿实录**：读端补两行前三条新用例全红——`expected:<MCP> but was:<UNKNOWN>` ×2（新版分支 round-trip、旧版头部分支）、`读回条目来源应仍为 MCP: UNKNOWN` ×1（渲染链），补后两文件 **39/0/0/0** 全绿 |
+| T-MAT-04 回退修复（独立复核轮） | `8501730` | **问题**（独立验证者实测 + 代码推演）：`McpAuditLog.call` 对整串 `<摘要> error=<文本>` 施加 120 字符 clip，入参摘要（`dataSource=… dialect=… sql=…`，头 33 字符）先占满预算 → `sqlv_explain` 的 SQL 段 >80 字符起错误文本被截、≥113 字符**整段消失**；九静态工具因 `ok ` 前缀只占 4 字符，实质信息不减。**修法**：`mcp/McpAuditLog.kt` 新增顶层 `errorArgsSummary`（两段分预算：错误文本优先、摘要保底 16 字符、错误文本短时余量还给摘要、总长仍 ≤120），`AuditTicket.expectedError` 改调它；OK 路径零改动。**不取「error 段前置」**的理由与未改项见 §九 ⑧。**先红后绿**：`./gradlew test --tests "cn.song.mybatisplus.visualizer.mcp.*"` 红 **104/6**（错误路径 6 例全红，报文里审计槽位只剩 `dataSource=demo dialect=MySQL sql=…`，92 字符错误文本整段不在）→ 绿 **104/0/0/0**（McpAuditLogTest **11/0/0/0**，改造前 6 例 + 本轮 5 例） |
 
 ## 九、实施小结：偏离、阻塞与未验证项
 
@@ -128,7 +128,7 @@ MCP 条目经 `buffer.addEntry` 落库 → 三条既有门控同样生效：用�
 
 **⑤ 未验证（环境受限）**
 
-`mpsv_explain` 的**真实执行**（需 Database 插件 + 已保存密码的数据源 + 真库）本机不可自动化 → §五 真机走查四项全部留人工。本任务测试覆盖的是「执行之后」的落库链（条目构造 + 入既有入库路径）、载荷/徽标/审计面；`onExecuted` 回调在成功/失败两条真实路径上的触发只能由真机走查确认。
+`sqlv_explain` 的**真实执行**（需 Database 插件 + 已保存密码的数据源 + 真库）本机不可自动化 → §五 真机走查四项全部留人工。本任务测试覆盖的是「执行之后」的落库链（条目构造 + 入既有入库路径）、载荷/徽标/审计面；`onExecuted` 回调在成功/失败两条真实路径上的触发只能由真机走查确认。
 
 **⑥ agent 门禁 flake（与本改动无依赖关系）**
 
@@ -147,7 +147,7 @@ MCP 条目经 `buffer.addEntry` 落库 → 三条既有门控同样生效：用�
 
 **⑧ 回退修复：错误路径的审计入参段（独立复核轮，`8501730`）**
 
-独立验证者实测 + 代码推演查出 T-MAT-04 的一处**信息回退**：`McpAuditLog.call` 对整串 `<摘要> error=<文本>` 施加 120 字符 clip，而改造前该槽位只放错误文本（错误文本独占 120 字符）。组合串长度 ≈ `33 + sqlLen + 7 + errLen`，于是 `mpsv_explain` 的 SQL 段 >80 字符时错误文本开始被截、≥113 字符时**整段消失**（长 SQL 恰是最需要看错误原因的场景）；九个静态工具因 `ok ` 前缀只占 4 字符，实质信息不减。
+独立验证者实测 + 代码推演查出 T-MAT-04 的一处**信息回退**：`McpAuditLog.call` 对整串 `<摘要> error=<文本>` 施加 120 字符 clip，而改造前该槽位只放错误文本（错误文本独占 120 字符）。组合串长度 ≈ `33 + sqlLen + 7 + errLen`，于是 `sqlv_explain` 的 SQL 段 >80 字符时错误文本开始被截、≥113 字符时**整段消失**（长 SQL 恰是最需要看错误原因的场景）；九个静态工具因 `ok ` 前缀只占 4 字符，实质信息不减。
 
 修法取**两段分预算**（`McpAuditLog.kt` 新增顶层 `errorArgsSummary`，`AuditTicket.expectedError` 改调它）：错误文本优先占预算，入参摘要让位但保留 16 字符保底（数据源标识与字段格式不消失），错误文本短时余量全部还给摘要，总长仍 120 封顶（上限未取消——那是防日志爆量的）。**不取「error 段前置」的理由**：前置让长错误文本把入参摘要整段挤掉（审计行退化成只有 `error=`，T-MAT-04 补入参的意义在长 SQL 场景同样落空），而分预算下两段都不会归零。OK 路径逐字节不变（仍走 `McpAuditLog.clip`，未改一行）。
 

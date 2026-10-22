@@ -98,15 +98,17 @@ flowchart TD
 
 ---
 
-## 5. Step ②：双仓库与代码同步（Gitee 主 + GitHub 镜像）
+## 5. Step ②：源码链接（Gitee 直连；GitHub 镜像可选未启用）
 
-### 5.1 为什么需要双仓库
+> **2026-08-18 定案**（`docs/memory-archive/bug-fixes/project-marketplace-publishing.md`）：不用 GitHub 镜像，**直接用 Gitee 作为 Marketplace 源码链接**（官方要求「公网可达」Gitee 满足，审核若要求换 GitHub 再补）。本段 GitHub 条目一律视为「可选、未启用」——仓库未配置 github 远程，`scripts/push-all.sh` 不存在。
+
+### 5.1 现状与依据
 
 - 开源插件**必须**提供公网可访问的源码链接（官方要求，缺失直接拒）；
-- 官方文档举例 GitHub/GitLab，**未明确接受 Gitee**——填 GitHub 镜像最稳妥，审核与用户可发现性都更好；
-- Gitee 保持主仓库（现状 origin），GitHub 为只读镜像，工作流零变化。
+- Gitee 仓库公网可达，直接填作 Marketplace Source code URL 已实测过审（2026-08-18 首版即此形态，审核未要求换）；
+- 若未来审核要求 GitHub 链接再启用镜像（步骤见 5.2，标注「未启用」）。
 
-### 5.2 操作步骤
+### 5.2 操作步骤（GitHub 镜像，未启用，仅审核要求时启用）
 
 ```bash
 # 1. 在 GitHub 网页创建同名空仓库（不勾选 README/.gitignore，避免首推冲突）
@@ -122,33 +124,24 @@ git push -u github master
 
 ### 5.3 日常同步（每次发布 / 里程碑提交后）
 
-建议在仓库根加 `scripts/push-all.sh`（并提交）：
-
 ```bash
-#!/bin/bash
-# 双仓库同步推送：Gitee(origin) 为主，GitHub(github) 为镜像
-set -e
-cd "$(dirname "$0")/.."
+# Gitee 主仓库唯一写源——每次发布/里程碑提交后直接推 origin
 git push origin master
-git push github master
-echo "双仓库推送完成：origin + github"
 ```
 
 ```mermaid
 flowchart LR
-    DEV["本地开发"] -->|"git push origin master"| GITEE["Gitee 主仓库<br/>（现状，更新清单/Release 托管）"]
-    DEV -->|"scripts/push-all.sh"| GH["GitHub 镜像<br/>（Marketplace 源码链接用）"]
-    GITEE -.->|"手动：git push github master"| GH
+    DEV["本地开发"] -->|"git push origin master"| GITEE["Gitee 主仓库<br/>（源码链接/更新清单/Release 托管）"]
 ```
 
-### 5.4 双仓库协作约定
+### 5.4 协作约定
 
 | 约定 | 说明 |
 |---|---|
-| 主仓库 | Gitee 唯一写源（含 Release 附件、update.json） |
-| 镜像 | GitHub 只读，接受 issue；PR 合入需手动 cherry-pick（低频可忽略） |
-| Marketplace 链接 | **Source code URL 填 GitHub 镜像**；Additional Information 可再加一条 Gitee 链接（自定义链接，均须公网可达） |
-| 同步时机 | 每次发布前必须双推（审核方会点开源码链接） |
+| 主仓库 | Gitee 唯一写源（含 Release 附件、update.json、Marketplace 源码链接） |
+| 镜像 | GitHub 镜像**未启用**（无 github 远程）；仅当审核要求 GitHub 链接时按 5.2 启用，启后为只读镜像 |
+| Marketplace 链接 | **Source code URL 填 Gitee 仓库**（公网可达，2026-08-18 定案）；Additional Information 可再加一条官网链接（须公网可达） |
+| 同步时机 | 每次发布前 `git push origin master` 保证源码链接最新 |
 
 ---
 
@@ -328,7 +321,7 @@ flowchart TD
 | 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
 | Marketplace 自定义页 | 复制 `docs/发行说明/marketplace-custom-page.md` 全文（去掉首行维护者注释）→ 插件后台 Documentation 标签粘贴保存 | 该编辑器**仅渲染 Markdown**（HTML / style / CSS 被剥除）；功能文案变更时必须与 `src/main/resources/html/marketplace-custom-page.html`（IDE 内「帮助」按钮 JCEF 渲染版，完整样式）**两版同步更新，不能只改其一**；New / Ultimate 徽章为官网托管 SVG（`sql-visualizer.jvtools.cn/badges/tag-*.svg`），与 HTML 版药丸同款配色 |
-| 双推 | `scripts/push-all.sh` | 源码链接保持最新 |
+| 推送源码 | `git push origin master` | Gitee 主仓库即 Marketplace 源码链接（2026-08-18 定案）；GitHub 镜像未启用 |
 
 > ⚠️ 两渠道版本号必须一致（update.json version = Marketplace 版本），否则用户侧会出现「检查更新有新版但市场无」的困惑。
 

@@ -10,7 +10,7 @@
 
 ## 一、背景与依据
 
-一期（T-McpToolset）注册了三只读工具：`mpsv_render_sql`（渲染）、`mpsv_schema_context`（上下文）、`mpsv_explain`（执行计划）——覆盖了 agent 消费 SQL 主链的「源码 → SQL → 结构 → 计划」四段。但 agent 的完整工作流还有四段空白，而填补它们的引擎侧资产**本插件全部现成且多为纯逻辑**：
+一期（T-McpToolset）注册了三只读工具：`sqlv_render_sql`（渲染）、`sqlv_schema_context`（上下文）、`sqlv_explain`（执行计划）——覆盖了 agent 消费 SQL 主链的「源码 → SQL → 结构 → 计划」四段。但 agent 的完整工作流还有四段空白，而填补它们的引擎侧资产**本插件全部现成且多为纯逻辑**：
 
 1. **日志还原**（插件的核心能力）：agent 读应用日志拿到的是 `Preparing:`/`Parameters:` 两行文本，还原成可执行 SQL 目前只有 IDE 面板能做——三日志解析器是纯计算（`computeConversion` 注释明确后台线程安全不触 Swing），接 MCP 面零成本。
 2. **写前风险核查**：CodeHelperPro 用 `validate_mybatis_mapper` 占了「校验器」叙事位；O-9 刚交付的 UnboundedWriteDetector（七规则）+ SqlTypeClassifier + SqlPerfAnalyzer 组合起来就是一个校验工具——且我们有位差武器：**校验的对象可以是渲染后的真实 SQL**，这是纯静态校验器做不到的。
@@ -61,28 +61,28 @@
 
 | 工具 | 入参 | 引擎链 | 产物 |
 |---|---|---|---|
-| `mpsv_render_logs` | logText（必填）；sqlPrefix/paramPrefix/mixedPrefix 等可选覆盖（缺省读 PluginSettings，与面板同源） | 三解析器并行 feed → takeEntries（`LogSqlEntry.restoredSql` 现成） | 逐条可执行 SQL（多组以 `-- SQL #N` 注释行分隔，与 render_sql 多语句口径一致）+ 来源格式/行号/耗时元信息 |
-| `mpsv_check_sql` | sql（必填） | SqlTypeClassifier 分类 + UnboundedWriteDetector.detect + SqlStatementSplitter 计数 | type / statementCount / findings（kind + detail）/ dangerous 布尔——纯文本判定，绝不执行 |
-| `mpsv_rollback_plan` | sql（必填）；primaryKeyColumns 可选（逗号分隔） | RollbackSqlGenerator.generate | rating / statements / warnings / countCheckSql / snapshotSelectSql / targetTable——只产出预案永不执行 |
-| `mpsv_perf_advice` | sql（必填） | SqlPerfAnalyzer.analyze | 警告清单（ruleId/severity/行号 + 英文文案）。**英文文案 helper 定案**：bundle base 文件即英文（rollback.warn.\*/perf.\* 键双语在册）——`MpSqlVisualizerBundle` 开 internal `messageEn(key, args)`（Locale.ROOT + 既有 utf8Control）统一渲染 rollback 与 perf 警告，**替代原 McpPerfText 键映射方案**（零新键且无映射不全风险）；未识别键输出键名 + 参数诚实降级 |
+| `sqlv_render_logs` | logText（必填）；sqlPrefix/paramPrefix/mixedPrefix 等可选覆盖（缺省读 PluginSettings，与面板同源） | 三解析器并行 feed → takeEntries（`LogSqlEntry.restoredSql` 现成） | 逐条可执行 SQL（多组以 `-- SQL #N` 注释行分隔，与 render_sql 多语句口径一致）+ 来源格式/行号/耗时元信息 |
+| `sqlv_check_sql` | sql（必填） | SqlTypeClassifier 分类 + UnboundedWriteDetector.detect + SqlStatementSplitter 计数 | type / statementCount / findings（kind + detail）/ dangerous 布尔——纯文本判定，绝不执行 |
+| `sqlv_rollback_plan` | sql（必填）；primaryKeyColumns 可选（逗号分隔） | RollbackSqlGenerator.generate | rating / statements / warnings / countCheckSql / snapshotSelectSql / targetTable——只产出预案永不执行 |
+| `sqlv_perf_advice` | sql（必填） | SqlPerfAnalyzer.analyze | 警告清单（ruleId/severity/行号 + 英文文案）。**英文文案 helper 定案**：bundle base 文件即英文（rollback.warn.\*/perf.\* 键双语在册）——`MpSqlVisualizerBundle` 开 internal `messageEn(key, args)`（Locale.ROOT + 既有 utf8Control）统一渲染 rollback 与 perf 警告，**替代原 McpPerfText 键映射方案**（零新键且无映射不全风险）；未识别键输出键名 + 参数诚实降级 |
 
 ### T-MTS2-02 PSI 两工具（R2，ReadAction 模式照 McpSourceLocator 先例）
 
 | 工具 | 入参 | 引擎链 | 产物 |
 |---|---|---|---|
-| `mpsv_crud_sql` | filePath（实体类文件，与 render_sql 同定位语义）或 className 二选一 | requireSmart → ReadAction 内 EntityResolver.resolve → CrudTableSpec → 既有 CRUD 生成链 | INSERT / UPDATE / SELECT / DELETE 四件套文本 + 表名/列元信息；无主键降级 `WHERE 1 = 0` 占位与 IDE 侧口径一致；只生成不执行 |
-| `mpsv_reverse_sql` | sql（必填）；targetClass 可选提示 | SqlReverseParser.parse（纯解析）+ 生成器 | MP 代码文本（默认形态）+ 错误行号（失败时 SOURCE 语义错误经 McpExpectedError）；PSI 候选反查（TableInfo）不做——无实体解析的纯文本模式已可交付，索引反查留后评估（慢操作守卫成本） |
+| `sqlv_crud_sql` | filePath（实体类文件，与 render_sql 同定位语义）或 className 二选一 | requireSmart → ReadAction 内 EntityResolver.resolve → CrudTableSpec → 既有 CRUD 生成链 | INSERT / UPDATE / SELECT / DELETE 四件套文本 + 表名/列元信息；无主键降级 `WHERE 1 = 0` 占位与 IDE 侧口径一致；只生成不执行 |
+| `sqlv_reverse_sql` | sql（必填）；targetClass 可选提示 | SqlReverseParser.parse（纯解析）+ 生成器 | MP 代码文本（默认形态）+ 错误行号（失败时 SOURCE 语义错误经 McpExpectedError）；PSI 候选反查（TableInfo）不做——无实体解析的纯文本模式已可交付，索引反查留后评估（慢操作守卫成本） |
 
 ### T-MTS2-03 mapper 契约核查（R2，CodeHelperPro validate_mybatis_mapper 对位）
 
-`mpsv_mapper_check`：xmlSnippet 或 filePath（mapper XML）→ 三层产出：
+`sqlv_mapper_check`：xmlSnippet 或 filePath（mapper XML）→ 三层产出：
 1. **契约层**：XmlMapperParser 解析错误清单 + 语句清单（id / 动态标签拓扑 / `#{}` 参数清单 vs parameterType 缺失提示）+ `${}` 直替位标注（O-11 计数口径，`dollarSubstitutions`）；
 2. **渲染层（位差落点）**：可选 `simulate=true` 时以空模拟参数渲染 → 渲染产物逐条过 UnboundedWriteDetector / SqlPerfAnalyzer——**校验的是渲染后的真实 SQL**，纯静态校验器给不出的证据形态；
 3. 输出分节文本（契约 findings / 渲染 findings），拒绝与错误走九码不新增。
 
 ### T-MTS2-04 只读查询抽样（P3 可选分支，实施前用户定夺）
 
-`mpsv_query_rows`：单条 SELECT 白名单（McpSelectGuard 复用）+ 行数/列数硬上限 + 走 McpDbExecutor 既有 headless 通道，给 agent「看一眼数据」的能力。**涉及真实业务数据出 IDE**（隐私面）且与「渲染器不出数据」的一期口径有张力——默认不实施，仅在用户明示需要时立项，本计划只预留决策位不做设计。
+`sqlv_query_rows`：单条 SELECT 白名单（McpSelectGuard 复用）+ 行数/列数硬上限 + 走 McpDbExecutor 既有 headless 通道，给 agent「看一眼数据」的能力。**涉及真实业务数据出 IDE**（隐私面）且与「渲染器不出数据」的一期口径有张力——默认不实施，仅在用户明示需要时立项，本计划只预留决策位不做设计。
 
 ### T-MTS2-05 测试与质量面
 
@@ -99,7 +99,7 @@ CHANGELOG [Unreleased] Added、变更记录总册行、README「MCP：给 AI age
 
 ## 四、验收标准
 
-1. 二期 7 工具全部注册可发现（R1 四 + R2 三），只读三 hint 与描述「deterministic/read-only」口径一致；`mpsv_query_rows` 未实施（决策位留置）。
+1. 二期 7 工具全部注册可发现（R1 四 + R2 三），只读三 hint 与描述「deterministic/read-only」口径一致；`sqlv_query_rows` 未实施（决策位留置）。
 2. **设置页门控生效**：总开关 off → `isEnabled()` 全 false（工具面对 agent 消失）；单工具禁用 → 仅该工具不可见；apply/reset 往返正确；设置页新文案双语 parity 绿。
 3. 纯逻辑工具测试不依赖 IDE fixture（普通 JUnit），PSI 工具按既有面板测试范式；新增用例 ≥60 条，全量 testShards 绿（基线 4410 + 新增）。
 4. 引擎侧零改动（本期只加 mcp/ 包适配层 + util 包 messageEn 单函数）——grep 证伪：xml/、log/、execute/、sql/rollback/ 四包 diff 为空。
@@ -110,9 +110,9 @@ CHANGELOG [Unreleased] Added、变更记录总册行、README「MCP：给 AI age
 ## 五、真机走查清单（留人工）
 
 1. Claude Code / AI Assistant 各调一次 10 工具：核对描述文案、错误形态、`[MCP-AUDIT]` 日志。
-2. `mpsv_render_logs` 喂真实项目混合日志（MyBatis + JdbcTemplate 混排）：条目数与面板「日志 → SQL」一致。
-3. `mpsv_mapper_check` 对含 `${orderBy}` 动态排序的 mapper：`${}` 标注 + simulate 渲染 findings 在位。
-4. `mpsv_crud_sql` 对逻辑删除实体：DELETE 变体与 IDE 右键产物一致。
+2. `sqlv_render_logs` 喂真实项目混合日志（MyBatis + JdbcTemplate 混排）：条目数与面板「日志 → SQL」一致。
+3. `sqlv_mapper_check` 对含 `${orderBy}` 动态排序的 mapper：`${}` 标注 + simulate 渲染 findings 在位。
+4. `sqlv_crud_sql` 对逻辑删除实体：DELETE 变体与 IDE 右键产物一致。
 5. **设置页开关真机核实（T-MTS2-00）**：总开关关 → 平台 MCP 工具列表变化时机（即时/重连）；单工具禁用 → agent 侧不可见；重开恢复。结论落 §八。
 6. 243 真机回归：mcp-optional.xml 整文件不加载零影响（一期口径不变）。
 
@@ -146,7 +146,7 @@ T-MTS2-00（设置门控：状态字段+McpToolGate+设置页开关+三工具拆
 
 - **T-MTS2-00 门控落地**：PluginSettings.State 增 `mcpToolsEnabled`(默认 true) + `mcpDisabledTools`(默认空)；McpToolGate 统一读口（服务未注册兜底启用）；**一工具一 toolset 类**（平台 per-tool 门控只有 toolset 粒度 isEnabled——262 mcpserver.jar getEnabledToolsets 字节码实证每次 getTools 重新求值，开关即时生效无需重启）；McpToolsetSupport 抽象基类三钩子 final 字面量覆写（253 兼容机制与一期相同）；mcp-optional.xml 注册 10 个 toolset。McpConfigurable 门控区：总开关 + 10 工具复选框 + 全部启用/禁用切换按钮（T-SelToggle 同款）+ isModified/apply/reset；**工具复选框与总开关正交**（仅表达「不在禁用清单」——否则 master off 时复选框全不勾会把全部工具误写禁用清单，apply 反噬）。
 - **T-MTS2-01 R1 四工具**：render_logs（三解析器 feed→takeEntries 复用面板同构，`LogSqlEntry.restoredSql` 直接消费，前缀缺省读设置可覆盖）/ check_sql（splitter+classifier+detector 组合）/ rollback_plan（RollbackSqlGenerator + messageEn）/ perf_advice（SqlPerfAnalyzer + messageEn）。**英文文案定案**：MpSqlVisualizerBundle 增 internal `messageEn`（Locale.ROOT + utf8Control 读 base 英文，零新键），替代原 McpPerfText 键映射方案（无映射不全风险）。
-- **T-MTS2-02 R2 两工具 + T-MTS2-03**：crud_sql（复用 GenerateCrudSqlFromEntityAction.entitySpec 单一真相源 + CrudSqlGenerator，无主键 `1=0` 占位与 IDE 口径一致）/ reverse_sql（SqlReverseParser+JavaCodeGenerator 字符串列形态，错误带行号）/ mapper_check（契约层 + simulate 渲染层——空参数语境下 `mpsv_mapper_check` 对渲染产物过 detector/perf，即「校验渲染产物」位差落点；空/非法 XML 转 McpExpectedError）。
+- **T-MTS2-02 R2 两工具 + T-MTS2-03**：crud_sql（复用 GenerateCrudSqlFromEntityAction.entitySpec 单一真相源 + CrudSqlGenerator，无主键 `1=0` 占位与 IDE 口径一致）/ reverse_sql（SqlReverseParser+JavaCodeGenerator 字符串列形态，错误带行号）/ mapper_check（契约层 + simulate 渲染层——空参数语境下 `sqlv_mapper_check` 对渲染产物过 detector/perf，即「校验渲染产物」位差落点；空/非法 XML 转 McpExpectedError）。
 - **测试分层决策（实施中关键修正）**：243 基线测试 JVM 的 stdlib 缺 `SpillingKt`——`audit` 本体是高阶 suspend 结构性发射（一期 ignored-problems 豁免语义=mcp-optional.xml 不加载则类永不可达），**测试进程直接实例化 Tool 类调用挂起方法即 NoClassDefFoundError**。解法=七新工具核心全部抽 `internal` 非 suspend 纯函数（checkSql/rollbackPlan/perfAdvice/reverseSql/mapperCheck/renderLogs/resolveSpec+crudOutput），挂起方法只做 audit 一行委托；测试全走纯函数层，挂起链只有真机/生产触达。测试 9 类约 50 例（门控 5 + 设置页 5 + 各工具表驱动 + mapper_check 契约/simulate + crud 实体四件套/空列拒绝）。
 - **顺带收口三处 74f7842 合并回归**（base 基线即红，非本次引入）：PluginXmlStructureGuardTest 子设置页 count 5→7（plugin.xml 声明序按 weight 降序重排至 ui/shortcuts/preview/tableMapping/sqlLog/mcp/about）；PluginSettingsFolderConfigurable.SUB_PAGES 补 shortcuts 子页（folder 搜索页）；McpScopeSourceScanTest 增 stripStrings 字符串字面量豁免（`Class.forName("com.intellij.mcpserver.settings...")` 是反射字符串非类型引用，未装环境已兜底提示）。
 - **构建接线**：mcpStub 桩源集补挂 compileTestKotlin + test 任务 + **testShardN 分片任务**（IPGP 分片默认不含桩输出，漏挂致工具类 NoClassDefFoundError 成片 28 例，定向 `test` 因已挂桩而绿——实证分片与 test 两条 classpath 独立）。

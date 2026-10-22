@@ -67,7 +67,7 @@
 |---|---|---|
 | 误报疲劳 | 规则过敏感把正常语句也标危险，用户开始无脑点确认 | 子查询只提示不算危险；文案说事实；表驱动样例含真实业务形态反例 |
 | JSqlParser 方言差异 | 反引号/转义/方言函数导致解析失败被 fail closed 误伤 | PARSE_FAILED 走既有确认流（不阻断），文案注明「无法解析，请人工确认」 |
-| 与 MCP 边界混淆 | 探测器可能被误认为要接进 mpsv_explain | MCP 侧维持 SELECT 白名单不动；探测器仅 execute/rollback 两消费者，KDoc 写明 |
+| 与 MCP 边界混淆 | 探测器可能被误认为要接进 sqlv_explain | MCP 侧维持 SELECT 白名单不动；探测器仅 execute/rollback 两消费者，KDoc 写明 |
 
 ## 七、实施顺序
 
