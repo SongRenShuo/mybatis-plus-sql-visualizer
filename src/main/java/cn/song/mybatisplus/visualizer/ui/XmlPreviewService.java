@@ -2,11 +2,11 @@ package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver;
-import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.ModuleIdentityResolution;
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver;
 import cn.song.mybatisplus.visualizer.context.PreviewSourceContext;
-import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin;
-import cn.song.mybatisplus.visualizer.context.SqlPsiResolution;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.PreviewSourceOrigin;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.SqlPsiResolution;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;

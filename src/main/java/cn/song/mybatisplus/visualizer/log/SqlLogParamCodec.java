@@ -166,8 +166,8 @@ public final class SqlLogParamCodec {
         };
         java.io.OutputStream encoded = Base64.getEncoder().wrap(ascii);
         java.io.Writer utf8 = new java.io.OutputStreamWriter(encoded, StandardCharsets.UTF_8);
-        com.google.gson.stream.JsonWriter json = GSON.newJsonWriter(new ChunkedWriter(utf8));
         try {
+            com.google.gson.stream.JsonWriter json = GSON.newJsonWriter(new ChunkedWriter(utf8));
             json.beginObject();
             json.name(RAW_FIELD).value(entry.rawSql());
             json.name(PARAMS_FIELD).beginArray();

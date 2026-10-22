@@ -51,6 +51,11 @@ public final class SqlPreviewModel {
         return new SqlPreviewModel(statement, dialect, formatSql, conditionViews);
     }
 
+    /** 目标方言无损重渲染：仅替换方言，其余字段原样。 */
+    public SqlPreviewModel withDialect(Dialect target) {
+        return new SqlPreviewModel(statement, target, formatSql, conditionViews);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

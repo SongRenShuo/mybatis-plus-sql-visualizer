@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.log;
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener;
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable;
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelKt;
@@ -1166,7 +1168,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         CommunityAction() {
             super(MpSqlVisualizerBundle.message("log.community.action"),
                     MpSqlVisualizerBundle.message("log.community.action.tip"),
-                    com.intellij.openapi.util.cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Community);
+                    MpvsIcons.Community);
         }
 
         @Override
@@ -2567,3 +2569,4 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 }
+

@@ -29,6 +29,16 @@ public record SqlFragment(String text, List<String> params) {
         this(text, List.of());
     }
 
+    /** Kotlin {@code val text} 的 JVM 读取器形态（Kotlin 调用方按属性名读）。 */
+    public String getText() {
+        return text;
+    }
+
+    /** Kotlin {@code val params} 的 JVM 读取器形态。 */
+    public List<String> getParams() {
+        return params;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

@@ -64,9 +64,4 @@ public final class PostgreSQLDialect implements Dialect {
         return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns, caseSource);
     }
 
-    /** R36：PG 官方 BEGIN [WORK|TRANSACTION]。 */
-    @Override
-    public String getTransactionBegin() {
-        return "BEGIN";
-    }
 }

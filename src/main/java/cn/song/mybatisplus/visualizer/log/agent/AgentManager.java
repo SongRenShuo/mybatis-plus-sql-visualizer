@@ -204,7 +204,7 @@ public final class AgentManager implements Disposable {
      * R53：健康会话 pid 列表（工具窗状态栏取数，无锁只读——同 {@link #statusSummary()} 口径）。
      * 包私有为同模块守护测试缝（{@code sweepOffline} 同款）。
      */
-    List<Long> healthyPids() {
+    public List<Long> healthyPids() {
         List<Long> result = new ArrayList<>();
         for (AgentSession s : sessions) {
             if (isSessionHealthy(s)) {

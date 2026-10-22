@@ -478,6 +478,22 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      */
     public int explainStructuredGeneration = 0;
 
+    /** O-145 W7：结果到达时冻结的渲染模式；提交时不得重读设置冒充当初的渲染事实。 */
+    public cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode executionDialectRenderMode =
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN;
+
+    /** 预览来源模块规范键（方言决策/闸门的模块作用域信号；null = 无来源模块）。 */
+    public String sourceModuleKey = null;
+
+    /** R48 自动填充预演载体（FieldFill 面板与预览结果回填链路）。 */
+    public cn.song.mybatisplus.visualizer.model.PreviewResult fieldFillPreview = null;
+
+    /** 当前方言决策（meta 行方言段重组的事实源）。 */
+    public cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision currentDialectDecision = null;
+
+    /** 结果实际生成方言名（预热/预览目录方言映射同步用）。 */
+    public String previewDesiredDialectName = null;
+
     /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
      * DBN results refreshed 期间会临时拿走 console 组件，旧的直挂方式（editorHolder.add(console)）

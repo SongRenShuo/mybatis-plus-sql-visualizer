@@ -77,7 +77,7 @@ public final class WrapperConverterKt {
      *   <li>{@code {i}}：替换为第 i 个绑定值（字面量取 {@code raw}、运行期值写 {@code ?} 并登记来源）；
      *       绑定值缺失（null）时保留 {@code {i}} 原样（与既有 {@code replace} 跳过语义一致）</li>
      *   <li>模板自带的 {@code ?}：按顺序消耗 fragment 的来源，<b>只认真实占位符位点</b>
-     *       （字符串字面量/注释内的 {@code ?} 不消耗、不登记——{@code first("/*+ ...(" + ms + ") */")}
+     *       （字符串字面量/注释内的 {@code ?} 不消耗、不登记——{@code first("/*+ ...(" + ms + ") *&#47;")}
      *       这类不能凭空多出来源）</li>
      *   <li>自带来源不足时补中性来源 {@link #UNKNOWN_PARAM}，<b>宁可名字含糊也不能让参数表整体错位</b></li>
      * </ul>

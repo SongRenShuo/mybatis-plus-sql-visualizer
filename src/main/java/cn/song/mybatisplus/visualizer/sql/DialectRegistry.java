@@ -71,6 +71,11 @@ public final class DialectRegistry {
         return decision(project, sourceFile, sqlPsiFile, moduleKey, null);
     }
 
+    /** 仅项目上下文的决策（O-145 入口二：无来源文件/SQL PSI/模块键）。 */
+    public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project) {
+        return decision(project, null, null, null);
+    }
+
     /** {@link #decision} 的 PreviewSourceContext 形态（O-145 瞬态上下文直取）。 */
     public DialectDecisionEngine.Decision decision(
             cn.song.mybatisplus.visualizer.context.PreviewSourceContext context) {

@@ -432,14 +432,4 @@ public interface Dialect {
         return false;
     }
 
-    /**
-     * R36：本方言的<b>显式事务开始语句</b>（回放脚本事务包裹用）；null = 无（Oracle/DM——
-     * {@code BEGIN} 在 Oracle 是 PL/SQL 块起始，SQL Reference 无 {@code BEGIN [TRANSACTION]}
-     * 语句形态；DM 默认 Oracle 兼容模式同形）。判无依据「宁可少包，不可产出语法错误脚本」
-     * （三档证据：DBX MCP 拒事务语句、Docker 未启真机核对缺席、官方文法族/兼容面推定）。
-     * 接口默认 null，方言按官方文法覆盖。
-     */
-    default String getTransactionBegin() {
-        return null;
-    }
 }

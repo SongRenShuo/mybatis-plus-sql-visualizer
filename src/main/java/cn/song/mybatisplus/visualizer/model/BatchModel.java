@@ -282,6 +282,11 @@ public final class BatchModel {
                 identifierCaseSource);
     }
 
+    /** 目标方言无损重渲染：仅替换方言（等价 Kotlin data class copy(dialect=...)）。 */
+    public BatchModel withDialect(Dialect target) {
+        return copy(target);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

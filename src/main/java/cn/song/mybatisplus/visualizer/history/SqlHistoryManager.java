@@ -255,7 +255,7 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
     private void enforcePlanBounds(java.util.List<SqlHistoryEntry> all) {
         for (SqlHistoryEntry entry : all) {
             entry.getExplainPlans().removeIf(p ->
-                    !p.key().isPersistable() || !p.projectIdentity().equals(entry.getProjectIdentity())
+                    !p.key().isPersistable() || !p.getProjectIdentity().equals(entry.getProjectIdentity())
                             || p.raw() == null || p.serializedBytes() > MAX_PLAN_BYTES);
             entry.getExplainPlans().sort((a, b) -> Long.compare(b.getCapturedAt(), a.getCapturedAt()));
             while (entry.getExplainPlans().size() > MAX_PLANS_PER_ENTRY) {

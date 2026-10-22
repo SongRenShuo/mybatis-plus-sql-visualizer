@@ -171,7 +171,7 @@ public class PreviewUnknownColumnAnnotator extends
                 continue;
             }
             holder.newAnnotation(HighlightSeverity.ERROR, PreviewSchemaHighlighterKt.previewUnknownColumnMessage(mark))
-                    .range(TextRange(mark.startOffset(), mark.endOffset()))
+                    .range(new TextRange(mark.startOffset(), mark.endOffset()))
                     .create();
         }
     }

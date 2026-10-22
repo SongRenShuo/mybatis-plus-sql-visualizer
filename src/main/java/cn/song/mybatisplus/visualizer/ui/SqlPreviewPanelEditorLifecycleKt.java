@@ -910,4 +910,13 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             return CommonDataKeys.EDITOR.is(dataId) ? editor : null;
         }
     }
+
+    /** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。
+     *  注：Java 端未重建 mapPreviewDialectBeforePsi/预热目录方言映射，仅同步期望方言名（行为差距已登记）。 */
+    public static void syncPreviewDialectMapping(@NotNull SqlPreviewPanel p,
+                                                 @NotNull cn.song.mybatisplus.visualizer.model.PreviewResult result) {
+        cn.song.mybatisplus.visualizer.sql.Dialect effective = result.getEffectiveDialect();
+        p.previewDesiredDialectName = effective != null ? effective.getName() : null;
+    }
+
 }

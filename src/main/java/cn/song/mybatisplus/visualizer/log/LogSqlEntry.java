@@ -243,7 +243,8 @@ public record LogSqlEntry(
     public void setCachedListLineFragmentsMode(SqlListDisplayMode value) {
         synchronized (LINE_FRAGMENT_CACHE) {
             LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
-            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(e != null ? e.fragments() : null, value));
+            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(e != null ? e.fragments() : null, value,
+                    e != null ? e.masked() : null));
         }
     }
 

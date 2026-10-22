@@ -52,9 +52,4 @@ public final class SqliteDialect implements Dialect {
         return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns, caseSource);
     }
 
-    /** R36：SQLite 随 PG 族取 BEGIN。 */
-    @Override
-    public String getTransactionBegin() {
-        return "BEGIN";
-    }
 }

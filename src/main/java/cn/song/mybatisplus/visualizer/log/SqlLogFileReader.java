@@ -285,7 +285,9 @@ public final class SqlLogFileReader {
                     try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
                         // O-147：修订已整文件预扫（revisionsIn），正文再过 boundedLines 时不重复收集。
                         Revisions revisions = revisionsIn(file);
-                        return parseContent(boundedLines(reader), revisions, false);
+                        return parseContent(java.util.stream.StreamSupport.stream(
+                                java.util.Spliterators.spliteratorUnknownSize(boundedLines(reader), java.util.Spliterator.ORDERED), false),
+                        revisions, false);
                     } catch (Exception e) {
                         return List.of();
                     }
@@ -443,7 +445,7 @@ public final class SqlLogFileReader {
      * 头部判定与 {@code countInFile} 的计数判据保持一致（含 source:/time: 的新版头部、
      * {@code -- 日期} 的旧版头部、排除 {@code -- pd: } 参数持久化行）。
      */
-    final class EntryBlockScanner {
+    static final class EntryBlockScanner {
         private String header = null;
         private String id = null;
         private String completedId = null;
@@ -505,7 +507,7 @@ public final class SqlLogFileReader {
         }
     }
 
-    private LogSqlEntry parseBlockLines(String header, List<String> contentLines) {
+    private static LogSqlEntry parseBlockLines(String header, List<String> contentLines) {
         // T-SqlLogPerf（20261006-1020 计划 P2）：直收 parseContent 的行序列——旧 parseBlock(block)
         // 的 block.lines() 再切分已随单遍化移除；头部行/正文行由调用方分开传入，语义逐字一致。
         List<String> bodyLines = contentLines;
@@ -603,7 +605,7 @@ public final class SqlLogFileReader {
         return null;
     }
 
-    private Pair<String, Integer> parseSource(String sourceStr) {
+    private static Pair<String, Integer> parseSource(String sourceStr) {
         if ("unknown".equals(sourceStr)) {
             return new Pair<>(null, 0);
         }
@@ -616,7 +618,7 @@ public final class SqlLogFileReader {
         return new Pair<>(sourceStr, 0);
     }
 
-    private Long parseDuration(String timeStr) {
+    private static Long parseDuration(String timeStr) {
         if ("—".equals(timeStr) || "-".equals(timeStr) || timeStr.isBlank()) {
             return null;
         }
@@ -649,7 +651,7 @@ public final class SqlLogFileReader {
         return created;
     }
 
-    private Long parseTimestampNew(String ts) {
+    private static Long parseTimestampNew(String ts) {
         try {
             return formatterFor("yyyy-MM-dd HH:mm:ss.SSS").parse(ts).getTime();
         } catch (Exception e) {
@@ -657,7 +659,7 @@ public final class SqlLogFileReader {
         }
     }
 
-    private Long parseTimestampOld(String ts) {
+    private static Long parseTimestampOld(String ts) {
         try {
             return formatterFor("yyyy-MM-dd HH:mm:ss").parse(ts).getTime();
         } catch (Exception e) {

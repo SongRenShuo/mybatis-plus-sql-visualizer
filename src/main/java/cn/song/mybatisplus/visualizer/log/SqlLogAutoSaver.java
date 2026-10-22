@@ -644,7 +644,12 @@ public class SqlLogAutoSaver {
                 remember(merged, block);
             } catch (Exception e) {
                 if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) {
-                    throw (Error) e;
+                    // fatal 透传：catch 类型是 Exception（Error 不会被捕获）——RuntimeException 子类
+                    // 原样重抛（PCE 等），其余包装为 RuntimeException
+                    if (e instanceof RuntimeException re) {
+                        throw re;
+                    }
+                    throw new RuntimeException(e);
                 }
                 forgetWritten(oldEntry);
                 LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史", e);

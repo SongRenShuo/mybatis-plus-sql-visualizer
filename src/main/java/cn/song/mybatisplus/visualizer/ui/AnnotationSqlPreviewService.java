@@ -1,6 +1,8 @@
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/AnnotationSqlPreviewService.kt 移植（T-FCA-02 预览绑定构造并入集合快捷别名）
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.PreviewSourceOrigin;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.AnnotationSqlParser;
@@ -9,6 +11,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlParseException;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind;
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;

@@ -344,6 +344,22 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull List<String> paramNames,
             @Nullable PsiMethod method,
             @NotNull Set<String> inClauseParams,
+            @Nullable Dialect dialectOverride,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision) {
+        return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,
+                dialectOverride, dialectDecision, List.of(), Set.of(), Map.of());
+    }
+
+    /** Kotlin 默认参数 {@code dialectOverride/dialectDecision} 为 null 的显式重载。 */
+    @NotNull
+    public static PreviewResult buildJpaPreviewResult(
+            @NotNull SqlPreviewService p,
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
             @NotNull List<String> placeholderParamNames,
             @NotNull Map<String, String> initialParamValues) {
         return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,

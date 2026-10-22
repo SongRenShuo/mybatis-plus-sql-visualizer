@@ -461,7 +461,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
             }
         });
         // 原生按钮只修改 FindModel，不触发 DocumentListener；切旗必须同步重验并清除过期错误。
-        nativeSearch.getFindModel().addObserver(() -> applySearch());
+        nativeSearch.getFindModel().addObserver(model -> applySearch());
         // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
         toolbar.add(searchBar);
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）

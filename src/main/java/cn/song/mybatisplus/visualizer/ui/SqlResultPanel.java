@@ -46,6 +46,12 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
     /** T-ErrorLocate：定位动作（宿主面板注入——需要 project + 预览源锚点，面板自身不可知）。 */
     private Runnable locateHandler = null;
 
+    /** T-DialectGateUx：方言设置动作（错误态第二个可操作按钮，仅门控阻断时可见）。 */
+    private Runnable settingsHandler = null;
+
+    /** T-DialectGateUx：方言设置按钮（同 errorCopyButton 款式，挂 east 组）。 */
+    private final JButton errorSettingsButton;
+
     private String currentError = null;
     private State state = State.EMPTY;
 
@@ -86,6 +92,19 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
             if (locateHandler != null) locateHandler.run();
         });
 
+        // T-DialectGateUx：方言设置按钮（同 errorCopyButton 款式，仅错误态出现）。
+        errorSettingsButton = new JButton(MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings"));
+        errorSettingsButton.setVisible(false);
+        errorSettingsButton.setOpaque(false);
+        errorSettingsButton.setContentAreaFilled(false);
+        errorSettingsButton.setBorder(JBUI.Borders.empty(1, 6));
+        errorSettingsButton.setFont(errorSettingsButton.getFont().deriveFont(11f));
+        errorSettingsButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.GRAY));
+        errorSettingsButton.setMargin(JBUI.insets(0, 6, 0, 6));
+        errorSettingsButton.addActionListener(e -> {
+            if (settingsHandler != null) settingsHandler.run();
+        });
+
         setBorder(JBUI.Borders.empty());
         setOpaque(false);
         // T-UiNative T-UN-14：加载转圈放左侧（CENTER 是 infoLabel 文案，EAST 是错误复制按钮）
@@ -94,6 +113,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         JBPanel<JBPanel<?>> east = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         east.setOpaque(false);
         east.setBorder(JBUI.Borders.empty());
+        east.add(errorSettingsButton);
         east.add(errorLocateButton);
         east.add(errorCopyButton);
         add(east, BorderLayout.EAST);
@@ -318,4 +338,51 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
     public String stateForTest() {
         return state.name();
     }
+
+    /** O-145 W7：显示不属于执行成功/失败的诚实状态（如已重渲染、需复核后二击）。 */
+    public void showStatus(String message) {
+        state = State.EMPTY;
+        currentError = null;
+        errorCopyButton.setVisible(false);
+        errorSettingsButton.setVisible(false);
+        if (locateHandler != null) locateHandler = null;
+        setLoadingIconVisible(false);
+        String esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        infoLabel.setText("<html>" + esc + "</html>");
+        infoLabel.setToolTipText(message);
+        infoLabel.setForeground(JBColor.namedColor("Label.infoForeground", JBColor.GRAY));
+        showContent();
+        revalidate();
+        repaint();
+    }
+
+    /**
+     * T-DialectGateUx：阻断态错误 + 就地出口（切数据源 / 打开方言设置）。
+     * 入口为 null/label 为空时不显示对应按钮（例如 Community 无 Database 插件）。
+     */
+    public void showErrorWithActions(
+            String error,
+            String fixLabel,
+            String fixTooltip,
+            Runnable fix,
+            String settingsLabel,
+            String settingsTooltip,
+            Runnable settings) {
+        showError(error);
+        if (fixLabel != null && fix != null) {
+            locateHandler = fix;
+            errorLocateButton.setText(fixLabel);
+            errorLocateButton.setToolTipText(fixTooltip);
+            errorLocateButton.setVisible(true);
+        }
+        if (settingsLabel != null && settings != null) {
+            settingsHandler = settings;
+            errorSettingsButton.setText(settingsLabel);
+            errorSettingsButton.setToolTipText(settingsTooltip);
+            errorSettingsButton.setVisible(true);
+        }
+        revalidate();
+        repaint();
+    }
+
 }

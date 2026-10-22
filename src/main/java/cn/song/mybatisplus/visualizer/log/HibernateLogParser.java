@@ -179,7 +179,6 @@ public class HibernateLogParser {
      * 语义与 {@code feed(line)} 自提逐字等价；token=null 走 fail-open 回退）。
      */
     public void feed(String line, String threadToken) {
-    public void feed(String line, String threadToken) {
         Bucket bucket = router.bucketForToken(threadToken);
         if (bucket.collecting) {
             feedCollecting(bucket, line);

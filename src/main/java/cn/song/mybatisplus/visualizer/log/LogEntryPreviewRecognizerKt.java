@@ -270,6 +270,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                 null,                              // xmlModel
                 Map.of(),                          // initialParamValues
                 List.of(),                         // perfWarnings
+                null,                              // fillClauses
                 null,                              // previousSql
                 List.of(),                         // pagesColumns
                 Map.of(),                          // namedParamHints

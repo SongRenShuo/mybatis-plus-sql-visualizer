@@ -61,6 +61,13 @@ public final class ActualSqlPsiResolver {
         return resolve(hostFile, owner, null, DEFAULT_MAX_OWNER_ELEMENTS, DEFAULT_MAX_OWNER_TEXT_LENGTH);
     }
 
+    /** Kotlin 默认参数 {@code maxOwnerElements/maxOwnerTextLength} 的显式重载（带 caretOffset 的调用形态）。 */
+    public static PreviewSourceContext.SqlPsiResolution resolve(@NotNull PsiFile hostFile,
+                                                                @Nullable PsiElement owner,
+                                                                @Nullable Integer caretOffset) {
+        return resolve(hostFile, owner, caretOffset, DEFAULT_MAX_OWNER_ELEMENTS, DEFAULT_MAX_OWNER_TEXT_LENGTH);
+    }
+
     public static PreviewSourceContext.SqlPsiResolution resolve(@NotNull PsiFile hostFile,
                                                                 @Nullable PsiElement owner,
                                                                 @Nullable Integer caretOffset,

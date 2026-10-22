@@ -6,11 +6,11 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.config.TableNameRule;
 import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver;
-import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.ModuleIdentityResolution;
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver;
 import cn.song.mybatisplus.visualizer.context.PreviewSourceContext;
-import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin;
-import cn.song.mybatisplus.visualizer.context.SqlPsiResolution;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.PreviewSourceOrigin;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext.SqlPsiResolution;
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry;
 import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter;
 import cn.song.mybatisplus.visualizer.converter.MdsConverter;
@@ -1317,6 +1317,8 @@ public final class SqlPreviewService {
                 staticParamValues(info.getParameters()),
                 null, null, null, null,
                 Map.of(), null, false,
+                // countSql/paginationLimitLine 未用（规范构造器位置参数）
+                null, null,
                 usableNamedSources != null ? usableNamedSources : List.of(),
                 info.getDuplicateParamNames(),
                 // diagramStatement/historyFingerprintSeed 未用；O-145：方言决策随行入结果
@@ -1524,6 +1526,8 @@ public final class SqlPreviewService {
                     Map.of(),
                     null,
                     false,
+                    // countSql/paginationLimitLine 未用（规范构造器位置参数）
+                    null, null,
                     usableNamedSources != null ? usableNamedSources : List.of(),
                     Set.of(),
                     null, null,

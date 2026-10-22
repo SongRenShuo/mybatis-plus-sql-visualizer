@@ -31,6 +31,7 @@ public final class DialectPreviewStatusText {
                     decision.source() == DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE
                             ? "panel.meta.dialectStatus.scopeUnavailable"
                             : "panel.meta.dialectStatus.unavailable");
+            default -> status = MpSqlVisualizerBundle.message("panel.meta.dialectStatus.unavailable");
         }
         String rendered = decision.dialectName() != null
                 ? decision.dialectName()
