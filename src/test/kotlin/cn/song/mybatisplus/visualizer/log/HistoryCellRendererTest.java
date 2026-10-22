@@ -123,7 +123,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         String sql = joinedText(r.getSqlLine());
         assertTrue("含 SQL 关键字", sql.contains("SELECT"));
         assertTrue("无耗时显示占位符 —（与日志页同款无括号）", meta.contains("—"));
-        assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"));
+        assertFalse("未知来源不占元信息空间（master 82ee88b1 语义）", meta.contains("[unknown]"));
         assertFalse("无耗时不出现 ms", meta.contains("ms"));
         assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"));
     }
@@ -175,7 +175,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
         String meta = joinedText(r.metaLine);
         assertTrue("空耗时占位 — 应在元信息行", meta.contains("—"));
-        assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"));
+        assertFalse("未知来源不显示占位（master 82ee88b1 语义）", meta.contains("[unknown]"));
         assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
     }
 
