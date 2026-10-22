@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.actions;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator;
 import cn.song.mybatisplus.visualizer.reverse.ReverseJoin;
@@ -140,7 +141,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
                 if (project.isDisposed()) return;
                 ReverseWrapperFormat format = reverseFormat();
                 String code = SqlToJavaConverter.INSTANCE.generateBatchCode(
-                        parseResults, pairHolder[0].getFirst(), pairHolder[0].getSecond(), format, null);
+                        parseResults, pairHolder[0].getFirst(), pairHolder[0].getSecond(), format, null,
+                        reverseLogicDeleteValue(project));
                 new JavaCodePreviewDialog(project, code).show();
             });
         });
@@ -153,6 +155,20 @@ public final class ConvertSqlToJavaAction extends AnAction {
         } catch (Throwable ignored) {
             return ReverseWrapperFormat.AUTO;
         }
+    }
+
+    /**
+     * T-ReverseGroupLogicDelete：逻辑删除「未删除」值（项目级优先 → 全局 → 兜底 "0"）——
+     * 生成器据此识别 MP 依据 `@TableLogic` 自动注入的 `AND <列> = <值>` 并跳过。
+     * 与正向注入 `effectiveLogicDeleteValue().ifBlank { "0" }` 同口径。
+     */
+    private String reverseLogicDeleteValue(@NotNull Project project) {
+        try {
+            String value = ProjectPluginSettings.getInstance(project).effectiveLogicDeleteValue();
+            if (value != null && !value.isBlank()) return value;
+        } catch (Throwable ignored) {
+        }
+        return SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE;
     }
 
     /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
@@ -214,7 +230,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
                             if (alias == null) continue;
                             PsiClass psi = selections.get(alias);
                             if (psi != null) {
-                                JavaCodeGenerator.EntityTarget sub = toSubEntity(SqlToJavaConverter.INSTANCE.candidateOf(psi));
+                                JavaCodeGenerator.EntityTarget sub = toSubEntity(
+                                        SqlToJavaConverter.INSTANCE.candidateOf(psi), reverseLogicDeleteValue(project));
                                 if (sub != null) subEntities.put(alias, sub);
                             }
                         }
@@ -253,15 +270,21 @@ public final class ConvertSqlToJavaAction extends AnAction {
         }
     }
 
-    /** 手动选择实体 → 生成用副实体目标（类名缺失跳过）。 */
+    /** 手动选择实体 → 生成用副实体目标（类名缺失跳过；Kotlin 默认参重载，logicDeleteValue = 默认值）。 */
     private JavaCodeGenerator.EntityTarget toSubEntity(SqlToJavaConverter.EntityCandidate candidate) {
+        return toSubEntity(candidate, SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE);
+    }
+
+    /** 手动选择实体 → 生成用副实体目标（类名缺失跳过）。 */
+    private JavaCodeGenerator.EntityTarget toSubEntity(SqlToJavaConverter.EntityCandidate candidate, String logicDeleteValue) {
         String className = candidate.psiClass().getName();
         if (className == null) return null;
         Map<String, String> columnToField = new HashMap<>();
         for (ColumnInfo col : candidate.tableInfo().getColumns()) {
             columnToField.put(col.getColumnName(), col.getFieldName());
         }
-        return new JavaCodeGenerator.EntityTarget(className, columnToField, Collections.emptyMap());
+        return new JavaCodeGenerator.EntityTarget(className, columnToField, Collections.emptyMap(),
+                candidate.tableInfo().getLogicDeleteColumn(), logicDeleteValue);
     }
 
     /** 生成并展示代码（形态由配置分发）。 */
@@ -279,8 +302,9 @@ public final class ConvertSqlToJavaAction extends AnAction {
             @NotNull SqlToJavaConverter.EntityCandidate candidate,
             @NotNull ReverseWrapperFormat format,
             @NotNull Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
-        new JavaCodePreviewDialog(project,
-                SqlToJavaConverter.INSTANCE.generateCode(result, candidate, format, null, subEntities)).show();
+        String code = SqlToJavaConverter.INSTANCE.generateCode(result, candidate, format, null, subEntities,
+                reverseLogicDeleteValue(project));
+        new JavaCodePreviewDialog(project, code).show();
     }
 
     private void showNoSelection(@NotNull Project project) {
