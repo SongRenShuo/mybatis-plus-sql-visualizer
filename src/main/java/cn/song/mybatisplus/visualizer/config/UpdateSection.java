@@ -102,6 +102,27 @@ public class UpdateSection extends JPanel {
 
     private final JPanel feedbackContainer;
 
+    /** R62：最近一次检查失败的分类（渲染文案与兜底链接可见性分流）。 */
+    private PluginUpdateRunner.FailureKind failureKind = null;
+
+    /** R62：兜底链接行（Marketplace + Gitee 双源）——只在「检查失败且通道缺失」态可见。 */
+    private final JPanel fallbackLinksContainer = buildFallbackLinks();
+
+    private JPanel buildFallbackLinks() {
+        JPanel row = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0));
+        row.setOpaque(false);
+        row.setVisible(false);
+        LinkLabel<Object> marketplace = new LinkLabel<>(
+            MpSqlVisualizerBundle.message("settings.update.fallback.marketplace"), null,
+            (link, data) -> SafeBrowser.browse(UpdateSource.MARKETPLACE_URL));
+        LinkLabel<Object> gitee = new LinkLabel<>(
+            MpSqlVisualizerBundle.message("settings.update.fallback.gitee"), null,
+            (link, data) -> SafeBrowser.browse(UpdateSource.GITEE_RELEASES_URL));
+        row.add(marketplace);
+        row.add(gitee);
+        return row;
+    }
+
     private final PluginSettings settings;
 
     public UpdateSection(PluginSettings settings) {
@@ -198,11 +219,15 @@ public class UpdateSection extends JPanel {
             state = State.Available;
         } else if (result instanceof PluginUpdateRunner.CheckResult.UpToDate) {
             pendingManifest = null;
+            failureKind = null;
             state = State.UpToDate;
         } else if (result instanceof PluginUpdateRunner.CheckResult.Failure f) {
             pendingManifest = null;
             state = State.Failed;
             failureReason = f.message();
+            failureKind = f.kind();
+        } else {
+            failureKind = null;
         }
         renderState();
     }
@@ -259,6 +284,10 @@ public class UpdateSection extends JPanel {
         progressBar.setIndeterminate(true);
         notesContainer.setVisible(s == State.Available);
         doneContainer.setVisible(s == State.Installed);
+        // R62：兜底链接行只在「检查失败且通道缺失」态可见（网络态/安装失败/其他态一律隐藏）
+        fallbackLinksContainer.setVisible(
+            s == State.Failed && pendingManifest == null
+                && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING);
         switch (s) {
             case Checking -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.checking"));
             case UpToDate -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.upToDate"));
@@ -267,9 +296,20 @@ public class UpdateSection extends JPanel {
             case Downloading -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.downloading"));
             case Installed -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
             case InstalledLive -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installedLive"));
-            case Failed -> statusLabel.setText(MpSqlVisualizerBundle.message(
-                "settings.update." + (pendingManifest == null ? "checkFailed" : "installFailed"),
-                failureReason != null ? failureReason : "?"));
+            case Failed -> {
+                // R62：检查失败按 FailureKind 分流文案（三态可诊断）；安装失败维持原文案
+                if (pendingManifest == null && failureKind != null) {
+                    statusLabel.setText(MpSqlVisualizerBundle.message(
+                        failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING
+                            ? "settings.update.fail.channel404"
+                            : "settings.update.fail.network",
+                        failureReason != null ? failureReason : "?"));
+                } else {
+                    statusLabel.setText(MpSqlVisualizerBundle.message(
+                        "settings.update." + (pendingManifest == null ? "checkFailed" : "installFailed"),
+                        failureReason != null ? failureReason : "?"));
+                }
+            }
             case Idle -> statusLabel.setText(" ");
         }
     }
@@ -297,6 +337,7 @@ public class UpdateSection extends JPanel {
         autoCheckCheck.setSelected(settings.getState().getAutoCheckUpdate());
         pendingManifest = null;
         failureReason = null;
+        failureKind = null;
         state = State.Idle;
         renderState();
     }
