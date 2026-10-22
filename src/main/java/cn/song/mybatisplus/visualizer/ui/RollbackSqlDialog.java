@@ -932,7 +932,7 @@ public class RollbackSqlDialog extends DialogWrapper {
                     null);
         }
         PreviewSideQuery.run(proj, target, sql, request, false, true, result -> {
-            if (result instanceof PreviewSideQuery.Result.Table table) {
+            if (result instanceof PreviewSideQuery.Table table) {
                 if (table.raw().rows().isEmpty()) {
                     warningLabel.setText("<html>" + escapeHtml(
                             MpSqlVisualizerBundle.message("rollback.snapshot.emptyResult")) + "</html>");
@@ -941,12 +941,12 @@ public class RollbackSqlDialog extends DialogWrapper {
                 pasteArea.setText(toSnapshotTsv(table.raw()));
                 showSnapshotTable(table.raw().headers(), table.raw().rows());
                 generateFromPaste();
-            } else if (result instanceof PreviewSideQuery.Result.Blocked blocked) {
+            } else if (result instanceof PreviewSideQuery.Blocked blocked) {
                 warningLabel.setText("<html>" + escapeHtml(blocked.message()) + "</html>");
                 showGateExitRowIfDialectConflict(blocked.verdict(), allowRerenderRetry);
-            } else if (result instanceof PreviewSideQuery.Result.Failed failed) {
+            } else if (result instanceof PreviewSideQuery.Failed failed) {
                 warningLabel.setText("<html>" + escapeHtml(failed.message()) + "</html>");
-            } else if (result instanceof PreviewSideQuery.Result.Scalar) {
+            } else if (result instanceof PreviewSideQuery.Scalar) {
                 warningLabel.setText("<html>" + escapeHtml(
                         MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed")) + "</html>");
             }
