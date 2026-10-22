@@ -417,8 +417,8 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
             panel.dispose();
             SqlLogPanel panel2 = new SqlLogPanel(getProject(), manager);
             waitForEdt();
-            int tabCount = (panel2.getComponent(0) instanceof JTabbedPane)
-                    ? ((JTabbedPane) panel2.getComponent(0)).getTabCount() : -1;
+            // O-149：页签容器 JTabbedPane → 平台 JBTabs（tabsForTest 出口）
+            int tabCount = panel2.tabsForTest().getTabCount();
             assertTrue("含历史/转换等 tab，tab 数应 ≥ 3", tabCount >= 3);
             panel2.dispose();
         } finally {

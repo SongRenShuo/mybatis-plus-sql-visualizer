@@ -60,13 +60,13 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         assertFalse(SqlCaptureGate.paused.get())
     }
 
-    fun test已开启未确认_不注入不协商端口() {
+    /** T-EnhancedCaptureDefaultOn：旧 XML 残留 confirmed=false 不得再拦 premain。 */
+    fun test已开启_旧未确认态也注入() {
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
-        assertNull("未确认时不得注入（首次知情同意仍走既有 attach 链）", manager.preparePremainVmOption())
-        assertTrue("未确认时不得协商端口", manager.premainChannels.isEmpty())
-        assertFalse(SqlCaptureGate.paused.get())
+        assertNotNull("开关打开即注入，confirmed 不再参与判定", manager.preparePremainVmOption())
+        manager.shutdownAll()
     }
 
     // ---------- 注入产物 ----------

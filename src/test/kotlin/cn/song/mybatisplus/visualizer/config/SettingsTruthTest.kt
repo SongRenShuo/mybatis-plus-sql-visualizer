@@ -80,16 +80,15 @@ class SettingsTruthTest {
             "settings.enhancedCapture.status.attached",
             "settings.enhancedCapture.status.fellBack",
             "settings.enhancedCapture.status.authorizedWaiting",
-            "settings.enhancedCapture.status.unauthorizedCooldown",
-            "settings.enhancedCapture.status.unauthorizedPending",
             // T-AgentHeartbeat T-05：心跳两因（停摆 / 首条心跳未到）必须各有独立键
             "settings.enhancedCapture.status.heartbeatLost",
             "settings.enhancedCapture.status.firstHeartbeatPending",
         ).forEach { key ->
             assertTrue("agentStatusText 应引用状态行键 $key", src.contains("\"$key\""))
         }
-        // T-CT-02：重新授权入口存在且清零冷却（O-66 起带可选 onOutcome 回调，断言放宽到名字前缀）
-        assertTrue("应有 requestReauthorization 入口", src.contains("void requestReauthorization("))
+        // T-EnhancedCaptureDefaultOn：确认流与重新授权入口整体移除，不得回潮
+        assertFalse("不得再出现 requestReauthorization", src.contains("requestReauthorization("))
+        assertFalse("不得再出现 confirmed 判定", src.contains("isEnhancedConfirmed"))
         // Topic 声明形态（仿 PluginSettings.SETTINGS_CHANGE_TOPIC）
         assertTrue("AGENT_STATUS_TOPIC 应为 Topic.create", src.contains("Topic<AgentStatusListener> AGENT_STATUS_TOPIC = Topic.create("))
     }
@@ -100,17 +99,11 @@ class SettingsTruthTest {
         // 在这里拆为 AgentManager.java（类）+ AgentManagerKt.java（顶层函数），守卫读合并文本。
         val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java") + "\n" +
             mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManagerKt.java")
-        // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + 确认流单点 1 + 重新授权 1 = 6
+        // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + setUserPaused 1
         // T-M56Phase2-Premain（合流后 +1）：premain 回连建会话成功亦广播一次状态行（启动即捕获生效）
-        // T-FirstUsePremainConsent S1：同意流三态落盘收进 confirmEnhancedCapture 单点，单点内
-        // 1 处广播覆盖三态（新分支自动纳入，比逐分支三处更不易漏），总数 9 → 7
+        // T-EnhancedCaptureDefaultOn：确认流/重新授权两处广播随 B1 摘除（master 同口径 6 处）
         val count = Regex("publishStatusChanged\\(\\)").findAll(src).count()
-        assertTrue("publishStatusChanged 应有 7 处（定义 1 + 调用 6，实际 $count）", count == 7)
-        // 三态广播必须收口在确认落盘单点体内（三态语义运行期覆盖见 AgentConsentFlowTest / AgentPremainConsentTest）
-        assertTrue(
-            "confirmEnhancedCapture 单点体内应广播状态变更",
-            Regex("EnhancedCaptureConsent confirmEnhancedCapture\\(\\)[\\s\\S]*?publishStatusChanged\\(\\)").find(src) != null,
-        )
+        assertTrue("publishStatusChanged 应有 6 处（定义 1 + 调用 5，实际 $count）", count == 6)
     }
 
     @Test
@@ -125,7 +118,8 @@ class SettingsTruthTest {
             "面板不得 Disposer.register(this, …)（ROOT 子节点无释放路径 → 泄漏）",
             panelSrc.contains("Disposer.register(this"),
         )
-        assertTrue("面板应有重新授权按钮接线", panelSrc.contains("requestReauthorization()"))
+        // T-EnhancedCaptureDefaultOn：重新授权按钮已移除，不得回潮
+        assertFalse("面板不得再有重新授权接线", panelSrc.contains("requestReauthorization()"))
         val secSrc = mainSrc("cn/song/mybatisplus/visualizer/config/SectionConfigurable.java")
         assertTrue("SectionConfigurable.disposeUIResources 应调 panel.disposeResources()",
             Regex("disposeUIResources[\\s\\S]{0,200}panel\\.disposeResources\\(\\)").containsMatchIn(secSrc))

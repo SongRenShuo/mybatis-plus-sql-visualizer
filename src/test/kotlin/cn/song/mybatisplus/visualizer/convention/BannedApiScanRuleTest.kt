@@ -662,9 +662,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 5 处：原生 JOIN 图可选能力探测 + 关编辑器失败不阻断，失败回落内置渲染器（零劣化）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/NativeJoinDiagramSupport.java" to
             CatchExemption(5, "原生 JOIN 图可选能力探测，失败回落内置渲染器（零劣化）"),
-        // 4 处：本地帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串。
+        // 5 处：本地帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串；R53 双通道状态栏
+        // 三处只读内存态取数（桥计数/agent 快照/抑制计数）失败回落「无状态行」——纯展示面，无 fatal 语义。
         "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogPanel.java" to
-            CatchExemption(4, "帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串"),
+            CatchExemption(5, "帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串；R53 状态栏只读取数回落无状态行"),
         // 6 处：OGNL 求值器对用户表达式收敛为 Err（evaluate 主口 1 处 + isTrue/toDecimal 等数值
         // 降级——master 侧 runCatching 形态对本守卫不可见，Java 侧落成 catch 全数入表）。
         "src/main/java/cn/song/mybatisplus/visualizer/xml/OgnlEvaluator.java" to
