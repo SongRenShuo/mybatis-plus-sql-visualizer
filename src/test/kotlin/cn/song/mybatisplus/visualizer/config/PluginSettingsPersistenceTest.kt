@@ -238,7 +238,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 43；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             // 后台依赖库实体扫描开关新增一项。
-            assertEquals("复选框总数应为 44", 44, texts.size)
+            // R60 T-LaneB D96（B1）：展示/导出链脱敏开关（displayMaskCheck）+1 后为 45；
+            // k2j 面板暂缺 R90「Retain raw EXPLAIN plans」原始计划保留授权开关（master 侧为 46），
+            // 该开关落位后本断言随 master 升 46。
+            assertEquals("复选框总数应为 45", 45, texts.size)
         } finally {
             settings.state.language = old
         }
