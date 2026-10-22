@@ -47,14 +47,13 @@ import org.jetbrains.annotations.Nullable;
  *    IU-262.10968.63（1809 jar）全量扫描均不存在（现行平台 SQL 注入器为 EP 注册的
  *    SqlTypeBasedInjector，两代 javap 实证 {@code implements MultiHostInjector}，喂入类型全为 SQL PSI
  *    ——mapper XML 宿主平台从不会喂入、更不会着色）——类在场判定既失效又误伤；
- *  - 「三方 MyBatisCodeHelperPro 安装且启用即让位」：用户真机 MCH-Pro 启用中，mapper 语句文本
+ *  - 「第三方 MyBatis 插件安装且启用即让位」：用户真机上第三方插件处于启用状态，mapper 语句文本
  *    关键字仍无色（在位≠覆盖）——批发让位正是本次验收缺陷现场；现并入上条 per-host 探测，
  *    它真会给该宿主上色才让位。</p>
  *
- * <p>W1 实测补充（20261012，证据见 T-XmlGap 计划 §实施记录）：竞品 MCH-Pro 3.6.7 的三条社区轨注入器
- * 都被自身的「平台让位门」挡住（{@code plugin.xml:484} 可选依赖 {@code com.intellij.database} ⇒
- * {@code plugin_database.xml} 注册 {@code ultimateVersionChecker} ⇒ {@code i.b.c()} 为真 ⇒ 三注入器整段跳过），
- * 平台轨注入器的喂入类型是 {@code XmlTag}（不在本门探测面）；用户真机另装的 zMyBatis <b>不注册任何注入器</b>。
+ * <p>W1 实测补充（20261012，证据见 T-XmlGap 计划 §实施记录）：某商业插件的社区轨注入器被其自身的
+ * 平台让位门挡住（Ultimate 专用能力缺席时整段跳过），其平台轨注入器的喂入类型是 {@code XmlTag}
+ *（不在本门探测面）；用户真机另装的第三方插件<b>不注册任何注入器</b>。
  * 故 Ultimate 真机上本门不触发——W1 的价值在 Community 版（社区轨注入器活跃）与任何未来第三方注入器。</p>
  *
  * <p>守卫族（非让位，自身 O(1)）：

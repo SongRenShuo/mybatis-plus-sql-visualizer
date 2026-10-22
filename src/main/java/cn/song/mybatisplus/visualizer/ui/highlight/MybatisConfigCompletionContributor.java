@@ -8,8 +8,10 @@ import com.intellij.codeInsight.completion.CompletionResultSet;
 import com.intellij.codeInsight.completion.CompletionType;
 import com.intellij.codeInsight.completion.PrefixMatcher;
 import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.lang.xml.XMLLanguage;
 import com.intellij.openapi.project.DumbAware;
 import com.intellij.patterns.PlatformPatterns;
+import com.intellij.patterns.PsiElementPattern;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlAttribute;
@@ -47,8 +49,20 @@ import java.util.Set;
  */
 public class MybatisConfigCompletionContributor extends CompletionContributor implements DumbAware {
 
+    /**
+     * T-PerfSweep26 F101：补全位置模式——限定 XML 语言元素。
+     *
+     * <p>原为无约束 {@code PlatformPatterns.psiElement()}：全 IDE 任意语言每次补全调用都进 provider 体，
+     * 靠首行 {@code instanceof XmlFile} O(1) 早退兜底。{@code withLanguage} 是 [PsiElementPattern] 上最小可用的
+     * 语言约束（243 sources jar {@code PsiElementPattern.java:268}，accepts 即 {@code t.getLanguage().equals(language)}）；
+     * mybatis-config.xml 是标准 XML 语言，文件内任意补全位（XmlToken 等）语言均为 XMLLanguage，
+     * 约束后行为不变；注入片段（如 mapper.xml 里的 SQL）语言非 XML，本就不该进本贡献器。
+     */
+    static final PsiElementPattern.Capture<PsiElement> completionPositionPattern =
+            PlatformPatterns.psiElement().withLanguage(XMLLanguage.INSTANCE);
+
     public MybatisConfigCompletionContributor() {
-        extend(CompletionType.BASIC, PlatformPatterns.psiElement(), new CompletionProvider<CompletionParameters>() {
+        extend(CompletionType.BASIC, completionPositionPattern, new CompletionProvider<CompletionParameters>() {
             @Override
             protected void addCompletions(CompletionParameters parameters, ProcessingContext context,
                                           CompletionResultSet result) {

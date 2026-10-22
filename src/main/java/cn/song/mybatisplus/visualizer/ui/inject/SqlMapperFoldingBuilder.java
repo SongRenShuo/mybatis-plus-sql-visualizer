@@ -34,7 +34,9 @@ import java.util.Set;
  *   <li>只在<b>根标签为 {@code mapper}</b> 的文件里生效；</li>
  *   <li>只对<b>语句标签</b>（select/insert/update/delete）与带 {@code id} 的 {@code <sql>} 建区；</li>
  *   <li>只对<b>跨多行</b>的标签建区（单行标签折叠无视觉意义，且更易与平台区重叠）；</li>
- *   <li>不自带默认折叠（{@code isCollapsedByDefault = false}，与平台「不自动折叠 XML 标签」一致）。</li>
+ *   <li>不自带默认折叠（{@code isCollapsedByDefault = false}，与平台「不自动折叠 XML 标签」一致）；</li>
+ *   <li>{@code quick=true} 短路、超 [XmlSynHiGate.MAX_TEXT_LENGTH] 熔断返回空（T-PerfSweep26 F95，
+ *       编辑期快速重建与万行级文件不做子树遍历，见 [buildFoldRegions] 内注释）。</li>
  * </ul>
  *
  * <p>与平台区<b>范围相同</b>时的占位优先级属渲染期行为，单测只能钉本类产出；真机观感列入 W8 走查项
@@ -45,11 +47,21 @@ public class SqlMapperFoldingBuilder extends FoldingBuilderEx {
     @Override
     @NotNull
     public FoldingDescriptor[] buildFoldRegions(@NotNull PsiElement root, @NotNull Document document, boolean quick) {
+        // T-PerfSweep26 F95：`quick=true` 只发生在编辑器打开瞬间的初始折叠
+        // （`CodeFoldingManagerImpl.buildInitialFoldings` → `FoldingUpdate.getFoldingsFor(file, quick=true)`，
+        // 243 sources jar 实证），平台契约要求该 pass "avoid complex checks if possible"
+        // （`FoldingBuilderEx.buildFoldRegions` javadoc）；随后 daemon `CodeFoldingPass` 的
+        // `updateFoldRegionsAsync` 恒以 `quick=false` 全量重建（`updateFoldRegions(editor, firstTime, quick=false)`）。
+        // 本类不自动折叠、无打开瞬间必须立即可见的区（对比 Java imports），quick pass 直接短路，
+        // 全量区由 daemon 补齐——省掉一次全 PSI 子树遍历。
+        if (quick) return FoldingDescriptor.EMPTY;
         if (!(root.getContainingFile() instanceof XmlFile)) return FoldingDescriptor.EMPTY;
         XmlFile file = (XmlFile) root.getContainingFile();
         if (file.getRootTag() == null || !file.getRootTag().getName().equals("mapper")) {
             return FoldingDescriptor.EMPTY;
         }
+        // T-PerfSweep26 F95：体量熔断——超万行级 mapper 不做子树遍历（与注入族 XmlSynHiGate 同阈值同防线）。
+        if (document.getTextLength() > XmlSynHiGate.MAX_TEXT_LENGTH) return FoldingDescriptor.EMPTY;
         List<FoldingDescriptor> out = new ArrayList<>();
         for (XmlTag tag : PsiTreeUtil.findChildrenOfType(root, XmlTag.class)) {
             if (!FOLDABLE_TAGS.contains(tag.getName())) continue;
