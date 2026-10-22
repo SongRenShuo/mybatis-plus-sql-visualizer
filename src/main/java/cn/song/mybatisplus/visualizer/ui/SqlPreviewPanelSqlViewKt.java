@@ -484,8 +484,20 @@ public final class SqlPreviewPanelSqlViewKt {
         return p.compactMode;
     }
 
-    /** 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。 */
+    /** 一键复制当前 SQL（Kotlin 默认参 {@code offerClosePanelAction=true} 形态）。 */
     public static boolean copySql(@NotNull SqlPreviewPanel p) {
+        return copySql(p, true);
+    }
+
+    /**
+     * 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。
+     *
+     * @param offerClosePanelAction 复制成功通知里是否附带「关闭 SQL 面板」动作。仅当调用方**不**关闭
+     *                              面板时才有意义——「复制 SQL 并关闭」本身就会关掉弹窗，再挂一个
+     *                              「关闭 SQL 面板」既冗余、点击也无目标可关（UI-044：用户复制后
+     *                              弹窗已关，通知里还留着这个链接）。
+     */
+    public static boolean copySql(@NotNull SqlPreviewPanel p, boolean offerClosePanelAction) {
         // M36.4：优先取原生编辑器文档，兜底自研编辑器
         String raw = p.nativeEditorDoc != null && !p.nativeEditorDoc.getText().isBlank()
                 ? p.nativeEditorDoc.getText()
@@ -495,6 +507,13 @@ public final class SqlPreviewPanelSqlViewKt {
         // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
         String text = SqlCommentStripper.strip(raw);
         UiTextClipboard.copy(text);
+        // UI-044 测试缝：非 null 时记录「本次通知会挂哪些动作」，绕开单测模式下不弹通知的分支
+        java.util.List<String> actionSink = p.copyNotificationActionsForTest;
+        if (actionSink != null) {
+            if (offerClosePanelAction) {
+                actionSink.add(MpSqlVisualizerBundle.message("dialog.closeSqlPanel"));
+            }
+        }
         if (p.project != null) {
             // T-UiNative T-UN-02：复制成功提示改轻通知 + 「关闭 SQL 面板」动作（T-M23.6 原双按钮
             // 模态改为非模态——点动作等价原 index==1 分支，回调关闭预览弹窗）；
@@ -506,11 +525,13 @@ public final class SqlPreviewPanelSqlViewKt {
                             MpSqlVisualizerBundle.message("plugin.name"),
                             MpSqlVisualizerBundle.message("dialog.copy.done"),
                             NotificationType.INFORMATION);
-                    notification.addAction(NotificationAction.createSimpleExpiring(
-                            MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
-                            () -> {
-                                if (p.onClosePanelRequested != null) p.onClosePanelRequested.run();
-                            }));
+                    if (offerClosePanelAction) {
+                        notification.addAction(NotificationAction.createSimpleExpiring(
+                                MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                                () -> {
+                                    if (p.onClosePanelRequested != null) p.onClosePanelRequested.run();
+                                }));
+                    }
                     notification.notify(p.project);
                 } catch (Throwable ignored) {
                     // headless 无通知系统依赖，与原 runCatching 等价

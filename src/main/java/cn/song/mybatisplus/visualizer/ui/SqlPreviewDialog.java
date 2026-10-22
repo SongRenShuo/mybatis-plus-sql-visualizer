@@ -22,6 +22,30 @@ public class SqlPreviewDialog extends DialogWrapper {
 
     private final SqlPreviewPanel panel;
 
+    /**
+     * T-DmlImpactProminence：底部蓝色主行动——复制 SQL 并关闭（复制成功提示随之关闭面板）。
+     *
+     * <p>字段初始化先于构造器体（init() 会在构造期同步调用 createActions()，本字段若在
+     * init() 之后才赋值，动作数组里出现空位、按钮不渲染——UI-042：用户侧表现为
+     * 「复制 SQL 并关闭」按钮整个不见）。</p>
+     */
+    private final Action copyAndCloseAction = new DialogWrapperAction(
+            MpSqlVisualizerBundle.message("panel.copySqlAndClose")) {
+        @Override
+        protected void doAction(java.awt.event.ActionEvent actionEvent) {
+            // UI-044：弹窗随即关闭，「关闭 SQL 面板」动作已无目标，通知里不再挂它
+            SqlPreviewPanelSqlViewKt.copySql(panel, false);
+            doDispose();
+        }
+    };
+
+    /**
+     * 构造期首次 createActions 的产出（UI-042 回归缝）。
+     *
+     * <p>init() 同步触发 createActions()；此捕获只记首次（后续测试再调 createActions 不覆盖）。</p>
+     */
+    public Action[] actionsAtConstructionForTest = null;
+
     public SqlPreviewDialog(@Nullable Project project, @NotNull PreviewResult result) {
         this(project, result, null);
     }
@@ -78,7 +102,8 @@ public class SqlPreviewDialog extends DialogWrapper {
     @NotNull
     @Override
     protected Action[] createActions() {
-        return new Action[]{
+        Action[] actions = new Action[]{
+                // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
                     @Override
                     protected void doAction(java.awt.event.ActionEvent actionEvent) {
@@ -91,8 +116,30 @@ public class SqlPreviewDialog extends DialogWrapper {
                         SqlPreviewPanelSqlViewKt.copySql(panel);
                     }
                 },
+                copyAndCloseAction,
+                // 关闭
                 getCancelAction()
         };
+        if (actionsAtConstructionForTest == null) actionsAtConstructionForTest = actions;
+        return actions;
+    }
+
+    /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；其余按钮保持平台默认。 */
+    @Override
+    protected javax.swing.JButton createJButtonForAction(Action action) {
+        javax.swing.JButton button = super.createJButtonForAction(action);
+        if (action == copyAndCloseAction) SqlPreviewPanelExecutionKt.applyPrimaryButtonStyle(button);
+        return button;
+    }
+
+    /** UI-043 测试访问器（createJButtonForAction 在 DialogWrapper 内为 protected）。 */
+    public javax.swing.JButton createJButtonForActionForTest(Action action) {
+        return createJButtonForAction(action);
+    }
+
+    /** T-DmlImpactProminence：测试访问器（createActions 在 DialogWrapper 内为 protected）。 */
+    public Action[] actionsForTest() {
+        return createActions();
     }
 
     @Override

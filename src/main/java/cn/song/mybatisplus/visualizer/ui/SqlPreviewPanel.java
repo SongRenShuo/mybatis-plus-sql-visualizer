@@ -508,6 +508,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-PreviewSideQuery P1：预估影响行数的内联结果行（不进入控制台/结果区）。 */
     public JBLabel impactResultLabel = null;
 
+    /**
+     * UI-044 测试缝：复制通知「动作文案」采集器（null/缺席 = 不采集）。
+     * 单测模式不弹真通知，若只断言点击行为就看不到「通知挂了哪些动作」——置非 null 后
+     * {@code SqlPreviewPanelSqlViewKt.copySql} 会把将要挂上的动作文案记进来，供用例断言
+     * 「复制并关闭」不带关闭链接。（Kotlin 侧经 WeakHashMap 扩展属性承载——Java 直接字段即可。）
+     */
+    public java.util.List<String> copyNotificationActionsForTest = null;
+
     /** 当前方言决策（meta 行方言段重组的事实源）。 */
     public cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision currentDialectDecision = null;
 

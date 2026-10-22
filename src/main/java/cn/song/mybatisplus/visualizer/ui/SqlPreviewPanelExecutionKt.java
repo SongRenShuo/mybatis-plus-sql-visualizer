@@ -45,7 +45,7 @@ import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Disposer;
-import com.intellij.ui.JBColor;
+
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -1713,6 +1713,37 @@ public final class SqlPreviewPanelExecutionKt {
         return button;
     }
 
+    /**
+     * T-DmlImpactProminence：主行动按钮样式（蓝色实底）——用于「返回预览」「复制 SQL 并关闭」
+     * 这类需要一眼看到的显式出口。
+     *
+     * <p>UI-043：**必须交给平台绘制**，不能手工涂底色。早期实现是 {@code setOpaque(true)} +
+     * {@code setBackground} 填主题蓝，而 Darcula 按钮边框是**内缩 4px 的圆角**
+     * （{@code DarculaButtonPainter.getOffset() == 4}）：底色按整个矩形铺满，圆角之外就多出
+     * 一圈方形蓝边（用户截图所见）。</p>
+     *
+     * <p>平台的标准入口是 client property {@code JButton.styleDefault}
+     * （= {@code DarculaButtonUI.DEFAULT_STYLE_KEY}）：{@code DarculaButtonPainter} 在
+     * {@code paintBorder} 里认这个键，走原生 default 样式的圆角填充与配色。
+     * 平台自身的 ButtonPanel、OnboardingDialogButtons 都是这么打的标。</p>
+     */
+    public static void applyPrimaryButtonStyle(@NotNull JButton button) {
+        button.putClientProperty(
+                com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+                java.lang.Boolean.TRUE);
+        // 底色/前景交给 LAF；显式清掉，防止外层（如 resultPanel 主题覆盖）残留手工涂色
+        button.setOpaque(false);
+        button.setFocusPainted(false);
+        button.repaint();
+    }
+
+    public static JButton primaryButton(@NotNull String text, @NotNull Runnable action) {
+        JButton button = new JButton(text);
+        applyPrimaryButtonStyle(button);
+        button.addActionListener(e -> action.run());
+        return button;
+    }
+
     /** 压缩/多行切换按钮文案：显示"将要切换到的模式"。 */
     @NotNull
     public static String modeButtonText(@NotNull SqlPreviewPanel p) {
@@ -1730,11 +1761,20 @@ public final class SqlPreviewPanelExecutionKt {
     // SqlPreviewPanelParamPanelKt.showDmlImpactResult（T-DmlImpactProminence 起同时挂顶部横幅），
     // 本文件原最小版（逐次扫描 paramPanel 建标签、无横幅）已删除，调用点全部改指正式版。
 
-    /** 数据源绑定等待（生产路径，T-PreviewSideQuery P1）：250ms 轮询 + 480 次超时。 */
+    /** 绑定等待轮询间隔（EDT；只读判定，不碰 JDBC）。 */
+    private static final int EXPLAIN_DS_BIND_POLL_MS = 250;
+
+    /**
+     * 轮询硬上限：120 拍 × 250ms = 30s（T-PerfSweep26-06 由 480 拍/2 分钟收紧）；
+     * 只防定时器泄漏，正常收口由准备链终结（已绑定或取消）驱动。
+     */
+    private static final int EXPLAIN_DS_BIND_MAX_TICKS = 120;
+
+    /** 数据源绑定等待（生产路径，T-PreviewSideQuery P1）：250ms 轮询 + 120 拍（30s）硬上限。 */
     public static void awaitDataSourceBoundThen(@NotNull SqlPreviewPanel p, @NotNull Project proj, int generation,
                                                 @NotNull Runnable onBound, @NotNull Runnable onGiveUp) {
         int[] ticks = {0};
-        javax.swing.Timer timer = new javax.swing.Timer(250, event -> {
+        javax.swing.Timer timer = new javax.swing.Timer(EXPLAIN_DS_BIND_POLL_MS, event -> {
             ticks[0]++;
             javax.swing.Timer t = (javax.swing.Timer) event.getSource();
             if (com.intellij.openapi.util.Disposer.isDisposed(p) || proj.isDisposed()) {
@@ -1754,7 +1794,7 @@ public final class SqlPreviewPanelExecutionKt {
             }
             boolean inFlight = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight();
             switch (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.dataSourceBindTick(
-                    bound, inFlight, ticks[0] >= 480)) {
+                    bound, inFlight, ticks[0] >= EXPLAIN_DS_BIND_MAX_TICKS)) {
                 case RETRY:
                     t.stop();
                     onBound.run();
@@ -1795,6 +1835,8 @@ public final class SqlPreviewPanelExecutionKt {
             entry.setTimestamp(System.currentTimeMillis());
             entry.setTableName(originalPreview.getTableName() != null ? originalPreview.getTableName() : "");
             entry.setProjectIdentity(planKey.projectIdentity());
+            // T-PresetMethodScope：补建条目沿用当前预览的作用域，参数快照回落口径一致。
+            entry.setOriginScopeKey(originalPreview.getOriginScopeKey());
             originalPreview.setHistoryEntryId(history.add(entry).getId());
         }
         return p.explainPlanHistorySession.begin(
