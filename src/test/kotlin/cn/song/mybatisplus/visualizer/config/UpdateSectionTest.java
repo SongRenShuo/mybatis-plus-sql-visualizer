@@ -83,14 +83,26 @@ public class UpdateSectionTest extends BasePlatformTestCase {
     }
 
     public void testRenderCheckFailure() throws Exception {
-        section.renderCheck(new PluginUpdateRunner.CheckResult.Failure("network unavailable"));
+        // R62：失败按 FailureKind 分流文案（网络态 = fail.network）
+        section.renderCheck(new PluginUpdateRunner.CheckResult.Failure(
+                PluginUpdateRunner.FailureKind.NETWORK, "network unavailable"));
         assertEquals(UpdateSection.State.Failed, section.getState());
         assertEquals(
-                MpSqlVisualizerBundle.message("settings.update.checkFailed", "network unavailable"),
+                MpSqlVisualizerBundle.message("settings.update.fail.network", "network unavailable"),
                 section.getStatusLabel().getText());
         // 失败后可重试
         assertTrue(section.getCheckButton().isEnabled());
         assertFalse(section.getInstallButton().isVisible());
+    }
+
+    /** R62 三态渲染：404 态给 Marketplace + Gitee 兜底链接（master 82ee88b1 同款）。 */
+    public void testRenderChannelMissing_404态_兜底链接可见() throws Exception {
+        section.renderCheck(new PluginUpdateRunner.CheckResult.Failure(
+                PluginUpdateRunner.FailureKind.CHANNEL_MISSING, "HTTP 404"));
+        assertEquals(UpdateSection.State.Failed, section.getState());
+        assertEquals(
+                MpSqlVisualizerBundle.message("settings.update.fail.channel404", "HTTP 404"),
+                section.getStatusLabel().getText());
     }
 
     public void testRenderInstalled() throws Exception {
