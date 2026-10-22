@@ -93,7 +93,7 @@ class McpConfigurableGateTest : BasePlatformTestCase() {
         val configurable = newConfigurable()
         assertEquals(
             "横幅标题计数应动态取 TOOL_NAMES.size（写死数字会随工具清单漂移过期，R14 十→十一工具即前车）",
-            MpSqlVisualizerBundle.message("settings.mcp.banner.ready", McpToolGate.TOOL_NAMES.size.toString()),
+            MpSqlVisualizerBundle.message("settings.mcp.banner.declared", McpToolGate.TOOL_NAMES.size.toString()),
             configurable.bannerHeadlineForTest(),
         )
         assertEquals(

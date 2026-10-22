@@ -801,6 +801,46 @@ public class PluginSettingsPanel implements Disposable {
     public final JBCheckBox explainPlanRetentionCheck = new JBCheckBox();
     public final JBLabel explainPlanRetentionDisclosure = new JBLabel();
 
+    // ---------- T-M19-StorageClear：三类本地数据的分离动作 ----------
+
+    /** 破坏性动作分类。 */
+    public enum StorageClearKind { PREVIEW_HISTORY, PARAM_HISTORY }
+
+    /** 破坏性动作确认缝：生产弹确认；headless 测试注入确定结果，不唤起原生对话框。 */
+    public java.util.function.Predicate<StorageClearKind> storageClearConfirmation = kind -> {
+        String messageKey = kind == StorageClearKind.PREVIEW_HISTORY
+                ? "settings.storage.previewHistory.clear.confirm"
+                : "settings.storage.paramHistory.clear.confirm";
+        return com.intellij.openapi.ui.Messages.showYesNoDialog(
+                com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects().length > 0
+                        ? com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects()[0]
+                        : null,
+                MpSqlVisualizerBundle.message(messageKey),
+                MpSqlVisualizerBundle.message("settings.storage.clear.title"),
+                com.intellij.openapi.ui.Messages.getWarningIcon())
+                == com.intellij.openapi.ui.Messages.YES;
+    };
+
+    /** 捕获目录打开缝：测试只观察目标路径；生产交给平台既有 BrowserUtil.open(file URI)。 */
+    public java.util.function.Consumer<java.io.File> captureDirectoryOpener =
+            dir -> com.intellij.ide.BrowserUtil.open(dir.toURI().toString());
+
+    /** 默认目录需要项目根；无打开项目时 SqlLogAutoSaver 按既有契约回落 user.home。 */
+    public java.util.function.Supplier<String> captureProjectBasePathProvider = () -> {
+        for (com.intellij.openapi.project.Project p :
+                com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects()) {
+            if (!p.isDisposed()) {
+                return p.getBasePath();
+            }
+        }
+        return null;
+    };
+
+    public final JButton openCaptureDirectoryButton = new JButton();
+    public final JButton clearPreviewHistoryButton = new JButton();
+    public final JButton clearParamHistoryButton = new JButton();
+    public final JBLabel storageActionStatusLabel = new JBLabel(" ");
+
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
     public final JBTextField executionTimeoutField = new JBTextField(8);
 
@@ -949,6 +989,10 @@ public class PluginSettingsPanel implements Disposable {
     }
 
     public PluginSettingsPanel(PluginSettings settings, Set<String> sections) {
+        // T-M19-StorageClear：三按钮接线（行构建在 PluginSettingsPanelSections）
+        openCaptureDirectoryButton.addActionListener(e -> openCaptureHistoryDirectory());
+        clearPreviewHistoryButton.addActionListener(e -> clearPreviewHistory());
+        clearParamHistoryButton.addActionListener(e -> clearParamHistory());
         this.settings = settings;
         this.sections = sections;
         this.updateSection = new UpdateSection(settings);
@@ -2167,4 +2211,85 @@ public class PluginSettingsPanel implements Disposable {
             return null;
         }
     }
+
+    /**
+     * 打开捕获历史目录。只解析/创建并打开目录，绝不枚举或删除其中任何文件；自定义目录与默认目录
+     * 走 SqlLogAutoSaver.resolveHistoryDir 同一写端口径。
+     */
+    private void openCaptureHistoryDirectory() {
+        String path = cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.resolveHistoryDir(
+                logAutoSavePathField.getText(), captureProjectBasePathProvider.get());
+        java.io.File dir = new java.io.File(path);
+        try {
+            java.nio.file.Files.createDirectories(dir.toPath());
+            captureDirectoryOpener.accept(dir);
+            storageActionStatusLabel.setText(MpSqlVisualizerBundle.message(
+                    "settings.storage.captureFiles.opened", dir.getAbsolutePath()));
+            storageActionStatusLabel.setToolTipText(dir.getAbsolutePath());
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            storageActionStatusLabel.setText(
+                    MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.failed"));
+            storageActionStatusLabel.setToolTipText(t.getMessage());
+        }
+    }
+
+    /** 清空预览 SQL 历史组件（普通/收藏条目及其标签、参数快照），不触碰共享 XML 的其他组件。 */
+    private void clearPreviewHistory() {
+        if (!storageClearConfirmation.test(StorageClearKind.PREVIEW_HISTORY)) {
+            return;
+        }
+        try {
+            cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance().clear();
+            storageActionStatusLabel.setText(
+                    MpSqlVisualizerBundle.message("settings.storage.previewHistory.cleared"));
+            storageActionStatusLabel.setToolTipText(null);
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            storageActionStatusLabel.setText(
+                    MpSqlVisualizerBundle.message("settings.storage.clear.failed"));
+            storageActionStatusLabel.setToolTipText(t.getMessage());
+        }
+    }
+
+    /** 清空默认参数历史、全部命名方案与激活指针，并立即失效所有已打开预览面板的缓存实例。 */
+    private void clearParamHistory() {
+        if (!storageClearConfirmation.test(StorageClearKind.PARAM_HISTORY)) {
+            return;
+        }
+        try {
+            cn.song.mybatisplus.visualizer.ui.ParamHistoryCache.clearPersistedHistory();
+            storageActionStatusLabel.setText(
+                    MpSqlVisualizerBundle.message("settings.storage.paramHistory.cleared"));
+            storageActionStatusLabel.setToolTipText(null);
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            storageActionStatusLabel.setText(
+                    MpSqlVisualizerBundle.message("settings.storage.clear.failed"));
+            storageActionStatusLabel.setToolTipText(t.getMessage());
+        }
+    }
+
+    public JButton openCaptureDirectoryButtonForTest() {
+        return openCaptureDirectoryButton;
+    }
+
+    public JButton clearPreviewHistoryButtonForTest() {
+        return clearPreviewHistoryButton;
+    }
+
+    public JButton clearParamHistoryButtonForTest() {
+        return clearParamHistoryButton;
+    }
+
+    public JBLabel storageActionStatusForTest() {
+        return storageActionStatusLabel;
+    }
+
 }

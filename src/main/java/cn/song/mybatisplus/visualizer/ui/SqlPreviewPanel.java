@@ -688,6 +688,83 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     // P-05：参数历史缓存 + debounce 写回
     public final ParamHistoryCache paramHistoryCache = new ParamHistoryCache();
+
+    /**
+     * R51（O-105 余半）测试缝：recall 回落源——ParamHistoryCache 未命中时按缓存键取历史
+     * 参数快照（null = 单测态默认禁用真服务；生产走 SqlHistoryManager.newestParamSnapshot）。
+     */
+    public java.util.function.Function<String, java.util.Map<String, String>> historySnapshotFallbackSource = null;
+
+    /** R51 测试缝：参数快照回写 sink——flush 链同步进历史条目的落点观察（null = 单测态禁用真服务）。 */
+    public java.util.function.BiConsumer<String, java.util.Map<String, String>> historySnapshotSink = null;
+
+    /**
+     * R51（O-105 余半·主体）：参数快照回落——ParamHistoryCache 未命中时，按同一缓存键从
+     * 最新历史条目的 paramSnapshot 回落。单测态默认禁用真服务（跨用例残留会串扰 recall 断言）。
+     */
+    public java.util.Map<String, String> historySnapshotFallback(String key) {
+        if (historySnapshotFallbackSource != null) {
+            return historySnapshotFallbackSource.apply(key);
+        }
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode()) {
+            return null;
+        }
+        try {
+            return cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance()
+                    .newestParamSnapshot(entry -> matchesSnapshotKey(entry, key));
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            return null;
+        }
+    }
+
+    /**
+     * R51：历史条目 → 缓存键（与 historyCacheKey 同口径）。T-PresetMethodScope：条目自带
+     * 作用域时按同一口径追加，否则回落旧键（存量条目）。
+     */
+    public String entrySnapshotKey(cn.song.mybatisplus.visualizer.history.SqlHistoryEntry entry) {
+        String scope = entry.getOriginScopeKey().isEmpty() ? null : entry.getOriginScopeKey();
+        return paramHistoryCache.computeKey(
+                entry.getTableName().isEmpty() ? null : entry.getTableName(),
+                entry.getSql(),
+                scope);
+    }
+
+    /**
+     * T-PresetMethodScope：带 scope 键也认「同一条 SQL 的旧条目」——升级前落的历史条目没有
+     * 作用域，只做精确匹配会让快照回写与回落与旧条目失联。
+     */
+    public boolean matchesSnapshotKey(cn.song.mybatisplus.visualizer.history.SqlHistoryEntry entry, String key) {
+        String entryKey = entrySnapshotKey(entry);
+        if (entryKey == null) {
+            return false;
+        }
+        if (entryKey.equals(key)) {
+            return true;
+        }
+        String legacy = paramHistoryCache.legacyKeyOf(key);
+        return !legacy.equals(key) && entryKey.equals(legacy);
+    }
+
+    /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目。 */
+    public void updateHistoryEntrySnapshot(String key, java.util.Map<String, String> snapshot) {
+        if (historySnapshotSink != null) {
+            historySnapshotSink.accept(key, snapshot);
+        }
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode()) {
+            return;
+        }
+        try {
+            cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance()
+                    .updateNewestParamSnapshot(entry -> matchesSnapshotKey(entry, key), snapshot);
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+        }
+    }
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
     public final Timer historyAlarm =
             new Timer(500, e -> SqlPreviewPanelParamPanelKt.flushHistoryToCache(this));

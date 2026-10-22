@@ -116,6 +116,12 @@ public final class PluginSettingsPanelSections {
                 self.explainStructuredCheck.setText(MpSqlVisualizerBundle.message("settings.explain.structured"));
                 self.explainStructuredCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.explain.structured.tip"));
                 addRow(p, g, "", self.explainStructuredCheck);
+                // R90：EXPLAIN 原始计划保留开关 + 只读隐私披露
+                self.explainPlanRetentionCheck.setText(MpSqlVisualizerBundle.message("settings.explain.retention"));
+                addRow(p, g, "", self.explainPlanRetentionCheck);
+                self.explainPlanRetentionDisclosure.setText(
+                        MpSqlVisualizerBundle.message("settings.explain.retention.disclosure"));
+                addRow(p, g, "", self.explainPlanRetentionDisclosure);
                 self.executionTimeoutField.setToolTipText(MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip"));
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), self.executionTimeoutField);
             });
@@ -291,6 +297,26 @@ public final class PluginSettingsPanelSections {
             });
 
             sectionGroup(panel, gbc, "settings.log.tab.autoSave", (p, g) -> {
+                // T-M19-StorageClear：三类本地数据的分离动作（打开目录 / 清空预览历史 / 清空参数历史）
+                self.openCaptureDirectoryButton.setText(MpSqlVisualizerBundle.message("settings.storage.captureFiles.open"));
+                self.openCaptureDirectoryButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.tip"));
+                addDisclosure(p, g, MpSqlVisualizerBundle.message("settings.storage.captureFiles"),
+                        self.openCaptureDirectoryButton);
+                self.clearPreviewHistoryButton.setText(
+                        MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear"));
+                self.clearPreviewHistoryButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear.tip"));
+                addDisclosure(p, g, MpSqlVisualizerBundle.message("settings.storage.previewHistory"),
+                        self.clearPreviewHistoryButton);
+                self.clearParamHistoryButton.setText(
+                        MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear"));
+                self.clearParamHistoryButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear.tip"));
+                addDisclosure(p, g, MpSqlVisualizerBundle.message("settings.storage.paramHistory"),
+                        self.clearParamHistoryButton);
+                addDisclosure(p, g, MpSqlVisualizerBundle.message("settings.storage.clearBoundary"), null);
+                addRow(p, g, "", self.storageActionStatusLabel);
                 self.logAutoSaveCheck.setText(MpSqlVisualizerBundle.message("settings.log.autoSave"));
                 self.logAutoSaveCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.autoSave.tip"));
                 self.logAutoSaveCheck.addActionListener(e -> {
@@ -522,6 +548,29 @@ public final class PluginSettingsPanelSections {
         gbc.fill = fill;
         panel.add(component, gbc);
         gbc.fill = GridBagConstraints.NONE;
+        gbc.gridy++;
+    }
+
+    /**
+     * T-M19-StorageClear 披露行（master {@code disclosure(key, action)} 的 Java 等价）：
+     * 左侧说明文案；action 非空时挂 EAST（打开目录 / 清空按钮），null 为纯边界说明行。
+     */
+    private static void addDisclosure(JPanel panel, GridBagConstraints gbc, String label, JButton action) {
+        JPanel row = new JPanel(new BorderLayout(4, 0));
+        row.setOpaque(false);
+        row.add(new JBLabel(label), BorderLayout.CENTER);
+        if (action != null) {
+            JPanel east = new JPanel(new BorderLayout());
+            east.setOpaque(false);
+            east.add(action, BorderLayout.EAST);
+            row.add(east, BorderLayout.EAST);
+        }
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
+        panel.add(row, gbc);
+        gbc.gridwidth = 1;
+        gbc.weightx = 0.0;
         gbc.gridy++;
     }
 

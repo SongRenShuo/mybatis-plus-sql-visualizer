@@ -360,24 +360,6 @@ class SettingsRealityGuardTest {
             "settings.mcp.tool.desc.reversesql",
             "settings.mcp.tool.desc.mappercheck",
             "settings.mcp.tool.desc.historysearch",
-            // T-SyncK2JMaster496：下列键对应「尚未移植的 UI 面」，落位后须从本白名单移除
-            // （UPDATE 失败分型文案 / MCP 脱敏开关与能力横幅 / T-M19-StorageClear 三按钮 / R90 保留开关文案）：
-            "settings.update.fail.network", "settings.update.fail.channel404",
-            "settings.update.fallback.marketplace", "settings.update.fallback.gitee",
-            "settings.mcp.maskLiterals", "settings.mcp.maskLiterals.desc",
-            "settings.mcp.banner.declared", "settings.mcp.banner.platformPresent",
-            "settings.mcp.banner.platformUnavailable",
-            "settings.storage.captureFiles", "settings.storage.captureFiles.open",
-            "settings.storage.captureFiles.open.tip", "settings.storage.captureFiles.opened",
-            "settings.storage.captureFiles.open.failed",
-            "settings.storage.previewHistory", "settings.storage.previewHistory.clear",
-            "settings.storage.previewHistory.clear.tip", "settings.storage.previewHistory.clear.confirm",
-            "settings.storage.previewHistory.cleared",
-            "settings.storage.paramHistory", "settings.storage.paramHistory.clear",
-            "settings.storage.paramHistory.clear.tip", "settings.storage.paramHistory.clear.confirm",
-            "settings.storage.paramHistory.cleared",
-            "settings.storage.clear.title", "settings.storage.clear.failed", "settings.storage.clearBoundary",
-            "settings.explain.retention", "settings.explain.retention.disclosure",
         )
         val texts = mainSources()
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()

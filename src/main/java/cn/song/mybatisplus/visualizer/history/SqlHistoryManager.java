@@ -170,6 +170,39 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
         return mergeByTimestamp(state.getFavoriteEntries(), state.getEntries());
     }
 
+    /**
+     * R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环）。
+     * 空快照不写；无匹配条目返回 false。
+     */
+    public synchronized boolean updateNewestParamSnapshot(
+            java.util.function.Predicate<SqlHistoryEntry> match, java.util.Map<String, String> snapshot) {
+        if (snapshot.isEmpty()) {
+            return false;
+        }
+        for (SqlHistoryEntry entry : state.getEntries()) {
+            if (match.test(entry)) {
+                entry.getParamSnapshot().clear();
+                entry.getParamSnapshot().putAll(snapshot);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * R51：按匹配谓词取最新一条条目的参数快照（recall 链在 ParamHistoryCache 未命中时的
+     * 回落源；快照为空的条目不参与——无快照的历史回落无意义）。
+     */
+    public synchronized java.util.Map<String, String> newestParamSnapshot(
+            java.util.function.Predicate<SqlHistoryEntry> match) {
+        for (SqlHistoryEntry entry : state.getEntries()) {
+            if (match.test(entry) && !entry.getParamSnapshot().isEmpty()) {
+                return entry.getParamSnapshot();
+            }
+        }
+        return null;
+    }
+
     // ---------- R90：EXPLAIN 计划持久化 ----------
 
     private long planGeneration = 0L;
