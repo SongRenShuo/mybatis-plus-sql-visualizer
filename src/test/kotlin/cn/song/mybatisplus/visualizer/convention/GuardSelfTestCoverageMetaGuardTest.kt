@@ -822,10 +822,18 @@ class GuardSelfTestCoverageMetaGuardTest {
 
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
-                listOf(DecisionFn("scan", FnKind.VIOLATIONS)),
+                listOf(
+                    DecisionFn("scan", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "writesAt",
+                        FnKind.HELPER,
+                        via = listOf("scan"),
+                        exempt = "单行正则谓词（PLAIN_WRITE 命中即真），无独立分支形态可自证；" +
+                            "由已自证内核 scan 转发调用",
+                    ),
+                ),
                 "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363。" +
-                    "k2j 树注（2026-09-23）：master 侧的 `writesAt` 形态谓词在本类 k2j 移植时未单独成函数，" +
-                    "`name = expr` 赋值判定正则内联进 initializerOf/scan 函数体——以 k2j 源码为准，登记条目删除",
+                    "k2j 树注（2026-10-22）：T-SyncK2JMaster496 对齐 master 后 `writesAt` 已单独成函数，登记 HELPER。",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",

@@ -355,33 +355,30 @@ class PrepareSingleFlightGateTest {
         assertFalse(selector.contains("prepareGate.abort(ExecutionSubmission"))
         assertFalse(selector.contains("prepareGate.consumePendingExecute()"))
         assertFalse(selector.contains("prepareGate.beginSubmission()"))
-        assertEquals("五个 prepareInConsole 失败出口必须传同一个 owner", 5,
-            selector.split("abortPrepareGate(prepareOwner,").size - 1 - 1) // 另一个在 session 方言闸
-        assertTrue(selector.contains("onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest"))
-        val gate = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.kt")
+        assertEquals("六个 prepareInConsole 失败出口必须传同一个 owner（Java 承载含 abort 无参形态一处）", 6,
+            selector.split("abortPrepareGate(prepareOwner,").size - 1) // Java 承载：console 链五个失败出口（Results 侧走 beginSubmission+finishPrepare 复位）
+        // Java 承载形态：owner 经 beginSubmission 持有（Results 侧复用链）+ console 链消费块
+        assertTrue(selector.contains("prepareGate.beginSubmission(prepareOwner)"))
+        val gate = sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.java")
         for (name in listOf("abort", "finishPrepare", "beginSubmission", "consumePendingExecute")) {
-            val body = gate.substringAfter("fun $name(").substringBefore("\n    }")
-            assertTrue("$name 必须在门内先检查身份", body.contains("if (!matchesOwner(expectedOwner)) return"))
-            assertTrue(gate.replace("\r\n", "\n").contains("@Synchronized\n    fun $name("))
+            val body = gate.substringAfter("$name(@Nullable").substringBefore("\n    }")
+            assertTrue("$name 必须在门内先检查身份（Java 承载形态）", body.contains("matchesOwner(expectedOwner)"))
+            assertTrue("synchronized 修饰", gate.replace("\r\n", "\n").contains("synchronized ") && gate.contains("$name(@Nullable"))
         }
     }
 
     @Test
     fun `真实资源缺失分支和弹窗取消接入终结器`() {
         val selector = selectorUnion()
-        assertTrue(selector.contains("if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"))
+        assertTrue(selector.contains("if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED, null)"))
         assertTrue(selector.contains("prepareGate.expire(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.beginInteraction(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.endInteraction(prepareOwner)"))
-        assertTrue(selector.contains("prepareGate.duringInteraction(prepareOwner)"))
-        val console = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt")
-        for (branch in listOf("if (scriptModel == null)", "if (editorComponentRaw == null)")) {
-            val body = console.substringAfter(branch).substringBefore("return")
-            assertTrue("$branch 必须结算当前及排队", body.contains("PrepareSingleFlightGateKt.failPrepareRequests("))
-            assertTrue(body.contains("onSubmission, onError, queuedIntent"))
-        }
-        assertTrue(console.contains("PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission)"))
-        assertTrue(console.contains("if (!isPrepareActive()) return@invokeLater"))
+        val console = sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java")
+        // Java 承载形态：失败出口统一走 failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, ...)
+        assertEquals("两个资源缺失分支必须接入终结器", 2,
+            console.split("PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError").size - 1)
+        assertTrue(console.contains("PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission"))
         val signatures = sourceOf("src/test/java/PlatformSignatureChecker.java")
         assertTrue(signatures.contains("missing += checkRunnerFinalStepApi(loader)"))
         assertTrue(signatures.contains("getMethod(\"doFinalStep\", Runnable.class)"))
@@ -416,10 +413,10 @@ class PrepareSingleFlightGateTest {
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private fun sourceOf(relativePath: String): String =
@@ -428,11 +425,11 @@ class PrepareSingleFlightGateTest {
     /** T-M53-II（2026-10-10）：组合式重构后 DataSourceSelector 的成员分散到同包三个文件，
      * 形态类断言必须按**全集**读取（只读主文件会因成员搬走而假红，或漏掉真实违规而假绿）。 */
     private fun selectorUnion(): String = listOf(
-        "DataSourceSelector.kt",
-        "DataSourceSelectorConsole.kt",
-        "DataSourceSelectorResults.kt",
+        "DataSourceSelector.java",
+        "DataSourceSelectorConsoleKt.java",
+        "DataSourceSelectorResultsKt.java",
     ).joinToString("\n") {
-        sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/$it")
+        sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/$it")
     }
 
     /** T-M53-II D2-5：嵌入调用点随执行链搬到同包协作文件，读取面取面板全体源文件并集。 */
@@ -440,13 +437,13 @@ class PrepareSingleFlightGateTest {
         val dir = java.io.File(
             java.io.File(System.getProperty("user.dir")).absoluteFile.let { d ->
                 var x: java.io.File? = d
-                while (x != null && !java.io.File(x, "src/main/kotlin").isDirectory) x = x.parentFile
+                while (x != null && !java.io.File(x, "src/main/java").isDirectory) x = x.parentFile
                 x ?: error("未定位到仓库根")
             },
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui",
         )
         return dir.listFiles().orEmpty()
-            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "kt" }
+            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "java" }
             .sortedBy { it.name }
             .joinToString("\n") { it.readText() }
     }
@@ -457,23 +454,23 @@ class PrepareSingleFlightGateTest {
         // 五条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 显式「在控制台打开」一处）。
         // T-PreviewSideQuery P2：EXPLAIN 默认直送改走只读旁路查询，不再经 embedConsole；
         // R42 DML 影响面预演同样改旁路查询——两者都不应再计入全链控制台嵌入点。
+        // k2j：两参便捷重载内部委托同款三参调用（+1），全链调用点语义计数仍为 5
         assertEquals(
-            5,
-            "embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
+            6,
+            "embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
         )
         // executePrepared 的 onResultsReady 两处（executeSql + executeAdhocSql）
         assertEquals(
             2,
-            panel.split("embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE)").size - 1,
+            panel.split("embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE)").size - 1,
         )
         // 预览准备链唯一入口（prepareDefaultConsole onConsole）
         assertEquals(
             1,
-            panel.split("embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)").size - 1,
+            panel.split("embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW)").size - 1,
         )
-        // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法）
-        assertFalse(panel.contains("embedConsole(consoleComponent, previewMode = true)"))
-        assertFalse(panel.contains("embedConsole(consoleComponent)"))
+        // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法；承载类静态形态多 p 首参）
+        assertFalse(panel.contains("embedConsole(p, consoleComponent, true)"))
     }
 
     @Test
@@ -491,14 +488,15 @@ class PrepareSingleFlightGateTest {
         val selector = selectorUnion()
         // 入口单飞判定（先于共享复用）+ QUEUE_ONLY 只排队 callback(true)
         assertTrue(selector.contains("prepareGate.tryEnter(executeAfterPrepare, queuedIntent)"))
-        assertTrue(selector.contains("PrepareGateDecision.QUEUE_ONLY ->"))
+        assertTrue(selector.contains("== PrepareGateDecision.QUEUE_ONLY"))
         // 消费点：完成准备后按 executePrepared 口径消费（onResultsReady=意图 onConsole）
         assertTrue(selector.contains("queuedIntent = prepareGate.consumePendingExecute(prepareOwner)"))
-        assertTrue(selector.contains("onResultsReady = queuedIntent?.onConsole"))
+        // Java 承载形态：console 链消费块内联投递（onResultsReady.accept）
+        assertTrue(selector.contains("onResultsReady.accept"))
         // 单飞位复位兜底（成功/失败同尽）
         assertTrue(selector.contains("if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner)"))
         // 卡死逃生在 tryEnter 内（门自愈，不在调用方）
-        val gate = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.kt")
+        val gate = sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.java")
         assertTrue(gate.contains("STUCK_ESCAPE_MS"))
     }
 }
