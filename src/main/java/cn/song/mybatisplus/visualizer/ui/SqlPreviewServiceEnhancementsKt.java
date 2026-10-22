@@ -57,6 +57,15 @@ public final class SqlPreviewServiceEnhancementsKt {
     private SqlPreviewServiceEnhancementsKt() {
     }
 
+    // T-PerfSweep26 F104：本文件原六处函数体内现场 Regex/Pattern 构造提为文件级单例
+    // （同一实例跨调用复用，模式逐字保留）。命名对齐 SqlPreviewService 同款常量
+    // （SQL_WHITESPACE_RUN / LIMIT_OFFSET_FETCH_CLAUSE / ORDER_BY_CLAUSE，模式相同）。
+    private static final Pattern SQL_WHITESPACE_RUN = Pattern.compile("\\s+");
+
+    private static final Pattern LIMIT_OFFSET_FETCH_CLAUSE = Pattern.compile("(?i)\\b(LIMIT|OFFSET|FETCH)\\b");
+
+    private static final Pattern ORDER_BY_CLAUSE = Pattern.compile("(?i)\\bORDER\\s+BY\\b");
+
     /**
      * 其他 ORM 第一批（M44）前置派发：Easy-Query proxy（EQ_PROXY）/ MyBatis Dynamic SQL（MDS）/
      * Querydsl（QD）。三者按 entry + receiver 启发认领（普通类同名方法不命中，负例守卫），
@@ -71,7 +80,7 @@ public final class SqlPreviewServiceEnhancementsKt {
         if (eq != null) {
             return new PreviewResult(
                     eq.getSql(),
-                    eq.getSql().replaceAll("\\s+", " ").trim(),
+                    SQL_WHITESPACE_RUN.matcher(eq.getSql()).replaceAll(" ").trim(),
                     eq.getParamSources(),
                     ParameterReplacer.buildParamTable(eq.getParamSources()),
                     WrapperType.EQ_PROXY,
@@ -95,7 +104,7 @@ public final class SqlPreviewServiceEnhancementsKt {
         if (mds != null) {
             return new PreviewResult(
                     mds.getSql(),
-                    mds.getSql().replaceAll("\\s+", " ").trim(),
+                    SQL_WHITESPACE_RUN.matcher(mds.getSql()).replaceAll(" ").trim(),
                     mds.getParamSources(),
                     ParameterReplacer.buildParamTable(mds.getParamSources()),
                     WrapperType.MDS,
@@ -119,7 +128,7 @@ public final class SqlPreviewServiceEnhancementsKt {
         if (qd != null) {
             return new PreviewResult(
                     qd.getSql(),
-                    qd.getSql().replaceAll("\\s+", " ").trim(),
+                    SQL_WHITESPACE_RUN.matcher(qd.getSql()).replaceAll(" ").trim(),
                     qd.getParamSources(),
                     ParameterReplacer.buildParamTable(qd.getParamSources()),
                     WrapperType.QD,
@@ -238,7 +247,7 @@ public final class SqlPreviewServiceEnhancementsKt {
                     if (pageSort.getLimit() != null) {
                         if (limitAppliedInModel
                                 || JpaQueryEnhancer.containsTopLevelClause(enhanced,
-                                Pattern.compile("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))) {
+                                LIMIT_OFFSET_FETCH_CLAUSE)) {
                             if (!limitAppliedInModel) {
                                 notes.add("查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）");
                             }
@@ -247,7 +256,7 @@ public final class SqlPreviewServiceEnhancementsKt {
                         }
                     }
                     if (pageSort.getOrderBy() != null && !pageSort.getOrderBy().isEmpty()) {
-                        if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Pattern.compile("(?i)\\bORDER\\s+BY\\b"))) {
+                        if (JpaQueryEnhancer.containsTopLevelClause(enhanced, ORDER_BY_CLAUSE)) {
                             notes.add("查询内已含 ORDER BY，Sort 参数运行时与其合并");
                         } else {
                             StringBuilder ob = new StringBuilder();
@@ -435,9 +444,9 @@ public final class SqlPreviewServiceEnhancementsKt {
         // F-1 修复：JPA 联表派生查询同款缺口——图 Tab 判据与 previewModel 解耦
         SelectStatement selForDiagram = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
         SelectStatement diagramStatement = (selForDiagram != null && !selForDiagram.getJoins().isEmpty()) ? selForDiagram : null;
-        return new PreviewResult(
+        PreviewResult result = new PreviewResult(
                 convertedSql,
-                convertedSql.replaceAll("\\s+", " ").trim(),
+                SQL_WHITESPACE_RUN.matcher(convertedSql).replaceAll(" ").trim(),
                 paramNames,
                 ParameterReplacer.buildParamTable(paramNames),
                 null,
@@ -471,6 +480,11 @@ public final class SqlPreviewServiceEnhancementsKt {
                 dialectDecision,
                 null,
                 null);
+        // T-PresetMethodScope：HQL/JPA 链路不落历史条目（recordHistory 未调用），作用域必须在此写入，
+        // 否则同一段 HQL 写在两个方法里仍共用「表名 + SQL 指纹」键。
+        result.setOriginScopeKey(
+                cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(method, p.project));
+        return result;
     }
 
     /**
