@@ -171,9 +171,8 @@ class AgentLogTimeParityTest {
     }
 
     @Test
-    fun `参数个数不匹配_仍命中日志行时间`() {
-        // 旧键死因：agent 侧「占位符数 ≠ 参数数就不还原」守卫 → 保留 ? → 与已还原的控制台 SQL 不等。
-        // 新键只看占位符版原文，故参数少捕不再影响时间配对（还原口径的错位防护因此得以保留）。
+    fun `参数个数不匹配_不借用其他签名的日志时间`() {
+        // rawSql相同不能抵消已知参数签名不一致；少捕参数时同时保持SQL与时间的保守回退。
         val entry = runChain(
             listOf(
                 "$logLineTime [main] ==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
@@ -182,7 +181,8 @@ class AgentLogTimeParityTest {
             "SELECT * FROM t WHERE a = ? AND b = ?",
             listOf(Triple(1, "1", "Long")),
         )
-        assertHit(entry, "参数个数不匹配")
+        assertMissKeepsCaptureTime(entry, "参数个数不匹配")
+        assertEquals("不匹配不能消费其他执行的时间", 1, LogTimeCorrelator.size())
         assertEquals("少捕参数时 agent 侧保持原样不还原（防错位）", "SELECT * FROM t WHERE a = ? AND b = ?", entry.restoredSql)
     }
 
