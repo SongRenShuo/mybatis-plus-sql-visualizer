@@ -287,7 +287,7 @@ class SqlPreviewServiceJpaCrudTest : BasePlatformTestCase() {
             FROM t_user
             WHERE id = 1001
             LIMIT 1
-            -- existsById：命中即真语义（Spring Data 运行时渲染 SELECT 1 ... LIMIT 1 形态）
+            -- existsById：命中即真语义（按当前方言只取首行，运行时语句以实际日志为准）
             """.trimIndent(),
             result.sql,
         )
