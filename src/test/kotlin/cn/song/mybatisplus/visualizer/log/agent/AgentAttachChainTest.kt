@@ -25,9 +25,6 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
-        // 直接走 attach 链（确认流语义由 AgentConsentFlowTest / AgentManagerFallbackTest 覆盖）
-        state.enhancedCaptureConfirmed = true
-        state.enhancedCaptureRejectedAtMs = 0
     }
 
     override fun tearDown() {
@@ -35,12 +32,9 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         // 否则陈旧闭包污染后续类的冷却/去抖判定
         manager.clockMs = { System.currentTimeMillis() }
         manager.attachDebounceMs = AgentManager.DEFAULT_ATTACH_DEBOUNCE_MS
-        manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
         manager.shutdownAll()
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = false
-        state.enhancedCaptureConfirmed = false
-        state.enhancedCaptureRejectedAtMs = 0
         super.tearDown()
     }
 
@@ -89,7 +83,7 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         val accepted = server.accept()
         try {
             // AgentSession internal 同包可构造（同 AgentListenSyncTest 惯例）
-            val session = AgentSession(project, 5555L, accepted, noopStateChange())
+            val session = AgentSession(project, 5555L, accepted, {})
             manager.sessions.add(session)
             manager.attachedPids[5555L] = 123L
             session.close() // 置 alive=false（死会话）
@@ -128,26 +122,21 @@ class AgentAttachChainTest : BasePlatformTestCase() {
     /**
      * 接线守卫（源码级，防重构摘线）：上升沿分支必须调用 scanAndAttachRunningProcesses——
      * 摘掉该调用则「对在跑应用开开关即挂载」静默失效（偏差 #6 的原始形态），本用例必红。
-     * k2j 适配：生产为 Java（src/main/java/.../AgentManager.java），接线标记与 Kotlin 同串。
      */
     fun test设置变更上升沿接线_在跑进程补挂调用在场() {
-        val src = java.io.File("src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java")
-            .readText()
+        val src = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
+        ).readText()
         assertTrue("上升沿扫描入口调用应在场", "scanAndAttachRunningProcesses" in src)
         assertTrue("调用应带 settings-rescan 场景标签", "settings-rescan" in src)
-        // 接线位置：必须位于「增强重新开启」上升沿分支内（拒绝冷却重置之后）
-        val edge = src.indexOf("增强捕获重新开启——拒绝冷却已重置")
+        // 接线位置：必须位于「增强重新开启」上升沿分支内
+        val edge = src.indexOf("增强捕获重新开启——用户暂停已复位")
         val call = src.indexOf("scanAndAttachRunningProcesses")
         assertTrue("上升沿分支应在场", edge >= 0)
         assertTrue("扫描调用应接线在上升沿分支下游（edge=$edge, call=$call）", call > edge)
-        assertTrue("拒绝注入的用户不应触发扫描（守卫 consentedNow）", "consentedNow" in src)
+        // T-EnhancedCaptureDefaultOn：确认流已移除，扫描不再受 consentedNow 之类授权闸门约束
+        assertFalse("不得再出现 consentedNow 授权闸门", "consentedNow" in src)
     }
-
-    /** 空状态回调工厂。
-     * JUnit3 合成方法坑：测试方法体内联零参 lambda 会生成 `<测试方法名>$lambda$0()` 私有静态方法，
-     * JUnit3 按「名字以 test 开头 + 零参」判定为测试方法，再因非 public 记一条失败（带参 lambda 的
-     * 合成方法参数数不为零故不触发）。抽出后合成名挂在工厂名下，不再以 test 开头。 */
-    private fun noopStateChange(): Runnable = Runnable { }
 
     /** 反射缝假 ProcessHandler：可控暴露 getNativePid（同既有测试惯例）。 */
     private class FakeProcessHandler(private val nativePid: Long?) {

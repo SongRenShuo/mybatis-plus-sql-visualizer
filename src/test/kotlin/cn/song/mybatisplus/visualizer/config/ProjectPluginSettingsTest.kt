@@ -260,7 +260,7 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
             assertEquals(
                 "project=null 无探测上下文 → auto 回退 MySQL（手动残值不参与，O-93 语义）",
                 MySqlDialect.INSTANCE,
-                DialectRegistry.INSTANCE.effective(null),
+                DialectRegistry.INSTANCE.effective(null as com.intellij.openapi.project.Project?),
             )
         } finally {
             ps.loadState(psSnapshot)

@@ -58,7 +58,7 @@ class DialectStaleManualLeakGuardTest : BasePlatformTestCase() {
         assertEquals(
             "auto 模式下 project=null（psi 渲染链）必须忽略手动残值回退 MySQL",
             MySqlDialect.INSTANCE,
-            DialectRegistry.INSTANCE.effective(null),
+            DialectRegistry.INSTANCE.effective(null as com.intellij.openapi.project.Project?),
         )
     }
 
@@ -67,7 +67,7 @@ class DialectStaleManualLeakGuardTest : BasePlatformTestCase() {
         val state = PluginSettings.getInstance().state
         state.dialect = "Oracle"
         state.dialectAuto = false
-        assertEquals(OracleDialect.INSTANCE, DialectRegistry.INSTANCE.effective(null))
+        assertEquals(OracleDialect.INSTANCE, DialectRegistry.INSTANCE.effective(null as com.intellij.openapi.project.Project?))
     }
 
     fun testBatchUpsertPreviewImmuneToStaleManualDialect() {

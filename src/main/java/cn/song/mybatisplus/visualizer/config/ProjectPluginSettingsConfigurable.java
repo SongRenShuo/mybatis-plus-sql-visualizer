@@ -75,6 +75,10 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
     private final ProjectPluginSettings projectSettings;
     private JBCheckBox useProjectCheck = null;
     private JLabel scopeStatusLabel = null;
+
+    /** R51/T-ModuleBinding：模块→数据源绑定摘要标签与清空按钮（master ProjectPluginSettingsConfigurable 同款）。 */
+    private JLabel moduleBindingLabel = null;
+    private JButton clearModuleBindingsButton = null;
     private ComboBox<String> dialectCombo = null;
     private JBCheckBox replaceParamsCheck = null;
     private JBCheckBox formatSqlCheck = null;
@@ -225,6 +229,21 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         JPanel resetRow = new JPanel(new BorderLayout(8, 0));
         resetRow.add(resetButton, BorderLayout.WEST);
         panel.add(resetRow, gbc);
+        gbc.gridwidth = 1;
+
+        // R51/T-ModuleBinding：模块→数据源绑定摘要 + 清空入口（走 ModuleDataSourceBindingStore）
+        moduleBindingLabel = new JBLabel(moduleBindingSummary());
+        clearModuleBindingsButton = new JButton(
+                MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear"));
+        clearModuleBindingsButton.addActionListener(e -> clearModuleBindings());
+        gbc.gridy++;
+        gbc.gridwidth = 2;
+        JPanel bindingRow = new JPanel(new BorderLayout(8, 0));
+        bindingRow.add(new JBLabel(MpSqlVisualizerBundle.message("settings.project.moduleBindings")),
+                BorderLayout.WEST);
+        bindingRow.add(moduleBindingLabel, BorderLayout.CENTER);
+        bindingRow.add(clearModuleBindingsButton, BorderLayout.EAST);
+        panel.add(bindingRow, gbc);
         gbc.gridwidth = 1;
 
         projectValueCells.clear();
@@ -574,6 +593,43 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         refreshControls(projectSettings.getState().getUseProjectSettings());
     }
 
+    /** 绑定条数摘要（仅计数，不外泄数据源名/模块名）。 */
+    private String moduleBindingSummary() {
+        int count = project != null
+                ? cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+                        .getState().bindings.size()
+                : 0;
+        return MpSqlVisualizerBundle.message("settings.project.moduleBindings.count", count);
+    }
+
+    /** 清空全部模块绑定（先确认，与设置页其余破坏性动作同款）。 */
+    private void clearModuleBindings() {
+        if (project == null) {
+            return;
+        }
+        int answer = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                project,
+                MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear.confirm"),
+                MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear.title"),
+                com.intellij.icons.AllIcons.General.QuestionDialog);
+        if (answer == com.intellij.openapi.ui.Messages.YES) {
+            cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project).clear();
+            if (moduleBindingLabel != null) {
+                moduleBindingLabel.setText(moduleBindingSummary());
+            }
+        }
+    }
+
+    /** 测试缝：绑定摘要标签（R51 设置页可达性断言）。 */
+    public JLabel moduleBindingLabelForTest() {
+        return moduleBindingLabel;
+    }
+
+    /** 测试缝：清空绑定按钮。 */
+    public JButton clearModuleBindingsButtonForTest() {
+        return clearModuleBindingsButton;
+    }
+
     @Override
     public void disposeUIResources() {
         useProjectCheck = null;
@@ -588,6 +644,8 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         inferenceCombo = null;
         ignoredFieldsField = null;
         columnCalibrationCheck = null;
+        moduleBindingLabel = null;
+        clearModuleBindingsButton = null;
         projectValueCells.clear();
     }
 }

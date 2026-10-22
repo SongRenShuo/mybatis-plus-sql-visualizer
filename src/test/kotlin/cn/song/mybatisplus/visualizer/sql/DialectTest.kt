@@ -357,6 +357,6 @@ class DialectTest {
     @Test
     fun `effective_无平台设置上下文_兜底MySQL`() {
         assertEquals(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.effective())
-        assertEquals(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.effective(null))
+        assertEquals(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.effective(null as com.intellij.openapi.project.Project?))
     }
 }

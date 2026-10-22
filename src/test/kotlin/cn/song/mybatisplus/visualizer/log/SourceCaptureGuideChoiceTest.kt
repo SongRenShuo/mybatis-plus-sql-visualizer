@@ -11,7 +11,7 @@ import org.junit.Assert.assertTrue
  * T-JumpCapture / O-66 T-GuideEnhancedFirst：[SourceCaptureGuide] 引导编排的纯函数与文案落地测试。
  *
  * 弹框本体（Messages.showDialog 模态）headless 不可测，家规「UI 只做编排 + 纯函数单测」：
- *  - [SourceCaptureGuide.decideActions] 全局态 → 引导分支（未开启/未授权 → EnhanceFirst，已开启已授权 → Legacy）；
+ *  - [SourceCaptureGuide.decideActions] 全局态 → 引导分支（未开启 → EnhanceFirst，已开启 → Legacy）；
  *  - [SourceCaptureGuide.resolveChoice] 返回码 → 选择的映射**带分支序表**（两条序表 0 号语义不同），
  *    关闭/负值兜底取消；
  *  - [SourceCaptureGuide.legacyMessage] Legacy 分支附增强捕获实时状态一行（D1 定案）；
@@ -21,14 +21,12 @@ import org.junit.Assert.assertTrue
  */
 class SourceCaptureGuideChoiceTest : BasePlatformTestCase() {
 
-    fun test分支判定_未开启或未授权走EnhanceFirst() {
-        assertEquals(SourceCaptureGuide.GuideBranch.EnhanceFirst, SourceCaptureGuide.decideActions(false, false))
-        assertEquals(SourceCaptureGuide.GuideBranch.EnhanceFirst, SourceCaptureGuide.decideActions(true, false))
-        assertEquals(SourceCaptureGuide.GuideBranch.EnhanceFirst, SourceCaptureGuide.decideActions(false, true))
+    fun test分支判定_未开启走EnhanceFirst() {
+        assertEquals(SourceCaptureGuide.GuideBranch.EnhanceFirst, SourceCaptureGuide.decideActions(false))
     }
 
-    fun test分支判定_已开启已授权走Legacy() {
-        assertEquals(SourceCaptureGuide.GuideBranch.Legacy, SourceCaptureGuide.decideActions(true, true))
+    fun test分支判定_已开启走Legacy() {
+        assertEquals(SourceCaptureGuide.GuideBranch.Legacy, SourceCaptureGuide.decideActions(true))
     }
 
     fun test返回码映射随分支序表() {

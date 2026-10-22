@@ -548,6 +548,24 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         on.disposeUIResources()
     }
 
+    fun test模块数据源学习可查看并独立清除() {
+        val store = cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+        store.clear()
+        store.remember("gradle:app", "uuid-1")
+        store.remember("gradle:api", "uuid-2")
+        val cfg = newConfig()
+        cfg.createComponent()
+        assertTrue(cfg.moduleBindingLabelForTest()?.text.orEmpty().contains("2"))
+        com.intellij.openapi.ui.TestDialogManager.setTestDialog(
+            com.intellij.openapi.ui.TestDialog { com.intellij.openapi.ui.Messages.YES },
+            testRootDisposable,
+        )
+        cfg.clearModuleBindingsButtonForTest()?.doClick()
+        assertTrue(store.state.bindings.isEmpty())
+        assertTrue(cfg.moduleBindingLabelForTest()?.text.orEmpty().contains("0"))
+        cfg.disposeUIResources()
+    }
+
     /**
      * P3 前置对照实验（落地为路由守卫）：设置搜索的 navigateTo 走
      * `Settings.find(类)` = `ConfigurableVisitor.findByType(类, 设置树根组)`，
