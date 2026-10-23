@@ -437,18 +437,19 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        // R60：展示文本打码、原始条目不动；缓存同时以模式和脱敏态为键，防切换后复用旧语义片段。
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
+        // R60 → T-MagpieGems W2：展示文本按脱敏模式渲染、原始条目不动；缓存以显示模式和
+        // 脱敏模式（OFF/WARN 原样、MASK 打码、BLOCK 占位四态互异）为键，防切换后复用旧语义片段。
+        val maskMode = PluginSettings.getInstance().displayMaskMode()
+        val sql = withTerminator(displaySqlForList(entry, mode, maskMode))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMaskMode == maskMode.name }
             ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
-                entry.cachedListLineFragmentsMasked = maskOn
+                entry.cachedListLineFragmentsMaskMode = maskMode.name
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }

@@ -272,10 +272,11 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     private fun checkUi012Geometry(scale: Float) {
         val settings = PluginSettings.getInstance().state
         val savedMode = settings.logListSqlDisplayMode
-        val savedMask = settings.displayMaskEnabled
+        // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载
+        val savedMask = settings.displayMaskMode
         val savedScale = JBUIScale.scale(1.0f)
         settings.logListSqlDisplayMode = SqlListDisplayMode.KEYWORD_WRAP.name
-        settings.displayMaskEnabled = false
+        settings.displayMaskMode = "OFF"
         JBUIScale.setUserScaleFactorForTest(scale)
         var manager: SqlLogManager? = null
         var panel: SqlLogPanel? = null
@@ -373,7 +374,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
                     manager?.dispose()
                 } finally {
                     settings.logListSqlDisplayMode = savedMode
-                    settings.displayMaskEnabled = savedMask
+                    settings.displayMaskMode = savedMask
                     JBUIScale.setUserScaleFactorForTest(savedScale)
                 }
             }

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.IdeActions
@@ -418,6 +419,53 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         )
         assertTrue("脱敏关原文保留", plain.contains("13812345678"))
         assertTrue("分号收尾语义不变", plain.endsWith(";"))
+    }
+
+    // ---------- T-MagpieGems W2：预览文本按 MaskMode 分级（WARN 警示行 / BLOCK 阻断占位） ----------
+
+    // contact 非关键词列 → 手机号走形态兜底（警示行才含「手机号」类别）；pwd 走关键词
+    private val W2_PREVIEW_SQL = "SELECT * FROM t WHERE contact = '13812345678' AND pwd = 'p@ss'"
+
+    fun testClickPreviewSqlWARN原文加警示行() {
+        val text = clickPreviewSql(W2_PREVIEW_SQL, formatSql = false, DisplayMasker.MaskMode.WARN)
+        assertTrue("WARN 应保留原文", text.contains("13812345678"))
+        val warnPrefix = MpSqlVisualizerBundle.message("log.preview.maskWarn", "").substringBefore("{0}")
+        assertTrue("头部应追加警示行（前缀=$warnPrefix）", text.startsWith(warnPrefix))
+        assertTrue("警示行应含手机号类别计数", text.contains(MpSqlVisualizerBundle.message("mask.category.mobile")))
+        assertTrue("警示行应含密码类列名类别计数", text.contains(MpSqlVisualizerBundle.message("mask.category.sensitive_column")))
+        assertFalse("警示行绝不回显原值", text.substringBefore("\n").contains("13812345678"))
+    }
+
+    fun testClickPreviewSqlWARN零敏感不加警示行() {
+        val text = clickPreviewSql("SELECT 1", formatSql = false, DisplayMasker.MaskMode.WARN)
+        assertTrue("零敏感应原文不加警示行", text.contains("SELECT 1") && !text.contains("×"))
+    }
+
+    fun testClickPreviewSqlBLOCK整段阻断占位() {
+        val text = clickPreviewSql(W2_PREVIEW_SQL, formatSql = false, DisplayMasker.MaskMode.BLOCK)
+        assertTrue("BLOCK 应输出阻断占位（含命中总数 2）", text.contains("2"))
+        assertFalse("原文手机号不得出现", text.contains("13812345678"))
+        assertFalse("原文密码不得出现", text.contains("p@ss"))
+        // 白名单豁免命中后计数 0 → 按 OFF 原样
+        val exempt = clickPreviewSql(
+            W2_PREVIEW_SQL, formatSql = false, DisplayMasker.MaskMode.BLOCK,
+            allowList = listOf("contact", "pwd"),
+        )
+        assertTrue("白名单全豁免后 BLOCK 按 OFF 原样", exempt.contains("13812345678"))
+    }
+
+    fun testPreviewCopySafeText从严口径() {
+        // WARN 屏显原文，但复制出去必须打码（离开 IDE 面）
+        val masked = previewCopySafeText(W2_PREVIEW_SQL, DisplayMasker.MaskMode.WARN)
+        assertTrue(masked.contains("'***'"))
+        assertFalse(masked.contains("13812345678"))
+        // MASK 已打码文本再过一道幂等
+        assertEquals(
+            previewCopySafeText(W2_PREVIEW_SQL, DisplayMasker.MaskMode.MASK),
+            previewCopySafeText(previewCopySafeText(W2_PREVIEW_SQL, DisplayMasker.MaskMode.MASK), DisplayMasker.MaskMode.MASK),
+        )
+        // OFF 原样（既有语义）
+        assertEquals(W2_PREVIEW_SQL, previewCopySafeText(W2_PREVIEW_SQL, DisplayMasker.MaskMode.OFF))
     }
 
     // ---------- 三面板接线 ----------

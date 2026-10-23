@@ -24,14 +24,27 @@ internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = 
     SqlListDisplayMode.FORMATTED -> SqlFormatter.format(sql)
 }
 
-internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, masked: Boolean): String {
+/**
+ * 列表展示文本（T-MagpieGems W2 按 [maskMode] 分流）：
+ *  - OFF/WARN → 原样（WARN 的警示行只进预览浮层/停靠预览，列表渲染不追加）；
+ *  - MASK → 打码文本；BLOCK → 阻断占位文本（白名单豁免后计数 0 时 DisplayMasker 按 OFF 原样）。
+ * 非全量模式沿用摘要——MASK/BLOCK 须先处理完整 SQL 再截摘要（防旧摘要在引号中间截断漏打码），
+ * 摘要缓存以 mode 为键防 MASK/BLOCK 产物串缓存。
+ */
+internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, maskMode: DisplayMasker.MaskMode): String {
+    if (maskMode == DisplayMasker.MaskMode.OFF || maskMode == DisplayMasker.MaskMode.WARN) {
+        if (mode == SqlListDisplayMode.FORMATTED) return entry.restoredSql
+        return entry.summary
+    }
     if (mode == SqlListDisplayMode.FORMATTED) {
-        return DisplayMasker.maskDisplay(entry.restoredSql, masked)
+        return DisplayMasker.maskDisplay(entry.restoredSql, maskMode)
     }
-    if (!masked) return entry.summary
-    return entry.cachedMaskedSummary ?: LogSqlEntry.summarizeSql(DisplayMasker.maskSqlText(entry.restoredSql)).also {
-        entry.cachedMaskedSummary = it
-    }
+    return entry.cachedMaskedSummary
+        ?.takeIf { entry.cachedMaskedSummaryMode == maskMode.name }
+        ?: LogSqlEntry.summarizeSql(DisplayMasker.maskDisplay(entry.restoredSql, maskMode)).also {
+            entry.cachedMaskedSummary = it
+            entry.cachedMaskedSummaryMode = maskMode.name
+        }
 }
 
 /** 不包含任何主题属性的词法片段，可安全存于条目缓存；空白 token 同样保留。 */

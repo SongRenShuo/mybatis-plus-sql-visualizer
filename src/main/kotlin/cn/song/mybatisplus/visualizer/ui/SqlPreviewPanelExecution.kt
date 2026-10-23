@@ -91,7 +91,8 @@ internal fun SqlPreviewPanel.showRollbackSql() {
         val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
-        val mask = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled
+        // T-MagpieGems W2：回放脚本写盘是离开 IDE 面——mode != OFF 从严打码（WARN 不给原文离开产品）
+        val mask = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskExportOn()
         val plan = cn.song.mybatisplus.visualizer.log.ReplayScriptExport
             .plan(sql, dialect, options.wrapTransaction) ?: return
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
@@ -339,13 +340,14 @@ internal fun SqlPreviewPanel.exportPortableSql() {
     ApplicationManager.getApplication().executeOnPooledThread {
         runCatching {
             cn.song.mybatisplus.visualizer.log.SqlExportService
-                // R60（T-LaneB D96）：可移植导出同脱敏口径（displayMaskEnabled，投影级）
+                // R60（T-LaneB D96）→ T-MagpieGems W2：可移植导出同脱敏口径；离开 IDE 面从严
+                // （mode != OFF 一律按 MASK 打码）
                     .exportToFile(
                         target,
                         cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(
                             rows,
                             format,
-                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled,
+                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskExportOn(),
                         ),
                     )
         }.onSuccess {

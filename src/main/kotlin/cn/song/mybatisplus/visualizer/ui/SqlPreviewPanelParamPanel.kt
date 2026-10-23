@@ -107,9 +107,9 @@ private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
         add(control, BorderLayout.WEST)
     }
 
-/** Actual 的无类型裸列表不是 SQL 字面量；展示脱敏时隐藏整段，不尝试逐值解析。 */
+/** Actual 的无类型裸列表不是 SQL 字面量；展示脱敏非关闭态时隐藏整段，不尝试逐值解析（W2 模式化口径）。 */
 private fun shardingRouteDisplayText(actual: String): String =
-    if (PluginSettings.getInstance().state.displayMaskEnabled) {
+    if (PluginSettings.getInstance().displayMaskExportOn()) {
         MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked")
     } else actual
 

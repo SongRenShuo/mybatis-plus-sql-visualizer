@@ -15,7 +15,8 @@ import javax.swing.JList
 class SqlListV179HeadlessTest : BasePlatformTestCase() {
     private lateinit var manager: SqlLogManager
     private var savedMode = ""
-    private var savedMask = false
+    // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载（保存/恢复改用模式串）
+    private var savedMask = "OFF"
     private var savedCrudStyle = ""
     private var savedThreshold = 0L
 
@@ -23,11 +24,12 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         super.setUp()
         val s = PluginSettings.getInstance().state
         savedMode = s.logListSqlDisplayMode
-        savedMask = s.displayMaskEnabled
+        // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载
+        savedMask = s.displayMaskMode
         savedCrudStyle = s.crudColorStyle
         savedThreshold = s.slowQueryThresholdMs
         s.logListSqlDisplayMode = PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
-        s.displayMaskEnabled = false
+        s.displayMaskMode = "OFF"
         s.crudColorStyle = SqlListTypeColor.STYLE_BAR
         s.slowQueryThresholdMs = 1000
         manager = SqlLogManager(project)
@@ -39,7 +41,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             manager.dispose()
             val s = PluginSettings.getInstance().state
             s.logListSqlDisplayMode = savedMode
-            s.displayMaskEnabled = savedMask
+            s.displayMaskMode = savedMask
             s.crudColorStyle = savedCrudStyle
             s.slowQueryThresholdMs = savedThreshold
         } finally {
@@ -196,7 +198,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         val history = HistoryCellRenderer().apply { templateCounts = mapOf(e.structureKey to 4) }
         val expectedCluster = MpSqlVisualizerBundle.message("log.panel.templateBadge", 4)
         fun render(selected: Boolean, masked: Boolean, historical: Boolean): Pair<String, String> {
-            PluginSettings.getInstance().state.displayMaskEnabled = masked
+            PluginSettings.getInstance().state.displayMaskMode = if (masked) "MASK" else "OFF"
             val r = if (historical) history else live
             r.getListCellRendererComponent(list, e, 0, selected, false) // 失焦选中态
             val meta = if (historical) history.metaLine else live.metaLine
@@ -239,13 +241,14 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             val (_, maskedSql) = render(false, true, historical)
             assertTrue(maskedSql, maskedSql.contains("***"))
             assertFalse("开启脱敏不能复用明文缓存", maskedSql.contains("13812345678"))
-            assertTrue(e.cachedListLineFragmentsMasked)
+            // T-MagpieGems W2：缓存键由布尔脱敏态改为 MaskMode 名（OFF/WARN/MASK/BLOCK 四态互异）
+            assertEquals("MASK", e.cachedListLineFragmentsMaskMode)
         }
         assertFalse("脱敏态需重新计算语义缓存", cached === e.cachedListLineFragments)
         for (historical in listOf(true, false)) {
             val (_, plainSql) = render(false, false, historical)
             assertTrue("关闭脱敏不能沿用打码缓存", plainSql.contains("13812345678"))
-            assertFalse(e.cachedListLineFragmentsMasked)
+            assertEquals("OFF", e.cachedListLineFragmentsMaskMode)
         }
     }
 }

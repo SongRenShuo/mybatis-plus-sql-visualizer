@@ -1042,7 +1042,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             runCatching {
                 SqlExportService.exportToFile(
                     target,
-                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
+                    // T-MagpieGems W2：导出是离开 IDE 面——mode != OFF 一律按 MASK 打码（从严）
+                    SqlExportService.format(rows, format, PluginSettings.getInstance().displayMaskExportOn()),
                 )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
@@ -1526,18 +1527,18 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        // R60：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
+        // R60 → T-MagpieGems W2：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
+        val maskMode = PluginSettings.getInstance().displayMaskMode()
+        val sql = withTerminator(displaySqlForList(entry, mode, maskMode))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMaskMode == maskMode.name }
             ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
-                entry.cachedListLineFragmentsMasked = maskOn
+                entry.cachedListLineFragmentsMaskMode = maskMode.name
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }

@@ -37,13 +37,44 @@ internal class SqlClickPreviewContent(val component: JComponent, val editor: Edi
  * 先补分号再格式化（生产已验证的分号处理路径）。纯函数，开关由调用方读设置传入。
  *
  * R60（T-LaneB D96）：[maskSql] 开时先脱敏（[DisplayMasker.maskDisplay]，展示层文本级）再走
- * 分号/格式化——脱敏只动浮层展示文本，条目数据层（restoredSql/params）不动；复制按钮复制
- * 的是脱敏后文本（安全分享语义）。
+ * 分号/格式化——脱敏只动浮层展示文本，条目数据层（restoredSql/params）不动。
+ *
+ * T-MagpieGems W2：按 [maskMode] 分级渲染（委托 [clickPreviewSql] 的 mode 主形态；
+ * 布尔重载向后兼容既有调用与测试）。
  */
-internal fun clickPreviewSql(sql: String, formatSql: Boolean, maskSql: Boolean = false): String {
-    val display = DisplayMasker.maskDisplay(sql, maskSql)
-    return if (formatSql) SqlFormatter.format(withTerminator(display)) else withTerminator(display)
+internal fun clickPreviewSql(sql: String, formatSql: Boolean, maskSql: Boolean = false): String =
+    clickPreviewSql(
+        sql, formatSql,
+        if (maskSql) DisplayMasker.MaskMode.MASK else DisplayMasker.MaskMode.OFF,
+    )
+
+/**
+ * 单击预览浮层/停靠预览文本（T-MagpieGems W2 主形态，按 [maskMode] 分级）：
+ *  - OFF：原文；
+ *  - MASK：打码文本；
+ *  - WARN：原文 + **文本头部追加警示行** `⚠ 检测到疑似敏感值：身份证×a、手机号×b`
+ *    （[DisplayMasker.scanSqlText] 计数为 0 则不追加；文案只含类别与次数，绝不回显原值）；
+ *  - BLOCK：阻断占位文本（白名单豁免后计数 0 时按 OFF 原样）。
+ * 只动浮层展示文本，条目数据层不动。
+ */
+internal fun clickPreviewSql(
+    sql: String,
+    formatSql: Boolean,
+    maskMode: DisplayMasker.MaskMode,
+    allowList: List<String> = emptyList(),
+): String {
+    val scan = DisplayMasker.scanSqlText(sql, maskMode, allowList)
+    val body = if (formatSql) SqlFormatter.format(withTerminator(scan.maskedSql)) else withTerminator(scan.maskedSql)
+    val warn = if (maskMode == DisplayMasker.MaskMode.WARN) DisplayMasker.warnLine(scan.counts) else null
+    return if (warn != null) warn + "\n" + body else body
 }
+
+/**
+ * T-MagpieGems W2：预览浮层复制文本的从严归一——复制是离开 IDE 面，mode != OFF 一律按
+ * MASK 行为打码（WARN 屏显原文，但复制出去的文本不得带原值）。OFF 原样（既有语义）。
+ */
+internal fun previewCopySafeText(text: String, maskMode: DisplayMasker.MaskMode): String =
+    if (maskMode == DisplayMasker.MaskMode.OFF) text else DisplayMasker.maskDisplay(text, true)
 
 /**
  * 修饰键是否表达列表多选意图（T-ClickPreviewCopyRestore）：Ctrl/Shift 单击是选择的开始或扩展，

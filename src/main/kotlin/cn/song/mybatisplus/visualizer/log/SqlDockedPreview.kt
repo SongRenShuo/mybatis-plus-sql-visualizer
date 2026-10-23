@@ -106,9 +106,12 @@ internal class SqlDockedPreview(
         }
         if (displayedEntry === entry) return
         val state = PluginSettings.getInstance().state
-        val sql = clickPreviewSql(entry.restoredSql, state.logFormatSql, state.displayMaskEnabled)
+        // T-MagpieGems W2：停靠预览按脱敏模式全语义渲染（WARN 原文+警示行、BLOCK 阻断占位）
+        val maskMode = PluginSettings.getInstance().displayMaskMode()
+        val sql = clickPreviewSql(entry.restoredSql, state.logFormatSql, maskMode, PluginSettings.getInstance().displayMaskAllowList())
         val current = content ?: SqlClickPreview.buildContent(project, sql, copyText = {
-            cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(it)
+            // T-MagpieGems W2：复制是离开 IDE 面——mode != OFF 从严按 MASK 打码（WARN 不给原文离开产品）
+            cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(previewCopySafeText(it, maskMode))
         }, close = onClose).also { built ->
             content = built
             built.editor.document.addDocumentListener(object : DocumentListener {

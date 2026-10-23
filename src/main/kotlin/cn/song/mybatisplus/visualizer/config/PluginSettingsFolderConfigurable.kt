@@ -612,9 +612,12 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
-            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
-            // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：T-MagpieGems W2 起该键是
+            // displayMaskModeCombo 分级下拉的行标签（控件可搜索身份仍在本条目，防「跳了不亮」幽灵条目），
+            // 搜「脱敏/展示/导出/打码」必须能翻到该行；完整性由 SettingsPanelSearchableGuardTest 守卫
             fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
+            // T-MagpieGems W2：豁免白名单文本域（行标签同键）；「白名单/豁免」可搜索命中
+            fields.add(SearchableField(b.message("settings.display.mask.allowList"), b.message("settings.display.mask.allowList.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 

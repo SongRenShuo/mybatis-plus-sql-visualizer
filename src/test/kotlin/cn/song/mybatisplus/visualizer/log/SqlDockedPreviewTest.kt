@@ -151,7 +151,8 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val before = settings.state
         try {
-            settings.loadState(before.copy(logFormatSql = false, displayMaskEnabled = true))
+            // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载（loadState 归一只认新字段）
+            settings.loadState(before.copy(logFormatSql = false, displayMaskMode = "MASK"))
             f.list.selectedIndex = 0
             f.host.toggle()
             val displayed = f.preview.displayedSqlForTest.orEmpty()
@@ -159,6 +160,47 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
             assertFalse("停靠预览不得泄漏原手机号", displayed.contains("13812345678"))
             assertEquals("展示脱敏不能改写条目数据", original, f.list.selectedValue.restoredSql)
         } finally {
+            f.preview.dispose()
+            settings.loadState(before)
+        }
+    }
+
+    fun test停靠预览WARN模式原文加警示行且复制从严() {
+        // contact 非关键词列 → 手机号走形态兜底（警示行才含「手机号」类别）
+        val original = "SELECT * FROM t WHERE contact = '13812345678' AND pwd = 'p@ss'"
+        val f = fixture(original)
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(logFormatSql = false, displayMaskMode = "WARN"))
+            f.list.selectedIndex = 0
+            f.host.toggle()
+            val displayed = f.preview.displayedSqlForTest.orEmpty()
+            assertTrue("WARN 屏显应保留原文", displayed.contains("13812345678"))
+            assertTrue("头部应追加警示行（含手机号类别）", displayed.substringBefore("\n")
+                .contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("mask.category.mobile")))
+            assertEquals("展示脱敏不能改写条目数据", original, f.list.selectedValue.restoredSql)
+        } finally {
+            f.host.hideHint()
+            f.preview.dispose()
+            settings.loadState(before)
+        }
+    }
+
+    fun test停靠预览BLOCK模式整段阻断占位() {
+        val original = "SELECT * FROM t WHERE phone = '13812345678'"
+        val f = fixture(original)
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(logFormatSql = false, displayMaskMode = "BLOCK"))
+            f.list.selectedIndex = 0
+            f.host.toggle()
+            val displayed = f.preview.displayedSqlForTest.orEmpty()
+            assertTrue("BLOCK 应输出阻断占位（含命中总数 1）", displayed.contains("1"))
+            assertFalse("原文手机号不得出现", displayed.contains("13812345678"))
+        } finally {
+            f.host.hideHint()
             f.preview.dispose()
             settings.loadState(before)
         }

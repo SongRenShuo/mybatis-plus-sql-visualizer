@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,6 +64,56 @@ class SqlLogListCopyTest : BasePlatformTestCase() {
             rawSql = "SELECT * FROM t WHERE id = ?",
         )
         assertEquals("SELECT * FROM t WHERE id = 10;", list.textFor(0, e))
+    }
+
+    // ---------- T-MagpieGems W2：Ctrl+C 复制是离开 IDE 面——mode != OFF 从严打码 ----------
+
+    private fun withMaskMode(mode: String, block: () -> Unit) {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.displayMaskMode = mode
+            block()
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun test复制链MASK模式敏感字面量打码() {
+        withMaskMode("MASK") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            val text = list.textFor(0, e)
+            assertTrue("MASK 复制应打码：$text", text.contains("'***'"))
+            assertFalse("原文手机号不得出产品：$text", text.contains("13812345678"))
+        }
+    }
+
+    fun test复制链BLOCK模式同样打码不吐占位外的原文() {
+        withMaskMode("BLOCK") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            val text = list.textFor(0, e)
+            assertFalse("原文手机号不得出产品：$text", text.contains("13812345678"))
+        }
+    }
+
+    fun test复制链WARN模式从严按MASK打码() {
+        withMaskMode("WARN") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            val text = list.textFor(0, e)
+            assertTrue("WARN 复制应从严打码（WARN 只给屏显原文）：$text", text.contains("'***'"))
+            assertFalse(text.contains("13812345678"))
+        }
+    }
+
+    fun test复制链OFF模式原文原样() {
+        withMaskMode("OFF") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            assertEquals("OFF 复制原文（既有默认观感）", "SELECT * FROM t WHERE phone = '13812345678';", list.textFor(0, e))
+        }
     }
 
     // ---------- T-ListPreviewCopy：右键批量复制 + 右键选中收敛 ----------

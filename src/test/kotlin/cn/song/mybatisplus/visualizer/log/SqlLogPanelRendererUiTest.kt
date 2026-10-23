@@ -535,34 +535,35 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
 
     fun test列表脱敏开_渲染文本打码() {
         val state = PluginSettings.getInstance().state
-        val saved = state.displayMaskEnabled
+        // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载（displayMaskEnabled 只作迁移源）
+        val saved = state.displayMaskMode
         try {
-            state.displayMaskEnabled = true
+            state.displayMaskMode = "MASK"
             val sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).sqlLine)
             assertTrue("脱敏开应打码: $sqlText", sqlText.contains("***"))
             assertFalse("原文手机号不得出现: $sqlText", sqlText.contains("13812345678"))
         } finally {
-            state.displayMaskEnabled = saved
+            state.displayMaskMode = saved
         }
     }
 
     fun test列表脱敏关_原文渲染() {
         val state = PluginSettings.getInstance().state
-        val saved = state.displayMaskEnabled
+        val saved = state.displayMaskMode
         try {
-            state.displayMaskEnabled = false
+            state.displayMaskMode = "OFF"
             val sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).sqlLine)
             assertTrue("脱敏关原文渲染: $sqlText", sqlText.contains("13812345678"))
         } finally {
-            state.displayMaskEnabled = saved
+            state.displayMaskMode = saved
         }
     }
 
     fun test摘要截断在敏感字面量中间_日志展示仍须脱敏() {
         val state = PluginSettings.getInstance().state
-        val saved = state.displayMaskEnabled
+        val saved = state.displayMaskMode
         try {
-            state.displayMaskEnabled = true
+            state.displayMaskMode = "MASK"
             val secret = "PRIVATE_MARKER_" + "x".repeat(200)
             val entry = entry("SELECT * FROM account WHERE password = '$secret'")
             assertTrue("夹具须在闭合引号前截断", entry.summary.contains("PRIVATE_MARKER_"))
@@ -571,7 +572,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             assertTrue("密码应按完整字面量打码：$displayed", displayed.contains("password = '***'"))
             assertFalse("截断的敏感片段不得泄漏：$displayed", displayed.contains("PRIVATE_MARKER_"))
         } finally {
-            state.displayMaskEnabled = saved
+            state.displayMaskMode = saved
         }
     }
 

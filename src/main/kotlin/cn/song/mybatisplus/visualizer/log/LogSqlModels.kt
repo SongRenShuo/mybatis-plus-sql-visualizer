@@ -223,13 +223,17 @@ data class LogSqlEntry(
     var cachedListLineFragmentsMode: SqlListDisplayMode? = null
 
     /**
-     * 缓存对应的脱敏态（R60 T-LaneB D96）：读取处按当前 displayMaskEnabled 比对——脱敏开关
-     * 翻转后旧缓存（打码/未打码形态）自动失效重渲染，防脏缓存（V112.3 附带发现）。
+     * 缓存对应的脱敏态（R60 T-LaneB D96；T-MagpieGems W2 起存 MaskMode 名）：读取处按当前
+     * displayMaskMode 比对——模式切换（OFF/WARN 原样、MASK 打码、BLOCK 占位四态互异）后旧缓存
+     * 自动失效重渲染，防脏缓存（V112.3 附带发现；W2 扩展）。
      */
-    var cachedListLineFragmentsMasked: Boolean = false
+    var cachedListLineFragmentsMaskMode: String = ""
 
     /** 脱敏展示前先处理完整 SQL，避免旧摘要在字面量引号中间截断后漏打码。 */
     var cachedMaskedSummary: String? = null
+
+    /** [cachedMaskedSummary] 对应的 MaskMode 名（T-MagpieGems W2）：MASK/BLOCK 产物不同，切模式须失效。 */
+    var cachedMaskedSummaryMode: String? = null
 
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
