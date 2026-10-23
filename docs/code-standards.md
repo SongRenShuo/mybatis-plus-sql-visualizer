@@ -1,0 +1,26 @@
+# code-standards（编码与验收标准）
+
+> 本文件的条目**全部来自 LESSONS.md 里 Seen 满 3 个不同日期的复发教训**（机制取自 magpie，2026-10-23 T-MagpieGems 建册）。
+> 格式两列：左列一句话祈使句规则，右列「审查者/复核者具体看什么」。审查定向测试报告、复核收口读数、评审他人提交时逐条对照；不满足的条目要在报告里点名说哪条不满足。
+> 新条目只能从 `LESSONS.md` 升级进来（Seen ≥ 3），不允许直接在本文件立新规。
+
+## Tests 与验证
+
+<a name="s1"></a>
+| 规则 | 复核者看什么 |
+|---|---|
+| **S1 EDT 与后台线程两段式归位，不找逃生舱** | 读 PSI/Document 的探测在 BGT 只走只读 API；写 Document 只派 EDT；ReadAction 内不开 WIRA（WIRA-in-WIRA 重入合法≠嵌套无害）；`allowSlowOperations` 已双重证伪，出现即打回。证据：262 `PsiFileFactory` EDT 硬抛、`Document.isModified` 移除、`PreviewSideQuery.kt:96-108` 的 `runProcess(EmptyProgressIndicator)` 修法先例、T-PreviewChainNoise（`9809a5b7`）A/B 组。 |
+| **S2 反向验证必须成对且有对照，空绿不算数** | 守卫/扫描/迁移类改动：摘掉修复分支必须变红（贴两次读数）；合成样本只证「规则看得见我造的形态」，须补真实形态对照；「仓内 0 违规」在写命中为 0 时是空绿；探针夹具值必须与守卫值拉开（L2）。 |
+| **S3 定向测试以判据数收读数** | `--tests` 过滤不匹配会静默跳过且 `BUILD SUCCESSFUL`——报告必须给每类用例数（XML/输出），判据数对不上类数即视为没跑；`testFast` 与 `--tests` 同用必失败，禁混用；改 State/守卫类跑 `testFast` 整桶（L3）。 |
+| **S4 收口多步禁用 `&&` 串联** | 多步收口用分号或显式检查每步退出码；合并/门禁的失败会伪装成「进行中」（曾致白等半小时）。 |
+| **S5 工作树所有权与并发写隔离** | 接手掉线代理先 `git status` + 搜临时探针/RED PROBE；并发车道禁同改 `src/main`（并发 worktree 改码曾致全量 ClassNotFoundException）；**提交后 `git show --stat HEAD` 必须只列自己的文件**，读数贴进报告；跑 gradle 前过 `parallel_tasks.py check` + 登记表。 |
+| **S6 证据看产物，不看文档自述** | 判断影响面/用户受影响面以 tag 树、发行物内容、二进制、实测请求为准；CHANGELOG/清单与产物不符即 blocker；「未复现」如实标注 not run，不得写成通过。 |
+| **S7 修 bug 必 grep 同型兄弟** | 修一处缺陷时 grep 同模式调用点/同形状守卫/同谓词分支，本次一并修或明确登记；证据：T-PreviewChainNoise A 组发现同文件 `:1837-1854` 早在 10-06 已删同款读盘而本函数没回填。 |
+
+## 提交与文档
+
+| 规则 | 复核者看什么 |
+|---|---|
+| **S8 提交信息走 UTF-8 文件 `-F`，body 带验证记录** | 禁 `git commit -m` 内联（反引号陷阱）；授权提交的 body 写「跑了什么定向、读数多少」；`python -c` 双引号串同根，编辑后必回读校验。 |
+| **S9 文档契约与代码同源** | 行为域文档（如 `docs/架构设计/子系统-*.md`）改契约须同批更新；链接指源文件与具名符号，不复制实现；一个事实只写一处、他处链接。 |
+| **S10 本机工具红线** | Git Bash 传 `/X` 参数一律 `.ps1` 化；robocopy 0~7 均成功；跨调用写文件用 Edit/Write 工具；中文请求体写 UTF-8 文件再 curl。 |
