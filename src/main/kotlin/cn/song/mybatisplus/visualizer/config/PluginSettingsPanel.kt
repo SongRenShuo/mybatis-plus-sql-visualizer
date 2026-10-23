@@ -92,8 +92,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
         val SECTION_ALL = setOf(SECTION_PREVIEW, SECTION_TABLE_MAPPING, SECTION_CODE_GEN, SECTION_SQL_LOG, SECTION_UI, SECTION_UPDATE_DIAGNOSTICS, SECTION_SHORTCUTS)
     }
 
-    /** 展示脱敏模式下拉选项（值 + 显示文案；data class 按 value 判等，对齐 LanguageOption 范式）。 */
-    internal data class MaskModeOption(val label: String, val value: String) {
+    /**
+     * 展示脱敏模式下拉选项（枚举本体 + 显示文案；data class 按 mode 判等，对齐 LanguageOption 范式）。
+     * W2 守卫批（EnumReachabilityGuardTest）改携带枚举本体：WARN/BLOCK 在实参位有了唯一产出点，
+     * 不再是「有消费零产出」的死常量；持久化仍走 [value]（name 串）。
+     */
+    internal data class MaskModeOption(val label: String, val mode: cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode) {
+        val value: String get() = mode.name
         override fun toString(): String = label
     }
 
@@ -103,10 +108,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 内重建面板，companion 静态清单会把旧语言冻住）。
      */
     private val maskModeOptions: List<MaskModeOption> = listOf(
-        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.off"), "OFF"),
-        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.mask"), "MASK"),
-        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.warn"), "WARN"),
-        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.block"), "BLOCK"),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.off"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.mask"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.warn"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.WARN),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.block"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.BLOCK),
     )
 
     /**

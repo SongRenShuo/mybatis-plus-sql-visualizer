@@ -337,10 +337,26 @@ class DisplayMaskerTest {
     }
 
     @Test
-    fun test_非INSERT语句_旧规则不变() {
-        assertEquals(
-            "SELECT * FROM t WHERE password = '***'",
-            DisplayMasker.maskSqlText("SELECT * FROM t WHERE password = 'x'"),
-        )
+    fun test脱敏引擎异常_failClosed按阻断兜底不裸出原文() {
+        // T-MagpieGems W5（code-standards M1）：摘掉 safely 包装 → 本例必红（异常透传/原文裸出）
+        val sql = "INSERT INTO t(password) VALUES('Secret123X')"
+        val expected = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.preview.maskFailed")
+        val prev = DisplayMasker.faultHook
+        DisplayMasker.faultHook = { error("boom") }
+        try {
+            for (mode in listOf(
+                DisplayMasker.MaskMode.MASK,
+                DisplayMasker.MaskMode.WARN,
+                DisplayMasker.MaskMode.BLOCK,
+            )) {
+                assertEquals("mode=$mode 引擎异常应落到兜底文案", expected, DisplayMasker.maskDisplay(sql, mode))
+                assertFalse("mode=$mode 不得裸出原文", DisplayMasker.maskDisplay(sql, mode).contains("Secret123X"))
+            }
+            // OFF 档入口短路：不扫描=引擎不参与，故障注入不影响
+            assertEquals(sql, DisplayMasker.maskDisplay(sql, DisplayMasker.MaskMode.OFF))
+            assertEquals(sql, DisplayMasker.maskDisplay(sql, enabled = false))
+        } finally {
+            DisplayMasker.faultHook = prev
+        }
     }
 }

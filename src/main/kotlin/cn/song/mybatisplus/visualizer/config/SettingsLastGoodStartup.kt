@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.log.SqlSuppressRuleManager
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -43,6 +44,7 @@ class SettingsLastGoodStartup : ProjectActivity {
                 try {
                     runMaintenanceOnce(defaultTargets(), ::notifyIfNeeded, notified)
                 } catch (e: Throwable) {
+                    if (FatalErrors.isFatal(e)) throw e
                     // 维护线程绝不中断巡检：单轮失败记日志进下一轮
                     LOG.warn("SettingsLastGoodStartup: 巡检轮失败：$e")
                 }
@@ -122,6 +124,7 @@ class SettingsLastGoodStartup : ProjectActivity {
                 .createNotification(MpSqlVisualizerBundle.message("settings.lastgood.title"), content, NotificationType.WARNING)
                 .notify(null)
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e
             // 通知失败不影响恢复本身
             LOG.warn("SettingsLastGoodStartup: 通知失败：$e")
         }

@@ -360,10 +360,21 @@
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.agent"
                            displayType="BALLOON"/>
+
+        <!-- T-MagpieGems W3：设置文件 lastgood 防护（坏文件存证回落）——独立组：一域一组惯例 -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.settingsguard"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.settingsguard"
+                           displayType="BALLOON"/>
+
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.log.LogStartupCapture"/>
+
+        <!-- T-MagpieGems W3：应用级设置文件巡检（坏文件存证 + .bak 回落 + 定期刷新副本），
+             应用级去重（多项目只拉一条 daemon 线程），headless/单测跳过 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.config.SettingsLastGoodStartup"/>
 
         <!-- T-UxOnboard T-UX-01：首用锚点一次性引导——编辑器打开事件节流探测（低频入口），
              检测到可预览 SQL 时经预览组弹一次「Alt+Shift+Q」指路通知；一次性状态持久化

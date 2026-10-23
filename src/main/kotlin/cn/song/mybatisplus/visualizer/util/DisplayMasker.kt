@@ -158,7 +158,7 @@ object DisplayMasker {
      * Secret123X 的 hint 变成上一列的 ui_mask_probe → 漏打；下一列值的 hint 变成 Secret123X →
      * 因含 secret 误打）。列清单解析失败/值数超出列数时逐位回退旧规则。
      */
-    fun maskSqlText(sql: String): String = scanSqlText(sql, MaskMode.MASK).maskedSql
+    fun maskSqlText(sql: String): String = safely { scanSqlText(sql, MaskMode.MASK).maskedSql }
 
     /**
      * SQL 文本按 [mode] 扫描（W2 主入口）：OFF 原样不扫描；MASK 打码；WARN 原文 + 计数；
@@ -198,16 +198,46 @@ object DisplayMasker {
         return MaskScan(masked, counts)
     }
 
-    /** 链入口（旧布尔开关，向后兼容）：[enabled] 开 → [maskSqlText]，关 → 原文逐字。 */
+    /** 链入口（旧布尔开关，向后兼容）：[enabled] 开 → [maskSqlText]（内部已 fail-closed），关 → 原文逐字。 */
     fun maskDisplay(sql: String, enabled: Boolean): String = if (enabled) maskSqlText(sql) else sql
 
     /**
      * 链入口（W2 主入口，按 mode 渲染）：OFF/WARN → 原文、MASK → 打码、BLOCK → 阻断占位
      * （或白名单豁免后按 OFF 原样）。屏显面直接用；离开 IDE 面的调用方须先归一
      * （mode != OFF 一律按 [MaskMode.MASK] 传入）再走本入口。
+     *
+     * **fail-closed 契约（T-MagpieGems W5，code-standards M1）**：脱敏引擎任何异常一律按
+     * 阻断兜底（bundle `log.preview.maskFailed`），**绝不裸出原文**——脱敏面宁可误伤展示
+     * 也不泄漏（对齐 magpie `ErrUnmasked` 语义）；OFF 档在入口短路（不扫描=引擎不参与，
+     * 不进兜底）。
      */
     fun maskDisplay(sql: String, mode: MaskMode, allowList: List<String> = emptyList()): String =
-        scanSqlText(sql, mode, allowList).maskedSql
+        if (mode == MaskMode.OFF) sql else safely { scanSqlText(sql, mode, allowList).maskedSql }
+
+    /**
+     * fail-closed 兜底包装：脱敏抛错 → 记日志 + 阻断文案，不把异常透给渲染链
+     * （透传等于把「引擎坏了」变成「原文全裸」，两者取其轻）。
+     */
+    private fun safely(block: () -> String): String =
+        try {
+            faultHook?.invoke()
+            block()
+        } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t
+            // 保持本类零平台依赖：故障走 stderr（Logger 需要平台类，KDoc 口径同步）
+            System.err.println("[DisplayMasker] fail-closed: 脱敏引擎异常，按阻断兜底：$t")
+            maskedFailedText()
+        }
+
+    /** 引擎异常时的兜底文案（bundle `log.preview.maskFailed`）。 */
+    private fun maskedFailedText(): String = MpSqlVisualizerBundle.message("log.preview.maskFailed")
+
+    /**
+     * W5 反向探针缝：测试注入脱敏引擎故障用（生产恒 null，scanSqlText 入口处触发一次）。
+     * OFF 档在触发点之前返回，不受注入影响——这是契约的一部分（OFF=不扫描，引擎不参与）。
+     */
+    @Volatile
+    internal var faultHook: (() -> Unit)? = null
 
     /** BLOCK 占位文本（bundle `log.preview.maskBlocked`，{0}=命中总数）。 */
     private fun blockedPlaceholder(total: Int): String = MpSqlVisualizerBundle.message("log.preview.maskBlocked", total)

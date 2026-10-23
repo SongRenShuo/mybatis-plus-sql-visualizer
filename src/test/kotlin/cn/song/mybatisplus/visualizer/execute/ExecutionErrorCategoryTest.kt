@@ -40,7 +40,7 @@ class ExecutionErrorCategoryTest {
         assertEquals(ExecutionErrorCategory.PERMISSION, ExecutionErrorClassifier.classify(info("SELECT command denied to user 'u'@'h' for table 't'", "42000", 1142)))
         assertEquals(ExecutionErrorCategory.PERMISSION, ExecutionErrorClassifier.classify(info("insufficient privileges", null, 1031)))
         assertEquals(ExecutionErrorCategory.PERMISSION, ExecutionErrorClassifier.classify(info("permission denied for table x", "42501", null)))
-        assertEquals(ExecutionErrorCategory.PERMISSION, ExecutionErrorClassifier.classify(info("user does not have permission", null, null)))
+        assertEquals(ExecutionErrorCategory.PERMISSION, ExecutionErrorClassifier.classify(info("Access denied; you need (at least one of) the SUPER privilege(s) for this operation", "42000", 1227)))
     }
 
     // ---------- OBJECT_MISSING ----------
@@ -109,9 +109,9 @@ class ExecutionErrorCategoryTest {
         assertTrue("出路提示追加在末行", text.endsWith(expectedHint))
         assertTrue("提示不含原值", !expectedHint.contains(sensitiveValue))
         // CONNECTION 与 OTHER 无出路提示
-        assertEquals("plain", ExecutionErrorFormatter.format(info("offline", errorCode = 0)))
+        assertEquals("offline", ExecutionErrorFormatter.format(info("offline", errorCode = 0)))
         assertEquals(
-            "Communications link failure",
+            "Communications link failure\nerrorCode: 2013",
             ExecutionErrorFormatter.format(info("Communications link failure", null, 2013)),
         )
     }

@@ -152,7 +152,7 @@ class StateFileLastGoodTest {
         val restored = SampleState()
         XmlSerializer.deserializeInto(
             restored,
-            org.jdom.input.SAXBuilder().build(Files.newInputStream(bakFile)).rootElement,
+            org.jdom.input.SAXBuilder().build(Files.newInputStream(bakFile)).rootElement.getChild("component"),
         )
         assertEquals("mustStay", restored.name)
         assertEquals(1, restored.count)
