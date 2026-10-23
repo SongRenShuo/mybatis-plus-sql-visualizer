@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.config
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.JDOMUtil
 import com.intellij.util.xmlb.XmlSerializer
-import org.jdom.Document
+
 import org.jdom.Element
-import java.io.ByteArrayInputStream
+
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
@@ -52,11 +52,12 @@ object StateFileLastGood {
     data class Outcome(val status: Status, val detail: String?)
 
     /**
-     * 校验字节是否可解析为 XML 文档；解析失败返回 null（不抛）。
+     * 校验文件是否可解析为 XML；可解析返回根 Element（null=解析失败，不抛）。
      * 注意这是「结构合法」检查，不校验 State 字段——字段级容错由各组件 loadState 自己负责。
+     * 走非废弃的 [JDOMUtil.load]（Path 形态；InputStream/Document 形态已标废弃，Verifier 会算账）。
      */
-    fun parseDocument(bytes: ByteArray): Document? = try {
-        JDOMUtil.loadDocument(ByteArrayInputStream(bytes))
+    fun loadValidRoot(mainFile: Path): Element? = try {
+        JDOMUtil.load(mainFile)
     } catch (e: Exception) {
         null
     }
@@ -76,7 +77,7 @@ object StateFileLastGood {
             LOG.warn("StateFileLastGood.refreshBackup: 主文件读取失败（${mainFile.fileName}）：$e")
             return false
         }
-        if (parseDocument(bytes) == null) return false
+        if (loadValidRoot(mainFile) == null) return false
         if (Files.exists(bakFile)) {
             val old = try {
                 Files.readAllBytes(bakFile)
@@ -116,14 +117,14 @@ object StateFileLastGood {
         apply: (T) -> Unit,
     ): Outcome {
         if (!Files.exists(mainFile)) return Outcome(Status.NO_FILE, null)
-        val mainBytes = try {
+        try {
             Files.readAllBytes(mainFile)
         } catch (e: Exception) {
             // 读不出（锁/权限）≠ 文件坏：按 NO_FILE 处置，不存证不回落，等下轮维护再查
             LOG.warn("StateFileLastGood: 主文件读取失败，本轮跳过（${mainFile.fileName}）：$e")
             return Outcome(Status.NO_FILE, null)
         }
-        if (parseDocument(mainBytes) != null) {
+        if (loadValidRoot(mainFile) != null) {
             refreshBackup(mainFile, bakFile)
             return Outcome(Status.HEALTHY, null)
         }
@@ -144,13 +145,8 @@ object StateFileLastGood {
         }
 
         if (!Files.exists(bakFile)) return Outcome(Status.CORRUPT_NO_BACKUP, evidenceName)
-        val bakBytes = try {
-            Files.readAllBytes(bakFile)
-        } catch (e: Exception) {
-            return Outcome(Status.CORRUPT_NO_BACKUP, evidenceName)
-        }
-        val bakDoc = parseDocument(bakBytes) ?: return Outcome(Status.CORRUPT_NO_BACKUP, evidenceName)
-        val component = componentElementOf(bakDoc, componentName)
+        val bakRoot = loadValidRoot(bakFile) ?: return Outcome(Status.CORRUPT_NO_BACKUP, evidenceName)
+        val component = componentElementOf(bakRoot, componentName)
             ?: return Outcome(Status.CORRUPT_NO_BACKUP, evidenceName)
         val restored = try {
             val bean = stateClass.getDeclaredConstructor().newInstance()
@@ -170,8 +166,8 @@ object StateFileLastGood {
     }
 
     /** options XML 结构：`<application><component name="...">状态字段…</component></application>`。 */
-    private fun componentElementOf(doc: Document, componentName: String): Element? =
-        doc.rootElement.getChildren("component").firstOrNull { it.getAttributeValue("name") == componentName }
+    private fun componentElementOf(root: Element, componentName: String): Element? =
+        root.getChildren("component").firstOrNull { it.getAttributeValue("name") == componentName }
 
     private fun existingEvidence(mainFile: Path): Path? {
         val dir = mainFile.parent ?: return null

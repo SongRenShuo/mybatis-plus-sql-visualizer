@@ -119,7 +119,7 @@ magpie 出处：`docs/subsystems/README.md` 维护规约（证据详见调研报
 | `060ffaeb` | （W2 车道代修）`36e70767` 编译三连错——教训已入 LESSONS L11 |
 | `acc4a276` | W2 本体：脱敏四档分级 + Allow 白名单 + Hint 计数 + 复制/导出缺口补齐（29 文件 +793/−107，16 测试类 266 例） |
 | `b57d23d2` | 守卫批收口：EnumReachabilityGuard（面板选项携带枚举本体=WARN/BLOCK 产出点）+ BannedApiScanRule（三处 catch(Throwable) 补 `FatalErrors.isFatal` 透传）+ BundleParity（mode 4 键）+ W3 通知键/plugin.xml 注册 + W4 提示键 + W5 fail-closed 兜底（faultHook 探针缝）+ 测试修正 |
-| （本次） | W7 展示脱敏链子系统文档 + L11 + 本节回填 |
+| `7a`（本次） | W7 展示脱敏链子系统文档 + L11 + 本节回填 + verifier 收口（loadValidRoot 换非废弃 API） |
 
 ### 前提核销
 
@@ -132,7 +132,7 @@ magpie 出处：`docs/subsystems/README.md` 维护规约（证据详见调研报
 
 - 定向：W2 十六类 266/0/0（子代理交）；W3/W4/W5 四类 71/0/0。
 - 反向探针：W2 白名单摘除恰 2 红（子代理交）；W3 存证摘除恰 3 红；W4 权限摘除恰 2 红；W5 safely 摘除恰 1 红——全部还原回绿，grep 零残留。
-- 收口：testFast **4168/0/7**（338 文件判据数实测；首跑 3 守卫红已修）。全量 `testShards` 未跑（流程+局部增强改动，按三档分层留待下轮统一全量；构建校验不触发）。
+- 收口：testFast **4168/0/7**（338 文件判据数实测；首跑 3 守卫红已修）。verifyPlugin：verdict **Compatible**（本轮动了 plugin.xml EP 注册触发构建校验；发现并消掉我方唯一一条新增废弃用法 `JDOMUtil.loadDocument(InputStream)`→`load(Path)`，deprecated 41→40 回基线，我方类零 verifier 记账；MISSING_DEPENDENCIES=两个 optional 依赖在 verifier IDE 不可用，属既有基线——verifyPlugin 本身已降级为报告生成器，权威 failureLevel=COMPATIBILITY_PROBLEMS）。全量 `testShards` 未跑（留下轮统一全量）。
 - 真机走查：**not run**（W2 设置页/脱敏四档、W3 恢复通知、W4 错误提示的沙盒/真机复核留用户）。
 
 ### 有意偏离

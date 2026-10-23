@@ -6,7 +6,6 @@ import org.jdom.Element
 import org.jdom.output.XMLOutputter
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -208,7 +207,11 @@ class StateFileLastGoodTest {
     fun test常量与结构契约() {
         assertEquals(".bak", StateFileLastGood.BAK_SUFFIX)
         assertEquals(".bad-", StateFileLastGood.BAD_INFIX)
-        assertFalse(StateFileLastGood.parseDocument("rubbish".toByteArray()) != null)
-        assertNotNull(StateFileLastGood.parseDocument("<application/>".toByteArray()))
+        val bad = dir.resolve("bad.xml")
+        val good = dir.resolve("good.xml")
+        Files.write(bad, "rubbish".toByteArray())
+        Files.write(good, "<application/>".toByteArray())
+        assertNull(StateFileLastGood.loadValidRoot(bad))
+        assertNotNull(StateFileLastGood.loadValidRoot(good))
     }
 }
