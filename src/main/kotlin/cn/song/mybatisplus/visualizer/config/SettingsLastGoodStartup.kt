@@ -1,7 +1,8 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.log.SqlSuppressRuleManager
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import com.intellij.NotificationGroupManager
+import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
@@ -127,8 +128,10 @@ class SettingsLastGoodStartup : ProjectActivity {
     }
 
     private fun dispatchEdt(block: () -> Unit) {
-        val app = ApplicationManager.getApplication() ?: run(block)
-        if (app.isDispatchThread) block() else app.invokeLater(block)
+        // W2 车道编译修复（36e70767 提交时未编译）：原写法 `?: run(block)` 让 app 推导成 Any
+        // （elvis 右侧 Unit），isDispatchThread/invokeLater 双双 unresolved。语义等价改写：
+        val app = ApplicationManager.getApplication()
+        if (app == null || app.isDispatchThread) block() else app.invokeLater(block)
     }
 
     companion object {
