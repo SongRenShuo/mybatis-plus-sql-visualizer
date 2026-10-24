@@ -113,13 +113,15 @@ magpie 出处：`docs/subsystems/README.md` 维护规约（证据详见调研报
 
 | hash | 内容 |
 |---|---|
-| `8f6b3faa` | W1+W6：`docs/LESSONS.md`（种子 L1~L10，四段式）+ `docs/code-standards.md`（S1~S10）+ `docs/开发流程-派活与验收清单.md` + docs/MEMORY.md 两处指针。仓根 AGENTS.md 因本仓 `.gitignore` 有意忽略 `/AGENTS.md`（:67），按本地文件留用、权威指针在 docs/MEMORY.md |
+| `8f6b3faa` | W1+W6：`docs/LESSONS.md`（种子 L1~L10，四段式）+ `docs/code-standards.md`（S1~S10）+ `docs/开发流程-派活与验收清单.md` + docs/MEMORY.md 两处指针。仓根 AGENTS.md 按本地文件留用（后续 `231378e1` 放行入库：删 `.gitignore:67`，实测宽规则 `AGENTS` 不命中 AGENTS.md 无需负规则） |
 | `36e70767` | W3+W4 代码线：`StateFileLastGood`（三件套纯函数）+ `SettingsLastGoodStartup`（巡检接线）+ `ExecutionErrorCategory`（五档分类）+ `format` 出路提示接线 + 两测试类 + 预览执行链子系统文档 |
 | `f201597d` | W5 标准条目：code-standards 机制导入节 + M1 扩展点失败策略契约 |
 | `060ffaeb` | （W2 车道代修）`36e70767` 编译三连错——教训已入 LESSONS L11 |
 | `acc4a276` | W2 本体：脱敏四档分级 + Allow 白名单 + Hint 计数 + 复制/导出缺口补齐（29 文件 +793/−107，16 测试类 266 例） |
 | `b57d23d2` | 守卫批收口：EnumReachabilityGuard（面板选项携带枚举本体=WARN/BLOCK 产出点）+ BannedApiScanRule（三处 catch(Throwable) 补 `FatalErrors.isFatal` 透传）+ BundleParity（mode 4 键）+ W3 通知键/plugin.xml 注册 + W4 提示键 + W5 fail-closed 兜底（faultHook 探针缝）+ 测试修正 |
-| `7a`（本次） | W7 展示脱敏链子系统文档 + L11 + 本节回填 + verifier 收口（loadValidRoot 换非废弃 API） |
+| `490b2e9b` | 收尾：展示脱敏链子系统文档 + LESSONS L11 + 本节回填 + 索引状态 |
+| `b5e5a8b9` | verifier 收口：loadValidRoot 换非废弃 `JDOMUtil.load(Path)`（deprecated 41→40 回基线，我方类零 verifier 记账；verdict Compatible） |
+| `231378e1` | AGENTS.md 入库：删 `.gitignore:67` 放行（纯指针随仓走，更新只改 docs/ 侧） |
 
 ### 前提核销
 
