@@ -1,0 +1,22 @@
+{
+  "name": "example-preview",
+  "region": [277, 25, 1370, 984],
+  "targets": {
+    "gutterIcon": [300, 220],
+    "executeButton": [1256, 829]
+  },
+  "steps": [
+    { "do": "move", "target": "gutterIcon", "dur": 0.5 },
+    { "do": "click", "target": "gutterIcon", "label": "gutter 预览图标" },
+    { "do": "wait", "ms": 2500 },
+    { "do": "move", "target": "executeButton", "dur": 0.6 },
+    { "do": "click", "target": "executeButton", "label": "执行 SQL 按钮" },
+    { "do": "wait", "ms": 3000 },
+    { "do": "shot", "name": "perf/example_preview_final.png" }
+  ],
+  "unseen": [
+    "真机正式许可下的表现（本演示录制于 runIde 沙盒）",
+    "大工程索引规模下的耗时",
+    "用户真实库的方言与权限差异（演示用本地 demo 库）"
+  ]
+}

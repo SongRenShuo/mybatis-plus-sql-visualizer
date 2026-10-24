@@ -86,6 +86,19 @@
 **正例**：提交前跑一次 `./gradlew compileKotlin compileTestKotlin`（增量秒级）；或改码与提交隔轮；**反例**：「我的改动是纯新增文件，编译肯定没问题」。
 **Seen 1× (2026-10-24)**
 
+### L12 守卫的口径要以生产代码的实际契约为准，不能按「更严格更好」想象
+
+**证据**：T-TestGateGems（2026-10-24）W3 动作矩阵第一版断言「空上下文下 `isVisible == false`」，实测 3 个选中类动作本来就设计成**常驻可见、按上下文灰置**（`SelectedTableSqlTemplateAction.update` 只设 `isEnabled`）⇒ 假红；自证用例又因「共用同一 `AnActionEvent` + 复位写反」二次假红。改断 `isEnabled == false` 后转绿，摘掉 `isEnabled` 赋值反向恰红。
+**正例**：先读被守卫代码的 `update()`/绘制方法体确认契约，再定断言；自证用例每条用独立夹具（事件/对象），别复用可变状态。
+**反例**：「不可见比不可用更严格，所以断言可见性更保险」——严格不等于正确，契约不对就是假红。
+**Seen 1× (2026-10-24)**
+
+### L13 PowerShell 脚本必须存 UTF-8 BOM，否则 PS 5.1 按 ANSI 解码中文注释
+
+**证据**：T-TestGateGems（2026-10-24）`gate-readout.ps1` 无 BOM 落盘，PS 5.1 解析报「Missing closing '}'」且行号指向 `switch` 行（真实原因是中文注释的字节被 ANSI 解码后引号错配）；仓内既有 `push-all.ps1`/`ci-verify.ps1` 均带 BOM。
+**正例**：新建 `.ps1` 一律带 BOM；另注意 Git Bash 直调 `powershell -File` 会吞退出码，核验退出码须 `-Command "& '...ps1' ...; exit $LASTEXITCODE"`。
+**Seen 1× (2026-10-24)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
