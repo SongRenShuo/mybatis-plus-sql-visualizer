@@ -7,7 +7,7 @@
 - **magpie（`docs/内部/调研报告/20261023-2311-magpie-*.md` §5.3）**：更新器双保险——换名暂存（运行中的 exe 移到 `exe.old` 再放新文件）+ 起新失败自动还原（`update.go:453-502、721-728`）。
 **基线**：`t-magpie-gems@e35a0d7c`（自更新链 13 类：`update/PluginUpdateRunner` 编排、`DynamicInstallSupport` 热替换、`PlatformPluginInstaller` 脚本兜底、`UpdateZipGuard`、`VersionIgnore`…）。
 **编号**：占 **O-150**（竞品 28 轮册口径「下一全新号自 O-150 起」；子序列取号先查主线台账）。
-**状态**：计划待拍板。**P-1 已于立项当日核实并证伪「零成本标记」**（2026-10-24，243 sources `com/intellij/ide/plugins/PluginInstaller.java` 三处实证：动态卸载后 `FileUtil.delete(pluginPath)` :117、`unpackPlugin` 解压前 `NioFiles.deleteRecursively(target)` 删旧同名目录 :209、重启安装 `DeleteCommand(existingPlugin)` :157——平台所有路径均为「删旧」语义，旧包零保留）⇒ **W1 定案：主动备份，两条路径统一一套 `UpdateBackupStore`**（双轨分叉反而复杂；包 3.4MB 级一份封顶成本可忽略）。**W1 备份时机随之订正：必须在 `DynamicInstallSupport.install` 调 `unloadPlugin` 之前（validateArtifact 通过后立即）——原文「安装新包成功后留存」不成立，安装成功那一刻旧目录已被平台删除**。
+**状态**：W1+W2 已实施（2026-10-24，实施记录见 §六；W3 为边界声明无代码）。**P-1 已于立项当日核实并证伪「零成本标记」**（2026-10-24，243 sources `com/intellij/ide/plugins/PluginInstaller.java` 三处实证：动态卸载后 `FileUtil.delete(pluginPath)` :117、`unpackPlugin` 解压前 `NioFiles.deleteRecursively(target)` 删旧同名目录 :209、重启安装 `DeleteCommand(existingPlugin)` :157——平台所有路径均为「删旧」语义，旧包零保留）⇒ **W1 定案：主动备份，两条路径统一一套 `UpdateBackupStore`**（双轨分叉反而复杂；包 3.4MB 级一份封顶成本可忽略）。**W1 备份时机随之订正：必须在 `DynamicInstallSupport.install` 调 `unloadPlugin` 之前（validateArtifact 通过后立即）——原文「安装新包成功后留存」不成立，安装成功那一刻旧目录已被平台删除**。
 
 ---
 
@@ -65,3 +65,20 @@ W1+P-1/P-2/P-3 核实一批（改动集中在 `PlatformPluginInstaller`/新 `Upd
 - `update/update.json 只有用户能改`是铁律——本计划**不动清单与发行面**，只动客户端安装/回滚侧；
 - 回滚脚本与更新脚本同用平台 startup script 机制，调度冲突（同插件两条 pending 命令）须在 W1 排队互斥；
 - 备份目录写盘失败（磁盘满）不得阻断正常升级（fail-open：快照失败=可升级但记录「本轮无回滚源」日志与提示），与脱敏 fail-closed 形成显式对照。
+
+---
+
+## 六、实施记录（2026-10-24 回填）
+
+**提交**：W1+W2 一笔（`update/UpdateBackupStore.kt` 293 行 + `UpdateSection` 回滚行 + `downloadAndInstall` 接线 + 双语 7 键 + 两测试类），W3 边界已在本计划 §三 声明、无代码。
+
+**P-2/P-3/P-4 核销**：
+- P-2：恢复命令与升级脚本同机制同构（`DeleteCommand(当前目录) + UnzipCommand(备份zip, plugins根)`），无需新时序——已按此实现。
+- P-3：备份落点 `PathManager.getPluginTempPath()/update-backup/`（plugins 目录外，零重复装载风险）；备份形态=zip（平台 `CopyCommand` 只收 `isRegularFile`，243 sources :184 实证——目录不可拷贝，计划原文「copy 目录」不成立，已按 zip 实现，顶层 entry=插件目录名与发行 zip 同构）。
+- P-4：Marketplace 渠道边界落在 noBackup 文案（指引用户去 Gitee Releases 手动装旧版），未承诺一键回滚。
+
+**有意偏离**：①脚本路径未改 DeleteCommand→move——备份已在运行期完成（install seam 前），脚本删旧时备份已就位，改脚本反而增加重启命令复杂度；②manifest 用 JDK Properties 而非 JSON（仓内无 JSON 库依赖，先例 SettingsIO 手写解析，4 个标量字段 Properties 更稳）。
+
+**读数**：定向 4 类 56/0/0（新增 UpdateBackupStoreTest 9 例 + UpdateSectionTest 追加 5 例）；反向三组恰红（sha256 摘除 1 红/ignore 联动摘除 1 红/接线整行摘除 1 红；`if(false)` 前缀不触发属探针形态无效，非守卫缺陷）；testFast **4177/0/7**。首跑翻车一例：Windows 句柄锁（ZipFile use 块内 Files.move）——测试 bug 已修。
+
+**not run**：243/262 真机沙盒「升级→回滚→重启→旧版可用且新版被忽略」端到端（startup script 阶段 headless 盖不住，留用户复验）。
