@@ -7,7 +7,7 @@
 - **magpie（`docs/内部/调研报告/20261023-2311-magpie-*.md` §5.3）**：更新器双保险——换名暂存（运行中的 exe 移到 `exe.old` 再放新文件）+ 起新失败自动还原（`update.go:453-502、721-728`）。
 **基线**：`t-magpie-gems@e35a0d7c`（自更新链 13 类：`update/PluginUpdateRunner` 编排、`DynamicInstallSupport` 热替换、`PlatformPluginInstaller` 脚本兜底、`UpdateZipGuard`、`VersionIgnore`…）。
 **编号**：占 **O-150**（竞品 28 轮册口径「下一全新号自 O-150 起」；子序列取号先查主线台账）。
-**状态**：计划待拍板。
+**状态**：计划待拍板。**P-1 已于立项当日核实并证伪「零成本标记」**（2026-10-24，243 sources `com/intellij/ide/plugins/PluginInstaller.java` 三处实证：动态卸载后 `FileUtil.delete(pluginPath)` :117、`unpackPlugin` 解压前 `NioFiles.deleteRecursively(target)` 删旧同名目录 :209、重启安装 `DeleteCommand(existingPlugin)` :157——平台所有路径均为「删旧」语义，旧包零保留）⇒ **W1 定案：主动备份，两条路径统一一套 `UpdateBackupStore`**（双轨分叉反而复杂；包 3.4MB 级一份封顶成本可忽略）。**W1 备份时机随之订正：必须在 `DynamicInstallSupport.install` 调 `unloadPlugin` 之前（validateArtifact 通过后立即）——原文「安装新包成功后留存」不成立，安装成功那一刻旧目录已被平台删除**。
 
 ---
 
