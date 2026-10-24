@@ -64,7 +64,6 @@ reasonix.toml
 .DS_Store
 /.idea/
 .ace-tool/
-/AGENTS.md
 /scripts/**
 /.agents/
 /.codex/
