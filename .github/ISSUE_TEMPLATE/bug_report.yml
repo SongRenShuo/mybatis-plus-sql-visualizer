@@ -1,0 +1,83 @@
+name: 缺陷报告
+description: 插件行为异常、报错或结果不符合预期
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **先看这里**：这个 Issue 区是镜像仓的备用入口，使用问题与功能建议请优先走[官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)，
+        > 那里能看到处理进度，也方便贴附件。只有可复现的代码级缺陷才建议在这里提。
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本
+      description: Settings → Tools → SQL Visualizer → 关于，或 Plugins 页显示的版本号
+      placeholder: 例如 2026.10.23-beta.1
+    validations:
+      required: true
+
+  - type: input
+    id: ide-version
+    attributes:
+      label: IDE 版本与发行版
+      description: Community 或 Ultimate，以及完整构建号
+      placeholder: 例如 IU-2024.3.7.1 / IC-2024.3.7.1
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: 例如 Windows 11 23H2 / macOS 15.1 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: orm-db
+    attributes:
+      label: 相关 ORM / 数据库（如适用）
+      placeholder: 例如 MyBatis-Plus 3.5.15 + MySQL 8.0 / JPA + PostgreSQL 16
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 尽量给出最小可复现路径
+      placeholder: |
+        1. 打开 xxx 类
+        2. 点击左侧预览图标
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: |
+        插件日志：Help → Show Log in Explorer / Show Log in Finder。
+        请勿粘贴真实连接串、密码或未脱敏的业务数据。
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 是否稳定复现、是否只在本项目出现、最近是否升级过插件或 IDE

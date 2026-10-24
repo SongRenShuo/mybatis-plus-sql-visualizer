@@ -70,6 +70,9 @@ public class AttachPoolWarmGateTest {
 
     @org.junit.Test
     public void 模式C_对照_attach后新建连接_事件到达() throws Exception {
+        // T-CiRelease（20261024）：A2/B2/A3/A4 均有探活门控，主场景 A/B/C 漏接——与类头
+        // 「不可达时整类 Assume 跳过」声明不符（20261024 CI 无 MySQL 时三模式红而非跳的实证）。
+        org.junit.Assume.assumeTrue("MySQL 不可达，模式C 跳过（环境受限未验证）", mysqlReachable());
         RunResult r = runMode("C", "attachpool_c", new ArrayList<String>(), WAIT_SECONDS * 1000L);
         report("C", r);
         org.junit.Assert.assertTrue("模式C（对照，attach 后新建连接）应收到事件——MySQL 名单/harness 自检失败\n"
@@ -78,6 +81,7 @@ public class AttachPoolWarmGateTest {
 
     @org.junit.Test
     public void 模式A_主场景_存量连接上新建PS_事件到达() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，模式A 跳过（环境受限未验证）", mysqlReachable());
         RunResult r = runMode("A", "attachpool_a", new ArrayList<String>(), WAIT_SECONDS * 1000L);
         report("A", r);
         org.junit.Assert.assertTrue("模式A（主场景，存量池连接复用）应收到事件\n" + r.asBlock(), r.eventReceived);
@@ -85,6 +89,7 @@ public class AttachPoolWarmGateTest {
 
     @org.junit.Test
     public void 模式B_attach前prepare的PS复用_一期盲区表现() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，模式B 跳过（环境受限未验证）", mysqlReachable());
         RunResult r = runMode("B", "attachpool_b", new ArrayList<String>(), 15_000L, null);
         report("B", r);
         org.junit.Assert.assertNotNull("模式B 必须产出 attach retransform 行", r.attachRetransformLine);

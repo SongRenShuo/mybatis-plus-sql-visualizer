@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [2026.10.23-beta.2] - 2026-10-23
+
+### Fixed
+- **增强捕获与第三方 agent 共存导致目标 JVM 无法启动（T-JRebelPremainCrash）**：用户同时开启增强捕获与 JRebel 启动器后，目标应用以 `FATAL ERROR in native method: processing of -javaagent failed, processJavaStart failed` 直接起不来——`retransformLoadedDrivers` 的名单谓词位于 try 之外，第三方 agent 接管 premain 类加载后重定位 ASM 不可见，谓词触发织入器类初始化时抛 `NoClassDefFoundError`（另一种加载器形态为 `ClassCircularityError`），异常穿出 `premain` 即终止宿主启动。现在 premain/agentmain 双入口统一做失败兜底（捕 `Throwable`，含 `Error`），降级后不写在线标记以便运行期 attach 仍可重试，并在 stderr 留一行降级说明；名单判定与 ASM 解耦（登记表上提为独立类），使「查名字」不再要求 ASM 可解析，异常场景下增强能力不丢。插件侧新增 premain 未按时回连的降级感知与一次性提示，回落运行期挂载。已在 Corretto 21.0.12.1 上用真实 agent 产物验证修复前后对照（修复前同形态必然致命，修复后进程正常启动、逐类失败被计数拦下）；未复刻用户 JRebel 的具体转发路径，未在真实 IDE 工程端到端验收。
+- **设置页能力矩阵的 MCP 工具数停留十工具**：实际为十一个，落地页文案已修正。
+
 ## [2026.10.23-beta.1] - 2026-10-23
 
 ### Added

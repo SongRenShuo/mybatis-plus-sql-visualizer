@@ -13,6 +13,7 @@
 | 文件 | 用途 | 必填 |
 |---|---|---|
 | `gitee-token.json` | Gitee 发行 Personal Access Token（字段 `gitee_personal_access_token` / `owner` / `repo`），供 `dev-support/gitee-release.py` 读取 | 仅发布到 Gitee 时需要 |
+| `github-token.json` | GitHub Personal Access Token（字段 `github_personal_access_token` / `owner` / `repo` / `login`，scope 需 `repo`），供 `dev-support/push-all.ps1` 推送镜像仓 | 仅推送 GitHub 镜像时需要 |
 | `local.env` | 本机路径与代理覆盖（键名见 `local.env.example`），供 `dev-support/` 下的脚本 source | 不需要（缺省时脚本自行发现） |
 
 ## 迁移说明

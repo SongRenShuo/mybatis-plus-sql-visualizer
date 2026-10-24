@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
-import com.ccnode.fakeprobe.FakeParamRangeInjector
+import com.example.thirdparty.fakeprobe.FakeParamRangeInjector
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlText

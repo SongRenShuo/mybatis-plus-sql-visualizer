@@ -500,6 +500,9 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.info("onProcessAppeared: premain 通道在场（启动即捕获已注入）——跳过 attach（T-M56Phase2）")
             return
         }
+        // T-JRebelPremainCrash C 案：抑制窗已过仍未认领 ⇒ premain 实际降级（agent 侧 install 失败后
+        // 不回连）。此处一次性告知 + 照常走下方 attach 回落（不再 return——降级恰恰是「必须回落」的场景）。
+        detectPremainDegraded()
         // T-PS4-03：去抖必须在「排队时刻」判定——若迟到 executor 任务起跑才查表，静默等待已把
         // 窗口耗尽、判定失真。pid 解析是轻反射（getNativePid/getProcess().pid()，无阻塞等待），
         // 前移到请求线程安全；重活（静默等待 + attach）仍留在 executor，不进调用线程。
@@ -652,6 +655,64 @@ class AgentManager(private val project: Project) : Disposable {
 
     /** attach 兜底通知已发标记（**每项目会话一次**，不随 [onRunEnded] 复位；internal 供测试复位）。 */
     internal val attachFallbackNotifiedThisSession = AtomicBoolean(false)
+
+    // ---------- T-JRebelPremainCrash C 案：premain 降级感知 ----------
+
+    /**
+     * premain 降级的判定入口（T-JRebelPremainCrash C 案）。
+     *
+     * <p>「premain 失败」在 IDE 侧的唯一可观测信号是**通道始终未被认领**：agent 侧 `install` 失败后
+     * 不再回连（`AgentMain` 的失败兜底不写 `sqlvis.agent.active`、不启 `EventBus`），于是
+     * [PremainChannel.claimed] 永远为 false，accept 线程最后按
+     * [PREMAIN_ACCEPT_TIMEOUT_MS] 超时收口。本方法在「通道已过 [PREMAIN_SKIP_ATTACH_WINDOW_MS]
+     * 抑制窗、仍未认领」时把它判为降级。
+     *
+     * <p>为什么要显式判：抑制窗内 [hasPendingPremainChannel] 会让 attach 让位；窗口过后 attach 主路径
+     * 恢复（零劣化的既有设计），但**用户侧没有任何提示**——在 JRebel 现场表现为「增强捕获悄悄只剩
+     * 半条通道」，用户会以为插件坏了。本方法把这条静默降级变成一次性可见告知。
+     *
+     * <p>频次与 [notifyAttachFallbackOnce] 同口径：**每项目会话一次**，不随 [onRunEnded] 复位
+     * （开发期反复重启不该反复弹窗）。返回是否本次新判定出降级。
+     */
+    internal fun detectPremainDegraded(): Boolean {
+        val now = clockMs()
+        val degraded = premainChannels.any { ch ->
+            !ch.claimed && !ch.closed && now - ch.preparedAtMs > PREMAIN_SKIP_ATTACH_WINDOW_MS
+        }
+        if (!degraded) return false
+        if (premainDegradedNotifiedThisSession.compareAndSet(false, true)) {
+            LOG.warn(
+                "detectPremainDegraded: premain 通道超过 ${PREMAIN_SKIP_ATTACH_WINDOW_MS}ms 未认领" +
+                    "——启动即捕获未生效（agent premain 可能已降级：第三方 agent 干扰/ASM 不可见），" +
+                    "回落运行期 attach（本项目会话仅提示一次）",
+            )
+            runCatching { premainDegradedNotifier?.invoke() }
+                .onFailure {
+                    if (FatalErrors.isFatal(it)) throw it
+                    LOG.warn("detectPremainDegraded: 降级提示发送失败（不影响 attach 回落）", it)
+                }
+        }
+        return true
+    }
+
+    /** premain 降级提示出口（默认 balloon；测试注入计数器驱动断言，口径同 [attachFallbackNotifier]）。 */
+    internal var premainDegradedNotifier: (() -> Unit)? = {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (app == null || !app.isUnitTestMode) {
+            runCatching {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("notification.agent.premainDegraded.title"),
+                        MpSqlVisualizerBundle.message("notification.agent.premainDegraded.body"),
+                        com.intellij.notification.NotificationType.WARNING,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /** premain 降级提示已发标记（**每项目会话一次**；internal 供测试复位）。 */
+    internal val premainDegradedNotifiedThisSession = AtomicBoolean(false)
 
     /**
      * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。

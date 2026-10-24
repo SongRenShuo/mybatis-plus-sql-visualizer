@@ -167,11 +167,11 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
 
     // ---- T-DevAcceptFix ④：三方族并入 per-host 探测（用户在位≠覆盖，真上色才让位） ----
 
-    /** 三方 MyBatisCodeHelperPro 族注入器：喂入命中且 start → 让位（该位确实归它）。 */
+    /** 第三方注入器（占满宿主）：喂入命中且 start → 让位（该位确实归它）。 */
     @Test
     fun testDevAcceptFix04_三方注入器_喂入命中且start_让位() {
         val host = firstMapperText()
-        val fake = com.ccnode.fakeprobe.FakeCodeHelperInjector(listOf(XmlText::class.java))
+        val fake = com.example.thirdparty.fakeprobe.FakeThirdPartyInjector(listOf(XmlText::class.java))
         assertTrue(
             "三方注入器确实给该宿主上色 → 让位（在位≠覆盖，真 start 才让位）",
             XmlSynHiGate.foreignInjectorsWouldInject(listOf(fake), host),
@@ -183,7 +183,7 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     @Test
     fun testDevAcceptFix04_三方注入器_未start_不让位() {
         val host = firstMapperText()
-        val fake = com.ccnode.fakeprobe.FakeCodeHelperInjector(listOf(XmlText::class.java), start = false)
+        val fake = com.example.thirdparty.fakeprobe.FakeThirdPartyInjector(listOf(XmlText::class.java), start = false)
         assertFalse(
             "三方在位但未覆盖该宿主 → 不让位（用户真机无色现场的关键修复）",
             XmlSynHiGate.foreignInjectorsWouldInject(listOf(fake), host),

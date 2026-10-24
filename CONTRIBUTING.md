@@ -2,6 +2,15 @@
 
 感谢你愿意为 SQL Visualizer 提交代码、文档或问题反馈。本文说明本仓库的分支模型、开发环境、测试门槛、代码风格与 PR 流程。提交前请至少读完「分支与 PR」「构建与测试」「代码与文案约定」三节。
 
+## 仓库位置
+
+本仓库双平台同步：**Gitee 是主仓**（发行与自更新清单的权威源），**GitHub 是镜像**。两边内容一致，PR 两个平台都收，你可以就近选择。
+
+| 平台 | 地址 | 说明 |
+|---|---|---|
+| Gitee（主仓） | <https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer> | 发行版与插件内更新清单指向这里 |
+| GitHub（镜像） | <https://github.com/SongRenShuo/mybatis-plus-sql-visualizer> | 与 Gitee 同步，源码链接填的是这个 |
+
 ## 许可与行为
 
 - 本项目以 Apache License 2.0 发布，见 [LICENSE](LICENSE)。提交 PR 即表示你同意贡献内容按该许可发布；无需签署 CLA。
@@ -10,7 +19,7 @@
 
 ## 先讨论，再动手
 
-- 新功能、行为变更、架构调整：先开 Issue 说明使用场景与方案，确认方向后再写代码，避免大 PR 返工。
+- 新功能、行为变更、架构调整：先开 Issue 说明使用场景与方案，确认方向后再写代码，避免大 PR 返工。使用问题与功能建议优先走[官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)，那里有统一的排期视图。
 - 较大的改动按仓库惯例先写开发计划：`docs/开发计划/{YYYYMMDD}-{HHMM}-{功能名}-开发计划.md`，写清目标、方案、影响面与验证方式；实施完成后在同一文档回填实施记录和测试读数，并在 `docs/变更记录.md` 登记任务级变更。
 - 拼写、文档、明确的 bug、小范围修复：可以直接提 PR。
 - 一个 PR 只做一件事；不要把格式化、重命名和功能改动混在一起。
@@ -32,7 +41,7 @@
 ## 分支与 PR
 
 - `master` 是发布分支，`dev` 是在途集成分支。外部 PR 请以 `dev` 为基分支；`master` 只由维护者在发版时合入。若 `dev` 落后于 `master`，先基于最新 `dev` 建分支，维护者会在合入前处理同步。
-- Fork 后从 `dev` 切分支，分支名用 `feature/<简短英文名>`、`fix/<简短英文名>` 或 `docs/<简短英文名>`：
+- Fork 后从 `dev` 切分支，分支名用 `feature/<简短英文名>`、`fix/<简短英文名>` 或 `docs/<简短英文名>`。下面的示例以 Gitee 为准，换成 GitHub 时把 `gitee.com/<你的用户名>` 与 `gitee.com/songrenshuo` 分别改为 `github.com/<你的用户名>` 与 `github.com/SongRenShuo` 即可：
 
   ```bash
   git clone https://gitee.com/<你的用户名>/mybatis-plus-sql-visualizer.git
@@ -42,7 +51,7 @@
   git checkout -b feature/<简短英文名> upstream/dev
   ```
 - 分支尽量短生命周期；合并后由维护者删除。
-- PR 描述请按 [PR 模板](.gitee/PULL_REQUEST_TEMPLATE.zh-CN.md) 填写：改了什么、为什么、怎么验证、兼容性影响、UI 截图（如有）。
+- PR 描述请按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 填写：改了什么、为什么、怎么验证、兼容性影响、UI 截图（如有）。Gitee 侧的同款模板在 [.gitee/PULL_REQUEST_TEMPLATE.zh-CN.md](.gitee/PULL_REQUEST_TEMPLATE.zh-CN.md)。
 - 提交信息格式：
 
   ```
@@ -85,7 +94,7 @@
 
 **只克隆插件仓库直接跑 `testShards` 会失败。** 分片里有 5 个 `Demo*` 用例会硬断言兄弟目录 `../mybatis-plus-sql-visualizer-demo` 下的真实源码存在；`testDatabase` / `testDb*` 和 `e2eFakeIde` 还需要本地 MySQL。`testFast` 不需要这些前置。
 
-测试 demo 是独立仓库 [mybatis-plus-sql-visualizer-demo](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo)（MIT），包含 MP / MPJ / JPA / 多 ORM 等各主题的 Spring Boot 示例工程；插件仓库不复制它的源码，只钉定版本。
+测试 demo 是独立仓库 [mybatis-plus-sql-visualizer-demo](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo)（MIT，[GitHub 镜像](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo)），包含 MP / MPJ / JPA / 多 ORM 等各主题的 Spring Boot 示例工程；插件仓库不复制它的源码，只钉定版本。
 
 | 测试入口 | 测试 demo | 本地 MySQL | 缺省行为 |
 |---|---|---|---|
@@ -115,6 +124,9 @@ demo 默认放在插件仓库的兄弟目录，版本钉在 `dev-support/test-de
 
 ```bash
 git clone https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo.git \
+  ../mybatis-plus-sql-visualizer-demo
+# 或 GitHub 镜像（内容一致）
+git clone https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo.git \
   ../mybatis-plus-sql-visualizer-demo
 ```
 
@@ -185,6 +197,6 @@ mysql -h127.0.0.1 -P3306 -uroot -p --default-character-set=utf8mb4 \
 
 ## 问题反馈
 
-- 使用问题、功能建议：优先走[官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)。
-- 开发相关缺陷、可复现的代码问题：可在 Gitee 仓库提 Issue，按 `.gitee/ISSUE_TEMPLATE/` 下的模板填写。
+- 使用问题、功能建议：优先走[官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)。两个平台的 Issue 区都置顶了这条引导，那里能看到统一的处理进度。
+- 开发相关缺陷、可复现的代码问题：可在 [Gitee](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues) 或 [GitHub](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/issues) 提 Issue，按对应平台的模板填写（`.gitee/ISSUE_TEMPLATE/` / `.github/ISSUE_TEMPLATE/`）。
 - 提交 Issue 前先搜索是否已有同类问题；附上插件版本、IDE 版本、复现步骤、期望/实际结果和相关日志。

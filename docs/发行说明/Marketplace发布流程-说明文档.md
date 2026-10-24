@@ -28,16 +28,16 @@ flowchart LR
 ```
 
 - **Marketplace 是正式发行渠道**：用户搜索/发现、评分、自动更新都在这；本次要发布的就是它。
-- **自更新渠道继续保留**：`update.json` 指向 Gitee Releases（已有 `writeUpdateManifest` 任务），两者版本号保持一致（详见 §5.7）。
+- **自更新渠道继续保留**：`update.json` 指向 Gitee Releases（已有 `writeUpdateManifest` 任务），两者版本号保持一致（详见 §10.2）。
 
 ### 1.2 核心结论（先读）
 
 | 问题 | 结论 |
 |---|---|
-| Gitee 仓库能否直接作为 Marketplace 源码链接？ | 官方要求源码链接「公网可达、公开可访问」，文档举例 GitHub/GitLab，**未明确列出 Gitee**。稳妥做法：**双仓库**——Gitee 为主仓库（现状不变），GitHub 建镜像，Marketplace 源码字段填 GitHub |
+| Gitee 仓库能否直接作为 Marketplace 源码链接？ | **能**——2026-08-18 起用 Gitee 填该字段，9 个版本一路过审，官方要求只有「公网可达、公开可访问」。但 2026-10-22 已改为填 **GitHub 镜像**，理由是受众匹配（海外用户见到 Gitee 多半不点）与可达性，详见 §5.1。Gitee 仍是主仓 |
 | 开源许可证与源码链接 | 本项目 LICENSE = **Apache-2.0**（开源）→ 上传表单选择开源许可证时 **源码链接必填**（官方原文 "If you select an open-source license, you need to provide a link to the source code"），缺失是常见被拒原因 |
 | 首次发布怎么传 | **首次必须通过网页手动上传**（官方：The first publication must always be uploaded manually）；后续版本可用 Gradle `publishPlugin` 自动发布 |
-| 代码签名 | 官方建议发布前签名（`signPlugin` 自动执行）；当前公钥上传功能官方仍标记未开放，未签名也可上传但 IDE 安装时可能弹警告。首次发布**建议先不配置签名**，跑通流程后再补（见 §5.4） |
+| 代码签名 | 官方建议发布前签名（`signPlugin` 自动执行）；当前公钥上传功能官方仍标记未开放，未签名也可上传但 IDE 安装时可能弹警告。首次发布**建议先不配置签名**，跑通流程后再补（见 §7） |
 | 发布频率/版本号 | 版本号沿用 `YYYY.M.D`；**Marketplace 不接受同一版本号重复上传**，每次更新必须升版本 |
 | 内测包用户能否直接更新到市场版 | **不能自动**。磁盘安装（含插件内自更新安装的包）在 IDE 里无市场订阅，不会收到市场更新；需**一次性迁移**到市场渠道（详见 §10.3） |
 
@@ -98,50 +98,66 @@ flowchart TD
 
 ---
 
-## 5. Step ②：源码链接（Gitee 直连；GitHub 镜像可选未启用）
+## 5. Step ②：源码链接（GitHub 镜像；Gitee 仍为主仓）
 
-> **2026-08-18 定案**（`docs/memory-archive/bug-fixes/project-marketplace-publishing.md`）：不用 GitHub 镜像，**直接用 Gitee 作为 Marketplace 源码链接**（官方要求「公网可达」Gitee 满足，审核若要求换 GitHub 再补）。本段 GitHub 条目一律视为「可选、未启用」——仓库未配置 github 远程，`scripts/push-all.sh` 不存在。
+> **现行定案（2026-10-22）**：Marketplace Source code URL 填 **GitHub 镜像** `https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`，已在作者后台改完并线上复核生效（API `urls.sourceCodeUrl` 已指向 GitHub）。**Gitee 仍是主仓**——发行、Release、`update.json`、Cloudflare 部署触发一律不动，改的只是 Marketplace 后台那一个展示跳转字段。
+>
+> **历史定案（2026-08-18，已废止）**：当时决定「不用 GitHub 镜像，直接用 Gitee 作源码链接」。该决定的三个前提现在都不成立——GitHub 远程已配置、镜像三仓已在同步、双推脚本为 `dev-support/push-all.ps1`（旧文提到的 `scripts/push-all.sh` 从不存在）。
 
-### 5.1 现状与依据
+### 5.1 为什么从 Gitee 换成 GitHub
+
+**先说清楚：换不是因为它不改就会出问题。** 2026-08-18 首版起用 Gitee 填这个字段，一路 9 个版本过审，官方要求只有「公网可达、公开可访问」一条，Gitee 满足。换的三条理由是别的：
+
+1. **受众匹配**：Marketplace 是全球平台，海外用户点 Source Code 看到 Gitee，多数第一反应是「中文站/可能打不开」而不再点。GitHub 镜像内容与主仓完全一致（三支 + 全部 tag 同步），点过去是熟悉的界面。
+2. **可达性**：Gitee 境外访问不稳、GitHub 境内不稳，两端各有短板；在这个字段上选 GitHub，等于给全球用户一个默认能打开的面。
+3. **口径风险**：官方文档举例只列 GitHub/GitLab，未列 Gitee。实测能过审，但等于留了一个「若审核口径收紧会被点名」的字段。
+
+### 5.2 现状与依据
 
 - 开源插件**必须**提供公网可访问的源码链接（官方要求，缺失直接拒）；
-- Gitee 仓库公网可达，直接填作 Marketplace Source code URL 已实测过审（2026-08-18 首版即此形态，审核未要求换）；
-- 若未来审核要求 GitHub 链接再启用镜像（步骤见 5.2，标注「未启用」）。
+- 该字段填 Gitee 曾实测过审（2026-08-18 起 9 个版本），证明 Gitee 本身合规；换成 GitHub 是**优化可达性**，不是修缺陷；
+- 2026-10-22 作者后台已改为 GitHub 地址，线上 API 复核 `urls.sourceCodeUrl` = `https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`；
+- `vendor.url` 仍是 `https://gitee.com/songrenshuo`（厂商页与源码链接是两个字段，未一并改动）。
 
-### 5.2 操作步骤（GitHub 镜像，未启用，仅审核要求时启用）
+### 5.3 仓库配置（2026-10-22 已就位，无需重做）
+
+三仓均为「Gitee 主 + GitHub 镜像」，`github` 远程已配置；插件仓镜像 3 分支 + 全部 tag：
 
 ```bash
-# 1. 在 GitHub 网页创建同名空仓库（不勾选 README/.gitignore，避免首推冲突）
-#    路径建议：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer
+git remote -v   # origin(Gitee) + github(GitHub)
+```
 
-# 2. 添加第二个远程（本地一次性配置）
+首次建仓流程只在换机/重建时用（备忘）：
+
+```bash
 git remote add github https://github.com/SongRenShuo/mybatis-plus-sql-visualizer.git
-git remote -v   # 确认：origin(Gitee) + github(GitHub)
-
-# 3. 首次全量推送
-git push -u github master
+# 注意：GitHub 建仓默认分支是 main，先推 master 再在后台切默认分支
+git push github master:master
 ```
 
-### 5.3 日常同步（每次发布 / 里程碑提交后）
+### 5.4 日常同步（推荐一条命令）
 
 ```bash
-# Gitee 主仓库唯一写源——每次发布/里程碑提交后直接推 origin
-git push origin master
+powershell -NoProfile -ExecutionPolicy Bypass -File dev-support/push-all.ps1
+# -All 三支一起推 / -Tags 附带 tag / -GiteeOnly 只推主仓 / -DryRun 只看命令
 ```
+
+脚本要点（细节见计划 `docs/开发计划/20261022-1140-T-DualRepo-*`）：GitHub 端优先走本地代理、探不通回落直连，两条路各带重试；令牌读 `.local/github-token.json` 且输出脱敏；一端失败不阻断另一端。
 
 ```mermaid
 flowchart LR
-    DEV["本地开发"] -->|"git push origin master"| GITEE["Gitee 主仓库<br/>（源码链接/更新清单/Release 托管）"]
+    DEV["本地开发"] -->|"push-all.ps1"| GITEE["Gitee 主仓库<br/>（Release / update.json / 部署触发）"]
+    DEV -->|"push-all.ps1"| GH["GitHub 镜像<br/>（Marketplace 源码链接）"]
 ```
 
-### 5.4 协作约定
+### 5.5 协作约定
 
 | 约定 | 说明 |
 |---|---|
-| 主仓库 | Gitee 唯一写源（含 Release 附件、update.json、Marketplace 源码链接） |
-| 镜像 | GitHub 镜像**未启用**（无 github 远程）；仅当审核要求 GitHub 链接时按 5.2 启用，启后为只读镜像 |
-| Marketplace 链接 | **Source code URL 填 Gitee 仓库**（公网可达，2026-08-18 定案）；Additional Information 可再加一条官网链接（须公网可达） |
-| 同步时机 | 每次发布前 `git push origin master` 保证源码链接最新 |
+| 主仓库 | Gitee 是唯一写源：Release 附件、`update.json`、Cloudflare 部署触发都在这里 |
+| 镜像 | GitHub 三支 + tag 全同步，**只读镜像**（不在 GitHub 上开发、不发 Release） |
+| Marketplace 链接 | **Source code URL 填 GitHub 镜像**（2026-10-22 改）；Additional Information 可再加官网链接（须公网可达） |
+| 同步时机 | 每次发布前跑 `push-all.ps1`，保证镜像与主仓同 SHA——源码链接指向镜像，镜像过期等于给用户看旧代码 |
 
 ---
 
@@ -321,7 +337,7 @@ flowchart TD
 | 自更新清单 | **仅用户本人操作**：`./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`（AI 会话一律不得代改，2026-09-16 用户定规）；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
 | Marketplace 自定义页 | 复制 `docs/发行说明/marketplace-custom-page.md` 全文（去掉首行维护者注释）→ 插件后台 Documentation 标签粘贴保存 | 该编辑器**仅渲染 Markdown**（HTML / style / CSS 被剥除）；功能文案变更时必须与 `src/main/resources/html/marketplace-custom-page.html`（IDE 内「帮助」按钮 JCEF 渲染版，完整样式）**两版同步更新，不能只改其一**；New / Ultimate 徽章为官网托管 SVG（`sql-visualizer.jvtools.cn/badges/tag-*.svg`），与 HTML 版药丸同款配色 |
-| 推送源码 | `git push origin master` | Gitee 主仓库即 Marketplace 源码链接（2026-08-18 定案）；GitHub 镜像未启用 |
+| 推送源码 | `dev-support/push-all.ps1` | 双仓同推：Gitee 是主仓（发行与清单源），GitHub 镜像承担 Marketplace 源码链接；镜像过期等于给用户看旧代码，发版前必推 |
 
 > ⚠️ 两渠道版本号必须一致（update.json version = Marketplace 版本），否则用户侧会出现「检查更新有新版但市场无」的困惑。
 
@@ -375,7 +391,7 @@ flowchart TD
 □ 2. 兼容门禁：./gradlew verifyGate（三目标，离线；日常档 verifySmoke / -PverifyIdes=minimal）
 □ 3. 发行包：./gradlew buildPlugin，产物 zip 内容核对（无测试类/无关依赖）
 □ 4. 版本号已递增（YYYY.M.D），gradle/plugin-change-notes.html 已更新（新 <h2> 块置顶）
-□ 5. GitHub 镜像仓库存在且已同步（git push github master）
+□ 5. GitHub 镜像已同步到与 Gitee 同 SHA（`dev-support/push-all.ps1 -All -Tags`）——源码链接指向镜像，不同步等于让用户看旧代码
 □ 6. Gitee Release 已建，zip 已附
 □ 7. update.json 已生成（writeUpdateManifest）+ changeNotes 人工补充 + 双推
 □ 8. Marketplace 表单：Apache-2.0 + 源码链接（GitHub）+ tags + 截图

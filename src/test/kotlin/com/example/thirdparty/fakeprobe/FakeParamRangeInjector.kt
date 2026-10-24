@@ -1,4 +1,4 @@
-package com.ccnode.fakeprobe
+package com.example.thirdparty.fakeprobe
 
 import com.intellij.lang.injection.MultiHostInjector
 import com.intellij.lang.injection.MultiHostRegistrar
@@ -8,10 +8,10 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLanguageInjectionHost
 
 /**
- * T-XmlGap W1 探针测试专用假注入器：**只占参数占位区间**（复刻竞品 MCH-Pro 的两条真实注入链——
+ * T-XmlGap W1 探针测试专用假注入器：**只占参数占位区间**（模拟一条按区间注入的第三方链——
  * `#{}` 注入器按区间 `startInjecting`+`addPlace`；`${}` 注入器只报 `${` 之后到 `}` 之前）。
  *
- * 与 [FakeCodeHelperInjector]（占满整宿主）的区别正是 W1 的判别点：占满 → 我方零注入（等价旧让位）；
+ * 与 [FakeThirdPartyInjector]（占满整宿主）的区别正是 W1 的判别点：占满 → 我方零注入（等价旧让位）；
  * 只占参数区间 → 我方为**余下区间**着色（旧形态在这里整宿主放弃）。
  *
  * 只供 W1 用例经 `XmlSynHiGate.foreignInjectorsOccupiedRanges` 缝直注清单，或经区间缝喂入，
@@ -20,7 +20,7 @@ import com.intellij.psi.PsiLanguageInjectionHost
 class FakeParamRangeInjector(
     private val fedTypes: List<Class<out PsiElement>>,
     private val params: List<Regex> = listOf(Regex("""#\{[^}]*}"""), Regex("""\$\{[^}]*}""")),
-    /** true = 只报参数内部区间（不含 `${`/`#{` 与 `}`），复刻竞品 `${}` 链的形态。 */
+    /** true = 只报参数内部区间（不含 `${`/`#{` 与 `}`），模拟只报内层的注入形态。 */
     private val innerOnly: Boolean = false,
 ) : MultiHostInjector {
 

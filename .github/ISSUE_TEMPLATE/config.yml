@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 官网需求池（推荐）
+    url: https://sql-visualizer.jvtools.cn/about/feedback
+    about: 使用问题、功能建议、缺陷反馈的统一入口，能看到处理进度，也方便贴附件。
+  - name: 在线文档
+    url: https://sql-visualizer.jvtools.cn
+    about: 安装、配置、功能说明与常见问题。
+  - name: 插件市场页
+    url: https://plugins.jetbrains.com/plugin/33633-sql-visualizer
+    about: 版本更新记录、评分与留言。

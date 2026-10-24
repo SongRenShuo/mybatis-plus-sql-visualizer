@@ -133,7 +133,7 @@ Gutter 图标仅出现在目标 SQL 所在行：Wrapper 链末尾调用行、map
 ## Links / 相关链接
 
 - **官网**：[Sql Visualizer](https://sql-visualizer.jvtools.cn)
-- **源码**：[Gitee](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer)
+- **源码**：[GitHub（镜像）](https://github.com/SongRenShuo/mybatis-plus-sql-visualizer) · [Gitee（主仓）](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer)——2026-10-22 起双仓同步，Marketplace 源码链接指向 GitHub
 - **问题反馈**：[官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)
 - **变更日志**：[CHANGELOG.md](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/blob/master/CHANGELOG.md)
 - **Marketplace**：[JetBrains Plugin Page](https://plugins.jetbrains.com/plugin/33633-sql-visualizer)

@@ -55,16 +55,23 @@ public final class DriverRegistry {
 
     /**
      * 语句面：execute 族织入对象（T-StatementWeave）。
-     * 名单单一真相在 [StatementWeaver.specOf]（织入形态标注跟着类走，防两处漂移）——本谓词委托判定。
+     * 名单单一真相在 [WeaveSpecs]（织入形态标注跟着类走，防两处漂移）——本谓词委托判定。
+     *
+     * <p><b>T-JRebelPremainCrash B 案</b>：此前委托 {@code StatementWeaver.specOf}，而该类
+     * {@code implements Opcodes} 且方法体引用 {@code Opcodes.LONG/DOUBLE/TOP}（{@code Integer}
+     * 装箱字段，不可内联）——「查名字」会触发其类初始化，从而要求重定位 ASM 全程可解析。
+     * 第三方 agent 接管 premain 类加载时该路径会抛 NCDFE / ClassCircularityError，且异常
+     * 从 premain 逃逸会让目标 JVM 启动失败。改委托零 ASM 依赖的 [WeaveSpecs] 后，名单查询
+     * 不再需要 ASM；真正的 ASM 需求只落在 {@code weave()}（已在 transformer 的 try 内）。
      */
     public static boolean isStatementWeavable(String className) {
-        final StatementWeaver.Kind[] spec = StatementWeaver.specOf(className);
+        final StatementWeaver.Kind[] spec = WeaveSpecs.specOf(className);
         return spec != null && !hasPrepare(spec);
     }
 
     /** prepare 面：prepareStatement/prepareCall 出口登记对象（T-StatementWeave S3）。 */
     public static boolean isPrepareWeavable(String className) {
-        final StatementWeaver.Kind[] spec = StatementWeaver.specOf(className);
+        final StatementWeaver.Kind[] spec = WeaveSpecs.specOf(className);
         return spec != null && hasPrepare(spec);
     }
 
