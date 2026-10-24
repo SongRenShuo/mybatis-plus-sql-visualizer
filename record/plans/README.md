@@ -31,6 +31,18 @@ python record/plan_runner.py record/plans/<name>.json             # 真重放
 
 这条对应 magpie 的 `outline()`：**给规划器的是结构，不是截图**——截图猜坐标不可靠，结构才能给出稳定选择器。
 
+## 自检
+
+```bash
+python record/verify_uitree.py                                  # uitree 判定内核正反例（Swing 桩，无需 IDE）
+python -m py_compile record/uitree.py record/plan_runner.py     # 语法
+```
+
+`verify_uitree.py` 用最小 Swing 桩验证 `build_tree` / `find_by_text`：正例证明看得见该看的
+（可见组件 / 类名 / role / rect / 嵌套递归），反例证明看不见不该看的（隐藏组件不进树且不可命中、
+不存在返回 None、`max_lines` 截断生效）。**改了 `uitree.py` 就跑一遍**——它依赖 JVM 组件，
+正常环境跑不到真实树，桩测试是唯一的低成本回归。
+
 ## 现成样例
 
 见同目录 `example-preview.json`（演示「打开预览 → 执行 SQL → 截终帧」三步，坐标为示意值，实拍前按 BASELINE 重标）。

@@ -154,7 +154,8 @@ magpie 出处：`.github/ui-preview/` 全套（详见报告 §五）。按投入
   - W5：篡改台账 sha → verify 报「读数已过期」且真实退出码 1。
   - W6-a：6 类危险词（删除/Invalidate Caches/Update Plugin/重启/卸载/Sign out）全部拦截，安全标签放行，无 label 渐进记录。
   - W6-c：target 无映射 / 非法 do / 空 steps 三组各恰 1 红。
-- 未跑：全量 `testShards`（not run，留统一收口）；真机/沙盒 UI 走查（not run，本轮不涉及 UI 行为变更）；`verifyGate`/`verifyPlugin`（not run，本轮未动 build.gradle.kts/plugin.xml EP/依赖版本）。
+  - **W6-d（补充验证，2026-10-24 复核发现首版只验了「文件存在」）**：`record/uitree.py` 依赖 JVM Swing 组件，首版交付时**未编译、未执行**，属弱验证。补做：`python -m py_compile` + AST 解析通过；新增 `record/verify_uitree.py`（最小 Swing 桩：`isShowing`/`getAccessibleContext`/`getComponents`/`getName`/`getLocationOnScreen`/`width`/`height`/`getText`）跑正反例——**正例** build_tree 带出可见组件/类名/role/rect/嵌套递归、find_by_text 命中并给矩形、dump_tree 落文件；**反例** 隐藏组件不进树且不可命中、不存在文本返回 None、空 needle 返回 None、`max_lines` 截断生效且写 `(cut)`。反向：摘掉可见性剪枝 `if not visible: return` → 验证脚本恰 1 红（「把 isShowing=false 的组件也 dump 了」），恢复后回绿、`git status` 零残留。
+- 未跑：全量 `testShards`（not run，留统一收口）；真机/沙盒 UI 走查（not run，本轮不涉及 UI 行为变更）；`verifyGate`/`verifyPlugin`（not run，本轮未动 build.gradle.kts/plugin.xml EP/依赖版本）；`uitree.py` 在**真实 IDE 进程内**（真实 Swing 组件树）的端到端使用（not run，需 attach 到 IDE 执行，属后续实拍时验证）。
 
 ### 实施中新发现的坑
 
