@@ -27,7 +27,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 > - **env 车道禁合回（T-BranchHygiene3 O-62 登记）**：`origin/env/cloud`、`origin/env/no-proxy` 为构建环境车道（本机构建环境调参专用），**禁合回 master/dev**，本地无需建分支，治理波次不必清理
 > - **`testDatabase` 门禁 10 绿的含义（T-BranchHygiene3 O-62 落档，销 t-testdb-driver 裁决）**：该任务只覆盖 DB 集成小集合（5 类 10 例＝驱动管线 `DbDriverPipelineTest` 硬断言 + DBN 四个集成类）；2026-09-18 驱动管线打通后四类首次真跑暴露 7 项断言失败，判定为测试侧平台行为假设（沙盒缺真实 IDE 项目/窗口/VFS 夹具）非产品缺陷，经 T-Fix-TestDb（`627fd13` 稳定工程目录）真实转绿——**非 skip/豁免掩盖**；HeavyNative B 路径（`LocalDataSource.getModel()` 是否带内省结果）本环境 `roots=0` 无法真跑，在真机走查清单在册。详见 `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md`
 > - **构建并发闸门（2026-09-24 起，T-BuildConcurrency O-65 C 项）**：任何会话跑 gradle 前过机器级闸门——`powershell -NoProfile -ExecutionPolicy Bypass -File dev-support\gradle-gate.ps1 -Command "<gradle 命令>"`。最多 2 路并行（32 GB 内存约束，加路先加内存），第 3 路自动排队（超时默认 3600 s），持有者异常退出后锁由下一路自动接管。**禁降片**：不许用 `-PtestShardCount` 调小换并行（实测证伪）
-> - **教训账本与派活模板（2026-10-23 T-MagpieGems 起）**：改代码前先读 [`LESSONS.md`](LESSONS.md)（规则+hash 证据+Seen 计数，满 3 天升级 [`code-standards.md`](code-standards.md)）；给子代理派活复制 [`开发流程-派活与验收清单.md`](开发流程-派活与验收清单.md) 模板（验收逐项打勾、没跑的标 not run、提交后 `git show --stat HEAD` 只许有自己的文件）
+> - **教训账本与派活模板（2026-10-23 T-MagpieGems 起）**：改代码前先读 [`LESSONS.md`](LESSONS.md)（规则+hash 证据+Seen 计数，满 3 天升级 [`code-standards.md`](code-standards.md)）；给子代理派活复制 [`开发流程-派活与验收清单.md`](开发流程-派活与验收清单.md) 模板（验收逐项打勾、没跑的标 not run、提交后 `git show --stat HEAD` 只许有自己的文件）；夜间复盘按 [`开发流程-夜间复盘协议.md`](开发流程-夜间复盘协议.md)（水位线在 LESSONS.md 头部，零教训日不硬凑）
 > - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
 
 ## 核心文档（docs/ 根目录）
@@ -510,7 +510,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 > - **env 车道禁合回（T-BranchHygiene3 O-62 登记）**：`origin/env/cloud`、`origin/env/no-proxy` 为构建环境车道（本机构建环境调参专用），**禁合回 master/dev**，本地无需建分支，治理波次不必清理
 > - **`testDatabase` 门禁 10 绿的含义（T-BranchHygiene3 O-62 落档，销 t-testdb-driver 裁决）**：该任务只覆盖 DB 集成小集合（5 类 10 例＝驱动管线 `DbDriverPipelineTest` 硬断言 + DBN 四个集成类）；2026-09-18 驱动管线打通后四类首次真跑暴露 7 项断言失败，判定为测试侧平台行为假设（沙盒缺真实 IDE 项目/窗口/VFS 夹具）非产品缺陷，经 T-Fix-TestDb（`627fd13` 稳定工程目录）真实转绿——**非 skip/豁免掩盖**；HeavyNative B 路径（`LocalDataSource.getModel()` 是否带内省结果）本环境 `roots=0` 无法真跑，在真机走查清单在册。详见 `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md`
 > - **构建并发闸门（2026-09-24 起，T-BuildConcurrency O-65 C 项）**：任何会话跑 gradle 前过机器级闸门——`powershell -NoProfile -ExecutionPolicy Bypass -File dev-support\gradle-gate.ps1 -Command "<gradle 命令>"`。最多 2 路并行（32 GB 内存约束，加路先加内存），第 3 路自动排队（超时默认 3600 s），持有者异常退出后锁由下一路自动接管。**禁降片**：不许用 `-PtestShardCount` 调小换并行（实测证伪）
-> - **教训账本与派活模板（2026-10-23 T-MagpieGems 起）**：改代码前先读 [`LESSONS.md`](LESSONS.md)（规则+hash 证据+Seen 计数，满 3 天升级 [`code-standards.md`](code-standards.md)）；给子代理派活复制 [`开发流程-派活与验收清单.md`](开发流程-派活与验收清单.md) 模板（验收逐项打勾、没跑的标 not run、提交后 `git show --stat HEAD` 只许有自己的文件）
+> - **教训账本与派活模板（2026-10-23 T-MagpieGems 起）**：改代码前先读 [`LESSONS.md`](LESSONS.md)（规则+hash 证据+Seen 计数，满 3 天升级 [`code-standards.md`](code-standards.md)）；给子代理派活复制 [`开发流程-派活与验收清单.md`](开发流程-派活与验收清单.md) 模板（验收逐项打勾、没跑的标 not run、提交后 `git show --stat HEAD` 只许有自己的文件）；夜间复盘按 [`开发流程-夜间复盘协议.md`](开发流程-夜间复盘协议.md)（水位线在 LESSONS.md 头部，零教训日不硬凑）
 > - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
 
 ## 核心文档（docs/ 根目录）
