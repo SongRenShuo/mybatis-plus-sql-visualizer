@@ -130,6 +130,10 @@ public final class PreviewSideQuery {
                 // （headless 实测：no ProgressIndicator or Job, the current job is not cancellable）。
                 // 真机 IDE 的池线程恰好有上下文，测试/纯后台调用没有——给一次空指示器让只读查询
                 // 在任意后台上下文可执行；查询本身不读取消状态（只读短查询，超时由驱动护栏负责）。
+                // T-PreviewChainNoise W2（2026-10-23 订正）：上文「真机 IDE 的池线程恰好有上下文」
+                // 已被用户真机日志推翻——ExplainPanelChannel 同款裸调在真机也命中该 SEVERE。
+                // 兜底已下沉到 McpDbExecutor.withDbBlockingContext（缺上下文才补空指示器），
+                // 本处包装保留为无害冗余（少改一处少一份回归面）。
                 outcome = ProgressManager.getInstance().runProcess(
                         (Computable<McpExplainFormatter.RawResult>) () -> {
                             try {
@@ -139,6 +143,8 @@ public final class PreviewSideQuery {
                                         sql,
                                         scalar ? 1 : McpExplainFormatter.DEFAULT_MAX_ROWS,
                                         timeoutSeconds,
+                                        // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                                        true,
                                         null,
                                         channelNote);
                             } catch (Throwable t) {
@@ -200,13 +206,20 @@ public final class PreviewSideQuery {
     /**
      * 失败信息：反射通道会把目标异常包进 InvocationTargetException，必须解包后取 message；
      * 无 message 时退回异常类简单名，保证对话框/内联行不出现空白原因。
+     *
+     * <p>T-ExplainPwdPrompt（2026-10-24）：认证失败附「补存密码」指引——预估行数内联区与
+     * EXPLAIN 错误对话框共用本出口，指引随文案走（其余失败形态零变化）。</p>
      */
     @NotNull
     public static String failureMessage(@NotNull Throwable t) {
         Throwable cause = t instanceof java.lang.reflect.InvocationTargetException ite
                 ? ite.getTargetException()
                 : t;
-        return cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+        String text = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+        if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isAuthFailureText(text)) {
+            return text + "　" + MpSqlVisualizerBundle.message("panel.explain.authFailureHint");
+        }
+        return text;
     }
 
     /** Kotlin {@code runCatching { ... }.getOrNull()} 等价：fatal 透传，其余异常归 null。 */
