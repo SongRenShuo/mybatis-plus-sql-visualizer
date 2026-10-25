@@ -18,6 +18,7 @@ import com.intellij.notification.NotificationAction;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionToolbar;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -158,6 +159,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
      */
     public final AnAction sortModeAction = new AnAction() {
         { getTemplatePresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Sort); }
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT（见 toolbarGroup 注释的字节码依据）
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
         @Override public void update(AnActionEvent e) {
             String label = currentSortLabel();
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Sort);
@@ -173,6 +176,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
             MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
             MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
                 cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.DockedPreview) {
+        // T-SqlLogToolbarEdt W1：ToggleAction 的 update 由平台模板实现，但 isSelected 被覆写后
+        // 平台仍按 AnAction 默认的更新线程判定 → 显式声明 BGT（isSelected 只读 dockedPreview 状态）。
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
         @Override public boolean isSelected(AnActionEvent e) { return dockedPreview.isOpen(); }
         @Override public void setSelected(AnActionEvent e, boolean state) {
             if (dockedPreview.isOpen() != state) previewHost.toggle();
@@ -650,7 +656,27 @@ public class SqlLogPanel extends JPanel implements Disposable {
         this.searchDebounceTimer = new javax.swing.Timer(SEARCH_DEBOUNCE_MS, e -> applySearchText());
         this.searchDebounceTimer.setRepeats(false);
         this.captureToggleAction = new CaptureAction();
-        this.toolbarGroup = new DefaultActionGroup(
+        // T-SqlLogToolbarEdt W1（2026-10-24，用户令「可修的性能问题现在立项」）：组与组内动作显式
+        // 声明 ActionUpdateThread.BGT。
+        //
+        // 为什么必须显式声明（243 字节码实证，非猜测）：AnAction.getActionUpdateThread() 的默认
+        // 实现是「实现 UpdateInBackground 且返回 true → BGT；ActionClassMetaData.isDefaultUpdate
+        // 为 true → BGT；否则 EDT」，而 isDefaultUpdate 判定的是「声明 update() 的类是否就是
+        // AnAction 本身」——组内这批动作全都覆写了 update()，于是默认全部落 EDT。
+        //
+        // 实测代价（沙盒 idea.log 20:34:28 / 20:35:23）：ActionUpdater - 3981 ms / 3174 ms total
+        // to grab EDT 10 times to expand DefaultActionGroup#expandGroup@...log.toolbar ...，
+        // 累计抢 EDT 3.1~4.0 秒。
+        //
+        // 约束（W2 已逐个核过）：update() 内只读状态 + 写 e.presentation，不触碰 Swing 组件/
+        // 文档/EDT-only API，故 BGT 合规。例外=AgentPauseAction：master 同样未声明 BGT
+        // （方案 B 无条件隐藏，EDT 更新无害），保持一致不擅自加。
+        DefaultActionGroup toolbarGroupImpl = new DefaultActionGroup() {
+            @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+        };
+        // 操作在前、工具在后、帮助收尾（? 是纯信息性动作，平台惯例放末尾；溢出从右端折叠，
+        // 帮助最先让位）。不设自建「更多」弹层——窄宽折叠交给平台 ActionToolbar 自带的溢出（»）。
+        toolbarGroupImpl.addAll(java.util.Arrays.asList(new AnAction[] {
                 captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
                 this.agentPauseAction, // R53：暂停/恢复（方案 B 临时全隐藏——动作对象保留在组内）
                 new ClearAction(),
@@ -661,8 +687,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 scrollToEndAction,
                 sortModeAction,
                 new CommunityAction(),
-                new HelpAction()
-        );
+                new HelpAction(), // 数组初始化器尾逗号合法——守卫逐行解析成员列表的统一行形态
+        }));
+        this.toolbarGroup = toolbarGroupImpl;
         // T-M55-03/04：聚焦页签栏与隐藏计数提示初始态（无页签隐藏不占高度）
         this.focusTabBar.setOpaque(false);
         this.focusTabBar.setVisible(false);
@@ -909,6 +936,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
     public class ShowSearchAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         ShowSearchAction() {
             registerCustomShortcutSet(CommonShortcuts.getFind(), list);
         }
@@ -1047,6 +1077,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
      */
     public class CaptureAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             if (manager.isCapturing()) {
@@ -1100,6 +1133,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     class ClearAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Clear);
@@ -1117,6 +1153,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 图标复用 {@link AllIcons.General.ArrowDown}（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
      */
     public class ScrollToEndAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.ScrollToEnd);
@@ -1131,6 +1170,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     public class SettingsAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Settings);
@@ -1151,6 +1193,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
     public class ManageSuppressAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Suppress);
@@ -1165,6 +1210,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** T-Community：交流群弹框入口（工具栏动作组；二维码异步加载，见 CommunityDialog）。 */
     public class CommunityAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：master 对本动作同样显式声明 BGT（虽未覆写 update，声明无害且与组内一致）
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         CommunityAction() {
             super(MpSqlVisualizerBundle.message("log.community.action"),
                     MpSqlVisualizerBundle.message("log.community.action.tip"),
@@ -1183,6 +1231,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      */
     public class HelpAction extends AnAction {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Help);
@@ -1834,16 +1885,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     // ---------- 排序方式（T-LogSortModes；T-UiCoord 后按钮改走动作图标组，文案由 presentation 承载） ----------
 
-    /** 当前排序方式标签（动作 update 进 presentation.text 与 tooltip）。 */
+    /**
+     * 当前排序方式显示名（静态查表，零分配——T-SqlLogToolbarEdt W3）。
+     *
+     * <p>旧实现每次都要新建 7 个 {@link SqlLogPanelKt.SortOption} 并调 7 次 bundle 取值，而这里
+     * 处在工具栏每次展开的 update 路径上。</p>
+     */
     private String currentSortLabel() {
-        String label = null;
-        for (SqlLogPanelKt.SortOption option : SqlLogPanelKt.sortOptions()) {
-            if (option.mode() == sortMode) {
-                label = option.label();
-                break;
-            }
-        }
-        return label != null ? label : MpSqlVisualizerBundle.message("log.sort.time.asc");
+        return MpSqlVisualizerBundle.message(SqlLogPanelKt.sortModeLabelKey(sortMode));
     }
 
     /** 弹出排序方式单选菜单（锚点 = 触发事件的组件，缺省落工具栏本体）。 */

@@ -123,6 +123,28 @@ public final class SqlLogPanelKt {
         return options;
     }
 
+    /**
+     * T-SqlLogToolbarEdt W3（2026-10-24）：{@code SortMode → 文案键} 静态查表。
+     *
+     * <p>为什么不再用 {@link #sortOptions()}：{@code sortModeAction.update()} 是<b>工具栏每次展开
+     * 都要走的路径</b>（改 BGT 之前还在 EDT 上），而它每次 {@code firstOrNull{}} 都要新建 7 个
+     * {@link SortOption} 并调 7 次 {@code MpSqlVisualizerBundle.message}（含 ResourceBundle 取值）。
+     * 查表后 update 是常数时间、零分配。{@link #sortOptions()} 本身保留给「构建下拉项」这类
+     * 一次性场景（需要顺序与 label）。</p>
+     */
+    public static String sortModeLabelKey(SortMode mode) {
+        switch (mode) {
+            case TIME_ASC: return "log.sort.time.asc";
+            case TIME_DESC: return "log.sort.time.desc";
+            case DURATION_ASC: return "log.sort.duration.asc";
+            case DURATION_DESC: return "log.sort.duration.desc";
+            case SEQUENCE: return "log.sort.sequence";
+            case STRUCTURE_CLUSTER: return "log.sort.structure";
+            case DATABASE_GROUP: return "log.sort.database";
+        }
+        throw new IllegalStateException("unexpected sort mode: " + mode);
+    }
+
     public static final String DATABASE_UNKNOWN_SORT_KEY = "\uFFFF";
 
     /** 慢查询过滤使用调用方统一的耗时回退口径；关闭时直接透传。 */
