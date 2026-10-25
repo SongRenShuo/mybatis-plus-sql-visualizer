@@ -526,6 +526,21 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean onboardingAnchorTipShown = false;
 
         /**
+         * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
+         * 「启用结构化并重试」推荐通知<b>只提示一次</b>。
+         *
+         * <p>事故形态：该通知每次点「执行计划」都出现（{@code explainStructuredRender} 关着就满足推荐条件），
+         * 用户顺手点过一次「启用结构化」之后，开关被<b>永久</b>写成 true，而界面上再没有任何地方
+         * 提示「现在是实验形态」——用户下次点执行计划看到弹窗，完全不知道是自己什么时候开的。
+         * 沙盒实测该值确为 {@code true}（{@code config/options/mp-sql-visualizer.xml}），代码默认值是 false，
+         * 差异只可能来自这条通知的动作。</p>
+         *
+         * <p>语义：展示过一次即置 true，之后全程静默。用户想开仍可去设置页显式勾选（不被此标记阻断）；
+         * 本标记只关掉「主动推荐」这一条噪音源。</p>
+         */
+        private boolean explainStructuredOfferedShown = false;
+
+        /**
          * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（用户登记的自研框架包名，一行一个，
          * 如 {@code com.corp.engine.}）。agent 侧栈帧判定并入（CONFIG 热下发），IDE 侧候选解析同步过滤。
          * 空 = 未登记。
@@ -858,6 +873,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getOnboardingAnchorTipShown() { return onboardingAnchorTipShown; }
         public void setOnboardingAnchorTipShown(boolean onboardingAnchorTipShown) { this.onboardingAnchorTipShown = onboardingAnchorTipShown; }
 
+        public boolean getExplainStructuredOfferedShown() { return explainStructuredOfferedShown; }
+        public void setExplainStructuredOfferedShown(boolean explainStructuredOfferedShown) { this.explainStructuredOfferedShown = explainStructuredOfferedShown; }
+
         public String getSourceFrameSkipPrefixes() { return sourceFrameSkipPrefixes; }
         public void setSourceFrameSkipPrefixes(String sourceFrameSkipPrefixes) { this.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes; }
 
@@ -971,6 +989,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.enhancedCaptureStackMaxFrames = enhancedCaptureStackMaxFrames;
             c.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled;
             c.onboardingAnchorTipShown = onboardingAnchorTipShown;
+            c.explainStructuredOfferedShown = explainStructuredOfferedShown;
             c.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes;
             c.sourceFrameBizJarPrefixes = sourceFrameBizJarPrefixes;
             return c;
@@ -1032,6 +1051,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && mcpToolsEnabled == that.mcpToolsEnabled
                     && onboardingAnchorTipEnabled == that.onboardingAnchorTipEnabled
                     && onboardingAnchorTipShown == that.onboardingAnchorTipShown
+                    && explainStructuredOfferedShown == that.explainStructuredOfferedShown
                     && enhancedCaptureEnabled == that.enhancedCaptureEnabled
                     && enhancedCaptureConfirmed == that.enhancedCaptureConfirmed
                     && enhancedCaptureRejectedAtMs == that.enhancedCaptureRejectedAtMs
@@ -1116,7 +1136,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureRejectedAtMs, enhancedCaptureDesensitize,
                     displayMaskEnabled, mcpMaskEnabled,
                     enhancedCaptureStackMaxFrames,
-                    onboardingAnchorTipEnabled, onboardingAnchorTipShown, sourceFrameSkipPrefixes, sourceFrameBizJarPrefixes);
+                    onboardingAnchorTipEnabled, onboardingAnchorTipShown, explainStructuredOfferedShown,
+                    sourceFrameSkipPrefixes, sourceFrameBizJarPrefixes);
         }
 
         @Override
