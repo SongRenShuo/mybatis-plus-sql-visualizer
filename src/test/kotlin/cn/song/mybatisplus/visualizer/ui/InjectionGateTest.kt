@@ -119,7 +119,68 @@ class InjectionGateTest : BasePlatformTestCase() {
         null,
     )
 
+    fun test静态结果没有动态模型仍展示实际生成方言() {
+        val result = PreviewResult(
+            "SELECT * FROM t_biz",
+            "SELECT * FROM t_biz",
+            emptyList(),
+            null,
+            null,
+            "t_biz",
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            false,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            cn.song.mybatisplus.visualizer.sql.OracleDialect.INSTANCE,
+            null,
+            null,
+            null,
+        )
+        assertNull(result.previewModel)
+        val p = newPanel()
+        SqlPreviewPanelResultViewKt.showResult(p, result)
+        assertEquals("Oracle", p.currentDialect())
+        assertEquals("预览临时 PSI 应消费同一实际生成方言", "Oracle", p.previewDesiredDialectName)
+    }
+
     private fun panelState(): String = panel!!.resultPanelForTest().stateForTest()
+
+    /**
+     * UI-035 起「无绑定数据源」不再进执行链：EXPLAIN 放行后的可观测面是「无数据源」引导对话框
+     * （`showExplainErrorDialog(openDatabase = true)`），不再是把结果面板推进 LOADING。
+     * 这里截获该对话框并回读可见文案，供断言「放行后确实给出了引导」。
+     */
+    private fun captureExplainDialogText(): () -> String? {
+        var message: String? = null
+        ExplainPlanDialog.explainDialogSinkForTest = java.util.function.Consumer { dialog ->
+            message = com.intellij.util.ui.UIUtil.uiTraverser(dialog.contentForTest())
+                .filter(com.intellij.ui.components.JBLabel::class.java)
+                .toList()
+                .mapNotNull { it.text }
+                .joinToString(" ")
+        }
+        return { message }
+    }
 
     /**
      * 断言「放行 = 进入执行链」：放行后 `resultPanel.showLoading()` 已执行，随后沙盒（无 Database
@@ -252,25 +313,45 @@ class InjectionGateTest : BasePlatformTestCase() {
         interceptDialogs(Messages.NO, Messages.YES)
         val p = newPanel()
         SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
+        val dialogText = captureExplainDialogText()
+        try {
+            SqlPreviewPanelExecutionKt.explainSql(p)
+            assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
+            assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
+            assertNull("NO 中止时不应再给后续引导", dialogText())
 
-        SqlPreviewPanelExecutionKt.explainSql(p)
-        assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
-        assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
-
-        SqlPreviewPanelExecutionKt.explainSql(p)
-        assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
-        assertProceeded("确认后放行")
+            SqlPreviewPanelExecutionKt.explainSql(p)
+            assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
+            // UI-035：无绑定数据源 → 放行后给引导，不进执行链（旧断言是 state != EMPTY）
+            val text = dialogText()
+            assertNotNull("确认后应给出「无数据源」引导：state=${panelState()}", text)
+            assertTrue(
+                "引导文案应为无数据源：$text",
+                text!!.contains(MpSqlVisualizerBundle.message("panel.explain.noDataSource")),
+            )
+        } finally {
+            ExplainPlanDialog.explainDialogSinkForTest = null
+        }
     }
 
     fun testEXPLAIN无raw段_不弹门() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
         SqlPreviewPanelResultViewKt.showResult(p, xmlResult(plainSelectMapper(), "s1"))
+        val dialogText = captureExplainDialogText()
+        try {
+            SqlPreviewPanelExecutionKt.explainSql(p)
 
-        SqlPreviewPanelExecutionKt.explainSql(p)
-
-        assertEquals("无 raw 段的 EXPLAIN 照旧免确认", 0, dialogMessages.size)
-        assertProceeded("照常执行")
+            assertEquals("无 raw 段的 EXPLAIN 照旧免确认", 0, dialogMessages.size)
+            val text = dialogText()
+            assertNotNull("放行后应给出「无数据源」引导：state=${panelState()}", text)
+            assertTrue(
+                "引导文案应为无数据源：$text",
+                text!!.contains(MpSqlVisualizerBundle.message("panel.explain.noDataSource")),
+            )
+        } finally {
+            ExplainPlanDialog.explainDialogSinkForTest = null
+        }
     }
 
     // ------------------------------------------------------------------

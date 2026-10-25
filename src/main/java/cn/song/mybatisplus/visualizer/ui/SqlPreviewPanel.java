@@ -1296,10 +1296,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return current != null ? current.getTableName() : null;
     }
 
-    /** F-8：当前预览的方言名称（可 null）。 */
+    /** F-8：当前预览的方言名称（可 null；T-SyncK2JMaster82 对齐 master effectiveDialect 链——含 renderedDialect 回落）。 */
     public String currentDialect() {
-        return current != null && current.getPreviewModel() != null
-                ? current.getPreviewModel().getDialect().getName() : null;
+        return current != null && current.getEffectiveDialect() != null
+                ? current.getEffectiveDialect().getName() : null;
     }
 
     public JBTextField paramFieldForTest(int index) {

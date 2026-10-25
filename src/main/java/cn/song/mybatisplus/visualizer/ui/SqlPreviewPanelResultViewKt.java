@@ -211,6 +211,12 @@ public final class SqlPreviewPanelResultViewKt {
                         ? cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO
                         : cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL)
                 : cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN;
+        // T-M19-StorageClear：新预览会从结果模型重新初始化全部参数态，此刻才允许旧面板接纳清理后的
+        // 新存储代际；停留在原预览的面板始终保持旧代际，其防抖/管理方案写回全部被拒。
+        // T-SyncK2JMaster82：对齐 master showResult 两行——此前 k2j 漏译（adopt 与方言同步均未接线）。
+        p.paramHistoryCache.adoptCurrentGenerationForFreshPreview();
+        // O-145 W5：渲染方言与临时 PSI 使用同一事实；必须先于 renderSql/createEditor。
+        SqlPreviewPanelEditorLifecycleKt.syncPreviewDialectMapping(p, result);
         // 参数值按 source 初始化（T-M42：优先取预填初始值——日志识别 `param1` → 日志参数值；
         // 其余空字符串；多条件复用同一 source 共享一个值）
         p.paramValues.clear();
