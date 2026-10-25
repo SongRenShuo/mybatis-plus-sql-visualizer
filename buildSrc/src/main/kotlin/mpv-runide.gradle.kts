@@ -56,6 +56,23 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
+        // 录制沙盒的许可补丁（本机 IDEA Ultimate 靠 javaagent 绕过签名校验）。
+        // 两点事实（2026-10-25 实测，见 docs/经验总结/20261025-0830-…）：
+        //  1) IntelliJ Platform Gradle Plugin 2.x 只读平台自身 bin/idea64.exe.vmoptions
+        //     （IntelliJPlatformArgumentProvider 走 product-info.json 的 vmOptionsFilePath），
+        //     沙盒 config/idea64.exe.vmoptions 不再被 merge；
+        //  2) agent 加载 ≠ 许可生效——许可实体是沙盒 config/idea.key，build/ 被 clean 后
+        //     整个沙盒消失、key 也不会自动恢复。缺 key 时 agent 照样加载（jcmd 能列出
+        //     53 个 janetfilter 类）但界面仍弹 Start Free Trial。
+        // 故这里只负责把 agent 传进去，key 的事在文档里单列一步。
+        // 路径由 -Pmpvs.licenseAgent=... 给定，缺席则一个参数都不加（其他机器/CI 零影响）。
+        // 注意必须在执行期读——配置期 System.getProperty 会被配置缓存冻结（同下面清单 URL 那条）。
+        val licenseAgent = providers.gradleProperty("mpvs.licenseAgent").orNull
+            ?.takeIf { it.isNotBlank() }
+            ?.takeIf { file(it).isFile }
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            licenseAgent?.let { listOf("-javaagent:$it") } ?: emptyList()
+        })
         // T-DynUpdate 职责分离（用户定案）：hotswap 本地服务起停只挂 runIdeHotSwap
         //（Run IDE (Local Manifest) 链路专属）——本任务（Run IDE with Plugin）是纯开发沙盒，
         // 不依赖更新清单服务，曾因无条件起服务 + build/distributions 缺 zip（clean 后）导致
