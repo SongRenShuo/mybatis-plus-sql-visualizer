@@ -142,6 +142,68 @@ def require_component(xpath, base=DEFAULT_BASE, offset=(0, 0), retries=3, interv
     raise RobotServerError("组件未找到: %s——XPath 写错了？界面还没出现？" % xpath)
 
 
+def menu_items(base=DEFAULT_BASE, timeout=20, screen=(1920, 1080)):
+    """当前弹出菜单的全部菜单项（屏幕坐标，按 y 从上到下），无菜单时返回 []。
+
+    2026-10-26 实测：ActionMenuItem **在主窗组件树里**——此前「robot 查不到弹出菜单」
+    的结论是 XPath 写错了：菜单项没有 name/text 字段，只有 className + 几何。
+    返回 [{x, y, width, height}]，x/y 为该行的左缘/上缘（屏幕坐标）。
+
+    **落在屏幕外的项会被丢弃**：菜单关闭后组件树里可能残留上一轮的坐标（实测会返回
+    y=1012/1795 这类超过窗口高度的旧值），按屏幕边界过滤可避免把残留当成当前菜单。
+    """
+    xp = "//div[contains(@class,'ActionMenuItem')]"
+    comps = find_components(xp, base=base, timeout=timeout)
+    out = []
+    for c in comps:
+        try:
+            sx, sy = component_screen_center(xp, comp=c, base=base, timeout=timeout)
+        except Exception:
+            continue
+        w, h = int(c.get("width", 0)), int(c.get("height", 0))
+        if not (0 <= sx < screen[0] and 0 <= sy < screen[1] and w > 0 and h > 0):
+            continue                        # 屏幕外 = 残留缓存，不是当前菜单
+        out.append({"x": sx, "y": sy, "width": w, "height": h})
+    out.sort(key=lambda r: r["y"])          # 「第 N 项」= 从上往下数
+    return out
+
+
+def click_menu_item(index, base=DEFAULT_BASE, timeout=20, retries=3, interval=0.6,
+                    x_ratio=0.5):
+    """点弹出菜单的第 index 项（0 起，从上往下；负数从末尾数，-1 = 最后一项）。
+
+    替代「像素扫描找末项 + 两段式量测子菜单」那套（a15 曾为此返工五轮）：菜单项几何
+    由 IDE 组件树直接给出，项数随上下文变化也不影响。x_ratio 控制点在该行的横向位置
+    （0.5 = 行中心；想避开文字可给 0.9）。
+    返回被点的矩形；菜单没弹出则重试，最终失败抛错。
+    """
+    import time
+    for _ in range(max(1, retries)):
+        items = menu_items(base=base, timeout=timeout)
+        if items:
+            try:
+                rect = items[index]
+            except IndexError:
+                raise RobotServerError("菜单只有 %d 项，取不到第 %s 项" % (len(items), index))
+            x = int(rect["x"] + rect["width"] * x_ratio)
+            y = rect["y"] + rect["height"] // 2
+            import pyautogui
+            pyautogui.moveTo(x, y, duration=0.25)
+            pyautogui.click(x, y)
+            return rect
+        time.sleep(interval)
+    raise RobotServerError("菜单没弹出来（0 个 ActionMenuItem）")
+
+
+def has_menu(base=DEFAULT_BASE, timeout=10):
+    """当前是否有弹出菜单在显示（无需等满 timeout 的快速判据）。"""
+    try:
+        return bool(find_components("//div[contains(@class,'ActionMenuItem')]",
+                                    base=base, timeout=timeout))
+    except Exception:
+        return False
+
+
 def screenshot(base=DEFAULT_BASE, out=None, timeout=30):
     """取 IDE 侧截图（返回 bytes；给了 out 就落盘）。"""
     resp = _request("/screenshot", base=base, timeout=timeout)
