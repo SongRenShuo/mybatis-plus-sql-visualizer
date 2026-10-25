@@ -392,6 +392,31 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
             LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
             if (executeAfterPrepare) openDatabaseToolWindow(project)
+            // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
+            // 数据源，可以正常提示方言不一致，但是还是要能成功执行」。
+            //
+            // 平台 runner 枚举按 **psiFile 已映射的 SQL 方言**筛；数据源在平台侧没有 Dialects
+            // 映射时，该方言一条 runner 都筛不出（runners=0）——数据源其实完全可用。
+            // 兜底＝按**目标源方言**把 exec 文件重映射一次，再枚举一遍 runner：命中即走既有
+            // 全链（控制台、结果表、审计全部复用），不新建任何执行通道。
+            val remapLanguage = runCatching {
+                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+            }.getOrNull()
+            if (remapLanguage != null && ExecDialectRouting.remapExecFileDialect(project, vf, remapLanguage)) {
+                val retry = runCatching { ExecDialectRouting.expandGroupRunners(
+                    DataSourceSelector.getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer),
+                ) }.getOrDefault(emptyList())
+                LOG.info("[M36] runners empty → remapped exec file to target dialect, retry runners=${retry.size}")
+                if (retry.isNotEmpty()) {
+                    // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）
+                    return@chooseAndPrepare chooseAndPrepare(
+                        project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
+                        onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
+                        forceChoose, preferredRunnerName, forceChoosePopup,
+                    )
+                }
+            }
             if (registered.isEmpty()) {
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
             } else {
