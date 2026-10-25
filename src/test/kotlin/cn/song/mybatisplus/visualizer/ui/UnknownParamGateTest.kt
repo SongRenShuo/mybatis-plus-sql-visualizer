@@ -70,6 +70,23 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     private fun panelState(): String = panel!!.resultPanelForTest().stateForTest()
 
     /**
+     * UI-035 起「无绑定数据源」不再进执行链：EXPLAIN 放行后的可观测面是「无数据源」引导对话框
+     * （`showExplainErrorDialog(openDatabase = true)`），不再是把结果面板推进 LOADING。
+     * 这里截获该对话框并回读可见文案。
+     */
+    private fun captureExplainDialogText(): () -> String? {
+        var message: String? = null
+        ExplainPlanDialog.explainDialogSinkForTest = java.util.function.Consumer { dialog ->
+            message = com.intellij.util.ui.UIUtil.uiTraverser(dialog.contentForTest())
+                .filter(com.intellij.ui.components.JBLabel::class.java)
+                .toList()
+                .mapNotNull { it.text }
+                .joinToString(" ")
+        }
+        return { message }
+    }
+
+    /**
      * 断言「放行 = 进入执行链」：放行后 `resultPanel.showLoading()` 已执行，随后沙盒（无 Database
      * 插件）走 Community 降级链落到 ERROR 态；中止则原样停留 EMPTY。故非 EMPTY 即「未中止」。
      */
@@ -211,14 +228,25 @@ class UnknownParamGateTest : BasePlatformTestCase() {
         interceptDialogs(Messages.NO, Messages.YES)
         val p = newPanel()
         SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
+        val dialogText = captureExplainDialogText()
+        try {
+            SqlPreviewPanelExecutionKt.explainSql(p)
+            assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
+            assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
+            assertNull("NO 中止时不应再给后续引导", dialogText())
 
-        SqlPreviewPanelExecutionKt.explainSql(p)
-        assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
-        assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
-
-        SqlPreviewPanelExecutionKt.explainSql(p)
-        assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
-        assertProceeded("确认后放行")
+            SqlPreviewPanelExecutionKt.explainSql(p)
+            assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
+            // UI-035：无绑定数据源 → 放行后给引导，不进执行链（旧断言是 state != EMPTY）
+            val text = dialogText()
+            assertNotNull("确认后应给出「无数据源」引导：state=${panelState()}", text)
+            assertTrue(
+                "引导文案应为无数据源：$text",
+                text!!.contains(MpSqlVisualizerBundle.message("panel.explain.noDataSource")),
+            )
+        } finally {
+            ExplainPlanDialog.explainDialogSinkForTest = null
+        }
     }
 
     fun testEXPLAIN确认后_与执行共用一次性记忆() {

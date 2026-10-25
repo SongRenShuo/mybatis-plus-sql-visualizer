@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -105,10 +107,49 @@ class ConsoleHostTest : BasePlatformTestCase() {
         panel.embedConsoleForTest(first)
         panel.embedConsoleForTest(second)
 
-        assertSame("host should hold the new console", second, panel.consoleHostForTest().getComponent(0))
-        assertEquals("host should hold exactly one child", 1, panel.consoleHostForTest().componentCount)
+        assertSame(
+            "host should hold the new console",
+            second,
+            panel.consoleHostForTest().components.first { it === second },
+        )
+        assertEquals(
+            "host should hold the execute-view header + console",
+            2,
+            panel.consoleHostForTest().componentCount,
+        )
         assertNull("old console should be detached", first.parent)
     }
+
+    /** P3a：执行视图必须提供显式「返回预览」，不再只能靠刷新按钮。 */
+    @Test
+    fun testExecuteEmbedShowsBackToPreviewHeader() {
+        val panel = newPanel()
+        panel.embedConsoleForTest(JPanel())
+        val button = panel.consoleHostForTest().components
+            .flatMap { buttons(it) }
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("panel.backToPreview") }
+        assertNotNull("执行视图必须提供返回预览入口", button)
+    }
+
+    /** P3a：返回预览必须移除执行视图头部（不能只重渲染 SQL 留着「执行结果」标识）。 */
+    @Test
+    fun testBackToPreviewRemovesExecuteHeader() {
+        val panel = newPanel()
+        panel.embedConsoleForTest(JPanel())
+        assertTrue(
+            "执行视图应显示返回预览",
+            buttons(panel.consoleHostForTest()).any { it.text == MpSqlVisualizerBundle.message("panel.backToPreview") },
+        )
+        SqlPreviewPanelExecutionKt.backToPreview(panel)
+        assertTrue(
+            "返回预览后头部必须移除",
+            buttons(panel.consoleHostForTest()).none { it.text == MpSqlVisualizerBundle.message("panel.backToPreview") },
+        )
+    }
+
+    private fun buttons(component: java.awt.Component): List<javax.swing.AbstractButton> =
+        (if (component is javax.swing.AbstractButton) listOf(component) else emptyList()) +
+            (if (component is java.awt.Container) component.components.flatMap { buttons(it) } else emptyList())
 
     // ======================== A2 清空语义 ========================
 

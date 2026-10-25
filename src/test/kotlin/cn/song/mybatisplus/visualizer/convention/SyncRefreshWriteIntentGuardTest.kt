@@ -90,10 +90,14 @@ class SyncRefreshWriteIntentGuardTest : BannedApiScanSupport() {
     @Test
     fun 规则一_BGT预热链不得再现WIRA包装() {
         val source = maskNonCode(productionSource().second)
-        val body = functionBodyRange(source, "prewarmExecTempFileInner")
-        assertNotNull("Java 预热方法必须被定位，不能空扫描", body)
-        assertTrue(WIRA_TOKEN !in source.substring(body!!.first, body.last + 1))
-        assertTrue(SYNC_REFRESH_TOKEN in source.substring(body.first, body.last + 1))
+        // T-SyncK2JMaster82：prewarmExecTempFileInner 现为「3 参委托 + 4 参实现」重载族
+        // （Kotlin 默认参 → Java 重载惯例），改按重载族口径锚定含同步 refresh 的实现体。
+        val impl = functionBodyRanges(source, "prewarmExecTempFileInner")
+            .map { source.substring(it.first, it.last + 1) }
+            .firstOrNull { SYNC_REFRESH_TOKEN in it }
+        assertNotNull("Java 预热实现重载（含同步 refresh）必须被定位，不能空扫描", impl)
+        assertTrue(WIRA_TOKEN !in impl!!)
+        assertTrue(SYNC_REFRESH_TOKEN in impl)
     }
 
     @Test
@@ -196,12 +200,15 @@ class SyncRefreshWriteIntentGuardTest : BannedApiScanSupport() {
     @Test
     fun 反向_真实预热站点还原WIRA必须变红() {
         val (path, original) = productionSource()
-        val body = functionBodyRange(maskNonCode(original), "prewarmExecTempFileInner")
-            ?: error("prewarmExecTempFileInner 定位失败——文件/函数改名后本守卫须同步跟进")
-        val bodyText = original.substring(body.first, body.last + 1)
+        val maskedOriginal = maskNonCode(original)
+        // T-SyncK2JMaster82：重载族口径——锚定含同步 refresh 的实现体重载
+        val implRange = functionBodyRanges(maskedOriginal, "prewarmExecTempFileInner")
+            .firstOrNull { SYNC_REFRESH_TOKEN in maskedOriginal.substring(it.first, it.last + 1) }
+            ?: error("prewarmExecTempFileInner 实现重载定位失败——文件/函数改名后本守卫须同步跟进")
+        val bodyText = original.substring(implRange.first, implRange.last + 1)
         val bare = "vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);"
         assertTrue("反向探针必须命中真实修改点", bodyText.contains(bare))
-        val broken = original.replaceRange(body, bodyText.replace(bare,
+        val broken = original.replaceRange(implRange, bodyText.replace(bare,
             "vf = WriteIntentReadAction.compute((com.intellij.openapi.util.Computable<VirtualFile>) () -> " +
                 "LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));"))
         assertTrue("原始形态必须全仓零违规", syncRefreshInsideWiraOffenders(listOf(path to original)).isEmpty())
