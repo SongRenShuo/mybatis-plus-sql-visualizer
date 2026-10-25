@@ -132,6 +132,18 @@ public final class SqlPreviewPanelResultViewKt {
                 () -> SqlPreviewPanelSqlViewKt.showShareDialog(p)));
         list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.portableExport"),
                 () -> SqlPreviewPanelExecutionKt.exportPortableSql(p)));
+        // R36：回放脚本导出（参数已填回的可执行 .sql；沿用 O-91 同款入口与写盘/通知链）
+        list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.replayExport"),
+                () -> SqlPreviewPanelExecutionKt.exportReplayScript(p)));
+        // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
+        list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.aiContext"),
+                () -> SqlPreviewPanelExecutionKt.copyAsAiContext(p)));
+        // T-AiContextLegibility B：显式含表列名出口（值仍打码，引号内容不复制）
+        list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.aiContext.identifiers"),
+                () -> SqlPreviewPanelExecutionKt.copyAsAiContext(p, true)));
+        // R42（阶段二合并批）：DML 影响面预演——UPDATE/DELETE 执行前的只读 COUNT 试算
+        list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.dmlImpact"),
+                () -> SqlPreviewPanelExecutionKt.estimateDmlImpact(p)));
         return list;
     }
 

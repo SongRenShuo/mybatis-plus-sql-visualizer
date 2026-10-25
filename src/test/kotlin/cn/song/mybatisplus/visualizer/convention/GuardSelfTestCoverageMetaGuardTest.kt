@@ -693,6 +693,32 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数（差集在用例内联计算），故 decisionFns 留空；" +
                     "灵敏度=把 KEYWORDS 改回旧 41 词平集必红，已实测于实施轮（4 例红，含逐词差集原文）。",
             ),
+            GuardEntry(
+                "convention/ExplainAskPasswordChannelGuardTest.kt",
+                emptyList(),
+                "结构化执行计划三通道 askPassword 表态守卫（T-ExplainPwdPrompt）：判定内核内联于三个用例——" +
+                    "扫 ExplainDialog/预估行数与 EXPLAIN 旁路/MCP 工具三处源码，断言 askPassword 按" +
+                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。无独立「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
+                    "潜伏红灯），合并轮补登。",
+            ),
+            GuardEntry(
+                "log/SqlLogToolbarUpdateThreadGuardTest.kt",
+                emptyList(),
+                "SQL 日志工具栏 BGT 声明守卫（T-SqlLogToolbarEdt W4）：判定内核内联于四个用例——" +
+                    "扫 SqlLogPanel 源码断言组与组内每个覆写 update 的动作都声明 BGT、BGT 常量类型为 BGT、" +
+                    "排序文案查表覆盖全部模式。offenders 在用例内累积，无独立「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=删一个动作的 BGT 声明恰 1 红已实测（并修掉首版正则剥 Action " +
+                    "后缀致 filter 全程跳过的假绿）。",
+            ),
+            GuardEntry(
+                "ui/ExplainStructuredDefaultOffGuardTest.kt",
+                emptyList(),
+                "结构化执行计划默认关守卫（T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
+                    "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
+                    "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
