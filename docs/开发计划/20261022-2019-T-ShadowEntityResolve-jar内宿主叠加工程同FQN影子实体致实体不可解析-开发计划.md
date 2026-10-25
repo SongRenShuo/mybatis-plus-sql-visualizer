@@ -328,7 +328,118 @@ sources 形态一致（表名列名、不降级、无 fallback 表）。
 - `EntityClassFinder`（表名→实体反查）、`NamedQueryLocator` 等 §7 同族站点仍按原计划登记未动。
 - 全量 `testShards` 已跑两次：第一次 **8162/0/0/9**（含取证期临时探针类），W2 换成正式护栏类后复跑
   **8122/0/0/9**（分片 1904+1560+1453+1504+1670 + external 31），两次零失败。**8122 为权威读数**
-  （生产代码在两次之间未变，仅测试类替换）。
+  （生产代码在两次之间未变，仅测试类替换）。W3 追加轮的门禁读数见 §10.8。
+
+### 10.8 追加轮（20261023）：用户真机复现失败 → **第三种形态**（workspace 零候选）
+
+**用户复现读数**：demo 仓按 `WmsTaskJarService#beAllocateSuccess` 预览仍出 `SELECT task.* /* 实体不可解析…*/`，
+且用户把 lib 里的 `WmsTask.java` **整个注释掉**后，demo 的影子实体仍不被识别。
+
+**取证**（demo 仓现场）：lib 源码已注释（类消失），但 `target/classes` 留有 21:04 旧 class、jar 21:06 打包
+（注释在构建之后）。**决定性形态是 IDEA 的 Maven workspace 解析**：`shadow-entity-lib` 与 `shadow-entity-demo`
+**都作为模块加载**，宿主 `WmsTaskJarService.java` 属于 lib 模块**内容**（非库文件）→ `contextModule` = lib 模块；
+demo 的影子实体在**下游**模块（依赖方向 demo→lib，lib 不可见 demo）→ 宿主作用域内 `WmsTask` **零候选** →
+降级。前两轮修复（P0a 同 FQN 收窄、P0b 非实体过滤）都治「多候选」，治不了「零候选」——该形态在新旧插件下
+同样降级，与前两轮正交。子智能体在 README 里预警过的「workspace 假绿」在这里以**反向**形式应验：
+workspace 不是让缺陷消失，而是把缺陷换成了另一种（零候选）。
+
+**修法（W3 零候选拓宽）**：`EntityClassResolver.resolveWithAliasCandidates` 在宿主作用域**零候选**且
+`context != null`（且 scope 尚非 allScope）时，放宽到 allScope 再查一次；**全项目唯一命中且为映射实体**
+才采用；多命中按既有纪律走「歧义终态」（`ambiguous=true` + 提示一次）。首版曾把多命中写成静默空候选，
+被自家反向用例逼回歧义终态——「让用户看到候选清单」优于无声降级。
+
+**契约变更（有意识的一处）**：`SqlPreviewEntityScopeHeavyTest#testExplicitInvisibleClassCannotBypassHostScope`
+原钉「显式不可见类不得旁路＝resolveHqlTable 为 null」；拓宽后窄域零候选会解析出全项目唯一实体，原断言翻转。
+改造为**在窄域有候选的形态下钉同一防护**（宿主可见 `local.Inventory` + 不可见 `wrong.Inventory` → 断言解析到
+local 那份），防护语义保留、新契约由 workspace 用例单独钉住。T-EntityNameScope 防「挑错实体」的核心
+（多候选不猜）未放松：窄域多候选照旧 fail closed，拓宽多命中也 fail closed。
+
+**新增用例**（`ShadowEntityResolveTest`）：`testEntityOnlyInDownstreamModuleResolvesFromWorkspaceHost`
+（workspace 零候选 → 解析到下游实体、表名/列正确、不降级）、`testDownstreamWideningStaysFailClosedWhenNotUnique`
+（下游双命中 → 仍 fail closed）。
+
+**读数**：红基线 7 例**恰 2 红**（两条 workspace 用例）；修复后定向 **37/0/0/0**
+（ShadowEntityResolve 7 + EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）；反向摘拓宽
+**恰 2 红**、还原回绿。
+
+**给用户的复现提示**：装**本次修复之后**构建的插件（zip 或 runIde 产物）再走查；workspace（两模块同载）与
+README 的「卸载 lib 用真 jar」两种加载方式此后都应解析到 `wms_task_project`。另：lib 注释源码后若想恢复
+「jar 双份」形态，需 `mvn install` 重建（`target/classes` 里的旧 class 与旧 jar 仍是注释前产物）。
+
+### 10.9 追加轮二（20261023 晚）：**第四种形态**——两份候选都被判「工程内容」
+
+用户把 jar 放进 `src/main/resources/lib/` 后仍降级，且歧义提示里**两个候选都标 `[工程]`**：
+
+```
+候选：com.example.shadow.model.WmsTask [工程], com.example.shadow.model.WmsTask [工程]
+```
+
+**根因**：`preferProjectContent` 第一步按 `isInContent` 收窄，而该环境下 jar 内 class 也被判为内容
+（`inContent.size == definitions.size`）⇒ 分不出胜负 ⇒ 不收窄 ⇒ 歧义 ⇒ 降级。
+
+**取证**：三种挂法（模块外 jar / 内容根下 jar / 双挂）实测 jar 内 class **均 `isInContent=false`**，
+与用户环境不一致——差异在工程配置而非代码。故修复**不依赖 `isInContent`**。
+
+**修法（W5）**：把收窄决策抽成 `narrowByContentAndForm`（两步串联，纯逻辑可测）：
+1. 按「是否工程内容」收窄（原逻辑，全内容/全非内容时不收窄）；
+2. 再按「**源码形态**」收窄：`.java` 对上 `.class` 时取 `.java`——这正是「工程里新增一份同包同名类」
+   的本质形态，与挂载方式无关。
+
+两步都只在能明确分出胜负时收窄，否则原样返回交由歧义 fail closed（不伪造胜者）。
+
+**另加诊断**：歧义时把每个候选的 `ext / inContent / inLibClasses / inLibSource / module / url` 写进
+IDE 日志（搜 `entity-ambiguity`），便于现场定位工程配置差异。
+
+**读数**：红基线 `ShadowContentTieBreakTest` 5 例**恰 1 红**（`testBothContentThenSourceFormWins`：
+两份都判内容时未收窄）→ 修复后定向 **42/0/0/0**（ShadowContentTieBreak 5 + ShadowEntityResolve 7 +
+EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）。
+
+**同时修掉一个假绿用例**：W4 的 `JarInsideContentRootTest` 用**解包目录**代替 jar，jar 那份根本没进候选
+⇒ 测不到用户形态。已改用 `JarFileSystem` 挂**真实 jar** 成库根（jar 物理路径位于 source root 下），
+从反编译 PSI 取调用点做端到端断言（2/0/0/0）。**教训：夹具与被测形态的「身份」必须一致——解包目录
+不等于 jar。**
+
+### 10.10 追加轮三（20261023 晚）：**第五种形态**——跨模块同 FQN 源码，靠模块依赖方向仲裁
+
+用户装上含 W5 的沙盒后复测：**sources jar 形态已正常**，**反编译（class jar）形态仍降级**；
+并说明触发点是 `shadow-entity-demo/src/main/resources/lib/shadow-entity-lib-1.0.0.jar` 里那行
+`commonDao.findByQuery(...)`。诊断日志（W5 加的）给出决定性读数：
+
+```
+entity-ambiguity[0] com.example.shadow.model.WmsTask ext=java inContent=true
+  inLibClasses=false inLibSource=false module=shadow-entity-demo url=.../shadow-entity-demo/.../WmsTask.java
+entity-ambiguity[1] ... ext=java inContent=true module=shadow-entity-lib url=.../shadow-entity-lib/.../WmsTask.java
+```
+
+**两个候选都是 `.java`**，分属 demo 与 lib 两个模块——jar 内那份 class 已被平台自身的同 FQN 去重淘汰
+（内容优先于库）。于是 W5 的两步（内容、源码形态）**都失效**（两边都是内容、都是源码）⇒ 歧义 ⇒ 降级。
+与 W5 的形态正交，故 W5 修不了它。
+
+**修法（W6）**：收窄改为三步 `narrowAmbiguous`（纯逻辑，可注入谓词）：
+1. 工程内容优先（原步）；
+2. **模块依赖方向**——恰分属两模块且一方（传递）依赖另一方时取**依赖方**那份。依据＝运行期
+   classpath 序（本模块输出先于其依赖），也正是「工程里新增同名类覆盖依赖模块」的生效规则；
+   无关模块／互为依赖／组内含无可归属定义（库内）时此步不收窄；
+3. 源码形态优先（原步）。
+
+顺序有意：**先剔库定义，模块方向才可能落在「恰好两个模块」上**（首次实现把模块步放在内容步之前，
+组内还含 jar 那份无模块定义 → 三个模块键 → 直接放弃，实测仍 2 候选）。
+
+同时删掉原先「`module == null` 就整段跳过平台仲裁」的分支——它丢掉了本可用的模块身份信息。
+
+**读数**：红基线 `ShadowModuleOrderTest#testDependentModuleSourceWins` 失败（candidates=2）→ 修复后
+`ShadowModuleOrderTest` + `ShadowContentTieBreakTest` **7/0/0/0**；回归 4 类（ShadowEntityResolve 7 +
+JarInsideContentRoot 2 + EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）**39/0/0/0**，
+XML 落盘条数已校验（非空绿）。反向契约 `testUnrelatedModulesStayAmbiguous`（两模块无依赖）保持歧义。
+
+**本轮新踩的坑**：① 组合多个 `--tests` 模式时出现「No tests found for given includes」而单类可跑，
+同一批改用 4 类一次跑通过——**判据是 XML 落盘条数，不是退出码**；② `BUILD SUCCESSFUL` 但零 XML 的
+空绿再现（配置缓存），凡读断言必先数 XML。
+
+**沙盒目录确认**（用户问）：`.intellijPlatform/sandbox/.../IU-2024.3.7.1/`＝`runIde` 默认态；
+`build/MPSV-GifFresh/.../IU-2026.2.1/`＝`-PgifRecord=true` 录制态。用户实际跑的是前者（其日志写在
+`log_runIdeHotSwap/idea.log`）。**插件必须装进用户实际使用的那个 `plugins*` 目录**，否则复测仍在跑旧代码
+（本轮已装 `plugins/` 与 `plugins_runIdeHotSwap/` 两处并核验字节码）。
 
 ## 十一、附：本轮未做的事
 
