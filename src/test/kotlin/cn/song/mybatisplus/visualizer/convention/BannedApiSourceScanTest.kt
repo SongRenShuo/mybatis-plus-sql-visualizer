@@ -1253,6 +1253,10 @@ class BannedApiSourceScanTest {
         // T-SyncK2JMaster90（2026-10-18）：Selector 主体随 T-PrewarmWilDeadlock W2 预热预算化
         // （prewarmFuture.get 超时放弃链）新增 1 处 ExecutionException 拆包 fatal 透传判定，实测 1→2。
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 2,
+        // 2 处（T-SyncK2JMaster82，2026-10-25 新入落地集）：执行计划双通道翻译把 master 侧
+        // submitExplainDirectConsole 预热块与 submitExplainOrStructured hints 块两处
+        // `runCatching`+fatal 透传落成 `catch (Throwable)` + `throw (Error) t`，实测口径计数 2。
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
@@ -1337,7 +1341,16 @@ class BannedApiSourceScanTest {
      */
     // T-SyncK2JMaster496：k2j 树把每个 Kotlin `runCatching` 落成 try/catch(Throwable)，站点数随
     // 移植增量上升——本次实测 833（763 → 833）。新增/删除捕获点须重新登记本基线。
-    private val fatalCatchSiteTotalBaseline = 852
+    //
+    // **852 → 888（T-SyncK2JMaster82，2026-10-25，本轮重登记净增 +36）**：82 轮生产翻译五功能族
+    // （执行计划/预览取源换源修复族为主 + 设置搜索/影子实体/premain 挂死/日志 BGT）把 master 侧
+    // `runCatching` 继续落成 try/catch(Throwable)（776 个 .java 文件实测口径 888 站点）。
+    // 新增站点集中在 explainFallbackDataSource 表归属路由与模块学习归属、跨源证据升格、
+    // last-used 模块级双写、执行计划双通道失败分型与通知、AgentManager 代际让位/resume 预算、
+    // 模块绑定清理等，均为降级/探测/兜底语义（agent 各批报告归集 +35，与守卫实测 +36 差 1
+    // 为 ResultsKt 跨源升格整体包裹块）；外层 fatal 透传判定新增两处已登记
+    // [fatalPassthroughGuardedFiles]（SqlPreviewPanelExecutionKt 新入落地集 = 2）。
+    private val fatalCatchSiteTotalBaseline = 888
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
