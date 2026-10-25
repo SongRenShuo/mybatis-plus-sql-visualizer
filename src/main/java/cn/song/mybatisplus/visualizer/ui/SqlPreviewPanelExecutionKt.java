@@ -75,7 +75,7 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
     public static void showRollbackSql(@NotNull SqlPreviewPanel p) {
-        String raw = currentEditorSql(p);
+        String raw = previewSqlForReadonly(p);
         if (raw == null) return;
         String sql = SqlCommentStripper.strip(raw);
         if (sql.isBlank()) return;
@@ -124,7 +124,7 @@ public final class SqlPreviewPanelExecutionKt {
      * 脱敏同 R60 口径（{@code displayMaskEnabled}，投影级）：开启时脚本字面量打码并在注释头标 {@code masked}。</p>
      */
     public static void exportReplayScript(@NotNull SqlPreviewPanel p) {
-        String sql = currentEditorSql(p);
+        String sql = previewSqlForReadonly(p);
         if (sql == null || sql.isBlank()) return;
         cn.song.mybatisplus.visualizer.sql.Dialect dialect =
                 p.current != null && p.current.getEffectiveDialect() != null
@@ -219,7 +219,7 @@ public final class SqlPreviewPanelExecutionKt {
     public static void estimateDmlImpact(@NotNull SqlPreviewPanel p, boolean allowDataSourcePrompt) {
         Project proj = p.project;
         if (proj == null) return;
-        String sql = currentEditorSql(p);
+        String sql = previewSqlForReadonly(p);
         if (sql == null) return;
         cn.song.mybatisplus.visualizer.sql.Dialect dialect =
                 p.current != null && p.current.getEffectiveDialect() != null
@@ -395,7 +395,7 @@ public final class SqlPreviewPanelExecutionKt {
      * 写盘在后台线程（对齐 SqlLogPanel R4 导出流程）。</p>
      */
     public static void exportPortableSql(@NotNull SqlPreviewPanel p) {
-        String raw = currentEditorSql(p);
+        String raw = previewSqlForReadonly(p);
         if (raw == null) return;
         String sql = SqlCommentStripper.strip(raw);
         if (sql.isBlank()) return;
@@ -467,8 +467,78 @@ public final class SqlPreviewPanelExecutionKt {
         return SqlExportFormat.TXT;
     }
 
-    // TODO(ui-sync)：master 的 copyAsAiContext（R91 AI 上下文复制）待 util/AiContextExport Java 化后补译
-    //  （AiContextExport.kt 属 util 批次，作业树暂缺；captureAiContextPlan 已在 EXPLAIN 链落地）。
+    /**
+     * R91（master ed5005d4 对齐）：AI 上下文复制——只读当前预览/编辑器与已获取历史，
+     * 绝不新取计划或 schema（v2 投影：字面量遮蔽 + 标识符可选 + 缺失段标注）。
+     */
+    public static void copyAsAiContext(@NotNull SqlPreviewPanel p) {
+        copyAsAiContext(p, false);
+    }
+
+    public static void copyAsAiContext(@NotNull SqlPreviewPanel p, boolean includeIdentifiers) {
+        String sql = previewSqlForReadonly(p);
+        if (sql == null) return;
+        PreviewResult preview = p.current;
+        cn.song.mybatisplus.visualizer.sql.Dialect dialect =
+                preview != null && preview.getEffectiveDialect() != null ? preview.getEffectiveDialect() : null;
+        SqlPreviewPanel.AiContextTarget target = p.aiContextTarget;
+        if (target != null && !(target.preview() == preview && stillCurrentSafe(target))) {
+            target = null;
+        }
+        ExplainGate.SubmitPlan.Submit wrapped = null;
+        if (dialect != null) {
+            ExplainGate.SubmitPlan plan = ExplainGate.planExplainSubmit(dialect, sql);
+            if (plan instanceof ExplainGate.SubmitPlan.Submit submit) wrapped = submit;
+        }
+        cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat format =
+                dialect != null ? ExplainSupport.formatFor(dialect.getName()) : null;
+        cn.song.mybatisplus.visualizer.history.ExplainPlanKey key = null;
+        if (target != null && dialect != null && wrapped != null && format != null) {
+            cn.song.mybatisplus.visualizer.history.ExplainPlanKey candidate =
+                    cn.song.mybatisplus.visualizer.history.ExplainPlanKey.create(
+                            cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(
+                                    p.project != null ? p.project.getBasePath() : null),
+                            target.key().dataSourceUuid(), dialect.getName(), format, wrapped.statement());
+            if (candidate.equals(target.key())) key = candidate;
+        }
+        List<cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> plans = List.of();
+        if (key != null) {
+            cn.song.mybatisplus.visualizer.history.SqlHistoryManager history =
+                    cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance();
+            List<cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> matched =
+                    new ArrayList<>(history.matchingExplainPlans(key));
+            kotlin.Pair<Long, cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> acquired = p.aiContextPlan;
+            if (acquired != null && acquired.getFirst() == history.explainPlanGeneration()
+                    && acquired.getSecond().key().equals(key)) {
+                matched.add(acquired.getSecond());
+            }
+            plans = matched;
+        }
+        // A manually edited SQL cannot borrow schema facts from the previous preview.
+        cn.song.mybatisplus.visualizer.util.AiContextExport.StaticSchema schema = null;
+        if (preview != null && (sql.equals(preview.getSql()) || sql.equals(p.lastRenderedSql))) {
+            String table = preview.getTableName();
+            if (table != null) {
+                schema = new cn.song.mybatisplus.visualizer.util.AiContextExport.StaticSchema(table, preview.getColumns());
+            }
+        }
+        cn.song.mybatisplus.visualizer.util.AiContextExport.Result result =
+                cn.song.mybatisplus.visualizer.util.AiContextExport.buildV2(
+                        sql, dialect != null ? dialect.getName() : null, key, plans, schema, includeIdentifiers);
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(result.block());
+        String toastKey = includeIdentifiers ? "ai.context.v2.copied.identifiers" : "ai.context.v2.copied";
+        SqlPreviewPanelSqlViewKt.showDiffToast(p,
+                MpSqlVisualizerBundle.message(toastKey, result.maskedCount()));
+    }
+
+    private static boolean stillCurrentSafe(@NotNull SqlPreviewPanel.AiContextTarget target) {
+        try {
+            Boolean v = target.stillCurrent().get();
+            return Boolean.TRUE.equals(v);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     public static ExecutionDialectGate.Request executionDialectGateRequest(
             @NotNull SqlPreviewPanel p, @NotNull ExecutionDialectGate.Intent intent) {
@@ -482,7 +552,15 @@ public final class SqlPreviewPanelExecutionKt {
                 && (result.getPreviewModel() != null || result.getBatchModel() != null);
         return new ExecutionDialectGate.Request(
                 p.executionDialectRenderMode,
-                result != null && result.getEffectiveDialect() != null ? result.getEffectiveDialect().getName() : null,
+                // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
+                // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
+                // {@code effectiveDialect} 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
+                // renderedDialect 未赋值的链）。而渲染器 {@code DialectRegistry.byName(null)} 的既有语义是
+                // <b>回落 MySQL</b>（Dialect.kt:908-909）——即实际渲染方言从来不是「未知」。此处按同一口径
+                // 补回落，避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
+                result != null && result.getEffectiveDialect() != null
+                        ? result.getEffectiveDialect().getName()
+                        : MySqlDialect.INSTANCE.getName(),
                 intent,
                 canRerender,
                 untouched,
@@ -547,7 +625,11 @@ public final class SqlPreviewPanelExecutionKt {
                     message,
                     MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
                     MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-                    () -> executeSql(p, true),
+                    // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：换源一律走**平台原生
+                    // 工具栏的 Data Sources 菜单**（图三：Detach Data Source + 全部源）——插件侧自建
+                    // 入口做不到与原生一致（平台 forced 关联无公开清除 API，自建列表第二次起会被短路成
+                    // 单源）。此处动作改为把用户送到能换源的地方：打开 Database 工具窗口。
+                    () -> cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(projF),
                     settingsAvailableF
                             ? MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
                             : null,
@@ -844,6 +926,30 @@ public final class SqlPreviewPanelExecutionKt {
         if (p.nativeEditorDoc != null && !p.nativeEditorDoc.getText().isBlank()) return p.nativeEditorDoc.getText();
         if (p.editor != null && !p.editor.getDocument().getText().isBlank()) return p.editor.getDocument().getText();
         return null;
+    }
+
+    /**
+     * T-ExplainConsoleFirst W2（2026-10-24）：<b>只读动作</b>的取词——执行视图在场时读预览快照。
+     *
+     * <p>为什么需要：执行计划走内嵌原生控制台（形态 A）时，EXPLAIN 语句被写进 {@code mpsql-exec.sql} 的
+     * document，而 {@code nativeEditorDoc} 指向它——{@link #currentEditorSql} 于是从「预览 SQL」漂移成
+     * 「EXPLAIN …」。回滚 SQL / 导出回放脚本 / 复制 AI 上下文 / 导出可移植 SQL / 预估影响行数
+     * 全都读那个函数，在执行视图里点它们会拿到 EXPLAIN 语句（{@code 1a1cf724} 正是因此把默认通道换成
+     * 旁路查询的）。</p>
+     *
+     * <p>判据：{@code lastRenderedSql} 由 showSql 在每次预览渲染后记录，而控制台执行链写 exec 文件
+     * <b>不经过 showSql</b>，故它恰好保存着「最后一次预览的 SQL」。</p>
+     *
+     * <p>边界：执行视图不在场（含「返回预览」之后）一律返回真实编辑器文本——用户手改必须被看见。
+     * <b>执行链本身不用本函数</b>（executeSql/explainSql 执行的就是编辑器里的真实文本）。</p>
+     */
+    @Nullable
+    public static String previewSqlForReadonly(@NotNull SqlPreviewPanel p) {
+        if (p.executeViewHeader != null) {
+            String snapshot = p.lastRenderedSql;
+            if (snapshot != null && !snapshot.isBlank()) return snapshot;
+        }
+        return currentEditorSql(p);
     }
 
     /**
@@ -1186,22 +1292,196 @@ public final class SqlPreviewPanelExecutionKt {
         // fail-closed 回退直送通道，双通道并存不替换既有行为，见 submitExplainOrStructured）
         // 代际先递增（所有路径）——作废前一次提交的在途结构化回调
         p.explainStructuredGeneration++;
-        submitExplainOrStructured(p, proj, dialect, explainSql);
+        submitExplainOrStructured(p, proj, dialect, explainSql,
+                executionDialectGateRequest(p, ExecutionDialectGate.Intent.EXPLAIN));
     }
 
     /**
-     * R33：EXPLAIN **直送通道**（既有行为原样收敛）——包装语句交原生 Database 控制台执行，
-     * 结果区内嵌控制台（embedConsole）。结构化通道的初始回退与「回到原生控制台」入口都复用
-     * 本函数：直送链只此一份，绝不新增第二套执行链。
+     * T-PreviewSideQuery P2：显式「在控制台打开」路径（保留原有 SqlExecutor.execute 行为）。
+     * 仅由用户在结果对话框里明确选择时调用；默认 EXPLAIN/回退不再走这里。
+     *
+     * <p>T-ExplainConsoleFirst W8（2026-10-24 沙盒验收实测）：<b>进执行链前先预热 exec 临时文件</b>。</p>
+     *
+     * <p>实测症状：点「执行计划」刷 9 条 {@code SEVERE - SlowOperations ... Plugin to blame: SQL Visualizer}，
+     * 栈为 {@code explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare →
+     * createTempPsiFile → PsiManagerImpl.findFile}——即 {@code createTempPsiFile} 的<b>冷路径</b>
+     * （VFS refresh + {@code PsiManager.findFile}）在 EDT 上跑。</p>
+     *
+     * <p>为什么现在才暴露：{@code 1a1cf724} 之后 EXPLAIN 默认走旁路查询（PreviewSideQuery），不经过
+     * 控制台链；本轮 W1 把它切回控制台后，这条既有冷路径重新进入热路径。</p>
+     *
+     * <p>修法：执行前把<b>本条 EXPLAIN 文本</b>交给后台预热（专用入口自带 EDT 拒绝、并发去重），
+     * 命中缓存后 {@code createTempPsiFile} 走热路径。预热失败只是回落到既有冷路径，不阻断执行。</p>
+     *
+     * <p>W8-fix（同日复验修订）：<b>不得在 EDT 上阻塞等待预热</b>——后台线程里直接调 inner
+     * （不嵌套 prewarmExecTempFile 的预算等待），完成后回 EDT 续接执行链；预热失败/超时都照常续接。</p>
      */
-    public static void submitExplainDirect(@NotNull SqlPreviewPanel p, @NotNull Project proj, @NotNull String explainSql) {
-        p.resultPanel.showLoading("");
-        SqlExecutor.execute(
-                proj, explainSql, null, true,
-                consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
-                consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                errorMsg -> p.resultPanel.showError(errorMsg),
-                info -> showErrorRichWithLocate(p, info));
+    public static void submitExplainDirectConsole(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest) {
+        // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
+        cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome outcome =
+                cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, explainSql);
+        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked checked) {
+            notifySchemaIssues(p, proj, checked.issues());
+        }
+        final AtomicBoolean prewarmDone = new AtomicBoolean(false);
+        final Runnable continueChain = () -> {
+            if (prewarmDone.compareAndSet(false, true)) {
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (Disposer.isDisposed(p) || proj.isDisposed()) return;
+                    p.resultPanel.showLoading("");
+                    SqlExecutor.execute(
+                            proj, explainSql, null, true,
+                            consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
+                            consoleEditor -> onNativeEditorReady(p, consoleEditor),
+                            errorMsg -> p.resultPanel.showError(errorMsg),
+                            info -> showErrorRichWithLocate(p, info),
+                            false,
+                            dialectGateRequest,
+                            verdict -> onExecutionDialectGate(p, verdict),
+                            null, false);
+                }, ModalityState.any());
+            }
+        };
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFileOnBackgroundThread(
+                        proj,
+                        explainSql,
+                        dialectGateRequest.renderedDialectName(),
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class));
+            } catch (Throwable e) {
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw (Error) e;
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class)
+                        .info("[W8] exec prewarm before explain failed (fallback to cold path): "
+                                + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+            // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
+            ApplicationManager.getApplication().invokeLater(continueChain::run, ModalityState.any());
+        });
+    }
+
+    /**
+     * T-ExplainConsoleFirst W1（2026-10-24）：执行计划默认/回退<b>统一走内嵌原生控制台</b>。
+     *
+     * <p>形态渊源：这是初版实现（{@code 1a1cf724} 前的 submitExplainDirect），{@code 1a1cf724} 为了「不顶掉
+     * 预览编辑器」把默认改成旁路查询（形态 B）。十二轮换源拉锯（T-DialectInferPollution /
+     * T-ExplainFailUx / T-ExplainSwitchNative，合计 W1~W12）暴露出形态 B / 结构化通道的系统性代价：
+     * 它们是插件自建 JDBC 通道，于是「用哪条源、密码从哪来、方言对不对、失败怎么呈现」全落在插件
+     * 身上；而平台「选中即关联」（getForcedDataSourceForExec 命中即 singletonList 短路枚举、
+     * 无公开清除 API）让插件侧选源列表第二次起恒为单源——这是那十二轮全部拉锯的根因。</p>
+     *
+     * <p>形态 A 把这些<b>整类</b>交回平台：换源走内嵌控制台自带的原生 Data Sources 菜单（Detach +
+     * 全部源），密码走平台凭据链，方言与报错在控制台原生呈现。{@code 1a1cf724} 当初真正的顾虑
+     * （执行视图里只读动作拿到 EXPLAIN 语句）已由 {@link #previewSqlForReadonly} 根治（W2）。</p>
+     *
+     * <p>前置只判「一条源都没有」→ 引导去 Database 工具窗口；<b>不在插件侧做任何选源</b>
+     * （不重演 W1~W12）。结构化形态（explainStructuredRender）不受影响，仍在设置项后。</p>
+     */
+    public static void submitExplainDirect(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest) {
+        // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
+        cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome outcome =
+                cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, explainSql);
+        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked checked) {
+            notifySchemaIssues(p, proj, checked.issues());
+        }
+        // 零源判定：只要有一条在籍源就交给平台（平台自己决定用哪条、按需弹选择器），
+        // 插件不枚举、不筛选、不猜。测试缝非 null 即视为「有可用源」。
+        boolean hasAnySource;
+        if (explainTargetForTest != null) {
+            hasAnySource = explainTargetForTest.get() != null;
+        } else {
+            boolean registered;
+            try {
+                registered = cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                        .registeredDataSourceCount(proj) > 0;
+            } catch (Throwable t) {
+                registered = true; // runCatching { ... }.getOrDefault(true) 等价
+            }
+            hasAnySource = registered;
+        }
+        if (!hasAnySource) {
+            // 一条源都没有：按钮直达 Database 工具窗口（按提示去配置/连接），不空跑一次必然失败的执行。
+            ExplainPlanDialog.showExplainErrorDialog(p,
+                    MpSqlVisualizerBundle.message("panel.explain.noDataSource"),
+                    () -> {
+                    }, true);
+            return;
+        }
+        submitExplainDirectConsole(p, proj, explainSql, dialectGateRequest);
+    }
+
+    /**
+     * T-ExplainFailUx W1（2026-10-24 用户沙盒实测）：<b>选错数据源</b>失败的就地引导。
+     *
+     * <p>为什么不用模态：{@code Table 'mp_demo.x' doesn't exist} 是最典型的「该换源」信号，模态框会先遮住
+     * 预览、还要求用户先关掉再点「在控制台打开」两步才见到换源入口（用户原话：「这种情况就不应该
+     * 弹窗了吧」）。改为结果区就地横幅（SqlResultPanel.showErrorWithActions 双动作槽）。</p>
+     *
+     * <p>T-ExplainSwitchNative W6（同日修订）：动作语义改为「<b>弹平台原生选择器</b>」且<b>不自动重试</b>
+     * ——用户实测「点切换数据源却重试执行了」：旧实现走 prepareConsole(forceChoose=true)，
+     * 而该参数只跳过 last-used 静默，runner 唯一时仍会直选执行，用户看不到列表。</p>
+     */
+    private static void showExplainWrongTarget(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull String message,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest,
+            @NotNull Runnable openConsole) {
+        p.resultPanel.showIdle();
+        String hint = MpSqlVisualizerBundle.message("panel.explain.wrongTargetHint");
+        p.resultPanel.showErrorWithActions(
+                message + "　" + hint,
+                MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
+                MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
+                // W12：换源走平台原生工具栏 Data Sources 菜单（见 showDialectGateError 同款说明）
+                () -> cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj),
+                MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+                null,
+                openConsole);
+    }
+
+    /**
+     * T-ExplainPwdPrompt W6（2026-10-24）：认证失败轻通知——平台凭据链（askPassword=true 的
+     * 「Change Credentials / Abort」对话框）已完成失败呈现与两个出口，本通知只做 Abort 后的
+     * 收口反馈（含补存密码指引），绝不弹红字模态框二次打断。单测模式不弹（notifySchemaIssues
+     * 同款守卫）。
+     */
+    private static void notifyExplainAuthFailure(@NotNull SqlPreviewPanel p, @NotNull Project proj) {
+        if (ApplicationManager.getApplication().isUnitTestMode() && schemaNotificationForTest == null) return;
+        try {
+            new Notification(
+                    SqlPreviewPanel.NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("panel.explain"),
+                    MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
+                    NotificationType.WARNING).notify(proj);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * T-ExplainPwdPrompt（2026-10-24）：用户取消（原生密码框 Esc 等）——轻通知收口，不弹红字
+     * 模态框（取消是用户自己的决定，模态报错等于打断两次），也<b>绝不自动重试</b>（重试会再弹一次
+     * 密码框）。单测模式不弹（弹窗/通知克制红线，notifySchemaIssues 同款守卫）。
+     */
+    private static void notifyExplainCancelled(@NotNull SqlPreviewPanel p, @NotNull Project proj) {
+        if (ApplicationManager.getApplication().isUnitTestMode() && schemaNotificationForTest == null) return;
+        try {
+            new Notification(
+                    SqlPreviewPanel.NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("panel.explain"),
+                    MpSqlVisualizerBundle.message("panel.explain.cancelled"),
+                    NotificationType.INFORMATION).notify(proj);
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -1211,20 +1491,84 @@ public final class SqlPreviewPanelExecutionKt {
      * ∧ database 插件在场 ∧ 预览会话已绑数据源 → 结构化通道；开关关/其余方言（TEXT/XML，
      * 含 R23 Oracle 二段式与 SQL Server XML——不硬解析红线）→ 设计内直送（静默）；无数据源/
      * 无插件 → fail-closed 回退直送＋一条轻提示（不弹窗）。执行/渲染异常同样回退直送——
-     * **结构化通道绝不成为 EXPLAIN 的唯一路径**。</p>
+     * <b>结构化通道绝不成为 EXPLAIN 的唯一路径</b>。</p>
      */
     public static void submitExplainOrStructured(@NotNull SqlPreviewPanel p, @NotNull Project proj,
                                                  @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
-                                                 @NotNull String explainSql) {
+                                                 @NotNull String explainSql,
+                                                 @NotNull ExecutionDialectGate.Request dialectGateRequest) {
+        submitExplainOrStructured(p, proj, dialect, explainSql, dialectGateRequest, true, false);
+    }
+
+    /** Kotlin 默认参数等价重载：{@code rerendered=false}（T-DialectInferPollution W7 防循环旗标）。 */
+    public static void submitExplainOrStructured(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                 @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+                                                 @NotNull String explainSql,
+                                                 @NotNull ExecutionDialectGate.Request dialectGateRequest,
+                                                 boolean allowDataSourcePrompt) {
+        submitExplainOrStructured(p, proj, dialect, explainSql, dialectGateRequest, allowDataSourcePrompt, false);
+    }
+
+    /**
+     * @param allowDataSourcePrompt T-UI030：重试路径禁止再弹数据源选择器（防「取消 → 再弹 → 再取消」循环）。
+     * @param rerendered            T-DialectInferPollution W7：本链已自动重渲染过一次（防闸门重提交循环）。
+     */
+    public static void submitExplainOrStructured(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                 @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+                                                 @NotNull String explainSql,
+                                                 @NotNull ExecutionDialectGate.Request dialectGateRequest,
+                                                 boolean allowDataSourcePrompt,
+                                                 boolean rerendered) {
         PluginSettings.State settings = PluginSettings.getInstance().getState();
         Object boundDs;
-        try {
-            boundDs = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource();
-        } catch (Throwable t) {
-            boundDs = null;
+        if (explainBoundDsForTest != null) {
+            boundDs = explainBoundDsForTest.get();
+        } else {
+            try {
+                boundDs = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource();
+            } catch (Throwable t) {
+                boundDs = null;
+            }
         }
+        // T-ExplainPwdPrompt W4（2026-10-24）：真绑定缺失且绑定链 runner 枚举被方言路由卡死
+        // （数据源无 Dialects 映射时平台返回空，沙盒实测 Database 视图已连接仍 runners=0）时，
+        // 回落到面板「数据源（上次使用）」记忆取源——结构化通道（askPassword=true）不依赖
+        // 绑定链即可到达；歧义即弃，方言不符由既有 allowDialectGate 闸拦。
+        if (boundDs == null) {
+            try {
+                boundDs = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
+                        proj, p.sourceModuleKey, explainSql);
+            } catch (Throwable t) {
+                boundDs = null;
+            }
+        }
+        // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
+        if (boundDs != null && !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.allowDialectGate(
+                proj,
+                dialectGateRequest,
+                cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.fromDataSource(boundDs),
+                verdict -> {
+                    // T-DialectInferPollution W7（2026-10-24 用户真机报障）：渲染方言与目标数据源
+                    // 不一致（如 last-used 在竞品测试后残留 dbx_test/PG，MySQL 预览被按 PG 渲染）时
+                    // 闸门 AUTO_RERENDER_REQUIRED 重渲染成功——**自动重提交一次**，不再让用户重按
+                    // 「执行计划」；重渲染失败或已重渲染过（防循环）回落既有红条提示。
+                    if (verdict.status() == ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED
+                            && !rerendered
+                            && verdict.targetDialectName() != null
+                            && rerenderForExecutionTarget(p, verdict.targetDialectName())) {
+                        submitExplainOrStructured(p, proj, dialect, explainSql, dialectGateRequest,
+                                false, true);
+                    } else {
+                        onExecutionDialectGate(p, verdict);
+                    }
+                },
+                message -> p.resultPanel.showError(message),
+                null)) return;
         cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat format =
                 ExplainSupport.formatFor(dialect.getName());
+        boolean databaseAvailable = explainDatabaseAvailableForTest != null
+                ? explainDatabaseAvailableForTest.get()
+                : cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable();
         // R33 真机走查修复：编辑器文本就是回填链的终点产物（参数击键防抖重渲染），此处残留
         // `?`（串感知位点，字符串/注释里的 `?` 不计）即真未填——不下发结构化探测（字面 `?`
         // 送 JDBC = 语法错），按响亮失败回退并明示「存在未回填参数」
@@ -1233,29 +1577,75 @@ public final class SqlPreviewPanelExecutionKt {
                 cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.decide(
                         settings.getExplainStructuredRender(),
                         format,
-                        cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable(),
+                        databaseAvailable,
                         boundDs != null,
                         hasUnfilledParams);
         if (verdict instanceof cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent) {
-            submitExplainDirect(p, proj, explainSql);
+            // T-UI030：开关关闭时不再只是「静默直送」——该方言确有结构化面且 Database 插件
+            // 在场时给一条带「启用结构化并重试」动作的通知；TEXT/XML/Community 不提示（开启
+            // 也没用，只会变成噪音）。不点动作时行为与改前逐字一致（仍直送原生控制台）。
+            //
+            // T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
+            // 该推荐**只提示一次**。此前每次点执行计划都弹，用户顺手点过一次「启用结构化」后
+            // 开关被永久写成 true，界面上再无任何「现在是实验形态」的提示——下次看到弹窗时
+            // 完全无从归因。沙盒实测该配置确为 true、而代码默认是 false，差异只可能来自这里。
+            if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldOfferStructuredEnable(
+                    settings.getExplainStructuredRender(), format, databaseAvailable)
+                    && !settings.getExplainStructuredOfferedShown()) {
+                settings.setExplainStructuredOfferedShown(true);
+                notifyStructuredExplainDisabled(p, proj,
+                        () -> enableStructuredExplainAndRetry(p, proj, dialect, explainSql, dialectGateRequest));
+            }
+            submitExplainDirect(p, proj, explainSql, dialectGateRequest);
         } else if (verdict instanceof cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback) {
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback fb =
                     (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback) verdict;
-            notifyExplainStructuredFallback(p, proj, fb.reason(), null);
-            submitExplainDirect(p, proj, explainSql);
+            if (fb.reason() == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE) {
+                if (allowDataSourcePrompt) {
+                    // T-UI030：真机反馈这条「已回退原生控制台」只是告知、没有下一步。改为直接弹
+                    // 既有数据源选择器（与执行 SQL 同一个 runner 选择器，只绑定不执行任何 SQL），
+                    // 选中后自动重试结构化；用户取消则只给说明，绝不再弹第二次。
+                    promptDataSourceThenRetryStructured(p, proj, dialect, explainSql, dialectGateRequest);
+                } else {
+                    // 重试仍未绑定：只给现有回退说明，不再触发直送链（直送链会再次弹选择器）。
+                    notifyExplainStructuredFallback(p, proj, fb.reason(), null);
+                }
+            } else if (fb.reason() ==
+                    cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS) {
+                // T-ExplainPwdPrompt W5（2026-10-24 用户沙盒实测 bug）：参数未回填**不回退直送**。
+                // 回退直送在无绑定形态下必然失败且再弹一个误导性「未绑定数据源」红字框（用户明明
+                // 有 last-used 数据源）；有绑定形态把字面 `?` 送 JDBC 同样是语法错（R33 同款结论）。
+                // 通知已含原因与动作（填参数后重试），就地收口即可。
+                notifyExplainStructuredFallback(p, proj, fb.reason(), null);
+            } else {
+                notifyExplainStructuredFallback(p, proj, fb.reason(), null);
+                submitExplainDirect(p, proj, explainSql, dialectGateRequest);
+            }
         } else if (verdict instanceof cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.Structured) {
             final Object ds = boundDs;
             final cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat outFormat = format;
             // 防御：判定与取值之间环境可能变化（数据源失效等）——缺一即回退，不硬解包
             if (ds == null || outFormat == null) {
-                submitExplainDirect(p, proj, explainSql);
+                submitExplainDirect(p, proj, explainSql, dialectGateRequest);
                 return;
             }
             p.resultPanel.showLoading("");
             final int generation = p.explainStructuredGeneration;
-            final cn.song.mybatisplus.visualizer.sql.Dialect dialectF = dialect;
+            // R90：提交时捕获原 SQL/历史条目/实际目标；回调不得再读 current 或当前数据源。
+            cn.song.mybatisplus.visualizer.history.SqlHistoryManager history =
+                    cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance();
+            cn.song.mybatisplus.visualizer.history.ExplainPlanKey planKey =
+                    cn.song.mybatisplus.visualizer.history.ExplainPlanKey.create(
+                            cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(proj.getBasePath()),
+                            cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(ds),
+                            dialect.getName(), outFormat, explainSql);
+            final cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request historyRequest =
+                    captureExplainPlanHistory(p, history, planKey, ds);
+            final cn.song.mybatisplus.visualizer.history.SqlHistoryManager historyF = history;
+            final cn.song.mybatisplus.visualizer.history.ExplainPlanKey planKeyF = planKey;
             final Project projF = proj;
             final String explainSqlF = explainSql;
+            final ExecutionDialectGate.Request gateRequestF = dialectGateRequest;
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                     proj, ds, explainSql,
                     settings.getExecutionTimeoutSeconds(),
@@ -1268,46 +1658,238 @@ public final class SqlPreviewPanelExecutionKt {
                         List<cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.Hint> hints;
                         try {
                             hints = cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
-                                    dialectF.getName(), outcome.raw().headers(), outcome.raw().rows());
+                                    dialect.getName(), outcome.raw().headers(), outcome.raw().rows());
                         } catch (Throwable t) {
+                            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw (Error) t;
                             hints = List.of();
                         }
-                        embedExplainView(
-                                p,
-                                new ExplainPlanResultView(
-                                        dialectF.getName(),
-                                        outcome.dataSourceName(),
-                                        outcome.elapsedMs(),
-                                        outcome.raw(),
-                                        outFormat,
-                                        hints,
-                                        () -> submitExplainDirect(p, projF, explainSqlF)));
+                        cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Completion historyCompletion =
+                                completeExplainPlanHistory(p, historyF, historyRequest, outcome.raw());
+                        if (historyCompletion.saved() != cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED) {
+                            captureAiContextPlan(p, historyF, planKeyF, outcome.raw());
+                        }
+                        List<cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Baseline> baselines =
+                                historyCompletion.baselines();
+                        cn.song.mybatisplus.visualizer.ui.ExplainPlanDiff.PlanDiff planDiff = baselines.isEmpty()
+                                ? null
+                                : ExplainPlanDiff.diff(baselines.get(0).raw(), outcome.raw(), outFormat);
+                        // R61 兼容观察值；比较决策由 R90 的目标隔离会话负责。
+                        p.lastStructuredExplain = new kotlin.Pair<>(explainSql, outcome.raw());
+                        final ExplainPlanDialog[] dialogRef = {null};
+                        ExplainPlanResultView view = new ExplainPlanResultView(
+                                dialect.getName(),
+                                outcome.dataSourceName(),
+                                outcome.elapsedMs(),
+                                outcome.raw(),
+                                outFormat,
+                                hints,
+                                () -> {
+                                    if (dialogRef[0] != null) dialogRef[0].close(0);
+                                    submitExplainDirectConsole(p, projF, explainSqlF, gateRequestF);
+                                },
+                                planDiff,
+                                baselines,
+                                historyCompletion.saved());
+                        ExplainPlanDialog dialog = new ExplainPlanDialog(projF, view);
+                        dialogRef[0] = dialog;
+                        ExplainPlanDialog.showExplainDialog(p, dialog);
                         p.resultPanel.showIdle();
                     },
                     errorText -> {
                         if (Disposer.isDisposed(p) || generation != p.explainStructuredGeneration) {
                             return;
                         }
-                        notifyExplainStructuredFallback(p, projF, null, errorText);
-                        submitExplainDirect(p, projF, explainSqlF);
+                        // T-ExplainPwdPrompt（2026-10-24）：失败分型出口——认证失败不再回退直送
+                        // （直送同通道必同样失败，徒增一次红字对话框）。
+                        // T-ExplainPwdPrompt W6（用户沙盒实测 bug）：AUTH **也不弹红字模态框**——
+                        // askPassword=true 后平台凭据链已弹原生「Connecting to ... + Change
+                        // Credentials / Abort」对话框（失败与两个出口都在那里），用户点 Abort 后
+                        // 异常以 SQLException: Access denied 形态冒泡回来，再弹红字框是二次打断
+                        // （用户报障原话：「点终止还是出现执行计划的弹框」）。AUTH 改轻通知收口，
+                        // 补存密码指引随通知走。
+                        cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind kind =
+                                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel
+                                        .classifyExplainFailure(errorText);
+                        if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.AUTH) {
+                            p.resultPanel.showIdle();
+                            notifyExplainAuthFailure(p, projF);
+                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.WRONG_TARGET) {
+                            // T-ExplainFailUx W1：选错源不弹模态、不回退直送（同通道必同样失败）——
+                            // 就地横幅 + 「切换数据源」动作（换源后自动重试，W3）
+                            p.resultPanel.showIdle();
+                            showExplainWrongTarget(p, projF, errorText, explainSqlF, gateRequestF,
+                                    () -> submitExplainDirectConsole(p, projF, explainSqlF, gateRequestF));
+                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.CANCELLED) {
+                            p.resultPanel.showIdle();
+                            notifyExplainCancelled(p, projF);
+                        } else {
+                            notifyExplainStructuredFallback(p, projF, null, errorText);
+                            submitExplainDirect(p, projF, explainSqlF, gateRequestF);
+                        }
                     });
         }
     }
 
+    /** T-PreviewSideQuery P3a：从执行视图回到预览——移除头部并重渲染预览 SQL。 */
+    public static void backToPreview(@NotNull SqlPreviewPanel p) {
+        if (p.executeViewHeader != null) {
+            p.consoleHost.remove(p.executeViewHeader);
+        }
+        p.executeViewHeader = null;
+        SqlPreviewPanelSqlViewKt.refreshView(p);
+    }
+
+    /** P3a：执行结果视图头部——明确当前不是预览编辑态，并提供显式「返回预览」。 */
+    @NotNull
+    private static JComponent buildExecuteViewHeader(@NotNull SqlPreviewPanel p) {
+        JBPanel<JBPanel<?>> header = new JBPanel<JBPanel<?>>(new BorderLayout());
+        header.setOpaque(false);
+        header.setBorder(JBUI.Borders.empty(2, 8));
+        JBLabel hint = new JBLabel(MpSqlVisualizerBundle.message("panel.executeViewHint"));
+        hint.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+        header.add(hint, BorderLayout.WEST);
+        JButton back = primaryButton(MpSqlVisualizerBundle.message("panel.backToPreview"), () -> backToPreview(p));
+        back.setFont(buttonFont(p));
+        header.add(back, BorderLayout.EAST);
+        return header;
+    }
+
     /**
-     * R33：结构化 EXPLAIN 视图换入结果区（consoleHost 同位换入，循 embedConsole 的宿主形态；
-     * 先 detachConsole 解绑旧控制台的 rehost 监听——残活会把控制台抢回已废弃面板，6 连抢实锤）。
-     * 下一次控制台嵌入/预览/清空都会自然替换本视图，双通道并存不互斥。
+     * T-UI030：无已绑数据源时<b>直接复用既有数据源选择/准备链</b>（与执行 SQL/执行计划同一个
+     * runner 选择器），只绑定、不执行任何 SQL；绑定落地后自动重试结构化 EXPLAIN。
+     *
+     * <p>并发纪律：已有准备链在飞时<b>只等待</b>，不再走 chooseAndPrepare（预览准备是 PASS_THROUGH，
+     * 会建第二条会话/控制台）。用户取消选择会把单飞位复位，轮询下一拍即收口为「不再弹第二次」。</p>
      */
-    public static void embedExplainView(@NotNull SqlPreviewPanel p, @NotNull JComponent component) {
-        detachConsole(p);
-        p.editorHolder.removeAll();
-        p.editorHolder.add(p.consoleHost, BorderLayout.CENTER);
-        p.consoleHost.removeAll();
-        p.consoleHost.add(component, BorderLayout.CENTER);
-        component.setBorder(JBUI.Borders.empty());
-        p.revalidate();
-        p.repaint();
+    public static void promptDataSourceThenRetryStructured(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest) {
+        AtomicBoolean errorShown = new AtomicBoolean(false);
+        // 代际快照：等待绑定期间用户可能切预览/再次点执行计划（SqlPreviewPanelSqlView 会递增）——
+        // 过期等待不得把旧 SQL 的 EXPLAIN 提交到新预览上。
+        int generation = p.explainStructuredGeneration;
+        if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight())) {
+            // 绑定用的 SQL 取面板当前预览原文（不是包了 EXPLAIN 的文本）：只写进控制台文档，
+            // 不执行；真正的 EXPLAIN 由下面的重试提交，用户 SQL 不被改写。
+            String previewSql = currentEditorSql(p) != null ? currentEditorSql(p) : explainSql;
+            // executeAfterPrepare=false = 只准备/绑定，不提交任何语句（DML/DDL 零自动执行）。
+            // 不传 dialectGateRequest：绑定与方言无关，门禁在重试的结构化提交里照旧生效。
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                    proj, previewSql, null, null,
+                    message -> {
+                        errorShown.set(true);
+                        p.resultPanel.showError(message);
+                    },
+                    null, null, null, false);
+        }
+        awaitDataSourceBoundThenRetry(p, proj, dialect, explainSql, dialectGateRequest, errorShown, generation);
+    }
+
+    /**
+     * T-UI030：等待既有/新建准备链把数据源绑定落地，然后重试一次结构化 EXPLAIN。
+     * 收到取消/失败（单飞位复位）即停表并只给现有回退说明，绝不再弹选择器；
+     * 重试路径传 {@code allowDataSourcePrompt=false}，即使仍未绑定也不会形成循环。
+     */
+    public static void awaitDataSourceBoundThenRetry(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest,
+            @NotNull AtomicBoolean errorShown,
+            int generation) {
+        awaitDataSourceBoundThen(p, proj, generation,
+                () -> submitExplainOrStructured(p, proj, dialect, explainSql, dialectGateRequest, false),
+                () -> {
+                    // 选择失败（无数据源/驱动错误）已在面板行内显示既有错误文案；只有「用户取消」
+                    // 这类没有错误文案的收口才补一条说明——两条提示不重复。
+                    if (!errorShown.get()) notifyExplainDataSourceNotBound(p, proj);
+                });
+    }
+
+    /** T-UI030：用户取消数据源选择（或等待未绑定）后的说明——如实说明「未执行」，并给出下一步。 */
+    public static void notifyExplainDataSourceNotBound(@NotNull SqlPreviewPanel p, @NotNull Project proj) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
+        try {
+            new Notification(
+                    SqlPreviewPanel.NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("panel.explain"),
+                    MpSqlVisualizerBundle.message("panel.explain.structured.noDataSourceDeclined"),
+                    NotificationType.INFORMATION).notify(proj);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * T-UI030：开关关闭通知里的一个可操作项（文案 key + 点击行为）。
+     * 用「key + runnable」而非直接构造 NotificationAction（照 SqlTemplateErrorAction 先例）：
+     * 让「挂了哪些动作、点了做什么」成为不依赖平台事件即可断言的纯逻辑。
+     */
+    public static final class StructuredExplainNotificationAction {
+        public final String titleKey;
+        public final Runnable run;
+
+        public StructuredExplainNotificationAction(@NotNull String titleKey, @NotNull Runnable run) {
+            this.titleKey = titleKey;
+            this.run = run;
+        }
+    }
+
+    /** T-UI030：开关关闭通知的动作清单——恒给「启用结构化并重试」一项。 */
+    @NotNull
+    public static List<StructuredExplainNotificationAction> structuredExplainDisabledActions(
+            @NotNull Runnable onEnableAndRetry) {
+        return List.of(new StructuredExplainNotificationAction(
+                "panel.explain.structured.enableAndRetry", onEnableAndRetry));
+    }
+
+    /**
+     * T-UI030：结构化开关关闭时的可操作通知——带「启用结构化并重试」动作。
+     * 动作由纯函数 shouldOfferStructuredEnable 决定是否值得出现（TEXT/XML/Community 不提示）；
+     * 动作回调只写该开关并重试，不改其它设置。
+     */
+    @NotNull
+    public static Notification buildStructuredExplainDisabledNotification(@NotNull Runnable onEnableAndRetry) {
+        Notification notification = new Notification(
+                SqlPreviewPanel.NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("panel.explain"),
+                MpSqlVisualizerBundle.message("panel.explain.structured.disabled"),
+                NotificationType.INFORMATION);
+        for (StructuredExplainNotificationAction action : structuredExplainDisabledActions(onEnableAndRetry)) {
+            notification.addAction(NotificationAction.createSimpleExpiring(
+                    MpSqlVisualizerBundle.message(action.titleKey), action.run));
+        }
+        return notification;
+    }
+
+    public static void notifyStructuredExplainDisabled(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                       @NotNull Runnable onEnableAndRetry) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
+        try {
+            buildStructuredExplainDisabledNotification(onEnableAndRetry).notify(proj);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * T-UI030：「启用结构化并重试」动作——写设置（与设置页 apply 同一字段、同一变更主题）后
+     * 立即重试一次 EXPLAIN。设置语义不变：默认仍关闭，只有用户显式点这个动作才打开。
+     */
+    public static void enableStructuredExplainAndRetry(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+            @NotNull String explainSql,
+            @NotNull ExecutionDialectGate.Request dialectGateRequest) {
+        if (Disposer.isDisposed(p) || proj.isDisposed()) return;
+        PluginSettings.getInstance().getState().setExplainStructuredRender(true);
+        ApplicationManager.getApplication().getMessageBus()
+                .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged();
+        submitExplainOrStructured(p, proj, dialect, explainSql, dialectGateRequest);
     }
 
     /**
@@ -1391,12 +1973,36 @@ public final class SqlPreviewPanelExecutionKt {
         }
         p.nativeConsoleEditor = consoleEditor;
         EditorCommentShortcuts.install(consoleEditor);
+        // UI025：exec 文件在 .idea 下，daemon 不分析 → 编辑器级错列标注通道（与预览编辑器同源）。
+        // install 内部首拍延迟 300ms/1500ms，覆盖 preparedEditor 与 schema 缓存晚到的窗口。
+        cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.install(consoleEditor);
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(
                 consoleEditor,
                 consoleEditor.getDocument().getText());
         if (p.editor != null) {
             SqlPreviewPanelEditorLifecycleKt.releaseEditor(p);
             p.editorHolder.removeAll();
+        }
+        // UI025：控制台编辑器的 ExternalAnnotator 需要「文档 → 已备控制台目标」身份，而
+        // preparedEditor 在本回调返回后才由 prepareAfterEditorResolved 赋值。下一拍重启一次 daemon，
+        // 让首轮 collect 就能读到目标（否则要等用户下一次输入才出现错列波浪线）。
+        // 单元测试直接驱动 doHighlighting，不做全局 daemon 重启（避免拖慢/扰动其他用例）。
+        if (!ApplicationManager.getApplication().isUnitTestMode()) {
+            ApplicationManager.getApplication().invokeLater(() -> {
+                Project projNow = p.project;
+                if (projNow != null && !projNow.isDisposed()) {
+                    try {
+                        com.intellij.psi.PsiFile psi = com.intellij.openapi.application.ReadAction.compute(
+                                (com.intellij.openapi.util.Computable<com.intellij.psi.PsiFile>) () ->
+                                        com.intellij.psi.PsiDocumentManager.getInstance(projNow)
+                                                .getPsiFile(consoleEditor.getDocument()));
+                        if (psi != null) {
+                            com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(projNow).restart(psi);
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, ModalityState.any());
         }
     }
 
@@ -1497,6 +2103,15 @@ public final class SqlPreviewPanelExecutionKt {
             }
         }, ModalityState.any());
         if (consoleComponent == p.embeddedConsole) {
+            // P3a：执行视图头部随 embedMode 幂等换装（EXECUTE 补挂 / PREVIEW 摘除）。
+            if (embedMode == ConsoleEmbedMode.EXECUTE && p.executeViewHeader == null) {
+                JComponent header = buildExecuteViewHeader(p);
+                p.executeViewHeader = header;
+                p.consoleHost.add(header, BorderLayout.NORTH);
+            } else if (embedMode != ConsoleEmbedMode.EXECUTE && p.executeViewHeader != null) {
+                p.consoleHost.remove(p.executeViewHeader);
+                p.executeViewHeader = null;
+            }
             // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
             // loading 态。M36.5.49：用 showIdle() 而非 showEmpty()——只清 loading/成功态，**保留错误态**。
             p.resultPanel.showIdle();
@@ -1526,6 +2141,14 @@ public final class SqlPreviewPanelExecutionKt {
         p.editorHolder.add(p.consoleHost, BorderLayout.CENTER);
         p.consoleHost.removeAll();
         p.consoleHost.add(consoleComponent, BorderLayout.CENTER);
+        if (embedMode == ConsoleEmbedMode.EXECUTE) {
+            // P3a：执行结果视图明确标识 + 显式「返回预览」，避免用户只能靠「刷新」逃回编辑态。
+            JComponent header = buildExecuteViewHeader(p);
+            p.executeViewHeader = header;
+            p.consoleHost.add(header, BorderLayout.NORTH);
+        } else {
+            p.executeViewHeader = null;
+        }
         attachRehostListener(p, consoleComponent);
         if (consoleComponent instanceof JSplitPane) {
             final JSplitPane sp = (JSplitPane) consoleComponent;
@@ -1690,6 +2313,9 @@ public final class SqlPreviewPanelExecutionKt {
             if (l != null) embedded.removeHierarchyListener(l);
             p.consoleHost.remove(embedded);
         }
+        // P3a：执行视图头部（返回预览）也属于控制台宿主层，摘除时一并清空。
+        p.executeViewHeader = null;
+        p.consoleHost.removeAll();
         // T-AutoFold F5：控制台组件摘除即清编辑器引用（防 EditorFactory 泄漏）
         // T-PreviewLineCommentDash O-134：摘除先减计数（install 的对称端点之一）
         if (p.nativeConsoleEditor != null) EditorCommentShortcuts.uninstall(p.nativeConsoleEditor);
@@ -1812,6 +2438,30 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
 
+    /** R90：EXPLAIN 计划历史捕获入口（默认 still-current 判定——纯绑定对象查找，零连接操作）。 */
+    public static cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request captureExplainPlanHistory(
+            @NotNull SqlPreviewPanel p,
+            @NotNull cn.song.mybatisplus.visualizer.history.SqlHistoryManager history,
+            @NotNull cn.song.mybatisplus.visualizer.history.ExplainPlanKey planKey,
+            @NotNull Object target) {
+        return captureExplainPlanHistory(p, history, planKey, target, () -> {
+            // Pure bound-object lookup, not roster/last-used lookup and not a connection operation.
+            Object bound;
+            try {
+                bound = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource();
+            } catch (Throwable t) {
+                return false;
+            }
+            if (bound != target) return false;
+            try {
+                String id = cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(bound);
+                return id != null && id.equalsIgnoreCase(planKey.dataSourceUuid());
+            } catch (Throwable t) {
+                return false;
+            }
+        });
+    }
+
     /** O-145/R90：EXPLAIN 计划历史捕获入口（retention 关时只建会话不补建历史条目）。 */
     public static cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request captureExplainPlanHistory(
             @NotNull SqlPreviewPanel p,
@@ -1853,6 +2503,16 @@ public final class SqlPreviewPanelExecutionKt {
         return p.explainPlanHistorySession.complete(history, request, raw,
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .getState().getExplainPlanRetentionEnabled());
+    }
+
+    /** R91: retain an already obtained value snapshot in memory, never write history from the copy action. */
+    public static void captureAiContextPlan(
+            @NotNull SqlPreviewPanel p,
+            @NotNull cn.song.mybatisplus.visualizer.history.SqlHistoryManager history,
+            @NotNull cn.song.mybatisplus.visualizer.history.ExplainPlanKey key,
+            @NotNull cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult raw) {
+        p.aiContextPlan = new kotlin.Pair<>(history.explainPlanGeneration(),
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot.create(key, raw));
     }
 
 }
