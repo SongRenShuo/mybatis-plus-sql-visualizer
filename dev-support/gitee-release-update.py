@@ -51,12 +51,20 @@ def find_release(token, owner, repo, version):
         raise
 
 
-def patch_release(token, owner, repo, rid, body_md):
-    """PATCH 更新正文。Gitee 无 created_at 入参，创建时间自动保持原值。"""
+def patch_release(token, owner, repo, rid, version, name, body_md, prerelease):
+    """PATCH 更新发行版。Gitee 无 created_at 入参，创建时间自动保持原值。
+
+    坑位（20261025 实测）：Gitee 的 PATCH 要求 **tag_name 与 name 同时在场**，
+    只传 body 报 400 `{"messages":["tag_name is missing","name is missing"]}`
+    —— 与 GitHub 的「部分更新」语义不同，必须把全量字段带上。
+    """
     url = f"{api(owner, repo)}/releases/{rid}"
     data = urllib.parse.urlencode({
         "access_token": token,
+        "tag_name": version,
+        "name": name,
         "body": body_md,
+        "prerelease": "true" if prerelease else "false",
     }).encode()
     req = urllib.request.Request(url, data=data, method="PATCH")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -136,12 +144,19 @@ def main():
         body_md = f.read()
 
     print("[1/3] PATCH 更新发行版正文（创建时间保持不变）...")
-    patch_release(token, owner, repo, rid, body_md)
+    patch_release(token, owner, repo, rid, ver, rel.get("name"), body_md,
+                  bool(rel.get("prerelease")))
     print("[2/3] 删旧附件 + 上传新附件 ...")
-    for a in rel.get("assets", []):
+    # 坑位（20261025 实测）：发行版详情里的 `assets` 只有 name/browser_download_url，
+    # **没有 id**；删除必须用 `GET /releases/{id}/attach_files` 拿 id，否则 KeyError。
+    # 另：同名附件允许并存（不自动覆盖），下载会命中先传的那个 —— 必须先删旧的再传新的，
+    # 否则线上会一直发旧包（sha256 对不上）。
+    assets = json.load(urllib.request.urlopen(
+        f"{api(owner, repo)}/releases/{rid}/attach_files?access_token={token}", timeout=60))
+    for a in assets:
         if a.get("name") == zip_name:
             st = delete_asset(token, owner, repo, rid, a["id"])
-            print(f"  旧附件 id={a['id']} 已删除 (HTTP {st})")
+            print(f"  旧附件 id={a['id']} ({a.get('size')} 字节) 已删除 (HTTP {st})")
     upload_zip(token, owner, repo, rid, zip_path)
     print("[3/3] 回读校验 ...")
     rel2 = find_release(token, owner, repo, ver)
