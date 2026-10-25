@@ -885,6 +885,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "SQL 方言映射 ensureStateLoaded→VFS findChild→FSRecords 慢操作门控）；" +
                     "自证 `test自证_慢操作API族判定内核可判别`（三令牌逐一必中+干净源零误报）",
             ),
+            GuardEntry(
+                "config/SettingsPanelSearchableGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "isDescendantOf",
+                        FnKind.HELPER,
+                        "组件归属谓词（Boolean 形态），服务于断言一的动态豁免组件过滤；" +
+                            "本类用例名与上方注释均无「自证」关键词、不构成自证语料，故按豁免+via 登记" +
+                            "（HELPER 类可写调用它的用例名）",
+                        via = listOf("test面板输入型文本均能在搜索索引命中或列白名单"),
+                    ),
+                ),
+                "设置页内搜索面板-索引配对守卫（T-SettingsSearchB）：判定内核内联于四个用例（真实面板文本经 " +
+                    "双语 bundle 反解回键逐条配对索引、四关键词真实搜索链路命中），无独立判定函数；" +
+                    "decisionFns 仅登记 Boolean 形态谓词（判据 7）。",
+            ),
             // ---- 无判定内核的守卫类（断言直接内联在 @Test；登记以关闭文件名闭包） ----
             GuardEntry(
                 "acp/AcpTransportScopeSourceScanTest.kt",

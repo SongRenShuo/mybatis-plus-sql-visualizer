@@ -154,6 +154,60 @@ class PluginXmlExtensionPointResolutionTest {
     private fun declaredEpNames(): Set<String> = declaredFromClasspath() + declaredFromPluginManager()
 
     // ------------------------------------------------------------------
+    // EP dynamic 属性（热更新可行性守卫，T-SettingsSearchA 追加）
+    // ------------------------------------------------------------------
+
+    /**
+     * 平台 EP 声明 → 是否 `dynamic="true"`。
+     *
+     * **为什么这条决定热更新**：`DynamicInstallSupport` 的动态安装先过平台
+     * `DynamicPlugins.checkCanUnloadWithoutRestart`，其首道判定是
+     * `IdeaPluginDescriptorImpl.isRequireRestart()`；EP 的 dynamic 属性经
+     * `ExtensionPointImpl.isDynamic` 参与该标志推导（243 字节码：`ExtensionPointImpl`
+     * 持有 `private final boolean isDynamic`）。插件把注册落在**非 dynamic** 的 EP 点位上，
+     * 整个插件就退化为「必须重启」——自更新静默回落启动脚本路径，用户感知为
+     * 「点了更新但没热生效」。
+     *
+     * 2026-10-23 实测：本插件 57 个 EP 注册 0 违规（含新增的 `search.optionContributor`，
+     * 平台声明处即 `dynamic="true"`）。本守卫防的是**将来**新增 EP 踩到非 dynamic 点位。
+     */
+    private fun dynamicFlagsFromClasspath(): Map<String, Boolean> {
+        val out = mutableMapOf<String, Boolean>()
+        val cp = System.getProperty("java.class.path").orEmpty()
+        for (entry in cp.split(File.pathSeparatorChar)) {
+            if (!entry.endsWith(".jar", ignoreCase = true)) continue
+            val f = File(entry)
+            if (!f.isFile) continue
+            try {
+                ZipFile(f).use { z ->
+                    val it = z.entries()
+                    while (it.hasMoreElements()) {
+                        val e = it.nextElement()
+                        if (e.isDirectory || !e.name.endsWith(".xml")) continue
+                        if (!e.name.contains("META-INF") && !e.name.contains("ExtensionPoints")) continue
+                        val text = z.getInputStream(e).use { s -> s.readBytes().toString(Charsets.UTF_8) }
+                        if (!text.contains("<extensionPoint")) continue
+                        val pid = Regex("<id>([^<]+)</id>").find(text)?.groupValues?.get(1) ?: "com.intellij"
+                        for (m in Regex("""<extensionPoint\b[^>]*>""").findAll(text)) {
+                            val attrs = m.value
+                            val dyn = Regex("""\bdynamic\s*=\s*"true"""").containsMatchIn(attrs)
+                            Regex("""\bname\s*=\s*"([^"]+)"""").find(attrs)?.let {
+                                out.putIfAbsent("$pid.${it.groupValues[1]}", dyn)
+                            }
+                            Regex("""\bqualifiedName\s*=\s*"([^"]+)"""").find(attrs)?.let {
+                                out.putIfAbsent(it.groupValues[1], dyn)
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // 单个 jar 读失败不致命：多路并集兜底
+            }
+        }
+        return out
+    }
+
+    // ------------------------------------------------------------------
     // 用例
     // ------------------------------------------------------------------
 
@@ -220,6 +274,74 @@ class PluginXmlExtensionPointResolutionTest {
         assertTrue(
             "裸 syntaxHighlighterFactory 必须解析不到（这正是 20261012 那个真 bug 的形态）",
             qualified("com.intellij", "syntaxHighlighterFactory") !in declared,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // 热更新可行性：插件注册不得落在平台非 dynamic 的 EP 点位
+    // ------------------------------------------------------------------
+
+    /**
+     * 插件每个 EP 注册都必须落在平台声明 `dynamic="true"` 的点位上。
+     *
+     * 违反的后果：`DynamicPlugins.checkCanUnloadWithoutRestart` 判
+     * `IdeaPluginDescriptorImpl.isRequireRestart` 为真 → 自更新静默回落到「重启生效」，
+     * 用户点了更新却看不到热生效（不是崩溃，是体验降级，所以更难被发现）。
+     *
+     * 平台侧查不到声明的注册跳过（外部插件 EP：`runConfigurationExtension` 属 com.intellij.java，
+     * `supportsKotlinPluginMode` 属 Kotlin 插件，测试 classpath 里未必带全）——
+     * 名字可解析性由 `全部注册的EP名均可解析` 单独负责，本条只管 dynamic 属性。
+     */
+    @Test
+    fun `插件注册的EP均落在平台dynamic点位上`() {
+        val flags = dynamicFlagsFromClasspath()
+        assertTrue(
+            "平台 EP dynamic 声明表仅 ${flags.size} 条——扫描面退化，守卫会空绿，先修扫描面",
+            flags.size > 100,
+        )
+        assertTrue(
+            "search.optionContributor 在平台应为 dynamic（本条红=扫描面取不到该 EP 或平台改了声明）",
+            flags[qualified("com.intellij", "search.optionContributor")] == true,
+        )
+
+        val violations = mutableListOf<String>()
+        for (name in xmlNames) {
+            for ((ns, tag) in epTagsUsedIn(resource(name)).distinct()) {
+                val q = qualified(ns, tag)
+                val dynamic = flags[q] ?: continue   // 平台侧无声明：不归本条管
+                if (!dynamic) violations += "$name: <$tag> → $q"
+            }
+        }
+        assertTrue(
+            "以下 EP 注册落在平台**非 dynamic** 点位上——插件将无法热更新（自更新会静默回落重启）：\n" +
+                violations.joinToString("\n") { "  - $it" } +
+                "\n修法：换到 dynamic 点位，或接受该能力需要重启并在发行说明中标注",
+            violations.isEmpty(),
+        )
+    }
+
+    /**
+     * 自证：判定面必须**看得见**非 dynamic 形态。
+     *
+     * 拿平台里真实存在、且声明为非 dynamic 的 EP 做正对照——若 [dynamicFlagsFromClasspath]
+     * 把所有 EP 都读成 true（解析退化），这里会红。
+     */
+    @Test
+    fun `自证_dynamic判定能识别非dynamic点位`() {
+        val flags = dynamicFlagsFromClasspath()
+        val nonDynamic = flags.filterValues { !it }.keys
+        assertTrue(
+            "平台声明里应存在非 dynamic 的 EP（否则 dynamic 判定无判别力，主守卫是空绿）；" +
+                "实际非 dynamic 数=${nonDynamic.size}",
+            nonDynamic.isNotEmpty(),
+        )
+        assertTrue(
+            "search.optionContributor 应为 dynamic（新增该 EP 的前提）",
+            flags[qualified("com.intellij", "search.optionContributor")] == true,
+        )
+        println(
+            "DYNAMIC-PROBE 平台 EP 声明=${flags.size}，其中非 dynamic=${nonDynamic.size}；" +
+                "示例：" + nonDynamic.take(5).joinToString(),
         )
     }
 }

@@ -119,6 +119,14 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
+        <!-- T-SettingsSearchA：插件设置项进入 IDE 自带设置搜索索引。
+             平台索引有两个来源——插件 jar 内 search/searchableOptions.xml（构建期 fork IDE 生成，
+             本仓 buildSearchableOptions=false 因 Windows 中文环境 locale 失败）与运行期
+             search.optionContributor EP（SearchableOptionsRegistrarImpl.doInitialize 逐个调
+             contribute）。走后者，不动构建。数据源与设置页内搜索同一份清单（ideSearchEntries）。
+             门二（查询侧 instanceof SearchableConfigurable）由平台 ConfigurableWrapper 天然满足——
+             它实现该接口且 getId() 返回 EP id，故各设置页无需改类。 -->
+        <search.optionContributor implementation="cn.song.mybatisplus.visualizer.config.PluginSettingsSearchableOptionContributor"/>
         <!-- M56 T-M56-09：EP 双轨主通道——控制台行捕获（首行标志生效后桥轮询挂载停转） -->
         <consoleFilterProvider implementation="cn.song.mybatisplus.visualizer.log.SqlConsoleBridgeFilterProvider"/>
         <!-- T-M56Phase2-Premain：启动即捕获补位——Java 运行配置准备期向 VM 参数注入

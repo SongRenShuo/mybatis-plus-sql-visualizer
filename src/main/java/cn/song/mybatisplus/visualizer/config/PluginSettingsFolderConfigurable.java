@@ -730,6 +730,9 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.log.crudColor.style"), msg("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.enhancedCapture"), msg("settings.enhancedCapture.status"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l));
+        // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
+        // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+        fields.add(new SearchableField(msg("settings.display.mask"), msg("settings.display.mask.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.sourceFrameSkipPrefixes"), msg("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.sourceFrameBizJarPrefixes"), msg("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l));
 
@@ -793,6 +796,53 @@ public class PluginSettingsFolderConfigurable implements Configurable {
             targets.add(new kotlin.Pair<>(field.ref.id(), field.ref.cls()));
         }
         return targets.stream().distinct().collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 测试缝：登记的全部可搜索 label（T-SettingsSearchB 守卫用）。
+     *
+     * <p>「面板上有控件」与「搜索索引里有条目」两件事只靠本清单的维护纪律绑定——
+     * SettingsPanelSearchableGuardTest 拿真实面板的每个输入型文本逐条到本结果里配对，
+     * 漏登记即红。只比对 label 文本（搜索命中判定同源：label 或 tooltip 命中即可，
+     * 本清单 tooltip 全部与控件 tooltip 同键，配对在 label 层已足够判漏）。</p>
+     */
+    public static List<String> registeredSearchLabelsForTest() {
+        List<String> labels = new java.util.ArrayList<>();
+        for (SearchableField field : ALL_SEARCHABLE_FIELDS) {
+            labels.add(field.searchLabel);
+        }
+        return labels;
+    }
+
+    /**
+     * T-SettingsSearchA：页内搜索与 IDE 设置搜索<b>共用的索引条目</b>（单一数据源）。
+     *
+     * <p>两套搜索读同一份清单，避免「面板加了控件、某一边索引忘了登记」的漂移在 IDE 搜索侧
+     * 重演（B 那类缺陷的根因）。返回 (label, tooltip, 页显示名, EP id) 四元组：</p>
+     * <ul>
+     * <li>label/tooltip 喂 {@link com.intellij.ide.ui.search.SearchableOptionProcessor#addOptions}
+     * 的 text/hit；</li>
+     * <li>页显示名喂 configurableDisplayName（搜索结果分组显示）；</li>
+     * <li>EP id 喂 configurableId（平台按 id 把命中映射回设置树节点，见 {@code filterById}）。</li>
+     * </ul>
+     *
+     * <p>只做内存映射，无 IO/PSI——Contributor 在设置对话框初始化路径上执行（计划 §八）。</p>
+     */
+    public static List<IdeSearchEntry> ideSearchEntries() {
+        List<IdeSearchEntry> entries = new java.util.ArrayList<>();
+        for (SearchableField field : ALL_SEARCHABLE_FIELDS) {
+            entries.add(new IdeSearchEntry(
+                field.searchLabel,
+                field.searchTooltip,
+                MpSqlVisualizerBundle.message(field.pageLabelKey),
+                field.ref.id()
+            ));
+        }
+        return entries;
+    }
+
+    /** IDE 设置搜索条目（{@link #ideSearchEntries()} 的元素；四元组语义见该函数 KDoc）。 */
+    public record IdeSearchEntry(String label, String tooltip, String pageDisplayName, String configurableId) {
     }
 
     private static String msg(String key) {
