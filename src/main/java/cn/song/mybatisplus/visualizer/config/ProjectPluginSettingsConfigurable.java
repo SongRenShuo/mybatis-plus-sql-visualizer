@@ -614,6 +614,15 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
                 com.intellij.icons.AllIcons.General.QuestionDialog);
         if (answer == com.intellij.openapi.ui.Messages.YES) {
             cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project).clear();
+            // T-ModuleScopedLastUsed W4：连带清「上次使用」的**全部层级**（项目级 + 所有模块分桶）。
+            // 否则用户点了「清空模块学习」，指示行灰字仍显示旧源——清空语义名不副实。
+            // （master 为 runCatching 降级形态；依赖 B 波 B1 批的 DataSourceSelector.forgetAllLastUsed，
+            //  中央编译收口验证。）
+            try {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.forgetAllLastUsed(project);
+            } catch (Throwable e) {
+                // 清空失败不阻断绑定清理收尾（降级与 master runCatching 同源）
+            }
             if (moduleBindingLabel != null) {
                 moduleBindingLabel.setText(moduleBindingSummary());
             }
