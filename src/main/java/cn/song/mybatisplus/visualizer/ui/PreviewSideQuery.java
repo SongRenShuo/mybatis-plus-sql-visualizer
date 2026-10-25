@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.mcp.McpDbExecutor;
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter;
 import cn.song.mybatisplus.visualizer.mcp.McpSelectGuard;
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.progress.EmptyProgressIndicator;
@@ -216,7 +217,7 @@ public final class PreviewSideQuery {
                 ? ite.getTargetException()
                 : t;
         String text = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
-        if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isAuthFailureText(text)) {
+        if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannelKt.isAuthFailureText(text)) {
             return text + "　" + MpSqlVisualizerBundle.message("panel.explain.authFailureHint");
         }
         return text;

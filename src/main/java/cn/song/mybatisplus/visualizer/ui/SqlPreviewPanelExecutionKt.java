@@ -46,6 +46,8 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Disposer;
 
+import com.intellij.ui.components.JBLabel;
+import com.intellij.ui.components.JBPanel;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -212,10 +214,6 @@ public final class SqlPreviewPanelExecutionKt {
      * 查询</b>（{@link PreviewSideQuery}）对当前绑定数据源执行——不进入共享控制台、不替换预览编辑器。
      * 不适用形态（JOIN/多表/无 WHERE/多语句）走轻通知如实说明原因，不执行。</p>
      */
-    public static void estimateDmlImpact(@NotNull SqlPreviewPanel p) {
-        estimateDmlImpact(p, true);
-    }
-
     public static void estimateDmlImpact(@NotNull SqlPreviewPanel p, boolean allowDataSourcePrompt) {
         Project proj = p.project;
         if (proj == null) return;
@@ -302,6 +300,11 @@ public final class SqlPreviewPanelExecutionKt {
      * T-PreviewSideQuery P1：无绑定数据源时复用既有数据源选择器（只绑定不执行），
      * 绑定落地后重试一次预估；取消/超时只就地提示，不再二次弹选择器。
      */
+    /** Kotlin 默认参数 {@code allowDataSourcePrompt = true} 的等价重载。 */
+    public static void estimateDmlImpact(@NotNull SqlPreviewPanel p) {
+        estimateDmlImpact(p, true);
+    }
+
     public static void promptDataSourceThenRetryImpact(@NotNull SqlPreviewPanel p,
                                                        @NotNull Project proj, @NotNull String previewSql) {
         SqlPreviewPanelParamPanelKt.showDmlImpactResult(p,MpSqlVisualizerBundle.message("dml.impact.binding"), false, null);
@@ -470,11 +473,8 @@ public final class SqlPreviewPanelExecutionKt {
     /**
      * R91（master ed5005d4 对齐）：AI 上下文复制——只读当前预览/编辑器与已获取历史，
      * 绝不新取计划或 schema（v2 投影：字面量遮蔽 + 标识符可选 + 缺失段标注）。
+     * （全参形态在前：接线守卫按首个声明取函数体。）
      */
-    public static void copyAsAiContext(@NotNull SqlPreviewPanel p) {
-        copyAsAiContext(p, false);
-    }
-
     public static void copyAsAiContext(@NotNull SqlPreviewPanel p, boolean includeIdentifiers) {
         String sql = previewSqlForReadonly(p);
         if (sql == null) return;
@@ -538,6 +538,11 @@ public final class SqlPreviewPanelExecutionKt {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /** Kotlin 默认参数 {@code includeIdentifiers = false} 的等价重载。 */
+    public static void copyAsAiContext(@NotNull SqlPreviewPanel p) {
+        copyAsAiContext(p, false);
     }
 
     public static ExecutionDialectGate.Request executionDialectGateRequest(
@@ -1324,7 +1329,7 @@ public final class SqlPreviewPanelExecutionKt {
         // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
         cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome outcome =
                 cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, explainSql);
-        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked checked) {
+        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Checked checked) {
             notifySchemaIssues(p, proj, checked.issues());
         }
         final AtomicBoolean prewarmDone = new AtomicBoolean(false);
@@ -1389,7 +1394,7 @@ public final class SqlPreviewPanelExecutionKt {
         // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
         cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome outcome =
                 cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, explainSql);
-        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked checked) {
+        if (outcome instanceof cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Checked checked) {
             notifySchemaIssues(p, proj, checked.issues());
         }
         // 零源判定：只要有一条在籍源就交给平台（平台自己决定用哪条、按需弹选择器），
@@ -1707,19 +1712,19 @@ public final class SqlPreviewPanelExecutionKt {
                         // 异常以 SQLException: Access denied 形态冒泡回来，再弹红字框是二次打断
                         // （用户报障原话：「点终止还是出现执行计划的弹框」）。AUTH 改轻通知收口，
                         // 补存密码指引随通知走。
-                        cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind kind =
-                                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind kind =
+                                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannelKt
                                         .classifyExplainFailure(errorText);
-                        if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.AUTH) {
+                        if (kind == cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH) {
                             p.resultPanel.showIdle();
                             notifyExplainAuthFailure(p, projF);
-                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.WRONG_TARGET) {
+                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET) {
                             // T-ExplainFailUx W1：选错源不弹模态、不回退直送（同通道必同样失败）——
                             // 就地横幅 + 「切换数据源」动作（换源后自动重试，W3）
                             p.resultPanel.showIdle();
                             showExplainWrongTarget(p, projF, errorText, explainSqlF, gateRequestF,
                                     () -> submitExplainDirectConsole(p, projF, explainSqlF, gateRequestF));
-                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.ExplainFailureKind.CANCELLED) {
+                        } else if (kind == cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED) {
                             p.resultPanel.showIdle();
                             notifyExplainCancelled(p, projF);
                         } else {
@@ -1992,8 +1997,10 @@ public final class SqlPreviewPanelExecutionKt {
                 Project projNow = p.project;
                 if (projNow != null && !projNow.isDisposed()) {
                     try {
+                        // k2j：243 平台 ReadAction.compute 只剩 ThrowableComputable 形态（master Kotlin
+                        // 泛型实参 <PsiFile?, Throwable> 同此），Computable 单参重载已不可用。
                         com.intellij.psi.PsiFile psi = com.intellij.openapi.application.ReadAction.compute(
-                                (com.intellij.openapi.util.Computable<com.intellij.psi.PsiFile>) () ->
+                                (com.intellij.openapi.util.ThrowableComputable<com.intellij.psi.PsiFile, Throwable>) () ->
                                         com.intellij.psi.PsiDocumentManager.getInstance(projNow)
                                                 .getPsiFile(consoleEditor.getDocument()));
                         if (psi != null) {

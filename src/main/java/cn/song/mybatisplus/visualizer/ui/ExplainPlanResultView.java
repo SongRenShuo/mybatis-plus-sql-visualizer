@@ -156,6 +156,7 @@ public class ExplainPlanResultView extends JBPanel<ExplainPlanResultView> {
         hintsLabel.setVisible(!hints.isEmpty());
 
         // R61 跨次对比条（照抄索引建议条形态；null=无基线不占位——isEmpty 也要显式告知「计划无变化」）
+        historyStatusLabel = new JBLabel();
         if (diff != null || !baselines.isEmpty()) {
             compareLabel = new JBLabel();
             compareLabel.setForeground(JBColor.namedColor("Label.infoForeground", JBColor.GRAY));

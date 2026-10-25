@@ -131,9 +131,10 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // AUTO_RERENDER_REQUIRED 重渲染成功后若断链让用户重按「执行计划」，第二次点击在开关
         // 关闭形态还会落进直送链弹「未绑定数据源」红字——重渲染成功必须自动重提交一次
         // （rerendered 参数防循环），重渲染失败/已重渲染过才回落红条。
-        // k2j：Java 位置实参——自动重提交 = 尾两参 false, true（allowDataSourcePrompt=false, rerendered=true）。
+        // k2j：Java 位置实参——自动重提交 = 尾两参 false, true（allowDataSourcePrompt=false, rerendered=true，
+        // 生产为多行调用，按行锚判定）。
         val gateHit = code.contains("AUTO_RERENDER_REQUIRED") && code.contains("!rerendered")
-        val recursion = code.contains(", false, true);")
+        val recursion = Regex("(?m)^\\s*false, true\\);\\s*$").containsMatchIn(code)
         val param = code.contains("boolean rerendered")
         assertTrue(
             "submitExplainOrStructured 的闸门回调须有 AUTO_RERENDER_REQUIRED 自动重提交分支（W7）",
