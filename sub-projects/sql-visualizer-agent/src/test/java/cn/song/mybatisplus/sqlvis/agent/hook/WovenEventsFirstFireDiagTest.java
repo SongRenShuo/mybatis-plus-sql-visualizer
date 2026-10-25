@@ -7,6 +7,7 @@ import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -30,13 +31,20 @@ public class WovenEventsFirstFireDiagTest {
     private PrintStream originalErr;
     private ByteArrayOutputStream captured;
 
+    /** T-CiRelease（20261024）：捕获/读回两侧显式 UTF-8——默认 PrintStream 字符集随平台走
+     * （本机 GBK 可编码中文取证行、EN-US runner 的 JDK17 默认 Cp1252 把整段打成 '?'，断言必挂），
+     * 读写同 charset 自洽后与本机默认字符集解耦。 */
+    private String capturedText() {
+        return new String(captured.toByteArray(), StandardCharsets.UTF_8);
+    }
+
     @Before
     public void captureStderr() {
         WovenEvents.resetFirstFireForTest();
         StatementRegistry.clearForTest();
         originalErr = System.err;
         captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true));
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
     }
 
     @After
@@ -51,7 +59,7 @@ public class WovenEventsFirstFireDiagTest {
         final FakeVendorFixtures.VendorPs stmt = new FakeVendorFixtures.VendorPs();
         final long token = System.nanoTime();
         WovenEvents.emit(stmt, "execute", "SELECT * FROM t", null, null, token, null);
-        final String first = captured.toString();
+        final String first = capturedText();
         assertTrue("首条事件必须打取证行（宿主侧「钩子在产」证据）",
                 first.contains("织入通道首条事件已产出"));
         assertTrue("取证行须带 op（现场按 op 分流 execute 族形态）", first.contains("op=execute"));
@@ -69,10 +77,10 @@ public class WovenEventsFirstFireDiagTest {
     public void 短路路径不打点() {
         // 空 SQL：事件未产，保持零噪音
         WovenEvents.emit(new Object(), "execute", "", null, null, System.nanoTime(), null);
-        assertEquals("", captured.toString());
+        assertEquals("", capturedText());
         // 首条名额未被空路径消耗：随后真事件照常打点
         WovenEvents.emit(new FakeVendorFixtures.VendorPs(), "execute", "SELECT 1",
                 null, null, System.nanoTime(), null);
-        assertTrue(captured.toString().contains("织入通道首条事件已产出"));
+        assertTrue(capturedText().contains("织入通道首条事件已产出"));
     }
 }
