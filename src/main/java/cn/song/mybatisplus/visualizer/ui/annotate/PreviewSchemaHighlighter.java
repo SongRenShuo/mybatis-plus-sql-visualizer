@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import com.intellij.codeInsight.hint.TooltipController;
 import com.intellij.codeInsight.hint.TooltipGroup;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
@@ -88,13 +89,35 @@ public final class PreviewSchemaHighlighter {
         return attrs;
     }
 
-    /** 为编辑器安装标注通道（幂等；重复安装直接返回）。 */
+    /**
+     * 为编辑器安装标注通道（幂等；重复安装直接返回）。
+     *
+     * <p>T-PreviewSchemaSessionLeak：Session 必须<b>注册进 Disposer 树</b>，否则其内部 Alarm（以 Session 为
+     * parentDisposable）会把整条分支挂到 {@code ROOT_DISPOSABLE} 下，关 IDE 时报「Memory leak detected」。
+     * 属主取 {@code editor.project}：project 必在树中，且项目关闭即兜底回收（正常释放仍由 {@link #uninstall}
+     * 提前销毁）。</p>
+     */
     public static void install(@NotNull Editor editor) {
+        install(editor, editor.getProject());
+    }
+
+    /**
+     * T-PreviewSchemaSessionLeak 测试缝/内部入口：显式指定属主（生产传 {@code editor.project}）。
+     *
+     * <p>用 {@link Disposer#tryRegister} 而非 {@code register}：后者在属主正在关闭时抛异常，而 install 可能
+     * 发生在项目关闭的临界窗口（预览编辑器尚未释放）。属主为 null（无 project 的编辑器）时退化为不注册——
+     * 该分支由测试显式覆盖。</p>
+     */
+    public static void install(@NotNull Editor editor, @Nullable Disposable owner) {
         synchronized (SESSIONS) {
             if (SESSIONS.containsKey(editor)) {
                 return;
             }
-            SESSIONS.put(editor, new Session(editor));
+            Session session = new Session(editor, owner);
+            if (owner != null) {
+                Disposer.tryRegister(owner, session);
+            }
+            SESSIONS.put(editor, session);
         }
     }
 
@@ -118,9 +141,33 @@ public final class PreviewSchemaHighlighter {
         synchronized (SESSIONS) {
             session = SESSIONS.remove(editor);
         }
-        if (session != null) {
-            session.dispose();
+        if (session == null) {
+            return;
         }
+        // T-PreviewSchemaSessionLeak：走树感知销毁——由 Disposer 移除节点并连带 dispose 子对象（Alarm），
+        // 此前直接调 session.dispose() 只跑一半清理（节点与 Alarm 仍留在树里）。自身 disposed 标志
+        // 保证幂等：项目关闭兜底已销毁时这里直接跳过（Disposer.isDisposed 已废弃，不许用）。
+        if (!session.isDisposed()) {
+            Disposer.dispose(session);
+        }
+    }
+
+    /**
+     * T-PreviewSchemaSessionLeak 测试缝：该编辑器是否<b>仍有活会话</b>（＝已安装且未 dispose）。
+     *
+     * <p>注意语义：uninstall 会先把会话移出 map，故「map 里没有」＝没有活会话＝无泄漏风险。
+     * 这正是泄漏判据（是否残留一个未 dispose 的会话），而非「曾经安装过」。</p>
+     */
+    public static boolean hasLiveSessionForTest(@NotNull Editor editor) {
+        Session session = SESSIONS.get(editor);
+        return session != null && !session.isDisposed();
+    }
+
+    /** T-PreviewSchemaSessionLeak 测试缝：该会话记录的属主（用于断言生产入口确实注册到 project）。 */
+    @Nullable
+    public static Disposable sessionOwnerForTest(@NotNull Editor editor) {
+        Session session = SESSIONS.get(editor);
+        return session != null ? session.owner : null;
     }
 
     /** 测试缝：同步触发一次重算（结果经 {@code invokeLater} 落盘，测试侧 dispatch 后断言）。 */
@@ -134,8 +181,25 @@ public final class PreviewSchemaHighlighter {
     private static final class Session implements Disposable {
 
         private final Editor editor;
+
+        /** T-PreviewSchemaSessionLeak：属主（生产=editor.project；null=无 project 编辑器不注册）。 */
+        final Disposable owner;
+
         private final Alarm alarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
         private final List<RangeHighlighter> highlighters = new ArrayList<>();
+
+        /**
+         * T-PreviewSchemaSessionLeak：自身可判定的 disposed 标志（<b>注意不是 override</b>——243 的
+         * {@code com.intellij.openapi.Disposable} 只声明 {@code dispose()}，没有 {@code isDisposed()}；
+         * 平台对「Disposer.isDisposed 已废弃」给出的官方替代正是「对象自带布尔标志」，本处照此实现）。
+         *
+         * <p>与「注册进父树」并用：入树负责兜底回收，标志负责幂等（兜底与 uninstall 可能先后到达）。</p>
+         */
+        private volatile boolean disposed = false;
+
+        boolean isDisposed() {
+            return disposed;
+        }
 
         /** 代际：文档连续变更时旧一轮结果不得覆盖新一轮（池化线程与 EDT 并发读写）。 */
         private final AtomicInteger generation = new AtomicInteger();
@@ -157,8 +221,11 @@ public final class PreviewSchemaHighlighter {
             }
         };
 
-        private Session(@NotNull Editor editor) {
+        private Session(@NotNull Editor editor, @Nullable Disposable owner) {
             this.editor = editor;
+            this.owner = owner;
+            // T-PreviewChainNoise W3：两参重载=注册+把「摘除」挂成本会话的子 disposable（所有权
+            // 一次性交出去）——dispose 里**禁止**再手动 remove（后序销毁下必成二次摘除，见 dispose 注释）
             editor.getDocument().addDocumentListener(documentListener, this);
             editor.addEditorMouseMotionListener(mouseListener, this);
             // 首拍：控制台 preparedEditor 在本编辑器就绪回调返回后才赋值，故延迟一拍；
@@ -291,21 +358,20 @@ public final class PreviewSchemaHighlighter {
 
         @Override
         public void dispose() {
+            if (disposed) {
+                return; // T-PreviewSchemaSessionLeak：幂等（兜底回收与 uninstall 可能先后到达）
+            }
+            disposed = true;
+            // Alarm 是本会话的子 disposable（构造参数 this），Disposer 后序销毁时已先 cancel——
+            // 这里是防御性重复调用（cancelAllRequests 幂等，列表已空）
             alarm.cancelAllRequests();
-            try {
-                editor.getDocument().removeDocumentListener(documentListener);
-            } catch (Throwable t) {
-                if (FatalErrors.isFatal(t)) {
-                    throw (Error) t;
-                }
-            }
-            try {
-                editor.removeEditorMouseMotionListener(mouseListener);
-            } catch (Throwable t) {
-                if (FatalErrors.isFatal(t)) {
-                    throw (Error) t;
-                }
-            }
+            // T-PreviewChainNoise W3：监听摘除职责**只归注册时的 parentDisposable**——构造用两参
+            // 重载（addDocumentListener / addEditorMouseMotionListener）注册时，平台已在 Disposer 树
+            // 里给本会话挂了摘除子对象，且 ObjectTree 按后序（子先父后）销毁：跑到本方法时监听必已
+            // 被摘，再手动 removeDocumentListener / removeEditorMouseMotionListener 即二次摘除 →
+            // 平台打 "Can't remove document listener" 与 EditorImpl 的 "Assertion failed"
+            // （2026-10-23 用户真机日志，master ebfaf73f 改树感知销毁后暴露）。仓内同款定例见
+            // SqlPreviewPanelEditorLifecycle（T-RA-02）。
             for (RangeHighlighter highlighter : highlighters) {
                 try {
                     editor.getMarkupModel().removeHighlighter(highlighter);
