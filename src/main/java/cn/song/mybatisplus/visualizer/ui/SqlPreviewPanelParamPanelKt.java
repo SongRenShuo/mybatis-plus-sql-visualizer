@@ -328,9 +328,36 @@ public final class SqlPreviewPanelParamPanelKt {
         Project proj = p.project;
         if (proj == null) return null;
         try {
-            return DataSourceSelector.rememberedDataSourceName(proj);
+            return DataSourceSelector.rememberedDataSourceName(proj, p.sourceModuleKey);
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    /**
+     * T-ModuleScopedLastUsed W3：本次显示的记忆名来自<b>模块级</b>还是<b>项目级兜底</b>。
+     *
+     * <p><b>判据必须是「模块级键本身有没有值」</b>，不能比较两个解析结果——沙盒验收实测到的缺陷：
+     * {@code lastUsedRunner(proj, moduleKey)} 在模块级为空时会<b>回落项目级</b>，于是
+     * {@code scoped == projectLevel} 恒成立，只有项目级记忆时也被误判成「本模块上次使用」
+     * （真机实际状态：workspace.xml 只有 {@code mpsql.visualizer.last.runner}，无模块级键，
+     * 灰字却显示「数据源（本模块上次使用）」）。</p>
+     *
+     * <p>正确做法：直接读模块级那一层的原始键（{@code DataSourceSelector.LastUsedKeys}），有值才算模块级。
+     * 只读、零副作用；仅用于文案限定词，不参与取源决策。</p>
+     */
+    public static boolean rememberedIsModuleScoped(@NotNull SqlPreviewPanel p) {
+        Project proj = p.project;
+        if (proj == null) return false;
+        if (p.sourceModuleKey == null || p.sourceModuleKey.isBlank()) return false;
+        try {
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(proj);
+            final String moduleKey = p.sourceModuleKey;
+            String id = pc.getValue(DataSourceSelector.LastUsedKeys.dataSourceIdKey(moduleKey));
+            String name = pc.getValue(DataSourceSelector.LastUsedKeys.displayNameKey(moduleKey));
+            return (id != null && !id.isBlank()) || (name != null && !name.isBlank());
+        } catch (Throwable t) {
+            return false;
         }
     }
 
@@ -347,7 +374,14 @@ public final class SqlPreviewPanelParamPanelKt {
         String name = boundDataSourceNameForDisplay(p);
         if (name != null) return MpSqlVisualizerBundle.message("panel.bindstate.bound", name);
         String remembered = rememberedDataSourceNameForDisplay(p);
-        if (remembered != null) return MpSqlVisualizerBundle.message("panel.bindstate.associated", remembered);
+        if (remembered != null) {
+            // T-ModuleScopedLastUsed W3：模块级命中与项目级兜底文案区分（只改括号内限定词，
+            // 不新增控件——W12 定案自研换源 UI 已全部退役）。
+            String key = rememberedIsModuleScoped(p)
+                    ? "panel.bindstate.associatedModule"
+                    : "panel.bindstate.associated";
+            return MpSqlVisualizerBundle.message(key, remembered);
+        }
         return MpSqlVisualizerBundle.message("panel.bindstate.unbound");
     }
 
@@ -368,6 +402,11 @@ public final class SqlPreviewPanelParamPanelKt {
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.RIGHT, 8, 2));
         row.setName(SqlPreviewPanel.BIND_STATE_ROW_NAME);
         row.add(label);
+        // T-ExplainSwitchNative W12（2026-10-24 用户实测三图）：
+        // 图三证明<b>平台原生工具栏自带 {@code Data Sources} 菜单</b>（含 Detach Data Source + 全部源），
+        // 那才是「切换数据源」的正确形态。插件侧自建入口（W2 下拉 / W5 链接）已被用户否决；
+        // 且平台 {@code getForcedDataSourceForExec} 的关联无公开清除 API，自建入口做不到与原生一致
+        // ——故<b>撤掉自研入口</b>，换源一律走原生工具栏（右侧控制台头部）的 Data Sources 菜单。
         row.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
         return row;
     }
