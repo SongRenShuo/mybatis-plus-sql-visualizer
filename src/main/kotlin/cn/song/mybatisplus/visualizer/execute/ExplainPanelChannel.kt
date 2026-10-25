@@ -144,6 +144,9 @@ object ExplainPanelChannel {
                 val raw = McpDbExecutor.executeQuery(
                     project, dataSource, explainSql, McpExplainFormatter.DEFAULT_MAX_ROWS,
                     timeoutSeconds = timeoutSeconds,
+                    // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                    // （此前硬编码 false 连坐自 MCP 通道，沙盒实测只出 Access denied 红字）
+                    askPassword = true,
                     onExecuted = { outcome ->
                         // 审计钩子同步回读（成功/失败两路径都回调一次；取数失败不影响主链）
                         elapsedMs = outcome.elapsedMs
@@ -167,4 +170,82 @@ object ExplainPanelChannel {
         // write-safe：回调只做 Swing 组装/换入（无文档写），ModalityState.any() 同 embedConsole 口径
         ApplicationManager.getApplication().invokeLater(block, ModalityState.any())
     }
+}
+
+/** T-ExplainPwdPrompt：执行计划失败分型（呈现层据此选出口，纯逻辑 headless 直测）。 */
+internal enum class ExplainFailureKind {
+    /** 认证失败（数据源密码未存/错误）——附「补存密码」指引，不再无谓回退直送（同通道必同样失败）。 */
+    AUTH,
+
+    /**
+     * T-ExplainFailUx W1（2026-10-24 用户沙盒实测）：**选错数据源**——预览引用的表不在当前源
+     * （`Table 'mp_demo.wms_inventory_jar_demo' doesn't exist`）。这是最典型的「该换源」信号：
+     * 不弹模态框，就地引导切换数据源（换源后自动重试一次，见 W3）。
+     */
+    WRONG_TARGET,
+
+    /** 用户取消（原生密码框 Esc 等）——轻通知，绝不自动重试（重试会再弹一次框）。 */
+    CANCELLED,
+
+    /** 其余——维持既有回退直送链。 */
+    OTHER,
+}
+
+/** 认证失败签名（小写 contains；覆盖 MySQL/PostgreSQL/Oracle/SQL Server 常见形态）。 */
+private val EXPLAIN_AUTH_SIGNATURES = listOf(
+    "access denied",                   // MySQL / 通用
+    "password authentication failed",  // PostgreSQL
+    "invalid username/password",       // Oracle 文本形态
+    "ora-01017",                       // Oracle 数字形态
+    "login failed for user",           // SQL Server
+)
+
+/**
+ * T-ExplainFailUx W1：「表不在当前源」签名（小写 contains）。覆盖四家方言的固定报文：
+ * MySQL `[42S02][1146] Table 'x.y' doesn't exist`（仓内实证 DataSourceSelectorResults:1056）、
+ * PostgreSQL `relation "x" does not exist`（42P01）、SQL Server `Invalid object name 'x'`（208）、
+ * Oracle `ORA-00942: table or view does not exist`。
+ *
+ * 注意与「列不存在」区分：`Unknown column` 是列级问题（同一张表在，换源解决不了），**不算**本档。
+ */
+private val EXPLAIN_WRONG_TARGET_SIGNATURES = listOf(
+    "doesn't exist",                    // MySQL 1146 / SQL Server 变体
+    "does not exist",                   // PostgreSQL 42P01 / Oracle 942 文本
+    "unknown table",                    // MySQL 泛化
+    "invalid object name",              // SQL Server 208
+    "ora-00942",                        // Oracle 数字形态
+    "no such table",                    // SQLite / 通用
+)
+
+/** 文本是否「表不在当前源」形态（W1）。 */
+internal fun isWrongTargetText(text: String): Boolean {
+    val lower = text.lowercase()
+    return EXPLAIN_WRONG_TARGET_SIGNATURES.any { lower.contains(it) }
+}
+
+/** 文本是否认证失败形态（[classifyExplainFailure] 与 [cn.song.mybatisplus.visualizer.ui.PreviewSideQuery] 共用）。 */
+internal fun isAuthFailureText(text: String): Boolean {
+    val lower = text.lowercase()
+    return EXPLAIN_AUTH_SIGNATURES.any { lower.contains(it) }
+}
+
+/**
+ * T-ExplainPwdPrompt W2（2026-10-24）：执行计划失败分型。
+ *
+ * 取消判定排除超时——驱动超时消息常含 "cancelled"（MySQL "Statement cancelled due to
+ * timeout"），超时是执行错误不是用户取消（[cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard]
+ * 已转 `timed out` 标记），误判取消会把真失败吞成轻通知。
+ */
+internal fun classifyExplainFailure(text: String): ExplainFailureKind {
+    if (isAuthFailureText(text)) return ExplainFailureKind.AUTH
+    // T-ExplainFailUx W1：认证优先（`doesn't exist` 与认证不会同时出现，但认证误判代价更高），
+    // 其次「表不在当前源」——该换源而非报错（列级 `Unknown column` 不算，换源解决不了）。
+    if (isWrongTargetText(text)) return ExplainFailureKind.WRONG_TARGET
+    val lower = text.lowercase()
+    // "cancell" 词根同时覆盖 cancelled / cancellation（CancellationException 是双 L，
+    // 只写 "canceled" 漏掉平台取消形态——ExplainFailureClassifierTest 首跑实证）
+    val cancelLike = lower.contains("canceled") || lower.contains("cancell")
+    val timeoutLike = lower.contains("timeout") || lower.contains("timed out")
+    if (cancelLike && !timeoutLike) return ExplainFailureKind.CANCELLED
+    return ExplainFailureKind.OTHER
 }

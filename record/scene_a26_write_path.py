@@ -29,10 +29,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from gifkit import Recorder
 from nav import close_preview, force_en_us, goto_col, shot, trigger_preview
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a26_write_path.mp4"
 
 FILE = "UserWriteServiceImpl.java"
+FILE_REL = "jpa-hibernate-demo/src/main/java/cn/song/jpademo/service/impl/UserWriteServiceImpl.java"
 RESULT_ROW = (777, 342)
 EDITOR_SPOT = (600, 500)
 DLG_BODY = (760, 400)
@@ -53,21 +54,30 @@ def main():
     force_en_us()
 
     # ---- prep（不入镜）：开文件 + 光标压到 save 调用点 + 开好第一张预览 ----
+    #    开文件改走 MCP（按路径精确打开）：Ctrl+Shift+N + typewrite 那条路在 demo 里
+    #    会撞同名文件，而且 typewrite 在中文 IME 下会把文件名变成候选框（2026-10-25）。
     close_preview(body_xy=DLG_BODY)
-    pyautogui.click(*EDITOR_SPOT)
-    time.sleep(0.5)
-    pyautogui.hotkey("ctrl", "shift", "n")
-    time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.3)
-    force_en_us()
-    pyautogui.typewrite(FILE, interval=0.05)
-    time.sleep(1.8)
-    pyautogui.click(*RESULT_ROW)
-    time.sleep(0.4)
-    pyautogui.click(*RESULT_ROW)
-    time.sleep(2.5)
+    try:
+        from mcpnav import open_file
+        open_file(FILE_REL, settle=1.6)
+    except Exception as e:
+        print("MCP 打不开，退回搜索方式:", e)
+        pyautogui.click(*EDITOR_SPOT)
+        time.sleep(0.5)
+        pyautogui.hotkey("ctrl", "shift", "n")
+        time.sleep(1.4)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.3)
+        force_en_us()
+        pyautogui.typewrite(FILE, interval=0.05)
+        time.sleep(1.8)
+        pyautogui.click(*RESULT_ROW)
+        time.sleep(0.4)
+        pyautogui.click(*RESULT_ROW)
+        time.sleep(2.5)
     goto_col(LINE_SAVE, COL_SAVE)
+    pyautogui.press("esc")          # 关掉 goto 输入框
+    time.sleep(0.4)
     trigger_preview()
 
     r = Recorder(REGION, OUT)
@@ -83,9 +93,19 @@ def main():
     time.sleep(1.6)
 
     # 3. 切到 deleteById：关窗 → 跳行 → 再预览（DELETE + 逐实体 em.remove 语义注释）
+    #    goto_col 走 Ctrl+G，**跳完立刻 Esc 关掉那个输入框**——否则它留在画面里
+    #    （旧片第 48~68 帧挂着 `56:35`，正是这一步漏了 Esc）。
     close_preview(body_xy=DLG_BODY, wait=1.1)
-    goto_col(LINE_DEL, COL_DEL, wait=0.9)
-    trigger_preview(wait=2.6)
+    goto_col(LINE_DEL, COL_DEL, wait=1.2)
+    # goto 自带护栏（Enter 被吞会补按一次），这里再兜一层：弹窗仍在就 Esc
+    from nav import _goto_dialog_open
+    if _goto_dialog_open():
+        pyautogui.press("esc")
+        time.sleep(0.6)
+    time.sleep(0.4)
+    # wait=2.6 不够：实测弹窗要 ~3s 才画完，中途开录会录到半透明/错位的渲染中间态
+    # （本轮第 70 帧就录成了「参数列浮在编辑器上、弹窗本体看不见」）。
+    trigger_preview(wait=3.6)
 
     # 4. 收尾凝视：DELETE / WHERE 与灰注释同屏
     pyautogui.moveTo(*GAZE_A, duration=1.0)

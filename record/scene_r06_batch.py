@@ -20,7 +20,7 @@ from gifkit import (Recorder, click, find_blue_checkboxes, find_gutter_icons,
                     goto_line, shot, wait_stable)
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r06_batch.mp4")
 
@@ -84,10 +84,18 @@ def main():
         click(*chk_age, move_dur=0.35)        # 2. 取消勾选 age 列
         time.sleep(1.8)                       # SQL 收缩定格
 
-        click(*abs_pt(COPY_AND_CLOSE), move_dur=0.3)   # 3. 复制 SQL 并关闭
+        # 3. 复制 SQL 并关闭——**改点「取消」**：复制会留一张常驻的
+        #    「SQL 已复制到剪贴板」通知卡（独立 balloon 窗口，robot-server 查不到、
+        #    Esc 关不掉），尾帧与首帧对不上。
+        click(*abs_pt(CANCEL), move_dur=0.3)
         time.sleep(0.9)
 
-        goto_line(211)                                  # 4. 首尾同态（回到起始行）
+        # 4. 首尾同态：回起始行。
+        #    goto_line 会弹 Ctrl+G 输入框，**必须紧跟着 Esc 关掉**——否则弹窗留在
+        #    尾帧里（旧片第 65~88 帧就挂着 `[Line] 211`，正是这一步漏了 Esc）。
+        goto_line(211)
+        time.sleep(0.4)
+        pyautogui.press("esc")
         time.sleep(1.0)
     finally:
         rec.stop()

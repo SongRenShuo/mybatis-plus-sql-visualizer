@@ -7,18 +7,27 @@
 - gutter 图标仍走像素检测（组件树看不见 gutter）。
 
 前置（prep）：UserMapper.java 打开、goto(33)、无弹窗。
+
+【2026-10-25 T-DocsGifRecord1025 修订】旧片在参数框里出现中文输入法候选框
+（绿底「1 送」+「2 Song 3 宋…」），并把汉字「送」打进 `#username`，最终渲染成
+`WHERE username = '送'`。根因＝`typewrite` 没切英文布局，本机 IME 为中文态。
+修法＝每次键入前调 `nav.force_en_us()`（`LoadKeyboardLayoutW('00000409')` +
+`PostMessage(WM_INPUTLANGCHANGEREQUEST)`；只调 ActivateKeyboardLayout 无效，
+2026-10-25 P1 证伪已实测）。
 """
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
-from gifkit import (Recorder, click, find_gutter_icons, goto_line, shot,
-                    typewrite, wait_stable)
+from gifkit import (Recorder, click, find_gutter_icons, goto_line, pyautogui,
+                    shot, typewrite, wait_stable)
+from nav import force_en_us
 from robot import click_component, find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r03_annotation.mp4")
 
@@ -37,9 +46,9 @@ def has(xp):
 def locate_gutter(y_range=(100, 860)):
     path = os.path.join(BASE, "perf", "_pre_r03.png")
     shot(REGION, path)
-    icons = find_gutter_icons(path, y_range=y_range, gap=12)
-    # 只要 gutter 主条带（x≈95）：x≈117 是编辑器折叠箭头，不是插件图标
-    icons = [i for i in icons if i[1] < 105]
+    # 条带必须覆盖插件图标本体：目录树收起后它落在 region 相对 x≈70~82
+    # （2026-10-25 实测；默认 strip_x=(95,130) 只框到灯泡/折叠箭头，检测恒为空）
+    icons = find_gutter_icons(path, strip_x=(85, 115), y_range=y_range, gap=12)
     if not icons:
         raise RuntimeError("gutter icon not found")
     center = (y_range[0] + y_range[1]) / 2
@@ -54,6 +63,8 @@ def param_fields():
 
 
 def main():
+    force_en_us()                            # 先把输入法切英文，否则参数值会被转成汉字
+    time.sleep(0.5)
     goto_line(37)
     gutter = locate_gutter()
 
@@ -66,20 +77,30 @@ def main():
         wait_stable(REGION)
         time.sleep(1.3)                      # 弹窗定格
 
+        # 参数框的值会跨次保留（上一轮录完不清空，下一轮再点进去旧值还在，
+        # 直接 typewrite 就变成 songsongsong… / 111111）。所以先全选删干净再输。
         fields = param_fields()
-        click(*abs_pt(fields[0]), move_dur=0.3)
-        typewrite("song", interval=0.06)
-        time.sleep(0.5)
-        click(*abs_pt(fields[1]), move_dur=0.3)
-        typewrite("1", interval=0.06)
+        for idx, val in enumerate(("song", "1")):
+            click(*abs_pt(fields[idx]), move_dur=0.3)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.2)
+            pyautogui.press("delete")
+            time.sleep(0.2)
+            typewrite(val, interval=0.06)
+            time.sleep(0.5)
         time.sleep(1.8)                      # SQL 回填定格
 
-        # 3. 复制 SQL 并关闭（新 UI 蓝色主行动）
-        click(*abs_pt((1115, 806)), move_dur=0.3)
-        time.sleep(0.9)
+        # 3. 取消关闭弹窗（收尾）
+        #    旧版点的是蓝色主行动「复制 SQL 并关闭」，会在右下角留一张常驻的
+        #    「SQL 已复制到剪贴板」通知卡——独立 balloon 窗口，robot-server 查不到、
+        #    Esc 关不掉（2026-10-25 实测连按两次仍在），尾帧因此与首帧对不上
+        #    （接缝 2.03%，27433 个差异像素里 11432 个是它）。
+        #    改点「取消」：同样关闭弹窗，但不产生通知卡。
+        click(*abs_pt((1212, 798)), move_dur=0.3)
+        time.sleep(1.0)
         # 收尾回跳到起始行，保证首尾同态（录制指南第 18 条）
         goto_line(37)
-        time.sleep(0.9)
+        time.sleep(1.0)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")

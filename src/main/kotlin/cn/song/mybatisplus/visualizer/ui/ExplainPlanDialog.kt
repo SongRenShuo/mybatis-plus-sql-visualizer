@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.ui
 
-import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -8,14 +7,11 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JTable
-import javax.swing.table.DefaultTableModel
 
 /**
  * T-PreviewSideQuery P2：非模态承载 EXPLAIN 结果，不替换预览编辑器。
@@ -73,29 +69,14 @@ internal fun SqlPreviewPanel.showExplainDialog(view: JComponent) {
     showExplainDialog(ExplainPlanDialog(proj, view))
 }
 
-/** 直送结果（TEXT/XML/回退形态）：只读表格展示，不进入共享控制台。 */
-internal fun SqlPreviewPanel.showExplainRawResultDialog(title: String, raw: McpExplainFormatter.RawResult) {
-    val model = DefaultTableModel(arrayOf<Any>(*raw.headers.toTypedArray()), 0)
-    raw.rows.forEach { model.addRow(arrayOf<Any>(*it.toTypedArray())) }
-    val table = JBTable(model).apply {
-        isEnabled = false
-        autoResizeMode = JTable.AUTO_RESIZE_OFF
-    }
-    val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-        add(
-            JBLabel(
-                "<html><b>" + escapeHtml(title) + "</b>" +
-                    if (raw.truncated) " · " + MpSqlVisualizerBundle.message("panel.explain.structured.truncated") else "" +
-                    "</html>",
-            ).apply { border = JBUI.Borders.empty(4, 6) },
-            BorderLayout.NORTH,
-        )
-        add(JBScrollPane(table), BorderLayout.CENTER)
-    }
-    showExplainDialog(panel)
-}
+/**
+ * T-ExplainConsoleFirst W1（2026-10-24）：原「直送结果只读表格对话框」已随形态 B 一起退役
+ * ——EXPLAIN 默认与回退全部走内嵌原生控制台（`submitExplainDirectConsole`），计划由平台
+ * 控制台原生呈现。结构化形态（`explainStructuredRender`）用 `ExplainPlanResultView` 渲染，
+ * 从不经过本函数。留此注释只为记录去向，避免后来者以为漏了某个表格分支。
+ */
 
-/** 旁路查询失败：给出原因，并保留显式「在控制台打开」入口（用户明确选择才换编辑器）。 */
+/** 无源/失败引导：给出原因，并保留显式出口（在控制台打开 / 去 Database 工具窗口）。 */
 internal fun SqlPreviewPanel.showExplainErrorDialog(
     message: String,
     onOpenConsole: () -> Unit = {},

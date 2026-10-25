@@ -193,6 +193,15 @@ internal class PremainChannel(
     @Volatile
     var paused: Boolean = false
 
+    /**
+     * T-ReleasePerf8（S5 挂死修复）：accept 循环代际。每次起 accept 循环（[AgentManager.openPremainChannel]
+     * / [AgentManager.resumePremainChannel]）递增取新代；旧循环在 accept 返回/超时拍处发现失主即让位
+     * 退出——不依赖 `paused`（pause→resume 竞态下 paused 先被 resume 翻回 false，旧循环若只依赖它会
+     * 失去全部退出条件而无限 tick，S5 发行门禁轮实测挂 75min）。
+     */
+    @Volatile
+    var acceptGeneration: Int = 0
+
     /** 关闭通道（幂等）：置位 + 关监听 socket——阻塞中的 accept 立即抛 SocketException 退出。 */
     fun closeChannel() {
         closed = true

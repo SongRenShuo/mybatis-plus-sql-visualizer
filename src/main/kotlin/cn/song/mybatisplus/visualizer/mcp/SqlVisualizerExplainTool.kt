@@ -153,6 +153,9 @@ open class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                     target.project, target.ds, target.explainSql, target.maxRows,
                     timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .state.executionTimeoutSeconds,
+                    // T-ExplainPwdPrompt：MCP 通道**必须** false（零弹窗红线）——程序性调用弹
+                    // 模态密码框即挂死；密码未存时保持 fail closed，错误文本交 agent 可读通道
+                    askPassword = false,
                     // R23：二段式/多结果集方言（Oracle/SQL Server）的通道说明——随执行结果以
                     // notices 节透出（「行里为什么没有计划」的诚实降级）；null（其余 9 家）零追加
                     channelNote = cn.song.mybatisplus.visualizer.sql.ExplainSupport

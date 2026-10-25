@@ -264,6 +264,128 @@ class ExplainPanelWiringGuardTest {
         }
     }
 
+    /**
+     * T-ExplainConsoleFirst W4（2026-10-24）：只读动作必须走 `previewSqlForReadonly()`，
+     * 不得再裸读 `currentEditorSql()`。
+     *
+     * 为什么：执行计划回到内嵌原生控制台后，`mpsql-exec.sql` 的 document 会被 EXPLAIN 语句
+     * 顶掉，而 `nativeEditorDoc` 指向它 ⇒ `currentEditorSql()` 漂移。只读动作（回滚 SQL /
+     * 导出回放 / 复制 AI 上下文 / 导出可移植 SQL / 预估影响行数）若裸读它，用户在执行视图里
+     * 点这些按钮会拿到 EXPLAIN 语句而不是自己的 SQL。（`1a1cf724` 当初弃用形态 A 正是这个
+     * 原因——不钉住这条，形态 A 重新上线就会回归。）
+     *
+     * 反向验证：把任一动作改回 `currentEditorSql()` 必红。
+     */
+    @Test
+    fun `W2_只读动作取词必须走预览快照`() {
+        val source = sqlPreviewPanelSource()
+        val readonlyActions = listOf(
+            "internal fun SqlPreviewPanel.showRollbackSql(",
+            "internal fun SqlPreviewPanel.exportReplayScript(",
+            "internal fun SqlPreviewPanel.copyAsAiContext(",
+            "internal fun SqlPreviewPanel.exportPortableSql(",
+            "internal fun SqlPreviewPanel.estimateDmlImpact(",
+        )
+        for (marker in readonlyActions) {
+            val body = functionBody(source, marker)
+            assertTrue(
+                "$marker 必须走 previewSqlForReadonly()（执行视图下才拿得到预览 SQL）",
+                body.contains("previewSqlForReadonly()"),
+            )
+            assertFalse(
+                "$marker 不得裸读 currentEditorSql()（执行视图下会漂移成 EXPLAIN 语句）",
+                body.contains("currentEditorSql()"),
+            )
+        }
+        // 执行链本身必须仍读真实编辑器（用户手改要生效），不得走快照
+        val execute = functionBody(source, "internal fun SqlPreviewPanel.executeSql(")
+        assertTrue(
+            "executeSql 必须执行编辑器真实文本（不得用预览快照顶替用户手改）",
+            execute.contains("nativeEditorDoc?.text") || execute.contains("editor?.document?.text"),
+        )
+    }
+
+    /**
+     * T-ExplainConsoleFirst W1（2026-10-24）：形态 B 的旁路 EXPLAIN 不得回流。
+     *
+     * `submitExplainDirect` 必须转调 `submitExplainDirectConsole`（内嵌原生控制台），
+     * 且函数体内不得出现 `PreviewSideQuery.run`——一旦回流，十二轮换源拉锯的根因
+     * （插件自建 JDBC 通道 + 平台「选中即关联」短路）就全回来。
+     */
+    @Test
+    fun `W1_执行计划直送不得回流旁路查询`() {
+        val source = sqlPreviewPanelSource()
+        val direct = functionBody(source, "internal fun SqlPreviewPanel.submitExplainDirect(")
+        assertTrue(
+            "submitExplainDirect 必须转调 submitExplainDirectConsole（形态 A）",
+            direct.contains("submitExplainDirectConsole("),
+        )
+        assertFalse(
+            "submitExplainDirect 不得再调 PreviewSideQuery.run（形态 B 已退役）",
+            direct.contains("PreviewSideQuery.run("),
+        )
+    }
+
+    /**
+     * T-ExplainConsoleFirst W8（2026-10-24 沙盒验收实测）：`submitExplainDirectConsole` 进执行链前
+     * **必须先预热 exec 临时文件**。
+     *
+     * 实测症状：点「执行计划」刷 9 条 `SEVERE - SlowOperations ... Plugin to blame: SQL Visualizer`，
+     * 栈为 `explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare →
+     * createTempPsiFile → PsiManagerImpl.findFile`——`createTempPsiFile` 的冷路径（VFS refresh +
+     * `PsiManager.findFile`）在 EDT 上跑。`1a1cf724` 后 EXPLAIN 走旁路查询不经控制台链，故从未暴露；
+     * W1 把 EXPLAIN 切回控制台后它重新进入热路径。
+     *
+     * 反向验证：删掉预热调用 → 必须红。
+     */
+    @Test
+    fun `W8_执行计划进链前必须预热exec文件`() {
+        val body = functionBody(sqlPreviewPanelSource(), "internal fun SqlPreviewPanel.submitExplainDirectConsole(")
+        assertTrue(
+            "submitExplainDirectConsole 必须预热 exec 文件（否则 createTempPsiFile 冷路径在 EDT 做 VFS/PSI 慢操作）",
+            body.contains("prewarmExecTempFileOnBackgroundThread("),
+        )
+        val prewarmCall = body.indexOf("prewarmExecTempFileOnBackgroundThread(")
+        // W8-fix 后结构是**异步续接**：`SqlExecutor.execute` 在 `continueChain` 闭包里（源码位置在前），
+        // 预热提交在闭包外、且池线程跑完之后才 `invokeLater(continueChain)`。
+        // 故不能按文本位置断言「预热在 execute 之前」——那是首版同步写法才成立的形态。
+        // 改钉真正的先后机制（池线程块内：先预热调用、后续接调用）：
+        val poolBlock = body.indexOf("executeOnPooledThread")
+        assertTrue(
+            "预热调用必须位于池线程块内（实际 prewarm=$prewarmCall, poolBlock=$poolBlock）",
+            prewarmCall > poolBlock,
+        )
+        val continueCall = body.indexOf("invokeLater({ continueChain() }")
+        assertTrue(
+            "预热完成后才续接执行链（continueChain 必须排在预热调用之后：prewarm=$prewarmCall, continue=$continueCall）",
+            continueCall > prewarmCall,
+        )
+        assertTrue(
+            "预热必须投在池线程（EDT 上做 VFS refresh/findFile 就是被修的那个问题）",
+            body.contains("executeOnPooledThread"),
+        )
+        // W8-fix：**EDT 上不得阻塞等预热**——首版 `future.get(8s)` 在慢盘/索引期会冻 UI，
+        // 且与既有 prewarm 的双层预算等待嵌套。改异步续接后 EDT 上一个 get 都不该有。
+        assertFalse(
+            "submitExplainDirectConsole 内不得出现 Future.get / 任何阻塞等待（EDT 会被冻住）",
+            body.contains(".get(") && body.contains("TimeUnit"),
+        )
+        assertTrue(
+            "预热完成后必须回 EDT 续接执行链（异步续接而非阻塞）",
+            body.contains("invokeLater") && body.contains("continueChain"),
+        )
+        // 直接调 inner 而不是外层 prewarmExecTempFile：后者内部会再 submit 一个池线程并 get(30s)，
+        // 从池线程调它就成了「池线程等池线程」的嵌套等待。
+        assertFalse(
+            "不得从池线程调用外层 prewarmExecTempFile（它内部再 submit + get，形成嵌套等待）",
+            body.contains("prewarmExecTempFile("),
+        )
+        assertTrue(
+            "必须走「调用方已在 BGT」的专用入口（同步跑完、不自带预算等待）",
+            body.contains("prewarmExecTempFileOnBackgroundThread("),
+        )
+    }
+
     /** 截取从 [marker] 开始到下一个顶层函数声明之前的源码段。 */
     private fun functionBody(source: String, marker: String): String {
         val start = source.indexOf(marker)

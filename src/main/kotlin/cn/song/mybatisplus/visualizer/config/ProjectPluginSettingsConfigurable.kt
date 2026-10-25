@@ -343,6 +343,11 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         ) == com.intellij.openapi.ui.Messages.YES
         if (!confirmed) return
         cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project).clear()
+        // T-ModuleScopedLastUsed W4：连带清「上次使用」的**全部层级**（项目级 + 所有模块分桶）。
+        // 否则用户点了「清空模块学习」，指示行灰字仍显示旧源——清空语义名不副实。
+        runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.forgetAllLastUsed(project)
+        }
         moduleBindingLabel?.text = moduleBindingSummary()
     }
 

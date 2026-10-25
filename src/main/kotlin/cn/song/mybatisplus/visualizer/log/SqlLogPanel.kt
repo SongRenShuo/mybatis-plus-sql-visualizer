@@ -21,6 +21,7 @@ import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
@@ -259,6 +260,9 @@ class SqlLogPanel(
             templatePresentation.icon = MpvsIcons.Sort
         }
 
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT（见 toolbarGroup KDoc 的字节码依据）
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             val label = currentSortLabel()
             e.presentation.icon = MpvsIcons.Sort
@@ -272,9 +276,14 @@ class SqlLogPanel(
     }
 
     /** 当前排序方式显示名（默认回退时间升序）。 */
+    /**
+     * 当前排序方式显示名（静态查表，零分配——T-SqlLogToolbarEdt W3）。
+     *
+     * 旧实现 `sortOptions().firstOrNull { it.mode == sortMode }?.label` 每次都要新建 7 个
+     * `SortOption` 并调 7 次 bundle 取值，而这里处在工具栏每次展开的 update 路径上。
+     */
     private fun currentSortLabel(): String =
-        sortOptions().firstOrNull { it.mode == sortMode }?.label
-            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
+        MpSqlVisualizerBundle.message(sortModeLabelKey(sortMode))
 
     /**
      * T-SqlLogPerf（20261006-1020 计划 + 用户点名）：「滚动到底部」动作 + 尾部跟随。
@@ -479,6 +488,10 @@ class SqlLogPanel(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
         MpvsIcons.DockedPreview,
     ) {
+        // T-SqlLogToolbarEdt W1：ToggleAction 的 update 由平台模板实现，但 isSelected 被覆写后
+        // 平台仍按 AnAction 默认的更新线程判定 → 显式声明 BGT（isSelected 只读 dockedPreview 状态）。
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
 
         override fun setSelected(e: AnActionEvent, state: Boolean) {
@@ -501,20 +514,42 @@ class SqlLogPanel(
      * 操作在前、工具在后、**帮助收尾**（`?` 是纯信息性动作，平台惯例放末尾；溢出从右端折叠，
      * 帮助最先让位）。**不设自建「更多」弹层**——窄宽折叠交给平台 ActionToolbar 自带的溢出（`»`），
      * 悬停/点击即列出被折叠的动作。
+     *
+     * T-SqlLogToolbarEdt W1（2026-10-24，用户令「可修的性能问题现在立项」）：**组与组内动作显式
+     * 声明 `ActionUpdateThread.BGT`**。
+     *
+     * 为什么必须显式声明（243 字节码实证，非猜测）：`AnAction.getActionUpdateThread()` 的默认
+     * 实现是「实现 `UpdateInBackground` 且返回 true → BGT；`ActionClassMetaData.isDefaultUpdate`
+     * 为 true → BGT；**否则 EDT**」，而 `isDefaultUpdate` 判定的是「声明 `update()` 的类是否就是
+     * `AnAction` 本身」——**组内这批动作全都覆写了 `update()`**，于是默认全部落 EDT。
+     *
+     * 实测代价（沙盒 `idea.log` 20:34:28 / 20:35:23）：
+     * `ActionUpdater - 3981 ms / 3174 ms total to grab EDT 10 times to expand
+     *  DefaultActionGroup#expandGroup@cn.song.mybatisplus.visualizer.log.toolbar ...
+     *  Use ActionUpdateThread.BGT`——累计抢 EDT 3.1~4.0 秒。
+     *
+     * 约束（W2 已逐个核过）：`update()` 内只读状态 + 写 `e.presentation`，**不触碰 Swing 组件/
+     * 文档/EDT-only API**，故 BGT 合规。
      */
-    internal val toolbarGroup = DefaultActionGroup(
-        captureToggleAction,
-        agentPauseAction,
-        ClearAction(),
-        SettingsAction(),
-        ManageSuppressAction(),
-        ShowSearchAction(),
-        previewToggleAction,
-        scrollToEndAction,
-        sortModeAction,
-        CommunityAction(),
-        HelpAction(),
-    )
+    internal val toolbarGroup = object : DefaultActionGroup() {
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+    }.apply {
+        addAll(
+            listOf(
+                captureToggleAction,
+                agentPauseAction,
+                ClearAction(),
+                SettingsAction(),
+                ManageSuppressAction(),
+                ShowSearchAction(),
+                previewToggleAction,
+                scrollToEndAction,
+                sortModeAction,
+                CommunityAction(),
+                HelpAction(),
+            ),
+        )
+    }
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
 
@@ -822,6 +857,9 @@ class SqlLogPanel(
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
     internal inner class ShowSearchAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         init {
             registerCustomShortcutSet(CommonShortcuts.getFind(), list)
         }
@@ -1069,6 +1107,9 @@ class SqlLogPanel(
      * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
      */
     internal inner class CaptureAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
                 e.presentation.icon = MpvsIcons.CaptureStop
@@ -1117,6 +1158,9 @@ class SqlLogPanel(
     }
 
     internal inner class ClearAction : AnAction(MpvsIcons.Clear) {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
@@ -1133,6 +1177,9 @@ class SqlLogPanel(
      * 图标 = [MpvsIcons.ScrollToEnd]（列表 + 向下箭头；原先复用 [AllIcons.General.ArrowDown]）。
      */
     internal inner class ScrollToEndAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.ScrollToEnd
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
@@ -1147,6 +1194,9 @@ class SqlLogPanel(
     }
 
     internal inner class SettingsAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
@@ -1165,6 +1215,9 @@ class SqlLogPanel(
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
     internal inner class ManageSuppressAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.Suppress
             e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
@@ -1180,6 +1233,9 @@ class SqlLogPanel(
         MpSqlVisualizerBundle.message("log.community.action.tip"),
         MpvsIcons.Community,
     ) {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun actionPerformed(e: AnActionEvent) {
             CommunityDialog(project).apply { startLoading() }.show()
         }
@@ -1202,6 +1258,9 @@ class SqlLogPanel(
      *  样式保证：marketplace-custom-page.html 为纯内联 <style>，无 link/script/img/url()，
      *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
     internal inner class HelpAction : AnAction() {
+        // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
         override fun update(e: AnActionEvent) {
             e.presentation.icon = MpvsIcons.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")

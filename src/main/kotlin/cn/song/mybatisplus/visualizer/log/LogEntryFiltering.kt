@@ -224,6 +224,24 @@ internal fun sortOptions(): List<SortOption> = listOf(
     SortOption(MpSqlVisualizerBundle.message("log.sort.database"), SortMode.DATABASE_GROUP),
 )
 
+/**
+ * T-SqlLogToolbarEdt W3（2026-10-24）：`SortMode → 文案键` 静态查表。
+ *
+ * 为什么不再用 [sortOptions]：`sortModeAction.update()` 是**工具栏每次展开都要走的路径**
+ * （改 BGT 之前还在 EDT 上），而它每次 `firstOrNull{}` 都要新建 7 个 `SortOption` + 调 7 次
+ * `MpSqlVisualizerBundle.message`（含 ResourceBundle 取值）。查表后 update 是常数时间、零分配。
+ * [sortOptions] 本身保留给「构建下拉项」这类一次性场景（需要顺序与 label）。
+ */
+internal fun sortModeLabelKey(mode: SortMode): String = when (mode) {
+    SortMode.TIME_ASC -> "log.sort.time.asc"
+    SortMode.TIME_DESC -> "log.sort.time.desc"
+    SortMode.DURATION_ASC -> "log.sort.duration.asc"
+    SortMode.DURATION_DESC -> "log.sort.duration.desc"
+    SortMode.SEQUENCE -> "log.sort.sequence"
+    SortMode.STRUCTURE_CLUSTER -> "log.sort.structure"
+    SortMode.DATABASE_GROUP -> "log.sort.database"
+}
+
 /** 「按目标库分组」排序里未知库名的哨兵键（U+FFFF 大于常规字符，未知库恒沉底）。 */
 internal const val DATABASE_UNKNOWN_SORT_KEY = "\uFFFF"
 

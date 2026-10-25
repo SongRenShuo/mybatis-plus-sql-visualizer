@@ -133,6 +133,47 @@ object DatabaseSchemaResolver {
         }
     }
 
+    /**
+     * T-DialectInferPollution W10（2026-10-24）：**表归属路由**——返回「缓存里持有**全部**指定
+     * 表」的数据源下标清单（与 [columnNameSources] 的源顺序一致；只读缓存，零内省零连接）。
+     *
+     * 动机：EXPLAIN 取源回落（模块学习/last-used）可能命中与预览表不符的源（跨模块错配，
+     * 用户实测 `mp_demo.wms_inventory_jar_demo doesn't exist`）；而「表在哪个库」是比模块绑定
+     * 更强的归属事实，且结构缓存在 Database 视图展开/预览链预热时已就位。命中唯一 → 直接路由；
+     * 零命中（缓存未热/表不存在）与多命中 → 调用方保持现行为/引导选择，不猜。
+     */
+    internal fun cachedOwnerIndexes(project: Project?, tableNames: Collection<String>): List<Int> {
+        if (project == null || tableNames.isEmpty()) return emptyList()
+        if (!isDatabaseAvailable()) return emptyList()
+        val dataSources = dataSources(project) ?: return emptyList()
+        synchronized(metaCache) {
+            return ownerIndexesForSources(columnNameSources(dataSources), tableNames)
+        }
+    }
+
+    /** 纯判定核心（headless 直测）：源查询器清单 + 表集 → 持有全部表的源下标。 */
+    internal fun ownerIndexesForSources(
+        sources: List<(String) -> Set<String>?>,
+        tableNames: Collection<String>,
+    ): List<Int> {
+        val names = tableNames.filter { it.isNotBlank() }
+        if (names.isEmpty() || sources.isEmpty()) return emptyList()
+        return sources.indices.filter { i -> names.all { sources[i](it)?.isNotEmpty() == true } }
+    }
+
+    /**
+     * T-DialectInferPollution W12：结构缓存是否有**任何**内容（区分「缓存冷 = 无法证明」与
+     * 「缓存热但表不在 = 确证不在」）——前者调用方保持候选（诚实降级），后者调用方引导选择。
+     * 只读 metaCache，零内省零连接。
+     */
+    internal fun cacheHasAnyTable(project: Project?): Boolean {
+        if (project == null || !isDatabaseAvailable()) return false
+        val dataSources = dataSources(project) ?: return false
+        synchronized(metaCache) {
+            return dataSources.any { ds -> metaCache[ds]?.isNotEmpty() == true }
+        }
+    }
+
     /** UI023：只读精确对象与库的既有缓存；不遍历、不跨源回退、不取未知库条目。 */
     internal fun columnNamesCachedForTarget(
         dataSource: Any,
@@ -162,6 +203,26 @@ object DatabaseSchemaResolver {
             }
             lookup
         }
+
+    /**
+     * T-ExplainConsoleFirst W7（2026-10-24）：`Unknown column` 跨源升格的证据入口。
+     *
+     * 与 [cachedOwnerIndexes] 同口径的只读枚举（零内省零连接），返回**在籍数据源清单**供调用方
+     * 按身份比对「当前控制台用的那条源」并排除它。Database 插件不在场或枚举失败一律 null
+     * （调用方据此不升格——诚实降级，不猜）。
+     */
+    internal fun allDataSourcesForEvidence(project: Project?): List<Any>? {
+        if (project == null) return null
+        if (!isDatabaseAvailable()) return null
+        return dataSources(project)?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * T-ExplainConsoleFirst W7：加锁版的 [columnNameSources]——升格判定要跨多条源连续读同一份
+     * `metaCache`，逐条各自加锁会让「读源 A 与读源 B 之间缓存被清」的窗口混入不一致视图。
+     */
+    internal fun columnNameSourcesCached(dataSources: List<Any>): List<(String) -> Set<String>?> =
+        synchronized(metaCache) { columnNameSources(dataSources) }
 
     /**
      * P7：「首个持有者」合并（口径与 [mergeCachedColumns] 逐条一致）——每个表名只认首个持有它的

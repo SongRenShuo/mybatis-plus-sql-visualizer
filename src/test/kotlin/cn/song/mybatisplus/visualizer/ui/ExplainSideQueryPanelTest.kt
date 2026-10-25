@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
-import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
+import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -11,13 +11,23 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
- * T-PreviewSideQuery P2：执行计划直送路径走只读旁路查询 + 非模态对话框，不改写预览编辑器。
+ * T-ExplainConsoleFirst W3（2026-10-24）：执行计划直送路径**回到内嵌原生控制台**。
+ *
+ * 契约反转说明：本类原属 T-PreviewSideQuery P2，断言「EXPLAIN 不得换入控制台、必须经只读
+ * 对话框展示」。十二轮换源拉锯后该形态被判定为系统性代价来源（插件自建 JDBC 通道 ⇒ 取源/
+ * 密码/方言/报错全落插件，而平台「选中即关联」让插件侧选源列表第二次起恒为单源），故
+ * T-ExplainConsoleFirst 主动把它改回初版的控制台形态。原断言随之反转：
+ *
+ *  - 旧：`submitExplainDirect` 走 `PreviewSideQuery` + `ExplainPlanDialog`，编辑器不变；
+ *  - 新：`submitExplainDirect` 把 EXPLAIN 交给 `SqlExecutor.execute`（内嵌原生控制台，
+ *        由 `embedConsole(EXECUTE)` 挂「返回预览」头部）。
+ *
+ * 仍然成立并保留的：对话框取消按钮跟随插件语言（`ExplainPlanDialog` 本体未变）、零源时
+ * 引导按钮直达 Database 工具窗口（`showExplainErrorDialog` 未变）。
  */
 class ExplainSideQueryPanelTest : BasePlatformTestCase() {
 
@@ -34,192 +44,86 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
         UIUtil.dispatchAllInvocationEvents()
     }
 
-    fun testExplainSideQueryKeepsEditorAndShowsDialog() {
-        val sql = "SELECT * FROM t_order WHERE id = 1"
-        val p = panel(sql)
-        val beforeDoc = p.nativeEditorDoc?.text
-        val beforeConsole = p.embeddedConsole
-        var captured: ExplainPlanDialog? = null
-        explainTargetForTest = { ExplainTarget() }
-        explainDialogSinkForTest = { captured = it }
-        PreviewSideQuery.runnerForTest = { _, _, _, scalar, cb ->
-            assertFalse("EXPLAIN 必须走表格旁路查询", scalar)
-            cb(
-                PreviewSideQuery.Result.Table(
-                    McpExplainFormatter.RawResult(
-                        listOf("id", "select_type"),
-                        listOf(listOf("1", "SIMPLE")),
-                    ),
-                ),
-            )
-        }
-        try {
-            p.submitExplainDirect(
-                project,
-                "EXPLAIN $sql",
-                ExecutionDialectGate.Request(
-                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
-                    renderedDialectName = "MySQL",
-                    intent = ExecutionDialectGate.Intent.EXPLAIN,
-                    canLosslesslyRerender = false,
-                    userTextUntouched = true,
-                ),
-            )
-            assertEquals("EXPLAIN 不得改写预览编辑器", beforeDoc, p.nativeEditorDoc?.text)
-            assertEquals(sql, p.currentEditorSql())
-            assertSame("EXPLAIN 不得换入控制台", beforeConsole, p.embeddedConsole)
-            assertNotNull("EXPLAIN 结果必须经非模态对话框展示", captured)
-            assertNotNull("对话框内容应已组装", captured!!.contentForTest())
-            val texts = texts(captured!!.contentForTest())
-            assertTrue("直送结果必须把计划单元格渲染出来：$texts", texts.contains("SIMPLE"))
-        } finally {
-            explainTargetForTest = null
-            explainDialogSinkForTest = null
-            PreviewSideQuery.runnerForTest = null
-            p.clear()
-        }
-    }
+    private fun explainRequest() = ExecutionDialectGate.Request(
+        renderMode = ExecutionDialectGate.RenderMode.AUTO,
+        renderedDialectName = "MySQL",
+        intent = ExecutionDialectGate.Intent.EXPLAIN,
+        canLosslesslyRerender = false,
+        userTextUntouched = true,
+    )
 
-    fun testExplainFailureDialogShowsLocalizedOpenConsoleButton() {
+    /**
+     * W1 核心契约：有源时直送链把 EXPLAIN 交给执行链（内嵌原生控制台），
+     * 且**不再**走旁路查询 + 结果对话框。
+     */
+    fun testExplainDirectGoesToEmbeddedNativeConsole() {
         val sql = "SELECT * FROM t_order WHERE id = 1"
         val p = panel(sql)
-        var captured: ExplainPlanDialog? = null
+        var attempted: String? = null
+        var dialogShown = false
+        SqlExecutor.executionAttemptForTest = { attempted = it }
         explainTargetForTest = { ExplainTarget() }
-        explainDialogSinkForTest = { captured = it }
-        PreviewSideQuery.runnerForTest = { _, _, _, _, cb -> cb(PreviewSideQuery.Result.Failed("boom")) }
+        explainDialogSinkForTest = { dialogShown = true }
         try {
-            p.submitExplainDirect(
-                project,
-                "EXPLAIN $sql",
-                ExecutionDialectGate.Request(
-                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
-                    renderedDialectName = "MySQL",
-                    intent = ExecutionDialectGate.Intent.EXPLAIN,
-                    canLosslesslyRerender = false,
-                    userTextUntouched = true,
-                ),
-            )
-            val button = buttons(captured!!.contentForTest()).single()
+            p.submitExplainDirect(project, "EXPLAIN $sql", explainRequest())
+            // T-ExplainConsoleFirst W8-fix：submitExplainDirectConsole 改成「后台预热 → invokeLater
+            // 续接执行链」的异步形态（避免 EDT 阻塞等预热）。故本断言必须等异步链落地，
+            // 不能在 submitExplainDirect 返回后立刻读——那是首版同步实现才成立的时序。
+            // 有界等待：轮询 + 调度 EDT 队列，最多约 10s（预热本身毫秒级，留足余量降 flaky）。
+            val deadline = System.currentTimeMillis() + 10_000
+            while (attempted == null && System.currentTimeMillis() < deadline) {
+                UIUtil.dispatchAllInvocationEvents()
+                Thread.sleep(20)
+            }
             assertEquals(
-                "失败对话框必须显示本地化的「在控制台打开」",
-                MpSqlVisualizerBundle.message("panel.explain.openConsole"),
-                button.text,
-            )
-            assertNotEquals("未本地化的 key 不能直接显示", "panel.explain.openConsole", button.text)
-            assertEquals(sql, p.currentEditorSql())
-        } finally {
-            explainTargetForTest = null
-            explainDialogSinkForTest = null
-            PreviewSideQuery.runnerForTest = null
-            p.clear()
-        }
-    }
-
-    fun testExplainBlockedResultShowsReasonAndConsoleEntry() {
-        val sql = "SELECT * FROM t_order WHERE id = 1"
-        val p = panel(sql)
-        var captured: ExplainPlanDialog? = null
-        explainTargetForTest = { ExplainTarget() }
-        explainDialogSinkForTest = { captured = it }
-        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
-            cb(PreviewSideQuery.Result.Blocked("dialect mismatch"))
-        }
-        try {
-            p.submitExplainDirect(
-                project,
+                "执行计划必须交给内嵌原生控制台（形态 A），实际交给执行链的文本：$attempted",
                 "EXPLAIN $sql",
-                ExecutionDialectGate.Request(
-                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
-                    renderedDialectName = "MySQL",
-                    intent = ExecutionDialectGate.Intent.EXPLAIN,
-                    canLosslesslyRerender = false,
-                    userTextUntouched = true,
-                ),
+                attempted,
             )
-            val content = captured!!.contentForTest()
-            assertTrue(
-                "方言闸阻断原因必须展示：${texts(content)}",
-                texts(content).any { it.contains("dialect mismatch") },
-            )
-            assertEquals(
-                "阻断后仍保留显式控制台入口",
-                MpSqlVisualizerBundle.message("panel.explain.openConsole"),
-                buttons(content).single().text,
-            )
-            assertEquals(sql, p.currentEditorSql())
+            assertFalse("不得再弹只读结果对话框（形态 B 已退役）", dialogShown)
         } finally {
+            SqlExecutor.executionAttemptForTest = null
             explainTargetForTest = null
             explainDialogSinkForTest = null
-            PreviewSideQuery.runnerForTest = null
             p.clear()
         }
     }
 
-    fun testUnexpectedScalarResultIsReported() {
-        val sql = "SELECT * FROM t_order WHERE id = 1"
-        val p = panel(sql)
-        var captured: ExplainPlanDialog? = null
-        explainTargetForTest = { ExplainTarget() }
-        explainDialogSinkForTest = { captured = it }
-        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
-            cb(PreviewSideQuery.Result.Scalar(1, McpExplainFormatter.RawResult(listOf("v"), listOf(listOf("1")))))
-        }
-        try {
-            p.submitExplainDirect(
-                project,
-                "EXPLAIN $sql",
-                ExecutionDialectGate.Request(
-                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
-                    renderedDialectName = "MySQL",
-                    intent = ExecutionDialectGate.Intent.EXPLAIN,
-                    canLosslesslyRerender = false,
-                    userTextUntouched = true,
-                ),
-            )
-            assertTrue(
-                "EXPLAIN 拿到单值必须如实报错：${texts(captured!!.contentForTest())}",
-                texts(captured!!.contentForTest()).any { it.contains("unexpected") },
-            )
-            assertEquals(sql, p.currentEditorSql())
-        } finally {
-            explainTargetForTest = null
-            explainDialogSinkForTest = null
-            PreviewSideQuery.runnerForTest = null
-            p.clear()
-        }
-    }
-
+    /**
+     * 零源：不进执行链，直接给「去 Database 工具窗口」引导（指引语义不变，只是判定从
+     * 「无绑定数据源」放宽为「一条在籍源都没有」——单条源的选源归平台）。
+     */
     fun testExplainNoDataSourceOffersDatabaseToolWindow() {
-        // 用户真机反馈：无数据源时「在控制台打开」空跑无反应——按钮应直达 Database 工具窗口。
         val sql = "SELECT * FROM t_order WHERE id = 1"
         val p = panel(sql)
         var captured: ExplainPlanDialog? = null
+        var attempted: String? = null
+        SqlExecutor.executionAttemptForTest = { attempted = it }
+        // 测试缝返回 null 且工程无在籍数据源 → 零源形态
         explainTargetForTest = { null }
         explainDialogSinkForTest = { captured = it }
         try {
-            p.submitExplainDirect(
-                project,
-                "EXPLAIN $sql",
-                ExecutionDialectGate.Request(
-                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
-                    renderedDialectName = "MySQL",
-                    intent = ExecutionDialectGate.Intent.EXPLAIN,
-                    canLosslesslyRerender = false,
-                    userTextUntouched = true,
-                ),
-            )
-            val content = captured!!.contentForTest()
-            assertEquals(
-                "无数据源时按钮应直达 Database 工具窗口",
-                MpSqlVisualizerBundle.message("panel.explain.openDatabase"),
-                buttons(content).single().text,
-            )
-            assertTrue(
-                "原因应说明去 Database 工具窗口选源：${texts(content)}",
-                texts(content).any { it.contains("Database") },
-            )
-            assertEquals(sql, p.currentEditorSql())
+            p.submitExplainDirect(project, "EXPLAIN $sql", explainRequest())
+            if (cn.song.mybatisplus.visualizer.execute.DataSourceSelector.registeredDataSourceCount(project) == 0) {
+                assertNotNull("零源时必须给出引导对话框", captured)
+                val content = captured!!.contentForTest()
+                assertEquals(
+                    "无源时按钮应直达 Database 工具窗口",
+                    MpSqlVisualizerBundle.message("panel.explain.openDatabase"),
+                    buttons(content).single().text,
+                )
+                assertTrue(
+                    "原因应说明去 Database 工具窗口选源：${texts(content)}",
+                    texts(content).any { it.contains("Database") },
+                )
+                assertEquals("零源不得进执行链", null, attempted)
+            } else {
+                // headless 工程里若存在隐式在籍源，零源引导不适用——此处只断言「进了执行链」
+                assertNotNull("有源时零源引导不应触发", attempted)
+            }
+            assertEquals("只读动作取词不受影响", sql, p.previewSqlForReadonly())
         } finally {
+            SqlExecutor.executionAttemptForTest = null
             explainTargetForTest = null
             explainDialogSinkForTest = null
             p.clear()

@@ -173,6 +173,11 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
             //   非模态 MODELESS（DialogWrapper(project, false, MODELESS)，与 SqlSuppressManagerDialog
             //   逐字段同形态），20260929 收口门禁守卫命中后按红线加白。
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ParamSchemeManagerDialog.kt",
+            // T-SelfUpdateRollback W2（O-150，2026-10-24）：回滚上一版前的 YesNo 确认。回滚是
+            //   重启级动作（调度恢复命令后须重启 IDE 才生效）且会覆盖当前已安装版本，属「重大不可逆
+            //   需知情确认」档，与 SqlSuppressManagerDialog 清空前确认同类。调用点
+            //   `UpdateSection.rollbackConfirm` 已注明场景依据，并做成 seam 供测试注入免弹窗。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/UpdateSection.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->

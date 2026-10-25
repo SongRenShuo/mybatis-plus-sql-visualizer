@@ -386,6 +386,96 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         assertTrue("活 pid 的登记应保留", manager.attachPorts.containsKey(selfPid))
     }
 
+    // ---------- P5：resume 无界挂死回归（T-ReleasePerf8，S5 发行门禁轮 75min 挂死） ----------
+
+    /**
+     * 回归锚点①（预算兜底）：旧 accept 线程滞留非预期停等形态时，resume 必须在预算内有界返回并判
+     * 通道不可恢复（false + 收口），而不是无界 join 挂死。S5 轮形态＝pause→resume 竞态下旧循环
+     * 失去 paused 退出条件、30s tick 无限 continue，Test worker 在 join 上挂 75min（jstack 实录，
+     * 本用例前身 testP4 第二循环）。反向锚点：摘除「超预算强制收口 + return false」分支（照旧起
+     * 新循环返回 true）本用例必红。
+     */
+    fun testP5_旧Accept线程停等超预算_有界返回判通道不可恢复() {
+        enableCapture()
+        val server = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
+        // 复刻挂死现场：claimed 暂停通道 + 一个永不退出的旧 accept 线程。
+        // 注：线程体必须捕获 channel（非捕获 lambda 会被编译成 testXxx$lambda$N 合成方法，
+        // JUnit3 反射把它当测试方法报「Test method isn't public」——下同，不再用裸 sleep 体）
+        val channel = PremainChannel(server.localPort, server, 0L).apply {
+            claimed = true
+            claimedAtMs = System.currentTimeMillis()
+            pid = selfPid
+            paused = true
+        }
+        manager.premainChannels.add(channel)
+        val wedge = Thread({ while (!channel.closed) { Thread.sleep(50) } }, "wedge-accept")
+        wedge.isDaemon = true
+        channel.acceptThread = wedge
+        wedge.start()
+        val originalBudget = AgentManager.PREMAIN_RESUME_JOIN_BUDGET_MS
+        AgentManager.PREMAIN_RESUME_JOIN_BUDGET_MS = 300L
+        try {
+            val startAt = System.currentTimeMillis()
+            assertFalse(
+                "旧线程停等超预算应判不可恢复返回 false（而非无界等待）",
+                manager.resumePausedPremainChannelIfHit(selfPid),
+            )
+            val elapsed = System.currentTimeMillis() - startAt
+            assertTrue("resume 必须有界返回（实测 ${elapsed}ms）", elapsed < 5_000)
+            assertTrue("不可恢复通道应已收口", channel.closed)
+        } finally {
+            AgentManager.PREMAIN_RESUME_JOIN_BUDGET_MS = originalBudget
+            channel.acceptThread?.interrupt()
+            runCatching { channel.closeChannel() }
+            manager.premainChannels.remove(channel)
+        }
+    }
+
+    /**
+     * 回归锚点②（代际让位）：resume 递增代际后，阻塞中的旧 accept 循环最迟下一拍发现失主退出，
+     * 通道由新循环接管（不收口、不双循环互抢）。反向锚点：摘除 accept 循环内的代际检查（只依赖
+     * paused 退出）本用例必红——resume 先行翻回 paused=false 后旧循环失去全部退出条件，resume 只能
+     * 靠预算兜底判死通道（返回 false）。本用例把 tick 调小到 300ms 加速旧循环的下一拍。
+     */
+    fun testP5_旧循环被新代取代_代际失主让位通道不收口() {
+        enableCapture()
+        val server = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
+        val channel = PremainChannel(server.localPort, server, 0L).apply {
+            claimed = true
+            claimedAtMs = System.currentTimeMillis()
+            pid = selfPid
+        }
+        manager.premainChannels.add(channel)
+        val originalTick = AgentManager.PREMAIN_IDLE_TICK_MS
+        AgentManager.PREMAIN_IDLE_TICK_MS = 300L
+        val generation = ++channel.acceptGeneration
+        val oldThread = Thread({ manager.acceptPremain(channel, generation) }, "old-accept")
+        oldThread.isDaemon = true
+        channel.acceptThread = oldThread
+        oldThread.start()
+        try {
+            awaitTrue("前置：旧循环应在役（parked in accept）") { oldThread.isAlive }
+            // 竞态形态复刻：paused 置位后、旧线程未及观察任何停等返回，resume 已翻回 paused 并取新代
+            channel.paused = true
+            assertTrue(
+                "resume 应在旧循环让位后成功（而非靠预算判死）",
+                manager.resumePausedPremainChannelIfHit(selfPid),
+            )
+            oldThread.join(2_000)
+            assertFalse("旧循环应代际失主退出（而非无限 tick）", oldThread.isAlive)
+            assertFalse("通道应由新循环接管（不得收口）", channel.closed)
+            assertTrue("acceptThread 应换成新循环", channel.acceptThread !== oldThread)
+            assertTrue("新循环应在役", channel.acceptThread?.isAlive == true)
+        } finally {
+            AgentManager.PREMAIN_IDLE_TICK_MS = originalTick
+            oldThread.interrupt()
+            runCatching { server.close() }
+            runCatching { channel.closeChannel() }
+            channel.acceptThread?.interrupt()
+            manager.premainChannels.remove(channel)
+        }
+    }
+
     // ---------- 辅助 ----------
 
     private fun enableCapture() {

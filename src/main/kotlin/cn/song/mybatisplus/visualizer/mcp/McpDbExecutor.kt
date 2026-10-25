@@ -195,6 +195,13 @@ object McpDbExecutor {
      * 二段式/附加结果集方言的计划「为什么不在上面的行里」的说明由
      * [cn.song.mybatisplus.visualizer.sql.ExplainSupport] 表单源持有。null（默认）走既有
      * executeQuery 通道，**行为逐字节不变**（其余 9 家方言与其他调用点的防回归面）。
+     *
+     * T-ExplainPwdPrompt（2026-10-24）：[askPassword] **必填**——编译期强迫每个调用点按通道
+     * 表态，不设默认值（默认 false 会让未来新增的 UI 调用点「静默不弹」重演缺陷；默认 true 会
+     * 击穿 MCP 零弹窗红线）。UI 上下文（面板执行计划/预估行数）传 true：数据源未存密码时交
+     * 平台原生密码框（Builder 默认即 true，javap 构造器字节码实证；只在「未存」时问，已存密码
+     * 零变化）；MCP 工具（`SqlVisualizerExplainTool`）传 false：程序性调用弹模态框即挂死，
+     * 维持零弹窗 fail closed。
      */
     fun executeQuery(
         project: Project,
@@ -202,12 +209,13 @@ object McpDbExecutor {
         sql: String,
         maxRows: Int,
         timeoutSeconds: Int = 0,
+        askPassword: Boolean,
         onExecuted: ((ExecutedOutcome) -> Unit)? = null,
         channelNote: String? = null,
     ): McpExplainFormatter.RawResult {
         val started = System.currentTimeMillis()
         return try {
-            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, channelNote).also {
+            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, askPassword, channelNote).also {
                 notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource)
             }
         } catch (e: Throwable) {
@@ -272,14 +280,20 @@ object McpDbExecutor {
         sql: String,
         maxRows: Int,
         timeoutSeconds: Int = 0,
+        askPassword: Boolean,
         channelNote: String? = null,
     ): McpExplainFormatter.RawResult {
         val rowBudget = channelRowBudget(maxRows)
         val manager = Class.forName(DCM).getMethod("getInstance").invoke(null)
         val builder = Class.forName(DCM).getMethod("build", Project::class.java, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource)
+        // T-ExplainPwdPrompt（2026-10-24）：askPassword 按调用点通道表态（见 executeQuery KDoc）——
+        // 此前硬编码 false（2026-09-15 T-McpToolset 为 MCP 立的零弹窗红线），面板 EXPLAIN 与预估
+        // 行数旁路切到本通道时被连坐：数据源未存密码不弹原生密码框，直接 Access denied 红字
+        //（沙盒实测截图 2026-10-23）。平台 Builder 默认即 true（javap 构造器字节码 iconst_1），
+        // 询问链在 DatabaseConnectionEstablisher（suspend，含凭据失败重试）。
         Class.forName(BUILDER).getMethod("setAskPassword", Boolean::class.javaPrimitiveType)
-            .invoke(builder, false)
+            .invoke(builder, askPassword)
         // T-PreviewChainNoise W2：建连前补齐阻塞上下文（见 withDbBlockingContext KDoc）——
         // 裸池线程（ExplainPanelChannel.executeStructured 的 executeOnPooledThread）上
         // createBlocking 内部 runBlockingCancellable 缺 Job 即打

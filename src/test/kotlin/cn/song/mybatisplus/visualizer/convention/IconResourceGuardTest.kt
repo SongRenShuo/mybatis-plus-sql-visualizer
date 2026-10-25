@@ -105,6 +105,11 @@ class IconResourceGuardTest {
     /**
      * 自证：判定内核能看见「缺失资源」形态。
      * 直接对合成路径做与生产同款的存在性判断，证明这条断言不是空转。
+     *
+     * T-TestGateGems 补（2026-10-25 合并 master 后登记进 GUARD_CLASSES 时发现）：本用例原先只对
+     * 合成路径做 `File.isFile`，**没有调用 `declaredIconPaths`**——元守卫看到的正是「站点提取器
+     * 无自证引用」。故此处补一条对提取器本身的断言：它必须真能从本仓声明里提出站点，否则主用例
+     * 的「逐条校验存在性」会退化成空循环（声明表为空 = 恒绿）。
      */
     @Test
     fun `判定内核能看见缺失的图标资源`() {
@@ -117,6 +122,11 @@ class IconResourceGuardTest {
         assertTrue(
             "判定内核看不见已存在资源（正向对照）",
             File(resourcesRoot(), definitelyPresent.removePrefix("/")).isFile,
+        )
+        val declared = declaredIconPaths()
+        assertTrue(
+            "站点提取器 declaredIconPaths 在本仓声明里一个图标都没提出来（主用例会退化成空循环）",
+            declared.isNotEmpty(),
         )
     }
 }

@@ -2,6 +2,7 @@ import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
+import mpv.verification.assertNoForeignVerifier
 import mpv.verification.checkMarketplaceVerdicts
 
 plugins {
@@ -55,6 +56,34 @@ intellijPlatform {
     }
 }
 
+// T-ReleasePerf8（20261024）N3：verifier home 外迁机器级持久目录（T6 L5 按新证据复审转正）。
+// T6 L5 的销案理由「发行日历史全暖窗」被发行日三读数证伪（v2026.10.9 31m9s / v2026.10.13 54m11s /
+// v2026.10.16 55m8s，10-08 记录明确「verifyMarketplace 单步下载 3.33GB 耗 30m」）——home 在 build/ 下
+// 意味着换工作树（发行常规操作：detached 验证树）= 全量冷下载税。本轮探针读数（rp8 树，20261024）：
+//   R0 冷树：下载 3.33GB/3m50s（快代理窗 ~14MB/s；慢窗 ~2MB/s 时同一笔膨胀到 ~30m＝55min 轮主因）；
+//   R1 warm：下载 0 B（loaded-plugins 131 文件全 kept），verifier 本体 9m15s；
+//   跨树跨 10 天比对主树(10-14) vs rp8(10-24)：131 个 build 号 130 个一致（仅 1 个插件前进 +89MB）。
+// 故 home 缺省迁到 GRADLE_USER_HOME/mpv-verifier-home/{gate,marketplace}（机器级持久、跨工作树/跨
+// clean 复用；gate 与 marketplace 保持分家，离线/在线语义互不污染，同链并发跑也无共享写点）。
+// 回退：-PverifierHomeRoot=build 一词回落每工作树 build/ 下的既有形态；给绝对路径则用该目录作根。
+// 并发面：共享 home 重开 T-VerifierHomeIso 消灭过的冲突类（两 verifier 并发写同一 extracted-plugins），
+// 防线两道——①全量门禁互斥既有定例（两份 releaseGate 叠跑本就因 Commit 破线被禁）；②下方
+// assertNoForeignVerifier 锁探测（doFirst 扫描整机 java 进程命令行，发现非本进程的 PluginVerifierMain
+// 指向同一 home 即硬失败给指引，不静默共写）。
+fun resolveVerifierHome(role: String): File {
+    val prop = providers.gradleProperty("verifierHomeRoot").orNull
+    return when {
+        prop == null -> gradle.gradleUserHomeDir.resolve("mpv-verifier-home").resolve(role)
+        prop == "build" ->
+            layout.buildDirectory.dir(if (role == "gate") "verify-home" else "verify-home-$role").get().asFile
+        else -> File(prop).resolve(role)
+    }
+}
+
+// 共享 home 并发锁探测（assertNoForeignVerifier）落在 buildSrc/src/main/kotlin/VerifierHomeGuard.kt
+// ——doFirst lambda 引用脚本顶层函数触发配置缓存「cannot serialize」（mpv-testing 同款实证），
+// 独立 .kt 文件的顶层函数编译为普通类可序列化（MarketVerdictChecker 同款先例）。
+
 // Plugin Verifier 是独立子进程，systemProp 代理不自动透传——显式注入（Clash 7890）
 tasks.named<VerifyPluginTask>("verifyPlugin") {
     jvmArgs(
@@ -65,8 +94,9 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         // T-VerifierHomeIso（2026-09-17 master c591c7e，本拆分合流时回植至本 convention）：
         // verifier-cli 1.410 在缺省 home（~/.pluginVerifier）下提取插件 zip 恒败（2×2 矩阵实证：
         // 1.410×默认home 恒败、1.410×隔离home 与 1.409×任一 home 全绿；verifyGate 走 walkTopDown
-        // 字典序实际取 1.409 故独活）。显式隔离，并与 verifyGate 共用同一 build/verify-home
-        //（同 zip 提取缓存互享，~/.pluginVerifier 污染源整类摘除）。
+        // 字典序实际取 1.409 故独活）。显式隔离。T-ReleasePerf8 后 verifyGate 缺省迁到
+        // GRADLE_USER_HOME/mpv-verifier-home/gate；本任务（报告生成器，不在发版链）维持
+        // build/verify-home——隔离面不变，只是不再与 verifyGate 互享缓存（两者都离线零下载，损失≈0）。
         "-Dplugin.verifier.home.dir=" + layout.buildDirectory.dir("verify-home").get().asFile.absolutePath,
     )
     // T-ReleasePerf-01（P0-1）：离线化 + 豁免清单——本仓库此前只注入了代理，verifier 每个目标都要
@@ -102,7 +132,11 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // 并行会话的 verify 占用该目录，forceRemoveDirectory 失败 exit 1；verifier 支持
     // -Dplugin.verifier.home.dir 覆盖，javap PluginVerifierMain$verifierHomeDirectory$2 实证）。
     // 代价=IDE 元数据缓存随 build 目录走，clean 后首次离线重建；IDE 发行本体在 gradle transforms 不受影响。
-    val verifyHome = layout.buildDirectory.dir("verify-home").get().asFile
+    // T-ReleasePerf8（20261024）N3 转正：缺省改落 GRADLE_USER_HOME/mpv-verifier-home/gate（机器级
+    // 持久，跨工作树/clean 复用，发行 detached 树不再付冷税），并发面由 assertNoForeignVerifier
+    // 锁探测兜底；-PverifierHomeRoot=build 回落本行原有形态。依据（R0/R1 探针 + 跨树复用率 130/131）
+    // 见上方 N3 总注释。
+    val verifyHome = resolveVerifierHome("gate")
     jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
     // 全部路径在配置期解析为值（configuration cache 兼容：执行期不触达 project/layout）
     val pluginVersion = providers.gradleProperty("version").get()
@@ -170,6 +204,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
     // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
     doFirst {
+        assertNoForeignVerifier(verifyHome, logger)
         if (!zipFile.isFile) {
             throw GradleException(
                 "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
@@ -215,7 +250,10 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
     description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑"
     dependsOn("buildPlugin")
     mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
-    val verifyHome = layout.buildDirectory.dir("verify-home-marketplace").get().asFile
+    // T-ReleasePerf8（20261024）N3：marketplace home 同 verifyGate 外迁机器级持久目录——这是
+    // 发行日冷下载税的主体（3.33GB 依赖插件 zip，R1 实证 warm=0 B 全命中、跨树 10 天仍 130/131
+    // 复用）。-PverifierHomeRoot=build 回落 build/verify-home-marketplace 既有形态。
+    val verifyHome = resolveVerifierHome("marketplace")
     jvmArgs(
         "-Dplugin.verifier.home.dir=${verifyHome.absolutePath}",
         // 在线模式必须联网：verifier 是独立子进程，systemProp 代理不自动透传，显式注入（Clash 7890）
@@ -264,6 +302,7 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
         }
     })
     doFirst {
+        assertNoForeignVerifier(verifyHome, logger)
         if (!zipFile.isFile) {
             throw GradleException("verifyMarketplace 需要已存在的发行包：$zipFile 不存在。先跑 ./gradlew buildPlugin。")
         }

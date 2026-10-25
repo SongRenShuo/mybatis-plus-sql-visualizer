@@ -39,6 +39,9 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         runCatching { PluginSettings.getInstance().state.formatSql = false }
         // O-88：折叠态已静态化——复位防跨用例串扰（ParamSchemes 同款）
         runCatching { SqlPreviewPanel.resetPresetCollapsedForTest() }
+        // T-ModuleScopedLastUsed：进态也清一次全部层级（上条用例/上次运行残留的模块级键会让
+        // 「是否模块级」判定读到脏值）
+        runCatching { DataSourceSelector.forgetAllLastUsed(project) }
     }
 
     override fun tearDown() {
@@ -47,7 +50,9 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         panel?.bindStateNameProvider = null
         // O-96：object 单例静态缝复位（防跨用例串扰）
         DataSourceSelector.rememberedLookupForTest = null
-        runCatching { DataSourceSelector.plantLastUsedMemoryForTest(project, null, null) }
+        // T-ModuleScopedLastUsed：清**全部层级**——只清项目级双键会让上一条用例写入的模块级键
+        // 残留到本条（实测症状：本条只有项目级记忆，isModule 却为 true，灰字冒称「本模块」）。
+        runCatching { DataSourceSelector.forgetAllLastUsed(project) }
         runCatching { panel?.clear() }
         panel = null
         super.tearDown()
@@ -104,6 +109,56 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         assertEquals(
             "绑定丢失后应回流未绑定文案",
             MpSqlVisualizerBundle.message("panel.bindstate.unbound"),
+            p.bindStateLabelForTest()!!.text,
+        )
+    }
+
+    /**
+     * T-ModuleScopedLastUsed W3 回归（沙盒验收实测缺陷）：
+     *
+     * 只有**项目级**记忆（无模块级键）时，灰字必须是「数据源（上次使用）」，
+     * **不得**冒称「本模块上次使用」。
+     *
+     * 缺陷成因（首版实现）：判据用 `rememberedDataSourceName(proj, moduleKey) ==
+     * rememberedDataSourceName(proj, null)`——而前者在模块级为空时会回落项目级，两边恒相等，
+     * 于是「纯项目级兜底」被误判成「模块级命中」。真机取证：workspace.xml 只有
+     * `mpsql.visualizer.last.runner`，无任何 `...runner.<moduleKey>` 键，灰字却显示「本模块」。
+     *
+     * 修法：直接读模块级键是否有值。本用例钉住它。
+     */
+    fun test仅有项目级记忆时不得冒称本模块() {
+        plantRegisteredDataSources(
+            listOf("proj_level@localhost"),
+        ) { id -> if (id == "uuid-proj") "proj_level@localhost" else null }
+        // 只写项目级（plantLastUsedMemoryForTest 写的就是项目级双键，与真机 workspace.xml 同源）
+        DataSourceSelector.plantLastUsedMemoryForTest(project, "uuid-proj", "proj_level@localhost")
+
+        val p = openPanel("id")
+        p.sourceModuleKey = "mybatis-plus-join-demo-pom"
+        p.renderSqlForTest()
+
+        assertEquals(
+            "无模块级键时必须是项目级兜底文案（不得显示「本模块上次使用」）",
+            MpSqlVisualizerBundle.message("panel.bindstate.associated", "proj_level@localhost"),
+            p.bindStateLabelForTest()!!.text,
+        )
+    }
+
+    /** 对照：真写了模块级键时，才显示「本模块」文案。 */
+    fun test有模块级记忆时显示本模块文案() {
+        plantRegisteredDataSources(
+            listOf("mod_level@localhost"),
+        ) { id -> if (id == "uuid-mod") "mod_level@localhost" else null }
+        val moduleKey = "mybatis-plus-join-demo-pom"
+        DataSourceSelector.rememberRunner(project, "mod_level@localhost", "uuid-mod", moduleKey)
+
+        val p = openPanel("id")
+        p.sourceModuleKey = moduleKey
+        p.renderSqlForTest()
+
+        assertEquals(
+            "有模块级键时必须显示「本模块上次使用」",
+            MpSqlVisualizerBundle.message("panel.bindstate.associatedModule", "mod_level@localhost"),
             p.bindStateLabelForTest()!!.text,
         )
     }

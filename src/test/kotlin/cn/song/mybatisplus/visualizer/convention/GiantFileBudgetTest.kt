@@ -26,15 +26,25 @@ class GiantFileBudgetTest {
      * `→ <新上限> (2026-10-24: <理由>, +N 行)`。
      */
     private val budgets: Map<String, Int> = mapOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2297,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2200,
+        // 2026-10-25 合并 master（179cdc86，72 笔）后统一按实测重定基线 ×1.015 余量。
+        // 六个文件本轮全部超限，增长均来自 master 侧既有代码（t-magpie-gems 分叉期未同步）：
+        // 合并本身只给 SqlPreviewPanelExecution 多 2 行，其余增量与本次合流无关。
+        // 提额即「承认现状 + 留痕」，**不是许可继续增长**——下次触顶请先走拆分（首选出路）。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2358,
+        // 2297 → 2358（2026-10-25: 合并 master 实测 2323 行，含日志工具栏 BGT 与列表高亮改造，+26 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2421,
+        // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2103,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2026,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2007,
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2349,
+        // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2133,
+        // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1918,
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1972,
+        // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1830,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1727,
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1777,
+        // 1727 → 1777（2026-10-25: 合并 master 实测 1750 行，含 premain 无界 join 修复，+23 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to 1619,
     )
 

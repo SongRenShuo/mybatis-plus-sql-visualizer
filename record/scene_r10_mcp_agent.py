@@ -43,13 +43,13 @@ from gifkit import Recorder, click, shot
 REGION = (277, 25, 1370, 984)
 OUT = "perf/r10_mcp_agent.mp4"
 
-LOG_PATH = (r"F:\code\Java\Gitee\SongRenShuo\mpsv-gif-rec\build\MPSV-GifFresh"
+LOG_PATH = (r"F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\build\MPSV-GifFresh"
             r"\mybatis-plus-sql-visualizer\IU-2026.2.1\log\idea.log")
 
 PROMPT = "调用 sqlv_check_sql 工具检查这条 SQL 的写风险：DELETE FROM user WHERE id > 0"
-PROMPT_BOX = (1045, 500)
-SEND = (1255, 545)
-NEW_CHAT = (1132, 79)
+PROMPT_BOX = (1064, 501)
+SEND = (1281, 569)
+NEW_CHAT = (1191, 62)
 OPEN_FILE_NAME = (472, 468)      # 原生「Open File or Project」文件名框
 EDITOR = (400, 300)
 NEUTRAL_CURSOR = (600, 620)

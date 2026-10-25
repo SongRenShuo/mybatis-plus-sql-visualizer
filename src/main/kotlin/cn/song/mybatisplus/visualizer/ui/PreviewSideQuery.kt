@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
 import cn.song.mybatisplus.visualizer.mcp.McpDbExecutor
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.mcp.McpSelectGuard
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.progress.EmptyProgressIndicator
@@ -109,6 +110,8 @@ internal object PreviewSideQuery {
                             sql,
                             if (scalar) 1 else McpExplainFormatter.DEFAULT_MAX_ROWS,
                             timeoutSeconds = timeoutSeconds,
+                            // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                            askPassword = true,
                             channelNote = channelNote,
                         )
                     },
@@ -140,6 +143,13 @@ internal object PreviewSideQuery {
      */
     internal fun failureMessage(t: Throwable): String {
         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
-        return cause.message ?: cause.javaClass.simpleName
+        val text = cause.message ?: cause.javaClass.simpleName
+        // T-ExplainPwdPrompt（2026-10-24）：认证失败附「补存密码」指引——预估行数内联区与
+        // EXPLAIN 错误对话框共用本出口，指引随文案走（其余失败形态零变化）
+        return if (cn.song.mybatisplus.visualizer.execute.isAuthFailureText(text)) {
+            text + "　" + MpSqlVisualizerBundle.message("panel.explain.authFailureHint")
+        } else {
+            text
+        }
     }
 }

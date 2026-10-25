@@ -134,7 +134,10 @@ class ExecutionDialectGateTest {
     }
 
     @Test
-    fun `central handler keeps callers without request unchanged and blocks known conflicts`() {
+    fun `central handler keeps callers without request unchanged and lets known conflicts through with a warning`() {
+        // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了数据源，
+        // 可以正常提示方言不一致，但还是要能成功执行」。所以 MANUAL_CONFLICT 从「阻断」改为
+        // 「提示 + 放行」——文案照旧要报出双方方言，让用户知道为什么可能报语法错。
         val project = projectStub()
         val target = ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL")
         assertTrue(DataSourceSelector.allowDialectGate(project, null, target, null, null))
@@ -148,10 +151,34 @@ class ExecutionDialectGateTest {
             { callbackStatus = it.status },
             { error = it },
         )
-        assertFalse(allowed)
+        assertTrue("已知方言冲突应放行（方言不拦执行）", allowed)
         assertEquals(ExecutionDialectGate.Status.MANUAL_CONFLICT, callbackStatus)
-        assertTrue(error.orEmpty().contains("MySQL"))
-        assertTrue(error.orEmpty().contains("PostgreSQL"))
+        assertTrue("仍要提示渲染方言", error.orEmpty().contains("MySQL"))
+        assertTrue("仍要提示目标方言", error.orEmpty().contains("PostgreSQL"))
+    }
+
+    @Test
+    fun `unknown dialect on either side still blocks writes`() {
+        // 与上一条的边界：**有一边方言未知**时不能放行——写操作可能把 PG 语法打到 MySQL 库上，
+        // 属于「无从判断」而非「判断出冲突」。
+        val project = projectStub()
+        val unknownRender = DataSourceSelector.allowDialectGate(
+            project,
+            request(ExecutionDialectGate.RenderMode.UNKNOWN, null, ExecutionDialectGate.Intent.DML),
+            ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL"),
+            null,
+            null,
+        )
+        assertFalse("渲染方言未知的写操作仍阻断", unknownRender)
+
+        val unknownTarget = DataSourceSelector.allowDialectGate(
+            project,
+            request(ExecutionDialectGate.RenderMode.MANUAL, "MySQL", ExecutionDialectGate.Intent.DML),
+            null,
+            null,
+            null,
+        )
+        assertFalse("目标方言未知的写操作仍阻断", unknownTarget)
     }
 
     @Test

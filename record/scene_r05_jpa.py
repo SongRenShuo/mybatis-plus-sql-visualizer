@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gifkit import (Recorder, click, find_gutter_icons, goto_line, shot,
                     wait_stable)
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r05_jpa.mp4")
 
@@ -34,13 +34,18 @@ def abs_pt(p):
 def locate_gutter():
     path = os.path.join(BASE, "perf", "_pre_r05.png")
     shot(REGION, path)
-    icons = find_gutter_icons(path, y_range=(100, 860), gap=12)
-    icons = [i for i in icons if 95 <= i[1] <= 130]   # gutter 条带（JPA 文件在 x≈110）
+    # 条带必须覆盖图标本体：目录树收起后插件图标落在 region 相对 x≈70~82
+    # （2026-10-25 实测；旧的 95..130 只框到灯泡/折叠箭头，检测为空）
+    icons = find_gutter_icons(path, strip_x=(85, 115), y_range=(100, 860), gap=12)
     if not icons:
         raise RuntimeError("gutter icon not found")
-    center = (100 + 860) / 2
-    y, x = min(icons, key=lambda p: abs(p[0] - center))
-    print("icons:", icons, "-> picked", (y, x))
+    # 必须选**离光标行最近**的图标，不能选「离画面中心最近」——后者会点到别的语句
+    # （2026-10-25 实测：中心法选中第 58 行 findByAgeGreaterThan，画面成了 WHERE age > ?）。
+    # 光标行由 goto_line(53) 决定。当前布局（目录树收起、编辑器占满）实测第 53 行
+    # 的 gutter 图标落在 region 相对 y≈386。
+    caret_y = 396
+    y, x = min(icons, key=lambda p: abs(p[0] - caret_y))
+    print("icons:", icons, f"caret_y≈{caret_y} -> picked", (y, x))
     return x + OX, y + OY
 
 
@@ -55,9 +60,13 @@ def main():
         time.sleep(0.5)
         click(*gutter, pauses=(0.25, 0.3))     # 1. 派生方法 gutter
         wait_stable(REGION)
-        time.sleep(1.8)                        # 预览定格（实体别名展开可见）
+        # JPA 派生查询的预览形态：完整预览弹窗（左侧参数框 #username/#email，
+        # 右侧 SQL `WHERE (username = ? OR email = ?)`）。停 2.4s 让两边都看清，
+        # 再点「取消」收尾——不用「复制 SQL 并关闭」，那会留一张常驻通知卡
+        # （独立 balloon 窗口，robot-server 查不到、Esc 关不掉），尾帧与首帧对不上。
+        time.sleep(2.4)
 
-        click(*abs_pt(COPY_AND_CLOSE), move_dur=0.3)   # 2. 复制 SQL 并关闭
+        click(*abs_pt((1212, 798)), move_dur=0.3)  # 2. 取消（region 相对）
         time.sleep(0.9)
 
         # 3. 不跳转：关窗后光标仍在 53 行，与首帧同态（跳转会引入新的滚动/弹窗差异）

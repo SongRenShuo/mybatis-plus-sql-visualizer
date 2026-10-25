@@ -413,8 +413,33 @@ internal fun SqlPreviewPanel.boundDataSourceNameForDisplay(): String? =
 internal fun SqlPreviewPanel.rememberedDataSourceNameForDisplay(): String? {
     val proj = project ?: return null
     return runCatching {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(proj)
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+            .rememberedDataSourceName(proj, sourceModuleKey)
     }.getOrNull()
+}
+
+/**
+ * T-ModuleScopedLastUsed W3：本次显示的记忆名来自**模块级**还是**项目级兜底**。
+ *
+ * **判据必须是「模块级键本身有没有值」**，不能比较两个解析结果——沙盒验收实测到的缺陷：
+ * `lastUsedRunner(proj, moduleKey)` 在模块级为空时会**回落项目级**，于是
+ * `scoped == projectLevel` 恒成立，只有项目级记忆时也被误判成「本模块上次使用」
+ * （真机实际状态：workspace.xml 只有 `mpsql.visualizer.last.runner`，无模块级键，
+ * 灰字却显示「数据源（本模块上次使用）」）。
+ *
+ * 正确做法：直接读模块级那一层的原始键（[DataSourceSelector.LastUsedKeys]），有值才算模块级。
+ * 只读、零副作用；仅用于文案限定词，不参与取源决策。
+ */
+internal fun SqlPreviewPanel.rememberedIsModuleScoped(): Boolean {
+    val proj = project ?: return false
+    val moduleKey = sourceModuleKey?.takeIf { it.isNotBlank() } ?: return false
+    return runCatching {
+        val pc = com.intellij.ide.util.PropertiesComponent.getInstance(proj)
+        val keys = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LastUsedKeys
+        val id = pc.getValue(keys.dataSourceIdKey(moduleKey))
+        val name = pc.getValue(keys.displayNameKey(moduleKey))
+        !id.isNullOrBlank() || !name.isNullOrBlank()
+    }.getOrDefault(false)
 }
 
 /**
@@ -430,7 +455,16 @@ internal fun SqlPreviewPanel.bindStateText(): String {
     val name = boundDataSourceNameForDisplay()
     if (name != null) return MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
     val remembered = rememberedDataSourceNameForDisplay()
-    if (remembered != null) return MpSqlVisualizerBundle.message("panel.bindstate.associated", remembered)
+    if (remembered != null) {
+        // T-ModuleScopedLastUsed W3：模块级命中与项目级兜底文案区分（只改括号内限定词，
+        // 不新增控件——W12 定案自研换源 UI 已全部退役）。
+        val key = if (rememberedIsModuleScoped()) {
+            "panel.bindstate.associatedModule"
+        } else {
+            "panel.bindstate.associated"
+        }
+        return MpSqlVisualizerBundle.message(key, remembered)
+    }
     return MpSqlVisualizerBundle.message("panel.bindstate.unbound")
 }
 
@@ -443,6 +477,19 @@ internal fun SqlPreviewPanel.bindStateText(): String {
  * 不再挂在参数区预设行之下；init 一次构建，刷新仍走 [refreshBindStateRow] 单点收口。
  */
 
+/**
+ * 指示行（S3 三级文案 / O-96）。
+ *
+ * T-ExplainFailUx W2（2026-10-24）：曾在此升级为自研「数据源下拉」。
+ * **T-ExplainSwitchNative W5/W12（同日修订）**：自研下拉被用户否决——「我希望选的优先是 idea
+ * 原生的」；后续实测进一步定案（图三）：**平台原生工具栏自带 `Data Sources` 菜单**
+ * （Detach Data Source + 全部源）就是理想形态，且平台 `getForcedDataSourceForExec` 的关联
+ * 无公开清除 API，插件自建入口第二次起必被短路成单源。故本轮**彻底撤掉自研换源 UI**：
+ * 指示行只保留纯文本三级文案（[bindStateText]），换源一律走右侧控制台头部的原生工具栏。
+ *
+ * **插件不可用（硬约束，W2 纪律沿用）**：社区版无 Database 插件时指示行仍为纯文本、不渲染任何
+ * 控件、不报错、不弹提示（本轮撤掉按钮后该约束天然满足）。
+ */
 internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
     val label = JBLabel(bindStateText()).apply {
         name = BIND_STATE_LABEL_NAME
@@ -452,6 +499,11 @@ internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
     return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 2)).apply {
         name = BIND_STATE_ROW_NAME
         add(label)
+        // T-ExplainSwitchNative W12（2026-10-24 用户实测三图）：
+        // 图三证明**平台原生工具栏自带 `Data Sources` 菜单**（含 Detach Data Source + 全部源），
+        // 那才是「切换数据源」的正确形态。插件侧自建入口（W2 下拉 / W5 链接）已被用户否决；
+        // 且平台 `getForcedDataSourceForExec` 的关联无公开清除 API，自建入口做不到与原生一致
+        // ——故**撤掉自研入口**，换源一律走原生工具栏（右侧控制台头部）的 Data Sources 菜单。
         border = JBUI.Borders.empty(0, 8, 2, 8)
     }
 }

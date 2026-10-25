@@ -654,6 +654,21 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/HardcodedUiTextGuardTest.kt",
+                listOf(DecisionFn("scanHardcoded", FnKind.VIOLATIONS)),
+                "UI 控件文案硬编码中文守卫（T-TestGateGems W1-a）：判定内核 `scanHardcoded` 逐文件剥注释" +
+                    "后按 `uiTextPatterns` 扫 CJK 字面量，返回 `文件:行 片段` 违规点集合。自证语料=同文件" +
+                    "「判定内核能看见硬编码中文形态」+「英文文案与注释中文不得命中」两例，覆盖正反两面。",
+            ),
+            GuardEntry(
+                "convention/IconResourceGuardTest.kt",
+                listOf(DecisionFn("declaredIconPaths", FnKind.SITES)),
+                "图标资源存在性守卫（T-TestGateGems W1-b）：判定内核 `declaredIconPaths` 从 plugin.xml " +
+                    "属性与 .kt 字面量提取 `/icons/*.svg|png` 站点集合（`文件:行` to 路径）。合并 master 时" +
+                    "登记，并顺手补了自证引用——原自证用例只对合成路径做 isFile、未调用提取器，元守卫" +
+                    "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
+            ),
+            GuardEntry(
                 "log/EmptyTextLinkApiGuardTest.kt",
                 emptyList(),
                 "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +
@@ -690,6 +705,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
                     "摘 loadState 归一）已实测。",
+            ),
+            GuardEntry(
+                "convention/ExplainAskPasswordChannelGuardTest.kt",
+                emptyList(),
+                "结构化执行计划三通道 askPassword 表态守卫（T-ExplainPwdPrompt）：判定内核内联于三个用例——" +
+                    "扫 ExplainDialog/预估行数与 EXPLAIN 旁路/MCP 工具三处源码，断言 askPassword 按" +
+                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。无独立「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
+                    "潜伏红灯），合并轮补登。",
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
@@ -797,6 +821,23 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "按钮手工铺底色形态守卫（UI-043）：判定内核 scan 返回命中集合，自证用例 test_扫描器灵敏度与豁免自证 " +
                     "喂合成源码（isOpaque/自选色必红、命名色与渲染器必走豁免）。",
+            ),
+            GuardEntry(
+                "log/SqlLogToolbarUpdateThreadGuardTest.kt",
+                emptyList(),
+                "SQL 日志工具栏 BGT 声明守卫（T-SqlLogToolbarEdt W4）：判定内核内联于四个用例——" +
+                    "扫 SqlLogPanel 源码断言组与组内每个覆写 update 的动作都声明 BGT、BGT 常量类型为 BGT、" +
+                    "排序文案查表覆盖全部模式。offenders 在用例内累积，无独立「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=删一个动作的 BGT 声明恰 1 红已实测（并修掉首版正则剥 Action " +
+                    "后缀致 filter 全程跳过的假绿）。",
+            ),
+            GuardEntry(
+                "ui/ExplainStructuredDefaultOffGuardTest.kt",
+                emptyList(),
+                "结构化执行计划默认关守卫（T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
+                    "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
+                    "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
             ),
             GuardEntry(
                 "config/SettingsPanelSearchableGuardTest.kt",
