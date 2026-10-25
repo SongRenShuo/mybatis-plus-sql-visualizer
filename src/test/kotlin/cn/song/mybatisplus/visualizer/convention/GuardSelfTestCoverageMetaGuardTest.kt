@@ -695,11 +695,24 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "convention/ExplainAskPasswordChannelGuardTest.kt",
-                emptyList(),
+                listOf(
+                    DecisionFn(
+                        "bareBooleanAfter",
+                        FnKind.HELPER,
+                        "三通道裸布尔实参定位谓词（Boolean 形态）：注释锚点之后 400 字符内出现「独占一行的裸布尔实参」" +
+                            "（k2j 的 Java 位置实参无 master 具名实参 askPassword = true/false 形态，判据改注释锚+邻近裸布尔）；" +
+                            "本类用例名与上方注释均无「自证」关键词、不构成自证语料，故按豁免+via 登记（HELPER 类可写调用它的用例名）",
+                        via = listOf(
+                            "面板执行计划结构化通道必须允许询问密码",
+                            "预估行数与EXPLAIN直送旁路必须允许询问密码",
+                            "MCP工具通道必须保持零弹窗",
+                        ),
+                    ),
+                ),
                 "结构化执行计划三通道 askPassword 表态守卫（T-ExplainPwdPrompt）：判定内核内联于三个用例——" +
                     "扫 ExplainDialog/预估行数与 EXPLAIN 旁路/MCP 工具三处源码，断言 askPassword 按" +
-                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。无独立「返回违规点集合」" +
-                    "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
+                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。除 bareBooleanAfter 谓词外" +
+                    "无独立「返回违规点集合」的具名判定函数。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
                     "潜伏红灯），合并轮补登。",
             ),
             GuardEntry(

@@ -109,7 +109,10 @@ public final class ExplainPlanHistorySession {
             String previousLabel = MpSqlVisualizerBundle.message("panel.explain.history.previousSession");
             int retainedIndex = -1;
             for (int i = 0; i < baselines.size(); i++) {
-                if (baselines.get(i).raw() == last.raw) {
+                // master Kotlin `it.raw == last.raw` 是 data class 结构相等；Java record 必须显式
+                // equals——直译成 `==` 变引用比较，已保存快照（反序列化新实例）永不命中，去重失效
+                // （ExplainPlanResultViewUiTest assertBaselineLabels 去重例实证 expected 1 was 2）。
+                if (baselines.get(i).raw().equals(last.raw)) {
                     retainedIndex = i;
                     break;
                 }

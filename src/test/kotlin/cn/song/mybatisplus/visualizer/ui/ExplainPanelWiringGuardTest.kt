@@ -120,11 +120,13 @@ class ExplainPanelWiringGuardTest {
         assertTrue(source.contains("DataSourceSettings.getUniqueId(ds)"))
         assertTrue(source.contains("boolean retentionEnabled = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()"))
         assertTrue(source.contains(".getState().getExplainPlanRetentionEnabled());"))
-        assertTrue(source.contains("historyCompletion.baselines(),"))
+        assertTrue(source.contains("historyCompletion.baselines();"))
         assertTrue(source.contains("historyCompletion.saved());"))
         val service = File(repoRoot(), "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java").readText()
         assertTrue(service.contains("result.setHistoryEntryId(manager.add(entry).getId());"))
-        assertTrue(service.contains("ExplainPlanKey.projectIdentity("))
+        // k2j：SqlPreviewService.java 里 ExplainPlanKey 与 .projectIdentity 分行（FQN 链式调用），
+        // 断言按「同类+.projectIdentity 相邻」正则判定（master 直串 ExplainPlanKey.projectIdentity）。
+        assertTrue(Regex("ExplainPlanKey\\s*\\.projectIdentity\\(").containsMatchIn(service))
     }
 
     /**

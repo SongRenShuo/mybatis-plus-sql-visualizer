@@ -85,15 +85,18 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         val code = sourceOf("ui/SqlPreviewPanelExecutionKt.java")
         // DirectFallback(UNFILLED_PARAMS) 分支必须先于「其余回退直送」的 else 被单独拦下：
         // 回退直送在无绑定形态必失败且弹误导性「未绑定数据源」红字（沙盒实测 2026-10-24）。
+        // k2j 判据：最终 else 分支的特征是 notify（回退说明）与 submitExplainDirect（直送）
+        // 相邻成对——NO_DATA_SOURCE 的重试-else 里只有 notify 没有直送，同形串不会误命中。
         val unfilledIdx = code.indexOf("FallbackReason.UNFILLED_PARAMS")
-        val elseIdx = code.indexOf("notifyExplainStructuredFallback(p, proj, fb.reason(), null);")
+        val elseIdx = Regex("notifyExplainStructuredFallback\\(p, proj, fb\\.reason\\(\\), null\\);\\s*\\r?\\n\\s*submitExplainDirect")
+            .find(code)?.range?.first
         assertTrue(
             "submitExplainOrStructured 须有 UNFILLED_PARAMS 专用分支（不回退直送，T-ExplainPwdPrompt W5）",
             unfilledIdx >= 0,
         )
         assertTrue(
             "UNFILLED_PARAMS 分支必须出现在回退直送的 else 之前（否则未回填参数仍会弹误导红字）",
-            elseIdx < 0 || unfilledIdx in 0 until elseIdx,
+            elseIdx == null || unfilledIdx in 0 until elseIdx,
         )
     }
 
