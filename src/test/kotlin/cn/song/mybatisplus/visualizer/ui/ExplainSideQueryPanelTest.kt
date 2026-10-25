@@ -167,7 +167,7 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
 
     fun testExplainDialogCancelButtonFollowsPluginLanguage() {
         // 用户真机反馈：英文 IDE 下取消按钮显示 Cancel——必须按插件 bundle 覆盖。
-        val dialog = ExplainPlanDialog(project, com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<?>>())
+        val dialog = ExplainPlanDialog(project, com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>())
         try {
             assertEquals(
                 "取消按钮必须跟插件语言（不受 IDE 语言影响）",
