@@ -201,16 +201,23 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         assertEquals("SELECT 1", diskText())
     }
 
-    /** 内容分叉（VFS 陈旧/外部残留）→ 修复同步触发且落盘（T-EC-01 同款收口）。 */
-    fun testSyncVfContentIfNeededRepairsDivergence() {
+    /**
+     * T-PreviewChainNoise W1 契约改写：EDT 上无 document 时**不读盘、不修复**（返回 false）——
+     * 原 T-EC-04 用例「盘上分叉 → repaired=true」的判定语义移到 BGT 判据
+     * （ExecVfDivergenceProbeTest.testNoDocWithDiskReadDetectsDivergence /
+     * testBackgroundSyncRepairsDiskDivergence，生产里该分支只有 BGT 预热链会走）。
+     *
+     * 本用例是新旧实现的判别器：旧实现无条件读盘，会判出分叉并 repaired=true（红）；
+     * 新实现 EDT + 无 document 短路为不分叉（绿）且磁盘保持原内容。
+     */
+    fun testSyncVfContentIfNeededSkipsDiskProbeOnEdtWithoutDocument() {
         writeIo("SELECT 1")
         val vf = refreshVf()
 
         val repaired = DataSourceSelector.syncExecVfContentIfNeeded(project, vf!!, "SELECT 2")
 
-        assertTrue("内容分叉应触发修复同步", repaired)
-        assertEquals("修复须落盘（同 T-EC-01 收口语义）", "SELECT 2", diskText())
-        assertFalse("修复后已收敛 → 再检应为 no-op", DataSourceSelector.syncExecVfContentIfNeeded(project, vf, "SELECT 2"))
+        assertFalse("EDT + 无 document：禁止读盘探测，也不得触发修复", repaired)
+        assertEquals("未修复 → 磁盘保持原内容", "SELECT 1", diskText())
     }
 
     // ======================== T-EC-03：双写方并发（smoke） ========================

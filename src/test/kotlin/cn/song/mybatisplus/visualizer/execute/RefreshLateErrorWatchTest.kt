@@ -84,9 +84,12 @@ class RefreshLateErrorWatchTest {
             text.contains("swapEnabled = refreshSwapEnabled("),
         )
         // 晚检通道在场：无宿主的失败反馈靠它把错误交给 deliverError → onError/onErrorRich。
+        // 断言只钉「调用点仍在、首实参仍是被刷新控制台」——`extractConsoleError` 在
+        // T-ExplainConsoleFirst W7 增了 sqlText/project 形参用于跨源列证据升格，本函数无
+        // project 上下文故只传三参；钉死整行实参会把签名演进误判成功能缺失（本轮实测）。
         assertTrue(
             "refreshResultsComponent 必须保留 extractConsoleError 晚检（失败反馈来源）",
-            text.contains("extractConsoleError(shared != null ? shared : preparedConsole, LOG)"),
+            Regex("""extractConsoleError\(\s*shared != null \? shared : preparedConsole\s*,\s*LOG""").containsMatchIn(text),
         )
     }
 
