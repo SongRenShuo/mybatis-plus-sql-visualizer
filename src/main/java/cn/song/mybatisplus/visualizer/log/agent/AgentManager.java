@@ -93,8 +93,17 @@ public final class AgentManager implements Disposable {
      * premain 通道<b>认领之后</b>的空转唤醒间隔（T-AgentReconnect T-03）：通道已等到首次回连，
      * accept 循环转为「等重连」，用短超时周期性复核运行结束信号与兜底 TTL，
      * 而不是无限阻塞在 accept 上（关闭 socket 虽也能唤醒 accept，但 TTL 需要自己的复核拍）。
+     *
+     * <p>T-ReleasePerf8：const→非 final 静态字段＝同模块测试缝（P5 回归把拍调小到毫秒级加速旧循环让位）。</p>
      */
-    private static final long PREMAIN_IDLE_TICK_MS = 30_000L;
+    public static long PREMAIN_IDLE_TICK_MS = 30_000L;
+
+    /**
+     * T-ReleasePerf8（S5 挂死修复）：{@link #resumePremainChannel} 等旧 accept 线程退出的 join 预算。
+     * 非 final 静态字段＝同模块测试缝（回归用例覆写成毫秒级驱动「停等超预算」分支）。
+     * 默认盖过旧线程最长合法停等：claimed 拍 {@link #PREMAIN_IDLE_TICK_MS}（30s）+ HELLO 读 5s + 余量。
+     */
+    public static long PREMAIN_RESUME_JOIN_BUDGET_MS = 40_000L;
 
     /**
      * premain 通道兜底 TTL（T-AgentReconnect T-03）：通道绑定到<b>本次运行</b>，正常由运行结束信号
@@ -1030,7 +1039,9 @@ public final class AgentManager implements Disposable {
         PremainChannel channel = new PremainChannel(server.getLocalPort(), server, clockMs.getAsLong());
         premainChannels.add(channel);
         registerChannelDisposable(channel);
-        Thread acceptThread = new Thread(() -> acceptPremain(channel), "mps-agent-premain-" + channel.port);
+        // T-ReleasePerf8（S5 挂死修复）：启动即取新代（0→1），后续 resume 递增取代
+        int generation = ++channel.acceptGeneration;
+        Thread acceptThread = new Thread(() -> acceptPremain(channel, generation), "mps-agent-premain-" + channel.port);
         acceptThread.setDaemon(true);
         channel.acceptThread = acceptThread;
         acceptThread.start();
@@ -1122,17 +1133,27 @@ public final class AgentManager implements Disposable {
      *
      * <p>会话被摘除（心跳窗口过期/连接断开）不再等于本次运行的终局——agent 侧 {@code SenderLoop} 无限重连
      * 同一端口（SenderLoop.java:29-91），只要监听 socket 还在，下一次回连就能重新建会话。
-     * 循环只有三条退出路径：首次回连迟迟不到（{@link #PREMAIN_ACCEPT_TIMEOUT_MS}，该进程回落 attach/桥）、
-     * 运行结束（{@link #onRunEnded} / pid 消亡 / 兜底 TTL）、回连次数达 {@link #MAX_PREMAIN_RECONNECTS}（防热循环）。
+     * 循环退出路径：首次回连迟迟不到（{@link #PREMAIN_ACCEPT_TIMEOUT_MS}，该进程回落 attach/桥）、
+     * 运行结束（{@link #onRunEnded} / pid 消亡 / 兜底 TTL）、回连次数达 {@link #MAX_PREMAIN_RECONNECTS}（防热循环）、
+     * <b>代际失主让位</b>（T-ReleasePerf8 S5 挂死修复：{@link #resumePremainChannel} 递增
+     * {@link PremainChannel#acceptGeneration} 后旧循环即失主——pause→resume 竞态下 {@code paused} 先被翻回
+     * false，旧循环若只依赖 paused 会失去全部退出条件而无限 tick，S5 发行门禁轮实测挂 75min）。</p>
      *
-     * <p>退出时一律走 {@link #closePremainChannel}：关 socket + 从通道表摘除 + 释放 disposable 条目。
+     * <p>退出时按代际分流收口：失主让位既不关通道也不清 backlog（监听与通道都归新代所有）；
+     * 其余路径照旧走 {@link #closePremainChannel}（关 socket + 从通道表摘除 + 释放 disposable 条目）
+     * 或暂停交接（{@link #drainPremainBacklog}）。</p>
+     *
+     * <p>public 为同模块测试缝（P5 回归直接以指定代际起旧循环）。</p>
      */
-    private void acceptPremain(PremainChannel channel) {
+    public void acceptPremain(PremainChannel channel, int generation) {
         try {
             // resume 重建的循环（已 claimed）走短超时周期拍（复核过期信号），与首次等待的 120s 长超时区分
             channel.server.setSoTimeout(
                 (int) (channel.claimed ? PREMAIN_IDLE_TICK_MS : PREMAIN_ACCEPT_TIMEOUT_MS));
             while (!channel.closed && !channel.paused) {
+                if (channel.acceptGeneration != generation) {
+                    return;
+                }
                 Socket socket;
                 try {
                     socket = channel.server.accept();
@@ -1143,10 +1164,23 @@ public final class AgentManager implements Disposable {
                         return;
                     }
                     // 已认领：本拍无重连到达，复核运行结束信号后继续等（不再无限阻塞在 accept 上）
+                    if (channel.acceptGeneration != generation) {
+                        return;
+                    }
                     if (isChannelExpired(channel)) {
                         return;
                     }
                     continue;
+                }
+                if (channel.acceptGeneration != generation) {
+                    // 代际失主：本连接归新循环，弃连让位（不让位会把停泊/哑元连接误当真回连，
+                    // 且旧循环失去退出条件——S5 挂死形态的另一半）
+                    try {
+                        socket.close();
+                    } catch (Throwable ignored) {
+                        // 对齐 Kotlin runCatching
+                    }
+                    return;
                 }
                 if (channel.paused || channel.closed) {
                     // T-PremainReattach S3：暂停唤醒哑元连接 / 暂停竞态期到达的连接——丢弃后退出循环，
@@ -1185,10 +1219,15 @@ public final class AgentManager implements Disposable {
                     + t.getMessage() + "）——该进程回落 attach/桥（零劣化）");
             }
         } finally {
-            // T-PremainReattach S1：暂停退出（paused 且未 closed）不收口——socket 与通道都保留，
-            // 等 resume 重建 accept 循环；其余退出路径照旧收口。暂停中被关闭的竞态（onRunEnded /
-            // dispose）也照旧收口（closeChannel 与本路径都幂等）。
-            if (channel.closed || !channel.paused) {
+            // T-ReleasePerf8（S5 挂死修复）：代际失主的让位退出不收口——监听 socket 与通道都归新代
+            // 循环所有（本代若顺手 closePremainChannel，resume 刚重建的通道会被自己人拆掉）。
+            boolean superseded = channel.acceptGeneration != generation;
+            if (superseded && !channel.closed) {
+                // 让位退出：不收口、不清 backlog
+            } else if (channel.closed || !channel.paused) {
+                // T-PremainReattach S1：暂停退出（paused 且未 closed）不收口——socket 与通道都保留，
+                // 等 resume 重建 accept 循环；其余退出路径照旧收口。暂停中被关闭的竞态（onRunEnded /
+                // dispose）也照旧收口（closeChannel 与本路径都幂等）。
                 closePremainChannel(channel);
             } else {
                 // 暂停退出先清空内核 backlog（哑元唤醒连接 / 暂停竞态期到达的连接——close 即弃；
@@ -1779,18 +1818,41 @@ public final class AgentManager implements Disposable {
             return false;
         }
         channel.paused = false;
-        // 等旧 accept 线程彻底退出（含暂停退出的 backlog 清理）再起新循环——两个线程并发 accept
-        // 会互抢停泊连接（旧线程的 drain 可能把 agent 真回连 accept 后弃掉）且 soTimeout 字段互踩。
-        // 无界 join 是安全的：旧线程全部退出路径有界（drain 100ms 拍 / 读 HELLO 5s / accept tick
-        // 30s，且 drain 见 paused=false 即停），最长数秒；典型为 0（哑元唤醒路径毫秒级退出）。
+        // T-ReleasePerf8（S5 挂死修复）双防线取代原「无界 join」——原注释断言「旧线程全部退出路径有界
+        //（最长数秒）」被发行门禁 S5 轮实测证伪：pause→resume 竞态下 resume 先行把 paused 翻回 false，
+        // 旧 accept 循环失去 paused 退出条件，30s tick 里 isChannelExpired 恒 false（pid 活着）即无限
+        // continue，Test worker 在无界 join 上挂 75min（jstack 实录，AgentManagerPremainReattachTest P4）。
+        //   ① 代际让位：递增 {@link PremainChannel#acceptGeneration} 取新代，旧循环最迟下一拍（≤30s tick /
+        //      accept 返回即刻）发现失主退出；
+        //   ② join 限定预算（{@link #PREMAIN_RESUME_JOIN_BUDGET_MS}，默认盖过 30s 拍 + 5s HELLO 读 + 余量），
+        //      超时即关监听强制唤醒并判通道不可恢复（返回 false，调用方回落 attach 兜底链）——无论旧线程
+        //      滞留在何种非预期停等形态，resume 都有界返回。
+        int generation = ++channel.acceptGeneration;
         if (channel.acceptThread != null) {
+            Thread thread = channel.acceptThread;
             try {
-                channel.acceptThread.join();
+                thread.join(PREMAIN_RESUME_JOIN_BUDGET_MS);
             } catch (Throwable ignored) {
                 // 对齐 Kotlin runCatching：中断等不影响后续重建
             }
+            if (thread.isAlive()) {
+                LOG.warn("premain 通道 " + channel.port + " 旧 accept 线程 " + PREMAIN_RESUME_JOIN_BUDGET_MS + "ms 未退出"
+                    + "（非预期停等形态）——关闭监听强制收口，通道判不可恢复（回落 attach 兜底链）");
+                try {
+                    channel.server.close();
+                } catch (Throwable ignored) {
+                    // 对齐 Kotlin runCatching
+                }
+                try {
+                    thread.join(2_000);
+                } catch (Throwable ignored) {
+                    // 对齐 Kotlin runCatching
+                }
+                closePremainChannel(channel);
+                return false;
+            }
         }
-        Thread acceptThread = new Thread(() -> acceptPremain(channel), "mps-agent-premain-" + channel.port + "-r");
+        Thread acceptThread = new Thread(() -> acceptPremain(channel, generation), "mps-agent-premain-" + channel.port + "-r");
         acceptThread.setDaemon(true);
         channel.acceptThread = acceptThread;
         acceptThread.start();
@@ -1850,7 +1912,9 @@ public final class AgentManager implements Disposable {
         channel.pid = pid;
         premainChannels.add(channel);
         registerChannelDisposable(channel);
-        Thread acceptThread = new Thread(() -> acceptPremain(channel), "mps-agent-premain-" + port + "-ra");
+        // T-ReleasePerf8（S5 挂死修复）：re-bind 同款取新代
+        int generation = ++channel.acceptGeneration;
+        Thread acceptThread = new Thread(() -> acceptPremain(channel, generation), "mps-agent-premain-" + port + "-ra");
         acceptThread.setDaemon(true);
         channel.acceptThread = acceptThread;
         acceptThread.start();

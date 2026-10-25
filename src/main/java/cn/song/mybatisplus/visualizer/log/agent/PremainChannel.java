@@ -54,6 +54,14 @@ public final class PremainChannel implements Disposable {
      */
     public volatile boolean paused = false;
 
+    /**
+     * T-ReleasePerf8（S5 挂死修复）：accept 循环代际。每次起 accept 循环（{@code AgentManager.openPremainChannel}
+     * / {@code AgentManager.resumePremainChannel}）递增取新代；旧循环在 accept 返回/超时拍处发现失主即让位
+     * 退出——不依赖 {@code paused}（pause→resume 竞态下 paused 先被 resume 翻回 false，旧循环若只依赖它会
+     * 失去全部退出条件而无限 tick，S5 发行门禁轮实测挂 75min）。
+     */
+    public volatile int acceptGeneration = 0;
+
     public PremainChannel(int port, ServerSocket server, long preparedAtMs) {
         this.port = port;
         this.server = server;
