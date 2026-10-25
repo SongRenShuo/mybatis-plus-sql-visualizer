@@ -193,9 +193,15 @@ class SqlPreviewEntityScopeHeavyTest : HeavyPlatformTestCase() {
     fun testExplicitInvisibleClassCannotBypassHostScope() {
         val other = createModule("other")
         val wrong = entity(other, "wrong.Inventory", "wrong_inventory")
+        // T-ShadowEntityResolve W3 契约更新：窄域**零候选**时全项目唯一命中可解析（见
+        // ShadowEntityResolveTest#testEntityOnlyInDownstreamModuleResolvesFromWorkspaceHost）。
+        // 因此「显式不可见类不得旁路」要在**窄域有候选**的形态下钉：宿主可见的 local.Inventory
+        // 先被解析出来，不可见的 wrong.Inventory 不得顶掉它。
+        entity(myModule, "local.Inventory", "local_inventory")
         val host = source(myModule, "host.Query")
         ready()
-        assertNull(SqlPreviewServiceEnhancementsKt.resolveHqlTable(service(), wrong, "Inventory", "from Inventory", host))
+        val table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(service(), wrong, "Inventory", "from Inventory", host)!!
+        assertEquals("local_inventory", table.tableName)
     }
 
     fun testExplicitSameNameClassCannotBypassVisibleAmbiguity() {

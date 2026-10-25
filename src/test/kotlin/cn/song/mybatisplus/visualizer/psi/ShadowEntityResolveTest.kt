@@ -12,6 +12,7 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.HeavyPlatformTestCase
 import com.intellij.testFramework.IndexingTestUtil
@@ -253,5 +254,89 @@ class ShadowEntityResolveTest : HeavyPlatformTestCase() {
         val resolution = EntityClassResolver.resolveByName(project, "WmsTask", method)
         assertEquals("只有库内一份，正常解析", 1, resolution.candidates.size)
         assertEquals("com.acme.WmsTask", resolution.candidates.single().qualifiedName)
+    }
+
+    // ------------------------------------------------------------------
+    // workspace 形态（用户 20261023 真机复现）：IDEA 把提供方模块与业务模块**都加载为模块**
+    // （Maven workspace 解析），宿主 DAO 在提供方模块源码里＝模块内容而非库文件。此时
+    // `contextModule` = 提供方模块，实体却只存在于**下游**业务模块（依赖方向 demo→lib，
+    // lib 看不见 demo）→ 宿主作用域内**零候选** → 降级。
+    // ------------------------------------------------------------------
+
+    /** workspace 形态复现：宿主在 lib 模块源码、实体只在下游 demo 模块 → 必须解析到 demo 那份。 */
+    fun testEntityOnlyInDownstreamModuleResolvesFromWorkspaceHost() {
+        val lib = createModule("shadow-lib-module")
+        writeProject(
+            lib, "com.acme", "CommonDao",
+            """
+            import java.util.List;
+            import java.util.Collections;
+            public class CommonDao {
+                public List<?> findByQuery(String hql, String[] paramNames, Object[] values) {
+                    return Collections.emptyList();
+                }
+                public List<?> beAllocateSuccess() {
+                    String hql = "FROM WmsTask task WHERE task.status = :status AND task.type = :type";
+                    return this.findByQuery(hql, new String[]{"status", "type"}, new Object[]{"OP", "PU"});
+                }
+            }
+            """.trimIndent(),
+        )
+        projectEntity(myModule, "com.acme", "wms_task_project")
+        ModuleRootModificationUtil.addDependency(myModule, lib)
+        ready()
+
+        val daoClass = com.intellij.psi.JavaPsiFacade.getInstance(project)
+            .findClass("com.acme.CommonDao", GlobalSearchScope.allScope(project))!!
+        val method = daoClass.findMethodsByName("beAllocateSuccess", false).single()
+
+        // 宿主在 lib 模块内容里，实体只在我的模块（下游）——修复前这里零候选
+        val resolution = EntityClassResolver.resolveByName(project, "WmsTask", method)
+        assertEquals("下游唯一实体应被解析（全项目唯一命中才放宽）", 1, resolution.candidates.size)
+        assertEquals("com.acme.WmsTask", resolution.candidates.single().qualifiedName)
+        assertEquals(myModule.name, com.intellij.openapi.module.ModuleUtilCore.findModuleForPsiElement(resolution.candidates.single())?.name)
+
+        val call = method.body!!
+            .let { PsiTreeUtil.collectElementsOfType(it, PsiMethodCallExpression::class.java) }
+            .single { it.methodExpression.referenceName == "findByQuery" }
+        val result = SqlPreviewService(project).previewCustomDaoHql(call)!!
+        assertEquals("wms_task_project", result.tableName)
+        assertTrue(result.sql, result.sql.contains("task_type"))
+        assertFalse("workspace 形态不应降级：${result.sql}", result.sql.contains("实体不可解析"))
+        assertFalse(result.sql, result.sql.contains("unknown_table"))
+    }
+
+    /** 拓宽只认**唯一**命中：下游两个模块各有一个同名实体时仍 fail closed（不猜）。 */
+    fun testDownstreamWideningStaysFailClosedWhenNotUnique() {
+        val lib = createModule("shadow-lib-module")
+        writeProject(
+            lib, "com.acme", "CommonDao",
+            """
+            import java.util.List;
+            import java.util.Collections;
+            public class CommonDao {
+                public List<?> findByQuery(String hql, String[] paramNames, Object[] values) {
+                    return Collections.emptyList();
+                }
+                public List<?> beAllocateSuccess() {
+                    String hql = "FROM WmsTask task WHERE task.status = :status";
+                    return this.findByQuery(hql, new String[]{"status"}, new Object[]{"OP"});
+                }
+            }
+            """.trimIndent(),
+        )
+        projectEntity(myModule, "com.acme.a", "wms_task_a")
+        val other = createModule("shadow-other")
+        projectEntity(other, "com.acme.b", "wms_task_b")
+        ModuleRootModificationUtil.addDependency(myModule, lib)
+        ModuleRootModificationUtil.addDependency(other, lib)
+        ready()
+
+        val daoClass = com.intellij.psi.JavaPsiFacade.getInstance(project)
+            .findClass("com.acme.CommonDao", GlobalSearchScope.allScope(project))!!
+        val method = daoClass.findMethodsByName("beAllocateSuccess", false).single()
+        val resolution = EntityClassResolver.resolveByName(project, "WmsTask", method)
+        assertTrue("下游多命中仍属真歧义，不得挑一个", resolution.ambiguous)
+        assertNull(resolution.psiClass)
     }
 }
