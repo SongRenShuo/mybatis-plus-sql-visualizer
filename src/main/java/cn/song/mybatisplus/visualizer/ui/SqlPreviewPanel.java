@@ -430,6 +430,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** R91：本面板最近一次获取的计划，历史清空/加载换代即失效。 */
     public kotlin.Pair<Long, cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> aiContextPlan = null;
 
+    /** R61：会话级上一次结构化 EXPLAIN（SQL 与原始结果，跨次对比基线；T-SyncK2JMaster90 波B2 增量）。 */
+    public kotlin.Pair<String, cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult> lastStructuredExplain = null;
+
+    /** T-PreviewSideQuery P3a：执行结果视图头部（「返回预览」入口）——embedConsole(EXECUTE) 添加、backToPreview 移除。 */
+    public JComponent executeViewHeader = null;
+
+    /** T-PreviewSideQuery P2：当前展示中的 EXPLAIN 结果对话框（新开先关旧的，防叠窗）。 */
+    public ExplainPlanDialog explainResultDialog = null;
+
     /** R91：AI 上下文计划的确认目标（预览 + 计划键 + 仍有效判定）。 */
     public record AiContextTarget(
             PreviewResult preview,
