@@ -6,6 +6,8 @@ import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 
+import org.jetbrains.annotations.Nullable;
+
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -148,6 +150,68 @@ public final class DatabaseSchemaResolver {
     }
 
     /**
+     * T-DialectInferPollution W10（2026-10-24）：<b>表归属路由</b>——返回「缓存里持有<b>全部</b>指定
+     * 表」的数据源下标清单（与 {@link #columnNameSources} 的源顺序一致；只读缓存，零内省零连接）。
+     *
+     * <p>动机：EXPLAIN 取源回落（模块学习/last-used）可能命中与预览表不符的源（跨模块错配，
+     * 用户实测 {@code mp_demo.wms_inventory_jar_demo doesn't exist}）；而「表在哪个库」是比模块绑定
+     * 更强的归属事实，且结构缓存在 Database 视图展开/预览链预热时已就位。命中唯一 → 直接路由；
+     * 零命中（缓存未热/表不存在）与多命中 → 调用方保持现行为/引导选择，不猜。</p>
+     */
+    public static List<Integer> cachedOwnerIndexes(@Nullable Project project, java.util.Collection<String> tableNames) {
+        if (project == null || tableNames.isEmpty()) return List.of();
+        if (!isDatabaseAvailable()) return List.of();
+        List<Object> dataSources = dataSources(project);
+        if (dataSources == null) return List.of();
+        synchronized (metaCache) {
+            return ownerIndexesForSources(columnNameSources(dataSources), tableNames);
+        }
+    }
+
+    /** 纯判定核心（headless 直测）：源查询器清单 + 表集 → 持有全部表的源下标。 */
+    public static List<Integer> ownerIndexesForSources(
+            List<Function<String, Set<String>>> sources,
+            java.util.Collection<String> tableNames) {
+        List<String> names = new ArrayList<>();
+        for (String name : tableNames) {
+            if (!name.isBlank()) names.add(name);
+        }
+        if (names.isEmpty() || sources.isEmpty()) return List.of();
+        List<Integer> out = new ArrayList<>();
+        for (int i = 0; i < sources.size(); i++) {
+            Function<String, Set<String>> source = sources.get(i);
+            boolean holdsAll = true;
+            for (String name : names) {
+                Set<String> columns = source.apply(name);
+                if (columns == null || columns.isEmpty()) {
+                    holdsAll = false;
+                    break;
+                }
+            }
+            if (holdsAll) out.add(i);
+        }
+        return out;
+    }
+
+    /**
+     * T-DialectInferPollution W12：结构缓存是否有<b>任何</b>内容（区分「缓存冷 = 无法证明」与
+     * 「缓存热但表不在 = 确证不在」）——前者调用方保持候选（诚实降级），后者调用方引导选择。
+     * 只读 metaCache，零内省零连接。
+     */
+    public static boolean cacheHasAnyTable(@Nullable Project project) {
+        if (project == null || !isDatabaseAvailable()) return false;
+        List<Object> dataSources = dataSources(project);
+        if (dataSources == null) return false;
+        synchronized (metaCache) {
+            for (Object ds : dataSources) {
+                Map<String, TableMeta> perDs = metaCache.get(ds);
+                if (perDs != null && !perDs.isEmpty()) return true;
+            }
+            return false;
+        }
+    }
+
+    /**
      * UI023：只读精确对象与库的既有缓存；不遍历、不跨源回退、不取未知库条目。
      */
     public static Map<String, Set<String>> columnNamesCachedForTarget(Object dataSource, String database,
@@ -214,6 +278,31 @@ public final class DatabaseSchemaResolver {
             });
         }
         return out;
+    }
+
+    /**
+     * T-ExplainConsoleFirst W7（2026-10-24）：{@code Unknown column} 跨源升格的证据入口。
+     *
+     * <p>与 {@link #cachedOwnerIndexes} 同口径的只读枚举（零内省零连接），返回<b>在籍数据源清单</b>供调用方
+     * 按身份比对「当前控制台用的那条源」并排除它。Database 插件不在场或枚举失败一律 null
+     * （调用方据此不升格——诚实降级，不猜）。</p>
+     */
+    @Nullable
+    public static List<Object> allDataSourcesForEvidence(@Nullable Project project) {
+        if (project == null) return null;
+        if (!isDatabaseAvailable()) return null;
+        List<Object> dataSources = dataSources(project);
+        return (dataSources != null && !dataSources.isEmpty()) ? dataSources : null;
+    }
+
+    /**
+     * T-ExplainConsoleFirst W7：加锁版的 {@link #columnNameSources}——升格判定要跨多条源连续读同一份
+     * {@code metaCache}，逐条各自加锁会让「读源 A 与读源 B 之间缓存被清」的窗口混入不一致视图。
+     */
+    public static List<Function<String, Set<String>>> columnNameSourcesCached(List<Object> dataSources) {
+        synchronized (metaCache) {
+            return columnNameSources(dataSources);
+        }
     }
 
     /**

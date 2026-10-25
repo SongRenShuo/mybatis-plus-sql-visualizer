@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute;
 
 import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver;
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine;
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.lang.Language;
@@ -108,6 +109,15 @@ public final class DataSourceSelector {
      * UUID 为主、显示名为回退——显示名同名多条时旧实现静默取首条，属「猜」，已弃。
      */
     private static final String LAST_RUNNER_ID_KEY = "mpsql.visualizer.last.runner.id";
+
+    /**
+     * T-ModuleScopedLastUsed W2：已写过的<b>模块键清单</b>（逗号分隔）。
+     *
+     * <p>为什么需要单独记清单：{@code PropertiesComponent} 的公开 API 只有 {@code unsetValue/getValue/setValue}
+     * （{@code javap} 实证，无列举全部键的方法），故「清空全部层级」时无法靠前缀扫描发现有哪些模块桶。
+     * 清单在首次写该模块记忆时登记（{@link #registerLastUsedModuleKey}），清空后一并移除。</p>
+     */
+    private static final String _LAST_USED_MODULE_KEYS_KEY = "mpsql.visualizer.last.runner.modules";
 
     /** 构建版本戳。 */
     public static final String BUILD_STAMP = "M36.8-exec-silent-noop";
@@ -422,9 +432,19 @@ public final class DataSourceSelector {
      *
      * <p>优先级契约（S3）：活控制台 {@link #boundConsoleDataSourceName} 恒高于本记忆回退 &gt; 未绑定。</p>
      */
+    /** Kotlin 默认参等价重载：moduleKey 缺省 null（既有项目级行为，逐字不变）。 */
     @Nullable
     public static String rememberedDataSourceName(@NotNull Project project) {
-        LastUsedMemory memory = lastUsedRunner(project);
+        return rememberedDataSourceName(project, null);
+    }
+
+    /**
+     * T-ModuleScopedLastUsed W2：{@code moduleKey} 非空时优先读该模块的记忆，未命中回落项目级
+     * （见 {@link LastUsedKeys} 与 {@link #lastUsedRunner(Project, String)} 的分层语义）。不传＝既有项目级行为，逐字不变。
+     */
+    @Nullable
+    public static String rememberedDataSourceName(@NotNull Project project, @Nullable String moduleKey) {
+        LastUsedMemory memory = lastUsedRunner(project, moduleKey);
         if (isNullOrBlank(memory.dataSourceId()) && isNullOrBlank(memory.displayName())) return null;
         kotlin.Pair<java.util.List<String>, java.util.function.Function<String, String>> lookup =
                 rememberedLookupForTest != null ? rememberedLookupForTest.apply(project) : null;
@@ -448,6 +468,175 @@ public final class DataSourceSelector {
             };
         }
         return resolveRememberedDataSourceName(memory, registeredNames, nameById);
+    }
+
+    /**
+     * T-ExplainPwdPrompt W4（2026-10-24）：结构化 EXPLAIN 的 <b>last-used 取源回落</b>——
+     * 真绑定（{@link #boundConsoleDataSource}）为 null 且绑定链 runner 枚举为 0（数据源无方言
+     * 映射时平台 {@code DatabaseRunners.getAttachDataSourceRunners} 返回空；243 沙盒实测：
+     * Database 视图已连接仍为 0）时，回落到面板「数据源（上次使用）」记忆取源，让结构化
+     * 通道（{@code McpDbExecutor} askPassword=true）不依赖绑定链也能走到。
+     *
+     * <p>防错源纪律：按名解析<b>歧义即弃</b>（同名多源不猜）；方言不符由既有 allowDialectGate
+     * 闸拦（EXPLAIN 同为执行旁路，同门控）。</p>
+     *
+     * <p>T-DialectInferPollution W9（2026-10-24）：EXPLAIN 链统一取源回落（结构化 W4 + 直送 W8
+     * 合并重构）。原「无脑回落 last-used」有跨模块错源副作用：jar-model demo 模块（无学习条目）
+     * 的表被 last-used（mp_demo）硬套 → {@code mp_demo.wms_inventory_jar_demo doesn't exist}（用户
+     * 沙盒实测截图）。修正语义：</p>
+     *
+     * <ol>
+     *  <li>预览模块有学习绑定 → 用学习源（模块归属强于全局记忆；UUID 解析在籍对象，比按名稳）；</li>
+     *  <li>学习源与 last-used <b>同时存在且不同</b> → 证据冲突不猜，返回 null（下游 NO_DATA_SOURCE
+     *      引导弹数据源选择器，用户选一次即自愈更新学习与记忆）；</li>
+     *  <li>学习缺失 → last-used 唯一命中可用（兜底旧场景）——注意这是兜底不是归属，模块学习会
+     *      随执行自愈。</li>
+     * </ol>
+     *
+     * @param moduleKey 预览 SQL 所属模块键（面板 ui.SqlPreviewPanel.sourceModuleKey）
+     * @param sql       预览 SQL 原文（T-DialectInferPollution W10 表归属路由用；null/无表 = 跳过路由验证）
+     * @return 在籍数据源对象（唯一命中）；名字缺失/歧义/枚举失败一律 null
+     */
+    @Nullable
+    public static Object explainFallbackDataSource(@NotNull Project project,
+                                                   @Nullable String moduleKey,
+                                                   @Nullable String sql) {
+        DialectDecisionEngine.Candidate learned = null;
+        if (moduleKey != null && !moduleKey.isBlank()) {
+            try {
+                learned = cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+                        .learnedCandidate(project, moduleKey);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+        }
+        String lastName = null;
+        try {
+            String name = rememberedDataSourceName(project, moduleKey);
+            if (name != null && !name.isBlank()) lastName = name;
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        Object lastDs = null;
+        if (lastName != null) {
+            try {
+                Object single = null;
+                int hits = 0;
+                for (Object ds : DataSourceSettings.getAllDataSources(project)) {
+                    if (lastName.equals(DataSourceSettings.getName(ds))) {
+                        single = ds;
+                        hits++;
+                    }
+                }
+                lastDs = hits == 1 ? single : null;  // singleOrNull 语义：同名多条歧义即弃
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+        }
+        String learnedId = learned != null ? learned.id() : null;
+        String lastId = null;
+        if (lastDs != null) {
+            try {
+                lastId = DataSourceSettings.getUniqueId(lastDs);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+        }
+        Object candidate;
+        String choice = resolveExplainFallbackChoice(learnedId, lastId);
+        if (choice == null) {
+            return null;                           // 双证据冲突：学习源与 last-used 不同源，交用户选择
+        } else if (choice.equals(learnedId)) {
+            try {
+                candidate = DataSourceSettings.getDataSourceById(project, learnedId);
+            } catch (Throwable ignored) {
+                candidate = null;                  // getOrNull 语义
+            }
+        } else {
+            candidate = lastDs;
+        }
+        if (candidate == null) return null;
+        // T-DialectInferPollution W10：<b>表归属路由</b>——学习/last-used 证据可能陈旧或跨模块错配
+        //（用户实测 `mp_demo.wms_inventory_jar_demo doesn't exist`），而「表在哪个库」是更强的
+        // 归属事实：结构缓存（Database 视图展开/预览预热即就位，只读零内省）能证明哪条源持有
+        // 预览引用的全部表。候选源不持有而<b>唯一</b>其他源持有 → 路由到它；多源持有 → 冲突交选择
+        // 器；零源持有（缓存未热/表不存在）→ 保持候选（诚实降级，不阻断）。
+        List<String> tables = new ArrayList<>();
+        try {
+            List<String> all = cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.tableNames(sql != null ? sql : "");
+            for (int i = 0; i < all.size() && i < 8; i++) tables.add(all.get(i));
+        } catch (Throwable ignored) {
+            // getOrNull().orEmpty() 语义
+        }
+        if (!tables.isEmpty()) {
+            List<Integer> ownerIndexes;
+            try {
+                ownerIndexes = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                        .cachedOwnerIndexes(project, tables);
+            } catch (Throwable ignored) {
+                ownerIndexes = List.of();          // getOrNull().orEmpty() 语义
+            }
+            if (!ownerIndexes.isEmpty()) {
+                List<Object> all = null;
+                try {
+                    all = DataSourceSettings.getAllDataSources(project);
+                } catch (Throwable ignored) {
+                    all = List.of();
+                }
+                String candidateName = null;
+                try {
+                    candidateName = DataSourceSettings.getName(candidate);
+                } catch (Throwable ignored) {
+                    // getOrNull 语义
+                }
+                List<Object> ownerObjects = new ArrayList<>();
+                for (Integer idx : ownerIndexes) {
+                    Object ds = idx >= 0 && idx < all.size() ? all.get(idx) : null;
+                    if (ds == null) continue;      // mapNotNull
+                    String name = null;
+                    try {
+                        name = DataSourceSettings.getName(ds);
+                    } catch (Throwable ignored) {
+                        // getOrNull 语义
+                    }
+                    if (!java.util.Objects.equals(name, candidateName)) ownerObjects.add(ds);
+                }
+                if (ownerObjects.isEmpty()) {
+                    // 候选源即持有者 → 可信，照旧
+                } else if (ownerObjects.size() == 1) {
+                    candidate = ownerObjects.get(0);   // 唯一持有 → 路由
+                } else {
+                    return null;                       // 多源都持有 → 冲突，交用户选择
+                }
+            } else {
+                boolean cacheHot = false;
+                try {
+                    cacheHot = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                            .cacheHasAnyTable(project);
+                } catch (Throwable ignored) {
+                    cacheHot = false;                  // getOrDefault(false) 语义
+                }
+                if (cacheHot) {
+                    // T-DialectInferPollution W12：缓存热（有源已内省出表）但没有任何源持有预览的表
+                    // → 表不存在于任何已连库，错源执行必败——引导选择数据源（返回 null 走 NO_DATA_SOURCE）。
+                    return null;
+                }
+                // 缓存全冷：无法证明归属，保持候选（诚实降级，Database 视图展开一次后自愈）
+            }
+        }
+        return candidate;
+    }
+
+    /**
+     * T-DialectInferPollution W9 纯判定核心（headless 直测）：回落证据选择。
+     * 学习源与 last-used 同时存在且不同 → null（冲突不猜，下游引导选择数据源）；
+     * 学习源优先；学习缺失时兜底 last-used。
+     */
+    @Nullable
+    public static String resolveExplainFallbackChoice(@Nullable String learnedId, @Nullable String lastId) {
+        if (learnedId != null && lastId != null && !learnedId.equals(lastId)) return null;
+        if (learnedId != null) return learnedId;
+        return lastId;
     }
 
     /** O-96 S1：记忆回退取名判定（纯函数壳——复用 T-SI-02 判定，命中下标换算在籍名）。 */
@@ -527,8 +716,33 @@ public final class DataSourceSelector {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             boolean forceChoose) {
+        prepareConsole(project, sql, onConsole, onEditor, onError, callback, dialectGateRequest, onDialectGate,
+                forceChoose, null, false);
+    }
+
+    /**
+     * T-ExplainFailUx W4 / T-ExplainSwitchNative W6 扩展形态。
+     *
+     * @param preferredRunnerName T-ExplainFailUx W4：用户已显式指定源名 → 按名直选建链，不再弹平台选择器。
+     * @param forceChoosePopup    T-ExplainSwitchNative W6（2026-10-24 用户实测「点切换数据源却重试执行了」）：
+     *                            <b>必须弹选择器</b>——即便 runner 枚举只剩一条（旧行为 {@code shouldBeChosenIfAlone}
+     *                            会直选执行，用户看不到列表）。仅「切换数据源」入口置 true；预览默认准备与显式执行不受影响。
+     */
+    public static void prepareConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            boolean forceChoose,
+            @Nullable String preferredRunnerName,
+            boolean forceChoosePopup) {
         DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback,
-                null, false, dialectGateRequest, onDialectGate, null, forceChoose);
+                null, false, dialectGateRequest, onDialectGate, null, forceChoose,
+                preferredRunnerName, forceChoosePopup);
     }
 
     /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
@@ -1281,12 +1495,22 @@ public final class DataSourceSelector {
 
     /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */
     public static String lastRunnerName(Project project) {
-        return lastUsedRunner(project).displayName();
+        return lastRunnerName(project, null);
+    }
+
+    /** T-ModuleScopedLastUsed W2：带模块键读取（模块级优先、项目级兜底）。 */
+    public static String lastRunnerName(Project project, @Nullable String moduleKey) {
+        return lastUsedRunner(project, moduleKey).displayName();
     }
 
     /** M36.5：记录 last-used 数据源名。 */
     public static void rememberRunnerName(Project project, String name) {
-        rememberRunner(project, name, null);
+        rememberRunnerName(project, name, null);
+    }
+
+    /** M36.5：记录 last-used 数据源名（T-ModuleScopedLastUsed W2：可带模块键分桶）。 */
+    public static void rememberRunnerName(Project project, String name, @Nullable String moduleKey) {
+        rememberRunner(project, name, null, moduleKey);
     }
 
     /**
@@ -1353,37 +1577,183 @@ public final class DataSourceSelector {
         return new LastUsedResolution(null, false);
     }
 
-    /** T-SI-02：读 last-used 记忆双字段（异常兜底全空）。 */
+    /** Kotlin 默认参等价重载：moduleKey 缺省 null（既有项目级行为）。 */
     public static LastUsedMemory lastUsedRunner(Project project) {
+        return lastUsedRunner(project, null);
+    }
+
+    /**
+     * T-ModuleScopedLastUsed W2：读 last-used 记忆双字段（异常兜底全空）。
+     *
+     * <p>三层优先级的第一、二层由调用方掌握（活控制台绑定最高）；本函数负责「模块级优先、
+     * 项目级兜底」：给了 {@code moduleKey} 就先读模块级键，<b>模块级未命中再读项目级</b>（不能因为
+     * 模块级没有就返回空——那会让新模块的第一次预览失去兜底）。判命中层级<b>直接读模块级原键</b>
+     * （{@code moduleKey} 空白时 {@code LastUsedKeys.key} 回落 base 原键，模块级与项目级同键——
+     * 不先分流就会「未命中回落」判定恒真，故先按空白分流再分层读）。</p>
+     */
+    public static LastUsedMemory lastUsedRunner(Project project, @Nullable String moduleKey) {
         try {
             com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
-            return new LastUsedMemory(pc.getValue(LAST_RUNNER_ID_KEY), pc.getValue(LAST_RUNNER_KEY));
+            if (isNullOrBlank(moduleKey)) {
+                return new LastUsedMemory(pc.getValue(LastUsedKeys.dataSourceIdKey(null)),
+                        pc.getValue(LastUsedKeys.displayNameKey(null)));
+            }
+            LastUsedMemory scoped = new LastUsedMemory(pc.getValue(LastUsedKeys.dataSourceIdKey(moduleKey)),
+                    pc.getValue(LastUsedKeys.displayNameKey(moduleKey)));
+            if (scoped.dataSourceId() != null || scoped.displayName() != null) return scoped;
+            return new LastUsedMemory(pc.getValue(LastUsedKeys.dataSourceIdKey(null)),
+                    pc.getValue(LastUsedKeys.displayNameKey(null)));
         } catch (Throwable ignored) {
             return new LastUsedMemory(null, null);
         }
     }
 
     /**
+     * T-ModuleScopedLastUsed W1（2026-10-24 用户问「上次使用的数据源是否按模块隔离更合适」）：
+     * last-used 记忆的<b>键构造</b>（纯函数，headless 直测）。
+     *
+     * <p>为什么按模块分桶：本项目此前并存两套取源记忆且粒度不一致——项目级 last-used（喂指示行
+     * 灰字与静默复用）vs 模块级 {@code ModuleDataSourceBindingStore}
+     * （{@code mp-sql-visualizer-datasource.xml}，<b>只喂方言决策</b>）。于是「在 jpa_demo 模块选了
+     * jpa_demo@localhost，切到 mp_demo 模块，灰字仍显示同一个源」——多模块工程的源本就按模块
+     * 分（demo 仓 mp_demo / jpa_demo / mpj_demo 各连各库），项目级单一记忆必然错配。这也是
+     * T-DialectInferPollution W8~W12 那批跨模块错源的根因之一。</p>
+     *
+     * <p><b>硬约束</b>：{@code moduleKey} 为 null/blank 时<b>必须回落项目级键</b>（返回 {@code LAST_RUNNER_KEY} 族
+     * 原键）——纯 {@code .sql} 文件、非 Java 源等入口没有模块上下文，若按模块硬隔离会退化成「每次
+     * 都未绑定」，比改前更糟。</p>
+     */
+    public static final class LastUsedKeys {
+
+        /** 模块级后缀分隔符：模块键是 {@code canonicalKey}（模块身份，非路径），拼上后仍是稳定键。 */
+        private static final String MODULE_SEPARATOR = ".";
+
+        private LastUsedKeys() {
+        }
+
+        /** 模块级记忆键；{@code moduleKey} 为空时返回 {@code base} 本身（即项目级原键，向后兼容）。 */
+        static String key(String base, @Nullable String moduleKey) {
+            return isNullOrBlank(moduleKey) ? base : base + MODULE_SEPARATOR + moduleKey;
+        }
+
+        public static String displayNameKey(@Nullable String moduleKey) {
+            return key(LAST_RUNNER_KEY, moduleKey);
+        }
+
+        public static String dataSourceIdKey(@Nullable String moduleKey) {
+            return key(LAST_RUNNER_ID_KEY, moduleKey);
+        }
+    }
+
+    /** Kotlin 默认参等价重载：moduleKey 缺省 null（既有项目级行为）。 */
+    public static void rememberRunner(Project project, String name, @Nullable String dataSourceId) {
+        rememberRunner(project, name, dataSourceId, null);
+    }
+
+    /**
      * T-SI-02：写 last-used 记忆。{@code dataSourceId} 取不到（弹窗路径尚无控制台）时<b>清掉身份键</b>
      * ——留着上一轮的 UUID 会指认另一个数据源（身份说谎比没有身份更糟）。
+     *
+     * <p>T-ModuleScopedLastUsed W2：给了 {@code moduleKey} 时<b>同时写模块级与项目级</b>——模块级承载
+     * 「本模块上次用哪个」，项目级作为无模块上下文入口（纯 {@code .sql} 等）的兜底，两者不冲突。
+     * 但模块级命中优先，故读取侧不会串味。</p>
      */
-    public static void rememberRunner(Project project, String name, @Nullable String dataSourceId) {
+    public static void rememberRunner(Project project, String name, @Nullable String dataSourceId,
+                                      @Nullable String moduleKey) {
         try {
             com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
-            pc.setValue(LAST_RUNNER_KEY, name);
-            if (dataSourceId == null || dataSourceId.isBlank()) pc.unsetValue(LAST_RUNNER_ID_KEY);
-            else pc.setValue(LAST_RUNNER_ID_KEY, dataSourceId);
+            writeLastUsed(pc, null, name, dataSourceId);
+            if (!isNullOrBlank(moduleKey)) {
+                writeLastUsed(pc, moduleKey, name, dataSourceId);
+                registerLastUsedModuleKey(project, moduleKey);
+            }
         } catch (Throwable ignored) {
             // ignore
         }
     }
 
-    /** T-SI-02：清 last-used 记忆（两个键一起清，避免半截身份残留）。 */
+    /** 单层写入（键构造统一走 {@link LastUsedKeys}；双写两层由 {@link #rememberRunner(Project, String, String, String)} 编排）。 */
+    private static void writeLastUsed(com.intellij.ide.util.PropertiesComponent pc, @Nullable String moduleKey,
+                                      String name, @Nullable String dataSourceId) {
+        pc.setValue(LastUsedKeys.displayNameKey(moduleKey), name);
+        if (dataSourceId == null || dataSourceId.isBlank()) pc.unsetValue(LastUsedKeys.dataSourceIdKey(moduleKey));
+        else pc.setValue(LastUsedKeys.dataSourceIdKey(moduleKey), dataSourceId);
+    }
+
+    /** Kotlin 默认参等价重载：moduleKey 缺省 null（既有「清项目级」行为）。 */
     public static void forgetLastRunner(Project project) {
+        forgetLastRunner(project, null);
+    }
+
+    /**
+     * T-SI-02：清 last-used 记忆（两个键一起清，避免半截身份残留）。
+     *
+     * <p>T-ModuleScopedLastUsed W2：给了 {@code moduleKey} 只清该模块那一层（不牵连其它模块，也不动
+     * 项目级兜底——用户只是在某个模块里换了源，不该把全局兜底一起抹掉）；未给则清项目级。
+     * 未指定模块＝既有语义「清项目级」；同时清掉所有模块级分桶（W4 的「清空学习」
+     * 入口要求彻底清干净，否则用户点了清空、灰字仍显示旧源）。</p>
+     */
+    public static void forgetLastRunner(Project project, @Nullable String moduleKey) {
         try {
             com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
-            pc.unsetValue(LAST_RUNNER_KEY);
-            pc.unsetValue(LAST_RUNNER_ID_KEY);
+            clearLastUsed(pc, moduleKey);
+        } catch (Throwable ignored) {
+            // ignore
+        }
+    }
+
+    /** 单层清理（键构造统一走 {@link LastUsedKeys}）。 */
+    private static void clearLastUsed(com.intellij.ide.util.PropertiesComponent pc, @Nullable String moduleKey) {
+        pc.unsetValue(LastUsedKeys.displayNameKey(moduleKey));
+        pc.unsetValue(LastUsedKeys.dataSourceIdKey(moduleKey));
+    }
+
+    /**
+     * T-ModuleScopedLastUsed W2：清<b>全部</b>层级（项目级 + 已登记的模块分桶）。
+     *
+     * <p><b>不能用通配扫描</b>：{@code PropertiesComponent} 的公开 API 只有 {@code unsetValue/getValue/setValue}
+     * （{@code javap} 实证，无 {@code getAllKeys}），拿不到「有哪些键」。故模块键清单必须<b>由插件自己记</b>：
+     * 每次写模块级记忆时把模块键登记进 {@link #_LAST_USED_MODULE_KEYS_KEY}（逗号分隔，去重），
+     * 清空时按清单逐个 {@code unsetValue}。</p>
+     */
+    public static void forgetAllLastUsed(Project project) {
+        try {
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
+            clearLastUsed(pc, null);
+            for (String moduleKey : registeredLastUsedModuleKeys(project)) {
+                clearLastUsed(pc, moduleKey);
+            }
+            pc.unsetValue(_LAST_USED_MODULE_KEYS_KEY);
+        } catch (Throwable ignored) {
+            // ignore
+        }
+    }
+
+    /** 已登记过的模块键（写模块级记忆时顺带登记，供 {@link #forgetAllLastUsed} 精确清理）。 */
+    public static List<String> registeredLastUsedModuleKeys(Project project) {
+        try {
+            String raw = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+                    .getValue(_LAST_USED_MODULE_KEYS_KEY);
+            if (raw == null) return List.of();
+            List<String> out = new ArrayList<>();
+            for (String part : raw.split(",")) {
+                String trimmed = part.trim();
+                if (!trimmed.isBlank()) out.add(trimmed);
+            }
+            return out;
+        } catch (Throwable ignored) {
+            return List.of();
+        }
+    }
+
+    private static void registerLastUsedModuleKey(Project project, String moduleKey) {
+        try {
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
+            List<String> existing = registeredLastUsedModuleKeys(project);
+            if (existing.contains(moduleKey)) return;
+            List<String> merged = new ArrayList<>(existing);
+            merged.add(moduleKey);
+            pc.setValue(_LAST_USED_MODULE_KEYS_KEY, String.join(",", merged));
         } catch (Throwable ignored) {
             // ignore
         }
@@ -1402,22 +1772,90 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 反射调用 DatabaseRunners.getAttachDataSourceRunners。 */
+    /** Kotlin 默认参等价重载：allDataSources 缺省 false、currentSession 缺省 null（既有 attach 版形态）。 */
     public static List<Object> getAttachDataSourceRunners(PsiFile psiFile, String sql, com.intellij.util.Consumer<Object> sessionConsumer) {
+        return getAttachDataSourceRunners(psiFile, sql, sessionConsumer, false, null);
+    }
+
+    /**
+     * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
+     * {@code sessionConsumer} 在选中 runner 执行后收到 DatabaseSession。
+     *
+     * <p>T-ExplainSwitchNative W8（2026-10-24 用户实测「点击切换数据源只有一个数据源？当前可是
+     * 配置了很多」）：<b>用户主动切换</b>时优先调平台切换专用入口 {@code getSwitchDataSourceRunners}，
+     * 失败（含签名/无会话）则回退 attach 版。</p>
+     *
+     * <p>⚠️ W8-hotfix（同日）：{@code getSwitchDataSourceRunners} 的签名是
+     * <b>{@code (PsiFile, String, DatabaseSession, Consumer)} 四参</b>（javap 实证），比 attach 版多一个
+     * 「当前会话」——首版按三参反射调用必然 {@code NoSuchMethodException}，被 runCatching 吞成空列表
+     * → {@code runners=0} → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条（切换数据源点了就报错）。
+     * 现按真实签名调用；{@code currentSession} 为 null（预览尚未建会话，切换入口的常态）时<b>直接用
+     * attach 版</b>——这正是切换入口此前一直正常工作的形态。</p>
+     *
+     * @param allDataSources 用户主动切换时为 true（尝试切换专用入口）
+     * @param currentSession 当前已 attach 的会话（无则走 attach 版）
+     */
+    public static List<Object> getAttachDataSourceRunners(
+            PsiFile psiFile,
+            String sql,
+            com.intellij.util.Consumer<Object> sessionConsumer,
+            boolean allDataSources,
+            @Nullable Object currentSession) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        List<Object> attach;
         try {
             Class<?> clazz = Class.forName(RUNNERS_CLASS);
             Method method = clazz.getMethod("getAttachDataSourceRunners", PsiFile.class, String.class, com.intellij.util.Consumer.class);
             Object result = method.invoke(null, psiFile, sql, sessionConsumer);
+            List<Object> list = new ArrayList<>();
             if (result instanceof List) {
-                List<Object> list = new ArrayList<>();
                 for (Object o : (List<?>) result) if (o != null) list.add(o);
-                return list;
             }
-            return List.of();
+            attach = list;
         } catch (Throwable e) {
             LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: " + e, e);
-            return List.of();
+            attach = List.of();
+        }
+        if (!allDataSources || currentSession == null) return attach;
+        // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
+        List<Object> switched;
+        try {
+            Class<?> clazz = Class.forName(RUNNERS_CLASS);
+            Method method = clazz.getMethod(
+                    "getSwitchDataSourceRunners",
+                    PsiFile.class,
+                    String.class,
+                    Class.forName(SESSION_CLASS),
+                    com.intellij.util.Consumer.class);
+            Object result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer);
+            List<Object> list = new ArrayList<>();
+            if (result instanceof List) {
+                for (Object o : (List<?>) result) if (o != null) list.add(o);
+            }
+            switched = list;
+        } catch (Throwable e) {
+            LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): " + e, e);
+            switched = List.of();
+        }
+        return switched.isEmpty() ? attach : switched;
+    }
+
+    /**
+     * W8 观测缝（用户 2026-10-24「点击切换数据源只有一个数据源？当前可是配置了很多」）：
+     * 平台 Runner 枚举走 {@code DbImplUtil.getAppropriateDataSourcesForExec} →
+     * {@code DbSqlUtilCore.getAppropriateDataSources} → {@code .filter(CAN_CONNECT_TO)}（反编译实证），
+     * 因此<b>当前不可连接的源不会出现在弹层里</b>（未连过/驱动未就绪）。插件侧无法凭空补出
+     * 合法的平台 Runner（{@code runInDataSource} 是直接建会话、不产 Runner；私有
+     * {@code createDataSourceRunner} 不可用），故本函数只做<b>归因打点</b>，供 UI 在「可选源少于在籍源」
+     * 时给出可行动说明（打开 Database 工具窗口连一次即可恢复可选）。
+     *
+     * @return 在籍源总数（平台不可用时 0）
+     */
+    public static int registeredDataSourceCount(Project project) {
+        try {
+            return DataSourceSettings.getAllDataSources(project).size();
+        } catch (Throwable ignored) {
+            return 0;
         }
     }
 
@@ -1723,6 +2161,15 @@ public final class DataSourceSelector {
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
     public static final long EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L;
 
+    /** T-DialectInferPollution W11：排队执行意图的<b>自有结算</b>超时（毫秒）——占门链 60s 逃生太长，
+     *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
+    public static final long PENDING_EXECUTE_TIMEOUT_MS = 15_000L;
+
+    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    public static String pendingExecuteTimeoutMessage() {
+        return MpSqlVisualizerBundle.message("execute.prepare.timeout");
+    }
+
     /** document 写单次尝试：WriteAction 内 {@link #writeVfTextViaDocument}；失败原因必达日志（旧 getOrDefault 吞 Throwable 的教训）。 */
     public static boolean docWriteOnce(Project project, VirtualFile vf, String sql) {
         try {
@@ -1742,20 +2189,51 @@ public final class DataSourceSelector {
      * T-EC-04：VFS 缺条目裸写路径的防御性收口——raw write 后由调用方 refresh 得到 vf，
      * 此处探测 document（getCachedDocument，不主动创建）或 VFS 内容与 sql 的分叉，
      * 命中则经 {@link #dispatchDocWriteOnEdt} 补一次 document 驱动同步（T-EC-01 同款落盘收口，
-     * BGT 调用安全——写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御
-     * VFS 陈旧条目/裸写与 refresh 之间的外部改写残留。探测包 ReadAction（BGT 无隐式读）。
+     * 写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御 VFS 陈旧条目/
+     * 裸写与 refresh 之间的外部改写残留。
+     *
+     * <p>T-PreviewChainNoise W1：分叉探测<b>按线程分流</b>（T-DevAcceptFix2 ④ 同款定例）。
+     * 此前无条件 {@code vf.inputStream.readBytes()} 读盘，经 {@code createTempPsiFile} 的 EDT 冷路径
+     * （点执行计划 → prepareConsole → 本链）每次都命中平台「Slow operations are prohibited
+     * on EDT」断言（2026-10-23 用户真机日志 ×2 实证；同文件 {@code execFileContentMatches} 早在
+     * T-DevAcceptFix2 ④ 就为同一调用链删过同款读盘，本函数漏回填）。分流判据：</p>
+     * <ul>
+     *  <li>有 document：只看内存态（{@code execFileContentMatches} 同口径——文档是权威视图），
+     *      额外认「内容已相等但未保存」为分叉（F4 收敛形态：doc=新 SQL、磁盘=旧 SQL）；</li>
+     *  <li>无 document + EDT：直接判不分叉（无 document 即不存在 File Cache Conflict 条件
+     *      ——冲突需「已加载且已修改」的文档；且 EDT 冷路径刚由本线程写完文件，无外部改写窗口）；</li>
+     *  <li>无 document + BGT：读盘比较，保留原防御面（SlowOperations 断言仅 EDT 生效）。</li>
+     * </ul>
      *
      * @return true = 执行了修复同步（正常流程 false）
      */
     public static boolean syncExecVfContentIfNeeded(Project project, VirtualFile vf, String sql) throws Throwable {
-        boolean diverged = ReadAction.compute(
-                (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) () -> {
-                    Document doc = FileDocumentManager.getInstance().getCachedDocument(vf);
-                    String disk = new String(vf.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                    return (doc != null && !doc.getText().equals(sql)) || !disk.equals(sql);
-                });
-        if (!diverged) return false;
+        boolean allowDiskRead = !ApplicationManager.getApplication().isDispatchThread();
+        if (!probeExecVfDivergence(vf, sql, allowDiskRead)) return false;
         return DataSourceSelectorResultsKt.dispatchDocWriteOnEdt(project, vf, sql);
+    }
+
+    /**
+     * T-PreviewChainNoise W1：exec 文件分叉探测纯判定（{@link #syncExecVfContentIfNeeded} 的探测段
+     * 抽出，public 供表驱动测试）。三态见 {@link #syncExecVfContentIfNeeded} Javadoc；{@code allowDiskRead}
+     * 由调用方按「当前是否 EDT」给出（生产= {@code !isDispatchThread}，测试可显式注入）。
+     *
+     * <p>document 读取包 ReadAction（BGT 无隐式读；EDT 直调合法）。<b>有 document 分支绝不读盘</b>
+     * ——这正是本抽取的可测不变式（见 ExecVfDivergenceProbeTest「文档在场时盘上再变也不读」用例）。</p>
+     */
+    public static boolean probeExecVfDivergence(VirtualFile vf, String sql, boolean allowDiskRead) throws Throwable {
+        FileDocumentManager fdm = FileDocumentManager.getInstance();
+        Document doc = ReadAction.compute(
+                (com.intellij.openapi.util.ThrowableComputable<Document, Throwable>) () -> fdm.getCachedDocument(vf));
+        if (doc != null) {
+            return !doc.getText().equals(sql) || fdm.isDocumentUnsaved(doc);
+        }
+        if (allowDiskRead) {
+            return ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) () ->
+                            !new String(vf.getInputStream().readAllBytes(), StandardCharsets.UTF_8).equals(sql));
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -1949,6 +2427,29 @@ public final class DataSourceSelector {
     /** T-ExecCopyFix F2c：exec 临时文件 vf+psi 缓存是否仍持有（clearPrepared 不清缓存断言用）。 */
     public static boolean cachedTempPsiFileForTest() {
         return cachedTempPsiFile != null;
+    }
+
+    /**
+     * T-ExplainConsoleFirst W8-fix（2026-10-24）：<b>调用方已确保自己在后台线程</b>时的预热入口。
+     *
+     * <p>与 {@link #prewarmExecTempFile(Project, String, String)} 的区别：后者内部会再 {@code submit} 一个池线程并
+     * {@code get(30s)} 等它——那是给「后台预热」这种非交互场景用的<b>自带预算</b>形态。若从池线程调它，就变成
+     * 「池线程 A 等池线程 B」的嵌套等待；而本入口<b>同步跑完</b>，调用方自己掌控等待与续接。</p>
+     *
+     * <p>必须传 {@code LOG}（调用方持有自己的 logger，便于把失败归到发起方而非本类）。
+     * EDT 上调用直接拒绝并 warn——本链含 refresh/findFile 慢操作。</p>
+     */
+    public static void prewarmExecTempFileOnBackgroundThread(
+            Project project,
+            String sql,
+            @Nullable String renderedDialectName,
+            Logger LOG) {
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            LOG.warn("[M36] prewarmExecTempFileOnBackgroundThread called on EDT — refused (slow ops)");
+            return;
+        }
+        if (project.isDisposed() || sql.isBlank()) return;
+        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG, renderedDialectName);
     }
 
     /**

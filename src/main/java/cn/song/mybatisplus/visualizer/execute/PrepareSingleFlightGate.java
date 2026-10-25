@@ -224,6 +224,20 @@ public final class PrepareSingleFlightGate {
         return intent;
     }
 
+    /**
+     * T-DialectInferPollution W11（2026-10-24）：<b>排队意图自己的有界结算</b>——排队者原本只能
+     * 等 owner 的 60s 逃生被下一链接管，期间 UI 永远「执行中…」（用户真机卡死实测）。排队
+     * 超时只结算排队意图本身（BLOCKED 解除加载态），<b>不动门与 owner</b>——owner 链照常推进，
+     * 用户稍后重试即可。owner 已变更/意图已被消费 → 幂等返回 false。
+     */
+    public synchronized boolean expirePendingExecute(@NotNull QueuedExecuteIntent intent, @NotNull String message) {
+        if (owner != null && owner == intent) return false;
+        if (pendingIntent != intent || !pendingExecute.get()) return false;
+        takePendingExecute();
+        intent.complete(ExecutionSubmission.BLOCKED, message);
+        return true;
+    }
+
     /** 门持有链终结复位（成功/失败/复用收敛均须调用；PASS_THROUGH 链不得调用）。 */
     public synchronized boolean finishPrepare(@Nullable QueuedExecuteIntent expectedOwner) {
         if (!matchesOwner(expectedOwner)) {

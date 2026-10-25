@@ -174,6 +174,9 @@ public class SqlVisualizerExplainTool extends McpToolsetSupport {
                 target.project, target.ds, target.explainSql, target.maxRows,
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                     .getState().getExecutionTimeoutSeconds(),
+                // T-ExplainPwdPrompt：MCP 通道**必须** false（零弹窗红线）——程序性调用弹
+                // 模态密码框即挂死；密码未存时保持 fail closed，错误文本交 agent 可读通道
+                false,
                 outcome -> McpToolsetSupportKt.recordMcpExecution(
                     target.project,
                     selectSql,

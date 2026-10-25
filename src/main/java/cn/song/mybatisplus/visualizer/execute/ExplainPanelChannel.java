@@ -176,6 +176,9 @@ public final class ExplainPanelChannel {
                 McpExplainFormatter.RawResult raw = McpDbExecutor.executeQuery(
                     project, dataSource, explainSql, McpExplainFormatter.DEFAULT_MAX_ROWS,
                     timeoutSeconds,
+                    // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                    //（此前硬编码 false 连坐自 MCP 通道，沙盒实测只出 Access denied 红字）
+                    true,
                     outcome -> {
                         // 审计钩子同步回读（成功/失败两路径都回调一次；取数失败不影响主链）
                         elapsedMs[0] = outcome.elapsedMs();

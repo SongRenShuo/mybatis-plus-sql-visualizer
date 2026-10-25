@@ -179,6 +179,13 @@ public final class McpDbExecutor {
      * 二段式/附加结果集方言的计划「为什么不在上面的行里」的说明由
      * {@code cn.song.mybatisplus.visualizer.sql.ExplainSupport} 表单源持有。null（默认）走既有
      * executeQuery 通道，<b>行为逐字节不变</b>（其余 9 家方言与其他调用点的防回归面）。</p>
+     *
+     * <p>T-ExplainPwdPrompt（2026-10-24）：{@code askPassword} <b>必填</b>——编译期强迫每个调用点按通道
+     * 表态，不设默认值（默认 false 会让未来新增的 UI 调用点「静默不弹」重演缺陷；默认 true 会
+     * 击穿 MCP 零弹窗红线）。UI 上下文（面板执行计划/预估行数）传 true：数据源未存密码时交
+     * 平台原生密码框（Builder 默认即 true，javap 构造器字节码实证；只在「未存」时问，已存密码
+     * 零变化）；MCP 工具（{@code SqlVisualizerExplainTool}）传 false：程序性调用弹模态框即挂死，
+     * 维持零弹窗 fail closed。</p>
      */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
@@ -186,13 +193,14 @@ public final class McpDbExecutor {
         String sql,
         int maxRows,
         int timeoutSeconds,
+        boolean askPassword,
         Consumer<ExecutedOutcome> onExecuted,
         String channelNote
     ) throws Exception {
         long started = System.currentTimeMillis();
         try {
             McpExplainFormatter.RawResult result =
-                executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, channelNote);
+                executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, askPassword, channelNote);
             notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource);
             return result;
         } catch (Throwable e) {
@@ -213,27 +221,29 @@ public final class McpDbExecutor {
         }
     }
 
-    /** Kotlin 默认参数等价重载：channelNote 缺省 null（既有 executeQuery 通道）。 */
+    /** Kotlin 默认参数等价重载：channelNote 缺省 null（askPassword 必填，T-ExplainPwdPrompt）。 */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
         Object dataSource,
         String sql,
         int maxRows,
         int timeoutSeconds,
+        boolean askPassword,
         Consumer<ExecutedOutcome> onExecuted
     ) throws Exception {
-        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, onExecuted, null);
+        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, askPassword, onExecuted, null);
     }
 
-    /** Kotlin 默认参数等价重载：onExecuted/channelNote 缺省 null（未接线的调用点零开销）。 */
+    /** Kotlin 默认参数等价重载：onExecuted/channelNote 缺省 null（askPassword 必填，T-ExplainPwdPrompt）。 */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
         Object dataSource,
         String sql,
         int maxRows,
-        int timeoutSeconds
+        int timeoutSeconds,
+        boolean askPassword
     ) throws Exception {
-        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, null, null);
+        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, askPassword, null, null);
     }
 
     /**
@@ -298,15 +308,34 @@ public final class McpDbExecutor {
         String sql,
         int maxRows,
         int timeoutSeconds,
+        boolean askPassword,
         String channelNote
     ) throws Exception {
         int rowBudget = McpDbExecutorKt.channelRowBudget(maxRows);
         Object manager = Class.forName(DCM).getMethod("getInstance").invoke(null);
         Object builder = Class.forName(DCM).getMethod("build", Project.class, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource);
+        // T-ExplainPwdPrompt（2026-10-24）：askPassword 按调用点通道表态（见 executeQuery Javadoc）——
+        // 此前硬编码 false（2026-09-15 T-McpToolset 为 MCP 立的零弹窗红线），面板 EXPLAIN 与预估
+        // 行数旁路切到本通道时被连坐：数据源未存密码不弹原生密码框，直接 Access denied 红字
+        //（沙盒实测截图 2026-10-23）。平台 Builder 默认即 true（javap 构造器字节码 iconst_1），
+        // 询问链在 DatabaseConnectionEstablisher（suspend，含凭据失败重试）。
         Class.forName(BUILDER).getMethod("setAskPassword", Boolean.TYPE)
-            .invoke(builder, false);
-        Object ref = Class.forName(BUILDER).getMethod("createBlocking").invoke(builder);
+            .invoke(builder, askPassword);
+        // T-PreviewChainNoise W2：建连前补齐阻塞上下文（见 withDbBlockingContext Javadoc）——
+        // 裸池线程（ExplainPanelChannel.executeStructured 的 executeOnPooledThread）上
+        // createBlocking 内部 runBlockingCancellable 缺 Job 即打
+        // "There is no ProgressIndicator or Job in this thread" SEVERE（真机 2026-10-23 实证）。
+        Object ref = McpDbExecutorKt.withDbBlockingContext(
+            // Kotlin lambda 可直接抛受检异常并原样外传；Java Supplier 装不下——sneakyThrow 擦除类型
+            // 抛出（运行时抛的仍是原实例，外层 catch(Throwable)/ITE 解包语义与 master 逐字一致）。
+            () -> {
+                try {
+                    return Class.forName(BUILDER).getMethod("createBlocking").invoke(builder);
+                } catch (Throwable t) {
+                    throw McpToolsetSupport.<RuntimeException>sneakyThrow(t);
+                }
+            });
         try {
             Object connection = Class.forName(GUARDED_REF).getMethod("get").invoke(ref);
             Object remoteConnection = findInterfaceMethod(connection, CONNECTION_CORE, CONNECTION, "getRemoteConnection")

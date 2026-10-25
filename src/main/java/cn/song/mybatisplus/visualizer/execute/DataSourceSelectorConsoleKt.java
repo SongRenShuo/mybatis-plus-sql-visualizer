@@ -398,8 +398,13 @@ public final class DataSourceSelectorConsoleKt {
             DataSourceSelector.sharedDialectGateRequest = dialectGateRequest;
             DataSourceSelector.sharedDialectGateCallback = onDialectGate;
             // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
-            // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字
-            if (dataSourceName != null) rememberRunner(project, dataSourceName, consoleDataSourceId(console));
+            // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字。
+            // T-ModuleScopedLastUsed W2：带上模块键，让「上次使用」按模块分桶（同时仍写项目级
+            // 作无模块上下文的兜底）；moduleKey 缺失时行为与改前逐字一致。
+            if (dataSourceName != null) {
+                rememberRunner(project, dataSourceName, consoleDataSourceId(console),
+                        dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
+            }
 
             if (onConsole != null) onConsole.accept(component);
 

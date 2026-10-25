@@ -114,7 +114,7 @@ public final class DataSourceSelectorResultsKt {
                 LOG.debug("[M36] result tab retry cancelled (generation " + generation + " != " + swapGeneration + ")");
                 return;
             }
-            String err = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
+            String err = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG, sqlText, project);
             if (err != null && !err.equals(lastReportedError)) {
                 timerHolder[0].stop();
                 runPostExecutionInvalidate(sqlText, LOG);
@@ -171,7 +171,7 @@ public final class DataSourceSelectorResultsKt {
                     timerHolder[0].stop();
                     runPostExecutionInvalidate(sqlText, LOG);
                     LOG.info("[M36] result tab not appeared after " + attempts[0] + " attempts (dumb=" + dumb + ")");
-                    String realError = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
+                    String realError = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG, sqlText, project);
                     // T-CEC-03：判据认不出的失败也要有下文——控制台确有新增输出（去掉本次 SQL
                     // 回显后的残余）时如实呈现，而不是把语法错归因成密码/驱动（真机 P15 实证）。
                     String residue = realError == null
@@ -267,6 +267,37 @@ public final class DataSourceSelectorResultsKt {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             boolean forceChoose) {
+        chooseAndPrepare(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
+                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose, null, false);
+    }
+
+    /**
+     * T-ExplainFailUx W4 / T-ExplainSwitchNative W6 扩展形态。
+     *
+     * @param preferredRunnerName T-ExplainFailUx W4（2026-10-24 用户实测「为什么我需要选两次数据源」）：
+     *                            <b>用户已显式指定数据源名</b>——按名在 runner 枚举里唯一命中就直接建链，
+     *                            <b>不再弹平台选择器</b>（此前预览的数据源下拉调 {@code prepareConsole(forceChoose=true)}，
+     *                            而 forceChoose 的语义恰是「强制弹窗」，于是用户在自己的下拉里选一次、
+     *                            平台选择器又让他选第二次）。语义边界：只跳过「选择」这一步，不跳过方言闸
+     *                            （闸门在 sessionConsumer 内照旧执行）；名字未命中/同名歧义 → 回落既有弹窗（不猜）。
+     * @param forceChoosePopup    T-ExplainSwitchNative W6：必须弹选择器（跳过 {@code shouldBeChosenIfAlone} 直选分支）。
+     */
+    public static void chooseAndPrepare(
+            @NotNull Project project,
+            @NotNull String sql,
+            boolean executeAfterPrepare,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose,
+            @Nullable String preferredRunnerName,
+            boolean forceChoosePopup) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort");
@@ -288,10 +319,26 @@ public final class DataSourceSelectorResultsKt {
         PrepareGateDecision gateDecision = prepareGate.tryEnter(executeAfterPrepare, queuedIntent);
         if (gateDecision == PrepareGateDecision.QUEUE_ONLY) {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain");
+            // T-DialectInferPollution W11（2026-10-24 用户真机「点执行 SQL 卡住」）：排队意图
+            // 原本只能等 owner 的 60s 逃生被下一链接管才结算——排队者自身无触发点，UI 永远
+            // 「执行中…」。给排队意图自己的有界结算：15s 未消费即 BLOCKED 解除加载态（门不动，
+            // owner 链照常；用户重试即可）。
+            final QueuedExecuteIntent queuedForTimeout = queuedIntent;
+            javax.swing.Timer pendingTimer = new javax.swing.Timer((int) DataSourceSelector.PENDING_EXECUTE_TIMEOUT_MS,
+                    event -> {
+                        if (prepareGate.expirePendingExecute(queuedForTimeout, DataSourceSelector.pendingExecuteTimeoutMessage())) {
+                            ((javax.swing.Timer) event.getSource()).stop();
+                        }
+                    });
+            pendingTimer.setRepeats(false);
+            pendingTimer.start();
             if (callback != null) callback.accept(true);
             return;
         }
         final boolean ownsGate = gateDecision == PrepareGateDecision.PROCEED;
+        if (gateDecision == PrepareGateDecision.PROCEED) {
+            LOG.info("[M36][T-FirstExec F1] prepare gate PROCEED: owning prepare chain (executeAfterPrepare=" + executeAfterPrepare + ")");
+        }
         if (gateDecision == PrepareGateDecision.PASS_THROUGH) {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: preview prepare passes through (no gate ownership)");
         }
@@ -402,7 +449,9 @@ public final class DataSourceSelectorResultsKt {
         //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
         // T-DialectGateExit：forceChoose（用户点「切换数据源」）同样跳过——否则点了等于没点。
         if (allowsSilentLastUsed(executeAfterPrepare, forceChoose)) {
-            LastUsedMemory memory = lastUsedRunner(project);
+            // T-ModuleScopedLastUsed W2：静默复用也按模块读——模块 A 上次用的源不该被模块 B 复用。
+            String moduleKeyForLastUsed = dialectGateRequest != null ? dialectGateRequest.moduleKey() : null;
+            LastUsedMemory memory = lastUsedRunner(project, moduleKeyForLastUsed);
             LastUsedResolution resolution = resolveLastUsedRunnerIndex(memory,
                     runners.stream().map(DataSourceSelector::getRunnerName).collect(java.util.stream.Collectors.toList()),
                     id -> {
@@ -419,18 +468,30 @@ public final class DataSourceSelectorResultsKt {
                 String matchedName = getRunnerName(matched);
                 LOG.info("[M36] silent reuse last runner: " + matchedName + " (memory id=" + memory.dataSourceId() + ")");
                 chosenRunnerName[0] = matchedName;
-                runRunner(project, matched, true, runnerError);
+                runRunner(project, matched, true, runnerError, moduleKeyForLastUsed);
                 if (callback != null) callback.accept(true);
                 return;
             }
             if (resolution.ambiguous()) {
                 LOG.info("[M36] last-used memory ambiguous (id=" + memory.dataSourceId() + ", name=" + memory.displayName()
                         + ") - drop memory, show popup");
-                forgetLastRunner(project);
+                // 只清该模块那一层：其它模块的记忆与项目级兜底不该被一处的歧义连坐。
+                forgetLastRunner(project, moduleKeyForLastUsed);
             }
         }
 
-        if (runners.isEmpty()) {
+        if (preferredRunnerName != null
+                && runners.stream().filter(r -> getRunnerName(r).equals(preferredRunnerName)).count() == 1) {
+            // T-ExplainFailUx W4：用户已在下拉里显式指定源名 → 按名唯一命中直接建链，不再弹选择器
+            //（一次选择即生效；名字未命中/歧义回落弹窗，不猜）。
+            Object picked = runners.stream().filter(r -> getRunnerName(r).equals(preferredRunnerName)).findFirst().orElse(null);
+            LOG.info("[M36] preferred runner by name: " + preferredRunnerName + " (skip platform chooser)");
+            chosenRunnerName[0] = preferredRunnerName;
+            String moduleKeyForPreferred = dialectGateRequest != null ? dialectGateRequest.moduleKey() : null;
+            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName, moduleKeyForPreferred);
+            runRunner(project, picked, !executeAfterPrepare, runnerError, moduleKeyForPreferred);
+            if (callback != null) callback.accept(true);
+        } else if (runners.isEmpty()) {
             // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
             //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
             // 真无数据源保持既有引导文案。
@@ -466,10 +527,11 @@ public final class DataSourceSelectorResultsKt {
             submission.accept(ExecutionSubmission.BLOCKED);
             if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, null);
             if (callback != null) callback.accept(false);
-        } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0))) {
+        } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0)) && !forceChoosePopup) {
             LOG.info("[M36] single runner, run directly");
             chosenRunnerName[0] = getRunnerName(runners.get(0));
-            runRunner(project, runners.get(0), !executeAfterPrepare, runnerError);
+            runRunner(project, runners.get(0), !executeAfterPrepare, runnerError,
+                    dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
             if (callback != null) callback.accept(true);
         } else {
             LOG.info("[M36] show popup with " + runners.size() + " runners");
@@ -481,7 +543,8 @@ public final class DataSourceSelectorResultsKt {
                 }
                 LOG.info("[M36] popup selected: " + (runner != null ? getRunnerName(runner) : "null"));
                 if (!executeAfterPrepare && runner != null) {
-                    rememberRunnerName(project, getRunnerName(runner));
+                    rememberRunnerName(project, getRunnerName(runner),
+                            dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
                 }
                 if (runner != null) chosenRunnerName[0] = getRunnerName(runner);
                 if (callback != null) callback.accept(runner != null);
@@ -491,7 +554,8 @@ public final class DataSourceSelectorResultsKt {
                     submission.accept(ExecutionSubmission.CANCELLED);
                 }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, false, runnerError);
+                if (runner != null) runRunner(project, runner, false, runnerError,
+                        dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
             });
         }
     }
@@ -557,7 +621,9 @@ public final class DataSourceSelectorResultsKt {
         if (!valid || !reuseIdentityAccepted(identity)) {
             LOG.warn("[M36] shared console identity rejected (ds=" + dsName + ", isValid=" + valid + ", " + identity + "), drop session");
             dropSharedConsole();
-            if (identity != null && Boolean.FALSE.equals(identity.dsInFacade)) forgetLastRunner(project);
+            if (identity != null && Boolean.FALSE.equals(identity.dsInFacade)) {
+                forgetLastRunner(project, dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
+            }
             return false;
         }
         try {
@@ -1222,7 +1288,9 @@ public final class DataSourceSelectorResultsKt {
                 LOG.info("[M36] results refresh cancelled (generation " + generation + " != " + swapGeneration + ")");
                 return;
             }
-            String err = extractConsoleError(shared != null ? shared : preparedConsole, LOG);
+            // T-ExplainConsoleFirst W7：本函数没有 project 参数（结果区刷新的通用组件），
+            // 故不传升格所需的工程上下文——跨源列证据在另两处（早检 / 超时兜底）生效。
+            String err = extractConsoleError(shared != null ? shared : preparedConsole, LOG, sqlText);
             if (err != null && !err.equals(lastReportedError)) {
                 timer.stop();
                 lastReportedError = err;
@@ -1571,8 +1639,14 @@ public final class DataSourceSelectorResultsKt {
     }
 
 
-    /** {@link #prewarmExecTempFile} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
+    /** {@link #prewarmExecTempFileInner} 的 Kotlin 默认参等价重载（renderedDialectName 缺省 null）。 */
     public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG) {
+        prewarmExecTempFileInner(project, sql, LOG, null);
+    }
+
+    /** {@link #prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
+    public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG,
+                                                @Nullable String renderedDialectName) {
         lastTempFileFailure = null;
         // BGT 不得持写意向锁同步 refresh：刷新会话推进也需要 WIL/EDT，会互等自锁。
         // EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，必须保留；这里只移除后台预热包装。
@@ -1621,11 +1695,10 @@ public final class DataSourceSelectorResultsKt {
             LOG.warn("[M36] exec prewarm syncVfContent failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return;
         }
-        // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
-        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf;
-        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
-            dialectMappedVf = vf;
-        }
+        // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
+        // O-145 W7：预览提供了渲染方言时 exec PSI 同步该事实；旧调用仍走 O-136 数据源路由
+        //（mapDialectBeforePsi 内部维护 dialectMappedVf/dialectMappedLanguageId 幂等短路）。
+        DataSourceSelector.mapDialectBeforePsi(project, vf, LOG, renderedDialectName);
         PsiFile psi;
         try {
             psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
@@ -1875,6 +1948,22 @@ public final class DataSourceSelectorResultsKt {
      */
     @Nullable
     public static String extractConsoleError(Object console, Logger LOG) {
+        return extractConsoleError(console, LOG, null, null);
+    }
+
+    /** Kotlin 默认参等价重载：project 缺省 null（不判跨源升格）。 */
+    @Nullable
+    public static String extractConsoleError(Object console, Logger LOG, @Nullable String sqlText) {
+        return extractConsoleError(console, LOG, sqlText, null);
+    }
+
+    /**
+     * @param sqlText T-ExplainConsoleFirst W7：被执行 SQL——用于 {@code Unknown column} 的跨源升格判定（null = 不判定）。
+     * @param project T-ExplainConsoleFirst W7：升格判定要枚举在籍数据源（null = 不判定）。
+     */
+    @Nullable
+    public static String extractConsoleError(Object console, Logger LOG, @Nullable String sqlText,
+                                             @Nullable Project project) {
         if (console == null) return null;
         try {
             String text = newConsoleText(console);
@@ -1912,7 +2001,67 @@ public final class DataSourceSelectorResultsKt {
             // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
             // 看不出这一层；带上上下文后一眼可归因
             String ctxLine = ExecConsoleContext.describeContext(console);
-            String enriched = ctxLine != null ? excerpt + "\n" + ctxLine : excerpt;
+            // T-ExplainConsoleFirst W7（2026-10-24 用户实测 `Unknown column 'first_name' in 'field list'`
+            // ＋上下文三处全是 mp_demo）：源没选错、错的是「SQL 与库」这一对——`first_name` 属 jpa_demo
+            // 的同名 user 表，而 mp_demo 的 user 没有该列。既有分类把 `Unknown column` 一律排除在
+            // WRONG_TARGET 外（「列级问题换源解决不了」），对拼错列名成立，对「同名表不同列集」漏判。
+            // 这里按证据升格：当前源确证无此列 ∧ 另一在籍源的同名表带此列 → 明说「换个源能解决」。
+            // 纯加法：判据不成立（缓存未热/任何源都没有/当前源其实有）一律不附加，报错原文不变。
+            String crossSourceHint = null;
+            try {
+                if (sqlText != null && !sqlText.isBlank() && project != null) {
+                    List<Object> dataSources = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                            .allDataSourcesForEvidence(project);
+                    Object current = null;
+                    if (dataSources != null) {
+                        // 反射取控制台数据源（`JdbcConsole.getDataSource()`，与 consoleDataSourceId 同口径）——
+                        // 本文件在 Community 下也会加载，不得直接引用 DBN 类。
+                        try {
+                            current = console.getClass().getMethod("getDataSource").invoke(console);
+                        } catch (Throwable ignored) {
+                            current = null;
+                        }
+                    }
+                    if (dataSources != null && current != null) {
+                        int currentIdx = -1;
+                        for (int i = 0; i < dataSources.size(); i++) {
+                            if (dataSources.get(i) == current) {
+                                currentIdx = i;
+                                break;
+                            }
+                        }
+                        if (currentIdx >= 0) {
+                            List<java.util.function.Function<String, java.util.Set<String>>> sources =
+                                    cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                                            .columnNameSourcesCached(dataSources);
+                            CrossSourceColumnEvidence.Evidence evidence = CrossSourceColumnEvidence.assess(
+                                    /* errorText = */ excerpt,
+                                    /* sql = */ sqlText,
+                                    /* currentSourceColumns = */ currentIdx < sources.size() ? sources.get(currentIdx) : null,
+                                    /* otherSourcesColumns = */ filterIndexesExcept(sources, currentIdx));
+                            if (evidence != null) {
+                                LOG.info("[W7] cross-source column evidence hit: table=" + evidence.table()
+                                        + ", column=" + evidence.column());
+                                crossSourceHint = MpSqlVisualizerBundle.message("execute.error.crossSourceColumn",
+                                        evidence.column(), evidence.table());
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+                crossSourceHint = null;   // runCatching{...}.getOrNull() 语义：升格失败不附加
+            }
+            StringBuilder enrichedBuilder = new StringBuilder();
+            if (excerpt != null) enrichedBuilder.append(excerpt);
+            if (ctxLine != null) {
+                if (enrichedBuilder.length() > 0) enrichedBuilder.append('\n');
+                enrichedBuilder.append(ctxLine);
+            }
+            if (crossSourceHint != null) {
+                if (enrichedBuilder.length() > 0) enrichedBuilder.append('\n');
+                enrichedBuilder.append(crossSourceHint);
+            }
+            String enriched = enrichedBuilder.toString();
             LOG.info("[M36] extracted console error: " + (enriched.length() > 200 ? enriched.substring(0, 200) : enriched));
             return enriched;
         } catch (Throwable ignored) {
@@ -1920,11 +2069,28 @@ public final class DataSourceSelectorResultsKt {
         }
     }
 
+    /** T-ExplainConsoleFirst W7：filterIndexed { i, _ -> i != currentIdx } 的 Java 等价（升格的「其余在籍源」清单）。 */
+    private static List<java.util.function.Function<String, java.util.Set<String>>> filterIndexesExcept(
+            List<java.util.function.Function<String, java.util.Set<String>>> sources, int exceptIndex) {
+        List<java.util.function.Function<String, java.util.Set<String>>> out = new ArrayList<>();
+        for (int i = 0; i < sources.size(); i++) {
+            if (i != exceptIndex) out.add(sources.get(i));
+        }
+        return out;
+    }
+
+
+    /** Kotlin 默认参等价重载：moduleKey 缺省 null（既有项目级行为）。 */
+    public static void runRunner(Project project, Object runner, boolean silent, Consumer<String> onError) {
+        runRunner(project, runner, silent, onError, null);
+    }
 
     /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板行内回调 + 按 silent 决定是否模态引导。
      * T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
-     * /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。 */
-    public static void runRunner(Project project, Object runner, boolean silent, Consumer<String> onError) {
+     * /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。
+     * @param moduleKey T-ModuleScopedLastUsed：失败清理只清该模块那一层（不传＝既有项目级行为）。 */
+    public static void runRunner(Project project, Object runner, boolean silent, Consumer<String> onError,
+                                 @Nullable String moduleKey) {
         // 空操作 Runner（平台组项的 EmptyRunnable）不能执行：run() 立即返回且永不回调 session，
         // 只会把准备门拖到 60s 超时。立即结算错误，让面板红字给出可行动原因。
         if (ExecDialectRouting.isNoOpRunner(runner)) {
@@ -1956,7 +2122,8 @@ public final class DataSourceSelectorResultsKt {
             if (onError != null) onError.accept(failMsg);
             if (silent) {
                 // T-SI-02：两个键一起清（只清旧键会留下指认另一个数据源的 UUID 身份）
-                forgetLastRunner(project);
+                // T-ModuleScopedLastUsed：带上模块键，只清该模块层（项目级兜底不动）
+                forgetLastRunner(project, moduleKey);
                 return;
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）

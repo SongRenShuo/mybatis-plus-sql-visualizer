@@ -36,6 +36,34 @@ public static int channelRowBudget(int requested) {
 }
 
 /**
+ * T-PreviewChainNoise W2：Database 反射链的<b>阻塞上下文兜底</b>（顶层函数，非 object 成员
+ * ——与 {@link #drainWarnings} 同款理由：测试加载本文件门面不必触发 {@link McpDbExecutor} 的 Logger 初始化）。
+ *
+ * <p>平台事实（243 sources {@code progress/coroutines.kt:138-143}）：{@code DatabaseConnectionManager$Builder
+ * .createBlocking} 内部走 {@code runBlockingCancellable}，当前线程既无全局 ProgressIndicator 又无
+ * Job（{@code executeOnPooledThread} 起的裸池线程即此形态）时打
+ * {@code IllegalStateException: There is no ProgressIndicator or Job in this thread}。同一坑
+ * {@code PreviewSideQuery} 已修（T-PreviewSideQuery），2026-10-23 用户真机日志证明
+ * {@code ExplainPanelChannel.executeStructured} 是漏网第二处——故兜底下沉到唯一入口 {@link McpDbExecutor}，
+ * 未来任何新调用点不再依赖各自记得包一层。</p>
+ *
+ * <p><b>已有指示器时不得替换</b>：{@code runProcess(EmptyProgressIndicator)} 会顶掉线程上真实指示器，
+ * 外层取消（MCP 工具跑在协程里带 Job）随之失效——所以只在缺上下文时补空指示器
+ * （查询本身不读取消状态：只读短查询，超时由驱动级 {@code setQueryTimeout} 护栏负责）。</p>
+ */
+public static <T> T withDbBlockingContext(java.util.function.Supplier<T> block) {
+    com.intellij.openapi.progress.ProgressManager pm = com.intellij.openapi.progress.ProgressManager.getInstance();
+    if (pm.getProgressIndicator() != null) {
+        return block.get();
+    }
+    // 显式 Computable 局部变量：runProcess 有 Runnable/Computable 双重载，裸 lambda/method-ref 会有歧义
+    com.intellij.openapi.util.Computable<T> computable = block::get;
+    return pm.runProcess(
+            computable,
+            new com.intellij.openapi.progress.EmptyProgressIndicator());
+}
+
+/**
  * warnings 采集面二元组：getAllWarnings 产出原始消息清单（可空），clearWarnings 清空驱动缓冲。
  * Kotlin 侧为 {@code Pair<() -> List<*>?, () -> Unit>}，Java 侧以 record + 函数式接口同构表达。
  */
