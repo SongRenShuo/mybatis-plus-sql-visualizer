@@ -282,12 +282,15 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         )
     }
 
-    /** 方言与类位置排在最前面丢（仅次于影响行数）。 */
+    /** 方言与类位置排在最前面丢（仅次于影响行数）；类位置内部先丢行号。 */
     fun test丢序_方言与类位置靠前() {
         val p = HeaderFragmentPriority
-        assertTrue("库角标应先于类名丢", p.DATABASE < p.SOURCE_NAME)
-        assertTrue("类名应先于源码行号丢（粗到细）", p.SOURCE_NAME < p.SOURCE_LINE)
-        assertTrue("类位置应先于徽章丢", p.SOURCE_LINE < p.TEMPLATE_BADGE)
+        assertTrue("库角标应先于源码行号丢", p.DATABASE < p.SOURCE_LINE)
+        assertTrue(
+            "**源码行号应先于类名丢**：':183' 脱离类名毫无意义，而类名单独出现仍能定位到文件",
+            p.SOURCE_LINE < p.SOURCE_NAME,
+        )
+        assertTrue("类位置应先于徽章丢", p.SOURCE_NAME < p.TEMPLATE_BADGE)
     }
 
     /**
