@@ -140,31 +140,30 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
     }
 
     /**
-     * 关键语义：宽度不足时**先剥日期、保时刻**，而不是整段丢掉时间。
+     * 关键语义修正（用户 2026-10-26 定案）：**时间格式严格跟随设置，不因宽度而改写**。
+     *
+     * 一度实现过「宽度不足时剥掉日期只留时刻」，但那是按宽度偷偷改写用户配置的
+     * `logTimestampFormat`——同一份配置在宽栏与窄栏显示成两种格式，用户无从察觉。
+     * 现改为：时间整段不可拆，宽度不足时按优先级丢其他片段，全丢完才顺序截断。
      */
-    fun test头部裁剪_先剥日期保时刻() {
+    fun test头部裁剪_绝不改写时间格式() {
         val set = headerSet()
-        // 实测宽度：`#1 `=30 / `[2026-10-26 09:42:02] `=220 / `1ms `=40 / `[MySQL] `=80 /
-        // `User:41 `=80 / `同结构 24 条 `=90，合计 540。
-        // 剥日期后为 430（`[09:42:02] ` 11 字 = 110px）。给 440 → 只剥日期即满足。
+        // 给一个「去掉时间会富余、但必须优先丢库角标」的窄档
         val out = clipFragmentsByPriority(set, 440) { t, _ -> measure10(t) }
         val joined = out.joinToString("") { it.text }
-        assertTrue("时刻应保留: $joined", joined.contains("09:42:02"))
-        assertFalse("日期应已剥掉: $joined", joined.contains("2026-10-26"))
-        assertTrue("库角标应保留: $joined", joined.contains("[MySQL]"))
-        assertTrue("来源应保留: $joined", joined.contains("User:41"))
-        assertTrue("徽章应保留: $joined", joined.contains("同结构"))
+        assertTrue(
+            "时间必须原样保留完整格式（不得剥成只剩时刻）: $joined",
+            joined.contains("[2026-10-26 09:42:02]"),
+        )
     }
 
-    /** 更窄时：日期之后丢掉影响行数（本用例无影响行数，验证库角标仍在来源之前被丢）。 */
-    fun test头部裁剪_极窄时才丢库角标与徽章() {
+    /** 窄档下先丢库角标与徽章，时间与序号保留。 */
+    fun test头部裁剪_极窄时丢库角标与徽章保留时间() {
         val set = headerSet()
-        // 剥完日期后 430；给 270 → 还需省 160：丢库角标（80）+ 徽章（90）刚好够。
-        // 注意此时时刻仍在（时刻属 NEVER 级，不主动丢）。
-        val out = clipFragmentsByPriority(set, 270) { t, _ -> measure10(t) }
+        val out = clipFragmentsByPriority(set, 300) { t, _ -> measure10(t) }
         val joined = out.joinToString("") { it.text }
-        assertTrue("序号必须最后才丢: $joined", joined.contains("#1"))
-        assertTrue("时刻应保留（NEVER 级不主动丢）: $joined", joined.contains("09:42:02"))
+        assertTrue("时刻应保留: $joined", joined.contains("09:42:02"))
+        assertTrue("序号应保留: $joined", joined.contains("#1"))
         assertFalse("极窄下库角标应被丢: $joined", joined.contains("[MySQL]"))
         assertFalse("极窄下徽章应被丢: $joined", joined.contains("同结构"))
     }
@@ -172,7 +171,7 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
     /** 序号是最后才丢的锚点：即使很窄也要尽量保住。 */
     fun test头部裁剪_序号最后才丢() {
         val set = headerSet()
-        val out = clipFragmentsByPriority(set, 350) { t, _ -> measure10(t) }
+        val out = clipFragmentsByPriority(set, 380) { t, _ -> measure10(t) }
         val joined = out.joinToString("") { it.text }
         assertTrue("序号应保留: $joined", joined.contains("#1"))
     }

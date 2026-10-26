@@ -202,25 +202,26 @@ internal fun clipSqlFragments(
 /**
  * 头部行片段在宽度不足时的**丢弃顺序**（数值越小越先丢）。
  *
- * 用户定案的优先级（2026-10-26）：日期 → 影响行数 → 库角标 → 同结构徽章 → 来源行号 → 序号。
+ * 优先级（2026-10-26 定案，同日修正）：影响行数 → 库角标 → 同结构徽章 → 来源行号 → 序号。
+ *
+ * **时间片段整段不可拆**（见 §修正记录）：一度打算「宽度不足时剥掉日期、只留时刻」，
+ * 但那等于按宽度偷偷改写用户配置的 `logTimestampFormat`——设置里写的是
+ * `yyyy-MM-dd HH:mm:ss`，显示就该是它。宽度不够时宁可按顺序截断（末尾 `…`），
+ * 也不该让同一份配置在宽栏/窄栏下显示成两种格式。故时间整段不可拆。
+ *
  * 语义依据：
- *  - **日期**最占地方（`2026-10-26 ` 占 11 字符）且信息密度最低——单次会话内跨天罕见，
- *    跨天时预览窗仍能看到完整时间戳；
- *  - **影响行数**只有 DML 有，且排查时很少是第一判据；
- *  - **库角标**是定长短串，丢了也只是少一层确认（本项目多数场景单数据源）；
+ *  - **影响行数**只有 DML 有，排查时很少是第一判据；
+ *  - **库角标**是定长短串，丢了只是少一层确认（本项目多数场景单数据源）；
  *  - **同结构徽章**是 N+1 线索，丢之前应尽量保；
- *  - **来源行号**是定位锚点，只在极窄时才退化（保留类名、丢行号）；
+ *  - **来源行号**是定位锚点，只在极窄时才退化；
  *  - **序号**最后丢——它是最常用的引用锚点（「#42 那条」）。
  *
- * 未列入的片段（时刻、耗时、类名、MCP、去重计数）按 [DROP_PRIORITY_NEVER] 处理：
- * 它们排在最后、只在整个头部行真的塞不下时才被截断。
+ * 未列入的片段（时间、耗时、类名、MCP、去重计数）不参与主动丢弃，
+ * 只在整个头部行真的塞不下时被 [clipSqlFragments] 按顺序截断。
  */
 internal object HeaderFragmentPriority {
-    /** 日期段（`yyyy-MM-dd ` 前缀，仅当时间片段以此开头时剥离）。 */
-    const val DATE_PART = 1
-
     /** 影响行数 `(N rows)`。 */
-    const val UPDATE_COUNT = 2
+    const val UPDATE_COUNT = 1
 
     /** 目标库角标 `[MySQL]`。 */
     const val DATABASE = 3
@@ -285,19 +286,8 @@ internal fun clipFragmentsByPriority(
     for (f in fragments) total += measure(f.text, f.attributes)
     if (total <= maxWidth) return fragments
 
-    // 第一步：剥日期（独立于优先级循环）。
-    // 时间片段本身是 NEVER 级（时刻不能丢），但它的**日期段**是 [HeaderFragmentPriority.DATE_PART]。
-    // 两件事必须分开：先尝试剥日期，再进优先级循环——否则「时间 = NEVER」会让日期永远剥不掉
-    // （曾踩过：把日期剥离塞进优先级循环，结果 levels 里根本没有时间片段）。
-    val dateIdx = fragments.indexOfFirst { isDatePrefixed(it) }
-    if (dateIdx >= 0) {
-        val stripped = stripDatePrefix(fragments[dateIdx])
-        val afterDate = fragments.toMutableList().also { it[dateIdx] = stripped }
-        var strippedTotal = 0
-        for (f in afterDate) strippedTotal += measure(f.text, f.attributes)
-        if (strippedTotal <= maxWidth) return afterDate
-        return dropByPriority(afterDate, maxWidth, measure)
-    }
+    // 时间格式严格跟随设置（用户 2026-10-26 明确）：绝不为适配宽度改写时间文本，
+    // 故这里没有「剥日期」一步——只按优先级丢其他片段，整段放不下才顺序截断。
     return dropByPriority(fragments, maxWidth, measure)
 }
 
@@ -329,36 +319,6 @@ private fun dropByPriority(
     return clipSqlFragments(kept, maxWidth, measure)
 }
 
-/**
- * 片段是否是「日期+时刻」形态。
- *
- * 实际片段来自 [formatTimestampFragment]，形态是 `[2026-10-26 09:42:02] `（带方括号）——
- * 故必须容忍前导 `[`，否则剥日期这条规则永远不生效（踩过一次：单测里手写无括号形态能过、
- * 真实渲染不生效）。
- */
-private fun isDatePrefixed(fragment: SqlTextFragment): Boolean {
-    val text = fragment.text
-    val start = if (text.startsWith("[")) 1 else 0
-    // `yyyy-MM-dd` 共 10 位，后跟一个空格
-    if (text.length < start + 11) return false
-    return text[start].isDigit() &&
-        text[start + 4] == '-' &&
-        text[start + 7] == '-' &&
-        text[start + 10] == ' '
-}
-
-/** 剥掉日期前缀，保留时刻（带方括号时一并保留括号）。 */
-private fun stripDatePrefix(fragment: SqlTextFragment): SqlTextFragment {
-    val text = fragment.text
-    return if (text.startsWith("[")) {
-        // `[2026-10-26 09:42:02] ` → `[09:42:02] `
-        val close = text.indexOf(']')
-        if (close < 0) SqlTextFragment(text, fragment.attributes)
-        else SqlTextFragment("[" + text.substring(12, close + 1) + text.substring(close + 1), fragment.attributes)
-    } else {
-        SqlTextFragment(text.substring(11), fragment.attributes)
-    }
-}
 
 private fun rebuild(
     fragments: List<SqlTextFragment>,
