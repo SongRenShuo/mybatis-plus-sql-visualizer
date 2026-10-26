@@ -15,9 +15,17 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * 版本对比探针（T-EmbeddedIdentify）：**JAR 内实体**的 @Embedded 展平端到端读数。
- * 挂载 demo 仓产出的 jpa-jar-model-lib-1.0.0.jar 为库根（真实二进制类），
- * 走 [EntityResolver.resolve] 全链打印列清单。用完即删，不入库。
+ * T-EmbeddedIdentify 回归护栏：**JAR/依赖模块实体的 @Embedded 全链预览**。
+ *
+ * 两个互补形态（外部报障「JAR 里的 @Embedded 不识别」20261026 收口后固化）：
+ *  - `test探针_语料DAO全链预览`——**JAR 态**：挂载 demo 仓产出的 jpa-jar-model-lib-1.0.0.jar
+ *    为库根（真实二进制类，锚点无模块根 → 工程级信号），语料 DAO 形态走 previewCustomDaoHql 全链；
+ *  - `test源码形态lib模块走宿主级联端到端`——**workspace 态**：实体源码在 lib 模块（自带普通
+ *    resources、无命名配置），命名判定走「实体模块 miss → 宿主模块」级联（T-EmbeddedHostCascade）。
+ *
+ * 前置缺陷背景：修复前该形态嵌入列丢 component-path 前缀（`base_qty` ≠ 真库 `qty_base_qty`），
+ * 且既有测试锚点全在夹具源码/工程级扫描，覆盖不到本类两形态（复盘见排查计划 §七）。
+ * Heavy 桶（全量分片执行）；夹具 jar 缺失时 JAR 态用例显式绿跳（与 JpaJarClassFileAnnotationTest 同惯例）。
  */
 class JpaJarEmbeddedPreviewChainTest : HeavyPlatformTestCase() {
 
@@ -86,6 +94,129 @@ class JpaJarEmbeddedPreviewChainTest : HeavyPlatformTestCase() {
 
     companion object {
         private const val ENTITY_FQN = "cn.song.jarlib.entity.WmsInventoryEntity"
+
+        /** 源码形态夹具：与 jar 语料同字段（三嵌入、内层零 @Column），javax 短名注解（classpath 无 JPA API 同形态）。 */
+        private val SOURCE_ENTITY = """
+            package cn.song.jarlib.entity;
+
+            import javax.persistence.Embeddable;
+            import javax.persistence.Embedded;
+            import javax.persistence.Entity;
+            import javax.persistence.Id;
+            import javax.persistence.Table;
+            import java.io.Serializable;
+            import java.time.LocalDateTime;
+
+            @Embeddable
+            class WmsInventoryQty implements Serializable {
+                private Long baseQty;
+            }
+
+            @Embeddable
+            class WmsSku implements Serializable {
+                private String inventoryStatus;
+            }
+
+            @Embeddable
+            class WmsItemKey implements Serializable {
+                @Embedded
+                private LotInfo lotInfo;
+
+                @Embeddable
+                static class LotInfo implements Serializable {
+                    private LocalDateTime receivedDate;
+                }
+            }
+
+            @Entity
+            @Table(name = "wms_inventory_jar_demo")
+            class WmsInventoryEntity implements Serializable {
+                private Long id;
+                private String warehouseId;
+                @Embedded
+                private WmsInventoryQty qty;
+                @Embedded
+                private WmsSku sku;
+                @Embedded
+                private WmsItemKey itemKey;
+            }
+        """.trimIndent()
+    }
+
+    /** workspace 形态复刻（用户实测档，T-EmbeddedHostCascade）：实体**源码**在 lib 模块（自带普通
+     *  resources、无命名配置）、DAO 在宿主模块（component-path）——命名判定须「实体模块 miss →
+     *  宿主模块」级联，列名带前缀。与 JAR 态 E2E（test探针_语料DAO全链预览）互补成对。 */
+    fun test源码形态lib模块走宿主级联端到端() {
+        val base = Files.createTempDirectory("jar-embed-src-").toFile()
+        File(base, "lib-module/pom.xml").apply { parentFile.mkdirs(); writeText("<project/>") }
+        File(base, "lib-module/src/main/resources/application.yml").apply {
+            parentFile.mkdirs()
+            writeText("server:\n  port: 0\n")
+        }
+        File(base, "lib-module/src/main/java/cn/song/jarlib/entity/WmsInventoryEntity.java").apply {
+            parentFile.mkdirs()
+            writeText(SOURCE_ENTITY)
+        }
+        val libRootVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(File(base, "lib-module"))!!
+        val hostRoot = File(base, "host-module")
+        File(hostRoot, "pom.xml").apply { parentFile.mkdirs(); writeText("<project/>") }
+        File(hostRoot, "src/main/resources/application.yml").apply {
+            parentFile.mkdirs()
+            writeText(
+                "spring:\n  jpa:\n    hibernate:\n      naming:\n        implicit_naming_strategy: component-path\n",
+            )
+        }
+        val hostRootVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(hostRoot)!!
+        com.intellij.testFramework.PsiTestUtil.addSourceRoot(myModule, libRootVf)
+        com.intellij.testFramework.PsiTestUtil.addSourceRoot(myModule, hostRootVf)
+        var callFileVf: com.intellij.openapi.vfs.VirtualFile? = null
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            val dir = VfsUtil.createDirectoryIfMissing(hostRootVf, "src/main/java")!!
+            callFileVf = dir.createChildData(this, "WmsJarQueryService.java")
+            VfsUtil.saveText(
+                callFileVf!!,
+                """
+                import java.util.List;
+
+                class WmsJarQueryService {
+                    private Object wmsJarCommonDao;
+
+                    public List<?> findAvailableJarInventory(String warehouseId, String inventoryStatus) {
+                        String hql = "from WmsInventoryEntity inv "
+                                + "where inv.warehouseId = :warehouseId "
+                                + "and inv.sku.inventoryStatus = :inventoryStatus "
+                                + "and inv.qty.baseQty > 0 "
+                                + "and inv.itemKey.lotInfo.receivedDate is not null "
+                                + "order by inv.id";
+                        return wmsJarCommonDao.findByQueryMaxNum(hql,
+                                new String[]{"warehouseId", "inventoryStatus"},
+                                new Object[]{warehouseId, inventoryStatus}, 0, 10);
+                    }
+                }
+                """.trimIndent(),
+            )
+        }
+        com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
+        val callFile = PsiManager.getInstance(project).findFile(callFileVf!!)
+                as com.intellij.psi.PsiJavaFile ?: error("DAO 调用点文件应可取 PSI")
+        val psiCall = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+            callFile,
+            com.intellij.psi.PsiMethodCallExpression::class.java,
+        ).firstOrNull { it.methodExpression.referenceName == "findByQueryMaxNum" }
+        org.junit.Assert.assertNotNull("夹具内应有 findByQueryMaxNum 调用", psiCall)
+        val service = project.getService(cn.song.mybatisplus.visualizer.ui.SqlPreviewService::class.java)
+        val result = com.intellij.openapi.application.ReadAction.compute<
+            cn.song.mybatisplus.visualizer.model.PreviewResult?, RuntimeException> {
+            service.previewCustomDaoHql(psiCall!!)
+        }
+        org.junit.Assert.assertNotNull("lib 源码 + 宿主 DAO 形态应可预览", result)
+        org.junit.Assert.assertTrue(
+            "表名应为真名: ${result?.sql}",
+            result!!.sql.contains("wms_inventory_jar_demo"),
+        )
+        org.junit.Assert.assertTrue("嵌入列应带前缀: ${result.sql}", result.sql.contains("qty_base_qty"))
+        org.junit.Assert.assertTrue("三层嵌套应带前缀: ${result.sql}", result.sql.contains("item_key_lot_info_received_date"))
+        org.junit.Assert.assertFalse("不应出现丢前缀列: ${result.sql}", result.sql.contains("inv.base_qty"))
     }
 
     /** 端到端：语料 DAO 形态（EntityManager DAO + 拼接 HQL）走 previewCustomDaoHql 全链。 */
