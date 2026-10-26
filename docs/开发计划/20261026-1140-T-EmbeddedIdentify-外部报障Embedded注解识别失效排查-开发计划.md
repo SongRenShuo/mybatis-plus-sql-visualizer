@@ -202,6 +202,8 @@ public List<?> findBookingByValueBean(WmsDockBooking sample) {
 
 **遗留**：用户沙盒的 jar 实测异常未在本轮任何构建上复现（E2E 正确）——请用户用本版重建沙盒后重测 jar 语料（`WmsInventoryJarQueryService.findAvailableJarInventory` 的 gutter），若仍异常，贴 `[T-EmbeddedIdentify]` 日志行即可按标签（probe-miss/probe-hit-host/降级 WARN）直接归因。其他 JPA 入口（CRUD/Specification/Criteria 转换器的 `JpaEntityResolver().resolve(entityClass)` 单参调用）未接宿主级联，同症状出现时按同款模式扩展。
 
+**✅ 用户实测通过（2026-10-26 当日收口）**：demo 语料补第三档场景（lib 自带 resources 无命名配置，demo 仓 `1b37378`）后，用户在修复版构建上预览 `findAvailableJarInventory` 两条参数读数（'2'/'3'）均输出正确 SQL——表名 `wms_inventory_jar_demo`、三列 component-path 前缀（`qty_base_qty`/`sku_inventory_status`/`item_key_lot_info_received_date`）、三层嵌套路径映射、参数回填全部与真库 schema 相符。本轮闭环：源码形态 ✓、JAR 形态 ✓。
+
 ---
 
 ## 附录 A：生产管线探针（本轮已删，复用时按此重建）
