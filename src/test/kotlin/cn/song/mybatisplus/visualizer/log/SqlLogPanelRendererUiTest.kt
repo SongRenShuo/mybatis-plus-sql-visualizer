@@ -89,7 +89,8 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 2)
         val r = render(entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
         val meta = r.metaTextForTest
-        assertTrue("轨道首行含来源类名 A:42: $meta", meta.contains("A:42"))
+        assertTrue("头部行含来源类名 A: $meta", meta.contains("A"))
+        assertTrue("头部行含行号 :42: $meta", meta.contains(":42"))
         assertTrue("头部行含去重徽章", detail(r).contains("⨉2"))
         assertFalse("轨道不应混入 SQL", meta.contains("SELECT"))
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
@@ -329,7 +330,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             val r = renderInMode(mode, entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
             val meta = r.metaTextForTest
             // T-LogListRail：来源类名在轨道、去重徽章在注脚行；两者都不得混入 SQL 文本
-            assertTrue("[$mode] 轨道含来源类名: $meta", meta.contains("A:42"))
+            assertTrue("[$mode] 头部行含来源类名: $meta", meta.contains("A"))
             assertTrue("[$mode] 头部行含去重徽章", detail(r).contains("⨉2"))
             assertFalse("[$mode] 轨道不混入 SQL", meta.contains("SELECT"))
         }

@@ -36,18 +36,29 @@ internal object SqlEntryPresentation {
         fun addFragment(fragment: Pair<String, SimpleTextAttributes>?) {
             if (fragment != null) add(SqlTextFragment(fragment.first, fragment.second))
         }
-        if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
+
+        /** 标注丢弃优先级的片段（宽度不足时按优先级从低到高丢）。 */
+        fun addPrioritized(fragment: Pair<String, SimpleTextAttributes>?, priority: Int) {
+            fragment?.let { add(SqlTextFragment(it.first, it.second, priority)) }
+        }
+
+        // 序号：最后才丢（最常用的引用锚点「#42 那条」）
+        if (entry.sequenceNumber > 0) {
+            add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes, HeaderFragmentPriority.SEQUENCE))
+        }
+        // 时间与耗时：显式 NEVER——时间是用户配置格式的投影，宽度不足时宁可截断末尾也不整段丢
         addFragment(formatTimestampFragment(entry))
         if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, selected))
-        addFragment(formatDatabaseFragment(entry, selected))
+        addPrioritized(formatDatabaseFragment(entry, selected), HeaderFragmentPriority.DATABASE)
         addFragment(formatMcpFragment(entry, selected))
-        addFragment(sourceNameText(entry))
-        addFragment(formatUpdateCountFragment(entry, selected))
+        addPrioritized(sourceNameText(entry), HeaderFragmentPriority.SOURCE_NAME)
+        addPrioritized(sourceLineText(entry), HeaderFragmentPriority.SOURCE_LINE)
+        addPrioritized(formatUpdateCountFragment(entry, selected), HeaderFragmentPriority.UPDATE_COUNT)
         // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
         dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 && entry.source != SqlSource.SHARDINGSPHERE }?.let {
             add(SqlTextFragment("⨉$it ", secondaryAttributes))
         }
-        addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
+        addPrioritized(formatTemplateCountFragment(entry, templateCounts, selected), HeaderFragmentPriority.TEMPLATE_BADGE)
     }
 
     /**
@@ -220,49 +231,73 @@ internal fun clipSqlFragments(
  * 只在整个头部行真的塞不下时被 [clipSqlFragments] 按顺序截断。
  */
 internal object HeaderFragmentPriority {
-    /** 影响行数 `(N rows)`。 */
+    /**
+     * 丢弃顺序（用户 2026-10-26 定案）：**方言与类位置先丢，序号绝不先丢**。
+     *
+     * 号码越小越先丢：
+     * ```
+     * 影响行数(1) → 库角标(2) → 来源类名(3) → 源码行号(4) → 同结构徽章(5) → 序号(6)
+     * ```
+     *
+     * 依据：
+     *  - 「类位置」＝来源类名 + 源码行号，是**最细的定位信息**，窄了先牺牲它；
+     *  - **序号（`#42`）是引用锚点**（「#42 那条」），不能先丢——丢了就无法在团队里指认某条；
+     *  - 同结构徽章是 N+1 线索，排在类位置之后、序号之前。
+     *
+     * 注意区分：此处的「源码行号」是 `:183`（Mapper 里的代码行），**不是**捕获序号 `#42`。
+     * 两者一度被混为一谈，导致误以为「序号不能先丢」与「行号不能先丢」冲突——实为两个字段。
+     */
     const val UPDATE_COUNT = 1
 
-    /** 目标库角标 `[MySQL]`。 */
-    const val DATABASE = 3
+    /** 目标库角标 `[MySQL]`——定长短串，多数场景单数据源，先牺牲。 */
+    const val DATABASE = 2
+
+    /** 来源类名（整段丢，不做像素级二次截断，避免双层省略号残片）。 */
+    const val SOURCE_NAME = 3
+
+    /** 源码行号 `":183"` 整段——与类名同属「类位置」，紧随其后丢。 */
+    const val SOURCE_LINE = 4
 
     /** 同结构徽章。 */
-    const val TEMPLATE_BADGE = 4
+    const val TEMPLATE_BADGE = 5
 
-    /** 来源行号（`User:41` → `User`）。 */
-    const val SOURCE_LINE = 5
-
-    /** 序号 `#N`。 */
+    /** 捕获序号 `#N`——**最后才丢**，它是引用锚点。 */
     const val SEQUENCE = 6
 
-    /** 不参与主动丢弃（只在整个头部行放不下时被截断）。 */
+/** 不参与主动丢弃（只在整个头部行放不下时被截断）。 */
     const val NEVER = Int.MAX_VALUE
 }
 
-/** 片段类别判定（按片段文本形态识别，避免给 [SqlTextFragment] 加字段破坏既有构造点）。 */
+/**
+ * 片段优先级**显式读取**（不做形态猜测——见 [SqlTextFragment.dropPriority] 的说明）。
+ *
+ * 历史教训：曾按文本形态猜类别，`5ms ` 与骨架化类名 `…ionOccupyInfo ` 同形（都是不含方括号的
+ * 短串），结果耗时被误判成可丢类名、480px 就把耗时丢了。现由生成片段处标注，读取处只取值。
+ *
+ * 唯一保留的形态兜底：**时间片段永远 NEVER**（即便调用方漏标）。时间是用户配置
+ * `logTimestampFormat` 的投影，宽度不足时宁可截断末尾也不得整段丢弃。
+ */
 private fun dropPriorityOf(fragment: SqlTextFragment): Int {
-    val text = fragment.text
-    return when {
-        // `(3 rows) ` —— 影响行数
-        text.contains(" rows)") -> HeaderFragmentPriority.UPDATE_COUNT
-        // 时间片段（含剥完日期的 `[09:42:02] `）不参与主动丢弃——它不是「库角标」。
-        // 必须先于下面的「方括号」判定，否则 `[09:42:02]` 会被当成库角标提前丢掉。
-        isTimeFragment(text) -> HeaderFragmentPriority.NEVER
-        // `[MySQL] ` / `[MySQL · jdbc:...] ` —— 目标库角标（MCP 徽标 `[MCP] ` 单独放过）
-        text.startsWith("[") && text.trim().endsWith("]") && !text.startsWith("[MCP]") -> HeaderFragmentPriority.DATABASE
-        // `同结构 N 条` / `×N 同模板`
-        text.contains("同结构") || text.contains("同模板") -> HeaderFragmentPriority.TEMPLATE_BADGE
-        // `⨉N ` —— 去重计数（不是模板徽章，保留优先级高）
-        text.startsWith("⨉") -> HeaderFragmentPriority.NEVER
-        else -> HeaderFragmentPriority.NEVER
-    }
+    if (isTimeText(fragment.text)) return HeaderFragmentPriority.NEVER
+    return fragment.dropPriority
 }
 
-/** 是否时间片段（`HH:mm:ss` 或 `yyyy-MM-dd HH:mm:ss` 形态，可带方括号）。 */
-private fun isTimeFragment(text: String): Boolean {
+/**
+ * 兜底：时间片段判定。
+ *
+ * 形态：`HH:mm:ss`、`yyyy-MM-dd HH:mm:ss`（可带方括号）。
+ *
+ * **必须排除 `:183`（源码行号）**：它同样含冒号与数字，早期版本用「含冒号 + 含数字」
+ * 判定，把源码行号误当成时间片段、强行升为 NEVER，导致它在窄宽度下永不丢弃
+ * （实测 260px 时应丢行号却丢了序号）。现要求冒号左侧必须还有内容。
+ */
+private fun isTimeText(text: String): Boolean {
     val core = text.trim().removeSurrounding("[", "]")
-    // 含冒号且含数字即可判定为时刻——库角标/徽章不会出现冒号
-    return core.contains(':') && core.any { it.isDigit() }
+    val colon = core.indexOf(':')
+    // 冒号必须在中间（左侧有两位以上数字，如 `06:13:20` / `2023-11-15 06:13:20`），
+    // 且不能是 `:183` 这种以冒号开头的行号形态
+    if (colon <= 1) return false
+    return core.any { it.isDigit() } && core.count { it == ':' } >= 1
 }
 
 /**

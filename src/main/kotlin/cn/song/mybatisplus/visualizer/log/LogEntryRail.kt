@@ -39,16 +39,29 @@ internal fun maxDurationOf(entries: List<LogSqlEntry>): Long? {
  */
 internal fun sourceNameText(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
     if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
-        return "MP 分页计数" to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
+        return "MP 分页计数 " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
     }
     val path = entry.sourceFile ?: return null
-    val fileName = path.substringAfterLast('/')
-    val className = fileName.substringBeforeLast('.', fileName)
-    val line = if (entry.sourceLine > 0) ":${entry.sourceLine}" else ""
+    val className = path.substringAfterLast('/').substringBeforeLast('.')
     // 尾随空格是片段间距契约（与 formatDurationFragment / formatDatabaseFragment 一致）——
     // 漏掉会让下一个片段粘上来（实测 `Order:42⨉3`）
-    return (shortSourceName(className) + line + " ") to
+    return (shortSourceName(className) + " ") to
         SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
+}
+
+/**
+ * 来源**行号**文本（`":42 "`），单独成片段。
+ *
+ * 为什么把类名与行号拆成两个片段（窄侧栏观感修正）：
+ * 合成一个片段时，窄宽度下 `clipSqlFragments` 会对它做**像素级二次截断**，叠在
+ * [shortSourceName] 的字符级压缩之上，产出 `…ionOccupyI…`、`…i…` 这种带两个省略号的残片——
+ * 既读不出类名也看不见行号。拆成两段后可以**先整段丢行号、再整段丢类名**，
+ * 任意宽度下都不会出现双层省略号。
+ */
+internal fun sourceLineText(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
+    if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) return null
+    if (entry.sourceFile == null || entry.sourceLine <= 0) return null
+    return ":${entry.sourceLine} " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
 }
 
 /** 公共后缀——剥掉后仍不足以表达类身份时才继续截断。 */

@@ -212,7 +212,8 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         for (meta in listOf(liveMeta, histMeta)) {
             assertTrue(meta, meta.startsWith("#77 "))
             assertTrue(meta, meta.contains("2000ms"))
-            assertTrue("轨道放骨架化类名与行号（Mapper 后缀已剥）: $meta", meta.contains("Order:42"))
+            assertTrue("头部行放骨架化类名（Mapper 后缀已剥）: $meta", meta.contains("Order"))
+            assertTrue("头部行放行号: $meta", meta.contains(":42"))
             assertFalse("正文不得混入轨道", meta.contains("SELECT phone"))
         }
         // T-LogListHeader：注脚行已并入头部行，库/MCP/徽章都在 metaTextForTest 里

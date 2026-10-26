@@ -38,7 +38,18 @@ internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, mas
 data class SqlSemanticFragment(val text: String, val tokenType: IElementType)
 
 /** 列表组件可直接 append 的当前 scheme 着色片段；仅为一次渲染的临时投影。 */
-data class SqlTextFragment(val text: String, val attributes: SimpleTextAttributes)
+data class SqlTextFragment(
+    val text: String,
+    val attributes: SimpleTextAttributes,
+    /**
+     * 头部行宽度不足时的丢弃优先级（数值越小越先丢；默认不参与主动丢弃）。
+     *
+     * 为什么显式标注而非按文本形态猜：形态猜测实测不可靠——`5ms ` 与骨架化类名
+     * `…ionOccupyInfo ` 都是「不含方括号的短串」，猜法把耗时误判成类名、480px 就丢掉它。
+     * 生成片段的地方本就知道片段语义，由它自己标注最可靠。
+     */
+    val dropPriority: Int = Int.MAX_VALUE,
+)
 
 /** 分词/分行只做一次；每次绘制用当前 scheme 将语义缓存投影为组件属性。 */
 object SqlListFragmentRenderer {

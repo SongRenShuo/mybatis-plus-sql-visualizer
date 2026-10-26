@@ -71,7 +71,8 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val r = renderSql(sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 12, ms = 3L))
         val meta = r.metaTextForTest
         assertTrue("轨道应含耗时 3ms: $meta", meta.contains("3ms"))
-        assertTrue("轨道应含骨架化类名与行号 User:12: $meta", meta.contains("User:12"))
+        assertTrue("头部行应含骨架化类名 User: $meta", meta.contains("User"))
+        assertTrue("头部行应含行号 :12: $meta", meta.contains(":12"))
         assertFalse("SQL 不应混入轨道", meta.contains("SELECT"))
     }
 
@@ -133,7 +134,8 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
         val meta = r.metaTextForTest
         assertTrue("耗时应在轨道: $meta", meta.contains("30ms"))
-        assertTrue("来源类名应在轨道（骨架化，剥 Dao 无关）: $meta", meta.contains("OrderDao:9"))
+        assertTrue("来源类名应在头部行: $meta", meta.contains("OrderDao"))
+        assertTrue("行号应在头部行: $meta", meta.contains(":9"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
         assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
     }

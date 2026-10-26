@@ -226,7 +226,7 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         val fragments = SqlEntryPresentation.headerFragments(entry, false, true, emptyMap())
         val joined = fragments.joinToString("") { it.text }
         val idxDb = joined.indexOf("[MySQL]")
-        val idxSrc = joined.indexOf("User:41")
+        val idxSrc = joined.indexOf("User")
         assertTrue("两者都应出现: $joined", idxDb >= 0 && idxSrc >= 0)
         assertTrue("库角标应在来源类名之前（方案④）: $joined", idxDb < idxSrc)
         // 序号最前
@@ -248,5 +248,85 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         assertTrue("影响行数与徽章都应出现: $joined", idxRows >= 0 && idxBadge >= 0)
         assertTrue("影响行数应在来源之后: $joined", idxSrc < idxRows)
         assertTrue("同结构徽章应在影响行数之后: $joined", idxRows < idxBadge)
+    }
+    // ---------- 窄宽度退化梯度（含用户定案的丢序） ----------
+
+    /** 构造带优先级的真实片段集（与 headerFragments 同口径）。 */
+    private fun realHeaderSet(entry: LogSqlEntry): List<SqlTextFragment> =
+        SqlEntryPresentation.headerFragments(entry, false, true, emptyMap())
+
+    private fun entryForRail() = LogSqlEntry(
+        rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+        timestamp = 1_700_000_000_000L, logTimestamp = 1_700_000_000_000L,
+        executionTimeMs = 5L, sequenceNumber = 42L,
+        sourceFile = "src/main/java/BizCarStationOccupyInfoServiceImpl.java", sourceLine = 183,
+        databaseName = "MySQL",
+    )
+
+    /**
+     * 用户定案的丢序（2026-10-26，经两轮澄清）：**方言与类位置先丢，序号绝不先丢**。
+     *
+     * 关键区分：**捕获序号 `#42`** 与 **源码行号 `:183`** 是两个不同字段——
+     * 前者是引用锚点（「#42 那条」）不可先丢；后者属「类位置」，可随类名一起先丢。
+     * 首轮把两者混为一谈，才产生「序号不能先丢」与「行号不能先丢」的表面冲突。
+     */
+    fun test丢序_类位置先于序号被丢() {
+        val p = HeaderFragmentPriority
+        assertTrue("类名应早于序号丢: ${p.SOURCE_NAME} < ${p.SEQUENCE}", p.SOURCE_NAME < p.SEQUENCE)
+        assertTrue("源码行号应早于序号丢: ${p.SOURCE_LINE} < ${p.SEQUENCE}", p.SOURCE_LINE < p.SEQUENCE)
+        assertTrue("库角标应早于序号丢: ${p.DATABASE} < ${p.SEQUENCE}", p.DATABASE < p.SEQUENCE)
+        assertTrue(
+            "序号应是所有可丢片段中最后丢的（数值最大）",
+            listOf(p.UPDATE_COUNT, p.DATABASE, p.SOURCE_NAME, p.SOURCE_LINE, p.TEMPLATE_BADGE)
+                .all { it < p.SEQUENCE },
+        )
+    }
+
+    /** 方言与类位置排在最前面丢（仅次于影响行数）。 */
+    fun test丢序_方言与类位置靠前() {
+        val p = HeaderFragmentPriority
+        assertTrue("库角标应先于类名丢", p.DATABASE < p.SOURCE_NAME)
+        assertTrue("类名应先于源码行号丢（粗到细）", p.SOURCE_NAME < p.SOURCE_LINE)
+        assertTrue("类位置应先于徽章丢", p.SOURCE_LINE < p.TEMPLATE_BADGE)
+    }
+
+    /**
+     * 窄档下：类位置已被丢，但**捕获序号仍在**（用户明确要求序号不先丢）。
+     *
+     * 只在「类位置刚被丢、其余仍放得下」的区间断言——极窄（≤200px）时所有可丢片段丢光后
+     * 会进入 [clipSqlFragments] 的像素级截断，连序号一起切短，属兜底行为而非优先级错误。
+     */
+    fun test窄档_类位置已丢但序号仍在() {
+        val e = entryForRail()
+        val set = realHeaderSet(e)
+        var checked = 0
+        for (w in 240..360 step 10) {
+            val out = clipFragmentsByPriority(set, w) { t, _ -> t.length * 8 }
+            val joined = out.joinToString("") { it.text }
+            // 仅当片段仍完整（未被兜底截断加省略号）时检查序号
+            if (!joined.contains("ionOccupyInfo") && !joined.endsWith("…")) {
+                checked++
+                assertTrue("[$w] 类位置已丢时序号必须仍在: $joined", joined.contains("#42"))
+            }
+        }
+        assertTrue("应至少命中一个「类位置已丢」的宽度档（当前 $checked）", checked > 0)
+    }
+
+    /**
+     * 时间与耗时**不会作为「可丢片段」被主动整段丢弃**（时间是用户配置格式的投影）。
+     *
+     * 说明：极窄时它们仍可能被 [clipSqlFragments] 的**像素级截断**切短（如 `5m…`），
+     * 那是所有可丢片段都丢光后的兜底行为，不是本断言要拦的对象。本断言只拦
+     * 「被当成低优先级片段直接消失」——那才是配置被悄悄改写。
+     */
+    fun test时间与耗时不被主动整段丢弃() {
+        val e = entryForRail()
+        val set = realHeaderSet(e)
+        for (w in 260..480 step 20) {
+            val out = clipFragmentsByPriority(set, w) { t, _ -> t.length * 8 }
+            val joined = out.joinToString("") { it.text }
+            assertTrue("[$w] 时间不得整段消失: $joined", joined.contains("2023-11-15"))
+            assertTrue("[$w] 耗时不得整段消失: $joined", joined.contains("5m"))
+        }
     }
 }
