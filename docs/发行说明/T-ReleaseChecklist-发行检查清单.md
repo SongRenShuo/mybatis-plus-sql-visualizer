@@ -58,6 +58,7 @@
 
 - [ ] RC-R1 git tag：发行提交之后 `git tag {版本号}` → `git push origin {版本号}`。判据：tag 名与 `version=` 一字不差（§1.1 第 3 条）。
 - [ ] RC-R2 Gitee Release：网页创建发行版，标签同名，附同名 zip，正文用发行说明全文。判据：Release 页可见附件且文件名含正确版本号。
+- [ ] RC-R2b GitHub Release 镜像：`python dev-support/mirror-releases-to-github.py --tag {版本号}`（幂等，可反复跑；已存在则只补附件）。判据：`--verify-only` 通过、GitHub Releases 页出现同版本且附件 size 与本地 zip 一致。**注意上传走 `uploads.github.com`，不是 `api.github.com`（用后者返 404）**。
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。
