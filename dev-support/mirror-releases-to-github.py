@@ -56,11 +56,41 @@ def load_github():
             cfg.get('repo', 'mybatis-plus-sql-visualizer'))
 
 
-def load_gitee_releases():
-    path = os.path.join(LOCAL, 'gitee-releases.json')
+def load_gitee_token():
+    path = os.path.join(LOCAL, 'gitee-token.json')
     if not os.path.exists(path):
-        sys.exit('缺少 %s（先用 Gitee API 抓一份）' % path)
-    return json.load(open(path, encoding='utf-8'))
+        return None
+    cfg = json.load(open(path, encoding='utf-8'))
+    return cfg.get('gitee_personal_access_token')
+
+
+def load_gitee_releases(fresh=False):
+    """Gitee releases 清单。
+
+    默认读 .local/gitee-releases.json（上一轮回填时抓的缓存）；缓存缺失或 --fresh
+    时现场拉一份并落盘。走这个缓存而不是每次现拉，是为了让「同一份清单」在
+    下载、建版、校验三个阶段保持一致——中途 Gitee 有新版也不会让本次跑偏。
+    """
+    path = os.path.join(LOCAL, 'gitee-releases.json')
+    if os.path.exists(path) and not fresh:
+        return json.load(open(path, encoding='utf-8'))
+
+    tok = load_gitee_token()
+    if not tok:
+        sys.exit('缺少 %s，且没有 .local/gitee-token.json 可用于抓取' % path)
+    url = ('https://gitee.com/api/v5/repos/songrenshuo/mybatis-plus-sql-visualizer'
+           '/releases?access_token=%s&per_page=100' % tok)
+    print('拉取 Gitee releases…', flush=True)
+    try:
+        with urllib.request.urlopen(url, timeout=90) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        sys.exit('拉取 Gitee releases 失败: %s' % e)
+    os.makedirs(LOCAL, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print('已缓存 %d 个版本到 %s' % (len(data), path), flush=True)
+    return data
 
 
 def find_asset_file(tag):
@@ -69,6 +99,39 @@ def find_asset_file(tag):
         p = os.path.join(d, fn)
         if os.path.exists(p):
             return p
+    return None
+
+
+def download_asset(release, tag, attempts=3):
+    """本地没有该版本 zip 时，从 Gitee Release 附件下载。
+
+    为什么不自己 buildPlugin 重打：老版本源码需要 checkout 对应 tag + 还原当时的
+    构建脚本/依赖，重打产物与当年发布的 zip 不一定逐字节相同（插件 zip 不含时间戳
+    但依赖版本可能已变），而「发布过的那个包」才是唯一正确的镜像对象。
+    """
+    fn = 'mybatis-plus-sql-visualizer-%s.zip' % tag
+    url = None
+    for a in (release.get('assets') or []):
+        if a.get('name') == fn:
+            url = a.get('browser_download_url')
+            break
+    if not url:
+        return None
+
+    outdir = ASSET_DIRS[0]
+    os.makedirs(outdir, exist_ok=True)
+    dst = os.path.join(outdir, fn)
+    for i in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=300) as resp, open(dst, 'wb') as f:
+                f.write(resp.read())
+            if os.path.getsize(dst) > 10_000:
+                return dst
+        except Exception as e:
+            print('      download attempt %d/%d failed: %s' % (i, attempts, str(e)[:120]),
+                  flush=True)
+            if i < attempts:
+                time.sleep(3)
     return None
 
 
@@ -156,10 +219,12 @@ def main():
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--verify-only', action='store_true')
     ap.add_argument('--tag', action='append', default=None, help='只处理指定 tag（可多次）')
+    ap.add_argument('--fresh', action='store_true', help='重新拉 Gitee releases 清单（忽略缓存）')
+    ap.add_argument('--no-download', action='store_true', help='本地缺 zip 时不自动下载')
     args = ap.parse_args()
 
     token, owner, repo = load_github()
-    releases = load_gitee_releases()
+    releases = load_gitee_releases(fresh=args.fresh)
     # Gitee 返回顺序是创建时间正序，GitHub 也按此顺序建，时间线一致
     if args.tag:
         want = set(args.tag)
@@ -178,7 +243,7 @@ def main():
         local = find_asset_file(tag)
         print('\n[%d/%d] %s  (prerelease=%s, zip=%s)' % (
             i, len(releases), tag, prerelease,
-            '%d bytes' % os.path.getsize(local) if local else 'MISSING'), flush=True)
+            '%d bytes' % os.path.getsize(local) if local else '本地无'), flush=True)
 
         try:
             remote = get_release_by_tag(token, owner, repo, tag)
@@ -202,12 +267,26 @@ def main():
 
             # 附件处理
             have = {a['name']: a for a in (remote.get('assets') or [])}
+            # 校验也要拿到本地 zip 才能比 size，所以 verify-only 同样触发下载
+            # （--no-download 可关掉，此时退化为只断言附件存在、不比对大小）
+            if local is None and not args.no_download and not args.dry_run:
+                print('      本地无 zip，从 Gitee 下载…', flush=True)
+                local = download_asset(r, tag)
+                if local:
+                    print('      已下载 %d bytes' % os.path.getsize(local), flush=True)
             if local is None:
                 if args.verify_only:
-                    print('      本地无 zip，跳过附件断言', flush=True)
+                    if have:
+                        stats['verified'] += 1
+                        print('      asset 存在（本地无 zip，未比对 size）', flush=True)
+                    else:
+                        stats['failed'].append('%s: 缺附件' % tag)
+                        print('      !! 缺附件', flush=True)
+                elif args.dry_run:
+                    print('      [dry] 将下载并上传附件', flush=True)
                 else:
-                    print('      !! 本地缺 zip，无法上传', flush=True)
-                    stats['failed'].append('%s: 本地缺 zip' % tag)
+                    print('      !! 拿不到 zip，无法上传', flush=True)
+                    stats['failed'].append('%s: 拿不到 zip' % tag)
                 continue
             want_name = os.path.basename(local)
             want_size = os.path.getsize(local)
