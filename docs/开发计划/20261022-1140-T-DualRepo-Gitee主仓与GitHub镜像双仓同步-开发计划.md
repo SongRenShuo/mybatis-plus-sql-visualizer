@@ -294,4 +294,25 @@ git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPre
 
 三仓合计：插件仓、demo 仓、文档站仓，均 Gitee 主 + GitHub 镜像。
 
+### 11.8 发现已有 --from-github 同步链路，撤销 CI 自动 Gitee 步骤（2026-10-26 追加）
+
+用户批准「GitHub 流水线 publish job 末尾加一步自动推 Gitee」。实施前通读 `dev-support/gitee-release.py`
+（准备复用其 API 逻辑）时发现：**该脚本当天上午刚提交了 `--from-github` 模式**（`048d4e03`，2026-10-26 10:38），
+注释里写着用户同日定案——「Gitee 仍是主仓，GitHub 触发的发布只能**经人确认**后才落一份到 Gitee；
+本脚本不自动跑、也不由 CI 调用」。与刚批准的方案直接冲突，故停止实施。
+
+**冲突消解：不加 CI 步骤，改用已有链路。** `--from-github` 就是「更省事的做法」的正确形态：
+一条命令自动从 GitHub Release 取附件（sha256 校验、本地同名不同哈希拒绝覆盖、草稿态拒绝同步、
+tag 缺失时给出补推命令而不自动推），摘要后人工输入 `yes` 才落 Gitee。与 CI 自动步相比，
+只多一次回车，换来「Gitee 落版永远经人确认」——这对自更新通道数据源是合理保守。
+
+RC-R2 已改写为双路：CI 发布走 `--from-github`，本机发布走网页；RC-R2b 标注仅本机发布场景需要。
+
+**验证（2026-10-26 只读实测）**：`gitee-release.py --version 2026.10.26 --from-github --verify-only`
+全绿——且本地 build/distributions zip、GitHub Release 附件、Gitee Release 附件三方 sha256 一致
+（`7f0231ea…`），v2026.10.26 的「CI 建 GitHub Release → 人确认同步 Gitee」链路字节级闭环。
+
+Gitee Go 空白流水线**不建**：Gitee 侧不需要 runner（同步是本机一条命令），建了反而引入第二套
+流水线的维护面。
+
 
