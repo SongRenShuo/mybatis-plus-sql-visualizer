@@ -110,4 +110,144 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         assertTrue(clipped.all { it.attributes === attrs })
         assertEquals("SELECT 😀 FROM t", entry.restoredSql)
     }
+    // ---------- T-LogListHeader：头部行优先级裁剪（本次唯一新算法） ----------
+
+    /** 每个字符按 10px 计，便于构造精确的宽度档位。 */
+    private fun measure10(text: String): Int = text.length * 10
+
+    private fun frag(text: String) = SqlTextFragment(text, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+
+    /** 完整头部片段集：序号 / 日期时刻 / 耗时 / 库 / 来源 / 徽章。 */
+    private fun headerSet(): List<SqlTextFragment> = listOf(
+        frag("#1 "),                       // 3 字 = 30px
+        frag("[2026-10-26 09:42:02] "),    // 22 字 = 220px（真实形态带方括号）
+        frag("1ms "),                      // 4 字 = 40px
+        frag("[MySQL] "),                  // 8 字 = 80px
+        frag("User:41 "),                  // 8 字 = 80px
+        frag("同结构 24 条 "),              // 8 字 ≈ 80px（中文按字符计，测试里只看长度）
+    )
+
+    fun test头部裁剪_宽度充足时原样返回() {
+        val set = headerSet()
+        val out = clipFragmentsByPriority(set, 10_000) { t, _ -> measure10(t) }
+        assertSame("放得下就原样返回（零拷贝）", set, out)
+    }
+
+    fun test头部裁剪_宽度为零视为未测量原样返回() {
+        val set = headerSet()
+        val out = clipFragmentsByPriority(set, 0) { t, _ -> measure10(t) }
+        assertSame("未测量（headless 首帧）不得丢片段", set, out)
+    }
+
+    /**
+     * 关键语义：宽度不足时**先剥日期、保时刻**，而不是整段丢掉时间。
+     */
+    fun test头部裁剪_先剥日期保时刻() {
+        val set = headerSet()
+        // 实测宽度：`#1 `=30 / `[2026-10-26 09:42:02] `=220 / `1ms `=40 / `[MySQL] `=80 /
+        // `User:41 `=80 / `同结构 24 条 `=90，合计 540。
+        // 剥日期后为 430（`[09:42:02] ` 11 字 = 110px）。给 440 → 只剥日期即满足。
+        val out = clipFragmentsByPriority(set, 440) { t, _ -> measure10(t) }
+        val joined = out.joinToString("") { it.text }
+        assertTrue("时刻应保留: $joined", joined.contains("09:42:02"))
+        assertFalse("日期应已剥掉: $joined", joined.contains("2026-10-26"))
+        assertTrue("库角标应保留: $joined", joined.contains("[MySQL]"))
+        assertTrue("来源应保留: $joined", joined.contains("User:41"))
+        assertTrue("徽章应保留: $joined", joined.contains("同结构"))
+    }
+
+    /** 更窄时：日期之后丢掉影响行数（本用例无影响行数，验证库角标仍在来源之前被丢）。 */
+    fun test头部裁剪_极窄时才丢库角标与徽章() {
+        val set = headerSet()
+        // 剥完日期后 430；给 270 → 还需省 160：丢库角标（80）+ 徽章（90）刚好够。
+        // 注意此时时刻仍在（时刻属 NEVER 级，不主动丢）。
+        val out = clipFragmentsByPriority(set, 270) { t, _ -> measure10(t) }
+        val joined = out.joinToString("") { it.text }
+        assertTrue("序号必须最后才丢: $joined", joined.contains("#1"))
+        assertTrue("时刻应保留（NEVER 级不主动丢）: $joined", joined.contains("09:42:02"))
+        assertFalse("极窄下库角标应被丢: $joined", joined.contains("[MySQL]"))
+        assertFalse("极窄下徽章应被丢: $joined", joined.contains("同结构"))
+    }
+
+    /** 序号是最后才丢的锚点：即使很窄也要尽量保住。 */
+    fun test头部裁剪_序号最后才丢() {
+        val set = headerSet()
+        val out = clipFragmentsByPriority(set, 350) { t, _ -> measure10(t) }
+        val joined = out.joinToString("") { it.text }
+        assertTrue("序号应保留: $joined", joined.contains("#1"))
+    }
+
+    /** 全部丢完仍放不下时，兜底退回顺序截断（不得死循环、不得返回超宽结果）。 */
+    fun test头部裁剪_全丢完仍超宽时退化为截断() {
+        val set = headerSet()
+        val out = clipFragmentsByPriority(set, 50) { t, _ -> measure10(t) }
+        val width = out.sumOf { measure10(it.text) }
+        assertTrue("结果不得超过给定宽度（实际 ${width}px）", width <= 50 + 10)
+    }
+
+    /** 优先级识别：影响行数先于库角标被丢。 */
+    fun test头部裁剪_影响行数先于库角标被丢() {
+        val set = listOf(
+            frag("#1 "), frag("[09:42:02] "), frag("3ms "), frag("[MySQL] "),
+            frag("Order:18 "), frag("(3 rows) "), frag("同结构 7 条 "),
+        )
+        val full = set.sumOf { measure10(it.text) }
+        // 给「刚好要省掉 (3 rows) 的宽度」
+        val out = clipFragmentsByPriority(set, full - measure10("(3 rows) ")) { t, _ -> measure10(t) }
+        val joined = out.joinToString("") { it.text }
+        assertFalse("影响行数应先丢: $joined", joined.contains("(3 rows)"))
+        assertTrue("库角标应还在: $joined", joined.contains("[MySQL]"))
+    }
+
+    /** 片段属性必须原样保留（着色不丢）。 */
+    fun test头部裁剪_保留片段属性() {
+        val attrs = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Color.BLUE)
+        val set = listOf(
+            SqlTextFragment("#1 ", attrs), SqlTextFragment("[2026-10-26 09:42:02] ", attrs),
+            SqlTextFragment("1ms ", attrs), SqlTextFragment("[MySQL] ", attrs),
+        )
+        val out = clipFragmentsByPriority(set, 250) { t, _ -> measure10(t) }
+        assertTrue("所有保留片段属性应与输入同一实例", out.all { it.attributes === attrs })
+    }
+    // ---------- 头部行字段顺序（用户定案方案④ 库前置） ----------
+
+    /**
+     * 库角标必须排在来源类名之前（方案④）。
+     *
+     * 为什么这条要单独立守卫：顺序是纯视觉决策，改错了不报错、不崩溃，
+     * 只是「库角标跑到类名后面」——没有断言就永远不会被发现。
+     */
+    fun test头部行顺序_库角标在来源类名之前() {
+        val entry = LogSqlEntry(
+            rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+            timestamp = 1_700_000_000_000L, executionTimeMs = 5L,
+            databaseName = "MySQL", sourceFile = "src/main/java/UserMapper.java", sourceLine = 41,
+            sequenceNumber = 3L,
+        )
+        val fragments = SqlEntryPresentation.headerFragments(entry, false, true, emptyMap())
+        val joined = fragments.joinToString("") { it.text }
+        val idxDb = joined.indexOf("[MySQL]")
+        val idxSrc = joined.indexOf("User:41")
+        assertTrue("两者都应出现: $joined", idxDb >= 0 && idxSrc >= 0)
+        assertTrue("库角标应在来源类名之前（方案④）: $joined", idxDb < idxSrc)
+        // 序号最前
+        assertTrue("序号应在最前: $joined", joined.trimStart().startsWith("#3"))
+    }
+
+    /** 影响行数与徽章排在来源之后（诊断类信息靠后）。 */
+    fun test头部行顺序_诊断信息在来源之后() {
+        val entry = LogSqlEntry(
+            rawSql = "UPDATE t SET a = 1", restoredSql = "UPDATE t SET a = 1", params = emptyList(),
+            timestamp = 1_700_000_000_000L, executionTimeMs = 5L, updateCount = 3L,
+            databaseName = "MySQL", sourceFile = "src/main/java/UserMapper.java", sourceLine = 41,
+        )
+        val fragments = SqlEntryPresentation.headerFragments(entry, false, true, mapOf(entry.structureKey to 4))
+        val joined = fragments.joinToString("") { it.text }
+        val idxSrc = joined.indexOf("User:41")
+        val idxRows = joined.indexOf("(3 rows)")
+        val idxBadge = joined.indexOf("同结构")
+        assertTrue("影响行数与徽章都应出现: $joined", idxRows >= 0 && idxBadge >= 0)
+        assertTrue("影响行数应在来源之后: $joined", idxSrc < idxRows)
+        assertTrue("同结构徽章应在影响行数之后: $joined", idxRows < idxBadge)
+    }
 }

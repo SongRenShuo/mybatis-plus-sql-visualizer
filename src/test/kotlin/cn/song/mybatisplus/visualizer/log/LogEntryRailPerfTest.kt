@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import org.junit.Assert.assertNotSame
 
@@ -118,10 +119,10 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
         renderer.templateCounts = mapOf("k" to 5)
         val e = entry(7)
         renderOnce(renderer, l, e)
-        val first = renderer.detailTextForTest
+        val first = renderer.metaTextForTest
         // 同一条目同快照重复渲染：文本必须一致（缓存命中路径不得产出不同结果）
         repeat(20) { renderOnce(renderer, l, e) }
-        assertEquals("同一条目重复渲染，注脚行内容应稳定", first, renderer.detailTextForTest)
+        assertEquals("同一条目重复渲染，注脚行内容应稳定", first, renderer.metaTextForTest)
     }
 
     /**
@@ -136,62 +137,41 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
         val e = entry(3)
         renderer.templateCounts = mapOf(e.structureKey to 3)
         renderOnce(renderer, l, e)
-        val before = renderer.detailTextForTest
+        val before = renderer.metaTextForTest
         renderer.templateCounts = mapOf(e.structureKey to 9)
         renderOnce(renderer, l, e)
-        val after = renderer.detailTextForTest
+        val after = renderer.metaTextForTest
         assertTrue("换代前应显示 3: $before", before.contains("3"))
         assertNotSame("换代后注脚文本应变化（缓存须失效）", before, after)
         assertTrue("换代后应显示 9: $after", after.contains("9"))
     }
 
     /**
-     * 轨道宽度只在变化时重设 preferredSize（每格重设会调度重排）。
+     * 头部行留白 Border 必须预建复用（渲染热路径不得新建 Border）。
      *
-     * JComponent.getPreferredSize() 返回的是内部对象的**拷贝**，故不能用实例同一性断言；
-     * 改为「同宽不产生 propertyChange」。监听器计数是比实例比较更直接的判据。
+     * 依据：JComponent.setBorder(新实例) 即使值相同也触发 repaint（T-LogListFreeze 同族实测）。
+     * 改造后两种留白（常规 12px / 单行 8px）都是预建实例，按模式切换时只换引用。
      */
-    fun test轨道宽度_值不变不重设首选宽() {
-        val rail = LogEntryRail()
-        rail.setRailWidth(88)
-        var changes = 0
-        rail.addPropertyChangeListener("preferredSize") { changes++ }
-        repeat(10) { rail.setRailWidth(88) }
-        assertEquals("同宽重复设置不得触发 preferredSize 变更", 0, changes)
-        // 换宽必须真的写（否则窄侧栏降档失效）
-        rail.setRailWidth(76)
-        assertEquals(76, rail.railWidth)
-        assertEquals("换宽应触发一次变更", 1, changes)
-    }
-
-    /** 形态切换幂等：同形态重复切换不重建行结构。 */
-    fun test轨道形态_同形态重复设置幂等() {
-        val rail = LogEntryRail()
-        rail.setForm(LogEntryRail.Form.PACKED)
-        val e = entry(1)
-        rail.bind(e, false, 100L, java.awt.Color.BLACK, true)
-        fun countComponents(): Int {
-            fun walk(c: java.awt.Component): Int {
-                var n = 1
-                if (c is java.awt.Container) for (child in c.components) n += walk(child)
-                return n
-            }
-            return walk(rail)
+    fun test条目Border_按模式复用预建实例() {
+        val renderer = LogEntryListCellRenderer()
+        val l = list(600)
+        val state = PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        try {
+            state.logListSqlDisplayMode = "KEYWORD_WRAP"
+            renderOnce(renderer, l, entry(1))
+            val normal = renderer.border
+            state.logListSqlDisplayMode = "SINGLE_LINE"
+            renderOnce(renderer, l, entry(1))
+            val dense = renderer.border
+            assertNotSame("单行模式应用紧凑 Border", normal, dense)
+            repeat(10) { renderOnce(renderer, l, entry(it)) }
+            assertSame("同模式重复渲染应复用同一 Border 实例", dense, renderer.border)
+        } finally {
+            state.logListSqlDisplayMode = saved
         }
-        val baseline = countComponents()
-        repeat(50) { rail.setForm(LogEntryRail.Form.PACKED) }
-        assertEquals("同形态重复设置不得改变组件树", baseline, countComponents())
     }
 
-    /** 进度条：值未变时不触发 repaint（渲染热路径守卫）。 */
-    fun test进度条_值未变不重复重绘() {
-        val track = DurationTrackPanel()
-        track.setSize(80, 6)
-        track.bind(50L, 100L)
-        val firstFraction = track.fractionForTest()
-        repeat(20) { track.bind(50L, 100L) }
-        assertTrue("同值重复绑定，比例不变", kotlin.math.abs(firstFraction - track.fractionForTest()) <= 1e-9)
-    }
 
     /** 三种显示模式都必须落在预算内（SINGLE_LINE 行高最紧、FORMATTED 行数最多）。 */
     fun test三种显示模式均满足单格预算() {
@@ -216,46 +196,28 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
             state.logListSqlDisplayMode = saved
         }
     }
-    // ---------- 宽度算式（计划 P3：最隐蔽、症状最轻的一条） ----------
+    // ---------- 宽度算式 ----------
 
     /**
-     * SQL 区可用宽度必须扣除轨道宽度。
-     *
-     * 反向守卫：若算式漏扣轨道，SQL 会按偏大的宽度测量——末尾字符被裁掉却**不报错、不告警**，
-     * 用户只会觉得「怎么少几个字」。这类静默缺陷只能靠算式层面的断言拦住。
+     * SQL 区可用宽度 = 列表宽 - 单元格内边距 - 色条（不再有侧栏要扣）。
      */
-    fun testSQL区宽度_必须扣除轨道宽度() {
+    fun testSQL区宽度_只扣内边距与色条() {
         val cell = LogEntryListCellRenderer()
         val l = list(600)
-        val withRail = sqlAreaWidth(l, cell, LogEntryRail.RAIL_WIDTH)
-        val withoutRail = sqlAreaWidth(l, cell, 0)
-        assertEquals(
-            "扣轨道与不扣轨道应恰好差一个轨道宽度",
-            LogEntryRail.RAIL_WIDTH,
-            withoutRail - withRail,
-        )
-        assertTrue("可用宽度必须为正（600px 列表 - 轨道后仍有空间）", withRail > 0)
+        val w = sqlAreaWidth(l, cell)
+        val expected = 600 - cell.insets.left - cell.insets.right - SqlListTypeColor.BAR_WIDTH
+        assertEquals("可用宽度应为列表宽减去内边距与色条", expected, w)
+        assertTrue("可用宽度必须为正", w > 0)
     }
 
-    /** 窄侧栏：轨道降档到 76px，SQL 区随之变宽（给 SQL 让空间）。 */
-    fun test窄侧栏_轨道降档且SQL区变宽() {
+    /** 窄侧栏：SQL 区不再被固定侧栏吃掉 88px。 */
+    fun test窄侧栏_SQL区仍占主导宽度() {
         val cell = LogEntryListCellRenderer()
-        val narrow = list(460)
-        val wide = list(700)
-        val narrowSql = sqlAreaWidth(narrow, cell, railWidthFor(narrow.width))
-        val wideSql = sqlAreaWidth(wide, cell, railWidthFor(wide.width))
-        assertEquals("460px 应降档到窄轨道", LogEntryRail.RAIL_NARROW_WIDTH, railWidthFor(460))
-        assertEquals("700px 用常规轨道", LogEntryRail.RAIL_WIDTH, railWidthFor(700))
-        assertTrue("宽列表的 SQL 区应更宽", wideSql > narrowSql)
+        val narrow = list(420)
+        val w = sqlAreaWidth(narrow, cell)
+        assertTrue("420px 侧栏下 SQL 区应 ≥380px（实际 ${w}px）", w >= 380)
     }
 
-    /** 轨道宽度预算：SQL 区不得被轨道挤到不可用（590px 侧栏下仍应 ≥ 400px）。 */
-    fun test常规侧栏_SQL区仍占主导宽度() {
-        val cell = LogEntryListCellRenderer()
-        val l = list(590)
-        val sqlWidth = sqlAreaWidth(l, cell, railWidthFor(590))
-        assertTrue("590px 侧栏下 SQL 区应 ≥400px（实际 ${sqlWidth}px）——否则轨道过宽挤占正文", sqlWidth >= 400)
-    }
 
     // ---------- 大数据集压测（用户要求：几千 / 几万条） ----------
 
@@ -278,9 +240,11 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
         repeat(rounds) { acc += maxDurationOf(data) ?: 0L }
         val perScanMs = (System.nanoTime() - t0) / 1_000_000.0 / rounds
         assertTrue("应能扫出结果（$acc）", acc > 0)
+        // 预算 3ms：单遍遍历两万条在实机约 0.6ms，但 headless + 共享 CI 抖动可到 1.3ms。
+        // 判据仍是「不得退化为 mapNotNull 分配临时列表」——那种写法在两万条下是 5~10ms 量级。
         assertTrue(
-            "两万条最大耗时扫描 ${"%.3f".format(perScanMs)}ms——单遍遍历应在 1ms 内，超出说明退回了会分配临时列表的写法",
-            perScanMs < 1.0,
+            "两万条最大耗时扫描 ${"%.3f".format(perScanMs)}ms——单遍遍历应在 3ms 内，超出说明退回了会分配临时列表的写法",
+            perScanMs < 3.0,
         )
     }
 
@@ -358,4 +322,37 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
         if (c is java.awt.Container) for (child in c.components) n += countComponents(child)
         return n
     }
+    // ---------- 条目分割（用户反馈「容易混在一起」的根治守卫） ----------
+
+    /**
+     * 条目上下留白必须显著大于改造前的 5px。
+     *
+     * 根因回顾：改造前上下各 5px，而条目内 SQL 行距是 1.45 倍行高（约 17px），
+     * 两者接近 → 眼睛找不到条目切分点。留白是分条的主力手段，退回到 5px 就回到原问题。
+     */
+    fun test条目留白_显著大于改造前() {
+        assertTrue(
+            "常规留白应 ≥10px（当前 ${RailCellRendererBase.ROW_VERTICAL_PADDING}px）——" +
+                "改造前是 5px，与条目内行距接近导致混在一起",
+            RailCellRendererBase.ROW_VERTICAL_PADDING >= 10,
+        )
+        assertTrue(
+            "单行模式留白应 ≥6px（当前 ${RailCellRendererBase.ROW_VERTICAL_PADDING_DENSE}px）",
+            RailCellRendererBase.ROW_VERTICAL_PADDING_DENSE >= 6,
+        )
+    }
+
+    /** 分隔线色必须比平台默认 border 更强（否则深色主题下看不见）。 */
+    fun test条目分隔线_强于平台默认边框() {
+        val divider = RailCellRendererBase.ROW_DIVIDER
+        val platform = JBColor.border()
+        assertNotSame("分隔线应是独立的命名色，不是平台 border 默认值", platform, divider)
+        // 深色主题下亮度应高于平台 border（更显眼）
+        assertTrue(
+            "分隔线应比平台 border 更亮（divider=${divider.rgb.toString(16)}, border=${platform.rgb.toString(16)}）",
+            brightness(divider) >= brightness(platform),
+        )
+    }
+
+    private fun brightness(c: java.awt.Color): Int = (c.red * 299 + c.green * 587 + c.blue * 114) / 1000
 }

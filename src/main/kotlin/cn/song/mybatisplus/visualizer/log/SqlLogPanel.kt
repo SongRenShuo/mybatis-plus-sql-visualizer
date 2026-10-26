@@ -2302,13 +2302,6 @@ class SqlLogPanel(
         /** R53：双通道状态栏两段文案之间的语义分隔符。 */
         private const val SEP_LABEL = "｜"
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
-        /**
-         * T-LogListRail：轨道首行用的「时段格式」回落值。
-         *
-         * 默认完整格式 19 字符，88px 轨道放不下；剥掉日期后剩 `HH:mm:ss`（8 字符）。
-         * 用户只配了日期 token（剥完无时间片段）时也回落到本值。
-         */
-        internal const val DEFAULT_TIMESTAMP_FORMAT_TIME_ONLY = "HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
          *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */

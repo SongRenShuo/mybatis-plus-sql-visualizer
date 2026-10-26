@@ -306,17 +306,16 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
 }
 
 /**
- * 日志列表条目单元格渲染器（F-44-2 重写；T-LogListFreeze-04 弃 HTML 通道）。
+ * 日志列表条目单元格渲染器（T-LogListHeader）。
  *
- * **T-LogListRail（2026-10-26）改版**：原「元信息行在上 + SQL 行在下」的两行卡片，改为
- * **左侧固定宽度信息轨 + 右侧 SQL 区**。轨内竖排「序号时刻 / 耗时 / 2px 进度条 / 类名 / 徽章」，
- * SQL 区拿到其余全部宽度。改版动机见 [LogEntryRail] 的类 KDoc。
+ * 版面：`[色条] 头部行（全部元信息） / SQL 行… / 可选错误行`。
+ * 头部行顺序与优先级裁剪见 [RailCellRendererBase.bindHeaderLine] 与
+ * [clipFragmentsByPriority]；条目分割靠上下留白 + 底部细线。
  *
- * `metaLine` 保留为 [LogEntryRail.timeLine] 的兼容别名——存量测试用 `joinedText(metaLine)` 断言
- * 序号/时间，改成别名后这些断言零改动继续有效。
+ * 演变：`bed58b64` 的 88px 左侧信息轨与进度条已被用户实测否决并撤除；
+ * `metaLine` 保留为头部行的兼容别名，存量测试断言零改动继续有效。
  *
- * 渲染热路径约束（T-LogListFreeze 系列）：不在逐格渲染里增删组件、不新建 Border/Color 实例；
- * 形态切换与徽章行挂载都由 [LogEntryRail] 内部早退。
+ * 渲染热路径约束（T-LogListFreeze 系列）：不在逐格渲染里增删组件、不新建 Border/Color 实例。
  */
 internal class LogEntryListCellRenderer : RailCellRendererBase() {
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
@@ -325,7 +324,7 @@ internal class LogEntryListCellRenderer : RailCellRendererBase() {
     /** O-90：同模板计数快照（「×N 同结构」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
     var templateCounts: Map<String, Int> = emptyMap()
 
-    /** 当前列表可见条目的最大耗时（进度条归一基准；refreshList 更新）。 */
+    /** 当前列表可见条目的最大耗时（refreshList 更新；进度条已退役，仍留作诊断读数与测试断言）。 */
     var maxDurationMs: Long? = null
 
     override fun templateCountsSnapshot(): Map<String, Int> = templateCounts
@@ -337,63 +336,3 @@ internal class LogEntryListCellRenderer : RailCellRendererBase() {
     override fun showDuration(): Boolean =
         PluginSettings.getInstance().state.showDurationInLogList
 }
-
-internal fun railFormFor(mode: SqlListDisplayMode): LogEntryRail.Form = when (mode) {
-    SqlListDisplayMode.SINGLE_LINE -> LogEntryRail.Form.COMPACT
-    SqlListDisplayMode.FORMATTED -> LogEntryRail.Form.DISTRIBUTED
-    SqlListDisplayMode.KEYWORD_WRAP -> LogEntryRail.Form.PACKED
-}
-
-/**
- * 轨道徽章片段（去重计数 / 同结构计数）。
- *
- * UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
- */
-internal fun railBadges(
-    entry: LogSqlEntry,
-    templateCounts: Map<String, Int>,
-    dedupeCounts: Map<String, Int>,
-): List<SqlTextFragment> = buildList {
-    dedupeCounts[entry.dedupeKey]
-        ?.takeIf { it > 0 && entry.source != SqlSource.SHARDINGSPHERE }
-        ?.let { add(SqlTextFragment("⨉$it", SimpleTextAttributes.REGULAR_ATTRIBUTES)) }
-    formatTemplateCountFragment(entry, templateCounts, false)?.let {
-        add(SqlTextFragment(it.first.trimEnd(), it.second))
-    }
-}
-
-/**
- * SQL 区可用像素宽度（T-LogListRail P3）。
- *
- * 与 [clipForList] 的差别只在**多扣轨道宽度**：轨道占的是 SQL 区左侧的固定宽度，
- * 若不扣，`clipSqlFragments` 会按偏大的宽度测量，末尾字符被 `…` 吞掉却不留痕（静默缺陷）。
- */
-internal fun sqlAreaWidth(
-    list: javax.swing.JList<*>?,
-    cell: JPanel,
-    railWidth: Int,
-): Int {
-    if (list == null || list.width <= 0) return 0
-    return list.width - cell.insets.left - cell.insets.right -
-        SqlListTypeColor.BAR_WIDTH - railWidth - list.insets.left - list.insets.right -
-        RAIL_SEPARATOR_WIDTH
-}
-
-/** 轨道分隔竖线宽度（[sqlAreaWidth] 扣除）。 */
-internal const val RAIL_SEPARATOR_WIDTH = 1
-
-/** 按给定像素宽度裁切片段（[clipForList] 的宽度已由调用方算好时的入口）。 */
-internal fun clipSqlFragmentsToWidth(
-    fragments: List<SqlTextFragment>,
-    list: javax.swing.JList<*>?,
-    maxWidth: Int,
-): List<SqlTextFragment> {
-    val baseFont = list?.font ?: return fragments
-    val metrics = HashMap<Int, java.awt.FontMetrics>(3)
-    return clipSqlFragments(fragments, maxWidth) { text, attributes ->
-        val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) java.awt.Font.BOLD else 0) or
-            (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) java.awt.Font.ITALIC else 0)
-        metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
-    }
-}
-

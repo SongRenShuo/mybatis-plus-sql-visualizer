@@ -204,7 +204,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             return Triple(
                 r.metaTextForTest,
                 r.sqlLines.joinToString("\n") { text(it) },
-                r.detailTextForTest + r.errorTextForTest,
+                r.errorTextForTest,
             )
         }
         val (liveMeta, liveSql, liveDetail) = render(false, false, false)
@@ -215,18 +215,19 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             assertTrue("轨道放骨架化类名与行号（Mapper 后缀已剥）: $meta", meta.contains("Order:42"))
             assertFalse("正文不得混入轨道", meta.contains("SELECT phone"))
         }
-        for (d in listOf(liveDetail, histDetail)) {
-            assertTrue(d, d.contains("[MySQL]"))
-            assertTrue(d, d.contains("[MCP]"))
-            assertTrue(d, d.contains(expectedCluster))
+        // T-LogListHeader：注脚行已并入头部行，库/MCP/徽章都在 metaTextForTest 里
+        for (meta in listOf(liveMeta, histMeta)) {
+            assertTrue(meta, meta.contains("[MySQL]"))
+            assertTrue(meta, meta.contains("[MCP]"))
+            assertTrue(meta, meta.contains(expectedCluster))
         }
-        assertTrue(liveDetail, liveDetail.contains("⨉3"))
-        assertTrue(liveDetail, liveDetail.contains("⛔ SQLException"))
+        assertTrue(liveMeta, liveMeta.contains("⨉3"))
+        assertTrue("报错独立成行", liveDetail.contains("⛔ SQLException"))
         // T-LogListRail：历史页**现在也显示报错**（此前 showLogDetails=false 把报错与影响行数一并吞掉，
         // 与日志页信息集不一致；记录本身带 errorText 时用户理应能看到）。去重计数仍只属实时通道——
         // 历史条目没有 dedupeCounts 快照，⨉N 不应出现。
         assertTrue("历史页也应显示报错（对齐日志页信息集）", histDetail.contains("⛔ SQLException"))
-        assertFalse("历史没有实时去重计数", histDetail.contains("⨉3"))
+        assertFalse("历史没有实时去重计数", histMeta.contains("⨉3"))
         assertTrue(liveSql, liveSql.contains("13812345678"))
         assertTrue(histSql, histSql.contains("13812345678"))
         assertTrue("默认模式确实按子句换行", live.sqlLines.size >= 2)
@@ -236,8 +237,8 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         render(false, false, false)
         assertSame("跨两种渲染器的同态缓存可复用", cached, e.cachedListLineFragments)
         val (selectedMeta, selectedSql, selectedDetail) = render(true, false, false)
-        // T-LogListRail：徽章在注脚行（轨道只放序号/时刻/耗时/类名）
-        assertTrue("$selectedMeta / $selectedDetail", selectedDetail.contains("⨉3") && selectedDetail.contains(expectedCluster))
+        // T-LogListHeader：注脚行已并入头部行，徽章在 metaTextForTest 里
+        assertTrue("$selectedMeta", selectedMeta.contains("⨉3") && selectedMeta.contains(expectedCluster))
         assertTrue(selectedSql, selectedSql.contains("13812345678"))
         assertEquals("失焦选中仍使用平台选中填充", list.selectionBackground, live.background)
         assertEquals(list.selectionForeground, live.metaLine.foreground)

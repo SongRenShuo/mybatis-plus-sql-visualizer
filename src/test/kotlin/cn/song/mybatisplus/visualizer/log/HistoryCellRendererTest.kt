@@ -45,8 +45,8 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         return sb.toString()
     }
 
-    /** 注脚行文本（T-LogListRail：库角标/影响行数/徽章迁到此行）。 */
-    private fun detail(r: RailCellRendererBase): String = r.detailTextForTest
+    /** 头部行文本（T-LogListHeader：注脚行已并入头部行）。 */
+    private fun detail(r: RailCellRendererBase): String = r.metaTextForTest
 
     private fun sqlEntry(sql: String, sourceFile: String? = null, sourceLine: Int = 0, ms: Long? = null) =
         LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = 1_700_000_000_000L, sourceFile = sourceFile, sourceLine = sourceLine, executionTimeMs = ms)
@@ -113,16 +113,16 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_同模板徽章达阈值渲染() {
         val sql = "SELECT * FROM hist_orders WHERE uid = 7"
         sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
-        assertTrue("达阈值应渲染同模板徽章", detail(renderSql(sqlEntry(sql))).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
+        assertTrue("达阈值应渲染同模板徽章", renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
         sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 2)
         assertFalse(
             "未达阈值不渲染",
-            detail(renderSql(sqlEntry(sql))).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)),
+            renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)),
         )
         sqlRenderer.templateCounts = emptyMap()
         assertFalse(
             "无计数不渲染",
-            detail(renderSql(sqlEntry(sql))).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
+            renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
         )
     }
 
@@ -253,11 +253,12 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
 
     fun test二级条目_背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
             renderSql(sqlEntry("UPDATE user SET a = 1"))
-            assertSame("未选中为普通边框", sqlRenderer.normalBorder, sqlRenderer.border)
+            val unselected = sqlRenderer.border
             renderSql(sqlEntry("UPDATE user SET a = 1"), true)
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                sqlRenderer.normalBorder, sqlRenderer.border)
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）", unselected, sqlRenderer.border)
         }
     }
 
@@ -334,7 +335,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val e = sqlEntry("SELECT id FROM user WHERE id = 1", ms = 7L)
             .copy(source = SqlSource.MCP, databaseName = "MySQL")
         val r = renderSql(e)
-        val d = detail(r)
+        val d = r.metaTextForTest
         val meta = r.metaTextForTest
         assertTrue("历史页注脚行应含 MCP 徽标: $d", d.contains("[MCP]"))
         assertTrue("与目标库角标共存: $d", d.contains("[MySQL]"))
@@ -343,7 +344,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
 
     fun test二级条目_非MCP来源_不渲染徽标() {
         val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L)
-        assertFalse("非 MCP 来源不应出现徽标", detail(renderSql(e)).contains("[MCP]"))
+        assertFalse("非 MCP 来源不应出现徽标", renderSql(e).metaTextForTest.contains("[MCP]"))
     }
 
     fun test二级条目_落盘再读回_徽标仍在() {
@@ -366,7 +367,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         saver.close()
 
         val read = SqlLogFileReader.readFromFile(dir.listFiles { f -> f.extension == "sql" }!!.single()).single()
-        val d = detail(renderSql(read))
+        val d = renderSql(read).metaTextForTest
         assertTrue("读回条目来源应仍为 MCP: ${read.source}", read.source == SqlSource.MCP)
         assertTrue("读回后渲染仍出 MCP 徽标: $d", d.contains("[MCP]"))
         assertTrue("目标库角标共存: $d", d.contains("[MySQL]"))

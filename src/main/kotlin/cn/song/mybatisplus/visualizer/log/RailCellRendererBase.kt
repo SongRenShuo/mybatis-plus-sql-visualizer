@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.speedSearch.SpeedSearchUtil
 import java.awt.BorderLayout
-import java.awt.Component
 import java.awt.Dimension
 import java.awt.GridLayout
 import javax.swing.BorderFactory
@@ -15,30 +15,36 @@ import javax.swing.ListCellRenderer
 import javax.swing.border.Border
 
 /**
- * SQL 列表条目单元格渲染器基类（T-LogListRail）。
+ * SQL 列表条目单元格渲染器基类（T-LogListHeader）。
  *
- * 存在理由：日志页 `LogEntryListCellRenderer` 与历史页 `HistoryCellRenderer` 曾有**三组方法
- * 逐行同构**（`getListCellRendererComponent` / `ensureSqlLineCount` / `sqlLineFragmentsFor`），
- * 每次改版都得人工同步两遍、且容易漏一处。本次改版把共用部分收进本基类，
- * 子类只声明「计数快照从哪取」与「耗时是否显示」两个差异点。
+ * 版面（自上而下）：
+ * ```
+ * [色条] #序号 时间 耗时 [库] 类名:行号 (行数) 同结构 N 条   ← 头部行（全部元信息）
+ *        SELECT ...                                        ← SQL 第 1 行
+ *        FROM ...
+ *        WHERE ...
+ *        ⛔ 报错（仅 errorText 存在时）
+ * ```
  *
- * 版面（自上而下、自左向右）：
- * ```
- * [色条] [轨道 88px][竖线] [SQL 行…]
- *                          [错误行（有 errorText 才挂）]
- * ```
- * 轨道语义见 [LogEntryRail]。SQL 区宽度必须扣除轨道（见 [sqlAreaWidth]），
- * 否则 SQL 会按偏大的宽度测量、末尾字符被静默吞掉。
+ * 演变：`bed58b64` 的 88px 左侧信息轨 + 进度条 + 竖线已全部撤除（用户实测否决：占宽度、
+ * 与 SQL 不同轴、扫视要左右来回）。元信息改为头部一行，SQL 区拿整行宽度。
+ *
+ * 条目分割：靠**上下各 12px 留白 + 底部 1px 略强色线**（见 [ROW_VERTICAL_PADDING]）。
+ * 不画斑马纹——深色主题下极淡底色辨识度不足，用户明确否决。
+ *
+ * 头部行超宽时按**优先级丢片段**（见 [clipFragmentsByPriority]）：先丢时间里的日期，
+ * 再丢影响行数，最后才截断尾部徽章。现有 [clipSqlFragments] 是「从左到右超出即停」，
+ * 表达不了这个语义。
  */
 internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellRenderer<Any?> {
 
-    /** 左侧信息轨。 */
-    internal val rail = LogEntryRail()
+    /** 头部行（序号/时间/耗时/库/MCP/来源/影响行数/徽章）。 */
+    internal val headerLine = SimpleColoredComponent()
 
     /**
-     * 首行兼容别名（存量测试断言序号/时间用）。**只读**——写入请走 [rail]。
+     * 首行兼容别名（存量测试断言元信息用）。**只读**——写入请走 [headerLine]。
      */
-    internal val metaLine: SimpleColoredComponent get() = rail.timeLine
+    internal val metaLine: SimpleColoredComponent get() = headerLine
 
     /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
     private val sqlLinePool = mutableListOf(SimpleColoredComponent())
@@ -53,70 +59,63 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
 
     /**
      * T-CrudColor：左侧类型色条（[SqlListTypeColor.STYLE_BAR] 下着色可见；
-     * 其他样式 `isOpaque=false` 但仍**占位**——占位是刻意的：切换样式时文本左缘不位移）。
-     * T-LogListRail：类型只靠本色条表达，不再加「查/增/改/删」字样。
+     * 其他样式 `isOpaque=false` 但仍**占位**——切换样式时文本左缘不位移）。
+     * 类型只靠本色条表达，不加「查/增/改/删」字样。
      */
     internal val colorBar = JPanel().apply {
         preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
         isOpaque = false
     }
 
-    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
-    internal val normalBorder: Border = BorderFactory.createCompoundBorder(
-        BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-        javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
+    /**
+     * 未选中态 Border：上下留白 + 底部 1px 分隔线。
+     *
+     * 留白是分条主力——改造前上下各 5px，而条目内 SQL 行距也是 1.45 倍行高，
+     * 导致「条目内间距 ≈ 条目间距」，眼睛找不到切分点（用户原话「容易混在一起」）。
+     * 分隔线用比 `JBColor.border()` 略强的色，深色主题下才看得见。
+     *
+     * **留白按模式分流**：单行模式本身是「一屏塞更多条」的密度模式，若也吃 12px 上下留白，
+     * 单条从 ~45px 涨到 68px（一屏少看 4 条），与它的用途冲突——故单行用
+     * [ROW_VERTICAL_PADDING_DENSE]。两个 Border 实例**预建**，渲染热路径不新建 Border
+     * （T-LogListFreeze 同族守卫）。
+     */
+    internal val normalBorder: Border = borderFor(ROW_VERTICAL_PADDING)
 
-    /** 轨道与 SQL 区之间的 1px 竖线。 */
-    private val railSeparator = JPanel().apply {
-        preferredSize = Dimension(RAIL_SEPARATOR_WIDTH, 1)
+    /** 单行模式用的紧凑 Border（上下 [ROW_VERTICAL_PADDING_DENSE]）。 */
+    private val compactBorder: Border = borderFor(ROW_VERTICAL_PADDING_DENSE)
+
+    /** 内容区：头部行（NORTH）+ SQL 行（CENTER）+ 错误行（SOUTH，按需挂载）。 */
+    private val content = JPanel(BorderLayout()).apply { isOpaque = false }
+
+    /** 头部行与 SQL 行之间的细分隔留白（纯视觉呼吸，不加线）。 */
+    private val headerGap = JPanel().apply {
         isOpaque = false
+        preferredSize = Dimension(1, HEADER_GAP)
     }
-
-    /** 轨道容器：轨道（固定宽）+ 竖线，整体挂内容区 WEST。 */
-    private val railHost = JPanel(BorderLayout()).apply { isOpaque = false }
 
     /** SQL 区容器：SQL 行（CENTER）+ 错误行（SOUTH）。 */
     private val sqlHost = JPanel(BorderLayout()).apply { isOpaque = false }
 
-    /** 内容区：轨道（WEST）+ SQL 区（CENTER）。 */
-    private val content = JPanel(BorderLayout()).apply { isOpaque = false }
-
     /**
-     * 错误行（全宽红字；有 errorText 才挂载）。报错文本远比轨道宽，塞进 88px 轨道会整段被截成
-     * `⛔ ER…`、等于丢信息——故挂在 SQL 区下方通栏。
+     * 错误行（全宽红字；有 errorText 才挂载）。报错文本长度不可控，仍需通栏而不是塞进头部行。
      */
     private val errorLine = SimpleColoredComponent().apply { isOpaque = false }
 
-    /**
-     * 注脚行（全宽灰字）：目标库角标、MCP 徽标、影响行数、去重计数、同结构计数。
-     *
-     * 这些片段原来都在「元信息行」里，与时间/耗时/来源排在一起。改版后时间/耗时/来源进了 88px
-     * 轨道，而它们**宽度不可控**（`[MySQL · jpa_demo@localhost:3306]`、`⛔ Data too long for
-     * column 'a'` 之类），塞进轨道会被截成无意义的残片。故统一改挂 SQL 区下方通栏：
-     * 既保留全部信息，也不占轨道宽度。无内容时不占高度。
-     */
-    private val detailLine = SimpleColoredComponent().apply { isOpaque = false }
-
     private var errorMounted = false
-    private var detailMounted = false
 
     /** 同模板计数快照（子类提供取值来源）。 */
     protected abstract fun templateCountsSnapshot(): Map<String, Int>
 
-    /** 可见条目最大耗时快照（进度条归一基准；子类提供取值来源）。 */
+    /** 可见条目最大耗时快照（子类提供取值来源）。 */
     protected abstract fun maxDurationMsSnapshot(): Long?
 
-    /** 是否显示耗时（日志页/历史页各读设置；历史上历史页曾硬编码 true）。 */
+    /** 是否显示耗时（日志页/历史页各读设置）。 */
     protected abstract fun showDuration(): Boolean
 
-    /** 元信息行渲染文本（测试断言用）。 */
-    val metaTextForTest: String get() = rail.textForTest
-
-    /** 注脚行渲染文本（测试断言用：角标/影响行数/徽章都在这里）。 */
-    val detailTextForTest: String
+    /** 元信息渲染文本（测试断言用）。 */
+    val metaTextForTest: String
         get() = buildString {
-            val it = detailLine.iterator()
+            val it = headerLine.iterator()
             while (it.hasNext()) append(it.next())
         }.trim()
 
@@ -130,18 +129,18 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
     init {
         layout = BorderLayout()
         isOpaque = true
+        headerLine.isOpaque = false
         sqlLinePool[0].isOpaque = false
-        linesPanel.add(sqlLinePool[0])
         errorLine.isOpaque = false
 
-        railHost.add(rail, BorderLayout.CENTER)
-        railHost.add(railSeparator, BorderLayout.EAST)
-        railHost.preferredSize = Dimension(LogEntryRail.RAIL_WIDTH + RAIL_SEPARATOR_WIDTH, 1)
         sqlHost.add(linesPanel, BorderLayout.CENTER)
-        content.add(railHost, BorderLayout.WEST)
-        content.add(sqlHost, BorderLayout.CENTER)
+        linesPanel.add(sqlLinePool[0])
 
-        // T-CrudColor：色条挂 WEST；T-LogListRail：内容区占满其余（SQL 区拿剩余宽度，轨道固定宽）
+        content.add(headerLine, BorderLayout.NORTH)
+        content.add(headerGap, BorderLayout.CENTER)
+        content.add(sqlHost, BorderLayout.SOUTH)
+
+        // 色条挂 WEST；内容区占满其余（SQL 拿整行宽度，不再有固定宽侧栏）
         add(colorBar, BorderLayout.WEST)
         add(content, BorderLayout.CENTER)
         border = normalBorder
@@ -153,43 +152,27 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         index: Int,
         isSelected: Boolean,
         cellHasFocus: Boolean,
-    ): Component {
+    ): java.awt.Component {
         val entry = value as? LogSqlEntry
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
         val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充
         val useSelectionFill = isSelected
-        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
+        // 留白按模式分流：单行模式密度优先（见 normalBorder KDoc）
+        val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        val activeBorder = if (mode == SqlListDisplayMode.SINGLE_LINE) compactBorder else normalBorder
+        applyCrudColorMark(this, colorBar, activeBorder, tint, isSelected, list)
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
-
-        val mode = PluginSettings.getInstance().sqlListDisplayMode()
         val lineFragments = if (entry != null) {
-            val width = list?.width ?: 0
-            rail.setRailWidth(railWidthFor(width))
-            // 热路径守卫：preferredSize 赋值会触发 propertyChange → revalidate。只在轨道宽度真变化时设，
-            // 否则每次滚动/重绘都新建 Dimension 并调度一次重排（T-LogListFreeze 同族问题）。
-            val hostWidth = rail.railWidth + RAIL_SEPARATOR_WIDTH
-            if (railHost.preferredSize.width != hostWidth) {
-                railHost.preferredSize = Dimension(hostWidth, 1)
-            }
-            rail.setForm(railFormFor(mode))
-            rail.bind(
-                entry = entry,
-                isSelected = isSelected,
-                maxDurationMs = maxDurationMsSnapshot(),
-                foreground = fg,
-                showDuration = showDuration(),
-            )
-            bindDetailLine(entry, isSelected, fg, useSelectionFill, list)
+            bindHeaderLine(entry, isSelected, fg, useSelectionFill, list)
             bindErrorLine(entry, isSelected, fg, useSelectionFill, list)
             sqlLineFragmentsFor(entry, mode)
         } else null
 
-        // SQL 区宽度 = 列表可视宽 - 单元格内边距 - 色条 - 轨道 - 竖线
-        val sqlWidth = sqlAreaWidth(list, this, if (entry != null) rail.railWidth else 0)
+        // SQL 区宽度 = 列表可视宽 - 单元格内边距 - 色条（不再有侧栏要扣）
+        val sqlWidth = sqlAreaWidth(list, this)
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
@@ -208,80 +191,43 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
     protected open fun dedupeCountsSnapshot(): Map<String, Int> = emptyMap()
 
     /**
-     * 注脚行文本缓存（T-LogListRail 性能守卫）。
+     * 头部行绑定：全部元信息片段，按用户定案的「库前置」顺序。
      *
-     * 为什么需要缓存：`details()` 每次调用都要做 3~5 次片段构造（数据库名切分、影响行数格式化、
-     * 模板计数查表）+ `buildList` 分配。渲染器**每格绘制都跑一遍**，滚动时一屏 20 格 × 每秒多帧，
-     * 在流式灌入（每秒数百条）的场景下会变成可观测的 GC 压力——这正是 T-LogListFreeze 系列
-     * 反复出问题的形态。注脚内容只取决于（条目身份 + 是否选中 + 两份计数快照），故按条目缓存。
+     * 顺序：`#序号 · 时间 · 耗时 · [库] · [MCP] · 类名:行号 · (影响行数) · ⨉去重 · 同结构 N 条`
      *
-     * 缓存键用条目引用 + 计数快照引用 + 选中态：计数快照换代（refreshList 每次重建 Map）即失效，
-     * 条目被替换（同位置新条目）也因引用不同而失效——不会串味。
+     * 为什么库在类名之前（用户 2026-10-26 定案方案④）：
+     *  - 库角标是**定长短串**（`[MySQL]` / `[PostgreSQL]`），位置固定，扫视时形成稳定锚点；
+     *    类名长度随内容浮动，放它之后，宽度不足时先裁它不破坏前几列的稳定性。
+     *  - 多数据源场景下「这条打的是哪个库」是判定 SQL 是否走对源的第一判据。
      */
-    private var detailCacheEntry: LogSqlEntry? = null
-    private var detailCacheSelected = false
-    private var detailCacheTemplates: Map<String, Int>? = null
-    private var detailCacheDedupe: Map<String, Int>? = null
-    private var detailCacheFragments: List<SqlTextFragment> = emptyList()
-
-    /**
-     * 注脚行绑定：目标库角标 / MCP 徽标 / 影响行数 / 去重计数 / 同结构计数。
-     *
-     * 这些片段宽度不可控（连接串、影响行数、计数徽章），进不了 88px 轨道，统一改挂 SQL 区下方通栏。
-     * 顺序沿用改造前的 [SqlEntryPresentation.metadata] 口径（库 → MCP → 影响行数 → 去重 → 同结构），
-     * 保证老用户视觉记忆连续；日期时间与耗时已由轨道承接，故不重复出现在注脚里。
-     */
-    private fun bindDetailLine(
+    private fun bindHeaderLine(
         entry: LogSqlEntry,
         isSelected: Boolean,
         fg: java.awt.Color,
         useSelectionFill: Boolean,
         list: JList<*>?,
     ) {
-        val templates = templateCountsSnapshot()
-        val dedupe = dedupeCountsSnapshot()
-        val fragments = if (
-            detailCacheEntry === entry &&
-            detailCacheSelected == isSelected &&
-            detailCacheTemplates === templates &&
-            detailCacheDedupe === dedupe
-        ) {
-            detailCacheFragments
-        } else {
-            SqlEntryPresentation.details(
-                entry,
-                selected = isSelected,
-                templateCounts = templates,
-                dedupeCounts = dedupe,
-            ).also {
-                detailCacheEntry = entry
-                detailCacheSelected = isSelected
-                detailCacheTemplates = templates
-                detailCacheDedupe = dedupe
-                detailCacheFragments = it
-            }
+        val fragments = SqlEntryPresentation.headerFragments(
+            entry = entry,
+            selected = isSelected,
+            showDuration = showDuration(),
+            templateCounts = templateCountsSnapshot(),
+            dedupeCounts = dedupeCountsSnapshot(),
+        )
+        val width = sqlAreaWidth(list, this)
+        headerLine.foreground = fg
+        headerLine.clear()
+        clipFragmentsByPriority(fragments, width, headerMeasurer(list, this)).forEach {
+            headerLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
         }
-        detailLine.foreground = fg
-        detailLine.clear()
-        fragments.forEach {
-            detailLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
-        }
-        val shouldMount = fragments.isNotEmpty()
-        if (detailMounted != shouldMount) {
-            detailMounted = shouldMount
-            if (shouldMount) sqlHost.add(detailLine, BorderLayout.SOUTH) else sqlHost.remove(detailLine)
-            sqlHost.revalidate()
-        }
-        if (shouldMount) {
-            list?.let { SpeedSearchUtil.applySpeedSearchHighlighting(it, detailLine, false, useSelectionFill) }
-        }
+        list?.let { SpeedSearchUtil.applySpeedSearchHighlighting(it, headerLine, false, useSelectionFill) }
     }
 
     /**
      * 错误行绑定（M56 T-M56-05 语义保留）。
      *
-     * 注意 P2：轨道拆成多个 [SimpleColoredComponent] 后，speed search 高亮需逐组件调用；
-     * 本基类已对 [rail] 内各行与 SQL 行分别施加，漏一处只会「不亮」、不报错。
+     * 报错文本远比头部行其他片段长（`⛔ ERROR: relation "user" does not exist` 量级），
+     * 混进头部行会把其余元信息全挤掉——故独立成行，只有 errorText 存在时才占高度。
      */
     private fun bindErrorLine(
         entry: LogSqlEntry,
@@ -342,5 +288,64 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
                 entry.cachedListLineFragmentsMasked = maskOn
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
+    }
+
+    companion object {
+        /** 条目上下留白（px）——分条主力手段。改造前是 5，实测条目内行距≈条目间距导致混在一起。 */
+        internal const val ROW_VERTICAL_PADDING = 12
+
+        /** 单行模式的紧凑留白（px）——密度优先，不能吃满 12px。 */
+        internal const val ROW_VERTICAL_PADDING_DENSE = 8
+
+        /** 头部行与 SQL 首行之间的额外呼吸（px）。 */
+        internal const val HEADER_GAP = 3
+
+        /** 条目分隔线——比 `JBColor.border()` 略强，深色主题下才可见。 */
+        internal val ROW_DIVIDER: java.awt.Color =
+            JBColor.namedColor("mpvs.log.rowDivider", 0xC8C8C8, 0x4A4D52)
+
+        /** 按留白高度构造条目 Border（预建实例，不在渲染热路径调用）。 */
+        internal fun borderFor(verticalPadding: Int): Border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, ROW_DIVIDER),
+            javax.swing.BorderFactory.createEmptyBorder(verticalPadding, 5, verticalPadding, 9),
+        )
+    }
+}
+
+/**
+ * SQL 区可用像素宽度。
+ *
+ * 改造后不再有固定宽侧栏，只扣单元格内边距与色条。
+ */
+internal fun sqlAreaWidth(list: JList<*>?, cell: JPanel): Int {
+    if (list == null || list.width <= 0) return 0
+    return list.width - cell.insets.left - cell.insets.right -
+        SqlListTypeColor.BAR_WIDTH - list.insets.left - list.insets.right
+}
+
+/** 按给定像素宽度裁切片段（宽度已由调用方算好时的入口）。 */
+internal fun clipSqlFragmentsToWidth(
+    fragments: List<SqlTextFragment>,
+    list: JList<*>?,
+    maxWidth: Int,
+): List<SqlTextFragment> {
+    val baseFont = list?.font ?: return fragments
+    val metrics = HashMap<Int, java.awt.FontMetrics>(3)
+    return clipSqlFragments(fragments, maxWidth) { text, attributes ->
+        val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) java.awt.Font.BOLD else 0) or
+            (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) java.awt.Font.ITALIC else 0)
+        metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
+    }
+}
+
+/** 头部行的像素测量器（按字重缓存 FontMetrics，避免逐片段新建）。 */
+internal fun headerMeasurer(list: JList<*>?, cell: JPanel): (String, SimpleTextAttributes) -> Int {
+    val baseFont = list?.font
+    if (list == null || baseFont == null) return { text, _ -> text.length * 7 }
+    val metrics = HashMap<Int, java.awt.FontMetrics>(3)
+    return { text, attributes ->
+        val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) java.awt.Font.BOLD else 0) or
+            (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) java.awt.Font.ITALIC else 0)
+        metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
     }
 }

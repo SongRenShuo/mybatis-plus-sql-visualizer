@@ -64,8 +64,8 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         return sb.toString()
     }
 
-    /** 注脚行文本（T-LogListRail：库角标/MCP/影响行数/去重/同结构徽章迁到此行）。 */
-    private fun detail(r: RailCellRendererBase): String = r.detailTextForTest
+    /** 头部行文本（T-LogListHeader：注脚行已并入头部行，全部元信息都在这里）。 */
+    private fun detail(r: RailCellRendererBase): String = r.metaTextForTest
 
     private fun entry(
         sql: String,
@@ -90,7 +90,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         val r = render(entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
         val meta = r.metaTextForTest
         assertTrue("轨道首行含来源类名 A:42: $meta", meta.contains("A:42"))
-        assertTrue("注脚行含去重徽章", detail(r).contains("⨉2"))
+        assertTrue("头部行含去重徽章", detail(r).contains("⨉2"))
         assertFalse("轨道不应混入 SQL", meta.contains("SELECT"))
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
     }
@@ -105,7 +105,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             source = SqlSource.AGENT,
             databaseName = "MySQL",
         )
-        val d = detail(render(e))
+        val d = render(e).metaTextForTest
         assertTrue("注脚行应含目标库角标: $d", d.contains("[MySQL]"))
     }
 
@@ -117,7 +117,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             timestamp = 1_700_000_000_000L,
             source = SqlSource.AGENT,
         )
-        val d = detail(render(e))
+        val d = render(e).metaTextForTest
         assertFalse("无 databaseName 不应显示角标", d.contains("[MySQL]"))
     }
 
@@ -133,7 +133,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             executionTimeMs = 7L,
         )
         val r = render(e)
-        val d = detail(r)
+        val d = r.metaTextForTest
         val meta = r.metaTextForTest
         assertTrue("注脚行应含 MCP 徽标: $d", d.contains("[MCP]"))
         assertTrue("MCP 徽标与目标库角标共存: $d", d.contains("[MySQL]"))
@@ -210,13 +210,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test去重徽章随dedupeCounts渲染() {
         val sql = "SELECT * FROM repeated WHERE id = 1"
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 4)
-        assertTrue("去重 ⨉4 徽章应渲染", detail(render(entry(sql))).contains("⨉4"))
+        assertTrue("去重 ⨉4 徽章应渲染", render(entry(sql)).metaTextForTest.contains("⨉4"))
 
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 0)
-        assertFalse("计数 0 不显示徽章", detail(render(entry(sql))).contains("⨉"))
+        assertFalse("计数 0 不显示徽章", render(entry(sql)).metaTextForTest.contains("⨉"))
 
         renderer.dedupeCounts = emptyMap()
-        assertFalse("无计数不显示徽章", detail(render(entry(sql))).contains("⨉"))
+        assertFalse("无计数不显示徽章", render(entry(sql)).metaTextForTest.contains("⨉"))
     }
 
     fun test渲染返回值非空_组件有效() {
@@ -230,13 +230,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test同模板徽章_达阈值渲染到元信息行() {
         val sql = "SELECT * FROM big_orders WHERE uid = 7"
         renderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
-        val d = detail(render(entry(sql)))
+        val d = render(entry(sql)).metaTextForTest
         assertTrue("达阈值应渲染同模板徽章: $d", d.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
         // 与去重徽章相邻共存（本条无去重计数，仅模板徽章）
         renderer.templateCounts = mapOf(structureFingerprint(sql) to 5)
         assertTrue(
             "计数 5 显示 ×5",
-            detail(render(entry(sql))).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)),
+            render(entry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)),
         )
     }
 
@@ -330,7 +330,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             val meta = r.metaTextForTest
             // T-LogListRail：来源类名在轨道、去重徽章在注脚行；两者都不得混入 SQL 文本
             assertTrue("[$mode] 轨道含来源类名: $meta", meta.contains("A:42"))
-            assertTrue("[$mode] 注脚行含去重徽章", detail(r).contains("⨉2"))
+            assertTrue("[$mode] 头部行含去重徽章", detail(r).contains("⨉2"))
             assertFalse("[$mode] 轨道不混入 SQL", meta.contains("SELECT"))
         }
     }
@@ -423,11 +423,12 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
 
     fun test背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
             render(entry("UPDATE user SET a = 1"))
-            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.border)
+            val unselected = renderer.border
             render(entry("UPDATE user SET a = 1"), true)
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                renderer.normalBorder, renderer.border)
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）", unselected, renderer.border)
         }
     }
 
@@ -522,9 +523,9 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test影响行数负值不显示_负行数守卫() {
         // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
         val neg = entry("SELECT 1").copy(source = SqlSource.AGENT, updateCount = -1L)
-        assertFalse("负值影响行数应不显示", detail(render(neg)).contains("rows)"))
+        assertFalse("负值影响行数应不显示", render(neg).metaTextForTest.contains("rows)"))
         val zero = entry("UPDATE t SET a = 1").copy(source = SqlSource.AGENT, updateCount = 0L)
-        assertTrue("0 行是合法计数，应显示", detail(render(zero)).contains("(0 rows)"))
+        assertTrue("0 行是合法计数，应显示", render(zero).metaTextForTest.contains("(0 rows)"))
     }
 
     fun test影响行数与报错片段同列() {
@@ -534,11 +535,11 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             errorText = "SQLException: Data too long for column 'a'",
         )
         val r = render(err)
-        assertTrue("注脚行应含影响行数片段", detail(r).contains("(3 rows)"))
+        assertTrue("头部行应含影响行数片段", detail(r).contains("(3 rows)"))
         assertTrue("错误行含报错片段（单行截断）", r.errorTextForTest.contains("⛔ SQLException: Data too long"))
         // 无报错无行数的普通条目不显示
         val ok = render(entry("SELECT 1"))
-        assertFalse("普通条目不应有行数片段", detail(ok).contains("rows)"))
+        assertFalse("普通条目不应有行数片段", ok.metaTextForTest.contains("rows)"))
         assertFalse("普通条目不应有报错片段", ok.errorTextForTest.contains("⛔"))
     }
 
@@ -609,7 +610,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         withBadgeDetail(enabled = false) {
             val full = "MySQL · jpa_demo@localhost:3306"
             assertEquals("OFF 态片段应切出纯方言段", "[MySQL] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
-            val d = detail(render(dbEntry(full)))
+            val d = render(dbEntry(full)).metaTextForTest
             assertTrue("注脚行应含方言角标: $d", d.contains("[MySQL]"))
             assertFalse("注脚行不应含连接事实: $d", d.contains("jpa_demo"))
         }
@@ -619,7 +620,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         withBadgeDetail(enabled = true) {
             val full = "MySQL · jpa_demo@localhost:3306"
             assertEquals("ON 态片段应原样全量", "[$full] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
-            val d = detail(render(dbEntry(full)))
+            val d = render(dbEntry(full)).metaTextForTest
             assertTrue("注脚行应含完整上下文: $d", d.contains("[$full]"))
         }
     }
