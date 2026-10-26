@@ -24,7 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
 import pyautogui
-from gifkit import Recorder, click, goto_line
+from PIL import Image
+from gifkit import Recorder, click, goto_line, shot
 from nav import force_en_us
 
 REGION = (285, 26, 1354, 974)
@@ -43,16 +44,82 @@ def abs_pt(p):
 POPUP_UPDATE_ROW = (623, 452)
 # 候选框 OK 按钮（region 相对）
 POPUP_OK = (839, 644)
-# 预览面板里的动态条件复选框（email / status，region 相对）
-COND_EMAIL = (296, 339)
-COND_STATUS = (296, 367)
+# 预览面板动态条件复选框（region 相对，20261026 按图标中心重标——
+# 旧值 (296,339) 在 x/y 双偏：x=296 不在图标上（热区=图标中心 x≈126），
+# y=339 落在 username 行带上，上一 take 实测取消的是 username 而非 email）
+COND_EMAIL = (126, 356)
+COND_STATUS = (126, 386)
 # 收尾「取消」按钮（region 相对）
 CANCEL = (1212, 798)
+
+
+def _open_panel():
+    """候选框 → updateUserByXml → OK，等面板画完。"""
+    pyautogui.hotkey("alt", "shift", "q")
+    time.sleep(1.4)
+    click(*abs_pt(POPUP_UPDATE_ROW), move_dur=0.3, pauses=(0.2, 0.7))
+    click(*abs_pt(POPUP_OK), move_dur=0.25, pauses=(0.15, 1.8))
+
+
+def _blue_rows():
+    """当前面板里蓝色（勾选）复选框的行 y 集合。"""
+    from gifkit import find_blue_checkboxes
+    path = os.path.join(BASE, "perf", "_norm_r04.png")
+    shot(REGION, path)
+    rows = find_blue_checkboxes(path, strip_x=(110, 150), y_range=(300, 430))
+    return set(y for y, _ in rows)
+
+
+def _normalize_conditions():
+    """复选框状态跨预览持久化——重录前跑 tmp_norm_r04.py（点面板「全选」按钮归一，
+    像素检测在本面板判不准已弃用），主控目视 _norm_r04_after.png 确认。"""
+    pass
+
+
+def _assert_email_is_the_unchecked_one():
+    """图标级校验：email 框必须已变灰、username/status 框仍为蓝（勾选）。"""
+    import numpy as np
+    path = os.path.join(BASE, "perf", "_chk_r04.png")
+    shot(REGION, path)
+    img = np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
+
+    def is_blue(cy):
+        # 用 10px 内芯判勾选：勾选内芯实心蓝（实测 79/85），未勾只剩边框（0）——
+        # 18px 全框判据会把未勾框的蓝色边框算进去（76），分不开
+        box = img[cy - 5:cy + 5, 121:131]
+        r, g, b = box[..., 0], box[..., 1], box[..., 2]
+        return int(((b - r > 60) & (b > 120)).sum()) > 40
+
+    assert not is_blue(356), "email 复选框仍是勾选态——取消的不是 email，中止"
+    assert is_blue(327) and is_blue(386), "username/status 复选框被误取消，中止"
+
+
+def _assert_both_unchecked():
+    """email 与 status 都已取消，username 仍勾选（与旧片双条件分镜一致）。"""
+    import numpy as np
+    path = os.path.join(BASE, "perf", "_chk_r04b.png")
+    shot(REGION, path)
+    img = np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
+
+    def is_blue(cy):
+        box = img[cy - 5:cy + 5, 121:131]
+        r, g, b = box[..., 0], box[..., 1], box[..., 2]
+        return int(((b - r > 60) & (b > 120)).sum()) > 40
+
+    assert not is_blue(356) and not is_blue(386), "email/status 未双双取消，中止"
+    assert is_blue(327), "username 被误取消，中止"
 
 
 def main():
     force_en_us()
     time.sleep(0.4)
+    # 开录前按路径精确打开目标文件（同名文件问题的根治手段，T-DemoGifFix1026 §2.2）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/resources/mapper/UserMapper.xml", settle=1.6)
+    except Exception as e:
+        print("MCP 打不开，中止（不退回搜索方式，宁可不录也不开错文件）:", e)
+        raise
     goto_line(74)
     time.sleep(0.4)
     # 首帧必须与尾帧同态：光标停在第 74 行（当前行有高亮底色）、gutter 图标已渲染。
@@ -66,34 +133,45 @@ def main():
     rec.start()
     try:
         time.sleep(0.5)
-        pyautogui.hotkey("alt", "shift", "q")                              # 1. 唤起候选框
-        time.sleep(1.4)
+        _open_panel()                                                        # 1-3. 候选框 → updateUserByXml → 面板
 
-        click(*abs_pt(POPUP_UPDATE_ROW), move_dur=0.3, pauses=(0.2, 0.7))   # 2. 点中 updateUserByXml 行
-        click(*abs_pt(POPUP_OK), move_dur=0.25, pauses=(0.15, 1.8))         # 3. OK → 面板打开
-
-        click(*abs_pt(COND_EMAIL), move_dur=0.28, pauses=(0.2, 1.3))        # 4. 取消 email
-        click(*abs_pt(COND_STATUS), move_dur=0.28, pauses=(0.2, 1.3))       # 5. 取消 status
-
-        click(*abs_pt(CANCEL), move_dur=0.3)                                # 6. 取消关面板
-        time.sleep(1.0)
-
-        # 7. 首尾同态：回到起始行
-        #    不能用 Ctrl+Shift+Backspace——它跳的是「上次编辑位置」，实测落在第 77 行
-        #    （首帧在第 74 行），接缝差 22.93%。也不能用「点编辑器空白」收 goto 框——
-        #    点击会把光标挪到点的位置（实测尾帧跑到第 87 行）。正解：goto_line 之后
-        #    按 Esc 关掉 goto 框，光标留在第 74 行不动（2026-10-25 实测）。
-        # 7. 首尾同态：**完整复刻开录前的建立序列**
-        #    goto_line(74) → 点击行内同一位置。只做 goto_line 不够：录制途中点复选框
-        #    会在编辑器里留下整行选中态（实测第 92 行带选中底色），
-        #    Ctrl+Shift+Backspace / 右方向键 / Esc 都清不掉，只有重新点一次编辑器行才复位。
-        goto_line(74)
-        time.sleep(0.5)
-        # 关 goto 框；**不要点编辑器**（点击会把光标挪走）。Esc 两次清掉可能残留的选择态。
-        pyautogui.press("esc")
-        time.sleep(0.3)
-        pyautogui.press("esc")
+        from verify import Guard
+        g = Guard(region=(470, 240, 720, 210))
+        g.mark("sql")
+        # 4. 取消 email → SET 段实时少一行。icon 中心 (126,356)；附近 y 兜底重试
+        done = False
+        for y in (356, 350, 362, 327):
+            pyautogui.click(*abs_pt((126, y)))
+            time.sleep(1.0)
+            ok, score = g.changed("sql", wait=0.2)
+            if ok:
+                done = True
+                break
+        if not done:
+            raise AssertionError("取消 email 后 SQL 区无变化——点击落空，中止")
+        _assert_email_is_the_unchecked_one()
+        # 4b. 再取消 status（与旧片分镜一致：双条件逐个取消，SET 段实时收缩）
+        pyautogui.click(*abs_pt(COND_STATUS))
         time.sleep(1.2)
+        _assert_both_unchecked()
+        # 5. 收尾凝视（裸屏捕获不含光标，纯静置会被 assemble 裁掉——用缓慢移动撑住
+        #    「SET 段实时少一行」的定格时长，同时把收窄后的 SET 段带一遍）
+        pyautogui.moveTo(700, 292, duration=0.6)
+        time.sleep(0.8)
+        pyautogui.moveTo(640, 340, duration=0.7)
+        time.sleep(0.8)
+        pyautogui.moveTo(600, 390, duration=0.7)
+        time.sleep(0.8)
+        pyautogui.moveTo(900, 389, duration=0.8)
+        time.sleep(0.8)
+        pyautogui.moveTo(620, 300, duration=0.8)
+        time.sleep(1.2)
+
+        # 5. 收尾（T-DemoGifFix1026 要求）：**停在预览弹窗上**，画面里留着
+        #    「取消 email 后 SET 段实时少一行」的结果——旧片尾帧约 20% 是静态
+        #    编辑器（复核判定的空尾巴）。首尾同态在本片让位：结构性跳变，
+        #    验收按「尾帧停在演示效果上」口径（计划 §三 #4）。
+        time.sleep(1.6)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")

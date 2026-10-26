@@ -133,9 +133,59 @@ class _Session:
 _cache = {}
 
 
+def _set_base(base):
+    """切换 MCP 端点并复位会话状态（_sse_loop/_post 读模块级 BASE）。"""
+    global BASE, _session_id
+    BASE = base
+    _session_id = None
+    with _responses.mutex:
+        _responses.queue.clear()
+
+
+def _detect_base():
+    """探测沙盒 IDE 的 MCP 端口。
+
+    端口每次沙盒重启都会漂（20261026：日常 IDE 占 64342，沙盒落 64343），且
+    **环境变量不穿透 UAC 提权**（Start-Process -Verb RunAs 起的录制脚本拿不到
+    IDEA_MCP_BASE）——所以先 TCP 探活 64340~64459，再对活口逐一握手，以
+    「get_all_open_file_paths 能认出 demo 工程」为命中判据。env 只作覆盖。
+    """
+    env = os.environ.get("IDEA_MCP_BASE")
+    if env:
+        _set_base(env)
+        _cache["s"] = _Session().start()
+        return _cache["s"]
+    import socket
+    live = []
+    for port in range(64340, 64460):
+        sock = socket.socket()
+        sock.settimeout(0.08)
+        try:
+            sock.connect(("127.0.0.1", port))
+            live.append(port)
+        except OSError:
+            pass
+        finally:
+            sock.close()
+    errs = []
+    for port in live:
+        base = f"http://127.0.0.1:{port}"
+        try:
+            _set_base(base)
+            s = _Session().start()
+            s.call("get_all_open_file_paths", {"projectPath": PROJECT})
+            print(f"[mcpnav] 沙盒 MCP 端口探测命中: {base}")
+            _cache["s"] = s
+            return s
+        except Exception as e:
+            errs.append(f"{port}: {str(e)[:80]}")
+    raise RuntimeError("MCP 端口探测失败：64340~64459 无一能认出 demo 工程（沙盒起了吗？）" +
+                       "; ".join(errs))
+
+
 def session():
     if "s" not in _cache:
-        _cache["s"] = _Session().start()
+        _detect_base()
     return _cache["s"]
 
 
