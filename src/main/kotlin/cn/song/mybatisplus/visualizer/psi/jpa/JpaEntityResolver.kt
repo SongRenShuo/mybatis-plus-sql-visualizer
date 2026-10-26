@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
@@ -62,32 +63,40 @@ class JpaEntityResolver {
      * （已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。
      *
      * @param entityClass JPA 实体 PsiClass
+     * @param hostAnchor 查询宿主元素（T-EmbeddedHostCascade，可空）——实体在依赖 JAR/lib 模块时
+     *   嵌入列命名策略配置在宿主 App 模块，实体自身模块探测 miss 后按宿主模块级联判定；
+     *   参与缓存键（不同宿主可判出不同命名档，不得共用缓存条目）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
-    fun resolve(entityClass: PsiClass): TableInfo {
+    fun resolve(entityClass: PsiClass, hostAnchor: PsiElement? = null): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
         val project = entityClass.project
         val file = entityClass.containingFile
-            ?: return ColumnNameCalibrator.calibrate(project, resolveInternal(entityClass))
+            ?: return ColumnNameCalibrator.calibrate(project, resolveInternal(entityClass, hostAnchorFile(hostAnchor)))
         val qName = entityClass.qualifiedName ?: className
         val configSig = TableConfigSignature.projectSignature(project)
+        val hostAnchorUrl = hostAnchorFile(hostAnchor)?.path
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
-        val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
+        val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig, hostAnchorUrl)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return ColumnNameCalibrator.calibrate(project, entry.value)
         }
 
-        val value = resolveInternal(entityClass)
+        val value = resolveInternal(entityClass, hostAnchorFile(hostAnchor))
         cache[key] = JpaEntry(stamp, value)
         return ColumnNameCalibrator.calibrate(project, value)
     }
 
+    /** 宿主锚点 → 其文件 VirtualFile（探测级联与缓存键用；解析异常一律 null 不改语义）。 */
+    private fun hostAnchorFile(hostAnchor: PsiElement?): VirtualFile? =
+        runCatching { hostAnchor?.containingFile?.virtualFile }.getOrNull()
+
     /**
      * 内部解析（完整 PSI 遍历，缓存未命中时调用）。
      */
-    private fun resolveInternal(entityClass: PsiClass): TableInfo {
+    private fun resolveInternal(entityClass: PsiClass, hostAnchor: VirtualFile? = null): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
         // 类级元数据：schema/catalog、限制子句、软删除、自定义脚本、生成器、副表、继承与判别、@IdClass
         // （T-J8 / T-J14 / T-J18，读取失败整体降级为空元数据）
@@ -103,7 +112,7 @@ class JpaEntityResolver {
         // 类级 @AttributeOverride（嵌入列名覆写，字段级覆写优先于类级，T-J18）
         val classOverrides = JpaMetadataReader.attributeOverrides(entityClass)
         // 按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，组内保持声明顺序）
-        val columns = fields.flatMap { field -> resolveColumns(field, ignoredFields, classOverrides) }
+        val columns = fields.flatMap { field -> resolveColumns(field, ignoredFields, classOverrides, hostAnchor) }
             .sortedWith(compareBy { it.role })
             // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
             // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
@@ -178,6 +187,7 @@ class JpaEntityResolver {
         field: PsiField,
         ignoredFields: Set<String>,
         classOverrides: Map<String, String>,
+        hostAnchor: VirtualFile? = null,
     ): List<ColumnInfo> {
         val fieldName = field.name
 
@@ -235,7 +245,7 @@ class JpaEntityResolver {
         val sdEmbedded = JpaMetadataReader.isSpringDataEmbeddedField(field)
         if (isEmbeddedId || sdEmbedded || JpaMetadataReader.isEmbeddedField(field)) {
             val sdPrefix = if (sdEmbedded) JpaMetadataReader.springDataEmbeddedPrefixOf(field) else ""
-            return flattenEmbeddedColumns(field, isPrimaryKey = isEmbeddedId, classOverrides, sdPrefix)
+            return flattenEmbeddedColumns(field, isPrimaryKey = isEmbeddedId, classOverrides, sdPrefix, hostAnchor)
         }
 
         // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
@@ -303,14 +313,17 @@ class JpaEntityResolver {
         isPrimaryKey: Boolean,
         classOverrides: Map<String, String>,
         sdPrefix: String = "",
+        hostAnchor: VirtualFile? = null,
     ): List<ColumnInfo> {
         val fieldName = field.name
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
-        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析
+        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析；
+        // T-EmbeddedHostCascade：实体模块判不出时按查询宿主模块级联（实体在依赖 JAR/lib、策略配在宿主的形态）
         val namingResolution = EmbeddedColumnNamingResolver.resolveDetailed(
             runCatching { field.project }.getOrNull(),
             runCatching { field.containingFile?.virtualFile }.getOrNull(),
+            hostAnchor,
         )
         val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides, namingResolution.naming) }
             .getOrDefault(emptyList())
@@ -701,6 +714,8 @@ class JpaEntityResolver {
             val fileIdentity: Int,
             val classQualifiedName: String,
             val configSignature: String,
+            /** T-EmbeddedHostCascade：查询宿主模块路径（命名档随宿主判出，不同宿主不得共用条目；null=未传宿主）。 */
+            val hostAnchorPath: String? = null,
         )
 
         /** 缓存条目：文件修改戳 + 解析结果。 */

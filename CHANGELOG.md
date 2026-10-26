@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **JAR/lib 模块实体的嵌入列命名宿主级联（T-EmbeddedIdentify）**：实体打包进依赖 JAR 或 lib 模块、该模块有自己的 resources 但没有命名配置时，嵌入列命名探测按实体所在模块收范围会判不出 → 列名丢嵌入前缀（`base_qty` ≠ 真库 `qty_base_qty`）。现按「实体所在模块 → 查询宿主模块」级联判定（HQL/JPQL 链自动生效），两档都判不出仍不回退工程级扫描——多模块聚合根打开时兄弟模块配置外溢的既有防护不变。另增嵌入列解析诊断日志（`[T-EmbeddedIdentify]` 前缀：命名档来源、嵌入列清单、展平降级 WARN）与 JAR 实体全链回归测试（真实模型 JAR 挂库根走 previewCustomDaoHql）。
+
 ## [2026.10.23] - 2026-10-23
 
 ### Added

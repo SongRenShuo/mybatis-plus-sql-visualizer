@@ -538,7 +538,7 @@ internal fun SqlPreviewService.resolveHqlTable(
         val hbmOnly = HbmXmlEntityResolver.resolve(className, project, context)
         return hbmOnly?.let { convertHbmMappingToTableInfo(it) }
     }
-    val resolved = resolver.resolve(target)
+    val resolved = resolver.resolve(target, context)
     LOG.info(
         "[T-EmbeddedIdentify] resolveHqlTable entity=$className → class=${target.qualifiedName} " +
             "url=${target.containingFile?.virtualFile?.url} columns=${resolved.columns.size} " +

@@ -187,9 +187,20 @@ public List<?> findBookingByValueBean(WmsDockBooking sample) {
 
 **结论：以 `findBookingByValueBean` 的 HQL 预览为复现手段时，「问题」在 2026.10.16 与最新版同样（不）存在，SQL 渲染三版一致且与真库 schema 逐列相符（真表 `created_time` 列注释即「内嵌 updateInfo.createdTime」）。** 用户所观察的异常必然落在：①复现方法之外的面（参数面板交互/停靠预览/SQL 转 Java/补全/执行链——执行链正是本窗口大改区：方言放行/取源/参数历史回落 recallRecent）；②外部用户工程特有形态（§三 H1~H5）；③首次点击的 IndexNotReadyException 失败（IDE 启动 24 秒内点预览必失败报「未找到可转换的内容」，三版行为同源非本窗口回归，但用户可感）。**待用户提供「错误输出长什么样」（截图/文本或指认界面元素）后归类落修；在拿到前禁止预防性改动。**
 
-### W2 待办
+### W2 第二项：根因指认「JAR 里的不正常」与修复（2026-10-26 用户补充）
 
-用带 W1 的构建在默认沙盒打开 demo → 触发 `findBookingByValueBean` 的 gutter 预览 → 对照 `[T-EmbeddedIdentify]` 日志与对话框（SQL＋参数面板）截图定位；结果回填 §六并归入 §三 H1~H6。
+用户指认：**JAR 里的实体不正常，源码的正常**（§三 H2 方向）。本轮双向取证与修复：
+
+**取证（HEAD `8267394d`）**：
+1. 既有 W3 读数存档（`build/w3-jar-readings-*.txt`）证明二进制类注解读取**本来就通**：`findFlex(entity, jakarta.Table)?.name = wms_inventory_jar_demo`、`resolve(NONE).tableName = wms_inventory_jar_demo`、嵌入列三条全展开。
+2. 重建同款重型探针（真实 `jpa-jar-model-lib-1.0.0.jar` 挂库根 + 语料 DAO 形态 `wmsJarCommonDao.findByQueryMaxNum(拼接 HQL…)` 走 `previewCustomDaoHql` 全链）：**HEAD 端到端完全正确**——`SELECT inv.id, inv.warehouse_id, inv.qty_base_qty, inv.sku_inventory_status, inv.item_key_lot_info_received_date from wms_inventory_jar_demo inv where …`（表名、component-path 前缀、三层路径映射逐项对照真库 schema 相符）。
+3. 用户复现会话（11:27~12:03）对 JAR 实体（`cn.song.jarlib.entity.WmsInventoryEntity`）**零 W1 日志**——其 jar 测试未走到预览链或跑在无 W1 的旧构建上。
+
+**修复（T-EmbeddedHostCascade，机械成立的缺口形态）**：实体在 lib/JAR 模块且**该模块有自己的 resources 但无命名配置**、`component-path` 配置在宿主 App 模块时，`6919d8ef` 的模块收范围必 miss（lib 无 resources 才会回落工程级而命中）。修复＝`EmbeddedColumnNamingResolver.resolveDetailed` 增加**宿主级联**：实体所在模块 → 查询宿主模块（新增 `probe-hit-host` 来源标签）；`JpaEntityResolver.resolve(entityClass, hostAnchor)` 重载下传（缓存键加宿主维度）；`resolveHqlTable` 自动传查询上下文。**两档都判不出仍不回退工程级扫描**——防外溢契约不变（`test同模块不外溢` 反向钉）。
+
+**验证**：`EmbeddedColumnNamingHostCascadeTest` 4/0/0/0（级联命中/实体模块优先/宿主也无配置/同模块不外溢）；`JpaJarEmbeddedPreviewChainTest` 2/0/0/0（真实 JAR 二进制实体 @Table 读取 + 语料 DAO 全链断言真表名与 component-path 列）；嵌入簇回归 9 类 **59/0/0/0**（含 6919d8ef 既有契约）。反向验证：临时短路级联条件 → `test宿主模块级联命中` **恰 1 红**，恢复后复绿。🆕坑＝Kotlin 加默认参数改 JVM 签名后陈旧测试字节码报 NoSuchMethodError（记忆在册同族），删陈旧 class 重编即消。
+
+**遗留**：用户沙盒的 jar 实测异常未在本轮任何构建上复现（E2E 正确）——请用户用本版重建沙盒后重测 jar 语料（`WmsInventoryJarQueryService.findAvailableJarInventory` 的 gutter），若仍异常，贴 `[T-EmbeddedIdentify]` 日志行即可按标签（probe-miss/probe-hit-host/降级 WARN）直接归因。其他 JPA 入口（CRUD/Specification/Criteria 转换器的 `JpaEntityResolver().resolve(entityClass)` 单参调用）未接宿主级联，同症状出现时按同款模式扩展。
 
 ---
 
