@@ -1650,6 +1650,12 @@ class SqlLogPanel(
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 
+        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
+
         val modelSizeBefore = listModel.size()
         val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
         if (!applyIncremental(newVisible, evicted)) {
@@ -2296,6 +2302,13 @@ class SqlLogPanel(
         /** R53：双通道状态栏两段文案之间的语义分隔符。 */
         private const val SEP_LABEL = "｜"
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+        /**
+         * T-LogListRail：轨道首行用的「时段格式」回落值。
+         *
+         * 默认完整格式 19 字符，88px 轨道放不下；剥掉日期后剩 `HH:mm:ss`（8 字符）。
+         * 用户只配了日期 token（剥完无时间片段）时也回落到本值。
+         */
+        internal const val DEFAULT_TIMESTAMP_FORMAT_TIME_ONLY = "HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
          *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */

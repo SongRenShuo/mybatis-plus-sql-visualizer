@@ -73,14 +73,30 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         }
     }
 
-    fun test子句概览最多三行且标记剩余行数() {
+    fun test子句概览三行实内容_剩余计数作末行尾巴() {
+        // T-LogListRail 改判：原「前 2 行 + 第三行整行占位符」只读到 2 个子句，
+        // 用户实测反馈 WHERE 之后全不可见。现改为 3 个子句全渲染，剩余计数附在末行行尾。
         val lines = (1..5).map { listOf(SqlTextFragment("line $it", SimpleTextAttributes.REGULAR_ATTRIBUTES)) }
         val preview = visibleSqlLines(lines, SqlListDisplayMode.KEYWORD_WRAP)
+        assertEquals("仍为 3 行（行高不变）", 3, preview.size)
+        assertEquals("第 1 个子句", "line 1", preview[0].single().text)
+        assertEquals("第 2 个子句", "line 2", preview[1].single().text)
+        assertEquals("第 3 个子句 + 剩余计数尾巴", "line 3 … (+2)", preview[2].joinToString("") { it.text })
+        assertSame("格式化模式不封顶", lines, visibleSqlLines(lines, SqlListDisplayMode.FORMATTED))
+    }
+
+    fun test子句概览_恰三行时不加尾巴() {
+        val lines = (1..3).map { listOf(SqlTextFragment("line $it", SimpleTextAttributes.REGULAR_ATTRIBUTES)) }
+        val preview = visibleSqlLines(lines, SqlListDisplayMode.KEYWORD_WRAP)
         assertEquals(3, preview.size)
-        assertEquals("line 1", preview[0].single().text)
-        assertEquals("line 2", preview[1].single().text)
-        assertEquals("… (+3)", preview[2].single().text)
-        assertSame(lines, visibleSqlLines(lines, SqlListDisplayMode.FORMATTED))
+        assertTrue("无隐藏行时不出现尾巴", preview.none { it.any { f -> f.text.contains("(+") } })
+    }
+
+    fun test子句概览_三行尾巴不再是整行占位符() {
+        // 反向守卫：禁止退回「第三行只剩 … (+N)、实内容全丢」的旧形态
+        val lines = (1..7).map { listOf(SqlTextFragment("clause$it", SimpleTextAttributes.REGULAR_ATTRIBUTES)) }
+        val preview = visibleSqlLines(lines, SqlListDisplayMode.KEYWORD_WRAP)
+        assertEquals("末行必须含第三个子句实内容", "clause3 … (+4)", preview[2].joinToString("") { it.text })
     }
 
     fun test宽度裁切保留片段属性与完整模型内容() {
