@@ -347,14 +347,42 @@ class O147HistoryUpgradeTest {
         val javaBin = File(System.getProperty("java.home"), "bin/java.exe")
         check(javaBin.isFile)
         val output = File(file.parentFile, "string-child.log")
-        val args = listOf(javaBin.path, "-Xmx768m", "-cp", (listOf(main, tests) + dependencies).joinToString(File.pathSeparator),
+        val args = listOf(javaBin.path, "-Xmx768m",
+            // T-CiRelease（20261025 破案）：子进程必须继承父进程时区——头部时间字符串由父进程
+            // 按其默认时区（mpv-testing 钉死 Asia/Shanghai）格式化落盘，子进程按 runner 原生 UTC
+            // 解析回毫秒会整体 +8h（原像实证：timestamp=1724596690000 vs 夹具 1724567890000，
+            // 差恰 28,800,000ms），timestamp 字段不同 → 指纹必不匹配。透传 user.timezone 后
+            // 父子同区，任何机器构造性一致。
+            "-Duser.timezone=" + System.getProperty("user.timezone"),
+            "-cp", (listOf(main, tests) + dependencies).joinToString(File.pathSeparator),
             O147LargeStringProbe::class.java.name, file.path, O147LargeStringProbe.fingerprint(expected))
         File(file.parentFile, "string-child-command.txt").writeText(args.joinToString("\n"))
         val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
         try {
             check(process.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)) { "String child timeout: $output" }
-            assertEquals(output.readText(), 0, process.exitValue())
-            assertTrue(output.readText().contains("O147_STRING_OK"))
+            val childOutput = output.readText()
+            if (process.exitValue() != 0) {
+                // T-CiRelease（20261024 诊断自曝）：子进程在 CI 上退出码非 0（本机全绿；字符集对齐
+                // 修复后仍复现——em dash/字符集假设被证伪或不充分）。CI 控制台是唯一无需下载工件
+                // 即可见的通道：失败时原样打印子进程输出与完整命令行，终结盲猜。
+                println("=== O147 string-child FAILED exit=${process.exitValue()} ===")
+                println(childOutput)
+                println("=== command ===")
+                println(File(file.parentFile, "string-child-command.txt").readText())
+                println("O147_EXPECTED_PREIMAGE=" + expected)
+                // T-CiRelease（20261025）：把 CI 上的原始 test.sql 与命令行拷进 build/o147-diag——
+                // 失败工件上传后可拿到 runner 上的真实文件字节，供本地逐字节 diff（本机所有
+                // 时区/字符集组合均无法复现分歧，唯余实物对比）。
+                runCatching {
+                    val diagDir = File(root, "build/o147-diag")
+                    diagDir.mkdirs()
+                    file.copyTo(File(diagDir, file.name), overwrite = true)
+                    File(file.parentFile, "string-child-command.txt").copyTo(File(diagDir, "string-child-command.txt"), overwrite = true)
+                }.onFailure { println("o147-diag copy failed: $it") }
+                println("=== end O147 string-child diag ===")
+            }
+            assertEquals(childOutput, 0, process.exitValue())
+            assertTrue(childOutput.contains("O147_STRING_OK"))
         } finally { if (process.isAlive) process.destroyForcibly() }
     }
 
@@ -424,7 +452,18 @@ class O147HistoryUpgradeTest {
 /** Runs the production String parser in one owned JVM; no platform stubs or weakened budget. */
 object O147LargeStringProbe {
     @JvmStatic fun main(args: Array<String>) {
-        val entries = SqlLogFileReader.parseContent(Files.readString(File(args[0]).toPath()))
+        // T-CiRelease（20261024）：与父进程同口径读文件（JVM 默认字符集）——父侧 saver/readLines/
+        // bufferedWriter/生产读取器整条链走默认字符集（本机 UTF-8、EN-US runner 为 Cp1252，单机内自洽），
+        // 此处原 Files.readString 强制 UTF-8，在默认字符集非 UTF-8 的机器上把文件头的 em dash
+        //（time: —）解码成替换符 → 指纹不匹配 → 子进程退出 1（CI 5/5 确定性失败实证）。
+        // T-CiRelease（20261025）：字符集/时区组合本地全试尽仍无法复现指纹分歧——失败时把哈希
+        // 原像（entries.toString()，count=1 体量很小）完整打出，供与父侧期望原像逐字段对比。
+        val entries = SqlLogFileReader.parseContent(File(args[0]).readText())
+        if (fingerprint(entries) != args[1]) {
+            println("O147_CHILD_PREIMAGE=" + entries)
+            println("O147_CHILD_HASH=" + fingerprint(entries))
+            println("O147_EXPECTED_HASH=" + args[1])
+        }
         check(fingerprint(entries) == args[1]) { "String parser differs from parent sequence/file results" }
         println("O147_STRING_OK count=${entries.size} reader=${SqlLogFileReader::class.java.protectionDomain.codeSource.location}")
     }
