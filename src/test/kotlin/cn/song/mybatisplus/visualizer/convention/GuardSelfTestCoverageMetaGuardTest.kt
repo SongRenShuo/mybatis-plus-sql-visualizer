@@ -865,6 +865,19 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "判定函数名不命中命名形状（:42）；自证用例靠 `//` 行注释标注（:121）+ 函数名不含关键词（:125）",
             ),
             GuardEntry(
+                "sql/verify/DialectDocTableGuardTest.kt",
+                listOf(
+                    DecisionFn("docTableViolations", FnKind.VIOLATIONS),
+                    DecisionFn("classifyPagination", FnKind.SITES),
+                    DecisionFn("classifyUpsert", FnKind.SITES),
+                ),
+                "文档站方言表 ↔ Dialect 实现的族一致性守卫（T-DialectDocDrift，2026-10-26 三处已上线错误倒查所得）；" +
+                    "两个 classify 是族归类器（文档与实现共用同一实现，族判定的唯一事实源），docTableViolations 是比对内核；" +
+                    "自证语料：`漂移自证_分页族归错被抓` / `漂移自证_ROWNUM写法被抓` / `漂移自证_漏方言被抓` / " +
+                    "`漂移自证_upsert族归错被抓`（后者同时覆盖两个 classify 的归类灵敏度）。" +
+                    "文档站不在场时四个文档表用例显式绿跳（外部贡献者只 clone 插件仓），但表格在场却解析不出内容必红。",
+            ),
+            GuardEntry(
                 "sql/verify/DockerComposeLabConsistencyTest.kt",
                 listOf(
                     DecisionFn("checkImagePinning", FnKind.VIOLATIONS),
