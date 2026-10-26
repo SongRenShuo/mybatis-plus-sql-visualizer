@@ -13,7 +13,7 @@ import gifkit
 from gifkit import Recorder, wait_stable
 from robot import click_component, find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf", "b0_verify.mp4")
 
 
