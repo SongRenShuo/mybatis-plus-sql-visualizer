@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""批次 5：重录 wrapper-preview.gif（features/wrapper-preview hero + getting-started 共 4 处引用）20261012。
+"""wrapper-preview.gif 重录（T-DemoGifFix1026 批2，hero 片，6 处引用，导出 1440 宽）。
 
-旧片（2026-09-12 / 1440×1034 / 7.67s）两处过时，本片按当前面板重出：
-  ① 预览面板**没有「预设」行**（现面板有「预设」/「默认预设 / 管理预设」）；
-  ② 标题栏是 `Start Free Trial` 试用态（沙盒现已激活，标题栏为工程名）。
 素材：`WrapperAdvancedCoverageServiceImpl#baseActiveUserWrapper`——
       `Wrappers.<User>lambdaQuery().eq(User::getStatus, 1).isNotNull(User::getEmail)`，
-      与文档「快速开始」代码块同形（eq + isNotNull），且 User 是 `@TableName("user")` 普通写法
-      → 表名走 MySQL 反引号（`` `user` ``），SQL 可执行。
+      与文档「快速开始」代码块同形。
 
-流程：光标压链 token（编辑器静止一拍）→ Alt+Shift+Q 唤起预览 → SQL 逐列展开 → 扫过左侧
-      「预设 / 动态条件」区（展示新增的预设行）→ 收尾。
+复核判定（20261026）：旧入库片拍成了 XML mapper 预览（同名文件开错）。本版：
+  - MCP 按路径精确开文件 + 预览面板 robot 断言 + 元信息 LAMBDA_QUERY 由主控抽帧目视；
+  - 当前面板**已无「预设」行**（20261027 实测，旧 preset_expanded 判据全假阳性，删除）；
+  - 分镜：光标压链 → Alt+Shift+Q 唤起 → SQL 展开 → 取消「email IS NOT NULL」
+    动态条件（WHERE 实时收缩）→ 勾回（WHERE 还原）→ 定格收尾。
 
-标定（20261012，IDE @ 277,25）：
-  链 token 在第 44 行第 18 列（`.eq(User::getStatus, 1)`）
-  预览 SQL 区 screen (1100,500) / (1100,620)
-  左侧「预设」行 screen (450,322)｜「动态条件」行 screen (450,411)
+标定（20261027，IDE @ (277,25)）：
+  链 token L44 col 18；「email IS NOT NULL」复选框 abs (411,384)；
+  「全选」按钮 abs (604,318)。
 """
 import os
 import sys
@@ -23,105 +21,102 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
-from gifkit import Recorder
-from nav import force_en_us, goto_col, shot
+import pyautogui  # noqa: E402
+from gifkit import Recorder  # noqa: E402
+from nav import close_preview, force_en_us, goto_col  # noqa: E402
+from robot import find_components  # noqa: E402
 
-REGION = (277, 25, 1370, 984)
-OUT = "perf/wrapper_preview.mp4"
+REGION = (285, 26, 1354, 974)
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf", "wrapper_preview.mp4")
 
-FILE_QUERY = "mybatisplusdemo/WrapperAdvancedCoverageServiceImpl.java"
+FILE_REL = ("mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/service/impl/"
+            "WrapperAdvancedCoverageServiceImpl.java")
 CHAIN_LINE = 44          # .eq(User::getStatus, 1)
 CHAIN_COL = 18
 
-CANCEL_XY = (1485, 828)
-ROW_X = 777
-ROW_YS = (350, 358, 366)
-
-GAZE_CHAIN = (600, 344)     # 编辑器里的链
-GAZE_SQL_A = (1100, 500)    # 预览 SQL 区
+CHK_EMAIL = (411, 384)       # 动态条件「email IS NOT NULL」复选框
+SELECT_ALL = (604, 318)      # 「全选」按钮（归一动态条件为全勾）
+GAZE_CHAIN = (600, 344)      # 编辑器里的链
+GAZE_SQL_A = (1100, 500)     # 预览 SQL 区
 GAZE_SQL_B = (1100, 620)
-GAZE_PRESET = (450, 365)    # 展开后的「默认预设 / 管理预设」行
-GAZE_COND = (450, 411)      # 左侧「动态条件」行
-PRESET_TOGGLE = (407, 322)  # 左侧「预设」行折叠箭头（▸ → ▾）
+GAZE_COND = (450, 411)       # 左侧「动态条件」行
 
 
-def preset_expanded() -> bool:
-    """判定预览面板「预设」行是否处于展开态。
-
-    展开态会**跨预览保留**（探针里展开过，正式 take 打开时就已经是展开的，那一下点击
-    反而把它收起 → 末帧仍是收起态）。所以 take 前必须归一到「收起」。
-    判据：展开时该行有下拉框与「管理预设...」按钮（边框+文字），灰度标准差明显更高。
-    实测（Islands Dark 主题）：收起 13.09 / 展开 34.95 —— 阈值取 22。**别照搬「空白≈0」的直觉**：
-    暗色主题下面板底色灰度均值只有 28，收起态也有 13 的本底噪声（阈值 8 会误判成展开，
-    归一化循环会连点三次反而把状态弄反）。
-    """
-    import numpy as np
-    import PIL.Image
-    tmp = "perf/_preset_state.png"
-    shot(tmp)
-    img = np.asarray(PIL.Image.open(tmp).convert("L"), dtype=float)
-    band = img[340:362, 185:295]      # 展开后「默认预设 / 管理预设」所占条带（窗口坐标）
-    return bool(band.std() > 22.0)
+def preview_open() -> bool:
+    return len(find_components("//div[@accessiblename='SQL Visualizer - SQL 预览']")) > 0
 
 
 def main():
-    import pyautogui
-
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
     force_en_us()
 
-    # ---- prep（不入镜）：关预览/弹窗 → 开文件 → 光标压链 token（**不唤起预览**，留给入镜） ----
-    pyautogui.click(*CANCEL_XY); time.sleep(1.0)
-    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.6)
-    pyautogui.click(600, 500); time.sleep(0.4)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.5)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.6)
-    for y in ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(0.4)
-    time.sleep(2.4)
+    # ---- prep（不入镜）：关预览/弹窗 → MCP 开文件 → 光标压链 token ----
+    close_preview()
+    try:
+        from mcpnav import open_file
+        open_file(FILE_REL, settle=1.6)
+    except Exception as e:
+        print("MCP 打不开，中止（宁可不录也不开错文件）:", e)
+        raise
     goto_col(CHAIN_LINE, CHAIN_COL)
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
 
-    # 预设行归一：先唤起一次预览看状态，展开就点箭头收起，再关掉预览让入镜从收起态开始
-    pyautogui.hotkey("alt", "shift", "q"); time.sleep(2.8)
-    for _ in range(3):
-        if not preset_expanded():
-            break
-        pyautogui.click(*PRESET_TOGGLE); time.sleep(1.2)
-    print("预设行展开态 =", preset_expanded())
-    pyautogui.click(*CANCEL_XY); time.sleep(1.2)
+    # 归一：唤起一次预览，点「全选」保证动态条件全勾，再关掉（勾选态跨预览持久化）
+    pyautogui.hotkey("alt", "shift", "q"); time.sleep(3.0)
+    if not preview_open():
+        raise RuntimeError("归一阶段预览未出现，中止")
+    pyautogui.click(*SELECT_ALL); time.sleep(0.8)
+    close_preview()
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.6)
     pyautogui.moveTo(*GAZE_CHAIN, duration=0.4); time.sleep(0.6)
 
     r = Recorder(REGION, OUT)
     r.start()
+    try:
+        # 1. 编辑器里链上静止一拍（「光标压在链上」）
+        pyautogui.moveTo(*GAZE_CHAIN, duration=0.6)
+        time.sleep(1.0)
 
-    # 1. 编辑器里链上静止一拍（让观众看清「光标压在链上」）
-    pyautogui.moveTo(*GAZE_CHAIN, duration=0.6)
-    time.sleep(1.0)
+        # 2. Alt+Shift+Q 唤起预览
+        pyautogui.hotkey("alt", "shift", "q")
+        time.sleep(3.0)
+        if not preview_open():
+            raise RuntimeError("预览面板未出现，中止本次 take")
 
-    # 2. Alt+Shift+Q 唤起预览
-    pyautogui.hotkey("alt", "shift", "q")
-    time.sleep(2.8)
+        # 3. 看 SQL（SELECT 逐列 + WHERE 两条件）
+        pyautogui.moveTo(*GAZE_SQL_A, duration=0.8)
+        pyautogui.moveTo(*GAZE_SQL_B, duration=1.0)
+        time.sleep(0.6)
 
-    # 3. 看 SQL
-    pyautogui.moveTo(*GAZE_SQL_A, duration=0.8)
-    pyautogui.moveTo(*GAZE_SQL_B, duration=1.0)
-    time.sleep(0.4)
+        # 4. 取消「email IS NOT NULL」→ WHERE 实时少一行
+        from verify import Guard
+        g = Guard(region=(780, 270, 700, 380))
+        g.mark("sql")
+        pyautogui.click(*CHK_EMAIL)
+        time.sleep(1.2)
+        ok, score = g.changed("sql", wait=0.3, thr=1.5)
+        if not ok:
+            raise AssertionError(f"取消 email 条件后 SQL 无变化（{score}）——点击落空")
+        time.sleep(0.8)
+        pyautogui.moveTo(*GAZE_COND, duration=0.7)
+        time.sleep(0.8)
 
-    # 4. 展开左侧「预设」行（本片相对旧片的主要新增；也是给片子真实 UI 变化——
-    #    裸屏捕获下鼠标移动不产生像素变化，会被静段裁剪吃掉，片子会短到 3.6s）
-    pyautogui.click(*PRESET_TOGGLE)
-    time.sleep(1.6)
-    pyautogui.moveTo(*GAZE_PRESET, duration=0.8)
-    time.sleep(1.0)
-    pyautogui.moveTo(*GAZE_COND, duration=0.8)
-    time.sleep(0.9)
+        # 5. 勾回 → WHERE 还原（演示实时双向）。基线重置为「已取消」态，
+        #    否则勾回后的 SQL 与「取消前」基线相同，changed() 恒判 False
+        g.mark("sql")
+        pyautogui.click(*CHK_EMAIL)
+        time.sleep(1.2)
+        ok2, score2 = g.changed("sql", wait=0.3, thr=1.5)
+        if not ok2:
+            raise AssertionError(f"勾回 email 条件后 SQL 无变化（{score2}）——点击落空")
+        time.sleep(1.0)
 
-    shot("perf/wrapper_preview_final.png")
-    print("frames:", r.stop())
+        # 6. 收尾凝视：SQL 全貌定格
+        pyautogui.moveTo(*GAZE_SQL_A, duration=0.8)
+        time.sleep(1.2)
+    finally:
+        print("frames:", r.stop())
 
 
 if __name__ == "__main__":
