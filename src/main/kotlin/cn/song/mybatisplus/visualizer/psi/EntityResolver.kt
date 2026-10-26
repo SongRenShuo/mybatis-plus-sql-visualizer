@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiAnnotationMemberValue
@@ -232,6 +233,21 @@ class EntityResolver {
         val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
         val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides) }
             .getOrDefault(emptyList())
+        // T-EmbeddedIdentify W1：MP 轨（D3 混合注解）嵌入列诊断日志，语义与 JPA 轨一致；
+        // MP 轨命名约定恒为默认 NONE（对齐 MP 运行时），来源标 mp-track 免与 JPA 轨混淆。
+        runCatching {
+            val owner = runCatching { field.containingClass?.name }.getOrNull() ?: "?"
+            if (specs.isEmpty()) {
+                val fieldType = runCatching { field.type.canonicalText }.getOrNull()
+                LOG.warn(
+                    "[T-EmbeddedIdentify] 嵌入展平降级单列（类型不可解析/全被跳过） entity=$owner field=$fieldName " +
+                        "fieldType=$fieldType naming=NONE/mp-track overrides=${overrides.size}",
+                )
+            } else {
+                val summary = specs.joinToString(", ") { "${it.fieldName}→${it.columnName}" }
+                LOG.info("[T-EmbeddedIdentify] entity=$owner field=$fieldName naming=NONE/mp-track columns=[$summary]")
+            }
+        }
         if (specs.isEmpty()) {
             val fieldType = runCatching { field.type.canonicalText }.getOrNull()
             return listOf(
@@ -460,6 +476,7 @@ class EntityResolver {
     }
 
     companion object {
+        private val LOG = Logger.getInstance(EntityResolver::class.java)
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
         private const val TABLE_FIELD = "com.baomidou.mybatisplus.annotation.TableField"
         private const val TABLE_ID = "com.baomidou.mybatisplus.annotation.TableId"
