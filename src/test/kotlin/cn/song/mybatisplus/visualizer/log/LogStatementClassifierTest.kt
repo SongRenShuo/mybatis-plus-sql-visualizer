@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Test
 
 /**
@@ -49,8 +50,10 @@ class LogStatementClassifierTest {
     }
 
     @Test
-    fun `TRUNCATE 归 OTHER`() {
-        assertEquals(StatementType.OTHER, LogStatementClassifier.classify("TRUNCATE TABLE user"))
+    fun `TRUNCATE 归 DROP`() {
+        // T-DdlTypeColor（2026-10-26）：TRUNCATE 原归 OTHER（不着色），现归 DROP（删表红 + 虚线条）。
+        // 改判依据：清表是结构性删除，与 DROP 同族；留 OTHER 会让它在列表里没有任何类型标识。
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("TRUNCATE TABLE user"))
     }
 
     @Test
@@ -87,7 +90,7 @@ class LogStatementClassifierTest {
             "UPDATE user SET a = 1" to StatementType.UPDATE,
             "DELETE FROM user WHERE id = 1" to StatementType.DELETE,
             "MERGE INTO t USING s ON (1=1)" to StatementType.OTHER,
-            "TRUNCATE TABLE user" to StatementType.OTHER,
+            "TRUNCATE TABLE user" to StatementType.DROP,
             "" to StatementType.OTHER,
             "   " to StatementType.OTHER,
         ).forEach { (sql, expected) ->
@@ -118,5 +121,62 @@ class LogStatementClassifierTest {
         val a = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = ts)
         assertEquals("两个同内容条目应相等：statementType 是 body 内属性，不进 equals",
             a, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = ts))
+    }
+
+    // ---------- T-DdlTypeColor：DDL 独立成档 ----------
+
+    fun testCreateAlterRename归为CREATE() {
+        assertEquals(StatementType.CREATE, LogStatementClassifier.classify("CREATE TABLE t (id INT)"))
+        assertEquals(StatementType.CREATE, LogStatementClassifier.classify("create table t (id INT)"))
+        assertEquals(StatementType.CREATE, LogStatementClassifier.classify("ALTER TABLE t ADD COLUMN c INT"))
+        assertEquals(StatementType.CREATE, LogStatementClassifier.classify("  \n  RENAME TABLE a TO b"))
+    }
+
+    fun testDropTruncate归为DROP() {
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("DROP TABLE IF EXISTS t"))
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("drop table t"))
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("TRUNCATE TABLE t"))
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("truncate t"))
+    }
+
+    /**
+     * DDL 不复用 INSERT/DELETE 档。
+     *
+     * 为什么重要：筛选按 StatementType 勾选。若 CREATE 就是 INSERT，用户勾「只看插入」
+     * 会把建表语句一起筛出来——语义错误。
+     */
+    fun testDdl不复用InsertDelete档() {
+        assertNotSame(
+            "CREATE 不得等于 INSERT",
+            StatementType.INSERT,
+            LogStatementClassifier.classify("CREATE TABLE t (id INT)"),
+        )
+        assertNotSame(
+            "DROP 不得等于 DELETE",
+            StatementType.DELETE,
+            LogStatementClassifier.classify("DROP TABLE t"),
+        )
+        assertNotSame(
+            "TRUNCATE 不得等于 DELETE",
+            StatementType.DELETE,
+            LogStatementClassifier.classify("TRUNCATE TABLE t"),
+        )
+    }
+
+    /** 未识别的结构类语句仍留 OTHER（避免误导性归类）。 */
+    fun test未识别语句仍为OTHER() {
+        assertEquals(StatementType.OTHER, LogStatementClassifier.classify("MERGE INTO t USING s ON (1=1)"))
+        assertEquals(StatementType.OTHER, LogStatementClassifier.classify("REPLACE INTO t VALUES (1)"))
+        assertEquals(StatementType.OTHER, LogStatementClassifier.classify("CALL some_proc()"))
+        assertEquals(StatementType.OTHER, LogStatementClassifier.classify(""))
+    }
+
+    /** 既有四类不受影响（回归确认）。 */
+    fun test既有四类分类不回归() {
+        assertEquals(StatementType.SELECT, LogStatementClassifier.classify("SELECT 1"))
+        assertEquals(StatementType.SELECT, LogStatementClassifier.classify("WITH c AS (SELECT 1) SELECT * FROM c"))
+        assertEquals(StatementType.INSERT, LogStatementClassifier.classify("INSERT INTO t VALUES (1)"))
+        assertEquals(StatementType.UPDATE, LogStatementClassifier.classify("UPDATE t SET a = 1"))
+        assertEquals(StatementType.DELETE, LogStatementClassifier.classify("DELETE FROM t"))
     }
 }

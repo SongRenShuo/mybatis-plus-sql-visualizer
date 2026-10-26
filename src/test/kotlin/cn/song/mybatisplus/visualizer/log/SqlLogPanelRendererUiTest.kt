@@ -657,4 +657,99 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             assertEquals("[DM（达梦） · localhost:5236] ", formatDatabaseFragment(readBack, false)!!.first)
         }
     }
+
+    // ---------- T-DdlTypeColor：DDL 虚线色条 ----------
+
+    /**
+     * DDL 条目走虚线色条、DML 走实心。
+     *
+     * 这是**形态断言**（不是像素比对）：用户明确要「虚线区分 DDL」，若谁把 DDL 也画成实心，
+     * 视觉区分就静默消失了——不报错、不崩溃，只是回退到「看不出类型」。
+     */
+    fun testDdl条目色条为虚线_dml为实心() {
+        val ddl = render(entry("CREATE TABLE t (id INT)"))
+        assertTrue("CREATE 应触发虚线色条", ddl.colorBar.dashed)
+
+        val drop = render(entry("DROP TABLE t"))
+        assertTrue("DROP 应触发虚线色条", drop.colorBar.dashed)
+
+        val truncate = render(entry("TRUNCATE TABLE t"))
+        assertTrue("TRUNCATE 应触发虚线色条", truncate.colorBar.dashed)
+
+        for (sql in listOf("SELECT 1", "INSERT INTO t VALUES (1)", "UPDATE t SET a = 1", "DELETE FROM t")) {
+            val r = render(entry(sql))
+            assertFalse("$sql 不应走虚线", r.colorBar.dashed)
+        }
+    }
+
+    /** DDL 条目与同色 DML 条目都着色（不再是无色条的 OTHER）。 */
+    fun testDdl条目有着色条() {
+        for (sql in listOf("CREATE TABLE t (id INT)", "ALTER TABLE t ADD c INT", "DROP TABLE t", "TRUNCATE TABLE t")) {
+            val r = render(entry(sql))
+            assertTrue("$sql 应有色条（不再是无色条的 OTHER）", r.colorBar.isOpaque)
+        }
+    }
+
+    /** 虚线段长常量（形态契约：实/空各 3px，周期 6px）。 */
+    fun test虚线段长常量() {
+        val bar = TypeColorBar()
+        val (on, off) = bar.dashPatternForTest()
+        assertEquals("实心段 3px", 3, on)
+        assertEquals("空白段 3px", 3, off)
+        assertEquals("周期 6px", 6, TypeColorBar.DASH_PERIOD)
+    }
+
+    /** 同形态重复设置不重复重绘（渲染热路径守卫）。 */
+    fun test色条形态_同值不重复设置() {
+        val bar = TypeColorBar()
+        bar.dashed = true
+        bar.dashed = true
+        bar.dashed = true
+        assertEquals("同值重复设置不得触发重绘", 1, bar.repaintRequests)
+        bar.dashed = false
+        assertEquals("切换形态应再触发一次", 2, bar.repaintRequests)
+    }
+
+    /**
+     * 虚线色条必须**真的画成虚线段**（像素级验证）。
+     *
+     * 为什么必须像素级：早期实现「先填 background 再按段填 background」，前景与底色同色 →
+     * 整条全实心，形态断言（`dashed == true`）照样通过、肉眼看上去却没区别。
+     * 这条用渲染后的像素序列判定，抓的就是这种「设了标志但画不出来」的假绿。
+     */
+    fun test虚线色条_像素序列为实空交替() {
+        val bar = TypeColorBar()
+        bar.background = java.awt.Color(0x4CAF50)
+        bar.dashed = true
+        bar.setSize(3, 40)
+        val img = java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = img.createGraphics()
+        bar.paint(g)
+        g.dispose()
+        val seq = (0 until 40).map { y ->
+            val rgb = img.getRGB(1, y) and 0xFFFFFF
+            if (rgb == 0x4CAF50) '#' else '.'
+        }.joinToString("")
+        assertTrue("应存在实心段: $seq", seq.contains('#'))
+        assertTrue("应存在空白段（否则等于实心）: $seq", seq.contains('.'))
+        // 周期契约：每 6px 一个循环
+        assertTrue(
+            "实空交替周期应为 ${TypeColorBar.DASH_PERIOD}px: $seq",
+            seq.startsWith("#".repeat(TypeColorBar.DASH_ON) + ".".repeat(TypeColorBar.DASH_OFF)),
+        )
+    }
+
+    /** 实心形态下整条填满（不出现空白段）。 */
+    fun test实心色条_像素全填满() {
+        val bar = TypeColorBar()
+        bar.background = java.awt.Color(0x4CAF50)
+        bar.dashed = false
+        bar.setSize(3, 40)
+        val img = java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = img.createGraphics()
+        bar.paint(g)
+        g.dispose()
+        val allFilled = (0 until 40).all { (img.getRGB(1, it) and 0xFFFFFF) == 0x4CAF50 }
+        assertTrue("实心形态应整条填满", allFilled)
+    }
 }

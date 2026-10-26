@@ -109,11 +109,15 @@ internal fun applyCrudColorMark(
     tint: Color?,
     isSelected: Boolean,
     list: javax.swing.JList<*>?,
+    dashed: Boolean = false,
 ) {
     val listBg = list?.background ?: cell.background
     val selectionBg = list?.selectionBackground ?: listBg
     when (SqlListTypeColor.styleOf()) {
         SqlListTypeColor.STYLE_BAR -> {
+            // T-DdlTypeColor：DDL 走虚线绘制。把形态告知色条面板（自绘时读它），
+            // 而不是在这里直接画——绘制逻辑归组件自己，本函数只管「该显示什么」。
+            if (colorBar is TypeColorBar) colorBar.dashed = dashed
             if (tint == null) {
                 setOpaqueIfChanged(colorBar, false)
             } else {

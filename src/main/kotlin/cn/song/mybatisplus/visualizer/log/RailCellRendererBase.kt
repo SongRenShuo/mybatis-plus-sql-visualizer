@@ -62,7 +62,7 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
      * 其他样式 `isOpaque=false` 但仍**占位**——切换样式时文本左缘不位移）。
      * 类型只靠本色条表达，不加「查/增/改/删」字样。
      */
-    internal val colorBar = JPanel().apply {
+    internal val colorBar = TypeColorBar().apply {
         preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
         isOpaque = false
     }
@@ -161,7 +161,15 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         // 留白按模式分流：单行模式密度优先（见 normalBorder KDoc）
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         val activeBorder = if (mode == SqlListDisplayMode.SINGLE_LINE) compactBorder else normalBorder
-        applyCrudColorMark(this, colorBar, activeBorder, tint, isSelected, list)
+        applyCrudColorMark(
+            cell = this,
+            colorBar = colorBar,
+            normalBorder = activeBorder,
+            tint = tint,
+            isSelected = isSelected,
+            list = list,
+            dashed = entry != null && SqlListTypeColor.isDdl(entry.statementType),
+        )
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())

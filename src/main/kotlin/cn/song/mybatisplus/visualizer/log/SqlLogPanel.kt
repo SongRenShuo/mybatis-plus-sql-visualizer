@@ -2319,6 +2319,8 @@ class SqlLogPanel(
             StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
             StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
             StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
+            StatementType.CREATE -> MpSqlVisualizerBundle.message("log.filter.create")
+            StatementType.DROP -> MpSqlVisualizerBundle.message("log.filter.drop")
             else -> "OTHER"
         }
     }

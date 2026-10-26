@@ -230,7 +230,13 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             assertEquals(java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"))
             assertEquals(java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"))
             assertEquals(java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"))
-            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"))
+            // T-DdlTypeColor（2026-10-26）：DDL 现归独立两档并着色——
+            // CREATE/ALTER 取增绿、DROP/TRUNCATE 取删红（虚线形态区分，见 RendererUiTest）。
+            assertEquals("CREATE 取增绿", java.awt.Color(0x4CAF50), barColorAfterRender("CREATE TABLE user (id INT)"))
+            assertEquals("DROP 取删红", java.awt.Color(0xD32F2F), barColorAfterRender("DROP TABLE user"))
+            assertEquals("TRUNCATE 取删红（原 OTHER 不着色）", java.awt.Color(0xD32F2F), barColorAfterRender("TRUNCATE TABLE user"))
+            // 真正无法归类的语句仍不着色
+            assertEquals("未识别语句仍不着色", null, barColorAfterRender("MERGE INTO user USING s ON (1=1)"))
         }
     }
 
