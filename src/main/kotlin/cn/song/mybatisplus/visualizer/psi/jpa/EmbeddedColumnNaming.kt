@@ -32,23 +32,42 @@ enum class EmbeddedColumnNaming { NONE, COMPONENT_PATH }
 object EmbeddedColumnNamingResolver {
 
     /**
+     * 命名档判定结果（T-EmbeddedIdentify 诊断日志用）。
+     *
+     * @param naming 判定的命名约定
+     * @param source 来源标签：`explicit`（设置页显式指定）/ `probe-hit`（工程配置探测命中）/
+     *   `probe-miss`（AUTO 探测未命中回落默认）/ `default-no-project`（无工程上下文直接默认）
+     */
+    data class NamingResolution(val naming: EmbeddedColumnNaming, val source: String)
+
+    /**
+     * 带来源标签的完整判定（诊断日志用）。
+     *
+     * @param project 宿主工程（用于配置探测）；为 null 时跳过探测，只认显式设置
+     * @param anchor 正在解析的实体文件——探测范围收敛到它**所在模块**；null 时按整个工程扫
+     */
+    fun resolveDetailed(project: Project?, anchor: VirtualFile? = null): NamingResolution {
+        val configured = runCatching { PluginSettings.getInstance().state.embeddedColumnNaming }.getOrNull()
+        return when (configured) {
+            PluginSettings.EMBEDDED_NAMING_NONE -> NamingResolution(EmbeddedColumnNaming.NONE, "explicit")
+            PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH -> NamingResolution(EmbeddedColumnNaming.COMPONENT_PATH, "explicit")
+            // AUTO（或取值不认识）：探测工程配置，判不出按 NONE
+            else ->
+                if (project != null && HibernateNamingConfigProbe.projectUsesComponentPath(project, anchor)) {
+                    NamingResolution(EmbeddedColumnNaming.COMPONENT_PATH, "probe-hit")
+                } else {
+                    NamingResolution(EmbeddedColumnNaming.NONE, if (project == null) "default-no-project" else "probe-miss")
+                }
+        }
+    }
+
+    /**
      * 解析当前应使用的嵌入列命名约定。
      *
      * @param project 宿主工程（用于配置探测）；为 null 时跳过探测，只认显式设置
      * @param anchor 正在解析的实体文件——探测范围收敛到它**所在模块**（命名策略是每个持久化单元
      *   的事，多模块工程里各模块配置互不影响）；null 时按整个工程扫
      */
-    fun resolve(project: Project?, anchor: VirtualFile? = null): EmbeddedColumnNaming {
-        val configured = runCatching { PluginSettings.getInstance().state.embeddedColumnNaming }.getOrNull()
-        return when (configured) {
-            PluginSettings.EMBEDDED_NAMING_NONE -> EmbeddedColumnNaming.NONE
-            PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH -> EmbeddedColumnNaming.COMPONENT_PATH
-            // AUTO（或取值不认识）：探测工程配置，判不出按 NONE
-            else -> if (project != null && HibernateNamingConfigProbe.projectUsesComponentPath(project, anchor)) {
-                EmbeddedColumnNaming.COMPONENT_PATH
-            } else {
-                EmbeddedColumnNaming.NONE
-            }
-        }
-    }
+    fun resolve(project: Project?, anchor: VirtualFile? = null): EmbeddedColumnNaming =
+        resolveDetailed(project, anchor).naming
 }

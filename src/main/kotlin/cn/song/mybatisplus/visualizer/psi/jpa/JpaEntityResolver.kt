@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
@@ -307,12 +308,32 @@ class JpaEntityResolver {
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
         // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析
-        val naming = EmbeddedColumnNamingResolver.resolve(
+        val namingResolution = EmbeddedColumnNamingResolver.resolveDetailed(
             runCatching { field.project }.getOrNull(),
             runCatching { field.containingFile?.virtualFile }.getOrNull(),
         )
-        val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides, naming) }
+        val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides, namingResolution.naming) }
             .getOrDefault(emptyList())
+        // T-EmbeddedIdentify W1：嵌入列诊断日志——外部报障「@Embedded 不识别」的排障锚点。
+        // 每个 @Embedded 字段一行 INFO（本函数只在嵌入分支被调用，天然免噪音）；展平失败降级单列升 WARN。
+        runCatching {
+            val owner = runCatching { field.containingClass?.name }.getOrNull() ?: "?"
+            if (specs.isEmpty()) {
+                val fallbackType = runCatching { field.type.canonicalText }.getOrNull()
+                LOG.warn(
+                    "[T-EmbeddedIdentify] 嵌入展平降级单列（类型不可解析/全被跳过） entity=$owner field=$fieldName " +
+                        "fieldType=$fallbackType naming=${namingResolution.naming}/${namingResolution.source} " +
+                        "overrides=${overrides.size}",
+                )
+            } else {
+                val summary = specs.joinToString(", ") { "${it.fieldName}→${it.columnName}" }
+                LOG.info(
+                    "[T-EmbeddedIdentify] entity=$owner field=$fieldName " +
+                        "naming=${namingResolution.naming}/${namingResolution.source} sdPrefix=$sdPrefix " +
+                        "columns=[$summary]",
+                )
+            }
+        }
         if (specs.isEmpty()) {
             val fallbackType = runCatching { field.type.canonicalText }.getOrNull()
             return listOf(
@@ -650,6 +671,7 @@ class JpaEntityResolver {
     }
 
     companion object {
+        private val LOG = Logger.getInstance(JpaEntityResolver::class.java)
         // JPA 注解全限定名（jakarta.persistence）
         private const val ENTITY_ANNOTATION = "jakarta.persistence.Entity"
         private const val TABLE_ANNOTATION = "jakarta.persistence.Table"
