@@ -172,6 +172,21 @@ public List<?> findBookingByValueBean(WmsDockBooking sample) {
 
 验证：定向 6 类 **48/0/0/0**（`JpaEmbeddedColumnNamingTest`/`EntityResolverEmbeddedTest`/`JpaEntityResolverMappingDeepTest`/`HibernateNamingConfigProbeTest`/`SqlPreviewServiceJpaEmbeddedNestedPathTest`/`SqlPreviewServiceSdHemostasisTest`，BUILD SUCCESSFUL）；行为零改动的反向面＝`resolve()` 委托 `resolveDetailed().naming`（纯函数，既有 247 例命名/展平用例全绿即证）。🆕实施坑＝`EntityResolver`/`JpaEntityResolver` 均已有 companion object，新增 companion 报 Conflicting declarations——LOG 并入既有块即消。全量未跑（日志改动不在大改动判据内）。
 
+### W2 第一项：三版本对比已做——复现链路逐字节一致（2026-10-26 用户指示「用 2026.10.19/16 版本对比」）
+
+版本串全史无 2026.10.19；用户确认基线是 **v2026.10.16 发行版**。三方基线各跑同款探针（demo 仓 jpa-hibernate-demo 逐字形态）：
+
+| 探针 | `2026.10.16` tag（`92232d23`） | 10-19 tip（`5846ac3c`，版本串 2026.10.16） | HEAD（`8267394d`） |
+|---|---|---|---|
+| SELECT 全列展开（type 条件） | `SELECT booking.id, …, booking.created_time …` | 逐字节相同 | 逐字节相同 |
+| 复现 HQL（warehouseId） | len=253（与用户贴出的预览内容一致） | len=253 | len=253 |
+| 派生查询 | len=157 | len=157 | len=157 |
+| JPQL 投影 | `select b.created_time …` | 相同 | 相同 |
+
+代码层面窗口内（`2026.10.16..HEAD`）复现链路零行为变更：gutter 目录、ArgResolver、HqlConverter/JpqlConverter/DerivedQueryConverter、`JpaMetadataReader`、`previewCustomDaoHql`、`resolveHqlTable`（除 W1 日志）全部无 diff；`JpaEntityResolver`/`EmbeddedColumnNaming` 的 diff 即 W1 本身；`HbmXmlEntityResolver` +61 仅命名查询消歧（不在该链）；`EntityClassResolver` +253 为仲裁加固（用户自己的复现会话 W1 日志证明命中正确类）。
+
+**结论：以 `findBookingByValueBean` 的 HQL 预览为复现手段时，「问题」在 2026.10.16 与最新版同样（不）存在，SQL 渲染三版一致且与真库 schema 逐列相符（真表 `created_time` 列注释即「内嵌 updateInfo.createdTime」）。** 用户所观察的异常必然落在：①复现方法之外的面（参数面板交互/停靠预览/SQL 转 Java/补全/执行链——执行链正是本窗口大改区：方言放行/取源/参数历史回落 recallRecent）；②外部用户工程特有形态（§三 H1~H5）；③首次点击的 IndexNotReadyException 失败（IDE 启动 24 秒内点预览必失败报「未找到可转换的内容」，三版行为同源非本窗口回归，但用户可感）。**待用户提供「错误输出长什么样」（截图/文本或指认界面元素）后归类落修；在拿到前禁止预防性改动。**
+
 ### W2 待办
 
 用带 W1 的构建在默认沙盒打开 demo → 触发 `findBookingByValueBean` 的 gutter 预览 → 对照 `[T-EmbeddedIdentify]` 日志与对话框（SQL＋参数面板）截图定位；结果回填 §六并归入 §三 H1~H6。
