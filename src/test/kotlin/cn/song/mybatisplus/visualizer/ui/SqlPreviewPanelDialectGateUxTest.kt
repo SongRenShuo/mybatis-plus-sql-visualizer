@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 /**
@@ -48,6 +49,56 @@ class SqlPreviewPanelDialectGateUxTest : BasePlatformTestCase() {
             UIUtil.dispatchAllInvocationEvents()
             val fix = panel.resultPanelForTest().fixActionForTest()
             assertTrue("手动方言冲突同样应挂出修复入口", fix.isVisible)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * T-DialectGatePass（2026-10-26 语义对齐，对齐 commit 8619a3af 用户定案）：预览入口的
+     * MANUAL_CONFLICT / RERENDER_UNAVAILABLE 不再走 [showDialectGateError] 阻断（错误态+动作），
+     * 改走 showStatus 信息态呈现方言不一致提示，执行继续（与选择器手选路径一致）。
+     * 呈现延迟到下一拍 EDT（见 [showDialectGateError] 注释的同栈 onError 覆盖坑），故先抽干队列。
+     */
+    fun test闸门放行_手动冲突显示状态提示不进错误态() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.onExecutionDialectGate(
+                ExecutionDialectGate.Verdict(
+                    ExecutionDialectGate.Status.MANUAL_CONFLICT,
+                    "PostgreSQL",
+                    "MySQL",
+                ),
+            )
+            UIUtil.dispatchAllInvocationEvents()
+            val rp = panel.resultPanelForTest()
+            assertEquals("放行语义不应进错误态", "EMPTY", rp.stateForTest())
+            assertFalse("放行语义不应挂错误文案", rp.currentErrorForTest() != null)
+            assertFalse("放行语义不应挂修复入口", rp.fixActionForTest().isVisible)
+            val text = rp.infoTextForTest()
+            assertTrue("状态行应报出渲染方言", text.contains("PostgreSQL"))
+            assertTrue("状态行应报出目标方言", text.contains("MySQL"))
+            assertFalse("放行语义文案不应再含「已阻止执行」", text.contains("已阻止执行"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun test闸门放行_重渲染不可用同样显示状态提示不进错误态() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.onExecutionDialectGate(
+                ExecutionDialectGate.Verdict(
+                    ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+                    "MySQL",
+                    "PostgreSQL",
+                ),
+            )
+            UIUtil.dispatchAllInvocationEvents()
+            val rp = panel.resultPanelForTest()
+            assertEquals("放行语义不应进错误态", "EMPTY", rp.stateForTest())
+            assertFalse("放行语义不应挂错误文案", rp.currentErrorForTest() != null)
+            assertTrue("状态行应报出双方方言", rp.infoTextForTest().contains("PostgreSQL"))
         } finally {
             panel.clear()
         }

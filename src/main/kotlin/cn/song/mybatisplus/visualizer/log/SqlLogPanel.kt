@@ -1650,6 +1650,12 @@ class SqlLogPanel(
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 
+        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
+
         val modelSizeBefore = listModel.size()
         val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
         if (!applyIncremental(newVisible, evicted)) {
@@ -2313,6 +2319,8 @@ class SqlLogPanel(
             StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
             StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
             StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
+            StatementType.CREATE -> MpSqlVisualizerBundle.message("log.filter.create")
+            StatementType.DROP -> MpSqlVisualizerBundle.message("log.filter.drop")
             else -> "OTHER"
         }
     }

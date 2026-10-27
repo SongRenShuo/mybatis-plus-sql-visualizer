@@ -130,26 +130,38 @@ class SqlLogListFreezeGuardTest : BasePlatformTestCase() {
         return walk(root)
     }
 
-    fun testSpeedSearch匹配高亮锚点_主列表与历史二级渲染器() {
+    fun testSpeedSearch匹配高亮锚点_共用渲染基类() {
         // T-UiNative f65d9ae：speed search 的匹配片段高亮是渲染器职责
-        //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的 meta 行与 SQL 行上；
+        //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的各文本组件上；
         // pitfall-speedsearch-highlight-renderer：setDynamicSearchMatchHighlighting 并不存在）。
-        // 面板新增渲染路径（列/模式）时若漏施高亮，搜索命中无标记且难察觉——以「两面板渲染器
-        // 文件各含 ≥2 处施加点」为结构锚点锁住（当前各 2 处：meta 行 + SQL 行）。
-        // T-M53-II（2026-10-10）：主列表的渲染片段/渲染器已由 SqlLogPanel.kt 原样搬出到同包
-        // LogEntryRendering.kt（逐字符搬运、零行为改动），故锚点路径随之更新；判据不变（仍 ≥2 处）。
-        val anchors = mapOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogEntryRendering.kt" to "SQL 日志主列表",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to "历史二级 SQL 列表",
+        // 面板新增渲染路径时若漏施高亮，搜索命中无标记且难察觉——以「施加点数量」为结构锚点锁住。
+        //
+        // T-LogListRail（2026-10-26）：日志页与历史页渲染器曾各持一份同构实现（每文件 2 处施加点），
+        // 改版时收进共用基类。锚点随之从「两个渲染器文件各 ≥2 处」改为「基类 ≥3 处」，且
+        // **子类不得自带施加点**——自带即说明出现了绕过基类的新渲染路径，那正是本守卫要防的漏施加情形。
+        val basePath = "src/main/kotlin/cn/song/mybatisplus/visualizer/log/RailCellRendererBase.kt"
+        val baseFile = java.io.File(basePath)
+        assertTrue("找不到基类源文件 $basePath（工作目录=${java.io.File(".").absolutePath}）", baseFile.isFile)
+        val baseCount = Regex("SpeedSearchUtil\\.applySpeedSearchHighlighting").findAll(baseFile.readText()).count()
+        assertTrue(
+            "共用渲染基类的 speed search 高亮施加点不足（$baseCount < 3）——轨道行/注脚行/错误行/SQL 行" +
+                "均须施 SpeedSearchUtil.applySpeedSearchHighlighting，否则搜索命中无高亮（f65d9ae 教训）",
+            baseCount >= 3,
         )
-        for ((path, label) in anchors) {
+
+        val subclassPaths = mapOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogEntryRendering.kt" to "SQL 日志主列表渲染器",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to "历史二级 SQL 列表渲染器",
+        )
+        for ((path, label) in subclassPaths) {
             val f = java.io.File(path)
-            assertTrue("找不到源文件 $path（工作目录=${java.io.File(".").absolutePath}）", f.isFile)
+            assertTrue("找不到源文件 $path", f.isFile)
             val count = Regex("SpeedSearchUtil\\.applySpeedSearchHighlighting").findAll(f.readText()).count()
-            assertTrue(
-                "$label 渲染器的 speed search 高亮施加点不足（$count < 2）——新增渲染路径须对 meta 行与 SQL 行" +
-                    "各施 SpeedSearchUtil.applySpeedSearchHighlighting，否则搜索命中无高亮（f65d9ae 教训）",
-                count >= 2,
+            assertEquals(
+                "$label 不应自带 speed search 施加点（现 $count 处）——渲染路径须统一走共用基类，" +
+                    "自带即意味着新增渲染路径可能漏施高亮",
+                0,
+                count,
             )
         }
     }

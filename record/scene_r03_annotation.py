@@ -65,6 +65,14 @@ def param_fields():
 def main():
     force_en_us()                            # 先把输入法切英文，否则参数值会被转成汉字
     time.sleep(0.5)
+    # 开录前按路径精确打开目标文件（同名文件问题的根治手段，T-DemoGifFix1026 §2.2）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/mapper/UserMapper.java",
+                  settle=1.6)
+    except Exception as e:
+        print("MCP 打不开，中止（不退回搜索方式，宁可不录也不开错文件）:", e)
+        raise
     goto_line(37)
     gutter = locate_gutter()
 
@@ -76,6 +84,9 @@ def main():
         click(*gutter)                       # 1. gutter 点开预览
         wait_stable(REGION)
         time.sleep(1.3)                      # 弹窗定格
+        # 闸门 2（画面断言）：预览面板必须已就位，否则本 take 作废
+        if not has("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
+            raise RuntimeError("预览面板未出现，中止本次 take")
 
         # 参数框的值会跨次保留（上一轮录完不清空，下一轮再点进去旧值还在，
         # 直接 typewrite 就变成 songsongsong… / 111111）。所以先全选删干净再输。
@@ -98,9 +109,10 @@ def main():
         #    改点「取消」：同样关闭弹窗，但不产生通知卡。
         click(*abs_pt((1212, 798)), move_dur=0.3)
         time.sleep(1.0)
-        # 收尾回跳到起始行，保证首尾同态（录制指南第 18 条）
-        goto_line(37)
-        time.sleep(1.0)
+        # 收尾**不再 goto**：关窗后光标仍在第 37 行（prep 落点），与首帧同态。
+        # 旧版这里 goto_line(37) 在录制窗口内弹 Ctrl+G，正是旧片帧 140-163 的
+        # 「Go to Line:Column」入镜来源（T-DemoGifFix1026 §2.1）。
+        time.sleep(0.8)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")
