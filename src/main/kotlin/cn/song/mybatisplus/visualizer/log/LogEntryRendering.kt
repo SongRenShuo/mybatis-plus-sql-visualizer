@@ -314,7 +314,7 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
  *
  * 版面：`[色条] 头部行（全部元信息） / SQL 行… / 可选错误行`。
  * 头部行顺序与优先级裁剪见 [RailCellRendererBase.bindHeaderLine] 与
- * [clipFragmentsByPriority]；条目分割靠上下留白 + 底部细线。
+ * [clipSqlFragments] 的顺序截断（与 2026.10.23 一致）；条目分割靠上下留白 + 底部细线。
  *
  * 演变：`bed58b64` 的 88px 左侧信息轨与进度条已被用户实测否决并撤除；
  * `metaLine` 保留为头部行的兼容别名，存量测试断言零改动继续有效。

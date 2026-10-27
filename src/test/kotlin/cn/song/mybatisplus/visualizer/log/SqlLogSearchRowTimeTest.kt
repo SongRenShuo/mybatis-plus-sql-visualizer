@@ -146,7 +146,7 @@ class SqlLogSearchRowTimeTest : BasePlatformTestCase() {
      * **时间与行号搜索必须仍然可用**。
      *
      * 为什么需要这条：行号/时间搜索依赖「显示文本 == 可搜文本」这一契约。改版动了显示位置
-     * 与裁剪策略（`clipFragmentsByPriority` 会在窄宽度下剥掉日期段），任何一侧漂移都会让
+     * 与裁剪策略（窄宽度下走 `clipSqlFragments` 顺序截断），任何一侧漂移都会让
      * 用户「看得见却搜不到」。本用例直接走**真实渲染链路**取头部行文本，再拿去搜索，
      * 闭合两端一致性。
      */

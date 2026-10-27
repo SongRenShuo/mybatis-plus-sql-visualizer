@@ -13,6 +13,7 @@ import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Container
+import java.awt.event.AdjustmentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
@@ -100,7 +101,12 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         }
     }
 
-    fun test只有滚底动作能从手动暂停恢复跟随() {
+    /**
+     * 状态机本身的转换（T-ListMetaRevert 起：滚到底也会恢复，见下一条）。
+     *
+     * 本条只验纯状态机：手动滚动 → PAUSED；onScrollToEnd → FOLLOWING；clear → FOLLOWING。
+     */
+    fun test状态机转换_手动滚动暂停_滚底与清除恢复() {
         val state = TailFollowState()
         assertEquals(TailFollowMode.FOLLOWING, state.mode)
         state.onUserScroll()
@@ -113,7 +119,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         assertTrue(state.shouldFollow)
     }
 
-    fun test滚轮滚动条与键盘暂停_程序性滚回底部不恢复() {
+    fun test滚轮滚动条与键盘暂停_滚回底部恢复跟随() {
         val manager = SqlLogManager(project)
         val panel = SqlLogPanel(project, manager)
         try {
@@ -129,8 +135,17 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
             val press = MouseEvent(bar, MouseEvent.MOUSE_PRESSED, 2L, 0, 2, 2, 1, false)
             bar.mouseListeners.forEach { it.mousePressed(press) }
             assertEquals("拖动或点击滚动条须暂停", TailFollowMode.PAUSED, panel.tailFollowModeForTest)
-            bar.value = bar.maximum
-            assertEquals("即使回到底部也不得自动恢复", TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+            // T-ListMetaRevert（用户 2026-10-26）：滚回底部必须恢复自动跟随。
+            // 此前的实现只有「滚动到底部」按钮能恢复，用户滚回去后还得再点一下按钮，
+            // 违反「滚到底就继续跟随」的直觉。
+            val maxScrollable = bar.maximum - bar.visibleAmount
+            bar.value = maxOf(0, maxScrollable)
+            bar.adjustmentListeners.forEach {
+                it.adjustmentValueChanged(
+                    AdjustmentEvent(bar, AdjustmentEvent.ADJUSTMENT_VALUE_CHANGED, AdjustmentEvent.TRACK, bar.value),
+                )
+            }
+            assertEquals("滚回底部应恢复自动跟随", TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
 
             panel.resumeTailFollowForTest()
             val key = KeyEvent(panel.list, KeyEvent.KEY_PRESSED, 3L, 0, KeyEvent.VK_PAGE_UP, KeyEvent.CHAR_UNDEFINED)
