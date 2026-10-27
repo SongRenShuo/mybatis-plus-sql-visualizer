@@ -43,10 +43,13 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
     /**
      * 单格渲染预算（毫秒）。
      *
-     * 取值依据：改造前同形态实测约 0.05~0.2ms/格（headless）；设 2ms 是留一个数量级余量，
-     * 只为拦住「每格 new 组件 / 每格 buildList / 每格 revalidate」这类结构性退化。
+     * 取值依据：T-PerfSweep27-01（头部行静态段条目级缓存）后 headless 实测约 0.08ms/格
+     * （日志页 2000 次渲染 0.197s 含 50 次预热均摊，JUnit XML time 读数）；原预算 2.0ms
+     * 收紧到 1.0ms——仍留 10 倍余量只拦「每格 new 组件 / 每格 buildList / 每格 revalidate」
+     * 这类结构性退化，不拦正常波动。缓存对「同一格反复重绘」场景免静态段重算，本形态
+     * （2000 个不同条目各渲一次）每条仍付一次首算，故预算不以缓存为前提。
      */
-    private val perCellBudgetMs = 2.0
+    private val perCellBudgetMs = 1.0
 
     fun test单格渲染耗时_日志页在预算内() {
         val renderer = LogEntryListCellRenderer()

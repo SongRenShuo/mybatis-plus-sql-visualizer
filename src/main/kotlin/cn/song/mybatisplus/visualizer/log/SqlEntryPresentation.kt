@@ -6,8 +6,41 @@ import java.awt.Font
 import javax.swing.JList
 import javax.swing.JPanel
 
+/**
+ * 券01（T-PerfSweep27-01）：头部行静态段缓存键——全部影响静态片段形态的设置维度。
+ * 键含设置值 = 显示格式严格跟随设置（切换即时重算，免失效钩子），
+ * 形态对照 `timestampFormatterCache`「键=格式串天然跟随设置变更」先例。
+ * 顶层 public 类型：LogSqlEntry 的缓存字段（public data class 成员）须公开引用它。
+ */
+data class HeaderStaticCacheKey(
+    val showDuration: Boolean,
+    val tsEnabled: Boolean,
+    val tsFormat: String,
+    val tsSource: String,
+    val badgeDetail: Boolean,
+    val slowThresholdMs: Long,
+)
+
 internal object SqlEntryPresentation {
     private val secondaryAttributes = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
+
+    /**
+     * 券01（T-PerfSweep27-01）测试缝：静态段实际计算次数。
+     * 先红判据（修复前每次渲染 +1）与反向验证（摘缓存后回红）共用；生产链路无读取方，零行为影响。
+     */
+    internal var headerCoreComputeCount = 0
+
+    internal fun headerStaticCacheKey(showDuration: Boolean): HeaderStaticCacheKey {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        return HeaderStaticCacheKey(
+            showDuration = showDuration,
+            tsEnabled = state.logTimestampEnabled,
+            tsFormat = state.logTimestampFormat,
+            tsSource = state.logTimestampSource,
+            badgeDetail = state.dataSourceBadgeDetail,
+            slowThresholdMs = state.slowQueryThresholdMs,
+        )
+    }
 
     /**
      * 头部行片段（T-LogListHeader）：SQL 上方那一行的全部元信息。
@@ -25,6 +58,13 @@ internal object SqlEntryPresentation {
      *    不再按优先级丢片段（退化梯度机制已删除）。
      *
      * `(影响行数)` 只在 DML 上有值；SELECT 不显示（不补空占位——那会让每行多出一段空白）。
+     *
+     * 券01（T-PerfSweep27-01）拆段：本函数保持原签名与输出序列（存量测试零改动），
+     * 内部改为 [headerStaticFragments] + [headerBadgeFragments] + [headerSourceFragments]
+     * 三段组合——渲染层按此分段做条目级缓存（静态/来源段可缓存、徽章段每次算）。
+     * **`selected` 参数自此被忽略**：片段层恒产出非选中态属性。选中态着色由
+     * `bindHeaderLine` 的 `selectedAttributes(f.attributes, fg)` 无条件覆盖（选中色最终
+     * 全部是列表 selectionForeground，片段层选中分支本就不可见），绑定输出逐字节一致。
      */
     fun headerFragments(
         entry: LogSqlEntry,
@@ -32,25 +72,51 @@ internal object SqlEntryPresentation {
         showDuration: Boolean,
         templateCounts: Map<String, Int>,
         dedupeCounts: Map<String, Int> = emptyMap(),
-    ): List<SqlTextFragment> = buildList {
-        fun addFragment(fragment: Pair<String, SimpleTextAttributes>?) {
-            if (fragment != null) add(SqlTextFragment(fragment.first, fragment.second))
-        }
+    ): List<SqlTextFragment> =
+        headerStaticFragments(entry, showDuration) +
+            headerBadgeFragments(entry, templateCounts, dedupeCounts) +
+            headerSourceFragments(entry)
 
-        if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
-        addFragment(formatTimestampFragment(entry))
-        if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, selected))
-        addFragment(formatDatabaseFragment(entry, selected))
-        addFragment(formatMcpFragment(entry, selected))
-        addFragment(formatUpdateCountFragment(entry, selected))
+    /**
+     * 静态段（券01 可缓存部分）：序号/时间/耗时/库/MCP/影响行数。
+     * 只依赖条目不可变字段与 [HeaderStaticCacheKey] 覆盖的设置维度；恒非选中态。
+     */
+    fun headerStaticFragments(entry: LogSqlEntry, showDuration: Boolean): List<SqlTextFragment> {
+        headerCoreComputeCount++
+        return buildList {
+            fun addFragment(fragment: Pair<String, SimpleTextAttributes>?) {
+                if (fragment != null) add(SqlTextFragment(fragment.first, fragment.second))
+            }
+            if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
+            addFragment(formatTimestampFragment(entry))
+            if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, false))
+            addFragment(formatDatabaseFragment(entry, false))
+            addFragment(formatMcpFragment(entry, false))
+            addFragment(formatUpdateCountFragment(entry, false))
+        }
+    }
+
+    /**
+     * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构。
+     * 两个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
+     */
+    fun headerBadgeFragments(
+        entry: LogSqlEntry,
+        templateCounts: Map<String, Int>,
+        dedupeCounts: Map<String, Int> = emptyMap(),
+    ): List<SqlTextFragment> = buildList {
         // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
         dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 && entry.source != SqlSource.SHARDINGSPHERE }?.let {
             add(SqlTextFragment("⨉$it ", secondaryAttributes))
         }
-        addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
-        // 来源放最后且保留完整文件名——与 2026.10.23 逐项一致
-        addFragment(formatSourceFragment(entry, selected))
+        formatTemplateCountFragment(entry, templateCounts, false)?.let {
+            add(SqlTextFragment(it.first, it.second))
+        }
     }
+
+    /** 来源段（券01 可缓存部分）：`[文件.java:行号]`，无源码位置为空列表。恒非选中态。 */
+    fun headerSourceFragments(entry: LogSqlEntry): List<SqlTextFragment> =
+        formatSourceFragment(entry, false)?.let { listOf(SqlTextFragment(it.first, it.second)) } ?: emptyList()
 
     /**
      * 通栏注脚片段（历史遗留：`bed58b64` 把角标/徽章放在 SQL 下方通栏）。
