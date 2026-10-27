@@ -47,6 +47,19 @@ def has(xp):
 
 
 def main():
+    # prep 清场（20261028 实测：残留的设置窗会整段入镜——上一版首帧就是
+    # 「SQL dialect is not configured」的设置页）。设置窗在 robot 树里查不到，
+    # 用「有 Apply 按钮」判存在，点 Cancel 关掉。
+    if has("//div[@text='Apply']"):
+        pyautogui.click(1272, 826)      # 设置窗 Cancel（本轮实测位置）
+        time.sleep(1.8)
+    pyautogui.press("esc")
+    time.sleep(0.5)
+    if has("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
+        pyautogui.click(700, 300)
+        time.sleep(0.4)
+        pyautogui.press("esc")
+        time.sleep(1.0)
     goto_line(28)
     time.sleep(0.8)
 
@@ -65,8 +78,13 @@ def main():
             raise RuntimeError("预览未打开——快捷键失效，中止录制")
 
         # 2. 更多 -> 回滚 SQL
-        click(*abs_pt(MORE_MENU), move_dur=0.3, pauses=(0.2, 1.0))
-        click(*abs_pt(ROLLBACK_ITEM), move_dur=0.25, pauses=(0.15, 2.2))
+        #    20261028 实测：更多菜单是 JBPopup，**鼠标点菜单项会被「关闭菜单」吃掉**
+        #    （点了坐标菜单就关、什么也没发生）→ 必须键盘：Home 落到首项「回滚 SQL」再 Enter。
+        click(*abs_pt(MORE_MENU), move_dur=0.3, pauses=(0.2, 1.2))
+        pyautogui.press("home")
+        time.sleep(0.5)
+        pyautogui.press("return")
+        time.sleep(2.2)
 
         # 3. 复制回滚 SQL
         click(*abs_pt(RB_COPY), move_dur=0.3, pauses=(0.15, 0.9))

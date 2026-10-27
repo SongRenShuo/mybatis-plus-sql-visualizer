@@ -169,7 +169,8 @@ def main():
             time.sleep(0.25)
         pyautogui.press("return")
         time.sleep(2.0)
-        if not has("//div[@accessiblename='导出回放脚本']"):
+        # 选项框是独立窗口，robot 组件树看不到（20261028 实测 has() 恒 False）→ 按窗口标题判
+        if find_window("导出回放脚本", timeout=5.0, max_w=800) is None:
             raise RuntimeError("导出回放脚本对话框未打开，中止")
 
         # 3. 取消 / 重勾「事务包裹」——说明行跟随联动
@@ -189,10 +190,29 @@ def main():
         if rect is None:
             raise RuntimeError("原生保存框未出现")
         time.sleep(0.6)
-        if not focus_title("导出回放脚本", min_w=800):
-            raise RuntimeError("原生保存框未置前（点不到「保存(S)」）")
-        pyautogui.click(rect[0] + 791, rect[1] + 498)      # 「保存(S)」
-        time.sleep(1.2)
+        focus_title("导出回放脚本", min_w=800)
+        pyautogui.click(rect[0] + 783, rect[1] + 498)      # 「保存(S)」
+        time.sleep(1.4)
+        if find_window("导出回放脚本", timeout=1.5, min_w=800) is not None:
+            # 20261028 实测：原生保存框有时**不绘制**（窗口存在、IsWindowVisible=1，
+            # 但截屏里看不到、鼠标点击无效），只有 WM_COMMAND(IDOK) 能提交。
+            # 后备路径直接向该窗口投 IDOK，效果等同点「保存(S)」。
+            import win32con
+            import win32gui
+
+            hwnd = [0]
+
+            def _cb(h, _):
+                if win32gui.GetWindowText(h).strip() == "导出回放脚本":
+                    l, t, r, b = win32gui.GetWindowRect(h)
+                    if (r - l) >= 800:
+                        hwnd[0] = h
+                return True
+
+            win32gui.EnumWindows(_cb, None)
+            if hwnd[0]:
+                win32gui.PostMessage(hwnd[0], win32con.WM_COMMAND, 1, 0)
+                time.sleep(1.6)
         if find_window("导出回放脚本", timeout=1.5, min_w=800) is not None:
             raise RuntimeError("保存框未关闭（保存失败）")
         # 夺回前台：保存框关闭的空档 Chrome 会抢走前台，屏幕录制区会整段变成浏览器
