@@ -24,7 +24,7 @@ import pyautogui
 from gifkit import Recorder, click, goto_line, wait_stable
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r09_xml_rollback.mp4")
 
@@ -75,7 +75,12 @@ def main():
 
         # 5. 复制 SQL 并关闭
         click(*abs_pt(COPY_AND_CLOSE), move_dur=0.3)
-        time.sleep(1.2)
+        time.sleep(1.6)
+        # 二次真实变化：重新唤起预览（展示可重复预览回滚 SQL）
+        pyautogui.moveTo(600, 450, duration=0.6); time.sleep(0.8)
+        pyautogui.hotkey("alt", "shift", "q")
+        time.sleep(3.6)
+        pyautogui.moveTo(900, 500, duration=0.8); time.sleep(1.8)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")

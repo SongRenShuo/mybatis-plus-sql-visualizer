@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from gifkit import Recorder
 from nav import close_preview, force_en_us, goto_col, shot, trigger_preview
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a23_interceptor.mp4"
 
 LINE, COL = 41, 21          # return this.list(queryWrapper)

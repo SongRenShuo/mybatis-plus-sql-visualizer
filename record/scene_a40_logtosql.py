@@ -12,17 +12,61 @@ import time
 
 from gifkit import Recorder
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a40_logtosql.mp4"
 
 INPUT = (1150, 300)
 CONVERT = (985, 198)
 
 
+LOG_SAMPLE = (
+    "2026-10-27 20:30:15.123 DEBUG 1234 --- [http-nio-8081-exec-1] "
+    "c.s.m.mapper.UserMapper.selectUserListByXml    : "
+    "==>  Preparing: SELECT id,username,password,age,email FROM user "
+    "WHERE username LIKE concat('%', ?, '%') AND status = ?\n"
+    "2026-10-27 20:30:15.124 DEBUG 1234 --- [http-nio-8081-exec-1] "
+    "c.s.m.mapper.UserMapper.selectUserListByXml    : "
+    "==> Parameters: tom(String), 1(Integer)"
+)
+
+
+def tkinter_clip(text):
+    """置剪贴板（tkinter，避免依赖 gifkit.paste 的 Ctrl+V 副作用）。"""
+    try:
+        import tkinter
+        r = tkinter.Tk(); r.withdraw()
+        r.clipboard_clear(); r.clipboard_append(text); r.update(); r.destroy()
+        return True
+    except Exception as e:
+        print("(剪贴板失败)", str(e)[:50]); return False
+
+
 def main():
     import pyautogui
+    import gifkit
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
+
+    # ---- prep（不入镜）：切到「日志 → SQL」页签 + 置剪贴板 ----
+    from robot import find_components, click_component
+    from verify import assert_no_dialog
+    try:
+        assert_no_dialog()
+    except AssertionError:
+        pyautogui.press("esc"); time.sleep(0.8)
+    # 关掉可能开着的预览，避免盖住面板
+    for xp in ("//div[@accessiblename='取消']",):
+        if find_components(xp):
+            click_component(xp); time.sleep(1.0); break
+    # 切到「日志 → SQL」页签（工具窗内的功能页）。
+    # 20261027 实测：该页签的 robot 组件不是 TabLabel（查不到），
+    # 按截图量得的固定位置点击（工具窗右栏，页签行 y≈96）。
+    # 截图 1354x974 里「日志 → SQL」页签中心 ≈ (757, 66) → 屏幕 = (285+757, 26+66)
+    pyautogui.click(285 + 757, 26 + 66)
+    time.sleep(1.8)
+    print("[prep] 已点「日志 → SQL」页签")
+    # 剪贴板置入样例日志
+    rc = tkinter_clip(LOG_SAMPLE)
 
     r = Recorder(REGION, OUT)
     r.start()
@@ -36,7 +80,16 @@ def main():
 
     # 2. 点转换 ▶
     pyautogui.click(*CONVERT)
-    time.sleep(2.8)
+    time.sleep(2.4)
+
+    # 3. 二次真实变化：清空输入重新粘贴并再转换（撑时长 + 展示可重复）
+    pyautogui.click(*INPUT)
+    time.sleep(0.4)
+    pyautogui.hotkey("ctrl", "a"); time.sleep(0.2)
+    pyautogui.press("delete"); time.sleep(1.0)
+    pyautogui.hotkey("ctrl", "v"); time.sleep(1.4)
+    pyautogui.click(*CONVERT)
+    time.sleep(2.6)
 
     print("frames:", r.stop())
 

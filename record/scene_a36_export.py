@@ -5,7 +5,7 @@ import sys,time
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import robot,pyautogui
 from gifkit import Recorder
-REGION=(277,25,1370,984)
+REGION = (285, 26, 1354, 974)
 OUT=HERE/'perf'/'a36_export_native.mp4'
 TARGET=HERE/'tmp'/'history-export-verified.sql'
 

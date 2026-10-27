@@ -29,7 +29,7 @@ import pyautogui
 from gifkit import Recorder, click
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "n12_display_mask.mp4")
 
@@ -53,7 +53,8 @@ def main():
         pyautogui.hotkey("ctrl", "alt", "s")  # 开设置
         time.sleep(3.0)
         # 设置页内导航（树滚动失效 → 用搜索框输单词）
-        pyautogui.click(*abs_pt((150, 78)), move_dur=0.3)
+        pyautogui.moveTo(*abs_pt((150, 78)), duration=0.3)
+        pyautogui.click(*abs_pt((150, 78)))
         time.sleep(0.6)
         pyautogui.write("Visualizer", interval=0.06)
         time.sleep(2.0)

@@ -34,6 +34,11 @@ SANDBOX_XML = ("F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer/build
 
 FIX = "--fix" in sys.argv
 NEED_DEMO = "--demo" in sys.argv
+# --expect-dialect <名>：本次录制期望的渲染方言（默认 MySQL）。
+# dialect-gate 那张需要 PostgreSQL 才能构造冲突场景，判据必须跟着变。
+EXPECT_DIALECT = "MySQL"
+if "--expect-dialect" in sys.argv:
+    EXPECT_DIALECT = sys.argv[sys.argv.index("--expect-dialect") + 1]
 results = []
 
 
@@ -127,8 +132,10 @@ def p4():
     sqld = os.path.join(DEMO, ".idea/sqldialects.xml")
     if os.path.exists(sqld):
         txt = open(sqld, encoding="utf-8").read()
-        if 'url="PROJECT" dialect="PostgreSQL"' in txt:
-            issues.append("sqldialects.xml PROJECT=PostgreSQL")
+        import re as _re
+        m = _re.search(r'url="PROJECT" dialect="([^"]*)"', txt)
+        if m and m.group(1) != EXPECT_DIALECT:
+            issues.append(f"sqldialects.xml PROJECT={m.group(1)} (expect {EXPECT_DIALECT})")
 
     proj = os.path.join(DEMO, ".idea/sql-visualizer/mp-sql-visualizer-settings.json")
     if os.path.exists(proj):
@@ -144,14 +151,14 @@ def p4():
         import re
         m = re.search(r'name="dialect" value="([^"]*)"', txt)
         auto = re.search(r'name="dialectAuto" value="([^"]*)"', txt)
-        if m and m.group(1) and m.group(1) != "MySQL":
-            issues.append(f"global dialect={m.group(1)}")
+        if m and m.group(1) and m.group(1) != EXPECT_DIALECT:
+            issues.append(f"global dialect={m.group(1)} (expect {EXPECT_DIALECT})")
         if auto and auto.group(1) == "false" and not (m and m.group(1)):
             issues.append("global dialectAuto=false but dialect empty")
 
     if issues:
         return report("P4 render dialect", False, "; ".join(issues))
-    return report("P4 render dialect", True, "all three sources say MySQL")
+    return report("P4 render dialect", True, f"all sources say {EXPECT_DIALECT}")
 
 
 # ---------------- P5 数据源记忆 ----------------

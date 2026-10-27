@@ -23,7 +23,7 @@ import robot
 from gifkit import Recorder
 from locate import ensure_foreground, sandbox_pid, windows
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = HERE / "perf" / "r11_sqllog.mp4"
 LOG_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 日志")]'
 HISTORY_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 历史")]'
@@ -58,13 +58,24 @@ def list_pixels():
 def main():
     pid = sandbox_pid()
     frames = [(h, r) for h, p, _, r in windows() if p == pid and r[2] - r[0] > 1200]
-    if len(frames) != 1 or frames[0][1] != (REGION[0], REGION[1],
-                                         REGION[0] + REGION[2], REGION[1] + REGION[3]):
-        raise RuntimeError(f"sandbox viewport differs from recording baseline: {frames}")
+    # 窗口外框实测 (277,25,1647,1009)——REGION 是内缩 8px 的录制区（坑 49）
+    WANT = (277, 25, 1647, 1009)
+    if len(frames) != 1 or frames[0][1] != WANT:
+        raise RuntimeError(f"sandbox viewport differs from baseline: {frames} != {WANT}")
     if not ensure_foreground(frames[0][0], click_xy=(700, 36)):
         raise RuntimeError("sandbox did not take focus")
     for xpath in (LOG_TAB, HISTORY_TAB):
         robot.require_component(xpath)
+    # 20261027：关掉可能开着的 SQL 预览弹窗——它会盖住日志列表，
+    # 让「捕获入列 + 双通道状态栏」这两个本页主角看不到（复核 MINOR 项）
+    try:
+        from robot import find_components, click_component
+        if find_components("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
+            for xp in ("//div[@accessiblename='取消']",):
+                if find_components(xp):
+                    click_component(xp); time.sleep(1.2); break
+    except Exception as e:
+        print("(关预览跳过)", str(e)[:40])
     clear_id = _clear_xpath()
     feed("/user/list")
     robot.click_component(f"//div[@id='{clear_id}']")

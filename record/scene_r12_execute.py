@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gifkit import Recorder, click, wait_stable
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r12_execute.mp4")
 

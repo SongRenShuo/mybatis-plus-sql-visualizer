@@ -10,7 +10,7 @@ import time
 
 from gifkit import Recorder, click
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a45_inject.mp4"
 
 CHK_DEMO = (740, 468)
@@ -31,7 +31,15 @@ def main():
 
     # 2. OK → 注入
     click(*OK_BTN, move_dur=0.35, pauses=(0.2, 0.2))
-    time.sleep(2.6)  # 生成文件 + 通知气球
+    time.sleep(2.4)  # 生成文件 + 通知气球
+    # 二次真实变化：打开已注入的拦截器产物（展示「自动注入」落点）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/config/"
+                  "SqlSourceInterceptor.java", settle=2.2)
+    except Exception as e:
+        print("(打开产物跳过)", str(e)[:50])
+    time.sleep(2.4)
 
     print("frames:", r.stop())
 

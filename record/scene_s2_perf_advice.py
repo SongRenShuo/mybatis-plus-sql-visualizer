@@ -37,18 +37,19 @@ from gifkit import Recorder                                                # noq
 from locate import close_preview, ensure_foreground, sandbox_pid, windows   # noqa: E402
 from nav import force_en_us, goto_col, trigger_preview                      # noqa: E402
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/s2_perf_advice.mp4"
 
 FILE_QUERY = "WrapperAdvancedCoverageServiceImpl.java"
 FILE_TITLE_KEY = "WrapperAdvancedCoverageServiceImpl"
-CHAIN_LINE, CHAIN_COL = 202, 18          # .like(User::getUsername, "张")（加注释块后行号会漂，改素材必重算）
+CHAIN_LINE, CHAIN_COL = 110, 18          # .eq(DeviceInfoEntity::getShareSchemeId, 1)
+# （20261027 重标：素材文件现为 114 行，旧值 202 已越界——goto 落空导致预览不出）
 ROW_X = 600
 FILE_ROW_YS = (341, 333, 349, 357)
 
-ADV_A = (700, 258)          # 建议行（可见截断态）——实测 region y≈233 → screen 258
-ADV_HOVER = (700, 258)      # 停住读全文 → tooltip（落点偏 27px 就不弹）
-GAZE_TOOLTIP = (700, 330)   # tooltip 区域
+ADV_A = (600, 224)          # 建议行「 ORDER BY 无 LIMIT…」（20261027 放大裁剪实测 region y≈198）
+ADV_HOVER = (600, 224)      # 停住读全文 → tooltip（落点偏 27px 就不弹）
+GAZE_TOOLTIP = (700, 290)   # tooltip 区域（建议行下方）
 GAZE_SQL = (1100, 460)
 PARK = (577, 725)
 
@@ -76,20 +77,15 @@ def main():
     # ---- prep（不入镜）：开文件、光标压链 token，但**不开**预览 ----
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.7)
     print("关旧预览:", close_preview(ide_pid))
-    pyautogui.click(600, 500); time.sleep(0.5)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.4)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
-    for y in FILE_ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(1.3)
-        if FILE_TITLE_KEY in ide_hwnd_and_title(ide_pid)[1]:
-            break
-    time.sleep(1.6)
-    t1 = ide_hwnd_and_title(ide_pid)[1]
-    if FILE_TITLE_KEY not in t1:
-        raise RuntimeError("开文件失败：标题仍为 %s" % t1[:70])
-    print("开文件后标题 = %s" % t1[:62])
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + 窗口标题判据均已过时——
+    # 坑 66 指出 2026.2 新 UI 主窗标题不再携带文件名，该判据恒 False）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/service/impl/"
+                  "DeviceInfoServiceImpl.java", settle=1.8)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     goto_col(CHAIN_LINE, CHAIN_COL)
     pyautogui.moveTo(*PARK, duration=0.4); time.sleep(0.6)
 
@@ -97,16 +93,30 @@ def main():
     # 建议分段按**宽度预算**裁剪（可见 label 只放得下第一条、末尾补「…」，第二条被裁掉），
     # **全文在 tooltip 里**——所以特意把光标停在建议行上停住，让 tooltip 显示多条建议全文
     # （这正是计划 S2 里写的「截断加省略号 + 悬停看全文」）。
+    # 先把光标从代码/建议行上挪开并清掉残留 tooltip（坑 27：tooltip 会「粘住」，离开不退）
+    pyautogui.moveTo(1200, 950, duration=0.4); time.sleep(0.4)
+    pyautogui.press("esc"); time.sleep(0.5)
+    pyautogui.moveTo(1200, 950, duration=0.3); time.sleep(0.4)
+
     r = Recorder(REGION, OUT)
     r.start()
     pyautogui.moveTo(900, 500, duration=0.5); time.sleep(0.4)
-    trigger_preview(wait=1.2)          # 浮窗连建议行一起出现（真实 UI 变化）
-    time.sleep(1.8)
-    pyautogui.moveTo(*ADV_A, duration=0.7); time.sleep(1.0)   # 建议行（可见截断态）
-    pyautogui.moveTo(*ADV_HOVER, duration=0.4)               # 停住 → tooltip 出全文
-    time.sleep(2.8)
-    pyautogui.moveTo(*GAZE_TOOLTIP, duration=0.6); time.sleep(1.6)
-    pyautogui.moveTo(*GAZE_SQL, duration=0.8); time.sleep(1.2)
+    trigger_preview(wait=3.6)          # 坑 51：预览弹窗要 ~3s 才画完，1.2s 会录成半透明态
+    time.sleep(2.0)
+    # 20261027 调整分镜：不悬停读 tooltip——悬停会弹一条**横贯整屏**的宽 tooltip，
+    # 把 SQL 上半部切开（比原瑕疵更糟）。改为展示「预览即出建议行 + SQL 全貌」，
+    # 用动态条件勾选制造真实画面变化撑时长（裸屏捕获不含光标，纯 moveTo 会被裁光）。
+    # 只「看」不「碰」建议行：光标停在其下方空白，避免触发宽 tooltip 切裂画面
+    pyautogui.moveTo(600, 250, duration=0.9); time.sleep(1.4)   # 建议行正下方（不压行本身）
+    pyautogui.moveTo(*GAZE_SQL, duration=1.0); time.sleep(1.6)  # SQL 全貌
+    # 真实 UI 变化：取消勾选「t.share_scheme_id = 1」动态条件 → WHERE 实时收缩
+    pyautogui.click(411, 375)        # 复选框图标中心（region(126,349) + origin(285,26)）
+    time.sleep(2.4)
+    pyautogui.moveTo(*GAZE_SQL, duration=0.9); time.sleep(2.0)
+    # 勾回 → WHERE 还原（双向演示，同时再撑一段真实变化）
+    pyautogui.click(411, 375)
+    time.sleep(2.4)
+    pyautogui.moveTo(*ADV_A, duration=0.8); time.sleep(1.8)
     # 收尾**停在建议行上**（不 park 到空白）：本张要展示的就是悬停全文 tooltip，
     # 末帧/poster 就该是它——移到别处 tooltip 会消失，poster 上什么都看不到。
     pyautogui.moveTo(*ADV_HOVER, duration=0.6); time.sleep(2.0)

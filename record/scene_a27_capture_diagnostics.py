@@ -6,7 +6,7 @@ HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import robot,anchor,pyautogui
 from gifkit import Recorder
 from locate import windows,sandbox_pid
-REGION=(277,25,1370,984)
+REGION = (285, 26, 1354, 974)
 OUT=HERE/'perf'/'a27_diagnostics_native.mp4'
 CAPTURE='//div[contains(@class,"ActionButton") and contains(@accessiblename,"捕捉")]'
 STOP='//div[contains(@class,"ActionButton") and contains(@accessiblename,"停止")]'
