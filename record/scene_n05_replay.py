@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 import pyautogui
 
 from gifkit import Recorder, click, shot
+from locate import ensure_foreground, sandbox_pid, windows
 from nav import force_en_us
 from robot import click_component, find_components
 
@@ -40,12 +41,11 @@ OUT = os.path.join(BASE, "perf", "n05_replay.mp4")
 
 OX, OY = REGION[0], REGION[1]
 
-# 预览头部「更多」（region 相对）
-MORE = (1189, 205)
-# 导出对话框「事务包裹」复选框（region 相对）
-WRAP_CHECK = (464, 460)
-# 导出对话框 OK（region 相对）
-OK_BTN = (790, 559)
+# 20261028：预览弹窗位置会变（本轮实测落在 (368,159)-(1558,861)），写死的 region 相对坐标
+# 会整体落空 —— 全部改成**相对预览弹窗/对话框自己的窗口矩形**计算（见 main 内）。
+# 标定（相对预览弹窗左上角）：更多按钮 (1131, 57)；导出对话框内「事务包裹」(337, 323)。
+
+# 导出产物路径（MCP open_file_in_editor 相对 IDE 工程根，工程根就是 demo 仓）
 # 导出产物路径（MCP open_file_in_editor 相对 IDE 工程根，工程根就是 demo 仓）
 EXPORTED_SQL = "replay.sql"
 
@@ -83,6 +83,64 @@ def abs_pt(p):
     return (p[0] + OX, p[1] + OY)
 
 
+def find_window(title, timeout=8.0, min_w=0, max_w=10**6):
+    """按标题找沙盒窗口，返回 rect。
+
+    坑（20261028 实测）：导出选项框与原生保存框**标题都叫「导出回放脚本」**，
+    只能按宽度区分——选项框 604px、保存框约 960px。
+    """
+    pid = sandbox_pid()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for _h, p, t, r in windows():
+            if p == pid and t.strip() == title:
+                w = r[2] - r[0]
+                if min_w <= w <= max_w:
+                    return r
+        time.sleep(0.3)
+    return None
+
+
+def focus_title(title, min_w=800):
+    """把标题匹配的窗口置前（Alt 按放 + SetForegroundWindow）。
+
+    20261028 实测：原生保存框会**开在 IDE 后面**（任务栏可见、屏幕不可见），
+    直接按屏幕坐标点会打到 IDE 上 → 保存失败。必须先把它置前。
+    """
+    import ctypes
+    import win32gui
+
+    pid = sandbox_pid()
+    target = [0]
+
+    def cb(h, _):
+        if win32gui.IsWindowVisible(h):
+            t = win32gui.GetWindowText(h)
+            if t.strip() == title:
+                l, tp, r, b = win32gui.GetWindowRect(h)
+                if (r - l) >= min_w:
+                    target[0] = h
+        return True
+
+    win32gui.EnumWindows(cb, None)
+    if not target[0]:
+        return False
+    u32 = ctypes.windll.user32
+    u32.keybd_event(0x12, 0, 0, 0)
+    u32.keybd_event(0x12, 0, 2, 0)
+    time.sleep(0.12)
+    win32gui.SetForegroundWindow(target[0])
+    time.sleep(0.6)
+    return win32gui.GetForegroundWindow() == target[0]
+
+
+def preview_rect():
+    r = find_window("SQL Visualizer - SQL 预览", timeout=3.0)
+    if r is None:
+        raise RuntimeError("预览弹窗未找到")
+    return r
+
+
 def has(xp):
     return len(find_components(xp)) > 0
 
@@ -100,8 +158,10 @@ def main():
     try:
         time.sleep(1.2)                                    # 1. 预览定格
 
+        pop = preview_rect()
+
         # 2. 「更多」→ 键盘导航到「导出回放脚本」
-        click(*abs_pt(MORE), move_dur=0.3, pauses=(0.2, 1.5))
+        click(pop[0] + 1131, pop[1] + 57, move_dur=0.3, pauses=(0.2, 1.5))
         pyautogui.press("end")
         time.sleep(0.4)
         for _ in range(3):
@@ -113,19 +173,36 @@ def main():
             raise RuntimeError("导出回放脚本对话框未打开，中止")
 
         # 3. 取消 / 重勾「事务包裹」——说明行跟随联动
-        click(*abs_pt(WRAP_CHECK), move_dur=0.3, pauses=(0.15, 1.0))
-        click(*abs_pt(WRAP_CHECK), move_dur=0.3, pauses=(0.15, 1.2))
+        opt = find_window("导出回放脚本", timeout=5.0, max_w=800)
+        if opt is None:
+            raise RuntimeError("导出选项框未找到")
+        click(opt[0] + 45, opt[1] + 66, move_dur=0.3, pauses=(0.15, 1.0))
+        click(opt[0] + 45, opt[1] + 66, move_dur=0.3, pauses=(0.15, 1.2))
 
         # 4. OK → 原生保存框（等待列表加载完，加载期按键会被吞）
-        click(*abs_pt(OK_BTN), move_dur=0.3, pauses=(0.2, 3.0))
+        click(opt[2] - 130, opt[3] - 32, move_dur=0.3, pauses=(0.2, 2.4))
 
-        # 5. 保存：保存框位置会在两种形态间漂移（保存(S)/打开(O)），坐标不可靠；
-        #    「保存(S)」是默认按钮带焦点，直接 Enter 提交。**只按一次**——
-        #    多按的 Return 会在对话框关闭后落到抢前台的浏览器上。
-        pyautogui.press("return")
+        # 5. 保存：原生对话框按窗口标题定位，**点「保存(S)」按钮**（20261028 实测：
+        #    Enter 在文件名框处于编辑态时不会提交，take 直接卡在保存框 →
+        #    后续 MCP 打开 replay.sql 报不存在）。「保存(S)」相对窗口左上 (791, 498)。
+        rect = find_window("导出回放脚本", timeout=10.0, min_w=800)
+        if rect is None:
+            raise RuntimeError("原生保存框未出现")
+        time.sleep(0.6)
+        if not focus_title("导出回放脚本", min_w=800):
+            raise RuntimeError("原生保存框未置前（点不到「保存(S)」）")
+        pyautogui.click(rect[0] + 791, rect[1] + 498)      # 「保存(S)」
         time.sleep(1.2)
-        focus_ide()                                        # 夺回被浏览器抢走的前台
-        time.sleep(1.5)
+        if find_window("导出回放脚本", timeout=1.5, min_w=800) is not None:
+            raise RuntimeError("保存框未关闭（保存失败）")
+        # 夺回前台：保存框关闭的空档 Chrome 会抢走前台，屏幕录制区会整段变成浏览器
+        # （20261028 实测 take 帧 156+ 全白）。focus_ide 的 Alt+SetForegroundWindow 不够稳，
+        # 改用 ensure_foreground（置前 + 取焦 + **校验前台句柄**）。
+        pid = sandbox_pid()
+        hwnd = [h for h, p_, t, r in windows() if p_ == pid and (r[2] - r[0]) > 1200][0]
+        if not ensure_foreground(hwnd, click_xy=(700, 500), tries=6, wait=0.6):
+            raise RuntimeError("保存后 IDE 未置前（Chrome 抢了前台）")
+        time.sleep(1.2)
 
         # 6. 打开导出的 .sql 展示注释头；先关预览浮窗（JDialog 会压住 .sql）
         from mcpnav import open_file

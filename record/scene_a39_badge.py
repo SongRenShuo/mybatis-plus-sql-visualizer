@@ -18,10 +18,14 @@ def main():
     try:
         time.sleep(.7);click(BADGE);changed=True
         robot.screenshot(out=str(HERE/'shots'/'badge-native-setting.png'))
-        click('//div[@accessiblename="OK"]');time.sleep(1.6)
-        # 二次真实变化：回到日志列表看角标从短态变完整态
-        pyautogui.moveTo(1000, 300, duration=.6);time.sleep(1.8)
-        pyautogui.moveTo(1100, 400, duration=.7);time.sleep(1.8)
+        click('//div[@accessiblename="OK"]');time.sleep(1.8)
+        # 二次真实变化：打开 SQL Visualizer 工具窗并回日志页，看角标从短态变完整态。
+        pyautogui.click(1618, 247);time.sleep(1.8)
+        xp='//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 日志")]'
+        if robot.find_components(xp):
+            robot.click_component(xp);time.sleep(1.2)
+        pyautogui.moveTo(1510, 300, duration=.6);time.sleep(1.4)
+        pyautogui.moveTo(1460, 400, duration=.7);time.sleep(1.4)
         robot.screenshot(out=str(HERE/'shots'/'badge-native-final.png'))
     finally:
         print('frames',rec.stop(),'output',OUT,flush=True)

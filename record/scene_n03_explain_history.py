@@ -55,17 +55,43 @@ def main():
     rec.start()
     try:
         time.sleep(1.0)
-        click(*abs_pt(EXPLAIN), move_dur=0.3)      # 第一次 EXPLAIN
-        wait_stable(REGION)
-        time.sleep(2.4)
+        # 20261027：改用 robot 按文本点（坐标点会漂）
+        from robot import click_component as _cc
+        def click_explain():
+            # 用 [1] 消歧：预览面板与执行视图各有一个「执行计划」
+            for xp in ("(//div[@text='执行计划'])[1]",
+                       "(//div[contains(@accessiblename,'执行计划')])[1]"):
+                if has(xp):
+                    _cc(xp); return True
+            return False
 
-        click(*abs_pt(EXPLAIN), move_dur=0.3)      # 第二次 → 出现对比入口
+        click_explain()                            # 第一次 EXPLAIN
         wait_stable(REGION)
+        time.sleep(2.6)
+
+        # 返回预览 → 再执行一次 EXPLAIN（第二次才有 baseline 可对比）
+        for xp in ("//div[contains(@text,'返回预览') or contains(@accessiblename,'返回预览')]",
+                   ):
+            if has(xp):
+                try: _cc(xp)
+                except Exception: pass
+                break
         time.sleep(2.2)
+        click_explain()                            # 第二次 → 出现对比入口
+        wait_stable(REGION)
+        time.sleep(2.6)
 
-        # 对比入口只在结构化渲染开启时存在；关闭态下第二次计划直接在控制台出现，
-        # 这里用容错点击：点不到就不阻断录制。
-        click(*abs_pt(COMPARE), move_dur=0.3, pauses=(0.15, 2.2))
+        # 「与上次执行对比」：robot 按文本找，找不到则容错跳过
+        clicked = False
+        for xp in ("//div[contains(@accessiblename,'与上次执行对比')]",
+                   "//div[contains(@text,'与上次执行对比')]",
+                   "//div[contains(@accessiblename,'对比')]"):
+            if has(xp):
+                try: _cc(xp); clicked = True; break
+                except Exception: pass
+        if not clicked:
+            print("（对比入口未找到，跳过）")
+        time.sleep(2.6)
 
         click(*abs_pt(CLOSE), move_dur=0.3)
         time.sleep(0.9)

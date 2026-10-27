@@ -70,10 +70,32 @@ def main():
     # 让「捕获入列 + 双通道状态栏」这两个本页主角看不到（复核 MINOR 项）
     try:
         from robot import find_components, click_component
-        if find_components("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
-            for xp in ("//div[@accessiblename='取消']",):
+        PREVIEW = "//div[@accessiblename='SQL Visualizer - SQL 预览']"
+        if find_components(PREVIEW):
+            # 「取消」按钮在预览弹窗底部；robot 按文本点（坐标会随弹窗宽度漂）
+            closed = False
+            for xp in ("//div[@accessiblename='取消']",
+                       "//div[@text='取消']"):
                 if find_components(xp):
-                    click_component(xp); time.sleep(1.2); break
+                    click_component(xp); time.sleep(1.5); closed = True; break
+            if not closed:
+                import pyautogui as _pg
+                _pg.click(REGION[0] + 1212, REGION[1] + 798); time.sleep(1.5)
+            print("[prep] 预览已关闭:", not find_components(PREVIEW))
+        # 断言：确认已切到「SQL 日志」页签
+        LOG_TAB_XP = ("//div[contains(@class,'TabLabel') and "
+                      "contains(@accessiblename,'SQL 日志')]")
+        if find_components(LOG_TAB_XP):
+            click_component(LOG_TAB_XP); time.sleep(1.2)
+        # 确保「捕捉」已开（工具窗重开后开关会重置；坑 36：悬停工具栏才现形的绿三角）
+        import pyautogui as _pg
+        _pg.moveTo(REGION[0] + 960, REGION[1] + 129, duration=0.4)
+        time.sleep(0.9)
+        cap = find_components("//div[contains(@accessiblename,'捕捉')]")
+        if cap:
+            click_component("//div[contains(@accessiblename,'捕捉')]")
+            time.sleep(1.5)
+            print("[prep] 已点捕捉开关")
     except Exception as e:
         print("(关预览跳过)", str(e)[:40])
     clear_id = _clear_xpath()
@@ -84,13 +106,15 @@ def main():
 
     recorder = Recorder(REGION, str(OUT))
     recorder.start()
-    time.sleep(0.8)
+    time.sleep(1.2)
     feed("/user/list")
-    time.sleep(1.0)
+    time.sleep(1.6)
     feed("/user/nested?username=ab&minAge=20&maxAge=30")
-    time.sleep(1.0)
+    time.sleep(1.6)
+    feed("/user/page?current=1&size=2")
+    time.sleep(1.4)
     feed("/user/list")
-    time.sleep(0.8)
+    time.sleep(1.4)
     after = list_pixels()
     diff = ImageChops.difference(before, after)
     bbox = diff.getbbox()

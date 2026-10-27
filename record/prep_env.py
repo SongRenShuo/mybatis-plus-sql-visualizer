@@ -50,8 +50,16 @@ def main():
         s = s.replace('<option name="dialectAuto" value="false" />',
                       f'<option name="dialectAuto" value="false" />\n    '
                       f'<option name="dialect" value="{dialect}" />')
+    # n03（EXPLAIN 跨次对比）需要「保留原始 EXPLAIN 计划」——默认关闭
+    if 'name="explainPlanRetentionEnabled"' not in s:
+        s = s.replace(f'<option name="dialect" value="{dialect}" />',
+                      f'<option name="dialect" value="{dialect}" />\n    '
+                      f'<option name="explainPlanRetentionEnabled" value="true" />')
+    else:
+        s = re.sub(r'<option name="explainPlanRetentionEnabled" value="[^"]*" />',
+                   '<option name="explainPlanRetentionEnabled" value="true" />', s)
     open(SANDBOX_XML, "w", encoding="utf-8", newline="").write(s)
-    print(f"[OK] 沙盒全局 dialect={dialect}（dialectAuto=false）")
+    print(f"[OK] 沙盒全局 dialect={dialect}（dialectAuto=false）+ EXPLAIN 计划保留开")
 
     # 2) 项目级 SQL 方言映射
     if os.path.exists(DEMO_SQLDIALECTS):

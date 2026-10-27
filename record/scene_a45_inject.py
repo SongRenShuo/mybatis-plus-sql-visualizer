@@ -19,6 +19,43 @@ OK_BTN = (1052, 628)
 
 
 def main():
+    # ---- prep（不入镜）：打开设置 → SQL Preview → 勾「自动注入」→ 触发模块对话框 ----
+    # 20261027：原脚本无 prep，前 221 帧（14.7s）全静止被 assemble 裁掉
+    import gifkit
+    import pyautogui
+    from robot import find_components as _fc, click_component as _cc
+    # 关残留弹窗
+    for _ in range(2):
+        if _fc("//div[@accessiblename='Cancel']"):
+            _cc("//div[@accessiblename='Cancel']"); time.sleep(1.0)
+    # 开设置并进 SQL Preview 页（坐标：左树 SQL Preview 行）
+    pyautogui.hotkey("ctrl", "alt", "s"); time.sleep(2.6)
+    pyautogui.click(320, 440); time.sleep(1.8)      # 左树 SQL Preview
+    # 勾「自动注入」（文本定位）
+    inj = None
+    for xp in ("//div[contains(@accessiblename,'自动注入')]",
+               "//div[contains(@text,'自动注入')]"):
+        if _fc(xp): inj = xp; break
+    if inj:
+        _cc(inj); time.sleep(2.0)
+        print("[prep] 已勾自动注入")
+    else:
+        print("[prep] 未找到「自动注入」勾选框")
+    # **关键**：设置对话框是模态的，必须点 OK 关掉，模块选择对话框才会独立显示
+    #（20261027：上一版没关，设置框一直盖住半幅画面）
+    ok = None
+    for xp in ("//div[@accessiblename='OK']",):
+        if _fc(xp): ok = xp; break
+    if ok:
+        _cc(ok); time.sleep(2.4)
+        print("[prep] 设置已关闭（OK）")
+    else:
+        pyautogui.press("enter"); time.sleep(2.0)
+    # 断言：模块选择对话框应在场（有复选框列表）
+    from robot import find_components as _f2
+    mod_dlg = _f2("//div[contains(@accessiblename,'选择')]") or _f2("//div[contains(@class,'JBCheckBox')]")
+    print("[prep] 模块对话框在场:", bool(mod_dlg))
+
     r = Recorder(REGION, OUT)
     r.start()
     time.sleep(0.4)
@@ -36,10 +73,16 @@ def main():
     try:
         from mcpnav import open_file
         open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/config/"
-                  "SqlSourceInterceptor.java", settle=2.2)
+                  "SqlSourceInterceptor.java", settle=2.4)
     except Exception as e:
         print("(打开产物跳过)", str(e)[:50])
-    time.sleep(2.4)
+    time.sleep(2.0)
+    # 凝视产物内容（类注释里的标记格式 + beforeQuery/beforeUpdate 两个方法）
+    # ⚠️ 落点必须避开标识符：压在方法名上会弹列文档浮层且「粘住」，
+    # 把左半幅整块挡住（20261027 实测，坑 27）。改停右侧空白列。
+    pyautogui.moveTo(1150, 400, duration=0.9); time.sleep(2.0)
+    pyautogui.moveTo(1150, 620, duration=0.8); time.sleep(2.0)
+    pyautogui.moveTo(1150, 300, duration=0.8); time.sleep(1.8)
 
     print("frames:", r.stop())
 
