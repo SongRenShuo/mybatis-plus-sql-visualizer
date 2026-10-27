@@ -32,9 +32,9 @@ import javax.swing.border.Border
  * 条目分割：靠**上下各 12px 留白 + 底部 1px 略强色线**（见 [ROW_VERTICAL_PADDING]）。
  * 不画斑马纹——深色主题下极淡底色辨识度不足，用户明确否决。
  *
- * 头部行超宽时按**优先级丢片段**（见 [clipFragmentsByPriority]）：先丢时间里的日期，
- * 再丢影响行数，最后才截断尾部徽章。现有 [clipSqlFragments] 是「从左到右超出即停」，
- * 表达不了这个语义。
+ * 头部行超宽时走 [clipSqlFragments] 的**顺序截断**（从左到右、超出即停、末尾补 `…`）——
+ * 与 `2026.10.23` 版本行为一致。曾一度实现「按优先级丢片段」的退化梯度，用户实测否决
+ * （「类名为什么要省略，还不如 2026.10.23 版本的」），已整段删除。
  */
 internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellRenderer<Any?> {
 
@@ -225,7 +225,7 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         val width = sqlAreaWidth(list, this)
         headerLine.foreground = fg
         headerLine.clear()
-        clipFragmentsByPriority(fragments, width, headerMeasurer(list, this)).forEach {
+        clipSqlFragmentsToWidth(fragments, list, width).forEach {
             headerLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
         }
         list?.let { SpeedSearchUtil.applySpeedSearchHighlighting(it, headerLine, false, useSelectionFill) }
@@ -340,18 +340,6 @@ internal fun clipSqlFragmentsToWidth(
     val baseFont = list?.font ?: return fragments
     val metrics = HashMap<Int, java.awt.FontMetrics>(3)
     return clipSqlFragments(fragments, maxWidth) { text, attributes ->
-        val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) java.awt.Font.BOLD else 0) or
-            (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) java.awt.Font.ITALIC else 0)
-        metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
-    }
-}
-
-/** 头部行的像素测量器（按字重缓存 FontMetrics，避免逐片段新建）。 */
-internal fun headerMeasurer(list: JList<*>?, cell: JPanel): (String, SimpleTextAttributes) -> Int {
-    val baseFont = list?.font
-    if (list == null || baseFont == null) return { text, _ -> text.length * 7 }
-    val metrics = HashMap<Int, java.awt.FontMetrics>(3)
-    return { text, attributes ->
         val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) java.awt.Font.BOLD else 0) or
             (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) java.awt.Font.ITALIC else 0)
         metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
