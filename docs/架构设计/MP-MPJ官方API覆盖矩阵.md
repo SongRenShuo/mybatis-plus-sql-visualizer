@@ -322,6 +322,7 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-10-27 | **时效性复核（矩阵状态列无变化）**：核对 2026-10-20 之后 `converter/` 与 `psi/` 的提交，无影响 API 覆盖面者，三条均属实现加固——`f69f75fe`/`58dd0c23` 补 SQL 片段入口的字符串拼接实参与 `select`/`first`/`around`/`UNION`/`LIMIT` 占位符来源登记（§1.9 消费面，不新增 API）；`8267394d` 增 `[T-EmbeddedIdentify]` 嵌入展平诊断日志（INFO 级、不改语义）。另确认反向链路条件组修复 `661019b6`（OR 组不吞 OR、子组保留 NOT、`@TableLogic` 条件不重复生成）属 §1 条件构造器已有行的语义修正，不涉及新方法。 |
 | 2026-10-20 | **现状回填**：修正交付记录摘要「剩余 ⬜」旧口径——Tenant/DataPermission/DynamicTableName 已随 F-6 交付 ✅（§1.8）、MPJ `fill` 6 形态已随 T-M22-01 交付 ✅（§2.5/§3）；实体 `@TableField(fill=…)` 新增 **FieldFill 安全模拟**（显式字面量覆盖、不加载用户 `MetaObjectHandler`、UPSERT 不模拟、INSERT/UPDATE 模拟值优先，T-FieldFillPriority），按「部分覆盖」描述而非全仿真。 |
 | 2026-09-04 | **二轮时效性核验（四智能体 jar javap + releases 双渠道）**：① 确认 MP 3.5.17 / MPJ 1.5.9 仍为最新，修正 MPJ 1.5.9 发布日期为 2026-07-10（§2.7/§4）；② 过期行回填 8 处——§1.2 Kotlin 🟡、§1.3 ktQuery/ktUpdate ✅、§1.8 Tenant/DynamicTableName/DataPermission ✅ + BlockAttack 🟡、§1.9 Db kit ✅（SimpleQuery/ActiveRecord 备注补全）、§2.5 fill ✅；③ 新增行 5 处——§1.6 MP @OrderBy/@SqlCondition、§1.7 LogicDeleteByIdWithFill、§2.1 MPJBaseJoin、§2.4 allEqStr、§2.6 UpdateJoin setUpdateEntity 族/deleteAll（均注「增量核验补列」，引入版本待考证）；④ Kotlin 侧 §3 规则表同步 🟡。同日新建姊妹文档《JPA-Hibernate官方API覆盖矩阵》 |
 | 2026-08-14 | **T-M23.7 同步（497 测试全绿）**：触发/定位能力变更（任意位置触发 + 选择区多 SQL 选择）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1115-任意位置触发与多SQL选择-开发计划.md` |
