@@ -1,91 +1,137 @@
 # -*- coding: utf-8 -*-
-"""A45 原生 MyBatis 拦截器自动注入（interceptor-inject.gif）20261011：
-设置页勾选「自动注入源码捕获拦截器」→ 选择注入模块对话框（prep 已打开）→
-只保留 native-mybatis-demo → OK → 生成拦截器 + mybatis-config.xml 注册 + 通知气球。
-标定（20261011 实测，屏幕坐标＝区域坐标+277/+25）：模块复选框 x=740，行 y=468/503/538；OK (1052,628)。
-录制后须还原 demo 仓工作树（注入会写文件）。
+"""A45 原生 MyBatis 拦截器自动注入（interceptor-inject.gif）20261028 重写。
+
+分镜（约 10 秒）：
+1. 设置页 SQL Log 的「源码位置捕获」区：勾选「自动注入源码捕获拦截器」
+2. 弹出「选择注入模块」对话框（三个模块全勾）→ 只保留 native-mybatis-demo（取消另外两个）
+3. OK → 生成拦截器与 mybatis-config.xml 注册 → 设置关闭
+4. 打开生成的 SqlSourceInterceptor.java 展示类头与 beforeQuery/beforeUpdate
+
+前置（prep，不入镜）：
+- 设置页停在 SQL Log 页并滚到「源码位置捕获」区（滚动在 take 内做，约 1.5s）；
+- 自动注入开关初始为**关**；
+- demo 仓工作树干净（注入会写文件，录后必须还原）。
+
+标定（20261028 实测，设置窗 1130 宽）：
+  自动注入复选框本体 (992, 723)   ← 滚到位后；滚动前在 y≈1299
+  模块对话框复选框 x=852，行 y=518/548/578；模块 OK (947,694)、Cancel (1029,694)
+
+坑：
+① 「自动注入」在 **SQL Log 页**的「源码位置捕获」区，不在 SQL 预览页——找错页会一直 0 命中；
+② 该复选框在首屏之下，必须真实滚轮滚（合成滚动无效）；
+③ 勾选后模块对话框是**独立窗口**，会盖在设置页上，两个 OK 别点混（模块 OK 在 947,694）。
 """
+import os
 import sys
 import time
 
-from gifkit import Recorder, click
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
+import pyautogui
+
+from gifkit import Recorder
+from robot import component_screen_center, find_components
 
 REGION = (285, 26, 1354, 974)
-OUT = "perf/a45_inject.mp4"
+BASE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(BASE, "perf", "a45_inject.mp4")
 
-CHK_DEMO = (740, 468)
-CHK_KOTLIN = (740, 503)
-OK_BTN = (1052, 628)
+INJECT_CB = "//div[contains(@accessiblename,'自动注入源码捕获拦截器')]"
+SCROLL_AT = (1200, 700)
+
+MOD_ALL = (885, 643)       # 全选
+MOD_NATIVE = (851, 541)    # native-mybatis-demo
+MOD_KOTLIN = (851, 576)    # mybatis-plus-kotlin-demo
+MOD_PLUS = (851, 611)      # mybatis-plus-demo
+MOD_OK = (1198, 689)
+
+PRODUCT = ("native-mybatis-demo/src/main/java/cn/song/nativedemo/config/"
+           "SqlSourceInterceptor.java")
+
+
+def has(xp):
+    return len(find_components(xp)) > 0
+
+
+def box_checked(box_xy):
+    """勾选框是否已勾：采样蓝底像素占比（JBCheckBox 勾选态是蓝色填充）。
+
+    20261028 实测：robot 组件树**不暴露 selected 状态**，而开关跨 take 会漂
+    （上一 take 结束时是开，下一次 prep 再点就变成关 → 模块对话框永不出现）。
+    """
+    import numpy as np
+    from PIL import ImageGrab
+
+    x, y = box_xy
+    im = ImageGrab.grab(bbox=(x - 8, y - 8, x + 8, y + 8)).convert("RGB")
+    a = np.asarray(im, dtype=np.int16)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    blue = ((b > 110) & (b - r > 40)).sum()
+    return int(blue) > 40
 
 
 def main():
-    # ---- prep（不入镜）：打开设置 → SQL Preview → 勾「自动注入」→ 触发模块对话框 ----
-    # 20261027：原脚本无 prep，前 221 帧（14.7s）全静止被 assemble 裁掉
-    import gifkit
-    import pyautogui
-    from robot import find_components as _fc, click_component as _cc
-    # 关残留弹窗
-    for _ in range(2):
-        if _fc("//div[@accessiblename='Cancel']"):
-            _cc("//div[@accessiblename='Cancel']"); time.sleep(1.0)
-    # 开设置并进 SQL Preview 页（坐标：左树 SQL Preview 行）
-    pyautogui.hotkey("ctrl", "alt", "s"); time.sleep(2.6)
-    pyautogui.click(320, 440); time.sleep(1.8)      # 左树 SQL Preview
-    # 勾「自动注入」（文本定位）
-    inj = None
-    for xp in ("//div[contains(@accessiblename,'自动注入')]",
-               "//div[contains(@text,'自动注入')]"):
-        if _fc(xp): inj = xp; break
-    if inj:
-        _cc(inj); time.sleep(2.0)
-        print("[prep] 已勾自动注入")
-    else:
-        print("[prep] 未找到「自动注入」勾选框")
-    # **关键**：设置对话框是模态的，必须点 OK 关掉，模块选择对话框才会独立显示
-    #（20261027：上一版没关，设置框一直盖住半幅画面）
-    ok = None
-    for xp in ("//div[@accessiblename='OK']",):
-        if _fc(xp): ok = xp; break
-    if ok:
-        _cc(ok); time.sleep(2.4)
-        print("[prep] 设置已关闭（OK）")
-    else:
-        pyautogui.press("enter"); time.sleep(2.0)
-    # 断言：模块选择对话框应在场（有复选框列表）
-    from robot import find_components as _f2
-    mod_dlg = _f2("//div[contains(@accessiblename,'选择')]") or _f2("//div[contains(@class,'JBCheckBox')]")
-    print("[prep] 模块对话框在场:", bool(mod_dlg))
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
 
-    r = Recorder(REGION, OUT)
-    r.start()
-    time.sleep(0.4)
-
-    # 1. 只保留 native-mybatis-demo
-    click(*CHK_DEMO, move_dur=0.3, pauses=(0.15, 0.25))
+    # ---- prep（不入镜）：设置页停在 SQL Log 并滚到「源码位置捕获」 ----
+    pyautogui.hotkey("ctrl", "alt", "s")
+    time.sleep(2.4)
+    pyautogui.click(580, 486)          # 左树 SQL Log
+    time.sleep(1.4)
+    pyautogui.moveTo(*SCROLL_AT, duration=0.2)
+    for _ in range(45):
+        pyautogui.scroll(-100)
+        time.sleep(0.02)
     time.sleep(0.5)
-    click(*CHK_KOTLIN, move_dur=0.3, pauses=(0.15, 0.25))
+    if not has(INJECT_CB):
+        raise RuntimeError("prep: 未滚到「自动注入」复选框")
+
+    # ---- prep 续：把开关归一化成「关」再勾选 → 弹出模块对话框（不入镜）----
+    cb = component_screen_center(INJECT_CB)
+    box = (cb[0] - 112, cb[1])
+    if box_checked(box):                    # 已开 → 先关掉，保证「关 → 开」会弹对话框
+        pyautogui.click(*box)
+        time.sleep(1.2)
+        if has("//div[@text='Cancel']"):
+            pyautogui.click(1283, 689)
+            time.sleep(0.8)
+    pyautogui.click(*box)
+    time.sleep(2.4)
+    if not has("//div[text()='选择注入模块']") and not has("//div[contains(@text,'选择注入模块')]"):
+        print("(警告) 模块对话框可能未弹出")
+
+    rec = Recorder(REGION, OUT)
     time.sleep(0.6)
-
-    # 2. OK → 注入
-    click(*OK_BTN, move_dur=0.35, pauses=(0.2, 0.2))
-    time.sleep(2.4)  # 生成文件 + 通知气球
-    # 二次真实变化：打开已注入的拦截器产物（展示「自动注入」落点）
+    rec.start()
     try:
-        from mcpnav import open_file
-        open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/config/"
-                  "SqlSourceInterceptor.java", settle=2.4)
-    except Exception as e:
-        print("(打开产物跳过)", str(e)[:50])
-    time.sleep(2.0)
-    # 凝视产物内容（类注释里的标记格式 + beforeQuery/beforeUpdate 两个方法）
-    # ⚠️ 落点必须避开标识符：压在方法名上会弹列文档浮层且「粘住」，
-    # 把左半幅整块挡住（20261027 实测，坑 27）。改停右侧空白列。
-    pyautogui.moveTo(1150, 400, duration=0.9); time.sleep(2.0)
-    pyautogui.moveTo(1150, 620, duration=0.8); time.sleep(2.0)
-    pyautogui.moveTo(1150, 300, duration=0.8); time.sleep(1.8)
+        # 1. 对话框已开（prep）：先「全选」归零，再取消另外两个
+        #    （对话框初始勾选状态不固定——上一轮可能是空的，直接按「勾 native」会全空）
+        pyautogui.click(*MOD_ALL, duration=0.3)
+        time.sleep(0.6)
+        pyautogui.click(*MOD_KOTLIN, duration=0.3)
+        time.sleep(0.5)
+        pyautogui.click(*MOD_PLUS, duration=0.3)
+        time.sleep(0.9)
 
-    print("frames:", r.stop())
+        # 3. 注入
+        pyautogui.click(*MOD_OK, duration=0.3)
+        time.sleep(3.2)
+
+        # 4. 打开生成的拦截器
+        try:
+            from mcpnav import open_file
+            open_file(PRODUCT, settle=2.4)
+        except Exception as e:
+            print("(打开产物跳过)", str(e)[:60])
+        time.sleep(1.2)
+        pyautogui.moveTo(1150, 400, duration=0.8)
+        time.sleep(1.8)
+    finally:
+        rec.stop()
+        print(f"frames={rec.frames} out={OUT}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
