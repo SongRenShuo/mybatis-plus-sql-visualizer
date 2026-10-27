@@ -174,7 +174,7 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 
 ## 七C、达梦（DM8）语句面织入（T-DmWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-attachpool @ t-attachpool）
 
-**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
+**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://dbx-test-host:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
 
 **本地复现（红）**：新增 childapp `ChildPoolApp` DM 模式（JDK8 目标，warm 建连接并跑一次，attach 后同连接新建 PS executeQuery）。摘除达梦登记时读数：`attach retransform: matched=1 wove=0 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，子进程 100 轮零事件（`eventReceived=false`）。**注意 matched=1 已含一处此前未知缺陷**：connect 面 `DmDriver.connect` 出口织入产物在 JVM 校验即失败（见下）。
 

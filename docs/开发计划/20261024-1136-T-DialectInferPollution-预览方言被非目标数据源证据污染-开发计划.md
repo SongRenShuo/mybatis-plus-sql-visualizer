@@ -33,7 +33,7 @@ LAMBDA_QUERY 预览点「执行计划」：先弹「未绑定数据源」红字�
 | ideaDialect（预览文件平台有效方言） | demo 工程 sqldialects.xml：preview 目录=MySQL | 否（demo 工程） |
 | learnedModule | 模块学 mp_demo → MySQL | 否 |
 | projectCandidates | 7 源（5×MySQL + dbx_test PG + mpj_dm DM）→ distinct>1 → **AMBIGUOUS** | 否（AMBIGUOUS 非 PG） |
-| lastAgentDialect | **dbx_test@114.66.55.245 = PostgreSQL**（竞品 DBX 调研测试残留） | **单模块才触发**（demo 多模块，引擎不取） |
+| lastAgentDialect | **dbx_test@dbx-test-host = PostgreSQL**（竞品 DBX 调研测试残留） | **单模块才触发**（demo 多模块，引擎不取） |
 | **boundDataSourceDialect** | **面板 last-used/绑定记忆**——用户竞品测试期间 last-used=**dbx_test(PG)** | **是（BOUND_DATASOURCE STRONG，T-DialectStatusLiveRefresh 方案 B 设计使然）** |
 
 **根因**：渲染时刻的面板 last-used/绑定=dbx_test(PG)（用户做竞品 DBX 对比测试所致），

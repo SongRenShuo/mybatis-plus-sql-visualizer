@@ -125,7 +125,7 @@ master 的 `T-SearchToggleNativeLook`（`2f992b2`）把日志页搜索框迁到�
 - **agent 子项目**：`:sql-visualizer-agent:test` → **30 类 / 157 例 / 0 失败 / 0 错误 / 0 跳过**（BUILD SUCCESSFUL，1m26s）。
 - **环境受限登记**：Docker Desktop 未运行（0 进程，npipe 不存在），`mpvs.docker.tests.enabled` 缺省 false ⇒ 容器方言类测试按设计不跑，本轮不构成容器侧验证（按「环境受限未验证」口径登记，不冒充通过）。
 - 全量 testShards（诊断轮，基线 `7dbefba`）：分片 1/3/4/5 全绿，**TOTAL 6919 例 / 3 失败 / 0 错误 / 8 跳过**（testShard2 三处红）。三处逐一定性：
-  1. `DataSourceJdbcSmokeTest::testAllDemoDataSourcesReachable` + `::testExecuteValidationSqlOnEachSource`——环境门控形态问题：该文件合并后取的是 dev 版（`assumeTrue`），而平台 runner 把 `AssumptionViolatedException` 记为 **failure 红任务**；demo 的 `dataSources.xml` 现含达梦源 `mpj_dm@114.66.55.245`（驱动不在主测试 classpath，`DmJdbcDriver18` 只挂在 agent 子项目）⇒ 逐源 assumption 违规被记红。
+  1. `DataSourceJdbcSmokeTest::testAllDemoDataSourcesReachable` + `::testExecuteValidationSqlOnEachSource`——环境门控形态问题：该文件合并后取的是 dev 版（`assumeTrue`），而平台 runner 把 `AssumptionViolatedException` 记为 **failure 红任务**；demo 的 `dataSources.xml` 现含达梦源 `mpj_dm@dbx-test-host`（驱动不在主测试 classpath，`DmJdbcDriver18` 只挂在 agent 子项目）⇒ 逐源 assumption 违规被记红。
   2. `EmptyTextRenderTest::test空态起步引导三径齐全`——中英 bundle 空态链接键大小写：合并版为 dev 的 `Enhanced capture`（小写），测试契约（两侧同文）断言 `Enhanced Capture`。
 - **根因共性（重要）**：两处都不是本次冲突裁决的错误，而是**合并基线过旧**——master 在任务执行期间由发行会话推进出 `91a2e35`（release: v2026.10.13 发行八处同步），该笔正是修这两处的提交（`DataSourceJdbcSmokeTest` 改「显式绿跳 + 逐源驱动过滤」；bundle 空态链接键定为 `Enhanced Capture`，同批还记有「空态引导英文链接文案大小写回归修复」条目）。master 侧同环境分片读数 6716/0/0/8 全绿可作对照。
 - **处置＝二次合并**（`f368752`，仅 CHANGELOG 一处冲突）：把 `91a2e35` 与 `d337989` 并入 dev，直接带入 master 对这两处的修复（不做手工搬运）。CHANGELOG 裁决＝整取 master 策展版（`[Unreleased]` 收编为 `[2026.10.13]` 发行段，dev 细粒度条目被聚合进对应条目）+ dev 独有 15 条放回 `[Unreleased]`（未发行语义）。

@@ -7,7 +7,7 @@
 
 ## 一、现象（沙盒实测，20261009 深夜）
 
-1. 沙盒（243）里已建好达梦数据源 `mpj_dm@114.66.55.245`（驱动 Dameng DM8 = 本机 `.m2` 的 DmJdbcDriver18-8.1.3.140.jar，Class `dm.jdbc.driver.DmDriver`）：
+1. 沙盒（243）里已建好达梦数据源 `mpj_dm@dbx-test-host`（驱动 Dameng DM8 = 本机 `.m2` 的 DmJdbcDriver18-8.1.3.140.jar，Class `dm.jdbc.driver.DmDriver`）：
    - Database 工具窗树中出现该数据源；展开触发内省成功（mpj_demo schema、tables 6）。
    - 数据源属性里 **Test Connection = Succeeded**（DBMS: DM DBMS 8.1.3.12，Driver: dm.jdbc.driver.DmDriver 8.1.3.140，Ping 65 ms）。
    - 该数据源自己的 Query Console 执行设备查询（`SELECT … FROM car_device_info t LEFT JOIN station_info st … WHERE (t.id = 1);`）**返回结果行**（充电桩A-01，1 row，1s 207ms）。

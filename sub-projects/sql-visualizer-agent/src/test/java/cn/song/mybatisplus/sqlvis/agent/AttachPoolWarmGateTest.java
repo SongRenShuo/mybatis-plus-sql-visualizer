@@ -37,10 +37,13 @@ public class AttachPoolWarmGateTest {
     private static final String DB_USER = "root";
     private static final String DB_PASS = "root";
 
-    /** 达梦（用户现场 application-dm.yml）——DM 模式子进程连它。 */
-    private static final String DM_URL = "jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO";
-    private static final String DM_USER = "MPJ_DEMO";
-    private static final String DM_PASS = "Mpj_demo_2026";
+    /**
+     * 达梦真库（DM 模式子进程连它）。主机与口令一律走系统属性，缺省不回落到真实环境值：
+     * 测试机填 {@code -Dmpvs.dm.url=... -Dmpvs.dm.password=...}，未填时 DM 档自动跳过。
+     */
+    private static final String DM_URL = System.getProperty("mpvs.dm.url", "jdbc:dm://localhost:15236?schema=MPJ_DEMO");
+    private static final String DM_USER = System.getProperty("mpvs.dm.user", "MPJ_DEMO");
+    private static final String DM_PASS = System.getProperty("mpvs.dm.password", "");
 
     /** 用户现场 JDK8（目标 JVM；attach 客户端仍为工具链 JDK）。 */
     private static final String JDK8_JAVA_HOME = "D:/HuanJing/Java/jdk1.8.0_181";
@@ -181,7 +184,7 @@ public class AttachPoolWarmGateTest {
      */
     @org.junit.Test
     public void 模式DM_达梦存量连接复用_attach事件到达() throws Exception {
-        org.junit.Assume.assumeTrue("DM 服务器 114.66.55.245:20096 不可达，DM 格跳过", dmReachable());
+        org.junit.Assume.assumeTrue("DM 服务器不可达（-Dmpvs.dm.url 未指向可用实例），DM 格跳过", dmReachable());
         org.junit.Assume.assumeTrue("JDK8 不在位，DM 格跳过", jdk8JavaBin() != null);
         // 用户现场应用很可能跑在 JDK8 上（本机默认 java=JDK8）——DM 格按 JDK8 目标跑
         RunResult r = runMode("DM", "attachpool_dm", new ArrayList<String>(), WAIT_SECONDS * 1000L,
@@ -555,7 +558,7 @@ public class AttachPoolWarmGateTest {
     /** 用户现场达梦库探活（demo application-dm.yml 的 URL host:port）。 */
     static boolean dmReachable() {
         try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress("114.66.55.245", 20096), 2000);
+            s.connect(new java.net.InetSocketAddress("dbx-test-host", 20096), 2000);
             return true;
         } catch (Exception e) {
             return false;
