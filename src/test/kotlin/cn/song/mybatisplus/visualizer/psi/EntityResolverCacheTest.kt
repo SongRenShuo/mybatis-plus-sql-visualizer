@@ -293,4 +293,42 @@ class EntityResolverCacheTest : BasePlatformTestCase() {
             assertEquals("恢复配置后命中旧条目", 2, EntityResolver.cacheSize())
         }
     }
+
+    // ------------------------------------------------------------------
+    // 券02（T-PerfSweep27-02）：缓存容量上限——超限整体清空再写
+    // ------------------------------------------------------------------
+
+    fun test缓存容量上限_超限整体清空() {
+        EntityResolver.clearCache()
+        val saved = EntityResolver.maxCacheEntries
+        EntityResolver.maxCacheEntries = 3
+        try {
+            val clazz = resolveEntity(
+                """
+                public class BoundEntity {
+                    private Long id;
+                    private String name;
+                }
+                """.trimIndent(),
+            )
+            // 4 个不同配置签名 = 4 个不同缓存键；修复前第 4 次写入后 cacheSize=4（无上限，先红）
+            repeat(4) { i ->
+                withTableConfig(tablePrefix = "b$i" + "_") {
+                    EntityResolver().resolve(clazz)
+                }
+            }
+            assertTrue(
+                "写入第 4 条后缓存应被上限守卫清空重填（cacheSize=${EntityResolver.cacheSize()}），不得超过 maxCacheEntries=3",
+                EntityResolver.cacheSize() <= 3,
+            )
+            // 清空后可重填：最后一次解析（b3_ 签名）仍在缓存中且可命中
+            withTableConfig(tablePrefix = "b3_") {
+                val again = EntityResolver().resolve(clazz)
+                assertEquals("b3_bound_entity", again.tableName)
+            }
+        } finally {
+            EntityResolver.maxCacheEntries = saved
+            EntityResolver.clearCache()
+        }
+    }
 }
