@@ -207,6 +207,7 @@ maintenance-note: >-
 ## 图片（docs/images/）
 
 - [group-qr.png](./images/group-qr.png) / [wechat-qr.png](./images/wechat-qr.png) — 插件介绍页群二维码 / 微信二维码
+- **功能演示图不入库（2026-10-27 起）**：README 与文档站的功能动图统一引用官网 URL（`https://sql-visualizer.jvtools.cn/demo/{name}.gif`）。原 `demo-0N-*.gif`（10 个）与 `screenshot-0N-*.png`（6 个）合计约 12MB 已删：那批图带 `Start Free Trial` 水印（属对外事故元素，同一批还被上传到了 Marketplace Screenshots），且 README 早改用官网 URL 后已成孤儿。Marketplace Screenshots 上传源改从文档站 `public/demo/` 取（无水印重录版）。详见 `docs/文档命名规范-说明文档.md` §图片/设计稿。
 
 ## 归档记忆（docs/memory-archive/）
 
