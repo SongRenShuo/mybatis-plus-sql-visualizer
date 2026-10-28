@@ -103,6 +103,24 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertEquals(
                 MpSqlVisualizerBundle.message("settings.update.fail.channel404", "HTTP 404"),
                 section.getStatusLabel().getText());
+        assertTrue("404 态兜底链接行应可见", fallbackLinksVisible());
+        assertTrue(section.getCheckButton().isEnabled());
+    }
+
+    public void testRenderNetworkFailure_兜底链接不可见() throws Exception {
+        section.renderCheck(new PluginUpdateRunner.CheckResult.Failure(
+                PluginUpdateRunner.FailureKind.NETWORK, "connect timed out"));
+        assertEquals(UpdateSection.State.Failed, section.getState());
+        assertTrue(section.getStatusLabel().getText().isEmpty() == false);
+        assertFalse("网络态不给兜底链接", fallbackLinksVisible());
+    }
+
+    public void testRenderUpToDate_三态之已最新() throws Exception {
+        section.renderCheck(PluginUpdateRunner.CheckResult.UpToDate.INSTANCE);
+        assertEquals(
+                MpSqlVisualizerBundle.message("settings.update.upToDate"),
+                section.getStatusLabel().getText());
+        assertFalse(fallbackLinksVisible());
     }
 
     public void testRenderInstalled() throws Exception {
@@ -214,6 +232,14 @@ public class UpdateSectionTest extends BasePlatformTestCase {
     public void testGiteeLinkPresent() throws Exception {
         // T-M28.4：变更日志关联 Gitee——链接存在且文案走 bundle
         assertEquals(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), section.getGiteeLink().getText());
+    }
+
+    /** 兜底链接行可见性——k2j 侧 fallbackLinksContainer 为私有字段且无测试访问器，
+     * 私有字段不可触生产码，测试以反射读取（master 侧直接读公开属性）。 */
+    private boolean fallbackLinksVisible() throws Exception {
+        java.lang.reflect.Field f = UpdateSection.class.getDeclaredField("fallbackLinksContainer");
+        f.setAccessible(true);
+        return ((java.awt.Component) f.get(section)).isVisible();
     }
 
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */
