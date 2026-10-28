@@ -428,17 +428,20 @@ var shardPlanHashes: String = ""
 // 迁移版。叶子在 doFirst 内 sleep 会占住 T-ReleasePerf9 限流槽：releaseGate 编排内限流 3 时
 // 首波三片各睡 285s 占槽正常，第二波分片排队拿到槽后会再白睡整段 285s（总墙钟 +5min 量级）。
 // 改为所有分片 dependsOn 本任务——它只执行一次、睡满 testStaggerMs 后释放，分片们随后抢槽：
-// 分片真实起点仍 ≥ t0+285s，时间线与原「每片各自 doFirst sleep」逐字等价（仅延迟启动，
+// 分片真实起点仍 ≥ t0+错峰值，时间线与原「每片各自 doFirst sleep」逐字等价（仅延迟启动，
 // 不删不减不重排任何测试语义）；差异只在限流下不再有第二波白睡。缺省逻辑与 verifyGate 侧
-// gateStaggerMs 同款：releaseGate 编排内 285000ms，日常 testShards 0，-PtestStaggerMs 显式覆盖。
+// gateStaggerMs 同款机制（invokedTaskNames 判定），但值独立定案：releaseGate 编排内 **240000ms**
+// （S3 A/B 同窗对照实测——A 轮 285s 全链 12m1s vs B 轮 240s 完整轮 10m48s 且 e2e PASS=26/0：
+// 分片窗（240s+两波）嵌回 verifyMarketplace 长杆（~583s 段）内，总墙钟回到 T8 权威轮 675s 线
+// 以内；285s 时分片尾超窗 ~46s 拖长总链），日常 testShards 0，-PtestStaggerMs 显式覆盖。
 // 块内声明局部值（CC 约束：脚本顶层 val 经任务动作引用不可序列化，T-ReleasePerf7 S2 实测）。
 tasks.register("testShardStagger") {
     group = "verification"
     description =
-        "分片错峰共享前置（releaseGate 编排内延迟 testStaggerMs 默认 285s；仅延迟启动，时间线与 T7 叶子 sleep 等价）"
+        "分片错峰共享前置（releaseGate 编排内延迟 testStaggerMs 默认 240s，T-ReleasePerf9 S3 A/B 定案；仅延迟启动，时间线与 T7 叶子 sleep 等价）"
     val invokedTaskNamesForStagger = gradle.startParameter.taskNames
     val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
-        ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
+        ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 240_000L else 0L
     inputs.property("mpvStaggerMs", testStaggerMs)
     doFirst {
         val ms = (inputs.properties["mpvStaggerMs"] as? Number)?.toLong() ?: 0L
