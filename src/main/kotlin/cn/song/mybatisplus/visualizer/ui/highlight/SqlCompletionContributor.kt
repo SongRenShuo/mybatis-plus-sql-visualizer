@@ -74,18 +74,24 @@ class SqlCompletionContributor : CompletionContributor() {
                     val provider = SqlCompletionProvider.instance
 
                     // ★ 调试：每次补全触发时打印关键信息
-                    val editor = parameters.editor
-                    val position = parameters.position
-                    val containingFile = position.containingFile
-                    LOG.debug("[SqlCompletion] addCompletions triggered")
-                    LOG.debug("[SqlCompletion]   editor=${editor.javaClass.simpleName}, doc=${editor.document.hashCode()}")
-                    LOG.debug("[SqlCompletion]   position=${position.javaClass.simpleName}, text='${position.text?.take(30)}'")
-                    LOG.debug("[SqlCompletion]   containingFile=${containingFile?.name}, lang=${containingFile?.language?.id}")
-                    LOG.debug("[SqlCompletion]   editorUserData=${editor.getUserData(SqlCompletionContext.KEY)?.tableName}")
-                    LOG.debug("[SqlCompletion]   psiUserData=${containingFile?.getUserData(SqlCompletionContext.KEY)?.tableName}")
-                    LOG.debug("[SqlCompletion]   documentContexts.size=${documentContexts.size}")
-                    val docFromViewProvider = containingFile?.viewProvider?.document
-                    LOG.debug("[SqlCompletion]   docFromViewProvider=${docFromViewProvider?.hashCode()}, inMap=${documentContexts.containsKey(docFromViewProvider)}")
+                    // 券03（T-PerfSweep27-03）：isDebugEnabled 门控包裹——autopopup 下 addCompletions
+                    // 每敲一个标识符字符触发一次，急切插值（simpleName/文本截取/双 getUserData/
+                    // viewProvider.document/containsKey）在 debug 关闭态全部照付。门控后这些读取
+                    // 也一并免除；debug 开启态输出逐字不变。
+                    if (LOG.isDebugEnabled) {
+                        val editor = parameters.editor
+                        val position = parameters.position
+                        val containingFile = position.containingFile
+                        LOG.debug("[SqlCompletion] addCompletions triggered")
+                        LOG.debug("[SqlCompletion]   editor=${editor.javaClass.simpleName}, doc=${editor.document.hashCode()}")
+                        LOG.debug("[SqlCompletion]   position=${position.javaClass.simpleName}, text='${position.text?.take(30)}'")
+                        LOG.debug("[SqlCompletion]   containingFile=${containingFile?.name}, lang=${containingFile?.language?.id}")
+                        LOG.debug("[SqlCompletion]   editorUserData=${editor.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                        LOG.debug("[SqlCompletion]   psiUserData=${containingFile?.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                        LOG.debug("[SqlCompletion]   documentContexts.size=${documentContexts.size}")
+                        val docFromViewProvider = containingFile?.viewProvider?.document
+                        LOG.debug("[SqlCompletion]   docFromViewProvider=${docFromViewProvider?.hashCode()}, inMap=${documentContexts.containsKey(docFromViewProvider)}")
+                    }
 
                     // 关键字（M16.2：不依赖上下文——ctx 缺失/丢失时关键字补全仍生效，恢复 M9 语义）
                     provider.keywords().forEach { word ->
@@ -98,7 +104,7 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
                         ?: documentContexts[parameters.editor.document]
-                    LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
+                    if (LOG.isDebugEnabled) LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
                     // 异常/无文件回退 UNKNOWN）

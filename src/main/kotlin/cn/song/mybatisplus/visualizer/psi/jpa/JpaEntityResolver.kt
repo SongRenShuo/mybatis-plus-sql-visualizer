@@ -85,6 +85,8 @@ class JpaEntityResolver {
         }
 
         val value = resolveInternal(entityClass, hostAnchorFile(hostAnchor))
+        // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
+        if (cache.size >= maxCacheEntries) cache.clear()
         cache[key] = JpaEntry(stamp, value)
         return ColumnNameCalibrator.calibrate(project, value)
     }
@@ -723,6 +725,14 @@ class JpaEntityResolver {
 
         /** 缓存键 → 条目（项目级，跟随 JpaEntityResolver 生命周期）。 */
         private val cache = ConcurrentHashMap<JpaCacheKey, JpaEntry>()
+
+        /**
+         * 券02（T-PerfSweep27-02）缓存容量上限：与 [cn.song.mybatisplus.visualizer.psi.EntityResolver]
+         * 同款——配置签名/宿主锚点变化后旧键永不命中也永不淘汰，超限整体清空（HbmXml 负缓存范式）。
+         * internal 可写仅测试缝（生产不改）。
+         */
+        @JvmStatic
+        internal var maxCacheEntries: Int = 4096
 
         /** 清空缓存（配置变更 / 项目关闭时调用）。 */
         @JvmStatic
