@@ -93,7 +93,6 @@ primary=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103 via=L1 
 （首轮跑失败为环境残留：上一次被中断的 e2e 留下了 FakeIde 进程占住探针端口，清理后重跑即全绿；与应用/插件行为无关。）
 
 ### 3.1 参数与影响行数（真机 + 真驱动，`O147RealAgentAcceptanceTest`）
-
 关掉连接代理后立刻暴露的第一个真回归就是参数：事件还在、`params` 全空。该用例用真 JVM + 真 H2/MyBatis 跑 agent，首跑直接红：
 
 ```
@@ -108,8 +107,36 @@ realJvmEventsCarryJdbcFacts: java.lang.AssertionError: expected:<1> but was:<nul
 
 按方法描述符返回类型（`)Z`）修正装箱后，该用例 4 个方法全绿。agent 单测 182/0/1（含新增「参数面_setXxx入口采集_事件携参与脱敏同口径」）。
 
-## 四、结论与边界
+## 四、为什么「同一份旧包，我这边崩启动、你那边崩 curl」——校验开关
 
+用户实机（IDE 2026.2 日常环境）复现得到的是 `ClassCastException`、应用**启动正常**；而命令行复现得到的是 `VerifyError`、应用**起不来**。差异不在驱动版本，在 **JVM 字节码校验开关**：
+
+| 启动方式 | 校验 | 旧包在达梦上的表现 |
+|---|---|---|
+| `java -cp … DemoApp`（及 `-jar`、`mvn spring-boot:run` fork） | 默认开 | 织入产出的 `DmDriver.connect` 帧非法 → `VerifyError: Bad local variable type`，Hikari 建池失败 → **应用起不来** |
+| IDEA Spring Boot 运行配置（「Enable launch optimization」默认开，JVM 参数含 `-noverify` / `-Xverify:none`） | 关 | 坏帧不被校验，织入「成功」，`connect` 返回被换成 JDK 代理 → 应用正常启动，宿主强转时 **CCE** |
+
+同一 demo、同一 `DmJdbcDriver18:8.1.3.140`、同一份 2026.10.26 agent 的对照读数（本轮实测，dm profile，`--server.port` 8097/8096）：
+
+```
+# 校验开（java -cp）
+dataSource 工厂方法抛 java.lang.VerifyError: Bad local variable type   → 上下文初始化中止
+
+# 校验关（java -Xverify:none）
+Started MybatisPlusJoinDemoApplication in 6.093 seconds
+GET /probe/conn-cast →
+  connClass       com.sun.proxy.$Proxy78
+  proxyHandler    cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler
+  proxyInterfaces dm.jdbc.internal.IDmdbConnection, java.sql.Wrapper, java.lang.AutoCloseable, java.sql.Connection
+  detail          com.sun.proxy.$Proxy78 cannot be cast to dm.jdbc.driver.DmdbConnection
+```
+
+最后一行与用户报障 `com.sun.proxy.$Proxy129 cannot be cast to dm.jdbc.driver.DmdbConnection` 只差代理编号。⇒ **两种症状同源**（都是我们的连接替换 + 达梦出口坏帧），修复同时覆盖：不再替换对象（消 CCE）+ 撤出达梦 connect 面（消 VerifyError）。
+
+> 取证方法留档（下次复用）：demo 里新增 `/probe/conn-cast`（`ConnCastProbeController`），走 `DriverManager` 取原始连接并强转到驱动实现类，同时回显 `proxyHandler` / `proxyInterfaces` / `agentMarker` / `jvmArgs`。判归属看 `proxyHandler`：我们的包装是 `cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler`。
+> 排障中的一次误判已纠正：曾以「两次请求拿到同一个 `$Proxy96`」推断「不是我们的代理」——实际两次是重启后的不同 JVM，代理类编号各自从零计，不能作判据。
+
+## 五、结论与边界
 - **复现成立**：旧 agent 在 demo 达梦链路上直接把驱动打废（VerifyError）；换织入成功的驱动即可原样打出用户 CCE 文本。**修复成立**：新 agent 在两条链路上都回到「宿主原对象」。
 - **边界**：本节验的是 agent 与真实驱动的交互，未跑 runIde 全 UI 流程；「插件侧注入 `-javaagent` → 应用启动 → 面板出条目」的完整 GUI 链路由 `e2eFakeIde` 与既往 runIde 批次覆盖。
 - 用户驱动版本未取得，`DmdbConnection` 强转的发起方（用户代码/框架）亦未取证；本轮按「代理无法伪装具体类」的构造性归因，不依赖上述两点。
