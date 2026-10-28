@@ -197,6 +197,48 @@ highlighter = LexerEditorHighlighter(
 - 合并后逐条复验本册引用的行号仍成立（dev 树上 grep 实测）：`LogToSqlPanel.kt:644/646`（`getStdFileType("SQL")` / `SyntaxHighlighterFactory`）、`SqlLogPanel.kt:141`（`LogToSqlPanel`）与 `:143`（`SqlToJavaPanel`）、`SqlInputEditor.kt:79`（`createEditor(doc, project, sqlFileType, false)`）、`SqlPreviewPanelEditorLifecycle.kt:627`（同形创建）与 `:650`（`SqlSyntaxHighlighter()`）、`SqlLogToolWindowFactory.java:39/50`。
 - 结论：本册不需要按合并结果改修法或改范围；仅补了「实施基线＝dev `a56c8e48`」与本节的迁移记录，以及 §四新增的「S1 观感差异与 D3 备选」。
 
-## 实施记录（待填）
+## 实施记录（2026-10-28，dev 工作树，提交 `e3ab9335` / `4d2abc64` / `f062e833`）
 
-（实施者按 §六 逐条回填：R1 后绿读数与 grep 命令、R2 三态栈、R3 双向读数、P-1~P-7 证伪结论、定向测试读数、全量门禁读数与 HEAD sha、未闭环项与证据边界。）
+### 落地清单
+
+| 步骤 | 落点 | 提交 |
+|---|---|---|
+| S1 | `LogToSqlPanel.createResultEditor` 改挂自研 `SqlSyntaxHighlighter`；类 KDoc 与方法 KDoc 同步（删掉「原生 SQL 高亮器」这句已失效表述） | `e3ab9335` |
+| S2 | 新增 `src/main/kotlin/.../ui/highlight/SqlDialectMappingPrewarm.kt`：`prewarmNow`（BGT 同步首查）/ `prewarm`（fire-and-forget）/ `prewarmAndAwait`（EDT 有界等待，`@JvmOverloads` 供 Java 调）+ `resetForTest` / `isWarmedForTest` 两个测试缝 | `4d2abc64` |
+| S3 | `SqlLogToolWindowFactory.createToolWindowContent` 在 `new SqlLogPanel(...)` 之前调 `prewarmAndAwait(project)`；`SqlPreviewPanelEditorLifecycle.prewarmPreviewTempFile` 的 BGT 任务首行调 `prewarmNow(project)` | `4d2abc64` |
+| S4 | 新增 `convention/SqlDialectEdtSourceScanTest`（等值允许清单 + 三条自证语料）+ `GuardSelfTestCoverageMetaGuardTest.GUARD_CLASSES` 登记 | `f062e833` |
+| S5 | `LogToSqlPanelUiTest` 增「首个 token 必须是 `MP_SQL_KEYWORD`」判别断言；新增 `SqlDialectMappingPrewarmTest` 钉短路契约；`LogToSqlPanel` 增 `setResultForTest` 缝 | `f062e833` |
+
+### 前提证伪结论
+
+| # | 结论 | 依据 |
+|---|---|---|
+| P-1 | **成立**（243 字节码）：`getMappingInner` 第一句即 `ensureStateLoaded`，与 file 是否为 null 无关 → 对 null file 预热即可覆盖全部入口 | 243 `lib/app-client.jar` 的 `javap -p -c PerFileMappingsBase` |
+| P-2 | **未按「只落 S1 中间态」做运行期实测**（需独立 IDE 会话 + 含 per-file 方言映射的项目）。代码面同链已确认：`SqlInputEditor.kt:79` 按 SQL FileType 建编辑器；243 `EditorHighlighterFactoryImpl` 字节码按 FileType 走 `SyntaxHighlighterFactory.getSyntaxHighlighter` → 同一首查。S3 按「假定成立」落地——即便不成立，预热也只是空转，无副作用 | 上报栈 + 243 字节码 + 源码 |
+| P-3 | **未实测**（需沙盒打点）。已用有界等待兜底；若沙盒显示超时成常态，按 §七 D2 改异步装配 | — |
+| P-4 | **未实测**：262 无字节码可核，只能以沙盒行为取证（见「未闭环」第 1 条）。本册不宣称两版语义一致 | 本机仅缓存 243 发行版 |
+| P-5 / P-8 | **未实测**（观感由用户并排截图拍板）。差异已在本册 §四 逐项写明；若要零观感变化，单独 revert `e3ab9335` 走 D3，其余两笔保留 | — |
+| P-6 | **成立**：`createInputEditor`（`LogToSqlPanel.kt:622-635`）无 FileType 参数，本次未动输入区 | 源码 |
+| P-7 | **成立**：守卫全量扫描命中清单恰为预热助手一处；`JavaSyntaxHighlighterFactory` 两处既有调用（`SqlToJavaPanel.kt:1743`、`JavaCodePreviewDialog.kt:54`）未被判红 | 守卫读数（见下） |
+
+### 读数
+
+- **定向测试**：162 / 0 / 0 / 0。命令：
+  `./gradlew test --tests "cn.song.mybatisplus.visualizer.log.LogToSqlPanel*" --tests "cn.song.mybatisplus.visualizer.log.SqlToJavaPanel*" --tests "cn.song.mybatisplus.visualizer.log.SqlClickPreviewTest" --tests "cn.song.mybatisplus.visualizer.ui.highlight.SqlDialectMappingPrewarmTest" --tests "cn.song.mybatisplus.visualizer.convention.SqlDialectEdtSourceScanTest" --tests "cn.song.mybatisplus.visualizer.convention.GuardSelfTestCoverageMetaGuardTest"`
+  分类：LogToSqlPanel 45（Test 22 / Execute 18 / Ui 5）、SqlToJavaPanel 83（38/23/18/4）、SqlClickPreview 20、Prewarm 2、SqlDialectEdtSourceScan 4、元守卫 8。
+- **守卫反向验证（双向）**：
+  - 探针 `TmpSqlDialectGuardProbe.kt`（裸调用）+ 负例 `TmpGuardNegativeControl.kt`（只含 `JavaSyntaxHighlighterFactory` 跨行调用）→ 红，命中清单 `[SqlDialectMappingPrewarm.kt, TmpSqlDialectGuardProbe.kt]`，**负例文件不在清单内**（文件粒度判别力；只把两个探针写在同一文件里做不到这一点，故拆成两个文件重取一次读数）。
+  - 删除两个探针 → 绿（`BUILD SUCCESSFUL in 27s`）。探针未提交，`git status` 复核无残留。
+- **编译**：`compileKotlin` / `compileJava` / `compileTestKotlin` 通过。首轮编译两处类型错误已修：预览链 `project` 是 `Project?`（改 `project?.let`，**不提前 return**，否则预热产物 await 永不完成、降级路径变慢）；`executeOnPooledThread` 的 `Runnable`/`Callable` 两重载推断歧义（显式指定）。
+- **构建面**：未动 `build.gradle.kts`、依赖版本、plugin.xml、EP/since-build，按 §六 6.4 不触发 `verifyGate`/`verifyPlugin`/`buildPlugin`。
+
+### 未闭环（合并/发版前须处理）
+
+1. **运行期读数全缺**：R1（262 沙盒 + 含 per-file 方言映射的项目 + 新会话 → `Slow operations` 计数 0）与 R2（先红栈 + 「只落 S1」中间态栈改指 `SqlInputEditor`）都需要带 Database 插件的 262 沙盒，本工作树只跑了单测与编译。**证据边界：本册关于「断言已消失」的所有结论目前都没有运行期读数支撑**，不得当作已验证。
+2. **既有红（非本任务，merge 带进 dev）**：`BannedApiSourceScanTest.方言setMapping反射只允许DialectPreMapping单入口` 命中 `execute/ExecFileBinding.kt`。该文件由 master `aa9bb1ac`（T-ConsoleBind）新增；其反射目标是 `com.intellij.database.dataSource.DataSourcePerFileMappingsImpl`（**不是** `SqlDialectMappings`），而守卫用裸 `"setMapping"` 子串判，粒度太粗。证据：`git show aa9bb1ac:...ExecFileBinding.kt | grep -c '"setMapping"'` = 1，守卫文件最后改动是 `d39a8e57`（早于该提交）→ master 上本就是红的。归 T-ConsoleBind 处置，两条候选：①守卫收窄到「同一站点同时引用 SqlDialectMappings」；②给该处具名豁免并注明目标类不同。本册未动手，避免与在途任务改同一批文件。
+3. **观感拍板**：P-5/P-8 未验，结果区配色变化是否接受由用户并排截图决定（步骤见对话记录）。
+
+### 与计划的偏离（两处，均有理由）
+
+- **预热助手放 `ui/highlight/` 而不是计划写的 `log` 包**：消费方是 `SqlLogToolWindowFactory`（log 包，Java）与预览链（ui 包），放高亮层让两边都只依赖「编辑器高亮」这一概念；且仓库本就有 ui→log 的 import，这个位置不新增方向依赖。
+- **`prewarmNow` 先查「是否有 SQL FileType」再派发**：`FileTypeManager.getStdFileType("SQL")` 在 Kotlin 里是**非空平台类型**（写成 `val x: FileType = … ?: run{}` 会被编译器警告「elvis 恒取左值」），故不声明类型、让推断走；未装 Database 的环境记「无可预热」以免每次启动重复探测。
