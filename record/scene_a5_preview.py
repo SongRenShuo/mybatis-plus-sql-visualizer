@@ -1,76 +1,61 @@
 # -*- coding: utf-8 -*-
-"""A5 单击预览与双击弹窗（sql-click-preview.gif）20261011 v2：
-前置：SQL 日志列表有已捕获条目（本会话 3 条）、捕获已开、无浮层/弹窗残留。
-流程：单击 #1 → 行下方轻量浮层（可编辑）→ 点「复制」（闪对号）→ 点「关闭」
-      → 双击 #1 → 完整预览弹窗 → 切「关键字换行」（SQL 由逐列竖排改为按关键字分行）
-      → 点「取消」回到起始列表态。
-
-标定（20261011 屏幕坐标，IDE 窗口 @ 277,25；region→screen 加 (277,25)）：
-  #1 条目头行     region (1000,225) → screen (1277,250)
-  浮层「复制」     region (1088,369) → screen (1365,394)
-  浮层「关闭」     region (1191,369) → screen (1468,394)
-  弹窗标题栏(取焦) region (170,164)  → screen (447,189)
-  弹窗「关键字换行」region (818,227)  → screen (1095,252)
-  弹窗「取消」     region (1208,811) → screen (1485,836)
-
-坑：① 列表在主窗口内，单击即可弹浮层——别连点两次，间隔 0.35s 会被系统并成双击而直接开弹窗；
-    ② 浮层弹出自带焦点，其按钮单击即生效；
-    ③ 弹窗首个子窗口点击会被「聚焦激活」吞掉，故先点标题栏取焦再点目标按钮；
-    ④ 关闭一律走按钮，不用 Esc——Esc 会把 SQL Visualizer 工具窗整个隐藏掉（实测踩过）。
-"""
-import sys
-import time
-
+"""单击选择、显式开启快速预览、复制 SQL、双击完整弹窗，再恢复默认关闭。"""
+from pathlib import Path
+import sys,time,subprocess
+HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
+import robot,anchor,pyautogui
 from gifkit import Recorder
+REGION=(277,25,1370,984)
+OUT=HERE/'perf'/'a5_preview_native.mp4'
+QUICK='//div[contains(@class,"ActionButton") and contains(@accessiblename,"快速预览")]'
+TITLE='//div[@accessiblename="SQL 快速预览"]'
+BUTTONS=TITLE+'/parent::div/parent::div//div[contains(@class,"Button")]'
+LIST='//div[contains(@class,"ViewportWidthSqlEntryList")]/parent::div'
 
-REGION = (277, 25, 1370, 984)
-OUT = "perf/a5_preview.mp4"
 
-ENTRY1 = (1277, 250)
-POP_COPY = (1365, 394)
-POP_CLOSE = (1468, 394)
-DLG_TITLE = (447, 189)
-DLG_KWWRAP = (1095, 252)
-DLG_CANCEL = (1485, 836)
+def click(x):
+    if not robot.click_component(x):raise RuntimeError('Missing control '+x)
+    time.sleep(.5)
+
+
+def preview_button(right):
+    controls=robot.find_components(BUTTONS)
+    if len(controls)!=2:raise RuntimeError('Unexpected preview button layout')
+    target=sorted(controls,key=lambda c:c['x'])[1 if right else 0]
+    parent_path='('+BUTTONS+')/parent::div'
+    parent=robot.require_component(parent_path)
+    cx,cy=robot.component_screen_center(parent_path,parent)
+    # 两个无名称图标共用按钮行；左为复制、右为关闭，取实际父容器坐标。
+    return (cx-parent['width']//2+target['x']+target['width']//2,
+            cy-parent['height']//2+target['y']+target['height']//2)
+
+
+def row():
+    c=robot.require_component(LIST);cx,cy=robot.component_screen_center(LIST,c)
+    return anchor.require_anchor('native_source_sql',region=(cx-c['width']//2,cy-c['height']//2,c['width'],c['height']))
 
 
 def main():
-    import pyautogui
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
+    if robot.find_one(TITLE):click(QUICK)
+    if robot.find_one(TITLE):raise RuntimeError('Quick preview did not close')
+    hit=row();rec=Recorder(REGION,str(OUT));rec.start()
+    try:
+        pyautogui.moveTo(hit[0],hit[1],duration=.3);pyautogui.click(hit[0],hit[1]);time.sleep(.8)
+        if robot.find_one(TITLE):raise RuntimeError('Default click unexpectedly opened quick preview')
+        click(QUICK);robot.require_component(TITLE);time.sleep(.7)
+        copy_point=preview_button(False)
+        pyautogui.moveTo(*copy_point,duration=.2);pyautogui.click(*copy_point);time.sleep(.6)
+        copied=subprocess.run(['powershell','-NoProfile','-Command','Get-Clipboard -Raw'],capture_output=True,text=True,check=True).stdout
+        if 'SELECT' not in copied.upper() or 'FROM' not in copied.upper():raise RuntimeError('SQL clipboard verification failed')
+        robot.screenshot(out=str(HERE/'shots'/'preview-native-quick.png'))
+        click(QUICK)
+        hit=row();pyautogui.moveTo(hit[0],hit[1],duration=.2);pyautogui.doubleClick(hit[0],hit[1],interval=.15);time.sleep(1)
+        robot.require_component('//div[@accessiblename="取消"]')
+        robot.screenshot(out=str(HERE/'shots'/'preview-native-full.png'))
+        click('//div[@accessiblename="取消"]')
+        pyautogui.moveTo(1510,650,duration=.2);time.sleep(.8)
+    finally:
+        print('frames',rec.stop(),'output',OUT,flush=True)
+        if robot.find_one(TITLE):click(QUICK)
 
-    r = Recorder(REGION, OUT)
-    r.start()
-    time.sleep(0.6)
-
-    # 1. 单击条目 → 轻量浮层
-    pyautogui.click(*ENTRY1)
-    time.sleep(2.4)
-
-    # 2. 点浮层头部「复制」→ 图标闪一下对号
-    pyautogui.click(*POP_COPY)
-    time.sleep(1.5)
-
-    # 3. 关闭浮层
-    pyautogui.click(*POP_CLOSE)
-    time.sleep(1.4)
-
-    # 4. 双击条目 → 完整预览弹窗（含参数回填）
-    pyautogui.doubleClick(*ENTRY1)
-    time.sleep(2.6)
-
-    # 5. 先点标题栏取焦（弹窗首个点击会被聚焦吞掉），再切「关键字换行」
-    pyautogui.click(*DLG_TITLE)
-    time.sleep(0.4)
-    pyautogui.click(*DLG_KWWRAP)
-    time.sleep(2.0)
-
-    # 6. 「取消」关闭 → 回到起始列表态（循环接缝）
-    pyautogui.click(*DLG_CANCEL)
-    time.sleep(1.6)
-
-    print("frames:", r.stop())
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__=='__main__':main()

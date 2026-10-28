@@ -1,66 +1,101 @@
 # -*- coding: utf-8 -*-
-"""S1 慢查询高亮（slow-query-highlight.gif）。
-
-素材：demo 的 `/mpj/perf/slow`（SLEEP(1.2) → 稳定 1.2s）+ 普通查询若干。
-成片：捕获态下先清空列表 → 灌入「普通查询 + 一条慢查询」→ 慢查询条目**红色标示**、
-工具栏出现**慢查询计数**（`慢 1`）→ 点排序下拉切「耗时降序」→ 列表重排（慢查询置顶）。
-"""
-import os
-import subprocess
+"""慢查询红色耗时、普通查询对照和类型下拉中的慢查询筛选。"""
+import io
 import sys
 import time
+import urllib.request
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "lib"))
-sys.path.insert(0, HERE)
-
-import pyautogui  # noqa: E402
-from gifkit import Recorder  # noqa: E402
-from locate import sandbox_pid, windows, ensure_foreground  # noqa: E402
-from nav import force_en_us  # noqa: E402
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "lib"))
+from PIL import Image, ImageChops
+import pyautogui
+import robot
+from gifkit import Recorder
+from locate import ensure_foreground, sandbox_pid, windows
 
 REGION = (277, 25, 1370, 984)
-OUT = "perf/s1_slow_query.mp4"
+OUT = HERE / "perf" / "s1_slow_query_native.mp4"
+TYPE_ALL = '//div[contains(@accessiblename,"全部")]'
+SLOW_ONLY = '//div[contains(@class,"JCheckBox") and contains(@accessiblename,"只看慢查询")]'
+CLEAR = '//div[contains(@class,"ActionButton") and contains(@accessiblename,"清空")]'
+BOTTOM = '//div[contains(@class,"ActionButton") and contains(@accessiblename,"滚动到底部")]'
+LIST = '//div[contains(@class,"ViewportWidthSqlEntryList")]'
 
-CAPTURE = (1105, 212)      # 「捕捉」开关（悬停才渲染的标题栏动作；▶=未捕获 / ■=捕获中）
-SORT = (1355, 212)         # 「时间升序 ▾」排序下拉
-GAZE = (1250, 380)
+
+def get(path):
+    with urllib.request.urlopen("http://127.0.0.1:8082" + path, timeout=20) as response:
+        if response.status != 200:
+            raise RuntimeError(f"mpj endpoint failed: {path} => {response.status}")
+        response.read()
 
 
-def hit(path, wait=1.2):
-    subprocess.run(["curl", "-s", "-m", "12", "http://127.0.0.1:8082" + path],
-                   capture_output=True)
-    time.sleep(wait)
+def list_pixels():
+    component = robot.require_component(LIST)
+    center = robot.component_screen_center(LIST, comp=component)
+    width, height = int(component["width"]), int(component["height"])
+    left, top = center[0] - width // 2, center[1] - height // 2
+    return Image.open(io.BytesIO(robot.screenshot())).crop((left, top, left+width, top+height)).copy()
 
 
 def main():
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
-    force_en_us()
-
-    p = sandbox_pid()
-    hwnd = next(h for h, pp, t, r in windows() if pp == p and (r[2] - r[0]) > 1200)
-    if not ensure_foreground(hwnd, tries=8, click_xy=(700, 300), wait=0.7):
-        raise RuntimeError("沙盒 IDE 未置前")
-
-    for _ in range(2):
-        pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.3)
-
-    # prep（不入镜）：捕获由外部脚本预先开启并核验
-    # ⚠️ take 内**不碰**工具窗工具栏任何按钮——「捕捉/清空/设置」几个动作在悬停态下相邻且坐标会漂，
-    #    实测点「清空」误中「设置」会把整个设置对话框弹出来毁掉整条 take（踩过三次）。
-    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
-
-    r = Recorder(REGION, OUT)
-    r.start()
-    time.sleep(0.8)
-    hit("/mpj/device/entityList"); time.sleep(1.4)      # 普通查询
-    hit("/mpj/ext/chain"); time.sleep(1.4)              # 普通查询
-    hit("/mpj/perf/slow", wait=3.0)                     # 慢查询（1.2s）——放最后，列表贴底可见
-    pyautogui.moveTo(*GAZE, duration=0.8); time.sleep(2.2)
-    pyautogui.moveTo(GAZE[0] - 120, GAZE[1] + 40, duration=0.6); time.sleep(1.4)
-    print("frames:", r.stop())
+    pid = sandbox_pid()
+    frames = [(h, r) for h, p, _, r in windows() if p == pid and r[2]-r[0]>1200]
+    if len(frames) != 1 or frames[0][1] != (277, 25, 1647, 1009):
+        raise RuntimeError(f"sandbox viewport mismatch: {frames}")
+    if not ensure_foreground(frames[0][0]):
+        raise RuntimeError("sandbox did not take focus")
+    pyautogui.press("esc")
+    if not robot.click_component('//div[contains(@class,"EditorTabLabel") and contains(@accessiblename,"UserServiceImpl.java")]'):
+        raise RuntimeError("safe source editor tab unavailable")
+    time.sleep(.5)
+    if not any(p == pid and "UserServiceImpl.java" in title for _, p, title, _ in windows()):
+        raise RuntimeError("unsafe editor background")
+    for xpath in (CLEAR, BOTTOM, TYPE_ALL, LIST):
+        robot.require_component(xpath)
+    get("/mpj/device/entityList")
+    if not robot.click_component(CLEAR):
+        raise RuntimeError("clear action unavailable")
+    time.sleep(.5)
+    get("/mpj/device/entityList")
+    get("/mpj/ext/chain")
+    time.sleep(.8)
+    robot.click_component(BOTTOM)
+    pyautogui.moveTo(1510, 600, duration=.2)
+    before = list_pixels()
+    recorder = Recorder(REGION, str(OUT))
+    filtered = False
+    recorder.start()
+    try:
+        time.sleep(.8)
+        get("/mpj/perf/slow")
+        time.sleep(1.3)
+        if ImageChops.difference(before, list_pixels()).getbbox() is None:
+            raise RuntimeError("slow query did not visibly enter list")
+        robot.screenshot(out=str(HERE / "shots" / "native-slow-red.png"))
+        if not robot.click_component(TYPE_ALL):
+            raise RuntimeError("type dropdown missing")
+        robot.require_component(SLOW_ONLY)
+        time.sleep(1)
+        robot.screenshot(out=str(HERE / "shots" / "native-slow-menu.png"))
+        if not robot.click_component(SLOW_ONLY):
+            raise RuntimeError("slow-only checkbox missing")
+        filtered = True
+        pyautogui.press("esc")
+        pyautogui.moveTo(1510,600,duration=.2)
+        time.sleep(1.6)
+        robot.screenshot(out=str(HERE / "shots" / "native-slow-final.png"))
+    finally:
+        print("frames", recorder.stop(), "output", OUT, flush=True)
+        if filtered:
+            if not robot.click_component(TYPE_ALL):
+                raise RuntimeError("cannot reopen type dropdown for reset")
+            if not robot.click_component(SLOW_ONLY):
+                raise RuntimeError("cannot reset slow-only checkbox")
+            pyautogui.press("esc")
+            time.sleep(.5)
+            robot.screenshot(out=str(HERE / "shots" / "native-slow-reset.png"))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

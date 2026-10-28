@@ -174,7 +174,7 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 
 ## 七C、达梦（DM8）语句面织入（T-DmWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-attachpool @ t-attachpool）
 
-**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
+**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://dbx-test-host:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
 
 **本地复现（红）**：新增 childapp `ChildPoolApp` DM 模式（JDK8 目标，warm 建连接并跑一次，attach 后同连接新建 PS executeQuery）。摘除达梦登记时读数：`attach retransform: matched=1 wove=0 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，子进程 100 轮零事件（`eventReceived=false`）。**注意 matched=1 已含一处此前未知缺陷**：connect 面 `DmDriver.connect` 出口织入产物在 JVM 校验即失败（见下）。
 
@@ -202,3 +202,11 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - premain 路线（增强开着启动）：`premain 会话建立：pid=35260（启动即捕获）` → 面板 #3「[18:34:15] 11ms [DM（达梦）]」。
 - 截图存 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`：`ide-21-attach.png`（安装读数行）、`ide-23-list.png`（面板三条目）、`ide-34-crop.png`（补全候选）。
 - 收工核对：8082 closed、无残留 java/fsnotifier、demo 仓与 dev-bak 工作树零改动。
+
+## 七D、首条事件取证行去 SQL 原文（2026-10-14）
+
+- **背景**：用户报障宿主控制台有插件打点噪音，逐行核到本计划落的「织入通道首条事件已产出」行——原带 `sqlHead=`（SQL 前 80 字符，见上文 §七C 的读数实例）。
+- **判据**：该行的用途是「钩子在产」的宿主侧证据（与 IDE 侧「首条事件已到达」配对三分故障域），SQL 原文对判读无贡献；而它**不过 agent 的脱敏开关**（脱敏只作用于事件载荷），Statement 路径的 SQL 可能含字面量（PreparedStatement 路径虽是占位符版也无打印必要）。
+- **处置**：`sqlHead=` → `sqlLen=`（只留长度）。行内判读字段 = op / sqlLen / registryUnresolved，宿主日志不再留业务文本，三分故障域能力不变。
+- **回归**：`WovenEventsFirstFireDiagTest` 增 `sqlLen=15` 正断言 + 「不得含 SELECT/FROM t」负断言（后者即本改动的守卫，回退 `sqlHead` 必红）。同批核过 `AttachPoolWarmGateTest` 只按行首前缀摘行、不解析 `sqlHead`，不受影响。
+- **同批核过但未改**：`[SqlVisAgent] attach retransform:` 行已由 `install` 的幂等闸（`installed` 静态位 + `sqlvis.agent.active` 系统属性，两闸都在打印之前）保证**每 JVM 至多一行**，无需另加去重；每个新 JVM（应用重启）各一行属预期。

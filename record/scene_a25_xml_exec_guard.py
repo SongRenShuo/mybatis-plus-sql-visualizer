@@ -28,7 +28,7 @@ from locate import (bright_band_x, close_preview, ensure_foreground,        # no
                     grab as locate_grab, sandbox_pid, window_rect, windows)
 from nav import force_en_us, goto_col, trigger_preview                      # noqa: E402
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a25_xml_exec_guard.mp4"
 
 FILE_QUERY = "mapper/OrderMapper.xml"
@@ -83,15 +83,13 @@ def main():
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.7)
     print("关旧预览:", close_preview(ide_pid))
     pyautogui.click(600, 500); time.sleep(0.5)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.4)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
-    for y in FILE_ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(1.3)
-        if FILE_TITLE_KEY in ide_hwnd_and_title(ide_pid)[1]:
-            break
-    time.sleep(1.6)
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + typewrite 必撞同名文件）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/resources/mapper/OrderMapper.xml", settle=2.0)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     t1 = ide_hwnd_and_title(ide_pid)[1]
     if FILE_TITLE_KEY not in t1:
         raise RuntimeError("开文件失败：标题仍为 %s" % t1[:70])
@@ -109,8 +107,16 @@ def main():
     pyautogui.moveTo(*GAZE_SQL, duration=0.8); time.sleep(1.4)
     btn = find_exec_button(ide_pid)
     print("执行 SQL 按钮 = %s" % (btn,))
-    pyautogui.click(*btn); time.sleep(2.2)          # 引出执行前确认闸门
-    pyautogui.moveTo(900, 520, duration=0.6); time.sleep(1.6)
+    pyautogui.click(*btn); time.sleep(2.4)          # 引出执行前确认闸门
+    # 凝视闸门弹窗（警告图标 + 文案 + Yes/No）
+    pyautogui.moveTo(900, 500, duration=0.8); time.sleep(2.0)
+    pyautogui.moveTo(780, 540, duration=0.7); time.sleep(1.6)
+    # 复核要求：演示「选 No 即中止」——点 No 关闭闸门，SQL 不执行
+    pyautogui.click(810, 550); time.sleep(2.2)   # No 按钮（放大裁剪实测，旧值 1025 偏右 215px）
+    pyautogui.moveTo(900, 560, duration=0.8); time.sleep(1.8)
+    # 二次真实变化：再点一次「执行 SQL」，闸门复现（证明 No 只是当次取消，可重试）
+    pyautogui.click(*btn); time.sleep(2.6)
+    pyautogui.moveTo(900, 500, duration=0.8); time.sleep(2.0)
     print("frames:", r.stop())
 
 

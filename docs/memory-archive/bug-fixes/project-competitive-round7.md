@@ -1,7 +1,7 @@
 ---
 name: project-competitive-round7
 description: 竞品横向对比第七轮（20260918，入库 master ca57460 未推送）——zMyBatis
-  全仓库深度解剖结论（真引擎求值/Leap 重写未接线/精华 Z-1~Z-13）、Marketplace 快照、DBX v6 清单、新编号
+  全仓库源码通读结论（真引擎求值/Leap 重写未接线/精华 Z-1~Z-13）、Marketplace 快照、DBX v6 清单、新编号
   N-24~N-27/O-30~O-33
 metadata:
   node_type: memory
@@ -11,9 +11,9 @@ metadata:
 
 # 竞品横向对比第七轮（2026-09-18）
 
-报告：`docs/调研报告/20260918-0200-竞品横向对比与功能建议-第七轮调研报告.md`（master 提交 **ca57460，未推送**）。三子智能体并行（zMyBatis 源码解剖 / Marketplace 刷新 / DBX 增量），主智能体抽查复核；Marketplace 原始 JSON 留档 `%TEMP%\jbmkt_r7\`；zMyBatis 本地克隆 `%TEMP%\zmybatis_deep_r7`（临时目录，下轮复测需重新克隆）。
+报告：`docs/调研报告/20260918-0200-竞品横向对比与功能建议-第七轮调研报告.md`（master 提交 **ca57460，未推送**）。三子智能体并行（zMyBatis 源码通读 / Marketplace 刷新 / DBX 增量），主智能体抽查复核；Marketplace 原始 JSON 留档 `%TEMP%\jbmkt_r7\`；zMyBatis 本地克隆 `%TEMP%\zmybatis_deep_r7`（临时目录，下轮复测需重新克隆）。
 
-## zMyBatis（Marketplace 30447）深度解剖核心结论
+## zMyBatis（Marketplace 30447）源码通读核心结论
 
 - **反差**：Marketplace 4 个半月零动作（实测 updates 仅 3 版、since 253、110 下载），GitHub 却 104 提交（42 个 dependabot，真人≈2 韩国账号）、主代码 10,424 行/测试 12,813 行。五个月火力全投向**未接线**的完整重写（代号 Leap：admission 门禁+参数契约溯源+classloader 隔离求值），生产入口跑的还是 4 月启发式 v1。下版 sinceBuild 253→262 主动弃旧 IDE。
 - **最值得偷师=真引擎求值**：不自研解释器，直接丢给真 MyBatis 3.5.19 `XMLScriptBuilder.getBoundSql(params)`，字面量化只处理 parameterMappings→`?` 队列，约 500 行拿全标签语义（MyBatisEvaluator.kt:109-126）。

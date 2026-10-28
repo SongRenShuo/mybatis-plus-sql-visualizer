@@ -155,7 +155,7 @@
 
 ### T-CT-06（P3）验证前提写进清单
 
-- `docs/测试沙盒验证清单.md` 与真机验证清单补一条：**验证控制台捕获链路前，先让被测应用真的把 SQL 打到控制台**（demo 工程：`logging.level.cn.song.dasycodedemo.mapper=debug`，或切 `prod` 档），否则「控制台桥」这条链在任何验证里都是空跑——本次排障绕了远路就是因为这个前提没写在清单里。
+- `docs/规范/测试沙盒验证清单.md` 与真机验证清单补一条：**验证控制台捕获链路前，先让被测应用真的把 SQL 打到控制台**（demo 工程：`logging.level.cn.song.dasycodedemo.mapper=debug`，或切 `prod` 档），否则「控制台桥」这条链在任何验证里都是空跑——本次排障绕了远路就是因为这个前提没写在清单里。
 
 ### T-CT-07（P1）确认框第三动作「关闭增强捕获并不再询问」根本没渲染出来
 
@@ -213,7 +213,7 @@ build/mpsv-stfix/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/options/mp-sql
 | T-CT-03 | 本批 | 新增 `log/CaptureDiagnostics.kt`（纯函数 + `CaptureDiagnosticsTest` 七例）；桥加 `consoleLinesSeen` 计数；面板 `syncDiagnostics()` 写空态第二行，2s 定时器仅在「捕捉中且零条目」时运行（与桥轮询同频），命中条目或停止捕捉即停表，`dispose()` 停表。**偏离**：诊断行改为「等待控制台 / 控制台无输出 / 有输出但没匹配到 SQL」三档提示，比原计划单一提示更能分流现场。 |
 | T-CT-04 | 本批 | **未按原计划做 per-console 覆盖**：平台 `Filter` 接口只有 `applyFilter(String,int)`（EP 拿不到控制台身份），per-console 判定需新开 `ConsoleViewImpl` 私有字段反射入口（触发项目「新增反射入口必登记 PlatformCrossVersionTest」的连带成本）。改为**语义收窄**：`epActive` 置位条件由「EP 处理过任意一行」改为「EP 实证产出过条目」，且桥**挂载面不再跳过**（封口只由 handler 逐行短路承担）——EP 未在链上/产不出条目时桥照常捕获，CPU 收益在 EP 真产出后与原先等价。**残留风险（真机门禁须覆盖）**：EP 证明过一次后本 IDE 会话内不再逐控制台重证，若某类控制台不经 provider 路径装配（如插件自建执行控制台、Gradle 构建控制台）仍可能被短路。 |
 | T-CT-05 | 本批 | 删 `Disposer.register(this@PluginSettingsPanel, connection)`（ROOT 子节点无释放路径 → 沙盒实测 6 例 leak），连接生命周期回归 `disposeResources()` 显式承担；`SettingsTruthTest` 加「不得自注册 Disposer」断言（扫注释剥离后的源码——守卫扫原文时会被解释性注释误伤，已加 `stripComments`）。 |
-| T-CT-06 | 本批 | `docs/测试沙盒验证清单.md` 补「验控制台捕获链路前先让应用真的把 SQL 打到控制台」前提（含 demo 工程两种开法）。 |
+| T-CT-06 | 本批 | `docs/规范/测试沙盒验证清单.md` 补「验控制台捕获链路前先让应用真的把 SQL 打到控制台」前提（含 demo 工程两种开法）。 |
 | T-CT-07 | 本批 | **实施期新增（用户提问触发）**：确认框第三动作「关闭增强捕获并不再询问」**从未渲染**——`disableCaptureAction` 声明在 `init {}` 之后，平台在构造期（`init()` 内）回调 `createActions()` 时该字段仍为 null，平台容忍 null 静默不渲染按钮（243 平台字节码直证 + 沙盒日志无「确认框异常」双重坐实；git 核实该功能**并未**落到其他分支，master/dev 均有）。修复=属性上移到 init 块之前；新增 `DialogWrapperInitOrderGuardTest`（全仓扫描 `DialogWrapper` 子类的 createActions 后声明引用，纯源码扫描进快桶）。 |
 
 **实施期新发现（附带修复）**

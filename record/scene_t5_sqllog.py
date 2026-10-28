@@ -1,53 +1,79 @@
 # -*- coding: utf-8 -*-
-"""T5 sql-log（修订九构图 120%+13pt+树关）v2：应用已在 Services 中运行 →
-点「捕捉」开始监听已存在的控制台 → 轮询 /user/list 触发新查询（Preparing/
-Parameters 进控制台被捕获）→ 列表填充 → 点开第一条看还原 SQL。
-
-旧版「先捕捉后启动」流程实证无效：捕捉时无控制台，监听未建立即失效（列表恒空）。
-捕捉按钮 (1184,206)、列表首条 (1377,295) 为修订九重标。
-"""
+"""新版 SQL 日志主画面：IDE Run 的控制台入列、单行页签与新列表布局。"""
+import io
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
-from gifkit import Recorder, click
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "lib"))
+
+from PIL import Image, ImageChops
+import pyautogui
+
+import robot
+from gifkit import Recorder
+from locate import ensure_foreground, sandbox_pid, windows
 
 REGION = (277, 25, 1370, 984)
-OUT = "perf/t5_sqllog.mp4"
+OUT = HERE / "perf" / "t5_sqllog_native.mp4"
+LOG_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 日志")]'
+HISTORY_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 历史")]'
+CLEAR = '//div[contains(@class,"ActionButton") and contains(@accessiblename,"清空")]'
+LIST = '//div[contains(@class,"ViewportWidthSqlEntryList")]'
 
-CAPTURE = (1184, 206)   # 工具窗 ▶ 捕捉（修订九重标）
-ENTRY = (1377, 295)     # SQL 列表第一条（修订九重标）
+
+def feed(path):
+    with urllib.request.urlopen("http://127.0.0.1:8081" + path, timeout=12) as response:
+        if response.status != 200:
+            raise RuntimeError(f"demo endpoint failed: {path} => {response.status}")
+        response.read()
 
 
-def query_once():
-    try:
-        with urllib.request.urlopen("http://localhost:8081/user/list", timeout=5) as r:
-            return r.status == 200
-    except Exception:
-        return False
+def list_pixels():
+    component = robot.require_component(LIST)
+    center = robot.component_screen_center(LIST, comp=component)
+    width, height = int(component["width"]), int(component["height"])
+    area = (center[0] - width // 2, center[1] - height // 2,
+            center[0] + width // 2, center[1] - height // 2 + min(height, 500))
+    return Image.open(io.BytesIO(robot.screenshot())).crop(area).copy()
 
 
 def main():
-    assert query_once(), "app not running on 8081 - start MybatisPlusDemoApplication first"
+    pid = sandbox_pid()
+    frames = [(h, r) for h, p, _, r in windows() if p == pid and r[2] - r[0] > 1200]
+    if len(frames) != 1 or frames[0][1] != (REGION[0], REGION[1],
+                                         REGION[0] + REGION[2], REGION[1] + REGION[3]):
+        raise RuntimeError(f"sandbox viewport differs from recording baseline: {frames}")
+    if not ensure_foreground(frames[0][0], click_xy=(700, 36)):
+        raise RuntimeError("sandbox did not take focus")
+    for xpath in (LOG_TAB, HISTORY_TAB, CLEAR, LIST):
+        robot.require_component(xpath)
+    feed("/user/list")
+    robot.click_component(CLEAR)
+    pyautogui.moveTo(1510, 500, duration=0.3)
+    before = list_pixels()
 
-    r = Recorder(REGION, OUT)
-    time.sleep(1.0)
-    r.start()
-    time.sleep(0.5)
-
-    click(*CAPTURE, move_dur=0.3)        # 1. 开始捕捉（控制台已存在）
+    recorder = Recorder(REGION, str(OUT))
+    recorder.start()
     time.sleep(0.8)
-
-    for _ in range(4):                   # 2. 触发查询，控制台刷 Preparing/Parameters
-        query_once()
-        time.sleep(1.4)
-    time.sleep(1.2)                      # 3. 列表填充定格
-
-    click(*ENTRY, move_dur=0.35)         # 4. 点开第一条
-    time.sleep(1.8)
-
-    print("frames:", r.stop())
+    feed("/user/list")
+    time.sleep(1.0)
+    feed("/user/nested?username=ab&minAge=20&maxAge=30")
+    time.sleep(1.0)
+    feed("/user/list")
+    time.sleep(0.8)
+    if ImageChops.difference(before, list_pixels()).getbbox() is None:
+        recorder.stop()
+        raise RuntimeError("captured SQL list did not visibly change")
+    robot.click_component(HISTORY_TAB)
+    time.sleep(0.8)
+    robot.click_component(LOG_TAB)
+    time.sleep(1.4)
+    robot.screenshot(out=str(HERE / "shots" / "native-sql-log-final.png"))
+    print("frames", recorder.stop(), "output", OUT, flush=True)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

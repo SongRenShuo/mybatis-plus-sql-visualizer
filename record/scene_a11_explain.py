@@ -38,7 +38,7 @@ from gifkit import Recorder
 from nav import force_en_us, goto_col, shot, trigger_preview
 from locate import sandbox_pid, window_rect
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a11_explain.mp4"
 
 FILE_QUERY = "mpjdemo/DeviceInfoServiceImpl.java"
@@ -96,13 +96,13 @@ def main():
     print("关旧预览弹窗:", "已关闭" if close_preview_hard(pyautogui) else "!! 没关掉")
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.6)
     pyautogui.click(*EDITOR_SPOT); time.sleep(0.4)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.5)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.6)
-    for y in ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(0.4)
-    time.sleep(2.4)
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + typewrite 必撞同名文件）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java", settle=2.0)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     goto_col(CHAIN_LINE, CHAIN_COL)
     trigger_preview()
     # trigger 后把光标移离代码区：压在链 token 上会弹 documentation 悬浮窗挡预览画面
@@ -117,19 +117,26 @@ def main():
     pyautogui.moveTo(*GAZE_A, duration=0.6)
     pyautogui.moveTo(*GAZE_B, duration=1.0)
 
-    # 2. 点「执行计划」→ 弹数据源选择
-    pyautogui.click(*BTN_EXPLAIN); time.sleep(2.2)
+    # 2. 点「执行计划」→ 已绑定数据源时直接出结构化计划（20261027 实测：
+    #    数据源已绑 mpj_demo@localhost，**不再弹选择器**；旧脚本点 DS_MPJ_ROW
+    #    反而点偏把弹层关掉，导致 EXPLAIN 从不执行）
+    from robot import click_component
+    click_component("//div[@text='执行计划']")
+    time.sleep(2.4)          # 「执行中…」一拍入镜
+    time.sleep(4.0)          # 等计划表渲染（实测 202ms 就出）
 
-    # 3. 选 mpj_demo@localhost → 提交 EXPLAIN（首连可能 5~15s）
-    pyautogui.click(*DS_MPJ_ROW)
-    time.sleep(2.5)          # 先给「执行中…」一拍入镜
-    time.sleep(10.0)         # 等结果渲染（本轮实测计划表在 16s 内到位）
+    # 3. 凝视计划表（结构化列 + 数据行）
+    pyautogui.moveTo(600, 300, duration=0.8); time.sleep(1.6)
+    pyautogui.moveTo(600, 340, duration=0.7); time.sleep(1.4)
 
-    # 4. 凝视计划结果：结构化 EXPLAIN 与静态规则同屏对照
-    pyautogui.moveTo(*WAYPOINT_LEFT, duration=0.5)   # 左栏上方航点：避开 JOIN 行横带
-    pyautogui.moveTo(*GAZE_PLAN_A, duration=1.0)
-    pyautogui.moveTo(*GAZE_PLAN_B, duration=1.0)
-    time.sleep(0.8)
+    # 4. 返回预览 → 再执行一次（真实 UI 变化，撑时长 + 展示可重复执行）
+    pyautogui.moveTo(1120, 175, duration=0.6); time.sleep(0.5)
+    click_component("//div[contains(@text,'返回预览') or contains(@accessiblename,'返回预览')]")
+    time.sleep(2.2)
+    pyautogui.moveTo(600, 400, duration=0.7); time.sleep(1.2)
+    click_component("//div[@text='执行计划']")
+    time.sleep(2.4)
+    pyautogui.moveTo(600, 320, duration=0.8); time.sleep(2.0)
 
     shot("perf/a11_final.png")
     print("frames:", r.stop())

@@ -95,7 +95,7 @@
 
 调用时机：已拿到 SQL（通常来自 sqlv_render_sql 或 sqlv_render_logs）、想看执行计划时。严格只读，拒绝 fail-closed。
 
-失败语义：`SQL_BLOCKED`（非单条纯 SELECT）；`DATASOURCE_NOT_FOUND` / `DATASOURCE_UNREACHABLE`；`DIALECT_UNSUPPORTED`。
+失败语义：`MCP_READ_ONLY`（语句本身是写语句——结构判定优先）；`SQL_BLOCKED`（形态违规：多条语句、锁读 FOR UPDATE/SHARE、非单条纯 SELECT）；`DATASOURCE_NOT_FOUND` / `DATASOURCE_UNREACHABLE`；`DIALECT_UNSUPPORTED`。
 
 ### 3.5 sqlv_check_sql — 写风险核查
 
@@ -111,7 +111,7 @@
 
 ### 3.6 sqlv_rollback_plan — 回滚预案
 
-用途：为 INSERT/UPDATE/DELETE 生成回滚预案，不执行任何东西。输出含完整度评级（COMPLETE=已定位主键 / PARTIAL=可执行但有风险警告 / UNABLE=不可推导，语句清单留空并给恢复指引）、候选回滚语句、警告、执行前 COUNT 检查模板和快照 SELECT 模板。
+用途：为 INSERT/UPDATE/DELETE 生成回滚预案，不执行任何东西。输出含完整度评级（COMPLETE=已定位主键、可生成逐行精确回滚语句，仅 INSERT 可达；PARTIAL=可执行但有风险警告，如 INSERT 未给主键列；UNABLE=不可推导，语句清单留空并给恢复指引——UPDATE/DELETE 没有 before-image，一律 UNABLE，只给快照 SELECT 与恢复途径）、候选回滚语句、警告、执行前 COUNT 检查模板和快照 SELECT 模板。
 
 | 入参 | 类型 | 必填 | 说明 |
 |------|------|------|------|

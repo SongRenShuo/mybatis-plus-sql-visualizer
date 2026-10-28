@@ -40,7 +40,7 @@
 
 解析失败 **fail closed**：返回 `PARSE_FAILED` finding，按最高风险处理。UPDATE 与 DELETE 判定一致；INSERT 不适用（忽略）。
 
-**T-UW-02（执行链接线，不新增弹窗）**：`LogToSqlPanel` 执行链在既有 `showYesNoDialog` 之前调用探测器；无 finding → 现确认流原样（文案不变，频率不变）；有 finding → 确认对话框消息升级为列出发现（如「检测到无 WHERE 的全表 DELETE」），`execute.confirm.dml` 复用同一对话框形态，只换 message 文案——遵守弹窗克制红线（`docs/设计规范-弹窗克制红线.md`），不新增弹窗形态、不新增步骤。
+**T-UW-02（执行链接线，不新增弹窗）**：`LogToSqlPanel` 执行链在既有 `showYesNoDialog` 之前调用探测器；无 finding → 现确认流原样（文案不变，频率不变）；有 finding → 确认对话框消息升级为列出发现（如「检测到无 WHERE 的全表 DELETE」），`execute.confirm.dml` 复用同一对话框形态，只换 message 文案——遵守弹窗克制红线（`docs/规范/设计规范-弹窗克制红线.md`），不新增弹窗形态、不新增步骤。
 
 **T-UW-03（RollbackSqlGenerator 评级接入）**：PARTIAL 评级补两类触发面——恒真谓词、LIKE 全匹配（复用 T-UW-01 探测器），warnings 追加对应 RollbackWarning 键；WHERE 缺失已有 fullRowPredicate 覆盖不动。
 

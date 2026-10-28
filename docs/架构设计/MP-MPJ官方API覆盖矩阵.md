@@ -6,9 +6,9 @@
 >
 > **状态图例**：✅ = 已支持（目标达成）；🟡 = 部分支持（形态有限制）；⬜ = 暂不支持 / 文档化边界（远期或外部依赖）。
 >
-> **状态说明**：矩阵中「目标状态」为里程碑完成后应达成的最终状态；当前实现快照以《[MPJ 用法收集与兼容性测试清单](../需求文档/MPJ用法收集与兼容性测试清单.md)》§5.6 为准。**状态随开发计划（[docs/开发计划/20260813-1730-全量API预览支持-开发计划.md](./开发计划/20260813-1730-全量API预览支持-开发计划.md)）各里程碑（M20/M21/M22）交付更新**：交付一项、对应行 🟡/⬜ → ✅ 或标注文档化边界，并同步新增 A 段 fixture 测试（沿用 P/Q/U 编号惯例，新增段建议 **A01~Axx**，测试先行）。
+> **状态说明**：矩阵中「目标状态」为里程碑完成后应达成的最终状态；当前实现快照以《[MPJ 用法收集与兼容性测试清单](../需求文档/MPJ用法收集与兼容性测试清单.md)》§5.6 为准。**状态随开发计划（[20260813-1730-全量API预览支持-开发计划](../开发计划/20260813-1730-全量API预览支持-开发计划.md)）各里程碑（M20/M21/M22）交付更新**：交付一项、对应行 🟡/⬜ → ✅ 或标注文档化边界，并同步新增 A 段 fixture 测试（沿用 P/Q/U 编号惯例，新增段建议 **A01~Axx**，测试先行）。
 >
-> **交付记录**：**M20 ✅（2026-08-13，379 测试全绿）**——P0 差距清零（JoinWrappers 工厂/entity 构造/批量族/Map 消费/eqOrIsNull/selectIgnore/逻辑删除六方法/消费全集）；**M21 ✅（2026-08-13，420 测试全绿）**——中等成本补全（allEq/setEntity/selectFilter/枚举 selectFunc/rightAlias/子表 MConsumer/ext/prefix-free/from/around/UpdateJoin+DeleteJoin）；**M22 ✅（2026-08-14，444 测试全绿）**——P2 项（方言 6 种扩展、@Version 乐观锁注入、Db kit/SimpleQuery/ActiveRecord 识别）。剩余 ⬜（fill、Tenant/DataPermission/DynamicTableName 拦截器模拟、Kotlin 侧、方言实测）按《[剩余立项开发计划](./开发计划/20260814-0804-剩余立项-开发计划.md)》**按需立项**实施。
+> **交付记录**：**M20 ✅（2026-08-13，379 测试全绿）**——P0 差距清零（JoinWrappers 工厂/entity 构造/批量族/Map 消费/eqOrIsNull/selectIgnore/逻辑删除六方法/消费全集）；**M21 ✅（2026-08-13，420 测试全绿）**——中等成本补全（allEq/setEntity/selectFilter/枚举 selectFunc/rightAlias/子表 MConsumer/ext/prefix-free/from/around/UpdateJoin+DeleteJoin）；**M22 ✅（2026-08-14，444 测试全绿）**——P2 项（方言 6 种扩展、@Version 乐观锁注入、Db kit/SimpleQuery/ActiveRecord 识别）。后续交付：Tenant/DataPermission/DynamicTableName 拦截器模拟已随 F-6 补齐（§1.8 ✅）；实体 `@TableField(fill=…)` 现由 **FieldFill 安全模拟**部分覆盖（显式字面量覆盖、不加载用户 `MetaObjectHandler`、UPSERT 不模拟，T-FieldFillPriority）；仍为文档化边界的：Kotlin 侧 PSI 级续链、部分方言真实库实测。
 >
 > 关联文档：《MPJ 用法收集与兼容性测试清单.md》（§5.6 为现状矩阵）、《20260813-0829-低频复杂API后期实现计划.md》（P 分组背景）、《20260813-1730-全量API预览支持-开发计划.md》（M20~M22 任务来源，本矩阵任务编号均出自该文档）。
 
@@ -296,7 +296,7 @@
 |------|:----:|------|
 | 绝大多数行（计划内全部实现） | ✅ | 本矩阵即 T-M20-01 语料基座；实现一项、对应行标 ✅ 并新增 A 段 fixture 测试（断言 SQL 文本） |
 | `select(Class, Predicate)` / `selectFilter` 谓词精确求值 | 🟡 | 静态近似（T-M21-01）：psi 层识别 predicate lambda 体的字段白/黑名单，复杂谓词回退全列 |
-| `fill` 6 形态 | ⬜ | M22 远期（T-M22-01） |
+| `fill` 6 形态 | ✅ | T-M22-01 已交付（MpjLambdaConverter 六形态 + MpjFillConverterTest，见 §2.5）；MP 实体 `@TableField(fill=…)` 另由 FieldFill 安全模拟覆盖（显式字面量，不仿真 `MetaObjectHandler`；UPSERT 不模拟） |
 | `@Version` 乐观锁 / 拦截器模拟 | ✅ | T-M22-02（M22）——@Version 注入已交付；Tenant/DataPermission/DynamicTableName 已随 F-6 交付 ✅、BlockAttack 警示形态 🟡 |
 | 方言扩展（SQL Server / H2 / SQLite / MariaDB / 达梦 / KingBase） | ✅ | T-M22-03（M22），未知方言回退 MySQL；T-M43 补 upsert 按方言（MySQL 系 ON DUPLICATE KEY UPDATE / PG 系 ON CONFLICT / Oracle·SQLServer·DM 降级纯 INSERT）+ 达梦分页官方实证 + 反向解析分页三形态宽容（LIMIT..OFFSET / OFFSET..FETCH / FETCH FIRST） |
 | `Db` kit / `SimpleQuery` / ActiveRecord | ✅ | T-M22-04（M22）——Db.getById/类字面量/lambdaQuery 链、SimpleQuery wrapper 消费、ActiveRecord 无参形态 |
@@ -322,6 +322,8 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-10-27 | **时效性复核（矩阵状态列无变化）**：核对 2026-10-20 之后 `converter/` 与 `psi/` 的提交，无影响 API 覆盖面者，三条均属实现加固——`f69f75fe`/`58dd0c23` 补 SQL 片段入口的字符串拼接实参与 `select`/`first`/`around`/`UNION`/`LIMIT` 占位符来源登记（§1.9 消费面，不新增 API）；`8267394d` 增 `[T-EmbeddedIdentify]` 嵌入展平诊断日志（INFO 级、不改语义）。另确认反向链路条件组修复 `661019b6`（OR 组不吞 OR、子组保留 NOT、`@TableLogic` 条件不重复生成）属 §1 条件构造器已有行的语义修正，不涉及新方法。 |
+| 2026-10-20 | **现状回填**：修正交付记录摘要「剩余 ⬜」旧口径——Tenant/DataPermission/DynamicTableName 已随 F-6 交付 ✅（§1.8）、MPJ `fill` 6 形态已随 T-M22-01 交付 ✅（§2.5/§3）；实体 `@TableField(fill=…)` 新增 **FieldFill 安全模拟**（显式字面量覆盖、不加载用户 `MetaObjectHandler`、UPSERT 不模拟、INSERT/UPDATE 模拟值优先，T-FieldFillPriority），按「部分覆盖」描述而非全仿真。 |
 | 2026-09-04 | **二轮时效性核验（四智能体 jar javap + releases 双渠道）**：① 确认 MP 3.5.17 / MPJ 1.5.9 仍为最新，修正 MPJ 1.5.9 发布日期为 2026-07-10（§2.7/§4）；② 过期行回填 8 处——§1.2 Kotlin 🟡、§1.3 ktQuery/ktUpdate ✅、§1.8 Tenant/DynamicTableName/DataPermission ✅ + BlockAttack 🟡、§1.9 Db kit ✅（SimpleQuery/ActiveRecord 备注补全）、§2.5 fill ✅；③ 新增行 5 处——§1.6 MP @OrderBy/@SqlCondition、§1.7 LogicDeleteByIdWithFill、§2.1 MPJBaseJoin、§2.4 allEqStr、§2.6 UpdateJoin setUpdateEntity 族/deleteAll（均注「增量核验补列」，引入版本待考证）；④ Kotlin 侧 §3 规则表同步 🟡。同日新建姊妹文档《JPA-Hibernate官方API覆盖矩阵》 |
 | 2026-08-14 | **T-M23.7 同步（497 测试全绿）**：触发/定位能力变更（任意位置触发 + 选择区多 SQL 选择）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1115-任意位置触发与多SQL选择-开发计划.md` |
 | 2026-08-14 | **T-M23.6 同步（492 测试全绿）**：UI 行为变更（复制/执行 SQL 成功提示加「关闭 SQL 面板」按钮）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1100-弹窗提示一键关闭SQL面板-开发计划.md` |
