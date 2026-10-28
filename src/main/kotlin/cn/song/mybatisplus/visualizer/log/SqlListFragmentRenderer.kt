@@ -29,21 +29,29 @@ internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = 
  *  - OFF/WARN → 原样（WARN 的警示行只进预览浮层/停靠预览，列表渲染不追加）；
  *  - MASK → 打码文本；BLOCK → 阻断占位文本（白名单豁免后计数 0 时 DisplayMasker 按 OFF 原样）。
  * 非全量模式沿用摘要——MASK/BLOCK 须先处理完整 SQL 再截摘要（防旧摘要在引号中间截断漏打码），
- * 摘要缓存以 mode 为键防 MASK/BLOCK 产物串缓存。
+ * 摘要缓存以 mode+白名单为键防 MASK/BLOCK 产物串缓存（UI-001 修复：白名单进缓存键，
+ * 改白名单后同 mode 下摘要即重算）。
  */
-internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, maskMode: DisplayMasker.MaskMode): String {
+internal fun displaySqlForList(
+    entry: LogSqlEntry,
+    mode: SqlListDisplayMode,
+    maskMode: DisplayMasker.MaskMode,
+    allowList: List<String> = emptyList(),
+): String {
     if (maskMode == DisplayMasker.MaskMode.OFF || maskMode == DisplayMasker.MaskMode.WARN) {
         if (mode == SqlListDisplayMode.FORMATTED) return entry.restoredSql
         return entry.summary
     }
+    // UI-001 修复：白名单实参贯穿列表显示链（此前默认 emptyList，白名单在列表面恒不生效）
     if (mode == SqlListDisplayMode.FORMATTED) {
-        return DisplayMasker.maskDisplay(entry.restoredSql, maskMode)
+        return DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)
     }
+    val cacheKey = maskMode.name + "|" + allowList.joinToString(",")
     return entry.cachedMaskedSummary
-        ?.takeIf { entry.cachedMaskedSummaryMode == maskMode.name }
-        ?: LogSqlEntry.summarizeSql(DisplayMasker.maskDisplay(entry.restoredSql, maskMode)).also {
+        ?.takeIf { entry.cachedMaskedSummaryMode == cacheKey }
+        ?: LogSqlEntry.summarizeSql(DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)).also {
             entry.cachedMaskedSummary = it
-            entry.cachedMaskedSummaryMode = maskMode.name
+            entry.cachedMaskedSummaryMode = cacheKey
         }
 }
 

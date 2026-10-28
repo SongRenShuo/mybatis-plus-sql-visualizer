@@ -253,6 +253,18 @@ class UpdateSectionTest : BasePlatformTestCase() {
         assertFalse("无备份按钮必须禁用（诚实降级，绝不假装可点）", section.rollbackButton.isEnabled)
     }
 
+    /** UI-002：备份在会话中途出现后，重开设置页（resetState）须重算可用性，不再滞后灰置。 */
+    fun test回滚按钮态_reset时重算可用性() {
+        section.rollbackAvailability = { null }
+        section.resetState()
+        assertFalse("无备份 reset 后仍禁用", section.rollbackButton.isEnabled)
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")
+        }
+        section.resetState()
+        assertTrue("备份中途出现后 reset 须启用按钮（UI-002）", section.rollbackButton.isEnabled)
+    }
+
     fun test回滚流程_确认通过_调度成功渲染重启提示() {
         section.rollbackAvailability = {
             cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")

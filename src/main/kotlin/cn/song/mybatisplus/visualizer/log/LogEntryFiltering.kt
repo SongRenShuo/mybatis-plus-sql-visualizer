@@ -158,8 +158,14 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<L
         val maskOff = runCatching { PluginSettings.getInstance().displayMaskMode() }
             .getOrDefault(cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK) ==
             cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF
+        // UI-001 修复：复制链同样按白名单豁免（allowList 为空时与 maskDisplay(sql, true) 逐字等价）
+        val allowList = runCatching { PluginSettings.getInstance().displayMaskAllowList() }.getOrDefault(emptyList())
         val base = if (maskOff) element.restoredSql
-        else cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(element.restoredSql, true)
+        else cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(
+            element.restoredSql,
+            cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK,
+            allowList,
+        )
         return withTerminator(base)
     }
 }

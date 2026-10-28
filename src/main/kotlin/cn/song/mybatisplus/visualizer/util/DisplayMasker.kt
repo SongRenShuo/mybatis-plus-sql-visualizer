@@ -185,11 +185,17 @@ object DisplayMasker {
                     }
                 }
                 TokenKind.BARE_NUMBER -> {
-                    // 裸数字 token 由 TOKEN_REGEX 定形（11 位/18 位），对齐旧 maskSqlText 无条件替换
-                    // 语义（正则只捕形态、不查首位）；类别按身份证形态优先归类，计数用。
-                    val category = if (looksLikeIdCard(ctx.text)) CAT_ID_CARD else CAT_MOBILE
-                    bump(counts, category)
-                    if (mode == MaskMode.MASK) MASK else ctx.text
+                    // UI-001 修复：裸数字同样受白名单豁免（hint 命中 allowList → 原样）——对齐
+                    // 「白名单优先于一切识别」语义；allowList 为空时与旧口径逐字一致（无条件按形态打码）。
+                    if (allowList.isNotEmpty() && ctx.hint != null &&
+                        allowList.any { ctx.hint.lowercase().contains(it) }
+                    ) {
+                        ctx.text
+                    } else {
+                        val category = if (looksLikeIdCard(ctx.text)) CAT_ID_CARD else CAT_MOBILE
+                        bump(counts, category)
+                        if (mode == MaskMode.MASK) MASK else ctx.text
+                    }
                 }
             }
         }
@@ -299,7 +305,7 @@ object DisplayMasker {
     /** 扫描 token 形态。 */
     private enum class TokenKind { LITERAL, BARE_NUMBER }
 
-    /** 命中 token + 推导的列名 hint（仅 LITERAL 有；裸数字无 hint 走形态）。 */
+    /** 命中 token + 推导的列名 hint（裸数字同样推导——UI-001 白名单豁免需要；旧消费方不读它的保持原行为）。 */
     private class TokenContext(val text: String, val kind: TokenKind, val hint: String?)
 
     /** SQL 字符串字面量的引号字符。 */
@@ -313,7 +319,7 @@ object DisplayMasker {
             val token = m.value
             val kind = if (token.first() == SQL_QUOTE) TokenKind.LITERAL else TokenKind.BARE_NUMBER
             sb.append(sql, last, m.range.first)
-            sb.append(mapper(TokenContext(token, kind, if (kind == TokenKind.LITERAL) columnHintBefore(sql, m.range.first) else null)))
+            sb.append(mapper(TokenContext(token, kind, columnHintBefore(sql, m.range.first))))
             last = m.range.last + 1
         }
         sb.append(sql, last, sql.length)

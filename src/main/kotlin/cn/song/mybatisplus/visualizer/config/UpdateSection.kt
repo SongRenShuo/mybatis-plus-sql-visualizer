@@ -389,6 +389,9 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         failureReason = null
         failureKind = null
         state = State.Idle
+        // UI-002 修复：备份在「会话中途」出现（如本轮升级动作落盘）后，重开设置页须重算回滚
+        // 可用性——此前只在语言切换 rebuild（updateTexts）时刷新，reset 不刷导致按钮滞后灰置。
+        refreshRollbackAvailability()
         renderState()
     }
 

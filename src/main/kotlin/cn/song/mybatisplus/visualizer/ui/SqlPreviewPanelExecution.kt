@@ -92,7 +92,10 @@ internal fun SqlPreviewPanel.showRollbackSql() {
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
         // T-MagpieGems W2：回放脚本写盘是离开 IDE 面——mode != OFF 从严打码（WARN 不给原文离开产品）
-        val mask = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskExportOn()
+        // UI-001 修复：白名单豁免贯穿重放导出链。
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val mask = settings.displayMaskExportOn()
+        val allowList = settings.displayMaskAllowList()
         val plan = cn.song.mybatisplus.visualizer.log.ReplayScriptExport
             .plan(sql, dialect, options.wrapTransaction) ?: return
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
@@ -112,6 +115,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                         plan,
                         mask,
                         cn.song.mybatisplus.visualizer.log.SqlExportService.formatTime(System.currentTimeMillis()),
+                        allowList,
                     ),
                 )
             }.onSuccess {
@@ -348,6 +352,7 @@ internal fun SqlPreviewPanel.exportPortableSql() {
                             rows,
                             format,
                             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskExportOn(),
+                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskAllowList(),
                         ),
                     )
         }.onSuccess {

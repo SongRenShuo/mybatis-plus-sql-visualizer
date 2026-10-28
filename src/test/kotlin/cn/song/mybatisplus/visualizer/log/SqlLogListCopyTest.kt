@@ -68,14 +68,32 @@ class SqlLogListCopyTest : BasePlatformTestCase() {
 
     // ---------- T-MagpieGems W2：Ctrl+C 复制是离开 IDE 面——mode != OFF 从严打码 ----------
 
-    private fun withMaskMode(mode: String, block: () -> Unit) {
+    private fun withMaskMode(mode: String, allowList: String = "", block: () -> Unit) {
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {
             settings.state.displayMaskMode = mode
+            settings.state.displayMaskAllowList = allowList
             block()
         } finally {
             settings.loadState(snapshot)
+        }
+    }
+
+    /** UI-001：复制链白名单豁免（textFor → displayMaskAllowList 贯穿）。 */
+    fun test复制链白名单列豁免() {
+        withMaskMode("MASK", allowList = "tel\nphone") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            val text = list.textFor(0, e)
+            assertTrue("白名单列复制应豁免原文：$text", text.contains("13812345678"))
+            assertFalse("豁免后不得残留打码：$text", text.contains("'***'"))
+        }
+        withMaskMode("MASK") {
+            val list = ExposedSqlEntryList()
+            val e = entry(restoredSql = "SELECT * FROM t WHERE phone = '13812345678'")
+            val text = list.textFor(0, e)
+            assertTrue("空白名单仍打码（状态隔离）：$text", text.contains("'***'"))
         }
     }
 

@@ -72,9 +72,14 @@ internal fun clickPreviewSql(
 /**
  * T-MagpieGems W2：预览浮层复制文本的从严归一——复制是离开 IDE 面，mode != OFF 一律按
  * MASK 行为打码（WARN 屏显原文，但复制出去的文本不得带原值）。OFF 原样（既有语义）。
+ * UI-001 修复：[allowList] 豁免与浮层屏显同口径（浮层屏显已按白名单豁免，复制不再回打）。
  */
-internal fun previewCopySafeText(text: String, maskMode: DisplayMasker.MaskMode): String =
-    if (maskMode == DisplayMasker.MaskMode.OFF) text else DisplayMasker.maskDisplay(text, true)
+internal fun previewCopySafeText(
+    text: String,
+    maskMode: DisplayMasker.MaskMode,
+    allowList: List<String> = emptyList(),
+): String =
+    if (maskMode == DisplayMasker.MaskMode.OFF) text else DisplayMasker.maskDisplay(text, DisplayMasker.MaskMode.MASK, allowList)
 
 /**
  * 修饰键是否表达列表多选意图（T-ClickPreviewCopyRestore）：Ctrl/Shift 单击是选择的开始或扩展，

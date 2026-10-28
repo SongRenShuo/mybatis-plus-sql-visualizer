@@ -17,6 +17,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
     private var savedMode = ""
     // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载（保存/恢复改用模式串）
     private var savedMask = "OFF"
+    private var savedAllowList = ""
     private var savedCrudStyle = ""
     private var savedThreshold = 0L
 
@@ -26,6 +27,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         savedMode = s.logListSqlDisplayMode
         // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载
         savedMask = s.displayMaskMode
+        savedAllowList = s.displayMaskAllowList
         savedCrudStyle = s.crudColorStyle
         savedThreshold = s.slowQueryThresholdMs
         s.logListSqlDisplayMode = PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
@@ -42,6 +44,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             val s = PluginSettings.getInstance().state
             s.logListSqlDisplayMode = savedMode
             s.displayMaskMode = savedMask
+            s.displayMaskAllowList = savedAllowList
             s.crudColorStyle = savedCrudStyle
             s.slowQueryThresholdMs = savedThreshold
         } finally {
@@ -254,14 +257,42 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
             val (_, maskedSql) = render(false, true, historical)
             assertTrue(maskedSql, maskedSql.contains("***"))
             assertFalse("开启脱敏不能复用明文缓存", maskedSql.contains("13812345678"))
-            // T-MagpieGems W2：缓存键由布尔脱敏态改为 MaskMode 名（OFF/WARN/MASK/BLOCK 四态互异）
-            assertEquals("MASK", e.cachedListLineFragmentsMaskMode)
+            // T-MagpieGems W2：缓存键由布尔脱敏态改为 MaskMode 名（OFF/WARN/MASK/BLOCK 四态互异）；
+            // UI-001 修复：键并入白名单维度（空白名单=尾部空串）
+            assertEquals("MASK|", e.cachedListLineFragmentsMaskMode)
         }
         assertFalse("脱敏态需重新计算语义缓存", cached === e.cachedListLineFragments)
         for (historical in listOf(true, false)) {
             val (_, plainSql) = render(false, false, historical)
             assertTrue("关闭脱敏不能沿用打码缓存", plainSql.contains("13812345678"))
-            assertEquals("OFF", e.cachedListLineFragmentsMaskMode)
+            assertEquals("OFF|", e.cachedListLineFragmentsMaskMode)
         }
+    }
+
+    /** UI-001：白名单豁免贯穿列表渲染链（renderer→displaySqlForList→DisplayMasker），缓存键含白名单。 */
+    fun test脱敏白名单_列表渲染豁免与缓存键() {
+        val sql = "SELECT phone FROM v179_orders WHERE phone = '13812345678'"
+        val e = LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(),
+            timestamp = 1_700_000_000_000L, sequenceNumber = 78, source = SqlSource.MCP,
+            executionTimeMs = 2000, databaseName = "MySQL · audit@localhost:3306",
+            sourceFile = "src/main/OrderMapper.java", sourceLine = 42,
+            errorText = null, captureProvenance = CaptureProvenance.MERGED)
+        val list = JList<LogSqlEntry>().apply { setSize(1200, 400) }
+        val live = LogEntryListCellRenderer()
+        fun render(withWhitelist: Boolean): String {
+            val s = PluginSettings.getInstance().state
+            s.displayMaskMode = "MASK"
+            s.displayMaskAllowList = if (withWhitelist) "tel\nphone" else ""
+            live.getListCellRendererComponent(list, e, 0, false, false)
+            return live.sqlLines.joinToString("\n") { text(it) }
+        }
+        val exempted = render(withWhitelist = true)
+        assertTrue("白名单列应豁免显示原文: $exempted", exempted.contains("13812345678"))
+        assertFalse("白名单豁免后不得残留打码", exempted.contains("***"))
+        val masked = render(withWhitelist = false)
+        assertTrue("摘除白名单须重新打码（缓存键含白名单）: $masked", masked.contains("'***'"))
+        assertFalse("不得沿用豁免缓存", masked.contains("13812345678"))
+        // 再改回白名单：键变化须再次重算恢复原文
+        assertTrue("白名单改回后恢复原文", render(withWhitelist = true).contains("13812345678"))
     }
 }
