@@ -31,7 +31,11 @@
 
 ## 三、实施记录
 
-（回填区）
+- 23:38 合并 master 完成（merge `5b0492ed`，121 笔；冲突 3+1 处裁决，W2 适配 RailCellRendererBase 重叠面）；LESSONS 夜间复盘日志单独入账（ed7acd35）。
+- 23:46 定向测试 16 类 248 例：GiantFileBudgetTest 1 红（DataSourceSelectorResults.kt 2162>2133，master 侧 ExecFileBinding 改造 +29 行的合并连带）→ 按守卫提额条款 2133→2194（a815b5d3）→ 复绿。终态 248/248。
+- 23:48 首次启动 runIde 失败：build.gradle.kts:181 要求先 bootstrap robot-server——`python record/bootstrap-robot-server.py` 下载 0.11.23 校验通过后重启沙盒（教训：本仓 -PgifRobotServer=true 前置 bootstrap，与 dev 树缓存不共享）。
+- 沙盒 build/MPSV-MagpieGems-UI243（init 脚本独立沙盒 + autoReload=false，启动脚本 .local/start-magpie-ui243.ps1）。
+- 语料：B1 用 `GET /mpj/locator/joinPlaceholder?tel=13812345678`（demo 既有端点，还原 SQL 含手机号形态字面量）；B3 用预览面板执行 `SELECT * FROM no_such_table_xyz`（OBJECT_MISSING）与语法错误（SYNTAX），PERMISSION/CONNECTION 以 ExecutionErrorCategoryTest 测试收口；B2 备份预置探针 record/stage_update_backup.py（复刻 UpdateBackupStore 磁盘形态：update-backup/ + rollback-*.zip 顶层目录名 + manifest.json 四键）。
 
 ## 四、状态去向
 
