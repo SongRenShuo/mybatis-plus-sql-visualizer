@@ -1,3 +1,5 @@
+import org.gradle.api.provider.Provider
+import org.gradle.api.services.BuildServiceParameters
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
@@ -8,6 +10,33 @@ plugins {
 
 // T-BuildScriptSplit：测试基建分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=分区指纹与基线一致 + testShards 全量绿。
+
+// ---------- T-ReleasePerf9（20261029）：测试链并发限流 ----------
+// 5 个分片（同 root project）在 org.gradle.parallel 下真并发起跑（20261028 三轮实测 START 戳
+// 相差 <60ms；「分片严格串行 911s」是 20261020 旧树的过时读数）——内存挤时 5 测试 JVM + verifier
+// 同时在场直冲 native OOM（hs_err Chunk::new / G1 virtual space，当日三轮作废 + 人肉分阶段
+// 11m13s 兜底）。本机制把「同时执行的测试任务数」钉在 laneLimit：
+//   * 缺省 2——10-28 实测 `--max-workers=2` 干净出读数的精准化（只限测试链，编译并行度不动，
+//     不再需要手工带 --max-workers 或人肉分阶段）；
+//   * releaseGate 编排内缺省 3——分片窗两波 ~360s，配合下方 testShardStagger 共享错峰，
+//     仍嵌回 verifyMarketplace 等待窗附近，一条命令总墙钟不劣化出 T8 权威轮 11m15s 量级；
+//   * -PtestShardConcurrency=N 显式覆盖（内存干净时可提 4~5 提速；1=测试链全串行）。
+// 限流 ≠ 降片：片数、每片类集、覆盖面逐一不变，压的是「同一时刻几片在跑」（R3 禁降片口径
+// 的另一维度）。usesService 是配置缓存官方通道；服务类无状态（MpvTestLaneLimiter.kt），
+// 只承担并发许可。DB 集成桶豁免——T-TestPerf14 的 testDb* 七路并行语义保持（独立命令，
+// 不与 testShards/releaseGate 同批）。
+val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
+    val invokedTaskNamesForLane = gradle.startParameter.taskNames
+    val laneLimitDefault = if (invokedTaskNamesForLane.contains("releaseGate")) 3 else 2
+    val laneLimit = providers.gradleProperty("testShardConcurrency").orNull
+        ?.toIntOrNull()?.coerceIn(1, 8) ?: laneLimitDefault
+    logger.lifecycle("mpv-test-lane: maxParallelLimit=$laneLimit (releaseGate default $laneLimitDefault; -PtestShardConcurrency overrides)")
+    gradle.sharedServices.registerIfAbsent("mpvTestLaneLimiter", MpvTestLaneLimiterService::class.java) {
+        // Gradle 9.7 API：BuildServiceSpec.maxParallelUsages = 同时可使用本服务的任务数上限
+        // （javap gradle-core-api-9.7.0 BuildServiceSpec 实证；服务实例上无 maxParallelLimit）。
+        maxParallelUsages.set(laneLimit)
+    }
+}
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：
 // LightPlatform 测试沙盒会无条件加载所有 bundled 插件，Vue 的 LSP 扩展（VueLspServerSupportProvider）
@@ -22,6 +51,12 @@ plugins {
 // 判断保留，兼容旧树/聚合容器同名不冲突）。
 tasks.withType<Test>().configureEach {
     val isDbIntegration = name == "testDatabase" || name.startsWith("testDb")
+    // T-ReleasePerf9：测试链并发限流挂接（mpvTestLaneLimiter 注册块见上方）——testShardN 分片、
+    // testExternal、默认 test/testFast 全部在此面内；DB 集成桶豁免（testDb* 七路并行语义保持）。
+    // 配置期调用，任务执行期共享限流许可；单任务独跑（test/testFast）不受限流影响。
+    if (!isDbIntegration) {
+        usesService(mpvTestLaneLimiter)
+    }
     classpath = classpath.filter {
         !it.name.contains("vue", ignoreCase = true) &&
             (isDbIntegration || (
@@ -389,6 +424,31 @@ var shardPlanClasses: String = ""
 // 供 auto-handicap 判定「临界不随清单更替漂移」。
 var shardPlanHashes: String = ""
 
+// T-ReleasePerf9（20261029）：分片错峰共享前置——T-ReleasePerf7 N1「分片叶子 doFirst sleep」的
+// 迁移版。叶子在 doFirst 内 sleep 会占住 T-ReleasePerf9 限流槽：releaseGate 编排内限流 3 时
+// 首波三片各睡 285s 占槽正常，第二波分片排队拿到槽后会再白睡整段 285s（总墙钟 +5min 量级）。
+// 改为所有分片 dependsOn 本任务——它只执行一次、睡满 testStaggerMs 后释放，分片们随后抢槽：
+// 分片真实起点仍 ≥ t0+285s，时间线与原「每片各自 doFirst sleep」逐字等价（仅延迟启动，
+// 不删不减不重排任何测试语义）；差异只在限流下不再有第二波白睡。缺省逻辑与 verifyGate 侧
+// gateStaggerMs 同款：releaseGate 编排内 285000ms，日常 testShards 0，-PtestStaggerMs 显式覆盖。
+// 块内声明局部值（CC 约束：脚本顶层 val 经任务动作引用不可序列化，T-ReleasePerf7 S2 实测）。
+tasks.register("testShardStagger") {
+    group = "verification"
+    description =
+        "分片错峰共享前置（releaseGate 编排内延迟 testStaggerMs 默认 285s；仅延迟启动，时间线与 T7 叶子 sleep 等价）"
+    val invokedTaskNamesForStagger = gradle.startParameter.taskNames
+    val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
+        ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
+    inputs.property("mpvStaggerMs", testStaggerMs)
+    doFirst {
+        val ms = (inputs.properties["mpvStaggerMs"] as? Number)?.toLong() ?: 0L
+        if (ms > 0) {
+            logger.lifecycle("testShardStagger sleep ${ms}ms")
+            Thread.sleep(ms)
+        }
+    }
+}
+
 intellijPlatformTesting {
     testIde {
         // T-TestPerf-04（2026-09-14）分片包含清单自动分区 + T-TestPerf2（2026-09-15）时长均衡：
@@ -714,13 +774,9 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
-        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟。缺省逻辑与 verifyGate 侧同款
-        //（mpv-verification gateStaggerMs）：releaseGate 编排内自动 285000ms，日常 testShards 0。
-        // 块内声明+doFirst 只捕获局部 Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，
-        // 配置缓存不可序列化——S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
-        val invokedTaskNamesForStagger = gradle.startParameter.taskNames
-        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
-            ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
+        // T-ReleasePerf9：错峰延迟迁至共享前置任务 testShardStagger（原 T-ReleasePerf7 N1
+        // 叶子 doFirst sleep 的迁移版，等价性论证见该任务注释）——限流下叶子 sleep 会占槽
+        // 令第二波分片白睡整段延迟，共享前置睡一次后释放。分片真实起点不变（≥ t0+285s）。
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
@@ -729,6 +785,8 @@ intellijPlatformTesting {
                 task {
                     // T-ContribDemoFixture：每片都先过 demo 预检；直接跑 testShardN 也不会绕过。
                     dependsOn("verifyDemoFixture")
+                    // T-ReleasePerf9：错峰共享前置（releaseGate 编排内延迟，日常 0）。
+                    dependsOn("testShardStagger")
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
@@ -763,15 +821,8 @@ intellijPlatformTesting {
                         val dir = File(root, "build/test-results/testShard$i")
                         dir.mkdirs()
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
-                        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（默认 0=关，浮动作不变）。
-                        // R1 warm 探针实证 verifyMarketplace 前段高占用（START 后 ~285s CPU 141~199%），
-                        // 之后 ~7 分钟低占用（在线等待窗，多分钟 <40%）；分片窗 208s 现状与高占用段
-                        // 完全重叠 = 双向争用（market +86~165s、分片 +22~43s）。本开关把分片真实
-                        // 起点推后 N 毫秒嵌入低占用段。仅延迟启动，不删不减不重排任何任务语义。
-                        if (testStaggerMs > 0) {
-                            logger.lifecycle("testShard$i stagger ${testStaggerMs}ms")
-                            Thread.sleep(testStaggerMs)
-                        }
+                        // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
+                        // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
                         logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
                     }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
@@ -965,7 +1016,8 @@ tasks.register("testDatabase") {
 tasks.register("testShards") {
     group = "verification"
     description =
-        "分片全量测试（时长均衡自动分区 $testShardCount 片；-PtestShardCount 调片数；跨进程并行用 dev-support/test-shards-parallel.ps1）"
+        "分片全量测试（时长均衡自动分区 $testShardCount 片；测试链并发限流见 -PtestShardConcurrency，缺省 2、" +
+            "releaseGate 编排内 3；限流压的是同时执行的片数，片数与覆盖面不变；跨进程并行用 dev-support/test-shards-parallel.ps1）"
     dependsOn("verifyDemoFixture")
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
