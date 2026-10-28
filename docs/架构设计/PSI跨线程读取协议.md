@@ -1,8 +1,9 @@
 # PSI 跨线程读取协议
 
-> 适用：插件内一切「在非 EDT 线程读 PSI / Document」的代码。
+> 适用：插件内一切「在非 EDT 线程读 PSI / Document」的代码，以及「在 EDT 上做文件/文档 I/O」的代码（第 5 节，2026-10-23 补）。
 > 出处：T-PsiCaptureProtocol（竞品第八轮报告 §9.4 O-35，来源 §7.2 Z-16）。
-> 工具与守卫：`psi/PsiSnapshot.kt`（两段式快照）、`convention/BannedApiSourceScanTest`（psiCapture / edtReadContract 两条规则）。
+> 工具与守卫：`psi/PsiSnapshot.kt`（两段式快照，`capture(element)` 捕获 + `validate()` 校验）、`convention/BannedApiSourceScanTest`（psiCapture / edtReadContract 两条规则）。
+> 最后核实：2026-10-27（`PsiSnapshot` 的 `capture` / `validate` / `Valid` 形态未变）。
 
 ---
 
@@ -135,7 +136,29 @@ app.executeOnPooledThread {
 `actions/ConvertToSqlAction.kt` 4 处（XML 选区/全文件语句候选，属「文件级捕获 + 块内重取 PSI」，
 不是元素级快照；未在 T-PCP-02 的锚点范围内）。
 
-## 5. 落地备注（Z-16）
+## 5. 丙类：EDT 上的文件 I/O（2026-10-23 实证补充）
+
+本协议原先只谈「跨线程读 PSI/Document 的元素有效性」。2026-10-23 的 `T-PreviewChainNoise` 收口
+（`9809a5b7`）证明了**同一条链上的第二个独立约束**：EDT 上做文件 I/O 同样是违规，而且此前一直被
+当成「读写 PSI 之外的旁枝」。
+
+- **现象**：预览执行链有一处 `VirtualFile.inputStream` 读盘落在 EDT 上，日志里出现 9 条
+  `Plugin to blame: SQL Visualizer` 的 SEVERE（平台慢操作断言）。改造后降到 0 条。
+- **规则**：EDT 上不做 `VirtualFile.inputStream` / `document.setText` 这类文件或文档 I/O。
+  读盘挪后台（形态 B），改文档必须派 EDT 且包 `WriteAction`——注意 262 起
+  `FileDocumentManager.isDocumentUnsaved` 取代了已从接口移除的 `Document.isModified()`，
+  而 BGT 改文件 document 即使用 `WriteAction` 包裹也救不回来（EDT-only）。
+- **同族两处**（同批收口）：`createBlocking` 之类阻塞 API 在裸池线程（`executeOnPooledThread`）
+  上缺进度上下文会打 SEVERE——兜底形态是缺上下文才补 `EmptyProgressIndicator`，已有指示器不替换；
+  注册在父 disposable 上的子监听不要在 `dispose()` 里手动二次摘除（ObjectTree 后序子先父后，
+  二次摘会抛「Can't remove document listener」）。
+- **验证边界**：这三类都**只在 runIde 沙盒与真机暴露**，headless 测试全绿不代表没问题。
+  判断「有没有用户受影响」看 IDE 日志里的 `Plugin to blame` 计数，不看测试读数。
+
+跳转族在 EDT 上只做平台模型读（`ModuleManager` / `LocalFileSystem`），不涉及文件 I/O，
+因此不受本节约束，仍按第 3 节「持读权限」一条执行。
+
+## 6. 落地备注（Z-16）
 
 - 锚点更正：第八轮报告 §7.2 Z-16 的引用里出现的 `StackLocator` 是**比喻性**引用——它是
   agent 子项目的 Java 调用栈定位工具（`sub-projects/sql-visualizer-agent/.../util/StackLocator.java`），

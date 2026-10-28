@@ -82,6 +82,8 @@ class EntityResolver {
         }
 
         val value = resolveInternal(entityClass)
+        // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
+        if (cache.size >= maxCacheEntries) cache.clear()
         cache[key] = Entry(stamp, value)
         return ColumnNameCalibrator.calibrate(project, value)
     }
@@ -554,6 +556,14 @@ class EntityResolver {
 
         /** 缓存键 → 条目（项目级，跟随 EntityResolver 生命周期）。 */
         private val cache = ConcurrentHashMap<EntityCacheKey, Entry>()
+
+        /**
+         * 券02（T-PerfSweep27-02）缓存容量上限：配置签名变化后旧键永不命中也永不淘汰，
+         * 无上限时长会话缓慢累积——超限整体清空（HbmXml 负缓存同范式；键轻值纯，
+         * 重解析成本可接受）。internal 可写仅测试缝（生产不改）。
+         */
+        @JvmStatic
+        internal var maxCacheEntries: Int = 4096
 
         /** 清空缓存（配置变更 / 项目关闭时调用）。 */
         @JvmStatic

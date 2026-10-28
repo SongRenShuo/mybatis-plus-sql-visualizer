@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from gifkit import Recorder
 from nav import close_preview, force_en_us, goto_col, shot, trigger_preview
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a34_pagination.mp4"
 
 FILE_QUERY = "mybatis-plus-demo/mapper/UserMapper.xml"
@@ -60,19 +60,15 @@ def main():
 
     # ---- prep（不入镜）：开 XML + 光标压语句 + 开好第一张预览 ----
     close_preview(body_xy=DLG_BODY)
-    pyautogui.click(600,500)
-    time.sleep(0.5)
-    pyautogui.hotkey("ctrl", "shift", "n")
-    time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.3)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.04)
-    time.sleep(1.8)
-    pyautogui.click(*RESULT_ROW)
-    time.sleep(0.4)
-    pyautogui.click(*RESULT_ROW)
-    time.sleep(2.5)
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + typewrite 必撞同名文件——
+    # native-mybatis-demo 也有 NativeUserMapper.xml，实测开错到那个文件，
+    # LINE_A=161 落在错误文件里 → 弹「选择要预览的 SQL」候选框，整条 take 报废）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/resources/mapper/UserMapper.xml", settle=2.0)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     goto_col(LINE_A, COL_A)
     trigger_preview()
 

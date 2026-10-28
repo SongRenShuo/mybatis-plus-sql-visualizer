@@ -131,6 +131,11 @@ abstract class McpToolsetSupport(private val toolName: String) {
     ): String {
         val token = AUDIT_SEQ.incrementAndGet()
         AUDIT_CTX[token] = AuditContext(tool, argsSummary, System.currentTimeMillis())
+        // 券04（T-PerfSweep27-04）：写入点顺带清扫——取消且 continuation 永不 resume 时
+        // 双路径记账（AuditGate.resumeWith/onFailure）都不会触达，token 残留；同步 O(小表)
+        // 清扫兜底。**不得改用 try/finally 包裹挂起调用**——K2 对该形态无条件生成 SpillingKt
+        // 引用，243 平台 stdlib 缺该类（verifier 红线，见类 KDoc；P-4 证伪结论）。
+        sweepAuditContexts()
         return suspendCoroutineUninterceptedOrReturn { cont ->
             val gate = AuditGate(token, cont)
             val outcome = try {
@@ -234,6 +239,33 @@ abstract class McpToolsetSupport(private val toolName: String) {
 
         /** 审计 token 发号器。 */
         private val AUDIT_SEQ = java.util.concurrent.atomic.AtomicLong()
+
+        /**
+         * 券04（T-PerfSweep27-04）旁路表容量上限：常态 0~2 条（每在途工具一条），取消残留是
+         * 低频异常路径，64 上限只为防「控制通道失效形态下长时间无记账」的病态累积。
+         */
+        internal const val AUDIT_CTX_MAX = 64
+
+        /**
+         * 券04（T-PerfSweep27-04）过期判定窗：远超 McpDbExecutor 的 queryTimeout 量级（秒级），
+         * 在途工具不会被判过期；即使误删活条目，记账端 `remove ?: return` 语义只丢一条审计行。
+         */
+        internal const val AUDIT_CTX_STALE_MS = 10 * 60_000L
+
+        /**
+         * 券04（T-PerfSweep27-04）审计旁路表清扫：移除过期条目 + 超限按 started 移除最旧。
+         * **纯同步函数**（不得触碰挂起调用/try-finally-挂起形态，SpillingKt 红线见类 KDoc）；
+         * audit() 写入后调用，挂起前本帧执行完毕。测试直调（internal 可见）。
+         */
+        internal fun sweepAuditContexts(now: Long = System.currentTimeMillis()) {
+            AUDIT_CTX.values.removeIf { now - it.started > AUDIT_CTX_STALE_MS }
+            if (AUDIT_CTX.size > AUDIT_CTX_MAX) {
+                AUDIT_CTX.entries
+                    .sortedBy { it.value.started }
+                    .take(AUDIT_CTX.size - AUDIT_CTX_MAX)
+                    .forEach { AUDIT_CTX.remove(it.key) }
+            }
+        }
 
         /** 成功记账并移除上下文（AuditGate 同步/挂起两路径共用；静态域供嵌套类触达）。 */
         private fun auditOk(token: Long) {

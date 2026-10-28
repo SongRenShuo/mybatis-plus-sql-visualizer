@@ -140,7 +140,7 @@ class ExecDialectRoutingTest {
     @Test
     fun `URL兜底_dm子协议映射平台DM方言id`() {
         val id = ExecDialectRouting.urlFallbackId(
-            StubDs("jdbc:dm://114.66.55.245:5236"),
+            StubDs("jdbc:dm://dbx-test-host:5236"),
             listOf("MySQL", "PostgreSQL", "DM"),
         )
         assertEquals("jdbc:dm 应映射平台 DM 方言 id", "DM", id)

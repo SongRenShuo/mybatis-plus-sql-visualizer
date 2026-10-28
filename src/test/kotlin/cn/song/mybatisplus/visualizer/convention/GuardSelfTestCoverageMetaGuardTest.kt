@@ -691,6 +691,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
                     "摘 loadState 归一）已实测。",
             ),
+            // ---- T-PerfSweep27-03：机械优化结构静检守卫（2026-10-27） ----
+            GuardEntry(
+                "convention/PerfSweep27StaticGuardTest.kt",
+                emptyList(),
+                "券03 机械优化源码结构钉（T-PerfSweep27-03）：判定内核内联于两个用例——" +
+                    "读 SqlCompletionContributor.kt 源码断言 isDebugEnabled 块门控存在且 " +
+                    "editor 等急切读取落入门控内；读 HqlGutterLineMarkerProvider.kt 断言 " +
+                    "showGutterIcon 开关判定行先于 hasStringFirstArgument 调用行（关闸不付 resolve）。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向探针（摘门控改 run{ / 开关判定后置）两断言各恰 1 红，实施轮已实测。",
+            ),
             GuardEntry(
                 "convention/ExplainAskPasswordChannelGuardTest.kt",
                 emptyList(),

@@ -111,3 +111,6 @@ gitee-token.*
 docs/内部/
 record/*.run.log
 record/_elev_ac.log
+
+# Marketplace 截图上传临时目录（一次性产物，不入库）
+.tmp-marketplace-upload/

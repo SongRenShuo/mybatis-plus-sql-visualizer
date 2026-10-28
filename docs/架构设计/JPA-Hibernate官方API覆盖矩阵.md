@@ -8,7 +8,7 @@
 >
 > **任务编号**：对应《[ORM框架功能覆盖缺口分析与补全-开发计划](../开发计划/20260904-2340-ORM框架功能覆盖缺口分析与补全-开发计划.md)》J1~J23；「已覆盖」表示现有能力无需新任务。
 >
-> **插件现状的核实方式**：源码全量检索（psi/jpa、converter/jpa、SqlPreviewService）+ demo 工程（jpa-hibernate-demo）对照，2026-09-04 二轮调研定稿；API 侧以本地 jar javap 为唯一权威，文档只补引入版本与语义。2026-09-05 起按 M39 三波交付逐行勾行（备注列尾标「M39 交付」）。
+> **插件现状的核实方式**：源码全量检索（psi/jpa、converter/jpa、SqlPreviewService）+ demo 工程（jpa-hibernate-demo）对照，2026-09-04 二轮调研定稿；API 侧以本地 jar javap 为唯一权威，文档只补引入版本与语义。2026-09-05 起按 M39 三波交付逐行勾行（备注列尾标「M39 交付」）。2026-10 的实体解析与嵌入列命名修复（T-EntityNameScope / T-EmbeddedColPrefix / T-EmbeddedHostCascade）以「M39 后修复」标注，不改变矩阵状态列的语义。
 
 ---
 
@@ -158,7 +158,7 @@
 | `@SequenceGenerator(s)` / `@TableGenerator(s)` | 🟡 | J14 | 序列名/分配大小元数据记录；前置 SELECT 形态部分；M39 交付 |
 | `@Enumerated` / `@Temporal` | ⬜ | J18 | 绑定值形态/精度 |
 | `@Access` | ⬜ | J18 | FIELD/PROPERTY 决定属性发现面 |
-| `@Embedded/@Embeddable` | ✅ | J18 | 嵌入列展平（无 JOIN）；M39 交付 |
+| `@Embedded/@Embeddable` | ✅ | J18 | 嵌入列展平（无 JOIN）；M39 交付。命名约定按 `application.yml` 的 Hibernate 命名策略推断 component-path 前缀，作用域＝实体所在模块（T-EmbeddedColPrefix，`6919d8ef`）→ 判不出再级联查询宿主模块（T-EmbeddedHostCascade，`b3970e1f`：实体打包进 JAR/lib 模块、命名策略配在宿主 App 的形态）；两档都判不出不回退工程级扫描，防多模块兄弟配置外溢 |
 | `@EmbeddedId` / `@IdClass` | ✅ | J18 | 复合主键 WHERE 多列等值；M39 交付 |
 | `@AttributeOverride(s)` / `@AssociationOverride(s)` | ✅ | J18 | 展平时套用列名覆写（嵌入展平）；M39 交付 |
 | `@Version`（jakarta） | 🟡 | J8 | 记入 versionColumn 元数据；UPDATE 追加 SET version+1 WHERE version=? 注入未接（远期）；M39 交付 |
@@ -420,3 +420,4 @@
 |------|------|
 | 2026-09-04 | 初版：四智能体并行调研（jar javap + 官方文档 + releases 三重交叉）建立 8 个分类面（Spring Data JPA 6 节、jakarta 3 节、JPQL/HQL 2 节、Criteria 6 节、Hibernate Session/注解/HibernateTemplate 3 节）；「jar 未能证实、依赖文档」条目已逐节标注；对应开发计划任务 J1~J23 |
 | 2026-09-05 | M39 三波交付勾行：Wave1（`a0bd5aa` 转换/定位四线并行）+ Wave2（`7e11d31` CRUD 派发与 demo 写路径语料）+ Wave3（F 智能体 Specification/QBE/查询深化，代码在工作区待提交），测试基线约 1700+ 用例。保持原状行：§1.1 `Repository` 标记接口 / `findAllById` / `ListCrudRepository` / `deleteInBatch`（清单未列）；§1.3 `UPDATE / DELETE JPQL`（清单仅勾 §3.1 UPDATE SET 行）；§1.4 `QuerydslPredicateExecutor`（J23 文档化边界）；§1.5 `Tuple`；§2.1 `createNamedQuery`（🟡）；§2.2 `@NamedQuery(s)`（🟡，清单仅勾 §1.3 同名行）；§3.1 标量子查询行状态保持 🟡 仅更新备注。`ExampleMatcher.StringMatcher/MatchMode` 行经 QueryByExampleConverter 源码核对补勾 🟡（StringMatcher 5 形态已接、MatchMode 未接）；§2.2 节头消费注解清单随 M39 扩展更新 |
+| 2026-10-27 | **M39 后实体解析簇回填**（矩阵状态列不变，全部属 ✅ 行的实现加固）：①实体解析按查询宿主模块可见性收敛（`78878520` T-EntityNameScope，2026-10-16）——同名实体不再跨模块误判；②同 FQN 跨模块源码按模块依赖方向仲裁（`1b61964f`）、两份都判为工程内容时按源码形态收窄（`a52d083d`，jar 位于 resources/lib）、workspace 形态零候选拓宽（`91400a3e`，三条均 2026-10-23）、库内宿主叠加工程同名实体（`54059ef0`，2026-10-22）；③嵌入列命名作用域＝实体所在模块（`6919d8ef`）→ 判不出级联宿主模块（`b3970e1f` T-EmbeddedHostCascade，2026-10-26，解 JAR/lib 实体 @Embedded 丢 component-path 前缀的外部报障），§2.2 `@Embedded/@Embeddable` 行备注已补全链；④诊断锚点：`[T-EmbeddedIdentify]` 前缀日志（`8267394d`，覆盖 JPA 轨与 MP 轨的嵌入展平出口、命名档来源、`resolveHqlTable` 实体解析，四处源文件、INFO 级无开关不改语义） |

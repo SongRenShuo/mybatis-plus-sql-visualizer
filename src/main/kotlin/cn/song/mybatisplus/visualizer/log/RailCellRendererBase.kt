@@ -215,13 +215,21 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         useSelectionFill: Boolean,
         list: JList<*>?,
     ) {
-        val fragments = SqlEntryPresentation.headerFragments(
-            entry = entry,
-            selected = isSelected,
-            showDuration = showDuration(),
-            templateCounts = templateCountsSnapshot(),
-            dedupeCounts = dedupeCountsSnapshot(),
-        )
+        // 券01（T-PerfSweep27-01）：静态段/来源段按条目缓存，键含全部相关设置维度（键不等即重算，
+        // 显示格式严格跟随设置）；⨉去重与×N 同结构徽章是会话级可变输入，恒每次算。
+        val cacheKey = SqlEntryPresentation.headerStaticCacheKey(showDuration())
+        if (entry.cachedHeaderKey != cacheKey || entry.cachedHeaderCore == null) {
+            entry.cachedHeaderCore = SqlEntryPresentation.headerStaticFragments(entry, showDuration())
+            entry.cachedHeaderSource = SqlEntryPresentation.headerSourceFragments(entry)
+            entry.cachedHeaderKey = cacheKey
+        }
+        val fragments = entry.cachedHeaderCore.orEmpty() +
+            SqlEntryPresentation.headerBadgeFragments(
+                entry = entry,
+                templateCounts = templateCountsSnapshot(),
+                dedupeCounts = dedupeCountsSnapshot(),
+            ) +
+            entry.cachedHeaderSource.orEmpty()
         val width = sqlAreaWidth(list, this)
         headerLine.foreground = fg
         headerLine.clear()

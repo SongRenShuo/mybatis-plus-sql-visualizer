@@ -160,7 +160,7 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 3. **跨盘搬移的中间态占空间**：C 盘仅剩 3.0 GB，禁用"先复制到 F 盘再手动删 C 盘"的两步法，须用 `robocopy /MOVE` 逐文件搬移删除，避免中途写满。
 4. **`robocopy` 退出码语义**：0~7 均为成功，8 以上才是失败。脚本判断禁用 `&&` 串联（与本仓既有收口纪律同款理由）。
 5. **D 项的内存反效果**：独立 home 会让每路各自持有 daemon 与 transform 缓存，在 C2（已超售）现状下可能加剧页面交换，反而变慢。故 D 项须在 A 项完成、内存压力缓解后再评估。
-6. **B 项与并行会话同文件**：`~/.gradle/gradle.properties` 是全局文件，其它项目（如 coolrequest-vip 依赖其中的 `codex.sdk.jar`）共用，改动前须确认不误删他人条目。
+6. **B 项与并行会话同文件**：`~/.gradle/gradle.properties` 是全局文件，其它项目（如某个第三方工程依赖其中的 `codex.sdk.jar`）共用，改动前须确认不误删他人条目。
 7. **E 项的既有定案不可轻率推翻**：T-TestPerf-01 关闭 build cache 是三次实证假失败后的处置，重启前必须先完成 P-4 的根因查证。
 
 ---
@@ -340,8 +340,8 @@ org.gradle.caching=true
 # JVM 内存优化
 org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=256m
 
-# coolrequest-vip: codex-java-sdk 的本地 jar（该仓库 build.gradle.kts 的默认值指向作者机器的路径）
-codex.sdk.jar=F:/code/Java/Github/other/houxinlin/coolrequest-vip/libs/codex-java-sdk-1.0-SNAPSHOT.jar
+# 某第三方工程：其 build.gradle.kts 依赖一个本地 jar，默认值指向作者本机路径
+codex.sdk.jar=<该工程本地的 codex-java-sdk jar 路径>
 ```
 
 **改前读数**：`--stop`（01:35）后约 5 分钟，并行车道即拉起新 GradleDaemon（pid 18972），参数仍是 `-Xmx2g -XX:MaxMetaspaceSize=256m`（用户级旧值）——覆盖冲突与「每次构建拉新 daemon」的实证；此时机器另有 7 个非 gradle java 进程（IDE 等）。
