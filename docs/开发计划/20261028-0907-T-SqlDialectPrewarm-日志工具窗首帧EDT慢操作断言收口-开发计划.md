@@ -3,7 +3,7 @@
 **创建时间**：2026-10-28 09:07
 **触发源**：用户上报 `java.lang.Throwable: Slow operations are prohibited on EDT`，栈顶落点 `LogToSqlPanel.createResultEditor(LogToSqlPanel.kt:647)` → `SqlLogToolWindowFactory.createToolWindowContent(SqlLogToolWindowFactory.java:50)` → `ToolWindowSetInitializer`（即**项目打开、侧边栏工具窗首次装配**这一拍）
 **基线**：master `aa9bb1ac`。根因分析读的是 `fb0a73fd` 的代码；期间并行会话前进一笔 `aa9bb1ac`（T-ConsoleBind，只动 `execute/DataSourceSelectorResults.kt` + 新增 `ExecFileBinding` 与其测试），与本册涉及文件无交集，故本册全部 `文件:行` 取证在新基线上仍然成立（dev 侧同文件与 master 无差异，已 `git diff master...dev` 核实）
-**实施基线**：dev `a56c8e48`（2026-10-28 由 master `c584a89d` 整支并入 dev，合并后 `dev..master` = 0；本册在 dev 树上逐条复验行号仍成立，见 §九）
+**实施基线**：dev 分支（代码面提交 `a56c8e48`＝master `c584a89d` 整支并入后的 dev；其后 dev 上仅追加 docs 合并 `6972a5d1`，本册引用的代码文件在两者间无差异。合并后 `dev..master` = 0；本册在 dev 树上逐条复验行号仍成立，见 §九）
 **占号**：本册不占 O/R/D/V 编号（近期并行会话高频占号且已出现 O-150 撞车；合流时统一分配）
 
 ## 一、结论先行
