@@ -35,6 +35,8 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 !**/src/reloc/**/build/
+# T-TestShardParallel：每条并行 lane 的 buildSrc 独立输出目录（-PmpvBuildSrcDir）
+buildSrc/build-lane*/
 
 ### VS Code ###
 .vscode/
@@ -73,6 +75,12 @@ out/
 
 ### 演示 GIF 录制（record/ 只入库可复用脚本，中间产物不进仓库）###
 record/perf/
+record/shots/
+record/robot-plugins/
+record/templates/
+record/tmp/
+# 提权录制封装固定写在 record 根目录的单次运行日志。
+record/_elev_run.log
 record/**/__pycache__/
 # Python 字节码缓存：dev-support 下的编排脚本（拆文件/权重刷新等）本地 import 即生成
 dev-support/**/__pycache__/
@@ -101,3 +109,8 @@ gitee-token.*
 # 竞品逆向分析等不宜公开的内容；本地可读，父仓不跟踪。
 # 注意：git clean -x 会连此目录一并删除，清理时勿带 -x。
 docs/内部/
+record/*.run.log
+record/_elev_ac.log
+
+# Marketplace 截图上传临时目录（一次性产物，不入库）
+.tmp-marketplace-upload/
