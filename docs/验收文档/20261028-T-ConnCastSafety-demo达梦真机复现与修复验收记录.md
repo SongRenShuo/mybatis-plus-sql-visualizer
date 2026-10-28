@@ -136,7 +136,25 @@ GET /probe/conn-cast →
 > 取证方法留档（下次复用）：demo 里新增 `/probe/conn-cast`（`ConnCastProbeController`），走 `DriverManager` 取原始连接并强转到驱动实现类，同时回显 `proxyHandler` / `proxyInterfaces` / `agentMarker` / `jvmArgs`。判归属看 `proxyHandler`：我们的包装是 `cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler`。
 > 排障中的一次误判已纠正：曾以「两次请求拿到同一个 `$Proxy96`」推断「不是我们的代理」——实际两次是重启后的不同 JVM，代理类编号各自从零计，不能作判据。
 
-## 五、结论与边界
+## 五、XA 链路（用户实际配置：Atomikos + `DmdbXADataSource`）
+
+报障用户补充了真实用法：`atomikosDataSourceBean.setXaDataSourceClassName("dm.jdbc.driver.DmdbXADataSource")`，JDK 1.8.0_301。这条链路不走 `DriverManager`，必须单独验。用驱动自带的 `DmdbXADataSource` 直接复刻（不引 Atomikos），三组对照：
+
+| 组合（均 `-Xverify:none`，模拟 IDE 运行） | `XAConnection.getConnection()` | handler | 接口集 |
+|---|---|---|---|
+| 不挂 agent（基线） | `com.sun.proxy.$Proxy0` | `dm.jdbc.driver.DmdbPooledConnection$1` | `IDmdbConnection, Connection` |
+| 旧包 agent | `com.sun.proxy.$Proxy0` | 同上（达梦自己的 XA 包装） | `Connection, IDmdbConnection, Wrapper, AutoCloseable` |
+| 新包 agent | `com.sun.proxy.$Proxy0` | 同上 | `IDmdbConnection, Connection`（与基线逐项一致） |
+
+三条结论：
+
+1. **达梦 XA 自己就返回代理**：基线（完全不挂 agent）下 `XAConnection.getConnection()` 也是 `$Proxy0`，handler 是 `dm.jdbc.driver.DmdbPooledConnection$1`。所以「把 XA 拿到的连接直接强转到 `DmdbConnection`」在任何情况下都失败——这是达梦 XA 的设计，不是插件缺陷；正确取法是 `unwrap(DmdbConnection.class)`（基线/旧包/新包三组 unwrap 都成功）。
+2. **旧包确实把我们的代理塞进了达梦 XA 包装里**：旧包那组接口集比基线多 `Wrapper, AutoCloseable`，正是外层达梦代理把内层对象的接口并进来的结果，说明内层不是驱动原生连接。
+3. **修复覆盖 XA 路径**：新包接口集与基线逐项一致，内层已回到 `DmdbConnection`。用户「达梦/Atomikos 内部对连接做强转」的形态，修复后不会再撞到我们的 `$Proxy`。
+
+> 因此对报障用户的交付口径应是：升级到 2026.10.28 后，XA + Atomikos 场景下插件不再介入连接对象；若用户代码自己把 XA 连接强转到 `DmdbConnection`，那是达梦 XA 的固有行为（基线同样失败），需改用 `unwrap`。
+
+## 六、结论与边界
 - **复现成立**：旧 agent 在 demo 达梦链路上直接把驱动打废（VerifyError）；换织入成功的驱动即可原样打出用户 CCE 文本。**修复成立**：新 agent 在两条链路上都回到「宿主原对象」。
 - **边界**：本节验的是 agent 与真实驱动的交互，未跑 runIde 全 UI 流程；「插件侧注入 `-javaagent` → 应用启动 → 面板出条目」的完整 GUI 链路由 `e2eFakeIde` 与既往 runIde 批次覆盖。
 - 用户驱动版本未取得，`DmdbConnection` 强转的发起方（用户代码/框架）亦未取证；本轮按「代理无法伪装具体类」的构造性归因，不依赖上述两点。
