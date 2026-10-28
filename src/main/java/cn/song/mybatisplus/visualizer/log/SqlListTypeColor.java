@@ -70,7 +70,12 @@ public final class SqlListTypeColor {
     private static final ConcurrentHashMap<StatementType, Map.Entry<String, Color>> PARSED_CACHE =
             new ConcurrentHashMap<>();
 
-    /** 类型 → 默认色（用户未配置 / 配置非法时的兜底）。 */
+    /**
+     * 类型 → 默认色（用户未配置 / 配置非法时的兜底）。
+     *
+     * DDL 两档<b>复用</b> DML 的色（T-DdlTypeColor）：CREATE 取增绿、DROP 取删红。
+     * 视觉区分不靠色相而靠<b>线条形态</b>（虚线 vs 实心，见 TypeColorBar 的虚线绘制）。
+     */
     public static Color defaultOf(StatementType type) {
         switch (type) {
             case SELECT:
@@ -81,9 +86,22 @@ public final class SqlListTypeColor {
                 return COLOR_UPDATE;
             case DELETE:
                 return COLOR_DELETE;
+            case CREATE:
+                return COLOR_INSERT;
+            case DROP:
+                return COLOR_DELETE;
             default:
                 return COLOR_SELECT; // OTHER
         }
+    }
+
+    /**
+     * 是否 DDL 类型（色条画虚线）。
+     *
+     * 纯函数，渲染热路径直接调用（不做设置读取）。
+     */
+    public static boolean isDdl(StatementType type) {
+        return type == StatementType.CREATE || type == StatementType.DROP;
     }
 
     /** 当前样式（读设置薄壳）。 */
@@ -150,6 +168,11 @@ public final class SqlListTypeColor {
             case UPDATE:
                 return state.getCrudColorUpdate();
             case DELETE:
+                return state.getCrudColorDelete();
+            // DDL 不新增设置项（用户定案）：复用对应 DML 的色
+            case CREATE:
+                return state.getCrudColorInsert();
+            case DROP:
                 return state.getCrudColorDelete();
             default:
                 return ""; // OTHER
