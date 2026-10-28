@@ -856,6 +856,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 regexEnabled(),
                 matchCaseEnabled(),
                 regexMemo);
+        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（与日志页同口径；单遍无分配）
+        sqlCellRenderer.maxDurationMs = LogEntryRailKt.maxDurationOf(filteredEntries);
         String query = searchField.getText().trim();
         boolean invalidRegex = !query.isEmpty()
                 && (regexEnabled() || query.startsWith(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX))
