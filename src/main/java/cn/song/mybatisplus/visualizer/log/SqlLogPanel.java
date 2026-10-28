@@ -1143,6 +1143,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // T-SqlLogToolbarEdt W1：覆写了 update 的动作默认落 EDT → 显式 BGT
         @Override public ActionUpdateThread getActionUpdateThread() { return ActionUpdateThread.BGT; }
 
+        ClearAction() {
+            super(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Clear);
+        }
+
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Clear);
@@ -1151,6 +1155,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(AnActionEvent e) {
+            // 清空也是捕获事件——尾随状态机须感知（master SqlLogPanel.kt onClear 同款），
+            // 否则清除后尾随错停在 FOLLOWING/PAUSED 的旧态上
+            tailFollow.onClear();
             manager.getEntries().clear();
         }
     }

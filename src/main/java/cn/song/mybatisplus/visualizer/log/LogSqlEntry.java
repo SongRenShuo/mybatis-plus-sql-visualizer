@@ -129,6 +129,19 @@ public record LogSqlEntry(
     private static final java.util.Map<LogSqlEntry, StatementType> STATEMENT_TYPE_CACHE =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
+    /**
+     * 三指纹侧表缓存（STATEMENT_TYPE_CACHE 同款 WeakHashMap 形态）：master 侧三键是
+     * {@code by lazy} 惰性字段——每条只算一次；Java record 无实例字段承载，纯函数每次现算
+     * 在结构聚类排序（LogPipelinePerfTest 实测 684ms 超预算 120ms）与屏蔽筛选热路径上不可接受。
+     * 键为条目（record 值相等），弱键随条目 GC；指纹均由组件派生，值相等条目共享结果语义等价。
+     */
+    private static final java.util.Map<LogSqlEntry, String> DEDUPE_KEY_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final java.util.Map<LogSqlEntry, String> SUPPRESS_KEY_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final java.util.Map<LogSqlEntry, String> STRUCTURE_KEY_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     /** 行片段缓存载荷（片段 + 模式一并存取，保证两值一致）。 */
     private record LineFragmentCacheEntry(List<List<SqlSemanticFragment>> fragments, SqlListDisplayMode mode,
                                           Boolean masked) {
@@ -330,10 +343,15 @@ public record LogSqlEntry(
      * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
      * T-LogDedupeMpMark：指纹前先 normalizeSqlWhitespace——同一语句的双路日志副本（named 行 trim 过 /
      * prepared 行尾随空白原样保留）仅差首尾空白，原文指纹判重永不命中。
-     * （record 无实例字段，纯函数每次现算——FNV-1a 线性扫描，成本可忽略。）
+     * （record 无实例字段，侧表缓存承载「每条只算一次」——master 的 by lazy 等价。）
      */
     public String dedupeKey() {
-        return LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace(restoredSql));
+        String cached = DEDUPE_KEY_CACHE.get(this);
+        if (cached == null) {
+            cached = LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace(restoredSql));
+            DEDUPE_KEY_CACHE.put(this, cached);
+        }
+        return cached;
     }
 
     /** Kotlin {@code val dedupeKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
@@ -349,7 +367,12 @@ public record LogSqlEntry(
      * （规则侧 {@code SqlSuppressRuleManager} 同源，两侧必须同函数）。
      */
     public String suppressKey() {
-        return LogSqlModelsKt.suppressFingerprint(restoredSql);
+        String cached = SUPPRESS_KEY_CACHE.get(this);
+        if (cached == null) {
+            cached = LogSqlModelsKt.suppressFingerprint(restoredSql);
+            SUPPRESS_KEY_CACHE.put(this, cached);
+        }
+        return cached;
     }
 
     /** Kotlin {@code val suppressKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
@@ -363,7 +386,12 @@ public record LogSqlEntry(
      * 空集短路下无结构规则则零成本。
      */
     public String structureKey() {
-        return LogSqlModelsKt.structureFingerprint(restoredSql);
+        String cached = STRUCTURE_KEY_CACHE.get(this);
+        if (cached == null) {
+            cached = LogSqlModelsKt.structureFingerprint(restoredSql);
+            STRUCTURE_KEY_CACHE.put(this, cached);
+        }
+        return cached;
     }
 
     /** Kotlin {@code val structureKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */

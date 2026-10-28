@@ -506,6 +506,7 @@ public class SqlLogAutoSaver {
                     || entry.requestTag() != null || entry.updateCount() != null
                     || !entry.sourceCandidates().isEmpty() || entry.stackDigest() != null
                     || entry.actualSql() != null
+                    || entry.captureProvenance() != CaptureProvenance.UNKNOWN
                     || entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
                 w.write("-- pd: ");
                 SqlLogParamCodec.writeEncodedEntry(entry, w);

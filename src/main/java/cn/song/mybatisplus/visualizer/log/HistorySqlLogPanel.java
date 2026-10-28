@@ -74,7 +74,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private final DefaultListModel<LogSqlEntry> sqlListModel = new DefaultListModel<>();
-    private final SqlEntryList sqlList = new SqlEntryList(sqlListModel);
+    // 视口宽度跟随（master HistorySqlLogPanel.kt:85 同款）——宽度交给视口、由渲染器裁剪长 SQL
+    private final SqlEntryList sqlList = new ViewportWidthSqlEntryList(sqlListModel);
 
     /**
      * 二级列表渲染器（面板直持引用）。<b>勿经 {@code sqlList.cellRenderer} 取回</b>：平台
