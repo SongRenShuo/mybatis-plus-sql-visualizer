@@ -1148,6 +1148,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "JSqlParser/ASM 关键词、build.gradle.kts 的 jsqlparser 排除 jmh-core——防打包泄漏回潮）；" +
                     "零平台引用，进 testFast 快桶；反向=删 NOTICES/改名关键词/摘 exclude 必红",
             ),
+            GuardEntry(
+                "convention/SqlDialectEdtSourceScanTest.kt",
+                listOf(DecisionFn("syntaxHighlighterFactorySites", FnKind.VIOLATIONS)),
+                "平台 SQL 高亮器直取守卫（T-SqlDialectPrewarm）：该调用会触发 SqlDialectMappings 的" +
+                    "一次性延迟加载（逐条 VirtualFileManager.findFileByUrl → FSRecordsImpl.update），" +
+                    "落 EDT 即平台慢操作断言并把本插件归为 blame。允许清单只有预热助手一处，且断言取" +
+                    "**等值**而非子集——助手不再直取时清单变空即红，防失效豁免（同 WHITELIST 反腐烂口径）。" +
+                    "自证语料：`自证_裸调用与跨行全限定调用均被抓`（含真实历史跨行形态）/ " +
+                    "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
+                    "`自证_注释里的调用不算`。",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

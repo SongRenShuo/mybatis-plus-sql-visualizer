@@ -702,6 +702,9 @@ class LogToSqlPanel(
 
     internal fun resultTextForTest(): String = resultEditor.document.text
 
+    /** T-SqlDialectPrewarm：结果区写入（高亮器 token 类型断言用）。 */
+    internal fun setResultForTest(text: String) = setDocumentText(resultEditor, text)
+
     /** T-AutoFold F4-c：结果区编辑器（折叠区域断言用）。 */
     internal fun resultEditorForTest(): Editor = resultEditor
 
