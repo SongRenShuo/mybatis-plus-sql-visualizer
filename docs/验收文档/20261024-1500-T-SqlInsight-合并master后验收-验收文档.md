@@ -476,7 +476,10 @@ master 129 笔并入（merge `6ae97fe9`）后的沙盒续走（独立沙盒 buil
 | 4.5 对象使用与影响 | **通过** | 覆盖声明逐字；扫描 t_order → 结构化诊断 SqlUsageCoverage(currentFile,1,1,0,0,false,false) + DYNAMIC_MAPPER_SKIPPED×5（动态 mapper 不产猜测 SQL）+ SUPPORTED_SOURCES 声明；结果表与候选数一致（i_45.png、i_45scan.png） |
 | 4.6 Schema快照比较 | **通过** | 披露（身份必填/1MiB/不查询/影响范围不完整）；垃圾 JSON → 「invalid_schema_snapshot」双侧拒绝（i_46.png、i_46bad.png） |
 | 4.10 指示行（部分） | **部分通过** | 「数据源（上次使用）： mp_demo@localhost」项目级兜底态纯文本在场、无自建换源控件（i_preview2.png）；其余三态与原生菜单换源待数据源凭据配置后走 |
-| 4.1~4.3 / 4.9 / 4.11 | 待续 | 4.1~4.3 前轮冒烟已过、本轮待回归；4.9/4.11 与 4.10 绑定态依赖沙盒数据源凭据（IDE 级安全存储不随项目走，需 Data Sources 对话框配 Custom JAR + Change Credentials） |
+| 4.1 分析SQL | **通过（回归）** | 分析质量 CERTAIN / 增码区间 UNKNOWN（诚实）/ 已验证方言 MYSQL；结构树 t_order[o]·READ·TABLE、user[u]·READ·TABLE；「仅供分析：不执行 SQL、不读取数据库或数据源」与「点击树节点定位；没有已验证精确区间则选择全语句」在场（i_41.png） |
+| 4.2 渲染解释 | **通过（回归）** | 「场景与渲染解释」表 当前输入 CERTAIN/参数 0/共参数 2；statement/0 TextSqlNode accepted=true、statement/1 MixedSqlNode accepted=true；边界声明（模拟型/Conditions follow stored preview toggles/SOURCE_RANGE_UNKNOWN）逐字在场（i_42.png） |
+| 4.3 运行SQL分析 | **通过（回归）** | 六子页签在场；「启用所有会话的分析」默认关 + 披露（仅本机内存/不上传/SAME_GENERATION_PARTIAL_OBSERVATION/enable=false, quality=coverage_not_proven, bytes=0）；**063db9d6f 修复复验通过**——勾选后 4.5s 勾选保持未被滞后快照弹回（i_43.png、i_43on.png）；enable 翻 true 依赖 agent 会话确认（需运行流量），登记待续 |
+| 4.9 / 4.10 绑定态 / 4.11 | **登记凭据阻塞** | 沙盒数据源密码在 IDE 级安全存储不随项目走（dataSources.local.xml 只有 user-name），需 Data Sources 对话框 Custom JAR + Change Credentials 后才能走绑定态/执行计划链/DML 影响面试算；另 UPDATE 预览「更多」菜单项的键盘精定位（End/Down 计数）两次落错项，robot 组件树路线待下一轮；顺带取证：分享面板对无凭据源的诊断列全 5 个已配置源（i_49c.png），未死磕盲点 |
 
 ## 十一、状态与去向
 
