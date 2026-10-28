@@ -289,35 +289,33 @@ public final class DataSourceSelector {
             // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
             if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
         }
-        boolean allowed;
-        switch (verdict.status()) {
-            case MATCH -> allowed = true;
+        boolean allowed = switch (verdict.status()) {
+            case MATCH -> true;
             case TARGET_UNKNOWN_QUERY_CONFIRM, RENDER_UNKNOWN_QUERY_CONFIRM -> {
                 java.util.function.Predicate<ExecutionDialectGate.Verdict> test =
                         unknownTargetQueryConfirmationForTest;
                 if (test != null) {
-                    allowed = test.test(verdict);
-                } else {
-                    boolean confirmed = false;
-                    try {
-                        String messageKey = verdict.status() == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM
-                                ? "execute.dialectGate.unknownQuery.confirm"
-                                : "execute.dialectGate.unknownRenderQuery.confirm";
-                        confirmed = com.intellij.openapi.ui.Messages.showYesNoDialog(
-                                project,
-                                MpSqlVisualizerBundle.message(messageKey),
-                                MpSqlVisualizerBundle.message("execute.dialectGate.title"),
-                                com.intellij.openapi.ui.Messages.getWarningIcon())
-                                == com.intellij.openapi.ui.Messages.YES;
-                    } catch (Throwable ignored) {
-                        confirmed = false;
-                    }
-                    allowed = confirmed;
+                    yield test.test(verdict);
                 }
+                boolean confirmed = false;
+                try {
+                    String messageKey = verdict.status() == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM
+                            ? "execute.dialectGate.unknownQuery.confirm"
+                            : "execute.dialectGate.unknownRenderQuery.confirm";
+                    confirmed = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                            project,
+                            MpSqlVisualizerBundle.message(messageKey),
+                            MpSqlVisualizerBundle.message("execute.dialectGate.title"),
+                            com.intellij.openapi.ui.Messages.getWarningIcon())
+                            == com.intellij.openapi.ui.Messages.YES;
+                } catch (Throwable ignored) {
+                    confirmed = false;
+                }
+                yield confirmed;
             }
             case AUTO_RERENDER_REQUIRED -> {
                 if (onDialectGate == null && onError != null) onError.accept(dialectGateMessage(verdict));
-                allowed = false;
+                yield false;
             }
             // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
             // 数据源，可以正常提示方言不一致，但还是要能成功执行」。
@@ -326,16 +324,18 @@ public final class DataSourceSelector {
             // 语法错是最准确的反馈；插件不该替用户做执行层面的否决。
             // 反例保留阻断：RENDER_UNKNOWN_BLOCK / TARGET_UNKNOWN_BLOCK —— 那时**有一边是未知的**，
             // 写操作可能把 PG 语法打到 MySQL 库上，属于「无从判断」而非「判断出冲突」，仍拦。
+            // switch 表达式形态（对应 Kotlin 的 val allowed = when(...)）：枚举新增值时编译期
+            // 即暴露缺 case，明确赋值随穷尽性成立。
             case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> {
                 // 提示照旧（UI 仍显示方言不一致与「切换数据源」入口），但不拦执行。
                 if (onError != null) onError.accept(dialectGateMessage(verdict));
-                allowed = true;
+                yield true;
             }
             case TARGET_UNKNOWN_BLOCK, RENDER_UNKNOWN_BLOCK -> {
                 if (onError != null) onError.accept(dialectGateMessage(verdict));
-                allowed = false;
+                yield false;
             }
-        }
+        };
         if (!allowed && needsConfirmation && onSubmission != null) {
             onSubmission.accept(ExecutionSubmission.CANCELLED);
         }

@@ -373,7 +373,7 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
 
     /** 条目分隔线——比 {@code JBColor.border()} 略强，深色主题下才可见。 */
     public static final Color ROW_DIVIDER =
-            JBColor.namedColor("mpvs.log.rowDivider", new Color(0xC8C8C8), new Color(0x4A4D52));
+            JBColor.namedColor("mpvs.log.rowDivider", new JBColor(0xC8C8C8, 0x4A4D52));
 
     /** 按留白高度构造条目 Border（预建实例，不在渲染热路径调用）。 */
     public static Border borderFor(int verticalPadding) {

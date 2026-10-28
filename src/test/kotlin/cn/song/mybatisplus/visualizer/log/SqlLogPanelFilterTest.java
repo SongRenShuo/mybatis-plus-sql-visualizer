@@ -54,6 +54,8 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
             case INSERT -> "INSERT INTO t VALUES (1)";
             case UPDATE -> "UPDATE t SET x = 1";
             case DELETE -> "DELETE FROM t";
+            case CREATE -> "CREATE TABLE t (id INT)";
+            case DROP -> "DROP TABLE t";
             case OTHER -> "TRUNCATE TABLE t";
         };
         return new LogSqlEntry(actualSql, actualSql, List.of(), ts);
