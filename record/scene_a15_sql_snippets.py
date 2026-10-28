@@ -63,14 +63,32 @@ SCROLL_NOTCHES = -19         # Ctrl+Home 钉首行=1 后滚 57 行 → 首行=58
 #                              ⚠️ -18 会让首行=55、表名落到第 4 行，锚点按「第一行」量就会落到空行 L57，
 #                              光标不在 token 上 → 子菜单三项全灰、点了没反应（20261013 实测踩过）
 
-ANCHOR = (740, 185)          # L58 注释里的 `car_device_info`（编辑区第一行；20261013 实测屏幕坐标）
-WIN = (277, 25, 1370, 984)   # 标准几何（不推窗口出屏——用户要求 IDE 顶部完整入镜）
+ANCHOR = (638, 130)          # L58 注释里的 `car_device_info`（编辑区第一行）
+# 【2026-10-25 重标完成】窗口按授权改到 (277,0,1370,1030) 后全量重标：
+#   · SCROLL_NOTCHES=-19 不变（滚轮行数与窗口位置无关，Ctrl+Home 后 L58 仍落首行）
+#   · ANCHOR y 从 185→130：窗口上移 25px + 绑定数据源后编辑器顶部多出「Script ▾」上下文
+#     工具行（~35px），实测 L58 注释行中心 y=130（像素扫描）
+#   · ANCHOR x 从 740→638：字体渲染变化，实测 `car_device_info` 在屏幕 588..712（中文词 495..577，
+#     740 已落不进英文词），取 638 = 词内中段偏左，避开中文词与末尾全角括号
+#   · 前置：schema.sql 已通过 .idea/data_source_mapping.xml 绑定 mpj_demo@localhost（页签标题
+#     带 [mpj_demo@localhost] 后缀即成功）；MySQL 驱动丢失时在数据源属性里 Download Driver Files，
+#     密码丢失（<Unknown>）需重新填 root（Save: Forever）
+#   · 绑定数据源会让 SQL 的「粘性行」复活——右键落在粘性行上被吃掉（菜单不弹）。开录前用
+#     Find Action 搜「Sticky Lines」→ Disable for SQL 关掉；关掉后 L58 才回到编辑区第一行
+#   · 教训：goto_col 的 Ctrl+G 会往文档里塞杂散空行（文档比磁盘多行→L58 错位），定位只用
+#     Ctrl+Home+滚轮；文件弄脏后「关页签（自动保存脏文档）→ git checkout → Ctrl+Alt+Y → 重开」
+#     才能真正恢复，顺序不能反
+
+# 本张**临时放高**到 1030 并上移到 y=0：快捷模板菜单高约 900px（22 项 × 41px）且向下
+# 展开，末项 ≈ 锚点 + 902，984 高的取景框装不下（末项会被屏幕底边夹住）。用户 2026-10-25
+# 明确授权「窗口高度允许这两次临时放高」，录完必须还原成标准构图 (277,25,1370,984)。
+WIN = (277, 0, 1370, 1030)
 #                              token 在 L58 的 col 17（`car_device_info` 起始），x 取其中段
 ITEM_H = 41                  # 菜单单项高度（实测，仅注释用；扫描不依赖它）
 
 # 子菜单所在横带：菜单右边缘 ≈ 锚点 x+368，子菜单面板 ≈ 锚点 x+378..+588
-GAZE = (1000, 700)
-PARK = (620, 700)
+GAZE = (1000, 800)
+PARK = (620, 800)
 
 
 def post_wheel(hwnd, notches, sx=1000, sy=400):
@@ -142,6 +160,31 @@ def _grab(region):
 
 
 SCAN_YMAX = 1020             # 扫描上限：再往下是任务栏，鼠标经过会把图标点亮 → 假变化
+
+
+def _submenu_third(items2, items1):
+    """从「悬停末项后的全部菜单项」里取出**子菜单第三项**（抽样 10 行）。
+
+    子菜单可能向右或向左展开（取决于屏幕边缘空间），**x 不可靠**——2026-10-26 实测
+    主菜单右缘 1330、子菜单 x=1327（向左展开，反而更靠左）。可靠判据是**垂直位置**：
+    子菜单项挂在末项上下方、与主菜单项不重叠，故取「y 落在主菜单 y 范围之外」的新增项。
+    主菜单此刻被冻结（悬停展开子菜单时它不再变化），新增的都算子菜单项。
+    """
+    if not items1 or not items2:
+        return None
+    main_bottom = max(it["y"] + it["height"] for it in items1)
+    main_top = min(it["y"] for it in items1)
+    sub = [it for it in items2
+           if it["y"] + it["height"] <= main_top + 4 or it["y"] >= main_bottom - 4]
+    if len(sub) < 3:
+        # 兜底：按 y 去重后取「与主菜单不重合」的项——子菜单整体在末项附近独立一列
+        sub = [it for it in items2
+               if not any(abs(it["y"] - m["y"]) < 4 and abs(it["x"] - m["x"]) < 4
+                          for m in items1)]
+    if len(sub) < 3:
+        return None
+    sub.sort(key=lambda r: r["y"])
+    return sub[-1]                                # 第三项＝子菜单最下面一项
 REF_X0 = ANCHOR[0] - 100       # 参照带起点（含菜单本身 + 右侧子菜单可能落位）
 REF_W = 900
 
@@ -190,18 +233,33 @@ def sub_item3_y(ref, parent_y, band_x):
     """悬停末项后，量子菜单**第三项**（抽样 10 行）的中心 y。
 
     子菜单相对末项向上还是向下展开，取决于下方还有没有空间（两种都实测出现过），
-    所以位置必须现场量。做法：把带内「与参照不同」的行按间隙聚簇，最后一簇＝第三项文字行。
+    所以位置必须现场量。判据用**亮文字行**（行均值 > 90）而不是「与参照不同」：
+    面板背景本身就是与参照的差异，按差异判据整块面板聚成一簇、中心落到第二项
+    （2026-10-25 实测点成 COUNT 还开出关系图页签）。亮行聚簇 gap=8，最后一簇＝第三项。
     """
-    ys = [y for y in range(max(0, parent_y - 150), min(SCAN_YMAX, parent_y + 170), 5)
-          if _row_changed(ref, y, band_x)]
+    x = _strip_x(band_x)
+    # 扫描窗下限 parent_y+90：子菜单三项面板 ~100px 高；再往下是编辑器底色行
+    top = max(0, min(parent_y - 150, 1080 - 300))
+    img = _grab({"left": x + 20, "top": top, "width": 200, "height": (parent_y + 90) - top})
+    rows = img.mean(axis=(1, 2))
+    # 两段式（2026-10-25 五轮实测收敛）：面板底色(~34)本身高于编辑器底色(~23)，
+    # 直接「与编辑器底比」会把整块面板连成一簇、中心落在两项之间（点空）。
+    # 先框出面板范围，再以面板内中位数为准找文字行，最后滤掉 1~2px 的边框孤立簇。
+    base = float(np.median(rows))
+    panel_rows = [top + i for i, v in enumerate(rows) if v > base + 3]
+    p_top, p_bot = panel_rows[0], panel_rows[-1]
+    inner = rows[p_top - top:p_bot - top + 1]
+    base2 = float(np.median(inner))
+    ys = [p_top + i for i, v in enumerate(inner) if v > base2 + 6]
     clusters = []
     for y in ys:
-        if clusters and y - clusters[-1][-1] <= 20:
+        if clusters and y - clusters[-1][-1] <= 8:
             clusters[-1].append(y)
         else:
             clusters.append([y])
+    clusters = [c for c in clusters if len(c) >= 3]      # 面板上下边框是 1px 孤立簇
     if not clusters:
-        raise RuntimeError("悬停末项后没量到子菜单面板")
+        raise RuntimeError("悬停末项后没量到子菜单文字行")
     return sum(clusters[-1]) / len(clusters[-1])
 
 
@@ -254,8 +312,8 @@ def main():
     for _ in range(3):
         pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.4)
 
-    # 工具窗回到「SQL 日志」页签（探针曾把它切到「SQL 历史」，出片口径要统一）
-    pyautogui.click(1217, 133); time.sleep(0.8)
+    # 「SQL 日志」页签切换已移除（2026-10-25）：本张需要的是右侧 Database 工具窗
+    # （控制台结果网格就在那里），没有 SQL 日志工具窗在场，旧坐标点击只会误触。
 
     # 模态对话框护栏：沙盒里若还挂着别的窗口（Clone Repository / Settings / Commit…），
     # 整段 take 都会录进那个对话框——上一轮就是这样白录一条（Esc 关不掉模态框，
@@ -299,27 +357,66 @@ def main():
     print("锚点 %s（常量）" % (ANCHOR,))
 
     # ---- 开菜单、量末项与子菜单（不入镜）----
-    # 右键弹菜单实测不稳（有时不弹），加重试：最多 4 次。
+    # 【2026-10-26 主路线改为 robot-server 组件树】ActionMenuItem 在主窗组件树里，
+    # 直接按序号取「末项」与「子菜单第 3 项」，不再像素扫描找末项（那套曾为此返工五轮）。
+    # 像素扫描保留为兜底（robot 不可用时）。
     ref = _band_ref()
-    last_y = sub3_y = None
-    for attempt in range(4):
-        pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
-        pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
-        menu_right = _menu_right(ref)
-        band_x = menu_right            # 取样带：菜单右边缘之外
-        click_x = menu_right + 90      # 点击 x：落在子菜单文字上
-        try:
-            last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
-        except RuntimeError:
-            print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
-            continue
-        pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)   # 悬停末项 → 展开子菜单
-        sub3_y = sub_item3_y(ref, last_y, band_x)
-        break
-    if last_y is None:
-        raise RuntimeError("连续 4 次右键都没弹出菜单——先看 shots/a15_pre.png")
-    print("菜单右边缘 x=%d（取样带起点 %d，点击 x %d）" % (menu_right, band_x + 12, click_x))
-    print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  取景框底 %d" % (last_y, sub3_y, bottom_clip))
+    last_y = sub3_y = click_x = None
+    menu_right = None
+    robot_ok = False
+    try:
+        from robot import menu_items, has_menu
+        for attempt in range(4):
+            pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+            pyautogui.click(*ANCHOR, button='right'); time.sleep(1.8)
+            if not has_menu():
+                print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
+                continue
+            items = menu_items()
+            if not items:
+                continue
+            last = items[-1]                       # 末项＝「SQL 快捷模板」
+            last_y = last["y"] + last["height"] // 2
+            menu_right = last["x"] + last["width"]
+            click_x = last["x"] + int(last["width"] * 0.25)
+            # 悬停末项展开子菜单，再取子菜单项（此时菜单项列表会含子菜单的三项）
+            pyautogui.moveTo(last["x"] + 120, last_y, duration=0.5); time.sleep(1.6)
+            items2 = menu_items()
+            if len(items2) < len(items):
+                print("子菜单没展开（%d 项），重试" % len(items2))
+                continue
+            sub3 = _submenu_third(items2, items)
+            if sub3 is None:
+                print("子菜单三项没量到，重试")
+                continue
+            sub3_y = sub3["y"] + sub3["height"] // 2
+            click_x = sub3["x"] + int(sub3["width"] * 0.25)
+            robot_ok = True
+            break
+    except Exception as e:
+        print("robot 路线失败，降级像素扫描:", str(e)[:80])
+
+    if not robot_ok:
+        for attempt in range(4):
+            pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+            pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
+            menu_right = _menu_right(ref)
+            band_x = menu_right
+            click_x = menu_right + 60
+            try:
+                last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
+            except RuntimeError:
+                print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
+                continue
+            pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)
+            sub3_y = sub_item3_y(ref, last_y, band_x)
+            break
+        if last_y is None:
+            raise RuntimeError("连续 4 次右键都没弹出菜单——先看 shots/a15_pre.png")
+
+    print("定位来源: %s" % ("robot 组件树" if robot_ok else "像素扫描兜底"))
+    print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  点击 x=%.0f  取景框底 %d"
+          % (last_y, sub3_y, click_x, bottom_clip))
     import mss
     with mss.mss() as sct:
         mss.tools.to_png(sct.grab({"left": 0, "top": 0, "width": 1920, "height": 1080}).rgb,

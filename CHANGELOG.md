@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [2026.10.26] - 2026-10-26
+
+### Fixed
+- **JAR/lib 模块实体的嵌入列命名宿主级联（T-EmbeddedIdentify）**：实体打包进依赖 JAR 或 lib 模块、该模块有自己的 resources 但没有命名配置时，嵌入列命名探测按实体所在模块收范围会判不出 → 列名丢嵌入前缀（`base_qty` ≠ 真库 `qty_base_qty`）。现按「实体所在模块 → 查询宿主模块」级联判定（HQL/JPQL 链自动生效），两档都判不出仍不回退工程级扫描——多模块聚合根打开时兄弟模块配置外溢的既有防护不变。另增嵌入列解析诊断日志（`[T-EmbeddedIdentify]` 前缀：命名档来源、嵌入列清单、展平降级 WARN）与 JAR 实体全链回归测试（真实模型 JAR 挂库根走 previewCustomDaoHql）。
+
 ## [2026.10.23] - 2026-10-23
 
 ### Added
@@ -50,7 +55,10 @@
 - **分发包许可与依赖合规**：LICENSE 与 THIRD-PARTY-NOTICES 随包分发（插件目录与主 jar `META-INF/` 双落位）；排除 JSqlParser 误带的 jmh-core / jopt-simple / commons-math3 三件套，分发 zip 约减 20.8%，运行期 `lib/` 只保留 jsqlparser 与主 jar。
 
 ### Fixed
+- **方言冲突不再阻断执行（8619a3af）**：用户定案「方言不能影响最终的执行，哪怕方言是错的，手动选了数据源可以提示不一致，但要能成功执行」。`MANUAL_CONFLICT` / `RERENDER_UNAVAILABLE` 从「红字 + 阻断」改为「红字 + 放行」——两边方言都已知时，冲突只是渲染来源与目标库不一致，交给数据库自己报语法错是最准确的反馈。**边界保留阻断**：`TARGET_UNKNOWN_BLOCK` / `RENDER_UNKNOWN_BLOCK`（有一边方言未知，写操作可能把 PG 语法打到 MySQL 库上，属无从判断而非判断出冲突）。另修报错文案：`runners` 为空时此前只从目标源反推方言，出现「预览写着方言 PostgreSQL、文案却说没有与 MySQL 匹配的数据源」的自相矛盾，现优先用渲染方言。
+- **Runner 枚举为空时按目标方言重映射再枚举（e7a27700）**：平台按 exec 文件已映射的 SQL 方言筛 runner，数据源在平台侧没建好方言映射时一条都筛不出（`runners=0`），但数据源其实是连着的。现 `runners` 为空时把 exec 文件重映射到目标数据源方言再枚举一次，命中即递归回同一分派逻辑——控制台 / 结果表 / 审计全部复用既有链路，不新建执行通道；重映射后仍为空才落既有红条。
 - **执行计划取源与换源十二轮问题收口（T-DialectInferPollution / T-ExplainFailUx / T-ExplainSwitchNative / T-ExplainConsoleFirst）**：方言闸门重渲染后自动重提交、直送链取源接 last-used 回落；按表归属路由选源（表不在候选源即自动改取持有该表的源）；按模块学习归属，冲突不猜，消掉跨模块错源执行；排队执行意图自有有界结算，缓存热零命中时引导选择；选错源不再弹模态，改就地横幅引导换源；换源交还平台原生 `Data Sources` 工具栏。最终形态收回到预览窗内嵌原生控制台，插件不选源不筛不猜，并偿还 `1a1cf724` 的技术债——新增 `previewSqlForReadonly()` 让五处只读动作读预览快照，根治执行视图下取词漂移成 EXPLAIN 语句。另修「启用结构化并重试」推荐通知每次执行计划都弹、点一次即永久点亮开关的问题，改为只提示一次。
+- **Unknown column 按跨源证据升格为「选错数据源」提示（27429da6）**：`Unknown column` 此前一律被排除在「选错数据源」之外——对拼错列名成立，对「同名表不同列集」漏判（用户实测 `[42S22][1054] Unknown column 'first_name' in 'field list'`，上下文三处读数全是 `mp_demo`：源没选错，错的是「SQL 与库」这一对）。新增 `CrossSourceColumnEvidence` 纯判定（零 IDE 依赖、零连接），三条同时成立才升格：①错误文本能解析出具体列名；②当前源同名表**确证**没有该列（缓存未热＝无从证明，不升格）；③存在另一在籍源、其同名表带该列。第③条把「拼错列名」（任何源都没有 → 照旧只报错）与「源选错」（另一源确实有 → 提示换源）分开，宁可漏判不可误判。
 - **上次使用的数据源按模块隔离（T-ModuleScopedLastUsed）**：三层记忆（活控制台 > 模块级 > 项目级兜底），多模块工程不再串用其他模块的数据源；指示行文案区分「本模块上次使用」；`moduleKey` 缺失必须回落项目级。沙盒验收抓出并修复「用兜底读取的返回值反推命中层级」恒为真的误判——改为直接读模块级键本身。
 - **SQL 日志工具栏动作组改走 BGT（T-SqlLogToolbarEdt）**：动作组与 11 个动作逐个声明 BGT，消除每次抢占 EDT 3.1~4.0 秒的告警；`currentSortLabel` 去分配改静态查表，实测 20 万次 38.1s → 5.8s（6.6x）。
 - **exec 预热改异步不阻塞 EDT**：执行文档预热不再占用编辑线程。
@@ -115,8 +123,8 @@
 
 | 归档分册 | 覆盖版本 |
 |---|---|
-| [changelog-archive-2026-09.md](./变更记录/changelog-archive-2026-09.md) | 2026-09 发布的版本 |
-| [changelog-archive-2026-08.md](./变更记录/changelog-archive-2026-08.md) | 2026-08 发布的版本 |
+| [changelog-archive-2026-09.md](./docs/变更记录/changelog-archive-2026-09.md) | 2026-09 发布的版本 |
+| [changelog-archive-2026-08.md](./docs/变更记录/changelog-archive-2026-08.md) | 2026-08 发布的版本 |
 
 ---
 
@@ -124,6 +132,7 @@
 
 ### Added
 
+- **SQL 日志捕获通道归因与同桶信息融合（T-AgentCaptureProvenance）**：增强捕获与控制台通道对同一 SQL 的观测可融合：后到的真实源码位置、候选帧、耗时及目标库等按「只补空不覆盖、真实位置优先」补进原条目，保持列表位置与序号；融合后的捕获路径可写入历史，旧历史文件仍可读；控制台回落条目缺源码时提示实际通道原因，不再错误引导用户再次开启捕获。限频诊断记录通道与信息完整性，不含 SQL 原文及参数
 - **支持「SQL 由同工程方法拼好再传入」的写法（T-HqlHelperReturn）**：`commonDao.findByQuery(buildHql(), …)` / `session.createQuery(buildHql())` 这类把 SQL 交给一个**源码可见**的方法去拼的调用，此前既不亮预览图标、快捷键预览也失败（判定口径是「调用处首参是否为字符串承载」，方法调用不在其列，`locate` 直接返回 null）。现改为跟随到该方法的 `return` 表达式聚合：深度上限 3 层（防递归/环）、只收本方法自身的 `return`（排除嵌套方法与 lambda 体内的）、**多分支返回内容不一致时不猜**（宁缺不错）、方法返回类型非 String 或没有源码体（JDK/三方库）一律不认领（挡住 `selectList(<wrapper 链>)` 这类误判回归）。demo 复现模块 `jpa-embedded-prefix-demo` 现备齐三种 HQL 承载形态（拼接变量 / StringBuffer + `sb.toString()` / 方法返回），插件侧门禁 `DemoEmbeddedPrefixReproAnchorTest` 断言三者各恰 1 枚图标
 - **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报。**（T-DialectQuoteWarn §十二 调整）**「MySQL 家族（MySQL/MariaDB/OceanBase）+ 双引号」这一档不再一律报 ERROR——双引号是否为标识符取决于连接 `sql_mode` 是否含 `ANSI_QUOTES`，而数据源 URL **只能证明「合法」不能证明「非法」**（URL 未声明该项时服务端全局仍可能开着）：预览按绑定数据源（活控制台 > last-used 记忆）的 URL 取该三态，确知声明了才不报，已知未声明或未知都降级为**带前提的 WARN**（缓存键含该三态，避免串味）；PG/Oracle/DM/KingBase/openGauss 遇反引号、非 SQL Server 遇方括号等无歧义档仍报 ERROR
 - **mapper XML 语法高亮注入（T-XmlSynHi）**：mapper XML 内语句文本按 SQL 语法着色（关键字/字符串/注释）、`#{}`/`${}` 参数占位加底色、`test`/`value` 属性表达式着色；输入 `#`/`$` 自动补全 `{}`；resultMap `column` 属性补全列名。让位改为**宿主级探测**（任一会给该宿主上色的其他注入器真 `startInjecting` 才让位——在位≠覆盖），与本机其他 SQL 插件共存不打架
@@ -159,6 +168,7 @@
 
 ### Changed
 
+- **增强捕获宿主诊断收敛**：移除 Spring 代理健康调用也会反复打印的「入口键非业务帧」摘要；首条织入事件日志由 SQL 片段改为仅记录 SQL 长度，不再把业务文本写入宿主诊断行。需要栈帧详情时仍可开启 agent 的 info 日志
 - **SQL 快捷模板三动作改为「光标压在表名上也能用」（T-SqlTemplateCaret）**：EXPLAIN 选中表 / COUNT 选中表 / 抽样 10 行此前必须先划出非空文本选区才可用，光标停在表名上（不划选区）时动作是灰的。现启用条件放宽为「非空选区 或 光标处标识符」：有非空选区时逐字节原样取选区文本（既有行为不变），无选区或选区为空白时退化为取光标处的标识符（表名/片段），两路都取不到才禁用。光标退化走 `Document.getCharsSequence()` 的词边界扫描，不依赖具体语言与 SQL 注入是否生效，故在 mapper XML、`.sql`、Java、预览弹窗文本区等任意编辑器里都成立；标识符带反引号/双引号/方括号时连引号一并取（与选区路径「原样当表名」一致），`db.tbl` 这类限定名跨点取全，单引号字符串不带单引号（`FROM 'x'` 非法）。不改动作语义（仍不做表名校验）、不改 P2 的失败通知接线、不动执行链
 - **描述与文案口径统一：运行期以增强捕获为主、控制台为回落**（配套文档站首页描述改版）：`plugin.xml` 描述把原先并排的两条（「运行期捕获 · 控制台 SQL 日志」＋「增强捕获」）合并为一条「**运行期捕获（默认开启）**」，补入慢查询标红与静态性能建议、调用栈悬停弹层逐帧跳转，控制台三族日志降为「不改工程的回落通道」（中英同段同改；数字类声明未动，结构守卫对账面不变）；README 顶部一句话简介改为「写代码时就看见最终 SQL……跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码……不启服务、不翻日志、不手拼参数」，「运行期」段落同步改为增强捕获前置；Marketplace 自定义页**两版同步**（`src/main/resources/html/marketplace-custom-page.html` 供 IDE 帮助按钮 JCEF 渲染、`docs/发行说明/marketplace-custom-page.md` 供后台粘贴）——「为什么选它」的增强捕获条前置为「运行期捕获（默认开启）」、控制台降为「控制台日志（回落通道）」，标语盒「运行期日志还原」改「运行期捕获真实参数与耗时」。**md 版需在 Marketplace 后台重新粘贴**（两版唯一权威在本仓，见发布流程 §10.2/§11）。
 - **README 的 EXPLAIN 方言计数勘正**：原文「EXPLAIN 执行计划（9 种方言，8 种真机 / 引擎实证、OceanBase 文档级验证）」为过期读数——`ExplainSupport` 实为 **11 条**（新增 Oracle 真机实证 Free 23 / XE 11g、SQL Server 按 Microsoft Learn 文法落地·真机待验），改为「覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机）」。文档站 `wrapper-preview` 与 `faq` 中英原写「Oracle / SQL Server 暂不支持 EXPLAIN」同步勘正（该表述自两方言接入后即失真）。
@@ -166,6 +176,8 @@
 - **数据源上下文角标默认仅显示数据库类型（T-DataSourceBadgeMode）**：SQL 日志/历史两页的目标库角标此前恒显全量「方言 · 库名@host:port」，条目元信息行信息密度偏高。现默认仅显示数据库类型（如 `[MySQL]`）；设置页「SQL 日志 → 数据源角标显示完整上下文（库名@主机:端口）」打开后恢复全量形态。门控做在显示侧——生产/落盘/历史读回/MCP 检索链零改动，开关即时生效（含已读回的历史条目），后开开关不丢任何信息；方言解析失败仅存连接事实的条目关闭态原样保留
 
 ### Fixed
+- **增强捕获接管瞬间同一次执行留下两行（T-AgentCaptureProvenance）**：旧接管沿清空整个去重索引，使接管前几毫秒入库的控制台条目与随后到达的 agent 观测无法融合，出现一行可跳转、一行缺源码。现仅清除陈旧键，保留近五秒内的新鲜键用于字段级融合；首批 agent 事件仍不会被旧记录吞掉
+- **历史与 XML 编辑性能收敛（T-PerfSweep25）**：历史日志面板由「打开即后台扫描历史文件」改为首次切入「SQL 历史」页签才触发首扫；空查询的同模板聚合只随条目快照换代重算；resultMap 列补全加 100K 熔断及双槽 memo、XML 高亮共存探针加宿主弱身份／PSI 修改戳／注入器清单 stamped memo（非 mapper 宿主探测前置跳过，F79）、SQL 切分器前视加 10K 窗上限（F90），resultMap 贡献器补 DumbAware（F93），避免大文件 / 无配对 BEGIN 等形态拖慢编辑响应
 
 - **`@Embedded` 展平列的预览列名丢了嵌入段前缀，与真库列名不符（T-EmbeddedColPrefix）**：实体 `@Embedded private WmsInventoryQty qty;` + HQL `inv.qty.baseQty` 被预览成 `AND inv.base_qty > 0`，而真库列是 `qty_base_qty`（同句 `inv.moveTool.palletNo` 同样被预览成 `inv.pallet_no`）。根因是展平嵌入列时把「列名 = 内层字段名」写死（`@AttributeOverride` > 内层 `@Column(name)` > 驼峰转下划线），而列名怎么拼其实由工程的 Hibernate 隐式命名策略决定——`ImplicitNamingStrategyComponentPathImpl`（配置关键字 `component-path`，Hibernate 4 的 `DefaultComponentSafeNamingStrategy` 同源）会把属性路径并进列名。现已按 hibernate-core 源码核实的语义支持这一约定：默认自动读工程 `application*.yml/properties` 判定（判不出按 JPA 默认「无前缀」），设置页「嵌入列命名」亦可显式指定「无前缀 / 组件路径前缀」；两档都只作用于兜底档，显式 `@AttributeOverride` 与内层 `@Column(name)` 依旧优先。同一处列名推导同时喂 WHERE 段属性映射与 SELECT 子句展开，故一处修正、两处产物同时正确。另补一条不依赖配置的兜底：既有的「按数据源校正列名」此前对嵌入列失效（它按归一化比对，`base_qty` 与 `qty_base_qty` 差的是一整段前缀，必然 0 候选），现对嵌入列在 0 命中后追加「用嵌入段路径的 snake 形态唯一命中」这一档——绑定了数据源时这类场景零设置自愈，0 候选/歧义/当前列名本就是库中真名时一律不改写；嵌入列命名的配置探测按**实体所在模块**取范围（命名策略是每个持久化单元各自的事），多模块工程里兄弟模块的配置不会外溢
 - **用 `StringBuffer`·`StringBuilder` 逐句 `append` 拼出的 SQL 传给自定义 DAO 时无法预览（T-HqlBufConcat）**：把 HQL 累积在 `StringBuffer sb` 里（`sb.append("SELECT …")` …）再经 `sb.toString()` 传给自研 DAO（如 `commonDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10)`）时，该行既不亮预览图标、手动触发动作也只弹「未找到可预览 SQL 源」。根因是定位器只认字面量 / `+` 拼接 / 变量引用三种承载，而 `sb.toString()` 是方法调用表达式、落进「无法静态取得字符串」的兜底返回 null，内容启发失败即不认领（与 DAO 实现是否在 jar 里无关——认领走 qualifier 后缀 + 方法名关键字 + 内容正则，全程不解析 DAO 实现体）。现把 JdbcTemplate 通道已在用的 StringBuilder 聚合器 `SqlStringConcatenator` 提为共享入口（并补 `.toString()` / `.append(x).toString()` 解包），自定义 DAO（`CustomDaoHqlLocator`）与 Hibernate `session.createQuery(...)`（`HqlQueryLocator`）两条通道共用；拼接中嵌入的运行时值（`param.get(...)`）沿用既有 `/*运行时值*/` 占位降级。顺带收敛两处同族口径：`HqlQueryLocator` 的兜底不再把表达式源码文本当 HQL（对齐 T-GutterDupFreeze），`handleNewExpression` 只认大写 `NEW` 的问题改为大小写不敏感的单一实现 `NewExpressionStripper`（小写 `new Map(...)` 此前会被原样留在产物里产出非法 SQL，「`RENEW(`」之类不再误命中）
@@ -202,6 +214,9 @@
 - **个别增强捕获条目源码位置显示 `[<generated>]`（T-SrcGenFrame）**：增强捕获下经 Spring 代理调用 MyBatis-Plus `ServiceImpl` 继承方法（`list`/`getOne`/`saveBatch` 等，真实方法体所在类被框架前缀跳过）时，栈上最深非框架帧是 CGLIB 增强类帧（`$$EnhancerBySpringCGLIB$$` 族）——其 SourceFile 属性是 Enhancer 字节码硬编码的 `<generated>`（spring-core javap 实证）、行号恒 -1，而类名前缀即业务包名、codeSource 随宿主类落业务目录，agent 侧 `StackLocator` 的 L1 来源判据与上顶收敛都把它当业务帧选中，面板遂渲染 `[<generated>]`（真机实证：同批条目直调 mapper 接口的拿到真实业务行、经代理调 Service 继承方法的全部中招）。现主位置选择（L1/上顶收敛/判定缓存命中深帧探测/候选列）一律要求真实源文件，生成类帧让位给池中真实业务帧（=触发本次调用的调用方行）；仅池内无任何真实源文件帧（调度器直发/框架回调等真无主形态）时安全网原样采用，`[<generated>]` 保留作真无主信号
 
 - **预览编辑器行注释前缀统一为 `--` 双横线（T-PreviewLineCommentDash）**：预览/控制台编辑器内 Ctrl+/ 此前插入 `#` 前缀——预览文件被方言预映射强制为 MySQL 方言，平台注释动作经 commenter 链取到 MySQL 的 `#`，对 PostgreSQL 执行报 `[42601] syntax error`。现对预览自建编辑器与原生控制台编辑器接管行注释快捷键：插入一律 `-- `、再按一次剥除，修复前残留的 `#` 行同样可剥（缩进保留、多行选区整段切换、一步撤销）；未打标编辑器直通平台原行为零变化，块注释 Ctrl+Shift+/ 不接管（MySQL/PG 语义本就一致）
+- **原生控制台结果组件无收益摘取收敛（★A49）**：SQL 快捷模板及「日志转 SQL」的执行没有嵌入宿主，此前仍从 DBN 原生宿主摘取结果组件；现只在有嵌入宿主时组装及换入，避免扰动原生控制台。录制中出现的「0 rows」实为调用方传了不存在的表名，与该改动无关
+- **SQL 快捷模板失败反馈偶发静默（T-SqlTemplateUx P2）**：EXPLAIN / COUNT / 抽样三动作的晚检失败会被宿主门控挡住，气泡与「定位到出错语句 / 复制错误信息」两个反馈入口都不出现；现失败链在门控后正确送达反馈面板
+- **增强捕获「已挂载」气泡重复出现**：同一项目会话内多次触发挂载提示会反复打扰，现收敛为每项目会话一次
 
 ## [2026.10.9] - 2026-10-09
 

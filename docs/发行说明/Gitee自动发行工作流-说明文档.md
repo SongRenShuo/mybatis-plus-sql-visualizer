@@ -17,7 +17,7 @@ parallel_tasks check/register
   → ⑥ Gitee API 建发行版 + 上传 zip 附件（见第三节）
   → ⑦ 回读校验 downloadUrl
   → parallel_tasks done
-  → 人工收尾：preview.update.json 拷入 update/update.json（独立单文件提交，不进发行提交）
+  → 人工收尾（**仅用户本人，AI 会话不得代改**）：preview.update.json 拷入 update/update.json（独立单文件提交，不进发行提交）
 ```
 
 跑任何 `./gradlew` 前按并行铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`，
@@ -263,10 +263,40 @@ assert r['prerelease'] and manifest_download_url in urls
 ## 四、发行后收尾
 
 1. `parallel_tasks.py done --name <任务名>` 注销登记。
-2. 人工步骤：`preview.update.json` 逐字节拷入 `update/update.json`（先 sha1 校验一致），
-   独立单文件提交随官网推送，**不进发行提交**。
+2. 人工步骤（**仅用户本人执行，AI 会话一律不得代改**）：`preview.update.json` 逐字节拷入 `update/update.json`（先 sha1 校验一致），
+   独立单文件提交随官网推送，**不进发行提交**。会话的发行职责止于建发行版 + 回读校验，收口报告只写「update.json 待用户手改」。
 3. 核对 Gitee 发行版页面：预览标记、附件可下载、正文渲染正常。
 4. 若为 beta 系列：下一发 beta 重复本流程，changeNotes 块替换为本发内容（累计）。
+
+## 五、GitHub 触发发布后的 Gitee 同步（--from-github）
+
+**定位**：Gitee 仍是主仓，GitHub 只是镜像侧的构建与发行通道。GitHub 上的
+`.github/workflows/build-plugin.yml` 只往 GitHub 写东西（无 Gitee 凭据、`persist-credentials: false`），
+落到 Gitee 这一步永远由人手动执行：
+
+```bash
+python dev-support/gitee-release.py --version <版本> \
+  --notes docs/发行说明/<那份>-发行说明.md --from-github
+```
+
+脚本做四件事，其余流程与手工发行完全一致：
+
+1. 按 tag 查 GitHub Release，取**同名附件**（`mybatis-plus-sql-visualizer-<版本>.zip`）下载到
+   `build/distributions/`——不重新打包，附件就是门禁验过的那一份。本地已有同名文件且哈希一致时直接复用，
+   哈希不同则拒绝覆盖。
+2. 沿用 GitHub 侧的预发布标记（`-beta.N` 版本自动是预发布）。
+3. 检查 tag 是否已在 Gitee（未推会 400），只检查不自动推送。
+4. 打印版本/附件/哈希/正文/Gitee 链接摘要，**要求人工确认**：终端里输入 `yes` 才继续；
+   非交互环境必须显式 `--yes`（这是有意的二次确认，防止误把副本传上去）。
+
+前提与注意：
+
+- GitHub Release 必须已存在且非草稿（Actions 跑 `mode=release` 或 `mode=publish`）。
+- tag 必须先双推：`git tag <版本> <目标提交>` → `dev-support/push-all.ps1 -Tags`。
+  这样两端 tag 指向同一提交，流水线的 `gh release create` 会挂到既有 tag 上。
+- **不动 `update/update.json`**：内测/自更新通道的数据源仍由本地 `writeUpdateManifest` + 手补 changeNotes
+  维护，行为与本流程上线前一致。
+- 反向（Gitee 已有 → 想补一份到 GitHub）没有对应模式；流水线的 `publish` 只复用 **GitHub 侧**的产物。
 
 ## 相关文档
 

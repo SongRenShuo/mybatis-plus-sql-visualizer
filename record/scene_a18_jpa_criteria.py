@@ -23,14 +23,15 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from gifkit import Recorder                                                # noqa: E402
+from gifkit import Recorder, paste                                          # noqa: E402
 from locate import close_preview, ensure_foreground, sandbox_pid, windows   # noqa: E402
 from nav import force_en_us, goto_col, trigger_preview                      # noqa: E402
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a18_jpa_criteria.mp4"
 
 FILE_QUERY = "JpaQueryServiceImpl.java"
+FILE_REL = "jpa-hibernate-demo/src/main/java/cn/song/jpademo/service/impl/JpaQueryServiceImpl.java"
 FILE_TITLE_KEY = "JpaQueryServiceImpl"
 CHAIN_LINE, CHAIN_COL = 135, 12          # cq.where(cb.and(...))
 ROW_X = 600
@@ -38,6 +39,7 @@ FILE_ROW_YS = (341, 333, 349, 357)
 
 GAZE_WHERE_A = (900, 600)
 GAZE_WHERE_B = (900, 700)
+GAZE_USERNAME = (600, 320)   # 预览左栏 #username 输入框（region 绝对坐标）
 GAZE_PARAMS = (500, 700)
 PARK = (577, 760)
 
@@ -65,15 +67,23 @@ def main():
     # ---- prep（不入镜）：开文件 + 光标压到 cq.where(...)，预览留给 take 内唤起 ----
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.7)
     print("关旧预览:", close_preview(ide_pid))
-    pyautogui.click(600, 500); time.sleep(0.5)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.4)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
-    for y in FILE_ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(1.3)
-        if FILE_TITLE_KEY in ide_hwnd_and_title(ide_pid)[1]:
-            break
+    # 开文件改走 MCP（按路径精确打开）：Ctrl+Shift+N + typewrite 会撞同名文件与中文 IME
+    try:
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from mcpnav import open_file
+        open_file(FILE_REL, settle=1.8)
+    except Exception as _e:
+        print("MCP 打不开，退回搜索方式:", _e)
+        pyautogui.click(600, 500); time.sleep(0.5)
+        pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
+        pyautogui.hotkey("ctrl", "a"); time.sleep(0.4)
+        force_en_us()
+        pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
+        for y in FILE_ROW_YS:
+            pyautogui.click(ROW_X, y); time.sleep(1.3)
+            if FILE_TITLE_KEY in ide_hwnd_and_title(ide_pid)[1]:
+                break
     time.sleep(1.6)
     t1 = ide_hwnd_and_title(ide_pid)[1]
     if FILE_TITLE_KEY not in t1:
@@ -86,12 +96,18 @@ def main():
     r = Recorder(REGION, OUT)
     r.start()
     pyautogui.moveTo(900, 500, duration=0.5); time.sleep(0.4)
-    trigger_preview(wait=1.2)               # Criteria 调用 → 预览出 SQL（真实 UI 变化）
+    # wait 从 1.2 提到 3.4：实测弹窗要 ~3s 才画完，1.2s 会录到半透明错位的渲染中间态
+    trigger_preview(wait=3.4)               # Criteria 调用 → 预览出 SQL（真实 UI 变化）
     time.sleep(1.8)
-    pyautogui.moveTo(*GAZE_WHERE_A, duration=0.7); time.sleep(1.1)
-    pyautogui.moveTo(*GAZE_WHERE_B, duration=0.7); time.sleep(1.1)
-    pyautogui.moveTo(*GAZE_PARAMS, duration=0.7); time.sleep(1.1)
-    pyautogui.moveTo(*GAZE_WHERE_A, duration=0.7); time.sleep(1.1)
+    # 纯 moveTo 的凝视段在截屏里**没有任何像素变化**（裸屏捕获不含光标），assemble 会
+    # 把整段当静止裁掉——本轮首版 thus 只剩 3.1s。改成一个真实交互撑时长：
+    # 往 #username 填值，SQL 的 `username LIKE ?` 实时变成实值。
+    pyautogui.moveTo(*GAZE_WHERE_A, duration=0.7); time.sleep(0.9)
+    pyautogui.moveTo(*GAZE_WHERE_B, duration=0.7); time.sleep(0.9)
+    pyautogui.click(*GAZE_USERNAME); time.sleep(0.5)
+    paste("ad")                              # 剪贴板粘贴，绕开中文 IME
+    time.sleep(2.6)                          # SQL 实时回填定格
+    pyautogui.moveTo(*GAZE_WHERE_A, duration=0.7); time.sleep(1.0)
     pyautogui.moveTo(*PARK, duration=0.6); time.sleep(0.8)
     print("frames:", r.stop())
 

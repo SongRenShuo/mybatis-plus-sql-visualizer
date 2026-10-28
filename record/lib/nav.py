@@ -37,8 +37,37 @@ def goto(line, wait=1.2, verify_shot=None):
     time.sleep(0.4)
     pyautogui.keyDown('return'); pyautogui.keyUp('return')
     time.sleep(wait)
+    # Enter 可能被 IME 吞掉，弹窗就留在画面上（2026-10-25 实测：a26 录到第 90 帧时
+    # `Go to Line:Column` 还开着、内容是 `56:35`，正是 Enter 没提交成功的形态）。
+    # 补一次护栏：弹窗仍在就再按一次 Enter，仍不在再 Esc 兜底。
+    if _goto_dialog_open():
+        pyautogui.keyDown('return'); pyautogui.keyUp('return')
+        time.sleep(0.6)
+        if _goto_dialog_open():
+            pyautogui.keyDown('esc'); pyautogui.keyUp('esc')
+            time.sleep(0.4)
     if verify_shot:
         shot(verify_shot, SB)
+
+
+def _goto_dialog_open():
+    """Goto Line 弹窗是否还开着。
+
+    判据＝输入框的**蓝色 focus 边框**（比亮度可靠：弹窗本体是深灰，与编辑器只差
+    3~5 个灰度级，实测用「亮块占比」判恒 False）。蓝框实测屏幕范围 x 809~1179 /
+    y 420~537，取窄一点的带（x 800~1190, y 415~545）扫蓝色像素。
+    """
+    try:
+        import numpy as np
+        import mss
+        box = {'left': 800, 'top': 415, 'width': 390, 'height': 130}
+        with mss.mss() as sct:
+            img = np.asarray(sct.grab(box))[:, :, :3].astype(int)
+        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        blue = (b - r > 60) & (b > 120)
+        return int(blue.sum()) > 150
+    except Exception:
+        return False
 
 
 # ---- 像素护栏（goto 用）：编辑区指纹比对 -------------------------------------
@@ -127,6 +156,12 @@ def goto_col(line, col, wait=1.0):
         pyautogui.keyDown('right'); pyautogui.keyUp('right')
         time.sleep(0.02)   # 连发不间隔会被丢键（实测 31 次右箭头只生效 24 次、列号短 7）
     time.sleep(wait)
+    # **无条件按 Esc**：跳转已经生效，Esc 只关 goto 输入框、不会撤销光标位置。
+    # 这比「先判弹窗是否还在」可靠得多——像素护栏在弹窗刚出现/正在淡出时判据不稳，
+    # 2026-10-25 实测 a17 首帧就留着 `22:26`、a26 第 90 帧留着 `56:35`，
+    # 两次都是护栏判 False 所以没兜底。
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc')
+    time.sleep(0.35)
 
 
 def close_preview(cancel_xy=(1485, 828), wait=1.4, body_xy=None):
