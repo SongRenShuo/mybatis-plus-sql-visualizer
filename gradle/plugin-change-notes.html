@@ -1,8 +1,13 @@
+<h2>v2026.10.28</h2>
+<ul>
+    <li>修复开启增强捕获后部分数据库工程启动即报 ClassCastException（$Proxy 无法强转为 DmdbConnection 等驱动类）</li>
+    <li>增强捕获不再替换应用拿到的数据库连接对象，改为只读登记；SQL 捕获改由方法级织入完成，功能不受影响</li>
+    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
+</ul>
 <h2>v2026.10.26</h2>
 <ul>
     <li>实体打包进 JAR/lib 模块且该模块无命名配置时，嵌入列前缀按查询宿主模块判定，@Embedded 不再丢前缀</li>
     <li>嵌入列解析新增诊断日志，报障时可在 idea.log 按关键词定位判定链路</li>
-    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.10.23</h2>
 <ul>

@@ -27,6 +27,41 @@ public final class SqlHookCallbacks {
     private static final AtomicBoolean WARNED_ONCE = new AtomicBoolean();
 
     /**
+     * 连接对象替换开关（T-ConnCastSafety，默认<b>关</b>，出厂不得替换宿主连接）。
+     *
+     * <p><b>为什么默认关。</b>连接替换＝把驱动 {@code connect} 返回值换成 JDK 动态代理，而 JDK 代理
+     * 只能实现接口、无法伪装成具体类：宿主只要写 {@code (DmdbConnection) conn}、{@code (KbConnection) conn}
+     * 这类到驱动实现类的强转，就必然抛 {@code ClassCastException: com.sun.proxy.$ProxyN cannot be cast to
+     * dm.jdbc.driver.DmdbConnection}。这不是可修的边界条件，而是「接口代理」的构造性缺陷——一旦命中，
+     * 崩的是宿主业务代码，agent 的 {@code catch (Throwable)} 自吞救不了（异常在宿主栈上抛出）。
+     * 国产库（达梦/金仓/翰高/海量/GaussDB）宿主侧做实现类强转的现场并不少见，故采集红线升级为
+     * 「<b>绝不在宿主侧替换 JDBC 对象</b>」：默认只登记 URL、原对象直返。
+     *
+     * <p><b>那还采得到吗。</b>采得到。SQL 采集主通道已是语句面/prepare 面字节码织入
+     * （{@code StatementWeaver} + {@link cn.song.mybatisplus.sqlvis.agent.WeaveSpecs}）——它只往方法体里
+     * 插回调，<b>不改任何对象身份</b>，MySQL/MariaDB 家族、PG/openGauss、Oracle、SQL Server、H2、达梦
+     * 都走这条路，且 attach 路径对存量池连接同样生效（T-StatementWeave/T-DmWeave/T-PgWeave 的落点）。
+     * 连接代理是更早的通道，唯一独有能力是「连接级 prepare 拦截」，而这已被 prepare 面覆盖。
+     *
+     * <p><b>何时需要打开。</b>仅当某驱动的语句实现类不在 {@code WeaveSpecs} 名单里（如 GBASE 8s、
+     * 部分 SQLite/HSQLDB 形态），织入通道覆盖不到、只能靠连接代理时，用户显式加
+     * {@code -Dsqlvis.agent.wrapConnection=true} 承担强转风险。默认值来自系统属性，进程内不再变，
+     * 避免每条连接读一次属性；测试用 {@link #setWrapConnectionForTest} 显式开关。
+     */
+    private static final String WRAP_CONNECTION_PROP = "sqlvis.agent.wrapConnection";
+
+    private static final boolean DEFAULT_WRAP_CONNECTION =
+            Boolean.parseBoolean(System.getProperty(WRAP_CONNECTION_PROP, "false"));
+
+    /** volatile：测试缝可改（生产初值即 DEFAULT_WRAP_CONNECTION，运行期无写入点）。 */
+    private static volatile boolean wrapConnection = DEFAULT_WRAP_CONNECTION;
+
+    /** 测试缝：null = 复位到系统属性默认值。 */
+    public static void setWrapConnectionForTest(Boolean value) {
+        wrapConnection = value != null ? value : DEFAULT_WRAP_CONNECTION;
+    }
+
+    /**
      * 连接出口回调（织入字节码在 connect 出口调用）：**一律包装**，停采只做逐调用短路。
      *
      * <p><b>为什么这里不看 {@code disabled}</b>（T-AgentConfigChannel T-08，2026-09-22 真机实证）：
@@ -45,6 +80,11 @@ public final class SqlHookCallbacks {
             // T-StatementWeave S4：connect 钩子记最近 URL——语句面归属链的粗粒度兜底源
             UrlResolver.noteConnectUrl(url);
             if (rawConnection == null) {
+                return rawConnection;
+            }
+            if (!wrapConnection) {
+                // T-ConnCastSafety：出厂不替换宿主连接对象（$Proxy 无法强转到 DmdbConnection 等实现类）。
+                // URL 已在上面登记，采集交给语句面/prepare 面织入（不换对象）。
                 return rawConnection;
             }
             if (ProxySupport.isOurProxy(rawConnection)) {

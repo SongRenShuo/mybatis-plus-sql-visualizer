@@ -25,6 +25,21 @@ import static org.junit.Assert.assertTrue;
  */
 public class ConnectWeaveEndToEndTest {
 
+    /**
+     * 本类专测**连接代理通道**（T-ConnCastSafety 起该通道已改为显式 opt-in，
+     * 出厂不替换宿主连接对象——见 {@code SqlHookCallbacks#WRAP_CONNECTION_PROP}）。
+     * 这里按测试缝打开，语义与改造前一致；「默认不替换」由 {@code ConnectionCastSafetyTest} 钉住。
+     */
+    @org.junit.Before
+    public void enableConnectionProxyForProxyChannelTests() {
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setWrapConnectionForTest(Boolean.TRUE);
+    }
+
+    @org.junit.After
+    public void restoreConnectionProxy() {
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setWrapConnectionForTest(null);
+    }
+
     /** 织入产物落盘，返回目录（供隔离 classloader 加载）。 */
     private File writeWoven(ClassLoader weaveLoader) throws Exception {
         byte[] original = classBytes(FakeDriver.class.getName());

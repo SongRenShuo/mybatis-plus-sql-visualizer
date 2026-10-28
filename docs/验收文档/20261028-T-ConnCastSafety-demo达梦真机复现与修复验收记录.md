@@ -1,0 +1,99 @@
+# T-ConnCastSafety 真机复现与修复验收记录（demo 达梦环境）
+
+**日期**：2026-10-28
+**对象**：增强捕获 agent 在驱动 `connect` 出口替换宿主连接对象（`$Proxy` 无法强转为驱动实现类）
+**复现/验收环境**：
+- demo 工程 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo`（模块 `mybatis-plus-join-demo`）
+- 达梦配置（demo 仓既有，无需新建）：`mybatis-plus-join-demo/src/main/resources/application-dm.yml`
+  - driver `dm.jdbc.driver.DmDriver`，驱动包 `com.dameng:DmJdbcDriver18:8.1.3.140`（`mybatis-plus-join-demo/pom.xml:56-61`）
+  - URL `jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，用户名 `MPJ_DEMO`
+  - 切换方式：Maven profile `dm`（`pom.xml:97-104`，`-Pdm` 或 IDEA Maven 面板勾选）
+- 旧插件：`build/distributions/mybatis-plus-sql-visualizer-2026.10.26.zip` 内嵌 `agent/mps-sql-agent.jar`
+- 新代码：本地构建 `sub-projects/sql-visualizer-agent/build/dist/mps-sql-agent.jar`（含 T-ConnCastSafety 修复）
+- JDK：1.8.0_181（本机默认）
+
+## 一、探针
+
+两个探针都是「取驱动原始连接 → 按用户现场写法强转到驱动实现类」，差别只在驱动：
+
+| 探针 | 连接来源 | 强转目标 | 为什么需要它 |
+|---|---|---|---|
+| `DmConnCastProbe` | `DriverManager.getConnection(jdbc:dm://…)` | `dm.jdbc.driver.DmdbConnection` | 用户报障的真实库与真实强转类型 |
+| `MySqlConnCastProbe` | `DriverManager.getConnection(jdbc:mysql://localhost:3306/mpj_demo…)` | `com.mysql.cj.jdbc.ConnectionImpl` | 达梦 8.1.3.140 的 connect 面织入在旧代码上是 **VerifyError**（见 §二.2），形不出代理；换一条织入能成功的驱动，才能把用户那句 `$ProxyN cannot be cast to <驱动实现类>` 原样打出来 |
+
+探针源码在 `C:/Users/USER/AppData/Local/Temp/conncast-old/`（临时探针，不入任何仓库）。
+
+## 二、读数
+
+### 1. 基线（不挂 agent）
+
+```
+[probe] connection class = dm.jdbc.driver.DmdbConnection
+[probe] CAST OK -> dm.jdbc.driver.DmdbConnection
+```
+
+### 2. 旧插件 agent（2026.10.26）+ 达梦 8.1.3.140
+
+```
+[SqlVisAgent] attach retransform: matched=0 wove=0 unmodifiable=0 failed=0 | transformer: weavable=0 woven=0 noChange=0 transformFailed=0
+Exception in thread "main" java.lang.VerifyError: Bad local variable type
+  Location: dm/jdbc/driver/DmDriver.connect(Ljava/lang/String;Ljava/util/Properties;)Ljava/sql/Connection; @57: aload_1
+  Reason:   Type top (current frame, locals[1]) is not assignable to reference type
+```
+
+即：旧 agent 织出的 `DmDriver` 字节过不了 JVM 校验，**驱动类根本加载不起来**。这不是「采不到事件」，而是**宿主应用连驱动都用不了**——比 CCE 更早、更狠地让程序起不来，与用户「程序死活跑不起来」的现象同源。
+
+### 3. 旧插件 agent + MySQL 8.0.33（用户 CCE 形态）
+
+```
+[probe] connection class = com.sun.proxy.$Proxy0
+[probe] CAST FAILED -> java.lang.ClassCastException: com.sun.proxy.$Proxy0 cannot be cast to com.mysql.cj.jdbc.ConnectionImpl
+```
+
+与用户报障 `com.sun.proxy.$Proxy129 cannot be cast to dm.jdbc.driver.DmdbConnection` 是同一形态、同一代码路径（`ConnectWeaver` → `onConnection` → `ProxySupport.wrapConnection`），只差驱动实现类名。**用户的 DM 驱动版本其 connect 出口帧形态与 8.1.3.140 不同（无 `chop_frame`），织入成功才会形出代理**——这条差异正是「为什么用户看到 CCE、而 demo 同版本看到 VerifyError」的解释。
+
+### 4. 新代码 agent + 达梦 8.1.3.140
+
+```
+[probe] connection class = dm.jdbc.driver.DmdbConnection
+[probe] CAST OK -> dm.jdbc.driver.DmdbConnection
+```
+
+### 5. 新代码 agent + MySQL 8.0.33
+
+```
+[probe] connection class = com.mysql.cj.jdbc.ConnectionImpl
+[probe] CAST OK -> com.mysql.cj.jdbc.ConnectionImpl
+```
+
+两端一致：修复后宿主拿到的就是驱动自己的连接对象，实现类强转不可能失败。
+
+## 三、采集未劣化（e2eFakeIde）
+
+关掉连接代理通道后，必须证明「事件照常到达、源码位置照常可跳」——否则就是把崩溃换成了功能归零。
+
+`./gradlew e2eFakeIde`（假 IDE + 真 Spring Boot/MyBatis-Plus-Join 应用 + 真 MySQL + 新 agent）：
+
+```
+HELLO=pid=13056 @1318ms HEARTBEAT=1 EVENT(累计)=4 CONFIG_ACK=5 UNKNOWN_CMD=0
+断言 PASS=26 FAIL=0
+RESULT: ALL-PASS
+```
+
+源码定位（应用侧 `[T-SourceJumpFunnel]` 取证）落在真实业务行：
+
+```
+primary=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:92 via=L1 entry=...#joinOneAndCount
+primary=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:42 via=L1 entry=...#joinRightAlias
+primary=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103 via=L1 entry=...#ifExistsFamily
+```
+
+即：事件、CONFIG 通道（停采/恢复/脱敏/收口五段）、调用栈定位全部照旧，走的是语句面织入通道而非连接代理。
+
+（首轮跑失败为环境残留：上一次被中断的 e2e 留下了 FakeIde 进程占住探针端口，清理后重跑即全绿；与应用/插件行为无关。）
+
+## 四、结论与边界
+
+- **复现成立**：旧 agent 在 demo 达梦链路上直接把驱动打废（VerifyError）；换织入成功的驱动即可原样打出用户 CCE 文本。**修复成立**：新 agent 在两条链路上都回到「宿主原对象」。
+- **边界**：本节验的是 agent 与真实驱动的交互，未跑 runIde 全 UI 流程；「插件侧注入 `-javaagent` → 应用启动 → 面板出条目」的完整 GUI 链路由 `e2eFakeIde` 与既往 runIde 批次覆盖。
+- 用户驱动版本未取得，`DmdbConnection` 强转的发起方（用户代码/框架）亦未取证；本轮按「代理无法伪装具体类」的构造性归因，不依赖上述两点。

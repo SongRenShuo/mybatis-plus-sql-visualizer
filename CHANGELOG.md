@@ -2,9 +2,10 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.10.28] - 2026-10-28
 
 ### Fixed
+- **增强捕获把宿主连接换成 JDK 代理，致驱动实现类强转抛 CCE、应用起不来（T-ConnCastSafety，用户 P0）**：达梦工程报 `com.sun.proxy.$Proxy129 cannot be cast to dm.jdbc.driver.DmdbConnection`——agent 在驱动 `connect` 出口把真实连接替换成 `java.lang.reflect.Proxy`，而动态代理只能实现接口、永远无法伪装成驱动实现类，宿主任何 `(DmdbConnection) conn` 形式的强转必然抛 `ClassCastException`，且异常抛在宿主栈上、agent 的自吞拦不住。根因是构造性的，故采集红线升级为「绝不在宿主侧替换 JDBC 对象」：连接替换改为显式 opt-in（`-Dsqlvis.agent.wrapConnection=true`），出厂只登记连接 URL 并原样返回宿主对象；SQL 采集仍走语句面/prepare 面字节码织入（只插回调、不改对象身份，MySQL 家族/PG 与 openGauss/Oracle/SQL Server/H2/达梦全覆盖，attach 对存量池连接同样生效）。同批撤出达梦 connect 面织入（该出口在达梦上是已知 `VerifyError` 形态，premain 下会让驱动类定义失败、应用起不来；达梦已有语句面+prepare 面覆盖）。代价：语句实现类不在织入名单的驱动（GBASE 8s、部分 SQLite/HSQLDB 形态）默认不再产出事件，需自行打开上述属性并接受强转风险——「不让程序起不来」优先于覆盖面。
 - **项目打开时的平台慢操作断言（T-SqlDialectPrewarm）**：日志工具窗首帧装配在 EDT 上取 SQL 文件类型高亮器，连带触发平台「文件→方言」映射的一次性延迟加载（逐条解析持久化路径），被平台记为 EDT 慢操作并把本插件归为 blame。现日志转 SQL 的结果区改用插件自研 SQL 高亮器（与预览面板/日志预览同一套配色），并把这处首查整体挪到后台线程、在装配面板之前完成（有界等待 300ms，超时照常装配）。功能与布局零变化；结果区配色随自研词法器变化：关键字按固定词表着色（`WITH`/`INTERVAL` 等方言词降为标识符）、表名与表别名独立成色、逗号点号并入运算符色，且「设置 → 编辑器 → 配色方案 → SQL」段的既有自定义不再作用于该区域。
 
 ## [2026.10.26] - 2026-10-26
