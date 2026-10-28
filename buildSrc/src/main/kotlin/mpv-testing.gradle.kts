@@ -93,6 +93,12 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
+    //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
+    // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
+    // formatTimestampFragment 的 SimpleDateFormat 走 ThreadLocal 缓存、构造时固化默认时区，
+    // 测试内 setDefault 管不到已缓存实例。本机即 CST，此参数为无操作。
+    jvmArgs("-Duser.timezone=Asia/Shanghai")
 }
 
 // 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
@@ -107,16 +113,25 @@ tasks.withType<Test>().configureEach {
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
+// T-ContribDemoFixture：demo 路径单一来源（-PmpDemoProjectDir 可覆盖），供 testShards 预检、
+// testDatabase 系统属性与报错文案共用；预检本身可用 -PskipDemoFixtureCheck=true 显式关闭。
+val mpDemoProjectDir = providers.gradleProperty("mpDemoProjectDir").orNull ?: mpDemoProjectDirDefault
+val skipDemoFixtureCheck = providers.gradleProperty("skipDemoFixtureCheck").orNull?.toBoolean() ?: false
 
-// T-TestPerf14 S2：DB 集成五类 → 五个并行 testIde 任务（任务名→FQCN），聚合任务 testDatabase
+// T-TestPerf14 S2：DB 集成任务 → 每个 FQCN 一个并行 testIde 任务（UI025 起 6 个），聚合任务 testDatabase
 // dependsOn 与各任务 filter 均由本清单驱动。分片排除清单仍是 testIde 块内 dbIntegrationClasses
 // ——两份清单类集必须一致，类集漂移时 SHARD TOTAL 计数与 parity 会现形。
+// UI025：新增预览错列 ExternalAnnotator 判别测试——它需要 SQL 语言/文件类型（Database 插件），
+// 默认 test 的 classpath 已剥离 database jar，故与 DB 集成类同走 testDb* 通道。
 val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     "testDbConsole" to "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
     "testDbSelector" to "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
     "testDbDiagram" to "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
     "testDbExecDocGate" to "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
     "testDbDriverPipeline" to "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
+    "testDbSchemaAnnotator" to "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
+    // T-PreviewSideQuery：旁路查询真库链（COUNT/EXPLAIN/失败解包），需 Database 插件与真实 MySQL
+    "testDbPreviewSideQuery" to "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -397,11 +412,21 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
             // T-TestDbDriver：驱动解析管线回归（artifact 清单/版本解析/classpath 落点）
             "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
+            // UI025：预览错列 ExternalAnnotator（需要 SQL 语言/文件类型 = Database 插件）
+            "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
+            // T-PreviewSideQuery：旁路查询真库链（Database 插件 + 真实 MySQL）
+            "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
         )
+        // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
+        // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿
+        // 任务单独跑。缺省空集 = 既有串行语义逐字不变。
+        val shardExcludeClasses: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
+            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
             .filter { it !in testExternalClasses }
+            .filter { it !in shardExcludeClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -415,8 +440,19 @@ intellijPlatformTesting {
         val durationWeights: Map<String, Double> = run {
             val weightSamples = providers.gradleProperty("testShardWeightSamples").orNull
                 ?.toIntOrNull()?.coerceIn(1, 5) ?: 2
-            val resultDirs = sequenceOf(file("build/test-results/test")) +
-                (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+            // T-TestShardParallel：并行多构建同时配置时，各 lane 看到的 build/test-results
+            // 历史样本不同（别的 lane 正在删/写结果目录），会算出不同的分片分配 → 测试
+            // 重复或漏跑（20261020 实测两轮总数 7949 vs 8119）。并行运行器开跑前把上一轮
+            // 结果快照到固定目录，并用 -PtestShardWeightRoot 让所有 lane 读同一份冻结样本，
+            // 既保留真实权重（均衡）又让计划与配置时点无关；缺省仍是 build/test-results。
+            // -PtestShardIgnoreLocalWeights=true 是只吃入库画像的退路（冷树/快照缺失时用）。
+            val ignoreLocalWeights =
+                providers.gradleProperty("testShardIgnoreLocalWeights").orNull?.toBoolean() ?: false
+            val weightRoot = providers.gradleProperty("testShardWeightRoot").orNull
+                ?.let { file(it) } ?: file("build/test-results")
+            val resultDirs = if (ignoreLocalWeights) emptySequence() else
+                sequenceOf(File(weightRoot, "test")) +
+                    (1..testShardCount).asSequence().map { File(weightRoot, "testShard$it") }
             val samples = HashMap<String, MutableList<Pair<Long, Double>>>() // FQCN -> [(mtime, seconds)]
             for (dir in resultDirs) {
                 if (!dir.isDirectory) continue
@@ -691,9 +727,18 @@ intellijPlatformTesting {
                 testFramework(TestFrameworkType.Platform)
                 sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard$i"))
                 task {
+                    // T-ContribDemoFixture：每片都先过 demo 预检；直接跑 testShardN 也不会绕过。
+                    dependsOn("verifyDemoFixture")
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
+                    // T-CiRelease（20261025）：失败用例全格式输出（消息+完整栈）——Gradle 精简格式
+                    // 只打「AssertionError at xx:NN」不含断言消息，CI 上 O147 子进程日志等关键证据
+                    // 落不进控制台（agent 子项目侧同款配置，其失败日志一直带消息即此机制）。
+                    testLogging {
+                        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    }
                     // T-McpToolset2：分片同样需要 mcpStub 桩产物（工具级门控测试实例化 Tool 类，
                     // 超类型 McpToolset 来自桩源集；root 侧 test 任务已挂，分片默认不含——
                     // 漏挂致 NoClassDefFoundError 成片）。mcpStub 源集由根脚本在 convention
@@ -743,8 +788,8 @@ intellijPlatformTesting {
         // 并行前提（T13 S4 评估 + 本轮反转的前提）：五类对 demo MySQL 全只读（源码面零 DML/DDL
         // 实证）→ 五路并发读无共享写冲突；Commit 峰值≈5 分片量级（评估③在案）；真库在跑
         // （20261004 netstat 3306 LISTENING 实测，T13「真库未起」前提反转）。
-        // 命令语义不变：./gradlew testDatabase 仍是「一命令五类全跑」（块外聚合任务 dependsOn
-        // 五者，org.gradle.parallel 并行执行）。
+        // 命令语义不变：./gradlew testDatabase 仍是「一命令全部 testDb* 全跑」（块外聚合任务
+        // dependsOn 全部任务，org.gradle.parallel 并行执行）。
         // 种子逻辑与原单任务逐字等价、仅 configRoot 参数化（config_<任务名> 规则 M36.5.23d 在案，
         // IPGP testIde 任务的实际 config 目录 = sandboxDirectory 下 config_<任务名>）。
         fun registerDbShard(name: String, fqcn: String) {
@@ -752,6 +797,8 @@ intellijPlatformTesting {
                 testFramework(TestFrameworkType.Platform)
                 sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/database/$name"))
                 task {
+                    // T-ContribDemoFixture：DB 集成任务同样先过 demo 预检。
+                    dependsOn("verifyDemoFixture")
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
                     // M36.5.23：DB 集成测试配置
@@ -759,7 +806,7 @@ intellijPlatformTesting {
                     //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。
                     systemProperty(
                         "mpDemoProjectDir",
-                        providers.gradleProperty("mpDemoProjectDir").getOrElse(mpDemoProjectDirDefault),
+                        mpDemoProjectDir,
                     )
                     // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
                     // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
@@ -867,19 +914,59 @@ intellijPlatformTesting {
     }
 }
 
-// T-TestPerf14 S2：testDatabase 聚合任务（命令名与语义不变，一命令五类全跑）——纯容器，
-// 五个 testDb* 任务在 org.gradle.parallel 下并行执行。原单任务串行形态见 git 历史。
+// T-ContribDemoFixture：全量/DB 测试的 demo 前置预检——只读检查，不修改 demo。
+// 5 个 Demo* 用例硬断言 demo 源码存在；缺 demo 时提前失败并给出一键设置指引，避免 5 个分片
+// 各跑一遍才在同一个断言上成片报红。可用 -PskipDemoFixtureCheck=true 显式跳过本预检。
+tasks.register("verifyDemoFixture") {
+    group = "verification"
+    description = "校验测试 demo 是否存在且包含测试读取的关键文件（-PmpDemoProjectDir 覆盖）"
+    inputs.property("mpvDemoRoot", mpDemoProjectDir)
+    inputs.property("mpvSkipDemoFixtureCheck", skipDemoFixtureCheck.toString())
+    doLast {
+        if (inputs.properties["mpvSkipDemoFixtureCheck"] == "true") {
+            logger.lifecycle("verifyDemoFixture: skipped (-PskipDemoFixtureCheck=true)")
+            return@doLast
+        }
+        val root = File(inputs.properties["mpvDemoRoot"] as String)
+        val required = listOf(
+            "mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/service/impl/UserServiceImpl.java",
+            "mybatis-plus-demo/src/main/resources/db/schema.sql",
+            "mybatis-plus-join-demo/src/main/resources/db/schema.sql",
+            "jpa-hibernate-demo/src/main/java/cn/song/jpademo",
+            "jpa-embedded-prefix-demo/src/main/java/cn/song/embedprefixdemo/service",
+            "jpa-jar-model-demo/src/main/java/cn/song/jarmodeldemo/service",
+            "jpa-jar-model-lib/pom.xml",
+        )
+        val missing = required.filter { !File(root, it).exists() }
+        if (!root.isDirectory || missing.isNotEmpty()) {
+            val detail = if (missing.isEmpty()) "" else "\n缺少：" + missing.joinToString("、")
+            throw GradleException(
+                "测试 demo 未就绪：$root$detail\n" +
+                    "全量 testShards 中 5 个 Demo* 用例会硬断言 demo 源码存在。\n" +
+                    "请运行：dev-support/test-demo/setup-test-env.ps1（或 setup-test-env.sh）\n" +
+                    "或指定：-PmpDemoProjectDir=<demo 路径>\n" +
+                    "只想跳过本预检：-PskipDemoFixtureCheck=true",
+            )
+        }
+        logger.lifecycle("verifyDemoFixture: OK ($root)")
+    }
+}
+
+// T-TestPerf14 S2：testDatabase 聚合任务（命令名与语义不变，一命令全部 testDb* 全跑）——纯容器，
+// 6 个 testDb* 任务在 org.gradle.parallel 下并行执行。原单任务串行形态见 git 历史。
 tasks.register("testDatabase") {
     group = "verification"
     description =
-        "DB 集成五类并行门禁（T-TestPerf14 S2：五任务各独占 JVM+沙盒，原单任务串行形态见 git 历史）"
+        "DB 插件 classpath 门禁（T-TestPerf14 S2：各任务独占 JVM+沙盒；UI025 起 6 个、T-PreviewSideQuery 起 7 个，原单任务串行形态见 git 历史）"
+    dependsOn("verifyDemoFixture")
     dependsOn(*dbIntegrationTaskSpecs.map { it.first }.toTypedArray())
 }
 
 tasks.register("testShards") {
     group = "verification"
     description =
-        "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
+        "分片全量测试（时长均衡自动分区 $testShardCount 片；-PtestShardCount 调片数；跨进程并行用 dev-support/test-shards-parallel.ps1）"
+    dependsOn("verifyDemoFixture")
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
     dependsOn("testExternal")
@@ -1054,6 +1141,10 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
         // T-TestDbDriver：驱动解析管线回归，同上仅在 testDatabase 运行
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest")
+        // UI025：错列标注判别测试需要 Database 插件提供 SQL 语言/文件类型，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest")
+        // T-PreviewSideQuery：旁路查询真库链需要 Database 插件与真实 MySQL，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest")
     }
 }
 

@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.26",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.26/mybatis-plus-sql-visualizer-2026.10.26.zip",
-  "changeNotes": "实体打包进 JAR/lib 模块且该模块无命名配置时，嵌入列前缀按查询宿主模块判定，@Embedded 不再丢前缀\n嵌入列解析新增诊断日志，报障时可在 idea.log 按关键词定位判定链路\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-26",
+  "version": "2026.10.28",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.28/mybatis-plus-sql-visualizer-2026.10.28.zip",
+  "changeNotes": "Mapper 接口方法与 XML 语句之间新增双向跳转，点行号旁的图标即可互跳\nDDL 语句纳入类型着色与筛选，建表改表与删表清空各成一档，色条用虚线区分\n预览面板执行 SQL 不再因方言不一致被拦下，改为提示后继续执行\n增强捕获不再替换应用拿到的数据库连接，修复部分数据库工程启动即报 ClassCastException\n修复预览头部显示已绑定某库、实际却在另一个库上执行的问题\n修复日志列表头部信息顺序与类名被截断，以及自动滚动无法恢复\n修复时间显示格式不跟随设置，宽栏与窄栏显示成两种形态\n修复设置页切到具体方言后状态行文案不刷新\n日志头部行渲染加缓存，长列表滚动更流畅\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-28",
   "sinceBuild": "243"
 }

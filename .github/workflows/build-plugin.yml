@@ -1,0 +1,434 @@
+name: 插件门禁与发行（手动）
+run-name: 插件 CI（${{ inputs.mode }}）· ${{ inputs.branch || github.ref_name }}
+
+# 四种运行模式（同一条流水线，按 mode 裁剪步骤）：
+#   gate    全量分片测试 + buildPlugin/verifyPlugin + verifyGate(243/253/262) + verifyMarketplace，产物留 14 天，不发布
+#   release 同上，跑完直接发布 GitHub Release
+#   publish 只下载某次已成功门禁运行的插件产物并发布——不重建、不重跑门禁，发出去的字节就是门禁验过的那一份
+#   tests   只跑全量分片测试
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'gate＝全量测试＋三目标门禁（默认，不发布）｜release＝门禁后直接发布｜publish＝复用已通过门禁的产物发布（不重跑门禁）｜tests＝只跑全量分片测试'
+        required: false
+        type: choice
+        options:
+          - gate
+          - release
+          - publish
+          - tests
+        default: gate
+      run_id:
+        description: 'publish 模式的门禁运行 id（留空＝该分支最近一次带插件产物的成功运行）'
+        required: false
+        type: string
+      branch:
+        description: '要运行/发行的分支（留空使用上方选择的分支）'
+        required: false
+        type: string
+      notes:
+        description: '完整发行说明路径（留空＝按版本号在 docs/发行说明 下匹配；仅在正文里作链接）'
+        required: false
+        type: string
+
+# 创建 Release 并上传资产需要写权限（GITHUB_TOKEN）；
+# actions: read 用于 publish 模式跨运行下载门禁产物（显式声明 permissions 会重置所有默认作用域）
+permissions:
+  contents: write
+  actions: read
+
+# 同一分支串行排队（三种模式共用一组）：既避免两次发行并发覆盖同一 Release 资产，
+# 也避免门禁/全量测试与发行抢同一台 runner 的资源
+concurrency:
+  group: plugin-ci-${{ inputs.branch || github.ref_name }}
+  cancel-in-progress: false
+
+
+jobs:
+  ci:
+    # publish 模式只发布既有产物，不重建不重测
+    if: inputs.mode != 'publish'
+    runs-on: windows-latest
+    timeout-minutes: 240
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          # publish 模式检出的是门禁那次的提交（版本号/change notes/发行说明都取自同一棵树）
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        if: inputs.mode != 'publish'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        if: inputs.mode != 'publish'
+        run: |
+          # 仅修改 Runner 中的副本，移除本地代理并使用 Gradle 官方下载源。
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        if: inputs.mode != 'publish'
+        # 缓存 Gradle User Home：verifyPlugin 下载的三版本 IDE 发行版与 verifier-cli 跨轮复用
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 准备测试 demo
+        if: inputs.mode != 'publish'
+        # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）；
+        # -SkipDb：CI 无本机 MySQL，testDatabase / e2eFakeIde 属本地真库环节，不在本流水线内
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+
+      - name: 打包插件 + 官方兼容验证
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        # T-CiRelease（20261025）：各 gradle 步骤不再用 --no-daemon——单次 daemon JVM 在构建
+        # 结束后须整进程退出，任何测试泄漏的非 daemon 线程都会把退出卡死（20261025 run
+        # 40150222557 实证：五片 01:47 全部结束后静默 69 分钟直至取消）。常驻 daemon 下客户端
+        # 在构建完成即返回，泄漏线程随 runner 回收；daemon 跨步骤复用顺带提速。
+        # 发版链前半（对应本地 releaseGate）：verifyPlugin 在线报告口径为「离线 + 豁免清单」，
+        # 同时为后续 verifyGate/verifyMarketplace 预热 verifier-cli 与 253/262 发行版缓存
+        #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
+        run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
+
+      - name: 权威兼容门禁（verifyGate，三目标 243/253/262）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        # -PverifyOnly=true：复用上一步的发行包，不重打包（Jar 带 MPV-Build 时间戳恒重跑）
+        run: ./gradlew.bat :verifyGate -PverifyOnly=true -PgifRecord=false --console=plain
+
+      - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
+
+      - name: 全量分片测试（testShards，真机类剔除）
+        if: inputs.mode != 'publish'
+        # 步骤级超时：历史耗时约 10 分钟（O147 子进程另加约 2 分钟），25 分钟 = 2 倍余量。
+        # 20261025 已两次实测分片 JVM 在 runner 上偶发挂起（步骤内挂死只能烧满 job 的 240 分钟），
+        # 超时把挂起转化为快速失败——if: failure() 的诊断/上传步骤得以执行，工件里能看到哪个
+        # 分片没有结果 XML（= 挂起元凶），下次挂起即可定位。
+        timeout-minutes: 25
+        # 三类真机依赖用例在 CI 剔除（与 testDatabase / e2eFakeIde 同口径，本地发版前照跑）：
+        #   AttachPoolWarmGateTest——child JVM 起 Hikari 真池直连本机 MySQL；
+        #   DataSourceJdbcSmokeTest——demo 数据源 JDBC 直连 127.0.0.1:3306；
+        #   O147RealAgentAcceptanceTest——需要本机 JDK8（sqlvis.jdk8home 默认硬编码本机路径）。
+        # root 侧用既有 -PtestShardExcludeClasses 隔离口，agent 侧用 -PagentTestExclude（同语义）。
+        run: >-
+          ./gradlew.bat :testShards -PgifRecord=false --console=plain
+          "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
+          "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+
+      - name: 上传插件 ZIP
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ github.run_number }}
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: 失败诊断输出（断言消息打到任务日志）
+        # Gradle 精简控制台不显示断言消息（expected/actual、O147 子进程日志只在 test-results
+        # XML 里），此步把所有失败用例的消息直接打进任务日志——无需下载工件即可定位。
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results, sub-projects/sql-visualizer-agent/build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($failMatches.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              foreach ($m in $failMatches) {
+                Write-Host ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
+                Write-Host '-----'
+              }
+            }
+          }
+
+      - name: 失败时上传测试报告（诊断通道）
+        # 任务失败时把测试报告与结果 XML 打成工件——CI 控制台的精简格式不显示断言消息
+        # （expected/actual、子进程日志都只在报告里），下载工件即可定位，终结盲猜轮次。
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_number }}
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/o147-diag/
+            sub-projects/sql-visualizer-agent/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
+    # （仓库 Settings → Environments → release 配 required reviewers；未配审批人则直接发布）
+    needs: ci
+    # !cancelled() 而不是 always()：取消运行时不能把发布 job 拉起来
+    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.ci.result == 'success')) }}
+    environment: release
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 解析发布源（publish 模式）
+        # 复用此前通过门禁的运行：只取「检出提交 + 已上传的插件 zip」，不重建、不重跑门禁，
+        # 保证发出去的字节就是门禁验证过的那一份。未给 run_id 时取该分支最近一次带产物的成功运行。
+        if: inputs.mode == 'publish'
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID_INPUT: ${{ inputs.run_id }}
+          BRANCH_INPUT: ${{ inputs.branch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $branch = if ($env:BRANCH_INPUT) { $env:BRANCH_INPUT } else { $env:GITHUB_REF_NAME }
+          $runId = $env:RUN_ID_INPUT
+          if (-not $runId) {
+            # 该分支最近 20 次成功运行里，取第一个确实带 plugin-<run_number> 产物的
+            # （tests 模式不产出该产物，不能只看「成功」）
+            $resp = gh api "repos/$repo/actions/runs?branch=$([uri]::EscapeDataString($branch))&status=success&per_page=20" |
+              ConvertFrom-Json
+            foreach ($c in $resp.workflow_runs) {
+              $names = @(gh api "repos/$repo/actions/runs/$($c.id)/artifacts" --jq '.artifacts[].name')
+              if ($names -contains "plugin-$($c.run_number)") { $runId = $c.id; break }
+            }
+            if (-not $runId) {
+              throw "分支 $branch 上找不到带插件产物的成功运行；请显式传 run_id（该运行 URL 末尾的 /runs/<id>）"
+            }
+          }
+          $run = gh api "repos/$repo/actions/runs/$runId" | ConvertFrom-Json
+          if ($run.conclusion -ne 'success') { throw "运行 $runId 的结论是 $($run.conclusion)，只能基于成功的门禁运行发布" }
+          if ($run.head_branch -ne $branch) {
+            Write-Host "提示：运行 $runId 来自分支 $($run.head_branch)（输入分支是 $branch），按运行自身分支发布"
+          }
+          $artName = "plugin-$($run.run_number)"
+          $have = @(gh api "repos/$repo/actions/runs/$runId/artifacts" --jq '.artifacts[].name')
+          if (-not ($have -contains $artName)) {
+            throw "运行 $runId 里没有产物 $artName（tests 模式不产出该产物，或已过 14 天保留期）"
+          }
+          Write-Host "发布源运行=$runId 分支=$($run.head_branch) 提交=$($run.head_sha) 产物=$artName"
+          "sha=$($run.head_sha)"            | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "branch=$($run.head_branch)"      | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "run_id=$runId"                   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "run_number=$($run.run_number)"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.source.outputs.sha || inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 下载门禁产物（publish 模式）
+        if: inputs.mode == 'publish'
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-${{ steps.source.outputs.run_number }}
+          run-id: ${{ steps.source.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: build/distributions
+
+      - name: 下载本次构建产物（release 模式）
+        if: inputs.mode == 'release'
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-${{ github.run_number }}
+          path: build/distributions
+
+      - name: 发布到 GitHub Release（本版变更 + 完整发行说明链接）
+        if: inputs.mode == 'release' || inputs.mode == 'publish'
+        # 正文结构＝本版变更清单（取 gradle/plugin-change-notes.html 里 v{version} 那一段，与 IDE 详情页
+        # 「最新变化」同源）+ 全部历史版本（<details> 折叠，就地展开，不外链 HTML 源文件）+ 发行元信息
+        # （附件/标签/完整发行说明/全部发行版本/构建记录）+ 反馈入口（官网需求池与微信/交流群二维码）。
+        # 不整份贴的只有发行说明 md（约 20 KB 且带「测试」一节内部读数），它作为链接目标；首屏仍是
+        # 本版二十来条用户可见变更，全量清单点开即见。
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.source.outputs.branch || inputs.branch || github.ref_name }}
+          RELEASE_NOTES_INPUT: ${{ inputs.notes }}
+          RELEASE_SOURCE_RUN: ${{ steps.source.outputs.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = ((Get-Content 'gradle.properties' | Where-Object { $_ -match '^version=' } | Select-Object -First 1) -replace '^version=', '').Trim()
+          if (-not $version) { throw '未能从 gradle.properties 解析出 version=' }
+          $tag = $version
+          $title = "🎉 SQL Visualizer v$version"
+
+          # 发行标签必须落在**实际检出并打包**的提交上：dispatch 的 ref 与输入 branch 可以不同
+          # （--ref master -f branch=dev 时 github.sha 是 master 的），故取检出树的 HEAD 而非 github.sha
+          $headSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $headSha) { throw 'git rev-parse HEAD 失败' }
+
+          # 内测版（-beta.N）先按完整版本号找，找不到退回基号——change notes 与发行说明都按此约定
+          $probes = @($tag)
+          if ($tag -match '^([^-]+)-') { $probes += $Matches[1] }
+
+          # ---- 1. 本版变更清单：切 gradle/plugin-change-notes.html ----
+          $cnPath = 'gradle/plugin-change-notes.html'
+          if (-not (Test-Path -LiteralPath $cnPath)) { throw "change notes 不存在：$cnPath" }
+          $cn = Get-Content -LiteralPath $cnPath -Raw -Encoding utf8
+          $segment = $null
+          $currentBlock = $null
+          foreach ($probe in $probes) {
+            $m = [regex]::Match($cn, "(?s)<h2>\s*v?$([regex]::Escape($probe))\s*</h2>(.*?)(?=<h2>|\z)")
+            if ($m.Success) { $segment = $m.Groups[1].Value.Trim(); $currentBlock = $m.Value; break }
+          }
+          if (-not $segment) {
+            $have = ([regex]::Matches($cn, '<h2>(.*?)</h2>') | ForEach-Object { $_.Groups[1].Value }) -join '、'
+            throw "$cnPath 里没有 v$version 的标题块，无法拼发行正文（现存：$have）"
+          }
+          $bullets = [regex]::Matches($segment, '(?s)<li>(.*?)</li>')
+          if ($bullets.Count -eq 0) { throw "$cnPath 的 v$version 段里没有 <li> 变更条目" }
+          # 统一换行，避免文件里的 CRLF 与 Markdown 的 LF 混排
+          $segment = $segment -replace "`r`n", "`n"
+          # 历史版本＝去掉本版那段后的全部内容，供正文里折叠展开
+          $history = ($cn.Replace($currentBlock, '').Trim()) -replace "`r`n", "`n"
+          $historyVersions = [regex]::Matches($history, '<h2>').Count
+          $historyBullets = [regex]::Matches($history, '<li>').Count
+
+          # ---- 2. 完整发行说明：只作链接目标，不贴正文 ----
+          $notesDir = 'docs/发行说明'
+          $notesFile = $env:RELEASE_NOTES_INPUT
+          if ($notesFile) {
+            if (-not (Test-Path -LiteralPath $notesFile)) { throw "指定的发行说明不存在：$notesFile" }
+            $notesFile = (Resolve-Path -LiteralPath $notesFile).Path
+          } else {
+            if (-not (Test-Path -LiteralPath $notesDir)) { throw "发行说明目录不存在：$notesDir" }
+            foreach ($probe in $probes) {
+              # 版本号两侧加边界，避免 v2026.10.2 误命中 v2026.10.23
+              $pattern = "(?<![0-9A-Za-z._-])v$([regex]::Escape($probe))(?![0-9A-Za-z._-])"
+              $hit = Get-ChildItem -LiteralPath $notesDir -Filter '*-发行说明.md' |
+                Where-Object { (Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8) -match $pattern } |
+                Sort-Object Name -Descending | Select-Object -First 1
+              if ($hit) { $notesFile = $hit.FullName; break }
+            }
+            if (-not $notesFile) {
+              $available = (Get-ChildItem -LiteralPath $notesDir -Filter '*-发行说明.md' | Sort-Object Name -Descending |
+                Select-Object -First 5 -ExpandProperty Name) -join '、'
+              throw "在 $notesDir 下找不到正文含 v$version 的发行说明，请用工作流输入 notes 显式指定。最近 5 份：$available"
+            }
+          }
+          # 链接钉 tag 而不是分支：分支前进或改名都不会失效；中文路径逐段做 URL 编码
+          $notesName = [System.IO.Path]::GetFileName($notesFile)
+          $encodedPath = ((("docs/发行说明/$notesName") -split '/') | ForEach-Object { [System.Uri]::EscapeDataString($_) }) -join '/'
+          $notesUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/blob/$tag/$encodedPath"
+
+          # ---- 3. 组装正文 ----
+          $zipName = "mybatis-plus-sql-visualizer-$version.zip"
+          $runUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
+          $repoBase = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)"
+          $giteeUrl = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/tag/$tag"
+          $releasesUrl = "$repoBase/releases"
+          $readmeUrl = "$repoBase/blob/$tag/README.md"
+          $feedbackUrl = 'https://sql-visualizer.jvtools.cn/about/feedback'
+          $bodyLines = @(
+            '## 本版变更',
+            '',
+            $segment
+          )
+          # 全部历史版本就地折叠展开——change notes 是 HTML 文件，GitHub 只会把它当源码显示，
+          # 外链过去是一屏 <h2>/<li> 标签墙，所以要展开就直接把内容放进正文
+          if ($historyVersions -gt 0) {
+            $bodyLines += @(
+              '',
+              '<details>',
+              ('<summary>查看全部历史变更（{0} 个版本 · {1} 条，v{2} 之前的部分）</summary>' -f $historyVersions, $historyBullets, $tag),
+              '',
+              $history,
+              '',
+              '</details>'
+            )
+          }
+          $bodyLines += @(
+            '',
+            '---',
+            '',
+            ('- 附件：`{0}`' -f $zipName),
+            ('- 标签：`{0}`（提交 `{1}`，分支 {2}）' -f $tag, $headSha.Substring(0, 7), $env:RELEASE_BRANCH),
+            ('- 完整发行说明：[{0}]({1})' -f $notesName, $notesUrl),
+            ('- 全部发行版本：[Releases]({0})' -f $releasesUrl),
+            ('- Gitee 同版发行版（自更新通道）：{0}' -f $giteeUrl),
+            # publish 模式是另一次运行，产物与门禁结论来自源运行，两个链接都给出才追得回
+            $(if ($env:RELEASE_SOURCE_RUN) {
+                ('- 构建记录：{0}（门禁运行：{1}）' -f $runUrl, "$repoBase/actions/runs/$($env:RELEASE_SOURCE_RUN)")
+              } else {
+                ('- 构建记录：{0}' -f $runUrl)
+              }),
+            '',
+            '---',
+            '',
+            ('**反馈**：遇到问题或有建议，欢迎到 [官网需求池]({0}) 提交；也可以扫码加作者微信 / 交流群。' -f $feedbackUrl),
+            '',
+            '| 作者微信 | 交流群 |',
+            '|---|---|',
+            '| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.png) |',
+            '',
+            ('二维码失效时，可从 [官网](https://sql-visualizer.jvtools.cn) 或 [README.md]({0}) 底部查看最新入口。' -f $readmeUrl)
+          )
+          $bodyText = $bodyLines -join "`n"
+          $bodyFile = Join-Path ($(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP })) 'github-release-body.md'
+          Set-Content -LiteralPath $bodyFile -Value $bodyText -Encoding utf8NoBOM
+
+          $zipPath = "build/distributions/$zipName"
+          if (-not (Test-Path -LiteralPath $zipPath)) { throw "发行包不存在：$zipPath" }
+          Write-Host "版本=$version 标签=$tag 分支=$env:RELEASE_BRANCH 提交=$headSha"
+          Write-Host "本版变更条目=$($bullets.Count) 完整发行说明=$notesFile"
+
+          # ---- 4. 建版 / 覆盖 ----
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在：覆盖资产并同步标题与正文。"
+            gh release upload $tag $zipPath --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'gh release upload 失败' }
+            $editArgs = @('release', 'edit', $tag, '--title', $title, '--notes-file', $bodyFile)
+            if ($version -match '-') { $editArgs += '--prerelease' }
+            gh @editArgs
+            if ($LASTEXITCODE -ne 0) { throw 'gh release edit 失败' }
+          } else {
+            $releaseArgs = @(
+              'release', 'create', $tag, $zipPath,
+              '--target', $headSha,
+              '--title', $title,
+              '--notes-file', $bodyFile
+            )
+            # 内测通道（版本号带 -beta.N 等后缀）自动标记为预发布
+            if ($version -match '-') { $releaseArgs += '--prerelease' }
+            gh @releaseArgs
+            if ($LASTEXITCODE -ne 0) { throw 'gh release create 失败' }
+          }
+
+          # ---- 5. 回读校验：正文必须带本版首条与末条变更（切片没切偏、没被覆盖成旧正文）----
+          $plain = @($bullets | ForEach-Object { (($_.Groups[1].Value -replace '<[^>]+>', '').Trim()) })
+          foreach ($n in @($plain[0], $plain[-1])) {
+            $needle = if ($n.Length -gt 24) { $n.Substring(0, 24) } else { $n }
+            $body = (gh release view $tag --json body --jq '.body') -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw 'gh release view 回读失败' }
+            if (-not $body.Contains($needle)) {
+              throw "回读校验失败：Release 正文缺少本版变更条目「$needle…」"
+            }
+          }
+          Write-Host "回读校验通过：本版首末条变更均在正文中"
+
+          "GitHub Release ``$tag``：分支 $env:RELEASE_BRANCH @ $headSha，正文＝本版 change notes（$($bullets.Count) 条）+ 历史折叠（$historyVersions 版 / $historyBullets 条）+ 元信息与反馈，完整说明 $notesUrl" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
