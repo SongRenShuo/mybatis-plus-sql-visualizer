@@ -18,7 +18,7 @@ import java.util.TreeSet;
  *  <li>有危险发现：摘要行 + 按类别去重的发现清单（每类一行，文案中性说事实）。</li>
  * </ul>
  *
- * <p>不新增弹窗形态、不新增步骤（弹窗克制红线 {@code docs/设计规范-弹窗克制红线.md}）。</p>
+ * <p>不新增弹窗形态、不新增步骤（弹窗克制红线 {@code docs/规范/设计规范-弹窗克制红线.md}）。</p>
  */
 public final class ExecuteConfirmMessages {
 
