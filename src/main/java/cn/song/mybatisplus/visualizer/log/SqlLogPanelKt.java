@@ -525,10 +525,24 @@ public final class SqlLogPanelKt {
             Color tint,
             boolean isSelected,
             javax.swing.JList<?> list) {
+        applyCrudColorMark(cell, colorBar, normalBorder, tint, isSelected, list, false);
+    }
+
+    public static void applyCrudColorMark(
+            JPanel cell,
+            JPanel colorBar,
+            javax.swing.border.Border normalBorder,
+            Color tint,
+            boolean isSelected,
+            javax.swing.JList<?> list,
+            boolean dashed) {
         Color listBg = list != null ? list.getBackground() : cell.getBackground();
         Color selectionBg = list != null ? list.getSelectionBackground() : listBg;
         switch (SqlListTypeColor.styleOf()) {
             case SqlListTypeColor.STYLE_BAR: {
+                // T-DdlTypeColor：DDL 走虚线绘制。把形态告知色条面板（自绘时读它），
+                // 而不是在这里直接画——绘制逻辑归组件自己，本函数只管「该显示什么」。
+                if (colorBar instanceof TypeColorBar) ((TypeColorBar) colorBar).setDashed(dashed);
                 if (tint == null) {
                     setOpaqueIfChanged(colorBar, false);
                 } else {
