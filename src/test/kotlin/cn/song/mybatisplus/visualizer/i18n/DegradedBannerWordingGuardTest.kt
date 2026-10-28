@@ -1,4 +1,3 @@
-// T-SyncK2JMaster115 自 master src/test/kotlin/cn/song/mybatisplus/visualizer/i18n/DegradedBannerWordingGuardTest.kt 移植
 package cn.song.mybatisplus.visualizer.i18n
 
 import org.junit.Assert.assertFalse
@@ -73,21 +72,29 @@ class DegradedBannerWordingGuardTest {
     }
 
     /**
-     * 正向：降级横幅必须给出**真正可行**的补救动作（关掉重开）——只删不写等于留下没有出路的告警。
+     * 正向：降级横幅必须给出**真正可行**的补救动作——只删不写等于留下没有出路的告警。
+     *
+     * T-DegradedPreviewUx P2：原单一 `degradedPsi` 按原因拆成 `degradedTimeout` / `degradedFailed`
+     * （外加第三级 `degradedPlain`）。三条都必须仍能指向「重试」这条就地出路——此前写「关掉重开」
+     * 虽然属实，但把一次本可自动完成的恢复外包给了用户。
      */
     @Test
-    fun `降级横幅必须写出关掉重开这条出路`() {
+    fun `降级横幅必须写出重试这条出路`() {
         val entries = bannerEntries().toMap()
         for (lang in listOf("en", "zh")) {
-            for (key in listOf("panel.banner.degradedPsi", "panel.banner.degradedPlain")) {
+            for (key in listOf(
+                "panel.banner.degradedTimeout",
+                "panel.banner.degradedFailed",
+                "panel.banner.degradedPlain",
+            )) {
                 val v = entries["$lang:$key"]
                     ?: error("缺少键 $lang:$key（bundle 结构变了，本守卫需同步）")
                 val hasRemedy = if (lang == "zh") {
-                    v.contains("重新打开")
+                    v.contains("重试")
                 } else {
-                    v.contains("reopen", ignoreCase = true)
+                    v.contains("Retry", ignoreCase = true)
                 }
-                assertTrue("$lang:$key 未写出「关掉重开」这条可行补救动作: $v", hasRemedy)
+                assertTrue("$lang:$key 未写出「重试」这条可行补救动作: $v", hasRemedy)
             }
         }
     }

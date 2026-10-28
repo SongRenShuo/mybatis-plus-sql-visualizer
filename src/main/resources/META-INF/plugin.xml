@@ -43,7 +43,7 @@
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE（SQL Server / 达梦自增列自动包装）；UPDATE / DELETE 支持快照回填恢复</li>
             <li><b>执行与分析 · 执行 SQL 与执行计划</b>：内嵌原生 Database 控制台执行，一键 EXPLAIN 按方言提交，JOIN 关系图支持 PNG / SVG 导出；执行前有 <code>${}</code> 注入确认、无界写清单与超时护栏（需 Ultimate，社区版自动降级）</li>
             <li><b>调用栈悬停与最近执行记录</b>：调用栈悬停弹出调试器风格弹层（帧数可配置、跳转源码）；最近执行记录弹框浏览并跳转源码</li>
-            <li><b>编码期与工作流增强</b>：mapper XML 语句语法高亮、动态标签折叠与引用导航；方言引号不匹配静态告警；SQL 快捷模板支持光标压在表名上使用；SQL 历史条目可钉住、正则检索、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本，并支持两条历史版本对比；预览参数预设按语句隔离、可折叠；分页拦截器模拟 LIMIT 与 COUNT 可分别控制；EXPLAIN 支持结构化渲染与 Oracle / SQL Server 模板</li>
+            <li><b>编码期与工作流增强</b>：mapper XML 语句语法高亮、动态标签折叠与引用导航、Mapper 接口方法与 XML 语句双向跳转；方言引号不匹配静态告警；SQL 快捷模板支持光标压在表名上使用；SQL 历史条目可钉住、正则检索、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本，并支持两条历史版本对比；预览参数预设按声明方法隔离并永久绑定、可折叠；分页拦截器模拟 LIMIT 与 COUNT 可分别控制；EXPLAIN 支持结构化渲染与 Oracle / SQL Server 模板</li>
             <li><b>面向 AI · MCP 工具</b>：接入平台 MCP Server（近版 IDE 内置），<code>sqlv_*</code> 11 个确定性只读工具覆盖渲染 / 日志还原 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等，设置页逐项门控</li>
         </ul>
         <p>触发方式：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code>。</p>
@@ -59,7 +59,7 @@
             <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview (identity-column wrapping for SQL Server and DM); snapshot recovery for UPDATE / DELETE</li>
             <li><b>Analyze &middot; execution and EXPLAIN</b>: run SQL in the embedded native Database console, one-click EXPLAIN, JOIN diagram with PNG / SVG export; <code>${}</code> injection confirmation, unbounded-write findings and a timeout guard (Ultimate; Community degrades gracefully)</li>
             <li><b>Call stack hover and recent executions</b>: debugger-style stack popup (configurable frame count, jump-to-source) and a recent-executions dialog</li>
-            <li><b>Editing and workflow</b>: SQL syntax highlighting, dynamic-tag folding and reference navigation for mapper XML statements; a static warning for dialect quote mismatches; SQL quick templates usable with the caret on a table name; history pinning, regex search, export to CSV / TSV / plain text / executable SQL, and two-entry version diff; per-statement collapsible parameter presets; pagination-interceptor simulation with LIMIT and COUNT controlled separately; structured EXPLAIN rendering plus Oracle / SQL Server templates</li>
+            <li><b>Editing and workflow</b>: SQL syntax highlighting, dynamic-tag folding and reference navigation for mapper XML statements, plus two-way gutter jumps between mapper XML statements and interface methods; a static warning for dialect quote mismatches; SQL quick templates usable with the caret on a table name; history pinning, regex search, export to CSV / TSV / plain text / executable SQL, and two-entry version diff; collapsible parameter presets scoped to and permanently bound to the declaring method; pagination-interceptor simulation with LIMIT and COUNT controlled separately; structured EXPLAIN rendering plus Oracle / SQL Server templates</li>
             <li><b>AI agents &middot; MCP tools</b>: 11 deterministic read-only <code>sqlv_*</code> tools on the platform MCP Server (render, log restore, checks, EXPLAIN, rollback plan, CRUD, reverse SQL), per-tool gating in settings</li>
         </ul>
         <p>Trigger: gutter icon / context menu / <code>Alt+Shift+Q</code> (rebindable).</p>
@@ -230,6 +230,11 @@
         <!-- T-M24-04 XML 预览：mapper 语句（select/insert/update/delete）行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider"/>
+        <!-- Mapper statement 与接口方法双向导航 -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperXmlToJavaLineMarkerProvider"/>
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider"/>
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
