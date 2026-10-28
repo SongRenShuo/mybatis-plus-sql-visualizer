@@ -134,14 +134,19 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                     await.fail(new IllegalStateException("abandoned before service lookup"));
                     return;
                 }
-                // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言）
-                mapPreviewDialectBeforePsi(p, proj, vf);
+                // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
+                // 创建后再映射需 push 重建；exec 路径同款顺序）
+                String targetLanguageId = mapPreviewDialectBeforePsi(p, proj, vf);
+                // T-DegradedPreviewUx P4：映射切换的语言替换重解析是异步的——等到本文件 PSI 的
+                // 语言已等于目标再取实例，避免捕获即将失效的旧语言 PSI（真机 16:14:33 实证）。
                 // T-StabilityTail：判据放读动作**内部**才管用——平台读动作可被 closeProject 的写动作阻塞，
                 // 放行时窗口已开；在外面判会漏掉这条窄缝。
                 final VirtualFile vfForPsi = vf;
-                PsiFile psi = ReadAction.compute(
-                        (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
-                                prewarmAbandoned(p) ? null : PsiManager.getInstance(proj).findFile(vfForPsi));
+                PsiFile psi = targetLanguageId != null
+                        ? awaitPreviewPsiLanguage(p, proj, vfForPsi, targetLanguageId)
+                        : ReadAction.compute(
+                                (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
+                                        prewarmAbandoned(p) ? null : PsiManager.getInstance(proj).findFile(vfForPsi));
                 if (psi == null) {
                     // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN
                     if (prewarmAbandoned(p)) {
@@ -155,7 +160,17 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                     return;
                 }
                 p.previewTempFile = vf;
-                publishPrewarmProduct(p, await, new Pair<>(vf, psi), prewarmStartedAt, round);
+                // 结果可能恰在首次映射与 PSI 创建之间到达；再走一次幂等同步，避免早期 MySQL 映射赢竞态。
+                PsiFile publishPsi = psi;
+                if (p.previewDesiredDialectName != null) {
+                    String remappedId = mapPreviewDialectBeforePsi(p, proj, vf);
+                    if (remappedId != null) {
+                        // 映射若再次变化，旧实例同样会被重解析失效：等落地并重取
+                        PsiFile reawaited = awaitPreviewPsiLanguage(p, proj, vf, remappedId);
+                        if (reawaited != null) publishPsi = reawaited;
+                    }
+                }
+                publishPrewarmProduct(p, await, new Pair<>(vf, publishPsi), prewarmStartedAt, round);
             } catch (Throwable e) {
                 p.prewarmFailed = true;
                 await.fail(e);
@@ -307,22 +322,94 @@ public final class SqlPreviewPanelEditorLifecycleKt {
     }
 
     /**
-     * T-PreviewExecDs-01c：预览文件方言预映射（exec 路径 DataSourceSelector.mapDialectBeforePsi 同款）——
-     * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。
+     * T-PreviewExecDs-01c / O-145 W5：预览文件方言预映射——PSI 创建时即按本次 SQL 的实际生成方言解析，
+     * 让编辑器语言、补全和渲染保持一致。结果尚未到达时先用兼容 MySQL；结果到达后按
+     * {@code previewDesiredDialectName} 重映射。同目录幂等同时比较 language id，避免早到的
+     * MySQL 映射阻断后到的 Oracle/PostgreSQL；平台缺对应方言时映射 GenericSQL，不反向冒充 MySQL。
+     *
+     * <p>T-ExecSlowOps F1：反射段收编进 {@code DialectPreMapping}，本方法仅保留「面板级进程内幂等短路」
+     * 语义 + 成功回写 {@code previewDialectMappedVf}/{@code previewDialectMappedLanguageId}。
+     * {@code ensureMapped} 两段式——映射写归 EDT、慢操作归 BGT。</p>
      *
      * <p>T-FixN2：映射对象由「文件」改为**父目录**（文件名每次预热唯一后，按文件映射会让每个新文件名
      * 都判「未映射」）。平台 {@code PerFileMappingsBase.getMappingInner → getMappingForHierarchy}
      * 自下而上逐级查表，故**目录映射被其下所有文件继承**；{@code previewDialectMappedVf} 随之记
      * 「已映射的那个目录 vf」，身份判定比较的是目录。目录 vf 取不到（极端）时退回按文件映射。</p>
+     *
+     * @return 映射就位时返回目标 language id（调用方据此等语言替换重解析落地后再取 PSI，
+     *     见 {@link #awaitPreviewPsiLanguage}）；映射失败返回 null，不退化成白等。
      */
-    public static void mapPreviewDialectBeforePsi(@NotNull SqlPreviewPanel p, @NotNull Project proj,
-                                                  @NotNull VirtualFile vf) {
+    public static String mapPreviewDialectBeforePsi(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                    @NotNull VirtualFile vf) {
         VirtualFile target = SqlPreviewPanel.previewDialectMappingTarget(vf);
-        boolean inProcessMapped = p.previewDialectMappedVf != null && p.previewDialectMappedVf.isValid()
-                && p.previewDialectMappedVf == target;
-        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, target, inProcessMapped)) {
-            p.previewDialectMappedVf = target;
+        String desiredName = p.previewDesiredDialectName;
+        Object resolvedLanguage = desiredName != null
+                ? cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, desiredName)
+                : null;
+        // 已明确生成方言但平台无对应 parser 时用 GenericSQL，绝不反向冒充 MySQL。
+        Object targetLanguage = desiredName != null && resolvedLanguage == null
+                ? cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
+                        proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID)
+                : resolvedLanguage;
+        if (desiredName != null && targetLanguage == null) {
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .warn("[O-145] preview dialect '" + desiredName
+                            + "' and GenericSQL platform Language are unavailable; keep existing mapping");
+            return null;
         }
+        String targetId = targetLanguage instanceof com.intellij.lang.Language language
+                ? language.getID()
+                : cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.MYSQL_LANGUAGE_ID;
+        boolean inProcessMapped = p.previewDialectMappedVf != null && p.previewDialectMappedVf.isValid()
+                && p.previewDialectMappedVf == target
+                && p.previewDialectMappedLanguageId != null
+                && p.previewDialectMappedLanguageId.equalsIgnoreCase(targetId);
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(
+                proj, target, targetLanguage, inProcessMapped)) {
+            p.previewDialectMappedVf = target;
+            p.previewDialectMappedLanguageId = targetId;
+            // T-DegradedPreviewUx P4：映射已就位才返回目标 id——调用方据此等语言替换重解析落地
+            // 后再取 PSI。映射失败返回 null，不退化成白等 400ms。
+            return targetId;
+        }
+        return null;
+    }
+
+    /**
+     * T-DegradedPreviewUx P4：等方言映射引发的「语言替换重解析」落地，返回当前 PSI。
+     *
+     * <p>{@code DialectPreMapping.ensureMapped} 只等到 EDT 的 {@code setMapping} 返回，而平台随后用
+     * 异步任务对预览文件做 {@code LanguageSubstitutors} 重解析（真机日志 {@code Reparsing ... MySQL->PostgreSQL}）。
+     * 立刻 {@code findFile} 会拿到**旧语言 PSI**，重解析落地后该实例失效——装配时 {@code getDocument} 抛错，
+     * 整条预览落内存 PSI 降级。这里只轮询**本文件**的 PSI 语言是否已等于目标，不等待全局 dumb，
+     * 有界预算用完即带当前实例返回（装配端还有一次按文件重取兜底）。</p>
+     */
+    public static PsiFile awaitPreviewPsiLanguage(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                  @NotNull VirtualFile vf, @NotNull String targetLanguageId,
+                                                  long budgetMs) throws InterruptedException {
+        long deadline = System.nanoTime() + budgetMs * 1_000_000L;
+        while (true) {
+            PsiFile current;
+            try {
+                current = ReadAction.compute(
+                        (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
+                                prewarmAbandoned(p) ? null : PsiManager.getInstance(proj).findFile(vf));
+            } catch (Throwable t) {
+                // master 无受检异常语义——compute 抛出的 Throwable 原样上抛给预热 onFailure 记账
+                throw sneakyThrow(t);
+            }
+            if (current == null || prewarmAbandoned(p)) return current;
+            if (targetLanguageId.equalsIgnoreCase(current.getLanguage().getID())) return current;
+            if (System.nanoTime() >= deadline) return current;
+            Thread.sleep(10L);
+        }
+    }
+
+    /** 默认预算 400ms 重载（master 默认参数）。 */
+    public static PsiFile awaitPreviewPsiLanguage(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                  @NotNull VirtualFile vf, @NotNull String targetLanguageId)
+            throws InterruptedException {
+        return awaitPreviewPsiLanguage(p, proj, vf, targetLanguageId, 400L);
     }
 
     /**
@@ -918,12 +1005,23 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         }
     }
 
-    /** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。
-     *  注：Java 端未重建 mapPreviewDialectBeforePsi/预热目录方言映射，仅同步期望方言名（行为差距已登记）。 */
+    /** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。 */
     public static void syncPreviewDialectMapping(@NotNull SqlPreviewPanel p,
                                                  @NotNull cn.song.mybatisplus.visualizer.model.PreviewResult result) {
         cn.song.mybatisplus.visualizer.sql.Dialect effective = result.getEffectiveDialect();
         p.previewDesiredDialectName = effective != null ? effective.getName() : null;
+        VirtualFile vf = p.previewTempFile != null ? p.previewTempFile
+                : (p.prewarmedTempFile != null ? p.prewarmedTempFile.getFirst() : null);
+        if (vf == null) return;
+        Project proj = p.project;
+        if (proj == null) return;
+        mapPreviewDialectBeforePsi(p, proj, vf);
+    }
+
+    /** 受检异常擦除（k2j 既有形态）：保持 master「原实例上抛」语义，不包装不改类型。 */
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
     }
 
 }

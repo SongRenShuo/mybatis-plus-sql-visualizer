@@ -338,20 +338,19 @@ class ExecDialectRoutingTest {
             panel.contains("previewDesiredDialectName"))
         assertTrue("预览结果进入面板后须在渲染前同步临时 PSI 方言",
             resultView.contains("syncPreviewDialectMapping"))
-        // 【master 断言延后——生产差距登记 T-SyncK2JMaster136 B2】master 17be6319 终态的预览链
-        // （lifecycle 解析 resolvePluginDialectLanguage + GENERIC_LANGUAGE_ID 兜底 +
-        // previewDialectMappedLanguageId 幂等 + 发布预热产物前补映射，SqlPreviewPanelEditorLifecycle.kt:370-395）
-        // 在 k2j A 波未译：SqlPreviewPanelEditorLifecycleKt.java:318 mapPreviewDialectBeforePsi 仍走
-        // ensureMapped(3 参)=MySQL 目标、幂等键 previewDialectMappedVf（非 language id）；生产注释
-        // 「仅同步期望方言名（行为差距已登记）」同源。master 四条断言在此必红，根因 src/main，
-        // 按批次纪律登记勿改生产；此处先钉「预热在 PSI 创建前映射 + 期望方言名同步链」两处在场。
-        assertTrue("预热链须在 findFile/PSI 创建前执行方言映射（映射决定 PSI 语言）",
-            lifecycle.contains("mapPreviewDialectBeforePsi(p, proj, vf)"))
-        assertTrue("结果到达须把实际生成方言同步到期望方言名",
-            lifecycle.contains("p.previewDesiredDialectName = effective != null ? effective.getName() : null"))
-        assertTrue("平台没有对应方言时必须降到 GenericSQL 的兜底常量须在场（ExecDialectRouting 侧）",
-            mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.java")
-                .contains("GENERIC_LANGUAGE_ID = \"GenericSQL\""))
+        assertTrue("预热映射不得继续无条件写死 MySQL，须解析插件实际生成方言",
+            lifecycle.contains("resolvePluginDialectLanguage") &&
+                lifecycle.contains("previewDesiredDialectName"))
+        assertTrue("平台没有对应方言时必须降到 GenericSQL，不得把已确定的厂商方言冒充 MySQL",
+            lifecycle.contains("GENERIC_LANGUAGE_ID") &&
+                mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.java")
+                    .contains("GENERIC_LANGUAGE_ID = \"GenericSQL\""))
+        assertTrue("同目录幂等必须同时比较 language id，不能让先映射的 MySQL 阻断 Oracle/PG 重映射",
+            panel.contains("previewDialectMappedLanguageId") &&
+                lifecycle.contains("previewDialectMappedLanguageId"))
+        assertTrue("结果在首次映射与 PSI 创建之间到达时，发布预热产物前须补一次方言同步",
+            Regex("previewTempFile = vf[\\s\\S]{0,300}previewDesiredDialectName[\\s\\S]{0,200}mapPreviewDialectBeforePsi")
+                .containsMatchIn(lifecycle))
     }
 
     @Test

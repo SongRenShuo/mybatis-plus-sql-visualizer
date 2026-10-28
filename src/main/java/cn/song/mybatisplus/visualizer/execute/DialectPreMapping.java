@@ -95,8 +95,9 @@ public final class DialectPreMapping {
         }
     }
 
-    /** O-136：按 language id 在 SqlDialectMappings 可用值里找方言 Language 实例（忽略大小写；失败 null）。 */
-    static Object languageById(Project project, String id) {
+    /** O-136：按 language id 在 SqlDialectMappings 可用值里找方言 Language 实例（忽略大小写；失败 null）。
+     *  master 为 internal（模块级可见）——k2j 预览链（ui 包）需调，Java 侧 public 对应模块内跨包访问。 */
+    public static Object languageById(Project project, String id) {
         try {
             Object mappings = instanceOf(project);
             if (mappings == null) {

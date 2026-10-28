@@ -27,8 +27,11 @@ import java.util.function.Function;
  *
  * <p>反射隔离约定：平台类一律 {@code Class.forName} 反射 + try/catch，Community/无 Database 插件下降级
  * null（调用方保持 MySQL 现状），与 {@link DataSourceSettings} 同款口径。</p>
+ *
+ * <p>master 为 internal object（模块级可见）——k2j 预览链（ui 包）需调其方言解析成员，Java 侧
+ * public 对应模块内跨包访问。</p>
  */
-final class ExecDialectRouting {
+public final class ExecDialectRouting {
 
     private static final Logger LOG = Logger.getInstance(ExecDialectRouting.class);
 
@@ -38,9 +41,10 @@ final class ExecDialectRouting {
     /** 组 Runner 展开最大轮数：平台当前最多两级（{@code DatabaseRunners$4 → $4$1}）。 */
     private static final int MAX_GROUP_DEPTH = 3;
 
-    /** 平台 MySQL SQL 方言 language id（{@code DialectPreMapping.findMySql} 同款判定口径）。 */
-    static final String MYSQL_LANGUAGE_ID = "MySQL";
-    static final String GENERIC_LANGUAGE_ID = "GenericSQL";
+    /** 平台 MySQL SQL 方言 language id（{@code DialectPreMapping.findMySql} 同款判定口径）。
+     *  master 为 internal（模块级可见）——k2j 预览链（ui 包）需读，Java 侧 public 对应模块内跨包访问。 */
+    public static final String MYSQL_LANGUAGE_ID = "MySQL";
+    public static final String GENERIC_LANGUAGE_ID = "GenericSQL";
 
     /**
      * 插件方言名（DialectRegistry 命名空间，键须与 {@code Dialect.getName()} 逐字一致）→
@@ -283,8 +287,9 @@ final class ExecDialectRouting {
         }
     }
 
-    /** 插件渲染方言 → 平台 SQL Language。按候选顺序命中；平台无对应方言时诚实返回 null。 */
-    static Object resolvePluginDialectLanguage(Project project, @Nullable String dialectName) {
+    /** 插件渲染方言 → 平台 SQL Language。按候选顺序命中；平台无对应方言时诚实返回 null。
+     *  master 为 internal（模块级可见）——k2j 预览链（ui 包）需调，Java 侧 public 对应模块内跨包访问。 */
+    public static Object resolvePluginDialectLanguage(Project project, @Nullable String dialectName) {
         if (dialectName == null || dialectName.isBlank()) {
             return null;
         }

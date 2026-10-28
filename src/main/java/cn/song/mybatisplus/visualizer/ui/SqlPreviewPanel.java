@@ -473,6 +473,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同对象幂等短路，避免每次预览重设方言触发 push all dumb）。
      *  T-FixN2 起该 vf 是**预览目录**（不再是单个文件）——见 mapPreviewDialectBeforePsi。 */
     public volatile VirtualFile previewDialectMappedVf = null;
+    /** {@code previewDialectMappedVf} 当前已映射的平台 language id，防同目录误把 MySQL 当成 Oracle/PG 幂等命中。 */
+    public volatile String previewDialectMappedLanguageId = null;
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private String sourceLocation = null;
     public final JBPanel<JBPanel<?>> editorHolder = new JBPanel<JBPanel<?>>(new GridLayout(1, 1)) {{
@@ -528,8 +530,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** 当前方言决策（meta 行方言段重组的事实源）。 */
     public cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision currentDialectDecision = null;
 
-    /** 结果实际生成方言名（预热/预览目录方言映射同步用）。 */
-    public String previewDesiredDialectName = null;
+    /** 结果实际生成方言名（预热线程与结果到达后的重映射共用；volatile＝EDT 写 / BGT 预热读）。 */
+    public volatile String previewDesiredDialectName = null;
 
     /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
