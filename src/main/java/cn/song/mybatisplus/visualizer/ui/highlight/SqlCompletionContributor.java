@@ -73,21 +73,27 @@ public class SqlCompletionContributor extends CompletionContributor {
                 SqlCompletionProvider provider = SqlCompletionProvider.Companion.getInstance();
 
                 // ★ 调试：每次补全触发时打印关键信息
-                Editor editor = parameters.getEditor();
-                PsiElement position = parameters.getPosition();
-                PsiFile containingFile = position.getContainingFile();
-                LOG.debug("[SqlCompletion] addCompletions triggered");
-                LOG.debug("[SqlCompletion]   editor=" + editor.getClass().getSimpleName() + ", doc=" + editor.getDocument().hashCode());
-                String posText = position.getText();
-                LOG.debug("[SqlCompletion]   position=" + position.getClass().getSimpleName() + ", text='" + (posText != null ? posText.substring(0, Math.min(30, posText.length())) : "") + "'");
-                LOG.debug("[SqlCompletion]   containingFile=" + (containingFile != null ? containingFile.getName() : null) + ", lang=" + (containingFile != null && containingFile.getLanguage() != null ? containingFile.getLanguage().getID() : null));
-                SqlCompletionContext ctxEditor = editor.getUserData(SqlCompletionContext.KEY);
-                LOG.debug("[SqlCompletion]   editorUserData=" + (ctxEditor != null ? ctxEditor.tableName : null));
-                SqlCompletionContext ctxPsi = containingFile != null ? containingFile.getUserData(SqlCompletionContext.KEY) : null;
-                LOG.debug("[SqlCompletion]   psiUserData=" + (ctxPsi != null ? ctxPsi.tableName : null));
-                LOG.debug("[SqlCompletion]   documentContexts.size=" + documentContexts.size());
-                Document docFromViewProvider = containingFile != null && containingFile.getViewProvider() != null ? containingFile.getViewProvider().getDocument() : null;
-                LOG.debug("[SqlCompletion]   docFromViewProvider=" + (docFromViewProvider != null ? docFromViewProvider.hashCode() : null) + ", inMap=" + (docFromViewProvider != null && documentContexts.containsKey(docFromViewProvider)));
+                // 券03（T-PerfSweep27-03）：isDebugEnabled 门控包裹——autopopup 下 addCompletions
+                // 每敲一个标识符字符触发一次，急切插值（simpleName/文本截取/双 getUserData/
+                // viewProvider.document/containsKey）在 debug 关闭态全部照付。门控后这些读取
+                // 也一并免除；debug 开启态输出逐字不变。
+                if (LOG.isDebugEnabled()) {
+                    Editor editor = parameters.getEditor();
+                    PsiElement position = parameters.getPosition();
+                    PsiFile containingFile = position.getContainingFile();
+                    LOG.debug("[SqlCompletion] addCompletions triggered");
+                    LOG.debug("[SqlCompletion]   editor=" + editor.getClass().getSimpleName() + ", doc=" + editor.getDocument().hashCode());
+                    String posText = position.getText();
+                    LOG.debug("[SqlCompletion]   position=" + position.getClass().getSimpleName() + ", text='" + (posText != null ? posText.substring(0, Math.min(30, posText.length())) : "") + "'");
+                    LOG.debug("[SqlCompletion]   containingFile=" + (containingFile != null ? containingFile.getName() : null) + ", lang=" + (containingFile != null && containingFile.getLanguage() != null ? containingFile.getLanguage().getID() : null));
+                    SqlCompletionContext ctxEditor = editor.getUserData(SqlCompletionContext.KEY);
+                    LOG.debug("[SqlCompletion]   editorUserData=" + (ctxEditor != null ? ctxEditor.tableName : null));
+                    SqlCompletionContext ctxPsi = containingFile != null ? containingFile.getUserData(SqlCompletionContext.KEY) : null;
+                    LOG.debug("[SqlCompletion]   psiUserData=" + (ctxPsi != null ? ctxPsi.tableName : null));
+                    LOG.debug("[SqlCompletion]   documentContexts.size=" + documentContexts.size());
+                    Document docFromViewProvider = containingFile != null && containingFile.getViewProvider() != null ? containingFile.getViewProvider().getDocument() : null;
+                    LOG.debug("[SqlCompletion]   docFromViewProvider=" + (docFromViewProvider != null ? docFromViewProvider.hashCode() : null) + ", inMap=" + (docFromViewProvider != null && documentContexts.containsKey(docFromViewProvider)));
+                }
 
                 // 关键字（M16.2：不依赖上下文——ctx 缺失/丢失时关键字补全仍生效，恢复 M9 语义）
                 for (String word : provider.keywords()) {
@@ -104,7 +110,7 @@ public class SqlCompletionContributor extends CompletionContributor {
                 if (ctx == null) {
                     ctx = documentContexts.get(parameters.getEditor().getDocument());
                 }
-                LOG.debug("[SqlCompletion]   resolveContext result=" + (ctx != null ? ctx.tableName : null));
+                if (LOG.isDebugEnabled()) LOG.debug("[SqlCompletion]   resolveContext result=" + (ctx != null ? ctx.tableName : null));
                 if (ctx == null) {
                     return;
                 }
