@@ -42,7 +42,8 @@ import javax.swing.ListCellRenderer
  *
  * 布局（Splitter 上下分栏 + IDEA 原生 ActionToolbar，对齐「SQL → Java」tab）：
  *  - 上：日志输入区（普通编辑器——日志文本含前缀/时间戳，不设 SQL 词法高亮）；工具栏：转换 / 清空；
- *  - 下：SQL 结果区（可编辑 + SQL 词法高亮）；工具栏：复制 / 压缩↔多行 / 清空；
+ *  - 下：SQL 结果区（可编辑 + 自研 SQL 词法高亮——[cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter]，
+ *    与预览面板/日志预览共用同一 token→配色映射，**不查平台方言映射**）；工具栏：复制 / 压缩↔多行 / 清空；
  *  - 底部：状态行（错误红字 / 提示灰字）。
  *
  * 转换是 EDT 纯函数（文本解析无 PSI/实体查找），同步执行无需异步；
@@ -634,21 +635,24 @@ class LogToSqlPanel(
         return editor
     }
 
-    /** SQL 结果编辑器：可编辑（微调参数后复制）+ 原生 SQL 语法高亮。 */
+    /** SQL 结果编辑器：可编辑（微调参数后复制）+ 自研 SQL 词法高亮。
+     *
+     * T-SqlDialectPrewarm：此前这里取平台 SQL FileType 的高亮器
+     * （`SyntaxHighlighterFactory.getSyntaxHighlighter(sqlFileType, project, null)`），链路会落到
+     * `SqlDialectMappings.getMapping` → `PerFileMappingsBase.ensureStateLoaded` 的**一次性延迟加载**
+     * ——逐条 `VirtualFileManager.findFileByUrl` 解析持久化的方言映射，在 EDT 上撞平台慢操作断言
+     * （真机栈：本方法 → `FSRecordsImpl.update` → `SlowOperations.assertSlowOperationsAreAllowed`）。
+     * 改走自研 [cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter]：不查方言映射、
+     * 不依赖 Database 插件（未装时此前该区根本没有高亮），配色与预览面板/日志预览同源。
+     */
     private fun createResultEditor(): Editor {
         val editor = EditorFactory.getInstance()
             .createEditor(EditorFactory.getInstance().createDocument(""), project)
         (editor as EditorEx).apply {
-            // 原生 SQL 高亮器
-            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
-                .getStdFileType("SQL")
-            if (sqlFileType != null) {
-                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
-                    .getSyntaxHighlighter(sqlFileType, project, null)
-                if (sqlHighlighter != null) {
-                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
-                }
-            }
+            highlighter = LexerEditorHighlighter(
+                cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter(),
+                EditorColorsManager.getInstance().globalScheme,
+            )
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
