@@ -3,6 +3,7 @@
 **创建时间**：2026-10-28 09:07
 **触发源**：用户上报 `java.lang.Throwable: Slow operations are prohibited on EDT`，栈顶落点 `LogToSqlPanel.createResultEditor(LogToSqlPanel.kt:647)` → `SqlLogToolWindowFactory.createToolWindowContent(SqlLogToolWindowFactory.java:50)` → `ToolWindowSetInitializer`（即**项目打开、侧边栏工具窗首次装配**这一拍）
 **基线**：master `aa9bb1ac`。根因分析读的是 `fb0a73fd` 的代码；期间并行会话前进一笔 `aa9bb1ac`（T-ConsoleBind，只动 `execute/DataSourceSelectorResults.kt` + 新增 `ExecFileBinding` 与其测试），与本册涉及文件无交集，故本册全部 `文件:行` 取证在新基线上仍然成立（dev 侧同文件与 master 无差异，已 `git diff master...dev` 核实）
+**实施基线**：dev `a56c8e48`（2026-10-28 由 master `c584a89d` 整支并入 dev，合并后 `dev..master` = 0；本册在 dev 树上逐条复验行号仍成立，见 §九）
 **占号**：本册不占 O/R/D/V 编号（近期并行会话高频占号且已出现 O-150 撞车；合流时统一分配）
 
 ## 一、结论先行
@@ -96,6 +97,27 @@ highlighter = LexerEditorHighlighter(
 - 新 `SqlDialectMappingPrewarmTest`：单测模式短路（返回 false、不抛、链路总耗时 < 上限）；同 project 连续两次调用不重复派发；`getStdFileType("SQL")` 为 null 的分支不抛。
 - 既有 `LogToSqlPanelTest`/`LogToSqlPanelExecuteTest`/`SqlToJavaPanel*` 必须保持全绿（S1 不动面板 API）。
 
+### S1 的观感差异与「零观感变化」备选（D3）
+
+用户明确关心「改完 UI 上有没有区别」，逐项列清（token 级，均已读码核实：`SqlLexer.KEYWORDS` 现为 66 词固定表；`SqlTokenTypes` 只有 KEYWORD/IDENTIFIER/TABLE/STRING/NUMBER/COMMENT/OPERATOR/PAREN 八类）：
+
+| 维度 | 今天（原生 SQL 文件类型高亮） | 改后（自研 SqlSyntaxHighlighter） |
+|---|---|---|
+| 关键词集 | 按方言词法器，词集即该方言全集 | 固定 66 词；表外词降为标识符——`WITH` 不在表内，`INTERVAL`/`RETURNING`/`REGEXP`/`TRUNCATE`/`EXPLAIN`/`REPLACE` 等同样不覆盖 |
+| 表名 / 表别名 | 词法层不区分，按标识符着色 | 独立成色（`TABLE` → `STATIC_FIELD` 语义槽），`FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` 后按启发式命中，连别名一起 |
+| 逗号 / 点 / 方括号 / 花括号 | 各自独立配色键 | 无独立键，落 `OPERATOR` |
+| 配色来源 | Settings → Editor → Color Scheme → **SQL 段**的键（keyword/string/number/comment/parentheses…） | `MP_SQL.*` 键（当前无设置页入口）→ 回落 `DefaultLanguageHighlighterColors.*` 通用语义槽；**SQL 段的自定义不再作用于该区** |
+| SQL 配色页的语义键（table/column/schema/alias/parameter） | 结果区是无 PSI 的裸文档，只有词法层键生效，这些语义键本来就不参与 | 同左（不新增损失） |
+| 行号 / 折叠 / 软换行 / 可编辑 / 复制 / 占位提示 / 布局 | — | 完全不变 |
+
+结论：改后与「预览面板、日志单击预览浮层」配色统一（同一套键），但**不是像素级零变化**：关键字覆盖面变窄、表名与别名变显眼、逗号点号并入运算符、SQL 配色段自定义失效。
+
+决策口径：
+
+- 默认按 S1 走（去掉不必要的平台调用，同时去掉 Database 插件依赖）；落地前必须在沙盒把结果区与预览区**并排截图**（P-5），由用户确认观感可接受。
+- 若用户要求**零观感变化**，切备选 D3：撤回 S1，只做 S2/S3。断言同样消失（首查已挪到 BGT 预热），代价是结果区继续依赖 Database 插件（未装时仍无高亮）并保留那次不必要的平台高亮获取。D3 不改本册其余任何步骤。
+- 可选 S1b（与 D3 互斥）：把常用缺失关键字补进 `SqlLexer.KEYWORDS`。注意 `SqlMapperKeywordCoverageGuardTest` 断言 `SqlLexer.KEYWORDS ⊆ SqlMapperLanguage.KEYWORDS`，补词必须同步 `SqlMapperLanguage.KEYWORDS`——这条红线要遵守，不允许为了过守卫改断言。
+
 ## 五、待验证前提（实施者先证伪再动手，证伪即回写本册再实施）
 
 | # | 前提 | 证伪方法 |
@@ -104,7 +126,8 @@ highlighter = LexerEditorHighlighter(
 | P-2 | 仅修 S1 会把断言**挪到** `SqlInputEditor`（SQL→Java 输入区）而非消失 | 做一个「只落 S1」的中间态提交，按 §六 R2 在同一项目新会话复现；若断言直接消失，说明 `SqlInputEditor` 并未走该链，S3 的工厂接线可降级为纯防御（记录依据后仍保留） |
 | P-3 | BGT 侧 `getSyntaxHighlighter(SQL, project, null)` 不需要 EDT 写锁，有界等待不会常态化超时（否则 300ms 上限退化为「每次都超时」） | 沙盒打点：冷/暖各 5 次读 `prewarm` 耗时与 `prewarmAndAwait` 返回值；有超时即改备选 D2（见 §七） |
 | P-4 | 262（上报环境）与 243（编译基线）的 `ensureStateLoaded` 语义同构：一次加载、逐条 `findFileByUrl`、映射为空则根本不加载 | 本机仅缓存 243 发行版（`F:/gradle-home/.../ideaIU-2024.3.7.1-win`），**262 无字节码可核**——只能以「262 沙盒修复后 0 条」作为行为证据，证据边界须写进实施记录，不许宣称「两版字节码一致」 |
-| P-5 | 自研高亮器的配色与预览面板一致，且不含「方言专属关键字」导致的观感断裂可接受 | 沙盒并排截图（结果区 vs 预览区）；可接受即闭环，不接受则回滚 S1 并只保留 S2/S3（此时断言仍消失，只是继续依赖 Database 插件） |
+| P-5 | S1 的观感落差可接受：结果区与预览区并排看一致，且「关键字覆盖面收窄（`WITH`/`INTERVAL` 等降为标识符）、表名别名变显眼、逗号点号并入运算符」三项用户不视为退化 | 沙盒并排截图（结果区 vs 预览区）+ 用含 `WITH` CTE、MySQL `INTERVAL`、`ON DUPLICATE KEY UPDATE` 的 SQL 各贴一张；不接受则走 D3（撤回 S1，仅留 S2/S3，断言同样消失） |
+| P-8 | 用户当前主题是否改过 Color Scheme → SQL 段（不可知，不能默认「没改」） | 若能拿到用户设置截图/真机 `colorsScheme` 一并看；改过则 S1 的观感落差会被放大，此时默认改走 D3，不做 S1 |
 | P-6 | `LogToSqlPanel` 输入编辑器仍是纯文本文档，不受本改动影响（避免误改输入区） | 读 `createInputEditor`（`LogToSqlPanel.kt:622-635`）：无 fileType 参数；S1 只动 `createResultEditor` |
 | P-7 | 守卫正则不误伤既有合法调用 | 落地后全量扫 `src/main`：0 命中；同时 `SqlToJavaPanel.kt:1743`、`JavaCodePreviewDialog.kt:54` 两处 `JavaSyntaxHighlighterFactory` 仍在（负例对照绿） |
 
@@ -166,6 +189,13 @@ highlighter = LexerEditorHighlighter(
 - `docs/索引/开发计划.md`：本册入库一行（时间倒序首行），状态写「仅计划」。
 - 经验总结（交付时写）：`docs/经验总结/20261028-*-SQL方言映射延迟加载在EDT上的慢操作断言-经验总结.md`，要点两条——① 平台「一次性延迟加载」最容易在插件首帧装配处被拉到 EDT 上，取证要看 `ensureStateLoaded` 这类函数而不是只看自己的调用；② 只修首个调用点会把错误挪到同链的下一个入口，必须先证明「下一个入口是否同链」再决定范围。
 - 架构文档：不动（无分层/流程变化）；`docs/架构设计/01-02` 里若有「结果区原生 SQL 高亮」表述，实施时 `grep` 核对后顺手改。
+
+## 九、合并与基线迁移记录（2026-10-28）
+
+- master 侧本册入库提交 `c584a89d`（计划 + `docs/索引/开发计划.md` 一行）；同刻 master 另有并行会话一笔 `aa9bb1ac`（T-ConsoleBind）。
+- `git merge master` 进 dev：合并点 **`a56c8e48`**，无冲突（两侧同名改动交集只有 `sub-projects/sql-visualizer-agent/src/test/java/.../AttachPoolWarmGateTest.java` 一个文件且未成 hunk 冲突）；合并后 `dev..master` = 0、`master..dev` = 28，dev 工作树干净。
+- 合并后逐条复验本册引用的行号仍成立（dev 树上 grep 实测）：`LogToSqlPanel.kt:644/646`（`getStdFileType("SQL")` / `SyntaxHighlighterFactory`）、`SqlLogPanel.kt:141`（`LogToSqlPanel`）与 `:143`（`SqlToJavaPanel`）、`SqlInputEditor.kt:79`（`createEditor(doc, project, sqlFileType, false)`）、`SqlPreviewPanelEditorLifecycle.kt:627`（同形创建）与 `:650`（`SqlSyntaxHighlighter()`）、`SqlLogToolWindowFactory.java:39/50`。
+- 结论：本册不需要按合并结果改修法或改范围；仅补了「实施基线＝dev `a56c8e48`」与本节的迁移记录，以及 §四新增的「S1 观感差异与 D3 备选」。
 
 ## 实施记录（待填）
 
