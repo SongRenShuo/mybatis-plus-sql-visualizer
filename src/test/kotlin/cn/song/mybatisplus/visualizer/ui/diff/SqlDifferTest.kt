@@ -137,11 +137,23 @@ class SqlDifferTest {
 
     // ---------- F61（T-PerfSweep18）：LCS 行数上限护栏——超限降级逐行并排 ----------
 
-    // 【master 断言延后——生产差距登记 T-SyncK2JMaster136 B2】k2j SqlDiffer.java 未译
-    // F61 的 1000 行上限降级分支（master computeDiff 超限走逐行并排、不再付平方 DP）——
-    // master 的 `F61_超限降级_逐行并排不再付平方DP`（断言 2002 条目）在 k2j 必红（LCS 全局
-    // 对齐只出 2 条目），根因 src/main，按批次纪律登记勿改生产；生产补译后应恢复该用例。
-    // 下方两条（阈值内 LCS 对齐 / 条目形态契约）在当前实现下即可钉住边界与契约。
+    @Test
+    fun `F61_超限降级_逐行并排不再付平方DP`() {
+        val old = (1..1001).joinToString("\n") { "line_$it" }
+        val new = "line_prepended\n" + (1..1000).joinToString("\n") { "line_$it" }
+        assertEquals(1001, new.split("\n").size)
+        val start = System.currentTimeMillis()
+        val diff = SqlDiffer.computeDiff(old, new)
+        val elapsed = System.currentTimeMillis() - start
+        // 逐行并排：前插致整体移位、1001 行全错位 → 1001 DELETE + 1001 INSERT = 2002 条目
+        assertEquals("超限须逐行并排（2002 条目）", 2002, diff.size)
+        assertEquals(1001, diff.count { it.type == DiffType.DELETE })
+        assertEquals(1001, diff.count { it.type == DiffType.INSERT })
+        assertTrue("降级路径应远快于 1001² DP（实际 ${elapsed}ms）", elapsed < 100)
+        // 行号形态仍符合契约：首对 DELETE 旧行号 1、INSERT 新行号 1
+        assertEquals(1, diff.first { it.type == DiffType.DELETE }.oldLineNumber)
+        assertEquals(1, diff.first { it.type == DiffType.INSERT }.newLineNumber)
+    }
 
     /**
      * 阈值边界：同形态输入（前置插入 1 行）在阈值内走 LCS 全局对齐（2 条目）。

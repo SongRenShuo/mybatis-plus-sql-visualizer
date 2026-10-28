@@ -27,6 +27,18 @@ public final class SqlDiffer {
     }
 
     /**
+     * F61（T-PerfSweep18）：LCS 行数上限护栏——千行级阈值。
+     *
+     * <p>DP 表成本 O(M*N)（时间与 int 表内存都随行数平方膨胀）：千行级内是类 Javadoc 既有
+     * 性能红线覆盖区（&lt;1000 行 &lt;100ms）；超限输入（外部粘入的超大 SQL/全文对比）走
+     * {@link #sideBySideDiff} 逐行并排降级——按下标对齐、同位相等记 EQUAL、否则 DELETE+INSERT
+     * 成对，不做全局对齐。<b>computeDiff(old, new) → List&lt;DiffEntry&gt; 契约不变</b>
+     * （R31「恰两条可用」历史对比入口与 DiffEntry 形态照旧消费）。master 为 internal
+     * object 属性，Java 侧 public static final 对应模块内访问。</p>
+     */
+    public static final int LCS_LINE_LIMIT = 1000;
+
+    /**
      * 差异类型。
      *
      * <p>刻意不设 CHANGE（行被修改）：差异类型的唯一消费形态是按类型分派的渲染，而 O-4 的自研
@@ -100,12 +112,33 @@ public final class SqlDiffer {
     public static List<DiffEntry> computeDiff(@Nullable String oldSql, @NotNull String newSql) {
         List<String> oldLines = (oldSql == null || oldSql.isEmpty()) ? List.of() : Arrays.asList(oldSql.split("\n"));
         List<String> newLines = newSql.isEmpty() ? List.of() : Arrays.asList(newSql.split("\n"));
+        // F61：超限降级逐行并排（契约不变，仅内部算法切换）
+        if (oldLines.size() > LCS_LINE_LIMIT || newLines.size() > LCS_LINE_LIMIT) {
+            return sideBySideDiff(oldLines, newLines);
+        }
         // LCS 动态规划表
         int[][] lcs = computeLCS(oldLines, newLines);
         // 回溯构造差异序列（仅返回非 EQUAL 条目，减少下游处理负担）
         return backtrack(lcs, oldLines, newLines).stream()
                 .filter(e -> e.type() != DiffType.EQUAL)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * F61：降级路径——逐行并排（同下标相等跳过，否则 DELETE+INSERT 成对；单侧越界只出存在侧）。
+     * 与主路径同口径：EQUAL 不产出（下游只消费差异条目）。
+     */
+    @NotNull
+    private static List<DiffEntry> sideBySideDiff(@NotNull List<String> old, @NotNull List<String> newL) {
+        List<DiffEntry> result = new ArrayList<>();
+        for (int idx = 0; idx < Math.max(old.size(), newL.size()); idx++) {
+            String o = idx < old.size() ? old.get(idx) : null;
+            String n = idx < newL.size() ? newL.get(idx) : null;
+            if (o != null && n != null && o.equals(n)) continue;
+            if (o != null) result.add(new DiffEntry(DiffType.DELETE, idx + 1, null, o, null));
+            if (n != null) result.add(new DiffEntry(DiffType.INSERT, null, idx + 1, null, n));
+        }
+        return result;
     }
 
     /** 计算 LCS 长度表（动态规划）。 */
