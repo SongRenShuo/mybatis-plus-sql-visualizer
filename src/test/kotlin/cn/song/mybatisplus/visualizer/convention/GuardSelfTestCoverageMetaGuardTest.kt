@@ -1196,6 +1196,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "`自证_注释里的调用不算`。（k2j：源码清单走 BannedApiScanSupport.mainSources " +
                     "src/main/java 快照，允许点为 Java 路径。）",
             ),
+            GuardEntry(
+                "sql/verify/DialectDocTableGuardTest.kt",
+                listOf(DecisionFn("docTableViolations", FnKind.VIOLATIONS)),
+                "文档站方言表守卫（637da736，k2j 扫描根适配 src/main/java）：文档站方言表与 Dialect" +
+                    "实现族一致性机器校验——分页/UPSERT 两族中英四表 + identity 包装声明覆盖。判定内核" +
+                    "docTableViolations 按「文档行↔实现能力」双向对账产违规点；方言表扫的是兄弟文档站仓" +
+                    "（mybatis-plus-sql-visualizer-docs/），与 src/main 树无关。自证语料（合成表漂移形态" +
+                    "各一例）：`漂移自证_分页族归错被抓` / `漂移自证_ROWNUM写法被抓` / " +
+                    "`漂移自证_漏方言被抓` / `漂移自证_upsert族归错被抓`。",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
