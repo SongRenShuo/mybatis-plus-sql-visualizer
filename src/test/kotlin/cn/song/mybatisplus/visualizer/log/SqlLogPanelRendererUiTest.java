@@ -103,16 +103,38 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test两行结构_元信息在上SQL在下() throws Exception {
+    public void test两行结构_轨道在左SQL在右() throws Exception {
+        // T-LogListRail：原「元信息在上 / SQL 在下」改为「信息轨在左 / SQL 区在右」。
+        // 来源类名随耗时进轨道；去重徽章宽度不可控，迁到 SQL 区下方注脚行。
         String sql = "SELECT * FROM repeated WHERE id = 1";
         renderer.dedupeCounts = Map.of(LogSqlModelsKt.sqlFingerprint(sql), 2);
         LogEntryListCellRenderer r = render(entry(sql, null, "src/main/java/A.java", 42));
-        String meta = joinedText(r.metaLine);
-        assertTrue("元信息行含来源 [文件:行]", meta.contains("[A.java:42]"));
-        assertTrue("元信息行含去重徽章", meta.contains("⨉2"));
-        assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"));
+        String meta = r.getMetaTextForTest();
+        assertTrue("头部行含来源类名 A: " + meta, meta.contains("A"));
+        assertTrue("头部行含行号 :42: " + meta, meta.contains(":42"));
+        assertTrue("头部行含去重徽章", r.getMetaTextForTest().contains("⨉2"));
+        assertFalse("轨道不应混入 SQL", meta.contains("SELECT"));
         assertTrue("SQL 行完整保留语句（含分号结束符）",
                 joinedText(r.getSqlLine()).contains("SELECT * FROM repeated WHERE id = 1;"));
+    }
+
+    @Test
+    public void test窄侧栏按像素裁切SQL而复制源文本不变() throws Exception {
+        StringBuilder cols = new StringBuilder();
+        for (int i = 1; i <= 40; i++) {
+            if (i > 1) cols.append(", ");
+            cols.append("column_").append(i);
+        }
+        String original = "SELECT " + cols + " FROM wide_table";
+        list.setSize(170, 80);
+        try {
+            LogSqlEntry e = entry(original);
+            String sql = joinedText(render(e).getSqlLine());
+            assertTrue("可见 SQL 应有宽度省略号", sql.endsWith("…"));
+            assertTrue("省略只发生在展示层", e.restoredSql().endsWith("FROM wide_table"));
+        } finally {
+            list.setSize(0, 0);
+        }
     }
 
     @Test
@@ -522,21 +544,298 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     @Test
     public void test影响行数负值不显示_负行数守卫() throws Exception {
         // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
+        // T-LogListHeader：行数片段并入头部行（metaTextForTest）
         LogSqlEntry neg = agentEntry("SELECT 1", null, -1L, null);
-        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"));
+        assertFalse("负值影响行数应不显示", render(neg).getMetaTextForTest().contains("rows)"));
         LogSqlEntry zero = agentEntry("UPDATE t SET a = 1", null, 0L, null);
-        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"));
+        assertTrue("0 行是合法计数，应显示", render(zero).getMetaTextForTest().contains("(0 rows)"));
     }
 
     @Test
     public void test影响行数与报错片段同列() throws Exception {
+        // T-LogListRail：报错迁到独立错误行（errorTextForTest），行数并入头部行
         LogSqlEntry err = agentEntry("UPDATE t SET a = 1", null, 3L, "SQLException: Data too long for column 'a'");
-        String meta = joinedText(render(err).metaLine);
-        assertTrue("应含影响行数片段", meta.contains("(3 rows)"));
-        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"));
+        LogEntryListCellRenderer r = render(err);
+        assertTrue("头部行应含影响行数片段", r.getMetaTextForTest().contains("(3 rows)"));
+        assertTrue("错误行含报错片段（单行截断）", r.getErrorTextForTest().contains("⛔ SQLException: Data too long"));
         // 无报错无行数的普通条目不显示
-        String ok = joinedText(render(entry("SELECT 1")).metaLine);
-        assertFalse("普通条目不应有行数片段", ok.contains("rows)"));
-        assertFalse("普通条目不应有报错片段", ok.contains("⛔"));
+        LogEntryListCellRenderer ok = render(entry("SELECT 1"));
+        assertFalse("普通条目不应有行数片段", ok.getMetaTextForTest().contains("rows)"));
+        assertFalse("普通条目不应有报错片段", ok.getErrorTextForTest().contains("⛔"));
+    }
+
+    // ---------- O-90：同模板 ×N 徽章 ----------
+
+    @Test
+    public void test同模板徽章_达阈值渲染到元信息行() throws Exception {
+        String sql = "SELECT * FROM big_orders WHERE uid = 7";
+        renderer.templateCounts = Map.of(LogSqlModelsKt.structureFingerprint(sql), 3);
+        String d = render(entry(sql)).getMetaTextForTest();
+        assertTrue("达阈值应渲染同模板徽章: " + d,
+                d.contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)));
+        // 与去重徽章相邻共存（本条无去重计数，仅模板徽章）
+        renderer.templateCounts = Map.of(LogSqlModelsKt.structureFingerprint(sql), 5);
+        assertTrue("计数 5 显示 ×5",
+                render(entry(sql)).getMetaTextForTest()
+                        .contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)));
+    }
+
+    @Test
+    public void test同模板徽章_未达阈值不渲染() throws Exception {
+        String sql = "SELECT * FROM small_orders WHERE uid = 7";
+        int below = LogSqlModelsKt.TEMPLATE_BADGE_MIN_COUNT - 1;
+        renderer.templateCounts = Map.of(LogSqlModelsKt.structureFingerprint(sql), below);
+        assertFalse("计数 " + below + " 未达阈值不渲染",
+                joinedText(render(entry(sql)).metaLine)
+                        .contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.panel.templateBadge", below)));
+        renderer.templateCounts = Map.of();
+        assertFalse("无计数不渲染",
+                joinedText(render(entry(sql)).metaLine)
+                        .contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)));
+    }
+
+    @Test
+    public void test同模板徽章片段_选中白未选中琥珀() throws Exception {
+        String sql = "SELECT * FROM t WHERE id = 1";
+        LogSqlEntry e = entry(sql);
+        Map<String, Integer> counts = Map.of(LogSqlModelsKt.structureFingerprint(sql), 3);
+        assertEquals("未选中琥珀（与耗时偏慢同族）",
+                new Color(0xE67E22),
+                SqlLogPanelKt.formatTemplateCountFragment(e, counts, false).getSecond().getFgColor());
+        assertEquals("选中白（不抢 SQL 高亮）",
+                new Color(0xFFFFFF),
+                SqlLogPanelKt.formatTemplateCountFragment(e, counts, true).getSecond().getFgColor());
+        assertNull("未达阈值返回 null",
+                SqlLogPanelKt.formatTemplateCountFragment(e, Map.of(LogSqlModelsKt.structureFingerprint(sql), 2), false));
+        assertNull("无计数返回 null", SqlLogPanelKt.formatTemplateCountFragment(e, Map.of(), false));
+    }
+
+    @Test
+    public void test格式化模式不再只格式化首行摘要() throws Exception {
+        StringBuilder cols = new StringBuilder();
+        for (int i = 1; i <= 40; i++) {
+            if (i > 1) cols.append(", ");
+            cols.append("c").append(i);
+        }
+        String full = "SELECT " + cols + " FROM record WHERE id = 42";
+        LogEntryListCellRenderer r = renderInMode("FORMATTED", entry(full));
+        StringBuilder visible = new StringBuilder();
+        for (SimpleColoredComponent line : r.getSqlLines()) {
+            if (visible.length() > 0) visible.append('\n');
+            visible.append(joinedText(line));
+        }
+        assertTrue("全文最后的 WHERE 子句应在格式化模式可见", visible.toString().contains("WHERE id = 42"));
+    }
+
+    // ---------- R60（T-LaneB D96）：日志列表链脱敏（判别断言两态，走真实渲染器链路） ----------
+
+    @Test
+    public void test列表脱敏开_渲染文本打码() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        boolean saved = state.getDisplayMaskEnabled();
+        try {
+            state.setDisplayMaskEnabled(true);
+            String sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).getSqlLine());
+            assertTrue("脱敏开应打码: " + sqlText, sqlText.contains("***"));
+            assertFalse("原文手机号不得出现: " + sqlText, sqlText.contains("13812345678"));
+        } finally {
+            state.setDisplayMaskEnabled(saved);
+        }
+    }
+
+    @Test
+    public void test列表脱敏关_原文渲染() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        boolean saved = state.getDisplayMaskEnabled();
+        try {
+            state.setDisplayMaskEnabled(false);
+            String sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).getSqlLine());
+            assertTrue("脱敏关原文渲染: " + sqlText, sqlText.contains("13812345678"));
+        } finally {
+            state.setDisplayMaskEnabled(saved);
+        }
+    }
+
+    @Test
+    public void test摘要截断在敏感字面量中间_日志展示仍须脱敏() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        boolean saved = state.getDisplayMaskEnabled();
+        try {
+            state.setDisplayMaskEnabled(true);
+            String secret = "PRIVATE_MARKER_" + "x".repeat(200);
+            LogSqlEntry e = entry("SELECT * FROM account WHERE password = '" + secret + "'");
+            assertTrue("夹具须在闭合引号前截断", e.summary().contains("PRIVATE_MARKER_"));
+            assertFalse(e.summary().contains("'" + secret + "'"));
+            String displayed = joinedText(render(e).getSqlLine());
+            assertTrue("密码应按完整字面量打码：" + displayed, displayed.contains("password = '***'"));
+            assertFalse("截断的敏感片段不得泄漏：" + displayed, displayed.contains("PRIVATE_MARKER_"));
+        } finally {
+            state.setDisplayMaskEnabled(saved);
+        }
+    }
+
+    // ---------- T-DataSourceBadgeMode：数据源角标默认仅显示数据库类型（显示侧门控） ----------
+
+    /** 构造带目标库的 agent 条目（badgeName 全量形态：方言 · 连接事实）。 */
+    private static LogSqlEntry dbEntry(String db) {
+        return agentEntry("SELECT 1", db, null, null);
+    }
+
+    /** 在给定开关值下执行断言（收尾原样恢复）。 */
+    private void withBadgeDetail(boolean enabled, Runnable block) {
+        PluginSettings.State s = PluginSettings.getInstance().getState();
+        boolean saved = s.getDataSourceBadgeDetail();
+        try {
+            s.setDataSourceBadgeDetail(enabled);
+            block.run();
+        } finally {
+            s.setDataSourceBadgeDetail(saved);
+        }
+    }
+
+    @Test
+    public void test数据源角标_默认关仅渲染方言段() throws Exception {
+        // OFF（默认）：badgeName 全量串「MySQL · jpa_demo@localhost:3306」只显方言段（D135 显示侧门控）
+        withBadgeDetail(false, () -> {
+            String full = "MySQL · jpa_demo@localhost:3306";
+            assertEquals("OFF 态片段应切出纯方言段", "[MySQL] ",
+                    SqlLogPanelKt.formatDatabaseFragment(dbEntry(full), false).getFirst());
+            String d = render(dbEntry(full)).getMetaTextForTest();
+            assertTrue("注脚行应含方言角标: " + d, d.contains("[MySQL]"));
+            assertFalse("注脚行不应含连接事实: " + d, d.contains("jpa_demo"));
+        });
+    }
+
+    @Test
+    public void test数据源角标_开启后渲染全量上下文() throws Exception {
+        withBadgeDetail(true, () -> {
+            String full = "MySQL · jpa_demo@localhost:3306";
+            assertEquals("ON 态片段应原样全量", "[" + full + "] ",
+                    SqlLogPanelKt.formatDatabaseFragment(dbEntry(full), false).getFirst());
+            String d = render(dbEntry(full)).getMetaTextForTest();
+            assertTrue("注脚行应含完整上下文: " + d, d.contains("[" + full + "]"));
+        });
+    }
+
+    @Test
+    public void test数据源角标_无分隔符串关闭态原样保留() throws Exception {
+        // 已知边界：方言解析失败仅存连接事实（无 · 分隔符）→ OFF 态原样保留最后上下文
+        withBadgeDetail(false, () -> assertEquals(
+                "无 · 串 OFF 态应原样保留",
+                "[localhost:5236] ",
+                SqlLogPanelKt.formatDatabaseFragment(dbEntry("localhost:5236"), false).getFirst()));
+    }
+
+    @Test
+    public void test数据源角标_未知库名恒不显示() throws Exception {
+        // null databaseName 恒 null 不显示（既有语义不变；渲染器级 null 用例见 test目标库角标_未知库名不显示）
+        withBadgeDetail(false, () -> assertNull(SqlLogPanelKt.formatDatabaseFragment(dbEntry(null), false)));
+        withBadgeDetail(true, () -> assertNull("ON 态同样恒 null",
+                SqlLogPanelKt.formatDatabaseFragment(dbEntry(null), true)));
+    }
+
+    @Test
+    public void test数据源角标_历史读回条目随开关切换() throws Exception {
+        // P4 口径：历史读回条目的 databaseName 为自由文本全量串，显示门控对它同样生效
+        LogSqlEntry readBack = dbEntry("DM（达梦） · localhost:5236");
+        withBadgeDetail(false, () -> assertEquals("[DM（达梦）] ",
+                SqlLogPanelKt.formatDatabaseFragment(readBack, false).getFirst()));
+        withBadgeDetail(true, () -> assertEquals("[DM（达梦） · localhost:5236] ",
+                SqlLogPanelKt.formatDatabaseFragment(readBack, false).getFirst()));
+    }
+
+    // ---------- T-DdlTypeColor：DDL 虚线色条 ----------
+
+    /**
+     * DDL 条目走虚线色条、DML 走实心。
+     *
+     * 这是**形态断言**（不是像素比对）：用户明确要「虚线区分 DDL」，若谁把 DDL 也画成实心，
+     * 视觉区分就静默消失了——不报错、不崩溃，只是回退到「看不出类型」。
+     */
+    @Test
+    public void testDdl条目色条为虚线_dml为实心() throws Exception {
+        assertTrue("CREATE 应触发虚线色条", render(entry("CREATE TABLE t (id INT)")).colorBar.isDashed());
+        assertTrue("DROP 应触发虚线色条", render(entry("DROP TABLE t")).colorBar.isDashed());
+        assertTrue("TRUNCATE 应触发虚线色条", render(entry("TRUNCATE TABLE t")).colorBar.isDashed());
+        for (String sql : List.of("SELECT 1", "INSERT INTO t VALUES (1)", "UPDATE t SET a = 1", "DELETE FROM t")) {
+            assertFalse(sql + " 不应走虚线", render(entry(sql)).colorBar.isDashed());
+        }
+    }
+
+    /** DDL 条目与同色 DML 条目都着色（不再是无色条的 OTHER）。 */
+    @Test
+    public void testDdl条目有着色条() throws Exception {
+        for (String sql : List.of("CREATE TABLE t (id INT)", "ALTER TABLE t ADD c INT", "DROP TABLE t", "TRUNCATE TABLE t")) {
+            assertTrue(sql + " 应有色条（不再是无色条的 OTHER）", render(entry(sql)).colorBar.isOpaque());
+        }
+    }
+
+    /** 虚线段长常量（形态契约：实/空各 3px，周期 6px）。 */
+    @Test
+    public void test虚线段长常量() throws Exception {
+        TypeColorBar bar = new TypeColorBar();
+        kotlin.Pair<Integer, Integer> pattern = bar.dashPatternForTest();
+        assertEquals("实心段 3px", 3, pattern.getFirst().intValue());
+        assertEquals("空白段 3px", 3, pattern.getSecond().intValue());
+        assertEquals("周期 6px", 6, TypeColorBar.DASH_PERIOD);
+    }
+
+    /** 同形态重复设置不重复重绘（渲染热路径守卫）。 */
+    @Test
+    public void test色条形态_同值不重复设置() throws Exception {
+        TypeColorBar bar = new TypeColorBar();
+        bar.setDashed(true);
+        bar.setDashed(true);
+        bar.setDashed(true);
+        assertEquals("同值重复设置不得触发重绘", 1, bar.getRepaintRequests());
+        bar.setDashed(false);
+        assertEquals("切换形态应再触发一次", 2, bar.getRepaintRequests());
+    }
+
+    /**
+     * 虚线色条必须**真的画成虚线段**（像素级验证）。
+     *
+     * 为什么必须像素级：早期实现「先填 background 再按段填 background」，前景与底色同色 →
+     * 整条全实心，形态断言（{@code dashed == true}）照样通过、肉眼看上去却没区别。
+     * 这条用渲染后的像素序列判定，抓的就是这种「设了标志但画不出来」的假绿。
+     */
+    @Test
+    public void test虚线色条_像素序列为实空交替() throws Exception {
+        TypeColorBar bar = new TypeColorBar();
+        bar.setBackground(new Color(0x4CAF50));
+        bar.setDashed(true);
+        bar.setSize(3, 40);
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics g = img.createGraphics();
+        bar.paint(g);
+        g.dispose();
+        StringBuilder seq = new StringBuilder();
+        for (int y = 0; y < 40; y++) {
+            int rgb = img.getRGB(1, y) & 0xFFFFFF;
+            seq.append(rgb == 0x4CAF50 ? '#' : '.');
+        }
+        assertTrue("应存在实心段: " + seq, seq.toString().contains("#"));
+        assertTrue("应存在空白段（否则等于实心）: " + seq, seq.toString().contains("."));
+        // 周期契约：每 6px 一个循环
+        StringBuilder expectHead = new StringBuilder();
+        expectHead.append("#".repeat(TypeColorBar.DASH_ON)).append(".".repeat(TypeColorBar.DASH_OFF));
+        assertTrue("实空交替周期应为 " + TypeColorBar.DASH_PERIOD + "px: " + seq,
+                seq.toString().startsWith(expectHead.toString()));
+    }
+
+    /** 实心形态下整条填满（不出现空白段）。 */
+    @Test
+    public void test实心色条_像素全填满() throws Exception {
+        TypeColorBar bar = new TypeColorBar();
+        bar.setBackground(new Color(0x4CAF50));
+        bar.setDashed(false);
+        bar.setSize(3, 40);
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics g = img.createGraphics();
+        bar.paint(g);
+        g.dispose();
+        for (int y = 0; y < 40; y++) {
+            assertTrue("实心形态应整条填满", (img.getRGB(1, y) & 0xFFFFFF) == 0x4CAF50);
+        }
     }
 }

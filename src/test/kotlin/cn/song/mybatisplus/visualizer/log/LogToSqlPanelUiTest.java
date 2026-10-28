@@ -130,4 +130,34 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
             panel.dispose();
         }
     }
+
+    /**
+     * T-SqlDialectPrewarm：结果区必须挂**插件自研**词法器。
+     *
+     * 判别力放在 token 类型上：平台 SQL 词法器给出的关键字 token 不是 {@code MP_SQL_KEYWORD}，把高亮器改回
+     * 平台工厂（{@code SyntaxHighlighterFactory.getSyntaxHighlighter(SQL, …)}）本断言即红——「类型是
+     * LexerEditorHighlighter」这种弱断言两边都成立，不能当覆盖。
+     */
+    @Test
+    public void test结果区挂自研SQL词法器() throws Exception {
+        LogToSqlPanel panel = new LogToSqlPanel(getProject());
+        try {
+            panel.setResultForTest("SELECT id FROM user_info");
+            waitForEdt();
+            com.intellij.openapi.fileTypes.SyntaxHighlighter highlighter =
+                ((com.intellij.openapi.editor.ex.EditorEx) panel.resultEditorForTest()).getHighlighter();
+            assertTrue(
+                "结果区 highlighter 应为 LexerEditorHighlighter",
+                highlighter instanceof com.intellij.openapi.editor.ex.util.LexerEditorHighlighter);
+            com.intellij.openapi.editor.HighlighterIterator iterator =
+                ((com.intellij.openapi.editor.ex.util.LexerEditorHighlighter) highlighter).createIterator(0);
+            assertFalse("token 迭代不应为空", iterator.atEnd());
+            assertEquals(
+                "首个 token 应为自研词法器的关键字类型（改回平台 SQL 高亮器会变成平台 token）",
+                "MP_SQL_KEYWORD",
+                String.valueOf(iterator.getTokenType()));
+        } finally {
+            panel.dispose();
+        }
+    }
 }

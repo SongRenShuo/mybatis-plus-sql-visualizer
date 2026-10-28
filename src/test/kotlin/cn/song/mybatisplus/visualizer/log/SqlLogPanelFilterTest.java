@@ -56,7 +56,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
             case DELETE -> "DELETE FROM t";
             case CREATE -> "CREATE TABLE t (id INT)";
             case DROP -> "DROP TABLE t";
-            case OTHER -> "TRUNCATE TABLE t";
+            case OTHER -> "MERGE INTO t USING s ON (1=1)";
         };
         return new LogSqlEntry(actualSql, actualSql, List.of(), ts);
     }
@@ -373,5 +373,185 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     private void waitForEdt() {
         ApplicationManager.getApplication().invokeAndWait(() -> {
         });
+    }
+
+    // ---------- T-HistorySearchToggles：MatchCase 大小写开关（filterBySearch matchCase 参数） ----------
+
+    @Test
+    public void testSearchMatchCaseOnIsCaseSensitive() throws Exception {
+        List<LogSqlEntry> entries = List.of(entryOfType(StatementType.SELECT, "SELECT * FROM user"));
+        // 开（敏感）：小写查询不命中大写 SQL；关（默认）：忽略大小写照旧
+        // k2j：master 单一全默认参函数在 Java 侧拆为 (matchCase, regexEnabled, memo) 5 参重载
+        assertEquals(0, SqlLogPanelKt.filterBySearch(entries, "select", true, false, new HistoryRegexMemo()).size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "select", false, false, new HistoryRegexMemo()).size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "select").size()); // 免注入重载 = 忽略大小写
+    }
+
+    @Test
+    public void testSearchMatchCaseRowNumberUnaffected() throws Exception {
+        // 行号 `#N` 精确 equals 不受大小写旗影响（数字无大小写，契约锁死）
+        LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of(), 0L).withSequenceNumber(5L);
+        assertEquals(1, SqlLogPanelKt.filterBySearch(List.of(entry), "#5", true, false, new HistoryRegexMemo()).size());
+    }
+
+    /**
+     * 时间目标同样随 matchCase 旗。
+     *
+     * k2j 重载面注：master 的 filterBySearch 是单一全默认参函数（matchCase × timestampTextOf 可任意组合），
+     * Java 承载拆为三个重载后**无 matchCase+timestampTextOf 组合缝**——本用例拆两段锁语义：
+     * ①注入时间片段（3 参版，matchCase 缺省=忽略大小写）验证时间维度参与匹配；
+     * ②5 参版（真实设置）在时间开关关闭时时间维度不参与。组合缝缺口登记主控评估补重载。
+     */
+    @Test
+    public void testSearchMatchCaseTimestampTarget() throws Exception {
+        List<LogSqlEntry> entries = List.of(entryOfType(StatementType.SELECT, "SELECT 1"));
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "Jan-02",
+                e -> "[2026-Jan-02 10:30:00]").size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "JAN-02",
+                e -> "[2026-Jan-02 10:30:00]").size());
+        // 时间开关关闭（真实 timestampDisplayText → null）：时间维度不参与，大小写旗只作用于 SQL 两维
+        PluginSettings.getInstance().getState().setLogTimestampEnabled(false);
+        try {
+            assertEquals(0, SqlLogPanelKt.filterBySearch(entries, "Jan-02", true, false, new HistoryRegexMemo()).size());
+            assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "select", false, false, new HistoryRegexMemo()).size());
+        } finally {
+            PluginSettings.getInstance().getState().setLogTimestampEnabled(true);
+        }
+    }
+
+    /**
+     * 面板接线（开关 → refreshList → filterBySearch(matchCase)）：toggle 点击即生效；
+     * headless 下防抖 Timer 不可控，搜索文本经 applySearchTextForTest 同步应用。
+     */
+    @Test
+    public void testMatchCaseToggleDrivesPanelFiltering() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+        try {
+            manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM USER", 0L));
+            pumpEdt();
+            panel.getSearchFieldForTest().setText("user");
+            panel.applySearchTextForTest();
+            assertEquals("默认关=忽略大小写，命中", 1, panel.getVisibleEntryCount());
+            panel.setMatchCaseToggleForTest(!panel.getMatchCaseToggleForTest()); // 等价用户点击：翻转选中态并触发刷新
+            assertEquals("开关开=敏感，user 不命中 USER", 0, panel.getVisibleEntryCount());
+            panel.setMatchCaseToggleForTest(!panel.getMatchCaseToggleForTest());
+            assertEquals("再点关闭恢复命中", 1, panel.getVisibleEntryCount());
+        } finally {
+            panel.dispose();
+        }
+    }
+
+    // ---------- T-SearchToggleNativeLook：Regex 正则开关（20261010 用户令日志页补正则，D133 翻案） ----------
+
+    @Test
+    public void testSearchRegexToggleMatchesPattern() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, "SELECT * FROM user WHERE id = 1"),
+                entryOfType(StatementType.UPDATE, "UPDATE t SET a = 1"));
+        // 开关正则：按 pattern 语义命中（\d = 数字），两维 restoredSql/summary 参与
+        assertEquals(2, SqlLogPanelKt.filterBySearch(entries, "id = \\d|SET a = \\d", false, true, new HistoryRegexMemo()).size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "FROM user WHERE", false, true, new HistoryRegexMemo()).size());
+        // 锚点+大小写：`^select` 敏感态不命中大写开头；忽略态命中
+        assertEquals(0, SqlLogPanelKt.filterBySearch(entries, "^select", true, true, new HistoryRegexMemo()).size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "^select", false, true, new HistoryRegexMemo()).size());
+    }
+
+    @Test
+    public void testSearchRegexOffKeepsSubstringSemantics() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, "SELECT * FROM user WHERE id = 1"));
+        // 关（默认）：正则元字符按字面子串匹配（现状语义零变化）
+        assertEquals(0, SqlLogPanelKt.filterBySearch(entries, "id = \\d").size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "id = ").size());
+    }
+
+    @Test
+    public void testSearchRegexInvalidFallsBackToSubstring() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, "SELECT * FROM user WHERE id = 1"),
+                entryOfType(StatementType.SELECT, "bad [ pattern row"));
+        // 非法正则 fail-closed：回退子串（查询为原文），restoredSql 维度恰一行含 "["
+        // （k2j 适配：master 注入 timestampTextOf=null 隔离时间片段；Java 重载无该组合缝，
+        //  改用真实设置关闭时间开关——timestampDisplayText → null，等价隔离）
+        PluginSettings.getInstance().getState().setLogTimestampEnabled(false);
+        try {
+            assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "[", false, true, new HistoryRegexMemo()).size());
+            assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "bad [ pattern", false, true, new HistoryRegexMemo()).size());
+        } finally {
+            PluginSettings.getInstance().getState().setLogTimestampEnabled(true);
+        }
+    }
+
+    @Test
+    public void testSearchRegexPrefixWorksWithoutToggle() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, "SELECT * FROM user WHERE id = 1"));
+        // `regex:` 前缀独立生效（开关关也走正则）；行号/时间正则态不参与（对齐历史页）
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "regex:^SELECT \\*").size());
+        assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "regex:id = \\d").size());
+    }
+
+    @Test
+    public void testRegexToggleDrivesPanelFiltering() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+        try {
+            manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM USER", 0L));
+            pumpEdt();
+            panel.getSearchFieldForTest().setText("FROM \\d+");
+            panel.applySearchTextForTest();
+            assertEquals("默认关：\\d+ 按字面子串不命中", 0, panel.getVisibleEntryCount());
+            panel.setRegexToggleForTest(!panel.getRegexToggleForTest()); // 等价用户点击 .* 钮：翻旗并触发刷新
+            assertEquals("正则开：按 pattern 语义仍不命中（无数字）", 0, panel.getVisibleEntryCount());
+            panel.getSearchFieldForTest().setText("USER|missing");
+            panel.applySearchTextForTest();
+            assertEquals("正则开：或模式单侧命中", 1, panel.getVisibleEntryCount());
+        } finally {
+            panel.dispose();
+        }
+    }
+
+    // ---------- T-DdlTypeColor：DDL 可单独筛选 ----------
+
+    /**
+     * 勾「建表」只出 CREATE/ALTER 条目，不把 INSERT 一起带出来。
+     *
+     * 这正是 DDL 独立成档（而非复用 INSERT 档）的核心理由：若复用，勾「只看插入」
+     * 会把建表语句一起筛出来，语义错误。
+     */
+    @Test
+    public void test筛选建表_只出结构性新增() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, "SELECT 1"),
+                entryOfType(StatementType.INSERT, "INSERT INTO t VALUES (1)"),
+                entryOfType(StatementType.CREATE, "CREATE TABLE t (id INT)"),
+                entryOfType(StatementType.CREATE, "ALTER TABLE t ADD c INT"),
+                entryOfType(StatementType.DROP, "DROP TABLE t"));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByType(entries, Set.of(StatementType.CREATE));
+        assertEquals("应只命中建表与改表 2 条", 2, filtered.size());
+        assertTrue("应含 CREATE", filtered.stream().anyMatch(e -> e.restoredSql().startsWith("CREATE")));
+        assertTrue("应含 ALTER", filtered.stream().anyMatch(e -> e.restoredSql().startsWith("ALTER")));
+        assertFalse("不应含 INSERT", filtered.stream().anyMatch(e -> e.restoredSql().startsWith("INSERT")));
+    }
+
+    /** 勾「删表」只出 DROP/TRUNCATE 条目。 */
+    @Test
+    public void test筛选删表_只出结构性删除() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.DELETE, "DELETE FROM t"),
+                entryOfType(StatementType.DROP, "DROP TABLE t"),
+                entryOfType(StatementType.DROP, "TRUNCATE TABLE t"),
+                entryOfType(StatementType.CREATE, "CREATE TABLE t (id INT)"));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByType(entries, Set.of(StatementType.DROP));
+        assertEquals("应只命中 DROP 与 TRUNCATE 2 条", 2, filtered.size());
+        assertFalse("不应含 DELETE", filtered.stream().anyMatch(e -> e.restoredSql().startsWith("DELETE")));
+    }
+
+    /** 筛选弹窗可勾选项应含六个类型（四 DML + 两 DDL）。 */
+    @Test
+    public void test筛选候选类型含Ddl两档() throws Exception {
+        assertEquals("可筛选类型应为 6 项", 6, SqlLogPanelKt.FILTERABLE_TYPES.size());
+        assertTrue("应含 CREATE", SqlLogPanelKt.FILTERABLE_TYPES.contains(StatementType.CREATE));
+        assertTrue("应含 DROP", SqlLogPanelKt.FILTERABLE_TYPES.contains(StatementType.DROP));
+        assertFalse("OTHER 不单列", SqlLogPanelKt.FILTERABLE_TYPES.contains(StatementType.OTHER));
     }
 }

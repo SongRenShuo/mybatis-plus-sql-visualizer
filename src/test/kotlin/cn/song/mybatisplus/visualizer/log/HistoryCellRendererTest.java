@@ -129,12 +129,14 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_含源码位置_渲染元信息行() throws Exception {
+    public void test二级条目_含源码位置_渲染信息轨() throws Exception {
+        // T-LogListRail：源码位置进 88px 轨道，类名骨架化（剥 Mapper 后缀）、不再带方括号
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", "UserMapper.java", 12, 3L));
         String meta = joinedText(r.metaLine);
-        assertTrue("应渲染耗时 3ms（与日志页同款无括号）", meta.contains("3ms"));
-        assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"));
-        assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"));
+        assertTrue("轨道应含耗时 3ms: " + meta, meta.contains("3ms"));
+        assertTrue("头部行应含骨架化类名 User: " + meta, meta.contains("User"));
+        assertTrue("头部行应含行号 :12: " + meta, meta.contains(":12"));
+        assertFalse("SQL 不应混入轨道", meta.contains("SELECT"));
     }
 
     @Test
@@ -157,17 +159,39 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         assertTrue("超长 SQL 摘要含省略号", joinedText(r.getSqlLine()).contains("…"));
     }
 
-    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+    // ---------- T-TwoLine → T-LogListRail：轨道在左 / SQL 区在右 ----------
 
     @Test
-    public void test二级条目_元信息在上SQL在下两行显示() throws Exception {
+    public void test二级条目_轨道在左SQL在右() throws Exception {
+        // T-LogListRail：原「元信息在上 / SQL 在下」改为「信息轨在左 / SQL 区在右」
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 30L));
         String meta = joinedText(r.metaLine);
-        assertTrue("耗时应在元信息行", meta.contains("30ms"));
-        assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"));
+        assertTrue("耗时应在轨道: " + meta, meta.contains("30ms"));
+        assertTrue("来源类名应在头部行: " + meta, meta.contains("OrderDao"));
+        assertTrue("行号应在头部行: " + meta, meta.contains(":9"));
         assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
         assertFalse("来源不应混入 SQL 行", joinedText(r.getSqlLine()).contains("OrderDao.java"));
-        assertTrue("元信息行恒存在（T-TwoLine 两行结构，占位符归元信息行）", meta.contains("[") && meta.contains("]"));
+    }
+
+    @Test
+    public void test摘要截断在敏感字面量中间_历史展示仍须脱敏() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        boolean savedMask = state.getDisplayMaskEnabled();
+        String savedMode = state.getLogListSqlDisplayMode();
+        try {
+            state.setDisplayMaskEnabled(true);
+            state.setLogListSqlDisplayMode("SINGLE_LINE");
+            String secret = "PRIVATE_MARKER_" + "x".repeat(200);
+            LogSqlEntry entry = sqlEntry("SELECT * FROM account WHERE password = '" + secret + "'", null, 0, null);
+            assertTrue("夹具须在闭合引号前截断", entry.summary().contains("PRIVATE_MARKER_"));
+            assertFalse(entry.summary().contains("'" + secret + "'"));
+            String displayed = joinedText(renderSql(entry).getSqlLine());
+            assertTrue("密码应按完整字面量打码: " + displayed, displayed.contains("password = '***'"));
+            assertFalse("截断的敏感片段不得泄漏: " + displayed, displayed.contains("PRIVATE_MARKER_"));
+        } finally {
+            state.setDisplayMaskEnabled(savedMask);
+            state.setLogListSqlDisplayMode(savedMode);
+        }
     }
 
     @Test
@@ -377,13 +401,15 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
             s.setLogTimestampEnabled(true);
             s.setLogTimestampSource(LOG_TIMESTAMP_SOURCE_CAPTURE);
             LogSqlEntry e = sqlEntry("SELECT 1", "UserMapper.java", 3, 3L).withSequenceNumber(5L);
-            String meta = joinedText(renderSql(e).metaLine);
+            String meta = renderSql(e).getMetaTextForTest();
+            // T-LogListRail：轨道首行 = `#N HH:mm:ss`，耗时在其下一行。时刻不再带方括号
+            //（格式串已剥日期，SimpleDateFormat 直接产出时段），按「首个 : 」定位时刻。
             int idxRow = meta.indexOf("#5 ");
-            int idxTs = meta.indexOf("[");
+            int idxTs = meta.indexOf(":");
             int idxDur = meta.indexOf("3ms");
-            assertTrue("应含行号/时间/耗时", idxRow >= 0 && idxTs >= 0 && idxDur >= 0);
-            assertTrue("行号在最前", idxRow < idxTs);
-            assertTrue("时间应在耗时之前（对齐日志页）", idxTs < idxDur);
+            assertTrue("应含行号/时间/耗时: " + meta, idxRow >= 0 && idxTs >= 0 && idxDur >= 0);
+            assertTrue("行号在最前: " + meta, idxRow < idxTs);
+            assertTrue("时间应在耗时之前（对齐日志页）: " + meta, idxTs < idxDur);
         } finally {
             s.setLogTimestampEnabled(savedTs);
             s.setLogTimestampSource(savedSrc);
@@ -405,17 +431,17 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     public void test二级条目_MCP来源_渲染徽标且与目标库角标共存() throws Exception {
         LogSqlEntry e = withSourceAndDatabase(sqlEntry("SELECT id FROM user WHERE id = 1", null, 0, 7L),
                 SqlSource.MCP, "MySQL");
-        String meta = joinedText(renderSql(e).metaLine);
-        assertTrue("历史页元信息行应含 MCP 徽标: " + meta, meta.contains("[MCP] "));
-        assertTrue("与目标库角标共存: " + meta, meta.contains("[MySQL] "));
-        assertTrue("耗时同列展示: " + meta, meta.contains("7ms"));
+        HistoryCellRenderer r = renderSql(e);
+        String d = r.getMetaTextForTest();
+        assertTrue("历史页注脚行应含 MCP 徽标: " + d, d.contains("[MCP]"));
+        assertTrue("与目标库角标共存: " + d, d.contains("[MySQL]"));
+        assertTrue("耗时展示在轨道: " + d, d.contains("7ms"));
     }
 
     @Test
     public void test二级条目_非MCP来源_不渲染徽标() throws Exception {
         LogSqlEntry e = sqlEntry("SELECT 1", "UserMapper.java", 3, 3L);
-        String meta = joinedText(renderSql(e).metaLine);
-        assertFalse("非 MCP 来源不应出现徽标: " + meta, meta.contains("[MCP]"));
+        assertFalse("非 MCP 来源不应出现徽标", renderSql(e).getMetaTextForTest().contains("[MCP]"));
     }
 
     @Test
@@ -451,10 +477,10 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         File[] files = dir.listFiles(f -> f.getName().endsWith(".sql"));
         assertNotNull("应写出历史文件", files);
         LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
-        String meta = joinedText(renderSql(read).metaLine);
+        String d = renderSql(read).getMetaTextForTest();
         assertTrue("读回条目来源应仍为 MCP: " + read.source(), read.source() == SqlSource.MCP);
-        assertTrue("读回后渲染仍出 MCP 徽标: " + meta, meta.contains("[MCP] "));
-        assertTrue("目标库角标共存: " + meta, meta.contains("[MySQL] "));
+        assertTrue("读回后渲染仍出 MCP 徽标: " + d, d.contains("[MCP]"));
+        assertTrue("目标库角标共存: " + d, d.contains("[MySQL]"));
     }
 
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
@@ -498,11 +524,13 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test历史页时间戳_非法pattern回退默认() throws Exception {
+    public void test历史页时间戳_非法pattern回退时段格式() throws Exception {
+        // 非法 pattern：完整格式回落 `yyyy-MM-dd HH:mm:ss`，轨道再剥日期 → `HH:mm:ss`。
+        // 断言轨道实际可见的时段形态，而非完整回落串（轨道从不显示日期）。
         setTimestampFormat("not-a-valid-pattern-%%");
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, 3L));
         String meta = joinedText(r.metaLine);
-        String expected = expectedFormatted("not-a-valid-pattern-%%"); // 回退默认 yyyy-MM-dd HH:mm:ss
-        assertTrue("非法 pattern 应回退默认格式（期望 " + expected + "）", meta.contains("[" + expected + "]"));
+        String expected = expectedFormatted("HH:mm:ss");
+        assertTrue("非法 pattern 应回退时段格式（期望 " + expected + "，实际 meta=" + meta + "）", meta.contains(expected));
     }
 }
