@@ -92,6 +92,22 @@ primary=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103 via=L1 
 
 （首轮跑失败为环境残留：上一次被中断的 e2e 留下了 FakeIde 进程占住探针端口，清理后重跑即全绿；与应用/插件行为无关。）
 
+### 3.1 参数与影响行数（真机 + 真驱动，`O147RealAgentAcceptanceTest`）
+
+关掉连接代理后立刻暴露的第一个真回归就是参数：事件还在、`params` 全空。该用例用真 JVM + 真 H2/MyBatis 跑 agent，首跑直接红：
+
+```
+realJvmEventsCarryJdbcFacts: java.util.NoSuchElementException: List is empty   ← params.single()
+```
+
+配套把参数采集搬进语句面织入（`setXxx` 方法头插桩）后转绿；期间又钓出一处既有缺陷——织入层把 `execute()` 的 `boolean` 返回值也装箱成 `Integer`，导致 `updateCount` 走不到 `getUpdateCount` 分支：
+
+```
+realJvmEventsCarryJdbcFacts: java.lang.AssertionError: expected:<1> but was:<null>
+```
+
+按方法描述符返回类型（`)Z`）修正装箱后，该用例 4 个方法全绿。agent 单测 182/0/1（含新增「参数面_setXxx入口采集_事件携参与脱敏同口径」）。
+
 ## 四、结论与边界
 
 - **复现成立**：旧 agent 在 demo 达梦链路上直接把驱动打废（VerifyError）；换织入成功的驱动即可原样打出用户 CCE 文本。**修复成立**：新 agent 在两条链路上都回到「宿主原对象」。

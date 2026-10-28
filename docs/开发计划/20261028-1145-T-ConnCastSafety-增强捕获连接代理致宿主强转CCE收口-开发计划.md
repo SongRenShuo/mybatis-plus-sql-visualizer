@@ -54,8 +54,24 @@
 
 从 `DriverRegistry` 移除 `dm.jdbc.driver.DmDriver`：该类 connect 出口织入是**已知 VerifyError 形态**。在 attach 路径它只是记一次失败（原字节保留，安全），但 premain 路径同样的坏字节会让 `DmDriver` 类定义失败 → 宿主 `NoClassDefFoundError` → 应用起不来。达梦已有语句面 + prepare 面覆盖（prepare 面带 URL），撤出只损失一个粗粒度 URL 兜底。
 
-### S3 回归钉住
+### S3 绑定参数搬进织入通道（S1 的必要配套，否则等于用崩溃换功能归零）
 
+S1 一落地就暴露一个不能接受的回归：**参数捕获原本只存在于语句代理层**（`StatementHandler` 的 `setXxx` 拦截），连接代理关掉后事件仍在、参数全空。`O147RealAgentAcceptanceTest.realJvmEventsCarryJdbcFacts` 用真 JVM + 真驱动当场抓住（`params.single()` 抛 `List is empty`）——这条正是「测了但没测到」的反面：真机用例比单测更早知道。
+
+配套实现（本次一并落地）：
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 新增织入形态 `Kind.PARAM` | `StatementWeaver` | 只在白名单 setter **方法头**插一行 `onParamSet(stmt, index, boxedValue)`：不新增局部、不插出口、不加分支 → 不动 maxLocals、不补栈图帧，因而对达梦出口 `chop_frame` 那类限制天然免疫 |
+| 取值按描述符装箱 | `StatementWeaver.appendParamValue` | I/S/B→Integer、Z→Boolean、C→Character、J→Long、F→Float、D→Double、引用/数组→ALOAD；`setNull(int,int)` 的第二个 int 是 SQL 类型码，压 null |
+| 登记槽 | `StatementRegistry.Ctx.params` | 与 SQL/URL 同生命周期（弱键随 PS 回收清账）；无登记（盲区语句）不建账 |
+| 回调 | `SqlHookCallbacks.onParamSet` | 停采短路在前（不累积）、代理层活跃时跳过（防双份）、异常自吞 |
+| 事件组装 | `WovenEvents.emit` | 从登记槽取 `ParamCapture.snapshot(sql, desensitize)`，脱敏口径与代理层同源 |
+| 面登记 | `WeaveSpecs` | 语句面与达梦 timed 面都追加 `PARAM` |
+
+同批修正一处**既有**缺陷（与本次改造互为因果才暴露）：织入层把 `execute()` 的 `boolean` 返回值也装箱成 `Integer`，于是 `EventBuilder.extractUpdateCount` 里「`execute()` 返回 false 时用 `getUpdateCount`」的分支永远进不去，影响行数恒空（O147 现场：`expected:<1> but was:<null>`）。修法＝按**方法描述符返回类型**（`)Z`）决定装箱为 `Boolean` 还是 `Integer`，不再只看 opcode（`execute()` 与 `executeUpdate()` 都是 IRETURN）。
+
+### S4 回归钉住
 - 新增 `ConnectionCastSafetyTest`：默认必须 `assertSame(raw, out)` 且返回值不是代理、语句不被包装（=实现类强转不可能失败）；opt-in 时旧通道语义仍在。
 - `ConnectWeaveEndToEndTest` / `ConfigApplyEndToEndTest`（专测连接代理通道）改用测试缝 `SqlHookCallbacks.setWrapConnectionForTest(Boolean)` 显式打开，原有断言全部保留——通道语义没删，只是不再是默认。
 - `CaptureRulesTest` 驱动覆盖矩阵同步：达梦 connect 面断言反转为「必须不在名单」。
@@ -99,3 +115,21 @@
 | 定向测试读数 | `:sql-visualizer-agent:test` → **BUILD SUCCESSFUL，180 tests / 0 failed / 1 skipped**（约 1m26s）。两次中途红都是新用例自身的断言写错（`out` 未转型编译错、`isProxyClass` 误判夹具自带的代理），生产代码未因这两次红改动过。 |
 | 反向验证 | 临时把闸门改成 `if (false && !wrapConnection)` → `ConnectionCastSafetyTest.默认原样返回宿主连接_实现类强转不可能CCE` **FAILED**（`AssertionError` 落在 `assertSame`，`ConnectionCastSafetyTest.java:45`），2 tests / 1 failed；恢复闸门后全量复跑转绿。证明该用例钉住的正是这条闸门本身，不是「照见夹具」的空绿。 |
 | 未闭环 | ①真机：达梦/金仓带 `(驱动实现类) conn` 强转的最小工程未跑（本机无该库实例）；②金仓/翰高/海量是否继承 PG 驱动类未取证（决定 §七 S5 的工作量）；③GBASE/sqlite/hsqldb 形态默认零事件的用户可见降级未做文案提示，仅 CHANGELOG 说明。 |
+
+### 八·补 真机复现与验收（2026-10-28 当日补齐）
+
+上文「真机未跑」已由 demo 达梦环境闭环，详见 `docs/验收文档/20261028-T-ConnCastSafety-demo达梦真机复现与修复验收记录.md`：
+
+| 场景 | 读数 |
+|---|---|
+| 基线（不挂 agent）+ DM | 连接类 `DmdbConnection`，强转成功 |
+| 旧包 agent（2026.10.26 内嵌）+ DM 8.1.3.140 | `VerifyError: Bad local variable type @ dm/jdbc/driver/DmDriver.connect(...) @57: aload_1`，驱动类加载失败 |
+| 旧包 agent + MySQL 8.0.33 | `ClassCastException: com.sun.proxy.$Proxy0 cannot be cast to com.mysql.cj.jdbc.ConnectionImpl`（与用户报障同形态） |
+| 新 agent + DM / MySQL | 两条链路连接类均为驱动原生类，强转成功 |
+| `e2eFakeIde`（新 agent + 真应用 + 假 IDE） | 断言 26/0 ALL-PASS，EVENT=4，CONFIG_ACK=5，源码定位落 `DeviceInfoServiceImpl.java:92` 等真实业务行 |
+
+达梦配置取自 demo 仓既有（`mybatis-plus-join-demo/src/main/resources/application-dm.yml`：`jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，`DmJdbcDriver18:8.1.3.140`，Maven profile `dm`）。
+
+### 八·补二 发行门禁（2026.10.28）
+
+`releaseGate` 首跑在 verifyGate + 5 片并发的组合下被**系统内存打爆**（三份 `hs_err`：`Native memory allocation (mmap) failed to map ... G1 virtual space`，测试 JVM 非零退出），不是用例失败；改为「片数不变、并发降到 2」分阶段重跑。IU-243 目标的 verdict 首跑已产出 `Compatible`（5 处 scheduled-for-removal、41 处 deprecated、98 处 experimental API）。

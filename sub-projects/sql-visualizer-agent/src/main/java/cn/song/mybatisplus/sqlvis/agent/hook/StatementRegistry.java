@@ -33,6 +33,12 @@ public final class StatementRegistry {
          */
         public final StringBuilder batch = new StringBuilder();
 
+        /**
+         * 参数槽（T-ConnCastSafety）：语句面 setXxx 入口织入写入。生命周期同 JDBC 语义——
+         * 参数在语句上保持到下次覆盖/重置，跨多次 execute 复用同一份（不消费即清）。
+         */
+        public final ParamCapture params = new ParamCapture();
+
         Ctx(String sql, String url) {
             this.sql = sql;
             this.url = url;
@@ -145,6 +151,23 @@ public final class StatementRegistry {
     /** 盲区计数（排障/测试观测）。 */
     public static long unresolvedCount() {
         return UNRESOLVED.get();
+    }
+
+    /**
+     * 语句面 setXxx 入口：把参数记进该语句的登记槽（T-ConnCastSafety）。
+     *
+     * <p>无登记即跳过、不建账：SQL 都取不到的盲区语句，参数记了也产不出事件，建账反而制造
+     * 弱键表膨胀。停采由调用方（{@link SqlHookCallbacks#onParamSet}）先行短路，故停采期间
+     * 不累积参数——恢复后不会把停采期间的参数错配到恢复后的语句上（与代理层 R5 同口径）。
+     */
+    public static void captureParam(Object statement, int index, Object value) {
+        if (statement == null) {
+            return;
+        }
+        final Ctx ctx = get(statement);
+        if (ctx != null) {
+            ctx.params.capture(index, value);
+        }
     }
 
     /** 仅测试用：清表复位（夹具间隔离；与 AgentState.resetPortAbandonedForTest 同款测试缝）。 */

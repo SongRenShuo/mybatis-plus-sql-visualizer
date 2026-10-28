@@ -8,6 +8,7 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
 import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
@@ -84,7 +85,8 @@ object SqlDialectMappingPrewarm {
             LOG.info("sql dialect mapping prewarm done in ${(System.nanoTime() - startedAt) / 1_000_000}ms")
             true
         } catch (t: Throwable) {
-            // 不置 warmed：下次仍有补齐机会；本次调用方照原逻辑继续
+            // 不置 warmed：下次仍有补齐机会；本次调用方照原逻辑继续。JVM 级致命错误不吞（T-FatalPassthrough）
+            if (FatalErrors.isFatal(t)) throw t
             LOG.warn("sql dialect mapping prewarm failed: ${t.javaClass.simpleName}: ${t.message}")
             false
         }
@@ -105,6 +107,7 @@ object SqlDialectMappingPrewarm {
                 java.util.concurrent.Callable { prewarmNow(project) },
             )
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t
             LOG.warn("sql dialect mapping prewarm dispatch failed: ${t.javaClass.simpleName}: ${t.message}")
             return false
         }
@@ -117,6 +120,7 @@ object SqlDialectMappingPrewarm {
             Thread.currentThread().interrupt()
             false
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t
             LOG.warn("sql dialect mapping prewarm failed: ${t.javaClass.simpleName}: ${t.message}")
             false
         }

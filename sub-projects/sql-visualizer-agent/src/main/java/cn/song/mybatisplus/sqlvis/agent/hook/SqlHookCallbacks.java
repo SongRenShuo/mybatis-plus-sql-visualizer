@@ -201,6 +201,29 @@ public final class SqlHookCallbacks {
         }
     }
 
+    /**
+     * setXxx **入口**（语句面织入，T-ConnCastSafety）：记录绑定参数。
+     *
+     * <p>为什么需要这条：参数捕获原本只存在于语句代理（连接被包装后才有），而连接替换已在
+     * 出厂关闭（{@code $Proxy} 无法强转到驱动实现类）。缺了它，「修好崩溃」的代价就是「参数全丢」，
+     * 那是把红线换成了功能归零。织入形态与观测语义都对齐代理层：白名单 setter、值渲染与
+     * 默认 toString 降级、脱敏在快照时按列名提示做。
+     *
+     * <p>签名被 StatementWeaver 字节码硬编码，改动两侧同步。停采短路排在写入之前——停采期间的
+     * 参数不累积，恢复后不会错配到后续语句（与 T-AgentResiduals R5 同口径）。代理层活跃时跳过，
+     * 参数由代理自己那份 ParamCapture 记（双通道去重，防双份）。
+     */
+    public static void onParamSet(Object stmt, int index, Object value) {
+        try {
+            if (stmt == null || AgentState.isDisabled() || WeaveGate.isProxyActive()) {
+                return;
+            }
+            StatementRegistry.captureParam(stmt, index, value);
+        } catch (Throwable t) {
+            // 采集红线：自吞（宿主 setXxx 语义不受影响）
+        }
+    }
+
     /** prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。 */
     public static void onStatementPrepare(Object ps, String sql, Object connection) {
         try {

@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.26",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.26/mybatis-plus-sql-visualizer-2026.10.26.zip",
-  "changeNotes": "实体打包进 JAR/lib 模块且该模块无命名配置时，嵌入列前缀按查询宿主模块判定，@Embedded 不再丢前缀\n嵌入列解析新增诊断日志，报障时可在 idea.log 按关键词定位判定链路\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-26",
+  "version": "2026.10.28",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.28/mybatis-plus-sql-visualizer-2026.10.28.zip",
+  "changeNotes": "修复开启增强捕获后部分数据库工程启动即报 ClassCastException，$Proxy 无法强转为 DmdbConnection 等驱动类\n增强捕获不再替换应用拿到的数据库连接对象，改为只读登记；SQL 捕获改由方法级织入完成，功能不受影响\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-28",
   "sinceBuild": "243"
 }
