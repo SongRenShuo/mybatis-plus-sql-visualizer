@@ -105,4 +105,10 @@ public final class MpvsIcons {
 
     /** 跳转 Mapper XML：XML 文件图标。 */
     public static final Icon MapperXml = icon("mapperXml");
+
+    /** Mapper 接口方法侧的配对跳转标记（红头）。 */
+    public static final Icon MapperMethod = icon("mapperMethod");
+
+    /** Mapper XML 语句侧的配对跳转标记（青头）。 */
+    public static final Icon MapperStatement = icon("mapperStatement");
 }
