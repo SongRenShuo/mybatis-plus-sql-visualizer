@@ -37,8 +37,9 @@ class GiantFileBudgetTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2103,
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2349,
         // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2133,
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2194,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
+        // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1972,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
