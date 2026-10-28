@@ -13,9 +13,6 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * 语句面/prepare 面织入器（T-StatementWeave，ASM Tree API）——「attach 即生效」的直接落点：
  * 钩子挂在 execute 族**方法体**上，随每次执行触发，与连接/语句对象的创建时间无关
@@ -57,6 +54,8 @@ public final class StatementWeaver implements Opcodes {
     private static final String ADD_BATCH_SIG = "(Ljava/lang/Object;Ljava/lang/String;)V";
     private static final String CLEAR_BATCH_SIG = "(Ljava/lang/Object;)V";
     private static final String PREPARE_SIG = "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)V";
+    /** 参数面入口签名（index 为 JDBC parameterIndex，value 已装箱）。 */
+    private static final String PARAM_SIG = "(Ljava/lang/Object;ILjava/lang/Object;)V";
 
     private static final String STR_DESC = "(Ljava/lang/String;";
 
@@ -74,107 +73,39 @@ public final class StatementWeaver implements Opcodes {
         CLEAR_BATCH,
         /** prepareStatement(String)/prepareCall(String) 出口——登记「PS 实例 → SQL + URL」。 */
         PREPARE,
+        /**
+         * setXxx 入口（T-ConnCastSafety）：把绑定参数送进登记槽。**只在方法头插一行回调**——
+         * 不新增局部、不插出口、不加分支，故不需要 token 槽与帧补丁；也正因如此对达梦那种
+         * 出口 chop_frame 的类安全（问题只出在出口读原局部）。
+         */
+        PARAM,
     }
 
     private static final String[] EXEC_NAMES =
             {"execute", "executeQuery", "executeUpdate", "executeLargeUpdate"};
     private static final String[] BATCH_NAMES = {"executeBatch", "executeLargeBatch"};
 
-    /** 类名（点分）→ 允许形态；驱动语句面（计划 §三 S1）与 prepare 面（S3）。 */
-    private static final Map<String, Kind[]> SPECS = new HashMap<String, Kind[]>();
-
-    private static void putSpec(Kind[] kinds, String... classes) {
-        for (String c : classes) {
-            SPECS.put(c, kinds);
-        }
+    /**
+     * 名单单一真相已上提至 {@link WeaveSpecs}（T-JRebelPremainCrash B 案）：本类
+     * {@code implements Opcodes} 且方法体引用 {@code Opcodes.LONG/DOUBLE/TOP}（{@code Integer}
+     * 装箱字段，不可内联），只要触达本类初始化就要求 ASM 可解析。而 {@link DriverRegistry}
+     * 的两面谓词只需「名字在不在表里」——此前经本类 {@code specOf} 判定，导致「查名字」也要
+     * ASM 全程可见；第三方 agent 接管 premain 类加载时该路径必炸且会中止宿主启动。
+     * 名单与形态标注移入零 ASM 依赖的 {@link WeaveSpecs}，本类仅委托。
+     *
+     * <p>名单的实证口径与未登记理由（达梦 ADD_BATCH/CLEAR_BATCH 的 chop_frame 限制等）
+     * 仍以 {@link WeaveSpecs} 类注释为准，避免两处各说一套。
+     */
+    static Kind[] specOf(String dottedClassName) {
+        return WeaveSpecs.specOf(dottedClassName);
     }
 
-    /**
-     * 名单单一真相（DriverRegistry 两面谓词委托 [specOf]）。条目均经 javap 实测方法名+描述符 + **真实
-     * 驱动类字节织入 + JVM 校验**（{@code StatementWeaverVendorCoverageTest}）才登记（版本以证据注记为准）：
-     * <ul>
-     *   <li>mysql-connector-j 8.0.33 / h2 2.3.232（首轮，计划 §二）；</li>
-     *   <li>postgresql 42.7.x（T-PgWeave，2026-10-09）：attach（agentmain）路径主因——存量池
-     *       连接无法回溯 connect 包装，语句面无 PG 类可 retransform 即零事件；</li>
-     *   <li>ojdbc 23.x、mssql-jdbc 12.x（同批 javap 评估 + 字节级校验通过后登记）。</li>
-     * </ul>
-     * 未登记（形态不相符 / 字节级校验不过 / 无法实证）：
-     * <ul>
-     *   <li>各驱动的 pooled/代理包装族；PreparedStatement 无参 addBatch()（仅 ADD_BATCH 认
-     *       {@code (Ljava/lang/String;)V}）；</li>
-     *   <li>无自有 execute 族的 Callable 子类（SQL Server {@code SQLServerCallableStatement}）不单列——
-     *       其 execute 族继承自已登记的 PreparedStatement 基类，基类织入即覆盖；</li>
-     *   <li><b>达梦（DmJdbcDriver18 8.1.3.140）的 ADD_BATCH / CLEAR_BATCH 面不登记</b>：该两出口非
-     *       timed（无入口捕获），出口块须读原局部，而达梦 javac 在该点发 {@code chop_frame}
-     *       （{@code DmdbStatement.addBatch(String)} chop_frame(2)、{@code clearBatch()} chop_frame(1)），
-     *       旧形态 → {@code VerifyError: Bad local variable type}（字节级探针实证）。timed 面
-     *       （EXEC_PARAM/EXEC_CTX/BATCH）经 T-DmWeave「入口捕获 this/首参 → 出口读自有槽」改造后已登记
-     *       并过 JVM 校验（达梦为本轮用户 P0 根因面）。</li>
-     * </ul>
-     */
-    static {
-        final Kind[] statementFace =
-                {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH, Kind.ADD_BATCH, Kind.CLEAR_BATCH};
-        putSpec(statementFace,
-                "com.mysql.cj.jdbc.StatementImpl",
-                "com.mysql.cj.jdbc.ClientPreparedStatement",
-                "com.mysql.cj.jdbc.ServerPreparedStatement",
-                "com.mysql.jdbc.StatementImpl",
-                "com.mysql.jdbc.PreparedStatement",
-                "com.mysql.jdbc.ServerPreparedStatement",
-                "org.h2.jdbc.JdbcStatement",
-                "org.h2.jdbc.JdbcPreparedStatement",
-                "org.h2.jdbc.JdbcCallableStatement",
-                // PostgreSQL / openGauss 兼容（openGauss 2.x 走 PG 驱动）——PgPreparedStatement
-                // 继承 PgStatement、PgCallableStatement 继承 PgPreparedStatement（javap 实测）
-                "org.postgresql.jdbc.PgStatement",
-                "org.postgresql.jdbc.PgPreparedStatement",
-                "org.postgresql.jdbc.PgCallableStatement",
-                // Oracle thin（OracleStatement 带参执行族 + 批处理；PS/Callable 各自覆盖无参 execute 族）
-                "oracle.jdbc.driver.OracleStatement",
-                "oracle.jdbc.driver.OraclePreparedStatement",
-                "oracle.jdbc.driver.OracleCallableStatement",
-                // SQL Server（SQLServerPreparedStatement 覆盖无参族并桥接带参族；
-                // SQLServerCallableStatement 无自有 execute 族——继承 SQLServerPreparedStatement 即覆盖，不单列）
-                "com.microsoft.sqlserver.jdbc.SQLServerStatement",
-                "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement");
-        // 达梦 DM8（DmJdbcDriver18 8.1.3.140）——用户 P0 根因面（2026-10-09 T-DmWeave）：
-        // 该族出口处 javac 对已死局部发 chop_frame，旧织入形态（出口读原局部）字节级 VerifyError；
-        // T-DmWeave 改为「入口捕获 this/首参 → 出口读自有槽」后，**timed 面**（EXEC_PARAM/EXEC_CTX/
-        // BATCH）可通过 JVM 校验并落钩。ADD_BATCH/CLEAR_BATCH 出口非 timed（仍读原局部）在达梦上
-        // 仍是 VerifyError（DmdbStatement.addBatch(String) chop_frame(2)、clearBatch() chop_frame(1)
-        // 字节探针实证），故**不登记**——达梦批处理事件一期不采（MyBatis 主路径走 PS，无影响）。
-        // DmdbStatement（纯语句）/ DmdbPreparedStatement（PS 自有 execute 族）用同一 timed 面；
-        // DmdbCallableStatement 无自有 execute 族（继承 DmdbPreparedStatement），不单列。
-        final Kind[] dmTimedFace = {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH};
-        putSpec(dmTimedFace,
-                "dm.jdbc.driver.DmdbStatement",
-                "dm.jdbc.driver.DmdbPreparedStatement");
-        final Kind[] prepareFace = {Kind.PREPARE};
-        putSpec(prepareFace,
-                "com.mysql.cj.jdbc.ConnectionImpl",
-                "com.mysql.jdbc.ConnectionImpl",
-                "org.h2.jdbc.JdbcConnection",
-                // PG 连接（prepareStatement/prepareCall 出口登记 PS 实例 → SQL）
-                "org.postgresql.jdbc.PgConnection",
-                // Oracle 连接基类（T4CConnection 继承其 prepareStatement/prepareCall，包私有亦可 retransform）
-                "oracle.jdbc.driver.PhysicalConnection",
-                "com.microsoft.sqlserver.jdbc.SQLServerConnection",
-                // 达梦连接（prepareStatement/prepareCall 出口登记 PS→SQL；该类字节探针通过校验）
-                "dm.jdbc.driver.DmdbConnection");
+    /** 已登记类名快照（委托 {@link WeaveSpecs}；仅供厂商对齐守卫遍历）。 */
+    static java.util.Set<String> specClassNames() {
+        return WeaveSpecs.specClassNames();
     }
 
     private StatementWeaver() {
-    }
-
-    /** 类名（点分）→ 织入形态 spec（单一真相：DriverRegistry 两面谓词委托本表判定）。 */
-    static Kind[] specOf(String dottedClassName) {
-        return SPECS.get(dottedClassName);
-    }
-
-    /** SPECS 已登记类名快照（仅供厂商对齐守卫遍历；生产路径不使用）。 */
-    static java.util.Set<String> specClassNames() {
-        return SPECS.keySet();
     }
 
     public static byte[] weave(ClassLoader definingLoader, String dottedClassName, byte[] classfileBuffer) {
@@ -251,9 +182,37 @@ public final class StatementWeaver implements Opcodes {
                         && desc.startsWith(STR_DESC)
                         && (desc.contains(")Ljava/sql/PreparedStatement;")
                             || desc.contains(")Ljava/sql/CallableStatement;"));
+            case PARAM:
+                // 只认 (int index, T value...) 形态的白名单 setter：setFetchSize/setMaxRows 这类
+                // 首参不是 int 的同名族天然排除，与 ParamCapture 的白名单双保险。
+                return cn.song.mybatisplus.sqlvis.agent.hook.ParamCapture.isSetter(name)
+                        && desc.startsWith("(I")
+                        && parameterCount(desc) >= 2;
             default:
                 return false;
         }
+    }
+
+    /** 描述符形参个数（`(` 与 `)` 之间，long/double 仍算 1 个形参）。 */
+    private static int parameterCount(String desc) {
+        int count = 0;
+        for (int i = 1; i < desc.length() && desc.charAt(i) != ')'; i++) {
+            final char c = desc.charAt(i);
+            if (c == '[') {
+                while (i + 1 < desc.length() && desc.charAt(i + 1) == '[') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == 'L') {
+                i = desc.indexOf(';', i);
+                if (i < 0) {
+                    return count;
+                }
+            }
+            count++;
+        }
+        return count;
     }
 
     private static boolean in(String name, String[] names) {
@@ -263,6 +222,57 @@ public final class StatementWeaver implements Opcodes {
             }
         }
         return false;
+    }
+
+    /**
+     * 参数面取值：按描述符把第 2 个形参（slot 2）装箱压栈。
+     *
+     * <p>三类形态分别处理——基本类型按类型装箱（I/S/B→Integer、Z→Boolean、C→Character、
+     * J→Long、F→Float、D→Double）、引用/数组直接 ALOAD；{@code setNull(int,int)} 的第二个 int 是
+     * SQL 类型码而不是值，压 null（与代理层「isSetNull → 值记 null、类型记 NULL」同口径）。
+     */
+    private static void appendParamValue(InsnList l, String name, String desc) {
+        if ("setNull".equals(name)) {
+            l.add(new InsnNode(ACONST_NULL));
+            return;
+        }
+        final char c = desc.charAt(2); // "(I" 之后
+        switch (c) {
+            case 'B':
+            case 'S':
+            case 'I':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
+                        "(I)Ljava/lang/Integer;", false));
+                return;
+            case 'Z':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
+                        "(Z)Ljava/lang/Boolean;", false));
+                return;
+            case 'C':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Character", "valueOf",
+                        "(C)Ljava/lang/Character;", false));
+                return;
+            case 'J':
+                l.add(new VarInsnNode(LLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Long", "valueOf",
+                        "(J)Ljava/lang/Long;", false));
+                return;
+            case 'F':
+                l.add(new VarInsnNode(FLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Float", "valueOf",
+                        "(F)Ljava/lang/Float;", false));
+                return;
+            case 'D':
+                l.add(new VarInsnNode(DLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Double", "valueOf",
+                        "(D)Ljava/lang/Double;", false));
+                return;
+            default: // L…; 与 […
+                l.add(new VarInsnNode(ALOAD, 2));
+        }
     }
 
     /**
@@ -280,7 +290,24 @@ public final class StatementWeaver implements Opcodes {
         return op == IRETURN || op == LRETURN || op == ARETURN || op == ATHROW;
     }
 
+    /** 方法描述符的返回类型是否为 boolean（`)Z`）——决定 IRETURN 结果装箱成 Boolean 还是 Integer。 */
+    private static boolean returnsBoolean(String methodDesc) {
+        final int paren = methodDesc.indexOf(')');
+        return paren >= 0 && paren + 1 < methodDesc.length() && methodDesc.charAt(paren + 1) == 'Z';
+    }
+
     private static boolean weaveMethod(MethodNode mn, Kind kind, String ownerInternal) {
+        if (kind == Kind.PARAM) {
+            // 参数面：只在方法头插一行回调——不新增局部、无出口、无分支，故 maxLocals 与栈图帧
+            // 都不用动（这也是它对达梦出口 chop_frame 免疫的原因：问题出在出口读原局部）。
+            final InsnList head = new InsnList();
+            head.add(new VarInsnNode(ALOAD, 0));
+            head.add(new VarInsnNode(ILOAD, 1));
+            appendParamValue(head, mn.name, mn.desc);
+            head.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onParamSet", PARAM_SIG, false));
+            mn.instructions.insertBefore(mn.instructions.getFirst(), head);
+            return true;
+        }
         final boolean timed = kind == Kind.EXEC_PARAM || kind == Kind.EXEC_CTX || kind == Kind.BATCH;
         // T-DmWeave（2026-10-09）：timed 面在**方法入口**把 this（EXEC_PARAM 再加首参 SQL）捕获进
         // 自有槽，出口一律读**自有槽**——不再读原方法局部。动因：达梦等驱动 javac 在出口处对已死局部
@@ -360,8 +387,17 @@ public final class StatementWeaver implements Opcodes {
                     l.add(new VarInsnNode(ALOAD, retSlot)); // failure
                 } else if (op == IRETURN) {
                     l.add(new VarInsnNode(ILOAD, retSlot)); // 先压 int 参
-                    l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
-                            "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+                    // 返回类型按**描述符**判定而非 opcode：execute() 返回 boolean、executeUpdate() 返回
+                    // int，两者都是 IRETURN。若一律装箱成 Integer，事件里 Boolean.FALSE 的判定就失效
+                    // （execute() 的影响行数改走 getUpdateCount 的分支永远进不去，updateCount 恒 null——
+                    // O147 真机用例实测）。
+                    if (returnsBoolean(mn.desc)) {
+                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
+                                "(Z)Ljava/lang/Boolean;", false));
+                    } else {
+                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
+                                "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+                    }
                     l.add(new InsnNode(ACONST_NULL)); // failure
                 } else if (op == LRETURN) {
                     l.add(new VarInsnNode(LLOAD, retSlot)); // 先压 long 参

@@ -203,10 +203,14 @@ public class CaptureRulesTest {
         for (String cn : new String[]{
                 "com.mysql.cj.jdbc.NonRegisteringDriver", "org.postgresql.Driver", "org.h2.Driver",
                 "org.sqlite.JDBC", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-                "dm.jdbc.driver.DmDriver", "com.kingbase8.Driver", "com.gbasedbt.jdbc.Driver",
+                "com.kingbase8.Driver", "com.gbasedbt.jdbc.Driver",
                 "org.opengauss.Driver"}) {
             assertTrue("应命中登记表: " + cn, DriverRegistry.isWeavable(cn));
         }
         assertFalse(DriverRegistry.isWeavable("com.example.NotADriver"));
+        // T-ConnCastSafety：达梦 connect 面撤出——其 connect 出口织入是已知 VerifyError 形态
+        // （premain 上会让 DmDriver 类定义失败、应用起不来），采集由语句面/prepare 面覆盖。
+        assertFalse("达梦 connect 面应保持撤出（VerifyError 会让宿主起不来）",
+                DriverRegistry.isWeavable("dm.jdbc.driver.DmDriver"));
     }
 }

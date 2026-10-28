@@ -33,14 +33,43 @@ public final class StatementRegistry {
          */
         public final StringBuilder batch = new StringBuilder();
 
+        /**
+         * 参数槽（T-ConnCastSafety）：语句面 setXxx 入口织入写入。生命周期同 JDBC 语义——
+         * 参数在语句上保持到下次覆盖/重置，跨多次 execute 复用同一份（不消费即清）。
+         */
+        public final ParamCapture params = new ParamCapture();
+
         Ctx(String sql, String url) {
             this.sql = sql;
             this.url = url;
         }
     }
 
-    private static final Map<Object, Ctx> REGISTRY =
-            Collections.synchronizedMap(new WeakHashMap<Object, Ctx>());
+    /**
+     * F78（T-PerfSweep23）：登记表按语句身份分桶（16 桶条带锁）——原单张
+     * synchronizedMap(WeakHashMap) 上 EXEC_CTX 读取与 addBatch 建账共用**同一把全局监视器**，
+     * 池化高并发下跨线程语句操作理论串行点；分桶后同语句恒落同桶（单语句 check-then-act
+     * 原子性保持——bucketCtxOf 的建账语义不变），跨语句并发摊到 16 把锁。
+     * 弱键边界不变（每桶各自 WeakHashMap，PS 弃用随 GC 清账）。
+     */
+    private static final int BUCKET_COUNT = 16;
+
+    @SuppressWarnings("unchecked")
+    private static final Map<Object, Ctx>[] BUCKETS = createBuckets();
+
+    @SuppressWarnings("unchecked")
+    private static Map<Object, Ctx>[] createBuckets() {
+        final Map<Object, Ctx>[] a = (Map<Object, Ctx>[]) new Map[BUCKET_COUNT];
+        for (int i = 0; i < BUCKET_COUNT; i++) {
+            a[i] = Collections.synchronizedMap(new WeakHashMap<Object, Ctx>());
+        }
+        return a;
+    }
+
+    /** 语句所在桶（identityHashCode 条带——同实例恒同桶）。 */
+    private static Map<Object, Ctx> bucketFor(Object statement) {
+        return BUCKETS[(System.identityHashCode(statement) & 0x7fffffff) % BUCKET_COUNT];
+    }
 
     /** attach 前 prepare、映射无登记的 PS 执行次数（盲区可观测口径）。 */
     private static final AtomicLong UNRESOLVED = new AtomicLong();
@@ -64,7 +93,7 @@ public final class StatementRegistry {
         if (statement == null || sql == null || sql.isEmpty()) {
             return;
         }
-        REGISTRY.put(statement, new Ctx(sql, url));
+        bucketFor(statement).put(statement, new Ctx(sql, url));
     }
 
     /** 取登记（无则 null）。 */
@@ -72,7 +101,7 @@ public final class StatementRegistry {
         if (statement == null) {
             return null;
         }
-        return REGISTRY.get(statement);
+        return bucketFor(statement).get(statement);
     }
 
     /** 取登记，无则登记盲区计数后返回 null（execute 出口调用方据此跳过不上报）。 */
@@ -92,13 +121,14 @@ public final class StatementRegistry {
         return ctx;
     }
 
-    /** statement 面 addBatch 目标 ctx（无则惰性建——URL 未知，execute 出口再走归属链）。 */
+    /** statement 面 addBatch 目标 ctx（无则惰性建——URL 未知，execute 出口再走归属链；同桶内 check-then-act 原子）。 */
     public static Ctx batchCtxOf(Object statement) {
-        synchronized (REGISTRY) {
-            Ctx ctx = REGISTRY.get(statement);
+        final Map<Object, Ctx> bucket = bucketFor(statement);
+        synchronized (bucket) {
+            Ctx ctx = bucket.get(statement);
             if (ctx == null) {
                 ctx = new Ctx(null, null);
-                REGISTRY.put(statement, ctx);
+                bucket.put(statement, ctx);
             }
             return ctx;
         }
@@ -109,8 +139,9 @@ public final class StatementRegistry {
         if (statement == null) {
             return;
         }
-        synchronized (REGISTRY) {
-            final Ctx ctx = REGISTRY.get(statement);
+        final Map<Object, Ctx> bucket = bucketFor(statement);
+        synchronized (bucket) {
+            final Ctx ctx = bucket.get(statement);
             if (ctx != null) {
                 ctx.batch.setLength(0);
             }
@@ -122,10 +153,29 @@ public final class StatementRegistry {
         return UNRESOLVED.get();
     }
 
+    /**
+     * 语句面 setXxx 入口：把参数记进该语句的登记槽（T-ConnCastSafety）。
+     *
+     * <p>无登记即跳过、不建账：SQL 都取不到的盲区语句，参数记了也产不出事件，建账反而制造
+     * 弱键表膨胀。停采由调用方（{@link SqlHookCallbacks#onParamSet}）先行短路，故停采期间
+     * 不累积参数——恢复后不会把停采期间的参数错配到恢复后的语句上（与代理层 R5 同口径）。
+     */
+    public static void captureParam(Object statement, int index, Object value) {
+        if (statement == null) {
+            return;
+        }
+        final Ctx ctx = get(statement);
+        if (ctx != null) {
+            ctx.params.capture(index, value);
+        }
+    }
+
     /** 仅测试用：清表复位（夹具间隔离；与 AgentState.resetPortAbandonedForTest 同款测试缝）。 */
     public static void clearForTest() {
-        synchronized (REGISTRY) {
-            REGISTRY.clear();
+        for (Map<Object, Ctx> bucket : BUCKETS) {
+            synchronized (bucket) {
+                bucket.clear();
+            }
         }
         UNRESOLVED.set(0L);
         UNRESOLVED_WARNED_ONCE.set(false);

@@ -123,6 +123,18 @@ public class SenderLoopBackoffTest {
         return System.currentTimeMillis();
     }
 
+    /** T-CiRelease（20261025）：等待放弃记账落地——放弃是 loop 线程异步执行的，调用方方法结束前
+     * 必须确认它已入账，否则可能落进后续测试的计数复位窗（见「复位」用例尾注）。 */
+    private static void awaitPortAbandoned(int port, long timeoutMs) throws Exception {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (AgentState.lastAbandonedPort() == port) {
+                return;
+            }
+            Thread.sleep(10L);
+        }
+    }
+
     @Test
     public void 连上即被关_退避增长且达上限后放弃该端口() throws Exception {
         AgentState.resetPortAbandonedForTest();
@@ -190,6 +202,11 @@ public class SenderLoopBackoffTest {
                     "首连存活过阈值应复位快速断开计数：总 accept 应为 1（正常连接）+ " + MAX_FAST_DROPS
                             + "（数满上限），实际 " + observed,
                     1 + MAX_FAST_DROPS, observed);
+            // T-CiRelease（20261025）：等待本测试的放弃记账落地（lastAbandonedPort 变为本端口）——
+            // 放弃由 loop 线程异步执行，方法不等记账就结束时，它可能落在下一个测试的计数复位
+            // **之后**补记，把那个测试的期望 1 冲成 2（CI run 40157047667 实证：慢拨号用例
+            // expected:<1> but was:<2>，本机调度快难以复现）。
+            awaitPortAbandoned(server.port(), 5_000L);
 
             loop.interrupt();
         }

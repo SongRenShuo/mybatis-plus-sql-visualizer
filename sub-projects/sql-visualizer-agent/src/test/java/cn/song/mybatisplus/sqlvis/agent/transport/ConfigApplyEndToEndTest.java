@@ -76,6 +76,9 @@ public class ConfigApplyEndToEndTest {
         AgentState.setDisabled(false);      // 生产初值 fail-open；用例自证「停采是 CONFIG/看门狗带来的」
         AgentState.setDesensitize(true);
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        // T-ConnCastSafety：本类 A 段用例钉的是「连接代理通道」的停采语义——该通道自 2026-10-28 起
+        // 出厂不再替换宿主连接（$Proxy 无法强转到驱动实现类），故这里按测试缝显式打开。
+        SqlHookCallbacks.setWrapConnectionForTest(Boolean.TRUE);
     }
 
     @After
@@ -95,6 +98,7 @@ public class ConfigApplyEndToEndTest {
         AgentState.setDisabled(false);
         AgentState.setDesensitize(true);
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        SqlHookCallbacks.setWrapConnectionForTest(null);
     }
 
     /**

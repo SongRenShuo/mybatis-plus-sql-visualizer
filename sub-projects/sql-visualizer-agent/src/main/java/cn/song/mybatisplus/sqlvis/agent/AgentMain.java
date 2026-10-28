@@ -16,6 +16,20 @@ import java.lang.instrument.Instrumentation;
  * 挂载」的旧口径不准——243 沙盒（attach 目标为现代 JDK）**首次**挂载也观察到该异常（idea.log
  * 10:15:23 实录），随后握手成功证明 agent 实际装载。该异常只作「结果以握手为准」的容错信号，
  * 不作为幂等判据，IDE 侧容错见 AgentManager。
+ *
+ * <p><b>T-JRebelPremainCrash（2026-10-22）：premain 全域失败兜底。</b>此前 {@code install} 内部
+ * 的 {@code retransformLoadedDrivers} 及其三连谓词（{@code DriverRegistry.isWeavable/
+ * isStatementWeavable/isPrepareWeavable}）都在 try 之外——任何 {@code LinkageError} 都会穿出
+ * {@code premain}，而 premain 抛异常对 JVM 是**致命**的（{@code -javaagent} 失败 ⇒
+ * {@code processJavaStart failed}，目标应用起不来）。用户现场：JRebel 接管 premain 类加载后
+ * 重定位 ASM 包不可见，{@code DriverRegistry.isStatementWeavable} 触发 {@code StatementWeaver}
+ * 类初始化时抛 {@code NoClassDefFoundError: cn/song/mybatisplus/sqlvis/agent/asm/Opcodes}
+ * （另一种加载器形态下为 {@code ClassCircularityError}），应用直接无法启动。
+ *
+ * <p>取舍：**宁可少采集，也不能杀宿主**。故本类在 premain/agentmain 双入口统一包
+ * {@code catch (Throwable)}——含 {@code Error}（{@code ClassCircularityError} 与 NCDFE 只有
+ * 共同父类 {@code Throwable}）。降级后**不写** {@code sqlvis.agent.active}，让 IDE 侧的
+ * attach 兜底仍可工作（写标记会让 attach 误判「已装」而永不重试）。
  */
 public final class AgentMain {
 
@@ -24,12 +38,20 @@ public final class AgentMain {
 
     private static volatile boolean installed = false;
 
+    /** 降级说明前缀（宿主 stderr 唯一出口；不含 SQL 原文/凭据/全路径）。 */
+    static final String DEGRADE_PREFIX = "[SqlVisAgent] install degraded: ";
+
     // 尽早定义 DriverRegistry（AgentMain 自身 <clinit> 内）——消除 attach 线程与并发
-    // transform 调用对同一类的首次定义竞争窗口（实测双 define LinkageError 规避）
+    // transform 调用对同一类的首次定义竞争窗口（实测双 define LinkageError 规避）。
+    // T-JRebelPremainCrash：失败不再无声——预定义失败是「本进程内 ASM 可能不可见」的第一现场
+    // 证据，此前 catch(Throwable ignore) 把它彻底抹掉，导致现场只能看到更靠外的一帧。
     static {
         try {
             Class.forName(DriverRegistry.class.getName(), true, AgentMain.class.getClassLoader());
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            // 只留一行类型 + 消息，不含宿主路径；不阻断（真正的降级判定在 install）
+            System.err.println("[SqlVisAgent] preload DriverRegistry failed: "
+                    + t.getClass().getName() + ": " + t.getMessage());
         }
     }
 
@@ -41,7 +63,24 @@ public final class AgentMain {
         install(agentArgs, inst);
     }
 
+    /**
+     * 双入口共用安装链。**任何 Throwable 都不得外抛**——premain 路径外抛会让 JVM 判定
+     * {@code -javaagent} 失败并中止启动（T-JRebelPremainCrash 用户现场实录）。
+     *
+     * <p>失败时：{@code installed} 保持 false、不写 {@link #ACTIVE_MARKER}，stderr 留一行
+     * {@link #DEGRADE_PREFIX} 说明；后续 attach 兜底照旧可用。
+     */
     private static synchronized void install(String agentArgs, Instrumentation inst) {
+        try {
+            installOrThrow(agentArgs, inst);
+        } catch (Throwable t) {
+            // 不再触碰任何织入器/注册表类——类初始化已失败的类再次触达可能二次
+            // ClassCircularityError / ExceptionInInitializerError（B3 格实测形态）
+            degrade(t);
+        }
+    }
+
+    private static void installOrThrow(String agentArgs, Instrumentation inst) {
         if (installed) {
             return;
         }
@@ -69,6 +108,28 @@ public final class AgentMain {
     }
 
     /**
+     * 降级出口：一行结构化说明 + 不写 active 标记（让 attach 兜底仍可重试）。
+     *
+     * <p>只做纯字符串拼接与 System.err，**不解析/不实例化任何业务类**——已在类初始化失败的
+     * 进程里，任何额外触达都可能二次抛错。
+     */
+    private static void degrade(Throwable t) {
+        String msg;
+        try {
+            msg = String.valueOf(t);
+        } catch (Throwable ignore) {
+            // 连 toString 都炸（畸形 Throwable）时退到类名
+            msg = t.getClass().getName();
+        }
+        try {
+            System.err.println(DEGRADE_PREFIX + msg
+                    + " | enhanced capture unavailable in this JVM; run-time attach fallback remains active");
+        } catch (Throwable ignore) {
+            // stderr 不可用（已关闭/被接管）——静默，绝不因诊断出口二次抛错
+        }
+    }
+
+    /**
      * 对已加载的驱动类执行 retransform（agentmain 门禁：SQL 事件须在应用已运行后到达）。
      *
      * T-StatementWeave S5：扩展为**三面**——驱动 connect 面（原有）+ 语句 execute 面 + prepare
@@ -81,6 +142,12 @@ public final class AgentMain {
      * 反推。现逐类计数 + 汇总一行 stderr（宿主应用控制台可见）：单类失败仍不阻断整体，但**不再无声**。
      * 判读：wove>0 而 transformer wovenCount==0 ⇒ transform 层静默 no-change（织入器/可见性闸门）；
      * failed>0 ⇒ JVM 拒绝（VerifyError 等），失败类名随行列出。
+     *
+     * T-JRebelPremainCrash：三连谓词移入单类 try——谓词本身会触发织入器类初始化（
+     * {@code StatementWeaver.specOf} → {@code <clinit>}），在第三方 agent 干扰 ASM 可见性时
+     * **谓词就会抛**，而此前它位于 try 之外，于是一个类的类初始化失败会中止整轮 retransform
+     * 并穿出 premain。现在单类失败只计入 {@code predicateFailed} 并继续，附独立计数便于区分
+     * 「名单判定炸」与「retransform 炸」。
      */
     private static void retransformLoadedDrivers(Instrumentation inst) {
         Class<?>[] loaded = inst.getAllLoadedClasses();
@@ -88,12 +155,31 @@ public final class AgentMain {
         int wove = 0;
         int unmodifiable = 0;
         int failed = 0;
+        int predicateFailed = 0;
         final StringBuilder failures = new StringBuilder();
+        final StringBuilder predicateFailures = new StringBuilder();
         for (Class<?> c : loaded) {
-            final String name = c.getName();
-            final boolean weavable = DriverRegistry.isWeavable(name)
-                    || DriverRegistry.isStatementWeavable(name)
-                    || DriverRegistry.isPrepareWeavable(name);
+            final String name;
+            try {
+                name = c.getName();
+            } catch (Throwable t) {
+                // 取名字失败（极端畸形类）：静默跳过该类，不阻断整体
+                continue;
+            }
+            final boolean weavable;
+            try {
+                weavable = DriverRegistry.isWeavable(name)
+                        || DriverRegistry.isStatementWeavable(name)
+                        || DriverRegistry.isPrepareWeavable(name);
+            } catch (Throwable t) {
+                // 名单判定炸（典型：织入器类初始化失败 → NCDFE/ClassCircularityError）：
+                // 该类跳过，其余继续；单独计数以便与 retransform 失败区分
+                predicateFailed++;
+                if (predicateFailures.length() < 400) {
+                    predicateFailures.append(t.getClass().getSimpleName()).append(' ');
+                }
+                continue;
+            }
             if (!weavable) {
                 continue;
             }
@@ -116,7 +202,9 @@ public final class AgentMain {
         // 每次挂载恰一行（premain/agentmain 同走 install），量级无害；这是 attach 链唯一的总览出口
         System.err.println("[SqlVisAgent] attach retransform: matched=" + matched
                 + " wove=" + wove + " unmodifiable=" + unmodifiable + " failed=" + failed
+                + (predicateFailed > 0 ? " predicateFailed=" + predicateFailed : "")
                 + (failures.length() > 0 ? " [" + failures.toString().trim() + "]" : "")
+                + (predicateFailures.length() > 0 ? " [predicate: " + predicateFailures.toString().trim() + "]" : "")
                 + " | transformer: weavable=" + SqlHookTransformer.weavableCount()
                 + " woven=" + SqlHookTransformer.wovenCount()
                 + " noChange=" + SqlHookTransformer.noChangeCount()
