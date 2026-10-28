@@ -46,6 +46,125 @@ class SettingsTruthTest {
         assertTrue("en tooltip 应声明 does not persist", en!!.contains("does not persist"))
     }
 
+    @Test
+    fun testP1_本地存储披露双语与真实接线() {
+        fun messages(resource: String) = java.util.Properties().apply {
+            this@SettingsTruthTest.javaClass.getResourceAsStream("/messages/$resource")!!
+                .bufferedReader(Charsets.UTF_8).use(::load)
+        }
+        val zh = messages("MpSqlVisualizerBundle_zh.properties")
+        val en = messages("MpSqlVisualizerBundle.properties")
+        val keys = listOf(
+            "settings.storage.captureFiles", "settings.storage.previewHistory",
+            "settings.storage.paramHistory", "settings.storage.clearBoundary",
+        )
+        // k2j 互操作：master 的 disclosure(key, action) 单行调用在 Java 侧为
+        // addDisclosure(p, g, message(key), self.<button>) 两行形态，用带 \s* 的正断等价钉住。
+        val sections = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.java")
+        val actionByKey = mapOf(
+            keys[0] to "openCaptureDirectoryButton",
+            keys[1] to "clearPreviewHistoryButton",
+            keys[2] to "clearParamHistoryButton",
+        )
+        keys.forEach { key ->
+            val call = actionByKey[key]?.let {
+                Regex("addDisclosure\\(p, g, MpSqlVisualizerBundle\\.message\\(\"$key\"\\),\\s*self\\.$it\\)")
+            } ?: Regex("addDisclosure\\(p, g, MpSqlVisualizerBundle\\.message\\(\"$key\"\\),\\s*null\\)")
+            assertTrue("设置页须可见地接线说明及独立动作 $key", call.containsMatchIn(sections))
+            assertTrue("中文披露缺失 $key", !zh.getProperty(key).isNullOrBlank())
+            assertTrue("英文披露缺失 $key", !en.getProperty(key).isNullOrBlank())
+        }
+        assertTrue(zh.getProperty(keys[0]).contains("默认不自动保存"))
+        assertTrue(en.getProperty(keys[0]).contains("off by default"))
+        assertTrue(zh.getProperty(keys[1]).contains("mp-sql-visualizer.xml"))
+        assertTrue(en.getProperty(keys[2]).contains("plaintext JSON"))
+        assertTrue(zh.getProperty(keys[3]).contains("不会清除上述三类"))
+        assertTrue(en.getProperty(keys[3]).contains("not these three"))
+        listOf(zh, en).forEach { bundle ->
+            assertFalse("自动保存提示不应称仅淘汰时写文件", bundle.getProperty("settings.log.autoSave.tip").contains("被淘汰的 SQL") ||
+                bundle.getProperty("settings.log.autoSave.tip").contains("entries evicted"))
+            assertFalse("历史空态不应称仅淘汰时存档", bundle.getProperty("log.history.files.empty").contains("被淘汰的 SQL") ||
+                bundle.getProperty("log.history.files.empty").contains("evicted SQL"))
+        }
+        // 文案与真实写入/清理边界同时守卫，防止只改文字却漏掉实际独立持久化链。
+        // k2j 互操作：Kotlin 属性赋值 buffer.onEntryStored = { ... } 翻为 setOnEntryStored(方法引用)。
+        assertTrue(mainSrc("cn/song/mybatisplus/visualizer/log/SqlLogManager.java")
+            .contains("buffer.setOnEntryStored(autoSaver::submit)"))
+        val settings = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettings.java")
+        assertTrue(settings.contains("private boolean logAutoSaveEnabled = false;"))
+        assertTrue(settings.contains("private String paramHistoryJson"))
+        assertTrue(settings.contains("private String paramSchemesJson"))
+        // k2j 互操作：@Storage 注解形态（Kotlin 侧为 Storage("mp-sql-visualizer.xml")）。
+        assertTrue(mainSrc("cn/song/mybatisplus/visualizer/history/SqlHistoryManager.java")
+            .contains("Storage(value = \"mp-sql-visualizer.xml\""))
+        val clear = mainSrc("cn/song/mybatisplus/visualizer/util/PluginCacheManager.java")
+        assertFalse(clear.contains("SqlHistoryManager.clear("))
+        assertFalse(clear.contains("ParamHistoryCache.clear("))
+        assertTrue(java.io.File("README.md").readText().contains("两者均在 IDE 应用配置目录"))
+    }
+
+    @Test
+    fun testP1_旧方言状态键不能被新键前缀伪装为已消费() {
+        listOf("MpSqlVisualizerBundle.properties", "MpSqlVisualizerBundle_zh.properties").forEach { name ->
+            val lines = javaClass.getResourceAsStream("/messages/$name")!!
+                .bufferedReader(Charsets.UTF_8).use { it.readLines() }
+            assertFalse("$name: 父键已无人消费，不能因新键前缀而假绿",
+                lines.any { it.startsWith("settings.dialect.inferred=") })
+            assertFalse("$name: 旧空态键已被有证据的分类状态取代",
+                lines.any { it.startsWith("settings.dialect.inferred.none=") })
+        }
+    }
+
+    @Test
+    fun testP1_执行超时说明不能冒充原生控制台取消护栏() {
+        fun read(resource: String) = java.util.Properties().apply {
+            this@SettingsTruthTest.javaClass.getResourceAsStream("/messages/$resource")!!.bufferedReader(Charsets.UTF_8).use(::load)
+        }.getProperty("settings.preview.executionTimeout.tip")
+        val zh = read("MpSqlVisualizerBundle_zh.properties")
+        val en = read("MpSqlVisualizerBundle.properties")
+        assertTrue("中文设置须明确原生控制台不受插件超时保护", zh.contains("原生控制台") && zh.contains("不受"))
+        assertTrue("英文设置须明确原生控制台不受插件超时保护", en.contains("native console") && en.contains("not"))
+        assertTrue("适用的 MCP 通道仍须在文案中可见", zh.contains("MCP") && en.contains("MCP"))
+    }
+
+    @Test
+    fun testP1_全局方言状态不得取首项目首数据源() {
+        // k2j 互操作：锚点从 internal fun 换为 Java 方法签名；区间收窄到 refreshInferredLabel
+        // 方法体（master 原区间止于 isModifiedPreview，Java 侧中间夹着 refreshCacheInfo/
+        // triggerInterceptorInjection 等合法取首项目的无关方法，负向断言须只盯状态行本体）。
+        val section = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java")
+            .substringAfter("public void refreshInferredLabel()")
+            .substringBefore("public void selectLanguage(")
+        assertFalse("全局设置不能把首个项目冒充当前项目", section.contains("getOpenProjects()[0]"))
+        assertFalse("全局状态不能取数据源首个 URL", section.contains("DataSourceUrlProbe.firstUrl("))
+        assertTrue("状态应消费项目候选共识决策", section.contains("DialectRegistry.INSTANCE") && section.contains(".decision("))
+        assertTrue("多项目不得偷取其一的决策", section.contains("projects.size() == 1"))
+    }
+
+    /**
+     * T-DialectLabelStale（2026-10-27 用户真机复现）：方言下拉切到具体方言时，
+     * 推断状态只读行必须同步刷新。原实现只在「切回智能推断」分支刷新，
+     * 切到 Oracle 等具体方言时副标题停在旧文案，直到面板重绘/apply 后的 reset() 才追上。
+     */
+    @Test
+    fun testT_DialectLabelStale_下拉切具体方言也刷新状态行() {
+        // k2j 互操作：行锚点带 self. 前缀；Kotlin 尾 lambda 换为 Java lambda 形态。
+        val src = stripComments(
+            mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.java"),
+        )
+        val listener = src.substringAfter("addRow(p, g, \"\", self.dialectInferredLabel)")
+            .substringBefore("addRow(p, g, \"\", self.replaceParamsCheck)")
+        assertTrue(
+            "方言下拉监听必须无条件刷新推断状态行（不得只判 autoDialectItem 分支）",
+            listener.contains("dialectCombo.addActionListener(e -> self.refreshInferredLabel())"),
+        )
+        assertFalse(
+            "切到具体方言时不得跳过刷新（不得回潮按哨兵项判等的条件刷新）",
+            listener.contains("selectedItem == autoDialectItem") ||
+                listener.contains("getSelectedItem(), autoDialectItem"),
+        )
+    }
+
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
     private fun mainSrc(rel: String) = java.io.File("src/main/java/$rel").readText()
