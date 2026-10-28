@@ -9,7 +9,7 @@
 
 | ID | 功能与必验子场景 | 主要操作与判别点 | 证据级别 | 状态 | 证据 |
 |----|------------------|------------------|----------|------|------|
-| MG-01 | W2 脱敏分级：设置页四态下拉（关闭/打码/警示/阻断）+ 白名单文本域在场 | 设置 → SQL 日志安全分组：`settings.display.mask` 下拉四项、`settings.display.mask.allowList` 输入区 | GUI | 未验 | |
+| MG-01 | W2 脱敏分级：设置页四态下拉（关闭/打码/警示/阻断）+ 白名单文本域在场 | 设置 → SQL 日志安全分组：`settings.display.mask` 下拉四项、`settings.display.mask.allowList` 输入区 | GUI | **通过** | 设置搜索「展示与导出脱敏」直达 Tools→SQL Visualizer→SQL Log 页源码位置捕获组：四态下拉（关闭/打码(***)/警示(原文+计数)/阻断(隐藏 SQL)）+ 白名单域（示例 mobile_register）同帧在位（record/tmp/b1_combo_popup.png）；切「打码」Apply 生效（b1_applied.png 显示 Revert changes 出现） |
 | MG-02 | W2 脱敏分级：日志列表渲染随模式变化（MASK=***、BLOCK=占位、WARN 预览首行提示、OFF 原样） | 设置切模式 → 日志列表含手机号形态条目观感对照 | GUI | 未验 | |
 | MG-03 | W2 导出/复制从严：任一非关闭模式导出与 Ctrl+C 复制均打码 | 列表条目 Ctrl+C → 剪贴板读数；右键导出 → 文件读数 | GUI+产物 | 未验 | |
 | MG-04 | W2 白名单豁免：列名关键词命中列豁免识别（连兜底判定都跳过） | 白名单填关键词 → 含该列名的敏感值恢复原样 | GUI | 未验 | |
