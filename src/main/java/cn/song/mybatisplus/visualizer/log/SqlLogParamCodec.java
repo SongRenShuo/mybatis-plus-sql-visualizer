@@ -221,8 +221,17 @@ public final class SqlLogParamCodec {
             json.endObject();
             json.close(); // 输出 Base64 尾块，不关闭外部 target。
         } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
+            // master 无 catch（Kotlin 无受检异常概念）——IOException 原样透传（含修订链
+            // RevisionOutput 抛的 RevisionLimitExceeded，测试按该类型捕获）。
+            // 不得包装成 UncheckedIOException 改变异常形态；受检透传走既有 sneakyThrow 先例。
+            throw sneakyThrow(e);
         }
+    }
+
+    /** 受检异常原样透传（AcpTransportEpRegistrar/McpToolsetSupport 同款先例）。 */
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
     }
 
     /** 避免 OutputStreamWriter.write(String) 将巨型 String 一次转成 char[]。 */

@@ -347,6 +347,9 @@ public class SqlLogAutoSaver {
     public synchronized void configure(String customPath, String pattern, String projectBasePath, int maxFiles) {
         // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
         close(configureDrainLimit);
+        // O-147：旧目录的 WrittenBlock 随重配作废——融合修订只认本实例在当前配置下写出的块
+        writtenBlocks.clear();
+        writtenOrder.clear();
         saveDir = resolveHistoryDir(customPath, projectBasePath);
         fileNamePattern = pattern.isBlank() ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN : pattern;
         this.maxFiles = maxFiles;
@@ -701,10 +704,11 @@ public class SqlLogAutoSaver {
     /** Base64 最终输出硬封顶；超额在流写时抛出，绝不先生成完整 payload。 */
     static class RevisionOutput extends java.io.OutputStream {
         private final int limit;
-        private final java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream(1024);
+        private final java.io.ByteArrayOutputStream data;
 
         RevisionOutput(int limit) {
             this.limit = limit;
+            this.data = new java.io.ByteArrayOutputStream(Math.min(limit, 1024));
         }
 
         int size() {
@@ -732,25 +736,21 @@ public class SqlLogAutoSaver {
         }
     }
 
-    static String revisionPayload(LogSqlEntry entry) {
+    static String revisionPayload(LogSqlEntry entry) throws java.io.IOException {
         RevisionOutput output = new RevisionOutput(SqlLogFileReader.MAX_REVISION_PAYLOAD);
         writeRevision(entry, output);
         return output.text();
     }
 
-    static void writeRevision(LogSqlEntry entry, java.io.OutputStream output) {
+    static void writeRevision(LogSqlEntry entry, java.io.OutputStream output) throws java.io.IOException {
         java.io.OutputStream encoded = java.util.Base64.getEncoder().wrap(output);
         java.io.Writer w = new SqlLogParamCodec.ChunkedWriter(
                 new java.io.OutputStreamWriter(encoded, java.nio.charset.StandardCharsets.UTF_8));
-        try {
-            writeEntryText(w, entry, null);
-            w.close();
-        } catch (Throwable t) {
-            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
-                throw (Error) t;
-            }
-            throw new RuntimeException(t);
-        }
+        // master 无 try/catch（Kotlin 无受检异常概念）——RevisionLimitExceeded 等异常原样透传；
+        // Java 侧以 throws IOException 承载同一语义（测试按 RevisionLimitExceeded 捕获，
+        // drainMerges 侧 catch Exception 兜底不变），不得包装成 RuntimeException 改变异常形态
+        writeEntryText(w, entry, null);
+        w.close();
     }
 
     /**
@@ -818,6 +818,11 @@ public class SqlLogAutoSaver {
 
     public synchronized void close(int maxDrainEntries) {
         drainPendingSync(maxDrainEntries);
+        // O-147：close 前同步排空待处理融合修订（已落盘条目的元数据升级不丢）；
+        // 随后清空等待表——close 后不再有写线程消费 waitingMerges，残留即泄漏（master close 同序）
+        drainMerges();
+        waitingMerges.clear();
+        waitingOrder.clear();
         java.util.concurrent.ExecutorService current = executor;
         if (current != null) {
             current.shutdownNow();
