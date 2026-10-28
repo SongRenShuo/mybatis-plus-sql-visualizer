@@ -693,6 +693,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数（差集在用例内联计算），故 decisionFns 留空；" +
                     "灵敏度=把 KEYWORDS 改回旧 41 词平集必红，已实测于实施轮（4 例红，含逐词差集原文）。",
             ),
+            // ---- T-PerfSweep27-03：机械优化结构静检守卫（2026-10-27） ----
+            GuardEntry(
+                "convention/PerfSweep27StaticGuardTest.kt",
+                emptyList(),
+                "券03 机械优化源码结构钉（T-PerfSweep27-03）：判定内核内联于两个用例——" +
+                    "读 SqlCompletionContributor.java 源码断言 isDebugEnabled 块门控存在且 " +
+                    "editor 等急切读取落入门控内；读 HqlGutterLineMarkerProvider.java 断言 " +
+                    "showGutterIcon 开关判定行先于 hasStringFirstArgument 调用行（关闸不付 resolve）。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向探针（摘门控改 run{ / 开关判定后置）两断言各恰 1 红，实施轮已实测。" +
+                    "（k2j：扫描根 src/main/java，锚点语句按 Java 语法形态。）",
+            ),
             GuardEntry(
                 "convention/ExplainAskPasswordChannelGuardTest.kt",
                 listOf(
@@ -1171,6 +1183,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                 listOf(DecisionFn("syncRefreshInsideWiraOffenders", FnKind.VIOLATIONS)),
                 "BGT 同步 VFS 刷新不得持写意向锁；仅豁免 Java EDT 冷路径 createTempPsiFile。" +
                     "同文件自证覆盖泛型/强转/两种 lambda，真实预热站点还原 WIRA 后必须报错。",
+            ),
+            GuardEntry(
+                "convention/SqlDialectEdtSourceScanTest.kt",
+                listOf(DecisionFn("syntaxHighlighterFactorySites", FnKind.VIOLATIONS)),
+                "平台 SQL 高亮器直取守卫（T-SqlDialectPrewarm）：该调用会触发 SqlDialectMappings 的" +
+                    "一次性延迟加载（逐条 VirtualFileManager.findFileByUrl → FSRecordsImpl.update），" +
+                    "落 EDT 即平台慢操作断言并把本插件归为 blame。允许清单只有预热助手一处，且断言取" +
+                    "**等值**而非子集——助手不再直取时清单变空即红，防失效豁免（同 WHITELIST 反腐烂口径）。" +
+                    "自证语料：`自证_裸调用与跨行全限定调用均被抓`（含真实历史跨行形态）/ " +
+                    "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
+                    "`自证_注释里的调用不算`。（k2j：源码清单走 BannedApiScanSupport.mainSources " +
+                    "src/main/java 快照，允许点为 Java 路径。）",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(
