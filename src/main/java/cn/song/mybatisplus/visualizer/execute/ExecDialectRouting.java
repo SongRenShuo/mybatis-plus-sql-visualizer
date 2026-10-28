@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.vfs.VirtualFile;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Method;
@@ -340,6 +341,30 @@ final class ExecDialectRouting {
             return DataSourceSettings.getAllDataSources(project);
         } catch (Throwable t) {
             return List.of();
+        }
+    }
+
+    /** 方言名归一（大小写与首尾空白不参与比对；空值返回 null）。 */
+    private static String knownDialectName(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed.toLowerCase();
+    }
+
+    /**
+     * 把 exec 文件重映射到指定平台 SQL 方言（runner 枚举为空时的兜底）。
+     *
+     * <p>用途：平台 {@code getAttachDataSourceRunners} 按 psiFile 已映射方言筛 runner，数据源无平台
+     * Dialects 映射时该方言筛不出 runner。重映射到<b>目标数据源方言</b>后再枚举即可命中，
+     * 后续控制台/结果表/审计全部复用既有链路（不新建执行通道）。</p>
+     *
+     * @return true = 映射已就位（可重试枚举）；false = 平台无该方言或写映射失败
+     */
+    static boolean remapExecFileDialect(Project project, VirtualFile vf, Object language) {
+        try {
+            return DialectPreMapping.ensureMapped(project, vf, language, false);
+        } catch (Throwable t) {
+            return false;
         }
     }
 
