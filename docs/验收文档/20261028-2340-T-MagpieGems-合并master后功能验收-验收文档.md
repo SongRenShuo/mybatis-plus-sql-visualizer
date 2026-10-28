@@ -10,9 +10,9 @@
 | ID | 功能与必验子场景 | 主要操作与判别点 | 证据级别 | 状态 | 证据 |
 |----|------------------|------------------|----------|------|------|
 | MG-01 | W2 脱敏分级：设置页四态下拉（关闭/打码/警示/阻断）+ 白名单文本域在场 | 设置 → SQL 日志安全分组：`settings.display.mask` 下拉四项、`settings.display.mask.allowList` 输入区 | GUI | **通过** | 设置搜索「展示与导出脱敏」直达 Tools→SQL Visualizer→SQL Log 页源码位置捕获组：四态下拉（关闭/打码(***)/警示(原文+计数)/阻断(隐藏 SQL)）+ 白名单域（示例 mobile_register）同帧在位（record/tmp/b1_combo_popup.png）；切「打码」Apply 生效（b1_applied.png 显示 Revert changes 出现） |
-| MG-02 | W2 脱敏分级：日志列表渲染随模式变化（MASK=***、BLOCK=占位、WARN 预览首行提示、OFF 原样） | 设置切模式 → 日志列表含手机号形态条目观感对照 | GUI | 未验 | |
-| MG-03 | W2 导出/复制从严：任一非关闭模式导出与 Ctrl+C 复制均打码 | 列表条目 Ctrl+C → 剪贴板读数；右键导出 → 文件读数 | GUI+产物 | 未验 | |
-| MG-04 | W2 白名单豁免：列名关键词命中列豁免识别（连兜底判定都跳过） | 白名单填关键词 → 含该列名的敏感值恢复原样 | GUI | 未验 | |
+| MG-02 | W2 脱敏分级：日志列表渲染随模式变化（MASK=***、BLOCK=占位、WARN 预览首行提示、OFF 原样） | 设置切模式 → 日志列表含手机号形态条目观感对照 | GUI | **通过** | 语料 `joinPlaceholder?tel=13812345678`（增强通道条目 [MYSQL] MpjLocatorCoverageServiceImpl.java:164）：MASK=列表 `add.tel = '***'`（b1_list_state.png）；BLOCK=整段替换「已阻断：疑似敏感值 1 处；」（b1_block_list.png）；WARN=列表原文 + 停靠快速预览首行「⚠ 检测到疑似敏感值：手机号×1」（b1_warn_docked.png）；OFF=列表原文回显 `add.tel = '13812345678'`（b1_off_list.png）。四态全对 |
+| MG-03 | W2 导出/复制从严：任一非关闭模式导出与 Ctrl+C 复制均打码 | 列表条目 Ctrl+C → 剪贴板读数；右键导出 → 文件读数 | GUI+产物 | **通过** | MASK 态 Ctrl+C → 剪贴板全文 `addr.tel = '***'`（含 WHERE）；BLOCK 态 Ctrl+C → 回落 MASK 全文（非占位，b1_copy_block 后剪贴板读数）；导出 SQL 文件 `sql-export-20261029-001826.sql` 内 `addr.tel = '***'`（toast 确认导出路径） |
+| MG-04 | W2 白名单豁免：列名关键词命中列豁免识别（连兜底判定都跳过） | 白名单填关键词 → 含该列名的敏感值恢复原样 | GUI | **不通过（UI-001）** | 白名单 `tel` + MASK（options XML 实证 `displayMaskAllowList="tel"`/`displayMaskMode="MASK"` 已持久化）→ 日志列表仍 `***`（b1_whitelist_list.png）；MASK→OFF→MASK 模式循环排除缓存陈旧（b1_cycle_mask_list.png）。**代码级根因＝白名单只接进停靠快速预览链**：`SqlListFragmentRenderer.kt:40/44`（列表显示）、`LogEntryFiltering.kt:162`（Ctrl+C 复制）、`SqlExportService.kt:53/176`（导出）、`ReplayScriptExport.kt:92`（重放导出）均未传 `displayMaskAllowList()`，`maskDisplay(sql, mode)` 第三参默认 emptyList；已接线的仅 `SqlDockedPreview.kt:111 → SqlClickPreview.kt:66`。停靠预览的白名单行为未获 GUI 复证（面板内容不随模式切换重渲染，截图停留在 WARN 旧渲染；警示行仅 WARN 模式追加——SqlClickPreview.kt:68，故 MASK 态截图里的警示条是旧渲染非新证据） |
 | MG-05 | W3 坏 State 文件旁路 guard：坏 XML → 启动巡检恢复默认并留 LastGood | 沙盒 options 写坏 XML → 重启 → 设置正常、`.lastgood` 文件产生、通知/日志 | GUI+重启 | 未验 | |
 | MG-06 | W4 执行错误五档分类：权限类错误提示出路（压过对象缺失）、连接错误分类 | demo 真库执行无权限/错对象语句 → 提示文案分类与出路提示 | GUI | 未验 | |
 | MG-07 | O-150 回滚按钮：无备份态 tooltip「暂无可用备份」 | 设置 → 更新节「回滚上一版」按钮 hover | GUI | 未验 | |
@@ -37,6 +37,12 @@
 - 沙盒 build/MPSV-MagpieGems-UI243（init 脚本独立沙盒 + autoReload=false，启动脚本 .local/start-magpie-ui243.ps1）。
 - 语料：B1 用 `GET /mpj/locator/joinPlaceholder?tel=13812345678`（demo 既有端点，还原 SQL 含手机号形态字面量）；B3 用预览面板执行 `SELECT * FROM no_such_table_xyz`（OBJECT_MISSING）与语法错误（SYNTAX），PERMISSION/CONNECTION 以 ExecutionErrorCategoryTest 测试收口；B2 备份预置探针 record/stage_update_backup.py（复刻 UpdateBackupStore 磁盘形态：update-backup/ + rollback-*.zip 顶层目录名 + manifest.json 四键）。
 
-## 四、状态去向
+## 四、缺陷登记
+
+| ID | 发现批次 | 现象（实际 vs 预期） | 根因（代码级） | 级别 | 处置 |
+|----|----------|----------------------|----------------|------|------|
+| UI-001 | B1（MG-04） | 白名单填 `tel` 且模式=打码（options XML 已持久化）后，日志列表、Ctrl+C 复制、SQL 导出仍打码该列；预期=白名单列豁免一切识别 | 白名单实参只接进停靠快速预览链（`SqlDockedPreview.kt:111`）；`SqlListFragmentRenderer.kt:40/44`、`LogEntryFiltering.kt:162`、`SqlExportService.kt:53/176`、`ReplayScriptExport.kt:92` 调 `maskDisplay(sql, mode)` 未传第三参（默认 emptyList） | P2（功能链断裂但非数据损坏；从严重叠面不受影响——复制/导出仍按 MASK 打码，只是豁免不生效） | 待批末统一修：四处调用点补传 `PluginSettings.getInstance().displayMaskAllowList()` + 定向测试（改白名单后列表/复制/导出三面豁免）+ 反向探针（摘接线恰红）；修复落在 src/main ⇒ 收口复跑 |
+
+## 五、状态去向
 
 （收尾回填）
