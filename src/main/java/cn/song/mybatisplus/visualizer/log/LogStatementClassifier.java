@@ -9,7 +9,13 @@ package cn.song.mybatisplus.visualizer.log;
  * - `INSERT` → StatementType.INSERT
  * - `UPDATE` → StatementType.UPDATE
  * - `DELETE` → StatementType.DELETE
- * - 其他（`MERGE` / `TRUNCATE` / `CREATE` 等）→ StatementType.OTHER
+ * - `CREATE` / `ALTER` / `RENAME` → StatementType.CREATE（结构性新增/变更）
+ * - `DROP` / `TRUNCATE` → StatementType.DROP（结构性删除/清空）
+ * - 其他（`MERGE` / `REPLACE` / 存储过程调用等）→ StatementType.OTHER
+ *
+ * T-DdlTypeColor（2026-10-26）：DDL 独立成两档而非并入 INSERT/DELETE。理由是
+ * 筛选按 StatementType 勾选——若 CREATE 就是 INSERT，勾「只看插入」会把建表语句
+ * 一起筛出来，语义错误。着色可复用（CREATE 取绿、DROP 取红），但类型必须分开。
  */
 public final class LogStatementClassifier {
     public static final LogStatementClassifier INSTANCE = new LogStatementClassifier();
@@ -38,6 +44,14 @@ public final class LogStatementClassifier {
                 return StatementType.UPDATE;
             case "DELETE":
                 return StatementType.DELETE;
+            // DDL：结构性变更 vs 结构性删除
+            case "CREATE":
+            case "ALTER":
+            case "RENAME":
+                return StatementType.CREATE;
+            case "DROP":
+            case "TRUNCATE":
+                return StatementType.DROP;
             default:
                 return StatementType.OTHER;
         }
