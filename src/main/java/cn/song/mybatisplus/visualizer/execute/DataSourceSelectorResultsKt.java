@@ -74,7 +74,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -360,12 +359,25 @@ public final class DataSourceSelectorResultsKt {
         // 控制台编辑器所见即所执行；历史链在预览侧记录原文，不受此处影响（两态分离）。
         String submitSql = stripGSuffixForSubmit(sql, null).submitText();
 
-        // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
+        // M36.5.5：共享控制台命中（绑定数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
+        // T-ConsoleBind：复用判定升级为身份制——预览有明确绑定目标（UUID）时，共享控制台
+        // 「当前实际绑定」必须同一数据源才可复用（此前按「记忆名 == 建缓存记录名」字符串比较，
+        // 控制台被翻转后照旧放行，跑错库——20261028 录制现场实证）。
+        String moduleKey = dialectGateRequest != null ? dialectGateRequest.moduleKey() : null;
+        Object intendedDs = ExecFileBinding.resolveIntendedDataSource(project, moduleKey, preferredRunnerName);
+        String intendedDsId = null;
+        if (intendedDs != null) {
+            try {
+                intendedDsId = DataSourceSettings.getUniqueId(intendedDs);
+            } catch (Throwable t) {
+                intendedDsId = null;
+            }
+        }
         if (allowsSharedConsoleReuse(forceChoose) && reuseSharedConsole(project, submitSql, executeAfterPrepare,
                 onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
-                dialectGateRequest, onDialectGate, submission, prepareOwner)) {
+                dialectGateRequest, onDialectGate, submission, prepareOwner, moduleKey, intendedDsId)) {
             // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
             // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
             if (ownsGate) prepareGate.finishPrepare(prepareOwner);
@@ -387,6 +399,30 @@ public final class DataSourceSelectorResultsKt {
         }
         VirtualFile vf = temp.vf;
         PsiFile psiFile = temp.psi;
+
+        // T-ConsoleBind：平台 forced 关联对齐——exec 文件路径稳定，平台 attachConsole 会把
+        // 「文件→数据源」per-file 关联写死并挂控制台；getAttachDataSourceRunners 入口
+        // getForcedDataSourceForExec 命中即返回单 runner，本插件的选择链（last-used 静默命中 /
+        // preferredRunnerName / 选择器弹窗）全部被短路（262 字节码实证，见 ExecFileBinding KDoc）。
+        // 绑定目标明确且 pin 不一致 → 对齐到目标；用户显式要求换源 → 清 pin 恢复全源弹窗；
+        // pin 已一致或目标不可知（无记忆/冲突不猜）→ 不动平台状态（既有行为逐字保持）。
+        if (forceChoose || forceChoosePopup || intendedDsId != null) {
+            ExecFileBinding.ExecBindProbe bindProbe = ExecFileBinding.probeExecBind(project, vf);
+            ExecFileBinding.BindAction bindAction = ExecFileBinding.resolveBindAction(
+                    forceChoose || forceChoosePopup, intendedDsId, bindProbe);
+            if (bindAction.action() != ExecFileBinding.Action.NOOP) {
+                LOG.info("[T-ConsoleBind] exec file pin=" + bindProbe.pinnedDsId()
+                        + ", intended=" + (bindAction.intendedDsId() != null ? bindAction.intendedDsId() : "(clear)")
+                        + " → " + bindAction.action());
+                if (ExecFileBinding.realignExecBind(project, vf,
+                        bindAction.action() == ExecFileBinding.Action.REALIGN ? intendedDs : null)) {
+                    // 被 detach 的可能正是共享/已备控制台（内嵌在预览面板里）——缓存作废，
+                    // 本链全量重建（onConsole 回调会重嵌新控制台）。
+                    dropSharedConsole();
+                    clearPrepared();
+                }
+            }
+        }
 
         final String[] chosenRunnerName = {null};
         java.util.function.Supplier<Boolean> isPrepareActive = () ->
@@ -505,13 +541,55 @@ public final class DataSourceSelectorResultsKt {
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
             if (executeAfterPrepare) openDatabaseToolWindow(project);
+            // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
+            // 数据源，可以正常提示方言不一致，但是还是要能成功执行」。
+            //
+            // 平台 runner 枚举按 **psiFile 已映射的 SQL 方言**筛；数据源在平台侧没有 Dialects
+            // 映射时，该方言一条 runner 都筛不出（runners=0）——数据源其实完全可用。
+            // 兜底＝按**目标源方言**把 exec 文件重映射一次，再枚举一遍 runner：命中即走既有
+            // 全链（控制台、结果表、审计全部复用），不新建任何执行通道。
+            Object remapLanguage = null;
+            try {
+                Object targetDs = ExecDialectRouting.resolveTargetDataSource(project);
+                remapLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs);
+            } catch (Throwable t) {
+                remapLanguage = null;
+            }
+            if (remapLanguage != null && ExecDialectRouting.remapExecFileDialect(project, vf, remapLanguage)) {
+                List<Object> retry;
+                try {
+                    retry = ExecDialectRouting.expandGroupRunners(
+                            getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer));
+                } catch (Throwable t) {
+                    retry = List.of();
+                }
+                LOG.info("[M36] runners empty → remapped exec file to target dialect, retry runners=" + retry.size());
+                if (!retry.isEmpty()) {
+                    // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）
+                    chooseAndPrepare(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
+                            onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, submission,
+                            forceChoose, preferredRunnerName, forceChoosePopup);
+                    return;
+                }
+            }
             if (registered.isEmpty()) {
                 if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.datasource.empty"));
             } else {
-                Object targetDs = ExecDialectRouting.resolveTargetDataSource(project);
-                Object targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs);
-                String dialectDisplay = targetLanguage instanceof com.intellij.lang.Language language
-                        ? language.getID() : ExecDialectRouting.MYSQL_LANGUAGE_ID;
+                // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
+                // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
+                // 上次使用的 MySQL 源 → 推出 MySQL → 用户看到「没有与该 SQL 方言（MySQL）匹配的
+                // 数据源」，可他眼前预览里明明写着 `方言: PostgreSQL（手动指定）`、SQL 也是 PG 语法，
+                // 文案自相矛盾（2026-10-25 实测）。O-145 W7 已让 mapDialectBeforePsi 跟随渲染方言，
+                // 这里同步跟上：有渲染事实优先用它，没有才回退旧的按源推断。
+                String renderedName = dialectGateRequest != null ? dialectGateRequest.renderedDialectName() : null;
+                if (renderedName != null && renderedName.isBlank()) renderedName = null;
+                String dialectDisplay = renderedName;
+                if (dialectDisplay == null) {
+                    Object targetDs = ExecDialectRouting.resolveTargetDataSource(project);
+                    Object targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs);
+                    dialectDisplay = targetLanguage instanceof Language language
+                            ? language.getID() : ExecDialectRouting.MYSQL_LANGUAGE_ID;
+                }
                 StringBuilder names = new StringBuilder();
                 for (Object ds : registered) {
                     if (names.length() > 0) names.append(", ");
@@ -589,6 +667,31 @@ public final class DataSourceSelectorResultsKt {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             @Nullable QueuedExecuteIntent prepareOwner) {
+        return reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, prepareOwner,
+                null, null);
+    }
+
+    /**
+     * @param moduleKey    T-ConsoleBind：本次预览的模块键（无身份目标时保留旧项目级名字判定的记忆来源）。
+     * @param intendedDsId T-ConsoleBind：本次预览的绑定目标数据源 UUID（null = 无可信目标 → 旧名字判定）。
+     */
+    public static boolean reuseSharedConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            boolean executeAfterPrepare,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable QueuedExecuteIntent prepareOwner,
+            @Nullable String moduleKey,
+            @Nullable String intendedDsId) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         Object console = sharedConsole;
         if (console == null) return false;
@@ -602,7 +705,19 @@ public final class DataSourceSelectorResultsKt {
         if (scriptModel == null) return false;
         Object execOption = sharedExecOption;
         if (execOption == null) return false;
-        if (!Objects.equals(lastRunnerName(project), dsName)) return false;
+        // T-ConsoleBind：复用身份判定——有预览目标时必须「当前实际绑定」同一数据源；
+        // 此前只比「记忆名 == 建缓存记录名」两个字符串，控制台被任何路径重绑（native 切换/
+        // 被钉源翻转）后照旧放行，执行落在旧库（20261028 录制现场实证）。
+        String liveDsId = consoleDataSourceId(console);
+        if (!ExecFileBinding.resolveSharedConsoleReuse(intendedDsId, liveDsId,
+                lastUsedRunner(project, moduleKey).displayName(), dsName)) {
+            LOG.info("[T-ConsoleBind] shared console reuse rejected (intended=" + intendedDsId
+                    + ", live=" + liveDsId + ", recorded=" + dsName + ") - drop session, rebuild on intended source");
+            // 共享控制台已证伪（绑在别的数据源上）——弃缓存；不清 last-used 记忆
+            //（记忆可能是对的，错的是控制台；由后续全链按目标重建并覆盖记忆）。
+            dropSharedConsole();
+            return false;
+        }
 
         executionGeneration++;
         boolean valid;
