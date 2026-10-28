@@ -306,7 +306,13 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
             assertEquals(new java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"));
             assertEquals(new java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"));
             assertEquals(new java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"));
-            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"));
+            // T-DdlTypeColor（2026-10-26）：DDL 现归独立两档并着色——
+            // CREATE/ALTER 取增绿、DROP/TRUNCATE 取删红（虚线形态区分，见 RendererUiTest）。
+            assertEquals("CREATE 取增绿", new java.awt.Color(0x4CAF50), barColorAfterRender("CREATE TABLE user (id INT)"));
+            assertEquals("DROP 取删红", new java.awt.Color(0xD32F2F), barColorAfterRender("DROP TABLE user"));
+            assertEquals("TRUNCATE 取删红（原 OTHER 不着色）", new java.awt.Color(0xD32F2F), barColorAfterRender("TRUNCATE TABLE user"));
+            // 真正无法归类的语句仍不着色
+            assertEquals("未识别语句仍不着色", null, barColorAfterRender("MERGE INTO user USING s ON (1=1)"));
         });
     }
 
@@ -334,11 +340,14 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     @Test
     public void test二级条目_背景样式_选中态不再安装描边边框() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
+            // （k2j 适配：本类 setUp 锁 SINGLE_LINE，activeBorder=compactBorder，不得引用 normalBorder 字段）
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null));
-            assertSame("未选中为普通边框", sqlRenderer.normalBorder, sqlRenderer.getBorder());
+            javax.swing.border.Border unselected = sqlRenderer.getBorder();
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null), true);
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                    sqlRenderer.normalBorder, sqlRenderer.getBorder());
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）",
+                    unselected, sqlRenderer.getBorder());
         });
     }
 

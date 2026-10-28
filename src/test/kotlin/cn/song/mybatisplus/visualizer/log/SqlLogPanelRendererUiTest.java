@@ -441,11 +441,14 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     @Test
     public void test背景样式_选中态不再安装描边边框() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
+            // （k2j 适配：本类 setUp 锁 SINGLE_LINE，activeBorder=compactBorder，不得引用 normalBorder 字段）
             render(entry("UPDATE user SET a = 1"));
-            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.getBorder());
+            javax.swing.border.Border unselected = renderer.getBorder();
             render(entry("UPDATE user SET a = 1"), true);
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                renderer.normalBorder, renderer.getBorder());
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）",
+                unselected, renderer.getBorder());
         });
     }
 
