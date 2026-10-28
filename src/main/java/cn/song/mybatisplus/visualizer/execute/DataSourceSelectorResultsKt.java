@@ -1595,7 +1595,12 @@ public final class DataSourceSelectorResultsKt {
         // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
         // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
         TempPsiFile cached = consumeCachedTempPsiFile(project);
-        if (cached != null) return cached;
+        if (cached != null) {
+            // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——目标数据源方言切换后
+            // 缓存复用不得携带旧映射进 Runner 枚举。
+            mapDialectBeforePsi(project, cached.vf, LOG, renderedDialectName);
+            return cached;
+        }
         // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
         // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
         // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
@@ -1632,7 +1637,7 @@ public final class DataSourceSelectorResultsKt {
             if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("syncVfContent", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
-        mapDialectBeforePsi(project, vf, LOG);
+        mapDialectBeforePsi(project, vf, LOG, renderedDialectName);
         PsiFile psi;
         try {
             psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));

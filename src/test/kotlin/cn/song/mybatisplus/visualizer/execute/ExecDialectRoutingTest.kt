@@ -312,15 +312,13 @@ class ExecDialectRoutingTest {
             "mapDialectBeforePsi 未接数据源方言路由（resolveTargetLanguage 缺失）——DM 等非 MySQL 数据源将从预览执行链隐形",
             selector.contains("resolveTargetLanguage(") && selector.contains("resolveTargetDataSource("),
         )
-        // 【master 断言延后——生产差距登记 T-SyncK2JMaster136 B2】master 17be6319 缓存命中路径
-        // 在 return 前重跑方言映射（DataSourceSelectorResults.kt:1444 consumeCachedTempPsiFile 命中
-        // → mapDialectBeforePsi(project, pair.first, LOG, renderedDialectName)）；k2j 侧
-        // DataSourceSelectorResultsKt.java:1597-1598 命中即 `if (cached != null) return cached;`
-        // 未重映射——master 断言 Regex("consumeCachedTempPsiFile\\(project\\)[\\s\\S]{0,200}mapDialectBeforePsi")
-        // 在 k2j 必红，根因 src/main（A 波未译该句），按批次纪律登记勿改生产；此处先钉冷路径映射在场。
+        assertTrue(
+            "createTempPsiFile 缓存命中路径未对齐方言映射（缓存复用会跳过路由）",
+            Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,200}mapDialectBeforePsi""").containsMatchIn(results),
+        )
         assertTrue(
             "冷路径 createTempPsiFile 未接方言映射（mapDialectBeforePsi 缺失）",
-            Regex("""createTempPsiFile\(Project project, String sql, @Nullable String renderedDialectName\)[\s\S]{0,3200}mapDialectBeforePsi\(project, vf, LOG\)""").containsMatchIn(results),
+            Regex("""createTempPsiFile\(Project project, String sql, @Nullable String renderedDialectName\)[\s\S]{0,3400}mapDialectBeforePsi\(project, vf, LOG, renderedDialectName\)""").containsMatchIn(results),
         )
         val prewarmBody = results.substringAfter("public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG,")
             .substringBefore("public static JComponent buildConsoleSplitPane(")
