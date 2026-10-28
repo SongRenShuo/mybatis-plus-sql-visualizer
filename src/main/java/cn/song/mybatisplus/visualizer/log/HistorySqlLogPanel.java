@@ -538,7 +538,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
             }
         });
         // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
+        // T-LogListFreeze：宽度跟随视口由 ViewportWidthSqlEntryList 承担，横向滚动条永不出现（长 SQL 由渲染器裁剪）
         sqlScrollPane = new JBScrollPane(sqlList);
+        sqlScrollPane.setHorizontalScrollBarPolicy(javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         sqlScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> maybeAppendOnScroll());
         previewHost = new SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview,
                 "mpvs.logs.preview.split", true,
