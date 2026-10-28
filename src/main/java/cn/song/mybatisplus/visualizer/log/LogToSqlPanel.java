@@ -19,9 +19,6 @@ import com.intellij.openapi.editor.HighlighterColors;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter;
-import com.intellij.openapi.fileTypes.SyntaxHighlighter;
-import com.intellij.openapi.fileTypes.FileTypeManager;
-import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Splitter;
 import com.intellij.ui.JBColor;
@@ -613,19 +610,24 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         return editor;
     }
 
-    /** SQL 结果编辑器：可编辑（微调参数后复制）+ 原生 SQL 语法高亮。 */
+    /**
+     * SQL 结果编辑器：可编辑（微调参数后复制）+ 自研 SQL 词法高亮。
+     *
+     * <p>T-SqlDialectPrewarm：此前这里取平台 SQL FileType 的高亮器
+     * （{@code SyntaxHighlighterFactory.getSyntaxHighlighter(sqlFileType, project, null)}），链路会落到
+     * {@code SqlDialectMappings.getMapping} → {@code PerFileMappingsBase.ensureStateLoaded} 的<b>一次性延迟加载</b>
+     * ——逐条 {@code VirtualFileManager.findFileByUrl} 解析持久化的方言映射，在 EDT 上撞平台慢操作断言
+     * （真机栈：本方法 → {@code FSRecordsImpl.update} → {@code SlowOperations.assertSlowOperationsAreAllowed}）。
+     * 改走自研 {@code cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter}：不查方言映射、
+     * 不依赖 Database 插件（未装时此前该区根本没有高亮），配色与预览面板/日志预览同源。</p>
+     */
     private Editor createResultEditor() {
         Editor editor = EditorFactory.getInstance()
                 .createEditor(EditorFactory.getInstance().createDocument(""), project);
         EditorEx ex = (EditorEx) editor;
-        com.intellij.openapi.fileTypes.FileType sqlFileType = FileTypeManager.getInstance().getStdFileType("SQL");
-        if (sqlFileType != null) {
-            SyntaxHighlighter sqlHighlighter = SyntaxHighlighterFactory
-                    .getSyntaxHighlighter(sqlFileType, project, null);
-            if (sqlHighlighter != null) {
-                ex.setHighlighter(new LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().getGlobalScheme()));
-            }
-        }
+        ex.setHighlighter(new LexerEditorHighlighter(
+                new cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter(),
+                EditorColorsManager.getInstance().getGlobalScheme()));
         ex.getSettings().setLineNumbersShown(true);
         ex.getSettings().setFoldingOutlineShown(true);
         ex.getSettings().setIndentGuidesShown(false);
@@ -684,6 +686,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
     String resultTextForTest() {
         return resultEditor.getDocument().getText();
+    }
+
+    /** T-SqlDialectPrewarm：结果区写入（高亮器 token 类型断言用）。 */
+    void setResultForTest(String text) {
+        setDocumentText(resultEditor, text);
     }
 
     /** T-AutoFold F4-c：结果区编辑器（折叠区域断言用）。 */
