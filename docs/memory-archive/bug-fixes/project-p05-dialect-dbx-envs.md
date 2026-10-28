@@ -9,7 +9,7 @@ metadata:
 
 P-立项-05（方言输出真实验证，分支 `dialect-verification`，工作树 `mybatis-plus-sql-visualizer-dialect-verification`）Tier 2 真机执行已于 2026-08-29 **完成**：MySQL 8.4.6/5.7.42、PostgreSQL 16.14/14.23/17.4、Oracle 26ai Free 23.26.2（+19c/21c/18c 抽查、11g 实证 FETCH 需 12c+）、DM8、KingbaseES **V9R1C10** 七家族 TC 套件 + 保留字探针零缺陷——结果在报告第十节（提交 2a4a106/e09c668）。
 
-**DBX 测试环境（【DBX 开发测试连接】分组，114.66.55.245，库 dbx_test）**：MySQL 8.4.6 :20084 / 5.7.42 :20057（连接名写 5.7.44）、PG 16.14 :20033 / 14.23 :20034 / 17.4 :20035、Oracle 26ai :20095 / 21c :20103 / 19c :20104 / 18c :20102 / 11g :20101、DM8 :20096、KingbaseES :20097（**连接名叫 "V8" 实为 V9R1C10**，与 Tier 3 核对的 V9 手册同源）、openGauss :20105（PG 家族附加）。MariaDB :20081 与 CockroachDB :20091 宕机；分组内**无 SQL Server**——这两项真机验收缺环境，其余代码侧无遗留。名字陷阱：分组里的「Turso / libSQL Server :20112」（DBX 类型 `turso`）**不是微软 SQL Server**——"Server" 指 libSQL（SQLite 开源分支）的服务端部署形态，方言属 SQLite 家族，既不能顶替 SqlServerDialect（T-SQL/`[col]`/MSSQL）的真机验收，对 SQLite 方言也无增量价值（Tier 1 已用 sqlite-jdbc 原生引擎 100% 真实验证过）。
+**DBX 测试环境（【DBX 开发测试连接】分组，dbx-test-host，库 dbx_test）**：MySQL 8.4.6 :20084 / 5.7.42 :20057（连接名写 5.7.44）、PG 16.14 :20033 / 14.23 :20034 / 17.4 :20035、Oracle 26ai :20095 / 21c :20103 / 19c :20104 / 18c :20102 / 11g :20101、DM8 :20096、KingbaseES :20097（**连接名叫 "V8" 实为 V9R1C10**，与 Tier 3 核对的 V9 手册同源）、openGauss :20105（PG 家族附加）。MariaDB :20081 与 CockroachDB :20091 宕机；分组内**无 SQL Server**——这两项真机验收缺环境，其余代码侧无遗留。名字陷阱：分组里的「Turso / libSQL Server :20112」（DBX 类型 `turso`）**不是微软 SQL Server**——"Server" 指 libSQL（SQLite 开源分支）的服务端部署形态，方言属 SQLite 家族，既不能顶替 SqlServerDialect（T-SQL/`[col]`/MSSQL）的真机验收，对 SQLite 方言也无增量价值（Tier 1 已用 sqlite-jdbc 原生引擎 100% 真实验证过）。
 
 **Why**: 本机无 Docker、DBX MCP 不暴露凭据，`-Dmpvs.dialect.*` 直连方案用不上；「gradle 渲染导出 → DBX MCP 执行」是免凭据且不违反「SQL 全部出自插件渲染链」原则的真机通道。
 

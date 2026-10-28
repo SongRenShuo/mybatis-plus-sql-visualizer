@@ -189,9 +189,14 @@ class UpdateSectionTest : BasePlatformTestCase() {
         var calls = 0
         section.checkRunner = { calls++; CheckResult.UpToDate }
         section.checkButton.doClick()
-        // 同步进入「检查中」（Backgroundable 从非 EDT 同步执行；fake 立即完成）
-        assertEquals(UpdateSection.State.Checking, section.state)
-        assertEquals(MpSqlVisualizerBundle.message("settings.update.checking"), section.statusLabel.text)
+        // 瞬态观测同 testInstallButtonClick 的调度竞态（T-CiRelease 20261024 实证：EDT 可能抢在
+        // 断言前派发完成回调）：Checking/UpToDate 均为「点击已进入检查流程」的合法观测，
+        // 对应文案两可；流程正确性由下方 calls==1 + waitForState(UpToDate) 严格把关。
+        if (section.state == UpdateSection.State.Checking) {
+            assertEquals(MpSqlVisualizerBundle.message("settings.update.checking"), section.statusLabel.text)
+        } else {
+            assertEquals(UpdateSection.State.UpToDate, section.state)
+        }
         waitForState(UpdateSection.State.UpToDate)
         assertEquals(1, calls)
         assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.statusLabel.text)
@@ -202,7 +207,13 @@ class UpdateSectionTest : BasePlatformTestCase() {
         section.installRunner = { _, _ -> calls++; InstallResult.InstalledRestartRequired }
         section.renderCheck(CheckResult.Available(UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)))
         section.installButton.doClick()
-        assertEquals(UpdateSection.State.Downloading, section.state)
+        // 瞬态观测存在调度竞态：EDT 线程可能在本断言前已派发 invokeLater 的 renderInstall
+        //（CI 20261024 实测偶发，本机测试线程几乎总赢）。Downloading/Installed 均为「点击已
+        // 进入安装流程」的合法观测；流程正确性由下方 calls==1 + waitForState(Installed) 严格把关。
+        assertTrue(
+            "点击后应立即进入安装流程（Downloading 或已完成 Installed），实际 ${section.state}",
+            section.state == UpdateSection.State.Downloading || section.state == UpdateSection.State.Installed,
+        )
         waitForState(UpdateSection.State.Installed)
         assertEquals(1, calls)
         assertTrue("安装完成应显示重启按钮", section.restartButton.isVisible)

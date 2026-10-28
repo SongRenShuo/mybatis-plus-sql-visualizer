@@ -13,7 +13,7 @@ import org.junit.Test
  * T-DialectXcFamily（O-63）：信创方言补全族（OceanBase + openGauss）单测。
  *
  * 证据层级三态口径（2026-09-23）：
- *  - **openGauss：引擎级**（DBX MCP 只读通道，`GaussDB / openGauss 5.0.0`，114.66.55.245:20105/dbx_test，
+ *  - **openGauss：引擎级**（DBX MCP 只读通道，`GaussDB / openGauss 5.0.0`，dbx-test-host:20105/dbx_test，
  *    逐条只读探针）——
  *      - `SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 455 行（裸大写折为小写命中）；
  *        `FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist on gaussdb`

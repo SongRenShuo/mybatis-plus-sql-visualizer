@@ -80,7 +80,7 @@
 
 ### 1.5 真 Oracle 实测（**本轮新增，缺陷定性升级**）
 
-连接：DBX MCP → `Oracle Free 23 / FREEPDB1`（`114.66.55.245:20095`，connection_id `311778f3-3f03-4e13-b561-74ca36873af1`）。四组查询的双向证据：
+连接：DBX MCP → `Oracle Free 23 / FREEPDB1`（`dbx-test-host:20095`，connection_id `311778f3-3f03-4e13-b561-74ca36873af1`）。四组查询的双向证据：
 
 | # | 查询 | 结果 | 证明 |
 |---|---|---|---|

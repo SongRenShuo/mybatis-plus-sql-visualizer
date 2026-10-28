@@ -691,6 +691,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
                     "摘 loadState 归一）已实测。",
             ),
+            // ---- T-PerfSweep27-03：机械优化结构静检守卫（2026-10-27） ----
+            GuardEntry(
+                "convention/PerfSweep27StaticGuardTest.kt",
+                emptyList(),
+                "券03 机械优化源码结构钉（T-PerfSweep27-03）：判定内核内联于两个用例——" +
+                    "读 SqlCompletionContributor.kt 源码断言 isDebugEnabled 块门控存在且 " +
+                    "editor 等急切读取落入门控内；读 HqlGutterLineMarkerProvider.kt 断言 " +
+                    "showGutterIcon 开关判定行先于 hasStringFirstArgument 调用行（关闸不付 resolve）。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向探针（摘门控改 run{ / 开关判定后置）两断言各恰 1 红，实施轮已实测。",
+            ),
             GuardEntry(
                 "convention/ExplainAskPasswordChannelGuardTest.kt",
                 emptyList(),
@@ -863,6 +874,19 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "generator/DmlAliasGuardTest.kt",
                 listOf(DecisionFn("dmlTargetsHaveNoAlias", FnKind.VIOLATIONS)),
                 "判定函数名不命中命名形状（:42）；自证用例靠 `//` 行注释标注（:121）+ 函数名不含关键词（:125）",
+            ),
+            GuardEntry(
+                "sql/verify/DialectDocTableGuardTest.kt",
+                listOf(
+                    DecisionFn("docTableViolations", FnKind.VIOLATIONS),
+                    DecisionFn("classifyPagination", FnKind.SITES),
+                    DecisionFn("classifyUpsert", FnKind.SITES),
+                ),
+                "文档站方言表 ↔ Dialect 实现的族一致性守卫（T-DialectDocDrift，2026-10-26 三处已上线错误倒查所得）；" +
+                    "两个 classify 是族归类器（文档与实现共用同一实现，族判定的唯一事实源），docTableViolations 是比对内核；" +
+                    "自证语料：`漂移自证_分页族归错被抓` / `漂移自证_ROWNUM写法被抓` / `漂移自证_漏方言被抓` / " +
+                    "`漂移自证_upsert族归错被抓`（后者同时覆盖两个 classify 的归类灵敏度）。" +
+                    "文档站不在场时四个文档表用例显式绿跳（外部贡献者只 clone 插件仓），但表格在场却解析不出内容必红。",
             ),
             GuardEntry(
                 "sql/verify/DockerComposeLabConsistencyTest.kt",
@@ -1122,6 +1146,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在三个 @Test（根目录 LICENSE/NOTICES 在场、NOTICES 覆盖 JetBrains 图标/" +
                     "JSqlParser/ASM 关键词、build.gradle.kts 的 jsqlparser 排除 jmh-core——防打包泄漏回潮）；" +
                     "零平台引用，进 testFast 快桶；反向=删 NOTICES/改名关键词/摘 exclude 必红",
+            ),
+            GuardEntry(
+                "convention/SqlDialectEdtSourceScanTest.kt",
+                listOf(DecisionFn("syntaxHighlighterFactorySites", FnKind.VIOLATIONS)),
+                "平台 SQL 高亮器直取守卫（T-SqlDialectPrewarm）：该调用会触发 SqlDialectMappings 的" +
+                    "一次性延迟加载（逐条 VirtualFileManager.findFileByUrl → FSRecordsImpl.update），" +
+                    "落 EDT 即平台慢操作断言并把本插件归为 blame。允许清单只有预热助手一处，且断言取" +
+                    "**等值**而非子集——助手不再直取时清单变空即红，防失效豁免（同 WHITELIST 反腐烂口径）。" +
+                    "自证语料：`自证_裸调用与跨行全限定调用均被抓`（含真实历史跨行形态）/ " +
+                    "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
+                    "`自证_注释里的调用不算`。",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

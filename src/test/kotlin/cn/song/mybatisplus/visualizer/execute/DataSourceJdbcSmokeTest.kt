@@ -19,7 +19,7 @@ import javax.xml.parsers.DocumentBuilderFactory
  * classpath 时 println + return；驱动可加载的数据源连不上仍 fail（本地 MySQL 需在跑）。
  *
  * 可验证范围（T-UiFixGate9）：**确定性收窄为 localhost/127.0.0.1 源**——demo 的远程测试库
- * （如 dbx_test@114.66.55.245，用户保留用于沙盒真机验收）不是 demo 配置健全性的断言范围，
+ * （如 dbx_test@dbx-test-host，用户保留用于沙盒真机验收）不是 demo 配置健全性的断言范围，
  * 门禁依赖远程可达＝网络 flake 面；按 host 过滤并打印注明，禁「连不上才跳过」的条件通过。
  *
  * 多方言扩展：demo dataSources.xml 增加本机 PG/Oracle/DM/KingBase 数据源且驱动作为
@@ -102,7 +102,7 @@ class DataSourceJdbcSmokeTest : BasePlatformTestCase() {
     /**
      * T-UiFixGate9：可验证范围**确定性收窄**为 localhost/127.0.0.1（含 ::1）源。
      *
-     * 理由：demo 工程 dataSources.xml 新增远程测试库（dbx_test@114.66.55.245，PG16；条目系用户
+     * 理由：demo 工程 dataSources.xml 新增远程测试库（dbx_test@dbx-test-host，PG16；条目系用户
      * 明令保留用于沙盒真机验收，不得删除）。远程源不是 demo 配置健全性的断言范围，且门禁 JVM
      * 依赖远程可达＝网络 flake 面（20261018 全量门禁 testAllDemoDataSourcesReachable /
      * testExecuteValidationSqlOnEachSource 各 1 红实证——PG 驱动恰在测试 classpath，「驱动可加载」

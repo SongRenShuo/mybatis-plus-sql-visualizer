@@ -46,7 +46,10 @@ final class WeaveSpecs {
                 StatementWeaver.Kind.EXEC_CTX,
                 StatementWeaver.Kind.BATCH,
                 StatementWeaver.Kind.ADD_BATCH,
-                StatementWeaver.Kind.CLEAR_BATCH};
+                StatementWeaver.Kind.CLEAR_BATCH,
+                // T-ConnCastSafety：参数捕获必须自持（连接代理出厂关闭后，setXxx 只能靠织入拦）。
+                // 只在方法头插一行回调，不新增局部/出口，达梦出口 chop_frame 那类限制与它无关。
+                StatementWeaver.Kind.PARAM};
         putSpec(statementFace,
                 "com.mysql.cj.jdbc.StatementImpl",
                 "com.mysql.cj.jdbc.ClientPreparedStatement",
@@ -81,7 +84,9 @@ final class WeaveSpecs {
         final StatementWeaver.Kind[] dmTimedFace = {
                 StatementWeaver.Kind.EXEC_PARAM,
                 StatementWeaver.Kind.EXEC_CTX,
-                StatementWeaver.Kind.BATCH};
+                StatementWeaver.Kind.BATCH,
+                // 参数面是入口插桩（无出口、无局部、无帧补丁），不受 chop_frame 限制
+                StatementWeaver.Kind.PARAM};
         putSpec(dmTimedFace,
                 "dm.jdbc.driver.DmdbStatement",
                 "dm.jdbc.driver.DmdbPreparedStatement");

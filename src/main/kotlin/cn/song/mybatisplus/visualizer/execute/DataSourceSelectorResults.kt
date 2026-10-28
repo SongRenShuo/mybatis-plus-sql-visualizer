@@ -268,12 +268,19 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 控制台编辑器所见即所执行；历史链在预览侧记录原文，不受此处影响（两态分离）。
     val submitSql = stripGSuffixForSubmit(sql, null).submitText
 
-    // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
+    // M36.5.5：共享控制台命中（绑定数据源一致且控制台仍有效）→ 直接复用——
     // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
     // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
+    // T-ConsoleBind：复用判定升级为身份制——预览有明确绑定目标（UUID）时，共享控制台
+    // 「当前实际绑定」必须同一数据源才可复用（此前按「记忆名 == 建缓存记录名」字符串比较，
+    // 控制台被翻转后照旧放行，跑错库——20261028 录制现场实证）。
+    val moduleKey = dialectGateRequest?.moduleKey
+    val intendedDs = ExecFileBinding.resolveIntendedDataSource(project, moduleKey, preferredRunnerName)
+    val intendedDsId = intendedDs?.let { runCatching { DataSourceSettings.getUniqueId(it) }.getOrNull() }
     if (allowsSharedConsoleReuse(forceChoose) && reuseSharedConsole(
             project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
             wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, prepareOwner,
+            moduleKey = moduleKey, intendedDsId = intendedDsId,
         )) {
         // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
         // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
@@ -293,6 +300,37 @@ internal fun DataSourceSelector.chooseAndPrepare(
         return
     }
     val (vf, psiFile) = temp
+
+    // T-ConsoleBind：平台 forced 关联对齐——exec 文件路径稳定，平台 attachConsole 会把
+    // 「文件→数据源」per-file 关联写死并挂控制台；getAttachDataSourceRunners 入口
+    // getForcedDataSourceForExec 命中即返回单 runner，本插件的选择链（last-used 静默命中 /
+    // preferredRunnerName / 选择器弹窗）全部被短路（262 字节码实证，见 ExecFileBinding KDoc）。
+    // 绑定目标明确且 pin 不一致 → 对齐到目标；用户显式要求换源 → 清 pin 恢复全源弹窗；
+    // pin 已一致或目标不可知（无记忆/冲突不猜）→ 不动平台状态（既有行为逐字保持）。
+    if (forceChoose || forceChoosePopup || intendedDsId != null) {
+        val bindProbe = ExecFileBinding.probeExecBind(project, vf)
+        val bindAction = ExecFileBinding.resolveBindAction(
+            forceChooserPopup = forceChoose || forceChoosePopup,
+            intendedDsId = intendedDsId,
+            probe = bindProbe,
+        )
+        if (bindAction.action != ExecFileBinding.Action.NOOP) {
+            LOG.info(
+                "[T-ConsoleBind] exec file pin=${bindProbe.pinnedDsId}, intended=${bindAction.intendedDsId ?: "(clear)"} " +
+                    "→ ${bindAction.action}",
+            )
+            if (ExecFileBinding.realignExecBind(
+                    project, vf,
+                    intendedDs = if (bindAction.action == ExecFileBinding.Action.REALIGN) intendedDs else null,
+                )
+            ) {
+                // 被 detach 的可能正是共享/已备控制台（内嵌在预览面板里）——缓存作废，
+                // 本链全量重建（onConsole 回调会重嵌新控制台）。
+                dropSharedConsole()
+                clearPrepared()
+            }
+        }
+    }
 
     // consumer：runner.run 建好 session 后回调 → 续接准备链（attachConsole → 拼合 → 可选执行）
     var chosenRunnerName: String? = null
@@ -392,6 +430,31 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
             LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
             if (executeAfterPrepare) openDatabaseToolWindow(project)
+            // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
+            // 数据源，可以正常提示方言不一致，但是还是要能成功执行」。
+            //
+            // 平台 runner 枚举按 **psiFile 已映射的 SQL 方言**筛；数据源在平台侧没有 Dialects
+            // 映射时，该方言一条 runner 都筛不出（runners=0）——数据源其实完全可用。
+            // 兜底＝按**目标源方言**把 exec 文件重映射一次，再枚举一遍 runner：命中即走既有
+            // 全链（控制台、结果表、审计全部复用），不新建任何执行通道。
+            val remapLanguage = runCatching {
+                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+            }.getOrNull()
+            if (remapLanguage != null && ExecDialectRouting.remapExecFileDialect(project, vf, remapLanguage)) {
+                val retry = runCatching { ExecDialectRouting.expandGroupRunners(
+                    DataSourceSelector.getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer),
+                ) }.getOrDefault(emptyList())
+                LOG.info("[M36] runners empty → remapped exec file to target dialect, retry runners=${retry.size}")
+                if (retry.isNotEmpty()) {
+                    // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）
+                    return@chooseAndPrepare chooseAndPrepare(
+                        project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
+                        onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
+                        forceChoose, preferredRunnerName, forceChoosePopup,
+                    )
+                }
+            }
             if (registered.isEmpty()) {
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
             } else {
@@ -472,6 +535,10 @@ internal fun DataSourceSelector.reuseSharedConsole(
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     prepareOwner: QueuedExecuteIntent? = null,
+    /** T-ConsoleBind：本次预览的模块键（无身份目标时保留旧项目级名字判定的记忆来源）。 */
+    moduleKey: String? = null,
+    /** T-ConsoleBind：本次预览的绑定目标数据源 UUID（null = 无可信目标 → 旧名字判定）。 */
+    intendedDsId: String? = null,
 ): Boolean {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val console = sharedConsole ?: return false
@@ -480,7 +547,26 @@ internal fun DataSourceSelector.reuseSharedConsole(
     val dsName = sharedDataSourceName ?: return false
     val scriptModel = sharedScriptModel ?: return false
     val execOption = sharedExecOption ?: return false
-    if (lastRunnerName(project) != dsName) return false
+    // T-ConsoleBind：复用身份判定——有预览目标时必须「当前实际绑定」同一数据源；
+    // 此前只比「记忆名 == 建缓存记录名」两个字符串，控制台被任何路径重绑（native 切换/
+    // 被钉源翻转）后照旧放行，执行落在旧库（20261028 录制现场实证）。
+    val liveDsId = consoleDataSourceId(console)
+    if (!ExecFileBinding.resolveSharedConsoleReuse(
+            intendedDsId = intendedDsId,
+            liveConsoleDsId = liveDsId,
+            legacyMemoryName = lastUsedRunner(project, moduleKey).displayName,
+            legacySharedRecordedName = dsName,
+        )
+    ) {
+        LOG.info(
+            "[T-ConsoleBind] shared console reuse rejected (intended=$intendedDsId, live=$liveDsId, " +
+                "recorded=$dsName) - drop session, rebuild on intended source",
+        )
+        // 共享控制台已证伪（绑在别的数据源上）——弃缓存；不清 last-used 记忆
+        //（记忆可能是对的，错的是控制台；由后续全链按目标重建并覆盖记忆）。
+        dropSharedConsole()
+        return false
+    }
     // M36.5.10：代际递增——复用会覆盖控制台文档（setText），作废挂起的 runWhenSmart 提交，
     // 防止旧预览 SQL 在新文档上执行（文档共享串扰）
     executionGeneration++

@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from gifkit import Recorder
 from nav import close_preview, force_en_us, goto_text, shot, trigger_preview
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a22_dialect.mp4"
 
 TOKEN = "selectPage(new Page<>(2, 5)"       # PageSimServiceImpl L55，文件内唯一
@@ -84,13 +84,13 @@ def main():
     pyautogui.click(SET_OK); time.sleep(1.9)
     # 2) 开文件、按片段定位光标、开好「换方言前」的预览
     pyautogui.click(600, 500); time.sleep(0.4)
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.3)
-    force_en_us()
-    pyautogui.typewrite("mybatis-plus-demo/PageSimServiceImpl.java", interval=0.04)
-    time.sleep(1.8)
-    pyautogui.click(777, 342); time.sleep(0.4)
-    pyautogui.click(777, 342); time.sleep(2.5)
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + typewrite 必撞同名文件）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/service/impl/PageSimServiceImpl.java", settle=2.0)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     goto_text(TOKEN)
     trigger_preview()
 

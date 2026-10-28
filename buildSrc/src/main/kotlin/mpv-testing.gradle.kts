@@ -93,6 +93,12 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
+    //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
+    // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
+    // formatTimestampFragment 的 SimpleDateFormat 走 ThreadLocal 缓存、构造时固化默认时区，
+    // 测试内 setDefault 管不到已缓存实例。本机即 CST，此参数为无操作。
+    jvmArgs("-Duser.timezone=Asia/Shanghai")
 }
 
 // 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
@@ -726,6 +732,13 @@ intellijPlatformTesting {
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
+                    // T-CiRelease（20261025）：失败用例全格式输出（消息+完整栈）——Gradle 精简格式
+                    // 只打「AssertionError at xx:NN」不含断言消息，CI 上 O147 子进程日志等关键证据
+                    // 落不进控制台（agent 子项目侧同款配置，其失败日志一直带消息即此机制）。
+                    testLogging {
+                        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    }
                     // T-McpToolset2：分片同样需要 mcpStub 桩产物（工具级门控测试实例化 Tool 类，
                     // 超类型 McpToolset 来自桩源集；root 侧 test 任务已挂，分片默认不含——
                     // 漏挂致 NoClassDefFoundError 成片）。mcpStub 源集由根脚本在 convention

@@ -212,3 +212,15 @@ artifacts {
 tasks.named<Test>("test") {
     outputs.upToDateWhen { false }
 }
+
+// T-CiRelease（20261024）：真机类隔离口（逗号分隔 FQCN）——AttachPoolWarmGateTest 四格需要
+// 本机 MySQL 3306（child JVM 起 Hikari 真池直连），GitHub runner 无真库故 CI 传入剔除；语义对齐
+// root 侧 mpv-testing 的 -PtestShardExcludeClasses（从执行计划剔除，缺省空集 = 本地全量逐字不变）。
+// 真库环节与 testDatabase / e2eFakeIde 同口径：CI 不跑，本地发版前照跑。
+providers.gradleProperty("agentTestExclude").orNull?.takeIf { it.isNotBlank() }?.let { pats ->
+    tasks.named<Test>("test") {
+        filter {
+            pats.split(',').map(String::trim).filter(String::isNotEmpty).forEach { excludeTestsMatching(it) }
+        }
+    }
+}

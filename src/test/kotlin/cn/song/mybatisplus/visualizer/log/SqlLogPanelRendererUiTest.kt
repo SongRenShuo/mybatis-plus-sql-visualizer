@@ -64,6 +64,9 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         return sb.toString()
     }
 
+    /** 头部行文本（T-LogListHeader：注脚行已并入头部行，全部元信息都在这里）。 */
+    private fun detail(r: RailCellRendererBase): String = r.metaTextForTest
+
     private fun entry(
         sql: String,
         ms: Long? = null,
@@ -76,17 +79,20 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）", r.metaLine is SimpleColoredComponent)
         assertTrue("SQL 行应含 SELECT", joinedText(r.sqlLine).contains("SELECT"))
         assertFalse("渲染文本不应为 HTML 包裹", joinedText(r.sqlLine).startsWith("<html>"))
-        assertFalse("无耗时不应出现 ms", joinedText(r.metaLine).contains("ms"))
+        assertFalse("无耗时不应出现 ms", r.metaTextForTest.contains("ms"))
     }
 
-    fun test两行结构_元信息在上SQL在下() {
+    fun test两行结构_轨道在左SQL在右() {
+        // T-LogListRail：原「元信息在上 / SQL 在下」改为「信息轨在左 / SQL 区在右」。
+        // 来源类名随耗时进轨道；去重徽章宽度不可控，迁到 SQL 区下方注脚行。
         val sql = "SELECT * FROM repeated WHERE id = 1"
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 2)
         val r = render(entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
-        val meta = joinedText(r.metaLine)
-        assertTrue("元信息行含来源 [文件:行]", meta.contains("[A.java:42]"))
-        assertTrue("元信息行含去重徽章", meta.contains("⨉2"))
-        assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"))
+        val meta = r.metaTextForTest
+        assertTrue("头部行含来源类名 A: $meta", meta.contains("A"))
+        assertTrue("头部行含行号 :42: $meta", meta.contains(":42"))
+        assertTrue("头部行含去重徽章", detail(r).contains("⨉2"))
+        assertFalse("轨道不应混入 SQL", meta.contains("SELECT"))
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
     }
 
@@ -100,8 +106,8 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             source = SqlSource.AGENT,
             databaseName = "MySQL",
         )
-        val meta = joinedText(render(e).metaLine)
-        assertTrue("元信息行应含目标库角标", meta.contains("[MySQL] "))
+        val d = render(e).metaTextForTest
+        assertTrue("注脚行应含目标库角标: $d", d.contains("[MySQL]"))
     }
 
     fun test目标库角标_未知库名不显示() {
@@ -112,8 +118,8 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             timestamp = 1_700_000_000_000L,
             source = SqlSource.AGENT,
         )
-        val meta = joinedText(render(e).metaLine)
-        assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"))
+        val d = render(e).metaTextForTest
+        assertFalse("无 databaseName 不应显示角标", d.contains("[MySQL]"))
     }
 
     fun testMCP徽标_来源MCP渲染到元信息行() {
@@ -127,10 +133,12 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             databaseName = "MySQL",
             executionTimeMs = 7L,
         )
-        val meta = joinedText(render(e).metaLine)
-        assertTrue("元信息行应含 MCP 徽标: $meta", meta.contains("[MCP] "))
-        assertTrue("MCP 徽标与目标库角标共存: $meta", meta.contains("[MySQL] "))
-        assertTrue("耗时同列展示: $meta", meta.contains("7ms"))
+        val r = render(e)
+        val d = r.metaTextForTest
+        val meta = r.metaTextForTest
+        assertTrue("注脚行应含 MCP 徽标: $d", d.contains("[MCP]"))
+        assertTrue("MCP 徽标与目标库角标共存: $d", d.contains("[MySQL]"))
+        assertTrue("耗时展示在轨道: $meta", meta.contains("7ms"))
     }
 
     fun testMCP徽标_非MCP来源不显示() {
@@ -203,13 +211,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test去重徽章随dedupeCounts渲染() {
         val sql = "SELECT * FROM repeated WHERE id = 1"
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 4)
-        assertTrue("去重 ⨉4 徽章应渲染", joinedText(render(entry(sql)).metaLine).contains("⨉4"))
+        assertTrue("去重 ⨉4 徽章应渲染", render(entry(sql)).metaTextForTest.contains("⨉4"))
 
         renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 0)
-        assertFalse("计数 0 不显示徽章", joinedText(render(entry(sql)).metaLine).contains("⨉"))
+        assertFalse("计数 0 不显示徽章", render(entry(sql)).metaTextForTest.contains("⨉"))
 
         renderer.dedupeCounts = emptyMap()
-        assertFalse("无计数不显示徽章", joinedText(render(entry(sql)).metaLine).contains("⨉"))
+        assertFalse("无计数不显示徽章", render(entry(sql)).metaTextForTest.contains("⨉"))
     }
 
     fun test渲染返回值非空_组件有效() {
@@ -223,13 +231,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test同模板徽章_达阈值渲染到元信息行() {
         val sql = "SELECT * FROM big_orders WHERE uid = 7"
         renderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
-        val meta = joinedText(render(entry(sql)).metaLine)
-        assertTrue("达阈值应渲染同模板徽章: $meta", meta.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
+        val d = render(entry(sql)).metaTextForTest
+        assertTrue("达阈值应渲染同模板徽章: $d", d.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
         // 与去重徽章相邻共存（本条无去重计数，仅模板徽章）
         renderer.templateCounts = mapOf(structureFingerprint(sql) to 5)
         assertTrue(
             "计数 5 显示 ×5",
-            joinedText(render(entry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)),
+            render(entry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)),
         )
     }
 
@@ -320,9 +328,11 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         for (mode in listOf("SINGLE_LINE", "KEYWORD_WRAP", "FORMATTED")) {
             renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 2)
             val r = renderInMode(mode, entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
-            val meta = joinedText(r.metaLine)
-            assertTrue("[$mode] 元信息行含来源与徽章", meta.contains("[A.java:42]") && meta.contains("⨉2"))
-            assertFalse("[$mode] 元信息行不混入 SQL", meta.contains("SELECT"))
+            val meta = r.metaTextForTest
+            // T-LogListRail：来源类名在轨道、去重徽章在注脚行；两者都不得混入 SQL 文本
+            assertTrue("[$mode] 头部行含来源类名: $meta", meta.contains("A"))
+            assertTrue("[$mode] 头部行含去重徽章", detail(r).contains("⨉2"))
+            assertFalse("[$mode] 轨道不混入 SQL", meta.contains("SELECT"))
         }
     }
 
@@ -331,7 +341,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test行号片段在元信息行最前() {
         val e = entry("SELECT 1").copy(sequenceNumber = 12L)
         val r = render(e)
-        val meta = joinedText(r.metaLine)
+        val meta = r.metaTextForTest
         assertTrue("元信息行含行号 #12", meta.contains("#12 "))
         assertTrue("行号应在片段序列最前", meta.startsWith("#12 "))
         assertFalse("SQL 不混入元信息行", meta.contains("SELECT"))
@@ -340,7 +350,7 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test无行号条目不渲染行号片段() {
         // sequenceNumber=0：历史文件读回 / round-trip 条目
         val r = render(entry("SELECT 1"))
-        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+        assertFalse("无行号不渲染 # 前缀", r.metaTextForTest.contains("#"))
     }
 
     // ---------- T-CrudColor：CRUD 类型颜色标记 ----------
@@ -414,11 +424,12 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
 
     fun test背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
             render(entry("UPDATE user SET a = 1"))
-            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.border)
+            val unselected = renderer.border
             render(entry("UPDATE user SET a = 1"), true)
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                renderer.normalBorder, renderer.border)
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）", unselected, renderer.border)
         }
     }
 
@@ -488,11 +499,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             pluginSettings.logTimestampEnabled = true
             val e = entry("SELECT 1").copy(sequenceNumber = 3L)
             val r = render(e)
-            val meta = joinedText(r.metaLine)
+            val meta = r.metaTextForTest
+            // T-LogListRail：轨道首行 = `#N HH:mm:ss`。时间戳不再带方括号（格式串已剥日期、
+            // 由 SimpleDateFormat 直接产出时段），故按「#3 后紧跟时刻」而非「找 [ 」断言。
             val idxRow = meta.indexOf("#3 ")
-            val idxTs = meta.indexOf("[")
-            assertTrue("应同时含行号与时间戳", idxRow >= 0 && idxTs >= 0)
-            assertTrue("行号在时间戳之前", idxRow < idxTs)
+            val idxTime = meta.indexOf(":")
+            assertTrue("应同时含行号与时刻: $meta", idxRow >= 0 && idxTime >= 0)
+            assertTrue("行号在时刻之前: $meta", idxRow < idxTime)
         } finally {
             pluginSettings.logTimestampEnabled = savedTs
         }
@@ -511,9 +524,9 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     fun test影响行数负值不显示_负行数守卫() {
         // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
         val neg = entry("SELECT 1").copy(source = SqlSource.AGENT, updateCount = -1L)
-        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"))
+        assertFalse("负值影响行数应不显示", render(neg).metaTextForTest.contains("rows)"))
         val zero = entry("UPDATE t SET a = 1").copy(source = SqlSource.AGENT, updateCount = 0L)
-        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"))
+        assertTrue("0 行是合法计数，应显示", render(zero).metaTextForTest.contains("(0 rows)"))
     }
 
     fun test影响行数与报错片段同列() {
@@ -522,13 +535,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             updateCount = 3L,
             errorText = "SQLException: Data too long for column 'a'",
         )
-        val meta = joinedText(render(err).metaLine)
-        assertTrue("应含影响行数片段", meta.contains("(3 rows)"))
-        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"))
+        val r = render(err)
+        assertTrue("头部行应含影响行数片段", detail(r).contains("(3 rows)"))
+        assertTrue("错误行含报错片段（单行截断）", r.errorTextForTest.contains("⛔ SQLException: Data too long"))
         // 无报错无行数的普通条目不显示
-        val ok = joinedText(render(entry("SELECT 1")).metaLine)
-        assertFalse("普通条目不应有行数片段", ok.contains("rows)"))
-        assertFalse("普通条目不应有报错片段", ok.contains("⛔"))
+        val ok = render(entry("SELECT 1"))
+        assertFalse("普通条目不应有行数片段", ok.metaTextForTest.contains("rows)"))
+        assertFalse("普通条目不应有报错片段", ok.errorTextForTest.contains("⛔"))
     }
 
     // ---------- R60（T-LaneB D96）：日志列表链脱敏（判别断言两态，走真实渲染器链路） ----------
@@ -598,9 +611,9 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         withBadgeDetail(enabled = false) {
             val full = "MySQL · jpa_demo@localhost:3306"
             assertEquals("OFF 态片段应切出纯方言段", "[MySQL] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
-            val meta = joinedText(render(dbEntry(full)).metaLine)
-            assertTrue("元信息行应含方言角标: $meta", meta.contains("[MySQL] "))
-            assertFalse("元信息行不应含连接事实: $meta", meta.contains("jpa_demo"))
+            val d = render(dbEntry(full)).metaTextForTest
+            assertTrue("注脚行应含方言角标: $d", d.contains("[MySQL]"))
+            assertFalse("注脚行不应含连接事实: $d", d.contains("jpa_demo"))
         }
     }
 
@@ -608,8 +621,8 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         withBadgeDetail(enabled = true) {
             val full = "MySQL · jpa_demo@localhost:3306"
             assertEquals("ON 态片段应原样全量", "[$full] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
-            val meta = joinedText(render(dbEntry(full)).metaLine)
-            assertTrue("元信息行应含完整上下文: $meta", meta.contains("[$full] "))
+            val d = render(dbEntry(full)).metaTextForTest
+            assertTrue("注脚行应含完整上下文: $d", d.contains("[$full]"))
         }
     }
 
@@ -643,5 +656,100 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         withBadgeDetail(enabled = true) {
             assertEquals("[DM（达梦） · localhost:5236] ", formatDatabaseFragment(readBack, false)!!.first)
         }
+    }
+
+    // ---------- T-DdlTypeColor：DDL 虚线色条 ----------
+
+    /**
+     * DDL 条目走虚线色条、DML 走实心。
+     *
+     * 这是**形态断言**（不是像素比对）：用户明确要「虚线区分 DDL」，若谁把 DDL 也画成实心，
+     * 视觉区分就静默消失了——不报错、不崩溃，只是回退到「看不出类型」。
+     */
+    fun testDdl条目色条为虚线_dml为实心() {
+        val ddl = render(entry("CREATE TABLE t (id INT)"))
+        assertTrue("CREATE 应触发虚线色条", ddl.colorBar.dashed)
+
+        val drop = render(entry("DROP TABLE t"))
+        assertTrue("DROP 应触发虚线色条", drop.colorBar.dashed)
+
+        val truncate = render(entry("TRUNCATE TABLE t"))
+        assertTrue("TRUNCATE 应触发虚线色条", truncate.colorBar.dashed)
+
+        for (sql in listOf("SELECT 1", "INSERT INTO t VALUES (1)", "UPDATE t SET a = 1", "DELETE FROM t")) {
+            val r = render(entry(sql))
+            assertFalse("$sql 不应走虚线", r.colorBar.dashed)
+        }
+    }
+
+    /** DDL 条目与同色 DML 条目都着色（不再是无色条的 OTHER）。 */
+    fun testDdl条目有着色条() {
+        for (sql in listOf("CREATE TABLE t (id INT)", "ALTER TABLE t ADD c INT", "DROP TABLE t", "TRUNCATE TABLE t")) {
+            val r = render(entry(sql))
+            assertTrue("$sql 应有色条（不再是无色条的 OTHER）", r.colorBar.isOpaque)
+        }
+    }
+
+    /** 虚线段长常量（形态契约：实/空各 3px，周期 6px）。 */
+    fun test虚线段长常量() {
+        val bar = TypeColorBar()
+        val (on, off) = bar.dashPatternForTest()
+        assertEquals("实心段 3px", 3, on)
+        assertEquals("空白段 3px", 3, off)
+        assertEquals("周期 6px", 6, TypeColorBar.DASH_PERIOD)
+    }
+
+    /** 同形态重复设置不重复重绘（渲染热路径守卫）。 */
+    fun test色条形态_同值不重复设置() {
+        val bar = TypeColorBar()
+        bar.dashed = true
+        bar.dashed = true
+        bar.dashed = true
+        assertEquals("同值重复设置不得触发重绘", 1, bar.repaintRequests)
+        bar.dashed = false
+        assertEquals("切换形态应再触发一次", 2, bar.repaintRequests)
+    }
+
+    /**
+     * 虚线色条必须**真的画成虚线段**（像素级验证）。
+     *
+     * 为什么必须像素级：早期实现「先填 background 再按段填 background」，前景与底色同色 →
+     * 整条全实心，形态断言（`dashed == true`）照样通过、肉眼看上去却没区别。
+     * 这条用渲染后的像素序列判定，抓的就是这种「设了标志但画不出来」的假绿。
+     */
+    fun test虚线色条_像素序列为实空交替() {
+        val bar = TypeColorBar()
+        bar.background = java.awt.Color(0x4CAF50)
+        bar.dashed = true
+        bar.setSize(3, 40)
+        val img = java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = img.createGraphics()
+        bar.paint(g)
+        g.dispose()
+        val seq = (0 until 40).map { y ->
+            val rgb = img.getRGB(1, y) and 0xFFFFFF
+            if (rgb == 0x4CAF50) '#' else '.'
+        }.joinToString("")
+        assertTrue("应存在实心段: $seq", seq.contains('#'))
+        assertTrue("应存在空白段（否则等于实心）: $seq", seq.contains('.'))
+        // 周期契约：每 6px 一个循环
+        assertTrue(
+            "实空交替周期应为 ${TypeColorBar.DASH_PERIOD}px: $seq",
+            seq.startsWith("#".repeat(TypeColorBar.DASH_ON) + ".".repeat(TypeColorBar.DASH_OFF)),
+        )
+    }
+
+    /** 实心形态下整条填满（不出现空白段）。 */
+    fun test实心色条_像素全填满() {
+        val bar = TypeColorBar()
+        bar.background = java.awt.Color(0x4CAF50)
+        bar.dashed = false
+        bar.setSize(3, 40)
+        val img = java.awt.image.BufferedImage(3, 40, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = img.createGraphics()
+        bar.paint(g)
+        g.dispose()
+        val allFilled = (0 until 40).all { (img.getRGB(1, it) and 0xFFFFFF) == 0x4CAF50 }
+        assertTrue("实心形态应整条填满", allFilled)
     }
 }

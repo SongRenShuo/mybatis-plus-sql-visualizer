@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.23-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.23-beta.2/mybatis-plus-sql-visualizer-2026.10.23-beta.2.zip",
-  "changeNotes": "增强捕获与 JRebel 等第三方 agent 同时开启时目标应用起不来，现已修复并可正常启动\n增强捕获在 premain 未按时回连时提示一次并自动回落运行期挂载，不再静默\n参数预设与参数历史按声明方法隔离，预设永久绑定方法，改 SQL 不再丢参数\n预览面板的只读动作走旁路，不再替换正在看的 SQL；影响行数改为顶部横幅\n回滚快照支持表格与文本双态，并可在 CSV 编辑器中打开；无数据源时直接弹选择器\n方言与数据源不匹配时给出「切换数据源」「方言设置」两个就地入口，绑定后自动重渲染\n预览执行按目标数据源方言出 Runner，达梦等方言的数据源也能直接执行\nEXPLAIN 计划可跨会话保存并对比两次执行的变化，预览可标注无法解析的列\nAI 上下文复制新增「含表列名」出口，日志与导出支持选择性脱敏\nFieldFill 字段填充可安全模拟字面量，不执行用户 Handler\n新增执行前 Schema 预检、方言能力自检、DML 影响面试算与一键诊断报告\n增强捕获默认开启，打开即授权，不再逐次确认\n历史检索与日志列表性能优化，大历史目录不再卡顿\n预览面板底部新增「复制 SQL 并关闭」，一次复制当前 SQL 并关掉面板\nSQL 转 Java 条件组不再吞 OR、保留子组 NOT，逻辑删除条件不重复生成\nSQL 日志时间、ShardingSphere 路由、反向转换与设置页一批问题修复\n设置页能力矩阵的 MCP 工具数修正为十一个\n分发包补齐 LICENSE 与第三方声明，体积减少约 20%\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-23",
+  "version": "2026.10.28",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.28/mybatis-plus-sql-visualizer-2026.10.28.zip",
+  "changeNotes": "Mapper 接口方法与 XML 语句之间新增双向跳转，点行号旁的图标即可互跳\nDDL 语句纳入类型着色与筛选，建表改表与删表清空各成一档，色条用虚线区分\n预览面板执行 SQL 不再因方言不一致被拦下，改为提示后继续执行\n增强捕获不再替换应用拿到的数据库连接，修复部分数据库工程启动即报 ClassCastException\n修复预览头部显示已绑定某库、实际却在另一个库上执行的问题\n修复日志列表头部信息顺序与类名被截断，以及自动滚动无法恢复\n修复时间显示格式不跟随设置，宽栏与窄栏显示成两种形态\n修复设置页切到具体方言后状态行文案不刷新\n日志头部行渲染加缓存，长列表滚动更流畅\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-28",
   "sinceBuild": "243"
 }

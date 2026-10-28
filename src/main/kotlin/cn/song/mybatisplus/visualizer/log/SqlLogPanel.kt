@@ -1560,6 +1560,19 @@ class SqlLogPanel(
                 tailFollow.onUserScroll()
             }
         })
+        // T-ListMetaRevert：用户手动滚回底部时恢复自动跟随。
+        // 改造前只有「滚动到底部」按钮会调 onScrollToEnd()，用户滚回去后必须再点一下按钮
+        // 才能恢复——违反「滚到底就继续跟随」的直觉。
+        scrollPane.verticalScrollBar.addAdjustmentListener { e ->
+            if (e.valueIsAdjusting) return@addAdjustmentListener
+            val bar = e.adjustable as? javax.swing.JScrollBar ?: return@addAdjustmentListener
+            // 真正能滚到的最大值是 maximum - visibleAmount（Swing 的 maximum 是内容总高语义，
+            // 直接比 maximum 永远不成立——这类 bug 的典型写法错误）。
+            val maxScrollable = bar.maximum - bar.visibleAmount
+            if (maxScrollable > 0 && bar.value >= maxScrollable - SCROLL_BOTTOM_TOLERANCE_PX) {
+                tailFollow.onScrollToEnd()
+            }
+        }
         val navigationKeys = setOf(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_PAGE_UP,
             KeyEvent.VK_PAGE_DOWN, KeyEvent.VK_HOME, KeyEvent.VK_END)
         val navigationListener = object : KeyAdapter() {
@@ -1649,6 +1662,12 @@ class SqlLogPanel(
         val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
+
+        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
 
         val modelSizeBefore = listModel.size()
         val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
@@ -2295,6 +2314,13 @@ class SqlLogPanel(
         private const val DIAGNOSTICS_TICK_MS = 2000
         /** R53：双通道状态栏两段文案之间的语义分隔符。 */
         private const val SEP_LABEL = "｜"
+        /**
+         * T-ListMetaRevert：判定「滚动条已在底部」的容差（px）。
+         *
+         * 取 2px 而非 0：不同 LAF 下 `value` 与 `maximum - visibleAmount` 可能差几个像素
+         * （舍入），严格相等会导致「拖到底却不恢复跟随」。
+         */
+        private const val SCROLL_BOTTOM_TOLERANCE_PX = 2
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
@@ -2313,6 +2339,8 @@ class SqlLogPanel(
             StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
             StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
             StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
+            StatementType.CREATE -> MpSqlVisualizerBundle.message("log.filter.create")
+            StatementType.DROP -> MpSqlVisualizerBundle.message("log.filter.drop")
             else -> "OTHER"
         }
     }

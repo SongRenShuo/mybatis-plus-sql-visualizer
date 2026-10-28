@@ -112,7 +112,10 @@ class SqlDifferTest {
         val start = System.currentTimeMillis()
         val diff = SqlDiffer.computeDiff(old, new)
         val elapsed = System.currentTimeMillis() - start
-        assertTrue("1000 行 diff 应在 100ms 内完成（实际 ${elapsed}ms）", elapsed < 100)
+        // T-CiRelease（20261024）：预算从 100ms 放宽到 2000ms——本机 warm 实测个位数~几十 ms，守卫
+        // 意图是抓复杂度量级回归（O(n³)/病态实现会到秒级以上）而非跑分；GitHub runner 上 5 个分片
+        // JVM 抢 4 核 + 冷 JIT，100ms 预算必炸（CI 实测假失败）。20 倍余量仍在回归形态的判别域内。
+        assertTrue("1000 行 diff 应在 2000ms 内完成（实际 ${elapsed}ms）", elapsed < 2000)
         val changed = diff.filter { it.type != DiffType.EQUAL }
         // 1 行改写 = 1 删除 + 1 新增 = 2 个差异条目
         assertEquals("仅 1 行改写（2 个差异条目）", 2, changed.size)

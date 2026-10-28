@@ -11,12 +11,15 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 语句面织入通道的事件组装（T-StatementWeave S2）：字段语义与代理层 [StatementHandler] 对齐
- * （耗时/影响行数/异常文本/栈定位/摘要/MDC/线程名），两处**结构性差异**如实登记：
+ * （耗时/影响行数/异常文本/栈定位/摘要/MDC/线程名/绑定参数），三处**结构性差异**如实登记：
  * <ul>
- *   <li>params 为空——织入通道不拦 setXxx（代理层经包装连接的语句代理才看得到参数捕获点），
- *       老连接语句的绑定参数一期不可得，事件带裸 {@code ?} 占位（与控制台通道同观感）；</li>
- *   <li>生产路径从 ExecutionScope 取入口墙钟与纳秒时间；旧内部测试入口无 scope 时保留
- *       出口回推，并明确标记 EXIT_ESTIMATE_MILLIS，不冒充入口观测。</li>
+ *   <li>params 来自语句面 setXxx 入口织入（T-ConnCastSafety 起；此前只有代理层能采，连接代理
+ *       出厂关闭后必须自持）。盲区语句（attach 前 prepare、无 SQL 登记）取不到 SQL 时 params 为
+ *       null——不产空壳；</li>
+ *   <li>timestamp 为出口回推（出口 currentTimeMillis 减 duration）——毫秒级精度，日志时间相关器
+ *       未命中时的回落值与语句开始时刻最多差一个执行耗时（计划 §四.4 取舍）。生产路径从
+ *       ExecutionScope 取入口墙钟与纳秒时间；旧内部测试入口无 scope 时保留出口回推，并明确
+ *       标记 EXIT_ESTIMATE_MILLIS，不冒充入口观测。</li>
  * </ul>
  * 采集红线：本类只被 SqlHookCallbacks 调用（异常已在回调层自吞），EventBus.offer 失败不影响宿主。
  */
@@ -88,7 +91,10 @@ final class WovenEvents {
         event.sourceCandidates = frame == null ? null : frame.candidates;
         event.stackDigest = StackDigest.build(stack);
         event.requestTag = MdcAccessor.requestTag();
-        event.params = null; // 织入通道无 setXxx 拦截——参数一期不可得（类注释「结构性差异」）
+        // T-ConnCastSafety：参数改由语句面 setXxx 织入采集（连接代理出厂关闭后代理层那份不再在）。
+        // 无登记（盲区语句）即 null——SQL 都取不到时参数无处挂，与旧语义一致的「诚实缺省」。
+        final StatementRegistry.Ctx ctx = StatementRegistry.get(stmt);
+        event.params = ctx == null ? null : ctx.params.snapshot(sql, AgentState.isDesensitize());
         event.url = url;
         event.threadName = Thread.currentThread().getName();
         if (scope != null) scope.apply(event);

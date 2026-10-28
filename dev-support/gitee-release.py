@@ -13,6 +13,9 @@ Gitee 自动发行脚本（可复用）
   python dev-support/gitee-release.py --version 2026.10.9 --verify-only
   # 只删发行版（不动 tag）
   python dev-support/gitee-release.py --version 2026.10.9 --delete-only
+  # 从 GitHub Release 取附件同步到 Gitee（发布流水线在 GitHub 侧跑完后用这条：不重新打包，
+  # 附件就是门禁验过的那一份；默认要在终端里输入 yes 确认，非交互环境须显式 --yes）
+  python dev-support/gitee-release.py --version 2026.10.9 --notes docs/发行说明/xxx.md --from-github
 
 功能（对应《Gitee自动发行工作流-说明文档.md》第三节）:
   1. 建发行版（POST /releases，body 参数名坑位已在实现内规避）
@@ -22,17 +25,23 @@ Gitee 自动发行脚本（可复用）
      就是本地这一份；--verify-only 下不一致即失败，建版流程下只告警，见 verify_artifact）
   5. --replace / --delete-only / --verify-only 三个重发与核查模式（按 tag 查发行版走
      GET /releases/tags/{tag}，实测受支持）
+  6. --from-github：把 GitHub Release 的同名附件同步成 Gitee 发行版（本地不重新打包）。
+     沿用 GitHub 侧的预发布标记；建版前打印摘要并要求人工确认，除非显式 --yes。
+     不动 update/update.json——内测通道数据源仍由 writeUpdateManifest 本地维护。
 
 依赖:
   - .local/gitee-token.json（字段: gitee_personal_access_token / owner / repo；已 gitignore。
     2026-10-10 起由仓库根迁入 .local/，本脚本保留根目录旧路径作回退）
+  - .local/github-token.json（--from-github 需要：github_personal_access_token / owner / repo）
   - build/distributions/mybatis-plus-sql-visualizer-{version}.zip 已构建（buildPlugin）
-  - 远端标签 {version} 已 push（否则建发行版 400）
+    或由 --from-github 从 GitHub Release 下载
+  - 远端标签 {version} 已 push 到 Gitee（否则建发行版 400；--from-github 会先检查并给出指引）
 """
 import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -149,6 +158,113 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# --from-github：把 GitHub Release 的同名附件同步成 Gitee 发行版
+# 设计约束（用户 2026-10-26 定）：Gitee 仍是主仓，GitHub 触发的发布只能**经人确认**后才
+# 落一份到 Gitee；本脚本不自动跑、也不由 CI 调用，且不碰 update/update.json（内测通道数据源）。
+# ---------------------------------------------------------------------------
+
+def load_github_config():
+    candidates = [
+        os.path.join(REPO_ROOT, ".local", "github-token.json"),
+        os.path.join(REPO_ROOT, "github-token.json"),
+    ]
+    token_path = next((p for p in candidates if os.path.exists(p)), None)
+    if token_path is None:
+        raise SystemExit(
+            "找不到 GitHub 令牌文件（--from-github 需要）：\n  - " + "\n  - ".join(candidates)
+            + "\n字段示例：{\"github_personal_access_token\": \"...\", \"owner\": \"...\", \"repo\": \"...\"}"
+        )
+    with open(token_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    return (
+        cfg["github_personal_access_token"],
+        cfg.get("owner", "SongRenShuo"),
+        cfg.get("repo", "mybatis-plus-sql-visualizer"),
+    )
+
+
+def _github_get(url, token):
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + token,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "sql-visualizer-release-sync",
+    })
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=60))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            return None
+        raise SystemExit(f"GitHub API {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
+
+
+def ensure_gitee_tag(version):
+    """建版要求 tag 已在 Gitee（否则 Gitee 返回 400）。只读检查，不自动推 tag。"""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", REPO_ROOT, "ls-remote", "--tags", "origin", f"refs/tags/{version}"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as e:  # noqa: BLE001 - 环境缺 git 时只告警
+        print(f"  WARN: 无法执行 git（{type(e).__name__}），跳过 tag 前置检查")
+        return
+    if proc.returncode != 0:
+        print(f"  WARN: git ls-remote 失败（{proc.stderr.strip()[:120]}），跳过 tag 前置检查")
+        return
+    if not proc.stdout.strip():
+        raise SystemExit(
+            f"ERROR: Gitee 上没有 tag {version}，建发行版会 400。\n"
+            f"  先在本地打 tag 并推到两端：git tag {version} <目标提交> && "
+            f"powershell -NoProfile -File dev-support/push-all.ps1 -Tags"
+        )
+
+
+def fetch_github_zip(version, zip_name, dest):
+    """取 GitHub Release 里与 zip_name 同名的附件写入 dest，不重新打包。
+
+    返回 (prerelease, sha256, size)。本地已有同名文件且哈希一致时直接复用；
+    哈希不同则拒绝覆盖（避免静默改掉本地构建产物）。
+    """
+    token, gh_owner, gh_repo = load_github_config()
+    rel = _github_get(f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/tags/{version}", token)
+    if rel is None:
+        raise SystemExit(
+            f"ERROR: GitHub 上没有 tag {version} 的发行版。\n"
+            f"  先在 Actions 跑 build-plugin.yml：mode=release（门禁后审批发布）或 mode=publish（复用门禁产物）"
+        )
+    if rel.get("draft"):
+        raise SystemExit(f"ERROR: GitHub 发行版 {version} 仍是草稿，先正式发布再同步")
+    assets = rel.get("assets") or []
+    asset = next((a for a in assets if a.get("name") == zip_name), None)
+    if asset is None:
+        names = "、".join(a.get("name", "?") for a in assets) or "（无附件）"
+        raise SystemExit(f"ERROR: GitHub 发行版 {version} 里没有附件 {zip_name}；现有：{names}")
+    expected = int(asset.get("size") or 0)
+    req = urllib.request.Request(asset["url"], headers={
+        "Authorization": "Bearer " + token,
+        "Accept": "application/octet-stream",
+        "User-Agent": "sql-visualizer-release-sync",
+    })
+    data = urllib.request.urlopen(req, timeout=600).read()
+    if expected and len(data) != expected:
+        raise SystemExit(f"ERROR: 下载长度不符：GitHub 报 {expected} 字节，实际 {len(data)} 字节")
+    sha = hashlib.sha256(data).hexdigest()
+    if os.path.exists(dest):
+        local_sha = _sha256_file(dest)
+        if local_sha != sha:
+            raise SystemExit(
+                f"ERROR: 本地已有同名 zip 但内容不同（本地 {local_sha[:16]}… / GitHub {sha[:16]}…）。\n"
+                f"  确认以 GitHub 为准就先把它移走：{dest}"
+            )
+        print(f"  本地已存在同名 zip，sha256 与 GitHub 一致（{sha[:16]}…），直接复用")
+        return bool(rel.get("prerelease")), sha, len(data)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(data)
+    print(f"  已从 GitHub 下载 {zip_name}（{len(data)} 字节，sha256 {sha[:16]}…）")
+    return bool(rel.get("prerelease")), sha, len(data)
+
+
 def verify_artifact(token, owner, repo, version, zip_path, strict):
     """下载线上附件与本地 zip 对 sha256——比 URL 串比对强一级，证明下发的是本地这一份。
 
@@ -195,6 +311,10 @@ def main():
                         help="只删除该 tag 的发行版（不动远端标签）后退出")
     parser.add_argument("--verify-only", action="store_true",
                         help="不建版不传附件，只回读校验现有发行版")
+    parser.add_argument("--from-github", action="store_true",
+                        help="从 GitHub Release 取同名附件同步到 Gitee（不重新打包；建版前需人工确认）")
+    parser.add_argument("--yes", action="store_true",
+                        help="--from-github 时跳过人工确认；非交互环境必须显式给")
     args = parser.parse_args()
 
     version = args.version
@@ -214,6 +334,26 @@ def main():
         status = delete_release(token, owner, repo, rid)
         print(f"已删除发行版 id={rid} (HTTP {status})；远端标签 {version} 未动")
         return
+
+    # ①.5 同步来源：从 GitHub Release 取附件（本地不重新打包；CI 不走这条，只能人手动跑）
+    if args.from_github:
+        gh_prerelease, gh_sha, gh_size = fetch_github_zip(version, zip_name, zip_path)
+        if gh_prerelease and not args.prerelease:
+            args.prerelease = True
+            print("  沿用 GitHub 侧的预发布标记（内测版）")
+        if not args.verify_only:
+            ensure_gitee_tag(version)
+            print("\n即将把上述 GitHub 附件同步为 Gitee 发行版：")
+            print(f"  版本   : {version}")
+            print(f"  附件   : {zip_name}（{gh_size} 字节，sha256 {gh_sha[:16]}…）")
+            print(f"  预发布 : {'是' if args.prerelease else '否'}")
+            print(f"  正文   : {args.notes or '（缺 --notes，建版会失败）'}")
+            print(f"  Gitee  : https://gitee.com/{owner}/{repo}/releases/tag/{version}")
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    raise SystemExit("ERROR: 非交互环境下同步到 Gitee 需显式加 --yes（这是有意的二次确认）")
+                if input("确认上传到 Gitee 吗？输入 yes 继续：").strip().lower() != "yes":
+                    raise SystemExit("已取消：未对 Gitee 做任何写操作")
 
     # ② 只校验（发布后复查，尤其同名附件重传后确认 CDN 已换新）
     if args.verify_only:

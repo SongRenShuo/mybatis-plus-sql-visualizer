@@ -61,7 +61,7 @@ Automatic merge failed; fix conflicts and then commit the result.
 6. **r2 竞品应答代码资产逐项计数保留**：合并结果 `supportsDeleteLimit` 8 行、`entityResolutionFailed` 4 行、`isWrapperVariable` 13 行，与 r2 基线（`git grep 42cc889`）**逐项相等**。
 7. **dev 侧删除仅 1 文件**：`docs/images/t-vstack-requirement.png`（T-VStack 需求截图移出 docs，r2 侧无引用面，安全）。r2 侧零删除。
 8. **`testgen` 双线下线一致**：合并结果 `src/` 内 `testgen` / `TestAssetGenerator` 命中 **0**，无残留引用。
-9. **单侧新增互不影响**：dev 侧新增 17 文件（11 份开发计划/性能分析文档 + 4 个测试类 + `record/pos_frame.py` + 1 份发行说明）；r2 侧新增 9 文件（`dev-support/ci-verify.ps1`、`docs/设计规范-弹窗克制红线.md`、6 份调研/计划/测试计划文档、`DatabaseSchemaResolverFallbackTest.kt`、`XmlMapParamSpecMatrixTest.kt`）。均为单侧新增，无覆盖风险。
+9. **单侧新增互不影响**：dev 侧新增 17 文件（11 份开发计划/性能分析文档 + 4 个测试类 + `record/pos_frame.py` + 1 份发行说明）；r2 侧新增 9 文件（`dev-support/ci-verify.ps1`、`docs/规范/设计规范-弹窗克制红线.md`、6 份调研/计划/测试计划文档、`DatabaseSchemaResolverFallbackTest.kt`、`XmlMapParamSpecMatrixTest.kt`）。均为单侧新增，无覆盖风险。
 10. **`record/` 录制管线**：dev 相对 merge-base 改 10 文件（+332/−57，含新增 `pos_frame.py`），与 r2 零交集。
 11. **dev 上游能力在位**（合并结果 `src/main` 计数）：`sequenceNumber` 4、`isModuleBasedLaunch` 3、`awaitPrewarmedTempFile` 3、`lineFragments` 6。
 
@@ -99,7 +99,7 @@ Automatic merge failed; fix conflicts and then commit the result.
 | `plugin.xml` | 与 r2 版逐字节一致 |
 | r2 资产计数 | `supportsDeleteLimit` 8、`entityResolutionFailed` 4、`isWrapperVariable` 13 |
 | dev 资产计数 | `sequenceNumber` 4、`isModuleBasedLaunch` 3、`awaitPrewarmedTempFile` 3、`lineFragments` 6 |
-| r2 文档资产 | `docs/设计规范-弹窗克制红线.md` 在位、`SqlPreviewSpecMatrixTest` / `XmlMapParamSpecMatrixTest` 在位 |
+| r2 文档资产 | `docs/规范/设计规范-弹窗克制红线.md` 在位、`SqlPreviewSpecMatrixTest` / `XmlMapParamSpecMatrixTest` 在位 |
 | `testgen` 残留 | 0 |
 
 ## 六、实施步骤
@@ -168,7 +168,7 @@ Automatic merge failed; fix conflicts and then commit the result.
 
 - [x] 第一段合入 r2 零冲突（**偏差**：因 Wave 0 先提交计划文档，HEAD 离开 `b632086`，故为真实合并 `3ae4d1b` 而非快进；与 r2 的树差异仅计划文档本身，等价于快进效果）
 - [x] 第二段 2 处文档冲突并集完成：无丢行、无重复行、无冲突标记残留（日期倒序在冲突块内成立；表格第 30–31 行处 dev 侧**固有**倒序见 §九）
-- [x] r2 竞品应答资产在位：`plugin.xml` blob `d58ae1b` 与 r2 逐字节一致、`docs/设计规范-弹窗克制红线.md`、金样矩阵测试、`supportsDeleteLimit`/`entityResolutionFailed`/`isWrapperVariable` 计数 8/4/13
+- [x] r2 竞品应答资产在位：`plugin.xml` blob `d58ae1b` 与 r2 逐字节一致、`docs/规范/设计规范-弹窗克制红线.md`、金样矩阵测试、`supportsDeleteLimit`/`entityResolutionFailed`/`isWrapperVariable` 计数 8/4/13
 - [x] dev 上游能力在位：`sequenceNumber` 4 / `isModuleBasedLaunch` 3 / `awaitPrewarmedTempFile` 3 / `lineFragments` 6、`record/` 12 文件、bundle 553×2 键对称
 - [x] `testgen` 零残留；版本号 `2026.9.10`；CHANGELOG 含 `[2026.9.10]` 与 `[2026.9.9]`
 - [x] 全量测试 0 失败（3760/0/0/6，见 §九）

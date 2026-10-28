@@ -23,7 +23,7 @@ import robot
 from gifkit import Recorder
 from locate import ensure_foreground, sandbox_pid, windows
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = HERE / "perf" / "r11_sqllog.mp4"
 LOG_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 日志")]'
 HISTORY_TAB = '//div[contains(@class,"TabLabel") and contains(@accessiblename,"SQL 历史")]'
@@ -58,13 +58,46 @@ def list_pixels():
 def main():
     pid = sandbox_pid()
     frames = [(h, r) for h, p, _, r in windows() if p == pid and r[2] - r[0] > 1200]
-    if len(frames) != 1 or frames[0][1] != (REGION[0], REGION[1],
-                                         REGION[0] + REGION[2], REGION[1] + REGION[3]):
-        raise RuntimeError(f"sandbox viewport differs from recording baseline: {frames}")
+    # 窗口外框实测 (277,25,1647,1009)——REGION 是内缩 8px 的录制区（坑 49）
+    WANT = (277, 25, 1647, 1009)
+    if len(frames) != 1 or frames[0][1] != WANT:
+        raise RuntimeError(f"sandbox viewport differs from baseline: {frames} != {WANT}")
     if not ensure_foreground(frames[0][0], click_xy=(700, 36)):
         raise RuntimeError("sandbox did not take focus")
     for xpath in (LOG_TAB, HISTORY_TAB):
         robot.require_component(xpath)
+    # 20261027：关掉可能开着的 SQL 预览弹窗——它会盖住日志列表，
+    # 让「捕获入列 + 双通道状态栏」这两个本页主角看不到（复核 MINOR 项）
+    try:
+        from robot import find_components, click_component
+        PREVIEW = "//div[@accessiblename='SQL Visualizer - SQL 预览']"
+        if find_components(PREVIEW):
+            # 「取消」按钮在预览弹窗底部；robot 按文本点（坐标会随弹窗宽度漂）
+            closed = False
+            for xp in ("//div[@accessiblename='取消']",
+                       "//div[@text='取消']"):
+                if find_components(xp):
+                    click_component(xp); time.sleep(1.5); closed = True; break
+            if not closed:
+                import pyautogui as _pg
+                _pg.click(REGION[0] + 1212, REGION[1] + 798); time.sleep(1.5)
+            print("[prep] 预览已关闭:", not find_components(PREVIEW))
+        # 断言：确认已切到「SQL 日志」页签
+        LOG_TAB_XP = ("//div[contains(@class,'TabLabel') and "
+                      "contains(@accessiblename,'SQL 日志')]")
+        if find_components(LOG_TAB_XP):
+            click_component(LOG_TAB_XP); time.sleep(1.2)
+        # 确保「捕捉」已开（工具窗重开后开关会重置；坑 36：悬停工具栏才现形的绿三角）
+        import pyautogui as _pg
+        _pg.moveTo(REGION[0] + 960, REGION[1] + 129, duration=0.4)
+        time.sleep(0.9)
+        cap = find_components("//div[contains(@accessiblename,'捕捉')]")
+        if cap:
+            click_component("//div[contains(@accessiblename,'捕捉')]")
+            time.sleep(1.5)
+            print("[prep] 已点捕捉开关")
+    except Exception as e:
+        print("(关预览跳过)", str(e)[:40])
     clear_id = _clear_xpath()
     feed("/user/list")
     robot.click_component(f"//div[@id='{clear_id}']")
@@ -73,13 +106,15 @@ def main():
 
     recorder = Recorder(REGION, str(OUT))
     recorder.start()
-    time.sleep(0.8)
+    time.sleep(1.2)
     feed("/user/list")
-    time.sleep(1.0)
+    time.sleep(1.6)
     feed("/user/nested?username=ab&minAge=20&maxAge=30")
-    time.sleep(1.0)
+    time.sleep(1.6)
+    feed("/user/page?current=1&size=2")
+    time.sleep(1.4)
     feed("/user/list")
-    time.sleep(0.8)
+    time.sleep(1.4)
     after = list_pixels()
     diff = ImageChops.difference(before, after)
     bbox = diff.getbbox()

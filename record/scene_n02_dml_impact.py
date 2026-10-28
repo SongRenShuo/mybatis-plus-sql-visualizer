@@ -24,7 +24,7 @@ import pyautogui
 from gifkit import Recorder, click
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "n02_dml_impact.mp4")
 

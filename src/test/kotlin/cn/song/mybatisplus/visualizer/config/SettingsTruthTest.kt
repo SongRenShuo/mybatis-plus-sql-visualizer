@@ -132,6 +132,28 @@ class SettingsTruthTest {
         assertTrue("状态应消费项目候选共识决策", section.contains("DialectRegistry.decision("))
     }
 
+    /**
+     * T-DialectLabelStale（2026-10-27 用户真机复现）：方言下拉切到具体方言时，
+     * 推断状态只读行必须同步刷新。原实现只在「切回智能推断」分支刷新，
+     * 切到 Oracle 等具体方言时副标题停在旧文案，直到面板重绘/apply 后的 reset() 才追上。
+     */
+    @Test
+    fun testT_DialectLabelStale_下拉切具体方言也刷新状态行() {
+        val src = stripComments(
+            mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.kt"),
+        )
+        val listener = src.substringAfter("addRow(p, g, \"\", dialectInferredLabel)")
+            .substringBefore("addRow(p, g, \"\", replaceParamsCheck")
+        assertTrue(
+            "方言下拉监听必须无条件刷新推断状态行（不得只判 autoDialectItem 分支）",
+            listener.contains("dialectCombo.addActionListener { refreshInferredLabel() }"),
+        )
+        assertFalse(
+            "切到具体方言时不得跳过刷新",
+            listener.contains("if (dialectCombo.selectedItem == autoDialectItem) refreshInferredLabel()"),
+        )
+    }
+
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
     private fun mainSrc(rel: String) = java.io.File("src/main/kotlin/$rel").readText()

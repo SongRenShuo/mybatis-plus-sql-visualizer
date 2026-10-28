@@ -457,4 +457,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
     /** M36.5.49：当前状态（测试断言用）。 */
     internal fun stateForTest(): String = state.name
+
+    /** T-DialectGatePass：状态行文本（测试断言放行提示用，showStatus/showError 均写 infoLabel）。 */
+    internal fun infoTextForTest(): String = infoLabel.text
 }

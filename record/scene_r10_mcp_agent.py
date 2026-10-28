@@ -35,6 +35,7 @@
 import sys
 import time
 
+import numpy as np
 import pyautogui
 
 import scene_m1_mcp as base
@@ -43,13 +44,16 @@ from gifkit import Recorder, click, shot
 REGION = (277, 25, 1370, 984)
 OUT = "perf/r10_mcp_agent.mp4"
 
-LOG_PATH = (r"F:\code\Java\Gitee\SongRenShuo\mpsv-gif-rec\build\MPSV-GifFresh"
+LOG_PATH = (r"F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\build\MPSV-GifFresh"
             r"\mybatis-plus-sql-visualizer\IU-2026.2.1\log\idea.log")
 
-PROMPT = "调用 sqlv_check_sql 工具检查这条 SQL 的写风险：DELETE FROM user WHERE id > 0"
-PROMPT_BOX = (1045, 500)
-SEND = (1255, 545)
-NEW_CHAT = (1132, 79)
+PROMPT = "调用 sqlv_check_sql 工具检查这条 SQL 的写风险：DELETE FROM user WHERE id > 0。拿到工具结果后用三句话以内回答，不要展开分析。"
+# 输入框坐标（窗口相对，2026-10-25 实测）：AI 面板占满右侧全高后输入框贴底（y≈860），
+# 旧值 (1064,501) 会点到「More room for your prompts」空白区——文字被 paste 进编辑器
+# （上轮实测污染了 MybatisPlusDemoApplication.java）。面板布局随版本漂，开录前先截图核对。
+PROMPT_BOX = (968, 835)
+SEND = (1281, 569)
+NEW_CHAT = (1191, 62)
 OPEN_FILE_NAME = (472, 468)      # 原生「Open File or Project」文件名框
 EDITOR = (400, 300)
 NEUTRAL_CURSOR = (600, 620)
@@ -59,9 +63,13 @@ TAB_ROW_Y = 79
 
 
 def _tab_centers():
-    """编辑器标签栏的标签中心 x 列表（左→右）。"""
+    """编辑器标签栏的标签中心 x 列表（左→右）。
+
+    扫描窗到 x=1200（AI 面板左缘为止）：2026-10-25 页签多时总宽超过旧窗 805，
+    后段标签（idea.log）探测不到导致计数恒错。折叠进 More 弹出菜单的标签不渲染、
+    探测不到——录制前把多余页签关掉，保证目标标签在可见区。"""
     img = base.grab()
-    sub = img[60:98, 60:805]
+    sub = img[60:98, 60:1200]
     mask = (sub.mean(axis=2) > 90)
     cols = mask.sum(axis=0)
     xs = [60 + i for i, v in enumerate(cols) if v > 0]
@@ -82,6 +90,36 @@ def _tab_by_index(i):
     return (c[i], TAB_ROW_Y)
 
 
+def _active_tab_index():
+    """激活标签的 index：激活标签底部有高亮下划线，像素探测。
+
+    页签集合随会话变（重启后恢复的页签与 20260920 完全不同），index 2/3 写死必错
+    （2026-10-25 实测第 3 个标签已是 replay.sql 不是 RoleMapper.xml）。
+    下划线在**窗口相对 y≈68..76**（标签文字带 y 56..66 之下；y 92+ 已是上下文
+    工具行/编辑器区，2026-10-25 实测扫错带会把标签文字误当下划线）。"""
+    img = base.grab()
+    band = img[68:76, 60:1200]                    # 下划线条带（标签盒底缘）
+    cols = band.mean(axis=(0, 2))
+    thr = float(np.median(cols)) + 20
+    xs = [60 + i for i, v in enumerate(cols) if v > thr]
+    if not xs:
+        return None
+    groups = []
+    for x in xs:
+        if groups and x - groups[-1][-1] <= 20:
+            groups[-1].append(x)
+        else:
+            groups.append([x])
+    best = max(groups, key=len)                   # 最宽的亮段＝激活标签下划线
+    if len(best) < 30:                            # 下划线至少与标签盒同宽（几十 px）
+        return None
+    cx = sum(best) / len(best)
+    centers = _tab_centers()
+    if not centers:
+        return None
+    return min(range(len(centers)), key=lambda i: abs(centers[i] - cx))
+
+
 def _frame():
     return base._hwnd("mybatis-plus-sql-visualizer-demo", "SunAwtFrame")
 
@@ -95,48 +133,44 @@ def _click(x, y, wait=1.0):
 
 
 def _editor_title_has(sub):
-    """主窗标题里是否含某文件（判当前活动编辑器）。"""
-    import ctypes
-    import ctypes.wintypes as wt
-    u32 = ctypes.WinDLL("user32", use_last_error=True)
-    w = _frame()
-    if not w:
-        return False
-    n = ctypes.create_unicode_buffer(300)
-    u32.GetWindowTextW(w, n, 300)
-    return sub in n.value
+    """旧判据已废弃：2026.2 新 UI 主窗标题不再携带文件名，恒 False。
+
+    保留函数名以免调用点遗漏——现改判「激活标签的文本是不是该文件」：
+    robot-server 拿不到标签文本，这里用激活 index + 打开日志后必为最后标签的约定。"""
+    return _active_tab_index() == len(_tab_centers()) - 1 and sub == "idea.log"
 
 
 def _close_log():
     """关掉 idea.log 标签：Ctrl+W（当前活动编辑器）比点 × 稳。"""
     for _ in range(3):
-        if not _editor_title_has("idea.log"):
-            return True
+        n = len(_tab_centers())
         w = _frame()
         if w:
             base.focus(w)
         pyautogui.hotkey('ctrl', 'w')
         time.sleep(1.2)
-    return not _editor_title_has("idea.log")
+        if len(_tab_centers()) < n:
+            return True
+    return False
 
 
 def _open_log_and_find_audit():
-    """Find Action → Open File or Project → 粘全路径 → Ctrl+F 搜 tool=sqlv_check_sql。"""
+    """Ctrl+E（Recent Files）→ 打字过滤 idea.log → Enter → Ctrl+F 搜 tool=sqlv_check_sql。
+
+    2026-10-25 弃用 Find Action「Open File」路线：2026.2 该动作在 Find Action 里
+    搜不到（Nothing to show），且 Ctrl+Shift+N 弹的是「File Open Actions」窄搜索。
+    Recent Files 列表按最近使用排序、支持打字过滤，最稳。"""
     w = _frame()
     if w:
         base.focus(w)
-    pyautogui.hotkey('ctrl', 'shift', 'a')
+    n_before = len(_tab_centers())
+    pyautogui.hotkey('ctrl', 'e')
+    time.sleep(1.8)
+    base.paste("idea.log")
     time.sleep(1.5)
-    base.paste("Open File")
-    time.sleep(1.6)
-    pyautogui.press('return')
-    time.sleep(3.0)
-    _click(*OPEN_FILE_NAME, wait=0.8)
-    base.paste(LOG_PATH)
-    time.sleep(1.0)
     pyautogui.press('return')
     time.sleep(4.5)
-    if not _editor_title_has("idea.log"):
+    if len(_tab_centers()) != n_before + 1 or _active_tab_index() != len(_tab_centers()) - 1:
         return False
     _find_audit()
     return True
@@ -162,30 +196,45 @@ def _new_chat():
 
 
 def prep():
-    """就位：日志已开好并停在审计行、编辑器切回 mapper、AI 面板开在新会话。
+    """就位：编辑器切回起点页签、AI 面板开在新会话。
 
-    **日志在 prep 里开**：录制段现场开日志要 13s（Find Action + 原生对话框 + 4.5s 载入），
-    会把成片顶到 30s 超出规格；prep 开好后录制段只切标签，1s 内完成。"""
+    **2026-10-25 砍掉「打开 idea.log 看审计行」分镜**：2026.2 新 UI 下三条开文件路线全断
+    （Find Action 搜不到「Open File」动作 / Ctrl+Shift+N 变成 File Open Actions 窄搜索 /
+    MCP open_file_in_editor 拒绝项目外路径；Ctrl+E 过滤框吃不到合成粘贴），审计行画面
+    留在 docs 文字里。成片=真实调用全过程（输入 → 发送 → 调用卡 → 结构化结果），信息量足够。"""
+    global START_INDEX
     w = _frame()
     if not w:
         raise RuntimeError("IDE 主窗未找到")
     base.focus(w)
-    if not _editor_title_has("idea.log"):
-        if not _open_log_and_find_audit():
-            raise RuntimeError("prep：idea.log 未能打开并定位到审计行")
-    else:
-        _find_audit()
-    time.sleep(0.5)
-    rt = _tab_by_index(2)                # RoleMapper.xml（第 3 个标签）
-    if rt:
-        _click(rt[0], rt[1], wait=1.0)   # 切回 mapper（录制起点）
-    # 面板自检：必须是对话面板（Codex / Chat History），不是落地页
+    # 窗口归位：沙盒重启后窗口回默认位置，base.grab() 的固定 region 会错位
+    # （2026-10-25 实测：没归位时激活标签下划线探测恒失败）
+    import ctypes
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    u32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    u32.SetWindowPos(ctypes.c_void_p(w), ctypes.c_void_p(0),
+                     REGION[0], REGION[1], REGION[2], REGION[3], 0x0004)
+    time.sleep(1.2)
+    # 先把起点页签激活并记录 index（重启后会话恢复的页签集不固定，
+    # 用 MCP 打开 schema.sql 保证它在场且激活）
+    try:
+        from mcpnav import open_file
+        open_file('mybatis-plus-join-demo/src/main/resources/db/schema.sql', settle=2.0)
+    except Exception as e:
+        print("mcpnav 打开 schema.sql 失败（沿用当前激活页签）:", e)
+    time.sleep(0.8)
+    START_INDEX = _active_tab_index()
+    if START_INDEX is None:
+        raise RuntimeError("prep：激活标签下划线探测失败")
+    print("起点标签 index =", START_INDEX)
+    # 面板自检：必须是对话面板（认证行/Chat History），不是落地页
     img = base.grab()
     if base.bright_count(img, 810, 1300, 60, 100, thr=110) < 40:
         raise RuntimeError("AI Assistant 对话面板未打开（可能是落地页）")
     _new_chat()
     shot(REGION, "perf/_r10_prep.png")
-    print("prep ok: 日志已停在审计行并切回 mapper、面板在新会话")
+    print("prep ok: 已切回起点页签、面板在新会话")
 
 
 def main():
@@ -194,33 +243,37 @@ def main():
     r = Recorder(REGION, OUT)
     time.sleep(0.8)
     r.start()
-    time.sleep(0.7)                       # 起始定格：Codex + Managed by agent
+    time.sleep(0.7)                       # 起始定格：agent + Managed by agent
 
     # 1. 输入任务
     _click(*PROMPT_BOX, wait=0.7)
     base.paste(PROMPT)
     time.sleep(0.7)                       # 分镜 2 定格
-    _click(*SEND, wait=0.5)
+    pyautogui.press('enter')              # Enter 发送（发送按钮坐标随面板布局漂，Enter 稳）
+    time.sleep(0.5)
 
-    # 2. 等 agent 跑完（ACP 会话 → MCP 调用 → 结果）；轮询画面变化，最多 40s
-    for _ in range(40):
+    # 2. 等 agent 跑完（ACP 会话 → MCP 调用 → 结果）；轮询画面变化：
+    #    先等「出现变化」（会话启动），再等「连续静止 12s」（回复写完——流式输出在
+    #    工具执行期会有 5~8s 停顿，still=6 会误判提前收摊，2026-10-25 首条实测），上限 150s
+    seen_change = False
+    still = 0
+    prev = base.grab()
+    for _ in range(150):
         time.sleep(1.0)
         img = base.grab()
-        if base.bright_count(img, 820, 1290, 150, 420, thr=120) > 800:
-            break
-    time.sleep(0.8)                       # 分镜 3 定格：调用卡 + 结果
+        diff = float(abs(img.astype(int) - prev.astype(int)).mean())
+        prev = img
+        if diff > 0.5:
+            seen_change = True
+            still = 0
+        elif seen_change:
+            still += 1
+            if still >= 12:
+                break
+    time.sleep(1.0)                       # 分镜 3 定格：调用卡 + 结果
 
-    # 3. 切到 idea.log（prep 已定位好）看审计行——日志是最后一个标签
-    lt = _tab_by_index(3)
-    if lt:
-        _click(lt[0], lt[1], wait=1.0)
-    if not _editor_title_has("idea.log"):
-        r.stop()
-        raise RuntimeError("未切到 idea.log 标签")
-    time.sleep(1.0)                       # 分镜 4 定格：审计行
-
-    # 4. 复原：切回 mapper + 新会话（回到起点态，首尾帧一致）
-    rt = _tab_by_index(2)
+    # 3. 复原：切回起点页签 + 新会话（回到起点态，首尾帧一致）
+    rt = _tab_by_index(START_INDEX)
     if rt:
         _click(rt[0], rt[1], wait=0.9)
     _new_chat()

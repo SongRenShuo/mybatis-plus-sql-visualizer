@@ -36,7 +36,9 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
             StatementType.INSERT -> "INSERT INTO t VALUES (1)"
             StatementType.UPDATE -> "UPDATE t SET x = 1"
             StatementType.DELETE -> "DELETE FROM t"
-            StatementType.OTHER -> "TRUNCATE TABLE t"
+            StatementType.CREATE -> "CREATE TABLE t (id INT)"
+            StatementType.DROP -> "DROP TABLE t"
+            StatementType.OTHER -> "MERGE INTO t USING s ON (1=1)"
         }
         return LogSqlEntry(rawSql = actualSql, restoredSql = actualSql, params = emptyList(), timestamp = ts)
     }
@@ -473,5 +475,49 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
     /** 等待 EDT 调度完成。 */
     private fun waitForEdt() {
         ApplicationManager.getApplication().invokeAndWait { java.lang.Runnable { } }
+    }
+
+    // ---------- T-DdlTypeColor：DDL 可单独筛选 ----------
+
+    /**
+     * 勾「建表」只出 CREATE/ALTER 条目，不把 INSERT 一起带出来。
+     *
+     * 这正是 DDL 独立成档（而非复用 INSERT 档）的核心理由：若复用，勾「只看插入」
+     * 会把建表语句一起筛出来，语义错误。
+     */
+    fun test筛选建表_只出结构性新增() {
+        val entries = listOf(
+            entryOfType(StatementType.SELECT, "SELECT 1"),
+            entryOfType(StatementType.INSERT, "INSERT INTO t VALUES (1)"),
+            entryOfType(StatementType.CREATE, "CREATE TABLE t (id INT)"),
+            entryOfType(StatementType.CREATE, "ALTER TABLE t ADD c INT"),
+            entryOfType(StatementType.DROP, "DROP TABLE t"),
+        )
+        val filtered = filterByType(entries, setOf(StatementType.CREATE))
+        assertEquals("应只命中建表与改表 2 条", 2, filtered.size)
+        assertTrue("应含 CREATE", filtered.any { it.restoredSql.startsWith("CREATE") })
+        assertTrue("应含 ALTER", filtered.any { it.restoredSql.startsWith("ALTER") })
+        assertFalse("不应含 INSERT", filtered.any { it.restoredSql.startsWith("INSERT") })
+    }
+
+    /** 勾「删表」只出 DROP/TRUNCATE 条目。 */
+    fun test筛选删表_只出结构性删除() {
+        val entries = listOf(
+            entryOfType(StatementType.DELETE, "DELETE FROM t"),
+            entryOfType(StatementType.DROP, "DROP TABLE t"),
+            entryOfType(StatementType.DROP, "TRUNCATE TABLE t"),
+            entryOfType(StatementType.CREATE, "CREATE TABLE t (id INT)"),
+        )
+        val filtered = filterByType(entries, setOf(StatementType.DROP))
+        assertEquals("应只命中 DROP 与 TRUNCATE 2 条", 2, filtered.size)
+        assertFalse("不应含 DELETE", filtered.any { it.restoredSql.startsWith("DELETE") })
+    }
+
+    /** 筛选弹窗可勾选项应含六个类型（四 DML + 两 DDL）。 */
+    fun test筛选候选类型含Ddl两档() {
+        assertEquals("可筛选类型应为 6 项", 6, FILTERABLE_TYPES.size)
+        assertTrue("应含 CREATE", StatementType.CREATE in FILTERABLE_TYPES)
+        assertTrue("应含 DROP", StatementType.DROP in FILTERABLE_TYPES)
+        assertFalse("OTHER 不单列", StatementType.OTHER in FILTERABLE_TYPES)
     }
 }
