@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,13 +97,26 @@ class StatementWeaveWiringGuardTest {
     }
 
     @Test
-    fun test接线守卫_登记名单单一真相在StatementWeaver() {
+    fun test接线守卫_登记名单单一真相在WeaveSpecs() {
+        // T-JRebelPremainCrash B 案（2026-10-22）：名单单一真相从 StatementWeaver 上提到
+        // WeaveSpecs（零 ASM 依赖）——StatementWeaver implements Opcodes 且方法体引用
+        // Opcodes.LONG/DOUBLE/TOP（Integer 装箱字段，不可内联），「查名字」触发其类初始化
+        // 就会要求重定位 ASM 全程可解析；第三方 agent 接管 premain 类加载时该路径会抛
+        // NCDFE/ClassCircularityError 并中止宿主启动（用户现场 JRebel + Corretto 21）。
+        //
+        // 本守卫的原意（防两份名单漂移）不变，只把落点从 StatementWeaver 改到 WeaveSpecs；
+        // 并新增一条反向断言：DriverRegistry **不得**再经 StatementWeaver.specOf 触达 ASM。
         val registry = stripComments(agentSrc("DriverRegistry.java"))
         assertTrue(
-            "DriverRegistry 两面谓词必须委托 StatementWeaver.specOf（防两份名单漂移）",
+            "DriverRegistry 两面谓词必须委托 WeaveSpecs.specOf（单一真相在 WeaveSpecs，防两份名单漂移）",
+            registry.contains("WeaveSpecs.specOf"),
+        )
+        assertFalse(
+            "DriverRegistry 不得再走 StatementWeaver.specOf——那会触发 implements Opcodes 的类初始化，" +
+                "第三方 agent 干扰 ASM 可见性时 premain 直接抛并中止宿主启动（T-JRebelPremainCrash）",
             registry.contains("StatementWeaver.specOf"),
         )
-        val weaver = stripComments(agentSrc("StatementWeaver.java"))
+        val specs = stripComments(agentSrc("WeaveSpecs.java"))
         listOf(
             "com.mysql.cj.jdbc.StatementImpl",
             "com.mysql.cj.jdbc.ClientPreparedStatement",
@@ -110,8 +124,13 @@ class StatementWeaveWiringGuardTest {
             "com.mysql.cj.jdbc.ConnectionImpl",
             "org.h2.jdbc.JdbcConnection",
         ).forEach { cls ->
-            assertTrue("StatementWeaver SPECS 应登记 $cls", weaver.contains("\"$cls\""))
+            assertTrue("WeaveSpecs 应登记 $cls", specs.contains("\"$cls\""))
         }
+        // WeaveSpecs 自身必须零 ASM 依赖：出现 org.objectweb.asm 导入即说明解耦被破坏
+        assertFalse(
+            "WeaveSpecs 必须零 ASM 依赖（否则「查名字」又会要求 ASM 可解析，B 案失效）",
+            specs.contains("org.objectweb.asm"),
+        )
     }
 
     @Test
