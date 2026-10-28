@@ -137,6 +137,19 @@ public record LogSqlEntry(
     private static final java.util.Map<LogSqlEntry, LineFragmentCacheEntry> LINE_FRAGMENT_CACHE =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
+    /** 头部行静态段缓存载荷（券01 T-PerfSweep27-01：静态段 + 来源段 + 缓存键一并存取）。 */
+    private record HeaderCacheEntry(List<SqlTextFragment> core, List<SqlTextFragment> source,
+                                     HeaderStaticCacheKey key) {
+    }
+
+    /**
+     * 券01（T-PerfSweep27-01）头部行静态段/来源段条目级缓存侧表：序号/时间/耗时/库/MCP/行数与
+     * 来源片段只依赖条目不可变字段，每次可见格重绘都重算属浪费——对照上方多行语义片段
+     * 缓存先例放条目侧（EDT 单线程读写，无并发面）。
+     */
+    private static final java.util.Map<LogSqlEntry, HeaderCacheEntry> HEADER_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     /** R60：脱敏摘要缓存（完整 SQL 先打码再截断，避免旧摘要在引号中间截断后漏打码）。 */
     private static final java.util.Map<LogSqlEntry, String> MASKED_SUMMARY_CACHE =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
@@ -245,6 +258,69 @@ public record LogSqlEntry(
             LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
             LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(e != null ? e.fragments() : null, value,
                     e != null ? e.masked() : null));
+        }
+    }
+
+    /**
+     * 头部行静态段缓存（券01：序号/时间/耗时/库/MCP/影响行数；恒非选中态属性）。
+     * 中间的 ⨉去重/×N 同结构徽章不进缓存（输入是面板级快照 map，随流式灌入变化）。
+     */
+    public List<SqlTextFragment> cachedHeaderCore() {
+        HeaderCacheEntry e = HEADER_CACHE.get(this);
+        return e != null ? e.core() : null;
+    }
+
+    /** Kotlin {@code var cachedHeaderCore} 的 JVM 读取器等价入口（属性名读取用）。 */
+    public List<SqlTextFragment> getCachedHeaderCore() {
+        return cachedHeaderCore();
+    }
+
+    public void setCachedHeaderCore(List<SqlTextFragment> core) {
+        synchronized (HEADER_CACHE) {
+            HeaderCacheEntry e = HEADER_CACHE.get(this);
+            HEADER_CACHE.put(this, new HeaderCacheEntry(core, e != null ? e.source() : null,
+                    e != null ? e.key() : null));
+        }
+    }
+
+    /** 来源段缓存（`[文件.java:行号]`；无源码位置为空列表），与 {@link #cachedHeaderCore()} 同键生命周期。 */
+    public List<SqlTextFragment> cachedHeaderSource() {
+        HeaderCacheEntry e = HEADER_CACHE.get(this);
+        return e != null ? e.source() : null;
+    }
+
+    /** Kotlin {@code var cachedHeaderSource} 的 JVM 读取器等价入口（属性名读取用）。 */
+    public List<SqlTextFragment> getCachedHeaderSource() {
+        return cachedHeaderSource();
+    }
+
+    public void setCachedHeaderSource(List<SqlTextFragment> source) {
+        synchronized (HEADER_CACHE) {
+            HeaderCacheEntry e = HEADER_CACHE.get(this);
+            HEADER_CACHE.put(this, new HeaderCacheEntry(e != null ? e.core() : null, source,
+                    e != null ? e.key() : null));
+        }
+    }
+
+    /**
+     * 缓存键（{@link HeaderStaticCacheKey}）：showDuration+时间戳设置+角标细节+
+     * 慢查询阈值——键含设置值，任一设置变更自动失效重算（显示格式严格跟随设置，免失效钩子）。
+     */
+    public HeaderStaticCacheKey cachedHeaderKey() {
+        HeaderCacheEntry e = HEADER_CACHE.get(this);
+        return e != null ? e.key() : null;
+    }
+
+    /** Kotlin {@code var cachedHeaderKey} 的 JVM 读取器等价入口（属性名读取用）。 */
+    public HeaderStaticCacheKey getCachedHeaderKey() {
+        return cachedHeaderKey();
+    }
+
+    public void setCachedHeaderKey(HeaderStaticCacheKey key) {
+        synchronized (HEADER_CACHE) {
+            HeaderCacheEntry e = HEADER_CACHE.get(this);
+            HEADER_CACHE.put(this, new HeaderCacheEntry(e != null ? e.core() : null,
+                    e != null ? e.source() : null, key));
         }
     }
 
