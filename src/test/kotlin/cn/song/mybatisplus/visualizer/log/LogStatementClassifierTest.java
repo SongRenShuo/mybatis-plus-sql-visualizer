@@ -52,8 +52,10 @@ public class LogStatementClassifierTest {
     }
 
     @Test
-    public void TRUNCATE归OTHER() throws Exception {
-        assertEquals(StatementType.OTHER, LogStatementClassifier.classify("TRUNCATE TABLE user"));
+    public void TRUNCATE归DROP() throws Exception {
+        // T-DdlTypeColor（2026-10-26）：TRUNCATE 原归 OTHER（不着色），现归 DROP（删表红 + 虚线条）。
+        // 改判依据：清表是结构性删除，与 DROP 同族；留 OTHER 会让它在列表里没有任何类型标识。
+        assertEquals(StatementType.DROP, LogStatementClassifier.classify("TRUNCATE TABLE user"));
     }
 
     @Test
@@ -90,7 +92,7 @@ public class LogStatementClassifierTest {
             new Object[]{"UPDATE user SET a = 1", StatementType.UPDATE},
             new Object[]{"DELETE FROM user WHERE id = 1", StatementType.DELETE},
             new Object[]{"MERGE INTO t USING s ON (1=1)", StatementType.OTHER},
-            new Object[]{"TRUNCATE TABLE user", StatementType.OTHER},
+            new Object[]{"TRUNCATE TABLE user", StatementType.DROP},
             new Object[]{"", StatementType.OTHER},
             new Object[]{"   ", StatementType.OTHER}
         );

@@ -225,32 +225,7 @@ public final class SqlLogPanelKt {
      */
     public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query,
             Function<LogSqlEntry, String> timestampTextOf) {
-        String q = query.trim();
-        if (q.isEmpty()) {
-            return entries;
-        }
-        Long rowNumber = null;
-        String rowRaw = q.startsWith("#") ? q.substring(1) : q;
-        try {
-            long parsed = Long.parseLong(rowRaw);
-            if (parsed > 0) {
-                rowNumber = parsed;
-            }
-        } catch (NumberFormatException ignored) {
-            // 非纯数字查询 → 行号维度不参与
-        }
-        List<LogSqlEntry> result = new ArrayList<>();
-        for (LogSqlEntry it : entries) {
-            boolean match = containsIgnoreCase(it.restoredSql(), q)
-                    || containsIgnoreCase(it.summary(), q)
-                    || (rowNumber != null && it.sequenceNumber() == rowNumber)
-                    || (timestampTextOf != null
-                        && timestampDisplayTextSafe(timestampTextOf, it, q));
-            if (match) {
-                result.add(it);
-            }
-        }
-        return result;
+        return filterBySearch(entries, query, false, false, new HistoryRegexMemo(), timestampTextOf);
     }
 
     /** 免注入重载：默认取当前设置下的真实显示片段（{@link #timestampDisplayText}）。 */
@@ -272,13 +247,26 @@ public final class SqlLogPanelKt {
      */
     public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query,
             boolean matchCase, boolean regexEnabled, HistoryRegexMemo memo) {
+        return filterBySearch(entries, query, matchCase, regexEnabled, memo, SqlLogPanelKt::timestampDisplayText);
+    }
+
+    /**
+     * 全参核心（master 单函数语义的完整承载）：matchCase × regexEnabled × memo × timestampTextOf 组合缝，
+     * 各重载面均归一到此（B1 接缝登记：k2j 首轮重载面缺 prefix 旗组合，导致无前缀查询被切掉前 6 字符
+     * 或 2 参面 {@code regex:} 前缀独立生效失效）。
+     */
+    public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query,
+            boolean matchCase, boolean regexEnabled, HistoryRegexMemo memo,
+            Function<LogSqlEntry, String> timestampTextOf) {
         String q = query.trim();
         if (q.isEmpty()) {
             return entries;
         }
         if (regexEnabled || q.startsWith(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX)) {
-            kotlin.text.Regex pattern = HistorySqlLogPanelKt.resolveHistoryRegex(
-                    q.substring(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX.length()), matchCase, memo);
+            // removePrefix 语义：前缀在场先剥，不在场原样（无前缀查询被切掉前 6 字符后按残串匹配是首轮红根因）
+            String source = q.startsWith(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX)
+                    ? q.substring(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX.length()) : q;
+            kotlin.text.Regex pattern = HistorySqlLogPanelKt.resolveHistoryRegex(source, matchCase, memo);
             if (pattern != null) {
                 List<LogSqlEntry> result = new ArrayList<>();
                 for (LogSqlEntry entry : entries) {
@@ -302,7 +290,7 @@ public final class SqlLogPanelKt {
         }
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry it : entries) {
-            String ts = timestampDisplayText(it);
+            String ts = timestampTextOf == null ? null : timestampTextOf.apply(it);
             boolean match = contains(it.restoredSql(), q, !matchCase)
                     || contains(it.summary(), q, !matchCase)
                     || (rowNumber != null && it.sequenceNumber() == rowNumber)
@@ -323,16 +311,6 @@ public final class SqlLogPanelKt {
             return text.toLowerCase(Locale.ROOT).contains(q.toLowerCase(Locale.ROOT));
         }
         return text.contains(q);
-    }
-
-    private static boolean containsIgnoreCase(String text, String q) {
-        return text != null && text.toLowerCase(Locale.ROOT).contains(q.toLowerCase(Locale.ROOT));
-    }
-
-    private static boolean timestampDisplayTextSafe(Function<LogSqlEntry, String> timestampTextOf,
-            LogSqlEntry entry, String q) {
-        String text = timestampTextOf.apply(entry);
-        return text != null && containsIgnoreCase(text, q);
     }
 
     /**
