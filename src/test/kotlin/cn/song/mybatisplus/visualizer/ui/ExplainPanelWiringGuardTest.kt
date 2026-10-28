@@ -305,7 +305,9 @@ class ExplainPanelWiringGuardTest {
             )
         }
         // 执行链本身必须仍读真实编辑器（用户手改要生效），不得走快照
-        val execute = functionBody(source, "public static void executeSql(")
+        // （k2j：master 的默认参 forceChoose 在 Java 侧落 1 参/2 参双重载——1 参是委托壳，
+        // 锚点须指向 2 参真身，否则 functionBody 取到壳体必红）
+        val execute = functionBody(source, "public static void executeSql(@NotNull SqlPreviewPanel p, boolean forceChoose)")
         assertTrue(
             "executeSql 必须执行编辑器真实文本（不得用预览快照顶替用户手改）",
             execute.contains("p.nativeEditorDoc") || execute.contains("p.editor"),

@@ -654,8 +654,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             CatchExemption(4, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
         // 15 处：编辑器装配/预热/补全链随 T-M53-II 拆分整块搬进本文件（master 同区 1 处在 .kt 树；
         // k2j 的 runCatching→try/catch 翻译使站点数膨胀，全为降级语义）。
+        // 15→16（T-SyncK2JMaster136）：预览链方言解析补译（resolvePluginDialectLanguage/GENERIC 兜底）
+        // 新增 1 处捕获站点，同源降级语义。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycleKt.java" to
-            CatchExemption(15, "编辑器装配/预热/补全链降级（补全弹窗异常不影响输入、预热失败下次重试——runCatching 翻译站点）"),
+            CatchExemption(16, "编辑器装配/预热/补全链降级（补全弹窗异常不影响输入、预热失败下次重试——runCatching 翻译站点）"),
         // 13 处：原生 Database 插件图表可选能力探测，失败回落自建 A 路径（零劣化）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.java" to
             CatchExemption(13, "原生 Database 图表可选能力探测，失败回落自建 A 路径（零劣化）"),
@@ -822,6 +824,8 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：T-SyncK2JMaster90 实测 428→423；
         // T-SyncK2JMaster496 移植增量后重登 423→456（与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步）
         // T-SyncK2JMaster82 移植增量后重登 456→471（2026-10-25，82 轮五功能族 runCatching 落地）
+        // T-SyncK2JMaster136 移植增量后重登 471→489（2026-10-29 守卫实测；136 轮日志/执行/差距补译
+        // 各族 runCatching 落地 + SqlDialectMappingPrewarm/SqlPreviewPanelEditorLifecycleKt 落地集口径联动）
         // （SqlClickPreview 交互浮层整类退役，降级站点随之消失；Java 注释语义掩码）。
         // 全量对账（Kotlin 守卫读数）：全量 777 = 豁免登记 + 落地文件站点与判定 + 其余未判定 + 其余已判定。
         val exemptSites = throwableCatchExemptions.values.sumOf { it.sites }
@@ -835,12 +839,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            471,
+            489,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            888,
+            912,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
