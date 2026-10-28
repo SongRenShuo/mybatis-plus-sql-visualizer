@@ -4,7 +4,7 @@
 - 基线：`dev` `087c336d`（工作树 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev`）
 - 状态：已实施（2026-10-19，dev 工作树，提交 `5b4fb4e0` + 守卫修复 `c00b8827`/`a1a4da47`）。定向 17 类 **148/0/0/0**；反向三组各恰 1 红（G2 恢复 confirmed 闸门 / G1 恢复 `requestReauthorization` 符号 / G3 摘 `loadState` 归一）。隔离工作树 `a1a4da47` 权威 `testShards` **7892/0/0/9** + testExternal **31/0/0/1** + agent **164/0/0/0**，parity 720 类全覆盖；shard2 有 +40% 权重告警（画像过期/新类缺权，非失败）。**沙盒真机验收已过（2026-10-19 晚，243 沙盒）**：项目打开/首次 Run 全程无注入确认弹窗（当日会话日志 consent 轨迹 0 条），premain 首轮即注入并建会话（`premain 会话建立：pid=24136`），SQL 执行产生条目。未合并 master、未推送。
 - 编号：不预占 O/R/D/V，实施前按台账登记。
-- 关联：`T-FirstUsePremainConsent`、`T-FirstUseFreshInstallConsent`、`T-ConsentTruth`、`T-CaptureTruth`、`T-PS4-01`；`docs/设计规范-弹窗克制红线.md`；`20261015-T-Jdk8RedisAgentStartupCrash-JDK8接入Redis后增强捕获启动崩溃排查-开发计划.md`。
+- 关联：`T-FirstUsePremainConsent`、`T-FirstUseFreshInstallConsent`、`T-ConsentTruth`、`T-CaptureTruth`、`T-PS4-01`；`docs/规范/设计规范-弹窗克制红线.md`；`20261015-T-Jdk8RedisAgentStartupCrash-JDK8接入Redis后增强捕获启动崩溃排查-开发计划.md`。
 
 ## 一、需求与结论
 
@@ -52,7 +52,7 @@
 - `log.jump.guide.message.enhanceFirst` 与 `log.inject.unsupported.enhanceFirst` 仍写着「同意授权并重启应用后生效」。
 - `README.md:120`「启用或首次打开未授权项目时先确认」、`README.md:156`「在增强捕获提示中确认接入」。
 - `docs/架构设计/01-项目架构总览.md:377`、`docs/架构设计/02-核心流程详解.md:455/532/548/567/713` 描述确认流与未授权态。
-- `docs/测试沙盒验证清单.md:24` 仍在检查「未授权/冷却中/重新授权」。
+- `docs/规范/测试沙盒验证清单.md:24` 仍在检查「未授权/冷却中/重新授权」。
 
 ## 三、目标与非目标
 
@@ -161,8 +161,8 @@
 - `README.md:120`、`README.md:156`：改为「增强捕获默认开启，无需确认；可在设置中关闭」。
 - `docs/架构设计/01-项目架构总览.md:377`：删除「首次挂载确认」描述。
 - `docs/架构设计/02-核心流程详解.md:455/532/548/567/713`：删除确认流、未授权分支与「重新授权」措辞，改为开关态与运行态两分。
-- `docs/测试沙盒验证清单.md:24`：删除「未授权/冷却中/重新授权」检查项，改为「首次 Run 无弹窗、默认挂载、关闭开关后回落」。
-- `docs/设计规范-弹窗克制红线.md`：重跑文档给出的 grep 基线，更新触点清单。本计划不新增主动触点，只移除一个用户触发的确认框。
+- `docs/规范/测试沙盒验证清单.md:24`：删除「未授权/冷却中/重新授权」检查项，改为「首次 Run 无弹窗、默认挂载、关闭开关后回落」。
+- `docs/规范/设计规范-弹窗克制红线.md`：重跑文档给出的 grep 基线，更新触点清单。本计划不新增主动触点，只移除一个用户触发的确认框。
 - `docs/索引/开发计划.md`：登记本计划。
 - `CHANGELOG.md` / `docs/变更记录`：实施批次落地时补一行；本计划阶段不写。
 
@@ -189,8 +189,8 @@ src/test/kotlin/...（见 W5 清单）
 README.md
 docs/架构设计/01-项目架构总览.md
 docs/架构设计/02-核心流程详解.md
-docs/测试沙盒验证清单.md
-docs/设计规范-弹窗克制红线.md
+docs/规范/测试沙盒验证清单.md
+docs/规范/设计规范-弹窗克制红线.md
 docs/索引/开发计划.md
 ```
 

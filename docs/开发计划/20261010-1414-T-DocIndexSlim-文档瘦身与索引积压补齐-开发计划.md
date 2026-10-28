@@ -2,7 +2,7 @@
 
 - 占号：O-141/R87/D146~D147/V169~V170（引用前已实测未占用）
 - 日期：2026-10-10 下午
-- 关联：T-RepoLayout（O-138，本项源自其 §六 C③）、`project-doc-conventions`（记忆）、`docs/文档命名规范-说明文档.md`
+- 关联：T-RepoLayout（O-138，本项源自其 §六 C③）、`project-doc-conventions`（记忆）、`docs/规范/文档命名规范-说明文档.md`
 - 载体建议：master 直提（纯 docs，零生产码，不触门禁）
 - 来源：T-RepoLayout §六 C③ 登记项
 

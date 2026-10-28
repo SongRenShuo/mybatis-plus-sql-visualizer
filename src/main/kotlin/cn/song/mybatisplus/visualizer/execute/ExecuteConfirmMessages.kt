@@ -16,7 +16,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
  * ——SQL 用到了本方言不支持的形态（DELETE LIMIT / UPSERT / identity 包装）时执行前如实提示。
  * [dialect]=null 时逐字节维持既有行为（旧调用点与既有测试零回归）。
  *
- * 不新增弹窗形态、不新增步骤（弹窗克制红线 `docs/设计规范-弹窗克制红线.md`）。
+ * 不新增弹窗形态、不新增步骤（弹窗克制红线 `docs/规范/设计规范-弹窗克制红线.md`）。
  */
 object ExecuteConfirmMessages {
 
