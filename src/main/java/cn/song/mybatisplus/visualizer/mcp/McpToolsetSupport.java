@@ -142,6 +142,12 @@ public abstract class McpToolsetSupport {
     protected McpToolTextResult audit(String tool, String argsSummary, ToolBlock block) {
         long token = AUDIT_SEQ.incrementAndGet();
         AUDIT_CTX.put(token, new AuditContext(tool, argsSummary, System.currentTimeMillis()));
+        // 券04（T-PerfSweep27-04）：写入点顺带清扫——取消且 continuation 永不 resume 时
+        // 双路径记账（AuditGate.resumeWith/onFailure）都不会触达，token 残留；同步 O(小表)
+        // 清扫兜底。（master 侧另注「不得改用 try/finally 包裹挂起调用」——K2 对该形态无条件
+        // 生成 SpillingKt 引用、243 平台 stdlib 缺该类；Java 同步形态无此约束，但清扫形态
+        // 照 master 终态保持。）
+        sweepAuditContexts();
         try {
             if (!McpToolGate.isEnabled(tool)) {
                 throwExpected(
@@ -178,6 +184,43 @@ public abstract class McpToolsetSupport {
 
     /** 审计 token 发号器。 */
     private static final AtomicLong AUDIT_SEQ = new AtomicLong();
+
+    /**
+     * 券04（T-PerfSweep27-04）旁路表容量上限：常态 0~2 条（每在途工具一条），取消残留是
+     * 低频异常路径，64 上限只为防「控制通道失效形态下长时间无记账」的病态累积。
+     * 包私有（Kotlin internal 等价，测试可读）。
+     */
+    static final int AUDIT_CTX_MAX = 64;
+
+    /**
+     * 券04（T-PerfSweep27-04）过期判定窗：远超 McpDbExecutor 的 queryTimeout 量级（秒级），
+     * 在途工具不会被判过期；即使误删活条目，记账端 {@code remove ?: return} 语义只丢一条审计行。
+     * 包私有（Kotlin internal 等价，测试可读）。
+     */
+    static final long AUDIT_CTX_STALE_MS = 10 * 60_000L;
+
+    /**
+     * 券04（T-PerfSweep27-04）审计旁路表清扫：移除过期条目 + 超限按 started 移除最旧。
+     * 纯同步函数（master 侧另有 SpillingKt 红线约束挂起形态，Java 同步形态天然满足）；
+     * audit() 写入后调用。包私有（Kotlin internal 等价，测试直调）。
+     */
+    static void sweepAuditContexts() {
+        sweepAuditContexts(System.currentTimeMillis());
+    }
+
+    /** Kotlin 默认参数等价重载：{@code sweepAuditContexts(now = System.currentTimeMillis())}。 */
+    static void sweepAuditContexts(long now) {
+        AUDIT_CTX.values().removeIf(ctx -> now - ctx.started > AUDIT_CTX_STALE_MS);
+        if (AUDIT_CTX.size() > AUDIT_CTX_MAX) {
+            int toRemove = AUDIT_CTX.size() - AUDIT_CTX_MAX;
+            java.util.List<java.util.Map.Entry<Long, AuditContext>> entries =
+                    new java.util.ArrayList<>(AUDIT_CTX.entrySet());
+            entries.sort(java.util.Comparator.comparingLong(e -> e.getValue().started));
+            for (int i = 0; i < toRemove; i++) {
+                AUDIT_CTX.remove(entries.get(i).getKey());
+            }
+        }
+    }
 
     /** 成功记账并移除上下文（master AuditGate.onSuccess／companion auditOk 的同步合并形态）。 */
     private static void auditOk(long token) {
