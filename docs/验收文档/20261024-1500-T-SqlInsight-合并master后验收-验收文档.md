@@ -464,6 +464,20 @@ git rev-list --left-right --count master...t-sql-insight   # 期望 0 / 186
 
 **读数时效**：前两轮合并后的门禁读数（8487/0/0/10，冻结 `f6a769c3`）因后续轮次改动了生产代码而作废；§九 的 8670/1/0/15 取自 `70a71469`，第五轮 W8~W10 之后未复跑。
 
+## 十一之前插：2026-10-29 合并后续走（第七轮 GUI）
+
+master 129 笔并入（merge `6ae97fe9`）后的沙盒续走（独立沙盒 build/MPSV-Insight-Accept，启动脚本 .local/start-insight-ui243.ps1：idea.key 预置 + init 脚本挂 qwdn agent + robot-server；demo 工程 Trust 已处理）。本轮新走/复走读数：
+
+| 节 | 结果 | 证据（record/tmp/） |
+|---|---|---|
+| 4.7 优化候选 | **通过** | 页签「静态优化候选」+ 性质声明逐字（不改写/不建索引/不执行/不猜位置/SOURCE_RANGE_UNKNOWN）；JOIN 带连接谓词 → 空表不编造（i_47c.png） |
+| 4.8 比较SELECT结果 | **通过** | 面板形态（三勾默认不勾/发现目标不默认选/仅打开不执行/INCONCLUSIVE/100行10秒披露逐字在场）（i_47b.png） |
+| 4.4 离线Trace | **通过** | 披露（不自动读剪贴板/1MiB/UNKNOWN 保持）；非法 JSON → 「导入已拒绝: invalid_or_oversized_json」整体拒绝、表空（i_44.png、i_44bad.png） |
+| 4.5 对象使用与影响 | **通过** | 覆盖声明逐字；扫描 t_order → 结构化诊断 SqlUsageCoverage(currentFile,1,1,0,0,false,false) + DYNAMIC_MAPPER_SKIPPED×5（动态 mapper 不产猜测 SQL）+ SUPPORTED_SOURCES 声明；结果表与候选数一致（i_45.png、i_45scan.png） |
+| 4.6 Schema快照比较 | **通过** | 披露（身份必填/1MiB/不查询/影响范围不完整）；垃圾 JSON → 「invalid_schema_snapshot」双侧拒绝（i_46.png、i_46bad.png） |
+| 4.10 指示行（部分） | **部分通过** | 「数据源（上次使用）： mp_demo@localhost」项目级兜底态纯文本在场、无自建换源控件（i_preview2.png）；其余三态与原生菜单换源待数据源凭据配置后走 |
+| 4.1~4.3 / 4.9 / 4.11 | 待续 | 4.1~4.3 前轮冒烟已过、本轮待回归；4.9/4.11 与 4.10 绑定态依赖沙盒数据源凭据（IDE 级安全存储不随项目走，需 Data Sources 对话框配 Custom JAR + Change Credentials） |
+
 ## 十一、状态与去向
 
 - 分支：`t-sql-insight`，**已推送远端**（2026-10-25，含第六轮合并与两个 GUI 修复）；未发布、未合回 dev 或 master。
