@@ -82,6 +82,13 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
         bindPrewarmToProjectLifecycle(p);
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            // T-SqlDialectPrewarm：本线程先完成 SQL 方言映射的一次性加载（BGT 上做，EDT 上做即平台慢操作
+            // 断言）。顺序意图：预热产物 await 完成 → EDT 才装配预览编辑器（createEditor(doc, proj,
+            // sqlFileType, …) 会按 SQL FileType 取高亮器）——排在产物之前即继承这个先后关系。
+            // 放在耗时打点之前：prewarmStarteAt 量的仍是临时文件产物的自身耗时，不被这次预热污染。
+            if (p.project != null) {
+                cn.song.mybatisplus.visualizer.ui.highlight.SqlDialectMappingPrewarm.prewarmNow(p.project);
+            }
             // T-PrewarmBudget（2026-09-20）：预热**自身耗时**打点起点
             long prewarmStartedAt = System.nanoTime();
             if (p.previewTempFile != null || prewarmAbandoned(p)) {
