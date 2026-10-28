@@ -1365,7 +1365,10 @@ class BannedApiSourceScanTest {
     // try/catch(Throwable)（785 个 .java 文件守卫实测 913 站点，行计数 918 与判定口径差 5 为
     // 注释/字符串形态不计）。新增站点均为降级/预热/兜底语义；外层 fatal 透传判定新增一处已登记
     // [fatalPassthroughGuardedFiles]（SqlDialectMappingPrewarm 新入落地集 = 3 判定点）。
-    private val fatalCatchSiteTotalBaseline = 913
+    // **913 → 912（T-SyncK2JMaster136 D 前收口尾差，2026-10-28）**：O147 修订链收口把
+    // SqlLogParamCodec.writeEncodedEntry 的 IOException 包裹 catch 改 sneakyThrow 原样透传，
+    // 站点净减 1（守卫实测 912，785 个 .java）。其余口径同上轮登记。
+    private val fatalCatchSiteTotalBaseline = 912
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

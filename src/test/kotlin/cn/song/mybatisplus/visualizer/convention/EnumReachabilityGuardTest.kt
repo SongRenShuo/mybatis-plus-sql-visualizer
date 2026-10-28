@@ -391,8 +391,6 @@ class EnumReachabilityGuardTest {
                 "产出点在未移植的降级预览链，落位后删本条",
             "PreviewDegradationReason.MEMORY_PSI_FAILED" to
                 "产出点在未移植的降级预览链，落位后删本条",
-            "Intent.TEMPLATE" to
-                "产出点在未移植的执行意图分型链（SqlPreviewPanelExecution 尾款），落位后删本条",
         )
     }
 }
