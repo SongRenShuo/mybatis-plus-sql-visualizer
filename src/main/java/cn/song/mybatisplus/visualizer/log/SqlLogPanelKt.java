@@ -164,7 +164,11 @@ public final class SqlLogPanelKt {
             StatementType.SELECT,
             StatementType.INSERT,
             StatementType.UPDATE,
-            StatementType.DELETE
+            StatementType.DELETE,
+            // T-DdlTypeColor：DDL 独立成档（不复用 INSERT/DELETE），故筛选弹窗单列，
+            // 允许「只看结构变更」而不把普通增删一起筛出来
+            StatementType.CREATE,
+            StatementType.DROP
     );
 
     /**
