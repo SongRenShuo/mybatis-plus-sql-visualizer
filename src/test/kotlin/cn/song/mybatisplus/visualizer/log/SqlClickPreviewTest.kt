@@ -434,4 +434,26 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             }
         }
     }
+
+    // ---------- R60（T-LaneB D96）：浮层展示文本脱敏 ----------
+
+    fun testClickPreviewSql脱敏开_展示文本打码() {
+        val masked = SqlClickPreview.clickPreviewSql(
+            "SELECT * FROM t WHERE phone = '13812345678'",
+            false,
+            true,
+        )
+        assertTrue("脱敏开应打码", masked.contains("'***'"))
+        assertFalse("原文手机号不得出现", masked.contains("13812345678"))
+    }
+
+    fun testClickPreviewSql脱敏关_原文加分号() {
+        val plain = SqlClickPreview.clickPreviewSql(
+            "SELECT * FROM t WHERE phone = '13812345678'",
+            false,
+            false,
+        )
+        assertTrue("脱敏关原文保留", plain.contains("13812345678"))
+        assertTrue("分号收尾语义不变", plain.endsWith(";"))
+    }
 }

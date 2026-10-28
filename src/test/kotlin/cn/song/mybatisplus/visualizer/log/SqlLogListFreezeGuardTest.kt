@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import javax.swing.JComponent
@@ -100,28 +101,70 @@ class SqlLogListFreezeGuardTest : BasePlatformTestCase() {
         }
     }
 
-    fun testSpeedSearch匹配高亮锚点_主列表与历史二级渲染器() {
+    fun test日志与历史SQL列表跟随视口宽度且不横向滚动() {
+        val manager = SqlLogManager(project)
+        val logPanel = SqlLogPanel(project, manager)
+        val historyPanel = HistorySqlLogPanel(project)
+        try {
+            for ((panel, sqlList) in listOf(logPanel to logPanel.list, historyPanel to historyPanel.sqlListForTest)) {
+                assertTrue("SQL 条目列表应跟随视口宽度", sqlList.scrollableTracksViewportWidth)
+                val scroll = findScrollPane(panel, sqlList)
+                assertTrue("SQL 列表滚动宿主应存在", scroll != null)
+                assertTrue(
+                    "SQL 条目不能靠水平滚动阅读",
+                    scroll?.horizontalScrollBarPolicy == javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER,
+                )
+            }
+        } finally {
+            historyPanel.dispose()
+            logPanel.dispose()
+            manager.dispose()
+        }
+    }
+
+    private fun findScrollPane(root: JComponent, list: JList<*>): javax.swing.JScrollPane? {
+        fun walk(component: java.awt.Component): javax.swing.JScrollPane? {
+            if (component is javax.swing.JScrollPane && component.viewport.view === list) return component
+            if (component is JComponent) component.components.forEach { child -> walk(child)?.let { return it } }
+            return null
+        }
+        return walk(root)
+    }
+
+    fun testSpeedSearch匹配高亮锚点_共用渲染基类() {
         // T-UiNative f65d9ae：speed search 的匹配片段高亮是渲染器职责
-        //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的 meta 行与 SQL 行上；
+        //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的各文本组件上；
         // pitfall-speedsearch-highlight-renderer：setDynamicSearchMatchHighlighting 并不存在）。
-        // 面板新增渲染路径（列/模式）时若漏施高亮，搜索命中无标记且难察觉——以「两面板渲染器
-        // 文件各含 ≥2 处施加点」为结构锚点锁住（当前各 2 处：meta 行 + SQL 行）。
-        // k2j 移植注：生产为 Java，两个渲染器在 master 里是同文件顶层类（SqlLogPanel.kt 内的
-        // LogEntryListCellRenderer / HistorySqlLogPanel.kt 内的 HistoryCellRenderer），Java 侧各自
-        // 独立成文件——锚点路径随之下沉到渲染器文件本体（语义不变：仍是「主列表渲染器」与
-        // 「历史二级列表渲染器」各 ≥2 处施加点）。
-        val anchors = mapOf(
-            "src/main/java/cn/song/mybatisplus/visualizer/log/LogEntryListCellRenderer.java" to "SQL 日志主列表",
-            "src/main/java/cn/song/mybatisplus/visualizer/log/HistoryCellRenderer.java" to "历史二级 SQL 列表",
+        // 面板新增渲染路径时若漏施高亮，搜索命中无标记且难察觉——以「施加点数量」为结构锚点锁住。
+        //
+        // T-LogListRail（2026-10-26）：日志页与历史页渲染器曾各持一份同构实现（每文件 2 处施加点），
+        // 改版时收进共用基类。锚点随之从「两个渲染器文件各 ≥2 处」改为「基类 ≥3 处」，且
+        // **子类不得自带施加点**——自带即说明出现了绕过基类的新渲染路径，那正是本守卫要防的漏施加情形。
+        // k2j 移植注：master 的渲染器是同文件顶层类（LogEntryRendering.kt / HistorySqlLogPanel.kt 内），
+        // Java 侧基类与两个子类各自独立成文件——子类锚点用渲染器文件本体（语义不变）。
+        val basePath = "src/main/java/cn/song/mybatisplus/visualizer/log/RailCellRendererBase.java"
+        val baseFile = java.io.File(basePath)
+        assertTrue("找不到基类源文件 $basePath（工作目录=${java.io.File(".").absolutePath}）", baseFile.isFile)
+        val baseCount = Regex("SpeedSearchUtil\\.applySpeedSearchHighlighting").findAll(baseFile.readText()).count()
+        assertTrue(
+            "共用渲染基类的 speed search 高亮施加点不足（$baseCount < 3）——轨道行/注脚行/错误行/SQL 行" +
+                "均须施 SpeedSearchUtil.applySpeedSearchHighlighting，否则搜索命中无高亮（f65d9ae 教训）",
+            baseCount >= 3,
         )
-        for ((path, label) in anchors) {
+
+        val subclassPaths = mapOf(
+            "src/main/java/cn/song/mybatisplus/visualizer/log/LogEntryListCellRenderer.java" to "SQL 日志主列表渲染器",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/HistoryCellRenderer.java" to "历史二级 SQL 列表渲染器",
+        )
+        for ((path, label) in subclassPaths) {
             val f = java.io.File(path)
-            assertTrue("找不到源文件 $path（工作目录=${java.io.File(".").absolutePath}）", f.isFile)
+            assertTrue("找不到源文件 $path", f.isFile)
             val count = Regex("SpeedSearchUtil\\.applySpeedSearchHighlighting").findAll(f.readText()).count()
-            assertTrue(
-                "$label 渲染器的 speed search 高亮施加点不足（$count < 2）——新增渲染路径须对 meta 行与 SQL 行" +
-                    "各施 SpeedSearchUtil.applySpeedSearchHighlighting，否则搜索命中无高亮（f65d9ae 教训）",
-                count >= 2,
+            assertEquals(
+                "$label 不应自带 speed search 施加点（现 $count 处）——渲染路径须统一走共用基类，" +
+                    "自带即意味着新增渲染路径可能漏施高亮",
+                0,
+                count,
             )
         }
     }
