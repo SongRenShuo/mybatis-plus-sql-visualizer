@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
@@ -66,25 +67,36 @@ public class JpaEntityResolver {
      * DDL 变更的失效面因此只有数据源 schema 缓存一处（已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。</p>
      *
      * @param entityClass JPA 实体 PsiClass
+     * @param hostAnchor 查询宿主元素（T-EmbeddedHostCascade，可空）——实体在依赖 JAR/lib 模块时
+     *                   嵌入列命名策略配置在宿主 App 模块，实体自身模块探测 miss 后按宿主模块级联判定；
+     *                   参与缓存键（不同宿主可判出不同命名档，不得共用缓存条目）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     @NotNull
     public TableInfo resolve(@NotNull PsiClass entityClass) {
+        return resolve(entityClass, null);
+    }
+
+    /** Kotlin 默认参数等价重载宿主：{@code resolve(entityClass, hostAnchor = null)}。 */
+    @NotNull
+    public TableInfo resolve(@NotNull PsiClass entityClass, @Nullable PsiElement hostAnchor) {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of(), null, null, null, List.of());
         Project project = entityClass.getProject();
         PsiFile file = entityClass.getContainingFile();
         if (file == null) {
             return ColumnNameCalibrator.calibrate(project,
-                    resolveInternal(entityClass));
+                    resolveInternal(entityClass, hostAnchorFile(hostAnchor)));
         }
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
         String configSig = TableConfigSignature.projectSignature(project);
+        com.intellij.openapi.vfs.VirtualFile hostAnchorVirtualFile = hostAnchorFile(hostAnchor);
+        String hostAnchorUrl = hostAnchorVirtualFile != null ? hostAnchorVirtualFile.getPath() : null;
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
         JpaCacheKey key = new JpaCacheKey(
                 file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
-                System.identityHashCode(file), qName, configSig);
+                System.identityHashCode(file), qName, configSig, hostAnchorUrl);
         long stamp = file.getModificationStamp();
         JpaEntry entry = cache.get(key);
         if (entry != null) {
@@ -93,16 +105,40 @@ public class JpaEntityResolver {
             }
         }
 
-        TableInfo value = resolveInternal(entityClass);
+        TableInfo value = resolveInternal(entityClass, hostAnchorVirtualFile);
+        // 券02（T-PerfSweep27-02）：写入前容量守卫——超限整体清空再写（上限语义见 maxCacheEntries）。
+        if (cache.size() >= maxCacheEntries) cache.clear();
         cache.put(key, new JpaEntry(stamp, value));
         return ColumnNameCalibrator.calibrate(project, value);
     }
 
+    /** 宿主锚点 → 其文件 VirtualFile（探测级联与缓存键用；解析异常一律 null 不改语义）。 */
+    @Nullable
+    private static com.intellij.openapi.vfs.VirtualFile hostAnchorFile(@Nullable PsiElement hostAnchor) {
+        try {
+            return hostAnchor != null && hostAnchor.getContainingFile() != null
+                    ? hostAnchor.getContainingFile().getVirtualFile() : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     /**
-     * 内部解析（完整 PSI 遍历，缓存未命中时调用）。
+     * 内部解析（完整 PSI 遍历，缓存未命中时调用）；Kotlin 默认参数等价重载（hostAnchor = null）。
      */
     @NotNull
     private TableInfo resolveInternal(@NotNull PsiClass entityClass) {
+        return resolveInternal(entityClass, null);
+    }
+
+    /**
+     * 内部解析（完整 PSI 遍历，缓存未命中时调用）。
+     *
+     * @param hostAnchor 查询宿主文件（T-EmbeddedHostCascade）——穿透到嵌入展平的命名档级联判定
+     */
+    @NotNull
+    private TableInfo resolveInternal(@NotNull PsiClass entityClass,
+            @Nullable com.intellij.openapi.vfs.VirtualFile hostAnchor) {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of(), null, null, null, List.of());
         // 类级元数据：schema/catalog、限制子句、软删除、自定义脚本、生成器、副表、继承与判别、@IdClass
@@ -121,7 +157,7 @@ public class JpaEntityResolver {
         // 按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，组内保持声明顺序）
         List<ColumnInfo> columns = new ArrayList<>();
         for (PsiField field : fields) {
-            columns.addAll(resolveColumns(field, ignoredFields, classOverrides));
+            columns.addAll(resolveColumns(field, ignoredFields, classOverrides, hostAnchor));
         }
         columns.sort(Comparator.comparing(ColumnInfo::getRole));
         // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
@@ -226,7 +262,8 @@ public class JpaEntityResolver {
     private List<ColumnInfo> resolveColumns(
             @NotNull PsiField field,
             @NotNull Set<String> ignoredFields,
-            @NotNull java.util.Map<String, String> classOverrides) {
+            @NotNull java.util.Map<String, String> classOverrides,
+            @Nullable com.intellij.openapi.vfs.VirtualFile hostAnchor) {
         String fieldName = field.getName();
 
         // @Transient / @ColumnIgnore / @Ignore：非持久化字段，跳过
@@ -272,7 +309,7 @@ public class JpaEntityResolver {
         boolean sdEmbedded = JpaMetadataReader.isSpringDataEmbeddedField(field);
         if (isEmbeddedId || sdEmbedded || JpaMetadataReader.isEmbeddedField(field)) {
             String sdPrefix = sdEmbedded ? JpaMetadataReader.springDataEmbeddedPrefixOf(field) : "";
-            return flattenEmbeddedColumns(field, isEmbeddedId, classOverrides, sdPrefix);
+            return flattenEmbeddedColumns(field, isEmbeddedId, classOverrides, sdPrefix, hostAnchor);
         }
 
         // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
@@ -335,12 +372,14 @@ public class JpaEntityResolver {
             @NotNull PsiField field,
             boolean isPrimaryKey,
             @NotNull java.util.Map<String, String> classOverrides,
-            @NotNull String sdPrefix) {
+            @NotNull String sdPrefix,
+            @Nullable com.intellij.openapi.vfs.VirtualFile hostAnchor) {
         String fieldName = field.getName();
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         java.util.Map<String, String> overrides = new LinkedHashMap<>(classOverrides);
         overrides.putAll(JpaMetadataReader.attributeOverrides(field));
-        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析
+        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析；
+        // T-EmbeddedHostCascade：实体模块判不出时按查询宿主模块级联（实体在依赖 JAR/lib、策略配在宿主的形态）
         com.intellij.openapi.project.Project project;
         try {
             project = field.getProject();
@@ -353,12 +392,46 @@ public class JpaEntityResolver {
         } catch (Throwable ignored) {
             anchor = null;
         }
-        EmbeddedColumnNaming naming = EmbeddedColumnNamingResolver.resolve(project, anchor);
+        EmbeddedColumnNamingResolver.NamingResolution namingResolution =
+                EmbeddedColumnNamingResolver.resolveDetailed(project, anchor, hostAnchor);
         List<JpaMetadataReader.EmbeddedColumnSpec> specs;
         try {
-            specs = JpaMetadataReader.flattenEmbeddedColumns(field, overrides, naming);
+            specs = JpaMetadataReader.flattenEmbeddedColumns(field, overrides, namingResolution.naming());
         } catch (Throwable ignored) {
             specs = List.of();
+        }
+        // T-EmbeddedIdentify W1：嵌入列诊断日志——外部报障「@Embedded 不识别」的排障锚点。
+        // 每个 @Embedded 字段一行 INFO（本函数只在嵌入分支被调用，天然免噪音）；展平失败降级单列升 WARN。
+        try {
+            String owner;
+            try {
+                owner = field.getContainingClass() != null ? field.getContainingClass().getName() : null;
+            } catch (Throwable ignored) {
+                owner = null;
+            }
+            if (owner == null) owner = "?";
+            if (specs.isEmpty()) {
+                String fallbackType;
+                try {
+                    fallbackType = field.getType().getCanonicalText();
+                } catch (Throwable ignored) {
+                    fallbackType = null;
+                }
+                LOG.warn("[T-EmbeddedIdentify] 嵌入展平降级单列（类型不可解析/全被跳过） entity=" + owner
+                        + " field=" + fieldName + " fieldType=" + fallbackType
+                        + " naming=" + namingResolution.naming() + "/" + namingResolution.source()
+                        + " overrides=" + overrides.size());
+            } else {
+                StringBuilder summary = new StringBuilder();
+                for (JpaMetadataReader.EmbeddedColumnSpec spec : specs) {
+                    if (summary.length() > 0) summary.append(", ");
+                    summary.append(spec.getFieldName()).append("→").append(spec.getColumnName());
+                }
+                LOG.info("[T-EmbeddedIdentify] entity=" + owner + " field=" + fieldName
+                        + " naming=" + namingResolution.naming() + "/" + namingResolution.source()
+                        + " sdPrefix=" + sdPrefix + " columns=[" + summary + "]");
+            }
+        } catch (Throwable ignored) {
         }
         if (specs.isEmpty()) {
             String fallbackType;
@@ -722,6 +795,8 @@ public class JpaEntityResolver {
     // 伴生对象（静态）成员
     // ------------------------------------------------------------------
 
+    private static final Logger LOG = Logger.getInstance(JpaEntityResolver.class);
+
     /** JPA 注解全限定名（jakarta.persistence）。 */
     private static final String ENTITY_ANNOTATION = "jakarta.persistence.Entity";
     private static final String TABLE_ANNOTATION = "jakarta.persistence.Table";
@@ -734,19 +809,23 @@ public class JpaEntityResolver {
     private static final String JOIN_TABLE_ANNOTATION = "jakarta.persistence.JoinTable";
     private static final String MAPPED_SUPERCLASS_ANNOTATION = "jakarta.persistence.MappedSuperclass";
 
-    /** JPA 实体解析缓存键（PsiFile + classQualifiedName + configSignature）。 */
+    /** JPA 实体解析缓存键（PsiFile + classQualifiedName + configSignature + 宿主锚点路径）。 */
     private static final class JpaCacheKey {
     private final String fileUrl;
     /** T-Perf-18：文件实例同一性辅助键（同 EntityResolver——light/mock 文件 url 可重复）。 */
     private final int fileIdentity;
     private final String classQualifiedName;
     private final String configSignature;
+    /** T-EmbeddedHostCascade：查询宿主模块路径（命名档随宿主判出，不同宿主不得共用条目；null=未传宿主）。 */
+    private final String hostAnchorPath;
 
-    public JpaCacheKey(String fileUrl, int fileIdentity, String classQualifiedName, String configSignature) {
+    public JpaCacheKey(String fileUrl, int fileIdentity, String classQualifiedName, String configSignature,
+            String hostAnchorPath) {
         this.fileUrl = fileUrl;
         this.fileIdentity = fileIdentity;
         this.classQualifiedName = classQualifiedName;
         this.configSignature = configSignature;
+        this.hostAnchorPath = hostAnchorPath;
     }
 
     public String getFileUrl() { return fileUrl; }
@@ -757,23 +836,25 @@ public class JpaEntityResolver {
     public String classQualifiedName() { return classQualifiedName; }
     public String getConfigSignature() { return configSignature; }
     public String configSignature() { return configSignature; }
+    public String getHostAnchorPath() { return hostAnchorPath; }
+    public String hostAnchorPath() { return hostAnchorPath; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof JpaCacheKey)) return false;
         JpaCacheKey that = (JpaCacheKey) o;
-        return this.fileIdentity == that.fileIdentity && java.util.Objects.equals(this.fileUrl, that.fileUrl) && java.util.Objects.equals(this.classQualifiedName, that.classQualifiedName) && java.util.Objects.equals(this.configSignature, that.configSignature);
+        return this.fileIdentity == that.fileIdentity && java.util.Objects.equals(this.fileUrl, that.fileUrl) && java.util.Objects.equals(this.classQualifiedName, that.classQualifiedName) && java.util.Objects.equals(this.configSignature, that.configSignature) && java.util.Objects.equals(this.hostAnchorPath, that.hostAnchorPath);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(fileUrl, fileIdentity, classQualifiedName, configSignature);
+        return java.util.Objects.hash(fileUrl, fileIdentity, classQualifiedName, configSignature, hostAnchorPath);
     }
 
     @Override
     public String toString() {
-        return "JpaCacheKey[" + "fileUrl=" + fileUrl + ", " + "fileIdentity=" + fileIdentity + ", " + "classQualifiedName=" + classQualifiedName + ", " + "configSignature=" + configSignature + "]";
+        return "JpaCacheKey[" + "fileUrl=" + fileUrl + ", " + "fileIdentity=" + fileIdentity + ", " + "classQualifiedName=" + classQualifiedName + ", " + "configSignature=" + configSignature + ", " + "hostAnchorPath=" + hostAnchorPath + "]";
     }
 }
 
@@ -813,6 +894,13 @@ public class JpaEntityResolver {
 
     /** 缓存键 → 条目（项目级，跟随 JpaEntityResolver 生命周期）。 */
     private static final ConcurrentHashMap<JpaCacheKey, JpaEntry> cache = new ConcurrentHashMap<>();
+
+    /**
+     * 券02（T-PerfSweep27-02）缓存容量上限：与 {@link cn.song.mybatisplus.visualizer.psi.EntityResolver}
+     * 同款——配置签名/宿主锚点变化后旧键永不命中也永不淘汰，超限整体清空（HbmXml 负缓存范式）。
+     * internal 可写仅测试缝（生产不改）——包私有（Kotlin internal 等价）。
+     */
+    static int maxCacheEntries = 4096;
 
     /** 清空缓存（配置变更 / 项目关闭时调用）。 */
     public static void clearCache() {
