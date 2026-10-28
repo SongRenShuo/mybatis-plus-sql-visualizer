@@ -17,8 +17,8 @@
 | MG-06 | W4 执行错误五档分类：权限类错误提示出路（压过对象缺失）、连接错误分类 | demo 真库执行无权限/错对象语句 → 提示文案分类与出路提示 | GUI | 未验 | |
 | MG-07 | O-150 回滚按钮：无备份态 tooltip「暂无可用备份」 | 设置 → 更新节「回滚上一版」按钮 hover | GUI | 未验 | |
 | MG-08 | O-150 回滚主链：有备份态 → 确认框 → 调度 DeleteCommand+UnzipCommand + 当前版本入忽略列表 | 造备份场景 → 点回滚 → 确认 → 状态标签「已回滚——重启后生效」；重启后版本回落（重启批） | GUI+重启 | 未验 | |
-| MG-09 | W1/W5/W6/W7 文档与守卫面：LESSONS/code-standards/开发流程/子系统文档在位；TestGateGems 守卫定向绿 | 静态面 + 定向测试 | 静态/测试 | 未验 | |
-| MG-10 | 合并语义收口：W2×master 渲染重构共存（RailCellRendererBase maskMode）、SqlListV179HeadlessTest 等 W2 连带测试绿 | 定向测试 | 测试 | 未验 | |
+| MG-09 | W1/W5/W6/W7 文档与守卫面：LESSONS/code-standards/开发流程/子系统文档在位；TestGateGems 守卫定向绿 | 静态面 + 定向测试 | 静态/测试 | **通过** | 文档 7 篇在位实测（LESSONS 16959B / code-standards 4547B / 开发流程两篇 / 子系统两篇 / AGENTS.md）；HardcodedUiTextGuardTest / IconResourceGuardTest / GiantFileBudgetTest 定向绿（GiantFileBudgetTest 首跑 1 红=DataSourceSelectorResults.kt 2162>2133 合并连带，按守卫提额条款 2133→2194 修复，a815b5d3） |
+| MG-10 | 合并语义收口：W2×master 渲染重构共存（RailCellRendererBase maskMode）、SqlListV179HeadlessTest 等 W2 连带测试绿 | 定向测试 | 测试 | **通过** | 合并后编译绿 + 定向 16 类 **248/248**（含 SqlListV179HeadlessTest / SqlLogPanelRendererUiTest / HistoryCellRendererTest / DisplayMaskerTest / SqlLogListCopyTest / SqlDockedPreviewTest / SqlClickPreviewTest / StateFileLastGoodTest / ExecutionErrorCategoryTest / UpdateBackupStoreTest / UpdateSectionTest / PluginSettingsPersistenceTest / SettingsTruthTest；2m05s）；冲突裁决语义=master 渲染收拢进 RailCellRendererBase 后 W2 maskMode 缓存键改造重新落位，旧布尔 API 零残留（grep 实测） |
 
 ## 二、定向测试清单
 
