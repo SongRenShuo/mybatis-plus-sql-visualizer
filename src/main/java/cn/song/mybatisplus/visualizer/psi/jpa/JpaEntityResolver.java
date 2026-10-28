@@ -67,9 +67,6 @@ public class JpaEntityResolver {
      * DDL 变更的失效面因此只有数据源 schema 缓存一处（已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。</p>
      *
      * @param entityClass JPA 实体 PsiClass
-     * @param hostAnchor 查询宿主元素（T-EmbeddedHostCascade，可空）——实体在依赖 JAR/lib 模块时
-     *                   嵌入列命名策略配置在宿主 App 模块，实体自身模块探测 miss 后按宿主模块级联判定；
-     *                   参与缓存键（不同宿主可判出不同命名档，不得共用缓存条目）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     @NotNull
@@ -77,7 +74,13 @@ public class JpaEntityResolver {
         return resolve(entityClass, null);
     }
 
-    /** Kotlin 默认参数等价重载宿主：{@code resolve(entityClass, hostAnchor = null)}。 */
+    /**
+     * Kotlin 默认参数等价重载宿主：{@code resolve(entityClass, hostAnchor = null)}。
+     *
+     * @param hostAnchor 查询宿主元素（T-EmbeddedHostCascade，可空）——实体在依赖 JAR/lib 模块时
+     *                   嵌入列命名策略配置在宿主 App 模块，实体自身模块探测 miss 后按宿主模块级联判定；
+     *                   参与缓存键（不同宿主可判出不同命名档，不得共用缓存条目）
+     */
     @NotNull
     public TableInfo resolve(@NotNull PsiClass entityClass, @Nullable PsiElement hostAnchor) {
         String className = entityClass.getName();
