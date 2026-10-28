@@ -747,16 +747,39 @@ public final class SqlPreviewServiceEnhancementsKt {
         if (className == null) return null;
         var resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(p.project, className, context);
         // 歧义是终态，不借显式类、XML 或别名 fallback 偷偷挑选一个。
-        if (resolution.getAmbiguous()) return null;
+        if (resolution.getAmbiguous()) {
+            // T-EmbeddedIdentify W1：实体解析诊断日志——外部报障「@Embedded 不识别」排障锚点之一
+            StringBuilder candidates = new StringBuilder();
+            for (PsiClass candidate : resolution.getCandidates()) {
+                if (candidates.length() > 0) candidates.append(", ");
+                candidates.append(candidate.getQualifiedName() != null ? candidate.getQualifiedName()
+                        : candidate.getName() != null ? candidate.getName() : "?");
+            }
+            SqlPreviewService.LOG.info("[T-EmbeddedIdentify] resolveHqlTable entity=" + className + " → 歧义终态 "
+                    + "candidates=[" + candidates + "]");
+            return null;
+        }
         PsiClass target = resolution.psiClass();
         if (target == null && entityClass != null && classMatchesQueryEntity(entityClass, className)
                 && isVisibleInQueryScope(entityClass, context)) target = entityClass;
         // 纯 XML 映射工程可以没有 Java 类，保留 HBM 路径。
         if (target == null) {
+            SqlPreviewService.LOG.info("[T-EmbeddedIdentify] resolveHqlTable entity=" + className
+                    + " → 未解析（走 HBM 回退判定） hasContext=" + (context != null));
             var hbmOnly = HbmXmlEntityResolver.resolve(className, p.project, context);
             return hbmOnly == null ? null : p.convertHbmMappingToTableInfo(hbmOnly);
         }
-        TableInfo resolved = new JpaEntityResolver().resolve(target);
+        TableInfo resolved = new JpaEntityResolver().resolve(target, context);
+        // T-EmbeddedIdentify W1：实体解析诊断日志——解析成功路径（列数/嵌入列数供报障比对）
+        String entityUrl = target.getContainingFile() != null && target.getContainingFile().getVirtualFile() != null
+                ? target.getContainingFile().getVirtualFile().getUrl() : null;
+        int embeddedCount = 0;
+        for (ColumnInfo col : resolved.getColumns()) {
+            if (col.isEmbedded()) embeddedCount++;
+        }
+        SqlPreviewService.LOG.info("[T-EmbeddedIdentify] resolveHqlTable entity=" + className + " → class="
+                + target.getQualifiedName() + " url=" + entityUrl + " columns=" + resolved.getColumns().size()
+                + " embedded=" + embeddedCount);
         if (!resolved.getColumns().isEmpty()) return resolved;
         var hbm = HbmXmlEntityResolver.resolve(className, p.project, context);
         return hbm == null ? resolved : p.convertHbmMappingToTableInfo(hbm);
