@@ -26,7 +26,7 @@ master 侧 merge-base 后的对面演进（合流冲突来源，按时间序）�
 | N-8 X1~X7 竞品翻车防御 | `xml/XmlMapParamSpecMatrixTest.kt` | 无此文件 | 自动带入 |
 | X8 HeavyXml 增强 | `heavy/HeavyXmlParamTypeResolverTest.kt` | merge-base 后 master 未改（T-M29.5 早于分叉点 ffe3ff7） | 自动带入 |
 | O-5 CI 自动 verify | `dev-support/ci-verify.ps1` | 无 | 带入；**Windows 计划任务需本机重注册**（不在 git 内） |
-| O-7 弹窗克制红线 | `docs/设计规范-弹窗克制红线.md` | 无 | 带入 |
+| O-7 弹窗克制红线 | `docs/规范/设计规范-弹窗克制红线.md` | 无 | 带入 |
 | N-10 Ultra 对标报告 | r2 侧 `docs/调研报告/`（7 文件） | 无 | 带入 |
 | N-6/N-7 首屏 hero + 迁移 FAQ | `marketplace-custom-page.html`（r2 版完整，实测含 JPA New 标签等文案） | `e1a9807` 单源化时回退丢失 | **按 r2 版回补**（§3.5） |
 | O-6 WrapperSearchService 服务链补全 | `log/WrapperSearchService.kt` 增强 | **master 已整族删除（T-JumpCapture，2026-09-14 上午合入）** | **废弃，保持 master 删除决断**（§3.1） |
