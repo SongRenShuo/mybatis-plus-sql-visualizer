@@ -111,5 +111,70 @@ class Guard:
                              % (msg or '点击落空', xy, score, thr))
 
 
+# ---------------- 语义断言（20261027 复盘新增） ----------------
+#
+# 动机：批 4 的失败多是「我以为它开着 / 我以为选对了」——a11 点了弹层却选中 PG 源，
+# 直到转制后目视才发现。像素断言证不了「选的是哪一项」，必须读组件树语义。
+#
+# 目标：每个 take 至少 3 条断言（开录前 1 条 + 关键动作后 2 条）。
+
+def _fc():
+    """包一层：robot 不可达时统一抛 AssertionError（否则调用方的 except 漏接）。"""
+    from robot import find_components
+
+    def wrapped(xp):
+        try:
+            return find_components(xp)
+        except Exception as e:
+            raise AssertionError(f"robot-server 不可达（断言无法执行）：{str(e)[:60]}")
+    return wrapped
+
+
+def assert_panel_open(title="SQL Visualizer - SQL 预览", timeout=8.0):
+    """断言面板/弹窗真的存在（不是「我以为它开着」）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _fc()(f"//div[@accessiblename='{title}']"):
+            return True
+        time.sleep(0.4)
+    raise AssertionError(f"面板未出现：{title}")
+
+
+def assert_panel_closed(title="SQL Visualizer - SQL 预览", timeout=6.0):
+    """断言面板已关闭（收尾同态 / 关窗成功）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _fc()(f"//div[@accessiblename='{title}']"):
+            return True
+        time.sleep(0.4)
+    raise AssertionError(f"面板未关闭：{title}")
+
+
+def assert_no_dialog(titles=("分享 SQL", "Connecting to", "Settings", "选择要预览的 SQL")):
+    """断言无残留弹窗（开录前必查——残留弹窗会吃掉后续所有点击）。"""
+    found = []
+    for t in titles:
+        if _fc()(f"//div[contains(@accessiblename,'{t}')]"):
+            found.append(t)
+    if found:
+        raise AssertionError("残留弹窗：" + ", ".join(found))
+    return True
+
+
+def assert_text_present(text, timeout=6.0):
+    """断言界面上出现某段文本（如「方言」「mpj_demo@localhost」）。
+
+    这是**证明选对了项**的关键手段：点完数据源弹层后断言选中项名字出现在界面上，
+    而不是只证明「画面变了」——像素断言在「点到相邻项」时同样会通过。
+    """
+    deadline = time.time() + timeout
+    xp = f"//div[contains(@accessiblename,'{text}')]"
+    while time.time() < deadline:
+        if _fc()(xp):
+            return True
+        time.sleep(0.4)
+    raise AssertionError(f"界面上找不到文本：{text}")
+
+
 if __name__ == '__main__':
     print(__doc__)

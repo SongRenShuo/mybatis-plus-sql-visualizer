@@ -67,6 +67,14 @@ def calibrate_age_checkbox(gutter):
 
 
 def main():
+    # 开录前按路径精确打开目标文件（同名文件问题的根治手段，T-DemoGifFix1026 §2.2）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/service/impl/UserServiceImpl.java",
+                  settle=1.6)
+    except Exception as e:
+        print("MCP 打不开，中止（不退回搜索方式，宁可不录也不开错文件）:", e)
+        raise
     goto_line(211)
     gutter = locate_gutter()
     chk_age = calibrate_age_checkbox(gutter)
@@ -80,6 +88,9 @@ def main():
         click(*gutter)                        # 1. 点 saveBatch gutter
         wait_stable(REGION)
         time.sleep(1.4)                       # 批量面板定格
+        # 闸门 2（画面断言）：预览面板必须已就位，否则本 take 作废
+        if not has("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
+            raise RuntimeError("预览面板未出现，中止本次 take")
 
         click(*chk_age, move_dur=0.35)        # 2. 取消勾选 age 列
         time.sleep(1.8)                       # SQL 收缩定格
@@ -90,13 +101,10 @@ def main():
         click(*abs_pt(CANCEL), move_dur=0.3)
         time.sleep(0.9)
 
-        # 4. 首尾同态：回起始行。
-        #    goto_line 会弹 Ctrl+G 输入框，**必须紧跟着 Esc 关掉**——否则弹窗留在
-        #    尾帧里（旧片第 65~88 帧就挂着 `[Line] 211`，正是这一步漏了 Esc）。
-        goto_line(211)
-        time.sleep(0.4)
-        pyautogui.press("esc")
-        time.sleep(1.0)
+        # 4. 首尾同态：**不再 goto**。关窗后光标仍在第 211 行（prep 落点），
+        #    旧版这里 goto_line(211)+Esc 在录制窗口内弹 Ctrl+G——正是旧片
+        #    帧 110-133 的跳行弹窗入镜来源（T-DemoGifFix1026 §2.1）。
+        time.sleep(0.8)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")

@@ -229,6 +229,23 @@ data class LogSqlEntry(
      */
     var cachedListLineFragmentsMaskMode: String = ""
 
+    /**
+     * 券01（T-PerfSweep27-01）头部行静态段/来源段条目级缓存：序号/时间/耗时/库/MCP/行数与
+     * 来源片段只依赖条目不可变字段，每次可见格重绘都重算属浪费——对照上方多行语义片段
+     * 缓存先例放条目字段上（EDT 单线程读写，无并发面）。
+     * 中间的 ⨉去重/×N 同结构徽章不进缓存（输入是面板级快照 map，随流式灌入变化）。
+     */
+    var cachedHeaderCore: List<SqlTextFragment>? = null
+
+    /** 来源段缓存（`[文件.java:行号]`；无源码位置为空列表），与 [cachedHeaderCore] 同键生命周期。 */
+    var cachedHeaderSource: List<SqlTextFragment>? = null
+
+    /**
+     * 缓存键（[HeaderStaticCacheKey]）：showDuration+时间戳设置+角标细节+
+     * 慢查询阈值——键含设置值，任一设置变更自动失效重算（显示格式严格跟随设置，免失效钩子）。
+     */
+    var cachedHeaderKey: HeaderStaticCacheKey? = null
+
     /** 脱敏展示前先处理完整 SQL，避免旧摘要在字面量引号中间截断后漏打码。 */
     var cachedMaskedSummary: String? = null
 

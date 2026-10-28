@@ -283,13 +283,19 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
         // reparseFiles → runWriteAction → VcsVFSListener.beforeContentsChange 断言），262 真机
         // 后台预热线程反射直调必炸 "Access is allowed from EDT only"。方言映射唯一入口是
         // DialectPreMapping.ensureMapped（BGT 读探测 + invokeLater 派 EDT），新调用点禁止绕开。
+        //
+        // 判据须同时命中「setMapping 字符串」与「SqlDialectMappings 类名」：平台上有两个同名
+        // setMapping——方言映射 `com.intellij.sql.dialects.SqlDialectMappings`（本条要管）与
+        // 数据源 per-file 关联 `com.intellij.database.dataSource.DataSourcePerFileMappingsImpl`
+        // （T-ConsoleBind 的 exec 文件 pin，线程语义与收口入口都不同）。只按方法名判会把后者
+        // 误判成绕开收口（20261028 首现：ExecFileBinding.kt 假红）。
         val allowed = "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.kt"
         val bad = mainSources()
-            .filter { (_, code) -> code.contains("\"setMapping\"") }
+            .filter { (_, code) -> code.contains("\"setMapping\"") && code.contains("SqlDialectMappings") }
             .map { (path, _) -> path }
             .filter { it != allowed }
         assertTrue(
-            "setMapping 反射出现在 $allowed 之外（线程语义收口被绕开，BGT 直调 EDT-only API 必抛）：$bad。" +
+            "方言 setMapping 反射出现在 $allowed 之外（线程语义收口被绕开，BGT 直调 EDT-only API 必抛）：$bad。" +
                 "方言映射统一走 DialectPreMapping.ensureMapped",
             bad.isEmpty(),
         )

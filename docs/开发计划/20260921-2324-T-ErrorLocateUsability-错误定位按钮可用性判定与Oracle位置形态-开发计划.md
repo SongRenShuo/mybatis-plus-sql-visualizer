@@ -65,7 +65,7 @@
 
 ## 五、验证清单（可经 DBX MCP 执行）
 
-**Oracle 侧已实测可用**：`Oracle Free 23 / FREEPDB1`（`114.66.55.245:20095`，connection_id `311778f3-…`）。**纪律：共享库只读验证、禁止建删对象。**
+**Oracle 侧已实测可用**：`Oracle Free 23 / FREEPDB1`（`dbx-test-host:20095`，connection_id `311778f3-…`）。**纪律：共享库只读验证、禁止建删对象。**
 
 | # | 场景 | 判据 |
 |---|---|---|

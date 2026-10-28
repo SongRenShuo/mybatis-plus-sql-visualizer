@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>封面 600x600</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 600px; height: 600px; overflow: hidden; }
+  body {
+    background: #f5f7fa;
+    font-family: "Microsoft YaHei", sans-serif;
+    position: relative;
+  }
+  .title {
+    text-align: center;
+    font-size: 52px;
+    font-weight: 700;
+    color: #1a2233;
+    letter-spacing: 1px;
+    margin-top: 22px;
+    line-height: 1;
+  }
+  .title .accent { color: #3b82f6; }
+  .tag {
+    text-align: center;
+    font-size: 19px;
+    color: #647082;
+    margin-top: 12px;
+    line-height: 1;
+  }
+  .block {
+    width: 556px;
+    margin: 18px auto 0;
+    background: #10141a;
+    border-radius: 14px;
+    box-shadow: 0 12px 30px rgba(23, 32, 48, 0.16);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 16.5px;
+    line-height: 1.4;
+    overflow: hidden;
+  }
+  .sec { position: relative; padding: 10px 18px 12px 16px; }
+  .sec.sql { background: #121821; border-left: 4px solid #b4604a; }
+  .badge {
+    position: absolute;
+    top: 10px; right: 16px;
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-family: Consolas, monospace;
+  }
+  .badge.java { border: 2px solid #6ad0e0; color: #6ad0e0; }
+  .badge.sql  { border: 2px solid #f0885f; color: #f0885f; }
+  .bar {
+    font-family: "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: #7a8494;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 7px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .dot.t { background: #6ad0e0; } .dot.o { background: #ff9e6b; }
+  .badge.inline { position: static; margin-left: auto; }
+  .ln { color: #5a626e; display: inline-block; width: 26px; }
+  .code { white-space: pre; }
+  .tk-t { color: #69cce0; }
+  .tk-k { color: #ff9e6b; }
+  .tk-w { color: #e2e7f0; }
+  .tk-n { color: #b2e078; }
+  .tk-s { color: #f6715f; }
+  .pillrow {
+    position: relative;
+    height: 34px;
+    background: #161b23;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pill {
+    font-family: Consolas, monospace;
+    font-size: 13.5px;
+    color: #c4cbd6;
+    border: 2px solid #585f6e;
+    border-radius: 20px;
+    padding: 2px 18px;
+    background: #10141a;
+  }
+  .foot {
+    text-align: center;
+    font-size: 23px;
+    color: #46525f;
+    font-weight: 700;
+    margin-top: 34px;
+    line-height: 1;
+  }
+</style>
+</head>
+<body>
+  <div class="title">服务未启，<span class="accent">SQL 先知</span></div>
+  <div class="tag">IDEA 插件 · 免费开源 · 无遥测</div>
+
+  <div class="block">
+    <div class="sec java">
+      <div class="bar"><span class="dot t"></span>UserService.java<span class="badge java inline">JAVA</span></div>
+      <div class="code"><span class="ln">1</span><span class="tk-t">LambdaQueryWrapper&lt;DeviceInfoEntity&gt;</span></div>
+      <div class="code"><span class="ln">2</span><span class="tk-w">  wrapper = </span><span class="tk-k">new </span><span class="tk-t">LambdaQueryWrapper&lt;&gt;()</span></div>
+      <div class="code"><span class="ln">3</span><span class="tk-w">  .eq(</span><span class="tk-t">DeviceInfoEntity::getId</span><span class="tk-w">, </span><span class="tk-n">1001L</span><span class="tk-w">)</span></div>
+      <div class="code"><span class="ln">4</span><span class="tk-w">  .isNotNull(</span><span class="tk-t">DeviceInfoEntity::getStationId</span><span class="tk-w">);</span></div>
+    </div>
+    <div class="pillrow"><span class="pill">↓&nbsp;&nbsp;ALT + SHIFT + Q</span></div>
+    <div class="sec sql">
+      <div class="bar"><span class="dot o"></span>实时预览 · 生成的 SQL<span class="badge sql inline">SQL</span></div>
+      <div class="code"><span class="ln">1</span><span class="tk-s">SELECT </span><span class="tk-w">id, station_id, share_scheme_id</span></div>
+      <div class="code"><span class="ln">2</span><span class="tk-s">FROM </span><span class="tk-w">device_info_entity</span></div>
+      <div class="code"><span class="ln">3</span><span class="tk-s">WHERE </span><span class="tk-w">id = </span><span class="tk-n">1001</span></div>
+      <div class="code"><span class="ln">4</span><span class="tk-w">  </span><span class="tk-s">AND station_id IS NOT NULL</span></div>
+    </div>
+  </div>
+
+  <div class="foot">不启动服务，先看见最终 SQL</div>
+</body>
+</html>

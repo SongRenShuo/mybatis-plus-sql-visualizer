@@ -518,7 +518,14 @@ internal fun SqlPreviewService.resolveHqlTable(
     val resolver = JpaEntityResolver()
     val resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, className, context)
     // 歧义是终态：不借显式类、XML 映射或别名 fallback 再偷偷挑一个。
-    if (resolution.ambiguous) return null
+    if (resolution.ambiguous) {
+        // T-EmbeddedIdentify W1：实体解析诊断日志——外部报障「@Embedded 不识别」排障锚点之一
+        LOG.info(
+            "[T-EmbeddedIdentify] resolveHqlTable entity=$className → 歧义终态 " +
+                "candidates=[${resolution.candidates.joinToString { it.qualifiedName ?: it.name ?: "?" }}]",
+        )
+        return null
+    }
     // 显式传入的类（TypedQuery 结果类型 / @NamedQuery 宿主）**不是旁路**——scope 内解析出根实体时以它为准；
     // 解析不出时，只有显式类本身在查询宿主可见范围内才可用。否则它属于别的模块/持久化单元，拿它当根实体会
     // 渲染出另一张表（T-EntityNameScope：同名实体跨模块误选即此形态）。
@@ -527,10 +534,16 @@ internal fun SqlPreviewService.resolveHqlTable(
         ?: explicit?.takeIf { isVisibleInQueryScope(it, context) }
     // 类解析不到不是终态：HBM 纯 XML 映射工程里根本没有 Java 类（既有路径必须保持可达）。
     if (target == null) {
+        LOG.info("[T-EmbeddedIdentify] resolveHqlTable entity=$className → 未解析（走 HBM 回退判定） hasContext=${context != null}")
         val hbmOnly = HbmXmlEntityResolver.resolve(className, project, context)
         return hbmOnly?.let { convertHbmMappingToTableInfo(it) }
     }
-    val resolved = resolver.resolve(target)
+    val resolved = resolver.resolve(target, context)
+    LOG.info(
+        "[T-EmbeddedIdentify] resolveHqlTable entity=$className → class=${target.qualifiedName} " +
+            "url=${target.containingFile?.virtualFile?.url} columns=${resolved.columns.size} " +
+            "embedded=${resolved.columns.count { it.embedded }}",
+    )
     if (resolved.columns.isNotEmpty()) return resolved
     val hbmMapping = HbmXmlEntityResolver.resolve(className, project, context)
     return hbmMapping?.let { convertHbmMappingToTableInfo(it) } ?: resolved

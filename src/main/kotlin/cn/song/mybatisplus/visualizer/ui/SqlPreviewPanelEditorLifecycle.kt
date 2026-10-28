@@ -75,6 +75,11 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
     // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
     bindPrewarmToProjectLifecycle()
     ApplicationManager.getApplication().executeOnPooledThread {
+        // T-SqlDialectPrewarm：本线程先完成 SQL 方言映射的一次性加载（BGT 上做，EDT 上做即平台慢操作
+        // 断言）。顺序意图：预热产物 await 完成 → EDT 才装配预览编辑器（createEditor(doc, proj,
+        // sqlFileType, …) 会按 SQL FileType 取高亮器）——排在产物之前即继承这个先后关系。
+        // 放在耗时打点之前：prewarmStarteAt 量的仍是临时文件产物的自身耗时，不被这次预热污染。
+        project?.let { cn.song.mybatisplus.visualizer.ui.highlight.SqlDialectMappingPrewarm.prewarmNow(it) }
         // T-PrewarmBudget（2026-09-20）：预热**自身耗时**打点起点——此前全链无完成打点，
         // 真机实测报告只能靠「方言映射行出现」与「临时文件被删」两条间接判据夹逼出区间
         // （最紧一次 ∈ (280ms, 1071ms]），无法定 `PREWARM_WAIT_MS` 预算。本打点即补这个洞：

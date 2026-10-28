@@ -33,7 +33,7 @@ from locate import (bright_band_x, bright_band_y, close_preview,         # noqa:
 from nav import force_en_us, goto_col, trigger_preview                   # noqa: E402
 from verify import Guard                                                 # noqa: E402
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/a13_execute_sql.mp4"
 
 FILE_QUERY = "mpjdemo/DeviceInfoServiceImpl.java"
@@ -116,26 +116,13 @@ def main():
     pyautogui.click(*MAVEN_HIDE); time.sleep(1.2)      # 收起 Maven 工具窗，恢复录制版式
     pyautogui.click(600, 500); time.sleep(0.5)
 
-    pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
-    pyautogui.hotkey("ctrl", "a"); time.sleep(0.5)
-    force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
-    # **点首条结果行**开文件（扫掠几个候选 y，首个命中即开）。
-    # 键盘路径实测无效（Down 不动选中、Return 不开文件），坐标路径在本平台可靠。
-    for y in FILE_ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(1.4)
-        _, t = ide_hwnd_and_title(ide_pid)
-        if FILE_TITLE_KEY in t and "UserWrite" not in t:
-            print("开文件命中：点 y=%d → %s" % (y, t[:60]))
-            break
-    time.sleep(1.6)
-    _, title1 = ide_hwnd_and_title(ide_pid)
-    if not (FILE_TITLE_KEY in title1 and "UserWrite" not in title1):
-        raise RuntimeError("开文件失败：标题仍为 %s（期望命中 %s）" % (title1[:70], FILE_TITLE_KEY))
-    print("开文件后标题 = %s（命中目标）" % title1[:66])
-
-    pyautogui.moveTo(300, 300, duration=0.3); time.sleep(0.5)
-    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
+    # 开文件改 MCP 按路径精确打开（20261027：Ctrl+Shift+N + typewrite 必撞同名文件）
+    try:
+        from mcpnav import open_file
+        open_file("mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java", settle=2.0)
+    except Exception as e:
+        print("MCP 打不开，中止:", e)
+        raise
     goto_col(CHAIN_LINE, CHAIN_COL)
     trigger_preview()
     pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
@@ -174,9 +161,18 @@ def main():
     pyautogui.moveTo(*GAZE_SQL, duration=0.6); time.sleep(1.2)
     g.after_click(btn, region=CLICK_WATCH, wait=1.2, retries=1,
                   msg="点『执行 SQL』后预览下半部无变化（落空）")
-    time.sleep(2.5)
-    time.sleep(10.0)
-    pyautogui.moveTo(*PARK, duration=0.8); time.sleep(1.2)
+    time.sleep(3.0)          # 结果网格出现
+    # 凝视结果网格（避开 "2 rows" 气泡：停在表格中上部，不停在行尾/汇总区）
+    pyautogui.moveTo(700, 600, duration=0.9); time.sleep(1.8)
+    pyautogui.moveTo(900, 660, duration=0.8); time.sleep(1.6)
+    # 真实 UI 变化：返回预览 → 再执行一次（撑时长 + 展示可重复执行）
+    from robot import click_component as _cc
+    _cc("//div[contains(@text,'返回预览') or contains(@accessiblename,'返回预览')]")
+    time.sleep(2.2)
+    pyautogui.moveTo(700, 450, duration=0.7); time.sleep(1.2)
+    _cc("//div[@text='执行 SQL']")
+    time.sleep(3.2)
+    pyautogui.moveTo(700, 600, duration=0.9); time.sleep(2.0)
     print("frames:", r.stop())
 
 

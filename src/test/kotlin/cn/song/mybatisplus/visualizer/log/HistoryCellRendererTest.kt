@@ -45,6 +45,9 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         return sb.toString()
     }
 
+    /** 头部行文本（T-LogListHeader：注脚行已并入头部行）。 */
+    private fun detail(r: RailCellRendererBase): String = r.metaTextForTest
+
     private fun sqlEntry(sql: String, sourceFile: String? = null, sourceLine: Int = 0, ms: Long? = null) =
         LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = 1_700_000_000_000L, sourceFile = sourceFile, sourceLine = sourceLine, executionTimeMs = ms)
 
@@ -54,7 +57,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_片段通道_非HTML标签() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）", r.metaLine is SimpleColoredComponent)
-        val meta = joinedText(r.metaLine)
+        val meta = r.metaTextForTest
         val sql = joinedText(r.sqlLine)
         assertTrue("含 SQL 关键字", sql.contains("SELECT"))
         assertTrue("无耗时显示占位符 —（与日志页同款无括号）", meta.contains("—"))
@@ -63,12 +66,14 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"))
     }
 
-    fun test二级条目_含源码位置_渲染元信息行() {
+    fun test二级条目_含源码位置_渲染信息轨() {
+        // T-LogListRail：源码位置进 88px 轨道，类名骨架化（剥 Mapper 后缀）、不再带方括号
         val r = renderSql(sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 12, ms = 3L))
-        val meta = joinedText(r.metaLine)
-        assertTrue("应渲染耗时 3ms（与日志页同款无括号）", meta.contains("3ms"))
-        assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"))
-        assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"))
+        val meta = r.metaTextForTest
+        assertTrue("轨道应含耗时 3ms: $meta", meta.contains("3ms"))
+        assertTrue("头部行应含骨架化类名 User: $meta", meta.contains("User"))
+        assertTrue("头部行应含行号 :12: $meta", meta.contains(":12"))
+        assertFalse("SQL 不应混入轨道", meta.contains("SELECT"))
     }
 
     fun test二级条目_特殊字符SQL原文保真() {
@@ -110,35 +115,35 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_同模板徽章达阈值渲染() {
         val sql = "SELECT * FROM hist_orders WHERE uid = 7"
         sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
-        val meta = joinedText(renderSql(sqlEntry(sql)).metaLine)
-        assertTrue("达阈值应渲染同模板徽章", meta.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
+        assertTrue("达阈值应渲染同模板徽章", renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
         sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 2)
         assertFalse(
             "未达阈值不渲染",
-            joinedText(renderSql(sqlEntry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)),
+            renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)),
         )
         sqlRenderer.templateCounts = emptyMap()
         assertFalse(
             "无计数不渲染",
-            joinedText(renderSql(sqlEntry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
+            renderSql(sqlEntry(sql)).metaTextForTest.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
         )
     }
 
     // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
 
-    fun test二级条目_元信息在上SQL在下两行显示() {
+    fun test二级条目_轨道在左SQL在右() {
+        // T-LogListRail：原「元信息在上 / SQL 在下」改为「信息轨在左 / SQL 区在右」
         val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
-        val meta = joinedText(r.metaLine)
-        assertTrue("耗时应在元信息行", meta.contains("30ms"))
-        assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"))
+        val meta = r.metaTextForTest
+        assertTrue("耗时应在轨道: $meta", meta.contains("30ms"))
+        assertTrue("来源类名应在头部行: $meta", meta.contains("OrderDao"))
+        assertTrue("行号应在头部行: $meta", meta.contains(":9"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
         assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
-        assertTrue("元信息行恒存在（T-TwoLine 两行结构，占位符归元信息行）", meta.contains("[") && meta.contains("]"))
     }
 
     fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
-        val meta = joinedText(r.metaLine)
+        val meta = r.metaTextForTest
         assertTrue("空耗时占位 — 应在元信息行", meta.contains("—"))
         assertFalse("未知来源不显示占位", meta.contains("[unknown]"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
@@ -154,7 +159,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9))
             assertTrue("FROM 应独立成行", r.sqlLines.any { joinedText(it).startsWith("FROM") })
             assertTrue("WHERE 应独立成行", r.sqlLines.any { joinedText(it).startsWith("WHERE") })
-            assertFalse("元信息行不混入 SQL", joinedText(r.metaLine).contains("SELECT"))
+            assertFalse("元信息行不混入 SQL", r.metaTextForTest.contains("SELECT"))
         } finally {
             state.logListSqlDisplayMode = saved
         }
@@ -226,7 +231,13 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             assertEquals(java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"))
             assertEquals(java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"))
             assertEquals(java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"))
-            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"))
+            // T-DdlTypeColor（2026-10-26）：DDL 现归独立两档并着色——
+            // CREATE/ALTER 取增绿、DROP/TRUNCATE 取删红（虚线形态区分，见 RendererUiTest）。
+            assertEquals("CREATE 取增绿", java.awt.Color(0x4CAF50), barColorAfterRender("CREATE TABLE user (id INT)"))
+            assertEquals("DROP 取删红", java.awt.Color(0xD32F2F), barColorAfterRender("DROP TABLE user"))
+            assertEquals("TRUNCATE 取删红（原 OTHER 不着色）", java.awt.Color(0xD32F2F), barColorAfterRender("TRUNCATE TABLE user"))
+            // 真正无法归类的语句仍不着色
+            assertEquals("未识别语句仍不着色", null, barColorAfterRender("MERGE INTO user USING s ON (1=1)"))
         }
     }
 
@@ -251,11 +262,12 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
 
     fun test二级条目_背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            // T-LogListHeader：Border 按模式预建两个实例（常规 12px / 单行 8px）。
+            // 断言口径改为「同一模式内实例恒定」——选中态不得换 Border（描边已退役）。
             renderSql(sqlEntry("UPDATE user SET a = 1"))
-            assertSame("未选中为普通边框", sqlRenderer.normalBorder, sqlRenderer.border)
+            val unselected = sqlRenderer.border
             renderSql(sqlEntry("UPDATE user SET a = 1"), true)
-            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
-                sqlRenderer.normalBorder, sqlRenderer.border)
+            assertSame("选中态与未选中必须共用同一 Border 实例（描边已退役）", unselected, sqlRenderer.border)
         }
     }
 
@@ -282,7 +294,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
 
     fun test二级条目_行号片段在元信息行最前() {
         val r = renderSql(sqlEntry("SELECT 1").copy(sequenceNumber = 12L))
-        val meta = joinedText(r.metaLine)
+        val meta = r.metaTextForTest
         assertTrue("元信息行含行号 #12", meta.contains("#12 "))
         assertTrue("行号应在片段序列最前", meta.startsWith("#12 "))
         assertFalse("SQL 不混入元信息行", meta.contains("SELECT"))
@@ -291,12 +303,12 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_无行号条目不渲染行号片段() {
         // sequenceNumber=0：旧文件读回 / 未注入条目
         val r = renderSql(sqlEntry("SELECT 1"))
-        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+        assertFalse("无行号不渲染 # 前缀", r.metaTextForTest.contains("#"))
     }
 
     fun test二级条目_行号在耗时占位之前() {
         val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
-        val meta = joinedText(renderSql(e).metaLine)
+        val meta = renderSql(e).metaTextForTest
         val idxRow = meta.indexOf("#5 ")
         val idxDur = meta.indexOf("3ms")
         assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
@@ -311,13 +323,15 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             PluginSettings.getInstance().state.logTimestampEnabled = true
             PluginSettings.getInstance().state.logTimestampSource = LOG_TIMESTAMP_SOURCE_CAPTURE
             val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
-            val meta = joinedText(renderSql(e).metaLine)
+            val meta = renderSql(e).metaTextForTest
+            // T-LogListRail：轨道首行 = `#N HH:mm:ss`，耗时在其下一行。时刻不再带方括号
+            // （格式串已剥日期，SimpleDateFormat 直接产出时段），按「首个 : 」定位时刻。
             val idxRow = meta.indexOf("#5 ")
-            val idxTs = meta.indexOf("[")
+            val idxTs = meta.indexOf(":")
             val idxDur = meta.indexOf("3ms")
-            assertTrue("应含行号/时间/耗时", idxRow >= 0 && idxTs >= 0 && idxDur >= 0)
-            assertTrue("行号在最前", idxRow < idxTs)
-            assertTrue("时间应在耗时之前（对齐日志页）", idxTs < idxDur)
+            assertTrue("应含行号/时间/耗时: $meta", idxRow >= 0 && idxTs >= 0 && idxDur >= 0)
+            assertTrue("行号在最前: $meta", idxRow < idxTs)
+            assertTrue("时间应在耗时之前（对齐日志页）: $meta", idxTs < idxDur)
         } finally {
             PluginSettings.getInstance().state.logTimestampEnabled = savedTs
             PluginSettings.getInstance().state.logTimestampSource = savedSrc
@@ -329,16 +343,17 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_MCP来源_渲染徽标且与目标库角标共存() {
         val e = sqlEntry("SELECT id FROM user WHERE id = 1", ms = 7L)
             .copy(source = SqlSource.MCP, databaseName = "MySQL")
-        val meta = joinedText(renderSql(e).metaLine)
-        assertTrue("历史页元信息行应含 MCP 徽标: $meta", meta.contains("[MCP] "))
-        assertTrue("与目标库角标共存: $meta", meta.contains("[MySQL] "))
-        assertTrue("耗时同列展示: $meta", meta.contains("7ms"))
+        val r = renderSql(e)
+        val d = r.metaTextForTest
+        val meta = r.metaTextForTest
+        assertTrue("历史页注脚行应含 MCP 徽标: $d", d.contains("[MCP]"))
+        assertTrue("与目标库角标共存: $d", d.contains("[MySQL]"))
+        assertTrue("耗时展示在轨道: $meta", meta.contains("7ms"))
     }
 
     fun test二级条目_非MCP来源_不渲染徽标() {
         val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L)
-        val meta = joinedText(renderSql(e).metaLine)
-        assertFalse("非 MCP 来源不应出现徽标: $meta", meta.contains("[MCP]"))
+        assertFalse("非 MCP 来源不应出现徽标", renderSql(e).metaTextForTest.contains("[MCP]"))
     }
 
     fun test二级条目_落盘再读回_徽标仍在() {
@@ -361,10 +376,10 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         saver.close()
 
         val read = SqlLogFileReader.readFromFile(dir.listFiles { f -> f.extension == "sql" }!!.single()).single()
-        val meta = joinedText(renderSql(read).metaLine)
+        val d = renderSql(read).metaTextForTest
         assertTrue("读回条目来源应仍为 MCP: ${read.source}", read.source == SqlSource.MCP)
-        assertTrue("读回后渲染仍出 MCP 徽标: $meta", meta.contains("[MCP] "))
-        assertTrue("目标库角标共存: $meta", meta.contains("[MySQL] "))
+        assertTrue("读回后渲染仍出 MCP 徽标: $d", d.contains("[MCP]"))
+        assertTrue("目标库角标共存: $d", d.contains("[MySQL]"))
     }
 
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
@@ -410,27 +425,28 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     }
 
     fun test历史页时间戳_跟随设置格式() {
+        // T-LogListRail：轨道首行只放时段（日期已剥，见 railTimeFormat），且不再套方括号——
+        // 88px 轨道放不下 `[yyyy-MM-dd HH:mm:ss]` 这种 21 字符形态。
         val fmt = "HH:mm:ss"
-        val expected = expectedFormatted(fmt) // 系统时区下的 HH:mm:ss
+        val expected = expectedFormatted(fmt)
         setTimestampFormat(fmt)
         setTimestampEnabled(true)
-        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains("[$expected]"))
+        val meta = joinedText(renderSql(sqlEntry("SELECT 1", ms = 3L)).metaLine)
+        assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains(expected))
     }
 
     fun test历史页时间戳_显示开关关闭则隐藏() {
         setTimestampEnabled(false)
-        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")))
+        val meta = joinedText(renderSql(sqlEntry("SELECT 1", ms = 3L)).metaLine)
+        assertFalse("关闭时间戳后不应含时间片段 $meta", meta.contains(expectedFormatted("yyyy-MM-dd")))
     }
 
-    fun test历史页时间戳_非法pattern回退默认() {
+    fun test历史页时间戳_非法pattern回退时段格式() {
+        // 非法 pattern：完整格式回落 `yyyy-MM-dd HH:mm:ss`，轨道再剥日期 → `HH:mm:ss`。
+        // 断言轨道实际可见的时段形态，而非完整回落串（轨道从不显示日期）。
         setTimestampFormat("not-a-valid-pattern-%%")
-        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            val expected = expectedFormatted("not-a-valid-pattern-%%") // 回退默认 yyyy-MM-dd HH:mm:ss
-            assertTrue("非法 pattern 应回退默认格式（期望 $expected）", meta.contains("[$expected]"))
+        val meta = joinedText(renderSql(sqlEntry("SELECT 1", ms = 3L)).metaLine)
+        val expected = expectedFormatted("HH:mm:ss")
+        assertTrue("非法 pattern 应回退时段格式（期望 $expected，实际 meta=$meta）", meta.contains(expected))
     }
 }

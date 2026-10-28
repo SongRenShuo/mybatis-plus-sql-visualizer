@@ -63,14 +63,29 @@ object SqlListTypeColor {
      */
     private val parsedCache = java.util.concurrent.ConcurrentHashMap<StatementType, Pair<String, Color>>()
 
-    /** 类型 → 默认色（用户未配置 / 配置非法时的兜底）。 */
+    /**
+     * 类型 → 默认色（用户未配置 / 配置非法时的兜底）。
+     *
+     * DDL 两档**复用** DML 的色（T-DdlTypeColor）：CREATE 取增绿、DROP 取删红。
+     * 视觉区分不靠色相而靠**线条形态**（虚线 vs 实心，见 [ddlBarStyleOf]）。
+     */
     fun defaultOf(type: StatementType): Color = when (type) {
         StatementType.SELECT -> COLOR_SELECT
         StatementType.INSERT -> COLOR_INSERT
         StatementType.UPDATE -> COLOR_UPDATE
         StatementType.DELETE -> COLOR_DELETE
+        StatementType.CREATE -> COLOR_INSERT
+        StatementType.DROP -> COLOR_DELETE
         StatementType.OTHER -> COLOR_SELECT
     }
+
+    /**
+     * 是否 DDL 类型（色条画虚线）。
+     *
+     * 纯函数，渲染热路径直接调用（不做设置读取）。
+     */
+    fun isDdl(type: StatementType): Boolean =
+        type == StatementType.CREATE || type == StatementType.DROP
 
     /** 当前样式（读设置薄壳）。 */
     fun styleOf(): String = styleOf(PluginSettings.getInstance().state.crudColorStyle)
@@ -117,6 +132,9 @@ object SqlListTypeColor {
             StatementType.INSERT -> state.crudColorInsert
             StatementType.UPDATE -> state.crudColorUpdate
             StatementType.DELETE -> state.crudColorDelete
+            // DDL 不新增设置项（用户定案）：复用对应 DML 的色
+            StatementType.CREATE -> state.crudColorInsert
+            StatementType.DROP -> state.crudColorDelete
             StatementType.OTHER -> ""
         }
     }

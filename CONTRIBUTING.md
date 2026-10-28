@@ -163,10 +163,10 @@ mysql -h127.0.0.1 -P3306 -uroot -p --default-character-set=utf8mb4 \
 - 以周边代码为准：命名、缩进、注释密度、异常处理方式保持一致；不要整文件重排。
 - 分层：纯逻辑层（`model` / `converter` / `sql` / `xml` / `reverse` / `generator` / `util`）不得依赖 PSI 或 IDE 平台类；平台读取放 `psi` / `ui` / `log`。
 - 注释：本仓库以中文 KDoc 为主，KDoc 应说明约束与踩坑背景；新增代码可用中文或英文，但同一文件保持一致。
-- 不在代码里留 `TODO` / `FIXME`；待办写进 `docs/开发计划/`（命名见 [文档命名规范](docs/文档命名规范-说明文档.md)）。
+- 不在代码里留 `TODO` / `FIXME`；待办写进 `docs/开发计划/`（命名见 [文档命名规范](docs/规范/文档命名规范-说明文档.md)）。
 - 用户可见文案必须走 i18n：`src/main/resources/messages/MpSqlVisualizerBundle.properties`（英文）与 `_zh`（中文）同时补齐；`BundleParityGuardTest` 会检查键一致。
 - 平台 API：不要引用 Internal API；新增反射入口须登记 `PlatformSignatureCrossVersionTest`；可选依赖（Database / Diagrams / Kotlin / MCP / AI Assistant）必须走 optional XML + 桩源集隔离，主源集不得直接引用。
-- UI：优先复用现有组件与面板内嵌提示；新增弹窗需说明必要性（见[弹窗克制红线](docs/设计规范-弹窗克制红线.md)）。UI 改动附沙盒截图。
+- UI：优先复用现有组件与面板内嵌提示；新增弹窗需说明必要性（见[弹窗克制红线](docs/规范/设计规范-弹窗克制红线.md)）。UI 改动附沙盒截图。
 - 安全：不要提交密钥、token、真实连接串、绝对路径或构建产物；示例数据使用公开测试库。
 - AI 辅助可以，但提交者需对代码、测试与许可证负责；不要提交自己未理解的生成代码。
 

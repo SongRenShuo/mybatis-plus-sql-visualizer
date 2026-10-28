@@ -160,6 +160,31 @@ def _grab(region):
 
 
 SCAN_YMAX = 1020             # 扫描上限：再往下是任务栏，鼠标经过会把图标点亮 → 假变化
+
+
+def _submenu_third(items2, items1):
+    """从「悬停末项后的全部菜单项」里取出**子菜单第三项**（抽样 10 行）。
+
+    子菜单可能向右或向左展开（取决于屏幕边缘空间），**x 不可靠**——2026-10-26 实测
+    主菜单右缘 1330、子菜单 x=1327（向左展开，反而更靠左）。可靠判据是**垂直位置**：
+    子菜单项挂在末项上下方、与主菜单项不重叠，故取「y 落在主菜单 y 范围之外」的新增项。
+    主菜单此刻被冻结（悬停展开子菜单时它不再变化），新增的都算子菜单项。
+    """
+    if not items1 or not items2:
+        return None
+    main_bottom = max(it["y"] + it["height"] for it in items1)
+    main_top = min(it["y"] for it in items1)
+    sub = [it for it in items2
+           if it["y"] + it["height"] <= main_top + 4 or it["y"] >= main_bottom - 4]
+    if len(sub) < 3:
+        # 兜底：按 y 去重后取「与主菜单不重合」的项——子菜单整体在末项附近独立一列
+        sub = [it for it in items2
+               if not any(abs(it["y"] - m["y"]) < 4 and abs(it["x"] - m["x"]) < 4
+                          for m in items1)]
+    if len(sub) < 3:
+        return None
+    sub.sort(key=lambda r: r["y"])
+    return sub[-1]                                # 第三项＝子菜单最下面一项
 REF_X0 = ANCHOR[0] - 100       # 参照带起点（含菜单本身 + 右侧子菜单可能落位）
 REF_W = 900
 
@@ -332,28 +357,66 @@ def main():
     print("锚点 %s（常量）" % (ANCHOR,))
 
     # ---- 开菜单、量末项与子菜单（不入镜）----
-    # 右键弹菜单实测不稳（有时不弹），加重试：最多 4 次。
+    # 【2026-10-26 主路线改为 robot-server 组件树】ActionMenuItem 在主窗组件树里，
+    # 直接按序号取「末项」与「子菜单第 3 项」，不再像素扫描找末项（那套曾为此返工五轮）。
+    # 像素扫描保留为兜底（robot 不可用时）。
     ref = _band_ref()
-    last_y = sub3_y = None
-    for attempt in range(4):
-        pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
-        pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
-        menu_right = _menu_right(ref)
-        band_x = menu_right            # 取样带：菜单右边缘之外
-        click_x = menu_right + 60      # 点击 x：落在子菜单项行内（2026-10-25 实测面板 955..1105，
-                                       # 文字 985..1050；+90 会落到文字末端，+60 落行内空白更稳）
-        try:
-            last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
-        except RuntimeError:
-            print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
-            continue
-        pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)   # 悬停末项 → 展开子菜单
-        sub3_y = sub_item3_y(ref, last_y, band_x)
-        break
-    if last_y is None:
-        raise RuntimeError("连续 4 次右键都没弹出菜单——先看 shots/a15_pre.png")
-    print("菜单右边缘 x=%d（取样带起点 %d，点击 x %d）" % (menu_right, band_x + 12, click_x))
-    print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  取景框底 %d" % (last_y, sub3_y, bottom_clip))
+    last_y = sub3_y = click_x = None
+    menu_right = None
+    robot_ok = False
+    try:
+        from robot import menu_items, has_menu
+        for attempt in range(4):
+            pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+            pyautogui.click(*ANCHOR, button='right'); time.sleep(1.8)
+            if not has_menu():
+                print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
+                continue
+            items = menu_items()
+            if not items:
+                continue
+            last = items[-1]                       # 末项＝「SQL 快捷模板」
+            last_y = last["y"] + last["height"] // 2
+            menu_right = last["x"] + last["width"]
+            click_x = last["x"] + int(last["width"] * 0.25)
+            # 悬停末项展开子菜单，再取子菜单项（此时菜单项列表会含子菜单的三项）
+            pyautogui.moveTo(last["x"] + 120, last_y, duration=0.5); time.sleep(1.6)
+            items2 = menu_items()
+            if len(items2) < len(items):
+                print("子菜单没展开（%d 项），重试" % len(items2))
+                continue
+            sub3 = _submenu_third(items2, items)
+            if sub3 is None:
+                print("子菜单三项没量到，重试")
+                continue
+            sub3_y = sub3["y"] + sub3["height"] // 2
+            click_x = sub3["x"] + int(sub3["width"] * 0.25)
+            robot_ok = True
+            break
+    except Exception as e:
+        print("robot 路线失败，降级像素扫描:", str(e)[:80])
+
+    if not robot_ok:
+        for attempt in range(4):
+            pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+            pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
+            menu_right = _menu_right(ref)
+            band_x = menu_right
+            click_x = menu_right + 60
+            try:
+                last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
+            except RuntimeError:
+                print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
+                continue
+            pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)
+            sub3_y = sub_item3_y(ref, last_y, band_x)
+            break
+        if last_y is None:
+            raise RuntimeError("连续 4 次右键都没弹出菜单——先看 shots/a15_pre.png")
+
+    print("定位来源: %s" % ("robot 组件树" if robot_ok else "像素扫描兜底"))
+    print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  点击 x=%.0f  取景框底 %d"
+          % (last_y, sub3_y, click_x, bottom_clip))
     import mss
     with mss.mss() as sct:
         mss.tools.to_png(sct.grab({"left": 0, "top": 0, "width": 1920, "height": 1080}).rgb,

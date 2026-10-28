@@ -173,11 +173,13 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         sectionGroup("settings.section.preview") { p, g ->
             addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
             addRow(p, g, "", dialectInferredLabel)
-            // T-DialectAutoInfer：切回哨兵项时刷新推断状态行（仅此一处需要联动；
-            // 非「只为置 modified 标志位」的监听器——T-RA-04 删除的是后者）
-            dialectCombo.addActionListener {
-                if (dialectCombo.selectedItem == autoDialectItem) refreshInferredLabel()
-            }
+            // T-DialectAutoInfer：下拉变化一律刷新推断状态行。
+            // 2026-10-27 修（T-DialectLabelStale）：原实现只在「切回哨兵项」时刷新，
+            // 切到具体方言时状态行不动——表现为下拉已变 Oracle、副标题仍停在
+            // 「项目候选方言不一致 / 手动指定: MySQL」的旧文案，直到面板重绘或
+            // apply 后的 reset() 才追上（用户真机复现）。状态行内容完全由
+            // selectedItem 决定（见 refreshInferredLabel），故任何变化都应重算。
+            dialectCombo.addActionListener { refreshInferredLabel() }
             addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
             // T-PT-04 / O-79：空参数填充策略（参数值为空时保留 ? 占位，还是回填 NULL/空字符串）
             emptyParamFillPlaceholderRadio.apply {

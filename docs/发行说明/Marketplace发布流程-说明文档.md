@@ -39,7 +39,7 @@ flowchart LR
 | 首次发布怎么传 | **首次必须通过网页手动上传**（官方：The first publication must always be uploaded manually）；后续版本可用 Gradle `publishPlugin` 自动发布 |
 | 代码签名 | 官方建议发布前签名（`signPlugin` 自动执行）；当前公钥上传功能官方仍标记未开放，未签名也可上传但 IDE 安装时可能弹警告。首次发布**建议先不配置签名**，跑通流程后再补（见 §7） |
 | 发布频率/版本号 | 版本号沿用 `YYYY.M.D`；**Marketplace 不接受同一版本号重复上传**，每次更新必须升版本 |
-| 内测包用户能否直接更新到市场版 | **不能自动**。磁盘安装（含插件内自更新安装的包）在 IDE 里无市场订阅，不会收到市场更新；需**一次性迁移**到市场渠道（详见 §10.3） |
+| 内测包用户能否直接更新到市场版 | **能**。IDE 的插件更新检查不区分安装来源——pluginId 一致且市场版本更高即提示更新（反编译实证见 §10.3）；内测用户此前「看不到市场更新」的真因是内测版版本号领先货架版，平台判无更新 |
 
 ---
 
@@ -343,27 +343,35 @@ flowchart TD
 
 ### 10.3 内测用户能否直接更新到市场新版本？（重要）
 
-**结论：在「已安装插件列表」里看不到更新提示、也不能在那里手动更新；但在「Marketplace 搜索页」可以手动点 Update（这同时也是迁移动作）。** IDE 的插件更新机制按**安装来源**区分（官方帮助文档明确）：
+**结论：能。** IDE 的插件更新检查**不区分安装来源**——只要 pluginId 与 Marketplace 上的一致、且市场版本高于本地版本，就会收到更新提示（`Settings → Plugins → Installed` 出现 **Update 按钮**，`⚙ → Check for Updates` 也会列出）。
 
-- **从 Marketplace 安装** → 插件管理器记录该插件的仓库元数据（ID/版本/渠道），此后 IDE 自动检查更新、插件列表出现 **Update 按钮**、可配置自动更新；
-- **从磁盘安装**（`Install Plugin from Disk` **以及本插件内置「检查更新」下载的 zip**——`PlatformPluginInstaller` 卸载旧版+解压新版，安装语义与磁盘安装相同）→ IDE **没有该插件的市场订阅**：`Settings → Plugins → Installed` 列表只显示本地版本（无"有新版本"标记、无 Update 按钮），IDE 的更新检查（含 ⚙ → Check for Updates）也不会列出它。
+**反编译实证（IDEA 2026.2.3，2026-10-26 核实）**：
 
-**但手动更新有一扇门**：`Settings → Plugins → Marketplace` 搜索页按 **pluginId** 匹配已安装插件——市场版本高于本地版本时，该插件显示 **Update 按钮**（而非 Install）。点击 Update = 从市场下载安装新版并覆盖磁盘版，一次操作同时完成两件事：① 手动更新到市场新版；② 安装来源切换为 Marketplace，此后自动更新由 IDE 接管。个别版本若显示 Install 而非 Update，点击效果等同（覆盖安装）。
+- `UpdateChecker.collectUpdateablePlugins()`（`intellij.platform.feedback.jar`）对已装插件的筛选条件**只有** `!isBundled() || allowBundledUpdate()`，**没有任何安装来源判定**；
+- `UpdateChecker.checkInstalledPluginUpdates()` 取这批 pluginId 后，按 **pluginId** 向仓库（Marketplace 后端 + 已配置的自定义 host）查询；
+- `PluginUpdateCheckService.getPluginUpdate(pluginId, indicator)`（`intellij.platform.ide.impl.jar`，Plugins 页面单插件检查用的新 API）同样只收 pluginId，无来源参数；
+- `UpdateCheckerPluginsFacadeImpl.getInstalledPlugins()` = `PluginManagerCore.getPlugins()`，全量已装插件，无过滤。
+
+**那为什么内测用户「看不到市场更新」？** 因为内测版版本号**总是领先货架版**（`-beta.N` 先发、正式版后上架），平台比较后判「无更新」。这是**版本比较的结果，不是订阅缺失**。一旦货架版本追平或超过内测版（例如货架已到 `2026.10.23`，而用户装的是 `2026.10.23-beta.2`/`beta.3`），更新提示就会出现。
+
+> ⚠️ **本节 2026-10-26 之前的旧结论（「磁盘安装 → IDE 无市场订阅 → 收不到市场更新」）已证伪并订正**。旧结论据官方帮助文档的「安装来源」表述推得，未做反编译核实；实测（用户反馈：本地磁盘安装也能收到市场提示）与上述反编译均不支持该结论。**教训**：平台行为类断言须以反编译/实测为准，文档转述不足以立论。
+
+**迁移路径（仍然有效，但性质是「可选」而非「必需」）**：`Settings → Plugins → Marketplace` 搜索页按 pluginId 匹配已安装插件，市场版本更高时显示 **Update**（而非 Install），点一次即从市场覆盖安装，此后由 IDE 接管自动更新。个别版本若显示 Install 而非 Update，点击效果等同（覆盖安装）。
 
 ```mermaid
 flowchart TD
-    A["内测包安装方式"] -->|"手动 Install Plugin from Disk"| D["磁盘安装<br/>（IDE 无该插件市场订阅）"]
+    A["内测包安装方式"] -->|"手动 Install Plugin from Disk"| D["磁盘安装<br/>（IDE 不记录来源，但更新检查不看来源）"]
     A -->|"插件内检查更新<br/>update.json → Gitee zip"| D
-    D --> L1["Installed 插件列表<br/>只显示本地版本号"]
-    L1 --> Q1{"能看到市场新版本吗？"}
-    Q1 -->|"否"| X1["无更新标记、无 Update 按钮<br/>Check for Updates 也不列出"]
-    Q1 -->|"另寻路径"| M["Marketplace 搜索页<br/>按 pluginId 匹配已安装 → 显示 Update 按钮"]
-    M --> OK["点击 Update：下载市场新版覆盖安装<br/>来源切换为 Marketplace → IDE 自动接管更新"]
+    D --> L1["Installed 插件列表<br/>按 pluginId 参与更新检查"]
+    L1 --> Q1{"市场版本 > 本地版本？"}
+    Q1 -->|"是"| OK["出现 Update 按钮<br/>Check for Updates 也列出 → 点一次即覆盖安装"]
+    Q1 -->|"否（内测版领先货架版时）"| X1["无更新标记<br/>这是版本比较结果，不是订阅缺失"]
+    OK --> M["安装来源切换为 Marketplace<br/>此后 IDE 接管自动更新"]
 ```
 
 **迁移步骤（内测用户一次性操作）**：
 
-1. 确认市场已发布版本 **≥ 内测用户当前版本**（避免迁移时被市场旧版"降级"）；
+1. 确认市场已发布版本 **≥ 内测用户当前版本**（避免迁移时被市场旧版"降级"）——注意内测版通常领先货架版，货架追平前市场不会给出更新提示；
 2. 内测用户打开 `Settings → Plugins → Marketplace`，搜索插件名：
    - 市场版本更高 → 直接点 **Update**（同 pluginId 覆盖安装，按提示重启）；
    - 未显示 Update → 点 Install 覆盖安装（效果等同）；
@@ -378,7 +386,7 @@ flowchart TD
 | 内测群（迁移后） | Marketplace | 覆盖安装一次即切换，之后自动更新 |
 | 正式用户 | Marketplace | 主渠道 |
 
-> 本质原因：插件内自更新是插件**自己的代码**实现（检查 update.json → 下载 zip → 安装），不经过 IDE 插件管理器的市场订阅机制；要让 IDE 接管更新，唯一的途径是插件从 Marketplace 安装一次。
+> 两条通道的关系：插件内自更新是插件**自己的代码**实现（检查 `update/update.json` → 从 Gitee 下载 zip → 安装），与 IDE 插件管理器**互不干涉**；IDE 那条按 pluginId 检查市场版本，与安装来源无关。两者可并存，但**版本号必须一致**，否则用户会看到「一条通道说有新版、另一条说没有」的困惑。
 
 ---
 

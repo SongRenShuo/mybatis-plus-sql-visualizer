@@ -46,6 +46,14 @@ public class SqlLogToolWindowFactory implements ToolWindowFactory {
             }
         });
 
+        // T-SqlDialectPrewarm：顺序是承重墙——SqlLogPanel 构造链上会创建 SQL 文件类型编辑器
+        // （LogToSqlPanel 结果区、SqlToJavaPanel 输入区），"取平台 SQL 高亮器/按 SQL FileType 建编辑器"
+        // 首查会触发 SqlDialectMappings 的一次性延迟加载（逐条 VirtualFileManager.findFileByUrl），
+        // 在 EDT 上即平台慢操作断言（真机栈：LogToSqlPanel.createResultEditor → FSRecordsImpl.update
+        // → SlowOperations）。这里先把它挪到 BGT 做完再装面板；有界等待 300ms，超时/失败照原样继续。
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlDialectMappingPrewarm.INSTANCE
+                .prewarmAndAwait(project);
+
         SqlLogManager manager = project.getService(SqlLogManager.class);
         SqlLogPanel panel = new SqlLogPanel(project, manager);
         // T-CaptureBack：捕捉开关已回归面板工具栏（T-UN-11 曾挂标题栏，新 UI 下悬停才可见

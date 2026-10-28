@@ -16,7 +16,7 @@
 2. **master 合入 dev 的整簇（本次合并的主体）**：T-VStack 三笔、T-LogRowNumber 两笔、T-RefreshDbSteal、T-ExecCopyFix、T-DepApi、T-PreviewFlash、T-AutoShowMaster、T-AutoShowRecover、T-PortLossBatch1 A~D、v2026.9.9 发行（版本号 + CHANGELOG 版本段 + 发行说明 + preview 清单），以及合并提交本身与两份文档。
 3. 合并带进来的上游 assets（如 `docs/images/t-vstack-requirement.png`、`ConsoleReplayGuard.kt`、`CopyFeedback.kt` 等 master 侧新文件）。
 
-**r2 独有（28 提交）**：竞品应答主线——冷启动组合拳与承接 MyBatis Log Free 老用户（plugin.xml 描述 / README / marketplace 自定义 HTML / 发布流程）、弹窗克制设计红线（`docs/设计规范-弹窗克制红线.md`）、竞品翻车场景金样矩阵 X1~X8、N-9 测试资产真实断言增强、O-6 WrapperSearchService 服务链通道、O-8 字符串版 QueryWrapper 服务链三处缺陷修复（var 消费语义 / `service.query` 无预览 / DELETE 丢 last）、M55/M56 立项文档、Mybatis Log Ultra 对标调研报告、生成测试功能跟随 dev 一致下线。
+**r2 独有（28 提交）**：竞品应答主线——冷启动组合拳与承接 MyBatis Log Free 老用户（plugin.xml 描述 / README / marketplace 自定义 HTML / 发布流程）、弹窗克制设计红线（`docs/规范/设计规范-弹窗克制红线.md`）、竞品翻车场景金样矩阵 X1~X8、N-9 测试资产真实断言增强、O-6 WrapperSearchService 服务链通道、O-8 字符串版 QueryWrapper 服务链三处缺陷修复（var 消费语义 / `service.query` 无预览 / DELETE 丢 last）、M55/M56 立项文档、Mybatis Log Ultra 对标调研报告、生成测试功能跟随 dev 一致下线。
 
 两侧几乎不重叠：r2 的代码改动集中在 `WrapperSearchService` / `WrapperLocator` / `UpdateDeleteStatement` / `Dialect` / `SqlGenerator` / `SqlPreviewService` / `DatabaseSchemaResolver` / 矩阵测试，dev 本次带来的代码改动集中在 log 包 / 预览包 / gutter。因此**源码零冲突**。
 
@@ -39,7 +39,7 @@
 2. **plugin.xml 保留 r2 版**（合并结果与 r2 逐字节相同）——r2 的竞品应答描述文案（冷启动组合拳 / 承接老用户 / 弹窗克制）一字不丢；dev 侧自 base 起未改该文件。
 3. **r2 的代码资产全部在位**：`Dialect.supportsDeleteLimit`（4 处）、`SqlPreviewService.entityResolutionFailed`（2 处）、`WrapperLocator.isWrapperVariable`（10 处）在合并结果中与 r2 侧计数一致。
 4. **版本号走向 2026.9.8 → 2026.9.9**：base 与 r2 均为 2026.9.8，dev 因 master 的发行提交为 2026.9.9，合并取 dev 值。与 CHANGELOG 已含 `[2026.9.9]` 段、`build.gradle.kts` 已含 v2026.9.9 changeNotes 自洽。
-5. **r2 独有的 docs 资产**（`设计规范-弹窗克制红线.md`、竞品调研/对标报告、金样矩阵计划文档、marketplace 自定义页）dev 侧不存在，自动保留。
+5. **r2 独有的 docs 资产**（`规范/设计规范-弹窗克制红线.md`、竞品调研/对标报告、金样矩阵计划文档、marketplace 自定义页）dev 侧不存在，自动保留。
 
 ## 四、解决原则
 
@@ -117,7 +117,7 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
   - `docs/变更记录.md`：并集 189 行（r2 176 ∪ dev 独有 13），去重、日期倒序、无丢行。该文件两侧非表格行内容**逐字相同**（实测），故可直接按「表头 + 并集行 + 表尾」重写。
   - `docs/MEMORY.md`：该文件非表格区域两侧**各有改动**（不是纯表格文件），因此不能沿用上一条的整表重写法——首次用「表头取 r2 侧」的脚本会把 dev 对非表格区的改动抹掉，遂改用 `git checkout -m` 恢复真实自动合并结果、只替换冲突块，并集后块内 6 行（r2 2 ∪ dev 4）。
   - 两文件最终与预演产物逐行比对：行数相同且工作树为预演的超集，确认自动合并区内容零丢失。
-- **Wave 2 语义清扫**：bundle zh/en **548/548** 键完全对称、零重复键；`testgen` / `TestAssetGenerator` 全树零残留（双线下线彻底）；r2 竞品应答资产在位（`supportsDeleteLimit`、`entityResolutionFailed`、`isWrapperVariable`；`docs/设计规范-弹窗克制红线.md`、`SqlPreviewSpecMatrixTest`、marketplace 自定义页）；dev 上游能力在位（`sequenceNumber`、`isModuleBasedLaunch`、`consoleAttachedToMe`、`ConsoleReplayGuard`、`awaitPrewarmedTempFile`）；`plugin.xml` 合并结果与 r2 逐字节相同。
+- **Wave 2 语义清扫**：bundle zh/en **548/548** 键完全对称、零重复键；`testgen` / `TestAssetGenerator` 全树零残留（双线下线彻底）；r2 竞品应答资产在位（`supportsDeleteLimit`、`entityResolutionFailed`、`isWrapperVariable`；`docs/规范/设计规范-弹窗克制红线.md`、`SqlPreviewSpecMatrixTest`、marketplace 自定义页）；dev 上游能力在位（`sequenceNumber`、`isModuleBasedLaunch`、`consoleAttachedToMe`、`ConsoleReplayGuard`、`awaitPrewarmedTempFile`）；`plugin.xml` 合并结果与 r2 逐字节相同。
 - **Wave 3**：全量 `./gradlew test --no-daemon` **3720 tests / 0 failures / 0 errors / 6 skipped 绿**，289 个测试类（无 `tests="0"` 陈旧结果文件）。较 dev 侧多 3 类 / 27 例，为 r2 竞品应答独有测试。
 - **Wave 4**：`./gradlew verifyPlugin --no-daemon` **BUILD SUCCESSFUL**（9m22s），三目标报告 `verification-verdict.txt` 均 **Compatible**，计数与 dev 侧合并后完全一致（同源代码面）：
 

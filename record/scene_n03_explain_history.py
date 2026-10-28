@@ -1,74 +1,119 @@
 # -*- coding: utf-8 -*-
-"""N03「EXPLAIN 跨次对比」新增录制（T-DocsRefresh1023 / R61 + R90）。
+"""N03 EXPLAIN 跨次对比（explain-history-compare.gif）20261028 重写。
 
-前置（硬）：
-1. 预览绑 **mpj_demo@localhost**（带 ANSI_QUOTES）；
-2. **设置页「SQL 预览 → 预览面板内结构化渲染 EXPLAIN」必须开启**——「与上次执行对比」
-   这个入口长在 `ExplainPlanResultView`（结构化视图）里，默认关闭时 EXPLAIN 走原生控制台，
-   面板内没有对比入口（源码：ExplainPlanResultView.showComparison → panel.explain.compare.title）。
-   这是本轮查证的硬前提，未开启则本脚本只能录到控制台计划、录不到对比。
-3. 「跨会话保留原始 EXPLAIN 计划」可关（默认关）——会话内对比不需要它。
+前置（prep，不入镜）：
+1. 设置页「预览面板内结构化渲染 EXPLAIN」已开启（默认关闭，关着只能走原生控制台）；
+2. **已有一条不同计划的基线快照**——本脚本用「建索引 → 执行一次 → 删索引」制造：
+   有索引时 `type=ref / key=idx_share_scheme / rows=2`，删索引后 `type=index / key=PRIMARY / rows=4`，
+   于是对比条出现真实差异（不是「计划无变化」）；
+3. 预览面板已开（mpj DeviceInfoServiceImpl#joinListEntity，绑 mpj_demo）。
 
-分镜（约 10 秒）：
-1. 预览已开（联表 SELECT），点「执行计划」→ 结构化/控制台计划出现，停 2.4s
-2. 再点「执行计划」（第二次）→ 计划视图出现「与上次执行对比」，停 2.0s
-3. 点「与上次执行对比」→ 计划树逐节点标注 cost/rows 变化，停 2.2s
-4. 关预览，停 0.9s
+分镜（约 9 秒）：
+1. 预览面板定格
+2. 点「执行计划」→ 结构化计划弹窗
+3. 拖大弹窗（默认宽度会把右上角的「与上次执行对比」块裁掉）
+4. 凝视计划表 → 凝视对比块（`与上次执行对比` + 变化行）
+5. 关闭弹窗
 
-坑：结构化渲染是**实验特性、默认关闭**。录 N03 前必须先在设置页开启，录完还原。
-若只想录「原生控制台计划」，那不是本图的主题（本图主题是跨次对比），不要用那张冒充。
+坑（20261028 实测）：
+① 对比块右对齐，**默认 940 宽弹窗下它整块被裁到屏幕外**（robot 算出 x≈2569），
+   必须把弹窗拉到 ~1330 宽才可见；
+② 弹窗尺寸不跨次保留 → 只能在 take 内拖；
+③ 对比基线取历史快照（每条 SQL 最多 5 份），所以「先跑一次再改环境」是造差异的通用手法。
 """
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
 import pyautogui
-from gifkit import Recorder, click, wait_stable
-from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+from gifkit import Recorder
+from locate import sandbox_pid, windows
+from robot import find_components, click_component
+
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "n03_explain_history.mp4")
 
-OX, OY = REGION[0], REGION[1]
-EXPLAIN = (1020, 208)        # 预览按钮行「执行计划」
-COMPARE = (700, 330)         # 「与上次执行对比」（结构化视图头部；原生控制台路径下不存在时跳过）
-CLOSE = (1185, 806)
+PREVIEW = "//div[@accessiblename='SQL Visualizer - SQL 预览']"
+EXPLAIN_BTN = ("(//div[@text='执行计划'])[1]",
+               "(//div[contains(@accessiblename,'执行计划')])[1]")
+CLOSE_BTN = "//div[@text='关闭']"
 
-
-def abs_pt(p):
-    return (p[0] + OX, p[1] + OY)
+TARGET_RECT = (300, 40, 1330, 940)      # 拖大后的弹窗（落在录制区内）
 
 
 def has(xp):
     return len(find_components(xp)) > 0
 
 
+def dialog_rect():
+    pid = sandbox_pid()
+    for _h, p, t, r in windows():
+        if p == pid and t.strip() == "执行计划":
+            return r
+    return None
+
+
 def main():
-    if not has("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
-        raise RuntimeError("前置未满足：预览未打开")
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+
+    # ---- prep（不入镜）：关掉残留弹窗，确认预览在 ----
+    if has(CLOSE_BTN):
+        click_component(CLOSE_BTN)
+        time.sleep(1.2)
+    if not has(PREVIEW):
+        raise RuntimeError("prep: 预览未打开")
 
     rec = Recorder(REGION, OUT)
     time.sleep(1.0)
     rec.start()
     try:
-        time.sleep(1.0)
-        click(*abs_pt(EXPLAIN), move_dur=0.3)      # 第一次 EXPLAIN
-        wait_stable(REGION)
-        time.sleep(2.4)
+        # 1. 预览定格
+        pyautogui.moveTo(1150, 480, duration=0.7)
+        time.sleep(1.2)
 
-        click(*abs_pt(EXPLAIN), move_dur=0.3)      # 第二次 → 出现对比入口
-        wait_stable(REGION)
-        time.sleep(2.2)
+        # 2. 执行计划
+        for xp in EXPLAIN_BTN:
+            if has(xp):
+                click_component(xp)
+                break
+        time.sleep(5.5)
 
-        # 对比入口只在结构化渲染开启时存在；关闭态下第二次计划直接在控制台出现，
-        # 这里用容错点击：点不到就不阻断录制。
-        click(*abs_pt(COMPARE), move_dur=0.3, pauses=(0.15, 2.2))
+        # 3. 放大弹窗（默认宽度会把右上角对比块裁到屏幕外）
+        #    该对话框**不可拖拽改尺寸**（20261028 实测：拖右下角无效），只能 SetWindowPos。
+        rect = dialog_rect()
+        if rect is None:
+            raise RuntimeError("执行计划弹窗未出现")
+        import ctypes
 
-        click(*abs_pt(CLOSE), move_dur=0.3)
-        time.sleep(0.9)
+        hwnd = [0]
+        pid = sandbox_pid()
+        for h, p, t, r in windows():
+            if p == pid and t.strip() == "执行计划":
+                hwnd[0] = h
+        u = ctypes.windll.user32
+        u.SetWindowPos.argtypes = ([ctypes.c_void_p] * 2 + [ctypes.c_int] * 4
+                                   + [ctypes.c_uint])
+        u.SetWindowPos(ctypes.c_void_p(hwnd[0]), ctypes.c_void_p(0),
+                       TARGET_RECT[0], TARGET_RECT[1],
+                       TARGET_RECT[2], TARGET_RECT[3], 0x0004)   # SWP_NOZORDER
+        time.sleep(1.6)
+
+        # 4. 凝视计划表 → 对比块（右上）
+        pyautogui.moveTo(700, 480, duration=0.8)
+        time.sleep(1.2)
+        pyautogui.moveTo(1380, 210, duration=0.8)
+        time.sleep(1.8)
+
+        # 5. 关闭
+        if has(CLOSE_BTN):
+            click_component(CLOSE_BTN)
+        time.sleep(1.2)
     finally:
         rec.stop()
         print(f"frames={rec.frames} out={OUT}")

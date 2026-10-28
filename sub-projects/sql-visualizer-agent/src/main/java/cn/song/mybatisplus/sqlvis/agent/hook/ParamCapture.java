@@ -31,6 +31,22 @@ public final class ParamCapture {
     private final Map<Integer, Object[]> captured = new TreeMap<Integer, Object[]>();
 
     /**
+     * 织入通道入口（T-ConnCastSafety）：语句面把白名单 setter 的 {@code (int index, T value)}
+     * 首两参直接送进来——连接代理关闭后，参数捕获不能再依赖语句代理。
+     * 与 {@link #tryCapture} 同口径（值渲染、默认 toString 降级、脱敏在 {@link #snapshot} 做），
+     * 差别只是这里已经知道「哪个方法被调过」，类型名按值形态推断。
+     */
+    public void capture(int index, Object value) {
+        final String typeName = value == null ? "NULL" : simpleTypeName(value);
+        captured.put(index, new Object[]{renderValue(value), typeName});
+    }
+
+    /** 是否 setter 白名单方法（织入器按此决定要不要在方法头插参数钩子）。 */
+    public static boolean isSetter(String methodName) {
+        return WHITELIST.contains(methodName);
+    }
+
+    /**
      * 尝试捕获；命中白名单返回 true（调用方直接放行原调用），否则 false。
      * 形态：setXxx(int parameterIndex[, T value][, Calendar/int scaleOrType])。
      */

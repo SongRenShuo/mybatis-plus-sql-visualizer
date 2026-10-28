@@ -139,4 +139,159 @@ class SqlLogSearchRowTimeTest : BasePlatformTestCase() {
         // capture 来源下 timestamp 与 logTimestamp 同值（测试条目），形态一致仅验证来源分支可达
         assertEquals("2024-01-15 10:30:45", batchCopyTimestamps(listOf(rowEntry(5))))
     }
+    // ---------- T-LogListHeader：头部行改版后「所见即所搜」不回归 ----------
+
+    /**
+     * 回归守卫：头部行改版（元信息从左侧栏搬到 SQL 上方 + 宽度不足时剥日期）之后，
+     * **时间与行号搜索必须仍然可用**。
+     *
+     * 为什么需要这条：行号/时间搜索依赖「显示文本 == 可搜文本」这一契约。改版动了显示位置
+     * 与裁剪策略（窄宽度下走 `clipSqlFragments` 顺序截断），任何一侧漂移都会让
+     * 用户「看得见却搜不到」。本用例直接走**真实渲染链路**取头部行文本，再拿去搜索，
+     * 闭合两端一致性。
+     */
+    fun test头部行可见时段可搜_窄宽与宽侧栏一致() {
+        val state = PluginSettings.getInstance().state
+        val savedOn = state.logTimestampEnabled
+        val savedFmt = state.logTimestampFormat
+        val savedMode = state.logListSqlDisplayMode
+        try {
+            state.logTimestampEnabled = true
+            state.logTimestampFormat = "yyyy-MM-dd HH:mm:ss"
+            state.logListSqlDisplayMode = "KEYWORD_WRAP"
+            val entry = LogSqlEntry(
+                rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+                timestamp = 1_700_000_000_000L, logTimestamp = 1_700_000_000_000L,
+                executionTimeMs = 5L, sequenceNumber = 42L,
+                sourceFile = "src/main/java/SomeServiceImpl.java", sourceLine = 7,
+            )
+            val full = requireNotNull(timestampDisplayText(entry)).removeSurrounding("[", "]")
+            val timeOnly = full.substringAfterLast(' ')
+
+            for (width in listOf(900, 420, 320, 280)) {
+                val list = javax.swing.JList<Any>().apply { setSize(width, 400) }
+                val renderer = LogEntryListCellRenderer()
+                renderer.getListCellRendererComponent(list, entry, 0, false, false)
+                val header = renderer.metaTextForTest
+                // 头部行里出现的每一个时间片段都必须是可搜的
+                if (header.contains(timeOnly)) {
+                    assertEquals(
+                        "[$width] 头部行可见时段 $timeOnly 必须可搜（header=$header）",
+                        1,
+                        filterBySearch(listOf(entry), timeOnly).size,
+                    )
+                }
+                if (header.contains(full)) {
+                    assertEquals(
+                        "[$width] 头部行可见完整时间 $full 必须可搜",
+                        1,
+                        filterBySearch(listOf(entry), full).size,
+                    )
+                }
+            }
+        } finally {
+            state.logTimestampEnabled = savedOn
+            state.logTimestampFormat = savedFmt
+            state.logListSqlDisplayMode = savedMode
+        }
+    }
+
+    /** 头部行改版后，行号搜索仍按精确匹配工作（`#42` 与 `42` 都命中、`43` 不命中）。 */
+    fun test头部行改版后_行号搜索仍精确匹配() {
+        val entry = LogSqlEntry(
+            rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+            timestamp = 1_700_000_000_000L, sequenceNumber = 42L,
+        )
+        assertEquals("#42 应命中", 1, filterBySearch(listOf(entry), "#42").size)
+        assertEquals("42 应命中", 1, filterBySearch(listOf(entry), "42").size)
+        assertEquals("43 不应命中", 0, filterBySearch(listOf(entry), "43").size)
+    }
+
+    /** 头部行改版后，时间戳开关关闭时不参与时间匹配（既有语义不回归）。 */
+    fun test头部行改版后_时间戳关闭则不参与时间匹配() {
+        val state = PluginSettings.getInstance().state
+        val saved = state.logTimestampEnabled
+        try {
+            state.logTimestampEnabled = false
+            val entry = LogSqlEntry(
+                rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+                timestamp = 1_700_000_000_000L,
+            )
+            assertNull("关闭后无时间片段", timestampDisplayText(entry))
+            assertEquals("关闭后时段查询不应命中", 0, filterBySearch(listOf(entry), "06:13:20").size)
+        } finally {
+            state.logTimestampEnabled = saved
+        }
+    }
+
+    /** 自定义时间格式下，头部行可见文本同样可搜（防格式漂移）。 */
+    fun test自定义时间格式_头部行可见文本可搜() {
+        val state = PluginSettings.getInstance().state
+        val savedOn = state.logTimestampEnabled
+        val savedFmt = state.logTimestampFormat
+        try {
+            state.logTimestampEnabled = true
+            val entry = LogSqlEntry(
+                rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+                timestamp = 1_700_000_000_000L, logTimestamp = 1_700_000_000_000L,
+            )
+            for (fmt in listOf("MM/dd HH:mm:ss", "HH:mm:ss", "yyyyMMddHHmmss")) {
+                state.logTimestampFormat = fmt
+                val display = requireNotNull(timestampDisplayText(entry)).removeSurrounding("[", "]")
+                assertEquals(
+                    "格式 $fmt 下可见文本 $display 必须可搜",
+                    1,
+                    filterBySearch(listOf(entry), display).size,
+                )
+            }
+        } finally {
+            state.logTimestampEnabled = savedOn
+            state.logTimestampFormat = savedFmt
+        }
+    }
+    /**
+     * 回归守卫（用户 2026-10-26 定案）：**时间显示格式严格跟随设置，不随宽度变化**。
+     *
+     * 曾实现过「窄宽度剥掉日期只留时刻」，被用户否决——设置里配的是
+     * `yyyy-MM-dd HH:mm:ss`，宽栏窄栏就该都显示它。本用例在多个宽度下渲染同一份配置，
+     * 断言可见时间片段逐字节一致。
+     */
+    fun test头部行时间格式不随宽度变化() {
+        val state = PluginSettings.getInstance().state
+        val savedOn = state.logTimestampEnabled
+        val savedFmt = state.logTimestampFormat
+        val savedMode = state.logListSqlDisplayMode
+        try {
+            state.logTimestampEnabled = true
+            state.logListSqlDisplayMode = "KEYWORD_WRAP"
+            val entry = LogSqlEntry(
+                rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(),
+                timestamp = 1_700_000_000_000L, logTimestamp = 1_700_000_000_000L,
+                executionTimeMs = 5L, sequenceNumber = 42L,
+                sourceFile = "src/main/java/SomeServiceImpl.java", sourceLine = 7,
+            )
+            for (fmt in listOf("yyyy-MM-dd HH:mm:ss", "MM/dd HH:mm:ss", "HH:mm:ss")) {
+                state.logTimestampFormat = fmt
+                val renderer = LogEntryListCellRenderer()
+                var first: String? = null
+                for (width in listOf(900, 420, 320, 280, 240, 200)) {
+                    val list = javax.swing.JList<Any>().apply { setSize(width, 400) }
+                    renderer.getListCellRendererComponent(list, entry, 0, false, false)
+                    val header = renderer.metaTextForTest
+                    // 提取头部行中的时间片段（方括号包裹）
+                    val m = Regex("""\[[^\]]*]""").find(header)?.value
+                    if (first == null) first = m
+                    assertEquals(
+                        "[$fmt @ ${width}px] 时间片段应与最宽栏一致（格式跟随设置，不随宽度变）: header=$header",
+                        first,
+                        m,
+                    )
+                }
+            }
+        } finally {
+            state.logTimestampEnabled = savedOn
+            state.logTimestampFormat = savedFmt
+            state.logListSqlDisplayMode = savedMode
+        }
+    }
 }

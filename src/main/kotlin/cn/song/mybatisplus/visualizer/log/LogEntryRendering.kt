@@ -109,11 +109,15 @@ internal fun applyCrudColorMark(
     tint: Color?,
     isSelected: Boolean,
     list: javax.swing.JList<*>?,
+    dashed: Boolean = false,
 ) {
     val listBg = list?.background ?: cell.background
     val selectionBg = list?.selectionBackground ?: listBg
     when (SqlListTypeColor.styleOf()) {
         SqlListTypeColor.STYLE_BAR -> {
+            // T-DdlTypeColor：DDL 走虚线绘制。把形态告知色条面板（自绘时读它），
+            // 而不是在这里直接画——绘制逻辑归组件自己，本函数只管「该显示什么」。
+            if (colorBar is TypeColorBar) colorBar.dashed = dashed
             if (tint == null) {
                 setOpaqueIfChanged(colorBar, false)
             } else {
@@ -306,152 +310,33 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
 }
 
 /**
- * 日志列表条目单元格渲染器（F-44-2 重写；T-LogListFreeze-04 弃 HTML 通道）：
- * 双 [SimpleColoredComponent] 两行结构（T-TwoLine 语义保留：元信息行在上、SQL 高亮行在下）。
- * 原 JLabel+HTML 通道每次 setText 都触发 BasicHTML 解析排版，叠加可变行高逐条测量——
- * 16s EDT Freeze 报告主因；片段通道渲染只剩轻量文本测量，配合固定行高布局走 O(1) 快路径。
- * 文本原样着色（无 HTML 转义面，注入场景不复存在）；摘要构造时已在首行截断（[LogSqlEntry.summary]），无换行处理面。
- * 抽为具名 internal 类，便于单元测试直接渲染各种条目状态、锁定配色语义。
+ * 日志列表条目单元格渲染器（T-LogListHeader）。
+ *
+ * 版面：`[色条] 头部行（全部元信息） / SQL 行… / 可选错误行`。
+ * 头部行顺序与优先级裁剪见 [RailCellRendererBase.bindHeaderLine] 与
+ * [clipSqlFragments] 的顺序截断（与 2026.10.23 一致）；条目分割靠上下留白 + 底部细线。
+ *
+ * 演变：`bed58b64` 的 88px 左侧信息轨与进度条已被用户实测否决并撤除；
+ * `metaLine` 保留为头部行的兼容别名，存量测试断言零改动继续有效。
+ *
+ * 渲染热路径约束（T-LogListFreeze 系列）：不在逐格渲染里增删组件、不新建 Border/Color 实例。
  */
-internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
+internal class LogEntryListCellRenderer : RailCellRendererBase() {
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
 
-    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
+    /** O-90：同模板计数快照（「×N 同结构」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
     var templateCounts: Map<String, Int> = emptyMap()
 
-    /** 元信息行（internal 供 UI 测试遍历片段断言文本与着色）。 */
-    internal val metaLine = SimpleColoredComponent()
+    /** 当前列表可见条目的最大耗时（refreshList 更新；进度条已退役，仍留作诊断读数与测试断言）。 */
+    var maxDurationMs: Long? = null
 
-    /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
-    private val sqlLinePool = mutableListOf(SimpleColoredComponent())
+    override fun templateCountsSnapshot(): Map<String, Int> = templateCounts
 
-    /** SQL 首行（SINGLE_LINE 恒为唯一 SQL 行；测试断言兼容 T-LogListFreeze-04 单行语义）。 */
-    internal val sqlLine: SimpleColoredComponent get() = sqlLinePool[0]
+    override fun maxDurationMsSnapshot(): Long? = maxDurationMs
 
-    /** 全部 SQL 行（internal 供 UI 测试按行断言多行模式渲染）。 */
-    internal val sqlLines: List<SimpleColoredComponent> get() = sqlLinePool
+    override fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts
 
-    private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
-
-    /**
-     * T-CrudColor：左侧类型色条（[SqlListTypeColor.STYLE_BAR] 下着色可见；
-     * 其他样式 `isOpaque=false` 但仍**占位**——占位是刻意的：切换样式时文本左缘不位移，
-     * 且左内边距 5 + 色条 3 = 原 8px，文本左缘像素位置与改造前一致。
-     */
-    internal val colorBar = JPanel().apply {
-        preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
-        isOpaque = false
-    }
-
-    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
-    internal val normalBorder: Border = BorderFactory.createCompoundBorder(
-        BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-        EmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    init {
-        layout = BorderLayout()
-        isOpaque = true
-        metaLine.isOpaque = false
-        sqlLinePool[0].isOpaque = false
-        linesPanel.add(metaLine)
-        linesPanel.add(sqlLinePool[0])
-        // T-CrudColor：色条挂 WEST——CENTER 已被组件池面板占用，WEST 空闲且零结构冲突
-        add(colorBar, BorderLayout.WEST)
-        add(linesPanel, BorderLayout.CENTER)
-        border = normalBorder
-    }
-
-    /** 元信息行渲染文本（测试断言用：全部片段拼接、trim 段间距）。 */
-    val metaTextForTest: String
-        get() = buildString {
-            val it = metaLine.iterator()
-            while (it.hasNext()) append(it.next())
-        }.trim()
-
-    override fun getListCellRendererComponent(
-        list: javax.swing.JList<*>?,
-        value: Any?,
-        index: Int,
-        isSelected: Boolean,
-        cellHasFocus: Boolean,
-    ): java.awt.Component {
-        val entry = value as? LogSqlEntry
-
-        // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
-        val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
-        // selectionForeground（耗时着色随 formatDurationFragment 的选中白语义）
-        val useSelectionFill = isSelected
-        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
-
-        val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
-        else (list?.foreground ?: JBColor.foreground())
-        metaLine.foreground = fg
-        metaLine.clear()
-        val lineFragments = if (entry != null) {
-            val metadata = SqlEntryPresentation.metadata(
-                entry, isSelected, PluginSettings.getInstance().state.showDurationInLogList,
-                templateCounts, dedupeCounts, showLogDetails = true,
-            )
-            clipForList(metadata, list, this, SqlListTypeColor.BAR_WIDTH).forEach {
-                metaLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
-            }
-            sqlLineFragmentsFor(entry)
-        } else null
-        // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
-        ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
-        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
-        // 依 supply.matchingFragments 精确命中区间；fragments 文本已在上面 append，此处在片段级叠加 STYLE_SEARCH_MATCH）
-        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
-        sqlLinePool.forEachIndexed { i, comp ->
-            comp.foreground = fg
-            comp.clear()
-            lineFragments?.getOrNull(i)?.let { fragments ->
-                clipForList(fragments, list, this, SqlListTypeColor.BAR_WIDTH)
-                    .forEach { f -> comp.append(f.text, if (isSelected) selectedAttributes(f.attributes, fg) else f.attributes) }
-            }
-            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
-        }
-        // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
-        return this
-    }
-
-    /** SQL 行组件池伸缩到 n 行（首位恒保留——[sqlLine] 测试缝；收缩移除末尾）。 */
-    private fun ensureSqlLineCount(n: Int) {
-        while (sqlLinePool.size < n) {
-            val comp = SimpleColoredComponent()
-            comp.isOpaque = false
-            sqlLinePool += comp
-            linesPanel.add(comp)
-        }
-        while (sqlLinePool.size > maxOf(1, n)) {
-            linesPanel.remove(sqlLinePool.removeAt(sqlLinePool.size - 1))
-        }
-    }
-
-    /**
-     * SQL 行片段（T-ListMode 模式分流）：SINGLE_LINE 直渲染不缓存（固定行高 + 主题切换实时生效）；
-     * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
-     */
-    private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        // R60 → T-MagpieGems W2：展示文本按脱敏模式渲染、原始条目不动；缓存以显示模式和
-        // 脱敏模式（OFF/WARN 原样、MASK 打码、BLOCK 占位四态互异）为键，防切换后复用旧语义片段。
-        val maskMode = PluginSettings.getInstance().displayMaskMode()
-        val sql = withTerminator(displaySqlForList(entry, mode, maskMode))
-        if (mode == SqlListDisplayMode.SINGLE_LINE) {
-            return listOf(SqlListFragmentRenderer.renderFragments(sql))
-        }
-        val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMaskMode == maskMode.name }
-            ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
-                entry.cachedListLineFragments = it
-                entry.cachedListLineFragmentsMode = mode
-                entry.cachedListLineFragmentsMaskMode = maskMode.name
-            }
-        return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
-    }
+    override fun showDuration(): Boolean =
+        PluginSettings.getInstance().state.showDurationInLogList
 }
-

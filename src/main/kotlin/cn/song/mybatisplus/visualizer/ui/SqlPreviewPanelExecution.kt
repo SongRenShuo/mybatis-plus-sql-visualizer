@@ -719,11 +719,23 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
                 )
             }
         }
-        // T-DialectGateUx：方言不匹配的两态给就地出口（切数据源 / 打开方言设置），
-        // 其余阻断（目标未知、渲染未知）没有可直接跳转的设置面，保持纯文案。
+        // T-DialectGatePass（2026-10-26 语义对齐，对齐 commit 8619a3af 用户定案「方言不能影响
+        // 最终的执行」）：这两态在 allowDialectGate 侧本就放行（返回 true），预览入口同步去掉
+        // 阻断呈现——提示照旧报出双方方言不一致，但不再用「错误+动作」红条阻断，改走
+        // showStatus 信息态；执行继续与 MATCH 分支同一路径（本回调只管呈现，继续与否由
+        // allowDialectGate 的返回值决定，这里 Unit 即放行）。
+        // 时序坑（同 showDialectGateError 注释）：闸门在同一次调用栈还会经旧 onError 通道再投
+        // 一次纯文案（DataSourceSelector.allowDialectGate 先 onDialectGate 再 onError），同步
+        // showStatus 会被紧随其后的 showError 覆盖——把最终呈现放到下一拍 EDT，两条通道最终
+        // 只留一条提示（若执行随后真报错，真实错误仍会覆盖这条状态，时序上真实错误晚于本拍）。
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT,
-        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE ->
-            showDialectGateError(verdict)
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
+            val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                if (previewDisposed) return@invokeLater
+                resultPanel.showStatus(message)
+            }
+        }
         else -> resultPanel.showError(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict),
         )
@@ -737,6 +749,11 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
  *  - 「打开 SQL 方言设置」→ 平台设置页（EP id = "SQL Dialects"，按 id 取避免整棵设置树实例化）。
  *
  * 文案只解释原因，动作直接通向修复点；用户不必自己翻设置或文档。
+ *
+ * T-DialectGatePass（2026-10-26）：MANUAL_CONFLICT / RERENDER_UNAVAILABLE 已改为放行
+ * （见 [onExecutionDialectGate]），不再走本函数——**保留不删**（后续可能复用），当前唯一
+ * 生产调用方是 AUTO_RERENDER_REQUIRED 分支的「重渲染失败回落 RERENDER_UNAVAILABLE」路径
+ * （该态仍是阻断语义，红条+就地出口照旧）。
  */
 internal fun SqlPreviewPanel.showDialectGateError(
     verdict: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Verdict,

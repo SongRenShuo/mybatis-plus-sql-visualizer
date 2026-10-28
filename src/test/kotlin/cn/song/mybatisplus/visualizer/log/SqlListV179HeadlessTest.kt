@@ -197,28 +197,40 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         }
         val history = HistoryCellRenderer().apply { templateCounts = mapOf(e.structureKey to 4) }
         val expectedCluster = MpSqlVisualizerBundle.message("log.panel.templateBadge", 4)
-        fun render(selected: Boolean, masked: Boolean, historical: Boolean): Pair<String, String> {
+        // T-LogListRail：轨道（metaLine）只放序号/时刻/耗时/类名；库角标、MCP、徽章、报错
+        // 迁到 SQL 区下方注脚行与错误行（宽度不可控，进不了 88px 轨道）。
+        fun render(selected: Boolean, masked: Boolean, historical: Boolean): Triple<String, String, String> {
             PluginSettings.getInstance().state.displayMaskMode = if (masked) "MASK" else "OFF"
             val r = if (historical) history else live
             r.getListCellRendererComponent(list, e, 0, selected, false) // 失焦选中态
-            val meta = if (historical) history.metaLine else live.metaLine
-            val lines = if (historical) history.sqlLines else live.sqlLines
-            return text(meta) to lines.joinToString("\n") { text(it) }
+            return Triple(
+                r.metaTextForTest,
+                r.sqlLines.joinToString("\n") { text(it) },
+                r.errorTextForTest,
+            )
         }
-        val (liveMeta, liveSql) = render(false, false, false)
-        val (histMeta, histSql) = render(false, false, true)
+        val (liveMeta, liveSql, liveDetail) = render(false, false, false)
+        val (histMeta, histSql, histDetail) = render(false, false, true)
         for (meta in listOf(liveMeta, histMeta)) {
             assertTrue(meta, meta.startsWith("#77 "))
             assertTrue(meta, meta.contains("2000ms"))
+            assertTrue("头部行放骨架化类名（Mapper 后缀已剥）: $meta", meta.contains("Order"))
+            assertTrue("头部行放行号: $meta", meta.contains(":42"))
+            assertFalse("正文不得混入轨道", meta.contains("SELECT phone"))
+        }
+        // T-LogListHeader：注脚行已并入头部行，库/MCP/徽章都在 metaTextForTest 里
+        for (meta in listOf(liveMeta, histMeta)) {
             assertTrue(meta, meta.contains("[MySQL]"))
             assertTrue(meta, meta.contains("[MCP]"))
-            assertTrue(meta, meta.contains("[OrderMapper.java:42]"))
             assertTrue(meta, meta.contains(expectedCluster))
-            assertFalse("正文不得混入元信息", meta.contains("SELECT phone"))
         }
         assertTrue(liveMeta, liveMeta.contains("⨉3"))
-        assertTrue(liveMeta, liveMeta.contains("⛔ SQLException"))
-        assertFalse("历史没有实时去重和错误片段", histMeta.contains("⨉3") || histMeta.contains("⛔"))
+        assertTrue("报错独立成行", liveDetail.contains("⛔ SQLException"))
+        // T-LogListRail：历史页**现在也显示报错**（此前 showLogDetails=false 把报错与影响行数一并吞掉，
+        // 与日志页信息集不一致；记录本身带 errorText 时用户理应能看到）。去重计数仍只属实时通道——
+        // 历史条目没有 dedupeCounts 快照，⨉N 不应出现。
+        assertTrue("历史页也应显示报错（对齐日志页信息集）", histDetail.contains("⛔ SQLException"))
+        assertFalse("历史没有实时去重计数", histMeta.contains("⨉3"))
         assertTrue(liveSql, liveSql.contains("13812345678"))
         assertTrue(histSql, histSql.contains("13812345678"))
         assertTrue("默认模式确实按子句换行", live.sqlLines.size >= 2)
@@ -227,8 +239,9 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         assertEquals(SqlListDisplayMode.KEYWORD_WRAP, e.cachedListLineFragmentsMode)
         render(false, false, false)
         assertSame("跨两种渲染器的同态缓存可复用", cached, e.cachedListLineFragments)
-        val (selectedMeta, selectedSql) = render(true, false, false)
-        assertTrue(selectedMeta, selectedMeta.contains("⨉3") && selectedMeta.contains(expectedCluster))
+        val (selectedMeta, selectedSql, selectedDetail) = render(true, false, false)
+        // T-LogListHeader：注脚行已并入头部行，徽章在 metaTextForTest 里
+        assertTrue("$selectedMeta", selectedMeta.contains("⨉3") && selectedMeta.contains(expectedCluster))
         assertTrue(selectedSql, selectedSql.contains("13812345678"))
         assertEquals("失焦选中仍使用平台选中填充", list.selectionBackground, live.background)
         assertEquals(list.selectionForeground, live.metaLine.foreground)

@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.awt.Color
@@ -128,5 +131,36 @@ class SqlListTypeColorTest {
         assertEquals(Color(0xE6EEFC), SqlListTypeColor.blend(light, Color(0x4A86E8), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0xE6F4E7), SqlListTypeColor.blend(light, Color(0x4CAF50), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0xF9E2E2), SqlListTypeColor.blend(light, Color(0xD32F2F), SqlListTypeColor.MIX_NORMAL))
+    }
+
+    // ---------- T-DdlTypeColor：DDL 着色与虚线形态 ----------
+
+    /** CREATE 复用 INSERT 绿、DROP 复用 DELETE 红（不新增设置项）。 */
+    fun testDdl着色复用Dml色() {
+        val p = SqlListTypeColor.STYLE_BAR
+        val create = SqlListTypeColor.colorOf(StatementType.CREATE, p, "#4CAF50")
+        val insert = SqlListTypeColor.colorOf(StatementType.INSERT, p, "#4CAF50")
+        val drop = SqlListTypeColor.colorOf(StatementType.DROP, p, "#D32F2F")
+        val delete = SqlListTypeColor.colorOf(StatementType.DELETE, p, "#D32F2F")
+        assertNotNull("CREATE 应着色", create)
+        assertNotNull("DROP 应着色", drop)
+        assertEquals("CREATE 与 INSERT 同色", insert, create)
+        assertEquals("DROP 与 DELETE 同色", delete, drop)
+    }
+
+    /** OTHER 仍然不着色（未识别语句不误导用户）。 */
+    fun testOther仍不着色() {
+        assertNull(SqlListTypeColor.colorOf(StatementType.OTHER, SqlListTypeColor.STYLE_BAR, "#4A86E8"))
+    }
+
+    /** isDdl：只有 CREATE/DROP 两档为 true。 */
+    fun testIsDdl判定() {
+        assertTrue(SqlListTypeColor.isDdl(StatementType.CREATE))
+        assertTrue(SqlListTypeColor.isDdl(StatementType.DROP))
+        assertFalse(SqlListTypeColor.isDdl(StatementType.SELECT))
+        assertFalse(SqlListTypeColor.isDdl(StatementType.INSERT))
+        assertFalse(SqlListTypeColor.isDdl(StatementType.UPDATE))
+        assertFalse(SqlListTypeColor.isDdl(StatementType.DELETE))
+        assertFalse(SqlListTypeColor.isDdl(StatementType.OTHER))
     }
 }

@@ -383,7 +383,13 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         list.actionMap.get("copy")
             .actionPerformed(java.awt.event.ActionEvent(list, java.awt.event.ActionEvent.ACTION_PERFORMED, "copy"))
         val clip: String? = CopyPasteManager.getInstance().getContents(java.awt.datatransfer.DataFlavor.stringFlavor)
-        assertEquals("多选列表 Ctrl+C 应复制逐行拼接的纯 SQL", "SELECT 1;\nSELECT 2;", clip)
+        val expectedSql = "SELECT 1;\nSELECT 2;"
+        if (clip != expectedSql) {
+            // T-CiRelease（20261024 诊断自曝）：CI 上 copy 动作未产出预期文本（同 JVM 的编辑器版
+            // Ctrl+C 用例通过=剪贴板本身可用），失败时打出实际内容与选择态供控制台定位。
+            println("[list-copy-diag] clip=<<$clip>> selection=${list.selectedValues.toList()}")
+        }
+        assertEquals("多选列表 Ctrl+C 应复制逐行拼接的纯 SQL", expectedSql, clip)
     }
 
     fun testClickPreviewSql关闭格式化为原文加分号() {

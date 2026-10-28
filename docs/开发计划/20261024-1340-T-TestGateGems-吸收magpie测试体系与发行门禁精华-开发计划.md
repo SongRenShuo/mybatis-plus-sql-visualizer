@@ -23,7 +23,7 @@
 - **P-1（已部分核实）**：本仓已有 97 个守卫类测试，且已有源码扫描基建 `BannedApiScanSupport`（`src/test/kotlin/.../convention/BannedApiSourceScanTest.kt`）。**但**：`BundleParityGuardTest` 已覆盖「bundle key 全等 + 占位符形态 + 源码/plugin.xml 引用 key 存在」三项；**「硬编码中文字面量扫描」与「图标资源存在性」两项未发现等价物**（grep 命中均为注释或无关类）。实施 W1/W2 前须逐项 grep 确认，若已有则跳过或收窄为补测试。
 - **P-2（未核实，风险最高）**：「动作可用性矩阵」（`ActionManager.getAction(id).update()` 后断言 `isEnabled`/`text`）在本仓**零先例**——`grep ActionManager|isEnabled` 在 `src/test/kotlin` 无命中。这条依赖「headless 测试里 `ActionManager` 是否可用、`update()` 是否需要 EDT/是否需要已打开的编辑器上下文」。**必须先写一个最小探针验证**，验证不过就整条撤掉，不要硬做。
 - **P-3**：本仓 UI 是否全是 Swing/JB 组件、有无 JCEF/HTML 面板。若有 JCEF，报告 §三的浏览器范式可部分搬；若无（纯 Swing），则第①层守卫 + 快照断言是唯一路线。需先确认。
-- **P-4**：`docs/测试沙盒验证清单.md` 里哪些条目**其实已可 headless 判定**（例如「设置页状态行文案」「空态三行完整可见」「工具窗最窄换行」）——需逐条过一遍，才能算出「下沉后能砍掉多少人工验收」。别按印象估。
+- **P-4**：`docs/规范/测试沙盒验证清单.md` 里哪些条目**其实已可 headless 判定**（例如「设置页状态行文案」「空态三行完整可见」「工具窗最窄换行」）——需逐条过一遍，才能算出「下沉后能砍掉多少人工验收」。别按印象估。
 - **P-5**：读者门禁是否真的缺「验证 HEAD sha 比对」机制。需确认 `dev-support/` 现有脚本是否已有等价物（前序 memory 提过 `push-all.ps1` 双仓推送，未提 sha 校验）。
 
 ---

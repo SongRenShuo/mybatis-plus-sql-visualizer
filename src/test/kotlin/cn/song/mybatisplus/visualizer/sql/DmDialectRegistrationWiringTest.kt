@@ -50,7 +50,7 @@ class DmDialectRegistrationWiringTest {
     fun testCandidate_dmUrl_兜底链全通返回dm() {
         // 模拟「注册后」的平台可用清单：Generic/MySQL + 注册的 DM
         val ids = listOf("GenericSQL", "MySQL", DmSqlDialect.ID)
-        val ds = StubDs("jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO&user=MPJ_DEMO&password=Mpj_demo_2026")
+        val ds = StubDs("jdbc:dm://db.example:15236?schema=MPJ_DEMO&user=demo&password=demo")
         assertEquals(
             "DM URL 经兜底链应解析出注册的 DM 语言 id",
             DmSqlDialect.ID,

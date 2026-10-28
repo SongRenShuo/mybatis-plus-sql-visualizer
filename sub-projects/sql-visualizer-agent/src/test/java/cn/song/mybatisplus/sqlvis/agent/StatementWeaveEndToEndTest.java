@@ -34,9 +34,9 @@ public class StatementWeaveEndToEndTest {
     private static final StatementWeaver.Kind[] STATEMENT_FACE =
             {StatementWeaver.Kind.EXEC_PARAM, StatementWeaver.Kind.EXEC_CTX,
                     StatementWeaver.Kind.BATCH, StatementWeaver.Kind.ADD_BATCH,
-                    StatementWeaver.Kind.CLEAR_BATCH};
+                    StatementWeaver.Kind.CLEAR_BATCH, StatementWeaver.Kind.PARAM};
     private static final StatementWeaver.Kind[] PS_FACE =
-            {StatementWeaver.Kind.EXEC_CTX, StatementWeaver.Kind.BATCH};
+            {StatementWeaver.Kind.EXEC_CTX, StatementWeaver.Kind.BATCH, StatementWeaver.Kind.PARAM};
     private static final StatementWeaver.Kind[] PREPARE_FACE = {StatementWeaver.Kind.PREPARE};
 
     private File dir;
@@ -75,7 +75,8 @@ public class StatementWeaveEndToEndTest {
         assertEquals("UPDATE t SET x=1", event.sql);
         assertEquals("executeUpdate 影响行数取返回值", Long.valueOf(2L), event.updateCount);
         assertTrue("durationNanos 应非负", event.durationNanos >= 0);
-        assertNull("织入通道无 setXxx 拦截，params 一期为空（类注释结构性差异）", event.params);
+        // T-ConnCastSafety：参数改由 setXxx 入口织入采集（连接代理关闭后不能再靠代理层）
+        assertNull("无参数绑定的语句 params 应保持 null（不产空壳）", event.params);
     }
 
     @Test
@@ -95,6 +96,23 @@ public class StatementWeaveEndToEndTest {
         SqlEvent event = queue().poll();
         assertNotNull("异常路径也须产出事件", event);
         assertTrue("errorText 应含异常类名", event.errorText != null && event.errorText.contains("BoomException"));
+    }
+
+    @Test
+    public void 参数面_setXxx入口采集_事件携参与脱敏同口径() throws Exception {
+        Object ps = newInstance("VendorPs");
+        StatementRegistry.register(ps, "SELECT * FROM t WHERE id = ?", "jdbc:fake://param");
+        ps.getClass().getMethod("setInt", int.class, int.class).invoke(ps, 1, 42);
+        ps.getClass().getMethod("executeQuery").invoke(ps);
+
+        SqlEvent event = queue().poll();
+        assertNotNull("带参 PS 执行必须产出事件", event);
+        assertEquals("SELECT * FROM t WHERE id = ?", event.sql);
+        assertNotNull("参数必须由 setXxx 入口织入采集（连接代理关闭后唯一来源）", event.params);
+        assertEquals(1, event.params.size());
+        assertEquals("1", event.params.get(0)[0]);
+        assertEquals("42", event.params.get(0)[1]);
+        assertEquals("Integer", event.params.get(0)[2]);
     }
 
     @Test

@@ -114,7 +114,7 @@
 
 **待验证前提（实施者先证伪再动手）——实测结论**：
 
-1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测（本轮复验，PG 16.14 / `114.66.55.245:20033`，只读）**：单列（列名 `QUERY PLAN`）JSON 文本。真实表顺序扫描的键值也**已钉死**：`EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM bench_items` → `"Node Type":"Seq Scan"` + `"Relation Name":"bench_items"` + `"Plan Rows":10000`（`bench_items` 实测 10000 行）；嵌套子计划在 `"Plans"` 数组。`SELECT 1` 的形态为 `"Node Type":"Result"`（无 `Relation Name`）。
+1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测（本轮复验，PG 16.14 / `dbx-test-host:20033`，只读）**：单列（列名 `QUERY PLAN`）JSON 文本。真实表顺序扫描的键值也**已钉死**：`EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM bench_items` → `"Node Type":"Seq Scan"` + `"Relation Name":"bench_items"` + `"Plan Rows":10000`（`bench_items` 实测 10000 行）；嵌套子计划在 `"Plans"` 数组。`SELECT 1` 的形态为 `"Node Type":"Result"`（无 `Relation Name`）。
 2. ~~MCP 侧结构白名单是否对 `VALUES(1)`/`TABLE users` 过严~~ → **前提证伪（实测）**：JSqlParser 5.3 里 `Values` 与 `TableStatement` **都是 `Select` 的子类**（`javap` 实证），`McpSelectGuard.checkSingleSelect` 本来就放行这两条——两链白名单**完全对齐，无分叉面需要登记**。原计划预设的「若过严须对齐白名单」不成立；MCP 侧的 `isExplainableSource` 因此对白名单接受的输入不可能触发（保留为守卫后断言 + 包含性用例钉住，防将来白名单被放宽）。
 3. Oracle / SQL Server 仍不接入（非目标，未动）。
 4. KingBase 与 PG 同格式 → **已实测**（KingbaseES V8 连接执行 `EXPLAIN (FORMAT JSON)`；本次核实时该连接下 `dbx_test.bench_items` 不存在，**未取到 JSON 正文**，故格式仍按既有真机实证登记为 JSON，未新增未经验证的形态断言）。

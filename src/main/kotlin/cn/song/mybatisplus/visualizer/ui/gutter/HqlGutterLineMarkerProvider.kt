@@ -44,13 +44,16 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         if (grandParent.methodExpression.referenceName != element.text) return null
         // 仅处理 createQuery / createNamedQuery / createNativeQuery 调用
         if (element.text !in STANDARD_JPA_QUERY_METHODS) return null // T-Perf-23：Set 提常量
-        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
-        if (!hasStringFirstArgument(grandParent)) return null
         // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
         // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        // 券03（T-PerfSweep27-03）：开关判定前移至 hasStringFirstArgument 之前——其变量引用
+        // 分支含 resolve()，总闸关闭时用户不该为永不显示的图标付 resolve。
+        // 两判定纯只读相互独立，次序交换不改变开闸用户结果（P-3 已证）。
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return null
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
+        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
+        if (!hasStringFirstArgument(grandParent)) return null
         // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
         if (HqlQueryLocator.locate(grandParent) == null) return null
         return LineMarkerInfo(
