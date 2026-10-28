@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 
@@ -10,20 +12,22 @@ import org.junit.Assert.assertEquals
  *
  * 修复前 LIMIT 硬编码 10（配置点 grep 为零，第四轮报告 R5 缺口）；本用例先红
  * （配置 25 时模板仍产出 LIMIT 10）、修复后绿（LIMIT 25）。钳制 1..10000。
+ *
+ * T-SyncK2JMaster136 C波 差距5 随产对齐 master 终态：templateOf 不再反射 template
+ * 函数字段（该形态已随「捕获方言渲染器」上收删除），直调
+ * SelectedTableSqlTemplateAction.renderSelectedTableTemplate（Java 静态；方言为
+ * MySqlDialect.INSTANCE——Kotlin object 在 Java 侧的承载形态）；补 master 同文件
+ * 两条用例（只读契约 + Oracle 抽样/EXPLAIN 按捕获方言渲染）。
  */
 class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
 
-    private fun templateOf(selected: String): String {
-        // template 构造参数为 lambda 属性——经子类实例化直接驱动（与生产同一函数对象）
-        // k2j 适配：SelectedTableSqlTemplateAction 为 Java 类，template 字段是
-        // java.util.function.Function<String, String>（master 侧为 Kotlin (String) -> String）
-        val action = SampleSelectedTableAction()
-        val field = SelectedTableSqlTemplateAction::class.java.getDeclaredField("template")
-        field.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val template = field.get(action) as java.util.function.Function<String, String>
-        return template.apply(selected)
-    }
+    private fun templateOf(selected: String): String =
+        SelectedTableSqlTemplateAction.renderSelectedTableTemplate(
+            SelectedTableTemplateKind.SAMPLE,
+            selected,
+            MySqlDialect.INSTANCE,
+            PluginSettings.getInstance().state.sampleLimit,
+        )!!
 
     private fun withLimit(limit: Int, block: () -> Unit) {
         val old = PluginSettings.getInstance().state.sampleLimit
@@ -47,5 +51,33 @@ class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
         withLimit(0) { assertEquals("SELECT * FROM t LIMIT 1", templateOf("t")) }
         withLimit(-5) { assertEquals("SELECT * FROM t LIMIT 1", templateOf("t")) }
         withLimit(99999) { assertEquals("SELECT * FROM t LIMIT 10000", templateOf("t")) }
+    }
+
+    fun testPreviewMenuReusesReadOnlyTemplateSqlContract() {
+        val expected = mapOf(
+            SelectedTableTemplateKind.EXPLAIN to "EXPLAIN SELECT * FROM user",
+            SelectedTableTemplateKind.COUNT to "SELECT COUNT(*) FROM user",
+            SelectedTableTemplateKind.SAMPLE to "SELECT * FROM user LIMIT 10",
+        )
+        for ((kind, sql) in expected) {
+            val actual = SelectedTableSqlTemplateAction.renderSelectedTableTemplate(
+                kind, "user", MySqlDialect.INSTANCE, 10)
+            assertEquals(sql, actual)
+            org.junit.Assert.assertTrue("模板必须保持只读：$kind",
+                cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(actual!!))
+        }
+    }
+
+    fun `test 抽样与EXPLAIN按捕获方言渲染`() {
+        assertEquals(
+            "SELECT * FROM t FETCH FIRST 25 ROWS ONLY",
+            SelectedTableSqlTemplateAction.renderSelectedTableTemplate(
+                SelectedTableTemplateKind.SAMPLE, "t", OracleDialect.INSTANCE, 25),
+        )
+        assertEquals(
+            MySqlDialect.INSTANCE.renderExplainStatement("SELECT * FROM t"),
+            SelectedTableSqlTemplateAction.renderSelectedTableTemplate(
+                SelectedTableTemplateKind.EXPLAIN, "t", MySqlDialect.INSTANCE, 10),
+        )
     }
 }

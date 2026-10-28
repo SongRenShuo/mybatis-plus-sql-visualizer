@@ -10,6 +10,6 @@ public class ExplainSelectedTableAction extends SelectedTableSqlTemplateAction {
     public ExplainSelectedTableAction() {
         super(
                 "action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text",
-                selected -> "EXPLAIN SELECT * FROM " + selected);
+                SelectedTableTemplateKind.EXPLAIN);
     }
 }

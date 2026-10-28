@@ -17,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@code SelectedTableSqlTemplateActions.kt} 顶层函数（T-SqlTemplateCaret / T-SqlTemplateUx P2）的 Java 承载类。
@@ -57,6 +58,63 @@ public final class SelectedTableSqlTemplateActionsKt {
     /** 标识符字符：字母/数字/下划线（与 log/LiteralParamRecovery、sql/ExplainGate 等既有 isWordChar 同族）。 */
     private static boolean isIdentifierChar(char c) {
         return Character.isLetterOrDigit(c) || c == '_';
+    }
+
+    /** 表名位置不可能出现的关键字（小写比较）——出现即判非法（master 686f582f）。 */
+    private static final Set<String> NON_TABLE_KEYWORDS = Set.of(
+            "select", "insert", "update", "delete", "drop", "truncate", "alter", "create",
+            "from", "where", "join", "with", "limit", "explain");
+
+    /**
+     * 只接受一个表名或以点连接的标识符段；不截取候选前缀来掩盖多语句输入
+     * （master 686f582f：单表标识符校验后才提交快捷 SQL）。
+     */
+    @Nullable
+    public static String validatedTableIdentifier(@Nullable String candidate) {
+        if (candidate == null) return null;
+        String text = candidate.trim();
+        if (text.isEmpty() || text.length() > 512) return null;
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isISOControl(text.charAt(i))) return null;
+        }
+        if (text.contains(";") || text.contains("--") || text.contains("/*") || text.contains("*/")) return null;
+        int index = 0;
+        while (index < text.length()) {
+            Character closer = QUOTE_OPENERS.get(text.charAt(index));
+            if (closer != null) {
+                index++;
+                boolean content = false;
+                boolean closed = false;
+                while (index < text.length()) {
+                    if (text.charAt(index) == closer) {
+                        if (index + 1 < text.length() && text.charAt(index + 1) == closer) {
+                            content = true;
+                            index += 2;
+                            continue;
+                        }
+                        index++;
+                        closed = true;
+                        break;
+                    }
+                    content = true;
+                    index++;
+                }
+                if (!content || !closed) return null;
+            } else {
+                int start = index;
+                while (index < text.length() && isIdentifierChar(text.charAt(index))) index++;
+                if (start == index || NON_TABLE_KEYWORDS.contains(text.substring(start, index).toLowerCase())) {
+                    return null;
+                }
+            }
+            while (index < text.length() && Character.isWhitespace(text.charAt(index))) index++;
+            if (index == text.length()) return text;
+            if (text.charAt(index) != '.') return null;
+            index++;
+            while (index < text.length() && Character.isWhitespace(text.charAt(index))) index++;
+            if (index == text.length()) return null;
+        }
+        return null;
     }
 
     /** 开引号 → 对应闭引号（SQL 三种标识符引号：反引号 / 双引号 / 方括号）。 */

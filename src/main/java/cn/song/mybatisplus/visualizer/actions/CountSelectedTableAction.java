@@ -9,6 +9,6 @@ public class CountSelectedTableAction extends SelectedTableSqlTemplateAction {
     public CountSelectedTableAction() {
         super(
                 "action.cn.song.mybatisplus.visualizer.CountSelectedTable.text",
-                selected -> "SELECT COUNT(*) FROM " + selected);
+                SelectedTableTemplateKind.COUNT);
     }
 }

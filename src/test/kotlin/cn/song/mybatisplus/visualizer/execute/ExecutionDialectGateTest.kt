@@ -314,13 +314,17 @@ class ExecutionDialectGateTest {
         val structuredSubmit = preview.indexOf("ExplainPanelChannel.executeStructured")
         assertTrue("structured EXPLAIN must gate before JDBC submit", structuredGate >= 0 && structuredSubmit > structuredGate)
 
-        // 【master 断言延后——生产差距登记】选表模板三动作的「捕获方言渲染器」
-        // （master SelectedTableSqlTemplateActions.kt:52-123 renderExplainStatement/renderLimit/
-        // DialectRegistry.effective/executeTemplate+dialectGateRequest）k2j 未译
-        // （SelectedTableSqlTemplateAction.java 仍为恒 MySQL 模板字符串 + SqlExecutor.execute 旧参形态）；
-        // 同上登记勿改生产，此处钉现状形态（template.apply 纯字符串模板）供补译对照。
-        assertTrue("k2j 选表模板仍是纯字符串模板形态（生产补译捕获方言渲染器后此断言应删除）",
-            templates.contains("template.apply"))
+        assertTrue("selected-table EXPLAIN must use the captured dialect renderer",
+            templates.contains("renderExplainStatement"))
+        assertTrue("selected-table sample must use the captured dialect renderer",
+            templates.contains("renderLimit"))
+        // k2j 互操作：Kotlin object DialectRegistry 在 Java 侧为 DialectRegistry.INSTANCE。
+        assertTrue("selected-table rendering must capture the action source/project dialect",
+            templates.contains("DialectRegistry.INSTANCE.effective(project, sourceFile)"))
+        val templateExecuteBody = sourceSlice(templates, "protected void executeTemplate(", "/** 目标文本入口")
+        // k2j 互操作：`dialectGateRequest = request` 命名实参在 Java 侧为位置实参
+        //（request, null, null, false）——同一「模板执行携闸」事实。
+        assertEquals(1, templateExecuteBody.countOccurrences("request, null, null, false"))
 
         val impactBody = sourceSlice(
             preview,
