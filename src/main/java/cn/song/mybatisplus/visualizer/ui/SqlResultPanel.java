@@ -339,6 +339,11 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         return state.name();
     }
 
+    /** T-DialectGatePass：状态行文本（测试断言放行提示用，showStatus/showError 均写 infoLabel）。 */
+    public String infoTextForTest() {
+        return infoLabel.getText();
+    }
+
     /** O-145 W7：显示不属于执行成功/失败的诚实状态（如已重渲染、需复核后二击）。 */
     public void showStatus(String message) {
         state = State.EMPTY;
