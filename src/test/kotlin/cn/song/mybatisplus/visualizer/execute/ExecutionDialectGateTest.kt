@@ -293,14 +293,11 @@ class ExecutionDialectGateTest {
         assertTrue(console.contains("selectPrepareSubmission(queuedIntent, onSubmission)"))
         assertEquals("native 与 fallback 均从既有 afterSubmitted 转发回执", 2,
             console.lineSequence().count { it.contains("afterSubmitted(project") && it.trimEnd().endsWith("onSubmission);") })
-        // 【master 断言延后——生产差距登记 T-SyncK2JMaster136 B2】master LogToSqlPanel.kt:340-377
-        // 的 executeSql/showSubmission 双链（发起只报 pending、回执驱动 submitted、rawSqlRequest 进闸）
-        // 在 k2j LogToSqlPanel.java 未译：executeStatement 仍提交即报 logToSql.execute.submitted（:372）、
-        // 无 rawSqlRequest/onSubmission。master 三条断言（不发 submitted/发 pending/onSubmission=::showSubmission）
-        // 在 k2j 必红，根因 src/main，登记勿改生产；此处先钉日志面板不虚报 pending 的现状反面事实——
-        // 即现状仍是旧语义（断言其仍在，供生产补译时翻绿为线索）。
-        assertTrue("k2j 日志面板仍是旧提交即报成功语义（生产补译 T-UI020 后此断言应删除）",
-            runner.contains("logToSql.execute.submitted"))
+        // k2j 互操作：方法名 executeSql→executeStatement、`onSubmission = ::showSubmission`→`this::showSubmission`。
+        val entry = sourceSlice(runner, "private void executeStatement(String sql)", "private void showSubmission(")
+        assertFalse("发起执行不能预报成功", entry.contains("logToSql.execute.submitted"))
+        assertTrue(entry.contains("logToSql.execute.pending"))
+        assertTrue(entry.contains("this::showSubmission"))
         val runnerSlice = sourceSlice(results, "public static void runRunner(", "public static String execSilentProbe(")
         assertFalse("runner 返回不能发成功回执", runnerSlice.contains("ExecutionSubmission.SUBMITTED"))
     }
@@ -311,11 +308,7 @@ class ExecutionDialectGateTest {
         val preview = File(root, "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java").readText()
         val templates = File(root, "src/main/java/cn/song/mybatisplus/visualizer/actions/SelectedTableSqlTemplateAction.java").readText()
 
-        // 【master 断言延后——生产差距登记 T-SyncK2JMaster136 B2】k2j executeSql/executeAdhocSql 主链
-        // 未构造方言闸请求（master SqlPreviewPanelExecution.kt:917-920 QUERY/DML 分派 + 三处
-        // dialectGateRequest 透传在 k2j 缺席：SqlExecutor 调用走旧重载传 null）——
-        // preview.contains("ExecutionDialectGate.Intent.DML") 必红，根因 src/main，登记勿改生产。
-        // EXPLAIN 链已译（Intent.EXPLAIN + allowDialectGate 在 executeStructured 前）：
+        assertTrue(preview.contains("ExecutionDialectGate.Intent.DML"))
         assertTrue(preview.contains("ExecutionDialectGate.Intent.EXPLAIN"))
         val structuredGate = preview.indexOf("DataSourceSelector.allowDialectGate")
         val structuredSubmit = preview.indexOf("ExplainPanelChannel.executeStructured")
@@ -341,6 +334,14 @@ class ExecutionDialectGateTest {
         )
         assertTrue("影响面预演仍须携带方言闸请求", impactBody.contains("dialectGateRequest"))
 
+        val logs = File(root, "src/main/java/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.java").readText()
+        // k2j 互操作：方法名 executeSql→executeStatement、止锚「/** T-Perf-14」在 Java 布局位于更早处——
+        // 改用「转换流程」分节锚；命名实参 `dialectGateRequest = dialectGateRequest` 在 Java 侧为
+        // 位置实参——改数透传实参个数（同一 threading 事实）。
+        val logBody = sourceSlice(logs, "private void executeStatement(String sql)", "转换流程")
+        assertEquals(1, logBody.countOccurrences("ExecutionDialectGate.rawSqlRequest"))
+        assertEquals(1, logBody.countOccurrences("dialectGateRequest, null,"))
+
         val adhocBody = sourceSlice(
             preview,
             "public static void executeAdhocSql(\n            @NotNull SqlPreviewPanel p,\n            @NotNull String sql,\n            boolean dmlConfirmed,\n            @Nullable cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry rollbackOfEntry,\n            @Nullable Consumer<ExecutionSubmission> onSubmission) {",
@@ -348,6 +349,9 @@ class ExecutionDialectGateTest {
         )
         assertEquals(2, adhocBody.countOccurrences("SqlExecutor.execute("))
         assertEquals(1, adhocBody.countOccurrences("SqlExecutor.executePrepared("))
+        // k2j 互操作：master 的 `dialectGateRequest = dialectGateRequest` ×3 在 Java 侧为位置实参——
+        // 两全链 + 一 prepared 落点均以 `dialectGateRequest, null, receipt` 形态透传（同一事实）。
+        assertEquals(3, adhocBody.countOccurrences("dialectGateRequest, null, receipt"))
         assertTrue(ExecutionDialectGate.UNCOVERED_ENTRY_POINTS.isEmpty())
     }
 

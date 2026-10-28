@@ -64,6 +64,10 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
     private final JBLabel statusLabel;
 
+    /** 执行错误富承载（富错误+复制，无定位动作——日志还原链无 mapper 来源锚点）。 */
+    private final cn.song.mybatisplus.visualizer.ui.SqlResultPanel executionErrorPanel =
+            new cn.song.mybatisplus.visualizer.ui.SqlResultPanel();
+
     // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——还原失败/参数缺失
     // 不再仅靠单行状态红字，横幅承载三要素（哪段没还原/为什么/用户能做什么）
     private final cn.song.mybatisplus.visualizer.ui.DegradationBanner degradationBanner =
@@ -127,10 +131,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         splitter.setSecondComponent(resultPanel);
         splitter.setShowDividerControls(false);
         add(splitter, BorderLayout.CENTER);
-        // T-PreviewUx-Pack #2：底部区 = 诚实降级横幅（上）+ 状态行（下）——横幅触发即显示、
-        // 恢复即隐藏（不占高度），状态行语义不变
+        // T-PreviewUx-Pack #2：底部区 = 诚实降级横幅（上）+ 执行错误富承载（中）+ 状态行（下）——
+        // 横幅触发即显示、恢复即隐藏（不占高度），状态行语义不变
         JPanel southHost = new JPanel(new BorderLayout());
         southHost.add(degradationBanner, BorderLayout.NORTH);
+        southHost.add(executionErrorPanel, BorderLayout.CENTER);
         southHost.add(statusLabel, BorderLayout.SOUTH);
         add(southHost, BorderLayout.SOUTH);
 
@@ -364,16 +369,68 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             String keywordOrSql = keyword != null ? keyword : "SQL";
             int confirm = com.intellij.openapi.ui.Messages.showYesNoDialog(
                     project,
-                    cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keywordOrSql),
+                    cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                            sql,
+                            keywordOrSql,
+                            // R52：日志还原链无预览会话方言，取当前生效方言（与渲染/执行链同源函数）
+                            cn.song.mybatisplus.visualizer.sql.DialectRegistry.INSTANCE.effective(project)),
                     MpSqlVisualizerBundle.message("execute.confirm.dml"),
                     com.intellij.openapi.ui.Messages.getWarningIcon());
             if (confirm != com.intellij.openapi.ui.Messages.YES) return;
         }
-        status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), false);
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request dialectGateRequest =
+                cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql);
+        status(MpSqlVisualizerBundle.message("logToSql.execute.pending"), false);
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
                 project, sql, null, isQuery,
                 null, null,
-                errorMsg -> status(errorMsg, true));
+                this::showExecutionError,
+                this::showExecutionErrorRich,
+                false,
+                dialectGateRequest, null,
+                this::showSubmission,
+                false);
+    }
+
+    /** 提交回执驱动状态行：SUBMITTED 才报已提交，取消/被闸拦各按其文案（不虚报成功）。 */
+    private void showSubmission(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission outcome) {
+        if (!ApplicationManager.getApplication().isDispatchThread()) {
+            ApplicationManager.getApplication().invokeLater(
+                    () -> showSubmission(outcome), com.intellij.openapi.application.ModalityState.any());
+            return;
+        }
+        switch (outcome) {
+            case SUBMITTED -> status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), false);
+            case CANCELLED -> status(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), false);
+            case BLOCKED -> showExecutionError(MpSqlVisualizerBundle.message("logToSql.execute.blocked"));
+        }
+    }
+
+    /** 日志没有 mapper 来源锚点：保留富错误与复制，但不提供虚假的定位动作。 */
+    private void showExecutionErrorRich(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info) {
+        if (!ApplicationManager.getApplication().isDispatchThread()) {
+            ApplicationManager.getApplication().invokeLater(
+                    () -> showExecutionErrorRich(info), com.intellij.openapi.application.ModalityState.any());
+            return;
+        }
+        if (disposed || project.isDisposed()) return;
+        String text = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info);
+        status(text, true);
+        statusLabel.setVisible(false);
+        executionErrorPanel.showErrorRich(info, null);
+    }
+
+    /** 执行链回调有 EDT 与后台两条路径；只在 EDT 更新面板，不弹窗。 */
+    private void showExecutionError(String message) {
+        if (!ApplicationManager.getApplication().isDispatchThread()) {
+            ApplicationManager.getApplication().invokeLater(
+                    () -> showExecutionError(message), com.intellij.openapi.application.ModalityState.any());
+            return;
+        }
+        if (disposed || project.isDisposed()) return;
+        status(message, true);
+        statusLabel.setVisible(false);
+        executionErrorPanel.showError(message);
     }
 
     // ------------------------------------------------------------------
@@ -583,8 +640,10 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         WriteCommandAction.runWriteCommandAction(project, () -> editor.getDocument().setText(text));
     }
 
-    /** 状态行（错误红字 / 提示主题色）。 */
+    /** 状态行（错误红字 / 提示主题色）；普通状态恢复时撤销上次执行错误动作。 */
     private void status(String message, boolean error) {
+        executionErrorPanel.showEmpty();
+        statusLabel.setVisible(true);
         statusLabel.setForeground(error
                 ? JBColor.namedColor("ErrorForeground", JBColor.RED)
                 : EditorColorsManager.getInstance().getGlobalScheme().getAttributes(HighlighterColors.TEXT).getForegroundColor());

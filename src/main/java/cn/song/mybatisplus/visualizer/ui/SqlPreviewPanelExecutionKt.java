@@ -826,6 +826,7 @@ public final class SqlPreviewPanelExecutionKt {
             return;
         }
         boolean isQuery = SqlTypeClassifier.isQuery(sql);
+        ExecutionDialectGate.Request dialectGateRequest = ExecutionDialectGate.rawSqlRequest(sql);
         // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
         // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
         // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
@@ -861,7 +862,7 @@ public final class SqlPreviewPanelExecutionKt {
                             errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             wholeScriptExec,
-                            null, null, receipt, false);
+                            dialectGateRequest, null, receipt, false);
                     return;
                 }
             }
@@ -880,7 +881,7 @@ public final class SqlPreviewPanelExecutionKt {
                     errorMsg -> p.resultPanel.showError(errorMsg),
                     info -> showErrorRichWithLocate(p, info),
                     wholeScriptExec,
-                    null, null, receipt);
+                    dialectGateRequest, null, receipt);
             if (executed) return;
         }
         SqlExecutor.execute(
@@ -890,7 +891,7 @@ public final class SqlPreviewPanelExecutionKt {
                 errorMsg -> p.resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(p, info),
                 wholeScriptExec,
-                null, null, receipt, false);
+                dialectGateRequest, null, receipt, false);
     }
 
     /**
@@ -1047,6 +1048,10 @@ public final class SqlPreviewPanelExecutionKt {
      * M36.5.4：入口/中止日志——沙盒排查执行问题时此前无任何面板侧日志（静默 return 难定位）。</p>
      */
     public static void executeSql(@NotNull SqlPreviewPanel p) {
+        executeSql(p, false);
+    }
+
+    public static void executeSql(@NotNull SqlPreviewPanel p, boolean forceChoose) {
         Project proj = p.project;
         if (proj == null) return;
         // M36.4：优先取原生编辑器文档，兜底自研编辑器
@@ -1086,11 +1091,15 @@ public final class SqlPreviewPanelExecutionKt {
         warnOnPlaceholderMismatch(p);
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(p, sql, null);
+        ExecutionDialectGate.Request dialectGateRequest = executionDialectGateRequest(
+                p, isQuery ? ExecutionDialectGate.Intent.QUERY : ExecutionDialectGate.Intent.DML);
 
         // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
         //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
         p.resultPanel.showLoading("");
-        if (SqlExecutor.isPrepared()) {
+        // T-DialectGateUx：forceChoose（错误行「切换数据源」）必须跳过已准备控制台，
+        // 否则会继续复用与原目标同源的会话，闸门再次拦截。
+        if (SqlExecutor.isPrepared() && !forceChoose) {
             // T-RefreshDbSteal F4：isPrepared 只证明插件级共享控制台存在，不证明它还挂在本面板——
             // 失联时 executePrepared 会把 SQL 执行到别的弹窗/Database 工具窗的控制台（症状③）。
             if (!consoleAttachedToMe(p)) {
@@ -1098,13 +1107,19 @@ public final class SqlPreviewPanelExecutionKt {
                         .warn("[M36] executeSql: prepared console detached from this panel → recover before execute");
                 recoverConsole(p, sql);
                 if (SqlExecutor.isPrepared() && !consoleAttachedToMe(p)) {
-                    // 恢复未落地（异步链未回调）：放弃 executePrepared，落全链
+                    // 恢复未落地（异步链未回调）：放弃 executePrepared，落全链（全链会重建/复用
+                    // 共享控制台并经 onConsole 重嵌本面板），避免打在别人的控制台上
                     SqlExecutor.execute(
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
                             errorMsg -> p.resultPanel.showError(errorMsg),
-                            info -> showErrorRichWithLocate(p, info));
+                            info -> showErrorRichWithLocate(p, info),
+                            false,
+                            dialectGateRequest,
+                            verdict -> onExecutionDialectGate(p, verdict),
+                            null,
+                            false);
                     return;
                 }
             }
@@ -1121,7 +1136,11 @@ public final class SqlPreviewPanelExecutionKt {
                     // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
                     errorMsg -> p.resultPanel.showError(errorMsg),
-                    info -> showErrorRichWithLocate(p, info));
+                    info -> showErrorRichWithLocate(p, info),
+                    false,
+                    dialectGateRequest,
+                    verdict -> onExecutionDialectGate(p, verdict),
+                    null);
             if (executed) return;
         }
         SqlExecutor.execute(
@@ -1130,7 +1149,12 @@ public final class SqlPreviewPanelExecutionKt {
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
                 // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
                 errorMsg -> p.resultPanel.showError(errorMsg),
-                info -> showErrorRichWithLocate(p, info));
+                info -> showErrorRichWithLocate(p, info),
+                false,
+                dialectGateRequest,
+                verdict -> onExecutionDialectGate(p, verdict),
+                null,
+                forceChoose);
     }
 
     /**
@@ -2400,12 +2424,6 @@ public final class SqlPreviewPanelExecutionKt {
     public static String modeButtonText(@NotNull SqlPreviewPanel p) {
         return MpSqlVisualizerBundle.message(
                 p.compactMode ? "panel.mode.multiline" : "panel.mode.singleline");
-    }
-
-    /** T-DialectGateUx：带 forceChoose 的执行入口（「切换数据源」重开选择器）。
-     *  注：Java 端 1 参 executeSql 未含 forceChoose 分支，先委托 1 参（行为差距已登记）。 */
-    public static void executeSql(@NotNull SqlPreviewPanel p, boolean forceChoose) {
-        executeSql(p);
     }
 
     // R42：影响面预演的内联结果（不触碰编辑器/控制台）——正式承载已迁
