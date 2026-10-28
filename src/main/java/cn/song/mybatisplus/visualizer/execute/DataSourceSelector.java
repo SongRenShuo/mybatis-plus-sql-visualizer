@@ -319,7 +319,19 @@ public final class DataSourceSelector {
                 if (onDialectGate == null && onError != null) onError.accept(dialectGateMessage(verdict));
                 allowed = false;
             }
-            default -> {
+            // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
+            // 数据源，可以正常提示方言不一致，但还是要能成功执行」。
+            // 判据＝**两边方言都已知**（rendered 与 target 都非 null）。此时 SQL 是什么方言、
+            // 目标库是什么方言都是确定事实，冲突只是「渲染来源与目标不一致」，交给数据库自己报
+            // 语法错是最准确的反馈；插件不该替用户做执行层面的否决。
+            // 反例保留阻断：RENDER_UNKNOWN_BLOCK / TARGET_UNKNOWN_BLOCK —— 那时**有一边是未知的**，
+            // 写操作可能把 PG 语法打到 MySQL 库上，属于「无从判断」而非「判断出冲突」，仍拦。
+            case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> {
+                // 提示照旧（UI 仍显示方言不一致与「切换数据源」入口），但不拦执行。
+                if (onError != null) onError.accept(dialectGateMessage(verdict));
+                allowed = true;
+            }
+            case TARGET_UNKNOWN_BLOCK, RENDER_UNKNOWN_BLOCK -> {
                 if (onError != null) onError.accept(dialectGateMessage(verdict));
                 allowed = false;
             }
