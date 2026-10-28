@@ -144,12 +144,12 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
         try {
             panel.setResultForTest("SELECT id FROM user_info");
             waitForEdt();
-            com.intellij.openapi.fileTypes.SyntaxHighlighter highlighter =
+            com.intellij.openapi.editor.highlighter.EditorHighlighter highlighter =
                 ((com.intellij.openapi.editor.ex.EditorEx) panel.resultEditorForTest()).getHighlighter();
             assertTrue(
                 "结果区 highlighter 应为 LexerEditorHighlighter",
                 highlighter instanceof com.intellij.openapi.editor.ex.util.LexerEditorHighlighter);
-            com.intellij.openapi.editor.HighlighterIterator iterator =
+            com.intellij.openapi.editor.highlighter.HighlighterIterator iterator =
                 ((com.intellij.openapi.editor.ex.util.LexerEditorHighlighter) highlighter).createIterator(0);
             assertFalse("token 迭代不应为空", iterator.atEnd());
             assertEquals(
