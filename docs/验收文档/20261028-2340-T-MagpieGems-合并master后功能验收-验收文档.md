@@ -1,0 +1,38 @@
+# T-MagpieGems 合并 master 后功能验收文档（2026-10-28）
+
+> 任务：master 并入 t-magpie-gems（merge `5b0492ed`，121 笔）后，对本分支新增与调整功能做全量验收。
+> 方法：ide-ui-acceptance skill（证据分级：真机 GUI 实测 > 代码/字节码可判 > 定向测试收口 > 平台面限制登记）。
+> 沙盒：`build/MPSV-MagpieGems-UI243`（init `.local/magpie-gems-ui243.init.gradle`，启动 `.local/start-magpie-ui243.ps1`，-PgifRobotServer=true）。
+> demo：`mybatis-plus-sql-visualizer-demo`（IDE 内启动应用，控制台/增强双通道可用）。
+
+## 一、验收矩阵
+
+| ID | 功能与必验子场景 | 主要操作与判别点 | 证据级别 | 状态 | 证据 |
+|----|------------------|------------------|----------|------|------|
+| MG-01 | W2 脱敏分级：设置页四态下拉（关闭/打码/警示/阻断）+ 白名单文本域在场 | 设置 → SQL 日志安全分组：`settings.display.mask` 下拉四项、`settings.display.mask.allowList` 输入区 | GUI | 未验 | |
+| MG-02 | W2 脱敏分级：日志列表渲染随模式变化（MASK=***、BLOCK=占位、WARN 预览首行提示、OFF 原样） | 设置切模式 → 日志列表含手机号形态条目观感对照 | GUI | 未验 | |
+| MG-03 | W2 导出/复制从严：任一非关闭模式导出与 Ctrl+C 复制均打码 | 列表条目 Ctrl+C → 剪贴板读数；右键导出 → 文件读数 | GUI+产物 | 未验 | |
+| MG-04 | W2 白名单豁免：列名关键词命中列豁免识别（连兜底判定都跳过） | 白名单填关键词 → 含该列名的敏感值恢复原样 | GUI | 未验 | |
+| MG-05 | W3 坏 State 文件旁路 guard：坏 XML → 启动巡检恢复默认并留 LastGood | 沙盒 options 写坏 XML → 重启 → 设置正常、`.lastgood` 文件产生、通知/日志 | GUI+重启 | 未验 | |
+| MG-06 | W4 执行错误五档分类：权限类错误提示出路（压过对象缺失）、连接错误分类 | demo 真库执行无权限/错对象语句 → 提示文案分类与出路提示 | GUI | 未验 | |
+| MG-07 | O-150 回滚按钮：无备份态 tooltip「暂无可用备份」 | 设置 → 更新节「回滚上一版」按钮 hover | GUI | 未验 | |
+| MG-08 | O-150 回滚主链：有备份态 → 确认框 → 调度 DeleteCommand+UnzipCommand + 当前版本入忽略列表 | 造备份场景 → 点回滚 → 确认 → 状态标签「已回滚——重启后生效」；重启后版本回落（重启批） | GUI+重启 | 未验 | |
+| MG-09 | W1/W5/W6/W7 文档与守卫面：LESSONS/code-standards/开发流程/子系统文档在位；TestGateGems 守卫定向绿 | 静态面 + 定向测试 | 静态/测试 | 未验 | |
+| MG-10 | 合并语义收口：W2×master 渲染重构共存（RailCellRendererBase maskMode）、SqlListV179HeadlessTest 等 W2 连带测试绿 | 定向测试 | 测试 | 未验 | |
+
+## 二、定向测试清单
+
+- `SqlListV179HeadlessTest`（W2×master 渲染重构共存，合并冲突直接当事类）
+- `SqlLogPanelRendererUiTest` / `HistoryCellRendererTest`（渲染器）
+- `DisplayMaskerTest` / `SqlLogListCopyTest` / `SqlDockedPreviewTest` / `SqlClickPreviewTest`（W2 面）
+- `StateFileLastGoodTest`（W3）；`ExecutionErrorCategoryTest`（W4）
+- `UpdateBackupStoreTest` / `UpdateSectionTest`（O-150）
+- `PluginSettingsPersistenceTest` / `SettingsTruthTest`（设置持久化）
+
+## 三、实施记录
+
+（回填区）
+
+## 四、状态去向
+
+（收尾回填）
