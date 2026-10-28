@@ -132,4 +132,16 @@ S1 一落地就暴露一个不能接受的回归：**参数捕获原本只存在
 
 ### 八·补二 发行门禁（2026.10.28）
 
-`releaseGate` 首跑在 verifyGate + 5 片并发的组合下被**系统内存打爆**（三份 `hs_err`：`Native memory allocation (mmap) failed to map ... G1 virtual space`，测试 JVM 非零退出），不是用例失败；改为「片数不变、并发降到 2」分阶段重跑。IU-243 目标的 verdict 首跑已产出 `Compatible`（5 处 scheduled-for-removal、41 处 deprecated、98 处 experimental API）。
+`releaseGate` 首跑在 verifyGate + 5 片并发的组合下被**系统内存打爆**（三份 `hs_err`：`Native memory allocation (mmap) failed to map ... G1 virtual space`，测试 JVM 非零退出），不是用例失败。查明并证实：内存被**两条测试链**同时占住——本任务 master 树 5 片 + 另一个会话在 dev 工作树遗留的 5 片（其结果 11:21:39 就停了，执行器与外层 gradlew 壳一直挂着没释放，正是那条「因内存耗尽无效」的跑批留下的孤儿）。清理 2 个孤儿执行器 + 空壳 + dev 树空闲守护进程后空闲内存回到 11.4GB。
+
+门禁改为分阶段单跑（片数不变、仅降并发）：
+
+| 阶段 | 读数 |
+|---|---|
+| `testShards`（`--max-workers=2`） | **BUILD SUCCESSFUL 11m13s**，5 片合计 **8324 tests / 0 fail / 0 err / 8 skipped**（775 个测试类） |
+| `:sql-visualizer-agent:test` | 182 / 0 / 1 |
+| `O147RealAgentAcceptanceTest`（真 JVM + 真驱动） | 4 方法全绿（先红于参数丢失、再红于影响行数，两处均已修） |
+| `e2eFakeIde` | 26/0 ALL-PASS、EVENT=4 |
+| `buildPlugin` + `verifyGate` | 见 §八·补三 |
+
+途中另有两处**他人提交带来的既有红**阻断发版，一并处置（非本任务引入）：方言 `setMapping` 守卫按方法名误伤数据源同名 API（判据补「须同时命中 `SqlDialectMappings`」，临时探针反向验证仍恰 1 红）、`SqlDialectMappingPrewarm` 三处 `catch (Throwable)` 补 fatal 判定。
