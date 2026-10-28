@@ -230,6 +230,7 @@ highlighter = LexerEditorHighlighter(
   - 探针 `TmpSqlDialectGuardProbe.kt`（裸调用）+ 负例 `TmpGuardNegativeControl.kt`（只含 `JavaSyntaxHighlighterFactory` 跨行调用）→ 红，命中清单 `[SqlDialectMappingPrewarm.kt, TmpSqlDialectGuardProbe.kt]`，**负例文件不在清单内**（文件粒度判别力；只把两个探针写在同一文件里做不到这一点，故拆成两个文件重取一次读数）。
   - 删除两个探针 → 绿（`BUILD SUCCESSFUL in 27s`）。探针未提交，`git status` 复核无残留。
 - **编译**：`compileKotlin` / `compileJava` / `compileTestKotlin` 通过。首轮编译两处类型错误已修：预览链 `project` 是 `Project?`（改 `project?.let`，**不提前 return**，否则预热产物 await 永不完成、降级路径变慢）；`executeOnPooledThread` 的 `Runnable`/`Callable` 两重载推断歧义（显式指定）。
+- **全量门禁（`testShards` 5 片）本次无效，且不是用例失败**：五片并行时系统内存耗尽——JVM 直接 `os::commit_memory` / native `malloc` 失败（产出 5 个 `hs_err_pid*.log` + 3 个 `replay_pid*.log`，已删除未提交），shard2/3/4 启动期即崩、无 `tests completed` 读数；`testExternal` 的两条失败也都不归本册：`AcpSignatureCrossVersionTest` 的断言消息里直接夹着 `os::commit_memory` 告警（同一内存诱因），`BannedApiSourceScanTest.方言setMapping…` 见下节第 2 条。当时机器上另有多个 0.8~1.5GB 级 java 进程（并行会话负载）。**建议机器空闲时单路重跑一次取有效读数**；在此之前不得引用「全量绿」。
 - **构建面**：未动 `build.gradle.kts`、依赖版本、plugin.xml、EP/since-build，按 §六 6.4 不触发 `verifyGate`/`verifyPlugin`/`buildPlugin`。
 
 ### 未闭环（合并/发版前须处理）
