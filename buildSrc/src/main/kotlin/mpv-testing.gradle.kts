@@ -167,6 +167,9 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     "testDbSchemaAnnotator" to "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
     // T-PreviewSideQuery：旁路查询真库链（COUNT/EXPLAIN/失败解包），需 Database 插件与真实 MySQL
     "testDbPreviewSideQuery" to "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
+    // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
+    // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
+    "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -1200,6 +1203,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest")
         // T-PreviewSideQuery：旁路查询真库链需要 Database 插件与真实 MySQL，同上
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest")
+        // T-GaussDbDialect 券 06：平台 sql.dialect 运行期可见性断言需要 Database 插件，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest")
     }
 }
 
