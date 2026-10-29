@@ -252,8 +252,8 @@
 | 05 代码面 | `6c39fc07`（同上） | plugin.xml 12 方言 + 6 处守卫同步——必须与 04 同笔，否则单笔 checkout 是红的 |
 | 05 文档面 | 分支 `feature/gaussdb-docs` 三笔 → 合入 `e4e24be1` | 架构文档 01/02/03、README、MCP 指南、对外文案；兄弟文档站另仓 **`fa7ce8e`**（其 master，**未推送**，推送会触发站点部署） |
 | 06 | `47e7693f` | feat(dialect): 券06 注册 GaussDB 平台 SQL 方言（仿达梦先例） |
-| 07 | 待补 | |
-| 08 | 待补 | |
+| 07 | `a60e49d9` + `cbb86d5d`（分支 `feature/gaussdb-capture`，已合入） | 华为 GaussDB/openGauss 品牌驱动 + 社区 openGauss 2.x/3.x 的语句面与 prepare 面登记；按 D5「商用版与社区旧缺口不混在同一笔」拆成两笔 |
+| 08 | `a98c2d2c`（同上分支，已合入） | 厂商对齐守卫口径（`com.huawei.` 取三段）+ 名单漂移反向断言 + 帧跳过前缀五份补齐（比计划多一份：`docs/instrumentation/SqlSourceInterceptor.kt` 才是 `LocatorSkipPrefixSyncTest` 真正锁的那份） |
 
 ### 7.2 §二 待验证前提的证伪结论
 
@@ -267,10 +267,10 @@
 | P-6 | **成立（静态）；运行时未验** | `.intellijPlatform` 制品目录 `grep -ril gauss` 零命中；运行时 `SqlDialectMappings.getAvailableValues()` 需 runIde，未做 → 券 06 已实现注册与静态接线守卫，真机可见性列入未闭环 |
 | P-7 | **成立，且已实证** | `DialectDocTableGuardTest` 9/0 **skipped=0**（实读兄弟站表格）——合并单元格 `PostgreSQL / openGauss / GaussDB` 被正确拆成三个键，`GaussDB` 与 `openGauss` 是两个独立键 |
 | P-8 | **成立** | `Dialect.name`=`GaussDB` 与 `GaussDbSqlDialect.ID` 逐字相等，由 `GaussDbDialectRegistrationWiringTest` 断言 |
-| P-9 | 待补 | |
-| P-10 | 待补 | |
-| P-11 | 待补 | |
-| P-12 | 待补 | |
+| P-9 | **成立——全部 `VERIFY-OK`** | 真实 jar 字节 → `weaveSpec` → 子优先隔离子 loader 定义并初始化：华为两族与 `org.opengauss` 三族的 `PgStatement`/`PgPreparedStatement`/`PgCallableStatement`/`PgConnection` 全部 `changed=true` 且 `VERIFY-OK`。**探针有判别力**：同批阳性对照 `dm.jdbc.driver.DmDriver` 仍报 `java.lang.VerifyError: Bad local variable type`，与 T-DmWeave 记录一致 |
+| P-10 | **成立** | `org.opengauss:opengauss-jdbc:3.0.0` 内为 `org/opengauss/Driver.class`，`org/postgresql` 计数 0；`7.0.0` 内为 `org/postgresql/Driver.class`（`META-INF/services/java.sql.Driver` 声明），`org/opengauss` 计数 0 |
+| P-11 | **证伪为「安全」** | 华为两族 `Driver.connect` 出口织入实测也是 `VERIFY-OK`，**与达梦不同型**。故「不登记 connect 面」不是被迫而是按 D6=B 的主动保守选择：语句面 + prepare 面已覆盖采集，不拿 premain 类定义风险换「最近 connect URL」这一项兜底。字节层证据已在，后续想补可单独成笔 |
+| P-12 | **成立** | 改为对 `com.huawei.` 取三段（`THREE_SEGMENT_VENDORS`）后，`com.microsoft.`/`com.mysql.`/`com.dameng.`/`com.gbasedbt.`/`com.kingbase8.` 仍取两段，既有厂商断言不变 |
 
 ### 7.3 验证读数
 
@@ -311,8 +311,18 @@
 |---|---|---|---|
 | 券 01 | 从 `OPENGAUSS_KEYWORDS_RESERVED` 移除 `rownum` | `openGauss保留字_真机黄金清单逐词一致` + `openGauss保留字_旧PG基线漏包十七词回归防护` 红；合并批次 `26 tests completed, 4 failed` | `BUILD SUCCESSFUL` |
 | 券 04 | 从 `DialectRegistry.dialects` 摘掉 `GaussDbDialect` | `注册表身份_摘掉注册即红` + `url推断_三前缀命中且全链落到本方言对象` 红（同上 4 failed 中的两例） | `BUILD SUCCESSFUL` |
-| 07 | 待补 | | |
-| 08 | 待补 | | |
+| 07 | 从 `WeaveSpecs` 撤销 `com.huawei.gaussdb.jdbc.jdbc.PgPreparedStatement` | `tests=9 failures=3`：`语句面真实驱动类_织入changed且通过JVM校验` / `语句面登记_命中语句面谓词且不在prepare面` / `登记名单单一真相_与SPECS一致` 三例红 | `tests=12 failures=0` |
+| 08 跨族假绿 | `THREE_SEGMENT_VENDORS` 临时置空（回退旧两段口径） | `同厂商跨族_只登记GaussDB族不得让openGauss品牌族假绿` 红：`实际未覆盖清单：[] expected:<1> but was:<0>`——旧逻辑假绿的实据 | `tests=12 failures=0` |
+| 08 名单漂移 | 临时在 `WeaveSpecs` 加 `com.example.SyntheticStatement` | `名单漂移_SPECS每个类都必须进测试数组或显式排除` 红，点名该合成类 | 删除后 `BUILD SUCCESSFUL` |
+| 08 帧前缀 | 只从 agent `StackLocator.java` 副本删掉 `com.huawei.` | `tests=6 failures=2`：`两侧共同前缀互为子集…` + `R1补齐锚点…` | 五份同集后 `tests=6 failures=0` |
+
+**agent 子项目定向（合并后终态）**
+
+| 类 | 读数 |
+|---|---|
+| `StatementWeaverVendorCoverageTest` | 12 / 0 / 0 |
+| `CaptureRulesTest` | 15 / 0 / 0 |
+| `LocatorSkipPrefixSyncTest`（根项目，实际包名 `log.agent`） | 6 / 0 / 0 |
 
 **全量门禁**：待补。
 **`verifyGate`**：待补。
@@ -324,4 +334,6 @@
 - **兼容模式未覆盖**：只有 `sql_compatibility='A'` 库。B/C/PG/M 模式下 `LIMIT m,n`、`IFNULL`、`DATE_FORMAT`、反引号的行为全部未验。
 - **券 06 平台 EP 运行期可见性未验**：需 runIde 沙盒确认「设置页 SQL Dialects 能选到 GaussDB」与「Runner 精确匹配」。静态接线由 `GaussDbDialectRegistrationWiringTest` 守住。
 - **官方关键字页计数未逐词复核**：934/862 与 130/122 为 HTML 表格机读结果，本轮以真机 186 词兜底，GaussDB 增量 11 词单列（见 P-5）。
-- **增强捕获 07/08**：见 7.1 待补行。
+- **增强捕获全部结论为「真实驱动 jar 字节 + 链接期校验」级，零 attach 真机**：未在运行中的 GaussDB 实例上做过端到端 attach，「事件真的到 IDE」未验证。文档与能力矩阵不得写「GaussDB 增强捕获已验证」。
+- **connect 面按 D6=B 未登记**：P-11 已证伪「不安全」，字节层对华为两族 connect 出口是 `VERIFY-OK`。当前不登记是保守选择（采集已由语句面 + prepare 面覆盖），代价只有「最近 connect URL」兜底。要补时可单独成笔并独立验 premain。
+- **明确出界未登记**：`com.huawei.gauss200.jdbc.Driver`（Maven Central 无制品）、openGauss 5.x/7.x 的 `readwritesplitting.*` 与 `OR*` 族（不继承 `Pg*`）、`SmartRouteConnection` 的两个 `prepareStatement` 重载。
