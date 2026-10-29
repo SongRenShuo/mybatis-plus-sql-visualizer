@@ -88,6 +88,8 @@ public final class StackLocator {
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
             "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
             "com.gbasedbt.", "com.kingbase8.",
+            // 信创 PG 系新族：海量 Vastbase（cn.com.vastbase.*）/ 瀚高 HighGo（com.highgo.*）
+            "cn.com.vastbase.", "com.highgo.",
             // 华为 GaussDB 商用（com.huawei.gaussdb.*）与 openGauss 品牌（com.huawei.opengauss.*）
             // 共用 com.huawei.；社区 openGauss 2.x/3.x 在 org.opengauss.*
             "com.huawei.", "org.opengauss.",

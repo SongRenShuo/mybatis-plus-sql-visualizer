@@ -88,7 +88,22 @@ final class WeaveSpecs {
                 // SQL Server（SQLServerPreparedStatement 覆盖无参族并桥接带参族；
                 // SQLServerCallableStatement 无自有 execute 族——继承 SQLServerPreparedStatement 即覆盖，不单列）
                 "com.microsoft.sqlserver.jdbc.SQLServerStatement",
-                "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement");
+                "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement",
+                // 人大金仓 KingbaseES（kingbase8 9.0.1）：完全重定位的独立实现，jar 内
+                // `org/postgresql` 条目数为 0、与 pgjdbc 无继承关系，故必须单列。方法形态与
+                // pgjdbc 一致（真实 jar 字节织入 + JVM 链接期校验，见
+                // StatementWeaverVendorCoverageTest；KbCallableStatement 继承 KbPreparedStatement，
+                // 不单列）
+                "com.kingbase8.jdbc.KbStatement",
+                "com.kingbase8.jdbc.KbPreparedStatement",
+                // 海量 Vastbase（vastbase-jdbc 2.16.1v）：同为完全重定位（`org/postgresql`
+                // 条目数为 0、与 pgjdbc 无继承关系），语句类借了 Pg* 旧名但包在 cn.com.vastbase 下
+                "cn.com.vastbase.jdbc.PgStatement",
+                "cn.com.vastbase.jdbc.PgPreparedStatement",
+                // 瀚高 HighGo（HgdbJdbc 6.2.5）：完全重定位（`org/postgresql` 条目数为 0、
+                // 与 pgjdbc 无继承关系），包形 com.highgo.jdbc.jdbc.Pg* 与华为 GaussDB 商用驱动同构
+                "com.highgo.jdbc.jdbc.PgStatement",
+                "com.highgo.jdbc.jdbc.PgPreparedStatement");
         // 达梦 DM8（DmJdbcDriver18 8.1.3.140）：出口处 javac 对已死局部发 chop_frame，旧织入形态
         // （出口读原局部）字节级 VerifyError；T-DmWeave 改为「入口捕获 this/首参 → 出口读自有槽」后，
         // **timed 面**（EXEC_PARAM/EXEC_CTX/BATCH）可通过 JVM 校验并落钩。
@@ -124,7 +139,13 @@ final class WeaveSpecs {
                 "oracle.jdbc.driver.PhysicalConnection",
                 "com.microsoft.sqlserver.jdbc.SQLServerConnection",
                 // 达梦连接（prepareStatement/prepareCall 出口登记 PS→SQL；该类字节探针通过校验）
-                "dm.jdbc.driver.DmdbConnection");
+                "dm.jdbc.driver.DmdbConnection",
+                // 信创 PG 系三族连接（T-XcDialects3 券 07）：金仓 / 海量 / 瀚高的连接类均为完全
+                // 重定位的独立实现（`org/postgresql` 条目数为 0、与 pgjdbc 无继承关系），prepare
+                // 面单列；getURL() 形态与 pgjdbc 一致，UrlResolver 反射兜底可用
+                "com.kingbase8.jdbc.KbConnection",
+                "cn.com.vastbase.jdbc.PgConnection",
+                "com.highgo.jdbc.jdbc.PgConnection");
     }
 
     /** 类名（点分）→ 织入形态 spec；未登记返回 null。 */
