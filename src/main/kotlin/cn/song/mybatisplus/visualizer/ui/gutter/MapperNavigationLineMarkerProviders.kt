@@ -35,7 +35,7 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         if (gutterState != null &&
             MyBatisCompetitorGate.shouldYield(
                 gutterState.mapperNavYieldToCodeHelper,
-                MyBatisCompetitorGate.isCodeHelperProActive(),
+                MyBatisCompetitorGate.isPeerPluginActive(),
             )
         ) {
             return
@@ -85,7 +85,7 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         if (gutterState != null &&
             MyBatisCompetitorGate.shouldYield(
                 gutterState.mapperNavYieldToCodeHelper,
-                MyBatisCompetitorGate.isCodeHelperProActive(),
+                MyBatisCompetitorGate.isPeerPluginActive(),
             )
         ) {
             return

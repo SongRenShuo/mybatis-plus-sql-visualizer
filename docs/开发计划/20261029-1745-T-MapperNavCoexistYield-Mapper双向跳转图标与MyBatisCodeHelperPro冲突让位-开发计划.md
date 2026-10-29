@@ -71,8 +71,8 @@ if (MyBatisCompetitorGate.shouldYield(state.mapperNavYieldToCodeHelper, MyBatisC
 
 - `PluginSettings.State` 增 `var mapperNavYieldToCodeHelper: Boolean = true`（默认开＝让位），KDoc 写清：开启时检测到 MyBatisCodeHelperPro 启用即不显示 Mapper 双向跳转图标；关闭则强制显示。
 - 设置页放在 gutter 组开关同一区块（`SettingsConfigurable` 里紧随 `gutterGroup*` 之后），文案：
-  - zh：`与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标`
-  - en：`Yield Mapper jump icons when MyBatisCodeHelperPro is enabled`
+  - zh：`与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标`（2026-10-29 用户反馈：点名竞品不如按「同类插件」表述，登记面在 `PEER_PLUGIN_ID_PREFIXES`）
+  - en：`Yield Mapper jump icons when a peer MyBatis navigation plugin is enabled`
   - 双 bundle 同步（`MpSqlVisualizerBundle.properties` / `_zh.properties`）。
 - **注意计数守卫**：设置页复选框总数断言（`PluginSettingsPersistenceTest` 一类）会因新增开关变红，需同步期望值——这不是可选项。
 

@@ -3,8 +3,9 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import com.intellij.openapi.diagnostic.Logger
 
 /**
- * T-MapperNavCoexistYield：gutter 面的「竞品共存让位」门——MyBatisCodeHelperPro（下称 MPJ）
- * 处于启用状态时，本插件的 Mapper 双向跳转图标让位，不再与对方的跳转箭头叠在同一行。
+ * T-MapperNavCoexistYield：gutter 面的「同类插件共存让位」门——检测到同类 MyBatis 导航插件
+ * （当前登记 MyBatisCodeHelperPro，下称 MPJ）处于启用状态时，本插件的 Mapper 双向跳转图标让位，
+ * 不再与对方画在同一行的跳转箭头叠在一起。登记面见 [PEER_PLUGIN_ID_PREFIXES]。
  *
  * ## 与 XmlSynHiGate 的关系（两面，勿混）
  *
@@ -29,10 +30,12 @@ object MyBatisCompetitorGate {
     private val LOG: Logger = Logger.getInstance(MyBatisCompetitorGate::class.java)
 
     /**
-     * 竞品 pluginId 前缀。实测本机 MPJ 3.6.8 的 id 为 `com.ccnode.codegenerator.MyBatisCodeHelperPro`
-     * （`META-INF/plugin.xml` 读取）；前缀匹配兜住 Marketplace 版与历史 id 变体。
+     * 同类 MyBatis 导航插件的 pluginId 前缀（当前登记一项）。实测本机 MPJ 3.6.8 的 id 为
+     * `com.ccnode.codegenerator.MyBatisCodeHelperPro`（`META-INF/plugin.xml` 读取）；前缀匹配兜住
+     * Marketplace 版与历史 id 变体。设置页文案写的是「同类插件」，与这里的登记面保持一致——
+     * 将来登记更多会把跳转箭头画在同一行的同类插件时，在本表加前缀即可（探测逻辑无需改）。
      */
-    internal const val COMPETITOR_PLUGIN_ID_PREFIX = "com.ccnode.codegenerator"
+    internal val PEER_PLUGIN_ID_PREFIXES: List<String> = listOf("com.ccnode.codegenerator")
 
     private const val LOG_PREFIX = "[T-MapperNavCoexistYield]"
 
@@ -51,12 +54,12 @@ object MyBatisCompetitorGate {
     internal var probe: (() -> Boolean)? = null
 
     /**
-     * MPJ 是否处于启用状态。
+     * 同类 MyBatis 导航插件是否有任一处于启用状态（当前登记面见 [PEER_PLUGIN_ID_PREFIXES]）。
      *
      * 语义：`true` = 对方在位且启用 → gutter 跳转图标应让位（是否真的让位还取决于用户开关，
      * 见 [shouldYield]）。探测或反射失败返回 `false`（保留本插件功能）。
      */
-    fun isCodeHelperProActive(): Boolean {
+    fun isPeerPluginActive(): Boolean {
         cachedActive?.let { return it }
         synchronized(this) {
             cachedActive?.let { return it }
@@ -112,7 +115,7 @@ object MyBatisCompetitorGate {
             if (descriptor == null) continue
             val id = getPluginId.invoke(descriptor) ?: continue
             val idString = getIdString.invoke(id) as? String ?: continue
-            if (!idString.startsWith(COMPETITOR_PLUGIN_ID_PREFIX)) continue
+            if (PEER_PLUGIN_ID_PREFIXES.none { idString.startsWith(it) }) continue
             // 命中前缀但多个变体并存时，任一启用即让位
             if (isEnabled.invoke(descriptor) as? Boolean == true) return true
         }

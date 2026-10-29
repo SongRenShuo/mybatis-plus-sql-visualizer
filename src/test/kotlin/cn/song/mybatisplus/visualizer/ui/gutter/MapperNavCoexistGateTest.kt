@@ -12,7 +12,7 @@ import org.junit.Test
  * 覆盖三块：
  *  ① [MyBatisCompetitorGate.shouldYield] 真值表四档——「用户开让位 × 竞品在位」的组合里
  *    只有「开 ＋ 在位」让位，其余三档都保留本插件图标（默认宁可多画，不误删功能）；
- *  ② [MyBatisCompetitorGate.isCodeHelperProActive] 探针三形态——在位 / 不在位 / 探测抛异常；
+ *  ② [MyBatisCompetitorGate.isPeerPluginActive] 探针三形态——在位 / 不在位 / 探测抛异常；
  *     异常必须降级为「不在位」而不是把异常抛进 daemon 的慢趟；
  *  ③ 探测结论级缓存——插件启停需重启 IDE，同一会话内重复查询不得反复走反射（探针计数钉住）。
  *
@@ -45,10 +45,10 @@ class MapperNavCoexistGateTest {
     fun test探针_竞品在位() {
         MyBatisCompetitorGate.resetForTest()
         MyBatisCompetitorGate.probe = { true }
-        assertTrue("探针报在位时应判为在位", MyBatisCompetitorGate.isCodeHelperProActive())
+        assertTrue("探针报在位时应判为在位", MyBatisCompetitorGate.isPeerPluginActive())
         assertTrue(
             "在位 + 默认让位开关（true）应触发让位",
-            MyBatisCompetitorGate.shouldYield(true, MyBatisCompetitorGate.isCodeHelperProActive()),
+            MyBatisCompetitorGate.shouldYield(true, MyBatisCompetitorGate.isPeerPluginActive()),
         )
     }
 
@@ -56,7 +56,7 @@ class MapperNavCoexistGateTest {
     fun test探针_竞品不在位() {
         MyBatisCompetitorGate.resetForTest()
         MyBatisCompetitorGate.probe = { false }
-        assertFalse("探针报不在位时应判为不在位", MyBatisCompetitorGate.isCodeHelperProActive())
+        assertFalse("探针报不在位时应判为不在位", MyBatisCompetitorGate.isPeerPluginActive())
     }
 
     @Test
@@ -65,7 +65,7 @@ class MapperNavCoexistGateTest {
         MyBatisCompetitorGate.probe = { error("synthetic probe failure") }
         assertFalse(
             "探测抛异常必须降级为「不在位」（异常不得漏进 daemon 慢趟）",
-            MyBatisCompetitorGate.isCodeHelperProActive(),
+            MyBatisCompetitorGate.isPeerPluginActive(),
         )
     }
 
@@ -79,9 +79,9 @@ class MapperNavCoexistGateTest {
             calls++
             true
         }
-        assertTrue(MyBatisCompetitorGate.isCodeHelperProActive())
-        assertTrue(MyBatisCompetitorGate.isCodeHelperProActive())
-        assertTrue(MyBatisCompetitorGate.isCodeHelperProActive())
+        assertTrue(MyBatisCompetitorGate.isPeerPluginActive())
+        assertTrue(MyBatisCompetitorGate.isPeerPluginActive())
+        assertTrue(MyBatisCompetitorGate.isPeerPluginActive())
         assertEquals("插件启停需重启 IDE，结论应只探一次", 1, calls)
 
         MyBatisCompetitorGate.resetForTest()
@@ -89,7 +89,7 @@ class MapperNavCoexistGateTest {
             calls++
             true
         }
-        assertTrue(MyBatisCompetitorGate.isCodeHelperProActive())
+        assertTrue(MyBatisCompetitorGate.isPeerPluginActive())
         assertEquals("resetForTest 后应重新探测", 2, calls)
     }
 
@@ -101,7 +101,7 @@ class MapperNavCoexistGateTest {
         val localMeasured = "com.ccnode.codegenerator.MyBatisCodeHelperPro"
         assertTrue(
             "前缀候选必须覆盖本机实测 id（$localMeasured）",
-            localMeasured.startsWith(MyBatisCompetitorGate.COMPETITOR_PLUGIN_ID_PREFIX),
+            MyBatisCompetitorGate.PEER_PLUGIN_ID_PREFIXES.any { localMeasured.startsWith(it) },
         )
     }
 }
