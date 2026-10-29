@@ -324,8 +324,21 @@
 | `CaptureRulesTest` | 15 / 0 / 0 |
 | `LocatorSkipPrefixSyncTest`（根项目，实际包名 `log.agent`） | 6 / 0 / 0 |
 
-**全量门禁**：待补。
-**`verifyGate`**：待补。
+**全量门禁（只读收口代理，HEAD `1e5d8f9f`，三项独立执行未串联）**
+
+| 项 | 命令 | 读数 |
+|---|---|---|
+| agent 子项目全量 | `:sql-visualizer-agent:test` | `BUILD SUCCESSFUL in 1m 39s`；`classes=35 tests=193 failures=0 errors=0 skipped=1`（基线 190 → 193，+3 为新增驱动夹具与守卫用例） |
+| 根项目全量分片 | `testShards`（5 片 + external） | `SHARD TOTAL: tests=8386 failures=0 errors=0 skipped=9`；各片 2048/1611/1658/1577/1461 + external 31，相加恰等于 TOTAL；`parity: 计划类全集 779 个均有结果 XML`；`BUILD SUCCESSFUL in 18m 50s` |
+| 构建校验 | `verifyGate` | 三条 verdict 全 `Compatible.`（IU-243 / IU-253 / IU-262），全文 `Incompatible` 出现 0 次；`BUILD SUCCESSFUL in 2m 43s` |
+
+**重复类自证**：总用例 8386（分片相加一致，无虚胖）；结果 XML 785 个类（779 计划 + 6 external），去重后仍 785；**重复类 0 个**，`SqlPreviewPanelTest` 本轮未出现历史记录里的重复分配。
+
+**跳过 9 例全部为环境门控**（非失败）：`DialectDockerVerificationTest` 6 例（Docker 门控未开 5 + 未提供外部实例 1）、`ExecWholeScriptOptionTest` 2 例（Database 插件不进默认 test classpath，项目既定）、`AcpSignatureCrossVersionTest` 1 例（结构性停用）、`AttachPoolWarmGateTest` 的 DM 格 1 例（无达梦实例）。
+
+**观察（如实登记，不作通过依据）**：原始用例数 8386 与历史记录 `8545/0/0/10`（T-PerfSweep28 轮）相差 −159。本轮唯一可信的对账口径是**类覆盖**（779 计划类全有结果、类集与计划清单一致、重复类 0），历史 8545 含 `SqlPreviewPanelTest` 被重复分片分配的虚胖（见项目记忆）；两者的**基线不是同一快照**，故不宣称「与历史 parity」。
+
+**性能 WARN（不影响正确性）**：`临界片失衡 +44%`（shard1 558.9s vs 片均值 387.6s）。成因是 5 片按 `maxParallelLimit=2` 两路并行 + `in-process` Kotlin 策略，权重画像按串行标定；判为画像刻度与并行模式不匹配，非新类缺权。
 
 ### 7.4 未做项与观察登记
 
