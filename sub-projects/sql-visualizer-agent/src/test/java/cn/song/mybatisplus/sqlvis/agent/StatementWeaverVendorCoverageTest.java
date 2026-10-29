@@ -71,6 +71,12 @@ public class StatementWeaverVendorCoverageTest {
             // CLEAR_BATCH 出口非 timed 读原局部会被 chop_frame 判死，未登记（见 StatementWeaver 类注释）
             "dm.jdbc.driver.DmdbStatement",
             "dm.jdbc.driver.DmdbPreparedStatement",
+            // 华为 GaussDB 商用驱动（gaussdbjdbc 506.0.0.b058）——独立重定位包，与 pgjdbc 无继承关系
+            "com.huawei.gaussdb.jdbc.jdbc.PgStatement",
+            "com.huawei.gaussdb.jdbc.jdbc.PgPreparedStatement",
+            // 华为 openGauss 品牌驱动（opengaussjdbc 506.0.T35）——与商用版同形，独立包名
+            "com.huawei.opengauss.jdbc.jdbc.PgStatement",
+            "com.huawei.opengauss.jdbc.jdbc.PgPreparedStatement",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -83,6 +89,9 @@ public class StatementWeaverVendorCoverageTest {
             "com.microsoft.sqlserver.jdbc.SQLServerConnection",
             // 达梦连接（prepare 面；该类字节探针通过校验）
             "dm.jdbc.driver.DmdbConnection",
+            // 华为 GaussDB 商用 / openGauss 品牌连接（prepare 面）
+            "com.huawei.gaussdb.jdbc.jdbc.PgConnection",
+            "com.huawei.opengauss.jdbc.jdbc.PgConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */

@@ -113,6 +113,12 @@ dependencies {
     // T-DmWeave：达梦语句面/prepare 面登记（本机 demo 声明版 DmJdbcDriver18 8.1.3.140）——
     // 真实驱动类字节进**测试 classpath**，供覆盖率守卫做字节层织入 + JVM 校验探针。
     testImplementation("com.dameng:DmJdbcDriver18:8.1.3.140")
+    // T-GaussCapture：GaussDB / openGauss 三族驱动夹具——均为自包含 jar（`org/postgresql`
+    // 条目数为 0，与 pgjdbc 无继承关系），只进测试 classpath，生产依赖图不变。
+    // 华为 GaussDB 商用驱动（语句/prepare 类包 com.huawei.gaussdb.jdbc.jdbc.Pg*）
+    testImplementation("com.huaweicloud.gaussdb:gaussdbjdbc:506.0.0.b058-jdk7")
+    // 华为 openGauss 品牌驱动（包 com.huawei.opengauss.jdbc.jdbc.Pg*）
+    testImplementation("com.huaweicloud.gaussdb:opengaussjdbc:506.0.T35")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
