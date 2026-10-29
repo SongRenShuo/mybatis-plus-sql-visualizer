@@ -462,3 +462,36 @@ javap -p -c -classpath 261.25134.203/mcpserver/lib/mcpserver.jar \
 2. **`verifyMarketplace` 在线门禁未跑**：发版前必跑（券07），离线 `verifyGate` 不能替代。
 3. **261.22158 的 C 形态**：按设计不注册（门控不生效，MCP 可用），已在文档站矩阵披露。
 
+### 10.6 报障复现（2026-10-29 补，两件）
+
+**（1）语句级复现**：`McpGateFilter261CrashReproTest` 把 261 的两步原样搬进测试——旧形态代理
+（只认 `applyFilters`，其余返回 null）＋平台那句 `collected.addAll(provider.getFilters(...))`
+（经 Kotlin stdlib 的 `addAll` 真身调用）。复现输出与用户 `idea.log` **逐字一致**：
+
+```
+REPRO-261-NPE: java.lang.NullPointerException: Parameter specified as non-null is null:
+  method kotlin.collections.CollectionsKt__MutableCollectionsKt.addAll, parameter elements
+```
+
+同一句调用换成现行桥的代理 → 不抛、返回空清单（门控退化为空清单，平台会话正常建立）。
+
+**（2）真实 261 字节码探测**：`McpGateFilter261SignatureTest` 把 Marketplace 下载的 mcpserver
+插件 jar 装进 **child-first 严格子加载器**（`com.intellij.mcpserver` 包不回退 parent，否则会命中
+测试 classpath 里的 mcpStub 桩，把「类不存在」测成「A 形态」——首跑即踩此坑），对平台自己的
+字节码跑 `detectFilterForm`：
+
+| 版本（仓外取证产物） | 读数 |
+|---|---|
+| 261.17801.91 | 类不存在 → 探测失败 → 不注册（安全） |
+| 261.22158.220 | `UNKNOWN`（`StateFlow` 形态 C，不注册） |
+| 261.24374.39 | `B_GET_LIST` |
+| 261.25134.203（用户报障版本） | `B_GET_LIST` |
+
+262 / 263 未纳入：其 mcpserver jar 是 class file **major 69（Java 25）**，测试 JVM 是 243 自带的
+JBR 21，`Class.forName` 直接 `UnsupportedClassVersionError`（实测）；A 形态由假接口用例 + §附录
+的 javap 取证覆盖。
+
+**仍未做**：真机 261 IDE 端到端（装插件 → 开 MCP Server → `/stream` 从 500 变 200）。本机无 261
+发行版，这一条只能等有 261 环境的机器或用户侧升级验证。
+
+
