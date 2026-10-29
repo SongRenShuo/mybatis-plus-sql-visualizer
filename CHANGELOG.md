@@ -2,6 +2,22 @@
 
 # SQL Visualizer Changelog
 
+## [2026.10.29] - 2026-10-29
+
+### Added
+- **方言推断的配置证据按模块收窄（T-DialectInferSmart）**：多模块项目各自连不同库、或测试资源用另一套库时，项目级全量共识会退化成「无共识」、整条推断落回 IDE 方言设置。现配置证据按来源模块收窄（模块内无结论才回落项目级），扫描排除测试资源目录（主库 PostgreSQL + 测试 H2 不再互相挤成无共识），并优先采用激活 profile（`spring.profiles.active` / `include`，支持 properties / YAML 缩进块 / 逗号与方括号列表；`${ENV:default}` 取默认值，`${ENV}` 与 `@maven@` 视为未知）；拿不到激活 profile 才回到全量共识
+
+### Fixed
+- **IDEA 2026.1.x 下插件让内置 MCP Server 对所有客户端不可用（T-Mcp261FilterContract，用户报障 P0）**：261 上启用 MCP Server 后，任何客户端 `initialize` 都拿到 HTTP 500（`/stream` 每次失败、`/sse` 建不起会话），`idea.log` 是同一句 `NullPointerException: Parameter specified as non-null is null ... CollectionsKt.addAll`。受影响的不止本插件的 11 个工具——平台 MCP Server 整体不可用，其他插件注册的工具一并消失，关掉插件里的 MCP 总开关也没用，只能卸载插件。根因是平台的工具过滤器接口在 261 上是另一套契约（`getFilters` 返回过滤器清单 + `modify`/`apply` 改写工具集合），而插件的全反射代理是按 2026.2 的 `applyFilters` 写的：261 调 `getFilters` 时落到兜底返回 null，平台紧接着把 null 当迭代器传给 `addAll`。现改为「先探测契约再注册」：`applyFilters` 形态（2026.2 / 2026.3）与 `getFilters` 形态（261.24374 起）各走对应实现，认不出的形态一律不注册；同时给代理的所有未知方法加按返回类型的空值兜底（集合 / Map / Flow / 原始类型绝不返回 null），实现体全程异常降级——即使下一条版本线再改契约，最坏结果是「门控不生效」，不会再让平台的 MCP 服务整体挂掉
+- **定时任务等非 Web 线程下增强捕获的调用栈看不到项目代码（T-StackBizFrame）**：`@Scheduled` 一类调度线程产出的 SQL，日志位置列能指到业务文件，但栈摘要与调用栈弹层里一个项目帧都没有。根因是栈底锚点只认插件自有基础设施白名单，不含 `org.springframework.scheduling.*` / `io.micrometer.*`，非 Web 线程的穿透在第一帧就停住，锚点等于栈底，业务帧被挤出 8 帧窗口；且摘要与定位是两条独立判定，没有任何一致性约束。现锚点改三层判定（业务来源复用 `StackLocator` 判据 → 框架前缀穿透 → 字面兜底），源码定位帧成为摘要必含项（落在窗口外时单列一段，省略计数同步扣减）。展示面同步三处：弹层折叠名单补 JDBC 驱动族与 MyBatis logging/binding/reflection/type 等内部包、日志列表 meta 行的栈摘要先取景（头部全内部帧时跳到首个项目帧）再按原 120 字符契约截断、调用栈弹层标题附线程名（`scheduling-1` / `pool-2-thread-1` 一眼可辨）。顺带把业务帧判定从逐帧拼路径字符串改为直接判文件名，Web 形态省约 1.6µs/SQL。真机对拍（`ThreadPoolTaskScheduler` + 两层 `TransactionTemplate` + MyBatis + H2）：旧包摘要零项目帧，新包剩五个项目帧且锚点落在 `@Scheduled` 方法本身
+- **预览的智能方言推断被非 SQL 数据源与日志还原链规避（T-DialectInferFix）**：Redis 一类非 SQL 数据源被当成方言候选、产出「未知」后整项目回落到 MySQL；日志/历史双击预览不携带本次执行方言，渲染与 PSI 映射一并落到 MySQL，PG 的合法列名 `signal` 被 MySQL 保留字表判成语法错。现候选只取 SQL 数据源（按平台 query language → DBMS 显示名 → URL 子协议精确比对）；日志/历史预览携带本次执行方言（旧条目按 `db:` 角标回填）；兜底不再硬编码 MySQL，新增 `PreviewDialectResolver` 统一渲染与 PSI 映射口径，PSI 预映射改为继承平台项目/全局 SQL 方言并清理历史 MySQL 映射；无 IDE 数据源时改按「配置 JDBC URL → 构建驱动坐标 → SQL 方言特征」的唯一共识再退一级到项目/全局设置，状态行显式标注来源
+- **日志列表暂停态被新 SQL 顶动、关键字换行退化成单行**：手动滚动暂停后新 SQL 到达仍把正在看的内容往上顶（JList 没有滚动锚定，缓冲满载时每条新 SQL 淘汰头部一条、整屏上移一行）；显示模式为「关键字换行」时多数只显示单行（摘要 160 字内到不了 `FROM`，一个换行点都找不到）。现头部淘汰按被删行高上移视口、全量重建按条目身份复原且条目落在后续批次时逐拍重试；换行模式改为取完整还原 SQL 并按 4096 字符预算在空白边界截断；滚底判据抽成纯函数，程序性滚动与「位置变小」都不算用户手势，只有用户主动往底部滚动且到位才恢复跟随
+
+### Changed
+- **Mapper 双向跳转 gutter 判定门控与结果记忆（T-PerfSweep28-01）**：`MapperJavaToXmlLineMarkerProvider` 此前对每个打开 Java 文件的每个方法声明在 daemon 慢趟调一次 `MapperXmlLocator.locate`，无接口前置、无负结果缓存、命中也不早退。现加 `containingClass.isInterface` 前置、语句定位结果级 memo（正负都缓存，与文件清单同代失效），两个 Provider 接入总闸与 mapperXml 组闸
+- **两处无上限缓存收口（T-PerfSweep28-03）**：`HibernateNamingConfigProbe` 缓存加 512 上限（写入单一守卫，超限整体清空再写）；`SqlPreviewService.activePreviewDialogs` 以 `Project` 强引用为键、项目关闭不摘除，改弱键映射后随 GC 摘除
+- **字符串 SQL 方法 gutter 方法体引号预筛（T-PerfSweep28-04）**：`StringSqlMethodGutterLineMarkerProvider` 原在每个候选方法名叶子做一次方法体全子树遍历，改为先扫方法体文本是否含引号（字符串 SQL 必为字符串字面量，零分配单次扫描），精度 100%、子树遍历归零
+
 ## [2026.10.28] - 2026-10-28
 
 ### Added

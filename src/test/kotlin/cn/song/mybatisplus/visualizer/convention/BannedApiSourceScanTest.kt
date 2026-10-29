@@ -299,11 +299,16 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
     /**
      * O-145 日志来源证据边界：只禁危险的“升级为精确事实”，不禁止未来经验证的 sourceContext。
      * 库标是脱敏展示文本，last agent URL 是另一时刻/连接的事实；源码文件也不是 SQL PSI。
+     *
+     * T-DialectInferFix（券 05）：`PreviewSourceContext.capturedJdbcUrl`/`selectedDataSourceId` 已删除
+     * （声明后 0 读取）。事件级方言事实改走 `LogSqlEntry.dialectName`（pd 载荷 `dl` 键，随条目持久化），
+     * 因此规则同步到新符号：仍然禁止「拿另一时刻的 agent URL」「拿脱敏角标显示名」冒充本条条目的方言。
      */
     private fun unsafeLogPreviewEvidence(code: String): List<String> {
         val patterns = listOf(
-            Regex("capturedJdbcUrl\\s*=\\s*(?:entry\\.)?databaseName\\b") to "库标反推精确 JDBC URL",
-            Regex("capturedJdbcUrl\\s*=\\s*[^\\n]*lastConnectionUrl\\s*\\(") to "最近 agent URL 冒充本条连接",
+            Regex("capturedDialect\\s*=\\s*[^\\n]*lastConnectionUrl\\s*\\(") to "最近 agent URL 冒充本条连接方言",
+            Regex("capturedDialect\\s*=\\s*[^\\n]*databaseName\\b") to "库标原串冒充注册方言名",
+            Regex("dialectName\\s*=\\s*[^\\n]*JdbcUrlDialects\\.") to "角标显示名冒充注册方言名",
             Regex("SqlPsiResolution\\.(?:Exact|UniqueInOwner)\\s*\\(") to "运行时源码冒充真实 SQL PSI",
             Regex("hostVirtualFile\\s*=\\s*SourcePathResolver\\.resolveVirtualFile\\s*\\(") to "首命中源码路径冒充唯一来源",
             Regex("SourcePathResolver\\.resolveVirtualFiles\\s*\\([^\\n]*\\)\\s*\\.first(?:OrNull)?\\s*\\(") to "多路径候选取首个冒充唯一来源",
@@ -313,8 +318,8 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
 
     @Test
     fun `O145日志预览不得从库标旧URL或源码路径升级精确来源`() {
-        // 三个实际打开入口（实时、历史、反查）都要覆盖，而非只验证合成字符串。
-        val paths = listOf("SqlLogPanel.kt", "HistorySqlLogPanel.kt", "EntrySourceMatcher.kt")
+        // 四个实际打开/识别入口（实时、历史、反查、统一识别通道）都要覆盖，而非只验证合成字符串。
+        val paths = listOf("SqlLogPanel.kt", "HistorySqlLogPanel.kt", "EntrySourceMatcher.kt", "LogEntryPreviewRecognizer.kt")
         val root = repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/log")
         val violations = paths.flatMap { name ->
             val code = stripComments(root.resolve(name).readText())
@@ -326,14 +331,16 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
     @Test
     fun `O145守卫自证_危险推断必红而安全来源展示不禁`() {
         for (sample in listOf(
-            "capturedJdbcUrl = entry.databaseName",
-            "capturedJdbcUrl = AgentUrlRegistry.lastConnectionUrl(project)",
+            "capturedDialect = entry.databaseName",
+            "capturedDialect = AgentUrlRegistry.lastConnectionUrl(project)",
+            "dialectName = JdbcUrlDialects.displayName(url)",
             "sqlPsiResolution = SqlPsiResolution.Exact(sourcePsi)",
             "hostVirtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)",
             "hostVirtualFile = SourcePathResolver.resolveVirtualFiles(project, entry.sourceFile).firstOrNull()",
         )) {
             assertTrue("危险形态未检出：$sample", unsafeLogPreviewEvidence(sample).isNotEmpty())
         }
+        assertTrue(unsafeLogPreviewEvidence("capturedDialect = entry.dialectName").isEmpty())
         assertTrue(unsafeLogPreviewEvidence("sourceLocation = entry.sourceFile").isEmpty())
         assertTrue(unsafeLogPreviewEvidence("sourceContext = verifiedUniqueEvidence").isEmpty())
     }

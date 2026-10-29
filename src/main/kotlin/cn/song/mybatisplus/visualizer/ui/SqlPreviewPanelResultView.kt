@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
+import cn.song.mybatisplus.visualizer.sql.withResolvedDialect
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
@@ -153,7 +154,11 @@ internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Un
  * 完全不可推导（解析失败/MERGE/DDL/SELECT）不弹视图，仅消息框说明原因与人工恢复路径。
  */
 
-internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
+internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
+    // T-DialectInferFix：渲染方言与临时文件映射必须同源。来源自带的精确方言（日志/历史条目）
+    // 优先，否则走统一决策链（数据源 → 项目配置/驱动依赖 → SQL 语法特征）。判不出来时保持 null，
+    // 由映射侧继承平台设置——不再让渲染端与 PSI 各自落 MySQL。
+    val result = input.withResolvedDialect(project)
     current = result
     // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
     executionDialectRenderMode = project?.let {

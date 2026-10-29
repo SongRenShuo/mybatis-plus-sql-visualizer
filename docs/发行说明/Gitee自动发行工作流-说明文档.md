@@ -206,6 +206,10 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
   （`DELETE /releases/{id}` 只删发行版，标签保留），再按第三节重新 POST + 传附件；
   重建后附件文件名不变即下载 URL 不变，update 清单无需改动。
 - **`PUT /releases/{id}` 不支持**（405 Method Not Allowed），无法靠「编辑」刷新排序位置。
+- **改正文用 `PATCH /releases/{id}`（2026-10-29 实证）**：只想改发行版正文（如发行说明重排格式）不必删了重建——
+  `PATCH` 可用，但**必须带 `tag_name`**（缺它报 400 `{"messages":["tag_name is missing"]}`），
+  `target_commitish` 会按标签解析成提交哈希回填。改完发行版 id、附件与列表排序都不变，附件下载 URL 不受影响。
+  与「补建版本排序」是两件事：`PATCH` 不改变创建时间，删了重建才会挪到列表顶部。
 - 补建 zip 若与当前 master 内容有差（如历史版本落后若干提交），在 `gradle.properties`
   临时改版本号 `./gradlew buildPlugin -x test`，产物内层 jar 的 plugin.xml `<version>`
   由 patchPluginXml 注入，须回读 zip 确认；打完包把版本号改回，工作树不留痕。
@@ -216,7 +220,7 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 |------|-------------|
 | 400 `{"messages":["body is missing"]}` | 描述参数用了 `description` → 改 `body` |
 | 404 `upload_files` / `assets` | 端点不存在 → 用 `attach_files` |
-| 405 `PUT /releases/{id}` | Gitee 不支持编辑发行版 → 删除重建 |
+| 405 `PUT /releases/{id}` | Gitee 不支持 PUT 编辑发行版 → 改正文用 `PATCH /releases/{id}`（须带 `tag_name`）；要换附件才需 `--replace` 删了重建 |
 | 同 tag 再建报 400「该标签已经存在发行版」 | 已有发行版 → `gitee-release.py … --replace`（先删后重建） |
 | 同名附件重传后线上仍是旧包 | CDN 缓存 → 稍后用 `--verify-only` 复查 sha256 |
 | 补建版本显示在列表下方 | 列表按创建时间倒序 → 见 §4 删除重建 |

@@ -77,6 +77,78 @@ internal object DialectPreMapping {
     }.getOrNull()
 
     /**
+     * T-DialectInferFix：**继承值**读取（项目级 → 全局默认），不含本目录自己的显式映射。
+     *
+     * 与 [configuredLanguageId] 的区别：后者走 `getConfiguredMapping`（文件/目录优先），会把插件
+     * 历史上写给预览目录的兼容兜底也读出来——而那条正是要覆盖掉的旧值。这里从**项目根**读
+     * 继承链，拿不到再退 `SqlDialectMappings.getConfiguredDefaultSqlDialect()`（设置页「全局 SQL 方言」，
+     * 243/253/262/2026.2 均为 public static，本仓既有反射口径同族）。
+     */
+    /** T-DialectInferFix：项目根继承值 → 全局默认（无需 VirtualFile，渲染侧与映射侧共用同一口径）。 */
+    internal fun inheritedLanguageId(project: Project): String? = runCatching {
+        val mappings = instanceOf(project) ?: return null
+        val root = project.basePath
+            ?.let { com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(it) }
+        if (root != null) {
+            val inherited = mappings.javaClass
+                .getMethod("getConfiguredMapping", VirtualFile::class.java)
+                .invoke(mappings, root)
+            (inherited as? com.intellij.lang.Language)?.id?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        defaultLanguageId(project)
+    }.getOrNull()
+
+
+    /** T-DialectInferFix：平台全局默认 SQL 方言的 language id（用户设置页「全局 SQL 方言」）。 */
+    internal fun defaultLanguageId(project: Project): String? = runCatching {
+        val dialect = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
+            .getMethod("getConfiguredDefaultSqlDialect")
+            .invoke(null)
+        (dialect as? com.intellij.lang.Language)?.id
+    }.getOrNull()
+
+    /** T-DialectInferFix：本文件/目录**自有**映射的 language id（无则 null；不含继承）。 */
+    internal fun configuredImmediateLanguageId(project: Project, vf: VirtualFile): String? = runCatching {
+        val mappings = instanceOf(project) ?: return null
+        val immediate = mappings.javaClass
+            .getMethod("getImmediateMapping", VirtualFile::class.java)
+            .invoke(mappings, vf)
+        (immediate as? com.intellij.lang.Language)?.id
+    }.getOrNull()
+
+    /**
+     * T-DialectInferFix：清除插件自己写在预览目录上的显式映射（`setMapping(vf, null)`）。
+     *
+     * 线程口径与 [ensureMapped] 完全一致：写映射必须 EDT（`VcsVFSListener` 断言），后台线程
+     * 派发 + 有界等待。失败只 warn，不影响预览继续（最差保留旧映射）。
+     */
+    internal fun clearMapping(project: Project, vf: VirtualFile, waitMs: Long = EDT_SET_MAPPING_WAIT_MS): Boolean {
+        val clearOnEdt = {
+            runCatching {
+                val mappings = instanceOf(project) ?: return@runCatching false
+                mappings.javaClass.getMethod(
+                    "setMapping", VirtualFile::class.java, Any::class.java,
+                ).invoke(mappings, vf, null)
+                true
+            }.getOrElse { e ->
+                LOG.warn("[M36] dialect clearMapping skipped: ${e.javaClass.simpleName}: ${e.message}")
+                false
+            }
+        }
+        if (ApplicationManager.getApplication().isDispatchThread) return clearOnEdt()
+        val done = CountDownLatch(1)
+        var cleared = false
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                cleared = clearOnEdt()
+            } finally {
+                done.countDown()
+            }
+        }
+        return runCatching { done.await(waitMs, TimeUnit.MILLISECONDS) }.getOrDefault(false) && cleared
+    }
+
+    /**
      * EDT 执行 setMapping(vf, MySQL)——平台线程断言见类 KDoc，非 EDT 调用直接拒绝并 warn
      * （防御网：调用方编排错误不得静默退化为 BGT 直调）。
      */

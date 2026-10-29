@@ -87,6 +87,28 @@ class McpScopeSourceScanTest {
     private val coreApiRefMarker = Regex("""com\.intellij\.mcpserver\.(?!annotations)""")
 
     @Test
+    fun testMcpStubCarriesNo261OnlyFilterTypes() {
+        // T-Mcp261FilterContract 券07：261 形态 B 的 McpToolFilter / McpToolFilterModification
+        // 只允许以字符串 FQN 出现在 main（Class.forName），**不得**做成 mcpStub 桩类型再被 import——
+        // 桩产物不进 jar，但 main 一旦 import，字节码里就留下真引用，正是 20260923 审核拒绝的形态。
+        // 注意：McpToolFilterContext / McpToolState 属 262 形态 A 的合法桩（applyFilters 签名需要），
+        // 故只禁两个 261-only 类型（`\b` 保证不会误伤 McpToolFilterContext）。
+        val offenders = repoRoot().resolve("src/mcpStub/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { stub261OnlyFilterType.containsMatchIn(stripStrings(stripComments(it.readText()))) }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
+        assertTrue(
+            "mcpStub 出现 261-only 过滤器类型桩：$offenders。B 形态必须全反射（字符串 FQN），" +
+                "加桩并被 main import 会让 jar 留下 com.intellij.mcpserver.* 真引用（见券07 红线）",
+            offenders.isEmpty(),
+        )
+    }
+
+    private val stub261OnlyFilterType =
+        Regex("""(interface|class)\s+McpToolFilter\b|(interface|class)\s+McpToolFilterModification\b""")
+
+    @Test
     fun testNoOrgObjectwebAsmReferenceInMcpPackage() {
         // T-McpDynamicToolset 真机 ASM 不可达修复（20261005）：org.objectweb.asm 是平台已知包
         // （262 lib 自带 intellij.libraries.asm.jar），插件 classloader 对该包 parent-first 接管、

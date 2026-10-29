@@ -1049,6 +1049,8 @@ object DialectRegistry {
         sqlPsiFile: com.intellij.psi.PsiFile? = null,
         moduleKey: String? = null,
         boundDataSourceDialect: String? = null,
+        sqlText: String? = null,
+        capturedDialect: String? = null,
     ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
@@ -1056,7 +1058,15 @@ object DialectRegistry {
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
         if (!auto) return DialectDecisionEngine.decide(DialectDecisionEngine.Input(manualDialect = manualName))
-        if (project == null) return DialectDecisionEngine.decide(DialectDecisionEngine.Input())
+        if (project == null) {
+            return withLowConfidenceEvidence(
+                null,
+                DialectDecisionEngine.decide(
+                    DialectDecisionEngine.Input(capturedDialect = capturedDialect),
+                ),
+                sqlText,
+            )
+        }
         val candidates = DataSourceUrlProbe.candidateDialects(project)
         val singleModule = runCatching {
             com.intellij.openapi.module.ModuleManager.getInstance(project).modules.size == 1
@@ -1068,27 +1078,141 @@ object DialectRegistry {
             runCatching { ModuleDataSourceBindingStore.getInstance(project).learnedCandidate(project, it) }.getOrNull()
         }
         val dialectFile = sqlPsiFile?.virtualFile ?: sourceFile
+        // T-DialectInferSmart：配置/依赖证据按**来源文件所属模块**收窄——多模块各自连不同库时，
+        // A 模块的预览不能被 B 模块的 application.yml 搅成「无共识」。
+        val sourceModule = resolveSourceModule(project, dialectFile)
         if (sqlPsiFile != null && dialectFile != null) {
             val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
             if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
-                return IdeaSqlDialectDecision.decide(
-                    snapshot = snapshot,
-                    learnedModule = learnedModule,
-                    fallbackProjectCandidates = candidates,
-                    lastAgentDialect = agentDialect,
-                    singleModuleProven = singleModule,
-                    boundDataSourceDialect = boundDataSourceDialect,
+                return withLowConfidenceEvidence(
+                    project,
+                    IdeaSqlDialectDecision.decide(
+                        capturedDialect = capturedDialect,
+                        snapshot = snapshot,
+                        learnedModule = learnedModule,
+                        fallbackProjectCandidates = candidates,
+                        lastAgentDialect = agentDialect,
+                        singleModuleProven = singleModule,
+                        boundDataSourceDialect = boundDataSourceDialect,
+                    ),
+                    sqlText,
+                    sourceModule,
                 )
             }
         }
-        return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
-            ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
-            ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
-            learnedModule = learnedModule,
-            projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
-            boundDataSourceDialect = boundDataSourceDialect,
-        ))
+        return withLowConfidenceEvidence(
+            project,
+            DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+                capturedDialect = capturedDialect,
+                ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
+                ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+                learnedModule = learnedModule,
+                projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
+                boundDataSourceDialect = boundDataSourceDialect,
+            )),
+            sqlText,
+            sourceModule,
+        )
     }
+
+    /** 来源文件所属模块（拿不到/无文件 → null；模块解析是读动作，统一包 ReadAction）。 */
+    private fun resolveSourceModule(
+        project: com.intellij.openapi.project.Project,
+        file: com.intellij.openapi.vfs.VirtualFile?,
+    ): com.intellij.openapi.module.Module? {
+        file ?: return null
+        return runCatching {
+            com.intellij.openapi.application.ReadAction.compute<com.intellij.openapi.module.Module?, Throwable> {
+                com.intellij.openapi.module.ModuleUtilCore.findModuleForFile(file, project)
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * T-DialectInferFix（增补券）：数据源 / PSI / 范围证据都给不出结论时，补三层**低置信**证据。
+     *
+     * 触发场景是用户最常见的两类环境：①一个 IDE 数据源都没配（只写了 `application.yml`）；
+     * ②配了数据源但从没连过、插件也拿不到方言。此前这两类一律兜底 MySQL，等于「智能推断从未生效」。
+     *
+     * 顺序与置信度（全部 [DialectDecisionEngine.Confidence.FALLBACK]，UI 必须披露来源）：
+     *  项目配置文件里的 JDBC URL（`Source.PROJECT_CONFIG`）→ 构建文件里的驱动坐标
+     *  （`Source.PROJECT_DEPENDENCY`）→ 本次 SQL 文本的方言独占特征（`Source.SQL_SYNTAX`）。
+     *
+     * 两条边界：`CONFLICT`（数据源与运行期事实真的打架）保持阻断，低置信证据不得覆盖；
+     * EDT 上只读缓存，绝不触发文件扫描（平台慢操作断言）。
+     */
+    private fun withLowConfidenceEvidence(
+        project: com.intellij.openapi.project.Project?,
+        decision: DialectDecisionEngine.Decision,
+        sqlText: String?,
+        module: com.intellij.openapi.module.Module? = null,
+    ): DialectDecisionEngine.Decision {
+        if (decision.dialectName != null) return decision
+        if (decision.status == DialectDecisionEngine.Status.CONFLICT) return decision
+        val evidence = project?.let { projectEvidence(it, module) }
+        if (evidence != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = evidence.dialectName,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = evidence.source,
+                evidence = decision.evidence + evidence.source,
+            )
+        }
+        val syntax = ProjectDialectEvidence.syntaxHint(sqlText)
+        if (syntax != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = syntax,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = DialectDecisionEngine.Source.SQL_SYNTAX,
+                evidence = decision.evidence + DialectDecisionEngine.Source.SQL_SYNTAX,
+            )
+        }
+        // 最后一层：用户在 IDEA 里配置的 SQL 方言（项目级 → 全局默认）。它比 MySQL 硬编码更贴近
+        // 用户意图，也是「没有任何数据源」时唯一稳定事实。
+        val inherited = platformInheritedDialect(project) ?: return decision
+        return decision.copy(
+            status = DialectDecisionEngine.Status.RESOLVED,
+            dialectName = inherited,
+            confidence = DialectDecisionEngine.Confidence.FALLBACK,
+            source = DialectDecisionEngine.Source.IDEA_DIALECT,
+            evidence = decision.evidence + DialectDecisionEngine.Source.IDEA_DIALECT,
+        )
+    }
+
+    /**
+     * 平台为项目/全局配置的 SQL 方言 → 插件注册方言名（未配置/GenericSQL/未收录方言 → null）。
+     *
+     * 只读平台内存映射（`getConfiguredMapping` / `getConfiguredDefaultSqlDialect`），无 EDT 限制；
+     * [cn.song.mybatisplus.visualizer.execute.DialectPreMapping] 内已 runCatching 兜底。
+     */
+    private fun platformInheritedDialect(project: com.intellij.openapi.project.Project?): String? = runCatching {
+        project ?: return null
+        val id = cn.song.mybatisplus.visualizer.execute.DialectPreMapping.inheritedLanguageId(project)
+            ?: return null
+        IdeaSqlContextBridge.pluginDialectName(id)
+    }.getOrNull()
+
+    /**
+     * EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。
+     *
+     * T-DialectInferSmart：先问**来源模块**（模块内无结论再由 `forProject` 回落到项目级），
+     * 模块级结论单独缓存，避免 A 模块的库被 B 模块的配置覆盖。
+     */
+    private fun projectEvidence(
+        project: com.intellij.openapi.project.Project,
+        module: com.intellij.openapi.module.Module? = null,
+    ): ProjectDialectEvidence.Evidence? = runCatching {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+            ProjectDialectEvidence.cachedOrNull(project, module)
+                ?: (if (module != null) ProjectDialectEvidence.cachedOrNull(project) else null)
+        } else {
+            (if (module != null) ProjectDialectEvidence.forProject(project, module) else null)
+                ?: ProjectDialectEvidence.forProject(project)
+        }
+    }.getOrNull()
+
 
     fun decision(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext): DialectDecisionEngine.Decision =
         decision(context.project, context.hostVirtualFile, context.sqlPsiFile, context.canonicalModuleKey)

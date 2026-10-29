@@ -28,6 +28,18 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+        // 第三道门（T-MapperNavCoexistYield）：gutter 面的共存让位——MyBatisCodeHelperPro 启用时
+        // 它自己也会给同一行出跳转箭头，本插件让位。与 XmlSynHiGate 的注入区间互补是两件事：
+        // 那边判「对方是否真给这段文本上色」，这边判「对方是否在位」（同行两个图标都合规，故让位）。
+        // 探测结论已缓存，此处为 O(1) 布尔，不引入按元素开销。
+        if (gutterState != null &&
+            MyBatisCompetitorGate.shouldYield(
+                gutterState.mapperNavYieldToCodeHelper,
+                MyBatisCompetitorGate.isPeerPluginActive(),
+            )
+        ) {
+            return
+        }
         elements.mapNotNullTo(result, ::createMarker)
     }
 
@@ -69,6 +81,15 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+        // 第三道门（T-MapperNavCoexistYield）：与 XML 侧同门形——竞品在位且用户未关闭让位即不产出图标
+        if (gutterState != null &&
+            MyBatisCompetitorGate.shouldYield(
+                gutterState.mapperNavYieldToCodeHelper,
+                MyBatisCompetitorGate.isPeerPluginActive(),
+            )
+        ) {
+            return
+        }
         elements.mapNotNullTo(result, ::createMarker)
     }
 

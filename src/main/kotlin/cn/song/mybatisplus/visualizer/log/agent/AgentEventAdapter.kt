@@ -60,6 +60,10 @@ object AgentEventAdapter {
             // R32 弱形态：连接 URL → 目标库标注（方言名 · 库名@host:port url 解析真值；
             // 凭据在 JdbcUrlDialects.targetOf 解析期剔除；未知/畸形 URL 为 null，面板不显示角标）
             databaseName = JdbcUrlDialects.badgeName(event.url),
+            // T-DialectInferFix：同一条 URL 另存**注册方言名**（渲染命名空间）——日志/历史双击预览
+            // 用它当 EXACT 方言证据；与角标显示名分开，避免 HSQL/GBASE 这类无注册方言的名字被
+            // byName 静默回落 MySQL。
+            dialectName = cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(event.url),
             // O-147 W0：通道归因打标——agent 事件适配产物恒为 AGENT
             captureProvenance = CaptureProvenance.AGENT,
         )

@@ -370,22 +370,22 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
 internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile): String? {
     val target = previewDialectMappingTarget(vf)
     val desiredName = previewDesiredDialectName
-    val resolvedLanguage = desiredName?.let {
-        cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, it)
-    }
+    // T-DialectInferFix：没有预览级结论时**继承平台设置**，不再冒充 MySQL。
+    // 历史版本在这里硬编码 MySQL，把「PG 项目的 preview SQL」按 MySQL 解析，`signal` 这类
+    // PG 合法列名被 MySQL 保留字表判成语法错（真机假红）。
+    if (desiredName == null) return inheritPlatformPreviewDialect(proj, target)
+    val resolvedLanguage = cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, desiredName)
     // 已明确生成方言但平台无对应 parser 时用 GenericSQL，绝不反向冒充 MySQL。
-    val targetLanguage = if (desiredName != null && resolvedLanguage == null) {
-        cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
-            proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID,
-        )
-    } else resolvedLanguage
-    if (desiredName != null && targetLanguage == null) {
+    val targetLanguage = resolvedLanguage ?: cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
+        proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID,
+    )
+    if (targetLanguage == null) {
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .warn("[O-145] preview dialect '$desiredName' and GenericSQL platform Language are unavailable; keep existing mapping")
         return null
     }
     val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
-        ?: cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.MYSQL_LANGUAGE_ID
+        ?: cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID
     val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target &&
         previewDialectMappedLanguageId.equals(targetId, ignoreCase = true)
     if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(
@@ -399,6 +399,47 @@ internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.i
     }
     return null
 }
+
+/**
+ * T-DialectInferFix：无预览级方言结论时的**继承**路径。
+ *
+ * 我们自己的私有预览目录（`.idea/sql-visualizer/preview`）只有插件写过映射，因此这里的规则是：
+ *  1. 读「项目级 → 全局默认 SQL 方言」（[DialectPreMapping.configuredLanguageId] 从项目根读，
+ *     不读本目录自己的旧映射）——用户已经在设置里配过的方言优先；
+ *  2. 读到就**显式改写**本目录映射（覆盖历史版本留下的 MySQL 兼容兜底，P-6 现场）；
+ *  3. 平台什么都没配（全局也是 GenericSQL）→ 清掉本目录的旧映射，退回平台默认，
+ *     既不冒充 MySQL 也不留旧值。
+ *
+ * 返回要等的 language id；拿不到平台 Language 对象时返回 null（调用方按「无映射」继续，
+ * 最差等价 GenericSQL 旧行为，不会产生假红）。
+ */
+private fun SqlPreviewPanel.inheritPlatformPreviewDialect(
+    proj: Project,
+    target: com.intellij.openapi.vfs.VirtualFile,
+): String? {
+    val preMapping = cn.song.mybatisplus.visualizer.execute.DialectPreMapping
+    val inheritedId = runCatching {
+        preMapping.inheritedLanguageId(proj)
+    }.getOrNull()
+    val inheritedLanguage = inheritedId?.let { preMapping.languageById(proj, it) }
+    if (inheritedLanguage != null) {
+        val id = (inheritedLanguage as? com.intellij.lang.Language)?.id ?: return null
+        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target &&
+            previewDialectMappedLanguageId.equals(id, ignoreCase = true)
+        if (preMapping.ensureMapped(proj, target, inheritedLanguage, inProcessMapped)) {
+            previewDialectMappedVf = target
+            previewDialectMappedLanguageId = id
+            return id
+        }
+        return null
+    }
+    // 平台没有可继承的方言：清掉本目录的旧插件映射（best-effort，失败不影响预览继续）。
+    if (preMapping.configuredImmediateLanguageId(proj, target) != null) {
+        preMapping.clearMapping(proj, target)
+    }
+    return cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID
+}
+
 
 /**
  * T-DegradedPreviewUx P4：等方言映射引发的「语言替换重解析」落地，返回当前 PSI。

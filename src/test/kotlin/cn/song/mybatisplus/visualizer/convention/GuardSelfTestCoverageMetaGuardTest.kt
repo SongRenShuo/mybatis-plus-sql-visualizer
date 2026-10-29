@@ -711,6 +711,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
                     "潜伏红灯），合并轮补登。",
             ),
+            // ---- T-DialectInferFix 券 06：方言兜底反向守卫（2026-10-29） ----
+            GuardEntry(
+                "convention/DialectInferFallbackGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "insideString",
+                        FnKind.HELPER,
+                        "注释剥离助手（返回 Boolean，不是判定内核）：判断行内 `//` 是否落在字符串字面量里，" +
+                            "供 stripComments 决定是否截断；被 stripComments 的 map 分支调用。",
+                        via = listOf("stripComments"),
+                    ),
+                ),
+                "方言兜底反向守卫（T-DialectInferFix 券 06）：判定内核内联于四个用例——" +
+                    "读 SqlPreviewPanelEditorLifecycle 断言不再出现 MySQL 硬兜底符号" +
+                    "（MYSQL_LANGUAGE_ID / setMySqlOnEdt）且走继承入口 inheritedLanguageId；" +
+                    "读 PreviewSourceContext 断言无「声明了没人读」的精确 URL/数据源字段；" +
+                    "读日志识别通道断言 capturedDialect 在场；另有用例以合成样本自证危险形态必红。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",

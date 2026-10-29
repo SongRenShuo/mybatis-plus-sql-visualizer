@@ -45,12 +45,14 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         super.setUp()
         MapperXmlLocator.clearFileListCacheForTest()
         MapperXmlLocator.statementScanCount.set(0)
+        MyBatisCompetitorGate.resetForTest()
     }
 
     override fun tearDown() {
         try {
             MapperXmlLocator.clearFileListCacheForTest()
         } finally {
+            MyBatisCompetitorGate.resetForTest()
             super.tearDown()
         }
     }
@@ -165,6 +167,71 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
             val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
             assertEquals("组关时 Java 侧零标记", 0, markers.size)
             assertEquals("组关时不得触达 locate（门在重逻辑前）", 0, MapperXmlLocator.statementScanCount.get())
+        } finally {
+            settings.loadState(before)
+        }
+    }
+
+    // ---------- ④ T-MapperNavCoexistYield：竞品共存让位门 ----------
+
+    /** XML 侧基线：namespace 可解析到接口方法 → 语句标签行恰 1 个跳转图标。 */
+    private fun xmlSideMarkerCount(): Int {
+        myFixture.addFileToProject("com/demo/mapper/UserMapper.java", javaFixture)
+        val xml = myFixture.addFileToProject("mapping/UserMapper.xml", mapperXml1)
+        val leaves = PsiTreeUtil.collectElements(xml) { it.firstChild == null }.toMutableList()
+        val result = mutableListOf<LineMarkerInfo<*>>()
+        MapperXmlToJavaLineMarkerProvider().collectSlowLineMarkers(leaves, result)
+        return result.size
+    }
+
+    /** Java 侧基线：接口方法声明行恰 1 个跳转图标（与 test接口方法_恰一标记且定位命中 同夹具）。 */
+    private fun javaSideMarkerCount(): Int {
+        addMapperXmlForInterface()
+        myFixture.configureByText("UserMapper.java", javaFixture)
+        return collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves()).size
+    }
+
+    fun test竞品在位且让位开_XML侧零图标() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：XML 侧应让位（0 图标）", 0, xmlSideMarkerCount())
+    }
+
+    fun test竞品在位且让位开_Java侧零图标() {
+        MyBatisCompetitorGate.probe = { true }
+        assertEquals("竞品在位 + 让位开：Java 侧应让位（0 图标）", 0, javaSideMarkerCount())
+    }
+
+    fun test竞品在位但让位关_XML侧与基线一致() {
+        withYieldDisabled {
+            MyBatisCompetitorGate.probe = { true }
+            assertEquals("让位关：XML 侧强制保留本插件图标", 1, xmlSideMarkerCount())
+        }
+    }
+
+    fun test竞品在位但让位关_Java侧与基线一致() {
+        withYieldDisabled {
+            MyBatisCompetitorGate.probe = { true }
+            assertEquals("让位关：Java 侧强制保留本插件图标", 1, javaSideMarkerCount())
+        }
+    }
+
+    fun test竞品不在位_XML侧基线不变() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("不在位：XML 侧基线 1", 1, xmlSideMarkerCount())
+    }
+
+    fun test竞品不在位_Java侧基线不变() {
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals("不在位：Java 侧基线 1", 1, javaSideMarkerCount())
+    }
+
+    /** 临时关闭让位开关执行 [block]（结束后恢复原 State）。 */
+    private fun withYieldDisabled(block: () -> Unit) {
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(mapperNavYieldToCodeHelper = false))
+            block()
         } finally {
             settings.loadState(before)
         }
