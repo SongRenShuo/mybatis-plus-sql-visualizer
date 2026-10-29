@@ -1,7 +1,10 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.module.Module
+import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.search.FilenameIndex
@@ -16,19 +19,27 @@ import com.intellij.psi.search.GlobalSearchScope
  *
  * 这里补三层**只读、可解释、fail-closed** 的证据（全部低置信度，UI 必须披露来源）：
  *
- *  1. [configDialect]：项目内 `application*` / `bootstrap*` 配置文件里的 `jdbc:<子协议>:`。
- *     多个文件出现**不同**子协议 → 不猜（null）。
- *  2. [dependencyDialect]：`pom.xml` / `build.gradle(.kts)` / `libs.versions.toml` 里的数据库驱动坐标。
- *     多个不同驱动的方言 → 不猜。
+ *  1. [configDialect]：`application*` / `bootstrap*` 配置文件里的 `jdbc:<子协议>:`。
+ *     - **模块优先**（T-DialectInferSmart）：传了 [Module] 就只扫该模块自己的文件（多模块各自连不同库时，
+ *       模块 A 的预览不再被模块 B 的配置搅成「无共识」）；模块内无结论才由调用方回落到项目级。
+ *     - **排除测试资源**：`src/test/resources` 下的 `application-test.yml` 不参与（否则「主库 PG + 测试 H2」
+ *       会被判成无共识，整条推断退化）。
+ *     - **激活 profile 优先**：读 `spring.profiles.active` / `spring.profiles.include`，激活 profile 的
+ *       `application-<profile>.*` 覆盖基础 `application.*`；**其它环境的文件直接不投票**。
+ *       拿不到激活 profile（没写/占位符无默认值）时退回「全部文件求共识」，与旧行为一致。
+ *  2. [dependencyDialect]：`pom.xml` / `build.gradle(.kts)` 里的数据库驱动坐标。多个不同驱动 → 不猜。
  *  3. [syntaxHint]：SQL 文本里的**方言独占**特征（反引号、`LIMIT a, b`、`::type`、`ROWNUM`、`TOP n`…）。
  *     只认强特征，且要求「只有一个方言命中」，否则 null。
  *
- * 缓存：单槽 TTL（默认 30s）+ 项目弱引用；[enabled] 是测试缝（并发用例可关掉，避免真实工程扫描）。
+ * 缓存：TTL（默认 30s）+ 项目/模块弱引用，模块各占一槽；[enabled] 是测试缝（单测默认关闭真实扫描）。
  * 扫描范围有上界（[MAX_CONFIG_FILES] / [MAX_BUILD_FILES] / [MAX_TEXT_CHARS]），不会扫整仓。
  */
 internal object ProjectDialectEvidence {
 
     data class Evidence(val dialectName: String, val source: DialectDecisionEngine.Source)
+
+    /** 一个配置/构建文件的「文件名 + 正文」——profile 判定需要文件名后缀。 */
+    data class ConfigFile(val name: String, val text: String)
 
     /** 扫描的配置文件扩展名（按扩展名走 FilenameIndex，覆盖 Boot 的连字符命名）。 */
     private val CONFIG_EXTENSIONS = listOf("yml", "yaml", "properties")
@@ -42,6 +53,15 @@ internal object ProjectDialectEvidence {
 
     /** JDBC URL 定位（只需子协议；连接串里的账号密码不进入任何返回值）。 */
     private val JDBC_URL = Regex("jdbc:([a-zA-Z0-9]+):")
+
+    /** 扁平键形态：`spring.profiles.active=dev` / `spring.profiles.active: dev`。 */
+    private val FLAT_PROFILE_KEY = Regex(
+        "(?i)^\\s*spring\\.profiles\\.(active|include)\\s*[:=]\\s*(.+?)\\s*$",
+    )
+
+    private val SPRING_KEY = Regex("^\\s*spring\\s*:\\s*$")
+    private val PROFILES_KEY = Regex("^\\s*profiles\\s*:\\s*$")
+    private val PROFILE_VALUE_KEY = Regex("^\\s*(active|include)\\s*:\\s*(.*)$")
 
     /**
      * 驱动坐标标记 → 方言名（小写子串匹配）。键取各驱动**发布坐标里独有**的片段，
@@ -106,8 +126,14 @@ internal object ProjectDialectEvidence {
         val evidence: Evidence?,
     )
 
+    /** 项目级槽（module == null）。 */
     @Volatile
-    private var slot: Slot? = null
+    private var projectSlot: Slot? = null
+
+    /** 模块级槽：多模块各自连不同库时必须分开缓存，否则 A 模块的结论会喂给 B。 */
+    private val moduleSlots = java.util.Collections.synchronizedMap(
+        java.util.WeakHashMap<Module, Slot>(),
+    )
 
     /** 测试缝：TTL 上界（毫秒）。 */
     internal var ttlMs: Long = 30_000L
@@ -120,57 +146,80 @@ internal object ProjectDialectEvidence {
      *  - 全量 8500+ 例里凡走 `DialectRegistry.effective(project)` 的都会各扫一遍工程文件，纯浪费；
      *  - 更危险的是**仓库自身**的 `build.gradle.kts` 含 `libs.postgresql`（测试依赖），
      *    任何以真实工程为 basePath 的测试项目都会被它判成 PostgreSQL，污染既有断言。
-     * 语义由 [configTextsForTest] / [buildTextsForTest] 缝覆盖，接线由真机覆盖。
+     * 语义由 [configFilesForTest] / [buildTextsForTest] 缝覆盖，接线由真机覆盖。
      */
     internal var enabled: Boolean = com.intellij.openapi.application.ApplicationManager.getApplication()
         ?.isUnitTestMode != true
 
-    /** 测试缝：配置文件文本替身（null = 走真实扫描）。 */
-    internal var configTextsForTest: ((Project) -> List<String>)? = null
+    /** 测试缝：配置文件替身（含文件名，供 profile 判定；null = 走真实扫描）。 */
+    internal var configFilesForTest: ((Project) -> List<ConfigFile>)? = null
 
     /** 测试缝：构建文件文本替身。 */
     internal var buildTextsForTest: ((Project) -> List<String>)? = null
 
     /**
-     * 项目级补充证据：配置文件优先、驱动依赖次之；两者都无结论 → null（调用方保持 fail-closed）。
-     * 只在后台线程调用（内部包 ReadAction；EDT 调用会退化为读动作，平台允许但勿在热路径用）。
+     * 补充证据：配置文件优先、驱动依赖次之；两者都无结论 → null（调用方保持 fail-closed）。
+     *
+     * @param module 预览来源文件所属模块；非 null 时配置扫描**只收该模块自己的文件**，
+     *               模块内无结论由调用方再问项目级（[Module] 为 null 的那次调用）。
      */
-    fun forProject(project: Project?): Evidence? {
+    fun forProject(project: Project?, module: Module? = null): Evidence? {
         if (project == null) return null
         // 测试缝注入时不看 enabled——语义用例要能在「真实扫描关闭」的环境里跑
-        val seamsInjected = configTextsForTest != null || buildTextsForTest != null
+        val seamsInjected = configFilesForTest != null || buildTextsForTest != null
         if (!enabled && !seamsInjected) return null
         val now = clockMs()
-        slot?.let { cached ->
-            if (cached.project.get() === project && now - cached.atMs <= ttlMs) return cached.evidence
-        }
+        cachedSlot(project, module, now)?.let { return it.evidence }
         val evidence = runCatching {
-            configDialect(project)?.let { Evidence(it, DialectDecisionEngine.Source.PROJECT_CONFIG) }
+            configDialect(project, module)?.let { Evidence(it, DialectDecisionEngine.Source.PROJECT_CONFIG) }
                 ?: dependencyDialect(project)?.let { Evidence(it, DialectDecisionEngine.Source.PROJECT_DEPENDENCY) }
         }.getOrNull()
-        slot = Slot(java.lang.ref.WeakReference(project), now, evidence)
+        val slot = Slot(java.lang.ref.WeakReference(project), now, evidence)
+        if (module == null) projectSlot = slot else moduleSlots[module] = slot
         return evidence
     }
 
     /** 只读缓存（EDT 调用路径用：绝不在 EDT 上触发文件扫描）。 */
-    fun cachedOrNull(project: Project?): Evidence? {
+    fun cachedOrNull(project: Project?, module: Module? = null): Evidence? {
         if (project == null) return null
-        val cached = slot ?: return null
-        if (cached.project.get() !== project) return null
-        if (clockMs() - cached.atMs > ttlMs) return null
-        return cached.evidence
+        return cachedSlot(project, module, clockMs())?.evidence
     }
 
-    /** 配置文件里的 JDBC 子协议共识（唯一才返回）。 */
-    fun configDialect(project: Project): String? = runCatching {
-        val texts = configTextsForTest?.invoke(project) ?: readConfigTexts(project)
-        consensus(texts.flatMap { dialectsInUrls(it) })
+    private fun cachedSlot(project: Project, module: Module?, now: Long): Slot? {
+        val cached = if (module == null) projectSlot else moduleSlots[module]
+        if (cached == null) return null
+        if (cached.project.get() !== project) return null
+        if (now - cached.atMs > ttlMs) return null
+        return cached
+    }
+
+    /**
+     * 配置文件里的 JDBC 子协议共识（唯一才返回）。
+     *
+     * 激活 profile 已知时按 Spring 的覆盖语义分层：`application-<profile>` 优先，
+     * **其它 profile 的文件不投票**；profile 段没有任何 URL 才看基础文件。
+     */
+    fun configDialect(project: Project, module: Module? = null): String? = runCatching {
+        val files = configFilesForTest?.invoke(project) ?: readConfigFiles(project, module)
+        val active = activeProfilesIn(files)
+        if (active.isEmpty()) {
+            // 拿不到激活 profile：全部文件求共识（旧行为）
+            return consensus(files.flatMap { dialectsInUrls(it.text) })
+        }
+        val profileFiles = files.filter { profileSuffix(it.name)?.lowercase() in active }
+        val baseFiles = files.filter { profileSuffix(it.name) == null }
+        val profileUrls = profileFiles.flatMap { dialectsInUrls(it.text) }
+        if (profileUrls.isNotEmpty()) {
+            // profile 段有证据：只认它（冲突即 null，不拿 base 的旧值兜底）
+            return consensus(profileUrls)
+        }
+        consensus(baseFiles.flatMap { dialectsInUrls(it.text) })
     }.getOrNull()
 
     /** 构建文件里的数据库驱动坐标共识（唯一才返回）。 */
     fun dependencyDialect(project: Project): String? = runCatching {
-        val texts = buildTextsForTest?.invoke(project) ?: readBuildTexts(project)
-        consensus(texts.flatMap { dialectsInDependencies(it) })
+        val files = buildTextsForTest?.invoke(project)?.map { ConfigFile("", it) } ?: readBuildTexts(project)
+        consensus(files.flatMap { dialectsInDependencies(it.text) })
     }.getOrNull()
 
     /** 纯函数：文本里出现的 JDBC 子协议 → 注册方言名（未收录子协议自然被忽略）。 */
@@ -181,6 +230,72 @@ internal object ProjectDialectEvidence {
     fun dialectsInDependencies(text: String): List<String> {
         val lower = text.lowercase()
         return DRIVER_MARKERS.filter { (marker, _) -> lower.contains(marker) }.map { it.second }
+    }
+
+    /**
+     * 纯函数：从配置文本里取激活 profile 集合（`spring.profiles.active|include`）。
+     *
+     * 支持：扁平的 `spring.profiles.active: dev` / `.properties` 的 `=dev` / YAML 缩进块
+     * （`spring: → profiles: → active:`）/ 逗号与 `[a, b]` 列表 / 后续 `- item` 列表 /
+     * `${ENV:default}` 取默认值。`${ENV}`（无默认值）与 `@maven.filter@` 视为未知 → 跳过。
+     * 拿不到任何值 → 空集（调用方按「未知」处理，全量求共识）。
+     */
+    fun activeProfilesIn(files: List<ConfigFile>): Set<String> =
+        files.flatMap { activeProfilesIn(it.text) }.map { it.lowercase() }.toSet()
+
+    fun activeProfilesIn(text: String): List<String> {
+        val out = mutableListOf<String>()
+        var springIndent = -1
+        var profilesIndent = -1
+        val lines = text.lineSequence().toList()
+        var i = 0
+        while (i < lines.size) {
+            val raw = lines[i]
+            i++
+            val line = stripYamlComment(raw)
+            if (line.isBlank()) continue
+            val indent = line.indexOfFirst { !it.isWhitespace() }.let { if (it < 0) 0 else it }
+            // 缩进回退即离开 spring/profiles 块
+            if (springIndent >= 0 && indent <= springIndent && !SPRING_KEY.matches(line)) {
+                springIndent = -1
+                profilesIndent = -1
+            } else if (profilesIndent >= 0 && indent <= profilesIndent && !PROFILES_KEY.matches(line)) {
+                profilesIndent = -1
+            }
+            FLAT_PROFILE_KEY.find(line)?.let { m ->
+                out += parseProfileValues(m.groupValues[2])
+                continue
+            }
+            if (SPRING_KEY.matches(line)) {
+                springIndent = indent
+                continue
+            }
+            if (springIndent >= 0 && indent > springIndent && PROFILES_KEY.matches(line)) {
+                profilesIndent = indent
+                continue
+            }
+            if (profilesIndent >= 0 && indent > profilesIndent) {
+                PROFILE_VALUE_KEY.find(line)?.let { m ->
+                    var value = m.groupValues[2].trim()
+                    if (value.isEmpty()) {
+                        // 列表形态：后续更深缩进的 "- item"
+                        val items = mutableListOf<String>()
+                        while (i < lines.size) {
+                            val next = stripYamlComment(lines[i])
+                            if (next.isBlank()) { i++; continue }
+                            val nextIndent = next.indexOfFirst { !it.isWhitespace() }.let { if (it < 0) 0 else it }
+                            if (nextIndent <= indent) break
+                            i++
+                            val item = next.trim().removePrefix("-").trim()
+                            if (item.isNotEmpty()) items += item
+                        }
+                        value = items.joinToString(",")
+                    }
+                    out += parseProfileValues(value)
+                }
+            }
+        }
+        return out
     }
 
     /**
@@ -202,16 +317,59 @@ internal object ProjectDialectEvidence {
     private fun consensus(names: List<String>): String? =
         names.filter { it.isNotBlank() }.distinct().singleOrNull()
 
-    private fun readConfigTexts(project: Project): List<String> = readProjectTexts(
+    /** `application-dev.yml` → `dev`；`application.yml` / `bootstrap.yml` → null（基础文件）。 */
+    internal fun profileSuffix(name: String): String? {
+        val lower = name.lowercase()
+        val stem = lower.substringBeforeLast('.', lower)
+        if (stem == "application" || stem == "bootstrap") return null
+        if (!stem.startsWith("application-") && !stem.startsWith("bootstrap-")) return null
+        return stem.substringAfter('-').takeIf { it.isNotBlank() }
+    }
+
+    /** `dev, test` / `[dev, test]` / `${ENV:dev}` → 去引号后的 profile 列表。 */
+    private fun parseProfileValues(raw: String): List<String> =
+        raw.removeSurrounding("[", "]")
+            .split(',')
+            .map { it.trim().removeSurrounding("\"").removeSurrounding("'") }
+            .map { normalizeProfileToken(it) }
+            .filter { it.isNotEmpty() }
+
+    /** `${ENV:dev}` → `dev`；`${ENV}` 与 `@x@`（Maven 过滤）→ 空（未知，不猜）。 */
+    private fun normalizeProfileToken(token: String): String {
+        if (token.isEmpty()) return ""
+        if (token.startsWith("@") && token.endsWith("@")) return ""
+        val placeholder = Regex("^\\$\\{([^:}]+)(?::([^}]*))?}$").find(token) ?: return token
+        return placeholder.groupValues[2].trim()
+    }
+
+    /** 去掉行尾 `#` 注释（只在引号外生效，够 YAML/properties 用）。 */
+    private fun stripYamlComment(line: String): String {
+        var inSingle = false
+        var inDouble = false
+        var i = 0
+        while (i < line.length) {
+            when (line[i]) {
+                '\'' -> if (!inDouble) inSingle = !inSingle
+                '"' -> if (!inSingle) inDouble = !inDouble
+                '#' -> if (!inSingle && !inDouble) return line.substring(0, i)
+            }
+            i++
+        }
+        return line
+    }
+
+    private fun readConfigFiles(project: Project, module: Module?): List<ConfigFile> = readProjectTexts(
         project = project,
+        module = module,
         maxFiles = MAX_CONFIG_FILES,
         accept = { file -> isApplicationConfig(file.name) },
         byName = emptyList(),
         byExtensions = CONFIG_EXTENSIONS,
     )
 
-    private fun readBuildTexts(project: Project): List<String> = readProjectTexts(
+    private fun readBuildTexts(project: Project): List<ConfigFile> = readProjectTexts(
         project = project,
+        module = null,
         maxFiles = MAX_BUILD_FILES,
         accept = { true },
         byName = BUILD_FILE_NAMES,
@@ -228,17 +386,22 @@ internal object ProjectDialectEvidence {
 
     /**
      * 有界读取：按名 + 按扩展名两次索引查询，读前限制文件大小，ReadAction 内完成。
+     *
+     * 过滤两件事：**测试资源不参与**（`isInTestSourceContent`，否则测试库会把真实库挤成「无共识」）；
+     * 传了 [module] 时**只收该模块的文件**（多模块各自连不同库时互不干扰）。
      * 读失败的文件静默跳过（推断是可选能力，不得影响预览主链）。
      */
     private fun readProjectTexts(
         project: Project,
+        module: Module?,
         maxFiles: Int,
         accept: (VirtualFile) -> Boolean,
         byName: List<String>,
         byExtensions: List<String>,
-    ): List<String> = ReadAction.compute<List<String>, Throwable> {
+    ): List<ConfigFile> = ReadAction.compute<List<ConfigFile>, Throwable> {
         if (project.isDisposed) return@compute emptyList()
         val scope = GlobalSearchScope.projectScope(project)
+        val fileIndex = ProjectFileIndex.getInstance(project)
         val files = LinkedHashSet<VirtualFile>()
         byName.forEach { name ->
             runCatching { FilenameIndex.getVirtualFilesByName(project, name, scope) }
@@ -250,11 +413,13 @@ internal object ProjectDialectEvidence {
         }
         files.asSequence()
             .filter { it.isValid && !it.isDirectory && accept(it) }
+            .filter { !fileIndex.isInTestSourceContent(it) }
+            .filter { module == null || ModuleUtilCore.findModuleForFile(it, project) === module }
             .take(maxFiles)
             .mapNotNull { file ->
                 runCatching {
                     if (file.length > MAX_TEXT_CHARS) return@runCatching null
-                    VfsUtilCore.loadText(file)
+                    ConfigFile(file.name, VfsUtilCore.loadText(file))
                 }.getOrNull()
             }
             .toList()
@@ -262,13 +427,15 @@ internal object ProjectDialectEvidence {
 
     /** 测试缝：清缓存。 */
     internal fun invalidate() {
-        slot = null
+        projectSlot = null
+        moduleSlots.clear()
     }
 
     /** 测试缝：清缓存 + 恢复默认（用例隔离）。 */
     internal fun resetForTest() {
-        slot = null
-        configTextsForTest = null
+        projectSlot = null
+        moduleSlots.clear()
+        configFilesForTest = null
         buildTextsForTest = null
         enabled = com.intellij.openapi.application.ApplicationManager.getApplication()?.isUnitTestMode != true
         ttlMs = 30_000L

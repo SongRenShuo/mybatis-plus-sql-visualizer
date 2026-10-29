@@ -974,6 +974,9 @@ object DialectRegistry {
             runCatching { ModuleDataSourceBindingStore.getInstance(project).learnedCandidate(project, it) }.getOrNull()
         }
         val dialectFile = sqlPsiFile?.virtualFile ?: sourceFile
+        // T-DialectInferSmart：配置/依赖证据按**来源文件所属模块**收窄——多模块各自连不同库时，
+        // A 模块的预览不能被 B 模块的 application.yml 搅成「无共识」。
+        val sourceModule = resolveSourceModule(project, dialectFile)
         if (sqlPsiFile != null && dialectFile != null) {
             val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
             if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
@@ -989,6 +992,7 @@ object DialectRegistry {
                         boundDataSourceDialect = boundDataSourceDialect,
                     ),
                     sqlText,
+                    sourceModule,
                 )
             }
         }
@@ -1003,7 +1007,21 @@ object DialectRegistry {
                 boundDataSourceDialect = boundDataSourceDialect,
             )),
             sqlText,
+            sourceModule,
         )
+    }
+
+    /** 来源文件所属模块（拿不到/无文件 → null；模块解析是读动作，统一包 ReadAction）。 */
+    private fun resolveSourceModule(
+        project: com.intellij.openapi.project.Project,
+        file: com.intellij.openapi.vfs.VirtualFile?,
+    ): com.intellij.openapi.module.Module? {
+        file ?: return null
+        return runCatching {
+            com.intellij.openapi.application.ReadAction.compute<com.intellij.openapi.module.Module?, Throwable> {
+                com.intellij.openapi.module.ModuleUtilCore.findModuleForFile(file, project)
+            }
+        }.getOrNull()
     }
 
     /**
@@ -1023,10 +1041,11 @@ object DialectRegistry {
         project: com.intellij.openapi.project.Project?,
         decision: DialectDecisionEngine.Decision,
         sqlText: String?,
+        module: com.intellij.openapi.module.Module? = null,
     ): DialectDecisionEngine.Decision {
         if (decision.dialectName != null) return decision
         if (decision.status == DialectDecisionEngine.Status.CONFLICT) return decision
-        val evidence = project?.let { projectEvidence(it) }
+        val evidence = project?.let { projectEvidence(it, module) }
         if (evidence != null) {
             return decision.copy(
                 status = DialectDecisionEngine.Status.RESOLVED,
@@ -1071,14 +1090,22 @@ object DialectRegistry {
         IdeaSqlContextBridge.pluginDialectName(id)
     }.getOrNull()
 
-    /** EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。 */
+    /**
+     * EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。
+     *
+     * T-DialectInferSmart：先问**来源模块**（模块内无结论再由 `forProject` 回落到项目级），
+     * 模块级结论单独缓存，避免 A 模块的库被 B 模块的配置覆盖。
+     */
     private fun projectEvidence(
         project: com.intellij.openapi.project.Project,
+        module: com.intellij.openapi.module.Module? = null,
     ): ProjectDialectEvidence.Evidence? = runCatching {
         if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
-            ProjectDialectEvidence.cachedOrNull(project)
+            ProjectDialectEvidence.cachedOrNull(project, module)
+                ?: (if (module != null) ProjectDialectEvidence.cachedOrNull(project) else null)
         } else {
-            ProjectDialectEvidence.forProject(project)
+            (if (module != null) ProjectDialectEvidence.forProject(project, module) else null)
+                ?: ProjectDialectEvidence.forProject(project)
         }
     }.getOrNull()
 

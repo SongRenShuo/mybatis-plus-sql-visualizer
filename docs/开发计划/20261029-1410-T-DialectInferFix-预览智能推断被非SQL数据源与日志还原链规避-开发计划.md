@@ -273,3 +273,18 @@
   - 结论：**P-4 部分证伪**（`getConfiguredMapping` 不含全局，全局走 `getDefaultMapping`）但**继承链成立**；我们的 `inheritedLanguageId` 恰好是「项目级 `getConfiguredMapping` → 全局 `getConfiguredDefaultSqlDialect`」，无需改策略。**P-5 成立**（清除即回到继承并触发重解析）。
   - 残留（只有真机能答）：`.idea/sql-visualizer/preview` 是否处于内容根内（决定项目级对该文件是否生效，还是直接落到全局）；预览目录上是否残留旧的 pusher 值（`clearMapping` 会一并清掉）。
 - 真机验收（cyzc-platform）待发版验证：日志条目预览头部应显示「方言: PostgreSQL（当前运行条目）」，`signal` 不再标红，`.idea/sqldialects.xml` 的 preview 映射应被改写为 PostgreSQL 或清除。
+
+---
+
+## 十二、增补：T-DialectInferSmart（2026-10-29，同日落 master）
+
+用户追问「多模块项目用不同方言能否识别；希望再聪明些，例如排除测试资源、按激活 profile 优先」。原实现是**项目级全量求共识**：多模块各自连不同库、或 `src/test/resources/application-test.yml` 用 H2，都会把候选挤成「无共识」而整体退化。本次三处收窄：
+
+1. **模块优先**（`ProjectDialectEvidence.forProject(project, module)`）：`DialectRegistry.decision` 用 `ModuleUtilCore.findModuleForFile(来源文件)` 解析模块并传入；配置扫描只收**该模块自己的文件**（`findModuleForFile(file) === module`），模块级结论单独缓存（`WeakHashMap<Module, Slot>`）。模块内无结论时由 `projectEvidence` 回落项目级。⇒ 多模块 A=MySQL、B=PostgreSQL 时，各自预览各得其所。
+2. **排除测试资源**：`readProjectTexts` 过滤 `ProjectFileIndex.isInTestSourceContent`。⇒ 主库 PG + 测试 H2 不再被挤成无共识。
+3. **激活 profile 优先**：`activeProfilesIn` 支持 `spring.profiles.active|include` 的四种写法（扁平键 / properties `=` / YAML 缩进块 / 逗号与 `[a, b]` 与 `- item` 列表），`${ENV:default}` 取默认值、`${ENV}` 与 `@maven@` 视为未知；有激活 profile 时**只让激活 profile 的 `application-<profile>.*` 投票**（覆盖基础 `application.*`），其它环境的文件不参与；拿不到激活 profile 才回到「全部文件求共识」。
+
+配套单测：`ProjectDialectEvidenceTest` 扩到 15 例（激活 profile 选中/覆盖基础/profile 无 URL 回落/prod 默认值/四种写法解析/profile 后缀/未知值不猜）。**反向验证**：把 `activeProfilesIn` 的结果强行忽略（`if (true)` 走全量分支）→ 三个 profile 用例红（`active profile file wins over other environments`、`active profile overrides base file`、`profile placeholder default value is used`）；撤回后同批 15 例绿。
+
+未覆盖（只有真机能确认）：模块收窄与测试资源排除走的是平台 `ProjectFileIndex`/`ModuleUtilCore`，语义层用测试缝验证、接线待真机；多文档 YAML 里 `spring.config.activate.on-profile` 分档暂未解析（同一文件内多环境段会按「同文件多 URL」判无共识）。
+
