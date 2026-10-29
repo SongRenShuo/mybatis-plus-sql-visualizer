@@ -43,11 +43,14 @@ import org.junit.Test
  *        `FORMAT = {TRADITIONAL | JSON}`，缺省 TRADITIONAL 表格行 → 同 MySQL 形态；
  *      - MySQL 5.7/8.0 兼容性声明（官方《与 MySQL 兼容性对比》）覆盖反引号 / LIMIT / `ON DUPLICATE KEY
  *        UPDATE`（官方《唯一键冲突》）——形态推定为 MySQL 族，真机核对后增量；
- *  - **GaussDB `jdbc:gaussdb://` 前缀：文档级**（华为 GaussDB 官方《Creating a Database Connection》），
- *    与 `jdbc:opengauss://` 同归 [OpenGaussDialect]（D2=A 定案）。
+ *  - **GaussDB：文档级**（华为云 GaussDB 集中式 V2.0-10.x SQL 参考 + 官方驱动表
+ *    `jdbc:gaussdb://`）。**T-GaussDbDialect（券 04）起不再与 `jdbc:opengauss://` 共用
+ *    [OpenGaussDialect]**——D2=A 已撤销，理由见 [GaussDbDialect] 的 KDoc（形态不分叉、
+ *    保留字与身份分叉）。GaussDB 商用版无公开容器镜像，无真机。
  *
- * 反向验证夹具：`注册表身份_摘掉注册即红` 断言 `DialectRegistry.byName` 命中本方言对象与推断链
- * 全链落点——摘掉注册后 byName 回落 [MySqlDialect]、推断链值失配，本文件红灯（红/绿读数见计划 §七）。
+ * 反向验证夹具（两次，读数见计划 §七）：`注册表身份_摘掉注册即红` 断言 `DialectRegistry.byName`
+ * 命中本方言对象与推断链全链落点——摘掉注册后 byName 回落 [MySqlDialect]、推断链值失配；
+ * `openGauss保留字_真机黄金清单逐词一致` 摘掉任一保留字即红。
  */
 class DialectXcFamilyTest {
 
