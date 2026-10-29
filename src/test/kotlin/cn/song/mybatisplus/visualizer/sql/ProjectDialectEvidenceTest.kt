@@ -178,6 +178,81 @@ class ProjectDialectEvidenceTest {
         }
     }
 
+    // ---------- T-XcDialects3（券 03 + 券 05-驱动标记）：瀚高 / 海量 / 金仓 PG 协议版 ----------
+
+    @Test
+    fun `xc3 driver markers highgo and vastbase coordinates`() {
+        // 瀚高两个制品都归 HighGo：HgdbJdbc（jdbc:highgo:）与 hgdb-pgjdbc（原版 pgjdbc 直用，
+        // jdbc:postgresql: URL 层按 PostgreSQL 不纠正，坐标层是唯一 HighGo 线索）——
+        // com.highgo 与 hgdb 两个标记会同时命中同一坐标文本，故断言 distinct 后唯一
+        assertEquals(
+            listOf("HighGo"),
+            ProjectDialectEvidence.dialectsInDependencies("implementation(\"com.highgo:HgdbJdbc:6.2.5\")").distinct(),
+        )
+        assertEquals(
+            listOf("HighGo"),
+            ProjectDialectEvidence.dialectsInDependencies("implementation(\"com.highgo:hgdb-pgjdbc:42.5.0\")").distinct(),
+        )
+        // 海量 cn.com.vastdata:vastbase-jdbc
+        assertEquals(
+            listOf("Vastbase"),
+            ProjectDialectEvidence.dialectsInDependencies("implementation(\"cn.com.vastdata:vastbase-jdbc:2.16.1v\")"),
+        )
+    }
+
+    @Test
+    fun `xc3 kingbase pg-protocol driver inferred as kingbase not postgres`() {
+        // P-15 顺序关键正例：postgresql-for-kingbase 的驱动类是 org.postgresql.Driver、子协议
+        // jdbc:postgresql:，坐标是唯一纠正线索——其标记必须排在 "org.postgresql:postgresql"
+        // 之前，且该坐标文本不含 "org.postgresql:postgresql" 子串、不会误触 PG 标记
+        val fake = fakeProject()
+        try {
+            ProjectDialectEvidence.resetForTest()
+            ProjectDialectEvidence.configFilesForTest = { emptyList() }
+            ProjectDialectEvidence.buildTextsForTest = {
+                listOf("implementation(\"cn.com.kingbase:postgresql-for-kingbase:9.0.0.jre7\")")
+            }
+            val evidence = ProjectDialectEvidence.forProject(fake)
+            assertEquals("KingBase（人大金仓）", evidence?.dialectName)
+            assertEquals(DialectDecisionEngine.Source.PROJECT_DEPENDENCY, evidence?.source)
+        } finally {
+            ProjectDialectEvidence.resetForTest()
+        }
+    }
+
+    @Test
+    fun `xc3 kingbase8 marker covers mysql and sqlserver variants`() {
+        // 子串匹配：kingbase8 覆盖 kingbase8-mysql / kingbase8-sqlserver 变体坐标（核对性正例）
+        assertEquals(
+            listOf("KingBase（人大金仓）"),
+            ProjectDialectEvidence.dialectsInDependencies("implementation(\"cn.com.kingbase:kingbase8-mysql:9.0.1\")"),
+        )
+        assertEquals(
+            listOf("KingBase（人大金仓）"),
+            ProjectDialectEvidence.dialectsInDependencies("implementation(\"cn.com.kingbase:kingbase8-sqlserver:9.0.1\")"),
+        )
+    }
+
+    @Test
+    fun `xc3 kingbase pg-protocol plus vanilla pg in one file has no consensus`() {
+        // 同一构建文件同时出现金仓 PG 协议版与原版 PG 坐标：标记全量收集后两方言各有命中 →
+        // distinct 2 项无共识 → null（fail-closed 不猜，与既有「多驱动不猜」同口径）
+        val fake = fakeProject()
+        try {
+            ProjectDialectEvidence.resetForTest()
+            ProjectDialectEvidence.configFilesForTest = { emptyList() }
+            ProjectDialectEvidence.buildTextsForTest = {
+                listOf(
+                    "implementation(\"org.postgresql:postgresql:42.7.3\")\n" +
+                        "implementation(\"cn.com.kingbase:postgresql-for-kingbase:9.0.0.jre7\")",
+                )
+            }
+            assertNull(ProjectDialectEvidence.forProject(fake))
+        } finally {
+            ProjectDialectEvidence.resetForTest()
+        }
+    }
+
     @Test
     fun `syntax hint only fires on a single dialect`() {
         assertEquals("MySQL", ProjectDialectEvidence.syntaxHint("select `id` from t limit 10, 20"))
