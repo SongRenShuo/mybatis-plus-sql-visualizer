@@ -825,17 +825,27 @@ object OceanBaseDialect : Dialect {
 
 /**
  * openGauss 方言（T-DialectXcFamily / O-63）：PG 族形态——`LIMIT {count} OFFSET {offset}`、
- * 双引号引用、[IdentifierFolding.LOWER] 折叠。D2=A 定案：GaussDB（华为云）与 openGauss 社区版
- * 共用一个 object，两个 JDBC URL 前缀（`jdbc:opengauss://` 与 `jdbc:gaussdb://`）都归本方言
- * （两前缀各有官方文档出处，见 [UrlSubprotocolDialects]）。
+ * 双引号引用、[IdentifierFolding.LOWER] 折叠。
  *
- * **验证来源（openGauss 引擎级，DBX MCP 只读通道，GaussDB/openGauss 5.0.0，2026-09-23）**：
+ * **T-GaussDbDialect 券 04 修订**：原 D2=A 定案「GaussDB 与 openGauss 共用一个 object、两前缀都归
+ * 本方言」已撤销——`jdbc:gaussdb://` 改归独立的 [GaussDbDialect]。撤销理由不是形态分叉（两边六项
+ * 形态相同，见 [GaussDbDialect] 的 KDoc），而是**身份与保留字**：GaussDB 官方保留字表比 openGauss
+ * 多 11 词，且用户应在设置页/角标/MCP 里看到 GaussDB 而不是 openGauss。本 object 此后**只服务
+ * `jdbc:opengauss://` 与显式选择 openGauss 的场景**。
+ *
+ * **验证来源（openGauss 引擎级，DBX MCP 只读通道，openGauss 5.0.0 社区版 / sql_compatibility='A'，
+ * 2026-09-23 首测 + 2026-10-29 复核）**：
  *  - 折叠 LOWER：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 455 行（裸大写折小写命中）、
  *    `FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist on gaussdb`；
  *  - 反引号不可用：``SELECT 1 AS `x` `` → `syntax error`（双引号族实锤）；
- *  - LIMIT 形态：`SELECT 1 LIMIT 1 OFFSET 0` → 1 行；`SELECT 1 LIMIT 1, 2` → **0 行**——
- *    openGauss 把 `LIMIT a, b` 按 **PG 语义**（OFFSET a LIMIT b）解析，MySQL 形态会被静默错解，
- *    故分页必须渲染 PG 形态（真机对照读数）；
+ *  - **LIMIT 形态（T-GaussDbDialect 券 03 订正）**：`LIMIT a, b` 是**原生 MySQL 语义**
+ *    （offset, count），**不存在静默错解**。多行源实测：
+ *    `SELECT * FROM generate_series(1,5) LIMIT 1, 2` → 返回 `2, 3`（2 行）；
+ *    真实 455 行源 `SELECT table_name FROM information_schema.tables LIMIT 1, 2` → 第 2、3 行。
+ *    原结论「按 PG 语义解析被静默错解」的探针是 `SELECT 1 LIMIT 1, 2` → 0 行——**单行源上
+ *    「MySQL 语义」与「PG 语义（OFFSET 1 LIMIT 2）」给出同一读数**，两种假设不可区分，属假绿。
+ *    本方言仍渲染 PG 形态（`LIMIT {count} OFFSET {offset}`），理由改为「该形态在两种解释下同义、
+ *    无歧义」，而非「防御错解」；`OFFSET n ROWS FETCH NEXT m ROWS ONLY` 亦可用但不必。
  *  - EXPLAIN：`EXPLAIN (FORMAT JSON) SELECT 1` → 单列 `QUERY PLAN` JSON 文本（JSON 档实锤）；
  *    `EXPLAIN SELECT 1` → 文本计划树。
  *
@@ -870,12 +880,101 @@ object OpenGaussDialect : Dialect {
      */
     override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
 
+    /**
+     * DELETE 的 `LIMIT n` 尾段（T-GaussDbDialect 券 02）：**显式声明不支持**（非遗漏，与 Oracle 的
+     * [transactionBegin] 判无同款写法）。
+     *
+     * 2026-10-29 真机取证分三档，结论比原记录复杂：
+     *  - **语法层**：`EXPLAIN DELETE FROM db4ai.snapshot WHERE id = 1 LIMIT 1` →
+     *    `permission denied for relation snapshot`，即已过语法与分析阶段（同库对照组
+     *    `EXPLAIN INSERT … ON CONFLICT (id) …` 直接报 `syntax error at or near "CONFLICT ("`，
+     *    证明本通道能可靠区分语法错与权限拦）→ openGauss **接受**该语法；
+     *  - **语义层**：是否真的限行**未验证**——在册实例非超管且 `public` 无用户表，DML 全被权限拦下，
+     *    无从观察影响行数；
+     *  - **依据层**：此前 false 的理由是「PG 族无 DELETE LIMIT 尾段（真机佐证 `LIMIT 1,2` 按 PG
+     *    语义解析）」，该理由已被券 03 推翻（`LIMIT a, b` 是 MySQL 语义）。
+     *
+     * 故保持 false 但换依据：「语法接受、语义未验证」。取舍不对称——渲染了而语义不生效，用户会
+     * 以为删除有界而实际无界；不渲染只是少一个尾段。拿到可写实例的语义读数后按实测翻转。
+     */
+    override val supportsDeleteLimit: Boolean = false
+
     override val reservedWords: Set<String> = OPENGAUSS_RESERVED
 
     /**
      * MySQL 形态 upsert（真机对照对实锤，见类 KDoc）——复用 [renderMySqlStyleUpsert]，
      * 列名引用符号随本方言的双引号（`VALUES()` 引用形态 openGauss 官方 INSERT 文法在册）。
      */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * GaussDB（华为云商用版）方言（T-GaussDbDialect 券 04）：第 12 个方言，独立于 [OpenGaussDialect]。
+ *
+ * ## 为什么独立成 object
+ *
+ * 原 D2=A 把 GaussDB 并进 openGauss，依据是「同内核」。2026-10-29 复核判定：**形态不必分叉，
+ * 身份必须分叉**。
+ *  - **形态同形**：分页 / 引号 / 折叠 / upsert / EXPLAIN / 事务 / DELETE-LIMIT 七项在两边一致，
+ *    本类用与 [OpenGaussDialect] **同一批**私有渲染助手实现，产物逐字节相同
+ *    （`DialectXcFamilyTest` 有一条逐项对拍用例钉住，防两侧漂移）；
+ *  - **保留字真的不同**：GaussDB 官方《关键字》页 934 词 / 保留 130，openGauss 862 / 122；
+ *    GaussDB 独有保留字 11 词（见 [GAUSSDB_RESERVED]）——这是唯一有实质后果的分叉点，因为
+ *    漏引用即语法错误；
+ *  - **身份要分**：设置下拉 / 日志角标 / MCP 方言名都应显示 GaussDB；MyBatis-Plus 自 3.5.13 起
+ *    也把 `GAUSS_DB`（`LIMIT ?,?`）与 `OPENGAUSS`（`LIMIT ? OFFSET ?`）拆成两个 `DbType`，
+ *    插件反着合并会让按 MP 文档配置的用户对不上号。
+ *
+ * ## 逐项依据
+ *
+ *  - 分页 `LIMIT {count} OFFSET {offset}`：GaussDB 官方《SELECT》文法 `LIMIT { [offset,] count | ALL }`
+ *    两种写法都收，取无歧义的 PG 形态（逗号形态语义虽为 MySQL 的 offset,count，但与 PG 写法
+ *    反向，读者易误读——见 [OpenGaussDialect] 的 LIMIT 订正）；
+ *  - 引号双引号 + 折叠 LOWER：GaussDB 不带引号的标识符折小写；B 兼容模式额外收反引号，本类
+ *    不依赖它（插件只用双引号）；
+ *  - upsert `ON DUPLICATE KEY UPDATE col = VALUES(col)`：GaussDB 全模式支持；PG 的
+ *    `ON CONFLICT` 官方明写「仅支持 PG 兼容性」，**默认 A（Oracle）兼容模式不可用**，故不取；
+ *  - EXPLAIN `(FORMAT JSON)`：与 openGauss 真机同形（单列 `QUERY PLAN`，`[{"Plan":…}]`）；
+ *  - 事务 `BEGIN`；DELETE 的 `LIMIT` 尾段显式判无（同 [OpenGaussDialect.supportsDeleteLimit]）；
+ *  - identity 包装：不需要（GaussDB 无 `SET IDENTITY_INSERT` 形态）。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级**（华为云 GaussDB 集中式 V2.0-10.x SQL 参考：SELECT / INSERT / EXPLAIN /
+ * CREATE DATABASE / 关键字）。GaussDB 商用版**无公开容器镜像**、无真机；各项形态与
+ * openGauss 5.0.0 真机读数同源（`server_version` 基线 9.2.4）。真机读数到位后升档。
+ *
+ * ## 兼容模式边界
+ *
+ * `sql_compatibility` 是**库级**属性（A/Oracle 默认、B/MySQL、C/Teradata、PG、M），建库后不可改。
+ * 本类按**默认 A 模式**的可用面渲染；B 模式专属能力（反引号、`IFNULL`、`DATE_FORMAT`、
+ * `LAST_INSERT_ID`）**不用**——真机实测这些在 A 模式直接报函数不存在。模式感知不在本轮范围。
+ */
+object GaussDbDialect : Dialect {
+    override val name: String = "GaussDB"
+
+    /** R36：GaussDB 官方《BEGIN》在册，取与 openGauss 相同的 `BEGIN`。 */
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    /** 裸标识符折小写（PG 系），与 openGauss/KingBase/PG 同族。 */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    /** 见 [OpenGaussDialect.supportsDeleteLimit]：语法接受但语义未验证，保守判无（非遗漏）。 */
+    override val supportsDeleteLimit: Boolean = false
+
+    override val reservedWords: Set<String> = GAUSSDB_RESERVED
+
+    /** MySQL 形态 upsert；`ON CONFLICT` 仅 PG 兼容模式可用，默认 A 模式不可，故不取。 */
     override fun renderUpsert(
         conflictKey: String,
         updateColumns: List<String>,
@@ -901,6 +1000,7 @@ object DialectRegistry {
         KingBaseDialect,
         OceanBaseDialect,
         OpenGaussDialect,
+        GaussDbDialect,
     )
 
     /**

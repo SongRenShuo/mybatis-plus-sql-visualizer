@@ -117,8 +117,8 @@ open class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 McpToolErrors.code(
                     McpToolErrors.INVALID_ARGUMENT,
                     "dialect '$dialect' is not recognized; supported: MySQL, MariaDB, PostgreSQL, Oracle, " +
-                        "SQL Server, H2, SQLite, DM, KingBase, OceanBase, openGauss (omit to auto-detect " +
-                        "from the data source URL).",
+                        "SQL Server, H2, SQLite, DM, KingBase, OceanBase, openGauss, GaussDB (omit to " +
+                        "auto-detect from the data source URL).",
                 ),
             )
         }

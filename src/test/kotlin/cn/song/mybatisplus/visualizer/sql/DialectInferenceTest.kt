@@ -25,10 +25,10 @@ class DialectInferenceTest {
             "jdbc:dm://localhost:5236" to "DM（达梦）",
             "jdbc:kingbase8://localhost:54321/db" to "KingBase（人大金仓）",
             "jdbc:kingbase://localhost:54321/db" to "KingBase（人大金仓）",
-            // T-DialectXcFamily（O-63）：信创双备 + GaussDB 前缀（D2=A 同归 openGauss）
+            // T-DialectXcFamily（O-63）：信创双备；T-GaussDbDialect（券 04）起 gaussdb 归独立方言
             "jdbc:oceanbase://localhost:2881/db" to "OceanBase",
             "jdbc:opengauss://localhost:5432/db" to "openGauss",
-            "jdbc:gaussdb://localhost:8000/db" to "openGauss",
+            "jdbc:gaussdb://localhost:8000/db" to "GaussDB",
         )
         expected.forEach { (url, name) -> assertEquals(name, UrlSubprotocolDialects.dialectName(url)) }
     }

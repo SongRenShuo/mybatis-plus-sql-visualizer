@@ -26,10 +26,11 @@ internal object JdbcUrlDialects {
         "dm" to "DM（达梦）",
         "kingbase8" to "KingBase（人大金仓）",
         "kingbase" to "KingBase（人大金仓）",
-        // T-DialectXcFamily（O-63）：gaussdb（华为 GaussDB 官方前缀）与 opengauss 同归 openGauss
-        // 角标（D2=A 一 object 两前缀）；oceanbase 新增角标（此前在册即无）
+        // T-DialectXcFamily（O-63）：gaussdb 原与 opengauss 同归 openGauss 角标（D2=A 一 object 两前缀）；
+        // T-GaussDbDialect（券 04）起拆开——华为 GaussDB 官方驱动（gaussdbjdbc.jar / gsjdbc200.jar）
+        // 的 URL 前缀是 jdbc:gaussdb，与 jdbc:opengauss 是两个产品线，角标应如实显示。
         "oceanbase" to "OceanBase",
-        "gaussdb" to "openGauss",
+        "gaussdb" to "GaussDB",
         "gbasedbt-sqli" to "GBASE",
         "gbasedbt" to "GBASE",
         "gbase" to "GBASE",

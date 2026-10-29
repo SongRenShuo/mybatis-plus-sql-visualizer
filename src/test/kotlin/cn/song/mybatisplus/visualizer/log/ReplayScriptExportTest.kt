@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DmDialect
+import cn.song.mybatisplus.visualizer.sql.GaussDbDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
 import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
@@ -126,6 +127,7 @@ class ReplayScriptExportTest {
             PostgreSQLDialect.name to "BEGIN",
             KingBaseDialect.name to "BEGIN",
             OpenGaussDialect.name to "BEGIN",
+            GaussDbDialect.name to "BEGIN",
             H2Dialect.name to "BEGIN",
             SqliteDialect.name to "BEGIN",
             SqlServerDialect.name to "BEGIN TRANSACTION",
