@@ -149,6 +149,7 @@ internal object StackDigestFrames {
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
             "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
             "com.gbasedbt.", "com.kingbase8.", "com.alibaba.druid.", "com.mchange.",
+            "com.huawei.", "org.opengauss.",
             "org.apache.commons.dbcp2.", "com.ibm.db2.", "com.teradata.", "org.hibernate.",
             "com.baomidou.", "org.springframework.transaction.", "org.springframework.jdbc.",
         ).any { name.startsWith(it) }
