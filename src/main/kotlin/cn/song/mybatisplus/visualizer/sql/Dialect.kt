@@ -845,8 +845,12 @@ object OceanBaseDialect : Dialect {
  * （KingBase 同为 PG 系但 upsert 相反），照抄 KingBase 先例会产出语法错误 SQL。
  * 官方文档同向（openGauss《INSERT》on_duplicate_key 文法，`VALUES(column_name)` 引用在册）。
  *
- * 保留字：沿用 [PG_RESERVED]（PG 官方附录全量）为基线——openGauss 内核源自 PG 9.2 演化，
- * openGauss 特有保留字差异未逐词核对（真机核对后增量）。
+ * 保留字：**[OPENGAUSS_RESERVED]**（T-GaussDbDialect 券 01 订正）。此前沿用 `PG_RESERVED`
+ * 是缺陷——真机 `pg_get_keywords()` 实测 openGauss 比 PG 多 17 个保留字
+ * （`rownum` / `minus` / `modify` / `nocycle` / `performance` / `shrink` / `verify` / `sysdate` /
+ * `excluded` / `buckets` / `authid` / `less` / `maxvalue` / `groupparent` / `reject` /
+ * `procedure` / `is`）。其中 `rownum` 实测报 `ROWNUM cannot be used as an alias`——
+ * 列名为 `rownum` 的表在旧集合下不会被引用，产物直接语法报错。
  */
 object OpenGaussDialect : Dialect {
     override val name: String = "openGauss"
@@ -866,7 +870,7 @@ object OpenGaussDialect : Dialect {
      */
     override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
 
-    override val reservedWords: Set<String> = PG_RESERVED
+    override val reservedWords: Set<String> = OPENGAUSS_RESERVED
 
     /**
      * MySQL 形态 upsert（真机对照对实锤，见类 KDoc）——复用 [renderMySqlStyleUpsert]，
