@@ -28,6 +28,10 @@ package cn.song.mybatisplus.visualizer.sql
  *    ∪ 官方《关键字》页保留列独有词；T-GaussDbDialect 券 01）——**不再复用 [PG_RESERVED]**
  *  - [GAUSSDB_RESERVED]：[OPENGAUSS_RESERVED] + GaussDB 官方《关键字》页保留列独有 11 词
  *    （`maxvalue` 已在 openGauss R 类内；证据为官方文档级，GaussDB 商用版无真机）
+ *  - [HIGHGO_RESERVED]：瀚高保留字（官方 V4.5 手册附录 2 的 150 词 ∪ [PG_RESERVED] ∪ 引擎
+ *    R 类实测；T-XcDialects3 券 01）
+ *  - [VASTBASE_RESERVED]：海量保留字（官方四份兼容模式关键字表「保留」类并集 ∪ [PG_RESERVED]；
+ *    T-XcDialects3 券 02）
  *
  * 近似归组已消除（P-立项-05）：H2 / DM / KingBase / MariaDB 均改为**本方言官方保留字集合**，
  * 不再近似复用其他方言的集合（原近似在 H2（key/value/values/day/year 等漏包）与
@@ -285,6 +289,11 @@ val DM_RESERVED: Set<String> = setOf(
  * notnull/similar）+ 金仓特有保留字：auto_increment/collation/ilike/minus/nocycle/nvl/nvl2/
  * online/return/rowid/rownum/synonym/systimestamp/top/verbose/connect_by_* 等——
  * 证伪原「≈PG 集合」近似（rowid/rownum/top 等在金仓裸用为列名会语法错误）。
+ *
+ * T-XcDialects3 券 05 补 `enckey`（118 词）：引擎 `pg_get_keywords()` 标 R，列引用
+ * `SELECT enckey FROM …` 报 `kb: syntax error at or near "enckey"`（KingbaseES V009R001C010
+ * 真机实测 2026-10-29）；官方 V8/V9 文档表标「非保留」，以引擎为准。已知分歧：别名位
+ * `SELECT 1 AS enckey` 实测通过——收录后该形态多一对引号，属「宁可多包」口径的可接受多包。
  */
 val KINGBASE_RESERVED: Set<String> = setOf(
     "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
@@ -293,8 +302,8 @@ val KINGBASE_RESERVED: Set<String> = setOf(
     "connect_by_iscycle", "connect_by_isleaf", "connect_by_root", "constraint",
     "create", "cross", "current_catalog", "current_date", "current_role",
     "current_schema", "current_time", "current_timestamp", "current_user",
-    "default", "deferrable", "desc", "distinct", "do", "else", "end", "except",
-    "false", "fetch", "for", "foreign", "freeze", "from", "full", "grant", "group",
+    "default", "deferrable", "desc", "distinct", "do", "else", "enckey", "end",
+    "except", "false", "fetch", "for", "foreign", "freeze", "from", "full", "grant", "group",
     "having", "ilike", "in", "initially", "inner", "intersect", "into", "is",
     "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
     "localtimestamp", "minus", "natural", "nocycle", "not", "notnull", "null",
@@ -400,4 +409,89 @@ val OPENGAUSS_RESERVED: Set<String> = OPENGAUSS_KEYWORDS_RESERVED +
 val GAUSSDB_RESERVED: Set<String> = OPENGAUSS_RESERVED + setOf(
     "crossbucket", "dbtimezone", "fenced", "force", "match", "offline", "online", "priorer",
     "regexp", "rlike", "sessiontimezone",
+)
+
+/**
+ * 瀚高（HighGo DB）保留字全量（T-XcDialects3 券 01）：三源并集 **153 词**。
+ *
+ *  - **官方文档级**：瀚高官方 V4.5 手册附录 2「保留字」150 词（V9 在线文档附录页 404 未取到）；
+ *  - **[PG_RESERVED] 基线**（86 词）：与瀚高表双向有差集——瀚高表多 65 词（`between`/`bigint`/
+ *    `int`/`varchar`/`timestamp`/`coalesce`/`trim` 等类型名与函数名，照抄 PG 表会漏包），
+ *    PG 侧多 1 词（`procedure`），故必须并集；
+ *  - **引擎实测 R 类**（社区镜像 HighGo V6.0.1 / PostgreSQL 12.3 内核，`pg_get_keywords()`
+ *    2026-10-30 探针）：比前两源多 `flashback` / `sysdate` 两词，一并纳入。
+ *
+ * 引擎读数的如实登记（不因多包而隐藏）：
+ *  - `values` 在 V6.0.1 引擎实测是**非保留**（可裸用作列名）——本表按「宁可多包」仍收录
+ *    （官方 V4.5 附录 2 在册、引用幂等安全：包裹后在本方言仍合法）；
+ *  - `enckey` **不是**瀚高关键字（引擎 `pg_get_keywords()` 无此词——那是金仓的），故不在本表。
+ */
+val HIGHGO_RESERVED: Set<String> = setOf(
+    "all", "analyse", "analyze", "and", "any", "array", "as",
+    "asc", "asymmetric", "authorization", "between", "bigint", "binary", "bit",
+    "boolean", "both", "case", "cast", "char", "character", "check",
+    "coalesce", "collate", "collation", "column", "concurrently", "constraint", "create",
+    "cross", "current_catalog", "current_date", "current_role", "current_schema", "current_time", "current_timestamp",
+    "current_user", "dec", "decimal", "default", "deferrable", "desc", "distinct",
+    "do", "else", "end", "except", "exists", "extract", "false",
+    "fetch", "flashback", "float", "for", "foreign", "freeze", "from",
+    "full", "grant", "greatest", "group", "grouping", "having", "ilike",
+    "in", "initially", "inner", "inout", "int", "integer", "intersect",
+    "interval", "into", "is", "isnull", "join", "lateral", "leading",
+    "least", "left", "like", "limit", "localtime", "localtimestamp", "national",
+    "natural", "nchar", "none", "not", "notnull", "null", "nullif",
+    "numeric", "offset", "on", "only", "or", "order", "out",
+    "outer", "overlaps", "overlay", "placing", "position", "precision", "primary",
+    "procedure", "real", "references", "returning", "right", "row", "select",
+    "session_user", "setof", "similar", "smallint", "some", "substring", "symmetric",
+    "sysdate", "table", "tablesample", "then", "time", "timestamp", "to",
+    "trailing", "treat", "trim", "true", "union", "unique", "user",
+    "using", "values", "varchar", "variadic", "verbose", "when", "where",
+    "window", "with", "xmlattributes", "xmlconcat", "xmlelement", "xmlexists", "xmlforest",
+    "xmlnamespaces", "xmlparse", "xmlpi", "xmlroot", "xmlserialize", "xmltable",
+)
+
+/**
+ * 海量（Vastbase G100）保留字全量（T-XcDialects3 券 02）：官方四份兼容模式关键字表
+ * 「保留」类的**四模式并集** ∪ [PG_RESERVED]，共 **201 词**。
+ *
+ * 官方四表（docs.vastdata.com.cn，PG 163 / Oracle 172 / MSSQL 174 / MySQL 差分 22）的
+ * 「保留」类逐表机读后取并集。**必须取四模式并集而不是只取 PG 模式表**：兼容模式是实例级、
+ * 初始化后不可改（`vb_initdb --dbcompatibility`，默认 **A（Oracle）**），同一 URL 无法判定
+ * 实例落在哪个模式——A 模式比 PG 模式多 `excluded`/`online`/`long` 等 **14 个**保留词，
+ * 只取 PG 表会在默认实例上漏包。
+ *
+ * 证据级别：**官方文档级**（Vastbase G100 V3.0.9 关键字四表）。无真机（DBX 在册无 vastbase
+ * 实例；真机部署在途）——官方自身建议用 `pg_get_keywords()` 机读校准，真机到位后按引擎读数订正。
+ */
+val VASTBASE_RESERVED: Set<String> = setOf(
+    "add", "against", "all", "analyse", "analyze", "and", "any",
+    "apply", "array", "as", "asc", "asymmetric", "authorization", "auto_increment",
+    "begin", "binary", "body", "both", "buckets", "by", "call",
+    "case", "cast", "catch", "check", "checktable", "close", "collate",
+    "collation", "column", "compact", "concurrently", "connect_by_root", "constraint", "create",
+    "cross", "csn", "current_catalog", "current_date", "current_role", "current_schema", "current_time",
+    "current_timestamp", "current_user", "dbcc", "dbtimezone", "declare", "default", "deferrable",
+    "delete", "deltamerge", "desc", "diagnostics", "distinct", "do", "drop",
+    "else", "elseif", "elsif", "end", "except", "exception", "excluded",
+    "exec", "execute", "exit", "failed", "false", "fenced", "fetch",
+    "flashback", "for", "forall", "foreach", "foreign", "freeze", "from",
+    "full", "function", "get", "goto", "grant", "group", "having",
+    "hdfsdirectory", "identity", "if", "ignore", "ilike", "image", "in",
+    "index", "initially", "inner", "insert", "intersect", "into", "is",
+    "isnull", "join", "json_mergepatch", "json_table", "last_day", "lateral", "leading",
+    "left", "less", "like", "limit", "localtime", "localtimestamp", "logical_data",
+    "logical_file", "long", "loop", "maxvalue", "minus", "modify", "move",
+    "natural", "nocycle", "not", "notnull", "null", "of", "off",
+    "offset", "on", "online", "only", "open", "openxml", "or",
+    "order", "out", "outer", "output", "overlaps", "percent", "performance",
+    "phtsical_only", "physical_only", "pivot", "placing", "primary", "prior", "procedure",
+    "raise", "recyclebin", "redisanyvalue", "ref", "references", "reject", "returining",
+    "return", "returning", "right", "rownum", "sample", "select", "session_user",
+    "sessiontimezone", "set", "shrink", "similar", "some", "sp_executesql", "stdin",
+    "stdout", "strict", "succeed", "symmetric", "sysdate", "system_function", "systimestamp",
+    "table", "tablesample", "then", "ties", "timecapsule", "to", "top",
+    "trailing", "true", "try", "union", "unique", "unpivot", "update",
+    "updating", "user", "using", "varbinary", "variadic", "verbose", "verify",
+    "when", "where", "while", "window", "with",
 )

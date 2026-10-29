@@ -127,7 +127,12 @@ class DialectDocGoldenTest {
     // KingBase（人大金仓）：官方 V9 保留字黄金清单 + 行为锚点
     // ------------------------------------------------------------------
 
-    /** 黄金清单：V9 手册《SQL保留字和关键字》章节 22 分类「保留」的词（逐词核对于 2026-08-28）。 */
+    /**
+     * 黄金清单：V9 手册《SQL保留字和关键字》章节 22 分类「保留」的词（逐词核对于 2026-08-28，
+     * 117 词）+ T-XcDialects3 券 05 引擎补词 `enckey`（KingbaseES V009R001C010 真机
+     * `pg_get_keywords()` 标 R、列引用报 `syntax error at or near "enckey"`，2026-10-29
+     * 实测；官方 V8/V9 文档表标「非保留」，以引擎为准）= **118 词**。
+     */
     private val kingbaseOfficialReserved: Set<String> = setOf(
         "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
         "authorization", "auto_increment", "binary", "both", "case", "cast", "check",
@@ -135,7 +140,7 @@ class DialectDocGoldenTest {
         "connect_by_isleaf", "connect_by_root", "constraint", "create", "cross",
         "current_catalog", "current_date", "current_role", "current_schema", "current_time",
         "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct",
-        "do", "else", "end", "except", "false", "fetch", "for", "foreign", "freeze",
+        "do", "else", "enckey", "end", "except", "false", "fetch", "for", "foreign", "freeze",
         "from", "full", "grant", "group", "having", "ilike", "in", "initially", "inner",
         "intersect", "into", "is", "isnull", "join", "lateral", "leading", "left", "like",
         "limit", "localtime", "localtimestamp", "minus", "natural", "nocycle", "not",
@@ -168,6 +173,9 @@ class DialectDocGoldenTest {
         assertEquals("\"top\"", KingBaseDialect.quoteIfKeyword("top"))
         assertEquals("\"binary\"", KingBaseDialect.quoteIfKeyword("binary"))
         assertEquals("\"minus\"", KingBaseDialect.quoteIfKeyword("minus"))
+        // T-XcDialects3 券 05：引擎标 R、列引用语法错误（真机 2026-10-29）——文档表标非保留，以引擎为准；
+        // 别名位 SELECT 1 AS enckey 实测通过，收录后该形态多一对引号属可接受多包
+        assertEquals("\"enckey\"", KingBaseDialect.quoteIfKeyword("enckey"))
         //   常见业务词在金仓非保留（裸用合法）→ 不包裹
         assertEquals("value", KingBaseDialect.quoteIfKeyword("value"))
         assertEquals("name", KingBaseDialect.quoteIfKeyword("name"))
