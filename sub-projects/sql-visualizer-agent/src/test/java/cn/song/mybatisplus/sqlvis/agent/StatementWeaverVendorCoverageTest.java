@@ -28,8 +28,9 @@ import static org.junit.Assert.fail;
  * <p>两层判别：
  * <ol>
  *   <li><b>谓词层</b>（环境无关）：每个登记类必须命中正确的一面谓词、且不在另一面——名单与
- *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server、达梦 timed 面；
- *       达梦 ADD_BATCH/CLEAR_BATCH 面因 chop_frame 未登记，见 {@link StatementWeaver} 类注释）。</li>
+ *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server、达梦 timed 面、
+ *       信创三族金仓/海量/瀚高；达梦 ADD_BATCH/CLEAR_BATCH 面因 chop_frame 未登记，
+ *       见 {@link StatementWeaver} 类注释）。</li>
  *   <li><b>字节层</b>（需驱动 jar 在测试 classpath）：直读真实驱动类字节 → {@code weaveSpec}
  *       → 断言 changed → 子优先隔离子 loader 定义 + 初始化（链接期 JVM 栈图校验）。mysql-connector
  *       不在 agent 测试 classpath，只走谓词层。</li>
@@ -82,6 +83,15 @@ public class StatementWeaverVendorCoverageTest {
             // org.postgresql.*，已在上面那组）
             "org.opengauss.jdbc.PgStatement",
             "org.opengauss.jdbc.PgPreparedStatement",
+            // 信创 PG 系三族（T-XcDialects3）：均完全重定位（`org/postgresql` 条目数为 0、
+            // 与 pgjdbc 无继承关系）。金仓 kingbase8 9.0.1（KbCallableStatement 继承
+            // KbPreparedStatement 不单列）/ 海量 vastbase-jdbc 2.16.1v / 瀚高 HgdbJdbc 6.2.5
+            "com.kingbase8.jdbc.KbStatement",
+            "com.kingbase8.jdbc.KbPreparedStatement",
+            "cn.com.vastbase.jdbc.PgStatement",
+            "cn.com.vastbase.jdbc.PgPreparedStatement",
+            "com.highgo.jdbc.jdbc.PgStatement",
+            "com.highgo.jdbc.jdbc.PgPreparedStatement",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -99,6 +109,10 @@ public class StatementWeaverVendorCoverageTest {
             "com.huawei.opengauss.jdbc.jdbc.PgConnection",
             // 社区 openGauss 2.x/3.x 连接
             "org.opengauss.jdbc.PgConnection",
+            // 信创 PG 系三族连接（T-XcDialects3）：金仓 / 海量 / 瀚高，prepare 面单列
+            "com.kingbase8.jdbc.KbConnection",
+            "cn.com.vastbase.jdbc.PgConnection",
+            "com.highgo.jdbc.jdbc.PgConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -170,7 +184,9 @@ public class StatementWeaverVendorCoverageTest {
         VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("org.sqlite.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");
-        VENDOR_NOT_COVERED.put("com.kingbase8.", "国产库，本机无 jar 未实证");
+        // 金仓 com.kingbase8. 的旧认领（「本机无 jar 未实证」）已在 T-XcDialects3 券 07 删除：
+        // kingbase8 9.0.1 进测试 classpath、语句面/prepare 面登记并过字节层校验后，认领留在
+        // 这里反而会让厂商对齐守卫看不出「已覆盖」（认领优先于覆盖判定），变成反向锚。
     }
 
     /**
@@ -230,14 +246,19 @@ public class StatementWeaverVendorCoverageTest {
      * 就会把另一族也判成「已覆盖」（假绿）。其余 `com.*` 厂商仍是两段（P-12 实测）——
      * microsoft/mysql/dameng/gbasedbt/kingbase8 的次段已唯一标识厂商，升三段反而会把同一厂商
      * 的不同包族（`com.mysql.jdbc.*` 与 `com.mysql.cj.*`）判成两个厂商。
+     *
+     * <p>T-XcDialects3 增补 `cn.com.`：海量驱动类 `cn.com.vastbase.Driver` 首段是 `cn`，若按两段
+     * 规则厂商键会压成 `cn.`——与将来任何 `cn.*` 厂商互相假绿（对方登记的语句面就能把海量判成
+     * 已覆盖）。升三段后键为 `cn.com.vastbase.`，与 `com.kingbase8.`（两段）、`com.highgo.`
+     * （两段）无包含关系。金仓/瀚高的次段（kingbase8/highgo）已唯一标识厂商，仍取两段。
      */
     private static final java.util.Set<String> THREE_SEGMENT_VENDORS =
-            java.util.Collections.singleton("com.huawei.");
+            new java.util.HashSet<String>(java.util.Arrays.asList("com.huawei.", "cn.com."));
 
-    /** 驱动类 → 厂商前缀（默认 org.x/com.x 取两段；[#THREE_SEGMENT_VENDORS] 取三段）。 */
+    /** 驱动类 → 厂商前缀（默认 org.x/com.x/cn.x 取两段；[#THREE_SEGMENT_VENDORS] 命中取三段）。 */
     private static String vendorKey(String driverClass) {
         final String[] p = driverClass.split("\\.");
-        if ("org".equals(p[0]) || "com".equals(p[0])) {
+        if ("org".equals(p[0]) || "com".equals(p[0]) || "cn".equals(p[0])) {
             if (p.length >= 4 && THREE_SEGMENT_VENDORS.contains(p[0] + "." + p[1] + ".")) {
                 return p[0] + "." + p[1] + "." + p[2] + ".";
             }
@@ -275,7 +296,7 @@ public class StatementWeaverVendorCoverageTest {
                 vendorKey("com.huawei.opengauss.jdbc.Driver"));
     }
 
-    /** P-12：三段口径只针对 com.huawei.，其余厂商前缀逐项不变。 */
+    /** P-12：三段口径只针对 com.huawei. 与 cn.com.，其余厂商前缀逐项不变。 */
     @Test
     public void 厂商前缀口径_其余厂商仍取两段() {
         assertEquals("com.microsoft.", vendorKey("com.microsoft.sqlserver.jdbc.SQLServerDriver"));
@@ -284,10 +305,34 @@ public class StatementWeaverVendorCoverageTest {
         assertEquals("com.dameng.", vendorKey("com.dameng.DmDriver"));
         assertEquals("com.gbasedbt.", vendorKey("com.gbasedbt.jdbc.Driver"));
         assertEquals("com.kingbase8.", vendorKey("com.kingbase8.Driver"));
+        assertEquals("com.highgo.", vendorKey("com.highgo.jdbc.Driver"));
         assertEquals("org.postgresql.", vendorKey("org.postgresql.Driver"));
         assertEquals("org.opengauss.", vendorKey("org.opengauss.Driver"));
         assertEquals("dm.", vendorKey("dm.jdbc.driver.DmDriver"));
         assertEquals("oracle.", vendorKey("oracle.jdbc.OracleDriver"));
+    }
+
+    /**
+     * T-XcDialects3：`cn.` 段厂商必须取三段（`cn.com.vastbase.`），不得压成两段 `cn.com.` 或一段
+     * `cn.`——后者会让将来任何 `cn.*` 厂商互相假绿（对方登记的语句面即可把海量判成已覆盖）。
+     * 判别力负样本与 {@link #同厂商跨族_只登记GaussDB族不得让openGauss品牌族假绿} 同构。
+     */
+    @Test
+    public void cn段厂商_压成cn前缀不得让其他cn厂商假绿() {
+        assertEquals("海量 Vastbase 应取三段", "cn.com.vastbase.", vendorKey("cn.com.vastbase.Driver"));
+
+        // 反向：连接面登记海量驱动、语句面只有另一家 cn.com.* 厂商 → 守卫必须报警。
+        // 若厂商键退化为 cn.（一段）或 cn.com.（两段），这条就会假绿。
+        final java.util.Set<String> drivers = new java.util.LinkedHashSet<String>();
+        drivers.add("cn.com.vastbase.Driver");
+        final java.util.Set<String> specs = new java.util.LinkedHashSet<String>();
+        specs.add("cn.com.othervendor.jdbc.PgStatement");
+
+        final java.util.List<String> uncovered = uncoveredDrivers(
+                drivers, specs, java.util.Collections.<String, String>emptyMap());
+        assertEquals("cn 段其他厂商的语句面不得把海量判成已覆盖。实际未覆盖清单：" + uncovered,
+                1, uncovered.size());
+        assertEquals("cn.com.vastbase.Driver", uncovered.get(0));
     }
 
     // ---------- 名单漂移反向断言 ----------

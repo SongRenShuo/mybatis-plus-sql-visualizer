@@ -121,6 +121,12 @@ dependencies {
     testImplementation("com.huaweicloud.gaussdb:opengaussjdbc:506.0.T35")
     // 社区 openGauss 2.x/3.x（包 org.opengauss.jdbc.Pg*；5.x/7.x 已整体回到 org.postgresql.*）
     testImplementation("org.opengauss:opengauss-jdbc:3.0.0")
+    // T-XcDialects3：信创 PG 系三族驱动夹具（金仓 kingbase8 / 海量 vastbase-jdbc / 瀚高 HgdbJdbc）
+    // ——均为完全重定位的自包含 jar（`org/postgresql` 条目数为 0，与 pgjdbc 无继承关系），
+    // 只进测试 classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + JVM 链接期校验。
+    testImplementation("cn.com.kingbase:kingbase8:9.0.1")
+    testImplementation("cn.com.vastdata:vastbase-jdbc:2.16.1v")
+    testImplementation("com.highgo:HgdbJdbc:6.2.5")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
