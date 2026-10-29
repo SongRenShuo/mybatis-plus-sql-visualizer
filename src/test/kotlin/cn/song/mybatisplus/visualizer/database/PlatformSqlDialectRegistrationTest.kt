@@ -71,8 +71,27 @@ class PlatformSqlDialectRegistrationTest : BasePlatformTestCase() {
         )
         // openGauss 我们**没有**注册平台方言（平台缺、也无必要），它的缺席是预期行为而非缺陷
         assertTrue(
-            "openGauss 未注册平台方言是预期（本轮只注册 GaussDB）；若出现请复核是否有人重复注册",
+            "openGauss 未注册平台方言是预期（GaussDB 已独立注册）；若出现请复核是否有人重复注册",
             !ids.contains("openGauss"),
+        )
+        // T-XcDialects3 券 08：HighGo / Vastbase 与 DM/GaussDB 同款注册，运行期可见性同口径
+        assertTrue(
+            "HighGo 未出现在平台 SQL Dialects 可用列表（设置页因此选不到）。实际：$ids",
+            ids.contains("HighGo"),
+        )
+        assertTrue(
+            "Vastbase 未出现在平台 SQL Dialects 可用列表（设置页因此选不到）。实际：$ids",
+            ids.contains("Vastbase"),
+        )
+        assertEquals(
+            "HighGo 的显示名应与 HighGoSqlDialect.DISPLAY_NAME 逐字一致",
+            "HighGo",
+            available.first { it.id == "HighGo" }.displayName,
+        )
+        assertEquals(
+            "Vastbase 的显示名应与 VastbaseSqlDialect.DISPLAY_NAME 逐字一致",
+            "Vastbase",
+            available.first { it.id == "Vastbase" }.displayName,
         )
     }
 }
