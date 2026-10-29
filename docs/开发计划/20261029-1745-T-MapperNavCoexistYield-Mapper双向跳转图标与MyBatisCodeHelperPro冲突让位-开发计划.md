@@ -114,3 +114,61 @@ if (MyBatisCompetitorGate.shouldYield(state.mapperNavYieldToCodeHelper, MyBatisC
 | 新增设置项打破设置页计数守卫 | S3 已写明同步期望值，定向跑 `PluginSettingsPersistenceTest` |
 | 用户其实希望保留两套图标 | 设置项默认开、可关；文档与设置页文案说明「让位」含义 |
 | 反例：真正撞车的是本插件的重复图标（P-4 不成立） | 立即改方案为 anchor 去重，本册 §实施记录写明转向依据 |
+
+## 七、实施记录（2026-10-29）
+
+### 7.1 P-1~P-4 实测结论
+
+| # | 结论 | 读数与出处 |
+|---|------|-----------|
+| P-1 | **成立** | 本机 `%APPDATA%\JetBrains\IntelliJIdea2026.2\plugins\MyBatisCodeHelper-Pro\lib\instrumented-MyBatisCodeHelper-Pro241-3.6.8+2321.jar!/META-INF/plugin.xml`：`<id>com.ccnode.codegenerator.MyBatisCodeHelperPro</id>`、`<version>3.6.8+2321</version>`。前缀 `com.ccnode.codegenerator` 命中；未发现其它变体 id（2024.1 / 2024.3 / 2026.2 三个配置目录的插件目录同名，均为同一发行包形态） |
+| P-2 | **成立（243/262 双端 javap；253 本地无发行物）** | 243（`ideaIU-2024.3.7.1`）：`app-client.jar` 的 `PluginManagerCore.getPlugins()` 返回 `IdeaPluginDescriptor[]`；`util.jar` 的 `com.intellij.openapi.extensions.PluginDescriptor` 有 `getPluginId()` / `isEnabled()`，`PluginId.getIdString()` 在场。262（`IU-262.10968.63`，`lib/intellij.platform.core.impl.jar` + `lib/util.jar`）签名逐字一致。253 本机无安装/缓存，未核；探测按「数组/Iterable 双兼容 + 异常降级 false」兜住 |
+| P-3 | **成立** | 2026.2 的 `disabled_plugins.txt` 无 `ccnode` / `MyBatis` 条目，插件目录在场 ⇒ 启用；用户截图亦显示对方在出图标 |
+| P-4 | **成立（静态证据；真机视觉复看待用户）** | MPJ `plugin.xml` 注册 `codeInsight.lineMarkerProvider language="XML" implementationClass="com.ccnode.codegenerator.view.J"`（另有 JAVA 两个、UAST 一个）；`javap` 实证 `J extends RelatedItemLineMarkerProvider` 且实现 `collectNavigationMarkers` ⇒ 跳转图标是**对方自己画的**，不是本插件重复绘制。故按原方案走让位，不改 anchor 去重 |
+
+### 7.2 变更清单
+
+- 新增 `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MyBatisCompetitorGate.kt`：反射探测（`PluginManagerCore.getPlugins()` → `PluginDescriptor.getPluginId()/isEnabled()` → `PluginId.getIdString()`，方法解析在公开接口上避免 package-private 实现的 IllegalAccessException）、前缀候选、`@Volatile` 懒缓存、异常降级 false + WARN 一次、`probe` 测试缝、`resetForTest()`、纯判定 `shouldYield`。
+- `ui/gutter/MapperNavigationLineMarkerProviders.kt`：两个 provider 在总闸/组闸之后补第三道共存让位门（O(1)，探针已缓存）。
+- `config/PluginSettings.kt`：新增 `mapperNavYieldToCodeHelper: Boolean = true`。
+- `config/PluginSettingsPanel.kt`：`mapperNavYieldCheck` 控件 + isModified/apply/reset 三处接线（漏挂 isModified 会复现「勾了但不生效」假开关）。
+- `config/PluginSettingsPanelSections.kt`：界面节 gutter 组开关之后新增一行。
+- `config/PluginSettingsFolderConfigurable.kt`：搜索索引补登记（新开关禁入白名单台账，按守卫要求进 `buildSearchableFields()`）。
+- 中英 bundle：`settings.mapperNavYield` / `settings.mapperNavYield.tip` 双语同步。
+- `src/test/.../ui/gutter/MapperNavCoexistGateTest.kt`（新）：真值表四档 + 探针三形态 + 结论缓存 + P-1 前缀回归锚。
+- `src/test/.../ui/gutter/MapperNavigationGutterGateTest.kt`：新增「在位+让位开 → 两侧 0 图标」「在位+让位关 → 两侧基线 1」「不在位 → 基线 1」六条；setUp/tearDown 重置探测缓存。
+- `src/test/.../config/PluginSettingsPersistenceTest.kt`：设置页复选框总数 46 → 47（新增让位开关）。
+- 文档：`docs/架构设计/01-项目架构总览.md` gutter 注册表行、`02-核心流程详解.md` §3.1 后各补一句。
+
+### 7.3 定向测试读数
+
+| 测试类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `ui.gutter.MapperNavCoexistGateTest`（新） | 6 | 0 | 0 | 0 |
+| `ui.gutter.MapperNavigationGutterGateTest`（扩充） | 11 | 0 | 0 | 0 |
+| `ui.gutter.MapperNavigationLineMarkerProvidersTest`（回归） | 11 | 0 | 0 | 0 |
+| `config.PluginSettingsPersistenceTest` | 18 | 0 | 0 | 0 |
+| `config.SettingsPanelSearchableGuardTest` | 4 | 0 | 0 | 0 |
+| `config.SettingsRealityGuardTest` | 4 | 0 | 0 | 0 |
+| `config.SettingsIdeSearchContributorTest` | 8 | 0 | 0 | 0 |
+| `config.SettingsTruthTest` | 10 | 0 | 0 | 0 |
+| `config.PluginSettingsPanelBindingTest` | 16 | 0 | 0 | 0 |
+| `config.PluginSettingsPanelUiTest` | 10 | 0 | 0 | 0 |
+| `config.PluginSettingsFolderConfigurableTest` | 11 | 0 | 0 | 0 |
+| `i18n.BundleParityGuardTest` | 5 | 0 | 0 | 0 |
+| `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 | 0 |
+
+首跑 `PluginSettingsPersistenceTest` 18 例全 `NoSuchMethodError`（`State.<init>(..., DefaultConstructorMarker)`）——新增 data class 属性改了合成构造器签名，测试字节码陈旧。`./gradlew compileTestKotlin --rerun-tasks` 后 18/0/0/0，非代码缺陷。
+
+### 7.4 反向验证
+
+- 探针：把 `shouldYield` 临时改成 `yieldEnabled && false`（竞品项短路）→ `MapperNavCoexistGateTest` + `MapperNavigationGutterGateTest` 合计 **17 例 4 红**：真值表 1 条（`(true,true)` 期望让位却返回 false）、探针在位用例 1 条（同时钉「在位 + 默认开关 → 让位」的组合断言）、两个 provider 的「在位+让位开」各 1 条（期望 0 图标实际 1）。
+- 还原后复跑：**17 例 0 红**，两文件计数见 7.3。
+- 与计划预估的差异：计划写「真值表恰 1 条红」，实际 4 条——多出的 3 条是同一断言的调用方（探针用例的组合断言 + 两个 provider 行为用例），不是守卫灵敏度问题。
+
+### 7.5 未闭环
+
+- **真机视觉复看**（需用户）：装 MPJ 的 IDE 里 `OrderMapper.xml` 语句行应只剩对方一套跳转箭头；关掉设置页新开关后本插件图标回来。
+- 253 平台线反射形态未本地核验（无 253 发行物），靠异常降级兜底；若真机日志出现 `[T-MapperNavCoexistYield] competitor probe unavailable` 即说明该线失效，届时补探针形态。
+- 全量门禁未跑（按任务约定只跑定向；发版链另有门禁）。
+
