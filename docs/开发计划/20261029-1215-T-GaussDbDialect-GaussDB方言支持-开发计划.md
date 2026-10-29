@@ -345,8 +345,29 @@
 - **GaussDB 商用版零真机**：Docker Hub 无华为官方镜像，全部 GaussDB 结论为**官方文档级**；各项形态以 openGauss 5.0.0 真机（同源 PG 9.2.4 基线）为旁证。真机读数到位前，文档与能力矩阵不得写「GaussDB 已验证」。
 - **`DELETE ... LIMIT` 语义未验证**：只证到语法接受。需一个可写实例（建表插 5 行、`DELETE ... LIMIT 1` 后核影响行数）才能决定是否翻转 `supportsDeleteLimit`。
 - **兼容模式未覆盖**：只有 `sql_compatibility='A'` 库。B/C/PG/M 模式下 `LIMIT m,n`、`IFNULL`、`DATE_FORMAT`、反引号的行为全部未验。
-- **券 06 平台 EP 运行期可见性未验**：需 runIde 沙盒确认「设置页 SQL Dialects 能选到 GaussDB」与「Runner 精确匹配」。静态接线由 `GaussDbDialectRegistrationWiringTest` 守住。
+- **券 06 平台 EP 运行期可见性：已验**（见 §7.5）。`SqlDialectMappings.getInstance(project).availableValues` 在真沙盒里含 `GaussDB` 与对照组 `DM`（35 个可用方言），即设置页 SQL Dialects 候选列表里能选到；Runner 侧靠 `GaussDbDialectRegistrationWiringTest` 的「候选链首位」+ `urlFallbackId` 兜底链纯逻辑断言闭合。
 - **官方关键字页计数未逐词复核**：934/862 与 130/122 为 HTML 表格机读结果，本轮以真机 186 词兜底，GaussDB 增量 11 词单列（见 P-5）。
 - **增强捕获全部结论为「真实驱动 jar 字节 + 链接期校验」级，零 attach 真机**：未在运行中的 GaussDB 实例上做过端到端 attach，「事件真的到 IDE」未验证。文档与能力矩阵不得写「GaussDB 增强捕获已验证」。
 - **connect 面按 D6=B 未登记**：P-11 已证伪「不安全」，字节层对华为两族 connect 出口是 `VERIFY-OK`。当前不登记是保守选择（采集已由语句面 + prepare 面覆盖），代价只有「最近 connect URL」兜底。要补时可单独成笔并独立验 premain。
 - **明确出界未登记**：`com.huawei.gauss200.jdbc.Driver`（Maven Central 无制品）、openGauss 5.x/7.x 的 `readwritesplitting.*` 与 `OR*` 族（不继承 `Pg*`）、`SmartRouteConnection` 的两个 `prepareStatement` 重载。
+
+### 7.5 收口复核补项（2026-10-29 第二轮，验证器指出三处未落）
+
+验证器复核发现三处计划正文的显式条目未落地，本轮补完。
+
+| 缺口 | 计划条目 | 补齐动作 | 提交 |
+|---|---|---|---|
+| 1 | 券 03 第 2 项「在架构文档方言验证节补：方言语义探针必须有多行源」 | `03-开发与测试指南.md` 新增 **§4.2.1 方言语义探针的区分力要求**：以本轮 `LIMIT 1,2` 假绿为实例，给四条落地要求（行数 > offset+count、断言具体行而不是行数、先问两假设是否同解、反向改单行源应红），并附「语法通过 ≠ 语义生效」口径 | `9d728825` |
+| 2 | 券 01 第 3 项「为三方言各加一份**独立维护**的黄金清单」 | 此前只有 openGauss 拿了全量 186 词，PG 只补两词、GaussDB 只有增量 11 词 + size 断言。现补 **PG 全量 86 词**（`postgresOfficialReserved`）与 **GaussDB 全量 197 词**（`gaussDbOfficialReserved`），均用文本块独立维护、不引用生产常量 | `9d728825` |
+| 3 | 券 06 第 4 项「真机沙盒验证：设置页 SQL Dialects 能选到 GaussDB，执行 Runner 精确匹配」 | 原只做静态接线。现新增 DB 集成通道任务 `testDbPlatformDialect` + `PlatformSqlDialectRegistrationTest`，**运行期**断言 `SqlDialectMappings.getInstance(project).availableValues` 含 `GaussDB`；并以 `DM` 作对照组区分「环境没加载」与「本次功能缺失」 | `38b78576` |
+
+**补项后的定向读数**
+
+| 项 | 命令 | 读数 |
+|---|---|---|
+| 全量黄金清单 | `test --tests DialectDocGoldenTest` | `tests=13 skipped=0 failures=0 errors=0`（原 11 + PG 全量 1 + GaussDB 全量 1） |
+| 平台 EP 运行期可见性 | `testDbPlatformDialect -PskipDemoFixtureCheck=true` | `tests=2 failures=0 errors=0`；打印 `available=35 ids=[…, DM, …, GaussDB, …]` |
+
+**`availableValues` 运行期全量（35 个）**：Redshift, CassandraQL, Derby, HiveQL, SparkSQL, AZURE, BigQuery, ClickHouse, Cockroach, CouchbaseQuery, **DM**, Dynamo, Exasol, **GaussDB**, GenericSQL, Greenplum, H2, HSQLDB, DB2, DB2_IS, DB2_ZOS, MariaDB, TSQL, MongoDB, MySQL, Oracle, NetSuite, OracleSqlPlus, PostgreSQL, Redis, SQL92, SQLite, Snowflake, Sybase, Vertica。
+
+> 这条读数的价值在于它同时否掉两种假象：`DM` 在场证明插件的 `database-optional.xml` **确实被加载了**（不是空跑），`GaussDB` 在场证明第二条注册生效；`openGauss` 如期不在（本轮只注册 GaussDB，出现即为重复注册）。默认 `test` 桶按既有铁律排除该类（其 classpath 无 Database 插件，加载即 `NoClassDefFoundError`）。
