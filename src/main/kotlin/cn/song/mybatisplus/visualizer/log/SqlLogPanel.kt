@@ -2123,7 +2123,15 @@ class SqlLogPanel(
         val state = PluginSettings.getInstance().state
         // T-HistParam F3：识别通道统一——与历史 tab 共用 toPreviewResult
         // （占位符识别 / 字面量参数恢复 F4 / 回退警告分流，行为与原 openPreview 双分支逐字段一致）
-        SqlPreviewService.showResult(project, entry.toPreviewResult(formatSql = state.logFormatSql, literalRecovery = state.literalParamRecovery))
+        SqlPreviewService.showResult(
+            project,
+            entry.toPreviewResult(
+                formatSql = state.logFormatSql,
+                literalRecovery = state.literalParamRecovery,
+                // T-DialectInferFix：把「这条 SQL 当时连的库」交给预览，避免回落 MySQL 造成假红
+                capturedDialect = entry.dialectName,
+            ),
+        )
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */

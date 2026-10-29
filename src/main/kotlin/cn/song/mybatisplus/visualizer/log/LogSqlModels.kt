@@ -163,6 +163,19 @@ data class LogSqlEntry(
      */
     val databaseName: String? = null,
     /**
+     * T-DialectInferFix：本次执行连的那条连接的**方言名**（[cn.song.mybatisplus.visualizer.sql.DialectRegistry]
+     * 命名空间，如 `PostgreSQL`；不是 [databaseName] 那种展示串）。
+     *
+     * 与 [databaseName] 同源（agent 事件的 `connect` URL），但**取的是渲染用的命名空间**：
+     * [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects] 的显示名不能直接喂
+     * `DialectRegistry.byName`（HSQL/GBASE 不在注册表里、命名口径也不同）。
+     *
+     * 用途：日志/历史双击预览据此把「这条 SQL 当时跑在哪个库」当作 EXACT 方言证据
+     * （O-145 方案第 2 条），不再让预览回落 MySQL。null = 未知（桥通道 / 旧版 agent / 旧条目）。
+     * 随 pd 载荷键 `dl` 落盘（仅非空落键，旧读端忽略未知键）。
+     */
+    val dialectName: String? = null,
+    /**
      * Actual SQL 折叠附注（R10 T-ShardingSphereCompat，D1=A）：[SqlSource.SHARDINGSPHERE]
      * 条目的 `Actual SQL:` 段原文（多分片逐行、换行连接）；其余来源恒 null。
      * Logic 主条目 + Actual 折叠的模型承载——面板对照渲染（折叠态样式）等真实语料（V36）。
@@ -451,6 +464,7 @@ internal fun mergeDuplicateEntry(existing: LogSqlEntry, incoming: LogSqlEntry): 
         executionTimeMs = existing.executionTimeMs ?: incoming.executionTimeMs,
         updateCount = existing.updateCount ?: incoming.updateCount,
         databaseName = existing.databaseName ?: incoming.databaseName,
+        dialectName = existing.dialectName ?: incoming.dialectName,
         mapperStatement = existing.mapperStatement ?: incoming.mapperStatement,
         requestTag = existing.requestTag ?: incoming.requestTag,
         errorText = existing.errorText ?: incoming.errorText,

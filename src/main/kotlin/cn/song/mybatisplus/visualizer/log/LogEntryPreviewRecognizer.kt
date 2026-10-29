@@ -122,9 +122,24 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,
     literalRecovery: Boolean,
-): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery)
-    .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
-    .withExecutionError(errorText)
+    capturedDialect: String? = null,
+): PreviewResult {
+    // T-DialectInferFix：本次执行连接的方言是本条预览最强证据（O-145 方案第 2 条）。
+    // 优先用 pd 载荷里的注册方言名（dl 键）；旧条目退用持久化的目标库角标（`db: PostgreSQL · …`）。
+    val dialect = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.knownDialect(capturedDialect)
+        ?: cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.dialectFromBadge(databaseName)
+    val decision = dialect?.let {
+        cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.capturedDecision(it)
+    }
+    val base = toPreviewResultInternal(formatSql, literalRecovery)
+        .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
+        .withExecutionError(errorText)
+    if (dialect == null) return base
+    return base.copy(
+        renderedDialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName(dialect),
+        dialectDecision = decision,
+    )
+}
 
 /**
  * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
