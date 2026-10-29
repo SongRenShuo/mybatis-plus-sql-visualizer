@@ -578,7 +578,8 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text }
     metaTooltipSuffix = dialectCapabilityTooltipSection(result)
     applyDialectStatusSegment()
-    stackHover.updateDigest(result.stackDigest)
+    // T-StackBizFrame S3：线程名随快照一起喂弹层（标题展示；null 时标题退回纯「调用栈」）
+    stackHover.updateDigest(result.stackDigest, result.threadName)
     metaLabel.foreground = if (currentWarning != null) {
         // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
         JBColor.namedColor("ErrorForeground", JBColor.RED)

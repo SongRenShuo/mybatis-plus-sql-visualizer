@@ -66,7 +66,6 @@ reasonix.toml
 .ace-tool/
 /AGENTS.md
 /scripts/**
-/.agents/
 /.codex/
 
 ### ZCode ###

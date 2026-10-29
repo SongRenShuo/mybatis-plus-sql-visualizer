@@ -113,6 +113,14 @@ object ExplainSupport {
         Entry("OceanBase", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
         Entry(
+            "GaussDB",
+            "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER",
+            ExplainOutputFormat.JSON,
+            "官方文档级：GaussDB 集中式 V2.0-10.x《EXPLAIN》文法 `EXPLAIN [ ( option [, ...] ) ] statement`，" +
+                "FORMAT {TEXT|XML|JSON|YAML}；与 openGauss 5.0.0 真机同形（单列 QUERY PLAN、`[{\"Plan\":…}]`）。" +
+                "GaussDB 商用版无公开容器镜像、无真机——真机读数到位后升档",
+        ),
+        Entry(
             "Oracle",
             "EXPLAIN PLAN FOR $SQL_PLACEHOLDER",
             ExplainOutputFormat.TEXT,

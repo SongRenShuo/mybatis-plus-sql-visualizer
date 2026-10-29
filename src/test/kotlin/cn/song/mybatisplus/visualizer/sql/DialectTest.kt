@@ -85,7 +85,7 @@ class DialectTest {
         assertEquals(
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
-                "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss",
+                "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -141,7 +141,7 @@ class DialectTest {
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
-            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss"),
+            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
         )
     }

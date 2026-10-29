@@ -250,6 +250,33 @@ class SqlLogHistoryRoundTripTest {
         assertNull("无报错条目回环 null", read.errorText)
     }
 
+    /**
+     * T-StackBizFrame S3：调用栈快照与线程名都要经历史文件回环——线程名是弹层标题的一部分，
+     * 读回丢失会让历史条目的标题退回纯「调用栈」，用户重新失去「这条 SQL 跑在哪个线程」的判别量。
+     */
+    @Test
+    fun `真实链路_调用栈快照与线程名写读回环_不丢`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        val captured = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1724567890000L,
+            stackDigest = "cn.acme.Svc#run:1<-java.lang.Thread#run:2",
+            threadName = "scheduling-1",
+        )
+        saver.write(captured)
+        saver.close()
+
+        val files = dir.listFiles { f -> f.extension == "sql" }!!
+        assertEquals(1, files.size)
+        val read = SqlLogFileReader.readFromFile(files[0]).single()
+        assertEquals("栈快照回环", captured.stackDigest, read.stackDigest)
+        assertEquals("线程名回环", captured.threadName, read.threadName)
+    }
+
     @Test
     fun `真实链路_报错条目写读回环_errorText不丢`() {
         val dir = tempDir()

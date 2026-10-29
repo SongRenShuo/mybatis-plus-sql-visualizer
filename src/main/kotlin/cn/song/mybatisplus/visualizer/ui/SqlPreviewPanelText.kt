@@ -126,11 +126,14 @@ import javax.swing.event.DocumentListener
 internal fun buildStackDigestInlineLine(digest: String?): String {
     if (digest == null) return ""
     val label = MpSqlVisualizerBundle.message("panel.meta.stackDigest")
+    // T-StackBizFrame S3：先取景（头部全是 agent/驱动/框架帧时跳到首个项目帧），再按原契约截断。
+    // 首个非内部帧本来就在开头时取景原样返回，故既有「前 120 字符 + …」行为逐字不变。
+    val excerpt = StackDigestFrames.projectExcerpt(digest)
     val summary =
-        if (digest.length > STACK_DIGEST_MAX_CHARS) {
-            digest.substring(0, STACK_DIGEST_MAX_CHARS) + STACK_DIGEST_ELLIPSIS
+        if (excerpt.length > STACK_DIGEST_MAX_CHARS) {
+            excerpt.substring(0, STACK_DIGEST_MAX_CHARS) + STACK_DIGEST_ELLIPSIS
         } else {
-            digest
+            excerpt
         }
     return "   " + label + " " + summary
 }

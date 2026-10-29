@@ -152,6 +152,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
             wrapperType = null,
             tableName = null,
             stackDigest = stackDigest,
+            threadName = threadName,
             warning = MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.sharding"),
         )
     }
@@ -163,6 +164,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
             // T-StackHoverUi：识别分支与兜底分支同权携带调用栈快照——带参数条目（占位符==参数数的
             // 主路径）此前在此丢快照，meta 行摘要与悬停弹层对最常见的带参数条目不可达
             stackDigest = stackDigest,
+            threadName = threadName,
             unresolvedParams = recognized.unresolvedParams,
             paramTable = null,
             wrapperType = null,
@@ -194,6 +196,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
                     compactSql = withTerminator(recovery.placeholderSql),
                     // T-StackHoverUi：同上，字面量恢复分支同权携带快照
                     stackDigest = stackDigest,
+                    threadName = threadName,
                     unresolvedParams = recovery.unresolvedParams,
                     paramTable = null,
                     wrapperType = null,
@@ -210,6 +213,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
         sql = formatIfNeeded(base, formatSql),
         compactSql = restoredSql,
         stackDigest = stackDigest,
+        threadName = threadName,
         unresolvedParams = emptyList(),
         paramTable = null,
         wrapperType = null,

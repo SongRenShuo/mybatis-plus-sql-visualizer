@@ -24,6 +24,10 @@ package cn.song.mybatisplus.visualizer.sql
  *    《SQL保留字和关键字》章节 22，分类为「保留」的词；P-立项-05 逐词核对）
  *  - [MARIA_RESERVED]：MariaDB 官方保留字全量（mariadb.com/kb/en/reserved-words/，
  *    = MySQL 8.0 保留字 + MariaDB 增量；P-立项-05 逐词核对）
+ *  - [OPENGAUSS_RESERVED]：openGauss 保留字全量（真机 `pg_get_keywords()` 的 R/T/C 三类 183 词
+ *    ∪ 官方《关键字》页保留列独有词；T-GaussDbDialect 券 01）——**不再复用 [PG_RESERVED]**
+ *  - [GAUSSDB_RESERVED]：[OPENGAUSS_RESERVED] + GaussDB 官方《关键字》页保留列独有 11 词
+ *    （`maxvalue` 已在 openGauss R 类内；证据为官方文档级，GaussDB 商用版无真机）
  *
  * 近似归组已消除（P-立项-05）：H2 / DM / KingBase / MariaDB 均改为**本方言官方保留字集合**，
  * 不再近似复用其他方言的集合（原近似在 H2（key/value/values/day/year 等漏包）与
@@ -111,9 +115,9 @@ val PG_RESERVED: Set<String> = setOf(
     "current_role", "current_time", "current_timestamp", "current_user", "default",
     "deferrable", "desc", "distinct", "do", "else", "end", "except", "false",
     "fetch", "for", "foreign", "freeze", "from", "grant", "group", "having", "in",
-    "initially", "intersect", "into", "isnull", "lateral", "leading", "limit",
+    "initially", "intersect", "into", "is", "isnull", "lateral", "leading", "limit",
     "localtime", "localtimestamp", "not", "notnull", "null", "offset", "on", "only",
-    "or", "order", "placing", "primary", "references", "returning", "select",
+    "or", "order", "placing", "primary", "procedure", "references", "returning", "select",
     "session_user", "similar", "some", "symmetric", "table", "then", "to",
     "trailing", "true", "union", "unique", "user", "using", "variadic", "when",
     "where", "window", "with",
@@ -318,4 +322,82 @@ val MARIA_RESERVED: Set<String> = MYSQL_RESERVED + setOf(
     "master_heartbeat_period", "offset", "page_checksum", "parse_vcol_expr",
     "portion", "ref_system_id", "returning", "row_number", "slow",
     "stats_auto_recalc", "stats_persistent", "stats_sample_pages", "vector",
+)
+
+/** openGauss 保留字表：`pg_get_keywords()` 的 `R` 类（真机实测 93 词）。 */
+private val OPENGAUSS_KEYWORDS_RESERVED: Set<String> = setOf(
+    "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "authid",
+    "both", "buckets", "case", "cast", "check", "collate", "column", "constraint", "create",
+    "current_catalog", "current_date", "current_role", "current_time", "current_timestamp",
+    "current_user", "default", "deferrable", "desc", "distinct", "do", "else", "end", "except",
+    "excluded", "false", "fetch", "for", "foreign", "from", "grant", "group", "groupparent",
+    "having", "in", "initially", "intersect", "into", "is", "leading", "less", "limit",
+    "localtime", "localtimestamp", "maxvalue", "minus", "modify", "nocycle", "not", "null",
+    "offset", "on", "only", "or", "order", "performance", "placing", "primary", "procedure",
+    "references", "reject", "returning", "rownum", "select", "session_user", "shrink", "some",
+    "symmetric", "sysdate", "table", "then", "to", "trailing", "true", "union", "unique",
+    "user", "using", "variadic", "verify", "when", "where", "window", "with",
+)
+
+/** openGauss 保留字表：`pg_get_keywords()` 的 `T` 类（保留但可作函数/类型名，真机实测 27 词）。 */
+private val OPENGAUSS_KEYWORDS_TYPE_RESERVED: Set<String> = setOf(
+    "authorization", "binary", "collation", "compact", "concurrently", "cross", "csn",
+    "current_schema", "deltamerge", "freeze", "full", "hdfsdirectory", "ilike", "inner",
+    "join", "left", "like", "natural", "notnull", "outer", "overlaps", "recyclebin", "right",
+    "similar", "tablesample", "timecapsule", "verbose",
+)
+
+/** openGauss 保留字表：`pg_get_keywords()` 的 `C` 类（非保留但不能作函数/类型名，真机实测 63 词）。 */
+private val OPENGAUSS_KEYWORDS_COL_NAME_RESTRICTED: Set<String> = setOf(
+    "between", "bigint", "binary_double", "binary_integer", "bit", "boolean", "bucketcnt",
+    "byteawithoutorder", "byteawithoutorderwithequal", "char", "character", "coalesce",
+    "date", "dec", "decimal", "decode", "exists", "extract", "float", "greatest", "grouping",
+    "inout", "int", "integer", "interval", "least", "national", "nchar", "none", "nullif",
+    "number", "numeric", "nvarchar", "nvarchar2", "nvl", "out", "overlay", "position",
+    "precision", "real", "row", "setof", "smalldatetime", "smallint", "substring", "time",
+    "timestamp", "timestampdiff", "tinyint", "treat", "trim", "values", "varchar", "varchar2",
+    "xmlattributes", "xmlconcat", "xmlelement", "xmlexists", "xmlforest", "xmlparse", "xmlpi",
+    "xmlroot", "xmlserialize",
+)
+
+/**
+ * openGauss 保留字全量（T-GaussDbDialect 券 01）。
+ *
+ * 来源**两档并集**，缺一不可——两个来源对「保留」的定义不同，任取其一都会漏：
+ *  - **真机引擎级**：openGauss 5.0.0（DBX 只读通道，2026-10-29）`SELECT * FROM pg_get_keywords()`
+ *    共 653 词，其中 `R`=93 / `T`=27 / `C`=63（`U`=470 不取）。`R`/`T`/`C` 三类全部纳入：
+ *    列名/别名判定下 `T` 类实测可裸用（`SELECT 1 AS binary, 2 AS notnull, 3 AS ilike` → 成功），
+ *    但按本文件既有口径「宁可多包、不漏包」，多引用一次是幂等安全的，漏引用则是语法错误；
+ *  - **官方文档级**：openGauss 官方《关键字》页「保留」列。相较引擎 `R` 类，该页另有
+ *    `imcstored` / `self` / `unimcstored` 三词（`groupparent` 已在 `R` 类内），一并纳入。
+ *
+ * **不要**用 `PG_RESERVED` 顶替（本表的前身就是这么干的，是缺陷）：PG 官方附录与 openGauss
+ * 双向差异大——openGauss 额外保留 `rownum`/`minus`/`modify`/`nocycle`/`performance`/
+ * `shrink`/`verify`/`sysdate`/`excluded`/`buckets`/`authid`/`less`/`maxvalue`/`groupparent`/
+ * `reject`/`procedure`/`is`（17 词）等；PG 保留而 openGauss `R` 类不含的有
+ * `authorization`/`binary`/`concurrently`/`freeze`/`isnull`/`lateral`/`notnull`/`similar`
+ * （8 词，本表仍**保留**——多包无害）。
+ *
+ * 真机依据：`SELECT 1 AS rownum, 2 AS minus, 3 AS modify` → `ROWNUM cannot be used as an alias`；
+ * 逐词核对见 `DialectDocGoldenTest` 的黄金清单（与实现两侧独立维护）。
+ */
+val OPENGAUSS_RESERVED: Set<String> = OPENGAUSS_KEYWORDS_RESERVED +
+    OPENGAUSS_KEYWORDS_TYPE_RESERVED +
+    OPENGAUSS_KEYWORDS_COL_NAME_RESTRICTED +
+    setOf("imcstored", "self", "unimcstored")
+
+/**
+ * GaussDB（华为商用版）保留字增量（T-GaussDbDialect 券 01）。
+ *
+ * GaussDB 官方《关键字》页「保留」列相较 openGauss 独有 12 词，其中 `maxvalue` 已在 openGauss
+ * `R` 类内，故本表增量为 11 词。openGauss 独有而 GaussDB 未列的 4 词
+ * （`groupparent` / `imcstored` / `self` / `unimcstored`）**不从基线剔除**——多包无害。
+ *
+ * 证据级别：**官方文档级**（华为云 GaussDB 集中式 V2.0-10.x《关键字》）。GaussDB 商用版无公开
+ * 容器镜像，无真机；与 openGauss 同源（`server_version` 基线 9.2.4），故以真机实测的 openGauss
+ * 全集为基线 + 文档增量，是本环境下能给出的最强证据形态。
+ */
+val GAUSSDB_RESERVED: Set<String> = OPENGAUSS_RESERVED + setOf(
+    "crossbucket", "dbtimezone", "fenced", "force", "match", "offline", "online", "priorer",
+    "regexp", "rlike", "sessiontimezone",
 )

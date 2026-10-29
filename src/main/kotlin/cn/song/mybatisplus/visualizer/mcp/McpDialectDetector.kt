@@ -19,9 +19,10 @@ object McpDialectDetector {
         "jdbc:sqlite" to "SQLite",
         "jdbc:dm" to "DM（达梦）",
         "jdbc:kingbase" to "KingBase（人大金仓）",
-        // T-DialectXcFamily（O-63）：opengauss/gaussdb 同归 openGauss（D2=A 一 object 两前缀）
+        // T-DialectXcFamily（O-63）：opengauss 归 openGauss；T-GaussDbDialect（券 04）起 gaussdb 拆出
+        // 独立方言（华为 GaussDB 官方驱动 gaussdbjdbc.jar / gsjdbc200.jar 的前缀）
         "jdbc:opengauss" to "openGauss",
-        "jdbc:gaussdb" to "openGauss",
+        "jdbc:gaussdb" to "GaussDB",
         "jdbc:oceanbase" to "OceanBase",
     )
 
@@ -49,7 +50,10 @@ object McpDialectDetector {
         // T-DialectXcFamily（O-63）
         "oceanbase" to "OceanBase",
         "opengauss" to "openGauss",
-        "gaussdb" to "openGauss",
+        // T-GaussDbDialect（券 04）：gaussdb 从同归 openGauss 改为独立方言；中文别名按既有惯例补
+        "gaussdb" to "GaussDB",
+        "高斯" to "GaussDB",
+        "华为高斯" to "GaussDB",
     )
 
     /** agent 显式方言名归一化（精确别名匹配；不可识别返回 null）。 */

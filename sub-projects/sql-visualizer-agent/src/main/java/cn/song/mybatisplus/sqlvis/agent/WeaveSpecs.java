@@ -46,7 +46,10 @@ final class WeaveSpecs {
                 StatementWeaver.Kind.EXEC_CTX,
                 StatementWeaver.Kind.BATCH,
                 StatementWeaver.Kind.ADD_BATCH,
-                StatementWeaver.Kind.CLEAR_BATCH};
+                StatementWeaver.Kind.CLEAR_BATCH,
+                // T-ConnCastSafety：参数捕获必须自持（连接代理出厂关闭后，setXxx 只能靠织入拦）。
+                // 只在方法头插一行回调，不新增局部/出口，达梦出口 chop_frame 那类限制与它无关。
+                StatementWeaver.Kind.PARAM};
         putSpec(statementFace,
                 "com.mysql.cj.jdbc.StatementImpl",
                 "com.mysql.cj.jdbc.ClientPreparedStatement",
@@ -57,11 +60,27 @@ final class WeaveSpecs {
                 "org.h2.jdbc.JdbcStatement",
                 "org.h2.jdbc.JdbcPreparedStatement",
                 "org.h2.jdbc.JdbcCallableStatement",
-                // PostgreSQL / openGauss 兼容（openGauss 2.x 走 PG 驱动）——PgPreparedStatement
-                // 继承 PgStatement、PgCallableStatement 继承 PgPreparedStatement（javap 实测）
+                // PostgreSQL / openGauss 5.x·7.x（这两个版本整体回到 org.postgresql.* 包；2.x/3.x
+                // 是 org.opengauss.*，见下）——PgPreparedStatement 继承 PgStatement、
+                // PgCallableStatement 继承 PgPreparedStatement（javap 实测）
                 "org.postgresql.jdbc.PgStatement",
                 "org.postgresql.jdbc.PgPreparedStatement",
                 "org.postgresql.jdbc.PgCallableStatement",
+                // 华为 GaussDB 商用驱动（gaussdbjdbc 506.0.0.b058）：完全重定位，jar 内
+                // `org/postgresql` 条目数为 0、与 pgjdbc 无继承关系，故必须单列。方法形态与
+                // pgjdbc 一致（T-GaussCapture 用真实 jar 字节织入 + JVM 链接期校验实测；
+                // PgCallableStatement 继承 PgPreparedStatement，不单列）
+                "com.huawei.gaussdb.jdbc.jdbc.PgStatement",
+                "com.huawei.gaussdb.jdbc.jdbc.PgPreparedStatement",
+                // 华为 openGauss 品牌驱动（opengaussjdbc 506.0.T35）：与商用版同形同构，独立包名
+                "com.huawei.opengauss.jdbc.jdbc.PgStatement",
+                "com.huawei.opengauss.jdbc.jdbc.PgPreparedStatement",
+                // 社区 openGauss 2.x/3.x（org.opengauss:opengauss-jdbc）：这代整体重定位到
+                // org.opengauss.*，Class.forName("org.postgresql.Driver") 解析不到——此前连接面
+                // 早已登记 org.opengauss.Driver，语句面却是空的，用户侧表现为「看着支持、一条不出」。
+                // 3.0.0 真实字节织入 + JVM 校验通过；5.x/7.x 已整体回到 org.postgresql.*，不在此列
+                "org.opengauss.jdbc.PgStatement",
+                "org.opengauss.jdbc.PgPreparedStatement",
                 // Oracle thin（OracleStatement 带参执行族 + 批处理；PS/Callable 各自覆盖无参 execute 族）
                 "oracle.jdbc.driver.OracleStatement",
                 "oracle.jdbc.driver.OraclePreparedStatement",
@@ -81,7 +100,9 @@ final class WeaveSpecs {
         final StatementWeaver.Kind[] dmTimedFace = {
                 StatementWeaver.Kind.EXEC_PARAM,
                 StatementWeaver.Kind.EXEC_CTX,
-                StatementWeaver.Kind.BATCH};
+                StatementWeaver.Kind.BATCH,
+                // 参数面是入口插桩（无出口、无局部、无帧补丁），不受 chop_frame 限制
+                StatementWeaver.Kind.PARAM};
         putSpec(dmTimedFace,
                 "dm.jdbc.driver.DmdbStatement",
                 "dm.jdbc.driver.DmdbPreparedStatement");
@@ -91,7 +112,14 @@ final class WeaveSpecs {
                 "com.mysql.jdbc.ConnectionImpl",
                 "org.h2.jdbc.JdbcConnection",
                 // PG 连接（prepareStatement/prepareCall 出口登记 PS 实例 → SQL）
+                // 同为 openGauss 5.x/7.x 的连接面
                 "org.postgresql.jdbc.PgConnection",
+                // 华为 GaussDB 商用 / openGauss 品牌连接（两族均为完全重定位的独立实现；
+                // getURL() 实测 public，UrlResolver 的反射兜底可用）
+                "com.huawei.gaussdb.jdbc.jdbc.PgConnection",
+                "com.huawei.opengauss.jdbc.jdbc.PgConnection",
+                // 社区 openGauss 2.x/3.x 连接（5.x/7.x 走上面的 org.postgresql.PgConnection）
+                "org.opengauss.jdbc.PgConnection",
                 // Oracle 连接基类（T4CConnection 继承其 prepareStatement/prepareCall，包私有亦可 retransform）
                 "oracle.jdbc.driver.PhysicalConnection",
                 "com.microsoft.sqlserver.jdbc.SQLServerConnection",

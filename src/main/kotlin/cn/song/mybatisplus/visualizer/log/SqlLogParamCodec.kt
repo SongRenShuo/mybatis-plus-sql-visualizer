@@ -46,6 +46,8 @@ object SqlLogParamCodec {
     private const val CANDS_FIELD = "cd"
     private const val CAND_CLASSES_FIELD = "cc"
     private const val STACK_DIGEST_FIELD = "sd"
+    /** T-StackBizFrame S3：线程名（仅非空落键；旧 payload 无此键 → null，标题退回纯「调用栈」）。 */
+    private const val THREAD_NAME_FIELD = "tn"
     /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注（仅非默认落键；旧 payload 无此键 → null）。 */
     private const val ACTUAL_SQL_FIELD = "a"
     /**
@@ -87,6 +89,8 @@ object SqlLogParamCodec {
         val candidateClasses: List<String> = emptyList(),
         /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
         val stackDigest: String? = null,
+        /** T-StackBizFrame S3：产生该 SQL 的线程名（弹层标题用）；旧 payload 为 null。 */
+        val threadName: String? = null,
         /** T-McpAuditTrail T-MAT-03：来源（当前仅 [SqlSource.MCP] 落键）；旧 payload / 非 MCP 条目为 null。
          * 读端把它回填进 [LogSqlEntry.source]，不填则沿用默认 [SqlSource.UNKNOWN]。
          */
@@ -148,6 +152,7 @@ object SqlLogParamCodec {
             json.endArray()
         }
         entry.stackDigest?.let { json.name(STACK_DIGEST_FIELD).value(it) }
+        entry.threadName?.takeIf { it.isNotBlank() }?.let { json.name(THREAD_NAME_FIELD).value(it) }
         entry.actualSql?.let { json.name(ACTUAL_SQL_FIELD).value(it) }
         if (entry.captureProvenance != CaptureProvenance.UNKNOWN) json.name(PROVENANCE_FIELD).value(entry.captureProvenance.name)
         if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) json.name(SOURCE_FIELD).value(entry.source.name)
@@ -214,6 +219,7 @@ object SqlLogParamCodec {
                 out
             },
             stackDigest = json.get(STACK_DIGEST_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            threadName = json.get(THREAD_NAME_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
             // T-McpAuditTrail T-MAT-03：来源键缺失/值非本版本枚举名 → null（旧文件与旧版写入端天然兼容，
             // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
             source = json.get(SOURCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString

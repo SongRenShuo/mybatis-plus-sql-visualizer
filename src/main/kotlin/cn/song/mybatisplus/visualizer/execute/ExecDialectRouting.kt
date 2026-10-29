@@ -59,7 +59,11 @@ internal object ExecDialectRouting {
         "DM（达梦）" to listOf("DM", "Dameng"),
         "KingBase（人大金仓）" to listOf("KingBase", "KingbaseES", "PostgreSQL"),
         "OceanBase" to listOf("OceanBase", "MySQL"),
-        "openGauss" to listOf("openGauss", "GaussDB", "PostgreSQL"),
+        "openGauss" to listOf("openGauss", "PostgreSQL"),
+        // T-GaussDbDialect（券 04）：独立方言。262 平台无 GaussDB / openGauss 方言模块
+        // （.intellijPlatform 制品目录 grep gauss 零命中），故候选按「同族 id → PG 兜底」排；
+        // 漏登记此键会让执行目标 Runner 枚举落空并回退 MySQL（功能不生效）。
+        "GaussDB" to listOf("GaussDB", "openGauss", "PostgreSQL"),
     )
 
     /** 目标数据源解析测试缝（headless 无 DataSourceStorage；生产恒 null 走真链）。 */

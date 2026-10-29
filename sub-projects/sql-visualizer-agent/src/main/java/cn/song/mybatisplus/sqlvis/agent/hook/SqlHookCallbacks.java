@@ -27,6 +27,50 @@ public final class SqlHookCallbacks {
     private static final AtomicBoolean WARNED_ONCE = new AtomicBoolean();
 
     /**
+     * 连接对象替换开关（T-ConnCastSafety，默认<b>关</b>，出厂不得替换宿主连接）。
+     *
+     * <p><b>为什么默认关。</b>连接替换＝把驱动 {@code connect} 返回值换成 JDK 动态代理，而 JDK 代理
+     * 只能实现接口、无法伪装成具体类：宿主只要写 {@code (DmdbConnection) conn}、{@code (KbConnection) conn}
+     * 这类到驱动实现类的强转，就必然抛 {@code ClassCastException: com.sun.proxy.$ProxyN cannot be cast to
+     * dm.jdbc.driver.DmdbConnection}。这不是可修的边界条件，而是「接口代理」的构造性缺陷——一旦命中，
+     * 崩的是宿主业务代码，agent 的 {@code catch (Throwable)} 自吞救不了（异常在宿主栈上抛出）。
+     * 国产库（达梦/金仓/翰高/海量/GaussDB）宿主侧做实现类强转的现场并不少见，故采集红线升级为
+     * 「<b>绝不在宿主侧替换 JDBC 对象</b>」：默认只登记 URL、原对象直返。
+     *
+     * <p><b>那还采得到吗。</b>采得到。SQL 采集主通道已是语句面/prepare 面字节码织入
+     * （{@code StatementWeaver} + {@link cn.song.mybatisplus.sqlvis.agent.WeaveSpecs}）——它只往方法体里
+     * 插回调，<b>不改任何对象身份</b>，MySQL/MariaDB 家族、PG/openGauss（含华为 GaussDB 商用与
+     * openGauss 品牌两族）、Oracle、SQL Server、H2、达梦都走这条路，且 attach 路径对存量池连接同样生效
+     * （T-StatementWeave/T-DmWeave/T-PgWeave/T-GaussCapture 的落点）。
+     * 连接代理是更早的通道，唯一独有能力是「连接级 prepare 拦截」，而这已被 prepare 面覆盖。
+     *
+     * <p><b>GaussDB 现场（T-GaussCapture）。</b>华为两族的 {@code com.huawei.gaussdb.jdbc.jdbc.PgConnection}
+     * 与 {@code com.huawei.opengauss.jdbc.jdbc.PgConnection} 实测均为 {@code public} **非 final**——
+     * 宿主写 {@code (PgConnection) conn} 完全合法且现实存在。一旦有人打开
+     * {@code -Dsqlvis.agent.wrapConnection=true}，这里返回的动态代理会立刻抛
+     * {@code ClassCastException: com.sun.proxy.$ProxyN cannot be cast to ...PgConnection}，
+     * 与达梦那次同型。**默认值 {@code false} 不得改**：GaussDB 的采集能力来自语句面/prepare 面，
+     * 不需要连接代理。
+     *
+     * <p><b>何时需要打开。</b>仅当某驱动的语句实现类不在 {@code WeaveSpecs} 名单里（如 GBASE 8s、
+     * 部分 SQLite/HSQLDB 形态），织入通道覆盖不到、只能靠连接代理时，用户显式加
+     * {@code -Dsqlvis.agent.wrapConnection=true} 承担强转风险。默认值来自系统属性，进程内不再变，
+     * 避免每条连接读一次属性；测试用 {@link #setWrapConnectionForTest} 显式开关。
+     */
+    private static final String WRAP_CONNECTION_PROP = "sqlvis.agent.wrapConnection";
+
+    private static final boolean DEFAULT_WRAP_CONNECTION =
+            Boolean.parseBoolean(System.getProperty(WRAP_CONNECTION_PROP, "false"));
+
+    /** volatile：测试缝可改（生产初值即 DEFAULT_WRAP_CONNECTION，运行期无写入点）。 */
+    private static volatile boolean wrapConnection = DEFAULT_WRAP_CONNECTION;
+
+    /** 测试缝：null = 复位到系统属性默认值。 */
+    public static void setWrapConnectionForTest(Boolean value) {
+        wrapConnection = value != null ? value : DEFAULT_WRAP_CONNECTION;
+    }
+
+    /**
      * 连接出口回调（织入字节码在 connect 出口调用）：**一律包装**，停采只做逐调用短路。
      *
      * <p><b>为什么这里不看 {@code disabled}</b>（T-AgentConfigChannel T-08，2026-09-22 真机实证）：
@@ -45,6 +89,11 @@ public final class SqlHookCallbacks {
             // T-StatementWeave S4：connect 钩子记最近 URL——语句面归属链的粗粒度兜底源
             UrlResolver.noteConnectUrl(url);
             if (rawConnection == null) {
+                return rawConnection;
+            }
+            if (!wrapConnection) {
+                // T-ConnCastSafety：出厂不替换宿主连接对象（$Proxy 无法强转到 DmdbConnection 等实现类）。
+                // URL 已在上面登记，采集交给语句面/prepare 面织入（不换对象）。
                 return rawConnection;
             }
             if (ProxySupport.isOurProxy(rawConnection)) {
@@ -158,6 +207,29 @@ public final class SqlHookCallbacks {
             StatementRegistry.clearBatchOf(stmt);
         } catch (Throwable t) {
             // 采集红线：自吞
+        }
+    }
+
+    /**
+     * setXxx **入口**（语句面织入，T-ConnCastSafety）：记录绑定参数。
+     *
+     * <p>为什么需要这条：参数捕获原本只存在于语句代理（连接被包装后才有），而连接替换已在
+     * 出厂关闭（{@code $Proxy} 无法强转到驱动实现类）。缺了它，「修好崩溃」的代价就是「参数全丢」，
+     * 那是把红线换成了功能归零。织入形态与观测语义都对齐代理层：白名单 setter、值渲染与
+     * 默认 toString 降级、脱敏在快照时按列名提示做。
+     *
+     * <p>签名被 StatementWeaver 字节码硬编码，改动两侧同步。停采短路排在写入之前——停采期间的
+     * 参数不累积，恢复后不会错配到后续语句（与 T-AgentResiduals R5 同口径）。代理层活跃时跳过，
+     * 参数由代理自己那份 ParamCapture 记（双通道去重，防双份）。
+     */
+    public static void onParamSet(Object stmt, int index, Object value) {
+        try {
+            if (stmt == null || AgentState.isDisabled() || WeaveGate.isProxyActive()) {
+                return;
+            }
+            StatementRegistry.captureParam(stmt, index, value);
+        } catch (Throwable t) {
+            // 采集红线：自吞（宿主 setXxx 语义不受影响）
         }
     }
 

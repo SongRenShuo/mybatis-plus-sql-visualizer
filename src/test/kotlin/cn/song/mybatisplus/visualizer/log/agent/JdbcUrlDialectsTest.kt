@@ -34,9 +34,10 @@ class JdbcUrlDialectsTest {
         assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:opengauss://localhost:5432/db"))
         assertEquals("GBASE", JdbcUrlDialects.displayName("jdbc:gbasedbt-sqli://localhost:9088/db"))
         assertEquals("HSQL", JdbcUrlDialects.displayName("jdbc:hsqldb:mem:test"))
-        // T-DialectXcFamily（O-63）：OceanBase 新增角标；华为 GaussDB 前缀同归 openGauss 角标（D2=A）
+        // T-DialectXcFamily（O-63）：OceanBase 新增角标；T-GaussDbDialect（券 04）起华为 GaussDB
+        // 前缀独立成角标（原与 opengauss 同归 openGauss，D2=A 已撤销）
         assertEquals("OceanBase", JdbcUrlDialects.displayName("jdbc:oceanbase://localhost:2881/db"))
-        assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:gaussdb://localhost:8000/db"))
+        assertEquals("GaussDB", JdbcUrlDialects.displayName("jdbc:gaussdb://localhost:8000/db"))
     }
 
     @Test

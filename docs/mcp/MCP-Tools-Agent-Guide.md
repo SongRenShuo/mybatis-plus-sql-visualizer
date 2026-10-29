@@ -84,7 +84,7 @@
 
 ### 3.4 sqlv_explain — 执行计划
 
-用途：对单条只读 SELECT 在真实数据源上跑 EXPLAIN，返回计划文本。方言支持 MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/DM/KingBase，`dialect` 省略时按数据源 URL 自动识别。
+用途：对单条只读 SELECT 在真实数据源上跑 EXPLAIN，返回计划文本。方言支持 MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/SQLite/DM/KingBase/OceanBase/openGauss/GaussDB，`dialect` 省略时按数据源 URL 自动识别。
 
 | 入参 | 类型 | 必填 | 说明 |
 |------|------|------|------|

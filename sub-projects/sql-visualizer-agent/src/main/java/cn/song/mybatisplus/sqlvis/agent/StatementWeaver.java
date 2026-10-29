@@ -54,6 +54,8 @@ public final class StatementWeaver implements Opcodes {
     private static final String ADD_BATCH_SIG = "(Ljava/lang/Object;Ljava/lang/String;)V";
     private static final String CLEAR_BATCH_SIG = "(Ljava/lang/Object;)V";
     private static final String PREPARE_SIG = "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)V";
+    /** 参数面入口签名（index 为 JDBC parameterIndex，value 已装箱）。 */
+    private static final String PARAM_SIG = "(Ljava/lang/Object;ILjava/lang/Object;)V";
 
     private static final String STR_DESC = "(Ljava/lang/String;";
 
@@ -71,6 +73,12 @@ public final class StatementWeaver implements Opcodes {
         CLEAR_BATCH,
         /** prepareStatement(String)/prepareCall(String) 出口——登记「PS 实例 → SQL + URL」。 */
         PREPARE,
+        /**
+         * setXxx 入口（T-ConnCastSafety）：把绑定参数送进登记槽。**只在方法头插一行回调**——
+         * 不新增局部、不插出口、不加分支，故不需要 token 槽与帧补丁；也正因如此对达梦那种
+         * 出口 chop_frame 的类安全（问题只出在出口读原局部）。
+         */
+        PARAM,
     }
 
     private static final String[] EXEC_NAMES =
@@ -174,9 +182,37 @@ public final class StatementWeaver implements Opcodes {
                         && desc.startsWith(STR_DESC)
                         && (desc.contains(")Ljava/sql/PreparedStatement;")
                             || desc.contains(")Ljava/sql/CallableStatement;"));
+            case PARAM:
+                // 只认 (int index, T value...) 形态的白名单 setter：setFetchSize/setMaxRows 这类
+                // 首参不是 int 的同名族天然排除，与 ParamCapture 的白名单双保险。
+                return cn.song.mybatisplus.sqlvis.agent.hook.ParamCapture.isSetter(name)
+                        && desc.startsWith("(I")
+                        && parameterCount(desc) >= 2;
             default:
                 return false;
         }
+    }
+
+    /** 描述符形参个数（`(` 与 `)` 之间，long/double 仍算 1 个形参）。 */
+    private static int parameterCount(String desc) {
+        int count = 0;
+        for (int i = 1; i < desc.length() && desc.charAt(i) != ')'; i++) {
+            final char c = desc.charAt(i);
+            if (c == '[') {
+                while (i + 1 < desc.length() && desc.charAt(i + 1) == '[') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == 'L') {
+                i = desc.indexOf(';', i);
+                if (i < 0) {
+                    return count;
+                }
+            }
+            count++;
+        }
+        return count;
     }
 
     private static boolean in(String name, String[] names) {
@@ -186,6 +222,57 @@ public final class StatementWeaver implements Opcodes {
             }
         }
         return false;
+    }
+
+    /**
+     * 参数面取值：按描述符把第 2 个形参（slot 2）装箱压栈。
+     *
+     * <p>三类形态分别处理——基本类型按类型装箱（I/S/B→Integer、Z→Boolean、C→Character、
+     * J→Long、F→Float、D→Double）、引用/数组直接 ALOAD；{@code setNull(int,int)} 的第二个 int 是
+     * SQL 类型码而不是值，压 null（与代理层「isSetNull → 值记 null、类型记 NULL」同口径）。
+     */
+    private static void appendParamValue(InsnList l, String name, String desc) {
+        if ("setNull".equals(name)) {
+            l.add(new InsnNode(ACONST_NULL));
+            return;
+        }
+        final char c = desc.charAt(2); // "(I" 之后
+        switch (c) {
+            case 'B':
+            case 'S':
+            case 'I':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
+                        "(I)Ljava/lang/Integer;", false));
+                return;
+            case 'Z':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
+                        "(Z)Ljava/lang/Boolean;", false));
+                return;
+            case 'C':
+                l.add(new VarInsnNode(ILOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Character", "valueOf",
+                        "(C)Ljava/lang/Character;", false));
+                return;
+            case 'J':
+                l.add(new VarInsnNode(LLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Long", "valueOf",
+                        "(J)Ljava/lang/Long;", false));
+                return;
+            case 'F':
+                l.add(new VarInsnNode(FLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Float", "valueOf",
+                        "(F)Ljava/lang/Float;", false));
+                return;
+            case 'D':
+                l.add(new VarInsnNode(DLOAD, 2));
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Double", "valueOf",
+                        "(D)Ljava/lang/Double;", false));
+                return;
+            default: // L…; 与 […
+                l.add(new VarInsnNode(ALOAD, 2));
+        }
     }
 
     /**
@@ -203,7 +290,24 @@ public final class StatementWeaver implements Opcodes {
         return op == IRETURN || op == LRETURN || op == ARETURN || op == ATHROW;
     }
 
+    /** 方法描述符的返回类型是否为 boolean（`)Z`）——决定 IRETURN 结果装箱成 Boolean 还是 Integer。 */
+    private static boolean returnsBoolean(String methodDesc) {
+        final int paren = methodDesc.indexOf(')');
+        return paren >= 0 && paren + 1 < methodDesc.length() && methodDesc.charAt(paren + 1) == 'Z';
+    }
+
     private static boolean weaveMethod(MethodNode mn, Kind kind, String ownerInternal) {
+        if (kind == Kind.PARAM) {
+            // 参数面：只在方法头插一行回调——不新增局部、无出口、无分支，故 maxLocals 与栈图帧
+            // 都不用动（这也是它对达梦出口 chop_frame 免疫的原因：问题出在出口读原局部）。
+            final InsnList head = new InsnList();
+            head.add(new VarInsnNode(ALOAD, 0));
+            head.add(new VarInsnNode(ILOAD, 1));
+            appendParamValue(head, mn.name, mn.desc);
+            head.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onParamSet", PARAM_SIG, false));
+            mn.instructions.insertBefore(mn.instructions.getFirst(), head);
+            return true;
+        }
         final boolean timed = kind == Kind.EXEC_PARAM || kind == Kind.EXEC_CTX || kind == Kind.BATCH;
         // T-DmWeave（2026-10-09）：timed 面在**方法入口**把 this（EXEC_PARAM 再加首参 SQL）捕获进
         // 自有槽，出口一律读**自有槽**——不再读原方法局部。动因：达梦等驱动 javac 在出口处对已死局部
@@ -283,8 +387,17 @@ public final class StatementWeaver implements Opcodes {
                     l.add(new VarInsnNode(ALOAD, retSlot)); // failure
                 } else if (op == IRETURN) {
                     l.add(new VarInsnNode(ILOAD, retSlot)); // 先压 int 参
-                    l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
-                            "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+                    // 返回类型按**描述符**判定而非 opcode：execute() 返回 boolean、executeUpdate() 返回
+                    // int，两者都是 IRETURN。若一律装箱成 Integer，事件里 Boolean.FALSE 的判定就失效
+                    // （execute() 的影响行数改走 getUpdateCount 的分支永远进不去，updateCount 恒 null——
+                    // O147 真机用例实测）。
+                    if (returnsBoolean(mn.desc)) {
+                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
+                                "(Z)Ljava/lang/Boolean;", false));
+                    } else {
+                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
+                                "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+                    }
                     l.add(new InsnNode(ACONST_NULL)); // failure
                 } else if (op == LRETURN) {
                     l.add(new VarInsnNode(LLOAD, retSlot)); // 先压 long 参
