@@ -86,6 +86,7 @@ class DialectTest {
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
                 "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
+                "HighGo", "Vastbase",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -107,7 +108,7 @@ class DialectTest {
 
     /**
      * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：方言逐库声明——Oracle / H2 = UPPER、
-     * PostgreSQL / KingBase / openGauss = LOWER、其余 6 方言 = NONE。
+     * PostgreSQL / KingBase / openGauss / GaussDB / HighGo / Vastbase = LOWER、其余 6 方言 = NONE。
      *
      * 归属依据（真机/引擎实测，2026-09-22）：
      *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
@@ -135,13 +136,17 @@ class DialectTest {
         // OceanBase=NONE（MySQL 模式推定，真机核对后增量）
         assertEquals(IdentifierFolding.LOWER, OpenGaussDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, OceanBaseDialect.identifierFolding)
+        // T-XcDialects3 券 01/02：HighGo=LOWER（社区镜像 V6.0.1 引擎实测 2026-10-30）、
+        // Vastbase=LOWER（官方《开发规范》推定，真机在途）
+        assertEquals(IdentifierFolding.LOWER, HighGoDialect.identifierFolding)
+        assertEquals(IdentifierFolding.LOWER, VastbaseDialect.identifierFolding)
         // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
         assertEquals(
             listOf("Oracle", "H2"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
-            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB"),
+            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB", "HighGo", "Vastbase"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
         )
     }

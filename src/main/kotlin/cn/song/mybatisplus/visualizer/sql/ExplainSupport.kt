@@ -97,10 +97,15 @@ object ExplainSupport {
      *    不可达，走 [Entry.postPlanQuery]/[Entry.channelNote] 诚实降级：语句照发（登记真实发生），
      *    计划行指引到数据库端同连接另查；
      *  - SQL Server（R23 接入）：`SET STATISTICS XML ON; <sql>; SET STATISTICS XML OFF`，XML 档——
-     *    文档实证 Microsoft Learn《SET STATISTICS XML》「need not be the only statement in a batch」
-     *    （SHOWPLAN_XML 才有批内独占限制，故不取）；计划 XML 是语句执行后的**附加结果集**，
+     *    文档实证 Microsoft Learn《SET STATISTICS XML》（need not be the only statement in a batch；
+     *    SHOWPLAN_XML 才有批内独占限制，故不取）；计划 XML 是语句执行后的**附加结果集**，
      *    MCP 单结果集通道返回的是查询行而非计划（[Entry.channelNote] 澄清），IDE 控制台多结果
-     *    页签可见；**真机未验证**（DBX 在册无 sqlserver 实例），末尾 OFF 还原会话态防连接复用串扰。
+     *    页签可见；**真机未验证**（DBX 在册无 sqlserver 实例），末尾 OFF 还原会话态防连接复用串扰；
+     *  - HighGo（T-XcDialects3 券 04）：`EXPLAIN (FORMAT JSON)`，JSON 档——社区镜像引擎级实证
+     *    （HighGo V6.0.1 / PostgreSQL 12.3，镜像 `xuxuclassmate/highgo:6.0.1`，非厂商官方发布物）；
+     *  - Vastbase（T-XcDialects3 券 04）：`EXPLAIN (FORMAT JSON)`，JSON 档——官方文档级
+     *    （G100 V3.0.9《EXPLAIN》文法，FORMAT 默认 TEXT）；B 模式下 EXPLAIN 兼作 DESC（首关键字
+     *    白名单由 [ExplainGate] 保证，此处仅登记）。
      */
     private val table: List<Entry> = listOf(
         Entry("MySQL", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "真机实证 MySQL 5.7/8.4（DBX 通道 2026-09-02）"),
@@ -135,6 +140,8 @@ object ExplainSupport {
             "文档实证 Microsoft Learn《SET STATISTICS XML》（need not be the only statement in a batch；计划 XML 为执行后的附加结果集）；真机未验证（DBX 在册无 sqlserver 实例留账）——MCP 单结果集通道返回查询行而非计划，channelNote 澄清；末尾 OFF 还原会话态",
             channelNote = "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; the rows above are the query result, not the plan - use the IDE database console to see the plan tab (documented syntax; not verified against a live instance).",
         ),
+        Entry("HighGo", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：HighGo V6.0.1 / PostgreSQL 12.3，FORMAT JSON 单列 QUERY PLAN JSON 文本（镜像 xuxuclassmate/highgo:6.0.1，非厂商官方）"),
+        Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "官方文档级：Vastbase G100 V3.0.9《EXPLAIN》FORMAT {TEXT|XML|JSON|YAML} 默认 TEXT；真机读数到位后升档"),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

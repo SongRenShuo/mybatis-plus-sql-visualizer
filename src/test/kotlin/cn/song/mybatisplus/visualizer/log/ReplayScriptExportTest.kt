@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DmDialect
 import cn.song.mybatisplus.visualizer.sql.GaussDbDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
+import cn.song.mybatisplus.visualizer.sql.HighGoDialect
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
 import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
@@ -14,6 +15,7 @@ import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.SqliteDialect
+import cn.song.mybatisplus.visualizer.sql.VastbaseDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -128,6 +130,8 @@ class ReplayScriptExportTest {
             KingBaseDialect.name to "BEGIN",
             OpenGaussDialect.name to "BEGIN",
             GaussDbDialect.name to "BEGIN",
+            HighGoDialect.name to "BEGIN",
+            VastbaseDialect.name to "BEGIN",
             H2Dialect.name to "BEGIN",
             SqliteDialect.name to "BEGIN",
             SqlServerDialect.name to "BEGIN TRANSACTION",
