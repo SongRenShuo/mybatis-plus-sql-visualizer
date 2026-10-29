@@ -123,16 +123,16 @@ class DialectXcFamily3Test {
     // ---------- upsert / 事务 / DELETE-LIMIT / identity ----------
 
     @Test
-    fun `upsert_瀚高PG形态_海量MySQL形态`() {
+    fun `upsert_两族均PG形态`() {
         // 瀚高：PG 形态（社区镜像引擎级实证——EXPLAIN 计划含 Conflict Resolution: UPDATE）
         assertEquals(
             "ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note",
             HighGoDialect.renderUpsert("id", listOf("note")),
         )
         assertNull(HighGoDialect.renderUpsertStatement("t", listOf("id", "note"), "id"))
-        // 海量：MySQL 形态（D3 定案；真机证 PG 形态可用再切）
+        // 海量：D3 切换条款已触发——A 模式真机实证两种形态均可用，切 PG 形态（2026-10-30）
         assertEquals(
-            "ON DUPLICATE KEY UPDATE note = VALUES(note)",
+            "ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note",
             VastbaseDialect.renderUpsert("id", listOf("note")),
         )
         assertNull(VastbaseDialect.renderUpsertStatement("t", listOf("id", "note"), "id"))
@@ -143,7 +143,8 @@ class DialectXcFamily3Test {
         assertEquals("BEGIN", HighGoDialect.transactionBegin)
         assertEquals("BEGIN", VastbaseDialect.transactionBegin)
         assertFalse(HighGoDialect.supportsDeleteLimit)
-        assertFalse(VastbaseDialect.supportsDeleteLimit)
+        // 海量：A 模式真机实证 DELETE ... LIMIT 真删生效（DELETE 1），P-7 翻 true
+        assertTrue(VastbaseDialect.supportsDeleteLimit)
         // identity 包装保持 null：瀚高实测 OVERRIDING SYSTEM VALUE 是语句内子句（非前置包装）；
         // 海量按官方文档同形（B 模式 AUTO_INCREMENT 允许显式写值）
         assertNull(HighGoDialect.renderInsertWrapper("t", "INSERT INTO t VALUES (?)"))

@@ -141,7 +141,7 @@ object ExplainSupport {
             channelNote = "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; the rows above are the query result, not the plan - use the IDE database console to see the plan tab (documented syntax; not verified against a live instance).",
         ),
         Entry("HighGo", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：HighGo V6.0.1 / PostgreSQL 12.3，FORMAT JSON 单列 QUERY PLAN JSON 文本（镜像 xuxuclassmate/highgo:6.0.1，非厂商官方）"),
-        Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "官方文档级：Vastbase G100 V3.0.9《EXPLAIN》FORMAT {TEXT|XML|JSON|YAML} 默认 TEXT；真机读数到位后升档"),
+        Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：Vastbase G100 V3.0 Build 9（openGauss 6.0.0）A 模式 FORMAT JSON 单列 JSON 文本（镜像 apecloud/vastbase，非厂商官方）"),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

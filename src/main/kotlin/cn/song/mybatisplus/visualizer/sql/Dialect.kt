@@ -1095,7 +1095,7 @@ object HighGoDialect : Dialect {
 object VastbaseDialect : Dialect {
     override val name: String = "Vastbase"
 
-    /** R36：官方 `BEGIN` 在册（文档级；vsql 中 BEGIN 不可与 SQL 同行——插件产物逐条独立，不受影响）。 */
+    /** R36：官方 `BEGIN`/`START TRANSACTION` 均在册且**社区镜像引擎级实证可用**（A 模式 2026-10-30；vsql 中 BEGIN 不可与 SQL 同行——插件产物逐条独立，不受影响）。 */
     override val transactionBegin: String = "BEGIN"
 
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
@@ -1104,26 +1104,36 @@ object VastbaseDialect : Dialect {
 
     override val identifierQuotes: Set<Char> = setOf('"')
 
-    /** 裸标识符折小写（官方《开发规范》推定，未真机；PG 族先例 PG/KingBase/openGauss/GaussDB）。 */
+    /**
+     * 裸标识符折小写。**社区镜像引擎级实证**（Vastbase G100 V3.0 Build 9 / openGauss 6.0.0，
+     * 镜像 apecloud/vastbase:v3.0.9.2-ape1，A 兼容模式，2026-10-30 探针）：裸大写
+     * `INFORMATION_SCHEMA.TABLES` 703 行命中、`information_schema."tables"` 703 行、
+     * `information_schema."TABLES"` 报 `relation "information_schema.TABLES" does not exist`。
+     */
     override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
 
     /**
-     * 官方通用 DELETE 文法含 `[ORDER BY][LIMIT]` 但 B 模式专章不含——文档自相矛盾，
-     * 保守判无（非遗漏），与 [OpenGaussDialect.supportsDeleteLimit] / [GaussDbDialect] 同口径。
+     * **社区镜像引擎级实证为 true**（A 模式，2026-10-30）：官方通用 DELETE 文法含
+     * `[ORDER BY][LIMIT]` 而 B 模式专章不含——文档自相矛盾，实测落在通用文法一侧：
+     * `DELETE FROM t WHERE ... LIMIT 1` 真删 1 行（`DELETE 1`），带 `ORDER BY ... LIMIT`
+     * 同样生效。P-7 的「拿到可写实例后翻 true」条件已满足。
      */
-    override val supportsDeleteLimit: Boolean = false
+    override val supportsDeleteLimit: Boolean = true
 
     override val reservedWords: Set<String> = VASTBASE_RESERVED
 
     /**
-     * MySQL 形态 upsert（D3 定案）：官方通用文法两种都在册，默认 A 模式无真机证据，
-     * 取同内核 openGauss 真机已证形态；真机证 PG 形态（`ON CONFLICT`）可用再切。
+     * PG 形态 upsert（D3 切换条款已触发）：官方通用文法两种都在册，出厂曾按「A 模式无
+     * 真机证据」取 MySQL 形态兜底；**社区镜像引擎级实证（A 模式，2026-10-30）两种形态
+     * 均可用**——`ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note` 规划与真跑覆盖
+     * 均生效、`DO NOTHING` 可用，`ON DUPLICATE KEY UPDATE`（含 `VALUES(col)`）同样生效
+     * ——按 D3 预留条款切到 PG 形态（与本方言 PG 族渲染及 LOWER 折叠一致）。
      */
     override fun renderUpsert(
         conflictKey: String,
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
-    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
 }
 
 /**
