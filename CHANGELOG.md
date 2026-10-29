@@ -2,6 +2,16 @@
 
 # SQL Visualizer Changelog
 
+## [2026.10.30] - 2026-10-30
+
+### Fixed
+- **Mapper 双向跳转图标与同类 MyBatis 导航插件叠在同一行（T-MapperNavCoexistYield）**：装了 MyBatisCodeHelperPro 的工程里，mapper XML 的 `select` / `insert` / `update` / `delete` 标签行与 Mapper 接口方法行会出现两个跳转图标——一个是 v2026.10.28 合入的双向跳转，一个是对方自带的跳转箭头。根因是这两个 provider 只接了全局总闸（`showGutterIcon`）与按来源分组开关（`GutterGroups`），**没有任何同类插件共存判定**；而全仓原有的「第三方插件在位即让位」判定在 T-XmlGap W1 随注入区间互补一起废止了（那是注入/着色面的正解——在位 ≠ 覆盖，必须逐区间问），gutter 面的「同一行两个来源各画一个都合规、纪律是让位」这条一直缺实现。现补上：检测到同类 MyBatis 导航插件（当前登记 `com.ccnode.codegenerator`）处于启用状态时，这两个跳转图标不产出；其它 gutter（SQL 预览、注解 SQL、JPA/HQL、JDBC、Wrapper 链等）不受影响
+
+- **方言冲突时预览头部的候选数据源证据丢失（回归，v2026.10.29 引入）**：结果已带上游算好的方言决策时，`withResolvedDialect` 仍要求「渲染方言也在场」才原样返回，于是 `dialectName == null` 的冲突/不可用决策被重算成兜底决策，按需查看的证据面从「候选标识：uuid-a, uuid-b」退化成「无精确绑定」。现改为**以上游决策为准**（决策在场即不重算，仅在决策知道方言名而渲染方言缺席时用该名字回填），候选证据与来源、置信度一并保留
+### Added
+- **设置项「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」（默认开）**：关闭后即使对方在位也强制显示本插件图标；设置页在 gutter 分组开关同一区块，接入 IDE 设置搜索
+- 探测走全反射（`PluginManagerCore.getPlugins()` → `PluginDescriptor.getPluginId()` / `isEnabled()`，`PluginId.getIdString()`），不静态引用 `PluginId` / `PluginManagerCore`（该组 API 在 2025.3~2026.2 有形态漂移）；任何反射失败按「不在位」处理并只 WARN 一次——不确定时不删功能。同类插件前缀登记面为列表，将来收更多同类插件只加前缀
+
 ## [2026.10.29] - 2026-10-29
 
 ### Added

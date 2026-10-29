@@ -1,177 +1,177 @@
-[8ms] LISTENING 127.0.0.1:53999（等待 agent 回连；agent 在 premain 阶段即连接）
-[9ms] 
-[9ms] >>> [13] mark 0 握手：等 agent 回连（premain 阶段即连）
+[9ms] LISTENING 127.0.0.1:53999（等待 agent 回连；agent 在 premain 阶段即连接）
+[10ms] 
+[10ms] >>> [13] mark 0 握手：等 agent 回连（premain 阶段即连）
 [10ms] ======== 0 握手：等 agent 回连（premain 阶段即连） ========
 [10ms] 
 [10ms] >>> [14] wait-hello 90000
-[1431ms] ACCEPT 来自 /127.0.0.1:50063（agent 回连）
-[1445ms] HELLO pid=90332 body={"pid":90332}（+ 1445ms 起连）
-[1446ms]   PASS HELLO 到达 pid=90332 (+1445ms)
-[1446ms] 
-[1446ms] HEARTBEAT #1 body={}
-[1446ms] >>> [15] wait-http http://localhost:8082/mpj/device/one/1 120000
-[3518ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
-[6549ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 2 次探测）
-[6550ms] 
-[6550ms] >>> [17] mark A 停采生效：CONFIG disabled=true
-[6550ms] ======== A 停采生效：CONFIG disabled=true ========
-[6550ms] 
-[6550ms] >>> [18] config {"disabled":true,"desensitize":true}
-[6551ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
-[6551ms]   PASS 已下发 CONFIG
-[6551ms] 
-[6551ms] >>> [19] expect-ack "disabled":true
-[6552ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[6552ms] CONFIG_ACK #1 body={"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[6553ms] 
-[6553ms] >>> [20] reset-events
-[6553ms] 事件窗口已归零（累计 0 条）
-[6553ms] 
-[6553ms] >>> [21] get http://localhost:8082/mpj/device/rightAlias
-[6566ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
-[6566ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
-[6566ms] 
-[6566ms] >>> [22] get http://localhost:8082/mpj/device/extSub
-[6582ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
-[6582ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
-[6582ms] 
-[6582ms] >>> [23] assert-no-events 3000
-[9585ms]   PASS 停采窗口 3000ms 内事件数 = 0
-[9585ms] 
-[9585ms] >>> [24] report-events
-[9585ms] 窗口内事件 0 条；sf:sl 分布 = (无)
-[9585ms] 
-[9585ms] >>> [26] mark B 恢复采集：CONFIG disabled=false
-[9585ms] ======== B 恢复采集：CONFIG disabled=false ========
-[9585ms] 
-[9585ms] >>> [27] config {"disabled":false,"desensitize":true}
-[9586ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
-[9586ms]   PASS 已下发 CONFIG
-[9586ms] 
-[9586ms] >>> [28] expect-ack "disabled":false
-[9586ms] CONFIG_ACK #2 body={"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[9586ms]   PASS CONFIG_ACK 到达且含 ""disabled":false"：{"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[9586ms] 
-[9586ms] >>> [29] reset-events
-[9586ms] 事件窗口已归零（累计 0 条）
-[9586ms] 
-[9586ms] >>> [30] get http://localhost:8082/mpj/device/rightAlias
-[9593ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
-[9594ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
-[9594ms] 
-[9594ms] >>> [31] get http://localhost:8082/mpj/device/extSub
-[9601ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
-[9601ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
-[9601ms] 
-[9601ms] >>> [32] assert-events 3000
-[9789ms] EVENT #1 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=42 mk=DeviceInfoServiceImpl#joinRightAlias sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name   F…(+100) p=[[1,"1","Integer"]]
-[9789ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
-[9790ms] EVENT #2 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=63 mk=DeviceInfoServiceImpl#joinExtAndSubTable sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name   FROM car_device_i…(+273) p=[[1,"0","Integer"],[2,"中心站","String"],[3,"1","Integer"]]
-[9790ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
-[12613ms]   PASS 窗口 3000ms 内事件数 = 2（采集生效）
-[12613ms] 
-[12613ms] >>> [33] report-events
-[12613ms] 窗口内事件 2 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:42, cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:63
-[12613ms]   sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name   FROM car_device_info …(+80) | sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java | sl=42 | mk=DeviceInfoServiceImpl#joinRightAlias | p=[[1,"1","Integer"]]
-[12613ms]     cands=[["cn/song/mpjdemo/controller/DeviceInfoController.java",33,"cn.song.mpjdemo.controller.DeviceInfoController","rightAlias"]]
-[12613ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
-[12613ms]   sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name   FROM car_device_info  t    LEFT JOIN …(+253) | sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java | sl=63 | mk=DeviceInfoServiceImpl#joinExtAndSubTable | p=[[1,"0","Integer"],[2,"中心站","String"],[3,"1","Integer"]]
-[12613ms]     cands=[["cn/song/mpjdemo/controller/DeviceInfoController.java",41,"cn.song.mpjdemo.controller.DeviceInfoController","extSub"]]
-[12613ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
-[12613ms] 
-[12613ms] >>> [34] assert-event-sf-sl DeviceInfoServiceImpl.java:42
-[12613ms]   PASS 窗口内存在事件 sf:sl = DeviceInfoServiceImpl.java:42
-[12613ms] 
-[12613ms] >>> [35] assert-event-sf-sl DeviceInfoServiceImpl.java:63
-[12613ms]   PASS 窗口内存在事件 sf:sl = DeviceInfoServiceImpl.java:63
-[12613ms] 
-[12613ms] >>> [37] mark D1 脱敏关闭：CONFIG desensitize=false
-[12613ms] ======== D1 脱敏关闭：CONFIG desensitize=false ========
-[12613ms] 
-[12613ms] >>> [38] config {"disabled":false,"desensitize":false}
-[12614ms] SEND cmd=3 body={"disabled":false,"desensitize":false}
-[12614ms]   PASS 已下发 CONFIG
-[12614ms] 
-[12614ms] >>> [39] expect-ack "desensitize":false
-[12614ms] CONFIG_ACK #3 body={"disabled":false,"desensitize":false,"skipPrefixes":0,"bizJarPrefixes":0}
-[12614ms]   PASS CONFIG_ACK 到达且含 ""desensitize":false"：{"disabled":false,"desensitize":false,"skipPrefixes":0,"bizJarPrefixes":0}
-[12614ms] 
-[12614ms] >>> [40] reset-events
-[12614ms] 事件窗口已归零（累计 2 条）
-[12614ms] 
-[12614ms] >>> [41] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
-[12647ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
-[12647ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
-[12647ms] 
-[12647ms] >>> [42] assert-events 2000
-[12817ms] EVENT #3 sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java sl=103 mk=MpjFullCoverageServiceImpl#ifExistsFamily sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JO…(+187) p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer…(+40)
-[12817ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
-[14656ms]   PASS 窗口 2000ms 内事件数 = 1（采集生效）
-[14656ms] 
-[14656ms] >>> [43] report-events
-[14656ms] 窗口内事件 1 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103
-[14656ms]   sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JOIN user_address t1 O…(+167) | sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java | sl=103 | mk=MpjFullCoverageServiceImpl#ifExistsFamily | p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer"],[9,"2","Integer"],[10,"3","Integer"]]
-[14656ms]     cands=[["cn/song/mpjdemo/controller/MpjFullCoverageController.java",47,"cn.song.mpjdemo.controller.MpjFullCoverageController","ifExists"]]
-[14656ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
-[14656ms] 
-[14656ms] >>> [45] mark D2 脱敏开启：CONFIG desensitize=true
-[14656ms] ======== D2 脱敏开启：CONFIG desensitize=true ========
-[14656ms] 
-[14656ms] >>> [46] config {"disabled":false,"desensitize":true}
-[14656ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
-[14657ms]   PASS 已下发 CONFIG
-[14657ms] 
-[14657ms] >>> [47] expect-ack "desensitize":true
-[14657ms] CONFIG_ACK #4 body={"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[14657ms]   PASS CONFIG_ACK 到达且含 ""desensitize":true"：{"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[14657ms] 
-[14657ms] >>> [48] reset-events
-[14657ms] 事件窗口已归零（累计 3 条）
-[14657ms] 
-[14657ms] >>> [49] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
-[14666ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
-[14666ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
-[14666ms] 
-[14666ms] >>> [50] assert-events 2000
-[14859ms] EVENT #4 sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java sl=103 mk=MpjFullCoverageServiceImpl#ifExistsFamily sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JO…(+187) p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer…(+40)
-[14859ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
-[16680ms]   PASS 窗口 2000ms 内事件数 = 1（采集生效）
-[16680ms] 
-[16680ms] >>> [51] report-events
-[16680ms] 窗口内事件 1 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103
-[16680ms]   sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JOIN user_address t1 O…(+167) | sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java | sl=103 | mk=MpjFullCoverageServiceImpl#ifExistsFamily | p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer"],[9,"2","Integer"],[10,"3","Integer"]]
-[16680ms]     cands=[["cn/song/mpjdemo/controller/MpjFullCoverageController.java",47,"cn.song.mpjdemo.controller.MpjFullCoverageController","ifExists"]]
-[16680ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
-[16680ms] 
-[16680ms] >>> [53] mark 收口：再停采一次，确认通道可反复切换
-[16680ms] ======== 收口：再停采一次，确认通道可反复切换 ========
-[16680ms] 
-[16680ms] >>> [54] config {"disabled":true,"desensitize":true}
-[16680ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
-[16680ms]   PASS 已下发 CONFIG
-[16680ms] 
-[16681ms] >>> [55] expect-ack "disabled":true
-[16681ms] CONFIG_ACK #5 body={"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[16681ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
-[16681ms] 
-[16681ms] >>> [56] reset-events
-[16681ms] 事件窗口已归零（累计 4 条）
-[16681ms] 
-[16681ms] >>> [57] get http://localhost:8082/mpj/device/rightAlias
-[16688ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
-[16688ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
-[16688ms] 
-[16688ms] >>> [58] assert-no-events 2000
-[18702ms]   PASS 停采窗口 2000ms 内事件数 = 0
-[18702ms] 
-[18702ms] >>> [60] summary
-[18702ms] 
-[18702ms] ──────── SUMMARY ────────
-[18702ms] HELLO=pid=90332 @1445ms HEARTBEAT=1 EVENT(累计)=4 CONFIG_ACK=5 UNKNOWN_CMD=0
-[18702ms] 断言 PASS=26 FAIL=0
-[18702ms] RESULT: ALL-PASS
-[18702ms] ─────────────────────────
-[18702ms] 
-[18702ms] >>> [61] quit
+[1528ms] ACCEPT 来自 /127.0.0.1:60007（agent 回连）
+[1549ms] HELLO pid=82516 body={"pid":82516}（+ 1549ms 起连）
+[1549ms]   PASS HELLO 到达 pid=82516 (+1549ms)
+[1549ms] HEARTBEAT #1 body={}
+[1549ms] 
+[1549ms] >>> [15] wait-http http://localhost:8082/mpj/device/one/1 120000
+[3613ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
+[6731ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 2 次探测）
+[6733ms] 
+[6733ms] >>> [17] mark A 停采生效：CONFIG disabled=true
+[6733ms] ======== A 停采生效：CONFIG disabled=true ========
+[6733ms] 
+[6733ms] >>> [18] config {"disabled":true,"desensitize":true}
+[6733ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
+[6733ms]   PASS 已下发 CONFIG
+[6733ms] 
+[6733ms] >>> [19] expect-ack "disabled":true
+[6734ms] CONFIG_ACK #1 body={"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[6734ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[6734ms] 
+[6734ms] >>> [20] reset-events
+[6735ms] 事件窗口已归零（累计 0 条）
+[6735ms] 
+[6735ms] >>> [21] get http://localhost:8082/mpj/device/rightAlias
+[6750ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[6750ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[6750ms] 
+[6750ms] >>> [22] get http://localhost:8082/mpj/device/extSub
+[6767ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
+[6767ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
+[6767ms] 
+[6767ms] >>> [23] assert-no-events 3000
+[9770ms]   PASS 停采窗口 3000ms 内事件数 = 0
+[9770ms] 
+[9770ms] >>> [24] report-events
+[9770ms] 窗口内事件 0 条；sf:sl 分布 = (无)
+[9770ms] 
+[9770ms] >>> [26] mark B 恢复采集：CONFIG disabled=false
+[9770ms] ======== B 恢复采集：CONFIG disabled=false ========
+[9770ms] 
+[9770ms] >>> [27] config {"disabled":false,"desensitize":true}
+[9770ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
+[9770ms]   PASS 已下发 CONFIG
+[9771ms] 
+[9771ms] >>> [28] expect-ack "disabled":false
+[9771ms]   PASS CONFIG_ACK 到达且含 ""disabled":false"：{"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[9771ms] CONFIG_ACK #2 body={"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[9771ms] 
+[9771ms] >>> [29] reset-events
+[9771ms] 事件窗口已归零（累计 0 条）
+[9771ms] 
+[9771ms] >>> [30] get http://localhost:8082/mpj/device/rightAlias
+[9778ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[9778ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[9778ms] 
+[9778ms] >>> [31] get http://localhost:8082/mpj/device/extSub
+[9786ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
+[9786ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
+[9786ms] 
+[9786ms] >>> [32] assert-events 3000
+[9974ms] EVENT #1 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=42 mk=DeviceInfoServiceImpl#joinRightAlias sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name   F…(+100) p=[[1,"1","Integer"]]
+[9974ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
+[9975ms] EVENT #2 sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java sl=63 mk=DeviceInfoServiceImpl#joinExtAndSubTable sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name   FROM car_device_i…(+273) p=[[1,"0","Integer"],[2,"中心站","String"],[3,"1","Integer"]]
+[9975ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
+[12802ms]   PASS 窗口 3000ms 内事件数 = 2（采集生效）
+[12802ms] 
+[12802ms] >>> [33] report-events
+[12802ms] 窗口内事件 2 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:42, cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:63
+[12802ms]   sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name   FROM car_device_info …(+80) | sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java | sl=42 | mk=DeviceInfoServiceImpl#joinRightAlias | p=[[1,"1","Integer"]]
+[12802ms]     cands=[["cn/song/mpjdemo/controller/DeviceInfoController.java",33,"cn.song.mpjdemo.controller.DeviceInfoController","rightAlias"]]
+[12802ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
+[12802ms]   sql=SELECT     t.id,t.station_id,t.share_scheme_id,t.device_name   FROM car_device_info  t    LEFT JOIN …(+253) | sf=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java | sl=63 | mk=DeviceInfoServiceImpl#joinExtAndSubTable | p=[[1,"0","Integer"],[2,"中心站","String"],[3,"1","Integer"]]
+[12802ms]     cands=[["cn/song/mpjdemo/controller/DeviceInfoController.java",41,"cn.song.mpjdemo.controller.DeviceInfoController","extSub"]]
+[12802ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 32 帧…><-com.sun.…(+473)
+[12802ms] 
+[12802ms] >>> [34] assert-event-sf-sl DeviceInfoServiceImpl.java:42
+[12802ms]   PASS 窗口内存在事件 sf:sl = DeviceInfoServiceImpl.java:42
+[12802ms] 
+[12802ms] >>> [35] assert-event-sf-sl DeviceInfoServiceImpl.java:63
+[12802ms]   PASS 窗口内存在事件 sf:sl = DeviceInfoServiceImpl.java:63
+[12802ms] 
+[12802ms] >>> [37] mark D1 脱敏关闭：CONFIG desensitize=false
+[12802ms] ======== D1 脱敏关闭：CONFIG desensitize=false ========
+[12802ms] 
+[12802ms] >>> [38] config {"disabled":false,"desensitize":false}
+[12803ms] SEND cmd=3 body={"disabled":false,"desensitize":false}
+[12803ms]   PASS 已下发 CONFIG
+[12803ms] 
+[12803ms] >>> [39] expect-ack "desensitize":false
+[12803ms]   PASS CONFIG_ACK 到达且含 ""desensitize":false"：{"disabled":false,"desensitize":false,"skipPrefixes":0,"bizJarPrefixes":0}
+[12803ms] CONFIG_ACK #3 body={"disabled":false,"desensitize":false,"skipPrefixes":0,"bizJarPrefixes":0}
+[12803ms] 
+[12803ms] >>> [40] reset-events
+[12803ms] 事件窗口已归零（累计 2 条）
+[12803ms] 
+[12803ms] >>> [41] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[12844ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
+[12844ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[12844ms] 
+[12845ms] >>> [42] assert-events 2000
+[13003ms] EVENT #3 sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java sl=103 mk=MpjFullCoverageServiceImpl#ifExistsFamily sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JO…(+187) p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer…(+40)
+[13003ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
+[14860ms]   PASS 窗口 2000ms 内事件数 = 1（采集生效）
+[14860ms] 
+[14860ms] >>> [43] report-events
+[14860ms] 窗口内事件 1 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103
+[14860ms]   sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JOIN user_address t1 O…(+167) | sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java | sl=103 | mk=MpjFullCoverageServiceImpl#ifExistsFamily | p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer"],[9,"2","Integer"],[10,"3","Integer"]]
+[14860ms]     cands=[["cn/song/mpjdemo/controller/MpjFullCoverageController.java",47,"cn.song.mpjdemo.controller.MpjFullCoverageController","ifExists"]]
+[14860ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
+[14860ms] 
+[14860ms] >>> [45] mark D2 脱敏开启：CONFIG desensitize=true
+[14860ms] ======== D2 脱敏开启：CONFIG desensitize=true ========
+[14860ms] 
+[14860ms] >>> [46] config {"disabled":false,"desensitize":true}
+[14860ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
+[14860ms]   PASS 已下发 CONFIG
+[14860ms] 
+[14860ms] >>> [47] expect-ack "desensitize":true
+[14860ms] CONFIG_ACK #4 body={"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[14860ms]   PASS CONFIG_ACK 到达且含 ""desensitize":true"：{"disabled":false,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[14860ms] 
+[14861ms] >>> [48] reset-events
+[14861ms] 事件窗口已归零（累计 3 条）
+[14861ms] 
+[14861ms] >>> [49] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[14870ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
+[14870ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[14870ms] 
+[14870ms] >>> [50] assert-events 2000
+[15063ms] EVENT #4 sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java sl=103 mk=MpjFullCoverageServiceImpl#ifExistsFamily sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JO…(+187) p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer…(+40)
+[15063ms]         sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
+[16885ms]   PASS 窗口 2000ms 内事件数 = 1（采集生效）
+[16885ms] 
+[16885ms] >>> [51] report-events
+[16885ms] 窗口内事件 1 条；sf:sl 分布 = cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103
+[16885ms]   sql=SELECT     t.id,t.name,t.age,t.sex,t.head_img,t1.tel   FROM "user"  t    LEFT JOIN user_address t1 O…(+167) | sf=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java | sl=103 | mk=MpjFullCoverageServiceImpl#ifExistsFamily | p=[[1,"20","Integer"],[2,"%13800138000%","String"],[3,"0","Integer"],[4,"10","Integer"],[5,"80","Integer"],[6,"100","Integer"],[7,"200","Integer"],[8,"1","Integer"],[9,"2","Integer"],[10,"3","Integer"]]
+[16885ms]     cands=[["cn/song/mpjdemo/controller/MpjFullCoverageController.java",47,"cn.song.mpjdemo.controller.MpjFullCoverageController","ifExists"]]
+[16885ms]     sd=cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70<-cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#onExecuteExit:161<-com.mysql.cj.jdbc.ClientPreparedStatement#execute:395<-com.zaxxer.hikari.pool.ProxyPreparedStatement#execute:44<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-java.lang.reflect.Method#invoke:498<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:59<-com.sun.proxy.$Proxy84#execute<-org.apache.ibatis.executor.statement.PreparedStatementHandler#query:64<-org.apache.ibatis.executor.statement.RoutingStatementHandler#query:79<-sun.reflect.NativeMethodAccessorImpl#invoke0<-sun.reflect.NativeMethodAccessorImpl#invoke:62<-sun.reflect.DelegatingMethodAccessorImpl#invoke:43<-<…中间省略 27 帧…><-org.myba…(+533)
+[16885ms] 
+[16885ms] >>> [53] mark 收口：再停采一次，确认通道可反复切换
+[16885ms] ======== 收口：再停采一次，确认通道可反复切换 ========
+[16885ms] 
+[16885ms] >>> [54] config {"disabled":true,"desensitize":true}
+[16885ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
+[16885ms]   PASS 已下发 CONFIG
+[16885ms] 
+[16885ms] >>> [55] expect-ack "disabled":true
+[16885ms] CONFIG_ACK #5 body={"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[16886ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0,"bizJarPrefixes":0}
+[16886ms] 
+[16886ms] >>> [56] reset-events
+[16886ms] 事件窗口已归零（累计 4 条）
+[16886ms] 
+[16886ms] >>> [57] get http://localhost:8082/mpj/device/rightAlias
+[16892ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[16892ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[16892ms] 
+[16892ms] >>> [58] assert-no-events 2000
+[18898ms]   PASS 停采窗口 2000ms 内事件数 = 0
+[18898ms] 
+[18898ms] >>> [60] summary
+[18898ms] 
+[18898ms] ──────── SUMMARY ────────
+[18898ms] HELLO=pid=82516 @1549ms HEARTBEAT=1 EVENT(累计)=4 CONFIG_ACK=5 UNKNOWN_CMD=0
+[18898ms] 断言 PASS=26 FAIL=0
+[18898ms] RESULT: ALL-PASS
+[18898ms] ─────────────────────────
+[18898ms] 
+[18898ms] >>> [61] quit
 PROBE-EXIT rc=0
-[18703ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed
+[18898ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed
