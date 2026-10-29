@@ -24,14 +24,44 @@ internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = 
     SqlListDisplayMode.FORMATTED -> SqlFormatter.format(sql)
 }
 
+/**
+ * 关键字换行的取源预算（字符）。
+ *
+ * 关键字换行必须看到 `FROM`/`WHERE` 才能产出三行，所以取源是**完整还原 SQL**（与格式化模式同源），
+ * 不再是 160 字摘要——摘要在长列清单下连一个子句关键字都覆盖不到，恒退化成单行（T-LogListAnchor 券01）。
+ * 预算只影响第四行及以后：三行封顶后本来也看不到，但词法成本不能随 IN 列表长度无界放大。
+ */
+internal const val KEYWORD_WRAP_SOURCE_BUDGET = 4096
+
+/** 超预算时按空白边界截断并补省略号（避免把标识符劈成两半）。 */
+internal fun clipKeywordWrapSource(sql: String): String {
+    if (sql.length <= KEYWORD_WRAP_SOURCE_BUDGET) return sql
+    var cut = KEYWORD_WRAP_SOURCE_BUDGET
+    var i = KEYWORD_WRAP_SOURCE_BUDGET - 1
+    while (i > 0 && !sql[i].isWhitespace()) i--
+    if (i > 0) cut = i
+    return sql.substring(0, cut).trimEnd() + "…"
+}
+
+/**
+ * 列表展示用 SQL 文本（按模式取源）。
+ *
+ * - `SINGLE_LINE`：摘要（一行封顶，摘要正是为此而生）。
+ * - `KEYWORD_WRAP` / `FORMATTED`：完整还原 SQL（脱敏链同 [DisplayMasker.maskDisplay]），前者另受
+ *   [KEYWORD_WRAP_SOURCE_BUDGET] 约束。
+ *
+ * 摘要分支的脱敏缓存（[LogSqlEntry.cachedMaskedSummary]）只服务单行模式；多行模式按
+ * 「模式+脱敏态」缓存词法片段（`RailCellRendererBase.sqlLineFragmentsFor`），不复用摘要。
+ */
 internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, masked: Boolean): String {
-    if (mode == SqlListDisplayMode.FORMATTED) {
-        return DisplayMasker.maskDisplay(entry.restoredSql, masked)
+    if (mode == SqlListDisplayMode.SINGLE_LINE) {
+        if (!masked) return entry.summary
+        return entry.cachedMaskedSummary ?: LogSqlEntry.summarizeSql(DisplayMasker.maskSqlText(entry.restoredSql)).also {
+            entry.cachedMaskedSummary = it
+        }
     }
-    if (!masked) return entry.summary
-    return entry.cachedMaskedSummary ?: LogSqlEntry.summarizeSql(DisplayMasker.maskSqlText(entry.restoredSql)).also {
-        entry.cachedMaskedSummary = it
-    }
+    val full = DisplayMasker.maskDisplay(entry.restoredSql, masked)
+    return if (mode == SqlListDisplayMode.KEYWORD_WRAP) clipKeywordWrapSource(full) else full
 }
 
 /** 不包含任何主题属性的词法片段，可安全存于条目缓存；空白 token 同样保留。 */

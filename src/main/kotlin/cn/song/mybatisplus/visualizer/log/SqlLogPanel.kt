@@ -299,11 +299,97 @@ class SqlLogPanel(
     private var listScrollPane: JBScrollPane? = null
     internal val tailFollowModeForTest: TailFollowMode get() = tailFollow.mode
 
+    /**
+     * 程序性滚动窗口（T-LogListAnchor 券03）。
+     *
+     * 滚动条的调整事件**无法区分用户手势与程序动作**——贴底、锚点复原、模型增删引起的 clamp
+     * 都会触发同一个 `AdjustmentListener`。旧实现把任何「value 到底」都当成「用户滚回底部」，
+     * 于是停在贴底一行内时，头部淘汰的 clamp 会把暂停态静默改回跟随（探针实测：remove(0) 与
+     * addElement 各触发一次调整事件）。本计数器非零期间，调整事件不参与跟随判定。
+     *
+     * 用计数器而不是布尔：复原可能嵌套（贴底后再复原锚点）。
+     */
+    private var programmaticScrollDepth = 0
+
+    /** 上一次观察到的滚动条位置（券03 单调性判据基线）。 */
+    private var lastScrollBarValue = -1
+
+    private inline fun <T> withProgrammaticScroll(block: () -> T): T {
+        programmaticScrollDepth++
+        try {
+            return block()
+        } finally {
+            programmaticScrollDepth--
+        }
+    }
+
     private fun scrollToBottom(resume: Boolean) {
         if (resume) tailFollow.onScrollToEnd()
         if (listModel.isEmpty) return
-        list.ensureIndexIsVisible(listModel.size() - 1)
-        listScrollPane?.verticalScrollBar?.let { it.value = it.maximum }
+        withProgrammaticScroll {
+            list.ensureIndexIsVisible(listModel.size() - 1)
+            // maximum 是内容总高语义，能滚到的最大值是 maximum - visibleAmount
+            // （旧写法靠 Swing 的 clamp 兜底，变行高下会差一两像素）。
+            listScrollPane?.verticalScrollBar?.let { bar ->
+                bar.value = (bar.maximum - bar.visibleAmount).coerceAtLeast(0)
+            }
+        }
+    }
+
+    /**
+     * 暂停态视口锚点（T-LogListAnchor 券02）：条目身份 + 它在视口内的行内像素偏移。
+     *
+     * 为什么需要它：JList **没有滚动锚定**。视口按像素定位，模型头部删一条，后面所有行的 y
+     * 就整体上移一行高，而 `viewPosition` 不变——用户正在读的内容被「顶上去」。
+     * 缓冲满载（默认 200）时每条新 SQL 都触发一次 `HeadEvictAppend`，于是暂停态下持续跳动。
+     */
+    private class ScrollAnchor(val entry: LogSqlEntry, val offsetInRow: Int)
+
+    /** 全量重建在途时的待复原锚点（条目可能落在后续批次里，逐拍重试）。 */
+    private var pendingScrollAnchor: ScrollAnchor? = null
+
+    /** 取当前视口顶部条目与其行内偏移；无滚动容器/空列表/布局未就绪时返回 null。 */
+    private fun captureTopAnchor(): ScrollAnchor? {
+        val viewport = listScrollPane?.viewport ?: return null
+        val size = listModel.size()
+        if (size == 0) return null
+        val pos = viewport.viewPosition
+        val index = list.locationToIndex(java.awt.Point(pos.x, pos.y + 1))
+        if (index !in 0 until size) return null
+        val bounds = list.getCellBounds(index, index) ?: return null
+        return ScrollAnchor(listModel.getElementAt(index), bounds.y - pos.y)
+    }
+
+    /** 按条目身份复原视口；条目还不在模型里返回 false（调用方决定是否重试）。 */
+    private fun restoreAnchor(anchor: ScrollAnchor): Boolean {
+        val viewport = listScrollPane?.viewport ?: return true
+        val size = listModel.size()
+        var index = -1
+        for (i in 0 until size) {
+            if (listModel.getElementAt(i) === anchor.entry) {
+                index = i
+                break
+            }
+        }
+        if (index < 0) return false
+        val bounds = list.getCellBounds(index, index) ?: return false
+        withProgrammaticScroll {
+            viewport.viewPosition = java.awt.Point(
+                viewport.viewPosition.x,
+                (bounds.y - anchor.offsetInRow).coerceAtLeast(0),
+            )
+        }
+        return true
+    }
+
+    /** 头部淘汰后把视口按被删总高上移（等价于内容原地不动）。 */
+    private fun shiftViewportUpBy(removedHeight: Int) {
+        if (removedHeight <= 0) return
+        val viewport = listScrollPane?.viewport ?: return
+        val pos = viewport.viewPosition
+        val target = (pos.y - removedHeight).coerceAtLeast(0)
+        if (target == pos.y) return
+        withProgrammaticScroll { viewport.viewPosition = java.awt.Point(pos.x, target) }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -1563,15 +1649,22 @@ class SqlLogPanel(
         // T-ListMetaRevert：用户手动滚回底部时恢复自动跟随。
         // 改造前只有「滚动到底部」按钮会调 onScrollToEnd()，用户滚回去后必须再点一下按钮
         // 才能恢复——违反「滚到底就继续跟随」的直觉。
+        // T-LogListAnchor 券03：程序动作与内容缩短都不算用户手势，两条判据各挡一类：
+        //  - programmaticScrollDepth：贴底/锚点复原这类我们自己发起的滚动；
+        //  - 位置单调性：头部淘汰会让内容变矮、滚动条被 clamp 到底（value **变小**），
+        //    而用户往底部滚动一定是 value 变大——变小的一律不恢复跟随。
         scrollPane.verticalScrollBar.addAdjustmentListener { e ->
             if (e.valueIsAdjusting) return@addAdjustmentListener
             val bar = e.adjustable as? javax.swing.JScrollBar ?: return@addAdjustmentListener
-            // 真正能滚到的最大值是 maximum - visibleAmount（Swing 的 maximum 是内容总高语义，
-            // 直接比 maximum 永远不成立——这类 bug 的典型写法错误）。
-            val maxScrollable = bar.maximum - bar.visibleAmount
-            if (maxScrollable > 0 && bar.value >= maxScrollable - SCROLL_BOTTOM_TOLERANCE_PX) {
-                tailFollow.onScrollToEnd()
-            }
+            val previous = lastScrollBarValue
+            lastScrollBarValue = bar.value
+            val bottom = isUserScrollToBottom(
+                previousValue = previous,
+                currentValue = bar.value,
+                maxScrollable = bar.maximum - bar.visibleAmount,
+                programmatic = programmaticScrollDepth > 0,
+            )
+            if (bottom) tailFollow.onScrollToEnd()
         }
         val navigationKeys = setOf(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_PAGE_UP,
             KeyEvent.VK_PAGE_DOWN, KeyEvent.VK_HOME, KeyEvent.VK_END)
@@ -1671,8 +1764,19 @@ class SqlLogPanel(
 
         val modelSizeBefore = listModel.size()
         val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
-        if (!applyIncremental(newVisible, evicted)) {
-            applyFullRebuild(newVisible, gen)
+        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
+        withProgrammaticScroll {
+            if (!applyIncremental(newVisible, evicted)) {
+                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
+                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
+                pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
+                applyFullRebuild(newVisible, gen)
+                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
+                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
+                pendingScrollAnchor?.let { anchor ->
+                    if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
+                }
+            }
         }
         val tailAdvancedAtCapacity = evicted > 0 &&
             (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
@@ -1706,12 +1810,23 @@ class SqlLogPanel(
         return when (val diff = diffVisible(lastRendered, newVisible, evicted)) {
             is VisibleDiff.Same -> { lastRendered = newVisible; true }
             is VisibleDiff.HeadEvictAppend -> {
+                // T-LogListAnchor 券02：暂停态下头部淘汰会把整屏内容上顶一行高（JList 无滚动锚定）。
+                // 先量出被删行的总高（只涉及 0..evicted-1，成本 O(evicted)），模型变更后把视口
+                // 按同一高度上移——用户正在读的那条原地不动，新条目只在尾部出现。
+                val evictedHeight = if (tailFollow.shouldFollow) {
+                    0
+                } else {
+                    list.getCellBounds(0, diff.evicted - 1)?.height ?: 0
+                }
                 repeat(diff.evicted) { listModel.remove(0) }
                 diff.appended.forEach { listModel.addElement(it) }
                 lastRendered = newVisible
+                shiftViewportUpBy(evictedHeight)
                 true
             }
             is VisibleDiff.Insert -> {
+                // 尾部追加不动视口上方内容，无需补偿；中段插入（过滤条件变化产生）走 FullRebuild，
+                // 由 pendingScrollAnchor 按条目身份复原。
                 diff.entries.forEachIndexed { i, e -> listModel.add(diff.index + i, e) }
                 lastRendered = newVisible
                 true
@@ -1770,9 +1885,19 @@ class SqlLogPanel(
         val remaining = rebuildRemaining ?: return
         val chunk = mutableListOf<LogSqlEntry>()
         repeat(REFRESH_CHUNK_SIZE) { if (remaining.hasNext()) chunk.add(remaining.next()) }
-        listModel.addAll(chunk)
-        if (chunk.isNotEmpty() && tailFollow.shouldFollow) scrollToBottom(resume = false)
+        withProgrammaticScroll {
+            listModel.addAll(chunk)
+            // T-LogListAnchor 券02：重建在途时锚点条目可能落在本批才出现——找到就复原并清空；
+            // 跟随态优先（用户中途点了「滚动到底部」时不得再被锚点拉回）。
+            if (chunk.isNotEmpty() && tailFollow.shouldFollow) {
+                pendingScrollAnchor = null
+                scrollToBottom(resume = false)
+            } else {
+                pendingScrollAnchor?.let { anchor -> if (restoreAnchor(anchor)) pendingScrollAnchor = null }
+            }
+        }
         rebuildRemaining = if (remaining.hasNext()) remaining else null
+        if (rebuildRemaining == null) pendingScrollAnchor = null
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
         } else if (pendingRefreshAfterChain) {
@@ -1807,6 +1932,8 @@ class SqlLogPanel(
         list.ignoreRepaint = true
         if (rest.isNotEmpty()) listModel.addAll(rest)
         list.ignoreRepaint = false
+        // T-LogListAnchor 券02：链被同步补完——锚点条目此时可能才出现，补一次复原尝试。
+        pendingScrollAnchor?.let { anchor -> if (restoreAnchor(anchor)) pendingScrollAnchor = null }
         list.revalidate()
         list.repaint()
         return true
@@ -2314,13 +2441,8 @@ class SqlLogPanel(
         private const val DIAGNOSTICS_TICK_MS = 2000
         /** R53：双通道状态栏两段文案之间的语义分隔符。 */
         private const val SEP_LABEL = "｜"
-        /**
-         * T-ListMetaRevert：判定「滚动条已在底部」的容差（px）。
-         *
-         * 取 2px 而非 0：不同 LAF 下 `value` 与 `maximum - visibleAmount` 可能差几个像素
-         * （舍入），严格相等会导致「拖到底却不恢复跟随」。
-         */
-        private const val SCROLL_BOTTOM_TOLERANCE_PX = 2
+        // 「已滚到底」容差常量随判据一起搬到 TailFollowState.kt（T-LogListAnchor 券03：
+        // 判据抽成纯函数 isUserScrollToBottom，容差与判据同处才不会被两处各写一份）。
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
