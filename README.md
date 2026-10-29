@@ -118,7 +118,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 ### 验证与生成：执行计划、关系图、风险提示
 
 - **执行 SQL**：预览内嵌 IDEA 原生数据库控制台，可选择数据源并查看结果表格与报错。需要 Ultimate + Database Tools；无此环境仍可预览、复制 SQL。
-- **EXPLAIN 与性能建议**：覆盖 12 种方言的计划入口；验证情况分别为 9 种真机 / 引擎级实证、OceanBase 与 GaussDB 文档级验证、SQL Server 官方文法级落地待真机。默认由原生控制台呈现；MySQL / PostgreSQL 结构化结果是默认关闭的实验选项。静态建议不是实际执行计划，也不能替代真实索引与数据分布验证。
+- **EXPLAIN 与性能建议**：覆盖 14 种方言的计划入口；验证情况分别为 9 种真机 / 引擎级实证、瀚高为社区镜像引擎级实证、OceanBase / GaussDB / 海量文档级验证、SQL Server 官方文法级落地待真机。默认由原生控制台呈现；MySQL / PostgreSQL 结构化结果是默认关闭的实验选项。静态建议不是实际执行计划，也不能替代真实索引与数据分布验证。
 - **SQL 快捷模板**：选中表名，或将光标停在表名上，通过右键运行 EXPLAIN / COUNT / 抽样查询；抽样默认 10 行，可在设置中调整。
 - **JOIN 关系图**：查看联表与列信息，可导出 PNG / SVG；Community 环境使用降级绘图。
 - **写入风险与回滚预案**：`${}` 直接替换有注入提示与确认，无界 UPDATE / DELETE 有风险清单，MCP 直连执行有超时护栏，IDE 原生控制台不受插件该护栏保护。INSERT 可推导逆向 DELETE；UPDATE / DELETE 缺少修改前数据时不会凭空生成恢复 SQL，需先查询快照、再按实际数据回填。回滚预案不是事务回滚，也不会自动执行。
@@ -159,7 +159,7 @@ SQL → Java 的快捷键为 `Alt+Shift+J`。快捷键可在 Keymap 或插件设
 | Ultimate + Database Tools | 支持内嵌执行、数据源元数据、数据库表入口等能力 |
 | IDEA 2025.2+ + MCP Server | 可向 AI 客户端暴露插件 MCP 工具 |
 
-数据库方言：MySQL、PostgreSQL、Oracle、SQL Server、H2、SQLite、MariaDB、达梦、人大金仓、OceanBase（MySQL 模式）、openGauss、GaussDB。渲染方言支持不等于所有数据库、驱动与热挂载组合均已验证，具体边界见对应功能文档。
+数据库方言：MySQL、PostgreSQL、Oracle、SQL Server、H2、SQLite、MariaDB、达梦、人大金仓、OceanBase（MySQL 模式）、openGauss、GaussDB、瀚高（HighGo）、海量（Vastbase）。渲染方言支持不等于所有数据库、驱动与热挂载组合均已验证，具体边界见对应功能文档。
 
 ### 更新与安装问题
 
