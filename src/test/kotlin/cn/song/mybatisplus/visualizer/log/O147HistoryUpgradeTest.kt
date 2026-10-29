@@ -6,13 +6,27 @@ import java.io.File
 import java.nio.file.Files
 
 class O147HistoryUpgradeTest {
+    /**
+     * 券05（T-PerfSweep28-05，R28-7）：临时目录登记 + @After 统一清理。
+     *
+     * 此前每个用例 `Files.createTempDirectory` 新建目录后无人删除——全量门禁实测每轮泄漏
+     * 130M × N（累计 1292 个 ≈ 35G 吃满 C 盘，放大成磁盘空间类假失败与 Docker 启动被挤）。
+     */
+    private val tempDirs = mutableListOf<File>()
+
+    @org.junit.After
+    fun cleanTempDirs() {
+        tempDirs.forEach { runCatching { it.deleteRecursively() } }
+        tempDirs.clear()
+    }
+
     private fun entry(sql: String = "SELECT 'synthetic'", seq: Long = 1) = LogSqlEntry(
         sql, sql, emptyList(), timestamp = 1724567890000L, sequenceNumber = seq,
         captureProvenance = CaptureProvenance.CONSOLE_BRIDGE,
     )
     private fun merged(old: LogSqlEntry) = old.copy(captureProvenance = CaptureProvenance.MERGED,
         sourceFile = "Synthetic.java", sourceLine = 12, executionTimeMs = 3, databaseName = "H2")
-    private fun dir() = Files.createTempDirectory("o147-history-").toFile()
+    private fun dir() = Files.createTempDirectory("o147-history-").toFile().also { tempDirs += it }
 
     @Test fun upgradesAlreadyFlushedBlockWithoutAddingHistoryRow() {
         val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
