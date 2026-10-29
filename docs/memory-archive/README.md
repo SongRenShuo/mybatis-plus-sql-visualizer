@@ -3,10 +3,10 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（116 个通用文件）
-> **项目记忆**：保留 60 个核心文件 + MEMORY.md 索引（第三十次精简后）
+> **项目记忆**：保留 155 个内容文件 + MEMORY.md 索引（第三十一次精简后）
 
 ---
 
@@ -399,13 +399,15 @@
 
 **第二十一次精简升级（2026-09-29，2 个归档）**：project-keyword-wrap-format（关键字换行+T-ListMode 显示模式，交付档）与 project-dynamic-unload-barriers（动态卸载根因分析，T-DynUpdate 已交付闭环；活跃精要=反射入口签名护栏+卸载窗口 write-unsafe 语义留项目 memory 薄档）归 bug-fixes。同轮压缩（不产生归档）：project-test-conventions T4~T9 四代叙事收拢为「现行定例+在役机制+历代一行账+教训清单」、project-pending-plans 批次 1~7 多代叠写收拢为一段账+合流债第九次刷新、project-kotlin-to-java-port-sync 历轮读数压一行账（187 条目订正「未 push」→已 push 零债）、project-overview 四代历史状态清栈+since-build 253→243 实测订正（现值 `intellijIdeaUltimate("2024.3.7.1")`）、xml-engine 过期调试基础设施节清理。项目 memory 46→45 内容文件（+MEMORY.md）。
 
+**第三十一次精简升级（2026-10-29，47 个归档 + 孤儿补账入册 + 索引重建）**：归档判定全部先 `git merge-base --is-ancestor` 实测（每个文件至少一枚 sha 命中 master HEAD）并过敏感内容扫描（无真实凭据/竞品私密材料）。归 **bug-fixes 43 个**——原「十一、已完成（待归档）」整节 10 个（settings-search-index-gap / preview-chain-noise / releaseperf8-verifier-home-shared / perfsweep26-batch / history-rewrite-20261019 / devfullui-acceptance-campaign / dev-vs-master-acceptance-manual / merge-master-to-dev-round3 / round4 / sync-k2j-496-inprogress）+ 跨节已交付档 26 个（一/二/八/九/十节：conn-cast-safety、dialect-doc-table-guard、watermark-cleanup、freeze-reports-assessment、memory-index-slim-20261027、github-mirror-sync、docs-gif-rerecord-1025、enhanced-capture-default-on、jrebel-premain-crash、agent-pause-visibility、ai-context-v2-unreadable、fieldfill-panel-ux、preset-method-scope-key、dml-impact-prominence、display-mask-degraded-preview、sql-list-highlight-layout、sql-log-tail-follow、sql-log-tabs-single-row、explain-fail-ux、dialect-status-live-refresh、dml-impact-editor-replacement、reverse-logic-delete-blind、embedded-identify-investigation、entity-name-scope、hql-buffer-concat、update-setsql-concat、xml-highlight-completion-gap）+ 历史轮次档 7 个（competitive-round27/28/30/31、panorama-round20、magpie-merge-master-20261025）。归 **pitfalls 4 个**（master-log-search-wiring-lost、partial-submission-loading-stuck、pause-resume-socket-channel-races、markdown-table-image-width-ignored——末者系漏索引孤儿补账）。同轮：MEMORY.md 索引 247→198 行（conn-cast 重复合并行删 1、超 200 字符行压短、节次重排「十一已完成」并入归档节）；漏索引孤儿 3 个补入册留役——`reference-docs-deploy-cloudflare-token`（部署在役）、`pitfall-doc-sample-path-is-test-contract`（docs 结构整理待拍板要用）、`pitfall-sql-dialect-mapping-lazy-load-on-edt`（T-SqlDialectPrewarm 未闭环机制档）。项目 memory 203→156 个 md（含 MEMORY.md）。
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 61（含 MEMORY.md） |
+| 项目 memory（保留） | 156（含 MEMORY.md） |
 | 全局记忆 global/ | 116 |
-| 归档 archive/ | 262（bug-fixes 178 + pitfalls 81 + methodology 1 + user-context 1 + README） |
-| **合计** | **439** |
+| 归档 archive/ | 307（bug-fixes 219 + pitfalls 85 + methodology 1 + user-context 1 + README） |
+| **合计** | **579** |
