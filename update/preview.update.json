@@ -1,7 +1,7 @@
 {
   "version": "2026.10.30",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.30/mybatis-plus-sql-visualizer-2026.10.30.zip",
-  "changeNotes": "装了 MyBatisCodeHelperPro 等同类插件时，Mapper 双向跳转图标不再和对方的跳转箭头叠在同一行\n新增开关「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」，默认开，关掉即恢复本插件图标\n只让出跳转图标，SQL 预览等其余左侧图标不受影响\n修复方言冲突时预览悬停证据丢失候选数据源的问题（此前只显示「无精确绑定」）\n好用的话，欢迎到 Marketplace 页评分留言",
+  "changeNotes": "装了 MyBatisCodeHelperPro 等同类插件时，Mapper 双向跳转图标不再和对方的跳转箭头叠在同一行\n新增开关「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」，默认开，关掉即恢复本插件图标\n只让出跳转图标，SQL 预览等其余左侧图标不受影响\n修复方言冲突时预览悬停证据丢失候选数据源的问题，此前只显示无精确绑定\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-10-30",
   "sinceBuild": "243"
 }
