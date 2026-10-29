@@ -245,41 +245,83 @@
 
 | 券 | 提交 | 说明 |
 |---|---|---|
-| 01 | 待填 | |
-| 02 | 待填 | |
-| 03 | 待填 | |
-| 04 | 待填 | |
-| 05 | 待填 | |
-| 06 | 待填 | 可选 |
-| 07 | 待填 | 增强捕获驱动登记（agent 子项目单独一笔） |
-| 08 | 待填 | 增强捕获守卫口径与帧前缀 |
+| 01 | `89dec3ab` | feat(dialect): 券01 保留字基线收口（openGauss/GaussDB 独立集合 + PG 补 is/procedure） |
+| 02 | `6c39fc07`（与 03/04/05 同笔） | 只改 `Dialect.kt` 的 KDoc 与 `supportsDeleteLimit` 显式声明，与券 04 同文件，无法单独成笔 |
+| 03 | `6c39fc07`（同上） | 同上；新增「只产 PG 形态不产逗号形态」用例 |
+| 04 | `6c39fc07` | feat(dialect): GaussDB 独立方言落地（券02~05 代码面） |
+| 05 代码面 | `6c39fc07`（同上） | plugin.xml 12 方言 + 6 处守卫同步——必须与 04 同笔，否则单笔 checkout 是红的 |
+| 05 文档面 | 分支 `feature/gaussdb-docs` 三笔 → 合入 `e4e24be1` | 架构文档 01/02/03、README、MCP 指南、对外文案；兄弟文档站另仓 **`fa7ce8e`**（其 master，**未推送**，推送会触发站点部署） |
+| 06 | `47e7693f` | feat(dialect): 券06 注册 GaussDB 平台 SQL 方言（仿达梦先例） |
+| 07 | 待补 | |
+| 08 | 待补 | |
 
 ### 7.2 §二 待验证前提的证伪结论
 
 | 前提 | 结论 | 证据 |
 |---|---|---|
-| P-1 | 待填 | |
-| P-2 | 待填 | |
-| P-3 | 待填 | |
-| P-4 | 待填 | |
-| P-5 | 待填 | |
-| P-6 | 待填 | |
-| P-7 | 待填 | |
-| P-8 | 待填 | |
-| P-9 | 待填 | |
-| P-10 | 待填 | |
-| P-11 | 待填 | |
-| P-12 | 待填 | |
+| P-1 | **成立** | GaussDB 官方《INSERT》文法全模式含 `ON DUPLICATE KEY UPDATE`，而 `ON CONFLICT` 官方明注「仅支持 PG 兼容性」；openGauss 5.0.0（A 模式）真机 EXPLAIN 只被权限拦（语法+计划通过）。故 `GaussDbDialect` 取 MySQL 形态 |
+| P-2 | **语法成立、语义未验证** | `EXPLAIN DELETE FROM db4ai.snapshot WHERE id = 1 LIMIT 1` → `permission denied for relation snapshot`；同库对照组 `ON CONFLICT` 直接 `syntax error`（证明通道能区分）。实例非超管且 `public` 无用户表，无法观察影响行数 → 按 D3 保持 `supportsDeleteLimit=false` 并改依据 |
+| P-3 | **成立** | `SqlMapperLanguage.DIALECT_RESERVED` 是 registry 并集自动吸收；`SqlMapperKeywordCoverageGuardTest` 7/0 绿 |
+| P-4 | **未验证（环境受限）** | 只有 `sql_compatibility='A'` 库；B 模式需 dolphin 插件、无法自建。本轮明示按 A 模式口径，B 模式专属能力（反引号/`IFNULL`/`DATE_FORMAT`/`LAST_INSERT_ID`）一概不用 |
+| P-5 | **部分证伪** | 官方页机读的 934/862 词、130/122 保留字未逐词人工复核，故**没有采信绝对数**；改为以真机 `pg_get_keywords()` 的 R∪T∪C（183）为基线，文档只贡献 3 个独有词（共 186），GaussDB 增量 11 词单独列出并由黄金清单钉死 |
+| P-6 | **成立（静态）；运行时未验** | `.intellijPlatform` 制品目录 `grep -ril gauss` 零命中；运行时 `SqlDialectMappings.getAvailableValues()` 需 runIde，未做 → 券 06 已实现注册与静态接线守卫，真机可见性列入未闭环 |
+| P-7 | **成立，且已实证** | `DialectDocTableGuardTest` 9/0 **skipped=0**（实读兄弟站表格）——合并单元格 `PostgreSQL / openGauss / GaussDB` 被正确拆成三个键，`GaussDB` 与 `openGauss` 是两个独立键 |
+| P-8 | **成立** | `Dialect.name`=`GaussDB` 与 `GaussDbSqlDialect.ID` 逐字相等，由 `GaussDbDialectRegistrationWiringTest` 断言 |
+| P-9 | 待补 | |
+| P-10 | 待补 | |
+| P-11 | 待补 | |
+| P-12 | 待补 | |
 
 ### 7.3 验证读数
 
-| 项 | 读数 |
+**定向测试（本工作树，逐类 tests/skipped/failures）**
+
+| 类 | 读数 |
 |---|---|
-| 定向测试 | 待填 |
-| 反向验证（四次，红/绿） | 待填 |
-| 全量门禁 | 待填 |
-| `verifyGate` | 待填 |
+| `DialectTest` | 19 / 0 / 0 |
+| `DialectXcFamilyTest` | 15 / 0 / 0 |
+| `DialectExplainTest` | 26 / 0 / 0 |
+| `DialectInferenceTest` | 9 / 0 / 0 |
+| `DialectDocGoldenTest` | 11 / 0 / 0 |
+| `ReplayScriptExportTest` | 11 / 0 / 0 |
+| `JdbcUrlDialectsTest` | 16 / 0 / 0 |
+| `McpRenderInputTest` | 6 / 0 / 0 |
+| `PluginXmlStructureGuardTest` | 22 / 0 / 0 |
+| `DialectDocTableGuardTest` | 9 / 0 / 0（skipped=0，实读兄弟站） |
+| `DialectCapabilitiesTest` | 9 / 0 / 0 |
+| `SqlMapperKeywordCoverageGuardTest` | 7 / 0 / 0 |
+| `CrudSqlGeneratorTest` | 29 / 0 / 0 |
+| `DialectRenderDumpTest` | 1 / 0 / 0 |
+| `GaussDbDialectRegistrationWiringTest` | 4 / 0 / 0 |
+| `DmDialectRegistrationWiringTest` | 3 / 0 / 0 |
+| `GuardSelfTestCoverageMetaGuardTest` | 8 / 0 / 0 |
+| `DialectRegistryIdeaContextTest` | 2 / 0 / 0 |
+| `DialectStaleManualLeakGuardTest` | 3 / 0 / 0 |
+| `SqlDialectEdtSourceScanTest` | 4 / 0 / 0 |
+| `ExecutionDialectGateTest` | 18 / 0 / 0 |
+| `ExecDialectRoutingTest` | 27 / 0 / 0 |
+| `SettingsTruthTest` | 10 / 0 / 0 |
+| `DialectSettingsStatusTextTest` | 3 / 0 / 0 |
+| `DialectH2VerificationTest` | 14 / 0 / 0 |
+| `DialectDockerVerificationTest` | 6 / 6 skip / 0（本机无 docker，预期跳过） |
+
+**反向验证（红/绿两次读数）**
+
+| 对象 | 反向操作 | 红 | 绿（恢复后） |
+|---|---|---|---|
+| 券 01 | 从 `OPENGAUSS_KEYWORDS_RESERVED` 移除 `rownum` | `openGauss保留字_真机黄金清单逐词一致` + `openGauss保留字_旧PG基线漏包十七词回归防护` 红；合并批次 `26 tests completed, 4 failed` | `BUILD SUCCESSFUL` |
+| 券 04 | 从 `DialectRegistry.dialects` 摘掉 `GaussDbDialect` | `注册表身份_摘掉注册即红` + `url推断_三前缀命中且全链落到本方言对象` 红（同上 4 failed 中的两例） | `BUILD SUCCESSFUL` |
+| 07 | 待补 | | |
+| 08 | 待补 | | |
+
+**全量门禁**：待补。
+**`verifyGate`**：待补。
 
 ### 7.4 未做项与观察登记
 
-待填。
+- **GaussDB 商用版零真机**：Docker Hub 无华为官方镜像，全部 GaussDB 结论为**官方文档级**；各项形态以 openGauss 5.0.0 真机（同源 PG 9.2.4 基线）为旁证。真机读数到位前，文档与能力矩阵不得写「GaussDB 已验证」。
+- **`DELETE ... LIMIT` 语义未验证**：只证到语法接受。需一个可写实例（建表插 5 行、`DELETE ... LIMIT 1` 后核影响行数）才能决定是否翻转 `supportsDeleteLimit`。
+- **兼容模式未覆盖**：只有 `sql_compatibility='A'` 库。B/C/PG/M 模式下 `LIMIT m,n`、`IFNULL`、`DATE_FORMAT`、反引号的行为全部未验。
+- **券 06 平台 EP 运行期可见性未验**：需 runIde 沙盒确认「设置页 SQL Dialects 能选到 GaussDB」与「Runner 精确匹配」。静态接线由 `GaussDbDialectRegistrationWiringTest` 守住。
+- **官方关键字页计数未逐词复核**：934/862 与 130/122 为 HTML 表格机读结果，本轮以真机 186 词兜底，GaussDB 增量 11 词单列（见 P-5）。
+- **增强捕获 07/08**：见 7.1 待补行。
