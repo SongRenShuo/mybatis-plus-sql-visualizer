@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
@@ -22,6 +23,11 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         elements: MutableList<out PsiElement>,
         result: MutableCollection<in LineMarkerInfo<*>>,
     ) {
+        // 券01（T-PerfSweep28-01，R28-2）：组显隐门前置——本 Provider 此前未接任何组闸，组关时
+        // 语句标签的接口解析重活照付。批级单次取 state，总闸与组显隐共用（CriteriaQueryGutter 门形）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return
         elements.mapNotNullTo(result, ::createMarker)
     }
 
@@ -59,6 +65,10 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         elements: MutableList<out PsiElement>,
         result: MutableCollection<in LineMarkerInfo<*>>,
     ) {
+        // 券01（T-PerfSweep28-01，R28-2）：组显隐门前置（与 XML 侧同门形）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return
         elements.mapNotNullTo(result, ::createMarker)
     }
 
@@ -66,7 +76,12 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         if (element !is com.intellij.psi.PsiIdentifier) return null
         val method = element.parent as? PsiMethod ?: return null
         if (method.nameIdentifier !== element) return null
-        val namespace = method.containingClass?.qualifiedName ?: return null
+        // 券01（T-PerfSweep28-01，R28-1/P-1）：接口前置——mapper namespace 语义必为接口
+        // （方法绑定经 JDK 动态代理），此前 service/util 等普通类的每个方法声明都在慢趟付一次
+        // 全 mapper 文件定位。isInterface 为 O(1) 属性读，开闸用户可见行为不变。
+        val containingClass = method.containingClass ?: return null
+        if (!containingClass.isInterface) return null
+        val namespace = containingClass.qualifiedName ?: return null
         if (MapperXmlLocator.locate(element.project, "$namespace.${method.name}") == null) return null
         return LineMarkerInfo(
             element, element.textRange, MpvsIcons.MapperMethod,

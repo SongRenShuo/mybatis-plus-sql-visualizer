@@ -54,11 +54,19 @@ object MapperXmlLocator {
         return s.substring(0, idx) to s.substring(idx + 1)
     }
 
-    /** 读上下文内的定位主体（FileTypeIndex → namespace/id 校验 → 行号换算）。 */
+    /** 读上下文内的定位主体（清单槽新鲜度 → memo → 逐文件 namespace/id 校验 → 行号换算）。 */
     private fun locateUnderRead(project: Project, namespace: String, id: String): Location? {
+        // 先取**新鲜**清单槽：TTL 过期 / 任一文件失效 / 项目不匹配都会换代（既有 T-PS5-05 语义）。
+        // memo 挂在槽实例上，换代即整体失效——命中路径与清单新鲜度严格同代，不会让过期结果
+        // 跳过重扫（既有 TTL 用例钉死该语义）。
+        val slot = currentFileListSlot(project)
+        val memoKey = namespace to id
+        slot.memo[memoKey]?.let { cached -> return cached as? Location }
         var first: Pair<XmlFile, XmlTag>? = null
         var extraHits = 0
-        for (file in findMapperXmlFiles(project)) {
+        for (vf in slot.files) {
+            statementScanCount.incrementAndGet()
+            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
             val tag = findStatementTag(file, namespace, id) ?: continue
             val hit = file to tag
             if (first == null) first = hit else extraHits++
@@ -66,32 +74,31 @@ object MapperXmlLocator {
         if (extraHits > 0) {
             LOG.info("MapperXmlLocator: 语句 $namespace.$id 命中 ${extraHits + 1} 个 mapper XML（多模块同名），取第一个：${first?.first?.virtualFile?.path}")
         }
-        val (file, tag) = first ?: return null
-        val vf = file.virtualFile ?: return null
-        val document = PsiDocumentManager.getInstance(project).getDocument(file) ?: return null
-        val line = document.getLineNumber(tag.textRange.startOffset)
-        return Location(vf, line)
+        val location = first?.let { (file, tag) ->
+            val vf = file.virtualFile ?: return@let null
+            val document = PsiDocumentManager.getInstance(project).getDocument(file) ?: return@let null
+            Location(vf, document.getLineNumber(tag.textRange.startOffset))
+        }
+        // 负结果以 MISS 哨兵承载（ConcurrentHashMap 不接受 null 值）
+        slot.memo[memoKey] = location ?: MISS
+        return location
     }
 
     /**
-     * 项目内全部 mapper XML（`.xml` 后缀 + 根元素 `<mapper>`）。
-     * XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按 HbmXmlEntityResolver 同款用
-     * FileTypeManager 取标准 XML 类型；索引异常按空列表处理（优雅降级，绝不抛出）。
+     * T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳 +
+     * 券01 语句定位结果 memo）。
      *
-     * T-PS5-05：走 [mapperXmlVirtualFiles] 单槽缓存（索引遍历 + 非 mapper XML 的 PSI 解析
-     * 只在缓存未命中时发生）。
+     * memo 与清单**同生共死**：条目每次换代即新建空 memo（对照 MybatisXmlTargets F96
+     * namespaceSlot 的 listingGeneration 同代失效先例）。memo 键为 `namespace to id`，
+     * 值 [Location] 或 [MISS] 哨兵（负结果一并缓存——非 Mapper 方法必然落空，修前每趟重付全程）。
      */
-    private fun findMapperXmlFiles(project: Project): List<XmlFile> = runCatching {
-        mapperXmlVirtualFiles(project)
-            .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
-    }.getOrDefault(emptyList())
-
-    /** T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳）。 */
     private class FileListSlot(
         val project: java.lang.ref.WeakReference<Project>,
         val files: List<VirtualFile>,
         val atMs: Long,
-    )
+    ) {
+        val memo = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, Any>()
+    }
 
     /**
      * T-PS5-05：缓存 TTL 上界（毫秒）。新增 mapper XML 后至多一个窗口内跳转仍按旧列表
@@ -106,8 +113,14 @@ object MapperXmlLocator {
     /** T-PS5-05 测试缝：索引全扫计数（断言命中路径零遍历）。 */
     internal val indexScanCount = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /** 券01（T-PerfSweep28-01）测试缝：语句定位的逐文件根标签访问计数（断言 memo 命中零遍历）。 */
+    internal val statementScanCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     @Volatile
     private var fileListSlot: FileListSlot? = null
+
+    /** memo 负结果哨兵（`namespace.id` 在当前清单代内不存在对应语句）。 */
+    private val MISS = Any()
 
     /** T-PS5-05 测试缝：清空文件列表缓存（用例隔离；生产链路无调用点）。 */
     internal fun clearFileListCacheForTest() {
@@ -129,14 +142,14 @@ object MapperXmlLocator {
      * 单槽 + 项目弱引用（不挂项目 Disposable、不加监听器）：无跨项目泄漏，项目关闭后条目随
      * GC 回收；多项目交替访问退化为重扫（与无缓存等价，无正确性风险）。
      */
-    private fun mapperXmlVirtualFiles(project: Project): List<VirtualFile> {
+    private fun currentFileListSlot(project: Project): FileListSlot {
         val now = clockMs()
         fileListSlot?.let { slot ->
             if (slot.project.get() === project &&
                 now - slot.atMs <= fileListTtlMs &&
                 slot.files.all { it.isValid }
             ) {
-                return slot.files
+                return slot
             }
         }
         indexScanCount.incrementAndGet()
@@ -149,8 +162,9 @@ object MapperXmlLocator {
                 .mapNotNull { it.virtualFile }
                 .toList()
         }.getOrDefault(emptyList())
-        fileListSlot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
-        return files
+        val slot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
+        fileListSlot = slot
+        return slot
     }
 
     /**
