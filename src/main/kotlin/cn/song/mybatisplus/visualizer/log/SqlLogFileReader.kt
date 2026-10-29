@@ -363,6 +363,7 @@ object SqlLogFileReader {
                 sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
+                threadName = decodedExt?.threadName,
                 actualSql = decodedExt?.actualSql,
                 captureProvenance = decodedExt?.captureProvenance ?: CaptureProvenance.UNKNOWN,
             )
@@ -385,6 +386,7 @@ object SqlLogFileReader {
                 sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
+                threadName = decodedExt?.threadName,
                 actualSql = decodedExt?.actualSql,
                 captureProvenance = decodedExt?.captureProvenance ?: CaptureProvenance.UNKNOWN,
             )

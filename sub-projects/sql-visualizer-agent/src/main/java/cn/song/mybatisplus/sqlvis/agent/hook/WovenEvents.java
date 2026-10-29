@@ -81,7 +81,7 @@ final class WovenEvents {
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
         event.sourceCandidates = frame == null ? null : frame.candidates;
-        event.stackDigest = StackDigest.build(stack);
+        event.stackDigest = StackDigest.build(stack, hint, frame);
         event.requestTag = MdcAccessor.requestTag();
         // T-ConnCastSafety：参数改由语句面 setXxx 织入采集（连接代理出厂关闭后代理层那份不再在）。
         // 无登记（盲区语句）即 null——SQL 都取不到时参数无处挂，与旧语义一致的「诚实缺省」。

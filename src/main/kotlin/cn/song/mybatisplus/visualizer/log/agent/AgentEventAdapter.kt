@@ -49,6 +49,8 @@ object AgentEventAdapter {
             // T-SourceJumpFunnel：候选类名与栈快照透传（选帧弹层/NotFound 提示/详情面板往上追踪）
             candidateClasses = event.candidateClasses,
             stackDigest = event.stackDigest,
+            // T-StackBizFrame S3：线程名透传——调用栈弹层标题据此标注「这条 SQL 在哪个线程上执行」
+            threadName = event.threadName,
             // T-M56-06：方法聚焦键（agent 栈帧 {Class}#{method}）——与 mapper 语句 id 同入 mapperStatement
             // 字段语义扩展由 focusMethodKey 统一承载（agent JDBC 层无 mapper id，非冲突）
             mapperStatement = event.methodKey,

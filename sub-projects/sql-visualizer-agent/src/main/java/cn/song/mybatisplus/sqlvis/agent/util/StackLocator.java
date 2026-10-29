@@ -170,13 +170,24 @@ public final class StackLocator {
         public final List<String[]> candidates;
         /** 诊断：主位置判定路径（L1=目录帧命中 / SAFETY=安全网，上顶收敛与首帧兜底均计入 SAFETY）。info 日志与测试断言用。 */
         public final String via;
+        /**
+         * 主位置的 FQCN 与原始方法名（T-StackBizFrame S2）。
+         *
+         * <p>为什么不复用 {@link #methodKey}：那是<b>简名</b>（`UserService#query`），两个不同包的
+         * 同名类会撞键；摘要侧要按身份在同一份栈快照里精确定位这一帧，必须用 FQCN。
+         */
+        public final String primaryClassName;
+        public final String primaryMethod;
 
-        Frame(String sourceFile, int line, String methodKey, List<String[]> candidates, String via) {
+        Frame(String sourceFile, int line, String methodKey, List<String[]> candidates, String via,
+              String primaryClassName, String primaryMethod) {
             this.sourceFile = sourceFile;
             this.line = line;
             this.methodKey = methodKey;
             this.candidates = candidates;
             this.via = via;
+            this.primaryClassName = primaryClassName;
+            this.primaryMethod = primaryMethod;
         }
     }
 
@@ -379,6 +390,39 @@ public final class StackLocator {
     }
 
     /**
+     * T-StackBizFrame S1：调用栈摘要的栈底锚点复用的「业务帧」判据——与定位侧 L1
+     * （{@link #isSelectableBusinessFrame}）<b>同源</b>，不再另造第二套名单。
+     *
+     * <p>为什么必须同源：摘要与定位是同一份栈快照上的两条判定，各自维护一套「什么算业务帧」
+     * 必然漂移——漂移的后果正是用户报障形态（位置列有项目类、栈快照里没有）。
+     *
+     * @param frame  待判帧；null 恒 false
+     * @param loader 能看见应用类的 loader（与 locate 的 hint 同一个）；null 退上下文 loader
+     */
+    public static boolean isBusinessFrame(StackTraceElement frame, ClassLoader loader) {
+        if (frame == null) {
+            return false;
+        }
+        final String cn = frame.getClassName();
+        // 自身包永不算业务帧：开发/测试态 agent 类同样来自目录（codeSource 非 JAR），来源判据会
+        // 把它当成「用户业务类」，于是摘要锚点落到采集入口帧、整条栈被截成两帧（T-StackBizFrame
+        // 单测首轮实测）。产线 agent 来自 JAR 时这条不触发，但判据不该依赖部署形态。
+        // 字面量与 FRAME_SKIP_PREFIXES 里「本 agent」项同值——那里刻意保持字面量，因为
+        // LocatorSkipPrefixSyncTest 按源码扫描该数组提取前缀，换成常量会让守卫提取不到。
+        if (cn == null || cn.startsWith("cn.song.mybatisplus.sqlvis.")) {
+            return false;
+        }
+        // T-PerfSweep29 P-5 压测发现：原实现走 isSelectableBusinessFrame(toRelativePath(...))，
+        // 每帧拼一次「pkg/File.java」字符串（栈底扫描最多几十帧，实测摘要侧 +2.6µs/SQL）。
+        // 这里直接判文件名——<generated> 是 SourceFile 的裸值，不需要先拼相对路径。
+        final String fileName = frame.getFileName();
+        if (fileName == null || GENERATED_SOURCE_NAME.equals(fileName)) {
+            return false;
+        }
+        return isBusinessOrigin(cn, resolveLoader(loader));
+    }
+
+    /**
      * 由<b>当前 pool</b> 的第 {@code primaryAt} 条构造结果帧（T-AgentSourceLocateStale T-01：行号与
      * 候选列每执行重建，禁整帧缓存）。主位置无调试信息（file 为 null）时返回 null = 本次不产出位置。
      */
@@ -400,7 +444,7 @@ public final class StackLocator {
             }
         }
         return new Frame(primary[0], Math.max(Integer.parseInt(primary[1]), 0),
-                simpleMethodKey(primary[2] + "#" + primary[3]), candidates, via);
+                simpleMethodKey(primary[2] + "#" + primary[3]), candidates, via, primary[2], primary[3]);
     }
 
     /**

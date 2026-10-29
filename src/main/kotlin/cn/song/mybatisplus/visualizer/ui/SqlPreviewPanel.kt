@@ -1130,6 +1130,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** T-StackHoverUi：当前喂给悬停弹层的栈快照（接线断言用——tooltip 不再承载栈文本）。 */
     internal fun stackDigestForTest(): String? = stackHover.currentDigestForTest()
+
+    /** T-StackBizFrame S3：当前喂给弹层标题的线程名（接线断言用）。 */
+    internal fun stackThreadNameForTest(): String? = stackHover.currentThreadNameForTest()
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 

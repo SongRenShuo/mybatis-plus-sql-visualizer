@@ -512,6 +512,7 @@ class SqlLogAutoSaver(
                 entry.mapperStatement != null || entry.errorText != null ||
                 entry.requestTag != null || entry.updateCount != null ||
                 entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
+                entry.threadName != null ||
                 entry.actualSql != null || entry.captureProvenance != CaptureProvenance.UNKNOWN ||
                 entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {

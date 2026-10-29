@@ -119,6 +119,12 @@ data class LogSqlEntry(
     /** T-SourceJumpFunnel：调用栈快照「类#方法:行 ← …」（仅 agent 通道；详情面板人工往上追踪用）。 */
     val stackDigest: String? = null,
     /**
+     * T-StackBizFrame S3：产生该 SQL 的线程名（仅 agent 通道）。调用栈弹层标题展示，
+     * 让「调度线程 / 异步池 / 请求线程」一眼可辨（同类误报的第一判别量）。
+     * null = 未知（桥通道 / 旧条目 / 旧日志文件），标题退回纯「调用栈」。
+     */
+    val threadName: String? = null,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
