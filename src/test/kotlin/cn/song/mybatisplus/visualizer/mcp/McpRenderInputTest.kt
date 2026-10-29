@@ -31,6 +31,10 @@ class McpDialectDetectorTest {
         assertEquals("OceanBase", McpDialectDetector.guessFromUrl("jdbc:oceanbase://localhost:2881/db"))
         assertEquals("openGauss", McpDialectDetector.guessFromUrl("jdbc:opengauss://localhost:5432/db"))
         assertEquals("GaussDB", McpDialectDetector.guessFromUrl("jdbc:gaussdb://localhost:8000/db"))
+        // T-XcDialects3（券 03）：瀚高 / 海量；dws:iam 是海量驱动 parseURL 认可的第二前缀
+        assertEquals("HighGo", McpDialectDetector.guessFromUrl("jdbc:highgo://localhost:5866/db"))
+        assertEquals("Vastbase", McpDialectDetector.guessFromUrl("jdbc:vastbase://localhost:5432/db"))
+        assertEquals("Vastbase", McpDialectDetector.guessFromUrl("jdbc:dws:iam://localhost:5432/db"))
     }
 
     @Test
@@ -58,6 +62,14 @@ class McpDialectDetectorTest {
         assertEquals("openGauss", McpDialectDetector.normalize("opengauss"))
         assertEquals("GaussDB", McpDialectDetector.normalize("gaussdb"))
         assertEquals("GaussDB", McpDialectDetector.normalize("高斯"))
+        // T-XcDialects3（券 03）：瀚高两种中文写法（官方「瀚高」/ 用户常写「翰高」）都收；
+        // 海量收厂商中文名「海量」
+        assertEquals("HighGo", McpDialectDetector.normalize("highgo"))
+        assertEquals("HighGo", McpDialectDetector.normalize("HighGo"))
+        assertEquals("HighGo", McpDialectDetector.normalize("瀚高"))
+        assertEquals("HighGo", McpDialectDetector.normalize("翰高"))
+        assertEquals("Vastbase", McpDialectDetector.normalize("vastbase"))
+        assertEquals("Vastbase", McpDialectDetector.normalize("海量"))
     }
 
     @Test

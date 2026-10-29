@@ -24,6 +24,11 @@ object McpDialectDetector {
         "jdbc:opengauss" to "openGauss",
         "jdbc:gaussdb" to "GaussDB",
         "jdbc:oceanbase" to "OceanBase",
+        // T-XcDialects3（券 03）：瀚高 jdbc:highgo:；海量 jdbc:vastbase: 与 jdbc:dws:iam:
+        //（cn.com.vastbase.Driver 错误串原文 "must start with jdbc:vastbase: or jdbc:dws:iam:"）
+        "jdbc:highgo" to "HighGo",
+        "jdbc:vastbase" to "Vastbase",
+        "jdbc:dws" to "Vastbase",
     )
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -54,6 +59,13 @@ object McpDialectDetector {
         "gaussdb" to "GaussDB",
         "高斯" to "GaussDB",
         "华为高斯" to "GaussDB",
+        // T-XcDialects3（券 03）：瀚高/海量。瀚高官方写「瀚高」，但用户手输常写「翰高」，
+        // 两种写法都收（精确匹配互不冲突）；海量按厂商中文名收「海量」。
+        "highgo" to "HighGo",
+        "瀚高" to "HighGo",
+        "翰高" to "HighGo",
+        "vastbase" to "Vastbase",
+        "海量" to "Vastbase",
     )
 
     /** agent 显式方言名归一化（精确别名匹配；不可识别返回 null）。 */

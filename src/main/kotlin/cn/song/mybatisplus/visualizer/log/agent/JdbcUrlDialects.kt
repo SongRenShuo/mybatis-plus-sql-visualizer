@@ -31,6 +31,11 @@ internal object JdbcUrlDialects {
         // 的 URL 前缀是 jdbc:gaussdb，与 jdbc:opengauss 是两个产品线，角标应如实显示。
         "oceanbase" to "OceanBase",
         "gaussdb" to "GaussDB",
+        // T-XcDialects3（券 03）：瀚高 jdbc:highgo: 与海量 jdbc:vastbase: / jdbc:dws:iam:
+        //（cn.com.vastbase.Driver 的 parseURL 常量池，调研报告 §6.2）
+        "highgo" to "HighGo",
+        "vastbase" to "Vastbase",
+        "dws" to "Vastbase",
         "gbasedbt-sqli" to "GBASE",
         "gbasedbt" to "GBASE",
         "gbase" to "GBASE",

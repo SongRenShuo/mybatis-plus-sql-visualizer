@@ -32,6 +32,13 @@ internal object UrlSubprotocolDialects {
         "oceanbase" to "OceanBase",
         "opengauss" to "openGauss",
         "gaussdb" to "GaussDB",
+        // T-XcDialects3（券 03）：瀚高官方驱动 HgdbJdbc 的 Driver.class 常量池仅认 jdbc:highgo:；
+        // 海量 vastbase-jdbc 的 cn.com.vastbase.Driver 同时认 jdbc:vastbase: 与 jdbc:dws:iam:
+        // （取子协议得 vastbase / dws）。注意 com.highgo:hgdb-pgjdbc 走 jdbc:postgresql:，
+        // 是原版 pgjdbc，按 PostgreSQL 处理不纠正（调研报告 §5.2 字节码实证）。
+        "highgo" to "HighGo",
+        "vastbase" to "Vastbase",
+        "dws" to "Vastbase",
     )
 
     /**
