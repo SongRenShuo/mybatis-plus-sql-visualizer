@@ -11,6 +11,12 @@ object DialectDecisionEngine {
         LEARNED_MODULE, PROJECT_CONSENSUS, PROJECT_AGENT,
         /** T-DialectStatusLiveRefresh：面板已绑定/上次使用数据源（具体执行目标，非猜测）。 */
         BOUND_DATASOURCE,
+        /** T-DialectInferFix：项目配置文件里的 JDBC URL（无 IDE 数据源时的运行时事实，低置信）。 */
+        PROJECT_CONFIG,
+        /** T-DialectInferFix：构建文件里的数据库驱动坐标（无数据源、无配置时的工程事实，低置信）。 */
+        PROJECT_DEPENDENCY,
+        /** T-DialectInferFix：SQL 文本里的方言独占特征（最后兜底，仅强特征唯一命中时采用）。 */
+        SQL_SYNTAX,
     }
     enum class TargetStatus { MATCH, AUTO_RERENDER_REQUIRED, MANUAL_CONFLICT, TARGET_UNKNOWN }
 

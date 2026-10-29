@@ -356,6 +356,8 @@ object SqlLogFileReader {
                 executionTimeMs = executionTimeMs,
                 source = decodedExt?.source ?: SqlSource.UNKNOWN,
                 databaseName = mr.groupValues[5].takeIf { it.isNotBlank() },
+                // T-DialectInferFix：pd 载荷里的注册方言名；旧文件无此键 → null（调用方从 `db:` 角标回填）
+                dialectName = decodedExt?.dialectName,
                 mapperStatement = decodedExt?.mapperStatement,
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,

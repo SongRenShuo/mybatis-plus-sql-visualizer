@@ -514,6 +514,8 @@ class SqlLogAutoSaver(
                 entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
                 entry.threadName != null ||
                 entry.actualSql != null || entry.captureProvenance != CaptureProvenance.UNKNOWN ||
+                // T-DialectInferFix：方言名随 pd 载荷落盘，否则历史读回后日志预览又回落 MySQL
+                entry.dialectName != null ||
                 entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {
                 w.write("-- pd: ")

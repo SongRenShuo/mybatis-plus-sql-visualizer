@@ -55,6 +55,12 @@ object SqlLogParamCodec {
      * 旧 payload 无此键 → 解码 null → 读回 UNKNOWN（向前兼容不迁移）；不认识的值同样降级 UNKNOWN。
      */
     private const val PROVENANCE_FIELD = "pv"
+    /**
+     * T-DialectInferFix：本次执行连接的注册方言名（仅非空落键）。
+     * 旧 payload 无此键 → 解码 null（读回按「未知」处理，历史预览保持既有回落链）；
+     * 不认识的值也不丢弃整条——只在 byName 时落兼容兜底。
+     */
+    private const val DIALECT_FIELD = "dl"
 
     private val gson = Gson()
 
@@ -99,6 +105,8 @@ object SqlLogParamCodec {
         val actualSql: String? = null,
         /** O-147：捕获路径（旧 payload / 未打标条目为 null → 读端回退 UNKNOWN）。 */
         val captureProvenance: CaptureProvenance? = null,
+        /** T-DialectInferFix：本次执行连接的注册方言名（旧 payload 为 null）。 */
+        val dialectName: String? = null,
     )
 
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
@@ -154,6 +162,7 @@ object SqlLogParamCodec {
         entry.stackDigest?.let { json.name(STACK_DIGEST_FIELD).value(it) }
         entry.threadName?.takeIf { it.isNotBlank() }?.let { json.name(THREAD_NAME_FIELD).value(it) }
         entry.actualSql?.let { json.name(ACTUAL_SQL_FIELD).value(it) }
+        entry.dialectName?.takeIf { it.isNotBlank() }?.let { json.name(DIALECT_FIELD).value(it) }
         if (entry.captureProvenance != CaptureProvenance.UNKNOWN) json.name(PROVENANCE_FIELD).value(entry.captureProvenance.name)
         if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) json.name(SOURCE_FIELD).value(entry.source.name)
         json.endObject()
@@ -228,6 +237,8 @@ object SqlLogParamCodec {
             // O-147：键缺失 / 值非本版本枚举名 → null（读端回退 UNKNOWN，不因扩展键损坏丢弃整条）
             captureProvenance = json.get(PROVENANCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString
                 ?.let { name -> CaptureProvenance.values().firstOrNull { it.name == name } },
+            // T-DialectInferFix：键缺失/空白 → null（旧条目保持「未知」，不因扩展键损坏丢弃整条）
+            dialectName = json.get(DIALECT_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
         )
     }.getOrNull()
 

@@ -945,6 +945,8 @@ object DialectRegistry {
         sqlPsiFile: com.intellij.psi.PsiFile? = null,
         moduleKey: String? = null,
         boundDataSourceDialect: String? = null,
+        sqlText: String? = null,
+        capturedDialect: String? = null,
     ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
@@ -952,7 +954,15 @@ object DialectRegistry {
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
         if (!auto) return DialectDecisionEngine.decide(DialectDecisionEngine.Input(manualDialect = manualName))
-        if (project == null) return DialectDecisionEngine.decide(DialectDecisionEngine.Input())
+        if (project == null) {
+            return withLowConfidenceEvidence(
+                null,
+                DialectDecisionEngine.decide(
+                    DialectDecisionEngine.Input(capturedDialect = capturedDialect),
+                ),
+                sqlText,
+            )
+        }
         val candidates = DataSourceUrlProbe.candidateDialects(project)
         val singleModule = runCatching {
             com.intellij.openapi.module.ModuleManager.getInstance(project).modules.size == 1
@@ -967,24 +977,111 @@ object DialectRegistry {
         if (sqlPsiFile != null && dialectFile != null) {
             val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
             if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
-                return IdeaSqlDialectDecision.decide(
-                    snapshot = snapshot,
-                    learnedModule = learnedModule,
-                    fallbackProjectCandidates = candidates,
-                    lastAgentDialect = agentDialect,
-                    singleModuleProven = singleModule,
-                    boundDataSourceDialect = boundDataSourceDialect,
+                return withLowConfidenceEvidence(
+                    project,
+                    IdeaSqlDialectDecision.decide(
+                        capturedDialect = capturedDialect,
+                        snapshot = snapshot,
+                        learnedModule = learnedModule,
+                        fallbackProjectCandidates = candidates,
+                        lastAgentDialect = agentDialect,
+                        singleModuleProven = singleModule,
+                        boundDataSourceDialect = boundDataSourceDialect,
+                    ),
+                    sqlText,
                 )
             }
         }
-        return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
-            ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
-            ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
-            learnedModule = learnedModule,
-            projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
-            boundDataSourceDialect = boundDataSourceDialect,
-        ))
+        return withLowConfidenceEvidence(
+            project,
+            DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+                capturedDialect = capturedDialect,
+                ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
+                ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+                learnedModule = learnedModule,
+                projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
+                boundDataSourceDialect = boundDataSourceDialect,
+            )),
+            sqlText,
+        )
     }
+
+    /**
+     * T-DialectInferFix（增补券）：数据源 / PSI / 范围证据都给不出结论时，补三层**低置信**证据。
+     *
+     * 触发场景是用户最常见的两类环境：①一个 IDE 数据源都没配（只写了 `application.yml`）；
+     * ②配了数据源但从没连过、插件也拿不到方言。此前这两类一律兜底 MySQL，等于「智能推断从未生效」。
+     *
+     * 顺序与置信度（全部 [DialectDecisionEngine.Confidence.FALLBACK]，UI 必须披露来源）：
+     *  项目配置文件里的 JDBC URL（`Source.PROJECT_CONFIG`）→ 构建文件里的驱动坐标
+     *  （`Source.PROJECT_DEPENDENCY`）→ 本次 SQL 文本的方言独占特征（`Source.SQL_SYNTAX`）。
+     *
+     * 两条边界：`CONFLICT`（数据源与运行期事实真的打架）保持阻断，低置信证据不得覆盖；
+     * EDT 上只读缓存，绝不触发文件扫描（平台慢操作断言）。
+     */
+    private fun withLowConfidenceEvidence(
+        project: com.intellij.openapi.project.Project?,
+        decision: DialectDecisionEngine.Decision,
+        sqlText: String?,
+    ): DialectDecisionEngine.Decision {
+        if (decision.dialectName != null) return decision
+        if (decision.status == DialectDecisionEngine.Status.CONFLICT) return decision
+        val evidence = project?.let { projectEvidence(it) }
+        if (evidence != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = evidence.dialectName,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = evidence.source,
+                evidence = decision.evidence + evidence.source,
+            )
+        }
+        val syntax = ProjectDialectEvidence.syntaxHint(sqlText)
+        if (syntax != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = syntax,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = DialectDecisionEngine.Source.SQL_SYNTAX,
+                evidence = decision.evidence + DialectDecisionEngine.Source.SQL_SYNTAX,
+            )
+        }
+        // 最后一层：用户在 IDEA 里配置的 SQL 方言（项目级 → 全局默认）。它比 MySQL 硬编码更贴近
+        // 用户意图，也是「没有任何数据源」时唯一稳定事实。
+        val inherited = platformInheritedDialect(project) ?: return decision
+        return decision.copy(
+            status = DialectDecisionEngine.Status.RESOLVED,
+            dialectName = inherited,
+            confidence = DialectDecisionEngine.Confidence.FALLBACK,
+            source = DialectDecisionEngine.Source.IDEA_DIALECT,
+            evidence = decision.evidence + DialectDecisionEngine.Source.IDEA_DIALECT,
+        )
+    }
+
+    /**
+     * 平台为项目/全局配置的 SQL 方言 → 插件注册方言名（未配置/GenericSQL/未收录方言 → null）。
+     *
+     * 只读平台内存映射（`getConfiguredMapping` / `getConfiguredDefaultSqlDialect`），无 EDT 限制；
+     * [cn.song.mybatisplus.visualizer.execute.DialectPreMapping] 内已 runCatching 兜底。
+     */
+    private fun platformInheritedDialect(project: com.intellij.openapi.project.Project?): String? = runCatching {
+        project ?: return null
+        val id = cn.song.mybatisplus.visualizer.execute.DialectPreMapping.inheritedLanguageId(project)
+            ?: return null
+        IdeaSqlContextBridge.pluginDialectName(id)
+    }.getOrNull()
+
+    /** EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。 */
+    private fun projectEvidence(
+        project: com.intellij.openapi.project.Project,
+    ): ProjectDialectEvidence.Evidence? = runCatching {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+            ProjectDialectEvidence.cachedOrNull(project)
+        } else {
+            ProjectDialectEvidence.forProject(project)
+        }
+    }.getOrNull()
+
 
     fun decision(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext): DialectDecisionEngine.Decision =
         decision(context.project, context.hostVirtualFile, context.sqlPsiFile, context.canonicalModuleKey)
