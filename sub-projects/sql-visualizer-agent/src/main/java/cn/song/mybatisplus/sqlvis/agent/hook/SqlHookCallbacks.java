@@ -39,9 +39,18 @@ public final class SqlHookCallbacks {
      *
      * <p><b>那还采得到吗。</b>采得到。SQL 采集主通道已是语句面/prepare 面字节码织入
      * （{@code StatementWeaver} + {@link cn.song.mybatisplus.sqlvis.agent.WeaveSpecs}）——它只往方法体里
-     * 插回调，<b>不改任何对象身份</b>，MySQL/MariaDB 家族、PG/openGauss、Oracle、SQL Server、H2、达梦
-     * 都走这条路，且 attach 路径对存量池连接同样生效（T-StatementWeave/T-DmWeave/T-PgWeave 的落点）。
+     * 插回调，<b>不改任何对象身份</b>，MySQL/MariaDB 家族、PG/openGauss（含华为 GaussDB 商用与
+     * openGauss 品牌两族）、Oracle、SQL Server、H2、达梦都走这条路，且 attach 路径对存量池连接同样生效
+     * （T-StatementWeave/T-DmWeave/T-PgWeave/T-GaussCapture 的落点）。
      * 连接代理是更早的通道，唯一独有能力是「连接级 prepare 拦截」，而这已被 prepare 面覆盖。
+     *
+     * <p><b>GaussDB 现场（T-GaussCapture）。</b>华为两族的 {@code com.huawei.gaussdb.jdbc.jdbc.PgConnection}
+     * 与 {@code com.huawei.opengauss.jdbc.jdbc.PgConnection} 实测均为 {@code public} **非 final**——
+     * 宿主写 {@code (PgConnection) conn} 完全合法且现实存在。一旦有人打开
+     * {@code -Dsqlvis.agent.wrapConnection=true}，这里返回的动态代理会立刻抛
+     * {@code ClassCastException: com.sun.proxy.$ProxyN cannot be cast to ...PgConnection}，
+     * 与达梦那次同型。**默认值 {@code false} 不得改**：GaussDB 的采集能力来自语句面/prepare 面，
+     * 不需要连接代理。
      *
      * <p><b>何时需要打开。</b>仅当某驱动的语句实现类不在 {@code WeaveSpecs} 名单里（如 GBASE 8s、
      * 部分 SQLite/HSQLDB 形态），织入通道覆盖不到、只能靠连接代理时，用户显式加

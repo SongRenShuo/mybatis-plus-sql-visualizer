@@ -28,7 +28,10 @@ public final class DriverRegistry {
         s.add("com.mysql.cj.jdbc.Driver");
         s.add("com.mysql.cj.jdbc.NonRegisteringDriver");
         s.add("org.mariadb.jdbc.Driver");
-        // PostgreSQL / OpenGauss 兼容（openGauss 2.x 走 PG 驱动，3.x 起自带驱动）
+        // PostgreSQL / openGauss 兼容。社区 openGauss 驱动的包组织按版本分界（T-GaussCapture
+        // 实测）：2.x/3.x 整体重定位到 org.opengauss.*（3.0.0 内 org/postgresql 条目数为 0），
+        // 5.x/7.x 才回到 org.postgresql.*（7.0.0 的 META-INF/services 声明 org.postgresql.Driver）。
+        // 两边的语句面/prepare 面各自登记在 WeaveSpecs，勿只登记一半。
         s.add("org.postgresql.Driver");
         s.add("org.opengauss.Driver");
         // H2 / HSQL / SQLite（嵌入式，测试矩阵主力）
