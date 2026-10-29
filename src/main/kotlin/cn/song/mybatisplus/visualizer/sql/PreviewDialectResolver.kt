@@ -70,16 +70,24 @@ internal object PreviewDialectResolver {
 
 /**
  * 给预览结果补齐方言（幂等）：
- *  - 已有 `dialectDecision` 且 `renderedDialect` 在场 → 原样返回；
- *  - 否则按 [PreviewDialectResolver.resolve] 求解；判出来就同时写**渲染方言**与**决策**，
+ *  - **已有 `dialectDecision` → 以上游决策为准**：它带着上游算好的证据（来源、置信度、
+ *    候选数据源 UUID 等），面板不得重算覆盖——2026-10-30 修：原判据要求「决策与渲染方言都在场」
+ *    才早退，导致 `dialectName == null` 的冲突/不可用决策（例如 `CONFLICT` + 候选 UUID 清单）
+ *    被重算成 `UNAVAILABLE` 兜底，按需查看的证据面丢掉候选标识。仅当决策知道方言名而
+ *    `renderedDialect` 缺席时，用该名字回填渲染方言（渲染端与临时文件映射端仍取同一值）；
+ *  - 没有决策时按 [PreviewDialectResolver.resolve] 求解；判出来就同时写**渲染方言**与**决策**，
  *    保证渲染端与临时文件映射端读到同一个值。
  */
 internal fun cn.song.mybatisplus.visualizer.model.PreviewResult.withResolvedDialect(
     project: Project?,
     boundDataSourceDialect: String? = null,
 ): cn.song.mybatisplus.visualizer.model.PreviewResult {
-    val captured = dialectDecision?.dialectName ?: renderedDialect?.name
-    if (renderedDialect != null && dialectDecision != null) return this
+    dialectDecision?.let { existing ->
+        val name = existing.dialectName
+        if (renderedDialect != null || name == null) return this
+        return copy(renderedDialect = DialectRegistry.byName(name))
+    }
+    val captured = renderedDialect?.name
     val decision = PreviewDialectResolver.resolve(
         project = project,
         capturedDialect = captured,

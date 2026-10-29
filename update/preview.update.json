@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.29",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.29/mybatis-plus-sql-visualizer-2026.10.29.zip",
-  "changeNotes": "修复 IDEA 2026.1.x 启用 MCP Server 后内置服务对所有客户端不可用、必须卸载插件才恢复的问题\n定时任务等后台线程里，增强捕获的调用栈摘要与弹层现在能看到项目代码，弹层标题还带线程名\n日志列表暂停后不再被新 SQL 顶动，关键字换行模式正常显示三行\n智能方言推断不再被 Redis 等非 SQL 数据源带偏，日志与历史预览沿用本次执行方言\n多模块工程按来源模块与激活 profile 取方言证据，推断更准\n调用栈折叠名单补入驱动与 MyBatis 内部包，行内栈摘要先取景再截断，长栈下也能看到项目类\nMapper 双向跳转的图标判定加接口前置与结果缓存，编辑大工程更轻\n字符串 SQL 方法 gutter 改用方法体引号预筛，大文件检查开销下降\nHibernate 命名探测缓存与预览窗口登记改为有界，长会话不再缓慢累积内存\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-29",
+  "version": "2026.10.30",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.30/mybatis-plus-sql-visualizer-2026.10.30.zip",
+  "changeNotes": "装了 MyBatisCodeHelperPro 等同类插件时，Mapper 双向跳转图标不再和对方的跳转箭头叠在同一行\n新增开关「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」，默认开，关掉即恢复本插件图标\n只让出跳转图标，SQL 预览等其余左侧图标不受影响\n修复方言冲突时预览悬停证据丢失候选数据源的问题（此前只显示「无精确绑定」）\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-30",
   "sinceBuild": "243"
 }
