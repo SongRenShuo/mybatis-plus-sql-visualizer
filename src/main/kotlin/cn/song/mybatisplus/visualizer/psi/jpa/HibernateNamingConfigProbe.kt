@@ -113,6 +113,34 @@ object HibernateNamingConfigProbe {
     private val cache = ConcurrentHashMap<String, Cached>()
 
     /**
+     * 券03（T-PerfSweep28-03，R28-4）缓存容量上限：键含项目基路径与模块资源目录，多项目长会话
+     * 缓慢累积且无项目关闭摘除。超限整体清空（HbmXml 负缓存/EntityResolver 同范式；值为纯布尔
+     * 判定结果，重算成本 = 一次资源目录扫描，可接受）。internal 可写仅测试缝。
+     */
+    @JvmStatic
+    internal var maxCacheEntries: Int = 512
+
+    /** 当前缓存条目数（测试 / 诊断用）。 */
+    @JvmStatic
+    internal fun cacheSize(): Int = cache.size
+
+    /** 券03 测试缝：按给定键走同一写入守卫路径（灌键验证上限收敛；生产链路无调用点）。 */
+    @JvmStatic
+    internal fun putForTest(key: String, stamp: Long, value: Boolean) {
+        store(key, Cached(stamp, value))
+    }
+
+    /** 券03 测试缝：清空缓存（用例隔离；生产链路无调用点）。 */
+    @JvmStatic
+    internal fun clearCacheForTest() = cache.clear()
+
+    /** 写入守卫单一事实：超限整体清空再写（[maxCacheEntries] 语义）。 */
+    private fun store(key: String, entry: Cached) {
+        if (cache.size >= maxCacheEntries) cache.clear()
+        cache[key] = entry
+    }
+
+    /**
      * 工程（或更准确地说：[anchor] 所在模块）是否使用「组件路径」嵌入列命名。
      *
      * @param anchor 正在解析的实体文件；null、或实体来自依赖 JAR 时按工程级信号判定
@@ -137,7 +165,8 @@ object HibernateNamingConfigProbe {
         val stamp = PsiModificationTracker.getInstance(project).modificationCount
         cache[key]?.let { if (it.stamp == stamp) return it.value }
         val value = compute()
-        cache[key] = Cached(stamp, value)
+        // 券03（T-PerfSweep28-03）：写入走统一守卫（超限整体清空再写，语义见 maxCacheEntries）
+        store(key, Cached(stamp, value))
         return value
     }
 
