@@ -327,4 +327,99 @@ class DialectDocGoldenTest {
         ).forEach { assertTrue("GaussDB 官方增量缺失: $it", it in GAUSSDB_RESERVED) }
         assertEquals(OPENGAUSS_RESERVED.size + 11, GAUSSDB_RESERVED.size)
     }
+
+    // ------------------------------------------------------------------
+    // PostgreSQL / GaussDB 的全量独立黄金清单（券 01 第 3 项：三方言各一份）
+    // ------------------------------------------------------------------
+
+    /**
+     * PostgreSQL 官方保留字全量黄金清单——与 [PG_RESERVED] **独立维护**（任一侧漂移即红）。
+     *
+     * 来源：PG 官方附录《SQL Key Words》中标 `reserved` 与 `reserved (can be function or type name)`
+     * 的全量，含 T-GaussDbDialect 券 01 补入的 `is` / `procedure`（原集合只有 `isnull`、且完全缺
+     * `procedure`）。
+     */
+    private val postgresOfficialReserved: Set<String> = """
+        all analyse analyze and any array
+        as asc asymmetric authorization binary both
+        case cast check collate column concurrently
+        constraint create current_catalog current_date current_role current_time
+        current_timestamp current_user default deferrable desc distinct
+        do else end except false fetch
+        for foreign freeze from grant group
+        having in initially intersect into is
+        isnull lateral leading limit localtime localtimestamp
+        not notnull null offset on only
+        or order placing primary procedure references
+        returning select session_user similar some symmetric
+        table then to trailing true union
+        unique user using variadic when where
+        window with
+    """.trimIndent().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
+
+    @Test
+    fun `PG保留字_官方全量黄金清单逐词一致`() {
+        assertEquals("黄金清单自检：应为 86 词", 86, postgresOfficialReserved.size)
+        assertEquals(
+            "PG_RESERVED 与 PG 官方附录保留字全量黄金清单不一致",
+            postgresOfficialReserved,
+            PG_RESERVED,
+        )
+    }
+
+    /**
+     * GaussDB 官方保留字全量黄金清单——与 [GAUSSDB_RESERVED] **独立维护**（任一侧漂移即红）。
+     *
+     * 内容 = openGauss 5.0.0 真机 `pg_get_keywords()` 的 R∪T∪C（183）∪ 官方关键字页保留列独有
+     * 3 词（`imcstored` / `self` / `unimcstored`）∪ GaussDB 官方页独有增量 11 词 = 197 词。
+     *
+     * 口径说明（为什么是并集而不是「GaussDB 页那一列」）：两个来源对「保留」的定义不同，且
+     * GaussDB 商用版无真机可复核；按 `SqlKeywords` 既有「宁可多包、不漏包」口径取并集——
+     * 多引用一次是幂等安全的，漏引用则是语法错误。
+     */
+    private val gaussDbOfficialReserved: Set<String> = """
+        all analyse analyze and any array
+        as asc asymmetric authid authorization between
+        bigint binary binary_double binary_integer bit boolean
+        both bucketcnt buckets byteawithoutorder byteawithoutorderwithequal case
+        cast char character check coalesce collate
+        collation column compact concurrently constraint create
+        cross crossbucket csn current_catalog current_date current_role
+        current_schema current_time current_timestamp current_user date dbtimezone
+        dec decimal decode default deferrable deltamerge
+        desc distinct do else end except
+        excluded exists extract false fenced fetch
+        float for force foreign freeze from
+        full grant greatest group grouping groupparent
+        having hdfsdirectory ilike imcstored in initially
+        inner inout int integer intersect interval
+        into is join leading least left
+        less like limit localtime localtimestamp match
+        maxvalue minus modify national natural nchar
+        nocycle none not notnull null nullif
+        number numeric nvarchar nvarchar2 nvl offline
+        offset on online only or order
+        out outer overlaps overlay performance placing
+        position precision primary priorer procedure real
+        recyclebin references regexp reject returning right
+        rlike row rownum select self session_user
+        sessiontimezone setof shrink similar smalldatetime smallint
+        some substring symmetric sysdate table tablesample
+        then time timecapsule timestamp timestampdiff tinyint
+        to trailing treat trim true unimcstored
+        union unique user using values varchar
+        varchar2 variadic verbose verify when where
+        window with xmlattributes xmlconcat xmlelement xmlexists
+        xmlforest xmlparse xmlpi xmlroot xmlserialize
+    """.trimIndent().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
+
+    @Test
+    fun `gaussDB保留字_官方全量黄金清单逐词一致`() {
+        assertEquals("黄金清单自检：应为 197 词", 197, gaussDbOfficialReserved.size)
+        assertEquals(
+            "GAUSSDB_RESERVED 与 GaussDB 官方保留字全量黄金清单不一致",
+            gaussDbOfficialReserved,
+            GAUSSDB_RESERVED,
+        )
+    }
 }
