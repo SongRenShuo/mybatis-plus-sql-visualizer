@@ -91,8 +91,8 @@
 | **P-1** | `DataSourceManager.getQueryLanguage(ds)` 在 262/2026.2 可用，且对 Redis 数据源返回 `Redis`（非 SQL） | `javap` 已确认接口有该方法；需 runIde 沙盒或真机跑一次反射调用（打印每个数据源的 language id） | 退回用 `getDatabaseDialect(ds).getDisplayName()` 分类，再退 URL 子协议 |
 | **P-2** | 反射取 `getQueryLanguage` 必须传 `RawDataSource` 类，传 `Object::class.java` 找不到方法 | `javap -p com.intellij.database.psi.DataSourceManager` 已确认签名 `getQueryLanguage(T)`（擦除后为 `RawDataSource`） | 直接用 `getMethod("getQueryLanguage", Class.forName("com.intellij.database.model.RawDataSource"))`；本仓已有同类「从声明接口取 Method」纪律（`DatabaseSchemaResolver.kt:49-56`） |
 | **P-3** | agent 事件确实带 connect URL（券 02 的 EXACT 证据成立） | 真机跑一次应用，看日志条目角标是否为 `PostgreSQL · …`（有角标即有 URL） | 若 URL 缺失：券 02 降级为「只从已持久化的 `db:` 头回填」，桥通道条目仍靠项目决策 |
-| **P-4** | `SqlDialectMappings.getConfiguredMapping(previewDir)` 在目录无显式映射时返回项目/全局继承值 | 262 实测一次（沙盒里删掉 `sqldialects.xml` 的 preview 行 → 读该方法） | 若只返回显式值，则「继承」策略改为「不写映射、按平台默认」并在 UI 明示未判定 |
-| **P-5** | 清掉插件自己写的目录映射后，平台会回到继承语义（不会缓存旧语言） | 沙盒里 `setMapping(dir, null)` 后观察 `LanguageSubstitutors` 是否重解析 | 若不会回退，则改为「显式重写为目标方言」，不做清除 |
+| **P-4** | ~~`getConfiguredMapping(previewDir)` 返回「项目/全局」继承值~~ **已证伪一半（实现级）**：`getConfiguredMapping` = pusher 持久值 → 目录/父目录显式映射 → **项目级（映射表 `null` 键，且仅当文件在内容根内）**；**不含全局**——全局由 `getDefaultMapping`（= `getConfiguredDefaultSqlDialect()`，用户设置页「全局 SQL 方言」）另行兜底，全无配置时 = GenericSQL | fernflower 反编译 `PerFileMappingsBase` / `SqlDialectMappings` / `SqlDialectImplUtilCore` / `SqlDialectPusher` 读实现（记录见 §十一） | **已按此修正**：`inheritedLanguageId` 就是「项目级（`getConfiguredMapping` 读项目根）→ 全局（`getConfiguredDefaultSqlDialect`）」，与平台语义一致，不需改策略 |
+| **P-5** | 清掉插件自己写的目录映射后，平台会回到继承语义（不会缓存旧语言） | **已证（实现级）**：`setMapping(file, null)` → `myMappings.remove(file)` → `handleMappingChange`（清 pusher 持久值 + `pushAll` + `reparseFiles([file], includeOpenFiles=false)`）；之后 `getMapping` = configured ?: default | 不需「显式重写」兜底；`clearMapping` 仍保留 EDT 两段式（写映射必须 EDT）；`includeOpenFiles=false` 不影响未打开的预览临时文件 |
 | **P-6** | 老用户 `.idea/sqldialects.xml` 里已有的 `preview → MySQL` 不会继续压住新结论 | 用当前工作树跑一次修复后的构建，观察映射是否被改写（E5 的现场即夹具） | 若不改写：券 03 增加「打开预览时按决策校正映射」的强制路径 |
 
 ---
@@ -143,7 +143,7 @@
 
 1. 新增单一入口（建议 `sql/PreviewDialectResolver.kt`）：`resolve(project, capturedDialect, boundDataSourceDialect)`
    → `DialectDecisionEngine.Decision`，优先级：手动 > captured（券 02）> 绑定/上次使用数据源 > 模块学习 > 项目候选 >
-   **平台继承**（P-4 成立时：previewDir 的 `getConfiguredMapping` 映射到注册名，`Source.IDEA_DIALECT`、`Confidence.FALLBACK`）。
+   **平台继承**（P-4 已实现级证实：项目级 `getConfiguredMapping` → 全局 `getConfiguredDefaultSqlDialect` → GenericSQL；`Source.IDEA_DIALECT`、`Confidence.FALLBACK`）。
 2. `ui/SqlPreviewPanelEditorLifecycle.kt:370-401`：`desiredName == null` 时不再落 `MYSQL_LANGUAGE_ID`——
    有继承值就按继承值映射；没有就**不写映射**（保持平台默认），并在返回的决策里标 fallback。
 3. `ui/SqlPreviewPanelEditorLifecycle.kt:432-437`：`syncPreviewDialectMapping` 改为喂 `resolve(...)` 的结果；
@@ -266,4 +266,10 @@
 - 定向测试两批共 **163 例 0 失败**（首批 127：`DataSourceDialectClassificationTest`、`ProjectDialectEvidenceTest`、`PreviewDialectResolverTest`、`LogEntryPreviewDialectTest`、`LogEntryPreviewRecognizerTest`、`SqlLogHistoryRoundTripTest`、`DialectInferFallbackGuardTest`、`BannedApiSourceScanTest`、`DialectDecisionEngineTest`、`IdeaSqlDialectDecisionTest`、`DialectInferenceTest`、`DialectProbeCacheTest`、`DialectRegistryIdeaContextTest`、`DialectPreviewStatusTextTest`；第二批 36：`HistorySqlLogPanelPreviewTest`、`SqlPreviewServiceProjectSettingsTest`、`SqlPreviewPanelPrewarmConsumeTest`、`DialectStatusRefreshPolicyTest`、`DialectStatusRefreshWiringGuardTest`、`DialectSettingsStatusTextTest`、`DialectPreviewStatusTextTest`）。
 - **反向验证（三个缺陷形态同时注入，一次跑红）**：①预览映射编排加回 `MYSQL_LANGUAGE_ID` → `DialectInferFallbackGuardTest > 预览映射编排不得硬编码 MySQL 兜底` **红**；②`SqlLogPanel` 改 `capturedDialect = null` → 同守卫 `日志识别通道必须把条目方言传下去` **红**；③`ProjectDialectEvidence.syntaxHint` 恒返回 null → `PreviewDialectResolverTest > sql syntax hint is the last resort…` **红**。读数：`14 tests completed, 3 failed`。撤回三处注入后复跑同批：`BUILD SUCCESSFUL`（绿）。
 - 全量门禁：按用户 2026-10-29 指示**未跑**（"最后的全量门禁不用跑"）。
+- **P-4 / P-5 实现级取证（2026-10-29，用户要求"现在做"）**：用 IDE 自带 fernflower（`plugins/java-decompiler/lib/java-decompiler.jar` + JBR 21）反编译平台 jar 的四个类，逐行读实现（不是只读签名）：
+  - `PerFileMappingsBase.getMappingInner`：① 先 `pusherKey.getPersistentValue(file)`（VFS 上上次 push 的结果）→ ② `getMappingForHierarchy`（file → 父目录逐个 `getImmediateMapping`）→ ③ 原文件（`VirtualFileWindow` 委托）同样走 ② → ④ `getNotInHierarchy`：**只有文件在内容根内**（`ProjectFileIndex.isInContent`）才返回映射表 `null` 键（项目级），否则 null。
+  - `PerFileMappingsBase.setMapping(file, null)`：`myMappings.remove(file)` → `handleMappingChange([file], [file], false)`：清 `SQL_DIALECT_KEY` 持久值 → `PushedFilePropertiesUpdater.pushAll(SqlDialectPusher)` → `PsiDocumentManager.reparseFiles([file], includeOpenFiles=false)`。
+  - `SqlDialectMappings.getMapping` = `super.getMapping` = configured ?: `getDefaultMapping`；`getDefaultMapping` = `getDefaultSqlDialect()`，而 `SqlDialectImplUtilCore.getDefaultSqlDialect()` = `getConfiguredDefaultSqlDialect() ?: SqlDialects.getGenericDialect()`；`getConfiguredDefaultSqlDialect()` 读 `PropertiesComponent "DBE.Default.Dialect"`（设置页「全局 SQL 方言」）。
+  - 结论：**P-4 部分证伪**（`getConfiguredMapping` 不含全局，全局走 `getDefaultMapping`）但**继承链成立**；我们的 `inheritedLanguageId` 恰好是「项目级 `getConfiguredMapping` → 全局 `getConfiguredDefaultSqlDialect`」，无需改策略。**P-5 成立**（清除即回到继承并触发重解析）。
+  - 残留（只有真机能答）：`.idea/sql-visualizer/preview` 是否处于内容根内（决定项目级对该文件是否生效，还是直接落到全局）；预览目录上是否残留旧的 pusher 值（`clearMapping` 会一并清掉）。
 - 真机验收（cyzc-platform）待发版验证：日志条目预览头部应显示「方言: PostgreSQL（当前运行条目）」，`signal` 不再标红，`.idea/sqldialects.xml` 的 preview 映射应被改写为 PostgreSQL 或清除。
