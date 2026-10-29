@@ -396,6 +396,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
     internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
     internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
+    /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
+    internal val mapperNavYieldCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"))
 
     /**
      * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 `com.corp.shared.util.`）。
@@ -1274,6 +1276,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterGroupJdbcCheck.isSelected != s.gutterGroupJdbc ||
             gutterGroupInlineFallbackCheck.isSelected != s.gutterGroupInlineFallback ||
             gutterGroupOtherCheck.isSelected != s.gutterGroupOther
+            // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
+            || mapperNavYieldCheck.isSelected != s.mapperNavYieldToCodeHelper
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
@@ -1416,6 +1420,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.gutterGroupJdbc = gutterGroupJdbcCheck.isSelected
             s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
             s.gutterGroupOther = gutterGroupOtherCheck.isSelected
+            s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
@@ -1529,6 +1534,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         gutterGroupJdbcCheck.isSelected = s.gutterGroupJdbc
         gutterGroupInlineFallbackCheck.isSelected = s.gutterGroupInlineFallback
         gutterGroupOtherCheck.isSelected = s.gutterGroupOther
+        mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled

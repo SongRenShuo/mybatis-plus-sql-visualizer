@@ -634,6 +634,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", gutterGroupJdbcCheck)
             addRow(p, g, "", gutterGroupInlineFallbackCheck)
             addRow(p, g, "", gutterGroupOtherCheck)
+            // T-MapperNavCoexistYield：共存让位开关（默认勾选＝MyBatisCodeHelperPro 启用时让出跳转图标）
+            addRow(p, g, "", mapperNavYieldCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.mapperNavYield")
+                toolTipText = MpSqlVisualizerBundle.message("settings.mapperNavYield.tip")
+            })
             addRow(p, g, "", xmlInlineSqlCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                 toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")

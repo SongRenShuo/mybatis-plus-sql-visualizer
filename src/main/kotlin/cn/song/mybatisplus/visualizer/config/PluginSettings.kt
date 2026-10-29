@@ -113,6 +113,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var gutterGroupInlineFallback: Boolean = true,
 
         /**
+         * T-MapperNavCoexistYield（默认开＝让位）：MyBatisCodeHelperPro 处于启用状态时，本插件的
+         * Mapper 双向跳转 gutter 图标（XML 语句行 ↔ Mapper 接口方法行）不显示，避免与对方的跳转
+         * 箭头叠在同一行。关闭后即使对方在位也强制显示本插件图标。
+         *
+         * 只影响 Mapper 双向跳转这一件事；SQL 预览等其余 gutter 与对方不撞车，不受此开关影响。
+         * 竞品探测见 [cn.song.mybatisplus.visualizer.ui.gutter.MyBatisCompetitorGate]。
+         */
+        var mapperNavYieldToCodeHelper: Boolean = true,
+
+        /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
          * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
          * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
