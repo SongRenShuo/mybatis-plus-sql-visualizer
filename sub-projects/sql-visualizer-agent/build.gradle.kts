@@ -119,6 +119,8 @@ dependencies {
     testImplementation("com.huaweicloud.gaussdb:gaussdbjdbc:506.0.0.b058-jdk7")
     // 华为 openGauss 品牌驱动（包 com.huawei.opengauss.jdbc.jdbc.Pg*）
     testImplementation("com.huaweicloud.gaussdb:opengaussjdbc:506.0.T35")
+    // 社区 openGauss 2.x/3.x（包 org.opengauss.jdbc.Pg*；5.x/7.x 已整体回到 org.postgresql.*）
+    testImplementation("org.opengauss:opengauss-jdbc:3.0.0")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，

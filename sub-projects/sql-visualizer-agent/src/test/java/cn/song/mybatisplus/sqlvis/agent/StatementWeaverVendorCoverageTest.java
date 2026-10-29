@@ -77,6 +77,10 @@ public class StatementWeaverVendorCoverageTest {
             // 华为 openGauss 品牌驱动（opengaussjdbc 506.0.T35）——与商用版同形，独立包名
             "com.huawei.opengauss.jdbc.jdbc.PgStatement",
             "com.huawei.opengauss.jdbc.jdbc.PgPreparedStatement",
+            // 社区 openGauss 2.x/3.x（opengauss-jdbc 3.0.0，包组织与 pgjdbc 分家；5.x/7.x 用
+            // org.postgresql.*，已在上面那组）
+            "org.opengauss.jdbc.PgStatement",
+            "org.opengauss.jdbc.PgPreparedStatement",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -92,6 +96,8 @@ public class StatementWeaverVendorCoverageTest {
             // 华为 GaussDB 商用 / openGauss 品牌连接（prepare 面）
             "com.huawei.gaussdb.jdbc.jdbc.PgConnection",
             "com.huawei.opengauss.jdbc.jdbc.PgConnection",
+            // 社区 openGauss 2.x/3.x 连接
+            "org.opengauss.jdbc.PgConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -144,6 +150,15 @@ public class StatementWeaverVendorCoverageTest {
     /**
      * 已知不覆盖的厂商（连接面已登记，但语句面/prepare 面未登记）——显式认领 + 原因，缺项即红。
      * 新增厂商只有两条路：补齐三面，或在此登记不覆盖原因。
+     *
+     * <p><b>openGauss 谱系事实（T-GaussCapture 实测，旧表述曾写反）。</b>社区驱动
+     * {@code org.opengauss:opengauss-jdbc} 的 2.x/3.x 在包 {@code org.opengauss.*}
+     * （3.0.0 内 {@code org/postgresql} 条目数为 0），5.x/7.x 才整体回到 {@code org.postgresql.*}
+     * （7.0.0 的 {@code META-INF/services/java.sql.Driver} 声明 {@code org.postgresql.Driver}，
+     * {@code org/opengauss} 条目数为 0）。因此 {@code org.opengauss.} **不**列入本表：
+     * 3.0.0 的 {@code PgStatement/PgPreparedStatement/PgConnection} 已登记并通过字节层校验，
+     * 5.x/7.x 由 {@code org.postgresql.} 覆盖。华为商用 {@code com.huawei.gaussdb.*} 与
+     * 华为 openGauss 品牌 {@code com.huawei.opengauss.*} 同为独立重定位实现，已各自登记。
      */
     private static final java.util.Map<String, String> VENDOR_NOT_COVERED =
             new java.util.LinkedHashMap<String, String>();
@@ -151,8 +166,6 @@ public class StatementWeaverVendorCoverageTest {
     static {
         VENDOR_NOT_COVERED.put("org.mariadb.",
                 "MariaDB 未纳入测试矩阵（无本机 jar / 未实证语句面形态）；如需支持请补语句面/prepare 面");
-        VENDOR_NOT_COVERED.put("org.opengauss.",
-                "openGauss 2.x 走 PG 驱动（已由 org.postgresql. 覆盖）；3.x 自带驱动未实证");
         VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("org.sqlite.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");

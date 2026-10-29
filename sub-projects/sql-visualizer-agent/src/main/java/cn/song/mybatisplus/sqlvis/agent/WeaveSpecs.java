@@ -75,6 +75,12 @@ final class WeaveSpecs {
                 // 华为 openGauss 品牌驱动（opengaussjdbc 506.0.T35）：与商用版同形同构，独立包名
                 "com.huawei.opengauss.jdbc.jdbc.PgStatement",
                 "com.huawei.opengauss.jdbc.jdbc.PgPreparedStatement",
+                // 社区 openGauss 2.x/3.x（org.opengauss:opengauss-jdbc）：这代整体重定位到
+                // org.opengauss.*，Class.forName("org.postgresql.Driver") 解析不到——此前连接面
+                // 早已登记 org.opengauss.Driver，语句面却是空的，用户侧表现为「看着支持、一条不出」。
+                // 3.0.0 真实字节织入 + JVM 校验通过；5.x/7.x 已整体回到 org.postgresql.*，不在此列
+                "org.opengauss.jdbc.PgStatement",
+                "org.opengauss.jdbc.PgPreparedStatement",
                 // Oracle thin（OracleStatement 带参执行族 + 批处理；PS/Callable 各自覆盖无参 execute 族）
                 "oracle.jdbc.driver.OracleStatement",
                 "oracle.jdbc.driver.OraclePreparedStatement",
@@ -112,6 +118,8 @@ final class WeaveSpecs {
                 // getURL() 实测 public，UrlResolver 的反射兜底可用）
                 "com.huawei.gaussdb.jdbc.jdbc.PgConnection",
                 "com.huawei.opengauss.jdbc.jdbc.PgConnection",
+                // 社区 openGauss 2.x/3.x 连接（5.x/7.x 走上面的 org.postgresql.PgConnection）
+                "org.opengauss.jdbc.PgConnection",
                 // Oracle 连接基类（T4CConnection 继承其 prepareStatement/prepareCall，包私有亦可 retransform）
                 "oracle.jdbc.driver.PhysicalConnection",
                 "com.microsoft.sqlserver.jdbc.SQLServerConnection",
