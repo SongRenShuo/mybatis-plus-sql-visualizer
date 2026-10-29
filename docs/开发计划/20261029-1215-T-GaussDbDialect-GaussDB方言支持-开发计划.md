@@ -371,3 +371,29 @@
 **`availableValues` 运行期全量（35 个）**：Redshift, CassandraQL, Derby, HiveQL, SparkSQL, AZURE, BigQuery, ClickHouse, Cockroach, CouchbaseQuery, **DM**, Dynamo, Exasol, **GaussDB**, GenericSQL, Greenplum, H2, HSQLDB, DB2, DB2_IS, DB2_ZOS, MariaDB, TSQL, MongoDB, MySQL, Oracle, NetSuite, OracleSqlPlus, PostgreSQL, Redis, SQL92, SQLite, Snowflake, Sybase, Vertica。
 
 > 这条读数的价值在于它同时否掉两种假象：`DM` 在场证明插件的 `database-optional.xml` **确实被加载了**（不是空跑），`GaussDB` 在场证明第二条注册生效；`openGauss` 如期不在（本轮只注册 GaussDB，出现即为重复注册）。默认 `test` 桶按既有铁律排除该类（其 classpath 无 Database 插件，加载即 `NoClassDefFoundError`）。
+
+### 7.6 券 02 / 券 03 的其余子项（同日第二轮补齐）
+
+复核时另外发现两处「计划写了但只做到一半」的子项，一并收口。
+
+**券 02 第 2 项后半**：「在 `dialect.capability.reason.deleteLimit` 的既有文案路径上确认用户看得到说明」。
+此前只改了 KDoc，没确认用户侧是否真能看到。查证结论：呈现路径是**能力矩阵**（预览 meta 悬停 +
+诊断报告的方言能力段），**不是** `gapsFor` 的执行前确认弹窗——判无后渲染产物里本来就没有 LIMIT
+尾段，`hasDeleteLimitTail` 恒 false，缺口永远报不出来。已在 `DialectCapabilitiesTest` 补用例，
+断言打在实际渲染文案上（`summaryText` 含 `dialect.capability.reason.deleteLimit` 的中文值），
+而不是只断言 `reasonKey` 常量（后者只证明「指向了某个键」）。
+
+**券 03 第 3 项**：「反向验证：把多行源改回单行源 → 新用例必红」。
+本轮落地的用例是「只产 PG 形态不产逗号形态」，它不依赖探针数据源，原配方不适用。改用等价反向
+操作并取证：把 `OpenGaussDialect.renderLimit` 临时改成 MySQL 逗号形态 → **3 例红**
+（`opengauss_分页_只产PG形态不产逗号形态`、`opengauss_分页_PG形态`、`gaussdb_形态与openGauss逐项一致`），
+恢复后全绿。第三例红说明「形态对拍」守卫确实能抓到两方言漂移，不是摆设。
+
+**读数**
+
+| 类 | 读数 |
+|---|---|
+| `DialectCapabilitiesTest` | 10 / 0 / 0（原 9 + 新增 1） |
+| `DialectXcFamilyTest` | 15 / 0 / 0 |
+| `DialectDocGoldenTest` | 13 / 0 / 0 |
+| 反向验证（券 03） | `15 tests completed, 3 failed` → 恢复后 `BUILD SUCCESSFUL` |

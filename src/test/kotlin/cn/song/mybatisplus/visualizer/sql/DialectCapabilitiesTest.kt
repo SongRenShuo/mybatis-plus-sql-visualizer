@@ -135,4 +135,34 @@ class DialectCapabilitiesTest {
         // 支持项标 supported，不支持项出原因（非 supported）
         assertTrue(text, text.contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("dialect.capability.supported")))
     }
+
+    /**
+     * T-GaussDbDialect 券 02 第 2 项：`DELETE ... LIMIT` 判无的**用户可见说明**必须真的呈现得出来。
+     *
+     * 判无的理由已从「PG 语义静默错解」改成「语法接受、语义未验证」，但改 KDoc 只是内部留痕；
+     * 用户侧要能看到「本方言不支持 `DELETE ... LIMIT n`」。呈现路径是**能力矩阵**
+     * （预览 meta 悬停 + 诊断报告的方言能力段）——**不是** `gapsFor` 的执行前确认弹窗：
+     * 判无后渲染产物里本来就没有 LIMIT 尾段，`hasDeleteLimitTail` 恒 false，缺口永远报不出来，
+     * 所以矩阵这一路是唯一的说明出口。
+     *
+     * 断言刻意打在 `summaryText` 的实际文案上，而不是只断言 `reasonKey` 常量——后者只能证明
+     * 「指向了某个键」，证不了「键有值、且真的渲染出来了」。
+     */
+    @Test
+    fun `gauss族_DELETE_LIMIT判无在能力矩阵里给得出用户可见说明`() {
+        val reason = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+            .message("dialect.capability.reason.deleteLimit")
+        assertTrue("bundle 文案不应为空：$reason", reason.isNotBlank())
+        listOf(OpenGaussDialect, GaussDbDialect).forEach { dialect ->
+            val row = DialectCapabilities.matrix(dialect)
+                .single { it.capability == DialectCapabilities.Capability.DELETE_LIMIT }
+            assertFalse("${dialect.name} 的 DELETE LIMIT 应如实判无", row.supported)
+            assertEquals("dialect.capability.reason.deleteLimit", row.reasonKey)
+            val text = DialectCapabilities.summaryText(dialect)
+            assertTrue(
+                "${dialect.name} 的能力矩阵应出现用户可见的 DELETE LIMIT 原因，实际：$text",
+                text.contains(reason),
+            )
+        }
+    }
 }
