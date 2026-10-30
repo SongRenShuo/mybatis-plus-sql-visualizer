@@ -426,5 +426,11 @@
 | 全量 `testShards` | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
 | `verifyGate` | **3/3 Compatible**（IU-243.28141.41 / 253.33514.17 / 262.10968.63），无 unresolved class / 无 incompatible |
 
+**4a 真机闭环（本轮补测，2026-10-31）**：新增 `mcp/DmExplainRealEngineTest`（外部实例模式，与 `DialectDockerVerificationTest` 同款 `-Dmpvs.dialect.*` 协议，缺省跳过），把「插件渲染出来的」达梦计划语句交给真 DM8 执行，三条断言一起看：①渲染产物是 `EXPLAIN FOR` 且档位 TABLE；②真机执行返回 **19 列**且含 `OPERATION`/`TAB_NAME`/`COST`/`ROW_NUMS`、行集非空、`McpExplainFormatter.format` 正文非空；③反向钉子——裸 `EXPLAIN` 在该引擎上**列数为 0**（若形态变了这条会独立变红并说明根因结论需重评）。读数：指向 DBX 在册 DM8 `114.66.55.245:20096` 实跑 **3/3 PASS、0 跳过**；不带系统属性时 2 跳过 1 通过（不污染默认门禁）。⇒ 4a 的「计划正文非空」已在**真机 + 插件渲染产物**层面闭环，剩下的只是 IDE remote JDBC 传输层（平台 `McpDbExecutor`，非本插件代码）。
+
+**两个拍板项补立独立册**：按 §三 约定「拍板后按惯例出独立立项册」，本轮拍板即实施，已于事后补立 `20261031-0130-T-TemplateHook-…` 与 `20261031-0130-T-BannedApiCheck-…` 两册（含拍板落点、红线处置依据、方案券与完整版不做理由），并登记进 `docs/索引/开发计划.md`。
+
+**文档站同步（2026-10-31）**：兄弟仓 `mybatis-plus-sql-visualizer-docs` 提交 `289a5f1`（**未 push**，按惯例随批次推送）——`features/mcp` 新增「错误码」节（12 个码，含 `NOT_A_SQL_DATASOURCE` 与 `EXTERNAL_RENDER_FAILED`）＋ `sqlv_explain` 补非关系型数据源早拒与达梦 `EXPLAIN FOR` ＋ `sqlv_render_sql` 补 `paramsJson`／自研模板；`features/wrapper-preview` 的方言表把达梦订正为 `EXPLAIN FOR`（19 列计划表）并补「裸 EXPLAIN 不返回结果集」的实测说明，跨次对比把达梦并入表格族，跨会话保留计划补 TEXT 档现在也落盘的隐私提示；`guide/configuration` 新增「禁用 API」与「外部 SQL 模板」两节。中英双语同步，`node scripts/check-en-parity.mjs` 与 `vitepress build` 均通过；插件侧 `DialectDocTableGuardTest` 对改后的表仍绿。
+
 **仍未闭环（发版前需补）**：①`runIde` 真机走查——设置页两新页观感、编辑器标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制、外部模板命令真机联调；②DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道）——本轮达梦证据是裸 JDBC 读数 + 19 列夹具，不等于 UI 链已验；③4c DM 函数矩阵落点仍待拍板（证据已备）。
 
