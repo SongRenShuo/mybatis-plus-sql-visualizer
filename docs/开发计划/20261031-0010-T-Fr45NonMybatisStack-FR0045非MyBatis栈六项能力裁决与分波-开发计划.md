@@ -82,7 +82,7 @@
 **(c) DM 实测方言矩阵内置——无现成落点，挂拍板：**
 
 - 全仓**没有「方言×函数」能力表**：IFNULL/DATE_FORMAT/NOW/`||`/WM_CONCAT/LISTAGG/GROUP_CONCAT 不存在于任何方言知识表（`DM_RESERVED` 保留字表在 SqlKeywords.kt:216 起，`ifnull` 已在；PerfRulesBatch2.kt:422 的聚合名单是性能规则用，非方言能力）。DmDialect（Dialect.kt:724）已覆盖 MySQL 式 LIMIT、双引号引用（对应反引号 -2007）、identity 包装、DM_RESERVED。
-- 用户实测矩阵（LIMIT/LIMIT 0,1/ROWNUM/OFFSET..FETCH FIRST/IFNULL/DATE_FORMAT/NOW()/`||`/WM_CONCAT/LISTAGG 支持；GROUP_CONCAT 报 -2207、反引号报 -2007 不支持）是有价值的资产，但「内置成规则表」需要先拍板落点（证据化代码表＋执行前提示 vs 文档站方言页），且用户读数未经我方真机复验（P-1 顺带可验 GROUP_CONCAT/反引号两条否定项）。**挂拍板，不进第一波主修**。
+- 用户实测矩阵（LIMIT/LIMIT 0,1/ROWNUM/OFFSET..FETCH FIRST/IFNULL/DATE_FORMAT/NOW()/`||`/WM_CONCAT/LISTAGG 支持；GROUP_CONCAT 报 -2207、反引号报 -2007 不支持）**已由我方真机逐条复验（2026-10-31，P-1）且逐字吻合**，资产可入册；但「内置成规则表」仍需拍板落点（证据化代码表＋执行前提示 vs 文档站方言页）。**挂拍板，不进第一波主修；证据已备，拍板后可即落**。
 
 ### 2.5 第 5 项 调用点回溯 ——【已交付，用户版本卡位 + DM 织入缺口已被兜底件补上】
 
@@ -154,7 +154,11 @@
 
 ## 四、待验证前提（实施前先证伪，不成立就改方案）
 
-- **P-1 DM8 裸 JDBC EXPLAIN 结果集形态**：决定 4a 修法走 channelNote 还是 postPlanQuery。载体＝DBX 在册 DM8 实例 `114.66.55.245:20096`（DM8，端口 5236，凭据见仓根 `.local/test-databases.md`，**不抄进文档/代码**）；备选＝`database-lab/load-dm8.ps1` docker 脚手架。若 MCP 通道读数与 DBX 通道（#NSET2 有正文）矛盾，以 MCP 通道为准（那是用户报障链路）。
+- **P-1 DM8 裸 JDBC EXPLAIN 结果集形态**：**已实测（2026-10-31 主控亲测；DBX 在册 DM8 `114.66.55.245:20096` + 仓内驱动 `DmJdbcDriver18-8.1.3.140`，服务端 DM DBMS 8.1.3.12）**，读数**推翻计划原假设**：
+  - **`EXPLAIN <sql>` 在 DM8 上不返回结果集**——`executeQuery` 得 0 列 0 行；`execute()` 得 `isResultSet=false, updateCount=0`，再 `getMoreResults()` 即 `-1`（无第二结果集）。⇒「计划正文为空」的真因是**模板语句用错**，与多结果集/宽容通道无关，加 `channelNote` 也救不回来。
+  - **`EXPLAIN FOR <sql>` 正确返回 19 列结构化计划表**：`PLAN_ID, PLAN_NAME, CREATE_TIME, LEVEL_ID, OPERATION, TAB_NAME, IDX_NAME, SCAN_TYPE, SCAN_RANGE, ROW_NUMS, BYTES, COST, CPU_COST, IO_COST, FILTER, JOIN_COND, ADVICE_INFO, PSTART, PSTOP`；`SELECT` 与 `DELETE ... WHERE 1=0` 均 4 行（OPERATION=DELETE、TAB_NAME=ARTICLE、COST=0）。⇒ 修法＝DM 条目改 `EXPLAIN FOR {sql}` 且**档位 TEXT→TABLE**（TABLE 档顺带解锁历史持久化：`ExplainPlanSnapshot.persistable` 认 TABLE/JSON；`ExplainPlanDiff.diffTable` 按小写列名取 `cost` 命中 DM 的 `COST`，`ROW_NUMS` 不命中但优雅降级）。
+  - **4c 矩阵真机读数顺带取到**：正向全部成立——`LISTAGG`/`WM_CONCAT`/`IFNULL`/`DATE_FORMAT`/`NOW()`/`LIMIT`/`LIMIT 0,1`/`ROWNUM`/`||`；负向与用户实测逐字一致——`GROUP_CONCAT` → **-2207**「无法解析的成员访问表达式」、反引号 → **-2007**「语法分析出错」；表不存在 → -2106。4c 落点拍板未定，证据已备。
+  - 备选载体（未用）：`database-lab/load-dm8.ps1` docker 脚手架。
 - **P-2 internal 可见性**：`DataSourceDialectClassification.isNonSqlUrl` 与 `McpDialectDetector` 同在 src/main 一个 source set，Kotlin internal 模块内可见——编译期即证；若实际跨模块（子项目拆分）则把 NON_SQL_KEYS/isNonSqlUrl 下沉到 `sql/DialectInference.kt` 共享位。
 - **P-3 用户 v2026.10.28 的 render_logs 场景**：该版本已含 JdbcTemplateLogParser，用户「主打 MyBatis 配对」的表述与代码不符——按「0 条/不对号」分诊口诀（EP 过滤器→桥→解析器开关 logJdbcEnabled→去重窗→屏蔽规则）待用户回报复现步骤；不排除用户控制台日志格式被自研日志框架二次包装（logback pattern 带前缀）——`extractAfterKeyword` 与前缀容忍性实施时用真实样本核。
 - **P-4 第 2 项拍板未决前不动工**（含 plugin.xml:412 红线表述修订归属）。
