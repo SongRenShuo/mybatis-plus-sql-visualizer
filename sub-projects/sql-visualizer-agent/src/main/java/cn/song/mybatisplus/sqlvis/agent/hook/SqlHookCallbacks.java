@@ -122,7 +122,12 @@ public final class SqlHookCallbacks {
             if (stmt == null || AgentState.isDisabled() || WeaveGate.isProxyActive()) {
                 return 0L;
             }
-            return System.nanoTime();
+            final long token = System.nanoTime();
+            // T-CaptureCatchAll 券 07：登记本线程进入一个已织 execute 帧（与 onExecuteExit 的
+            // NestGate.exit() 成对）。只有 token != 0 的帧才进栈——出口在 token==0 时直返，
+            // 若入口无条件自增就会漏减，把线程深度永久抬高。
+            NestGate.enter();
+            return token;
         } catch (Throwable t) {
             return 0L;
         }
@@ -141,6 +146,12 @@ public final class SqlHookCallbacks {
                                      Object result, Throwable failure) {
         try {
             if (token == 0L || stmt == null) {
+                return;
+            }
+            // T-CaptureCatchAll 券 07：出栈必须排在一切早退之前——本帧只要入过栈就必须出栈，
+            // 否则一次「取不到 SQL 的盲区语句」就会把线程深度永久抬高，后续真实语句全被误判为
+            // 外层而抑制。判定 false = 本帧外层已由内层产事件（Hikari/MyBatis 包装层形态）。
+            if (!NestGate.exit()) {
                 return;
             }
             String sql = sqlParam;
@@ -247,22 +258,38 @@ public final class SqlHookCallbacks {
 
     /**
      * 归属链（S4）：stmt.getConnection() 反射 → 驱动 getURL → 最近 connect URL 兜底。
-     * F75（T-PerfSweep23）：getConnection 的 Method 按语句类缓存（CHM，对齐同分支
-     * UrlResolver.GET_URL_METHODS 同款）——原每条 SQL 一次 getMethod 反射查找，
-     * 池化高并发下归属链每 SQL 重复付；解析失败不缓存（外层 catch 落兜底 URL）。
+     * F75（T-PerfSweep23）：getConnection 的 Method 按语句类缓存——原每条 SQL 一次 getMethod
+     * 反射查找，池化高并发下归属链每 SQL 重复付；解析失败不缓存（外层 catch 落兜底 URL）。
+     *
+     * <p><b>T-CaptureCatchAll 券 04：强引用缓存改 {@link ClassValue}。</b>原实现是
+     * {@code ConcurrentHashMap<Class<?>, Method>}——静态强引用键 + 值（{@code Method} 又反向强引用
+     * {@code declaringClass}），热部署/反复 reload 的容器里会**钉住旧 classloader**，整个应用上下文
+     * 都回收不掉。{@code ClassValue} 的值挂在 Class 自身的 ClassValueMap 上，Class 不可达时值随之
+     * 回收，天然没有「静态表钉住类」的泄漏面；热部署后同名新类的缓存也是全新的（不会拿到旧 loader
+     * 的 Method 去 invoke 新对象，那是 {@code IllegalArgumentException: object is not an instance of
+     * declaring class} 的来源）。命中/未命中都是 O(1)，与 CHM 同量级。
      */
-    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, java.lang.reflect.Method> GET_CONNECTION_METHODS =
-            new java.util.concurrent.ConcurrentHashMap<Class<?>, java.lang.reflect.Method>();
+    private static final Object METHOD_ABSENT = new Object();
+
+    private static final ClassValue<Object> GET_CONNECTION_METHODS = new ClassValue<Object>() {
+        @Override
+        protected Object computeValue(Class<?> type) {
+            try {
+                return type.getMethod("getConnection");
+            } catch (Throwable t) {
+                // 未命中同样缓存：宿主每条语句都重试一次反射查找是纯浪费
+                return METHOD_ABSENT;
+            }
+        }
+    };
 
     private static String resolveUrl(Object stmt) {
         try {
-            final Class<?> clazz = stmt.getClass();
-            java.lang.reflect.Method m = GET_CONNECTION_METHODS.get(clazz);
-            if (m == null) {
-                m = clazz.getMethod("getConnection");
-                GET_CONNECTION_METHODS.put(clazz, m);
+            final Object cached = GET_CONNECTION_METHODS.get(stmt.getClass());
+            if (cached == METHOD_ABSENT) {
+                return UrlResolver.lastConnectUrl();
             }
-            final Object conn = m.invoke(stmt);
+            final Object conn = ((java.lang.reflect.Method) cached).invoke(stmt);
             final String u = UrlResolver.resolve(conn);
             return u != null ? u : UrlResolver.lastConnectUrl();
         } catch (Throwable t) {
