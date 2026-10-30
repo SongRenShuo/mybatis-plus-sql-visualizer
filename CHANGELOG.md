@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **增强捕获 agent 的宿主控制台输出改为默认静默（用户令「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）**：原先每次挂载打一行 `attach retransform: matched/wove/...`、premain 打候选类数、每轮补挂各打一行、首条织入事件再打一行，日常噪音大于信息量。现分两级：诊断/进度行默认不打，仅 `-javaagent:…=logLevel=debug`（含 `verbose` / `trace`）时输出；真实降级与熔断必报，与级别无关——预算耗尽、kill switch、`getAllLoadedClasses` 失败、注册盲区（仅一次）、`PORT_ABANDONED`、install degraded、驱动名单预载失败。attach 汇总行额外保留「有问题就打」：`failed>0` 或 `predicateFailed>0` 时照常输出，全零静默（「本次 attach 命中多少」由 IDE 侧心跳的 `AgentAttachStats` 诊断行承载，不必占宿主控制台）。采集与上报链路零变化，静音只作用于宿主 stderr 诊断行
+
 ### Fixed
 - **方言为 GaussDB / 达梦 / 瀚高 / 海量时预览恒降级、表列补全不可用（T-PreviewPsiDialect，用户真机报障）**：预览顶部常驻黄色横幅「预览以简化模式打开——临时文件解析失败；表/列补全暂不可用」，10 次预览 10 次降级。真机日志实证根因是 `ClassCastException: SqlLanguage cannot be cast to SqlLanguageDialect`（当天 9 次，3 次打成 SEVERE 且点名本插件），栈落在 `SqlParserDefinitionBase.createFile:90` ← `SingleRootFileViewProvider.getPsiInner` ← `FileManagerImpl.findFile` ← 预览预热的 `awaitPreviewPsiLanguage`。**成因**：四个自注册方言（DM / GaussDB / HighGo / Vastbase）此前只注册了 `<sql.dialect>`，没有为该语言注册 `<lang.parserDefinition>`——平台查 ParserDefinition 时沿语言链上溯，落到基语言 `SQL` 的那份（其 file node type 绑的是基类 `SqlLanguage`），`createFile` 里的 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 强转必然失败，PSI 建不出来，`PsiManager.findFile` 返回 null，预热按 `PSI_UNAVAILABLE` 降级。平台内置方言 SQL / GenericSQL / SQL92 全是成对注册的，我们这四对少了后一半。**修复**：①新增 `sql/SqlFamilyParserDefinitions.kt`，为四个方言各补一个 ParserDefinition（file node type 绑本方言语言，lexer / parser / elementFactory 委托 `Sql92ParserDefinition`，与方言 `createTokensHelper` 的委托口径一致），注册面在 `database-optional.xml` 成对补齐；②`mapPreviewDialectBeforePsi` 增加映射前探测——目标语言的 ParserDefinition 若不在 SQL 方言族，这次就不映射（补全退 GenericSQL），不再拖垮整条预览；③`PsiManager.findFile` 两处调用包 `runCatching`，平台契约异常降为一条带栈 WARN，不再以 SEVERE 记到插件头上。**守卫**：`SqlDialectParserDefinitionPairingGuardTest` 静态校验「每个 `<sql.dialect>` 必有同名 `lang.parserDefinition`」，`PlatformSqlDialectRegistrationTest` 新增 DB 通道用例真建 PSI（摘掉任一条注册即红）
 
