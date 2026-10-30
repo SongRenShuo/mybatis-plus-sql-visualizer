@@ -29,31 +29,42 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
     val invokedTaskNamesForLane = gradle.startParameter.taskNames
     val isGateOrchestration = invokedTaskNamesForLane.contains("releaseGate")
     val laneLimitDefault = if (isGateOrchestration) 3 else 2
-    // T-ReleasePerf10 券01：测试链档位从静态缺省改内存水位自适应——同一机制两头收：
-    // 内存宽裕自动提档提速（T9 读数：缺省 2 估 8.5~10min vs 限流 5 实测 5m02s），紧张自动收缩防
-    // native OOM（R15~R24 形态）。只在 testShards/releaseGate 形态采样（其他构建零开销）；
-    // 探针失败/不可用时回落静态缺省（fail-open）。优先级：-PtestShardConcurrency 显式 >
-    // 自适应 > 静态缺省；-PtestLaneAdaptive=off 一词保险丝回落 T9 静态行为。
+    // T-ReleasePerf10：并发度观测计数器跨构建驻留（daemon 复用 JVM），配置期清零
+    MpvLaneMeter.reset()
+    // T-ReleasePerf10 券01：测试链档位从静态缺省改内存水位自适应——内存宽裕时自动提档提速
+    // （T9 读数：缺省 2 估 8.5~10min vs 限流 5 实测 5m02s），水位紧张时由券02 的快速失败闸门
+    // 拒绝起跑（不靠压档位续命）。只在 testShards/releaseGate 形态采样（其他构建零开销）；
+    // 探针失败/不可用时回落静态缺省（fail-open）。
+    // 优先级：-PtestShardConcurrency 显式 > max(自适应, 静态缺省)；-PtestLaneAdaptive=off 回落静态。
     val isShardedRun = isGateOrchestration || invokedTaskNamesForLane.contains("testShards")
     val adaptiveOff = providers.gradleProperty("testLaneAdaptive").orNull == "off"
-    // releaseGate 编排内并发面还有 verifyGate+verifyMarketplace 两 verifier JVM（~5.1GB commit），
-    // 定档前预留（mpv.watermark.MemoryWatermarkProbe.pickLane 档位表与依据见该类注释）
-    val reserveGb = if (isGateOrchestration) 6.0 else 0.0
+    // releaseGate 编排内并发面还有 verifyGate+verifyMarketplace 两 verifier JVM（market 常驻
+    // 2.8GB / gate 2.3GB，错峰下不同时在峰值）——定档前预留 4GB 覆盖叠加段
+    // （档位表与物理模型见 mpv.watermark.MemoryWatermarkProbe.pickLane 注释）
+    val reserveGb = if (isGateOrchestration) 4.0 else 0.0
+    // -PwatermarkOverrideFreeGb=<x>：确定性验证用（把探针读数钉成给定值，只影响档位计算，
+    // 不绕过闸门）——档位表的验证不能依赖「此刻机器恰好多少空闲」（并行会话下 free 3~14GB 波动）。
+    val overrideFreeGb = providers.gradleProperty("watermarkOverrideFreeGb").orNull?.toDoubleOrNull()
     val adaptiveLane: Int? = if (isShardedRun && !adaptiveOff) {
-        mpv.watermark.MemoryWatermarkProbe.pickLane(
-            logger,
-            reserveGb,
-            if (isGateOrchestration) "releaseGate" else "testShards",
-        )
+        val context = if (isGateOrchestration) "releaseGate" else "testShards"
+        if (overrideFreeGb != null) {
+            mpv.watermark.MemoryWatermarkProbe.laneFor(overrideFreeGb, reserveGb, "$context/override", logger)
+        } else {
+            mpv.watermark.MemoryWatermarkProbe.pickLane(logger, reserveGb, context)
+        }
     } else {
         null
     }
     val explicitLane = providers.gradleProperty("testShardConcurrency").orNull
-    val laneLimit = explicitLane?.toIntOrNull()?.coerceIn(1, 8) ?: adaptiveLane ?: laneLimitDefault
+    // 自适应只**抬高**、不压低：静态缺省（testShards 2 / releaseGate 3）是 T9 已 A/B 的已知安全档；
+    // 低水位场景由券02 的快速失败闸门负责（free < floor 直接拒绝起跑），不靠把档位压到 1 续命
+    // （压到 1 = 5 片全串行，实测 16m25s，比快速失败重跑更亏）。
+    val laneLimit = explicitLane?.toIntOrNull()?.coerceIn(1, 8)
+        ?: maxOf(adaptiveLane ?: 0, laneLimitDefault)
     logger.lifecycle(
         "mpv-test-lane: maxParallelLimit=$laneLimit " +
-            "(adaptive=${adaptiveLane ?: "n/a"}, staticDefault=$laneLimitDefault, explicit=${explicitLane ?: "none"}; " +
-            "-PtestShardConcurrency overrides > adaptive > static; -PtestLaneAdaptive=off 回落静态)",
+            "(adaptive=${adaptiveLane ?: "n/a"}, floor=$laneLimitDefault, explicit=${explicitLane ?: "none"}; " +
+            "-PtestShardConcurrency > max(adaptive, floor); -PtestLaneAdaptive=off 回落静态)",
     )
     gradle.sharedServices.registerIfAbsent("mpvTestLaneLimiter", MpvTestLaneLimiterService::class.java) {
         // Gradle 9.7 API：BuildServiceSpec.maxParallelUsages = 同时可使用本服务的任务数上限
@@ -864,9 +875,15 @@ intellijPlatformTesting {
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
                         // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
                         // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
-                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
+                        // T-ReleasePerf10：laneActive = 执行期真实并发片数（与档位日志并排判定
+                        // 「档位是否真的变成并发」，见 MpvLaneMeter 注释）。
+                        val laneActive = MpvLaneMeter.enter()
+                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneActive=$laneActive")
                     }
-                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
+                    doLast {
+                        MpvLaneMeter.leave()
+                        logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
+                    }
                 }
             }
         }

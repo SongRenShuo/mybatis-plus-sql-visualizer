@@ -80,22 +80,42 @@ object MemoryWatermarkProbe {
     }
 
     /**
-     * 测试链档位表（券01）：effective = free − reserve（releaseGate 编排内预留两 verifier JVM
-     * ~5.1GB＋余量 → 6GB）。档位依据：T9 实测限流 5 在 free 4.8GB 属危险区幸存（execSum +27%
-     * 争用膨胀）——5 档要求 ≥24GB 余量；每 lane 测试 JVM ~1.5~2GB commit。
+     * 测试链档位表（券01）：effective = free − reserve。
+     *
+     * 物理模型（本轮实测校准，替代初版的 12/18/24 拍脑袋门槛）：
+     *  - 单 lane 测试 JVM 的 commit 实测 **1.4~1.6GB**（`memory-hygiene.ps1` 分类合计 +
+     *    test-executor ws 1175~1529MB，20261030 两轮读数）；
+     *  - 安全余量 5GB（机器基线抖动 + 分片尾段 JIT/GC 抬升）；
+     *  - 档位 = 满足 `effective ≥ lane × 1.6 + 5` 的最大 lane（上限 5）：
+     *    5→13GB / 4→11.4GB / 3→9.8GB / 2→8.2GB，低于 2 档门槛仍取 2（下限，不是 1）。
+     *  - releaseGate 编排内额外 reserve 4GB（verifyMarketplace 常驻 2.8GB + verifyGate 2.3GB，
+     *    两者错峰不同时在峰值，取 4GB 覆盖叠加段）。
+     *  - T9 实测 lane 5 在 free 4.8GB 幸存（execSum +27% 争用膨胀）是**危险区读数**，
+     *    不作为放宽依据；本模型在该点仍取 2 档。
+     *
+     * 与快速失败闸门的分工：档位表是**吞吐旋钮**（选几片同时跑），闸门是**安全底线**
+     * （free < floor 直接拒绝起跑）。两者独立生效，闸门不因档位低而放宽。
      */
+    private const val PER_LANE_GB = 1.6
+    private const val SAFETY_GB = 5.0
+    private const val MAX_LANE = 5
+
     fun pickLane(logger: Logger, reserveGb: Double, context: String): Int? {
         val reading = probe(logger) ?: return null
-        val effective = reading.freeCommitGb - reserveGb
-        val lane = when {
-            effective >= 24.0 -> 5
-            effective >= 18.0 -> 4
-            effective >= 12.0 -> 3
-            else -> 2
-        }
+        return laneFor(reading.freeCommitGb, reserveGb, context, logger)
+    }
+
+    /**
+     * 档位计算的纯函数（与探针解耦，供 `-PwatermarkOverrideFreeGb` 确定性验证与单点推理）。
+     * 抽出来的理由：档位逻辑的验证不该依赖「此刻机器恰好有多少空闲」——20261030 实测期间
+     * 机器常被并行会话占到 free 3~14GB 波动，靠真机水位只能撞运气验档。
+     */
+    fun laneFor(freeCommitGb: Double, reserveGb: Double, context: String, logger: Logger): Int {
+        val effective = freeCommitGb - reserveGb
+        val lane = (MAX_LANE downTo 2).firstOrNull { effective >= it * PER_LANE_GB + SAFETY_GB } ?: 2
         logger.lifecycle(
-            "mpv-test-lane adaptive ($context): free=${reading.freeCommitGb}GB total=${reading.totalCommitGb}GB " +
-                "reserve=$reserveGb effective=$effective -> lane=$lane",
+            "mpv-test-lane adaptive ($context): free=${freeCommitGb}GB reserve=$reserveGb effective=$effective " +
+                "-> lane=$lane (perLane=${PER_LANE_GB}GB safety=${SAFETY_GB}GB)",
         )
         return lane
     }
