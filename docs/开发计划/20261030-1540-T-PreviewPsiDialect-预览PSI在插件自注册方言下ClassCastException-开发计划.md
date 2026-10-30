@@ -201,8 +201,21 @@ class GaussDbParserDefinition : Sql92ParserDefinition()   // 或 SqlParserDefini
 ### 7.5 未闭环
 
 - **runIde 真机复验未做**：需在沙盒 + `mybatis-plus-demo`（`-Pgaussdb`）双击日志条目，确认①横幅不再出现、②`idea.log` 中该 CCE 计数为 0、③补全能列出 `t_order` / `sys_config` / `department`
-- 全量 `testShards` 与 `verifyGate` 三目标：动了 `lang.parserDefinition` 这个平台核心 EP，属「大改动」判据，合流/发版前必须补跑
 - P-6（历史预览残留文件的清理）未做
+
+### 7.5b 门禁读数（2026-10-30 收口）
+
+| 项 | 读数 |
+|---|---|
+| `verifyGate` 三目标 | **全 Compatible**（IU-243 scheduled/deprecated/experimental = 5/42/98；IU-253 = 6/53/96；IU-262 = 8/128/96） |
+| `testDbPlatformDialect`（含新增四方言真建 PSI 用例） | 绿（3 例） |
+| `SqlDialectParserDefinitionPairingGuardTest` | 2 / 0 |
+| `:sql-visualizer-agent:test` | 240 / 0 / 0 / 1 |
+| `testShards` 首轮 | 1 红：`SqlPreviewPanelPrewarmLateRecoverTest#test重试动作_用户已编辑时也换装且内容不丢` —— 隔离单跑 7/7 绿，判为分片高负载下的 VFS/findFile 抖动（该用例类注释自述「重负载下会偶发失败」） |
+| `testShards` 第二轮 | 2 红：`LogPipelinePerfTest#test搜索_子串_两万条在预算内` / `#test排序_七种模式_两万条均在预算内` —— 隔离单跑绿，同属负载敏感性能预算断言（与 2026-10-30 早前那轮同型，已在册） |
+
+注：两轮红的都不是本次改动触达的路径（预热映射链 / agent 日志级别），且均隔离复跑转绿；按「回归假失败清单」口径判为环境负载抖动，读数如实登记，不宣称「一轮全绿」。
+
 
 ### 7.6 `verifyGate` 暴露的跨版本类缺失（本轮补修）
 
