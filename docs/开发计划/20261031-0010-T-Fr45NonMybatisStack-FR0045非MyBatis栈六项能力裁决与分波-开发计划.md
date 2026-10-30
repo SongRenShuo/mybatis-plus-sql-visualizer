@@ -188,3 +188,49 @@
 ## 八、实施记录
 
 （待回填——第一波动工后按券补读数与反向验证。）
+
+### 8.1 T-Fr45DmGuard 实施记录
+
+- 分支 `t-fr45-dmguard`（基线 `4cd4ac35`），2026-10-31。范围＝本册 §三·任务 A 的 S1/S2；4c 函数矩阵未动，其它 MCP 工具的非 SQL 守卫未扩面，其它方言条目未动。
+- **P-1 已落地（主控真机读数，本任务直接采信）**：DM8 实例 `114.66.55.245:20096` + 仓内 `DmJdbcDriver18-8.1.3.140`（服务端 DM DBMS 8.1.3.12）。`EXPLAIN <sql>` 走裸 JDBC **不返回结果集**（`executeQuery` 0 列 0 行；`execute()` 得 `isResultSet=false, updateCount=0`，`getMoreResults()` 随即 -1）；`EXPLAIN FOR <sql>` 返回 19 列结构化计划表（`PLAN_ID, PLAN_NAME, CREATE_TIME, LEVEL_ID, OPERATION, TAB_NAME, IDX_NAME, SCAN_TYPE, SCAN_RANGE, ROW_NUMS, BYTES, COST, CPU_COST, IO_COST, FILTER, JOIN_COND, ADVICE_INFO, PSTART, PSTOP`），`SELECT …` 与 `DELETE … WHERE 1=0` 均得 4 行。负向对照：`GROUP_CONCAT` → -2207、反引号标识符 → -2007、表不存在 → -2106。
+  - 结论：用户报障「计划正文为空、只剩 `dialect: DM（达梦）`」的真因是**模板语句用错**（旧模板 `EXPLAIN {sql}` 返回 0 列 0 行 → `McpExplainFormatter.format` 输出空串），不是多结果集/宽容通道问题——不需要 `channelNote`，也不需要 `postPlanQuery`。旧证据「`EXPLAIN` 返回 `#NSET2` 计划文本」来自 DBX 通道，对 MCP 裸 JDBC 链不成立，已在 `ExplainSupport` 证据字段改写。
+- **P-2 已证伪（按「成立」落地）**：`DataSourceDialectClassification` 与 `mcp` 包同在 `src/main` 一个 source set，`isNonSqlUrl` 由 `private` 改 `internal` 后编译即通——不需要下沉到 `sql/DialectInference.kt`。
+
+**S1（4b）非 SQL 数据源早拒**
+
+- 改动：
+  - `mcp/McpToolErrors.kt:28-29` 新增 `NOT_A_SQL_DATASOURCE`（MCP 错误文案为英文常量，**不进 bundle**，无新增 i18n 键）。
+  - `mcp/ExplainTargetGuard.kt`（新增）：`checkDataSourceUrl(url): String?` 纯逻辑，命中返回可直接抛出的 `[NOT_A_SQL_DATASOURCE] …` 文本；复用语料来自 `sql/DataSourceDialectClassification.isNonSqlUrl`（键表不复制）。文案只带子协议（`subprotocolOf`），不回显 URL 其余部分。
+  - `sql/DataSourceUrlProbe.kt:74-79`：`isNonSqlUrl` `private` → `internal`。
+  - `mcp/SqlVisualizerExplainTool.kt:129-135`：取 `url` 之后、`McpDialectDetector.resolve` 之前调用守卫。
+- 测试 `mcp/McpExplainTargetGuardTest`：redis/mongodb 命中；大小写（`JDBC:REDIS:`）与前后空格命中；mysql/dm/postgresql/mariadb/oracle/sqlserver/kingbase8/opengauss 放行；`jdbc:clickhouse:`、null、空串、纯空白、非 jdbc 前缀放行（不猜）；账号/口令/主机不泄漏；源码扫描断言接线顺序（取 `getConnectionConfig` 之后、`McpDialectDetector.resolve` 之前）。
+
+**S2（4a）DM 改 `EXPLAIN FOR` + 档位 TEXT→TABLE**
+
+- 改动：`sql/ExplainSupport.kt:138-146` DM 条目（模板 `EXPLAIN FOR {sql}`、`TABLE`、evidence 换本轮真机读数）；同步 `ExplainOutputFormat`/DM 证据 KDoc、`util/ExplainIndexAdvisor.kt` 与 `ui/ExplainPlanDiff.kt` 的档位注释。
+- 测试：`sql/DialectExplainTest` 的 DM 用例改「模板 + 档位」双断言、幂等用例改 `EXPLAIN FOR`；新增 `mcp/DmExplainPlanFixtureTest` 用 P-1 的真实 19 列做夹具，断言 `McpExplainFormatter.format` 输出非空、含 `OPERATION`/`TAB_NAME`/`ARTICLE`/`DELETE` 且首行 18 个分隔符；另加「空结果集 → 空正文」用例复现用户报障形态。
+- **下游语义核查（TABLE 档，均只降级不崩，无需改码）**：
+  - `execute/ExplainPanelChannel.kt:29` `STRUCTURED_FORMATS = {TABLE, JSON}` → DM 从此走结构化面板通道（此前 TEXT 档走直送控制台）。
+  - `history/ExplainPlanSnapshot.kt:66-69` `persistable` 认 TABLE/JSON → DM 计划可落历史（4a 的附加收益；用例 `TABLE 档让 DM 计划可落历史` 钉住）。
+  - `ui/ExplainPlanDiff.kt:127-181` `diffTable` 按小写列名取值：`COST` 命中 `cost` → 产出数值增量；DM 无 `id`/`table` 列 → 匹配键退化为行序 `row#n`；`ROW_NUMS` 不在 `NUMERIC_TABLE_COLUMNS` → 走字段级变化（用例断言 `rowsDelta == null` 且 `costDelta` 非空）。
+  - `util/AiContextPlanSummary.kt:25-34` TABLE 分支：`COST` 命中、`rows`/`filtered` 缺省不追加（输出仍有 `cost=`，不返回 null）。
+  - `util/ExplainIndexAdvisor.kt:51-53` TABLE → `adviseMysql`，DM 无 `type/key/Extra` 列 → 提前返回空清单（不噪音、不抛）。
+  - `ui/ExplainPlanResultView.kt` TABLE 分支是通用 `JBTable` 渲染任意列头，无 MySQL 列名硬编码。
+
+**定向读数与反向验证**
+
+| 阶段 | 命令（均带 `-Pkotlin.compiler.execution.strategy=in-process`） | 读数 |
+|---|---|---|
+| 先红（测试先写、生产未落） | `./gradlew test --tests …McpExplainTargetGuardTest --tests …DmExplainPlanFixtureTest --tests …DialectExplainTest` | `compileTestKotlin FAILED`，`Unresolved reference 'ExplainTargetGuard'`（×9）与 `'NOT_A_SQL_DATASOURCE'` |
+| 中间红（S1 已落、S2 未落） | 同上 | `40 tests completed, 3 failed`：`DmExplainPlanFixtureTest > DM 模板为 EXPLAIN FOR 且档位为 TABLE`（ComparisonFailure）、`TABLE 档让 DM 计划可落历史`（persistable=false）、`DialectExplainTest > 达梦 EXPLAIN FOR 形态与 TABLE 档`（ComparisonFailure） |
+| 全绿 | 同上 | `BUILD SUCCESSFUL`（40 用例） |
+| **反向验证-红** | 注释掉 `SqlVisualizerExplainTool` 的守卫调用 + DM 条目临时改回 `EXPLAIN {sql}`/TEXT，再跑同三组 | `40 tests completed, 4 failed`：`McpExplainTargetGuardTest > 接线守卫-取 url 之后与方言派发之前调用 checkDataSourceUrl`（`:112`）、`DmExplainPlanFixtureTest > DM 模板为 EXPLAIN FOR 且档位为 TABLE`（`:71`）、`TABLE 档让 DM 计划可落历史`（`:126`）、`DialectExplainTest > 达梦 EXPLAIN FOR 形态与 TABLE 档`（`:70`） |
+| **反向验证-还原复绿** | `git checkout --` 两文件后同三组 | `BUILD SUCCESSFUL` |
+
+- `testFast`（本轮唯一一次）：`4334 tests completed, 2 failed, 7 skipped`——两处都是本轮改动的**连带面**，不是既有缺陷：
+  1. `convention/GuardSelfTestCoverageMetaGuardTest`（`:400`）：新守卫类 `mcp/McpExplainTargetGuardTest`（文件名含 Guard）未登记进 `GUARD_CLASSES` → 补登记（decisionFns 留空，理由＝断言内联在 @Test）。
+  2. `util/ExplainIndexAdvisorTest`（`:217`）：该用例钉住「DM 路由到 TEXT 档」——DM 改 TABLE 后断言过期；改为断言 TABLE 档 + 用 DM 真机列集（无 type/key/Extra）验证零命中（不拿 MySQL 列头冒充）。
+  - 两处修复后定向复跑（上述五类）`BUILD SUCCESSFUL`。全量 `testFast`/分片未再复跑（本任务只允许一次 testFast），权威全量交只读收口代理。
+- 新增错误码：`NOT_A_SQL_DATASOURCE`。新增 i18n 键：无（MCP 错误文案走英文常量，不进 bundle）。
+- **未闭环项**：DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道 + 预览面板「执行计划」结构化通道）需 runIde 沙盒，本轮未跑；本轮的 DM 证据是裸 JDBC 通道读数 + 19 列夹具，不等于 UI/IDE 链已验。DM 驱动的 `ROW_NUMS` 等列名未纳入 `ExplainPlanDiff` 数值白名单（只降级），是否补 DM 语义列名挂后续裁量。仓内 `docs/mcp/MCP-Tools-Agent-Guide.md` 的错误码清单与文档站 DM 段由主控统一更新，本任务未改。
+
