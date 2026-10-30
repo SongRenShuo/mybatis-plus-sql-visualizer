@@ -256,6 +256,8 @@
   （`execute/ExplainPanelChannel.STRUCTURED_FORMATS`），TEXT 方言仍走直送控制台。S3 只完成
   存储层（persistable + payload + 读回）；DM/Oracle 等要真正落历史还依赖 4a 的通道改造，
   登记随 T-Fr45DmGuard 收口时复评。
-- 按任务约束未跑 runIde/构建校验：UI 接线以编译通过 + 纯逻辑定向用例为准；`testFast` 触链
-  回归单跑（读数见提交说明/交付报告）。
+- 按任务约束未跑 runIde/构建校验：UI 接线以编译通过 + 纯逻辑定向用例为准。`testFast` 触链回归
+  单跑读数：**4341 用例 / 0 失败 / 7 跳过**（跳过为既有 Assume，本轮未新增），其中
+  `TraceDocFormatterTest` 11 例与 `ExplainPlanSnapshotTextTest` 10 例已进快桶；`ExplainPlanHistoryTest`
+  11 例（含 TEXT 序列化往返）在平台桶单跑 0 失败。
 
