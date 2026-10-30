@@ -43,18 +43,24 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
     // -PwatermarkOverrideFreeGb=<x>：确定性验证用（把探针读数钉成给定值，只影响档位计算，
     // 不绕过闸门）——档位表的验证不能依赖「此刻机器恰好多少空闲」（并行会话下 free 3~14GB 波动）。
     val overrideFreeGb = providers.gradleProperty("watermarkOverrideFreeGb").orNull?.toDoubleOrNull()
+    // 档位上限：缺省 3（5 档实测 execSum 翻倍 + 4 例负载敏感红，见 pickLane 注释）；
+    // -PtestShardMaxLane=5 显式放开（本地赶时间、接受负载敏感红时用）
+    val maxLane = providers.gradleProperty("testShardMaxLane").orNull?.toIntOrNull() ?: 3
     val adaptiveLane: Int? = if (isShardedRun && !adaptiveOff) {
         val context = if (isGateOrchestration) "releaseGate" else "testShards"
         if (overrideFreeGb != null) {
-            mpv.watermark.MemoryWatermarkProbe.laneFor(overrideFreeGb, reserveGb, "$context/override", logger)
+            mpv.watermark.MemoryWatermarkProbe.laneFor(overrideFreeGb, reserveGb, "$context/override", logger, maxLane)
         } else {
             // 配置期探针必须走 providers.exec（CC 官方支持的外部进程通道）——用 ProcessBuilder
             // 会触发「external process started at configuration time」，Gradle 9 直接把构建判失败
             // （20261030 权威 gate 轮实测：CC problems found → BUILD FAILED）。
             val raw = runCatching {
-                providers.exec {
+                // 注意：buildSrc 禁用 `.asText`（T-BS-01：按 daemon 平台字符集解码，GBK 机器读
+                // UTF-8 会乱码，守卫 BannedApiSourceScanTest 钉住）——取字节再显式按 UTF-8 解。
+                val bytes = providers.exec {
                     commandLine(mpv.watermark.MemoryWatermarkProbe.probeScript())
-                }.standardOutput.asText.get()
+                }.standardOutput.asBytes.get()
+                bytes.toString(Charsets.UTF_8)
             }.getOrElse { e ->
                 logger.warn("mpv-test-lane: 配置期水位探针失败（${e.javaClass.simpleName}），回落静态缺省")
                 ""
@@ -64,7 +70,7 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
                 logger.warn("mpv-test-lane: 水位探针不可用，回落静态缺省（fail-open）")
                 null
             } else {
-                mpv.watermark.MemoryWatermarkProbe.laneFor(reading.freeCommitGb, reserveGb, context, logger)
+                mpv.watermark.MemoryWatermarkProbe.laneFor(reading.freeCommitGb, reserveGb, context, logger, maxLane)
             }
         }
     } else {

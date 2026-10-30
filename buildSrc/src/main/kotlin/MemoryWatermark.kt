@@ -117,7 +117,19 @@ object MemoryWatermarkProbe {
      */
     private const val PER_LANE_GB = 1.6
     private const val SAFETY_GB = 5.0
-    private const val MAX_LANE = 5
+
+    /**
+     * 默认上限 **3**（不是 5）。20261030 实测 5 档代价：
+     *  - 测试窗 670s（2 档）→ **459s**（5 档），−31%，看起来很美；
+     *  - 但 execSum 从 1000.8s 涨到 **1996.8s（+100%）**——5 个平台测试 JVM 互相争用，
+     *    每个分片的用例耗时整体翻倍；
+     *  - 并多出 4 例负载敏感红（`LogPipelinePerfTest` 耗时预算类 + `testExternal` 1 例），
+     *    均为本仓已登记的「并行分片下资源竞争」形态。
+     * 门禁要的是**可信读数**而不是最短墙钟：多出来的假红每次都要人肉定向复跑定责，
+     * 净收益为负。故缺省封顶 3（T9 编排内档位，已 A/B），5 档走
+     * `-PtestShardMaxLane=5` 显式开启（本地赶时间、且愿意接受负载敏感红时用）。
+     */
+    private const val DEFAULT_MAX_LANE = 3
 
     fun pickLane(logger: Logger, reserveGb: Double, context: String): Int? {
         val reading = probe(logger) ?: return null
@@ -129,12 +141,19 @@ object MemoryWatermarkProbe {
      * 抽出来的理由：档位逻辑的验证不该依赖「此刻机器恰好有多少空闲」——20261030 实测期间
      * 机器常被并行会话占到 free 3~14GB 波动，靠真机水位只能撞运气验档。
      */
-    fun laneFor(freeCommitGb: Double, reserveGb: Double, context: String, logger: Logger): Int {
+    fun laneFor(
+        freeCommitGb: Double,
+        reserveGb: Double,
+        context: String,
+        logger: Logger,
+        maxLane: Int = DEFAULT_MAX_LANE,
+    ): Int {
         val effective = freeCommitGb - reserveGb
-        val lane = (MAX_LANE downTo 2).firstOrNull { effective >= it * PER_LANE_GB + SAFETY_GB } ?: 2
+        val cap = maxLane.coerceIn(2, 5)
+        val lane = (cap downTo 2).firstOrNull { effective >= it * PER_LANE_GB + SAFETY_GB } ?: 2
         logger.lifecycle(
             "mpv-test-lane adaptive ($context): free=${freeCommitGb}GB reserve=$reserveGb effective=$effective " +
-                "-> lane=$lane (perLane=${PER_LANE_GB}GB safety=${SAFETY_GB}GB)",
+                "-> lane=$lane (perLane=${PER_LANE_GB}GB safety=${SAFETY_GB}GB cap=$cap)",
         )
         return lane
     }
