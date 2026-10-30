@@ -305,3 +305,50 @@
   `TraceDocFormatterTest` 11 例与 `ExplainPlanSnapshotTextTest` 10 例已进快桶；`ExplainPlanHistoryTest`
   11 例（含 TEXT 序列化往返）在平台桶单跑 0 失败。
 
+### 8.4 T-BannedApiCheck 实施记录
+
+- **分支/基点**：`t-fr45-bannedapi`，基点 `4cd4ac35`。提交 `57d85d9e`（S1 规则模型与管理器）+ `8da5f032`（S2–S4 检查器 / 设置子页 / 存量统计）+ `a6d4ed1f`（本记录）。未 push/merge。
+- **P-4 前提状态如实说明**：本册 §四 P-4 写「第 2 项拍板未决前不动工」。本轮由主控派工实施，按用户令视为已拍板；红线表述修订按 §2.2 裁决要求处置（见下）。
+
+#### 改动清单
+
+生产代码（新增 8 个）
+
+| 文件 | 关键锚点 |
+|---|---|
+| `inspection/BannedApiRule.kt` | :22 规则 data class（类匹配串 / `classRegex` 模式标记 / 方法名正则 / 说明 / 级别 / createdAt）；:44 `targetSummary`；:52 `isError` |
+| `inspection/BannedApiMatcher.kt` | :22 纯逻辑匹配核心；:47 `validate`；:65 `compile` 预编译；:92 `CompiledRules`；:103 `Entry.matches`（类精确或正则整串 + 方法名正则整串，首条命中即返回，非法正则 `compileOrNull` → 规则静默失效）；:115 `mayMatchMethodName` 廉价短路 |
+| `inspection/BannedApiRuleManager.kt` | :35–38 `@State(name="MpSqlVisualizerBannedApiRules", storages=[Storage("mp-sql-visualizer-banned-api.xml", DISABLED)])` + App 级 `@Service`；:78 `addRule`（判重类+模式+方法名）；:102 `updateRule`；:125 `removeRule`；:132 `clearRules`；:156 `republish`（整体替换 `@Volatile compiledRules` + 通知）；:165 `loadState`（补 id、归一未知级别）；:216 `MAX_RULES=200` |
+| `inspection/BannedApiInspection.kt` | :34 `LocalInspectionTool` 薄壳；:46 `getShortName()` 与 plugin.xml 同值；:48 `buildVisitor`（空规则 → `EMPTY_VISITOR`）；:50 零行为短路；:65 方法名短路；:68 `resolveMethod()`；:69 `containingClass.qualifiedName`；:72–84 显式 `PsiElement` 锚点 + 逐规则 `ProblemHighlightType.ERROR/WARNING` |
+| `inspection/BannedApiProjectScanner.kt` | :22 `BannedApiScanResult`；:55 `scan`；:56 `FileTypeIndex.getFiles(JavaFileType.INSTANCE, projectScope)`；:76 取消检查；:79 解析失败跳过；:104 明细上限 |
+| `inspection/BannedApiScanReport.kt` | :15 `BannedApiScanHit`；:33 报告组装；:36 `MAX_DETAIL_ENTRIES=500`；:54 截断；:73 `groupedCounts` |
+| `config/BannedApiConfigurable.kt` | :52 Configurable（左 `JBList` + 右 `FormBuilder`，照 `SqlSuppressManagerDialog` 形态）；:57 无参构造供 EP `instance=`；`isModified/apply` 空实现（关闭即生效，单源=manager） |
+| `actions/ScanBannedApiUsagesAction.kt` | :42 AnAction；:51 BGT update；:54 `DumbService.isDumb` 不跑；:67 `runReadAction` 包扫描；:72/:98 `catch (Throwable)` 先 `FatalErrors.isFatal` 透传；:110 写临时报告 / :131 打不开降级对话框 |
+
+注册与文案（改动 4 个）：`META-INF/plugin.xml` :215–220 `applicationConfigurable`（`groupWeight=12`，插 mcp(15) 与 about(10) 之间）、:421–427 XML 引用红线注释修订、:457–477 `localInspection`（`language="JAVA"`、`shortName="BannedApi"`、`key`+`bundle`、`groupKey`+`groupBundle`、`enabledByDefault="true"`、`level="WARNING"`）、:576–580 action 挂 `ToolsMenu`；`config/PluginSettingsFolderConfigurable.kt` :509/:538–542/:549–552；两本 bundle 各 +57 键（中英键集全等）。
+
+测试：新增 6 类（Matcher 9 / RuleManager 11 / ScanReport 4 / Inspection 5（`BasePlatformTestCase`+`enableInspections`）/ ProjectScanner 2 / RuleSerialization 3）+ `BannedApiConfigurableTest` 1；改动 `PluginSettingsFolderConfigurableTest`（子页 7→8、登记 8→9）、`PluginXmlStructureGuardTest`（注册数 7→8）。
+
+#### 定向读数与反向验证
+
+- 定向：`BUILD SUCCESSFUL`，聚合 **9 类 / 68 例 / 0 失败 / 0 错误 / 0 跳过**。触链 `testFast`：**4344 例 / 0 失败 / 7 跳过**。
+- 过程修过 1 处实现缺陷（`ScanBannedApiUsagesAction` 两处 `catch (Throwable)` 未判 fatal，被 `convention.BannedApiScanRuleTest` 抓住 → 按 `FatalErrors.isFatal` 补齐）与 2 处测试自身预期错误（规则库存的 `className` 误当实际类名；扫描器夹具 `addFileToProject` 致 resolve 落空，改 `configureByText(JavaFileType)`）。
+- 反向验证三次（均还原复绿）：R1 摘 `BannedApiMatcher.kt:103` 方法名分支 → Matcher **2 红**；R2 摘 `registerProblem` → Inspection **4 红**（唯「无规则零行为」仍绿，符合语义）；R3 注释掉 `<localInspection>` → 注册守卫 **1 红**。还原后 `RED PROBE` 零命中、`git diff` 空、定向 **68/0**。
+
+#### i18n / 存储 / 注册键名
+
+- 新增 57 键 × 中英两份：`settings.section.bannedApi(.desc)`、`settings.bannedApi.*`（字段/模式/级别/状态 33 键）、`inspection.bannedApi.displayName|groupName|problem`、`scan.bannedApi.*`（15 键）、action 文案 2 键；`BundleParityGuardTest` 5 例绿。
+- 存储：`mp-sql-visualizer-banned-api.xml`（`RoamingType.DISABLED`，App 级），`@State` name `MpSqlVisualizerBannedApiRules`。
+- 设置页 EP id `cn.song.mybatisplus.visualizer.settings.bannedApi`；检查短名 `BannedApi`（`@SuppressWarnings("BannedApi")` 可抑制单点）；动作 id `cn.song.mybatisplus.visualizer.ScanBannedApiUsages`。
+
+#### `plugin.xml:412` 红线注释的处置
+
+原句「只产 soft 引用，不注册任何 inspection/annotator（红线：不做校验器形态）」字面与新增 Java 侧 `localInspection` 冲突。处置＝**收窄作用域到 XML 引用链、保留原意**：改为「**XML 侧**不注册任何 inspection/annotator（红线：mapper XML 不做校验器形态）」并加勘误说明「Java 侧禁用 API 检查是独立能力面，与『只产 soft 引用』互不相干，本红线对 XML 引用仍成立」。未删红线、未改 `psi.referenceContributor` 注册本身。
+
+#### 未闭环项
+
+- **未跑**：`runIde` 真机（设置页观感、标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制）、`testShards` 全量、`verifyGate`/`verifyPlugin`/`buildPlugin`。发版前应补 `verifyGate`（新增 `localInspection` EP + action，按 §五判据属大改动）。
+- `localInspection` 分组显示名由平台按 IDE 语言解析（测试 JVM 下为英文），中文 IDE 应显示中文——未真机确认。
+- `BannedApiConfigurable` 只有 headless 冒烟，真实对话框布局/分栏未走查；存量统计「写临时文件 → `FileEditorManager.openFile` → 降级对话框」UI 链只有代码审读。
+- 匹配只按方法**声明类** FQN 判定，不做父类/接口回溯（覆写后需规则写子类）；Kotlin 调用点不覆盖（注册 `language="JAVA"`）。两项已写进 KDoc 与本记录。
+
