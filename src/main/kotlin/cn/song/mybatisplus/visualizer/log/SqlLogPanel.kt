@@ -1539,6 +1539,10 @@ class SqlLogPanel(
                         val mgr = SqlSuppressRuleManager.getInstance()
                         mgr.rules.sumOf { it.id.let { id -> mgr.hitCount(id) } }.toLong()
                     }.getOrDefault(0L),
+                    // T-CaptureCatchAll 券02：活性回落解封态——「增强已挂载却零产出」的唯一解释
+                    activityFallbackActive = CaptureActivityFallback.isActive(),
+                    // T-CaptureCatchAll 券03：agent 侧 attach 覆盖自检（旧版 agent 为 null，不显示）
+                    attachStats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest(),
                 ),
             )
         } else {

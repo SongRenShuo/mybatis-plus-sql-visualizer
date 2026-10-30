@@ -92,6 +92,12 @@ dependencies {
     testImplementation(libs.mssql.jdbc)
     testImplementation(libs.mariadb.java.client)
     testImplementation(libs.ojdbc11)
+    // T-XcDialects3：信创三族驱动——DialectDockerVerificationTest 外部实例模式
+    //（-Dmpvs.dialect.jdbcUrl=... 指向 103.36.220.245 自建实例 / DBX 金仓）渲染套件真执行用；
+    // 仅测试 classpath，插件运行时零依赖不变（与 ojdbc11 同口径）
+    testImplementation(libs.highgo.jdbc)
+    testImplementation(libs.vastbase.jdbc)
+    testImplementation(libs.kingbase.jdbc)
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。

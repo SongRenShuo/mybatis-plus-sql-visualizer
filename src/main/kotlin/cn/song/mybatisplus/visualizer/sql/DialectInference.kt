@@ -24,12 +24,21 @@ internal object UrlSubprotocolDialects {
         "dm" to "DM（达梦）",
         "kingbase8" to "KingBase（人大金仓）",
         "kingbase" to "KingBase（人大金仓）",
-        // T-DialectXcFamily（O-63）：oceanbase（OceanBase Connector/J 官方《Database URL》）；
-        // opengauss（openGauss 官方《Connecting to a Database》）与 gaussdb（华为 GaussDB 官方
-        // 《Creating a Database Connection》）同归 openGauss——D2=A 定案，一 object 两前缀
+        // T-DialectXcFamily（O-63）：oceanbase（OceanBase Connector/J 官方《Database URL》）与
+        // opengauss（openGauss 官方《Connecting to a Database》）。
+        // T-GaussDbDialect（券 04）：gaussdb 从「同归 openGauss（D2=A）」改为归独立的 GaussDB 方言
+        // ——华为 GaussDB 官方《获取驱动 jar 与驱动表》实锤 `gaussdbjdbc.jar` / `gsjdbc200.jar` 的
+        // URL 前缀都是 `jdbc:gaussdb`，与 `jdbc:opengauss` 是两个产品线。
         "oceanbase" to "OceanBase",
         "opengauss" to "openGauss",
-        "gaussdb" to "openGauss",
+        "gaussdb" to "GaussDB",
+        // T-XcDialects3（券 03）：瀚高官方驱动 HgdbJdbc 的 Driver.class 常量池仅认 jdbc:highgo:；
+        // 海量 vastbase-jdbc 的 cn.com.vastbase.Driver 同时认 jdbc:vastbase: 与 jdbc:dws:iam:
+        // （取子协议得 vastbase / dws）。注意 com.highgo:hgdb-pgjdbc 走 jdbc:postgresql:，
+        // 是原版 pgjdbc，按 PostgreSQL 处理不纠正（调研报告 §5.2 字节码实证）。
+        "highgo" to "HighGo",
+        "vastbase" to "Vastbase",
+        "dws" to "Vastbase",
     )
 
     /**

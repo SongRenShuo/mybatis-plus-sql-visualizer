@@ -229,7 +229,8 @@ open class SqlLogConsoleBridge(
         // T-ConsolePendingFlush：待闭合条目静默冲刷——应用执行完 SQL 后一行都不再打时，只有这一拍能把
         // 桶里的待产出条目交出去（见 flushSettledEntries KDoc）。增强接管中（paused）不冲——那期间条目
         // 由 agent 通道产出，桥侧冲刷会造成双路重复。
-        if (isCapturing() && !SqlCaptureGate.paused.get()) {
+        // T-CaptureCatchAll 券02：活性回落解封期间照常冲刷——此时 agent 通道已判定为空转，桥是唯一产出方。
+        if (isCapturing() && !SqlCaptureGate.bridgeSuppressed()) {
             flushSettledEntries()
         }
         // 主控制台移除：上一轮有、当前轮无 → 项目停止
@@ -867,6 +868,195 @@ object SqlCaptureGate {
      */
     @Volatile
     var epActive: Boolean = false
+
+    /**
+     * T-CaptureCatchAll 券02：桥的**有效**封停态——`paused` 且活性回落未解封。
+     *
+     * 逐行热路径只读两个 volatile（[paused] + [CaptureActivityFallback.isActive]），无锁。
+     * 桥的所有「是否让位」判定都改用本函数（不再直接读 [paused]）：白名单漏一个驱动时
+     * agent 会长期零事件，此时必须让控制台桥回来，否则两条通道同时零产出。
+     */
+    fun bridgeSuppressed(): Boolean = paused.get() && !CaptureActivityFallback.isActive()
+}
+
+/**
+ * T-CaptureCatchAll 券02：控制台桥**活性回落**（调研报告 R10「`paused` 假在线」）。
+ *
+ * 立项动因：`paused` 在「agent 在线且应用侧 ACK 确认在采集」时置真，控制台桥随即短路。
+ * 但 ACK 只证明「应用侧打开了采集开关」，不证明「织入真的命中过驱动」——白名单漏一个驱动时，
+ * agent 零事件、桥已让位，用户视角就是「插件坏了」。本对象把「agent 沉默但控制台仍有 SQL」
+ * 变成可自动恢复的事实：静默超过阈值后解封桥，事件恢复后立即重新让位（滞回）。
+ *
+ * 判据（全部为可核实的事实，不做因果断言）：
+ *  - 让位已持续 ≥ 阈值（默认 10s，`-Dmpsv.capture.activityFallback.thresholdMs=<ms>` 可调）；
+ *  - 窗口内**零** agent 事件（[onAgentEvent] 由事件到达打点驱动）；
+ *  - 窗口内控制台**有 SQL 行**（由嗅探路径实证产出条目，不是「有任意控制台输出」）。
+ *
+ * 滞回：agent 事件一到达即解封回落（[onAgentEvent]），且静默计时从该事件重新起算——
+ * 事件断断续续时不会在两条通道间反复横跳。
+ *
+ * 默认开启（`-Dmpsv.capture.activityFallback=false` 可关）：这是纯降级收益，不引入任何新采集面。
+ * 选择系统属性而非设置项的理由：它不是功能开关（用户无「想要/不想要」之分），只是排障旋钮；
+ * 放进设置页要连带改复选框计数守卫与 UI，收益不抵噪音。解封状态本身在面板空态诊断行与设置页
+ * 状态行可见（见 [CaptureDiagnostics.activityFallbackActive]）。
+ *
+ * 线程：状态迁移由控制台输出线程（逐行）与 agent 读线程（事件）并发触发，统一 `synchronized`；
+ * 判定本身 O(1)，只在 paused 期间执行。任何异常不得穿出（调用方在 filter 回调内）。
+ */
+object CaptureActivityFallback {
+
+    /** 默认静默阈值：10s（调研报告 D4 倾向 A）。 */
+    const val DEFAULT_THRESHOLD_MS = 10_000L
+
+    /** 开关系统属性（`false`/`0`/`off` 关闭，其余视为开启）。 */
+    const val ENABLED_PROP = "mpsv.capture.activityFallback"
+
+    /** 阈值系统属性（毫秒；非正数/非法回落 [DEFAULT_THRESHOLD_MS]）。 */
+    const val THRESHOLD_PROP = "mpsv.capture.activityFallback.thresholdMs"
+
+    private val lock = Any()
+    private var pausedSinceMs = 0L
+    private var lastAgentEventMs = 0L
+    private var lastConsoleSqlMs = 0L
+
+    @Volatile
+    private var active = false
+
+    /** 解封次数（诊断/测试读数）。 */
+    val engagements = java.util.concurrent.atomic.AtomicLong()
+
+    /** 事件恢复后重新让位次数（诊断/测试读数）。 */
+    val releases = java.util.concurrent.atomic.AtomicLong()
+
+    /** 测试注入点：开关/阈值/时钟（null = 走系统属性与墙钟）。 */
+    @Volatile
+    internal var enabledOverride: Boolean? = null
+    @Volatile
+    internal var thresholdOverrideMs: Long? = null
+    @Volatile
+    internal var clockOverride: (() -> Long)? = null
+
+    /** 当前时钟（毫秒）。 */
+    fun now(): Long = clockOverride?.invoke() ?: System.currentTimeMillis()
+
+    /** 是否启用（系统属性优先，出厂默认开启）。 */
+    fun enabled(): Boolean = enabledOverride ?: when (
+        System.getProperty(ENABLED_PROP)?.trim()?.lowercase()
+    ) {
+        "false", "0", "off", "no" -> false
+        else -> true
+    }
+
+    /** 静默阈值毫秒。 */
+    fun thresholdMs(): Long = thresholdOverrideMs
+        ?: System.getProperty(THRESHOLD_PROP)?.trim()?.toLongOrNull()?.takeIf { it > 0L }
+        ?: DEFAULT_THRESHOLD_MS
+
+    /** 解封态（false = 桥仍让位；agent 事件恢复即回落为 false）。 */
+    fun isActive(): Boolean = active
+
+    /**
+     * 闸门迁移回调（[cn.song.mybatisplus.visualizer.log.agent.AgentManager.updateOnline] 调用）：
+     * 置真时记录让位起点；置假时清空全部状态（新一次接管从零起算，不继承上一轮的解封态）。
+     */
+    fun onGateChanged(paused: Boolean, now: Long = now()) {
+        runCatching {
+            synchronized(lock) {
+                if (paused) {
+                    if (pausedSinceMs == 0L) pausedSinceMs = now
+                } else {
+                    resetLocked()
+                }
+            }
+        }
+    }
+
+    /**
+     * agent 事件到达打点（[cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.markReceived]
+     * 调用）：事件恢复 → 立即重新让位，静默计时从此刻重算（滞回）。
+     */
+    fun onAgentEvent(now: Long = now()) {
+        runCatching {
+            val wasActive = synchronized(lock) {
+                lastAgentEventMs = now
+                val was = active
+                if (was) {
+                    active = false
+                    releases.incrementAndGet()
+                }
+                was
+            }
+            if (wasActive) {
+                LOG.info("增强捕获活性回落解除：agent 事件恢复，控制台桥重新让位")
+            }
+        }
+    }
+
+    /**
+     * 控制台行打点（仅在 `paused` 分支调用）：推进状态机并返回**本行是否应按正常路径解析**。
+     *
+     * @param sqlSeen 本行是否被嗅探路径实证解析出 SQL 条目（「控制台有 SQL 行」的唯一判据）
+     * @return true = 解封态（含本行刚解封），调用方应解析该行；false = 继续让位
+     */
+    fun onConsoleLine(sqlSeen: Boolean, now: Long = now()): Boolean = runCatching {
+        evaluateConsoleLine(sqlSeen, now)
+    }.getOrDefault(false)
+
+    private fun evaluateConsoleLine(sqlSeen: Boolean, now: Long): Boolean {
+        if (!enabled()) {
+            synchronized(lock) { active = false }
+            return false
+        }
+        val threshold = thresholdMs()
+        val alreadyActive: Boolean
+        val engagedNow: Boolean
+        synchronized(lock) {
+            if (pausedSinceMs == 0L) pausedSinceMs = now
+            if (sqlSeen) lastConsoleSqlMs = now
+            alreadyActive = active
+            engagedNow = !active && run {
+                val silenceStart = maxOf(pausedSinceMs, lastAgentEventMs)
+                val silentLongEnough = now - silenceStart >= threshold
+                val consoleHasSql = sqlSeen || (lastConsoleSqlMs > 0L && now - lastConsoleSqlMs <= threshold)
+                silentLongEnough && consoleHasSql
+            }
+            if (engagedNow) {
+                active = true
+                engagements.incrementAndGet()
+            }
+        }
+        if (engagedNow) {
+            LOG.info(
+                "增强捕获活性回落：agent 已静默 ≥${threshold}ms 而控制台仍有 SQL 行，" +
+                    "解封控制台桥恢复解析（本次解封第 ${engagements.get()} 次；agent 事件恢复即重新让位）",
+            )
+        }
+        return alreadyActive || engagedNow
+    }
+
+    /** 测试/项目销毁：清空全部状态与计数（不动测试注入点——由 [resetForTest] 一并清）。 */
+    fun reset() {
+        synchronized(lock) { resetLocked() }
+    }
+
+    private fun resetLocked() {
+        active = false
+        pausedSinceMs = 0L
+        lastAgentEventMs = 0L
+        lastConsoleSqlMs = 0L
+    }
+
+    /** 测试收尾：状态 + 注入点 + 计数全部复位。 */
+    internal fun resetForTest() {
+        synchronized(lock) { resetLocked() }
+        enabledOverride = null
+        thresholdOverrideMs = null
+        clockOverride = null
+        engagements.set(0L)
+        releases.set(0L)
+    }
+
+    private val LOG = Logger.getInstance("cn.song.mybatisplus.visualizer.log.CaptureActivityFallback")
 }
 
 internal fun processConsoleLine(
@@ -881,9 +1071,18 @@ internal fun processConsoleLine(
     // 提取「日志行原始时间」暂存 LogTimeCorrelator（键=占位符版 SQL 指纹），agent 事件入队前
     // 取回回填，面板「日志时间」在增强模式下不丢失。日志时间是**数据**：采集不再受「时间显示开
     // 关/时间源」这类渲染偏好控制（关掉显示只影响渲染，不影响条目字段），故此处零开关判断。
+    //
+    // T-CaptureCatchAll 券02：让位不再是二值——[CaptureActivityFallback] 在「agent 静默但控制台
+    // 仍有 SQL 行」时自动解封（白名单漏驱动的双哑场景）。解封态下本函数直接走正常解析；让位态下
+    // 嗅探产出的条目若恰是解封触发点，直接采用该条目（不重复喂解析器、不丢这一行）。
     if (SqlCaptureGate.paused.get()) {
-        sniffLogTimestamp(line, ctx)
-        return emptyList()
+        if (!CaptureActivityFallback.isActive()) {
+            val sniffed = sniffLogTimestamp(line, ctx)
+            if (CaptureActivityFallback.onConsoleLine(sniffed.isNotEmpty(), CaptureActivityFallback.now())) {
+                return finishEntries(sniffed, line, ctx, timePrefix)
+            }
+            return emptyList()
+        }
     }
     // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
     val marker = SqlSourceMarker.parse(line)
@@ -936,6 +1135,19 @@ internal fun processConsoleLine(
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
         ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     if (taken.isEmpty()) return emptyList()
+    return finishEntries(taken, line, ctx, timePrefix)
+}
+
+/**
+ * T-CaptureCatchAll 券02：条目补全（耗时 + 源码位置）——正常解析路径与「解封瞬间采用嗅探条目」
+ * 共用同一出口，避免两处各抄一份补全逻辑（两处漂移会让解封首批条目丢耗时/源码）。
+ */
+private fun finishEntries(
+    taken: List<LogSqlEntry>,
+    line: String,
+    ctx: BridgeLineContext,
+    timePrefix: String?,
+): List<LogSqlEntry> {
     // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
     // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
     // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
@@ -969,8 +1181,11 @@ internal fun processConsoleLine(
  * （参数值序列必须匹配；没有真实日志时间的行不入册）。
  * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
  * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
+ *
+ * T-CaptureCatchAll 券02：返回本行解析出的条目——「控制台有 SQL 行」的实证信号由调用方喂给
+ * [CaptureActivityFallback]；解封触发的那一行直接采用这些条目（不再重复喂解析器）。
  */
-private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
+private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext): List<LogSqlEntry> {
     // F58：同款每行一次 token 下传（嗅探路径同喂四解析器）
     val threadToken = LogThreadRouter.threadTokenOf(line)
     ctx.myBatisParser.feed(line, threadToken)
@@ -984,6 +1199,7 @@ private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
         val logTime = e.logTimestamp ?: continue
         LogTimeCorrelator.put(logTimeKey(e), logTime, logTimeParamSignature(e.params))
     }
+    return taken
 }
 
 /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */

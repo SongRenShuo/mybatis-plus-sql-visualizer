@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.Arrays;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -27,8 +28,9 @@ import static org.junit.Assert.fail;
  * <p>两层判别：
  * <ol>
  *   <li><b>谓词层</b>（环境无关）：每个登记类必须命中正确的一面谓词、且不在另一面——名单与
- *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server、达梦 timed 面；
- *       达梦 ADD_BATCH/CLEAR_BATCH 面因 chop_frame 未登记，见 {@link StatementWeaver} 类注释）。</li>
+ *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server、达梦 timed 面、
+ *       信创三族金仓/海量/瀚高；达梦 ADD_BATCH/CLEAR_BATCH 面因 chop_frame 未登记，
+ *       见 {@link StatementWeaver} 类注释）。</li>
  *   <li><b>字节层</b>（需驱动 jar 在测试 classpath）：直读真实驱动类字节 → {@code weaveSpec}
  *       → 断言 changed → 子优先隔离子 loader 定义 + 初始化（链接期 JVM 栈图校验）。mysql-connector
  *       不在 agent 测试 classpath，只走谓词层。</li>
@@ -71,6 +73,57 @@ public class StatementWeaverVendorCoverageTest {
             // CLEAR_BATCH 出口非 timed 读原局部会被 chop_frame 判死，未登记（见 StatementWeaver 类注释）
             "dm.jdbc.driver.DmdbStatement",
             "dm.jdbc.driver.DmdbPreparedStatement",
+            // 华为 GaussDB 商用驱动（gaussdbjdbc 506.0.0.b058）——独立重定位包，与 pgjdbc 无继承关系
+            "com.huawei.gaussdb.jdbc.jdbc.PgStatement",
+            "com.huawei.gaussdb.jdbc.jdbc.PgPreparedStatement",
+            // 华为 openGauss 品牌驱动（opengaussjdbc 506.0.T35）——与商用版同形，独立包名
+            "com.huawei.opengauss.jdbc.jdbc.PgStatement",
+            "com.huawei.opengauss.jdbc.jdbc.PgPreparedStatement",
+            // 社区 openGauss 2.x/3.x（opengauss-jdbc 3.0.0，包组织与 pgjdbc 分家；5.x/7.x 用
+            // org.postgresql.*，已在上面那组）
+            "org.opengauss.jdbc.PgStatement",
+            "org.opengauss.jdbc.PgPreparedStatement",
+            // 信创 PG 系三族（T-XcDialects3）：均完全重定位（`org/postgresql` 条目数为 0、
+            // 与 pgjdbc 无继承关系）。金仓 kingbase8 9.0.1（KbCallableStatement 继承
+            // KbPreparedStatement 不单列）/ 海量 vastbase-jdbc 2.16.1v / 瀚高 HgdbJdbc 6.2.5
+            "com.kingbase8.jdbc.KbStatement",
+            "com.kingbase8.jdbc.KbPreparedStatement",
+            "cn.com.vastbase.jdbc.PgStatement",
+            "cn.com.vastbase.jdbc.PgPreparedStatement",
+            "com.highgo.jdbc.jdbc.PgStatement",
+            "com.highgo.jdbc.jdbc.PgPreparedStatement",
+            // MariaDB（mariadb-java-client 3.3.3，T-CaptureCoverage 券 01）：3.x 全部重写为自有类，
+            // 不复用 MySQL `StatementImpl`，故必须单列（三个类各自覆盖 execute 全族，javap 实测）
+            "org.mariadb.jdbc.Statement",
+            "org.mariadb.jdbc.ClientPreparedStatement",
+            "org.mariadb.jdbc.ServerPreparedStatement",
+            // SQLite（sqlite-jdbc 3.50.3.0，T-CaptureCoverage 券 02）：JDBC3Statement 自有 execute
+            // 全族；无 Callable 自有 execute 族（JDBC3PreparedStatement 覆盖），不单列
+            "org.sqlite.jdbc3.JDBC3Statement",
+            "org.sqlite.jdbc3.JDBC3PreparedStatement",
+            // OceanBase（oceanbase-client 2.4.19，T-CaptureCoverage 券 03）：与 MySQL 协议兼容但类
+            // 体系自成一套（com.oceanbase.jdbc.*）。OceanBaseStatement 纯语句自带 execute 全族；
+            // 两个 PS 类 extends BasePrepareStatement extends OceanBaseStatement，各有自有 execute
+            // 族故单列。CallableStatement 不单列（D3 定案：继承链覆盖）
+            "com.oceanbase.jdbc.OceanBaseStatement",
+            "com.oceanbase.jdbc.JDBC4PreparedStatement",
+            "com.oceanbase.jdbc.JDBC4ServerPreparedStatement",
+    };
+
+    /**
+     * 驱动 jar **默认不在** agent 测试 classpath 的类（T-CaptureCoverage）：MariaDB / SQLite 两族的
+     * jar 在根项目 `testImplementation`（`libs.mariadb.java.client` / `libs.sqlite.jdbc`）里，agent
+     * 子项目尚未声明。资源在位时必须做字节层校验；不在位时只降级为谓词层，并在
+     * {@link #MariaDB与SQLite字节层_驱动jar在位时必须真实织入且过校验()} 里显式 skip（不是静默放过）。
+     */
+    private static final String[] JAR_OPTIONAL_BYTE_LAYER = {
+            "org.mariadb.jdbc.Statement",
+            "org.mariadb.jdbc.ClientPreparedStatement",
+            "org.mariadb.jdbc.ServerPreparedStatement",
+            "org.sqlite.jdbc3.JDBC3Statement",
+            "org.sqlite.jdbc3.JDBC3PreparedStatement",
+            "org.mariadb.jdbc.Connection",
+            "org.sqlite.jdbc3.JDBC3Connection",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -83,6 +136,21 @@ public class StatementWeaverVendorCoverageTest {
             "com.microsoft.sqlserver.jdbc.SQLServerConnection",
             // 达梦连接（prepare 面；该类字节探针通过校验）
             "dm.jdbc.driver.DmdbConnection",
+            // 华为 GaussDB 商用 / openGauss 品牌连接（prepare 面）
+            "com.huawei.gaussdb.jdbc.jdbc.PgConnection",
+            "com.huawei.opengauss.jdbc.jdbc.PgConnection",
+            // 社区 openGauss 2.x/3.x 连接
+            "org.opengauss.jdbc.PgConnection",
+            // 信创 PG 系三族连接（T-XcDialects3）：金仓 / 海量 / 瀚高，prepare 面单列
+            "com.kingbase8.jdbc.KbConnection",
+            "cn.com.vastbase.jdbc.PgConnection",
+            "com.highgo.jdbc.jdbc.PgConnection",
+            // MariaDB / SQLite 连接（T-CaptureCoverage 券 01/02）：3.x 自有连接类，prepare 面单列
+            "org.mariadb.jdbc.Connection",
+            "org.sqlite.jdbc3.JDBC3Connection",
+            // OceanBase 连接（T-CaptureCoverage 券 03）：OceanBaseConnection implements ConnectionImpl，
+            // 自有 6 个 prepareStatement + 3 个 prepareCall 出口，非 MySQL ConnectionImpl 子类
+            "com.oceanbase.jdbc.OceanBaseConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -135,19 +203,32 @@ public class StatementWeaverVendorCoverageTest {
     /**
      * 已知不覆盖的厂商（连接面已登记，但语句面/prepare 面未登记）——显式认领 + 原因，缺项即红。
      * 新增厂商只有两条路：补齐三面，或在此登记不覆盖原因。
+     *
+     * <p><b>openGauss 谱系事实（T-GaussCapture 实测，旧表述曾写反）。</b>社区驱动
+     * {@code org.opengauss:opengauss-jdbc} 的 2.x/3.x 在包 {@code org.opengauss.*}
+     * （3.0.0 内 {@code org/postgresql} 条目数为 0），5.x/7.x 才整体回到 {@code org.postgresql.*}
+     * （7.0.0 的 {@code META-INF/services/java.sql.Driver} 声明 {@code org.postgresql.Driver}，
+     * {@code org/opengauss} 条目数为 0）。因此 {@code org.opengauss.} **不**列入本表：
+     * 3.0.0 的 {@code PgStatement/PgPreparedStatement/PgConnection} 已登记并通过字节层校验，
+     * 5.x/7.x 由 {@code org.postgresql.} 覆盖。华为商用 {@code com.huawei.gaussdb.*} 与
+     * 华为 openGauss 品牌 {@code com.huawei.opengauss.*} 同为独立重定位实现，已各自登记。
      */
-    private static final java.util.Map<String, String> VENDOR_NOT_COVERED =
+    static final java.util.Map<String, String> VENDOR_NOT_COVERED =
             new java.util.LinkedHashMap<String, String>();
 
     static {
-        VENDOR_NOT_COVERED.put("org.mariadb.",
-                "MariaDB 未纳入测试矩阵（无本机 jar / 未实证语句面形态）；如需支持请补语句面/prepare 面");
-        VENDOR_NOT_COVERED.put("org.opengauss.",
-                "openGauss 2.x 走 PG 驱动（已由 org.postgresql. 覆盖）；3.x 自带驱动未实证");
+        // T-CaptureCoverage（2026-10-30）删除两条旧认领：
+        //  - `org.mariadb.` 原认领「未纳入测试矩阵（无本机 jar / 未实证语句面形态）」——理由已失真：
+        //    mariadb-java-client 3.3.3 在根项目 testImplementation 与本机 gradle 缓存里都在位，语句面
+        //    三类的 execute 全族已 javap 取证，语句面/prepare 面已登记并过字节层校验；
+        //  - `org.sqlite.` 同理（sqlite-jdbc 3.50.3.0 在位，JDBC3Statement/JDBC3PreparedStatement 已登记）。
+        // 认领优先于覆盖判定（uncoveredDrivers 先看 notCovered），留着认领等于让补上的覆盖白做——
+        // 金仓 T-XcDialects3 券 07 删认领时踩过同一形态，此处照办。
         VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
-        VENDOR_NOT_COVERED.put("org.sqlite.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");
-        VENDOR_NOT_COVERED.put("com.kingbase8.", "国产库，本机无 jar 未实证");
+        // 金仓 com.kingbase8. 的旧认领（「本机无 jar 未实证」）已在 T-XcDialects3 券 07 删除：
+        // kingbase8 9.0.1 进测试 classpath、语句面/prepare 面登记并过字节层校验后，认领留在
+        // 这里反而会让厂商对齐守卫看不出「已覆盖」（认领优先于覆盖判定），变成反向锚。
     }
 
     /**
@@ -158,32 +239,181 @@ public class StatementWeaverVendorCoverageTest {
      */
     @Test
     public void 厂商对齐守卫_连接面已登记厂商必须有语句或prepare面条目() {
-        for (String driverClass : DriverRegistry.driverClassNames()) {
+        final java.util.List<String> uncovered = uncoveredDrivers(
+                DriverRegistry.driverClassNames(), StatementWeaver.specClassNames(), VENDOR_NOT_COVERED);
+        if (!uncovered.isEmpty()) {
+            final StringBuilder detail = new StringBuilder();
+            for (String driverClass : uncovered) {
+                detail.append("\n  ").append(driverClass)
+                        .append(" → 厂商前缀 ").append(vendorKey(driverClass));
+            }
+            fail("以下驱动类的连接面已登记，但厂商前缀在 StatementWeaver.SPECS 无语句面/prepare 面条目"
+                    + "——这是「看着支持、attach 后一条不出」的静默缺口来源。请补齐语句面/prepare 面，"
+                    + "或在 VENDOR_NOT_COVERED 显式登记不覆盖原因。" + detail);
+        }
+    }
+
+    /**
+     * 厂商对齐判定（纯函数，测试缝）：返回「连接面已登记、但厂商前缀在 SPECS 无对应条目」的驱动类。
+     *
+     * <p>抽成纯函数是为了能注入**合成名单**造缺陷样本——「同厂商跨族假绿」只有用合成场景才能
+     * 稳定复现（真名单不会同时缺一族）。
+     */
+    static java.util.List<String> uncoveredDrivers(java.util.Set<String> driverClasses,
+                                                   java.util.Set<String> specClasses,
+                                                   java.util.Map<String, String> notCovered) {
+        final java.util.List<String> uncovered = new java.util.ArrayList<String>();
+        for (String driverClass : driverClasses) {
             final String vendor = vendorKey(driverClass);
-            if (VENDOR_NOT_COVERED.containsKey(vendor)) {
+            if (notCovered.containsKey(vendor)) {
                 continue; // 显式认领不覆盖
             }
             boolean covered = false;
-            for (String specClass : StatementWeaver.specClassNames()) {
+            for (String specClass : specClasses) {
                 if (specClass.startsWith(vendor)) {
                     covered = true;
                     break;
                 }
             }
-            assertTrue(driverClass + " 的连接面已登记，但厂商前缀 " + vendor
-                    + " 在 StatementWeaver.SPECS 无语句面/prepare 面条目——这是「看着支持、attach 后"
-                    + "一条不出」的静默缺口来源。请补齐语句面/prepare 面，或在 VENDOR_NOT_COVERED"
-                    + " 显式登记不覆盖原因。", covered);
+            if (!covered) {
+                uncovered.add(driverClass);
+            }
         }
+        return uncovered;
     }
 
-    /** 驱动类 → 厂商前缀（org.x/com.x 取两段，其余取一段：oracle. / dm. 等）。 */
+    /**
+     * 需要**三段**厂商前缀的次要命名空间。华为把 GaussDB 商用（`com.huawei.gaussdb.`）与 openGauss
+     * 品牌（`com.huawei.opengauss.`）并列挂在 `com.huawei.` 下：两段前缀相等 → 只登记一族的语句面
+     * 就会把另一族也判成「已覆盖」（假绿）。其余 `com.*` 厂商仍是两段（P-12 实测）——
+     * microsoft/mysql/dameng/gbasedbt/kingbase8 的次段已唯一标识厂商，升三段反而会把同一厂商
+     * 的不同包族（`com.mysql.jdbc.*` 与 `com.mysql.cj.*`）判成两个厂商。
+     *
+     * <p>T-XcDialects3 增补 `cn.com.`：海量驱动类 `cn.com.vastbase.Driver` 首段是 `cn`，若按两段
+     * 规则厂商键会压成 `cn.`——与将来任何 `cn.*` 厂商互相假绿（对方登记的语句面就能把海量判成
+     * 已覆盖）。升三段后键为 `cn.com.vastbase.`，与 `com.kingbase8.`（两段）、`com.highgo.`
+     * （两段）无包含关系。金仓/瀚高的次段（kingbase8/highgo）已唯一标识厂商，仍取两段。
+     */
+    private static final java.util.Set<String> THREE_SEGMENT_VENDORS =
+            new java.util.HashSet<String>(java.util.Arrays.asList("com.huawei.", "cn.com."));
+
+    /** 驱动类 → 厂商前缀（默认 org.x/com.x/cn.x 取两段；[#THREE_SEGMENT_VENDORS] 命中取三段）。 */
     private static String vendorKey(String driverClass) {
         final String[] p = driverClass.split("\\.");
-        if ("org".equals(p[0]) || "com".equals(p[0])) {
+        if ("org".equals(p[0]) || "com".equals(p[0]) || "cn".equals(p[0])) {
+            if (p.length >= 4 && THREE_SEGMENT_VENDORS.contains(p[0] + "." + p[1] + ".")) {
+                return p[0] + "." + p[1] + "." + p[2] + ".";
+            }
             return p[0] + "." + p[1] + ".";
         }
         return p[0] + ".";
+    }
+
+    // ---------- 守卫判别力自证（负向样本） ----------
+
+    /**
+     * 同厂商跨族假绿：连接面登记了 `com.huawei.opengauss.jdbc.Driver`，语句面**只有**
+     * `com.huawei.gaussdb.` 一族——厂商前缀必须判出两族不同，守卫必须报警。
+     *
+     * <p>这条用例是 {@link #THREE_SEGMENT_VENDORS} 的判别力证据：把 {@code vendorKey} 改回两段
+     * （`com.huawei.`）后本用例立刻变红——那正是「登记一族、另一族静默零采集」的实际形态。
+     */
+    @Test
+    public void 同厂商跨族_只登记GaussDB族不得让openGauss品牌族假绿() {
+        final java.util.Set<String> drivers = new java.util.LinkedHashSet<String>();
+        drivers.add("com.huawei.opengauss.jdbc.Driver");
+        final java.util.Set<String> specs = new java.util.LinkedHashSet<String>();
+        specs.add("com.huawei.gaussdb.jdbc.jdbc.PgStatement");
+
+        final java.util.List<String> uncovered = uncoveredDrivers(
+                drivers, specs, java.util.Collections.<String, String>emptyMap());
+        assertEquals("品牌族的连接面已登记、语句面一族都没有；两段前缀 com.huawei. 会把 gaussdb 族的"
+                + "登记当成品牌族的覆盖（假绿）。实际未覆盖清单：" + uncovered,
+                1, uncovered.size());
+        assertEquals("com.huawei.opengauss.jdbc.Driver", uncovered.get(0));
+
+        assertEquals("商用族应取三段", "com.huawei.gaussdb.",
+                vendorKey("com.huawei.gaussdb.jdbc.Driver"));
+        assertEquals("品牌族应取三段", "com.huawei.opengauss.",
+                vendorKey("com.huawei.opengauss.jdbc.Driver"));
+    }
+
+    /** P-12：三段口径只针对 com.huawei. 与 cn.com.，其余厂商前缀逐项不变。 */
+    @Test
+    public void 厂商前缀口径_其余厂商仍取两段() {
+        assertEquals("com.microsoft.", vendorKey("com.microsoft.sqlserver.jdbc.SQLServerDriver"));
+        assertEquals("com.mysql.", vendorKey("com.mysql.cj.jdbc.Driver"));
+        assertEquals("com.mysql.", vendorKey("com.mysql.jdbc.Driver"));
+        assertEquals("com.dameng.", vendorKey("com.dameng.DmDriver"));
+        assertEquals("com.gbasedbt.", vendorKey("com.gbasedbt.jdbc.Driver"));
+        assertEquals("com.kingbase8.", vendorKey("com.kingbase8.Driver"));
+        assertEquals("com.highgo.", vendorKey("com.highgo.jdbc.Driver"));
+        assertEquals("org.postgresql.", vendorKey("org.postgresql.Driver"));
+        assertEquals("org.opengauss.", vendorKey("org.opengauss.Driver"));
+        assertEquals("dm.", vendorKey("dm.jdbc.driver.DmDriver"));
+        assertEquals("oracle.", vendorKey("oracle.jdbc.OracleDriver"));
+    }
+
+    /**
+     * T-XcDialects3：`cn.` 段厂商必须取三段（`cn.com.vastbase.`），不得压成两段 `cn.com.` 或一段
+     * `cn.`——后者会让将来任何 `cn.*` 厂商互相假绿（对方登记的语句面即可把海量判成已覆盖）。
+     * 判别力负样本与 {@link #同厂商跨族_只登记GaussDB族不得让openGauss品牌族假绿} 同构。
+     */
+    @Test
+    public void cn段厂商_压成cn前缀不得让其他cn厂商假绿() {
+        assertEquals("海量 Vastbase 应取三段", "cn.com.vastbase.", vendorKey("cn.com.vastbase.Driver"));
+
+        // 反向：连接面登记海量驱动、语句面只有另一家 cn.com.* 厂商 → 守卫必须报警。
+        // 若厂商键退化为 cn.（一段）或 cn.com.（两段），这条就会假绿。
+        final java.util.Set<String> drivers = new java.util.LinkedHashSet<String>();
+        drivers.add("cn.com.vastbase.Driver");
+        final java.util.Set<String> specs = new java.util.LinkedHashSet<String>();
+        specs.add("cn.com.othervendor.jdbc.PgStatement");
+
+        final java.util.List<String> uncovered = uncoveredDrivers(
+                drivers, specs, java.util.Collections.<String, String>emptyMap());
+        assertEquals("cn 段其他厂商的语句面不得把海量判成已覆盖。实际未覆盖清单：" + uncovered,
+                1, uncovered.size());
+        assertEquals("cn.com.vastbase.Driver", uncovered.get(0));
+    }
+
+    // ---------- 名单漂移反向断言 ----------
+
+    /**
+     * `WeaveSpecs.SPECS` 新增类必须同时进测试数组（或显式排除/认领），否则拿不到字节层校验。
+     *
+     * <p>动因（调研 §7.5-2）：此前只有「测试数组 ⊆ SPECS」单向断言——**SPECS 加了类、测试没加**
+     * 不会红。而字节层用例正是 premain 红线（织入产物让宿主起不来）的唯一自动化防线，
+     * 新类绕过它等于没有防线。
+     */
+    @Test
+    public void 名单漂移_SPECS每个类都必须进测试数组或显式排除() {
+        final java.util.Set<String> known = new java.util.HashSet<String>();
+        known.addAll(Arrays.asList(STATEMENT_FACE_CLASSES));
+        known.addAll(Arrays.asList(PREPARE_FACE_CLASSES));
+        known.addAll(Arrays.asList(BYTE_VERIFIABLE_EXCLUDES));
+
+        final java.util.List<String> drifted = new java.util.ArrayList<String>();
+        for (String specClass : StatementWeaver.specClassNames()) {
+            if (known.contains(specClass)) {
+                continue;
+            }
+            boolean claimed = false;
+            for (String vendor : VENDOR_NOT_COVERED.keySet()) {
+                if (specClass.startsWith(vendor)) {
+                    claimed = true;
+                    break;
+                }
+            }
+            if (!claimed) {
+                drifted.add(specClass);
+            }
+        }
+        // 提取有效性自检（防空绿）：SPECS 应达到量级，否则「差集为空」无意义
+        assertTrue("StatementWeaver.SPECS 提取到的类过少（疑似断言失效）："
+                + StatementWeaver.specClassNames().size(), StatementWeaver.specClassNames().size() >= 20);
+        assertTrue("SPECS 里这些类没进 STATEMENT_FACE_CLASSES/PREPARE_FACE_CLASSES（新类因此拿不到"
+                + "字节层校验——premain 红线唯一防线）：" + drifted, drifted.isEmpty());
     }
 
     // ---------- 字节层（真实驱动类字节 → 织入 → JVM 链接期校验） ----------
@@ -205,6 +435,28 @@ public class StatementWeaverVendorCoverageTest {
                 continue;
             }
             assertWovenAndVerifiable(dotted);
+        }
+    }
+
+    /**
+     * MariaDB / SQLite 两族字节层直证（T-CaptureCoverage 券 01/02，准入门槛）：7 个类在**真实驱动
+     * 字节**上必须 changed 且过 JVM 链接期校验。两族 jar 在根项目 testImplementation 与本机 gradle
+     * 缓存里在位，但 agent 子项目尚未声明 testImplementation——资源不在位时本用例 skip（明确登记），
+     * 绝不静默当作「已验证」；jar 进 classpath 后自动升级为硬断言。
+     */
+    @Test
+    public void MariaDB与SQLite字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
+        final java.util.List<String> absent = new java.util.ArrayList<String>();
+        for (String dotted : JAR_OPTIONAL_BYTE_LAYER) {
+            if (!resourcePresent(dotted)) {
+                absent.add(dotted);
+                continue;
+            }
+            assertWovenAndVerifiable(dotted);
+        }
+        if (!absent.isEmpty()) {
+            org.junit.Assume.assumeTrue("MariaDB/SQLite 驱动 jar 不在 agent 测试 classpath——以下类只做了"
+                    + "谓词层校验，字节层读数由临时 classpath 注入出具（见计划 §七）：" + absent, false);
         }
     }
 
@@ -293,7 +545,25 @@ public class StatementWeaverVendorCoverageTest {
                 return true;
             }
         }
+        // 可选 jar 类：资源不在位时从批量循环剔除（改由专项用例显式 skip，避免把「缺 jar」
+        // 误报成「织入失败」；资源在位时照常进批量校验）。
+        if (resourceOptional(dotted) && !resourcePresent(dotted)) {
+            return true;
+        }
         return false;
+    }
+
+    private static boolean resourceOptional(String dotted) {
+        for (String e : JAR_OPTIONAL_BYTE_LAYER) {
+            if (e.equals(dotted)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean resourcePresent(String dotted) {
+        return ClassLoader.getSystemClassLoader().getResource(dotted.replace('.', '/') + ".class") != null;
     }
 
     private static byte[] resourceBytes(String path) throws Exception {

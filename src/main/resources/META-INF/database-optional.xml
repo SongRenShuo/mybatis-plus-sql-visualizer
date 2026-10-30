@@ -26,6 +26,20 @@
              与 Sql92/Generic 一样注册 UNKNOWN，保留语言 ID=DM，只提供 Generic 兼容能力。 -->
         <sql.dialect dbms="UNKNOWN" order="last"
                      implementationClass="cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect"/>
+        <!-- T-GaussDbDialect（券 06）：同一缺口的第二个实例——262 平台方言注册表无 GaussDB 也无
+             openGauss（.intellijPlatform 制品目录 grep gauss 零命中）。注册后语言 id `GaussDB`
+             进入 SqlDialectMappings.getAvailableValues，ExecDialectRouting 的 GaussDB 候选链首项
+             即命中，不再只能落 PostgreSQL 兜底。最小实现同样是 Generic 样板。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect"/>
+        <!-- T-XcDialects3（券 08）：同一缺口的第三、四个实例——262 平台方言注册表无 HighGo 也无
+             Vastbase（intellij.database.dialects.* 模块逐包列举实证，2026-10-29）。注册后语言
+             id `HighGo`/`Vastbase` 进入平台可用清单，两族候选链首项即命中，不再只能落
+             PostgreSQL 兜底。最小实现同样是 Generic 样板。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect"/>
     </extensions>
 
     <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu

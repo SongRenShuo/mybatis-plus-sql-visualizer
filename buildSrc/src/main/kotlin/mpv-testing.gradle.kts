@@ -223,6 +223,9 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     "testDbSchemaAnnotator" to "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
     // T-PreviewSideQuery：旁路查询真库链（COUNT/EXPLAIN/失败解包），需 Database 插件与真实 MySQL
     "testDbPreviewSideQuery" to "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
+    // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
+    // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
+    "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -549,6 +552,12 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
             // T-PreviewSideQuery：旁路查询真库链（Database 插件 + 真实 MySQL）
             "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
+            // T-GaussDbDialect 券 06：平台 sql.dialect 运行期可见性断言（需要 Database 插件）。
+            // 补登（T-XcDialects3 收口门禁实测 2026-10-30）：当时只加了 tasks.test 的
+            // excludeTestsMatching（mpv-testing 下方 filter 块），漏登本清单——分片类发现扫描
+            // 仍把它捞进 testShardN，而分片沙盒无 database jar，两用例必红（「沙盒未安装
+            // com.intellij.database」）。本清单才是分片侧的唯一排除口径。
+            "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
         )
         // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
         // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿
@@ -1275,6 +1284,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest")
         // T-PreviewSideQuery：旁路查询真库链需要 Database 插件与真实 MySQL，同上
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest")
+        // T-GaussDbDialect 券 06：平台 sql.dialect 运行期可见性断言需要 Database 插件，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest")
     }
 }
 

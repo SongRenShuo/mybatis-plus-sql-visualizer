@@ -64,8 +64,14 @@ internal object ProjectDialectEvidence {
     private val PROFILE_VALUE_KEY = Regex("^\\s*(active|include)\\s*:\\s*(.*)$")
 
     /**
-     * 驱动坐标标记 → 方言名（小写子串匹配）。键取各驱动**发布坐标里独有**的片段，
-     * 不用 `h2`/`dm` 这类短词（会在任意文本里误命中）。
+     * 驱动坐标标记 → 方言名（小写子串匹配，**顺序敏感**：`dialectsInDependencies` 按本表顺序
+     * 收集命中项）。键取各驱动**发布坐标里独有**的片段，不用 `h2`/`dm` 这类短词（会在任意
+     * 文本里误命中）。
+     *
+     * PG 协议版金仓驱动（`cn.com.kingbase:postgresql-for-kingbase`，驱动类 `org.postgresql.Driver`、
+     * 子协议 `jdbc:postgresql:`）无法从 URL 区分，靠坐标标记纠正——故其标记**必须排在**
+     * `org.postgresql:postgresql` 之前；用户用 `jdbc:postgresql:` 连金仓时仍按 PostgreSQL
+     * 渲染属已知边界（URL 层无 distinguishing 特征）。
      */
     private val DRIVER_MARKERS: List<Pair<String, String>> = listOf(
         "mysql-connector-j" to "MySQL",
@@ -73,6 +79,8 @@ internal object ProjectDialectEvidence {
         "com.mysql:mysql" to "MySQL",
         "mariadb-java-client" to "MariaDB",
         "org.mariadb.jdbc" to "MariaDB",
+        // 金仓 PG 协议版必须先于 org.postgresql:postgresql（见上 KDoc；子串含 "kingbase" 不会误伤原版 pg 坐标）
+        "postgresql-for-kingbase" to "KingBase（人大金仓）",
         "org.postgresql:postgresql" to "PostgreSQL",
         "com.oracle.database.jdbc" to "Oracle",
         "ojdbc" to "Oracle",
@@ -85,6 +93,12 @@ internal object ProjectDialectEvidence {
         "kingbase8" to "KingBase（人大金仓）",
         "opengauss" to "openGauss",
         "gaussdb" to "openGauss",
+        // T-XcDialects3（券 05）：瀚高两个制品 com.highgo:HgdbJdbc（jdbc:highgo:）与
+        // com.highgo:hgdb-pgjdbc（jdbc:postgresql:，原版 pgjdbc 直用）都归 HighGo——后者
+        // 用户拿它连瀚高时坐标纠正是唯一线索；海量 cn.com.vastdata:vastbase-jdbc。
+        "com.highgo" to "HighGo",
+        "hgdb" to "HighGo",
+        "vastbase" to "Vastbase",
     )
 
     /** 方言独占语法特征（小写正则；只认强特征，宁可漏判）。 */
