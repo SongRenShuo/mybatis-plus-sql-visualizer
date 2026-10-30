@@ -437,5 +437,57 @@
 
 **4b 的验收位与手工复验配方（如实：IDE 链未跑）**：`NOT_A_SQL_DATASOURCE` 的**决策**由 `McpExplainTargetGuardTest` 14 例纯逻辑用例覆盖（redis/mongo 命中、十一个关系库放行、大小写与空白、clickhouse 等「不猜」形态、账号口令不泄漏），**接线位置**由同一类的源码扫描断言钉住（取 `getConnectionConfig` 之后、`McpDialectDetector.resolve` 之前）。未做的是**真 IDE 链**——需要 runIde 沙盒里挂一个 `jdbc:redis://` 数据源再调 `sqlv_explain`；这条不能靠平台测试补：仓内既有结论（`pitfall-das-seed-model-quarantined`）是 **DAS 数据源模型不能手写 seed，必须由平台生成**，测试里造不出「真 redis 数据源」。手工复验配方：沙盒装 redis JDBC 驱动 → Database 工具窗新建 `jdbc:redis://127.0.0.1:6379` 数据源 → 用 `dev-support/mcp-test/mpsv-mcp-test.mjs call sqlv_explain`（参数 `dataSource` 指到该源、`selectSql`='SELECT 1'）→ 期望拿到 `[NOT_A_SQL_DATASOURCE] … sub-protocol 'redis' is not a relational SQL database …`，且错误文本不含主机/账号/口令；对照组把 `dataSource` 换成 MySQL 源应正常返回计划。本条挂「机器空闲 + runIde 窗口」，与 §五 的其余真机项同一批。
 
+### 8.6 runIde 真机走查（2026-10-31，主控亲自操作 GUI）
+
+**环境**：两个独立沙盒，均未触碰录制中的主工作树与录制沙盒。
+- 243 沙盒 `MPSV-Fr45Walk`（`-PgifRobotServer=true`，走查设置页与检查器观感）；
+- 262 沙盒 `MPSV-Fr45Walk262`（`-PgifRecord=true` + 独立 `sandboxContainer`，走查 MCP 链——2024.3 无内置 MCP Server）。
+- 走查工程为仓外新建 `F:\code\Java\Gitee\SongRenShuo\_fr45_walk_project`（自研 `<sqls>/<sql id>` 模板 + 两个 Java 夹具类 + `render.cjs` 外部渲染脚本）。
+- **在役包核验**：`jar tf` 沙盒内 `mybatis-plus-sql-visualizer-2026.10.31-beta.2.jar` 确认 `BannedApiInspection` / `BannedApiConfigurable` / `ExternalTemplateRenderer` / `ExplainTargetGuard` / `TraceDocExport` 全在；`META-INF/plugin.xml` 里 `<localInspection>` 与两个新 `applicationConfigurable` 均在。
+
+#### 4b `NOT_A_SQL_DATASOURCE` —— 真 IDE 链已验（计划 §五 的验收条目闭环）
+
+工程内 `dataSources.xml` 造两个源：`redis_probe@localhost`（`jdbc:redis://127.0.0.1:6379/0`）与 `mysql_local`（`jdbc:mysql://127.0.0.1:3306/mpj_demo`）。用 262 沙盒的 MCP（64350）调 `sqlv_explain`：
+
+```
+=== redis_probe@localhost (isError=true) ===
+[NOT_A_SQL_DATASOURCE] the data source URL sub-protocol 'redis' is not a relational SQL database;
+sqlv_explain needs a relational data source (MySQL / MariaDB / PostgreSQL / Oracle / SQL Server / H2 /
+SQLite / DM / KingBase / OceanBase / openGauss / GaussDB / HighGo / Vastbase). Point 'dataSource' at a
+relational data source and retry.
+```
+
+- 错误文本**只带子协议 `redis`**，不含主机/账号/口令 ✅（与纯逻辑用例的断言一致，真机复核）。
+- **对照组（非 SQL 不误伤）**：同一链换成 `mysql_local` → 不再返回本码，而是走到真实建连并报 `[DATASOURCE_UNREACHABLE]`（沙盒内 `RemoteJdbcServer` 起不来，`Process finished with exit code -1`，属**平台远程驱动进程在沙盒里的环境限制**，与插件无关）。**这一条证明守卫没有过度拦截关系型源**——它放行了，失败点在驱动的远程进程而不是守卫。
+- 未闭环（如实）：`sqlv_explain` 的**成功路径**（真返回计划正文）在本沙盒仍未跑通，原因是上述 RemoteJdbcServer 环境限制，不是插件代码；4a 的「计划正文非空」由 `DmExplainRealEngineTest` 的真机用例（3/3 PASS）承担。
+
+#### 「禁用 API」页 —— 观感与标红均已验
+
+- **页面结构**（截图 `c02-rule-added` / `g05-262-banned`）：左侧规则列表（标题 `类#方法` + 灰色元信息行「级别 · 创建时间 · 说明」）+ 右侧表单（类 / 匹配模式 / 方法名正则 / 级别 / 说明）+ 底排「新增规则 / 删除 / 清空」+ 右侧「保存修改」+ 状态行。与 `SqlSuppressManagerDialog` 的列表+表单形态一致，未出现布局挤压或文案截断。
+- **交互**：新增规则走「新增规则 → 填表 → 新增」，落盘到沙盒 `config/options/mp-sql-visualizer-banned-api.xml`（真机核对 XML 内容与表单一致）；选中规则时表单回填（截图 `g07` 显示标题带「错误」级别前缀与说明）。
+- **标红效果**：把规则级别设为 `error`（XML 写 `level=error` 后重启）→ `Service.java` 第 9 行 `dao.batchAdd()` **整段调用变红**（截图 `g08`：`dao.batchAdd()` 全红，同文件第 10 行 `queryAll()` 保持正常语法着色）；编辑器右上角出现**红色错误计数徽标 `1`**（截图 `g09`）。
+- **悬停提示**（243 沙盒）：告警级别下靠 `Ctrl+F1`/悬停可见 `禁用 API demo.LegacyDao#batchAdd: useAddOneNotBatchAdd` + 方法签名块 + 说明文字（截图 `b32-tooltip`）。
+- 未验：`@SuppressWarnings("BannedApi")` 真机抑制（未逐点试）；Tools 菜单「统计禁用 API 存量」动作未手动执行（扫描链有平台用例覆盖）。
+
+#### 「外部 SQL 模板」页 —— 观感与端到端联调均已验
+
+- **页面结构**（截图 `c04` / `c05` 放大 / `g04-262`）：复选框「用外部命令渲染自研模板语句」+ 语句标签名（默认 `sql`）+ 渲染命令（长文本框）+ 占位符说明行（`{template}` / `{sqlId}` / `{paramsJson}`）+ 超时（秒，默认 10）+ 工作目录。
+- **端到端**：配 `node render.cjs {template} {sqlId} {paramsJson}` 指向自研模板文件，调 `sqlv_render_sql`（`filePath=resources/mapper/ArticleMapper.xml`, `line=5`）：
+  ```
+  SELECT ID, TITLE FROM ARTICLE WHERE PLAN_YEAR = :planYear /* params: {"planYear":"2026","note":"quoted"} */
+  sourceType: external template (sql#findByPlanYear)
+  ```
+  即自研 `<sqls>/<sql id>` 格式在 MCP 链上被正确渲染（原生链会报 `SOURCE_NOT_FOUND`），`sourceType` 标注符合设计。
+
+#### 🔴 走查抓到的真缺陷并已修（UI-045-01）
+
+`paramsJson` 传 `{"planYear":"2026"}` 时，用户脚本**收到的是 `{planYear:2026}`——双引号全被吃掉**，参数 JSON 结构性损坏。根因：Windows 上 `CreateProcess` 只拿一条命令行字符串，子进程运行时（CRT / Node / Python 同款规则）把任何 `"` 当分组符并剥掉；而 `ProcessBuilder` 只给**含空格**的参数补引号，JSON 没有空格，于是裸引号进入命令行被吃。POSIX 由 `execve` 直接传 argv 无此问题。
+
+修法：新增 `ExternalTemplateRenderer.argvForLaunch`——仅 Windows 且参数含 `"` 时按 CRT 规则补外层引号并转义（引号前 N 个反斜杠 → 2N+1 个，尾随反斜杠加倍）；其余一律逐字节不变。守卫四例（Windows 补引号+转义 / POSIX 原样 / 反斜杠加倍 / 真实 node 进程验证 JSON 双引号原样到达）。反向验证：摘掉 `argvForLaunch` 调用 → 真实进程用例恰 1 红，还原复绿。修复后真机复验同一调用的 `paramsJson` 已完整保留双引号（上文端到端输出）。
+
+#### 走查过程事故（如实登记）
+
+自动化输入在「前置焦点」上出过一次误伤：一次 `ctrl+alt+s` 落在了**用户录制中的 IDE**（PID 66024）上，弹出了 Settings 对话框；发现后立即只对该窗口发 `Esc` 关闭并复查（该 IDE 窗口列表已恢复为单一主窗口，未见其它改动）。教训：沙盒 GUI 自动化必须**每次点击前重新断言前台 PID**，`SetForegroundWindow` 报 OK 不等于下一次输入仍落在同一窗口。
+
 **仍未闭环（发版前需补）**：①`runIde` 真机走查——设置页两新页观感、编辑器标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制、外部模板命令真机联调；②DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道）——本轮达梦证据是裸 JDBC 读数 + 19 列夹具，不等于 UI 链已验；③4c DM 函数矩阵落点仍待拍板（证据已备）。
 

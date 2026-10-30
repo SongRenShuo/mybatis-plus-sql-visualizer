@@ -14,6 +14,7 @@
 - **TEXT 档执行计划可落历史（T-TraceDocExport S3）**：`ExplainPlanSnapshot` 新增原文文本 payload 形态，TEXT 档方言（达梦 / Oracle / OceanBase / H2 / SQLite）的计划从此可持久化、可跨会话对比；旧 `headers/rows` payload 读回零迁移
 
 ### Fixed
+- **外部模板渲染器在 Windows 上把参数 JSON 的双引号弄丢（T-TemplateHook，真机走查抓到）**：`paramsJson` 传 `{"planYear":"2026"}`，用户脚本实际收到 `{planYear:2026}`——Windows 上 `CreateProcess` 只传一条命令行字符串，子进程运行时（CRT / Node / Python 同款规则）会把任何 `"` 当分组符并剥掉；而 `ProcessBuilder` 只给含空格的参数补引号，JSON 没有空格，裸引号就这样没了。POSIX 由 `execve` 直接传 argv，不受影响。现按平台在启动前修正 argv（仅 Windows 且参数含双引号时按 CRT 规则补外层引号并转义，其余逐字节不变），四例守卫加一条真实 node 进程端到端用例
 - **达梦执行计划恒为空（T-Fr45DmGuard，用户真机报障）**：`sqlv_explain` 在 DM 上只返回 `dialect: DM（达梦）`、计划正文为空。真机实测（DM DBMS 8.1.3.12 + DmJdbcDriver18 8.1.3.140）证伪了原证据：**DM8 的裸 `EXPLAIN <sql>` 根本不返回结果集**（`executeQuery` 0 列 0 行、`execute()` 后无第二结果集），所以问题不在多结果集通道、加 `channelNote` 也救不回来；`EXPLAIN FOR <sql>` 才返回 19 列结构化计划表（`OPERATION` / `TAB_NAME` / `IDX_NAME` / `SCAN_TYPE` / `ROW_NUMS` / `COST` / `FILTER` …）。现模板由 `EXPLAIN` 改 `EXPLAIN FOR`，档位由 TEXT 纠为 TABLE——达梦因此同时获得结构化计划面板与计划落历史。TABLE 档下游六处消费点逐一核查均为优雅降级（代价增量可算、行数走字段级变化、索引建议因缺 MySQL 列提前返回空清单）
 
 ## [2026.10.31-beta.2] - 2026-10-31
