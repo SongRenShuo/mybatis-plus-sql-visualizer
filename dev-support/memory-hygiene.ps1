@@ -80,7 +80,9 @@ $classified = foreach ($p in $procs) {
         Category = Classify $p
         CommitGb = Get-CommitGb ([uint32]$p.ProcessId)
         Cl       = ([string]$p.CommandLine)
-        WSmb     = $commitBytes[[uint32]$p.ProcessId]
+        # zombie signature uses WORKING SET (R23: 4-day-old kotlin daemon squeezed to 2.3MB WS);
+        # commit stays high for such a process, so commit alone cannot detect it
+        WsMb     = [math]::Round([double]$p.WorkingSetSize / 1MB)
     }
 }
 
@@ -99,7 +101,7 @@ foreach ($p in $classified) {
     if ($p.Category -eq 'cdp-headless') {
         $suspects += [pscustomobject]@{ Kind = 'CDP-HEADLESS'; Item = $p }
     }
-    if ($p.Category -eq 'kotlin-daemon' -and $null -ne $p.WSmb -and $p.WSmb -lt 50MB) {
+    if ($p.Category -eq 'kotlin-daemon' -and $null -ne $p.WsMb -and $p.WsMb -lt 50) {
         $suspects += [pscustomobject]@{ Kind = 'ZOMBIE-KOTLIN-DAEMON'; Item = $p }
     }
 }
