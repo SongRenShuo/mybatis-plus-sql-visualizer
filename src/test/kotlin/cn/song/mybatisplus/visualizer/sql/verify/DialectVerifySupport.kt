@@ -68,7 +68,7 @@ object DialectVerifySupport {
         val jdbcUrlTemplate: String,
         val dialect: Dialect,
         val upsertMode: UpsertMode,
-        /** 种子数据是否支持多行 VALUES（Oracle 不支持）。 */
+        /** 种子数据是否支持多行 VALUES（12c 前的 Oracle 不支持，用 `-Dmpvs.dialect.multiRowValues=false` 回退）。 */
         val multiRowValues: Boolean = true,
     )
 
@@ -84,6 +84,24 @@ object DialectVerifySupport {
 
     /** SQLite 真实引擎配对（`:memory:` 每连接独立库）。 */
     val sqliteEngine: EngineSpec = EngineSpec("SQLite", "jdbc:sqlite::memory:", SqliteDialect, UpsertMode.REAL)
+
+    /**
+     * 由方言能力**推导** upsert 执行策略（T-SuiteIdempotent，2026-10-30）。
+     *
+     * 外部实例入口原先硬编码 `UpsertMode.REAL`——对 Oracle / SQL Server / 达梦这类**无原生 upsert**
+     * 的方言，REAL 分支会去撞主键冲突（`ORA-00001` / SQL Server 2627 / DM 同族），异常直接把
+     * 后面的保留字扫描整段带崩，读数变成「方言不支持」的假结论。判定口径与渲染侧一致：
+     * [Dialect.renderUpsert] 与 [Dialect.renderUpsertStatement] 都返回 null ⇒ 渲染降级纯 INSERT，
+     * 套件只该验降级路径。
+     *
+     * 注意：这只是「插件有无原生 upsert」的推导；**引擎**是否支持该形态是另一回事
+     * （如 H2 任何模式都不认 `ON CONFLICT`），那种情况仍由配对表显式写 [UpsertMode.SKIP]。
+     */
+    fun upsertModeOf(dialect: Dialect): UpsertMode {
+        val hasNative = dialect.renderUpsert("id", listOf("biz_name")) != null ||
+            dialect.renderUpsertStatement("dev_info", listOf("id", "biz_name"), "id") != null
+        return if (hasNative) UpsertMode.REAL else UpsertMode.DEGRADE_ONLY
+    }
 
     /** 打开独立内存库连接（每用例独立，避免 H2 具名内存库跨用例共享）。 */
     fun open(spec: EngineSpec, dbName: String): Connection {
@@ -237,6 +255,9 @@ object DialectVerifySupport {
         val dialect = spec.dialect
         val q = dialect::quoteIdentifier
         // 夹具：业务表（order/table 为保留字列）+ 种子数据
+        // T-SuiteIdempotent（2026-10-30 D2 实测）：**先删后建**，否则持久库（真库外部实例）第二次跑必红
+        // （首轮 HighGo/Vastbase 就是被上一轮残留的 dev_info 挡住）。DDL 无 IF EXISTS 的引擎靠 runCatching 兜。
+        runCatching { exec(connection, "DROP TABLE dev_info") }
         assertExecutable(
             connection,
             listOf(
@@ -286,9 +307,18 @@ object DialectVerifySupport {
 
         // DELETE 最后执行
         assertExecutableParams(connection, listOf(renderDelete(dialect) to emptyList()))
+
+        // T-SuiteIdempotent：收尾清场——外部实例（真库）不留夹具表，重复跑与人工复查都干净。
+        runCatching { exec(connection, "DROP TABLE dev_info") }
     }
 
-    /** 种子数据（Oracle 不支持多行 VALUES）。 */
+    /**
+     * 种子数据。
+     *
+     * T-SuiteIdempotent 注释订正（2026-10-30）：原写「Oracle 不支持多行 VALUES」**已过期**——
+     * Oracle Free 23 实测支持 `INSERT … VALUES (…),(…)`（12c 起支持，11g 不支持）。
+     * 外部实例默认按支持处理，指向老版本（11g）时用 `-Dmpvs.dialect.multiRowValues=false` 回退。
+     */
     private fun seedRows(spec: EngineSpec): List<String> {
         val base = "INSERT INTO dev_info (id, biz_name, ${spec.dialect.quoteIdentifier("order")}, " +
             "${spec.dialect.quoteIdentifier("table")}, status) VALUES "

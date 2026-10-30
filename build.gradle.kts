@@ -98,6 +98,11 @@ dependencies {
     testImplementation(libs.highgo.jdbc)
     testImplementation(libs.vastbase.jdbc)
     testImplementation(libs.kingbase.jdbc)
+    // T-DialectDriverGap（2026-10-30）：达梦 / openGauss / OceanBase 外部实例验证驱动。
+    // openGauss 取 `-og` 变体（org.opengauss.Driver）；无后缀变体是 pgjdbc 改名包会遮蔽真 PG 驱动。
+    testImplementation(libs.dameng.jdbc)
+    testImplementation(libs.opengauss.jdbc)
+    testImplementation(libs.oceanbase.client)
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
