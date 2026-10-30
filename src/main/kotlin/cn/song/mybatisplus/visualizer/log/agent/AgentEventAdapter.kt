@@ -25,6 +25,9 @@ object AgentEventAdapter {
     /** 事件到达打点（[AgentManager] 适配前调用）。 */
     internal fun markReceived() {
         receivedCount.incrementAndGet()
+        // T-CaptureCatchAll 券02：事件恢复 → 控制台桥活性回落立即解除（重新让位）。
+        // 放在打点同一处：任何「事件真的到了」的路径都必然经过这里，漏挂即滞回失效。
+        cn.song.mybatisplus.visualizer.log.CaptureActivityFallback.onAgentEvent()
     }
 
     /** 已收事件数（诊断行取数；测试可读）。 */

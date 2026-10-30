@@ -14,7 +14,12 @@ java {
     }
 }
 
-val asmVersion = "9.4"
+// T-CaptureCatchAll 券 05：ASM 9.4 → 9.8（大改动判据：收口须跑 verifyGate）。
+// 动因：ASM 9.4 最高只认 major 64（Java 20），读 h2-2.3.232.jar 的 META-INF/versions/21
+// 类（major 65）直接抛 Unsupported class file major version 65；9.8 上限 major 69（Java 25）。
+// 版本闸上限（ClassFileVersion.MAX_SUPPORTED_MAJOR=69）与本值由 ClassFileVersionTest 双向钉住：
+// 只改一处即转红。reloc 源集共用同一版本（fat jar 的 ASM 自 relocate 与织入期 ASM 必须同源）。
+val asmVersion = "9.8"
 
 // childapp 源集（PoC 门禁的「用户应用」子进程）：仅 h2 依赖——刻意与 agent 主类隔离，
 // 子 JVM classpath 不含 agent 类，模拟真实用户应用（避免重复定义 LinkageError 假象）
@@ -154,7 +159,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.compileJava {
-    // Java 8 字节码（major 52）：JDK8 目标应用可直接加载；ASM 9.10.1 自身 Java 8 兼容
+    // Java 8 字节码（major 52）：JDK8 目标应用可直接加载；ASM 9.8 自身 Java 8 兼容
     options.release = 8
 }
 

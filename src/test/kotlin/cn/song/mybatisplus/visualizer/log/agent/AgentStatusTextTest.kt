@@ -27,9 +27,10 @@ class AgentStatusTextTest {
         heartbeatExpired: Boolean = false,
         firstHeartbeatPending: Boolean = false,
         heartbeatWindowSeconds: Long = 30L,
+        activityFallbackActive: Boolean = false,
     ) = AgentStatusSnapshot(
         enabled, livePids, everAttached, heartbeatExpired,
-        firstHeartbeatPending, heartbeatWindowSeconds,
+        firstHeartbeatPending, heartbeatWindowSeconds, activityFallbackActive,
     )
 
     @Test
@@ -144,5 +145,17 @@ class AgentStatusTextTest {
             assertFalse("状态行不得再出现「冷却」：$text", text.contains("冷却"))
             assertFalse("状态行不得再出现「重新授权」：$text", text.contains("重新授权"))
         }
+    }
+
+    // ---------- T-CaptureCatchAll 券02：活性回落解封态 ----------
+
+    @Test
+    fun test活性回落解封态与已挂载同时出现() {
+        val text = agentStatusText(snap(livePids = listOf(11L), activityFallbackActive = true))!!
+        assertTrue("会话还在这一事实不能丢（已挂载）：$text", text.contains("已挂载 pid=11"))
+        assertTrue("必须如实披露已回退控制台解析：$text", text.contains("增强捕获疑似空转，已回退控制台解析"))
+        val normal = agentStatusText(snap(livePids = listOf(11L)))!!
+        assertEquals("未解封时状态行保持原样", "已挂载 pid=11", normal)
+        assertFalse("未解封时不得出现回落文案：$normal", normal.contains("增强捕获疑似空转"))
     }
 }

@@ -49,7 +49,49 @@ internal data class CaptureDiagnostics(
      * 只能靠翻配置文件才判得出来。与重放/EP 两个计数同口径：**> 0 才显示**（零值不添噪）。
      */
     val suppressed: Long = 0L,
+    /**
+     * T-CaptureCatchAll 券02：控制台桥**活性回落已解封**——agent 在线但长期零事件、控制台仍有
+     * SQL 行，桥已恢复解析。必须恒显示（不设「非零才显示」）：这是「增强已挂载却零产出」的
+     * 唯一解释，藏起来就退回静默。
+     */
+    val activityFallbackActive: Boolean = false,
+    /**
+     * T-CaptureCatchAll 券03：agent 侧 attach 覆盖自检计数（null = 旧版 agent 未上报）。
+     * 零命中/零织入/有失败/接口兜底命中这几类事实按「异常才显示」进首行（见 [attachCoverageNotes]）。
+     */
+    val attachStats: cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats? = null,
 )
+
+/**
+ * T-CaptureCatchAll 券03：attach 覆盖事实 → 诊断片段（纯函数，零平台依赖）。
+ *
+ * 只报**用户需要据此行动**的形态：
+ *  - `matched == 0`：本次 attach 一个驱动都没命中 → 增强通道本会话不可能有事件，白名单/加载时机问题；
+ *  - `matched > 0 && woven == 0`：命中了却没织上 → 织入器/可见性闸门（不是「没装 agent」）；
+ *  - `failed > 0`：JVM 拒绝 retransform（版本/VerifyError）——数量足够说明形态漂移；
+ *  - `matchedByInterface > 0`：接口兜底生效的**正向事实**（旧版 agent 恒缺省 0，不显示）。
+ */
+internal fun attachCoverageNotes(stats: cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats?): List<String> {
+    if (stats == null) return emptyList()
+    return buildList {
+        if (stats.zeroMatched) {
+            add(MpSqlVisualizerBundle.message("log.diag.attachZero"))
+        } else if (!stats.anyWoven) {
+            // 命中数取 matched/weavable 较大值（心跳只带 weavable 时不得报「命中 0」）
+            add(MpSqlVisualizerBundle.message("log.diag.attachNoWeave", stats.matchedTotal, stats.weavable, stats.woven))
+        }
+        if (stats.failed > 0L) add(MpSqlVisualizerBundle.message("log.diag.attachFailed", stats.failed))
+        // C1 路新增：major 版本闸挡下的类数——「命中了却没织」的一条硬原因
+        if (stats.skippedByVersion > 0L) {
+            add(MpSqlVisualizerBundle.message("log.diag.attachSkippedVersion", stats.skippedByVersion))
+        }
+        // C1 路新增：transformer 兜底熔断（整体退回白名单）——覆盖变窄的直接证据
+        if (stats.catchAllKilled) add(MpSqlVisualizerBundle.message("log.diag.attachCatchAllKilled"))
+        if (stats.matchedByInterface > 0L) {
+            add(MpSqlVisualizerBundle.message("log.diag.attachInterface", stats.matchedByInterface, stats.interfaceWoven))
+        }
+    }
+}
 
 /**
  * 诊断行文案；不需要诊断时返回 null（未捕捉 / 已有条目——空态文案由面板还原为默认）。
@@ -63,6 +105,15 @@ internal fun captureDiagnosticsText(d: CaptureDiagnostics): String? {
         // T-DevAcceptFix2 ⑤：增强通道状态后恒挂「已收事件 N 条」——判「事件到没到」的唯一判别量
         MpSqlVisualizerBundle.message("log.diag.enhancedWithEvents", d.enhancedStatus, d.agentEventsReceived)
     }
+    // T-CaptureCatchAll 券02/03：增强通道的**事实补充**与状态同处首行（不新增语义行——空态折行
+    // 守卫锁定「三行语义」形态，第四行会被面板右边界裁掉）：
+    //  - 活性回落解封：桥为什么在产出；
+    //  - attach 覆盖：为什么 agent 没产出。
+    val enhancedParts = buildList {
+        add(enhanced)
+        if (d.activityFallbackActive) add(MpSqlVisualizerBundle.message("log.diag.activityFallback"))
+        addAll(attachCoverageNotes(d.attachStats))
+    }
     val console = MpSqlVisualizerBundle.message("log.diag.console", d.consolesAttached, d.linesSeen)
     // T-RA-03：丢弃/短路计数只在非零时挂尾——零值是常态，常态不该给诊断行添噪；
     // 非零则意味着「桥看到过行却没产出」，是排障时最先要看的两条线索。
@@ -75,7 +126,7 @@ internal fun captureDiagnosticsText(d: CaptureDiagnostics): String? {
     // T-AgentDiagWrap T-04：语义行按「读的人下一步要干什么」切——
     // 第一行「在捕捉吗 + 增强通道通不通」，第二行「控制台通道通不通 + 行被谁吃了」，
     // 第三行「所以下一步该做什么」。三者混成一行时，被面板右边界裁掉的总是第三行（可执行的那句）。
-    val channels = listOf(head, enhanced).joinToString(SEP)
+    val channels = (listOf(head) + enhancedParts).joinToString(SEP)
     val consoleLine = (listOf(console) + dropped).joinToString(SEP)
     val hintKey = when {
         d.waitingForConsole -> "log.diag.hint.waiting"

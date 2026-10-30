@@ -56,11 +56,11 @@ public final class AgentMain {
     }
 
     public static void premain(String agentArgs, Instrumentation inst) {
-        install(agentArgs, inst);
+        install(agentArgs, inst, true);
     }
 
     public static void agentmain(String agentArgs, Instrumentation inst) {
-        install(agentArgs, inst);
+        install(agentArgs, inst, false);
     }
 
     /**
@@ -70,9 +70,9 @@ public final class AgentMain {
      * <p>失败时：{@code installed} 保持 false、不写 {@link #ACTIVE_MARKER}，stderr 留一行
      * {@link #DEGRADE_PREFIX} 说明；后续 attach 兜底照旧可用。
      */
-    private static synchronized void install(String agentArgs, Instrumentation inst) {
+    private static synchronized void install(String agentArgs, Instrumentation inst, boolean premain) {
         try {
-            installOrThrow(agentArgs, inst);
+            installOrThrow(agentArgs, inst, premain);
         } catch (Throwable t) {
             // 不再触碰任何织入器/注册表类——类初始化已失败的类再次触达可能二次
             // ClassCircularityError / ExceptionInInitializerError（B3 格实测形态）
@@ -80,7 +80,7 @@ public final class AgentMain {
         }
     }
 
-    private static void installOrThrow(String agentArgs, Instrumentation inst) {
+    private static void installOrThrow(String agentArgs, Instrumentation inst, boolean premain) {
         if (installed) {
             return;
         }
@@ -102,6 +102,10 @@ public final class AgentMain {
         // agentmain 路径对已加载驱动 retransform（只改方法体，不增删成员——ConnectWeaver 合规）
         inst.addTransformer(new SqlHookTransformer(), true);
         retransformLoadedDrivers(inst);
+        // T-CaptureCatchAll：白名单优先 + 接口匹配兜底（D1=A）。顺序不可颠倒——兜底轮先按白名单
+        // 谓词排除已处理类。premain 阶段只记候选（券 08）：premain 内联未知字节形态失败会让宿主
+        // 起不来，这是红线；真正的接口匹配交给启动后补挂轮（daemon 线程，有限轮数 + 预算）。
+        CatchAllMatcher.afterInstall(inst, premain);
         EventBus.start(args.getPort());
         System.setProperty(ACTIVE_MARKER, "port=" + args.getPort());
         installed = true;
@@ -184,8 +188,11 @@ public final class AgentMain {
                 continue;
             }
             matched++;
+            // T-CaptureCatchAll 券 03：名单轮命中进心跳（IDE 侧「本次 attach 命中多少」的另一半）
+            CaptureBudget.noteAttachMatched();
             if (!inst.isModifiableClass(c)) {
                 unmodifiable++;
+                CaptureBudget.noteAttachUnmodifiable();
                 continue;
             }
             try {
