@@ -17,6 +17,7 @@
 ### Fixed
 - **PostgreSQL 系保留字缺项（T-GaussDbDialect 券 01）**：`PG_RESERVED` 缺 `is` / `procedure`（PG 官方附录两词均为 reserved），产物在真机上会因合法列名被判语法错；openGauss 原先直接复用 `PG_RESERVED`，比真机 `pg_get_keywords()` 保留类少 17 词（`rownum` / `minus` / `modify` 等），列名 `rownum` 在真机已确认「cannot be used as an alias」。现补 `PG_RESERVED` 缺项、新增 `OPENGAUSS_RESERVED`（183 词）与 `GAUSSDB_RESERVED`（130 词）
 - **OceanBase 执行计划档位错判（改真机实证）**：EXPLAIN 原按表格档位解析，真机返回的其实是文本形态，现改按文本档位呈现
+- **SQL Server 无排序分页渲染出非法 T-SQL**：`OFFSET … ROWS FETCH NEXT … ROWS ONLY` 在 SQL Server 上必须跟在 `ORDER BY` 之后，而 `SqlGenerator` 只在 `orderBy` 非空时才输出 `ORDER BY`、`limit` 无条件拼接——「无排序 + 分页」的预览产物在真机直接 `Incorrect syntax near '0'.`。现新增 `Dialect.limitRequiresOrderBy` 能力位（仅 SQL Server 覆写 true），无排序且带分页时补语义中性的 `ORDER BY (SELECT NULL)` 占位，位置在分页子句之前。**旧用例为什么没抓到**：`DialectH2VerificationTest` 用 H2 的 `MODE=MSSQLServer` 跑兼容面，H2 不强制这条规则，与 OceanBase 档位误登同型——兼容模式 ≠ 引擎现实。回归用例三条判据（补占位且位于 OFFSET 之前 / 已有排序不补 / MySQL 与 PostgreSQL 不引入 ORDER BY），反向验证短路兜底分支即红
 - **premain 补挂线程永不执行（单位量纲混用）**：`msProp` 统一返回纳秒（预算比较需要），但 premain 首轮延迟与轮间隔也走它，随后被直接当毫秒喂 `Thread.sleep`——默认 10 秒变成约 10^10 毫秒（约 317 年），补挂线程从未执行。白名单驱动不受影响（靠类加载期织入），**未知驱动的 premain 形态 100% 静默**，正是本轮兜底要解决的场景。现拆出 `rawMsProp` 只服务两个延迟字段；行为断言永远绿（`resetForTest()` 会把字段覆盖回正确默认值，这正是缺陷潜伏的原因），故另加源码扫描守卫钉住量纲
 - **金仓 PG 协议版驱动被误判为 PostgreSQL**：`postgresql-for-kingbase` 坐标此前排在 `org.postgresql:postgresql` 之后，方言推断与增强捕获双双落错族
 
