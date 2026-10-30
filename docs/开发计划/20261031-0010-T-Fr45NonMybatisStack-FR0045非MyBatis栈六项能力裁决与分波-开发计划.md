@@ -395,3 +395,36 @@
 - `BannedApiConfigurable` 只有 headless 冒烟，真实对话框布局/分栏未走查；存量统计「写临时文件 → `FileEditorManager.openFile` → 降级对话框」UI 链只有代码审读。
 - 匹配只按方法**声明类** FQN 判定，不做父类/接口回溯（覆写后需规则写子类）；Kotlin 调用点不覆盖（注册 `language="JAVA"`）。两项已写进 KDoc 与本记录。
 
+### 8.5 合并收口与门禁（2026-10-31，主控）
+
+**分支拓扑**：四路各独立工作树/分支，从 `4cd4ac35` 起（主工作树正在录制，全程零触碰），主控在 `t-fr45-integration` 合并。
+
+| 分支 | 工作树 | 提交 |
+|---|---|---|
+| `t-fr45-tracedoc` | `mpsv-fr45-tracedoc` | 6 笔（S1 组装器 / S3 快照 / S2 出口 / 脱敏收紧 / 文档 / 预览取数复用） |
+| `t-fr45-dmguard` | `mpsv-fr45-dmguard` | 3 笔（`248ca462` / `e2e0378c` / `a9b2ebda`） |
+| `t-fr45-bannedapi` | `mpsv-fr45-bannedapi` | 3 笔（`57d85d9e` / `8da5f032` / `a6d4ed1f`） |
+| `t-fr45-tplhook` | `mpsv-fr45-tplhook` | 4 笔（含掉线留底 `370116a1`） |
+
+**合并冲突三处，全部为「两条分支各自 +1 设置页」的同型冲突**（并集裁决）：
+
+1. `plugin.xml` 的 `applicationConfigurable`：bannedApi(12) 与 externalTemplate(11) 并存，声明序 15>12>11>10 仍严格递减。
+2. `PluginSettingsFolderConfigurable`：`ID_*` / `PAGE_*` / `SUB_PAGES` / 搜索索引四处并存；子页数 7→9。
+3. 基数断言：两条分支各自把「子页数」从 7 写到 8，**合并后实际是 9**；`PluginXmlStructureGuardTest` 8→9、`PluginSettingsFolderConfigurableTest` 列表 8→9 / 登记目标 9→10（主控在集成轮统一改正，未回改分支）。
+
+另外两个子代理各被 provider 中断一次（BannedApiCheck 实现完成后中断、TemplateHook 核心实现后中断），均已先审计工作树（无「先红」中间态、无探针残留、`git diff` 干净）再留底提交或续跑补齐，成果零丢失。
+
+**收口门禁抓出的真问题（本册唯一的门禁级返工）**：`convention.BannedApiSourceScanTest#模态弹窗只允许白名单内既有场景` 判红——「统计禁用 API 存量」动作用了 5 处模态弹窗，违反弹窗克制红线。按红线**改实现而非加白**：四条轻提示 → 平台通知（新组 `cn.song.mybatisplus.visualizer.inspection`，「无规则」带「打开设置页」直达动作）；报告落盘失败 → `LightVirtualFile` 在编辑器打开（不落盘、不弹框）；规则页「清空全部」的 YesNo 属破坏性知情确认，加白并写明依据。整改后 convention+config+i18n+inspection **382 例 / 0 失败**。
+
+**门禁读数**
+
+| 门禁 | 读数 |
+|---|---|
+| 各分支定向 | TraceDoc 32/0、DmGuard 40/0、BannedApiCheck 68/0、TemplateHook 83/0 |
+| 反向验证 | 八次（3+3+1+1），每次「摘除 → 指定用例必红 → 还原复绿」两次读数在案；TemplateHook 摘除后无既有用例会红，故补源码级接线守卫并登记元守卫 |
+| 合并态定向 | convention+config+i18n+inspection **382 / 0 / 0** |
+| 全量 `testShards` | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
+| `verifyGate` | **3/3 Compatible**（IU-243.28141.41 / 253.33514.17 / 262.10968.63），无 unresolved class / 无 incompatible |
+
+**仍未闭环（发版前需补）**：①`runIde` 真机走查——设置页两新页观感、编辑器标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制、外部模板命令真机联调；②DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道）——本轮达梦证据是裸 JDBC 读数 + 19 列夹具，不等于 UI 链已验；③4c DM 函数矩阵落点仍待拍板（证据已备）。
+
