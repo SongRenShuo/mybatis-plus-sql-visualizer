@@ -214,7 +214,7 @@
 - `config/PluginSettingsFolderConfigurable.kt` —— `ID_EXTERNAL_TEMPLATE`（:508）、`PAGE_EXTERNAL_TEMPLATE`（:538-541）、`SUB_PAGES`（:546-549，插在 mcp 与 about 之间）、搜索索引 5 项（:642-648）。
 - `config/PluginXmlStructureGuardTest.kt` / `config/PluginSettingsFolderConfigurableTest.kt` —— 子页基数 7→8、登记目标 8→9（本分支自洽同步）。
 - `convention/GuardSelfTestCoverageMetaGuardTest.kt` —— 新增 `ExternalTemplateWiringSourceScanTest` 登记项（`decisionFns` 留空 + 灵敏度说明）。
-- 双语 bundle —— `MpSqlVisualizerBundle.properties:968-981` / `MpSqlVisualizerBundle_zh.properties:943-956`，13 键（`settings.section.externalTemplate` + `.desc` + 11 个 `settings.externalTemplate.*`），中英键集全等。
+- 双语 bundle —— `MpSqlVisualizerBundle.properties:968-981` / `MpSqlVisualizerBundle_zh.properties:944-957`，13 键（`settings.section.externalTemplate` + `.desc` + 11 个 `settings.externalTemplate.*`），中英键集全等。
 
 新增设置键 / i18n 键 / 错误码：
 
