@@ -425,6 +425,7 @@
 | 合并态定向 | convention+config+i18n+inspection **382 / 0 / 0** |
 | 全量 `testShards`（首轮，2026-10-31 02:40） | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
 | 全量 `testShards`（加 `DmExplainRealEngineTest` 后复跑，03:11） | **8595 / 0 失败 / 0 错误 / 11 跳过**（跳过 +2＝真机用例在无 `-Dmpvs.dialect.*` 时按设计跳过）|
+| 全量 `testShards`（走查后补 argv 修复，04:57） | **8599 / 0 失败 / 0 错误 / 11 跳过**（+4＝`ExternalTemplateRendererTest` 新增四例引号契约用例）|
 | `verifyGate` | **3/3 Compatible**（IU-243.28141.41 / 253.33514.17 / 262.10968.63），无 unresolved class / 无 incompatible |
 
 **一次分片抖动（如实登记，非本券缺陷）**：加测试类后首次复跑（02:59 那轮）shard4 有 **9 红**，全部集中在 `ui.highlight.XmlMapperInjectorIncludeParityTest` / `XmlSqlCompletionDispatchTest` / `ui.inject.XmlGapEditingAssistTest`，栈是 `AlreadyDisposedException` 从 **Spring 插件的 `SpringContextSchemaInjector`** 抛在注入语言探测里，与本券零交集。判定依据三条：①同一份生产代码在 02:40 那轮 **0 失败**；②三个类**单独跑 16/0 全绿**；③`--rerun-tasks` 整轮复跑 **8595/0/11 全绿**。成因是分片器按用例数重新切片（加一个类后各片类数 165→166/161→154/161→172…重排），换了邻居后该 flake 被暴露——与「平台 UI 测试对邻居敏感」同族。**权威读数是 8595/0/11**。
