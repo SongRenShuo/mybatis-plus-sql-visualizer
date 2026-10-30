@@ -284,6 +284,8 @@ public class SqlSourceInterceptor implements InnerInterceptor {
                 cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||
                 // 信创 PG 系新族：海量 Vastbase（cn.com.vastbase.*）/ 瀚高 HighGo（com.highgo.*）
                 cn.startsWith("cn.com.vastbase.") || cn.startsWith("com.highgo.") ||
+                // OceanBase（com.oceanbase.*）：独立实现非 MySQL 分叉（URL 前缀 jdbc:oceanbase: 唯一）
+                cn.startsWith("com.oceanbase.") ||
                 // 华为 GaussDB 商用 / openGauss 品牌（同挂 com.huawei.）与社区 openGauss 2.x/3.x
                 cn.startsWith("com.huawei.") || cn.startsWith("org.opengauss.") ||
                 // 连接池 / ORM / Spring 数据层

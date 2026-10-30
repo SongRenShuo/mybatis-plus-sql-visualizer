@@ -152,6 +152,8 @@ internal object StackDigestFrames {
             "com.huawei.", "org.opengauss.",
             // 信创 PG 系新族：海量 Vastbase / 瀚高 HighGo（金仓 com.kingbase8. 已在上方）
             "cn.com.vastbase.", "com.highgo.",
+            // OceanBase（独立实现非 MySQL 分叉）
+            "com.oceanbase.",
             "org.apache.commons.dbcp2.", "com.ibm.db2.", "com.teradata.", "org.hibernate.",
             "com.baomidou.", "org.springframework.transaction.", "org.springframework.jdbc.",
         ).any { name.startsWith(it) }

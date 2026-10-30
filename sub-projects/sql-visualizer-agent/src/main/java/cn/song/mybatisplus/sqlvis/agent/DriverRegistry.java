@@ -59,6 +59,11 @@ public final class DriverRegistry {
         // 金仓 com.kingbase8.Driver 已在上方；三族语句面/prepare 面在 WeaveSpecs，勿只登记一半。
         s.add("cn.com.vastbase.Driver");
         s.add("com.highgo.jdbc.Driver");
+        // OceanBase Connector/J（oceanbase-client 2.4.19）：独立实现非 MySQL 分叉——与 MySQL 协议
+        // 兼容但类体系自成一套（com.oceanbase.jdbc.*，不复用 com.mysql.cj.*），URL 前缀
+        // `jdbc:oceanbase:` 唯一（com.oceanbase.jdbc.UrlParser 常量池实证）。语句面/prepare 面在
+        // WeaveSpecs，勿只登记一半。
+        s.add("com.oceanbase.jdbc.Driver");
         DRIVER_CLASSES = Collections.unmodifiableSet(s);
         // T-StatementWeave 语句面/prepare 面名单在 StatementWeaver.SPECS（单一真相，形态标注
         // 跟类走）；本表只保留驱动 connect 面。两新面谓词委托 specOf 判定。

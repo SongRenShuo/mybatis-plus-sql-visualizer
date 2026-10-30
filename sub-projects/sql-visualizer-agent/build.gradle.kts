@@ -127,6 +127,11 @@ dependencies {
     testImplementation("cn.com.kingbase:kingbase8:9.0.1")
     testImplementation("cn.com.vastdata:vastbase-jdbc:2.16.1v")
     testImplementation("com.highgo:HgdbJdbc:6.2.5")
+    // T-CaptureCoverage 券 03：OceanBase Connector/J 夹具（Maven Central，1.18 MB）——与 MySQL 协议
+    // 兼容但类体系自成一套（com.oceanbase.jdbc.*，URL 前缀 jdbc:oceanbase: 唯一），只进测试
+    // classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + JVM 链接期校验。
+    // OceanBaseStatement 类体 37KB（chop_frame 风险最高），字节层过不了则整类不登记。
+    testImplementation("com.oceanbase:oceanbase-client:2.4.19")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，

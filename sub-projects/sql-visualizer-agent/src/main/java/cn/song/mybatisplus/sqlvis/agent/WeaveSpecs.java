@@ -104,6 +104,20 @@ final class WeaveSpecs {
                 // 与 pgjdbc 无继承关系），包形 com.highgo.jdbc.jdbc.Pg* 与华为 GaussDB 商用驱动同构
                 "com.highgo.jdbc.jdbc.PgStatement",
                 "com.highgo.jdbc.jdbc.PgPreparedStatement");
+        // OceanBase Connector/J（oceanbase-client 2.4.19）：与 MySQL 协议兼容但类体系自成一套
+        // （com.oceanbase.jdbc.*，不复用 com.mysql.cj.*），URL 前缀 `jdbc:oceanbase:` 唯一，故必须
+        // 单列。OceanBaseStatement（纯语句，`implements java.sql.Statement, Cloneable`）自带
+        // execute/executeQuery/executeUpdate/executeLargeUpdate/addBatch/clearBatch/executeBatch 全族；
+        // JDBC4PreparedStatement / JDBC4ServerPreparedStatement 两者 `extends BasePrepareStatement
+        // extends OceanBaseStatement`，虽继承大父类但各有**自有 execute 族**（javap 实测：前者
+        // execute/executeQuery/executeUpdate/addBatch/clearBatch/executeBatch/executeLargeBatch，
+        // 后者 execute/executeQuery/executeUpdate/executeLargeUpdate/addBatch/executeBatch），
+        // 父类织入覆盖不到它们的覆盖点，故两个 PS 类必须单列。
+        // CallableStatement 不单列（D3 定案）：JDBC4ServerPreparedStatement 继承链已覆盖 execute 族。
+        putSpec(statementFace,
+                "com.oceanbase.jdbc.OceanBaseStatement",
+                "com.oceanbase.jdbc.JDBC4PreparedStatement",
+                "com.oceanbase.jdbc.JDBC4ServerPreparedStatement");
         // 达梦 DM8（DmJdbcDriver18 8.1.3.140）：出口处 javac 对已死局部发 chop_frame，旧织入形态
         // （出口读原局部）字节级 VerifyError；T-DmWeave 改为「入口捕获 this/首参 → 出口读自有槽」后，
         // **timed 面**（EXEC_PARAM/EXEC_CTX/BATCH）可通过 JVM 校验并落钩。
@@ -146,6 +160,10 @@ final class WeaveSpecs {
                 "com.kingbase8.jdbc.KbConnection",
                 "cn.com.vastbase.jdbc.PgConnection",
                 "com.highgo.jdbc.jdbc.PgConnection");
+        // OceanBase 连接（T-CaptureCoverage 券 03）：`OceanBaseConnection implements ConnectionImpl`
+        // 且自有 6 个 prepareStatement 出口 + 3 个 prepareCall 出口（javap 实测），非 MySQL
+        // ConnectionImpl 子类，故 prepare 面单列。
+        putSpec(prepareFace, "com.oceanbase.jdbc.OceanBaseConnection");
     }
 
     /** 类名（点分）→ 织入形态 spec；未登记返回 null。 */

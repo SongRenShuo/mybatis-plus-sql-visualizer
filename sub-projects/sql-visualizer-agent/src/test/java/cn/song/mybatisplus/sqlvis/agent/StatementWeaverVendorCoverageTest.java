@@ -92,6 +92,13 @@ public class StatementWeaverVendorCoverageTest {
             "cn.com.vastbase.jdbc.PgPreparedStatement",
             "com.highgo.jdbc.jdbc.PgStatement",
             "com.highgo.jdbc.jdbc.PgPreparedStatement",
+            // OceanBase（oceanbase-client 2.4.19，T-CaptureCoverage 券 03）：与 MySQL 协议兼容但类
+            // 体系自成一套（com.oceanbase.jdbc.*）。OceanBaseStatement 纯语句自带 execute 全族；
+            // 两个 PS 类 extends BasePrepareStatement extends OceanBaseStatement，各有自有 execute
+            // 族故单列。CallableStatement 不单列（D3 定案：继承链覆盖）
+            "com.oceanbase.jdbc.OceanBaseStatement",
+            "com.oceanbase.jdbc.JDBC4PreparedStatement",
+            "com.oceanbase.jdbc.JDBC4ServerPreparedStatement",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -113,6 +120,9 @@ public class StatementWeaverVendorCoverageTest {
             "com.kingbase8.jdbc.KbConnection",
             "cn.com.vastbase.jdbc.PgConnection",
             "com.highgo.jdbc.jdbc.PgConnection",
+            // OceanBase 连接（T-CaptureCoverage 券 03）：OceanBaseConnection implements ConnectionImpl，
+            // 自有 6 个 prepareStatement + 3 个 prepareCall 出口，非 MySQL ConnectionImpl 子类
+            "com.oceanbase.jdbc.OceanBaseConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
