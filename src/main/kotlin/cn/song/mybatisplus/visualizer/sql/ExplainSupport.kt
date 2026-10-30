@@ -84,9 +84,16 @@ object ExplainSupport {
      *  - KingbaseES V8/V9：`EXPLAIN (FORMAT JSON)`（PG 兼容）；
      *  - DM8：`EXPLAIN <sql>`，返回 `#NSET2` 计划文本；
      *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
-     *  - OceanBase（T-DialectXcFamily）：`EXPLAIN <sql>`，TABLE 档——官方 V4.x《SQL 执行计划简介》
-     *    `EXPLAIN [explain_type] dml_statement`、缺省 `FORMAT = TRADITIONAL` 表格行（文档级，
-     *    无真机——环境受限未验证留账）；
+     *  - OceanBase（T-DialectXcFamily 接入，T-OBExplainFormat 纠档）：`EXPLAIN <sql>`，**TEXT 档**——
+     *    官方 V4.x《SQL 执行计划简介》称缺省 `FORMAT = TRADITIONAL` 为表格行，但**真机实证推翻**：
+     *    社区镜像引擎级（oceanbase/oceanbase-ce:4.3.5-lts，OB CE 4.3.5.6，`ob_compatibility_mode=MYSQL`）
+     *    `EXPLAIN SELECT 1` 返回**单列 `Query Plan`**，值是 OB 自有的 ASCII 计划树
+     *    （`|ID|OPERATOR|NAME|EST.ROWS|EST.TIME(us)|` 段 + `Outputs & filters` 段；真实表得
+     *    `TABLE RANGE SCAN`，带 `partitions(p0)` / `is_index_back` 等 OB 专有字段），**不是** MySQL
+     *    的 `id/select_type/table/type/...` 多列表格；`EXPLAIN FORMAT = JSON` 为 OB 专用紧凑 JSON
+     *    （`ID/OPERATOR/EST.ROWS`），**不是** MySQL `query_block` 结构。档位误登 TABLE 会让
+     *    [cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor] 走 MySQL 列名解析分支（找不到
+     *    `type/key/rows/Extra` 列即提前返回）→ OceanBase 索引建议永不触发（T-ECH-03 同型假绿）；
      *  - openGauss（T-DialectXcFamily）：`EXPLAIN (FORMAT JSON)`，JSON 档——openGauss 5.0.0
      *    **真机实证**（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 `QUERY PLAN` JSON 文本）；
      *  - Oracle（R23 接入）：`EXPLAIN PLAN FOR <sql>`，TEXT 档——**真机实证** Oracle Free 23 +
@@ -115,7 +122,15 @@ object ExplainSupport {
         Entry("DM（达梦）", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "真机实证 DM8（返回 #NSET2 计划文本）"),
         Entry("H2", "EXPLAIN PLAN FOR $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "H2 2.3.232 引擎级单测"),
         Entry("SQLite", "EXPLAIN QUERY PLAN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "SQLite 引擎级单测"),
-        Entry("OceanBase", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
+        Entry(
+            "OceanBase",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "社区镜像引擎级实证：OceanBase CE 4.3.5.6（ob_compatibility_mode=MYSQL）EXPLAIN SELECT 1 返回单列 Query Plan ASCII 树" +
+                "（算子 TABLE RANGE SCAN、含 partitions/is_index_back），非官方文档所述的 TRADITIONAL 表格行；" +
+                "EXPLAIN FORMAT=JSON 为 OB 专用紧凑 JSON（ID/OPERATOR/EST.ROWS），非 MySQL query_block。" +
+                "档位误登 TABLE 会让索引建议走 MySQL 列名分支而永不触发（T-OBExplainFormat）",
+        ),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
         Entry(
             "GaussDB",

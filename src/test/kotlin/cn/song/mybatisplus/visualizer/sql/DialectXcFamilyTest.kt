@@ -229,10 +229,11 @@ class DialectXcFamilyTest {
     // ---------- EXPLAIN 渲染（模板经 ExplainSupport 表） ----------
 
     @Test
-    fun `explain渲染_OceanBase同MySQL形态`() {
+    fun `explain渲染_OceanBase同MySQL模板但TEXT档`() {
         val sample = "SELECT * FROM users WHERE id > 1"
         assertEquals("EXPLAIN $sample", OceanBaseDialect.renderExplainStatement(sample))
-        assertEquals(ExplainOutputFormat.TABLE, ExplainSupport.formatFor("OceanBase"))
+        // T-OBExplainFormat：真机实证 OB CE 4.3.5.6 返回单列 Query Plan ASCII 树（非表格行）→ TEXT 档
+        assertEquals(ExplainOutputFormat.TEXT, ExplainSupport.formatFor("OceanBase"))
     }
 
     @Test
