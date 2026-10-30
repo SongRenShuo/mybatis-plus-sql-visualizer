@@ -140,12 +140,51 @@ internal object StackDigestFrames {
             "com.zaxxer.hikari.pool.", "org.apache.ibatis.executor.",
             "org.apache.ibatis.session.", "org.apache.ibatis.plugin.",
             "org.apache.coyote.", "org.apache.tomcat.", "cn.dev33.satoken.",
+            // T-StackBizFrame S3：JDBC 驱动族与 MyBatis 日志/绑定/反射/类型族。它们在每条 SQL 的
+            // 栈顶恒在场，旧名单不收时弹层里「可见行」反而是驱动帧——项目帧缺席时观感上更像
+            // 「看不到项目类」。这些包是纯依赖，误折叠风险低。
+            "org.apache.ibatis.logging.", "org.apache.ibatis.binding.",
+            "org.apache.ibatis.reflection.", "org.apache.ibatis.type.",
+            "org.apache.ibatis.datasource.", "org.apache.ibatis.transaction.",
+            "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
+            "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
+            "com.gbasedbt.", "com.kingbase8.", "com.alibaba.druid.", "com.mchange.",
+            "com.huawei.", "org.opengauss.",
+            // 信创 PG 系新族：海量 Vastbase / 瀚高 HighGo（金仓 com.kingbase8. 已在上方）
+            "cn.com.vastbase.", "com.highgo.",
+            // OceanBase（独立实现非 MySQL 分叉）
+            "com.oceanbase.",
+            "org.apache.commons.dbcp2.", "com.ibm.db2.", "com.teradata.", "org.hibernate.",
+            "com.baomidou.", "org.springframework.transaction.", "org.springframework.jdbc.",
         ).any { name.startsWith(it) }
     }
 
     /** agent 自身帧判定（采集埋点链，弹层降权用）。 */
     internal fun isAgentFrame(frame: StackFrameEntry): Boolean =
         frame.fqcn.startsWith(AGENT_PACKAGE_PREFIX)
+
+    /** 单段解析（供内联摘要取景复用；解析失败返回 null，永不抛）。 */
+    internal fun parseSegment(segment: String): StackFrameEntry? = parseFrame(segment.trim())
+
+    /**
+     * T-StackBizFrame S3：meta 行内联摘要的取景（只取景，不截断——截断仍由调用方按
+     * `STACK_DIGEST_MAX_CHARS` 处理，宽度预算与文案契约不变）。
+     *
+     * 原实现固定取摘要串前若干字符，而摘要头恒为 agent/驱动/框架帧——长栈下那一行永远不含项目帧
+     * （用户报障形态：位置列有项目类，可见行的栈摘要里全是驱动帧）。现规则：头部全为已知内部帧时
+     * 跳到首个非内部帧；首个非内部帧本来就在开头（或整条栈都是内部帧）时原样返回，既有契约不变。
+     */
+    internal fun projectExcerpt(digest: String): String {
+        if (digest.isBlank()) return digest
+        val segments = digest.split(FRAME_SEPARATOR)
+        for (i in segments.indices) {
+            val entry = parseSegment(segments[i]) ?: continue
+            if (!isKnownInternal(entry)) {
+                return if (i == 0) digest else segments.drop(i).joinToString(FRAME_SEPARATOR)
+            }
+        }
+        return digest
+    }
 
     /**
      * 单帧解析：`pkg.Class#method:line`。`#` 定位类名/方法名边界（首个 `#`——方法名不含 `#`）；

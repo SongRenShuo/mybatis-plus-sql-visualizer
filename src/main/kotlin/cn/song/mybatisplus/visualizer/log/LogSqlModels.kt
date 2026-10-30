@@ -119,6 +119,12 @@ data class LogSqlEntry(
     /** T-SourceJumpFunnel：调用栈快照「类#方法:行 ← …」（仅 agent 通道；详情面板人工往上追踪用）。 */
     val stackDigest: String? = null,
     /**
+     * T-StackBizFrame S3：产生该 SQL 的线程名（仅 agent 通道）。调用栈弹层标题展示，
+     * 让「调度线程 / 异步池 / 请求线程」一眼可辨（同类误报的第一判别量）。
+     * null = 未知（桥通道 / 旧条目 / 旧日志文件），标题退回纯「调用栈」。
+     */
+    val threadName: String? = null,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
@@ -156,6 +162,19 @@ data class LogSqlEntry(
      * 自动存档/读回按自由文本回环（SqlLogAutoSaver/SqlLogFileReader，格式无关）。
      */
     val databaseName: String? = null,
+    /**
+     * T-DialectInferFix：本次执行连的那条连接的**方言名**（[cn.song.mybatisplus.visualizer.sql.DialectRegistry]
+     * 命名空间，如 `PostgreSQL`；不是 [databaseName] 那种展示串）。
+     *
+     * 与 [databaseName] 同源（agent 事件的 `connect` URL），但**取的是渲染用的命名空间**：
+     * [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects] 的显示名不能直接喂
+     * `DialectRegistry.byName`（HSQL/GBASE 不在注册表里、命名口径也不同）。
+     *
+     * 用途：日志/历史双击预览据此把「这条 SQL 当时跑在哪个库」当作 EXACT 方言证据
+     * （O-145 方案第 2 条），不再让预览回落 MySQL。null = 未知（桥通道 / 旧版 agent / 旧条目）。
+     * 随 pd 载荷键 `dl` 落盘（仅非空落键，旧读端忽略未知键）。
+     */
+    val dialectName: String? = null,
     /**
      * Actual SQL 折叠附注（R10 T-ShardingSphereCompat，D1=A）：[SqlSource.SHARDINGSPHERE]
      * 条目的 `Actual SQL:` 段原文（多分片逐行、换行连接）；其余来源恒 null。
@@ -445,6 +464,7 @@ internal fun mergeDuplicateEntry(existing: LogSqlEntry, incoming: LogSqlEntry): 
         executionTimeMs = existing.executionTimeMs ?: incoming.executionTimeMs,
         updateCount = existing.updateCount ?: incoming.updateCount,
         databaseName = existing.databaseName ?: incoming.databaseName,
+        dialectName = existing.dialectName ?: incoming.dialectName,
         mapperStatement = existing.mapperStatement ?: incoming.mapperStatement,
         requestTag = existing.requestTag ?: incoming.requestTag,
         errorText = existing.errorText ?: incoming.errorText,

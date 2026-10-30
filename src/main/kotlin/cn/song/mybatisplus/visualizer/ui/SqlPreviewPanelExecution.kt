@@ -688,10 +688,12 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
         // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
         // `effectiveDialect` 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
-        // renderedDialect 未赋值的链）。而渲染器 `DialectRegistry.byName(null)` 的既有语义是
-        // **回落 MySQL**（Dialect.kt:908-909）——即实际渲染方言从来不是「未知」。此处按同一口径
-        // 补回落，避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
+        // renderedDialect 未赋值的链）。T-DialectInferFix 起，showResult 会先用统一决策链
+        // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
+        // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
+        // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
         renderedDialectName = result?.effectiveDialect?.name
+            ?: currentDialectDecision?.compatibilityFallbackName
             ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
         intent = intent,
         canLosslesslyRerender = canRerender,

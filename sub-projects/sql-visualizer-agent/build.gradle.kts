@@ -14,7 +14,12 @@ java {
     }
 }
 
-val asmVersion = "9.4"
+// T-CaptureCatchAll 券 05：ASM 9.4 → 9.8（大改动判据：收口须跑 verifyGate）。
+// 动因：ASM 9.4 最高只认 major 64（Java 20），读 h2-2.3.232.jar 的 META-INF/versions/21
+// 类（major 65）直接抛 Unsupported class file major version 65；9.8 上限 major 69（Java 25）。
+// 版本闸上限（ClassFileVersion.MAX_SUPPORTED_MAJOR=69）与本值由 ClassFileVersionTest 双向钉住：
+// 只改一处即转红。reloc 源集共用同一版本（fat jar 的 ASM 自 relocate 与织入期 ASM 必须同源）。
+val asmVersion = "9.8"
 
 // childapp 源集（PoC 门禁的「用户应用」子进程）：仅 h2 依赖——刻意与 agent 主类隔离，
 // 子 JVM classpath 不含 agent 类，模拟真实用户应用（避免重复定义 LinkageError 假象）
@@ -116,6 +121,31 @@ dependencies {
     // T-DmWeave：达梦语句面/prepare 面登记（本机 demo 声明版 DmJdbcDriver18 8.1.3.140）——
     // 真实驱动类字节进**测试 classpath**，供覆盖率守卫做字节层织入 + JVM 校验探针。
     testImplementation("com.dameng:DmJdbcDriver18:8.1.3.140")
+    // T-GaussCapture：GaussDB / openGauss 三族驱动夹具——均为自包含 jar（`org/postgresql`
+    // 条目数为 0，与 pgjdbc 无继承关系），只进测试 classpath，生产依赖图不变。
+    // 华为 GaussDB 商用驱动（语句/prepare 类包 com.huawei.gaussdb.jdbc.jdbc.Pg*）
+    testImplementation("com.huaweicloud.gaussdb:gaussdbjdbc:506.0.0.b058-jdk7")
+    // 华为 openGauss 品牌驱动（包 com.huawei.opengauss.jdbc.jdbc.Pg*）
+    testImplementation("com.huaweicloud.gaussdb:opengaussjdbc:506.0.T35")
+    // 社区 openGauss 2.x/3.x（包 org.opengauss.jdbc.Pg*；5.x/7.x 已整体回到 org.postgresql.*）
+    testImplementation("org.opengauss:opengauss-jdbc:3.0.0")
+    // T-XcDialects3：信创 PG 系三族驱动夹具（金仓 kingbase8 / 海量 vastbase-jdbc / 瀚高 HgdbJdbc）
+    // ——均为完全重定位的自包含 jar（`org/postgresql` 条目数为 0，与 pgjdbc 无继承关系），
+    // 只进测试 classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + JVM 链接期校验。
+    testImplementation("cn.com.kingbase:kingbase8:9.0.1")
+    testImplementation("cn.com.vastdata:vastbase-jdbc:2.16.1v")
+    testImplementation("com.highgo:HgdbJdbc:6.2.5")
+    // T-CaptureCoverage 券 03：OceanBase Connector/J 夹具（Maven Central，1.18 MB）——与 MySQL 协议
+    // 兼容但类体系自成一套（com.oceanbase.jdbc.*，URL 前缀 jdbc:oceanbase: 唯一），只进测试
+    // classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + JVM 链接期校验。
+    // OceanBaseStatement 类体 37KB（chop_frame 风险最高），字节层过不了则整类不登记。
+    testImplementation("com.oceanbase:oceanbase-client:2.4.19")
+    // T-CaptureCoverage 券 01/02 收口：MariaDB / SQLite 夹具。A 路实施时这两个 jar 只在根项目
+    // testImplementation 与本机 gradle 缓存里，字节层读数靠临时 init 脚本取得、无条件 skip；
+    // 此处固化后 7 个新类（MariaDB Statement/ClientPS/ServerPS/Connection + SQLite JDBC3Statement/
+    // JDBC3PS/JDBC3Connection）自动升级为硬断言，可选分支可删。
+    testImplementation("org.mariadb.jdbc:mariadb-java-client:3.3.3")
+    testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
@@ -132,7 +162,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.compileJava {
-    // Java 8 字节码（major 52）：JDK8 目标应用可直接加载；ASM 9.10.1 自身 Java 8 兼容
+    // Java 8 字节码（major 52）：JDK8 目标应用可直接加载；ASM 9.8 自身 Java 8 兼容
     options.release = 8
 }
 

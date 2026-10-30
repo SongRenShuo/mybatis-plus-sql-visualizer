@@ -19,6 +19,9 @@ public class TransactionProxyTest {
     @Before public void setup() throws Exception {
         disabled = AgentState.isDisabled(); AgentState.setDisabled(false); TraceBus.disconnected();
         TraceBus.configure(false, true, "abcd", true); EventBus.clearQueued();
+        // 本类驱动的是连接代理通道（出厂默认 wrapConnection=false，采集走织入面）——
+        // 必须自足开启 seam，不依赖其他测试类遗留的开关态（此前 8/8 预存红即因缺此步）。
+        SqlHookCallbacks.setWrapConnectionForTest(Boolean.TRUE);
         // Keep real-driver execution out of the test application's loader: the existing
         // zero-load weaving guard intentionally asserts H2 is not preloaded there.
         java.net.URL resource = getClass().getClassLoader().getResource("org/h2/Driver.class");
@@ -32,6 +35,7 @@ public class TransactionProxyTest {
     }
     @After public void cleanup() throws Exception {
         TraceBus.disconnected();
+        SqlHookCallbacks.setWrapConnectionForTest(null); // seam 复位出厂默认，不污染后续测试类
         if (raw != null) raw.close();
         if (driverLoader != null) driverLoader.close();
         EventBus.clearQueued(); AgentState.setDisabled(disabled);

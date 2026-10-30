@@ -158,6 +158,7 @@ object LogEntryPreviewOpener {
         val result = entry.toPreviewResult(
             formatSql = state.logFormatSql,
             literalRecovery = state.literalParamRecovery,
+            capturedDialect = entry.dialectName,
         )
         // M37.1：携带来源位置——预览面板可感知/回显 SQL 出处
         SqlPreviewService.showResult(project, result, sourceLocation = entry.sourceFile)

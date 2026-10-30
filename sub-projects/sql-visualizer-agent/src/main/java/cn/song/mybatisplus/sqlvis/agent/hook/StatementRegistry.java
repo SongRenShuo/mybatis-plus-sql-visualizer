@@ -12,8 +12,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * （PreparedStatement.execute() 无 SQL 参数）从本表取 SQL。
  *
  * <p>内存边界（计划 §四.1 定案）：键为**弱引用**（WeakHashMap）——PS 被宿主弃用后随 GC 自然清账，
- * 连接池「close=归还」复用同一实例期间登记保持有效（不织 close，归还≠废弃）；不设规模上限，
- * 泄漏面=未回收的弱键本身，与宿主 PS 生命周期同寿。
+ * 连接池「close=归还」复用同一实例期间登记保持有效（不织 close，归还≠废弃）。原「不设规模上限」
+ * 的论证在 T-CaptureCatchAll 之后不再成立（接口兜底会把**池包装语句**也登记进来，池长期持有 ⇒
+ * 弱键不再短命），故补单桶硬上限 + 淘汰，见 {@link #MAX_PER_BUCKET_PROP}。
  *
  * <p>盲区（如实登记，计划 §三 S3）：attach（agentmain retransform）**之前**已 prepare 的 PS
  * 从未经过织入的 prepare 出口，本表无其 SQL——一期处置=跳过不上报 + 计数（[unresolvedCount]，
@@ -75,6 +76,44 @@ public final class StatementRegistry {
     private static final AtomicLong UNRESOLVED = new AtomicLong();
 
     /**
+     * 单桶登记上限（T-CaptureCatchAll 券 09③ 的内存侧上限）。
+     *
+     * <p>原设计「弱键 + 不设规模上限」的论证前提是「泄漏面=未回收的弱键本身，与宿主 PS 生命周期
+     * 同寿」。但增强捕获扩到接口兜底后，**池包装语句也会被登记**（Hikari 的
+     * {@code HikariProxyPreparedStatement} 等），而连接池会长期持有这些实例——弱键不再是短命对象，
+     * 单桶可能涨到与池容量同量级，且每条登记带 SQL 文本 + 参数槽。故补一条硬上限。
+     *
+     * <p>上限语义是**淘汰**，不是「拒绝新登记」：拒绝新登记会让高并发下新语句全部采不到（丢采集），
+     * 淘汰只丢一部分已登记语句（其 SQL 会由下一次 prepare 重新登记）。淘汰顺序按 WeakHashMap 的
+     * 哈希桶序，**不保证保留最新条目**——触发上限时优先保内存不保采集，这是红线的取向。
+     * 单桶上限 × 16 桶 = 进程内登记条数上界，默认 512/桶（≈8192 条），可经
+     * {@code sqlvis.agent.registryMaxPerBucket} 调整。
+     */
+    static final String MAX_PER_BUCKET_PROP = "sqlvis.agent.registryMaxPerBucket";
+
+    private static final int DEFAULT_MAX_PER_BUCKET = 512;
+
+    private static final int MAX_PER_BUCKET = resolveMaxPerBucket();
+
+    /** 因超上限被淘汰的累计登记数（内存侧熔断的可观测口径）。 */
+    private static final AtomicLong EVICTED = new AtomicLong();
+
+    private static int resolveMaxPerBucket() {
+        try {
+            final String raw = System.getProperty(MAX_PER_BUCKET_PROP);
+            if (raw != null) {
+                final int v = Integer.parseInt(raw.trim());
+                if (v >= 16) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignore) {
+            // 非法值回落默认（注入失误不得改变生产行为）
+        }
+        return DEFAULT_MAX_PER_BUCKET;
+    }
+
+    /**
      * T-AttachPoolWarm（2026-10-09）：盲区**首条**取证打点——只打一次，后续零噪音。
      *
      * <p>现场复盘：{@link #unresolvedCount()} 此前只有「织入通道首条事件已产出」这一条出口
@@ -93,7 +132,11 @@ public final class StatementRegistry {
         if (statement == null || sql == null || sql.isEmpty()) {
             return;
         }
-        bucketFor(statement).put(statement, new Ctx(sql, url));
+        final Map<Object, Ctx> bucket = bucketFor(statement);
+        synchronized (bucket) {
+            bucket.put(statement, new Ctx(sql, url));
+            evictIfNeeded(bucket);
+        }
     }
 
     /** 取登记（无则 null）。 */
@@ -129,9 +172,44 @@ public final class StatementRegistry {
             if (ctx == null) {
                 ctx = new Ctx(null, null);
                 bucket.put(statement, ctx);
+                evictIfNeeded(bucket);
             }
             return ctx;
         }
+    }
+
+    /**
+     * 超上限即淘汰（调用方必须已持有桶监视器）。
+     *
+     * <p>淘汰到 3/4 上限而不是「刚好到上限」：每次淘汰都要迭代整桶，刚好淘汰会让后续每次登记都
+     * 触发一次迭代（摊销成本变高）；留 1/4 余量把摊销压到「每 MAX/4 次登记一次迭代」。
+     * 迭代顺序是 WeakHashMap 的桶序（近似插入序），被淘汰的是较早登记、通常已不再执行的语句。
+     */
+    private static void evictIfNeeded(Map<Object, Ctx> bucket) {
+        if (bucket.size() <= MAX_PER_BUCKET) {
+            return;
+        }
+        final int target = MAX_PER_BUCKET * 3 / 4;
+        long removed = 0L;
+        final java.util.Iterator<Object> it = bucket.keySet().iterator();
+        while (bucket.size() > target && it.hasNext()) {
+            it.next();
+            it.remove();
+            removed++;
+        }
+        if (removed > 0L) {
+            EVICTED.addAndGet(removed);
+        }
+    }
+
+    /** 单桶登记上限（取证/测试读数）。 */
+    public static int maxPerBucket() {
+        return MAX_PER_BUCKET;
+    }
+
+    /** 因超上限被淘汰的累计登记数（取证/测试读数）。 */
+    public static long evictedCount() {
+        return EVICTED.get();
     }
 
     /** statement 面 clearBatch 出口：清批串（有登记才清——清账不建账，无登记即无事可清）。 */
@@ -179,5 +257,6 @@ public final class StatementRegistry {
         }
         UNRESOLVED.set(0L);
         UNRESOLVED_WARNED_ONCE.set(false);
+        EVICTED.set(0L);
     }
 }

@@ -1,12 +1,15 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -85,7 +88,8 @@ class DialectTest {
         assertEquals(
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
-                "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss",
+                "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
+                "HighGo", "Vastbase",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -107,7 +111,7 @@ class DialectTest {
 
     /**
      * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：方言逐库声明——Oracle / H2 = UPPER、
-     * PostgreSQL / KingBase / openGauss = LOWER、其余 6 方言 = NONE。
+     * PostgreSQL / KingBase / openGauss / GaussDB / HighGo / Vastbase = LOWER、其余 6 方言 = NONE。
      *
      * 归属依据（真机/引擎实测，2026-09-22）：
      *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
@@ -135,13 +139,17 @@ class DialectTest {
         // OceanBase=NONE（MySQL 模式推定，真机核对后增量）
         assertEquals(IdentifierFolding.LOWER, OpenGaussDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, OceanBaseDialect.identifierFolding)
+        // T-XcDialects3 券 01/02：HighGo=LOWER（社区镜像 V6.0.1 引擎实测 2026-10-30）、
+        // Vastbase=LOWER（官方《开发规范》推定，真机在途）
+        assertEquals(IdentifierFolding.LOWER, HighGoDialect.identifierFolding)
+        assertEquals(IdentifierFolding.LOWER, VastbaseDialect.identifierFolding)
         // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
         assertEquals(
             listOf("Oracle", "H2"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
-            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss"),
+            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB", "HighGo", "Vastbase"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
         )
     }
@@ -265,6 +273,38 @@ class DialectTest {
             "OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
             SqlServerDialect.renderLimit(LimitClause(offset = 5, count = 10)),
         )
+    }
+
+    /**
+     * T-SqlServerLimitOrder（2026-10-30 真机实证）：SQL Server 的 `OFFSET … FETCH` **必须**跟在
+     * `ORDER BY` 之后，否则引擎报 `Incorrect syntax near '0'`（SQL Server 2022 CU27 实测）。
+     *
+     * <p>旧用例没抓到，是因为只在 `renderLimit` 层断言子句文本、且兼容面验证走 H2 的
+     * `MODE=MSSQLServer`——H2 不强制这条规则（假绿，与 T-OBExplainFormat 同型）。
+     *
+     * <p>三条判据：①无排序 + 分页 → 补 `ORDER BY (SELECT NULL)` 且位于 OFFSET 之前；
+     * ②已有排序 → **不**补（不改变用户语义）；③其他方言无排序 + 分页 → **不**引入 ORDER BY。
+     */
+    @Test
+    fun `sqlserver_无排序分页必须补ORDER BY占位`() {
+        val noOrder = SelectStatement(table = table, limit = LimitClause(offset = 5, count = 10))
+        val sql = SqlGenerator.generate(noOrder, compact = false, dialect = SqlServerDialect)
+        assertTrue("SQL Server 无排序 + 分页必须补 ORDER BY (SELECT NULL)，实际: " + sql,
+            sql.contains("ORDER BY (SELECT NULL)"))
+        assertTrue("ORDER BY 占位必须在 OFFSET 之前（T-SQL 语法位），实际: " + sql,
+            sql.indexOf("ORDER BY (SELECT NULL)") < sql.indexOf("OFFSET 5 ROWS"))
+
+        // 已有排序：不补占位，保留用户语义
+        val withOrder = noOrder.copy(orderBy = listOf(OrderByItem(ColumnRef(columnName = "id"), asc = false)))
+        val sql2 = SqlGenerator.generate(withOrder, compact = false, dialect = SqlServerDialect)
+        assertTrue("已有 ORDER BY 时不得再补占位，实际: " + sql2, !sql2.contains("ORDER BY (SELECT NULL)"))
+        assertTrue("用户 ORDER BY 应保留，实际: " + sql2, sql2.contains("ORDER BY id DESC"))
+
+        // 其他方言：不得引入 ORDER BY
+        val mysql = SqlGenerator.generate(noOrder, compact = false, dialect = MySqlDialect)
+        assertTrue("MySQL 不得引入 ORDER BY，实际: " + mysql, !mysql.contains("ORDER BY"))
+        val pg = SqlGenerator.generate(noOrder, compact = false, dialect = PostgreSQLDialect)
+        assertTrue("PostgreSQL 不得引入 ORDER BY，实际: " + pg, !pg.contains("ORDER BY"))
     }
 
     /** H2 分页（T-M22-03）：无 offset 时仅 `LIMIT {count}`。 */

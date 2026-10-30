@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.CaptureActivityFallback
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
 import cn.song.mybatisplus.visualizer.log.RunConfigurationProcessListener
@@ -1334,6 +1335,9 @@ class AgentManager(private val project: Project) : Disposable {
         // 控制台通道照常解析兜底，两通道不并存（agent 侧已丢，无重复条目）。
         val gateNow = online && captureConfirmedActive() && !userPaused
         val gateWas = SqlCaptureGate.paused.getAndSet(gateNow)
+        // T-CaptureCatchAll 券02：让位起点/回落沿同步给活性回落状态机（白名单漏驱动导致的双哑
+        // 由它兜底）。放在闸门写入之后：状态机的「静默计时」必须与闸门实际生效时刻对齐。
+        CaptureActivityFallback.onGateChanged(gateNow)
         // T-AttachZeroEvent P3（2026-10-09 现场复盘）：通道纪元——接管沿（false→true，桥让位、
         // agent 接管）重置**本项目**缓冲的去重索引。dedupeKey 跨通道统一（AgentEventAdapter 契约）
         // 的目的是折叠接管/回落重叠期的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
@@ -1426,6 +1430,8 @@ class AgentManager(private val project: Project) : Disposable {
             firstHeartbeatPending = firstHeartbeatPending.get(),
             // 秒数取当前在线窗口值（测试注入短窗时文案跟着变，不硬编码 30）
             heartbeatWindowSeconds = heartbeatWindowMs / 1000,
+            // T-CaptureCatchAll 券02：活性回落解封态——设置页状态行如实披露「已回退控制台解析」
+            activityFallbackActive = CaptureActivityFallback.isActive(),
         ),
     )
 
@@ -1798,6 +1804,9 @@ class AgentManager(private val project: Project) : Disposable {
             executor.shutdownNow()
             monitor.shutdownNow()
             SqlCaptureGate.paused.set(false)
+            // T-CaptureCatchAll 券02/03：项目销毁 → 活性回落状态与 attach 覆盖计数一并清空
+            CaptureActivityFallback.reset()
+            AgentAttachReport.reset()
         }
     }
 }

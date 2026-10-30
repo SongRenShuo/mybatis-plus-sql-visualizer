@@ -8,6 +8,7 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -46,7 +47,7 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         return sb.substring(0, length)
     }
 
-    private fun makeResult(stackDigest: String?): PreviewResult = PreviewResult(
+    private fun makeResult(stackDigest: String?, threadName: String? = null): PreviewResult = PreviewResult(
         sql = "SELECT id\nFROM user\nWHERE username = ?",
         compactSql = "SELECT id FROM user WHERE username = ?",
         unresolvedParams = listOf("username"),
@@ -55,6 +56,7 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         tableName = "user",
         columns = listOf("id", "username"),
         stackDigest = stackDigest,
+        threadName = threadName,
     )
 
     // ------------------------------------------------------------------
@@ -101,6 +103,67 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
 
     fun test无调用栈_内联摘要为空() {
         assertEquals("", buildStackDigestInlineLine(null))
+    }
+
+    // ------------------------------------------------------------------
+    // T-StackBizFrame S3：弹层标题带线程名
+    // ------------------------------------------------------------------
+
+    fun test弹层标题_无线程名时退回纯调用栈() {
+        val plain = MpSqlVisualizerBundle.message("panel.stackPopup.title")
+        assertEquals(plain, buildStackPopupTitle(null))
+        assertEquals("空白线程名视同未知", plain, buildStackPopupTitle("   "))
+    }
+
+    fun test弹层标题_带线程名时附加到标题() {
+        val title = buildStackPopupTitle("scheduling-1")
+        assertTrue("标题应含线程名: $title", title.contains("scheduling-1"))
+        assertTrue(
+            "标题应保留调用栈语义: $title",
+            title.contains(MpSqlVisualizerBundle.message("panel.stackPopup.title")),
+        )
+    }
+
+    fun test面板把线程名喂给弹层标题() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(makeResult(chainOf(60), threadName = "scheduling-1"))
+            waitForEdt()
+            assertEquals("scheduling-1", panel.stackThreadNameForTest())
+            assertEquals("栈快照与线程名同源透传", chainOf(60), panel.stackDigestForTest())
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun test面板无线程名时弹层标题数据为空() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(makeResult(chainOf(60)))
+            waitForEdt()
+            assertNull("无线程名时不得留陈旧值", panel.stackThreadNameForTest())
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * T-StackBizFrame S3：头部全是 agent/驱动帧时，内联摘要跳到首个项目帧——用户报障形态是
+     * 「位置列有项目类，可见行的栈摘要全是驱动帧」。首个非内部帧本来就在开头时仍走原契约
+     * （见上面三例），故本次改动不改变既有文案与宽度预算。
+     */
+    fun test长调用栈_头部全为内部帧时内联摘要跳到项目帧() {
+        val digest = "cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70" +
+            "<-org.postgresql.jdbc.PgPreparedStatement#execute:182" +
+            "<-com.acme.service.OrderService#find:42" +
+            "<-com.acme.task.OrderTask#run:45"
+        val inline = buildStackDigestInlineLine(digest)
+        assertEquals(
+            prefix() + "com.acme.service.OrderService#find:42<-com.acme.task.OrderTask#run:45",
+            inline,
+        )
+        assertFalse("摘要不得再以 agent 埋点帧开头", inline.contains("WovenEvents"))
+        assertFalse("摘要不得以驱动帧开头", inline.contains("PgPreparedStatement"))
     }
 
     // ------------------------------------------------------------------

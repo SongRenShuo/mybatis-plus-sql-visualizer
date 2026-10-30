@@ -119,6 +119,39 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         assertTrue(state.shouldFollow)
     }
 
+    /**
+     * T-LogListAnchor 券03：「这次调整事件算不算用户滚到底」的判据（纯函数，六种形态）。
+     *
+     * 区分力在这里而不在集成夹具：券02 的视口补偿已经让头部淘汰不再触发 clamp，
+     * 集成用例（`test暂停贴底附近_…`）摘掉单调性判据仍会绿——本用例才是那条判据的守卫。
+     */
+    fun test滚底判据_位置变小与程序性滚动都不算用户手势() {
+        assertTrue(
+            "用户往下滚到最大值 → 恢复跟随",
+            isUserScrollToBottom(previousValue = 100, currentValue = 300, maxScrollable = 300, programmatic = false),
+        )
+        assertFalse(
+            "内容变矮后 clamp 到底（位置从 320 掉到 300）→ 不得恢复跟随",
+            isUserScrollToBottom(previousValue = 320, currentValue = 300, maxScrollable = 300, programmatic = false),
+        )
+        assertFalse(
+            "程序性贴底/锚点复原 → 不得恢复跟随",
+            isUserScrollToBottom(previousValue = 100, currentValue = 300, maxScrollable = 300, programmatic = true),
+        )
+        assertFalse(
+            "没到底 → 不恢复",
+            isUserScrollToBottom(previousValue = 100, currentValue = 280, maxScrollable = 300, programmatic = false),
+        )
+        assertTrue(
+            "容差 2px 内算到底（LAF 舍入）",
+            isUserScrollToBottom(previousValue = 100, currentValue = 298, maxScrollable = 300, programmatic = false),
+        )
+        assertFalse(
+            "不可滚动（maxScrollable<=0）→ 不恢复",
+            isUserScrollToBottom(previousValue = 0, currentValue = 0, maxScrollable = 0, programmatic = false),
+        )
+    }
+
     fun test滚轮滚动条与键盘暂停_滚回底部恢复跟随() {
         val manager = SqlLogManager(project)
         val panel = SqlLogPanel(project, manager)
@@ -441,6 +474,196 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
             assertEquals("追加和刷新不得改变暂停意图", TailFollowMode.PAUSED, panel.tailFollowModeForTest)
             panel.resumeTailFollowForTest()
             assertEquals(TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    // ---------- T-LogListAnchor 券02/03：暂停态视口锚定与跟随意图 ----------
+
+    /** 递归布局整棵树（headless 下没有窗口，viewport 尺寸靠手动 doLayout 撑起来）。 */
+    private fun layoutTree(component: java.awt.Component) {
+        if (component is java.awt.Container) {
+            component.doLayout()
+            component.components.forEach(::layoutTree)
+        }
+    }
+
+    /** 视口顶部那条（用户实际在读的那一行）。 */
+    private fun topVisibleEntry(panel: SqlLogPanel): LogSqlEntry {
+        val scroll = requireNotNull(panel.listScrollPaneForTest)
+        val pos = scroll.viewport.viewPosition
+        val index = panel.list.locationToIndex(java.awt.Point(pos.x, pos.y + 1))
+        return panel.list.model.getElementAt(index) as LogSqlEntry
+    }
+
+    private fun sqlEntry(index: Int, durationMs: Long? = null) = LogSqlEntry(
+        rawSql = "SELECT id, name FROM t_$index WHERE id = $index",
+        restoredSql = "SELECT id, name FROM t_$index WHERE id = $index",
+        params = emptyList(),
+        timestamp = index.toLong(),
+        executionTimeMs = durationMs,
+    )
+
+    private fun wheelUpOnce(panel: SqlLogPanel) {
+        val scroll = requireNotNull(panel.listScrollPaneForTest)
+        val wheel = MouseWheelEvent(scroll, MouseEvent.MOUSE_WHEEL, 7L, 0, 5, 5, 0,
+            false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 1, -1)
+        scroll.mouseWheelListeners.forEach { it.mouseWheelMoved(wheel) }
+    }
+
+    /** 灌满 80 条并布局（缓冲上限=80，此后每条新 SQL 都触发头部淘汰）。 */
+    private fun fillToCapacity(panel: SqlLogPanel, manager: SqlLogManager, durationOf: (Int) -> Long? = { null }) {
+        manager.entries.maxEntries = 80
+        panel.setSize(460, 420)
+        layoutTree(panel)
+        for (index in 1..80) manager.entries.addEntry(sqlEntry(index, durationOf(index)))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        layoutTree(panel)
+    }
+
+    /**
+     * 用户报障主形态：手动滚动暂停后，缓冲满载下每条新 SQL 淘汰头部一条——
+     * JList 没有滚动锚定，旧实现里整屏内容被顶上去一行高（视口像素位置不动）。
+     */
+    fun test暂停且缓冲已满_头部淘汰不得移动用户视口() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            fillToCapacity(panel, manager)
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            val bar = scroll.verticalScrollBar
+            assertTrue("夹具须有真实可滚动内容", bar.maximum > bar.visibleAmount + 100)
+            assertEquals("夹具须已满载", 80, panel.list.model.size)
+
+            panel.resumeTailFollowForTest()
+            bar.value = 800
+            wheelUpOnce(panel)
+            assertEquals("滚轮须暂停跟随", TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+            val anchored = topVisibleEntry(panel)
+            val anchoredPos = scroll.viewport.viewPosition.y
+            assertTrue("夹具须停在中段（不在顶部）: $anchoredPos", anchoredPos > 0)
+
+            for (index in 81..83) {
+                manager.entries.addEntry(sqlEntry(index))
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                layoutTree(panel)
+            }
+
+            assertEquals("新 SQL 到达后视口顶部条目必须原地不动", anchored, topVisibleEntry(panel))
+            assertTrue(
+                "视口须按被删行高上移（before=$anchoredPos after=${scroll.viewport.viewPosition.y}）",
+                scroll.viewport.viewPosition.y < anchoredPos,
+            )
+            assertEquals("淘汰不得改变暂停意图", TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    /**
+     * 停在贴底不足一行处再淘汰：暂停态必须保持。
+     *
+     * 证据边界：本条**没有区分力**——券02 的视口补偿已经把「内容变矮 → 滚动条 clamp 到底」这条
+     * 通道掐掉，摘掉券03 的单调性判据它照样绿（反向验证实测）。真正钉住判据的是纯函数用例
+     * `test滚底判据_位置变小与程序性滚动都不算用户手势`；本条只作端到端冒烟。
+     */
+    fun test暂停贴底附近_头部淘汰后仍保持暂停() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            fillToCapacity(panel, manager)
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            val bar = scroll.verticalScrollBar
+
+            panel.resumeTailFollowForTest()
+            bar.value = bar.maximum - bar.visibleAmount
+            wheelUpOnce(panel)
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+            bar.value = bar.maximum - bar.visibleAmount - 10
+
+            manager.entries.addEntry(sqlEntry(81))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layoutTree(panel)
+
+            assertEquals(
+                "淘汰引起的 clamp（滚动条位置变小）不得把暂停态改回跟随",
+                TailFollowMode.PAUSED,
+                panel.tailFollowModeForTest,
+            )
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    /** 暂停态下改排序触发全量重建：视口应回到原条目，而不是回顶。 */
+    fun test暂停态全量重建按锚点条目复原视口() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            // 耗时与时间同序 → 按耗时降序排即整体倒序，diffVisible 必判 FullRebuild
+            fillToCapacity(panel, manager) { index -> index.toLong() }
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            val bar = scroll.verticalScrollBar
+
+            panel.resumeTailFollowForTest()
+            bar.value = 800
+            wheelUpOnce(panel)
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+            val anchored = topVisibleEntry(panel)
+            assertTrue("夹具须停在中段", scroll.viewport.viewPosition.y > 0)
+
+            panel.selectSortModeForTest(SortMode.DURATION_DESC)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layoutTree(panel)
+
+            assertEquals(
+                "夹具前提：排序确实重排（首条换成耗时最大的一条）",
+                sqlEntry(80, 80L).restoredSql,
+                (panel.list.model.getElementAt(0) as LogSqlEntry).restoredSql,
+            )
+            assertEquals("全量重建后视口顶部须回到原条目", anchored, topVisibleEntry(panel))
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    /**
+     * P-3 的 headless 判据：锚点复原之后再走两轮 `revalidate` + 完整树布局，视口不得被拉回顶部或贴底。
+     *
+     * 真机上 `JScrollPane` 的布局由平台在 EDT 上异步触发；这里用显式 `revalidate()` + `doLayout`
+     * 递归把它**同步**跑一遍。能证的：布局过程本身不会覆盖复原结果。证不了的：两次 EDT 事件之间的
+     * 真实时序（仍需 `runIde` 沙盒，见计划 §九 判据 4）。这是 P-3 在本环境的证据上限，不要当闭环。
+     */
+    fun test锚点复原后经revalidate重布局仍停在原条目() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            fillToCapacity(panel, manager) { index -> index.toLong() }
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            panel.resumeTailFollowForTest()
+            scroll.verticalScrollBar.value = 800
+            wheelUpOnce(panel)
+            val anchored = topVisibleEntry(panel)
+
+            panel.selectSortModeForTest(SortMode.DURATION_DESC)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layoutTree(panel)
+            assertEquals("重建后先按锚点复原", anchored, topVisibleEntry(panel))
+
+            repeat(2) {
+                scroll.revalidate()
+                panel.list.revalidate()
+                layoutTree(panel)
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            }
+            assertEquals("revalidate 重布局后锚点不得被覆盖（顶部条目仍须是原条目）", anchored, topVisibleEntry(panel))
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
         } finally {
             panel.dispose()
             manager.dispose()

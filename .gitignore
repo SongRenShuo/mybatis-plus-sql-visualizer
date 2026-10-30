@@ -7,6 +7,7 @@ logs/
 !**/src/main/**/target/
 !**/src/test/**/target/
 .kotlin
+tmp
 
 ### IntelliJ IDEA ###
 .idea
@@ -66,7 +67,6 @@ reasonix.toml
 .ace-tool/
 /AGENTS.md
 /scripts/**
-/.agents/
 /.codex/
 
 ### ZCode ###

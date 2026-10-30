@@ -122,9 +122,24 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,
     literalRecovery: Boolean,
-): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery)
-    .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
-    .withExecutionError(errorText)
+    capturedDialect: String? = null,
+): PreviewResult {
+    // T-DialectInferFix：本次执行连接的方言是本条预览最强证据（O-145 方案第 2 条）。
+    // 优先用 pd 载荷里的注册方言名（dl 键）；旧条目退用持久化的目标库角标（`db: PostgreSQL · …`）。
+    val dialect = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.knownDialect(capturedDialect)
+        ?: cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.dialectFromBadge(databaseName)
+    val decision = dialect?.let {
+        cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.capturedDecision(it)
+    }
+    val base = toPreviewResultInternal(formatSql, literalRecovery)
+        .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
+        .withExecutionError(errorText)
+    if (dialect == null) return base
+    return base.copy(
+        renderedDialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName(dialect),
+        dialectDecision = decision,
+    )
+}
 
 /**
  * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
@@ -152,6 +167,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
             wrapperType = null,
             tableName = null,
             stackDigest = stackDigest,
+            threadName = threadName,
             warning = MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.sharding"),
         )
     }
@@ -163,6 +179,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
             // T-StackHoverUi：识别分支与兜底分支同权携带调用栈快照——带参数条目（占位符==参数数的
             // 主路径）此前在此丢快照，meta 行摘要与悬停弹层对最常见的带参数条目不可达
             stackDigest = stackDigest,
+            threadName = threadName,
             unresolvedParams = recognized.unresolvedParams,
             paramTable = null,
             wrapperType = null,
@@ -194,6 +211,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
                     compactSql = withTerminator(recovery.placeholderSql),
                     // T-StackHoverUi：同上，字面量恢复分支同权携带快照
                     stackDigest = stackDigest,
+                    threadName = threadName,
                     unresolvedParams = recovery.unresolvedParams,
                     paramTable = null,
                     wrapperType = null,
@@ -210,6 +228,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
         sql = formatIfNeeded(base, formatSql),
         compactSql = restoredSql,
         stackDigest = stackDigest,
+        threadName = threadName,
         unresolvedParams = emptyList(),
         paramTable = null,
         wrapperType = null,

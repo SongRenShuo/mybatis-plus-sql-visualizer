@@ -378,8 +378,10 @@ class SqlLogEntryBuffer(
         }
         // O-147 W0：缺源码条目的通道归因诊断（限频）——「增强已开启却无法跳转」现场的直接证据行
         // （V180-1：通道=AGENT 缺源码 → 查 agent 侧栈定位；通道=CONSOLE_* → 查桥闸门为何回落）。
+        // T-CaptureCatchAll 券02：取「有效封停态」而非裸 paused——活性回落解封期间桥确实在产出，
+        // 打「桥封停=true」会把排障引向错误方向。
         if (entry.sourceFile == null && entry.sourceCandidates.isEmpty()) {
-            logAttributionThrottled { provenanceDiagText(entry, SqlCaptureGate.paused.get()) }
+            logAttributionThrottled { provenanceDiagText(entry, SqlCaptureGate.bridgeSuppressed()) }
         }
         // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
         // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）

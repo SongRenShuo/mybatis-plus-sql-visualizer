@@ -59,10 +59,14 @@ final class WovenEvents {
             // 2026-10-14：不再打印 SQL 片段（原 sqlHead=前 80 字符）。本行的用途只是「钩子在产」
             // （见上方 KDoc），SQL 原文对判读无贡献；而本行不过脱敏开关（脱敏只作用于事件载荷），
             // Statement 路径的 sql 可能含字面量——改打长度，判读能力不变、宿主日志不留业务文本。
-            System.err.println("[SqlVisAgent] 织入通道首条事件已产出 op=" + op
-                    + " sqlLen=" + sql.length()
-                    + " registryUnresolved=" + StatementRegistry.unresolvedCount()
-                    + " ——本行即「钩子在产」的宿主侧证据（仅此一条）");
+            // 2026-10-30 用户令「控制台只保留必要的」：本行降为 verbose（logLevel=debug）——「钩子在产」
+            // 这件事 IDE 侧已由心跳的 AgentAttachStats 诊断行承载，宿主控制台不必再表态。
+            if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.isVerboseLogging()) {
+                System.err.println("[SqlVisAgent] 织入通道首条事件已产出 op=" + op
+                        + " sqlLen=" + sql.length()
+                        + " registryUnresolved=" + StatementRegistry.unresolvedCount()
+                        + " ——本行即「钩子在产」的宿主侧证据（仅此一条）");
+            }
         }
         final long now = System.nanoTime();
         final long durationNanos = now - startNanos;
@@ -89,7 +93,7 @@ final class WovenEvents {
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
         event.sourceCandidates = frame == null ? null : frame.candidates;
-        event.stackDigest = StackDigest.build(stack);
+        event.stackDigest = StackDigest.build(stack, hint, frame);
         event.requestTag = MdcAccessor.requestTag();
         // T-ConnCastSafety：参数改由语句面 setXxx 织入采集（连接代理出厂关闭后代理层那份不再在）。
         // 无登记（盲区语句）即 null——SQL 都取不到时参数无处挂，与旧语义一致的「诚实缺省」。

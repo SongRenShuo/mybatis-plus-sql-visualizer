@@ -20,7 +20,7 @@
 
 > **别的插件给你文本，我们给你可执行的 SQL。**
 >
-> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言
+> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss / GaussDB / 瀚高 / 海量 等 14 种数据库方言
 
 图例：![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) 近期新增 · ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) 需要 IDEA Ultimate + Database 插件
 
@@ -37,14 +37,14 @@
 | JPA / Hibernate / 更多 ORM ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | gutter 图标 | 派生查询 / CriteriaQuery / Specification / HQL / `@Query`；Querydsl / EasyQuery / Xbatis / MDS 链式查询 |
 | JdbcTemplate / 自研 DAO 字符串 SQL ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 调用行 gutter 图标 | 字符串 SQL 实参直接预览；命名参数 `:name` 按名回填；`StringBuilder` 链式聚合 |
 | 参数替换 | 面板左侧输入框 | `?` 替换为实际值；LIKE 自动拼百分号，按字段类型加引号 |
-| SQL 格式化 | 弹窗内切换 | 多行缩进 / 单行；分页子句按 11 种方言渲染 |
+| SQL 格式化 | 弹窗内切换 | 多行缩进 / 单行；分页子句按 14 种方言渲染 |
 | 多租户 / 数据权限模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置 | 对齐 MP 多租户拦截器：自动注入 `AND tenant_id = ?`（列名 / 默认值可配）；数据权限可模拟 WHERE 片段 |
 | 字段列表自动折叠 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置（默认关） | 超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开 |
 | mapper XML 语法高亮与补全 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，`#{}` / `${}` 分色，`${}` 内与属性值内 OGNL 细着色，表名 / 列名 / 运算符着色；`#` / `$` 敲键自动闭合 `{}`，resultMap `column` 补全列名；动态标签折叠与引用导航（跳转 / 查找用法），颜色设置页可配 |
 | 方言引号不匹配告警 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | SQL 标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下 `FROM "user" t`），只报告不改写；判据按各方言实际宽容度定，不确定时降级为带前提的 WARN |
 | 参数预设 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 面板参数区「预设」行 | 参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按声明方法隔离、预设永久绑定方法（改 SQL 不再丢参数）；预设行可折叠 |
 | 分页拦截器模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页开关（默认开） | 带 `IPage` 形参的查询按方言追 LIMIT 并并列产出 COUNT 包裹语句；LIMIT 与 COUNT 可分别控制 |
-| 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议） |
+| 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 14 种方言（含 Oracle / SQL Server / GaussDB 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议） |
 | 执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) | 弹窗内「执行」按钮 | 原生 Database 控制台内嵌，数据源 / Tx / 会话工具栏全保留 |
 | JOIN 关系图 | 弹窗内「JOIN 图」tab | IDEA 原生 Diagrams 渲染（Community 降级自绘）；PNG / SVG 导出 |
 | 调用栈悬停 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 悬停预览面板调用栈区域 | 调试器风格弹层，优先呈现已采集的业务帧、折叠相邻内部帧；摘要可单击打开，支持逐帧跳转与原文复制；帧数可配置（默认 24，范围 12~64） |

@@ -245,7 +245,7 @@ final class SenderLoop implements Runnable {
                         + ",\"protocolVersion\":2,\"runId\":\"" + CaptureLedger.RUN_ID
                         + "\",\"captureStateCommand\":6}");
                 // 连接建立即补发一条心跳：即便首轮迭代被 CONFIG 读超时拖住，IDE 侧 lastSeen 也从头新鲜
-                writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
+                writeFrame(out, EventBus.CMD_HEARTBEAT, heartbeatBody());
                 long lastOutboundMs = System.currentTimeMillis();
                 long lastCaptureStateNanos = System.nanoTime();
                 inbound = new InboundPump(in);
@@ -291,7 +291,7 @@ final class SenderLoop implements Runnable {
                     }
                     // 2) 心跳：按真实流逝时间判（每轮都执行，不被 burst 分支包住——事件突发期间也按节奏发）
                     if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
-                        writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
+                        writeFrame(out, EventBus.CMD_HEARTBEAT, heartbeatBody());
                         lastOutboundMs = System.currentTimeMillis();
                     }
                     // Quality has its own monotonic cadence, even while SQL keeps the socket busy.
@@ -434,6 +434,59 @@ final class SenderLoop implements Runnable {
             try { thread.join(1500); }
             catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
             frames.clear();
+        }
+    }
+
+    /**
+     * 心跳 body（T-CaptureCatchAll 券 03 的 agent 侧出口）：带出织入/接口匹配的进程累计计数。
+     *
+     * <p><b>向后兼容</b>：此前心跳 body 恒为 {@code "{}"}，IDE 侧
+     * （{@code AgentSessionSupport}）对 HEARTBEAT 只做「存活帧」判定、**不解析 body**，故追加键
+     * 不改变任何既有语义；C2 的覆盖自检上报可按同一字面取值，无需新增命令号（新命令要动两侧
+     * 协议常量与 {@code AgentProtocolSyncTest} 守卫）。
+     *
+     * <p>字段语义（与 IDE 侧 {@code AgentAttachStats} 的宽容扫描口径逐键对齐）：
+     * {@code weavable/woven/failed} 与 attach 日志同源（transformer 四计数中的三个），
+     * {@code matched} = 白名单轮命中 + 接口兜底命中（「本次 attach 命中多少」的唯一完整口径，
+     * 旧口径只在宿主 stderr 有），{@code unmodifiable} = 两轮合计不可重转换数，
+     * {@code matchedByInterface/interfaceWoven} 为接口兜底轮读数，{@code skippedByVersion} 为
+     * major 版本闸挡下的类数，{@code catchAll} 为兜底状态（0=只白名单，1=transformer 兜底开，
+     * 2=已熔断）。键序固定、无空格——与 CONFIG ACK body 同一书写纪律。
+     *
+     * <p>任何异常回落 {@code "{}"}：心跳是 IDE 侧在线判定的唯一凭据，诊断字段的失败绝不能让
+     * 心跳帧本身丢掉。
+     */
+    public static String heartbeatBody() {
+        try {
+            return "{\"weavable\":" + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.weavableCount()
+                    + ",\"woven\":" + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.wovenCount()
+                    + ",\"failed\":" + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.failedCount()
+                    + ",\"matched\":" + cn.song.mybatisplus.sqlvis.agent.CaptureBudget.attachMatchedTotal()
+                    + ",\"unmodifiable\":"
+                    + (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.attachUnmodifiableCount()
+                        + cn.song.mybatisplus.sqlvis.agent.CaptureBudget.interfaceSkippedCount())
+                    + ",\"matchedByInterface\":"
+                    + cn.song.mybatisplus.sqlvis.agent.CaptureBudget.interfaceMatchedCount()
+                    + ",\"interfaceWoven\":"
+                    + cn.song.mybatisplus.sqlvis.agent.CaptureBudget.interfaceWovenCount()
+                    + ",\"skippedByVersion\":"
+                    + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.skippedByVersionCount()
+                    + ",\"catchAll\":" + catchAllState()
+                    + "}";
+        } catch (Throwable t) {
+            return "{}";
+        }
+    }
+
+    /** 兜底状态码：0=纯白名单（默认），1=transformer 兜底已启用，2=已触发 kill switch。 */
+    private static int catchAllState() {
+        try {
+            if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.killed()) {
+                return 2;
+            }
+            return cn.song.mybatisplus.sqlvis.agent.CaptureBudget.transformMatchEnabled() ? 1 : 0;
+        } catch (Throwable t) {
+            return 0;
         }
     }
 

@@ -92,6 +92,11 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
     private fun hasStringSqlCall(body: PsiCodeBlock): Boolean {
         // 极端大方法护栏：结构遍历成本与方法体大小线性，超限跳过（不标）
         if (body.textLength > MAX_BODY_TEXT_LENGTH) return false
+        // 券04（T-PerfSweep28-04，R28-5）：引号预筛——字符串 SQL 必为字符串字面量，方法体文本
+        // 不含引号即不可能有候选。单次字符扫描（零分配）替代 collectElementsOfType 全子树遍历；
+        // 判据精度 100%（无引号 → 必无候选），修前每个方法定义每趟都要付一次子树遍历。
+        if (!body.text.contains('"')) return false
+        bodyScanCount.incrementAndGet()
         return PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java).any { call ->
             JdbcTemplateMethodDetector.isStringSqlMethodCandidate(call.methodExpression.referenceName) &&
                 PreviewReceiverResolver.hasStringLikeArg(call) &&
@@ -121,6 +126,9 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
 
         /** 方法体文本长度护栏（字符）：超过则 daemon 快速路径跳过、点击按无候选处理。 */
         private const val MAX_BODY_TEXT_LENGTH = 200_000
+
+        /** 券04（T-PerfSweep28-04）测试缝：引号预筛放行后的全子树遍历次数（断言预筛零触达）。 */
+        internal val bodyScanCount = java.util.concurrent.atomic.AtomicInteger(0)
 
         private val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", StringSqlMethodGutterLineMarkerProvider::class.java)

@@ -11,7 +11,8 @@ import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
  *  - **JSON 档**（PG/KingBase/openGauss）：经 [ExplainJsonPlanTree.flattenPlanNodes] 取计划节点，
  *    按**对齐键**（`nodeType on relation#出现序`，V113①）配对，比 rows（Plan Rows/Actual Rows）、
  *    cost（Total Cost）与其余标量键；
- *  - **TABLE 档**（MySQL/MariaDB/OceanBase）：行按 `id`+`table` 列（缺列退行序）配对，
+ *  - **TABLE 档**（MySQL/MariaDB；OceanBase 已于 T-OBExplainFormat 按真机实证改登 TEXT 档——
+ *    其 `EXPLAIN` 返回单列 `Query Plan` ASCII 树，不是表格行）：行按 `id`+`table` 列（缺列退行序）配对，
  *    数值列（rows/filtered/cost）给增量，其余列给文本变化。
  *
  * 诚实降级：格式不同族 / 解析不出计划结构 / 任一侧无行 → null（调用方按无可比处理，不硬比）。

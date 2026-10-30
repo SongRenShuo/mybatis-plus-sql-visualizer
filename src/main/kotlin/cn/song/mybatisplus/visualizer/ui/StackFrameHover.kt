@@ -57,6 +57,22 @@ import javax.swing.SwingUtilities
  * 不再承载栈文本（旧实现把截断摘要+全文重复拼进 tooltip、超长单行折成文本墙——本类是栈文本
  * 在悬停面的唯一载体）。
  */
+/**
+ * T-StackBizFrame S3：调用栈弹层标题。
+ *
+ * 有线程名时附在标题后——用户报障的典型困惑是「这条 SQL 为什么不在我的请求链上」，
+ * 而它其实跑在 `scheduling-1` / `pool-2-thread-1` 这类线程里；线程名是这条困惑的第一判别量。
+ * 无线程名（桥通道 / 旧条目）退回纯「调用栈」，文案与既有行为逐字一致。
+ *
+ * 抽成顶层纯函数是为了脱 JBPopup 单测标题文案（弹层本体在 headless 下无法真实弹出）。
+ */
+internal fun buildStackPopupTitle(threadName: String?): String =
+    if (threadName.isNullOrBlank()) {
+        MpSqlVisualizerBundle.message("panel.stackPopup.title")
+    } else {
+        MpSqlVisualizerBundle.message("panel.stackPopup.titleWithThread", threadName)
+    }
+
 internal class StackFrameHover(
     private val project: Project?,
     private val popupOpener: (() -> Unit)? = null,
@@ -64,6 +80,7 @@ internal class StackFrameHover(
 
     private var target: JComponent? = null
     private var digest: String? = null
+    private var threadName: String? = null
     private var popup: JBPopup? = null
     private var contentPanel: JComponent? = null
     private var pendingAnchor: Point? = null
@@ -121,14 +138,23 @@ internal class StackFrameHover(
         target.addMouseMotionListener(listener)
     }
 
-    /** 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。 */
-    fun updateDigest(newDigest: String?) {
+    /**
+     * 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。
+     *
+     * @param threadName T-StackBizFrame S3：产生该 SQL 的线程名（agent 通道透传）——弹层标题展示，
+     *   让「调度线程 / 异步池 / 请求线程」一眼可辨；null 时标题退回纯「调用栈」。
+     */
+    fun updateDigest(newDigest: String?, threadName: String? = null) {
         digest = newDigest
+        this.threadName = threadName
         cancelPopup()
     }
 
     /** 当前栈快照（面板接线单测断言用）。 */
     internal fun currentDigestForTest(): String? = digest
+
+    /** 当前线程名（面板接线单测断言用）。 */
+    internal fun currentThreadNameForTest(): String? = threadName
 
     override fun dispose() {
         hoverTimer.stop()
@@ -155,7 +181,7 @@ internal class StackFrameHover(
 
         val root = buildContent(projection, d)
         val builder = JBPopupFactory.getInstance().createComponentPopupBuilder(root, null)
-            .setTitle(MpSqlVisualizerBundle.message("panel.stackPopup.title"))
+            .setTitle(buildStackPopupTitle(threadName))
             .setRequestFocus(false)
             .setFocusable(true)
             .setCancelOnClickOutside(true)
