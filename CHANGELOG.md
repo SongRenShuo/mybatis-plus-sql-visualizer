@@ -2,7 +2,7 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.10.31-beta.2] - 2026-10-31
 
 ### Changed
 - **增强捕获 agent 的宿主控制台输出改为默认静默（用户令「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）**：原先每次挂载打一行 `attach retransform: matched/wove/...`、premain 打候选类数、每轮补挂各打一行、首条织入事件再打一行，日常噪音大于信息量。现分两级：诊断/进度行默认不打，仅 `-javaagent:…=logLevel=debug`（含 `verbose` / `trace`）时输出；真实降级与熔断必报，与级别无关——预算耗尽、kill switch、`getAllLoadedClasses` 失败、注册盲区（仅一次）、`PORT_ABANDONED`、install degraded、驱动名单预载失败。attach 汇总行额外保留「有问题就打」：`failed>0` 或 `predicateFailed>0` 时照常输出，全零静默（「本次 attach 命中多少」由 IDE 侧心跳的 `AgentAttachStats` 诊断行承载，不必占宿主控制台）。采集与上报链路零变化，静音只作用于宿主 stderr 诊断行

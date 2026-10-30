@@ -1,4 +1,4 @@
-<h2>v2026.10.31-beta.1</h2>
+<h2>v2026.10.31-beta.2</h2>
 <ul>
     <li>新增 GaussDB 方言，设置页、日志角标与 MCP 方言名显示为 GaussDB，不再并入 openGauss</li>
     <li>新增瀚高 HighGo 与海量 Vastbase 方言，可格式化的数据库方言总数 14 种</li>
@@ -13,6 +13,9 @@
     <li>OceanBase 执行计划改按文本档位呈现，与真机返回形态一致</li>
     <li>SQL Server 无排序分页此前渲染出非法 T-SQL，现自动补 ORDER BY (SELECT NULL) 占位</li>
     <li>日志列表多行模式改为缓存命中零取源，滚动与重绘更轻</li>
+    <li>修复 GaussDB、达梦、瀚高、海量四种方言下预览恒降级、表与列补全不可用的问题，根因是这四种方言缺了平台需要的语法解析器注册</li>
+    <li>同批消除每次打开预览都往 IDEA 日志写一条点名本插件的严重错误</li>
+    <li>增强捕获在应用控制台的输出默认静默，只保留真实降级与熔断提示，排查时把 logLevel 设为 debug 即可恢复明细</li>
     <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.10.30</h2>
