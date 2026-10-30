@@ -344,3 +344,62 @@ ClickHouse/TDengine/Neo4j/PG/MySQL 系同密码全拒）——DBX 实际用每�
 
 premain 与 attach 的 `interfaceMatchedCount=2`、`interfaceWovenCount=2`、命中类集合与首条事件**完全一致**。
 **闭环**。
+
+### 7.6 十四方言渲染套件真机矩阵（D2，2026-10-30）
+
+复用 `DialectDockerVerificationTest` 外部实例模式（插件自己渲染的 SQL 逐保留字在真库执行），
+**串行单路**跑完。矩阵：**PASS 9 / FAIL 7 / SKIP 0**（14 个显示名逐字核对 `Dialect.kt` 全部命中，
+无一族走到 MySQL 静默回退）。
+
+| 方言 | 实例 | 结果 | 词数 |
+|---|---|---|---|
+| H2 / SQLite | 嵌入式 | PASS | 100 / 147 |
+| MySQL | 20084 (8.4.6) | PASS | 262 |
+| PostgreSQL | 20033 (16.14) | PASS | 86 |
+| KingBase | 20097 (V8) | PASS | 118 |
+| OceanBase | 25881 | PASS | 262 |
+| HighGo | 25866 | PASS | 153 |
+| Vastbase | 25432 (A 模式) | PASS | 201 |
+| MariaDB（替代） | 20084 用 maria 驱动 | PASS（**非真 MariaDB**，不能当结论） | 281 |
+| **SQL Server** | 21433 | **FAIL 真缺陷** | 0/180 |
+| MariaDB | 20081 | 环境受限（端口 dead） | — |
+| DM（达梦） | 20096 | 环境受限（主项目 test classpath 无 DmJdbcDriver18） | — |
+| openGauss / GaussDB | 25882 / 20105 | 环境受限（无 opengauss 驱动；pgjdbc 报 `Invalid or unsupported by client SCRAM mechanisms`） | — |
+| Oracle | 20095 (Free 23) | 脚手架缺陷（见下） | — |
+
+#### 7.6.1 真缺陷：SQL Server 无排序分页渲染非法 T-SQL（已修 `b0e79325`）
+
+插件产物 `SELECT … FROM dev_info OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY` → 引擎原文
+**`Incorrect syntax near '0'.`**；`OFFSET … FETCH` 在 T-SQL 里**必须**跟在 `ORDER BY` 之后。
+**又是一处假绿**：`DialectH2VerificationTest` 走 H2 `MODE=MSSQLServer`，H2 不强制该规则
+（与 T-OBExplainFormat 同型：兼容模式 ≠ 引擎现实）。
+
+修法：`Dialect` 新增能力位 `limitRequiresOrderBy`（默认 false，`SqlServerDialect` 覆写 true），
+`SqlGenerator` 在「有 limit、无 orderBy、方言要求」时补语义中性的 `ORDER BY (SELECT NULL)`
+（位置在 around 片段与分页子句之前）。回归用例三条判据（补占位且位置正确 / 已有排序不补 /
+MySQL+PG 不引入），反向验证短路兜底 → 必红、还原 → 绿。
+
+#### 7.6.2 脚手架缺陷（影响读数真实性，建议另立任务）
+
+1. 外部入口写死 `UpsertMode.REAL` 且冲突路径绑 `id=1` → Oracle/SQL Server/DM 这类无原生 upsert
+   的族必挂主键冲突（Oracle `ORA-00001`），且抛错后**保留字扫描整段不执行**（Oracle 8 条语句中
+   7 条其实已通过）；
+2. 套件不幂等：`dev_info` 只建不删，持久库第二次跑必红（HighGo/Vastbase 首轮就是被上一轮残留挡住）；
+3. `EngineSpec.multiRowValues` 注释「Oracle 不支持多行 VALUES」已过期（Free 23 实测支持）；
+4. 必须加 `--no-configuration-cache`：`-Dmpvs.*` 在配置期读取，带缓存有复用上一族 URL 的假绿风险。
+
+### 7.7 最终统一门禁（2026-10-30 13:07~13:28）
+
+合并 master（`4b7a8075`，22 笔：含 T-ReleasePerf10 门禁限流/水位治理、T-PerfSweep29、全景审计第二十二轮）
+之后，连同本轮两处修复一起跑：
+
+- **`verifyGate`：3/3 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，报告 13:07 生成）
+- **`testShards`：8522 tests / 0 failures / 0 errors / 9 skipped**，`BUILD SUCCESSFUL in 20m 57s`，
+  parity 口径「计划类全集 793 个均有结果 XML」（较上轮 8517/790 增 5 例 / 3 类，即本轮两处修复的
+  回归用例与合并带来的新类）
+- 两条 WARN 属既有画像漂移（shard3 +17%，提示跑 `weight-refresh.ps1`），不影响判定。
+
+**首轮门禁被内存水位门拦下（`watermarkGate`）**：`memory-hygiene.ps1` 报告 commit 72.5GB /
+free 12.9GB、`suspects: 0`（无可清理孤儿），属并行会话与 IDE 占用；等待回落（free 回到 9.7GB、
+java 进程从 7 个降到 4 个）后重跑即绿。**未使用 `-PwatermarkGate=off` 紧急放行**——理由：此前已出现
+`LogPipelinePerfTest` 在负载下假失败，强行放行只会让门禁读数不可信。
