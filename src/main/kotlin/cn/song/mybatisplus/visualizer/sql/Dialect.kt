@@ -242,6 +242,22 @@ interface Dialect {
     val supportsDeleteLimit: Boolean get() = false
 
     /**
+     * 分页子句是否**强制要求语句带 `ORDER BY`**（默认 false）。
+     *
+     * T-SqlServerLimitOrder（2026-10-30 真机实证）：SQL Server 的 `OFFSET … ROWS FETCH NEXT …` 语法
+     * **必须**跟在 `ORDER BY` 之后，否则引擎直接报 `Incorrect syntax near '0'`。而渲染链
+     * [cn.song.mybatisplus.visualizer.sql.SqlGenerator] 只在 `orderBy` 非空时才输出 ORDER BY，
+     * 于是「无排序 + 分页」的预览产物在 SQL Server 上是**非法 T-SQL**。
+     *
+     * 旧测试没抓到，是因为 `DialectH2VerificationTest` 用 H2 的 `MODE=MSSQLServer` 跑——H2 的
+     * 兼容模式**不强制**这条规则（假绿，与 T-OBExplainFormat 同型）。
+     *
+     * 为 true 时，渲染方在 `limit != null && orderBy 为空` 时补一个语义中性的
+     * `ORDER BY (SELECT NULL)`（T-SQL 社区标准写法，表示「不指定顺序」），保证产物可执行。
+     */
+    val limitRequiresOrderBy: Boolean get() = false
+
+    /**
      * R36（V46 证伪①）：**显式事务开始语句**（回放脚本的事务包裹用；不含结尾分号）。
      *
      * 语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 `<本值>;`（前）+
@@ -523,6 +539,13 @@ object SqlServerDialect : Dialect {
 
     override fun renderLimit(limit: LimitClause): String =
         "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
+
+    /**
+     * T-SqlServerLimitOrder：`OFFSET … FETCH` 必须跟在 `ORDER BY` 之后（真机实证，2026-10-30）。
+     * 引擎原文：无 ORDER BY 的 `SELECT … OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY`
+     * → `Incorrect syntax near '0'.`；补 `ORDER BY (SELECT NULL)` 后正常返回。
+     */
+    override val limitRequiresOrderBy: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "[$identifier]"
 
