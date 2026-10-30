@@ -432,5 +432,7 @@
 
 **文档站同步（2026-10-31）**：兄弟仓 `mybatis-plus-sql-visualizer-docs` 提交 `289a5f1`（**未 push**，按惯例随批次推送）——`features/mcp` 新增「错误码」节（12 个码，含 `NOT_A_SQL_DATASOURCE` 与 `EXTERNAL_RENDER_FAILED`）＋ `sqlv_explain` 补非关系型数据源早拒与达梦 `EXPLAIN FOR` ＋ `sqlv_render_sql` 补 `paramsJson`／自研模板；`features/wrapper-preview` 的方言表把达梦订正为 `EXPLAIN FOR`（19 列计划表）并补「裸 EXPLAIN 不返回结果集」的实测说明，跨次对比把达梦并入表格族，跨会话保留计划补 TEXT 档现在也落盘的隐私提示；`guide/configuration` 新增「禁用 API」与「外部 SQL 模板」两节。中英双语同步，`node scripts/check-en-parity.mjs` 与 `vitepress build` 均通过；插件侧 `DialectDocTableGuardTest` 对改后的表仍绿。
 
+**4b 的验收位与手工复验配方（如实：IDE 链未跑）**：`NOT_A_SQL_DATASOURCE` 的**决策**由 `McpExplainTargetGuardTest` 14 例纯逻辑用例覆盖（redis/mongo 命中、十一个关系库放行、大小写与空白、clickhouse 等「不猜」形态、账号口令不泄漏），**接线位置**由同一类的源码扫描断言钉住（取 `getConnectionConfig` 之后、`McpDialectDetector.resolve` 之前）。未做的是**真 IDE 链**——需要 runIde 沙盒里挂一个 `jdbc:redis://` 数据源再调 `sqlv_explain`；这条不能靠平台测试补：仓内既有结论（`pitfall-das-seed-model-quarantined`）是 **DAS 数据源模型不能手写 seed，必须由平台生成**，测试里造不出「真 redis 数据源」。手工复验配方：沙盒装 redis JDBC 驱动 → Database 工具窗新建 `jdbc:redis://127.0.0.1:6379` 数据源 → 用 `dev-support/mcp-test/mpsv-mcp-test.mjs call sqlv_explain`（参数 `dataSource` 指到该源、`selectSql`='SELECT 1'）→ 期望拿到 `[NOT_A_SQL_DATASOURCE] … sub-protocol 'redis' is not a relational SQL database …`，且错误文本不含主机/账号/口令；对照组把 `dataSource` 换成 MySQL 源应正常返回计划。本条挂「机器空闲 + runIde 窗口」，与 §五 的其余真机项同一批。
+
 **仍未闭环（发版前需补）**：①`runIde` 真机走查——设置页两新页观感、编辑器标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制、外部模板命令真机联调；②DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道）——本轮达梦证据是裸 JDBC 读数 + 19 列夹具，不等于 UI 链已验；③4c DM 函数矩阵落点仍待拍板（证据已备）。
 
