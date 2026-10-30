@@ -788,17 +788,28 @@ object KingBaseDialect : Dialect {
  * 标识符引用反引号 `` `x` ``。upsert 同 MySQL 的 `ON DUPLICATE KEY UPDATE ... VALUES()` 形态。
  * D1=A 定案：**只接 MySQL 模式**（主流装机面），Oracle 模式不做。
  *
- * 验证来源（**文档级**，无真机实例——环境受限未验证，真机核对后增量）：
- *  - JDBC URL：OceanBase Connector/J 官方《Database URL》`jdbc:oceanbase://host:port/db`（V2.4.16）；
- *  - EXPLAIN：官方 V4.x《SQL 执行计划简介》`EXPLAIN [explain_type] dml_statement`，
- *    `FORMAT = {TRADITIONAL | JSON}`，缺省 TRADITIONAL **表格行** → 与 MySQL 同形态
- *    （[ExplainSupport] 表登记 TABLE 档）；
- *  - 兼容面：官方《与 MySQL 兼容性对比》声明 MySQL 5.7/8.0 绝大部分语法兼容（反引号 / LIMIT /
- *    `ON DUPLICATE KEY UPDATE` 官方《唯一键冲突》在册）。
+ * **验证来源（社区镜像引擎级实证，2026-10-30）**：OceanBase CE 4.3.5.6
+ * （`ob_compatibility_mode=MYSQL`，`oceanbase/oceanbase-ce:4.3.5-lts`，部署于测试服务器 25881）逐项实测：
+ *  - 分页：`LIMIT 2,2` → 跳过 2 取 2、`LIMIT 2 OFFSET 1` → 同结果（**5 行源区分性探针**，非单行源假绿）；
+ *  - 引号：反引号可用（`` SELECT 1 AS `x` `` 列名 x）；
+ *  - upsert：`ON DUPLICATE KEY UPDATE` 生效（`ROW_COUNT()` 1/2/0）；`ON CONFLICT DO UPDATE` →
+ *    ERROR 1064（PG 语法被拒，与本方言 MySQL 兼容面一致）；
+ *  - DELETE LIMIT：`DELETE … LIMIT 1` 真删 1 行 → [supportsDeleteLimit] true 成立；
+ *  - 事务：`START TRANSACTION` / `BEGIN` 均可，事务内 ROLLBACK/COMMIT 语义正确；
+ *  - 自增：`AUTO_INCREMENT` 显式写 100 被接受、下一行续排 101；
+ *  - **EXPLAIN 档位（本轮订正）**：`EXPLAIN <sql>` 返回**单列 `Query Plan` 的 ASCII 树**
+ *    （算子 `TABLE RANGE/FULL SCAN`、含 `partitions(p0)`/`is_index_back`），**不是**官方文档所述的
+ *    TRADITIONAL 表格行；`EXPLAIN FORMAT=JSON` 是 OB 专用紧凑 JSON（`ID/OPERATOR/EST.ROWS`），
+ *    非 MySQL `query_block` → [ExplainSupport] 表登记 **TEXT** 档（原误登 TABLE，会让索引建议
+ *    按 MySQL 列名分支解析而永不触发，T-OBExplainFormat）。
+ *  - JDBC URL（文档级）：OceanBase Connector/J 官方《Database URL》`jdbc:oceanbase://host:port/db`。
  *
  * 保留字：沿用 [MYSQL_RESERVED]（MySQL 8.0 全量）为基线——OB MySQL 模式的兼容性声明覆盖语法面，
  * OB 特有保留字差异未逐词核对（真机核对后增量，参照 P-立项-05 的 DM/KingBase 黄金清单先例）。
- * 折叠方向：推定 [IdentifierFolding.NONE]（MySQL 模式大小写不敏感兼容面）——真机打脸按 H2 先例订正。
+ * 折叠方向：[IdentifierFolding.NONE]（真机实证：`lower_case_table_names=1`，表名统一按小写存储、
+ * 比较不敏感——`CREATE TABLE TProbe3` 落库 `tprobe3`、`T_DUP` 与 `t_dup` 冲突报 ERROR 1050）。
+ * **与 Linux MySQL 默认（`lower_case_table_names=0`）不同**，故目录来源按名判定无意义的分支
+ * （NONE 族）在此仍成立。
  */
 object OceanBaseDialect : Dialect {
     override val name: String = "OceanBase"
@@ -1105,10 +1116,20 @@ object VastbaseDialect : Dialect {
     override val identifierQuotes: Set<Char> = setOf('"')
 
     /**
-     * 裸标识符折小写。**社区镜像引擎级实证**（Vastbase G100 V3.0 Build 9 / openGauss 6.0.0，
-     * 镜像 apecloud/vastbase:v3.0.9.2-ape1，A 兼容模式，2026-10-30 探针）：裸大写
-     * `INFORMATION_SCHEMA.TABLES` 703 行命中、`information_schema."tables"` 703 行、
-     * `information_schema."TABLES"` 报 `relation "information_schema.TABLES" does not exist`。
+     * 裸标识符折小写（**默认兼容模式口径**）。**社区镜像引擎级实证**（Vastbase G100 V3.0 Build 9 /
+     * openGauss 6.0.0，镜像 apecloud/vastbase:v3.0.9.2-ape1，2026-10-30 探针）：
+     * A（Oracle，**实例默认**）模式——裸大写 `INFORMATION_SCHEMA.TABLES` 703 行命中、
+     * `information_schema."tables"` 703 行、`information_schema."TABLES"` 报
+     * `relation "information_schema.TABLES" does not exist`。
+     *
+     * **B（MySQL）模式不折叠**（同批实测）：`lower_case_table_names = 0`、表名保留创建时大小写
+     * 并大小写敏感——`T_Mix` 落库仍是 `T_Mix`，查 `t_mix` / `T_MIX` 均报不存在；
+     * `INFORMATION_SCHEMA.TABLES` 报错、`information_schema.tables` 628 行。
+     *
+     * **为什么仍声明 LOWER 族而不按模式分叉**：本方言不做模式感知（D2 定案），而 LOWER 族的目录来源
+     * 规则（`Dialect.quoteIfNeeded` 的 CATALOG 分支：字典名**含大写字母即加引号**）在 B 模式下
+     * **恰好也给对**——`T_Mix` → `"T_Mix"`（引号保留大小写，命中）、`t_mix` → 裸写（不折叠，命中）。
+     * 即族声明是「默认模式的真实折叠方向」，规则本身对两模式都安全。真机模式感知立项时再拆分。
      */
     override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
 
@@ -1117,6 +1138,9 @@ object VastbaseDialect : Dialect {
      * `[ORDER BY][LIMIT]` 而 B 模式专章不含——文档自相矛盾，实测落在通用文法一侧：
      * `DELETE FROM t WHERE ... LIMIT 1` 真删 1 行（`DELETE 1`），带 `ORDER BY ... LIMIT`
      * 同样生效。P-7 的「拿到可写实例后翻 true」条件已满足。
+     * **B 模式同向**（25433 实例实测）：单表 `DELETE ... LIMIT 1` 同样真删 1 行；B 模式另支持
+     * 多表形态 `DELETE FROM t1 USING t1, t2 WHERE ...`（两模式都接受 LIMIT，B 专章的「不含 LIMIT」
+     * 属官方文档欠记载，非引擎限制）。
      */
     override val supportsDeleteLimit: Boolean = true
 
