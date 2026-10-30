@@ -1,10 +1,12 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
 import cn.song.mybatisplus.visualizer.share.format.TraceDocFormatter
 import cn.song.mybatisplus.visualizer.share.format.TraceDocInput
 import cn.song.mybatisplus.visualizer.share.format.TracePlanSnapshot
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -74,7 +76,14 @@ object TraceDocExport {
 
     /** 选文件 + 后台写盘 + 结果通知（取消则静默返回）。 */
     fun export(project: Project, input: TraceDocInput) {
-        val content = TraceDocFormatter.format(input)
+        // 与 SqlExportService 同口径：显示脱敏开关开时只对本次导出的 SQL 做投影级打码，
+        // 调用方数据层条目不动（计划文本不打码——打码器会把数字一并抹掉，失去诊断价值）。
+        val effective = if (PluginSettings.getInstance().state.displayMaskEnabled) {
+            input.copy(sql = DisplayMasker.maskDisplay(input.sql, true))
+        } else {
+            input
+        }
+        val content = TraceDocFormatter.format(effective)
         val descriptor = FileSaverDescriptor(
             MpSqlVisualizerBundle.message("log.traceDoc.export"),
             MpSqlVisualizerBundle.message("log.traceDoc.export.descriptor"),

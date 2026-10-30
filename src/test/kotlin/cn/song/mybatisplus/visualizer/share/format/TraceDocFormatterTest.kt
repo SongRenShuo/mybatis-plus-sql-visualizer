@@ -108,7 +108,8 @@ class TraceDocFormatterTest {
                 plans = emptyList(),
             ),
         )
-        assertTrue(md.contains("无计划快照"))
+        // 基线段落必须自己明写「无计划快照」，不能只靠第 5 段的降级句
+        assertTrue(md.contains("无计划快照：本次留痕没有可用的执行计划"))
         assertFalse(md.contains("| id | table |"))
         assertFalse(md.contains("cost"))
         assertTrue(md.contains("无法进行前后对比"))
