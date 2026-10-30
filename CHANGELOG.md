@@ -2,6 +2,29 @@
 
 # SQL Visualizer Changelog
 
+## [2026.10.31-beta.1] - 2026-10-31
+
+> 内测版（Gitee 抢先体验通道）。范围＝dev 分支 59 笔合流 + master 侧渲染性能一笔；方言总数 11 → 14。
+
+### Added
+- **GaussDB 独立方言（T-GaussDbDialect）**：此前 `jdbc:gaussdb://` 被并进 `OpenGaussDialect`（一 object 两前缀），连接能认、SQL 能渲染、EXPLAIN 能出，但设置页下拉、日志库角标、MCP 方言名一律显示 `openGauss`——用户看不到 GaussDB。现拆出 `GaussDbDialect`：渲染形态与 openGauss 同形不同名（六项能力不分叉），保留字按 GaussDB 官方口径单独成表。增强捕获同批补登记华为两族驱动 `com.huawei.gaussdb.jdbc` / `com.huawei.opengauss.jdbc`——此前 connect / 语句 / prepare 三面全未登记，attach 后 `matched=0`、零事件零角标且宿主侧无任何报错；顺带改正仓内三处写反的 openGauss 驱动谱系注释（实为 2.x/3.x `org.opengauss.*`、5.x/7.x `org.postgresql.*`），并撤掉据错误谱系作出的「已被 PG 覆盖」失真认领
+- **瀚高 HighGo 与海量 Vastbase 两方言（T-XcDialects3）**：保留字分别 153 词 / 201 词，取「官方附录 ∪ PG 基础 ∪ 引擎 `pg_get_keywords()` 实读」并集（只取单一来源会漏类型名与函数名：瀚高比 PG 多 65 词、海量默认 A 模式比 PG 模式多 `excluded` / `online` / `long` 等 14 词）。URL 与方言链五表登记 `jdbc:highgo:` / `jdbc:vastbase:` / `jdbc:dws:iam:` 三子协议与 MCP 中文别名（瀚高 / 翰高 / 海量）；平台 `sql.dialect` 注册 2 → 4（照 DM 先例）；plugin.xml / README / 架构文档 / SqlMapperLanguage 计数 12 → 14（含 GaussDB 轮漏改的陈旧「十一个」）。真机触发两条计划预留切换条款：海量 `renderUpsert` 由 MySQL 形态切 PG 形态（两种均可用，实测取值）、`supportsDeleteLimit` 翻 true（`DELETE … LIMIT 1` 真删 1 行）
+- **人大金仓三处缺口补齐（T-XcDialects3 券 01/02/05）**：①保留字补 `enckey`（官方文档标非保留，引擎 `pg_get_keywords()` 标 R、列引用实测 `syntax error at or near "enckey"`，以引擎为准，117 → 118 词）；②PG 协议版驱动坐标 `postgresql-for-kingbase` 排在 `org.postgresql:postgresql` 之前，纠正「金仓被认成 PostgreSQL」；③增强捕获 `WeaveSpecs` 此前对金仓为零，用户「有库角标零 SQL」，现登记语句面 6 类 + prepare 面 3 类 + connect 面 2 新
+- **增强捕获按 JDBC 接口匹配兜底，采集面与方言解耦（T-CaptureCatchAll）**：「未命中白名单」不是少一条通道而是**两条都没有**——agent 在线并 ACK 后 `SqlCaptureGate.paused` 置真、控制台桥随即短路，白名单没命中就整链静默。现于 attach 轮用反射对已加载类做 `isAssignableFrom` 匹配（零字节解析），命中 `Statement` / `PreparedStatement` 即按语句面 / prepare 面织入。配套红线设施：`CaptureBudget` 三道闸（扫描类上限 5000、transformer 兜底累计预算 300ms、连败 3 次整体 kill 退回纯白名单，全可经 `sqlvis.agent.*` 覆盖且非法值回落默认）、`NestGate` 线程深度栈让嵌套链只报最内层（Hikari + MyBatis 双层不再双报）、接口对象引用改 `ClassValue`（防热部署钉住旧 classloader）。premain 阶段**不内联未知形态**（premain 织入失败等于宿主 JVM 起不来），只记候选、attach 后 daemon 补挂；transformer 两段式兜底（裸字节预筛 → ASM header）默认关。兜底面刻意不含 `ADD_BATCH` / `CLEAR_BATCH`——那两个出口读原局部，未知驱动 `chop_frame` 会整类 `VerifyError`（达梦 `DmDriver` 先例），为红线主动放弃批处理文本累积
+- **增强捕获活性回落与 attach 自检上报（T-CaptureCatchAll 券 02/03/10）**：IDE 侧 `CaptureActivityFallback`——`paused` 满 10 秒 + 窗口内零 agent 事件 + 控制台确实解析出 SQL → 解封控制台通道并披露，带滞回与去重，出厂开；`AgentAttachStats` 把心跳里的命中 / 织入 / 版本闸跳过 / 兜底熔断计数解析进诊断行，不再靠「面板零条目」反推
+- **增强捕获补齐 OceanBase / MariaDB / SQLite（T-CaptureCoverage）**：14 方言对账发现 11 全链路 / 2 只有角标 / 1 三面全空。OceanBase 三面全补（`OceanBaseStatement` 一族 37KB 大类字节层 LINK_OK）；MariaDB 语句面 3 类 + prepare 1 类（3.x 起全部重写为自有类，不复用 MySQL `StatementImpl`）、SQLite 语句面 2 类 + prepare 1 类；删 `VENDOR_NOT_COVERED` 里 MariaDB / SQLite 两条失真的「无本机 jar」认领（认领优先于覆盖，留着等于覆盖白做）；帧跳过前缀五份副本补 `com.oceanbase.`
+
+### Fixed
+- **PostgreSQL 系保留字缺项（T-GaussDbDialect 券 01）**：`PG_RESERVED` 缺 `is` / `procedure`（PG 官方附录两词均为 reserved），产物在真机上会因合法列名被判语法错；openGauss 原先直接复用 `PG_RESERVED`，比真机 `pg_get_keywords()` 保留类少 17 词（`rownum` / `minus` / `modify` 等），列名 `rownum` 在真机已确认「cannot be used as an alias」。现补 `PG_RESERVED` 缺项、新增 `OPENGAUSS_RESERVED`（183 词）与 `GAUSSDB_RESERVED`（130 词）
+- **OceanBase 执行计划档位错判（改真机实证）**：EXPLAIN 原按表格档位解析，真机返回的其实是文本形态，现改按文本档位呈现
+- **premain 补挂线程永不执行（单位量纲混用）**：`msProp` 统一返回纳秒（预算比较需要），但 premain 首轮延迟与轮间隔也走它，随后被直接当毫秒喂 `Thread.sleep`——默认 10 秒变成约 10^10 毫秒（约 317 年），补挂线程从未执行。白名单驱动不受影响（靠类加载期织入），**未知驱动的 premain 形态 100% 静默**，正是本轮兜底要解决的场景。现拆出 `rawMsProp` 只服务两个延迟字段；行为断言永远绿（`resetForTest()` 会把字段覆盖回正确默认值，这正是缺陷潜伏的原因），故另加源码扫描守卫钉住量纲
+- **金仓 PG 协议版驱动被误判为 PostgreSQL**：`postgresql-for-kingbase` 坐标此前排在 `org.postgresql:postgresql` 之后，方言推断与增强捕获双双落错族
+
+### Changed
+- **日志列表多行模式取源惰性化（T-PerfSweep29 券 01）**：脱敏开时 `displaySqlForList` 内部付 O(SQL 长) 全量词法打码，而缓存命中路径每帧重取源后整段丢弃——改为只在缓存未命中时取源，命中路径零取源
+- **新增 14 方言三面对账守卫 `DialectCaptureCoverageTest`**：反衬出既有厂商对齐守卫是**前缀级判定**，挡得住整族静默、挡不住「只补 prepare 面」的半覆盖；MariaDB / SQLite 驱动固化进 agent 测试 classpath，字节层由可选 skip 升为硬断言（`StatementWeaverVendorCoverageTest` 14/14、`DialectCaptureCoverageTest` 3/3，skip=0）
+- **三条真机验证链进测试面**：瀚高 / 海量 / 金仓三族驱动进主项目测试 classpath（仅测试面），`DialectDockerVerificationTest` 外部实例模式让插件渲染的 SQL 套件在真引擎真执行（瀚高 153 词 / 海量 201 词 / 金仓 118 词全 PASS）
+
 ## [2026.10.30] - 2026-10-30
 
 ### Fixed

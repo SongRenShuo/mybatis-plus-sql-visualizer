@@ -1,10 +1,25 @@
+<h2>v2026.10.31-beta.1</h2>
+<ul>
+    <li>新增 GaussDB 方言，设置页、日志角标与 MCP 方言名显示为 GaussDB，不再并入 openGauss</li>
+    <li>新增瀚高 HighGo 与海量 Vastbase 方言，可格式化的数据库方言总数 14 种</li>
+    <li>修复 PostgreSQL 系保留字缺项，is、procedure、rownum 等列名不再被误判为语法错</li>
+    <li>人大金仓补齐 enckey 保留字，并纠正金仓 PostgreSQL 协议版驱动被误认成 PostgreSQL 的问题</li>
+    <li>人大金仓工程此前有库角标却采不到 SQL，增强捕获已补上语句面与参数面登记</li>
+    <li>增强捕获增加按 JDBC 接口匹配的兜底通道，未登记驱动类名的数据库也能采到 SQL</li>
+    <li>兜底通道带扫描上限、耗时预算与连败熔断，连续失败三次自动退回纯白名单，不拖慢也不影响应用启动</li>
+    <li>增强捕获在线但零事件、且控制台已解析到 SQL 时自动回落到控制台通道，不再整链静默</li>
+    <li>补齐 OceanBase、MariaDB、SQLite 的增强捕获登记，此前分别只有部分面或完全无事件</li>
+    <li>修复 premain 补挂线程延迟单位写错导致永不执行的问题，未知驱动的兜底补挂此前从未跑起来</li>
+    <li>OceanBase 执行计划改按文本档位呈现，与真机返回形态一致</li>
+    <li>日志列表多行模式改为缓存命中零取源，滚动与重绘更轻</li>
+    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
+</ul>
 <h2>v2026.10.30</h2>
 <ul>
     <li>装了 MyBatisCodeHelperPro 等同类插件时，Mapper 双向跳转图标不再和对方的跳转箭头叠在同一行</li>
     <li>新增开关「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」，默认开，关掉即恢复本插件图标</li>
     <li>只让出跳转图标，SQL 预览等其余左侧图标不受影响</li>
     <li>修复方言冲突时预览悬停证据丢失候选数据源的问题，此前只显示无精确绑定</li>
-    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.10.29</h2>
 <ul>
