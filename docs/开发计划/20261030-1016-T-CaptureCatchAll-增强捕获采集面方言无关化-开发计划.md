@@ -273,3 +273,74 @@ transformer 入口先读 `bytes[6..7]` 得 major，超过 ASM 支持上限即**�
    与 C1/C2 两路并行构建残留叠加；第三轮（负载回落后）同一用例**通过**，全量 8517/0/0/9 绿。
    → 结论：**环境性假失败**，登记为观察项（若后续频繁复现，再按 T-PerfSweep28-05 的先例调预算或加
    「同轮取多次中位数」的稳健判据，不擅自放宽门槛）。
+
+### 7.5 真机验收（2026-10-30，用户令「不要 GUI，用 demo 复用」）
+
+#### 7.5.1 真实 Spring Boot + MyBatis-Plus + HikariCP 矩阵（10 族全绿）
+
+复用既有 demo `mybatis-plus-sql-visualizer-demo/mybatis-plus-demo`（Spring Boot 2.6.3 + MP 3.5.7，
+默认连接池即 HikariCP），**demo 仓零改动**；驱动用 `-Dloader.path` 外挂，数据源命令行覆盖，
+SQL 全部经 curl 打现成控制器触发（无 GUI）。
+
+| 族 | A(无 agent)/B(premain)/C(attach) 启动 | 接口 | A vs B 响应体 |
+|---|---|---|---|
+| MySQL 8.4.6 / PostgreSQL 16.14 / 达梦 DM8 / 金仓 V8 / 瀚高 / 海量 A / OceanBase / GaussDB Kernel 503 / SQL Server / SQLite | 6.2~8.0 s | **全 200** | **全 SAME** |
+
+- **红线**：20 次带 agent 运行 `failed=0 / unmodifiable=0 / skippedByVersion=0`；
+  `VerifyError|ClassCastException|NoClassDefFoundError|NoSuchMethodError|LinkageError` **零命中**；
+  应用日志 `ERROR` 行 0；启动耗时 B−A ∈ [−0.40, +0.14] s（抖动内）。
+- **双报 = 1 条**（`NestGate` 生效）：MySQL 四端点（心跳 / MP LambdaQuery / WrappedJdbc / user list）
+  各 1 条事件，栈中 `HikariProxy*` 与 `com.mysql.cj.jdbc.*Impl` 同现但不重复。海量/GaussDB 的 4 条、
+  SQLite 的 3 条经查是**驱动建连语句**（`pg_settings connection_info`、`pragma busy_timeout` 等），非双报。
+- **兜底真救了白名单外的类**：SQLite 白名单登记 `org.sqlite.jdbc3.*`、运行时实例是 `org.sqlite.jdbc4.*`
+  → attach 后 `matched=4 / matchedByInterface=2 / interfaceWoven=2`。这是券 01 在真实 Spring Boot 下的
+  首个硬证据；premain 走父类织入路径，两路径互补不重复。
+- **premain 冷启动 0 条 SQL 是真实事实、不是丢事件**：Spring Boot 2.6 + Hikari 惰性建池、MP 启动不探库，
+  心跳 `weavable` 在首个请求前为 0、请求后到 14/13（驱动类按需加载）。
+- **D1 自诊断的两个装载坑**（非插件缺陷）：①`opengauss-jdbc:5.0.0` 实为 pgjdbc 换名包（全
+  `org/postgresql/*`），放进 classpath 会顶掉真 PG 驱动 → PG 全 500，移出即绿（A 形态同样 500 证明与
+  agent 无关）；②`opengauss-jdbc` 只有 `-og` 后缀才是真驱动（`org.opengauss.Driver`），pgjdbc 连
+  GaussDB 报 `Invalid SCRAM client initialization`。
+- **未取证**：MariaDB 10.11（`114.66.55.245:20081` 两侧探测均拒连）→ 该族红线未取证。
+
+#### 7.5.2 未支持方言的兜底验证（DuckDB 靶子）
+
+原定 XuguDB 虚谷（DBX 在册 `20111`）未成：驱动两份都取到了（maven `com.xugudb:xugu-jdbc:12.3.4`、
+厂商 `XuguDB-JDBC-12.3.7.jar`），但实例在握手阶段拒绝凭据 `[E50027] Illegal user.`（6 组组合 × 2 驱动
+× 2 主机全拒）。**顺带查明一个环境事实**：DBX 清单里的「通用密码」对多主机已失效（Xugu/GBase 8a/
+ClickHouse/TDengine/Neo4j/PG/MySQL 系同密码全拒）——DBX 实际用每条连接独立密文凭据
+（`connection_secrets.secret_enc`），后续真机测试须走 DBX MCP 通道或逐条取真实凭据。
+
+改用 **DuckDB**（`org.duckdb:duckdb_jdbc:1.1.3`）做机制级验证：插件 14 方言与三张白名单
+（`Dialect.kt:1169-1184` / `DriverRegistry.java:24-67` / `WeaveSpecs.java:43-189`）grep 全零命中、
+运行时谓词四项全 false → 纯兜底路径。
+
+- **attach：兜底生效**。两次运行逐字一致 `matched=2 wove=2 (whitelist=0 interface=2) scan=1402
+  skipped=0 failed=0`，`acceptedSpecs={DuckDBConnection, DuckDBPreparedStatement}`，宿主侧
+  `op=executeBatch sqlLen=54`（批处理文本也采到）。
+- **红线**：三形态退出码全 0；`(org.duckdb.DuckDBConnection) conn` 三形态全过、`impl` 仍原生类、
+  `proxy=false`；10 份输出全文 grep `VerifyError|ClassCastException|NoClassDefFoundError` 零命中；
+  熔断未触发。
+
+#### 7.5.3 真机发现的缺陷与修复（premain 补挂单位错误）
+
+**缺陷**：`CaptureBudget.msProp` 统一 `* 1_000_000` 返回**纳秒**（预算比较需要），但
+`premainDelayMs`/`premainRepeatMs` 也走它，随后被 `CatchAllMatcher.scheduleDeferredPasses`
+直接当**毫秒**喂 `Thread.sleep` → 默认 10 000 ms 变 **10^10 ms（约 317 年）**，补挂线程永不执行。
+白名单驱动不受影响（类加载期织入），但**未知驱动的 premain 形态 100% 静默**——正是券 08 要解决的场景。
+
+**修复**（`d4b0eecb`）：新增 `rawMsProp`（原样毫秒）供两个 premain 字段；`msProp` 保持纳秒只服务预算。
+**为什么单测没抓到**：`resetForTest()` 会把两字段覆盖回正确默认值，行为断言永远绿 → 除单位契约用例外，
+另加**源码扫描守卫**钉住「两字段必须经 `rawMsProp` 初始化」。
+
+**复验（同 DuckDB 靶子）**：
+
+| 读数 | 修复前 | 修复后 |
+|---|---|---|
+| `premainDelayMs` / `premainRepeatMs` 回读 | `10000000000` / `60000000000` | **`10000` / `60000`** |
+| 补挂轮日志 | 无（含显式 3s 加速档也无） | `premain pass 1/5`、`2/5`；加速档 `1/2`、`2/2` |
+| premain `matched` / `matchedByInterface` | 0 / 0 | **2 / 2** |
+| premain 采到 SQL | 否 | **是**（`op=executeBatch sqlLen=54`） |
+
+premain 与 attach 的 `interfaceMatchedCount=2`、`interfaceWovenCount=2`、命中类集合与首条事件**完全一致**。
+**闭环**。
