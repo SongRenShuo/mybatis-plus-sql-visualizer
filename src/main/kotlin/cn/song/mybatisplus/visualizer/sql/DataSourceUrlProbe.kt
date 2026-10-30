@@ -71,7 +71,11 @@ internal object DataSourceDialectClassification {
         return normalized.isNotEmpty() && normalized in NON_SQL_KEYS
     }
 
-    private fun isNonSqlUrl(url: String?): Boolean {
+    /**
+     * URL 子协议是否属非 SQL 家族（T-Fr45DmGuard S1 起改为 internal：MCP `sqlv_explain` 的前置
+     * 守卫 [cn.song.mybatisplus.visualizer.mcp.ExplainTargetGuard] 复用同一判定，**不复制键表**）。
+     */
+    internal fun isNonSqlUrl(url: String?): Boolean {
         val trimmed = url?.trim() ?: return false
         if (!trimmed.startsWith("jdbc:", ignoreCase = true)) return false
         return isNonSqlKey(trimmed.substring(5).substringBefore(':'))

@@ -23,6 +23,9 @@ object McpToolErrors {
     /** 数据源别名不匹配 / 无数据源。 */
     const val DATASOURCE_NOT_FOUND = "DATASOURCE_NOT_FOUND"
 
+    /** 数据源不是关系型 SQL 库（Redis/Mongo 等 URL 子协议命中非 SQL 家族，早拒）。 */
+    const val NOT_A_SQL_DATASOURCE = "NOT_A_SQL_DATASOURCE"
+
     /** 建连/执行失败（不可达、鉴权失败等）。 */
     const val DATASOURCE_UNREACHABLE = "DATASOURCE_UNREACHABLE"
 

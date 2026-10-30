@@ -127,6 +127,12 @@ open class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 .getMethod("getConnectionConfig").invoke(ds)
                 ?.let { Class.forName("com.intellij.database.model.RawConnectionConfig").getMethod("getUrl").invoke(it) as? String }
         }.getOrNull()
+        // 2b) 非关系型数据源早拒（T-Fr45DmGuard S1 / FR-0045 4b）：Redis/Mongo 这类数据源此前会落到
+        // 下方方言派发的 MySQL 兜底，把 EXPLAIN 发给非 SQL 引擎（用户实测 JedisDataException）。
+        // 判定复用 sql 包单一事实源 [cn.song.mybatisplus.visualizer.sql.DataSourceDialectClassification]
+        // （不复制键表）；取不到 URL（Community/反射失败）不猜、放行。必须在 resolve 之前——
+        // 之后兜底已经发生，守卫就失去意义。
+        ExplainTargetGuard.checkDataSourceUrl(url)?.let { throwExpected(it) }
         val dialectName = McpDialectDetector.resolve(dialect, url)
         val explainSql = DialectRegistry.byName(dialectName).renderExplainStatement(selectSql.trim().removeSuffix(";"))
             ?: throwExpected(
