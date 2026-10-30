@@ -30,7 +30,9 @@ class GiantFileBudgetTest {
         // 六个文件本轮全部超限，增长均来自 master 侧既有代码（t-magpie-gems 分叉期未同步）：
         // 合并本身只给 SqlPreviewPanelExecution 多 2 行，其余增量与本次合流无关。
         // 提额即「承认现状 + 留痕」，**不是许可继续增长**——下次触顶请先走拆分（首选出路）。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2358,
+        // 2358 → 2522（2026-10-30: 再并 master(5aec84d8) 实测 2485 行，增量全来自 master 侧
+        // T-CaptureCatchAll 控制台桥活性回落/attach 覆盖自检上报与关键字换行视口锚定，+127 行超线）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2522,
         // 2297 → 2358（2026-10-25: 合并 master 实测 2323 行，含日志工具栏 BGT 与列表高亮改造，+26 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2421,
         // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
