@@ -122,4 +122,79 @@ transformer 入口先读 `bytes[6..7]` 得 major，超过 ASM 支持上限即**�
 
 ## 七、实施记录
 
-（待实施后回填）
+### 7.1 C1 路（agent 侧，券 01/04/05/06/07/08/09 + 券 10 agent 部分）
+
+实施基线：`t-capture-catchall`（基于 `6ddf9119`）。写集严格限于
+`sub-projects/sql-visualizer-agent/`；IDE 侧（券 02/03）由 C2 承担，agent 只把计数暴露进心跳。
+
+#### 逐券落位
+
+| 券 | 落点 | 关键形态 |
+|---|---|---|
+| 01 | `CatchAllMatcher`（新）、`WeaveSpecs.catchAllStatementFace/catchAllPrepareFace`、`AgentMain.installOrThrow`、`SqlHookTransformer.transform` 接受表分支 | attach 轮遍历 `getAllLoadedClasses()`，`java.sql.Statement/Connection.isAssignableFrom` 判定；命中类登记进接受表（类名→兜底面形态），transformer 据表走**同一** `StatementWeaver.weaveSpec` 通道。白名单优先（先按三谓词排除），`wrapConnection` 默认值未动 |
+| 04 | `SqlHookCallbacks.GET_CONNECTION_METHODS`、`UrlResolver.GET_URL_METHODS` | `ConcurrentHashMap<Class,Method>` → `ClassValue<Object>`（含未命中哨兵）；值随 Class 回收，热部署不再钉旧 loader |
+| 05 | `ClassFileVersion`（新）、`SqlHookTransformer.transform` 入口、`build.gradle.kts`（ASM 9.4→9.8） | 读 `bytes[6..7]` 得 major，超上限原字节放行 + `skippedByVersion`；上限 69（Java 25）与 `Opcodes.V25` 双向钉住 |
+| 06 | `SqlHookTransformer.transformCatchAll`（默认关，`sqlvis.agent.catchAllTransform`） | 两段式：裸字节子串 `java/sql/`（朴素扫描，不分配 String）→ 命中才 `ClassReader` 读 access+interfaces → 确认才织。禁止全树解析 |
+| 07 | `hook/NestGate`（新）、`SqlHookCallbacks.onStatementEnter/onExecuteExit` | 线程内深度栈：嵌套链只让**先退出者**（最内层）产事件，外层抑制；判据不含任何类名黑名单。出口出栈排在一切早退之前（防深度残留） |
+| 08 | `AgentMain.premain/agentmain` 分流 + `CatchAllMatcher.recordPremainCandidates/scheduleDeferredPasses` | premain **零 retransform**、接受表为空，只打一行候选计数；启动后 daemon 线程补挂（默认 10s 首轮 / 60s 间隔 / 5 轮，可配，受扫描上限与 kill switch 约束） |
+| 09 | `CaptureBudget`（新）、`StatementRegistry` 单桶上限 + 淘汰 | ①扫描类数 5000；②transformer 兜底累计 300ms（耗尽只关兜底，白名单不受影响）；③连败 3 → 整体 kill switch（退回纯白名单 + 一行诊断）；④`StatementRegistry` 单桶 512（≈8192 条）超限淘汰。全部可经 `sqlvis.agent.*` 覆盖 |
+
+**兜底面形态的取舍（重要，与计划原文的差异）**：接口命中的类**不**使用白名单的完整
+`statementFace`，而是 `{EXEC_PARAM, EXEC_CTX, BATCH, PARAM}`。理由：`ADD_BATCH`/`CLEAR_BATCH`
+两个形态在出口读**原方法局部**（`ALOAD 0/1`），未知驱动编译器的 `chop_frame` 会让整类
+`VerifyError`——连本可织上的 execute 面一起丢。代价：兜底驱动的批处理 SQL 文本不累积
+（`addBatch(String)` 未织），如实登记为已知缺口。
+
+**日志形态**：白名单轮汇总行逐字未变（3 个既有守卫依赖它），接口轮另起一行：
+`[SqlVisAgent] attach interface-match: matched=N wove=M (whitelist=N1 interface=N2) scan=S skipped=K failed=F`
+（premain 补挂轮前缀为 `premain pass k/5`）。premain 候选行为
+`[SqlVisAgent] catch-all: premain: N interface candidate(s) among S loaded class(es); …`。
+
+**心跳（券 03 的 agent 侧）**：`SenderLoop.heartbeatBody()` 带出
+`weavable/woven/failed/matched/unmodifiable/matchedByInterface/interfaceWoven/skippedByVersion/catchAll`，
+与 C2 的 `AgentAttachStats` 宽容扫描键逐字对齐；旧 body 是 `{}`、IDE 侧不解析 body，故向后兼容。
+
+#### 验证读数（本机，agent 模块全量＝本路定向面）
+
+| 项 | 读数 |
+|---|---|
+| 定向（`./gradlew :sql-visualizer-agent:test`） | **45 个测试类 / 237 例，0 失败 0 错误，2 skipped**（MariaDB/SQLite 可选 jar 字节层 skip，既有语义） |
+| 结构自检（券 10） | HikariCP 4.0.3 jar 自带的 `HikariProxyPreparedStatement`（`final`，直接 implements `PreparedStatement`）与 `HikariProxyConnection`：兜底面织入 changed → 隔离子优先 loader 定义 + **初始化**过 JVM 链接期校验；类型契约（仍 implements PreparedStatement / 仍 final）不变 |
+| 校验器判别力 | 同一 loader 定义「撒谎 StackMapTable」合成类 → `VerifyError`/`ClassFormatError`（防 loader 未触发校验的假绿） |
+| 红线① 带/不带兜底行为一致 | 同 SQL：`executeUpdate`→2、`execute`→false、`executeQuery`→null、`executeBatch`→长度 2；异常路径类型+消息逐字一致（`…$BoomException: kaboom`） |
+| 红线② matcher 抛异常 | `isModifiableClass` 抛异常 → 单类计 `interfaceFailed=1`、不熔断、不外溢；`getAllLoadedClasses` 抛异常 → 本轮安全返回、无匹配计数 |
+| 红线③ 强转 assertSame | `onConnection` 原样返回（assertSame）；兜底 prepare 面产出的 PS 仍可强转到驱动实现类且 `assertSame` |
+| 红线④ 连败→kill | `killAfter=2` 触发后：白名单类照旧织入（changed），兜底类返回 null、接受表为空 |
+| 反向验证（摘掉接口匹配轮） | **红**：`attach轮_白名单优先且命中即登记接受表`、`attach轮_接受表命中后transformer走同一织入通道`、`扫描上限_超出即停止扫描` 共 3 例失败（expected:1 but was:0）；还原后 **绿**（同 3 例通过） |
+| 版本闸 | major 69 放行 / 70 挡下并计 `skippedByVersion=1`（不计入 failed）；magic 不符与 null 不越权拦截 |
+
+#### 大改动登记
+
+- **`sub-projects/sql-visualizer-agent/build.gradle.kts`：ASM 9.4 → 9.8**（唯一构建面改动；
+  未新增测试依赖）。依据：ASM 9.4 上限 major 64（Java 20），读 JDK21 类（major 65）直接抛
+  `Unsupported class file major version 65`；9.8 上限 major 69（Java 25），已实测
+  `Opcodes.V25 = 69`。reloc 源集同版本（fat jar 自 relocate 与织入期 ASM 同源）。
+  **按大改动判据，收口须另跑 `verifyGate`**（本路未跑，按分工留给收口代理）。
+
+#### 未尽项（留给真机冒烟 / 后续券）
+
+1. **P-1/P-2/P-7 真机读数**：本机只证机制（假 Instrumentation + 隔离 loader），未在真实
+   Spring Boot 应用上验「不登记白名单、只靠反射匹配」的 `matched/wove>0`；premain 补挂能否接住
+   冷启动早期 SQL 亦未验。
+2. **Hikari + MyBatis 真实双层**：本机用「外层织入方法转发内层织入方法」等价夹具证嵌套门；
+   真实 `HikariProxyPreparedStatement` + MyBatis `PreparedStatementLogger` 组合未跑（需 MySQL 3306）。
+3. **兜底 prepare 面的 VerifyError 残留风险**：未知 `Connection` 实现的 `prepareStatement` 出口
+   仍读原局部（沿用既有 PREPARE 形态，未改已验证的 17 个白名单类），`chop_frame` 类会被 JVM 拒绝
+   retransform（该类不增强，宿主无感）——真机若见 `failed>0` 应如实登记，不得改成 premain 内联。
+4. **性能预算实测（P-6）**：2 万类应用启动 A/B 未做；兜底分派默认关，风险面仅 attach 轮
+   （5000 类扫描上限，零字节解析）。
+5. **券 06 默认开**：未做（计划 D2=A 要求真机验证后再考虑）。
+6. **券 02/03（IDE 侧）**：C2 路，本路只提供心跳字段。
+
+#### 待验证前提的实测结论（对 §二）
+
+- P-2 **成立（机制层）**：Hikari 4.0.3 的 `HikariProxyPreparedStatement` 是 jar 内预生成实体类
+  （非运行时 javassist 生成物），反射匹配与 header 匹配都命中，且兜底面织入产物过链接期校验。
+- P-3 **成立且已处置**：ASM 9.4 上限 64；升 9.8 后上限 69，闸值同步为 69。
+- P-4 **机制层成立**：调用栈深度判据在等价嵌套夹具上恰好 1 条事件，非嵌套不误杀。
+- P-1/P-5/P-6/P-7 仍待真机（见未尽项）。

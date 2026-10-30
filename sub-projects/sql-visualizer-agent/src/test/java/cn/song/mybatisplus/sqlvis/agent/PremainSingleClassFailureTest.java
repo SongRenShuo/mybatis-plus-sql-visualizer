@@ -99,12 +99,16 @@ public class PremainSingleClassFailureTest {
         capturedErr = new ByteArrayOutputStream();
         System.setErr(new PrintStream(capturedErr, true));
         System.clearProperty(AgentMain.ACTIVE_MARKER);
+        // T-CaptureCatchAll 券 08：关掉 premain 启动后补挂线程（桩 Instrumentation 会被延迟触发，
+        // 污染后续用例的 stderr 断言窗口）
+        CaptureBudget.setPremainScheduleForTest(0L, 0L, 1);
     }
 
     @After
     public void tearDown() {
         System.setErr(originalErr);
         System.clearProperty(AgentMain.ACTIVE_MARKER);
+        CaptureBudget.resetForTest();
     }
 
     private String stderr() {

@@ -188,9 +188,46 @@ final class WeaveSpecs {
         putSpec(prepareFace, "com.oceanbase.jdbc.OceanBaseConnection");
     }
 
+    /**
+     * 兜底面形态（T-CaptureCatchAll 券 01/06）：接口匹配命中、但**不在白名单**的类走这一档。
+     *
+     * <p><b>为什么比白名单的 {@code statementFace} 少两个形态。</b>白名单类都有真实驱动字节的
+     * 字节层实证（织入 + 隔离 loader 定义 + 初始化过 JVM 校验），故可以放开 {@code ADD_BATCH}/
+     * {@code CLEAR_BATCH}——这两个形态在出口处读**原方法局部**（{@code ALOAD 0/1}）。而未知驱动
+     * 的编译器可能对已死局部发 {@code chop_frame}（达梦 {@code DmdbStatement.addBatch(String)}
+     * 即此形态，见 {@link StatementWeaver} 类注释），此时出口读原局部会 {@code VerifyError}，
+     * 结果是**整类零钩子**——连本可织上的 execute 面也一起丢。
+     *
+     * <p>故兜底面只取「入口捕获自有槽」的 timed 面（EXEC_PARAM/EXEC_CTX/BATCH）与入口插桩的
+     * 参数面（PARAM），它们不读原方法局部，对未知字节形态最稳。代价是**兜底驱动的批处理 SQL
+     * 文本不累积**（addBatch(String) 未织）——如实登记为已知缺口，不静默假装覆盖。
+     *
+     * <p>premain 阶段绝不内联这一档（见 {@link AgentMain} 的券 08 策略）：兜底面只在 attach /
+     * 启动后补挂路径上使用，单类失败由 JVM 拒绝 retransform 后原字节保留。
+     */
+    private static final StatementWeaver.Kind[] CATCH_ALL_STATEMENT_FACE = {
+            StatementWeaver.Kind.EXEC_PARAM,
+            StatementWeaver.Kind.EXEC_CTX,
+            StatementWeaver.Kind.BATCH,
+            StatementWeaver.Kind.PARAM};
+
+    /** 兜底面 prepare 形态（接口匹配命中的 {@code java.sql.Connection} 实现）。 */
+    private static final StatementWeaver.Kind[] CATCH_ALL_PREPARE_FACE = {
+            StatementWeaver.Kind.PREPARE};
+
     /** 类名（点分）→ 织入形态 spec；未登记返回 null。 */
     static StatementWeaver.Kind[] specOf(String dottedClassName) {
         return SPECS.get(dottedClassName);
+    }
+
+    /** 兜底语句面形态（只读；调用方不得修改）。 */
+    static StatementWeaver.Kind[] catchAllStatementFace() {
+        return CATCH_ALL_STATEMENT_FACE;
+    }
+
+    /** 兜底 prepare 面形态（只读；调用方不得修改）。 */
+    static StatementWeaver.Kind[] catchAllPrepareFace() {
+        return CATCH_ALL_PREPARE_FACE;
     }
 
     /** 已登记类名快照（仅供厂商对齐守卫遍历；生产路径不使用）。 */
