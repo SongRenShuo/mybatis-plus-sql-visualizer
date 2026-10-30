@@ -25,12 +25,37 @@ internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = 
 }
 
 /**
- * 列表展示文本（T-MagpieGems W2 按 [maskMode] 分流）：
- *  - OFF/WARN → 原样（WARN 的警示行只进预览浮层/停靠预览，列表渲染不追加）；
- *  - MASK → 打码文本；BLOCK → 阻断占位文本（白名单豁免后计数 0 时 DisplayMasker 按 OFF 原样）。
- * 非全量模式沿用摘要——MASK/BLOCK 须先处理完整 SQL 再截摘要（防旧摘要在引号中间截断漏打码），
- * 摘要缓存以 mode+白名单为键防 MASK/BLOCK 产物串缓存（UI-001 修复：白名单进缓存键，
- * 改白名单后同 mode 下摘要即重算）。
+ * 关键字换行的取源预算（字符）。
+ *
+ * 关键字换行必须看到 `FROM`/`WHERE` 才能产出三行，所以取源是**完整还原 SQL**（与格式化模式同源），
+ * 不再是 160 字摘要——摘要在长列清单下连一个子句关键字都覆盖不到，恒退化成单行（T-LogListAnchor 券01）。
+ * 预算只影响第四行及以后：三行封顶后本来也看不到，但词法成本不能随 IN 列表长度无界放大。
+ */
+internal const val KEYWORD_WRAP_SOURCE_BUDGET = 4096
+
+/** 超预算时按空白边界截断并补省略号（避免把标识符劈成两半）。 */
+internal fun clipKeywordWrapSource(sql: String): String {
+    if (sql.length <= KEYWORD_WRAP_SOURCE_BUDGET) return sql
+    var cut = KEYWORD_WRAP_SOURCE_BUDGET
+    var i = KEYWORD_WRAP_SOURCE_BUDGET - 1
+    while (i > 0 && !sql[i].isWhitespace()) i--
+    if (i > 0) cut = i
+    return sql.substring(0, cut).trimEnd() + "…"
+}
+
+/**
+ * 列表展示用 SQL 文本（T-LogListAnchor 券01 取源分层 + T-MagpieGems W2 按 [maskMode] 分流）：
+ *
+ * - `SINGLE_LINE`：摘要（一行封顶，摘要正是为此而生）；MASK/BLOCK 的摘要缓存以模式+白名单为键
+ *   （UI-001 修复：白名单进缓存键，改白名单后同 mode 下摘要即重算）。
+ * - `KEYWORD_WRAP` / `FORMATTED`：完整还原 SQL（与格式化模式同源——摘要在长列清单下连一个
+ *   子句关键字都覆盖不到，恒退化成单行），前者另受 [KEYWORD_WRAP_SOURCE_BUDGET] 约束。
+ * - 脱敏分流（T-MagpieGems W2）：OFF/WARN → 原样（WARN 的警示行只进预览浮层/停靠预览，列表
+ *   渲染不追加）；MASK → 打码；BLOCK → 阻断占位（白名单豁免后计数 0 时按 OFF 原样）。
+ *   MASK/BLOCK 须先处理完整 SQL 再截摘要（防旧摘要在引号中间截断漏打码）。
+ *
+ * 摘要缓存（[LogSqlEntry.cachedMaskedSummary]）只服务单行模式；多行模式按
+ * 「模式+脱敏模式+白名单」缓存词法片段（`RailCellRendererBase.sqlLineFragmentsFor`），不复用摘要。
  */
 internal fun displaySqlForList(
     entry: LogSqlEntry,
@@ -39,20 +64,23 @@ internal fun displaySqlForList(
     allowList: List<String> = emptyList(),
 ): String {
     if (maskMode == DisplayMasker.MaskMode.OFF || maskMode == DisplayMasker.MaskMode.WARN) {
-        if (mode == SqlListDisplayMode.FORMATTED) return entry.restoredSql
-        return entry.summary
+        if (mode == SqlListDisplayMode.SINGLE_LINE) return entry.summary
+        // KEYWORD_WRAP/FORMATTED 取完整还原 SQL（券01：摘要盖不到子句关键字）
+        val full = entry.restoredSql
+        return if (mode == SqlListDisplayMode.KEYWORD_WRAP) clipKeywordWrapSource(full) else full
     }
     // UI-001 修复：白名单实参贯穿列表显示链（此前默认 emptyList，白名单在列表面恒不生效）
-    if (mode == SqlListDisplayMode.FORMATTED) {
-        return DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)
+    if (mode == SqlListDisplayMode.SINGLE_LINE) {
+        val cacheKey = maskMode.name + "|" + allowList.joinToString(",")
+        return entry.cachedMaskedSummary
+            ?.takeIf { entry.cachedMaskedSummaryMode == cacheKey }
+            ?: LogSqlEntry.summarizeSql(DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)).also {
+                entry.cachedMaskedSummary = it
+                entry.cachedMaskedSummaryMode = cacheKey
+            }
     }
-    val cacheKey = maskMode.name + "|" + allowList.joinToString(",")
-    return entry.cachedMaskedSummary
-        ?.takeIf { entry.cachedMaskedSummaryMode == cacheKey }
-        ?: LogSqlEntry.summarizeSql(DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)).also {
-            entry.cachedMaskedSummary = it
-            entry.cachedMaskedSummaryMode = cacheKey
-        }
+    val full = DisplayMasker.maskDisplay(entry.restoredSql, maskMode, allowList)
+    return if (mode == SqlListDisplayMode.KEYWORD_WRAP) clipKeywordWrapSource(full) else full
 }
 
 /** 不包含任何主题属性的词法片段，可安全存于条目缓存；空白 token 同样保留。 */

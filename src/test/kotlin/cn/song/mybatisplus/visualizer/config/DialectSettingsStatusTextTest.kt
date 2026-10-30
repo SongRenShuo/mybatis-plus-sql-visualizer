@@ -31,11 +31,20 @@ class DialectSettingsStatusTextTest {
 
     @Test
     fun `ambiguity conflict and no evidence never claim an inferred dialect`() {
+        // T-DialectInferFix：未判定时的口径从「预览兼容按 MySQL」改为「预览沿用 IDEA 的 SQL 方言设置」——
+        // 插件不再把 MySQL 当成事实，状态行也不得再暗示推断出了 MySQL。
         for (status in listOf(DialectDecisionEngine.Status.AMBIGUOUS,
             DialectDecisionEngine.Status.CONFLICT, DialectDecisionEngine.Status.UNAVAILABLE)) {
             val text = DialectSettingsStatusText.describe(1, decision(status))
-            assertTrue("$status must mark the compatibility fallback", text.contains("MySQL"))
+            assertFalse("$status must not claim MySQL as inferred", text.contains("MySQL"))
             assertFalse("$status must not claim Oracle", text.contains("Oracle"))
+        }
+        for (status in listOf(DialectDecisionEngine.Status.AMBIGUOUS, DialectDecisionEngine.Status.UNAVAILABLE)) {
+            val text = DialectSettingsStatusText.describe(1, decision(status))
+            assertTrue(
+                "$status must disclose the inheritance fallback: $text",
+                text.contains("IDE SQL dialect", ignoreCase = true) || text.contains("IDEA 的 SQL 方言设置"),
+            )
         }
     }
 }

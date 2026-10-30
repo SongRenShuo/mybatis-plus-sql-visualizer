@@ -27,10 +27,14 @@ class McpDialectDetectorTest {
         assertEquals("SQLite", McpDialectDetector.guessFromUrl("jdbc:sqlite:app.db"))
         assertEquals("DM（达梦）", McpDialectDetector.guessFromUrl("jdbc:dm://localhost:5236"))
         assertEquals("KingBase（人大金仓）", McpDialectDetector.guessFromUrl("jdbc:kingbase8://localhost:54321/db"))
-        // T-DialectXcFamily（O-63）：信创双备 + GaussDB 前缀
+        // T-DialectXcFamily（O-63）：信创双备；T-GaussDbDialect（券 04）起 gaussdb 归独立方言
         assertEquals("OceanBase", McpDialectDetector.guessFromUrl("jdbc:oceanbase://localhost:2881/db"))
         assertEquals("openGauss", McpDialectDetector.guessFromUrl("jdbc:opengauss://localhost:5432/db"))
-        assertEquals("openGauss", McpDialectDetector.guessFromUrl("jdbc:gaussdb://localhost:8000/db"))
+        assertEquals("GaussDB", McpDialectDetector.guessFromUrl("jdbc:gaussdb://localhost:8000/db"))
+        // T-XcDialects3（券 03）：瀚高 / 海量；dws:iam 是海量驱动 parseURL 认可的第二前缀
+        assertEquals("HighGo", McpDialectDetector.guessFromUrl("jdbc:highgo://localhost:5866/db"))
+        assertEquals("Vastbase", McpDialectDetector.guessFromUrl("jdbc:vastbase://localhost:5432/db"))
+        assertEquals("Vastbase", McpDialectDetector.guessFromUrl("jdbc:dws:iam://localhost:5432/db"))
     }
 
     @Test
@@ -53,10 +57,19 @@ class McpDialectDetectorTest {
         assertEquals("SQL Server", McpDialectDetector.normalize("mssql"))
         assertEquals("DM（达梦）", McpDialectDetector.normalize("达梦"))
         assertEquals("KingBase（人大金仓）", McpDialectDetector.normalize("金仓"))
-        // T-DialectXcFamily（O-63）：信创双备显式名归一
+        // T-DialectXcFamily（O-63）：信创双备显式名归一；T-GaussDbDialect（券 04）起 gaussdb 独立
         assertEquals("OceanBase", McpDialectDetector.normalize("oceanbase"))
         assertEquals("openGauss", McpDialectDetector.normalize("opengauss"))
-        assertEquals("openGauss", McpDialectDetector.normalize("gaussdb"))
+        assertEquals("GaussDB", McpDialectDetector.normalize("gaussdb"))
+        assertEquals("GaussDB", McpDialectDetector.normalize("高斯"))
+        // T-XcDialects3（券 03）：瀚高两种中文写法（官方「瀚高」/ 用户常写「翰高」）都收；
+        // 海量收厂商中文名「海量」
+        assertEquals("HighGo", McpDialectDetector.normalize("highgo"))
+        assertEquals("HighGo", McpDialectDetector.normalize("HighGo"))
+        assertEquals("HighGo", McpDialectDetector.normalize("瀚高"))
+        assertEquals("HighGo", McpDialectDetector.normalize("翰高"))
+        assertEquals("Vastbase", McpDialectDetector.normalize("vastbase"))
+        assertEquals("Vastbase", McpDialectDetector.normalize("海量"))
     }
 
     @Test

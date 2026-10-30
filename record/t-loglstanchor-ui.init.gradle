@@ -1,0 +1,23 @@
+// T-LogListAnchor 实机验收专用沙盒隔离（照 .local/explain-pwd-ui.init.gradle 形态）
+//
+// 用途：给 runIde 指一个独立 sandboxContainer，避免与并行会话（其他工作树/其他任务）的
+// 沙盒、索引、插件目录互锁；同时关掉 autoReload——验收期间任何后台修复构建都不许改变
+// 在验版本。
+//
+// 用法：
+//   .\gradlew.bat -I record/t-loglstanchor-ui.init.gradle runIde `
+//     --args="<demo 工程绝对路径>" -PgifRobotServer=true --no-configuration-cache --console=plain
+//
+// 说明：build.gradle.kts 里那段注释（「并行会话临时隔离请在本块内临时加自己的
+// sandboxContainer」）要求改文件再还原；这里改用 init 脚本注入，不动入库文件。
+allprojects {
+    afterEvaluate { p ->
+        if (p == p.rootProject && p.extensions.findByName('intellijPlatform') != null) {
+            p.extensions.getByName('intellijPlatform').sandboxContainer.set(
+                p.layout.buildDirectory.dir('MPSV-LogAnchor-UI'))
+            p.tasks.named('runIde').configure { task ->
+                task.autoReload.set(false)
+            }
+        }
+    }
+}

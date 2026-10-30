@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.sqlvis.agent.hook;
 
 import java.lang.reflect.Method;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -11,13 +10,39 @@ import java.util.concurrent.atomic.AtomicReference;
  * → 最近 connect 钩子 URL 兜底（[noteConnectUrl]，onConnection 出口记一笔）→ null
  * （事件 url 留空，IDE 侧推断链接管）。
  *
- * <p>Method 按连接实现类缓存（ConcurrentHashMap），反射失败保守返回 null——归属链任何一环
+ * <p>Method 按连接实现类缓存，反射失败保守返回 null——归属链任何一环
  * 失败只影响事件的「目标库」展示，绝不影响 SQL 事件本身与宿主执行。
+ *
+ * <p><b>T-CaptureCatchAll 券 04：缓存由 {@code ConcurrentHashMap<Class<?>, Method>} 改
+ * {@link ClassValue}。</b>原实现是静态强引用表，键 Class 与值 Method（反向强引用 declaringClass）
+ * 双重钉住类，热部署场景下旧 classloader 无法回收；且 reload 后同名新类的查询会命中旧 loader 的
+ * Method，invoke 新对象直接抛 {@code IllegalArgumentException}（归属链静默退兜底 URL，表现为
+ * 「热部署后事件全部没有目标库」）。ClassValue 的值随 Class 生命周期回收，无静态泄漏面。
  */
 public final class UrlResolver {
 
-    private static final ConcurrentHashMap<Class<?>, Method> GET_URL_METHODS =
-            new ConcurrentHashMap<Class<?>, Method>();
+    /** 未命中哨兵（ClassValue 的 computeValue 每次 get 未命中都会重算，须显式缓存否定结果）。 */
+    private static final Object METHOD_ABSENT = new Object();
+
+    private static final ClassValue<Object> GET_URL_METHODS = new ClassValue<Object>() {
+        @Override
+        protected Object computeValue(Class<?> type) {
+            try {
+                return type.getMethod("getURL");
+            } catch (NoSuchMethodException nsme) {
+                try {
+                    // h2 形态：包私有/非 public——declared + setAccessible
+                    final Method m = type.getDeclaredMethod("getURL");
+                    m.setAccessible(true);
+                    return m;
+                } catch (Throwable t) {
+                    return METHOD_ABSENT;
+                }
+            } catch (Throwable t) {
+                return METHOD_ABSENT;
+            }
+        }
+    };
 
     /** 最近一次 connect 钩子看到的 URL（粗粒度兜底：进程单库场景基本即真相）。 */
     private static final AtomicReference<String> LAST_CONNECT_URL = new AtomicReference<String>();
@@ -46,18 +71,11 @@ public final class UrlResolver {
             return null;
         }
         try {
-            Method m = GET_URL_METHODS.get(connection.getClass());
-            if (m == null) {
-                try {
-                    m = connection.getClass().getMethod("getURL");
-                } catch (NoSuchMethodException nsme) {
-                    // h2 形态：包私有/非 public——declared + setAccessible
-                    m = connection.getClass().getDeclaredMethod("getURL");
-                    m.setAccessible(true);
-                }
-                GET_URL_METHODS.put(connection.getClass(), m);
+            final Object cached = GET_URL_METHODS.get(connection.getClass());
+            if (cached == METHOD_ABSENT) {
+                return null;
             }
-            Object v = m.invoke(connection);
+            final Object v = ((Method) cached).invoke(connection);
             return v instanceof String ? (String) v : null;
         } catch (Throwable t) {
             return null; // 采集红线：归属链失败不外溢

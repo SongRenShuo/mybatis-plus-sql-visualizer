@@ -34,9 +34,30 @@ class JdbcUrlDialectsTest {
         assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:opengauss://localhost:5432/db"))
         assertEquals("GBASE", JdbcUrlDialects.displayName("jdbc:gbasedbt-sqli://localhost:9088/db"))
         assertEquals("HSQL", JdbcUrlDialects.displayName("jdbc:hsqldb:mem:test"))
-        // T-DialectXcFamily（O-63）：OceanBase 新增角标；华为 GaussDB 前缀同归 openGauss 角标（D2=A）
+        // T-DialectXcFamily（O-63）：OceanBase 新增角标；T-GaussDbDialect（券 04）起华为 GaussDB
+        // 前缀独立成角标（原与 opengauss 同归 openGauss，D2=A 已撤销）
         assertEquals("OceanBase", JdbcUrlDialects.displayName("jdbc:oceanbase://localhost:2881/db"))
-        assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:gaussdb://localhost:8000/db"))
+        assertEquals("GaussDB", JdbcUrlDialects.displayName("jdbc:gaussdb://localhost:8000/db"))
+        // T-XcDialects3（券 03）：瀚高 jdbc:highgo:（官方默认端口 5866）；海量 jdbc:vastbase: 与
+        // jdbc:dws:iam:（cn.com.vastbase.Driver 错误串原文收录的两个前缀）
+        assertEquals("HighGo", JdbcUrlDialects.displayName("jdbc:highgo://localhost:5866/highgo"))
+        assertEquals("Vastbase", JdbcUrlDialects.displayName("jdbc:vastbase://localhost:5432/vastbase"))
+        assertEquals("Vastbase", JdbcUrlDialects.displayName("jdbc:dws:iam://localhost:5432/vastbase"))
+    }
+
+    @Test
+    fun `T-XcDialects3_瀚高海量角标合成`() {
+        // authority 形态拼出「方言 · 库名@host:port」；dws:iam 形态 rest 段是 "iam://..." 非 "//" 开头，
+        // 无连接事实可标 → 退纯方言名（与 H2 嵌入形态同款边界）
+        assertEquals(
+            "HighGo · highgo@localhost:5866",
+            JdbcUrlDialects.badgeName("jdbc:highgo://localhost:5866/highgo"),
+        )
+        assertEquals(
+            "Vastbase · vastbase@localhost:5432",
+            JdbcUrlDialects.badgeName("jdbc:vastbase://localhost:5432/vastbase"),
+        )
+        assertEquals("Vastbase", JdbcUrlDialects.badgeName("jdbc:dws:iam://localhost:5432/vastbase"))
     }
 
     @Test

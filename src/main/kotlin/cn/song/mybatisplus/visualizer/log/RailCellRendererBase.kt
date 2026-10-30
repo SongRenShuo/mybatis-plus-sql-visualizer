@@ -296,13 +296,22 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         val maskMode = PluginSettings.getInstance().displayMaskMode()
         val allowList = PluginSettings.getInstance().displayMaskAllowList()
         val maskCacheKey = maskMode.name + "|" + allowList.joinToString(",")
-        val sql = withTerminator(displaySqlForList(entry, mode, maskMode, allowList))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            listSourceFetchCount++
+            val sql = withTerminator(displaySqlForList(entry, mode, maskMode, allowList))
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
+        // R29-1（T-PerfSweep29-01）：取源只在缓存未命中时执行——脱敏开时 displaySqlForList
+        // 内部付 O(SQL 长) 全量词法打码，命中路径每帧重取源后整段丢弃纯属白付。
         val semantics = entry.cachedListLineFragments
             ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMaskMode == maskCacheKey }
-            ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
+            ?: run {
+                listSourceFetchCount++
+                SqlListFragmentRenderer.semanticLineFragments(
+                    withTerminator(displaySqlForList(entry, mode, maskMode, allowList)),
+                    mode,
+                )
+            }.also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
                 entry.cachedListLineFragmentsMaskMode = maskCacheKey
@@ -324,11 +333,18 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
         internal val ROW_DIVIDER: java.awt.Color =
             JBColor.namedColor("mpvs.log.rowDivider", 0xC8C8C8, 0x4A4D52)
 
-        /** 按留白高度构造条目 Border（预建实例，不在渲染热路径调用）。 */
-        internal fun borderFor(verticalPadding: Int): Border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, ROW_DIVIDER),
-            javax.swing.BorderFactory.createEmptyBorder(verticalPadding, 5, verticalPadding, 9),
-        )
+    /** 按留白高度构造条目 Border（预建实例，不在渲染热路径调用）。 */
+    internal fun borderFor(verticalPadding: Int): Border = BorderFactory.createCompoundBorder(
+        BorderFactory.createMatteBorder(0, 0, 1, 0, ROW_DIVIDER),
+        javax.swing.BorderFactory.createEmptyBorder(verticalPadding, 5, verticalPadding, 9),
+    )
+
+    /**
+     * 券01（T-PerfSweep29-01）测试缝：列表渲染取源（displaySqlForList）实际调用次数。
+     * 先红判据（多行缓存命中路径零取源）与反向验证共用；生产链路无读取方，零行为影响
+     * （形态对齐 SqlEntryPresentation.headerCoreComputeCount 先例，EDT 单线程读写）。
+     */
+    internal var listSourceFetchCount = 0
     }
 }
 

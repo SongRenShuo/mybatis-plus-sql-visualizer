@@ -15,7 +15,7 @@ import com.intellij.lang.Language
  *
  * 词集 = 原 [BASE_KEYWORDS]（T-XmlSynHi D1 的 41 词平集，保留为兜底、不删一词）
  * ∪ [SqlLexer.KEYWORDS]（补全器与预览面板共用的 66 词）
- * ∪ [DIALECT_RESERVED]（`sql/Dialect.kt` 十一个实现类 [cn.song.mybatisplus.visualizer.sql.Dialect.reservedWords]
+ * ∪ [DIALECT_RESERVED]（`sql/Dialect.kt` 十四个实现类 [cn.song.mybatisplus.visualizer.sql.Dialect.reservedWords]
  * 的并集，大写形态）。
  *
  * **取舍（为什么是「全方言超集」而不是按文件方言收敛）**：注入语言是**全局**的（一个 `Language`
@@ -57,7 +57,7 @@ object SqlMapperLanguage : Language("MpSqlMapper") {
     internal val OGNL_KEYWORDS: Set<String> = setOf("AND", "OR", "NOT", "IN", "NULL")
 
     /**
-     * 十一个方言保留字的并集（大写）。数据源 = `DialectRegistry.dialects` 各实现类的
+     * 十四个方言保留字的并集（大写）。数据源 = `DialectRegistry.dialects` 各实现类的
      * `reservedWords`（小写）——OceanBase 复用 MySQL 集、openGauss 复用 PG 集，并集结果与
      * 九个 `SqlKeywords.kt` 顶层 val 的并集相同。
      */

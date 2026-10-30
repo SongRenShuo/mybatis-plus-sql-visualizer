@@ -242,6 +242,22 @@ interface Dialect {
     val supportsDeleteLimit: Boolean get() = false
 
     /**
+     * 分页子句是否**强制要求语句带 `ORDER BY`**（默认 false）。
+     *
+     * T-SqlServerLimitOrder（2026-10-30 真机实证）：SQL Server 的 `OFFSET … ROWS FETCH NEXT …` 语法
+     * **必须**跟在 `ORDER BY` 之后，否则引擎直接报 `Incorrect syntax near '0'`。而渲染链
+     * [cn.song.mybatisplus.visualizer.sql.SqlGenerator] 只在 `orderBy` 非空时才输出 ORDER BY，
+     * 于是「无排序 + 分页」的预览产物在 SQL Server 上是**非法 T-SQL**。
+     *
+     * 旧测试没抓到，是因为 `DialectH2VerificationTest` 用 H2 的 `MODE=MSSQLServer` 跑——H2 的
+     * 兼容模式**不强制**这条规则（假绿，与 T-OBExplainFormat 同型）。
+     *
+     * 为 true 时，渲染方在 `limit != null && orderBy 为空` 时补一个语义中性的
+     * `ORDER BY (SELECT NULL)`（T-SQL 社区标准写法，表示「不指定顺序」），保证产物可执行。
+     */
+    val limitRequiresOrderBy: Boolean get() = false
+
+    /**
      * R36（V46 证伪①）：**显式事务开始语句**（回放脚本的事务包裹用；不含结尾分号）。
      *
      * 语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 `<本值>;`（前）+
@@ -524,6 +540,13 @@ object SqlServerDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String =
         "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
 
+    /**
+     * T-SqlServerLimitOrder：`OFFSET … FETCH` 必须跟在 `ORDER BY` 之后（真机实证，2026-10-30）。
+     * 引擎原文：无 ORDER BY 的 `SELECT … OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY`
+     * → `Incorrect syntax near '0'.`；补 `ORDER BY (SELECT NULL)` 后正常返回。
+     */
+    override val limitRequiresOrderBy: Boolean = true
+
     override fun quoteIdentifier(identifier: String): String = "[$identifier]"
 
     /** T-DialectQuoteWarn：`QUOTED_IDENTIFIER` 默认 ON → 方括号与双引号都合法（判双引号错即误报）。 */
@@ -788,17 +811,28 @@ object KingBaseDialect : Dialect {
  * 标识符引用反引号 `` `x` ``。upsert 同 MySQL 的 `ON DUPLICATE KEY UPDATE ... VALUES()` 形态。
  * D1=A 定案：**只接 MySQL 模式**（主流装机面），Oracle 模式不做。
  *
- * 验证来源（**文档级**，无真机实例——环境受限未验证，真机核对后增量）：
- *  - JDBC URL：OceanBase Connector/J 官方《Database URL》`jdbc:oceanbase://host:port/db`（V2.4.16）；
- *  - EXPLAIN：官方 V4.x《SQL 执行计划简介》`EXPLAIN [explain_type] dml_statement`，
- *    `FORMAT = {TRADITIONAL | JSON}`，缺省 TRADITIONAL **表格行** → 与 MySQL 同形态
- *    （[ExplainSupport] 表登记 TABLE 档）；
- *  - 兼容面：官方《与 MySQL 兼容性对比》声明 MySQL 5.7/8.0 绝大部分语法兼容（反引号 / LIMIT /
- *    `ON DUPLICATE KEY UPDATE` 官方《唯一键冲突》在册）。
+ * **验证来源（社区镜像引擎级实证，2026-10-30）**：OceanBase CE 4.3.5.6
+ * （`ob_compatibility_mode=MYSQL`，`oceanbase/oceanbase-ce:4.3.5-lts`，部署于测试服务器 25881）逐项实测：
+ *  - 分页：`LIMIT 2,2` → 跳过 2 取 2、`LIMIT 2 OFFSET 1` → 同结果（**5 行源区分性探针**，非单行源假绿）；
+ *  - 引号：反引号可用（`` SELECT 1 AS `x` `` 列名 x）；
+ *  - upsert：`ON DUPLICATE KEY UPDATE` 生效（`ROW_COUNT()` 1/2/0）；`ON CONFLICT DO UPDATE` →
+ *    ERROR 1064（PG 语法被拒，与本方言 MySQL 兼容面一致）；
+ *  - DELETE LIMIT：`DELETE … LIMIT 1` 真删 1 行 → [supportsDeleteLimit] true 成立；
+ *  - 事务：`START TRANSACTION` / `BEGIN` 均可，事务内 ROLLBACK/COMMIT 语义正确；
+ *  - 自增：`AUTO_INCREMENT` 显式写 100 被接受、下一行续排 101；
+ *  - **EXPLAIN 档位（本轮订正）**：`EXPLAIN <sql>` 返回**单列 `Query Plan` 的 ASCII 树**
+ *    （算子 `TABLE RANGE/FULL SCAN`、含 `partitions(p0)`/`is_index_back`），**不是**官方文档所述的
+ *    TRADITIONAL 表格行；`EXPLAIN FORMAT=JSON` 是 OB 专用紧凑 JSON（`ID/OPERATOR/EST.ROWS`），
+ *    非 MySQL `query_block` → [ExplainSupport] 表登记 **TEXT** 档（原误登 TABLE，会让索引建议
+ *    按 MySQL 列名分支解析而永不触发，T-OBExplainFormat）。
+ *  - JDBC URL（文档级）：OceanBase Connector/J 官方《Database URL》`jdbc:oceanbase://host:port/db`。
  *
  * 保留字：沿用 [MYSQL_RESERVED]（MySQL 8.0 全量）为基线——OB MySQL 模式的兼容性声明覆盖语法面，
  * OB 特有保留字差异未逐词核对（真机核对后增量，参照 P-立项-05 的 DM/KingBase 黄金清单先例）。
- * 折叠方向：推定 [IdentifierFolding.NONE]（MySQL 模式大小写不敏感兼容面）——真机打脸按 H2 先例订正。
+ * 折叠方向：[IdentifierFolding.NONE]（真机实证：`lower_case_table_names=1`，表名统一按小写存储、
+ * 比较不敏感——`CREATE TABLE TProbe3` 落库 `tprobe3`、`T_DUP` 与 `t_dup` 冲突报 ERROR 1050）。
+ * **与 Linux MySQL 默认（`lower_case_table_names=0`）不同**，故目录来源按名判定无意义的分支
+ * （NONE 族）在此仍成立。
  */
 object OceanBaseDialect : Dialect {
     override val name: String = "OceanBase"
@@ -825,17 +859,27 @@ object OceanBaseDialect : Dialect {
 
 /**
  * openGauss 方言（T-DialectXcFamily / O-63）：PG 族形态——`LIMIT {count} OFFSET {offset}`、
- * 双引号引用、[IdentifierFolding.LOWER] 折叠。D2=A 定案：GaussDB（华为云）与 openGauss 社区版
- * 共用一个 object，两个 JDBC URL 前缀（`jdbc:opengauss://` 与 `jdbc:gaussdb://`）都归本方言
- * （两前缀各有官方文档出处，见 [UrlSubprotocolDialects]）。
+ * 双引号引用、[IdentifierFolding.LOWER] 折叠。
  *
- * **验证来源（openGauss 引擎级，DBX MCP 只读通道，GaussDB/openGauss 5.0.0，2026-09-23）**：
+ * **T-GaussDbDialect 券 04 修订**：原 D2=A 定案「GaussDB 与 openGauss 共用一个 object、两前缀都归
+ * 本方言」已撤销——`jdbc:gaussdb://` 改归独立的 [GaussDbDialect]。撤销理由不是形态分叉（两边六项
+ * 形态相同，见 [GaussDbDialect] 的 KDoc），而是**身份与保留字**：GaussDB 官方保留字表比 openGauss
+ * 多 11 词，且用户应在设置页/角标/MCP 里看到 GaussDB 而不是 openGauss。本 object 此后**只服务
+ * `jdbc:opengauss://` 与显式选择 openGauss 的场景**。
+ *
+ * **验证来源（openGauss 引擎级，DBX MCP 只读通道，openGauss 5.0.0 社区版 / sql_compatibility='A'，
+ * 2026-09-23 首测 + 2026-10-29 复核）**：
  *  - 折叠 LOWER：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 455 行（裸大写折小写命中）、
  *    `FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist on gaussdb`；
  *  - 反引号不可用：``SELECT 1 AS `x` `` → `syntax error`（双引号族实锤）；
- *  - LIMIT 形态：`SELECT 1 LIMIT 1 OFFSET 0` → 1 行；`SELECT 1 LIMIT 1, 2` → **0 行**——
- *    openGauss 把 `LIMIT a, b` 按 **PG 语义**（OFFSET a LIMIT b）解析，MySQL 形态会被静默错解，
- *    故分页必须渲染 PG 形态（真机对照读数）；
+ *  - **LIMIT 形态（T-GaussDbDialect 券 03 订正）**：`LIMIT a, b` 是**原生 MySQL 语义**
+ *    （offset, count），**不存在静默错解**。多行源实测：
+ *    `SELECT * FROM generate_series(1,5) LIMIT 1, 2` → 返回 `2, 3`（2 行）；
+ *    真实 455 行源 `SELECT table_name FROM information_schema.tables LIMIT 1, 2` → 第 2、3 行。
+ *    原结论「按 PG 语义解析被静默错解」的探针是 `SELECT 1 LIMIT 1, 2` → 0 行——**单行源上
+ *    「MySQL 语义」与「PG 语义（OFFSET 1 LIMIT 2）」给出同一读数**，两种假设不可区分，属假绿。
+ *    本方言仍渲染 PG 形态（`LIMIT {count} OFFSET {offset}`），理由改为「该形态在两种解释下同义、
+ *    无歧义」，而非「防御错解」；`OFFSET n ROWS FETCH NEXT m ROWS ONLY` 亦可用但不必。
  *  - EXPLAIN：`EXPLAIN (FORMAT JSON) SELECT 1` → 单列 `QUERY PLAN` JSON 文本（JSON 档实锤）；
  *    `EXPLAIN SELECT 1` → 文本计划树。
  *
@@ -845,8 +889,12 @@ object OceanBaseDialect : Dialect {
  * （KingBase 同为 PG 系但 upsert 相反），照抄 KingBase 先例会产出语法错误 SQL。
  * 官方文档同向（openGauss《INSERT》on_duplicate_key 文法，`VALUES(column_name)` 引用在册）。
  *
- * 保留字：沿用 [PG_RESERVED]（PG 官方附录全量）为基线——openGauss 内核源自 PG 9.2 演化，
- * openGauss 特有保留字差异未逐词核对（真机核对后增量）。
+ * 保留字：**[OPENGAUSS_RESERVED]**（T-GaussDbDialect 券 01 订正）。此前沿用 `PG_RESERVED`
+ * 是缺陷——真机 `pg_get_keywords()` 实测 openGauss 比 PG 多 17 个保留字
+ * （`rownum` / `minus` / `modify` / `nocycle` / `performance` / `shrink` / `verify` / `sysdate` /
+ * `excluded` / `buckets` / `authid` / `less` / `maxvalue` / `groupparent` / `reject` /
+ * `procedure` / `is`）。其中 `rownum` 实测报 `ROWNUM cannot be used as an alias`——
+ * 列名为 `rownum` 的表在旧集合下不会被引用，产物直接语法报错。
  */
 object OpenGaussDialect : Dialect {
     override val name: String = "openGauss"
@@ -866,7 +914,26 @@ object OpenGaussDialect : Dialect {
      */
     override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
 
-    override val reservedWords: Set<String> = PG_RESERVED
+    /**
+     * DELETE 的 `LIMIT n` 尾段（T-GaussDbDialect 券 02）：**显式声明不支持**（非遗漏，与 Oracle 的
+     * [transactionBegin] 判无同款写法）。
+     *
+     * 2026-10-29 真机取证分三档，结论比原记录复杂：
+     *  - **语法层**：`EXPLAIN DELETE FROM db4ai.snapshot WHERE id = 1 LIMIT 1` →
+     *    `permission denied for relation snapshot`，即已过语法与分析阶段（同库对照组
+     *    `EXPLAIN INSERT … ON CONFLICT (id) …` 直接报 `syntax error at or near "CONFLICT ("`，
+     *    证明本通道能可靠区分语法错与权限拦）→ openGauss **接受**该语法；
+     *  - **语义层**：是否真的限行**未验证**——在册实例非超管且 `public` 无用户表，DML 全被权限拦下，
+     *    无从观察影响行数；
+     *  - **依据层**：此前 false 的理由是「PG 族无 DELETE LIMIT 尾段（真机佐证 `LIMIT 1,2` 按 PG
+     *    语义解析）」，该理由已被券 03 推翻（`LIMIT a, b` 是 MySQL 语义）。
+     *
+     * 故保持 false 但换依据：「语法接受、语义未验证」。取舍不对称——渲染了而语义不生效，用户会
+     * 以为删除有界而实际无界；不渲染只是少一个尾段。拿到可写实例的语义读数后按实测翻转。
+     */
+    override val supportsDeleteLimit: Boolean = false
+
+    override val reservedWords: Set<String> = OPENGAUSS_RESERVED
 
     /**
      * MySQL 形态 upsert（真机对照对实锤，见类 KDoc）——复用 [renderMySqlStyleUpsert]，
@@ -877,6 +944,243 @@ object OpenGaussDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * GaussDB（华为云商用版）方言（T-GaussDbDialect 券 04）：第 12 个方言，独立于 [OpenGaussDialect]。
+ *
+ * ## 为什么独立成 object
+ *
+ * 原 D2=A 把 GaussDB 并进 openGauss，依据是「同内核」。2026-10-29 复核判定：**形态不必分叉，
+ * 身份必须分叉**。
+ *  - **形态同形**：分页 / 引号 / 折叠 / upsert / EXPLAIN / 事务 / DELETE-LIMIT 七项在两边一致，
+ *    本类用与 [OpenGaussDialect] **同一批**私有渲染助手实现，产物逐字节相同
+ *    （`DialectXcFamilyTest` 有一条逐项对拍用例钉住，防两侧漂移）；
+ *  - **保留字真的不同**：GaussDB 官方《关键字》页 934 词 / 保留 130，openGauss 862 / 122；
+ *    GaussDB 独有保留字 11 词（见 [GAUSSDB_RESERVED]）——这是唯一有实质后果的分叉点，因为
+ *    漏引用即语法错误；
+ *  - **身份要分**：设置下拉 / 日志角标 / MCP 方言名都应显示 GaussDB；MyBatis-Plus 自 3.5.13 起
+ *    也把 `GAUSS_DB`（`LIMIT ?,?`）与 `OPENGAUSS`（`LIMIT ? OFFSET ?`）拆成两个 `DbType`，
+ *    插件反着合并会让按 MP 文档配置的用户对不上号。
+ *
+ * ## 逐项依据
+ *
+ *  - 分页 `LIMIT {count} OFFSET {offset}`：GaussDB 官方《SELECT》文法 `LIMIT { [offset,] count | ALL }`
+ *    两种写法都收，取无歧义的 PG 形态（逗号形态语义虽为 MySQL 的 offset,count，但与 PG 写法
+ *    反向，读者易误读——见 [OpenGaussDialect] 的 LIMIT 订正）；
+ *  - 引号双引号 + 折叠 LOWER：GaussDB 不带引号的标识符折小写；B 兼容模式额外收反引号，本类
+ *    不依赖它（插件只用双引号）；
+ *  - upsert `ON DUPLICATE KEY UPDATE col = VALUES(col)`：GaussDB 全模式支持；PG 的
+ *    `ON CONFLICT` 官方明写「仅支持 PG 兼容性」，**默认 A（Oracle）兼容模式不可用**，故不取；
+ *  - EXPLAIN `(FORMAT JSON)`：与 openGauss 真机同形（单列 `QUERY PLAN`，`[{"Plan":…}]`）；
+ *  - 事务 `BEGIN`；DELETE 的 `LIMIT` 尾段显式判无（同 [OpenGaussDialect.supportsDeleteLimit]）；
+ *  - identity 包装：不需要（GaussDB 无 `SET IDENTITY_INSERT` 形态）。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级**（华为云 GaussDB 集中式 V2.0-10.x SQL 参考：SELECT / INSERT / EXPLAIN /
+ * CREATE DATABASE / 关键字）。GaussDB 商用版**无公开容器镜像**、无真机；各项形态与
+ * openGauss 5.0.0 真机读数同源（`server_version` 基线 9.2.4）。真机读数到位后升档。
+ *
+ * ## 兼容模式边界
+ *
+ * `sql_compatibility` 是**库级**属性（A/Oracle 默认、B/MySQL、C/Teradata、PG、M），建库后不可改。
+ * 本类按**默认 A 模式**的可用面渲染；B 模式专属能力（反引号、`IFNULL`、`DATE_FORMAT`、
+ * `LAST_INSERT_ID`）**不用**——真机实测这些在 A 模式直接报函数不存在。模式感知不在本轮范围。
+ */
+object GaussDbDialect : Dialect {
+    override val name: String = "GaussDB"
+
+    /** R36：GaussDB 官方《BEGIN》在册，取与 openGauss 相同的 `BEGIN`。 */
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    /** 裸标识符折小写（PG 系），与 openGauss/KingBase/PG 同族。 */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    /** 见 [OpenGaussDialect.supportsDeleteLimit]：语法接受但语义未验证，保守判无（非遗漏）。 */
+    override val supportsDeleteLimit: Boolean = false
+
+    override val reservedWords: Set<String> = GAUSSDB_RESERVED
+
+    /** MySQL 形态 upsert；`ON CONFLICT` 仅 PG 兼容模式可用，默认 A 模式不可，故不取。 */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * 瀚高（HighGo DB）方言（T-XcDialects3 券 01）：第 13 个方言。PG 族形态
+ * （`LIMIT {count} OFFSET {offset}` / 双引号 / [IdentifierFolding.LOWER] / PG 形态 upsert），
+ * 独立 object 的理由同 [GaussDbDialect]——形态可复用、身份与保留字必须分叉
+ * （[HIGHGO_RESERVED] 与 `PG_RESERVED` 双向差集 65+1 词）。
+ *
+ * ## 证据级别
+ *
+ * **社区镜像引擎级实证**（HighGo V6.0.1 / PostgreSQL 12.3 内核，镜像 `xuxuclassmate/highgo:6.0.1`，
+ * **非厂商官方发布物**，2026-10-30 探针）。厂商官方容器不存在（Docker Hub 无官方组织账号），
+ * 社区镜像与官方 tar 同源但未经厂商渠道分发，故不写「厂商引擎级」。
+ *
+ * ## 逐项依据（除保留字外均有引擎实测背书）
+ *
+ *  - 事务 `BEGIN`：实测 `BEGIN` → `SELECT` → `COMMIT` 逐条通过；
+ *  - 分页 PG 形态：实测 `LIMIT 1, 2` 报 `LIMIT #,# syntax is not supported`——逗号形态不可用，
+ *    只渲染 `LIMIT {count} OFFSET {offset}`；
+ *  - 折叠 LOWER：实测裸大写 `INFORMATION_SCHEMA.TABLES` 折小写命中、
+ *    `information_schema."TABLES"` 报 relation 不存在（引号保留大小写 → 大写名不存在）；
+ *  - upsert PG 形态 `ON CONFLICT (k) DO UPDATE SET c = EXCLUDED.c`：实测 `EXPLAIN INSERT …
+ *    ON CONFLICT` 计划含 `Conflict Resolution: UPDATE` + arbiter index（冲突插入语义生效）；
+ *    对照 `ON DUPLICATE KEY UPDATE` 实测语法错误；
+ *  - DELETE 的 `LIMIT` 尾段：实测 `DELETE … LIMIT` 报 `syntax error at or near "LIMIT"`
+ *    （与官方 DELETE 文法无 LIMIT 尾段互证）；
+ *  - identity：`GENERATED BY DEFAULT` 接受显式值、`GENERATED ALWAYS` 需语句内
+ *    `OVERRIDING SYSTEM VALUE`（不是前置语句包装）→ [renderInsertWrapper] 保持默认 null。
+ *
+ * ## 兼容模式边界
+ *
+ * V9 实例默认 Oracle 兼容模式（`initdb --dbmode` 默认 `oracle`，IvorySQL 血统）；Oracle 模式的
+ * `identifier_case_switch = INTERCHANGE` 对**带引号**标识符大小写互换——逐形态推演结论是
+ * LOWER 族引用规则不会因此更差（唯一不可命中形态是「以引号创建的全大写名」，见调研报告 §5.5），
+ * 不做模式分叉（模式感知登记为观察项，D2 定案本轮不做）。
+ */
+object HighGoDialect : Dialect {
+    override val name: String = "HighGo"
+
+    /**
+     * R36：`BEGIN`（社区镜像引擎级实证：BEGIN/SELECT/COMMIT 通过；官方 `START TRANSACTION`
+     * 原文「与 BEGIN 功能相同」同向）。
+     */
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    /** 裸标识符折小写（社区镜像引擎级实证，与 PG/KingBase/openGauss/GaussDB 同族）。 */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    /**
+     * 实测 `DELETE … LIMIT` 报 `syntax error at or near "LIMIT"`（引擎级，非遗漏）；
+     * 官方 DELETE 文法完整大纲同样无 `LIMIT` 尾段，两档互证。
+     */
+    override val supportsDeleteLimit: Boolean = false
+
+    override val reservedWords: Set<String> = HIGHGO_RESERVED
+
+    /**
+     * PG 形态 upsert（社区镜像引擎级实证：EXPLAIN 计划含 `Conflict Resolution: UPDATE` +
+     * arbiter index；`ON DUPLICATE KEY UPDATE` 同实例实测语法错误——与 openGauss 相反，照抄
+     * 同为 PG 系的 openGauss 会产出语法错误 SQL）。
+     */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
+}
+
+/**
+ * 海量（Vastbase G100）方言（T-XcDialects3 券 02）：第 14 个方言。openGauss 商业发行版
+ * （官方《产品定位》明写基于开源 openGauss 内核），但**独立于 [OpenGaussDialect]/
+ * [GaussDbDialect]**——保留字（[VASTBASE_RESERVED] 四模式并集）与身份分叉，upsert 形态与
+ * openGauss/GaussDB 同（MySQL 形态）、分页折叠同 PG 族。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级**（docs.vastdata.com.cn Vastbase G100 V3.0.9《SQL 参考》：SELECT/INSERT/DELETE/
+ * EXPLAIN/关键字四表/开发规范）。真机部署在途（DBX 在册无 vastbase 实例），本轮按文档落地，
+ * 真机读数到位后逐项升档。
+ *
+ * ## 逐项依据
+ *
+ *  - 事务 `BEGIN`：官方 `START TRANSACTION` / `BEGIN` 都在册；官方注意事项——**vsql 中 `BEGIN`
+ *    不能与 SQL 写在同一行**（插件产物是逐条独立语句，不受影响）；
+ *  - 分页**只渲染 PG 形态**：官方通用文法另有 `LIMIT [offset,] count` 逗号形态且文档写 MySQL
+ *    语义（首参=跳过行数）——与同内核 openGauss 5.0.0 真机读数同向（逗号形态确为 MySQL 语义，
+ *    与 PG 的 `LIMIT count OFFSET offset` 写法反向、读者易误读，见 [OpenGaussDialect] 的
+ *    LIMIT 订正），故只产无歧义的 `LIMIT {count} OFFSET {offset}`；
+ *  - 引号双引号 + 折叠 LOWER：官方《开发规范》「对象名不区分大小写，双引号可区分」推定（未真机）；
+ *    **反引号仅 B 模式可用**（默认 A 模式不可），本类不依赖；
+ *  - upsert **MySQL 形态** `ON DUPLICATE KEY UPDATE c = VALUES(c)`（D3 定案）：官方通用文法
+ *    两种形态都收，但默认 A（Oracle）模式无真机证据——取同内核 openGauss 真机已证可用的形态
+ *    （openGauss 5.0.0 实测 `ON CONFLICT` 语法错误）；**真机证 PG 形态可用再切**；
+ *  - DELETE 的 `LIMIT` 尾段：官方通用 DELETE 文法含 `[ORDER BY][LIMIT]` 但 B 模式 DELETE
+ *    专章重写且不含——文档自相矛盾，保守判无（非遗漏），与 openGauss/GaussDB 同口径；
+ *  - EXPLAIN：官方 `FORMAT {TEXT|XML|JSON|YAML}` 默认 TEXT；**B 模式下 `EXPLAIN` 兼作 `DESC`**
+ *    （[ExplainSupport] 已由 ExplainGate 首关键字白名单保证只对完整 SELECT 生成，此处仅登记）；
+ *  - identity：B 模式 `AUTO_INCREMENT` 允许显式写值、PG 模式 `GENERATED ALWAYS` 需语句内
+ *    `OVERRIDING SYSTEM VALUE`（非前置包装）→ [renderInsertWrapper] 保持默认 null。
+ *
+ * ## 兼容模式边界
+ *
+ * 兼容模式是**实例级**、初始化后不可改（`vb_initdb --dbcompatibility` 取 A/B/PG/MSSQL，默认
+ * **A（Oracle）**），URL 里无模式信息可判。本类按默认 A 模式的可用面渲染；B 模式专属能力
+ * （反引号、`lower_case_table_names`）不用。模式感知不在本轮范围（D2 定案）。
+ */
+object VastbaseDialect : Dialect {
+    override val name: String = "Vastbase"
+
+    /** R36：官方 `BEGIN`/`START TRANSACTION` 均在册且**社区镜像引擎级实证可用**（A 模式 2026-10-30；vsql 中 BEGIN 不可与 SQL 同行——插件产物逐条独立，不受影响）。 */
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    /**
+     * 裸标识符折小写（**默认兼容模式口径**）。**社区镜像引擎级实证**（Vastbase G100 V3.0 Build 9 /
+     * openGauss 6.0.0，镜像 apecloud/vastbase:v3.0.9.2-ape1，2026-10-30 探针）：
+     * A（Oracle，**实例默认**）模式——裸大写 `INFORMATION_SCHEMA.TABLES` 703 行命中、
+     * `information_schema."tables"` 703 行、`information_schema."TABLES"` 报
+     * `relation "information_schema.TABLES" does not exist`。
+     *
+     * **B（MySQL）模式不折叠**（同批实测）：`lower_case_table_names = 0`、表名保留创建时大小写
+     * 并大小写敏感——`T_Mix` 落库仍是 `T_Mix`，查 `t_mix` / `T_MIX` 均报不存在；
+     * `INFORMATION_SCHEMA.TABLES` 报错、`information_schema.tables` 628 行。
+     *
+     * **为什么仍声明 LOWER 族而不按模式分叉**：本方言不做模式感知（D2 定案），而 LOWER 族的目录来源
+     * 规则（`Dialect.quoteIfNeeded` 的 CATALOG 分支：字典名**含大写字母即加引号**）在 B 模式下
+     * **恰好也给对**——`T_Mix` → `"T_Mix"`（引号保留大小写，命中）、`t_mix` → 裸写（不折叠，命中）。
+     * 即族声明是「默认模式的真实折叠方向」，规则本身对两模式都安全。真机模式感知立项时再拆分。
+     */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    /**
+     * **社区镜像引擎级实证为 true**（A 模式，2026-10-30）：官方通用 DELETE 文法含
+     * `[ORDER BY][LIMIT]` 而 B 模式专章不含——文档自相矛盾，实测落在通用文法一侧：
+     * `DELETE FROM t WHERE ... LIMIT 1` 真删 1 行（`DELETE 1`），带 `ORDER BY ... LIMIT`
+     * 同样生效。P-7 的「拿到可写实例后翻 true」条件已满足。
+     * **B 模式同向**（25433 实例实测）：单表 `DELETE ... LIMIT 1` 同样真删 1 行；B 模式另支持
+     * 多表形态 `DELETE FROM t1 USING t1, t2 WHERE ...`（两模式都接受 LIMIT，B 专章的「不含 LIMIT」
+     * 属官方文档欠记载，非引擎限制）。
+     */
+    override val supportsDeleteLimit: Boolean = true
+
+    override val reservedWords: Set<String> = VASTBASE_RESERVED
+
+    /**
+     * PG 形态 upsert（D3 切换条款已触发）：官方通用文法两种都在册，出厂曾按「A 模式无
+     * 真机证据」取 MySQL 形态兜底；**社区镜像引擎级实证（A 模式，2026-10-30）两种形态
+     * 均可用**——`ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note` 规划与真跑覆盖
+     * 均生效、`DO NOTHING` 可用，`ON DUPLICATE KEY UPDATE`（含 `VALUES(col)`）同样生效
+     * ——按 D3 预留条款切到 PG 形态（与本方言 PG 族渲染及 LOWER 折叠一致）。
+     */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
 }
 
 /**
@@ -897,6 +1201,9 @@ object DialectRegistry {
         KingBaseDialect,
         OceanBaseDialect,
         OpenGaussDialect,
+        GaussDbDialect,
+        HighGoDialect,
+        VastbaseDialect,
     )
 
     /**
@@ -945,6 +1252,8 @@ object DialectRegistry {
         sqlPsiFile: com.intellij.psi.PsiFile? = null,
         moduleKey: String? = null,
         boundDataSourceDialect: String? = null,
+        sqlText: String? = null,
+        capturedDialect: String? = null,
     ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
@@ -952,7 +1261,15 @@ object DialectRegistry {
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
         if (!auto) return DialectDecisionEngine.decide(DialectDecisionEngine.Input(manualDialect = manualName))
-        if (project == null) return DialectDecisionEngine.decide(DialectDecisionEngine.Input())
+        if (project == null) {
+            return withLowConfidenceEvidence(
+                null,
+                DialectDecisionEngine.decide(
+                    DialectDecisionEngine.Input(capturedDialect = capturedDialect),
+                ),
+                sqlText,
+            )
+        }
         val candidates = DataSourceUrlProbe.candidateDialects(project)
         val singleModule = runCatching {
             com.intellij.openapi.module.ModuleManager.getInstance(project).modules.size == 1
@@ -964,27 +1281,141 @@ object DialectRegistry {
             runCatching { ModuleDataSourceBindingStore.getInstance(project).learnedCandidate(project, it) }.getOrNull()
         }
         val dialectFile = sqlPsiFile?.virtualFile ?: sourceFile
+        // T-DialectInferSmart：配置/依赖证据按**来源文件所属模块**收窄——多模块各自连不同库时，
+        // A 模块的预览不能被 B 模块的 application.yml 搅成「无共识」。
+        val sourceModule = resolveSourceModule(project, dialectFile)
         if (sqlPsiFile != null && dialectFile != null) {
             val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
             if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
-                return IdeaSqlDialectDecision.decide(
-                    snapshot = snapshot,
-                    learnedModule = learnedModule,
-                    fallbackProjectCandidates = candidates,
-                    lastAgentDialect = agentDialect,
-                    singleModuleProven = singleModule,
-                    boundDataSourceDialect = boundDataSourceDialect,
+                return withLowConfidenceEvidence(
+                    project,
+                    IdeaSqlDialectDecision.decide(
+                        capturedDialect = capturedDialect,
+                        snapshot = snapshot,
+                        learnedModule = learnedModule,
+                        fallbackProjectCandidates = candidates,
+                        lastAgentDialect = agentDialect,
+                        singleModuleProven = singleModule,
+                        boundDataSourceDialect = boundDataSourceDialect,
+                    ),
+                    sqlText,
+                    sourceModule,
                 )
             }
         }
-        return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
-            ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
-            ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
-            learnedModule = learnedModule,
-            projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
-            boundDataSourceDialect = boundDataSourceDialect,
-        ))
+        return withLowConfidenceEvidence(
+            project,
+            DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+                capturedDialect = capturedDialect,
+                ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
+                ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+                learnedModule = learnedModule,
+                projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
+                boundDataSourceDialect = boundDataSourceDialect,
+            )),
+            sqlText,
+            sourceModule,
+        )
     }
+
+    /** 来源文件所属模块（拿不到/无文件 → null；模块解析是读动作，统一包 ReadAction）。 */
+    private fun resolveSourceModule(
+        project: com.intellij.openapi.project.Project,
+        file: com.intellij.openapi.vfs.VirtualFile?,
+    ): com.intellij.openapi.module.Module? {
+        file ?: return null
+        return runCatching {
+            com.intellij.openapi.application.ReadAction.compute<com.intellij.openapi.module.Module?, Throwable> {
+                com.intellij.openapi.module.ModuleUtilCore.findModuleForFile(file, project)
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * T-DialectInferFix（增补券）：数据源 / PSI / 范围证据都给不出结论时，补三层**低置信**证据。
+     *
+     * 触发场景是用户最常见的两类环境：①一个 IDE 数据源都没配（只写了 `application.yml`）；
+     * ②配了数据源但从没连过、插件也拿不到方言。此前这两类一律兜底 MySQL，等于「智能推断从未生效」。
+     *
+     * 顺序与置信度（全部 [DialectDecisionEngine.Confidence.FALLBACK]，UI 必须披露来源）：
+     *  项目配置文件里的 JDBC URL（`Source.PROJECT_CONFIG`）→ 构建文件里的驱动坐标
+     *  （`Source.PROJECT_DEPENDENCY`）→ 本次 SQL 文本的方言独占特征（`Source.SQL_SYNTAX`）。
+     *
+     * 两条边界：`CONFLICT`（数据源与运行期事实真的打架）保持阻断，低置信证据不得覆盖；
+     * EDT 上只读缓存，绝不触发文件扫描（平台慢操作断言）。
+     */
+    private fun withLowConfidenceEvidence(
+        project: com.intellij.openapi.project.Project?,
+        decision: DialectDecisionEngine.Decision,
+        sqlText: String?,
+        module: com.intellij.openapi.module.Module? = null,
+    ): DialectDecisionEngine.Decision {
+        if (decision.dialectName != null) return decision
+        if (decision.status == DialectDecisionEngine.Status.CONFLICT) return decision
+        val evidence = project?.let { projectEvidence(it, module) }
+        if (evidence != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = evidence.dialectName,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = evidence.source,
+                evidence = decision.evidence + evidence.source,
+            )
+        }
+        val syntax = ProjectDialectEvidence.syntaxHint(sqlText)
+        if (syntax != null) {
+            return decision.copy(
+                status = DialectDecisionEngine.Status.RESOLVED,
+                dialectName = syntax,
+                confidence = DialectDecisionEngine.Confidence.FALLBACK,
+                source = DialectDecisionEngine.Source.SQL_SYNTAX,
+                evidence = decision.evidence + DialectDecisionEngine.Source.SQL_SYNTAX,
+            )
+        }
+        // 最后一层：用户在 IDEA 里配置的 SQL 方言（项目级 → 全局默认）。它比 MySQL 硬编码更贴近
+        // 用户意图，也是「没有任何数据源」时唯一稳定事实。
+        val inherited = platformInheritedDialect(project) ?: return decision
+        return decision.copy(
+            status = DialectDecisionEngine.Status.RESOLVED,
+            dialectName = inherited,
+            confidence = DialectDecisionEngine.Confidence.FALLBACK,
+            source = DialectDecisionEngine.Source.IDEA_DIALECT,
+            evidence = decision.evidence + DialectDecisionEngine.Source.IDEA_DIALECT,
+        )
+    }
+
+    /**
+     * 平台为项目/全局配置的 SQL 方言 → 插件注册方言名（未配置/GenericSQL/未收录方言 → null）。
+     *
+     * 只读平台内存映射（`getConfiguredMapping` / `getConfiguredDefaultSqlDialect`），无 EDT 限制；
+     * [cn.song.mybatisplus.visualizer.execute.DialectPreMapping] 内已 runCatching 兜底。
+     */
+    private fun platformInheritedDialect(project: com.intellij.openapi.project.Project?): String? = runCatching {
+        project ?: return null
+        val id = cn.song.mybatisplus.visualizer.execute.DialectPreMapping.inheritedLanguageId(project)
+            ?: return null
+        IdeaSqlContextBridge.pluginDialectName(id)
+    }.getOrNull()
+
+    /**
+     * EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。
+     *
+     * T-DialectInferSmart：先问**来源模块**（模块内无结论再由 `forProject` 回落到项目级），
+     * 模块级结论单独缓存，避免 A 模块的库被 B 模块的配置覆盖。
+     */
+    private fun projectEvidence(
+        project: com.intellij.openapi.project.Project,
+        module: com.intellij.openapi.module.Module? = null,
+    ): ProjectDialectEvidence.Evidence? = runCatching {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+            ProjectDialectEvidence.cachedOrNull(project, module)
+                ?: (if (module != null) ProjectDialectEvidence.cachedOrNull(project) else null)
+        } else {
+            (if (module != null) ProjectDialectEvidence.forProject(project, module) else null)
+                ?: ProjectDialectEvidence.forProject(project)
+        }
+    }.getOrNull()
+
 
     fun decision(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext): DialectDecisionEngine.Decision =
         decision(context.project, context.hostVirtualFile, context.sqlPsiFile, context.canonicalModuleKey)

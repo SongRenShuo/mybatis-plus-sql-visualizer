@@ -53,6 +53,11 @@ internal data class AgentStatusSnapshot(
     val firstHeartbeatPending: Boolean = false,
     /** T-AgentHeartbeat T-05：在线窗口秒数（文案带出的可核实读数；默认取协议常量，测试可注入短窗）。 */
     val heartbeatWindowSeconds: Long = AgentProtocol.ONLINE_WINDOW_MS / 1000,
+    /**
+     * T-CaptureCatchAll 券02：控制台桥活性回落已解封——agent 在线但长期零事件、控制台仍有 SQL 行，
+     * 桥已恢复解析。状态行必须如实披露（用户看到「已挂载」却零条目时，这句是唯一解释）。
+     */
+    val activityFallbackActive: Boolean = false,
 )
 
 /**
@@ -75,10 +80,17 @@ internal data class AgentStatusSnapshot(
 internal fun agentStatusText(s: AgentStatusSnapshot): String? {
     if (!s.enabled) return null
     if (s.livePids.isNotEmpty()) {
-        return MpSqlVisualizerBundle.message(
+        val attached = MpSqlVisualizerBundle.message(
             "settings.enhancedCapture.status.attached",
             s.livePids.joinToString(",") { "pid=$it" },
         )
+        // T-CaptureCatchAll 券02：解封态必须与「已挂载」同时出现——只说已挂载会让用户以为
+        // agent 在产出；只说回退会丢掉「会话还在」这一事实。
+        return if (s.activityFallbackActive) {
+            attached + "｜" + MpSqlVisualizerBundle.message("settings.enhancedCapture.status.activityFallback")
+        } else {
+            attached
+        }
     }
     if (s.everAttached) {
         // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。
@@ -453,7 +465,12 @@ internal class AgentSession(
                     input.readFully(body)
                     lastSeen = clockMs()
                     inboundFrameCount.incrementAndGet() // R4-①：超时文案判「下发后是否还有入站」的依据
-                    handleFrame(cmd, String(body, Charsets.UTF_8))
+                    val bodyText = String(body, Charsets.UTF_8)
+                    // T-CaptureCatchAll 券03：attach 覆盖自检计数（可选键，旧版 agent 无 → 零动作）。
+                    // 放在 handleFrame 之前：计数上报帧可能是任何命令（C1 路当前挂在心跳里），
+                    // 与主链分发解耦；解析失败在内部吞掉，绝不影响事件处理（红线）。
+                    AgentAttachReport.updateFromFrame(bodyText)
+                    handleFrame(cmd, bodyText)
                 }
             } catch (t: Throwable) {
                 if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）

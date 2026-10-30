@@ -1,3 +1,5 @@
+import org.gradle.api.provider.Provider
+import org.gradle.api.services.BuildServiceParameters
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
@@ -8,6 +10,89 @@ plugins {
 
 // T-BuildScriptSplit：测试基建分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=分区指纹与基线一致 + testShards 全量绿。
+
+// ---------- T-ReleasePerf9（20261029）：测试链并发限流 ----------
+// 5 个分片（同 root project）在 org.gradle.parallel 下真并发起跑（20261028 三轮实测 START 戳
+// 相差 <60ms；「分片严格串行 911s」是 20261020 旧树的过时读数）——内存挤时 5 测试 JVM + verifier
+// 同时在场直冲 native OOM（hs_err Chunk::new / G1 virtual space，当日三轮作废 + 人肉分阶段
+// 11m13s 兜底）。本机制把「同时执行的测试任务数」钉在 laneLimit：
+//   * 缺省 2——10-28 实测 `--max-workers=2` 干净出读数的精准化（只限测试链，编译并行度不动，
+//     不再需要手工带 --max-workers 或人肉分阶段）；
+//   * releaseGate 编排内缺省 3——分片窗两波 ~360s，配合下方 testShardStagger 共享错峰，
+//     仍嵌回 verifyMarketplace 等待窗附近，一条命令总墙钟不劣化出 T8 权威轮 11m15s 量级；
+//   * -PtestShardConcurrency=N 显式覆盖（内存干净时可提 4~5 提速；1=测试链全串行）。
+// 限流 ≠ 降片：片数、每片类集、覆盖面逐一不变，压的是「同一时刻几片在跑」（R3 禁降片口径
+// 的另一维度）。usesService 是配置缓存官方通道；服务类无状态（MpvTestLaneLimiter.kt），
+// 只承担并发许可。DB 集成桶豁免——T-TestPerf14 的 testDb* 七路并行语义保持（独立命令，
+// 不与 testShards/releaseGate 同批）。
+val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
+    val invokedTaskNamesForLane = gradle.startParameter.taskNames
+    val isGateOrchestration = invokedTaskNamesForLane.contains("releaseGate")
+    val laneLimitDefault = if (isGateOrchestration) 3 else 2
+    // T-ReleasePerf10 券01：测试链档位从静态缺省改内存水位自适应——内存宽裕时自动提档提速
+    // （T9 读数：缺省 2 估 8.5~10min vs 限流 5 实测 5m02s），水位紧张时由券02 的快速失败闸门
+    // 拒绝起跑（不靠压档位续命）。只在 testShards/releaseGate 形态采样（其他构建零开销）；
+    // 探针失败/不可用时回落静态缺省（fail-open）。
+    // 优先级：-PtestShardConcurrency 显式 > max(自适应, 静态缺省)；-PtestLaneAdaptive=off 回落静态。
+    val isShardedRun = isGateOrchestration || invokedTaskNamesForLane.contains("testShards")
+    val adaptiveOff = providers.gradleProperty("testLaneAdaptive").orNull == "off"
+    // releaseGate 编排内并发面还有 verifyGate+verifyMarketplace 两 verifier JVM（market 常驻
+    // 2.8GB / gate 2.3GB，错峰下不同时在峰值）——定档前预留 4GB 覆盖叠加段
+    // （档位表与物理模型见 mpv.watermark.MemoryWatermarkProbe.pickLane 注释）
+    val reserveGb = if (isGateOrchestration) 4.0 else 0.0
+    // -PwatermarkOverrideFreeGb=<x>：确定性验证用（把探针读数钉成给定值，只影响档位计算，
+    // 不绕过闸门）——档位表的验证不能依赖「此刻机器恰好多少空闲」（并行会话下 free 3~14GB 波动）。
+    val overrideFreeGb = providers.gradleProperty("watermarkOverrideFreeGb").orNull?.toDoubleOrNull()
+    // 档位上限：缺省 3（5 档实测 execSum 翻倍 + 4 例负载敏感红，见 pickLane 注释）；
+    // -PtestShardMaxLane=5 显式放开（本地赶时间、接受负载敏感红时用）
+    val maxLane = providers.gradleProperty("testShardMaxLane").orNull?.toIntOrNull() ?: 3
+    val adaptiveLane: Int? = if (isShardedRun && !adaptiveOff) {
+        val context = if (isGateOrchestration) "releaseGate" else "testShards"
+        if (overrideFreeGb != null) {
+            mpv.watermark.MemoryWatermarkProbe.laneFor(overrideFreeGb, reserveGb, "$context/override", logger, maxLane)
+        } else {
+            // 配置期探针必须走 providers.exec（CC 官方支持的外部进程通道）——用 ProcessBuilder
+            // 会触发「external process started at configuration time」，Gradle 9 直接把构建判失败
+            // （20261030 权威 gate 轮实测：CC problems found → BUILD FAILED）。
+            val raw = runCatching {
+                // 注意：buildSrc 禁用 `.asText`（T-BS-01：按 daemon 平台字符集解码，GBK 机器读
+                // UTF-8 会乱码，守卫 BannedApiSourceScanTest 钉住）——取字节再显式按 UTF-8 解。
+                val bytes = providers.exec {
+                    commandLine(mpv.watermark.MemoryWatermarkProbe.probeScript())
+                }.standardOutput.asBytes.get()
+                bytes.toString(Charsets.UTF_8)
+            }.getOrElse { e ->
+                logger.warn("mpv-test-lane: 配置期水位探针失败（${e.javaClass.simpleName}），回落静态缺省")
+                ""
+            }
+            val reading = mpv.watermark.MemoryWatermarkProbe.parse(raw)
+            if (reading == null) {
+                logger.warn("mpv-test-lane: 水位探针不可用，回落静态缺省（fail-open）")
+                null
+            } else {
+                mpv.watermark.MemoryWatermarkProbe.laneFor(reading.freeCommitGb, reserveGb, context, logger, maxLane)
+            }
+        }
+    } else {
+        null
+    }
+    val explicitLane = providers.gradleProperty("testShardConcurrency").orNull
+    // 自适应只**抬高**、不压低：静态缺省（testShards 2 / releaseGate 3）是 T9 已 A/B 的已知安全档；
+    // 低水位场景由券02 的快速失败闸门负责（free < floor 直接拒绝起跑），不靠把档位压到 1 续命
+    // （压到 1 = 5 片全串行，实测 16m25s，比快速失败重跑更亏）。
+    val laneLimit = explicitLane?.toIntOrNull()?.coerceIn(1, 8)
+        ?: maxOf(adaptiveLane ?: 0, laneLimitDefault)
+    logger.lifecycle(
+        "mpv-test-lane: maxParallelLimit=$laneLimit " +
+            "(adaptive=${adaptiveLane ?: "n/a"}, floor=$laneLimitDefault, explicit=${explicitLane ?: "none"}; " +
+            "-PtestShardConcurrency > max(adaptive, floor); -PtestLaneAdaptive=off 回落静态)",
+    )
+    gradle.sharedServices.registerIfAbsent("mpvTestLaneLimiter", MpvTestLaneLimiterService::class.java) {
+        // Gradle 9.7 API：BuildServiceSpec.maxParallelUsages = 同时可使用本服务的任务数上限
+        // （javap gradle-core-api-9.7.0 BuildServiceSpec 实证；服务实例上无 maxParallelLimit）。
+        maxParallelUsages.set(laneLimit)
+    }
+}
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：
 // LightPlatform 测试沙盒会无条件加载所有 bundled 插件，Vue 的 LSP 扩展（VueLspServerSupportProvider）
@@ -22,6 +107,12 @@ plugins {
 // 判断保留，兼容旧树/聚合容器同名不冲突）。
 tasks.withType<Test>().configureEach {
     val isDbIntegration = name == "testDatabase" || name.startsWith("testDb")
+    // T-ReleasePerf9：测试链并发限流挂接（mpvTestLaneLimiter 注册块见上方）——testShardN 分片、
+    // testExternal、默认 test/testFast 全部在此面内；DB 集成桶豁免（testDb* 七路并行语义保持）。
+    // 配置期调用，任务执行期共享限流许可；单任务独跑（test/testFast）不受限流影响。
+    if (!isDbIntegration) {
+        usesService(mpvTestLaneLimiter)
+    }
     classpath = classpath.filter {
         !it.name.contains("vue", ignoreCase = true) &&
             (isDbIntegration || (
@@ -132,6 +223,9 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     "testDbSchemaAnnotator" to "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
     // T-PreviewSideQuery：旁路查询真库链（COUNT/EXPLAIN/失败解包），需 Database 插件与真实 MySQL
     "testDbPreviewSideQuery" to "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
+    // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
+    // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
+    "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -389,6 +483,48 @@ var shardPlanClasses: String = ""
 // 供 auto-handicap 判定「临界不随清单更替漂移」。
 var shardPlanHashes: String = ""
 
+// T-ReleasePerf9（20261029）：分片错峰共享前置——T-ReleasePerf7 N1「分片叶子 doFirst sleep」的
+// 迁移版。叶子在 doFirst 内 sleep 会占住 T-ReleasePerf9 限流槽：releaseGate 编排内限流 3 时
+// 首波三片各睡 285s 占槽正常，第二波分片排队拿到槽后会再白睡整段 285s（总墙钟 +5min 量级）。
+// 改为所有分片 dependsOn 本任务——它只执行一次、睡满 testStaggerMs 后释放，分片们随后抢槽：
+// 分片真实起点仍 ≥ t0+错峰值，时间线与原「每片各自 doFirst sleep」逐字等价（仅延迟启动，
+// 不删不减不重排任何测试语义）；差异只在限流下不再有第二波白睡。缺省逻辑与 verifyGate 侧
+// gateStaggerMs 同款机制（invokedTaskNames 判定），但值独立定案：releaseGate 编排内 **240000ms**
+// （S3 A/B 同窗对照实测——A 轮 285s 全链 12m1s vs B 轮 240s 完整轮 10m48s 且 e2e PASS=26/0：
+// 分片窗（240s+两波）嵌回 verifyMarketplace 长杆（~583s 段）内，总墙钟回到 T8 权威轮 675s 线
+// 以内；285s 时分片尾超窗 ~46s 拖长总链），日常 testShards 0，-PtestStaggerMs 显式覆盖。
+// 块内声明局部值（CC 约束：脚本顶层 val 经任务动作引用不可序列化，T-ReleasePerf7 S2 实测）。
+tasks.register("testShardStagger") {
+    group = "verification"
+    description =
+        "分片错峰共享前置（releaseGate 编排内延迟 testStaggerMs 默认 240s，T-ReleasePerf9 S3 A/B 定案；仅延迟启动，时间线与 T7 叶子 sleep 等价）"
+    val invokedTaskNamesForStagger = gradle.startParameter.taskNames
+    val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
+        ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 240_000L else 0L
+    inputs.property("mpvStaggerMs", testStaggerMs)
+    // T-ReleasePerf10 券02：执行期水位快速失败闸门——testShardN 全体 dependsOn 本任务且本任务无
+    // 输出恒执行，闸门在分片测试 JVM 出生前判定（配置期捕获 floor，CC 约束同 mpvStaggerMs；
+    // 缺省 floor 6GB，-PwatermarkFloorGb 覆盖，-PwatermarkGate=off 关闭；探针失败 fail-open）。
+    val watermarkFloorGb = if (providers.gradleProperty("watermarkGate").orNull == "off") {
+        0.0
+    } else {
+        providers.gradleProperty("watermarkFloorGb").orNull?.toDoubleOrNull() ?: 6.0
+    }
+    inputs.property("mpvWatermarkFloorGb", watermarkFloorGb)
+    doFirst {
+        val ms = (inputs.properties["mpvStaggerMs"] as? Number)?.toLong() ?: 0L
+        mpv.watermark.MemoryWatermarkProbe.checkGate(
+            (inputs.properties["mpvWatermarkFloorGb"] as? Number)?.toDouble() ?: 6.0,
+            "testShardStagger（分片测试 JVM 出生前）",
+            logger,
+        )
+        if (ms > 0) {
+            logger.lifecycle("testShardStagger sleep ${ms}ms")
+            Thread.sleep(ms)
+        }
+    }
+}
+
 intellijPlatformTesting {
     testIde {
         // T-TestPerf-04（2026-09-14）分片包含清单自动分区 + T-TestPerf2（2026-09-15）时长均衡：
@@ -416,6 +552,12 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
             // T-PreviewSideQuery：旁路查询真库链（Database 插件 + 真实 MySQL）
             "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
+            // T-GaussDbDialect 券 06：平台 sql.dialect 运行期可见性断言（需要 Database 插件）。
+            // 补登（T-XcDialects3 收口门禁实测 2026-10-30）：当时只加了 tasks.test 的
+            // excludeTestsMatching（mpv-testing 下方 filter 块），漏登本清单——分片类发现扫描
+            // 仍把它捞进 testShardN，而分片沙盒无 database jar，两用例必红（「沙盒未安装
+            // com.intellij.database」）。本清单才是分片侧的唯一排除口径。
+            "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
         )
         // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
         // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿
@@ -714,13 +856,9 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
-        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟。缺省逻辑与 verifyGate 侧同款
-        //（mpv-verification gateStaggerMs）：releaseGate 编排内自动 285000ms，日常 testShards 0。
-        // 块内声明+doFirst 只捕获局部 Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，
-        // 配置缓存不可序列化——S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
-        val invokedTaskNamesForStagger = gradle.startParameter.taskNames
-        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
-            ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
+        // T-ReleasePerf9：错峰延迟迁至共享前置任务 testShardStagger（原 T-ReleasePerf7 N1
+        // 叶子 doFirst sleep 的迁移版，等价性论证见该任务注释）——限流下叶子 sleep 会占槽
+        // 令第二波分片白睡整段延迟，共享前置睡一次后释放。分片真实起点不变（≥ t0+285s）。
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
@@ -729,6 +867,8 @@ intellijPlatformTesting {
                 task {
                     // T-ContribDemoFixture：每片都先过 demo 预检；直接跑 testShardN 也不会绕过。
                     dependsOn("verifyDemoFixture")
+                    // T-ReleasePerf9：错峰共享前置（releaseGate 编排内延迟，日常 0）。
+                    dependsOn("testShardStagger")
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
@@ -763,18 +903,16 @@ intellijPlatformTesting {
                         val dir = File(root, "build/test-results/testShard$i")
                         dir.mkdirs()
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
-                        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（默认 0=关，浮动作不变）。
-                        // R1 warm 探针实证 verifyMarketplace 前段高占用（START 后 ~285s CPU 141~199%），
-                        // 之后 ~7 分钟低占用（在线等待窗，多分钟 <40%）；分片窗 208s 现状与高占用段
-                        // 完全重叠 = 双向争用（market +86~165s、分片 +22~43s）。本开关把分片真实
-                        // 起点推后 N 毫秒嵌入低占用段。仅延迟启动，不删不减不重排任何任务语义。
-                        if (testStaggerMs > 0) {
-                            logger.lifecycle("testShard$i stagger ${testStaggerMs}ms")
-                            Thread.sleep(testStaggerMs)
-                        }
-                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
+                        // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
+                        // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
+                        // T-ReleasePerf10：laneOthers = 本片起跑瞬间**其他**在跑分片执行器数
+                        // （本片自己的 JVM 尚未出生）。与档位日志并排即可判「档位是否真的变成并发」，
+                        // 见 MpvLaneMeter 注释（计数器版本已被实测否掉）。
+                        val laneOthers = MpvLaneMeter.activeShardExecutors(root, logger)
+                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneOthers=$laneOthers")
                     }
-                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
+                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
+                    }
                 }
             }
         }
@@ -965,7 +1103,8 @@ tasks.register("testDatabase") {
 tasks.register("testShards") {
     group = "verification"
     description =
-        "分片全量测试（时长均衡自动分区 $testShardCount 片；-PtestShardCount 调片数；跨进程并行用 dev-support/test-shards-parallel.ps1）"
+        "分片全量测试（时长均衡自动分区 $testShardCount 片；测试链并发限流见 -PtestShardConcurrency，缺省 2、" +
+            "releaseGate 编排内 3；限流压的是同时执行的片数，片数与覆盖面不变；跨进程并行用 dev-support/test-shards-parallel.ps1）"
     dependsOn("verifyDemoFixture")
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
@@ -1145,6 +1284,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest")
         // T-PreviewSideQuery：旁路查询真库链需要 Database 插件与真实 MySQL，同上
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest")
+        // T-GaussDbDialect 券 06：平台 sql.dialect 运行期可见性断言需要 Database 插件，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest")
     }
 }
 

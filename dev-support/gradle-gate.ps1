@@ -208,6 +208,25 @@ function Emit-Events {
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 function Now-Stamp { Get-Date -Format 'HH:mm:ss' }
 
+# ---- T-ReleasePerf10 券04：verifyMarketplace home 保温陈旧警告（只警告不阻断） ----
+# 命中 releaseGate/verifyMarketplace 时查保温 stamp：>36h 陈旧或缺失 → WARN，建议先跑
+# verifyMarketplaceRefresh。verifier home 机器级持久（GRADLE_USER_HOME/mpv-verifier-home，
+# T-ReleasePerf8 N3），但上游依赖插件前进一周即可令发行日 market 单步膨胀到 18m29s+（10-29 实测）。
+if ($Command -match 'releaseGate|verifyMarketplace') {
+    $guh = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE '.gradle' }
+    $stampFile = Join-Path $guh 'mpv-verifier-home\marketplace\.mpv-refresh-stamp'
+    if (Test-Path -LiteralPath $stampFile) {
+        $ageHours = ((Get-Date) - (Get-Item -LiteralPath $stampFile).LastWriteTime).TotalHours
+        if ($ageHours -gt 36) {
+            Write-Output ("MPV-VERIFIER-WARN: marketplace home refresh stamp is {0:N1}h old - release-day verifyMarketplace may pay incremental download tax (20261029 measured 18m29s). Prefer running first: .\gradlew verifyMarketplaceRefresh" -f $ageHours)
+        } else {
+            Write-Output ("MPV-VERIFIER: marketplace home refresh stamp fresh ({0:N1}h ago)" -f $ageHours)
+        }
+    } else {
+        Write-Output 'MPV-VERIFIER-WARN: marketplace home has no refresh stamp - prefer running first: .\gradlew verifyMarketplaceRefresh'
+    }
+}
+
 if ($Release) {
     if ([string]::IsNullOrWhiteSpace($Session) -and -not $Force) {
         Write-Output 'USAGE: -Release requires -Session <guid from ACQUIRED output> (or -Force)'

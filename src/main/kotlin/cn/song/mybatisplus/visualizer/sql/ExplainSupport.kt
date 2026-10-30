@@ -84,9 +84,16 @@ object ExplainSupport {
      *  - KingbaseES V8/V9：`EXPLAIN (FORMAT JSON)`（PG 兼容）；
      *  - DM8：`EXPLAIN <sql>`，返回 `#NSET2` 计划文本；
      *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
-     *  - OceanBase（T-DialectXcFamily）：`EXPLAIN <sql>`，TABLE 档——官方 V4.x《SQL 执行计划简介》
-     *    `EXPLAIN [explain_type] dml_statement`、缺省 `FORMAT = TRADITIONAL` 表格行（文档级，
-     *    无真机——环境受限未验证留账）；
+     *  - OceanBase（T-DialectXcFamily 接入，T-OBExplainFormat 纠档）：`EXPLAIN <sql>`，**TEXT 档**——
+     *    官方 V4.x《SQL 执行计划简介》称缺省 `FORMAT = TRADITIONAL` 为表格行，但**真机实证推翻**：
+     *    社区镜像引擎级（oceanbase/oceanbase-ce:4.3.5-lts，OB CE 4.3.5.6，`ob_compatibility_mode=MYSQL`）
+     *    `EXPLAIN SELECT 1` 返回**单列 `Query Plan`**，值是 OB 自有的 ASCII 计划树
+     *    （`|ID|OPERATOR|NAME|EST.ROWS|EST.TIME(us)|` 段 + `Outputs & filters` 段；真实表得
+     *    `TABLE RANGE SCAN`，带 `partitions(p0)` / `is_index_back` 等 OB 专有字段），**不是** MySQL
+     *    的 `id/select_type/table/type/...` 多列表格；`EXPLAIN FORMAT = JSON` 为 OB 专用紧凑 JSON
+     *    （`ID/OPERATOR/EST.ROWS`），**不是** MySQL `query_block` 结构。档位误登 TABLE 会让
+     *    [cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor] 走 MySQL 列名解析分支（找不到
+     *    `type/key/rows/Extra` 列即提前返回）→ OceanBase 索引建议永不触发（T-ECH-03 同型假绿）；
      *  - openGauss（T-DialectXcFamily）：`EXPLAIN (FORMAT JSON)`，JSON 档——openGauss 5.0.0
      *    **真机实证**（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 `QUERY PLAN` JSON 文本）；
      *  - Oracle（R23 接入）：`EXPLAIN PLAN FOR <sql>`，TEXT 档——**真机实证** Oracle Free 23 +
@@ -97,10 +104,28 @@ object ExplainSupport {
      *    不可达，走 [Entry.postPlanQuery]/[Entry.channelNote] 诚实降级：语句照发（登记真实发生），
      *    计划行指引到数据库端同连接另查；
      *  - SQL Server（R23 接入）：`SET STATISTICS XML ON; <sql>; SET STATISTICS XML OFF`，XML 档——
-     *    文档实证 Microsoft Learn《SET STATISTICS XML》「need not be the only statement in a batch」
-     *    （SHOWPLAN_XML 才有批内独占限制，故不取）；计划 XML 是语句执行后的**附加结果集**，
-     *    MCP 单结果集通道返回的是查询行而非计划（[Entry.channelNote] 澄清），IDE 控制台多结果
-     *    页签可见；**真机未验证**（DBX 在册无 sqlserver 实例），末尾 OFF 还原会话态防连接复用串扰。
+     *    **官方镜像引擎级实证**（2026-10-30，`mcr.microsoft.com/mssql/server:2022-latest`，
+     *    16.0.4305.5 CU27-GDR Developer on Linux）：
+     *    ①**多结果集假设成立**——`SET STATISTICS XML ON; SELECT …; SET STATISTICS XML OFF` 返回三集：
+     *    RS#0 查询行 → RS#1 计划 XML（列标签 `Microsoft SQL Server 2005 XML Showplan`，nvarchar）→
+     *    RS#2 `updateCount = -1`；四种缓冲模式（adaptive/full/cursor）读数一致；
+     *    ②**选型被真机证实**——`SET SHOWPLAN_XML ON` 批内混写直接报
+     *    `Msg 1067 The SET SHOWPLAN statements must be the only statements in the batch.`，
+     *    正是本表取 STATISTICS XML 而非 SHOWPLAN_XML 的理由；
+     *    ③**末尾 OFF 是必需项**（实测非「防御性」）：漏 OFF 会污染同连接后续语句，后续普通查询
+     *    也附带计划结果集；
+     *    ④**无 FROM 的语句引擎不产生计划**：`SELECT 1` 只回查询行、没有 RS#1——而 [ExplainGate]
+     *    放行 `SELECT` 白名单，故用户在 `SELECT 1` 上点执行计划会得到「有结果、没计划」，
+     *    属引擎侧事实而非插件缺陷（MCP 侧 channelNote 已按此澄清）；
+     *    ⑤DML（INSERT/UPDATE）首结果是 updateCount、计划在第二集——「MCP 首结果集＝查询行」
+     *    的说法只对 SELECT 成立；
+     *  - 计划 XML 是语句执行后的**附加结果集**，MCP 单结果集通道返回的是查询行而非计划
+     *    （[Entry.channelNote] 澄清），IDE 控制台多结果页签可见；
+     *  - HighGo（T-XcDialects3 券 04）：`EXPLAIN (FORMAT JSON)`，JSON 档——社区镜像引擎级实证
+     *    （HighGo V6.0.1 / PostgreSQL 12.3，镜像 `xuxuclassmate/highgo:6.0.1`，非厂商官方发布物）；
+     *  - Vastbase（T-XcDialects3 券 04）：`EXPLAIN (FORMAT JSON)`，JSON 档——官方文档级
+     *    （G100 V3.0.9《EXPLAIN》文法，FORMAT 默认 TEXT）；B 模式下 EXPLAIN 兼作 DESC（首关键字
+     *    白名单由 [ExplainGate] 保证，此处仅登记）。
      */
     private val table: List<Entry> = listOf(
         Entry("MySQL", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "真机实证 MySQL 5.7/8.4（DBX 通道 2026-09-02）"),
@@ -110,8 +135,24 @@ object ExplainSupport {
         Entry("DM（达梦）", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "真机实证 DM8（返回 #NSET2 计划文本）"),
         Entry("H2", "EXPLAIN PLAN FOR $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "H2 2.3.232 引擎级单测"),
         Entry("SQLite", "EXPLAIN QUERY PLAN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "SQLite 引擎级单测"),
-        Entry("OceanBase", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
+        Entry(
+            "OceanBase",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "社区镜像引擎级实证：OceanBase CE 4.3.5.6（ob_compatibility_mode=MYSQL）EXPLAIN SELECT 1 返回单列 Query Plan ASCII 树" +
+                "（算子 TABLE RANGE SCAN、含 partitions/is_index_back），非官方文档所述的 TRADITIONAL 表格行；" +
+                "EXPLAIN FORMAT=JSON 为 OB 专用紧凑 JSON（ID/OPERATOR/EST.ROWS），非 MySQL query_block。" +
+                "档位误登 TABLE 会让索引建议走 MySQL 列名分支而永不触发（T-OBExplainFormat）",
+        ),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
+        Entry(
+            "GaussDB",
+            "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER",
+            ExplainOutputFormat.JSON,
+            "官方文档级：GaussDB 集中式 V2.0-10.x《EXPLAIN》文法 `EXPLAIN [ ( option [, ...] ) ] statement`，" +
+                "FORMAT {TEXT|XML|JSON|YAML}；与 openGauss 5.0.0 真机同形（单列 QUERY PLAN、`[{\"Plan\":…}]`）。" +
+                "GaussDB 商用版无公开容器镜像、无真机——真机读数到位后升档",
+        ),
         Entry(
             "Oracle",
             "EXPLAIN PLAN FOR $SQL_PLACEHOLDER",
@@ -124,9 +165,14 @@ object ExplainSupport {
             "SQL Server",
             "SET STATISTICS XML ON; $SQL_PLACEHOLDER; SET STATISTICS XML OFF",
             ExplainOutputFormat.XML,
-            "文档实证 Microsoft Learn《SET STATISTICS XML》（need not be the only statement in a batch；计划 XML 为执行后的附加结果集）；真机未验证（DBX 在册无 sqlserver 实例留账）——MCP 单结果集通道返回查询行而非计划，channelNote 澄清；末尾 OFF 还原会话态",
-            channelNote = "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; the rows above are the query result, not the plan - use the IDE database console to see the plan tab (documented syntax; not verified against a live instance).",
+            "官方镜像引擎级实证：SQL Server 2022 CU27-GDR Developer on Linux（mcr.microsoft.com/mssql/server:2022-latest，16.0.4305.5）" +
+                "多结果集确认——RS#0 查询行 → RS#1 计划 XML（列标签 Microsoft SQL Server 2005 XML Showplan）→ RS#2 updateCount=-1，四种缓冲模式一致；" +
+                "SET SHOWPLAN_XML ON 批内混写报 Msg 1067（本表取 STATISTICS XML 的理由真机成立）；末尾 OFF 必需（漏 OFF 会污染同连接后续语句）；" +
+                "无 FROM 的 SELECT 引擎不产生计划（只有查询行）；DML 首结果为 updateCount、计划在第二集",
+            channelNote = "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; the rows above are the query result, not the plan - use the IDE database console to see the plan tab. Note: a statement without FROM (e.g. SELECT 1) produces no plan result set at all, and for DML the first result is an update count instead of rows.",
         ),
+        Entry("HighGo", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：HighGo V6.0.1 / PostgreSQL 12.3，FORMAT JSON 单列 QUERY PLAN JSON 文本（镜像 xuxuclassmate/highgo:6.0.1，非厂商官方）"),
+        Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：Vastbase G100 V3.0 Build 9（openGauss 6.0.0）A 模式 FORMAT JSON 单列 JSON 文本（镜像 apecloud/vastbase，非厂商官方）"),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

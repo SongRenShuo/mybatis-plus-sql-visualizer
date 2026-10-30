@@ -250,6 +250,62 @@ class SqlLogHistoryRoundTripTest {
         assertNull("无报错条目回环 null", read.errorText)
     }
 
+    /**
+     * T-StackBizFrame S3：调用栈快照与线程名都要经历史文件回环——线程名是弹层标题的一部分，
+     * 读回丢失会让历史条目的标题退回纯「调用栈」，用户重新失去「这条 SQL 跑在哪个线程」的判别量。
+     */
+    @Test
+    fun `真实链路_调用栈快照与线程名写读回环_不丢`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        val captured = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1724567890000L,
+            stackDigest = "cn.acme.Svc#run:1<-java.lang.Thread#run:2",
+            threadName = "scheduling-1",
+        )
+        saver.write(captured)
+        saver.close()
+
+        val files = dir.listFiles { f -> f.extension == "sql" }!!
+        assertEquals(1, files.size)
+        val read = SqlLogFileReader.readFromFile(files[0]).single()
+        assertEquals("栈快照回环", captured.stackDigest, read.stackDigest)
+        assertEquals("线程名回环", captured.threadName, read.threadName)
+    }
+
+    /**
+     * T-DialectInferFix 券 02：本次执行连接的方言名必须经历史文件回环。
+     *
+     * 读回丢失会让历史双击预览又回到「无证据 → 平台继承/MySQL 兜底」，
+     * 正是用户报障的那条路径（PG 项目按 MySQL 解析，`signal` 被标红）。
+     */
+    @Test
+    fun `真实链路_执行方言写读回环_不丢`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        val captured = LogSqlEntry(
+            rawSql = "SELECT signal FROM biz_car_device_info",
+            restoredSql = "SELECT signal FROM biz_car_device_info",
+            params = emptyList(),
+            timestamp = 1724567890000L,
+            databaseName = "PostgreSQL · cyzc_db1@121.40.45.91:5432",
+            dialectName = "PostgreSQL",
+        )
+        saver.write(captured)
+        saver.close()
+
+        val files = dir.listFiles { f -> f.extension == "sql" }!!
+        assertEquals(1, files.size)
+        val read = SqlLogFileReader.readFromFile(files[0]).single()
+        assertEquals("方言名回环", "PostgreSQL", read.dialectName)
+        assertEquals("库标回环", captured.databaseName, read.databaseName)
+    }
+
     @Test
     fun `真实链路_报错条目写读回环_errorText不丢`() {
         val dir = tempDir()

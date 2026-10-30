@@ -26,6 +26,8 @@ object GutterGroups {
         "XmlSqlGutterLineMarkerProvider" to "mapperXml",
         "PagesXmlGutterLineMarkerProvider" to "mapperXml",
         "HbmNamedQueryGutterLineMarkerProvider" to "mapperXml",
+        "MapperXmlToJavaLineMarkerProvider" to "mapperXml",
+        "MapperJavaToXmlLineMarkerProvider" to "mapperXml",
         "AnnotationSqlGutterLineMarkerProvider" to "annotation",
         "NamedQueryGutterLineMarkerProvider" to "annotation",
         "JpaGutterLineMarkerProvider" to "jpaHql",

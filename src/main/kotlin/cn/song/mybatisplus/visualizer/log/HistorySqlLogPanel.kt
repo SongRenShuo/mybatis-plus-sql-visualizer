@@ -903,6 +903,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         entry.toPreviewResult(
             formatSql = PluginSettings.getInstance().state.logFormatSql,
             literalRecovery = PluginSettings.getInstance().state.literalParamRecovery,
+            // T-DialectInferFix：历史条目同样携带本次执行方言（旧条目由此键或 `db:` 角标回填）
+            capturedDialect = entry.dialectName,
         )
 
     // ---------- 二级右键菜单 ----------

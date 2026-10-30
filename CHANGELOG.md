@@ -2,6 +2,64 @@
 
 # SQL Visualizer Changelog
 
+## [2026.10.31-beta.2] - 2026-10-31
+
+### Changed
+- **增强捕获 agent 的宿主控制台输出改为默认静默（用户令「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）**：原先每次挂载打一行 `attach retransform: matched/wove/...`、premain 打候选类数、每轮补挂各打一行、首条织入事件再打一行，日常噪音大于信息量。现分两级：诊断/进度行默认不打，仅 `-javaagent:…=logLevel=debug`（含 `verbose` / `trace`）时输出；真实降级与熔断必报，与级别无关——预算耗尽、kill switch、`getAllLoadedClasses` 失败、注册盲区（仅一次）、`PORT_ABANDONED`、install degraded、驱动名单预载失败。attach 汇总行额外保留「有问题就打」：`failed>0` 或 `predicateFailed>0` 时照常输出，全零静默（「本次 attach 命中多少」由 IDE 侧心跳的 `AgentAttachStats` 诊断行承载，不必占宿主控制台）。采集与上报链路零变化，静音只作用于宿主 stderr 诊断行
+
+### Fixed
+- **方言为 GaussDB / 达梦 / 瀚高 / 海量时预览恒降级、表列补全不可用（T-PreviewPsiDialect，用户真机报障）**：预览顶部常驻黄色横幅「预览以简化模式打开——临时文件解析失败；表/列补全暂不可用」，10 次预览 10 次降级。真机日志实证根因是 `ClassCastException: SqlLanguage cannot be cast to SqlLanguageDialect`（当天 9 次，3 次打成 SEVERE 且点名本插件），栈落在 `SqlParserDefinitionBase.createFile:90` ← `SingleRootFileViewProvider.getPsiInner` ← `FileManagerImpl.findFile` ← 预览预热的 `awaitPreviewPsiLanguage`。**成因**：四个自注册方言（DM / GaussDB / HighGo / Vastbase）此前只注册了 `<sql.dialect>`，没有为该语言注册 `<lang.parserDefinition>`——平台查 ParserDefinition 时沿语言链上溯，落到基语言 `SQL` 的那份（其 file node type 绑的是基类 `SqlLanguage`），`createFile` 里的 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 强转必然失败，PSI 建不出来，`PsiManager.findFile` 返回 null，预热按 `PSI_UNAVAILABLE` 降级。平台内置方言 SQL / GenericSQL / SQL92 全是成对注册的，我们这四对少了后一半。**修复**：①新增 `sql/SqlFamilyParserDefinitions.kt`，为四个方言各补一个 ParserDefinition（file node type 绑本方言语言，lexer / parser / elementFactory 委托 `Sql92ParserDefinition`，与方言 `createTokensHelper` 的委托口径一致），注册面在 `database-optional.xml` 成对补齐；②`mapPreviewDialectBeforePsi` 增加映射前探测——目标语言的 ParserDefinition 若不在 SQL 方言族，这次就不映射（补全退 GenericSQL），不再拖垮整条预览；③`PsiManager.findFile` 两处调用包 `runCatching`，平台契约异常降为一条带栈 WARN，不再以 SEVERE 记到插件头上。**守卫**：`SqlDialectParserDefinitionPairingGuardTest` 静态校验「每个 `<sql.dialect>` 必有同名 `lang.parserDefinition`」，`PlatformSqlDialectRegistrationTest` 新增 DB 通道用例真建 PSI（摘掉任一条注册即红）
+
+## [2026.10.31-beta.1] - 2026-10-31
+
+> 内测版（Gitee 抢先体验通道）。范围＝dev 分支 59 笔合流 + master 侧渲染性能一笔；方言总数 11 → 14。
+
+### Added
+- **GaussDB 独立方言（T-GaussDbDialect）**：此前 `jdbc:gaussdb://` 被并进 `OpenGaussDialect`（一 object 两前缀），连接能认、SQL 能渲染、EXPLAIN 能出，但设置页下拉、日志库角标、MCP 方言名一律显示 `openGauss`——用户看不到 GaussDB。现拆出 `GaussDbDialect`：渲染形态与 openGauss 同形不同名（六项能力不分叉），保留字按 GaussDB 官方口径单独成表。增强捕获同批补登记华为两族驱动 `com.huawei.gaussdb.jdbc` / `com.huawei.opengauss.jdbc`——此前 connect / 语句 / prepare 三面全未登记，attach 后 `matched=0`、零事件零角标且宿主侧无任何报错；顺带改正仓内三处写反的 openGauss 驱动谱系注释（实为 2.x/3.x `org.opengauss.*`、5.x/7.x `org.postgresql.*`），并撤掉据错误谱系作出的「已被 PG 覆盖」失真认领
+- **瀚高 HighGo 与海量 Vastbase 两方言（T-XcDialects3）**：保留字分别 153 词 / 201 词，取「官方附录 ∪ PG 基础 ∪ 引擎 `pg_get_keywords()` 实读」并集（只取单一来源会漏类型名与函数名：瀚高比 PG 多 65 词、海量默认 A 模式比 PG 模式多 `excluded` / `online` / `long` 等 14 词）。URL 与方言链五表登记 `jdbc:highgo:` / `jdbc:vastbase:` / `jdbc:dws:iam:` 三子协议与 MCP 中文别名（瀚高 / 翰高 / 海量）；平台 `sql.dialect` 注册 2 → 4（照 DM 先例）；plugin.xml / README / 架构文档 / SqlMapperLanguage 计数 12 → 14（含 GaussDB 轮漏改的陈旧「十一个」）。真机触发两条计划预留切换条款：海量 `renderUpsert` 由 MySQL 形态切 PG 形态（两种均可用，实测取值）、`supportsDeleteLimit` 翻 true（`DELETE … LIMIT 1` 真删 1 行）
+- **人大金仓三处缺口补齐（T-XcDialects3 券 01/02/05）**：①保留字补 `enckey`（官方文档标非保留，引擎 `pg_get_keywords()` 标 R、列引用实测 `syntax error at or near "enckey"`，以引擎为准，117 → 118 词）；②PG 协议版驱动坐标 `postgresql-for-kingbase` 排在 `org.postgresql:postgresql` 之前，纠正「金仓被认成 PostgreSQL」；③增强捕获 `WeaveSpecs` 此前对金仓为零，用户「有库角标零 SQL」，现登记语句面 6 类 + prepare 面 3 类 + connect 面 2 新
+- **增强捕获按 JDBC 接口匹配兜底，采集面与方言解耦（T-CaptureCatchAll）**：「未命中白名单」不是少一条通道而是**两条都没有**——agent 在线并 ACK 后 `SqlCaptureGate.paused` 置真、控制台桥随即短路，白名单没命中就整链静默。现于 attach 轮用反射对已加载类做 `isAssignableFrom` 匹配（零字节解析），命中 `Statement` / `PreparedStatement` 即按语句面 / prepare 面织入。配套红线设施：`CaptureBudget` 三道闸（扫描类上限 5000、transformer 兜底累计预算 300ms、连败 3 次整体 kill 退回纯白名单，全可经 `sqlvis.agent.*` 覆盖且非法值回落默认）、`NestGate` 线程深度栈让嵌套链只报最内层（Hikari + MyBatis 双层不再双报）、接口对象引用改 `ClassValue`（防热部署钉住旧 classloader）。premain 阶段**不内联未知形态**（premain 织入失败等于宿主 JVM 起不来），只记候选、attach 后 daemon 补挂；transformer 两段式兜底（裸字节预筛 → ASM header）默认关。兜底面刻意不含 `ADD_BATCH` / `CLEAR_BATCH`——那两个出口读原局部，未知驱动 `chop_frame` 会整类 `VerifyError`（达梦 `DmDriver` 先例），为红线主动放弃批处理文本累积
+- **增强捕获活性回落与 attach 自检上报（T-CaptureCatchAll 券 02/03/10）**：IDE 侧 `CaptureActivityFallback`——`paused` 满 10 秒 + 窗口内零 agent 事件 + 控制台确实解析出 SQL → 解封控制台通道并披露，带滞回与去重，出厂开；`AgentAttachStats` 把心跳里的命中 / 织入 / 版本闸跳过 / 兜底熔断计数解析进诊断行，不再靠「面板零条目」反推
+- **增强捕获补齐 OceanBase / MariaDB / SQLite（T-CaptureCoverage）**：14 方言对账发现 11 全链路 / 2 只有角标 / 1 三面全空。OceanBase 三面全补（`OceanBaseStatement` 一族 37KB 大类字节层 LINK_OK）；MariaDB 语句面 3 类 + prepare 1 类（3.x 起全部重写为自有类，不复用 MySQL `StatementImpl`）、SQLite 语句面 2 类 + prepare 1 类；删 `VENDOR_NOT_COVERED` 里 MariaDB / SQLite 两条失真的「无本机 jar」认领（认领优先于覆盖，留着等于覆盖白做）；帧跳过前缀五份副本补 `com.oceanbase.`
+
+### Fixed
+- **PostgreSQL 系保留字缺项（T-GaussDbDialect 券 01）**：`PG_RESERVED` 缺 `is` / `procedure`（PG 官方附录两词均为 reserved），产物在真机上会因合法列名被判语法错；openGauss 原先直接复用 `PG_RESERVED`，比真机 `pg_get_keywords()` 保留类少 17 词（`rownum` / `minus` / `modify` 等），列名 `rownum` 在真机已确认「cannot be used as an alias」。现补 `PG_RESERVED` 缺项、新增 `OPENGAUSS_RESERVED`（183 词）与 `GAUSSDB_RESERVED`（130 词）
+- **OceanBase 执行计划档位错判（改真机实证）**：EXPLAIN 原按表格档位解析，真机返回的其实是文本形态，现改按文本档位呈现
+- **SQL Server 无排序分页渲染出非法 T-SQL**：`OFFSET … ROWS FETCH NEXT … ROWS ONLY` 在 SQL Server 上必须跟在 `ORDER BY` 之后，而 `SqlGenerator` 只在 `orderBy` 非空时才输出 `ORDER BY`、`limit` 无条件拼接——「无排序 + 分页」的预览产物在真机直接 `Incorrect syntax near '0'.`。现新增 `Dialect.limitRequiresOrderBy` 能力位（仅 SQL Server 覆写 true），无排序且带分页时补语义中性的 `ORDER BY (SELECT NULL)` 占位，位置在分页子句之前。**旧用例为什么没抓到**：`DialectH2VerificationTest` 用 H2 的 `MODE=MSSQLServer` 跑兼容面，H2 不强制这条规则，与 OceanBase 档位误登同型——兼容模式 ≠ 引擎现实。回归用例三条判据（补占位且位于 OFFSET 之前 / 已有排序不补 / MySQL 与 PostgreSQL 不引入 ORDER BY），反向验证短路兜底分支即红
+- **premain 补挂线程永不执行（单位量纲混用）**：`msProp` 统一返回纳秒（预算比较需要），但 premain 首轮延迟与轮间隔也走它，随后被直接当毫秒喂 `Thread.sleep`——默认 10 秒变成约 10^10 毫秒（约 317 年），补挂线程从未执行。白名单驱动不受影响（靠类加载期织入），**未知驱动的 premain 形态 100% 静默**，正是本轮兜底要解决的场景。现拆出 `rawMsProp` 只服务两个延迟字段；行为断言永远绿（`resetForTest()` 会把字段覆盖回正确默认值，这正是缺陷潜伏的原因），故另加源码扫描守卫钉住量纲
+- **金仓 PG 协议版驱动被误判为 PostgreSQL**：`postgresql-for-kingbase` 坐标此前排在 `org.postgresql:postgresql` 之后，方言推断与增强捕获双双落错族
+
+### Changed
+- **日志列表多行模式取源惰性化（T-PerfSweep29 券 01）**：脱敏开时 `displaySqlForList` 内部付 O(SQL 长) 全量词法打码，而缓存命中路径每帧重取源后整段丢弃——改为只在缓存未命中时取源，命中路径零取源
+- **新增 14 方言三面对账守卫 `DialectCaptureCoverageTest`**：反衬出既有厂商对齐守卫是**前缀级判定**，挡得住整族静默、挡不住「只补 prepare 面」的半覆盖；MariaDB / SQLite 驱动固化进 agent 测试 classpath，字节层由可选 skip 升为硬断言（`StatementWeaverVendorCoverageTest` 14/14、`DialectCaptureCoverageTest` 3/3，skip=0）
+- **三条真机验证链进测试面**：瀚高 / 海量 / 金仓三族驱动进主项目测试 classpath（仅测试面），`DialectDockerVerificationTest` 外部实例模式让插件渲染的 SQL 套件在真引擎真执行（瀚高 153 词 / 海量 201 词 / 金仓 118 词全 PASS）
+
+## [2026.10.30] - 2026-10-30
+
+### Fixed
+- **Mapper 双向跳转图标与同类 MyBatis 导航插件叠在同一行（T-MapperNavCoexistYield）**：装了 MyBatisCodeHelperPro 的工程里，mapper XML 的 `select` / `insert` / `update` / `delete` 标签行与 Mapper 接口方法行会出现两个跳转图标——一个是 v2026.10.28 合入的双向跳转，一个是对方自带的跳转箭头。根因是这两个 provider 只接了全局总闸（`showGutterIcon`）与按来源分组开关（`GutterGroups`），**没有任何同类插件共存判定**；而全仓原有的「第三方插件在位即让位」判定在 T-XmlGap W1 随注入区间互补一起废止了（那是注入/着色面的正解——在位 ≠ 覆盖，必须逐区间问），gutter 面的「同一行两个来源各画一个都合规、纪律是让位」这条一直缺实现。现补上：检测到同类 MyBatis 导航插件（当前登记 `com.ccnode.codegenerator`）处于启用状态时，这两个跳转图标不产出；其它 gutter（SQL 预览、注解 SQL、JPA/HQL、JDBC、Wrapper 链等）不受影响
+
+- **方言冲突时预览头部的候选数据源证据丢失（回归，v2026.10.29 引入）**：结果已带上游算好的方言决策时，`withResolvedDialect` 仍要求「渲染方言也在场」才原样返回，于是 `dialectName == null` 的冲突/不可用决策被重算成兜底决策，按需查看的证据面从「候选标识：uuid-a, uuid-b」退化成「无精确绑定」。现改为**以上游决策为准**（决策在场即不重算，仅在决策知道方言名而渲染方言缺席时用该名字回填），候选证据与来源、置信度一并保留
+### Added
+- **设置项「与同类 MyBatis 导航插件共存时让出 Mapper 跳转图标」（默认开）**：关闭后即使对方在位也强制显示本插件图标；设置页在 gutter 分组开关同一区块，接入 IDE 设置搜索
+- 探测走全反射（`PluginManagerCore.getPlugins()` → `PluginDescriptor.getPluginId()` / `isEnabled()`，`PluginId.getIdString()`），不静态引用 `PluginId` / `PluginManagerCore`（该组 API 在 2025.3~2026.2 有形态漂移）；任何反射失败按「不在位」处理并只 WARN 一次——不确定时不删功能。同类插件前缀登记面为列表，将来收更多同类插件只加前缀
+
+## [2026.10.29] - 2026-10-29
+
+### Added
+- **方言推断的配置证据按模块收窄（T-DialectInferSmart）**：多模块项目各自连不同库、或测试资源用另一套库时，项目级全量共识会退化成「无共识」、整条推断落回 IDE 方言设置。现配置证据按来源模块收窄（模块内无结论才回落项目级），扫描排除测试资源目录（主库 PostgreSQL + 测试 H2 不再互相挤成无共识），并优先采用激活 profile（`spring.profiles.active` / `include`，支持 properties / YAML 缩进块 / 逗号与方括号列表；`${ENV:default}` 取默认值，`${ENV}` 与 `@maven@` 视为未知）；拿不到激活 profile 才回到全量共识
+
+### Fixed
+- **IDEA 2026.1.x 下插件让内置 MCP Server 对所有客户端不可用（T-Mcp261FilterContract，用户报障 P0）**：261 上启用 MCP Server 后，任何客户端 `initialize` 都拿到 HTTP 500（`/stream` 每次失败、`/sse` 建不起会话），`idea.log` 是同一句 `NullPointerException: Parameter specified as non-null is null ... CollectionsKt.addAll`。受影响的不止本插件的 11 个工具——平台 MCP Server 整体不可用，其他插件注册的工具一并消失，关掉插件里的 MCP 总开关也没用，只能卸载插件。根因是平台的工具过滤器接口在 261 上是另一套契约（`getFilters` 返回过滤器清单 + `modify`/`apply` 改写工具集合），而插件的全反射代理是按 2026.2 的 `applyFilters` 写的：261 调 `getFilters` 时落到兜底返回 null，平台紧接着把 null 当迭代器传给 `addAll`。现改为「先探测契约再注册」：`applyFilters` 形态（2026.2 / 2026.3）与 `getFilters` 形态（261.24374 起）各走对应实现，认不出的形态一律不注册；同时给代理的所有未知方法加按返回类型的空值兜底（集合 / Map / Flow / 原始类型绝不返回 null），实现体全程异常降级——即使下一条版本线再改契约，最坏结果是「门控不生效」，不会再让平台的 MCP 服务整体挂掉
+- **定时任务等非 Web 线程下增强捕获的调用栈看不到项目代码（T-StackBizFrame）**：`@Scheduled` 一类调度线程产出的 SQL，日志位置列能指到业务文件，但栈摘要与调用栈弹层里一个项目帧都没有。根因是栈底锚点只认插件自有基础设施白名单，不含 `org.springframework.scheduling.*` / `io.micrometer.*`，非 Web 线程的穿透在第一帧就停住，锚点等于栈底，业务帧被挤出 8 帧窗口；且摘要与定位是两条独立判定，没有任何一致性约束。现锚点改三层判定（业务来源复用 `StackLocator` 判据 → 框架前缀穿透 → 字面兜底），源码定位帧成为摘要必含项（落在窗口外时单列一段，省略计数同步扣减）。展示面同步三处：弹层折叠名单补 JDBC 驱动族与 MyBatis logging/binding/reflection/type 等内部包、日志列表 meta 行的栈摘要先取景（头部全内部帧时跳到首个项目帧）再按原 120 字符契约截断、调用栈弹层标题附线程名（`scheduling-1` / `pool-2-thread-1` 一眼可辨）。顺带把业务帧判定从逐帧拼路径字符串改为直接判文件名，Web 形态省约 1.6µs/SQL。真机对拍（`ThreadPoolTaskScheduler` + 两层 `TransactionTemplate` + MyBatis + H2）：旧包摘要零项目帧，新包剩五个项目帧且锚点落在 `@Scheduled` 方法本身
+- **预览的智能方言推断被非 SQL 数据源与日志还原链规避（T-DialectInferFix）**：Redis 一类非 SQL 数据源被当成方言候选、产出「未知」后整项目回落到 MySQL；日志/历史双击预览不携带本次执行方言，渲染与 PSI 映射一并落到 MySQL，PG 的合法列名 `signal` 被 MySQL 保留字表判成语法错。现候选只取 SQL 数据源（按平台 query language → DBMS 显示名 → URL 子协议精确比对）；日志/历史预览携带本次执行方言（旧条目按 `db:` 角标回填）；兜底不再硬编码 MySQL，新增 `PreviewDialectResolver` 统一渲染与 PSI 映射口径，PSI 预映射改为继承平台项目/全局 SQL 方言并清理历史 MySQL 映射；无 IDE 数据源时改按「配置 JDBC URL → 构建驱动坐标 → SQL 方言特征」的唯一共识再退一级到项目/全局设置，状态行显式标注来源
+- **日志列表暂停态被新 SQL 顶动、关键字换行退化成单行**：手动滚动暂停后新 SQL 到达仍把正在看的内容往上顶（JList 没有滚动锚定，缓冲满载时每条新 SQL 淘汰头部一条、整屏上移一行）；显示模式为「关键字换行」时多数只显示单行（摘要 160 字内到不了 `FROM`，一个换行点都找不到）。现头部淘汰按被删行高上移视口、全量重建按条目身份复原且条目落在后续批次时逐拍重试；换行模式改为取完整还原 SQL 并按 4096 字符预算在空白边界截断；滚底判据抽成纯函数，程序性滚动与「位置变小」都不算用户手势，只有用户主动往底部滚动且到位才恢复跟随
+
+### Changed
+- **Mapper 双向跳转 gutter 判定门控与结果记忆（T-PerfSweep28-01）**：`MapperJavaToXmlLineMarkerProvider` 此前对每个打开 Java 文件的每个方法声明在 daemon 慢趟调一次 `MapperXmlLocator.locate`，无接口前置、无负结果缓存、命中也不早退。现加 `containingClass.isInterface` 前置、语句定位结果级 memo（正负都缓存，与文件清单同代失效），两个 Provider 接入总闸与 mapperXml 组闸
+- **两处无上限缓存收口（T-PerfSweep28-03）**：`HibernateNamingConfigProbe` 缓存加 512 上限（写入单一守卫，超限整体清空再写）；`SqlPreviewService.activePreviewDialogs` 以 `Project` 强引用为键、项目关闭不摘除，改弱键映射后随 GC 摘除
+- **字符串 SQL 方法 gutter 方法体引号预筛（T-PerfSweep28-04）**：`StringSqlMethodGutterLineMarkerProvider` 原在每个候选方法名叶子做一次方法体全子树遍历，改为先扫方法体文本是否含引号（字符串 SQL 必为字符串字面量，零分配单次扫描），精度 100%、子树遍历归零
+
 ## [2026.10.28] - 2026-10-28
 
 ### Added

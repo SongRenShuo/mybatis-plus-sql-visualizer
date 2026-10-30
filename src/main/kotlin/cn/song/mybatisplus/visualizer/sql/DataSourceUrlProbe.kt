@@ -4,6 +4,81 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.diagnostic.Logger
 
 /**
+ * T-DialectInferFix：数据源「能不能当 SQL 方言候选」的分类（纯函数，表驱动可单测）。
+ *
+ * 背景（2026-10-29 真机报障）：`DataSourceManager.getDataSources()` 返回的是**全部**数据源，
+ * 其中包含 Redis/Mongo 这类根本不是 SQL 执行目标的数据源。旧实现把这类数据源的方言记成 null
+ * 投进候选，而 [DialectDecisionEngine] 的「未知候选不得宣称共识」是**有意语义**
+ * （`IdeaSqlDialectDecisionTest`「known and unknown candidates cannot be promoted to false consensus」
+ * 专门锁定），于是「PostgreSQL + Redis」被判 AMBIGUOUS → 整个项目回落 MySQL 兼容兜底，
+ * 连 `signal` 这种 PG 合法列名都被 MySQL 解析器标红。
+ *
+ * 判据（强→弱，只用平台事实，不猜）：
+ *  1. 平台 query language id 能映射到注册方言 → [Kind.SQL_KNOWN]
+ *     （platform 对该数据源认的方言，比驱动 URL 子协议更权威）；
+ *  2. URL 子协议能映射到注册方言 → [Kind.SQL_KNOWN]；
+ *  3. language id / DBMS 显示名命中已知非 SQL 家族 → [Kind.NON_SQL]（**不参与投票**）；
+ *  4. 其余 → [Kind.SQL_UNKNOWN]（仍是候选：可能是插件未收录的 SQL 库，保持 fail-closed）。
+ */
+internal object DataSourceDialectClassification {
+
+    enum class Kind { SQL_KNOWN, SQL_UNKNOWN, NON_SQL }
+
+    data class Result(val kind: Kind, val dialectName: String?) {
+        /** 非 SQL 家族的展示名（排障日志用；SQL 家族为空）。 */
+        fun isSqlTarget(): Boolean = kind != Kind.NON_SQL
+    }
+
+    /**
+     * 非 SQL 家族键（小写、去空格后**精确**比对，不做前缀匹配——前缀会把 Redshift 之外的
+     * 名字误伤，例如任何以 "mongo" 开头的新 SQL 方言都会被误判）。
+     */
+    private val NON_SQL_KEYS: Set<String> = setOf(
+        "redis", "mongo", "mongodb", "mongojs", "mongo js",
+        "cassandra", "apachecassandra",
+        "couchbase", "dynamo", "dynamodb", "amazondynamodb", "awsdynamodb",
+        "elastic", "elasticsearch", "hbase", "neo4j", "influxdb",
+    )
+
+    /** DBMS 显示名 → 注册方言名（平台显示名与注册名不同的少数形态）。 */
+    private val DBMS_ALIASES: Map<String, String> = mapOf(
+        "microsoftsqlserver" to "SQL Server",
+        "mssqlserver" to "SQL Server",
+        "sqlserver" to "SQL Server",
+        "postgresql" to "PostgreSQL",
+        "mysql" to "MySQL",
+        "mariadb" to "MariaDB",
+        "oracle" to "Oracle",
+    )
+
+    fun classify(queryLanguageId: String?, dbmsDisplayName: String?, url: String?): Result {
+        IdeaSqlContextBridge.pluginDialectName(queryLanguageId)?.let { return Result(Kind.SQL_KNOWN, it) }
+        UrlSubprotocolDialects.dialectName(url)?.let { return Result(Kind.SQL_KNOWN, it) }
+        if (isNonSqlKey(queryLanguageId) || isNonSqlKey(dbmsDisplayName) || isNonSqlUrl(url)) {
+            return Result(Kind.NON_SQL, null)
+        }
+        val dbms = dbmsDisplayName?.trim().orEmpty()
+        if (dbms.isNotEmpty()) {
+            DBMS_ALIASES[dbms.lowercase().replace(" ", "")]?.let { return Result(Kind.SQL_KNOWN, it) }
+            DialectRegistry.dialects.firstOrNull { it.name.equals(dbms, ignoreCase = true) }
+                ?.let { return Result(Kind.SQL_KNOWN, it.name) }
+        }
+        return Result(Kind.SQL_UNKNOWN, null)
+    }
+
+    private fun isNonSqlKey(value: String?): Boolean {
+        val normalized = value?.trim()?.lowercase()?.replace(" ", "") ?: return false
+        return normalized.isNotEmpty() && normalized in NON_SQL_KEYS
+    }
+
+    private fun isNonSqlUrl(url: String?): Boolean {
+        val trimmed = url?.trim() ?: return false
+        if (!trimmed.startsWith("jdbc:", ignoreCase = true)) return false
+        return isNonSqlKey(trimmed.substring(5).substringBefore(':'))
+    }
+}
+
+/**
  * T-DialectAutoInfer：IDE 数据源 URL 探测（DatabaseTools API，Ultimate-only）。
  *
  * 链路（262.3 javap 实锤，plugins/DatabaseTools/lib/modules/intellij.database*.jar）：
@@ -163,14 +238,61 @@ internal object DataSourceUrlProbe {
                     if (source == null) return@sourceLoop
                     val config = invoke(source, "getConnectionConfig")
                     val url = config?.let { invoke(it, "getUrl") as? String }
+                    val classified = classifyDataSource(manager, source, url)
+                    // T-DialectInferFix：非 SQL 数据源（Redis/Mongo/…）不是 SQL 执行目标，投进候选
+                    // 只会让决策落 AMBIGUOUS（见 DataSourceDialectClassification KDoc），直接不参与投票。
+                    if (!classified.isSqlTarget()) {
+                        LOG.debug(
+                            "DataSourceUrlProbe: skip non-SQL data source #$managerIndex-$sourceIndex " +
+                                "(${dbmsDisplayName(source) ?: "?"})",
+                        )
+                        return@sourceLoop
+                    }
                     candidates += DialectDecisionEngine.Candidate(
-                        "session-$managerIndex-$sourceIndex", UrlSubprotocolDialects.dialectName(url),
+                        "session-$managerIndex-$sourceIndex", classified.dialectName,
                     )
                 }
             }
             candidates
         }.getOrDefault(emptyList())
     }
+
+    /** T-DialectInferFix：单数据源分类（平台 query language → DBMS 显示名 → URL 子协议）。 */
+    private fun classifyDataSource(
+        manager: Any,
+        source: Any,
+        url: String?,
+    ): DataSourceDialectClassification.Result = DataSourceDialectClassification.classify(
+        queryLanguageId = queryLanguageId(manager, source),
+        dbmsDisplayName = dbmsDisplayName(source),
+        url = url,
+    )
+
+    /**
+     * 平台给该数据源认的 query language id（`DataSourceManager.getQueryLanguage(T)`）。
+     *
+     * 反射口径（T-DialectInferFix P-2）：`getQueryLanguage(T)` 擦除后参数类型是
+     * `com.intellij.database.model.RawDataSource`，传 `Object::class.java` 找不到方法；
+     * Method 一律从**声明接口**取（实现类 `LocalDataSource` 在包内，跨 classloader 直取会
+     * IllegalAccessException，见 DatabaseSchemaResolver 同款纪律）。取不到 → null（调用方降级）。
+     */
+    private fun queryLanguageId(manager: Any, source: Any): String? = runCatching {
+        val managerClass = Class.forName(DATA_SOURCE_MANAGER_CLASS) ?: return null
+        val rawType = Class.forName(RAW_DATA_SOURCE_CLASS) ?: return null
+        val method = managerClass.getMethod("getQueryLanguage", rawType)
+        (method.invoke(manager, source) as? com.intellij.lang.Language)?.id
+    }.onFailure {
+        LOG.debug("DataSourceUrlProbe.getQueryLanguage 反射失败（${manager.javaClass.name}）", it)
+    }.getOrNull()
+
+    /** 数据源 DBMS 显示名（`DasDataSource.getDbms().getDisplayName()`，取不到再取 `getName()`）。 */
+    private fun dbmsDisplayName(source: Any): String? = runCatching {
+        val dasType = Class.forName(DAS_DATA_SOURCE_CLASS) ?: return null
+        val dbms = dasType.getMethod("getDbms").invoke(source) ?: return null
+        val dbmsClass = Class.forName("com.intellij.database.Dbms") ?: return null
+        (dbmsClass.getMethod("getDisplayName").invoke(dbms) as? String)
+            ?: (dbmsClass.getMethod("getName").invoke(dbms) as? String)
+    }.getOrNull()
 
     /** 真实探测（反射链，失败静默 null）；[probeForTest] 注入时走替身。 */
     private fun probeFirstUrl(project: Project): String? {
@@ -185,7 +307,11 @@ internal object DataSourceUrlProbe {
                 for (ds in dataSources.filterNotNull()) {
                     val config = invoke(ds, "getConnectionConfig") ?: continue
                     val url = invoke(config, "getUrl") as? String
-                    if (!url.isNullOrBlank()) return url
+                    // T-DialectInferFix：首个非空 URL 也必须跳过非 SQL 数据源——Redis 排在前时
+                    // 会取到 jdbc:redis://…，下游 dialectName 为 null，等于「首个 URL 不可用」。
+                    if (url.isNullOrBlank()) continue
+                    if (!classifyDataSource(manager, ds, url).isSqlTarget()) continue
+                    return url
                 }
             }
             null
@@ -263,7 +389,7 @@ internal object DataSourceUrlProbe {
     /** `DataSourceManager.getManagers(project)` 反射调用；类缺失/异常 → null。 */
     private fun dataSourceManagers(project: Project): List<Any>? {
         val managerClass = runCatching {
-            Class.forName("com.intellij.database.psi.DataSourceManager", true, DataSourceUrlProbe::class.java.classLoader)
+            Class.forName(DATA_SOURCE_MANAGER_CLASS, true, DataSourceUrlProbe::class.java.classLoader)
         }.getOrNull() ?: return null
         val managers = runCatching {
             managerClass.getMethod("getManagers", Project::class.java).invoke(null, project)
@@ -277,4 +403,9 @@ internal object DataSourceUrlProbe {
     }.onFailure {
         LOG.debug("DataSourceUrlProbe.$method 反射失败（${target.javaClass.name}）", it)
     }.getOrNull()
+
+    /** DatabaseTools 反射面类名（T-DialectInferFix：候选分类与候选投票共用同一份字面量）。 */
+    private const val DATA_SOURCE_MANAGER_CLASS = "com.intellij.database.psi.DataSourceManager"
+    private const val RAW_DATA_SOURCE_CLASS = "com.intellij.database.model.RawDataSource"
+    private const val DAS_DATA_SOURCE_CLASS = "com.intellij.database.model.DasDataSource"
 }

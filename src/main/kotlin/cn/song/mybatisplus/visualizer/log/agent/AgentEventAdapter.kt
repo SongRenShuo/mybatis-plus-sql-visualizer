@@ -25,6 +25,9 @@ object AgentEventAdapter {
     /** 事件到达打点（[AgentManager] 适配前调用）。 */
     internal fun markReceived() {
         receivedCount.incrementAndGet()
+        // T-CaptureCatchAll 券02：事件恢复 → 控制台桥活性回落立即解除（重新让位）。
+        // 放在打点同一处：任何「事件真的到了」的路径都必然经过这里，漏挂即滞回失效。
+        cn.song.mybatisplus.visualizer.log.CaptureActivityFallback.onAgentEvent()
     }
 
     /** 已收事件数（诊断行取数；测试可读）。 */
@@ -49,6 +52,8 @@ object AgentEventAdapter {
             // T-SourceJumpFunnel：候选类名与栈快照透传（选帧弹层/NotFound 提示/详情面板往上追踪）
             candidateClasses = event.candidateClasses,
             stackDigest = event.stackDigest,
+            // T-StackBizFrame S3：线程名透传——调用栈弹层标题据此标注「这条 SQL 在哪个线程上执行」
+            threadName = event.threadName,
             // T-M56-06：方法聚焦键（agent 栈帧 {Class}#{method}）——与 mapper 语句 id 同入 mapperStatement
             // 字段语义扩展由 focusMethodKey 统一承载（agent JDBC 层无 mapper id，非冲突）
             mapperStatement = event.methodKey,
@@ -58,6 +63,10 @@ object AgentEventAdapter {
             // R32 弱形态：连接 URL → 目标库标注（方言名 · 库名@host:port url 解析真值；
             // 凭据在 JdbcUrlDialects.targetOf 解析期剔除；未知/畸形 URL 为 null，面板不显示角标）
             databaseName = JdbcUrlDialects.badgeName(event.url),
+            // T-DialectInferFix：同一条 URL 另存**注册方言名**（渲染命名空间）——日志/历史双击预览
+            // 用它当 EXACT 方言证据；与角标显示名分开，避免 HSQL/GBASE 这类无注册方言的名字被
+            // byName 静默回落 MySQL。
+            dialectName = cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(event.url),
             // O-147 W0：通道归因打标——agent 事件适配产物恒为 AGENT
             captureProvenance = CaptureProvenance.AGENT,
         )

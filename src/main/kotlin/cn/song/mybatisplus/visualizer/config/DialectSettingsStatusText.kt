@@ -17,6 +17,16 @@ internal object DialectSettingsStatusText {
                         MpSqlVisualizerBundle.message("settings.dialect.inferred.projectCandidates")
                     DialectDecisionEngine.Source.PROJECT_AGENT ->
                         MpSqlVisualizerBundle.message("settings.dialect.inferred.projectAgent")
+                    // T-DialectInferFix：没有 IDE 数据源时的三层证据，必须明说「据什么判的」
+                    DialectDecisionEngine.Source.PROJECT_CONFIG ->
+                        MpSqlVisualizerBundle.message("settings.dialect.inferred.projectConfig")
+                    DialectDecisionEngine.Source.PROJECT_DEPENDENCY ->
+                        MpSqlVisualizerBundle.message("settings.dialect.inferred.projectDependency")
+                    DialectDecisionEngine.Source.SQL_SYNTAX ->
+                        MpSqlVisualizerBundle.message("settings.dialect.inferred.sqlSyntax")
+                    DialectDecisionEngine.Source.IDEA_DIALECT,
+                    DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT ->
+                        MpSqlVisualizerBundle.message("settings.dialect.inferred.ideaDialect")
                     else -> MpSqlVisualizerBundle.message("settings.dialect.inferred.otherSource")
                 }
                 MpSqlVisualizerBundle.message("settings.dialect.inferred.withSource", decision.dialectName.orEmpty(), source)

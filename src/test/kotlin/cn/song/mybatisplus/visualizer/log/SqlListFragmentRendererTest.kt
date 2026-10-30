@@ -8,6 +8,7 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.psi.tree.IElementType
 import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -174,5 +175,67 @@ class SqlListFragmentRendererTest {
         val lines = SqlListFragmentRenderer.renderLineFragments("", SqlListDisplayMode.FORMATTED, attrOf)
         assertEquals("空 SQL 变换后仍为空——拆分恒单空行", 1, lines.size)
         assertTrue(lines[0].isEmpty())
+    }
+
+    // ---------- T-LogListAnchor 券01：关键字换行取源为完整 SQL ----------
+
+    /** 用户报障里的真实形态：24 列 SELECT，摘要（160 字）覆盖不到 FROM。 */
+    private val longColumnSql = "SELECT code, station_name AS stationName, device_id AS deviceId, " +
+        "device_code AS deviceCode, user_id AS userId, user_phone AS userPhone, " +
+        "device_port_number AS devicePortNumber, create_time AS createTime, start_time AS startTime, " +
+        "dic_charge_type AS dicChargeType, dic_status AS dicStatus, actually_amount AS actuallyAmount, " +
+        "discount_amount AS discountAmount FROM biz_car_order_record WHERE id = 42"
+
+    @Test
+    fun test关键字换行取源为完整SQL_长列清单仍三行() {
+        val entry = LogSqlEntry(rawSql = longColumnSql, restoredSql = longColumnSql, params = emptyList())
+        assertFalse("夹具前提：摘要覆盖不到 FROM（否则本用例无区分力）", entry.summary.contains("FROM"))
+
+        val source = displaySqlForList(
+            entry,
+            SqlListDisplayMode.KEYWORD_WRAP,
+            maskMode = cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF,
+        )
+        assertTrue("取源须是完整 SQL（含 FROM 之后的表名）", source.contains("FROM biz_car_order_record"))
+
+        val lines = SqlListFragmentRenderer.semanticLineFragments(source, SqlListDisplayMode.KEYWORD_WRAP)
+        assertEquals("长列清单也必须产出三行（SELECT/FROM/WHERE）", 3, lines.size)
+        assertTrue("首行 SELECT 开头", lines[0].firstOrNull()?.text == "SELECT")
+        assertTrue("次行 FROM 开头", lines[1].firstOrNull()?.text == "FROM")
+        assertTrue("第三行 WHERE 开头", lines[2].firstOrNull()?.text == "WHERE")
+    }
+
+    @Test
+    fun test单行模式仍取摘要_不受券01影响() {
+        val entry = LogSqlEntry(rawSql = longColumnSql, restoredSql = longColumnSql, params = emptyList())
+        assertEquals(
+            "单行模式取摘要（一行封顶）",
+            entry.summary,
+            displaySqlForList(entry, SqlListDisplayMode.SINGLE_LINE, cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF),
+        )
+        assertTrue(
+            "格式化模式与关键字换行同源：完整 SQL",
+            displaySqlForList(entry, SqlListDisplayMode.FORMATTED, cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF).contains("biz_car_order_record"),
+        )
+    }
+
+    @Test
+    fun test关键字换行取源预算_超长按空白边界截断() {
+        val inList = (1..2000).joinToString(", ") { "'v$it'" }
+        val sql = "SELECT id FROM t WHERE code IN ($inList)"
+        assertTrue("夹具前提：SQL 远超预算", sql.length > KEYWORD_WRAP_SOURCE_BUDGET)
+
+        val clipped = clipKeywordWrapSource(sql)
+        assertTrue("截断后长度受预算约束（含省略号）: ${clipped.length}", clipped.length <= KEYWORD_WRAP_SOURCE_BUDGET + 1)
+        assertTrue("截断须带省略号", clipped.endsWith("…"))
+        assertFalse(
+            "不得劈开标识符/字面量（末字符不能是字母数字）: ${clipped.takeLast(3)}",
+            clipped[clipped.length - 2].isLetterOrDigit(),
+        )
+        assertTrue("短 SQL 原样返回", clipKeywordWrapSource("SELECT 1") == "SELECT 1")
+        assertTrue(
+            "预算内仍能读到 WHERE 子句",
+            clipKeywordWrapSource("SELECT a FROM t WHERE id = 1") == "SELECT a FROM t WHERE id = 1",
+        )
     }
 }

@@ -191,6 +191,11 @@ object SqlGenerator {
                 .append(statement.orderBy.joinToString(", ") {
                     "${renderQualified(it.column, dialect)} ${if (it.asc) "ASC" else "DESC"}"
                 })
+        } else if (statement.limit != null && dialect.limitRequiresOrderBy) {
+            // T-SqlServerLimitOrder（2026-10-30 真机）：SQL Server 的 OFFSET/FETCH 必须跟在 ORDER BY
+            // 之后，否则 `Incorrect syntax near '0'`。无排序 + 分页时补语义中性的
+            // `ORDER BY (SELECT NULL)`（T-SQL 社区标准写法 = 不指定顺序），保证产物可执行。
+            sb.append(nl).append("ORDER BY (SELECT NULL)")
         }
 
         // around 片段（官方 API，T-M21-09）：渲染于 ORDER BY 之后、LIMIT 之前

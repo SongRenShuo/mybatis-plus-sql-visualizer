@@ -53,7 +53,10 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val result = makeResult("SELECT id\nFROM tbl")
             panel.showResult(result)
             waitForEdt()
-            assertEquals("showResult 应保存当前结果", result, panel.currentForTest())
+            val stored = requireNotNull(panel.currentForTest())
+            // T-DialectInferFix：面板在结果缺省方言决策时补记一条（含 FALLBACK 披露），故按「除决策外逐字一致」比对
+            assertEquals("showResult 应保存当前结果", result, stored.copy(dialectDecision = null))
+            assertNotNull("showResult 应记录方言决策", stored.dialectDecision)
             val editor = panel.editorForTest()
             assertNotNull("应挂载编辑器视图", editor)
             val text = editor!!.document.text
@@ -77,7 +80,9 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val editorText = panel.editorForTest()?.document?.text ?: ""
             assertTrue("大结果应完整渲染进编辑器（含列 col_400）", editorText.contains("col_400"))
             assertTrue("大结果应含 FROM big_table", editorText.contains("FROM big_table"))
-            assertEquals("current 应保存大结果", result, panel.currentForTest())
+            val stored = requireNotNull(panel.currentForTest())
+            assertEquals("current 应保存大结果", result, stored.copy(dialectDecision = null))
+            assertNotNull("current 应记录方言决策", stored.dialectDecision)
         } finally {
             panel.clear()
             panel.dispose()

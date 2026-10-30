@@ -43,6 +43,13 @@ internal object DialectPreviewStatusText {
         DialectDecisionEngine.Source.PROJECT_AGENT -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.agent")
         DialectDecisionEngine.Source.PROJECT_CONSENSUS ->
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConsensus")
+        // T-DialectInferFix：没有 IDE 数据源时的三层低置信证据（必须让用户看见「凭什么」）
+        DialectDecisionEngine.Source.PROJECT_CONFIG ->
+            MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConfig")
+        DialectDecisionEngine.Source.PROJECT_DEPENDENCY ->
+            MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectDependency")
+        DialectDecisionEngine.Source.SQL_SYNTAX ->
+            MpSqlVisualizerBundle.message("panel.meta.dialectStatus.sqlSyntax")
         null -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.unavailable")
     }
 }
