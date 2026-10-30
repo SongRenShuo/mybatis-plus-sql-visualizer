@@ -96,6 +96,10 @@ public final class AgentMain {
         }
 
         AgentState.setLogLevel(args.getLogLevel());
+        // 2026-10-30 用户令「控制台 [SqlVisAgent] 输出只保留必要的」：诊断/进度行默认静默，
+        // logLevel=debug 时才打（真实降级/熔断仍走 diagAlways 必报）。级别从本处推进 CaptureBudget，
+        // 不让它反向依赖 AgentState（premain 侧类初始化风险，见 CaptureBudget KDoc）。
+        CaptureBudget.setVerboseLogging(args.getLogLevel());
         // T-StackHoverUi：attach/premain 参数即初始化调用栈快照帧数预算（运行期可经 CONFIG 帧热更新）
         AgentState.setStackMaxFrames(args.getStackMaxFrames());
         // transformer 一律 canRetransform=true：premain 路径新加载驱动直接织入；
@@ -206,8 +210,11 @@ public final class AgentMain {
                 }
             }
         }
-        // 每次挂载恰一行（premain/agentmain 同走 install），量级无害；这是 attach 链唯一的总览出口
-        System.err.println("[SqlVisAgent] attach retransform: matched=" + matched
+        // 每次挂载至多一行（premain/agentmain 同走 install），但**只在有问题或 verbose 时打**：
+        // 全零的 matched/wove 对用户没有信息量（IDE 侧「本次 attach 命中多少」由心跳的
+        // AgentAttachStats 进诊断行承载）。2026-10-30 用户令：控制台输出只保留必要的。
+        if (CaptureBudget.verboseLogging || failed > 0 || predicateFailed > 0) {
+            System.err.println("[SqlVisAgent] attach retransform: matched=" + matched
                 + " wove=" + wove + " unmodifiable=" + unmodifiable + " failed=" + failed
                 + (predicateFailed > 0 ? " predicateFailed=" + predicateFailed : "")
                 + (failures.length() > 0 ? " [" + failures.toString().trim() + "]" : "")
@@ -216,6 +223,7 @@ public final class AgentMain {
                 + " woven=" + SqlHookTransformer.wovenCount()
                 + " noChange=" + SqlHookTransformer.noChangeCount()
                 + " transformFailed=" + SqlHookTransformer.failedCount());
+        }
     }
 
     private AgentMain() {

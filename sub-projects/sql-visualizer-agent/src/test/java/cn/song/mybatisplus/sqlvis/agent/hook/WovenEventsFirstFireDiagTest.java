@@ -45,6 +45,9 @@ public class WovenEventsFirstFireDiagTest {
         originalErr = System.err;
         captured = new ByteArrayOutputStream();
         System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        // 2026-10-30 用户令「控制台只保留必要的」：取证行已降为 verbose（logLevel=debug）。
+        // 本类验的是取证行内容，故显式开 verbose；「默认静默」由下一个用例单独钉住。
+        cn.song.mybatisplus.sqlvis.agent.CaptureBudget.setVerboseLogging("debug");
     }
 
     @After
@@ -52,6 +55,22 @@ public class WovenEventsFirstFireDiagTest {
         System.setErr(originalErr);
         WovenEvents.resetFirstFireForTest();
         StatementRegistry.clearForTest();
+        cn.song.mybatisplus.sqlvis.agent.CaptureBudget.setVerboseLogging(null);
+    }
+
+    /**
+     * 2026-10-30 用户令「控制台 [SqlVisAgent] 输出只保留必要的」：默认级别（warn）下
+     * 首条事件取证行**不得**出现在宿主控制台——「钩子在产」这件事由 IDE 侧心跳诊断承载。
+     */
+    @Test
+    public void 默认级别下首条事件不打印() {
+        cn.song.mybatisplus.sqlvis.agent.CaptureBudget.setVerboseLogging(null);
+        final FakeVendorFixtures.VendorPs stmt = new FakeVendorFixtures.VendorPs();
+        final long token = System.nanoTime();
+        WovenEvents.emit(stmt, "execute", "SELECT * FROM t", null, null, token, null);
+        final String text = capturedText();
+        assertFalse("默认级别下不得打印取证行（控制台只保留必要的）：" + text,
+                text.contains("织入通道首条事件已产出"));
     }
 
     @Test

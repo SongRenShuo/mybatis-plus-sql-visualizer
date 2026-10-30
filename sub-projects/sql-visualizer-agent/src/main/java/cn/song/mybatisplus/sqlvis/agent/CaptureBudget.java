@@ -272,7 +272,7 @@ public final class CaptureBudget {
         final long total = TRANSFORM_NANOS.addAndGet(nanos);
         if (!budgetExhausted && total >= budgetNanos) {
             budgetExhausted = true;
-            diag("transform budget exhausted (" + (total / 1_000_000L) + "ms >= "
+            diagAlways("transform budget exhausted (" + (total / 1_000_000L) + "ms >= "
                     + (budgetNanos / 1_000_000L) + "ms), transform-level catch-all disabled"
                     + "; whitelist weaving unaffected");
         }
@@ -295,7 +295,7 @@ public final class CaptureBudget {
         if (!killed && n >= killAfter) {
             killed = true;
             killReason = what;
-            diag("kill switch tripped after " + n + " consecutive failures (last=" + what
+            diagAlways("kill switch tripped after " + n + " consecutive failures (last=" + what
                     + "), catch-all disabled; whitelist weaving unaffected");
         }
     }
@@ -326,6 +326,9 @@ public final class CaptureBudget {
         premainDelayMs = DEFAULT_PREMAIN_DELAY_MS;
         premainRepeatMs = DEFAULT_PREMAIN_REPEAT_MS;
         premainPasses = DEFAULT_PREMAIN_PASSES;
+        // 2026-10-30：verbose 属于进程级开关，测试必须复位回产品默认（静默），
+        // 否则开了 verbose 的用例会把「默认静音」的判据污染给后续用例。
+        verboseLogging = false;
     }
 
     static void setAttachMatchEnabledForTest(boolean value) {
@@ -428,12 +431,47 @@ public final class CaptureBudget {
         return defMs * 1_000_000L;
     }
 
-    /** 一行诊断（stderr；失败静默——诊断出口绝不二次抛错）。 */
+    /**
+     * 诊断/进度行（stderr；失败静默——诊断出口绝不二次抛错）。
+     *
+     * **默认静默**（2026-10-30 用户令：「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）：
+     * 匹配数、逐轮补挂、首条事件这类进度信息只在 `-javaagent:...=logLevel=debug` 时输出；
+     * 真实降级/熔断/放弃走 {@link #diagAlways(String)}，任何级别都打。
+     */
     static void diag(String msg) {
+        if (!verboseLogging) return;
+        diagAlways(msg);
+    }
+
+    /** 必报行：真实降级、预算耗尽、kill switch、注册盲区——与日志级别无关，永远输出。 */
+    static void diagAlways(String msg) {
         try {
             System.err.println(DIAG_PREFIX + msg);
         } catch (Throwable ignore) {
             // stderr 不可用：静默
         }
+    }
+
+    /**
+     * 是否输出诊断/进度行。由 {@link AgentMain} 解析完 agent 参数后写入（`logLevel=debug|verbose|trace`）。
+     *
+     * 刻意**不**在这里读 `AgentState`：本类被 premain 路径共用，KDoc 顶部已声明
+     * 「只依赖 java.util.concurrent.atomic 与 System」，多引一个类的静态初始化就可能成为
+     * 「宿主起不来」的成因。故级别由调用方推进来。
+     */
+    static volatile boolean verboseLogging;
+
+    /** 供子包（hook / transport）判断是否需要输出进度行。 */
+    public static boolean isVerboseLogging() {
+        return verboseLogging;
+    }
+
+    /** 按 agent 参数里的日志级别设置诊断输出开关（非法值按关闭处理）。 */
+    public static void setVerboseLogging(String level) {
+        boolean verbose = level != null
+            && ("debug".equalsIgnoreCase(level.trim())
+                || "verbose".equalsIgnoreCase(level.trim())
+                || "trace".equalsIgnoreCase(level.trim()));
+        verboseLogging = verbose;
     }
 }

@@ -61,6 +61,9 @@ public class PremainFailsafeBehaviorTest {
         // T-CaptureCatchAll 券 08：关掉 premain 启动后补挂线程——本类用桩 Instrumentation 调 premain，
         // 真实补挂线程会在用例结束 10s 后触发桩并写 stderr，污染后续用例的断言窗口。
         CaptureBudget.setPremainScheduleForTest(0L, 0L, 1);
+        // 2026-10-30：attach 汇总行默认静默（用户令「控制台只保留必要的」），本类靠它判 matched>=1，
+        // 故显式开 verbose——测试要的是判据，不是产品的默认静音行为。
+        CaptureBudget.setVerboseLogging("debug");
     }
 
     @After
@@ -164,8 +167,10 @@ public class PremainFailsafeBehaviorTest {
         final Class<?> main = Class.forName(AgentMain.class.getName(), true, loader);
         final Method premain = main.getMethod("premain", String.class, Instrumentation.class);
         try {
-            // 端口需 >0 才走到 retransformLoadedDrivers（install 的早退闸门）
-            premain.invoke(null, "port=47801;logLevel=warn", stubInstrumentation(loaded));
+            // 端口需 >0 才走到 retransformLoadedDrivers（install 的早退闸门）。
+            // logLevel=debug：attach 汇总行自 2026-10-30 起默认静默（用户令「控制台只保留必要的」），
+            // 而本类要拿这一行的 matched=N 当判据，故由 harness 显式开 verbose。
+            premain.invoke(null, "port=47801;logLevel=debug", stubInstrumentation(loaded));
             return null;
         } catch (InvocationTargetException e) {
             return e.getCause();
@@ -194,6 +199,7 @@ public class PremainFailsafeBehaviorTest {
         final String err = stderr();
         assertFalse("B 案生效时不该降级——名单查询已不依赖 ASM；实际 stderr=" + err,
                 err.contains(AgentMain.DEGRADE_PREFIX));
+        // harness 传 logLevel=debug（见 invokePremain），汇总行在场，判据仍是那一行的 matched=N
         assertTrue("正对照：必须命中至少一个登记类（matched>=1），否则本档无鉴别力。stderr=" + err,
                 err.matches("(?s).*matched=[1-9]\\d*.*"));
         assertNotNull("install 成功应写 active 标记", System.getProperty(AgentMain.ACTIVE_MARKER));
@@ -266,6 +272,7 @@ public class PremainFailsafeBehaviorTest {
         assertNull("无干扰时不得外抛；实际：" + thrown, thrown);
         assertFalse("无干扰时不得降级，实际 stderr=" + stderr(),
                 stderr().contains(AgentMain.DEGRADE_PREFIX));
+        // 同上一处：harness 传 logLevel=debug，判据仍是汇总行的 matched=N
         assertTrue("无干扰时必须命中至少一个登记类（matched>=1），否则判据无鉴别力。stderr=" + stderr(),
                 stderr().matches("(?s).*matched=[1-9]\\d*.*"));
         assertNotNull("正常安装应写 active 标记", System.getProperty(AgentMain.ACTIVE_MARKER));
