@@ -188,3 +188,73 @@
 ## 八、实施记录
 
 （待回填——第一波动工后按券补读数与反向验证。）
+
+### 8.3 T-TemplateHook 实施记录
+
+工作树 `mpsv-fr45-tplhook` / 分支 `t-fr45-tplhook` / 基线 `4cd4ac35`（核心实现 WIP 留底 `370116a1`）。范围＝§2.3 的 MVP（外部渲染器 hook）+ §三·第二波的 T-TemplateHook 券；**不含**内置模板 SPI、预览/gutter 面接线。
+
+#### 改动清单
+
+新增：
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/ExternalTemplateRenderer.kt:31` —— 纯逻辑外部渲染器：`tokenize`（:78，引号感知切分，未闭合引号/空模板明确失败）、`substitute`（:141，整串与子串都替，`paramsJson=null` 替空串）、`run`（:160，`ProcessBuilder` 列表形态、stdout/stderr 分线程 UTF-8、超时 `destroyForcibly`、stderr 首行截 500、输出上限 1 MiB 截断标注、`start` 注入缝）。安全红线写进类 KDoc（命令用户自担、日志/错误文本不含 `paramsJson`）。
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/ExternalTemplateSettings.kt:31` —— App 级 `@State` 服务，独立 storage `mp-sql-visualizer-external-template.xml` + `RoamingType.DISABLED`；字段 `enabled=false`/`statementTags=sql`/`commandTemplate`/`timeoutSeconds=10`/`workingDirectory`；`isActive()`（:75，开关 + 命令非空白）、`statementTagSet()`（逗号/中文逗号、去空白、大小写不敏感）、`effectiveTimeoutSeconds()`（:69，钳 1..120）、`workingDirectoryOrNull()`（:92，空/不存在→null 回落项目根）、`update()`（:103，设置页唯一写入口）。
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/ExternalTemplateConfigurable.kt:26` —— 普通 `Configurable`（不继承 `SectionConfigurable`）：开关 / 语句 tag / 命令多行域 / 超时 / 工作目录 + 占位符说明行；`apply()` 经 `update()` 落状态。
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/mcp/ExternalTemplateRendererTest.kt:24` —— 14 例：切分 4（空格/引号/转义/未闭合+空模板）、替换 2、假 Process 6（成功/非零退出+stderr 截断/超时/1MiB 截断/空输出/启动失败+空命令）、真实进程 1（`cmd /c echo` vs `/bin/echo`，`SystemInfo.isWindows` 分支 + `assumeTrue` 保护）。
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/config/ExternalTemplateSettingsTest.kt:16` —— 7 例：出厂默认关闭、`enabled=false` 时 `isActive()` 恒 false、空白命令不激活、tag 集解析、超时写时钳位、`loadState` 钳位与回读、工作目录回落。
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/convention/ExternalTemplateWiringSourceScanTest.kt:25` —— 接线守卫 4 例：挂点①早于 `STATEMENT_TAGS` 爬升、挂点前 12 行有 `isActive()` 门、`enabled` 出厂 false、合成样本自证（挂点后置/无门两形态必判红）。
+
+修改：
+
+- `mcp/McpSourceLocator.kt` —— `renderAtLine`（:73）增可选 `paramsJson`；`RenderStep`（:117）把「PSI 定位」与「跑外部进程」拆开（外部命令在读锁**外**执行，`runExternalRender` :146）；`renderAtOffset`（:225）XML 分支增挂点①（:250-262，位于 `STATEMENT_TAGS` 爬升之前；`enabled` 关闭时整块不执行）与挂点②（:268-274，链尾兜底向上找带 `id` 的 tag，仍失败才用原文案一字不改）；新增 `externalStep`（:378）与 `nearestAncestorWithId`（:401）。
+- `mcp/McpToolErrors.kt:42` —— 新增 `EXTERNAL_RENDER_FAILED`（只加这一码，未动 `NOT_A_SQL_DATASOURCE` 所在行的语义）。
+- `mcp/McpRenderInput.kt` —— `Parsed.paramsJson`（:31）；`parse(...)`（:46）第 5 个可选参数，只对路径形态生效，空白视同未传（:56）。
+- `mcp/SqlVisualizerRenderSqlTool.kt` —— 工具签名增 `paramsJson: String = ""`（:42），工具描述补一句用法（:27）；透传至 `renderAtLine`（:56）。不传时与接线前逐字节一致。
+- `src/main/resources/META-INF/plugin.xml:213-219` —— `applicationConfigurable` 注册，id `cn.song.mybatisplus.visualizer.settings.externalTemplate`，**`groupWeight="11"`**（15 > 11 > 10，声明序严格递减）。注意：基线**没有** `bannedApi=12` 页（另分支产物未进本分支），11 仍落在 15 与 10 之间，与另一分支合并后自然成 15>12>11>10。
+- `config/PluginSettingsFolderConfigurable.kt` —— `ID_EXTERNAL_TEMPLATE`（:508）、`PAGE_EXTERNAL_TEMPLATE`（:538-541）、`SUB_PAGES`（:546-549，插在 mcp 与 about 之间）、搜索索引 5 项（:642-648）。
+- `config/PluginXmlStructureGuardTest.kt` / `config/PluginSettingsFolderConfigurableTest.kt` —— 子页基数 7→8、登记目标 8→9（本分支自洽同步）。
+- `convention/GuardSelfTestCoverageMetaGuardTest.kt` —— 新增 `ExternalTemplateWiringSourceScanTest` 登记项（`decisionFns` 留空 + 灵敏度说明）。
+- 双语 bundle —— `MpSqlVisualizerBundle.properties:968-981` / `MpSqlVisualizerBundle_zh.properties:943-956`，13 键（`settings.section.externalTemplate` + `.desc` + 11 个 `settings.externalTemplate.*`），中英键集全等。
+
+新增设置键 / i18n 键 / 错误码：
+
+- 设置服务与 storage：`MpSqlVisualizerExternalTemplate` / `mp-sql-visualizer-external-template.xml`；状态字段 `enabled`、`statementTags`、`commandTemplate`、`timeoutSeconds`、`workingDirectory`（均不进 `PluginSettings`）。
+- i18n 键 13 个（见上）。
+- MCP 错误码 1 个：`EXTERNAL_RENDER_FAILED`。
+
+#### 定向读数（本轮实测）
+
+命令：`./gradlew test --tests ... -Pkotlin.compiler.execution.strategy=in-process`（跑前 `parallel_tasks.py check` 有活跃任务，按仓规在 `build.gradle.kts` 临时加 `sandboxContainer=MPSV-Fr45TplHook`，用后还原）。
+
+| 类 | tests | failures/errors | skipped |
+| --- | --- | --- | --- |
+| mcp.ExternalTemplateRendererTest | 14 | 0 | 0 |
+| config.ExternalTemplateSettingsTest | 7 | 0 | 0 |
+| config.PluginSettingsFolderConfigurableTest | 11 | 0 | 0 |
+| config.PluginXmlStructureGuardTest | 22 | 0 | 0 |
+| convention.ExternalTemplateWiringSourceScanTest | 4 | 0 | 0 |
+| convention.GuardSelfTestCoverageMetaGuardTest | 8 | 0 | 0 |
+| i18n.BundleParityGuardTest | 5 | 0 | 0 |
+| config.SettingsRealityGuardTest | 4 | 0 | 0 |
+| config.SettingsIdeSearchContributorTest | 8 | 0 | 0 |
+| **合计** | **83（9 类）** | **0** | **0** |
+
+真实进程用例在 Windows 上真跑未跳过（skipped=0，走 `cmd /c echo` 分支）。
+
+`testFast`：`BUILD SUCCESSFUL in 4m 7s`，`classes=361 tests=4331 failed=0 skipped=7`（跳过项为仓内既有的环境门控用例，与本券无关）。
+
+#### 反向验证（两次读数）
+
+1. 摘接线：把 `renderAtOffset` XML 分支的挂点①整块注释掉（只留挂点②）→ 跑 `ExternalTemplateWiringSourceScanTest`：
+   - `tests=4 failures=1 errors=0 skipped=0`，红例＝`外部渲染挂点必须早于STATEMENT_TAGS爬升`，断言原文「当前 externalStep@11904 vs STATEMENT_TAGS@11415」——挂点只剩爬升之后的那一处，正是 FR-0045 报障形态。
+2. 还原接线 → 复跑同一类：`tests=4 failures=0 errors=0 skipped=0`，BUILD SUCCESSFUL。
+
+#### 未闭环项（如实登记）
+
+- 未跑 `runIde`：设置页 UI（`ExternalTemplateConfigurable` 组件布局、apply/reset 交互）**无真机走查**，只有源码 + 平台 Configurable 契约层保证；headless 下未单独断言该页控件。
+- 未跑全量 `testShards` / `verifyGate` / `verifyPlugin` / `buildPlugin`：按任务约束只跑定向 + 一次 `testFast`。`plugin.xml` 新增 EP 属「大改动判据」里的 EP 面变更，**发布前须补一轮 `verifyGate`**。
+- 预览/gutter 面未接线：`XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS`（硬编码 4 个 mapper tag + 父级须为 `<mapper>`）保持原样，自研 `<sqls>/<sql id>` 在本轮仍不出 gutter 图标，只有 MCP `sqlv_render_sql` 通道可用——与券范围一致，登记为可选搭车件。
+- `<sqls>` 根下**无 `id`** 的 tag：挂点②找不到带 `id` 的祖先，仍回落原 `SOURCE_NOT_FOUND` 文案（设计如此：无 id 无法传给外部命令）。
+- 外部命令的真机联调未做（用户侧需自备渲染脚本）；工作目录回落、超时、超限三条分支由假 Process 覆盖，真实脚本的编码/退出码行为待用户回报。
+- `ExternalTemplateConfigurable` 的 `isModified()` 在无服务环境（headless 无 PlatformImpl）恒 false——与 `McpConfigurable` 同款降级，真机不受影响。
+

@@ -209,6 +209,15 @@
                                  key="settings.section.mcp"
                                  instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
 
+        <!-- T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器（默认关；关闭时全链零行为变更）。
+             groupWeight=11 插在 mcp(15) 与 about(10) 之间，保持声明序严格递减。 -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.externalTemplate"
+                                 groupWeight="11"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.externalTemplate"
+                                 instance="cn.song.mybatisplus.visualizer.config.ExternalTemplateConfigurable"/>
+
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"

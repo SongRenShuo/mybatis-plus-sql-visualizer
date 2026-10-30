@@ -505,6 +505,7 @@ class PluginSettingsFolderConfigurable : Configurable {
         }
         private const val ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts"
         private const val ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp"
+        private const val ID_EXTERNAL_TEMPLATE = "cn.song.mybatisplus.visualizer.settings.externalTemplate"
         private const val ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about"
         private const val ID_PROJECT = "cn.song.mybatisplus.visualizer.settings.project"
 
@@ -533,6 +534,11 @@ class PluginSettingsFolderConfigurable : Configurable {
             "settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin,
             SubPageRef(ID_MCP, McpConfigurable::class.java),
         )
+        /** T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器页。 */
+        private val PAGE_EXTERNAL_TEMPLATE = SubPageDesc(
+            "settings.section.externalTemplate", "settings.section.externalTemplate.desc", AllIcons.Nodes.Plugin,
+            SubPageRef(ID_EXTERNAL_TEMPLATE, ExternalTemplateConfigurable::class.java),
+        )
         private val PAGE_ABOUT = SubPageDesc(
             "settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite,
             SubPageRef(ID_ABOUT, AboutConfigurable::class.java),
@@ -540,7 +546,8 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         /** 落地页列表（顺序即呈现顺序）。 */
         private val SUB_PAGES = listOf(
-            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP, PAGE_ABOUT,
+            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP,
+            PAGE_EXTERNAL_TEMPLATE, PAGE_ABOUT,
         )
 
         /** 所有可搜索的设置项字段 */
@@ -631,6 +638,14 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.joinDiagramNative"), b.message("settings.joinDiagramNative.tip"), "settings.section.ui", u))
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
             fields.add(SearchableField(b.message("settings.editorShowWhitespaces"), b.message("settings.editorShowWhitespaces.tip"), "settings.section.ui", u))
+
+            // T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器页 5 项
+            val et = PAGE_EXTERNAL_TEMPLATE.ref
+            fields.add(SearchableField(b.message("settings.externalTemplate.enabled"), b.message("settings.externalTemplate.enabled.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.statementTags"), b.message("settings.externalTemplate.statementTags.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.command"), b.message("settings.externalTemplate.command.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.timeout"), b.message("settings.externalTemplate.timeout.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.workingDirectory"), b.message("settings.externalTemplate.workingDirectory.tip"), "settings.section.externalTemplate", et))
 
             // 关于
             val a = PAGE_ABOUT.ref
