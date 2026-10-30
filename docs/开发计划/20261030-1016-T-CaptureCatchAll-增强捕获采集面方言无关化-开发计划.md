@@ -198,3 +198,53 @@ transformer 入口先读 `bytes[6..7]` 得 major，超过 ASM 支持上限即**�
 - P-3 **成立且已处置**：ASM 9.4 上限 64；升 9.8 后上限 69，闸值同步为 69。
 - P-4 **机制层成立**：调用栈深度判据在等价嵌套夹具上恰好 1 条事件，非嵌套不误杀。
 - P-1/P-5/P-6/P-7 仍待真机（见未尽项）。
+
+### 7.2 C2 路（IDE 侧：活性回落 + 覆盖自检）
+
+#### 逐券落位
+
+| 券 | 落点 | 关键形态 |
+|---|---|---|
+| 02 | `log/SqlLogConsoleBridge.kt`（新增 `CaptureActivityFallback`）、`AgentManager.updateOnline`、`AgentEventAdapter.markReceived` | `paused` 持续 ≥ 阈值（默认 10s）+ 窗口内零 agent 事件 + 窗口内控制台**实证解析出 SQL 条目** → 解封桥；事件到达立即重新让位（滞回）；闸门回落沿清空状态 |
+| 03 | 新增 `log/agent/AgentAttachStats.kt`、`AgentSessionSupport` 读循环、`CaptureDiagnostics`、`SqlLogPanel.syncDiagnostics` | 逐帧宽容扫描 `"key":数字`，解析 `weavable/woven/failed/matched/unmodifiable/matchedByInterface/interfaceWoven/skippedByVersion/catchAll`；旧版/缺键/畸形/超长全部降级 |
+| 10 | `CaptureActivityFallbackTest`（8）、`AgentAttachStatsTest`（9）、`CaptureDiagnosticsTest`（+7）、`AgentStatusTextTest`（+1） | 双哑、不丢行、滞回不横跳、双通道同指纹折叠、文案守卫 |
+| 11 | `docs/架构设计/01-项目架构总览.md` agent 段 | 补「白名单优先 + 接口兜底 + 活性回落」三句口径（抽象措辞，不写未完成细节） |
+
+**券 02 细节**
+
+- 触发判据全部为可核实事实：`SqlCaptureGate.paused` 持续 ≥ 阈值 + 窗口内零 agent 事件 + 窗口内控制台**实证解析出 SQL 条目**（由既有嗅探路径产出，不是「有任意控制台输出」）。
+- 不丢行：解封触发的那一行若已由嗅探解析出条目，经抽出的 `finishEntries` 直接采用（不重复喂解析器，Preparing/Parameters 配对不断）。
+- 滞回：`AgentEventAdapter.markReceived` → `onAgentEvent` 立即重新让位，静默计时从事件时刻重算；`AgentManager.updateOnline` 的闸门回落沿 → `onGateChanged(false)` 清空。
+- 消费点统一改用 `SqlCaptureGate.bridgeSuppressed()`（有效封停态 = paused 且未解封）：`scanAll` 静默冲刷守卫、`SqlLogEntryBuffer` 通道归因诊断不再裸读 `paused`。
+- 可配：系统属性 `-Dmpsv.capture.activityFallback=false` 关、`-Dmpsv.capture.activityFallback.thresholdMs=<ms>` 调阈值；**出厂默认开启**。选系统属性而非设置项：纯降级路径、非功能开关，放进设置页要连带改复选框计数守卫（当前 47）与 UI，收益不抵噪音；解封状态本身已在面板空态与设置页状态行可见。
+- 诊断（不弹窗）：面板空态首行「增强捕获疑似空转，已回退控制台解析」+ 设置页状态行「已挂载 pid=…｜增强捕获疑似空转，已回退控制台解析」（中英双份 bundle）。
+
+**券 03 细节**
+
+- 宽容解析任意入站帧 body（读循环逐帧、8KB 上限、`"matched"/"weavable"/"matchedByInterface"` 廉价前置门）；异常全吞、旧版 agent 返回 null。
+- 与 C1 心跳实测对齐（C1 已补 `matched/unmodifiable`）；「零命中」判据取 `max(matched, weavable)`，即使心跳只带 `weavable` 也不会误报「命中 0 个驱动」。
+- 面板空态首行按异常才显示：零命中 / 命中未织入 / retransform 失败 / 版本闸跳过 / 接口兜底熔断 / 接口兜底命中数（含织入数）。
+
+#### 验证读数（2026-10-30）
+
+| 项 | 读数 |
+|---|---|
+| 双哑 | 静默未达阈值 0 条 → 达阈值后 1 条，`isActive=true`、`engagements=1` |
+| 不抖动 | 事件每 5s 一次 + 控制台持续 SQL，4 轮采样 `engagements=0`、`releases=0`；解封后事件恢复，其后 5s/9s 两轮均不再解封（`engagements` 仍 1） |
+| 不重复 | 解封产出条目 + 同时到达的同指纹 agent 副本 → `SqlLogEntryBuffer.size()==1` |
+| **反向验证** | 临时把解封判据改为恒 `false` → `CaptureActivityFallbackTest` **8 例中 5 例失败**（双哑、不丢行、滞回、去重折叠、闸门回落）；还原 → **全绿** |
+| 定向（主项目） | `*CaptureDiagnostics*` / `*SqlCaptureGate*` / `*AgentManager*` / `*SqlLogConsoleBridge*` / `*BundleParityGuardTest` / `*CaptureActivityFallback*` / `*AgentAttachStats*` / `*AgentStatusText*` 合计 **172 例 0 失败 0 错误 0 跳过**；还原验证轮 47 例 0 失败 |
+
+**测试口径说明**：C1 路当时在同一工作树改 agent 子项目且处于编译中间态（`SqlHookTransformer.skippedByVersionCount()` 重复定义等），主项目定向测试以 `-x :sql-visualizer-agent:compileJava -x :sql-visualizer-agent:compileTestJava` 复用上一轮已产出的 agent jar 运行；agent 子项目测试留统一收口轮。
+
+#### 待与 C1 联调
+
+- 心跳键名已按 C1 `SenderLoop.heartbeatBody()` 实测对齐；若后续改键名，只需在 `AgentAttachStats.KEY_VALUE` 加候选，IDE 侧无其他改动。
+- `catchAll` 语义按 C1 注释（0=纯白名单 / 1=兜底开 / 2=已熔断），2 显示「接口兜底已熔断」。
+- `matched` 现由 `CaptureBudget.attachMatchedTotal()` 上报（含白名单 + 接口），与 `weavable` 不再必然同值；面板「命中数」取两者较大值。
+
+#### 未尽项
+
+- `docs/变更记录.md` / `docs/索引/开发计划.md` 与调研报告索引同步留给券 11 收口（C1 形态确定后一次写全）。
+- `SqlLogPanel.kt` 取数接线（新增两个诊断字段）虽不在原写集清单内，但为让新字段在生产路径生效所必需（与 C1 无交集），已一并落地。
+- `verifyGate` / 全量 `testShards` 未跑（按分工留只读收口代理）。
