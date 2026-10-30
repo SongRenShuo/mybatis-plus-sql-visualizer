@@ -945,6 +945,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // R4（W3 历史工作流包）：导出选中/全部条目（CSV/TSV/TXT，后台写盘）
         val allEntries = (0 until sqlList.model.size).map { sqlList.model.getElementAt(it) }
         group.add(ExportSqlAction(selectedEntries.ifEmpty { allEntries }))
+        // FR-0045 第 6 项（T-TraceDocExport S2）：导出优化留痕 Markdown（六段式模板）
+        group.add(ExportTraceDocAction(entry))
         // R31：历史/版本 SQL 对比（恰两条选中可用）
         group.add(CompareSelectedAction(selectedEntries))
         return group
@@ -1004,6 +1006,46 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         override fun actionPerformed(e: AnActionEvent) {
             exportEntries(entries)
         }
+    }
+
+    // ---------- FR-0045 第 6 项（T-TraceDocExport S2）：导出优化留痕 Markdown ----------
+
+    /** 右键「导出优化留痕 Markdown」——作用于被右键的那一条（与跳转类动作同口径）。 */
+    private inner class ExportTraceDocAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.Export
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.traceDoc")
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.traceDoc.tip")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            exportTraceDocFor(entry)
+        }
+    }
+
+    /**
+     * 导出单条历史 SQL 的留痕文档。
+     *
+     * 计划取数：日志历史文件本身不存执行计划（计划只挂在预览历史
+     * [cn.song.mybatisplus.visualizer.history.SqlHistoryEntry.explainPlans] 上），故按
+     * 「**同项目** + SQL 文本精确相等」从历史域取最近两份快照——跨项目不借用（R91 目标隔离口径）；
+     * 匹配不到就按「无计划快照」降级导出，绝不伪造计划。
+     */
+    internal fun exportTraceDocFor(entry: LogSqlEntry) {
+        TraceDocExport.export(project, TraceDocExport.fromLogEntry(entry, matchingHistoryPlans(entry)))
+    }
+
+    private fun matchingHistoryPlans(entry: LogSqlEntry): List<cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> {
+        val identity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath)
+        if (identity.isBlank()) return emptyList()
+        val candidates = setOf(entry.restoredSql, entry.rawSql).filter { it.isNotBlank() }
+        if (candidates.isEmpty()) return emptyList()
+        return cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance().entries.asSequence()
+            .filter { it.projectIdentity == identity && it.sql in candidates }
+            .flatMap { it.explainPlans.asSequence() }
+            .sortedByDescending { it.capturedAt }
+            .take(2)
+            .toList()
     }
 
     /** R4：导出选中/全部条目——格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存对话框 → 后台写盘 → 通知。
