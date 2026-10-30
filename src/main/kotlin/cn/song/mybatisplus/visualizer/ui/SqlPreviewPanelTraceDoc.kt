@@ -46,13 +46,13 @@ internal fun SqlPreviewPanel.exportTraceDoc() {
         entry?.explainPlans.orEmpty()
     }
 
+    val base = entry?.let { TraceDocExport.fromHistoryEntry(it) }
     val input = TraceDocInput(
         sql = sql,
-        dialect = (dialect?.name ?: entry?.explainPlans?.maxByOrNull { it.capturedAt }?.dialect)
-            ?.takeIf { it.isNotBlank() },
-        source = entry?.sourceLabel()?.takeIf { it.isNotBlank() },
-        capturedAt = entry?.timestamp ?: System.currentTimeMillis(),
-        executionTimeMs = entry?.executionTimeMs,
+        dialect = (dialect?.name ?: base?.dialect)?.takeIf { it.isNotBlank() },
+        source = base?.source,
+        capturedAt = base?.capturedAt ?: System.currentTimeMillis(),
+        executionTimeMs = base?.executionTimeMs,
         plans = plans.mapNotNull { TraceDocExport.planSnapshot(it) }.sortedBy { it.capturedAt },
     )
     TraceDocExport.export(proj, input)
