@@ -1056,6 +1056,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言经 assertDenied(:17)/assertAllowed(:24) 助手内联在 @Test",
             ),
             GuardEntry(
+                "mcp/McpExplainTargetGuardTest.kt",
+                emptyList(),
+                "T-Fr45DmGuard S1：断言直接内联在 @Test（非 SQL 数据源判定的命中/放行形态 + " +
+                    "SqlVisualizerExplainTool 接线顺序源码扫描——取 url 之后、McpDialectDetector.resolve 之前）；" +
+                    "explainToolSource/stripComments 为夹具",
+            ),
+            GuardEntry(
                 "update/UpdateZipGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；withTempZip/manualZip/concatManualZips 为夹具",

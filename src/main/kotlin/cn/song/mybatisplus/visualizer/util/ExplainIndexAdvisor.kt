@@ -49,11 +49,12 @@ object ExplainIndexAdvisor {
     fun advise(dialect: String, headers: List<String>, rows: List<List<String>>): List<Hint> {
         val out = mutableListOf<Hint>()
         when (ExplainSupport.formatFor(dialect)) {
-            // MySQL 家族：表格式（id/select_type/table/type/key/rows/Extra…）
+            // TABLE 档含 DM8（T-Fr45DmGuard：`EXPLAIN FOR` 返回 19 列计划表）——DM 无 MySQL 的
+            // type/key/Extra 列，adviseMysql 列名不符时提前返回，天然零命中（不噪音）。
             ExplainOutputFormat.TABLE -> adviseMysql(headers, rows, out)
             // PG/KingBase：单列 JSON 文本（FORMAT JSON）
             ExplainOutputFormat.JSON -> adviseJsonPlan(rows, out)
-            // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
+            // 文本计划树（H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
             // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展。
             // R23 Oracle 同为 TEXT 档：本插件通道不产出行（EXPLAIN PLAN FOR 只登记），空行天然零命中
             ExplainOutputFormat.TEXT -> advisePlanText(rows, out)
