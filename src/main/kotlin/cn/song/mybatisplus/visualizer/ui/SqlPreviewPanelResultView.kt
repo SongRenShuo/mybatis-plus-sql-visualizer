@@ -91,6 +91,8 @@ internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = lis
         MpSqlVisualizerBundle.message("panel.aiContext.identifiers") to { copyAsAiContext(includeIdentifiers = true) },
         // R42（阶段二合并批）：DML 影响面预演——UPDATE/DELETE 执行前的只读 COUNT 试算
         MpSqlVisualizerBundle.message("panel.dmlImpact") to { estimateDmlImpact() },
+        // FR-0045 第 6 项（T-TraceDocExport S2）：优化留痕 Markdown 一键导出（六段式模板）
+        MpSqlVisualizerBundle.message("panel.traceDoc") to { exportTraceDoc() },
 )
 
 /**
