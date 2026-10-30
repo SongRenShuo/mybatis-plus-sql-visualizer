@@ -298,3 +298,13 @@ agent `build.gradle.kts`、帧跳过前缀五份、`StatementWeaverVendorCoverag
 3. IDE 事件回流未验证（服务器无显示环境，属预期；「attach 端到端」口径不变）。
 4. 三族的**渲染套件**真执行（`DialectDockerVerificationTest` 外部实例模式）未跑——OceanBase 的
    `25881` 实例已在册、SQLite 嵌入式天然可用、MariaDB 待服务端可用后补，可作后续增量。
+
+### 7.4 收口门禁读数（2026-10-30）
+
+`verifyGate testShards`（单路，dev `9bf37605` 基线 + 本轮 4 笔）：
+
+- **`verifyGate`：3/3 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，报告 10:56 生成）
+  ——本轮动了 agent `testImplementation`（MariaDB/SQLite 驱动），触发大改动判据，已覆盖。
+- **`testShards`：8492 tests / 0 failures / 0 errors / 9 skipped**，`BUILD SUCCESSFUL in 13m 15s`；
+  parity 口径「计划类全集 790 个均有结果 XML」（含新增 `DialectCaptureCoverageTest`）。
+- 与 T-XcDialects3 收口那轮（8492/0/0/9）同数——本轮新增用例与既有跳过项抵消，无回归。
