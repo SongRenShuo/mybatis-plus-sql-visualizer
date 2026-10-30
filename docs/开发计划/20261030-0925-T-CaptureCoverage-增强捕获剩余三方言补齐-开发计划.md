@@ -256,3 +256,45 @@ agent `build.gradle.kts`、帧跳过前缀五份、`StatementWeaverVendorCoverag
    建议 A 路删除（当前不影响绿，但留着是陈旧披露）。
 4. **测试依赖变更**（`oceanbase-client` 进测试 classpath）触发大改动判据，收口须跑 `verifyGate`。
 
+### 7.3 主控收口（2026-10-30）
+
+**① 测试依赖固化（提交 `9409993a`）**：A 路的七类字节层读数原靠临时 init 脚本
+（`tmp/capture-coverage-deps.init.gradle.kts`，不入库）取得，默认 classpath 下用例以
+`Assumption` 显式 skip。把 `org.mariadb.jdbc:mariadb-java-client:3.3.3` 与
+`org.xerial:sqlite-jdbc:3.50.3.0` 固化进 `sub-projects/sql-visualizer-agent/build.gradle.kts`
+的 `testImplementation` 后，字节层升级为**硬断言**：`StatementWeaverVendorCoverageTest` **14/14**、
+`DialectCaptureCoverageTest` **3/3**，**skip=0**。生产依赖图不变。
+
+**② 真实 JVM premain / attach 冒烟**（服务器 `/opt/xc3-attach-smoke/`，JDK 17.0.20.1）——
+新 agent jar `mps-sql-agent-1028.jar`（350,327 B，md5 `1829894a…3292`）：
+
+| 族 | premain 织入（单驱动 classpath 真隔离） | 逐族隔离 attach | 三族同进程 attach |
+|---|---|---|---|
+| MariaDB | `weavable=4 woven=4 failed=0` | `matched=4` | — |
+| SQLite | `weavable=4 woven=4 failed=0` | `matched=4` | — |
+| OceanBase | `weavable=5 woven=5 failed=0` | `matched=4` | — |
+| 三族同进程 | `weavable=13 woven=13 noChange=0 failed=0` | — | **`matched=12 wove=12 unmodifiable=0 failed=0`** |
+
+`Lister2` 枚举确认精确 12 类且全部 `modifiable=true`（每族 Driver + Connection(prepare) + Statement
++ PreparedStatement）。OceanBase 多出的 1 个是 `JDBC4ServerPreparedStatement`（仅 agent 存在时才被加载）。
+
+**③ 红线（用户令：不能让宿主受影响）**：三族 × 三形态（不带 agent / premain / attach 后）
+`Connection` 强转**全部通过**，强转后 `SELECT 1` 均返回 1，`impl` 仍是驱动原生类（**未被替换成代理**）。
+宿主退出码 premain / attach / 对照 / 逐族隔离**全为 0**；无 `VerifyError` / `ClassCastException` /
+`NoClassDefFoundError`。**对照轮**：不带 agent 与 premain 的输出剔除计数行后 `diff` 完全一致
+（SQL 结果、batch 2 行、实现类、退出码）。
+
+**④ 实现事实（对「白名单只登父类」的意义）**：SQLite 运行期实例是 `jdbc4.*`，但只覆写 JDBC4 专有方法，
+宿主实际调用的 `createStatement()/prepareStatement(String)/set*/addBatch/executeBatch/executeQuery`
+全部继承自**被织入的 `jdbc3.*` 父类**；OceanBase 的 `ClientSidePreparedStatement` 继承
+`JDBC4PreparedStatement` 且无覆写，同理生效。→ 白名单只登父类即可覆盖子类，与既有「父类覆盖即不单列」
+惯例一致，现在有了真实 JVM 证据。
+
+**⑤ 未闭环**：
+1. **MariaDB 服务端未实测**：`114.66.55.245:20081` 从服务器侧连续 3 次 `Connection refused`
+   （同宿主 `20097` 同时刻 OPEN），本轮改用 **MySQL 8.4.6（20084）** 承载 MariaDB Connector/J 3.3.3。
+   **驱动侧织入结论成立，但「对 MariaDB 10.11 服务端已验证」这句不能写**。
+2. `JDBC4ServerPreparedStatement` 仅在 agent 存在时才被加载的成因未定位。
+3. IDE 事件回流未验证（服务器无显示环境，属预期；「attach 端到端」口径不变）。
+4. 三族的**渲染套件**真执行（`DialectDockerVerificationTest` 外部实例模式）未跑——OceanBase 的
+   `25881` 实例已在册、SQLite 嵌入式天然可用、MariaDB 待服务端可用后补，可作后续增量。
