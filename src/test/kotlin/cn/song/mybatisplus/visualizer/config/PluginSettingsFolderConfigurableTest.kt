@@ -65,13 +65,14 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         return list to search
     }
 
-    fun testCreateComponent_空搜索列出全部8个子页面() {
+    fun testCreateComponent_空搜索列出全部9个子页面() {
         val cfg = PluginSettingsFolderConfigurable()
         val comp = cfg.createComponent()
         val list = all(comp).filterIsInstance<JBList<*>>().first()
         assertEquals(
-            "默认应列出 8 个子页面（主五页 + shortcuts/mcp + bannedApi，T-ShortcutSettings/T-BannedApiCheck）",
-            8,
+            "默认应列出 9 个子页面（主五页 + shortcuts/mcp + bannedApi + 外部模板，" +
+                "T-ShortcutSettings/T-BannedApiCheck/T-TemplateHook）",
+            9,
             (list.model as ListModel<*>).size,
         )
     }
@@ -228,7 +229,7 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
     fun test登记目标id与类指向同一设置页() {
         val wrappers = allWrappers(settingsGroups())
         val targets = PluginSettingsFolderConfigurable.registeredTargetsForTest()
-        assertEquals("登记目标数（8 个子页 + 项目页）", 9, targets.size)
+        assertEquals("登记目标数（9 个子页 + 项目页）", 10, targets.size)
         for ((id, cls) in targets) {
             val wrapper = wrappers.firstOrNull { it.extensionPoint.id == id }
             assertNotNull("设置树里找不到该 id 的 EP：$id（id 与 plugin.xml 漂移？）", wrapper)

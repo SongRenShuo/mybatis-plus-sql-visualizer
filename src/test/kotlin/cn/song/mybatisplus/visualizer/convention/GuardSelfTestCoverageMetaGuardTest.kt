@@ -750,6 +750,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度＝把该行复制到第二块必红、只留历史块必红，两向已实测。",
             ),
+            // ---- T-TemplateHook 接线守卫（FR-0045 第 3 项 MVP，2026-10-31） ----
+            GuardEntry(
+                "convention/ExternalTemplateWiringSourceScanTest.kt",
+                emptyList(),
+                "外部模板渲染接线守卫（T-TemplateHook）：判定内核内联于三个用例——读 McpSourceLocator.kt 源码断言" +
+                    "首个 externalStep( 调用点早于 STATEMENT_TAGS 爬升、且前 12 行内有 isActive() 空判门；" +
+                    "读 ExternalTemplateSettings.kt 断言 enabled 出厂默认 false。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=注释掉 XML 分支的 externalStep 调用 → 断言一必红（计划 §8.3 已留两次读数），" +
+                    "另有 `自证_挂点后置与无门形态必被判红` 用合成源码钉住两种故障形态。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",

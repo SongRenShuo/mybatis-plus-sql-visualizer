@@ -298,9 +298,9 @@ class PluginXmlStructureGuardTest {
         val children = tagsOf(xml, "applicationConfigurable")
             .filter { it.contains("""parentId="cn.song.mybatisplus.visualizer.settings"""") }
         assertHolds(
-            "SQL Visualizer 子设置页注册数应为 8（主五页 + shortcuts/mcp + bannedApi，" +
-                "T-ShortcutSettings/T-BannedApiCheck），实际 ${children.size}",
-            children.size == 8,
+            "SQL Visualizer 子设置页注册数应为 9（主五页 + shortcuts/mcp + bannedApi + 外部模板，" +
+                "T-ShortcutSettings/T-BannedApiCheck/T-TemplateHook），实际 ${children.size}",
+            children.size == 9,
         )
         val weights = children.map { tag ->
             val id = Regex("""id="([^"]+)"""").find(tag)!!.groupValues[1]

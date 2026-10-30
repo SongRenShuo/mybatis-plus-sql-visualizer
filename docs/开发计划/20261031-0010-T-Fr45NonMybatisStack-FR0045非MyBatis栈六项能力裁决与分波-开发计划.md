@@ -305,6 +305,49 @@
   `TraceDocFormatterTest` 11 例与 `ExplainPlanSnapshotTextTest` 10 例已进快桶；`ExplainPlanHistoryTest`
   11 例（含 TEXT 序列化往返）在平台桶单跑 0 失败。
 
+### 8.3 T-TemplateHook 实施记录
+
+分支 `t-fr45-tplhook` / 基线 `4cd4ac35`（核心实现掉线留底 `370116a1`）。范围＝§2.3 的 MVP（外部渲染器 hook）；**不含**内置模板 SPI、预览/gutter 面接线。
+
+#### 改动清单
+
+新增：
+
+- `mcp/ExternalTemplateRenderer.kt:31` —— 纯逻辑外部渲染器：`tokenize`（:78，引号感知切分，未闭合引号/空模板明确失败）、`substitute`（:141，整串与子串都替，`paramsJson=null` 替空串）、`run`（:160，`ProcessBuilder` 列表形态、stdout/stderr 分线程 UTF-8、超时 `destroyForcibly`、stderr 首行截 500 字符、输出上限 1 MiB 截断标注、`start` 注入缝）。安全红线写进类 KDoc（命令由用户自担、日志/错误文本不含 `paramsJson`）。
+- `config/ExternalTemplateSettings.kt:31` —— App 级 `@State` 服务，独立 storage `mp-sql-visualizer-external-template.xml` + `RoamingType.DISABLED`；字段 `enabled=false`/`statementTags=sql`/`commandTemplate`/`timeoutSeconds=10`/`workingDirectory`；`isActive()`（:75）、`statementTagSet()`（逗号与中文逗号、去空白、大小写不敏感）、`effectiveTimeoutSeconds()`（:69，钳 1..120）、`workingDirectoryOrNull()`（:92，空/不存在→null 回落项目根）、`update()`（:103）。
+- `config/ExternalTemplateConfigurable.kt:26` —— 普通 `Configurable`（不继承 `SectionConfigurable`）：开关 / 语句 tag / 命令多行域 / 超时 / 工作目录 + 占位符说明行。
+- 测试三件：`mcp/ExternalTemplateRendererTest.kt`（14 例：切分 4 / 替换 2 / 假 Process 6（成功、非零退出+stderr 截断、超时、1 MiB 截断、空输出、启动失败）/ 真实进程 1，`SystemInfo.isWindows` 分支 + `assumeTrue` 保护）、`config/ExternalTemplateSettingsTest.kt`（7 例）、`convention/ExternalTemplateWiringSourceScanTest.kt`（4 例接线守卫）。
+
+修改：
+
+- `mcp/McpSourceLocator.kt` —— `renderAtLine`（:73）增可选 `paramsJson`；`RenderStep`（:117）把「PSI 定位」与「跑外部进程」拆开（外部命令在读锁**外**执行，`runExternalRender` :146）；`renderAtOffset`（:225）XML 分支增挂点①（:250-262，位于 `STATEMENT_TAGS` 爬升**之前**）与挂点②（:268-274，链尾向上找带 `id` 的 tag，仍失败才用原文案一字不改）；新增 `externalStep`（:378）与 `nearestAncestorWithId`（:401）。
+- `mcp/McpToolErrors.kt:42` —— `EXTERNAL_RENDER_FAILED`（未动 `NOT_A_SQL_DATASOURCE`）。
+- `mcp/McpRenderInput.kt`（`Parsed.paramsJson` :31 / `parse` 第 5 可选参数 :46，仅路径形态生效）、`mcp/SqlVisualizerRenderSqlTool.kt`（`paramsJson: String = ""` :42、描述 :27、透传 :56）——不传时与接线前逐字节一致。
+- `META-INF/plugin.xml:213-219` —— `applicationConfigurable`，`groupWeight="11"`；与 bannedApi(12) 合并后成 15>12>11>10 严格递减。
+- `config/PluginSettingsFolderConfigurable.kt` —— `ID_EXTERNAL_TEMPLATE`（:511）、`PAGE_EXTERNAL_TEMPLATE`（:547）、`SUB_PAGES`（:559，插在 bannedApi 与 about 之间）、搜索索引 5 项（:652-657）。
+- `convention/GuardSelfTestCoverageMetaGuardTest.kt` —— 新守卫类登记（`decisionFns` 留空 + 灵敏度说明）。
+- 双语 bundle：`MpSqlVisualizerBundle.properties:968-981` / `_zh.properties:944-957`，13 键（`settings.section.externalTemplate` + `.desc` + 11 个 `settings.externalTemplate.*`），中英键集全等。
+
+#### 定向读数与反向验证
+
+- 定向：9 类 / **83 例 / 0 失败 / 0 跳过**（Renderer 14、Settings 7、SettingsFolder 11、XmlStructureGuard 22、WiringSourceScan 4、MetaGuard 8、BundleParity 5、SettingsRealityGuard 4、SettingsIdeSearchContributor 8）。真实进程用例在 Windows 真跑未跳过（`cmd /c echo` 分支）。`testFast`：**4331 例 / 0 失败 / 7 跳过**（跳过为既有环境门控）。
+- 反向验证：摘掉挂点①（只留链尾挂点②）→ `ExternalTemplateWiringSourceScanTest` **4 例 / 1 红**，红例 `外部渲染挂点必须早于STATEMENT_TAGS爬升`（断言原文「externalStep@11904 vs STATEMENT_TAGS@11415」）；还原 → **4 例 / 0 红**。摘除后**没有**既有用例会红，故本轮补了这条源码级守卫并登记进元守卫。
+- 合并测：`PluginXmlStructureGuardTest` 子页基数 8→**9**、`PluginSettingsFolderConfigurableTest` 列表 8→**9** 与登记目标 9→**10**（两条分支各写 8，实际合并后为 9，主控在集成时改正）。
+
+#### 新增设置键 / i18n / 错误码
+
+- 设置服务与 storage：`MpSqlVisualizerExternalTemplate` / `mp-sql-visualizer-external-template.xml`；字段 `enabled`、`statementTags`、`commandTemplate`、`timeoutSeconds`、`workingDirectory`（均不进 `PluginSettings`）。
+- i18n 键 13 个；MCP 错误码 1 个 `EXTERNAL_RENDER_FAILED`。
+
+#### 未闭环项
+
+- 未跑 `runIde`：设置页组件布局与 apply/reset 交互无真机走查。
+- 未跑全量 `testShards` / `verifyGate` / `verifyPlugin` / `buildPlugin`：`plugin.xml` 新增 EP 属大改动判据面，发布前须补 `verifyGate`。
+- 预览/gutter 面未接线：`XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS`（硬编码 4 个 mapper tag 且父级须为 `<mapper>`）保持原样，自研 `<sqls>/<sql id>` 仍不出 gutter 图标，只有 MCP `sqlv_render_sql` 通道可用（券范围如此，登记为可选搭车件）。
+- `<sqls>` 下无 `id` 的 tag 仍回落原 `SOURCE_NOT_FOUND`（无 id 无法传给外部命令，设计如此）。
+- 外部命令真机联调未做（用户需自备脚本）；工作目录回落、超时、超限三条分支由假 Process 覆盖，真实脚本的编码/退出码行为待用户回报。
+- `ExternalTemplateConfigurable.isModified()` 在无服务环境（headless）恒 false——与 `McpConfigurable` 同款降级，真机不受影响。
+
 ### 8.4 T-BannedApiCheck 实施记录
 
 - **分支/基点**：`t-fr45-bannedapi`，基点 `4cd4ac35`。提交 `57d85d9e`（S1 规则模型与管理器）+ `8da5f032`（S2–S4 检查器 / 设置子页 / 存量统计）+ `a6d4ed1f`（本记录）。未 push/merge。
