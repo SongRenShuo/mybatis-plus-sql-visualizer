@@ -189,6 +189,72 @@ class ExternalTemplateRendererTest {
         assertTrue("应取回 stdout: ${result.sql}", result.sql.orEmpty().contains("select 1"))
     }
 
+    // ------------------------------------------------------------------
+    // Windows argv 引号修正（UI-045-01：走查发现 paramsJson 的双引号被 CRT 吃掉）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `Windows_含双引号的参数补引号并转义_不含引号的逐字节不变`() {
+        val argv = ExternalTemplateRenderer.argvForLaunch(
+            listOf("node", "render.cjs", "{template}", """{"planYear":"2026"}""", "plain"),
+            windows = true,
+        )
+        assertEquals("node", argv[0])
+        assertEquals("render.cjs", argv[1])
+        assertEquals("不含双引号的参数必须原样（逐字节不变）", "{template}", argv[2])
+        assertEquals(
+            "含双引号的参数须补外层引号并转义内部引号（否则 CRT 会把引号吃掉）",
+            """"{\"planYear\":\"2026\"}"""",
+            argv[3],
+        )
+        assertEquals("plain", argv[4])
+    }
+
+    @Test
+    fun `POSIX_argv必须原样不动`() {
+        val input = listOf("node", "render.cjs", """{"planYear":"2026"}""")
+        assertEquals("POSIX 由 execve 直接传 argv，插引号会破坏参数", input, ExternalTemplateRenderer.argvForLaunch(input, windows = false))
+    }
+
+    @Test
+    fun `Windows_尾随反斜杠与内嵌反斜杠按CRT规则加倍`() {
+        val plain = "d\\"   // d 后跟一个反斜杠（不含引号）
+        val argv = ExternalTemplateRenderer.argvForLaunch(listOf("""a\"b""", """c\""", plain), windows = true)
+        // 输入 a\"b（1 个反斜杠紧邻引号）→ 输出 2N+1=3 个反斜杠再跟引号，整体再包一层引号
+        assertEquals("""a\\\"b 需按 CRT 规则转义""", """"a\\\"b"""", argv[0])
+        // 不含引号的参数（含尾随反斜杠）一律原样，逐字节不变
+        assertEquals("无引号参数不得改动", plain, argv[2])
+    }
+
+    @Test
+    fun `真实进程_Windows下JSON参数的双引号必须原样到达子进程`() {
+        assumeTrue("仅 Windows 需要这条命令行引号契约", SystemInfo.isWindows)
+        val node = findNode()
+        assumeTrue("本机无 node，跳过（沙盒走查已覆盖同一路径）", node != null)
+        val echo = java.io.File.createTempFile("mpvs-argv-echo", ".cjs")
+        try {
+            echo.writeText("process.stdout.write(JSON.stringify(process.argv.slice(2)))")
+            val json = """{"planYear":"2026"}"""
+            val result = ExternalTemplateRenderer.run(listOf(node!!, echo.absolutePath, json), null, 30)
+            assertNull("真实进程不应失败: ${result.error}", result.error)
+            assertEquals("子进程收到的 JSON 必须保留双引号", """["{\"planYear\":\"2026\"}"]""", result.sql)
+        } finally {
+            echo.delete()
+        }
+    }
+
+    /** 找本机 node（PATH 里第一个可执行的 node/node.exe）。 */
+    private fun findNode(): String? {
+        val exts = listOf("", ".exe", ".cmd")
+        for (dir in System.getenv("PATH").orEmpty().split(java.io.File.pathSeparator)) {
+            for (ext in exts) {
+                val f = java.io.File(dir, "node$ext")
+                if (f.isFile) return f.absolutePath
+            }
+        }
+        return null
+    }
+
     /**
      * 假 [Process]：各流由构造参数给定；[hang] = true 时 `waitFor(timeout)` 直接返回 false
      * （模拟超时），并要求 `destroyForcibly` 被调用。

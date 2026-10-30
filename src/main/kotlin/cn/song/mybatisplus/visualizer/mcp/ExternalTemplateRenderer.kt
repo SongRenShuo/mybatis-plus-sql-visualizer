@@ -172,7 +172,7 @@ object ExternalTemplateRenderer {
         }
         val timeout = timeoutSeconds.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
         val process = try {
-            start(command, workingDir)
+            start(argvForLaunch(command), workingDir)
         } catch (e: Exception) {
             return RenderResult(
                 sql = null,
@@ -241,6 +241,56 @@ object ExternalTemplateRenderer {
     private const val READER_JOIN_MS = 2000L
 
     private fun truncate(value: String, max: Int): String = if (value.length <= max) value else value.take(max)
+
+    /**
+     * 启动前按平台修正 argv（**真机走查抓到的缺陷**，UI-045-01）。
+     *
+     * Windows 上 `CreateProcess` 只拿一条命令行字符串，子进程运行时（CRT / Node / Python 都同款）
+     * 会把命令行里**任何** `"` 当作分组符并**吃掉**——而 `ProcessBuilder` 只给「含空格/制表符」的
+     * 参数补引号，`{"planYear":"2026"}` 这种没有空格的 JSON 会原样进入命令行，于是子进程收到的
+     * 是 `{planYear:2026}`。表现是「参数 JSON 到了用户脚本里已经缺引号」，脚本 end-to-end 用不了。
+     *
+     * 修法＝按 CRT 规则给**含双引号**的参数补一层引号并转义内部引号/尾随反斜杠；不含双引号的参数
+     * 一律原样（逐字节不变）。POSIX 上 `execve` 直接传 argv，无此解析，**必须原样不动**。
+     *
+     * @param windows 平台判定（测试注入点；默认按 [System.getProperty] 判 Windows）
+     */
+    internal fun argvForLaunch(command: List<String>, windows: Boolean = isWindows()): List<String> =
+        if (!windows) command else command.map(::quoteForWindows)
+
+    /** 单个参数的 Windows 引号包裹（只在含 `"` 时生效；算法与 CRT 解析互逆）。 */
+    private fun quoteForWindows(arg: String): String {
+        if (!arg.contains('"')) return arg
+        val sb = StringBuilder(arg.length + 8)
+        sb.append('"')
+        var backslashes = 0
+        for (ch in arg) {
+            when (ch) {
+                '\\' -> {
+                    sb.append('\\')
+                    backslashes++
+                }
+                '"' -> {
+                    // CRT 规则：引号前 N 个反斜杠 → 输出 2N+1 个反斜杠再跟 `"`（2N 加倍 + 1 转义）。
+                    // 其中 N 个已随 '\\' 分支 append 过，故此处补 N+1 个。
+                    repeat(backslashes + 1) { sb.append('\\') }
+                    sb.append('"')
+                    backslashes = 0
+                }
+                else -> {
+                    sb.append(ch)
+                    backslashes = 0
+                }
+            }
+        }
+        // 收尾：尾随反斜杠加倍，避免与闭合引号拼成转义序列
+        repeat(backslashes) { sb.append('\\') }
+        sb.append('"')
+        return sb.toString()
+    }
+
+    /** 平台判定（Windows 需要命令行引号修正，POSIX 不需要）。 */
+    internal fun isWindows(): Boolean = System.getProperty("os.name").orEmpty().lowercase().contains("win")
 
     /**
      * 单流捕获器：后台线程按 UTF-8 累计到 [MAX_OUTPUT_BYTES]，超限后继续**排空**（防止子进程
