@@ -101,7 +101,87 @@
 
 ## 七、实施记录
 
-（待实施后回填）
+### 7.1 A 路（MariaDB / SQLite）
+
+**改了什么**
+
+1. `WeaveSpecs`：语句面加 5 类——`org.mariadb.jdbc.Statement` / `ClientPreparedStatement` /
+   `ServerPreparedStatement`（MariaDB 3.x 全部重写为自有类，不复用 MySQL `StatementImpl`，故必须单列）、
+   `org.sqlite.jdbc3.JDBC3Statement` / `JDBC3PreparedStatement`（SQLite 无 Callable 自有 execute 族，
+   `JDBC3PreparedStatement` 覆盖，不单列）；prepare 面加 2 类——`org.mariadb.jdbc.Connection`、
+   `org.sqlite.jdbc3.JDBC3Connection`。两族各用**独立 `putSpec(...)` 调用**，未改动既有行顺序
+   （B 路 OB 条目同在 `WeaveSpecs`，插入点不重叠）。
+2. `StatementWeaverVendorCoverageTest`：`VENDOR_NOT_COVERED` 删 `org.mariadb.` / `org.sqlite.`
+   两条认领（理由「无本机 jar」已失真；认领优先于覆盖判定，留着等于覆盖白做），保留
+   `org.hsqldb.` / `com.gbasedbt.`；`STATEMENT_FACE_CLASSES` 补 5 类、`PREPARE_FACE_CLASSES` 补 2 类；
+   新增 `JAR_OPTIONAL_BYTE_LAYER` + 专项用例（见下「测试依赖」）。
+3. 新增 `DialectCaptureCoverageTest`：14 方言三面对账守卫（写法见下）。
+
+**字节层读数（真实驱动字节 → 织入 → 子优先 loader 定义 + 初始化触发链接期校验）**
+
+| 类 | 面 | changed | 链接期校验 |
+|---|---|---|---|
+| `org.mariadb.jdbc.Statement` | 语句面 | true | LINK_OK |
+| `org.mariadb.jdbc.ClientPreparedStatement` | 语句面 | true | LINK_OK |
+| `org.mariadb.jdbc.ServerPreparedStatement` | 语句面 | true | LINK_OK |
+| `org.sqlite.jdbc3.JDBC3Statement` | 语句面 | true | LINK_OK |
+| `org.sqlite.jdbc3.JDBC3PreparedStatement` | 语句面 | true | LINK_OK |
+| `org.mariadb.jdbc.Connection` | prepare 面 | true | LINK_OK |
+| `org.sqlite.jdbc3.JDBC3Connection` | prepare 面 | true | LINK_OK |
+
+七类全部通过，P-1 / P-2 成立。SQLite 两个类是 `abstract`（`JDBC3Statement extends CoreStatement`、
+`JDBC3Connection extends SQLiteConnection`），定义 + 初始化照常，无需实例化。
+
+**测试依赖（重要未尽项）**：两个 jar **不在 agent 测试 classpath**（只在根项目
+`testImplementation` 与本机 gradle 缓存里）。本轮字节层读数用**临时 init 脚本**
+（`tmp/capture-coverage-deps.init.gradle.kts`，不入库）把 mariadb-java-client 3.3.3、
+sqlite-jdbc 3.50.3.0、slf4j-api 2.0.13 挂到 `:sql-visualizer-agent:testImplementation` 取得，
+**未改 `build.gradle.kts`**（属 B 路写集）。因此：
+
+- 带 init 脚本：`MariaDB与SQLite字节层_驱动jar在位时必须真实织入且过校验` 真跑，七类硬断言；
+- 不带（= 其他人/CI 的默认 classpath）：该用例 `Assumption` 显式 skip 并在消息里列出 7 个类
+  （不静默放过），其余用例全绿。
+
+**待收口补**：`sub-projects/sql-visualizer-agent/build.gradle.kts` 加
+`testImplementation("org.mariadb.jdbc:mariadb-java-client:3.3.3")` 与
+`testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")`（版本与根 catalog 一致）。补上后该用例
+自动升级为硬断言，`JAR_OPTIONAL_BYTE_LAYER` 与 `excludedFromByteLayer` 里的可选分支可一并删除。
+
+**定向测试读数**
+
+| 命令 | 读数 |
+|---|---|
+| `:sql-visualizer-agent:test -I tmp/capture-coverage-deps.init.gradle.kts`（agent 模块全量，36 类） | 198 项 0 失败 1 skip；skip 是既有 `AttachPoolWarmGateTest.模式DM_达梦存量连接复用_attach事件到达`（需真实 DM），与本改动无关。`StatementWeaverVendorCoverageTest` 14/14、`DialectCaptureCoverageTest` 3/3 |
+| `:sql-visualizer-agent:test --tests "*StatementWeaverVendorCoverageTest"`（不带 init） | 14 项 0 失败 1 skip（skip = 上述字节层专项，消息列出 7 类） |
+| 逐类字节层探针（`tmp/probe/ByteProbe.java`，JDK17，同形态 loader） | 7 类逐条 PASS（见上表） |
+
+**反向验证两读数**
+
+| 步骤 | 读数 |
+|---|---|
+| 删 MariaDB 语句面三条（保留 `org.mariadb.jdbc.Connection`） | **`厂商对齐守卫` 仍绿**——该守卫是厂商前缀级判定，同族一条 prepare 面条目即可把 `org.mariadb.` 整族判为已覆盖；红的是类级四条：`语句面登记_命中语句面谓词且不在prepare面`、`语句面真实驱动类_织入changed且通过JVM校验`、`登记名单单一真相_与SPECS一致`、`MariaDB与SQLite两族_语句面与prepare面均已覆盖`（17 项 5 失败）。新增的 `DialectCaptureCoverageTest` 也红：`MariaDB：驱动族 [org.mariadb.] 在 SPECS **语句面**零条目`（3 项 2 失败） |
+| 再删 prepare 面一条（整族四条全撤） | **`厂商对齐守卫` 红**：`org.mariadb.jdbc.Driver → 厂商前缀 org.mariadb.`（1 项 1 失败） |
+| 还原 | 全绿（14/14、3/3） |
+
+**订正计划 §券05 的预期**：「删任一族语句面条目 → 厂商对齐守卫必红」不成立（与 B 路 §7.2 的
+补充实测同结论）。语句面漏登记由类级用例与新增对账守卫拦，厂商对齐守卫只拦「整族静默」。
+
+**新增对账守卫的写法选择**：`DialectCaptureCoverageTest` 用「14 方言 → 驱动族前缀」硬编码表
+（agent 子项目拿不到根项目 Kotlin 的 `DialectRegistry`），对每个方言**分别**要求语句面与
+prepare 面各有条目（面按 `StatementWeaver.Kind` 判定，不按类名猜），或在 `VENDOR_NOT_COVERED`
+显式认领。任务书给的两条路（不硬失败 / 只断言两族）取的是**第三条**：B 路在本轮内已落地
+OceanBase 三面，缺口消失，故不留 `KNOWN_PENDING` 宽松分支，直接对 14 方言全硬断言——比原计划
+更严，且不需要收口时再改测试。判别力由负例钉住：整族缺失、**半覆盖（只有 prepare 面）**、
+显式认领三种形态各一条断言。
+
+**未尽项**
+
+1. 上述 agent `testImplementation` 两行（见「测试依赖」）——本轮按任务书未动 `build.gradle.kts`。
+2. 真实 JVM premain/attach 冒烟（P-4 强转红线：宿主 `(org.mariadb.jdbc.Connection) conn` /
+   `(org.sqlite.jdbc3.JDBC3Connection) conn` 三形态）未跑，环境受限未验证；字节层只证「织得进、
+   校验过」。
+3. `JAR_OPTIONAL_BYTE_LAYER` 是过渡机制，依赖补齐后应删除（连带 `resourceOptional` /
+   `resourcePresent` 的可选分支），否则「缺 jar 就 skip」会长期留在守卫里。
 
 ### 7.2 B 路（OceanBase）
 
