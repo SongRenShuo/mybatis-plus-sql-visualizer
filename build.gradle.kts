@@ -350,4 +350,12 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
 }
 // R7 时序：真机级探针放在发版链路最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
 // （与文件顶部的 verifyGate→testShards 同款做法：依赖只保证「都执行」，mustRunAfter 才定序。）
-tasks.named("e2eFakeIde") { mustRunAfter("testShards") }
+// T-ReleasePerf10（20261030 实测）：定序必须挂**分片叶子**而不是聚合任务 testShards——
+// 任一 shard 失败时（权威轮用 --continue 跑到底），testShards 因依赖失败被 Gradle 跳过，
+// **跳过任务的 mustRunAfter 边会被一并丢弃**，e2e 于是提前 4min 与剩余分片并发起跑
+// （实测 e2e START 12:13:20 < shard5 END 12:17:24；e2e 跑真实应用+MySQL，与分片并发有污染风险）。
+// 挂到叶子后，即使某个 shard 失败，e2e 仍等所有分片收尾再起（--continue 语义保留：e2e 照样跑）。
+tasks.named("e2eFakeIde") {
+    mustRunAfter(tasks.matching { it.name.matches(Regex("testShard[0-9]+")) })
+    mustRunAfter("testExternal")
+}
