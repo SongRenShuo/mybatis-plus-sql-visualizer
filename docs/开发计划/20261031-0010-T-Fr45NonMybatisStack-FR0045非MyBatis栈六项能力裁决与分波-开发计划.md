@@ -423,8 +423,11 @@
 | 各分支定向 | TraceDoc 32/0、DmGuard 40/0、BannedApiCheck 68/0、TemplateHook 83/0 |
 | 反向验证 | 八次（3+3+1+1），每次「摘除 → 指定用例必红 → 还原复绿」两次读数在案；TemplateHook 摘除后无既有用例会红，故补源码级接线守卫并登记元守卫 |
 | 合并态定向 | convention+config+i18n+inspection **382 / 0 / 0** |
-| 全量 `testShards` | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
+| 全量 `testShards`（首轮，2026-10-31 02:40） | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
+| 全量 `testShards`（加 `DmExplainRealEngineTest` 后复跑，03:11） | **8595 / 0 失败 / 0 错误 / 11 跳过**（跳过 +2＝真机用例在无 `-Dmpvs.dialect.*` 时按设计跳过）|
 | `verifyGate` | **3/3 Compatible**（IU-243.28141.41 / 253.33514.17 / 262.10968.63），无 unresolved class / 无 incompatible |
+
+**一次分片抖动（如实登记，非本券缺陷）**：加测试类后首次复跑（02:59 那轮）shard4 有 **9 红**，全部集中在 `ui.highlight.XmlMapperInjectorIncludeParityTest` / `XmlSqlCompletionDispatchTest` / `ui.inject.XmlGapEditingAssistTest`，栈是 `AlreadyDisposedException` 从 **Spring 插件的 `SpringContextSchemaInjector`** 抛在注入语言探测里，与本券零交集。判定依据三条：①同一份生产代码在 02:40 那轮 **0 失败**；②三个类**单独跑 16/0 全绿**；③`--rerun-tasks` 整轮复跑 **8595/0/11 全绿**。成因是分片器按用例数重新切片（加一个类后各片类数 165→166/161→154/161→172…重排），换了邻居后该 flake 被暴露——与「平台 UI 测试对邻居敏感」同族。**权威读数是 8595/0/11**。
 
 **4a 真机闭环（本轮补测，2026-10-31）**：新增 `mcp/DmExplainRealEngineTest`（外部实例模式，与 `DialectDockerVerificationTest` 同款 `-Dmpvs.dialect.*` 协议，缺省跳过），把「插件渲染出来的」达梦计划语句交给真 DM8 执行，三条断言一起看：①渲染产物是 `EXPLAIN FOR` 且档位 TABLE；②真机执行返回 **19 列**且含 `OPERATION`/`TAB_NAME`/`COST`/`ROW_NUMS`、行集非空、`McpExplainFormatter.format` 正文非空；③反向钉子——裸 `EXPLAIN` 在该引擎上**列数为 0**（若形态变了这条会独立变红并说明根因结论需重评）。读数：指向 DBX 在册 DM8 `114.66.55.245:20096` 实跑 **3/3 PASS、0 跳过**；不带系统属性时 2 跳过 1 通过（不污染默认门禁）。⇒ 4a 的「计划正文非空」已在**真机 + 插件渲染产物**层面闭环，剩下的只是 IDE remote JDBC 传输层（平台 `McpDbExecutor`，非本插件代码）。
 
