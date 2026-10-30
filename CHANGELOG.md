@@ -2,6 +2,20 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+> FR-0045（需求池：非 MyBatis 技术栈的 6 项能力，提交环境＝Spring Boot 2.5 + JDK 8 + Spring JDBC + 自研 `<sqls>/<sql id>` 模板 + 达梦 DM8 + 插件 v2026.10.28）。六项裁决后实施四项：其中「Spring JdbcTemplate 日志还原」与「调用点回溯」在仓内早已交付（M47 2026-08-24 / StackHoverUi 2026-10-07，用户版本落在两批交付之间），本轮新增另四项。
+
+### Added
+- **禁用 API 清单检查（T-BannedApiCheck）**：设置页新增「禁用 API」子页，规则＝类名（全限定名精确或正则）+ 方法名正则 + 说明（为什么禁用）+ 级别（错误/警告），规则跨项目共享、独立存储 `mp-sql-visualizer-banned-api.xml`、关闭即生效。检查器是插件**首个 `LocalInspectionTool`**：命中即以规则级别在编辑器内标红/黄，提示文案取规则说明，可用 `@SuppressWarnings("BannedApi")` 单点抑制；规则表为空时 `buildVisitor` 返回 `EMPTY_VISITOR`，零 daemon 行为。配套「统计禁用 API 存量」动作（Tools 菜单）：全项目只读 PSI 扫描、后台线程 + 可取消进度、明细上限 500 条、报告写临时文件并在编辑器打开
+- **SQL 优化留痕一键导出（T-TraceDocExport）**：历史面板右键与预览面板「更多」新增「导出优化留痕」，按固定六段（现象 / 基线 / 根因 / 手段 / 前后对比 / 结论与回滚）生成 Markdown，自动填入 SQL 原文、方言、来源位置、捕获时间、耗时与 0~2 份执行计划快照，计划对比复用既有 `ExplainPlanDiff`（行数/代价增量 + 字段级变化），TEXT 档计划退化为行级文本差异并明示「不推断代价」。**无计划快照时明写「不对计划内容做任何推断」**，绝不臆造
+- **外部 SQL 模板渲染器 hook（T-TemplateHook，MVP）**：设置页新增「外部模板」子页（默认关，关闭时全链零行为变更）。开启后 `sqlv_render_sql` 在自研模板文件（根节点 `<sqls>`、语句 `<sql id="x">`、`:命名参数` 一类）上不再报 `[SOURCE_NOT_FOUND]`，而是把「模板路径 + 语句 id + 参数 JSON」交给用户配置的外部命令，取回 stdout 作为 SQL 展示/分析/EXPLAIN。命令按列表形态启动（不经 `sh -c`/`cmd /c`），stdout/stderr 分开按 UTF-8 读，超时强杀、输出上限 1 MiB、stderr 只回显截断首行；`paramsJson` 不进任何日志或错误文本。新增 MCP 入参 `paramsJson` 与错误码 `[EXTERNAL_RENDER_FAILED]`
+- **MCP 新增错误码 `[NOT_A_SQL_DATASOURCE]`**：`sqlv_explain` 在 `jdbc:redis://` / `jdbc:mongodb://` 这类非关系型数据源上不再兜底猜成 MySQL 把 EXPLAIN 发给 Redis（用户报障 JedisDataException），而是在方言派发前直接结构化拒绝，错误文本只带子协议、不含账号口令
+- **TEXT 档执行计划可落历史（T-TraceDocExport S3）**：`ExplainPlanSnapshot` 新增原文文本 payload 形态，TEXT 档方言（达梦 / Oracle / OceanBase / H2 / SQLite）的计划从此可持久化、可跨会话对比；旧 `headers/rows` payload 读回零迁移
+
+### Fixed
+- **达梦执行计划恒为空（T-Fr45DmGuard，用户真机报障）**：`sqlv_explain` 在 DM 上只返回 `dialect: DM（达梦）`、计划正文为空。真机实测（DM DBMS 8.1.3.12 + DmJdbcDriver18 8.1.3.140）证伪了原证据：**DM8 的裸 `EXPLAIN <sql>` 根本不返回结果集**（`executeQuery` 0 列 0 行、`execute()` 后无第二结果集），所以问题不在多结果集通道、加 `channelNote` 也救不回来；`EXPLAIN FOR <sql>` 才返回 19 列结构化计划表（`OPERATION` / `TAB_NAME` / `IDX_NAME` / `SCAN_TYPE` / `ROW_NUMS` / `COST` / `FILTER` …）。现模板由 `EXPLAIN` 改 `EXPLAIN FOR`，档位由 TEXT 纠为 TABLE——达梦因此同时获得结构化计划面板与计划落历史。TABLE 档下游六处消费点逐一核查均为优雅降级（代价增量可算、行数走字段级变化、索引建议因缺 MySQL 列提前返回空清单）
+
 ## [2026.10.31-beta.2] - 2026-10-31
 
 ### Changed
