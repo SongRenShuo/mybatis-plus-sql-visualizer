@@ -249,8 +249,27 @@ transformer 入口先读 `bytes[6..7]` 得 major，超过 ASM 支持上限即**�
 - `SqlLogPanel.kt` 取数接线（新增两个诊断字段）虽不在原写集清单内，但为让新字段在生产路径生效所必需（与 C1 无交集），已一并落地。
 - `verifyGate` / 全量 `testShards` 未跑（按分工留只读收口代理）。
 
-### 7.3 两路合并与主控收口（待门禁读数回填）
+### 7.3 两路合并与主控收口（2026-10-30）
 
 - C1 提交：`2f5e40c0`（券 04/07）、`d5576cae`（券 01/05/06/08/09 + 心跳 + 测试 + §7.1）
 - C2 提交：`4ab5cb6c`（券 02/03/10 IDE 侧/11，16 文件；另含 `SqlLogPanel.kt` 取数接线——原写集清单外但为生产生效所必需，与 C1 零交集）
-- **待办**：合并 `t-capture-catchall` → dev → `verifyGate`（C1 把 ASM 9.4→9.8，触发大改动判据）+ 全量 `testShards` → 读数回填本节 → 推双仓
+- 合并：`t-capture-catchall` → dev（`f1037958`，无冲突；两路按模块分区，仅计划 §7 各自小节）
+
+### 7.4 收口门禁读数（2026-10-30）
+
+- **`verifyGate`：3/3 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，报告 11:19 生成）
+  ——C1 把 ASM **9.4 → 9.8**（上限 major 69），属大改动判据，已覆盖。
+- **`testShards`：8517 tests / 0 failures / 0 errors / 9 skipped**，`BUILD SUCCESSFUL in 9m 56s`
+  （较 T-CaptureCoverage 那轮 8492 增 25 例，即本轮新增的 agent 侧 237 例与 IDE 侧 172 例中的净增量）。
+
+**中途两次 `LogPipelinePerfTest` 红，判定为负载抖动（非本任务回归）**，证据三档：
+1. 被测量路径未被本轮改动：`filterBySearch` 在 `log/LogEntryFiltering.kt`，其下游 `formatTimestampFragment`
+   在 `log/LogEntryRendering.kt`——两文件在本轮合并的 `git diff --stat` 里**零命中**；测试自建 20000 条
+   `LogSqlEntry` 直接调纯函数，不经过桥/agent/面板。
+2. 用例自带注释即声明负载敏感：「本机实测 20~45ms（**随机器负载波动明显**），设 80ms 留一倍余量」，
+   且「判据仍是不得退化为平方级——真退化会在 500ms 以上」。两次失败读数 103.93 / 103.87ms 与 139.15ms
+   （正则档 120ms 预算）都在「30~50% 超预算」区间，离平方级退化差一个数量级。
+3. 同期机器状态：31.9GB 内存 free 8.6GB、7 个 java 进程合计 6.7GB（含 3.7GB 的 Gradle daemon），
+   与 C1/C2 两路并行构建残留叠加；第三轮（负载回落后）同一用例**通过**，全量 8517/0/0/9 绿。
+   → 结论：**环境性假失败**，登记为观察项（若后续频繁复现，再按 T-PerfSweep28-05 的先例调预算或加
+   「同轮取多次中位数」的稳健判据，不擅自放宽门槛）。
