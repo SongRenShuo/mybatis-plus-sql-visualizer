@@ -388,6 +388,25 @@ MySQL+PG 不引入），反向验证短路兜底 → 必红、还原 → 绿。
 3. `EngineSpec.multiRowValues` 注释「Oracle 不支持多行 VALUES」已过期（Free 23 实测支持）；
 4. 必须加 `--no-configuration-cache`：`-Dmpvs.*` 在配置期读取，带缓存有复用上一族 URL 的假绿风险。
 
+#### 7.6.3 六项脚手架缺陷已修（T-DialectDriverGap，2026-10-30）
+
+用户要求「测试脚手架也修复下」。前四条是 D2 矩阵点名的，后两条是修的过程中顺着「读数凭什么可信」
+补的：
+
+| 缺陷 | 修法 | 落点 |
+|---|---|---|
+| 硬编码 `UpsertMode.REAL` | 新增 `DialectVerifySupport.upsertModeOf(dialect)`：`renderUpsert` 与 `renderUpsertStatement` 都返回 null ⇒ `DEGRADE_ONLY`，判定口径与渲染侧同源 | `DialectVerifySupport.kt`；外部入口改调该函数 |
+| 套件不幂等 | 建表前 `runCatching { DROP TABLE dev_info }` + 收尾同样清场（无 `IF EXISTS` 的引擎靠 `runCatching` 兜） | `runTcSuite` 首尾 |
+| 多行 VALUES 注释过期 | 注释改为「12c 起支持、11g 不支持」，默认按支持处理，外部实例可用 `-Dmpvs.dialect.multiRowValues=false` 回退 | `EngineSpec` / `seedRows` / Oracle 容器用例 |
+| 缺 `--no-configuration-cache` 约束 | 写进外部实例入口 KDoc：`-Dmpvs.*` 由 `mpv-testing.gradle.kts` 在**配置期**经 `System.getProperties()` 透传，缓存命中会复用上一族的 `systemProperty` → 用上一族 URL 跑这一族（假绿），缓存未命中又可能静默换值 | 入口 KDoc |
+| 方言名可能静默回退 MySQL | 外部入口加逐字核对断言：`byName` 对未知名称回退 `MySqlDialect`，名称写错或中文参数被转码时全绿但验的是 MySQL 方言 | 外部入口 |
+| 空扫即空绿 | `assertSweepClean` 补「词表 < 50 词即失败」：原实现只判 `failures.isEmpty()`，词表没接上时空集合必然为空 | `DialectDockerVerificationTest.kt` |
+
+配套回归用例 `DialectVerifySupportUpsertModeTest`（3 例，纯逻辑无 DB）：无原生 upsert 的三族必须
+`DEGRADE_ONLY` 且两个渲染入口均为 null；注册表其余 11 族必须 `REAL`（族数写死 11，任一族的渲染入口
+被误删即变红）；H2（整语句 MERGE）与 MySQL/PG（后缀形态）两种不同形态都算原生。
+
+
 ### 7.7 最终统一门禁（2026-10-30 13:07~13:28）
 
 合并 master（`4b7a8075`，22 笔：含 T-ReleasePerf10 门禁限流/水位治理、T-PerfSweep29、全景审计第二十二轮）
@@ -403,3 +422,40 @@ MySQL+PG 不引入），反向验证短路兜底 → 必红、还原 → 绿。
 free 12.9GB、`suspects: 0`（无可清理孤儿），属并行会话与 IDE 占用；等待回落（free 回到 9.7GB、
 java 进程从 7 个降到 4 个）后重跑即绿。**未使用 `-PwatermarkGate=off` 紧急放行**——理由：此前已出现
 `LogPipelinePerfTest` 在负载下假失败，强行放行只会让门禁读数不可信。
+
+### 7.8 驱动补齐与脚手架修复后的重跑（T-DialectDriverGap，2026-10-30 下午）
+
+D2 矩阵里 4 个「环境受限」族（达梦 / openGauss / GaussDB / MariaDB），本轮补驱动 + 修脚手架后重跑，
+另有一个官方 openGauss 实例做补充读数。每族独立一次 `test` 调用、串行，命令模板见 §7.6
+（含 `--no-configuration-cache`），`-x :sql-visualizer-agent:test` 省时。
+
+| 方言 | 实例 | 修复前 | 本轮 | 词数 | 结论 |
+|---|---|---|---|---|---|
+| `DM（达梦）` | `114.66.55.245:20096` DM8 | 无驱动，0.18s 挂 | **PASS 69.3s** | 254 / 254 | 达梦真机闭环 |
+| `openGauss` | `103.36.220.245:25882`（GaussDB Kernel 503.1.0，openGauss 同源内核） | 无驱动 + SCRAM 报错 | **PASS 67.5s** | 186 / 186 | openGauss 方言闭环（**实例标注 Kernel 503，非 openGauss 5.0.0 官方版**） |
+| `GaussDB` | 同上 `:25882` | 同上 | **PASS 69.9s** | 197 / 197 | GaussDB 方言闭环（同上标注） |
+| `MariaDB` | `103.36.220.245:23306` **MariaDB 10.11.11**（本轮部署容器 `xc3-mariadb`） | 20081 端口拒连，只有「MySQL 8.4 + maria 驱动」替代读数 | **PASS 101.2s** | 281 / 281 | MariaDB 真引擎闭环（`lower_case_table_names=0`，与 OceanBase 的 1 相反） |
+| `openGauss`（官方 5.0.0） | `114.66.55.245:20105` | 无驱动 + SCRAM | **仍不可用**：驱动能连上，但 `dbx_test` 在该实例 `has_database_privilege('CREATE')=false`、`has_schema_privilege('public','CREATE')=false` → 建夹具表被拒（`ERROR: permission denied for schema public`） | — | **环境受限（权限）**，非产品问题；换到 25882 才拿到读数 |
+
+四族重跑**同时验证了 7.6.3 的脚手架修复**：达梦若仍走硬编码 `UpsertMode.REAL`，必然在主键冲突处
+抛错并带崩 254 词扫描；本轮 PASS 说明能力推导生效。每族开跑前的方言名逐字核对也生效——
+`DM（达梦）` 这类带中文括号的名称若被转码，新加的断言会直接失败而不是静默回退 MySQL。
+
+**保留字扫描的空扫守卫**：`assertSweepClean` 新增「词表 < 50 词即失败」断言。原实现只判
+`failures.isEmpty()`，词表若没接上（空集合）必然为空 → 空绿。现有 14 族最少 86 词（PG），下限取 50
+足以拦住「词表没接上」的形态。
+
+MariaDB：`114.66.55.245:20081` 仍然拒连（本机 socket 探测 `WinError 10061`），改在测试服务器
+`103.36.220.245:23306` 部署 `mariadb:10.11.11` 容器补齐真引擎读数（D2 那轮的「MySQL 8.4 + maria 驱动」
+只是替代读数，不能当 MariaDB 结论）。镜像走 `docker.m.daocloud.io`——直连 Docker Hub 单层实测只有
+~76KB/s，拉 25 分钟未完；换 daocloud 后复用已下层的进度，几分钟拉完（`docker pull -q
+<mirror>/library/alpine:3.19` 比墙钟可复现选源过程）。容器 `--restart unless-stopped`、`lower_case_table_names=0`。
+
+**门禁（本轮改动收口，2026-10-30 14:06~14:22）**：`testShards` **8525 tests / 0 failures / 0 errors /
+9 skipped**，`BUILD SUCCESSFUL in 11m 51s`，parity 口径「计划类全集 **794** 个均有结果 XML」（较上轮
+793 增 1 类＝新增的 `DialectVerifySupportUpsertModeTest`，该类的 3 例在 shard3 通过）。
+两条 WARN 仍是既有画像漂移（shard3 +20%，提示 `weight-refresh.ps1`），不影响判定。
+**未跑 `verifyGate`**：本轮零生产代码改动（只动测试脚手架 + 测试 classpath 依赖 + 文档），
+插件产物与 3 IDE 兼容性面不变，上一轮 3/3 Compatible 的读数仍然成立。
+
+
