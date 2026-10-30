@@ -27,10 +27,34 @@ plugins {
 // 不与 testShards/releaseGate 同批）。
 val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
     val invokedTaskNamesForLane = gradle.startParameter.taskNames
-    val laneLimitDefault = if (invokedTaskNamesForLane.contains("releaseGate")) 3 else 2
-    val laneLimit = providers.gradleProperty("testShardConcurrency").orNull
-        ?.toIntOrNull()?.coerceIn(1, 8) ?: laneLimitDefault
-    logger.lifecycle("mpv-test-lane: maxParallelLimit=$laneLimit (releaseGate default $laneLimitDefault; -PtestShardConcurrency overrides)")
+    val isGateOrchestration = invokedTaskNamesForLane.contains("releaseGate")
+    val laneLimitDefault = if (isGateOrchestration) 3 else 2
+    // T-ReleasePerf10 券01：测试链档位从静态缺省改内存水位自适应——同一机制两头收：
+    // 内存宽裕自动提档提速（T9 读数：缺省 2 估 8.5~10min vs 限流 5 实测 5m02s），紧张自动收缩防
+    // native OOM（R15~R24 形态）。只在 testShards/releaseGate 形态采样（其他构建零开销）；
+    // 探针失败/不可用时回落静态缺省（fail-open）。优先级：-PtestShardConcurrency 显式 >
+    // 自适应 > 静态缺省；-PtestLaneAdaptive=off 一词保险丝回落 T9 静态行为。
+    val isShardedRun = isGateOrchestration || invokedTaskNamesForLane.contains("testShards")
+    val adaptiveOff = providers.gradleProperty("testLaneAdaptive").orNull == "off"
+    // releaseGate 编排内并发面还有 verifyGate+verifyMarketplace 两 verifier JVM（~5.1GB commit），
+    // 定档前预留（mpv.watermark.MemoryWatermarkProbe.pickLane 档位表与依据见该类注释）
+    val reserveGb = if (isGateOrchestration) 6.0 else 0.0
+    val adaptiveLane: Int? = if (isShardedRun && !adaptiveOff) {
+        mpv.watermark.MemoryWatermarkProbe.pickLane(
+            logger,
+            reserveGb,
+            if (isGateOrchestration) "releaseGate" else "testShards",
+        )
+    } else {
+        null
+    }
+    val explicitLane = providers.gradleProperty("testShardConcurrency").orNull
+    val laneLimit = explicitLane?.toIntOrNull()?.coerceIn(1, 8) ?: adaptiveLane ?: laneLimitDefault
+    logger.lifecycle(
+        "mpv-test-lane: maxParallelLimit=$laneLimit " +
+            "(adaptive=${adaptiveLane ?: "n/a"}, staticDefault=$laneLimitDefault, explicit=${explicitLane ?: "none"}; " +
+            "-PtestShardConcurrency overrides > adaptive > static; -PtestLaneAdaptive=off 回落静态)",
+    )
     gradle.sharedServices.registerIfAbsent("mpvTestLaneLimiter", MpvTestLaneLimiterService::class.java) {
         // Gradle 9.7 API：BuildServiceSpec.maxParallelUsages = 同时可使用本服务的任务数上限
         // （javap gradle-core-api-9.7.0 BuildServiceSpec 实证；服务实例上无 maxParallelLimit）。
@@ -443,8 +467,22 @@ tasks.register("testShardStagger") {
     val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
         ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 240_000L else 0L
     inputs.property("mpvStaggerMs", testStaggerMs)
+    // T-ReleasePerf10 券02：执行期水位快速失败闸门——testShardN 全体 dependsOn 本任务且本任务无
+    // 输出恒执行，闸门在分片测试 JVM 出生前判定（配置期捕获 floor，CC 约束同 mpvStaggerMs；
+    // 缺省 floor 6GB，-PwatermarkFloorGb 覆盖，-PwatermarkGate=off 关闭；探针失败 fail-open）。
+    val watermarkFloorGb = if (providers.gradleProperty("watermarkGate").orNull == "off") {
+        0.0
+    } else {
+        providers.gradleProperty("watermarkFloorGb").orNull?.toDoubleOrNull() ?: 6.0
+    }
+    inputs.property("mpvWatermarkFloorGb", watermarkFloorGb)
     doFirst {
         val ms = (inputs.properties["mpvStaggerMs"] as? Number)?.toLong() ?: 0L
+        mpv.watermark.MemoryWatermarkProbe.checkGate(
+            (inputs.properties["mpvWatermarkFloorGb"] as? Number)?.toDouble() ?: 6.0,
+            "testShardStagger（分片测试 JVM 出生前）",
+            logger,
+        )
         if (ms > 0) {
             logger.lifecycle("testShardStagger sleep ${ms}ms")
             Thread.sleep(ms)
