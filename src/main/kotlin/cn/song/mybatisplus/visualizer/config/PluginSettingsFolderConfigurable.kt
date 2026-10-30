@@ -505,6 +505,8 @@ class PluginSettingsFolderConfigurable : Configurable {
         }
         private const val ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts"
         private const val ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp"
+        // T-BannedApiCheck（FR-0045 第 2 项）：禁用 API 规则管理页
+        private const val ID_BANNED_API = "cn.song.mybatisplus.visualizer.settings.bannedApi"
         private const val ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about"
         private const val ID_PROJECT = "cn.song.mybatisplus.visualizer.settings.project"
 
@@ -533,6 +535,11 @@ class PluginSettingsFolderConfigurable : Configurable {
             "settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin,
             SubPageRef(ID_MCP, McpConfigurable::class.java),
         )
+        // T-BannedApiCheck：禁用 API 规则（列表 + 编辑器，即时生效）；图标用平台「检查」语义图标
+        private val PAGE_BANNED_API = SubPageDesc(
+            "settings.section.bannedApi", "settings.section.bannedApi.desc", AllIcons.General.InspectionsWarning,
+            SubPageRef(ID_BANNED_API, BannedApiConfigurable::class.java),
+        )
         private val PAGE_ABOUT = SubPageDesc(
             "settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite,
             SubPageRef(ID_ABOUT, AboutConfigurable::class.java),
@@ -540,7 +547,8 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         /** 落地页列表（顺序即呈现顺序）。 */
         private val SUB_PAGES = listOf(
-            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP, PAGE_ABOUT,
+            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP,
+            PAGE_BANNED_API, PAGE_ABOUT,
         )
 
         /** 所有可搜索的设置项字段 */
