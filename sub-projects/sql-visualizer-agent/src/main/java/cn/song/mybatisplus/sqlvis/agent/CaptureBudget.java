@@ -84,9 +84,12 @@ public final class CaptureBudget {
 
     private static volatile int killAfter = intProp(PROP_KILL_AFTER, DEFAULT_KILL_AFTER, 1);
 
-    private static volatile long premainDelayMs = msProp(PROP_PREMAIN_DELAY_MS, DEFAULT_PREMAIN_DELAY_MS);
+    // 注意：这两个是**毫秒**语义（直接喂 Thread.sleep），不能走 [msProp]（它返回纳秒）。
+    // 2026-10-30 D3 实测缺陷：误用 msProp 后默认 10s 变 10^10ms（约 317 年），premain 补挂线程
+    // 永不执行 → 未知驱动的 premain 形态 100% 静默。此处改用 [rawMsProp]。
+    private static volatile long premainDelayMs = rawMsProp(PROP_PREMAIN_DELAY_MS, DEFAULT_PREMAIN_DELAY_MS);
 
-    private static volatile long premainRepeatMs = msProp(PROP_PREMAIN_REPEAT_MS, DEFAULT_PREMAIN_REPEAT_MS);
+    private static volatile long premainRepeatMs = rawMsProp(PROP_PREMAIN_REPEAT_MS, DEFAULT_PREMAIN_REPEAT_MS);
 
     private static volatile int premainPasses = intProp(PROP_PREMAIN_PASSES, DEFAULT_PREMAIN_PASSES, 1);
 
@@ -387,8 +390,30 @@ public final class CaptureBudget {
         return def;
     }
 
+    /**
+     * 毫秒属性 → **原样毫秒**（不做单位换算）。
+     *
+     * 与 [msProp] 的分工：需要纳秒的（预算/耗时比较）走 [msProp]；需要直接喂 `Thread.sleep`
+     * 或按毫秒展示的走本方法。二者混用会出数量级错误（2026-10-30 D3 实测：premain 补挂
+     * 延迟被放大 10^6 倍，线程永不执行）。
+     */
+    static long rawMsProp(String key, long defMs) {
+        try {
+            final String raw = System.getProperty(key);
+            if (raw != null) {
+                final long v = Long.parseLong(raw.trim());
+                if (v >= 0L) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignore) {
+            // 非法值回落默认
+        }
+        return defMs;
+    }
+
     /** 毫秒属性 → 纳秒（0 合法：预算 0 表示立即关闭兜底分支）。 */
-    private static long msProp(String key, long defMs) {
+    static long msProp(String key, long defMs) {
         try {
             final String raw = System.getProperty(key);
             if (raw != null) {

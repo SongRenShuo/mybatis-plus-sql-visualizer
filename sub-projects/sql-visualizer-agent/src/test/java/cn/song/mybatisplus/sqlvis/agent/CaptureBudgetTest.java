@@ -101,4 +101,52 @@ public class CaptureBudgetTest {
         assertNull("killReason 未触发时为空", CaptureBudget.killReason());
         assertEquals(0L, CaptureBudget.transformMillis());
     }
+
+    // ---------- T-CaptureCatchAll 缺陷回归：premain 补挂延迟的单位（2026-10-30 D3 真机发现） ----------
+
+    /**
+     * 单位契约：`msProp` 返回**纳秒**（供预算/耗时比较），`rawMsProp` 返回**原样毫秒**（供
+     * `Thread.sleep`）。二者混用会放大 10^6 倍。
+     *
+     * <p>缺陷现场：`premainDelayMs/premainRepeatMs` 误用 `msProp` → 默认 10_000ms 变 10^10ms
+     * （约 317 年），premain 补挂线程 `Thread.sleep` 永不返回 → 未知驱动的 premain 形态
+     * 100% 静默。既有单测看不见，因为 `resetForTest()` 把两个字段覆盖回正确默认值。
+     */
+    @Test
+    public void 单位契约_纳秒换算与原样毫秒不得混用() {
+        final String key = "sqlvis.agent.testUnitContract";
+        try {
+            System.setProperty(key, "5000");
+            assertEquals("msProp 应换算为纳秒", 5_000L * 1_000_000L, CaptureBudget.msProp(key, 1L));
+            assertEquals("rawMsProp 应原样返回毫秒", 5_000L, CaptureBudget.rawMsProp(key, 1L));
+        } finally {
+            System.clearProperty(key);
+        }
+        // 缺省与非法值：两者都回落到「毫秒入参」的对应量纲
+        assertEquals(7L * 1_000_000L, CaptureBudget.msProp("sqlvis.agent.noSuchProp", 7L));
+        assertEquals(7L, CaptureBudget.rawMsProp("sqlvis.agent.noSuchProp", 7L));
+    }
+
+    /**
+     * 源码守卫：premain 两个延迟字段必须经 `rawMsProp` 初始化。
+     *
+     * <p>为什么用源码扫描而不是行为断言：字段是 `static final` 语义的类初始化一次，
+     * 单测进程内无法在不污染全局的前提下重放初始化；而 `resetForTest()` 会把它们覆盖回
+     * 正确默认值，导致行为断言永远绿（这正是缺陷潜伏的原因）。
+     */
+    @Test
+    public void 源码守卫_premain延迟字段必须走rawMsProp() throws Exception {
+        final java.io.File src = new java.io.File(
+                "src/main/java/cn/song/mybatisplus/sqlvis/agent/CaptureBudget.java");
+        final String text = new String(java.nio.file.Files.readAllBytes(src.toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue("premainDelayMs 必须经 rawMsProp 初始化（毫秒语义，不得走纳秒换算）",
+                text.contains("premainDelayMs = rawMsProp("));
+        assertTrue("premainRepeatMs 必须经 rawMsProp 初始化（毫秒语义，不得走纳秒换算）",
+                text.contains("premainRepeatMs = rawMsProp("));
+        assertFalse("premainDelayMs 不得经 msProp 初始化（会放大 10^6 倍，线程永不执行）",
+                text.contains("premainDelayMs = msProp("));
+        assertFalse("premainRepeatMs 不得经 msProp 初始化（会放大 10^6 倍，线程永不执行）",
+                text.contains("premainRepeatMs = msProp("));
+    }
 }
