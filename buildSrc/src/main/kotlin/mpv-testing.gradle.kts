@@ -29,8 +29,6 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
     val invokedTaskNamesForLane = gradle.startParameter.taskNames
     val isGateOrchestration = invokedTaskNamesForLane.contains("releaseGate")
     val laneLimitDefault = if (isGateOrchestration) 3 else 2
-    // T-ReleasePerf10：并发度观测计数器跨构建驻留（daemon 复用 JVM），配置期清零
-    MpvLaneMeter.reset()
     // T-ReleasePerf10 券01：测试链档位从静态缺省改内存水位自适应——内存宽裕时自动提档提速
     // （T9 读数：缺省 2 估 8.5~10min vs 限流 5 实测 5m02s），水位紧张时由券02 的快速失败闸门
     // 拒绝起跑（不靠压档位续命）。只在 testShards/releaseGate 形态采样（其他构建零开销）；
@@ -875,14 +873,13 @@ intellijPlatformTesting {
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
                         // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
                         // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
-                        // T-ReleasePerf10：laneActive = 执行期真实并发片数（与档位日志并排判定
-                        // 「档位是否真的变成并发」，见 MpvLaneMeter 注释）。
-                        val laneActive = MpvLaneMeter.enter()
-                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneActive=$laneActive")
+                        // T-ReleasePerf10：laneOthers = 本片起跑瞬间**其他**在跑分片执行器数
+                        // （本片自己的 JVM 尚未出生）。与档位日志并排即可判「档位是否真的变成并发」，
+                        // 见 MpvLaneMeter 注释（计数器版本已被实测否掉）。
+                        val laneOthers = MpvLaneMeter.activeShardExecutors(root, logger)
+                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneOthers=$laneOthers")
                     }
-                    doLast {
-                        MpvLaneMeter.leave()
-                        logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
+                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
                     }
                 }
             }
