@@ -654,6 +654,17 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
+                emptyList(),
+                "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
+                    "<lang.parserDefinition>（缺了平台会回落到基语言 SQL 的 parser definition，其 file node " +
+                    "type 绑基类 SqlLanguage，SqlParserDefinitionBase.createFile 强转 SqlLanguageDialect " +
+                    "抛 CCE → 预览 PSI 建不出来、预热降级）。判定内核为纯文本扫描" +
+                    "（dialectClasses / parserDefinitionLanguages 两个提取器 + 数量与配对断言），" +
+                    "无返回违规点集合的 Boolean 判定函数，故 decisionFns 留空；" +
+                    "灵敏度=摘掉一条 lang.parserDefinition 注册必红（实施轮实测）。",
+            ),
+            GuardEntry(
                 "log/EmptyTextLinkApiGuardTest.kt",
                 emptyList(),
                 "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +

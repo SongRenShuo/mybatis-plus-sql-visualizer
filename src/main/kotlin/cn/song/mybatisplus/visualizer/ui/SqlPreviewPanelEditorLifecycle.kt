@@ -138,9 +138,16 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
             val psi = if (targetLanguageId != null) {
                 awaitPreviewPsiLanguage(proj, vf, targetLanguageId)
             } else {
-                com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
-                    if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                }
+                // T-PreviewPsiDialect：同 awaitPreviewPsiLanguage —— findFile 抛平台契约异常时按
+                // 「没有 PSI」处理（记 WARN 带堆栈），不让它升级成点名插件的 SEVERE。
+                runCatching {
+                    com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
+                        if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                    }
+                }.onFailure {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[T-PreviewPsiDialect] PsiManager.findFile threw for ${vf.name}", it)
+                }.getOrNull()
             }
             if (psi == null) {
                 // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN——
@@ -384,6 +391,21 @@ internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.i
             .warn("[O-145] preview dialect '$desiredName' and GenericSQL platform Language are unavailable; keep existing mapping")
         return null
     }
+    // T-PreviewPsiDialect（2026-10-30）：映射前先探一次「这个语言能不能建出 SQL PSI」。
+    // 背景：插件自注册方言（DM/GaussDB/HighGo/Vastbase）原先只有 <sql.dialect> 没有
+    // <lang.parserDefinition>，平台会沿语言链回落到基语言 SQL 的 parser definition，其 file node
+    // type 绑的是基类 SqlLanguage → `SqlParserDefinitionBase.createFile` 的强转抛
+    // ClassCastException → PSI 建不出来 → 整条预览降级（真机 262 实证，10/10 次）。
+    // 注册面已在 database-optional.xml 成对补齐；这里留一道保险：将来再漏一个，最差是「这次不映射、
+    // 补全按 GenericSQL 走」，不再拖垮整条预览。
+    if (!canCreateSqlPsiFor(targetLanguage)) {
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
+            "[T-PreviewPsiDialect] skip dialect mapping for '$desiredName': " +
+                "language '${(targetLanguage as? com.intellij.lang.Language)?.id}' has no SQL parser definition; " +
+                "keep platform default (completion falls back to GenericSQL)",
+        )
+        return null
+    }
     val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
         ?: cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID
     val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target &&
@@ -459,14 +481,52 @@ internal fun SqlPreviewPanel.awaitPreviewPsiLanguage(
 ): com.intellij.psi.PsiFile? {
     val deadline = System.nanoTime() + budgetMs * 1_000_000L
     while (true) {
-        val current = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
-            if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-        }
+        // T-PreviewPsiDialect：findFile 内部可能抛平台契约异常（典型是 SQL 方言缺 ParserDefinition
+        // 导致的 ClassCastException）。这里只负责取实例，异常不该以 SEVERE 的形式记到插件头上——
+        // 记一次 WARN 带堆栈，按「暂时没有 PSI」返回，让上层走既有的降级分型。
+        val current = runCatching {
+            com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+                if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+            }
+        }.onFailure {
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).warn(
+                "[T-PreviewPsiDialect] PsiManager.findFile threw for ${vf.name} (target=$targetLanguageId)", it,
+            )
+        }.getOrNull()
         if (current == null || prewarmAbandoned()) return current
         if (current.language.id.equals(targetLanguageId, ignoreCase = true)) return current
         if (System.nanoTime() >= deadline) return current
         Thread.sleep(10L)
     }
+}
+
+/**
+ * T-PreviewPsiDialect：该语言能否建出 SQL PSI。
+ *
+ * 判据取自平台行为本身——`SqlParserDefinitionBase.createFile` 要求
+ * `getFileNodeType().getLanguage()` 是 `SqlLanguageDialect`。所以直接查「当前生效的
+ * ParserDefinition 的 file node type 绑定的语言是不是 SQL 方言」。平台内置方言
+ * （MySQL / PostgreSQL / GenericSQL / SQL92）与补齐后的四个自注册方言都返回 true；
+ * 只有回落到基语言 `SQL` 的实现返回 false。
+ *
+ * **刻意不静态引用 `com.intellij.sql.*`**：本文件属常驻加载面，DatabaseTools 是可选依赖，
+ * 直接引用会让无 Database 插件的环境类加载失败。故按类名沿继承链判定。
+ */
+internal fun canCreateSqlPsiFor(language: Any?): Boolean = runCatching {
+    val lang = language as? com.intellij.lang.Language ?: return false
+    val fileNodeLanguage = com.intellij.lang.LanguageParserDefinitions.INSTANCE
+        .forLanguage(lang).fileNodeType.language
+    isSqlLanguageDialectInstance(fileNodeLanguage)
+}.getOrDefault(false)
+
+/** 按类名沿父类链判断（`SqlLanguageDialect` 是抽象类，不是接口）。 */
+private fun isSqlLanguageDialectInstance(language: Any?): Boolean {
+    var c: Class<*>? = language?.javaClass
+    while (c != null) {
+        if (c.name == "com.intellij.sql.dialects.SqlLanguageDialect") return true
+        c = c.superclass
+    }
+    return false
 }
 
 /** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。 */

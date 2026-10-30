@@ -40,6 +40,27 @@
                      implementationClass="cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect"/>
         <sql.dialect dbms="UNKNOWN" order="last"
                      implementationClass="cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect"/>
+
+        <!-- T-PreviewPsiDialect：上面四个自注册方言的 ParserDefinition——**必须成对存在**。
+
+             缺了这一半会怎样（262 真机实证，2026-10-30）：平台 SqlParserDefinitionBase.createFile
+             里有 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 的强转；没有本方言的
+             parserDefinition 时，平台沿语言链回落到基语言 SQL 的那份（其 file node type 绑的是
+             基类 SqlLanguage）→ ClassCastException → PSI 建不出来 → PsiManager.findFile 返回 null
+             → 预览预热降级成内存 PSI（表/列补全不可用），且 idea.log 里每次预览一条点名本插件的
+             SEVERE。平台内置方言 SQL / GenericSQL / SQL92 全是成对注册的，见
+             database-plugin.jar 的 plugin.xml:1253 / 1913 / 1925。
+
+             守卫：SqlDialectParserDefinitionPairingGuardTest 静态校验「每个 sql.dialect 必须有
+             同名 lang.parserDefinition」，加第五个方言时会先红。 -->
+        <lang.parserDefinition language="DM"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.DmParserDefinition"/>
+        <lang.parserDefinition language="GaussDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.GaussDbParserDefinition"/>
+        <lang.parserDefinition language="HighGo"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.HighGoParserDefinition"/>
+        <lang.parserDefinition language="Vastbase"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.VastbaseParserDefinition"/>
     </extensions>
 
     <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu

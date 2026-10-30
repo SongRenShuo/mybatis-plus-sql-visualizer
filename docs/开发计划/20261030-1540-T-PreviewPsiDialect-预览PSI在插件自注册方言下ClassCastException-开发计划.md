@@ -161,3 +161,46 @@ class GaussDbParserDefinition : Sql92ParserDefinition()   // 或 SqlParserDefini
 ## 七、实施记录
 
 （待实施后回填：P-1~P-6 实测结论、变更清单、定向读数、反向验证、未闭环项）
+
+### 7.1 P-1~P-6 实测结论（2026-10-30）
+
+| 前提 | 结论 |
+|---|---|
+| **P-1** `Sql92ParserDefinition` 可直接继承 | **不成立**。`javap` 实证它和 `GenericParserDefinition` 都是 `final`。改照 `GenericParserDefinition` 的**实现内容**自己派生：继承 `SqlParserDefinitionBase` + 委托一个 `Sql92ParserDefinition` 实例（lexer / parser / elementFactory 三处） |
+| **P-2** 补注册后 CCE 消失 | **成立**。反向验证：摘掉 GaussDB 那条注册，DB 通道用例直接复现 `ClassCastException`（`PlatformSqlDialectRegistrationTest.kt:119`）；还原后复绿 |
+| **P-3** DM/HighGo/Vastbase 同撞 | **成立（同源）**。DB 通道用例对四个语言循环建 PSI，四者共用同一注册形态与同一修复 |
+| **P-4** 262 与 2024.3 的 createFile 同形 | **成立**。262 真机栈落在 `createFile:90`；2024.3 制品字节码第 90 行前后正是 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 的 checkcast |
+| **P-5** 双注册不会报 duplicate EP | **成立**。`testDbPlatformDialect` 沙盒正常加载四个 `lang.parserDefinition`，无重复注册告警 |
+| **P-6** 历史残留文件是放大器 | **未做**（本轮不扩范围）。当日日志确实有一次对 16 个历史预览文件的重解析，但那是映射变更的正常行为；目录清理另立候选 |
+
+### 7.2 变更清单
+
+| 文件 | 变更 |
+|---|---|
+| `sql/SqlFamilyParserDefinitions.kt` | **新增**。`MpvSqlFamilyParserDefinition`（file node type 绑本方言语言；lexer/parser/elementFactory 委托 `Sql92ParserDefinition`）+ 四个方言子类 |
+| `META-INF/database-optional.xml` | 四个 `<lang.parserDefinition>` 成对补齐，附「为什么必须成对」的注释 |
+| `ui/SqlPreviewPanelEditorLifecycle.kt` | ①`mapPreviewDialectBeforePsi` 增加映射前「可建 PSI」探测（`canCreateSqlPsiFor`，按类名沿父类链判 `SqlLanguageDialect`，不静态引用 DatabaseTools）；②两处 `PsiManager.findFile` 包 `runCatching`，平台契约异常降为带栈 WARN |
+| `convention/SqlDialectParserDefinitionPairingGuardTest.kt` | **新增**根因守卫（静态配对扫描）+ 登记到 `GuardSelfTestCoverageMetaGuardTest` |
+| `database/PlatformSqlDialectRegistrationTest.kt` | 新增 `testPluginDialectLanguagesCanCreatePsiWithoutClassCastException`（DB 通道，四语言真建 PSI） |
+| `docs/架构设计/03-开发与测试指南.md` | 「新增数据库方言」清单补第 12 步「平台 SQL 方言注册必须成对」 |
+| `CHANGELOG.md` / `docs/变更记录.md` | `[Unreleased]` Fixed 段 + 变更记录一行 |
+
+### 7.3 定向读数
+
+- `SqlDialectParserDefinitionPairingGuardTest`：**2 / 0 / 0 / 0**
+- `testDbPlatformDialect`（含新增 PSI 用例）：**3 / 0 / 0 / 0**
+- 主代码 `compileKotlin` BUILD SUCCESSFUL；新增类已落 `build/classes/.../sql/*ParserDefinition.class`
+
+### 7.4 反向验证（两次读数在案）
+
+| 动作 | 读数 |
+|---|---|
+| 摘掉 GaussDB 的 `<lang.parserDefinition>` | 静态守卫 **2 例 1 红**（「每个自注册方言都必须有配套的 lang parserDefinition」）；DB 通道 **3 例 1 红**，失败形态正是 `ClassCastException`（`PlatformSqlDialectRegistrationTest.kt:119`） |
+| 还原注册 | 两者复绿（静态 2/0、DB 3/0） |
+
+### 7.5 未闭环
+
+- **runIde 真机复验未做**：需在沙盒 + `mybatis-plus-demo`（`-Pgaussdb`）双击日志条目，确认①横幅不再出现、②`idea.log` 中该 CCE 计数为 0、③补全能列出 `t_order` / `sys_config` / `department`
+- 全量 `testShards` 与 `verifyGate` 三目标：动了 `lang.parserDefinition` 这个平台核心 EP，属「大改动」判据，合流/发版前必须补跑
+- P-6（历史预览残留文件的清理）未做
+

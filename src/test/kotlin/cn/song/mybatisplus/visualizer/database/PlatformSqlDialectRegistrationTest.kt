@@ -94,4 +94,38 @@ class PlatformSqlDialectRegistrationTest : BasePlatformTestCase() {
             available.first { it.id == "Vastbase" }.displayName,
         )
     }
+
+    /**
+     * T-PreviewPsiDialect 回归：**这四个语言的 PSI 必须真的建得出来**。
+     *
+     * 真机缺陷（2026-10-30，262）：只注册 `<sql.dialect>` 而不注册 `<lang.parserDefinition>` 时，
+     * 平台回落到基语言 `SQL` 的 parser definition，其 file node type 绑的是基类 `SqlLanguage`，
+     * 于是 `SqlParserDefinitionBase.createFile` 里的
+     * `(SqlLanguageDialect) getFileNodeType().getLanguage()` 抛 `ClassCastException`，
+     * PSI 建不出来 → `PsiManager.findFile` 返回 null → 预览预热降级（表/列补全不可用）。
+     *
+     * 这里用 `PsiFileFactory.createFileFromText(名字, 该方言语言, sql)` —— 它走的就是
+     * `LanguageParserDefinitions.forLanguage(语言).createFile(...)` 那条路，**同步、不涉映射时序**，
+     * 因此可稳定复现：摘掉 `database-optional.xml` 里对应的 `<lang.parserDefinition>`，本用例必红。
+     */
+    fun testPluginDialectLanguagesCanCreatePsiWithoutClassCastException() {
+        val ids = SqlDialectMappings.getInstance(project).availableValues.map { it.id }
+        for (id in listOf("DM", "GaussDB", "HighGo", "Vastbase")) {
+            assertTrue("前置失败：平台可用方言里没有 $id（实际：$ids）", ids.contains(id))
+            val language = com.intellij.lang.Language.findLanguageByID(id)
+            assertNotNull("Language.findLanguageByID('$id') 为 null —— 方言语言未注册", language)
+            // 缺 lang.parserDefinition 时这一行抛 ClassCastException（SqlLanguage → SqlLanguageDialect）
+            val psi = com.intellij.psi.PsiFileFactory.getInstance(project)
+                .createFileFromText("mpsql-preview-psi-$id.sql", language!!, "select 1 from t_order")
+            assertEquals(
+                "$id 的 PSI 语言应等于该方言语言本身（说明用的是本方言的 parserDefinition，而非基语言 SQL）",
+                id,
+                psi.language.id,
+            )
+            assertTrue(
+                "$id 的 PSI 应是 SQL 文件（SqlFile 派生），实际 ${psi.javaClass.name}",
+                psi is com.intellij.sql.psi.SqlFile,
+            )
+        }
+    }
 }
