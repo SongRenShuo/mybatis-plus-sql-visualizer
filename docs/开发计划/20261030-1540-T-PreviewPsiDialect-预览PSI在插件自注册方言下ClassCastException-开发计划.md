@@ -204,3 +204,23 @@ class GaussDbParserDefinition : Sql92ParserDefinition()   // 或 SqlParserDefini
 - 全量 `testShards` 与 `verifyGate` 三目标：动了 `lang.parserDefinition` 这个平台核心 EP，属「大改动」判据，合流/发版前必须补跑
 - P-6（历史预览残留文件的清理）未做
 
+### 7.6 `verifyGate` 暴露的跨版本类缺失（本轮补修）
+
+首轮 `verifyGate` 结果：**IU-243 Compatible，IU-253 / IU-262 各 1 个 compatibility problem**：
+
+```
+Constructor cn.song.mybatisplus.visualizer.sql.MpvSqlFamilyParserDefinition.<init>(SqlLanguageDialect, String)
+references an unresolved class com.intellij.sql.psi.stubs.SqlFileElementType.
+This can lead to NoSuchClassError exception at runtime.
+```
+
+即 `SqlFileElementType` 只在 2024.3（编译基线）存在，**253 / 262 已删除整个 `com.intellij.sql.psi.stubs` 包**（253 制品里只剩一个 `hsql/psi/stubs/HsqlStubRegistryExtension`）。这类缺口本仓库测试跑不出来——编译期有、运行期没有，只有 verifier 按目标 IDE 逐个解析才报。
+
+**修法**：不再引用该类，改用核心（三个版本都在）的
+`com.intellij.psi.tree.IFileElementType(String, Language)` 直接构造文件根元素类型。查证过程：
+- `StubFileElementType` 是抽象类且要求实现 StubSerializer 四件套（`getExternalId` / `serialize` / `deserialize` / `indexStub`）——用不上，预览临时文件不建存根；
+- `IFileElementType` 在这个版本线上**本身就是抽象类**（不是接口），恰好带 `(String, Language)` 构造器 → 一行继承即可。
+
+代价：文件根元素类型不是 SQL 侧类型，不参与 SQL 存根索引——对「预览临时文件的瞬时 PSI」没有影响，DB 通道的 PSI 用例仍绿。
+
+

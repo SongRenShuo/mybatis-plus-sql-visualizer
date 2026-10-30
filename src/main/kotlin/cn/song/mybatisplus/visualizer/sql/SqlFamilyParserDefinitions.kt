@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect
 import cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect
 import cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect
 import cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect
+import com.intellij.lang.Language
 import com.intellij.lang.PsiParser
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.project.Project
@@ -12,7 +13,6 @@ import com.intellij.sql.dialects.SqlLanguageDialect
 import com.intellij.sql.dialects.base.SqlElementFactoryBase
 import com.intellij.sql.dialects.base.SqlParserDefinitionBase
 import com.intellij.sql.dialects.sql92.Sql92ParserDefinition
-import com.intellij.sql.psi.stubs.SqlFileElementType
 
 /**
  * T-PreviewPsiDialect：四个自注册方言的 `lang.parserDefinition`。
@@ -54,7 +54,15 @@ open class MpvSqlFamilyParserDefinition(
     fileTypeName: String,
 ) : SqlParserDefinitionBase() {
 
-    private val fileElementType: IFileElementType = SqlFileElementType(fileTypeName, dialect)
+    /**
+     * 文件根元素类型。**刻意用核心 `util` 里的 [StubFileElementType]，不用
+     * `com.intellij.sql.psi.stubs.SqlFileElementType`**：后者只在 2024.3 基线存在，253 / 262 已移除该包
+     * （`verifyGate` 实测报「Constructor … references an unresolved class
+     * com.intellij.sql.psi.stubs.SqlFileElementType. This can lead to NoSuchClassError at runtime」，
+     * 243 Compatible / 253 与 262 各 1 problem）。平台 `SqlParserDefinitionBase.createFile` 只用
+     * `getFileNodeType().getLanguage()`，核心类型足够；预览临时文件是瞬时 PSI、不参与 SQL 存根索引。
+     */
+    private val fileElementType: IFileElementType = MpvSqlFileElementType(fileTypeName, dialect)
 
     /** 平台只读一次并缓存（`SqlParserDefinitionBase.getElementFactory` 内有 volatile 缓存）。 */
     private val sql92: Sql92ParserDefinition by lazy { Sql92ParserDefinition() }
@@ -68,8 +76,7 @@ open class MpvSqlFamilyParserDefinition(
     override fun createParser(project: Project): PsiParser = sql92.createParser(project)
 }
 
-/** 达梦（`database-optional.xml` 的 `sql.dialect` 语言 id `DM`）。 */
-class DmParserDefinition : MpvSqlFamilyParserDefinition(DmSqlDialect.INSTANCE, "MPV_DM_SQL_FILE")
+/** 达梦（`database-optional.xml` 的 `sql.dialect` 语言 id `DM`）。 */class DmParserDefinition : MpvSqlFamilyParserDefinition(DmSqlDialect.INSTANCE, "MPV_DM_SQL_FILE")
 
 /** GaussDB（语言 id `GaussDB`）。 */
 class GaussDbParserDefinition : MpvSqlFamilyParserDefinition(GaussDbSqlDialect.INSTANCE, "MPV_GAUSSDB_SQL_FILE")
@@ -79,3 +86,16 @@ class HighGoParserDefinition : MpvSqlFamilyParserDefinition(HighGoSqlDialect.INS
 
 /** 海量 Vastbase（语言 id `Vastbase`）。 */
 class VastbaseParserDefinition : MpvSqlFamilyParserDefinition(VastbaseSqlDialect.INSTANCE, "MPV_VASTBASE_SQL_FILE")
+
+/**
+ * 绑定本方言语言的 `IFileElementType`——**用核心 `IElementType(String, Language)` 直接实现**
+ * （`IElementType` 是抽象类，`IFileElementType` 是纯标记接口），不碰 SQL 侧的
+ * `com.intellij.sql.psi.stubs.SqlFileElementType`：那个类只在 2024.3 基线存在，253 / 262 已删除，
+ * 静态引用会被 `verifyGate` 判为「unresolved class → NoSuchClassError at runtime」
+ * （实测 243 Compatible / 253 与 262 各 1 problem）。
+ *
+ * 也不用 `StubFileElementType`：它要另实现 StubSerializer 四件套（serialize / deserialize /
+ * indexStub / getExternalId），而预览临时文件是**瞬时 PSI**——不建存根、不进索引，不需要这些能力。
+ */
+private class MpvSqlFileElementType(debugName: String, language: Language) :
+    com.intellij.psi.tree.IFileElementType(debugName, language)
