@@ -48,7 +48,24 @@ val mpvTestLaneLimiter: Provider<MpvTestLaneLimiterService> = run {
         if (overrideFreeGb != null) {
             mpv.watermark.MemoryWatermarkProbe.laneFor(overrideFreeGb, reserveGb, "$context/override", logger)
         } else {
-            mpv.watermark.MemoryWatermarkProbe.pickLane(logger, reserveGb, context)
+            // 配置期探针必须走 providers.exec（CC 官方支持的外部进程通道）——用 ProcessBuilder
+            // 会触发「external process started at configuration time」，Gradle 9 直接把构建判失败
+            // （20261030 权威 gate 轮实测：CC problems found → BUILD FAILED）。
+            val raw = runCatching {
+                providers.exec {
+                    commandLine(mpv.watermark.MemoryWatermarkProbe.probeScript())
+                }.standardOutput.asText.get()
+            }.getOrElse { e ->
+                logger.warn("mpv-test-lane: 配置期水位探针失败（${e.javaClass.simpleName}），回落静态缺省")
+                ""
+            }
+            val reading = mpv.watermark.MemoryWatermarkProbe.parse(raw)
+            if (reading == null) {
+                logger.warn("mpv-test-lane: 水位探针不可用，回落静态缺省（fail-open）")
+                null
+            } else {
+                mpv.watermark.MemoryWatermarkProbe.laneFor(reading.freeCommitGb, reserveGb, context, logger)
+            }
         }
     } else {
         null

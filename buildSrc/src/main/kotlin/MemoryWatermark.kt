@@ -36,7 +36,8 @@ object MemoryWatermarkProbe {
         val topProcesses: List<String>,
     )
 
-    fun probe(logger: Logger): Reading? = try {
+    /** PowerShell 单行脚本（base64 UTF-16LE 下发，零转义歧义；VerifierHomeGuard 同款）。 */
+    fun probeScript(): List<String> {
         val ps = (
             "\$os = Get-CimInstance Win32_OperatingSystem; " +
                 "Write-Output ('totalGB=' + [math]::Round(\$os.TotalVirtualMemorySize/1MB,2)); " +
@@ -47,7 +48,38 @@ object MemoryWatermarkProbe {
                 "ForEach-Object { Write-Output ('proc=' + \$_.PId + '|' + \$_.PName + '|' + \$_.PMC) }"
         )
         val encoded = Base64.getEncoder().encodeToString(ps.toByteArray(Charsets.UTF_16LE))
-        val proc = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+        return listOf("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+    }
+
+    /**
+     * 解析探针文本（纯函数，CC 通道与 ProcessBuilder 通道共用）。
+     * CLIXML 清洗：PS 5.1 重定向 stdout 时混入序列化噪声行。
+     */
+    fun parse(rawText: String): Reading? {
+        val lines = rawText.lineSequence()
+            .filter { it != "#< CLIXML" && !it.startsWith("<Obj ") && it.isNotBlank() }
+            .toList()
+        val total = lines.firstOrNull { it.startsWith("totalGB=") }?.removePrefix("totalGB=")?.trim()?.toDoubleOrNull()
+        val free = lines.firstOrNull { it.startsWith("freeGB=") }?.removePrefix("freeGB=")?.trim()?.toDoubleOrNull()
+        if (total == null || free == null) return null
+        val tops = lines.filter { it.startsWith("proc=") }.map { line ->
+            val parts = line.removePrefix("proc=").split('|')
+            val mb = parts.getOrNull(2)?.trim()?.toDoubleOrNull()
+            val gb = if (mb == null) "?" else "%.1f".format(mb / 1024)
+            "${parts.getOrNull(1) ?: "?"}(${parts.getOrNull(0) ?: "?"}) commit≈${gb}GB"
+        }
+        return Reading(total, free, tops)
+    }
+
+    /**
+     * **执行期**探针（doFirst 内用）：直接起子进程。
+     * 注意：只能在任务动作里调用——配置期用 ProcessBuilder 会触发配置缓存
+     * 「external process started at configuration time」，Gradle 9 直接把构建判失败
+     * （20261030 权威 gate 轮实测，见经验总结坑 4）。配置期请走 mpv-testing 里的
+     * `providers.exec` 通道（CC 官方支持）再交给 [parse]。
+     */
+    fun probe(logger: Logger): Reading? = try {
+        val proc = ProcessBuilder(probeScript())
             .redirectErrorStream(true).start()
         val finished = proc.waitFor(30, TimeUnit.SECONDS)
         if (!finished) {
@@ -55,23 +87,10 @@ object MemoryWatermarkProbe {
             proc.destroyForcibly()
             null
         } else {
-            // CLIXML 清洗（VerifierHomeGuard 同款）：PS 5.1 重定向 stdout 时混入序列化噪声行
-            val lines = proc.inputStream.readBytes().decodeToString()
-                .lineSequence().filter { it != "#< CLIXML" && !it.startsWith("<Obj ") && it.isNotBlank() }
-                .toList()
-            val total = lines.firstOrNull { it.startsWith("totalGB=") }?.removePrefix("totalGB=")?.trim()?.toDoubleOrNull()
-            val free = lines.firstOrNull { it.startsWith("freeGB=") }?.removePrefix("freeGB=")?.trim()?.toDoubleOrNull()
-            val tops = lines.filter { it.startsWith("proc=") }.map { line ->
-                val parts = line.removePrefix("proc=").split('|')
-                val mb = parts.getOrNull(2)?.trim()?.toDoubleOrNull()
-                val gb = if (mb == null) "?" else "%.1f".format(mb / 1024)
-                "${parts.getOrNull(1) ?: "?"}(${parts.getOrNull(0) ?: "?"}) commit≈${gb}GB"
-            }
-            if (total == null || free == null) {
-                logger.warn("memory watermark: 探针输出解析失败（${lines.take(3)}），按 fail-open 降级")
+            val text = proc.inputStream.readBytes().decodeToString()
+            parse(text) ?: run {
+                logger.warn("memory watermark: 探针输出解析失败，按 fail-open 降级")
                 null
-            } else {
-                Reading(total, free, tops)
             }
         }
     } catch (e: Exception) {
