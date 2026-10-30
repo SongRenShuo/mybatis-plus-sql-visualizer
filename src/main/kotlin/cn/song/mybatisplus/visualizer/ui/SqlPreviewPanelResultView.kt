@@ -553,6 +553,14 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // T-DialectStatusLiveRefresh：方言决策与其余分段分开缓存——执行/绑定后只重组方言段
     // （recomposeDialectStatusText），不重跑本函数的警示/横幅/错误按钮全链。
     currentDialectDecision = result.dialectDecision
+        // 并入 t-sql-insight 裁决：无证据中性结果由 withResolvedDialect 返回原实例（预览投递
+        // 失效机制按 current 身份判新旧），模型不再落空决策；但 T-DialectInferFix 的 FALLBACK
+        // 披露语义不变——状态行仍要「补记一条」。生产链（状态行/执行闸/刷新）全部读本面板
+        // 变量（current.dialectDecision 无直接读者），在此兜底 resolve 补齐（只读缓存，EDT 安全）。
+        ?: cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.resolve(
+            project = project,
+            sqlText = result.sql,
+        )
     metaCoreText = meta + warningLine
     metaLineDigest = stackInline
     metaPerfSegments = buildPerfSegments(result)

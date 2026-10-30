@@ -54,9 +54,11 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             panel.showResult(result)
             waitForEdt()
             val stored = requireNotNull(panel.currentForTest())
-            // T-DialectInferFix：面板在结果缺省方言决策时补记一条（含 FALLBACK 披露），故按「除决策外逐字一致」比对
+            // T-DialectInferFix：面板在结果缺省方言决策时补记一条（含 FALLBACK 披露），故按「除决策外逐字一致」比对。
+            // 并入 t-sql-insight 后披露决策落面板变量（模型保持原实例身份，供投递失效机制判新旧；
+            // 生产链全部读 currentDialectDecision），断言随实现语义迁移。
             assertEquals("showResult 应保存当前结果", result, stored.copy(dialectDecision = null))
-            assertNotNull("showResult 应记录方言决策", stored.dialectDecision)
+            assertNotNull("showResult 应记录方言决策（披露走面板变量）", panel.currentDialectDecision)
             val editor = panel.editorForTest()
             assertNotNull("应挂载编辑器视图", editor)
             val text = editor!!.document.text
@@ -82,7 +84,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             assertTrue("大结果应含 FROM big_table", editorText.contains("FROM big_table"))
             val stored = requireNotNull(panel.currentForTest())
             assertEquals("current 应保存大结果", result, stored.copy(dialectDecision = null))
-            assertNotNull("current 应记录方言决策", stored.dialectDecision)
+            assertNotNull("current 应记录方言决策（披露走面板变量）", panel.currentDialectDecision)
         } finally {
             panel.clear()
             panel.dispose()
