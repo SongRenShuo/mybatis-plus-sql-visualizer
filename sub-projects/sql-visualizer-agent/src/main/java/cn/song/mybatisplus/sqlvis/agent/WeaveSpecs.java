@@ -104,6 +104,23 @@ final class WeaveSpecs {
                 // 与 pgjdbc 无继承关系），包形 com.highgo.jdbc.jdbc.Pg* 与华为 GaussDB 商用驱动同构
                 "com.highgo.jdbc.jdbc.PgStatement",
                 "com.highgo.jdbc.jdbc.PgPreparedStatement");
+        // MariaDB（mariadb-java-client 3.3.3，T-CaptureCoverage 券 01）：3.x 全部重写为自有类
+        // （`org.mariadb.jdbc.Statement` / `ClientPreparedStatement` / `ServerPreparedStatement`
+        // 均 implements java.sql.* 而非继承 MySQL `StatementImpl`，包名与 com.mysql 无交集），
+        // 故必须单列——只登记 connect 面时 attach 后一条 SQL 不出。三个类各自覆盖
+        // execute/executeQuery/executeUpdate/addBatch/clearBatch/executeBatch 全套（javap 实测），
+        // 与 statementFace 全形态一致。
+        putSpec(statementFace,
+                "org.mariadb.jdbc.Statement",
+                "org.mariadb.jdbc.ClientPreparedStatement",
+                "org.mariadb.jdbc.ServerPreparedStatement");
+        // SQLite（sqlite-jdbc 3.50.3.0，T-CaptureCoverage 券 02）：`JDBC3Statement` 自有
+        // execute/executeQuery/executeUpdate/executeLargeUpdate 全族，`JDBC3PreparedStatement`
+        // 覆盖 PS 无参族。**无 Callable 自有 execute 族**（`JDBC3Connection.prepareCall` 返回
+        // 的 `JDBC3PreparedStatement` 子类不新增 execute 形态），故不单列。
+        putSpec(statementFace,
+                "org.sqlite.jdbc3.JDBC3Statement",
+                "org.sqlite.jdbc3.JDBC3PreparedStatement");
         // OceanBase Connector/J（oceanbase-client 2.4.19）：与 MySQL 协议兼容但类体系自成一套
         // （com.oceanbase.jdbc.*，不复用 com.mysql.cj.*），URL 前缀 `jdbc:oceanbase:` 唯一，故必须
         // 单列。OceanBaseStatement（纯语句，`implements java.sql.Statement, Cloneable`）自带
@@ -160,6 +177,11 @@ final class WeaveSpecs {
                 "com.kingbase8.jdbc.KbConnection",
                 "cn.com.vastbase.jdbc.PgConnection",
                 "com.highgo.jdbc.jdbc.PgConnection");
+        // MariaDB 连接（T-CaptureCoverage 券 01）：`org.mariadb.jdbc.Connection` 是 3.x 自有连接类
+        // （非 MySQL ConnectionImpl 子类），prepareStatement/prepareCall 出口在此登记 PS→SQL。
+        putSpec(prepareFace, "org.mariadb.jdbc.Connection");
+        // SQLite 连接（T-CaptureCoverage 券 02）：`JDBC3Connection` 自有 prepareStatement/prepareCall。
+        putSpec(prepareFace, "org.sqlite.jdbc3.JDBC3Connection");
         // OceanBase 连接（T-CaptureCoverage 券 03）：`OceanBaseConnection implements ConnectionImpl`
         // 且自有 6 个 prepareStatement 出口 + 3 个 prepareCall 出口（javap 实测），非 MySQL
         // ConnectionImpl 子类，故 prepare 面单列。

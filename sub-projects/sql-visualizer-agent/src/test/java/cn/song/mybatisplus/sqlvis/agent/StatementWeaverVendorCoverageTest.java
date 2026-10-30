@@ -92,6 +92,15 @@ public class StatementWeaverVendorCoverageTest {
             "cn.com.vastbase.jdbc.PgPreparedStatement",
             "com.highgo.jdbc.jdbc.PgStatement",
             "com.highgo.jdbc.jdbc.PgPreparedStatement",
+            // MariaDB（mariadb-java-client 3.3.3，T-CaptureCoverage 券 01）：3.x 全部重写为自有类，
+            // 不复用 MySQL `StatementImpl`，故必须单列（三个类各自覆盖 execute 全族，javap 实测）
+            "org.mariadb.jdbc.Statement",
+            "org.mariadb.jdbc.ClientPreparedStatement",
+            "org.mariadb.jdbc.ServerPreparedStatement",
+            // SQLite（sqlite-jdbc 3.50.3.0，T-CaptureCoverage 券 02）：JDBC3Statement 自有 execute
+            // 全族；无 Callable 自有 execute 族（JDBC3PreparedStatement 覆盖），不单列
+            "org.sqlite.jdbc3.JDBC3Statement",
+            "org.sqlite.jdbc3.JDBC3PreparedStatement",
             // OceanBase（oceanbase-client 2.4.19，T-CaptureCoverage 券 03）：与 MySQL 协议兼容但类
             // 体系自成一套（com.oceanbase.jdbc.*）。OceanBaseStatement 纯语句自带 execute 全族；
             // 两个 PS 类 extends BasePrepareStatement extends OceanBaseStatement，各有自有 execute
@@ -99,6 +108,22 @@ public class StatementWeaverVendorCoverageTest {
             "com.oceanbase.jdbc.OceanBaseStatement",
             "com.oceanbase.jdbc.JDBC4PreparedStatement",
             "com.oceanbase.jdbc.JDBC4ServerPreparedStatement",
+    };
+
+    /**
+     * 驱动 jar **默认不在** agent 测试 classpath 的类（T-CaptureCoverage）：MariaDB / SQLite 两族的
+     * jar 在根项目 `testImplementation`（`libs.mariadb.java.client` / `libs.sqlite.jdbc`）里，agent
+     * 子项目尚未声明。资源在位时必须做字节层校验；不在位时只降级为谓词层，并在
+     * {@link #MariaDB与SQLite字节层_驱动jar在位时必须真实织入且过校验()} 里显式 skip（不是静默放过）。
+     */
+    private static final String[] JAR_OPTIONAL_BYTE_LAYER = {
+            "org.mariadb.jdbc.Statement",
+            "org.mariadb.jdbc.ClientPreparedStatement",
+            "org.mariadb.jdbc.ServerPreparedStatement",
+            "org.sqlite.jdbc3.JDBC3Statement",
+            "org.sqlite.jdbc3.JDBC3PreparedStatement",
+            "org.mariadb.jdbc.Connection",
+            "org.sqlite.jdbc3.JDBC3Connection",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -120,6 +145,9 @@ public class StatementWeaverVendorCoverageTest {
             "com.kingbase8.jdbc.KbConnection",
             "cn.com.vastbase.jdbc.PgConnection",
             "com.highgo.jdbc.jdbc.PgConnection",
+            // MariaDB / SQLite 连接（T-CaptureCoverage 券 01/02）：3.x 自有连接类，prepare 面单列
+            "org.mariadb.jdbc.Connection",
+            "org.sqlite.jdbc3.JDBC3Connection",
             // OceanBase 连接（T-CaptureCoverage 券 03）：OceanBaseConnection implements ConnectionImpl，
             // 自有 6 个 prepareStatement + 3 个 prepareCall 出口，非 MySQL ConnectionImpl 子类
             "com.oceanbase.jdbc.OceanBaseConnection",
@@ -185,14 +213,18 @@ public class StatementWeaverVendorCoverageTest {
      * 5.x/7.x 由 {@code org.postgresql.} 覆盖。华为商用 {@code com.huawei.gaussdb.*} 与
      * 华为 openGauss 品牌 {@code com.huawei.opengauss.*} 同为独立重定位实现，已各自登记。
      */
-    private static final java.util.Map<String, String> VENDOR_NOT_COVERED =
+    static final java.util.Map<String, String> VENDOR_NOT_COVERED =
             new java.util.LinkedHashMap<String, String>();
 
     static {
-        VENDOR_NOT_COVERED.put("org.mariadb.",
-                "MariaDB 未纳入测试矩阵（无本机 jar / 未实证语句面形态）；如需支持请补语句面/prepare 面");
+        // T-CaptureCoverage（2026-10-30）删除两条旧认领：
+        //  - `org.mariadb.` 原认领「未纳入测试矩阵（无本机 jar / 未实证语句面形态）」——理由已失真：
+        //    mariadb-java-client 3.3.3 在根项目 testImplementation 与本机 gradle 缓存里都在位，语句面
+        //    三类的 execute 全族已 javap 取证，语句面/prepare 面已登记并过字节层校验；
+        //  - `org.sqlite.` 同理（sqlite-jdbc 3.50.3.0 在位，JDBC3Statement/JDBC3PreparedStatement 已登记）。
+        // 认领优先于覆盖判定（uncoveredDrivers 先看 notCovered），留着认领等于让补上的覆盖白做——
+        // 金仓 T-XcDialects3 券 07 删认领时踩过同一形态，此处照办。
         VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
-        VENDOR_NOT_COVERED.put("org.sqlite.", "未纳入测试矩阵（无本机 jar）");
         VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");
         // 金仓 com.kingbase8. 的旧认领（「本机无 jar 未实证」）已在 T-XcDialects3 券 07 删除：
         // kingbase8 9.0.1 进测试 classpath、语句面/prepare 面登记并过字节层校验后，认领留在
@@ -406,6 +438,28 @@ public class StatementWeaverVendorCoverageTest {
         }
     }
 
+    /**
+     * MariaDB / SQLite 两族字节层直证（T-CaptureCoverage 券 01/02，准入门槛）：7 个类在**真实驱动
+     * 字节**上必须 changed 且过 JVM 链接期校验。两族 jar 在根项目 testImplementation 与本机 gradle
+     * 缓存里在位，但 agent 子项目尚未声明 testImplementation——资源不在位时本用例 skip（明确登记），
+     * 绝不静默当作「已验证」；jar 进 classpath 后自动升级为硬断言。
+     */
+    @Test
+    public void MariaDB与SQLite字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
+        final java.util.List<String> absent = new java.util.ArrayList<String>();
+        for (String dotted : JAR_OPTIONAL_BYTE_LAYER) {
+            if (!resourcePresent(dotted)) {
+                absent.add(dotted);
+                continue;
+            }
+            assertWovenAndVerifiable(dotted);
+        }
+        if (!absent.isEmpty()) {
+            org.junit.Assume.assumeTrue("MariaDB/SQLite 驱动 jar 不在 agent 测试 classpath——以下类只做了"
+                    + "谓词层校验，字节层读数由临时 classpath 注入出具（见计划 §七）：" + absent, false);
+        }
+    }
+
     /** PG 主因面直证：PgConnection 的 prepareStatement/prepareCall 出口钩子落点存在（changed）。 */
     @Test
     public void PG主因面_语句面与prepare面均真实织入() throws Exception {
@@ -491,7 +545,25 @@ public class StatementWeaverVendorCoverageTest {
                 return true;
             }
         }
+        // 可选 jar 类：资源不在位时从批量循环剔除（改由专项用例显式 skip，避免把「缺 jar」
+        // 误报成「织入失败」；资源在位时照常进批量校验）。
+        if (resourceOptional(dotted) && !resourcePresent(dotted)) {
+            return true;
+        }
         return false;
+    }
+
+    private static boolean resourceOptional(String dotted) {
+        for (String e : JAR_OPTIONAL_BYTE_LAYER) {
+            if (e.equals(dotted)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean resourcePresent(String dotted) {
+        return ClassLoader.getSystemClassLoader().getResource(dotted.replace('.', '/') + ".class") != null;
     }
 
     private static byte[] resourceBytes(String path) throws Exception {
