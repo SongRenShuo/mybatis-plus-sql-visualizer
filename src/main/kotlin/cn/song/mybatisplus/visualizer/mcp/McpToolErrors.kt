@@ -35,6 +35,12 @@ object McpToolErrors {
     /** 源码定位失败（文件/行号无可识别 SQL 源）。 */
     const val SOURCE_NOT_FOUND = "SOURCE_NOT_FOUND"
 
+    /**
+     * T-TemplateHook：外部模板渲染失败（命令模板非法/启动失败/超时/非零退出/空输出）。
+     * 只由用户配置的外部渲染命令产生；原生 13 类触发面链路永不复用此码。
+     */
+    const val EXTERNAL_RENDER_FAILED = "EXTERNAL_RENDER_FAILED"
+
     /** 工具虽仍可被已知名称直接调用，但当前设置已禁用。 */
     const val TOOL_DISABLED = "TOOL_DISABLED"
 
