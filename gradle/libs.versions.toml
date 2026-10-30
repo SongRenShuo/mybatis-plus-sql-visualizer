@@ -17,6 +17,13 @@ ojdbc11 = "23.3.0.23.09"
 highgo-jdbc = "6.2.5"
 vastbase-jdbc = "2.16.1v"
 kingbase-jdbc = "9.0.1"
+# T-DialectDriverGap（2026-10-30）：补齐外部实例验证缺的三族驱动——达梦 / openGauss / OceanBase。
+# openGauss 必须取 `-og` 变体：无后缀的 opengauss-jdbc 是 pgjdbc 改名包（含 org/postgresql/*），
+# 会在测试 classpath 上遮蔽真 PG 驱动；`-og` 才是 org.opengauss.Driver（实测两 jar 的
+# org/postgresql 条目数：-og = 0，无后缀 > 0）。三件均仅测试 classpath，插件运行时零依赖不变。
+dameng-jdbc = "8.1.3.140"
+opengauss-jdbc = "6.0.0-og"
+oceanbase-client = "2.4.19"
 # T-DialectLabMatrix：方言 Lab 配方一致性守卫的 YAML 解析（仅测试 classpath）
 snakeyaml = "2.2"
 
@@ -42,6 +49,9 @@ ojdbc11 = { module = "com.oracle.database.jdbc:ojdbc11", version.ref = "ojdbc11"
 highgo-jdbc = { module = "com.highgo:HgdbJdbc", version.ref = "highgo-jdbc" }
 vastbase-jdbc = { module = "cn.com.vastdata:vastbase-jdbc", version.ref = "vastbase-jdbc" }
 kingbase-jdbc = { module = "cn.com.kingbase:kingbase8", version.ref = "kingbase-jdbc" }
+dameng-jdbc = { module = "com.dameng:DmJdbcDriver18", version.ref = "dameng-jdbc" }
+opengauss-jdbc = { module = "org.opengauss:opengauss-jdbc", version.ref = "opengauss-jdbc" }
+oceanbase-client = { module = "com.oceanbase:oceanbase-client", version.ref = "oceanbase-client" }
 # T-DialectLabMatrix：DockerComposeLabConsistencyTest 解析 docker-compose-dialects.yml（钉版本/
 # 端口/必填 env/healthcheck 四硬约束 + database-lab 文档一致性），不起 Docker 即可校验配方
 snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }

@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.sql.ORACLE_RESERVED
 import cn.song.mybatisplus.visualizer.sql.PG_RESERVED
 import cn.song.mybatisplus.visualizer.sql.SQLSERVER_RESERVED
 import cn.song.mybatisplus.visualizer.sql.verify.DialectVerifySupport.UpsertMode
+import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.testcontainers.DockerClientFactory
@@ -160,7 +161,8 @@ class DialectDockerVerificationTest {
                 jdbcUrlTemplate = container.jdbcUrl,
                 dialect = cn.song.mybatisplus.visualizer.sql.OracleDialect,
                 upsertMode = UpsertMode.DEGRADE_ONLY,
-                multiRowValues = false, // Oracle 不支持多行 VALUES
+                // Oracle Free 23 实测支持多行 VALUES（12c 起；原注释「Oracle 不支持多行 VALUES」已过期）
+                multiRowValues = true,
             )
             DriverManager.getConnection(container.jdbcUrl, container.username, container.password).use { conn ->
                 DialectVerifySupport.runTcSuite(conn, spec)
@@ -178,7 +180,7 @@ class DialectDockerVerificationTest {
      * 外部实例验证入口（无容器依赖，连不上即跳过）：
      *
      * ```
-     * ./gradlew test --tests '*DialectDockerVerificationTest*' \
+     * ./gradlew test --tests '*DialectDockerVerificationTest*' --no-configuration-cache \
      *   -Dmpvs.dialect.jdbcUrl="jdbc:dm://host:5236" \
      *   -Dmpvs.dialect.user=SYSDBA -Dmpvs.dialect.password=... \
      *   -Dmpvs.dialect.name="DM（达梦）"
@@ -186,6 +188,15 @@ class DialectDockerVerificationTest {
      *
      * 方言取 [cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName]（名称与 Settings 下拉一致）；
      * 执行与容器/嵌入式完全相同的 TC 套件 + 保留字扫描——DM/KingBase 真实环境验证的标准流程。
+     *
+     * **必须带 `--no-configuration-cache`**（T-SuiteIdempotent，2026-10-30）：`-Dmpvs.*` 的透传写在
+     * `buildSrc/.../mpv-testing.gradle.kts` 的 `tasks.test { System.getProperties()… }` 里，是**配置期**
+     * 读取——配置缓存命中时会原样复用上一次写入的 `systemProperty`，于是换库重跑仍在连**上一族**的
+     * URL，读数看起来「绿」但验的根本不是这次的目标库（假绿）。缓存未命中时又可能静默换值，读数不可
+     * 复现。外部实例验证一律关缓存。
+     *
+     * 无原生 upsert 的方言（Oracle / SQL Server / 达梦）由 [DialectVerifySupport.upsertModeOf] 自动
+     * 降级为只验纯 INSERT 路径；指向 12c 前的 Oracle 另加 `-Dmpvs.dialect.multiRowValues=false`。
      */
     @Test
     fun `外部实例_方言套件与保留字扫描`() {
@@ -195,12 +206,22 @@ class DialectDockerVerificationTest {
         val password = System.getProperty("mpvs.dialect.password")
         val dialectName = System.getProperty("mpvs.dialect.name") ?: "MySQL"
         val dialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName(dialectName)
+        // 防静默回退（T-SuiteIdempotent）：byName 对未知名称回退 MySQL，名称写错/中文参数被转码时
+        // 会拿 MySQL 方言去跑别的库 → 全绿但验错了方言。这里逐字核对，不命中直接失败。
+        assertEquals(
+            "方言名未逐字命中 DialectRegistry（会静默回退 MySQL，读数无效）：请求 [$dialectName] 实际 [${dialect.name}]",
+            dialectName,
+            dialect.name,
+        )
         val spec = DialectVerifySupport.EngineSpec(
             label = "$dialectName (external)",
             jdbcUrlTemplate = url,
             dialect = dialect,
-            upsertMode = UpsertMode.REAL,
-            multiRowValues = dialectName.startsWith("Oracle") || dialectName.startsWith("DM"),
+            // 由方言能力推导（不再硬编码 REAL）：无原生 upsert 的方言（Oracle/SQL Server/达梦）
+            // 只验降级纯 INSERT 路径，否则必然踩主键冲突并带崩整段保留字扫描
+            upsertMode = DialectVerifySupport.upsertModeOf(dialect),
+            // 默认按支持多行 VALUES 处理；指向 12c 前的 Oracle 用 -Dmpvs.dialect.multiRowValues=false
+            multiRowValues = System.getProperty("mpvs.dialect.multiRowValues")?.toBoolean() ?: true,
         )
         val conn: Connection = if (user != null) {
             DriverManager.getConnection(url, user, password)
@@ -215,6 +236,12 @@ class DialectDockerVerificationTest {
     }
 
     private fun assertSweepClean(label: String, total: Int, failures: List<String>) {
+        // 空扫即空绿（T-SuiteIdempotent）：词表为空时 failures 必然为空，绿读数毫无证据力。
+        // 现有 14 族最少 86 词（PG），下限取 50 足以拦住「词表没接上」的形态。
+        org.junit.Assert.assertTrue(
+            "$label 保留字清单仅 $total 个词——空扫即空绿，不能当证据",
+            total >= 50,
+        )
         org.junit.Assert.assertTrue(
             "$label 方言保留字扫描失败 ${failures.size}/$total 个词:\n" + failures.joinToString("\n"),
             failures.isEmpty(),
