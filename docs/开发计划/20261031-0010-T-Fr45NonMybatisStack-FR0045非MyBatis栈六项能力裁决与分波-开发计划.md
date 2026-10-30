@@ -187,4 +187,75 @@
 
 ## 八、实施记录
 
-（待回填——第一波动工后按券补读数与反向验证。）
+（第一波任务 A（T-Fr45DmGuard）待回填。）
+
+### 8.2 T-TraceDocExport 实施记录
+
+- 工作树：`mpsv-fr45-tracedoc` / 分支 `t-fr45-tracedoc`（基线 `4cd4ac35`）
+- 提交：`2ac30bba`（S1 组装器）、`b08be19d`（S3 TEXT 档快照）、`da4d0d56`（S2 出口与 i18n）
+
+**S1 留痕组装器（`share/format/TraceDocFormatter.kt`，纯逻辑）**
+
+- 输入为独立 `TraceDocInput` / `TracePlanSnapshot`（不依赖历史域数据类与平台类型），输出固定六段：
+  现象 / 基线 / 根因 / 手段 / 前后对比 / 结论与回滚。
+- 事实字段自动填充（SQL 原文进 ```sql 围栏、方言、来源 `Xxx.java:42`、捕获时间、耗时 ms、
+  0~2 份计划快照）；叙述字段（现象/基线/根因/手段/结论/回滚）缺失留「（待补充）」。
+- **fail-closed**：无计划 → 基线段明写「无计划快照：…不对计划内容做任何推断」；计划行集为空 →
+  「空计划快照」；缺耗时/来源/捕获时间 → 「未采集」；方言未知 → 「未知」；单份计划 →
+  「没有可比基线」。
+- 前后对比：TABLE/JSON 复用 `ui/ExplainPlanDiff.kt`（rows/cost 增量 + 字段级变化）；TEXT/XML
+  或结构化解析失败退化为 `ui/diff/SqlDiffer.kt` 行级差异，标题明示「文本级…不推断代价」。
+- 转义：围栏按内容最长连续反引号加长（SQL 自带 ``` 时不提前闭合）；表格单元格 `|`→`\|`、
+  换行→`<br>`。
+- 读数：`TraceDocFormatterTest` 11 用例 / 0 失败 / 0 跳过（有单份、双份结构化对比、TEXT 行对比、
+  无计划降级、缺耗时、围栏/表格转义、截断、空计划、默认文件名、叙述回填）。
+
+**S3 TEXT 档执行计划落历史（`history/ExplainPlanSnapshot.kt`）**
+
+- `ExplainPlanKey.persistable` 扩员 TEXT（DM/Oracle/OceanBase/H2/SQLite 计划可持久化）；
+  XML 维持不落盘（无消费方）。
+- `ExplainPlanSnapshot.create`：TEXT 单列计划存原文文本 payload
+  `{"text": "...", "headers": [...], "truncated": bool}`；多列或单元格含换行回退结构化 JSON
+  （保行列边界）。`raw()` 双形态读回：旧 headers/rows payload 原样解析（`truncated` 缺省 false
+  容错），文本 payload 还原单列 `RawResult`（缺 headers 用 `TEXT_HEADER = "PLAN"`）。
+- 兼容（P-5）：旧 payload 读回零迁移；真实 `XmlSerializer` 往返用例同时钉 TEXT 与旧结构化
+  两种快照。`SqlLogFileReader`/自动保存链不涉及计划字段（grep 零命中），无需改动。
+- 读数：`ExplainPlanSnapshotTextTest` 10 用例 + `ExplainPlanHistoryTest` 11 用例（含新增 TEXT
+  序列化往返）/ 0 失败 / 0 跳过。
+
+**S2 导出出口**
+
+- 历史页二级右键「导出优化留痕 Markdown」（`log/HistorySqlLogPanel.kt`，作用于右键行）：
+  计划按「同项目 + SQL 文本精确相等」从预览历史取最近两份（跨项目不借用，R91 口径），
+  匹配不到按无计划快照降级。
+- 预览面板「更多」新增「导出优化留痕」（`ui/SqlPreviewPanelResultView.kt` +
+  `ui/SqlPreviewPanelTraceDoc.kt`）：取数口径同 `copyAsAiContext` 的精确计划键，键不成立回落
+  本预览历史条目。
+- 写盘：`log/TraceDocExport.kt` 照抄 `HistorySqlLogPanel.exportEntries`
+  （FileSaverDescriptor → pooled 线程 → `SqlExportService.exportToFile` → 通知）；默认名
+  `trace-doc-<yyyyMMdd-HHmmss>.md`；显示脱敏开关开时只对 SQL 做投影级打码（同 SqlExportService）。
+- i18n（中英各 7 键）：`panel.traceDoc`；`log.history.traceDoc` / `.tip`；
+  `log.traceDoc.export` / `.descriptor` / `.done` / `.failed`。
+- `SqlPreviewTopRowLayoutTest` 的「更多」菜单十项顺序断言同步更新。
+
+**反向验证（2026-10-31）**
+
+- 先红：仅落测试骨架（formatter 返回空串、TEXT 档位未扩、raw() 不认文本 payload）→
+  `TraceDocFormatterTest + ExplainPlanSnapshotTextTest` 共 21 用例，**20 失败**；唯一通过的是
+  「旧 headers/rows payload 读回不变」对照用例。
+- 反向摘除：临时把 `persistable` 的 TEXT 档位删掉、把基线段「无计划快照」降级句换成空串 →
+  同两类 **21 用例 / 6 失败**（S3 五例：persistable、文本 payload 落盘往返、多列回退、
+  含换行单元格回退、保留上限；S1 一例：无计划降级）。
+- 还原后复绿：三类 **32 用例 / 0 失败 / 0 跳过**（11 + 10 + 11）。
+- 反向过程还暴露一处测试弱点：原「无计划」断言只查「无计划快照」四字，被第 5 段降级句满足，
+  已收紧为匹配基线段完整句（反向验证由此才变红）。
+
+**未闭环 / 登记**
+
+- TEXT 档计划**暂无生产写入方**：面板 EXPLAIN 结构化通道只覆盖 TABLE/JSON
+  （`execute/ExplainPanelChannel.STRUCTURED_FORMATS`），TEXT 方言仍走直送控制台。S3 只完成
+  存储层（persistable + payload + 读回）；DM/Oracle 等要真正落历史还依赖 4a 的通道改造，
+  登记随 T-Fr45DmGuard 收口时复评。
+- 按任务约束未跑 runIde/构建校验：UI 接线以编译通过 + 纯逻辑定向用例为准；`testFast` 触链
+  回归单跑（读数见提交说明/交付报告）。
+
