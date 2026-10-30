@@ -132,6 +132,12 @@ dependencies {
     // classpath，生产依赖图不变；供覆盖率守卫做真实字节织入 + JVM 链接期校验。
     // OceanBaseStatement 类体 37KB（chop_frame 风险最高），字节层过不了则整类不登记。
     testImplementation("com.oceanbase:oceanbase-client:2.4.19")
+    // T-CaptureCoverage 券 01/02 收口：MariaDB / SQLite 夹具。A 路实施时这两个 jar 只在根项目
+    // testImplementation 与本机 gradle 缓存里，字节层读数靠临时 init 脚本取得、无条件 skip；
+    // 此处固化后 7 个新类（MariaDB Statement/ClientPS/ServerPS/Connection + SQLite JDBC3Statement/
+    // JDBC3PS/JDBC3Connection）自动升级为硬断言，可选分支可删。
+    testImplementation("org.mariadb.jdbc:mariadb-java-client:3.3.3")
+    testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
