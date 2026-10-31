@@ -522,6 +522,64 @@
                          enabledByDefault="true"
                          level="WARNING"
                          implementationClass="cn.song.mybatisplus.visualizer.inspection.BannedApiInspection"/>
+
+        <!-- NEW-26 编辑器内 Inspection 体系：五条规则各注册一棵设置树开关（用户可逐条关闭）。
+             覆盖面 = mapper XML（select/insert/update/delete 与 <sql>）与 Java/Kotlin 注解 SQL；
+             预览面板与运行日志里的临时 SQL 非源文件 PSI，不在覆盖面内（立项册 §二 经核实后的范围）。
+             判定全在纯逻辑层（inspection/SqlInspectionText），本处实现类都是薄壳（照 BannedApi 范式）；
+             文件不是 mapper/Java/Kotlin 时 buildVisitor 返回 EMPTY_VISITOR，零 daemon 行为。
+             `dumbAware="true"`：索引未就绪时内部一律「判不了就沉默」（DumbService 检查在适配层）。
+             P-4 语料误报为 0 才允许 enabledByDefault（见各规则实测定案）。 -->
+        <localInspection language=""
+                         shortName="SqlvDollarInjection"
+                         key="inspection.sqlv.dollar.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.DollarInjectionInspection"/>
+        <localInspection language=""
+                         shortName="SqlvMissingParameter"
+                         key="inspection.sqlv.param.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.MissingParameterInspection"/>
+        <localInspection language=""
+                         shortName="SqlvResultMapProperty"
+                         key="inspection.sqlv.resultMap.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.ResultMapPropertyInspection"/>
+        <localInspection language=""
+                         shortName="SqlvDialectQuote"
+                         key="inspection.sqlv.dialect.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.DialectQuoteInspection"/>
+        <localInspection language=""
+                         shortName="SqlvOgnlTautology"
+                         key="inspection.sqlv.ognl.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.OgnlTautologyInspection"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
