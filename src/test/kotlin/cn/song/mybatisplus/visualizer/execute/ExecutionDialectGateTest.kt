@@ -275,7 +275,10 @@ class ExecutionDialectGateTest {
     @Test
     fun `all explicit execution entry points carry requests and uncovered list is empty`() {
         val root = repoRoot()
-        val preview = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
+        // D202（2026-10-31）：EXPLAIN 双通道链已拆到同包 SqlPreviewPanelExecutionExplain.kt，
+        // 扫描面按家族铺开（只扫主文件会让 EXPLAIN 意图声明从守卫视野消失）。
+        val preview = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText() +
+            File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionExplain.kt").readText()
         val templates = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/SelectedTableSqlTemplateActions.kt").readText()
         val logs = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt").readText()
 

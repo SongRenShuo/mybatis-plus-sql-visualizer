@@ -581,6 +581,9 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 本表按「站点真正所在文件」登记，站点全部带 fatal 判定由下面 `sites.all { … }` 逐个保鲜。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
+        // D202（2026-10-31）：writeConsoleOutput 的 2 处 catch(Throwable)（均带 FatalErrors.isFatal 判定）
+        // 随输出写入链搬入本文件——按站点真正所在文件登记，站点全部带判定由下面 sites.all{…} 逐个保鲜。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleOutput.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt",
         // T-FP-02b（独立复核条件项）：原豁免理由「可选能力探测失败返回 null（预览主链降级）」把**预览

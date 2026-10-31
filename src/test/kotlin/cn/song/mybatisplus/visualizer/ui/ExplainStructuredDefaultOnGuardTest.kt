@@ -46,7 +46,10 @@ class ExplainStructuredDefaultOnGuardTest {
 
     @Test
     fun `启用结构化推荐通知仍只提示一次`() {
-        val execution = read("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt")
+        // D202（2026-10-31）：EXPLAIN 双通道链已拆到同包 SqlPreviewPanelExecutionExplain.kt，
+        // 扫描面按家族铺开（只扫主文件会让搬出去的「一次性标记」逻辑从守卫视野消失）。
+        val execution = read("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt") +
+            read("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionExplain.kt")
         assertTrue(
             "推荐通知的条件必须含 explainStructuredOfferedShown 一次性标记（否则用户关掉后每次点执行计划都弹）",
             execution.contains("explainStructuredOfferedShown"),

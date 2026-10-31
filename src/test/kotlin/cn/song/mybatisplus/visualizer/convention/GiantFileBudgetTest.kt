@@ -32,14 +32,19 @@ class GiantFileBudgetTest {
         // 提额即「承认现状 + 留痕」，**不是许可继续增长**——下次触顶请先走拆分（首选出路）。
         // 2358 → 2522（2026-10-30: 再并 master(5aec84d8) 实测 2485 行，增量全来自 master 侧
         // T-CaptureCatchAll 控制台桥活性回落/attach 覆盖自检上报与关键字换行视口锚定，+127 行超线）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2522,
+        // 2522 → 2000（2026-10-31 D202: 拆出 Refresh/Diagnostics/TypeFilter 三件，实测 1828 行，基线收到红线）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2000,
         // 2297 → 2358（2026-10-25: 合并 master 实测 2323 行，含日志工具栏 BGT 与列表高亮改造，+26 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2421,
+        // 2421 → 2000（2026-10-31 D202: EXPLAIN 双通道链拆出 ExecutionExplain，实测 1552 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2000,
         // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2103,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2349,
+        // 2103 → 2000（2026-10-31 D202: 语句后处理拆出 StatementOps，实测 1847 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2000,
+        // 2349 → 2000（2026-10-31 D202: 控制台文本探测拆出 ConsoleText，实测 1989 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2000,
         // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2194,
+        // 2194 → 2000（2026-10-31 D202: 输出写入/分栏取证拆出 ConsoleOutput，实测 1987 行）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2000,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,

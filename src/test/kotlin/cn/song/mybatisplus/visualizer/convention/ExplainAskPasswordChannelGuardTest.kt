@@ -14,9 +14,21 @@ import org.junit.Test
  */
 class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
-    private fun sourceOf(suffix: String): String =
-        mainSources().firstOrNull { it.first.endsWith(suffix) }?.second
-            ?: error("源文件不在快照中：$suffix")
+    /**
+     * 取源码：按后缀匹配**全部**命中文件并按路径排序拼接。
+     *
+     * D202（2026-10-31）：面板执行链巨文件被拆成同包协作文件集（`SqlPreviewPanelExecution.kt` +
+     * `SqlPreviewPanelExecutionExplain.kt`），判定面必须跟着铺开——只扫单文件会让搬出去的分支
+     * 从守卫视野里消失（扫描面漏站点＝假绿）。故后缀不带 `.kt`，家族文件全部纳入。
+     */
+    private fun sourceOf(suffix: String): String {
+        val normalized = suffix.removeSuffix(".kt")
+        val hits = mainSources()
+            .filter { it.first.removeSuffix(".kt").contains(normalized) }
+            .sortedBy { it.first }
+        if (hits.isEmpty()) error("源文件不在快照中：$suffix")
+        return hits.joinToString("\n") { it.second }
+    }
 
     @Test
     fun `面板执行计划结构化通道必须允许询问密码`() {
@@ -50,7 +62,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `提交链必须带模块学习回落取源`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         assertTrue(
             "submitExplainOrStructured 必须接 explainFallbackDataSource(proj, sourceModuleKey) 回落" +
                 "（绑定链 runner 枚举被方言路由卡死时，结构化通道靠模块学习/last-used 记忆取源到达，" +
@@ -61,7 +73,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `参数未回填不得回退直送`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // DirectFallback(UNFILLED_PARAMS) 分支必须先于「其余回退直送」的 else 被单独拦下：
         // 回退直送在无绑定形态必失败且弹误导性「未绑定数据源」红字（沙盒实测 2026-10-24）。
         val unfilledIdx = code.indexOf("FallbackReason.UNFILLED_PARAMS")
@@ -78,7 +90,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `认证失败不得弹红字模态框`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // AUTH 出口走轻通知（notifyExplainAuthFailure）——平台凭据对话框已呈现失败与出口，
         // Abort 后再弹红字框是二次打断（用户报障 2026-10-24：「点终止还是出现执行计划的弹框」）。
         // 提取全部 AUTH 分支体（结构化 onFailed 带花括号、直送 Failed 无花括号两种形态）：
@@ -111,7 +123,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `EXPLAIN闸门重渲染后必须自动重提交一次`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // T-DialectInferPollution W7（用户真机报障 2026-10-24）：渲染方言与目标数据源不一致
         // （last-used 被竞品测试数据源 dbx_test/PG 残留占据，MySQL 预览按 PG 渲染）时，闸门
         // AUTO_RERENDER_REQUIRED 重渲染成功后若断链让用户重按「执行计划」，第二次点击在开关
@@ -133,7 +145,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `直送链不得再做插件侧选源`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // T-ExplainConsoleFirst W1（2026-10-24）：直送链改回内嵌原生控制台（形态 A）后，
         // 「用哪条源」交还平台——插件侧**不得**再调 explainFallbackDataSource（模块学习 /
         // last-used / 表归属路由那一整套）。十二轮（W8~W12）的拉锯根因正是插件在自己算源：
@@ -169,7 +181,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     fun `回落取源必须做表归属路由`() {
         val resolver = sourceOf("ui/highlight/DatabaseSchemaResolver.kt")
         val selector = sourceOf("execute/DataSourceSelector.kt")
-        val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val chain = sourceOf("ui/SqlPreviewPanelExecution")
         // T-DialectInferPollution W10（用户沙盒实测两连错源：wms_inventory_jar_demo/order_entity
         // 被 last-used/学习源硬套）：模块学习与 last-used 证据都可能陈旧，而「表在哪个库」是更强
         // 的归属事实。resolver 须提供只读缓存的表归属路由入口；取源函数（DataSourceSelector 侧）
@@ -232,7 +244,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `选错源失败不得弹红字模态框`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // T-ExplainFailUx W1（用户沙盒实测诉求：「这种情况就不应该弹窗了吧，应该直接引导用户
         // 更换数据源」）：WRONG_TARGET 档（表不在当前源）须走就地引导 showExplainWrongTarget，
         // 不得调 showExplainErrorDialog 弹模态。按分支起点切片断言（同 W6 AUTH 纪律）。
@@ -260,7 +272,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `换源一律走平台原生工具栏不得自建入口`() {
-        val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val chain = sourceOf("ui/SqlPreviewPanelExecution")
         val panel = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
         // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：图三证明平台原生工具栏自带
         // `Data Sources` 菜单（Detach Data Source + 全部源）就是理想形态；且平台
@@ -283,7 +295,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `渲染方言缺失时不得判成未知阻断执行`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // T-ExplainSwitchNative W10（用户实测「为什么 sql 无法执行」）：effectiveDialect 为 null
         // 只发生在「渲染链没记方言」的载体，而渲染器 byName(null) 的既有语义是回落 MySQL
         // （Dialect.kt:908-909）——闸门请求侧必须同口径回落，否则 RENDER_UNKNOWN_BLOCK 会阻断执行。
@@ -298,7 +310,7 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
 
     @Test
     fun `方言闸红条的换源动作须指向原生能力`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val code = sourceOf("ui/SqlPreviewPanelExecution")
         // T-ExplainSwitchNative W9→W12：红条按钮曾接 executeSql（执行链，会被同一闸门再次阻断，
         // 表现为「点了没反应」）；W12 定案改指向平台原生能力——打开 Database 工具窗口换源。
         val gateIdx = code.indexOf("internal fun SqlPreviewPanel.showDialectGateError")
