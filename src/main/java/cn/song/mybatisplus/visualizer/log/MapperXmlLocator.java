@@ -79,13 +79,25 @@ public final class MapperXmlLocator {
         return new kotlin.Pair<>(s.substring(0, idx), s.substring(idx + 1));
     }
 
-    /** 读上下文内的定位主体（FileTypeIndex → namespace/id 校验 → 行号换算）。 */
+    /** 读上下文内的定位主体（清单槽新鲜度 → memo → 逐文件 namespace/id 校验 → 行号换算）。 */
     @Nullable
     private static Location locateUnderRead(@NotNull Project project, @NotNull String namespace, @NotNull String id) {
+        // 先取**新鲜**清单槽：TTL 过期 / 任一文件失效 / 项目不匹配都会换代（既有 T-PS5-05 语义）。
+        // memo 挂在槽实例上，换代即整体失效——命中路径与清单新鲜度严格同代，不会让过期结果
+        // 跳过重扫（既有 TTL 用例钉死该语义）。
+        FileListSlot slot = currentFileListSlot(project);
+        kotlin.Pair<String, String> memoKey = new kotlin.Pair<>(namespace, id);
+        Object cached = slot.memo.get(memoKey);
+        if (cached != null) {
+            return cached instanceof Location location ? location : null;
+        }
         XmlFile firstFile = null;
         XmlTag firstTag = null;
         int extraHits = 0;
-        for (XmlFile file : findMapperXmlFiles(project)) {
+        for (VirtualFile vf : slot.files) {
+            statementScanCount.incrementAndGet();
+            PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
+            if (!(psiFile instanceof XmlFile file)) continue;
             XmlTag tag = findStatementTag(file, namespace, id);
             if (tag == null) continue;
             if (firstFile == null) {
@@ -101,47 +113,37 @@ public final class MapperXmlLocator {
             LOG.info("MapperXmlLocator: 语句 " + namespace + "." + id + " 命中 " + (extraHits + 1)
                 + " 个 mapper XML（多模块同名），取第一个：" + firstPath);
         }
-        if (firstFile == null || firstTag == null) return null;
-        VirtualFile vf = firstFile.getVirtualFile();
-        if (vf == null) return null;
-        com.intellij.openapi.editor.Document document =
-            PsiDocumentManager.getInstance(project).getDocument(firstFile);
-        if (document == null) return null;
-        int line = document.getLineNumber(firstTag.getTextRange().getStartOffset());
-        return new Location(vf, line);
+        Location location = null;
+        if (firstFile != null && firstTag != null) {
+            VirtualFile vf = firstFile.getVirtualFile();
+            if (vf != null) {
+                com.intellij.openapi.editor.Document document =
+                    PsiDocumentManager.getInstance(project).getDocument(firstFile);
+                if (document != null) {
+                    location = new Location(vf, document.getLineNumber(firstTag.getTextRange().getStartOffset()));
+                }
+            }
+        }
+        // 负结果以 MISS 哨兵承载（ConcurrentHashMap 不接受 null 值）
+        slot.memo.put(memoKey, location != null ? location : MISS);
+        return location;
     }
 
     /**
-     * 项目内全部 mapper XML（{@code .xml} 后缀 + 根元素 {@code <mapper>}）。
-     * XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按 HbmXmlEntityResolver 同款用
-     * FileTypeManager 取标准 XML 类型；索引异常按空列表处理（优雅降级，绝不抛出）。
+     * T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳 +
+     * 券01 语句定位结果 memo）。
      *
-     * <p>T-PS5-05：走 {@link #mapperXmlVirtualFiles} 单槽缓存（索引遍历 + 非 mapper XML 的 PSI 解析
-     * 只在缓存未命中时发生）。
+     * <p>memo 与清单<b>同生共死</b>：条目每次换代即新建空 memo（对照 MybatisXmlTargets F96
+     * namespaceSlot 的 listingGeneration 同代失效先例）。memo 键为 {@code namespace to id}，
+     * 值 {@link Location} 或 {@code MISS} 哨兵（负结果一并缓存——非 Mapper 方法必然落空，修前每趟重付全程）。</p>
      */
-    @NotNull
-    private static List<XmlFile> findMapperXmlFiles(@NotNull Project project) {
-        try {
-            List<XmlFile> result = new ArrayList<>();
-            for (VirtualFile vf : mapperXmlVirtualFiles(project)) {
-                PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
-                if (psiFile instanceof XmlFile xmlFile) {
-                    result.add(xmlFile);
-                }
-            }
-            return result;
-        } catch (Throwable ignored) {
-            // runCatching 等价：索引异常按空列表处理（优雅降级，绝不抛出）
-            return List.of();
-        }
-    }
-
-    /** T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳）。 */
     private static final class FileListSlot {
 
         private final java.lang.ref.WeakReference<Project> project;
         private final List<VirtualFile> files;
         private final long atMs;
+        final java.util.concurrent.ConcurrentHashMap<kotlin.Pair<String, String>, Object> memo =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
         private FileListSlot(java.lang.ref.WeakReference<Project> project, List<VirtualFile> files, long atMs) {
             this.project = project;
@@ -164,7 +166,14 @@ public final class MapperXmlLocator {
     public static final java.util.concurrent.atomic.AtomicInteger indexScanCount =
         new java.util.concurrent.atomic.AtomicInteger(0);
 
+    /** 券01（T-PerfSweep28-01）测试缝：语句定位的逐文件根标签访问计数（断言 memo 命中零遍历）。 */
+    public static final java.util.concurrent.atomic.AtomicInteger statementScanCount =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+
     private static volatile FileListSlot fileListSlot = null;
+
+    /** memo 负结果哨兵（{@code namespace.id} 在当前清单代内不存在对应语句）。 */
+    private static final Object MISS = new Object();
 
     /** T-PS5-05 测试缝：清空文件列表缓存（用例隔离；生产链路无调用点）。 */
     public static void clearFileListCacheForTest() {
@@ -189,14 +198,14 @@ public final class MapperXmlLocator {
      * GC 回收；多项目交替访问退化为重扫（与无缓存等价，无正确性风险）。
      */
     @NotNull
-    private static List<VirtualFile> mapperXmlVirtualFiles(@NotNull Project project) {
+    private static FileListSlot currentFileListSlot(@NotNull Project project) {
         long now = clockMs.getAsLong();
         FileListSlot slot = fileListSlot;
         if (slot != null) {
             if (slot.project.get() == project
                     && now - slot.atMs <= fileListTtlMs
                     && allValid(slot.files)) {
-                return slot.files;
+                return slot;
             }
         }
         indexScanCount.incrementAndGet();
@@ -219,8 +228,9 @@ public final class MapperXmlLocator {
             // runCatching 等价：索引异常按空列表处理（优雅降级，绝不抛出）
             files = List.of();
         }
-        fileListSlot = new FileListSlot(new java.lang.ref.WeakReference<>(project), files, now);
-        return files;
+        FileListSlot fresh = new FileListSlot(new java.lang.ref.WeakReference<>(project), files, now);
+        fileListSlot = fresh;
+        return fresh;
     }
 
     /** Kotlin {@code files.all { it.isValid }} 等价：空列表为 true。 */
