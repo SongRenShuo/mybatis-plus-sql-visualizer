@@ -93,7 +93,6 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         null,
         null,
         null,
-        null,
     )
 
     // ------------------------------------------------------------------
