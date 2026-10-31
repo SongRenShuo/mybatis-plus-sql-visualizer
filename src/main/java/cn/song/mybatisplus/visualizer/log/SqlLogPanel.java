@@ -206,14 +206,109 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private final TailFollowState tailFollow = new TailFollowState();
     private JBScrollPane listScrollPane;
 
+    /**
+     * 程序性滚动窗口（T-LogListAnchor 券03）。
+     *
+     * <p>滚动条的调整事件<b>无法区分用户手势与程序动作</b>——贴底、锚点复原、模型增删引起的 clamp
+     * 都会触发同一个 {@code AdjustmentListener}。旧实现把任何「value 到底」都当成「用户滚回底部」，
+     * 于是停在贴底一行内时，头部淘汰的 clamp 会把暂停态静默改回跟随（探针实测：remove(0) 与
+     * addElement 各触发一次调整事件）。本计数器非零期间，调整事件不参与跟随判定。</p>
+     *
+     * <p>用计数器而不是布尔：复原可能嵌套（贴底后再复原锚点）。</p>
+     */
+    private int programmaticScrollDepth = 0;
+
+    /** 上一次观察到的滚动条位置（券03 单调性判据基线）。 */
+    private int lastScrollBarValue = -1;
+
+    private void withProgrammaticScroll(Runnable block) {
+        programmaticScrollDepth++;
+        try {
+            block.run();
+        } finally {
+            programmaticScrollDepth--;
+        }
+    }
+
     private void scrollToBottom(boolean resume) {
         if (resume) tailFollow.onScrollToEnd();
         if (listModel.isEmpty()) return;
-        list.ensureIndexIsVisible(listModel.size() - 1);
-        if (listScrollPane != null) {
-            javax.swing.JScrollBar bar = listScrollPane.getVerticalScrollBar();
-            bar.setValue(bar.getMaximum());
+        withProgrammaticScroll(() -> {
+            list.ensureIndexIsVisible(listModel.size() - 1);
+            // maximum 是内容总高语义，能滚到的最大值是 maximum - visibleAmount
+            // （旧写法靠 Swing 的 clamp 兜底，变行高下会差一两像素）。
+            if (listScrollPane != null) {
+                javax.swing.JScrollBar bar = listScrollPane.getVerticalScrollBar();
+                bar.setValue(Math.max(bar.getMaximum() - bar.getVisibleAmount(), 0));
+            }
+        });
+    }
+
+    /**
+     * 暂停态视口锚点（T-LogListAnchor 券02）：条目身份 + 它在视口内的行内像素偏移。
+     *
+     * <p>为什么需要它：JList <b>没有滚动锚定</b>。视口按像素定位，模型头部删一条，后面所有行的 y
+     * 就整体上移一行高，而 {@code viewPosition} 不变——用户正在读的内容被「顶上去」。
+     * 缓冲满载（默认 200）时每条新 SQL 都触发一次 {@code HeadEvictAppend}，于是暂停态下持续跳动。</p>
+     */
+    private static final class ScrollAnchor {
+        final LogSqlEntry entry;
+        final int offsetInRow;
+
+        ScrollAnchor(LogSqlEntry entry, int offsetInRow) {
+            this.entry = entry;
+            this.offsetInRow = offsetInRow;
         }
+    }
+
+    /** 全量重建在途时的待复原锚点（条目可能落在后续批次里，逐拍重试）。 */
+    private ScrollAnchor pendingScrollAnchor = null;
+
+    /** 取当前视口顶部条目与其行内偏移；无滚动容器/空列表/布局未就绪时返回 null。 */
+    private ScrollAnchor captureTopAnchor() {
+        if (listScrollPane == null) return null;
+        java.awt.Point viewPos = listScrollPane.getViewport().getViewPosition();
+        int size = listModel.size();
+        if (size == 0) return null;
+        int index = list.locationToIndex(new java.awt.Point(viewPos.x, viewPos.y + 1));
+        if (index < 0 || index >= size) return null;
+        java.awt.Rectangle bounds = list.getCellBounds(index, index);
+        if (bounds == null) return null;
+        return new ScrollAnchor(listModel.getElementAt(index), bounds.y - viewPos.y);
+    }
+
+    /** 按条目身份复原视口；条目还不在模型里返回 false（调用方决定是否重试）。 */
+    private boolean restoreAnchor(ScrollAnchor anchor) {
+        if (listScrollPane == null) return true;
+        java.awt.Point viewPos0 = listScrollPane.getViewport().getViewPosition();
+        int size = listModel.size();
+        int index = -1;
+        for (int i = 0; i < size; i++) {
+            if (listModel.getElementAt(i) == anchor.entry) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) return false;
+        java.awt.Rectangle bounds = list.getCellBounds(index, index);
+        if (bounds == null) return false;
+        java.awt.Point finalPos = viewPos0;
+        withProgrammaticScroll(() ->
+                listScrollPane.getViewport().setViewPosition(new java.awt.Point(
+                        finalPos.x,
+                        Math.max(bounds.y - anchor.offsetInRow, 0))));
+        return true;
+    }
+
+    /** 头部淘汰后把视口按被删总高上移（等价于内容原地不动）。 */
+    private void shiftViewportUpBy(int removedHeight) {
+        if (removedHeight <= 0) return;
+        if (listScrollPane == null) return;
+        java.awt.Point pos = listScrollPane.getViewport().getViewPosition();
+        int target = Math.max(pos.y - removedHeight, 0);
+        if (target == pos.y) return;
+        withProgrammaticScroll(() ->
+                listScrollPane.getViewport().setViewPosition(new java.awt.Point(pos.x, target)));
     }
 
     public TailFollowMode getTailFollowModeForTest() { return tailFollow.getMode(); }
@@ -359,13 +454,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private static final int DIAGNOSTICS_TICK_MS = 2000;
     /** R53：双通道状态栏两段文案之间的语义分隔符。 */
     private static final String SEP_LABEL = "｜";
-    /**
-     * T-ListMetaRevert：判定「滚动条已在底部」的容差（px）。
-     *
-     * <p>取 2px 而非 0：不同 LAF 下 {@code value} 与 {@code maximum - visibleAmount} 可能差几个像素
-     * （舍入），严格相等会导致「拖到底却不恢复跟随」。</p>
-     */
-    private static final int SCROLL_BOTTOM_TOLERANCE_PX = 2;
+    // 「已滚到底」容差常量随判据一起搬到 TailFollowState（T-LogListAnchor 券03：
+    // 判据抽成纯函数 isUserScrollToBottom，容差与判据同处才不会被两处各写一份）。
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -1527,7 +1617,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
                     cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
                     // T-DevAcceptFix2 ⑩：屏蔽规则命中次数（应用级累计，与规则面板同源计数）——
                     // 「事件到了却 0 条」时最容易被忽略的一条吃行通道（用户自建规则，设计内但必须可见）
-                    suppressed));
+                    suppressed,
+                    // T-CaptureCatchAll 券02：活性回落解封态——「增强已挂载却零产出」的唯一解释
+                    CaptureActivityFallback.isActive(),
+                    // T-CaptureCatchAll 券03：agent 侧 attach 覆盖自检（旧版 agent 为 null，不显示）
+                    cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest()));
         } else {
             text = null;
         }
@@ -1618,16 +1712,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // T-ListMetaRevert：用户手动滚回底部时恢复自动跟随。
         // 改造前只有「滚动到底部」按钮会调 onScrollToEnd()，用户滚回去后必须再点一下按钮
         // 才能恢复——违反「滚到底就继续跟随」的直觉。
+        // T-LogListAnchor 券03：程序动作与内容缩短都不算用户手势，两条判据各挡一类：
+        //  - programmaticScrollDepth：贴底/锚点复原这类我们自己发起的滚动；
+        //  - 位置单调性：头部淘汰会让内容变矮、滚动条被 clamp 到底（value **变小**），
+        //    而用户往底部滚动一定是 value 变大——变小的一律不恢复跟随。
         scrollPane.getVerticalScrollBar().addAdjustmentListener(e -> {
             if (e.getValueIsAdjusting()) return;
             if (!(e.getAdjustable() instanceof javax.swing.JScrollBar)) return;
             javax.swing.JScrollBar bar = (javax.swing.JScrollBar) e.getAdjustable();
-            // 真正能滚到的最大值是 maximum - visibleAmount（Swing 的 maximum 是内容总高语义，
-            // 直接比 maximum 永远不成立——这类 bug 的典型写法错误）。
-            int maxScrollable = bar.getMaximum() - bar.getVisibleAmount();
-            if (maxScrollable > 0 && bar.getValue() >= maxScrollable - SCROLL_BOTTOM_TOLERANCE_PX) {
-                tailFollow.onScrollToEnd();
-            }
+            int previous = lastScrollBarValue;
+            lastScrollBarValue = bar.getValue();
+            boolean bottom = TailFollowState.isUserScrollToBottom(
+                    previous,
+                    bar.getValue(),
+                    bar.getMaximum() - bar.getVisibleAmount(),
+                    programmaticScrollDepth > 0);
+            if (bottom) tailFollow.onScrollToEnd();
         });
         java.util.Set<Integer> navigationKeys = java.util.Set.of(
                 java.awt.event.KeyEvent.VK_UP, java.awt.event.KeyEvent.VK_DOWN,
@@ -1731,9 +1831,23 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         int modelSizeBefore = listModel.size();
         long visibleTailSequenceBefore = lastRendered.isEmpty() ? 0L : lastRendered.get(lastRendered.size() - 1).sequenceNumber();
-        if (!applyIncremental(newVisible, evicted)) {
-            applyFullRebuild(newVisible, gen);
-        }
+        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
+        withProgrammaticScroll(() -> {
+            if (!applyIncremental(newVisible, evicted)) {
+                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
+                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
+                pendingScrollAnchor = tailFollow.getShouldFollow() ? null : captureTopAnchor();
+                applyFullRebuild(newVisible, gen);
+                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
+                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
+                if (pendingScrollAnchor != null) {
+                    ScrollAnchor anchor = pendingScrollAnchor;
+                    if (restoreAnchor(anchor) || rebuildRemaining == null) {
+                        pendingScrollAnchor = null;
+                    }
+                }
+            }
+        });
         boolean tailAdvancedAtCapacity = evicted > 0
                 && (!newVisible.isEmpty()
                     && newVisible.get(newVisible.size() - 1).sequenceNumber() > visibleTailSequenceBefore);
@@ -1789,6 +1903,16 @@ public class SqlLogPanel extends JPanel implements Disposable {
             lastRendered = newVisible;
             return true;
         } else if (diff instanceof SqlLogPanelKt.VisibleDiff.HeadEvictAppend hea) {
+            // T-LogListAnchor 券02：暂停态下头部淘汰会把整屏内容上顶一行高（JList 无滚动锚定）。
+            // 先量出被删行的总高（只涉及 0..evicted-1，成本 O(evicted)），模型变更后把视口
+            // 按同一高度上移——用户正在读的那条原地不动，新条目只在尾部出现。
+            int evictedHeight;
+            if (tailFollow.getShouldFollow()) {
+                evictedHeight = 0;
+            } else {
+                java.awt.Rectangle evictedBounds = list.getCellBounds(0, hea.evicted() - 1);
+                evictedHeight = evictedBounds != null ? evictedBounds.height : 0;
+            }
             for (int i = 0; i < hea.evicted(); i++) {
                 listModel.remove(0);
             }
@@ -1796,8 +1920,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 listModel.addElement(e);
             }
             lastRendered = newVisible;
+            shiftViewportUpBy(evictedHeight);
             return true;
         } else if (diff instanceof SqlLogPanelKt.VisibleDiff.Insert ins) {
+            // 尾部追加不动视口上方内容，无需补偿；中段插入（过滤条件变化产生）走 FullRebuild，
+            // 由 pendingScrollAnchor 按条目身份复原。
             for (int i = 0; i < ins.entries().size(); i++) {
                 listModel.add(ins.index() + i, ins.entries().get(i));
             }
@@ -1868,8 +1995,24 @@ public class SqlLogPanel extends JPanel implements Disposable {
         for (int i = 0; i < SqlLogPanelKt.REFRESH_CHUNK_SIZE && remaining.hasNext(); i++) {
             chunk.add(remaining.next());
         }
-        listModel.addAll(chunk);
+        withProgrammaticScroll(() -> {
+            listModel.addAll(chunk);
+            // T-LogListAnchor 券02：重建在途时锚点条目可能落在本批才出现——找到就复原并清空；
+            // 跟随态优先（用户中途点了「滚动到底部」时不得再被锚点拉回）。
+            if (!chunk.isEmpty() && tailFollow.getShouldFollow()) {
+                pendingScrollAnchor = null;
+                scrollToBottom(false);
+            } else if (pendingScrollAnchor != null) {
+                ScrollAnchor anchor = pendingScrollAnchor;
+                if (restoreAnchor(anchor)) {
+                    pendingScrollAnchor = null;
+                }
+            }
+        });
         rebuildRemaining = remaining.hasNext() ? remaining : null;
+        if (rebuildRemaining == null) {
+            pendingScrollAnchor = null;
+        }
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater(this::appendRebuildChunk);
         } else if (pendingRefreshAfterChain) {
@@ -1912,6 +2055,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
             listModel.addAll(rest);
         }
         list.setIgnoreRepaint(false);
+        // T-LogListAnchor 券02：链被同步补完——锚点条目此时可能才出现，补一次复原尝试。
+        if (pendingScrollAnchor != null && restoreAnchor(pendingScrollAnchor)) {
+            pendingScrollAnchor = null;
+        }
         list.revalidate();
         list.repaint();
         return true;
@@ -2120,7 +2267,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // T-HistParam F3：识别通道统一——与历史 tab 共用 toPreviewResult
         // （占位符识别 / 字面量参数恢复 F4 / 回退警告分流，行为与原 openPreview 双分支逐字段一致）
         SqlPreviewService.showResult(project, LogEntryPreviewRecognizerKt.toPreviewResult(
-                entry, state.getLogFormatSql(), state.getLiteralParamRecovery()), null);
+                entry, state.getLogFormatSql(), state.getLiteralParamRecovery(),
+                // T-DialectInferFix：把「这条 SQL 当时连的库」交给预览，避免回落 MySQL 造成假红
+                entry.dialectName()), null);
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
