@@ -56,6 +56,12 @@ public record LogSqlEntry(
      */
     String stackDigest,
     /**
+     * T-StackBizFrame S3：产生该 SQL 的线程名（仅 agent 通道）。调用栈弹层标题展示，
+     * 让「调度线程 / 异步池 / 请求线程」一眼可辨（同类误报的第一判别量）。
+     * null = 未知（桥通道 / 旧条目 / 旧日志文件），标题退回纯「调用栈」。
+     */
+    String threadName,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 SqlLogEntryBuffer.addEntry
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
@@ -93,6 +99,19 @@ public record LogSqlEntry(
      * 自动存档/读回按自由文本回环（SqlLogAutoSaver/SqlLogFileReader，格式无关）。
      */
     String databaseName,
+    /**
+     * T-DialectInferFix：本次执行连的那条连接的<b>方言名</b>（{@code cn.song.mybatisplus.visualizer.sql.DialectRegistry}
+     * 命名空间，如 {@code PostgreSQL}；不是 {@link #databaseName} 那种展示串）。
+     *
+     * <p>与 {@link #databaseName} 同源（agent 事件的 {@code connect} URL），但<b>取的是渲染用的命名空间</b>：
+     * {@code cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects} 的显示名不能直接喂
+     * {@code DialectRegistry.byName}（HSQL/GBASE 不在注册表里、命名口径也不同）。</p>
+     *
+     * <p>用途：日志/历史双击预览据此把「这条 SQL 当时跑在哪个库」当作 EXACT 方言证据
+     * （O-145 方案第 2 条），不再让预览回落 MySQL。null = 未知（桥通道 / 旧版 agent / 旧条目）。
+     * 随 pd 载荷键 {@code dl} 落盘（仅非空落键，旧读端忽略未知键）。</p>
+     */
+    String dialectName,
     /**
      * Actual SQL 折叠附注（R10 T-ShardingSphereCompat，D1=A）：{@link SqlSource#SHARDINGSPHERE}
      * 条目的 {@code Actual SQL:} 段原文（多分片逐行、换行连接）；其余来源恒 null。
@@ -411,7 +430,7 @@ public record LogSqlEntry(
                        String mapperStatement, String errorText, String requestTag, Long updateCount,
                        String databaseName) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
-            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
             mapperStatement, errorText, requestTag, updateCount, databaseName, null);
     }
 
@@ -423,8 +442,24 @@ public record LogSqlEntry(
                        String mapperStatement, String errorText, String requestTag, Long updateCount,
                        String databaseName, String actualSql) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
-            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
             mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, CaptureProvenance.UNKNOWN);
+    }
+
+    /**
+     * K2J 互操作：master 新增 {@code threadName}（T-StackBizFrame S3，声明序插在 stackDigest 与
+     * sequenceNumber 之间）与 {@code dialectName}（T-DialectInferFix，插在 databaseName 与 actualSql
+     * 之间）取默认 null 的历史 22 参形态（Kotlin 默认参的 Java 等价），委托 24 参规范构造器。
+     */
+    public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
+                       Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
+                       String sourceFile, int sourceLine, List<kotlin.Pair<String, Integer>> sourceCandidates,
+                       List<String> candidateClasses, String stackDigest, long sequenceNumber,
+                       String mapperStatement, String errorText, String requestTag, Long updateCount,
+                       String databaseName, String actualSql, CaptureProvenance captureProvenance) {
+        this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, captureProvenance);
     }
 
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
@@ -459,56 +494,56 @@ public record LogSqlEntry(
     /** T-LogRowNumber：以本条为原型返回带指定捕获序号的副本（Kotlin data class copy(sequenceNumber=…) 的 Java 等价）。 */
     public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, newSequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, newSequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** O-147：修订应用拷贝原语——rawSql 覆写（其余字段同 {@link #withSequenceNumber} 形态）。 */
     public LogSqlEntry withRawSql(String newRawSql) {
         return new LogSqlEntry(newRawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** O-147：修订应用拷贝原语——restoredSql 覆写。 */
     public LogSqlEntry withRestoredSql(String newRestoredSql) {
         return new LogSqlEntry(rawSql, newRestoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** O-147：修订应用拷贝原语——params 覆写。 */
     public LogSqlEntry withParams(List<LogSqlParam> newParams) {
         return new LogSqlEntry(rawSql, restoredSql, newParams, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** O-147：修订应用拷贝原语——timestamp 覆写。 */
     public LogSqlEntry withTimestamp(long newTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, newTimestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     /** T-M55-02：以本条为原型返回带执行报错的副本（copy(errorText=…) 的 Java 等价；缓冲错误反向绑定用）。 */
     public LogSqlEntry withErrorText(String newErrorText) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, newErrorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, newErrorText, requestTag, updateCount, databaseName, dialectName, actualSql, captureProvenance);
     }
 
     public LogSqlEntry withCaptureProvenance(CaptureProvenance provenance) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, provenance);
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, dialectName, actualSql, provenance);
     }
 
     public CaptureProvenance getCaptureProvenance() {

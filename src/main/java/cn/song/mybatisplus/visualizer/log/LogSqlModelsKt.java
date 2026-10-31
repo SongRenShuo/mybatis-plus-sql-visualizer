@@ -219,12 +219,14 @@ public final class LogSqlModelsKt {
                 existing.sourceCandidates().isEmpty() ? incoming.sourceCandidates() : existing.sourceCandidates(),
                 existing.candidateClasses().isEmpty() ? incoming.candidateClasses() : existing.candidateClasses(),
                 existing.stackDigest() != null ? existing.stackDigest() : incoming.stackDigest(),
+                existing.threadName(),
                 existing.sequenceNumber(),
                 existing.mapperStatement() != null ? existing.mapperStatement() : incoming.mapperStatement(),
                 existing.errorText() != null ? existing.errorText() : incoming.errorText(),
                 existing.requestTag() != null ? existing.requestTag() : incoming.requestTag(),
                 existing.updateCount() != null ? existing.updateCount() : incoming.updateCount(),
                 existing.databaseName() != null ? existing.databaseName() : incoming.databaseName(),
+                existing.dialectName() != null ? existing.dialectName() : incoming.dialectName(),
                 existing.actualSql(), mergedProvenance(existing.captureProvenance(), incoming.captureProvenance()));
     }
 
