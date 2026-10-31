@@ -416,7 +416,7 @@
 
         <!-- S2 首用即生效①：项目打开预热——复用 T-SqlDialectPrewarm 的助手（fire-and-forget 投池化
              线程，EDT 零阻塞），把「SQL 方言映射一次性延迟加载」提前到项目打开时做完。
-             只接线不重复实现；源码守卫 convention/OnboardingPrewarmSourceScanTest 钉住
+             只接线不重复实现；源码守卫 onboarding/OnboardingWiringTest 钉住
              「只调 prewarm、不调 prewarmAndAwait」。 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingPrewarm"/>
 
