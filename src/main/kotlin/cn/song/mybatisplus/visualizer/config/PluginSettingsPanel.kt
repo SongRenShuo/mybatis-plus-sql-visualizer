@@ -603,6 +603,24 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 插件缓存统一清除按钮（清全部缓存，下次使用自动重建）。 */
     internal val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
 
+    // ---------- NEW-18：一键环境体检报告 ----------
+    /** 生成体检单（只读；后台取数后经 LightVirtualFile 在编辑器打开，不落盘不弹框）。 */
+    internal val environmentCheckButton = JButton(
+        MpSqlVisualizerBundle.message("settings.envCheck.button"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("settings.envCheck.tip")
+        addActionListener { generateEnvironmentCheckReport() }
+    }
+
+    /** 体检单结果行内提示（无模态弹窗：生成中/已打开/已复制到剪贴板）。 */
+    internal val environmentCheckStatusLabel = JBLabel(" ")
+
+    /**
+     * 体检单展示缝：生产 null 走编辑器（`LightVirtualFile`），测试注入后只观察文本。
+     * 与既有 `captureDirectoryOpener`/`storageClearConfirmation` 同款范式。
+     */
+    internal var environmentReportPresenter: ((String) -> Unit)? = null
+
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
     internal val logSqlPrefixField = JBTextField(12)
     internal val logParamPrefixField = JBTextField(12)
@@ -1160,6 +1178,66 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 测试访问器：导入/导出行内反馈（20260907——文本/前景色/tooltip 三断言面）。 */
     internal fun statusForTest(): JBLabel = statusLabel
+
+    // ------------------------------------------------------------------
+    // NEW-18：一键环境体检报告
+    // ------------------------------------------------------------------
+
+    /**
+     * 生成并展示体检单（设置页入口）。
+     *
+     * 线程：方言决策/数据源枚举可能触及 URL 探测，取数一律池线程；EDT 只做展示。
+     * 展示：有打开项目 → `LightVirtualFile` 在编辑器打开（不落盘、不弹模态框，用户可直接复制
+     * 贴工单）；无打开项目 → 复制到剪贴板并在行内提示（仍不弹框）。
+     * 只读：不执行任何 SQL，也不为体检创建 AgentManager/SqlLogManager。
+     */
+    internal fun generateEnvironmentCheckReport() {
+        environmentCheckButton.isEnabled = false
+        environmentCheckStatusLabel.text = MpSqlVisualizerBundle.message("settings.envCheck.generating")
+        val project = ProjectManager.getInstance().openProjects.firstOrNull { !it.isDisposed }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val report = runCatching {
+                cn.song.mybatisplus.visualizer.diagnostic.EnvironmentCheckCollector.collect(project)
+            }.onFailure {
+                Logger.getInstance(PluginSettingsPanel::class.java)
+                    .warn("[New18] environment check collect FAILED: ${it.javaClass.simpleName}: ${it.message}")
+            }.getOrNull()
+            val text = report?.render()
+            ApplicationManager.getApplication().invokeLater {
+                environmentCheckButton.isEnabled = true
+                if (text == null) {
+                    environmentCheckStatusLabel.text =
+                        MpSqlVisualizerBundle.message("settings.envCheck.failed")
+                    return@invokeLater
+                }
+                val presenter = environmentReportPresenter
+                if (presenter != null) {
+                    presenter(text)
+                    environmentCheckStatusLabel.text = MpSqlVisualizerBundle.message("settings.envCheck.ready")
+                    return@invokeLater
+                }
+                val opened = project != null && runCatching {
+                    val file = com.intellij.testFramework.LightVirtualFile(
+                        MpSqlVisualizerBundle.message("settings.envCheck.fileName"),
+                        text,
+                    )
+                    com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                        .openFile(file, true)
+                }.isSuccess
+                if (opened) {
+                    environmentCheckStatusLabel.text = MpSqlVisualizerBundle.message("settings.envCheck.ready")
+                } else {
+                    // 无打开项目/编辑器打开失败：复制到剪贴板（不弹框，行内提示）
+                    runCatching { UiTextClipboard.copy(text) }
+                    environmentCheckStatusLabel.text = MpSqlVisualizerBundle.message("settings.envCheck.copied")
+                }
+            }
+        }
+    }
+
+    /** 测试访问器：体检按钮与结果行（断言入口存在、点击后行内提示）。 */
+    internal fun environmentCheckButtonForTest(): JButton = environmentCheckButton
+    internal fun environmentCheckStatusForTest(): JBLabel = environmentCheckStatusLabel
 
     // ------------------------------------------------------------------
     // F-44-7：SqlSourceInterceptor 自动注入

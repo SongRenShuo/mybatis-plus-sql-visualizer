@@ -689,6 +689,14 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     // 组 6：更新与诊断（默认折叠）
     if (SECTION_UPDATE_DIAGNOSTICS in sections) {
         sectionGroup("settings.section.updateDiagnostics") { p, g ->
+            // NEW-18：一键环境体检（数据源/方言/agent attach/捕获覆盖/Community 五项只读体检，
+            // 结果以 LightVirtualFile 在编辑器打开，可整段复制贴工单）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.envCheck.label"),
+                JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                    isOpaque = false
+                    add(environmentCheckButton)
+                    add(environmentCheckStatusLabel)
+                })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
                 JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                     isOpaque = false
