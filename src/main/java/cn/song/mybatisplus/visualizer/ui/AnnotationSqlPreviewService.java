@@ -199,9 +199,7 @@ public final class AnnotationSqlPreviewService {
                 host,
                 host != null ? host.getVirtualFile() : null,
                 sqlResolution,
-                moduleResolution,
-                null,
-                null);
+                moduleResolution);
     }
 
     // ------------------------------------------------------------------

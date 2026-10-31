@@ -402,7 +402,7 @@ public final class SqlPreviewService {
         }
         return new PreviewSourceContext(project, PreviewSourceOrigin.PSI, file,
                 file != null ? file.getVirtualFile() : null,
-                sqlResolution, moduleResolution, null, null);
+                sqlResolution, moduleResolution);
     }
 
     @Nullable
@@ -911,9 +911,7 @@ public final class SqlPreviewService {
                 host,
                 file,
                 SqlPsiResolution.None.INSTANCE,
-                module,
-                null,
-                null);
+                module);
     }
 
     @NotNull

@@ -430,8 +430,8 @@ public record LogSqlEntry(
                        String mapperStatement, String errorText, String requestTag, Long updateCount,
                        String databaseName) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
-            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, null);
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, null, CaptureProvenance.UNKNOWN);
     }
 
     /** 保留新增归因前的完整构造签名（旧 20 参形态，旧生产者默认尚未归因）。 */
@@ -442,8 +442,8 @@ public record LogSqlEntry(
                        String mapperStatement, String errorText, String requestTag, Long updateCount,
                        String databaseName, String actualSql) {
         this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
-            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, threadName, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, CaptureProvenance.UNKNOWN);
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, null, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null, actualSql, CaptureProvenance.UNKNOWN);
     }
 
     /**

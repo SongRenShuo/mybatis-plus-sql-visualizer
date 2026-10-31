@@ -125,9 +125,7 @@ public final class XmlPreviewService {
                     file,
                     file.getVirtualFile(),
                     resolution,
-                    module,
-                    null,
-                    null);
+                    module);
         });
     }
 

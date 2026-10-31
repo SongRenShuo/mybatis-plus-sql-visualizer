@@ -201,7 +201,7 @@ public final class ProjectDialectEvidence {
     public static volatile Function<Project, List<String>> buildTextsForTest = null;
 
     private static boolean defaultEnabled() {
-        ApplicationManager app = ApplicationManager.getApplication();
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
         return app == null || !app.isUnitTestMode();
     }
 

@@ -316,7 +316,7 @@ public final class DialectRegistry {
             com.intellij.openapi.module.Module module) {
         try {
             if (project == null) return null;
-            if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+            if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread()) {
                 ProjectDialectEvidence.Evidence cached = ProjectDialectEvidence.cachedOrNull(project, module);
                 if (cached != null) return cached;
                 return module != null ? ProjectDialectEvidence.cachedOrNull(project) : null;
