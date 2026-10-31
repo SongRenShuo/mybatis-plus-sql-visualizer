@@ -421,4 +421,178 @@ class ExecDialectRoutingTest {
         assertTrue("en bundle 缺 execute.datasource.noRunnable", en.contains("execute.datasource.noRunnable="))
         assertTrue("zh bundle 缺 execute.datasource.noRunnable", zh.contains("execute.datasource.noRunnable="))
     }
+
+    // ------------------------------------------------------------------
+    // UI-046 A：兜底目标源挑选（四档确定性优先级，每档一个用例）
+    // ------------------------------------------------------------------
+
+    private fun idsOf(vararg ids: String?): List<String?> = ids.toList()
+
+    /** 桩数据源：判定函数按名字给方言 id 清单（真实判定由 platformDialectId/urlFallbackId 注入）。 */
+    private fun dialectMap(vararg pairs: Pair<String, List<String?>>): (Any) -> List<String?> {
+        val map = pairs.toMap()
+        return { ds -> map[ds as String].orEmpty() }
+    }
+
+    @Test
+    fun `兜底目标源_既有解析命中时原样返回`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = "memory-hit",
+            dataSources = listOf("mysql-a", "mysql-b"),
+            renderedDialectName = "MySQL",
+            dialectIdsOf = dialectMap("mysql-a" to idsOf("MySQL"), "mysql-b" to idsOf("MySQL")),
+        )
+        assertEquals("last-used/默认源命中时必须原样返回（既有行为零变化）", "memory-hit", picked)
+    }
+
+    @Test
+    fun `兜底目标源_按渲染方言唯一匹配`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("mysql-a", "pg-a", "h2-a"),
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = dialectMap(
+                "mysql-a" to idsOf("MySQL"),
+                "pg-a" to idsOf("PostgreSQL"),
+                "h2-a" to idsOf("H2"),
+            ),
+        )
+        assertEquals("恰好 1 个与渲染方言匹配时必须选它", "pg-a", picked)
+    }
+
+    @Test
+    fun `兜底目标源_单源无歧义兜底`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("only-one"),
+            // 未连接/未内省：平台与 URL 都判不出方言
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = { idsOf(null, null) },
+        )
+        assertEquals("判不出方言但在册源只有 1 个时用它（单源无歧义）", "only-one", picked)
+    }
+
+    @Test
+    fun `兜底目标源_多候选不猜`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("pg-a", "pg-b"),
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = dialectMap("pg-a" to idsOf("PostgreSQL"), "pg-b" to idsOf("PostgreSQL")),
+        )
+        assertNull("两个源都匹配渲染方言时是歧义，不许猜", picked)
+    }
+
+    @Test
+    fun `兜底目标源_零在册源返回空`() {
+        assertNull(
+            "没有在册源时无从挑选",
+            ExecDialectRouting.pickTargetDataSourceForDialect(
+                existing = null,
+                dataSources = emptyList(),
+                renderedDialectName = "MySQL",
+                dialectIdsOf = { idsOf("MySQL") },
+            ),
+        )
+    }
+
+    @Test
+    fun `渲染方言匹配_大小写与URL兜底id同口径`() {
+        assertTrue(
+            "方言名比对不区分大小写，且 URL 兜底 id 与平台 id 同权",
+            ExecDialectRouting.dialectMatchesRendered("mysql", idsOf(null, "MySQL")),
+        )
+        assertTrue(
+            "家族别名按 PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS 收敛（MariaDB 候选含 MySQL）",
+            ExecDialectRouting.dialectMatchesRendered("MariaDB", idsOf("MySQL")),
+        )
+        assertFalse(
+            "判不出方言的源不得被当成匹配",
+            ExecDialectRouting.dialectMatchesRendered("MySQL", idsOf(null, null)),
+        )
+        assertFalse(
+            "渲染方言不在登记表里时无从匹配（不猜）",
+            ExecDialectRouting.dialectMatchesRendered("UnknownDialect", idsOf("MySQL")),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // UI-046 B：空 Runner 归因三分类（文案必须说真话）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `空Runner归因_零在册源`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(emptyList(), "MySQL") { idsOf("MySQL") }
+        assertEquals(ExecDialectRouting.EmptyRunnersReason.NO_DATA_SOURCE, reason)
+        assertEquals("execute.datasource.empty", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_有源但均判不出方言`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("ds-1", "ds-2"),
+            "MySQL",
+        ) { idsOf(null, null) }
+        assertEquals(
+            "全部源都判不出方言＝未连接/未内省，不是方言不匹配",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_UNKNOWN,
+            reason,
+        )
+        assertEquals("execute.datasource.notConnected", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_方言对得上却仍无Runner`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a", "pg-a"),
+            "MySQL",
+        ) { ds -> if (ds == "mysql-a") idsOf("MySQL") else idsOf("PostgreSQL") }
+        assertEquals(
+            "有源与渲染方言匹配却枚举不出 Runner＝源不可 attach（未连接/未内省）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertEquals("execute.datasource.notConnected", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_方言可判但都对不上`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("pg-a"),
+            "MySQL",
+        ) { idsOf("PostgreSQL") }
+        assertEquals(ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH, reason)
+        assertEquals("execute.datasource.dialectMismatch", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_渲染方言缺失时按方言不匹配处理`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(listOf("pg-a"), null) { idsOf("PostgreSQL") }
+        assertEquals(
+            "无渲染事实时不能断言「对得上」，沿用既有 W7 反推口径",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH,
+            reason,
+        )
+    }
+
+    @Test
+    fun `接线守卫_空Runner分支接方言兜底与三分类`() {
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "空 Runner 分支未接方言兜底目标源解析——全新项目（无 last-used/默认源）会直接落到方言不匹配文案",
+            results.contains("resolveTargetDataSourceForDialect(project, renderedDialectName)"),
+        )
+        assertTrue(
+            "空 Runner 分支未按真实原因三分类",
+            results.contains("classifyEmptyRunners(project, registered, renderedDialectName)"),
+        )
+        val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        val enLine = en.lineSequence().firstOrNull { it.startsWith("execute.datasource.notConnected=") }
+        val zhLine = zh.lineSequence().firstOrNull { it.startsWith("execute.datasource.notConnected=") }
+        assertTrue("en bundle 缺 execute.datasource.notConnected", enLine != null)
+        assertTrue("zh bundle 缺 execute.datasource.notConnected", zhLine != null)
+        assertTrue("en 文案缺占位符 {0}（在册数据源个数）", enLine.orEmpty().contains("{0}"))
+        assertTrue("zh 文案缺占位符 {0}（在册数据源个数）", zhLine.orEmpty().contains("{0}"))
+    }
 }

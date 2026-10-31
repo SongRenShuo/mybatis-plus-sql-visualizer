@@ -424,9 +424,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
             callback?.invoke(true)
         }
         runners.isEmpty() -> {
-            // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
-            //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
-            // 真无数据源保持既有引导文案。
+            // UI-046：空 Runner 归因——真实原因三档（零源 / 源未连接未内省、判不出方言 / 方言不匹配）。
+            // 2026-11-01 真机（MySQL 8.0.12）：项目里 12 个在册源（3 个 MySQL）全部未内省，平台枚举
+            // 不出 attach Runner；旧代码一律回「没有与该 SQL 方言（MySQL）匹配的数据源」，把排查带偏成
+            // 「沙盒没有 MySQL 连接」。真实原因必须如实报出，可行动作也随档位不同。
             val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
             LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
             if (executeAfterPrepare) openDatabaseToolWindow(project)
@@ -437,8 +438,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
             // 映射时，该方言一条 runner 都筛不出（runners=0）——数据源其实完全可用。
             // 兜底＝按**目标源方言**把 exec 文件重映射一次，再枚举一遍 runner：命中即走既有
             // 全链（控制台、结果表、审计全部复用），不新建任何执行通道。
+            //
+            // UI-046 A：目标源解析不再只有 last-used/默认源（全新项目两者皆空 → 重映射整条被跳过）。
+            // 现按「last-used/默认源 → 按渲染方言唯一匹配 → 单源兜底」取源，仍不唯一则照旧不猜。
+            val renderedDialectName = dialectGateRequest?.renderedDialectName?.takeIf { it.isNotBlank() }
             val remapLanguage = runCatching {
-                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                val targetDs = ExecDialectRouting.resolveTargetDataSourceForDialect(project, renderedDialectName)
                 ExecDialectRouting.resolveTargetLanguage(project, targetDs)
             }.getOrNull()
             if (remapLanguage != null && ExecDialectRouting.remapExecFileDialect(project, vf, remapLanguage)) {
@@ -455,27 +460,35 @@ internal fun DataSourceSelector.chooseAndPrepare(
                     )
                 }
             }
-            if (registered.isEmpty()) {
-                onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
-            } else {
-                // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
-                // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
-                // 上次使用的 MySQL 源 → 推出 MySQL → 用户看到「没有与该 SQL 方言（MySQL）匹配的
-                // 数据源」，可他眼前预览里明明写着 `方言: PostgreSQL（手动指定）`、SQL 也是 PG 语法，
-                // 文案自相矛盾（2026-10-25 实测）。O-145 W7 已让 mapDialectBeforePsi 跟随渲染方言，
-                // 这里同步跟上：有渲染事实优先用它，没有才回退旧的按源推断。
-                val renderedName = dialectGateRequest?.renderedDialectName?.takeIf { it.isNotBlank() }
-                val dialectDisplay = renderedName
-                    ?: run {
-                        val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
-                        val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
-                        (targetLanguage as? com.intellij.lang.Language)?.id
-                            ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
-                    }
-                val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
-                onError?.invoke(
-                    MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+            when (ExecDialectRouting.classifyEmptyRunners(project, registered, renderedDialectName)) {
+                ExecDialectRouting.EmptyRunnersReason.NO_DATA_SOURCE ->
+                    onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
+                // 判不出方言（全部 platformDialectId 为空且 URL 兜底也判不出），或方言对得上却仍
+                // 枚举不出 Runner：两种形态的用户动作都是「先把源连上、等内省完成」。
+                ExecDialectRouting.EmptyRunnersReason.DIALECT_UNKNOWN,
+                ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+                -> onError?.invoke(
+                    MpSqlVisualizerBundle.message("execute.datasource.notConnected", registered.size),
                 )
+                ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH -> {
+                    // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
+                    // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
+                    // 上次使用的 MySQL 源 → 推出 MySQL → 用户看到「没有与该 SQL 方言（MySQL）匹配的
+                    // 数据源」，可他眼前预览里明明写着 `方言: PostgreSQL（手动指定）`、SQL 也是 PG 语法，
+                    // 文案自相矛盾（2026-10-25 实测）。O-145 W7 已让 mapDialectBeforePsi 跟随渲染方言，
+                    // 这里同步跟上：有渲染事实优先用它，没有才回退旧的按源推断。
+                    val dialectDisplay = renderedDialectName
+                        ?: run {
+                            val targetDs = ExecDialectRouting.resolveTargetDataSourceForDialect(project, renderedDialectName)
+                            val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+                            (targetLanguage as? com.intellij.lang.Language)?.id
+                                ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+                        }
+                    val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
+                    onError?.invoke(
+                        MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+                    )
+                }
             }
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
