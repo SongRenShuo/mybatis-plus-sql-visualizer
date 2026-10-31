@@ -16,6 +16,7 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.progress.util.ProgressIndicatorBase
 import com.intellij.ui.components.labels.LinkLabel
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.RestartDialogImpl
 import com.intellij.util.ui.UIUtil
@@ -28,7 +29,6 @@ import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JPanel
 import javax.swing.JProgressBar
-import javax.swing.JScrollPane
 
 /**
  * 设置页「更新」分区（M28）：当前版本 / 启动自动检查开关 / 检查更新 / 下载并安装 /
@@ -114,7 +114,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             add(notesTitleLabel, BorderLayout.WEST)
             add(giteeLink, BorderLayout.EAST)
         }, BorderLayout.NORTH)
-        add(JScrollPane(notesArea).apply {
+        // T-DarkTheme：滚动容器换平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸 JViewport
+        // （背景取 Viewport.background，不跟随所载组件）、四角无 Corner 组件；平台 JBScrollPane 用
+        // JBViewport（背景取所载 view）+ 四角 Corner。此处外层边框按原样覆盖为文本框边框，不受影响。
+        add(JBScrollPane(notesArea).apply {
             border = UIUtil.getTextFieldBorder()
             isVisible = false
         }, BorderLayout.CENTER)
