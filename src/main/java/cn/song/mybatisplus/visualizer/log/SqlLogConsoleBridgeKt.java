@@ -54,9 +54,18 @@ public final class SqlLogConsoleBridgeKt {
         // 提取「日志行原始时间」暂存 LogTimeCorrelator（键=占位符版 SQL 指纹），agent 事件入队前
         // 取回回填，面板「日志时间」在增强模式下不丢失。日志时间是**数据**：采集不再受「时间显示开
         // 关/时间源」这类渲染偏好控制（关掉显示只影响渲染，不影响条目字段），故此处零开关判断。
+        //
+        // T-CaptureCatchAll 券02：让位不再是二值——CaptureActivityFallback 在「agent 静默但控制台
+        // 仍有 SQL 行」时自动解封（白名单漏驱动的双哑场景）。解封态下本函数直接走正常解析；让位态下
+        // 嗅探产出的条目若恰是解封触发点，直接采用该条目（不重复喂解析器、不丢这一行）。
         if (SqlCaptureGate.paused.get()) {
-            sniffLogTimestamp(line, ctx);
-            return List.of();
+            if (!CaptureActivityFallback.isActive()) {
+                List<LogSqlEntry> sniffed = sniffLogTimestamp(line, ctx);
+                if (CaptureActivityFallback.onConsoleLine(!sniffed.isEmpty(), CaptureActivityFallback.now())) {
+                    return finishEntries(sniffed, line, ctx, timePrefix);
+                }
+                return List.of();
+            }
         }
         // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
         SourceMarkerData marker = SqlSourceMarker.parse(line);
@@ -122,6 +131,19 @@ public final class SqlLogConsoleBridgeKt {
         if (taken.isEmpty()) {
             return List.of();
         }
+        return finishEntries(taken, line, ctx, timePrefix);
+    }
+
+    /**
+     * T-CaptureCatchAll 券02：条目补全（耗时 + 源码位置）——正常解析路径与「解封瞬间采用嗅探条目」
+     * 共用同一出口，避免两处各抄一份补全逻辑（两处漂移会让解封首批条目丢耗时/源码）。
+     */
+    private static List<LogSqlEntry> finishEntries(
+            List<LogSqlEntry> taken,
+            String line,
+            BridgeLineContext ctx,
+            String timePrefix
+    ) {
         // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
         // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
         // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
@@ -155,14 +177,17 @@ public final class SqlLogConsoleBridgeKt {
                     e.sourceCandidates(),
                     e.candidateClasses(),
                     e.stackDigest(),
+                    e.threadName(),
                     e.sequenceNumber(),
                     mapperStatement,
                     e.errorText(),
                     requestTag,
                     e.updateCount(),
                     e.databaseName(),
+                    e.dialectName(),
                     // master 为 e.copy(...)——未触及字段须原样携带（actualSql 同权透传）
-                    e.actualSql()));
+                    e.actualSql(),
+                    e.captureProvenance()));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;
@@ -176,8 +201,11 @@ public final class SqlLogConsoleBridgeKt {
      * （参数值序列作次级判别签名）。
      * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
      * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
+     *
+     * <p>T-CaptureCatchAll 券02：返回本行解析出的条目——「控制台有 SQL 行」的实证信号由调用方喂给
+     * {@link CaptureActivityFallback}；解封触发的那一行直接采用这些条目（不再重复喂解析器）。</p>
      */
-    private static void sniffLogTimestamp(String line, BridgeLineContext ctx) {
+    private static List<LogSqlEntry> sniffLogTimestamp(String line, BridgeLineContext ctx) {
         // F58（T-PerfSweep18 压轴）：线程 token 每行只提一次下传——原四解析器各自 bucketFor(line)
         // 重提同一 token（同一行最多 4 次 substring 窗口+级别锚正则+方括号扫描）。
         String threadToken = LogThreadRouter.threadTokenOf(line);
@@ -204,6 +232,7 @@ public final class SqlLogConsoleBridgeKt {
                     e.logTimestamp(),
                     LogSqlModelsKt.logTimeParamSignature(e.params()));
         }
+        return taken;
     }
 
     /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */

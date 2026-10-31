@@ -26,4 +26,15 @@ public final class SqlCaptureGate {
      * 会话」多跑几道解析门，无条目可建，成本可忽略）。
      */
     public static volatile boolean epActive = false;
+
+    /**
+     * T-CaptureCatchAll 券02：桥的**有效**封停态——{@code paused} 且活性回落未解封。
+     *
+     * <p>逐行热路径只读两个 volatile（{@code paused} + {@code CaptureActivityFallback.isActive()}），无锁。
+     * 桥的所有「是否让位」判定都改用本函数（不再直接读 {@code paused}）：白名单漏一个驱动时
+     * agent 会长期零事件，此时必须让控制台桥回来，否则两条通道同时零产出。</p>
+     */
+    public static boolean bridgeSuppressed() {
+        return paused.get() && !CaptureActivityFallback.isActive();
+    }
 }

@@ -348,7 +348,8 @@ public class SqlLogConsoleBridge {
         // T-ConsolePendingFlush：待闭合条目静默冲刷——应用执行完 SQL 后一行都不再打时，只有这一拍能把
         // 桶里的待产出条目交出去（见 flushSettledEntries KDoc）。增强接管中（paused）不冲——那期间条目
         // 由 agent 通道产出，桥侧冲刷会造成双路重复。
-        if (isCapturing.getAsBoolean() && !SqlCaptureGate.paused.get()) {
+        // T-CaptureCatchAll 券02：活性回落解封期间照常冲刷——此时 agent 通道已判定为空转，桥是唯一产出方。
+        if (isCapturing.getAsBoolean() && !SqlCaptureGate.bridgeSuppressed()) {
             flushSettledEntries();
         }
         if (lastHadMainConsole && !hasMain) {
