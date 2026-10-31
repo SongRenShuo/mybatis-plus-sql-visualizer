@@ -32,12 +32,18 @@ object ExecuteSqlSupport {
     private const val LAUNCHER_CLASS = "cn.song.mybatisplus.visualizer.database.DatabaseConsoleLauncher"
 
     /**
+     * 测试缝：覆写可用性判定（headless 测试的 classpath 不含 database 插件标记类，真实探测恒为
+     * false，会让「验选区/文案」的既有测试误红）。生产路径恒为 null。
+     */
+    internal var availabilityOverrideForTest: Boolean? = null
+
+    /**
      * database 插件是否已加载（Ultimate/DataGrip）：`Class.forName` 探测标记类——
      * 不依赖 `PluginManagerCore.isPluginInstalled`/`PluginId` 的版本形态（该 API 在 2025.3~2026.2
      * 间有包迁移），Community/测试沙盒（jar 已排除）下返回 false。
      */
     @JvmStatic
-    fun isAvailable(): Boolean = runCatching {
+    fun isAvailable(): Boolean = availabilityOverrideForTest ?: runCatching {
         Class.forName(DATABASE_MARKER_CLASS)
         true
     }.getOrDefault(false)
