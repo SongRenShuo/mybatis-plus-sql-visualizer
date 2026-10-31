@@ -1135,6 +1135,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** F-8：当前预览的方言名称（可 null）。 */
     fun currentDialect(): String? = current?.effectiveDialect?.name
+
+    /**
+     * NEW-21：当前预览的**语句模型**（Wrapper/XML/JPA 预览链的解析产物；可 null）。
+     *
+     * 供信创兼容性体检逐方言**真渲染**——只有文本时体检只能按文本证据判，分页/引用形态判不出差异。
+     * P-5 结论：多方言渲染本身不需要 PSI/工程上下文，此处只是把已解析好的模型取出来。
+     */
+    fun currentStatement(): cn.song.mybatisplus.visualizer.model.SqlStatement? =
+        current?.previewModel?.statement ?: current?.diagramStatement
+
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text

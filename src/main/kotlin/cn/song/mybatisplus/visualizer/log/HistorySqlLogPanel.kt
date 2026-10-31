@@ -761,8 +761,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（与日志页同口径；单遍无分配）
         sqlCellRenderer.maxDurationMs = maxDurationOf(filteredEntries)
         val query = searchField.text.trim()
-        val invalidRegex = query.isNotEmpty() &&
-            (regexEnabled || query.startsWith(HISTORY_REGEX_PREFIX)) && regexMemo.compiled == null
+        // S1-4④：非法正则判定抽到 [invalidRegexQuery] 单一真源（日志页同链），两页行为一致。
+        val invalidRegex = invalidRegexQuery(query, regexEnabled, regexMemo)
         val error = if (invalidRegex) MpSqlVisualizerBundle.message("log.history.search.invalidRegex") else null
         // 过滤仍保留既有非法正则子串回退，但不能让「0 条」掩盖输入错误。
         nativeSearch.setSearchError(error)
@@ -1051,7 +1051,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** R4：导出选中/全部条目——格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存对话框 → 后台写盘 → 通知。
      *  照 ShareDialog 的 FileSaverDialog 惯例（仓内既有形态）。 */
     internal fun exportEntries(entries: List<LogSqlEntry>) {
-        if (entries.isEmpty()) return
+        // S1-4④：无条目不再静默 return（用户分不清「点了没生效」和「本来就没东西」）。
+        // 用户主动取消格式/保存对话框不走本通道——那是明确意图。
+        if (entries.isEmpty()) {
+            ExportFeedback.notifyNothingToExport(project, "export.nothing.history")
+            return
+        }
         val format = chooseExportFormat() ?: return
         val rows = entries.map {
             val source = buildString {

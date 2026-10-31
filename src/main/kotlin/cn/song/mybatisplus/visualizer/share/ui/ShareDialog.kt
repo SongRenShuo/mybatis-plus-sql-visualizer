@@ -169,18 +169,32 @@ class ShareDialog(
             paramValues = panel.paramValuesSnapshot(),
             tableName = panel.currentTableName(),
             source = source,
+            // NEW-21：语句模型在场时体检段逐方言真渲染（不在场则按文本证据判，如实降级）
+            statement = panel.currentStatement(),
         )
     }
 
     /** R50：复制诊断报告（Markdown）到剪贴板。 */
     private fun copyDiagnosticReport(source: String?) {
-        val input = diagnosticInput(source) ?: return
+        // S1-4④：无 SQL 不再静默 return（走平台通知，不弹模态框）。
+        val input = diagnosticInput(source)
+        if (input == null) {
+            cn.song.mybatisplus.visualizer.log.ExportFeedback
+                .notifyNothingToExport(project, "export.nothing.diagnostic")
+            return
+        }
         cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(DiagnosticReportFormatter.format(input))
     }
 
     /** R50：导出诊断报告（HTML 文件，复用既有 HTML 落盘链）。 */
     private fun exportDiagnosticHtml(source: String?) {
-        val input = diagnosticInput(source) ?: return
+        // S1-4④：无 SQL 不再静默 return（走平台通知，不弹模态框）；取消保存对话框仍静默。
+        val input = diagnosticInput(source)
+        if (input == null) {
+            cn.song.mybatisplus.visualizer.log.ExportFeedback
+                .notifyNothingToExport(project, "export.nothing.diagnostic")
+            return
+        }
         val html = DiagnosticReportFormatter.formatHtml(input)
         val descriptor = FileSaverDescriptor(
             MpSqlVisualizerBundle.message("share.dialog.diagnosticHtml"),

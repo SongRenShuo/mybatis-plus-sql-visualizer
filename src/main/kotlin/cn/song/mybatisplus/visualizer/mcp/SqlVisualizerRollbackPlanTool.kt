@@ -40,7 +40,14 @@ open class SqlVisualizerRollbackPlanTool : McpToolsetSupport("sqlv_rollback_plan
     ): String = audit("sqlv_rollback_plan") { rollbackPlan(sql, primaryKeyColumns) }
 
     /** 纯函数核心（零 IDE 依赖）。 */
-    internal fun rollbackPlan(sql: String, primaryKeyColumns: String): String {
+    internal fun rollbackPlan(sql: String, primaryKeyColumns: String): String =
+        formatRollbackPlan(rollbackResult(sql, primaryKeyColumns))
+
+    /**
+     * NEW-23 接线缝：只生成结果不渲染——[McpWritePathChain] 的执行前清单复用本函数的产物，
+     * 保证「清单里的回滚语句」与 sqlv_rollback_plan 的输出出自同一条 SQL 文本、同一份主键口径。
+     */
+    internal fun rollbackResult(sql: String, primaryKeyColumns: String): RollbackSqlGenerator.RollbackResult {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."))
         }
@@ -48,7 +55,11 @@ open class SqlVisualizerRollbackPlanTool : McpToolsetSupport("sqlv_rollback_plan
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .ifEmpty { null }
-        val result = RollbackSqlGenerator.generate(sql, pk)
+        return RollbackSqlGenerator.generate(sql, pk)
+    }
+
+    /** 结果 → 文本（工具输出与清单共用的唯一渲染点）。 */
+    internal fun formatRollbackPlan(result: RollbackSqlGenerator.RollbackResult): String {
         return buildString {
             append("rating: ").append(result.rating).append('\n')
             result.targetTable?.let { append("table: ").append(it).append('\n') }

@@ -55,6 +55,9 @@ import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
  *  - sqlv_history_search（R14）：返回条 ≤20 默认 / 硬上限 100（maxResults 钳制）、单条 SQL 预览
  *    8 行 / 600 字符、扫描封顶 200_000 条（常量在 HistorySearchService：DEFAULT_MAX_RESULTS /
  *    HARD_MAX_RESULTS / MAX_PREVIEW_LINES / MAX_PREVIEW_CHARS）；范围默认当日（D1=A）防全量倾泻；
+ *  - sqlv_check_sql（NEW-23 chain=true）：核查段规模由输入 SQL 决定；清单段 = 固定行数的判定与
+ *    交接文案 + 回滚计划（语句 ≤500 条 / 256KB，RollbackSqlGenerator 既有上限）+ 一条 COUNT 试算
+ *    语句——无新增独立预算，超限由回滚生成器截断并降级 PARTIAL；
  *  - 其余六工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
  *    rollback=单实体单语句），不设额外预算。
  *
