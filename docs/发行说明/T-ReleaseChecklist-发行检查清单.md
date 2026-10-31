@@ -36,6 +36,7 @@
 ## 二、准备段（门禁与元数据）
 
 - [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/262 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+- [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
 - [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
