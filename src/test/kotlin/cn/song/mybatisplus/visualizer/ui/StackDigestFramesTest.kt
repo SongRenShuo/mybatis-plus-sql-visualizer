@@ -219,4 +219,47 @@ class StackDigestFramesTest {
         assertTrue(projection.noProjectFrames())
         assertTrue(StackFramesProjection.build(null).nodes().isEmpty())
     }
+
+    // ------------------------------------------------------------------
+    // T-StackBizFrame S3：驱动族/MyBatis 日志族折叠 + 内联摘要取景
+    // ------------------------------------------------------------------
+
+    @Test
+    fun test驱动族与MyBatis日志族_按内部帧折叠_不再冒充可见帧() {
+        val digest = "org.postgresql.jdbc.PgPreparedStatement#execute:182" +
+            "<-org.apache.ibatis.logging.jdbc.PreparedStatementLogger#invoke:58" +
+            "<-org.apache.ibatis.binding.MapperMethod#execute:79" +
+            "<-com.acme.service.OrderService#find:42"
+        val projection = StackFramesProjection.build(digest)
+        assertEquals(2, projection.nodes().size)
+        assertEquals(3, (projection.nodes()[0] as StackFramesNode.Internal).frames().size)
+        assertEquals("com.acme.service.OrderService", (projection.nodes()[1] as StackFramesNode.Visible).frame().fqcn())
+        assertFalse(projection.noProjectFrames())
+    }
+
+    @Test
+    fun test取景_头部全为内部帧时跳到首个项目帧() {
+        val digest = "cn.song.mybatisplus.sqlvis.agent.hook.WovenEvents#emit:70" +
+            "<-org.postgresql.jdbc.PgPreparedStatement#execute:182" +
+            "<-<…中间省略 40 帧…>" +
+            "<-com.acme.service.OrderService#find:42" +
+            "<-com.acme.task.OrderTask#run:45"
+        assertEquals(
+            "com.acme.service.OrderService#find:42<-com.acme.task.OrderTask#run:45",
+            StackDigestFrames.projectExcerpt(digest),
+        )
+    }
+
+    @Test
+    fun test取景_首个非内部帧就在开头时原样返回() {
+        val digest = "com.acme.service.OrderService#find:42<-java.lang.Thread#run:1"
+        assertEquals(digest, StackDigestFrames.projectExcerpt(digest))
+    }
+
+    @Test
+    fun test取景_全内部帧或空串时原样返回() {
+        val allInternal = "java.lang.Thread#run:1<-org.postgresql.jdbc.PgPreparedStatement#execute:2"
+        assertEquals(allInternal, StackDigestFrames.projectExcerpt(allInternal))
+        assertEquals("", StackDigestFrames.projectExcerpt(""))
+    }
 }
