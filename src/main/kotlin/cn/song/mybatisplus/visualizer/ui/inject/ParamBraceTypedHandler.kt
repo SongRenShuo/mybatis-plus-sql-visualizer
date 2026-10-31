@@ -9,8 +9,10 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlComment
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
+import com.intellij.psi.xml.XmlText
 
 /**
  * T-XmlSynHi D5：mapper XML 语句文本内敲 `#` / `$` 自动闭合 `{}`（光标落 #/{ 之间）。
@@ -74,16 +76,50 @@ class ParamBraceTypedHandler : TypedHandlerDelegate() {
 
     /**
      * 光标前字符所属标签是否为语句文本位（mapper 根守卫 + 语句标签集，与 injector 同口径）。
-     * 子标签两态分界（20260928 真机实证）：光标落子标签**边界之后**（如 `</if>` 右侧，
-     * 属父语句内容区）→ 接管；落子标签**自身标记区内**（如 `<trim prefix=|>` 属性间隙）→
-     * 不接管——第二态曾因 parentTag∈语句标签 的宽判全放，全靠 EP 未注册的死代码遮掩。
+     *
+     * 两态分界（T-XmlBraceNested 重写，20260928 旧判据作废）：
+     *  - **最近语句标签祖先（任意深度）**：动态标签（`if`/`where`/`choose`/`trim`/…）可任意嵌套，
+     *    旧「一层 parentTag∈语句标签」判法把 `<where>` 下的 `<if>` 体内正文全部漏判
+     *    （R15 录制实测：真实 mapper 主流排版下功能全灭）；
+     *  - **标记区不接管**：光标落在某标签的**起始标记**内（`<select id=|>`、`<trim prefix=|>`
+     *    属性间隙）→ 不接管（20260928 真机实证形态，语义保留）；
+     *  - **子标签之后接管**：`</if>` 右侧、自闭合 `<include/>` 之后（`offset >= 该子标签 endOffset`）
+     *    → 属更外层语句内容，接管。
+     *
+     * 标记区边界的求法：平台 XmlTag 无 startTag/endTag 访问器（262/2025.3 javap 实证，
+     * 历史误写会被编译期拦下），改由**体内容孩子**（XmlTag/XmlText/XmlComment）推导——
+     * 起始标记 = 标签 startOffset 到第一个体内容孩子；无体内容孩子（空标签）整段都是标记。
+     *
+     * 旧判据把「子标签体内正文」（offset < endOffset）与「子标签自身标记区」混为一谈，
+     * 修 20260928 的 A（标记区误接管）时引入 B（正文误放行）。
      */
     private fun inStatementText(tag: XmlTag, offset: Int): Boolean {
         if (!XmlSynHiGate.inMapperFile(tag)) return false
-        if (tag.name in STATEMENT_TAGS) return true
-        val parent = tag.parentTag ?: return false
-        if (parent.name !in STATEMENT_TAGS) return false
-        return offset >= tag.textRange.endOffset
+        val statement = generateSequence(tag) { it.parentTag }
+            .take(64)
+            .firstOrNull { it.name in STATEMENT_TAGS } ?: return false
+        var cur: XmlTag? = tag
+        while (cur != null && cur !== statement) {
+            if (offset >= cur.textRange.endOffset) return true   // 子标签之后＝外层语句内容
+            if (offset < bodyStart(cur)) return false            // 子标签起始标记区（含属性间隙）
+            cur = cur.parentTag
+        }
+        // 语句标签自身：起始标记区不接管；结束标记区及其后不接管。
+        // 体末端点含在内（offset == bodyEnd 是紧贴 `</if>` 前的正文追加位，敲 # 应接管）
+        val (bodyStartOff, bodyEndOff) = bodyRange(statement) ?: return false
+        return offset in bodyStartOff..bodyEndOff
+    }
+
+    /** 标签**体内容**（子标签 / 文本 / 注释）起点＝起始标记的结束；无体内容（空标签）返回 endOffset。 */
+    private fun bodyStart(tag: XmlTag): Int =
+        tag.children.firstOrNull { it is XmlTag || it is XmlText || it is XmlComment }?.textRange?.startOffset
+            ?: tag.textRange.endOffset
+
+    /** 标签体内容区间（首/末体内容孩子）；无体内容（空标签）返回 null。 */
+    private fun bodyRange(tag: XmlTag): Pair<Int, Int>? {
+        val body = tag.children.filter { it is XmlTag || it is XmlText || it is XmlComment }
+        if (body.isEmpty()) return null
+        return body.first().textRange.startOffset to body.last().textRange.endOffset
     }
 
     private companion object {

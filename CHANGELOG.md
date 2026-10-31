@@ -2,6 +2,11 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased] - 2026-10-31
+
+### Fixed
+- **mapper XML 动态标签体内敲 `#`/`$` 不再自动补 `{}`（T-XmlBraceNested，演示录制实测）**：`ParamBraceTypedHandler.inStatementText` 只看一层 parent 且把「子标签体内正文」与「子标签标记区」混为一谈——`<where>` 下的 `<if>`、`<choose>` 下的 `<when>` 等真实 mapper 主流排版里敲 `#` 只落裸字符，功能全灭；光标落在语句标签自身属性区（`<select id="a|">`）还会误插。现改为「最近语句标签祖先（任意深度）+ 体内容孩子推导标记区」：体内正文与 `</if>` 右侧接管，起始标记区（含属性间隙）与结束标记区不接管。`ParamBraceTypedHandlerTest` 新增 5 用例（嵌套 if/when 体内、单层 if 体内、语句属性区、自闭合子标签之后）全绿，原 6 用例回归绿
+
 ## [2026.10.31-beta.2] - 2026-10-31
 
 ### Changed
