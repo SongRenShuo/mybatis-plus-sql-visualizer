@@ -893,12 +893,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "后缀致 filter 全程跳过的假绿）。",
             ),
             GuardEntry(
-                "ui/ExplainStructuredDefaultOffGuardTest.kt",
+                "ui/ExplainStructuredDefaultOnGuardTest.kt",
                 emptyList(),
-                "结构化执行计划默认关守卫（T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
-                    "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
+                "结构化执行计划默认开守卫（R45 转正；沿革 T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
+                    "断言 explainStructuredRender 默认值为 true、「启用结构化并重试」推荐仍只提示一次、" +
                     "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
-                    "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
+                    "灵敏度=把默认值改回 false 或去掉一次性标记必红。",
             ),
             GuardEntry(
                 "config/SettingsPanelSearchableGuardTest.kt",

@@ -262,17 +262,16 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
 
     fun testStateRoundTripKeepsExplainStructuredRender() {
         // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关随 State 持久化往返保留（O-58 同款契约）；
-        // T-DevAcceptFix ②（20261006 验收，D67 采 B 案）：默认关——EXPLAIN 默认走原生控制台；
-        // 结构化通道保留一版（显式开启的值随 State 往返保留）。
+        // R45（转正）：默认开——用户的**显式关闭**必须随 State 往返保留（关闭权不被默认值覆盖）。
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {
-            settings.state.explainStructuredRender = true
+            settings.state.explainStructuredRender = false
             val saved = settings.getState().copy()          // 模拟落盘快照
-            settings.loadState(PluginSettings.State())        // 清成出厂默认（false）
-            assertFalse("清空后应为出厂默认 false（20261006 验收定案）", settings.state.explainStructuredRender)
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（true）
+            assertTrue("清空后应为出厂默认 true（R45 转正定案）", settings.state.explainStructuredRender)
             settings.loadState(saved)                         // 模拟重启重载
-            assertTrue("往返后显式开启值应保持 true", settings.state.explainStructuredRender)
+            assertFalse("往返后显式关闭值应保持 false", settings.state.explainStructuredRender)
         } finally {
             settings.loadState(snapshot)
         }
