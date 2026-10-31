@@ -414,6 +414,24 @@
              headless 静默。未登记的版本不弹（亮点必须来自登记表，不编造）。 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.VersionHighlightsActivity"/>
 
+        <!-- S2 首用即生效①：项目打开预热——复用 T-SqlDialectPrewarm 的助手（fire-and-forget 投池化
+             线程，EDT 零阻塞），把「SQL 方言映射一次性延迟加载」提前到项目打开时做完。
+             只接线不重复实现；源码守卫 convention/OnboardingPrewarmSourceScanTest 钉住
+             「只调 prewarm、不调 prewarmAndAwait」。 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingPrewarm"/>
+
+        <!-- S2 首用即生效③：工程级首用引导——项目打开时探测「带 mapper 的工程」（非阻塞读动作 +
+             smart mode，只看 XML 文件名、命中即停），命中后一次性指路预览快捷键与日志面板。
+             防打扰三重约束：版本粒度持久化（PluginSettings.mapperPrimerVersion）/ 应用级单次 /
+             headless 静默。 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.MapperProjectPrimerActivity"/>
+
+        <!-- S2 首用即生效②：状态栏常驻入口——显示本工程 SQL 预览/捕获状态（如「已捕获 N 条」），
+             点击直达 SQL 日志面板。走平台核心 EP（Community 同样可用，P-8 已查证）；文本由池化线程
+             2s 取快照，EDT 只做 updateWidget。 -->
+        <statusBarWidgetFactory id="cn.song.mybatisplus.visualizer.status"
+                                implementation="cn.song.mybatisplus.visualizer.onboarding.SqlPreviewStatusBarWidgetFactory"/>
+
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）
