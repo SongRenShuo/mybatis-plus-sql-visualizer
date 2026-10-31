@@ -31,11 +31,14 @@ public final class SqlPreviewPanelTextKt {
     public static String buildStackDigestInlineLine(@Nullable String digest) {
         if (digest == null) return "";
         String label = MpSqlVisualizerBundle.message("panel.meta.stackDigest");
+        // T-StackBizFrame S3：先取景（头部全是 agent/驱动/框架帧时跳到首个项目帧），再按原契约截断。
+        // 首个非内部帧本来就在开头时取景原样返回，故既有「前 120 字符 + …」行为逐字不变。
+        String excerpt = StackDigestFrames.projectExcerpt(digest);
         String summary =
-                digest.length() > SqlPreviewPanelKt.STACK_DIGEST_MAX_CHARS
-                        ? digest.substring(0, SqlPreviewPanelKt.STACK_DIGEST_MAX_CHARS)
+                excerpt.length() > SqlPreviewPanelKt.STACK_DIGEST_MAX_CHARS
+                        ? excerpt.substring(0, SqlPreviewPanelKt.STACK_DIGEST_MAX_CHARS)
                                 + SqlPreviewPanelKt.STACK_DIGEST_ELLIPSIS
-                        : digest;
+                        : excerpt;
         return "   " + label + " " + summary;
     }
 

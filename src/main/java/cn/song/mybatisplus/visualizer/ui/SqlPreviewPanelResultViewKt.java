@@ -202,7 +202,12 @@ public final class SqlPreviewPanelResultViewKt {
      * UPDATE/DELETE（Unable 但有快照工作流）同样进视图——人工恢复指引 + 粘贴快照生成回滚；
      * 完全不可推导（解析失败/MERGE/DDL/SELECT）不弹视图，仅消息框说明原因与人工恢复路径。</p>
      */
-    public static void showResult(@NotNull SqlPreviewPanel p, PreviewResult result) {
+    public static void showResult(@NotNull SqlPreviewPanel p, PreviewResult input) {
+        // T-DialectInferFix：渲染方言与临时文件映射必须同源。来源自带的精确方言（日志/历史条目）
+        // 优先，否则走统一决策链（数据源 → 项目配置/驱动依赖 → SQL 语法特征）。判不出来时保持 null，
+        // 由映射侧继承平台设置——不再让渲染端与 PSI 各自落 MySQL。
+        PreviewResult result = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolverKt
+                .withResolvedDialect(input, p.project);
         p.current = result;
         // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
         p.executionDialectRenderMode = p.project != null
@@ -664,7 +669,8 @@ public final class SqlPreviewPanelResultViewKt {
         for (SqlPreviewPanel.MetaPerfSegment seg : p.metaPerfSegments) segTexts.add(seg.text());
         p.metaTooltipBase = meta + warningLine + String.join("；", segTexts);
         p.metaLabel.setToolTipText(p.metaTooltipBase);
-        p.stackHover.updateDigest(result.getStackDigest());
+        // T-StackBizFrame S3：线程名随快照一起喂弹层（标题展示；null 时标题退回纯「调用栈」）
+        p.stackHover.updateDigest(result.getStackDigest(), result.getThreadName());
         p.metaLabel.setForeground(p.currentWarning != null
                 // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
                 ? JBColor.namedColor("ErrorForeground", JBColor.RED)

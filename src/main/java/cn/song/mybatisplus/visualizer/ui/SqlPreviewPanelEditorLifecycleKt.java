@@ -142,11 +142,22 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 // T-StabilityTail：判据放读动作**内部**才管用——平台读动作可被 closeProject 的写动作阻塞，
                 // 放行时窗口已开；在外面判会漏掉这条窄缝。
                 final VirtualFile vfForPsi = vf;
-                PsiFile psi = targetLanguageId != null
-                        ? awaitPreviewPsiLanguage(p, proj, vfForPsi, targetLanguageId)
-                        : ReadAction.compute(
+                PsiFile psi;
+                if (targetLanguageId != null) {
+                    psi = awaitPreviewPsiLanguage(p, proj, vfForPsi, targetLanguageId);
+                } else {
+                    // T-PreviewPsiDialect：同 awaitPreviewPsiLanguage —— findFile 抛平台契约异常时按
+                    // 「没有 PSI」处理（记 WARN 带堆栈），不让它升级成点名插件的 SEVERE。
+                    try {
+                        psi = ReadAction.compute(
                                 (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
                                         prewarmAbandoned(p) ? null : PsiManager.getInstance(proj).findFile(vfForPsi));
+                    } catch (Throwable t) {
+                        Logger.getInstance(SqlPreviewPanel.class)
+                                .warn("[T-PreviewPsiDialect] PsiManager.findFile threw for " + vf.getName(), t);
+                        psi = null;
+                    }
+                }
                 if (psi == null) {
                     // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN
                     if (prewarmAbandoned(p)) {
@@ -343,23 +354,44 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                                                     @NotNull VirtualFile vf) {
         VirtualFile target = SqlPreviewPanel.previewDialectMappingTarget(vf);
         String desiredName = p.previewDesiredDialectName;
-        Object resolvedLanguage = desiredName != null
-                ? cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, desiredName)
-                : null;
+        // T-DialectInferFix：没有预览级结论时**继承平台设置**，不再冒充 MySQL。
+        // 历史版本在这里硬编码 MySQL，把「PG 项目的 preview SQL」按 MySQL 解析，`signal` 这类
+        // PG 合法列名被 MySQL 保留字表判成语法错（真机假红）。
+        if (desiredName == null) {
+            return inheritPlatformPreviewDialect(p, proj, target);
+        }
+        Object resolvedLanguage = cn.song.mybatisplus.visualizer.execute.ExecDialectRouting
+                .resolvePluginDialectLanguage(proj, desiredName);
         // 已明确生成方言但平台无对应 parser 时用 GenericSQL，绝不反向冒充 MySQL。
-        Object targetLanguage = desiredName != null && resolvedLanguage == null
-                ? cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
-                        proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID)
-                : resolvedLanguage;
-        if (desiredName != null && targetLanguage == null) {
+        Object targetLanguage = resolvedLanguage != null
+                ? resolvedLanguage
+                : cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
+                        proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID);
+        if (targetLanguage == null) {
             Logger.getInstance(SqlPreviewPanel.class)
                     .warn("[O-145] preview dialect '" + desiredName
                             + "' and GenericSQL platform Language are unavailable; keep existing mapping");
             return null;
         }
+        // T-PreviewPsiDialect（2026-10-30）：映射前先探一次「这个语言能不能建出 SQL PSI」。
+        // 背景：插件自注册方言（DM/GaussDB/HighGo/Vastbase）原先只有 <sql.dialect> 没有
+        // <lang.parserDefinition>，平台会沿语言链回落到基语言 SQL 的 parser definition，其 file node
+        // type 绑的是基类 SqlLanguage → `SqlParserDefinitionBase.createFile` 的强转抛
+        // ClassCastException → PSI 建不出来 → 整条预览降级（真机 262 实证，10/10 次）。
+        // 注册面已在 database-optional.xml 成对补齐；这里留一道保险：将来再漏一个，最差是「这次不映射、
+        // 补全按 GenericSQL 走」，不再拖垮整条预览。
+        if (!canCreateSqlPsiFor(targetLanguage)) {
+            Logger.getInstance(SqlPreviewPanel.class).info(
+                    "[T-PreviewPsiDialect] skip dialect mapping for '" + desiredName + "': language '"
+                            + (targetLanguage instanceof com.intellij.lang.Language language
+                                    ? language.getID() : null)
+                            + "' has no SQL parser definition; keep platform default "
+                            + "(completion falls back to GenericSQL)");
+            return null;
+        }
         String targetId = targetLanguage instanceof com.intellij.lang.Language language
                 ? language.getID()
-                : cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.MYSQL_LANGUAGE_ID;
+                : cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID;
         boolean inProcessMapped = p.previewDialectMappedVf != null && p.previewDialectMappedVf.isValid()
                 && p.previewDialectMappedVf == target
                 && p.previewDialectMappedLanguageId != null
@@ -373,6 +405,56 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             return targetId;
         }
         return null;
+    }
+
+    /**
+     * T-DialectInferFix：无预览级方言结论时的**继承**路径（master 同文件 private 扩展函数的私有静态承载）。
+     *
+     * <p>我们自己的私有预览目录（{@code .idea/sql-visualizer/preview}）只有插件写过映射，因此这里的规则是：
+     * <ol>
+     *   <li>读「项目级 → 全局默认 SQL 方言」（{@code DialectPreMapping.configuredLanguageId} 从项目根读，
+     *       不读本目录自己的旧映射）——用户已经在设置里配过的方言优先；</li>
+     *   <li>读到就**显式改写**本目录映射（覆盖历史版本留下的 MySQL 兼容兜底，P-6 现场）；</li>
+     *   <li>平台什么都没配（全局也是 GenericSQL）→ 清掉本目录的旧映射，退回平台默认，
+     *       既不冒充 MySQL 也不留旧值。</li>
+     * </ol></p>
+     *
+     * <p>返回要等的 language id；拿不到平台 Language 对象时返回 null（调用方按「无映射」继续，
+     * 最差等价 GenericSQL 旧行为，不会产生假红）。</p>
+     */
+    private static String inheritPlatformPreviewDialect(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                        @NotNull VirtualFile target) {
+        String inheritedId;
+        try {
+            inheritedId = cn.song.mybatisplus.visualizer.execute.DialectPreMapping.inheritedLanguageId(proj);
+        } catch (Throwable t) {
+            inheritedId = null; // runCatching{...}.getOrNull() 语义
+        }
+        Object inheritedLanguage = inheritedId != null
+                ? cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(proj, inheritedId)
+                : null;
+        if (inheritedLanguage != null) {
+            if (!(inheritedLanguage instanceof com.intellij.lang.Language)) {
+                return null;
+            }
+            String id = ((com.intellij.lang.Language) inheritedLanguage).getID();
+            boolean inProcessMapped = p.previewDialectMappedVf != null && p.previewDialectMappedVf.isValid()
+                    && p.previewDialectMappedVf == target
+                    && p.previewDialectMappedLanguageId != null
+                    && p.previewDialectMappedLanguageId.equalsIgnoreCase(id);
+            if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(
+                    proj, target, inheritedLanguage, inProcessMapped)) {
+                p.previewDialectMappedVf = target;
+                p.previewDialectMappedLanguageId = id;
+                return id;
+            }
+            return null;
+        }
+        // 平台没有可继承的方言：清掉本目录的旧插件映射（best-effort，失败不影响预览继续）。
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.configuredImmediateLanguageId(proj, target) != null) {
+            cn.song.mybatisplus.visualizer.execute.DialectPreMapping.clearMapping(proj, target);
+        }
+        return cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID;
     }
 
     /**
@@ -395,14 +477,60 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                         (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
                                 prewarmAbandoned(p) ? null : PsiManager.getInstance(proj).findFile(vf));
             } catch (Throwable t) {
-                // master 无受检异常语义——compute 抛出的 Throwable 原样上抛给预热 onFailure 记账
-                throw sneakyThrow(t);
+                // T-PreviewPsiDialect：findFile 内部可能抛平台契约异常（典型是 SQL 方言缺 ParserDefinition
+                // 导致的 ClassCastException）。这里只负责取实例，异常不该以 SEVERE 的形式记到插件头上——
+                // 记一次 WARN 带堆栈，按「暂时没有 PSI」返回，让上层走既有的降级分型。
+                Logger.getInstance(SqlPreviewPanel.class).warn(
+                        "[T-PreviewPsiDialect] PsiManager.findFile threw for " + vf.getName()
+                                + " (target=" + targetLanguageId + ")", t);
+                current = null;
             }
             if (current == null || prewarmAbandoned(p)) return current;
             if (targetLanguageId.equalsIgnoreCase(current.getLanguage().getID())) return current;
             if (System.nanoTime() >= deadline) return current;
             Thread.sleep(10L);
         }
+    }
+
+    /**
+     * T-PreviewPsiDialect：该语言能否建出 SQL PSI（master 顶层 internal 函数的静态承载）。
+     *
+     * <p>判据取自平台行为本身——{@code SqlParserDefinitionBase.createFile} 要求
+     * {@code getFileNodeType().getLanguage()} 是 {@code SqlLanguageDialect}。所以直接查「当前生效的
+     * ParserDefinition 的 file node type 绑定的语言是不是 SQL 方言」。平台内置方言
+     * （MySQL / PostgreSQL / GenericSQL / SQL92）与补齐后的四个自注册方言都返回 true；
+     * 只有回落到基语言 {@code SQL} 的实现返回 false。</p>
+     *
+     * <p><b>刻意不静态引用 {@code com.intellij.sql.*}</b>：本文件属常驻加载面，DatabaseTools 是可选依赖，
+     * 直接引用会让无 Database 插件的环境类加载失败。故按类名沿继承链判定。</p>
+     */
+    public static boolean canCreateSqlPsiFor(Object language) {
+        if (!(language instanceof com.intellij.lang.Language)) {
+            return false;
+        }
+        try {
+            com.intellij.lang.Language lang = (com.intellij.lang.Language) language;
+            Object fileNodeLanguage = com.intellij.lang.LanguageParserDefinitions.INSTANCE
+                    .forLanguage(lang).getFileNodeType().getLanguage();
+            return isSqlLanguageDialectInstance(fileNodeLanguage);
+        } catch (Throwable t) {
+            return false; // runCatching{...}.getOrDefault(false) 语义
+        }
+    }
+
+    /** 按类名沿父类链判断（{@code SqlLanguageDialect} 是抽象类，不是接口）。 */
+    private static boolean isSqlLanguageDialectInstance(Object language) {
+        if (language == null) {
+            return false;
+        }
+        Class<?> c = language.getClass();
+        while (c != null) {
+            if ("com.intellij.sql.dialects.SqlLanguageDialect".equals(c.getName())) {
+                return true;
+            }
+            c = c.getSuperclass();
+        }
+        return false;
     }
 
     /** 默认预算 400ms 重载（master 默认参数）。 */
@@ -1016,12 +1144,6 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         Project proj = p.project;
         if (proj == null) return;
         mapPreviewDialectBeforePsi(p, proj, vf);
-    }
-
-    /** 受检异常擦除（k2j 既有形态）：保持 master「原实例上抛」语义，不包装不改类型。 */
-    @SuppressWarnings("unchecked")
-    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
-        throw (E) t;
     }
 
 }
