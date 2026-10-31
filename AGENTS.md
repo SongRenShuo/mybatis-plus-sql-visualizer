@@ -4,6 +4,7 @@
 
 1. **改代码前先读 [`docs/LESSONS.md`](docs/LESSONS.md)**——教训账本，每条都是带证据的复发规则； Seen 满 3 天的已固化进 [`docs/规范/编码与验收标准-规范.md`](docs/规范/编码与验收标准-规范.md)，审查与收口逐条对照。
 2. **跑任何 Gradle 命令前先过并行登记表**——`docs/MEMORY.md` 顶部 🔴「并行测试协调登记表」节：`parallel_tasks.py check` → 有活跃任务先 register/done（禁裸 done）；构建并发上限 2 路，禁降片。
+   **⚠️ 登记 ≠ 在构建**（2026-11-01 用户纠正）：`parallel_tasks.py` 的登记是「意图声明」，主要用于防**沙盒目录冲突**，不代表真有人在跑 Gradle。**不要因为「看到别人登记了」就干等窗口**——判据是**实际在跑的 gradle 进程**（`powershell -NoProfile -Command "Get-Process java | Select-Object Id,CPU"`，CPU 持续增长且内存上 GB 的才是构建）。实测常见形态是「3 条登记、1~2 路真在跑」。**定向测试（`--tests`）两路并行可接受**，只有全量 `testShards` 必须单路。
 3. 定向测试纪律、验收清单（含 not run 条款）、派活模板：[`docs/开发流程/派活与验收清单.md`](docs/开发流程/派活与验收清单.md)；夜间复盘协议（提示词+水位线）：[`docs/开发流程/夜间复盘协议.md`](docs/开发流程/夜间复盘协议.md)。
 4. 行为域文档（子系统职责与 source of truth）：[`docs/架构设计/`](docs/架构设计/) 下 `子系统-*.md`；改契约必须同批更新归属文档。
 5. 文档写现状，提案写进 `docs/开发计划/`；新缺陷/教训在收口后补记 `docs/LESSONS.md`（规则一句话 + hash 证据 + Seen 计数，不写流水账）。

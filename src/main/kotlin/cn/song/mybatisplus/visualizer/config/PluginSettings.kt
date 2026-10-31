@@ -714,6 +714,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var lastHighlightedVersion: String = "",
 
+        /**
+         * S2「首用即生效」：最近一次已提示过「检测到 MyBatis mapper 工程」的插件版本
+         * （一次性 / **版本粒度**记忆，口径与 [lastHighlightedVersion] 相同）。
+         *
+         * 空串 = 从未提示。写入发生在通知**之前**（领取即消耗）：通知链任何异常都不会让同版本
+         * 在下一次打开工程时重弹。非用户设置项——设置页不呈现（文案见
+         * `onboarding.mapperPrimer.*`，无开关：与版本亮点同样只做一次性的能力指路）。
+         */
+        var mapperPrimerVersion: String = "",
+
         // ---------- 内部状态位（非用户设置：记录「提示已出现/已确认」，设置页不呈现） ----------
         /**
          * 内部状态位：「启用结构化并重试」推荐通知**只提示一次**的标记（T-ExplainConsoleFirst W6）。

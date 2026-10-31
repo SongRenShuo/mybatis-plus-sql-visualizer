@@ -106,10 +106,15 @@
 | 入参 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | sql | string | 是 | 待核查 SQL |
+| chain | bool | 否 | 置 true 追加「执行前清单」（见下），默认 false（输出与旧版逐字节一致） |
+| primaryKeyColumns | string | 否 | 主键列，逗号分隔；chain 清单里用它把回滚谓词收到主键上（评级 COMPLETE） |
+| dialect | string | 否 | 目标方言名；给了才产出 UPDATE/DELETE 的只读 COUNT 试算语句 |
 
 调用时机：任何执行前；尤其是 agent 自己生成的 UPDATE/DELETE。这是置信度评估的对面——它给确定性证据（语句真实形态）。
 
-失败语义：`INVALID_ARGUMENT`（sql 为空）。
+chain=true 的执行前清单（NEW-23）：一次调用拿到写路径的四件事——①风险等级与执行闸门（`riskLevel` LOW/MEDIUM/HIGH、`executionGate` CONFIRM/BLOCKED/READ_ONLY，判定来自无界写七规则，DDL 归 HIGH）②影响面要点（UPDATE/DELETE 的只读 `SELECT COUNT(*)` 试算语句，多表/无 WHERE 时如实降级说明）③回滚计划（与 `sqlv_rollback_plan` 同一生成器、同一条 SQL 文本、同一主键口径，评级 COMPLETE/PARTIAL/UNABLE）④执行交接说明：**本工具不执行，也不开写通道**——执行仍在 IDE 预览面板的确认流里完成，那里串着无界写探测、只读豁免证明与方言闸门。`executionGate: BLOCKED` 的语句（无界写或 DDL）不要交给任何自动化通道，先把谓词收窄或在 IDE 里显式确认全表范围。
+
+失败语义：`INVALID_ARGUMENT`（sql 为空 / dialect 不可识别）。
 
 ### 3.6 sqlv_rollback_plan — 回滚预案
 
@@ -199,7 +204,7 @@
 典型链路（按任务选段，不必全走）：
 
 1. 源码预览：`sqlv_render_sql`（给 filePath+line）拿到真实 SQL；不想读源码、只有日志时用 `sqlv_render_logs` 还原。
-2. 结构与风险：`sqlv_schema_context` 拿列类型；`sqlv_check_sql` 判类型与无界写；写语句先过 `sqlv_rollback_plan` 拿回滚预案。
+2. 结构与风险：`sqlv_schema_context` 拿列类型；`sqlv_check_sql` 判类型与无界写；写语句先过 `sqlv_rollback_plan` 拿回滚预案。想一次拿全写路径的证据，改调 `sqlv_check_sql(chain=true, primaryKeyColumns=…, dialect=…)`——风险等级、执行闸门、只读 COUNT 试算、回滚计划与执行交接在一份清单里。
 3. 执行计划：`sqlv_explain`（只收纯 SELECT）看真实计划；`sqlv_perf_advice` 补静态建议。
 4. 代码化与 review：`sqlv_reverse_sql` 把 SQL 固化成 Wrapper 链；`sqlv_mapper_check` 带 simulate 复核 mapper 渲染产物。
 5. 历史检索：`sqlv_history_search` 查本地历史落盘（默认当日，`allDates=true` 跨全量）——先检索历史再决定是否 render/render_logs，避免重复还原；只读，不执行。
@@ -208,7 +213,7 @@
 
 ## 五、给 agent 的调用建议
 
-- 何时用哪个：知道源码位置 → render_sql；只有日志 → render_logs；要执行前 → check_sql（+ rollback_plan 看写语句）；执行前优化 → explain（SELECT）+ perf_advice；写代码 → reverse_sql / crud_sql；review mapper → mapper_check（开 simulate）。
+- 何时用哪个：知道源码位置 → render_sql；只有日志 → render_logs；要执行前 → check_sql（`chain=true` 一次拿全写路径清单；仅看风险用默认参数）；执行前优化 → explain（SELECT）+ perf_advice；写代码 → reverse_sql / crud_sql；review mapper → mapper_check（开 simulate）。
 - 数据源入参：配置了多个数据源时给 `dataSource` 显式指名；省略时的行为以错误文本里的可用清单为准。
 - 所有工具都不会执行你的 SQL 或改文件；真正的执行、写库、回滚由 agent/人在自己的通道完成，插件产出的是决策证据。
 - 调用不生效先查三层：平台「工具 → MCP 服务器」开关、插件设置页「MCP 工具」总开关、工具级禁用清单（工具被禁用后从外部会话清单隐藏，表现是 agent 看不到该工具而不是报错）。排障看 idea.log 的 `[MCP-AUDIT]` 行。

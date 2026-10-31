@@ -15,10 +15,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.components.JBScrollPane
 import java.awt.Dimension
 import javax.swing.Action
 import javax.swing.JComponent
-import javax.swing.JScrollPane
 
 /**
  * Java 代码预览弹窗（SQL→MP Java 代码 反向转换的结果展示）。
@@ -65,7 +65,10 @@ class JavaCodePreviewDialog @JvmOverloads constructor(
         return editor
     }
 
-    override fun createCenterPanel(): JComponent = JScrollPane(editor.component).apply {
+    // T-DarkTheme：滚动容器用平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸 JViewport、
+    // 四角无 Corner 组件；平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner，
+    // 深色主题下容器边缘/角落不留浅色条带。
+    override fun createCenterPanel(): JComponent = JBScrollPane(editor.component).apply {
         preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
         minimumSize = Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
     }

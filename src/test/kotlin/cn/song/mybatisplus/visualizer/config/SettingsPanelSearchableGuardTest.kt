@@ -195,6 +195,8 @@ class SettingsPanelSearchableGuardTest : BasePlatformTestCase() {
     /** ② 说明/披露/链接行（R20/隐私披露/存储边界说明）：无自身状态值，不可被当作设置项搜出。 */
     private val DISCLOSURE_KEYS = setOf(
         "settings.sourceFrameSkipPrefixes.hint",
+        // S1-4⑥：注入链边界明示行（跨两列直挂的说明标签，无自身状态值）
+        "settings.log.autoInjectInterceptor.boundary",
         "settings.storage.captureFiles", "settings.storage.previewHistory",
         "settings.storage.paramHistory", "settings.storage.clearBoundary",
         "settings.update.changelog", "settings.update.viewOnGitee", "settings.update.feedbackPool",

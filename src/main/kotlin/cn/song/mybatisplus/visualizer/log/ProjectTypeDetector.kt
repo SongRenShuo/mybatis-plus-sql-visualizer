@@ -118,8 +118,11 @@ object ProjectTypeDetector {
             LOG.info("ProjectTypeDetector: 模块 ${module.name} 无 MyBatis-Plus 依赖，跳过注入")
             return null
         }
-        // 运行时注册链走 Spring bean（@Configuration + SmartInitializingSingleton），
-        // 模块可见 SpringApplication 即按 SPRING_BOOT 注入；否则原生链（当前未实现，注入侧兜底提示）
+        // 运行时注册链两条（S1-4⑥ 订正：原文写「原生链当前未实现」是过时的，R24/eec85249 已实现）：
+        //  - Spring Boot：@Configuration + SmartInitializingSingleton 把拦截器追加进 MybatisPlusInterceptor bean；
+        //  - 原生 MyBatis：装配点是 mybatis-config.xml 的 <plugins>，由 [MyBatisNativeWiring] 决策并写入
+        //    （薄包装插件持有 InnerInterceptor 本体）。fail-closed：找不到唯一 config / 根不是 <configuration>
+        //    时不写 XML，交调用方走 UnsupportedProject 兜底。
         val springBoot = runCatching {
             facade.findClass("org.springframework.boot.SpringApplication", moduleScope) != null
         }.getOrDefault(false)

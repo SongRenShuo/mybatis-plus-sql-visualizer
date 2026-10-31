@@ -16,8 +16,14 @@ import cn.song.mybatisplus.visualizer.sql.ExplainSupport
  * 完全没有计划也允许导出——组装器会明写「无计划快照」（fail-closed，不臆造）。
  */
 internal fun SqlPreviewPanel.exportTraceDoc() {
-    val proj = project ?: return
-    val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() } ?: return
+    // S1-4④：无项目/无 SQL 时不再静默 return（走平台通知，不弹模态框；无项目降级静默）。
+    val proj = project
+    val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() }
+    if (proj == null || sql == null) {
+        cn.song.mybatisplus.visualizer.log.ExportFeedback
+            .notifyNothingToExport(proj, "export.nothing.traceDoc")
+        return
+    }
     val preview = current
     val dialect = preview?.effectiveDialect
     val history = SqlHistoryManager.getInstance()

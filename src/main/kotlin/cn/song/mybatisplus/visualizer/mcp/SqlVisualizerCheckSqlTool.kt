@@ -29,6 +29,11 @@ open class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
             "constant-only WHERE, subqueries (informational), and unparseable statements (fail-closed). " +
             "Deterministic static analysis via JSqlParser AST. Run this before sqlv_explain on write " +
             "statements, or after sqlv_render_logs / sqlv_render_sql to assess what rendering produced. " +
+            "Set 'chain=true' to also get the pre-execution checklist for the write path: risk level and " +
+            "execution gate from the unbounded-write rules, a read-only COUNT impact probe (pass 'dialect'), " +
+            "the rollback plan generated from the same SQL text (pass 'primaryKeyColumns' for precise " +
+            "per-row rollback), and the execution hand-off. The chain never executes SQL and never opens a " +
+            "write channel — execution stays in the IDE preview panel confirmation flow. " +
             "Read-only: analysis only, never executes SQL.",
     )
     @McpToolHints(
@@ -36,20 +41,43 @@ open class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun sqlv_check_sql(sql: String): String = audit("sqlv_check_sql") { checkSql(sql) }
+    suspend fun sqlv_check_sql(
+        sql: String,
+        chain: Boolean = false,
+        primaryKeyColumns: String = "",
+        dialect: String = "",
+    ): String = audit("sqlv_check_sql") { checkSql(sql, chain, primaryKeyColumns, dialect) }
 
-    /** 纯函数核心（零 IDE 依赖）。 */
-    internal fun checkSql(sql: String): String {
+    /**
+     * 纯函数核心（零 IDE 依赖）。
+     *
+     * NEW-23：`chain=true` 追加执行前清单（[McpWritePathChain]）；`chain=false` 输出与接线前逐字节一致。
+     * 本工具**不执行任何语句**——清单只产出语句与判定，执行交回 IDE 既有确认流。
+     */
+    internal fun checkSql(
+        sql: String,
+        chain: Boolean = false,
+        primaryKeyColumns: String = "",
+        dialect: String = "",
+    ): String {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."))
         }
+        if (!McpDialectDetector.isRecognized(dialect)) {
+            throwExpected(
+                McpToolErrors.code(
+                    McpToolErrors.INVALID_ARGUMENT,
+                    "dialect '$dialect' is not recognized; omit it or pass one of the supported dialect names.",
+                ),
+            )
+        }
         val statements = SqlStatementSplitter.splitStripped(sql)
+        val types = statements.map { SqlTypeClassifier.classify(it) }
         val risk = UnboundedWriteDetector.detect(sql)
-        return buildString {
+        val base = buildString {
             append("statements: ").append(statements.size).append('\n')
-            statements.forEachIndexed { index, statement ->
-                append("statement #").append(index + 1).append(": ")
-                    .append(SqlTypeClassifier.classify(statement)).append('\n')
+            types.forEachIndexed { index, type ->
+                append("statement #").append(index + 1).append(": ").append(type).append('\n')
             }
             append("dangerous: ").append(risk.dangerous).append('\n')
             if (risk.findings.isEmpty()) {
@@ -64,6 +92,9 @@ open class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
                 }
             }
         }.trimEnd()
+        if (!chain) return base
+        val dialectName = dialect.trim().takeIf { it.isNotEmpty() }?.let { McpDialectDetector.resolve(it, null) }
+        return base + McpWritePathChain.checklist(sql, types, risk, primaryKeyColumns, dialectName)
     }
 
     /** 发现类别 → agent 面英文短句（英文常量不进 bundle 的一期口径；detail 截断在探测器侧已做）。 */

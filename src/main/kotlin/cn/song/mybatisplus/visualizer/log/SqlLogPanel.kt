@@ -1000,6 +1000,26 @@ class SqlLogPanel(
         refreshList()
     }
 
+    /**
+     * S1-4④：非法正则显式提示（与历史页 [HistorySqlLogPanel.applySqlSearch] 同链、同文案）。
+     *
+     * 历史页此前已显式报错，日志页却在 [filterBySearch] 里静默回退子串——同一个输入换一页就
+     * 「没反应」。本方法在 [refreshList] 过滤后调用（memo 已写入本次编译结果），把该错误送到
+     * 原生搜索条的状态区（`setSearchError`：背景变色 + 可见右侧标签 + tooltip），不改回退语义。
+     */
+    internal fun updateSearchErrorFeedback() {
+        val q = searchText.trim()
+        val error = if (invalidRegexQuery(q, logRegex, regexMemo)) {
+            MpSqlVisualizerBundle.message("log.history.search.invalidRegex")
+        } else {
+            null
+        }
+        nativeSearch.setSearchError(error)
+        nativeSearch.setStatusText(
+            error ?: if (q.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", lastRendered.size),
+        )
+    }
+
     /** 测试驱动：立即应用搜索框文本（headless 下防抖 Swing Timer 到点不可控），等价生产防抖回调。 */
     internal fun applySearchTextForTest() = applySearchText()
 

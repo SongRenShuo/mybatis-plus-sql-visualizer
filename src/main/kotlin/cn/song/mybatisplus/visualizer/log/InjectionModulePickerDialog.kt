@@ -5,6 +5,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -15,7 +16,6 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 
 /**
  * T-ModPick：多模块工程注入前的模块勾选弹框。
@@ -65,7 +65,9 @@ class InjectionModulePickerDialog(
             }
             list.add(line)
         }
-        val scroll = JScrollPane(list).apply {
+        // T-DarkTheme：滚动容器用平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸 JViewport、
+        // 四角无 Corner 组件；平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner。
+        val scroll = JBScrollPane(list).apply {
             preferredSize = Dimension(DIALOG_WIDTH, (rows.size * ROW_HEIGHT + 16).coerceAtMost(MAX_HEIGHT))
             border = JBUI.Borders.empty()
         }

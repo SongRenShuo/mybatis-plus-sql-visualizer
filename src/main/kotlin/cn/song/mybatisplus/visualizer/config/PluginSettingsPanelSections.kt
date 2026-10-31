@@ -29,6 +29,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBRadioButton
 import com.intellij.ui.TitledSeparator
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import javax.swing.ButtonGroup
 import com.intellij.util.ui.JBUI
@@ -586,6 +587,28 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     }
                 }
             })
+            // S1-4⑥：注入链边界明示（log/ProjectTypeDetector.kt:122 —— 非 Spring Boot 模块当前
+            // 不生成运行时注册链，只落拦截器类本体）。形态照本页首组「帧过滤前缀」指向说明：
+            // 跨两列直挂、JBLabel 包一层面板（sectionGroup 的列宽计算扫描直接 JBLabel 子件）。
+            g.gridx = 0
+            g.gridwidth = 2
+            g.weightx = 1.0
+            g.fill = GridBagConstraints.HORIZONTAL
+            p.add(
+                JPanel(BorderLayout()).apply {
+                    isOpaque = false
+                    add(
+                        JBLabel(
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor.boundary")),
+                        ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
+                        BorderLayout.CENTER,
+                    )
+                },
+                g,
+            )
+            g.gridwidth = 1
+            g.fill = GridBagConstraints.NONE
+            g.gridy++
             // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
             addRow(p, g, "", enhancedCaptureCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
@@ -602,9 +625,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.tip")
             })
             // T-MagpieGems W2：豁免白名单（3 行小文本域，滚动包裹防撑高）
+            // T-DarkTheme：滚动容器用平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸
+            // JViewport（背景取 Viewport.background，不跟随所载组件）、四角无 Corner 组件；
+            // 平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner。
             addRow(
                 p, g, MpSqlVisualizerBundle.message("settings.display.mask.allowList"),
-                javax.swing.JScrollPane(displayMaskAllowListArea).apply {
+                JBScrollPane(displayMaskAllowListArea).apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.allowList.tip")
                 },
                 fill = GridBagConstraints.HORIZONTAL,

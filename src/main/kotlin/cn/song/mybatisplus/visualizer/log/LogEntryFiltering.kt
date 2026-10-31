@@ -351,6 +351,22 @@ internal fun filterBySearch(
 }
 
 /**
+ * 非法正则输入判定（S1-4④：日志页与历史页共用单一真源，两处行为一致）。
+ *
+ * 正则生效条件 = 开关开**或** `regex:` 前缀（与 [filterBySearch]/[filterHistoryEntries] 同一判据）；
+ * 生效且 [memo] 编译结果为空即非法。**调用方须在过滤之后调用**——[filterBySearch] /
+ * [filterHistoryEntries] 会把本次编译结果（含 null）写进 [memo]，此前 memic 内容未必对应当前输入。
+ *
+ * 语义：非法正则**仍保留 fail-closed 子串回退**（过滤不空转），但不再静默——调用方据此在搜索条
+ * 显式报错（[NativeSearchTextField.setSearchError]）。
+ */
+internal fun invalidRegexQuery(query: String, regexEnabled: Boolean, memo: HistoryRegexMemo): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return false
+    return (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) && memo.compiled == null
+}
+
+/**
  * 时间显示片段文本（T-LogSearchRowTime）：`[yyyy-MM-dd HH:mm:ss]` 形态（去段间距尾随空格），
  * 与列表渲染逐字节一致（所见即所搜/所复制的单一真源——格式/来源/开关语义全在
  * [formatTimestampFragment]）；开关关闭返回 null（页面上没有时间片段可搜可复制）。

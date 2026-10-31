@@ -100,4 +100,79 @@ class DiagnosticReportFormatterTest {
         val md = DiagnosticReportFormatter.format(input("SELECT * FROM t_user"))
         assertTrue(md, md.contains("- ["))
     }
+
+    // ------------------------------------------------------------------
+    // NEW-21 信创兼容性体检段
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `信创体检段_纯文本输入出14方言行且标注无类型证据`() {
+        val md = DiagnosticReportFormatter.format(input("SELECT id FROM t_user WHERE id = 1"))
+        assertTrue("应有体检段标题", md.contains(MpSqlVisualizerBundle.message("diag.report.section.compat")))
+        // 14 方言各一行（rowOk 或 rowDiff），加摘要行
+        val rowCount = cn.song.mybatisplus.visualizer.sql.DialectRegistry.dialects.count { d ->
+            md.contains(MpSqlVisualizerBundle.message("diag.report.compat.rowOk", d.name)) ||
+                md.contains("${d.name}：") || md.contains("${d.name}:")
+        }
+        assertTrue("14 方言应各出一行，实际命中 $rowCount", rowCount >= 14)
+        assertTrue(
+            "纯文本输入应如实标注隐式转换档跳过",
+            md.contains(MpSqlVisualizerBundle.message("compat.note.textInputNoTypes")),
+        )
+    }
+
+    @Test
+    fun `信创体检段_差异行带分类前缀与本地化正文`() {
+        // GROUP_CONCAT 在 PG/Oracle 不可用 → 至少一条 [函数不存在] 差异行
+        val md = DiagnosticReportFormatter.format(input("SELECT GROUP_CONCAT(name) FROM t_user"))
+        assertTrue(
+            "应出函数不存在分类前缀",
+            md.contains(MpSqlVisualizerBundle.message("compat.category.function")),
+        )
+        assertTrue(
+            "应含本地化差异正文（PG 侧）",
+            md.contains(MpSqlVisualizerBundle.message("compat.diff.functionMissing", "GROUP_CONCAT", "PostgreSQL")),
+        )
+    }
+
+    @Test
+    fun `信创体检段_带语句模型时逐方言真渲染出分页差异`() {
+        val t = cn.song.mybatisplus.visualizer.model.TableInfo(
+            entityClassName = "T",
+            tableName = "t_user",
+            columns = listOf(cn.song.mybatisplus.visualizer.model.ColumnInfo("id", "id")),
+        )
+        val statement = cn.song.mybatisplus.visualizer.model.SelectStatement(
+            table = t,
+            limit = cn.song.mybatisplus.visualizer.model.LimitClause(count = 10),
+        )
+        val md = DiagnosticReportFormatter.format(
+            DiagnosticReportFormatter.buildInput(
+                sql = "SELECT id FROM t_user LIMIT 10",
+                dialectName = "MySQL",
+                statement = statement,
+            ),
+        )
+        assertTrue(
+            "Oracle 分页形态差异应落段",
+            md.contains("FETCH FIRST 10 ROWS ONLY"),
+        )
+        assertTrue(
+            "SQL Server 的 ORDER BY 强制差异应落段",
+            md.contains(
+                MpSqlVisualizerBundle.message("compat.diff.paginationRequiresOrderBy", "SQL Server"),
+            ),
+        )
+    }
+
+    @Test
+    fun `信创体检段_HTML形态也含该段`() {
+        val html = DiagnosticReportFormatter.formatHtml(input("SELECT id FROM t_user"))
+        assertTrue(
+            html,
+            html.contains(
+                "<h2>" + MpSqlVisualizerBundle.message("diag.report.section.compat") + "</h2>",
+            ),
+        )
+    }
 }
