@@ -171,7 +171,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
 <!-- ========== TAGLINE ========== -->
 <div style="margin-bottom:24px;padding:14px 18px;border-radius:8px;background:#f0f6ff;border:1px solid #d0e3ff;">
   <div style="font-size:16px;font-weight:700;">别的插件给你文本，我们给你可执行的 SQL。</div>
-  <div style="font-size:13px;color:#555;margin-top:4px;">编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言</div>
+  <div style="font-size:13px;color:#555;margin-top:4px;">编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss / GaussDB / 瀚高 / 海量 等 14 种数据库方言</div>
 </div>
 
 <img class="demo" src="https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif" alt="Wrapper 链静态预览演示" loading="lazy">
@@ -213,7 +213,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>SQL 格式化</td>
       <td>弹窗内切换</td>
-      <td>多行缩进 / 单行；分页子句按 11 种方言渲染</td>
+      <td>多行缩进 / 单行；分页子句按 14 种方言渲染</td>
     </tr>
     <tr>
       <td>多租户 / 数据权限模拟 <span class="tag tag-new">New</span></td>
@@ -238,7 +238,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>参数预设 <span class="tag tag-new">New</span></td>
       <td>面板参数区「预设」行</td>
-      <td>参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按语句隔离、快照语义；预设行可折叠</td>
+      <td>参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按声明方法隔离、预设永久绑定方法（改 SQL 不再丢参数）；预设行可折叠</td>
     </tr>
     <tr>
       <td>分页拦截器模拟 <span class="tag tag-new">New</span></td>
@@ -248,7 +248,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>执行计划 EXPLAIN <span class="tag tag-ultimate">Ultimate</span><span class="tag tag-new">New</span></td>
       <td>弹窗内「执行计划」按钮</td>
-      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议）</td>
+      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 14 种方言（含 Oracle / SQL Server / GaussDB 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议）</td>
     </tr>
     <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
@@ -352,7 +352,15 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
     <tr>
       <td>一键回滚 SQL <span class="tag tag-new">New</span></td>
-      <td>预览面板「更多」菜单对 INSERT 推导逆向 DELETE 一键复制；UPDATE / DELETE 走快照查询粘贴回填的人工恢复路径</td>
+      <td>预览面板「更多」菜单对 INSERT 推导逆向 DELETE 一键复制；UPDATE / DELETE 走快照查询粘贴回填的人工恢复路径；快照结果支持表格 / 文本双态并可在 CSV 编辑器中打开</td>
+    </tr>
+    <tr>
+      <td>只读旁路 <span class="tag tag-new">New</span></td>
+      <td>预估影响行数、EXPLAIN 与回滚快照查询走只读旁路，不再替换预览编辑器里的 SQL；影响行数结果以顶部横幅展示</td>
+    </tr>
+    <tr>
+      <td>AI 上下文与脱敏 <span class="tag tag-new">New</span></td>
+      <td>「复制为 AI 上下文」输出诊断投影（可选含表列名）；展示 / 导出 / MCP 四链可开启选择性脱敏，敏感字面量以 <code>***</code> 打码</td>
     </tr>
     <tr>
       <td>检查更新</td>
@@ -469,7 +477,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
 <h2 id="links">Links / 相关链接</h2>
 <ul>
   <li><b>官网</b>：<a href="https://sql-visualizer.jvtools.cn" target="_blank">Sql Visualizer</a></li>
-  <li><b>源码</b>：<a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer" target="_blank">Gitee</a></li>
+  <li><b>源码</b>：<a href="https://github.com/SongRenShuo/mybatis-plus-sql-visualizer" target="_blank">GitHub（镜像）</a> · <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer" target="_blank">Gitee（主仓）</a>——2026-10-22 起双仓同步，Marketplace 源码链接指向 GitHub</li>
   <li><b>问题反馈</b>：<a href="https://sql-visualizer.jvtools.cn/about/feedback" target="_blank">官网需求池</a></li>
   <li><b>变更日志</b>：<a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/blob/master/CHANGELOG.md" target="_blank">CHANGELOG.md</a></li>
   <li><b>Marketplace</b>：<a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer" target="_blank">JetBrains Plugin Page</a></li>
