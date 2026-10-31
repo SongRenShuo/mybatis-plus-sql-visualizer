@@ -80,6 +80,13 @@ public final class DialectPreviewStatusText {
                 return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.agent");
             case PROJECT_CONSENSUS:
                 return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConsensus");
+            // T-DialectInferFix：没有 IDE 数据源时的三层低置信证据（必须让用户看见「凭什么」）
+            case PROJECT_CONFIG:
+                return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConfig");
+            case PROJECT_DEPENDENCY:
+                return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectDependency");
+            case SQL_SYNTAX:
+                return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.sqlSyntax");
             default:
                 return MpSqlVisualizerBundle.message("panel.meta.dialectStatus.unavailable");
         }
