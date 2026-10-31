@@ -37,6 +37,9 @@ import java.util.Set;
  * @param pagesColumns     maintainPage 列元数据（F-45）
  * @param stackDigest      调用栈快照「类#方法:行 ← …」（栈顶在左；T-SourceJumpFunnel P2-2）；
  *                         null = 无（桥通道 / 旧条目），面板不显示栈节点
+ * @param threadName       T-StackBizFrame S3：产生该 SQL 的线程名（agent 通道透传）。调用栈弹层标题展示，
+ *                         让「调度线程 / 异步池 / 请求线程」一眼可辨。null = 未知（桥通道 / 旧条目），
+ *                         标题退回纯「调用栈」
  * @param hasDollarRawSegments 本次预览语句含 ${} 原文拼接段（T-InjectionGate T-IG-01，解析期 token 事实）；
  *                         非 XML 链恒 false
  * @param placeholderParamNames JPA 命名参数占位符名序（T-JpaParamOrder F3，首现序与 SQL `?` 一一对应）；
@@ -80,6 +83,11 @@ public final class PreviewResult {
      * 日志/历史条目双击预览透传）。null = 无（桥通道 / 旧条目），面板不显示栈节点。
      */
     private final String stackDigest;
+    /**
+     * T-StackBizFrame S3：产生该 SQL 的线程名（agent 通道透传）。调用栈弹层标题展示，
+     * 让「调度线程 / 异步池 / 请求线程」一眼可辨。null = 未知（桥通道 / 旧条目），标题退回纯「调用栈」。
+     */
+    private final String threadName;
     /**
      * T-InjectionGate T-IG-01：本次预览语句含 `${}` 原文拼接段（XML/注解预览链，解析期 `${` token 事实，
      * 与替换是否成功无关——成功替换为模拟值后文本里已无 `${}` 痕迹）。面板执行/EXPLAIN 前据此弹确认闸门，
@@ -197,10 +205,8 @@ public final class PreviewResult {
     }
 
     /**
-     * 规范构造器（29 参）：K2J 侧 {@code countSql}/{@code paginationLimitLine}/{@code diagramStatement}/
-     * {@code historyFingerprintSeed} 为 master 新增的带默认值后置字段（Kotlin 默认参），历史 25/27 参形态
-     * 在 Kotlin 调用方天然合法——Java 侧保留 25/27 参重载（见下）委托本构造器、新参取默认值
-     * （null，与 master 默认值等价）。
+     * K2J 互操作：master 新增 {@code threadName}（T-StackBizFrame S3，Kotlin 声明序插在 stackDigest 与
+     * hasDollarRawSegments 之间）取默认 null 的历史 34 参形态，委托规范构造器。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -209,6 +215,33 @@ public final class PreviewResult {
                          XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
                          Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed,
+                         List<String> paginationParamSources, Dialect renderedDialect,
+                         DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, null, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql);
+    }
+
+    /**
+     * 规范构造器（35 参）：K2J 侧 {@code threadName}/{@code countSql}/{@code paginationLimitLine}/
+     * {@code diagramStatement}/{@code historyFingerprintSeed} 为 master 新增的带默认值后置字段
+     * （Kotlin 默认参），历史短参形态在 Kotlin 调用方天然合法——Java 侧保留对应重载（见上/下）委托
+     * 本构造器、新参取默认值（null，与 master 默认值等价）。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, String threadName,
+                         boolean hasDollarRawSegments,
                          String countSql, String paginationLimitLine,
                          List<String> placeholderParamNames, Set<String> duplicateParamNames,
                          SelectStatement diagramStatement, String historyFingerprintSeed,
@@ -236,6 +269,7 @@ public final class PreviewResult {
         this.pagesColumns = pagesColumns;
         this.namedParamHints = namedParamHints != null ? namedParamHints : Map.of();
         this.stackDigest = stackDigest;
+        this.threadName = threadName;
         this.hasDollarRawSegments = hasDollarRawSegments;
         this.countSql = countSql;
         this.paginationLimitLine = paginationLimitLine;
@@ -407,6 +441,11 @@ public final class PreviewResult {
         return stackDigest;
     }
 
+    /** T-StackBizFrame S3：产生该 SQL 的线程名（agent 通道透传；null = 未知，标题退回纯「调用栈」）。 */
+    public String getThreadName() {
+        return threadName;
+    }
+
     public boolean isHasDollarRawSegments() {
         return hasDollarRawSegments;
     }
@@ -545,6 +584,7 @@ public final class PreviewResult {
                 && Objects.equals(pagesColumns, that.pagesColumns)
                 && Objects.equals(namedParamHints, that.namedParamHints)
                 && Objects.equals(stackDigest, that.stackDigest)
+                && Objects.equals(threadName, that.threadName)
                 && hasDollarRawSegments == that.hasDollarRawSegments
                 && Objects.equals(countSql, that.countSql)
                 && Objects.equals(paginationLimitLine, that.paginationLimitLine)
@@ -559,7 +599,7 @@ public final class PreviewResult {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
+                stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
                 duplicateParamNames, diagramStatement, historyFingerprintSeed);
     }
 
@@ -573,6 +613,7 @@ public final class PreviewResult {
                 + ", initialParamValues=" + initialParamValues + ", perfWarnings=" + perfWarnings + ", fillClauses="
                 + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns
                 + ", namedParamHints=" + namedParamHints + ", stackDigest=" + stackDigest
+                + ", threadName=" + threadName
                 + ", hasDollarRawSegments=" + hasDollarRawSegments
                 + ", countSql=" + countSql
                 + ", paginationLimitLine=" + paginationLimitLine
