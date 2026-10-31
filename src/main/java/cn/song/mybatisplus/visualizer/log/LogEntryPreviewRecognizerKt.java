@@ -135,13 +135,34 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
      * formatSql=设置值（T-ListPreviewCopy：两页预览统一跟随「预览时格式化还原 SQL」，默认开）。
      */
     public static PreviewResult toPreviewResult(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
-        PreviewResult result = toPreviewResultInternal(entry, formatSql, literalRecovery);
+        return toPreviewResult(entry, formatSql, literalRecovery, null);
+    }
+
+    /** capturedDialect 形态（master 默认参数 null 的 Java 重载等价）。 */
+    public static PreviewResult toPreviewResult(LogSqlEntry entry, boolean formatSql, boolean literalRecovery,
+                                                String capturedDialect) {
+        // T-DialectInferFix：本次执行连接的方言是本条预览最强证据（O-145 方案第 2 条）。
+        // 优先用 pd 载荷里的注册方言名（dl 键）；旧条目退用持久化的目标库角标（`db: PostgreSQL · …`）。
+        String dialect = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.knownDialect(capturedDialect);
+        if (dialect == null) {
+            dialect = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.dialectFromBadge(entry.databaseName());
+        }
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision decision = dialect != null
+                ? cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver.capturedDecision(dialect)
+                : null;
+        PreviewResult base = toPreviewResultInternal(entry, formatSql, literalRecovery);
         // R90：ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行
         if (entry.source() == SqlSource.SHARDINGSPHERE
                 && entry.actualSql() != null && !entry.actualSql().isBlank()) {
-            result.setActualSql(entry.actualSql());
+            base.setActualSql(entry.actualSql());
         }
-        return withExecutionError(result, entry.errorText());
+        base = withExecutionError(base, entry.errorText());
+        if (dialect == null) {
+            return base;
+        }
+        return copyPreviewResult(base, base.getThreadName(),
+                cn.song.mybatisplus.visualizer.sql.DialectRegistry.INSTANCE.byName(dialect), decision,
+                base.getWarning());
     }
 
     /**
@@ -158,14 +179,38 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             parts.add(result.getWarning());
         }
         String joined = String.join("\n", parts);
-        return result.copy(
-                result.getSql(), result.getCompactSql(), result.getUnresolvedParams(), result.getParamTable(),
-                result.getWrapperType(), result.getTableName(), joined, result.getColumns(),
-                result.getColumnComments(), result.getTableComment(), result.getPreviewModel(),
-                result.getParamHints(), result.getCandidateTables(), result.getBatchModel(),
-                result.getXmlModel(), result.getInitialParamValues(),
-                result.getPerfWarnings(), result.getFillClauses(), result.getPreviousSql(),
-                result.getPagesColumns());
+        // master 为 copy(warning=…)（Kotlin copy 保留全部未触及字段）。k2j PreviewResult 的历史
+        // 20 参 copy 重载会把 threadName/renderedDialect/dialectDecision/actualSql 归零——照用会让
+        // T-StackBizFrame S3/T-DialectInferFix 的透传在报错条目上丢失，改走全参重建。
+        return copyPreviewResult(result, result.getThreadName(), result.getRenderedDialect(),
+                result.getDialectDecision(), joined);
+    }
+
+    /**
+     * 全参重建拷贝（master Kotlin {@code copy} 语义的 Java 等价）：按 35 参规范构造器逐组件透传，
+     * 仅覆写调用方显式给出的 threadName/renderedDialect/dialectDecision/warning。
+     */
+    private static PreviewResult copyPreviewResult(PreviewResult r, String threadName,
+                                                   cn.song.mybatisplus.visualizer.sql.Dialect renderedDialect,
+                                                   cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision,
+                                                   String warning) {
+        return new PreviewResult(
+                r.getSql(), r.getCompactSql(), r.getUnresolvedParams(), r.getParamTable(),
+                r.getWrapperType(), r.getTableName(), warning, r.getColumns(),
+                r.getColumnComments(), r.getTableComment(), r.getPreviewModel(),
+                r.getParamHints(), r.getCandidateTables(), r.getBatchModel(),
+                r.getXmlModel(), r.getInitialParamValues(), r.getPerfWarnings(),
+                r.getFillClauses(), r.getPreviousSql(), r.getPagesColumns(),
+                r.getNamedParamHints(), r.getStackDigest(), threadName, r.isHasDollarRawSegments(),
+                r.getCountSql(), r.getPaginationLimitLine(), r.getPlaceholderParamNames(),
+                r.getDuplicateParamNames(), r.getDiagramStatement(), r.getHistoryFingerprintSeed(),
+                r.getPaginationParamSources(), renderedDialect, dialectDecision,
+                r.getHistoryEntryId(), r.getActualSql());
+    }
+
+    /** T-StackBizFrame S3：内部构造结果补线程名（PreviewResult 历史 copy 重载不携带该参）。 */
+    private static PreviewResult withThreadName(PreviewResult r, String threadName) {
+        return copyPreviewResult(r, threadName, r.getRenderedDialect(), r.getDialectDecision(), r.getWarning());
     }
 
     private static PreviewResult toPreviewResultInternal(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
@@ -173,7 +218,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
         if (recognized.recognized()) {
             // T-StackHoverUi：识别分支与兜底分支同权携带调用栈快照——带参数条目（占位符==参数数的
             // 主路径）此前在此丢快照，meta 行摘要与悬停弹层对最常见的带参数条目不可达
-            return new PreviewResult(
+            return withThreadName(new PreviewResult(
                 formatIfNeeded(SqlLogPanelKt.withTerminator(recognized.sql()), formatSql),
                 SqlLogPanelKt.withTerminator(recognized.compactSql()),
                 recognized.unresolvedParams(),
@@ -198,7 +243,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                 entry.stackDigest(),
                 false,
                 List.of(),
-                Set.of());
+                Set.of()), entry.threadName());
         }
         // 字面量恢复只接「零占位符」分支（裸 SQL / ${} / 上游日志已内联值）；数量不匹配
         // （残留 `?`）维持现状警告，不做两套占位符的混合恢复
@@ -222,7 +267,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             LiteralParamRecovery recovery = LiteralParamRecoveryKt.recoverLiteralParams(entry.rawSql());
             if (recovery != null && LiteralParamRecoveryKt.verifyLiteralRoundTrip(entry.rawSql(), recovery)) {
                 // T-StackHoverUi：同上，字面量恢复分支同权携带快照
-                return new PreviewResult(
+                return withThreadName(new PreviewResult(
                     formatIfNeeded(SqlLogPanelKt.withTerminator(recovery.placeholderSql()), formatSql),
                     SqlLogPanelKt.withTerminator(recovery.placeholderSql()),
                     recovery.unresolvedParams(),
@@ -247,12 +292,12 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                     entry.stackDigest(),
                     false,
                     List.of(),
-                    Set.of());
+                    Set.of()), entry.threadName());
             }
         }
         // Actual 是物理 SQLUnit，不是 Logic 的绑定证据。旧缓存中曾猜出的参数也不预填。
         if (entry.source() == SqlSource.SHARDINGSPHERE) {
-            return new PreviewResult(
+            return withThreadName(new PreviewResult(
                 formatIfNeeded(SqlLogPanelKt.withTerminator(entry.rawSql()), formatSql),   // sql
                 entry.rawSql(),                    // compactSql
                 List.of(),                         // unresolvedParams
@@ -278,7 +323,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                 false,                             // hasDollarRawSegments
                 null, null,                        // countSql / paginationLimitLine
                 List.of(), Set.of(),               // placeholderParamNames / duplicateParamNames
-                null, null);                       // diagramStatement / historyFingerprintSeed
+                null, null), entry.threadName());  // diagramStatement / historyFingerprintSeed
         }
         String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
         // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
@@ -296,7 +341,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             : null;
         // master 具名参数新增 stackDigest = stackDigest；Java 按全参构造位置传入
         // （T-SourceJumpFunnel：条目调用栈快照透传预览详情——meta 行栈节点展示）
-        return new PreviewResult(
+        return withThreadName(new PreviewResult(
             formatIfNeeded(base, formatSql),   // sql
             entry.restoredSql(),               // compactSql
             List.of(),                         // unresolvedParams
@@ -321,7 +366,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             entry.stackDigest(),
             false,
             List.of(),                         // placeholderParamNames
-            Set.of());                         // duplicateParamNames
+            Set.of()), entry.threadName());    // duplicateParamNames
     }
 
     private static String formatIfNeeded(String sql, boolean formatSql) {
