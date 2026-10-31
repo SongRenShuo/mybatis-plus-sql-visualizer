@@ -267,6 +267,27 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 **部署与推送（2026-10-31 同日完成）**：文档站 `dev` 合并进 `master`（冲突两处：`wrapper-preview` 中英的「14 种方言」段与 dev 的预设 GIF 插槽——取 master 标题与正文、保留 dev 的 GIF；`docs/变更记录.md` 两条同日行——保留第十六轮与 R15 两条、丢弃重复的 10-30 旧版）→ `npm run build` 退出码 0 → `npm run deploy` 上传 109 个文件 → 生产复验：三页 200、六张 GIF 全 200 且插槽在产物 HTML 中、`pagefind/pagefind-ui.js` 200。三仓均已推送（文档站 master+dev、插件仓 master，Gitee + GitHub 双远端）。
 
-**待用户侧确认的一项**（计划 §六.1）：工作区 skill 的实际命中要**新会话**才验证得到——本会话的
-skill 是启动时从全局加载的，路径改写后需重开会话用自然语言触发一次（「录一张演示 GIF」）确认
-解析到 `.agents/skills/ide-demo-gif/`。
+**§八.3 运行时发现已实测通过（2026-10-31，无需等新会话）**：ZCode 自带 CLI 可非交互验证，
+命令与读数如下（`--cwd` 指向插件仓根）：
+
+```
+node --experimental-sqlite "<ZCode>/resources/glm/zcode.cjs" --cwd <插件仓> skills list
+→ Available skills (26)
+  - ide-demo-gif (project/agents)
+    F:\code\...\mybatis-plus-sql-visualizer\.agents\skills\ide-demo-gif\SKILL.md
+  - ide-ui-acceptance (project/agents)
+    F:\code\...\mybatis-plus-sql-visualizer\.agents\skills\ide-ui-acceptance\SKILL.md
+```
+
+两条 skill 都被识别为 **project/agents** 作用域、路径指向 `.agents/skills/`，说明按 cwd 向上发现
+的链路通了。**反证**：同一条命令把 `--cwd` 指到文档站仓时，列表里没有这两条（子代理实测，20 条
+skill 全是 user/plugin）——与「skill 集合随 cwd 变」的机制一致。
+
+**脚本可达性**（从插件仓根按 skill 文档写的相对路径）：`python .agents/skills/ide-demo-gif/scripts/shot.py`
+报 `IndexError`（缺参数，说明脚本已加载执行）、`assemble.py` 报 argparse 缺参——都证明路径解析正常；
+`sys.path.insert(0,'.agents/skills/ide-demo-gif/scripts')` 后 8 个模块全部导入成功。
+
+**一处未能实测的腿**：`zcode -p "<prompt>"`（真跑一轮让模型自己挑 skill）在当前环境不可用——
+它要初始化 `~/.zcode/cli/db/db.sqlite`，而正在运行的 ZCode 应用占着该库，报
+`SQLite migration initialization failed`。这属环境限制（不是 skill 配置问题），且「发现」已在上面
+用同一套发现代码验过；模型侧的触发行为需在关掉当前应用后的新会话里自然验证一次。

@@ -386,4 +386,10 @@ children=0；computer-use（三视图各 2 节点）；视觉模型逐帧定位�
 - `record/` 是场景脚本与项目侧件（`anchor.py`/`robot.py`/`mcpnav.py`/`BASELINE.md`/`preflight.py`/`prep_env.py`/`lib/nav.py`/`_run_elev.bat`）的工作位置；
 - 同名基建（gifkit/shot/assemble/locate/verify/scene_template/black_underlay/clipread）在 `record/` 有工作副本：**改 skill 那份 → cp 回 `record/`**，不要双向各改；
 - 正式脚本 `git add` 明确路径提交，过程探针放被忽略的 `record/tmp/`；
+- **验证本 skill 是否被当前 cwd 发现**（不用等新会话）：
+  `node --experimental-sqlite "<ZCode>/resources/glm/zcode.cjs" --cwd <插件仓根> skills list`，
+  列表里应出现 `- ide-demo-gif (project/agents)` 并带 `.agents/skills/ide-demo-gif/SKILL.md` 绝对路径；
+  换成别的仓做 cwd 时它应当消失（这就是「skill 集合随 cwd 变」的反证）。注意 `zcode -p "<prompt>"`
+  在 ZCode 应用运行期间不可用（它要初始化 `~/.zcode/cli/db/db.sqlite`，被运行中的应用占着，
+  报 `SQLite migration initialization failed`）——发现用 `skills list` 验，模型侧触发才需真会话。
 - 录制操作手册：插件仓 `docs/录制/演示GIF录制指南-说明文档.md`；点击定位调研：`docs/调研报告/20261013-2130-演示录制点击定位提效工具调研-调研报告.md`；本轮经验：`docs/经验总结/20261031-*-第十五轮演示动图补录与录制链根因-经验总结.md`。
