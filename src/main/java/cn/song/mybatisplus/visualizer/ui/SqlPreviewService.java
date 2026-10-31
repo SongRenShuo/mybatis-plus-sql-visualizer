@@ -2543,9 +2543,17 @@ public final class SqlPreviewService {
         dialog.show();
     }
 
-    /** T-RefreshDbSteal F2：项目 → 当前存活的预览弹窗（弱引用——弹窗被用户关闭后不阻回收）。 */
-    private static final java.util.concurrent.ConcurrentHashMap<Project, WeakReference<SqlPreviewDialog>> ACTIVE_PREVIEW_DIALOGS =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * T-RefreshDbSteal F2：项目 → 当前存活的预览弹窗（弱引用——弹窗被用户关闭后不阻回收）。
+     *
+     * <p>券03（T-PerfSweep28-03，R28-4）：键改弱引用 + 同步包装——原 ConcurrentHashMap 以 Project
+     * 强引用为键且无项目关闭摘除，每弹过一次预览的项目在长会话里永久驻留一个 Project 对象
+     * （值已是弱引用，只剩键这一面）。项目存活期有强引用不会误回收；关闭后随 GC 摘除。
+     * 访问点仅 put/get 三处，全在预览链 EDT 路径，同步包装开销可忽略。</p>
+     */
+    private static final java.util.Map<Project, WeakReference<SqlPreviewDialog>> ACTIVE_PREVIEW_DIALOGS =
+            java.util.Collections.synchronizedMap(
+                    new java.util.WeakHashMap<Project, WeakReference<SqlPreviewDialog>>());
 
     /** T-RefreshDbSteal F2：测试访问器——当前项目登记的存活预览弹窗（单例化断言用）。 */
     public static SqlPreviewDialog activePreviewDialogForTest(@NotNull Project project) {

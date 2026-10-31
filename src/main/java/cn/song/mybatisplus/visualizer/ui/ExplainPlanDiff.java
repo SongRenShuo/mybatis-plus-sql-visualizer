@@ -23,7 +23,8 @@ import java.util.Set;
  *  <li><b>JSON 档</b>（PG/KingBase/openGauss）：经 {@link ExplainJsonPlanTree#flattenPlanNodes} 取计划节点，
  *      按<b>对齐键</b>（{@code nodeType on relation#出现序}，V113①）配对，比 rows（Plan Rows/Actual Rows）、
  *      cost（Total Cost）与其余标量键；</li>
- *  <li><b>TABLE 档</b>（MySQL/MariaDB/OceanBase）：行按 {@code id}+{@code table} 列（缺列退行序）配对，
+ *  <li><b>TABLE 档</b>（MySQL/MariaDB；OceanBase 已于 T-OBExplainFormat 按真机实证改登 TEXT 档——
+ *      其 {@code EXPLAIN} 返回单列 {@code Query Plan} ASCII 树，不是表格行）：行按 {@code id}+{@code table} 列（缺列退行序）配对，
  *      数值列（rows/filtered/cost）给增量，其余列给文本变化。</li>
  * </ul>
  *

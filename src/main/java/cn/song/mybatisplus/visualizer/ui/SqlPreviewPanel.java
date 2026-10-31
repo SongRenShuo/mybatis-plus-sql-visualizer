@@ -1328,6 +1328,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return stackHover.currentDigestForTest();
     }
 
+    /** T-StackBizFrame S3：当前喂给弹层标题的线程名（接线断言用）。 */
+    public String stackThreadNameForTest() {
+        return stackHover.currentThreadNameForTest();
+    }
+
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     public JButton errorCopyButtonForTest() {
         return errorCopyButton;

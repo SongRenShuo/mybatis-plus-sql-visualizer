@@ -71,6 +71,7 @@ public final class StackFrameHover implements Disposable {
     private final Runnable popupOpener;
     private JComponent target = null;
     private String digest = null;
+    private String threadName = null;
     private JBPopup popup = null;
     private JComponent contentPanel = null;
     private Point pendingAnchor = null;
@@ -146,9 +147,24 @@ public final class StackFrameHover implements Disposable {
         target.addMouseMotionListener(listener);
     }
 
-    /** 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。 */
+    /**
+     * 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。
+     *
+     * <p>Kotlin 默认参数 {@code threadName = null} 的 Java 重载形态（既有单参调用点不动）。</p>
+     */
     public void updateDigest(@Nullable String newDigest) {
+        updateDigest(newDigest, null);
+    }
+
+    /**
+     * 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。
+     *
+     * @param threadName T-StackBizFrame S3：产生该 SQL 的线程名（agent 通道透传）——弹层标题展示，
+     *                   让「调度线程 / 异步池 / 请求线程」一眼可辨；null 时标题退回纯「调用栈」。
+     */
+    public void updateDigest(@Nullable String newDigest, @Nullable String threadName) {
         digest = newDigest;
+        this.threadName = threadName;
         cancelPopup();
     }
 
@@ -158,11 +174,34 @@ public final class StackFrameHover implements Disposable {
         return digest;
     }
 
+    /** 当前线程名（面板接线单测断言用）。 */
+    @Nullable
+    public String currentThreadNameForTest() {
+        return threadName;
+    }
+
     @Override
     public void dispose() {
         hoverTimer.stop();
         hideTimer.stop();
         cancelPopup();
+    }
+
+    /**
+     * T-StackBizFrame S3：调用栈弹层标题。
+     *
+     * <p>有线程名时附在标题后——用户报障的典型困惑是「这条 SQL 为什么不在我的请求链上」，
+     * 而它其实跑在 {@code scheduling-1} / {@code pool-2-thread-1} 这类线程里；线程名是这条困惑的第一判别量。
+     * 无线程名（桥通道 / 旧条目）退回纯「调用栈」，文案与既有行为逐字一致。</p>
+     *
+     * <p>抽成纯函数（master 同文件顶层函数的单文件静态承载）是为了脱 JBPopup 单测标题文案
+     * （弹层本体在 headless 下无法真实弹出）。</p>
+     */
+    public static String buildStackPopupTitle(@Nullable String threadName) {
+        if (threadName == null || threadName.isBlank()) {
+            return MpSqlVisualizerBundle.message("panel.stackPopup.title");
+        }
+        return MpSqlVisualizerBundle.message("panel.stackPopup.titleWithThread", threadName);
     }
 
     // ------------------------------------------------------------------
@@ -189,7 +228,7 @@ public final class StackFrameHover implements Disposable {
         JComponent root = buildContent(projection, d);
         com.intellij.openapi.ui.popup.ComponentPopupBuilder builder =
                 JBPopupFactory.getInstance().createComponentPopupBuilder(root, null)
-                        .setTitle(MpSqlVisualizerBundle.message("panel.stackPopup.title"))
+                        .setTitle(buildStackPopupTitle(threadName))
                         .setRequestFocus(false)
                         .setFocusable(true)
                         .setCancelOnClickOutside(true);
