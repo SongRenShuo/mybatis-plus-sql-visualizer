@@ -21,7 +21,10 @@ public final class DialectRegistry {
             DmDialect.INSTANCE,
             KingBaseDialect.INSTANCE,
             OceanBaseDialect.INSTANCE,
-            OpenGaussDialect.INSTANCE);
+            OpenGaussDialect.INSTANCE,
+            GaussDbDialect.INSTANCE,
+            HighGoDialect.INSTANCE,
+            VastbaseDialect.INSTANCE);
 
     private DialectRegistry() {}
 
@@ -113,12 +116,25 @@ public final class DialectRegistry {
      * @param sqlPsiFile            实际 SQL PSI（DatabaseTools 控制台等；O-145 W1 桥的入口）
      * @param moduleKey             宿主模块稳定键（模块学习绑定查取）
      * @param boundDataSourceDialect 面板已绑定/上次使用数据源的方言（T-DialectStatusLiveRefresh）
+     * @param sqlText               本次预览 SQL 文本（T-DialectInferFix 增补券：低置信 SQL_SYNTAX 证据用）
+     * @param capturedDialect       事件捕获方言名（agent/日志通道；Kotlin 默认参 → 旧参形态委托本全参）
      */
     public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
                                                    com.intellij.openapi.vfs.VirtualFile sourceFile,
                                                    com.intellij.psi.PsiFile sqlPsiFile,
                                                    String moduleKey,
                                                    String boundDataSourceDialect) {
+        return decision(project, sourceFile, sqlPsiFile, moduleKey, boundDataSourceDialect, null, null);
+    }
+
+    /** T-DialectInferSmart / T-DialectInferFix 全参形态：决策出口统一包 {@link #withLowConfidenceEvidence}。 */
+    public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
+                                                   com.intellij.openapi.vfs.VirtualFile sourceFile,
+                                                   com.intellij.psi.PsiFile sqlPsiFile,
+                                                   String moduleKey,
+                                                   String boundDataSourceDialect,
+                                                   String sqlText,
+                                                   String capturedDialect) {
         cn.song.mybatisplus.visualizer.config.PluginSettings.State settings;
         try {
             settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
@@ -135,7 +151,11 @@ public final class DialectRegistry {
         }
         if (project == null) {
             // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与（见 KDoc「边界」）
-            return DialectDecisionEngine.decide(new DialectDecisionEngine.Input(null, null));
+            return withLowConfidenceEvidence(
+                    null,
+                    DialectDecisionEngine.decide(new DialectDecisionEngine.Input(null, capturedDialect)),
+                    sqlText,
+                    null);
         }
         java.util.List<DialectDecisionEngine.Candidate> candidates = DataSourceUrlProbe.candidateDialects(project);
         boolean singleModule = false;
@@ -158,34 +178,155 @@ public final class DialectRegistry {
         com.intellij.openapi.vfs.VirtualFile dialectFile = sqlPsiFile != null && sqlPsiFile.getVirtualFile() != null
                 ? sqlPsiFile.getVirtualFile()
                 : sourceFile;
+        // T-DialectInferSmart：配置/依赖证据按**来源文件所属模块**收窄——多模块各自连不同库时，
+        // A 模块的预览不能被 B 模块的 application.yml 搅成「无共识」。
+        com.intellij.openapi.module.Module sourceModule = resolveSourceModule(project, dialectFile);
         if (sqlPsiFile != null && dialectFile != null) {
             IdeaSqlContextBridge.Snapshot snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile);
             if (snapshot.availability() != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
-                return IdeaSqlDialectDecision.decide(
+                return withLowConfidenceEvidence(
+                        project,
+                        IdeaSqlDialectDecision.decide(
+                                null,
+                                capturedDialect,
+                                snapshot,
+                                learnedModule,
+                                candidates,
+                                agentDialect,
+                                singleModule,
+                                boundDataSourceDialect),
+                        sqlText,
+                        sourceModule);
+            }
+        }
+        String ideaDialect = sourceFile != null ? IdeaSourceDialectProbe.dialectName(project, sourceFile) : null;
+        return withLowConfidenceEvidence(
+                project,
+                DialectDecisionEngine.decide(new DialectDecisionEngine.Input(
                         null,
-                        null,
-                        snapshot,
+                        capturedDialect,
+                        false,
+                        java.util.List.of(),
+                        DialectDecisionEngine.Source.IDEA_SCOPE,
+                        ideaDialect,
+                        DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
                         learnedModule,
                         candidates,
                         agentDialect,
                         singleModule,
-                        boundDataSourceDialect);
-            }
+                        boundDataSourceDialect)),
+                sqlText,
+                sourceModule);
+    }
+
+    /** 来源文件所属模块（拿不到/无文件 → null；模块解析是读动作，统一包 ReadAction）。 */
+    private com.intellij.openapi.module.Module resolveSourceModule(
+            com.intellij.openapi.project.Project project,
+            com.intellij.openapi.vfs.VirtualFile file) {
+        if (file == null) return null;
+        try {
+            return com.intellij.openapi.application.ReadAction.compute(
+                    () -> com.intellij.openapi.module.ModuleUtilCore.findModuleForFile(file, project));
+        } catch (Throwable e) {
+            return null;
         }
-        String ideaDialect = sourceFile != null ? IdeaSourceDialectProbe.dialectName(project, sourceFile) : null;
-        return DialectDecisionEngine.decide(new DialectDecisionEngine.Input(
-                null,
-                null,
-                false,
-                java.util.List.of(),
-                DialectDecisionEngine.Source.IDEA_SCOPE,
-                ideaDialect,
-                DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
-                learnedModule,
-                candidates,
-                agentDialect,
-                singleModule,
-                boundDataSourceDialect));
+    }
+
+    /**
+     * T-DialectInferFix（增补券）：数据源 / PSI / 范围证据都给不出结论时，补三层<b>低置信</b>证据。
+     *
+     * <p>触发场景是用户最常见的两类环境：①一个 IDE 数据源都没配（只写了 {@code application.yml}）；
+     * ②配了数据源但从没连过、插件也拿不到方言。此前这两类一律兜底 MySQL，等于「智能推断从未生效」。</p>
+     *
+     * <p>顺序与置信度（全部 {@link DialectDecisionEngine.Confidence#FALLBACK}，UI 必须披露来源）：
+     * 项目配置文件里的 JDBC URL（{@code Source.PROJECT_CONFIG}）→ 构建文件里的驱动坐标
+     * （{@code Source.PROJECT_DEPENDENCY}）→ 本次 SQL 文本的方言独占特征（{@code Source.SQL_SYNTAX}）。</p>
+     *
+     * <p>两条边界：{@code CONFLICT}（数据源与运行期事实真的打架）保持阻断，低置信证据不得覆盖；
+     * EDT 上只读缓存，绝不触发文件扫描（平台慢操作断言）。</p>
+     */
+    private DialectDecisionEngine.Decision withLowConfidenceEvidence(
+            com.intellij.openapi.project.Project project,
+            DialectDecisionEngine.Decision decision,
+            String sqlText,
+            com.intellij.openapi.module.Module module) {
+        if (decision.dialectName() != null) return decision;
+        if (decision.status() == DialectDecisionEngine.Status.CONFLICT) return decision;
+        ProjectDialectEvidence.Evidence evidence = projectEvidence(project, module);
+        if (evidence != null) {
+            return new DialectDecisionEngine.Decision(
+                    DialectDecisionEngine.Status.RESOLVED,
+                    evidence.dialectName(),
+                    DialectDecisionEngine.Confidence.FALLBACK,
+                    evidence.source(),
+                    decision.dataSourceIds(),
+                    decision.withEvidencePlus(evidence.source()).evidence(),
+                    decision.compatibilityFallbackName());
+        }
+        String syntax = ProjectDialectEvidence.syntaxHint(sqlText);
+        if (syntax != null) {
+            return new DialectDecisionEngine.Decision(
+                    DialectDecisionEngine.Status.RESOLVED,
+                    syntax,
+                    DialectDecisionEngine.Confidence.FALLBACK,
+                    DialectDecisionEngine.Source.SQL_SYNTAX,
+                    decision.dataSourceIds(),
+                    decision.withEvidencePlus(DialectDecisionEngine.Source.SQL_SYNTAX).evidence(),
+                    decision.compatibilityFallbackName());
+        }
+        // 最后一层：用户在 IDEA 里配置的 SQL 方言（项目级 → 全局默认）。它比 MySQL 硬编码更贴近
+        // 用户意图，也是「没有任何数据源」时唯一稳定事实。
+        String inherited = platformInheritedDialect(project);
+        if (inherited == null) return decision;
+        return new DialectDecisionEngine.Decision(
+                DialectDecisionEngine.Status.RESOLVED,
+                inherited,
+                DialectDecisionEngine.Confidence.FALLBACK,
+                DialectDecisionEngine.Source.IDEA_DIALECT,
+                decision.dataSourceIds(),
+                decision.withEvidencePlus(DialectDecisionEngine.Source.IDEA_DIALECT).evidence(),
+                decision.compatibilityFallbackName());
+    }
+
+    /**
+     * 平台为项目/全局配置的 SQL 方言 → 插件注册方言名（未配置/GenericSQL/未收录方言 → null）。
+     *
+     * <p>只读平台内存映射（{@code getConfiguredMapping} / {@code getConfiguredDefaultSqlDialect}），无 EDT 限制；
+     * {@code cn.song.mybatisplus.visualizer.execute.DialectPreMapping} 内已 runCatching 兜底。</p>
+     */
+    private String platformInheritedDialect(com.intellij.openapi.project.Project project) {
+        try {
+            if (project == null) return null;
+            String id = cn.song.mybatisplus.visualizer.execute.DialectPreMapping.inheritedLanguageId(project);
+            if (id == null) return null;
+            return IdeaSqlContextBridge.pluginDialectName(id);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /**
+     * EDT 只吃缓存；后台线程才真正扫描项目文件（慢操作隔离，T-ExecSlowOps 同款纪律）。
+     *
+     * <p>T-DialectInferSmart：先问<b>来源模块</b>（模块内无结论再由 {@code forProject} 回落到项目级），
+     * 模块级结论单独缓存，避免 A 模块的库被 B 模块的配置覆盖。</p>
+     */
+    private ProjectDialectEvidence.Evidence projectEvidence(
+            com.intellij.openapi.project.Project project,
+            com.intellij.openapi.module.Module module) {
+        try {
+            if (project == null) return null;
+            if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+                ProjectDialectEvidence.Evidence cached = ProjectDialectEvidence.cachedOrNull(project, module);
+                if (cached != null) return cached;
+                return module != null ? ProjectDialectEvidence.cachedOrNull(project) : null;
+            }
+            ProjectDialectEvidence.Evidence byModule =
+                    module != null ? ProjectDialectEvidence.forProject(project, module) : null;
+            return byModule != null ? byModule : ProjectDialectEvidence.forProject(project);
+        } catch (Throwable e) {
+            return null;
+        }
     }
 
     /**
