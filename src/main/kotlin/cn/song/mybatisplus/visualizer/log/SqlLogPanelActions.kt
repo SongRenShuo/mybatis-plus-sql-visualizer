@@ -131,7 +131,18 @@ internal fun SqlLogPanel.exportVisibleEntries() {
     val target = saved.file
     ApplicationManager.getApplication().executeOnPooledThread {
         runCatching {
-            SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+            // T-MagpieGems W2：导出是离开 IDE 面——mode != OFF 一律按 MASK 打码（从严）。
+            // R60 时代本链漏传 mask 形参（日志页导出原文越权），随出口缺口一并补齐。
+            // UI-001 修复：白名单豁免贯穿导出链。
+            SqlExportService.exportToFile(
+                target,
+                SqlExportService.format(
+                    rows,
+                    format,
+                    PluginSettings.getInstance().displayMaskExportOn(),
+                    PluginSettings.getInstance().displayMaskAllowList(),
+                ),
+            )
         }.onSuccess {
             com.intellij.notification.NotificationGroupManager.getInstance()
                 .getNotificationGroup(NOTIFICATION_GROUP_ID)

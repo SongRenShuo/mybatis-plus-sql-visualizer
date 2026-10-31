@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
 import javax.swing.JComponent
-import javax.swing.JTextArea
 
 /**
  * T-FramePrefixVisibility 守卫：源码捕获帧过滤前缀输入框必须在「SQL 日志」子页面组件树中
@@ -16,25 +15,17 @@ class FrameSkipPrefixesFieldVisibilityTest : BasePlatformTestCase() {
     /** 承载「源码位置捕获」分组的真实子页（与用户设置页同一路径）。 */
     private fun newConfigurable(): SectionConfigurable = SqlLogConfigurable()
 
-    private fun findAll(container: java.awt.Container, type: Class<JTextArea>, out: MutableList<JTextArea>) {
-        for (c in container.components) {
-            when {
-                type.isInstance(c) -> out.add(type.cast(c))
-                c is java.awt.Container -> findAll(c, type, out)
-            }
-        }
-    }
-
     fun test测试帧过滤前缀输入框在组件树中且高度不塌缩() {
         val configurable = newConfigurable()
         configurable.createComponent()
-        val root = configurable.panelForTest().getRoot()
+        val panel = configurable.panelForTest()
+        val root = panel.getRoot()
 
-        val areas = mutableListOf<JTextArea>()
-        findAll(root, JTextArea::class.java, areas)
-        assertTrue("SQL 日志页组件树中应存在帧过滤前缀多行输入框（JBTextArea）", areas.isNotEmpty())
+        // T-MagpieGems W2 起 SQL 日志页有多个 JBTextArea（脱敏白名单 3 行域先于本组装配），
+        // 按「树里第一个 JTextArea」定位会取错控件——直接引用面板字段，与装配顺序解耦。
+        val field = panel.frameSkipPrefixesField
+        assertTrue("SQL 日志页组件树中应存在帧过滤前缀多行输入框（JBTextArea）", isInTree(root, field))
 
-        val field = areas.first()
         val label = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes")
         // 高度保底：preferred 高不得低于 60px（3 行文本的塌缩下限）
         assertTrue(
@@ -56,7 +47,8 @@ class FrameSkipPrefixesFieldVisibilityTest : BasePlatformTestCase() {
     fun test测试两前缀框置入垂直分栏且默认加大() {
         val configurable = newConfigurable()
         configurable.createComponent()
-        val root = configurable.panelForTest().getRoot()
+        val panel = configurable.panelForTest()
+        val root = panel.getRoot()
 
         val splitters = mutableListOf<com.intellij.ui.OnePixelSplitter>()
         findAllOfType(root, com.intellij.ui.OnePixelSplitter::class.java, splitters)
@@ -64,10 +56,10 @@ class FrameSkipPrefixesFieldVisibilityTest : BasePlatformTestCase() {
         val splitter = splitters.first()
         assertTrue("分栏应为垂直方向（上下两框、中缝横向拖拽）", splitter.orientation)
 
-        val areas = mutableListOf<JTextArea>()
-        findAll(root, JTextArea::class.java, areas)
-        assertTrue("分栏两侧应各有一个前缀多行输入框，实为 ${areas.size}", areas.size >= 2)
-        for (field in areas.take(2)) {
+        // 同前：按面板字段定位两框，不按树中 JTextArea 的出现顺序取。
+        val fields = listOf(panel.frameSkipPrefixesField, panel.bizJarPrefixesField)
+        assertTrue("分栏两侧应各有一个前缀多行输入框", fields.size == 2)
+        for (field in fields) {
             assertTrue(
                 "输入框默认首选高度应 ≥100px（T-FramePrefixResize 默认加大，实为 ${field.preferredSize.height}）",
                 field.preferredSize.height >= 100,

@@ -233,6 +233,95 @@ class UpdateSectionTest : BasePlatformTestCase() {
         assertEquals(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), section.giteeLink.text)
     }
 
+    // ------------------------------------------------------------------
+    // T-SelfUpdateRollback（O-150）W2：回滚入口
+    // ------------------------------------------------------------------
+
+    fun test回滚按钮态_备份可用启用_不可用禁用() {
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo(
+                fromVersion = "2026.10.1",
+                sha256 = "ab",
+                createdAt = 1L,
+                pluginDirName = "mybatis-plus-sql-visualizer",
+            )
+        }
+        section.refreshRollbackAvailability()
+        assertTrue("备份在场按钮应可用", section.rollbackButton.isEnabled)
+        section.rollbackAvailability = { null }
+        section.refreshRollbackAvailability()
+        assertFalse("无备份按钮必须禁用（诚实降级，绝不假装可点）", section.rollbackButton.isEnabled)
+    }
+
+    /** UI-002：备份在会话中途出现后，重开设置页（resetState）须重算可用性，不再滞后灰置。 */
+    fun test回滚按钮态_reset时重算可用性() {
+        section.rollbackAvailability = { null }
+        section.resetState()
+        assertFalse("无备份 reset 后仍禁用", section.rollbackButton.isEnabled)
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")
+        }
+        section.resetState()
+        assertTrue("备份中途出现后 reset 须启用按钮（UI-002）", section.rollbackButton.isEnabled)
+    }
+
+    fun test回滚流程_确认通过_调度成功渲染重启提示() {
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")
+        }
+        section.refreshRollbackAvailability()
+        var confirmed = 0
+        section.rollbackConfirm = { confirmed++; true }
+        var rolled = 0
+        section.rollbackRunner = {
+            rolled++
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.Scheduled("9.9.9")
+        }
+        section.rollbackButton.doClick()
+        assertEquals(1, confirmed)
+        assertEquals(1, rolled)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.rollback.scheduled", "9.9.9"),
+            section.rollbackStatusLabel.text,
+        )
+        assertFalse("调度后按钮禁用防重复调度", section.rollbackButton.isEnabled)
+    }
+
+    fun test回滚流程_确认拒绝_不调度() {
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")
+        }
+        section.refreshRollbackAvailability()
+        section.rollbackConfirm = { false }
+        var rolled = 0
+        section.rollbackRunner = { rolled++; cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.Scheduled("x") }
+        section.rollbackButton.doClick()
+        assertEquals("用户取消则零调度", 0, rolled)
+    }
+
+    fun test回滚流程_无备份结果_状态行如实披露() {
+        section.rollbackAvailability = {
+            cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo("2026.10.1", "ab", 1L, "d")
+        }
+        section.refreshRollbackAvailability()
+        section.rollbackConfirm = { true }
+        section.rollbackRunner = { cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.NoBackup("gone") }
+        section.rollbackButton.doClick()
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.rollback.noBackup"),
+            section.rollbackStatusLabel.text,
+        )
+    }
+
+    fun test禁用态点击_不弹确认不调度() {
+        section.rollbackAvailability = { null }
+        section.refreshRollbackAvailability()
+        var confirmed = 0
+        section.rollbackConfirm = { confirmed++; true }
+        section.rollbackButton.doClick()
+        assertEquals("禁用态必须短路", 0, confirmed)
+    }
+
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */
     private fun waitForState(target: UpdateSection.State) {
         val deadline = System.currentTimeMillis() + 10_000

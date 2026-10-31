@@ -50,13 +50,18 @@ class ListSourceFetchCacheTest : BasePlatformTestCase() {
         val state = PluginSettings.getInstance().state
         val savedMode = state.logListSqlDisplayMode
         val savedMask = state.displayMaskEnabled
+        val savedMaskMode = state.displayMaskMode
         state.logListSqlDisplayMode = mode
+        // T-MagpieGems W2 并入后脱敏真源是 displayMaskMode（旧布尔仅迁移源）——显式写显式值，
+        // 不依赖「空哨兵按旧布尔推导」的迁移路径，防其他用例遗留非哨兵值串场。
         state.displayMaskEnabled = mask
+        state.displayMaskMode = if (mask) "MASK" else "OFF"
         try {
             block()
         } finally {
             state.logListSqlDisplayMode = savedMode
             state.displayMaskEnabled = savedMask
+            state.displayMaskMode = savedMaskMode
         }
     }
 
@@ -88,7 +93,14 @@ class ListSourceFetchCacheTest : BasePlatformTestCase() {
                     val e = entry()
                     renderOnce(renderer, e)
                     val displayMode = settings.sqlListDisplayMode()
-                    val expected = withTerminator(displaySqlForList(e, displayMode, mask))
+                    val expected = withTerminator(
+                        displaySqlForList(
+                            e,
+                            displayMode,
+                            if (mask) cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK
+                            else cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF,
+                        ),
+                    )
                     val expectedLines = if (displayMode == SqlListDisplayMode.SINGLE_LINE) {
                         listOf(expected)
                     } else {
@@ -116,6 +128,7 @@ class ListSourceFetchCacheTest : BasePlatformTestCase() {
             assertTrue("脱敏开不应泄漏敏感字面量", joinedLines(renderer).joinToString("\n").contains("***"))
 
             PluginSettings.getInstance().state.displayMaskEnabled = false
+            PluginSettings.getInstance().state.displayMaskMode = "OFF"
             renderOnce(renderer, e)
             assertEquals("脱敏切换后必须重取源重算", 1, RailCellRendererBase.listSourceFetchCount)
             val text = joinedLines(renderer).joinToString("\n")

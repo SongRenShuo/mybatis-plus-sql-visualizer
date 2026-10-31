@@ -93,6 +93,28 @@ class PluginSettingsPanel @JvmOverloads constructor(
     }
 
     /**
+     * 展示脱敏模式下拉选项（枚举本体 + 显示文案；data class 按 mode 判等，对齐 LanguageOption 范式）。
+     * W2 守卫批（EnumReachabilityGuardTest）改携带枚举本体：WARN/BLOCK 在实参位有了唯一产出点，
+     * 不再是「有消费零产出」的死常量；持久化仍走 [value]（name 串）。
+     */
+    internal data class MaskModeOption(val label: String, val mode: cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode) {
+        val value: String get() = mode.name
+        override fun toString(): String = label
+    }
+
+    /**
+     * T-MagpieGems W2：展示脱敏模式下拉的选项（顺序=下拉顺序，首项 OFF=默认）。
+     * 实例级初始化（非 companion）——文案随语言 rebuild 重建面板时刷新（语言切换同一 JVM
+     * 内重建面板，companion 静态清单会把旧语言冻住）。
+     */
+    private val maskModeOptions: List<MaskModeOption> = listOf(
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.off"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.mask"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.warn"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.WARN),
+        MaskModeOption(MpSqlVisualizerBundle.message("settings.display.mask.mode.block"), cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.BLOCK),
+    )
+
+    /**
      * 语言选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。
      *
      * M19 修复：必须为 data class（按 value 判等）——JDK17 `JComboBox.setSelectedItem` 会以
@@ -249,8 +271,30 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 脱敏开关（默认关）：对疑似敏感形态打码，agent 采集层执行。 */
     internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
-    /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
-    internal val displayMaskCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"))
+    /**
+     * R60（T-LaneB D96）→ T-MagpieGems W2：展示/导出链脱敏动作分级下拉
+     * （关闭/打码/警示/阻断；默认关闭=既有默认观感不变）。行标签复用 settings.display.mask
+     * 键（搜索索引既有条目即本控件的可搜索身份，防「跳了不亮」幽灵条目）。
+     */
+    internal val displayMaskModeCombo = JComboBox(
+        maskModeOptions.map { it.label }.toTypedArray(),
+    )
+
+    /** T-MagpieGems W2：脱敏豁免白名单（列名关键词，换行或逗号分隔；3 行小文本域）。 */
+    internal val displayMaskAllowListArea = com.intellij.ui.components.JBTextArea(3, 24).apply {
+        emptyText.text = MpSqlVisualizerBundle.message("settings.display.mask.allowList.placeholder")
+        lineWrap = true
+        wrapStyleWord = true
+    }
+
+    /** 下拉选中项对应的 mode 串（OFF/MASK/WARN/BLOCK）。 */
+    internal fun selectedDisplayMaskMode(): String =
+        maskModeOptions.getOrNull(displayMaskModeCombo.selectedIndex)?.value ?: "OFF"
+
+    /** 按 mode 串回填下拉选中项（未知串回落 OFF 项）。 */
+    internal fun setDisplayMaskMode(mode: String) {
+        displayMaskModeCombo.selectedIndex = maskModeOptions.indexOfFirst { it.value == mode }.coerceAtLeast(0)
+    }
 
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     internal val stackMaxFramesField = JBTextField(6)
@@ -1246,7 +1290,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
-            || displayMaskCheck.isSelected != s.displayMaskEnabled
+            // T-MagpieGems W2：分级下拉 + 白名单文本域替代旧复选框的改动判定
+            // （与访问器归一后的有效值比，防空哨兵未迁移态造成常驻假「已修改」）
+            || selectedDisplayMaskMode() != PluginSettings.getInstance().displayMaskMode().name
+            || displayMaskAllowListArea.text.trim() != s.displayMaskAllowList.trim()
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1378,7 +1425,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
-            s.displayMaskEnabled = displayMaskCheck.isSelected
+            // T-MagpieGems W2：脱敏分级 + 白名单写回。旧开关同步为 mode != OFF——displayMaskEnabled
+            // 自此只作迁移源（loadState/displayMaskMode() 归一读取），同步写让旧版本插件读新 XML 观感一致
+            // （直取 displayMaskModeCombo 选中项，勿经 helper 中转——SettingsRealityGuardTest 断言二要求
+            // 控件本体在 apply/reset 函数体内出现，防「摆而不绑」回归）
+            val maskMode = maskModeOptions.getOrNull(displayMaskModeCombo.selectedIndex)?.value ?: "OFF"
+            s.displayMaskMode = maskMode
+            s.displayMaskAllowList = displayMaskAllowListArea.text.trim()
+            s.displayMaskEnabled = maskMode != "OFF"
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1581,7 +1635,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
-            displayMaskCheck.isSelected = s.displayMaskEnabled
+            // T-MagpieGems W2：分级下拉 + 白名单文本域回填（模式经访问器归一后的有效值）
+            displayMaskModeCombo.selectedIndex = maskModeOptions
+                .indexOfFirst { it.value == PluginSettings.getInstance().displayMaskMode().name }
+                .coerceAtLeast(0)
+            displayMaskAllowListArea.text = s.displayMaskAllowList
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

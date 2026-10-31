@@ -654,6 +654,21 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/HardcodedUiTextGuardTest.kt",
+                listOf(DecisionFn("scanHardcoded", FnKind.VIOLATIONS)),
+                "UI 控件文案硬编码中文守卫（T-TestGateGems W1-a）：判定内核 `scanHardcoded` 逐文件剥注释" +
+                    "后按 `uiTextPatterns` 扫 CJK 字面量，返回 `文件:行 片段` 违规点集合。自证语料=同文件" +
+                    "「判定内核能看见硬编码中文形态」+「英文文案与注释中文不得命中」两例，覆盖正反两面。",
+            ),
+            GuardEntry(
+                "convention/IconResourceGuardTest.kt",
+                listOf(DecisionFn("declaredIconPaths", FnKind.SITES)),
+                "图标资源存在性守卫（T-TestGateGems W1-b）：判定内核 `declaredIconPaths` 从 plugin.xml " +
+                    "属性与 .kt 字面量提取 `/icons/*.svg|png` 站点集合（`文件:行` to 路径）。合并 master 时" +
+                    "登记，并顺手补了自证引用——原自证用例只对合成路径做 isFile、未调用提取器，元守卫" +
+                    "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
+            ),
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +

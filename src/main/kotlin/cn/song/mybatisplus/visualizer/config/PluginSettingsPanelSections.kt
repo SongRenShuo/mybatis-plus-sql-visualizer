@@ -596,11 +596,19 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 }
             })
             addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
-            // R60（T-LaneB D96）：展示/导出链脱敏（与采集开关解耦——管「文本怎么出去」）
-            addRow(p, g, "", displayMaskCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.display.mask")
+            // R60（T-LaneB D96）→ T-MagpieGems W2：展示/导出链脱敏分级下拉（与采集开关解耦——管
+            // 「文本怎么出去」）。行标签复用 settings.display.mask（该键即本控件的可搜索身份）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.display.mask"), displayMaskModeCombo.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.tip")
             })
+            // T-MagpieGems W2：豁免白名单（3 行小文本域，滚动包裹防撑高）
+            addRow(
+                p, g, MpSqlVisualizerBundle.message("settings.display.mask.allowList"),
+                javax.swing.JScrollPane(displayMaskAllowListArea).apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.allowList.tip")
+                },
+                fill = GridBagConstraints.HORIZONTAL,
+            )
             // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")

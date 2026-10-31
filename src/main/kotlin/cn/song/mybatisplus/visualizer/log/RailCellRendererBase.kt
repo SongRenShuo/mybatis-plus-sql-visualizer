@@ -287,30 +287,34 @@ internal abstract class RailCellRendererBase : JPanel(BorderLayout()), ListCellR
 
     /**
      * SQL 行片段（T-ListMode 模式分流）：SINGLE_LINE 直渲染不缓存（固定行高 + 主题切换实时生效）；
-     * 多行模式走条目级缓存（键含模式+脱敏态，任一变化即重算）。
+     * 多行模式走条目级缓存（键含模式+脱敏模式，任一变化即重算）。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry, mode: SqlListDisplayMode): List<List<SqlTextFragment>> {
-        // R60：展示文本打码、原始条目不动；缓存以模式和脱敏态为键，防切换后复用旧语义片段。
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        // R60 → T-MagpieGems W2：展示文本按脱敏模式渲染、原始条目不动；缓存以显示模式和
+        // 脱敏模式（OFF/WARN 原样、MASK 打码、BLOCK 占位四态互异）为键，防切换后复用旧语义片段。
+        // UI-001 修复：白名单实参贯穿列表显示链；语义缓存键并入白名单（改白名单即重算）。
+        val maskMode = PluginSettings.getInstance().displayMaskMode()
+        val allowList = PluginSettings.getInstance().displayMaskAllowList()
+        val maskCacheKey = maskMode.name + "|" + allowList.joinToString(",")
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             listSourceFetchCount++
-            val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
+            val sql = withTerminator(displaySqlForList(entry, mode, maskMode, allowList))
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         // R29-1（T-PerfSweep29-01）：取源只在缓存未命中时执行——脱敏开时 displaySqlForList
         // 内部付 O(SQL 长) 全量词法打码，命中路径每帧重取源后整段丢弃纯属白付。
         val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMaskMode == maskCacheKey }
             ?: run {
                 listSourceFetchCount++
                 SqlListFragmentRenderer.semanticLineFragments(
-                    withTerminator(displaySqlForList(entry, mode, maskOn)),
+                    withTerminator(displaySqlForList(entry, mode, maskMode, allowList)),
                     mode,
                 )
             }.also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
-                entry.cachedListLineFragmentsMasked = maskOn
+                entry.cachedListLineFragmentsMaskMode = maskCacheKey
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }

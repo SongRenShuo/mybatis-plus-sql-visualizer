@@ -91,10 +91,10 @@ class PluginSettingsFolderConfigurable : Configurable {
         // （原页=搜索框+子页列表，用户不知道插件能干什么；「设置两层深」的兜底从搜索变一眼）
         val valuePanel = JPanel(GridLayout(0, 1)).apply {
             border = JBUI.Borders.empty(10, 16, 10, 16)
-            add(JBLabel("<html><b>增强捕获</b>：运行即采集真实参数、耗时、影响行数与目标库</html>"))
-            add(JBLabel("<html><b>免库预览</b>：Wrapper / mapper XML / JPA·HQL / 注解 SQL 写前静态还原</html>"))
-            add(JBLabel("<html><b>MCP 十一工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"))
-            add(JBLabel("<html>兼容矩阵与文档：<a href=\"https://sql-visualizer.jvtools.cn\">sql-visualizer.jvtools.cn</a></html>"))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.capture")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.preview")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.mcp")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.docs")))
         }
 
         return JPanel(BorderLayout()).apply {
@@ -628,9 +628,12 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
-            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
-            // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：T-MagpieGems W2 起该键是
+            // displayMaskModeCombo 分级下拉的行标签（控件可搜索身份仍在本条目，防「跳了不亮」幽灵条目），
+            // 搜「脱敏/展示/导出/打码」必须能翻到该行；完整性由 SettingsPanelSearchableGuardTest 守卫
             fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
+            // T-MagpieGems W2：豁免白名单文本域（行标签同键）；「白名单/豁免」可搜索命中
+            fields.add(SearchableField(b.message("settings.display.mask.allowList"), b.message("settings.display.mask.allowList.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 

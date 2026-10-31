@@ -208,14 +208,16 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
             // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
             // R60 T-LaneB D96：展示/导出链脱敏开关（displayMaskCheck）+1 后为 42；
+            // T-MagpieGems W2：displayMaskCheck 复选框改分级下拉（JComboBox）-1 后为 45；
             // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 43；
             // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 44；
             // R90：独立默认关闭的原始计划保留授权 +1 后为 45，不与结构化渲染共用；
             // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
-            // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47。
+            // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47；
+            // 并入 master 后：本分支 W2 已把 displayMaskCheck 布尔复选框改分级下拉（JComboBox，-1）——合并态 46（实跑核对）。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 47", 47, texts.size)
+            assertEquals("复选框总数应为 46", 46, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -561,4 +563,68 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    // ---------- T-MagpieGems W2：displayMaskMode 迁移归一 + 出口从严口径 ----------
+
+    fun testDisplayMaskMode迁移归一_true落MASK_false落OFF() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            val legacyOn = snapshot.copy().apply { displayMaskEnabled = true; displayMaskMode = "" }
+            settings.loadState(legacyOn)
+            assertEquals("旧开关开 → 迁移为 MASK", "MASK", settings.state.displayMaskMode)
+            assertEquals("访问器读出 MASK", DisplayMaskerMaskMode.MASK, settings.displayMaskMode())
+            assertTrue("MASK 属非关闭态，离开 IDE 面应从严打码", settings.displayMaskExportOn())
+
+            val legacyOff = snapshot.copy().apply { displayMaskEnabled = false; displayMaskMode = "" }
+            settings.loadState(legacyOff)
+            assertEquals("旧开关关 → 迁移为 OFF（既有默认观感不变）", "OFF", settings.state.displayMaskMode)
+            assertEquals(DisplayMaskerMaskMode.OFF, settings.displayMaskMode())
+            assertFalse("OFF 不打码导出", settings.displayMaskExportOn())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testDisplayMaskMode出厂默认空哨兵按旧开关推导() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            // 直接改 state（不 loadState）模拟「新装无 XML、loadState 未跑」形态
+            settings.state.displayMaskMode = ""
+            settings.state.displayMaskEnabled = false
+            assertEquals("出厂默认=不打码", DisplayMaskerMaskMode.OFF, settings.displayMaskMode())
+            settings.state.displayMaskEnabled = true
+            assertEquals("旧开关开且未迁移 → MASK", DisplayMaskerMaskMode.MASK, settings.displayMaskMode())
+            // 非法串回落 MASK
+            settings.state.displayMaskMode = "bogus"
+            assertEquals(DisplayMaskerMaskMode.MASK, settings.displayMaskMode())
+            // 显式 WARN/BLOCK 直写即生效（程序化路径不受迁移干扰）
+            settings.state.displayMaskMode = "WARN"
+            assertEquals(DisplayMaskerMaskMode.WARN, settings.displayMaskMode())
+            settings.state.displayMaskMode = "BLOCK"
+            assertEquals(DisplayMaskerMaskMode.BLOCK, settings.displayMaskMode())
+            assertTrue(settings.displayMaskExportOn())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testDisplayMaskAllowList解析() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.displayMaskAllowList = "mobile_register\nMOBILE"
+            assertEquals(listOf("mobile_register", "mobile"), settings.displayMaskAllowList())
+            settings.state.displayMaskAllowList = "a, b ,, c"
+            assertEquals(listOf("a", "b", "c"), settings.displayMaskAllowList())
+            settings.state.displayMaskAllowList = ""
+            assertTrue(settings.displayMaskAllowList().isEmpty())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }
+
+/** 避免测试文件整段全限定名——W2 访问器返回类型别名。 */
+private typealias DisplayMaskerMaskMode = cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode

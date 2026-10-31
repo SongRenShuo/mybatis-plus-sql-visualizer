@@ -107,9 +107,9 @@ private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
         add(control, BorderLayout.WEST)
     }
 
-/** Actual 的无类型裸列表不是 SQL 字面量；展示脱敏时隐藏整段，不尝试逐值解析。 */
+/** Actual 的无类型裸列表不是 SQL 字面量；展示脱敏非关闭态时隐藏整段，不尝试逐值解析（W2 模式化口径）。 */
 private fun shardingRouteDisplayText(actual: String): String =
-    if (PluginSettings.getInstance().state.displayMaskEnabled) {
+    if (PluginSettings.getInstance().displayMaskExportOn()) {
         MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked")
     } else actual
 
@@ -1115,7 +1115,7 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(view: XmlForEachView, labelWidth
     val valuesField = JBTextField(8).apply {
         // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
         text = xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
-        toolTipText = "集合值（逗号分隔，如 2,3；留空 = 默认展开 ${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
+        toolTipText = MpSqlVisualizerBundle.message("preview.xmlForEach.values.tooltip", XmlPreviewModel.DEFAULT_FOREACH_SIZE)
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
             override fun removeUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)

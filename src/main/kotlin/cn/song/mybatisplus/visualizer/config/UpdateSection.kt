@@ -67,6 +67,26 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     /** 重启回调 seam（T-M28.1：测试注入 fake 不弹原生重启确认框）。 */
     internal var restartAction: () -> Unit = { RestartDialogImpl.restartWithConfirmation() }
 
+    /**
+     * 回滚编排 seam（T-SelfUpdateRollback W2，O-150）：测试注入 fake；默认走
+     * [UpdateBackupStore.scheduleRestore]（校验备份→调度恢复命令→压忽略表，重启生效）。
+     */
+    internal var rollbackRunner: () -> cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult =
+        { cn.song.mybatisplus.visualizer.update.UpdateBackupStore.scheduleRestore() }
+
+    /** 回滚确认 seam（默认弹一次 Yes/No——回滚是重启级动作，属弹窗克制红线的「重大不可逆需确认」档）。 */
+    internal var rollbackConfirm: () -> Boolean = {
+        com.intellij.openapi.ui.Messages.showYesNoDialog(
+            MpSqlVisualizerBundle.message("settings.update.rollback.confirm"),
+            MpSqlVisualizerBundle.message("settings.update.rollback"),
+            com.intellij.openapi.ui.Messages.getQuestionIcon(),
+        ) == com.intellij.openapi.ui.Messages.YES
+    }
+
+    /** 备份可用性查询 seam（按钮可用态刷新用；测试注入免盘）。 */
+    internal var rollbackAvailability: () -> cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo? =
+        { cn.song.mybatisplus.visualizer.update.UpdateBackupStore.currentBackup() }
+
     internal val versionLabel = JBLabel()
     internal val autoCheckCheck = JCheckBox()
     internal val checkButton = JButton()
@@ -76,6 +96,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     internal val installButton = JButton()
     internal val installedLabel = JBLabel()
     internal val restartButton = JButton()
+
+    /** T-SelfUpdateRollback W2：回滚上一版按钮 + 结果状态行（备份可用才启用，tooltip 带旧版本号）。 */
+    internal val rollbackButton = JButton()
+    internal val rollbackStatusLabel = JBLabel()
 
     /** 变更日志标题（T-M28.4：标题行 = 左标题 + 右 Gitee 发布页链接）。 */
     internal val notesTitleLabel = JBLabel().apply { name = "notesTitle" }
@@ -148,6 +172,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         reportProblemButton.addActionListener {
             cn.song.mybatisplus.visualizer.feedback.FeedbackReporting.openManualDialog()
         }
+        // T-SelfUpdateRollback W2：回滚上一版（确认→调度恢复命令→提示重启）
+        rollbackButton.addActionListener { runRollback() }
         buildLayout()
         resetState()
         updateTexts()
@@ -185,6 +211,12 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         row(progressBar)
         row(notesContainer)
         row(doneContainer)
+        // T-SelfUpdateRollback W2：回滚上一版行（按钮 + 结果状态）
+        row(JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(rollbackButton)
+            add(rollbackStatusLabel)
+        })
         // R62：通道 404 兜底链接行（仅该态可见）
         row(fallbackLinksContainer)
         // T-ErrReport：需求池报告入口（报告问题按钮 + 需求池网页链接）
@@ -304,7 +336,50 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         giteeLink.text = MpSqlVisualizerBundle.message("settings.update.viewOnGitee")
         reportProblemButton.text = MpSqlVisualizerBundle.message("settings.update.reportProblem")
         feedbackPoolLink.text = MpSqlVisualizerBundle.message("settings.update.feedbackPool")
+        rollbackButton.text = MpSqlVisualizerBundle.message("settings.update.rollback")
+        refreshRollbackAvailability()
         renderState()
+    }
+
+    /**
+     * 回滚按钮可用态（T-SelfUpdateRollback W2）：备份可用→启用+tooltip 带旧版本号；
+     * 不可用→禁用+tooltip 说明（诚实降级：无回滚源绝不假装可点）。设置页打开/语言切换时刷新。
+     */
+    internal fun refreshRollbackAvailability() {
+        val backup = runCatching { rollbackAvailability() }.getOrNull()
+        if (backup != null) {
+            rollbackButton.isEnabled = true
+            rollbackButton.toolTipText =
+                MpSqlVisualizerBundle.message("settings.update.rollback.tooltip.available", backup.fromVersion)
+        } else {
+            rollbackButton.isEnabled = false
+            rollbackButton.toolTipText = MpSqlVisualizerBundle.message("settings.update.rollback.tooltip.none")
+        }
+    }
+
+    /** 执行回滚（确认→seam 调度→按结果渲染）。 */
+    internal fun runRollback() {
+        if (!rollbackButton.isEnabled) return
+        if (!runCatching { rollbackConfirm() }.getOrDefault(false)) return
+        when (val result = runCatching { rollbackRunner() }.getOrNull()) {
+            is cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.Scheduled -> {
+                rollbackStatusLabel.text =
+                    MpSqlVisualizerBundle.message("settings.update.rollback.scheduled", result.ignoredVersion)
+                rollbackButton.isEnabled = false
+            }
+            is cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.NoBackup -> {
+                rollbackStatusLabel.text =
+                    MpSqlVisualizerBundle.message("settings.update.rollback.noBackup")
+            }
+            is cn.song.mybatisplus.visualizer.update.UpdateBackupStore.RestoreResult.Failed -> {
+                rollbackStatusLabel.text =
+                    MpSqlVisualizerBundle.message("settings.update.rollback.failed", result.reason)
+            }
+            null -> {
+                rollbackStatusLabel.text =
+                    MpSqlVisualizerBundle.message("settings.update.rollback.failed", "unexpected error")
+            }
+        }
     }
 
     /** 从配置加载（Settings 打开/Reset 时调用）。 */
@@ -314,6 +389,9 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         failureReason = null
         failureKind = null
         state = State.Idle
+        // UI-002 修复：备份在「会话中途」出现（如本轮升级动作落盘）后，重开设置页须重算回滚
+        // 可用性——此前只在语言切换 rebuild（updateTexts）时刷新，reset 不刷导致按钮滞后灰置。
+        refreshRollbackAvailability()
         renderState()
     }
 

@@ -125,6 +125,11 @@ object PluginUpdateRunner {
                     is UpdateZipGuard.GuardResult.Reject ->
                         InstallResult.Failed("update package rejected: ${guard.reason}")
                     UpdateZipGuard.GuardResult.Ok -> {
+                        // T-SelfUpdateRollback W1（O-150）：安装 seam 调用前留存当前版本快照——
+                        // 必须在此处（运行期，旧目录必然在场）：平台三条安装路径都会在安装阶段
+                        // 物理删除旧目录（PluginInstaller :117/:157/:209），晚了就没了。
+                        // fail-open：备份失败不阻断升级（本轮无回滚源由入口态如实披露）。
+                        UpdateBackupStore.backupCurrent()
                         LOG.info("downloadAndInstall: zip valid, calling install")
                         install(temp.toPath())
                     }

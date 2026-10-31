@@ -1088,7 +1088,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             runCatching {
                 SqlExportService.exportToFile(
                     target,
-                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
+                    // T-MagpieGems W2：导出是离开 IDE 面——mode != OFF 一律按 MASK 打码（从严）。
+                    // UI-001 修复：白名单豁免贯穿导出链。
+                    SqlExportService.format(
+                        rows,
+                        format,
+                        PluginSettings.getInstance().displayMaskExportOn(),
+                        PluginSettings.getInstance().displayMaskAllowList(),
+                    ),
                 )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
