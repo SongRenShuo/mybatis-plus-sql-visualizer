@@ -100,6 +100,36 @@ public final class HibernateNamingConfigProbe {
 
     private static final ConcurrentHashMap<String, Cached> CACHE = new ConcurrentHashMap<>();
 
+    /**
+     * 券03（T-PerfSweep28-03，R28-4）缓存容量上限：键含项目基路径与模块资源目录，多项目长会话
+     * 缓慢累积且无项目关闭摘除。超限整体清空（HbmXml 负缓存/EntityResolver 同范式；值为纯布尔
+     * 判定结果，重算成本 = 一次资源目录扫描，可接受）。可写仅测试缝。
+     */
+    public static volatile int maxCacheEntries = 512;
+
+    /** 当前缓存条目数（测试 / 诊断用）。 */
+    public static int cacheSize() {
+        return CACHE.size();
+    }
+
+    /** 券03 测试缝：按给定键走同一写入守卫路径（灌键验证上限收敛；生产链路无调用点）。 */
+    public static void putForTest(String key, long stamp, boolean value) {
+        store(key, new Cached(stamp, value));
+    }
+
+    /** 券03 测试缝：清空缓存（用例隔离；生产链路无调用点）。 */
+    public static void clearCacheForTest() {
+        CACHE.clear();
+    }
+
+    /** 写入守卫单一事实：超限整体清空再写（{@link #maxCacheEntries} 语义）。 */
+    private static void store(String key, Cached entry) {
+        if (CACHE.size() >= maxCacheEntries) {
+            CACHE.clear();
+        }
+        CACHE.put(key, entry);
+    }
+
     private HibernateNamingConfigProbe() {
     }
 
@@ -127,7 +157,8 @@ public final class HibernateNamingConfigProbe {
         Cached cached = CACHE.get(key);
         if (cached != null && cached.stamp == stamp) return cached.value;
         boolean value = compute.getAsBoolean();
-        CACHE.put(key, new Cached(stamp, value));
+        // 券03（T-PerfSweep28-03）：写入走统一守卫（超限整体清空再写，语义见 maxCacheEntries）
+        store(key, new Cached(stamp, value));
         return value;
     }
 
