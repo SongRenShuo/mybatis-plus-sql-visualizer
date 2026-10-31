@@ -531,7 +531,9 @@ public final class ProjectDialectEvidence {
         if (token.startsWith("@") && token.endsWith("@")) return "";
         Matcher placeholder = PROFILE_PLACEHOLDER.matcher(token);
         if (!placeholder.matches()) return token;
-        return placeholder.group(2).trim();
+        // Kotlin groupValues[2] 对未匹配可选组回 ""，Java group(2) 回 null——无默认值占位
+        // 符（${SPRING_PROFILE}）走此分支，null 守卫等价 master「未知，不猜」语义
+        return placeholder.group(2) == null ? "" : placeholder.group(2).trim();
     }
 
     /** 去掉行尾 `#` 注释（只在引号外生效，够 YAML/properties 用）。 */
