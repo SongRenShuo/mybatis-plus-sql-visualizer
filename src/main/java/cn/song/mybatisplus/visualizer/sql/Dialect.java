@@ -284,6 +284,24 @@ public interface Dialect {
     }
 
     /**
+     * 分页子句是否<b>强制要求语句带 {@code ORDER BY}</b>（默认 false）。
+     *
+     * <p>T-SqlServerLimitOrder（2026-10-30 真机实证）：SQL Server 的 {@code OFFSET … ROWS FETCH NEXT …} 语法
+     * <b>必须</b>跟在 {@code ORDER BY} 之后，否则引擎直接报 {@code Incorrect syntax near '0'}。而渲染链
+     * {@code cn.song.mybatisplus.visualizer.sql.SqlGenerator} 只在 {@code orderBy} 非空时才输出 ORDER BY，
+     * 于是「无排序 + 分页」的预览产物在 SQL Server 上是<b>非法 T-SQL</b>。</p>
+     *
+     * <p>旧测试没抓到，是因为 {@code DialectH2VerificationTest} 用 H2 的 {@code MODE=MSSQLServer} 跑——H2 的
+     * 兼容模式<b>不强制</b>这条规则（假绿，与 T-OBExplainFormat 同型）。</p>
+     *
+     * <p>为 true 时，渲染方在 {@code limit != null && orderBy 为空} 时补一个语义中性的
+     * {@code ORDER BY (SELECT NULL)}（T-SQL 社区标准写法，表示「不指定顺序」），保证产物可执行。</p>
+     */
+    default boolean getLimitRequiresOrderBy() {
+        return false;
+    }
+
+    /**
      * R36（V46 证伪①）：<b>显式事务开始语句</b>（回放脚本的事务包裹用；不含结尾分号）。
      *
      * <p>语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 {@code <本值>;}（前）+

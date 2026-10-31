@@ -253,7 +253,7 @@ public final class SqlGenerator {
                     .append(statement.getOrderBy().stream().map(it ->
                             renderQualified(it.getColumn(), dialect) + " " + (it.isAsc() ? "ASC" : "DESC")
                     ).collect(Collectors.joining(", ")));
-        } else if (statement.getLimit() != null && dialect.limitRequiresOrderBy()) {
+        } else if (statement.getLimit() != null && dialect.getLimitRequiresOrderBy()) {
             // T-SqlServerLimitOrder（2026-10-30 真机）：SQL Server 的 OFFSET/FETCH 必须跟在 ORDER BY
             // 之后，否则 `Incorrect syntax near '0'`。无排序 + 分页时补语义中性的
             // `ORDER BY (SELECT NULL)`（T-SQL 社区标准写法 = 不指定顺序），保证产物可执行。

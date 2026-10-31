@@ -33,6 +33,16 @@ public final class SqlServerDialect implements Dialect {
                 Dialect.renderLimitValue(limit.getCount()) + " ROWS ONLY";
     }
 
+    /**
+     * T-SqlServerLimitOrder：{@code OFFSET … FETCH} 必须跟在 {@code ORDER BY} 之后（真机实证，2026-10-30）。
+     * 引擎原文：无 ORDER BY 的 {@code SELECT … OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY}
+     * → {@code Incorrect syntax near '0'.}；补 {@code ORDER BY (SELECT NULL)} 后正常返回。
+     */
+    @Override
+    public boolean getLimitRequiresOrderBy() {
+        return true;
+    }
+
     @Override
     public String quoteIdentifier(String identifier) {
         return "[" + identifier + "]";
