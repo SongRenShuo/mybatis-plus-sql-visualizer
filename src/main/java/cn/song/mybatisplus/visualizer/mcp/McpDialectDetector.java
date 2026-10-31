@@ -33,10 +33,16 @@ public final class McpDialectDetector {
         new SimpleEntry<>("jdbc:sqlite", "SQLite"),
         new SimpleEntry<>("jdbc:dm", "DM（达梦）"),
         new SimpleEntry<>("jdbc:kingbase", "KingBase（人大金仓）"),
-        // T-DialectXcFamily（O-63）：opengauss/gaussdb 同归 openGauss（D2=A 一 object 两前缀）
+        // T-DialectXcFamily（O-63）：opengauss 归 openGauss；T-GaussDbDialect（券 04）起 gaussdb 拆出
+        // 独立方言（华为 GaussDB 官方驱动 gaussdbjdbc.jar / gsjdbc200.jar 的前缀）
         new SimpleEntry<>("jdbc:opengauss", "openGauss"),
-        new SimpleEntry<>("jdbc:gaussdb", "openGauss"),
-        new SimpleEntry<>("jdbc:oceanbase", "OceanBase")
+        new SimpleEntry<>("jdbc:gaussdb", "GaussDB"),
+        new SimpleEntry<>("jdbc:oceanbase", "OceanBase"),
+        // T-XcDialects3（券 03）：瀚高 jdbc:highgo:；海量 jdbc:vastbase: 与 jdbc:dws:iam:
+        //（cn.com.vastbase.Driver 错误串原文 "must start with jdbc:vastbase: or jdbc:dws:iam:"）
+        new SimpleEntry<>("jdbc:highgo", "HighGo"),
+        new SimpleEntry<>("jdbc:vastbase", "Vastbase"),
+        new SimpleEntry<>("jdbc:dws", "Vastbase")
     );
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -67,7 +73,17 @@ public final class McpDialectDetector {
         // T-DialectXcFamily（O-63）
         m.put("oceanbase", "OceanBase");
         m.put("opengauss", "openGauss");
-        m.put("gaussdb", "openGauss");
+        // T-GaussDbDialect（券 04）：gaussdb 从同归 openGauss 改为独立方言；中文别名按既有惯例补
+        m.put("gaussdb", "GaussDB");
+        m.put("高斯", "GaussDB");
+        m.put("华为高斯", "GaussDB");
+        // T-XcDialects3（券 03）：瀚高/海量。瀚高官方写「瀚高」，但用户手输常写「翰高」，
+        // 两种写法都收（精确匹配互不冲突）；海量按厂商中文名收「海量」。
+        m.put("highgo", "HighGo");
+        m.put("瀚高", "HighGo");
+        m.put("翰高", "HighGo");
+        m.put("vastbase", "Vastbase");
+        m.put("海量", "Vastbase");
         return m;
     }
 
