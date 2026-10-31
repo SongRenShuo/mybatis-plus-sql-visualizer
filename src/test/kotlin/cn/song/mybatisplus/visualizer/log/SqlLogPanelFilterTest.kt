@@ -262,6 +262,69 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
         }
     }
 
+    // ---------- S1-4④：非法正则可见提示（与历史页同链） ----------
+
+    /**
+     * 日志页非法正则**必须显式报错**，不能静默回退子串。
+     *
+     * 修复前：`filterBySearch` 里 `pattern == null` 直接往下走子串路径，搜索条毫无反馈——
+     * 同一输入在历史页报「正则表达式无效」，在日志页却像「没命中」。修复后两页共用
+     * [invalidRegexQuery] 判定，日志页在 refreshList 末尾经 `setSearchError` 报错。
+     *
+     * 反向验证：摘掉 [SqlLogPanel.updateSearchErrorFeedback] 里 `setSearchError` 那一行
+     * （或整段调用），本用例的状态区/ tooltip 断言必红。
+     */
+    fun test非法正则显式报错且保留子串回退() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT '(' FROM t", ts = 0L))
+            pumpEdt()
+            panel.regexToggleForTest = true
+            panel.searchFieldForTest.text = "("
+            panel.applySearchTextForTest()
+            val search = panel.searchFieldForTest
+            val error = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+                .message("log.history.search.invalidRegex")
+            assertEquals("非法正则必须在搜索条状态区报错", error, search.component.statusText)
+            assertEquals("tooltip 同步报错", error, search.textEditor.toolTipText)
+            // 回退语义不变：`(` 按字面子串仍能命中含它的 SQL。
+            assertEquals("非法正则仍 fail-closed 回退子串，不应变成零结果", 1, panel.visibleEntryCount)
+            // 改为合法正则后错误必须被清掉，状态区回落命中数（与历史页同口径）。
+            panel.searchFieldForTest.text = "SELECT"
+            panel.applySearchTextForTest()
+            assertEquals(
+                "错误清除后状态区应显示命中数",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.history.search.results", 1),
+                search.component.statusText,
+            )
+            assertEquals(null, search.textEditor.toolTipText)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    // ---------- S1-4④：非法正则判定单一真源（日志页/历史页同链） ----------
+
+    /**
+     * 两页共用 [invalidRegexQuery]：同一输入在两页得到的「是否非法」必须一致。
+     *
+     * 反向验证：把任一面板的判定改回各自内联写法（或改 [invalidRegexQuery] 的生效条件），
+     * 下面的两页对照断言会红。
+     */
+    fun test非法正则判定两页一致() {
+        val memo = HistoryRegexMemo()
+        // 走一遍真实过滤把编译结果写进 memo（顺序同生产：先过滤后判定）。
+        filterBySearch(listOf(LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())), "(", regexEnabled = true, memo = memo)
+        assertTrue("正则开 + 非法串 → 非法", invalidRegexQuery("(", regexEnabled = true, memo = memo))
+        assertTrue("regex: 前缀（开关关）也生效", invalidRegexQuery("regex:(", regexEnabled = false, memo = memo))
+        assertFalse("正则关且无前缀 → 不走正则，不判非法", invalidRegexQuery("(", regexEnabled = false, memo = HistoryRegexMemo()))
+        assertFalse("空查询不判非法", invalidRegexQuery("   ", regexEnabled = true, memo = memo))
+
+        val memo2 = HistoryRegexMemo()
+        filterHistoryEntries(emptyList(), "[(]", regexEnabled = true, memo = memo2)
+        assertFalse("合法正则不判非法（历史页同一真源）", invalidRegexQuery("[(]", regexEnabled = true, memo = memo2))
+    }
+
     // ---------- 耗时排序（委托 LogDurationParser） ----------
 
     fun testDurationSortHiddenWithoutDurationInfo() {
