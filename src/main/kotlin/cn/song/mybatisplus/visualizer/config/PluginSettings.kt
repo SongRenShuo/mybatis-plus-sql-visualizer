@@ -548,16 +548,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var paginationCountEnabled: Boolean = true,
 
         /**
-         * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的
-         * 自建执行链路线）——开=MySQL 家族表格行/PG 家族 JSON 计划在面板内结构化渲染＋索引
-         * 建议条；其余方言（TEXT/XML 不硬解析）与判定/执行/渲染任一失败路径一律 fail-closed
-         * 回退原生控制台直送通道（双通道并存不替换）。
+         * R45（EXPLAIN 执行计划体检，转正）：EXPLAIN 结构化渲染开关——开=MySQL 家族表格行/
+         * PG 家族 JSON 计划在面板内结构化渲染＋索引建议条；其余方言（TEXT/XML 不硬解析）与
+         * 判定/执行/渲染任一失败路径一律 fail-closed 回退原生控制台直送通道（双通道并存不替换）。
          *
-         * T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：**默认关**——EXPLAIN 默认走原生
-         * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
-         * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。
+         * 口径沿革：R33 引入（自建执行链，核实报告 V41 定案）→ T-DevAcceptFix ②（20261006 验收
+         * 采 B 案）因「表格形态交互不如原生控制台」改为默认关、通道整体保留一个版本周期 →
+         * R45 转正为正式能力、**默认开**（观察期已过；用户仍可在设置页显式关闭，关闭后与原生
+         * 直送通道逐字一致）。存量用户已显式关闭的值不受影响（持久化值优先于声明默认值）。
          */
-        var explainStructuredRender: Boolean = false,
+        var explainStructuredRender: Boolean = true,
 
         /** R90：原始计划跨会话保留需独立同意；旧渲染开关不代表落盘授权，缺字段默认关闭。 */
         var explainPlanRetentionEnabled: Boolean = false,
