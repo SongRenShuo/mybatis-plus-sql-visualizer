@@ -15,15 +15,17 @@ class ErrorPositionExtractorTest {
 
     @Test
     fun testRichFormatterPreservesFullMessageAndOnlyRealMetadata() {
+        // T-MagpieGems W4 起 format 末行追加分类出路提示（SYNTAX 档），断言与实现同取 bundle 键
+        val syntaxHint = "\n" + cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("error.category.syntax")
         val driver = java.sql.SQLException("Syntax <bad> & detail\nPosition: 12", "42601", 932)
         val info = ErrorPositionExtractor.buildInfo(driver, driver.message!!, 80)
-        assertEquals("Syntax <bad> & detail\nPosition: 12\nsqlState: 42601\nerrorCode: 932\nerrorPosition: char 12", ExecutionErrorFormatter.format(info))
+        assertEquals("Syntax <bad> & detail\nPosition: 12\nsqlState: 42601\nerrorCode: 932\nerrorPosition: char 12$syntaxHint", ExecutionErrorFormatter.format(info))
         val mcp = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.formatFailure(driver, "PostgreSQL", "EXPLAIN SELECT * FROM some_table")
         assertEquals("\nsqlState: 42601\nerrorCode: 932\nerrorPosition: char 12", mcp.substringAfter("Syntax <bad> & detail"))
         assertEquals("offline", ExecutionErrorFormatter.format(ExecutionErrorInfo("offline", errorCode = 0, positionChar = 3)))
         assertEquals("offline", ExecutionErrorFormatter.format(ExecutionErrorInfo("offline", sqlState = " ", lineInSql = 0, positionSource = "line")))
         val line = ErrorPositionExtractor.buildInfo(java.sql.SQLException("bad at line 3", "42000", 1064), "bad at line 3", 40)
-        assertEquals("bad at line 3\nsqlState: 42000\nerrorCode: 1064\nerrorPosition: line 3", ExecutionErrorFormatter.format(line))
+        assertEquals("bad at line 3\nsqlState: 42000\nerrorCode: 1064\nerrorPosition: line 3$syntaxHint", ExecutionErrorFormatter.format(line))
         val ambiguous = ErrorPositionExtractor.buildInfo(null, "Position: 5 ... at line 2", 80)
         assertEquals("Position: 5 ... at line 2", ExecutionErrorFormatter.format(ambiguous))
     }

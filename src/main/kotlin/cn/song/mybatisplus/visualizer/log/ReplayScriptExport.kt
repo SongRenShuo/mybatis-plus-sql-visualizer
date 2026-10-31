@@ -86,10 +86,12 @@ object ReplayScriptExport {
      * 渲染脚本正文。
      *
      * @param mask 开 → 逐语句投影级脱敏（[DisplayMasker.maskDisplay]）＋头部 `masked:` 标注
+     * @param allowList 白名单豁免随调用方设置贯穿（UI-001 修复；为空时与旧签名逐字等价）
      * @param generatedAt 生成时间文本（调用方传 [SqlExportService.formatTime]，null 则省略该行）
      */
-    fun render(plan: Plan, mask: Boolean = false, generatedAt: String? = null): String {
-        val effective = if (mask) plan.statements.map { DisplayMasker.maskDisplay(it, true) } else plan.statements
+    fun render(plan: Plan, mask: Boolean = false, generatedAt: String? = null, allowList: List<String> = emptyList()): String {
+        val effective =
+            if (mask) plan.statements.map { DisplayMasker.maskDisplay(it, DisplayMasker.MaskMode.MASK, allowList) } else plan.statements
         val sb = StringBuilder()
         sb.append("-- ").append(HEADER_TAG).append('\n')
         if (!generatedAt.isNullOrBlank()) sb.append("-- generated: ").append(generatedAt).append('\n')

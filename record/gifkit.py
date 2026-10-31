@@ -127,12 +127,53 @@ def move(x, y, dur=0.32):
             time.sleep(0.002)
 
 
-def click(x=None, y=None, move_dur=0.32, pauses=(0.25, 0.30)):
+# 录制期禁按的语义标签（T-TestGateGems W6-a，2026-10-24）。
+#
+# 来源：magpie `.github/ui-preview/record.mjs:38,331` 的 FORBIDDEN 正则——每个点击执行前读目标的
+# 文本，命中就抛错中止。桌面场景没有 DOM 可读，所以这里改成**按调用方声明的语义标签拦**：
+# 场景脚本调用 click(...)/double_click(...) 时必须用 label= 说明「这一下点的是什么」，
+# 护栏按标签匹配禁用词，命中即中止并留痕。
+#
+# 为什么值得这层：一次误点「Invalidate Caches」「Delete」「Update Plugin」就毁掉整场录制，
+# 而且事后从成片里看不出来（画面照样录完了）。成本是一行 label，收益是整场不被毁。
+FORBIDDEN_LABELS = (
+    "退出", "关闭ide", "quit", "exit",
+    "删除", "移除", "delete", "remove",
+    "更新到", "update to", "update plugin", "升级插件",
+    "重启", "restart",
+    "登出", "sign out", "注销",
+    "卸载", "uninstall",
+    "invalidate caches", "清除缓存",
+)
+
+# 本次录制内已被拦下的点击（供收尾时汇总，不静默吞）
+blocked_labels = []
+
+
+def _guard_label(label, action):
+    """命中禁用词即抛错中止录制。label 为空时放行但记一条待补（渐进式，不阻断存量脚本）。"""
+    if not label:
+        blocked_labels.append(f"(no label) {action}")
+        return
+    low = label.lower()
+    for word in FORBIDDEN_LABELS:
+        if word in low:
+            raise RuntimeError(
+                f"拒绝执行危险点击：{action} label={label!r} 命中禁用词 {word!r}。"
+                f"演示录制不得触发退出/删除/更新/重启/卸载类操作——改脚本或换一条演示路径。"
+            )
+
+
+def click(x=None, y=None, move_dur=0.32, pauses=(0.25, 0.30), label=None):
     """移动并左键单击。pauses=(移动前, 点击后) 的演示停顿。
 
     T-GifRerecord：最终 click 传坐标给 pyautogui（moveTo+click 原子执行）——
     贝塞尔只做演示轨迹，落点不依赖期间光标不被外部（人手）移动。
+
+    label：这一下点的是什么（如 "预览按钮"、"设置页搜索框"）。T-TestGateGems W6-a 护栏用，
+    命中 FORBIDDEN_LABELS 即中止；未传则记入 blocked_labels 待补（不阻断存量脚本）。
     """
+    _guard_label(label, "click")
     if x is not None:
         time.sleep(pauses[0])
         move(x, y, move_dur)
@@ -140,13 +181,17 @@ def click(x=None, y=None, move_dur=0.32, pauses=(0.25, 0.30)):
     time.sleep(pauses[1])
 
 
-def double_click(x, y, move_dur=0.32):
+def double_click(x, y, move_dur=0.32, label=None):
+    """双击；label 同 click 的 W6-a 护栏语义。"""
+    _guard_label(label, "double_click")
     move(x, y, move_dur)
     time.sleep(0.06)
     pyautogui.doubleClick()
 
 
-def right_click(x, y, move_dur=0.32):
+def right_click(x, y, move_dur=0.32, label=None):
+    """右键；label 同 click 的 W6-a 护栏语义。"""
+    _guard_label(label, "right_click")
     move(x, y, move_dur)
     time.sleep(0.06)
     pyautogui.rightClick()

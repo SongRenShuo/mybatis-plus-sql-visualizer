@@ -32,15 +32,34 @@ object ExecuteSqlSupport {
     private const val LAUNCHER_CLASS = "cn.song.mybatisplus.visualizer.database.DatabaseConsoleLauncher"
 
     /**
+     * 测试缝：覆写可用性判定（headless 测试的 classpath 不含 database 插件标记类，真实探测恒为
+     * false，会让「验选区/文案」的既有测试误红）。生产路径恒为 null。
+     */
+    internal var availabilityOverrideForTest: Boolean? = null
+
+    /**
      * database 插件是否已加载（Ultimate/DataGrip）：`Class.forName` 探测标记类——
      * 不依赖 `PluginManagerCore.isPluginInstalled`/`PluginId` 的版本形态（该 API 在 2025.3~2026.2
      * 间有包迁移），Community/测试沙盒（jar 已排除）下返回 false。
      */
     @JvmStatic
-    fun isAvailable(): Boolean = runCatching {
+    fun isAvailable(): Boolean = availabilityOverrideForTest ?: runCatching {
         Class.forName(DATABASE_MARKER_CLASS)
         true
     }.getOrDefault(false)
+
+    /**
+     * UX Community 执行入口预判：不可用时的说明文案（tooltip）；可用返回 null。
+     *
+     * 立项动因：Community 版「执行 SQL」按钮此前**看起来可点**，点了才弹一条「需要 Ultimate」的
+     * 轻提示——用户白点一次才知道不可用。执行入口在构造期即按 [isAvailable] 置灰，tooltip 直接
+     * 说明原因与替代路径（预览/复制不受影响），把「点了才报错」提前成「一眼就知道」。
+     *
+     * 只读、幂等、零副作用（`Class.forName` 探测结果在进程内稳定）。
+     */
+    @JvmStatic
+    fun unavailableHint(): String? =
+        if (isAvailable()) null else MpSqlVisualizerBundle.message("execute.unavailable.tooltip")
 
     /**
      * 执行入口：不可用 → 提示升级 Ultimate；可用 → 反射调用 launcher。

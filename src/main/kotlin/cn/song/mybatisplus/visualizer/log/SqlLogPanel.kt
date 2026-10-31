@@ -109,10 +109,10 @@ class SqlLogPanel(
     internal val manager: SqlLogManager,
 ) : JPanel(BorderLayout()), Disposable {
 
-    private val listModel = DefaultListModel<LogSqlEntry>()
+    internal val listModel = DefaultListModel<LogSqlEntry>()
     internal val list = ViewportWidthSqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
-    private lateinit var entryCellRenderer: LogEntryListCellRenderer
+    internal lateinit var entryCellRenderer: LogEntryListCellRenderer
     private lateinit var previewHost: SqlListPreviewHost
     private val dockedPreview = SqlDockedPreview(project, list) { previewHost.toggle() }
     /**
@@ -173,41 +173,41 @@ class SqlLogPanel(
     // ---------- 过滤/排序状态 ----------
 
     /** 当前激活的类型过滤集合（默认全选 = 「全部」，含 OTHER 透传）。 */
-    private val activeFilter = FILTERABLE_TYPES.toMutableSet()
+    internal val activeFilter = FILTERABLE_TYPES.toMutableSet()
 
     /**
      * 「只看慢查询」筛选（用户 2026-10-14 补）：true 时只保留耗时 ≥ 当前慢查询阈值的条目。
      * 判定走 [durationOf]（结构化字段优先、缺失回退日志文本解析），与「慢查询徽章」同口径。
      * 性能：一次 O(n) 遍历，位于刷新管线（非渲染热路径）。
      */
-    private var slowOnly = false
+    internal var slowOnly = false
 
     /** 「只看慢查询」勾选框（弹窗首次构建后非 null；仅用于状态回填，测试另有 [setSlowOnlyForTest]）。 */
-    private var slowOnlyCheckBox: JCheckBox? = null
+    internal var slowOnlyCheckBox: JCheckBox? = null
 
     /** 排序模式（T-LogSortModes：默认时间升序 = 捕获顺序）。 */
-    private var sortMode = SortMode.TIME_ASC
+    internal var sortMode = SortMode.TIME_ASC
 
     /** 当前搜索词（搜索条实时同步；空串 = 不过滤）。 */
-    private var searchText = ""
+    internal var searchText = ""
 
     /**
      * M56 T-M56-00：动态聚焦过滤状态（基础设施；null = 不过滤）。
      * T-M56-02/06/07 起 agent 通道接管后由页签/请求聚合驱动写入；桥通道恒 null 与现状逐字一致。
      */
     @Volatile
-    private var activeFocus: FocusFilter? = null
+    internal var activeFocus: FocusFilter? = null
 
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
-    private var dedupeCounts: Map<String, Int> = emptyMap()
+    internal var dedupeCounts: Map<String, Int> = emptyMap()
 
     /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
-    private var templateCounts: Map<String, Int> = emptyMap()
+    internal var templateCounts: Map<String, Int> = emptyMap()
 
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
     /** 刷新代际：新 refreshList 启动时 +1，旧分批追加链检测到代际过期即终止。 */
-    private var refreshGeneration = 0L
+    internal var refreshGeneration = 0L
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     internal var lastRendered: List<LogSqlEntry> = emptyList()
@@ -222,7 +222,7 @@ class SqlLogPanel(
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
     /** 慢查询计数器（O-1 Phase C）。 */
-    private val slowQueryCounter = SlowQueryCounter(
+    internal val slowQueryCounter = SlowQueryCounter(
         PluginSettings.getInstance().state.slowQueryThresholdMs,
     )
 
@@ -238,12 +238,18 @@ class SqlLogPanel(
      * 标签键转作 tooltip 前缀（tooltip = `SQL类型：` + 当前状态**全文**）；按钮显示文本按
      * [DROPDOWN_TEXT_BUDGET_PX] 截尾省略——文本定宽封顶是多选后行宽不漂移、单行恒成立的前提。
      */
-    private val typeFilterButton = JButton().apply {
+    internal val typeFilterButton = JButton().apply {
         isFocusable = false
         icon = MpvsIcons.TypeFilter
         horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例）
         addActionListener { showTypeFilterPopup() }
     }
+
+    /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
+    internal var typePopupCheckBoxes: List<Pair<StatementType, JCheckBox>> = emptyList()
+
+    /** T-SelToggle：弹窗底部全选/全不选切换按钮（T-SelToggle 双按钮合一；弹窗每次打开重建，与 [typePopupCheckBoxes] 同生命周期约定）。 */
+    internal var typePopupToggleButton: JButton? = null
 
     /**
      * 排序方式动作（T-LogSortModes / 用户 2026-10-14 校正）：点击弹单选菜单，当前方式进
@@ -295,7 +301,7 @@ class SqlLogPanel(
      */
     internal val scrollToEndAction: AnAction = ScrollToEndAction()
 
-    private val tailFollow = TailFollowState()
+    internal val tailFollow = TailFollowState()
     private var listScrollPane: JBScrollPane? = null
     internal val tailFollowModeForTest: TailFollowMode get() = tailFollow.mode
 
@@ -314,7 +320,7 @@ class SqlLogPanel(
     /** 上一次观察到的滚动条位置（券03 单调性判据基线）。 */
     private var lastScrollBarValue = -1
 
-    private inline fun <T> withProgrammaticScroll(block: () -> T): T {
+    internal inline fun <T> withProgrammaticScroll(block: () -> T): T {
         programmaticScrollDepth++
         try {
             return block()
@@ -323,7 +329,7 @@ class SqlLogPanel(
         }
     }
 
-    private fun scrollToBottom(resume: Boolean) {
+    internal fun scrollToBottom(resume: Boolean) {
         if (resume) tailFollow.onScrollToEnd()
         if (listModel.isEmpty) return
         withProgrammaticScroll {
@@ -343,13 +349,13 @@ class SqlLogPanel(
      * 就整体上移一行高，而 `viewPosition` 不变——用户正在读的内容被「顶上去」。
      * 缓冲满载（默认 200）时每条新 SQL 都触发一次 `HeadEvictAppend`，于是暂停态下持续跳动。
      */
-    private class ScrollAnchor(val entry: LogSqlEntry, val offsetInRow: Int)
+    internal class ScrollAnchor(val entry: LogSqlEntry, val offsetInRow: Int)
 
     /** 全量重建在途时的待复原锚点（条目可能落在后续批次里，逐拍重试）。 */
-    private var pendingScrollAnchor: ScrollAnchor? = null
+    internal var pendingScrollAnchor: ScrollAnchor? = null
 
     /** 取当前视口顶部条目与其行内偏移；无滚动容器/空列表/布局未就绪时返回 null。 */
-    private fun captureTopAnchor(): ScrollAnchor? {
+    internal fun captureTopAnchor(): ScrollAnchor? {
         val viewport = listScrollPane?.viewport ?: return null
         val size = listModel.size()
         if (size == 0) return null
@@ -361,7 +367,7 @@ class SqlLogPanel(
     }
 
     /** 按条目身份复原视口；条目还不在模型里返回 false（调用方决定是否重试）。 */
-    private fun restoreAnchor(anchor: ScrollAnchor): Boolean {
+    internal fun restoreAnchor(anchor: ScrollAnchor): Boolean {
         val viewport = listScrollPane?.viewport ?: return true
         val size = listModel.size()
         var index = -1
@@ -383,7 +389,7 @@ class SqlLogPanel(
     }
 
     /** 头部淘汰后把视口按被删总高上移（等价于内容原地不动）。 */
-    private fun shiftViewportUpBy(removedHeight: Int) {
+    internal fun shiftViewportUpBy(removedHeight: Int) {
         if (removedHeight <= 0) return
         val viewport = listScrollPane?.viewport ?: return
         val pos = viewport.viewPosition
@@ -424,13 +430,13 @@ class SqlLogPanel(
     }
 
     /** 当前大小写敏感态（原生钮状态落点）。 */
-    private val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
+    internal val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
 
     /** 当前正则态（原生钮状态落点；`regex:` 前缀独立生效）。 */
-    private val logRegex: Boolean get() = nativeSearch.isRegex()
+    internal val logRegex: Boolean get() = nativeSearch.isRegex()
 
     /** 正则编译 memo（防抖 200ms 反复 apply 复用编译结果，键=源串+matchCase 旗）。 */
-    private val regexMemo = HistoryRegexMemo()
+    internal val regexMemo = HistoryRegexMemo()
 
     /** 搜索条宿主（原生 SearchTextArea 自带内嵌开关；显隐由 showSearch/hideSearch 控制）。 */
     private val searchBar = JPanel(BorderLayout()).apply {
@@ -661,13 +667,13 @@ class SqlLogPanel(
     // init 里 buildTopPanel 会读这些字段） ----------
 
     /** 当前开启的聚焦页签（EDT 读写——右键菜单/页签关闭按钮均在 EDT）。 */
-    private val focusTabs = mutableListOf<FocusTab>()
+    internal val focusTabs = mutableListOf<FocusTab>()
 
     /** 聚焦页签栏（工具栏行与搜索条之间；无页签时隐藏不占高度）。 */
     private val focusTabBar = JPanel(WrapLayout()).apply { isOpaque = false; isVisible = false }
 
     /** 聚焦隐藏计数提示（聚焦视图下不匹配任何页签的条目数；无页签时隐藏）。 */
-    private val focusHiddenLabel = JLabel().apply {
+    internal val focusHiddenLabel = JLabel().apply {
         foreground = MpvsUiColors.META_GRAY
         isVisible = false
     }
@@ -682,21 +688,21 @@ class SqlLogPanel(
     private var toolbarControls: JPanel? = null
 
     /** 工具栏动作图标组组件（挂行宿主 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
-    private var toolbarComponent: JComponent? = null
+    internal var toolbarComponent: JComponent? = null
 
     // ---------- R53：双通道捕获状态栏（字段须在 init 之前——init 里 buildStatusBar 会赋值） ----------
 
     /** 状态栏：控制台通道段（已挂载 N 个 · 已扫描 M 行）。 */
-    private var statusConsoleLabel: JLabel? = null
+    internal var statusConsoleLabel: JLabel? = null
 
     /** 状态栏：增强 agent 通道段（未开启 / 暂停中 / 已挂载 pid · 已收事件 N / 等待…）。 */
-    private var statusAgentLabel: JLabel? = null
+    internal var statusAgentLabel: JLabel? = null
 
     /**
      * 状态栏宿主（非捕捉态整体隐藏——只清两段文案会留下分隔符与一条空白高度；
      * BorderLayout 跳过 isVisible=false 的子件，故置位后需 revalidate）。
      */
-    private var statusBarPanel: JPanel? = null
+    internal var statusBarPanel: JPanel? = null
 
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
@@ -997,169 +1003,6 @@ class SqlLogPanel(
     /** 测试驱动：立即应用搜索框文本（headless 下防抖 Swing Timer 到点不可控），等价生产防抖回调。 */
     internal fun applySearchTextForTest() = applySearchText()
 
-    // ---------- SQL类型多选弹窗 ----------
-
-    /**
-     * 更新 SQL类型按钮文案（全部 / 无 / 类型组合）。
-     *
-     * T-UiCoord F2：标签控件退役后语义由 tooltip 承载——显示文本按预算截尾省略（多选组合可能很长），
-     * tooltip 恒为「SQL类型：」+ 完整状态。
-     */
-    private fun updateTypeFilterButton() {
-        val state = when {
-            activeFilter.containsAll(FILTERABLE_TYPES) -> MpSqlVisualizerBundle.message("log.filter.all")
-            activeFilter.isEmpty() -> MpSqlVisualizerBundle.message("log.filter.type.none")
-            else -> FILTERABLE_TYPES.filter { it in activeFilter }.joinToString(", ") { labelForType(it) }
-        }
-        typeFilterButton.text = clipToDropdownBudget(state, typeFilterButton)
-        typeFilterButton.toolTipText = MpSqlVisualizerBundle.message("log.filter.type.label") + state
-    }
-
-    /**
-     * T-UiCoord F2：下拉按钮显示文本按预算截尾省略（复用 meta 行的 [clipTailToWidth] 纯函数）。
-     * 预算用 JBUI 缩放表达——文本宽度随缩放变化，写死像素会在高 DPI 下失效。
-     * tooltip 恒全文，省略只发生在按钮显示层。
-     */
-    private fun clipToDropdownBudget(text: String, target: JComponent): String {
-        val metrics = target.getFontMetrics(target.font)
-        return clipTailToWidth(text, { metrics.stringWidth(it) }, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX))
-    }
-
-    /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
-    private var typePopupCheckBoxes: List<Pair<StatementType, JCheckBox>> = emptyList()
-
-    /** T-SelToggle：弹窗底部全选/全不选切换按钮（T-SelToggle 双按钮合一；弹窗每次打开重建，与 [typePopupCheckBoxes] 同生命周期约定）。 */
-    private var typePopupToggleButton: JButton? = null
-
-    /**
-     * T-SelToggle：弹窗切换按钮文案——activeFilter 全勾 → 「全不选」（点击清空），
-     * 其余态（含空集）→ 「全选」（点击填满）。判定与外层「全部」文案（updateTypeFilterButton）同口径。
-     */
-    private fun typePopupToggleLabel(): String = MpSqlVisualizerBundle.message(
-        if (activeFilter.containsAll(FILTERABLE_TYPES)) "log.filter.selectNone" else "log.filter.selectAll",
-    )
-
-    /**
-     * T-SelToggle：弹窗切换按钮文案随勾选态刷新。弹窗无公共渲染下游可收口
-     * （updateTypeFilterButton/refreshList 还被搜索等非弹窗链路调用），三个勾选态变更入口
-     * （弹窗构建末尾、applyAllTypes 末尾、单类型复选框 listener）显式调用本函数。
-     */
-    private fun syncTypePopupToggleLabel() {
-        typePopupToggleButton?.let {
-            val label = typePopupToggleLabel()
-            if (it.text != label) it.text = label
-        }
-    }
-
-    /**
-     * 弹出类型多选弹窗：勾选即时生效且弹窗不关闭（JCheckBox 非 menu item，
-     * 点击不触发 popup 收起，支持连续勾选组合）；底部单个全选/全不选切换按钮（T-SelToggle）
-     * 一键设置——同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
-     */
-    private fun showTypeFilterPopup() {
-        // T-UiNative P1a：JPopupMenu 外壳 → 平台 JBPopup（createComponentPopupBuilder 承载 JCheckBox 面板；
-        // 触发源是工具栏按钮 ActionListener 无 MouseEvent，锚点沿用原 show 坐标——按钮正下方 2px）
-        val contentPanel = buildTypeFilterContent()
-        JBPopupFactory.getInstance().createComponentPopupBuilder(contentPanel, contentPanel).apply {
-            setRequestFocus(false)
-            setCancelOnClickOutside(true)
-        }.createPopup().show(RelativePoint(typeFilterButton, Point(0, typeFilterButton.height + 2)))
-    }
-
-    /**
-     * T-SelToggle：构建弹窗内容（勾选框区 + 分隔线 + 底部切换按钮），赋值 [typePopupCheckBoxes]
-     * 与 [typePopupToggleButton]。与 [showTypeFilterPopup] 拆分是纯提取（行为零变更），
-     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下弹层 show 不可靠）。
-     */
-    private fun buildTypeFilterContent(): JPanel {
-        val content = JPanel()
-        content.layout = BoxLayout(content, BoxLayout.Y_AXIS)
-        content.isOpaque = false
-        content.border = EmptyBorder(8, 12, 8, 12)
-        val checkBoxes = mutableListOf<Pair<StatementType, JCheckBox>>()
-        FILTERABLE_TYPES.forEach { type ->
-            val cb = JCheckBox(labelForType(type), type in activeFilter).apply {
-                isOpaque = false
-                alignmentX = Component.LEFT_ALIGNMENT
-                isFocusable = false
-                addActionListener {
-                    if (isSelected) activeFilter.add(type) else activeFilter.remove(type)
-                    updateTypeFilterButton()
-                    refreshList()
-                    // T-SelToggle：单类型勾选即时同步切换按钮文案
-                    syncTypePopupToggleLabel()
-                }
-            }
-            checkBoxes += type to cb
-            // T-CrudColor：复选框前置色块图例——否则用户得去设置页才能把颜色和类型对上号。
-            // 样式为 off（或该类型无标记色）时不加色块，避免出现「有图例却无标记」的错位。
-            // 包一层行面板保持 checkBoxes 结构与 applyAllTypes 语义不变。
-            val tint = SqlListTypeColor.colorOf(type)
-            content.add(JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
-                isOpaque = false
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, cb.preferredSize.height + 2)
-                if (tint != null) add(JLabel(colorSwatchIcon(tint)))
-                add(cb)
-            })
-        }
-        typePopupCheckBoxes = checkBoxes
-        content.add(Box.createVerticalStrut(6))
-        content.add(JSeparator().apply { alignmentX = Component.LEFT_ALIGNMENT })
-        content.add(Box.createVerticalStrut(6))
-        // 用户 2026-10-14 补：与「慢查询徽章」呼应的快捷筛选——只看慢查询（按当前慢查询阈值判定）。
-        // 放在类型弹窗内、与类型勾选同一入口，避免往右侧控制组加控件（控制组有最坏宽预算锁）。
-        val slowOnlyBox = JCheckBox(MpSqlVisualizerBundle.message("log.filter.slowOnly"), slowOnly).apply {
-            isOpaque = false
-            alignmentX = Component.LEFT_ALIGNMENT
-            isFocusable = false
-            toolTipText = MpSqlVisualizerBundle.message("log.filter.slowOnly.tip")
-            addActionListener {
-                slowOnly = isSelected
-                refreshList()
-            }
-        }
-        slowOnlyCheckBox = slowOnlyBox
-        content.add(slowOnlyBox)
-        content.add(Box.createVerticalStrut(6))
-        val toggleButton = JButton(typePopupToggleLabel()).apply {
-            isFocusable = false
-            addActionListener { applyAllTypes(!activeFilter.containsAll(FILTERABLE_TYPES)) }
-        }
-        typePopupToggleButton = toggleButton
-        val row = JPanel(GridBagLayout()).apply {
-            isOpaque = false
-            alignmentX = Component.LEFT_ALIGNMENT
-            add(toggleButton)
-        }
-        content.add(row)
-        return content
-    }
-
-    /**
-     * T-CrudColor：类型色块图例图标（12×12 实心方块）。
-     * 用于类型过滤弹窗——纯色块、无边框，与列表中的标记同色，起对照作用。
-     */
-    private fun colorSwatchIcon(color: Color): Icon = object : Icon {
-        override fun getIconWidth(): Int = 12
-        override fun getIconHeight(): Int = 12
-        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
-            g.color = color
-            g.fillRect(x, y, iconWidth, iconHeight)
-        }
-    }
-
-    /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
-    private fun applyAllTypes(selected: Boolean) {
-        activeFilter.clear()
-        if (selected) activeFilter.addAll(FILTERABLE_TYPES)
-        typePopupCheckBoxes.forEach { (type, cb) -> cb.isSelected = type in activeFilter }
-        updateTypeFilterButton()
-        refreshList()
-        // T-SelToggle：切换按钮点击后文案翻转（此时 activeFilter 已是新态）
-        syncTypePopupToggleLabel()
-    }
-
     // ---------- 工具栏动作 ----------
 
     /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
@@ -1186,7 +1029,7 @@ class SqlLogPanel(
     internal val tabsForTest: com.intellij.ui.tabs.JBTabs get() = tabs
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
-    private var _toolbarRef: ActionToolbar? = null
+    internal var _toolbarRef: ActionToolbar? = null
 
     /**
      * 捕捉开关（T-UiNative T-UN-11：挂工具窗标题栏，经 [captureToggleAction] 暴露）。
@@ -1427,60 +1270,10 @@ class SqlLogPanel(
      * 最近一次写入空态的纯文本（`\n` 分隔语义行）。宽度变化时按新宽度重排同一份文本，
      * 所以必须留住它——否则 resize 只能重排「上一次的视觉行」，再窄一档就还原不了。
      */
-    private var lastEmptyText: String? = null
+    internal var lastEmptyText: String? = null
 
     /** 当前空态是否带「增强捕获」链接（诊断行不带——常规空态专属，见 [applyEmptyTextWithEnhancedLink]）。 */
-    private var emptyTextLinkEnabled: Boolean = false
-
-    /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
-    private fun applyEmptyText(plain: String) {
-        lastEmptyText = plain
-        emptyTextLinkEnabled = false
-        renderEmptyText()
-    }
-
-    /**
-     * 写入空态文案 + 尾部可点「增强捕获」链接（20261008 验收缺陷 #3：第三径原为纯文本不可点，
-     * 与验收文档 3.22「点该引导走到增强捕获的开启流程」不符）。仅常规空态用；诊断行不加链接。
-     */
-    private fun applyEmptyTextWithEnhancedLink() {
-        lastEmptyText = MpSqlVisualizerBundle.message("log.panel.empty")
-        emptyTextLinkEnabled = true
-        renderEmptyText()
-    }
-
-    /** 按当前列表可用宽度重排并逐视觉行写入（EDT）。 */
-    private fun renderEmptyText() {
-        val plain = lastEmptyText ?: return
-        val status = list.emptyText
-        status.clear()
-        applyEmptyTextLines(status, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
-        if (emptyTextLinkEnabled) {
-            // T-SettingsFocusFromLink：引导链接（**单一整体入口**——用户定「一个整体，点击都跳到目标位置」：
-            // 不再拆页签/设置页/增强捕获三个去向的分链），点击打开主设置页并定位高亮「增强捕获」设置行
-            // （空态文案里「参数实参与精确耗时…在设置页开启 →」所指）。经 appendLinkRow 单点——
-            // 平台 appendSecondaryText 固定写第二行的坑见该函数 KDoc。
-            appendLinkRow(
-                status,
-                listOf(
-                    MpSqlVisualizerBundle.message("log.panel.empty.link") to
-                        java.awt.event.ActionListener {
-                            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
-                                project,
-                                MpSqlVisualizerBundle.message("settings.enhancedCapture"),
-                            )
-                        },
-                ),
-            )
-        }
-    }
-
-    /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
-    private fun emptyTextWidthPx(): Int {
-        val insets = list.insets
-        val w = list.width - insets.left - insets.right - EMPTY_TEXT_EDGE_PADDING_PX * 2
-        return if (w <= 0) EMPTY_TEXT_FALLBACK_WIDTH_PX else w
-    }
+    internal var emptyTextLinkEnabled: Boolean = false
 
     // ---------- T-CaptureTruth T-CT-03：零产出诊断 ----------
 
@@ -1491,119 +1284,7 @@ class SqlLogPanel(
      * 的话诊断行会永远停在「捕捉开始那一刻」的快照上，恰好在用户真正想知道「为什么还是没有」时失语。
      * 2s 与桥轮询同频（[SqlLogConsoleBridge] POLL_INTERVAL_MS）；命中条目或停止捕捉即停表，常态零开销。
      */
-    private var diagnosticsTimer: javax.swing.Timer? = null
-
-    /**
-     * R53 测试缝：双通道状态栏两段标签（第一段=控制台通道，第二段=增强通道）。
-     */
-    internal fun statusBarLabelsForTest(): Pair<JLabel?, JLabel?> = statusConsoleLabel to statusAgentLabel
-
-    /**
-     * R53 测试缝：同步驱动状态栏刷新（等价 2s 诊断定时器的一拍）。
-     */
-    internal fun syncStatusBarForTest() = syncCaptureStatusBar()
-
-    /** R53 测试缝：状态栏宿主面板（非捕捉态应整条隐藏——不留分隔符/空白高度）。 */
-    internal fun statusBarForTest(): JPanel? = statusBarPanel
-
-    /** 诊断行同步（EDT）：更新列表空态文案 + 双通道状态栏 + 管理定时器生命周期。
-     * 取数全部为只读内存态（buffer 快照 / 桥计数 / AgentManager 状态），不触发平台调用。
-     *
-     * R53：定时器生命周期由「空态才跑」放宽为「捕捉期间常跑」——状态栏需要持续刷新；
-     * 空态判定改 [SqlLogEntryBuffer.size]（O(1)）而非 snapshot().isEmpty()（O(N) 拷贝，
-     * 长列表下 2s 常跑会白付整表拷贝）。
-     */
-    private fun syncDiagnostics() {
-        syncCaptureStatusBar()
-        val active = manager.capturing && manager.entries.size() == 0
-        val text = if (active) {
-            captureDiagnosticsText(
-                CaptureDiagnostics(
-                    capturing = true,
-                    waitingForConsole = manager.isWaitingForConsole,
-                    entryCount = 0,
-                    consolesAttached = manager.consoleBridge.attachedConsoles.size,
-                    linesSeen = manager.consoleBridge.consoleLinesSeen.get(),
-                    enhancedStatus = runCatching {
-                        AgentManager.getInstance(project).statusSummary()
-                    }.getOrNull(),
-                    // T-RA-03：两个「行去哪了」计数——守卫误丢行 / EP 短路后条目未落到本面板时，
-                    // 它们是面板唯一可见的证据（此前生产侧零读取，故障被伪装成「控制台没输出」）。
-                    replayDropped = manager.consoleBridge.replayDropCount,
-                    epShortCircuited = manager.consoleBridge.epActiveShortCircuitCount.get(),
-                    // T-DevAcceptFix2 ⑤：增强通道已收事件数（恒显示）——「事件到没到」的唯一判别量
-                    agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
-                    // T-DevAcceptFix2 ⑩：屏蔽规则命中次数（应用级累计，与规则面板同源计数）——
-                    // 「事件到了却 0 条」时最容易被忽略的一条吃行通道（用户自建规则，设计内但必须可见）
-                    suppressed = runCatching {
-                        val mgr = SqlSuppressRuleManager.getInstance()
-                        mgr.rules.sumOf { it.id.let { id -> mgr.hitCount(id) } }.toLong()
-                    }.getOrDefault(0L),
-                    // T-CaptureCatchAll 券02：活性回落解封态——「增强已挂载却零产出」的唯一解释
-                    activityFallbackActive = CaptureActivityFallback.isActive(),
-                    // T-CaptureCatchAll 券03：agent 侧 attach 覆盖自检（旧版 agent 为 null，不显示）
-                    attachStats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest(),
-                ),
-            )
-        } else {
-            null
-        }
-        if (text != null) applyEmptyText(text) else applyEmptyTextWithEnhancedLink()
-        // R53：定时器捕捉期间常跑（状态栏持续刷新）；非捕捉态停表清栏
-        if (manager.capturing) {
-            if (diagnosticsTimer == null) {
-                diagnosticsTimer = javax.swing.Timer(DIAGNOSTICS_TICK_MS) { syncDiagnostics() }
-                    .apply { isRepeats = true; start() }
-            }
-        } else {
-            diagnosticsTimer?.stop()
-            diagnosticsTimer = null
-        }
-    }
-
-    /**
-     * R53：双通道捕获状态栏刷新（EDT，挂在诊断定时器上 2s 无锁轮询）。
-     * 文案由纯函数 [captureStatusLineText] 产出（V80①：取数全为只读内存态）；
-     * 非捕捉态整条面板隐藏（只清文案会留下分隔符与空白高度）。
-     */
-    private fun syncCaptureStatusBar() {
-        val label = statusConsoleLabel ?: return
-        val texts = if (manager.capturing) {
-            runCatching {
-                val am = AgentManager.getInstance(project)
-                captureStatusLineText(
-                    CaptureStatusLine(
-                        capturing = true,
-                        consolesAttached = manager.consoleBridge.attachedConsoles.size,
-                        linesSeen = manager.consoleBridge.consoleLinesSeen.get(),
-                        agentStatus = am.statusSummary(),
-                        agentLivePids = am.healthyPids(),
-                        agentPaused = am.userPaused,
-                        agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
-                    ),
-                )
-            }.getOrNull()
-        } else {
-            null
-        }
-        if (texts == null) {
-            label.text = ""
-            statusAgentLabel?.text = ""
-            setStatusBarVisible(false)
-        } else {
-            label.text = texts.first
-            statusAgentLabel?.text = texts.second
-            setStatusBarVisible(true)
-        }
-    }
-
-    /** R53：状态栏显隐（BorderLayout 跳过不可见子件，须 revalidate 才重排高度）。 */
-    private fun setStatusBarVisible(visible: Boolean) {
-        val bar = statusBarPanel ?: return
-        if (bar.isVisible == visible) return
-        bar.isVisible = visible
-        bar.parent?.revalidate()
-    }
+    internal var diagnosticsTimer: javax.swing.Timer? = null
 
     // ---------- 条目列表 ----------
 
@@ -1706,337 +1387,11 @@ class SqlLogPanel(
         return if (measured > 0) measured else list.getFontMetrics(list.font).height * 2 + 13
     }
 
-    // ---------- 刷新管线（类型过滤 → 搜索过滤 → 排序 → 渲染） ----------
-
-    /**
-     * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
-     *
-     * 执行顺序：
-     * 1. [filterBySuppress]：按屏蔽规则指纹集滤存量（T-SqlSuppress O-69；管线最前——空集零成本）
-     * 2. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
-     * 3. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
-     * 4. [filterBySearch]：按 [searchText] 搜索（默认忽略大小写；T-HistorySearchToggles 起随 MatchCase 开关）
-     * 5. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 6. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
-     *
-     * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
-     * 原「清缓存/选择性失效」机制一并移除。
-     */
-    private fun refreshList() {
-        val gen = ++refreshGeneration
-        // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
-        // 「model.size != lastRendered.size」拒绝 → 每次刷新都重启重建链，风暴期列表永远停在首屏 30 条
-        // （用户体感「监听加载有延迟」的实态）。进差分前同步补完剩余批次，让差分基线对齐。
-        // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
-        // 量不再随 logMaxCount 线性放大。
-        if (!flushRebuildChainSync()) return
-        val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
-            manager.entries.snapshot()
-        }
-        // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
-        syncDiagnostics()
-
-        // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
-        dedupeCounts = manager.entries.dedupeCountsSnapshot()
-        entryCellRenderer.dedupeCounts = dedupeCounts
-
-        // O-90：同模板计数快照（**全量条目**聚合——徽章计数不随当前过滤/搜索波动；
-        // snapshot 本就为过滤链物化，structureKey 惰性缓存后单遍 O(N)）
-        templateCounts = structureKeyCounts(snapshot)
-        entryCellRenderer.templateCounts = templateCounts
-
-        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
-        val filtered = filterByFocus(
-            filterByType(
-                applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
-            ),
-            activeFocus,
-        )
-        // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
-        val focused = filterByFocusTabs(filtered, focusTabs)
-        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
-        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
-        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
-        val newVisible = applySort(searched)
-        val evicted = manager.entries.drainEvictedCount()
-
-        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
-        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
-        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
-        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
-        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
-
-        val modelSizeBefore = listModel.size()
-        val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
-        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
-        withProgrammaticScroll {
-            if (!applyIncremental(newVisible, evicted)) {
-                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
-                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
-                pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
-                applyFullRebuild(newVisible, gen)
-                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
-                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
-                pendingScrollAnchor?.let { anchor ->
-                    if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
-                }
-            }
-        }
-        val tailAdvancedAtCapacity = evicted > 0 &&
-            (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
-        // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
-        if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
-            scrollToBottom(resume = false)
-        }
-
-        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
-        if (focusTabs.isEmpty()) {
-            focusHiddenLabel.isVisible = false
-        } else {
-            val hidden = filtered.size - focused.size
-            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", hidden.toString())
-            focusHiddenLabel.isVisible = hidden > 0
-        }
-
-        // O-1：同步慢查询阈值 + 更新计数（Phase C）
-        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
-        slowQueryCounter.reset()
-        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
-        updateSlowQueryLabel()
-    }
-
-    /**
-     * T-Perf-03（自 dev 移植）：增量应用差分（同步完成，无异步追加链）。模型与 [lastRendered] 尺寸不一致
-     * （旧异步追加链被新刷新中断/外部改动）时拒绝增量——全量重建兜底。
-     */
-    private fun applyIncremental(newVisible: List<LogSqlEntry>, evicted: Int): Boolean {
-        if (listModel.size() != lastRendered.size) return false
-        return when (val diff = diffVisible(lastRendered, newVisible, evicted)) {
-            is VisibleDiff.Same -> { lastRendered = newVisible; true }
-            is VisibleDiff.HeadEvictAppend -> {
-                // T-LogListAnchor 券02：暂停态下头部淘汰会把整屏内容上顶一行高（JList 无滚动锚定）。
-                // 先量出被删行的总高（只涉及 0..evicted-1，成本 O(evicted)），模型变更后把视口
-                // 按同一高度上移——用户正在读的那条原地不动，新条目只在尾部出现。
-                val evictedHeight = if (tailFollow.shouldFollow) {
-                    0
-                } else {
-                    list.getCellBounds(0, diff.evicted - 1)?.height ?: 0
-                }
-                repeat(diff.evicted) { listModel.remove(0) }
-                diff.appended.forEach { listModel.addElement(it) }
-                lastRendered = newVisible
-                shiftViewportUpBy(evictedHeight)
-                true
-            }
-            is VisibleDiff.Insert -> {
-                // 尾部追加不动视口上方内容，无需补偿；中段插入（过滤条件变化产生）走 FullRebuild，
-                // 由 pendingScrollAnchor 按条目身份复原。
-                diff.entries.forEachIndexed { i, e -> listModel.add(diff.index + i, e) }
-                lastRendered = newVisible
-                true
-            }
-            is VisibleDiff.TailRemove -> {
-                for (i in lastRendered.size - 1 downTo diff.from) listModel.remove(i)
-                lastRendered = newVisible
-                true
-            }
-            is VisibleDiff.FullRebuild -> false
-        }
-    }
-
-    /**
-     * 全量重建（分批 EDT 写入 + generation 守卫）。
-     *
-     * T-Perf-03 追加链 generation 守卫（自 dev 移植）：新 refreshList 启动后旧链在新 chunk 写入前检测代际
-     * 并终止——杜绝旧快照剩余条目继续追加造成的幽灵/重复条目。
-     * T-SqlLogPerf P5：剩余批次游标提为字段 [rebuildRemaining]——refreshList 进差分前经
-     * [flushRebuildChainSync] 同步补完在途链（旧实现链被新刷新抢占后只能整体重启，见 flushRebuildChainSync 注释）。
-     */
-    private fun applyFullRebuild(sorted: List<LogSqlEntry>, gen: Long) {
-        lastRendered = sorted
-        rebuildRemaining = null
-        // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
-        list.ignoreRepaint = true
-        listModel.clear()
-        if (sorted.isNotEmpty()) {
-            // 首屏批次（立即写入，保证快速首屏）
-            val firstBatch = sorted.take(REFRESH_FIRST_BATCH_SIZE)
-            listModel.addAll(firstBatch)
-        }
-        list.ignoreRepaint = false
-        list.revalidate()
-        list.repaint()
-
-        // T-LogListFreeze-03：剩余批次通过 invokeLater 异步追加（每批一次 EDT 脉冲，避免长冻结）
-        rebuildRemaining = if (sorted.size > REFRESH_FIRST_BATCH_SIZE) {
-            sorted.drop(REFRESH_FIRST_BATCH_SIZE).iterator()
-        } else {
-            null
-        }
-        if (rebuildRemaining != null) {
-            ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
-        }
-    }
-
     /** T-SqlLogPerf P5：在途全量重建链的剩余游标（null = 无在途链）。 */
-    private var rebuildRemaining: Iterator<LogSqlEntry>? = null
+    internal var rebuildRemaining: Iterator<LogSqlEntry>? = null
 
     /** F80：链后补跑挂起标志（超大余量让路本拍刷新，链排空即补跑一次）。 */
-    private var pendingRefreshAfterChain = false
-
-    /** 追加一批（REFRESH_CHUNK_SIZE 条）；写完仍有余量则排下一拍。 */
-    private fun appendRebuildChunk() {
-        val remaining = rebuildRemaining ?: return
-        val chunk = mutableListOf<LogSqlEntry>()
-        repeat(REFRESH_CHUNK_SIZE) { if (remaining.hasNext()) chunk.add(remaining.next()) }
-        withProgrammaticScroll {
-            listModel.addAll(chunk)
-            // T-LogListAnchor 券02：重建在途时锚点条目可能落在本批才出现——找到就复原并清空；
-            // 跟随态优先（用户中途点了「滚动到底部」时不得再被锚点拉回）。
-            if (chunk.isNotEmpty() && tailFollow.shouldFollow) {
-                pendingScrollAnchor = null
-                scrollToBottom(resume = false)
-            } else {
-                pendingScrollAnchor?.let { anchor -> if (restoreAnchor(anchor)) pendingScrollAnchor = null }
-            }
-        }
-        rebuildRemaining = if (remaining.hasNext()) remaining else null
-        if (rebuildRemaining == null) pendingScrollAnchor = null
-        if (rebuildRemaining != null) {
-            ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
-        } else if (pendingRefreshAfterChain) {
-            // F80：链排空——补跑挂起的刷新（风暴期多次挂起合并为一次补跑）
-            pendingRefreshAfterChain = false
-            ApplicationManager.getApplication().invokeLater { refreshList() }
-        }
-    }
-
-    /**
-     * T-SqlLogPerf P5（20261006-1020 计划）：同步补完在途全量重建链。
-     *
-     * 旧形态：重建链在途时 `listModel.size != lastRendered.size`，增量差分必被拒绝 → 风暴期
-     * 每 200ms 的新刷新都重启重建链，链永远走不完，列表停在首屏 30 条且反复 clear/addAll 白耗 EDT。
-     * 补完后 model 与 lastRendered 对齐，后续刷新走增量差分。
-     *
-     * F80（T-PerfSweep24）补完保留分批：余量 ≤ [FLUSH_SYNC_MAX]（默认设置 ≤170）照旧单拍同步
-     * 补完——默认行为逐字不变；余量超大（用户 logMaxCount 数千）不再单拍同步写数千条
-     * （EDT 冻结随 logMaxCount 线性放大），本拍刷新让路（返回 false 挂起），在途链沿用
-     * appendRebuildChunk 逐拍语义推进（每拍 30 条 EDT 脉冲），链排空补跑挂起刷新——
-     * 风暴期新刷新不再反复 clear+重启链，列表从首屏 30 条起逐拍长满。
-     */
-    private fun flushRebuildChainSync(): Boolean {
-        val remaining = rebuildRemaining ?: return true
-        val rest = remaining.asSequence().toList()
-        if (rest.size > FLUSH_SYNC_MAX) {
-            // 超大余量：让路——链保持推进（rebuildRemaining 不动），本拍刷新挂起
-            pendingRefreshAfterChain = true
-            return false
-        }
-        rebuildRemaining = null
-        list.ignoreRepaint = true
-        if (rest.isNotEmpty()) listModel.addAll(rest)
-        list.ignoreRepaint = false
-        // T-LogListAnchor 券02：链被同步补完——锚点条目此时可能才出现，补一次复原尝试。
-        pendingScrollAnchor?.let { anchor -> if (restoreAnchor(anchor)) pendingScrollAnchor = null }
-        list.revalidate()
-        list.repaint()
-        return true
-    }
-
-    /** 按当前排序模式排序条目。 */
-    // ---------- 排序方式（T-LogSortModes） ----------
-
-    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。锚点＝触发动作的按钮。 */
-    private fun showSortPopup(anchor: java.awt.Component?) {
-        val popup = JPopupMenu()
-        buildSortMenuItems().forEach { popup.add(it) }
-        val target = anchor ?: toolbarComponent
-        if (target != null) popup.show(target, 0, target.height + 2) else popup.show(toolbarComponent, 0, 0)
-    }
-
-    /**
-     * 构建排序菜单项（拆出供测试断言选项齐备——headless 下 JPopupMenu.show 不可靠）。
-     * 单选语义：点选即生效并刷新列表与按钮文案。
-     */
-    private fun buildSortMenuItems(): List<JRadioButtonMenuItem> =
-        sortOptions().map { option ->
-            JRadioButtonMenuItem(option.label, option.mode == sortMode).apply {
-                isFocusable = false
-                addActionListener { applySortMode(option.mode) }
-            }
-        }
-
-    /** 应用排序方式：更新模式 → 刷新列表 → 刷新动作 presentation（当前方式进 tooltip 与菜单选中态）。 */
-    private fun applySortMode(mode: SortMode) {
-        if (sortMode == mode) {
-            refreshSortAction()
-            return
-        }
-        sortMode = mode
-        refreshList()
-        refreshSortAction()
-    }
-
-    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
-    private fun refreshSortAction() {
-        _toolbarRef?.updateActionsImmediately()
-    }
-
-    /**
-     * 排序动作文案 = 当前方式标签（见 [sortModeAction] 的 update：进 presentation.text 与 tooltip）。
-     * 工具窗工具栏按惯例只渲染图标，故当前方式实际由 tooltip「排序：<方式>」与菜单选中态承载。
-     */
-    private fun updateSortButtonText() {
-        refreshSortAction()
-    }
-
-    private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
-        // 时间升序（默认）：与捕获顺序一致（sortedBy 稳定，等值保持入列序）
-        SortMode.TIME_ASC -> entries.sortedBy { displayTimeOf(it) }
-        SortMode.TIME_DESC -> entries.sortedByDescending { displayTimeOf(it) }
-        // 耗时：结构化字段优先（agent 通道直采），缺失时回退日志文本解析；无耗时沉底
-        SortMode.DURATION_ASC -> entries.sortedBy { durationOf(it) ?: Long.MAX_VALUE }
-        SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: Long.MIN_VALUE }
-        // 行号：无行号（历史读回/round-trip）沉底
-        SortMode.SEQUENCE -> entries.sortedBy { if (it.sequenceNumber > 0) it.sequenceNumber else Long.MAX_VALUE }
-        // 同结构聚类（用户 2026-10-14 补）：按结构指纹分组、组内保持时间升序——排查 N+1 时同形状条目相邻。
-        // structureKey 为条目级 lazy（每条只算一次指纹），故比较器是纯字段读取。
-        SortMode.STRUCTURE_CLUSTER -> entries.sortedWith(
-            compareBy({ it.structureKey }, { displayTimeOf(it) }),
-        )
-        // 按目标库分组（用户 2026-10-14 补）：库名升序、未知（null）沉底，组内保持时间升序。
-        SortMode.DATABASE_GROUP -> entries.sortedWith(
-            compareBy({ it.databaseName ?: DATABASE_UNKNOWN_SORT_KEY }, { displayTimeOf(it) }),
-        )
-    }
-
-    /**
-     * 「只看慢查询」过滤接线（阈值取当前设置；判定走 [durationOf]，与慢查询徽章同口径）。
-     * 纯逻辑在 [cn.song.mybatisplus.visualizer.log.filterBySlowOnly]，便于独立单测。
-     */
-    private fun applySlowOnlyFilter(entries: List<LogSqlEntry>): List<LogSqlEntry> =
-        cn.song.mybatisplus.visualizer.log.filterBySlowOnly(
-            entries,
-            slowOnly,
-            PluginSettings.getInstance().state.slowQueryThresholdMs,
-            ::durationOf,
-        )
-
-    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */    private fun durationOf(entry: LogSqlEntry): Long? =
-        entry.executionTimeMs ?: LogDurationParser.parse(entry)
-
-    /**
-     * 条目显示时间（排序口径）：与列表现行时间列一致——「日志时间」源开启且条目有原始日志时间时
-     * 用之，否则用捕获时间（[formatTimestampFragment] 同规则），避免「看到的时间与排序依据不一致」。
-     */
-    private fun displayTimeOf(entry: LogSqlEntry): Long {
-        val state = PluginSettings.getInstance().state
-        return if (state.logTimestampSource == LOG_TIMESTAMP_SOURCE_LOG) {
-            entry.logTimestamp ?: entry.timestamp
-        } else {
-            entry.timestamp
-        }
-    }
+    internal var pendingRefreshAfterChain = false
 
     // ---------- 渲染辅助（F-44-2：片段通道恢复 SQL 高亮 + 耗时） ----------
     // 注：formatTimestampFragment / formatDurationFragment / formatSourceFragment 为文件级 internal 函数（见本文件末尾），
@@ -2107,7 +1462,7 @@ class SqlLogPanel(
     }
 
     /** 更新工具栏慢查询计数徽章（O-1 Phase C）。 */
-    private fun updateSlowQueryLabel() {
+    internal fun updateSlowQueryLabel() {
         val count = slowQueryCounter.slowCount
         slowQueryLabel?.let {
             if (count > 0) {
@@ -2448,9 +1803,9 @@ class SqlLogPanel(
          * 的预算锁。多选态余下约 6px 的超出量（相对图标组量测中值）由平台图标溢出兜底，
          * 属登记边界而非缺陷——见计划 §七 待验证前提 2。
          */
-        private const val DROPDOWN_TEXT_BUDGET_PX = 64
+        internal const val DROPDOWN_TEXT_BUDGET_PX = 64
         /** T-CaptureTruth T-CT-03：零产出诊断刷新间隔（与桥轮询同频 2s）。 */
-        private const val DIAGNOSTICS_TICK_MS = 2000
+        internal const val DIAGNOSTICS_TICK_MS = 2000
         /** R53：双通道状态栏两段文案之间的语义分隔符。 */
         private const val SEP_LABEL = "｜"
         // 「已滚到底」容差常量随判据一起搬到 TailFollowState.kt（T-LogListAnchor 券03：
@@ -2466,20 +1821,8 @@ class SqlLogPanel(
             "https://sql-visualizer.jvtools.cn/features/wrapper-preview"
         /** T-M39：帮助标签页标题。 */
         private const val HELP_TAB_TITLE = "SQL Visualizer - Help"
-
-        /** 类型 → 文案。 */
-        private fun labelForType(type: StatementType): String = when (type) {
-            StatementType.SELECT -> MpSqlVisualizerBundle.message("log.filter.select")
-            StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
-            StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
-            StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
-            StatementType.CREATE -> MpSqlVisualizerBundle.message("log.filter.create")
-            StatementType.DROP -> MpSqlVisualizerBundle.message("log.filter.drop")
-            else -> "OTHER"
-        }
     }
 }
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
-
 

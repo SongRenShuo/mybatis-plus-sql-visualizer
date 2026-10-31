@@ -231,6 +231,43 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * UX 换源重渲染：last-used 记忆变更（生产写入入口 [DataSourceSelector.rememberRunner] 广播）
+     * 后，**仍然存活的面板**头部绑定行立即跟上，无需关开预览、无需等下一次 renderSql。
+     *
+     * 反向验证：摘掉 `SqlPreviewPanel.init` 里的 LAST_USED_CHANGE_TOPIC 订阅后本用例必红
+     * （标签停在旧源），这正是修复前用户看到的形态。
+     */
+    fun test换源写入记忆后存活面板头部经消息总线刷新() {
+        plantRegisteredDataSources(
+            listOf("old@localhost", "new@localhost"),
+        ) { id ->
+            when (id) {
+                "uuid-old" -> "old@localhost"
+                "uuid-new" -> "new@localhost"
+                else -> null
+            }
+        }
+        DataSourceSelector.plantLastUsedMemoryForTest(project, "uuid-old", "old@localhost")
+        val p = openPanel("id")
+        p.renderSqlForTest()
+        assertEquals(
+            "前置：初始头部应显示旧源",
+            MpSqlVisualizerBundle.message("panel.bindstate.associated", "old@localhost"),
+            p.bindStateLabelForTest()!!.text,
+        )
+
+        // 走生产写入入口（内部会 syncPublisher 广播；单测模式同步刷新，无需等 EDT 泵）
+        DataSourceSelector.rememberRunner(project, "new@localhost", "uuid-new", null)
+        UIUtil.dispatchAllInvocationEvents()
+
+        assertEquals(
+            "换源后存活面板头部必须跟上新源（不得停留在旧源等下次渲染）",
+            MpSqlVisualizerBundle.message("panel.bindstate.associated", "new@localhost"),
+            p.bindStateLabelForTest()!!.text,
+        )
+    }
+
     fun testUUID失效且名字不在籍回落未绑定() {
         plantRegisteredDataSources(
             listOf("warehouse@db2"),

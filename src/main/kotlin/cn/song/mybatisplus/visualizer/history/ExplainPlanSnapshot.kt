@@ -30,14 +30,30 @@ data class ExplainPlanSnapshot(
         projectIdentity, dataSourceUuid, dialect, format, templateFingerprint, exactFingerprint,
     )
 
-    /** JSON 仅编码列头、行及采集截断标记；不持久化驱动 notices（可能含连接诊断）。 */
+    /**
+     * JSON 仅编码列头、行及采集截断标记；不持久化驱动 notices（可能含连接诊断）。
+     *
+     * T-TraceDocExport S3：兼容两种 payload 形态——
+     *  - 旧/结构化形态 `{"headers":[…],"rows":[[…]],"truncated":bool}`（TABLE/JSON 及多列回退）；
+     *  - 原文文本形态 `{"text":"…","headers":[…],"truncated":bool}`（TEXT 档单列计划，见 [create]）。
+     * 缺 `headers` 的文本 payload 按 [TEXT_HEADER] 还原为单列；缺 `truncated` 视为 false（旧文件容错）。
+     */
     fun raw(): McpExplainFormatter.RawResult? = runCatching {
         val json = JsonParser.parseString(payload).asJsonObject
-        McpExplainFormatter.RawResult(
-            json.getAsJsonArray("headers").map { it.asString },
-            json.getAsJsonArray("rows").map { row -> row.asJsonArray.map { it.asString } },
-            json.get("truncated").asBoolean,
-        )
+        if (json.has("text") && !json.get("text").isJsonNull) {
+            val text = json.get("text").asString
+            McpExplainFormatter.RawResult(
+                json.getAsJsonArray("headers")?.map { it.asString } ?: listOf(TEXT_HEADER),
+                if (text.isEmpty()) emptyList() else text.split("\n").map { listOf(it) },
+                json.get("truncated")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+            )
+        } else {
+            McpExplainFormatter.RawResult(
+                json.getAsJsonArray("headers").map { it.asString },
+                json.getAsJsonArray("rows").map { row -> row.asJsonArray.map { it.asString } },
+                json.get("truncated")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+            )
+        }
     }.getOrNull()
 
     /** 按真实 XML 序列化 UTF-8 字节计费，包括标签与 XML 转义；不是仅算 SQL/JSON 字符数。 */
@@ -45,12 +61,42 @@ data class ExplainPlanSnapshot(
         .outputString(XmlSerializer.serialize(this)).toByteArray(Charsets.UTF_8).size
 
     companion object {
+        /**
+         * T-TraceDocExport S3：原文文本快照的稳定列头。
+         *
+         * TEXT 档（DM/Oracle/OceanBase/H2/SQLite）计划是单列文本行；payload 走
+         * `{"text": "...", "headers": [...], "truncated": bool}` 形态时，缺 headers 的
+         * 旧/手写快照按本常量还原为单列 [McpExplainFormatter.RawResult]。
+         */
+        const val TEXT_HEADER = "PLAN"
+
         fun create(key: ExplainPlanKey, raw: McpExplainFormatter.RawResult): ExplainPlanSnapshot =
             ExplainPlanSnapshot(
                 UUID.randomUUID().toString(), System.currentTimeMillis(), key.projectIdentity,
                 key.dataSourceUuid, key.dialect, key.format, key.templateFingerprint, key.exactFingerprint,
-                Gson().toJson(mapOf("headers" to raw.headers, "rows" to raw.rows, "truncated" to raw.truncated)),
+                textPayloadOf(key, raw)
+                    ?: Gson().toJson(mapOf("headers" to raw.headers, "rows" to raw.rows, "truncated" to raw.truncated)),
             )
+
+        /**
+         * T-TraceDocExport S3：TEXT 档单列计划落**原文文本** payload（沿用 truncated 预算）。
+         *
+         * 仅当「格式=TEXT ∧ 单列 ∧ 单元格不含换行」时启用——文本形态按行拼接，多列或单元格自带
+         * 换行会丢失行列边界，此时回退结构化 JSON（仍然可持久化，只是不是文本形态）。
+         * 空行集产出空 text，读回为空 rows（不臆造占位行）。
+         */
+        private fun textPayloadOf(key: ExplainPlanKey, raw: McpExplainFormatter.RawResult): String? {
+            if (!key.format.equals(ExplainOutputFormat.TEXT.name, ignoreCase = true)) return null
+            if (raw.headers.size > 1) return null
+            if (raw.rows.any { row -> row.size > 1 || row.any { it.contains('\n') || it.contains('\r') } }) return null
+            return Gson().toJson(
+                linkedMapOf(
+                    "text" to raw.rows.joinToString("\n") { it.firstOrNull().orEmpty() },
+                    "headers" to raw.headers,
+                    "truncated" to raw.truncated,
+                ),
+            )
+        }
     }
 }
 
@@ -63,9 +109,13 @@ data class ExplainPlanKey(
     val templateFingerprint: String,
     val exactFingerprint: String,
 ) {
+    /**
+     * 可持久化档位：TABLE/JSON（结构化）与 TEXT（原文文本快照，T-TraceDocExport S3 扩员）。
+     * XML（SQL Server 计划 XML）仍不落历史——无消费方，保持原红线。
+     */
     val persistable: Boolean get() = projectIdentity.isNotBlank() &&
         UUID_PATTERN.matches(dataSourceUuid) && dialect.isNotBlank() &&
-        format in setOf(ExplainOutputFormat.TABLE.name, ExplainOutputFormat.JSON.name) &&
+        format in setOf(ExplainOutputFormat.TABLE.name, ExplainOutputFormat.JSON.name, ExplainOutputFormat.TEXT.name) &&
         templateFingerprint.isNotBlank() && exactFingerprint.isNotBlank()
 
     companion object {

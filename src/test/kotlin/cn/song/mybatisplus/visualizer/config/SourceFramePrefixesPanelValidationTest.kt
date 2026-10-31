@@ -7,7 +7,6 @@ import org.junit.Assert.assertTrue
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JLabel
-import javax.swing.JTextArea
 
 /**
  * T-PrefixValidate 面板装配测试：校验结果行与「一键修复」按钮在真实组件树中的行为——
@@ -58,13 +57,15 @@ class SourceFramePrefixesPanelValidationTest : BasePlatformTestCase() {
     fun test非法与冲突输入_结果行露出_一键修复回写并隐藏() {
         val configurable = newConfigurable()
         configurable.createComponent()
-        val root = configurable.panelForTest().getRoot()
+        val panel = configurable.panelForTest()
+        val root = panel.getRoot()
 
-        val areas = mutableListOf<JTextArea>()
-        findAll(root, JTextArea::class.java, areas)
-        assertTrue("应存在两栏前缀输入框，实为 ${areas.size}", areas.size >= 2)
-        val skipField = areas[0]
-        val bizField = areas[1]
+        // T-MagpieGems W2 起 SQL 日志页有多个 JBTextArea（脱敏白名单 3 行域先于本组装配），
+        // 按「树里前两个 JTextArea」定位会取错控件（往白名单域写文本 → 校验不触发 → 按钮不露），
+        // 直接引用面板字段，与装配顺序解耦。
+        val skipField = panel.frameSkipPrefixesField
+        val bizField = panel.bizJarPrefixesField
+        assertTrue("两栏前缀输入框应都在组件树中", isInTree(root, skipField) && isInTree(root, bizField))
 
         // 非法行（bad line）+ 跨栏冲突（com.corp. 两栏都登）
         skipField.text = "com.corp.\nbad line"

@@ -211,16 +211,20 @@ class ExplainIndexAdvisorTest {
         val rows = listOf(listOf("1", "SIMPLE", "t", "ALL", "NULL", "999999", ""))
         // 独立复核 ⑳：分派键必须是**表键**（= Dialect.name = "DM（达梦）"）。此前本用例传品牌短名
         // "DM"——`ExplainSupport` 里查不到 → 落到 else 静默降级分支，而下面的 `.isEmpty()` 对
-        // 「TEXT 档零命中」与「未登记降级」同形，肉眼区分不出 ⇒ 绿灯来自错误分支。
+        // 「档位零命中」与「未登记降级」同形，肉眼区分不出 ⇒ 绿灯来自错误分支。
         // 故先把**路由**钉住（键写错时本行先红），再断言输出。
+        // T-Fr45DmGuard S2：DM 真机 `EXPLAIN FOR` 返回 19 列计划表 → 档位由 TEXT 改 TABLE。
         val dmDialectName = "DM（达梦）"
         assertEquals(
-            "DM 必须以表键（Dialect.name）路由到 TEXT 档，品牌短名 \"DM\" 不是表键",
-            ExplainOutputFormat.TEXT,
+            "DM 必须以表键（Dialect.name）路由到 TABLE 档，品牌短名 \"DM\" 不是表键",
+            ExplainOutputFormat.TABLE,
             ExplainSupport.formatFor(dmDialectName),
         )
-        // DM（达梦）在册且接入（TEXT 档），但表格式行不含文本树模式 → 零命中（不噪音、不猜）
-        assertTrue(ExplainIndexAdvisor.advise(dmDialectName, mysqlHeaders, rows).isEmpty())
+        // DM 的真机列集没有 MySQL 的 type/key/Extra 列 → adviseMysql 列名不符即提前返回，
+        // 零命中（不噪音、不猜）；不能拿 MySQL 列头喂它冒充「同档即可套规则」。
+        val dmHeaders = listOf("PLAN_ID", "OPERATION", "TAB_NAME", "SCAN_TYPE", "ROW_NUMS", "COST")
+        val dmRows = listOf(listOf("1", "DELETE", "ARTICLE", "FULL SCAN", "999999", "0"))
+        assertTrue(ExplainIndexAdvisor.advise(dmDialectName, dmHeaders, dmRows).isEmpty())
         // R23 后 Oracle 已接入（TEXT 档）：MySQL 表格式行塞给它同样零命中——
         // 本插件通道对 Oracle 不产出计划行（EXPLAIN PLAN FOR 只登记不返回），勿硬解析
         assertTrue(ExplainIndexAdvisor.advise("Oracle", mysqlHeaders, rows).isEmpty())
@@ -269,6 +273,96 @@ class ExplainIndexAdvisorTest {
             1,
             ExplainIndexAdvisor.advise("postgresql", listOf("QUERY PLAN"), listOf(listOf(pgJsonSeqScan))).size,
         )
+    }
+
+    // ---------- R45 ③：OceanBase ASCII 计划树 ----------
+
+    /**
+     * OB 计划文本形态（真机实证：提交 58b8b5f3 正文逐字留证，社区镜像 oceanbase/oceanbase-ce:4.3.5-lts
+     * / OB CE 4.3.5.6，`EXPLAIN SELECT 1` 返回单列 `Query Plan`）：
+     * 表头 `|ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|` 与 EXPRESSION 行为真机原文；
+     * 表扫行按表头声明的列序填充（真机留证覆盖到算子名 `TABLE RANGE SCAN`/`TABLE FULL SCAN`，
+     * 未逐字落盘整行，故此处不伪造列宽——解析按列名取值，与列宽无关）。
+     */
+    private fun obPlan(operator: String, name: String, estRows: String): String =
+        """
+        ==========================================
+        |ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|
+        ------------------------------------------
+        |0 |$operator|$name|$estRows|1           |
+        ==========================================
+        Outputs & filters:
+          0 - output([*]), filter(nil), access([*])
+        """.trimIndent()
+
+    /** 路由先钉住：OceanBase 必须落在 TEXT 档（T-OBExplainFormat 真机实证），否则本组用例测的是别的分支。 */
+    @Test
+    fun testR45_OB路由为TEXT档() {
+        assertEquals(ExplainOutputFormat.TEXT, ExplainSupport.formatFor("OceanBase"))
+    }
+
+    @Test
+    fun testR45_OB全表扫超阈提示() {
+        val rows = listOf(listOf(obPlan("TABLE FULL SCAN", "bench_items", "500000")))
+        val hints = ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), rows)
+        assertEquals(1, hints.size)
+        assertEquals("TABLE_FULL_SCAN", hints[0].rule)
+        assertEquals("bench_items", hints[0].target)
+        assertTrue("建议文案应含估算行数", hints[0].advice.contains("500000"))
+    }
+
+    @Test
+    fun testR45_OB全表扫小表不提示() {
+        val rows = listOf(listOf(obPlan("TABLE SCAN", "tiny", "100")))
+        assertTrue(ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), rows).isEmpty())
+    }
+
+    @Test
+    fun testR45_OB范围扫超阈_报估算不报缺索引() {
+        // TABLE RANGE SCAN 已走索引：不报 TABLE_FULL_SCAN，只在估算行数超阈时报 HIGH_ROWS_ESTIMATE
+        val rows = listOf(listOf(obPlan("TABLE RANGE SCAN", "orders", "500000")))
+        val hints = ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), rows)
+        assertEquals(1, hints.size)
+        assertEquals("HIGH_ROWS_ESTIMATE", hints[0].rule)
+        assertEquals("orders", hints[0].target)
+    }
+
+    @Test
+    fun testR45_OB点查与常量计划不提示() {
+        assertTrue(
+            ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), listOf(listOf(obPlan("TABLE GET", "t", "1")))).isEmpty(),
+        )
+        assertTrue(
+            ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), listOf(listOf(obPlan("EXPRESSION", "", "1")))).isEmpty(),
+        )
+    }
+
+    /**
+     * 反例：OB 规则不得外溢。
+     *  - MySQL（TABLE 档）拿到 OB 文本 → 列名不符，零命中；
+     *  - H2 文本里出现 `TABLE SCAN` 字样但无 OB 表头 → 零命中（门是表头，不是算子词）；
+     *  - PG 文本树规则不受影响（同一次调用仍识别 Seq Scan）。
+     */
+    @Test
+    fun testR45_OB规则不误伤其它方言() {
+        val obText = obPlan("TABLE FULL SCAN", "bench_items", "500000")
+        assertTrue(
+            "MySQL 是 TABLE 档，文本计划不得被 MySQL 列名分支或 OB 分支命中",
+            ExplainIndexAdvisor.advise("MySQL", mysqlHeaders, listOf(listOf(obText))).isEmpty(),
+        )
+        assertTrue(
+            "无 OB 表头的 TABLE SCAN 字样（H2 等）不得触发 OB 规则",
+            ExplainIndexAdvisor.advise("H2", listOf("PLAN"), listOf(listOf("TABLE SCAN big_table"))).isEmpty(),
+        )
+        val pg = listOf(listOf("Seq Scan on big_table  (cost=0.00..35000.00 rows=300000 width=64)"))
+        val pgHints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), pg)
+        assertEquals(1, pgHints.size)
+        assertEquals("SEQ_SCAN", pgHints[0].rule)
+    }
+
+    @Test
+    fun testR45_规则清单_含OB全表扫() {
+        assertTrue(ExplainIndexAdvisor.ruleInventory().any { it.rule == "TABLE_FULL_SCAN" })
     }
 
     @Test

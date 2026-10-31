@@ -1,0 +1,9 @@
+{
+  "_comment": "演示 GIF 规格例外清单（record/tools/verify_gif.mjs 读取）。每条写明原因，新增例外必须在验收文档里同步登记。",
+  "wrapper-preview.gif": { "width": 1440, "height": 1036, "why": "首页共用的 wrapper 类构图，基准 1440×1034~1036" },
+  "sql-snippets.gif": { "width": 1280, "height": 962, "why": "装右键菜单需抬高窗口（2026-10-26 复核已登记）" },
+  "display-mask.gif": { "fps": 13, "why": "体积超预算时优先降帧（坑 77 口径）" },
+  "history-jump-last.gif": { "minFrames": 40, "why": "单动作短片段（跳行），60 帧下限不适用" },
+  "preview-copy-and-close.gif": { "minFrames": 40, "why": "单动作短片段（复制并关闭）" },
+  "sql-log-list-native-preview.gif": { "minFrames": 30, "minDuration": 2.0, "why": "单动作短片段（列表原生预览）" }
+}

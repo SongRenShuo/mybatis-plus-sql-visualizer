@@ -62,7 +62,11 @@ abstract class SelectedTableSqlTemplateAction(
 
     override fun update(e: AnActionEvent) {
         e.presentation.text = MpSqlVisualizerBundle.message(textKey)
-        e.presentation.isEnabled = validatedTableIdentifier(selectedOrCaretText(e)) != null
+        // UX Community 预判置灰：三个模板动作都经 SqlExecutor 送原生控制台执行，无 Database
+        // 插件时直接灰置 + tooltip（presentation.description），不再「点了才报错」。
+        val hint = cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()
+        e.presentation.isEnabled = validatedTableIdentifier(selectedOrCaretText(e)) != null && hint == null
+        e.presentation.description = hint
     }
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -116,6 +120,9 @@ abstract class SelectedTableSqlTemplateAction(
         locate: (() -> Unit)?,
         request: ExecutionDialectGate.Request,
     ) {
+        // UX Community 预判置灰的代码侧守卫：动作被程序化触发时同样不提交
+        //（灰置只挡 UI，不挡代码路径）。放在可覆写的执行入口上，子类测试覆写不受影响。
+        if (!cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) return
         SqlExecutor.execute(
             project, sql, null, true,
             onError = { errorMsg -> notifySqlTemplateError(project, errorMsg, locate) },

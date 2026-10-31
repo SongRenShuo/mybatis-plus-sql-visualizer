@@ -23,7 +23,7 @@ import javax.swing.ListModel
 
 /**
  * 设置页主页面（左侧树导航父节点）测试（F-44 续 · 补用例大波次）：此前 0 测试。
- * 覆盖：createComponent 列出全部 7 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
+ * 覆盖：createComponent 列出全部 8 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
  * 通过遍历取 JBList 与 SearchTextField，无需新增生产缝。
  * T-UN-20（T-UiNative）增补：行渲染器归一 SimpleColoredComponent 片段通道——组件类型断言
  * （JLabel-HTML/GridBag 通道不允许回潮）+ 双行语义断言（页名/描述行文本仍取 bundle 既有键）。
@@ -65,11 +65,16 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         return list to search
     }
 
-    fun testCreateComponent_空搜索列出全部7个子页面() {
+    fun testCreateComponent_空搜索列出全部9个子页面() {
         val cfg = PluginSettingsFolderConfigurable()
         val comp = cfg.createComponent()
         val list = all(comp).filterIsInstance<JBList<*>>().first()
-        assertEquals("默认应列出 7 个子页面（主五页+shortcuts/mcp，T-ShortcutSettings）", 7, (list.model as ListModel<*>).size)
+        assertEquals(
+            "默认应列出 9 个子页面（主五页 + shortcuts/mcp + bannedApi + 外部模板，" +
+                "T-ShortcutSettings/T-BannedApiCheck/T-TemplateHook）",
+            9,
+            (list.model as ListModel<*>).size,
+        )
     }
 
     fun test搜索过滤_无匹配项时列表清空() {
@@ -224,7 +229,7 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
     fun test登记目标id与类指向同一设置页() {
         val wrappers = allWrappers(settingsGroups())
         val targets = PluginSettingsFolderConfigurable.registeredTargetsForTest()
-        assertEquals("登记目标数（7 个子页 + 项目页）", 8, targets.size)
+        assertEquals("登记目标数（9 个子页 + 项目页）", 10, targets.size)
         for ((id, cls) in targets) {
             val wrapper = wrappers.firstOrNull { it.extensionPoint.id == id }
             assertNotNull("设置树里找不到该 id 的 EP：$id（id 与 plugin.xml 漂移？）", wrapper)

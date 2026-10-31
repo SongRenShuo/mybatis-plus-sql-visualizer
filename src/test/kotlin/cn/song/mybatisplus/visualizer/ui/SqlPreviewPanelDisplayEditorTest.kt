@@ -834,9 +834,14 @@ class SqlPreviewPanelDisplayEditorTest: BasePlatformTestCase() {
         cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
         clipboard = installFakeClipboard(testRootDisposable)
+        // NEW-18 后续（2026-10-31）：本类验的是「选区 → 动作启用」语义，不是 Community 判定。
+        // headless classpath 不含 database 插件标记类，真实探测恒 false 会让执行类动作一律置灰，
+        // 故在此显式声明为可用；Community 置灰语义由 G5 券3 的专项用例覆盖。
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = true
     }
 
     override fun tearDown() {
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = null
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
         super.tearDown()
     }

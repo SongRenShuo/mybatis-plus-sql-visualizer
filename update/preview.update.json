@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.31-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.31-beta.2/mybatis-plus-sql-visualizer-2026.10.31-beta.2.zip",
-  "changeNotes": "新增 GaussDB 方言，设置页、日志角标与 MCP 方言名显示为 GaussDB，不再并入 openGauss\n新增瀚高 HighGo 与海量 Vastbase 方言，可格式化的数据库方言总数 14 种\n修复 PostgreSQL 系保留字缺项，is、procedure、rownum 等列名不再被误判为语法错\n人大金仓补齐 enckey 保留字，并纠正金仓 PostgreSQL 协议版驱动被误认成 PostgreSQL 的问题\n人大金仓工程此前有库角标却采不到 SQL，增强捕获已补上语句面与参数面登记\n增强捕获增加按 JDBC 接口匹配的兜底通道，未登记驱动类名的数据库也能采到 SQL\n兜底通道带扫描上限、耗时预算与连败熔断，连续失败三次自动退回纯白名单，不拖慢也不影响应用启动\n增强捕获在线但零事件、且控制台已解析到 SQL 时自动回落到控制台通道，不再整链静默\n补齐 OceanBase、MariaDB、SQLite 的增强捕获登记，此前分别只有部分面或完全无事件\n修复 premain 补挂线程延迟单位写错导致永不执行的问题，未知驱动的兜底补挂此前从未跑起来\nOceanBase 执行计划改按文本档位呈现，与真机返回形态一致\nSQL Server 无排序分页此前渲染出非法 T-SQL，现自动补 ORDER BY (SELECT NULL) 占位\n日志列表多行模式改为缓存命中零取源，滚动与重绘更轻\n修复 GaussDB、达梦、瀚高、海量四种方言下预览恒降级、表与列补全不可用的问题，根因是这四种方言缺了平台需要的语法解析器注册\n同批消除每次打开预览都往 IDEA 日志写一条点名本插件的严重错误\n增强捕获在应用控制台的输出默认静默，只保留真实降级与熔断提示，排查时把 logLevel 设为 debug 即可恢复明细\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-30",
+  "version": "2026.10.31",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.31/mybatis-plus-sql-visualizer-2026.10.31.zip",
+  "changeNotes": "新增 GaussDB、瀚高 HighGo、海量 Vastbase 三种方言，可格式化的数据库方言总数 11 → 14 种；GaussDB 在设置页、日志角标与 MCP 方言名独立显示，不再并入 openGauss\n增强捕获增加按 JDBC 接口匹配的兜底通道，未登记驱动类名的数据库也能采到 SQL；兜底带扫描上限、耗时预算与连败熔断，连续失败三次自动退回纯白名单，不拖慢也不影响应用启动\n增强捕获在线但零事件、且控制台已解析到 SQL 时自动回落到控制台通道，不再整链静默\n补齐人大金仓、OceanBase、MariaDB、SQLite 的增强捕获登记，此前分别只有部分面或完全无事件\n修复 PostgreSQL 系与人大金仓的保留字缺项，is、procedure、rownum、enckey 等列名不再被误判为语法错；金仓 PG 协议版驱动不再被认成 PostgreSQL\n修复 GaussDB、达梦、瀚高、海量四种方言下预览恒降级、表与列补全不可用的问题，根因是这四种方言缺了平台需要的语法解析器注册；同批消除每次打开预览都往 IDEA 日志写一条点名本插件的严重错误\n修复 premain 补挂线程延迟单位写错导致永不执行的问题，未知驱动的兜底补挂此前从未跑起来\n修复 SQL Server 无排序分页渲染出非法 T-SQL，现自动补 ORDER BY (SELECT NULL) 占位\n修复 mapper XML 动态标签体内敲 # 或 $ 不自动补全花括号的问题，此前只有单层标签下生效\n修复 OceanBase 执行计划档位错判，改按文本档位呈现，与真机返回形态一致\n优化增强捕获在应用控制台的输出，默认静默只保留真实降级与熔断提示，排查时把 logLevel 设为 debug 即可恢复明细\n优化日志列表多行模式的取源，缓存命中时零取源，滚动与重绘更轻\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-31",
   "sinceBuild": "243"
 }

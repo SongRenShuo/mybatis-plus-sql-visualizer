@@ -18,6 +18,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import java.awt.Component
 import javax.swing.JComponent
 import javax.swing.JList
@@ -194,7 +195,7 @@ class NativeSearchTextField(
             com.intellij.openapi.actionSystem.ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE,
         )
         button.isOpaque = false
-        button.toolTipText = "最近搜索"
+        button.toolTipText = MpSqlVisualizerBundle.message("search.history.tooltip")
         // 点击由 AnAction 系统驱动（ActionButton 非 AbstractButton，无 addActionListener）
         parent.add(button, index)
         parent.revalidate()

@@ -548,16 +548,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var paginationCountEnabled: Boolean = true,
 
         /**
-         * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的
-         * 自建执行链路线）——开=MySQL 家族表格行/PG 家族 JSON 计划在面板内结构化渲染＋索引
-         * 建议条；其余方言（TEXT/XML 不硬解析）与判定/执行/渲染任一失败路径一律 fail-closed
-         * 回退原生控制台直送通道（双通道并存不替换）。
+         * R45（EXPLAIN 执行计划体检，转正）：EXPLAIN 结构化渲染开关——开=MySQL 家族表格行/
+         * PG 家族 JSON 计划在面板内结构化渲染＋索引建议条；其余方言（TEXT/XML 不硬解析）与
+         * 判定/执行/渲染任一失败路径一律 fail-closed 回退原生控制台直送通道（双通道并存不替换）。
          *
-         * T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：**默认关**——EXPLAIN 默认走原生
-         * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
-         * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。
+         * 口径沿革：R33 引入（自建执行链，核实报告 V41 定案）→ T-DevAcceptFix ②（20261006 验收
+         * 采 B 案）因「表格形态交互不如原生控制台」改为默认关、通道整体保留一个版本周期 →
+         * R45 转正为正式能力、**默认开**（观察期已过；用户仍可在设置页显式关闭，关闭后与原生
+         * 直送通道逐字一致）。存量用户已显式关闭的值不受影响（持久化值优先于声明默认值）。
          */
-        var explainStructuredRender: Boolean = false,
+        var explainStructuredRender: Boolean = true,
 
         /** R90：原始计划跨会话保留需独立同意；旧渲染开关不代表落盘授权，缺字段默认关闭。 */
         var explainPlanRetentionEnabled: Boolean = false,
@@ -642,8 +642,30 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * true 时日志列表 / 单击预览浮层 / 导出文件三类**展示层文本**经 DisplayMasker 双条件打码
          * （规则对齐采集侧 Desensitizer）；数据层（条目/参数预设/历史文件）不动。与采集侧
          * [enhancedCaptureDesensitize] 解耦——采集开关管「数据怎么进来」，本开关管「文本怎么出去」。
+         *
+         * T-MagpieGems W2（20261024）：本字段**降级为迁移源**——语义由 [displayMaskMode] 接管
+         * （分级 OFF/MASK/WARN/BLOCK + 白名单）。读取仅剩迁移归一（[loadState] 与
+         * [displayMaskMode()] 的默认值兜底）；面板 apply 同步写它（= mode != OFF），旧版本插件
+         * 读新 XML 仍得一致观感。
          */
         var displayMaskEnabled: Boolean = false,
+
+        /**
+         * T-MagpieGems W2：展示脱敏动作分级（OFF/MASK/WARN/BLOCK，存串）。
+         *
+         * 字段默认 **空串=「未迁移」哨兵**（比写死 "MASK" 稳：出厂默认无 XML 时 loadState 不跑，
+         * 写死 MASK 会让新装用户默认开打码；空哨兵由 [displayMaskMode()] 按旧开关推导，两者等效
+         * 且不误伤程序化直写 state 的路径）。旧 XML 缺本字段 → 反序列化落空哨兵 → [loadState]
+         * 迁移归一按旧开关落显式值（true→MASK、false→OFF），此后 displayMaskEnabled 只作迁移源。
+         * 非法串回落 MASK（[DisplayMasker.parseMaskMode]）。
+         */
+        var displayMaskMode: String = "",
+
+        /**
+         * T-MagpieGems W2：脱敏豁免白名单（换行或逗号分隔的列名关键词）。hint 命中任一项
+         * （contains，大小写不敏感）→ 豁免一切识别（含身份证/手机号形态兜底）。空 = 未登记。
+         */
+        var displayMaskAllowList: String = "",
 
         /**
          * R60（T-LaneB D96/D97）：MCP 输出面脱敏开关（sqlv_render_logs 还原语句打码；
@@ -673,6 +695,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
          */
         var onboardingAnchorTipShown: Boolean = false,
+
+        /**
+         * NEW-19：最近一次已提示过「本版亮点」的插件版本（一次性 / **版本粒度**记忆）。
+         *
+         * 空串 = 从未提示。写入发生在通知**之前**（领取即消耗）：通知链任何异常都不会让同版本
+         * 在下一次启动重弹——防打扰优先于「一定送达」。版本升级后字符串不等，才允许再提示一次。
+         */
+        var lastHighlightedVersion: String = "",
 
         /**
          * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
@@ -716,6 +746,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         // 用户显式关闭的 enhancedCaptureEnabled 必须原样保留（关闭增强 > 一切默认）。
         this.state.enhancedCaptureConfirmed = true
         this.state.enhancedCaptureRejectedAtMs = 0L
+        // T-MagpieGems W2 迁移归一：旧 XML 没有新字段时 displayMaskMode 落空哨兵，按旧开关
+        // 翻译落显式值——displayMaskEnabled=false（既有默认观感=不脱敏）→ OFF；true → MASK。
+        // 此后 displayMaskEnabled 只作迁移源（面板 apply 同步写，不再被业务读取）。
+        if (state.displayMaskMode.isBlank()) {
+            state.displayMaskMode = if (state.displayMaskEnabled) "MASK" else "OFF"
+        }
         // F47（T-PerfQuick5）：注入器喂入税消解的快照刷新漏斗——设置页 apply（面板末尾恒
         // loadState(s.copy())）与 JSON 导入（fromJson）均汇入本点，XmlSynHiGate 每元素
         // 服务查找（85ns/元素，V38 基准）由此降为快照直读（14ns/元素）。
@@ -727,6 +763,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
     fun sqlListDisplayMode(): cn.song.mybatisplus.visualizer.log.SqlListDisplayMode =
         runCatching { cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.valueOf(state.logListSqlDisplayMode) }
             .getOrDefault(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP)
+
+    /**
+     * T-MagpieGems W2：当前展示脱敏模式。
+     *
+     * 空哨兵（State() 出厂默认、未过 [loadState] 的形态，如新装无 XML）按旧开关推导——
+     * displayMaskEnabled=true → MASK、false → OFF（与迁移归一同一张真值表）。显式值
+     * （含面板 apply 写入与程序化直写）按串解析，非法回落 MASK。
+     */
+    fun displayMaskMode(): cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode {
+        val raw = state.displayMaskMode.trim()
+        if (raw.isEmpty()) {
+            return if (state.displayMaskEnabled)
+                cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK
+            else cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF
+        }
+        return cn.song.mybatisplus.visualizer.util.DisplayMasker.parseMaskMode(raw)
+    }
+
+    /** T-MagpieGems W2：白名单解析（换行/逗号分隔关键词，trim + 小写化；空串 = 未登记）。 */
+    fun displayMaskAllowList(): List<String> =
+        cn.song.mybatisplus.visualizer.util.DisplayMasker.parseAllowList(state.displayMaskAllowList)
+
+    /**
+     * T-MagpieGems W2：离开 IDE 面（导出/回放脚本/MCP 之外的复制链）的从严口径——
+     * mode != OFF 一律按 MASK 打码（WARN 不给原文离开产品）。
+     */
+    fun displayMaskExportOn(): Boolean = displayMaskMode() != cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF
 
     companion object {
         const val DEFAULT_DIALECT = "MySQL"

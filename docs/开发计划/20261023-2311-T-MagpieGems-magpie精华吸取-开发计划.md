@@ -5,7 +5,7 @@
 **调研对象**：github.com/yetone/magpie（MIT 开源，本地 `F:\code\Java\Github\other\magpie`，tip `fa22bc64`）。
 **配套报告**：[20261023-2311-magpie-全代理驱动的本地AI网关-调研报告.md](../内部/调研报告/20261023-2311-magpie-全代理驱动的本地AI网关-调研报告.md)（全部设计点带 `文件:行号` 证据）。
 **基线**：`master@a553f3d4`（开工时 tip）。
-**状态**：计划待拍板。**未占 O/R/D/V 编号**（编号在逐项立项时再占）。
+**状态**：已实施（2026-10-24，工作树 `mpsv-magpie-gems` / 分支 `t-magpie-gems`，实施记录见文末 §六；未 push）。**未占 O/R/D/V 编号**（流程+增强类，编号留待逐项销号时占）。
 **范围口径**：magpie 与本项目领域不同（LLM 网关 vs SQL 可视化 IDE 插件），吸取的不是功能而是**工程制度与设计模式**；计划分「产品代码」与「开发流程」两条线，流程线不动 `src/main`、不触发门禁复跑。
 
 ---
@@ -102,3 +102,44 @@ magpie 出处：`docs/subsystems/README.md` 维护规约（证据详见调研报
 
 - Bun 子进程/JS 沙箱插件体系、davsync WebDAV 同步、claudebridge 订阅桥接、TUI/五形态架构——领域不符或代价远超收益，见调研报告 §五、§3.5 与总表 14 号项的评估。
 - magpie 的「每日多次发行」节奏与自动夜间复盘基础设施——依赖其自有 CI 集群与 LLM 预算，不适合照搬；只吸收其复盘产物格式（LESSONS 条目）。
+
+---
+
+## 六、实施记录（2026-10-24 回填）
+
+**工作树**：`F:\code\Java\Gitee\SongRenShuo\mpsv-magpie-gems`，分支 `t-magpie-gems`（自 master@f9e1650f）。三路只读调研证伪前提后按决策树收窄范围实施。
+
+### 提交链（按序）
+
+| hash | 内容 |
+|---|---|
+| `8f6b3faa` | W1+W6：`docs/LESSONS.md`（种子 L1~L10，四段式）+ `docs/code-standards.md`（S1~S10）+ `docs/开发流程-派活与验收清单.md` + docs/MEMORY.md 两处指针。仓根 AGENTS.md 按本地文件留用（后续 `231378e1` 放行入库：删 `.gitignore:67`，实测宽规则 `AGENTS` 不命中 AGENTS.md 无需负规则） |
+| `36e70767` | W3+W4 代码线：`StateFileLastGood`（三件套纯函数）+ `SettingsLastGoodStartup`（巡检接线）+ `ExecutionErrorCategory`（五档分类）+ `format` 出路提示接线 + 两测试类 + 预览执行链子系统文档 |
+| `f201597d` | W5 标准条目：code-standards 机制导入节 + M1 扩展点失败策略契约 |
+| `060ffaeb` | （W2 车道代修）`36e70767` 编译三连错——教训已入 LESSONS L11 |
+| `acc4a276` | W2 本体：脱敏四档分级 + Allow 白名单 + Hint 计数 + 复制/导出缺口补齐（29 文件 +793/−107，16 测试类 266 例） |
+| `b57d23d2` | 守卫批收口：EnumReachabilityGuard（面板选项携带枚举本体=WARN/BLOCK 产出点）+ BannedApiScanRule（三处 catch(Throwable) 补 `FatalErrors.isFatal` 透传）+ BundleParity（mode 4 键）+ W3 通知键/plugin.xml 注册 + W4 提示键 + W5 fail-closed 兜底（faultHook 探针缝）+ 测试修正 |
+| `490b2e9b` | 收尾：展示脱敏链子系统文档 + LESSONS L11 + 本节回填 + 索引状态 |
+| `b5e5a8b9` | verifier 收口：loadValidRoot 换非废弃 `JDOMUtil.load(Path)`（deprecated 41→40 回基线，我方类零 verifier 记账；verdict Compatible） |
+| `231378e1` | AGENTS.md 入库：删 `.gitignore:67` 放行（纯指针随仓走，更新只改 docs/ 侧） |
+
+### 前提核销
+
+- **P-1**：证实现状=常量 `***`（平凡确定性）→ W2-a/b 按计划走「守卫测试不重做占位符」；W2-c/d（Hint 计数/分级/白名单）落地。
+- **P-2**：证实平台对插件 options 坏文件「当默认值+覆写」（`blockSaving` 名单不含插件文件）→ W3 按旁路 guard 落地（不撤 `@State`，规避自管化迁移风险）；项目级文件二期。
+- **P-3**：证实执行错误「全同路」→ W4 落五档分类；差异处置=分类出路提示单点接线（无自动 failover 维持设计）。
+- **P-4**：分工在 LESSONS 头部定稿（账本只收可执行规则，经验总结仍是事件叙事）。
+
+### 读数
+
+- 定向：W2 十六类 266/0/0（子代理交）；W3/W4/W5 四类 71/0/0。
+- 反向探针：W2 白名单摘除恰 2 红（子代理交）；W3 存证摘除恰 3 红；W4 权限摘除恰 2 红；W5 safely 摘除恰 1 红——全部还原回绿，grep 零残留。
+- 收口：testFast **4168/0/7**（338 文件判据数实测；首跑 3 守卫红已修）。verifyPlugin：verdict **Compatible**（本轮动了 plugin.xml EP 注册触发构建校验；发现并消掉我方唯一一条新增废弃用法 `JDOMUtil.loadDocument(InputStream)`→`load(Path)`，deprecated 41→40 回基线，我方类零 verifier 记账；MISSING_DEPENDENCIES=两个 optional 依赖在 verifier IDE 不可用，属既有基线——verifyPlugin 本身已降级为报告生成器，权威 failureLevel=COMPATIBILITY_PROBLEMS）。全量 `testShards` 未跑（留下轮统一全量）。
+- 真机走查：**not run**（W2 设置页/脱敏四档、W3 恢复通知、W4 错误提示的沙盒/真机复核留用户）。
+
+### 有意偏离
+
+1. W2 `displayMaskMode` 用空串「未迁移哨兵」而非写死默认 MASK（写死会让新装用户默认开打码）。
+2. W2 搜索索引只补 allowList 条目，mode 复用既有 `settings.display.mask` 键作行标签（避免幽灵条目）。
+3. W3 采用旁路 guard 而非计划文案里的「自管化 store」（P-2 核实后按最小风险路径执行，效果等价：坏文件存证+回落+内存态恢复）。
+4. W4 处置形态=分类出路提示（计划允许的「可能只补测试」分支未成立，缺口真实存在但差异处置收敛在提示层，不做自动切源）。

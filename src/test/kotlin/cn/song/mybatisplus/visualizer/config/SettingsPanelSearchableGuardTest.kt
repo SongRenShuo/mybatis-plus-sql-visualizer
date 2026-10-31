@@ -142,10 +142,19 @@ class SettingsPanelSearchableGuardTest : BasePlatformTestCase() {
             for (lang in listOf("zh", "en")) {
                 settings.state.language = lang
                 val root = SqlLogConfigurable().createComponent()
+                // T-MagpieGems W2：复选框改分级下拉，settings.display.mask 文本落在模式行的行标签上
                 val hint = MpSqlVisualizerBundle.message("settings.display.mask")
                 val target = folder.findHighlightTargetForTest(root, hint)
                 assertNotNull("[$lang] hint「$hint」应定位到 SQL 日志页控件（定位不到=用户「跳了但不亮」）", target)
-                assertTrue("[$lang] 定位目标应是复选框本体（displayMaskCheck）", target is JToggleButton)
+                assertTrue(
+                    "[$lang] 定位目标应是模式行行标签（displayMaskModeCombo 的 label）",
+                    target is javax.swing.JLabel,
+                )
+                // 白名单行同理可定位（W2 新增条目，防「跳了不亮」）
+                val allowHint = MpSqlVisualizerBundle.message("settings.display.mask.allowList")
+                val allowTarget = folder.findHighlightTargetForTest(root, allowHint)
+                assertNotNull("[$lang] hint「$allowHint」应定位到白名单行控件", allowTarget)
+                assertTrue("[$lang] 白名单定位目标应是行标签", allowTarget is javax.swing.JLabel)
             }
         } finally {
             settings.state.language = original

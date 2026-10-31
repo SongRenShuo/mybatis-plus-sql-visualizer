@@ -93,7 +93,10 @@ class SettingsRealityGuardTest {
         // T-EnhancedCaptureDefaultOn（2026-10-19）：两个字段只用于旧配置兼容归一——loadState 内
         // 写为固定值、运行期零读取，因此没有也不应有非 config 消费点。保留字段是为了旧 XML/JSON
         // 与旧版本回退，不是假配置；下线条件 = 确认不再需要兼容旧配置。显式登记而非泛化匹配。
-        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs")
+        // T-MagpieGems W2（20261024）：displayMaskEnabled 降级为迁移源——语义由 displayMaskMode
+        // 接管（分级+白名单），config 包内 loadState/displayMaskMode() 迁移归一仍读它、面板 apply
+        // 同步写它（旧版本插件读新 XML 观感一致），非 config 包零消费是本任务的迁移定案，非死字段。
+        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs", "displayMaskEnabled")
         val dead = fields.filter { it !in compatOnly }.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
@@ -135,6 +138,8 @@ class SettingsRealityGuardTest {
             "storageActionStatusLabel",
             // R90：只读隐私披露标签，不是可编辑设置；保留开关自身仍须 apply/reset。
             "explainPlanRetentionDisclosure",
+            // NEW-18：环境体检是「点击即生成」的只读动作 + 结果行内提示，无自身状态可存可回填。
+            "environmentCheckButton", "environmentCheckStatusLabel",
             // ShortcutEditor 内部控件（随 shortcutEditor 整体进出 apply/reset）
             "textField", "editButton",
         )

@@ -47,6 +47,11 @@ object ExecutionErrorFormatter {
             info.positionChar?.takeIf { it > 0 }?.let { append("\nerrorPosition: char ").append(it) }
                 ?: info.lineInSql?.takeIf { it > 0 }?.let { append("\nerrorPosition: line ").append(it) }
         }
+        // T-MagpieGems W4：分类出路提示——只追加静态文案，绝不回显消息里的参数值（脱敏同纪律）。
+        // CONNECTION 不加（既有切源出口/DDL 探测已承接），OTHER 不硬给出路。
+        ExecutionErrorClassifier.classify(info).hintKey?.let {
+            append("\n").append(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(it))
+        }
     }
 }
 

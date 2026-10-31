@@ -24,17 +24,26 @@ object McpRenderInput {
         val line: Int?,
         val xmlSnippet: String?,
         val sourceType: String?,
+        /**
+         * T-TemplateHook：可选参数 JSON，原样交给用户配置的外部渲染命令（`{paramsJson}` 占位符）。
+         * null = 未提供；只对路径形态有意义，片段形态忽略。**不进任何日志/错误文本**。
+         */
+        val paramsJson: String? = null,
     )
 
     /**
      * 入参校验：路径形态（filePath 非空）与片段形态（xmlSnippet+sourceType=xml_mapper）二选一；
      * 两者都给时路径形态优先。行号只允许正整数。
+     *
+     * T-TemplateHook：新增可选 [paramsJson]（默认 null）——不传时与接线前逐字节一致；
+     * 只透传给路径形态（片段形态没有外部命令挂点）。
      */
     fun parse(
         filePath: String?,
         line: Int?,
         xmlSnippet: String?,
         sourceType: String?,
+        paramsJson: String? = null,
     ): Pair<Parsed?, String?> {
         val file = filePath?.trim()?.takeIf { it.isNotEmpty() }
         if (file != null) {
@@ -44,7 +53,8 @@ object McpRenderInput {
                     "line must be within 1..$MAX_LINE (1-based); got $line.",
                 )
             }
-            return Parsed(file, line?.takeIf { it > 0 }, null, null) to null
+            val json = paramsJson?.trim()?.takeIf { it.isNotEmpty() }
+            return Parsed(file, line?.takeIf { it > 0 }, null, null, json) to null
         }
         val snippet = xmlSnippet?.trim()?.takeIf { it.isNotEmpty() }
         if (snippet != null) {

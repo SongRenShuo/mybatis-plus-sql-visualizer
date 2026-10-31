@@ -654,6 +654,21 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/HardcodedUiTextGuardTest.kt",
+                listOf(DecisionFn("scanHardcoded", FnKind.VIOLATIONS)),
+                "UI 控件文案硬编码中文守卫（T-TestGateGems W1-a）：判定内核 `scanHardcoded` 逐文件剥注释" +
+                    "后按 `uiTextPatterns` 扫 CJK 字面量，返回 `文件:行 片段` 违规点集合。自证语料=同文件" +
+                    "「判定内核能看见硬编码中文形态」+「英文文案与注释中文不得命中」两例，覆盖正反两面。",
+            ),
+            GuardEntry(
+                "convention/IconResourceGuardTest.kt",
+                listOf(DecisionFn("declaredIconPaths", FnKind.SITES)),
+                "图标资源存在性守卫（T-TestGateGems W1-b）：判定内核 `declaredIconPaths` 从 plugin.xml " +
+                    "属性与 .kt 字面量提取 `/icons/*.svg|png` 站点集合（`文件:行` to 路径）。合并 master 时" +
+                    "登记，并顺手补了自证引用——原自证用例只对合成路径做 isFile、未调用提取器，元守卫" +
+                    "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
+            ),
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
@@ -749,6 +764,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；并断言该行落在第一个 <h2> 块内。" +
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度＝把该行复制到第二块必红、只留历史块必红，两向已实测。",
+            ),
+            // ---- T-TemplateHook 接线守卫（FR-0045 第 3 项 MVP，2026-10-31） ----
+            GuardEntry(
+                "convention/ExternalTemplateWiringSourceScanTest.kt",
+                emptyList(),
+                "外部模板渲染接线守卫（T-TemplateHook）：判定内核内联于三个用例——读 McpSourceLocator.kt 源码断言" +
+                    "首个 externalStep( 调用点早于 STATEMENT_TAGS 爬升、且前 12 行内有 isActive() 空判门；" +
+                    "读 ExternalTemplateSettings.kt 断言 enabled 出厂默认 false。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=注释掉 XML 分支的 externalStep 调用 → 断言一必红（计划 §8.3 已留两次读数），" +
+                    "另有 `自证_挂点后置与无门形态必被判红` 用合成源码钉住两种故障形态。",
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
@@ -867,12 +893,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "后缀致 filter 全程跳过的假绿）。",
             ),
             GuardEntry(
-                "ui/ExplainStructuredDefaultOffGuardTest.kt",
+                "ui/ExplainStructuredDefaultOnGuardTest.kt",
                 emptyList(),
-                "结构化执行计划默认关守卫（T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
-                    "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
+                "结构化执行计划默认开守卫（R45 转正；沿革 T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
+                    "断言 explainStructuredRender 默认值为 true、「启用结构化并重试」推荐仍只提示一次、" +
                     "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
-                    "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
+                    "灵敏度=把默认值改回 false 或去掉一次性标记必红。",
             ),
             GuardEntry(
                 "config/SettingsPanelSearchableGuardTest.kt",
@@ -1053,6 +1079,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "mcp/McpSelectGuardTest.kt",
                 emptyList(),
                 "断言经 assertDenied(:17)/assertAllowed(:24) 助手内联在 @Test",
+            ),
+            GuardEntry(
+                "mcp/McpExplainTargetGuardTest.kt",
+                emptyList(),
+                "T-Fr45DmGuard S1：断言直接内联在 @Test（非 SQL 数据源判定的命中/放行形态 + " +
+                    "SqlVisualizerExplainTool 接线顺序源码扫描——取 url 之后、McpDialectDetector.resolve 之前）；" +
+                    "explainToolSource/stripComments 为夹具",
             ),
             GuardEntry(
                 "update/UpdateZipGuardTest.kt",

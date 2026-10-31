@@ -48,9 +48,16 @@ object SqlExportService {
      * R60（T-LaneB D96）：[mask] 开时对行集 sql 字段做**投影级**脱敏（[DisplayMasker.maskDisplay]，
      * 与采集侧 Desensitizer 双条件同规则）——只改本次导出文本，调用方行集与数据层条目不动；
      * 开关值由调用方读设置传入（本类纯逻辑不触平台设置）。
+     * UI-001 修复：[allowList] 白名单豁免随调用方设置贯穿导出链（为空时行为与旧签名逐字等价）。
      */
-    fun format(rows: List<SqlExportRow>, format: SqlExportFormat, mask: Boolean = false): String {
-        val effective = if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, true)) } else rows
+    fun format(
+        rows: List<SqlExportRow>,
+        format: SqlExportFormat,
+        mask: Boolean = false,
+        allowList: List<String> = emptyList(),
+    ): String {
+        val effective =
+            if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, DisplayMasker.MaskMode.MASK, allowList)) } else rows
         return when (format) {
             SqlExportFormat.CSV -> formatCsv(effective)
             SqlExportFormat.TSV -> formatTsv(effective)
@@ -169,11 +176,16 @@ object SqlExportService {
      * TXT 每条语句前带注释头（`-- dialect: X | kind: Y | upsert: Z`），CSV/TSV 把同三字段
      * 作列（机器可读形态），SQL 字段沿用既有转义/扁平化口径。
      *
-     * R60（T-LaneB D96）：[mask] 开时行集 sql 投影级脱敏（同 [format] 口径）。
+     * R60（T-LaneB D96）：[mask] 开时行集 sql 投影级脱敏（同 [format] 口径）；[allowList] 同 UI-001 贯穿。
      */
-    fun formatPortable(rows: List<PortableSqlRow>, format: SqlExportFormat, mask: Boolean = false): String {
+    fun formatPortable(
+        rows: List<PortableSqlRow>,
+        format: SqlExportFormat,
+        mask: Boolean = false,
+        allowList: List<String> = emptyList(),
+    ): String {
         val effective =
-            if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, true)) } else rows
+            if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, DisplayMasker.MaskMode.MASK, allowList)) } else rows
         return when (format) {
             SqlExportFormat.CSV -> formatPortableFlat(effective, ",") { csvField(it) }
             SqlExportFormat.TSV -> formatPortableFlat(effective, "\t") { v ->

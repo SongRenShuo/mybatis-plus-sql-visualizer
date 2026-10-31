@@ -147,8 +147,27 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<L
     /** Ctrl+C 复制文本（T-SqlCopyShortcuts：委派给共享基类；多选逐行拼接由平台既有 copy 动作完成）。 */
     override fun copyTextFor(element: LogSqlEntry): String = textFor(element)
 
-    /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
-    internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
+    /**
+     * 速度搜索与 Ctrl+C 复制共用的条目文本。
+     *
+     * T-MagpieGems W2 出口缺口补齐：Ctrl+C 复制是**离开 IDE 面**（剪贴板出产品）——
+     * 脱敏 mode != OFF 一律按 MASK 打码（R60 时代本链漏接 [DisplayMasker]，复制原文越权）；
+     * OFF 原样（既有默认观感不变）。服务未注册（无平台测试环境）从严回落 MASK。
+     */
+    internal fun textFor(element: LogSqlEntry): String {
+        val maskOff = runCatching { PluginSettings.getInstance().displayMaskMode() }
+            .getOrDefault(cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK) ==
+            cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF
+        // UI-001 修复：复制链同样按白名单豁免（allowList 为空时与 maskDisplay(sql, true) 逐字等价）
+        val allowList = runCatching { PluginSettings.getInstance().displayMaskAllowList() }.getOrDefault(emptyList())
+        val base = if (maskOff) element.restoredSql
+        else cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(
+            element.restoredSql,
+            cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.MASK,
+            allowList,
+        )
+        return withTerminator(base)
+    }
 }
 
 internal class ViewportWidthSqlEntryList(model: ListModel<LogSqlEntry>) : SqlEntryList(model) {

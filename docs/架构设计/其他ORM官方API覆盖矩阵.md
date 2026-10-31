@@ -187,7 +187,7 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| `SelectDSL.select(cols).from(table[,alias]).where(col, isEqualTo(1).and(col2, isIn(...)))` | ✅ | DS1 | 新建 MdsConverter：链→现有 Condition 模型→11 方言渲染 |
+| `SelectDSL.select(cols).from(table[,alias]).where(col, isEqualTo(1).and(col2, isIn(...)))` | ✅ | DS1 | 新建 MdsConverter：链→现有 Condition 模型→14 方言渲染 |
 | SqlTable.of("t_user") / table.column("id", JDBCType) 手写常量 | ✅ | DS2 | 列名直接可读（无生成代码） |
 | VisitableCondition 谓词 50+（isEqualTo/isNotEqualTo/isIn/notIn/isLike/isBetween/isNotNull/isNull/...） | ✅ | DS3 | 高频 20 个先覆盖 + 未支持条件降级提示 |
 | RenderingStrategy：MyBatis3（#{} / p1,p2）与 SpringNamedParameter（:name） | ✅ | DS4 | 占位符形态与插件参数面板两套对齐 |

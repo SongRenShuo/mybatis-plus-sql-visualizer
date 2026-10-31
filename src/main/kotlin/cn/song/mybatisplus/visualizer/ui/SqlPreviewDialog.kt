@@ -88,8 +88,19 @@ class SqlPreviewDialog(
 
     override fun createActions(): Array<Action> = arrayOf(
         // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
+        // UX Community 预判置灰：构造期按 ExecuteSqlSupport.isAvailable() 判定，不可用即灰置 +
+        // tooltip 说明（SHORT_DESCRIPTION 由 JButton(Action) 直接渲染成按钮 tooltip），
+        // 不再「点了才报错」。doAction 仍保留二次守卫（防动作被程序化触发）。
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
+            init {
+                cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()?.let { hint ->
+                    isEnabled = false
+                    putValue(Action.SHORT_DESCRIPTION, hint)
+                }
+            }
+
             override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+                if (!cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) return
                 panel.executeSql()
             }
         },

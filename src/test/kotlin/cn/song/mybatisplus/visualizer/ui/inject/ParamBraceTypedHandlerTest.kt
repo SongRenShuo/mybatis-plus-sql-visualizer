@@ -136,4 +136,94 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
             Regex("<typedHandlerDelegate\\s").containsMatchIn(xml),
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-XmlBraceNested（R15 录制实测）：动态标签嵌套体内正文接管 —— 旧「一层 parent +
+    // offset vs 子标签 endOffset」判据把 `<where>` 下的 `<if>` 体内正文全漏判
+    // ------------------------------------------------------------------
+
+    private fun resultFor(base: String): com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result {
+        val caret = base.indexOf("<caret>")
+        val text = base.replace("<caret>", "")
+        openFile(text, caret)
+        return ParamBraceTypedHandler().beforeCharTyped(
+            '#', project, myFixture.editor, myFixture.file, myFixture.file.fileType,
+        )
+    }
+
+    @Test
+    fun testXmlBraceNested_where下if体内_接管() {
+        // R15 实测主形态：真实 mapper 几乎全是 <where><if> 排版，旧判据在此全灭。
+        // 光标须落在「敲 # 前」的位置（体内正文行尾）；光标后方是 `{` 会撞先查后插守卫（非本判据）
+        val base = "<mapper namespace=\"n\">\n" +
+            "  <select id=\"a\">SELECT 1\n" +
+            "    <where>\n" +
+            "      <if test=\"status != null\">and status = <caret></if>\n" +
+            "    </where>\n" +
+            "  </select>\n" +
+            "</mapper>"
+        assertEquals(
+            "<where> 下 <if> 体内正文接管",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.STOP,
+            resultFor(base),
+        )
+    }
+
+    @Test
+    fun testXmlBraceNested_choose下when体内_接管() {
+        val base = "<mapper namespace=\"n\">\n" +
+            "  <select id=\"a\">SELECT 1\n" +
+            "    <choose>\n" +
+            "      <when test=\"a != null\">and a = <caret></when>\n" +
+            "    </choose>\n" +
+            "  </select>\n" +
+            "</mapper>"
+        assertEquals(
+            "二级嵌套 <choose><when> 体内接管",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.STOP,
+            resultFor(base),
+        )
+    }
+
+    @Test
+    fun testXmlBraceNested_单层if体内_接管() {
+        // 直接子标签体内正文：旧判据因 offset < 子标签 endOffset 误判成「标记区」也不接管
+        val base = "<mapper namespace=\"n\">\n" +
+            "  <update id=\"u\">update t\n" +
+            "    <if test=\"a != null\">set a = <caret></if>\n" +
+            "  </update>\n" +
+            "</mapper>"
+        assertEquals(
+            "直接子标签体内正文接管（旧两态判据的 B 面回归钉）",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.STOP,
+            resultFor(base),
+        )
+    }
+
+    @Test
+    fun testXmlBraceNested_语句标签自身属性区_不接管() {
+        // 同族洞：旧判据 tag∈STATEMENT_TAGS 直放，`<select id="a|">` 里敲 # 会插出 #{}
+        val base = "<mapper namespace=\"n\">\n" +
+            "  <select id=\"a\" result<caret>Type=\"x\">SELECT 1</select>\n" +
+            "</mapper>"
+        assertEquals(
+            "语句标签自身属性区不接管",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.CONTINUE,
+            resultFor(base),
+        )
+    }
+
+    @Test
+    fun testXmlBraceNested_自闭合子标签之后_接管() {
+        val base = "<mapper namespace=\"n\">\n" +
+            "  <select id=\"a\">SELECT 1\n" +
+            "    <include refid=\"c\"/><caret>\n" +
+            "  </select>\n" +
+            "</mapper>"
+        assertEquals(
+            "自闭合子标签之后＝父语句内容，接管",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.STOP,
+            resultFor(base),
+        )
+    }
 }

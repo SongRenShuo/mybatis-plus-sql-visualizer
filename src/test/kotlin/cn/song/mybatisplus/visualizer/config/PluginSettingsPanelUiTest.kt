@@ -169,8 +169,9 @@ class PluginSettingsPanelUiTest : BasePlatformTestCase() {
             assertTrue("全量面板应含多个下拉（方言/语言/反向形态/表名推断等）", fullCombos >= 3)
             // T-CrudColor：SQL 日志段新增「CRUD 标记样式」下拉，故由 0 → 1；
             // T-DisplayModeToSettings：新增「SQL 显示模式」下拉，故由 1 → 2
+            // T-MagpieGems W2：展示脱敏由复选框改「脱敏模式」分级下拉，故由 2 → 3
             // （断言本意是「其余 section 的下拉未被构建」，绝对数随该 section 内控件变化）
-            assertEquals("仅 SQL 日志段应只含 标记样式 + 显示模式 两个下拉（其余 section 被隐藏）", 2, sqlLogCombos)
+            assertEquals("仅 SQL 日志段应只含 标记样式 + 显示模式 + 脱敏模式 三个下拉（其余 section 被隐藏）", 3, sqlLogCombos)
 
             val fullSeparators = allComponents(full.getRoot()).count { it is TitledSeparator }
             val sqlLogSeparators = allComponents(sqlLogOnly.getRoot()).count { it is TitledSeparator }

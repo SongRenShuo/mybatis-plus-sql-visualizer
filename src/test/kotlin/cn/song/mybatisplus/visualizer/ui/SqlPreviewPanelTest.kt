@@ -61,7 +61,8 @@ import javax.swing.KeyStroke
 class SqlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testShardingRouteAnnotationReadOnlyCollapsedAndCleared() {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled = false
+        // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskMode = "OFF"
         val panel = SqlPreviewPanel(project)
         com.intellij.openapi.util.Disposer.register(testRootDisposable, panel)
         val actual = "ds_0 ::: SELECT * FROM ui_order_0 WHERE id = ? ::: [100]\n" +
@@ -86,12 +87,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testShardingRouteDisplayMaskOnOffAndLiveSettingsChange() {
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        val original = settings.displayMaskEnabled
+        val original = settings.displayMaskMode
         val actual = "private_ds ::: SELECT * FROM physical_order WHERE code = ? ::: [Secret001, BOOK,100]"
         val preview = result().copy(actualSql = actual)
         try {
-            for (initialMask in listOf(true, false)) {
-                settings.displayMaskEnabled = initialMask
+            for (initialMask in listOf("MASK", "OFF")) {
+                settings.displayMaskMode = initialMask
                 val panel = SqlPreviewPanel(project)
                 com.intellij.openapi.util.Disposer.register(testRootDisposable, panel)
                 panel.showResult(preview)
@@ -100,13 +101,13 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 fold.setOn(true)
                 val text = UIUtil.uiTraverser(panel).filter(javax.swing.JTextArea::class.java)
                     .toList().single { it.name == "shardingActualSqlText" }
-                fun assertProjection(mask: Boolean) {
-                    val expected = if (mask) MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked") else actual
+                fun assertProjection(mask: String) {
+                    val expected = if (mask == "MASK") MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked") else actual
                     assertEquals(expected, text.text)
                     assertFalse(text.isEditable)
                     text.selectAll()
                     assertEquals(expected, text.selectedText)
-                    if (mask) {
+                    if (mask == "MASK") {
                         for (secret in listOf("Secret001", "BOOK,100", "private_ds", "physical_order")) {
                             assertFalse(text.text.contains(secret))
                             assertFalse(text.selectedText.contains(secret))
@@ -116,9 +117,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                     assertEquals("展示投影不得改原始预览数据", actual, preview.actualSql)
                 }
                 assertProjection(initialMask)
-                // 同一个已展开面板/同一个文本组件：开关变更即时清掉旧选区及可复制原文。
-                for (mask in listOf(!initialMask, initialMask, true)) {
-                    settings.displayMaskEnabled = mask
+                // 同一个已展开面板/同一个文本组件：模式变更即时清掉旧选区及可复制原文。
+                for (mask in listOf(if (initialMask == "MASK") "OFF" else "MASK", initialMask, "MASK")) {
+                    settings.displayMaskMode = mask
                     com.intellij.openapi.application.ApplicationManager.getApplication().messageBus
                         .syncPublisher(cn.song.mybatisplus.visualizer.config.PluginSettings.SETTINGS_CHANGE_TOPIC)
                         .settingsChanged()
@@ -129,7 +130,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 panel.clear()
             }
         } finally {
-            settings.displayMaskEnabled = original
+            settings.displayMaskMode = original
         }
     }
 

@@ -91,10 +91,11 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
 
     fun test摘要截断在敏感字面量中间_历史展示仍须脱敏() {
         val state = PluginSettings.getInstance().state
-        val savedMask = state.displayMaskEnabled
+        // T-MagpieGems W2：脱敏语义由 displayMaskMode 承载（displayMaskEnabled 只作迁移源）
+        val savedMask = state.displayMaskMode
         val savedMode = state.logListSqlDisplayMode
         try {
-            state.displayMaskEnabled = true
+            state.displayMaskMode = "MASK"
             state.logListSqlDisplayMode = "SINGLE_LINE"
             val secret = "PRIVATE_MARKER_" + "x".repeat(200)
             val entry = sqlEntry("SELECT * FROM account WHERE password = '$secret'")
@@ -104,7 +105,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             assertTrue("密码应按完整字面量打码：$displayed", displayed.contains("password = '***'"))
             assertFalse("截断的敏感片段不得泄漏：$displayed", displayed.contains("PRIVATE_MARKER_"))
         } finally {
-            state.displayMaskEnabled = savedMask
+            state.displayMaskMode = savedMask
             state.logListSqlDisplayMode = savedMode
         }
     }

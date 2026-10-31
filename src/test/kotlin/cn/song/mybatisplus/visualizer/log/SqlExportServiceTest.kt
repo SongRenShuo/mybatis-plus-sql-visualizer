@@ -112,6 +112,34 @@ class SqlExportServiceTest {
         assertTrue(plain.contains("mobile = 13812345678"))
     }
 
+    // ---------- UI-001：白名单豁免贯穿导出链 ----------
+
+    @Test
+    fun testCsv_脱敏开_白名单列豁免() {
+        val out = SqlExportService.format(
+            listOf(sensitiveRow), SqlExportFormat.CSV, mask = true, allowList = listOf("phone"),
+        )
+        assertTrue("白名单列应恢复原文", out.contains("phone = '13812345678'"))
+        assertTrue("非白名单列仍打码", out.contains("password = '***'"))
+        assertFalse("非白名单原值不得出现", out.contains("p@ss"))
+    }
+
+    @Test
+    fun testPortable_脱敏开_白名单列豁免裸数字() {
+        val row = PortableSqlRow(
+            dialect = "MySQL",
+            kind = PortableSqlKind.CRUD,
+            upsert = "no",
+            sql = "SELECT 1 FROM t WHERE mobile = 13812345678",
+        )
+        val out = SqlExportService.formatPortable(
+            listOf(row), SqlExportFormat.TSV, mask = true, allowList = listOf("mobile"),
+        )
+        assertTrue("裸数字在白名单列下应豁免: $out", out.contains("mobile = 13812345678"))
+        val masked = SqlExportService.formatPortable(listOf(row), SqlExportFormat.TSV, mask = true)
+        assertTrue("空白名单仍打码", masked.contains("mobile = ***"))
+    }
+
     // ---------- T-ExportSqlFormat（O-131/R77/D131/V154）：SQL 文件格式 ----------
 
     @Test

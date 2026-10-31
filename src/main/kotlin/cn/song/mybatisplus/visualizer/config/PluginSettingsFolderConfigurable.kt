@@ -91,10 +91,10 @@ class PluginSettingsFolderConfigurable : Configurable {
         // （原页=搜索框+子页列表，用户不知道插件能干什么；「设置两层深」的兜底从搜索变一眼）
         val valuePanel = JPanel(GridLayout(0, 1)).apply {
             border = JBUI.Borders.empty(10, 16, 10, 16)
-            add(JBLabel("<html><b>增强捕获</b>：运行即采集真实参数、耗时、影响行数与目标库</html>"))
-            add(JBLabel("<html><b>免库预览</b>：Wrapper / mapper XML / JPA·HQL / 注解 SQL 写前静态还原</html>"))
-            add(JBLabel("<html><b>MCP 十一工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"))
-            add(JBLabel("<html>兼容矩阵与文档：<a href=\"https://sql-visualizer.jvtools.cn\">sql-visualizer.jvtools.cn</a></html>"))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.capture")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.preview")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.mcp")))
+            add(JBLabel(MpSqlVisualizerBundle.message("settings.landing.docs")))
         }
 
         return JPanel(BorderLayout()).apply {
@@ -505,6 +505,10 @@ class PluginSettingsFolderConfigurable : Configurable {
         }
         private const val ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts"
         private const val ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp"
+        // T-BannedApiCheck（FR-0045 第 2 项）：禁用 API 规则管理页
+        private const val ID_BANNED_API = "cn.song.mybatisplus.visualizer.settings.bannedApi"
+        // T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器页
+        private const val ID_EXTERNAL_TEMPLATE = "cn.song.mybatisplus.visualizer.settings.externalTemplate"
         private const val ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about"
         private const val ID_PROJECT = "cn.song.mybatisplus.visualizer.settings.project"
 
@@ -533,6 +537,17 @@ class PluginSettingsFolderConfigurable : Configurable {
             "settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin,
             SubPageRef(ID_MCP, McpConfigurable::class.java),
         )
+        // T-BannedApiCheck：禁用 API 规则（列表 + 编辑器，即时生效）；图标用平台「检查」语义图标
+        private val PAGE_BANNED_API = SubPageDesc(
+            "settings.section.bannedApi", "settings.section.bannedApi.desc", AllIcons.General.InspectionsWarning,
+            SubPageRef(ID_BANNED_API, BannedApiConfigurable::class.java),
+        )
+
+        /** T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器页。 */
+        private val PAGE_EXTERNAL_TEMPLATE = SubPageDesc(
+            "settings.section.externalTemplate", "settings.section.externalTemplate.desc", AllIcons.Nodes.Plugin,
+            SubPageRef(ID_EXTERNAL_TEMPLATE, ExternalTemplateConfigurable::class.java),
+        )
         private val PAGE_ABOUT = SubPageDesc(
             "settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite,
             SubPageRef(ID_ABOUT, AboutConfigurable::class.java),
@@ -540,7 +555,8 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         /** 落地页列表（顺序即呈现顺序）。 */
         private val SUB_PAGES = listOf(
-            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP, PAGE_ABOUT,
+            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP,
+            PAGE_BANNED_API, PAGE_EXTERNAL_TEMPLATE, PAGE_ABOUT,
         )
 
         /** 所有可搜索的设置项字段 */
@@ -612,9 +628,12 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
-            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
-            // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：T-MagpieGems W2 起该键是
+            // displayMaskModeCombo 分级下拉的行标签（控件可搜索身份仍在本条目，防「跳了不亮」幽灵条目），
+            // 搜「脱敏/展示/导出/打码」必须能翻到该行；完整性由 SettingsPanelSearchableGuardTest 守卫
             fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
+            // T-MagpieGems W2：豁免白名单文本域（行标签同键）；「白名单/豁免」可搜索命中
+            fields.add(SearchableField(b.message("settings.display.mask.allowList"), b.message("settings.display.mask.allowList.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 
@@ -632,9 +651,19 @@ class PluginSettingsFolderConfigurable : Configurable {
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
             fields.add(SearchableField(b.message("settings.editorShowWhitespaces"), b.message("settings.editorShowWhitespaces.tip"), "settings.section.ui", u))
 
+            // T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器页 5 项
+            val et = PAGE_EXTERNAL_TEMPLATE.ref
+            fields.add(SearchableField(b.message("settings.externalTemplate.enabled"), b.message("settings.externalTemplate.enabled.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.statementTags"), b.message("settings.externalTemplate.statementTags.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.command"), b.message("settings.externalTemplate.command.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.timeout"), b.message("settings.externalTemplate.timeout.tip"), "settings.section.externalTemplate", et))
+            fields.add(SearchableField(b.message("settings.externalTemplate.workingDirectory"), b.message("settings.externalTemplate.workingDirectory.tip"), "settings.section.externalTemplate", et))
+
             // 关于
             val a = PAGE_ABOUT.ref
             fields.add(SearchableField(b.message("settings.cache.label"), b.message("settings.cache.tip"), "settings.section.about", a))
+            // NEW-18：一键环境体检入口（搜「体检/环境/诊断」可定位；SettingsPanelSearchableGuardTest 守卫）
+            fields.add(SearchableField(b.message("settings.envCheck.label"), b.message("settings.envCheck.tip"), "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 

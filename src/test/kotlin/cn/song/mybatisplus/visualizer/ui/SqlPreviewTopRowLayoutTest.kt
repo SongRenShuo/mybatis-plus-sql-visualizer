@@ -158,18 +158,18 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             // 模式切换按钮文案随 compactMode 二态（压缩/多行），任一在场即视为直显
             val modeTexts = listOf("panel.mode.singleline", "panel.mode.multiline").map { MpSqlVisualizerBundle.message(it) }
             assertTrue("模式切换按钮应直显（压缩或多行任一文案）", modeTexts.any { it in directTexts })
-            for (key in listOf("panel.param.import", "panel.compare", "panel.share", "panel.rollbackSql", "panel.portableExport", "panel.replayExport", "panel.aiContext", "panel.aiContext.identifiers", "panel.dmlImpact")) {
+            for (key in listOf("panel.param.import", "panel.compare", "panel.share", "panel.rollbackSql", "panel.portableExport", "panel.replayExport", "panel.aiContext", "panel.aiContext.identifiers", "panel.dmlImpact", "panel.traceDoc")) {
                 val folded = MpSqlVisualizerBundle.message(key)
                 assertFalse("低频按钮 $key($folded) 不应直显", folded in directTexts)
             }
             assertEquals(
                 "「更多」菜单应恰为 回滚 SQL/分析 SQL/参数场景/渲染解释/运行 SQL 分析/离线 Trace 导入/" +
                     "对象使用与影响/本地 Schema 比较/优化候选/SELECT 结果比较/导入参数/差异对比/分享/" +
-                    "导出可移植 SQL/导出回放脚本/复制为 AI 上下文/复制为 AI 上下文（含表列名）/DML 影响面 " +
-                    "十八项且顺序稳定" +
+                    "导出可移植 SQL/导出回放脚本/复制为 AI 上下文/复制为 AI 上下文（含表列名）/DML 影响面/导出优化留痕 " +
+                    "十九项且顺序稳定" +
                     "（T-UiCoord F1 起回滚 SQL 居首；O-91 增导出可移植 SQL；R36 增导出回放脚本；" +
                     "R37 增复制为 AI 上下文；T-AiContextLegibility 增含表列名出口；R42 增 DML 影响面；" +
-                    "T-SqlInsight 在回滚 SQL 之后插入九项洞察入口）",
+                    "T-SqlInsight 在回滚 SQL 之后插入九项洞察入口；T-TraceDocExport 增导出优化留痕居末）",
                 listOf(
                     MpSqlVisualizerBundle.message("panel.rollbackSql"),
                     MpSqlVisualizerBundle.message("insight.action"),
@@ -189,6 +189,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                     MpSqlVisualizerBundle.message("panel.aiContext"),
                     MpSqlVisualizerBundle.message("panel.aiContext.identifiers"),
                     MpSqlVisualizerBundle.message("panel.dmlImpact"),
+                    MpSqlVisualizerBundle.message("panel.traceDoc"),
                 ),
                 panel.moreActionsForTest(),
             )

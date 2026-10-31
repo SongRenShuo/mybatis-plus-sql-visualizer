@@ -109,6 +109,63 @@ magpie 出处：`.github/ui-preview/` 全套（详见报告 §五）。按投入
 
 ---
 
-## 七、一句话
+## 七、实施记录（2026-10-24 回填）
+
+**工作树**：`F:\code\Java\Gitee\SongRenShuo\mpsv-magpie-gems`，分支 `t-magpie-gems`。开工时工作树落后 master（缺本计划文件），先从 master 取回计划与索引文件再实施。
+
+### 前提核销（P-1~P-5）
+
+- **P-1 部分成立**：`BundleParityGuardTest` 确已覆盖键集/占位符/引用存在三项；**「硬编码中文字面量」与「图标资源存在性」确无等价物**（grep 命中均为注释或无关类）。全量扫描 516 个 `.kt` 实测**仅 6 处**硬编码中文 UI 字面量 → 因规模极小，**放弃白名单台账方案，改为全量修复**（比维护台账便宜）。
+- **P-2 被推翻（重要）**：计划原写「动作可用性矩阵零先例」。实测 `ConvertSqlToJavaActionTest.kt:32-40` / `ConvertToSqlActionTest.kt:34-42` 已有 `action.update(e)` + `assertTrue(e.presentation.isEnabledAndVisible)` 完整模式 → W3 不是「先探针验证可行性」，而是**可直接扩展成矩阵**。
+- **P-3 部分成立**：UI 主体是 Swing/JB 组件；仅 `SqlLogPanel` 一处用 JCEF（打开在线文档页，非交互面板）→ 浏览器范式不适用，第①层守卫是唯一路线（与原判断一致）。
+- **P-4 已过一遍**：`docs/测试沙盒验证清单.md` 共 **42** 条人工勾选项；本次下沉的 3 类守卫（文案/图标/体积）不直接对应其中条目，故「能砍掉多少人工验收」本轮**未量化**（留待后续逐条评估）。
+- **P-5 成立**：`dev-support/` 下 10 个脚本均无「验证 HEAD sha」记录机制 → W5 确需新建。
+
+### 提交链
+
+见 `git log` 本分支对应提交；关键产出：
+
+| 产出 | 文件 |
+|---|---|
+| W1-a 守卫 + 6 处修复 | `HardcodedUiTextGuardTest.kt`；`PluginSettingsFolderConfigurable.kt`（4 处落地页文案）、`SqlPreviewPanelParamPanel.kt`（foreach tooltip）、`NativeSearchTextField.kt`（历史 tooltip）；bundle 中英各 +5 键 |
+| W1-b | `IconResourceGuardTest.kt`（声明存在性 + 模板目录非空 + 自证） |
+| W1-c | `GiantFileBudgetTest.kt`（top 10 巨型文件 + 1.5% 余量，提额须留理由） |
+| W3 | `ActionAvailabilityMatrixTest.kt`（6 个选中类动作的空上下文**不可用**矩阵 + 自证） |
+| W5 | `dev-support/gate-readout.ps1`（record/verify/show 三态） |
+| W6-a | `record/gifkit.py`：`FORBIDDEN_LABELS` + `click/double_click/right_click` 的 `label=` 护栏 |
+| W6-b | `record/BASELINE.md` §五「产物局限声明」（三类盲区 + 成片说明模板） |
+| W6-c/d | `record/plan_runner.py`（plan 校验 + 确定性重放 + dry-run）、`record/uitree.py`（可定位树 dump）、`record/plans/README.md` + `example-preview.json` |
+
+### W2 结论：不新建，已有等价物
+
+计划候选落点经核实**均已参数化且有测试**：`SqlPreviewDialog.initialSize(w,h)`（大屏/小屏/无屏幕信息三档断言，`SqlPreviewDialogSizeTest`）、`ErrorReportDialog.preferredGrowth` 等纯函数、`SqlPreviewTopRowLayoutTest` 的截断逻辑直调。**不为了凑条目强行重构**（计划原文口径）。
+
+### W4 结论：前序任务已落地
+
+`docs/开发流程/派活与验收清单.md` 验收清单第 7 条即「未跑过的项**逐条标 not run** 并写明原因」，派活模板「报告」段亦已含同款硬条款 → 本轮只核实，未重复改。
+
+### 读数
+
+- 定向（绿）：`HardcodedUiTextGuardTest` 3/0/0、`IconResourceGuardTest` 3/0/0、`GiantFileBudgetTest` 2/0/0、`ActionAvailabilityMatrixTest` 2/0/0、`BundleParityGuardTest` 5/0/0（回归确认新键未破 parity）、`SettingsPanelSearchableGuardTest` 4/0/0（回归）——**合计 19/0/0**。
+- 反向（全部恰红）：
+  - W1-a：植入 `JLabel("反向探针中文")` → 主用例 FAILED，摘除后回绿。
+  - W1-b：删 `icons/sqlLog.svg`（plugin.xml 引用）→ 2 例 FAILED（声明存在性 + 自证），恢复后回绿、`git status` 零残留。
+  - W3：摘掉 `SelectedTableSqlTemplateAction.update` 的 `isEnabled` 赋值 → 自证用例 FAILED。
+  - W5：篡改台账 sha → verify 报「读数已过期」且真实退出码 1。
+  - W6-a：6 类危险词（删除/Invalidate Caches/Update Plugin/重启/卸载/Sign out）全部拦截，安全标签放行，无 label 渐进记录。
+  - W6-c：target 无映射 / 非法 do / 空 steps 三组各恰 1 红。
+  - **W6-d（补充验证，2026-10-24 复核发现首版只验了「文件存在」）**：`record/uitree.py` 依赖 JVM Swing 组件，首版交付时**未编译、未执行**，属弱验证。补做：`python -m py_compile` + AST 解析通过；新增 `record/verify_uitree.py`（最小 Swing 桩：`isShowing`/`getAccessibleContext`/`getComponents`/`getName`/`getLocationOnScreen`/`width`/`height`/`getText`）跑正反例——**正例** build_tree 带出可见组件/类名/role/rect/嵌套递归、find_by_text 命中并给矩形、dump_tree 落文件；**反例** 隐藏组件不进树且不可命中、不存在文本返回 None、空 needle 返回 None、`max_lines` 截断生效且写 `(cut)`。反向：摘掉可见性剪枝 `if not visible: return` → 验证脚本恰 1 红（「把 isShowing=false 的组件也 dump 了」），恢复后回绿、`git status` 零残留。
+- 未跑：全量 `testShards`（not run，留统一收口）；真机/沙盒 UI 走查（not run，本轮不涉及 UI 行为变更）；`verifyGate`/`verifyPlugin`（not run，本轮未动 build.gradle.kts/plugin.xml EP/依赖版本）；`uitree.py` 在**真实 IDE 进程内**（真实 Swing 组件树）的端到端使用（not run，需 attach 到 IDE 执行，属后续实拍时验证）。
+
+### 实施中新发现的坑
+
+1. **PowerShell 脚本必须带 UTF-8 BOM**：无 BOM 的 `.ps1` 在 PS 5.1 下按 ANSI 解码中文注释 → 引号错配报「Missing closing '}'」，且报错行号指向无关位置。仓内既有 `push-all.ps1`/`ci-verify.ps1` 均带 BOM。
+2. **Git Bash 直调 `powershell -File` 会吞退出码**（脚本 `exit 1` 而 `$?` 显示 0）：核验退出码须 `powershell -Command "& '...ps1' args; exit \$LASTEXITCODE"`。
+3. **动作矩阵自证不能只盯 `isVisible`**：`SelectedTableSqlTemplateAction` 一类动作只设 `isEnabled`（始终可见、按上下文灰置，平台惯用法）。自证须断言「可见性或可用性至少一个变化」，且每个动作用独立 `AnActionEvent`（共用 Presentation 会让上一条结论污染下一条——第一版就踩了）。
+4. **主用例口径也跟着改了**：第一版断言「空上下文下 `isVisible == false`」，实测 3 个选中类动作本来就设计成常驻可见 → 假红。真实不变量是**不可用**（`isEnabled == false`）。教训：守卫口径要以**生产代码的实际契约**为准，不能按「更严格更好」想象。
+
+---
+
+## 八、一句话
 
 本计划要搬的不是「更多测试」，而是 magpie 那条取舍原则：**能机械判定的 UI 规则全部下沉成秒级守卫进日常门禁，剩下的必须人工的部分强制留可审计记录，且明确登记哪一层测不到什么。**

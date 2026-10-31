@@ -191,7 +191,11 @@ class SqlListFragmentRendererTest {
         val entry = LogSqlEntry(rawSql = longColumnSql, restoredSql = longColumnSql, params = emptyList())
         assertFalse("夹具前提：摘要覆盖不到 FROM（否则本用例无区分力）", entry.summary.contains("FROM"))
 
-        val source = displaySqlForList(entry, SqlListDisplayMode.KEYWORD_WRAP, masked = false)
+        val source = displaySqlForList(
+            entry,
+            SqlListDisplayMode.KEYWORD_WRAP,
+            maskMode = cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF,
+        )
         assertTrue("取源须是完整 SQL（含 FROM 之后的表名）", source.contains("FROM biz_car_order_record"))
 
         val lines = SqlListFragmentRenderer.semanticLineFragments(source, SqlListDisplayMode.KEYWORD_WRAP)
@@ -204,10 +208,14 @@ class SqlListFragmentRendererTest {
     @Test
     fun test单行模式仍取摘要_不受券01影响() {
         val entry = LogSqlEntry(rawSql = longColumnSql, restoredSql = longColumnSql, params = emptyList())
-        assertEquals("单行模式取摘要（一行封顶）", entry.summary, displaySqlForList(entry, SqlListDisplayMode.SINGLE_LINE, false))
+        assertEquals(
+            "单行模式取摘要（一行封顶）",
+            entry.summary,
+            displaySqlForList(entry, SqlListDisplayMode.SINGLE_LINE, cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF),
+        )
         assertTrue(
             "格式化模式与关键字换行同源：完整 SQL",
-            displaySqlForList(entry, SqlListDisplayMode.FORMATTED, false).contains("biz_car_order_record"),
+            displaySqlForList(entry, SqlListDisplayMode.FORMATTED, cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF).contains("biz_car_order_record"),
         )
     }
 

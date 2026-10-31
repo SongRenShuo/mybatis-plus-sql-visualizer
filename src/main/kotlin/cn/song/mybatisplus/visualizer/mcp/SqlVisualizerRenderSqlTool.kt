@@ -22,7 +22,10 @@ open class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
             "(line is 1-based; omit for the first statement), or pass xmlSnippet + " +
             "sourceType='xml_mapper' for a mapper XML text. One statement per call: " +
             "when several candidates match the location, the first is rendered and the output notes it; " +
-            "for multi-statement log text use sqlv_render_logs. This is a deterministic " +
+            "for multi-statement log text use sqlv_render_logs. If the user configured an external " +
+            "template renderer (Settings | Tools | SQL Visualizer | External SQL Template), statements " +
+            "in custom template files are rendered by that user command; pass paramsJson to hand a JSON " +
+            "object to it verbatim. This is a deterministic " +
             "renderer: it returns the executable SQL itself, not a validation verdict. " +
             "Read-only: never executes SQL.",
     )
@@ -36,13 +39,21 @@ open class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
         line: Int = 0,
         xmlSnippet: String = "",
         sourceType: String = "",
+        paramsJson: String = "",
     ): String = audit("sqlv_render_sql") {
         val project = requireProject()
-        val (parsed, error) = McpRenderInput.parse(filePath, line.takeIf { it > 0 }, xmlSnippet, sourceType)
+        val (parsed, error) = McpRenderInput.parse(
+            filePath,
+            line.takeIf { it > 0 },
+            xmlSnippet,
+            sourceType,
+            paramsJson,
+        )
         if (parsed == null) throwExpected(error!!)
         requireSmart(project)
         val outcome = when {
-            parsed.filePath != null -> McpSourceLocator.renderAtLine(project, parsed.filePath, parsed.line)
+            parsed.filePath != null ->
+                McpSourceLocator.renderAtLine(project, parsed.filePath, parsed.line, parsed.paramsJson)
             parsed.xmlSnippet != null -> McpSourceLocator.renderXmlSnippet(project, parsed.xmlSnippet)
             else -> throwExpected(
                 McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "provide filePath+line or xmlSnippet+sourceType."),
