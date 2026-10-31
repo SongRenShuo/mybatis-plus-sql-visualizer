@@ -447,6 +447,64 @@ tasks.register<Test>("testExternal") {
     doLast { logger.lifecycle("testExternal END ${System.currentTimeMillis()}") }
 }
 
+// ---------- T-DialectExternalGate（2026-10-31，用户定例） ----------
+// 真机方言验证的门禁口径：**测试服务器外部实例**，DBX 只做临时探测，Docker 用例维持默认关
+// （DialectDockerVerificationTest 仍可 -PmpvDockerTests=true 本地手工开，但不再承担发版判据）。
+//
+// 为什么单独成任务而不是塞进 testShards：它要连外部网络与一批真库，离线/实例下线会把权威全量
+// 拖红；作为独立 verification 任务显式触发，读数写 build/reports/dialectExternalVerify/summary.md
+// 并在发行说明里登记，既不污染日常门禁，也不再出现「Docker 不可用→静默跳过→真机读数空缺还写成通过」。
+//
+// 矩阵文件默认 `.local/dialect-external-matrix.properties`（含明文凭据，.local 已 gitignore），
+// 可用 -PdialectExternalMatrix=<路径> 覆盖；模板见 dev-support/dialect-external/matrix.example.properties。
+// 矩阵路径在配置期就求成普通 String：用 provider 包 layout 访问器会把 Gradle 脚本对象引用
+// 带进配置缓存（实测 "cannot serialize Gradle script object references"），故不用 provider 惰性求值。
+val dialectExternalMatrixPath: String = providers.gradleProperty("dialectExternalMatrix")
+    .getOrElse(layout.projectDirectory.file(".local/dialect-external-matrix.properties").asFile.absolutePath)
+
+tasks.register<Test>("dialectExternalVerify") {
+    group = "verification"
+    description =
+        "真机方言验证（外部实例，无 Docker）：把插件渲染的 SQL 套件与保留字扫描在真实引擎上执行；" +
+            "前置＝矩阵文件（默认 .local/dialect-external-matrix.properties）与实例可达，缺失硬失败并给指引"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    // classpath 构造同 testExternal：main+test output 前置，剔除插件自身 jar（其 classpath 由沙盒提供）
+    classpath = sourceSets["main"].output + sourceSets["test"].output +
+        tasks.named<Test>("test").get().classpath.filter {
+            !it.name.startsWith("mybatis-plus-sql-visualizer-")
+        }
+    filter {
+        includeTestsMatching("cn.song.mybatisplus.visualizer.sql.verify.DialectExternalMatrixVerificationTest")
+    }
+    maxParallelForks = 1
+    // 每轮真跑：实例侧数据会被套件自行清理，但任务本身无源码变更时会被判 UP-TO-DATE，
+    // 读旧 XML 等于拿上一轮读数冒充本轮（与 testExternal 同款理由）
+    outputs.upToDateWhen { false }
+    systemProperty("mpvs.external.matrix", dialectExternalMatrixPath)
+    systemProperty(
+        "mpvs.external.summary",
+        layout.buildDirectory.file("reports/dialectExternalVerify/summary.md").get().asFile.absolutePath,
+    )
+    // 路径经 inputs.property 传给 doFirst：直接闭包引用脚本级 val 会被配置缓存判为
+    // 「Gradle script object references」（实测两次红），inputs 是官方 CC 兼容通道
+    inputs.property("mpvDialectMatrix", dialectExternalMatrixPath)
+    doFirst {
+        // 前置缺失硬失败并给可执行指引——不做静默跳过（跳过会让「没验」伪装成「验过」）
+        val matrixPath = inputs.properties["mpvDialectMatrix"] as String
+        val matrix = File(matrixPath)
+        if (!matrix.isFile) {
+            throw GradleException(
+                "dialectExternalVerify 需要外部实例矩阵文件：$matrixPath 不存在。\n" +
+                    "  模板：dev-support/dialect-external/matrix.example.properties\n" +
+                    "  实际文件放 .local/（整目录 gitignore，可含明文凭据）：.local/dialect-external-matrix.properties\n" +
+                    "  或用 -PdialectExternalMatrix=<路径> 指向别处；实例清单见 .local/test-databases.md",
+            )
+        }
+        logger.lifecycle("dialectExternalVerify START ${System.currentTimeMillis()} matrix=$matrixPath")
+    }
+    doLast { logger.lifecycle("dialectExternalVerify END ${System.currentTimeMillis()}") }
+}
+
 tasks.register<Test>("testFast") {
     group = "verification"
     description =

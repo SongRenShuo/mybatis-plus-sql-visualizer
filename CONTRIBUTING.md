@@ -103,6 +103,9 @@
 | `./gradlew testShards` | **需要** | 不需要 | 缺 demo 时 `Demo*` 用例失败 |
 | `./gradlew testDatabase` / `testDb*` | **需要** | **需要** `mpj_demo` | 缺库时多数用例显式跳过 |
 | `./gradlew e2eFakeIde` | **需要**（含 Maven 与 `~/.m2`） | **需要** `mpj_demo` + 初始数据 | 前置缺失硬失败并给指引 |
+| `./gradlew dialectExternalVerify` | 不需要 | 不需要（连外部实例） | 缺矩阵文件硬失败并给指引 |
+
+`dialectExternalVerify` 是真机方言验证的发版口径：把插件渲染的 SQL 套件与全量保留字扫描放到**真实引擎**上执行，逐库产出 PASS / SKIP / FAIL 与词表规模，摘要写到 `build/reports/dialectExternalVerify/summary.md`。它连的是 `.local/dialect-external-matrix.properties` 里登记的实例（模板见 `dev-support/dialect-external/matrix.example.properties`，实例清单与凭据见 `.local/test-databases.md`，两者都在 gitignore 内）。Docker 版 `DialectDockerVerificationTest` 只保留作本地可选（`-PmpvDockerTests=true`），不承担发版判据；DBX 只做临时探测。
 
 ### 准备 demo 与数据库
 
