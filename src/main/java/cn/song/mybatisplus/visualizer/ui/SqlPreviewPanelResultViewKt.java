@@ -206,7 +206,7 @@ public final class SqlPreviewPanelResultViewKt {
         // T-DialectInferFix：渲染方言与临时文件映射必须同源。来源自带的精确方言（日志/历史条目）
         // 优先，否则走统一决策链（数据源 → 项目配置/驱动依赖 → SQL 语法特征）。判不出来时保持 null，
         // 由映射侧继承平台设置——不再让渲染端与 PSI 各自落 MySQL。
-        PreviewResult result = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolverKt
+        PreviewResult result = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver
                 .withResolvedDialect(input, p.project);
         p.current = result;
         // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
