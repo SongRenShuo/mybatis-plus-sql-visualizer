@@ -676,6 +676,18 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
+                emptyList(),
+                "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
+                    "<lang.parserDefinition>（缺了平台会回落到基语言 SQL 的 parser definition，其 file node " +
+                    "type 绑基类 SqlLanguage，SqlParserDefinitionBase.createFile 强转 SqlLanguageDialect " +
+                    "抛 CCE → 预览 PSI 建不出来、预热降级）。判定内核为纯文本扫描" +
+                    "（dialectClasses / parserDefinitionLanguages 两个提取器 + 数量与配对断言），" +
+                    "无返回违规点集合的 Boolean 判定函数，故 decisionFns 留空；" +
+                    "灵敏度=摘掉一条 lang.parserDefinition 注册必红（实施轮实测）。" +
+                    "（k2j：判定对象是 META-INF 资源 xml，双方言 FQCN/语言 id 两分支一致，无扫描根适配点。）",
+            ),
+            GuardEntry(
                 "log/EmptyTextLinkApiGuardTest.kt",
                 emptyList(),
                 "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +
@@ -743,6 +755,37 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
                     "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
+            ),
+            // ---- T-DialectInferFix 券 06：方言兜底反向守卫（2026-10-29） ----
+            GuardEntry(
+                "convention/DialectInferFallbackGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "insideString",
+                        FnKind.HELPER,
+                        "注释剥离助手（返回 Boolean，不是判定内核）：判断行内 `//` 是否落在字符串字面量里，" +
+                            "供 stripComments 决定是否截断；被 stripComments 的 map 分支调用。",
+                        via = listOf("stripComments"),
+                    ),
+                ),
+                "方言兜底反向守卫（T-DialectInferFix 券 06）：判定内核内联于四个用例——" +
+                    "读 SqlPreviewPanelEditorLifecycle 断言不再出现 MySQL 硬兜底符号" +
+                    "（MYSQL_LANGUAGE_ID / setMySqlOnEdt）且走继承入口 inheritedLanguageId；" +
+                    "读 PreviewSourceContext 断言无「声明了没人读」的精确 URL/数据源字段；" +
+                    "读日志识别通道断言 capturedDialect 在场；另有用例以合成样本自证危险形态必红。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空。" +
+                    "（k2j：扫描根 src/main/java；编排件承载 SqlPreviewPanelEditorLifecycleKt.java；" +
+                    "反查打开入口独立成 LogEntryPreviewOpener.java，方言传参锚点改 toPreviewResult + " +
+                    "entry.dialectName() Java 实参形态。）",
+            ),
+            // ---- changeNotes 评分引导句守卫（2026-10-30，用户二次指出） ----
+            GuardEntry(
+                "convention/ChangeNotesRatingLineGuardTest.kt",
+                emptyList(),
+                "changeNotes 评分引导句只留最新块守卫：判定内核内联于两个用例——数 gradle/plugin-change-notes.html " +
+                    "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；并断言该行落在第一个 <h2> 块内。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度＝把该行复制到第二块必红、只留历史块必红，两向已实测。",
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
