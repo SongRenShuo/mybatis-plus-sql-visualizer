@@ -120,6 +120,120 @@ public final class DialectPreMapping {
     }
 
     /**
+     * T-DialectInferFix：**继承值**读取（项目级 → 全局默认），不含本目录自己的显式映射。
+     *
+     * <p>与 {@link #configuredLanguageId} 的区别：后者走 {@code getConfiguredMapping}（文件/目录优先），会把插件
+     * 历史上写给预览目录的兼容兜底也读出来——而那条正是要覆盖掉的旧值。这里从<b>项目根</b>读
+     * 继承链，拿不到再退 {@code SqlDialectMappings.getConfiguredDefaultSqlDialect()}（设置页「全局 SQL 方言」，
+     * 243/253/262/2026.2 均为 public static，本仓既有反射口径同族）。
+     */
+    /** T-DialectInferFix：项目根继承值 → 全局默认（无需 VirtualFile，渲染侧与映射侧共用同一口径）。 */
+    public static String inheritedLanguageId(Project project) {
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return null;
+            }
+            String basePath = project.getBasePath();
+            VirtualFile root = basePath != null
+                    ? com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(basePath)
+                    : null;
+            if (root != null) {
+                Object inherited = mappings.getClass()
+                        .getMethod("getConfiguredMapping", VirtualFile.class)
+                        .invoke(mappings, root);
+                if (inherited instanceof Language language) {
+                    String id = language.getID();
+                    if (id != null && !id.isBlank()) {
+                        return id;
+                    }
+                }
+            }
+            return defaultLanguageId(project);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** T-DialectInferFix：平台全局默认 SQL 方言的 language id（用户设置页「全局 SQL 方言」）。 */
+    public static String defaultLanguageId(Project project) {
+        try {
+            Object dialect = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
+                    .getMethod("getConfiguredDefaultSqlDialect")
+                    .invoke(null);
+            return dialect instanceof Language language ? language.getID() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** T-DialectInferFix：本文件/目录**自有**映射的 language id（无则 null；不含继承）。 */
+    public static String configuredImmediateLanguageId(Project project, VirtualFile vf) {
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return null;
+            }
+            Object immediate = mappings.getClass()
+                    .getMethod("getImmediateMapping", VirtualFile.class)
+                    .invoke(mappings, vf);
+            return immediate instanceof Language language ? language.getID() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * T-DialectInferFix：清除插件自己写在预览目录上的显式映射（{@code setMapping(vf, null)}）。
+     *
+     * <p>线程口径与 {@link #ensureMapped} 完全一致：写映射必须 EDT（{@code VcsVFSListener} 断言），后台线程
+     * 派发 + 有界等待。失败只 warn，不影响预览继续（最差保留旧映射）。
+     */
+    public static boolean clearMapping(Project project, VirtualFile vf, long waitMs) {
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            return clearMappingOnEdt(project, vf);
+        }
+        CountDownLatch done = new CountDownLatch(1);
+        final boolean[] cleared = {false};
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                cleared[0] = clearMappingOnEdt(project, vf);
+            } finally {
+                done.countDown();
+            }
+        });
+        boolean signaled;
+        try {
+            signaled = done.await(waitMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException t) {
+            signaled = false;
+            Thread.currentThread().interrupt();
+        }
+        return signaled && cleared[0];
+    }
+
+    /** 默认等待预算重载（master 默认参数）。 */
+    public static boolean clearMapping(Project project, VirtualFile vf) {
+        return clearMapping(project, vf, EDT_SET_MAPPING_WAIT_MS);
+    }
+
+    private static boolean clearMappingOnEdt(Project project, VirtualFile vf) {
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return false;
+            }
+            mappings.getClass()
+                    .getMethod("setMapping", VirtualFile.class, Object.class)
+                    .invoke(mappings, vf, null);
+            return true;
+        } catch (Throwable e) {
+            LOG.warn("[M36] dialect clearMapping skipped: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * O-136：EDT 执行 setMapping(vf, targetLanguage)——与 {@link #setMySqlOnEdt} 同一线程断言与降级口径，
      * 方言实例由调用方解析（ExecDialectRouting.resolveTargetLanguage，SqlDialectMappings 可用值家族）。
      */
