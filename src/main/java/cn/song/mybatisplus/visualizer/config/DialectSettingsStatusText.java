@@ -30,6 +30,16 @@ final class DialectSettingsStatusText {
                 source = MpSqlVisualizerBundle.message("settings.dialect.inferred.projectCandidates");
             } else if (decision.source() == DialectDecisionEngine.Source.PROJECT_AGENT) {
                 source = MpSqlVisualizerBundle.message("settings.dialect.inferred.projectAgent");
+            } else if (decision.source() == DialectDecisionEngine.Source.PROJECT_CONFIG) {
+                // T-DialectInferFix：没有 IDE 数据源时的三层证据，必须明说「据什么判的」
+                source = MpSqlVisualizerBundle.message("settings.dialect.inferred.projectConfig");
+            } else if (decision.source() == DialectDecisionEngine.Source.PROJECT_DEPENDENCY) {
+                source = MpSqlVisualizerBundle.message("settings.dialect.inferred.projectDependency");
+            } else if (decision.source() == DialectDecisionEngine.Source.SQL_SYNTAX) {
+                source = MpSqlVisualizerBundle.message("settings.dialect.inferred.sqlSyntax");
+            } else if (decision.source() == DialectDecisionEngine.Source.IDEA_DIALECT
+                || decision.source() == DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT) {
+                source = MpSqlVisualizerBundle.message("settings.dialect.inferred.ideaDialect");
             } else {
                 source = MpSqlVisualizerBundle.message("settings.dialect.inferred.otherSource");
             }

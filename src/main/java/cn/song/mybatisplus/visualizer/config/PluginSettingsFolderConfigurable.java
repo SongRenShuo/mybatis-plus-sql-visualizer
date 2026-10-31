@@ -739,6 +739,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         // 界面与操作
         SubPageRef u = PAGE_UI.ref;
         fields.add(new SearchableField(msg("settings.showGutterIcon"), "", "settings.section.ui", u));
+        // T-MapperNavCoexistYield：共存让位开关（界面节，默认开）
+        fields.add(new SearchableField(msg("settings.mapperNavYield"), msg("settings.mapperNavYield.tip"), "settings.section.ui", u));
         // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
         fields.add(new SearchableField(msg("settings.xmlInlineSql"), msg("settings.xmlInlineSql.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.language"), "", "settings.section.ui", u));

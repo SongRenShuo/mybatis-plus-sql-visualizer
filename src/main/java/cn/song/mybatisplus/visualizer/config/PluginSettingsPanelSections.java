@@ -430,6 +430,10 @@ public final class PluginSettingsPanelSections {
                 addRow(p, g, "", self.gutterGroupJdbcCheck);
                 addRow(p, g, "", self.gutterGroupInlineFallbackCheck);
                 addRow(p, g, "", self.gutterGroupOtherCheck);
+                // T-MapperNavCoexistYield：共存让位开关（默认勾选＝MyBatisCodeHelperPro 启用时让出跳转图标）
+                self.mapperNavYieldCheck.setText(MpSqlVisualizerBundle.message("settings.mapperNavYield"));
+                self.mapperNavYieldCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.mapperNavYield.tip"));
+                addRow(p, g, "", self.mapperNavYieldCheck);
                 self.xmlInlineSqlCheck.setText(MpSqlVisualizerBundle.message("settings.xmlInlineSql"));
                 self.xmlInlineSqlCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip"));
                 addRow(p, g, "", self.xmlInlineSqlCheck);

@@ -683,6 +683,8 @@ public class PluginSettingsPanel implements Disposable {
     public final JBCheckBox gutterGroupJdbcCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"));
     public final JBCheckBox gutterGroupInlineFallbackCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"));
     public final JBCheckBox gutterGroupOtherCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"));
+    /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
+    public final JBCheckBox mapperNavYieldCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"));
 
     /**
      * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 {@code com.corp.shared.util.}）。
@@ -1660,6 +1662,8 @@ public class PluginSettingsPanel implements Disposable {
             || gutterGroupJdbcCheck.isSelected() != s.getGutterGroupJdbc()
             || gutterGroupInlineFallbackCheck.isSelected() != s.getGutterGroupInlineFallback()
             || gutterGroupOtherCheck.isSelected() != s.getGutterGroupOther()
+            // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
+            || mapperNavYieldCheck.isSelected() != s.getMapperNavYieldToCodeHelper()
             || xmlInlineSqlCheck.isSelected() != s.getXmlInlineSqlEnabled()
             || xmlSynHiCheck.isSelected() != s.getXmlSynHiEnabled()
             || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
@@ -1842,6 +1846,7 @@ public class PluginSettingsPanel implements Disposable {
             s.setGutterGroupJdbc(gutterGroupJdbcCheck.isSelected());
             s.setGutterGroupInlineFallback(gutterGroupInlineFallbackCheck.isSelected());
             s.setGutterGroupOther(gutterGroupOtherCheck.isSelected());
+            s.setMapperNavYieldToCodeHelper(mapperNavYieldCheck.isSelected());
             s.setXmlInlineSqlEnabled(xmlInlineSqlCheck.isSelected());
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.setXmlSynHiEnabled(xmlSynHiCheck.isSelected());
@@ -1958,6 +1963,7 @@ public class PluginSettingsPanel implements Disposable {
             gutterGroupJdbcCheck.setSelected(s.getGutterGroupJdbc());
             gutterGroupInlineFallbackCheck.setSelected(s.getGutterGroupInlineFallback());
             gutterGroupOtherCheck.setSelected(s.getGutterGroupOther());
+            mapperNavYieldCheck.setSelected(s.getMapperNavYieldToCodeHelper());
             xmlInlineSqlCheck.setSelected(s.getXmlInlineSqlEnabled());
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.setSelected(s.getXmlSynHiEnabled());
