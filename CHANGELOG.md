@@ -2,22 +2,11 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased] - 2026-10-31
+## [Unreleased]
 
-### Fixed
-- **mapper XML 动态标签体内敲 `#`/`$` 不再自动补 `{}`（T-XmlBraceNested，演示录制实测）**：`ParamBraceTypedHandler.inStatementText` 只看一层 parent 且把「子标签体内正文」与「子标签标记区」混为一谈——`<where>` 下的 `<if>`、`<choose>` 下的 `<when>` 等真实 mapper 主流排版里敲 `#` 只落裸字符，功能全灭；光标落在语句标签自身属性区（`<select id="a|">`）还会误插。现改为「最近语句标签祖先（任意深度）+ 体内容孩子推导标记区」：体内正文与 `</if>` 右侧接管，起始标记区（含属性间隙）与结束标记区不接管。`ParamBraceTypedHandlerTest` 新增 5 用例（嵌套 if/when 体内、单层 if 体内、语句属性区、自闭合子标签之后）全绿，原 6 用例回归绿
+## [2026.10.31] - 2026-10-31
 
-## [2026.10.31-beta.2] - 2026-10-31
-
-### Changed
-- **增强捕获 agent 的宿主控制台输出改为默认静默（用户令「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）**：原先每次挂载打一行 `attach retransform: matched/wove/...`、premain 打候选类数、每轮补挂各打一行、首条织入事件再打一行，日常噪音大于信息量。现分两级：诊断/进度行默认不打，仅 `-javaagent:…=logLevel=debug`（含 `verbose` / `trace`）时输出；真实降级与熔断必报，与级别无关——预算耗尽、kill switch、`getAllLoadedClasses` 失败、注册盲区（仅一次）、`PORT_ABANDONED`、install degraded、驱动名单预载失败。attach 汇总行额外保留「有问题就打」：`failed>0` 或 `predicateFailed>0` 时照常输出，全零静默（「本次 attach 命中多少」由 IDE 侧心跳的 `AgentAttachStats` 诊断行承载，不必占宿主控制台）。采集与上报链路零变化，静音只作用于宿主 stderr 诊断行
-
-### Fixed
-- **方言为 GaussDB / 达梦 / 瀚高 / 海量时预览恒降级、表列补全不可用（T-PreviewPsiDialect，用户真机报障）**：预览顶部常驻黄色横幅「预览以简化模式打开——临时文件解析失败；表/列补全暂不可用」，10 次预览 10 次降级。真机日志实证根因是 `ClassCastException: SqlLanguage cannot be cast to SqlLanguageDialect`（当天 9 次，3 次打成 SEVERE 且点名本插件），栈落在 `SqlParserDefinitionBase.createFile:90` ← `SingleRootFileViewProvider.getPsiInner` ← `FileManagerImpl.findFile` ← 预览预热的 `awaitPreviewPsiLanguage`。**成因**：四个自注册方言（DM / GaussDB / HighGo / Vastbase）此前只注册了 `<sql.dialect>`，没有为该语言注册 `<lang.parserDefinition>`——平台查 ParserDefinition 时沿语言链上溯，落到基语言 `SQL` 的那份（其 file node type 绑的是基类 `SqlLanguage`），`createFile` 里的 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 强转必然失败，PSI 建不出来，`PsiManager.findFile` 返回 null，预热按 `PSI_UNAVAILABLE` 降级。平台内置方言 SQL / GenericSQL / SQL92 全是成对注册的，我们这四对少了后一半。**修复**：①新增 `sql/SqlFamilyParserDefinitions.kt`，为四个方言各补一个 ParserDefinition（file node type 绑本方言语言，lexer / parser / elementFactory 委托 `Sql92ParserDefinition`，与方言 `createTokensHelper` 的委托口径一致），注册面在 `database-optional.xml` 成对补齐；②`mapPreviewDialectBeforePsi` 增加映射前探测——目标语言的 ParserDefinition 若不在 SQL 方言族，这次就不映射（补全退 GenericSQL），不再拖垮整条预览；③`PsiManager.findFile` 两处调用包 `runCatching`，平台契约异常降为一条带栈 WARN，不再以 SEVERE 记到插件头上。**守卫**：`SqlDialectParserDefinitionPairingGuardTest` 静态校验「每个 `<sql.dialect>` 必有同名 `lang.parserDefinition`」，`PlatformSqlDialectRegistrationTest` 新增 DB 通道用例真建 PSI（摘掉任一条注册即红）
-
-## [2026.10.31-beta.1] - 2026-10-31
-
-> 内测版（Gitee 抢先体验通道）。范围＝dev 分支 59 笔合流 + master 侧渲染性能一笔；方言总数 11 → 14。
+> 范围＝v2026.10.30 正式版之后的全部用户可见增量（含 v2026.10.31-beta.1 / beta.2 两轮内测的累计内容）；方言总数 11 → 14。
 
 ### Added
 - **GaussDB 独立方言（T-GaussDbDialect）**：此前 `jdbc:gaussdb://` 被并进 `OpenGaussDialect`（一 object 两前缀），连接能认、SQL 能渲染、EXPLAIN 能出，但设置页下拉、日志库角标、MCP 方言名一律显示 `openGauss`——用户看不到 GaussDB。现拆出 `GaussDbDialect`：渲染形态与 openGauss 同形不同名（六项能力不分叉），保留字按 GaussDB 官方口径单独成表。增强捕获同批补登记华为两族驱动 `com.huawei.gaussdb.jdbc` / `com.huawei.opengauss.jdbc`——此前 connect / 语句 / prepare 三面全未登记，attach 后 `matched=0`、零事件零角标且宿主侧无任何报错；顺带改正仓内三处写反的 openGauss 驱动谱系注释（实为 2.x/3.x `org.opengauss.*`、5.x/7.x `org.postgresql.*`），并撤掉据错误谱系作出的「已被 PG 覆盖」失真认领
@@ -33,11 +22,14 @@
 - **SQL Server 无排序分页渲染出非法 T-SQL**：`OFFSET … ROWS FETCH NEXT … ROWS ONLY` 在 SQL Server 上必须跟在 `ORDER BY` 之后，而 `SqlGenerator` 只在 `orderBy` 非空时才输出 `ORDER BY`、`limit` 无条件拼接——「无排序 + 分页」的预览产物在真机直接 `Incorrect syntax near '0'.`。现新增 `Dialect.limitRequiresOrderBy` 能力位（仅 SQL Server 覆写 true），无排序且带分页时补语义中性的 `ORDER BY (SELECT NULL)` 占位，位置在分页子句之前。**旧用例为什么没抓到**：`DialectH2VerificationTest` 用 H2 的 `MODE=MSSQLServer` 跑兼容面，H2 不强制这条规则，与 OceanBase 档位误登同型——兼容模式 ≠ 引擎现实。回归用例三条判据（补占位且位于 OFFSET 之前 / 已有排序不补 / MySQL 与 PostgreSQL 不引入 ORDER BY），反向验证短路兜底分支即红
 - **premain 补挂线程永不执行（单位量纲混用）**：`msProp` 统一返回纳秒（预算比较需要），但 premain 首轮延迟与轮间隔也走它，随后被直接当毫秒喂 `Thread.sleep`——默认 10 秒变成约 10^10 毫秒（约 317 年），补挂线程从未执行。白名单驱动不受影响（靠类加载期织入），**未知驱动的 premain 形态 100% 静默**，正是本轮兜底要解决的场景。现拆出 `rawMsProp` 只服务两个延迟字段；行为断言永远绿（`resetForTest()` 会把字段覆盖回正确默认值，这正是缺陷潜伏的原因），故另加源码扫描守卫钉住量纲
 - **金仓 PG 协议版驱动被误判为 PostgreSQL**：`postgresql-for-kingbase` 坐标此前排在 `org.postgresql:postgresql` 之后，方言推断与增强捕获双双落错族
+- **方言为 GaussDB / 达梦 / 瀚高 / 海量时预览恒降级、表列补全不可用（T-PreviewPsiDialect，用户真机报障）**：预览顶部常驻黄色横幅「预览以简化模式打开——临时文件解析失败；表/列补全暂不可用」，10 次预览 10 次降级。真机日志实证根因是 `ClassCastException: SqlLanguage cannot be cast to SqlLanguageDialect`（当天 9 次，3 次打成 SEVERE 且点名本插件），栈落在 `SqlParserDefinitionBase.createFile:90` ← `SingleRootFileViewProvider.getPsiInner` ← `FileManagerImpl.findFile` ← 预览预热的 `awaitPreviewPsiLanguage`。**成因**：四个自注册方言（DM / GaussDB / HighGo / Vastbase）此前只注册了 `<sql.dialect>`，没有为该语言注册 `<lang.parserDefinition>`——平台查 ParserDefinition 时沿语言链上溯，落到基语言 `SQL` 的那份（其 file node type 绑的是基类 `SqlLanguage`），`createFile` 里的 `(SqlLanguageDialect) getFileNodeType().getLanguage()` 强转必然失败，PSI 建不出来，`PsiManager.findFile` 返回 null，预热按 `PSI_UNAVAILABLE` 降级。平台内置方言 SQL / GenericSQL / SQL92 全是成对注册的，我们这四对少了后一半。**修复**：①新增 `sql/SqlFamilyParserDefinitions.kt`，为四个方言各补一个 ParserDefinition（file node type 绑本方言语言，lexer / parser / elementFactory 委托 `Sql92ParserDefinition`，与方言 `createTokensHelper` 的委托口径一致），注册面在 `database-optional.xml` 成对补齐；②`mapPreviewDialectBeforePsi` 增加映射前探测——目标语言的 ParserDefinition 若不在 SQL 方言族，这次就不映射（补全退 GenericSQL），不再拖垮整条预览；③`PsiManager.findFile` 两处调用包 `runCatching`，平台契约异常降为一条带栈 WARN，不再以 SEVERE 记到插件头上。**守卫**：`SqlDialectParserDefinitionPairingGuardTest` 静态校验「每个 `<sql.dialect>` 必有同名 `lang.parserDefinition`」，`PlatformSqlDialectRegistrationTest` 新增 DB 通道用例真建 PSI（摘掉任一条注册即红）
+- **mapper XML 动态标签体内敲 `#`/`$` 不再自动补 `{}`（T-XmlBraceNested，演示录制实测）**：`ParamBraceTypedHandler.inStatementText` 只看一层 parent 且把「子标签体内正文」与「子标签标记区」混为一谈——`<where>` 下的 `<if>`、`<choose>` 下的 `<when>` 等真实 mapper 主流排版里敲 `#` 只落裸字符，功能全灭；光标落在语句标签自身属性区（`<select id="a|">`）还会误插。现改为「最近语句标签祖先（任意深度）+ 体内容孩子推导标记区」：体内正文与 `</if>` 右侧接管，起始标记区（含属性间隙）与结束标记区不接管。`ParamBraceTypedHandlerTest` 新增 5 用例（嵌套 if/when 体内、单层 if 体内、语句属性区、自闭合子标签之后）全绿，原 6 用例回归绿
 
 ### Changed
 - **日志列表多行模式取源惰性化（T-PerfSweep29 券 01）**：脱敏开时 `displaySqlForList` 内部付 O(SQL 长) 全量词法打码，而缓存命中路径每帧重取源后整段丢弃——改为只在缓存未命中时取源，命中路径零取源
 - **新增 14 方言三面对账守卫 `DialectCaptureCoverageTest`**：反衬出既有厂商对齐守卫是**前缀级判定**，挡得住整族静默、挡不住「只补 prepare 面」的半覆盖；MariaDB / SQLite 驱动固化进 agent 测试 classpath，字节层由可选 skip 升为硬断言（`StatementWeaverVendorCoverageTest` 14/14、`DialectCaptureCoverageTest` 3/3，skip=0）
 - **三条真机验证链进测试面**：瀚高 / 海量 / 金仓三族驱动进主项目测试 classpath（仅测试面），`DialectDockerVerificationTest` 外部实例模式让插件渲染的 SQL 套件在真引擎真执行（瀚高 153 词 / 海量 201 词 / 金仓 118 词全 PASS）
+- **增强捕获 agent 的宿主控制台输出改为默认静默（用户令「控制台 [SqlVisAgent] 输出有点多，只保留必要的」）**：原先每次挂载打一行 `attach retransform: matched/wove/...`、premain 打候选类数、每轮补挂各打一行、首条织入事件再打一行，日常噪音大于信息量。现分两级：诊断/进度行默认不打，仅 `-javaagent:…=logLevel=debug`（含 `verbose` / `trace`）时输出；真实降级与熔断必报，与级别无关——预算耗尽、kill switch、`getAllLoadedClasses` 失败、注册盲区（仅一次）、`PORT_ABANDONED`、install degraded、驱动名单预载失败。attach 汇总行额外保留「有问题就打」：`failed>0` 或 `predicateFailed>0` 时照常输出，全零静默（「本次 attach 命中多少」由 IDE 侧心跳的 `AgentAttachStats` 诊断行承载，不必占宿主控制台）。采集与上报链路零变化，静音只作用于宿主 stderr 诊断行
 
 ## [2026.10.30] - 2026-10-30
 
