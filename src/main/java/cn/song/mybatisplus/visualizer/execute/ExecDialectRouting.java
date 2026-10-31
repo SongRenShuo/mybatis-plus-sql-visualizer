@@ -52,10 +52,10 @@ public final class ExecDialectRouting {
      *
      * <p>id 依据：243 平台 com/intellij/sql/dialects 目录下各方言 xml 的
      * {@code lang.parserDefinition language} 逐文件核对——MySQL / PostgreSQL / Oracle / MariaDB /
-     * TSQL(mssql) / H2 为 243 在册实锤；DM / KingBase / OceanBase / openGauss / SQLite 在 243 方言集缺位，
-     * 候选 id 取产品名常见注册形态，真平台缺位时 {@link #urlFallbackId} 自然落 null（不猜近似方言）。
-     * 家族别名仅作平台缺位时的尽力兜底（如 OceanBase MySQL 模式 → MySQL），别名错误最多
-     * 令 Runner 枚举落空（与现状同态），不产生错误执行。</p>
+     * TSQL(mssql) / H2 为 243 在册实锤；DM / KingBase / OceanBase / openGauss / SQLite / HighGo / Vastbase
+     * 在 243 方言集缺位（无对应 dialect xml），候选 id 取产品名常见注册形态，真平台缺位时
+     * {@link #urlFallbackId} 自然落 null（不猜近似方言）。家族别名仅作平台缺位时的尽力兜底（如 OceanBase MySQL
+     * 模式 → MySQL），别名错误最多令 Runner 枚举落空（与现状同态），不产生错误执行。</p>
      */
     static final Map<String, List<String>> PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS = createDialectIds();
 
@@ -71,7 +71,16 @@ public final class ExecDialectRouting {
         map.put("DM（达梦）", List.of("DM", "Dameng"));
         map.put("KingBase（人大金仓）", List.of("KingBase", "KingbaseES", "PostgreSQL"));
         map.put("OceanBase", List.of("OceanBase", "MySQL"));
-        map.put("openGauss", List.of("openGauss", "GaussDB", "PostgreSQL"));
+        map.put("openGauss", List.of("openGauss", "PostgreSQL"));
+        // T-GaussDbDialect（券 04）：独立方言。262 平台无 GaussDB / openGauss 方言模块
+        // （.intellijPlatform 制品目录 grep gauss 零命中），故候选按「同族 id → PG 兜底」排；
+        // 漏登记此键会让执行目标 Runner 枚举落空并回退 MySQL（功能不生效）。
+        map.put("GaussDB", List.of("GaussDB", "openGauss", "PostgreSQL"));
+        // T-XcDialects3（券 03）：瀚高/海量同 PG 族。262 平台无 HighGo / Vastbase 方言模块
+        // （本机 IDEA 262.10968.63 的 intellij.database.dialects.*.jar 逐包列举实证，P-11），
+        // 候选链恒落 PG 兜底——照 GaussDB 同款「本名 → PG 兜底」写法。
+        map.put("HighGo", List.of("HighGo", "PostgreSQL"));
+        map.put("Vastbase", List.of("Vastbase", "PostgreSQL"));
         return Map.copyOf(map);
     }
 
