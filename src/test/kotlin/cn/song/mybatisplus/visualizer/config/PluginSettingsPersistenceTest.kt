@@ -215,9 +215,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
             // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47；
             // 并入 master 后：本分支 W2 已把 displayMaskCheck 布尔复选框改分级下拉（JComboBox，-1）——合并态 46（实跑核对）。
+            // T-SettingsConverge：六组 gutter 分组开关合并为一个多选控件（6 个勾选框移入浮层、不进面板主树）-6 → 40（实跑核对）。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 46", 46, texts.size)
+            assertEquals("复选框总数应为 40", 40, texts.size)
         } finally {
             settings.state.language = old
         }

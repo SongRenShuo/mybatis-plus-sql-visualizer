@@ -433,13 +433,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     internal val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
-    // R2（gutter 按来源分组显隐）：六组开关（默认全开=现行为不变）
-    internal val gutterGroupMapperXmlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml"))
-    internal val gutterGroupAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.annotation"))
-    internal val gutterGroupJpaHqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql"))
-    internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
-    internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
-    internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
+    // R2（gutter 按来源分组显隐）：六组开关（默认全开=现行为不变）。
+    // T-SettingsConverge：6 个独立勾选框合成一个多选控件（行内摘要按钮 + 浮层内 6 勾选框 +
+    // 全选/全不选），存储层仍是 6 个布尔——GutterGroupSwitches 负责双向映射，读写路径不变。
+    internal val gutterGroupMultiSelect = GutterGroupMultiSelect()
     /** T-MapperNavCoexistYield：MyBatisCodeHelperPro 启用时让出 Mapper 双向跳转图标（默认勾选＝让位）。 */
     internal val mapperNavYieldCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.mapperNavYield"))
 
@@ -985,12 +982,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * PluginSettingsPersistenceTest.testLanguageWriteThroughRefreshesCheckboxTexts 真红实证）。
      */
     fun rebuild() {
-        gutterGroupMapperXmlCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml")
-        gutterGroupAnnotationCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.annotation")
-        gutterGroupJpaHqlCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql")
-        gutterGroupJdbcCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc")
-        gutterGroupInlineFallbackCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback")
-        gutterGroupOtherCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.other")
+        // T-SettingsConverge：六组 gutter 开关已聚合为多选控件，其内部勾选框/摘要按钮文案
+        // 由控件自己刷新（字段级实例随 rebuild 复用，语言切换须显式刷文本，同既有口径）。
+        gutterGroupMultiSelect.refreshTexts()
         // T-PerfSweep16 F46：字段级实例随 rebuild 复用，语言切换须显式刷文本（同 R2 六组口径）
         xmlSynHiCheck.text = MpSqlVisualizerBundle.message("settings.xmlSynHi")
         rootPanel.removeAll()
@@ -1343,12 +1337,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
         gutterIconCheck.isSelected != s.showGutterIcon ||
-            gutterGroupMapperXmlCheck.isSelected != s.gutterGroupMapperXml ||
-            gutterGroupAnnotationCheck.isSelected != s.gutterGroupAnnotation ||
-            gutterGroupJpaHqlCheck.isSelected != s.gutterGroupJpaHql ||
-            gutterGroupJdbcCheck.isSelected != s.gutterGroupJdbc ||
-            gutterGroupInlineFallbackCheck.isSelected != s.gutterGroupInlineFallback ||
-            gutterGroupOtherCheck.isSelected != s.gutterGroupOther
+            // T-SettingsConverge：六组 gutter 开关聚合为一个多选控件，任一勾选态与 State 不符即 modified
+            GutterGroupSwitches.isModified(s, gutterGroupMultiSelect.selectedFlags())
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected != s.mapperNavYieldToCodeHelper
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
@@ -1494,12 +1484,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
-            s.gutterGroupMapperXml = gutterGroupMapperXmlCheck.isSelected
-            s.gutterGroupAnnotation = gutterGroupAnnotationCheck.isSelected
-            s.gutterGroupJpaHql = gutterGroupJpaHqlCheck.isSelected
-            s.gutterGroupJdbc = gutterGroupJdbcCheck.isSelected
-            s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
-            s.gutterGroupOther = gutterGroupOtherCheck.isSelected
+            // T-SettingsConverge：六组 gutter 开关逐个字段写回（控件只是聚合展示，存储层零改动）
+            GutterGroupSwitches.applyTo(s, gutterGroupMultiSelect.selectedFlags())
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
@@ -1608,13 +1594,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             gutterIconCheck.isSelected = s.showGutterIcon
-        gutterGroupMapperXmlCheck.isSelected = s.gutterGroupMapperXml
-        gutterGroupAnnotationCheck.isSelected = s.gutterGroupAnnotation
-        gutterGroupJpaHqlCheck.isSelected = s.gutterGroupJpaHql
-        gutterGroupJdbcCheck.isSelected = s.gutterGroupJdbc
-        gutterGroupInlineFallbackCheck.isSelected = s.gutterGroupInlineFallback
-        gutterGroupOtherCheck.isSelected = s.gutterGroupOther
-        mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
+            // T-SettingsConverge：六组 gutter 开关从 State 回填到多选控件
+            gutterGroupMultiSelect.setFlags(GutterGroupSwitches.flagsFrom(s))
+            mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
