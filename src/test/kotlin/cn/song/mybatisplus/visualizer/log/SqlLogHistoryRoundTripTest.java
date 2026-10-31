@@ -264,6 +264,98 @@ public class SqlLogHistoryRoundTripTest {
         assertNull("无报错条目回环 null", read.errorText());
     }
 
+    // ---------- T-StackBizFrame S3 / T-DialectInferFix 券02：threadName / dialectName 回环 ----------
+
+    /**
+     * T-StackBizFrame S3：调用栈快照与线程名都要经历史文件回环——线程名是弹层标题的一部分，
+     * 读回丢失会让历史条目的标题退回纯「调用栈」，用户重新失去「这条 SQL 跑在哪个线程」的判别量。
+     * k2j 互操作注：master 具名实参（stackDigest=/threadName=）改 23 参规范构造器位置实参
+     * （threadName 在 stackDigest 后；dialectName 在 databaseName 后）。
+     */
+    @Test
+    public void 真实链路_调用栈快照与线程名写读回环_不丢() throws Exception {
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        LogSqlEntry captured = new LogSqlEntry(
+                "SELECT 1",
+                "SELECT 1",
+                List.of(),
+                1724567890000L,
+                null,
+                null,
+                SqlSource.UNKNOWN,
+                null,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                "cn.acme.Svc#run:1<-java.lang.Thread#run:2",
+                "scheduling-1",
+                0L,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
+        saver.write(captured);
+        saver.close();
+
+        File[] files = Objects.requireNonNull(dir.listFiles(f -> f.getName().endsWith(".sql")));
+        assertEquals(1, files.length);
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
+        assertEquals("栈快照回环", captured.stackDigest(), read.stackDigest());
+        assertEquals("线程名回环", captured.threadName(), read.threadName());
+    }
+
+    /**
+     * T-DialectInferFix 券 02：本次执行连接的方言名必须经历史文件回环。
+     *
+     * 读回丢失会让历史双击预览又回到「无证据 → 平台继承/MySQL 兜底」，
+     * 正是用户报障的那条路径（PG 项目按 MySQL 解析，{@code signal} 被标红）。
+     */
+    @Test
+    public void 真实链路_执行方言写读回环_不丢() throws Exception {
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        LogSqlEntry captured = new LogSqlEntry(
+                "SELECT signal FROM biz_car_device_info",
+                "SELECT signal FROM biz_car_device_info",
+                List.of(),
+                1724567890000L,
+                null,
+                null,
+                SqlSource.UNKNOWN,
+                null,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                "PostgreSQL · cyzc_db1@121.40.45.91:5432",
+                "PostgreSQL",
+                null,
+                null);
+        saver.write(captured);
+        saver.close();
+
+        File[] files = Objects.requireNonNull(dir.listFiles(f -> f.getName().endsWith(".sql")));
+        assertEquals(1, files.length);
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
+        assertEquals("方言名回环", "PostgreSQL", read.dialectName());
+        assertEquals("库标回环", captured.databaseName(), read.databaseName());
+    }
+
     @Test
     public void 真实链路_报错条目写读回环_errorText不丢() throws Exception {
         File dir = tempDir();
