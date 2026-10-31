@@ -9,6 +9,7 @@ import com.intellij.testFramework.MapDataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 
@@ -147,6 +148,8 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
     }
 
     fun `test 快捷模板拒绝非单个表标识符选区`() {
+        val executionAvailable = cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
+        val unavailableHint = cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()
         for (action in listOf(ExplainSelectedTableAction(), CountSelectedTableAction(), SampleSelectedTableAction())) {
             for (text in listOf("t; SELECT 1", "t -- comment", "t/*comment*/", "SELECT", "t JOIN u", "t.", ".t", "t..x", "[unclosed", "t\nSELECT 1", "t\u0000")) {
                 val event = eventForSelection(text)
@@ -156,8 +159,36 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
             for (text in listOf("t_order", "schema.t_order", "`db`.`table`", "\"my table\"", "[db].[table]", "\"we\"\"ird\"", "[tab]]le]", "`we``ird`")) {
                 val event = eventForSelection(text)
                 action.update(event)
-                assertTrue("有效限定表名应保留入口：$text", event.presentation.isEnabled)
+                // UX Community 预判置灰：入口可用性 = 表名合法 && 执行能力可用（测试沙盒无
+                // Database 插件 → 恒灰）。原「有效表名恒可用」的写法在 Community 语义下已不成立。
+                assertEquals(
+                    "有效限定表名入口可用性应与执行可用性一致（Community 下预判置灰）：$text",
+                    executionAvailable,
+                    event.presentation.isEnabled,
+                )
+                if (!executionAvailable) {
+                    assertEquals("置灰必须带说明 tooltip：$text", unavailableHint, event.presentation.description)
+                }
             }
+        }
+    }
+
+    /**
+     * UX Community 执行入口预判置灰（新功能小券批 券3）：有效表名 + 无 Database 插件时，
+     * 三个模板动作必须**一眼就知道不可用**（灰置 + tooltip），而不是点了才弹「需要 Ultimate」。
+     */
+    fun `test Community 下执行入口预判置灰并带 tooltip`() {
+        assertFalse(
+            "本用例前提=测试沙盒无 Database 插件（Community 形态）",
+            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable(),
+        )
+        val hint = cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()
+        assertNotNull("不可用必须有 tooltip 文案", hint)
+        for (action in listOf(ExplainSelectedTableAction(), CountSelectedTableAction(), SampleSelectedTableAction())) {
+            val event = eventForSelection("t_order")
+            action.update(event)
+            assertFalse("Community 下有效表名也必须预判置灰", event.presentation.isEnabled)
+            assertEquals("tooltip 应说明原因与替代路径", hint, event.presentation.description)
         }
     }
 
@@ -185,7 +216,12 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
         val editor = stale.getData(CommonDataKeys.EDITOR)!!
         editor.selectionModel.setSelection(0, 4)
         action.update(stale)
-        assertTrue(stale.presentation.isEnabled)
+        // 选区重验只看表名本身；入口是否可点还叠加执行能力（Community 下预判置灰）
+        assertEquals(
+            "合法表名时入口可用性应与执行能力一致",
+            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable(),
+            stale.presentation.isEnabled,
+        )
         editor.selectionModel.setSelection(0, editor.document.textLength)
         action.actionPerformed(stale)
         assertEquals("选区在 update 后变坏也不得提交", listOf("SELECT COUNT(*) FROM db.tbl"), submitted)

@@ -409,6 +409,11 @@
              （PluginSettings.onboardingAnchorTipShown），gutter 快速路径零改动 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingAnchorTip"/>
 
+        <!-- NEW-19：升级后一次性「本版亮点」通知（changelog 驱动的登记表 + 直达入口）。
+             防打扰三重约束：版本粒度持久化（PluginSettings.lastHighlightedVersion）/ 应用级单次 /
+             headless 静默。未登记的版本不弹（亮点必须来自登记表，不编造）。 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.VersionHighlightsActivity"/>
+
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）

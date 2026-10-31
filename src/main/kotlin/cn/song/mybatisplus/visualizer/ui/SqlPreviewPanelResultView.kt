@@ -60,7 +60,15 @@ internal fun SqlPreviewPanel.toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>
     // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）。
     // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
     // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
-    add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
+    // UX Community 预判置灰：EXPLAIN 同样送原生控制台执行，无 Database 插件时灰置 + tooltip。
+    add(
+        smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() }.apply {
+            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()?.let { hint ->
+                isEnabled = false
+                toolTipText = hint
+            }
+        },
+    )
     // T-UiCoord F1（2026-09-21 用户要求）：回滚 SQL 折叠进「更多」——低频动作（只对
     // INSERT/UPDATE/DELETE 有意义）不再与格式化/刷新同列直显。**推翻** T-RollbackSql F3 与
     // T-MergeR2IntoMaster §3.2 的「一键直达 / 执行计划之后刷新之前」定案，改判依据见

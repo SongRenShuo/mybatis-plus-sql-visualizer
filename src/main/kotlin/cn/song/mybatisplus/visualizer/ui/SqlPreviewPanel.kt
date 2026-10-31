@@ -680,6 +680,14 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
     internal val historyAlarm = javax.swing.Timer(500) { flushHistoryToCache() }.apply { isRepeats = false }
 
+    /**
+     * UX 换源重渲染：last-used 变更后的头部刷新防抖（Swing Timer，120ms，restart 防抖）。
+     * 一次执行链可能连写多键（模块级 + 项目级）并触发多次广播，合并为一拍只重组一次头部。
+     */
+    internal val headerSourceRefreshTimer = javax.swing.Timer(HEADER_SOURCE_REFRESH_DEBOUNCE_MS) {
+        refreshHeaderSourceNow()
+    }.apply { isRepeats = false }
+
     // R22 T-04：命名方案下拉（rebuildLeftPanel 随参数区重建；syncSchemeCombo 填充/刷新）
     internal var schemeCombo: JComboBox<String>? = null
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
@@ -813,6 +821,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
                 if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
             },
         )
+        // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板只刷新头部
+        // 绑定行与方言徽章，不重渲染 SQL、不新增常驻轮询。连接绑定本面板 Disposable，
+        // dispose 时自动注销（与上方设置 Topic 同款）。
+        project?.messageBus?.connect(this)?.subscribe(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LAST_USED_CHANGE_TOPIC,
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LastUsedChangeListener {
+                scheduleHeaderSourceRefresh()
+            },
+        )
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)
@@ -916,6 +933,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop()
         pendingRender = null
+        // UX 换源重渲染：头部刷新防抖同样随面板停止（晚到的记忆变更不再触碰已销毁面板）
+        headerSourceRefreshTimer.stop()
         // T-DegradedPreviewUx P1：降级宽限定时器同样随面板停止（到点不得再弹横幅）
         cancelDegradedGraceTimer()
         historyAlarm.stop()
@@ -1411,6 +1430,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
         /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
         private const val RENDER_DEBOUNCE_MS = 150
+
+        /** UX 换源重渲染：last-used 变更后的头部刷新防抖窗口（毫秒）——执行链连写多键只重组一次。 */
+        internal const val HEADER_SOURCE_REFRESH_DEBOUNCE_MS = 120
 
         /**
          * T-DollarInjectMark：`${}` 直替提示的会话级关闭记忆（✕ 后本 IDE 会话所有预览面板

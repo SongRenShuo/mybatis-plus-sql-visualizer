@@ -138,6 +138,8 @@ class SettingsRealityGuardTest {
             "storageActionStatusLabel",
             // R90：只读隐私披露标签，不是可编辑设置；保留开关自身仍须 apply/reset。
             "explainPlanRetentionDisclosure",
+            // NEW-18：环境体检是「点击即生成」的只读动作 + 结果行内提示，无自身状态可存可回填。
+            "environmentCheckButton", "environmentCheckStatusLabel",
             // ShortcutEditor 内部控件（随 shortcutEditor 整体进出 apply/reset）
             "textField", "editButton",
         )

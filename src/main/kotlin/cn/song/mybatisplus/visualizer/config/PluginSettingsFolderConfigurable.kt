@@ -662,6 +662,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             // 关于
             val a = PAGE_ABOUT.ref
             fields.add(SearchableField(b.message("settings.cache.label"), b.message("settings.cache.tip"), "settings.section.about", a))
+            // NEW-18：一键环境体检入口（搜「体检/环境/诊断」可定位；SettingsPanelSearchableGuardTest 守卫）
+            fields.add(SearchableField(b.message("settings.envCheck.label"), b.message("settings.envCheck.tip"), "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
