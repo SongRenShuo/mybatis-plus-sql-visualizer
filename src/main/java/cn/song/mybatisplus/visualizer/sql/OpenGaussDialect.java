@@ -1,5 +1,7 @@
 // T-SyncK2JMaster187 自 master sql/Dialect.kt（OpenGaussDialect object）移植
 // （master 的 Kotlin 源把全部方言 object 写在同一 Dialect.kt；Java 侧 public 顶层类须独立文件，沿用 k2j 既有布局）
+// T-SyncK2JMaster175 afd3d09 增量：T-GaussDbDialect（券01 保留字换 OPENGAUSS_RESERVED；券03 LIMIT 语义订正；
+// 券04 与 GaussDB 拆分）+ supportsDeleteLimit 显式声明（语法接受、语义未验证）
 package cn.song.mybatisplus.visualizer.sql;
 
 import cn.song.mybatisplus.visualizer.model.LimitClause;
@@ -9,19 +11,29 @@ import java.util.Set;
 
 /**
  * openGauss 方言（T-DialectXcFamily / O-63）：PG 族形态——{@code LIMIT {count} OFFSET {offset}}、
- * 双引号引用、{@link IdentifierFolding#LOWER} 折叠。D2=A 定案：GaussDB（华为云）与 openGauss 社区版
- * 共用一个 object，两个 JDBC URL 前缀（{@code jdbc:opengauss://} 与 {@code jdbc:gaussdb://}）都归本方言
- * （两前缀各有官方文档出处，见 {@link UrlSubprotocolDialects}）。
+ * 双引号引用、{@link IdentifierFolding#LOWER} 折叠。
  *
- * <p><b>验证来源（openGauss 引擎级，DBX MCP 只读通道，GaussDB/openGauss 5.0.0，2026-09-23）</b>：</p>
+ * <p><b>T-GaussDbDialect 券 04 修订</b>：原 D2=A 定案「GaussDB 与 openGauss 共用一个 object、两前缀都归
+ * 本方言」已撤销——{@code jdbc:gaussdb://} 改归独立的 {@code GaussDbDialect}。撤销理由不是形态分叉（两边六项
+ * 形态相同，见 GaussDbDialect 的 KDoc），而是<b>身份与保留字</b>：GaussDB 官方保留字表比 openGauss
+ * 多 11 词，且用户应在设置页/角标/MCP 里看到 GaussDB 而不是 openGauss。本类此后<b>只服务
+ * {@code jdbc:opengauss://} 与显式选择 openGauss 的场景</b>。</p>
+ *
+ * <p><b>验证来源（openGauss 引擎级，DBX MCP 只读通道，openGauss 5.0.0 社区版 / sql_compatibility='A'，
+ * 2026-09-23 首测 + 2026-10-29 复核）</b>：</p>
  * <ul>
  *  <li>折叠 LOWER：{@code SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES} → 455 行（裸大写折小写命中）、
  *      {@code FROM information_schema."TABLES"} → {@code relation "information_schema.TABLES" does not
  *      exist on gaussdb}；</li>
  *  <li>反引号不可用：{@code SELECT 1 AS `x`} → {@code syntax error}（双引号族实锤）；</li>
- *  <li>LIMIT 形态：{@code SELECT 1 LIMIT 1 OFFSET 0} → 1 行；{@code SELECT 1 LIMIT 1, 2} → <b>0 行</b>——
- *      openGauss 把 {@code LIMIT a, b} 按 <b>PG 语义</b>（OFFSET a LIMIT b）解析，MySQL 形态会被静默错解，
- *      故分页必须渲染 PG 形态（真机对照读数）；</li>
+ *  <li><b>LIMIT 形态（T-GaussDbDialect 券 03 订正）</b>：{@code LIMIT a, b} 是<b>原生 MySQL 语义</b>
+ *      （offset, count），<b>不存在静默错解</b>。多行源实测：
+ *      {@code SELECT * FROM generate_series(1,5) LIMIT 1, 2} → 返回 {@code 2, 3}（2 行）；
+ *      真实 455 行源 {@code SELECT table_name FROM information_schema.tables LIMIT 1, 2} → 第 2、3 行。
+ *      原结论「按 PG 语义解析被静默错解」的探针是 {@code SELECT 1 LIMIT 1, 2} → 0 行——<b>单行源上
+ *      「MySQL 语义」与「PG 语义（OFFSET 1 LIMIT 2）」给出同一读数</b>，两种假设不可区分，属假绿。
+ *      本方言仍渲染 PG 形态（{@code LIMIT {count} OFFSET {offset}}），理由改为「该形态在两种解释下同义、
+ *      无歧义」，而非「防御错解」；{@code OFFSET n ROWS FETCH NEXT m ROWS ONLY} 亦可用但不必；</li>
  *  <li>EXPLAIN：{@code EXPLAIN (FORMAT JSON) SELECT 1} → 单列 {@code QUERY PLAN} JSON 文本（JSON 档实锤）；
  *      {@code EXPLAIN SELECT 1} → 文本计划树。</li>
  * </ul>
@@ -32,8 +44,13 @@ import java.util.Set;
  * （KingBase 同为 PG 系但 upsert 相反），照抄 KingBase 先例会产出语法错误 SQL。
  * 官方文档同向（openGauss《INSERT》on_duplicate_key 文法，{@code VALUES(column_name)} 引用在册）。</p>
  *
- * <p>保留字：沿用 {@link SqlKeywords#PG_RESERVED}（PG 官方附录全量）为基线——openGauss 内核源自 PG 9.2
- * 演化，openGauss 特有保留字差异未逐词核对（真机核对后增量）。</p>
+ * <p>保留字：<b>{@link SqlKeywords#OPENGAUSS_RESERVED}</b>（T-GaussDbDialect 券 01 订正）。此前沿用
+ * {@code PG_RESERVED} 是缺陷——真机 {@code pg_get_keywords()} 实测 openGauss 比 PG 多 17 个保留字
+ * （{@code rownum} / {@code minus} / {@code modify} / {@code nocycle} / {@code performance} /
+ * {@code shrink} / {@code verify} / {@code sysdate} / {@code excluded} / {@code buckets} / {@code authid} /
+ * {@code less} / {@code maxvalue} / {@code groupparent} / {@code reject} / {@code procedure} /
+ * {@code is}）。其中 {@code rownum} 实测报 {@code ROWNUM cannot be used as an alias}——
+ * 列名为 {@code rownum} 的表在旧集合下不会被引用，产物直接语法报错。</p>
  */
 public final class OpenGaussDialect implements Dialect {
 
@@ -76,9 +93,33 @@ public final class OpenGaussDialect implements Dialect {
         return IdentifierFolding.LOWER;
     }
 
+    /**
+     * DELETE 的 {@code LIMIT n} 尾段（T-GaussDbDialect 券 02）：<b>显式声明不支持</b>（非遗漏，与 Oracle 的
+     * {@code transactionBegin} 判无同款写法）。
+     *
+     * <p>2026-10-29 真机取证分三档，结论比原记录复杂：</p>
+     * <ul>
+     *  <li><b>语法层</b>：{@code EXPLAIN DELETE FROM db4ai.snapshot WHERE id = 1 LIMIT 1} →
+     *      {@code permission denied for relation snapshot}，即已过语法与分析阶段（同库对照组
+     *      {@code EXPLAIN INSERT … ON CONFLICT (id) …} 直接报 {@code syntax error at or near "CONFLICT ("}，
+     *      证明本通道能可靠区分语法错与权限拦）→ openGauss <b>接受</b>该语法；</li>
+     *  <li><b>语义层</b>：是否真的限行<b>未验证</b>——在册实例非超管且 {@code public} 无用户表，DML 全被权限拦下，
+     *      无从观察影响行数；</li>
+     *  <li><b>依据层</b>：此前 false 的理由是「PG 族无 DELETE LIMIT 尾段（真机佐证 {@code LIMIT 1,2} 按 PG
+     *      语义解析）」，该理由已被券 03 推翻（{@code LIMIT a, b} 是 MySQL 语义）。</li>
+     * </ul>
+     *
+     * <p>故保持 false 但换依据：「语法接受、语义未验证」。取舍不对称——渲染了而语义不生效，用户会
+     * 以为删除有界而实际无界；不渲染只是少一个尾段。拿到可写实例的语义读数后按实测翻转。</p>
+     */
+    @Override
+    public boolean getSupportsDeleteLimit() {
+        return false;
+    }
+
     @Override
     public Set<String> getReservedWords() {
-        return SqlKeywords.PG_RESERVED;
+        return SqlKeywords.OPENGAUSS_RESERVED;
     }
 
     /**
