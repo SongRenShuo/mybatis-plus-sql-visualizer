@@ -87,7 +87,13 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      * 脱敏同 R60 口径（`displayMaskEnabled`，投影级）：开启时脚本字面量打码并在注释头标 `masked`。
      */
     internal fun SqlPreviewPanel.exportReplayScript() {
-        val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() } ?: return
+        // S1-4④：无 SQL 不再静默 return（走平台通知；取消选项/保存对话框仍静默）。
+        val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() }
+        if (sql == null) {
+            cn.song.mybatisplus.visualizer.log.ExportFeedback
+                .notifyNothingToExport(project, "export.nothing.replay")
+            return
+        }
         val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
@@ -97,7 +103,13 @@ internal fun SqlPreviewPanel.showRollbackSql() {
         val mask = settings.displayMaskExportOn()
         val allowList = settings.displayMaskAllowList()
         val plan = cn.song.mybatisplus.visualizer.log.ReplayScriptExport
-            .plan(sql, dialect, options.wrapTransaction) ?: return
+            .plan(sql, dialect, options.wrapTransaction)
+        if (plan == null) {
+            // 用户过了选项框却拼不出语句（全是注释/空语句）——同样属于「没有可导出内容」。
+            cn.song.mybatisplus.visualizer.log.ExportFeedback
+                .notifyNothingToExport(project, "export.nothing.replay")
+            return
+        }
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
             MpSqlVisualizerBundle.message("replay.export.title"),
             "SQL",
@@ -325,11 +337,21 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     }
 
 internal fun SqlPreviewPanel.exportPortableSql() {
-    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+    // S1-4④：无 SQL/无语句不再静默 return（走平台通知；取消格式/保存对话框仍静默）。
+    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }
+    if (sql.isNullOrBlank()) {
+        cn.song.mybatisplus.visualizer.log.ExportFeedback
+            .notifyNothingToExport(project, "export.nothing.portable")
+        return
+    }
     val dialect = current?.effectiveDialect ?: MySqlDialect
     val rows = cn.song.mybatisplus.visualizer.log.PortableSqlExport
         .collectRows(sql, dialect, current?.batchModel)
-    if (rows.isEmpty()) return
+    if (rows.isEmpty()) {
+        cn.song.mybatisplus.visualizer.log.ExportFeedback
+            .notifyNothingToExport(project, "export.nothing.portable")
+        return
+    }
     val format = choosePortableExportFormat() ?: return
     val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
         MpSqlVisualizerBundle.message("panel.portableExport"),

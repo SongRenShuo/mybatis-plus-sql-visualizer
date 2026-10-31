@@ -110,7 +110,11 @@ internal fun SqlLogPanel.exportVisibleEntries() {
             durationMs = it.executionTimeMs,
         )
     }
-    if (rows.isEmpty()) return
+    // S1-4④：无可导出内容不再静默 return——走平台通知（不弹模态框）。取消格式/保存对话框仍静默。
+    if (rows.isEmpty()) {
+        ExportFeedback.notifyNothingToExport(project, "export.nothing.log")
+        return
+    }
     val format = chooseExportFormat() ?: return
     val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
         MpSqlVisualizerBundle.message("log.export.visible"),

@@ -263,7 +263,6 @@ cn.song.mybatisplus.visualizer.log.SqlLogSearchRowTimeTest	1.827
 cn.song.mybatisplus.visualizer.log.SqlLogStreamingDiffTest	0.001
 cn.song.mybatisplus.visualizer.log.SqlSourceMarkerTest	0.002
 cn.song.mybatisplus.visualizer.log.SqlSuppressRuleManagerTest	0.180
-cn.song.mybatisplus.visualizer.log.SqlTableExtractorTest	0.002
 cn.song.mybatisplus.visualizer.log.SqlToJavaPanelCallerAndResultTypeTest	13.516
 cn.song.mybatisplus.visualizer.log.SqlToJavaPanelTest	5.193
 cn.song.mybatisplus.visualizer.log.SqlToJavaPanelUiTest	1.698
@@ -365,7 +364,6 @@ cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatterTest	0.004
 cn.song.mybatisplus.visualizer.share.format.MarkdownFormatterTest	0.006
 cn.song.mybatisplus.visualizer.share.SqlShareManagerTest	0.078
 cn.song.mybatisplus.visualizer.share.ui.ShareDialogTest	0.688
-cn.song.mybatisplus.visualizer.sql.ComplexityScorerTest	0.014
 cn.song.mybatisplus.visualizer.sql.DialectExplainTest	0.011
 cn.song.mybatisplus.visualizer.sql.DialectInferenceTest	0.001
 cn.song.mybatisplus.visualizer.sql.DialectProbeCacheTest	0.684
