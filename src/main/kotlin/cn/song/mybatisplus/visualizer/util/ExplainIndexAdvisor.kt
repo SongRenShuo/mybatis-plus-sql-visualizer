@@ -54,8 +54,9 @@ object ExplainIndexAdvisor {
             ExplainOutputFormat.TABLE -> adviseMysql(headers, rows, out)
             // PG/KingBase：单列 JSON 文本（FORMAT JSON）
             ExplainOutputFormat.JSON -> adviseJsonPlan(rows, out)
-            // 文本计划树（H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
-            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展。
+            // 文本计划树（H2 PLAN FOR / SQLite QUERY PLAN / OceanBase ASCII 树）——规则覆盖 PG 文本树
+            // 形态与 OB ASCII 计划树（R45 ③，以 OB 表头为门）；其余方言的文本形态不含这两种模式，
+            // 天然零命中（不噪音）；将来新增文本规则在此扩展。
             // R23 Oracle 同为 TEXT 档：本插件通道不产出行（EXPLAIN PLAN FOR 只登记），空行天然零命中
             ExplainOutputFormat.TEXT -> advisePlanText(rows, out)
             // R23 SQL Server XML 档：Showplan XML 是**附加结果集**（本通道不采集），且 XML 计划
@@ -141,6 +142,7 @@ object ExplainIndexAdvisor {
         RuleInfo("FILESORT", "ORDER BY cannot use an index (Using filesort)"),
         RuleInfo("TEMPORARY_TABLE", "GROUP BY/DISTINCT spills to a temp table (Using temporary)"),
         RuleInfo("SEQ_SCAN", "sequential scan on a large table (PostgreSQL/KingBase)"),
+        RuleInfo("TABLE_FULL_SCAN", "full table scan in the OceanBase ASCII plan tree (TABLE SCAN / TABLE FULL SCAN)"),
     )
 
     /** 体检规则清单（R45；空实现无——清单恒非空，供面板「体检规则」说明栏与文档生成）。 */
@@ -149,6 +151,12 @@ object ExplainIndexAdvisor {
     private fun advisePlanText(rows: List<List<String>>, out: MutableList<Hint>) {
         for (row in rows) {
             for (cell in row) {
+                // OceanBase：单列 `Query Plan`，值是 OB 自有 ASCII 计划树（表头 `|ID|OPERATOR|…`）。
+                // 以表头为门——其它方言的文本计划（H2/SQLite/Oracle）不含该表头，天然零命中。
+                if (OB_PLAN_HEADER.containsMatchIn(cell)) {
+                    adviseObPlanText(cell, out)
+                    continue
+                }
                 // PG 文本树：`Seq Scan on big_table  (cost=… rows=…)`
                 val m = SEQ_SCAN_ON.find(cell) ?: continue
                 val rowsN = PLAN_TEXT_ROWS.find(cell)?.groupValues?.get(1)?.toLongOrNull()
@@ -163,6 +171,80 @@ object ExplainIndexAdvisor {
                 }
             }
         }
+    }
+
+    // ---------- OceanBase ASCII 计划树（R45 ③） ----------
+
+    /**
+     * OceanBase 文本计划解析（T-OBExplainFormat 留账的「OB 专属文本规则」补全）。
+     *
+     * 形态依据（真机实证，提交 58b8b5f3 正文逐字留证；同口径见 [ExplainSupport] OceanBase 条目）：
+     * 社区镜像 `oceanbase/oceanbase-ce:4.3.5-lts`（OB CE 4.3.5.6，`ob_compatibility_mode=MYSQL`）
+     * 上 `EXPLAIN <sql>` 返回**单列 `Query Plan`**，值是 OB 自有 ASCII 表格：
+     * ```
+     * ==========================================
+     * |ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|
+     * |0 |EXPRESSION|    |1       |1           |
+     * ==========================================
+     * Outputs & filters:
+     *   0 - output([1]), filter(nil) / values({1})
+     * ```
+     * 真实表算子是 `TABLE RANGE SCAN` / `TABLE FULL SCAN`，带 `partitions(p0)`、`is_index_back`、
+     * `range_key/range_cond` 等 OB 专有字段（同源留证）。注意：真机留证覆盖到**表头 + EXPRESSION 行**
+     * 与**算子名**，表扫行本身未逐字落盘——本解析只按表头声明的列名取值（OPERATOR/NAME/EST.ROWS），
+     * 不按固定列位猜，故列宽/补空格差异不影响。
+     *
+     * 规则口径：
+     *  - `TABLE SCAN` / `TABLE FULL SCAN`（全表扫）→ [Hint.rule] `TABLE_FULL_SCAN`，EST.ROWS 超阈才提示；
+     *  - `TABLE RANGE SCAN`（走索引的范围扫）→ 不报「缺索引」，只在 EST.ROWS 超阈时报
+     *    `HIGH_ROWS_ESTIMATE`（选择性差 / 大范围扫，与 MySQL 档同规则码同语义）；
+     *  - `TABLE GET` / `EXPRESSION` 等其它算子不产出建议（点查与常量计划无索引话题）。
+     */
+    private fun adviseObPlanText(text: String, out: MutableList<Hint>) {
+        val lines = text.lines()
+        val headerIdx = lines.indexOfFirst { OB_PLAN_HEADER.containsMatchIn(it) }
+        if (headerIdx < 0) return
+        val header = obRowCells(lines[headerIdx]) ?: return
+        val opCol = header.indexOfFirst { it.trim().equals("OPERATOR", ignoreCase = true) }
+        val nameCol = header.indexOfFirst { it.trim().equals("NAME", ignoreCase = true) }
+        val rowsCol = header.indexOfFirst { it.trim().equals("EST.ROWS", ignoreCase = true) }
+        if (opCol < 0) return
+        for (line in lines.drop(headerIdx + 1)) {
+            val cells = obRowCells(line) ?: continue
+            if (cells.size != header.size) continue // 列数不符 = 非计划行（分隔线/说明段），不猜
+            val op = cells[opCol].trim()
+            if (op.isEmpty()) continue
+            val target = if (nameCol >= 0) cells[nameCol].trim().ifEmpty { "?" } else "?"
+            val estRows = if (rowsCol >= 0) cells[rowsCol].trim().toLongOrNull() else null
+            when {
+                OB_FULL_SCAN_OP.matches(op) -> {
+                    if (estRows == null || estRows >= ROWS_THRESHOLD) {
+                        out += Hint(
+                            rule = "TABLE_FULL_SCAN",
+                            target = target,
+                            advice = "full table scan ($op)" +
+                                (estRows?.let { " over ~$it rows" } ?: "") +
+                                " — consider adding an index on the WHERE/JOIN columns",
+                        )
+                    }
+                }
+                OB_RANGE_SCAN_OP.matches(op) && estRows != null && estRows >= ROWS_THRESHOLD -> {
+                    out += Hint(
+                        rule = "HIGH_ROWS_ESTIMATE",
+                        target = target,
+                        advice = "estimated rows=$estRows even with a range scan — poor selectivity / " +
+                            "wide range scan; verify the filter columns are covered",
+                    )
+                }
+            }
+        }
+    }
+
+    /** OB ASCII 行 → 单元格清单（按 `|` 切，保留原始列数）；非 `|…|` 行（`===` 分隔线、说明段）返回 null。 */
+    private fun obRowCells(line: String): List<String>? {
+        val trimmed = line.trim()
+        if (trimmed.length < 3 || !trimmed.startsWith("|") || !trimmed.endsWith("|")) return null
+        return trimmed.substring(1, trimmed.length - 1).split('|')
     }
 
     // ---------- PG/KingBase FORMAT JSON（T-ECH-03） ----------
@@ -283,4 +365,13 @@ object ExplainIndexAdvisor {
 
     /** F59（T-PerfSweep18）：文本树形态——`rows=N` 估算行数（同上提单例）。 */
     internal val PLAN_TEXT_ROWS = Regex("""rows=(\d+)""")
+
+    /** R45 ③：OceanBase ASCII 计划树表头（真机实证 `|ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|`）——OB 规则的门。 */
+    private val OB_PLAN_HEADER = Regex("""\|\s*ID\s*\|\s*OPERATOR\s*\|""")
+
+    /** R45 ③：OB 全表扫算子（4.x 传统计划 `TABLE SCAN` / `TABLE FULL SCAN`）。 */
+    private val OB_FULL_SCAN_OP = Regex("""(?i)^TABLE\s+(?:FULL\s+)?SCAN$""")
+
+    /** R45 ③：OB 索引范围扫算子（`TABLE RANGE SCAN`）——已走索引，不报缺索引。 */
+    private val OB_RANGE_SCAN_OP = Regex("""(?i)^TABLE\s+RANGE\s+SCAN$""")
 }
