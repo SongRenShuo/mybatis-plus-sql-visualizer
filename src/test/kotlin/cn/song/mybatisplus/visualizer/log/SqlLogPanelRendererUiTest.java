@@ -630,6 +630,33 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         assertTrue("全文最后的 WHERE 子句应在格式化模式可见", visible.toString().contains("WHERE id = 42"));
     }
 
+    /**
+     * T-LogListAnchor 券01：关键字换行取源是完整还原 SQL，不是 160 字摘要。
+     * 旧实现在 24 列 SELECT 上连一个子句关键字都覆盖不到，恒退化成单行 + 宽度裁切。
+     */
+    @Test
+    public void test关键字换行取源为完整SQL_长列清单仍三行() throws Exception {
+        String longSelect = "SELECT code, station_name AS stationName, device_id AS deviceId, "
+                + "device_code AS deviceCode, user_id AS userId, user_phone AS userPhone, "
+                + "device_port_number AS devicePortNumber, create_time AS createTime, start_time AS startTime, "
+                + "dic_charge_type AS dicChargeType, dic_status AS dicStatus, actually_amount AS actuallyAmount, "
+                + "discount_amount AS discountAmount FROM biz_car_order_record WHERE id = 42";
+        LogSqlEntry e = entry(longSelect);
+        assertFalse("夹具前提：摘要覆盖不到 FROM（否则本用例无区分力）", e.summary().contains("FROM"));
+
+        LogEntryListCellRenderer r = renderInMode("KEYWORD_WRAP", e);
+        assertEquals("长列清单必须三行（不再退化成单行摘要）", 3, r.getSqlLines().size());
+        assertTrue("首行 SELECT 开头", joinedText(r.getSqlLines().get(0)).startsWith("SELECT"));
+        assertTrue("次行 FROM 开头", joinedText(r.getSqlLines().get(1)).startsWith("FROM"));
+        StringBuilder text = new StringBuilder();
+        for (SimpleColoredComponent line : r.getSqlLines()) {
+            if (text.length() > 0) text.append('\n');
+            text.append(joinedText(line));
+        }
+        assertTrue("须看到 WHERE 子句: " + text, text.toString().contains("WHERE"));
+        assertFalse("不得再出现摘要截断形态: " + text, text.toString().contains("…;"));
+    }
+
     // ---------- R60（T-LaneB D96）：日志列表链脱敏（判别断言两态，走真实渲染器链路） ----------
 
     @Test
