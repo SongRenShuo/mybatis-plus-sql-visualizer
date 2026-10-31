@@ -155,6 +155,7 @@ class LocatorSkipPrefixSyncTest {
         for (p in listOf(
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.", "org.sqlite.",
             "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.", "com.gbasedbt.", "com.kingbase8.",
+            "com.huawei.", "org.opengauss.",
             "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
             "net.sf.cglib.", "org.aspectj.", "org.objectweb.asm.", "org.jboss.",
             "com.github.pagehelper.", "org.mybatis.", "net.sf.jsqlparser.",
@@ -207,7 +208,7 @@ class LocatorSkipPrefixSyncTest {
             // 驱动家族
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
             "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
-            "com.gbasedbt.", "com.kingbase8.",
+            "com.gbasedbt.", "com.kingbase8.", "com.huawei.", "org.opengauss.",
             // 连接池
             "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
             // AOP / 字节码
