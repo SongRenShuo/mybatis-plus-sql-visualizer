@@ -939,6 +939,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "「非 Boolean 字段不得误判」两例，覆盖正反两面。",
             ),
             GuardEntry(
+                "convention/LastUsedWriteOnEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                ),
+                "last-used 写入 EDT 归位守卫（T-LastUsedEdt 守卫）：项目级 PropertiesComponent 写入必须在 EDT——"
+                    + "`rememberRunner` 曾由 Database 插件 runner session 回调（非 EDT）直行，与平台保存竞争后把"
+                    + "用户 `.idea/workspace.xml` 的 `mpsql.visualizer.last.runner.id` 值写坏（丢开头引号，"
+                    + "每次启动 JsonDecodingException 且平台不重写该条目）。判定内核扫三个写入口函数体前 1200 字符"
+                    + "是否含 isDispatchThread + invokeLater；headless 下行为测试测不出竞争，形态守卫是唯一可机器化判据。"
+                    + "自证语料=「缺归位的三个入口都被点名」与「带归位的合规形态不误报」两例。",
+            ),
+            GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
                 listOf(
                     DecisionFn("scan", FnKind.VIOLATIONS),
