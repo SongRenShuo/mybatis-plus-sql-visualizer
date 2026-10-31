@@ -29,8 +29,8 @@
          ⑤ 数字类声明（方言数取 DialectRegistry.dialects、工具数取 McpToolGate.TOOL_NAMES、Alt+Shift+Q、since-build 版本标签）由 PluginXmlStructureGuardTest 与代码对账。
          HTML 片段下同。 -->
     <description><![CDATA[
-        <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values, before the server starts.</p>
-        <p><b>服务未启，SQL 先知</b>——在 IntelliJ IDEA 内把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填。</p>
+        <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values before the server starts — then explains the plan and generates a rollback. From MySQL to DM and Kingbase, all inside your IDE.</p>
+        <p><b>服务未启，SQL 先知。</b>把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填——再看懂它的执行计划、备好回滚语句。MySQL 到达梦、金仓，都在一个 IDE 里。</p>
         <p><a href="https://sql-visualizer.jvtools.cn">中文文档</a> · <a href="https://sql-visualizer.jvtools.cn/en/">English Docs</a> · <a href="https://sql-visualizer.jvtools.cn/about/feedback">需求池 / Feedback</a> · <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Screenshots</a></p>
 
         <h3>中文</h3>
@@ -522,6 +522,64 @@
                          enabledByDefault="true"
                          level="WARNING"
                          implementationClass="cn.song.mybatisplus.visualizer.inspection.BannedApiInspection"/>
+
+        <!-- NEW-26 编辑器内 Inspection 体系：五条规则各注册一棵设置树开关（用户可逐条关闭）。
+             覆盖面 = mapper XML（select/insert/update/delete 与 <sql>）与 Java/Kotlin 注解 SQL；
+             预览面板与运行日志里的临时 SQL 非源文件 PSI，不在覆盖面内（立项册 §二 经核实后的范围）。
+             判定全在纯逻辑层（inspection/SqlInspectionText），本处实现类都是薄壳（照 BannedApi 范式）；
+             文件不是 mapper/Java/Kotlin 时 buildVisitor 返回 EMPTY_VISITOR，零 daemon 行为。
+             `dumbAware="true"`：索引未就绪时内部一律「判不了就沉默」（DumbService 检查在适配层）。
+             P-4 语料误报为 0 才允许 enabledByDefault（见各规则实测定案）。 -->
+        <localInspection language=""
+                         shortName="SqlvDollarInjection"
+                         key="inspection.sqlv.dollar.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.DollarInjectionInspection"/>
+        <localInspection language=""
+                         shortName="SqlvMissingParameter"
+                         key="inspection.sqlv.param.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.MissingParameterInspection"/>
+        <localInspection language=""
+                         shortName="SqlvResultMapProperty"
+                         key="inspection.sqlv.resultMap.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.ResultMapPropertyInspection"/>
+        <localInspection language=""
+                         shortName="SqlvDialectQuote"
+                         key="inspection.sqlv.dialect.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.DialectQuoteInspection"/>
+        <localInspection language=""
+                         shortName="SqlvOgnlTautology"
+                         key="inspection.sqlv.ognl.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.OgnlTautologyInspection"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
