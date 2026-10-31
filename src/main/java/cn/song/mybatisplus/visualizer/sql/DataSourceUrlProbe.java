@@ -223,9 +223,18 @@ public final class DataSourceUrlProbe {
                         }
                         Object config = invoke(source, "getConnectionConfig");
                         String url = config != null && invoke(config, "getUrl") instanceof String s ? s : null;
+                        DataSourceDialectClassification.Result classified = classifyDataSource(manager, source, url);
+                        // T-DialectInferFix：非 SQL 数据源（Redis/Mongo/…）不是 SQL 执行目标，投进候选
+                        // 只会让决策落 AMBIGUOUS（见 DataSourceDialectClassification KDoc），直接不参与投票。
+                        if (!classified.isSqlTarget()) {
+                            String displayName = dbmsDisplayName(source);
+                            LOG.debug("DataSourceUrlProbe: skip non-SQL data source #" + managerIndex + "-"
+                                    + sourceIndex + " (" + (displayName != null ? displayName : "?") + ")");
+                            continue;
+                        }
                         candidates.add(new DialectDecisionEngine.Candidate(
                                 "session-" + managerIndex + "-" + sourceIndex,
-                                UrlSubprotocolDialects.dialectName(url)));
+                                classified.dialectName()));
                     }
                 }
             }
@@ -235,6 +244,54 @@ public final class DataSourceUrlProbe {
                 throw (Error) t;
             }
             return List.of();
+        }
+    }
+
+    /** T-DialectInferFix：单数据源分类（平台 query language → DBMS 显示名 → URL 子协议）。 */
+    private static DataSourceDialectClassification.Result classifyDataSource(Object manager, Object source,
+                                                                            @Nullable String url) {
+        return DataSourceDialectClassification.classify(
+                queryLanguageId(manager, source),
+                dbmsDisplayName(source),
+                url);
+    }
+
+    /**
+     * 平台给该数据源认的 query language id（{@code DataSourceManager.getQueryLanguage(T)}）。
+     *
+     * <p>反射口径（T-DialectInferFix P-2）：{@code getQueryLanguage(T)} 擦除后参数类型是
+     * {@code com.intellij.database.model.RawDataSource}，传 {@code Object.class} 找不到方法；
+     * Method 一律从<b>声明接口</b>取（实现类 {@code LocalDataSource} 在包内，跨 classloader 直取会
+     * IllegalAccessException，见 DatabaseSchemaResolver 同款纪律）。取不到 → null（调用方降级）。</p>
+     */
+    @Nullable
+    private static String queryLanguageId(Object manager, Object source) {
+        try {
+            Class<?> managerClass = Class.forName(DATA_SOURCE_MANAGER_CLASS);
+            Class<?> rawType = Class.forName(RAW_DATA_SOURCE_CLASS);
+            java.lang.reflect.Method method = managerClass.getMethod("getQueryLanguage", rawType);
+            Object language = method.invoke(manager, source);
+            return language instanceof com.intellij.lang.Language ? ((com.intellij.lang.Language) language).getID() : null;
+        } catch (Throwable t) {
+            LOG.debug("DataSourceUrlProbe.getQueryLanguage 反射失败（" + manager.getClass().getName() + "）", t);
+            return null;
+        }
+    }
+
+    /** 数据源 DBMS 显示名（{@code DasDataSource.getDbms().getDisplayName()}，取不到再取 {@code getName()}）。 */
+    @Nullable
+    private static String dbmsDisplayName(Object source) {
+        try {
+            Class<?> dasType = Class.forName(DAS_DATA_SOURCE_CLASS);
+            Object dbms = dasType.getMethod("getDbms").invoke(source);
+            if (dbms == null) return null;
+            Class<?> dbmsClass = Class.forName("com.intellij.database.Dbms");
+            Object display = dbmsClass.getMethod("getDisplayName").invoke(dbms);
+            if (display instanceof String) return (String) display;
+            Object name = dbmsClass.getMethod("getName").invoke(dbms);
+            return name instanceof String ? (String) name : null;
+        } catch (Throwable t) {
+            return null;
         }
     }
 
@@ -259,7 +316,11 @@ public final class DataSourceUrlProbe {
                     if (config == null) continue;
                     Object urlRaw = invoke(config, "getUrl");
                     String url = urlRaw instanceof String ? (String) urlRaw : null;
-                    if (url != null && !url.isBlank()) return url;
+                    // T-DialectInferFix：首个非空 URL 也必须跳过非 SQL 数据源——Redis 排在前时
+                    // 会取到 jdbc:redis://…，下游 dialectName 为 null，等于「首个 URL 不可用」。
+                    if (url == null || url.isBlank()) continue;
+                    if (!classifyDataSource(manager, ds, url).isSqlTarget()) continue;
+                    return url;
                 }
             }
             return null;
@@ -376,7 +437,7 @@ public final class DataSourceUrlProbe {
         Class<?> managerClass;
         try {
             managerClass = Class.forName(
-                    "com.intellij.database.psi.DataSourceManager", true, DataSourceUrlProbe.class.getClassLoader());
+                    DATA_SOURCE_MANAGER_CLASS, true, DataSourceUrlProbe.class.getClassLoader());
         } catch (Throwable e) {
             return null;
         }
@@ -399,4 +460,9 @@ public final class DataSourceUrlProbe {
             return null;
         }
     }
+
+    /** DatabaseTools 反射面类名（T-DialectInferFix：候选分类与候选投票共用同一份字面量）。 */
+    private static final String DATA_SOURCE_MANAGER_CLASS = "com.intellij.database.psi.DataSourceManager";
+    private static final String RAW_DATA_SOURCE_CLASS = "com.intellij.database.model.RawDataSource";
+    private static final String DAS_DATA_SOURCE_CLASS = "com.intellij.database.model.DasDataSource";
 }
