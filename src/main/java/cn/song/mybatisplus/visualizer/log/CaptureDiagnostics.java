@@ -62,7 +62,18 @@ public record CaptureDiagnostics(
      * 自建的<b>结构匹配</b>屏蔽规则按设计拦下了那些 SQL（入队前丢弃，设计内行为），可面板一个字没说，
      * 只能靠翻配置文件才判得出来。与重放/EP 两个计数同口径：<b>&gt; 0 才显示</b>（零值不添噪）。
      */
-    long suppressed
+    long suppressed,
+    /**
+     * T-CaptureCatchAll 券02：控制台桥**活性回落已解封**——agent 在线但长期零事件、控制台仍有
+     * SQL 行，桥已恢复解析。必须恒显示（不设「非零才显示」）：这是「增强已挂载却零产出」的
+     * 唯一解释，藏起来就退回静默。
+     */
+    boolean activityFallbackActive,
+    /**
+     * T-CaptureCatchAll 券03：agent 侧 attach 覆盖自检计数（null = 旧版 agent 未上报）。
+     * 零命中/零织入/有失败/接口兜底命中这几类事实按「异常才显示」进首行（见 {@link #attachCoverageNotes}）。
+     */
+    @Nullable cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats attachStats
 ) {
 
     /** K2J 互操作：master 侧后两参为带默认值 0L 的后置字段（Kotlin 默认参）——保留历史 8 参同形重载。 */
@@ -71,6 +82,57 @@ public record CaptureDiagnostics(
                               long replayDropped, long epShortCircuited) {
         this(capturing, waitingForConsole, entryCount, consolesAttached, linesSeen, enhancedStatus,
                 replayDropped, epShortCircuited, 0L, 0L);
+    }
+
+    /** K2J 互操作：activityFallbackActive / attachStats 缺省（Kotlin 默认参）的历史 10 参同形重载。 */
+    public CaptureDiagnostics(boolean capturing, boolean waitingForConsole, int entryCount,
+                              int consolesAttached, long linesSeen, String enhancedStatus,
+                              long replayDropped, long epShortCircuited,
+                              long agentEventsReceived, long suppressed) {
+        this(capturing, waitingForConsole, entryCount, consolesAttached, linesSeen, enhancedStatus,
+                replayDropped, epShortCircuited, agentEventsReceived, suppressed, false, null);
+    }
+
+    /**
+     * T-CaptureCatchAll 券03：attach 覆盖事实 → 诊断片段（纯函数，零平台依赖）。
+     *
+     * <p>只报<b>用户需要据此行动</b>的形态：
+     * <ul>
+     * <li>{@code matched == 0}：本次 attach 一个驱动都没命中 → 增强通道本会话不可能有事件，白名单/加载时机问题；</li>
+     * <li>{@code matched > 0 && woven == 0}：命中了却没织上 → 织入器/可见性闸门（不是「没装 agent」）；</li>
+     * <li>{@code failed > 0}：JVM 拒绝 retransform（版本/VerifyError）——数量足够说明形态漂移；</li>
+     * <li>{@code matchedByInterface > 0}：接口兜底生效的<b>正向事实</b>（旧版 agent 恒缺省 0，不显示）。</li>
+     * </ul></p>
+     */
+    public static List<String> attachCoverageNotes(
+            @Nullable cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats stats) {
+        if (stats == null) {
+            return List.of();
+        }
+        List<String> notes = new ArrayList<>();
+        if (stats.zeroMatched()) {
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachZero"));
+        } else if (!stats.anyWoven()) {
+            // 命中数取 matched/weavable 较大值（心跳只带 weavable 时不得报「命中 0」）
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachNoWeave",
+                    stats.matchedTotal(), stats.weavable(), stats.woven()));
+        }
+        if (stats.failed() > 0L) {
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachFailed", stats.failed()));
+        }
+        // C1 路新增：major 版本闸挡下的类数——「命中了却没织」的一条硬原因
+        if (stats.skippedByVersion() > 0L) {
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachSkippedVersion", stats.skippedByVersion()));
+        }
+        // C1 路新增：transformer 兜底熔断（整体退回白名单）——覆盖变窄的直接证据
+        if (stats.catchAllKilled()) {
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachCatchAllKilled"));
+        }
+        if (stats.matchedByInterface() > 0L) {
+            notes.add(MpSqlVisualizerBundle.message("log.diag.attachInterface",
+                    stats.matchedByInterface(), stats.interfaceWoven()));
+        }
+        return notes;
     }
 
     /**
@@ -100,10 +162,23 @@ public record CaptureDiagnostics(
         }
         List<String> parts = new ArrayList<>(List.of(head, enhanced, console));
         parts.addAll(dropped);
+        // T-CaptureCatchAll 券02/03：增强通道的**事实补充**与状态同处首行（不新增语义行——空态折行
+        // 守卫锁定「三行语义」形态，第四行会被面板右边界裁掉）：
+        //  - 活性回落解封：桥为什么在产出；
+        //  - attach 覆盖：为什么 agent 没产出。
+        List<String> enhancedParts = new ArrayList<>();
+        enhancedParts.add(enhanced);
+        if (d.activityFallbackActive) {
+            enhancedParts.add(MpSqlVisualizerBundle.message("log.diag.activityFallback"));
+        }
+        enhancedParts.addAll(attachCoverageNotes(d.attachStats));
         // T-AgentDiagWrap T-04：语义行按「读的人下一步要干什么」切——
         // 第一行「在捕捉吗 + 增强通道通不通」，第二行「控制台通道通不通 + 行被谁吃了」，
         // 第三行「所以下一步该做什么」。三者混成一行时，被面板右边界裁掉的总是第三行（可执行的那句）。
-        String channels = String.join(SEP, head, enhanced);
+        List<String> channelParts = new ArrayList<>(enhancedParts.size() + 1);
+        channelParts.add(head);
+        channelParts.addAll(enhancedParts);
+        String channels = String.join(SEP, channelParts);
         List<String> consoleParts = new ArrayList<>(dropped.size() + 1);
         consoleParts.add(console);
         consoleParts.addAll(dropped);
