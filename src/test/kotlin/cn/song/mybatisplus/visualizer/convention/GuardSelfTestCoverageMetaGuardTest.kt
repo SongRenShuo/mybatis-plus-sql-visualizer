@@ -917,6 +917,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "decisionFns 仅登记 Boolean 形态谓词（判据 7）。",
             ),
             GuardEntry(
+                "convention/SettingsScenarioGroupCoverageGuardTest.kt",
+                listOf(
+                    DecisionFn("booleanFieldsOf", FnKind.SITES),
+                    DecisionFn("ungroupedBooleanFields", FnKind.VIOLATIONS),
+                    DecisionFn("staleGroupKeys", FnKind.VIOLATIONS),
+                ),
+                "设置项场景归属守卫（T-SettingsConverge 守卫）：扫 PluginSettings.kt 的 `var xxx: Boolean` 字段名，" +
+                    "与 SettingsScenarioGroups 的场景清单对账——未归组的 Boolean 即红并点名，清单里的陈旧键同样红。" +
+                    "三个判定内核均可注入合成源码；自证语料=「未归组的 Boolean 必被点名且陈旧键可检出」" +
+                    "「非 Boolean 字段不得误判」两例，覆盖正反两面。",
+            ),
+            GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
                 listOf(
                     DecisionFn("scan", FnKind.VIOLATIONS),

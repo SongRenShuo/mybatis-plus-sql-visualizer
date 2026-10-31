@@ -636,12 +636,9 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     if (SECTION_UI in sections) {
         sectionGroup("settings.section.ui") { p, g ->
             addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
-            addRow(p, g, "", gutterGroupMapperXmlCheck)
-            addRow(p, g, "", gutterGroupAnnotationCheck)
-            addRow(p, g, "", gutterGroupJpaHqlCheck)
-            addRow(p, g, "", gutterGroupJdbcCheck)
-            addRow(p, g, "", gutterGroupInlineFallbackCheck)
-            addRow(p, g, "", gutterGroupOtherCheck)
+            // T-SettingsConverge：六组来源分组开关合成一个多选控件（行内标签 + 摘要按钮 → 浮层 6 勾选框 + 全选/全不选）。
+            // 行标签内嵌在组件里：本节其余行首列全为空，占首列标签宽度会让整节开关右移。
+            addRow(p, g, "", gutterGroupMultiSelect.component)
             // T-MapperNavCoexistYield：共存让位开关（默认勾选＝MyBatisCodeHelperPro 启用时让出跳转图标）
             addRow(p, g, "", mapperNavYieldCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.mapperNavYield")

@@ -640,6 +640,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             // 界面与操作
             val u = PAGE_UI.ref
             fields.add(SearchableField(b.message("settings.showGutterIcon"), "", "settings.section.ui", u))
+            // T-SettingsConverge：六组 gutter 来源开关聚合为单行多选控件——索引条目随之收敛为一条
+            // （原先 6 个分组键未索引，列在 SettingsPanelSearchableGuardTest 的存量缺口台账里）
+            fields.add(SearchableField(b.message("settings.gutterGroup.aggregate"), b.message("settings.gutterGroup.aggregate.tip"), "settings.section.ui", u))
             // T-MapperNavCoexistYield：共存让位开关（界面节，默认开）
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）

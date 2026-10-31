@@ -312,7 +312,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 日志还原 SQL 格式化（多行缩进；预览编辑器展示用）。 */
         var logFormatSql: Boolean = true,
 
-        /** SQL 列表预览交互迁移提示已展示过（两页共享，只提示一次）。 */
+        // ---------- 内部状态位（非用户设置：记录「提示已出现/已确认」，设置页不呈现） ----------
+        /**
+         * 内部状态位：SQL 列表预览交互迁移提示已展示过（两页共享，只提示一次）。
+         * 由提示链单向置 true，非用户可切换的设置项——设置页不呈现。
+         */
         var sqlListPreviewHintSeen: Boolean = false,
 
         /**
@@ -612,12 +616,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var enhancedCaptureEnabled: Boolean = true,
 
+        // ---------- 内部状态位（非用户设置：记录「提示已出现/已确认」，设置页不呈现） ----------
         /**
-         * M56 T-M56-08：注入确认记忆。
+         * 内部状态位：M56 T-M56-08 注入确认记忆。
          *
          * T-EnhancedCaptureDefaultOn（2026-10-19）：运行期语义已废弃——授权只看
          * [enhancedCaptureEnabled]。本字段保留仅为 XML/JSON 兼容与旧版本回退（旧版读到 true
-         * 不再弹框）；[loadState] 会把它归一为 true。
+         * 不再弹框）；[loadState] 会把它归一为 true。非用户设置项——设置页不呈现。
          */
         @Deprecated("T-EnhancedCaptureDefaultOn：授权语义已收敛到 enhancedCaptureEnabled，本字段不再参与判定")
         var enhancedCaptureConfirmed: Boolean = true,
@@ -647,6 +652,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * （分级 OFF/MASK/WARN/BLOCK + 白名单）。读取仅剩迁移归一（[loadState] 与
          * [displayMaskMode()] 的默认值兜底）；面板 apply 同步写它（= mode != OFF），旧版本插件
          * 读新 XML 仍得一致观感。
+         *
+         * 旧字段隐藏（T-SettingsConverge）：**仅迁移源**（[displayMaskMode] 空串时据此推导），
+         * 设置页不呈现——用户可见入口是三档下拉 [displayMaskMode]。
          */
         var displayMaskEnabled: Boolean = false,
 
@@ -690,9 +698,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var onboardingAnchorTipEnabled: Boolean = true,
 
+        // ---------- 内部状态位（非用户设置：记录「提示已出现/已确认」，设置页不呈现） ----------
         /**
-         * 首用锚点引导通知已展示（一次性持久化记忆）：展示过一次即置 true，
-         * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
+         * 内部状态位：首用锚点引导通知已展示（一次性持久化记忆）：展示过一次即置 true，
+         * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。非用户设置项——设置页不呈现
+         * （开关本身见 [onboardingAnchorTipEnabled]）。
          */
         var onboardingAnchorTipShown: Boolean = false,
 
@@ -704,9 +714,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var lastHighlightedVersion: String = "",
 
+        // ---------- 内部状态位（非用户设置：记录「提示已出现/已确认」，设置页不呈现） ----------
         /**
-         * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
-         * 「启用结构化并重试」推荐通知**只提示一次**。
+         * 内部状态位：「启用结构化并重试」推荐通知**只提示一次**的标记（T-ExplainConsoleFirst W6）。
          *
          * 事故形态：该通知每次点「执行计划」都出现（[explainStructuredRender] 关着就满足推荐条件），
          * 用户顺手点过一次「启用结构化」之后，开关被**永久**写成 true，而界面上再没有任何地方
@@ -715,7 +725,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 差异只可能来自这条通知的动作。
          *
          * 语义：展示过一次即置 true，之后全程静默。用户想开仍可去设置页显式勾选（不被此标记阻断）；
-         * 本标记只关掉「主动推荐」这一条噪音源。
+         * 本标记只关掉「主动推荐」这一条噪音源。非用户设置项——设置页不呈现。
          */
         var explainStructuredOfferedShown: Boolean = false,
 

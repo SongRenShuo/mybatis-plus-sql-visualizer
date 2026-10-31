@@ -41,6 +41,10 @@ import java.sql.DriverManager
  *
  * DM（达梦）/ KingBase（人大金仓）无公开自动化镜像——真实环境验证需用户侧连接实例执行
  * （文档级验证见 [DialectDocGoldenTest]），本测试不支持。
+ *
+ * **本类不承担发版判据**（2026-10-31 用户定例：真机方言验证走测试服务器外部实例、DBX 只做临时探测）。
+ * 发版门禁改由 `./gradlew dialectExternalVerify` 承担（[DialectExternalMatrixVerificationTest] 读实例
+ * 矩阵，产出可归档的 JUnit 计数）；Docker 用例只在本地想验时用 `-PmpvDockerTests=true` 手工开启。
  */
 @Suppress("TestClassWithoutTestCases") // 容器用例全部经 Assume 守卫（无 Docker 时静默跳过）
 class DialectDockerVerificationTest {
