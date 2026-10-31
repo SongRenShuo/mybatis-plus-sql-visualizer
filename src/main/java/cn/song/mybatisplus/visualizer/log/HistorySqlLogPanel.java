@@ -1037,7 +1037,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     public PreviewResult buildPreviewResult(LogSqlEntry entry) {
         return LogEntryPreviewRecognizerKt.toPreviewResult(entry,
                 PluginSettings.getInstance().getState().getLogFormatSql(),
-                PluginSettings.getInstance().getState().getLiteralParamRecovery());
+                PluginSettings.getInstance().getState().getLiteralParamRecovery(),
+                // T-DialectInferFix：历史条目同样携带本次执行方言（旧条目由此键或 `db:` 角标回填）
+                entry.dialectName());
     }
 
     // ---------- 二级右键菜单 ----------

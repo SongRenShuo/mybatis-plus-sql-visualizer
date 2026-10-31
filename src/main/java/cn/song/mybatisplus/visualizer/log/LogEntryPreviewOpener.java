@@ -23,7 +23,7 @@ public final class LogEntryPreviewOpener {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         // M37.1：携带来源位置——预览面板可感知/回显 SQL 出处
         SqlPreviewService.showResult(project, LogEntryPreviewRecognizerKt.toPreviewResult(
-                        entry, state.getLogFormatSql(), state.getLiteralParamRecovery()),
+                        entry, state.getLogFormatSql(), state.getLiteralParamRecovery(), entry.dialectName()),
                 entry.sourceFile());
     }
 }
