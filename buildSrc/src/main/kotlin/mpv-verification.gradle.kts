@@ -177,6 +177,16 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // 对象引用不可序列化，T-ReleasePerf-05 同款坑，S2 round2 实测 5 problems storing）。
     val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull()
         ?: if (invokedTaskNames.contains("releaseGate")) 285_000L else 0L
+    // T-ReleasePerf10 券02：执行期水位快速失败闸门——在错峰 sleep 之前判定（不白睡 285s）。
+    // 缺省 floor 6GB，-PwatermarkFloorGb 覆盖，-PwatermarkGate=off 关闭；探针失败 fail-open
+    // （机制与档位依据见 mpv.watermark.MemoryWatermarkProbe 与 testShardStagger 同款）。
+    // 配置缓存约束同 gateStaggerMs：register 块内捕获为普通 Double，执行期经 inputs 读回。
+    val watermarkFloorGb = if (providers.gradleProperty("watermarkGate").orNull == "off") {
+        0.0
+    } else {
+        providers.gradleProperty("watermarkFloorGb").orNull?.toDoubleOrNull() ?: 6.0
+    }
+    inputs.property("mpvWatermarkFloorGb", watermarkFloorGb)
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
             .walkTopDown().maxDepth(4)
@@ -224,6 +234,12 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
     // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
     doFirst {
+        // T-ReleasePerf10 券02：水位闸门在 285s 错峰 sleep 之前判定——水位不足秒级红，不白睡。
+        mpv.watermark.MemoryWatermarkProbe.checkGate(
+            (inputs.properties["mpvWatermarkFloorGb"] as? Number)?.toDouble() ?: 6.0,
+            "verifyGate（verifier JVM 出生前）",
+            logger,
+        )
         assertNoForeignVerifier(verifyHome, logger)
         if (!zipFile.isFile) {
             throw GradleException(
@@ -329,6 +345,93 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
     doLast {
         logger.lifecycle("verifyMarketplace END ${System.currentTimeMillis()}")
         checkMarketplaceVerdicts(reportsDir, baselineFile, logger)
+    }
+}
+
+// T-ReleasePerf10（20261030）券04：verifyMarketplace home 闲时保温——发行日下载税的常态化解。
+// 现状：home 机器级持久（T8 N3）但保温靠「恰好最近跑过」；上游依赖插件前进一周，发行日
+// verifyMarketplace 对增量重下载（10-29 实测单步 18m29s 占整链 88%；慢代理窗同一笔 3.33GB
+// 膨胀到 ~30m）。本任务对**最近可用发行包**跑与 verifyMarketplace 同参数面的在线 check，
+// 把依赖插件解析/下载回填 home，使正式门禁的 verifyMarketplace 回到暖窗本体 ~9m15s。
+// 语义红线不触碰：正式门禁仍在线、无豁免、按 verdict 判失败——本任务只是把「下载」段搬运出
+// 关键路径，不做任何 verdict 缓存（T7 红线）。与 verifyMarketplace 的差异仅三处：
+//   ① 报告落 build/reports/pluginVerifierRefresh（不参与门禁读数）；
+//   ② doLast 不做 baseline verdict 判定——只打锚点＋写 home/.mpv-refresh-stamp（gate 脚本
+//      按它判陈旧并 WARN，>36h 建议先跑本任务）；
+//   ③ zip 解析 = -PrefreshZip 显式 → distributions/*.zip mtime 最新（配置期解析；refresh 独立
+//      命令跑、从不与 buildPlugin 同批，配置与执行间 distributions 不变；CC 复用冻结旧路径时
+//      zip 缺失会被 doFirst 拦下给指引）→ 无 zip 即 StopExecutionException 跳过（新树首跑不炸）。
+// 并发面：同 marketplace home，assertNoForeignVerifier 锁探测同款兜底；闲时登记单 verifier
+// JVM ~2.8GB commit（计划 docs/开发计划/20261030-0827-T-ReleasePerf10-… §三 券04）。
+val verifyMarketplaceRefresh = tasks.register<JavaExec>("verifyMarketplaceRefresh") {
+    group = "verification"
+    description =
+        "verifyMarketplace home 闲时保温：对最近发行包回填在线依赖缓存（无 baseline 判定；-PrefreshZip 显式指定）"
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    val verifyHome = resolveVerifierHome("marketplace")
+    jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
+    jvmArgs(verifierProxyJvmArgs)
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierRefresh").get().asFile
+    val preferredZip = layout.buildDirectory
+        .file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val gradleUserHome = gradle.gradleUserHomeDir
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    val explicitZip = providers.gradleProperty("refreshZip").orNull?.let { File(it) }
+    val zipFile = explicitZip?.takeIf { it.isFile }
+        ?: preferredZip.takeIf { it.isFile }
+        ?: layout.buildDirectory.dir("distributions").get().asFile
+            .listFiles { f: File -> f.isFile && f.name.endsWith(".zip") }
+            ?.maxByOrNull { it.lastModified() }
+        ?: preferredZip
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        buildList {
+            add("check-plugin")
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            add(ide243.absolutePath)
+            add(ideDir("idea-2025.3.5-win").absolutePath)
+            add(ideDir("idea-2026.2.3-win").absolutePath)
+        }
+    })
+    doFirst {
+        assertNoForeignVerifier(verifyHome, logger)
+        if (!zipFile.isFile) {
+            throw StopExecutionException(
+                "verifyMarketplaceRefresh 跳过：无可用发行包（$zipFile 不存在）。" +
+                    "新树首跑属预期（home 尚空、无冷税可省）；要跑保温请 -PrefreshZip=<zip> 显式指定，或先 buildPlugin。",
+            )
+        }
+        logger.lifecycle("verifyMarketplaceRefresh START ${System.currentTimeMillis()} zip=$zipFile（在线、无豁免、保温用）")
+    }
+    doLast {
+        logger.lifecycle("verifyMarketplaceRefresh END ${System.currentTimeMillis()}")
+        verifyHome.mkdirs()
+        val stamp = File(verifyHome, ".mpv-refresh-stamp")
+        stamp.writeText(System.currentTimeMillis().toString())
+        logger.lifecycle("verifyMarketplaceRefresh stamp -> $stamp")
     }
 }
 

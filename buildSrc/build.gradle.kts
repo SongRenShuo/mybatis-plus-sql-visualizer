@@ -15,3 +15,11 @@ dependencies {
     implementation("org.jetbrains.intellij.platform:org.jetbrains.intellij.platform.gradle.plugin:2.18.1")
     implementation("org.jetbrains.changelog:org.jetbrains.changelog.gradle.plugin:2.5.0")
 }
+
+// T-TestShardParallel：并发 Gradle 进程共享 buildSrc/build 时，任一路重编会让其余路的
+// 输出指纹失效并级联重编，最终互踩生成源（compilePluginsBlocks FAILED）。
+// 并行运行器用 -PmpvBuildSrcDir 给每个 lane 指独立输出目录；缺省仍是 build，
+// 串行 testShards / 日常构建行为不变。
+providers.gradleProperty("mpvBuildSrcDir").orNull?.let {
+    layout.buildDirectory.set(file(it))
+}
