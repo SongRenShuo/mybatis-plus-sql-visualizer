@@ -55,10 +55,18 @@ public final class SqlLogParamCodec {
     private static final String CANDS_FIELD = "cd";
     private static final String CAND_CLASSES_FIELD = "cc";
     private static final String STACK_DIGEST_FIELD = "sd";
+    /** T-StackBizFrame S3：线程名（仅非空落键；旧 payload 无此键 → null，标题退回纯「调用栈」）。 */
+    private static final String THREAD_NAME_FIELD = "tn";
     /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注（仅非默认落键；旧 payload 无此键 → null）。 */
     private static final String ACTUAL_SQL_FIELD = "a";
     /** 捕获路径（CaptureProvenance 常量名，仅非 UNKNOWN 落键；旧 payload 无此键 → 读端回退 UNKNOWN）。 */
     private static final String PROVENANCE_FIELD = "pv";
+    /**
+     * T-DialectInferFix：本次执行连接的注册方言名（仅非空落键）。
+     * 旧 payload 无此键 → 解码 null（读回按「未知」处理，历史预览保持既有回落链）；
+     * 不认识的值也不丢弃整条——只在 byName 时落兼容兜底。
+     */
+    private static final String DIALECT_FIELD = "dl";
 
     private static final Gson GSON = new Gson();
 
@@ -85,6 +93,8 @@ public final class SqlLogParamCodec {
             List<String> candidateClasses,
             /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
             String stackDigest,
+            /** T-StackBizFrame S3：产生该 SQL 的线程名（弹层标题用）；旧 payload 为 null。 */
+            String threadName,
             /**
              * T-McpAuditTrail T-MAT-03：来源（当前仅 {@link SqlSource#MCP} 落键）；旧 payload / 非 MCP 条目为 null。
              * 读端把它回填进 {@link LogSqlEntry#source()}，不填则沿用默认 {@link SqlSource#UNKNOWN}。
@@ -93,11 +103,13 @@ public final class SqlLogParamCodec {
             /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注；旧 payload 为 null。 */
             String actualSql,
             /** 捕获路径；旧 payload / 未打标条目为 null（读端回退 UNKNOWN）。 */
-            CaptureProvenance captureProvenance) {
+            CaptureProvenance captureProvenance,
+            /** T-DialectInferFix：本次执行连接的注册方言名；旧 payload 为 null。 */
+            String dialectName) {
 
         /** 无扩展字段形态（Kotlin data class 默认参数等价）。 */
         public DecodedPayload(String rawSql, List<LogSqlParam> params) {
-            this(rawSql, params, null, null, null, null, List.of(), List.of(), null, null, null, null);
+            this(rawSql, params, null, null, null, null, List.of(), List.of(), null, null, null, null, null, null);
         }
     }
 
@@ -205,8 +217,14 @@ public final class SqlLogParamCodec {
             if (entry.stackDigest() != null) {
                 json.name(STACK_DIGEST_FIELD).value(entry.stackDigest());
             }
+            if (entry.threadName() != null && !entry.threadName().isBlank()) {
+                json.name(THREAD_NAME_FIELD).value(entry.threadName());
+            }
             if (entry.actualSql() != null) {
                 json.name(ACTUAL_SQL_FIELD).value(entry.actualSql());
+            }
+            if (entry.dialectName() != null && !entry.dialectName().isBlank()) {
+                json.name(DIALECT_FIELD).value(entry.dialectName());
             }
             // 捕获路径仅非 UNKNOWN 落键（枚举名而非序号，新增常量不使旧文件失效）
             if (entry.captureProvenance() != null && entry.captureProvenance() != CaptureProvenance.UNKNOWN) {
@@ -346,12 +364,15 @@ public final class SqlLogParamCodec {
                     sourceCandidates,
                     candidateClasses,
                     stringField(json, STACK_DIGEST_FIELD),
+                    stringField(json, THREAD_NAME_FIELD),
                     // T-McpAuditTrail T-MAT-03：来源键缺失/值非本版本枚举名 → null（旧文件与旧版写入端天然兼容，
                     // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
                     sourceField(json, SOURCE_FIELD),
                     stringField(json, ACTUAL_SQL_FIELD),
                     // 键缺失 / 值非本版本枚举名 → null（读端回退 UNKNOWN，不因扩展键损坏丢弃整条）
-                    provenanceField(json, PROVENANCE_FIELD));
+                    provenanceField(json, PROVENANCE_FIELD),
+                    // T-DialectInferFix：键缺失/空白 → null（旧条目保持「未知」，不因扩展键损坏丢弃整条）
+                    stringField(json, DIALECT_FIELD));
         } catch (Exception e) {
             return null;
         }

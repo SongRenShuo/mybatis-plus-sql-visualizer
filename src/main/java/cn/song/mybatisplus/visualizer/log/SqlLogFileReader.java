@@ -564,12 +564,15 @@ public final class SqlLogFileReader {
                     decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
                     decodedExt != null ? decodedExt.candidateClasses() : List.of(),
                     decodedExt != null ? decodedExt.stackDigest() : null,
+                    decodedExt != null ? decodedExt.threadName() : null,
                     0L,
                     decodedExt != null ? decodedExt.mapperStatement() : null,
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,
                     decodedExt != null ? decodedExt.updateCount() : null,
                     databaseName,
+                    // T-DialectInferFix：pd 载荷里的注册方言名；旧文件无此键 → null（调用方从 `db:` 角标回填）
+                    decodedExt != null ? decodedExt.dialectName() : null,
                     decodedExt != null ? decodedExt.actualSql() : null,
                     decodedExt != null && decodedExt.captureProvenance() != null
                             ? decodedExt.captureProvenance() : CaptureProvenance.UNKNOWN);
@@ -591,11 +594,13 @@ public final class SqlLogFileReader {
                     decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
                     decodedExt != null ? decodedExt.candidateClasses() : List.of(),
                     decodedExt != null ? decodedExt.stackDigest() : null,
+                    decodedExt != null ? decodedExt.threadName() : null,
                     0L,
                     decodedExt != null ? decodedExt.mapperStatement() : null,
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,
                     decodedExt != null ? decodedExt.updateCount() : null,
+                    null,
                     null,
                     null,
                     decodedExt != null && decodedExt.captureProvenance() != null
