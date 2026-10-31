@@ -61,10 +61,16 @@ class DialectExplainTest {
         assertEquals("EXPLAIN $sample", DmDialect.INSTANCE.renderExplainStatement(sample))
     }
 
-    /** T-DialectXcFamily：OceanBase 同 MySQL 形态（官方 V4.x EXPLAIN 文法缺省 TRADITIONAL 表格行——文档级）。 */
+    /**
+     * T-DialectXcFamily 接入；T-OBExplainFormat 纠档：模板同 MySQL（`EXPLAIN <sql>`），但输出**不是**
+     * 表格行——真机实证（社区镜像 oceanbase/oceanbase-ce:4.3.5-lts，OB CE 4.3.5.6，MySQL 模式）
+     * `EXPLAIN SELECT 1` 返回单列 `Query Plan` ASCII 计划树（`TABLE RANGE SCAN` + `Outputs & filters`），
+     * 故档位为 TEXT（误登 TABLE 会让索引建议按 MySQL 列名解析而永不触发）。
+     */
     @Test
-    fun `OceanBase 同 MySQL 形态（文档实证）`() {
+    fun `OceanBase 同 MySQL 模板但档位为 TEXT（真机实证）`() {
         assertEquals("EXPLAIN $sample", OceanBaseDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals(ExplainOutputFormat.TEXT, ExplainSupport.formatFor("OceanBase"))
     }
 
     /** T-DialectXcFamily：openGauss 同金仓形态（openGauss 5.0.0 真机实证 FORMAT JSON 单列 JSON 文本）。 */
