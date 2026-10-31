@@ -107,6 +107,8 @@ import javax.swing.JRadioButtonMenuItem
         slowQueryCounter.reset()
         snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
         updateSlowQueryLabel()
+        // S1-4④：非法正则不再静默——过滤已把本次编译结果写进 regexMemo，这里补可见反馈。
+        updateSearchErrorFeedback()
     }
 
     /**

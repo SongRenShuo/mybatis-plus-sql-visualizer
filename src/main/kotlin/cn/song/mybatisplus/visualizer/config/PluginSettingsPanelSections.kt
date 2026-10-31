@@ -586,6 +586,28 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     }
                 }
             })
+            // S1-4⑥：注入链边界明示（log/ProjectTypeDetector.kt:122 —— 非 Spring Boot 模块当前
+            // 不生成运行时注册链，只落拦截器类本体）。形态照本页首组「帧过滤前缀」指向说明：
+            // 跨两列直挂、JBLabel 包一层面板（sectionGroup 的列宽计算扫描直接 JBLabel 子件）。
+            g.gridx = 0
+            g.gridwidth = 2
+            g.weightx = 1.0
+            g.fill = GridBagConstraints.HORIZONTAL
+            p.add(
+                JPanel(BorderLayout()).apply {
+                    isOpaque = false
+                    add(
+                        JBLabel(
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor.boundary")),
+                        ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
+                        BorderLayout.CENTER,
+                    )
+                },
+                g,
+            )
+            g.gridwidth = 1
+            g.fill = GridBagConstraints.NONE
+            g.gridy++
             // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
             addRow(p, g, "", enhancedCaptureCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
