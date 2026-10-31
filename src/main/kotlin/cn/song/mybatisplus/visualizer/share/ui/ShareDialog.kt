@@ -169,6 +169,8 @@ class ShareDialog(
             paramValues = panel.paramValuesSnapshot(),
             tableName = panel.currentTableName(),
             source = source,
+            // NEW-21：语句模型在场时体检段逐方言真渲染（不在场则按文本证据判，如实降级）
+            statement = panel.currentStatement(),
         )
     }
 

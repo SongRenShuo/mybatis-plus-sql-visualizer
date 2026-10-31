@@ -2,8 +2,10 @@ package cn.song.mybatisplus.visualizer.share.format
 
 import cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector
+import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DialectCapabilities
+import cn.song.mybatisplus.visualizer.sql.MultiDialectRenderPlan
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -53,6 +55,13 @@ object DiagnosticReportFormatter {
         val rollbackLines: List<String> = emptyList(),
         /** 方言能力矩阵行（R52 呈现层触点二）。 */
         val capabilityLines: List<String> = emptyList(),
+        /**
+         * NEW-21 信创兼容性体检行（一次渲染全部注册方言 + 差异分类）。
+         *
+         * 空列表 = **本输入没有渲染源**（既无 SQL 文本也无语句模型），段内输出诚实说明；
+         * 非空 = 每方言一行（`方言名: 差异摘要 / 无差异`），首行为总耗时摘要。
+         */
+        val compatLines: List<String> = emptyList(),
     )
 
     /** 从 SQL + 方言名聚合各诊断段（纯逻辑；IDE 侧与测试共用）。 */
@@ -63,6 +72,11 @@ object DiagnosticReportFormatter {
         paramValues: Map<String, String> = emptyMap(),
         tableName: String? = null,
         source: String? = null,
+        /** NEW-21：预览链已有的话句模型（Wrapper/XML）——非 null 时体检段逐方言**真渲染**。 */
+        statement: SqlStatement? = null,
+        /** NEW-21：体检参与方言（默认全部注册方言）。 */
+        compatDialects: List<cn.song.mybatisplus.visualizer.sql.Dialect> =
+            DialectRegistry.dialects,
     ): Input {
         val perfLines = SqlPerfAnalyzer.analyze(sql).map { w ->
             "[" + w.severity.name + "] " + runCatching {
@@ -78,6 +92,7 @@ object DiagnosticReportFormatter {
         val capabilityLines = DialectRegistry.byName(dialectName).let { dialect ->
             DialectCapabilities.summaryText(dialect).lines()
         }
+        val compatLines = buildCompatLines(sql, statement, compatDialects)
         return Input(
             sql = sql,
             sources = sources,
@@ -91,7 +106,52 @@ object DiagnosticReportFormatter {
             unboundedLines = unboundedLines,
             rollbackLines = rollbackLines,
             capabilityLines = capabilityLines,
+            compatLines = compatLines,
         )
+    }
+
+    /**
+     * NEW-21：体检段行（每方言一行 + 首行耗时摘要）。
+     *
+     * 有语句模型 → [MultiDialectRenderPlan.Source.Model]（逐方言真渲染，差异含分页/引用形态）；
+     * 只有 SQL 文本 → [MultiDialectRenderPlan.Source.Text]（产物即原文，差异按文本证据判定，
+     * 分页/函数/保留字三档仍可判，隐式转换档如实标注不可判）。
+     * 两者都没有（SQL 为空）→ 空列表（段内输出诚实说明）。
+     */
+    private fun buildCompatLines(
+        sql: String,
+        statement: SqlStatement?,
+        dialects: List<cn.song.mybatisplus.visualizer.sql.Dialect>,
+    ): List<String> {
+        val source = statement?.let { MultiDialectRenderPlan.Source.Model(it) }
+            ?: sql.takeIf { it.isNotBlank() }?.let { MultiDialectRenderPlan.Source.Text(it) }
+            ?: return emptyList()
+        val result = MultiDialectRenderPlan.plan(source, dialects)
+        val lines = mutableListOf<String>()
+        lines += MpSqlVisualizerBundle.message("diag.report.compat.summary", result.rows.size, result.differenceCount, result.elapsedMillis)
+        for (note in result.notes) {
+            lines += runCatching { MpSqlVisualizerBundle.message(note) }.getOrDefault(note)
+        }
+        for (row in result.rows) {
+            if (row.differences.isEmpty()) {
+                lines += MpSqlVisualizerBundle.message("diag.report.compat.rowOk", row.dialectName)
+            } else {
+                val details = row.differences.joinToString("; ") { diff -> renderDifference(diff) }
+                lines += MpSqlVisualizerBundle.message("diag.report.compat.rowDiff", row.dialectName, details)
+            }
+        }
+        return lines
+    }
+
+    /** 单条差异文案（分类前缀 + 本地化正文）。 */
+    private fun renderDifference(diff: MultiDialectRenderPlan.Difference): String {
+        val text = runCatching {
+            MpSqlVisualizerBundle.message(diff.messageKey, *diff.args.toTypedArray())
+        }.getOrDefault(diff.messageKey)
+        val label = runCatching {
+            MpSqlVisualizerBundle.message("compat.category.${diff.category.name.lowercase()}")
+        }.getOrDefault(diff.category.name)
+        return "[$label] $text"
     }
 
     /** 回滚预案段：评级 + 自查模板 + 语句条数；UNABLE 时输出原始降级警示（V74 回滚降级文案）。 */
@@ -144,6 +204,9 @@ object DiagnosticReportFormatter {
         sb.append("\n## ").append(MpSqlVisualizerBundle.message("diag.report.section.capabilities")).append("\n")
         appendLines(sb, input.capabilityLines, MpSqlVisualizerBundle.message("diag.report.none"))
 
+        sb.append("\n## ").append(MpSqlVisualizerBundle.message("diag.report.section.compat")).append("\n")
+        appendLines(sb, input.compatLines, MpSqlVisualizerBundle.message("diag.report.compat.none"))
+
         return sb.toString()
     }
 
@@ -178,6 +241,7 @@ object DiagnosticReportFormatter {
         appendSectionHtml(sb, "diag.report.section.unbounded", input.unboundedLines, "diag.report.unbounded.none")
         appendSectionHtml(sb, "diag.report.section.rollback", input.rollbackLines, "diag.report.rollback.none")
         appendSectionHtml(sb, "diag.report.section.capabilities", input.capabilityLines, "diag.report.none")
+        appendSectionHtml(sb, "diag.report.section.compat", input.compatLines, "diag.report.compat.none")
 
         sb.append("</body></html>")
         return sb.toString()
