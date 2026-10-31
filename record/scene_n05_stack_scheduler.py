@@ -1,17 +1,21 @@
 # -*- coding: utf-8 -*-
-"""N05 调用栈跳转·定时任务线程帧（R15 补录计划 N5，P3 可裁项）。
+"""N05 调用栈·定时任务线程帧（R15 补录计划 N5）。
 
-分镜（约 12s）：
-  1. demo 应用跑起来（IDE 内启动，坑 74），@Scheduled 任务触发一条 SQL 进增强捕获
-  2. SQL 日志列表点该条目的调用栈入口 → 弹层标题线程名 `scheduling-1`
-  3. 点栈帧跳转到代码行
+前置（已完成）：demo 应用经 IDE 运行配置启动，`@Scheduled` 每 3s 查一次 user；
+捕捉开启，列表里有大量 `[SchedulerDemoTask.java:40]` 条目（线程 scheduling-1）。
+栈弹层是**预览面板 meta 行的悬停弹层**（`StackFrameHover`，400ms 防抖），
+不是列表 chip 的点击——这是本张的第一条实测结论。
 
-前置（demo 工程改动，走插件仓正常流程单独提交）：
-  · demo 加一个 @Scheduled 定时任务（fixedRate=2s），体内调一次 mapper 查询
-    （落在 mybatis-plus-demo 模块，如 UserMapper.selectById(1)）+ 主类 @EnableScheduling
-  · 改动单独提交、录制完成后保留（这是演示能力的一部分，不是录制态污染）
-风险：调度任务 2s 一条会持续刷列表——录「类型过滤/其他条目」类镜头时先停应用；
-  本张最后录，录完即停应用（坑 74：IDE 内起的应用非提权杀不掉，先想好停法）。
+分镜（约 11s）：
+  1. 列表定格：调度条目（SchedulerDemoTask.java:40）
+  2. 双击条目 → 完整预览面板打开（meta 行出现「调用栈: org.mybatis.spring.Sq…」）
+  3. 悬停「调用栈」→ 弹层标题 `调用栈 · scheduling-1`（线程名帧）
+  4. 点栈帧 `pollUser cn.song.mybatisplusdemo.task.SchedulerDemoTask:40` → 跳源码
+收尾：定格在 SchedulerDemoTask.java 第 40 行。
+
+坐标（批0 按当前布局实测，region 相对）：
+  列表条目体 (500, 275)；预览 meta 行「调用栈」chip (420, 220)；
+  弹层内 pollUser 帧行 (500, 429)。
 """
 import os
 import sys
@@ -23,48 +27,53 @@ sys.path.insert(0, os.path.join(HERE, "lib"))
 
 import pyautogui  # noqa: E402
 from gifkit import Recorder, shot  # noqa: E402
-from nav import force_en_us  # noqa: E402
 
 REGION = (285, 26, 1354, 974)
 OUT = os.path.join(HERE, "perf", "n05_stack_scheduler.mp4")
 
-# TODO(批0 踩点后回填)：
-STACK_ENTRY = None       # 列表里调度条目的调用栈入口（region 相对）
-STACK_FRAME = None       # 弹层里可跳转的栈帧项
+LIST_ROW = (500, 275)
+STACK_CHIP = (420, 220)
+FRAME_POLLUSER = (500, 429)
+
+
+def ap(x, y):
+    return (x + REGION[0], y + REGION[1])
 
 
 def main():
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
-    force_en_us()
     time.sleep(0.5)
 
-    # ---- prep（不入镜）：IDE 内启动 demo 应用（坑 74 链路：配置下拉→Recent→绿三角）----
-    #      等调度任务产出 ≥2 条 SQL 日志；SQL 日志工具窗就位、捕捉开
+    # ---- prep（不入镜）：关掉可能开着的预览，鼠标停安全区 ----
+    pyautogui.press("esc")
+    time.sleep(1.0)
+    pyautogui.moveTo(*ap(1300, 600), duration=0.4)
+    time.sleep(0.5)
+
     r = Recorder(REGION, OUT)
     r.start()
     try:
-        # 1. 鼠标滑到调度条目（线程名 scheduling-1 在列表元信息行）
-        pyautogui.moveTo(abs_x(STACK_ENTRY), abs_y(STACK_ENTRY), duration=0.6)
-        time.sleep(1.4)
-        # 2. 点调用栈入口 → 弹层（标题线程名 scheduling-1）
-        pyautogui.click(abs_x(STACK_ENTRY), abs_y(STACK_ENTRY))
-        time.sleep(1.6)
-        shot(REGION, os.path.join(HERE, "perf", "n05_stack_popup.png"))
-        # 3. 点栈帧 → 跳转到代码行
-        pyautogui.click(abs_x(STACK_FRAME), abs_y(STACK_FRAME))
+        # 1. 列表定格：调度条目
+        pyautogui.moveTo(*ap(*LIST_ROW), duration=0.6)
         time.sleep(2.0)
+        # 2. 双击开预览（3.4~3.6s 画完）
+        pyautogui.doubleClick(*ap(*LIST_ROW))
+        time.sleep(3.8)
+        # 3. 悬停 meta 行的「调用栈」→ 弹层（标题带线程名）
+        pyautogui.moveTo(*ap(*STACK_CHIP), duration=0.6)
+        time.sleep(2.2)
+        # 4. 点 pollUser 栈帧 → 跳源码
+        pyautogui.click(*ap(*FRAME_POLLUSER))
+        time.sleep(2.4)
+        # 关预览露出源码（跳转落点：SchedulerDemoTask.java 第 40 行）
+        pyautogui.click(*ap(1201, 798))
+        time.sleep(1.8)
+        pyautogui.moveTo(*ap(700, 500), duration=0.6)
+        time.sleep(1.6)
         shot(REGION, os.path.join(HERE, "perf", "n05_final.png"))
     finally:
         print("frames:", r.stop())
-
-
-def abs_x(p):
-    return p[0] + REGION[0]
-
-
-def abs_y(p):
-    return p[1] + REGION[1]
 
 
 if __name__ == "__main__":

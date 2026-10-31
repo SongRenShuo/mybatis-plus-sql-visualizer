@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
-"""N03 SQL 日志 DDL 类型颜色标记（R15 补录计划 N3，P2 可裁项）。
+"""N03 SQL 日志 DDL 类型颜色标记（R15 补录计划 N3）。
 
-分镜（约 10s）：
-  1. SQL 日志工具窗列表里出现 CREATE / DROP 类 DDL 条目（虚线色条）与 DML 条目（实色条）同屏
-  2. 点「全部 ▾」类型过滤 → 弹窗里两档 DDL（CREATE·ALTER·RENAME / DROP·TRUNCATE）勾选形态
-  3. 只勾 DDL → 列表只剩 DDL 条目；勾回 → 还原
+前置（已完成）：demo 应用经 IDE 运行配置启动跑过一轮调度
+（tick1 CREATE / tick6 DROP / 其余 SELECT），捕捉开启已收条目；应用已停、列表冻结。
+列表当前停在 DDL 段：`CREATE TABLE IF NOT EXISTS mpsv_tmp_ddl_demo`（虚线色条）
+与 `DROP TABLE IF EXISTS mpsv_tmp_ddl_demo`（虚线色条）夹着 SELECT 条目（实色条）。
 
-前置（批 0 踩点）：
-  · demo 控制台先跑出 DDL 日志：原生控制台执行 CREATE TABLE / DROP TABLE 临时表
-    （如 `CREATE TABLE mpsv_tmp_ddl_demo (id INT)` → `DROP TABLE mpsv_tmp_ddl_demo`），
-    让增强捕获收进 DDL 条目；录完无需还原（表已删）
-  · 「捕捉」开关已开（悬停工具栏绿色三角，坑 36），诊断行确认在收条目
-  · 类型过滤弹窗按钮坐标、色条判定带现标
+分镜（约 11s）：
+  1. 列表定格：DDL 虚线色条 vs SELECT 实色条同屏
+  2. 点「全部 ▾」→ 类型过滤弹层（查询/插入/更新/删除/建表/删表 六档 + 只看慢查询 + 全不选）
+  3. 全不选 → 只勾「建表」「删表」→ 关弹层 → 列表只剩 DDL
+收尾：定格在过滤后的 DDL 列表，并把六档勾回。
 
-风险：DDL 条目被旧日志淹没 → 先「清空」再触发 DDL；类型过滤弹窗是 JBPopup（robot 不可达），
-坐标按像素带现量。
+坐标（批0 按当前布局活体实测，region 相对）：
+  过滤按钮 robot 定位（`//div[contains(@text,'全部')]`）；弹层勾选 x=1147，
+  六档行 y：查询 213 / 插入 241 / 更新 269 / 删除 297 / 建表 325 / 删表 353；
+  「全不选」按钮 y≈464；关弹层点弹层外空白 (900, 560)。
 """
 import os
 import sys
@@ -26,44 +27,69 @@ sys.path.insert(0, os.path.join(HERE, "lib"))
 
 import pyautogui  # noqa: E402
 from gifkit import Recorder, shot  # noqa: E402
-from nav import force_en_us  # noqa: E402
+from robot import click_component  # noqa: E402
 
 REGION = (285, 26, 1354, 974)
 OUT = os.path.join(HERE, "perf", "n03_ddl_type_color.mp4")
 
-# TODO(批0 踩点后回填)：
-FILTER_BTN = None        # 「全部 ▾」类型过滤按钮（region 相对）
-DDL_CHECK_A = None       # 过滤弹窗第一档 DDL 复选框
-DDL_CHECK_B = None       # 过滤弹窗第二档 DDL 复选框
+CHK_X = 1147
+ROWS = {"query": 213, "insert": 241, "update": 269, "delete": 297, "create": 325, "drop": 353}
+BTN_NONE = (1170, 464)
+BLANK = (900, 560)
+
+
+def ap(x, y):
+    return (x + REGION[0], y + REGION[1])
+
+
+def open_filter():
+    click_component("//div[contains(@text,'全部')]")
+    time.sleep(1.4)
+
+
+def toggle(row_key):
+    pyautogui.click(*ap(CHK_X, ROWS[row_key]))
+    time.sleep(0.45)
 
 
 def main():
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
-    force_en_us()
     time.sleep(0.5)
 
-    # ---- prep（不入镜）：SQL 日志工具窗就位 + 捕捉开 + DDL 条目在列表顶部 ----
-    # （DDL 由批 0 在原生控制台跑临时表产生；此处假设列表已含 CREATE/DROP 条目）
+    pyautogui.moveTo(*ap(1300, 300), duration=0.4)
+    time.sleep(0.5)
+
     r = Recorder(REGION, OUT)
     r.start()
     try:
-        # 1. 打开类型过滤弹窗
-        pyautogui.click(*FILTER_BTN)
-        time.sleep(1.2)
-        # 2. 展示两档 DDL 勾选形态（停帧）
-        time.sleep(1.6)
-        # 3. 只勾 DDL 两档 → 应用 → 列表只剩 DDL
-        pyautogui.click(*DDL_CHECK_A)
-        time.sleep(0.5)
-        pyautogui.click(*DDL_CHECK_B)
+        # 1. DDL 虚线色条 + SELECT 实色条同屏定格
+        pyautogui.moveTo(*ap(700, 200), duration=0.6)
+        time.sleep(2.2)
+        # 2. 类型过滤弹层
+        open_filter()
         time.sleep(1.4)
-        # （确认/关闭弹窗的动作按批 0 实际弹窗形态补）
-        time.sleep(1.6)
+        # 3. 全不选 → 只勾建表/删表
+        pyautogui.click(*ap(*BTN_NONE))
+        time.sleep(0.8)
+        toggle("create")
+        toggle("drop")
+        time.sleep(0.8)
+        # 4. 关弹层 → 列表只剩 DDL
+        pyautogui.click(*ap(*BLANK))
+        time.sleep(2.6)
         shot(REGION, os.path.join(HERE, "perf", "n03_final.png"))
-        # 4. 勾回还原（不入镜的 prep 段做）
     finally:
         print("frames:", r.stop())
+
+    # ---- 收尾（不入镜）：六档勾回 ----
+    open_filter()
+    pyautogui.click(*ap(*BTN_NONE))
+    time.sleep(0.6)
+    for key in ROWS:
+        toggle(key)
+    pyautogui.click(*ap(*BLANK))
+    time.sleep(0.6)
 
 
 if __name__ == "__main__":
