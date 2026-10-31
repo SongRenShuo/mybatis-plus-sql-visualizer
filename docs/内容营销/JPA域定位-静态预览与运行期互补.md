@@ -23,7 +23,7 @@
 | 所处阶段 | 运行期：debugger 会话内查看语句 | 写前：编码期静态预览 |
 | 前置条件 | 启动应用、进入 debugger 会话 | 不启动应用、不连数据库 |
 | 兼容区间 | 263.5701.*（仅 2026.3，当前为 EAP） | 243 无上限（2024.3~2026.x） |
-| 代表能力 | 会话内语句可见、实时 N+1 检测、重放控制台、调用栈超链接 | 派生方法 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE 预览；免库 mock 填参（空参三态）；嵌入段列名精确（@Embedded / @AttributeOverride 展平，真机闭环已上架）；11 方言 EXPLAIN（含达梦 / 人大金仓 / OceanBase / openGauss 信创场景） |
+| 代表能力 | 会话内语句可见、实时 N+1 检测、重放控制台、调用栈超链接 | 派生方法 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE 预览；免库 mock 填参（空参三态）；嵌入段列名精确（@Embedded / @AttributeOverride 展平，真机闭环已上架）；14 方言 EXPLAIN（含达梦 / 人大金仓 / OceanBase / openGauss / GaussDB / 瀚高 / 海量信创场景） |
 
 再表态（主张，明示）：官方做运行期是对的，那是平台默认答案该站的位置；我们做静态也是对的，写前场景在结构上就轮不到会话工具——应用没跑起来，会话无从谈起。两件都装也完全成立：写代码时看我们的预览，断点调试时用官方的会话视图。
 
