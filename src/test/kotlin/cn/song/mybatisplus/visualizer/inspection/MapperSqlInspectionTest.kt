@@ -244,11 +244,84 @@ class MapperSqlInspectionTest : BasePlatformTestCase() {
                 """.trimIndent(),
             ),
         )
-        // PSI 文本不含 include 展开（P-1 取证结论），故调用点看不到片段内容——不会把片段里的
+        // PSI 文本不含 include 展开（见下一条取证用例），故调用点看不到片段内容——不会把片段里的
         // 参数按调用点的方法签名误判；此处只断言不崩、不产生参数类误报。
         assertTrue(
             "include 展开不在 PSI 文本里，调用点不得因此产生参数误报",
             hits("未声明").isEmpty() && hits("not declared").isEmpty(),
+        )
+    }
+
+    /**
+     * **P-1 取证**（立项册 §二 待验证前提）：`<include>` 的 PSI 文本**不含**展开内容。
+     *
+     * 结论：`XmlTag.text` 只有 `<include refid="base"/>` 本身，片段里的 `#{a}` 不在其中。
+     * 若假设相反（以为 PSI 已展开），「`#{}` 参数缺失」规则会把 `#{}` 判在调用点的方法签名上——
+     * 而 MyBatis 里片段参数确实来自调用点，这样判本身没错，但**偏移全部对不上**（片段文本不在
+     * 该标签里），标红会落错位置。
+     *
+     * 本仓的检查因此按「扫描面 = 源文件字面」设计：片段在自己的 `<sql>` 处被扫（那里 offsets 正确），
+     * 调用点只扫调用点自己的文本。对照面：[cn.song.mybatisplus.visualizer.xml.XmlMapperParser]
+     * 走 DOM 解析 + `XmlIncludeExpander`，**是**展开的——这正是两条链路不能混用 PSI 文本的原因。
+     */
+    fun testP1取证_include在PSI文本里不展开而在XmlMapperParser里展开() {
+        val text = mapperXml(
+            """
+            <sql id="base">where a = #{a}</sql>
+            <select id="s">select * from t <include refid="base"/></select>
+            """.trimIndent(),
+        )
+        myFixture.configureByText("UserMapper.xml", text)
+
+        val select = com.intellij.psi.util.PsiTreeUtil
+            .collectElementsOfType(myFixture.file, com.intellij.psi.xml.XmlTag::class.java)
+            .first { it.name == "select" }
+
+        // ① PSI 侧：不展开
+        assertTrue("PSI 里应能看到 <include> 标签本身", select.text.contains("<include"))
+        assertTrue(
+            "PSI 文本不得含片段内容（若含，说明平台改了展开行为，本检查的偏移假设必须重审）：${select.text}",
+            !select.text.contains("#{a}") && !select.text.contains("where a"),
+        )
+
+        // ② XmlMapperParser 侧（mapperCheck 用的那条链）：展开
+        val model = cn.song.mybatisplus.visualizer.xml.XmlMapperParser().parse(text)
+        val statement = model.statements.single { it.id == "s" }
+        assertTrue(
+            "XmlMapperParser 的 rawText 应含 include 展开后的片段内容（这是 DOM 链路与 PSI 链路的分野）：" +
+                "${statement.rawText}",
+            statement.rawText.orEmpty().contains("#{a}") && statement.rawText.orEmpty().contains("where a"),
+        )
+    }
+
+    /**
+     * **P-2 取证**：注解 SQL 的 PSI 文本带编译器插入的换行/缩进，判定前不需要归一化。
+     *
+     * 因为本检查只做 token（`${`/`#{`）与引号字符的**字符级**扫描，换行与缩进不参与判定；
+     * 且 `AnnotationSqlPreviewService` 的取数走 `String.join(" ", value).trim()`，与 MyBatis 拼接口径一致。
+     * 这里钉住「多行文本块的常量求值结果保留换行，但 token 扫描仍能命中」。
+     */
+    fun testP2取证_注解多行文本块无需归一化即可判定() {
+        enableAll()
+        myFixture.configureByText(
+            "MultiLineMapper.java",
+            // 用普通（非 raw）Kotlin 字符串拼多行 Java 源码：目标是把「含换行与缩进的注解 SQL」
+            // 喂进 PSI，验证判定不依赖空白归一化
+            listOf(
+                "package com.acme;",
+                "import org.apache.ibatis.annotations.Param;",
+                "import org.apache.ibatis.annotations.Select;",
+                "interface MultiLineMapper {",
+                // Java 源码里的 \\n 是**字面反斜杠+n**（Java 的转义序列），不是 Kotlin 的换行——
+                // 这样常量求值结果里才带真换行，且 Java 字符串字面量本身仍是单行合法源码
+                "    @Select(\"select *\\n  from t\\n order by \${orderBy}\")",
+                "    Object list(@Param(\"name\") String name);",
+                "}",
+            ).joinToString("\n"),
+        )
+        assertTrue(
+            "多行文本块里的 \${orderBy} 应被识别（换行/缩进不参与判定）",
+            hits("直接替换").isNotEmpty() || hits("Direct substitution").isNotEmpty(),
         )
     }
 }
