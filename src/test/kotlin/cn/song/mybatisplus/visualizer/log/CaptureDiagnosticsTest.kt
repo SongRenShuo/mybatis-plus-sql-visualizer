@@ -208,4 +208,84 @@ class CaptureDiagnosticsTest {
         assertTrue("应在空白处断行且不留首尾空格：$lines", lines.all { it == it.trim() })
         assertTrue("不得把单词切成两半：$lines", lines.flatMap { it.split(" ") }.all { it in source.split(" ") })
     }
+
+    // ---------- T-CaptureCatchAll 券02/03：活性回落 + attach 覆盖自检 ----------
+    // k2j 互操作注：captureDiagnosticsText/wrapEmptyTextLines 为 CaptureDiagnostics 静态方法（显式限定）；
+    // CaptureDiagnostics 走 12 参规范构造器、AgentAttachStats 走 9 参 record 构造器（Java 不收具名实参，均位置实参）。
+
+    private fun diagWithCoverage(
+        fallback: Boolean = false,
+        stats: cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats? = null,
+    ) = CaptureDiagnostics(
+        true, false, 0, 1, 30L, "已挂载 pid=1", 0L, 0L, 0L, 0L,
+        fallback, stats,
+    )
+
+    @Test
+    fun test活性回落解封态必须可见且只出现一次() {
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(fallback = true))!!
+        assertTrue("解封态必须如实披露「已回退控制台解析」：$text", text.contains("增强捕获疑似空转，已回退控制台解析"))
+        assertEquals("解封文案不得重复", 1, Regex("增强捕获疑似空转").findAll(text).count())
+        val normal = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(fallback = false))!!
+        assertTrue("未解封时不得出现回落文案：$normal", !normal.contains("增强捕获疑似空转"))
+    }
+
+    @Test
+    fun testattach零命中必须可见_替代静默() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0,
+        )
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("零命中必须报「本次 attach 命中 0 个驱动」：$text", text.contains("本次 attach 命中 0 个驱动"))
+    }
+
+    @Test
+    fun testattach命中但未织入时指向织入链() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            4L, 4L, 0L, 0L, 0L, 0L, 0L, 0L, 0,
+        )
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("命中但零织入应单独叙事：$text", text.contains("命中 4 个驱动但未织入"))
+        assertTrue("不得说成「命中 0 个」：$text", !text.contains("命中 0 个驱动"))
+    }
+
+    @Test
+    fun test接口兜底与失败计数可见且互不串味() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            6L, 6L, 5L, 2L, 0L, 1L, 0L, 0L, 0,
+        )
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("接口兜底命中应可见：$text", text.contains("接口兜底匹配 2 个驱动"))
+        assertTrue("retransform 失败应可见：$text", text.contains("attach 失败 1 个类"))
+        assertTrue("正常命中不得报零命中：$text", !text.contains("命中 0 个驱动"))
+    }
+
+    @Test
+    fun test版本闸与熔断事实可见() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            0L, 5L, 5L, 0L, 0L, 0L, 0L, 3L, 2,
+        )
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("版本闸跳过类数应可见：$text", text.contains("3 个类因类文件版本过高被跳过"))
+        assertTrue("接口兜底熔断应可见：$text", text.contains("接口兜底已熔断"))
+    }
+
+    @Test
+    fun test旧版agent未上报时零噪音() {
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(stats = null))!!
+        assertTrue("未上报不得编造覆盖结论：$text", !text.contains("attach"))
+        assertTrue("未上报不得出现接口兜底：$text", !text.contains("接口兜底"))
+    }
+
+    @Test
+    fun test新增覆盖事实不改变三行语义形态() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            0L, 0L, 0L, 0L, 0L, 2L, 0L, 0L, 0,
+        )
+        val text = CaptureDiagnostics.captureDiagnosticsText(diagWithCoverage(fallback = true, stats = stats))!!
+        val lines = CaptureDiagnostics.wrapEmptyTextLines(text, 4000, stubMeasure)
+        assertEquals("新增事实必须并入首行（第四行会被面板右边界裁掉）：$lines", 3, lines.size)
+        assertTrue("首行应同时含增强状态、回落与覆盖事实：${lines[0]}", lines[0].contains("已挂载 pid=1") &&
+            lines[0].contains("增强捕获疑似空转") && lines[0].contains("本次 attach 命中 0 个驱动"))
+    }
 }
