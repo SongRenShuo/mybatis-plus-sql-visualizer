@@ -261,7 +261,11 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 5 个相关旧条目顶部加迁移口径注，`MEMORY.md` 索引从 **45.7KB 瘦到 23.9KB**（78 条描述截断到
 ≤118 字符，并把此前因超限被截掉的 8 个条目补回）——现 107 个记忆文件全部入索引、零孤立、零悬空。
 
-**T7 收口**：`.zcode/` 原本整目录被 gitignore，改为 `.zcode/*` + `!.agents/skills/`（其余 `.zcode/inc|plans|probe` 仍忽略），skill 得以入库；skill frontmatter 三个字段齐全；8 个脚本 `import` 全通。
+**T7 收口**：skill frontmatter 三个字段齐全；8 个脚本 `import` 全通；`.agents/` 未被 gitignore（本仓既有 skill 目录），直接入库。
+
+**实施中一处方向修正（用户当场指出）**：落位初版做成 `.zcode/skills/`，用户指出本仓 skill 目录是 **`.agents/skills/`**（已有 `db-env-provisioning` / `k2j-port-sync` / `task-queue` 三个）→ 整体迁到 `.agents/skills/`，SKILL.md、指南、计划、经验总结、记忆内的路径同步改；`.gitignore` 回滚为整目录忽略 `.zcode/`。**教训**：落位前先看仓里既有约定（`.agents/skills/` 已有三个 skill），别按通用文档推。
+
+**部署与推送（2026-10-31 同日完成）**：文档站 `dev` 合并进 `master`（冲突两处：`wrapper-preview` 中英的「14 种方言」段与 dev 的预设 GIF 插槽——取 master 标题与正文、保留 dev 的 GIF；`docs/变更记录.md` 两条同日行——保留第十六轮与 R15 两条、丢弃重复的 10-30 旧版）→ `npm run build` 退出码 0 → `npm run deploy` 上传 109 个文件 → 生产复验：三页 200、六张 GIF 全 200 且插槽在产物 HTML 中、`pagefind/pagefind-ui.js` 200。三仓均已推送（文档站 master+dev、插件仓 master，Gitee + GitHub 双远端）。
 
 **待用户侧确认的一项**（计划 §六.1）：工作区 skill 的实际命中要**新会话**才验证得到——本会话的
 skill 是启动时从全局加载的，路径改写后需重开会话用自然语言触发一次（「录一张演示 GIF」）确认
