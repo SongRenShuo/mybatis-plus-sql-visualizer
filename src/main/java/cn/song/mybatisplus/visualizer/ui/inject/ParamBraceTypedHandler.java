@@ -11,8 +11,10 @@ import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.xml.XmlComment;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
+import com.intellij.psi.xml.XmlText;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -103,21 +105,87 @@ public class ParamBraceTypedHandler extends TypedHandlerDelegate {
 
     /**
      * 光标前字符所属标签是否为语句文本位（mapper 根守卫 + 语句标签集，与 injector 同口径）。
-     * 子标签两态分界（20260928 真机实证）：光标落子标签**边界之后**（如 {@code </if>} 右侧，
-     * 属父语句内容区）→ 接管；落子标签**自身标记区内**（如 {@code <trim prefix=|>} 属性间隙）→
-     * 不接管——第二态曾因 parentTag∈语句标签 的宽判全放，全靠 EP 未注册的死代码遮掩。
+     *
+     * <p>两态分界（T-XmlBraceNested 重写，20260928 旧判据作废）：
+     * <ul>
+     *   <li><b>最近语句标签祖先（任意深度）</b>：动态标签（{@code if}/{@code where}/{@code choose}/{@code trim}/…）
+     *       可任意嵌套，旧「一层 parentTag∈语句标签」判法把 {@code <where>} 下的 {@code <if>} 体内正文
+     *       全部漏判（R15 录制实测：真实 mapper 主流排版下功能全灭）；</li>
+     *   <li><b>标记区不接管</b>：光标落在某标签的<b>起始标记</b>内（{@code <select id=|>}、{@code <trim prefix=|>}
+     *       属性间隙）→ 不接管（20260928 真机实证形态，语义保留）；</li>
+     *   <li><b>子标签之后接管</b>：{@code </if>} 右侧、自闭合 {@code <include/>} 之后
+     *       （{@code offset >= 该子标签 endOffset}）→ 属更外层语句内容，接管。</li>
+     * </ul></p>
+     *
+     * <p>标记区边界的求法：平台 XmlTag 无 startTag/endTag 访问器（262/2025.3 javap 实证，
+     * 历史误写会被编译期拦下），改由<b>体内容孩子</b>（XmlTag/XmlText/XmlComment）推导——
+     * 起始标记 = 标签 startOffset 到第一个体内容孩子；无体内容孩子（空标签）整段都是标记。</p>
+     *
+     * <p>旧判据把「子标签体内正文」（offset &lt; endOffset）与「子标签自身标记区」混为一谈，
+     * 修 20260928 的 A（标记区误接管）时引入 B（正文误放行）。</p>
      */
     private static boolean inStatementText(XmlTag tag, int offset) {
         if (!XmlSynHiGate.inMapperFile(tag)) {
             return false;
         }
-        if (STATEMENT_TAGS.contains(tag.getName())) {
-            return true;
+        // generateSequence(tag) { it.parentTag }.take(64).firstOrNull { it.name in STATEMENT_TAGS }
+        XmlTag statement = null;
+        int depth = 0;
+        for (XmlTag cur = tag; cur != null && depth < 64; cur = cur.getParentTag(), depth++) {
+            if (STATEMENT_TAGS.contains(cur.getName())) {
+                statement = cur;
+                break;
+            }
         }
-        XmlTag parent = tag.getParentTag();
-        if (parent == null || !STATEMENT_TAGS.contains(parent.getName())) {
+        if (statement == null) {
             return false;
         }
-        return offset >= tag.getTextRange().getEndOffset();
+        XmlTag cur = tag;
+        while (cur != null && cur != statement) {
+            if (offset >= cur.getTextRange().getEndOffset()) {
+                return true;   // 子标签之后＝外层语句内容
+            }
+            if (offset < bodyStart(cur)) {
+                return false;  // 子标签起始标记区（含属性间隙）
+            }
+            cur = cur.getParentTag();
+        }
+        // 语句标签自身：起始标记区不接管；结束标记区及其后不接管。
+        // 体末端点含在内（offset == bodyEnd 是紧贴 `</if>` 前的正文追加位，敲 # 应接管）
+        int[] body = bodyRange(statement);
+        if (body == null) {
+            return false;
+        }
+        return offset >= body[0] && offset <= body[1];
+    }
+
+    /**
+     * 标签<b>体内容</b>（子标签 / 文本 / 注释）起点＝起始标记的结束；无体内容（空标签）返回 endOffset。
+     */
+    private static int bodyStart(XmlTag tag) {
+        for (PsiElement child : tag.getChildren()) {
+            if (child instanceof XmlTag || child instanceof XmlText || child instanceof XmlComment) {
+                return child.getTextRange().getStartOffset();
+            }
+        }
+        return tag.getTextRange().getEndOffset();
+    }
+
+    /**
+     * 标签体内容区间（首/末体内容孩子）；无体内容（空标签）返回 null。
+     * Kotlin {@code Pair<Int, Int>?} 的 Java 承载为 {@code int[]{start, end}}。
+     */
+    private static int[] bodyRange(XmlTag tag) {
+        int first = -1;
+        int last = -1;
+        for (PsiElement child : tag.getChildren()) {
+            if (child instanceof XmlTag || child instanceof XmlText || child instanceof XmlComment) {
+                if (first < 0) {
+                    first = child.getTextRange().getStartOffset();
+                }
+                last = child.getTextRange().getEndOffset();
+            }
+        }
+        return first < 0 ? null : new int[] {first, last};
     }
 }

@@ -26,7 +26,7 @@ import java.util.Set;
  * <p>关键字集口径（T-XmlGap W3 #7）：全方言超集。词集 = 原 {@link #BASE_KEYWORDS}
  * （T-XmlSynHi D1 的 41 词平集，保留为兜底、不删一词）∪ {@code SqlLexer.KEYWORDS}
  * （补全器与预览面板共用的 66 词）∪ {@link #DIALECT_RESERVED}
- * （{@code sql/Dialect} 十一个实现类 {@link Dialect#getReservedWords()} 的并集，大写形态）。</p>
+ * （{@code sql/Dialect} 十四个实现类 {@link Dialect#getReservedWords()} 的并集，大写形态）。</p>
  *
  * <p><b>取舍（为什么是「全方言超集」而不是按文件方言收敛）</b>：注入语言是<b>全局</b>的（一个
  * {@code Language} 实例服务所有项目、所有 mapper 文件），而方言是<b>项目级</b>设置
@@ -79,7 +79,7 @@ public final class SqlMapperLanguage extends Language {
     public static final Set<String> OGNL_KEYWORDS = Set.of("AND", "OR", "NOT", "IN", "NULL");
 
     /**
-     * 十一个方言保留字的并集（大写）。数据源 = {@code DialectRegistry} 各实现类的
+     * 十四个方言保留字的并集（大写）。数据源 = {@code DialectRegistry} 各实现类的
      * {@link Dialect#getReservedWords()}（小写）——OceanBase 复用 MySQL 集、openGauss 复用 PG 集，
      * 并集结果与九个 {@code SqlKeywords} 顶层 val 的并集相同。
      */
