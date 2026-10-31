@@ -424,10 +424,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
             callback?.invoke(true)
         }
         runners.isEmpty() -> {
-            // UI-046：空 Runner 归因——真实原因三档（零源 / 源未连接未内省、判不出方言 / 方言不匹配）。
-            // 2026-11-01 真机（MySQL 8.0.12）：项目里 12 个在册源（3 个 MySQL）全部未内省，平台枚举
-            // 不出 attach Runner；旧代码一律回「没有与该 SQL 方言（MySQL）匹配的数据源」，把排查带偏成
-            // 「沙盒没有 MySQL 连接」。真实原因必须如实报出，可行动作也随档位不同。
+            // UI-046：空 Runner 归因三档（零源 / 未连接未内省 / 方言不匹配）。真机实证（验收册
+            // 20261101-0430-S2-8）：12 个在册源（3 个 MySQL）全未内省时，旧代码一律误报「方言不匹配」。
             val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
             LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
             if (executeAfterPrepare) openDatabaseToolWindow(project)
