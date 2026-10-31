@@ -38,7 +38,12 @@ public final class AgentManagerKt {
                 }
                 joined.append("pid=").append(s.livePids().get(i));
             }
-            return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.attached", joined.toString());
+            String attached = MpSqlVisualizerBundle.message("settings.enhancedCapture.status.attached", joined.toString());
+            // T-CaptureCatchAll 券02：解封态必须与「已挂载」同时出现——只说已挂载会让用户以为
+            // agent 在产出；只说回退会丢掉「会话还在」这一事实。
+            return s.activityFallbackActive()
+                ? attached + "｜" + MpSqlVisualizerBundle.message("settings.enhancedCapture.status.activityFallback")
+                : attached;
         }
         if (s.everAttached()) {
             // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。

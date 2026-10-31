@@ -387,7 +387,12 @@ public class AgentSession {
                 input.readFully(body);
                 lastSeen = clockMs.getAsLong();
                 inboundFrameCount.incrementAndGet(); // R4-①：超时文案判「下发后是否还有入站」的依据
-                handleFrame(cmd, new String(body, StandardCharsets.UTF_8));
+                String bodyText = new String(body, StandardCharsets.UTF_8);
+                // T-CaptureCatchAll 券03：attach 覆盖自检计数（可选键，旧版 agent 无 → 零动作）。
+                // 放在 handleFrame 之前：计数上报帧可能是任何命令（C1 路当前挂在心跳里），
+                // 与主链分发解耦；解析失败在内部吞掉，绝不影响事件处理（红线）。
+                AgentAttachReport.updateFromFrame(bodyText);
+                handleFrame(cmd, bodyText);
             }
         } catch (Throwable t) {
             if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）

@@ -25,22 +25,34 @@ public record AgentStatusSnapshot(
      */
     boolean firstHeartbeatPending,
     /** T-AgentHeartbeat T-05：在线窗口秒数（文案带出的可核实读数；默认取协议常量，测试可注入短窗）。 */
-    long heartbeatWindowSeconds
+    long heartbeatWindowSeconds,
+    /**
+     * T-CaptureCatchAll 券02：控制台桥活性回落已解封——agent 在线但长期零事件、控制台仍有 SQL 行，
+     * 桥已恢复解析。状态行必须如实披露（用户看到「已挂载」却零条目时，这句是唯一解释）。
+     */
+    boolean activityFallbackActive
 ) {
     /** 便捷构造器：heartbeatExpired 缺省 false（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached) {
-        this(enabled, livePids, everAttached, false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+        this(enabled, livePids, everAttached, false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
     }
 
     /** 便捷构造器：firstHeartbeatPending / heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired) {
-        this(enabled, livePids, everAttached, heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+        this(enabled, livePids, everAttached, heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
     }
 
     /** 便捷构造器：heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
                                boolean firstHeartbeatPending) {
         this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
-            AgentProtocol.ONLINE_WINDOW_MS / 1000);
+            AgentProtocol.ONLINE_WINDOW_MS / 1000, false);
+    }
+
+    /** 便捷构造器：activityFallbackActive 缺省（Kotlin 默认参数）。 */
+    public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
+                               boolean firstHeartbeatPending, long heartbeatWindowSeconds) {
+        this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
+            heartbeatWindowSeconds, false);
     }
 }
