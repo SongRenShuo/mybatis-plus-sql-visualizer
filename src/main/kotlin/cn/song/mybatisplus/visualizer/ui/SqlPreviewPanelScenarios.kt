@@ -10,9 +10,9 @@ import cn.song.mybatisplus.visualizer.xml.XmlScenarioMatrix
 import com.intellij.openapi.application.ApplicationManager
 import java.awt.BorderLayout
 import java.util.concurrent.atomic.AtomicBoolean
+import com.intellij.ui.components.JBScrollPane
 import javax.swing.JButton
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 import javax.swing.JTextArea
 
 internal fun insightText(key: String): String = MpSqlVisualizerBundle.message("insight.$key")
@@ -89,7 +89,7 @@ internal fun SqlPreviewPanel.showScenarioExportPreview(json: String) {
     val area = JTextArea(json).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
     val host = JPanel(BorderLayout()).apply {
         add(JTextArea(insightText("scenario.exportNotice")).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }, BorderLayout.NORTH)
-        add(JScrollPane(area), BorderLayout.CENTER)
+        add(JBScrollPane(area), BorderLayout.CENTER)
         add(JPanel().apply {
             add(JButton(insightText("scenario.copy")).apply { addActionListener { UiTextClipboard.copy(json) } })
             add(JButton(insightText("close")).apply { addActionListener { previewTabs.remove("scenario-export") } })

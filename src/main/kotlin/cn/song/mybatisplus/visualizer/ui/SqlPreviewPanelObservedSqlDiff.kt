@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.ui.insight.InsightDetailPanel
 import cn.song.mybatisplus.visualizer.ui.insight.InsightDetailRow
 import cn.song.mybatisplus.visualizer.ui.insight.boundedTextArea
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import javax.swing.*
 
@@ -28,7 +30,9 @@ internal fun SqlPreviewPanel.showObservedSqlDiff(candidate: cn.song.mybatisplus.
     }
     val sample = boundedTextArea(65_536)
     val results = InsightDetailPanel(listOf(insightText("runtime.diffKind"), insightText("runtime.previewLine"), insightText("runtime.actualLine")), insightText("runtime.diffNotice"))
-    val host = JPanel(BorderLayout()).apply { add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(sample), results).apply { resizeWeight = 0.3 }, BorderLayout.CENTER) }
+    val host = JPanel(BorderLayout()).apply {
+        add(OnePixelSplitter(false, 0.3f).apply { firstComponent = JBScrollPane(sample); secondComponent = results }, BorderLayout.CENTER)
+    }
     val inputGate = cn.song.mybatisplus.visualizer.ui.insight.InsightInputVersion({
         previewTabs.beginRefresh("observed-sql-diff"); results.showRows(emptyList()); results.status.text = insightText("stale")
     }, sample.document)

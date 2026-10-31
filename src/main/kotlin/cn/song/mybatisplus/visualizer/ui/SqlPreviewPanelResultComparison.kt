@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.execute.*
 import cn.song.mybatisplus.visualizer.ui.insight.*
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import javax.swing.*
 
@@ -43,7 +45,13 @@ internal fun SqlPreviewPanel.showResultComparison() {
     }, before.document, after.document)
     comparisonSqlInvalidated = { gate.invalidate() }
     val host = JPanel(BorderLayout()).apply {
-        add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(before), JScrollPane(after)).apply { resizeWeight = 0.5 }, results).apply { resizeWeight = 0.35 }, BorderLayout.CENTER)
+        add(OnePixelSplitter(false, 0.35f).apply {
+            firstComponent = OnePixelSplitter(true, 0.5f).apply {
+                firstComponent = JBScrollPane(before)
+                secondComponent = JBScrollPane(after)
+            }
+            secondComponent = results
+        }, BorderLayout.CENTER)
     }
     fun background(task: () -> Unit) {
         comparisonBackgroundForTest?.let { it(task); return }

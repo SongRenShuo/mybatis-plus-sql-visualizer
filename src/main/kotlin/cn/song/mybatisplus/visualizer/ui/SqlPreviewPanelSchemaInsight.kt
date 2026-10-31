@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.ui.insight.InsightDetailPanel
 import cn.song.mybatisplus.visualizer.ui.insight.InsightDetailRow
 import cn.song.mybatisplus.visualizer.ui.insight.boundedTextArea
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import javax.swing.*
 
@@ -17,8 +19,13 @@ internal fun SqlPreviewPanel.showSchemaComparison() {
     val after = boundedTextArea(1024 * 1024)
     val results = InsightDetailPanel(listOf(insightText("schema.change"), insightText("schema.table"), insightText("schema.column")), insightText("schema.notice"))
     val host = JPanel(BorderLayout()).apply {
-        add(JSplitPane(JSplitPane.VERTICAL_SPLIT,
-            JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(before), JScrollPane(after)).apply { resizeWeight = 0.5 }, results).apply { resizeWeight = 0.3 }, BorderLayout.CENTER)
+        add(OnePixelSplitter(false, 0.3f).apply {
+            firstComponent = OnePixelSplitter(true, 0.5f).apply {
+                firstComponent = JBScrollPane(before)
+                secondComponent = JBScrollPane(after)
+            }
+            secondComponent = results
+        }, BorderLayout.CENTER)
     }
     val useUsage = JCheckBox(insightText("schema.useUsage"))
     val affectedChoice = JComboBox<String>()
