@@ -157,8 +157,44 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testClosePanelCallbackInjectedToPanel() {
-        // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
+    /**
+     * UX Community 执行入口预判置灰（新功能小券批 券3）：测试沙盒无 Database 插件，
+     * 「执行 SQL」按钮必须在**构造期**就灰置并带 tooltip，而不是点了才报错。
+     *
+     * 反向验证：摘掉 createActions 里 execute 动作 init 块的 `isEnabled = false` 后本用例必红。
+     */
+    fun testCommunity下执行入口预判置灰并带tooltip() {
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            assertFalse(
+                "本用例前提=测试沙盒无 Database 插件（Community 形态）",
+                cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable(),
+            )
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.executeSql")
+            val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+            assertFalse("Community 下执行动作应预判置灰", action.isEnabled)
+            assertEquals(
+                "置灰必须带说明 tooltip",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("execute.unavailable.tooltip"),
+                action.getValue(javax.swing.Action.SHORT_DESCRIPTION),
+            )
+            val button = dialog.createJButtonForActionForTest(action)
+            assertFalse("按钮必须同步灰置", button.isEnabled)
+            assertEquals(
+                "按钮 tooltip 应与动作说明一致",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("execute.unavailable.tooltip"),
+                button.toolTipText,
+            )
+            // 程序化触发也必须被守卫拦下（灰置只挡 UI，不挡代码路径）
+            action.actionPerformed(java.awt.event.ActionEvent(dialog, 0, ""))
+            assertFalse("置灰动作被程序化触发不得关闭弹窗", dialog.isDisposed())
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testClosePanelCallbackInjectedToPanel() {        // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
         // → 回调 dispose 关闭预览弹窗）；面板持有与对话框一致的当前结果
         val dialog = SqlPreviewDialog(project, previewResult())
         assertNotNull("弹窗应注入关闭面板回调", dialog.panelForTest())

@@ -43,6 +43,19 @@ object ExecuteSqlSupport {
     }.getOrDefault(false)
 
     /**
+     * UX Community 执行入口预判：不可用时的说明文案（tooltip）；可用返回 null。
+     *
+     * 立项动因：Community 版「执行 SQL」按钮此前**看起来可点**，点了才弹一条「需要 Ultimate」的
+     * 轻提示——用户白点一次才知道不可用。执行入口在构造期即按 [isAvailable] 置灰，tooltip 直接
+     * 说明原因与替代路径（预览/复制不受影响），把「点了才报错」提前成「一眼就知道」。
+     *
+     * 只读、幂等、零副作用（`Class.forName` 探测结果在进程内稳定）。
+     */
+    @JvmStatic
+    fun unavailableHint(): String? =
+        if (isAvailable()) null else MpSqlVisualizerBundle.message("execute.unavailable.tooltip")
+
+    /**
      * 执行入口：不可用 → 提示升级 Ultimate；可用 → 反射调用 launcher。
      * 所有 UI 提示均 runCatching 兜底（测试/headless 环境不抛异常）。
      *
