@@ -230,4 +230,39 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 ## 实施记录
 
-（实施后回填）
+2026-10-31 当天实施完成。
+
+**T1 skill 迁移**：两个 skill 复制到 `.zcode/skills/`，录制 skill 改了三处结构性内容——
+①开头新增「工作目录＝插件仓根」与三层工具表（skill scripts＝权威源 / `record/` 场景与项目件 /
+`record/` 内未通用化的 anchor·robot·mcpnav）；②`python scripts/xxx.py` 全部改成
+`python .zcode/skills/ide-demo-gif/scripts/xxx.py`；③「权威源约定」整节重写（含「全局已删、
+同名时用户级优先」的原因）。验收 skill 加位置块 + 两条本轮新发现（Database 控制台不进捕捉面、
+构建静默死亡先查外部工程配置）。全局两份已删。
+
+**T5 坑表**：录制 skill 坑表续 **79~89** 共 11 条（构建静默死亡 / Database 控制台 / runner 方言
+过滤 / ANSI_QUOTES 与建源校验 / 信息行被报错覆盖 / 模态对话框吞键误伤源文件 / 全屏 topmost 抢
+前台 / 工具窗宽度决定 chip 可见 / 栈弹层是悬停 / combo 三坑 / poster 选帧与接缝口径）。
+
+**T2 指南迁移**：`docs/录制/演示GIF录制指南-说明文档.md`（187 行）——去掉站点 frontmatter、
+头部改插件仓视角、`~/.zcode/skills/` 改 `.zcode/skills/`、补 `record/tools/verify_gif.mjs` 用法。
+文档站原文件改成路径占位页，`docs/MEMORY.md` 两处引用同步改指向。
+
+**T3 校验工具（与原计划有偏差，已改设计）**：原计划是把文档站 `scripts/verify-crudsql-gif.mjs`
+整份迁入；实读后发现它是**站点页面级**校验（puppeteer + GifPlayer 组件 + 亮暗主题 + 中英页），
+依赖 `puppeteer-core`（插件仓无 node_modules），且与「录制素材规格」不是一回事。故改为：
+站点那份留在文档站（不迁）；插件仓新写**无依赖**的 `record/tools/verify_gif.mjs`（只用 ffprobe，
+校验尺寸/帧数/帧率/时长/体积/poster 六项）+ `gif_spec_allow.json` 例外清单（6 条历史口径差异，
+每条带 why）。实测全站 69 张 **69/69 通过**。
+
+**T4 经验总结**：`docs/经验总结/20261031-1430-第十五轮演示动图补录与录制链根因-经验总结.md`
+（八节，含量化归因表、构建/捕捉面/runner/UI 交互/产物/插件缺陷六组、下轮动作）。
+
+**T6 记忆**：新增 2 条（`r15-recording-chain-root-causes`、`record-skill-lives-in-plugin-repo`），
+5 个相关旧条目顶部加迁移口径注，`MEMORY.md` 索引从 **45.7KB 瘦到 23.9KB**（78 条描述截断到
+≤118 字符，并把此前因超限被截掉的 8 个条目补回）——现 107 个记忆文件全部入索引、零孤立、零悬空。
+
+**T7 收口**：`.zcode/` 原本整目录被 gitignore，改为 `.zcode/*` + `!.zcode/skills/`（其余 `.zcode/inc|plans|probe` 仍忽略），skill 得以入库；skill frontmatter 三个字段齐全；8 个脚本 `import` 全通。
+
+**待用户侧确认的一项**（计划 §六.1）：工作区 skill 的实际命中要**新会话**才验证得到——本会话的
+skill 是启动时从全局加载的，路径改写后需重开会话用自然语言触发一次（「录一张演示 GIF」）确认
+解析到 `.zcode/skills/ide-demo-gif/`。
