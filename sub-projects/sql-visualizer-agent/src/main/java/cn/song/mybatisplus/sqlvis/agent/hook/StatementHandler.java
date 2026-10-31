@@ -147,7 +147,7 @@ final class StatementHandler implements InvocationHandler {
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
         event.sourceCandidates = frame == null ? null : frame.candidates;
-        event.stackDigest = StackDigest.build(stack);
+        event.stackDigest = StackDigest.build(stack, hint, frame);
         event.requestTag = MdcAccessor.requestTag();
         event.params = params.snapshot(sql, AgentState.isDesensitize());
         event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）

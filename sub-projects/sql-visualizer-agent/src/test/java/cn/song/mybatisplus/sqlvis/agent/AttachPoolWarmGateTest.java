@@ -279,7 +279,9 @@ public class AttachPoolWarmGateTest {
             }
         }
         try {
-            vm.loadAgent(agentJar.getAbsolutePath(), "port=" + server.getLocalPort() + ";logLevel=info");
+            // 2026-10-30：attach 汇总行默认静默（产品行为），本类用它判「attach 是否真跑了」，
+            // 故 harness 显式开 verbose —— 测的是判据，不是产品的默认静音。
+            vm.loadAgent(agentJar.getAbsolutePath(), "port=" + server.getLocalPort() + ";logLevel=debug");
         } catch (com.sun.tools.attach.AgentLoadException e) {
             if (!"0".equals(e.getMessage())) {
                 org.junit.Assert.fail("loadAgent 失败且非已知形态: " + e);
