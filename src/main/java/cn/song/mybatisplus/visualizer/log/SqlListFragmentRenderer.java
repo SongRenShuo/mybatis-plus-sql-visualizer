@@ -30,21 +30,48 @@ public final class SqlListFragmentRenderer {
     }
 
     /**
-     * R60（T-LaneB D96）：列表展示文本按脱敏态取值——展示层打码、原始条目不动。
-     * FORMATTED 直接对还原 SQL 打码；非 FORMATTED 且脱敏开时对完整 SQL 先打码再截断摘要
-     * （避免旧摘要在字面量引号中间截断后漏打码），结果缓存进条目。
+     * 关键字换行的取源预算（字符）。
+     *
+     * <p>关键字换行必须看到 {@code FROM}/{@code WHERE} 才能产出三行，所以取源是<b>完整还原 SQL</b>（与格式化模式同源），
+     * 不再是 160 字摘要——摘要在长列清单下连一个子句关键字都覆盖不到，恒退化成单行（T-LogListAnchor 券01）。
+     * 预算只影响第四行及以后：三行封顶后本来也看不到，但词法成本不能随 IN 列表长度无界放大。</p>
+     */
+    public static final int KEYWORD_WRAP_SOURCE_BUDGET = 4096;
+
+    /** 超预算时按空白边界截断并补省略号（避免把标识符劈成两半）。 */
+    public static String clipKeywordWrapSource(String sql) {
+        if (sql.length() <= KEYWORD_WRAP_SOURCE_BUDGET) return sql;
+        int cut = KEYWORD_WRAP_SOURCE_BUDGET;
+        int i = KEYWORD_WRAP_SOURCE_BUDGET - 1;
+        while (i > 0 && !Character.isWhitespace(sql.charAt(i))) i--;
+        if (i > 0) cut = i;
+        return sql.substring(0, cut).stripTrailing() + "…";
+    }
+
+    /**
+     * 列表展示用 SQL 文本（按模式取源）。
+     *
+     * <ul>
+     * <li>{@code SINGLE_LINE}：摘要（一行封顶，摘要正是为此而生）。</li>
+     * <li>{@code KEYWORD_WRAP} / {@code FORMATTED}：完整还原 SQL（脱敏链同 {@code DisplayMasker.maskDisplay}），前者另受
+     *     {@link #KEYWORD_WRAP_SOURCE_BUDGET} 约束。</li>
+     * </ul>
+     *
+     * <p>摘要分支的脱敏缓存（{@link LogSqlEntry#cachedMaskedSummary()}）只服务单行模式；多行模式按
+     * 「模式+脱敏态」缓存词法片段（{@code RailCellRendererBase.sqlLineFragmentsFor}），不复用摘要。</p>
      */
     public static String displaySqlForList(LogSqlEntry entry, SqlListDisplayMode mode, boolean masked) {
-        if (mode == SqlListDisplayMode.FORMATTED) {
-            return cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(entry.restoredSql(), masked);
+        if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            if (!masked) return entry.summary();
+            String cached = entry.cachedMaskedSummary();
+            if (cached != null) return cached;
+            String maskedSummary = LogSqlEntry.summarizeSql(
+                    cn.song.mybatisplus.visualizer.util.DisplayMasker.maskSqlText(entry.restoredSql()));
+            entry.setCachedMaskedSummary(maskedSummary);
+            return maskedSummary;
         }
-        if (!masked) return entry.summary();
-        String cached = entry.cachedMaskedSummary();
-        if (cached != null) return cached;
-        String maskedSummary = LogSqlEntry.summarizeSql(
-                cn.song.mybatisplus.visualizer.util.DisplayMasker.maskSqlText(entry.restoredSql()));
-        entry.setCachedMaskedSummary(maskedSummary);
-        return maskedSummary;
+        String full = cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(entry.restoredSql(), masked);
+        return mode == SqlListDisplayMode.KEYWORD_WRAP ? clipKeywordWrapSource(full) : full;
     }
 
     public static List<SqlSemanticFragment> semanticFragments(String sql) {

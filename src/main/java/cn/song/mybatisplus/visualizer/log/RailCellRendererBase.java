@@ -343,9 +343,10 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry, SqlListDisplayMode mode) {
         // R60：展示文本打码、原始条目不动；缓存以模式和脱敏态为键，防切换后复用旧语义片段。
         boolean maskOn = PluginSettings.getInstance().getState().getDisplayMaskEnabled();
-        String sql = SqlLogPanelKt.withTerminator(
-                SqlListFragmentRenderer.displaySqlForList(entry, mode, maskOn));
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            listSourceFetchCount++;
+            String sql = SqlLogPanelKt.withTerminator(
+                    SqlListFragmentRenderer.displaySqlForList(entry, mode, maskOn));
             List<List<SqlTextFragment>> single = new ArrayList<>();
             single.add(SqlListFragmentRenderer.renderFragments(sql));
             return single;
@@ -354,7 +355,11 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
         Boolean cachedMasked = entry.cachedListLineFragmentsMasked();
         if (semantics == null || entry.cachedListLineFragmentsMode() != mode
                 || !Boolean.valueOf(maskOn).equals(cachedMasked)) {
-            semantics = SqlListFragmentRenderer.semanticLineFragments(sql, mode);
+            // R29-1（T-PerfSweep29-01）：取源只在缓存未命中时执行——脱敏开时 displaySqlForList
+            // 内部付 O(SQL 长) 全量词法打码，命中路径每帧重取源后整段丢弃纯属白付。
+            listSourceFetchCount++;
+            semantics = SqlListFragmentRenderer.semanticLineFragments(SqlLogPanelKt.withTerminator(
+                    SqlListFragmentRenderer.displaySqlForList(entry, mode, maskOn)), mode);
             entry.setCachedListLineFragments(semantics);
             entry.setCachedListLineFragmentsMode(mode);
             entry.setCachedListLineFragmentsMasked(maskOn);
@@ -381,6 +386,13 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
                 BorderFactory.createMatteBorder(0, 0, 1, 0, ROW_DIVIDER),
                 BorderFactory.createEmptyBorder(verticalPadding, 5, verticalPadding, 9));
     }
+
+    /**
+     * 券01（T-PerfSweep29-01）测试缝：列表渲染取源（displaySqlForList）实际调用次数。
+     * 先红判据（多行缓存命中路径零取源）与反向验证共用；生产链路无读取方，零行为影响
+     * （形态对齐 SqlEntryPresentation.headerCoreComputeCount 先例，EDT 单线程读写）。
+     */
+    public static int listSourceFetchCount = 0;
 
     /**
      * SQL 区可用像素宽度。
