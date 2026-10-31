@@ -2,6 +2,7 @@
 // （F4 48a8f191：Mapper 双向跳转——Java→XML 方）新译。
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator;
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -39,6 +40,22 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
     @Override
     public void collectSlowLineMarkers(@NotNull List<? extends PsiElement> elements,
             @NotNull Collection<? super LineMarkerInfo<?>> result) {
+        // 券01（T-PerfSweep28-01，R28-2）：组显隐门前置（与 XML 侧同门形）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return;
+        // 第三道门（T-MapperNavCoexistYield）：与 XML 侧同门形——竞品在位且用户未关闭让位即不产出图标
+        if (gutterState != null
+                && MyBatisCompetitorGate.shouldYield(
+                        gutterState.getMapperNavYieldToCodeHelper(),
+                        MyBatisCompetitorGate.isPeerPluginActive())) {
+            return;
+        }
         for (PsiElement element : elements) {
             LineMarkerInfo<PsiElement> marker = createMarker(element);
             if (marker != null) result.add(marker);
@@ -51,8 +68,13 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         PsiMethod method = element.getParent() instanceof PsiMethod ? (PsiMethod) element.getParent() : null;
         if (method == null) return null;
         if (method.getNameIdentifier() != element) return null;
+        // 券01（T-PerfSweep28-01，R28-1/P-1）：接口前置——mapper namespace 语义必为接口
+        // （方法绑定经 JDK 动态代理），此前 service/util 等普通类的每个方法声明都在慢趟付一次
+        // 全 mapper 文件定位。isInterface 为 O(1) 属性读，开闸用户可见行为不变。
         PsiClass containingClass = method.getContainingClass();
-        String namespace = containingClass != null ? containingClass.getQualifiedName() : null;
+        if (containingClass == null) return null;
+        if (!containingClass.isInterface()) return null;
+        String namespace = containingClass.getQualifiedName();
         if (namespace == null) return null;
         if (MapperXmlLocator.locate(element.getProject(), namespace + "." + method.getName()) == null) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用

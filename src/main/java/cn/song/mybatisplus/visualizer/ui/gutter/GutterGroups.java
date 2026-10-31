@@ -38,6 +38,8 @@ public final class GutterGroups {
             Map.entry("XmlSqlGutterLineMarkerProvider", "mapperXml"),
             Map.entry("PagesXmlGutterLineMarkerProvider", "mapperXml"),
             Map.entry("HbmNamedQueryGutterLineMarkerProvider", "mapperXml"),
+            Map.entry("MapperXmlToJavaLineMarkerProvider", "mapperXml"),
+            Map.entry("MapperJavaToXmlLineMarkerProvider", "mapperXml"),
             Map.entry("AnnotationSqlGutterLineMarkerProvider", "annotation"),
             Map.entry("NamedQueryGutterLineMarkerProvider", "annotation"),
             Map.entry("JpaGutterLineMarkerProvider", "jpaHql"),
