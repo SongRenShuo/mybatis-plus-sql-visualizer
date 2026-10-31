@@ -97,9 +97,12 @@ class ExplainPlanResultView(
         }
 
         // 索引建议条（只提示不执行；空清单不占位——与 MCP formatHints 的零追加同口径）
+        // 2026-10-31 R45 面板本地化：文案按 rule 取 bundle（`explain.hint.<rule>`），
+        // 命中则显示本地化文案（含 metric 括注），缺失回落 Hint.advice 英文原文。
+        // MCP / 结构化通道仍消费 advice 字段，英文口径不变（单一逻辑源不分裂）。
         hintsLabel = JBLabel(
             if (hints.isEmpty()) "" else "<html>" + hints.joinToString("<br>") { hint ->
-                "[${hint.rule}] <b>${escapeHtml(hint.target)}</b>: ${escapeHtml(hint.advice)}"
+                "[${hint.rule}] <b>${escapeHtml(hint.target)}</b>: ${escapeHtml(localizedHint(hint))}"
             } + "</html>",
         ).apply {
             foreground = JBColor.namedColor("WarningForeground", JBColor.ORANGE)
@@ -259,6 +262,20 @@ class ExplainPlanResultView(
 
     private fun escapeHtml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    /**
+     * 索引建议的 IDE 面文案：按规则码取 `explain.hint.<rule>` 本地化串，命中则附 metric 括注；
+     * bundle 缺键（`message` 缺键时原样返回 key）→ 回落 [ExplainIndexAdvisor.Hint.advice] 英文原文。
+     *
+     * 判据用「返回值 == key」而非异常：`MpSqlVisualizerBundle.message` 的设计就是缺键返回 key 本身。
+     */
+    private fun localizedHint(hint: ExplainIndexAdvisor.Hint): String {
+        val key = "explain.hint.${hint.rule}"
+        val localized = MpSqlVisualizerBundle.message(key)
+        if (localized == key) return hint.advice
+        val metric = hint.metric
+        return if (metric.isNullOrBlank()) localized else "$localized ($metric)"
+    }
 
     // ---------- 测试探针（internal，同 SqlResultPanel.currentErrorForTest 惯例） ----------
 

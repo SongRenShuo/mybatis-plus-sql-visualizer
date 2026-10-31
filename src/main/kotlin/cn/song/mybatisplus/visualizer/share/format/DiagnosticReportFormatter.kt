@@ -17,11 +17,15 @@ import java.time.format.DateTimeFormatter
  * 方言能力），发 MR 或缺陷单要手动拼。本对象把它们聚合成一份自包含 Markdown / HTML 报告，
  * 经既有 [cn.song.mybatisplus.visualizer.share.ui.ShareDialog] 分享通道导出（不新增 MCP 工具、不新增弹窗形态）。
  *
- * ## V74 诚实降级（IDE 面 EXPLAIN 建议数据不可得）
- * T-EI-01 定案：IDE 内嵌原生控制台的结果行**无程序化读取面**（网格由 DBN 托管），
- * [cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor] 的建议节只挂在 MCP 面。故 IDE 侧诊断报告的
- * 「EXPLAIN 索引建议」段**如实说明不可得 + 给出获取路径**（不臆造、不静默留白）；
+ * ## V74 诚实降级（IDE 侧诊断报告取不到 EXPLAIN 建议数据）
+ * T-EI-01 定案：IDE 内**嵌原生控制台的结果行**无程序化读取面（网格由 DBN 托管），本格式化器
+ * （经 [cn.song.mybatisplus.visualizer.share.ui.ShareDialog] 导出）因此**取不到**建议数据。故 IDE 侧
+ * 诊断报告的「EXPLAIN 索引建议」段**如实说明不可得 + 给出获取路径**（不臆造、不静默留白）；
  * 回滚预案在无快照路径时（`Rating.UNABLE`）输出 [RollbackSqlGenerator] 的原始降级警示。
+ *
+ * 2026-10-31 订正：原文写作「[ExplainIndexAdvisor] 的建议节只挂在 MCP 面」，措辞过宽——**结构化
+ * EXPLAIN 面板另有建议条**（`ui/ExplainPlanResultView` 的 hintsLabel，onPlan 回调里由
+ * `ExplainIndexAdvisor.advise` 产出）。准确边界是「**本诊断报告这条导出链**取不到」，不是「建议只存在于 MCP」。
  *
  * 纯逻辑层：只依赖分析器（无 IDE 类型），普通 JUnit 可直接覆盖格式与聚合。
  */

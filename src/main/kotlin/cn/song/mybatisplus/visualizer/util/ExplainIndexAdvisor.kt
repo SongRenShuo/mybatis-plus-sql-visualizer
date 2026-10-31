@@ -34,8 +34,24 @@ object ExplainIndexAdvisor {
     /** 全表扫描行数阈值（低于此不提示——小表全扫常是更优计划，阈值一刀切会噪音）。 */
     const val ROWS_THRESHOLD = 10_000
 
-    /** 单条建议（纯数据；advice 为英文短句——MCP 输出口径，不进 bundle）。 */
-    data class Hint(val rule: String, val target: String, val advice: String)
+    /**
+     * 单条建议（纯数据）。
+     *
+     * @param rule   规则码（`FULL_SCAN` / `NO_INDEX_USED` / `FILESORT` / `TEMPORARY_TABLE` /
+     *               `HIGH_ROWS_ESTIMATE` / `TABLE_FULL_SCAN` / `SEQ_SCAN`）——同时是 IDE 面本地化
+     *               文案的 bundle 键后缀（`explain.hint.<rule>`）。
+     * @param target 命中对象（表名 / 索引名）。
+     * @param advice 英文短句——**MCP 输出口径**（agent 文案恒英文，不进 bundle），MCP/结构化通道
+     *               继续用它；IDE 面板则按 [rule] 取 bundle 本地化文案（缺失时回落本字段）。
+     * @param metric 可选量化信息（如 `~12000 rows`、`12000`）；MCP 侧不用，IDE 面本地化文案
+     *               以 `{1}` 参数消费（2026-10-31 R45 面板本地化时新增，默认 null 零破坏）。
+     */
+    data class Hint(
+        val rule: String,
+        val target: String,
+        val advice: String,
+        val metric: String? = null,
+    )
 
     /**
      * 从 EXPLAIN 结果识别索引缺失类模式。
@@ -91,6 +107,7 @@ object ExplainIndexAdvisor {
                     advice = "type=ALL full table scan" +
                         (rowsN?.let { " over ~$it rows" } ?: "") +
                         " — consider adding an index on the WHERE/JOIN columns",
+                    metric = rowsN?.let { "~$it rows" },
                 )
             }
             // key=NULL：没有可用索引被选中（与 ALL 互补——rows 不足阈值时不重复提示的兜底弱信号）
@@ -124,6 +141,7 @@ object ExplainIndexAdvisor {
                     target = table,
                     advice = "estimated rows=$rowsN even with an index — poor selectivity / wide range scan; " +
                         "verify the filter columns are covered",
+                    metric = rowsN.toString(),
                 )
             }
         }
@@ -225,6 +243,7 @@ object ExplainIndexAdvisor {
                             advice = "full table scan ($op)" +
                                 (estRows?.let { " over ~$it rows" } ?: "") +
                                 " — consider adding an index on the WHERE/JOIN columns",
+                            metric = estRows?.let { "~$it rows" },
                         )
                     }
                 }
@@ -234,6 +253,7 @@ object ExplainIndexAdvisor {
                         target = target,
                         advice = "estimated rows=$estRows even with a range scan — poor selectivity / " +
                             "wide range scan; verify the filter columns are covered",
+                        metric = estRows.toString(),
                     )
                 }
             }
