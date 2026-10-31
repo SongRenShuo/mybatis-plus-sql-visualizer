@@ -182,9 +182,33 @@ class ExecDialectRoutingTest {
     fun test候选方言id表_插件方言名与注册表命名对齐() {
         // DialectRegistry 的 name 是本表键空间（DM/KingBase 为中缀名）——名字漂移会让 URL 兜底整链失效
         val keys = ExecDialectRouting.PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS.keys
-        for (name in listOf("MySQL", "MariaDB", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss")) {
+        for (name in listOf("MySQL", "MariaDB", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB", "HighGo", "Vastbase")) {
             assertTrue("候选方言 id 表缺插件方言名「$name」（与 DialectRegistry 命名漂移）", name in keys)
         }
+    }
+
+    @Test
+    fun testT_XcDialects3_瀚高海量候选链恒落PG兜底() {
+        // 照 GaussDB 同款「本名 → PG 兜底」写法；262 平台无 HighGo / Vastbase 方言模块（P-11
+        // 逐包列举实证），平台可用清单只有 PG 时兜底命中 PostgreSQL，清单连 PG 都没有时诚实 null
+        assertEquals(listOf("HighGo", "PostgreSQL"), ExecDialectRouting.PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS["HighGo"])
+        assertEquals(listOf("Vastbase", "PostgreSQL"), ExecDialectRouting.PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS["Vastbase"])
+        assertEquals(
+            "PostgreSQL",
+            ExecDialectRouting.urlFallbackId(StubDs("jdbc:highgo://h:5866/db"), listOf("MySQL", "PostgreSQL")),
+        )
+        assertEquals(
+            "PostgreSQL",
+            ExecDialectRouting.urlFallbackId(StubDs("jdbc:vastbase://h:5432/db"), listOf("PostgreSQL")),
+        )
+        assertEquals(
+            "PostgreSQL",
+            ExecDialectRouting.urlFallbackId(StubDs("jdbc:dws:iam://h:5432/db"), listOf("PostgreSQL")),
+        )
+        assertNull(
+            "平台连 PG 都没有时不得猜近似方言",
+            ExecDialectRouting.urlFallbackId(StubDs("jdbc:highgo://h/db"), listOf("MySQL", "Oracle")),
+        )
     }
 
     // ------------------------------------------------------------------
