@@ -49,4 +49,40 @@ class McpGateFilterRegistrationGuardTest {
         val bridgeSrc = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.java").readText()
         assertTrue("EP 名 ldc 依据必须在册", bridgeSrc.contains("com.intellij.mcpServer.mcpToolFilterProvider"))
     }
+
+    // ---- T-Mcp261FilterContract（20261029）：契约形态分流结构守卫 --------------------------
+    // k2j 适配：扫描根迁 src/main/java + .java；master 的 registrar 单文件在 k2j 拆为
+    // McpGateFilterRegistrar（ProjectActivity 入口）+ McpGateFilterEpRegistrar（探测+注册本体），
+    // detect/register 两锚点均在 EpRegistrar（grep 实测行 42/56，detect 先于 register）。
+    // Kotlin when 语法字面量按 Java 等价形态改写（case "..."：/ getReturnType()），锚点已逐条
+    // grep 实证命中（非空绿）。
+
+    @Test
+    fun `契约探测必须先于注册且UNKNOWN不注册`() {
+        val src = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpRegistrar.java").readText()
+        assertTrue("必须按契约形态分流（旧形态「类存在即注册」正是 261 全挂根因）", src.contains("detectFilterForm"))
+        assertTrue("UNKNOWN 分支必须在册", src.contains("FilterForm.UNKNOWN"))
+        val detectIdx = src.indexOf("detectFilterForm")
+        val registerIdx = src.indexOf("McpGateFilterEpBridge.register")
+        assertTrue(
+            "探测必须先于注册（detect=$detectIdx, register=$registerIdx）——顺序反过来就会在未知形态上" +
+                "挂一个返回 null 的代理",
+            detectIdx in 1 until registerIdx,
+        )
+    }
+
+    @Test
+    fun `桥分发三形态入口与兜底在册`() {
+        val src = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.java").readText()
+        assertTrue("形态 A 入口在册（Java 等价：case \"applyFilters\":）", src.contains("case \"applyFilters\":"))
+        assertTrue("形态 B 入口在册（261，Java 等价：case \"getFilters\":）", src.contains("case \"getFilters\":"))
+        assertTrue(
+            "未知方法必须按返回类型兜底（Java 等价：getReturnType()）",
+            src.contains("defaultValueFor(method.getReturnType())"),
+        )
+        assertTrue(
+            "形态 B 两段接口必须以字符串出现（类型引用会重新触发审核拒绝）",
+            src.contains("McpToolFilterProvider\$McpToolFilter"),
+        )
+    }
 }
