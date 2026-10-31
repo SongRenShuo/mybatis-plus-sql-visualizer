@@ -9,7 +9,7 @@
 三件事，按依赖顺序：
 
 1. **资产下沉**：`ide-demo-gif`（录制）、`ide-ui-acceptance`（验收）两个 skill 从
-   `~/.zcode/skills/` 移到 `<插件仓>/.zcode/skills/`；文档站里可复用的录制产物（指南文档、
+   `~/.agents/skills/` 移到 `<插件仓>/.agents/skills/`；文档站里可复用的录制产物（指南文档、
    校验脚本）一并迁入插件仓。
 2. **经验沉淀**：本轮六张片子的实测经验写成插件仓 `docs/经验总结/` 一篇，并把可通用部分
    并进 skill 坑表。
@@ -23,8 +23,8 @@
 
 | skill | 位置 | 体量 | 内容 |
 |---|---|---|---|
-| `ide-demo-gif` | `~/.zcode/skills/ide-demo-gif/` | `SKILL.md` 361 行 + `scripts/` 8 个 py | 管线/构图/定位三件套/坑表 78 条/环境还原 |
-| `ide-ui-acceptance` | `~/.zcode/skills/ide-ui-acceptance/` | `SKILL.md` 113 行，无脚本 | runIde 沙盒 + robot/图像锚点/像素带 + 证据分级 + 批次验收 |
+| `ide-demo-gif` | `~/.agents/skills/ide-demo-gif/` | `SKILL.md` 361 行 + `scripts/` 8 个 py | 管线/构图/定位三件套/坑表 78 条/环境还原 |
+| `ide-ui-acceptance` | `~/.agents/skills/ide-ui-acceptance/` | `SKILL.md` 113 行，无脚本 | runIde 沙盒 + robot/图像锚点/像素带 + 证据分级 + 批次验收 |
 
 `scripts/`：`assemble.py` `black_underlay.py` `clipread.py` `gifkit.py` `locate.py`
 `scene_template.py` `shot.py` `verify.py`（**权威源**）。
@@ -42,7 +42,7 @@
 ### 2.3 插件仓 `.zcode/`（已存在，但无 skills）
 
 现有 `inc/ plans/ probe/ triage.json triage.py workflow-drafts/ workflow-runs/`。
-ZCode 工作区 skill 约定路径是 `<repo>/.zcode/skills/<name>/SKILL.md`（与 `~/.zcode/skills/` 同构）。
+ZCode 工作区 skill 约定路径是 `<repo>/.agents/skills/<name>/SKILL.md`（与 `~/.agents/skills/` 同构）。
 
 ### 2.4 文档站可迁移产物
 
@@ -57,7 +57,7 @@ ZCode 工作区 skill 约定路径是 `<repo>/.zcode/skills/<name>/SKILL.md`（�
 
 ```
 mybatis-plus-sql-visualizer/
-├── .zcode/skills/
+├── .agents/skills/
 │   ├── ide-demo-gif/
 │   │   ├── SKILL.md            # 路径全部改插件仓视角
 │   │   └── scripts/            # 8 个基建（权威源）
@@ -78,20 +78,20 @@ mybatis-plus-sql-visualizer/
 
 ### T1 skill 迁移与路径改写
 
-1. `mkdir -p <插件仓>/.zcode/skills`，整体复制两个 skill 目录（含 `scripts/`）。
+1. `mkdir -p <插件仓>/.agents/skills`，整体复制两个 skill 目录（含 `scripts/`）。
 2. 改写 `ide-demo-gif/SKILL.md` 内所有全局路径与「本项目」表述：
-   - `~/.zcode/skills/ide-demo-gif/scripts/` → `.zcode/skills/ide-demo-gif/scripts/`（相对插件仓根）
+   - `~/.agents/skills/ide-demo-gif/scripts/` → `.agents/skills/ide-demo-gif/scripts/`（相对插件仓根）
    - 「本项目 record/」保留，但显式写明 **cwd = 插件仓根**，场景脚本 `record/scene_*.py`
    - demo 工程绝对路径 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo`
    - 沙盒启动命令加一句「在插件仓根执行」
 3. `ide-ui-acceptance/SKILL.md` 同步（runIde 命令、record/ 锚点路径）。
 4. **删除全局两份**（同名时用户级优先，留着会让工作区副本永远不生效）。
-5. 验证：新会话在插件仓内用自然语言触发，确认 `Skill` 解析到 `.zcode/skills/...` 路径。
+5. 验证：新会话在插件仓内用自然语言触发，确认 `Skill` 解析到 `.agents/skills/...` 路径。
 
 ### T2 文档站指南迁移
 
 1. `docs/演示GIF录制指南-说明文档.md` → `<插件仓>/docs/录制/演示GIF录制指南-说明文档.md`，
-   正文里「插件仓库 `record/`」「skill 在 `~/.zcode/skills/`」等表述一并改。
+   正文里「插件仓库 `record/`」「skill 在 `~/.agents/skills/`」等表述一并改。
 2. 站点侧原文件改为短指针（保留 URL 不 404）：一句话 + 指向插件仓路径；`search: false` 保留。
 3. 检查站点内其他文档对该指南的引用（`grep 录制指南`），改成指插件仓或不指。
 
@@ -124,8 +124,8 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 ### T7 收口验证
 
-1. 插件仓：`.zcode/skills/**` 入库、`record/tools/` 入库、`docs/录制/` 入库、经验总结入库。
-2. 全局 `~/.zcode/skills/` 两份确认消失（`ls` 为空）。
+1. 插件仓：`.agents/skills/**` 入库、`record/tools/` 入库、`docs/录制/` 入库、经验总结入库。
+2. 全局 `~/.agents/skills/` 两份确认消失（`ls` 为空）。
 3. 文档站：`npm run build` 退出码 0；指针页可访问；`grep` 无失效引用。
 4. 冷启动复验：新会话（插件仓为 cwd）问「录一张演示 GIF」，确认命中的是插件仓 skill 且
    scripts 路径可达。
@@ -198,7 +198,7 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 ## 六、待验证前提（实施者先证伪）
 
-1. **工作区 skill 生效**：ZCode 工作区 skill 路径是 `<repo>/.zcode/skills/`（配置指南 §Skills
+1. **工作区 skill 生效**：ZCode 工作区 skill 路径是 `<repo>/.agents/skills/`（配置指南 §Skills
    一行），但本仓从未放过 skill——首个 skill 落地后必须用新会话实测命中，不能只看文件存在。
 2. **删除全局副本不会影响其它仓**：用户已定「之后录制都从插件仓开始」，其它仓不再需要该 skill；
    若日后有别的仓要录，走「复制回全局」而非双份维护。
@@ -218,9 +218,9 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 ## 八、验收标准
 
-1. 插件仓 `.zcode/skills/ide-demo-gif/`、`.zcode/skills/ide-ui-acceptance/` 在位且 SKILL.md
+1. 插件仓 `.agents/skills/ide-demo-gif/`、`.agents/skills/ide-ui-acceptance/` 在位且 SKILL.md
    内零全局路径残留。
-2. 全局 `~/.zcode/skills/` 下两份已删除。
+2. 全局 `~/.agents/skills/` 下两份已删除。
 3. 新会话（cwd＝插件仓）触发录制 skill 成功，脚本路径可解析。
 4. `docs/录制/演示GIF录制指南-说明文档.md` 在位；站点原路径仍可访问（指针页）。
 5. `record/tools/verify_gif.mjs` 在位且能跑（对现有六张 GIF 出校验读数）。
@@ -232,10 +232,10 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 
 2026-10-31 当天实施完成。
 
-**T1 skill 迁移**：两个 skill 复制到 `.zcode/skills/`，录制 skill 改了三处结构性内容——
+**T1 skill 迁移**：两个 skill 复制到 `.agents/skills/`，录制 skill 改了三处结构性内容——
 ①开头新增「工作目录＝插件仓根」与三层工具表（skill scripts＝权威源 / `record/` 场景与项目件 /
 `record/` 内未通用化的 anchor·robot·mcpnav）；②`python scripts/xxx.py` 全部改成
-`python .zcode/skills/ide-demo-gif/scripts/xxx.py`；③「权威源约定」整节重写（含「全局已删、
+`python .agents/skills/ide-demo-gif/scripts/xxx.py`；③「权威源约定」整节重写（含「全局已删、
 同名时用户级优先」的原因）。验收 skill 加位置块 + 两条本轮新发现（Database 控制台不进捕捉面、
 构建静默死亡先查外部工程配置）。全局两份已删。
 
@@ -244,7 +244,7 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 前台 / 工具窗宽度决定 chip 可见 / 栈弹层是悬停 / combo 三坑 / poster 选帧与接缝口径）。
 
 **T2 指南迁移**：`docs/录制/演示GIF录制指南-说明文档.md`（187 行）——去掉站点 frontmatter、
-头部改插件仓视角、`~/.zcode/skills/` 改 `.zcode/skills/`、补 `record/tools/verify_gif.mjs` 用法。
+头部改插件仓视角、`~/.agents/skills/` 改 `.agents/skills/`、补 `record/tools/verify_gif.mjs` 用法。
 文档站原文件改成路径占位页，`docs/MEMORY.md` 两处引用同步改指向。
 
 **T3 校验工具（与原计划有偏差，已改设计）**：原计划是把文档站 `scripts/verify-crudsql-gif.mjs`
@@ -261,8 +261,8 @@ poster 选帧与光标避让。项目特有坐标进 `record/BASELINE.md`。
 5 个相关旧条目顶部加迁移口径注，`MEMORY.md` 索引从 **45.7KB 瘦到 23.9KB**（78 条描述截断到
 ≤118 字符，并把此前因超限被截掉的 8 个条目补回）——现 107 个记忆文件全部入索引、零孤立、零悬空。
 
-**T7 收口**：`.zcode/` 原本整目录被 gitignore，改为 `.zcode/*` + `!.zcode/skills/`（其余 `.zcode/inc|plans|probe` 仍忽略），skill 得以入库；skill frontmatter 三个字段齐全；8 个脚本 `import` 全通。
+**T7 收口**：`.zcode/` 原本整目录被 gitignore，改为 `.zcode/*` + `!.agents/skills/`（其余 `.zcode/inc|plans|probe` 仍忽略），skill 得以入库；skill frontmatter 三个字段齐全；8 个脚本 `import` 全通。
 
 **待用户侧确认的一项**（计划 §六.1）：工作区 skill 的实际命中要**新会话**才验证得到——本会话的
 skill 是启动时从全局加载的，路径改写后需重开会话用自然语言触发一次（「录一张演示 GIF」）确认
-解析到 `.zcode/skills/ide-demo-gif/`。
+解析到 `.agents/skills/ide-demo-gif/`。

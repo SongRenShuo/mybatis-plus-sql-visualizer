@@ -2,7 +2,7 @@
 
 > 2026-09-12 沉淀，2026-10-31 从文档站 `docs/演示GIF录制指南-说明文档.md` 迁入插件仓（**录制起点自此固定在插件仓**）。
 > 本文是面向下一次录制/补拍的操作手册；管线原理与平台坑的完整分析见 `docs/经验总结/20260910-0100-IntelliJ演示GIF录制-经验总结.md`（§十、§十一为增量），两处不重复维护。
-> 方法论已固化为 skill **`.zcode/skills/ide-demo-gif/`**（在插件仓内，2026-10-31 从全局下沉；含通用脚本与场景模板，自然语言「录一张演示 GIF」可触发）。本文保留作背景与规格依据；通用能力改动以 skill 内 `scripts/` 为权威源。
+> 方法论已固化为 skill **`.agents/skills/ide-demo-gif/`**（在插件仓内，2026-10-31 从全局下沉；含通用脚本与场景模板，自然语言「录一张演示 GIF」可触发）。本文保留作背景与规格依据；通用能力改动以 skill 内 `scripts/` 为权威源。
 > 录制脚本在 `record/`（**已入库 master**，2026-09-15 起录制基线就是 master；分支只用于隔离并行开发），中间产物 `record/perf/` 不入库。
 > GIF 产物校验：`node record/tools/verify_gif.mjs <gif 路径>`（2026-10-31 从文档站 `scripts/verify-crudsql-gif.mjs` 迁入并改名）。
 
@@ -181,6 +181,6 @@
 ## 相关文档
 
 - 插件仓库 `docs/经验总结/20260910-0100-IntelliJ演示GIF录制-经验总结.md`——管线原理、平台坑完整版（§十、§十一为增量）
-- `record/`——gifkit.py / assemble.py / shot.py / clipread.py（读剪贴板，验证复制类按钮真实行为；gifkit 只写不读）/ scene_*；通用能力权威源在 `.zcode/skills/ide-demo-gif/scripts/`
+- `record/`——gifkit.py / assemble.py / shot.py / clipread.py（读剪贴板，验证复制类按钮真实行为；gifkit 只写不读）/ scene_*；通用能力权威源在 `.agents/skills/ide-demo-gif/scripts/`
 - `docs/开发计划/20260907-1138-文档站演示图GIF化补齐与替换-开发计划.md`——本轮计划全历程与实施状态
 - `docs/开发计划/20260909-脚本重放式录制-开发计划.md`——脚本重放管线立项
