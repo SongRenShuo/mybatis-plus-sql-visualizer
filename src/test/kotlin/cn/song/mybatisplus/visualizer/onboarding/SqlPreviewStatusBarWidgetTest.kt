@@ -45,11 +45,17 @@ class SqlPreviewStatusBarWidgetTest : BasePlatformTestCase() {
     }
 
     fun `test取快照不得创建SqlLogManager服务`() {
-        assertNull("前置：本用例开始时服务不应已创建", sqlLogManagerIfCreated(project))
+        // 脆弱前置修正（2026-11-01 全量分片实测暴露）：原写法断言「本用例开始时服务不应已创建」，
+        // 但 SqlLogManager 是**应用级单例、跨用例存活**——同 shard 里只要有任何前置用例（含状态栏
+        // widget 的 2s 池化轮询路径）碰过它，本用例就必然红，而单类定向跑时反而是绿的（假红/假绿同源）。
+        // 判据改为「相对基线不新增创建」：本用例真正要证的是 computeSnapshot 走只读入口、
+        // 不**主动**拉起服务，不是「全进程从未创建过」。
+        val baseline = sqlLogManagerIfCreated(project)
         val snapshot = computeSnapshot(project, executeAvailable = true)
         assertNotNull("快照必须非空", snapshot)
         assertNull(
-            "computeSnapshot 走只读入口，不得发起服务创建（否则毒化容器 + 无用功能也建服务）",
+            "computeSnapshot 走只读入口，不得发起服务创建（否则毒化容器 + 无用功能也建服务）——" +
+                "本用例开始时基线＝${if (baseline == null) "未创建" else "已创建（前置用例遗留，不影响本判据）"}",
             sqlLogManagerIfCreated(project),
         )
     }

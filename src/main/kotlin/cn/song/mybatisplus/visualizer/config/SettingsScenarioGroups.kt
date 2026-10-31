@@ -98,8 +98,9 @@ object SettingsScenarioGroups {
             "logHibernateEnabled", "logJdbcEnabled", "logShardingSphereEnabled",
             // 恢复与兜底
             "literalParamRecovery",
-            // agent 采集
-            "enhancedCaptureEnabled", "enhancedCaptureConfirmed",
+            // agent 采集（enhancedCaptureConfirmed 是迁移期兼容字段，只在 loadState 归一里读，
+            //   不是场景成员——由 EnhancedCaptureDefaultOnGuardTest 的 compatOnly 豁免守卫钉住）
+            "enhancedCaptureEnabled",
         ),
     )
 
