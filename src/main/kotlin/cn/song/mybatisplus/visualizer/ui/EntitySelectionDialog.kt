@@ -14,6 +14,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.psi.PsiClass
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
 import cn.song.mybatisplus.visualizer.util.IconScaler
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
@@ -25,7 +26,6 @@ import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 
 /**
  * 实体类选择弹窗（SQL→Java 反向转换手动指定实体）。
@@ -89,8 +89,10 @@ class EntitySelectionDialog(
             selections[row.key] = row.candidates.firstOrNull()
         }
         val content = JPanel(BorderLayout())
+        // T-DarkTheme：滚动容器用平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸 JViewport、
+        // 四角无 Corner 组件；平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner。
         content.add(
-            JScrollPane(panel).apply {
+            JBScrollPane(panel).apply {
                 preferredSize = Dimension(
                     DIALOG_WIDTH,
                     (currentRows.size * ROW_HEIGHT + DIALOG_PADDING).coerceAtMost(DIALOG_MAX_HEIGHT),
