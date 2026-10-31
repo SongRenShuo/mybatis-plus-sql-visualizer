@@ -29,6 +29,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBRadioButton
 import com.intellij.ui.TitledSeparator
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import javax.swing.ButtonGroup
 import com.intellij.util.ui.JBUI
@@ -624,9 +625,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.tip")
             })
             // T-MagpieGems W2：豁免白名单（3 行小文本域，滚动包裹防撑高）
+            // T-DarkTheme：滚动容器用平台 JBScrollPane。自建原生 JScrollPane 的 viewport 是裸
+            // JViewport（背景取 Viewport.background，不跟随所载组件）、四角无 Corner 组件；
+            // 平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner。
             addRow(
                 p, g, MpSqlVisualizerBundle.message("settings.display.mask.allowList"),
-                javax.swing.JScrollPane(displayMaskAllowListArea).apply {
+                JBScrollPane(displayMaskAllowListArea).apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.allowList.tip")
                 },
                 fill = GridBagConstraints.HORIZONTAL,

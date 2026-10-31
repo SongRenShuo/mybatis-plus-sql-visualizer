@@ -9,6 +9,7 @@ import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.ui.TreeUIHelper
 import com.intellij.ui.components.JBList
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
@@ -21,7 +22,6 @@ import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 import javax.swing.ListCellRenderer
 import javax.swing.ListSelectionModel
 
@@ -85,7 +85,11 @@ class SqlSelectionDialog<T>(
         init()
     }
 
-    override fun createCenterPanel(): JComponent = JScrollPane(list).apply {
+    // T-DarkTheme：滚动容器必须用平台 JBScrollPane（同 T-InsightDarkThemeFix 先例）。
+    // 自建原生 JScrollPane 的 viewport 是裸 JViewport、四角没有 Corner 组件（横竖滚动条交汇处
+    // 无人绘制）；平台 JBScrollPane 用 JBViewport（背景取所载 view）+ 四角 Corner，
+    // 深色主题下容器边缘/角落不会留浅色条带。
+    override fun createCenterPanel(): JComponent = JBScrollPane(list).apply {
         border = JBUI.Borders.empty()
         preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
         minimumSize = Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
