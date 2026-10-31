@@ -119,6 +119,8 @@ class PreviewRenderSlowOpsGuardTest {
             "ui/SqlPreviewPanelResultView.kt",
             "ui/SqlPreviewPanelParamPanel.kt",
             "ui/SqlPreviewPanelExecution.kt",
+            // D202（2026-10-31）：EXPLAIN 双通道链随拆分搬入本文件，扫描面同族铺开
+            "ui/SqlPreviewPanelExecutionExplain.kt",
             "ui/SqlPreviewPanelEditorLifecycle.kt",
             "ui/SqlPreviewPanelText.kt",
             "ui/highlight/SqlAutoFolding.kt",
