@@ -213,6 +213,44 @@ class LogEntryRailPerfTest : BasePlatformTestCase() {
             state.logListSqlDisplayMode = saved
         }
     }
+
+    /**
+     * T-LogListAnchor 券01：关键字换行取源改为完整 SQL 后，超预算语句的渲染成本。
+     *
+     * 两条判据：①首帧（词法 + 分行 + 缓存写入）在宽松预算内——只拦「把整段词法搬到每帧」这类
+     * 数量级退化（headless 无字体测量，绝对值不可当真机读数）；②第二次渲染命中同一份条目级
+     * 缓存实例，证明成本不随重绘次数累积。
+     * k2j：条目经 3 参构造器（rawSql/restoredSql/params）；缓存读取走 getCachedListLineFragments()。
+     */
+    fun test关键字换行_预算边界SQL首帧成本与缓存命中() {
+        val state = PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        val renderer = LogEntryListCellRenderer()
+        val l = list(600)
+        // 400 列 → 远超 4096 字符预算，覆盖「按空白边界截断」这条路径
+        val huge = "SELECT " + (1..400).joinToString(", ") { "c$it" } + " FROM huge_table WHERE id = 42"
+        val e = LogSqlEntry(huge, huge, emptyList())
+        try {
+            state.logListSqlDisplayMode = "KEYWORD_WRAP"
+            repeat(50) { renderOnce(renderer, l, entry(it)) }
+
+            val t0 = System.nanoTime()
+            val first = renderer.getListCellRendererComponent(l, e, 0, false, false) as LogEntryListCellRenderer
+            val firstMs = (System.nanoTime() - t0) / 1_000_000.0
+            val cached = e.cachedListLineFragments
+            assertNotNull("首帧后必须写入条目级片段缓存", cached)
+            assertEquals("三行封顶（可见行）", 3, first.sqlLines.size)
+
+            val t1 = System.nanoTime()
+            renderOnce(renderer, l, e)
+            val cachedMs = (System.nanoTime() - t1) / 1_000_000.0
+            assertSame("第二次渲染必须命中同一份缓存实例", cached, e.cachedListLineFragments)
+            assertTrue("首帧 ${"%.3f".format(firstMs)}ms 超宽松预算 50ms", firstMs < 50.0)
+            assertTrue("命中缓存后 ${"%.3f".format(cachedMs)}ms 超预算 5ms", cachedMs < 5.0)
+        } finally {
+            state.logListSqlDisplayMode = saved
+        }
+    }
     // ---------- 宽度算式 ----------
 
     /**
