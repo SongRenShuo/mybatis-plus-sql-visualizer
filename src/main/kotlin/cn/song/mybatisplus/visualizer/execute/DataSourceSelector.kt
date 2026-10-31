@@ -994,19 +994,11 @@ object DataSourceSelector {
     }
 
     /**
-     * T-ModuleScopedLastUsed W1（2026-10-24 用户问「上次使用的数据源是否按模块隔离更合适」）：
-     * last-used 记忆的**键构造**（纯函数，headless 直测）。
+     * T-ModuleScopedLastUsed W1：last-used 记忆的**键构造**（纯函数，headless 直测）。
      *
-     * 为什么按模块分桶：本项目此前并存两套取源记忆且粒度不一致——项目级 last-used（喂指示行
-     * 灰字与静默复用）vs 模块级 [cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore]
-     * （`mp-sql-visualizer-datasource.xml`，**只喂方言决策**）。于是「在 jpa_demo 模块选了
-     * jpa_demo@localhost，切到 mp_demo 模块，灰字仍显示同一个源」——多模块工程的源本就按模块
-     * 分（demo 仓 mp_demo / jpa_demo / mpj_demo 各连各库），项目级单一记忆必然错配。这也是
-     * T-DialectInferPollution W8~W12 那批跨模块错源的根因之一。
-     *
-     * **硬约束**：`moduleKey` 为 null/blank 时**必须回落项目级键**（返回 [LAST_RUNNER_KEY] 族
-     * 原键）——纯 `.sql` 文件、非 Java 源等入口没有模块上下文，若按模块硬隔离会退化成「每次
-     * 都未绑定」，比改前更糟。
+     * 按模块分桶的理由（多模块工程各连各库、项目级单一记忆必然错配）与历史根因见
+     * T-ModuleScopedLastUsed 计划册；**硬约束**＝`moduleKey` 为 null/blank 时必须回落项目级键
+     * （纯 `.sql` 等无模块上下文入口若硬隔离会退化成「每次都未绑定」）。
      */
     internal object LastUsedKeys {
         /** 模块级后缀分隔符：模块键是 `canonicalKey`（模块身份，非路径），拼上后仍是稳定键。 */
@@ -1048,27 +1040,9 @@ object DataSourceSelector {
      * 但模块级命中优先，故读取侧不会串味。
      */
     internal fun rememberRunner(project: Project, name: String, dataSourceId: String?, moduleKey: String? = null) {
-        // T-LastUsedEdt（2026-11-01 真机实证缺陷）：`PropertiesComponent.setValue` 写的是**项目级**
-        // 持久化状态（`BasePropertyService.MyState` 由 kotlinx 序列化后随工程保存落盘），必须在 EDT
-        // 或至少串行化上下文里写。本函数的调用点里 `prepareAfterEditorResolved` 是**非 EDT 直行**
-        // （由 Database 插件的 runner session 回调进入），于是出现「BGT 写 vs 平台保存」竞争。
-        //
-        // 实证症状：demo 工程 `.idea/workspace.xml` 里 `mpsql.visualizer.last.runner.id` 的值丢了
-        // 开头引号（4529 字符 JSON 里仅此一处），每次启动报
-        // `JsonDecodingException: Expected quotation mark '"', but had '8'`；且损坏后平台不会重写
-        // 该条目，等于用户工程文件被永久污染。
-        //
-        // 修法：**入口统一归位 EDT**（而非逐个调用点补），保证无论从哪条链进来都是串行写。
-        // 非 EDT 时投 invokeLater 后立即返回——last-used 是「下次预览用哪个源」的启发式记忆，
-        // 晚一两帧落地无影响；相比「写坏用户工程文件」，这个时序代价可接受。
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        if (!app.isDispatchThread) {
-            app.invokeLater(
-                { rememberRunner(project, name, dataSourceId, moduleKey) },
-                com.intellij.openapi.application.ModalityState.any(),
-            )
-            return
-        }
+        // T-LastUsedEdt：项目级 PropertiesComponent 必须在 EDT 写（BGT 写会与平台保存竞争、
+        // 写坏用户 .idea/workspace.xml 且平台不重写）。入口统一归位，机制与取证见 [onEdtForLastUsed]。
+        if (onEdtForLastUsed { rememberRunner(project, name, dataSourceId, moduleKey) }) return
         runCatching {
             val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
             fun write(keyModule: String?) {
@@ -1093,17 +1067,8 @@ object DataSourceSelector {
      * 项目级兜底——用户只是在某个模块里换了源，不该把全局兜底一起抹掉）；未给则清项目级。
      */
     internal fun forgetLastRunner(project: Project, moduleKey: String? = null) {
-        // T-LastUsedEdt（2026-11-01 真机实证缺陷）：`PropertiesComponent` 写的是**项目级**
-        // 持久化状态（随之随工程保存落盘），必须在 EDT 串行写。与 [rememberRunner] 同因同治——
-        // 非 EDT 时投 invokeLater 后立即返回，避免与平台保存竞争写坏用户工程文件。
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        if (!app.isDispatchThread) {
-            app.invokeLater(
-                { forgetLastRunner(project, moduleKey) },
-                com.intellij.openapi.application.ModalityState.any(),
-            )
-            return
-        }
+        // T-LastUsedEdt：同上，入口归位 EDT（机制见 [onEdtForLastUsed]）。
+        if (onEdtForLastUsed { forgetLastRunner(project, moduleKey) }) return
         runCatching {
             val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
             fun clear(keyModule: String?) {
@@ -1127,17 +1092,8 @@ object DataSourceSelector {
      * 清空时按清单逐个 `unsetValue`。
      */
     internal fun forgetAllLastUsed(project: Project) {
-        // T-LastUsedEdt（2026-11-01 真机实证缺陷）：`PropertiesComponent` 写的是**项目级**
-        // 持久化状态（随之随工程保存落盘），必须在 EDT 串行写。与 [rememberRunner] 同因同治——
-        // 非 EDT 时投 invokeLater 后立即返回，避免与平台保存竞争写坏用户工程文件。
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        if (!app.isDispatchThread) {
-            app.invokeLater(
-                { forgetAllLastUsed(project) },
-                com.intellij.openapi.application.ModalityState.any(),
-            )
-            return
-        }
+        // T-LastUsedEdt：同上，入口归位 EDT（机制见 [onEdtForLastUsed]）。
+        if (onEdtForLastUsed { forgetAllLastUsed(project) }) return
         runCatching {
             val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
             fun clear(keyModule: String?) {

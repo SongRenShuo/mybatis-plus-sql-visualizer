@@ -33,10 +33,40 @@ class LastUsedWriteOnEdtGuardTest {
         return writeFns.filter { fn ->
             val idx = stripped.indexOf("internal fun $fn(")
             if (idx < 0) return@filter true   // 函数不见了也算异常（防被删）
-            // 取函数体前 1200 字符（足以覆盖注释 + 归位块 + runCatching 开头）
-            val seg = stripped.substring(idx, minOf(idx + 1200, stripped.length))
-            !(seg.contains("isDispatchThread") && seg.contains("invokeLater"))
+            val seg = functionBodyAt(stripped, idx)
+            // 两种合规形态都接受：
+            //  a) 内联归位——函数体内直接 isDispatchThread + invokeLater；
+            //  b) 委托归位——函数体内调 onEdtForLastUsed { ... }（归位知识收敛到 DataSourceSelectorLastUsedEvents
+            //     的该辅助函数；另有「辅助函数本身必须在 EDT 判定」的用例钉住它不被掏空）。
+            val inline = seg.contains("isDispatchThread") && seg.contains("invokeLater")
+            val delegated = seg.contains("onEdtForLastUsed")
+            !(inline || delegated)
         }
+    }
+
+    /**
+     * 取 `idx` 处函数的**真实函数体**（大括号配对），而不是固定长度窗口。
+     *
+     * 踩过的坑（本轮反向验证抓出）：早先按「函数声明后 1200 字符」截窗口，`rememberRunner` 摘掉
+     * 自己的归位后，窗口跨界读到了后面 `forgetLastRunner` / `forgetAllLastUsed` 的 `onEdtForLastUsed`
+     * 调用 → 守卫**假绿**。按大括号配对切体后，窗口天然止于本函数。
+     */
+    private fun functionBodyAt(src: String, declIdx: Int): String {
+        val open = src.indexOf('{', declIdx)
+        if (open < 0) return ""
+        var depth = 0
+        var i = open
+        while (i < src.length) {
+            when (src[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return src.substring(open, i + 1)
+                }
+            }
+            i++
+        }
+        return src.substring(open)
     }
 
     @Test
@@ -47,6 +77,24 @@ class LastUsedWriteOnEdtGuardTest {
                 "修法：函数体开头加 isDispatchThread 判定 + invokeLater 归位后 return（照 rememberRunner 的 T-LastUsedEdt 块）",
             offenders.isEmpty(),
         )
+    }
+
+    /**
+     * 委托形态的兜底：三个入口现在都调 `onEdtForLastUsed { ... }`，归位知识在该辅助函数里。
+     * 若有人把辅助函数掏空成直行（或删掉 EDT 判定），上面的 offendersOf 仍绿——故单钉一条。
+     */
+    @Test
+    fun `委托归位的辅助函数本身必须在 EDT 判定`() {
+        val helperFile = File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorLastUsedEvents.kt",
+        )
+        assertTrue("onEdtForLastUsed 所在文件不存在：${helperFile.path}", helperFile.isFile)
+        val src = stripComments(helperFile.readText())
+        val idx = src.indexOf("fun onEdtForLastUsed(")
+        assertTrue("onEdtForLastUsed 不见了（委托归位失去落点）", idx >= 0)
+        val seg = src.substring(idx, minOf(idx + 600, src.length))
+        assertTrue("onEdtForLastUsed 缺 isDispatchThread 判定：A/B 竞争会复现", seg.contains("isDispatchThread"))
+        assertTrue("onEdtForLastUsed 缺 invokeLater 投递（非 EDT 时未归位）", seg.contains("invokeLater"))
     }
 
     /** 自证语料：合成一段「无归位」的写入口，判定内核必须点名；带归位的必须放行。 */
