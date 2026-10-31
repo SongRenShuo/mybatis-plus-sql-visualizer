@@ -18,8 +18,8 @@ import org.junit.Test
  *    后，本规则收窄为「只允许自有文档站域名 sql-visualizer.jvtools.cn」，其余外链 `<img>` 仍禁；
  *  - T-PluginDescReshape（2026-10-08）新增描述结构四条：`<hr/>` 与 HTML 注释被 Marketplace 剥离
  *    （实测 tag 2026.10.7 本地有 hr、线上同版本 hr=0，中英两段粘连）、首 40 字符须英文摘要
- *    （预览卡文案位，官方 best-practices 硬要求）、数字与行为声明对账（11 方言 / 10 工具 /
- *    Alt+Shift+Q / since-build 版本标签）、双语同构且中文在前；
+ *    （预览卡文案位，官方 best-practices 硬要求）、数字与行为声明对账（方言数 / MCP 工具数 /
+ *    Alt+Shift+Q / since-build 版本标签，数字均取代码单一事实源）、双语同构且中文在前；
  *  - `projectConfigurable` 与父级同名套娃（bug-fixes/project-settings-no-nested-configurable.md）；
  *    T-SettingsTruth P4 起项目级设置页合法注册（parentId=tools 顶层），守卫收窄为
  *    「不得挂应用级 configurable 之下 + id 不与 applicationConfigurable 重复」；

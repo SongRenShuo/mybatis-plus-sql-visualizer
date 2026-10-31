@@ -26,7 +26,7 @@
          ② 中文内容整体位于英文正文之上（用户 2026-10-08 定案，参考件 MyBatisCodeHelperPro 同形）；
          ③ 不使用 <hr/> 与 HTML 注释——Marketplace 会剥离（实测：本地 tag 2026.10.7 含 hr，线上同版本描述 hr=0）；
          ④ 禁用 <img>（外链图 302 防盗链），截图走 Marketplace Media 区；
-         ⑤ 数字类声明（11 方言 / 10 工具 / Alt+Shift+Q / 2024.3）由 PluginXmlStructureGuardTest 与代码对账。
+         ⑤ 数字类声明（方言数取 DialectRegistry.dialects、工具数取 McpToolGate.TOOL_NAMES、Alt+Shift+Q、since-build 版本标签）由 PluginXmlStructureGuardTest 与代码对账。
          HTML 片段下同。 -->
     <description><![CDATA[
         <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values, before the server starts.</p>
@@ -102,7 +102,7 @@
 
     <!-- T-McpToolset MCP 能力一期：com.intellij.mcpServer（平台内置 MCP Server 插件，253+/262 内置，
          243 不支持——旧 EP 形态适配成本>收益，见 CHANGELOG）——mcp-optional.xml 注册
-         mcpServer.mcpToolset（十个只读工具，一工具一 toolset 类，清单见 mcp-optional.xml）。
+         mcpServer.mcpToolset（只读工具，一工具一 toolset 类；工具名清单以 McpToolGate.TOOL_NAMES 为单一事实源，注册清单见 mcp-optional.xml）。
          未装该插件的环境整文件不加载，
          插件其余功能零影响；编译期类型来自 mcpStub 桩源集（本机构建辅助，见 build.gradle.kts 注释） -->
     <depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>
