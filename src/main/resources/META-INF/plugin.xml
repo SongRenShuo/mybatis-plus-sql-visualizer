@@ -209,6 +209,25 @@
                                  key="settings.section.mcp"
                                  instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
 
+        <!-- T-BannedApiCheck（FR-0045 第 2 项）：禁用 API 规则管理子页（列表 + 编辑器，即时生效）。
+             groupWeight=12 插在 MCP(15) 与关于(10) 之间——须保持声明序严格递减（守卫
+             PluginXmlStructureGuardTest 钉住）。App 级注册：规则跨项目共享，与屏蔽规则同作用域。 -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.bannedApi"
+                                 groupWeight="12"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.bannedApi"
+                                 instance="cn.song.mybatisplus.visualizer.config.BannedApiConfigurable"/>
+
+        <!-- T-TemplateHook（FR-0045 第 3 项 MVP）：外部 SQL 模板渲染器（默认关；关闭时全链零行为变更）。
+             groupWeight=11 插在 bannedApi(12) 与 about(10) 之间，保持声明序严格递减（15>12>11>10）。 -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.externalTemplate"
+                                 groupWeight="11"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.externalTemplate"
+                                 instance="cn.song.mybatisplus.visualizer.config.ExternalTemplateConfigurable"/>
+
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
@@ -365,6 +384,12 @@
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.agent"
                            displayType="BALLOON"/>
+        <!-- FR-0045 T-BannedApiCheck：禁用 API 存量统计动作的反馈（索引未就绪 / 无规则 / 扫描失败 /
+             无命中）——独立组：一域一组惯例；该动作按弹窗克制红线**零模态弹窗**，全部走本组 balloon -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.inspection"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.inspection"
+                           displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
@@ -408,8 +433,12 @@
              白」的真根因；同族坑见上方 typedHandler 注）。勿再改回裸名。 -->
         <lang.syntaxHighlighterFactory language="MpSqlMapper"
                                        implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
-        <!-- T-XmlGap W7：mapper XML 引用（跳转/查找用法）——只产 soft 引用，不注册任何
-             inspection/annotator（红线：不做校验器形态）；无目标时零报红 -->
+        <!-- T-XmlGap W7：mapper XML 引用（跳转/查找用法）——只产 soft 引用，**XML 侧**不注册任何
+             inspection/annotator（红线：mapper XML 不做校验器形态）；无目标时零报红。
+             T-BannedApiCheck（FR-0045 第 2 项）勘误：原注释「不注册任何 inspection/annotator」
+             是这条 XML 引用链的约束（避免 XML 引用被做成报红校验器）；插件在 Java 侧新增的
+             禁用 API 检查是独立能力面（见下方 localInspection），与本贡献器「只产 soft 引用」
+             互不相干，本红线对 XML 引用仍成立。 -->
         <psi.referenceContributor language="XML"
                                   implementation="cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlReferenceContributor"/>
         <!-- T-XmlGap W6：mybatis-config.xml 补全（<setting name>/value、配置子标签名）。
@@ -439,6 +468,28 @@
              本类只把占位换成 `select#id`，作用面收窄到 mapper 文件的语句标签/<sql> 且跨多行） -->
         <lang.foldingBuilder language="XML" order="first"
                              implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperFoldingBuilder"/>
+
+        <!-- T-BannedApiCheck（FR-0045 第 2 项）：插件**首个 localInspection**——Java 方法调用层面的
+             禁用 API 检查（规则来自设置页「禁用 API」，规则表为空时 buildVisitor 返回
+             EMPTY_VISITOR，零 daemon 行为）。
+             EP 名/形态：`com.intellij.localInspection`（平台 Analysis.xml 声明，beanClass=
+             LocalInspectionEP，243 app-client.jar 实证）；language/implementationClass 为
+             LanguageExtensionPoint 必填。
+             `key`+`bundle` 给检查设置树里的显示名（InspectionEP 无 displayName 走 bundle 的同款坑，
+             与 notificationGroup 一致）；`groupKey`+`groupBundle` 决定分组显示名；
+             `level` 只是**默认**严重度——逐规则的 error/warning 由 report 时的
+             ProblemHighlightType 表达（GENERIC_ERROR_OR_WARNING 会被 profile level 覆盖，
+             故规则级别的检查不能用它）。shortName 与 BannedApiInspection.getShortName() 同值，
+             用户可用 `@SuppressWarnings("BannedApi")` 抑制单点。 -->
+        <localInspection language="JAVA"
+                         shortName="BannedApi"
+                         key="inspection.bannedApi.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.bannedApi.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.BannedApiInspection"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
@@ -532,6 +583,17 @@
             <separator/>
             <reference ref="cn.song.mybatisplus.visualizer.SqlTemplateGroup"/>
         </group>
+
+        <!-- T-BannedApiCheck（FR-0045 第 2 项）S4：禁用 API 存量统计（Tools 菜单）。
+             只读全项目 Java PSI 扫描 → 临时报告文件在编辑器打开（写盘失败降级为对话框）；
+             规则为空/DumbService 索引期不跑（动作内提示）。不挂默认键位（避免与平台动作撞键，
+             可经设置页「快捷键」或 Keymap 自行录制）。 -->
+        <action id="cn.song.mybatisplus.visualizer.ScanBannedApiUsages"
+                class="cn.song.mybatisplus.visualizer.actions.ScanBannedApiUsagesAction"
+                text="action.cn.song.mybatisplus.visualizer.ScanBannedApiUsages.text"
+                description="action.cn.song.mybatisplus.visualizer.ScanBannedApiUsages.description">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
 
         <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
              对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->

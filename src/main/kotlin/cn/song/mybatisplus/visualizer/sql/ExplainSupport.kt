@@ -10,8 +10,9 @@ package cn.song.mybatisplus.visualizer.sql
  *
  * 取值按「计划文本的物理形态」分类，不按数据库品牌——同一品牌不同格式（如 PG 的
  * `FORMAT TEXT` 与 `FORMAT JSON`）分属不同取值，消费方按形态选解析器：
- *  - [ExplainOutputFormat.TABLE]：行列二维表（MySQL 家族 `EXPLAIN` 的原生表格行）；
- *  - [ExplainOutputFormat.TEXT]：单列文本计划树/文本行（DM8 `#NSET2`、H2 `PLAN FOR`、SQLite `QUERY PLAN`、
+ *  - [ExplainOutputFormat.TABLE]：行列二维表（MySQL 家族 `EXPLAIN` 的原生表格行、DM8 `EXPLAIN FOR`
+ *    的 19 列结构化计划表）；
+ *  - [ExplainOutputFormat.TEXT]：单列文本计划树/文本行（H2 `PLAN FOR`、SQLite `QUERY PLAN`、
  *    Oracle DBMS_XPLAN 文本树）；
  *  - [ExplainOutputFormat.JSON]：单列 JSON 文本（PG/KingBase `FORMAT JSON`）；
  *  - [ExplainOutputFormat.XML]：SQL Server `SET STATISTICS XML` 的 Showplan XML（R23 接入时补的
@@ -82,7 +83,9 @@ object ExplainSupport {
      *    原生 `MysqlBaseRawPlanData`——`FORMAT=JSON` 属自创形态且全树无渲染器消费）；
      *  - PostgreSQL 16：`EXPLAIN (FORMAT JSON, VERBOSE)`；
      *  - KingbaseES V8/V9：`EXPLAIN (FORMAT JSON)`（PG 兼容）；
-     *  - DM8：`EXPLAIN <sql>`，返回 `#NSET2` 计划文本；
+     *  - DM8：`EXPLAIN FOR <sql>`，19 列结构化计划表（T-Fr45DmGuard S2 真机实证：`EXPLAIN <sql>` 在
+ *    MCP 裸 JDBC 通道**不返回结果集**，正文为空；旧记「`EXPLAIN` 返回 `#NSET2` 计划文本」来自 DBX
+ *    通道，不适用于本链）；
      *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
      *  - OceanBase（T-DialectXcFamily 接入，T-OBExplainFormat 纠档）：`EXPLAIN <sql>`，**TEXT 档**——
      *    官方 V4.x《SQL 执行计划简介》称缺省 `FORMAT = TRADITIONAL` 为表格行，但**真机实证推翻**：
@@ -132,7 +135,15 @@ object ExplainSupport {
         Entry("MariaDB", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "真机实证 MariaDB 10.x（DBX 通道 2026-09-02）"),
         Entry("PostgreSQL", "EXPLAIN (FORMAT JSON, VERBOSE) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 PG 16（2026-09-02）+ 2026-09-22 复验返回形态"),
         Entry("KingBase（人大金仓）", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 KingbaseES V8（PG 兼容）"),
-        Entry("DM（达梦）", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "真机实证 DM8（返回 #NSET2 计划文本）"),
+        Entry(
+            "DM（达梦）",
+            "EXPLAIN FOR $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TABLE,
+            "真机实证 DM8 DBMS 8.1.3.12（DmJdbcDriver18 8.1.3.140，MCP 裸 JDBC 通道 2026-10-31）：" +
+                "EXPLAIN 不返回结果集（executeQuery 0 列 0 行；execute() isResultSet=false、getMoreResults() 随即 -1），" +
+                "EXPLAIN FOR 返回 19 列结构化计划表（PLAN_ID…OPERATION/TAB_NAME/IDX_NAME/SCAN_TYPE/ROW_NUMS/COST/FILTER…），" +
+                "SELECT 与 DELETE … WHERE 1=0 均得 4 行。档位随形态 TEXT→TABLE（结构化面板通道 + 计划可落历史）",
+        ),
         Entry("H2", "EXPLAIN PLAN FOR $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "H2 2.3.232 引擎级单测"),
         Entry("SQLite", "EXPLAIN QUERY PLAN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "SQLite 引擎级单测"),
         Entry(

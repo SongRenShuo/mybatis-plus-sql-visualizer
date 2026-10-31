@@ -95,7 +95,9 @@
 
 调用时机：已拿到 SQL（通常来自 sqlv_render_sql 或 sqlv_render_logs）、想看执行计划时。严格只读，拒绝 fail-closed。
 
-失败语义：`MCP_READ_ONLY`（语句本身是写语句——结构判定优先）；`SQL_BLOCKED`（形态违规：多条语句、锁读 FOR UPDATE/SHARE、非单条纯 SELECT）；`DATASOURCE_NOT_FOUND` / `DATASOURCE_UNREACHABLE`；`DIALECT_UNSUPPORTED`。
+失败语义：`MCP_READ_ONLY`（语句本身是写语句——结构判定优先）；`SQL_BLOCKED`（形态违规：多条语句、锁读 FOR UPDATE/SHARE、非单条纯 SELECT）；`DATASOURCE_NOT_FOUND` / `DATASOURCE_UNREACHABLE`；`NOT_A_SQL_DATASOURCE`（数据源 URL 子协议属非关系型家族，如 `jdbc:redis://`、`jdbc:mongodb://`——此时不再兜底猜方言，直接拒绝；错误文本只带子协议，不含账号口令）；`DIALECT_UNSUPPORTED`。
+
+达梦（DM）说明：计划语句为 `EXPLAIN FOR <sql>`，结果为结构化计划表（19 列，含 `OPERATION`/`TAB_NAME`/`IDX_NAME`/`SCAN_TYPE`/`ROW_NUMS`/`COST`/`FILTER` 等）；裸 `EXPLAIN <sql>` 在 DM8 上不返回结果集（2026-10-31 真机实测），故不要自行拼 `EXPLAIN` 前缀。
 
 ### 3.5 sqlv_check_sql — 写风险核查
 
@@ -202,7 +204,7 @@
 4. 代码化与 review：`sqlv_reverse_sql` 把 SQL 固化成 Wrapper 链；`sqlv_mapper_check` 带 simulate 复核 mapper 渲染产物。
 5. 历史检索：`sqlv_history_search` 查本地历史落盘（默认当日，`allDates=true` 跨全量）——先检索历史再决定是否 render/render_logs，避免重复还原；只读，不执行。
 
-失败语义约定（全工具通用）：错误以 `[错误码] 文本` 结构返回，agent 可解析。错误码：`MCP_READ_ONLY`、`SQL_BLOCKED`、`INVALID_ARGUMENT`、`DATASOURCE_NOT_FOUND`、`DATASOURCE_UNREACHABLE`、`SCHEMA_NOT_AVAILABLE`、`DIALECT_UNSUPPORTED`、`SOURCE_NOT_FOUND`、`PROJECT_NOT_READY`。拒绝通道零弹窗，agent 收到结构化错误即可自行决策重试或换路。
+失败语义约定（全工具通用）：错误以 `[错误码] 文本` 结构返回，agent 可解析。错误码：`MCP_READ_ONLY`、`SQL_BLOCKED`、`INVALID_ARGUMENT`、`DATASOURCE_NOT_FOUND`、`DATASOURCE_UNREACHABLE`、`NOT_A_SQL_DATASOURCE`、`SCHEMA_NOT_AVAILABLE`、`DIALECT_UNSUPPORTED`、`SOURCE_NOT_FOUND`、`PROJECT_NOT_READY`。拒绝通道零弹窗，agent 收到结构化错误即可自行决策重试或换路。
 
 ## 五、给 agent 的调用建议
 

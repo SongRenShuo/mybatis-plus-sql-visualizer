@@ -173,6 +173,12 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
             //   非模态 MODELESS（DialogWrapper(project, false, MODELESS)，与 SqlSuppressManagerDialog
             //   逐字段同形态），20260929 收口门禁守卫命中后按红线加白。
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ParamSchemeManagerDialog.kt",
+            // FR-0045 T-BannedApiCheck 禁用 API 规则页：清空全部规则前 showYesNoDialog 知情确认
+            //   （破坏性、不可恢复，与 SqlSuppressManagerDialog「清空全部规则」同场景同形态）；
+            //   新增规则走页内表单 + 状态行，不弹输入框。同批的「统计禁用 API 存量」动作原有 5 处
+            //   轻提示模态框，已按本红线改为平台通知（组 cn.song.mybatisplus.visualizer.inspection），
+            //   故该动作文件不在白名单。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/BannedApiConfigurable.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->

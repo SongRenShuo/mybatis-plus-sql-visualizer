@@ -211,16 +211,20 @@ class ExplainIndexAdvisorTest {
         val rows = listOf(listOf("1", "SIMPLE", "t", "ALL", "NULL", "999999", ""))
         // 独立复核 ⑳：分派键必须是**表键**（= Dialect.name = "DM（达梦）"）。此前本用例传品牌短名
         // "DM"——`ExplainSupport` 里查不到 → 落到 else 静默降级分支，而下面的 `.isEmpty()` 对
-        // 「TEXT 档零命中」与「未登记降级」同形，肉眼区分不出 ⇒ 绿灯来自错误分支。
+        // 「档位零命中」与「未登记降级」同形，肉眼区分不出 ⇒ 绿灯来自错误分支。
         // 故先把**路由**钉住（键写错时本行先红），再断言输出。
+        // T-Fr45DmGuard S2：DM 真机 `EXPLAIN FOR` 返回 19 列计划表 → 档位由 TEXT 改 TABLE。
         val dmDialectName = "DM（达梦）"
         assertEquals(
-            "DM 必须以表键（Dialect.name）路由到 TEXT 档，品牌短名 \"DM\" 不是表键",
-            ExplainOutputFormat.TEXT,
+            "DM 必须以表键（Dialect.name）路由到 TABLE 档，品牌短名 \"DM\" 不是表键",
+            ExplainOutputFormat.TABLE,
             ExplainSupport.formatFor(dmDialectName),
         )
-        // DM（达梦）在册且接入（TEXT 档），但表格式行不含文本树模式 → 零命中（不噪音、不猜）
-        assertTrue(ExplainIndexAdvisor.advise(dmDialectName, mysqlHeaders, rows).isEmpty())
+        // DM 的真机列集没有 MySQL 的 type/key/Extra 列 → adviseMysql 列名不符即提前返回，
+        // 零命中（不噪音、不猜）；不能拿 MySQL 列头喂它冒充「同档即可套规则」。
+        val dmHeaders = listOf("PLAN_ID", "OPERATION", "TAB_NAME", "SCAN_TYPE", "ROW_NUMS", "COST")
+        val dmRows = listOf(listOf("1", "DELETE", "ARTICLE", "FULL SCAN", "999999", "0"))
+        assertTrue(ExplainIndexAdvisor.advise(dmDialectName, dmHeaders, dmRows).isEmpty())
         // R23 后 Oracle 已接入（TEXT 档）：MySQL 表格式行塞给它同样零命中——
         // 本插件通道对 Oracle 不产出计划行（EXPLAIN PLAN FOR 只登记不返回），勿硬解析
         assertTrue(ExplainIndexAdvisor.advise("Oracle", mysqlHeaders, rows).isEmpty())

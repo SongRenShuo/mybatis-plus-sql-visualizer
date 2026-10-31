@@ -12,7 +12,7 @@ import org.junit.Test
  * 支持矩阵（DBX 真机实证 2026-09-02；T-ExplainFirstNative 对齐 IDEA 原生形态）：
  * MySQL 5.7/8.4、MariaDB（EXPLAIN 表格行——原生 MysqlBaseRawPlanData 同款，FORMAT=JSON
  * 为自创形态无渲染器消费）、PostgreSQL 16（FORMAT JSON, VERBOSE）、KingbaseES V8
- * （FORMAT JSON）、DM8（原生 EXPLAIN）、H2（PLAN FOR）、SQLite（QUERY PLAN）。
+ * （FORMAT JSON）、DM8（`EXPLAIN FOR`，19 列结构化计划表）、H2（PLAN FOR）、SQLite（QUERY PLAN）。
  * R23（2026-09-30）接入：Oracle（EXPLAIN PLAN FOR——真机实证 PLAN_TABLE 单语句登记，
  * 计划另查 DBMS_XPLAN.DISPLAY）、SQL Server（SET STATISTICS XML 批内前缀——官方文档级，
  * 真机未验证留账）。
@@ -56,9 +56,19 @@ class DialectExplainTest {
         assertEquals("EXPLAIN (FORMAT JSON) $sample", KingBaseDialect.renderExplainStatement(sample))
     }
 
+    /**
+     * T-Fr45DmGuard S2（FR-0045 4a）：DM8 真机实证（2026-10-31，DM DBMS 8.1.3.12 +
+     * DmJdbcDriver18 8.1.3.140，MCP 裸 JDBC 通道）——`EXPLAIN <sql>` **不返回结果集**
+     * （executeQuery 0 列 0 行；execute() isResultSet=false、getMoreResults() 随即 -1），
+     * 用户报障「计划正文为空、只剩 `dialect: DM（达梦）`」即此形态；`EXPLAIN FOR <sql>`
+     * 返回 19 列结构化计划表（OPERATION/TAB_NAME/IDX_NAME/SCAN_TYPE/ROW_NUMS/COST/FILTER…）。
+     * 档位随形态改 TEXT→TABLE（走结构化面板通道，计划也随之可落历史）。
+     * 本用例同时钉模板与档位：把 DM 改回 `EXPLAIN {sql}`+TEXT 即红（用户报障形态的回归网）。
+     */
     @Test
-    fun `达梦原生形态（DM8 真机实证）`() {
-        assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatement(sample))
+    fun `达梦 EXPLAIN FOR 形态与 TABLE 档（DM8 真机实证）`() {
+        assertEquals("EXPLAIN FOR $sample", DmDialect.renderExplainStatement(sample))
+        assertEquals(ExplainOutputFormat.TABLE, ExplainSupport.formatFor("DM（达梦）"))
     }
 
     /**
@@ -150,7 +160,7 @@ class DialectExplainTest {
     @Test
     fun `幂等-大小写与首尾空白结尾分号`() {
         assertEquals("explain $sample", MySqlDialect.renderExplainStatementIdempotent("  explain $sample;  "))
-        assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatementIdempotent("EXPLAIN $sample"))
+        assertEquals("EXPLAIN FOR $sample", DmDialect.renderExplainStatementIdempotent("EXPLAIN FOR $sample"))
     }
 
     @Test

@@ -125,4 +125,20 @@ class ExplainPlanHistoryTest {
         first.payload = "broken"
         assertEquals(raw(), m.matchingExplainPlans(key).single().raw())
     }
+
+    /** T-TraceDocExport S3：TEXT 档原文快照经真实 XmlSerializer 往返；同文件旧结构化 payload 读回不破（P-5）。 */
+    @Test fun `text snapshot survives real serializer restart and keeps raw text form`() {
+        val m = manager()
+        assertEquals(ExplainPlanSaveResult.SAVED, m.saveExplainPlan(m.capture(), raw()))
+        val textKey = key.copy(format = "TEXT", dialect = "DM（达梦）")
+        val text = RawResult(listOf("PLAN"), listOf(listOf("NSET2"), listOf("  TABLE SCAN T")), true)
+        assertEquals(ExplainPlanSaveResult.SAVED, m.saveExplainPlan(m.beginExplainCapture(project, sql, textKey)!!, text))
+        assertTrue(m.matchingExplainPlans(textKey).single().payload.contains("\"text\""))
+        val xml = XmlSerializer.serialize(m.getState())
+        val restart = SqlHistoryManager().apply {
+            loadState(XmlSerializer.deserialize(xml, SqlHistoryManager.State::class.java))
+        }
+        assertEquals(text, restart.matchingExplainPlans(textKey).single().raw())
+        assertEquals(raw(), restart.matchingExplainPlans(key).single().raw())
+    }
 }

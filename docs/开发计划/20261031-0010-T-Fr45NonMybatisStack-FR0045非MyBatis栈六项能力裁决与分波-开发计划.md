@@ -82,7 +82,7 @@
 **(c) DM 实测方言矩阵内置——无现成落点，挂拍板：**
 
 - 全仓**没有「方言×函数」能力表**：IFNULL/DATE_FORMAT/NOW/`||`/WM_CONCAT/LISTAGG/GROUP_CONCAT 不存在于任何方言知识表（`DM_RESERVED` 保留字表在 SqlKeywords.kt:216 起，`ifnull` 已在；PerfRulesBatch2.kt:422 的聚合名单是性能规则用，非方言能力）。DmDialect（Dialect.kt:724）已覆盖 MySQL 式 LIMIT、双引号引用（对应反引号 -2007）、identity 包装、DM_RESERVED。
-- 用户实测矩阵（LIMIT/LIMIT 0,1/ROWNUM/OFFSET..FETCH FIRST/IFNULL/DATE_FORMAT/NOW()/`||`/WM_CONCAT/LISTAGG 支持；GROUP_CONCAT 报 -2207、反引号报 -2007 不支持）是有价值的资产，但「内置成规则表」需要先拍板落点（证据化代码表＋执行前提示 vs 文档站方言页），且用户读数未经我方真机复验（P-1 顺带可验 GROUP_CONCAT/反引号两条否定项）。**挂拍板，不进第一波主修**。
+- 用户实测矩阵（LIMIT/LIMIT 0,1/ROWNUM/OFFSET..FETCH FIRST/IFNULL/DATE_FORMAT/NOW()/`||`/WM_CONCAT/LISTAGG 支持；GROUP_CONCAT 报 -2207、反引号报 -2007 不支持）**已由我方真机逐条复验（2026-10-31，P-1）且逐字吻合**，资产可入册；但「内置成规则表」仍需拍板落点（证据化代码表＋执行前提示 vs 文档站方言页）。**挂拍板，不进第一波主修；证据已备，拍板后可即落**。
 
 ### 2.5 第 5 项 调用点回溯 ——【已交付，用户版本卡位 + DM 织入缺口已被兜底件补上】
 
@@ -154,7 +154,11 @@
 
 ## 四、待验证前提（实施前先证伪，不成立就改方案）
 
-- **P-1 DM8 裸 JDBC EXPLAIN 结果集形态**：决定 4a 修法走 channelNote 还是 postPlanQuery。载体＝DBX 在册 DM8 实例 `114.66.55.245:20096`（DM8，端口 5236，凭据见仓根 `.local/test-databases.md`，**不抄进文档/代码**）；备选＝`database-lab/load-dm8.ps1` docker 脚手架。若 MCP 通道读数与 DBX 通道（#NSET2 有正文）矛盾，以 MCP 通道为准（那是用户报障链路）。
+- **P-1 DM8 裸 JDBC EXPLAIN 结果集形态**：**已实测（2026-10-31 主控亲测；DBX 在册 DM8 `114.66.55.245:20096` + 仓内驱动 `DmJdbcDriver18-8.1.3.140`，服务端 DM DBMS 8.1.3.12）**，读数**推翻计划原假设**：
+  - **`EXPLAIN <sql>` 在 DM8 上不返回结果集**——`executeQuery` 得 0 列 0 行；`execute()` 得 `isResultSet=false, updateCount=0`，再 `getMoreResults()` 即 `-1`（无第二结果集）。⇒「计划正文为空」的真因是**模板语句用错**，与多结果集/宽容通道无关，加 `channelNote` 也救不回来。
+  - **`EXPLAIN FOR <sql>` 正确返回 19 列结构化计划表**：`PLAN_ID, PLAN_NAME, CREATE_TIME, LEVEL_ID, OPERATION, TAB_NAME, IDX_NAME, SCAN_TYPE, SCAN_RANGE, ROW_NUMS, BYTES, COST, CPU_COST, IO_COST, FILTER, JOIN_COND, ADVICE_INFO, PSTART, PSTOP`；`SELECT` 与 `DELETE ... WHERE 1=0` 均 4 行（OPERATION=DELETE、TAB_NAME=ARTICLE、COST=0）。⇒ 修法＝DM 条目改 `EXPLAIN FOR {sql}` 且**档位 TEXT→TABLE**（TABLE 档顺带解锁历史持久化：`ExplainPlanSnapshot.persistable` 认 TABLE/JSON；`ExplainPlanDiff.diffTable` 按小写列名取 `cost` 命中 DM 的 `COST`，`ROW_NUMS` 不命中但优雅降级）。
+  - **4c 矩阵真机读数顺带取到**：正向全部成立——`LISTAGG`/`WM_CONCAT`/`IFNULL`/`DATE_FORMAT`/`NOW()`/`LIMIT`/`LIMIT 0,1`/`ROWNUM`/`||`；负向与用户实测逐字一致——`GROUP_CONCAT` → **-2207**「无法解析的成员访问表达式」、反引号 → **-2007**「语法分析出错」；表不存在 → -2106。4c 落点拍板未定，证据已备。
+  - 备选载体（未用）：`database-lab/load-dm8.ps1` docker 脚手架。
 - **P-2 internal 可见性**：`DataSourceDialectClassification.isNonSqlUrl` 与 `McpDialectDetector` 同在 src/main 一个 source set，Kotlin internal 模块内可见——编译期即证；若实际跨模块（子项目拆分）则把 NON_SQL_KEYS/isNonSqlUrl 下沉到 `sql/DialectInference.kt` 共享位。
 - **P-3 用户 v2026.10.28 的 render_logs 场景**：该版本已含 JdbcTemplateLogParser，用户「主打 MyBatis 配对」的表述与代码不符——按「0 条/不对号」分诊口诀（EP 过滤器→桥→解析器开关 logJdbcEnabled→去重窗→屏蔽规则）待用户回报复现步骤；不排除用户控制台日志格式被自研日志框架二次包装（logback pattern 带前缀）——`extractAfterKeyword` 与前缀容忍性实施时用真实样本核。
 - **P-4 第 2 项拍板未决前不动工**（含 plugin.xml:412 红线表述修订归属）。
@@ -187,4 +191,304 @@
 
 ## 八、实施记录
 
-（待回填——第一波动工后按券补读数与反向验证。）
+### 8.1 T-Fr45DmGuard 实施记录
+
+- 分支 `t-fr45-dmguard`（基线 `4cd4ac35`），2026-10-31。范围＝本册 §三·任务 A 的 S1/S2；4c 函数矩阵未动，其它 MCP 工具的非 SQL 守卫未扩面，其它方言条目未动。
+- **P-1 已落地（主控真机读数，本任务直接采信）**：DM8 实例 `114.66.55.245:20096` + 仓内 `DmJdbcDriver18-8.1.3.140`（服务端 DM DBMS 8.1.3.12）。`EXPLAIN <sql>` 走裸 JDBC **不返回结果集**（`executeQuery` 0 列 0 行；`execute()` 得 `isResultSet=false, updateCount=0`，`getMoreResults()` 随即 -1）；`EXPLAIN FOR <sql>` 返回 19 列结构化计划表（`PLAN_ID, PLAN_NAME, CREATE_TIME, LEVEL_ID, OPERATION, TAB_NAME, IDX_NAME, SCAN_TYPE, SCAN_RANGE, ROW_NUMS, BYTES, COST, CPU_COST, IO_COST, FILTER, JOIN_COND, ADVICE_INFO, PSTART, PSTOP`），`SELECT …` 与 `DELETE … WHERE 1=0` 均得 4 行。负向对照：`GROUP_CONCAT` → -2207、反引号标识符 → -2007、表不存在 → -2106。
+  - 结论：用户报障「计划正文为空、只剩 `dialect: DM（达梦）`」的真因是**模板语句用错**（旧模板 `EXPLAIN {sql}` 返回 0 列 0 行 → `McpExplainFormatter.format` 输出空串），不是多结果集/宽容通道问题——不需要 `channelNote`，也不需要 `postPlanQuery`。旧证据「`EXPLAIN` 返回 `#NSET2` 计划文本」来自 DBX 通道，对 MCP 裸 JDBC 链不成立，已在 `ExplainSupport` 证据字段改写。
+- **P-2 已证实（按「成立」落地）**：`DataSourceDialectClassification` 与 `mcp` 包同在 `src/main` 一个 source set，`isNonSqlUrl` 由 `private` 改 `internal` 后编译即通——不需要下沉到 `sql/DialectInference.kt`。
+
+**S1（4b）非 SQL 数据源早拒**
+
+- 改动：
+  - `mcp/McpToolErrors.kt:28-29` 新增 `NOT_A_SQL_DATASOURCE`（MCP 错误文案为英文常量，**不进 bundle**，无新增 i18n 键）。
+  - `mcp/ExplainTargetGuard.kt`（新增）：`checkDataSourceUrl(url): String?` 纯逻辑，命中返回可直接抛出的 `[NOT_A_SQL_DATASOURCE] …` 文本；语料来自 `sql/DataSourceDialectClassification.isNonSqlUrl`（键表不复制）。文案只带子协议（`subprotocolOf`），不回显 URL 其余部分。
+  - `sql/DataSourceUrlProbe.kt:74-79`：`isNonSqlUrl` `private` → `internal`。
+  - `mcp/SqlVisualizerExplainTool.kt:129-135`：取 `url` 之后、`McpDialectDetector.resolve` 之前调用守卫。
+- 测试 `mcp/McpExplainTargetGuardTest`：redis/mongodb 命中；大小写（`JDBC:REDIS:`）与前后空格命中；mysql/dm/postgresql/mariadb/oracle/sqlserver/kingbase8/opengauss 放行；`jdbc:clickhouse:`、null、空串、纯空白、非 jdbc 前缀放行（不猜）；账号/口令/主机不泄漏；源码扫描断言接线顺序（取 `getConnectionConfig` 之后、`McpDialectDetector.resolve` 之前）。
+
+**S2（4a）DM 改 `EXPLAIN FOR` + 档位 TEXT→TABLE**
+
+- 改动：`sql/ExplainSupport.kt:138-146` DM 条目（模板 `EXPLAIN FOR {sql}`、`TABLE`、evidence 换本轮真机读数）；同步 `ExplainOutputFormat`/DM 证据 KDoc、`util/ExplainIndexAdvisor.kt` 与 `ui/ExplainPlanDiff.kt` 的档位注释。
+- 测试：`sql/DialectExplainTest` 的 DM 用例改「模板 + 档位」双断言、幂等用例改 `EXPLAIN FOR`；新增 `mcp/DmExplainPlanFixtureTest` 用 P-1 的真实 19 列做夹具，断言 `McpExplainFormatter.format` 输出非空、含 `OPERATION`/`TAB_NAME`/`ARTICLE`/`DELETE`，另加「空结果集 → 空正文」用例复现用户报障形态。
+- **下游语义核查（TABLE 档，均只降级不崩，无需改码）**：
+  - `execute/ExplainPanelChannel.kt:29` `STRUCTURED_FORMATS = {TABLE, JSON}` → DM 从此走结构化面板通道（此前 TEXT 档走直送控制台）。
+  - `history/ExplainPlanSnapshot.kt:66-69` `persistable` 认 TABLE/JSON → DM 计划可落历史（4a 的附加收益；用例 `TABLE 档让 DM 计划可落历史` 钉住）。
+  - `ui/ExplainPlanDiff.kt:127-181` `diffTable` 按小写列名取值：`COST` 命中 `cost` → 产出数值增量；DM 无 `id`/`table` 列 → 匹配键退化为行序 `row#n`；`ROW_NUMS` 不在 `NUMERIC_TABLE_COLUMNS` → 走字段级变化（用例断言 `rowsDelta == null` 且 `costDelta` 非空）。
+  - `util/AiContextPlanSummary.kt:25-34` TABLE 分支：`COST` 命中、`rows`/`filtered` 缺省不追加（输出仍有 `cost=`，不返回 null）。
+  - `util/ExplainIndexAdvisor.kt:51-53` TABLE → `adviseMysql`，DM 无 `type/key/Extra` 列 → 提前返回空清单（不噪音、不抛）。
+  - `ui/ExplainPlanResultView.kt` TABLE 分支是通用 `JBTable` 渲染任意列头，无 MySQL 列名硬编码。
+
+**定向读数与反向验证**
+
+| 阶段 | 读数 |
+|---|---|
+| 先红（测试先写、生产未落） | `compileTestKotlin FAILED`，`Unresolved reference 'ExplainTargetGuard'`（×9）与 `'NOT_A_SQL_DATASOURCE'` |
+| 中间红（S1 已落、S2 未落） | `40 tests completed, 3 failed`：DM 模板/档位 ComparisonFailure、DM persistable=false、`DialectExplainTest` ComparisonFailure |
+| 全绿 | `BUILD SUCCESSFUL`（40 用例） |
+| **反向验证-红** | 注释掉守卫调用 + DM 条目改回 `EXPLAIN {sql}`/TEXT → `40 tests completed, 4 failed`（接线守卫、DM 模板档位、TABLE 落历史、`DialectExplainTest`） |
+| **反向验证-复绿** | `git checkout --` 两文件后同三组 → `BUILD SUCCESSFUL` |
+
+- `testFast`（本轮唯一一次）：`4334 tests completed, 2 failed, 7 skipped`——两处都是本轮改动的**连带面**：①`convention/GuardSelfTestCoverageMetaGuardTest`（`:400`）新守卫类未登记（已补）；②`util/ExplainIndexAdvisorTest`（`:217`）钉住「DM 路由 TEXT」的过期断言（已改 TABLE + DM 真机列集零命中）。修复后五类定向复跑 `BUILD SUCCESSFUL`；全量交只读收口代理。
+- 新增错误码：`NOT_A_SQL_DATASOURCE`。新增 i18n 键：无。
+- **未闭环项**：DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道 + 预览面板结构化通道）需 runIde 沙盒，本轮未跑；本轮 DM 证据是裸 JDBC 读数 + 19 列夹具，不等于 UI/IDE 链已验。`ROW_NUMS` 等 DM 语义列名未纳入 `ExplainPlanDiff` 数值白名单（只降级），补挂挂后续裁量。`docs/mcp/MCP-Tools-Agent-Guide.md` 错误码清单与文档站 DM 段由主控统一更新。
+
+### 8.2 T-TraceDocExport 实施记录
+
+- 工作树：`mpsv-fr45-tracedoc` / 分支 `t-fr45-tracedoc`（基线 `4cd4ac35`）
+- 提交：`2ac30bba`（S1 组装器）、`b08be19d`（S3 TEXT 档快照）、`da4d0d56`（S2 出口与 i18n）
+
+**S1 留痕组装器（`share/format/TraceDocFormatter.kt`，纯逻辑）**
+
+- 输入为独立 `TraceDocInput` / `TracePlanSnapshot`（不依赖历史域数据类与平台类型），输出固定六段：
+  现象 / 基线 / 根因 / 手段 / 前后对比 / 结论与回滚。
+- 事实字段自动填充（SQL 原文进 ```sql 围栏、方言、来源 `Xxx.java:42`、捕获时间、耗时 ms、
+  0~2 份计划快照）；叙述字段（现象/基线/根因/手段/结论/回滚）缺失留「（待补充）」。
+- **fail-closed**：无计划 → 基线段明写「无计划快照：…不对计划内容做任何推断」；计划行集为空 →
+  「空计划快照」；缺耗时/来源/捕获时间 → 「未采集」；方言未知 → 「未知」；单份计划 →
+  「没有可比基线」。
+- 前后对比：TABLE/JSON 复用 `ui/ExplainPlanDiff.kt`（rows/cost 增量 + 字段级变化）；TEXT/XML
+  或结构化解析失败退化为 `ui/diff/SqlDiffer.kt` 行级差异，标题明示「文本级…不推断代价」。
+- 转义：围栏按内容最长连续反引号加长（SQL 自带 ``` 时不提前闭合）；表格单元格 `|`→`\|`、
+  换行→`<br>`。
+- 读数：`TraceDocFormatterTest` 11 用例 / 0 失败 / 0 跳过（有单份、双份结构化对比、TEXT 行对比、
+  无计划降级、缺耗时、围栏/表格转义、截断、空计划、默认文件名、叙述回填）。
+
+**S3 TEXT 档执行计划落历史（`history/ExplainPlanSnapshot.kt`）**
+
+- `ExplainPlanKey.persistable` 扩员 TEXT（DM/Oracle/OceanBase/H2/SQLite 计划可持久化）；
+  XML 维持不落盘（无消费方）。
+- `ExplainPlanSnapshot.create`：TEXT 单列计划存原文文本 payload
+  `{"text": "...", "headers": [...], "truncated": bool}`；多列或单元格含换行回退结构化 JSON
+  （保行列边界）。`raw()` 双形态读回：旧 headers/rows payload 原样解析（`truncated` 缺省 false
+  容错），文本 payload 还原单列 `RawResult`（缺 headers 用 `TEXT_HEADER = "PLAN"`）。
+- 兼容（P-5）：旧 payload 读回零迁移；真实 `XmlSerializer` 往返用例同时钉 TEXT 与旧结构化
+  两种快照。`SqlLogFileReader`/自动保存链不涉及计划字段（grep 零命中），无需改动。
+- 读数：`ExplainPlanSnapshotTextTest` 10 用例 + `ExplainPlanHistoryTest` 11 用例（含新增 TEXT
+  序列化往返）/ 0 失败 / 0 跳过。
+
+**S2 导出出口**
+
+- 历史页二级右键「导出优化留痕 Markdown」（`log/HistorySqlLogPanel.kt`，作用于右键行）：
+  计划按「同项目 + SQL 文本精确相等」从预览历史取最近两份（跨项目不借用，R91 口径），
+  匹配不到按无计划快照降级。
+- 预览面板「更多」新增「导出优化留痕」（`ui/SqlPreviewPanelResultView.kt` +
+  `ui/SqlPreviewPanelTraceDoc.kt`）：取数口径同 `copyAsAiContext` 的精确计划键，键不成立回落
+  本预览历史条目。
+- 写盘：`log/TraceDocExport.kt` 照抄 `HistorySqlLogPanel.exportEntries`
+  （FileSaverDescriptor → pooled 线程 → `SqlExportService.exportToFile` → 通知）；默认名
+  `trace-doc-<yyyyMMdd-HHmmss>.md`；显示脱敏开关开时只对 SQL 做投影级打码（同 SqlExportService）。
+- i18n（中英各 7 键）：`panel.traceDoc`；`log.history.traceDoc` / `.tip`；
+  `log.traceDoc.export` / `.descriptor` / `.done` / `.failed`。
+- `SqlPreviewTopRowLayoutTest` 的「更多」菜单十项顺序断言同步更新。
+
+**反向验证（2026-10-31）**
+
+- 先红：仅落测试骨架（formatter 返回空串、TEXT 档位未扩、raw() 不认文本 payload）→
+  `TraceDocFormatterTest + ExplainPlanSnapshotTextTest` 共 21 用例，**20 失败**；唯一通过的是
+  「旧 headers/rows payload 读回不变」对照用例。
+- 反向摘除：临时把 `persistable` 的 TEXT 档位删掉、把基线段「无计划快照」降级句换成空串 →
+  同两类 **21 用例 / 6 失败**（S3 五例：persistable、文本 payload 落盘往返、多列回退、
+  含换行单元格回退、保留上限；S1 一例：无计划降级）。
+- 还原后复绿：三类 **32 用例 / 0 失败 / 0 跳过**（11 + 10 + 11）。
+- 反向过程还暴露一处测试弱点：原「无计划」断言只查「无计划快照」四字，被第 5 段降级句满足，
+  已收紧为匹配基线段完整句（反向验证由此才变红）。
+
+**未闭环 / 登记**
+
+- TEXT 档计划**暂无生产写入方**：面板 EXPLAIN 结构化通道只覆盖 TABLE/JSON
+  （`execute/ExplainPanelChannel.STRUCTURED_FORMATS`），TEXT 方言仍走直送控制台。S3 只完成
+  存储层（persistable + payload + 读回）；DM/Oracle 等要真正落历史还依赖 4a 的通道改造，
+  登记随 T-Fr45DmGuard 收口时复评。
+- 按任务约束未跑 runIde/构建校验：UI 接线以编译通过 + 纯逻辑定向用例为准。`testFast` 触链回归
+  单跑读数：**4341 用例 / 0 失败 / 7 跳过**（跳过为既有 Assume，本轮未新增），其中
+  `TraceDocFormatterTest` 11 例与 `ExplainPlanSnapshotTextTest` 10 例已进快桶；`ExplainPlanHistoryTest`
+  11 例（含 TEXT 序列化往返）在平台桶单跑 0 失败。
+
+### 8.3 T-TemplateHook 实施记录
+
+分支 `t-fr45-tplhook` / 基线 `4cd4ac35`（核心实现掉线留底 `370116a1`）。范围＝§2.3 的 MVP（外部渲染器 hook）；**不含**内置模板 SPI、预览/gutter 面接线。
+
+#### 改动清单
+
+新增：
+
+- `mcp/ExternalTemplateRenderer.kt:31` —— 纯逻辑外部渲染器：`tokenize`（:78，引号感知切分，未闭合引号/空模板明确失败）、`substitute`（:141，整串与子串都替，`paramsJson=null` 替空串）、`run`（:160，`ProcessBuilder` 列表形态、stdout/stderr 分线程 UTF-8、超时 `destroyForcibly`、stderr 首行截 500 字符、输出上限 1 MiB 截断标注、`start` 注入缝）。安全红线写进类 KDoc（命令由用户自担、日志/错误文本不含 `paramsJson`）。
+- `config/ExternalTemplateSettings.kt:31` —— App 级 `@State` 服务，独立 storage `mp-sql-visualizer-external-template.xml` + `RoamingType.DISABLED`；字段 `enabled=false`/`statementTags=sql`/`commandTemplate`/`timeoutSeconds=10`/`workingDirectory`；`isActive()`（:75）、`statementTagSet()`（逗号与中文逗号、去空白、大小写不敏感）、`effectiveTimeoutSeconds()`（:69，钳 1..120）、`workingDirectoryOrNull()`（:92，空/不存在→null 回落项目根）、`update()`（:103）。
+- `config/ExternalTemplateConfigurable.kt:26` —— 普通 `Configurable`（不继承 `SectionConfigurable`）：开关 / 语句 tag / 命令多行域 / 超时 / 工作目录 + 占位符说明行。
+- 测试三件：`mcp/ExternalTemplateRendererTest.kt`（14 例：切分 4 / 替换 2 / 假 Process 6（成功、非零退出+stderr 截断、超时、1 MiB 截断、空输出、启动失败）/ 真实进程 1，`SystemInfo.isWindows` 分支 + `assumeTrue` 保护）、`config/ExternalTemplateSettingsTest.kt`（7 例）、`convention/ExternalTemplateWiringSourceScanTest.kt`（4 例接线守卫）。
+
+修改：
+
+- `mcp/McpSourceLocator.kt` —— `renderAtLine`（:73）增可选 `paramsJson`；`RenderStep`（:117）把「PSI 定位」与「跑外部进程」拆开（外部命令在读锁**外**执行，`runExternalRender` :146）；`renderAtOffset`（:225）XML 分支增挂点①（:250-262，位于 `STATEMENT_TAGS` 爬升**之前**）与挂点②（:268-274，链尾向上找带 `id` 的 tag，仍失败才用原文案一字不改）；新增 `externalStep`（:378）与 `nearestAncestorWithId`（:401）。
+- `mcp/McpToolErrors.kt:42` —— `EXTERNAL_RENDER_FAILED`（未动 `NOT_A_SQL_DATASOURCE`）。
+- `mcp/McpRenderInput.kt`（`Parsed.paramsJson` :31 / `parse` 第 5 可选参数 :46，仅路径形态生效）、`mcp/SqlVisualizerRenderSqlTool.kt`（`paramsJson: String = ""` :42、描述 :27、透传 :56）——不传时与接线前逐字节一致。
+- `META-INF/plugin.xml:213-219` —— `applicationConfigurable`，`groupWeight="11"`；与 bannedApi(12) 合并后成 15>12>11>10 严格递减。
+- `config/PluginSettingsFolderConfigurable.kt` —— `ID_EXTERNAL_TEMPLATE`（:511）、`PAGE_EXTERNAL_TEMPLATE`（:547）、`SUB_PAGES`（:559，插在 bannedApi 与 about 之间）、搜索索引 5 项（:652-657）。
+- `convention/GuardSelfTestCoverageMetaGuardTest.kt` —— 新守卫类登记（`decisionFns` 留空 + 灵敏度说明）。
+- 双语 bundle：`MpSqlVisualizerBundle.properties:968-981` / `_zh.properties:944-957`，13 键（`settings.section.externalTemplate` + `.desc` + 11 个 `settings.externalTemplate.*`），中英键集全等。
+
+#### 定向读数与反向验证
+
+- 定向：9 类 / **83 例 / 0 失败 / 0 跳过**（Renderer 14、Settings 7、SettingsFolder 11、XmlStructureGuard 22、WiringSourceScan 4、MetaGuard 8、BundleParity 5、SettingsRealityGuard 4、SettingsIdeSearchContributor 8）。真实进程用例在 Windows 真跑未跳过（`cmd /c echo` 分支）。`testFast`：**4331 例 / 0 失败 / 7 跳过**（跳过为既有环境门控）。
+- 反向验证：摘掉挂点①（只留链尾挂点②）→ `ExternalTemplateWiringSourceScanTest` **4 例 / 1 红**，红例 `外部渲染挂点必须早于STATEMENT_TAGS爬升`（断言原文「externalStep@11904 vs STATEMENT_TAGS@11415」）；还原 → **4 例 / 0 红**。摘除后**没有**既有用例会红，故本轮补了这条源码级守卫并登记进元守卫。
+- 合并测：`PluginXmlStructureGuardTest` 子页基数 8→**9**、`PluginSettingsFolderConfigurableTest` 列表 8→**9** 与登记目标 9→**10**（两条分支各写 8，实际合并后为 9，主控在集成时改正）。
+
+#### 新增设置键 / i18n / 错误码
+
+- 设置服务与 storage：`MpSqlVisualizerExternalTemplate` / `mp-sql-visualizer-external-template.xml`；字段 `enabled`、`statementTags`、`commandTemplate`、`timeoutSeconds`、`workingDirectory`（均不进 `PluginSettings`）。
+- i18n 键 13 个；MCP 错误码 1 个 `EXTERNAL_RENDER_FAILED`。
+
+#### 未闭环项
+
+- 未跑 `runIde`：设置页组件布局与 apply/reset 交互无真机走查。
+- 未跑全量 `testShards` / `verifyGate` / `verifyPlugin` / `buildPlugin`：`plugin.xml` 新增 EP 属大改动判据面，发布前须补 `verifyGate`。
+- 预览/gutter 面未接线：`XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS`（硬编码 4 个 mapper tag 且父级须为 `<mapper>`）保持原样，自研 `<sqls>/<sql id>` 仍不出 gutter 图标，只有 MCP `sqlv_render_sql` 通道可用（券范围如此，登记为可选搭车件）。
+- `<sqls>` 下无 `id` 的 tag 仍回落原 `SOURCE_NOT_FOUND`（无 id 无法传给外部命令，设计如此）。
+- 外部命令真机联调未做（用户需自备脚本）；工作目录回落、超时、超限三条分支由假 Process 覆盖，真实脚本的编码/退出码行为待用户回报。
+- `ExternalTemplateConfigurable.isModified()` 在无服务环境（headless）恒 false——与 `McpConfigurable` 同款降级，真机不受影响。
+
+### 8.4 T-BannedApiCheck 实施记录
+
+- **分支/基点**：`t-fr45-bannedapi`，基点 `4cd4ac35`。提交 `57d85d9e`（S1 规则模型与管理器）+ `8da5f032`（S2–S4 检查器 / 设置子页 / 存量统计）+ `a6d4ed1f`（本记录）。未 push/merge。
+- **P-4 前提状态如实说明**：本册 §四 P-4 写「第 2 项拍板未决前不动工」。本轮由主控派工实施，按用户令视为已拍板；红线表述修订按 §2.2 裁决要求处置（见下）。
+
+#### 改动清单
+
+生产代码（新增 8 个）
+
+| 文件 | 关键锚点 |
+|---|---|
+| `inspection/BannedApiRule.kt` | :22 规则 data class（类匹配串 / `classRegex` 模式标记 / 方法名正则 / 说明 / 级别 / createdAt）；:44 `targetSummary`；:52 `isError` |
+| `inspection/BannedApiMatcher.kt` | :22 纯逻辑匹配核心；:47 `validate`；:65 `compile` 预编译；:92 `CompiledRules`；:103 `Entry.matches`（类精确或正则整串 + 方法名正则整串，首条命中即返回，非法正则 `compileOrNull` → 规则静默失效）；:115 `mayMatchMethodName` 廉价短路 |
+| `inspection/BannedApiRuleManager.kt` | :35–38 `@State(name="MpSqlVisualizerBannedApiRules", storages=[Storage("mp-sql-visualizer-banned-api.xml", DISABLED)])` + App 级 `@Service`；:78 `addRule`（判重类+模式+方法名）；:102 `updateRule`；:125 `removeRule`；:132 `clearRules`；:156 `republish`（整体替换 `@Volatile compiledRules` + 通知）；:165 `loadState`（补 id、归一未知级别）；:216 `MAX_RULES=200` |
+| `inspection/BannedApiInspection.kt` | :34 `LocalInspectionTool` 薄壳；:46 `getShortName()` 与 plugin.xml 同值；:48 `buildVisitor`（空规则 → `EMPTY_VISITOR`）；:50 零行为短路；:65 方法名短路；:68 `resolveMethod()`；:69 `containingClass.qualifiedName`；:72–84 显式 `PsiElement` 锚点 + 逐规则 `ProblemHighlightType.ERROR/WARNING` |
+| `inspection/BannedApiProjectScanner.kt` | :22 `BannedApiScanResult`；:55 `scan`；:56 `FileTypeIndex.getFiles(JavaFileType.INSTANCE, projectScope)`；:76 取消检查；:79 解析失败跳过；:104 明细上限 |
+| `inspection/BannedApiScanReport.kt` | :15 `BannedApiScanHit`；:33 报告组装；:36 `MAX_DETAIL_ENTRIES=500`；:54 截断；:73 `groupedCounts` |
+| `config/BannedApiConfigurable.kt` | :52 Configurable（左 `JBList` + 右 `FormBuilder`，照 `SqlSuppressManagerDialog` 形态）；:57 无参构造供 EP `instance=`；`isModified/apply` 空实现（关闭即生效，单源=manager） |
+| `actions/ScanBannedApiUsagesAction.kt` | :42 AnAction；:51 BGT update；:54 `DumbService.isDumb` 不跑；:67 `runReadAction` 包扫描；:72/:98 `catch (Throwable)` 先 `FatalErrors.isFatal` 透传；:110 写临时报告 / :131 打不开降级对话框 |
+
+注册与文案（改动 4 个）：`META-INF/plugin.xml` :215–220 `applicationConfigurable`（`groupWeight=12`，插 mcp(15) 与 about(10) 之间）、:421–427 XML 引用红线注释修订、:457–477 `localInspection`（`language="JAVA"`、`shortName="BannedApi"`、`key`+`bundle`、`groupKey`+`groupBundle`、`enabledByDefault="true"`、`level="WARNING"`）、:576–580 action 挂 `ToolsMenu`；`config/PluginSettingsFolderConfigurable.kt` :509/:538–542/:549–552；两本 bundle 各 +57 键（中英键集全等）。
+
+测试：新增 6 类（Matcher 9 / RuleManager 11 / ScanReport 4 / Inspection 5（`BasePlatformTestCase`+`enableInspections`）/ ProjectScanner 2 / RuleSerialization 3）+ `BannedApiConfigurableTest` 1；改动 `PluginSettingsFolderConfigurableTest`（子页 7→8、登记 8→9）、`PluginXmlStructureGuardTest`（注册数 7→8）。
+
+#### 定向读数与反向验证
+
+- 定向：`BUILD SUCCESSFUL`，聚合 **9 类 / 68 例 / 0 失败 / 0 错误 / 0 跳过**。触链 `testFast`：**4344 例 / 0 失败 / 7 跳过**。
+- 过程修过 1 处实现缺陷（`ScanBannedApiUsagesAction` 两处 `catch (Throwable)` 未判 fatal，被 `convention.BannedApiScanRuleTest` 抓住 → 按 `FatalErrors.isFatal` 补齐）与 2 处测试自身预期错误（规则库存的 `className` 误当实际类名；扫描器夹具 `addFileToProject` 致 resolve 落空，改 `configureByText(JavaFileType)`）。
+- 反向验证三次（均还原复绿）：R1 摘 `BannedApiMatcher.kt:103` 方法名分支 → Matcher **2 红**；R2 摘 `registerProblem` → Inspection **4 红**（唯「无规则零行为」仍绿，符合语义）；R3 注释掉 `<localInspection>` → 注册守卫 **1 红**。还原后 `RED PROBE` 零命中、`git diff` 空、定向 **68/0**。
+
+#### i18n / 存储 / 注册键名
+
+- 新增 57 键 × 中英两份：`settings.section.bannedApi(.desc)`、`settings.bannedApi.*`（字段/模式/级别/状态 33 键）、`inspection.bannedApi.displayName|groupName|problem`、`scan.bannedApi.*`（15 键）、action 文案 2 键；`BundleParityGuardTest` 5 例绿。
+- 存储：`mp-sql-visualizer-banned-api.xml`（`RoamingType.DISABLED`，App 级），`@State` name `MpSqlVisualizerBannedApiRules`。
+- 设置页 EP id `cn.song.mybatisplus.visualizer.settings.bannedApi`；检查短名 `BannedApi`（`@SuppressWarnings("BannedApi")` 可抑制单点）；动作 id `cn.song.mybatisplus.visualizer.ScanBannedApiUsages`。
+
+#### `plugin.xml:412` 红线注释的处置
+
+原句「只产 soft 引用，不注册任何 inspection/annotator（红线：不做校验器形态）」字面与新增 Java 侧 `localInspection` 冲突。处置＝**收窄作用域到 XML 引用链、保留原意**：改为「**XML 侧**不注册任何 inspection/annotator（红线：mapper XML 不做校验器形态）」并加勘误说明「Java 侧禁用 API 检查是独立能力面，与『只产 soft 引用』互不相干，本红线对 XML 引用仍成立」。未删红线、未改 `psi.referenceContributor` 注册本身。
+
+#### 未闭环项
+
+- **未跑**：`runIde` 真机（设置页观感、标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制）、`testShards` 全量、`verifyGate`/`verifyPlugin`/`buildPlugin`。发版前应补 `verifyGate`（新增 `localInspection` EP + action，按 §五判据属大改动）。
+- `localInspection` 分组显示名由平台按 IDE 语言解析（测试 JVM 下为英文），中文 IDE 应显示中文——未真机确认。
+- `BannedApiConfigurable` 只有 headless 冒烟，真实对话框布局/分栏未走查；存量统计「写临时文件 → `FileEditorManager.openFile` → 降级对话框」UI 链只有代码审读。
+- 匹配只按方法**声明类** FQN 判定，不做父类/接口回溯（覆写后需规则写子类）；Kotlin 调用点不覆盖（注册 `language="JAVA"`）。两项已写进 KDoc 与本记录。
+
+### 8.5 合并收口与门禁（2026-10-31，主控）
+
+**分支拓扑**：四路各独立工作树/分支，从 `4cd4ac35` 起（主工作树正在录制，全程零触碰），主控在 `t-fr45-integration` 合并。
+
+| 分支 | 工作树 | 提交 |
+|---|---|---|
+| `t-fr45-tracedoc` | `mpsv-fr45-tracedoc` | 6 笔（S1 组装器 / S3 快照 / S2 出口 / 脱敏收紧 / 文档 / 预览取数复用） |
+| `t-fr45-dmguard` | `mpsv-fr45-dmguard` | 3 笔（`248ca462` / `e2e0378c` / `a9b2ebda`） |
+| `t-fr45-bannedapi` | `mpsv-fr45-bannedapi` | 3 笔（`57d85d9e` / `8da5f032` / `a6d4ed1f`） |
+| `t-fr45-tplhook` | `mpsv-fr45-tplhook` | 4 笔（含掉线留底 `370116a1`） |
+
+**合并冲突三处，全部为「两条分支各自 +1 设置页」的同型冲突**（并集裁决）：
+
+1. `plugin.xml` 的 `applicationConfigurable`：bannedApi(12) 与 externalTemplate(11) 并存，声明序 15>12>11>10 仍严格递减。
+2. `PluginSettingsFolderConfigurable`：`ID_*` / `PAGE_*` / `SUB_PAGES` / 搜索索引四处并存；子页数 7→9。
+3. 基数断言：两条分支各自把「子页数」从 7 写到 8，**合并后实际是 9**；`PluginXmlStructureGuardTest` 8→9、`PluginSettingsFolderConfigurableTest` 列表 8→9 / 登记目标 9→10（主控在集成轮统一改正，未回改分支）。
+
+另外两个子代理各被 provider 中断一次（BannedApiCheck 实现完成后中断、TemplateHook 核心实现后中断），均已先审计工作树（无「先红」中间态、无探针残留、`git diff` 干净）再留底提交或续跑补齐，成果零丢失。
+
+**收口门禁抓出的真问题（本册唯一的门禁级返工）**：`convention.BannedApiSourceScanTest#模态弹窗只允许白名单内既有场景` 判红——「统计禁用 API 存量」动作用了 5 处模态弹窗，违反弹窗克制红线。按红线**改实现而非加白**：四条轻提示 → 平台通知（新组 `cn.song.mybatisplus.visualizer.inspection`，「无规则」带「打开设置页」直达动作）；报告落盘失败 → `LightVirtualFile` 在编辑器打开（不落盘、不弹框）；规则页「清空全部」的 YesNo 属破坏性知情确认，加白并写明依据。整改后 convention+config+i18n+inspection **382 例 / 0 失败**。
+
+**门禁读数**
+
+| 门禁 | 读数 |
+|---|---|
+| 各分支定向 | TraceDoc 32/0、DmGuard 40/0、BannedApiCheck 68/0、TemplateHook 83/0 |
+| 反向验证 | 八次（3+3+1+1），每次「摘除 → 指定用例必红 → 还原复绿」两次读数在案；TemplateHook 摘除后无既有用例会红，故补源码级接线守卫并登记元守卫 |
+| 合并态定向 | convention+config+i18n+inspection **382 / 0 / 0** |
+| 全量 `testShards`（首轮，2026-10-31 02:40） | **8592 / 0 失败 / 0 错误 / 9 跳过**（5 片：1690+1665+1583+1911+1743） |
+| 全量 `testShards`（加 `DmExplainRealEngineTest` 后复跑，03:11） | **8595 / 0 失败 / 0 错误 / 11 跳过**（跳过 +2＝真机用例在无 `-Dmpvs.dialect.*` 时按设计跳过）|
+| 全量 `testShards`（走查后补 argv 修复，04:57） | **8599 / 0 失败 / 0 错误 / 11 跳过**（+4＝`ExternalTemplateRendererTest` 新增四例引号契约用例）|
+| `verifyGate` | **3/3 Compatible**（IU-243.28141.41 / 253.33514.17 / 262.10968.63），无 unresolved class / 无 incompatible |
+
+**一次分片抖动（如实登记，非本券缺陷）**：加测试类后首次复跑（02:59 那轮）shard4 有 **9 红**，全部集中在 `ui.highlight.XmlMapperInjectorIncludeParityTest` / `XmlSqlCompletionDispatchTest` / `ui.inject.XmlGapEditingAssistTest`，栈是 `AlreadyDisposedException` 从 **Spring 插件的 `SpringContextSchemaInjector`** 抛在注入语言探测里，与本券零交集。判定依据三条：①同一份生产代码在 02:40 那轮 **0 失败**；②三个类**单独跑 16/0 全绿**；③`--rerun-tasks` 整轮复跑 **8595/0/11 全绿**。成因是分片器按用例数重新切片（加一个类后各片类数 165→166/161→154/161→172…重排），换了邻居后该 flake 被暴露——与「平台 UI 测试对邻居敏感」同族。**权威读数是 8595/0/11**。
+
+**4a 真机闭环（本轮补测，2026-10-31）**：新增 `mcp/DmExplainRealEngineTest`（外部实例模式，与 `DialectDockerVerificationTest` 同款 `-Dmpvs.dialect.*` 协议，缺省跳过），把「插件渲染出来的」达梦计划语句交给真 DM8 执行，三条断言一起看：①渲染产物是 `EXPLAIN FOR` 且档位 TABLE；②真机执行返回 **19 列**且含 `OPERATION`/`TAB_NAME`/`COST`/`ROW_NUMS`、行集非空、`McpExplainFormatter.format` 正文非空；③反向钉子——裸 `EXPLAIN` 在该引擎上**列数为 0**（若形态变了这条会独立变红并说明根因结论需重评）。读数：指向 DBX 在册 DM8 `114.66.55.245:20096` 实跑 **3/3 PASS、0 跳过**；不带系统属性时 2 跳过 1 通过（不污染默认门禁）。⇒ 4a 的「计划正文非空」已在**真机 + 插件渲染产物**层面闭环，剩下的只是 IDE remote JDBC 传输层（平台 `McpDbExecutor`，非本插件代码）。
+
+**两个拍板项补立独立册**：按 §三 约定「拍板后按惯例出独立立项册」，本轮拍板即实施，已于事后补立 `20261031-0130-T-TemplateHook-…` 与 `20261031-0130-T-BannedApiCheck-…` 两册（含拍板落点、红线处置依据、方案券与完整版不做理由），并登记进 `docs/索引/开发计划.md`。
+
+**文档站同步（2026-10-31）**：兄弟仓 `mybatis-plus-sql-visualizer-docs` 提交 `289a5f1`（**未 push**，按惯例随批次推送）——`features/mcp` 新增「错误码」节（12 个码，含 `NOT_A_SQL_DATASOURCE` 与 `EXTERNAL_RENDER_FAILED`）＋ `sqlv_explain` 补非关系型数据源早拒与达梦 `EXPLAIN FOR` ＋ `sqlv_render_sql` 补 `paramsJson`／自研模板；`features/wrapper-preview` 的方言表把达梦订正为 `EXPLAIN FOR`（19 列计划表）并补「裸 EXPLAIN 不返回结果集」的实测说明，跨次对比把达梦并入表格族，跨会话保留计划补 TEXT 档现在也落盘的隐私提示；`guide/configuration` 新增「禁用 API」与「外部 SQL 模板」两节。中英双语同步，`node scripts/check-en-parity.mjs` 与 `vitepress build` 均通过；插件侧 `DialectDocTableGuardTest` 对改后的表仍绿。
+
+**4b 的验收位与手工复验配方（如实：IDE 链未跑）**：`NOT_A_SQL_DATASOURCE` 的**决策**由 `McpExplainTargetGuardTest` 14 例纯逻辑用例覆盖（redis/mongo 命中、十一个关系库放行、大小写与空白、clickhouse 等「不猜」形态、账号口令不泄漏），**接线位置**由同一类的源码扫描断言钉住（取 `getConnectionConfig` 之后、`McpDialectDetector.resolve` 之前）。未做的是**真 IDE 链**——需要 runIde 沙盒里挂一个 `jdbc:redis://` 数据源再调 `sqlv_explain`；这条不能靠平台测试补：仓内既有结论（`pitfall-das-seed-model-quarantined`）是 **DAS 数据源模型不能手写 seed，必须由平台生成**，测试里造不出「真 redis 数据源」。手工复验配方：沙盒装 redis JDBC 驱动 → Database 工具窗新建 `jdbc:redis://127.0.0.1:6379` 数据源 → 用 `dev-support/mcp-test/mpsv-mcp-test.mjs call sqlv_explain`（参数 `dataSource` 指到该源、`selectSql`='SELECT 1'）→ 期望拿到 `[NOT_A_SQL_DATASOURCE] … sub-protocol 'redis' is not a relational SQL database …`，且错误文本不含主机/账号/口令；对照组把 `dataSource` 换成 MySQL 源应正常返回计划。本条挂「机器空闲 + runIde 窗口」，与 §五 的其余真机项同一批。
+
+### 8.6 runIde 真机走查（2026-10-31，主控亲自操作 GUI）
+
+**环境**：两个独立沙盒，均未触碰录制中的主工作树与录制沙盒。
+- 243 沙盒 `MPSV-Fr45Walk`（`-PgifRobotServer=true`，走查设置页与检查器观感）；
+- 262 沙盒 `MPSV-Fr45Walk262`（`-PgifRecord=true` + 独立 `sandboxContainer`，走查 MCP 链——2024.3 无内置 MCP Server）。
+- 走查工程为仓外新建 `F:\code\Java\Gitee\SongRenShuo\_fr45_walk_project`（自研 `<sqls>/<sql id>` 模板 + 两个 Java 夹具类 + `render.cjs` 外部渲染脚本）。
+- **在役包核验**：`jar tf` 沙盒内 `mybatis-plus-sql-visualizer-2026.10.31-beta.2.jar` 确认 `BannedApiInspection` / `BannedApiConfigurable` / `ExternalTemplateRenderer` / `ExplainTargetGuard` / `TraceDocExport` 全在；`META-INF/plugin.xml` 里 `<localInspection>` 与两个新 `applicationConfigurable` 均在。
+
+#### 4b `NOT_A_SQL_DATASOURCE` —— 真 IDE 链已验（计划 §五 的验收条目闭环）
+
+工程内 `dataSources.xml` 造两个源：`redis_probe@localhost`（`jdbc:redis://127.0.0.1:6379/0`）与 `mysql_local`（`jdbc:mysql://127.0.0.1:3306/mpj_demo`）。用 262 沙盒的 MCP（64350）调 `sqlv_explain`：
+
+```
+=== redis_probe@localhost (isError=true) ===
+[NOT_A_SQL_DATASOURCE] the data source URL sub-protocol 'redis' is not a relational SQL database;
+sqlv_explain needs a relational data source (MySQL / MariaDB / PostgreSQL / Oracle / SQL Server / H2 /
+SQLite / DM / KingBase / OceanBase / openGauss / GaussDB / HighGo / Vastbase). Point 'dataSource' at a
+relational data source and retry.
+```
+
+- 错误文本**只带子协议 `redis`**，不含主机/账号/口令 ✅（与纯逻辑用例的断言一致，真机复核）。
+- **对照组（非 SQL 不误伤）**：同一链换成 `mysql_local` → 不再返回本码，而是走到真实建连并报 `[DATASOURCE_UNREACHABLE]`（沙盒内 `RemoteJdbcServer` 起不来，`Process finished with exit code -1`，属**平台远程驱动进程在沙盒里的环境限制**，与插件无关）。**这一条证明守卫没有过度拦截关系型源**——它放行了，失败点在驱动的远程进程而不是守卫。
+- 未闭环（如实）：`sqlv_explain` 的**成功路径**（真返回计划正文）在本沙盒仍未跑通，原因是上述 RemoteJdbcServer 环境限制，不是插件代码；4a 的「计划正文非空」由 `DmExplainRealEngineTest` 的真机用例（3/3 PASS）承担。
+
+#### 「禁用 API」页 —— 观感与标红均已验
+
+- **页面结构**（截图 `c02-rule-added` / `g05-262-banned`）：左侧规则列表（标题 `类#方法` + 灰色元信息行「级别 · 创建时间 · 说明」）+ 右侧表单（类 / 匹配模式 / 方法名正则 / 级别 / 说明）+ 底排「新增规则 / 删除 / 清空」+ 右侧「保存修改」+ 状态行。与 `SqlSuppressManagerDialog` 的列表+表单形态一致，未出现布局挤压或文案截断。
+- **交互**：新增规则走「新增规则 → 填表 → 新增」，落盘到沙盒 `config/options/mp-sql-visualizer-banned-api.xml`（真机核对 XML 内容与表单一致）；选中规则时表单回填（截图 `g07` 显示标题带「错误」级别前缀与说明）。
+- **标红效果**：把规则级别设为 `error`（XML 写 `level=error` 后重启）→ `Service.java` 第 9 行 `dao.batchAdd()` **整段调用变红**（截图 `g08`：`dao.batchAdd()` 全红，同文件第 10 行 `queryAll()` 保持正常语法着色）；编辑器右上角出现**红色错误计数徽标 `1`**（截图 `g09`）。
+- **悬停提示**（243 沙盒）：告警级别下靠 `Ctrl+F1`/悬停可见 `禁用 API demo.LegacyDao#batchAdd: useAddOneNotBatchAdd` + 方法签名块 + 说明文字（截图 `b32-tooltip`）。
+- 未验：`@SuppressWarnings("BannedApi")` 真机抑制（未逐点试）；Tools 菜单「统计禁用 API 存量」动作未手动执行（扫描链有平台用例覆盖）。
+
+#### 「外部 SQL 模板」页 —— 观感与端到端联调均已验
+
+- **页面结构**（截图 `c04` / `c05` 放大 / `g04-262`）：复选框「用外部命令渲染自研模板语句」+ 语句标签名（默认 `sql`）+ 渲染命令（长文本框）+ 占位符说明行（`{template}` / `{sqlId}` / `{paramsJson}`）+ 超时（秒，默认 10）+ 工作目录。
+- **端到端**：配 `node render.cjs {template} {sqlId} {paramsJson}` 指向自研模板文件，调 `sqlv_render_sql`（`filePath=resources/mapper/ArticleMapper.xml`, `line=5`）：
+  ```
+  SELECT ID, TITLE FROM ARTICLE WHERE PLAN_YEAR = :planYear /* params: {"planYear":"2026","note":"quoted"} */
+  sourceType: external template (sql#findByPlanYear)
+  ```
+  即自研 `<sqls>/<sql id>` 格式在 MCP 链上被正确渲染（原生链会报 `SOURCE_NOT_FOUND`），`sourceType` 标注符合设计。
+
+#### 🔴 走查抓到的真缺陷并已修（UI-045-01）
+
+`paramsJson` 传 `{"planYear":"2026"}` 时，用户脚本**收到的是 `{planYear:2026}`——双引号全被吃掉**，参数 JSON 结构性损坏。根因：Windows 上 `CreateProcess` 只拿一条命令行字符串，子进程运行时（CRT / Node / Python 同款规则）把任何 `"` 当分组符并剥掉；而 `ProcessBuilder` 只给**含空格**的参数补引号，JSON 没有空格，于是裸引号进入命令行被吃。POSIX 由 `execve` 直接传 argv 无此问题。
+
+修法：新增 `ExternalTemplateRenderer.argvForLaunch`——仅 Windows 且参数含 `"` 时按 CRT 规则补外层引号并转义（引号前 N 个反斜杠 → 2N+1 个，尾随反斜杠加倍）；其余一律逐字节不变。守卫四例（Windows 补引号+转义 / POSIX 原样 / 反斜杠加倍 / 真实 node 进程验证 JSON 双引号原样到达）。反向验证：摘掉 `argvForLaunch` 调用 → 真实进程用例恰 1 红，还原复绿。修复后真机复验同一调用的 `paramsJson` 已完整保留双引号（上文端到端输出）。
+
+#### 走查过程事故（如实登记）
+
+自动化输入在「前置焦点」上出过一次误伤：一次 `ctrl+alt+s` 落在了**用户录制中的 IDE**（PID 66024）上，弹出了 Settings 对话框；发现后立即只对该窗口发 `Esc` 关闭并复查（该 IDE 窗口列表已恢复为单一主窗口，未见其它改动）。教训：沙盒 GUI 自动化必须**每次点击前重新断言前台 PID**，`SetForegroundWindow` 报 OK 不等于下一次输入仍落在同一窗口。
+
+**仍未闭环（发版前需补）**：①`runIde` 真机走查——设置页两新页观感、编辑器标红/黄实际效果、Tools 动作手动执行、`@SuppressWarnings("BannedApi")` 真机抑制、外部模板命令真机联调；②DM 真机端到端（`sqlv_explain` 经 IDE remote JDBC 通道）——本轮达梦证据是裸 JDBC 读数 + 19 列夹具，不等于 UI 链已验；③4c DM 函数矩阵落点仍待拍板（证据已备）。
+
