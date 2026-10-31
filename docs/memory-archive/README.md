@@ -313,6 +313,7 @@
 | [pitfall-shard-class-discovery-filename-vs-class](pitfalls/pitfall-shard-class-discovery-filename-vs-class.md) | 分片类发现不能按「文件名=FQCN」——Kotlin 文件名与类名可不同（`CrudPreviewFlowAndTypesTest.kt` 里是 `DbTypeQuoteHintTest`，3 用例静默漏跑致分片并集 4080≠串行 4083）；改内容提取列 0 顶层 class 声明 + 计数 parity 判绿 |
 | [feedback-runide-hotswap-separation.md](pitfalls/feedback-runide-hotswap-separation.md) | hotswap 服务只挂 runIdeHotSwap、普通 runIde 绝不拉副作用（用户定案 d0afda0）——辅助服务按任务职责挂载，不为「点错配置」兜底 |
 | [pitfall-k2j-stale-classes-hijack.md](pitfalls/pitfall-k2j-stale-classes-hijack.md) | K2J 期 build/classes/java/main 陈旧类劫持编译/运行六犯实录——标准前置动作（加 internal 新函数与合并后首跑先清 build/classes+build/kotlin）已收编 pitfall-regression-false-failure-flakes |
+| [pitfall-darcula-native-swing-containers.md](pitfalls/pitfall-darcula-native-swing-containers.md) | 深色主题白条=原生 JSplitPane 的 Metal 分隔条（shadow #EEEEEE / darkShadow #7A8A99）+ JScrollPane 裸 JViewport 四角，**不是滚动条**（Darcula 已注册 ScrollBar.UI）；本轮三轮定位的关键=第一轮只扫预览主界面、白条实际在「更多」四个洞察子页（分支独有、dev 不存在故单测绿）；守卫只认构造点不认 is/as? |
 | [pitfall-swing-html-list-renderer.md](pitfalls/pitfall-swing-html-list-renderer.md) | JList+JLabel-HTML 每次 O(N) BasicHTML 解析冻 EDT——根治 SimpleColoredComponent 片段 + 固定行高 |
 | [pitfall-vfs-refresh-write-intent-lock.md](pitfalls/pitfall-vfs-refresh-write-intent-lock.md) | 262 EDT ReadAction 包同步 VFS refresh 硬抛——须 WriteIntentReadAction（6f6a693） |
 | [pitfall-test-sandbox-browser-leak.md](pitfalls/pitfall-test-sandbox-browser-leak.md) | 测试沙盒 HelpAction 降级分支 BrowserUtil 弹宿主真机浏览器——isUnitTestMode 守卫（f955d85） |
