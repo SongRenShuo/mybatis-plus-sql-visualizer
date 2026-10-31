@@ -28,6 +28,10 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 3. **提权与输入**：沙盒 IDE 是提权进程，非提权 SendInput 被 UIPI 拦（光标能动、点击/按键全无效）。**整条探针提权跑**：`record/_run_elev.bat`（内容必须纯 ASCII）+ `Start-Process -Verb RunAs -WindowStyle Hidden`。提权进程杀得掉别的提权进程；非提权杀不掉。
 4. **验收前置检查**：IDE 全屏+置顶（`SetWindowPos(HWND_TOPMOST)` 后读回 ex=0x8 才算落实）；demo 工程干净、端口无监听；**沙盒在役包核验**（重大）：javap 沙盒 `plugins/<plugin>/lib/*.jar` 确认被验修复符号在役（JDK8 javap 读不了 21 字节码，用 `~/.jdks/ms-21`），jar mtime 必须晚于修复提交且早于 IDE 启动——**「javap 过 build 产物」不作数**，installPlugin 时点与探针时点错位 2 小时即全盘误诊（实锤过）。
 5. **IDE 状态归一**：等索引完成（右上 Analyzing 消失，轮询区域亮度，最多 90s）再触发动作；关闭 Distraction Free Mode（`Ctrl+Shift+A → Exit Distraction Free Mode`）；工具窗被收起时用 Find Action 搜工具窗名重开；重启后会话页签自动恢复可直接用。
+6. **沙盒 config 的真实层级**（2026-11-01 实锤）：不是 `build/<沙盒容器>/config`，而是 **`build/<沙盒容器>/<插件名>/<IU-版本>/config`**。`idea.key` 拷错层级＝弹「Manage Licenses」+ 日志 `JBA connection error`，界面照常能用但**数据库类功能不可用**（错过一次，白跑一轮）。
+7. **沙盒没有 JDBC 驱动实体**：数据源属性报「Download missing driver files」，Test Connection 跑不起来。整拷宿主 `%APPDATA%/JetBrains/IntelliJIdea<ver>/jdbc-drivers`（含 `jdbc-drivers.xml` 与各驱动目录）进沙盒 config 后**必须重启 IDE**——驱动清单在启动期读取，重启前面板仍显示 Problems。
+8. **「Trust and Open Project」对话框标题为空**，`EnumWindows` 按标题找不到，且会被别的窗口压在下层（截屏里看得见、点不到）。处置＝**按 rect 命中 HWND → `SetWindowPos(HWND_TOP)` → 再点**；直接按坐标点会落在压着它的那个窗口上（本轮两次空点）。
+9. **硬杀 IDE 会留下用户映射文件锁**：下一次 `prepareSandbox` 报 `Could not copy file … alpn-api-*.jar（请求的操作无法在使用用户映射区域打开的文件上执行）`＝`ERROR_USER_MAPPED_FILE`。处置＝连**卡住的 gradle wrapper 进程**一起杀，用 `Stop-Process -Id`（Git Bash 里写 `taskkill /PID` 会被 MSYS 把 `/PID` 转成路径而报「Invalid argument」）。
 
 ## 定位法优先级（禁手工换算坐标）
 
@@ -92,6 +96,7 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **rect 语义**：预览 rect 是 `(l,t,r,b)` 四元组——当 (x,y,w,h) 用会点进参数区（实测）。
 - **断言设计**：「填参后 SQL 应变」错——占位形态下填参不改 SQL，联动语义是勾选复选框；「面板无变化」可能是选择器弹出了——断言写「面板变化 OR 预期弹层在场」。
 - **错误文案会撒谎**：`click_button` 失败文案把「anchor 缺模板」误写成「robot 未启」——探针的失败文案必须精确到真实原因，误导性文案留档会让下一轮排障白烧。
+- **`runners=0` 不等于「数据源没连上」**（2026-11-01 真机实证）：平台 `DatabaseRunners.getAttachDataSourceRunners` 按**「文件→数据源」绑定**筛 Runner；本轮把唯一数据源连上、并在 Database 树里展开到 `Tables (11)`（表级内省完成）后，`runners=0` 依旧。判因前先看预览的绑定行（「未绑定数据源（在控制台执行一次查询即可绑定）」），别把 0 直接归因成连接或内省问题——本仓 `DataSourceSelector.kt:419-422` 的 KDoc 早就记着「Database 视图已连接仍为 0」。
 - **robot 按类名查控件先核真实类名**：转换输入框实际是 `EditorComponentImpl`（`EditorTextField/JBTextField` 均不存在）——用 robot 逐个类名探一遍再写死。
 - **Paste 落点自证**：粘贴类操作必须带「面板已变化」自证（像素指纹/文本 diff），工具回执不算落地证据；Esc 误关面板后样本可能粘进编辑器内存——磁盘是否污染以 `git status` 为准，内存污染杀 IDE 即弃。
 - **GUI 改设置三条路全堵的兜底**：滚轮 no-op＋搜索对自定义 Configurable 无索引（"Nothing to show"）＋对话框拉到上限仍装不下时，改读沙盒 `config/options/<plugin>.xml` 记录状态并如实标注「XML 兜底记录，非 GUI 操作」。
