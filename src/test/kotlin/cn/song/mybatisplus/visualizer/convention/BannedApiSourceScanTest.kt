@@ -1419,7 +1419,12 @@ class BannedApiSourceScanTest {
     // **913 → 912（T-SyncK2JMaster136 D 前收口尾差，2026-10-28）**：O147 修订链收口把
     // SqlLogParamCodec.writeEncodedEntry 的 IOException 包裹 catch 改 sneakyThrow 原样透传，
     // 站点净减 1（守卫实测 912，785 个 .java）。其余口径同上轮登记。
-    private val fatalCatchSiteTotalBaseline = 912
+    // **912 → 940（T-SyncK2JMaster175 A 波，2026-10-31，本轮重登记净增 +28）**：175 轮 A1/A2
+    // 生产翻译（方言与推断族/日志与采集族等 master 增量落地）把 master 侧 `runCatching` 与可选
+    // 平台探测继续落成 Java try/catch(Throwable)（803 个 .java 文件守卫实测 940 站点）。
+    // 新增站点均为降级/探测/兜底语义；落地集 [fatalPassthroughGuardedFiles] 各文件判定计数
+    // 本轮守卫实测无漂移，不新增登记。
+    private val fatalCatchSiteTotalBaseline = 940
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

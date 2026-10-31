@@ -767,6 +767,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                             "供 stripComments 决定是否截断；被 stripComments 的 map 分支调用。",
                         via = listOf("stripComments"),
                     ),
+                    DecisionFn(
+                        "passesEntryDialect",
+                        FnKind.HELPER,
+                        via = listOf(
+                            "日志识别通道必须把条目方言传下去",
+                            "守卫自证_危险形态必红",
+                        ),
+                    ),
                 ),
                 "方言兜底反向守卫（T-DialectInferFix 券 06）：判定内核内联于四个用例——" +
                     "读 SqlPreviewPanelEditorLifecycle 断言不再出现 MySQL 硬兜底符号" +
