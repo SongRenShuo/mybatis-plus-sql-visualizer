@@ -11,6 +11,7 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
+import com.intellij.util.messages.Topic
 import javax.swing.Icon
 
 /**
@@ -1262,6 +1263,33 @@ object DataSourceSelector {
     internal fun lastRunnerName(project: Project, moduleKey: String? = null): String? =
         lastUsedRunner(project, moduleKey).displayName
 
+    /**
+     * UX 换源重渲染：last-used 记忆变更监听（项目级 messageBus）。
+     *
+     * 立项动因：用户在某模块换了数据源后，**仍然开着的预览面板**头部绑定行与方言徽章停留在旧源上，
+     * 只能关开预览才更新。写入侧（[rememberRunner]/[forgetLastRunner]）广播一次，存活的预览面板
+     * 订阅后只刷新头部（绑定行 + 方言徽章），不重渲染 SQL、不新增常驻轮询。
+     */
+    fun interface LastUsedChangeListener {
+        fun onLastUsedChanged()
+    }
+
+    /** last-used 记忆变更 Topic（项目级；订阅方用 `project.messageBus.connect(this)` 绑定生命周期）。 */
+    val LAST_USED_CHANGE_TOPIC: Topic<LastUsedChangeListener> = Topic.create(
+        "MPVS last used data source changed",
+        LastUsedChangeListener::class.java,
+        Topic.BroadcastDirection.NONE,
+    )
+
+    /** 广播记忆变更（异常全吞：诊断通知绝不能影响执行主链）。 */
+    private fun notifyLastUsedChanged(project: Project) {
+        runCatching {
+            if (!project.isDisposed) {
+                project.messageBus.syncPublisher(LAST_USED_CHANGE_TOPIC).onLastUsedChanged()
+            }
+        }
+    }
+
     /** M36.5：记录 last-used 数据源名（T-ModuleScopedLastUsed W2：可带模块键分桶）。 */
     internal fun rememberRunnerName(project: Project, name: String, moduleKey: String? = null) {
         rememberRunner(project, name, null, moduleKey)
@@ -1380,6 +1408,8 @@ object DataSourceSelector {
                 write(moduleKey)
                 registerLastUsedModuleKey(project, moduleKey)
             }
+            // UX 换源重渲染：写入成功即广播（存活的预览面板刷新头部绑定行/方言徽章）
+            notifyLastUsedChanged(project)
         }
     }
 
@@ -1399,6 +1429,8 @@ object DataSourceSelector {
             // 未指定模块＝既有语义「清项目级」；同时清掉所有模块级分桶（W4 的「清空学习」
             // 入口要求彻底清干净，否则用户点了清空、灰字仍显示旧源）。
             clear(moduleKey)
+            // UX 换源重渲染：清记忆后同样广播（头部绑定行立即回流「未绑定」）
+            notifyLastUsedChanged(project)
         }
     }
 
@@ -1420,6 +1452,8 @@ object DataSourceSelector {
             clear(null)
             registeredLastUsedModuleKeys(project).forEach { clear(it) }
             pc.unsetValue(_LAST_USED_MODULE_KEYS_KEY)
+            // UX 换源重渲染：清空学习后广播（存活的预览面板头部立即回流「未绑定」）
+            notifyLastUsedChanged(project)
         }
     }
 

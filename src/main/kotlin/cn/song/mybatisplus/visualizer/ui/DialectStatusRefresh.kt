@@ -84,8 +84,11 @@ internal fun SqlPreviewPanel.boundDataSourceDialectForDecision(): String? {
  * 执行/绑定后的方言状态刷新：池线程重算 → EDT 仅升级替换 → 只重组方言段。
  *
  * 幂等且防抖：决策未变（或更弱）时不触碰 UI；面板已 dispose 时丢弃晚到结果。
+ *
+ * @param rerenderSql false = 只刷新头部方言徽章，不按新方言重写 SQL 文本（UX 换源重渲染：
+ *        last-used 变更只需头部跟上，不得改写用户正在编辑的文本）。
  */
-internal fun SqlPreviewPanel.refreshDialectStatusRow() {
+internal fun SqlPreviewPanel.refreshDialectStatusRow(rerenderSql: Boolean = true) {
     val proj = project ?: return
     if (current == null) return
     val moduleKey = sourceModuleKey
@@ -107,9 +110,41 @@ internal fun SqlPreviewPanel.refreshDialectStatusRow() {
             currentDialectDecision = chosen
             applyDialectStatusSegment()
             // T-DialectGateExit P1：绑定源给出更强方言时，把 SQL 也重渲染到该方言
-            rerenderIfBoundDialectDiffers(chosen)
+            if (rerenderSql) {
+                rerenderIfBoundDialectDiffers(chosen)
+            }
         }, ModalityState.any())
     }
+}
+
+/**
+ * UX 换源重渲染：last-used 变更后的头部刷新（防抖 + 线程归位）。
+ *
+ * 广播可能来自执行链的任意线程，也可能是连写模块级/项目级两次；这里统一收口：非 EDT 先投递
+ * 回 EDT，再经 120ms Timer 合并成一拍。单测模式同步执行（headless 无 EDT 泵，既有测试依赖
+ * 「改记忆 → 立刻可读」的同步语义，与 [SqlPreviewPanel.scheduleRender] 同款）。
+ *
+ * 只刷新头部（绑定行 + 方言徽章），**不**重渲染 SQL：换源事件不是用户编辑，不得改写编辑器文本。
+ */
+internal fun SqlPreviewPanel.scheduleHeaderSourceRefresh() {
+    if (previewDisposed || Disposer.isDisposed(this)) return
+    val app = ApplicationManager.getApplication() ?: return
+    if (app.isUnitTestMode) {
+        refreshHeaderSourceNow()
+        return
+    }
+    if (!app.isDispatchThread) {
+        app.invokeLater({ scheduleHeaderSourceRefresh() }, ModalityState.any())
+        return
+    }
+    headerSourceRefreshTimer.restart()
+}
+
+/** 头部刷新单拍（EDT）：绑定行 + 方言徽章。 */
+internal fun SqlPreviewPanel.refreshHeaderSourceNow() {
+    if (previewDisposed || Disposer.isDisposed(this)) return
+    refreshBindStateRow()
+    refreshDialectStatusRow(rerenderSql = false)
 }
 
 /**
