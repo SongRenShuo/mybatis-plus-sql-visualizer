@@ -50,7 +50,9 @@ class GiantFileBudgetTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1972,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1830,
+        // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
+        //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1840,
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1777,
         // 1727 → 1777（2026-10-25: 合并 master 实测 1750 行，含 premain 无界 join 修复，+23 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to 1619,

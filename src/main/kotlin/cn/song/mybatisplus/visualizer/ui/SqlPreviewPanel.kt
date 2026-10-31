@@ -826,7 +826,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // dispose 时自动注销（与上方设置 Topic 同款）。
         project?.messageBus?.connect(this)?.subscribe(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LAST_USED_CHANGE_TOPIC,
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LastUsedChangeListener {
+            cn.song.mybatisplus.visualizer.execute.LastUsedChangeEvents.Listener {
                 scheduleHeaderSourceRefresh()
             },
         )

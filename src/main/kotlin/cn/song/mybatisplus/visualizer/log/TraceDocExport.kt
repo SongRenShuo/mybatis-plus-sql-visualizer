@@ -78,7 +78,10 @@ object TraceDocExport {
     fun export(project: Project, input: TraceDocInput) {
         // 与 SqlExportService 同口径：显示脱敏开关开时只对本次导出的 SQL 做投影级打码，
         // 调用方数据层条目不动（计划文本不打码——打码器会把数字一并抹掉，失去诊断价值）。
-        val effective = if (PluginSettings.getInstance().state.displayMaskEnabled) {
+        // 2026-10-31 修正：改用 displayMaskExportOn()（离开 IDE 面的从严口径，mode != OFF 即打码），
+        // 不再读旧布尔 state.displayMaskEnabled——后者是迁移源，用户在新三档设置里选 WARN/BLOCK
+        // 时它仍为 false，会让留痕导出完全不打码（敏感数据离开 IDE 面），与同族三条导出链口径分叉。
+        val effective = if (PluginSettings.getInstance().displayMaskExportOn()) {
             input.copy(sql = DisplayMasker.maskDisplay(input.sql, true))
         } else {
             input
