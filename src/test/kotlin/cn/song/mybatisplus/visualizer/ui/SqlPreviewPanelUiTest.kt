@@ -39,13 +39,25 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
     private fun makeResult(sql: String, compact: String = sql, params: List<String> = emptyList()): PreviewResult =
         PreviewResult(sql, compact, params, if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]", WrapperType.LAMBDA_QUERY, "tbl", listOf("id", "name"))
 
+    /** master `stored.copy(dialectDecision = null)` 的 k2j 等价：21 参 copy 重载丢弃决策字段（其余逐字段回读）。 */
+    private fun withoutDialectDecision(r: PreviewResult): PreviewResult = r.copy(
+        r.sql, r.compactSql, r.unresolvedParams, r.paramTable, r.wrapperType, r.tableName, r.warning,
+        r.columns, r.columnComments, r.tableComment, r.previewModel, r.paramHints, r.candidateTables,
+        r.batchModel, r.xmlModel, r.initialParamValues, r.perfWarnings, r.fillClauses, r.previousSql,
+        r.pagesColumns, r.namedParamHints,
+    )
+
     fun test面板构建与结果渲染_编辑器含SQL() {
         val panel = SqlPreviewPanel(project)
         try {
             val result = makeResult("SELECT id\nFROM tbl")
             SqlPreviewPanelResultViewKt.showResult(panel, result)
             waitForEdt()
-            assertEquals("showResult 应保存当前结果", result, panel.currentForTest())
+            val stored = requireNotNull(panel.currentForTest())
+            // T-DialectInferFix：面板在结果缺省方言决策时补记一条（含 FALLBACK 披露），故按「除决策外逐字一致」比对
+            // k2j：PreviewResult 为 Java 类无 copy(dialectDecision=…) —— 21 参 copy 重载天然丢弃决策字段（等价形态）
+            assertEquals("showResult 应保存当前结果", result, withoutDialectDecision(stored))
+            assertNotNull("showResult 应记录方言决策", stored.dialectDecision)
             val editor = panel.editorForTest()
             assertNotNull("应挂载编辑器视图", editor)
             val text = editor!!.document.text
@@ -69,7 +81,9 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val editorText = panel.editorForTest()?.document?.text ?: ""
             assertTrue("大结果应完整渲染进编辑器（含列 col_400）", editorText.contains("col_400"))
             assertTrue("大结果应含 FROM big_table", editorText.contains("FROM big_table"))
-            assertEquals("current 应保存大结果", result, panel.currentForTest())
+            val stored = requireNotNull(panel.currentForTest())
+            assertEquals("current 应保存大结果", result, withoutDialectDecision(stored))
+            assertNotNull("current 应记录方言决策", stored.dialectDecision)
         } finally {
             SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
