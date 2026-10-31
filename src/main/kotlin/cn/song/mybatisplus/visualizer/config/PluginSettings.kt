@@ -697,6 +697,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var onboardingAnchorTipShown: Boolean = false,
 
         /**
+         * NEW-19：最近一次已提示过「本版亮点」的插件版本（一次性 / **版本粒度**记忆）。
+         *
+         * 空串 = 从未提示。写入发生在通知**之前**（领取即消耗）：通知链任何异常都不会让同版本
+         * 在下一次启动重弹——防打扰优先于「一定送达」。版本升级后字符串不等，才允许再提示一次。
+         */
+        var lastHighlightedVersion: String = "",
+
+        /**
          * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
          * 「启用结构化并重试」推荐通知**只提示一次**。
          *
