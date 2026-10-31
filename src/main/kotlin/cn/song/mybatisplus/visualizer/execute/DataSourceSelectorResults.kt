@@ -424,8 +424,9 @@ internal fun DataSourceSelector.chooseAndPrepare(
             callback?.invoke(true)
         }
         runners.isEmpty() -> {
-            // UI-046：空 Runner 归因三档（零源 / 未连接未内省 / 方言不匹配）。真机实证（验收册
-            // 20261101-0430-S2-8）：12 个在册源（3 个 MySQL）全未内省时，旧代码一律误报「方言不匹配」。
+            // UI-046 / UI-048：空 Runner 归因（零源 / 判不出方言 / 未绑定 / 已绑定仍不可用 / 方言不匹配）。
+            // 真机实证：20261101-0430-S2-8 十二源全未内省时旧代码一律误报「方言不匹配」；20261101-0529
+            // 单源已连接已内省却未绑定时，旧归因又误报「没连上/没内省」——两处都是把推测当因果。
             val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
             LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
             if (executeAfterPrepare) openDatabaseToolWindow(project)
@@ -458,36 +459,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
                     )
                 }
             }
-            when (ExecDialectRouting.classifyEmptyRunners(project, registered, renderedDialectName)) {
-                ExecDialectRouting.EmptyRunnersReason.NO_DATA_SOURCE ->
-                    onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
-                // 判不出方言（全部 platformDialectId 为空且 URL 兜底也判不出），或方言对得上却仍
-                // 枚举不出 Runner：两种形态的用户动作都是「先把源连上、等内省完成」。
-                ExecDialectRouting.EmptyRunnersReason.DIALECT_UNKNOWN,
-                ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
-                -> onError?.invoke(
-                    MpSqlVisualizerBundle.message("execute.datasource.notConnected", registered.size),
-                )
-                ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH -> {
-                    // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
-                    // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
-                    // 上次使用的 MySQL 源 → 推出 MySQL → 用户看到「没有与该 SQL 方言（MySQL）匹配的
-                    // 数据源」，可他眼前预览里明明写着 `方言: PostgreSQL（手动指定）`、SQL 也是 PG 语法，
-                    // 文案自相矛盾（2026-10-25 实测）。O-145 W7 已让 mapDialectBeforePsi 跟随渲染方言，
-                    // 这里同步跟上：有渲染事实优先用它，没有才回退旧的按源推断。
-                    val dialectDisplay = renderedDialectName
-                        ?: run {
-                            val targetDs = ExecDialectRouting.resolveTargetDataSourceForDialect(project, renderedDialectName)
-                            val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
-                            (targetLanguage as? com.intellij.lang.Language)?.id
-                                ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
-                        }
-                    val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
-                    onError?.invoke(
-                        MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
-                    )
-                }
-            }
+            // UI-048：归因（零源 / 判不出方言 / 未绑定 / 已绑定仍不可用 / 方言不匹配）与文案统一在
+            // EmptyRunnersHint——绑定态由 ExecFileBinding.probeExecBind 现场探测，不在此处猜因果
+            //（2026-11-01 真机：已连接 + 已内省 + 未绑定时报「没连上/没内省」是假话）。
+            onError?.invoke(EmptyRunnersHint.message(project, registered, renderedDialectName, vf))
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
             // M36.3：无数据源时通知 UI 从「执行中」恢复
