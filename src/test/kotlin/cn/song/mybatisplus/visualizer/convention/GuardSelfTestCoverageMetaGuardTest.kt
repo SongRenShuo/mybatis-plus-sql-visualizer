@@ -776,6 +776,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=注释掉 XML 分支的 externalStep 调用 → 断言一必红（计划 §8.3 已留两次读数），" +
                     "另有 `自证_挂点后置与无门形态必被判红` 用合成源码钉住两种故障形态。",
             ),
+            // ---- 原生 Swing 容器跟随主题守卫（T-DarkTheme，深色主题白条根治，2026-11-01） ----
+            GuardEntry(
+                "convention/NativeSwingThemeGuardTest.kt",
+                listOf(DecisionFn("nativeContainerOffenders", FnKind.VIOLATIONS)),
+                "原生 Swing 容器跟随主题守卫（T-DarkTheme）：判定内核 nativeContainerOffenders 剥注释后扫 " +
+                    "ui/log/config 三包 .kt，找自建 javax.swing.JScrollPane/JSplitPane 构造点（只认构造点，" +
+                    "不认 is/as? 类型判断——平台给的组件不是白条来源），返回 `文件:行 片段` 违规点集合。" +
+                    "自证语料=同文件「自建原生容器必被抓」（裸/全限定/匿名子类三形态）+「平台组件与类型判断 " +
+                    "与注释不得误报」两例，覆盖正反两面。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
