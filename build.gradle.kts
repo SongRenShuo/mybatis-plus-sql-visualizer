@@ -98,6 +98,17 @@ dependencies {
     testImplementation(libs.mssql.jdbc)
     testImplementation(libs.mariadb.java.client)
     testImplementation(libs.ojdbc11)
+    // T-XcDialects3：信创三族驱动——DialectDockerVerificationTest 外部实例模式
+    //（-Dmpvs.dialect.jdbcUrl=... 指向 103.36.220.245 自建实例 / DBX 金仓）渲染套件真执行用；
+    // 仅测试 classpath，插件运行时零依赖不变（与 ojdbc11 同口径）
+    testImplementation(libs.highgo.jdbc)
+    testImplementation(libs.vastbase.jdbc)
+    testImplementation(libs.kingbase.jdbc)
+    // T-DialectDriverGap（2026-10-30）：达梦 / openGauss / OceanBase 外部实例验证驱动。
+    // openGauss 取 `-og` 变体（org.opengauss.Driver）；无后缀变体是 pgjdbc 改名包会遮蔽真 PG 驱动。
+    testImplementation(libs.dameng.jdbc)
+    testImplementation(libs.opengauss.jdbc)
+    testImplementation(libs.oceanbase.client)
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
@@ -351,4 +362,12 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
 }
 // R7 时序：真机级探针放在发版链路最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
 // （与文件顶部的 verifyGate→testShards 同款做法：依赖只保证「都执行」，mustRunAfter 才定序。）
-tasks.named("e2eFakeIde") { mustRunAfter("testShards") }
+// T-ReleasePerf10（20261030 实测）：定序必须挂**分片叶子**而不是聚合任务 testShards——
+// 任一 shard 失败时（权威轮用 --continue 跑到底），testShards 因依赖失败被 Gradle 跳过，
+// **跳过任务的 mustRunAfter 边会被一并丢弃**，e2e 于是提前 4min 与剩余分片并发起跑
+// （实测 e2e START 12:13:20 < shard5 END 12:17:24；e2e 跑真实应用+MySQL，与分片并发有污染风险）。
+// 挂到叶子后，即使某个 shard 失败，e2e 仍等所有分片收尾再起（--continue 语义保留：e2e 照样跑）。
+tasks.named("e2eFakeIde") {
+    mustRunAfter(tasks.matching { it.name.matches(Regex("testShard[0-9]+")) })
+    mustRunAfter("testExternal")
+}
