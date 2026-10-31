@@ -11,8 +11,17 @@ import java.util.List;
 /**
  * O-145 W1 的瞬态来源上下文。
  *
- * <p>该模型只随一次预览调用存活，不参与历史、设置或复制序列化。尤其是 {@link #capturedJdbcUrl}，仅允许承载
- * 当前事件已经安全提供的运行时事实；旧日志的脱敏库标不能反推成 URL。</p>
+ * <p>该模型只随一次预览调用存活，不参与历史、设置或复制序列化，也不承载任何凭据。</p>
+ *
+ * <p>T-DialectInferFix（券 05）：原 {@code capturedJdbcUrl} / {@code selectedDataSourceId} 两个字段已删除——
+ * 它们在 O-145 落地时只做了声明，全仓 <b>0 处读取</b>（{@code grep capturedJdbcUrl} 只有声明与 KDoc）。
+ * 保留「声明了却没人用的证据字段」会让后来者误以为精确 URL 证据链已接线；本次改为：</p>
+ * <ul>
+ *   <li>事件级方言事实落在 {@code cn.song.mybatisplus.visualizer.log.LogSqlEntry.dialectName}（注册方言名，
+ *       随 SQL 条目持久化，历史读回仍可用）；</li>
+ *   <li>预览侧统一由 {@code cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver} 求解，
+ *       不再需要把 URL/数据源 UUID 塞进上下文模型（也就不会再有人从脱敏角标反推 URL）。</li>
+ * </ul>
  *
  * <p>master 的 Kotlin data class 的 Java 承载（伸缩构造器 + getter；Kotlin 默认参数 → 显式重载）。</p>
  */
@@ -22,9 +31,7 @@ public record PreviewSourceContext(
         @Nullable PsiFile hostPsiFile,
         @Nullable VirtualFile hostVirtualFile,
         SqlPsiResolution sqlPsiResolution,
-        ModuleIdentityResolution moduleResolution,
-        @Nullable String capturedJdbcUrl,
-        @Nullable String selectedDataSourceId
+        ModuleIdentityResolution moduleResolution
 ) {
 
     /** 全参构造（Kotlin 声明序）。 */
@@ -40,7 +47,7 @@ public record PreviewSourceContext(
     /** 便捷构造：hostPsiFile 兜 hostVirtualFile，其余缺省（Kotlin 默认参数）。 */
     public PreviewSourceContext(Project project, PreviewSourceOrigin origin, @Nullable PsiFile hostPsiFile) {
         this(project, origin, hostPsiFile, hostPsiFile != null ? hostPsiFile.getVirtualFile() : null,
-                SqlPsiResolution.None.INSTANCE, ModuleIdentityResolution.None.INSTANCE, null, null);
+                SqlPsiResolution.None.INSTANCE, ModuleIdentityResolution.None.INSTANCE);
     }
 
     /** 便捷构造：仅 project + origin（Kotlin 默认参数）。 */
