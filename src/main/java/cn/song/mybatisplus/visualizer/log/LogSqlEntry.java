@@ -449,7 +449,7 @@ public record LogSqlEntry(
     /**
      * K2J 互操作：master 新增 {@code threadName}（T-StackBizFrame S3，声明序插在 stackDigest 与
      * sequenceNumber 之间）与 {@code dialectName}（T-DialectInferFix，插在 databaseName 与 actualSql
-     * 之间）取默认 null 的历史 22 参形态（Kotlin 默认参的 Java 等价），委托 24 参规范构造器。
+     * 之间）取默认 null 的历史 21 参形态（Kotlin 默认参的 Java 等价），委托 23 参规范构造器。
      */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
                        Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
