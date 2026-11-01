@@ -280,7 +280,7 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（81 个）
+## 已解决踩坑（84 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -353,6 +353,9 @@
 | [sandbox-deployment-pitfalls.md](pitfalls/sandbox-deployment-pitfalls.md) | 沙盒 IDE 构建部署陷阱（prepareSandbox 文件锁 + 陈旧 jar） |
 | [pitfall-f42-join-diagram-render.md](pitfalls/pitfall-f42-join-diagram-render.md) | JOIN 图"渲染中/错误图"终极修复（F-42）——PlantUML 8059 硬依赖 Graphviz + 模态弹窗阻塞 invokeLater + hidden 标签页，三层根因（82797a0） |
 | [pitfall-dbn-output-console-layout-collapse.md](pitfalls/pitfall-dbn-output-console-layout-collapse.md) | DBN Output 控制台 44px 塌缩（M36.5.60→76）——平台 EditorMergedHorizontalScrollBarLayout"输入编辑器优先"策略；setSize 对抗布局必败、布局替换正解、同名类组件搜索错目标（7294d38/bc9963b） |
+| [pitfall-sandbox-jdbc-driver-needs-installed-state.md](pitfalls/pitfall-sandbox-jdbc-driver-needs-installed-state.md) | 沙盒 JDBC 驱动要**两份**文件：`config/jdbc-drivers/`（目录清单+jar）只决定「有哪些版本」，`config/options/databaseDrivers.xml`（已安装状态）才决定「driver id 绑哪个 artifact 版本」；只拷前者必 `ClassNotFoundException`。弯路：改 driver-ref 为 `artifact/version` 会被 IDE 回写成 `mysql.8`；往目录清单补 version 无效；整拷 `databaseDrivers.xml` 才通（拷贝前 4 次 CNFE → 拷贝后 0 次） |
+| [pitfall-explain-result-shape-real-vs-synthetic.md](pitfalls/pitfall-explain-result-shape-real-vs-synthetic.md) | 真机 EXPLAIN 形态与单测合成样本不一致：OB 返回**单列×多行**（一行计划=一个 row），解析器按「一个 cell 装整段多行文本」写 → 表头单独命中后无数据行 → 返回 null 回退；**127 例单测全绿而真机功能全废**。通用判据：解析器样本必须照抄真机原始结果；fail-closed 回退会掩盖功能失效，验收要看成功证据 |
+| [pitfall-sandbox-click-does-not-land-four-causes.md](pitfalls/pitfall-sandbox-click-does-not-land-four-causes.md) | 沙盒「点了没反应」四因：①工具栏坐标每会话漂移 25~27px（实测 y=226 不是 209、x=1305 不是 1342）②探针 `front()` 把主窗提到模态对话框之上，点击落主窗 ③阳性对照选了不会变的按钮（格式化已格式化 / 压缩已压缩）④自绘工具栏对 robot 树完全不可见。判据：裁剪放大读坐标 + 悬停高亮自证 + 用会变的对照 + 按 rect 置前对话框 |
 
 ## 方法论（1 个）
 
