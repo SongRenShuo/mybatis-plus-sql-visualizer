@@ -137,6 +137,22 @@ internal fun SqlPreviewPanel.showMoreActionsPopup() {
 
 internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Unit>>): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
     object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<String>(null, actions.map { it.first }) {
+        // UX Community 执行入口预判置灰（S2-4 券②）：「更多」菜单里的执行类条目（DML 影响面预演
+        // 对绑定数据源发 COUNT 试算）在无 Database 插件时不可选——平台把不可选项渲染成置灰，
+        // 点了才报错提前成一眼可见。回滚 SQL 条目不算执行类（对话框粘贴生成路径无 DB 也可用，
+        // 其执行钮由 RollbackSqlDialog 自行置灰）。
+        private val executionItems: Set<String> =
+            setOf(MpSqlVisualizerBundle.message("panel.dmlImpact"))
+
+        override fun isSelectable(value: String?): Boolean {
+            if (value != null && value in executionItems &&
+                cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint() != null
+            ) {
+                return false
+            }
+            return super.isSelectable(value)
+        }
+
         override fun onChosen(
             selectedValue: String?,
             finalChoice: Boolean,
