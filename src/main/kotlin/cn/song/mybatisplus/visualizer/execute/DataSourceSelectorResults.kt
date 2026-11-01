@@ -459,6 +459,25 @@ internal fun DataSourceSelector.chooseAndPrepare(
                     )
                 }
             }
+            // S2-12：绑定回落——243 判不出平台绑定态（DataSourcePerFileMappingsImpl 是 262 API），
+            // 重映射重试仍空时若目标源可**唯一**确定（学习绑定 > last-used > 单源，歧义不猜），
+            // 照平台 per-源 runner 同款通道（DatabaseSessionManager 按源直取 session）把执行落到
+            // 该源：控制台/结果表/审计整链照旧复用，不写平台绑定状态。失败走 runRunner 既有
+            // onError/日志；目标不唯一 → 逐字保持既有归因文案。
+            val fallbackTarget = runCatching {
+                ExecBindFallback.pickTarget(project, registered, dialectGateRequest?.moduleKey)
+            }.getOrNull()
+            if (fallbackTarget != null) {
+                val fallbackName = DataSourceSettings.getName(fallbackTarget)
+                LOG.info("[S2-12] runners empty → fallback to uniquely resolved data source '$fallbackName'")
+                chosenRunnerName = fallbackName
+                runRunner(
+                    project, ExecBindFallback.directRunner(project, fallbackTarget, submitSql, sessionConsumer),
+                    silent = !executeAfterPrepare, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey,
+                )
+                callback?.invoke(true)
+                return@chooseAndPrepare
+            }
             // UI-048：归因（零源 / 判不出方言 / 未绑定 / 已绑定仍不可用 / 方言不匹配）与文案统一在
             // EmptyRunnersHint——绑定态由 ExecFileBinding.probeExecBind 现场探测，不在此处猜因果
             //（2026-11-01 真机：已连接 + 已内省 + 未绑定时报「没连上/没内省」是假话）。
