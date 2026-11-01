@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -20,10 +21,20 @@ class SqlCaptureGateSniffTest {
     /** 日志行时间取「当前时刻往前 500ms」——与墙钟同源，不依赖相关器时间窗规则。 */
     private fun recentLineTime(): String = sdf.format(java.util.Date(System.currentTimeMillis() - 500))
 
+    @Before
+    fun setUp() {
+        // T-SniffGlobalIsolation（2026-11-01 门禁实证）：`bridgeSuppressed() = paused && !active`，
+        // 而 `CaptureActivityFallback.active` 是**全局单例态**——同分片里先跑的回落链用例把它置
+        // 解封态后，本用例只置 paused 会让封停判定失效（条目照常产出，断言红）。
+        // 用例自证前提：回落态必须由本用例自己置干净，不继承任何前序残留。
+        CaptureActivityFallback.resetForTest()
+    }
+
     @After
     fun tearDown() {
         SqlCaptureGate.paused.set(false)
         LogTimeCorrelator.clear()
+        CaptureActivityFallback.resetForTest()
     }
 
     private fun newCtx(): BridgeLineContext {
