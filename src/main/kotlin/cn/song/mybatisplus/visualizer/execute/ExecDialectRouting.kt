@@ -220,7 +220,16 @@ internal object ExecDialectRouting {
         /** 有在册源，但一个都判不出方言（未连接/未内省）——真实原因不是方言不匹配。 */
         DIALECT_UNKNOWN,
 
-        /** 方言判得出、也与渲染方言对得上，平台却仍枚举不出 Runner（源未连接/未内省，无法 attach）。 */
+        /**
+         * 方言判得出、也与渲染方言对得上，但**exec 文件尚未与任何数据源绑定**（UI-048）。
+         *
+         * 平台 `getAttachDataSourceRunners` 按「文件 → 数据源」关联筛 Runner，未绑定必空——
+         * 2026-11-01 真机实证：单源已连接 + 已表级内省、本文件未绑定时点执行，runners=0，
+         * 而此前的归因把它混进「未连接/未内省」（假因果）。
+         */
+        DIALECT_MATCHED_BUT_UNBOUND,
+
+        /** 方言判得出、也与渲染方言对得上、文件**已绑定**，平台却仍枚举不出 Runner（源不可 attach）。 */
         DIALECT_MATCHED_BUT_UNUSABLE,
 
         /** 方言判得出，但都对不上渲染方言。 */
@@ -229,15 +238,22 @@ internal object ExecDialectRouting {
 
     /**
      * 空 Runner 归因（纯函数）：零源 → [EmptyRunnersReason.NO_DATA_SOURCE]；全部判不出方言 →
-     * [EmptyRunnersReason.DIALECT_UNKNOWN]；有源与渲染方言对得上却仍无 Runner →
+     * [EmptyRunnersReason.DIALECT_UNKNOWN]；有源与渲染方言对得上、但 [boundToDataSource] 明确为
+     * false → [EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND]；对得上且已绑定（或绑定态未知）→
      * [EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE]；其余 → [EmptyRunnersReason.DIALECT_MISMATCH]。
      *
-     * 后两档都是「平台枚举不出 Runner」的事实，但用户可行动作不同：前者要先把源连上，后者要调
-     * Dialects 映射。渲染方言缺失时无法判定「对得上」，按方言不匹配处理（与既有 W7 反推口径一致）。
+     * **未绑定优先于未连接**（UI-048）：绑定态是现场探针的硬事实，而「没连上」只是推测；两者都
+     * 成立时按硬事实出文案，不许把推测写成因果。绑定态未知（[boundToDataSource] 为 null，如
+     * Community / 反射失败 / 测试未注入）时退回既有口径（[EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE]）。
+     *
+     * 后几档都是「平台枚举不出 Runner」的事实，但用户可行动作不同：未绑定 → 先做一次绑定；已绑定
+     * 仍不可用 → 查连接/内省/Dialects 标注；方言对不上 → 调 Dialects 映射。渲染方言缺失时无法判定
+     * 「对得上」，按方言不匹配处理（与既有 W7 反推口径一致）。
      */
     internal fun classifyEmptyRunners(
         dataSources: List<Any>,
         renderedDialectName: String?,
+        boundToDataSource: Boolean? = null,
         dialectIdsOf: (Any) -> List<String?>,
     ): EmptyRunnersReason {
         if (dataSources.isEmpty()) return EmptyRunnersReason.NO_DATA_SOURCE
@@ -245,17 +261,20 @@ internal object ExecDialectRouting {
         if (idsPerSource.all { it.isEmpty() }) return EmptyRunnersReason.DIALECT_UNKNOWN
         val rendered = renderedDialectName?.takeIf { it.isNotBlank() }
         if (rendered != null && idsPerSource.any { dialectMatchesRendered(rendered, it) }) {
+            // UI-048：绑定态是探针硬事实，优先于「未连接」这类推测（反向验证锚点）。
+            if (boundToDataSource == false) return EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND
             return EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE
         }
         return EmptyRunnersReason.DIALECT_MISMATCH
     }
 
-    /** 归因 → 文案键（三档文案：空源 / 未连接 / 方言不匹配）。 */
+    /** 归因 → 文案键（五档文案：空源 / 无法定位 / **未绑定** / 方言不匹配）。 */
     internal fun emptyRunnersHintKey(reason: EmptyRunnersReason): String = when (reason) {
         EmptyRunnersReason.NO_DATA_SOURCE -> "execute.datasource.empty"
         EmptyRunnersReason.DIALECT_UNKNOWN,
         EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
         -> "execute.datasource.notConnected"
+        EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND -> "execute.datasource.notBound"
         EmptyRunnersReason.DIALECT_MISMATCH -> "execute.datasource.dialectMismatch"
     }
 
@@ -348,16 +367,27 @@ internal object ExecDialectRouting {
         )
     }
 
-    /** 空 Runner 归因（生产链）：方言 id 候选 = 平台 DAS 方言 → URL 兜底（可用清单只取一次）。 */
+    /**
+     * 空 Runner 归因（生产链）：方言 id 候选 = 平台 DAS 方言 → URL 兜底（可用清单只取一次）；
+     * 绑定态由 [ExecFileBinding.probeExecBind] 现场探测（UI-048）——**探针只在这一层调用**，
+     * 判定内核仍是上面的纯函数。
+     *
+     * @param execFile exec 草稿文件；null（或探针失败）= 绑定态未知，退回既有口径
+     */
     internal fun classifyEmptyRunners(
         project: Project,
         registeredDataSources: List<Any>,
         renderedDialectName: String?,
+        execFile: com.intellij.openapi.vfs.VirtualFile? = null,
     ): EmptyRunnersReason {
         val available = runCatching { availableLanguageIds(project) }.getOrDefault(emptyList())
+        val bound = execFile?.let { file ->
+            runCatching { ExecFileBinding.probeExecBind(project, file).pinnedDsId != null }.getOrNull()
+        }
         return classifyEmptyRunners(
             dataSources = registeredDataSources,
             renderedDialectName = renderedDialectName,
+            boundToDataSource = bound,
             dialectIdsOf = { ds -> listOf(platformDialectId(ds), urlFallbackId(ds, available)) },
         )
     }
