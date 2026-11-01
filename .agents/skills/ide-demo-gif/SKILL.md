@@ -52,6 +52,7 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 7. **排查置顶覆盖层**：ZCode 自动化面板、PixPin 等常驻应用若是置顶态会盖住沙盒窗口，坐标点击会打进覆盖层。EnumWindows 核对前台窗口标题与 rect；需要时让 IDE 持续保持 TOPMOST 干完活再撤（TOPMOST→NOTOPMOST 舞步结束就回到非置顶带，对置顶覆盖层无效）。**反过来也要留意**：主窗口的 TOPMOST 会盖住设置对话框等独立窗口（见坑表 39）。
 8. **常驻截图工具录制期临时退出**（PixPin 实录为头号干扰源）：全局热键劫持面广（Ctrl+Shift+A/F12、Alt+1 等），其弹窗对合成点击免疫成僵尸弹窗，低层钩子还随机吞合成事件（症状=输入时灵时不灵）。`taskkill //IM PixPin.exe //F` 后全部恢复，录完重启（安装路径先 wmic 查；提权进程如 Snipaste 杀不掉，一般不捣乱）。ZCode 桌面通知 toast 会抢焦点顶掉打开中的浮层——动作链必须在单脚本内一次跑完，不留跨调用间隙。
 9. **录「执行类」画面（EXPLAIN / 执行 SQL / 真实结果）前，核对 IDE 数据源的连接参数与应用配置逐字一致**。本项目实测：应用 `application.yml` 的 MySQL URL 带 `sessionVariables=sql_mode=ANSI_QUOTES`，而 `.idea/dataSources.xml` 里的同名数据源没有 → 同一句 `FROM "user"` 应用能跑、IDE 侧报 `1064`，白查数小时（详见坑表 29）。两边 URL 拉平后**需重启 IDE 生效**（`.idea/` 通常已 gitignore，属本机状态不进仓）。
+11. **录「执行类」画面还要确认沙盒 JDBC 驱动是两份文件齐全**（2026-11-01 实测）：`config/jdbc-drivers/`（目录清单+jar）只说明有哪些版本，`config/options/databaseDrivers.xml`（已安装状态，形如 `<driver id="mysql.8"><artifact id="MySQL ConnectorJ" version="9.7.0"/></driver>`）才决定 driver id 绑哪个 artifact。只拷前者 → 远程 JDBC 进程 classpath 空 → `RemoteProcessSupport … ClassNotFoundException`，画面表现为「执行/EXPLAIN 静默回退原生控制台」，很容易拍出一条「看着正常其实功能没跑」的废片。做法＝整份拷宿主 `config/options/databaseDrivers.xml` + 确认 jar 实体在场 + 重启 IDE；**别改 `driver-ref` 为 `artifact/version` 写法**（IDE 会回写成 `mysql.8`）。
 10. **要拍设置页里「首屏之下」的分组，先请用户把设置页滚到位**（合成滚动是 no-op，见坑表 35）——这条要在开工前就问，别等到录的时候才发现够不着。
 
 ## 工作流
@@ -361,6 +362,11 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
 3. **`anchor.py` 模板（兜底）**：只用于 robot 真查不到的纯图形元素。模板必须按 **120% ideScale** 标定
    （实测：屏幕缩放偏离 1.0 时，不缩放模板得分掉到 0.68~0.78，低于 0.85 阈值 → 表现为「明明在屏幕上却找不到」）。
 4. **硬编码坐标（最后手段）**：写完必须配一条 `verify.Guard.require()` 断言，否则布局一变就是白录。
+   **坐标类目标再按这三条走**（2026-11-01 验收轮实测，四类「点了没反应」全在探针侧）：
+   - **对话框内工具栏坐标每会话漂移 25~27px**：同一对话框、同一分辨率，两次会话按钮中心实测 y=226 vs 209、x=1305 vs 1342。复用上轮坐标＝整行点空。**读坐标靠裁剪放大**（`ImageGrab.crop(...).resize(2x)`）而不是看整屏截图，或**悬停到候选点看有没有 hover 高亮**自证。
+   - **脚本里的 `front()` 会把主窗提到模态对话框之上**，点击就落在主窗编辑器上——现象与「按钮不响应」完全一样。点对话框内控件时改用「`EnumWindows` 按 rect 命中该对话框 HWND → `SetWindowPos(HWND_TOP)` → `SetForegroundWindow`」，并读回 `GetForegroundWindow()==hwnd` 自证；**不要置前主窗**。
+   - **插件自绘工具栏/列表对 robot 树完全不可见**（全量查询只剩 `JBPanel`/`NonOpaquePanel` 这类平台壳）——此时别在组件树上耗时间，直接走「裁剪放大 + 悬停自证」。
+   - **阳性对照要选「点了一定会变」的按钮**：拿「格式化」对照已格式化的 SQL、拿「压缩」对照已压缩态都会没变化，从而把「点击没落上」误读成「整行不可达」。更省事的判据是**每次点击后立刻 grep 该动作的固定日志前缀**（如 `[M37.2] explainSql`），比看界面可靠。
 
 **正在推进的能力（报告 §5 第二期）**：robot-server 有未启用的 `/js/execute` 通道（反编译实证 + 20 项沙盒实测），
 可进程内触发 Action、读弹窗内部状态、30fps 截图、合成鼠标事件。接通后可用「等真实状态」替代 `sleep(3.6)` 这种猜时间。
