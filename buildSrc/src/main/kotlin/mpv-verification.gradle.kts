@@ -33,6 +33,10 @@ intellijPlatform {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
                 }
+                // T-Mcp261Verify（2026-11-01）：单跑 2026.1（261）目标。261 是 v2026.10.29 P0
+                // （MCP Server 全客户端 500）的发生版本，此前从未进过验证集合；本模式供该券
+                // 真机/兼容单点复验用，不进日常/发行门禁（发行仍走三版本全量）。
+                "261" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.1.5.1")
                 else -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
