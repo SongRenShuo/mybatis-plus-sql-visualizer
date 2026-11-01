@@ -821,8 +821,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
                 if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
             },
         )
-        // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板只刷新头部
-        // 绑定行与方言徽章，不重渲染 SQL、不新增常驻轮询。连接绑定本面板 Disposable，
+        // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板刷新头部
+        // 绑定行与方言徽章，并按新源方言重渲染 SQL（S2-4 券①：护栏见 rerenderIfBoundDialectDiffers
+        // ——仅绑定源证据、方言不同、用户未编辑；不新增常驻轮询）。连接绑定本面板 Disposable，
         // dispose 时自动注销（与上方设置 Topic 同款）。
         project?.messageBus?.connect(this)?.subscribe(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LAST_USED_CHANGE_TOPIC,

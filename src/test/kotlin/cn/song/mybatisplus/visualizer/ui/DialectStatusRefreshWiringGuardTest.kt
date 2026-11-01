@@ -56,6 +56,20 @@ class DialectStatusRefreshWiringGuardTest {
     }
 
     @Test
+    fun `last-used header refresh keeps sql rerender wired`() {
+        // S2-4 券①（T-DialectInferPollution P2）：换源成功事件链必须按新源方言重渲染，
+        // 不许退回「只刷头部」的 rerenderSql = false 旧形态（预览停留在旧方言渲染结果）。
+        val t = read("$root/DialectStatusRefresh.kt")
+        val fn = t.substringAfter("internal fun SqlPreviewPanel.refreshHeaderSourceNow")
+            .substringBefore("internal fun SqlPreviewPanel.applyDialectStatusSegment")
+        assertTrue("换源头部刷新链丢失 refreshDialectStatusRow 调用", fn.contains("refreshDialectStatusRow()"))
+        assertFalse(
+            "换源链不得传 rerenderSql = false（摘掉重渲染=退回券①之前的形态）",
+            fn.contains("rerenderSql = false"),
+        )
+    }
+
+    @Test
     fun `forceChoose gates silent reuse at both call sites`() {
         // T-DialectGateExit P0-3：两处静默路径都必须被 forceChoose 短路，否则「切换数据源」点了等于没点。
         // 同样只认未注释的行（防止注释掉的判据假绿）。
