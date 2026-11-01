@@ -324,17 +324,20 @@ class ExecDialectRoutingTest {
     @Test
     fun `接线守卫_执行文件方言映射走数据源方言路由`() {
         val selector = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
-        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        // T-ExecPlanEdtSlowOp：`createTempPsiFile` 一族（缓存命中路径 + BGT 预热链）已从
+        // DataSourceSelectorResults.kt 拆到 ExecTempFileFactory.kt，两条接线锚点随迁。
+        val factory = mainSource("cn/song/mybatisplus/visualizer/execute/ExecTempFileFactory.kt")
         assertTrue(
             "mapDialectBeforePsi 未接数据源方言路由（resolveTargetLanguage 缺失）——DM 等非 MySQL 数据源将从预览执行链隐形",
             selector.contains("resolveTargetLanguage(") && selector.contains("resolveTargetDataSource("),
         )
         assertTrue(
             "createTempPsiFile 缓存命中路径未对齐方言映射（缓存复用会跳过路由）",
-            Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,200}mapDialectBeforePsi""").containsMatchIn(results),
+            // 窗口 400：迁移后的调用点上方带 P-3 线程归属注释（setMapping 写仍落 EDT），200 会切在
+            // 注释中间；两处调用之间仍只有注释，没有第三个调用点
+            Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,400}mapDialectBeforePsi""").containsMatchIn(factory),
         )
-        val prewarmBody = results.substringAfter("internal fun DataSourceSelector.prewarmExecTempFileInner(")
-            .substringBefore("internal fun DataSourceSelector.buildConsoleSplitPane(")
+        val prewarmBody = factory.substringAfter("internal fun DataSourceSelector.prewarmExecTempFileInner(")
         assertTrue("prewarmExecTempFileInner 函数切片为空（扫描锚点漂移）", prewarmBody.contains("val ioFile"))
         assertTrue(
             "prewarmExecTempFileInner 未走统一方言映射入口（BGT 预热仍硬编码 MySQL）",

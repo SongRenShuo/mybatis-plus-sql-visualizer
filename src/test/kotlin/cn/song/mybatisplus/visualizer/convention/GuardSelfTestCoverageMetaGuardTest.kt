@@ -1237,6 +1237,20 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
                     "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
             ),
+            // ---- T-ExecPlanEdtSlowOp：执行计划链 EDT 慢操作收口守卫（2026-11-01） ----
+            GuardEntry(
+                "convention/ExecTempFileEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                ),
+                "exec 临时文件构建链的 EDT 慢操作守卫：2026-11-01 真机点「执行计划」时 " +
+                    "`createTempPsiFile → ReadAction.compute { PsiManager.findFile }` 跑在 EDT，平台抛 " +
+                    "SEVERE SlowOperations（三路共用入口：执行 SQL/执行计划/回滚快照）。判定内核按大括号" +
+                    "配平取真实函数体，扫四条规则（EDT 入口不得出现 PSI/ReadAction 且必须经异步入口、" +
+                    "慢段只允许被异步入口调用、异步入口须 isDispatchThread+池线程+invokeLater、" +
+                    "慢段须仍含 refresh+PSI 获取）。自证语料=「EDT 直做 PSI + 同步调用必被点名且合规异步" +
+                    "形态不误报」「工厂内第二处同步调用点必被抓」两例。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",

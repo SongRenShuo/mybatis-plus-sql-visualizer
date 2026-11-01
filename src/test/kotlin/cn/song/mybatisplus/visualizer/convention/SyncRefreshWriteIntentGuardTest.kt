@@ -18,12 +18,13 @@ import org.junit.Test
  * ## 规则
  *
  * - 规则一：`prewarmExecTempFileInner`（BGT 预热链本体）函数体内不得再现 `WriteIntentReadAction`；
- * - 规则二：`createTempPsiFile`（**EDT 冷路径**）必须保留 `WriteIntentReadAction` +
- *   `refreshAndFindFileByIoFile`——那是 T-ExecCopyFix F2b 修「262 平台 EDT + plain ReadAction 内
- *   同步 refresh 硬抛 write thread only」的修复本体，且 EDT 语境无自锁（会话在持锁的调用线程
- *   同步处理），勿顺手清理；
+ * - 规则二：`createTempPsiFile`（exec 临时文件慢段本体）必须保留 `WriteIntentReadAction` +
+ *   `refreshAndFindFileByIoFile`——WIRA 分支是**防御性 EDT 分支**（T-ExecCopyFix F2b 修「262 平台
+ *   EDT + plain ReadAction 内同步 refresh 硬抛 write thread only」的修复本体，EDT 语境无自锁）；
+ *   T-ExecPlanEdtSlowOp 后生产形态恒走 BGT 裸调分支（`createTempPsiFileAsync` 派发），
+ *   两条分支的线程要求相反，故 WIRA 只能留在 `isDispatchThread` 判定内，勿顺手清理；
  * - 规则三（全量扫描面）：全仓 main 源码中 WIRA `.compute` 块内含同步 refresh 的站点，
- *   白名单仅 DataSourceSelectorResults.kt 的 `createTempPsiFile` 函数体。
+ *   白名单仅 ExecTempFileFactory.kt 的 `createTempPsiFile` 函数体（上述防御分支）。
  *
  * 已知漏报边界（只漏报不误报）：`WriteIntentReadAction.run { }` 等非 `.compute` 形态不进扫描面
  * （仓内当前 0 处该形态包 refresh；`.compute` 是 Computable 重载的唯一入口，T-Wia262 定例）。
@@ -157,14 +158,19 @@ class SyncRefreshWriteIntentGuardTest : BannedApiScanSupport() {
         )
         val bodyText = masked.substring(body!!.first, body.last + 1)
         assertTrue(
-            "$WHITELIST_FUNCTION（EDT 冷路径）丢失 WriteIntentReadAction 包装——262 平台 EDT + plain " +
-                "ReadAction 内同步 refresh 硬抛 write thread only（T-ExecCopyFix F2b 修复本体，勿清理）；" +
-                "EDT 持 WIL 时刷新会话在调用线程同步处理，无自锁风险",
+            "$WHITELIST_FUNCTION（慢段本体）丢失 WriteIntentReadAction 包装——EDT 防御分支被清理后，" +
+                "262 平台 EDT + plain ReadAction 内同步 refresh 硬抛 write thread only（T-ExecCopyFix F2b " +
+                "修复本体，勿清理）；生产形态走 BGT 裸调分支，两条分支线程要求相反",
             WIRA_TOKEN in bodyText,
         )
         assertTrue(
             "$WHITELIST_FUNCTION 不再含同步 refresh——refresh 方式变更后须重新评审 F2b 语境与本守卫",
             SYNC_REFRESH_TOKEN in bodyText,
+        )
+        assertTrue(
+            "$WHITELIST_FUNCTION 的 WIRA 必须收在 isDispatchThread 判定内——T-ExecPlanEdtSlowOp 后生产" +
+                "形态在 BGT（裸调），无判定的 WIRA 会在池线程自锁（T-PrewarmWilDeadlock）",
+            bodyText.contains("isDispatchThread"),
         )
     }
 
@@ -255,9 +261,11 @@ class SyncRefreshWriteIntentGuardTest : BannedApiScanSupport() {
     private companion object {
         private const val WIRA_TOKEN = "WriteIntentReadAction"
         private const val SYNC_REFRESH_TOKEN = "refreshAndFindFileBy"
-        private const val EXEC_PREWARM_FILE = "execute/DataSourceSelectorResults.kt"
+        // T-ExecPlanEdtSlowOp：exec 临时文件工厂（含 BGT 预热链与慢段本体）已从
+        // DataSourceSelectorResults.kt 拆到独立文件，两条规则的白名单/扫描面同步迁移。
+        private const val EXEC_PREWARM_FILE = "execute/ExecTempFileFactory.kt"
         private const val PREWARM_FUNCTION = "prewarmExecTempFileInner"
-        private const val WHITELIST_FILE = "execute/DataSourceSelectorResults.kt"
+        private const val WHITELIST_FILE = "execute/ExecTempFileFactory.kt"
         private const val WHITELIST_FUNCTION = "createTempPsiFile"
     }
 }
