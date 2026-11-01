@@ -171,7 +171,7 @@ object ExplainIndexAdvisor {
             for (cell in row) {
                 // OceanBase：单列 `Query Plan`，值是 OB 自有 ASCII 计划树（表头 `|ID|OPERATOR|…`）。
                 // 以表头为门——其它方言的文本计划（H2/SQLite/Oracle）不含该表头，天然零命中。
-                if (OB_PLAN_HEADER.containsMatchIn(cell)) {
+                if (ObExplainPlanTextParser.OB_PLAN_HEADER.containsMatchIn(cell)) {
                     adviseObPlanText(cell, out)
                     continue
                 }
@@ -220,15 +220,15 @@ object ExplainIndexAdvisor {
      */
     private fun adviseObPlanText(text: String, out: MutableList<Hint>) {
         val lines = text.lines()
-        val headerIdx = lines.indexOfFirst { OB_PLAN_HEADER.containsMatchIn(it) }
+        val headerIdx = lines.indexOfFirst { ObExplainPlanTextParser.OB_PLAN_HEADER.containsMatchIn(it) }
         if (headerIdx < 0) return
-        val header = obRowCells(lines[headerIdx]) ?: return
+        val header = ObExplainPlanTextParser.obRowCells(lines[headerIdx]) ?: return
         val opCol = header.indexOfFirst { it.trim().equals("OPERATOR", ignoreCase = true) }
         val nameCol = header.indexOfFirst { it.trim().equals("NAME", ignoreCase = true) }
         val rowsCol = header.indexOfFirst { it.trim().equals("EST.ROWS", ignoreCase = true) }
         if (opCol < 0) return
         for (line in lines.drop(headerIdx + 1)) {
-            val cells = obRowCells(line) ?: continue
+            val cells = ObExplainPlanTextParser.obRowCells(line) ?: continue
             if (cells.size != header.size) continue // 列数不符 = 非计划行（分隔线/说明段），不猜
             val op = cells[opCol].trim()
             if (op.isEmpty()) continue
@@ -260,12 +260,8 @@ object ExplainIndexAdvisor {
         }
     }
 
-    /** OB ASCII 行 → 单元格清单（按 `|` 切，保留原始列数）；非 `|…|` 行（`===` 分隔线、说明段）返回 null。 */
-    private fun obRowCells(line: String): List<String>? {
-        val trimmed = line.trim()
-        if (trimmed.length < 3 || !trimmed.startsWith("|") || !trimmed.endsWith("|")) return null
-        return trimmed.substring(1, trimmed.length - 1).split('|')
-    }
+    // obRowCells / OB_PLAN_HEADER 已单源化移入 ObExplainPlanTextParser（T-ObPanelAdvice），
+    // 本 advisor 消费原始单列文本与解析后行列共用同一套切分原语。
 
     // ---------- PG/KingBase FORMAT JSON（T-ECH-03） ----------
 
@@ -385,9 +381,6 @@ object ExplainIndexAdvisor {
 
     /** F59（T-PerfSweep18）：文本树形态——`rows=N` 估算行数（同上提单例）。 */
     internal val PLAN_TEXT_ROWS = Regex("""rows=(\d+)""")
-
-    /** R45 ③：OceanBase ASCII 计划树表头（真机实证 `|ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|`）——OB 规则的门。 */
-    private val OB_PLAN_HEADER = Regex("""\|\s*ID\s*\|\s*OPERATOR\s*\|""")
 
     /** R45 ③：OB 全表扫算子（4.x 传统计划 `TABLE SCAN` / `TABLE FULL SCAN`）。 */
     private val OB_FULL_SCAN_OP = Regex("""(?i)^TABLE\s+(?:FULL\s+)?SCAN$""")
