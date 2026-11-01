@@ -53,6 +53,62 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **「生成 CRUD SQL」类编辑器右键动作**：菜单项在册可用截图留证，但弹层内交互不可靠——**行为语义改由生成器单测收口**。
 - **执行类**：数据源绑定缺失时可能弹「选择数据源」选择器——「面板无变化」类断言必须是「面板变化 OR 预期弹层在场」二者取一（实测过把选择器弹出误判成无变化）。
 
+## 通道类功能真机验证（增强 agent / MCP / 方言推断）
+
+面板类功能看 UI 就够，**通道类**（agent 织入、MCP 服务、方言推断）要验的是「数据真的从另一头过来了」，
+判据和坑都不一样。三套配方都是 2026-11-01~02 真机跑通的。
+
+### 增强捕获 agent：必须走 IDE Run 链路
+
+**外部启动的 JVM 挂不上**（实证）：`onProcessAppeared` 只接 IDE Run 链路（`RunConfigurationProcessListener`）；
+唯一覆盖外部 JVM 的入口是设置变更**上升沿**（`enhancedCaptureEnabled` false→true → `scanAndAttachRunningProcesses`），
+而真机把「增强捕获」关→开→Apply 之后该上升沿日志并未出现（`设置变更：增强捕获重新开启` 零命中），
+**是否设置页 apply 真跑了至今未定论**（该字段默认 true，不落盘，证明不了）。别在这条路上继续耗。
+
+**正解**：让平台自己注入 `-javaagent`——
+1. demo `pom.xml` 加**system-scope** 依赖指向厂商驱动 jar（jar 直接取插件沙盒 `plugins-test/<plugin>/lib/` 里那份，与插件在用的是同一批）；
+2. 改 `src/main/resources/application.yml` 的 datasource 四项（驱动类/URL/账号/密码）；
+3. IDE 里 Shift+F10 跑应用（Run 配置已存在）→ `updateJavaParameters` 自动注入 agent → premain 回连 → 事件进面板；
+4. 每族跑 ~40s（定时任务每 3s 一条），读面板角标后换下一族（**会弹「Process is running，Stop and Run」**，点它）。
+
+**给 `target/classes` 解压驱动再跑不成立**——`DataSourceProperties.determineDriverClassName` 断言失败（驱动类不在运行 classpath），
+必须走 pom。三族实测角标：`[HighGo]` / `[Vastbase]` / `[Kingbase]（人大金仓）`，**同一份代码换 datasource 即换角标**。
+
+**顺手确认一件重要的事**：失败语句**同样回流**（三族都对 PG 族保留字 `user` 报 `column "id" does not exist`，
+面板照常出条目并带 `Caused by: … PSQLException`）——说明捕获钩子挂在执行入口而非成功分支。
+所以「条目里有错误链」不是缺陷，反而证明钩子位置对。
+
+### MCP Server：跨版本真机验证不改构建基准
+
+**不要试图用 `-PplatformVersion=<高版本>` 编高版本沙盒**（实证：261 上 `compileJava` 35 错，
+`ContentManagerEvent`/`SearchSession` 等在 261 已拆成独立模块，得补一堆 `bundledModule`）。
+**正解＝基线产物装进目标版本 IDE**（plugin.xml `since-build=243` 无 `until-build`，向上兼容是设计内）：
+
+1. `./gradlew buildPlugin -PgifRecord=false` 出 zip；
+2. 解压进目标 IDE 的插件目录（用 `-Didea.plugins.path=<私有目录>` 隔离，别污染宿主）；
+3. 目标 IDE 用**私有副本**：`-Didea.config.path` / `-Didea.system.path` 指到独立目录，
+   `idea.key` 拷进 config，许可 agent 写进**该副本**的 `bin/idea64.exe.vmoptions`；
+4. 设置页 Tools › MCP Server 勾 Enable（平台有二次确认框，点 Enable）→ OK。
+
+**客户端探针不用装 MCP 客户端**（`curl` 就够）：
+
+```
+curl -N http://127.0.0.1:64342/sse          # 收 event: endpoint + sessionId
+POST /message?sessionId=<sid>  initialize   # → 202 accepted（500 即 P0 复发）
+POST /message?sessionId=<sid>  notifications/initialized
+POST /message?sessionId=<sid>  tools/list   # 数 sqlv_* 个数
+POST /message?sessionId=<sid>  tools/call   # 参数里必须带 projectPath，否则报「无法确定目标工程」
+```
+结果从 SSE 的 `data:` 行读。**判据三层**：端点 200+sessionId / `initialize` 非 500 / `tools/call` `isError:false`；
+再加一条负向对照——日志里 P0 特征签名（`CollectionsKt.addAll` NPE、`Parameter specified as non-null is null`、`HTTP 500`）**零命中**。
+
+### 方言推断类：夹具必须是「恰好」的目标形态
+
+验「非 SQL 源不再带偏推断」时，`.idea/dataSources.xml` 要改成**恰好 1 个 SQL 源 + 1 个非 SQL 源**，
+**必须移除原有的其它 SQL 源**——留着原 MySQL 源就变成「两 SQL 源」，本身就是歧义，测不到修复。
+判据＝预览头「方言: X」；本轮 1 PG + 1 Redis → 推断出 **PostgreSQL**（旧实现会判 AMBIGUOUS 回落 MySQL 兜底）。
+注意「数据源（上次使用）」显示已删除的旧源属缓存残留，只影响执行默认连接、不影响推断结论。
+
 ## 截图与证据纪律
 
 - **全屏帧是默认**（`ImageGrab.grab()` 无参）：toast 在屏幕右下、独立窗口可能置后——`bbox=rect` 只拍面板内部会把它们裁掉，制造「无通知/无输出」假象（实锤过一整轮误诊）。
@@ -77,7 +133,7 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **万条/大文本语料**：合成文件显式标 synthetic（编号、哨兵词如 `UI_MATCH` 恰 N 条、五种耗时循环），落盘前用**在役 JAR 的同类**（如 `SqlLogFileReader`/`HistorySearchService`）读回核数；**首版探针的期望值要对照源码常量**（如 `HARD_MAX_RESULTS=100`——期望 1000 被钳到 100 是探针错不是产品错）。
 - **「插件生成的坏 SQL」夹具**：预览入口不可点达时，在 demo 仓临时加 `@Select("SELECT 错列 FROM …")` + 触发端点，验完 `git checkout` 撤销并确认干净。
 - **PG/非默认方言**：手写 `.idea/dataSources.xml` **注册表条目**可行（模型文件被 DAS 隔离）；驱动树整拷沙盒 `config/jdbc-drivers/<Driver>/` 免下载；口令经 dbx MCP 先验再走 IDE Change Credentials（Until restart）；**首连前的源不进控制台选择器**，先经 Data Sources 对话框触碰一次。
-- demo 应用**必须从 IDE 里 Run**（外部启动捕获链挂不上）；控制台通道条目无方言/耗时/源码（那是增强 agent 通道才有）——「列表没这些列」先查通道再疑缺陷。
+- demo 应用**必须从 IDE 里 Run**（外部启动捕获链挂不上，配方见「通道类功能真机验证」节）；控制台通道条目无方言/耗时/源码（那是增强 agent 通道才有）——「列表没这些列」先查通道再疑缺陷。
 - **Database 控制台执行的 SQL 不进捕捉面**（2026-10-31 实测）：诊断行恒「已挂载 0 个」。要 SQL 条目必须让应用自己执行（定时任务/接口）。
 - **沙盒构建静默死亡先查外部工程配置**（2026-10-31）：`build.log` 停在 `Pre-loaded process ready` + 运行配置报 `Process not started` ⇒ 查 `<sandbox>/system/projects/<proj>.<hash>/external_build_system/modules/<module>.xml` 的 `LANGUAGE_LEVEL`（改 demo `.idea/compiler.xml` 无效）。
 

@@ -53,6 +53,8 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 8. **常驻截图工具录制期临时退出**（PixPin 实录为头号干扰源）：全局热键劫持面广（Ctrl+Shift+A/F12、Alt+1 等），其弹窗对合成点击免疫成僵尸弹窗，低层钩子还随机吞合成事件（症状=输入时灵时不灵）。`taskkill //IM PixPin.exe //F` 后全部恢复，录完重启（安装路径先 wmic 查；提权进程如 Snipaste 杀不掉，一般不捣乱）。ZCode 桌面通知 toast 会抢焦点顶掉打开中的浮层——动作链必须在单脚本内一次跑完，不留跨调用间隙。
 9. **录「执行类」画面（EXPLAIN / 执行 SQL / 真实结果）前，核对 IDE 数据源的连接参数与应用配置逐字一致**。本项目实测：应用 `application.yml` 的 MySQL URL 带 `sessionVariables=sql_mode=ANSI_QUOTES`，而 `.idea/dataSources.xml` 里的同名数据源没有 → 同一句 `FROM "user"` 应用能跑、IDE 侧报 `1064`，白查数小时（详见坑表 29）。两边 URL 拉平后**需重启 IDE 生效**（`.idea/` 通常已 gitignore，属本机状态不进仓）。
 11. **录「执行类」画面还要确认沙盒 JDBC 驱动是两份文件齐全**（2026-11-01 实测）：`config/jdbc-drivers/`（目录清单+jar）只说明有哪些版本，`config/options/databaseDrivers.xml`（已安装状态，形如 `<driver id="mysql.8"><artifact id="MySQL ConnectorJ" version="9.7.0"/></driver>`）才决定 driver id 绑哪个 artifact。只拷前者 → 远程 JDBC 进程 classpath 空 → `RemoteProcessSupport … ClassNotFoundException`，画面表现为「执行/EXPLAIN 静默回退原生控制台」，很容易拍出一条「看着正常其实功能没跑」的废片。做法＝整份拷宿主 `config/options/databaseDrivers.xml` + 确认 jar 实体在场 + 重启 IDE；**别改 `driver-ref` 为 `artifact/version` 写法**（IDE 会回写成 `mysql.8`）。
+12. **要拍「信创/多库真实捕获」画面，先给 demo 补驱动再起应用**（2026-11-02 真机实证）：demo 默认只有 MySQL 驱动，换 datasource 到瀚高/海量/金仓会起不来（`DataSourceProperties.determineDriverClassName` 断言失败）。做法＝`pom.xml` 加**system-scope** 依赖指向厂商 jar（jar 直接取插件沙盒 `plugins-test/<plugin>/lib/` 里那份，与插件在用的是同一批）+ 改 `src/main/resources/application.yml` 的 datasource 四项，然后**在 IDE 里 Shift+F10 起应用**——平台 `updateJavaParameters` 会自动注入 `-javaagent`，增强捕获链路才通（外部启动的 JVM 挂不上，见验收 skill「通道类功能真机验证」）。**往 `target/classes` 解压驱动再跑不成立**（驱动类不在运行 classpath）。换族时会弹「Process is running，Stop and Run」，点它即可；每族跑 40s 攒够条目再换。录完把 pom/yml/`lib/` 全部还原。
+13. **要在比构建基线更新的 IDE 上录**（如 2026.1/261）：**不要改 `-PplatformVersion` 重编**（高版本把 `ContentManagerEvent`/`SearchSession` 等拆成独立模块，`compileJava` 会报一堆找不到符号）。正解＝基线版本 `buildPlugin` 产物解压进目标 IDE 的插件目录（plugin.xml `since-build=243` 无 `until-build`，向上兼容是设计内），目标 IDE 用私有 `-Didea.config/system/plugins.path` 隔离副本 + 拷 `idea.key` + 许可 agent 写进该副本的 `idea64.exe.vmoptions`。画面差异（新 UI 细节、设置页布局）属预期，成片前请用户确认要不要在旧版本重录。
 10. **要拍设置页里「首屏之下」的分组，先请用户把设置页滚到位**（合成滚动是 no-op，见坑表 35）——这条要在开工前就问，别等到录的时候才发现够不着。
 
 ## 工作流
@@ -206,6 +208,18 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
 | `create_database_connection` / `edit_database_connection` | 建/改数据源（`name`/`dbms`/`url`/`needToCheckDs`，凭据可写进 URL） |
 | `list_database_connections` / `list_database_schemas` / `test_database_connection` | 查连接与 schema、验连通 |
 | `execute_sql_query` | 直接跑 SQL 验数据 |
+
+### 最小连通性自证（不装 MCP 客户端）
+
+怀疑 MCP Server 没起来时，`curl` 就够，不必绕 ZCode 的 mcp.servers 配置：
+
+```
+curl -N http://127.0.0.1:64342/sse           # 收 event: endpoint + sessionId（401 = 没启用；500 = 平台契约问题）
+POST /message?sessionId=<sid>  {"method":"initialize",...}    # 202 = 通
+POST /message?sessionId=<sid>  {"method":"notifications/initialized"}
+POST /message?sessionId=<sid>  {"method":"tools/list"}         # 数工具个数
+```
+结果从 SSE 的 `data:` 行读，工具调用参数里**必须带 `projectPath`**。这套探针也用于跨版本验证平台 MCP 是否被插件拖挂（判据：`initialize` 非 500 + 日志无 `CollectionsKt.addAll` NPE）。
 
 ### 三个实测约束
 
