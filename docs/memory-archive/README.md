@@ -10,7 +10,7 @@
 
 ---
 
-## 已修复 Bug（178 个）
+## 已修复 Bug（188 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -279,6 +279,17 @@
 | [project-string-sql-method-anchor](bug-fixes/project-string-sql-method-anchor.md) | T-DaoSql 自研 DAO 字符串 SQL 预览与方法定义锚点（2026-09-06 交付，master 8087c4a）——DAO_STRING_SQL_METHODS 白名单/实参扫描取 SQL/JdbcTemplate gutter 家族守卫排除制/StringSqlMethodGutterLineMarkerProvider；已知边界=运行时构造 SQL 静态不可还原；runIde 真机截图待补 |
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
+
+| [project-xc-dialects3-research.md](bug-fixes/project-xc-dialects3-research.md) | T-XcDialects3 三方言支持已在 dev 全部实施收口并推双仓（20261030：门禁 8492/0/0/9+verifyGate 3/3+三族真机渲染套件 153/201/118 词全 PASS）——真正拍板点＝dev 14 方言态何时合回 master；仍欠 runIde 走查与增强捕获 attach 端到端 |
+| [project-capture-dialect-independence.md](bug-fixes/project-capture-dialect-independence.md) | 采集能力与方言解耦（20261030 已立项 T-CaptureCatchAll / O-155）——两条链方言依赖度、catch-all 走「白名单优先+接口兜底」的定案、兜底面刻意不含 ADD_BATCH 的安全取舍、公开仓与内部库分仓规则 |
+| [project-releaseperf10-watermark-lanes.md](bug-fixes/project-releaseperf10-watermark-lanes.md) | T-ReleasePerf10（20261030 已合 master `16fa3ad3` 并推双仓，工作树与 分支已删）——水位自适应限流/快速失败闸门/memory-hygiene/verifyMarketplaceRefresh 已落地；定案=releaseGate 墙钟 ≈ verifyMarketplace 本体（50min 那轮是冷构建+抢占的异常）， 测试档位默认封顶 3 |
+| [project-perf-review-round6-20261030.md](bug-fixes/project-perf-review-round6-20261030.md) | IDEA 性能影响第六期复查（20261030 已交付）——系列首次高风险清零，R29-1 已由 T-PerfSweep29 券01 修复并合并；全量 8433/4/0/8，4 红为三方言表既有红 |
+| [project-stack-digest-biz-frame.md](bug-fixes/project-stack-digest-biz-frame.md) | T-StackBizFrame 已实施（20261029）——增强捕获栈快照看不到项目调用类的根因与三层锚点/S2 修法、门禁读数，以及「目录来源判据」真机探针结论（目录来源稳定 false、受限 TCCL 下退化为 null ⇒ loader hint 是必要条件） |
+| [project-competitive-round34.md](bug-fixes/project-competitive-round34.md) | 竞品横向对比第三十四轮（20261031 落档未提交）——beta 双发未上货架、脉冲首次回落 25.7/天、FR-0045 五支+推债零远端留底、 zMyBatis 仓归属口径订正（真仓 luceat-lux-vestra）、DBX 2 feat 边缘试水 EXPLAIN 16 窗零增量；本轮占 O-158/D206~D207/V232~V233/#307~309 |
+| [project-panorama-round24.md](bug-fixes/project-panorama-round24.md) | 第二十四轮全景审计（20261031 晚）——合流拓扑坍缩为两棒、328 笔零冲突、竞品 CHP 已压上 MCP+agent 两根柱子 |
+| [project-docsrefresh1023-remaining-recordings.md](bug-fixes/project-docsrefresh1023-remaining-recordings.md) | T-DocsRefresh1023 文档站动图重录——10-22 会话进展、6 动图 3 截图状态、已验证的全部坐标与时序坑 |
+| [project-settings-convergence.md](bug-fixes/project-settings-convergence.md) | #18 设置收敛（S2-6 / NEW-14）——54 个 Boolean 的四类分档、四阶段实施顺序与两条红线（不删设置项、不改默认值） |
+| [project-nineteenth-round-acceptance-gaps.md](bug-fixes/project-nineteenth-round-acceptance-gaps.md) | 第十九轮代码与自动门禁已收口后的正式验收债——V178/V179/V182、O-147 后修版接管与真 Runner/真库尚未验；仓库缺对应验收文档，需按 UI/真库/agent/隐私门四册补齐。 |
 
 ## 已解决踩坑（84 个）
 
