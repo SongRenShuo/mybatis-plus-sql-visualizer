@@ -81,13 +81,43 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
         // 投递模态 = nonModal（构造期即登记为 write-safe），**不是 any()**：any() 排出的回调
         // 不套 runWithWritingAllowed，续接链的文档写必触发 TransactionGuard 的 Write-unsafe 断言
         // （2026-11-01 真机回归，见方法 KDoc「写安全」节）。守卫：ExecTempFileEdtGuardTest。
-        app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
+        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
         return
     }
     app.executeOnPooledThread {
         val pair = createTempPsiFile(project, sql, renderedDialectName)
-        app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
+        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
     }
+}
+
+/**
+ * T-ExecPsiInvalid（2026-11-01 全量门禁实证）：异步窗口内的 **PSI 失效兜底**。
+ *
+ * 缺陷形态：`createTempPsiFile` 在池线程 `findFile` 拿到的 [PsiFile] 到 EDT 回调消费之间有一个
+ * 空窗。空窗里只要该文件的内容发生一次变化（doc 驱动的三方同步落盘、防抖自动落盘、用户/其他
+ * 写方覆盖 `mpsql-exec.sql`），平台就会丢掉旧 PSI——`vf.isValid` 仍为 true（**只有内容变了**），
+ * 而 `psi.text` 硬抛 `PsiInvalidElementAccessException: different providers: …; null(0)`。
+ * 旧同步实现把整段压在 EDT 上，EDT 被占住时排队的内容变化落不下来，所以该窗口一直没暴露；
+ * 改异步后它成了真窗口（门禁 shard2 实证：8900 例中唯一红点）。
+ *
+ * 兜底口径：**只有 PSI 失效才重解析**（有效即原样返回，热路径零额外开销）；重解析仍失败则
+ * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。
+ * 调用点固定为 EDT 投递 lambda 内（守卫 ExecTempFileEdtGuardTest 规则五同时盯住投递模态）。
+ */
+internal fun revalidateOnEdt(
+    project: Project,
+    pair: Pair<VirtualFile, PsiFile>?,
+): Pair<VirtualFile, PsiFile>? {
+    if (pair == null) return null
+    val (vf, psi) = pair
+    if (psi.isValid) return pair
+    val fresh = try {
+        ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
+    } catch (e: Throwable) {
+        if (FatalErrors.isFatal(e)) throw e
+        null
+    }
+    return if (fresh != null && fresh.isValid) vf to fresh else null
 }
 
 /**

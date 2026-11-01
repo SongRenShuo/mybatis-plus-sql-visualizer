@@ -1322,7 +1322,8 @@ object DataSourceSelector {
     internal fun consumeCachedTempPsiFile(project: Project): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return cachedTempPsiFile?.let { (vf, psi) ->
-            if (isCacheUsable(project, vf)) {
+            // T-ExecPsiInvalid：vf.isValid 判不出 PSI 失效（内容一变就丢旧 PSI），须同时看 psi.isValid
+            if (isCacheUsable(project, vf) && psi.isValid) {
                 LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
                 vf to psi
             } else {

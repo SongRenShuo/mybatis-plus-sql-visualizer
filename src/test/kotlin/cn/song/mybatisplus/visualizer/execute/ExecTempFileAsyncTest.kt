@@ -7,6 +7,9 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -86,5 +89,41 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
             sql,
             String(ready.first.contentsToByteArray(), Charsets.UTF_8),
         )
+    }
+
+    /**
+     * T-ExecPsiInvalid（2026-11-01 全量门禁 shard2 实证）：异步窗口内 PSI 失效必须被兜住。
+     *
+     * 形态：池线程 `findFile` 拿到 PSI → 文件内容变化（doc 落盘/自动保存/其他写方覆盖）→ 平台
+     * 丢弃旧 PSI（`vf.isValid` 仍 true，只有内容变了）→ EDT 回调里读 `psi.text` 硬抛
+     * `PsiInvalidElementAccessException: different providers: …; null(0)`。
+     *
+     * 本用例直接钉兜底内核 [revalidateOnEdt]：先造一个**已失效**的 PSI（写内容把它顶掉），
+     * 再断言兜底返回的是**新解析出的有效 PSI 且内容为新内容**。反向验证：把 [revalidateOnEdt]
+     * 改成直返 `pair`，本用例必红（读到死 PSI 抛 PsiInvalidElementAccessException）。
+     */
+    fun testRevalidateOnEdtRebuildsInvalidatedPsi() {
+        val file = myFixture.addFileToProject("exec/psi-revalidate.sql", "SELECT 1")
+        val stalePsi = file
+        val staleVf = file.virtualFile
+        assertTrue("夹具前提：初始 PSI 有效", stalePsi.isValid)
+
+        // 删除旧文件把 PSI 打成失效（平台没有公开的「只失效 PSI」入口；删除是最贴近真实的形态：
+        // 用户/其他写方把 mpsql-exec.sql 换掉或删掉后，缓存槽里躺着的正是这种死 PSI）
+        ApplicationManager.getApplication().runWriteAction { staleVf.delete(this) }
+        assertFalse("夹具前提：文件删除后旧 PSI 必须已失效", stalePsi.isValid)
+
+        val fresh = myFixture.addFileToProject("exec/psi-revalidate.sql", "SELECT 2")
+        val rebuilt = revalidateOnEdt(project, fresh.virtualFile to stalePsi)
+        assertNotNull("PSI 失效后必须重解析成功，而不是把死 PSI 递进续接链", rebuilt)
+        assertTrue("重解析结果必须有效", rebuilt!!.second.isValid)
+        assertNotSame("必须换成新 PSI 实例（复用死 PSI 等于没兜）", stalePsi, rebuilt.second)
+        assertEquals("重解析结果内容应为最新内容", "SELECT 2", rebuilt.second.text)
+        assertSame("VF 不应被替换", fresh.virtualFile, rebuilt.first)
+
+        // 有效 PSI 走热路径：原样返回，不额外重解析
+        val hot = revalidateOnEdt(project, rebuilt)
+        assertSame("有效 PSI 必须原样返回（热路径零额外开销）", rebuilt.second, hot!!.second)
+        assertNull("null 入参原样透传（建链失败语义不变）", revalidateOnEdt(project, null))
     }
 }
