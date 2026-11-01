@@ -167,15 +167,18 @@ object ExplainIndexAdvisor {
     fun ruleInventory(): List<RuleInfo> = RULE_INVENTORY
 
     private fun advisePlanText(rows: List<List<String>>, out: MutableList<Hint>) {
+        // OceanBase：真机形态是**单列 × 多行**（计划文本一行一个 cell），必须先按行序展平成
+        // 行列表再判表头门——逐 cell 扫会让表头单独命中、其后行不在同一 cell，建议永不触发
+        // （2026-11-01 真机报障的同一根因）。展平同时兼容「单 cell 装整段多行」的合成形态。
+        // 表头为门——其它方言的文本计划（H2/SQLite/Oracle）不含该表头，天然零命中。
+        val planLines = ObExplainPlanTextParser.planLines(rows)
+        if (planLines.any { ObExplainPlanTextParser.OB_PLAN_HEADER.containsMatchIn(it) }) {
+            adviseObPlanText(planLines, out)
+            return
+        }
+        // PG 文本树：`Seq Scan on big_table  (cost=… rows=…)`——逐 cell 匹配（原口径不变）
         for (row in rows) {
             for (cell in row) {
-                // OceanBase：单列 `Query Plan`，值是 OB 自有 ASCII 计划树（表头 `|ID|OPERATOR|…`）。
-                // 以表头为门——其它方言的文本计划（H2/SQLite/Oracle）不含该表头，天然零命中。
-                if (ObExplainPlanTextParser.OB_PLAN_HEADER.containsMatchIn(cell)) {
-                    adviseObPlanText(cell, out)
-                    continue
-                }
-                // PG 文本树：`Seq Scan on big_table  (cost=… rows=…)`
                 val m = SEQ_SCAN_ON.find(cell) ?: continue
                 val rowsN = PLAN_TEXT_ROWS.find(cell)?.groupValues?.get(1)?.toLongOrNull()
                 if (rowsN == null || rowsN >= ROWS_THRESHOLD) {
@@ -212,14 +215,26 @@ object ExplainIndexAdvisor {
      * 与**算子名**，表扫行本身未逐字落盘——本解析只按表头声明的列名取值（OPERATOR/NAME/EST.ROWS），
      * 不按固定列位猜，故列宽/补空格差异不影响。
      *
+     * 2026-11-01 真机修正：入参改为**已按行序展平的行列表**（[ObExplainPlanTextParser.planLines]）。
+     * 真机 `EXPLAIN SELECT * FROM t_order` 返回的是单列 × 多行（每行一个 cell，中间还有空行），
+     * 逐 cell 传单行文本会让表头单独命中、其后行取不到——建议永不触发。真机原文（OB CE 4.3.5.6）：
+     * ```
+     * |ID|OPERATOR |NAME |EST.ROWS|EST.TIME(us)|
+     *
+     * |0 |TABLE FULL SCAN|t_order|3 |3 |
+     *
+     * Outputs & filters:
+     *   ------------------------------------
+     *   output([t_order.id], …)
+     * ```
+     *
      * 规则口径：
      *  - `TABLE SCAN` / `TABLE FULL SCAN`（全表扫）→ [Hint.rule] `TABLE_FULL_SCAN`，EST.ROWS 超阈才提示；
      *  - `TABLE RANGE SCAN`（走索引的范围扫）→ 不报「缺索引」，只在 EST.ROWS 超阈时报
      *    `HIGH_ROWS_ESTIMATE`（选择性差 / 大范围扫，与 MySQL 档同规则码同语义）；
      *  - `TABLE GET` / `EXPRESSION` 等其它算子不产出建议（点查与常量计划无索引话题）。
      */
-    private fun adviseObPlanText(text: String, out: MutableList<Hint>) {
-        val lines = text.lines()
+    private fun adviseObPlanText(lines: List<String>, out: MutableList<Hint>) {
         val headerIdx = lines.indexOfFirst { ObExplainPlanTextParser.OB_PLAN_HEADER.containsMatchIn(it) }
         if (headerIdx < 0) return
         val header = ObExplainPlanTextParser.obRowCells(lines[headerIdx]) ?: return
