@@ -35,6 +35,15 @@ object ExplainPanelChannel {
     fun supportsStructuredFormat(format: ExplainOutputFormat?): Boolean =
         format != null && format in STRUCTURED_FORMATS
 
+    /**
+     * T-ObPanelAdvice：该方言的 TEXT 档是否有面板结构化解析面——唯一在册的是 OceanBase
+     * （ASCII 计划树可解析成结构化行列，`ExplainSupport.Entry.structuredTextPlan` 显式登记）。
+     * 其余 TEXT 档（H2/SQLite/Oracle）维持无解析面（不硬解析红线）。
+     */
+    fun isStructuredTextPlan(dialectName: String?): Boolean =
+        cn.song.mybatisplus.visualizer.sql.ExplainSupport.entryFor(dialectName)
+            ?.let { it.outputFormat == ExplainOutputFormat.TEXT && it.structuredTextPlan } == true
+
     /** 通道判定结果（三类可区分——提示文案不同，合并会让用户拿到错的解释，ExplainGate 同款口径）。 */
     sealed interface Decision {
         /** 走结构化通道（自建执行链 + 面板渲染）。 */
@@ -63,18 +72,28 @@ object ExplainPanelChannel {
          * 落回直送通道（控制台如实呈现语法错）。
          */
         UNFILLED_PARAMS,
+
+        /**
+         * T-ObPanelAdvice：OB TEXT 档的 ASCII 计划树解析不出结构化行列（计划形态不支持，
+         * 如引擎版本输出形态漂移）——fail-closed 收窄后的唯一解析侧回退点：明示原因后
+         * 落回直送通道（原生控制台如实呈现计划原文）。
+         */
+        TEXT_PLAN_UNPARSEABLE,
     }
 
     /**
      * 通道判定（纯函数，无 IDE 类型——EDT 直调安全）。
      *
      * 判定序：① 开关关 → 直送；② 格式非结构化档（TEXT/XML/未知，含 R23 Oracle 二段式与
-     * SQL Server XML——**不硬解析**红线）→ 直送；③ database 插件不在场 → 回退（提示）；
+     * SQL Server XML——**不硬解析**红线）→ 直送，唯一例外是 T-ObPanelAdvice：TEXT 档但
+     * [isStructuredTextPlan] 在册的方言（OceanBase）放行——其解析失败由执行回调侧
+     * （TEXT_PLAN_UNPARSEABLE）收窄收口；③ database 插件不在场 → 回退（提示）；
      * ④ 无已绑数据源 → 回退（提示）；⑤ SQL 仍含未回填 `?`（R33 真机走查修复）→ 回退（提示）；
      * ⑥ 全部成立 → 结构化。
      *
      * `hasUnfilledParams` 默认 false 只为既有调用点零改编译——面板接线必须显式传
      * 占位探测结论（WiringGuard 钉住），漏传会让语法错场景重新滑进结构化探测。
+     * `dialectName` 默认 null 同理（既有用例/调用点零改编译；不传时 TEXT 档一律直送）。
      */
     fun decide(
         enabled: Boolean,
@@ -82,9 +101,15 @@ object ExplainPanelChannel {
         databaseAvailable: Boolean,
         hasBoundDataSource: Boolean,
         hasUnfilledParams: Boolean = false,
+        dialectName: String? = null,
     ): Decision {
         if (!enabled) return Decision.DirectSilent
-        if (format == null || format !in STRUCTURED_FORMATS) return Decision.DirectSilent
+        if (format == null) return Decision.DirectSilent
+        if (format !in STRUCTURED_FORMATS &&
+            !(format == ExplainOutputFormat.TEXT && isStructuredTextPlan(dialectName))
+        ) {
+            return Decision.DirectSilent
+        }
         if (!databaseAvailable) return Decision.DirectFallback(FallbackReason.NO_DATABASE_PLUGIN)
         if (!hasBoundDataSource) return Decision.DirectFallback(FallbackReason.NO_DATA_SOURCE)
         if (hasUnfilledParams) return Decision.DirectFallback(FallbackReason.UNFILLED_PARAMS)

@@ -70,6 +70,13 @@ object ExplainSupport {
          * 输出与无此字段时逐字节一致（防回归硬门禁的判据）。
          */
         val channelNote: String? = null,
+        /**
+         * TEXT 档但面板结构化通道**有解析面**的显式登记（T-ObPanelAdvice）：该方言的 TEXT
+         * 输出是可解析成结构化行列的计划表（OceanBase ASCII 计划树），解析成功即进
+         * EXPLAIN 面板，fail-closed 收窄为「解析失败才回退原生」。默认 false = 无解析面
+         * （H2/SQLite/Oracle 等 TEXT 档维持整族直送——不硬解析红线）。
+         */
+        val structuredTextPlan: Boolean = false,
     ) {
         /** 本方言是否接入 EXPLAIN。 */
         val supported: Boolean get() = template != null
@@ -154,6 +161,7 @@ object ExplainSupport {
                 "（算子 TABLE RANGE SCAN、含 partitions/is_index_back），非官方文档所述的 TRADITIONAL 表格行；" +
                 "EXPLAIN FORMAT=JSON 为 OB 专用紧凑 JSON（ID/OPERATOR/EST.ROWS），非 MySQL query_block。" +
                 "档位误登 TABLE 会让索引建议走 MySQL 列名分支而永不触发（T-OBExplainFormat）",
+            structuredTextPlan = true,
         ),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
         Entry(

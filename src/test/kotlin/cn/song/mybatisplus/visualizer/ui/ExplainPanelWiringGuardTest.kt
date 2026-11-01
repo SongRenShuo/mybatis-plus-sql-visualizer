@@ -194,6 +194,39 @@ class ExplainPanelWiringGuardTest {
         )
     }
 
+    /**
+     * T-ObPanelAdvice：OB TEXT 档结构化接线钉。解析成功必须进面板（结构化视图），
+     * 解析失败才回退原生（fail-closed 收窄后的唯一解析侧回退点）；建议必须按**原始行列**
+     * 计算（OB 单列 ASCII 树是建议器既有输入形态，解析后行列取不到表头门）。
+     * 摘掉任一件：parse 分支删了 OB 回到原生（建议永不进面板）、advise 改喂解析后行列
+     * （建议静默消失）、回退分支删了解析失败场景失控。
+     */
+    @Test
+    fun `T_ObPanelAdvice_OB解析接线在位`() {
+        val body = functionBody(sqlPreviewPanelSource(), "internal fun SqlPreviewPanel.submitExplainOrStructured(")
+        assertTrue(
+            "OB TEXT 档必须在结构化 onPlan 链上解析（ObExplainPlanTextParser.parse）",
+            body.contains("ObExplainPlanTextParser.parse(submitted.raw)"),
+        )
+        assertTrue(
+            "OB 解析必须以通道在册判定为门（isStructuredTextPlan）",
+            body.contains("ExplainPanelChannel.isStructuredTextPlan(dialect.name)"),
+        )
+        assertTrue(
+            "索引建议必须按原始行列计算（解析后行列过不了建议器的表头门）",
+            body.contains("submitted.raw.headers, submitted.raw.rows"),
+        )
+        assertTrue(
+            "解析失败必须回退原生（TEXT_PLAN_UNPARSEABLE + submitExplainDirect）",
+            body.contains("FallbackReason.TEXT_PLAN_UNPARSEABLE") &&
+                body.contains("submitExplainDirect(proj, explainSql, dialectGateRequest)"),
+        )
+        assertTrue(
+            "解析产物必须按 TABLE 渲染进视图（否则 ExplainPlanResultView 落 unsupportedFormat 占位）",
+            body.contains("ExplainOutputFormat.TABLE"),
+        )
+    }
+
     @Test
     fun `打开控制台按钮双语文案在场`() {
         for (path in listOf(

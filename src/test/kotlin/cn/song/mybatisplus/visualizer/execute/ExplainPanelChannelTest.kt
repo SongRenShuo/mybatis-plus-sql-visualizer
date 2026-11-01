@@ -170,4 +170,73 @@ class ExplainPanelChannelTest {
             ) as ExplainPanelChannel.Decision.DirectFallback).reason,
         )
     }
+
+    // ------------------------------------------------------------------
+    // 第五组（T-ObPanelAdvice）：OB TEXT 档放行——structuredTextPlan 在册方言的唯一例外
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `准入_OB_TEXT档在册放行`() {
+        assertEquals(
+            ExplainPanelChannel.Decision.Structured,
+            ExplainPanelChannel.decide(
+                enabled = true,
+                format = ExplainOutputFormat.TEXT,
+                databaseAvailable = true,
+                hasBoundDataSource = true,
+                dialectName = "OceanBase",
+            ),
+        )
+    }
+
+    @Test
+    fun `直送_TEXT档其余方言不放行`() {
+        // Oracle（二段式）/H2/SQLite 的 TEXT 无解析面（Entry.structuredTextPlan 默认 false）
+        for (dialect in listOf("Oracle", "H2", "SQLite", "DM（达梦）")) {
+            assertEquals(
+                "TEXT 档方言 $dialect 必须维持直送",
+                ExplainPanelChannel.Decision.DirectSilent,
+                ExplainPanelChannel.decide(true, ExplainOutputFormat.TEXT, true, true, dialectName = dialect),
+            )
+        }
+    }
+
+    @Test
+    fun `直送_TEXT档未传方言名不放行`() {
+        // 既有调用形态（不传 dialectName）零改编译且语义不变：TEXT 一律直送
+        assertEquals(
+            ExplainPanelChannel.Decision.DirectSilent,
+            ExplainPanelChannel.decide(true, ExplainOutputFormat.TEXT, true, true),
+        )
+    }
+
+    @Test
+    fun `OB_TEXT档环境闸照走`() {
+        // 放行 ≠ 绕过环境闸：无插件/无数据源/参数未回填照样回退
+        assertEquals(
+            ExplainPanelChannel.FallbackReason.NO_DATABASE_PLUGIN,
+            (ExplainPanelChannel.decide(true, ExplainOutputFormat.TEXT, false, true, dialectName = "OceanBase")
+                as ExplainPanelChannel.Decision.DirectFallback).reason,
+        )
+        assertEquals(
+            ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE,
+            (ExplainPanelChannel.decide(true, ExplainOutputFormat.TEXT, true, false, dialectName = "OceanBase")
+                as ExplainPanelChannel.Decision.DirectFallback).reason,
+        )
+    }
+
+    @Test
+    fun `直送_OB_TEXT档开关关`() {
+        // 例外只放宽格式档位，开关仍是总闸（与 MySQL/PG 同款语义）
+        assertEquals(
+            ExplainPanelChannel.Decision.DirectSilent,
+            ExplainPanelChannel.decide(
+                enabled = false,
+                format = ExplainOutputFormat.TEXT,
+                databaseAvailable = true,
+                hasBoundDataSource = true,
+                dialectName = "OceanBase",
+            ),
+        )
+    }
 }

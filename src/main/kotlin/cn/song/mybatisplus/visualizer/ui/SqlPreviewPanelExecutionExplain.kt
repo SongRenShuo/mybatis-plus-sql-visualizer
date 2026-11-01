@@ -469,6 +469,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             databaseAvailable = databaseAvailable,
             hasBoundDataSource = boundDs != null,
             hasUnfilledParams = hasUnfilledParams,
+            // T-ObPanelAdvice：OB TEXT 档（structuredTextPlan 在册）放行进结构化通道——
+            // 不传时 TEXT 档一律直送（既有调用点/用例零改编译）
+            dialectName = dialect.name,
         )
     ) {
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent -> {
@@ -538,23 +541,50 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,
-                onPlan = { outcome ->
+                onPlan = { submitted ->
                     if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
                         return@executeStructured
                     }
                     // 索引建议联动（ExplainIndexAdvisor 规则集的面板侧消费——只提示不执行；
-                    // 建议器异常不连坐计划渲染，降级为无建议）
+                    // 建议器异常不连坐计划渲染，降级为无建议）。
+                    // 按提交返回的**原始行列**计算：OB TEXT 档的单列 ASCII 计划树正是建议器
+                    // 既有输入形态（adviseObPlanText 以表头为门），转换后的行列反而取不到。
                     val hints = runCatching {
                         cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
-                            dialect.name, outcome.raw.headers, outcome.raw.rows,
+                            dialect.name, submitted.raw.headers, submitted.raw.rows,
                         )
                     }.getOrDefault(emptyList())
+                    // T-ObPanelAdvice：OB TEXT 档 ASCII 计划树 → 结构化行列——解析成功就进面板，
+                    // fail-closed 收窄为「解析失败才回退原生」（其余 TEXT/XML 档不进本分支，
+                    // 仍由通道判定 DirectSilent 挡在结构化外）
+                    val outcome = if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isStructuredTextPlan(dialect.name)) {
+                        val parsed = cn.song.mybatisplus.visualizer.util.ObExplainPlanTextParser.parse(submitted.raw)
+                        if (parsed == null) {
+                            notifyExplainStructuredFallback(
+                                proj,
+                                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.TEXT_PLAN_UNPARSEABLE,
+                                detail = null,
+                            )
+                            submitExplainDirect(proj, explainSql, dialectGateRequest)
+                            return@executeStructured
+                        }
+                        submitted.copy(raw = parsed)
+                    } else {
+                        submitted
+                    }
+                    // 视图与对比按解析后形态分派：OB = TABLE（解析产物是货真价实的行列表）；
+                    // 其余方言 = 提交档原样（MySQL/PG 行为逐字不变）
+                    val panelFormat = if (outcome !== submitted) {
+                        cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.TABLE
+                    } else {
+                        outFormat
+                    }
                     val historyCompletion = completeExplainPlanHistory(history, historyRequest, outcome.raw)
                     if (historyCompletion.saved != cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED) {
                         captureAiContextPlan(history, historyRequest.key, outcome.raw)
                     }
                     val planDiff = historyCompletion.baselines.firstOrNull()?.let {
-                        ExplainPlanDiff.diff(it.raw, outcome.raw, outFormat)
+                        ExplainPlanDiff.diff(it.raw, outcome.raw, panelFormat)
                     }
                     // R61 兼容观察值；比较决策由 R90 的目标隔离会话负责。
                     lastStructuredExplain = explainSql to outcome.raw
@@ -564,7 +594,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         dataSourceName = outcome.dataSourceName,
                         elapsedMs = outcome.elapsedMs,
                         raw = outcome.raw,
-                        format = outFormat,
+                        format = panelFormat,
                         hints = hints,
                         onBackToConsole = {
                             dialogRef?.close(0)
@@ -665,6 +695,8 @@ internal fun SqlPreviewPanel.notifyExplainStructuredFallback(
                 MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDatabasePlugin")
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS ->
                 MpSqlVisualizerBundle.message("panel.explain.structured.reason.unfilledParams")
+            cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.TEXT_PLAN_UNPARSEABLE ->
+                MpSqlVisualizerBundle.message("panel.explain.structured.reason.textPlanUnparseable")
             null -> detail ?: ""
         }
         Notification(
