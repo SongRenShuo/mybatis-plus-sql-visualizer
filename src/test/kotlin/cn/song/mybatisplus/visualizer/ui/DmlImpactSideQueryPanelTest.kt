@@ -40,6 +40,24 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
         UIUtil.dispatchAllInvocationEvents()
     }
 
+
+    /**
+     * T-PrepareGateAwait（2026-11-01 门禁实证）：`prepare` 单飞门是**异步**释放的
+     * （`chooseAndPrepare` 的续接链在 EDT 上收尾），用例在动作后立刻断言「应弹选择器」，
+     * 会撞上「门还在飞 → `shouldPromptForDataSource`=false → 提示被正确跳过」的时序窗。
+     * 本 helper 在动作前先把在飞准备抽干（泵 EDT 等门清空），让断言回到确定态；
+     * 这不是放松断言——生产契约就是异步（S2-16），同步断言只是在吃时序运气。
+     */
+    private fun awaitPrepareGateIdle(timeoutMs: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight()
+            && System.currentTimeMillis() < deadline
+        ) {
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+    }
+
     fun testEstimateUsesSideQueryAndKeepsEditor() {
         val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
         val p = panel(sql)
@@ -107,6 +125,7 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
             cb(PreviewSideQuery.Result.Scalar(3, McpExplainFormatter.RawResult(listOf("COUNT(*)"), listOf(listOf("3")))))
         }
         try {
+            awaitPrepareGateIdle()
             p.estimateDmlImpact()
             assertEquals("绑定应使用当前预览 SQL", sql, promptedSql)
             assertEquals(sql, p.currentEditorSql())

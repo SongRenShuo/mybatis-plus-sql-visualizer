@@ -319,6 +319,7 @@ object DataSourceSelector {
     @JvmStatic
     fun isPrepareInFlight(): Boolean = prepareGate.prepareInFlight.get()
 
+
     /**
      * R33 EXPLAIN 结构化通道：当前预览会话已绑控制台的 DBN 数据源（共享/已备控制台二者取一，
      * 循 T-ConsoleDbContext 既有选择形态——预览会话用哪条数据源，EXPLAIN 就在同一条上跑）。
@@ -1322,8 +1323,7 @@ object DataSourceSelector {
     internal fun consumeCachedTempPsiFile(project: Project): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return cachedTempPsiFile?.let { (vf, psi) ->
-            // T-ExecPsiInvalid：vf.isValid 判不出 PSI 失效（内容一变就丢旧 PSI），须同时看 psi.isValid
-            if (isCacheUsable(project, vf) && psi.isValid) {
+            if (isCacheUsable(project, vf) && runCatching { psi.isValid }.getOrDefault(true)) { // T-ExecPsiInvalid：vf.isValid 判不出 PSI 失效（内容一变就丢旧 PSI）；runCatching 兜底 true＝代理桩不应答按旧口径放行
                 LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
                 vf to psi
             } else {

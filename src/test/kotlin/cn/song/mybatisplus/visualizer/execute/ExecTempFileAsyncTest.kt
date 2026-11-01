@@ -46,6 +46,11 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
         var callbackOnEdt = false
         var writeAllowedInCallback = false
         var produced: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+        // 契约读数必须在**回调内**取：生产续接链就是在 onReady 里同步使用 PSI 的；
+        // 出了回调再读 psi.text 会被同一轮 dispatch 里排队的无关 EDT 事件（重解析/落盘）打掉，
+        // 那不是本用例要钉的契约（2026-11-01 全量门禁实证：回调后取数偶发 PsiInvalidElementAccessException）。
+        var psiTextInCallback: String? = null
+        var vfTextInCallback: String? = null
 
         DataSourceSelector.createTempPsiFileAsync(project, sql) { pair ->
             callbackRan = true
@@ -57,6 +62,8 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
                 com.intellij.openapi.application.TransactionGuard.getInstance().isWritingAllowed()
             }.getOrDefault(false)
             produced = pair
+            psiTextInCallback = pair?.second?.let { psi -> if (psi.isValid) psi.text else "<invalid>" }
+            vfTextInCallback = pair?.first?.let { vf -> String(vf.contentsToByteArray(), Charsets.UTF_8) }
         }
 
         assertFalse(
@@ -83,11 +90,16 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
             "临时文件构建应成功（失败原因=${DataSourceSelector.lastTempFileFailureForTest()}）",
             ready,
         )
-        assertEquals("PSI 内容应等于提交的 SQL", sql, ready!!.second.text)
+        assertEquals("PSI 内容应等于提交的 SQL（回调内取）", sql, psiTextInCallback)
         assertEquals(
-            "VF 内容应等于提交的 SQL",
+            "VF 内容应等于提交的 SQL（回调内取）",
             sql,
-            String(ready.first.contentsToByteArray(), Charsets.UTF_8),
+            vfTextInCallback,
+        )
+        assertNotSame(
+            "回调里的 PSI 不能是死实例（revalidateOnEdt 兜底必须在投递前生效）",
+            "<invalid>",
+            psiTextInCallback,
         )
     }
 
