@@ -368,11 +368,27 @@ internal object ExecDialectRouting {
     }
 
     /**
+     * 探针结果 → 归因用的绑定事实（UI-049 纯函数）：[ExecFileBinding.BindState.BOUND] → true，
+     * [ExecFileBinding.BindState.UNBOUND] → false，`UNKNOWN` → **null（未知）**，退回既有口径。
+     *
+     * 为什么必须单独一个函数：旧写法 `probe.pinnedDsId != null` 把「探不到」压成 false，于是
+     * 在 243 基线（`DataSourcePerFileMappingsImpl` **整个类都不存在**，真机日志 08:29:57 的
+     * ClassNotFoundException 是常态而非偶发）上，任何 runners=0 都会被报成「未绑定」——就算
+     * 文件其实已绑定。UI-048 修的是「把推测当因果」，这是同一病症的反向版。
+     */
+    internal fun boundToDataSourceFlag(probe: ExecFileBinding.ExecBindProbe?): Boolean? =
+        when (probe?.bindingState) {
+            ExecFileBinding.BindState.BOUND -> true
+            ExecFileBinding.BindState.UNBOUND -> false
+            ExecFileBinding.BindState.UNKNOWN, null -> null
+        }
+
+    /**
      * 空 Runner 归因（生产链）：方言 id 候选 = 平台 DAS 方言 → URL 兜底（可用清单只取一次）；
-     * 绑定态由 [ExecFileBinding.probeExecBind] 现场探测（UI-048）——**探针只在这一层调用**，
+     * 绑定态由 [ExecFileBinding.probeExecBind] 现场探测（UI-048/UI-049）——**探针只在这一层调用**，
      * 判定内核仍是上面的纯函数。
      *
-     * @param execFile exec 草稿文件；null（或探针失败）= 绑定态未知，退回既有口径
+     * @param execFile exec 草稿文件；null（或探针降级为 UNKNOWN）= 绑定态未知，退回既有口径
      */
     internal fun classifyEmptyRunners(
         project: Project,
@@ -381,13 +397,13 @@ internal object ExecDialectRouting {
         execFile: com.intellij.openapi.vfs.VirtualFile? = null,
     ): EmptyRunnersReason {
         val available = runCatching { availableLanguageIds(project) }.getOrDefault(emptyList())
-        val bound = execFile?.let { file ->
-            runCatching { ExecFileBinding.probeExecBind(project, file).pinnedDsId != null }.getOrNull()
+        val probe = execFile?.let { file ->
+            runCatching { ExecFileBinding.probeExecBind(project, file) }.getOrNull()
         }
         return classifyEmptyRunners(
             dataSources = registeredDataSources,
             renderedDialectName = renderedDialectName,
-            boundToDataSource = bound,
+            boundToDataSource = boundToDataSourceFlag(probe),
             dialectIdsOf = { ds -> listOf(platformDialectId(ds), urlFallbackId(ds, available)) },
         )
     }
