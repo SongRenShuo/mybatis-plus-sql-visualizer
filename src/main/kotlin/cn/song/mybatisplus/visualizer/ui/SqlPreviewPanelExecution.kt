@@ -176,6 +176,9 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      */
     internal fun SqlPreviewPanel.estimateDmlImpact(allowDataSourcePrompt: Boolean = true) {
         val proj = project ?: return
+        // UX Community 执行入口预判置灰的代码侧守卫（S2-4 券②）：菜单项已在 Community 置灰
+        //（moreActionsStep.isSelectable），程序化触发同样不提交——模板动作 executeTemplate 同款双保险。
+        if (!cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) return
         val sql = previewSqlForReadonly() ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         when (val plan = cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect)) {

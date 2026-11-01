@@ -19,6 +19,18 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
         fun getUrl(): String = "jdbc:mysql://localhost:3306/demo"
     }
 
+    override fun setUp() {
+        super.setUp()
+        // S2-4 券②：estimateDmlImpact 增 Community 代码侧守卫——本类验 Ultimate 态行为链，
+        // headless 无 Database 标记类需覆写探测（RollbackSqlDialogTest 同款）。
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = true
+    }
+
+    override fun tearDown() {
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = null
+        super.tearDown()
+    }
+
     private fun panel(sql: String): SqlPreviewPanel = SqlPreviewPanel(project).also {
         Disposer.register(testRootDisposable, it)
         it.showResult(

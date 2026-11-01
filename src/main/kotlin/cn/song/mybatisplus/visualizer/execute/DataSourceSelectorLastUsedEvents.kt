@@ -8,8 +8,9 @@ import com.intellij.util.messages.Topic
  *
  * 立项动因（UX 换源重渲染）：用户在某模块换了数据源后，**仍然开着的预览面板**头部绑定行与方言
  * 徽章停留在旧源上，只能关开预览才更新。写入侧（`DataSourceSelector.rememberRunner` /
- * `forgetLastRunner` / `forgetAllLastUsed`）广播一次，存活的预览面板订阅后只刷新头部
- * （绑定行 + 方言徽章），不重渲染 SQL、不新增常驻轮询。
+ * `forgetLastRunner` / `forgetAllLastUsed`）广播一次，存活的预览面板订阅后刷新头部
+ * （绑定行 + 方言徽章），并按新源方言重渲染 SQL（S2-4 券①；护栏=仅绑定源证据、方言不同、
+ * 用户未编辑），不新增常驻轮询。
  *
  * 订阅方用 `project.messageBus.connect(this)` 绑定生命周期；[TOPIC] 为项目级。
  */

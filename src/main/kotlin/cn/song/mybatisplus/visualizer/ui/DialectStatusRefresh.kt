@@ -85,8 +85,8 @@ internal fun SqlPreviewPanel.boundDataSourceDialectForDecision(): String? {
  *
  * 幂等且防抖：决策未变（或更弱）时不触碰 UI；面板已 dispose 时丢弃晚到结果。
  *
- * @param rerenderSql false = 只刷新头部方言徽章，不按新方言重写 SQL 文本（UX 换源重渲染：
- *        last-used 变更只需头部跟上，不得改写用户正在编辑的文本）。
+ * @param rerenderSql false = 只刷新头部方言徽章，不按新方言重写 SQL 文本（S2-4 券①之前
+ *        last-used 变更链只传 false；现在换源链也走 true——护栏见 [rerenderIfBoundDialectDiffers]）。
  */
 internal fun SqlPreviewPanel.refreshDialectStatusRow(rerenderSql: Boolean = true) {
     val proj = project ?: return
@@ -118,13 +118,15 @@ internal fun SqlPreviewPanel.refreshDialectStatusRow(rerenderSql: Boolean = true
 }
 
 /**
- * UX 换源重渲染：last-used 变更后的头部刷新（防抖 + 线程归位）。
+ * UX 换源重渲染：last-used 变更后的头部刷新 + 方言重渲染（防抖 + 线程归位）。
  *
  * 广播可能来自执行链的任意线程，也可能是连写模块级/项目级两次；这里统一收口：非 EDT 先投递
  * 回 EDT，再经 120ms Timer 合并成一拍。单测模式同步执行（headless 无 EDT 泵，既有测试依赖
  * 「改记忆 → 立刻可读」的同步语义，与 [SqlPreviewPanel.scheduleRender] 同款）。
  *
- * 只刷新头部（绑定行 + 方言徽章），**不**重渲染 SQL：换源事件不是用户编辑，不得改写编辑器文本。
+ * S2-4 券①（承接 T-DialectInferPollution P2）：刷新链按新源方言重算决策后**允许重渲染 SQL**
+ * ——预览不许停留在旧方言渲染结果上等执行计划闸门拦。护栏在 [rerenderIfBoundDialectDiffers]：
+ * 仅 BOUND_DATASOURCE 证据 + 方言确实不同 + 用户没改过编辑器文本（重渲染整篇重写，不能吞编辑）。
  */
 internal fun SqlPreviewPanel.scheduleHeaderSourceRefresh() {
     if (previewDisposed || Disposer.isDisposed(this)) return
@@ -140,11 +142,16 @@ internal fun SqlPreviewPanel.scheduleHeaderSourceRefresh() {
     headerSourceRefreshTimer.restart()
 }
 
-/** 头部刷新单拍（EDT）：绑定行 + 方言徽章。 */
+/**
+ * 头部刷新单拍（EDT）：绑定行 + 方言徽章 + 按新源方言重渲染（S2-4 券①）。
+ *
+ * 重渲染走 [refreshDialectStatusRow] 的既有腿（[rerenderIfBoundDialectDiffers]），护栏齐全：
+ * 仅绑定源证据、方言不同、文本未编辑；手动方言（MANUAL/CONFLICT）永不覆盖。
+ */
 internal fun SqlPreviewPanel.refreshHeaderSourceNow() {
     if (previewDisposed || Disposer.isDisposed(this)) return
     refreshBindStateRow()
-    refreshDialectStatusRow(rerenderSql = false)
+    refreshDialectStatusRow()
 }
 
 /**
