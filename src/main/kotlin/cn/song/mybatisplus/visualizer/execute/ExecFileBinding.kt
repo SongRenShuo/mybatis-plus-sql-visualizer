@@ -54,12 +54,30 @@ internal object ExecFileBinding {
     // 纯判定（headless 表驱动直测；不触平台类）
     // ------------------------------------------------------------------
 
+    /**
+     * 探针结果三态（UI-049）：`ExecBindProbe` 里「没有 pin」与「探不到」此前不可区分，归因层
+     * 因此把反射失败当成确定未绑定（2026-11-01 08:29 真机：243 基线缺
+     * `DataSourcePerFileMappingsImpl` → ClassNotFoundException → runners=0 一律报「未绑定」）。
+     */
+    enum class BindState {
+        /** 探到了 pin 身份（任一路命中即硬事实）。 */
+        BOUND,
+
+        /** 两路探测都跑完且确实没有 pin。 */
+        UNBOUND,
+
+        /** 至少一路探测失败（平台类缺失/反射失败/其它异常）——绑定态不可知，不许猜。 */
+        UNKNOWN,
+    }
+
     /** exec 文件 forced 关联探针结果（两项独立可空；全 null = 无钉源/探测不可用）。 */
     internal data class ExecBindProbe(
         /** 挂载控制台绑定的数据源 UUID（`JdbcConsoleProvider.getValidConsole` → `getDataSource`）。 */
         val attachedConsoleDsId: String?,
         /** per-file 关联的数据源 UUID（`DataSourcePerFileMappingsImpl.getDataSourcePerFileMapping`）。 */
         val perFileMappingDsId: String?,
+        /** 两路探测是否都跑完且没抛异常（false = 至少一路探不到；见 [bindingState]）。 */
+        val probeOk: Boolean = true,
     ) {
         /**
          * 平台实际的钉源身份——provider 顺序决定优先级（plugin.xml 实证：
@@ -67,6 +85,20 @@ internal object ExecFileBinding {
          * （挂载控制台）在后；forced 枚举短路按同一顺序取第一个命中）。
          */
         val pinnedDsId: String? get() = perFileMappingDsId ?: attachedConsoleDsId
+
+        /**
+         * 归因层用的三态（UI-049）：有 pin 是硬事实；两路都空且都正常跑完才是确定未绑定；
+         * 有一路失败 → [BindState.UNKNOWN]（平台类缺失/反射失败绝不等于「没有 pin」）。
+         *
+         * T-ConsoleBind 对齐链（[resolveBindAction]）不受影响：它仍按 `pinnedDsId ?: NOOP`
+         * 走——探测不到时「不动平台状态」是安全缺省，三态只服务于空 Runner 归因。
+         */
+        val bindingState: BindState
+            get() = when {
+                pinnedDsId != null -> BindState.BOUND
+                probeOk -> BindState.UNBOUND
+                else -> BindState.UNKNOWN
+            }
     }
 
     enum class Action {
@@ -187,15 +219,17 @@ internal object ExecFileBinding {
 
     /**
      * 探测 exec 文件当前被平台钉住的数据源身份（[ExecBindProbe]）。
-     * Community / 无 Database 插件 / 反射任何一环失败 → 全 null（NOOP）。
+     * Community / 无 Database 插件 / 反射任何一环失败 → 该路 null 且 `probeOk=false`（三态 = UNKNOWN）。
      */
     fun probeExecBind(project: Project, vf: VirtualFile): ExecBindProbe {
+        var probeOk = true
         val consoleId = runCatching {
             val provider = Class.forName(DataSourceSelector.CONSOLE_PROVIDER_CLASS)
             val console = provider.getMethod("getValidConsole", Project::class.java, VirtualFile::class.java)
                 .invoke(null, project, vf) ?: return@runCatching null
             DataSourceSelector.consoleDataSourceId(console)
         }.onFailure {
+            probeOk = false
             LOG.info("[T-ConsoleBind] probe attached console FAILED (treat as unpinned): ${it.javaClass.simpleName}: ${it.message}")
         }.getOrNull()
         val mappingId = runCatching {
@@ -204,9 +238,10 @@ internal object ExecFileBinding {
                 .invoke(null, project, vf) ?: return@runCatching null
             DataSourceSettings.getUniqueId(ds)
         }.onFailure {
+            probeOk = false
             LOG.info("[T-ConsoleBind] probe per-file mapping FAILED (treat as unmapped): ${it.javaClass.simpleName}: ${it.message}")
         }.getOrNull()
-        return ExecBindProbe(consoleId, mappingId)
+        return ExecBindProbe(consoleId, mappingId, probeOk)
     }
 
     /**

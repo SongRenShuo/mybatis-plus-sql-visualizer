@@ -703,4 +703,93 @@ class ExecDialectRoutingTest {
             results.contains("EmptyRunnersHint.message(project, registered, renderedDialectName, vf)"),
         )
     }
+
+    // ------------------------------------------------------------------
+    // UI-049：探针三态（「探不到」≠「确定未绑定」）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `探针三态_反射失败不得当成未绑定`() {
+        // 243 基线（IU-2024.3.7.1）整个类 com.intellij.database.dataSource.DataSourcePerFileMappingsImpl
+        // 都不存在（真机日志 08:29:57 ClassNotFoundException），per-file 一路恒降级 → UNKNOWN。
+        val degraded = ExecFileBinding.ExecBindProbe(null, null, probeOk = false)
+        assertEquals(
+            "有一路探测失败且没有任何 pin 事实 → 绑定态不可知",
+            ExecFileBinding.BindState.UNKNOWN,
+            degraded.bindingState,
+        )
+        val flag = ExecDialectRouting.boundToDataSourceFlag(degraded)
+        assertNull("探针降级时归因必须拿到未知（null），不能压成 false", flag)
+        val reason = ExecDialectRouting.classifyEmptyRunners(listOf("mysql-a"), "MySQL", flag) { idsOf("MySQL") }
+        assertEquals(
+            "探针降级只能退回既有口径——不得落「未绑定」档（UI-049 的核心回归点）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertFalse(
+            "探针降级时出「未绑定」文案就是把探测失败当因果",
+            ExecDialectRouting.emptyRunnersHintKey(reason) == "execute.datasource.notBound",
+        )
+    }
+
+    @Test
+    fun `探针三态_明确未绑定仍归因未绑定`() {
+        // 两路都正常跑完且确实没有 pin：这才是硬事实 UNBOUND（UI-048 成果不许被三态化回退）。
+        val unbound = ExecFileBinding.ExecBindProbe(null, null, probeOk = true)
+        assertEquals(ExecFileBinding.BindState.UNBOUND, unbound.bindingState)
+        assertEquals(false, ExecDialectRouting.boundToDataSourceFlag(unbound))
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a"),
+            "MySQL",
+            ExecDialectRouting.boundToDataSourceFlag(unbound),
+        ) { idsOf("MySQL") }
+        assertEquals(
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND,
+            reason,
+        )
+        assertEquals("execute.datasource.notBound", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `探针三态_任一路探到pin即为已绑定`() {
+        assertEquals(
+            "per-file 一路失败不影响已由挂载控制台探到的 pin（BOUND 是硬事实）",
+            ExecFileBinding.BindState.BOUND,
+            ExecFileBinding.ExecBindProbe("uuid-mp", null, probeOk = false).bindingState,
+        )
+        assertEquals(
+            ExecFileBinding.BindState.BOUND,
+            ExecFileBinding.ExecBindProbe(null, "uuid-mp-2").bindingState,
+        )
+        assertEquals(
+            "探到 pin 即绑定态确定，归因不得落未绑定档",
+            true,
+            ExecDialectRouting.boundToDataSourceFlag(ExecFileBinding.ExecBindProbe(null, "uuid-mp-2")),
+        )
+        assertNull("完全没有探针结果时同样是未知", ExecDialectRouting.boundToDataSourceFlag(null))
+    }
+
+    @Test
+    fun `接线守卫_归因绑定态走三态映射`() {
+        val routing = mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.kt")
+        assertTrue(
+            "生产归因未走三态映射 boundToDataSourceFlag（UI-049 接线缺失）",
+            routing.contains("boundToDataSourceFlag(probe)"),
+        )
+        assertFalse(
+            "归因层仍在用 probe.pinnedDsId != null 判绑定——UNKNOWN 会被压成 false，243 上一律误报未绑定",
+            routing.contains("probeExecBind(project, file).pinnedDsId != null"),
+        )
+        assertTrue(
+            "UNKNOWN 必须显式映射为 null（未知），不能落到 false",
+            Regex("""BindState\.UNKNOWN, null -> null""").containsMatchIn(routing),
+        )
+        val binding = mainSource("cn/song/mybatisplus/visualizer/execute/ExecFileBinding.kt")
+        assertTrue("ExecBindProbe 缺 probeOk 状态位（探针失败与无 pin 不可区分）", binding.contains("val probeOk: Boolean = true"))
+        assertTrue(
+            "probeExecBind 未在失败分支置 probeOk=false——三态永远是 UNBOUND",
+            Regex("""onFailure \{[^}]*probeOk = false""").containsMatchIn(binding),
+        )
+        assertTrue("ExecBindProbe 缺 bindingState 三态投影", binding.contains("val bindingState: BindState"))
+    }
 }
