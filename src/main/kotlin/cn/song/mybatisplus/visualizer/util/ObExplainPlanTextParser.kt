@@ -15,44 +15,63 @@ import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
  * 调用方（面板 onPlan 链）据此 fail-closed 回退原生控制台。
  *
  * 表头门与行列切分与 [ExplainIndexAdvisor] 共用本 object 的原语（单一逻辑源，不复制第二套）：
- * 建议器消费原始单列文本（表头门 `OB_PLAN_HEADER` 命中后按列名取值），面板消费解析后行列，
+ * 建议器消费原始行列（表头门 `OB_PLAN_HEADER` 命中后按列名取值），面板消费解析后行列，
  * 两者对同一份 OB 输出的读法一致。
  *
- * 纯逻辑层（无 IDE 类型），headless 直测。
+ * **真机形态修正（2026-11-01 真机报障）**：OB CE 4.3.5.6 的 `EXPLAIN` 在 IDE 控制台返回的是
+ * **单列 × 多行**——计划文本的每一行是一个独立的行（`rows = [["|ID|OPERATOR …|"], [""],
+ * ["|0 |TABLE FULL SCAN|t_order|3 |3 |"], …]`），**不是一个 cell 里装整段多行文本**。
+ * 首版按 cell 逐个 `lines()` 扫描，于是表头单独命中、其后无行 → 判解析失败（真机面板 toast
+ * 「计划文本解析不出结构化行列」）。现改为先把全部 cell **按行序展平**成一份行列表
+ * （[planLines]），再走表头门；「单 cell 装整段多行」的形态展平后同样成行列表，两种形态
+ * 归一处理（不再有第二套分支）。
+ *
+ * 纯逻辑层（无 IDE 类型），headless 直测；判定内核 [parseLines] 接受注入的行列表。
  */
 object ObExplainPlanTextParser {
+
+    /** 解析内核产物（表头 + 数据行，均已 trim）。 */
+    data class ParsedPlan(val headers: List<String>, val rows: List<List<String>>)
 
     /**
      * 解析 OB ASCII 计划树为结构化行列。
      *
-     * 逐 cell 扫描（OB 实际形态是 1 行 1 列，防御性容忍多 cell），命中表头后取其后
-     * 列数与表头一致的 `|…|` 行为数据行（`===` 分隔线与 `Outputs & filters` 说明段
-     * 天然不命中，跳过）。**表头命中但零数据行 → null**（解析失败，调用方回退原生）；
-     * 全 cell 不命中 → null（非 OB 形态，H2/SQLite/MySQL/PG 样本走到这里）。
+     * 先把 [planLines] 展平成行列表（兼容「单列×多行」与「单 cell 多行」两种真实形态），
+     * 再交 [parseLines] 判定；解析不出返回 null（调用方 fail-closed 回退原生控制台）。
      */
     fun parse(raw: McpExplainFormatter.RawResult): McpExplainFormatter.RawResult? {
-        for (row in raw.rows) {
-            for (cell in row) {
-                val lines = cell.lines()
-                val headerIdx = lines.indexOfFirst { OB_PLAN_HEADER.containsMatchIn(it) }
-                if (headerIdx < 0) continue
-                val header = obRowCells(lines[headerIdx]) ?: continue
-                val dataRows = mutableListOf<List<String>>()
-                for (line in lines.drop(headerIdx + 1)) {
-                    val cells = obRowCells(line) ?: continue
-                    if (cells.size != header.size) continue // 列数不符 = 非计划行（分隔线/说明段），不猜
-                    dataRows += cells
-                }
-                if (dataRows.isEmpty()) return null // 只有表头没有数据行 = 计划形态解析不出，不猜
-                return McpExplainFormatter.RawResult(
-                    header.map { it.trim() },
-                    dataRows.map { r -> r.map { it.trim() } },
-                    raw.truncated,
-                    raw.notices,
-                )
-            }
+        val parsed = parseLines(planLines(raw.rows)) ?: return null
+        return McpExplainFormatter.RawResult(parsed.headers, parsed.rows, raw.truncated, raw.notices)
+    }
+
+    /**
+     * 行列 → 行列表（按行序展平）。每个 cell 再按自身换行拆开：真机「一行一个 cell」得到逐行，
+     * 合成/其它通道「一个 cell 装整段多行」得到同一份行序列——两种形态归一，**不拼接行内结构**
+     * （`|…|` 行保持原样，绝不 join 成一长串）。
+     */
+    internal fun planLines(rows: List<List<String>>): List<String> =
+        rows.flatMap { row -> row.flatMap { it.lines() } }
+
+    /**
+     * 判定内核（纯函数，注入行列表即可 headless 直测）。
+     *
+     * 命中表头后取其后**列数与表头一致**的 `|…|` 行为数据行（空行、`---` 分隔线与
+     * `Outputs & filters` 说明段天然不命中，跳过）。**表头命中但零数据行 → null**
+     * （计划形态解析不出，不猜）；全无表头 → null（H2/SQLite/MySQL/PG 样本走到这里）。
+     * 只按表头声明的列位取值，不猜列位。
+     */
+    internal fun parseLines(lines: List<String>): ParsedPlan? {
+        val headerIdx = lines.indexOfFirst { OB_PLAN_HEADER.containsMatchIn(it) }
+        if (headerIdx < 0) return null
+        val header = obRowCells(lines[headerIdx]) ?: return null
+        val dataRows = mutableListOf<List<String>>()
+        for (line in lines.drop(headerIdx + 1)) {
+            val cells = obRowCells(line) ?: continue
+            if (cells.size != header.size) continue // 列数不符 = 非计划行（分隔线/说明段），不猜
+            dataRows += cells
         }
-        return null
+        if (dataRows.isEmpty()) return null // 只有表头没有数据行 = 计划形态解析不出，不猜
+        return ParsedPlan(header.map { it.trim() }, dataRows.map { r -> r.map { it.trim() } })
     }
 
     /**

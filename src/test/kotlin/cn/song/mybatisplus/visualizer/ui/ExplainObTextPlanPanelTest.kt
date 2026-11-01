@@ -47,10 +47,96 @@ class ExplainObTextPlanPanelTest : BasePlatformTestCase() {
           0 - output([*]), filter(nil), access([*])
         """.trimIndent()
 
+    /**
+     * 真机原文照录（2026-11-01 真机：OB CE 4.3.5.6 `103.36.220.245:25881/xc3_test`，
+     * `EXPLAIN SELECT * FROM t_order`，IDE 控制台单列 `Query Plan`）：**一行一个 cell**。
+     * 首版面板用例只喂了合成形态（单 cell 多行），真机形态恒 null → toast「解析不出结构化行列」。
+     */
+    private val realObLines = listOf(
+        "",
+        "|ID|OPERATOR |NAME |EST.ROWS|EST.TIME(us)|",
+        "",
+        "|0 |TABLE FULL SCAN|t_order|500000 |3 |",
+        "",
+        "Outputs & filters:",
+        "  ------------------------------------",
+        "  output([t_order.id], [t_order.order_no], [t_order.amount])",
+    )
+
     /** 路由钉住：OceanBase 必须仍登记 TEXT 档 + structuredTextPlan（否则本组测的是别的链）。 */
     fun testOb路由前提() {
         assertEquals(ExplainOutputFormat.TEXT, ExplainSupport.formatFor("OceanBase"))
         assertTrue(ExplainSupport.entryFor("OceanBase")!!.structuredTextPlan)
+    }
+
+    /** 真机形态端到端：单列 × 多行 → 解析成结构化行 → 进面板（表格 + 建议条）。 */
+    fun testOb真机单列多行解析成功进结构化面板() {
+        val sql = "SELECT * FROM t_order"
+        val p = SqlPreviewPanel(project)
+        Disposer.register(testRootDisposable, p)
+        val settings = PluginSettings.getInstance().state
+        val previousStructured = settings.explainStructuredRender
+        val history = SqlHistoryManager.getInstance()
+        history.clear()
+        var captured: ExplainPlanDialog? = null
+        try {
+            p.showResult(PreviewResult(sql, sql, emptyList(), null, null, null, renderedDialect = OceanBaseDialect))
+            p.nativeEditorDoc = EditorFactory.getInstance().createDocument(sql)
+            UIUtil.dispatchAllInvocationEvents()
+
+            settings.explainStructuredRender = true
+            explainBoundDsForTest = { ExplainTarget() }
+            explainDatabaseAvailableForTest = { true }
+            explainDialogSinkForTest = { captured = it }
+            ExplainPanelChannel.structuredRunnerForTest = { _, _, _, _, onPlan, _ ->
+                onPlan(
+                    ExplainPanelChannel.StructuredOutcome(
+                        McpExplainFormatter.RawResult(
+                            listOf("Query Plan"),
+                            realObLines.map { listOf(it) },
+                        ),
+                        5,
+                        "demo",
+                    ),
+                )
+            }
+
+            p.submitExplainOrStructured(
+                project,
+                OceanBaseDialect,
+                "EXPLAIN $sql",
+                ExecutionDialectGate.Request(
+                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
+                    renderedDialectName = "OceanBase",
+                    intent = ExecutionDialectGate.Intent.EXPLAIN,
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                ),
+            )
+
+            val view = captured?.contentForTest()
+            assertTrue("真机形态解析成功必须进结构化视图（首版在此回退原生）", view is ExplainPlanResultView)
+            val model = (view as ExplainPlanResultView).tableModelForTest()
+            assertNotNull("真机形态必须按 TABLE 渲染", model)
+            assertEquals(
+                listOf("ID", "OPERATOR", "NAME", "EST.ROWS", "EST.TIME(us)"),
+                (0 until model!!.columnCount).map { model.getColumnName(it) },
+            )
+            assertEquals(1, model.rowCount)
+            assertEquals("TABLE FULL SCAN", model.getValueAt(0, 1))
+            assertEquals("t_order", model.getValueAt(0, 2))
+            val hints = view.hintsTextForTest()
+            assertNotNull("真机形态建议条必须亮起（TABLE FULL SCAN 超阈）", hints)
+            assertTrue(hints!!.contains("TABLE_FULL_SCAN") && hints.contains("t_order"))
+        } finally {
+            explainBoundDsForTest = null
+            explainDatabaseAvailableForTest = null
+            explainDialogSinkForTest = null
+            ExplainPanelChannel.structuredRunnerForTest = null
+            settings.explainStructuredRender = previousStructured
+            history.clear()
+            p.clear()
+        }
     }
 
     fun testObTextPlan解析成功进结构化面板() {

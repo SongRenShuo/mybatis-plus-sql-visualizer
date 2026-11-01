@@ -8,13 +8,40 @@ import org.junit.Test
 /**
  * OceanBase TEXT 计划树解析器单测（T-ObPanelAdvice）。
  *
- * 样本形态与 `ExplainIndexAdvisorTest` 同源（真机留证：社区镜像 oceanbase/oceanbase-ce:4.3.5-lts，
- * 单列 `Query Plan`，表头 `|ID|OPERATOR  |NAME|EST.ROWS|EST.TIME(us)|`）；跨方言不外泄是本组
- * 的另一半职责——H2/SQLite/MySQL/PG 样本必须解析不出（null → 面板侧不进 OB 结构化分支）。
+ * 两种真实/合成形态都要覆盖（2026-11-01 真机报障）：
+ *  1. **真机形态：单列 × 多行**——计划文本一行一个 cell（含空行与 `Outputs & filters` 段），
+ *     照录真机（OB CE 4.3.5.6，`EXPLAIN SELECT * FROM t_order`）；首版只测了形态 2，
+ *     于是真机解析恒 null（单测假绿）；
+ *  2. **兼容形态：单 cell 装整段多行文本**——首版合成样本，其它通道/旧留证口径。
+ *
+ * 跨方言不外泄是另一半职责——H2/SQLite/MySQL/PG 样本必须解析不出（null → 面板不进 OB 分支）。
  */
 class ObExplainPlanTextParserTest {
 
-    /** 与 ExplainIndexAdvisorTest.obPlan 同形态（真机留证口径），含 `---` 分隔线与 Outputs 说明段。 */
+    /**
+     * 真机原文照录（OB CE 4.3.5.6，`103.36.220.245:25881/xc3_test`，IDE 控制台 `EXPLAIN SELECT * FROM t_order`）。
+     * 注意：无 `===` 分隔线，表头与数据行之间有空行，`Outputs & filters` 段下是 `---` 分隔线。
+     */
+    private val realObLines = listOf(
+        "",
+        "|ID|OPERATOR |NAME |EST.ROWS|EST.TIME(us)|",
+        "",
+        "|0 |TABLE FULL SCAN|t_order|3 |3 |",
+        "",
+        "Outputs & filters:",
+        "  ------------------------------------",
+        "  output([t_order.id], [t_order.order_no], [t_order.amount], [t_order.status], [t_order.create_time])",
+    )
+
+    /** 真机形态 RawResult：单列 `Query Plan`，一行一个 cell。 */
+    private fun realObRaw(
+        lines: List<String> = realObLines,
+        truncated: Boolean = false,
+        notices: List<String> = emptyList(),
+    ): McpExplainFormatter.RawResult =
+        McpExplainFormatter.RawResult(listOf("Query Plan"), lines.map { listOf(it) }, truncated, notices)
+
+    /** 兼容形态：一个 cell 里装整段多行文本（首版合成样本，含 `===` 分隔线与 Outputs 说明段）。 */
     private fun obPlan(operator: String, name: String, estRows: String): String =
         """
         ==========================================
@@ -31,8 +58,63 @@ class ObExplainPlanTextParserTest {
     private fun obRaw(plan: String, truncated: Boolean = false): McpExplainFormatter.RawResult =
         McpExplainFormatter.RawResult(listOf("Query Plan"), listOf(listOf(plan)), truncated)
 
+    // ---------- 真机形态（单列 × 多行） ----------
+
     @Test
-    fun testOb样本解析为结构化行列() {
+    fun test真机单列多行样本解析为结构化行列() {
+        val parsed = ObExplainPlanTextParser.parse(realObRaw()) ?: error("真机形态必须解析成功")
+        assertEquals(listOf("ID", "OPERATOR", "NAME", "EST.ROWS", "EST.TIME(us)"), parsed.headers)
+        assertEquals(1, parsed.rows.size)
+        assertEquals(listOf("0", "TABLE FULL SCAN", "t_order", "3", "3"), parsed.rows[0])
+    }
+
+    @Test
+    fun test真机形态truncated与notices保真() {
+        val parsed = ObExplainPlanTextParser.parse(
+            realObRaw(truncated = true, notices = listOf("driver notice")),
+        ) ?: error("真机形态必须解析成功")
+        assertEquals(true, parsed.truncated)
+        assertEquals(listOf("driver notice"), parsed.notices)
+    }
+
+    @Test
+    fun test真机形态多算子行() {
+        // 真机多行算子（嵌套计划）：每行一个 cell，全部按列数一致取出
+        val lines = listOf(
+            "|ID|OPERATOR      |NAME     |EST.ROWS|EST.TIME(us)|",
+            "",
+            "|0 |TABLE RANGE SCAN|t_order  |90000   |42          |",
+            "",
+            "|1 |TABLE FULL SCAN |t_detail |500000  |99          |",
+            "",
+            "Outputs & filters:",
+        )
+        val parsed = ObExplainPlanTextParser.parse(realObRaw(lines)) ?: error("真机多行形态必须解析成功")
+        assertEquals(2, parsed.rows.size)
+        assertEquals(listOf("0", "TABLE RANGE SCAN", "t_order", "90000", "42"), parsed.rows[0])
+        assertEquals(listOf("1", "TABLE FULL SCAN", "t_detail", "500000", "99"), parsed.rows[1])
+    }
+
+    @Test
+    fun test真机形态仅表头判失败() {
+        // 表头在、其后无任何列数一致的数据行 → 仍判失败（fail-closed，不猜）
+        val lines = listOf("|ID|OPERATOR |NAME |EST.ROWS|EST.TIME(us)|", "", "Outputs & filters:")
+        assertNull(ObExplainPlanTextParser.parse(realObRaw(lines)))
+    }
+
+    @Test
+    fun testplanLines按行序展平不拼接行内结构() {
+        val lines = ObExplainPlanTextParser.planLines(realObRaw().rows)
+        assertEquals(realObLines, lines)
+        // 兼容形态：单 cell 多行展平后成同一份行序列
+        val compat = ObExplainPlanTextParser.planLines(obRaw(obPlan("TABLE SCAN", "t", "3")).rows)
+        assertEquals(obPlan("TABLE SCAN", "t", "3").lines(), compat)
+    }
+
+    // ---------- 兼容形态（单 cell 装整段多行） ----------
+
+    @Test
+    fun test兼容单cell多行样本解析为结构化行列() {
         val parsed = ObExplainPlanTextParser.parse(obRaw(obPlan("TABLE FULL SCAN", "bench_items", "500000")))
             ?: error("OB 样本必须解析成功")
         assertEquals(listOf("ID", "OPERATOR", "NAME", "EST.ROWS", "EST.TIME(us)"), parsed.headers)
