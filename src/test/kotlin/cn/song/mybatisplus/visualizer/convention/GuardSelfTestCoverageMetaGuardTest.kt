@@ -1242,14 +1242,27 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "convention/ExecTempFileEdtGuardTest.kt",
                 listOf(
                     DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                    DecisionFn("writeSafeDeliveryOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "deliveryVerdict",
+                        FnKind.HELPER,
+                        "投递形态判定谓词（返回 DeliveryVerdict，非 Boolean 也不命中命名形状）："
+                            + "按最近投递调用 + 实参区括号配平判 onReady 是否落在 write-safe 投递内，"
+                            + "是 writeSafeDeliveryOffenders 的判定内核；自证经该调用边到达",
+                        via = listOf("writeSafeDeliveryOffenders"),
+                    ),
                 ),
                 "exec 临时文件构建链的 EDT 慢操作守卫：2026-11-01 真机点「执行计划」时 " +
                     "`createTempPsiFile → ReadAction.compute { PsiManager.findFile }` 跑在 EDT，平台抛 " +
                     "SEVERE SlowOperations（三路共用入口：执行 SQL/执行计划/回滚快照）。判定内核按大括号" +
-                    "配平取真实函数体，扫四条规则（EDT 入口不得出现 PSI/ReadAction 且必须经异步入口、" +
+                    "配平取真实函数体，扫五条规则（EDT 入口不得出现 PSI/ReadAction 且必须经异步入口、" +
                     "慢段只允许被异步入口调用、异步入口须 isDispatchThread+池线程+invokeLater、" +
-                    "慢段须仍含 refresh+PSI 获取）。自证语料=「EDT 直做 PSI + 同步调用必被点名且合规异步" +
-                    "形态不误报」「工厂内第二处同步调用点必被抓」两例。",
+                    "慢段须仍含 refresh+PSI 获取、结果回调须 write-safe 投递）。" +
+                    "write-safe 规则来自同日真机回归：首版用 ModalityState.any() 投递，续接链文档写每次" +
+                    "点执行计划都触发 TransactionGuard Write-unsafe（any() 恒 write-unsafe，平台构造期" +
+                    "只把 nonModal 登记为 write-safe）。自证语料三例：「EDT 直做 PSI + 同步调用必被点名且" +
+                    "合规异步形态不误报」「工厂内第二处同步调用点必被抓」「any/省略模态必红、nonModal 与" +
+                    "invokeLaterWriteSafe 放行」。",
             ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(

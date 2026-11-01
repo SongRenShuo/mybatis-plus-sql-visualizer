@@ -41,11 +41,18 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
         val sql = "SELECT 42"
         var callbackRan = false
         var callbackOnEdt = false
+        var writeAllowedInCallback = false
         var produced: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
 
         DataSourceSelector.createTempPsiFileAsync(project, sql) { pair ->
             callbackRan = true
             callbackOnEdt = ApplicationManager.getApplication().isDispatchThread
+            // 契约读数：write-safe 投递（nonModal）下平台会套 runWithWritingAllowed，
+            // 回调内 myWritingAllowed=true；any() 投递不套（2026-11-01 真机回归）。
+            // isWritingAllowed() 要求写意图锁，无锁时抛——按 DocWriteContext 同款口径兜底 false。
+            writeAllowedInCallback = runCatching {
+                com.intellij.openapi.application.TransactionGuard.getInstance().isWritingAllowed()
+            }.getOrDefault(false)
             produced = pair
         }
 
@@ -63,6 +70,11 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
 
         assertTrue("回调必须在预算内到达（否则点执行后建链挂死）", callbackRan)
         assertTrue("回调必须在 EDT 上执行（续接链全是 UI 动作）", callbackOnEdt)
+        assertTrue(
+            "续接回调必须处于 write-safe 上下文——否则续接链的文档写（控制台 setText/" +
+                "commitDocument）会触发 TransactionGuard Write-unsafe（2026-11-01 真机回归）",
+            writeAllowedInCallback,
+        )
         val ready = produced
         assertNotNull(
             "临时文件构建应成功（失败原因=${DataSourceSelector.lastTempFileFailureForTest()}）",
