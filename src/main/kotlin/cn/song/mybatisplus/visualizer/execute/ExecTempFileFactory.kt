@@ -35,15 +35,37 @@ import com.intellij.psi.PsiManager
  * 「未绑定数据源」入口发起时没有预热、回滚快照对话框、显式执行首跑/预热被 skip 或过期。
  *
  * 线程契约：
- *  - **EDT 调用**（生产唯一形态）：立刻返回，慢段在池线程执行，结果经 `invokeLater` 回到 EDT
+ *  - **EDT 调用**（生产唯一形态）：立刻返回，慢段在池线程执行，结果经**write-safe 投递**回到 EDT
  *    交给 [onReady]——续接链里的弹窗/内嵌控制台/结果面板动作因此仍全部在 EDT；
- *  - 非 EDT 调用：调用方本就在后台线程（慢操作在此合法），同步跑完直接回调。
+ *  - 非 EDT 调用（防御分支，生产不可达）：慢段在调用线程就地跑（BGT 上合法），**回调同样经
+ *    write-safe 投递回 EDT**——续接链是 UI + 文档写，不能由后台线程承接。
+ *
+ * **写安全（2026-11-01 真机回归，243.28141.41 字节码逐帧实证）**：投递模态必须是
+ * `ModalityState.nonModal()`，**不能用 `any()`**。
+ *  - `TransactionGuardImpl.<init>` 字节码：`createConcurrentWeakMap()` 之后立即
+ *    `put(ModalityState.nonModal(), TRUE)`——**nonModal 是构造期就登记为 write-safe 的模态**；
+ *    `any()` 不在表内，`isWriteSafeModality(any())` 恒 false。
+ *  - `wrapLaterInvocation` 产出的 `TransactionGuardImpl$1.run`：`isWriteSafeModality(模态)` 为真
+ *    → `assertWriteIntentLockAcquired()` + `runWithWritingAllowed(runnable)`（内部把
+ *    `myWritingAllowed` 置 true 再跑，跑完还原）；否则**裸 run**。即 any() 排出的回调里
+ *    `isWritingAllowed()` 不成立。
+ *  - 而续接链 [continuePrepareAfterTempFile] 内含文档写（共享控制台 `editor.document.setText`、
+ *    控制台文档 `setText` + `PsiDocumentManager.commitDocument`）——any() 投递实测每次点
+ *    「执行计划」都紧跟一条 `SEVERE TransactionGuardImpl … Write-unsafe context`（真机
+ *    16:41:44 / 16:48:03 / 16:53:49 三连，与点击时间戳一一对应）。
+ *  - `TransactionGuard.submitTransaction(Disposable, Runnable)` 虽是平台等价 write-safe 入口
+ *    （内部 `AppUIExecutor.onWriteThread(nonModal).later().expireWith(…)`），但 243 已
+ *    `Deprecated: true`（`javap -v` 实证，四个重载全弃用），故采用非弃用的等价形态
+ *    `invokeLater(…, ModalityState.nonModal())`——与仓内 `DocWriteContext.invokeLaterWriteSafe` 同款。
+ *  - 模态语义：nonModal 在模态存续期**延后**执行，这正是写入类回调的正确语义（模态期间写文档
+ *    本身被平台禁止，见 `DocWriteContext` 类注释定例）；本链的 runner 选择器/内嵌控制台是在
+ *    续接链**内部**弹出，续接链不会被自己的弹窗阻塞。
  *
  * 契约影响：本函数**异步**——调用方不得在调用返回后立即使用临时文件，必须写在 [onReady] 里
  * （`chooseAndPrepare` 的后续全链已按此迁入 `continuePrepareAfterTempFile`）。
  *
  * @param onReady 结果回调；null = 建链失败（阶段原因在 `lastTempFileFailure`）。EDT 调用时
- *   回调保证在 EDT 上发生。
+ *   回调保证在 EDT 上、且处于 write-safe 上下文（可写文档）。
  */
 internal fun DataSourceSelector.createTempPsiFileAsync(
     project: Project,
@@ -53,15 +75,18 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
 ) {
     val app = ApplicationManager.getApplication()
     if (!app.isDispatchThread) {
-        // 已是后台线程：慢操作在本线程合法（同 prewarmExecTempFileOnBackgroundThread 口径）
-        onReady(createTempPsiFile(project, sql, renderedDialectName))
+        // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
+        // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
+        val pair = createTempPsiFile(project, sql, renderedDialectName)
+        // 投递模态 = nonModal（构造期即登记为 write-safe），**不是 any()**：any() 排出的回调
+        // 不套 runWithWritingAllowed，续接链的文档写必触发 TransactionGuard 的 Write-unsafe 断言
+        // （2026-11-01 真机回归，见方法 KDoc「写安全」节）。守卫：ExecTempFileEdtGuardTest。
+        app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
         return
     }
     app.executeOnPooledThread {
         val pair = createTempPsiFile(project, sql, renderedDialectName)
-        // ModalityState.any()：续接链要弹 runner 选择器/内嵌控制台，不得被模态对话框饿死
-        //（同 DataSourceSelectorResults 内既有错误投递口径）
-        app.invokeLater({ onReady(pair) }, ModalityState.any())
+        app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
     }
 }
 

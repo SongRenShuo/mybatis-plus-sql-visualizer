@@ -28,7 +28,21 @@ import java.io.File
  *  3. [ASYNC_ENTRY] 必须同时具备 `isDispatchThread` 判定 + `executeOnPooledThread` + `invokeLater`
  *     （EDT 只派发、结果回 EDT）；
  *  4. 慢段本体必须仍含 `refreshAndFindFileByIoFile` + `ReadAction`/`PsiManager`——PSI 获取被
- *     悄悄删掉或改成同步形态同样要红。
+ *     悄悄删掉或改成同步形态同样要红；
+ *  5. **结果回调必须是 write-safe 投递**（[writeSafeDeliveryOffenders]，2026-11-01 真机回归）：
+ *     [ASYNC_ENTRY] 里每个 `onReady(` 调用点都必须落在 `invokeLater(…, ModalityState.nonModal())`
+ *     （或 `DocWriteContext.invokeLaterWriteSafe(` / `submitTransaction(`）之内，且函数体不得出现
+ *     `ModalityState.any()`。
+ *
+ * 规则五为什么必须单钉：既有 `BannedApiScanRuleTest.anyModalityWriteOffenders` 只看**直接**写令牌
+ * （`setText(` / `commitDocument(` …）出现在 any() 回调里，看不见「`invokeLater { callback(…) }`」
+ * 这种**间接**形态——回调体在别的函数里写文档。本券回归正是这一形态（`onReady` 不在写令牌表内，
+ * 首版 BannedApiScanRuleTest 全绿却真机必报），故在此按「投递点 + 模态」直接封口。
+ *
+ * 为什么规则五是形态守卫而非行为测试：write-safe 资格由平台事务/模态在运行期判定
+ * （`TransactionGuardImpl` 构造期把 `myWritingAllowed` 置为 `SwingUtilities.isEventDispatchThread()`，
+ * headless 测试线程上该值恒真），行为断言测不出「any() 排出的回调写文档」——形态是唯一可机器化
+ * 判据（与 LastUsedWriteOnEdtGuardTest 同理）。
  *
  * 函数体一律按**大括号配平**取真实区间（固定长度窗口会跨界读到邻居函数，造成假绿——
  * LastUsedWriteOnEdtGuardTest 反向验证时踩过这个坑）。
@@ -104,7 +118,95 @@ class ExecTempFileEdtGuardTest {
                 out += "$CORE: 不再含 ReadAction + PsiManager（PSI 获取被掏空——Runner 枚举会拿不到 PsiFile）"
             }
         }
+
+        // ---- 规则五：结果回调必须是 write-safe 投递（any() 恒 write-unsafe） ----
+        out += writeSafeDeliveryOffenders(factorySource)
         return out
+    }
+
+    /**
+     * 判定内核（VIOLATIONS）：[ASYNC_ENTRY] 的**结果回调投递**是否处于 write-safe 上下文。
+     *
+     * 2026-11-01 真机回归：首版用 `invokeLater({ onReady(pair) }, ModalityState.any())`——any() 恒
+     * write-unsafe（不在 `TransactionGuardImpl.myWriteSafeModalities` 表内，构造期只登记 nonModal），
+     * 续接链里的文档写（共享控制台 `editor.document.setText`、控制台文档 `setText` +
+     * `commitDocument`）每次点「执行计划」都紧跟一条 `SEVERE TransactionGuardImpl … Write-unsafe
+     * context`（16:41:44 / 16:48:03 / 16:53:49 与点击时间戳一一对应）。
+     *
+     * 判定：每个 `onReady(` 调用点都必须落在 write-safe 投递之内——
+     *  - `invokeLater(…, ModalityState.nonModal())`（实参区按**括号配平**取，不用固定窗口），或
+     *  - `DocWriteContext.invokeLaterWriteSafe(` / `submitTransaction(`（平台/仓内既有 write-safe 收口）。
+     * 另外函数体整体不得出现 `ModalityState.any()`。
+     */
+    internal fun writeSafeDeliveryOffenders(factorySource: String): List<String> {
+        val src = stripComments(factorySource)
+        val body = bodyOf(src, ASYNC_ENTRY)
+            ?: return listOf("$factoryPath: 未定位到 $ASYNC_ENTRY 函数体（异步投递入口消失）")
+        val out = ArrayList<String>()
+        if (body.contains("ModalityState.any()")) {
+            out += "$ASYNC_ENTRY: 用 ModalityState.any() 投递——any() 恒 write-unsafe" +
+                "（TransactionGuardImpl 构造期只把 nonModal 登记为 write-safe），续接链文档写必触发" +
+                " TransactionGuard Write-unsafe 断言"
+        }
+        var idx = body.indexOf("$ON_READY(")
+        if (idx < 0) out += "$ASYNC_ENTRY: 未见 $ON_READY( 调用（结果回调不见了？）"
+        while (idx >= 0) {
+            val verdict = deliveryVerdict(body, idx)
+            if (!verdict.writeSafe) {
+                out += "$ASYNC_ENTRY:${lineOf(body, idx)} $ON_READY 不在 write-safe 投递里（${verdict.how}）"
+            }
+            idx = body.indexOf("$ON_READY(", idx + ON_READY.length + 1)
+        }
+        return out
+    }
+
+    /** 判定辅助：`callIdx` 处的 `onReady(` 是否被 write-safe 投递包住（投递形态 + 模态实参）。 */
+    internal fun deliveryVerdict(body: String, callIdx: Int): DeliveryVerdict {
+        val before = body.substring(0, callIdx)
+        // 取「最近的一个投递调用」——按出现位置比较，避免跨语句误认
+        var bestIdx = -1
+        var bestKind = ""
+        var bestSafe = false
+        for ((name, safe) in DELIVERY_CALLS) {
+            val i = before.lastIndexOf(name)
+            if (i > bestIdx) {
+                bestIdx = i
+                bestKind = name
+                bestSafe = safe
+            }
+        }
+        if (bestIdx < 0) return DeliveryVerdict(false, "未找到任何投递调用（同步直调 = 慢操作 + 非 EDT 回调）")
+        if (bestSafe) return DeliveryVerdict(true, bestKind)
+        // invokeLater：取实参区（括号配平）判模态
+        val args = callArgsText(body, bestIdx + bestKind.length - 1)
+        val writeSafe = args.contains("ModalityState.nonModal()")
+        return DeliveryVerdict(
+            writeSafe,
+            if (writeSafe) "invokeLater(nonModal)" else "invokeLater 模态不是 nonModal：${args.take(60)}",
+        )
+    }
+
+    /** 投递形态：name → 该形态是否天然 write-safe（invokeLater 需另看模态实参）。 */
+    private data class DeliveryCall(val name: String, val writeSafeByItself: Boolean)
+
+    internal data class DeliveryVerdict(val writeSafe: Boolean, val how: String)
+
+    /** 取 `openParenIdx` 处调用的实参区文本（**括号配平**，不用固定长度窗口）。 */
+    private fun callArgsText(src: String, openParenIdx: Int): String {
+        if (openParenIdx < 0 || openParenIdx >= src.length || src[openParenIdx] != '(') return ""
+        var depth = 0
+        var i = openParenIdx
+        while (i < src.length) {
+            when (src[i]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return src.substring(openParenIdx + 1, i)
+                }
+            }
+            i++
+        }
+        return src.substring(openParenIdx + 1)
     }
 
     // ------------------------------------------------------------------
@@ -149,7 +251,7 @@ class ExecTempFileEdtGuardTest {
                 if (!app.isDispatchThread) { onReady(createTempPsiFile(project)); return }
                 app.executeOnPooledThread {
                     val pair = createTempPsiFile(project)
-                    app.invokeLater({ onReady(pair) }, ModalityState.any())
+                    app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
                 }
             }
         """.trimIndent()
@@ -166,13 +268,85 @@ class ExecTempFileEdtGuardTest {
                 }
             }
         """.trimIndent()
-        val goodFactory = badFactory
         assertEquals(
-            "合规异步形态不应误报：${offendersOf(goodResults, goodFactory)}",
+            "合规异步形态不应误报：${offendersOf(goodResults, goodAsyncFactory())}",
             0,
-            offendersOf(goodResults, goodFactory).size,
+            offendersOf(goodResults, goodAsyncFactory()).size,
         )
     }
+
+    /**
+     * 自证：write-safe 投递四态——`any()` / 省略模态（默认模态）必红，`nonModal` /
+     * `invokeLaterWriteSafe` 不误报。这是 2026-11-01 真机回归（any() → Write-unsafe）的锚点。
+     */
+    @Test
+    fun `自证_write-safe投递判定能看见any与省略模态且放行nonModal`() {
+        val anyModality = """
+            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
+                val app = ApplicationManager.getApplication()
+                app.executeOnPooledThread {
+                    app.invokeLater({ onReady(createTempPsiFile(project)) }, ModalityState.any())
+                }
+            }
+        """.trimIndent()
+        val anyOffenders = writeSafeDeliveryOffenders(anyModality)
+        assertTrue("any() 投递必须被点名：$anyOffenders", anyOffenders.any { it.contains("any()") })
+        assertTrue(
+            "any() 投递下的 onReady 必须被判「不在 write-safe 投递里」：$anyOffenders",
+            anyOffenders.any { it.contains("不在 write-safe 投递里") },
+        )
+
+        val defaultModality = """
+            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
+                ApplicationManager.getApplication().invokeLater({ onReady(createTempPsiFile(project)) })
+            }
+        """.trimIndent()
+        assertTrue(
+            "省略模态（defaultModalityState）投递必须被点名：${writeSafeDeliveryOffenders(defaultModality)}",
+            writeSafeDeliveryOffenders(defaultModality).any { it.contains("不在 write-safe 投递里") },
+        )
+
+        assertEquals(
+            "nonModal 投递不应误报：${writeSafeDeliveryOffenders(goodAsyncFactory())}",
+            0,
+            writeSafeDeliveryOffenders(goodAsyncFactory()).size,
+        )
+
+        val viaDocWriteContext = """
+            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
+                val pair = createTempPsiFile(project)
+                DocWriteContext.invokeLaterWriteSafe(project, "exec temp file ready") { onReady(pair) }
+            }
+        """.trimIndent()
+        assertEquals(
+            "DocWriteContext.invokeLaterWriteSafe（仓内 write-safe 收口）不应误报：" +
+                "${writeSafeDeliveryOffenders(viaDocWriteContext)}",
+            0,
+            writeSafeDeliveryOffenders(viaDocWriteContext).size,
+        )
+    }
+
+    /** 合成合规异步入口：两分支都经 `invokeLater(…, nonModal)` 投递（与生产形态同构）。 */
+    private fun goodAsyncFactory(): String = """
+        internal fun DataSourceSelector.createTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
+            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+            val psi = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
+            return null
+        }
+
+        internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
+            val app = ApplicationManager.getApplication()
+            if (!app.isDispatchThread) {
+                val pair = createTempPsiFile(project)
+                app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
+                return
+            }
+            app.executeOnPooledThread {
+                val pair = createTempPsiFile(project)
+                app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
+            }
+        }
+    """.trimIndent()
 
     /** 自证：工厂里出现第二处同步调用点必须被点名（守卫灵敏度）。 */
     @Test
@@ -182,22 +356,7 @@ class ExecTempFileEdtGuardTest {
                 createTempPsiFileAsync(project, sql) { temp -> continuePrepareAfterTempFile(project, temp) }
             }
         """.trimIndent()
-        val factory = """
-            internal fun DataSourceSelector.createTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
-                val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
-                val psi = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
-                return null
-            }
-
-            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
-                val app = ApplicationManager.getApplication()
-                if (!app.isDispatchThread) { onReady(createTempPsiFile(project)); return }
-                app.executeOnPooledThread {
-                    val pair = createTempPsiFile(project)
-                    app.invokeLater({ onReady(pair) }, ModalityState.any())
-                }
-            }
-
+        val factory = goodAsyncFactory() + "\n\n" + """
             internal fun DataSourceSelector.anotherCaller(project: Project) {
                 val temp = createTempPsiFile(project)
             }
@@ -282,5 +441,13 @@ class ExecTempFileEdtGuardTest {
         private const val CORE = "createTempPsiFile"
         private const val ASYNC_ENTRY = "createTempPsiFileAsync"
         private const val CONTINUATION = "continuePrepareAfterTempFile"
+        private const val ON_READY = "onReady"
+
+        /** 投递形态白/黑名单：`invokeLater` 需看模态实参，另两个自身即 write-safe 收口。 */
+        private val DELIVERY_CALLS = listOf(
+            DeliveryCall("invokeLaterWriteSafe(", true),
+            DeliveryCall("submitTransaction(", true),
+            DeliveryCall("invokeLater(", false),
+        )
     }
 }
