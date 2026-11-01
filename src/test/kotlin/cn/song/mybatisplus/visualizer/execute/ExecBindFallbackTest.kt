@@ -174,8 +174,10 @@ class ExecBindFallbackTest {
     @Test
     fun `自证_摘掉接线判定变红`() {
         val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        // T-ExecPlanEdtSlowOp：回落块随 chooseAndPrepare 后半链搬进 continuePrepareAfterTempFile，
+        // 标签返回 `return@chooseAndPrepare` 改为普通 `return`——锚点同步（摘掉的仍是同一段接线）。
         val stripped = results.replace(
-            Regex("""// S2-12：绑定回落[\s\S]*?return@chooseAndPrepare\r?\n\s*\}"""),
+            Regex("""// S2-12：绑定回落[\s\S]*?return\r?\n\s*\}"""),
             "",
         )
         assertFalse("摘掉回落块后判定必须变红（守卫灵敏度）", fallbackWiringShape(stripped))

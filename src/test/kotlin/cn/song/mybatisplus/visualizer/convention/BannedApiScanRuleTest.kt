@@ -580,7 +580,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 分布到同包两个协作文件（`*Console.kt` 2 处 + `*Results.kt` 11 处，合计仍是 13）；
         // 本表按「站点真正所在文件」登记，站点全部带 fatal 判定由下面 `sites.all { … }` 逐个保鲜。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt",
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
+        // T-ExecPlanEdtSlowOp（2026-11-01）：`*Results.kt` 的站点全部属于 `createTempPsiFile` 一族，
+        // 随执行计划链 EDT 慢操作收口整体搬入 ExecTempFileFactory.kt——本文件现 0 处站点，
+        // 故移出本表（本表要求每个登记文件至少一处站点），改登记新文件。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/ExecTempFileFactory.kt",
         // D202（2026-10-31）：writeConsoleOutput 的 2 处 catch(Throwable)（均带 FatalErrors.isFatal 判定）
         // 随输出写入链搬入本文件——按站点真正所在文件登记，站点全部带判定由下面 sites.all{…} 逐个保鲜。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleOutput.kt",
@@ -703,9 +706,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      * actions/ConvertSqlToJavaAction.kt                               1 处：93
      * ```
      *
-     * 已落地（**33 处 / 6 文件**）：`execute/DataSourceSelectorConsole.kt` 2 +
-     * `execute/DataSourceSelectorResults.kt` 11（原同属 `execute/DataSourceSelector.kt` 的 13 处，
-     * T-M53-II 组合式重构把它们分到两个协作文件——合计不变）、`log/agent/AgentManager.kt` 10、
+     * 已落地（**33 处 / 7 文件**）：`execute/DataSourceSelectorConsole.kt` 2 +
+     * `execute/ExecTempFileFactory.kt` 9（T-ExecPlanEdtSlowOp 把 `createTempPsiFile` 一族从
+     * `execute/DataSourceSelectorResults.kt` 整体搬来，原登记的 11 处即该族站点；
+     * `DataSourceSelectorResults.kt` 现 0 处故移出本表）、`log/agent/AgentManager.kt` 10、
      * `log/RunConfigurationProcessListener.kt` 7、`ui/SqlPreviewService.kt` 1（T-FP-02b 收口）、
      * `log/SqlToJavaPanel.kt` 2（20261007 收口；该文件此前**登记 1 处、实际 2 处**，故上表登记口径
      * 的 42 与已落地 33 之和为 75，比历史「合计 74」多 1——差额即那次漏登）——
