@@ -1,0 +1,11 @@
+allprojects {
+    afterEvaluate { p ->
+        if (p == p.rootProject && p.extensions.findByName('intellijPlatform') != null) {
+            p.extensions.getByName('intellijPlatform').sandboxContainer.set(
+                p.layout.buildDirectory.dir('MPSV-MagpieGems-UI243'))
+            p.tasks.named('runIde').configure { task ->
+                task.autoReload.set(false)
+            }
+        }
+    }
+}

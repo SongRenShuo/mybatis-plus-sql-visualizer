@@ -1,0 +1,13 @@
+// FR-0045 MCP 链走查：262 平台沙盒（2024.3 无内置 MCP Server，只能上 262）
+// 独立 sandboxContainer + autoReload 关，绝不碰录制用的 MPSV-GifFresh
+allprojects {
+    afterEvaluate { p ->
+        if (p == p.rootProject && p.extensions.findByName('intellijPlatform') != null) {
+            p.extensions.getByName('intellijPlatform').sandboxContainer.set(
+                p.layout.buildDirectory.dir('MPSV-Fr45Walk262'))
+            p.tasks.named('runIde').configure { task ->
+                task.autoReload.set(false)
+            }
+        }
+    }
+}

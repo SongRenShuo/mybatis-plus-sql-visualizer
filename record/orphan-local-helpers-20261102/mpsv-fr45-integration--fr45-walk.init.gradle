@@ -1,0 +1,12 @@
+// FR-0045 runIde 真机走查（T-Fr45NonMybatisStack 收口）：独立沙盒，防后台构建改动在验版本
+allprojects {
+    afterEvaluate { p ->
+        if (p == p.rootProject && p.extensions.findByName('intellijPlatform') != null) {
+            p.extensions.getByName('intellijPlatform').sandboxContainer.set(
+                p.layout.buildDirectory.dir('MPSV-Fr45Walk'))
+            p.tasks.named('runIde').configure { task ->
+                task.autoReload.set(false)
+            }
+        }
+    }
+}
