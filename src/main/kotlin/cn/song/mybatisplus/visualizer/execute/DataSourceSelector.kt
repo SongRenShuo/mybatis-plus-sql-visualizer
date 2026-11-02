@@ -1495,8 +1495,13 @@ object DataSourceSelector {
      * 内部的读访问断言硬抛 `Read access is allowed from inside read-action only`（idea.log
      * 4605 行完整栈）；runCatching 吞成空列表 → `runners=0` → 误报方言不匹配。
      * 平台链内部会 attach 控制台（写意图），故按 AGENTS.md 口径包 `WriteIntentReadAction.compute`
-     * 而非 ReadAction（ReadAction 内开 WIRA 会硬抛）；该方法 243 平台在 `util-8.jar`
-     * （javap 实证含 `compute(ThrowableComputable)`），243~262 交集可用。
+     * 而非 ReadAction（ReadAction 内开 WIRA 会硬抛）。**重载选型（javap 双平台实证）**：
+     * `compute(ThrowableComputable)` 仅 243 有——262 把它改名 `computeThrowable`（`run(ThrowableRunnable)`
+     * 同步改名 `runThrowable`），编译期引用在 262 运行时直接 `NoSuchMethodError`（2026-11-02
+     * 用户真机二次实测）；`compute(Computable)` 为 243~262 交集，且 Kotlin lambda 抛受检异常
+     * 在 JVM 字节码层合法（Kotlin 无受检异常检查），`InvocationTargetException` 照常穿透由外层
+     * `runCatching` 捕获，语义与 ThrowableComputable 形态一致。同文件 `RollbackSqlDialog.kt`
+     * 的既有用法即单类型实参形态。
      */
     internal fun enumerateDataSourceRunners(
         psiFile: PsiFile,
@@ -1516,7 +1521,7 @@ object DataSourceSelector {
                     String::class.java,
                     com.intellij.util.Consumer::class.java,
                 )
-                val result = WriteIntentReadAction.compute<Any?, Throwable> {
+                val result = WriteIntentReadAction.compute<Any?> {
                     method.invoke(null, psiFile, sql, sessionConsumer)
                 }
                 (result as? List<*>)?.filterNotNull() ?: emptyList()
@@ -1537,7 +1542,7 @@ object DataSourceSelector {
                 Class.forName(SESSION_CLASS),
                 com.intellij.util.Consumer::class.java,
             )
-            val result = WriteIntentReadAction.compute<Any?, Throwable> {
+            val result = WriteIntentReadAction.compute<Any?> {
                 method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
             }
             (result as? List<*>)?.filterNotNull() ?: emptyList()
