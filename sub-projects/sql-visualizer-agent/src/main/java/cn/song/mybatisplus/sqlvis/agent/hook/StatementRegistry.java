@@ -124,6 +124,18 @@ public final class StatementRegistry {
      */
     private static final AtomicBoolean UNRESOLVED_WARNED_ONCE = new AtomicBoolean();
 
+    /**
+     * 2026-11-02 用户口径：「这条应该有问题时才出现，平时不出现」。
+     *
+     * <p>单条盲区（attach 前 prepare 的 PS）是**常态**，属诊断信息——默认静默，仅
+     * {@code logLevel=debug} 打一次；累计到 [BLIND_ALARM_THRESHOLD] 次才说明整场都在盲区
+     * （钩子在跑但 SQL 一律取不到），那是真实降级，任何级别必报一次。
+     */
+    private static final AtomicBoolean BLIND_ALARM_EMITTED = new AtomicBoolean();
+
+    /** 系统性盲区判据：累计无登记执行达到该次数即升级为必报。 */
+    private static final long BLIND_ALARM_THRESHOLD = 5L;
+
     private StatementRegistry() {
     }
 
@@ -152,13 +164,19 @@ public final class StatementRegistry {
         final Ctx ctx = get(statement);
         if (ctx == null) {
             final long n = UNRESOLVED.incrementAndGet();
-            // 首条盲区取证（仅一次；见 UNRESOLVED_WARNED_ONCE 注释）——「钩子在跑但 SQL 取不到」
-            // 的宿主侧唯一出口，与 WovenEvents 首条事件行同款取舍（一次告警防宿主日志刷屏）。
-            if (UNRESOLVED_WARNED_ONCE.compareAndSet(false, true)) {
+            // 单条盲区＝诊断（attach 前 prepare 的 PS 是常态）：默认静默，logLevel=debug 打一次。
+            if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.isVerboseLogging()
+                    && UNRESOLVED_WARNED_ONCE.compareAndSet(false, true)) {
                 System.err.println("[SqlVisAgent] 织入通道登记盲区：无登记 PS 执行被跳过（SQL 不可得）"
                         + " psClass=" + (statement == null ? "null" : statement.getClass().getName())
                         + " unresolvedCount=" + n
-                        + " —— 一期已知盲区（attach 之前 prepare 的 PS 无 SQL 归属；仅此一条告警）");
+                        + " —— 一期已知盲区（attach 之前 prepare 的 PS 无 SQL 归属）");
+            }
+            // 累计到阈值＝系统性盲区（整场取不到 SQL 的真实降级）：任何级别必报，只报一次。
+            if (n >= BLIND_ALARM_THRESHOLD && BLIND_ALARM_EMITTED.compareAndSet(false, true)) {
+                System.err.println("[SqlVisAgent] 织入通道系统性盲区：累计 " + n
+                        + " 次无登记 PS 执行被跳过 —— 钩子在跑但 SQL 归属一律缺失，"
+                        + "请确认采集是否在连接/语句建立之后才 attach（一期已知限制）");
             }
         }
         return ctx;
