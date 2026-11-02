@@ -37,17 +37,38 @@ object MpvLaneMeter {
     /**
      * 此刻存活的、属于本构建的分片测试执行器数量（含本片自己：本片 JVM 已出生后 doFirst
      * 才执行，命令行已带标记）。
+     *
+     * T-ReleasePerf11 W3 轮实证：JDK `ProcessHandle.allProcesses()` 在 Windows daemon JVM 内
+     * 对其他进程的 CommandLine 可见性受限（W3 shard4 doLast 时 shard5 JVM 确定在跑——XML
+     * mtime 证据——而扫描读 0；对照 PowerShell CIM 同刻全进程 531 个、命令行全可读），故改走
+     * PowerShell CIM 通道（base64 -EncodedCommand，零转义歧义；assertNoForeignVerifier 同款
+     * 实现模式，W2 轮已实证该通道在 daemon JVM 内可读命令行）。失败降级 -1（fail-open）。
      */
     fun activeShardExecutors(buildDir: String, logger: org.gradle.api.logging.Logger): Int = try {
         val needle = "-DmpvShardMarker=" + markerValue(buildDir)
-        ProcessHandle.allProcesses()
-            .filter { handle ->
-                handle.info().commandLine().orElse("").contains(needle)
+        val ps = (
+            "\$c = Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | " +
+                "Where-Object { \$null -ne \$_.CommandLine -and \$_.CommandLine.Contains('$needle') }; " +
+                "if (\$c) { \$c | Measure-Object | ForEach-Object { \$_.Count } } else { '0' }"
+            )
+        val encoded = java.util.Base64.getEncoder().encodeToString(ps.toByteArray(Charsets.UTF_16LE))
+        val proc = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+            .redirectErrorStream(true).start()
+        val finished = proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+        val out = if (finished) proc.inputStream.readBytes().decodeToString()
+            .lineSequence().filter { it != "#< CLIXML" && !it.startsWith("<Obj ") && it.isNotBlank() }
+            .joinToString("\n").trim() else ""
+        if (!finished) {
+            logger.warn("lane meter: CIM 扫描超时（30s），laneAtEnd=-1")
+            -1
+        } else {
+            out.toIntOrNull() ?: run {
+                logger.warn("lane meter: CIM 输出不可解析「${out.take(80)}」，laneAtEnd=-1")
+                -1
             }
-            .count()
-            .toInt()
+        }
     } catch (e: Exception) {
-        logger.warn("lane meter: 进程扫描失败（${e.javaClass.simpleName}），laneActive=-1")
+        logger.warn("lane meter: 进程扫描失败（${e.javaClass.simpleName}），laneAtEnd=-1")
         -1
     }
 }
