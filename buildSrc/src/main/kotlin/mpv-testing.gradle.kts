@@ -847,7 +847,24 @@ intellijPlatformTesting {
                     fragOfTarget[fragOf] = target
                 }
             }
-            ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
+            // T-ReleasePerf11 券02：装箱完成后按权重**降序**重排槽位——贪心只保证各片负载相近，
+            // 不保证槽位序；限流（MpvTestLaneLimiter）下 Gradle 近似按注册/图序派发，等权装箱下
+            // 槽位序是负载序的随机投影，末波可能拿到最重片拉长尾巴。重排后 testShard1 恒最重、
+            // 末槽恒最轻：lane2 双波与 lane3 两波的末波尾巴都最短。
+            // 置换发生在 ShardPlan 构造前——classes/loads/frag 三张按槽记账的映射全部同步重映射，
+            // 下游所有按 testShardN 名对账的契约（结果目录/hashes/expected/聚合报告）自动一致。
+            // handicap 语义注记：auto-handicap 历史里的 critSlot 是「上一轮重排后」的槽号，重排使
+            // 槽号跨轮不稳定 → 3 连同槽触发自然推迟重学（宁欠勿过方向，无正确性影响）。
+            val weightOrder = loads.indices.sortedByDescending { loads[it] }
+            val remapSlot = IntArray(loads.size) { old -> weightOrder.indexOf(old) }
+            ShardPlan(
+                classes = weightOrder.map { shards[it] },
+                loads = weightOrder.map { loads[it] },
+                fragExcludes = fragExcludes.entries.associate { (slot, v) -> remapSlot[slot] to v },
+                fragIncludes = fragIncludes.entries.associate { (slot, v) -> remapSlot[slot] to v },
+                fragHome = fragOfHome.mapValues { (_, slot) -> remapSlot[slot] },
+                fragTarget = fragOfTarget.mapValues { (_, slot) -> remapSlot[slot] },
+            )
         }
         val shardAssignment = plan.classes
         // task{} 惰性块只捕获可序列化的纯 Map/List（局部类实例进 CC 序列化有拒收风险）
@@ -914,6 +931,12 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
+        // T-ReleasePerf11 券02：重排后的注册序即权重降序（testShard1 恒最重），日志一行自证。
+        logger.lifecycle(
+            "testShards: 槽位已按权重降序重排 loads=" +
+                plan.loads.indices.joinToString(" ") { i -> "shard${i + 1}=%.1fs".format(plan.loads[i]) } +
+                "（类集重映射，testShardN 名义与结果目录不变）",
+        )
         // T-ReleasePerf9：错峰延迟迁至共享前置任务 testShardStagger（原 T-ReleasePerf7 N1
         // 叶子 doFirst sleep 的迁移版，等价性论证见该任务注释）——限流下叶子 sleep 会占槽
         // 令第二波分片白睡整段延迟，共享前置睡一次后释放。分片真实起点不变（≥ t0+285s）。
@@ -968,6 +991,10 @@ intellijPlatformTesting {
                         // 见 MpvLaneMeter 注释（计数器版本已被实测否掉）。
                         val laneOthers = MpvLaneMeter.activeShardExecutors(root, logger)
                         logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneOthers=$laneOthers")
+                        // T-ReleasePerf11 券02：laneOthers 落盘——聚合报告按「本轮各片 laneOthers
+                        // 序列」自报并发形态（V235-3 判据「laneOthers 峰值一致」的机器读数通道），
+                        // 不再靠人翻 daemon 日志。落片目录（.round-start 同目录），聚合 doLast 读。
+                        File(dir, ".lane-others").writeText(laneOthers.toString())
                     }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
                     }
@@ -1250,6 +1277,18 @@ tasks.register("testShards") {
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
             if (idx < shardResultDirs.size - 1) shardExec += t
         }
+        // T-ReleasePerf11 券02：并发形态自报——聚合各片 doFirst 落盘的 .lane-others（本片起跑
+        // 瞬间其他在跑分片执行器数），峰值与序列一行可见。V235-3 判据（同参两轮 laneOthers
+        // 峰值一致=并发形态稳定）的机器读数；缺失（旧轮残留目录/手工单跑）显示 n/a 不阻塞。
+        val laneSeq = (1..testShardCount).map { i ->
+            val laneDir = file("build/test-results/testShard$i")
+            File(laneDir, ".lane-others").takeIf { it.isFile }?.readText()?.trim()
+        }
+        val laneMax = laneSeq.mapNotNull { it?.toIntOrNull() }.maxOrNull()
+        logger.lifecycle(
+            "SHARD LANE: laneOthers=[" + laneSeq.joinToString(",") { it ?: "n/a" } +
+                "] peak=${laneMax ?: "n/a"}（峰值<分片数-1 ⇒ 限流下并发度未满档，见 T10 坑1）",
+        )
         // T-TestPerf10 S2：失衡/缺权告警（只增 WARN，不改执行面）——把「预期 vs 实测」从人眼
         // 比对固化为机器判据，防 20260929 dev 树 3m07s 式漂移静默复发（批次8 新类零本地权重
         // 被中位数插值 → 所在片实际超重 +13.7%）。失衡判据 12%（并发噪声正常带 ±7% 上限加余量）；
