@@ -979,6 +979,11 @@ intellijPlatformTesting {
                     // 项目根绝对路径走 inputs.property（CC 官方通道，doFirst 相对路径按 daemon
                     // CWD 解析的坑与 testDatabase 同源）。
                     inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+                    // T-ReleasePerf11 券02 修正：分片执行器 JVM 的显式命令行标记——MpvLaneMeter
+                    // 进程扫描的匹配键（原「构建目录/test-sandbox/」字面量在 IPGP 执行器命令行
+                    // 里不存在，E1 两轮 laneOthers 恒 0 实证观测失效）。标记值=构建目录哈希，
+                    // 并行会话/其他工作树互不串扰；test 系统属性随执行器 JVM 命令行可见。
+                    systemProperty("mpvShardMarker", MpvLaneMeter.markerValue(project.projectDir.absolutePath))
                     doFirst {
                         val root = inputs.properties["mpvResultsRootAbs"] as String
                         val dir = File(root, "build/test-results/testShard$i")
@@ -986,15 +991,15 @@ intellijPlatformTesting {
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
                         // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
                         // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
-                        // T-ReleasePerf10：laneOthers = 本片起跑瞬间**其他**在跑分片执行器数
-                        // （本片自己的 JVM 尚未出生）。与档位日志并排即可判「档位是否真的变成并发」，
-                        // 见 MpvLaneMeter 注释（计数器版本已被实测否掉）。
-                        val laneOthers = MpvLaneMeter.activeShardExecutors(root, logger)
-                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneOthers=$laneOthers")
-                        // T-ReleasePerf11 券02：laneOthers 落盘——聚合报告按「本轮各片 laneOthers
-                        // 序列」自报并发形态（V235-3 判据「laneOthers 峰值一致」的机器读数通道），
-                        // 不再靠人翻 daemon 日志。落片目录（.round-start 同目录），聚合 doLast 读。
-                        File(dir, ".lane-others").writeText(laneOthers.toString())
+                        // T-ReleasePerf10：并发度观测。标记修正后本片 JVM 已带 -DmpvShardMarker
+                        // （task 配置期注入），doFirst 扫描读到的是**含本片**的活跃执行器数，
+                        // 故改名 laneActive（含自身）——lane1 时典型读数 1，两片并发时 2~3。
+                        val laneActive = MpvLaneMeter.activeShardExecutors(root, logger)
+                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneActive=$laneActive")
+                        // T-ReleasePerf11 券02：并发读数落盘——聚合报告按「本轮各片读数序列」
+                        // 自报并发形态（V235-3 判据的机器读数通道），不再靠人翻 daemon 日志。
+                        // 落片目录（.round-start 同目录），聚合 doLast 读。
+                        File(dir, ".lane-others").writeText(laneActive.toString())
                     }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
                     }
@@ -1277,18 +1282,18 @@ tasks.register("testShards") {
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
             if (idx < shardResultDirs.size - 1) shardExec += t
         }
-        // T-ReleasePerf11 券02：并发形态自报——聚合各片 doFirst 落盘的 .lane-others（本片起跑
-        // 瞬间其他在跑分片执行器数），峰值与序列一行可见。V235-3 判据（同参两轮 laneOthers
-        // 峰值一致=并发形态稳定）的机器读数；缺失（旧轮残留目录/手工单跑）显示 n/a 不阻塞。
-        // 走配置期捕获的 shardResultDirs（E1 轮实证：doLast 内调 Project.file 引用脚本对象，
-        // CC 存储失败——既有聚合块全部走该通道，本块必须同款）。
+        // T-ReleasePerf11 券02：并发形态自报——聚合各片 doFirst 落盘的 .lane-others（本片 doFirst
+        // 时含自身的活跃分片执行器数，-DmpvShardMarker 进程扫描），峰值与序列一行可见。
+        // V235-3 判据（同参两轮峰值一致=并发形态稳定）的机器读数；缺失（旧轮残留/手工单跑）
+        // 显示 n/a 不阻塞。走配置期捕获的 shardResultDirs（E1 轮实证：doLast 内调 Project.file
+        // 引用脚本对象，CC 存储失败——既有聚合块全部走该通道，本块必须同款）。
         val laneSeq = shardResultDirs.dropLast(1).map { dir ->
             File(dir, ".lane-others").takeIf { it.isFile }?.readText()?.trim()
         }
         val laneMax = laneSeq.mapNotNull { it?.toIntOrNull() }.maxOrNull()
         logger.lifecycle(
-            "SHARD LANE: laneOthers=[" + laneSeq.joinToString(",") { it ?: "n/a" } +
-                "] peak=${laneMax ?: "n/a"}（峰值<分片数-1 ⇒ 限流下并发度未满档，见 T10 坑1）",
+            "SHARD LANE: laneActive=[" + laneSeq.joinToString(",") { it ?: "n/a" } +
+                "] peak=${laneMax ?: "n/a"}（含自身；峰值 1 ⇒ 全程串行，2+ ⇒ 有并发）",
         )
         // T-TestPerf10 S2：失衡/缺权告警（只增 WARN，不改执行面）——把「预期 vs 实测」从人眼
         // 比对固化为机器判据，防 20260929 dev 树 3m07s 式漂移静默复发（批次8 新类零本地权重
