@@ -149,7 +149,22 @@ internal class ChooseDataSourceTakeoverGroup(
         }
     }
 
+    /**
+     * 点击落点——**命中本插件 exec 文件时不能再委托**。
+     *
+     * 262 实测（19:08）：`getChildren: sources=13` 已经产出我们的子项，但弹出来仍是原生
+     * 「分离数据源 / 所有 >」两层——因为 `ChooseDataSourceAction` 自己覆写了 `actionPerformed`
+     * 来弹它自己的菜单，委托过去就把我们的子项整个绕过了。命中时走 `ActionGroup` 默认实现
+     * （用本组的 `getChildren` 建弹层），其它文件才原样委托。
+     */
     override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project
+        val file = resolveFile(e)
+        if (project != null && takeoverAppliesTo(file?.path)) {
+            LOG.info("[M36][Takeover] actionPerformed -> own popup (sources via getChildren)")
+            super.actionPerformed(e)
+            return
+        }
         original.actionPerformed(e)
     }
 
