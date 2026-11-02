@@ -167,6 +167,8 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                     "（T-UiCoord F1 起回滚 SQL 居首；O-91 增导出可移植 SQL；R36 增导出回放脚本；R37 增复制为 AI 上下文；T-AiContextLegibility 增含表列名出口；R42 增 DML 影响面）",
                 listOf(
                     MpSqlVisualizerBundle.message("panel.rollbackSql"),
+                    // T-DialectGatePassDeadChain：换源入口常驻（执行失败后状态行蓝字会被错误行顶掉）
+                    MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
                     MpSqlVisualizerBundle.message("panel.param.import"),
                     MpSqlVisualizerBundle.message("panel.compare"),
                     MpSqlVisualizerBundle.message("panel.share"),

@@ -826,6 +826,10 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace() {
     val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
         ?: return
+    // 入口锚点：换源是用户手动动作，日志里必须能一眼看出「点了 / 没点」——2026-11-02 用户报
+    // 「点新数据源没有反应」时，原生下拉那次点击在 idea.log 里零痕迹，无从判断动作有没有落地。
+    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        .info("[M36][SwitchDs] entry: sql len=${sql.length}, prepared=${SqlExecutor.isPrepared()}")
     val gateRequest = executionDialectGateRequest(
         if (SqlTypeClassifier.isQuery(sql)) {
             cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
