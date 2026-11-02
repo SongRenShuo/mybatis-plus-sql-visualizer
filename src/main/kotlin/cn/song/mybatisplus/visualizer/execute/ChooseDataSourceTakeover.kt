@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.execute
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.switchDataSourceTo
 import cn.song.mybatisplus.visualizer.update.BarrierRegistry
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
@@ -128,7 +129,7 @@ internal class ChooseDataSourceTakeoverGroup(
         return merged
     }
 
-    /** 展示形态（图标/文案/可用性）交给原生动作；文案为空时兜底回填，避免只剩一个图标。 */
+    /** 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。 */
     override fun update(e: AnActionEvent) {
         original.update(e)
         if (updateProbed.compareAndSet(false, true)) {
@@ -140,12 +141,16 @@ internal class ChooseDataSourceTakeoverGroup(
         if (e.presentation.text.isNullOrBlank()) {
             e.presentation.setText(original.templateText ?: "", false)
         }
-        // 工具栏按钮读的是**模板呈现**（真机实测：update 里设的文案没能上按钮，下拉退化成只剩图标）。
-        // 把每次 update 的结果镜像进模板，按钮与弹层文案才能一致。
+        // 262 字节码实证：原生 `update` 会 setPopop/setPerformGroup(true) 等——`setPerformGroup`
+        // 正是工具栏把这个组渲染成「图标+文案」按钮（而非纯图标组）的开关。本类不能覆写 final 的
+        // getTemplatePresentation，于是把原生每次算好的呈现写回模板，按钮才会显示数据源名。
         runCatching {
+            e.presentation.setPerformGroup(true)
+            templatePresentation.setPerformGroup(true)
             templatePresentation.setText(e.presentation.text ?: "", false)
             templatePresentation.icon = e.presentation.icon
             templatePresentation.setEnabled(e.presentation.isEnabled)
+            templatePresentation.setVisible(e.presentation.isVisible)
         }
     }
 
@@ -168,21 +173,48 @@ internal class ChooseDataSourceTakeoverGroup(
             original.actionPerformed(e)
             return
         }
-        val children = getChildren(e)
-        if (children.isEmpty()) {
+        val sources = dataSourcesFor(project, file)
+        val items = sources.mapNotNull { ds ->
+            val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull()
+            if (name.isNullOrBlank()) {
+                null
+            } else {
+                name to runCatching { ds.javaClass.getMethod("getIcon").invoke(ds) as? Icon }.getOrNull()
+            }
+        }
+        if (items.isEmpty()) {
             original.actionPerformed(e)
             return
         }
-        LOG.info("[M36][Takeover] actionPerformed -> own popup (children=${children.size})")
+        LOG.info("[M36][Takeover] actionPerformed -> own popup (sources=${items.size})")
         runCatching {
-            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createActionGroupPopup(
-                templateText ?: "数据源",
-                com.intellij.openapi.actionSystem.DefaultActionGroup(*children),
-                e.dataContext,
-                com.intellij.openapi.ui.popup.JBPopupFactory.ActionSelectionAid.SPEEDSEARCH,
-                true,
-            )
-            popup.showInBestPositionFor(e.dataContext)
+            // 用 BaseListPopupStep 而不是 createActionGroupPopup：后者会把数据源名里的 `_`
+            // 当助记符吃掉（真机 `mpj_demo@localhost` 显示成缺少下划线），且带搜索框、位置跟着
+            // 焦点组件漂。纯列表 + showUnderneathOf 才与原生控制台那个下拉一致。
+            val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<Pair<String, Icon?>>(
+                MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                items,
+            ) {
+                override fun getTextFor(value: Pair<String, Icon?>): String = value.first
+                override fun getIconFor(value: Pair<String, Icon?>): Icon? = value.second
+                override fun onChosen(
+                    selectedValue: Pair<String, Icon?>,
+                    finalChoice: Boolean,
+                ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                    val picked = selectedValue.first
+                    return doFinalStep {
+                        LOG.info("[M36][Takeover] popup picked: $picked")
+                        SqlPreviewService.activePreviewPanel(project)?.switchDataSourceTo(picked)
+                    }
+                }
+            }
+            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(step)
+            val comp = e.inputEvent?.component
+            if (comp != null && comp.isShowing) {
+                popup.showUnderneathOf(comp)
+            } else {
+                popup.showInBestPositionFor(e.dataContext)
+            }
         }.onFailure { ex ->
             LOG.warn("[M36][Takeover] own popup FAILED: ${ex.javaClass.simpleName}: ${ex.message}")
             original.actionPerformed(e)
