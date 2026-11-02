@@ -11,6 +11,7 @@
 ### Fixed
 - **IntelliJ 2026.2 上预览窗「执行 SQL」报“方言不匹配”且无法执行（T-Exec262ReadLock）**：262 起 EDT 不再隐式持有读锁，插件反射调用平台 `DatabaseRunners.getAttachDataSourceRunners` 时，平台内部读 per-file 方言映射直接抛 `Read access is allowed from inside read-action only`；异常被 `runCatching` 吞成空列表，走「没有与该 SQL 方言匹配的已配置数据源」文案，用户被引去改 Dialects 设置（现场：PostgreSQL 数据源配置齐全、方言推断也正确）。现两处反射调用（attach / 切换数据源）统一包 `WriteIntentReadAction.compute`（按 243~262 两平台方法集交集选 `compute(Computable)` 重载，避免 262 上 `NoSuchMethodError`）；并且 `runners` 为空时按「平台调用有没有抛异常」分流红条——平台故障报异常首行并提示反馈，只有平台正常返回零个可用源才报方言不匹配。2026.1 / 2024.3 不受影响，包裹对旧版本无害
 - **`selectList` 等非分页查询的预览凭空多出一条「分页 COUNT」（T-Exec262ReadLock）**：`queryWrapper.last("limit " + n)` 被解析成语句 LIMIT（形参静态不可得 → `LIMIT ?`），而 COUNT 包裹的判据只看「语句有没有 LIMIT」，没看「调用是否真的传了 Page/IPage」，于是把 `last` 的 LIMIT 当成分页附赠 COUNT。现以「确有分页实参解析产物」为唯一闸：`last` 的 LIMIT 照常渲染，但不产 COUNT。XML/注解路径的 Page 形参分页不受影响
+- **预览面板已挂控制台时，勾选参数 / 返回预览会弹 `Access is allowed from write thread only`（T-PreviewDocPersistLock，用户真机报障）**：`SqlPreviewPanelSqlView` 的 nativeDoc 分支把 `setText` 放进 `WriteCommandAction`、`saveDocument` 留在块外——写命令返回时写意图即释放，而 `FileDocumentManager.saveDocument` 首行断言写环境（243 `FileDocumentManagerImpl:323-336` → `TransactionGuardImpl.assertWriteActionAllowed`；262 同形改名），EDT 上硬抛。异常从 `showSql` 外抛后，勾选按钮文案与绑定数据源指示行停在旧态、`lastRenderedSql` 不更新（迟到产物换装与自动折叠同时失效），且落盘一次都没成功过。修法＝把落盘移进同一个写命令块（与 `DataSourceSelectorResults` 既有形态一致）。此缺陷自 2026-10-10 引入、跨 2024.3 / 2026.1 / 2026.2 全版本，现有平台单测抓不到的原因是 `BasePlatformTestCase` 整个测试体被 `runWriteIntentReadAction` 包住，写意图恒在，断言恒过
 
 ## [2026.10.31] - 2026-10-31
 
