@@ -150,22 +150,43 @@ internal class ChooseDataSourceTakeoverGroup(
     }
 
     /**
-     * 点击落点——**命中本插件 exec 文件时不能再委托**。
+     * 点击落点——**命中本插件 exec 文件时自己弹层**。
      *
-     * 262 实测（19:08）：`getChildren: sources=13` 已经产出我们的子项，但弹出来仍是原生
-     * 「分离数据源 / 所有 >」两层——因为 `ChooseDataSourceAction` 自己覆写了 `actionPerformed`
-     * 来弹它自己的菜单，委托过去就把我们的子项整个绕过了。命中时走 `ActionGroup` 默认实现
-     * （用本组的 `getChildren` 建弹层），其它文件才原样委托。
+     * 262 实测两轮：
+     *  - 委托给 `original.actionPerformed` → 弹的是原生「分离数据源 / 所有 >」（它自己覆写了
+     *    该方法来弹自己的菜单，把我们的子项整个绕过）；
+     *  - `super.actionPerformed`（ActionGroup 默认）→ **什么都不弹**（`ActionGroup` 自身不建
+     *    弹层，弹层由工具栏的 ActionPopupMenu 负责）。
+     *
+     * 故这里显式用 [JBPopupFactory.createActionGroupPopup] 以本组 children 建弹层，锚到事件
+     * 的组件上；非本插件文件仍原样委托。
      */
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project
         val file = resolveFile(e)
-        if (project != null && takeoverAppliesTo(file?.path)) {
-            LOG.info("[M36][Takeover] actionPerformed -> own popup (sources via getChildren)")
-            super.actionPerformed(e)
+        if (project == null || !takeoverAppliesTo(file?.path)) {
+            original.actionPerformed(e)
             return
         }
-        original.actionPerformed(e)
+        val children = getChildren(e)
+        if (children.isEmpty()) {
+            original.actionPerformed(e)
+            return
+        }
+        LOG.info("[M36][Takeover] actionPerformed -> own popup (children=${children.size})")
+        runCatching {
+            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createActionGroupPopup(
+                templateText ?: "数据源",
+                com.intellij.openapi.actionSystem.DefaultActionGroup(*children),
+                e.dataContext,
+                com.intellij.openapi.ui.popup.JBPopupFactory.ActionSelectionAid.SPEEDSEARCH,
+                true,
+            )
+            popup.showInBestPositionFor(e.dataContext)
+        }.onFailure { ex ->
+            LOG.warn("[M36][Takeover] own popup FAILED: ${ex.javaClass.simpleName}: ${ex.message}")
+            original.actionPerformed(e)
+        }
     }
 
     /** 还原用：被接管的原生动作（dispose 时换回）。 */
