@@ -103,14 +103,17 @@ internal class ChooseDataSourceTakeoverGroup(
         (original as? ActionGroup)?.getChildren(e) ?: AnAction.EMPTY_ARRAY
 
     /**
-     * 数据源枚举——**与原生菜单同源**。
+     * 数据源枚举——**两条来源取并集**（各有盲区，单用任一条都会退回原生列表）。
      *
-     * 原生工具栏「所有」子项来自 `DbImplUtil.getAllDataSourcesForExec(psiFile)`；插件既有的
-     * [DataSourceSettings.getAllDataSources] 在 262 已失效（`DataSourceStorage` 只剩
-     * `myDataSources` 字段，`getDataSources()` 方法不存在 → 反射取不到 → 恒空），
-     * 于是旧实现一路落到「枚举为空 → 委托原生」。这里优先原生同源，失败才回落旧路径。
+     *  - `DbImplUtil.getAllDataSourcesForExec(psiFile)`：原生工具栏「所有」子项的同源集合，
+     *    但按 exec 文件方言过滤，方言未映射/未生效时可能为空；
+     *  - [DataSourceSettings.getAllDataSources]：全量在册源，但**依赖数据源已加载**——真机
+     *    17:17（IDE 启动 86 秒）实测返回 0，而沙盒 18:11 同一函数返回 12。
+     *
+     * 先取全量、再补原生集合里缺的（按显示名去重），任一来源有数据就能出清单。
      */
     private fun dataSourcesFor(project: Project, vf: com.intellij.openapi.vfs.VirtualFile?): List<Any> {
+        val all = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
         val fromNative = runCatching {
             @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
             com.intellij.openapi.application.ReadAction.compute<List<Any>, Throwable> {
@@ -124,8 +127,15 @@ internal class ChooseDataSourceTakeoverGroup(
         }.onFailure { e ->
             LOG.warn("[M36][Takeover] native source enumeration FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }.getOrDefault(emptyList())
-        if (fromNative.isNotEmpty()) return fromNative
-        return runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+        if (fromNative.isEmpty()) return all
+        if (all.isEmpty()) return fromNative
+        val seen = all.mapNotNull { runCatching { DataSourceSettings.getName(it) }.getOrNull() }.toMutableSet()
+        val merged = all.toMutableList()
+        for (ds in fromNative) {
+            val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull().orEmpty()
+            if (name.isNotBlank() && seen.add(name)) merged += ds
+        }
+        return merged
     }
 
     /** 展示形态（图标/文案/可用性）交给原生动作；文案为空时兜底回填，避免只剩一个图标。 */
