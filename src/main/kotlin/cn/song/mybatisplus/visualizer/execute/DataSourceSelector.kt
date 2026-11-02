@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -1472,10 +1473,42 @@ object DataSourceSelector {
         sessionConsumer: com.intellij.util.Consumer<Any>,
         allDataSources: Boolean = false,
         currentSession: Any? = null,
-    ): List<Any> {
+    ): List<Any> =
+        enumerateDataSourceRunners(psiFile, sql, sessionConsumer, allDataSources, currentSession).runners
+
+    /**
+     * Runner 枚举详情（T-Exec262ReadLock 观察缝）：[runners] + 平台调用异常 [failure]（未抛为 null）。
+     *
+     * 归因分流用：runners 为空时，「平台调用抛异常」与「平台正常返回零个可用源」是两回事——
+     * 前者是插件/平台缺陷（给「调用 IDE 数据库接口失败」+ 异常首行），后者才是方言不匹配或
+     * 数据源不可连接（既有文案）。旧实现把两者都吞成空列表，用户被误导去改 Dialects 设置
+     * （2026-11-02 用户实测现场）。
+     */
+    internal class RunnerEnumeration(val runners: List<Any>, val failure: Throwable?)
+
+    /**
+     * 枚举原生 Runner（含平台调用异常详情），[getAttachDataSourceRunners] 的详情版。
+     *
+     * T-Exec262ReadLock A（2026-11-02 用户日常 IDEA 2026.2 实测「执行 SQL 报方言不匹配」）：
+     * 262 起 EDT 不再隐式持有读锁，平台 `DatabaseRunners.getAttachDataSourceRunners` →
+     * `DbImplUtil.getForcedDataSourceForExec` → `DataSourcePerFileMappingsImpl.getMapping`
+     * 内部的读访问断言硬抛 `Read access is allowed from inside read-action only`（idea.log
+     * 4605 行完整栈）；runCatching 吞成空列表 → `runners=0` → 误报方言不匹配。
+     * 平台链内部会 attach 控制台（写意图），故按 AGENTS.md 口径包 `WriteIntentReadAction.compute`
+     * 而非 ReadAction（ReadAction 内开 WIRA 会硬抛）；该方法 243 平台在 `util-8.jar`
+     * （javap 实证含 `compute(ThrowableComputable)`），243~262 交集可用。
+     */
+    internal fun enumerateDataSourceRunners(
+        psiFile: PsiFile,
+        sql: String,
+        sessionConsumer: com.intellij.util.Consumer<Any>,
+        allDataSources: Boolean = false,
+        currentSession: Any? = null,
+    ): RunnerEnumeration {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        val attach: () -> List<Any> = {
-            runCatching {
+        val attach: () -> RunnerEnumeration = {
+            var failure: Throwable? = null
+            val runners = runCatching {
                 val clazz = Class.forName(RUNNERS_CLASS)
                 val method = clazz.getMethod(
                     "getAttachDataSourceRunners",
@@ -1483,11 +1516,15 @@ object DataSourceSelector {
                     String::class.java,
                     com.intellij.util.Consumer::class.java,
                 )
-                val result = method.invoke(null, psiFile, sql, sessionConsumer)
+                val result = WriteIntentReadAction.compute<Any?, Throwable> {
+                    method.invoke(null, psiFile, sql, sessionConsumer)
+                }
                 (result as? List<*>)?.filterNotNull() ?: emptyList()
             }.onFailure { e ->
+                failure = e
                 LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
             }.getOrDefault(emptyList())
+            RunnerEnumeration(runners, failure)
         }
         if (!allDataSources || currentSession == null) return attach()
         // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
@@ -1500,12 +1537,14 @@ object DataSourceSelector {
                 Class.forName(SESSION_CLASS),
                 com.intellij.util.Consumer::class.java,
             )
-            val result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
+            val result = WriteIntentReadAction.compute<Any?, Throwable> {
+                method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
+            }
             (result as? List<*>)?.filterNotNull() ?: emptyList()
         }.onFailure { e ->
             LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): $e", e)
-        }.getOrDefault(emptyList())
-        return switched.ifEmpty { attach() }
+        }.getOrNull() ?: return attach()
+        return if (switched.isEmpty()) attach() else RunnerEnumeration(switched, null)
     }
 
     /**

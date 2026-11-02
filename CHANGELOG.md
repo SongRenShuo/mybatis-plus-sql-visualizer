@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- **IntelliJ 2026.2 上预览窗「执行 SQL」报“方言不匹配”且无法执行（T-Exec262ReadLock）**：262 起 EDT 不再隐式持有读锁，插件反射调用平台 `DatabaseRunners.getAttachDataSourceRunners` 时，平台内部读 per-file 方言映射直接抛 `Read access is allowed from inside read-action only`；异常被 `runCatching` 吞成空列表，走「没有与该 SQL 方言匹配的已配置数据源」文案，用户被引去改 Dialects 设置（现场：PostgreSQL 数据源配置齐全、方言推断也正确）。现两处反射调用（attach / 切换数据源）统一包 `WriteIntentReadAction.compute`；并且 `runners` 为空时按「平台调用有没有抛异常」分流红条——平台故障报异常首行并提示反馈，只有平台正常返回零个可用源才报方言不匹配。2026.1 / 2024.3 不受影响，包裹对旧版本无害
+- **`selectList` 等非分页查询的预览凭空多出一条「分页 COUNT」（T-Exec262ReadLock）**：`queryWrapper.last("limit " + n)` 被解析成语句 LIMIT（形参静态不可得 → `LIMIT ?`），而 COUNT 包裹的判据只看「语句有没有 LIMIT」，没看「调用是否真的传了 Page/IPage」，于是把 `last` 的 LIMIT 当成分页附赠 COUNT。现以「确有分页实参解析产物」为唯一闸：`last` 的 LIMIT 照常渲染，但不产 COUNT。XML/注解路径的 Page 形参分页不受影响
+
 ## [2026.10.31] - 2026-10-31
 
 > 范围＝v2026.10.30 正式版之后的全部用户可见增量（含 v2026.10.31-beta.1 / beta.2 两轮内测的累计内容）；方言总数 11 → 14。

@@ -372,7 +372,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // → runners=0 → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条。
     // 现退回 attach 版（这正是此前一直正常、能弹原生列表的形态）；切换专用入口只在
     // 已有会话时才有意义，本链不持有会话，故不启用。
-    val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
+    val enumeration = enumerateDataSourceRunners(psiFile, submitSql, sessionConsumer)
+    val enumerated = enumeration.runners
     // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
     // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
     // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
@@ -455,8 +456,22 @@ internal fun DataSourceSelector.chooseAndPrepare(
                     )
                 }
             }
-            if (registered.isEmpty()) {
+            val emptyReason = emptyRunnersReason(registered.isEmpty(), enumeration.failure)
+            if (emptyReason == EmptyRunnersReason.NO_DATASOURCE) {
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
+            } else if (emptyReason == EmptyRunnersReason.PLATFORM_CALL_FAILED) {
+                // T-Exec262ReadLock A'：平台调用本身抛异常（262 EDT 读锁硬抛等）——runner 为空
+                // 不是「方言不匹配」，把用户引去改 Dialects 只会白折腾（2026-11-02 实测现场：
+                // `Read access is allowed from inside read-action only` 被 runCatching 吞成
+                // 方言不匹配红条）。报异常首行 + 反馈指引，真实原因看 idea.log。
+                val platformFailure = enumeration.failure
+                LOG.warn("[M36] runners empty due to platform call failure: $platformFailure")
+                onError?.invoke(
+                    MpSqlVisualizerBundle.message(
+                        "execute.datasource.platformCallFailed",
+                        platformFailure?.let(::rootCauseFirstLine) ?: "",
+                    ),
+                )
             } else {
                 // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
                 // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
@@ -2160,3 +2175,45 @@ internal fun DataSourceSelector.deliverError(
  * 用户全局设置（`getDefaultExecOption()` 活实例）一概不碰。反射不可用 → 原样返回基础
  * 实例（执行维持现态，不劣化）。测试直接覆盖本函数（DatabaseTools 在默认 test classpath）。
  */
+
+/**
+ * T-Exec262ReadLock A'：取异常链最内层的首行消息（「调用 IDE 数据库接口失败」文案用）。
+ *
+ * 反射调用抛的是 `InvocationTargetException`，真正原因在 cause 链末端（如 262 的
+ * `Read access is allowed from inside read-action only`）。取首行并截断，避免把整段
+ * `RuntimeExceptionWithAttachments` 塞进红条。
+ */
+internal fun rootCauseFirstLine(error: Throwable): String {
+    var cur = error
+    var guard = 0
+    while (cur.cause != null && cur.cause !== cur && guard++ < 32) cur = cur.cause!!
+    val text = cur.message ?: cur.javaClass.simpleName
+    return text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(300)
+        ?: cur.javaClass.simpleName
+}
+
+/** Runner 为空的归因（T-Exec262ReadLock A'）：决定给哪种红条。 */
+internal enum class EmptyRunnersReason {
+    /** 项目里一条数据源都没有 → 既有配置引导。 */
+    NO_DATASOURCE,
+
+    /** 有在册数据源，但平台调用本身抛了异常 → 报异常首行（不是方言问题）。 */
+    PLATFORM_CALL_FAILED,
+
+    /** 有在册数据源、平台正常返回零个可用 Runner → 方言不匹配/不可连接（既有文案）。 */
+    DIALECT_MISMATCH,
+}
+
+/**
+ * Runner 为空的三态归因（纯函数，供单测钉住分支）。
+ *
+ * 判定顺序有讲究：真无数据源时即使平台也抛了异常，用户最需要的是「先配数据源」，
+ * 故 [NO_DATASOURCE] 优先；其余按平台调用有没有抛分流——这是 2026-11-02 实测现场
+ * 被误导去改 Dialects 的直接原因（262 读锁硬抛被当成方言不匹配）。
+ */
+internal fun emptyRunnersReason(registeredEmpty: Boolean, platformFailure: Throwable?): EmptyRunnersReason =
+    when {
+        registeredEmpty -> EmptyRunnersReason.NO_DATASOURCE
+        platformFailure != null -> EmptyRunnersReason.PLATFORM_CALL_FAILED
+        else -> EmptyRunnersReason.DIALECT_MISMATCH
+    }
