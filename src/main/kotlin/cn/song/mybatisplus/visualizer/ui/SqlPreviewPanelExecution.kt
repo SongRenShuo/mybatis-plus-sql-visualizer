@@ -821,15 +821,17 @@ internal fun SqlPreviewPanel.showDialectGateError(
  *  - `forceChoosePopup`：即便只剩一条源也弹列表；
  *  - `executeAfterPrepare = false`：选完源只重建控制台，不提交 SQL（用户再点「执行 SQL」）。
  */
-internal fun SqlPreviewPanel.switchDataSourceInPlace() {
+internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String? = null) {
     val proj = project ?: return
+    // 幂等：换源会新建控制台，其 header 同样按 id 取动作组——确保接管件仍在位。
+    cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled()
     val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
         ?: return
     // 入口锚点：换源是用户手动动作，日志里必须能一眼看出「点了 / 没点」——2026-11-02 用户报
     // 「点新数据源没有反应」时，原生下拉那次点击在 idea.log 里零痕迹，无从判断动作有没有落地。
     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-        .info("[M36][SwitchDs] entry: sql len=${sql.length}, prepared=${SqlExecutor.isPrepared()}")
+        .info("[M36][SwitchDs] entry: sql len=${sql.length}, prepared=${SqlExecutor.isPrepared()}, preferred=${preferredRunnerName ?: "(popup)"}")
     val gateRequest = executionDialectGateRequest(
         if (SqlTypeClassifier.isQuery(sql)) {
             cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
@@ -849,8 +851,18 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace() {
         dialectGateRequest = gateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
         forceChoose = true,
-        forceChoosePopup = true,
+        // 指定了目标源（原生工具栏点选）→ 不弹列表，选谁就是谁；无目标（状态行/更多菜单）→ 必弹列表，单源也弹。
+        forceChoosePopup = preferredRunnerName == null,
+        preferredRunnerName = preferredRunnerName,
     )
+}
+
+/**
+ * T-NativeSwitchTakeover：控制台工具栏原生数据源下拉被接管后的落点——按名换源，
+ * **只重建控制台、不提交 SQL**（执行仍走「执行 SQL」入口过闸）。
+ */
+internal fun SqlPreviewPanel.switchDataSourceTo(dataSourceName: String) {
+    switchDataSourceInPlace(preferredRunnerName = dataSourceName)
 }
 
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
@@ -2071,6 +2083,9 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
 
 internal fun SqlPreviewPanel.prepareDefaultConsole() {
     val proj = project ?: return
+    // T-NativeSwitchTakeover：接管控制台工具栏的原生数据源下拉（幂等）——必须早于控制台创建，
+    // 平台 header 是按 id 从 ActionManager 取 Console.Jdbc.Right 组件的。
+    cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled()
     val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
     val gateRequest = executionDialectGateRequest(
         if (SqlTypeClassifier.isQuery(sql)) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
