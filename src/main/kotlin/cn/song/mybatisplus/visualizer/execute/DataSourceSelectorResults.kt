@@ -1549,52 +1549,43 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): 
         return null
     }
     val f = java.io.File(dir, "mpsql-exec.sql")
+    // T-PreviewLockInversion（2026-11-02 性能分析）：临界区**只留「存在性 + 判等 + 首建裸写」**，
+    // 跨线程等待（dispatchDocWriteOnEdt 最长 2s）必须移到锁外。
+    // 原实现把 2s 有界等待放在 synchronized 里：后台预热线程先持锁等 EDT，而 EDT 随后在
+    // `createTempPsiFile → projectExecFile` 阻塞在同一 monitor 上 → 自锁烧满 2000ms，
+    // 六次真机预览每次都稳定吃掉 1.7–2.0s（日志铁证：超时后 12–18ms 立刻写完）。
+    var vf: com.intellij.openapi.vfs.VirtualFile? = null
     synchronized(execFileWriteLock) {
         val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
-            // T-PreviewFast P1：**差量快路径**——派发前先判当前内容是否已等于目标 SQL。相同则
-            // 直接返回，不派发、不落盘、不等 EDT（连续预览同一 SQL 是常见形态：真机日志 14:17
-            // 五连预览每次都白付 2s 派发等待 + 一次无效落盘 + 一轮索引噪音）。
-            // 判据双源：document 文本（有已加载文档时，UI 所见为准）或 vf 内容（无文档时）。
+            // T-PreviewFast P1：差量快路径——内容已等于目标 SQL 就不派发、不落盘、不等 EDT。
             if (execFileContentMatches(project, existing, sql)) {
                 LOG.info("[M36] exec file content already matches — write SKIPPED (T-PreviewFast P1): ${f.name}")
                 return f
             }
-            // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
-            // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument KDoc）——旧实现
-            // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-            // T-UiFixGate9：fire-and-forget 形态退役（原 T-PreviewFast P2 的 nonBlocking=true）——
-            // 排队写与「本链自己的 refresh 会话 / 测试边界迟到的 VFS 会话」赛跑：写任务的
-            // setText→save 窗口（探针实测 ~30ms）被会话的旧内容/建条目事件命中即收集冲突，
-            // EDT 下一拍处理即抛（20261018 门禁三轮实录 + [PROBE-GATE9] 探针实锤）。有界等待让
-            // 写收敛始终在本链执行窗口内完成，调用方（预热链）拿到返回后才发起 refresh；
-            // 真机代价不变（EDT 健康 → 毫秒级返回），2s 预算只在 EDT 病态冻结时烧掉，而那正是
-            // 必须放弃写/refresh 的场景（dispose 守卫接手）。
-            val updated = dispatchDocWriteOnEdt(project, existing, sql)
-            if (updated) {
-                LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
-                return f
-            }
-            // T-ExecDocSync3（第四轮真机复现的收口，20260917 真实 IDE 日志实证）：**VFS 已有
-            // 该文件时一律不裸写盘**。原 T-EC-02 兜底守卫查 getCachedDocument==null 就放行裸写，
-            // 实机证伪——EDT 忙（冷启动/索引，日志同刻可见 DumbService enter dumb mode）时
-            // dispatch 有界等待 2s 超时返回 false，此刻「排队的 EDT 写任务」尚未执行、document
-            // 也还没建，getCachedDocument 恒 null；随之而来的裸写先改盘（12,590），排队任务
-            // 随后 ExecutionException 建出 document（resolver 日志 oldFileStamp:0 = 文档建于文件
-            // 写入之前）并标脏，裸写引发的 VFS 变更落到这个刚建的文档上 →
-            // MemoryDiskConflictResolver「重载 mpsql-exec.sql？」弹窗（12,609），23ms 后文档写入
-            // 才自己落盘（12,613）。即**插件与自己的排队写赛跑**，而非外部改盘。
-            // 宁内容旧一拍：排队任务/later 的 console doc 同步链（attachConsole 后的
-            // prepareAfterEditorResolved、executeOnConsole 执行前 T-EC-01 同款同步）都会重写并
-            // 落盘，执行内容不受影响。附带收益：冷启动 EDT 忙时不再有裸写 → 该场景彻底无冲突面。
-            LOG.warn(
-                "[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); " +
-                    "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): ${f.name}",
-            )
+            vf = existing
+        } else {
+            // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
+            FileUtil.writeToFile(f, sql)
             return f
         }
-        // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
-        FileUtil.writeToFile(f, sql)
+    }
+    // ---- 以下在锁外：等待 EDT 期间不持锁，避免与 EDT 侧同一 monitor 互锁 ----
+    val target = vf ?: return null
+    if (dispatchDocWriteOnEdt(project, target, sql)) {
+        LOG.info("[M36] exec file updated via document+save (disk synced out-of-critical-section): ${f.name}")
+        return f
+    }
+    // 等待失败：重进锁复核（另一条链可能已写好），仍不一致则按 T-ExecDocSync3 不裸写。
+    synchronized(execFileWriteLock) {
+        if (execFileContentMatches(project, target, sql)) {
+            LOG.info("[M36] exec file content converged by another chain: ${f.name}")
+            return f
+        }
+        LOG.warn(
+            "[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); " +
+                "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): ${f.name}",
+        )
         return f
     }
 }

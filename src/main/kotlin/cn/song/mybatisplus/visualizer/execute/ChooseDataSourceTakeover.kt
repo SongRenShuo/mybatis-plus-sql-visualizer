@@ -53,6 +53,18 @@ internal class ChooseDataSourceTakeoverGroup(
     private val original: AnAction,
 ) : ActionGroup(original.templateText ?: "", true) {
 
+    init {
+        // 工具栏按钮在**构建时**读模板呈现：`setPerformGroup(true)` 正是平台把「组」渲染成
+        // 「图标+文案」按钮的开关（原生 `update` 里也会设它）。只在 update 里设已经太晚——
+        // 按钮形态与宽度在工具栏构建那一刻就定了，后设的文案会被按模板宽度裁掉
+        //（真机 2026-11-02：按钮显示不出完整数据源名）。
+        runCatching {
+            templatePresentation.setPerformGroup(true)
+            templatePresentation.setText(original.templateText ?: "", false)
+            original.templatePresentation.icon?.let { templatePresentation.icon = it }
+        }
+    }
+
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ChooseDataSourceTakeoverGroup::class.java)
 
     /** 一次性取证位（update 每次刷新都会走，只留一条避免刷屏）。 */
