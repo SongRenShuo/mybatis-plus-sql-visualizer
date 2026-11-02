@@ -2096,7 +2096,20 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
     // T-NativeSwitchTakeover：接管控制台工具栏的原生数据源下拉（幂等）——必须早于控制台创建，
     // 平台 header 是按 id 从 ActionManager 取 Console.Jdbc.Right 组件的。
     cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled()
-    val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+    // 2026-11-02 沙盒验收：注解预览（@Select 等）这条链上回退编辑器是**异步**建的，
+    // showResult 末尾调用本函数时 `editor` 仍为 null → 旧实现直接 return，控制台永不预热，
+    // 面板一直「未绑定数据源」，要等用户点执行才挂上。改为三级回落：原生文档 → 回退编辑器 →
+    // 本次预览结果里的 SQL（showResult 已先写入 current）。
+    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+        ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+        ?: current?.sql?.takeIf { it.isNotBlank() }
+    // 入口锚点（2026-11-02 沙盒验收）：预览打开后控制台没挂上时，先要能区分「SQL 源取不到 →
+    // 提前返回」与「Database 不可用 → 静默回退」这两条静默路径。
+    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
+        "[M36] prepareDefaultConsole: editor=${editor != null}, sqlLen=${sql?.length ?: -1}, " +
+            "dbAvailable=${cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()}",
+    )
+    if (sql == null) return
     val gateRequest = executionDialectGateRequest(
         if (SqlTypeClassifier.isQuery(sql)) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
         else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
