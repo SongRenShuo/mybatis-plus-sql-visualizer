@@ -1280,9 +1280,10 @@ tasks.register("testShards") {
         // T-ReleasePerf11 券02：并发形态自报——聚合各片 doFirst 落盘的 .lane-others（本片起跑
         // 瞬间其他在跑分片执行器数），峰值与序列一行可见。V235-3 判据（同参两轮 laneOthers
         // 峰值一致=并发形态稳定）的机器读数；缺失（旧轮残留目录/手工单跑）显示 n/a 不阻塞。
-        val laneSeq = (1..testShardCount).map { i ->
-            val laneDir = file("build/test-results/testShard$i")
-            File(laneDir, ".lane-others").takeIf { it.isFile }?.readText()?.trim()
+        // 走配置期捕获的 shardResultDirs（E1 轮实证：doLast 内调 Project.file 引用脚本对象，
+        // CC 存储失败——既有聚合块全部走该通道，本块必须同款）。
+        val laneSeq = shardResultDirs.dropLast(1).map { dir ->
+            File(dir, ".lane-others").takeIf { it.isFile }?.readText()?.trim()
         }
         val laneMax = laneSeq.mapNotNull { it?.toIntOrNull() }.maxOrNull()
         logger.lifecycle(
