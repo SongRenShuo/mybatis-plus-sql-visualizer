@@ -46,10 +46,13 @@ object MpvLaneMeter {
      */
     fun activeShardExecutors(buildDir: String, logger: org.gradle.api.logging.Logger): Int = try {
         val needle = "-DmpvShardMarker=" + markerValue(buildDir)
+        // 计数在 PS 内转字符串前缀输出——Measure-Object 直接吐对象会被 CLIXML 包成
+        // <Objs>...（W3 后 round4 实测「输出不可解析「1<Objs」」），带前缀的 Write-Output
+        // 字符串在 CLIXML 流里原样可见（assertNoForeignVerifier 的 CLEAR/FOREIGN 同款经验）。
         val ps = (
-            "\$c = Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | " +
-                "Where-Object { \$null -ne \$_.CommandLine -and \$_.CommandLine.Contains('$needle') }; " +
-                "if (\$c) { \$c | Measure-Object | ForEach-Object { \$_.Count } } else { '0' }"
+            "\$c = @(Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | " +
+                "Where-Object { \$null -ne \$_.CommandLine -and \$_.CommandLine.Contains('$needle') }); " +
+                "Write-Output ('MPVLANE=' + \$c.Count)"
             )
         val encoded = java.util.Base64.getEncoder().encodeToString(ps.toByteArray(Charsets.UTF_16LE))
         val proc = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
@@ -62,8 +65,8 @@ object MpvLaneMeter {
             logger.warn("lane meter: CIM 扫描超时（30s），laneAtEnd=-1")
             -1
         } else {
-            out.toIntOrNull() ?: run {
-                logger.warn("lane meter: CIM 输出不可解析「${out.take(80)}」，laneAtEnd=-1")
+            Regex("MPVLANE=(\\d+)").find(out)?.groupValues?.get(1)?.toIntOrNull() ?: run {
+                logger.warn("lane meter: CIM 输出不可解析「${out.take(120)}」，laneAtEnd=-1")
                 -1
             }
         }
