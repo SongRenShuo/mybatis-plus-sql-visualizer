@@ -731,9 +731,28 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT,
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
             val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+            // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
+            // 放行态同样要给出口——文案本身就写着「可点「切换数据源」」，而 showStatus 第一行的
+            // clearErrorActions() 会把两个链接清掉。改用 showStatusWithActions：信息态底色不变，
+            // 右侧仍挂「切换数据源」「方言设置」两段蓝字（与错误态同款形态）。
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                 if (previewDisposed) return@invokeLater
-                resultPanel.showStatus(message)
+                val proj = project
+                if (proj == null) {
+                    resultPanel.showStatus(message)
+                    return@invokeLater
+                }
+                resultPanel.showStatusWithActions(
+                    message,
+                    fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                    fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                    fix = { switchDataSourceInPlace() },
+                    settingsLabel = if (runCatching { findSqlDialectConfigurable(proj) != null }.getOrDefault(false)) {
+                        MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
+                    } else null,
+                    settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+                    settings = { openSqlDialectSettings(proj) },
+                )
             }
         }
         else -> resultPanel.showError(
@@ -787,6 +806,47 @@ internal fun SqlPreviewPanel.showDialectGateError(
             settings = { openSqlDialectSettings(proj) },
         )
     }
+}
+
+/**
+ * T-DialectGatePassDeadChain（2026-11-02 用户定案）：方言冲突放行态的「切换数据源」入口——
+ * **就地弹平台原生数据源列表**，只换源、不自动提交 SQL。
+ *
+ * 为什么不复用 `executeSql(forceChoose = true)`：`forceChoosePopup`（「即便只剩一条源也必须弹列表」）
+ * 只存在于 `DataSourceSelector.prepareConsole`，`selectAndExecute` / `SqlExecutor.execute` /
+ * `executeSql` 都没有透传——runner 唯一时仍走 `shouldBeChosenIfAlone` 直选执行，用户看不到列表，
+ * 这正是 W6「点切换数据源却重试执行了」的原形。故这里直接调 prepareConsole 并同时置两个开关：
+ *
+ *  - `forceChoose`：跳过共享控制台复用与 last-used 静默命中；
+ *  - `forceChoosePopup`：即便只剩一条源也弹列表；
+ *  - `executeAfterPrepare = false`：选完源只重建控制台，不提交 SQL（用户再点「执行 SQL」）。
+ */
+internal fun SqlPreviewPanel.switchDataSourceInPlace() {
+    val proj = project ?: return
+    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+        ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+        ?: return
+    val gateRequest = executionDialectGateRequest(
+        if (SqlTypeClassifier.isQuery(sql)) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
+        } else {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML
+        },
+    )
+    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+        proj, sql,
+        onConsole = { consoleComponent ->
+            embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
+            // 换源成功即清掉旧状态行：方言提示按新目标重新判定（MATCH 时不再提示）
+            resultPanel.showEmpty()
+        },
+        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+        onError = { errorMsg -> resultPanel.showError(errorMsg) },
+        dialectGateRequest = gateRequest,
+        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        forceChoose = true,
+        forceChoosePopup = true,
+    )
 }
 
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */

@@ -231,10 +231,9 @@ object DataSourceSelector {
         onDialectGate?.invoke(verdict)
         val needsConfirmation = verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ||
             verdict.status == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM
-        if (verdict.status != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
-            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
-            onSubmission?.invoke(ExecutionSubmission.BLOCKED)
-        }
+        // 阻断红字的投递推迟到下面 allowed 判定之后（T-DialectGatePassDeadChain）：原先无论放行
+        // 与否都先投 BLOCKED，放行态因此把执行意图标成已完成（见下方注释）。
+        var blockMessage: String? = null
         val allowed = when (verdict.status) {
             ExecutionDialectGate.Status.MATCH -> true
             ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
@@ -254,7 +253,7 @@ object DataSourceSelector {
                 }.getOrDefault(false)
             }
             ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
-                if (onDialectGate == null) onError?.invoke(dialectGateMessage(verdict))
+                if (onDialectGate == null) blockMessage = dialectGateMessage(verdict)
                 false
             }
             // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
@@ -267,15 +266,24 @@ object DataSourceSelector {
             ExecutionDialectGate.Status.MANUAL_CONFLICT,
             ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
                 // 提示照旧（UI 仍显示方言不一致与「切换数据源」入口），但不拦执行。
-                onError?.invoke(dialectGateMessage(verdict))
+                blockMessage = dialectGateMessage(verdict)
                 true
             }
             ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK,
             ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK -> {
-                onError?.invoke(dialectGateMessage(verdict))
+                blockMessage = dialectGateMessage(verdict)
                 false
             }
         }
+        // T-DialectGatePassDeadChain（2026-11-02 用户真机「执行失败、也换不了数据源」）：
+        // BLOCKED 只在**确实不放行**时投递。此前「非 MATCH 一律投」把放行态也算成未提交，而准备链
+        // 传进来的 onSubmission 就是 QueuedExecuteIntent.onSubmission（`{ complete(it) }`）——
+        // 一投就把本次执行意图标成已完成，下游 `isPrepareActive()` 立刻为假，准备链在
+        // `attachConsole` 之前静默早退：控制台不挂载，单飞门也不释放，随后 60s 内执行/换源全部
+        // 只排队，15s 后报「数据库控制台准备超时」。
+        // 顺序保持原契约：先报未提交，再交付详细红字（onError 通道），互不覆盖。
+        if (!allowed && !needsConfirmation) onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+        blockMessage?.let { onError?.invoke(it) }
         if (!allowed && needsConfirmation) onSubmission?.invoke(ExecutionSubmission.CANCELLED)
         return allowed
     }
@@ -1814,13 +1822,23 @@ object DataSourceSelector {
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
     internal const val EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L
 
-    /** T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
+    /**
+     * T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
      *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
     internal const val PENDING_EXECUTE_TIMEOUT_MS = 15_000L
 
-    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    /**
+     * T-DialectInferPollution W11：排队意图超时文案。
+     *
+     * T-DialectGatePassDeadChain（2026-11-02）：**不再复用准备超时键**。排队者的真实处境是「上一条
+     * 准备链还没结束」，报「准备超时 + 请重新选择数据源」既误导（用户没超时），又把人指向当时
+     * 根本不存在的入口（预览弹窗没有换源按钮）。
+     */
     internal val PENDING_EXECUTE_TIMEOUT_MESSAGE: String
-        get() = MpSqlVisualizerBundle.message("execute.prepare.timeout")
+        get() = MpSqlVisualizerBundle.message(
+            "execute.prepare.queuedTimeout",
+            PENDING_EXECUTE_TIMEOUT_MS / 1000,
+        )
 
     /**
      * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式

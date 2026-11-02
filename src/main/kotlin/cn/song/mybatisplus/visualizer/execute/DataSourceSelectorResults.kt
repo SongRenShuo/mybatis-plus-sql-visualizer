@@ -339,7 +339,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
         if (isPrepareActive()) failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null, message)
     }
     val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
-        if (!isPrepareActive()) return@Consumer
+        if (!isPrepareActive()) {
+            // T-DialectGatePassDeadChain：早退必须结算单飞门（见下方同款注释）。
+            abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
+            return@Consumer
+        }
         val actualTarget = ExecutionDialectGate.fromSession(session)
         LOG.info(
             "[M36][O-145] session created: ${session?.javaClass?.name}, " +
@@ -356,7 +360,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
             return@Consumer
         }
         // 确认框的模态事件泵期间可能超时/被替代，返回 Yes 也不能复活旧准备链。
-        if (!isPrepareActive()) return@Consumer
+        // T-DialectGatePassDeadChain：早退**必须**结算单飞门——门是进程级单例状态，悬挂一次就是
+        // 60s 内执行/换源全部只排队（用户可见「控制台准备超时」）。abort 按 owner 幂等，重复调用无害。
+        if (!isPrepareActive()) {
+            abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
+            return@Consumer
+        }
         prepareInConsole(
             project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
             onErrorRich, wholeScriptExec, prepareOwner = prepareOwner,
@@ -511,7 +520,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
             prepareGate.beginInteraction(prepareOwner)
             showRunnerPopup(project, runners) { runner ->
                 prepareGate.endInteraction(prepareOwner)
-                if (!isPrepareActive()) return@showRunnerPopup
+                if (!isPrepareActive()) {
+                    // T-DialectGatePassDeadChain：用户已选源但本链已被替代——结算门，别让它悬挂。
+                    abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
+                    return@showRunnerPopup
+                }
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
                 if (!executeAfterPrepare && runner != null) {
