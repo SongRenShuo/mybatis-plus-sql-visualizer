@@ -54,11 +54,13 @@ internal class ChooseDataSourceTakeoverGroup(
 ) : ActionGroup(original.templateText ?: "", true) {
 
     init {
-        // 工具栏按钮在**构建时**读模板呈现：`setPerformGroup(true)` 正是平台把「组」渲染成
-        // 「图标+文案」按钮的开关（原生 `update` 里也会设它）。只在 update 里设已经太晚——
-        // 按钮形态与宽度在工具栏构建那一刻就定了，后设的文案会被按模板宽度裁掉
-        //（真机 2026-11-02：按钮显示不出完整数据源名）。
+        // 工具栏按钮在**构建时**读模板呈现：
+        //  - `setPerformGroup(true)` 是平台把「组」渲染成「图标+文案」按钮的开关（原生 update 里也设它）；
+        //  - `setPopup(false)`：弹层由本类 `actionPerformed` 自己弹，不需要平台把它当 popup 组
+        //    （popup 组在工具栏里被渲染成「图标+箭头」，文案永远不显示——真机 2026-11-02 现象：
+        //    只有图标、悬停才有名字）。
         runCatching {
+            isPopup = false
             templatePresentation.setPerformGroup(true)
             templatePresentation.setText(original.templateText ?: "", false)
             original.templatePresentation.icon?.let { templatePresentation.icon = it }
