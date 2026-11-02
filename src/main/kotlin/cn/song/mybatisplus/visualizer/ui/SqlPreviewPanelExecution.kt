@@ -742,17 +742,27 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
                     resultPanel.showStatus(message)
                     return@invokeLater
                 }
-                resultPanel.showStatusWithActions(
-                    message,
-                    fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
-                    fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-                    fix = { switchDataSourceInPlace() },
-                    settingsLabel = if (runCatching { findSqlDialectConfigurable(proj) != null }.getOrDefault(false)) {
-                        MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
-                    } else null,
-                    settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
-                    settings = { openSqlDialectSettings(proj) },
-                )
+                // T-NativeSwitchTakeover 回归修正：此处**不得**探测 configurable 可用性——
+                // `ConfigurableExtensionPointUtil.getConfigurableGroup(proj, true)` 会把整棵设置树
+                // 实例化（第三方插件的 configurable 构造器会抛 PluginException），1.2s 级 EDT 卡顿，
+                // 异常还会把本次渲染整个吞掉（面板停在「执行中」转圈）。链接恒显示，点击时
+                // [openSqlDialectSettings] 自己按 id 打开并兜底失败。
+                runCatching {
+                    resultPanel.showStatusWithActions(
+                        message,
+                        fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                        fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                        fix = { switchDataSourceInPlace() },
+                        settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings"),
+                        settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+                        settings = { openSqlDialectSettings(proj) },
+                    )
+                }.onFailure { e ->
+                    // 渲染失败也不能让面板停在旧态：退回纯状态行（无动作），至少把提示画出来。
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[M36] dialect gate status render FAILED: ${e.javaClass.simpleName}: ${e.message}")
+                    resultPanel.showStatus(message)
+                }
             }
         }
         else -> resultPanel.showError(
