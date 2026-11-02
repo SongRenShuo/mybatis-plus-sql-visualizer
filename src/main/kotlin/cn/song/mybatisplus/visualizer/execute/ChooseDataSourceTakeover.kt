@@ -87,7 +87,10 @@ internal class ChooseDataSourceTakeoverGroup(
         if (project == null || !takeoverAppliesTo(file?.path)) {
             return delegateChildren(e)
         }
-        val sources = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+        val sources = dataSourcesFor(project, file)
+        if (childrenProbed.compareAndSet(false, true)) {
+            LOG.info("[M36][Takeover] sources=${sources.size}")
+        }
         if (sources.isEmpty()) return delegateChildren(e)
         return sources.map { ds ->
             val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull().orEmpty()
@@ -98,6 +101,32 @@ internal class ChooseDataSourceTakeoverGroup(
 
     private fun delegateChildren(e: AnActionEvent?): Array<AnAction> =
         (original as? ActionGroup)?.getChildren(e) ?: AnAction.EMPTY_ARRAY
+
+    /**
+     * 数据源枚举——**与原生菜单同源**。
+     *
+     * 原生工具栏「所有」子项来自 `DbImplUtil.getAllDataSourcesForExec(psiFile)`；插件既有的
+     * [DataSourceSettings.getAllDataSources] 在 262 已失效（`DataSourceStorage` 只剩
+     * `myDataSources` 字段，`getDataSources()` 方法不存在 → 反射取不到 → 恒空），
+     * 于是旧实现一路落到「枚举为空 → 委托原生」。这里优先原生同源，失败才回落旧路径。
+     */
+    private fun dataSourcesFor(project: Project, vf: com.intellij.openapi.vfs.VirtualFile?): List<Any> {
+        val fromNative = runCatching {
+            @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+            com.intellij.openapi.application.ReadAction.compute<List<Any>, Throwable> {
+                val psi = vf?.let { com.intellij.psi.PsiManager.getInstance(project).findFile(it) }
+                    ?: return@compute emptyList()
+                val util = Class.forName("com.intellij.database.util.DbImplUtil")
+                val method = util.getMethod("getAllDataSourcesForExec", com.intellij.psi.PsiFile::class.java)
+                val iterable = method.invoke(null, psi) as? Iterable<*> ?: return@compute emptyList()
+                iterable.filterNotNull().toList()
+            }
+        }.onFailure { e ->
+            LOG.warn("[M36][Takeover] native source enumeration FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }.getOrDefault(emptyList())
+        if (fromNative.isNotEmpty()) return fromNative
+        return runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+    }
 
     /** 展示形态（图标/文案/可用性）交给原生动作；文案为空时兜底回填，避免只剩一个图标。 */
     override fun update(e: AnActionEvent) {
