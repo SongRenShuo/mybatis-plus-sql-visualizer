@@ -1728,6 +1728,12 @@ internal fun DataSourceSelector.buildConsoleSplitPane(
         dividerSize = 3
         border = com.intellij.util.ui.JBUI.Borders.empty()
         background = com.intellij.util.ui.UIUtil.getPanelBackground()
+        // T-ResultReclaimGuard：装底部回收守卫（DBN 把结果组件挂回 ServiceViewComponentWrapper
+        // 时 JSplitPane 的 rightComponent 会被置 null，执行后下半区空白——事件驱动抢回）。
+        installResultReclaimGuard(
+            this,
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java),
+        )
         // M36.6.2：分隔位置保险（每个实例自带，覆盖 prepare/reuse/contentAdded 重建全部路径）——
         // 构造时子组件 0x0 invalid（沙盒日志 toString 实证），首次真实布局的 divider 由 preferred
         // 尺寸推算，落点随构造时序漂移（用户三张截图：编辑器塌缩 ~40px / 编辑器截断无结果区 /
@@ -1825,8 +1831,7 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     liveResult: javax.swing.JComponent,
     topBlock: javax.swing.JComponent,
     LOG: com.intellij.openapi.diagnostic.Logger,
-): javax.swing.JComponent {
-    val sp = full as? javax.swing.JSplitPane
+): javax.swing.JComponent {    val sp = full as? javax.swing.JSplitPane
         ?: return buildConsoleSplitPane(topBlock, liveResult)
     // ★A49 取证修正：换入**前**记录结果组件的真实宿主。旧日志在 `sp.bottomComponent = liveResult`
     // 之后才读 parent，恒打印本 SplitPane，证明不了「有没有从 DBN 宿主摘走」。改在改动前取，
@@ -1874,8 +1879,75 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     realignSplitDivider(sp, force = true)
     sp.revalidate()
     sp.repaint()
+    // T-ResultReclaimGuard：复用既有 split 的路径也要确保守卫在位（幂等）。
+    installResultReclaimGuard(sp, LOG)
     LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${prevParent?.javaClass?.name ?: "null"}, fromExternalHost=${prevParent != null && prevParent !== sp})")
     return sp
+}
+
+/**
+ * T-ResultReclaimGuard（2026-11-02 真机「执行后下半区空白」）：持久整控台 SplitPane 的
+ * **底部回收守卫**。
+ *
+ * 根因链（代理逐段实证）：DBN 在新建结果页签时会把同一个结果组件重新挂回
+ * `ServiceViewComponentWrapper`（Database 工具窗侧宿主）；AWT 重挂父时从旧容器摘除，
+ * 而 `JSplitPane.remove(Component)` 会把 `rightComponent` 置 null —— 于是
+ * `[A49] result host at submit` 里出现 `mySplitBottom=null`。既有兜底只有
+ * `refreshResultsComponent` 的 600ms×8 拍轮询，且**首次检测到控制台错误就 stop**，
+ * 失败语句场景下最后一拍之后被抽走的部分无人修复 → 下半区永久空白。
+ *
+ * 本守卫把「轮询抢回」升级为**事件驱动抢回**：底部被摘即下一拍尝试重挂；带节流
+ * （[RESULT_RECLAIM_MIN_INTERVAL_MS]）、上限（[RESULT_RECLAIM_MAX]）与 `isShowing`
+ * 判据（面板关闭后不再抢，让 DBN 拿回控制台）。
+ */
+private const val RESULT_RECLAIM_MARK = "mpsql.resultReclaimGuard"
+private const val RESULT_RECLAIM_MIN_INTERVAL_MS = 300L
+private const val RESULT_RECLAIM_MAX = 60L
+
+internal fun DataSourceSelector.installResultReclaimGuard(
+    sp: javax.swing.JSplitPane,
+    log: com.intellij.openapi.diagnostic.Logger,
+) {
+    if (sp.getClientProperty(RESULT_RECLAIM_MARK) != null) return
+    sp.putClientProperty(RESULT_RECLAIM_MARK, true)
+    val state = longArrayOf(0L, 0L)
+    sp.addContainerListener(object : java.awt.event.ContainerAdapter() {
+        override fun componentRemoved(e: java.awt.event.ContainerEvent) {
+            val removed = e.child as? javax.swing.JComponent ?: return
+            if (removed === sp.topComponent) return
+            if (sp.bottomComponent != null) return
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
+                reclaimResultBottom(sp, removed, state, log)
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
+    })
+}
+
+/** 单次回收尝试（[force]=true 跳过 `isShowing`，供 headless 测试直测）。 */
+internal fun DataSourceSelector.reclaimResultBottom(
+    sp: javax.swing.JSplitPane,
+    candidate: javax.swing.JComponent,
+    state: LongArray,
+    log: com.intellij.openapi.diagnostic.Logger,
+    force: Boolean = false,
+): Boolean {
+    if (sp.bottomComponent != null) return false
+    if (!force && !sp.isShowing) return false
+    if (state[0] >= RESULT_RECLAIM_MAX) return false
+    val now = System.currentTimeMillis()
+    if (now - state[1] < RESULT_RECLAIM_MIN_INTERVAL_MS) return false
+    state[0]++
+    state[1] = now
+    (candidate.parent)?.takeIf { it !== sp }?.remove(candidate)
+    sp.bottomComponent = candidate
+    candidate.minimumSize = java.awt.Dimension(candidate.minimumSize?.width ?: 400, 160)
+    sp.revalidate()
+    sp.repaint()
+    log.info(
+        "[M36] result reclaim guard: bottom re-mounted " +
+            "(id=${System.identityHashCode(candidate)}, n=${state[0]})",
+    )
+    return true
 }
 
 /** M36.5.52/53：校准整控台 SplitPane 分隔——[force]=true（执行换入）时**无条件**拉回 60%
