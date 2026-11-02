@@ -52,11 +52,39 @@ internal class ChooseDataSourceTakeoverGroup(
     private val original: AnAction,
 ) : ActionGroup(original.templateText ?: "", true) {
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ChooseDataSourceTakeoverGroup::class.java)
+
+    /** 一次性取证位：真机只留一条，避免刷屏。 */
+    private val childrenProbed = java.util.concurrent.atomic.AtomicBoolean()
+    private val updateProbed = java.util.concurrent.atomic.AtomicBoolean()
+
+    /**
+     * 事件文件解析：工具栏动作的 DataContext 未必带 `VIRTUAL_FILE`（控制台 header 只保证
+     * EDITOR/PSI_FILE），因此按 文件 → PSI → 编辑器文档 三级回落；都拿不到才委托。
+     */
+    private fun resolveFile(e: AnActionEvent?): com.intellij.openapi.vfs.VirtualFile? {
+        if (e == null) return null
+        e.getData(CommonDataKeys.VIRTUAL_FILE)?.let { return it }
+        e.getData(CommonDataKeys.PSI_FILE)?.virtualFile?.let { return it }
+        val editor = e.getData(CommonDataKeys.EDITOR) ?: return null
+        return runCatching {
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(editor.document)
+        }.getOrNull()
+    }
+
     override fun getChildren(e: AnActionEvent?): Array<AnAction> {
         val project = e?.project
-        val vf = e?.getData(CommonDataKeys.VIRTUAL_FILE)
+        val file = resolveFile(e)
+        if (childrenProbed.compareAndSet(false, true)) {
+            LOG.info(
+                "[M36][Takeover] getChildren: project=${project != null}, file=${file?.path}, " +
+                    "keys(vf=${e?.getData(CommonDataKeys.VIRTUAL_FILE) != null}, " +
+                    "psi=${e?.getData(CommonDataKeys.PSI_FILE) != null}, " +
+                    "editor=${e?.getData(CommonDataKeys.EDITOR) != null})",
+            )
+        }
         // 非本插件 exec 文件：逐字委托原生组（DataGrip 原生行为不受影响）
-        if (project == null || !takeoverAppliesTo(vf?.path)) {
+        if (project == null || !takeoverAppliesTo(file?.path)) {
             return delegateChildren(e)
         }
         val sources = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
@@ -71,9 +99,18 @@ internal class ChooseDataSourceTakeoverGroup(
     private fun delegateChildren(e: AnActionEvent?): Array<AnAction> =
         (original as? ActionGroup)?.getChildren(e) ?: AnAction.EMPTY_ARRAY
 
-    /** 展示形态（图标/文案/可用性）完全交给原生动作，接管只改子项落点。 */
+    /** 展示形态（图标/文案/可用性）交给原生动作；文案为空时兜底回填，避免只剩一个图标。 */
     override fun update(e: AnActionEvent) {
         original.update(e)
+        if (updateProbed.compareAndSet(false, true)) {
+            LOG.info(
+                "[M36][Takeover] update: text='${e.presentation.text}', visible=${e.presentation.isVisible}, " +
+                    "enabled=${e.presentation.isEnabled}, template='${original.templateText}'",
+            )
+        }
+        if (e.presentation.text.isNullOrBlank()) {
+            e.presentation.setText(original.templateText ?: "", false)
+        }
     }
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -117,7 +154,11 @@ internal class PreviewDataSourceActionHost : com.intellij.openapi.Disposable {
 
         /** 幂等安装（预览面板展示前调用；Database 插件缺席或动作不存在时静默跳过）。 */
         fun ensureInstalled() {
-            runCatching { getInstance().install() }
+            runCatching { getInstance().install() }.onFailure { e ->
+                com.intellij.openapi.diagnostic.Logger
+                    .getInstance(PreviewDataSourceActionHost::class.java)
+                    .warn("[M36][Takeover] install FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
         }
     }
 
@@ -126,12 +167,18 @@ internal class PreviewDataSourceActionHost : com.intellij.openapi.Disposable {
     @Synchronized
     fun install() {
         if (installed != null) return
+        val log = com.intellij.openapi.diagnostic.Logger.getInstance(PreviewDataSourceActionHost::class.java)
         val manager = ActionManager.getInstance()
-        val original = manager.getAction(ACTION_ID) ?: return
+        val original = manager.getAction(ACTION_ID)
+        if (original == null) {
+            log.warn("[M36][Takeover] install skipped: action not found: $ACTION_ID")
+            return
+        }
         if (original is ChooseDataSourceTakeoverGroup) return
         val takeover = ChooseDataSourceTakeoverGroup(original)
         manager.replaceAction(ACTION_ID, takeover)
         installed = takeover
+        log.info("[M36][Takeover] installed: $ACTION_ID -> original=${original.javaClass.name}")
         BarrierRegistry.register(
             BarrierRegistry.Entry(
                 id = "action-takeover:$ACTION_ID",
