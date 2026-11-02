@@ -281,70 +281,119 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 // 并在 doLast 里**逐份 verdict 判文本**——任何目标不是以 `Compatible` 开头即失败（GradleException）。
 // 覆盖面 = 下方 targets（本机 gradle 缓存内已下载的发行版集合，与 verifyGate 同源三目标）；要覆盖
 // Marketplace 的 251/252/261/263 需先在 intellijPlatform.pluginVerification.ides 里声明对应版本。
-val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
-    group = "verification"
-    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑"
-    dependsOn("buildPlugin")
-    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
-    // T-ReleasePerf8（20261024）N3：marketplace home 同 verifyGate 外迁机器级持久目录——这是
-    // 发行日冷下载税的主体（3.33GB 依赖插件 zip，R1 实证 warm=0 B 全命中、跨树 10 天仍 130/131
-    // 复用）。-PverifierHomeRoot=build 回落 build/verify-home-marketplace 既有形态。
-    val verifyHome = resolveVerifierHome("marketplace")
-    jvmArgs(
-        "-Dplugin.verifier.home.dir=${verifyHome.absolutePath}",
-    )
-    // 在线模式必须联网：代理注入同 verifyPlugin——daemon 配了代理（systemProp.*）才注入，
-    // CI 直连（原硬编码 127.0.0.1:7890 会让无代理环境的联网解析全部失败）
-    jvmArgs(verifierProxyJvmArgs)
-    val pluginVersion = providers.gradleProperty("version").get()
-    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace").get().asFile
-    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
-    val baselineFile = layout.projectDirectory.file("dev-support/verifier-marketplace-baseline.txt").asFile
-    val gradleUserHome = gradle.gradleUserHomeDir
-    classpath(
-        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
-            .walkTopDown().maxDepth(4)
-            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
-            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
-    )
-    argumentProviders.add(CommandLineArgumentProvider {
-        val guh = gradleUserHome
-        fun ideDir(name: String): File =
-            guh.resolve("caches").listFiles()?.asSequence()
-                ?.filter { it.resolve("transforms").isDirectory }
-                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
-                ?.map { hash -> hash.resolve("transformed").resolve(name) }
-                ?.firstOrNull { it.isDirectory }
-                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+// T-ReleasePerf11（20261103）券01：verifyMarketplace 三目标并行化。
+//
+// 现状（拆分前）：单个 JavaExec 一次带 3 个目标目录，verifier-cli **串行**逐目标解析——
+// T10 权威轮2 实测 market 段 789s＝releaseGate 关键路径（802s−build 13s），其中 ~285s
+// 高占用解析 + ~7 分钟低占用等待窗（在线元数据/依赖往返，T7 探针实证），等待窗按目标
+// 串行排队。三目标拆三个子任务并发执行，等待窗互相重叠；T6 销案面（verifyGate 拆分）
+// 不覆盖此处——market 拆分从未试过。
+//
+// 结构：
+//   - 三个单目标子任务 verifyMarketplace243/253/262，各配**独立 verifier home**
+//     （marketplace-243 等，P-1：并发冲突面只存在于共享 home；子 home 一次性从主 home
+//     种子拷贝，不付 3×3.33GB 冷下载税）；
+//   - 聚合任务**保留原任务名 verifyMarketplace**——releaseGate dependsOn、gradle-gate.ps1
+//     的命令匹配、proc-sampler.ps1 的进程归类全部无感（P-4）；
+//   - baseline verdict 判定整体迁到聚合任务 doLast：遍历三个报告目录跑同一
+//     checkMarketplaceVerdicts（该函数按 reportsDir 相对路径首段取目标名，天然兼容多目录）；
+//     子任务只负责 verifier 退出码（JavaExec 天然语义，与拆分前一致）；
+//   - 聚合任务依赖 buildPlugin（沿用原任务接线）；三子任务各自依赖 zip 存在性检查。
+//
+// 语义不变量：在线、无豁免、按 verdict 文本判失败、三目标逐一保留、基线判定口径逐字不变。
+// 内存面：3 个 verifier JVM 并发 ~3×2.8GB commit（P-7）；releaseGate 编排内测试限流
+// （MpvTestLaneLimiter）继续压分片窗，总峰值由水位闸门（testShardStagger/verifyGate 前置）
+// 兜底；超限时 -PtestShardConcurrency 收档位即可，不在本券内做自动降档。
 
-        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
-        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
-            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
-        buildList {
-            add("check-plugin")
-            // 刻意不加 -offline、不加 -ignored-problems：这两项正是失明的成因
-            add("-verification-reports-dir")
-            add(reportsDir.absolutePath)
-            add("-runtime-dir")
-            add(jbr.absolutePath)
-            add("-verification-reports-formats")
-            add("plain,html")
-            add(zipFile.absolutePath)
-            add(ide243.absolutePath)
-            add(ideDir("idea-2025.3.5-win").absolutePath)
-            add(ideDir("idea-2026.2.3-win").absolutePath)
+val mpMarketTargets: List<Pair<String, String>> = listOf(
+    "ideaIU-2024.3.7.1-win" to "243",
+    "idea-2025.3.5-win" to "253",
+    "idea-2026.2.3-win" to "262",
+)
+
+// 三个单目标子任务与聚合任务共同的 zip/报告路径解析（配置期捕获为局部值，CC 可序列化）。
+fun registerMarketTarget(name: String, ideName: String, tag: String) {
+    val pluginVersion = providers.gradleProperty("version").get()
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
+    val gradleUserHome = gradle.gradleUserHomeDir
+    // 独立子 home：命名 role 带 tag，resolveVerifierHome 的三种模式（缺省 GRADLE_USER_HOME /
+    // -PverifierHomeRoot=build / 绝对路径根）都自动隔离到 marketplace-<tag> 子目录。
+    val verifyHome = resolveVerifierHome("marketplace-$tag")
+    // 主 marketplace home（既有缓存所在）——仅作一次性种子源。
+    val masterHome = resolveVerifierHome("marketplace")
+    val masterHomeCaptured = masterHome
+    val verifyHomeCaptured = verifyHome
+
+    tasks.register<JavaExec>(name) {
+        group = "verification"
+        description = "Marketplace 同口径兼容校验（单目标 $tag，在线 + 无豁免）；verifyMarketplace 三目标并行化的子任务"
+        mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+        jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
+        jvmArgs(verifierProxyJvmArgs)
+        classpath(
+            gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+                .walkTopDown().maxDepth(4)
+                .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+                .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+        )
+        argumentProviders.add(CommandLineArgumentProvider {
+            val ide243 = mpv.verification.resolveIdeDir(gradleUserHome, "ideaIU-2024.3.7.1-win")
+            val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+                ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+            buildList {
+                add("check-plugin")
+                // 刻意不加 -offline、不加 -ignored-problems：这两项正是失明的成因（拆分前注释原文）
+                add("-verification-reports-dir")
+                add(reportsDir.absolutePath)
+                add("-runtime-dir")
+                add(jbr.absolutePath)
+                add("-verification-reports-formats")
+                add("plain,html")
+                add(zipFile.absolutePath)
+                add(mpv.verification.resolveIdeDir(gradleUserHome, ideName).absolutePath)
+            }
+        })
+        doFirst {
+            // 首跑种子：把主 home 既有缓存拷进子 home（幂等，已初始化则空操作）。
+            mpv.verification.seedVerifierHome(masterHomeCaptured, verifyHomeCaptured, logger)
+            // 锁探测按各自子 home 判定——三子 home 互不相同，互不误伤；本树内三进程各占
+            // 一子 home 也互不命中。残余风险（P-1）＝两个 verifier 并发写**不同** home 的
+            // 全局副作用，W2 实测裁决。
+            mpv.verification.assertNoForeignVerifier(verifyHomeCaptured, logger)
+            if (!zipFile.isFile) {
+                throw GradleException("verifyMarketplace 需要已存在的发行包：$zipFile 不存在。先跑 ./gradlew buildPlugin。")
+            }
+            logger.lifecycle("verifyMarketplace$tag START ${System.currentTimeMillis()} plugin=$zipFile target=$ideName（在线、无豁免）")
         }
-    })
-    doFirst {
-        assertNoForeignVerifier(verifyHome, logger)
-        if (!zipFile.isFile) {
-            throw GradleException("verifyMarketplace 需要已存在的发行包：$zipFile 不存在。先跑 ./gradlew buildPlugin。")
+        doLast {
+            logger.lifecycle("verifyMarketplace$tag END ${System.currentTimeMillis()}")
         }
-        logger.lifecycle("verifyMarketplace START ${System.currentTimeMillis()} plugin=$zipFile（在线、无豁免）")
     }
+}
+
+mpMarketTargets.forEach { (ideName, tag) ->
+    registerMarketTarget("verifyMarketplace$tag", ideName, tag)
+}
+
+val verifyMarketplace = tasks.register("verifyMarketplace") {
+    group = "verification"
+    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"
+    dependsOn("buildPlugin", "verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    // baseline verdict 判定需要的路径面（配置期捕获，CC 可序列化）。
+    val reportsDirs = mpMarketTargets.map { (_, tag) ->
+        layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
+    }
+    val baselineFile = layout.projectDirectory.file("dev-support/verifier-marketplace-baseline.txt").asFile
+    doFirst { logger.lifecycle("verifyMarketplace START ${System.currentTimeMillis()}（三目标并行聚合，verdict 判定在 END 后）") }
     doLast {
         logger.lifecycle("verifyMarketplace END ${System.currentTimeMillis()}")
-        checkMarketplaceVerdicts(reportsDir, baselineFile, logger)
+        // 判定口径逐字沿用拆分前：三份报告目录逐一过 checkMarketplaceVerdicts——
+        // 该函数按「reportsDir 相对路径首段」取目标名（MarketVerdictChecker 注释在案），
+        // 单目录输入与拆分前行为逐字等价（P-2 由 W2 verdict parity 验证）。
+        // 空目录（对应子任务未跑/被跳过）会在函数内以「未找到 verification-verdict.txt」失败——
+        // 刻意沿用：单跑子任务不触发本判定，聚合判定不因部分跑而静默缩水。
+        reportsDirs.forEach { dir -> mpv.verification.checkMarketplaceVerdicts(dir, baselineFile, logger) }
     }
 }
 
@@ -361,27 +410,27 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
 //   ③ zip 解析 = -PrefreshZip 显式 → distributions/*.zip mtime 最新（配置期解析；refresh 独立
 //      命令跑、从不与 buildPlugin 同批，配置与执行间 distributions 不变；CC 复用冻结旧路径时
 //      zip 缺失会被 doFirst 拦下给指引）→ 无 zip 即 StopExecutionException 跳过（新树首跑不炸）。
-// 并发面：同 marketplace home，assertNoForeignVerifier 锁探测同款兜底；闲时登记单 verifier
-// JVM ~2.8GB commit（计划 docs/开发计划/20261030-0827-T-ReleasePerf10-… §三 券04）。
-val verifyMarketplaceRefresh = tasks.register<JavaExec>("verifyMarketplaceRefresh") {
+// 并发面（T-ReleasePerf11 更新）：market home 拆三子 home 后，保温必须**全覆盖三个子 home**
+// 才能让正式 verifyMarketplace（三子任务并行）回到暖窗——单刷主 home 已无用（正式门禁不再读它）。
+// 实现为普通 Task 内**串行循环**三次 ProcessBuilder 起 verifier-cli（每目标一个子 home +
+// 各自报告目录）：单 JavaExec 的 home 系统属性配置期定死、无法逐目标换，三子任务会引入
+// 三个任务面与额外编排——闲时保温用最简形态即可。刻意不并行（单 verifier JVM ~2.8GB commit，
+// 与主门禁/日常构建争内存不值当）。stamp 写主目录一份（gradle-gate.ps1 读取路径不变，P-4）
+// ——三个子 home 由同一轮刷新，主 stamp 即三子 home 新鲜度的代理，陈旧判定语义不变。
+tasks.register("verifyMarketplaceRefresh") {
     group = "verification"
     description =
-        "verifyMarketplace home 闲时保温：对最近发行包回填在线依赖缓存（无 baseline 判定；-PrefreshZip 显式指定）"
-    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
-    val verifyHome = resolveVerifierHome("marketplace")
-    jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
-    jvmArgs(verifierProxyJvmArgs)
+        "verifyMarketplace home 闲时保温：对最近发行包回填在线依赖缓存（三子 home 串行刷，无 baseline 判定；-PrefreshZip 显式指定）"
     val pluginVersion = providers.gradleProperty("version").get()
-    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierRefresh").get().asFile
+    val reportsRoot = layout.buildDirectory.dir("reports/pluginVerifierRefresh").get().asFile
     val preferredZip = layout.buildDirectory
         .file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
     val gradleUserHome = gradle.gradleUserHomeDir
-    classpath(
-        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
-            .walkTopDown().maxDepth(4)
-            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
-            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
-    )
+    val verifierJar = gradleUserHome
+        .resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+        .walkTopDown().maxDepth(4)
+        .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+        .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）")
     val explicitZip = providers.gradleProperty("refreshZip").orNull?.let { File(it) }
     val zipFile = explicitZip?.takeIf { it.isFile }
         ?: preferredZip.takeIf { it.isFile }
@@ -389,47 +438,57 @@ val verifyMarketplaceRefresh = tasks.register<JavaExec>("verifyMarketplaceRefres
             .listFiles { f: File -> f.isFile && f.name.endsWith(".zip") }
             ?.maxByOrNull { it.lastModified() }
         ?: preferredZip
-    argumentProviders.add(CommandLineArgumentProvider {
-        val guh = gradleUserHome
-        fun ideDir(name: String): File =
-            guh.resolve("caches").listFiles()?.asSequence()
-                ?.filter { it.resolve("transforms").isDirectory }
-                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
-                ?.map { hash -> hash.resolve("transformed").resolve(name) }
-                ?.firstOrNull { it.isDirectory }
-                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
-
-        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
-        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
-            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
-        buildList {
-            add("check-plugin")
-            add("-verification-reports-dir")
-            add(reportsDir.absolutePath)
-            add("-runtime-dir")
-            add(jbr.absolutePath)
-            add("-verification-reports-formats")
-            add("plain,html")
-            add(zipFile.absolutePath)
-            add(ide243.absolutePath)
-            add(ideDir("idea-2025.3.5-win").absolutePath)
-            add(ideDir("idea-2026.2.3-win").absolutePath)
-        }
-    })
+    // 配置期捕获全部执行所需值（CC 可序列化：纯 File/String/List）。
+    val subHomes = mpMarketTargets.map { (_, tag) -> resolveVerifierHome("marketplace-$tag") }
+    val ideNames = mpMarketTargets.map { it.first }
+    val masterHome = resolveVerifierHome("marketplace")
+    val proxyArgs = verifierProxyJvmArgs
+    inputs.property("mpvRefreshZip", zipFile.absolutePath)
+    inputs.property("mpvRefreshHomes", subHomes.joinToString("|") { it.absolutePath })
     doFirst {
-        assertNoForeignVerifier(verifyHome, logger)
         if (!zipFile.isFile) {
             throw StopExecutionException(
                 "verifyMarketplaceRefresh 跳过：无可用发行包（$zipFile 不存在）。" +
                     "新树首跑属预期（home 尚空、无冷税可省）；要跑保温请 -PrefreshZip=<zip> 显式指定，或先 buildPlugin。",
             )
         }
-        logger.lifecycle("verifyMarketplaceRefresh START ${System.currentTimeMillis()} zip=$zipFile（在线、无豁免、保温用）")
+        logger.lifecycle("verifyMarketplaceRefresh START ${System.currentTimeMillis()} zip=$zipFile targets=${ideNames.size}（在线、无豁免、保温用、串行三子 home）")
     }
     doLast {
-        logger.lifecycle("verifyMarketplaceRefresh END ${System.currentTimeMillis()}")
-        verifyHome.mkdirs()
-        val stamp = File(verifyHome, ".mpv-refresh-stamp")
+        val jbr = mpv.verification.resolveIdeDir(gradleUserHome, "ideaIU-2024.3.7.1-win")
+            .resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        subHomes.forEachIndexed { idx, home ->
+            val tag = mpMarketTargets[idx].second
+            val reportDir = File(reportsRoot, tag)
+            val args = buildList {
+                add("-Dplugin.verifier.home.dir=${home.absolutePath}")
+                addAll(proxyArgs)
+                add("-jar")
+                add(verifierJar.absolutePath)
+                add("check-plugin")
+                add("-verification-reports-dir")
+                add(reportDir.absolutePath)
+                add("-runtime-dir")
+                add(jbr.absolutePath)
+                add("-verification-reports-formats")
+                add("plain,html")
+                add(zipFile.absolutePath)
+                add(mpv.verification.resolveIdeDir(gradleUserHome, ideNames[idx]).absolutePath)
+            }
+            logger.lifecycle("verifyMarketplaceRefresh target=$tag START ${System.currentTimeMillis()} home=$home")
+            // java 可执行取当前 JVM 同款（javaExec 常规做法；PATH 下的 java 与 daemon 同源）
+            val proc = ProcessBuilder(
+                listOf(ProcessHandle.current().info().command().orElse("java")) + args,
+            ).inheritIO().start()
+            val exit = proc.waitFor()
+            if (exit != 0) {
+                throw GradleException("verifyMarketplaceRefresh target=$tag 退出码 $exit（verifier 本体失败，保温中止）")
+            }
+            logger.lifecycle("verifyMarketplaceRefresh target=$tag END ${System.currentTimeMillis()}")
+        }
+        masterHome.mkdirs()
+        val stamp = File(masterHome, ".mpv-refresh-stamp")
         stamp.writeText(System.currentTimeMillis().toString())
         logger.lifecycle("verifyMarketplaceRefresh stamp -> $stamp")
     }

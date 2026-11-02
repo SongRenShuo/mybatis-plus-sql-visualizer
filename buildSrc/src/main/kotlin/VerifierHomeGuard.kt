@@ -59,3 +59,67 @@ fun assertNoForeignVerifier(home: File, logger: Logger) {
     }
     logger.lifecycle("verifier home 锁探测 CLEAR（$home）")
 }
+
+// T-ReleasePerf11（20261103）券01：market 三目标并行化支撑件。
+//
+// 独立 .kt 顶层函数（配置缓存可序列化）与上方 assertNoForeignVerifier 同款理由。
+
+/**
+ * 在 gradle 缓存 transforms 下解析一个 IDE 发行目录（ideaIU-2024.3.7.1-win 等）。
+ * 原逻辑内嵌在 verifyMarketplace 的 argumentProviders lambda 里，三目标并行拆分后
+ * 三个子任务都要用它，提升为共享顶层函数（逐字搬运，语义不变）。
+ */
+fun resolveIdeDir(gradleUserHome: File, name: String): File =
+    gradleUserHome.resolve("caches").listFiles()?.asSequence()
+        ?.filter { it.resolve("transforms").isDirectory }
+        ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+        ?.map { hash -> hash.resolve("transformed").resolve(name) }
+        ?.firstOrNull { it.isDirectory }
+        ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+
+/**
+ * 给并行化的 marketplace 子 home 做一次性种子：把主 marketplace home 的既有缓存拷过去，
+ * 使三目标并行拆分不付 3×3.33GB 冷下载税（计划 P-3 的对冲）。
+ *
+ * 语义：目标子 home 存在 stamp 或 extracted-plugins 非空即视为已初始化，原样返回（幂等）；
+ * 主 home 未初始化（目录不存在或为空）时跳过种子（新环境走 verifier 自下载，行为与拆分前一致）。
+ * 拷贝失败降级为 WARN 放行——种子是提速手段不是正确性依赖，verifier 拿到空 home 会自己下载。
+ *
+ * 只拷缓存形态目录（extracted-plugins / dependencies / download），不拷锁/日志/stamp：
+ *   - .mpv-refresh-stamp 刻意不拷——子 home 各自的 stamp 由 refresh 任务独立维护，拷主 stamp
+ *     会让三子 home 的陈旧判定失真；
+ *   - download 下的临时文件（.part 等）verifier 自身容忍，不再精细过滤。
+ */
+fun seedVerifierHome(master: File, sub: File, logger: org.gradle.api.logging.Logger) {
+    val seededMarker = File(sub, "extracted-plugins")
+    if (seededMarker.isDirectory && seededMarker.listFiles()?.isNotEmpty() == true) return
+    if (!master.isDirectory || master.listFiles()?.isNullOrEmpty() != false) return
+    sub.mkdirs()
+    runCatching {
+        listOf("extracted-plugins", "dependencies", "download").forEach { dirName ->
+            val src = File(master, dirName)
+            if (src.isDirectory) copyDirRecursively(src, File(sub, dirName))
+        }
+        logger.lifecycle("verifier home seed: $sub <- $master（一次性，避免三目标并行拆分重付冷下载税）")
+    }.onFailure { e ->
+        logger.warn("verifier home seed 失败（${e.javaClass.simpleName}: ${e.message}）——子 home 将自行下载（冷税一次性）")
+    }
+}
+
+/**
+ * 递归目录拷贝（Kotlin stdlib 实现）——不用 org.gradle.util.internal.GFileUtils：
+ * internal 包无 API 稳定性承诺（虽在 9.7 在位，javap 实证），种子是锦上添花件不值得背这个债。
+ * 绝对路径去重防软链/相对路径自嵌套（按 canonicalPath 比对，异常时退 equals）。
+ */
+private fun copyDirRecursively(src: File, dst: File) {
+    val s = runCatching { src.canonicalPath }.getOrDefault(src.absolutePath)
+    val d = runCatching { dst.canonicalPath }.getOrDefault(dst.absolutePath)
+    require(s != d && !d.startsWith(s + File.separator)) { "src/dst 重叠：$src -> $dst" }
+    if (src.isDirectory) {
+        dst.mkdirs()
+        src.listFiles()?.forEach { copyDirRecursively(it, File(dst, it.name)) }
+    } else {
+        dst.parentFile.mkdirs()
+        src.copyTo(dst, overwrite = true)
+    }
+}
