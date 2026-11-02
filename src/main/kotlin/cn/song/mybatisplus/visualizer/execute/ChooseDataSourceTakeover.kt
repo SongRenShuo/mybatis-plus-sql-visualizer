@@ -54,8 +54,7 @@ internal class ChooseDataSourceTakeoverGroup(
 
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ChooseDataSourceTakeoverGroup::class.java)
 
-    /** 一次性取证位：真机只留一条，避免刷屏。 */
-    private val childrenProbed = java.util.concurrent.atomic.AtomicBoolean()
+    /** 一次性取证位（update 每次刷新都会走，只留一条避免刷屏）。 */
     private val updateProbed = java.util.concurrent.atomic.AtomicBoolean()
 
     /**
@@ -75,22 +74,13 @@ internal class ChooseDataSourceTakeoverGroup(
     override fun getChildren(e: AnActionEvent?): Array<AnAction> {
         val project = e?.project
         val file = resolveFile(e)
-        if (childrenProbed.compareAndSet(false, true)) {
-            LOG.info(
-                "[M36][Takeover] getChildren: project=${project != null}, file=${file?.path}, " +
-                    "keys(vf=${e?.getData(CommonDataKeys.VIRTUAL_FILE) != null}, " +
-                    "psi=${e?.getData(CommonDataKeys.PSI_FILE) != null}, " +
-                    "editor=${e?.getData(CommonDataKeys.EDITOR) != null})",
-            )
-        }
         // 非本插件 exec 文件：逐字委托原生组（DataGrip 原生行为不受影响）
         if (project == null || !takeoverAppliesTo(file?.path)) {
             return delegateChildren(e)
         }
         val sources = dataSourcesFor(project, file)
-        if (childrenProbed.compareAndSet(false, true)) {
-            LOG.info("[M36][Takeover] sources=${sources.size}")
-        }
+        // 每次点开都记一条：用户手动动作、频率极低；一次性日志在真机会漏掉「这次点开」的读数。
+        LOG.info("[M36][Takeover] getChildren: sources=${sources.size}, file=${file?.path}")
         if (sources.isEmpty()) return delegateChildren(e)
         return sources.map { ds ->
             val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull().orEmpty()
@@ -149,6 +139,13 @@ internal class ChooseDataSourceTakeoverGroup(
         }
         if (e.presentation.text.isNullOrBlank()) {
             e.presentation.setText(original.templateText ?: "", false)
+        }
+        // 工具栏按钮读的是**模板呈现**（真机实测：update 里设的文案没能上按钮，下拉退化成只剩图标）。
+        // 把每次 update 的结果镜像进模板，按钮与弹层文案才能一致。
+        runCatching {
+            templatePresentation.setText(e.presentation.text ?: "", false)
+            templatePresentation.icon = e.presentation.icon
+            templatePresentation.setEnabled(e.presentation.isEnabled)
         }
     }
 
