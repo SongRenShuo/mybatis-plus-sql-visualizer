@@ -60,7 +60,8 @@ internal class ChooseDataSourceTakeoverGroup(
         //    （popup 组在工具栏里被渲染成「图标+箭头」，文案永远不显示——真机 2026-11-02 现象：
         //    只有图标、悬停才有名字）。
         runCatching {
-            isPopup = false
+            // 2026-11-03 回退：`isPopup = false` 会让平台按「普通动作」渲染，实测把控制台 header
+            // 的工具栏搞坏（连工具栏都不显示）。恢复 popup 组（图标+箭头），文案问题另解。
             templatePresentation.setPerformGroup(true)
             templatePresentation.setText(original.templateText ?: "", false)
             original.templatePresentation.icon?.let { templatePresentation.icon = it }
