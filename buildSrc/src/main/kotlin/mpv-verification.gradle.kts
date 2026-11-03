@@ -384,7 +384,13 @@ mpMarketTargets.forEach { (ideName, tag) ->
 val verifyMarketplace = tasks.register("verifyMarketplace") {
     group = "verification"
     description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"
-    dependsOn("buildPlugin", "verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    // T-ReleasePerf11 券01 补丁（20261103）：与 verifyGate 的 verifyOnly 语义对齐——重验已存在
+    // 发行包时不再重打包（Jar 带 MPV-Build 时间戳恒重跑，重打包会让「已验证的字节」与
+    // 「最终上传的字节」不是同一份）。
+    if (!verifyOnly) {
+        dependsOn("buildPlugin")
+    }
     // baseline verdict 判定需要的路径面（配置期捕获，CC 可序列化）。
     val reportsDirs = mpMarketTargets.map { (_, tag) ->
         layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
