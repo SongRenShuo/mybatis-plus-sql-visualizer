@@ -83,6 +83,8 @@
 - 改平台相关代码（PSI、UI、Action、日志捕获）跑对应 `test --tests`；PR 中贴命令与 `X/Y/Z` 读数（用例数/失败数/错误数）。
 - 改 DB 链跑对应 `testDb*`；本机没有 MySQL 时在 PR 中如实说明「未跑 DB 集成」，不要用 headless 结果冒充真库验证。
 - 全量 `testShards` 与 `releaseGate` 由维护者在合入前收口；外部贡献者不要求跑全量，但请确保定向测试真实通过。
+- 收口轮提速口径（T-TestGapSpeed T6）：机器空载时用 `./gradlew testShards -PtestShardMaxLane=5`（内存水位自适应限流，限流 5 路实测 5m02s 在案），不要退回单路串行收口（同口径 33min 级）；内存紧张时保持缺省 lane 上限即可自适应降档。**禁降片红线不变**（`-PtestShardCount` 调小换速度已被实测否决）。
+- 全量后台跑必须带进度显示：`powershell -File dev-support/testShardsProgress.ps1`（10 秒一行；调片数时 `-ShardCount` 与 `-PtestShardCount` 两边一致）。
 - 失败先复跑确认是否稳定，不要把 flaky 当通过。测试计数异常（如断言数 4→5、`NoSuchMethodError`）优先怀疑增量编译残留，可对该模块执行 `--rerun-tasks`。
 - 新增测试类自动进分片；测试类命名 `*Test.kt`，JUnit 4；纯逻辑测试不要引入平台 fixture。
 - 缺陷修复优先先补一个能复现问题的测试，再改生产代码；说不清怎么复现时，在 PR 中说明原因。
