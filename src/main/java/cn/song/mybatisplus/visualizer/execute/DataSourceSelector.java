@@ -285,10 +285,9 @@ public final class DataSourceSelector {
         if (onDialectGate != null) onDialectGate.accept(verdict);
         boolean needsConfirmation = verdict.status() == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM
                 || verdict.status() == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM;
-        if (verdict.status() != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
-            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
-            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
-        }
+        // 阻断红字的投递推迟到下面 allowed 判定之后（T-DialectGatePassDeadChain）：原先无论放行
+        // 与否都先投 BLOCKED，放行态因此把执行意图标成已完成（见下方注释）。
+        String blockMessage = null;
         boolean allowed = switch (verdict.status()) {
             case MATCH -> true;
             case TARGET_UNKNOWN_QUERY_CONFIRM, RENDER_UNKNOWN_QUERY_CONFIRM -> {
@@ -314,7 +313,7 @@ public final class DataSourceSelector {
                 yield confirmed;
             }
             case AUTO_RERENDER_REQUIRED -> {
-                if (onDialectGate == null && onError != null) onError.accept(dialectGateMessage(verdict));
+                if (onDialectGate == null) blockMessage = dialectGateMessage(verdict);
                 yield false;
             }
             // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
@@ -328,14 +327,25 @@ public final class DataSourceSelector {
             // 即暴露缺 case，明确赋值随穷尽性成立。
             case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> {
                 // 提示照旧（UI 仍显示方言不一致与「切换数据源」入口），但不拦执行。
-                if (onError != null) onError.accept(dialectGateMessage(verdict));
+                blockMessage = dialectGateMessage(verdict);
                 yield true;
             }
             case TARGET_UNKNOWN_BLOCK, RENDER_UNKNOWN_BLOCK -> {
-                if (onError != null) onError.accept(dialectGateMessage(verdict));
+                blockMessage = dialectGateMessage(verdict);
                 yield false;
             }
         };
+        // T-DialectGatePassDeadChain（2026-11-02 用户真机「执行失败、也换不了数据源」）：
+        // BLOCKED 只在**确实不放行**时投递。此前「非 MATCH 一律投」把放行态也算成未提交，而准备链
+        // 传进来的 onSubmission 就是 QueuedExecuteIntent.onSubmission（`{ complete(it) }`）——
+        // 一投就把本次执行意图标成已完成，下游 `isPrepareActive()` 立刻为假，准备链在
+        // `attachConsole` 之前静默早退：控制台不挂载，单飞门也不释放，随后 60s 内执行/换源全部
+        // 只排队，15s 后报「数据库控制台准备超时」。
+        // 顺序保持原契约：先报未提交，再交付详细红字（onError 通道），互不覆盖。
+        if (!allowed && !needsConfirmation && onSubmission != null) {
+            onSubmission.accept(ExecutionSubmission.BLOCKED);
+        }
+        if (blockMessage != null && onError != null) onError.accept(blockMessage);
         if (!allowed && needsConfirmation && onSubmission != null) {
             onSubmission.accept(ExecutionSubmission.CANCELLED);
         }
@@ -1786,7 +1796,7 @@ public final class DataSourceSelector {
 
     /** Kotlin 默认参等价重载：allDataSources 缺省 false、currentSession 缺省 null（既有 attach 版形态）。 */
     public static List<Object> getAttachDataSourceRunners(PsiFile psiFile, String sql, com.intellij.util.Consumer<Object> sessionConsumer) {
-        return getAttachDataSourceRunners(psiFile, sql, sessionConsumer, false, null);
+        return enumerateDataSourceRunners(psiFile, sql, sessionConsumer, false, null).runners();
     }
 
     /**
@@ -1813,22 +1823,48 @@ public final class DataSourceSelector {
             com.intellij.util.Consumer<Object> sessionConsumer,
             boolean allDataSources,
             @Nullable Object currentSession) {
+        return enumerateDataSourceRunners(psiFile, sql, sessionConsumer, allDataSources, currentSession).runners();
+    }
+
+    /**
+     * Runner 枚举详情（T-Exec262ReadLock 观察缝）：{@link #runners} + 平台调用异常 {@link #failure}（未抛为 null）。
+     *
+     * <p>归因分流用：runners 为空时，「平台调用抛异常」与「平台正常返回零个可用源」是两回事——
+     * 前者是插件/平台缺陷（给「调用 IDE 数据库接口失败」+ 异常首行），后者才是方言不匹配或
+     * 数据源不可连接（既有文案）。旧实现把两者都吞成空列表，用户被误导去改 Dialects 设置
+     * （2026-11-02 用户实测现场）。</p>
+     */
+    public record RunnerEnumeration(@NotNull List<Object> runners, @Nullable Throwable failure) {
+    }
+
+    /**
+     * 枚举原生 Runner（含平台调用异常详情），{@link #getAttachDataSourceRunners} 的详情版。
+     *
+     * <p>master 默认参形态（allDataSources/currentSession 缺省）在 Java 侧不设缺省重载——与
+     * {@link #getAttachDataSourceRunners} 三参版同签名擦除冲突，调用方显式传 {@code false, null}。</p>
+     *
+     * <p>T-Exec262ReadLock A（2026-11-02 用户日常 IDEA 2026.2 实测「执行 SQL 报方言不匹配」）：
+     * 262 起 EDT 不再隐式持有读锁，平台 {@code DatabaseRunners.getAttachDataSourceRunners} →
+     * {@code DbImplUtil.getForcedDataSourceForExec} → {@code DataSourcePerFileMappingsImpl.getMapping}
+     * 内部的读访问断言硬抛 {@code Read access is allowed from inside read-action only}（idea.log
+     * 4605 行完整栈）；被吞成空列表 → {@code runners=0} → 误报方言不匹配。
+     * 平台链内部会 attach 控制台（写意图），master 原包 {@code WriteIntentReadAction.compute}——
+     * 但其 {@code compute(ThrowableComputable)} 重载仅 243 有（262 改名 {@code computeThrowable}，
+     * 编译期引用在 262 运行时直接 {@code NoSuchMethodError}），而 Java lambda 又不能像 Kotlin
+     * 那样从 {@code Computable} 里抛受检异常（Kotlin 无受检异常检查）。故按计划定案改用
+     * 243~262 交集 {@code ReadAction.compute(Computable)}：反射受检异常经 {@link #sneakyThrow}
+     * 透传，由外层 catch 收进 {@code failure}，语义与 ThrowableComputable 形态一致。</p>
+     */
+    public static RunnerEnumeration enumerateDataSourceRunners(
+            PsiFile psiFile,
+            String sql,
+            com.intellij.util.Consumer<Object> sessionConsumer,
+            boolean allDataSources,
+            @Nullable Object currentSession) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
-        List<Object> attach;
-        try {
-            Class<?> clazz = Class.forName(RUNNERS_CLASS);
-            Method method = clazz.getMethod("getAttachDataSourceRunners", PsiFile.class, String.class, com.intellij.util.Consumer.class);
-            Object result = method.invoke(null, psiFile, sql, sessionConsumer);
-            List<Object> list = new ArrayList<>();
-            if (result instanceof List) {
-                for (Object o : (List<?>) result) if (o != null) list.add(o);
-            }
-            attach = list;
-        } catch (Throwable e) {
-            LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: " + e, e);
-            attach = List.of();
+        if (!allDataSources || currentSession == null) {
+            return enumerateAttachRunners(psiFile, sql, sessionConsumer);
         }
-        if (!allDataSources || currentSession == null) return attach;
         // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
         List<Object> switched;
         try {
@@ -1839,7 +1875,13 @@ public final class DataSourceSelector {
                     String.class,
                     Class.forName(SESSION_CLASS),
                     com.intellij.util.Consumer.class);
-            Object result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer);
+            Object result = ReadAction.compute(() -> {
+                try {
+                    return method.invoke(null, psiFile, sql, currentSession, sessionConsumer);
+                } catch (Throwable t) {
+                    throw sneakyThrow(t);
+                }
+            });
             List<Object> list = new ArrayList<>();
             if (result instanceof List) {
                 for (Object o : (List<?>) result) if (o != null) list.add(o);
@@ -1847,9 +1889,51 @@ public final class DataSourceSelector {
             switched = list;
         } catch (Throwable e) {
             LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): " + e, e);
-            switched = List.of();
+            switched = null;
         }
-        return switched.isEmpty() ? attach : switched;
+        if (switched == null) return enumerateAttachRunners(psiFile, sql, sessionConsumer);
+        return switched.isEmpty()
+                ? enumerateAttachRunners(psiFile, sql, sessionConsumer)
+                : new RunnerEnumeration(switched, null);
+    }
+
+    /**
+     * attach 版枚举（master 侧 {@code attach} lambda 的 Java 形态）：每次调用现跑反射，
+     * 切换入口失败回退时与 master 一样重新枚举而非复用旧读数。
+     */
+    private static RunnerEnumeration enumerateAttachRunners(
+            PsiFile psiFile,
+            String sql,
+            com.intellij.util.Consumer<Object> sessionConsumer) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        Throwable failure = null;
+        List<Object> runners;
+        try {
+            Class<?> clazz = Class.forName(RUNNERS_CLASS);
+            Method method = clazz.getMethod("getAttachDataSourceRunners", PsiFile.class, String.class, com.intellij.util.Consumer.class);
+            Object result = ReadAction.compute(() -> {
+                try {
+                    return method.invoke(null, psiFile, sql, sessionConsumer);
+                } catch (Throwable t) {
+                    throw sneakyThrow(t);
+                }
+            });
+            List<Object> list = new ArrayList<>();
+            if (result instanceof List) {
+                for (Object o : (List<?>) result) if (o != null) list.add(o);
+            }
+            runners = list;
+        } catch (Throwable e) {
+            failure = e;
+            LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: " + e, e);
+            runners = List.of();
+        }
+        return new RunnerEnumeration(runners, failure);
+    }
+
+    /** 受检异常透传（Kotlin 无受检异常检查的等价形态）：{@code ReadAction.compute(Computable)} 内的反射异常经此透传出 compute。 */
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
     }
 
     /**
@@ -2177,9 +2261,17 @@ public final class DataSourceSelector {
      *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
     public static final long PENDING_EXECUTE_TIMEOUT_MS = 15_000L;
 
-    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    /**
+     * T-DialectInferPollution W11：排队意图超时文案。
+     *
+     * <p>T-DialectGatePassDeadChain（2026-11-02）：<b>不再复用准备超时键</b>。排队者的真实处境是「上一条
+     * 准备链还没结束」，报「准备超时 + 请重新选择数据源」既误导（用户没超时），又把人指向当时
+     * 根本不存在的入口（预览弹窗没有换源按钮）。</p>
+     */
     public static String pendingExecuteTimeoutMessage() {
-        return MpSqlVisualizerBundle.message("execute.prepare.timeout");
+        return MpSqlVisualizerBundle.message(
+                "execute.prepare.queuedTimeout",
+                PENDING_EXECUTE_TIMEOUT_MS / 1000);
     }
 
     /** document 写单次尝试：WriteAction 内 {@link #writeVfTextViaDocument}；失败原因必达日志（旧 getOrDefault 吞 Throwable 的教训）。 */
