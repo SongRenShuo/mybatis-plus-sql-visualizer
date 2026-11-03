@@ -106,5 +106,5 @@
   ④testFast 被 T1 券在途文件 ReplayExportDialogTest.kt 编译错阻塞（protected okAction/doDispose 等约 10 处，全落该文件），与 T4 改动无关；buildSrc 编译与配置期已由 help 两向验证覆盖，testFast 留收口复跑。
 - T5：**完成（20261104，提交 `1d623628`）**。前提3 证实后按计划摘道：两类实测 exec 合计 7.9s（17 例 + 14 例，20261103 轮 XML），摘道代价 ≈ 8s + 一次尾 JVM bootstrap，换整轮重试面收敛。落地：buildSrc `serialTailClasses` 摘出分片计划 + `testShardTail` 尾任务（mustRunAfter 全部分片保证分片全停才起、单跑不拖分片）；聚合报告计进 SHARD TOTAL、不参与失衡/缺权告警（shardExec 只收分片本体，片数经局部 val 捕获防 CC 炸）；根脚本 e2eFakeIde mustRunAfter 追加（任务名不匹配既有 `[0-9]+` 正则）；并行运行器路径走 test-shard-serial-classes.txt 同清单。验证：`help` 绿（buildSrc 编译+CC 存储正常）+ `testShardTail` 实跑绿（XML 17/0/0/0 + 14/0/0/0，laneAtEnd=0）。待收口复跑确认：testShards 全量轮分片计数应不含两类（预计 8503 + 尾道 31）。
 - T6：**完成（20261104，提交 `507bc705`）**。testShardsProgress.ps1 新增 `-ShardCount`（缺省 5 与 mpv-testing 默认对齐，注释写明调片数两边一致）；PS 解析器校验 PARSE OK（PS5.1 中文脚本雷区自查）。CONTRIBUTING 收口轮口径两条：`-PtestShardMaxLane=5` 自适应限流（5m02s 在案）替代单路 33min、禁降片红线不变；全量后台跑必须带进度显示。
-- T7：
-- 收口：
+- T7：**未实施**（按计划边界：前六券收口后余量评估不做；releaseGate 动态让路留待办，须 A/B 双轮读数才定案）。
+- 收口：**完成（20261104 02:07 收口轮，工作树 mpsv-testgap-speed）**。全量 `testShards` 后台带进度跑（testShardsProgress.ps1，10 秒一行），退出码 0、墙钟 20:30（自适应限流）：分片本体 **8517/0/0/13**（shard1 1711 / shard2 1668+2 跳 / shard3 1502+4 跳 / shard4 1904+7 跳 / shard5 1732，0 失败 0 错误 0 WARN 失衡告警）+ 尾道 testShardTail 31/0/0/0（本轮 02:07 新鲜 XML 实证）+ testExternal 6 套件全绿。分片计数与预期吻合（8534 基线 − perf 摘出 31 + T1 新增 11 ≈ 8514，13 跳过为 Docker/Assume 常态构成）。全六券 T1~T6 提交齐、工作树干净；未推远端（欠推待用户令）。
