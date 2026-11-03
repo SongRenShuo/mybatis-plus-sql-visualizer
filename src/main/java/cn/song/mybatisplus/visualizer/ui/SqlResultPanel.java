@@ -86,6 +86,11 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         errorLocateButton.setContentAreaFilled(false);
         errorLocateButton.setBorder(JBUI.Borders.empty(1, 6));
         errorLocateButton.setFont(errorLocateButton.getFont().deriveFont(11f));
+        // T-DialectGatePassDeadChain：与 T-DialectGateUx 的 fix 链接同为「链接」，fallback 统一 BLUE。
+        // k2j 侧把 master 独立的 errorFixButton（fallback 本就 BLUE）合并进了本按钮承载
+        // showErrorWithActions 的「切换数据源」入口——原 GRAY 只在主题键缺失时暴露，
+        // 表现为一段蓝一段灰。
+        errorLocateButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.BLUE));
         errorLocateButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.GRAY));
         errorLocateButton.setMargin(JBUI.insets(0, 6, 0, 6));
         errorLocateButton.addActionListener(e -> {
@@ -99,6 +104,9 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         errorSettingsButton.setContentAreaFilled(false);
         errorSettingsButton.setBorder(JBUI.Borders.empty(1, 6));
         errorSettingsButton.setFont(errorSettingsButton.getFont().deriveFont(11f));
+        // T-DialectGatePassDeadChain：与 fix 链接按钮同为「链接」，fallback 统一 BLUE
+        //（原 GRAY 只在主题键缺失时暴露，表现为一段蓝一段灰）。
+        errorSettingsButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.BLUE));
         errorSettingsButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.GRAY));
         errorSettingsButton.setMargin(JBUI.insets(0, 6, 0, 6));
         errorSettingsButton.addActionListener(e -> {
@@ -362,18 +370,50 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
     }
 
     /**
-     * T-DialectGateUx：阻断态错误 + 就地出口（切数据源 / 打开方言设置）。
-     * 入口为 null/label 为空时不显示对应按钮（例如 Community 无 Database 插件）。
+     * T-DialectGatePassDeadChain（2026-11-02 用户定案「这两应该是蓝色字体可直接点击」）：
+     * 信息态状态行 + 两个就地动作。
+     *
+     * <p>与 {@link #showStatus} 逐字相同，<b>唯一差别是清完动作后按入参重新挂上</b>——放行态（方言冲突只提示
+     * 不拦执行）同样需要「切换数据源」「方言设置」两个蓝色可点入口。此前该态走 {@link #showStatus}，
+     * 它第一行清动作的逻辑会把链接清掉，文案却仍写着「可点「切换数据源」」，用户找不到。</p>
+     *
+     * <p>动作形态与错误态完全一致（{@link #showErrorWithActions}）：透明按钮 + {@code Link.activeForeground}，
+     * 渲染即蓝字。</p>
      */
-    public void showErrorWithActions(
-            String error,
+    public void showStatusWithActions(
+            String message,
             String fixLabel,
             String fixTooltip,
             Runnable fix,
             String settingsLabel,
             String settingsTooltip,
             Runnable settings) {
-        showError(error);
+        state = State.EMPTY;
+        currentError = null;
+        errorCopyButton.setVisible(false);
+        locateHandler = null;
+        errorLocateButton.setVisible(false);
+        settingsHandler = null;
+        errorSettingsButton.setVisible(false);
+        applyErrorActions(fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings);
+        setLoadingIconVisible(false);
+        String esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        infoLabel.setText("<html>" + esc + "</html>");
+        infoLabel.setToolTipText(message);
+        infoLabel.setForeground(JBColor.namedColor("Label.infoForeground", JBColor.GRAY));
+        showContent();
+        revalidate();
+        repaint();
+    }
+
+    /** 挂载两个就地动作（错误态与信息态共用；label 或动作缺失即不显示对应入口）。 */
+    private void applyErrorActions(
+            String fixLabel,
+            String fixTooltip,
+            Runnable fix,
+            String settingsLabel,
+            String settingsTooltip,
+            Runnable settings) {
         if (fixLabel != null && fix != null) {
             locateHandler = fix;
             errorLocateButton.setText(fixLabel);
@@ -386,6 +426,22 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
             errorSettingsButton.setToolTipText(settingsTooltip);
             errorSettingsButton.setVisible(true);
         }
+    }
+
+    /**
+     * T-DialectGateUx：阻断态错误 + 就地出口（切数据源 / 打开方言设置）。
+     * 入口为 null/label 为空时不显示对应按钮（例如 Community 无 Database 插件）。
+     */
+    public void showErrorWithActions(
+            String error,
+            String fixLabel,
+            String fixTooltip,
+            Runnable fix,
+            String settingsLabel,
+            String settingsTooltip,
+            Runnable settings) {
+        showError(error);
+        applyErrorActions(fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings);
         revalidate();
         repaint();
     }
