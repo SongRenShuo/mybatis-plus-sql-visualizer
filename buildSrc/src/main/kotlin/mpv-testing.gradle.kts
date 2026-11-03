@@ -689,6 +689,24 @@ intellijPlatformTesting {
             }
             val known = (smoothed.values + weightProfile.values).sorted()
             val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+            // T-TestGapSpeed T4-B：画像保鲜告警（只告警不挡构建）。检出类中既无本地样本又无
+            // 入库画像覆盖的占比 >15% 时提示重跑画像刷新——占比高说明画像已陈旧到「大面积
+            // 中位数插值」，正是批次8 PluginSettingsPanelUiTest 4例19.5s 被 ~1.5s 插值、临界片
+            // 失衡 +13.7% 的退化形态。阈值 15%：正常轮未覆盖类只有零星新增（<2%），超 15% 即
+            // 结构性陈旧。配置期纯计算 + logger.warn，无新文件写入，不破坏 configuration-cache
+            // （TSV 读取本就在上方 weightProfile 段、已被 CC 输入追踪）。
+            run {
+                val uncovered = discoveredTestClasses.count { it !in smoothed && it !in weightProfile }
+                val ratio = if (discoveredTestClasses.isEmpty()) 0.0
+                else uncovered.toDouble() / discoveredTestClasses.size
+                if (ratio > 0.15) {
+                    logger.warn(
+                        "mpv-test-lane: 测试权重画像陈旧——${uncovered}/${discoveredTestClasses.size} 个检出测试类" +
+                            "（${"%.0f".format(ratio * 100)}%）既无本地样本也无画像覆盖，将按中位数插值装箱" +
+                            "（易致临界片失衡）；请跑 dev-support/weight-refresh.ps1 刷新 dev-support/test-shard-weights.tsv"
+                    )
+                }
+            }
             discoveredTestClasses.associateWith { smoothed[it] ?: weightProfile[it] ?: median }
         }
         // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
