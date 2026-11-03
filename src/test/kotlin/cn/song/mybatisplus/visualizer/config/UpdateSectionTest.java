@@ -193,9 +193,15 @@ public class UpdateSectionTest extends BasePlatformTestCase {
             return PluginUpdateRunner.CheckResult.UpToDate.INSTANCE;
         });
         section.getCheckButton().doClick();
-        // 同步进入「检查中」（Backgroundable 从非 EDT 同步执行；fake 立即完成）
-        assertEquals(UpdateSection.State.Checking, section.getState());
-        assertEquals(MpSqlVisualizerBundle.message("settings.update.checking"), section.getStatusLabel().getText());
+        // 瞬态观测同 testInstallButtonClick 的调度竞态（T-CiRelease 20261024 实证：EDT 可能抢在
+        // 断言前派发完成回调；master 5dfcc9a3 同款，k2j 侧 176 轮门禁暴露后补译）：Checking/UpToDate
+        // 均为「点击已进入检查流程」的合法观测，对应文案两可；流程正确性由下方 calls==1 +
+        // waitForState(UpToDate) 严格把关。
+        if (section.getState() == UpdateSection.State.Checking) {
+            assertEquals(MpSqlVisualizerBundle.message("settings.update.checking"), section.getStatusLabel().getText());
+        } else {
+            assertEquals(UpdateSection.State.UpToDate, section.getState());
+        }
         waitForState(UpdateSection.State.UpToDate);
         assertEquals(1, calls[0]);
         assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.getStatusLabel().getText());
