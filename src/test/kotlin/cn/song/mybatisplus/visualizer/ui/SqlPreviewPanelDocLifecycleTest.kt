@@ -145,6 +145,80 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-PreviewDocPersistLock：落盘必须发生在写动作内。
+     *
+     * 缺陷形态：`setText` 放在 `runWriteCommandAction` 里、`saveDocument` 留在块外。写命令返回
+     * 后写意图即释放，`FileDocumentManager.saveDocument` 首行断言写环境（243
+     * `FileDocumentManagerImpl:323-336` → `TransactionGuardImpl.assertWriteActionAllowed`；
+     * 262 同名断言），EDT 上硬抛 `Access is allowed from write thread only`。
+     *
+     * 判据为什么用调用栈而不是写意图状态（2026-11-02 实测两条前提均被推翻）：
+     *  1. `BasePlatformTestCase` 的**整个测试体**由 `UsefulTestCase:515 →
+     *     EdtTestUtil.runInEdtAndWait(runnable, writeIntent=true)` 包在一条
+     *     `runWriteIntentReadAction` 里；测试体内再调 `runInEdtAndWait(writeIntent=false)`
+     *     只会走 `isDispatchThread` 分支直接 `run()`，不会剥掉外层意图——崩溃条件构造不出来；
+     *  2. 退而判 `isWriteAccessAllowed` 也不判别：未修复代码下该值仍为 true（框架写意图帧内），
+     *     实测 4/0/0 全绿＝假红。
+     * 故改为「保存调用栈里必须出现写命令/写动作帧」：未修复时栈里只有
+     * `ExecDocAutosaveGate.suppressDuring → saveDocument`，修复后多出
+     * `WriteCommandAction.runWriteCommandAction` 帧，两者可区分。
+     */
+    fun testShowSqlNativeDocPersistHappensInsideWriteAction() {
+        val target = File(project.basePath!!, "pdpl-showsql-target.sql")
+        val vf = writeAndRefresh(target, "select  id ,name  from t  where id=1")
+        assertNotNull(vf)
+        val fdm = FileDocumentManager.getInstance()
+        val consoleDoc = fdm.getDocument(vf!!)
+        assertNotNull(consoleDoc)
+
+        val sawSave = java.util.concurrent.atomic.AtomicBoolean(false)
+        val saveStack = java.util.Collections.synchronizedList(mutableListOf<String>())
+        // 必须用 beforeAnyDocumentSaving：它在 FileDocumentManagerImpl.saveDocument 的断言之后、
+        // doSaveDocument 之前触发，栈里不含平台内部那次落盘写动作；beforeDocumentSaving 在
+        // doSaveDocumentInWriteAction 内部触发，栈里恒有平台写动作帧，断言无判别力（实测）。
+        val listener = object : com.intellij.openapi.fileEditor.FileDocumentManagerListener {
+            override fun beforeAnyDocumentSaving(
+                document: com.intellij.openapi.editor.Document,
+                explicit: Boolean,
+            ) {
+                if (document === consoleDoc) {
+                    sawSave.set(true)
+                    RuntimeException().stackTrace.forEach {
+                        saveStack.add(it.className.substringAfterLast('.') + "." + it.methodName)
+                    }
+                }
+            }
+        }
+        project.messageBus.connect(testRootDisposable)
+            .subscribe(com.intellij.openapi.fileEditor.FileDocumentManagerListener.TOPIC, listener)
+
+        val panel = SqlPreviewPanel(project)
+        try {
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
+            panel.embedConsoleForTest(javax.swing.JPanel())
+            panel.markNativeDocForTest(consoleDoc!!)
+
+            panel.renderSqlForTest()
+
+            assertTrue("前置：本次渲染应真的触发落盘（否则断言无判别力）", sawSave.get())
+            val inWriteAction = synchronized(saveStack) {
+                saveStack.any {
+                    it.startsWith("WriteCommandAction.") || it.startsWith("WriteAction.") ||
+                        it.startsWith("WriteCommandActionHelper")
+                }
+            }
+            assertTrue(
+                "T-PreviewDocPersistLock：saveDocument 必须在写命令/写动作内调用——写在块外时写意图已释放，" +
+                    "EDT 上会硬抛「Access is allowed from write thread only」。实际保存调用栈：" +
+                    synchronized(saveStack) { saveStack.take(8).joinToString(" ← ") },
+                inWriteAction,
+            )
+        } finally {
+            SqlPreviewPanelSqlViewKt.clear(panel)
+        }
+    }
+
     // ======================== T-PS4-14④：dispose 回收注册表 ========================
 
     /**
