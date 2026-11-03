@@ -90,9 +90,9 @@
 
 （各券完成后在此回填：提交号、定向读数、反例读数、与计划的偏差。）
 
-- T1：
-- T2：
-- T3：
+- T1：**完成（20261104，提交 `b2a85b3e`）**。原派子代理并发限额掉线，主控按「接手掉线代理」纪律接管（工作树仅剩一个在途测试文件、无探针残留）。11 例 headless 用例（DialogWrapper 结构/禁用态诚实降级双保险/导出映射/空输入与缺字段兜底），定向 `test --tests ReplayExportDialogTest` 读数 11/0/0/0。偏差：计划写「不碰 src/main」，实际按仓内惯例给弹窗补 public `doDispose()`（SqlPreviewDialog/RollbackSqlDialog 同款——平台 DialogWrapper.dispose 为 protected，兄弟弹窗全靠该惯例口给测试 tearDown；T4 观察到的「protected okAction/doDispose 约 10 处编译错」即源于测试误摸 protected，已改为经 public wrapCheck/doDispose 访问）。前提1 证实：headless 构造无障碍。
+- T2：（在途）
+- T3：**完成（20261104，提交 `bfc906b7`）**。清单新增「headless 单测不可验判据」一节：线程与模态 3 项（模态冻结 invokeLater / ModalityState.any write-unsafe / 262 读锁硬抛）、UI 形态 4 项（ToolWindow 悬停渲染 / 接管组 displayTextInToolbar / JOIN 像素 / 设置页导航）、控制台与键位 2 项（`use` 语句超时提示与键位冲突必现，均注明在册缺陷/待拍板现状），每项带触发路径、判据、出处复盘。
 - T4：**完成（20261104，提交 86f16ace + 3a5fb604）**。
   ①画像刷新：weight-refresh.ps1 从主仓 20261103 轮 XML（test+testShard1..5，804 文件）重生成 TSV，612→802 类（新增 195、移除 5 个已删类），头部注记 execSum 846.0→961.9s；新增头部含 O147HistoryUpgradeTest 87.07s（此前被中位数插值的最大失准源）。
   ②前提2证伪：闸口径=30 分钟窗内逐类 suite time 求和，本轮 961.9s>900s 实测被拒（报错原文留痕：`pollution gate: latest-round execSum=961.9s > threshold=900.0s over 804 files`）；结果目录仅此一轮、无干净轮可聚合，按脚本自有 `-Force` 显式放行并在 TSV 头部留注记（两路并发轮、相对量级回填语义），未改脚本默认阈值、未静默绕闸。公共 607 类中位比值 0.71（轮次刻度整体偏移，贪心装箱只吃相对量级，另 PluginSettingsPanelUiTest 热轮 1.895s vs 冷轮 ~19.5s 的冷启动偏差属已知局限）。
