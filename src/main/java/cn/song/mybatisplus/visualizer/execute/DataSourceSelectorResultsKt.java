@@ -436,6 +436,8 @@ public final class DataSourceSelectorResultsKt {
         };
         com.intellij.util.Consumer<Object> sessionConsumer = session -> {
             if (!isPrepareActive.get()) {
+                // T-DialectGatePassDeadChain：早退必须结算单飞门（见下方同款注释）。
+                DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
                 return;
             }
             ExecutionDialectGate.Target actualTarget = ExecutionDialectGate.fromSession(session);
@@ -459,7 +461,10 @@ public final class DataSourceSelectorResultsKt {
                 return;
             }
             // 确认框的模态事件泵期间可能超时/被替代，返回 Yes 也不能复活旧准备链。
+            // T-DialectGatePassDeadChain：早退**必须**结算单飞门——门是进程级单例状态，悬挂一次就是
+            // 60s 内执行/换源全部只排队（用户可见「控制台准备超时」）。abort 按 owner 幂等，重复调用无害。
             if (!isPrepareActive.get()) {
+                DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
                 return;
             }
             DataSourceSelectorConsoleKt.prepareInConsole(project, session, vf, executeAfterPrepare,
@@ -467,7 +472,10 @@ public final class DataSourceSelectorResultsKt {
                     prepareOwner, dialectGateRequest, onDialectGate, submission, isPrepareActive);
         };
 
-        List<Object> enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer);
+        // T-Exec262ReadLock A：改用详情版枚举——runners 为空时区分「平台调用抛异常」与「正常零可用源」
+        //（见下方 PLATFORM_CALL_FAILED 分支；归因函数 emptyRunnersReason 为纯函数，测试直测）。
+        RunnerEnumeration enumeration = enumerateDataSourceRunners(psiFile, submitSql, sessionConsumer, false, null);
+        List<Object> enumerated = enumeration.runners();
         // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
         // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
         // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
@@ -572,8 +580,21 @@ public final class DataSourceSelectorResultsKt {
                     return;
                 }
             }
-            if (registered.isEmpty()) {
+            EmptyRunnersReason emptyReason = emptyRunnersReason(registered.isEmpty(), enumeration.failure());
+            if (emptyReason == EmptyRunnersReason.NO_DATASOURCE) {
                 if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.datasource.empty"));
+            } else if (emptyReason == EmptyRunnersReason.PLATFORM_CALL_FAILED) {
+                // T-Exec262ReadLock A'：平台调用本身抛异常（262 EDT 读锁硬抛等）——runner 为空
+                // 不是「方言不匹配」，把用户引去改 Dialects 只会白折腾（2026-11-02 实测现场：
+                // `Read access is allowed from inside read-action only` 被 runCatching 吞成
+                // 方言不匹配红条）。报异常首行 + 反馈指引，真实原因看 idea.log。
+                Throwable platformFailure = enumeration.failure();
+                LOG.warn("[M36] runners empty due to platform call failure: " + platformFailure);
+                if (onError != null) {
+                    onError.accept(MpSqlVisualizerBundle.message(
+                            "execute.datasource.platformCallFailed",
+                            platformFailure != null ? rootCauseFirstLine(platformFailure) : ""));
+                }
             } else {
                 // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
                 // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
@@ -617,6 +638,8 @@ public final class DataSourceSelectorResultsKt {
             showRunnerPopup(project, runners, runner -> {
                 prepareGate.endInteraction(prepareOwner);
                 if (!isPrepareActive.get()) {
+                    // T-DialectGatePassDeadChain：用户已选源但本链已被替代——结算门，别让它悬挂。
+                    DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
                     return;
                 }
                 LOG.info("[M36] popup selected: " + (runner != null ? getRunnerName(runner) : "null"));
@@ -1694,13 +1717,17 @@ public final class DataSourceSelectorResultsKt {
      *
      * @param nonBlocking true = 预热等投机性调用：BGT 派发不等 EDT（fire-and-forget，P2）
      */
+    /** Kotlin 默认参形态 {@code projectExecFile(project, sql)}（master 终态：无 nonBlocking 参数，
+     * T-PreviewLockInversion 重写后派发等待一律在锁外、有界预算兜底）。 */
     public static File projectExecFile(Project project, String sql) throws java.io.IOException {
-        return projectExecFile(project, sql, false);
-    }
-
-    /** nonBlocking 显式重载（Kotlin 默认参数 {@code nonBlocking = false} 的显式形态）。 */
-    public static File projectExecFile(Project project, String sql, boolean nonBlocking) throws java.io.IOException {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
+        //（VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
+        // 磁盘即第二冲突源的一部分；返回 null 走既有「writeFile 失败 → 跳过」降级。
+        if (project.isDisposed()) {
+            LOG.info("[M36] projectExecFile abandoned (project disposed, T-UiFixGate9): project=" + project.getName());
+            return null;
+        }
         String base = project.getBasePath();
         if (base == null) {
             // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
@@ -1714,46 +1741,41 @@ public final class DataSourceSelectorResultsKt {
             return null;
         }
         File f = new File(dir, "mpsql-exec.sql");
+        // T-PreviewLockInversion（2026-11-02 性能分析）：临界区**只留「存在性 + 判等 + 首建裸写」**，
+        // 跨线程等待（dispatchDocWriteOnEdt 最长 2s）必须移到锁外。
+        // 原实现把 2s 有界等待放在 synchronized 里：后台预热线程先持锁等 EDT，而 EDT 随后在
+        // `createTempPsiFile → projectExecFile` 阻塞在同一 monitor 上 → 自锁烧满 2000ms，
+        // 六次真机预览每次都稳定吃掉 1.7–2.0s（日志铁证：超时后 12–18ms 立刻写完）。
+        VirtualFile vf = null;
         synchronized (execFileWriteLock) {
             VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
             if (existing != null) {
-                // T-PreviewFast P1：**差量快路径**——派发前先判当前内容是否已等于目标 SQL。相同则
-                // 直接返回，不派发、不落盘、不等 EDT（连续预览同一 SQL 是常见形态：真机日志 14:17
-                // 五连预览每次都白付 2s 派发等待 + 一次无效落盘 + 一轮索引噪音）。
-                // 判据双源：document 文本（有已加载文档时，UI 所见为准）或 vf 内容（无文档时）。
+                // T-PreviewFast P1：差量快路径——内容已等于目标 SQL 就不派发、不落盘、不等 EDT。
                 if (execFileContentMatches(project, existing, sql)) {
                     LOG.info("[M36] exec file content already matches — write SKIPPED (T-PreviewFast P1): " + f.getName());
                     return f;
                 }
-                // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
-                // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument Javadoc）——旧实现
-                // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-                // T-PreviewFast P2：预热调用（unblocking=true）走 fire-and-forget，不再等满 2 秒。
-                boolean updated = dispatchDocWriteOnEdt(
-                        project, existing, sql,
-                        nonBlocking ? 0L : EDT_EXEC_DOC_SYNC_WAIT_MS);
-                if (updated) {
-                    LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): " + f.getName());
-                    return f;
-                }
-                // T-ExecDocSync3（第四轮真机复现的收口，20260917 真实 IDE 日志实证）：**VFS 已有
-                // 该文件时一律不裸写盘**。原 T-EC-02 兜底守卫查 getCachedDocument==null 就放行裸写，
-                // 实机证伪——EDT 忙（冷启动/索引，日志同刻可见 DumbService enter dumb mode）时
-                // dispatch 有界等待 2s 超时返回 false，此刻「排队的 EDT 写任务」尚未执行、document
-                // 也还没建，getCachedDocument 恒 null；随之而来的裸写先改盘（12,590），排队任务
-                // 随后 ExecutionException 建出 document（resolver 日志 oldFileStamp:0 = 文档建于文件
-                // 写入之前）并标脏，裸写引发的 VFS 变更落到这个刚建的文档上 →
-                // MemoryDiskConflictResolver「重载 mpsql-exec.sql？」弹窗（12,609），23ms 后文档写入
-                // 才自己落盘（12,613）。即**插件与自己的排队写赛跑**，而非外部改盘。
-                // 宁内容旧一拍：排队任务/later 的 console doc 同步链（attachConsole 后的
-                // prepareAfterEditorResolved、executeOnConsole 执行前 T-EC-01 同款同步）都会重写并
-                // 落盘，执行内容不受影响。附带收益：冷启动 EDT 忙时不再有裸写 → 该场景彻底无冲突面。
-                LOG.warn("[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); "
-                        + "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): " + f.getName());
+                vf = existing;
+            } else {
+                // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
+                com.intellij.openapi.util.io.FileUtil.writeToFile(f, sql);
                 return f;
             }
-            // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
-            com.intellij.openapi.util.io.FileUtil.writeToFile(f, sql);
+        }
+        // ---- 以下在锁外：等待 EDT 期间不持锁，避免与 EDT 侧同一 monitor 互锁 ----
+        if (vf == null) return null;
+        if (dispatchDocWriteOnEdt(project, vf, sql)) {
+            LOG.info("[M36] exec file updated via document+save (disk synced out-of-critical-section): " + f.getName());
+            return f;
+        }
+        // 等待失败：重进锁复核（另一条链可能已写好），仍不一致则按 T-ExecDocSync3 不裸写。
+        synchronized (execFileWriteLock) {
+            if (execFileContentMatches(project, vf, sql)) {
+                LOG.info("[M36] exec file content converged by another chain: " + f.getName());
+                return f;
+            }
+            LOG.warn("[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); "
+                    + "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): " + f.getName());
             return f;
         }
     }
@@ -1857,6 +1879,9 @@ public final class DataSourceSelectorResultsKt {
         sp.setDividerSize(3);
         sp.setBorder(JBUI.Borders.empty());
         sp.setBackground(UIUtil.getPanelBackground());
+        // T-ResultReclaimGuard：装底部回收守卫（DBN 把结果组件挂回 ServiceViewComponentWrapper
+        // 时 JSplitPane 的 rightComponent 会被置 null，执行后下半区空白——事件驱动抢回）。
+        installResultReclaimGuard(sp, Logger.getInstance(DataSourceSelector.class));
         sp.addComponentListener(new ComponentAdapter() {
             @Override
             public void componentResized(ComponentEvent e) {
@@ -1992,10 +2017,75 @@ public final class DataSourceSelectorResultsKt {
         realignSplitDivider(sp, true);
         sp.revalidate();
         sp.repaint();
+        // T-ResultReclaimGuard：复用既有 split 的路径也要确保守卫在位（幂等）。
+        installResultReclaimGuard(sp, LOG);
         LOG.info("[M36] persistent console bottom swapped (result id=" + System.identityHashCode(liveResult)
                 + ", prevParent=" + (prevParent != null ? prevParent.getClass().getName() : "null")
                 + ", fromExternalHost=" + (prevParent != null && prevParent != sp) + ")");
         return sp;
+    }
+
+    // ---- T-ResultReclaimGuard（2026-11-02 真机「执行后下半区空白」）----
+
+    private static final String RESULT_RECLAIM_MARK = "mpsql.resultReclaimGuard";
+    private static final long RESULT_RECLAIM_MIN_INTERVAL_MS = 300L;
+    private static final long RESULT_RECLAIM_MAX = 60L;
+
+    /**
+     * T-ResultReclaimGuard：持久整控台 SplitPane 的<b>底部回收守卫</b>。
+     *
+     * <p>根因链（代理逐段实证）：DBN 在新建结果页签时会把同一个结果组件重新挂回
+     * {@code ServiceViewComponentWrapper}（Database 工具窗侧宿主）；AWT 重挂父时从旧容器摘除，
+     * 而 {@code JSplitPane.remove(Component)} 会把 {@code rightComponent} 置 null —— 于是
+     * {@code [A49] result host at submit} 里出现 {@code mySplitBottom=null}。既有兜底只有
+     * {@code refreshResultsComponent} 的 600ms×8 拍轮询，且<b>首次检测到控制台错误就 stop</b>，
+     * 失败语句场景下最后一拍之后被抽走的部分无人修复 → 下半区永久空白。</p>
+     *
+     * <p>本守卫把「轮询抢回」升级为<b>事件驱动抢回</b>：底部被摘即下一拍尝试重挂；带节流
+     * （{@link #RESULT_RECLAIM_MIN_INTERVAL_MS}）、上限（{@link #RESULT_RECLAIM_MAX}）与 {@code isShowing}
+     * 判据（面板关闭后不再抢，让 DBN 拿回控制台）。</p>
+     */
+    public static void installResultReclaimGuard(JSplitPane sp, Logger log) {
+        if (sp.getClientProperty(RESULT_RECLAIM_MARK) != null) return;
+        sp.putClientProperty(RESULT_RECLAIM_MARK, true);
+        long[] state = {0L, 0L};
+        sp.addContainerListener(new java.awt.event.ContainerAdapter() {
+            @Override
+            public void componentRemoved(java.awt.event.ContainerEvent e) {
+                if (!(e.getChild() instanceof JComponent)) return;
+                JComponent removed = (JComponent) e.getChild();
+                if (removed == sp.getTopComponent()) return;
+                if (sp.getBottomComponent() != null) return;
+                ApplicationManager.getApplication().invokeLater(
+                        () -> reclaimResultBottom(sp, removed, state, log),
+                        ModalityState.any());
+            }
+        });
+    }
+
+    /** 单次回收尝试（{@code force}=true 跳过 {@code isShowing}，供 headless 测试直测）。 */
+    public static boolean reclaimResultBottom(JSplitPane sp, JComponent candidate, long[] state, Logger log) {
+        return reclaimResultBottom(sp, candidate, state, log, false);
+    }
+
+    public static boolean reclaimResultBottom(JSplitPane sp, JComponent candidate, long[] state, Logger log, boolean force) {
+        if (sp.getBottomComponent() != null) return false;
+        if (!force && !sp.isShowing()) return false;
+        if (state[0] >= RESULT_RECLAIM_MAX) return false;
+        long now = System.currentTimeMillis();
+        if (now - state[1] < RESULT_RECLAIM_MIN_INTERVAL_MS) return false;
+        state[0]++;
+        state[1] = now;
+        Container parent = candidate.getParent();
+        if (parent != null && parent != sp) parent.remove(candidate);
+        sp.setBottomComponent(candidate);
+        Dimension min = candidate.getMinimumSize();
+        candidate.setMinimumSize(new Dimension(min != null ? min.width : 400, 160));
+        sp.revalidate();
+        sp.repaint();
+        log.info("[M36] result reclaim guard: bottom re-mounted (id=" + System.identityHashCode(candidate)
+                + ", n=" + state[0] + ")");
+        return true;
     }
 
 
@@ -2358,5 +2448,50 @@ public final class DataSourceSelectorResultsKt {
         deliverError(onErrorRich, onError, cause, message, null);
     }
 
+    /**
+     * T-Exec262ReadLock A'：取异常链最内层的首行消息（「调用 IDE 数据库接口失败」文案用）。
+     *
+     * <p>反射调用抛的是 {@code InvocationTargetException}，真正原因在 cause 链末端（如 262 的
+     * {@code Read access is allowed from inside read-action only}）。取首行并截断，避免把整段
+     * {@code RuntimeExceptionWithAttachments} 塞进红条。</p>
+     */
+    public static String rootCauseFirstLine(@NotNull Throwable error) {
+        Throwable cur = error;
+        int guard = 0;
+        while (cur.getCause() != null && cur.getCause() != cur && guard++ < 32) {
+            cur = cur.getCause();
+        }
+        String text = cur.getMessage() != null ? cur.getMessage() : cur.getClass().getSimpleName();
+        for (String line : text.lines().toArray(String[]::new)) {
+            if (!line.isBlank()) {
+                String trimmed = line.trim();
+                return trimmed.length() > 300 ? trimmed.substring(0, 300) : trimmed;
+            }
+        }
+        return cur.getClass().getSimpleName();
+    }
+
+    /** Runner 为空的归因（T-Exec262ReadLock A'）：决定给哪种红条。 */
+    public enum EmptyRunnersReason {
+        /** 项目里一条数据源都没有 → 既有配置引导。 */
+        NO_DATASOURCE,
+        /** 有在册数据源，但平台调用本身抛了异常 → 报异常首行（不是方言问题）。 */
+        PLATFORM_CALL_FAILED,
+        /** 有在册数据源、平台正常返回零个可用 Runner → 方言不匹配/不可连接（既有文案）。 */
+        DIALECT_MISMATCH,
+    }
+
+    /**
+     * Runner 为空的三态归因（纯函数，供单测钉住分支）。
+     *
+     * <p>判定顺序有讲究：真无数据源时即使平台也抛了异常，用户最需要的是「先配数据源」，
+     * 故 {@link EmptyRunnersReason#NO_DATASOURCE} 优先；其余按平台调用有没有抛分流——这是 2026-11-02
+     * 实测现场被误导去改 Dialects 的直接原因（262 读锁硬抛被当成方言不匹配）。</p>
+     */
+    public static EmptyRunnersReason emptyRunnersReason(boolean registeredEmpty, @Nullable Throwable platformFailure) {
+        if (registeredEmpty) return EmptyRunnersReason.NO_DATASOURCE;
+        if (platformFailure != null) return EmptyRunnersReason.PLATFORM_CALL_FAILED;
+        return EmptyRunnersReason.DIALECT_MISMATCH;
+    }
 
 }

@@ -2599,9 +2599,11 @@ public final class DataSourceSelector {
                 LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)");
                 return;
             }
-            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
+            // T-UiFixGate9：有界派发（原 T-PreviewFast P2 的 nonBlocking=true fire-and-forget 已退役，
+            // 见 projectExecFile 内注释）——缓存命中刷新同样不得留下跨边界的排队写：排队拍落在
+            // 测试/交互边界时，迟到的 VFS 会话会命中 setText→save 窗口的「已改未存」态收集冲突。
             try {
-                DataSourceSelectorResultsKt.projectExecFile(project, sql, true);
+                DataSourceSelectorResultsKt.projectExecFile(project, sql);
             } catch (Throwable e) {
                 // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
                 // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
