@@ -380,10 +380,18 @@ class ExecDialectRoutingTest {
     @Test
     fun test接线守卫_弹窗前展开组Runner() {
         val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java")
+        // T-Exec262ReadLock：枚举入口有列表版与详情版两个（后者带平台调用异常，供 runners 为空
+        // 时三分归因）；守卫钉的是「枚举 → expandGroupRunners(enumerated)」这条接线本身，
+        // 不是入口名，故两种入口名都接受。
+        // k2j 互操作：详情版 Java 签名带两枚尾参（enumerateDataSourceRunners(psiFile, submitSql,
+        // sessionConsumer, false, null)），锚点不钉闭括号；expandGroupRunners 静态形态带
+        // ExecDialectRouting 限定前缀，字面锚点放宽为裸方法名即命中。
         assertTrue(
             "chooseAndPrepare 未展开组 Runner——方言不匹配的数据源（DM 等）将藏在死组项里不可选",
-            Regex("""getAttachDataSourceRunners\(psiFile, submitSql, sessionConsumer\)[\s\S]{0,800}ExecDialectRouting\.expandGroupRunners\(enumerated\)""")
-                .containsMatchIn(results),
+            Regex(
+                """(?:getAttachDataSourceRunners|enumerateDataSourceRunners)\(psiFile, submitSql, sessionConsumer""" +
+                    """[\s\S]{0,800}expandGroupRunners\(enumerated\)""",
+            ).containsMatchIn(results),
         )
     }
 
