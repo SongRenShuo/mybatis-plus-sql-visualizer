@@ -25,8 +25,9 @@ class ConsoleStealRemountTest : BasePlatformTestCase() {
             )
 
             // 模拟平台行为：同一个实例被另一个容器 add() 走（AWT 会自动从旧父摘除）
-            val thief = JPanel()
-            thief.add(console)
+            // 用**平台真实类**模拟抢走：ServiceViewComponentWrapper 构造即 add(component, "Center")
+            // （243 app-client.jar 字节码实证），与 DBN 服务视图抢组件的路径逐字一致
+            val thief = com.intellij.execution.services.ServiceViewComponentWrapper(console)
             assertSame("夹具前提：控制台已被抢走", thief, console.parent)
             assertNotSame("夹具前提：已不在面板 host 下", panel.consoleHostForTest(), console.parent)
 
@@ -77,8 +78,7 @@ class ConsoleStealRemountTest : BasePlatformTestCase() {
             assertSame("夹具前提：下半区已挂上", result, split.bottomComponent)
 
             // 模拟平台：同一个结果组件被另一个容器 add() 走（JSplitPane 会把 rightComponent 置 null）
-            val thief = JPanel()
-            thief.add(result)
+            val thief = com.intellij.execution.services.ServiceViewComponentWrapper(result)
             assertNull("夹具前提：split 下半区已被掏空", split.bottomComponent)
 
             // 同实例再次嵌入——旧实现只重挂整块，下半区仍是 null

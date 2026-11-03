@@ -119,10 +119,11 @@ maintenance-note: >-
 
 ## 调研报告（docs/调研报告/）
 
-> 竞品分析、可行性分析、技术验证等。目录内共 **99 篇**（2026-10-29 实测，含原 `docs/调研/` 并入的 GUI 自动化选型主报告与三份子报告），其中 73 篇属三个轮次系列——**系列只登记最新一期 + 范围**，需要历史期次直接 `ls docs/调研报告/ | grep <系列名>`。
+> 竞品分析、可行性分析、技术验证等。目录内共 **100 篇**（2026-11-03 实测，含原 `docs/调研/` 并入的 GUI 自动化选型主报告与三份子报告），其中 73 篇属三个轮次系列——**系列只登记最新一期 + 范围**，需要历史期次直接 `ls docs/调研报告/ | grep <系列名>`。
 
 | 系列 / 文档 | 用途 |
 |------|------|
+| [20261103-1200-预览面板缺陷无GUI复现与验证手段-调研报告.md](./调研报告/20261103-1200-预览面板缺陷无GUI复现与验证手段-调研报告.md) | 回答「每轮验证都要用户重启 IDE 复现」的成本问题。反编译锁定平台重挂触发点：`DatabaseServiceViewContributor$BaseViewDescriptor.getContentComponent()` → `new ServiceViewComponentWrapper(view.getContent().getComponent())`，而 wrapper 构造器只有 `add(component,"Center")` → AWT 立即从我们 split 摘走。**实测证伪**「headless 平台真实触发」：descriptor `isValid()` 恒 false，`getContentComponent()` 返回 null（附探针输出与"挂在共享夹具上会连坐 5 例"的警示）。定三层手段：B 组件树不变式（秒级，夹具已改用平台真实类）+ C 自动化 runIde（助手自跑，覆盖时序与视觉）+ 用户只看最终一次 |
 | [20261029-2024-瀚高海量与人大金仓三方言支持-调研报告.md](./调研报告/20261029-2024-瀚高海量与人大金仓三方言支持-调研报告.md) | 瀚高 / 海量 / 人大金仓三方言支持三路交叉调研（三家官方文档 + 驱动 jar 反编译 + MP 3.5.17/3.5.18.1 + 本机 IDEA 262 制品 + 本仓源码审计 + **金仓 DBX 真机九探针**）。**基线 dev `9df5d55d`（12 方言）**。结论：金仓早已在册且六项核心形态真机全对（LOWER 493/493、`Conflict Resolution: UPDATE`、`FORMAT JSON` 单列 JSON、`DELETE…LIMIT` 报语法错误），缺口＝保留字缺 `enckey` / 增强捕获语句面未登记 / PG 协议版驱动被误判；瀚高 V9 = PG 14、海量 G100 = openGauss 6.0，形态可整体复用 PG，须单独取证三点：瀚高 150 保留字与 dev `PG_RESERVED`(86) **双向有差集**（多 65 词全是类型名/函数名，PG 多 1 词 `procedure`）→ 并集 151、Vastbase 同收两种 upsert 而同内核 openGauss 真机只认 MySQL 形态、瀚高默认 `dbmode=oracle`（`INTERCHANGE` 引号名大小写互换 + 空串存 NULL）。三族驱动均整体改名（`org/postgresql` 条目 0）→ 增强捕获不能靠 PG 名单覆盖；dev 已有华为 GaussDB 三族登记先例可照抄 |
 | [20261029-1215-GaussDB方言支持-调研报告.md](./调研报告/20261029-1215-GaussDB方言支持-调研报告.md) | GaussDB 方言支持三路交叉调研（官方文档 + MP 源码/jar + openGauss 5.0.0 真机 + 华为驱动 jar 反编译）。结论：GaussDB 已是 openGauss 别名、非零支持；形态不必分叉、身份必须分叉；并推翻三条既有结论（`LIMIT 1,2` 假绿探针、`supportsDeleteLimit` 依据失效、保留字用错 PG 基线缺 17 词含 `rownum`）。§七 另查增强捕获链：驱动类名白名单漏华为两族 → attach 零事件，且 openGauss 驱动谱系注释写反（2.x/3.x=`org.opengauss.*`） |
 | **竞品横向对比（29 篇，第三轮~第三十轮）** | 每轮含市场快照（下载量/评分/关键词位次）+ 竞品动向 + 功能建议 + 候选池编号（D/R/V/O 系）。**最新一期**：[20261026-0230-竞品横向对比与功能建议-第三十轮调研报告.md](./调研报告/20261026-0230-竞品横向对比与功能建议-第三十轮调研报告.md)（Marketplace 上架窗口 + 审计留痕缺口 + 分叉收敛） |
