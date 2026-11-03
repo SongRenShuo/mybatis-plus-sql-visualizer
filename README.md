@@ -250,6 +250,6 @@ SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本�
 
 | 作者微信 | 交流群 |
 |---|---|
-| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.png) |
+| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.jpg) |
 
 问题与建议请提交到 [官网需求池](https://sql-visualizer.jvtools.cn/about/feedback)。

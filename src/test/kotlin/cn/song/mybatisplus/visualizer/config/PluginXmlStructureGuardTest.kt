@@ -204,6 +204,45 @@ class PluginXmlStructureGuardTest {
         )
     }
 
+    /**
+     * 二维码卡片的两列须显式等宽（2026-11-03 线上报障：作者微信码明显大于交流群码）。
+     *
+     * 根因不在图片本身（两张源图都是 220×220，内容留白也一致），而在 Marketplace 描述区样式
+     * `.mdContent img{width:100%;max-width:800px}`：**CSS 盖掉了 `<img width="200">` 这个表现属性**，
+     * 图片改为撑满所在 `<td>`。两个 `<td>` 都不写 width 时，auto table layout 的列宽由单元格里
+     * 说明文字长度决定——左列文字更长就更宽，于是左边那张码更大（按线上同款样式本地复现 526px vs
+     * 368px，比例 1.43 与线上截图 448 vs 313 一致）。
+     *
+     * 修法＝给两个 `<td>` 写同样的 width：单元格定宽后 img 撑满的宽度也相同。平台白名单佐证：
+     * 线上描述里 `<td>` 的 align 被剥掉、`<img>` 的 width 保留，与 jsoup `Safelist.relaxed`
+     * （td/img 均含 width、td 无 align）一致，故 td 的 width 可用。
+     */
+    @Test
+    fun `二维码卡片两列须显式等宽`() {
+        val desc = rawDescription()
+        val cells = Regex("""<td\b([^>]*)>\s*<img\b[^>]*src="[^"]*qr\.(?:png|jpg)"[^>]*>""").findAll(desc).toList()
+        assertHolds("描述中二维码卡片应为 2 个（实际 ${cells.size}）", cells.size == 2)
+
+        val tdWidths = cells.map { cell ->
+            Regex("""\bwidth\s*=\s*"(\d+)"""").find(cell.groupValues[1])?.groupValues?.get(1)
+        }
+        assertHolds(
+            "二维码卡片的 <td> 须显式写 width（缺省时 Marketplace 的 img{width:100%} 让两列按说明文字长度" +
+                "一大一小）：实际 $tdWidths",
+            tdWidths.all { it != null },
+        )
+        assertHolds("二维码卡片两个 <td> 的 width 须相同（实际 $tdWidths）", tdWidths.distinct().size == 1)
+
+        val imgWidths = cells.map { cell ->
+            Regex("""<img\b[^>]*\bwidth\s*=\s*"(\d+)"""").find(cell.value)?.groupValues?.get(1)
+        }
+        assertHolds(
+            "二维码 <img> 的 width 须与所在 <td> 的 width 一致（Marketplace 下 img 按 td 撑满，两者不一致" +
+                "会误导后续维护）：td=$tdWidths img=$imgWidths",
+            tdWidths == imgWidths,
+        )
+    }
+
     @Test
     fun `不存在projectConfigurable注册`() {
         // T-SettingsTruth P4：项目级设置页已合法注册（parentId=tools 顶层，与全局页平级）。
