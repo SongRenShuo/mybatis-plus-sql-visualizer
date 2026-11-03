@@ -25,8 +25,18 @@
          ① 顶部英文摘要一行为预览卡首 40 字符硬约束而设（Marketplace 取描述前 40 字符做卡片文案，不可单独修改）；
          ② 中文内容整体位于英文正文之上（用户 2026-10-08 定案，参考件 MyBatisCodeHelperPro 同形）；
          ③ 不使用 <hr/> 与 HTML 注释——Marketplace 会剥离（实测：本地 tag 2026.10.7 含 hr，线上同版本描述 hr=0）；
-         ④ 禁用 <img>（外链图 302 防盗链），截图走 Marketplace Media 区；
-         ⑤ 数字类声明（方言数取 DialectRegistry.dialects、工具数取 McpToolGate.TOOL_NAMES、Alt+Shift+Q、since-build 版本标签）由 PluginXmlStructureGuardTest 与代码对账。
+         ④ <img> 只允许自有文档站域名（sql-visualizer.jvtools.cn，第三方图床在 Marketplace 被 302 防盗链），
+            截图仍走 Marketplace Media 区；
+         ⑤ 数字类声明（方言数取 DialectRegistry.dialects、工具数取 McpToolGate.TOOL_NAMES、Alt+Shift+Q、since-build 版本标签）由 PluginXmlStructureGuardTest 与代码对账；
+         ⑥ 二维码卡片必须给 <td> 显式 width：Marketplace 描述区样式 `.mdContent img{width:100%;max-width:800px}`
+            会盖掉 <img> 的 width 属性，图片改按所在单元格宽度撑满——两个 <td> 不写 width 时列宽由下方
+            说明文字长度决定（auto table layout），两张码就会一大一小（2026-11-03 按线上同款样式本地复现：
+            526px vs 368px，比例与线上截图 1.43 一致）。写死 width 后两侧恒等宽。
+            平台白名单佐证：线上描述里 <td> 的 align 被剥掉、<img> 的 width 保留，与 jsoup
+            Safelist.relaxed（td/img 均含 width，td 无 align）一致，故 td 的 width 可用；
+         ⑦ 交流群码引 .jpg 而非 .png：站点上的 group-qr.png 文件内容实为 JPEG（magic FF D8 FF E0），
+            按扩展名却返回 image/png，与内容不符，配合 nosniff 在部分客户端会被拒渲染。站点已补一份
+            字节相同的 group-qr.jpg，旧 .png 保留不删（已发布版本与历史文档仍指向它）。
          HTML 片段下同。 -->
     <description><![CDATA[
         <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values before the server starts — then explains the plan and generates a rollback. From MySQL to DM and Kingbase, all inside your IDE.</p>
@@ -68,8 +78,8 @@
         <p>两张二维码用途不同，请对照下方说明选择扫码（二维码为限时码）。</p>
         <table>
             <tr>
-                <td align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
-                <td align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.png" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
+                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
+                <td width="200" align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.jpg" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
             </tr>
         </table>
         ]]></description>
