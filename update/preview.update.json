@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.2/mybatis-plus-sql-visualizer-2026.11.2.zip",
-  "changeNotes": "修复 IDEA 2026.2 上预览窗「执行 SQL」提示没有匹配的已配置数据源、点了也执行不了的问题，现在平台侧出错会如实报出原因，不再一律归到方言不匹配\n修复 selectList 等非分页查询带 last(\"limit N\") 时预览凭空多出一条分页 COUNT 的问题\n修复预览面板已打开控制台时，勾选参数或返回预览会弹 Access is allowed from write thread only 异常、预览 SQL 也写不进执行文件的问题\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-02",
+  "version": "2026.11.3",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.3/mybatis-plus-sql-visualizer-2026.11.3.zip",
+  "changeNotes": "修复执行 SQL 后预览面板下半区空白、连原生控制台工具栏都不出现的问题，结果不再只落在 Database 工具窗\n修复预览结果栏跨预览残留，没执行就出现上一次的结果页签\n修复折叠结果区后约 2.5 秒又自己长回来、放大窗口时结果区反被撑大的问题\n修复方言冲突点「放行」后报数据库控制台准备超时、预览窗里找不到切换数据源的问题\n修复方言冲突状态行渲染时卡顿、面板停在执行中转圈的问题\n修复注解预览打开后一直显示未绑定数据源、要点一次执行才挂上控制台的问题\n控制台工具栏的数据源下拉改为只换源不执行，点选不再绕过二次确认与方言闸直接提交 SQL\n数据源下拉按钮现在显示数据源名，弹层贴着按钮弹出，名字里的下划线不再丢失\n「更多」菜单常驻切换数据源入口，执行失败后也能就地换源\n预览打开速度优化，每次省 1.7 到 2.0 秒\n增强捕获的登记盲区告警改为系统性才报，单条盲区默认静默\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-03",
   "sinceBuild": "243"
 }

@@ -171,10 +171,11 @@ maintenance-note: >-
 
 ## 发行说明（docs/发行说明/）
 
-> 版本记录与发行材料。目录内共 **48 个文件**（41 篇按期发行说明，2026-11-02 实测）；版本号规范见 [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md)（YYYY.M.D 一日一版）。近期版本逐条列出，历史版本按版本号检索。
+> 版本记录与发行材料。目录内共 **49 个文件**（42 篇按期发行说明，2026-11-03 实测）；版本号规范见 [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md)（YYYY.M.D 一日一版）。近期版本逐条列出，历史版本按版本号检索。
 
 | 文档 | 用途 |
 |------|------|
+| [20261103-1140-预览执行链修复与数据源下拉接管-发行说明.md](./发行说明/20261103-1140-预览执行链修复与数据源下拉接管-发行说明.md) | v2026.11.3 正式版（预览执行链整批修复 + 一项能力）：**执行 SQL 后预览面板下半区空白、连原生控制台工具栏都不出现**（五层叠加：`editorHolder` 单槽位被降级装配/迟到换装挤出显示链且归属判据恒真、DBN 复用结果面板致旧 Result 页签残留、接管组未覆写 `displayTextInToolbar`、160px 最小高度钳住折叠、回收守卫把 160px 写回；修法＝`mountEditorHolderContent` 单一装配口 + 清场 + 折叠标记）、**方言冲突放行把准备链静默卡死**（BLOCKED 先投把意图标完成 → `isPrepareActive` 假 → attachConsole 前早退）、**方言冲突渲染实例化设置树**（1.2s EDT 卡顿 + 面板转圈）、注解预览不预热、折叠结果栏回弹、agent 登记盲区降噪；新增**控制台工具栏数据源下拉接管（只换源不执行）**；预览打开每次省 1.7–2.0s（exec 写盘锁反转） |
 | [20261102-1100-262执行链读锁与分页COUNT误触修复-发行说明.md](./发行说明/20261102-1100-262执行链读锁与分页COUNT误触修复-发行说明.md) | v2026.11.2 正式版（修复版，三处）：**2026.2 预览窗「执行 SQL」报方言不匹配且无法执行**（EDT 读锁硬抛被 `runCatching` 吞成空列表 → runners 归零，误套方言不匹配文案；修法＝两处反射调用包 `WriteIntentReadAction.compute`，重载选 243/262 交集的 `compute(Computable)`，首版 `compute(ThrowableComputable)` 在 262 上 `NoSuchMethodError`）、**`last("limit N")` 非分页查询误产分页 COUNT**（闸改为 `chain.pageLimit != null`）、**预览文档落盘写在写命令外致 EDT 硬抛 `Access is allowed from write thread only`**（T-PreviewDocPersistLock，落盘移进写命令块；用例改判 `beforeAnyDocumentSaving` 栈帧，计划原 `writeIntent=false` 前提被证伪）；262 运行时真机实效未取到读数 |
 | [20261031-1512-十四方言转正与动态标签补全修复-发行说明.md](./发行说明/20261031-1512-十四方言转正与动态标签补全修复-发行说明.md) | v2026.10.31 正式版（beta.1/beta.2 转正，上架 Marketplace）：**方言 11→14**（GaussDB 独立身份 + 瀚高 153 词 + 海量 201 词 + 金仓三缺口）、**采集面方言无关化**（JDBC 接口匹配兜底 + 三道闸熔断 + 活性回落）、四方言预览恒降级修复（缺 `lang.parserDefinition`）、mapper XML 嵌套动态标签 `#`/`$` 补全修复、agent 控制台降噪 |
 | [20261030-1655-预览PSI方言修复与agent控制台降噪-发行说明.md](./发行说明/20261030-1655-预览PSI方言修复与agent控制台降噪-发行说明.md) | v2026.10.31-beta.2 内测：修 **GaussDB / 达梦 / 瀚高 / 海量四方言预览恒降级、表列补全不可用**（根因＝四种自注册方言只注册 `sql.dialect`、缺 `lang.parserDefinition`，平台回落基语言解析器后强转抛 CCE，真机一下午 9 次、3 次 SEVERE 点名本插件）；顺带修跨版本隐患（`SqlFileElementType` 在 253/262 已删，改核心 `IFileElementType`）；agent 控制台输出默认静默、只留真实降级与熔断（`logLevel=debug` 恢复明细）；Gitee id 1256540 |
