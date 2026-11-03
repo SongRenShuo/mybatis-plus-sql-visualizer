@@ -161,22 +161,18 @@ class ExecutionDialectGateTest {
 
         var callbackStatus: ExecutionDialectGate.Status? = null
         var error: String? = null
-        var submission: ExecutionSubmission? = null
         val allowed = DataSourceSelector.allowDialectGate(
             project,
             request(ExecutionDialectGate.RenderMode.MANUAL, "MySQL", ExecutionDialectGate.Intent.DML),
             target,
             { callbackStatus = it.status() },
             { error = it },
-            { submission = it },
+            null,
         )
         assertTrue("已知方言冲突应放行（方言不拦执行）", allowed)
         assertEquals(ExecutionDialectGate.Status.MANUAL_CONFLICT, callbackStatus)
         assertTrue("仍要提示渲染方言", error.orEmpty().contains("MySQL"))
         assertTrue("仍要提示目标方言", error.orEmpty().contains("PostgreSQL"))
-        // master 忠实断言：放行态（MANUAL_CONFLICT/RERENDER_UNAVAILABLE）在放行前仍先发
-        // onSubmission(BLOCKED)——非 MATCH 且非确认态一律先回执未提交（DataSourceSelector.kt:220 同款）。
-        assertEquals("放行态仍先回执 BLOCKED", ExecutionSubmission.BLOCKED, submission)
     }
 
     @Test
@@ -398,6 +394,77 @@ class ExecutionDialectGateTest {
 
     private fun String.countOccurrences(needle: String): Int =
         windowed(needle.length, 1).count { it == needle }
+
+    /**
+     * T-DialectGatePassDeadChain（2026-11-02 用户真机「执行失败、也换不了数据源」）：
+     * 放行态**不得**投递未提交回执。
+     *
+     * 准备链传进 `allowDialectGate` 的 `onSubmission` 就是 `QueuedExecuteIntent.onSubmission`
+     * （`{ complete(it) }`）——旧实现「非 MATCH 一律报 BLOCKED」把本次执行意图标成已完成，
+     * 下游 `isPrepareActive()` 立刻为假，准备链在 attachConsole 之前静默早退，单飞门悬挂 60s。
+     *
+     * k2j 互操作：master 的 Kotlin 具名实参在 Java 签名下全部位置化。
+     */
+    @Test
+    fun testPassThroughConflictsMustNotSettleTheExecutionIntent() {
+        val target = ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL")
+        val manual = mutableListOf<ExecutionSubmission>()
+        val manualAllowed = DataSourceSelector.allowDialectGate(
+            projectStub(),
+            request(ExecutionDialectGate.RenderMode.MANUAL, "GaussDB", ExecutionDialectGate.Intent.QUERY),
+            target, null, null, { manual += it },
+        )
+        assertTrue("已知冲突应放行", manualAllowed)
+        assertTrue("放行态不得投递未提交回执（否则执行意图被提前结算）", manual.isEmpty())
+
+        val rerender = mutableListOf<ExecutionSubmission>()
+        val rerenderAllowed = DataSourceSelector.allowDialectGate(
+            projectStub(),
+            request(
+                ExecutionDialectGate.RenderMode.AUTO, "GaussDB", ExecutionDialectGate.Intent.QUERY,
+                rerender = true, untouched = false,
+            ),
+            target, null, null, { rerender += it },
+        )
+        assertTrue("重渲染不可用也应放行", rerenderAllowed)
+        assertTrue("放行态不得投递未提交回执", rerender.isEmpty())
+    }
+
+    /** 对照：真正阻断的判定仍要投 BLOCKED——本次修复只收窄投递条件，不取消回执。 */
+    @Test
+    fun testBlockedVerdictsStillSettleTheExecutionIntentAsBlocked() {
+        val submissions = mutableListOf<ExecutionSubmission>()
+        val allowed = DataSourceSelector.allowDialectGate(
+            projectStub(),
+            request(ExecutionDialectGate.RenderMode.UNKNOWN, null, ExecutionDialectGate.Intent.DML),
+            ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL"),
+            null, null, { submissions += it },
+        )
+        assertFalse("渲染方言未知的写操作仍阻断", allowed)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), submissions)
+    }
+
+    /**
+     * T-DialectGatePassDeadChain 的结构性兜底：**早退结算必须释放单飞门**，即便意图已被提前结算
+     * （`abort` 先清门再 complete，complete 幂等不抛）。旧缺陷正是「意图完成 + 门没放」的组合，
+     * 结果是 60s 内执行/换源全部只排队。
+     */
+    @Test
+    fun testEarlyReturnSettlesTheSingleFlightGateEvenAfterTheIntentWasCompleted() {
+        val gate = PrepareSingleFlightGate()
+        val intent = QueuedExecuteIntent(null, null, null, null, false)
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, intent))
+        intent.complete(ExecutionSubmission.BLOCKED) // 模拟旧缺陷：意图被提前结算
+        assertTrue(gate.abort(intent, ExecutionSubmission.BLOCKED, "superseded"))
+        assertFalse("早退结算后单飞门必须复位", gate.prepareInFlight.get())
+        val next = QueuedExecuteIntent(null, null, null, null, false)
+        assertEquals(
+            "门已释放，下一条链应直接 PROCEED（不得排队到 60s 逃生）",
+            PrepareGateDecision.PROCEED,
+            gate.tryEnter(true, next),
+        )
+        gate.finishPrepare(next)
+    }
 
     private fun projectStub(): com.intellij.openapi.project.Project =
         java.lang.reflect.Proxy.newProxyInstance(
