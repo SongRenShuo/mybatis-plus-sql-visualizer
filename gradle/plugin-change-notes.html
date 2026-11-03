@@ -1,3 +1,10 @@
+<h2>v2026.11.2</h2>
+<ul>
+    <li>修复 IDEA 2026.2 上预览窗「执行 SQL」提示没有匹配的已配置数据源、点了也执行不了的问题，现在平台侧出错会如实报出原因，不再一律归到方言不匹配</li>
+    <li>修复 selectList 等非分页查询带 last("limit N") 时预览凭空多出一条分页 COUNT 的问题</li>
+    <li>修复预览面板已打开控制台时，勾选参数或返回预览会弹 Access is allowed from write thread only 异常、预览 SQL 也写不进执行文件的问题</li>
+    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
+</ul>
 <h2>v2026.10.31</h2>
 <ul>
     <li>新增 GaussDB、瀚高 HighGo、海量 Vastbase 三种方言，可格式化的数据库方言总数 11 → 14 种；GaussDB 在设置页、日志角标与 MCP 方言名独立显示，不再并入 openGauss</li>
@@ -12,7 +19,6 @@
     <li>修复 OceanBase 执行计划档位错判，改按文本档位呈现，与真机返回形态一致</li>
     <li>优化增强捕获在应用控制台的输出，默认静默只保留真实降级与熔断提示，排查时把 logLevel 设为 debug 即可恢复明细</li>
     <li>优化日志列表多行模式的取源，缓存命中时零取源，滚动与重绘更轻</li>
-    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.10.30</h2>
 <ul>
