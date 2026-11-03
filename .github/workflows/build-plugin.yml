@@ -382,7 +382,7 @@ jobs:
             '',
             '| 作者微信 | 交流群 |',
             '|---|---|',
-            '| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.png) |',
+            '| ![作者微信](https://sql-visualizer.jvtools.cn/wechat-qr.png) | ![交流群](https://sql-visualizer.jvtools.cn/group-qr.jpg) |',
             '',
             ('二维码失效时，可从 [官网](https://sql-visualizer.jvtools.cn) 或 [README.md]({0}) 底部查看最新入口。' -f $readmeUrl)
           )
