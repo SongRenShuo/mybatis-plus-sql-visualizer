@@ -124,6 +124,12 @@ public final class SqlPreviewPanelResultViewKt {
         List<Pair<String, Runnable>> list = new ArrayList<>();
         list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.rollbackSql"),
                 () -> SqlPreviewPanelExecutionKt.showRollbackSql(p)));
+        // T-DialectGatePassDeadChain（2026-11-02 用户实测「换源没有反应」）：换源入口**常驻**——
+        // 状态行那两段蓝字只在方言冲突态出现，一旦执行失败，错误行会把它们顶掉，而「想换源」恰恰
+        // 最常发生在这时。原生控制台下拉靠不住：exec 文件被平台 per-file 关联钉在旧源上
+        //（见 ExecFileBinding），只有插件入口会先 detach + 清 pin 再枚举全源。
+        list.add(new Pair<>(MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                () -> SqlPreviewPanelExecutionKt.switchDataSourceInPlace(p)));
         list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.param.import"),
                 () -> SqlPreviewPanelParamPanelKt.importParamsFromClipboard(p)));
         list.add(new Pair<>(MpSqlVisualizerBundle.message("panel.compare"),
