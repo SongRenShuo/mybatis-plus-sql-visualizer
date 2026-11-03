@@ -31,10 +31,15 @@
 
 ### 登记不修（本任务边界，防范围失控）
 
-- `use` 语句 timeout hint：真缺陷，但行为修复需真机报错形态验证，登记缺陷票不动生产。
+- ~~`use` 语句 timeout hint~~：**20261104 用户令改实施**（升 T8 券，见下），从本边界移出。
 - 键位冲突结构性死路：待用户拍板，不动。
 - 回滚 identity T-IIR-02：O-59 在册，不动。
 - `releaseGate` stagger 240s 静态错峰改动态让路：列为可选 T7，前六券收口且有余量才做。
+
+**T8-useToolStatementDone（20261104 用户令追加）**
+- 缺陷：`use`/DML 等无结果 Tab 的语句**成功**执行后走满 40 拍窗口落 `execute.timeout.hint`（把成功说成密码/驱动超时）——pitfall-console-error-signature-coverage 顺带观察在案。
+- 修法：完成证据检测（Output 里的 `affected`/`completed in`/`query ok` 等完成态回显，取既有状态词表的完成语义子集；`executing`/`fetching` 等进度词不算完成，长查询挂死不误报）+ `onInfo` 中性回调穿层（面板 `showStatus` 灰字，不进红条错误通道）。onInfo 缺席的调用方（LogToSqlPanel 等）保持既有行为。
+- 待验证前提：①`use` 语句 DBN 是否写完成回显**未知**（无真机形态样本）——若 DBN 对 `use` 只写回显不写摘要，则文本判据无法与挂死区分，该场景维持旧提示，如实标注证据边界；真机验收步骤交用户。②链路 11 处签名穿层（SqlExecutor→selectAndExecute/executePrepared→chooseAndPrepare→prepareInConsole→prepareAfterEditorResolved→executeOnConsole→afterSubmitted→startResultTabRetry + 面板三调用点），全部默认参数向后兼容。
 
 ## 二、券清单
 

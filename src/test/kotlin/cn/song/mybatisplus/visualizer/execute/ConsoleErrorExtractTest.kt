@@ -301,4 +301,56 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
             ),
         )
     }
+
+    // ======================== T8（T-TestGapSpeed）：工具语句成功完成证据 ========================
+    // 缺陷：`use`/DML 这类无结果 Tab 的语句成功后，40 拍窗口到期落 execute.timeout.hint
+    // （把成功说成超时/密码驱动问题）——pitfall-console-error-signature-coverage 顺带观察在案。
+
+    /**
+     * 成功 DML（与 [testResidueNullForSuccessfulDmlSummary] 同一真机形态样本）必须检出完成
+     * 证据——这正是 40 拍到期时与「真挂死」区分的唯一正向信号。
+     */
+    @Test
+    fun testCompletionEvidenceDetectedForSuccessfulDml() {
+        val text = listOf(
+            "mpj_demo> UPDATE user SET username = 'x' WHERE id = 1",
+            "[2026-09-22 08:48:29] 1 row affected",
+            "[2026-09-22 08:48:29] completed in 12 ms",
+        ).joinToString("\n")
+        assertTrue(
+            "DML 完成回显（affected/completed in）应被识别为完成证据",
+            DataSourceSelector.hasConsoleCompletionEvidence(consoleWithPrompt(text, "mpj_demo>")),
+        )
+    }
+
+    /** `use` 类工具语句若 DBN 只回显语句本身（无摘要行）——不判完成（宁少勿错，退化为旧提示）。 */
+    @Test
+    fun testCompletionEvidenceAbsentForEchoOnly() {
+        val text = "mpj_demo> use mpj_demo\n"
+        assertFalse(
+            "纯回显（无完成回显）不得判完成",
+            DataSourceSelector.hasConsoleCompletionEvidence(consoleWithPrompt(text, "mpj_demo>")),
+        )
+    }
+
+    /** 进度语义词（executing/fetching/connected）不算完成——长查询挂死时不误报「已完成」。 */
+    @Test
+    fun testCompletionEvidenceAbsentForInProgressStatusLines() {
+        val text = listOf(
+            "mpj_demo> SELECT SLEEP(3600)",
+            "[2026-09-22 08:48:29] connected",
+            "[2026-09-22 08:48:29] executing...",
+        ).joinToString("\n")
+        assertFalse(
+            "进度语义词不是完成证据",
+            DataSourceSelector.hasConsoleCompletionEvidence(consoleWithPrompt(text, "mpj_demo>")),
+        )
+    }
+
+    /** 控制台不可读 / 无新增文本：不判完成（调用方落回既有提示）。 */
+    @Test
+    fun testCompletionEvidenceAbsentWhenConsoleUnreadable() {
+        assertFalse(DataSourceSelector.hasConsoleCompletionEvidence(FakeConsole(null)))
+        assertFalse(DataSourceSelector.hasConsoleCompletionEvidence(null))
+    }
 }

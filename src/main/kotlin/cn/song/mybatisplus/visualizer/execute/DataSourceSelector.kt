@@ -633,6 +633,7 @@ object DataSourceSelector {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        onInfo: ((String) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
@@ -644,6 +645,7 @@ object DataSourceSelector {
             dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
             onDialectGate = onDialectGate ?: preparedDialectGateCallback,
             onSubmission = onSubmission,
+            onInfo = onInfo,
         )
         // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true
@@ -676,11 +678,13 @@ object DataSourceSelector {
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
         /** T-DialectGateUx：强制弹选择器（跳过共享控制台复用与 last-used 静默命中）。 */
         forceChoose: Boolean = false,
+        /** T8：中性信息回调（工具语句成功完成时面板 showStatus，不走红条错误通道）。 */
+        onInfo: ((String) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
             wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            onSubmission = onSubmission, forceChoose = forceChoose)
+            onSubmission = onSubmission, forceChoose = forceChoose, onInfo = onInfo)
     }
 
     /**
@@ -775,6 +779,31 @@ object DataSourceSelector {
             out
         }.getOrNull()
     }
+
+    /**
+     * T8（T-TestGapSpeed）：工具语句 / 更新类语句**成功完成**的证据——40 拍窗口到期且无错误
+     * 判据、无残余时，若新增输出里有完成态回显（`N row(s) affected` / `completed in …` /
+     * `Query OK` 等），说明语句已正常执行完（这类语句 DBN 不建结果 Tab，完成回显写在 Output，
+     * pitfall-console-error-signature-coverage 实证）——不得落 `execute.timeout.hint` 把成功
+     * 说成超时。
+     *
+     * 判据取 [CONSOLE_STATUS_LINES] / [CONSOLE_STATUS_WORDS] 的**完成语义子集**：进度词
+     * （`executing` / `fetching` / `connected`）不算完成——长查询挂死时 Output 只写这些，
+     * 仍落既有超时提示不误报（宁少勿错：漏报退化 = 现状，误报 = 把挂死说成完成）。
+     * 只做行级形态判断，不碰真机不可得的 DBN 内部态。
+     */
+    internal fun hasConsoleCompletionEvidence(console: Any?): Boolean {
+        val text = newConsoleText(console) ?: return false
+        return text.lines().any { line ->
+            val n = stripTimestamp(line.trim()).lowercase()
+            COMPLETION_EVIDENCE_LINES.any { n.contains(it) } || CONSOLE_STATUS_WORDS.containsMatchIn(n)
+        }
+    }
+
+    /** T8：完成态词表（[CONSOLE_STATUS_LINES] 的完成语义子集，判据注释见 [hasConsoleCompletionEvidence]）。 */
+    private val COMPLETION_EVIDENCE_LINES = listOf(
+        "completed in", "query ok", "affected", "fetched", "took ", "elapsed",
+    )
 
     /**
      * T-CEC：读取 console history 文档中**基线之后**的新增文本（读不到 / 无新增返 null）。

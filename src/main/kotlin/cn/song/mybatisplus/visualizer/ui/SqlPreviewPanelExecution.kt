@@ -1036,6 +1036,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                    onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
                 )
                 return
             }
@@ -1056,6 +1057,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             dialectGateRequest = dialectGateRequest,
             onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+            onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
         )
         if (executed) return
     }
@@ -1070,6 +1072,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         dialectGateRequest = dialectGateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
         forceChoose = forceChoose,
     )
 }
