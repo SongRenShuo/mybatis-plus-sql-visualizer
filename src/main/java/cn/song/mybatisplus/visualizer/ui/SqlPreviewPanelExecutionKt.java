@@ -602,9 +602,39 @@ public final class SqlPreviewPanelExecutionKt {
             // 只留一条提示（若执行随后真报错，真实错误仍会覆盖这条状态，时序上真实错误晚于本拍）。
             case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> {
                 String message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict);
+                // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
+                // 放行态同样要给出口——文案本身就写着「可点「切换数据源」」，而 showStatus 第一行的
+                // clearErrorActions() 会把两个链接清掉。改用 showStatusWithActions：信息态底色不变，
+                // 右侧仍挂「切换数据源」「方言设置」两段蓝字（与错误态同款形态）。
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (p.previewDisposed) return;
-                    p.resultPanel.showStatus(message);
+                    Project proj = p.project;
+                    if (proj == null) {
+                        p.resultPanel.showStatus(message);
+                        return;
+                    }
+                    // T-NativeSwitchTakeover 回归修正：此处**不得**探测 configurable 可用性——
+                    // `ConfigurableExtensionPointUtil.getConfigurableGroup(proj, true)` 会把整棵设置树
+                    // 实例化（第三方插件的 configurable 构造器会抛 PluginException），1.2s 级 EDT 卡顿，
+                    // 异常还会把本次渲染整个吞掉（面板停在「执行中」转圈）。链接恒显示，点击时
+                    // openSqlDialectSettings 自己按 id 打开并兜底失败。
+                    try {
+                        p.resultPanel.showStatusWithActions(
+                                message,
+                                MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                                MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                                () -> switchDataSourceInPlace(p),
+                                MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings"),
+                                MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+                                () -> openSqlDialectSettings(proj));
+                    } catch (Throwable t) {
+                        // 渲染失败也不能让面板停在旧态：退回纯状态行（无动作），至少把提示画出来。
+                        // （master 为 runCatching{}.onFailure 降级——Java 侧照落 try/catch，计入 fatal 基线。）
+                        Logger.getInstance(SqlPreviewPanel.class)
+                                .warn("[M36] dialect gate status render FAILED: " + t.getClass().getSimpleName()
+                                        + ": " + t.getMessage());
+                        p.resultPanel.showStatus(message);
+                    }
                 });
             }
             default -> p.resultPanel.showError(
@@ -663,6 +693,74 @@ public final class SqlPreviewPanelExecutionKt {
                     MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
                     () -> openSqlDialectSettings(projF));
         });
+    }
+
+    /**
+     * T-DialectGatePassDeadChain（2026-11-02 用户定案）：方言冲突放行态的「切换数据源」入口——
+     * <b>就地弹平台原生数据源列表</b>，只换源、不自动提交 SQL。
+     *
+     * <p>为什么不复用 {@code executeSql(forceChoose = true)}：{@code forceChoosePopup}
+     * （「即便只剩一条源也必须弹列表」）只存在于 {@code DataSourceSelector.prepareConsole}，
+     * {@code selectAndExecute} / {@code SqlExecutor.execute} / {@code executeSql} 都没有透传——
+     * runner 唯一时仍走 {@code shouldBeChosenIfAlone} 直选执行，用户看不到列表，
+     * 这正是 W6「点切换数据源却重试执行了」的原形。故这里直接调 prepareConsole 并同时置两个开关：</p>
+     *
+     * <ul>
+     *  <li>{@code forceChoose}：跳过共享控制台复用与 last-used 静默命中；</li>
+     *  <li>{@code forceChoosePopup}：即便只剩一条源也弹列表；</li>
+     *  <li>{@code executeAfterPrepare = false}：选完源只重建控制台，不提交 SQL（用户再点「执行 SQL」）。</li>
+     * </ul>
+     *
+     * <p>Kotlin 默认参 {@code preferredRunnerName: String? = null} 的等价重载（状态行/更多菜单入口）。</p>
+     */
+    public static void switchDataSourceInPlace(@NotNull SqlPreviewPanel p) {
+        switchDataSourceInPlace(p, null);
+    }
+
+    public static void switchDataSourceInPlace(@NotNull SqlPreviewPanel p, @Nullable String preferredRunnerName) {
+        Project proj = p.project;
+        if (proj == null) return;
+        // 幂等：换源会新建控制台，其 header 同样按 id 取动作组——确保接管件仍在位。
+        cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled();
+        String nativeText = p.nativeEditorDoc != null ? p.nativeEditorDoc.getText() : null;
+        String editorText = p.editor != null ? p.editor.getDocument().getText() : null;
+        String sql = nativeText != null && !nativeText.isBlank() ? nativeText
+                : editorText != null && !editorText.isBlank() ? editorText : null;
+        if (sql == null) return;
+        // 入口锚点：换源是用户手动动作，日志里必须能一眼看出「点了 / 没点」——2026-11-02 用户报
+        // 「点新数据源没有反应」时，原生下拉那次点击在 idea.log 里零痕迹，无从判断动作有没有落地。
+        Logger.getInstance(SqlPreviewPanel.class)
+                .info("[M36][SwitchDs] entry: sql len=" + sql.length()
+                        + ", prepared=" + SqlExecutor.isPrepared()
+                        + ", preferred=" + (preferredRunnerName != null ? preferredRunnerName : "(popup)"));
+        ExecutionDialectGate.Request gateRequest = executionDialectGateRequest(p,
+                SqlTypeClassifier.isQuery(sql)
+                        ? ExecutionDialectGate.Intent.QUERY
+                        : ExecutionDialectGate.Intent.DML);
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                proj, sql,
+                consoleComponent -> {
+                    embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW);
+                    // 换源成功即清掉旧状态行：方言提示按新目标重新判定（MATCH 时不再提示）
+                    p.resultPanel.showEmpty();
+                },
+                consoleEditor -> onNativeEditorReady(p, consoleEditor),
+                errorMsg -> p.resultPanel.showError(errorMsg),
+                null,
+                gateRequest,
+                verdict -> onExecutionDialectGate(p, verdict),
+                true,
+                // 指定了目标源（原生工具栏点选）→ 不弹列表，选谁就是谁；无目标（状态行/更多菜单）→ 必弹列表，单源也弹。
+                preferredRunnerName,
+                preferredRunnerName == null);
+    }
+
+    /**
+     * T-NativeSwitchTakeover：控制台工具栏原生数据源下拉被接管后的落点——按名换源，
+     * <b>只重建控制台、不提交 SQL</b>（执行仍走「执行 SQL」入口过闸）。
+     */
+    public static void switchDataSourceTo(@NotNull SqlPreviewPanel p, @NotNull String dataSourceName) {
+        switchDataSourceInPlace(p, dataSourceName);
     }
 
     /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
@@ -2073,8 +2171,27 @@ public final class SqlPreviewPanelExecutionKt {
     public static void prepareDefaultConsole(@NotNull SqlPreviewPanel p) {
         Project proj = p.project;
         if (proj == null) return;
-        if (p.editor == null || p.editor.getDocument().getText().isBlank()) return;
-        String sql = p.editor.getDocument().getText();
+        // T-NativeSwitchTakeover：接管控制台工具栏的原生数据源下拉（幂等）——必须早于控制台创建，
+        // 平台 header 是按 id 从 ActionManager 取 Console.Jdbc.Right 组件的。
+        cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled();
+        // 2026-11-02 沙盒验收：注解预览（@Select 等）这条链上回退编辑器是**异步**建的，
+        // showResult 末尾调用本函数时 `editor` 仍为 null → 旧实现直接 return，控制台永不预热，
+        // 面板一直「未绑定数据源」，要等用户点执行才挂上。改为三级回落：原生文档 → 回退编辑器 →
+        // 本次预览结果里的 SQL（showResult 已先写入 current）。
+        String nativeText = p.nativeEditorDoc != null ? p.nativeEditorDoc.getText() : null;
+        String editorText = p.editor != null ? p.editor.getDocument().getText() : null;
+        PreviewResult cur = p.current;
+        String currentSql = cur != null ? cur.getSql() : null;
+        String sql = nativeText != null && !nativeText.isBlank() ? nativeText
+                : editorText != null && !editorText.isBlank() ? editorText
+                : currentSql != null && !currentSql.isBlank() ? currentSql : null;
+        // 入口锚点（2026-11-02 沙盒验收）：预览打开后控制台没挂上时，先要能区分「SQL 源取不到 →
+        // 提前返回」与「Database 不可用 → 静默回退」这两条静默路径。
+        Logger.getInstance(SqlPreviewPanel.class).info(
+                "[M36] prepareDefaultConsole: editor=" + (p.editor != null)
+                        + ", sqlLen=" + (sql != null ? sql.length() : -1)
+                        + ", dbAvailable=" + cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable());
+        if (sql == null) return;
         SqlExecutor.prepareConsole(
                 proj, sql,
                 consoleComponent -> {
