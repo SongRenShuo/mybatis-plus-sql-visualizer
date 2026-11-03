@@ -1,6 +1,6 @@
 ---
 name: ide-demo-gif
-description: "IntelliJ/JetBrains IDE 功能演示 GIF 录制：脚本重放+帧稳定采样+无损中间产物转制。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环 GIF，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
+description: "IntelliJ/JetBrains IDE 功能演示动图录制：脚本重放+帧稳定采样+无损中间产物转制，交付 GIF+MP4+WebP 三件套（MP4 为站点主用，体积约 GIF 的 1/3）。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环动画，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
 when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」「给功能页配演示图」且对象是 IDE 内的操作画面时。网页录屏用 browser-use，不要用本 skill。"
 ---
 
@@ -14,7 +14,7 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 
 | 位置 | 内容 | 权威性 |
 |---|---|---|
-| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
+| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `deliver` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
 | `record/` | 场景脚本 `scene_*.py`、`BASELINE.md`、`preflight.py`/`prep_env.py`、`lib/nav.py`、`_run_elev.bat` | 项目侧工作位置（场景动作、坐标、沙盒预置） |
 | `record/` 里的 `anchor.py` `robot.py` `mcpnav.py` | 图像锚点 / robot-server 组件树 / IDE MCP 开文件 | 项目侧，**不在** skill scripts 内（未通用化） |
 
@@ -34,11 +34,64 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 | 构图 | 窗口外框 1370×984 @ 屏幕 (277,25)；**录制区域再内缩 8px 去阴影** → `(285,26,1354,974)`（见坑 49） |
 | IDE 缩放 / 编辑器字号 | 120% / 13pt（13pt 是 2026.2 默认值，别再调大） |
 | 主题 | Islands Dark（或目标项目定的官方暗色基准） |
-| 导出 | 15fps，宽 1280（多投放位共用的那张 1440），4~6MB 预算 |
-| 文件 | `<功能名>.gif` + 同名 `.png` poster（关键定格帧） |
+| 导出 | 15fps，宽 1280（多投放位共用的那张 1440） |
+| 交付 | **三件套同名**：`<功能名>.gif`（源/兜底）+ `<功能名>.mp4`（站点主用）+ `<功能名>.webp`（poster）；见下节 |
+| 体积 | 按 **MP4** 验收：单个 ≤600KB，首页第一屏（3~4 张）合计 ≤2MB |
 | 循环 | 首尾帧一致，接缝 diff ≤1 |
 
 投放宽度决定导出宽度：导出宽 ≥ 显示宽 × 1.8 才锐利。换投放位/构图后，脚本里标过的坐标全部要重标。
+
+## 交付三件套（2026-11-03 定例，录完必做）
+
+`assemble.py` 吐出的 GIF + PNG poster 只是**源**。进文档站前必须再过一道后处理，产出三份同名文件：
+
+| 产物 | 编码 | 站点用法 |
+|---|---|---|
+| `<功能名>.gif` | assemble.py 原生 | 源文件；视频加载失败时兜底 |
+| `<功能名>.mp4` | H.264 `crf 24 -preset slow` | **默认加载的就是它**（体积约为 GIF 的 1/3） |
+| `<功能名>.webp` | libwebp `q 82` | poster（视频未就绪/失败时显示；体积约为 PNG 的 1/5） |
+
+一条命令做完（裁框 → mp4 → webp → 校验）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py <gif 路径> --out <输出目录>
+```
+
+### 1. 必须裁窗框
+
+录制区域虽然已内缩 8px（坑 49），成片四边仍会残留 **5~7px 浅灰窗框**——2026-11-03 全量扫描 90 个站点素材，34 个有框：左/右 5~7px、底 4~7px、顶 0~1px。**逐张量、逐张裁**，不要套固定百分比（`cropdetect` 只认黑边，浅灰框得自己扫像素）。
+
+手工等价命令（`deliver.py` 内部就是这几条）：
+
+```bash
+# 裁 GIF 必须带调色板，否则体积会涨 40~277 倍；dither=none 才能逐像素一致
+ffmpeg -i in.gif -filter_complex "[0:v]crop=W:H:X:Y,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none" -loop 0 out.gif
+# 视频（偶数尺寸才能走 yuv420p）
+ffmpeg -i in.gif -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart \
+  -vf "crop=W:H:X:Y,scale=trunc(iw/2)*2:trunc(ih/2)*2" out.mp4
+# poster 取关键定格帧再裁
+ffmpeg -i in.gif -frames:v 1 -vf "crop=W:H:X:Y" -c:v libwebp -quality 82 -compression_level 6 out.webp
+```
+
+**零损失校验**：`ffmpeg -i out -i in -filter_complex "[1:v]crop=W:H:X:Y[ref];[0:v][ref]psnr" -f null -`，PNG/poster 应为 `inf`；GIF 多数 `inf`，少数 78~89 dB（单通道 ±1，肉眼不可辨）。
+
+### 2. 体积基线（2026-11-03 全站实测）
+
+| | 原 | 现 | 降幅 |
+|---|---|---|---|
+| 69 个演示 GIF → MP4 | 52.06MB | 18.7MB | −64% |
+| 22 张 poster PNG → WebP | 6.45MB | 1.25MB | −81% |
+| `guide/configuration` 整页媒体 | 2.71MB | 0.85MB | −69% |
+
+GIF 体积不再作为预算指标（它只是源）。慢网下首屏一次拉 7MB 动图要 20 秒以上，视频可流式播放。
+
+### 3. 站点侧引用（文档站仓）
+
+- 组件（`GifPlayer`）：`src` 仍传 `.gif`，组件内部按同名推导 `.mp4`，失败回退 GIF；
+- markdown 直插动图：用 `<figure><video :src="'/demo/x.mp4'" :poster="'/demo/x.webp'" autoplay muted loop playsinline preload="metadata"><figcaption class="visually-hidden">原 alt 文案</figcaption></figure>`；
+  ⚠️ 写成 `src="/demo/x.mp4"`（非绑定字符串）会被 Vite 的 `transformAssetUrls` 当模块解析，构建报 `failed to resolve import`；
+- 静态截图同样转 WebP 后引用 `.webp`。
+
 
 ## 环境就位清单
 
@@ -91,6 +144,14 @@ python assemble.py perf/tN.mp4 perf/tN.gif --width 1280 --poster perf/tN.png
 
 转制后核对 `decoded 帧数 == Recorder 打印的 frames`（assemble 已修残留帧 bug，但核对是最后防线）。poster 需要指定帧时直接从 mp4 抽：`ffmpeg -i mp4 -vf "select='eq(n\,N)',scale=1280:-2" poster.png`。
 
+**转制完还有一道交付后处理**（裁窗框 → mp4 → webp，一条命令）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py perf/tN.gif --out perf/deliver
+```
+
+产出 `tN.gif / tN.mp4 / tN.webp` 三件套并自动校验零损失，规格见上文「交付三件套」。**交接给文档站的是 `deliver/` 下这三份**，不是 `perf/` 里未裁框的原片。
+
 **入库分层（本项目）**：可复用的 `record/scene_*.py`、`anchor.py`、`robot.py`、bootstrap 与 `_run_elev.bat` 逐项检查后显式 `git add`；`record/perf/` 存 MP4/转制帧、`record/shots/` 存过程截图、`record/templates/` 存本机模板、`record/robot-plugins/` 存下载插件，均是被 git 忽略的本地产物。一次性 `_probe*.py` / `probe_*.py`、进程检查 PS1 等**新文件放 `record/tmp/`**（本机忽略目录），不要散落在根目录；若探针需要导入 `gifkit` 等根目录模块，显式把 `record/` 加进 `sys.path`。**移入 tmp 的探针统一带幂等兜底块**（2026-10-19 定例）：`sys.path` 初始化不要只取 `dirname(__file__)`——从 record 根移进 tmp 后会只剩 tmp 在路径里、`import ac/bc_common` 直接失败。模板：
 
 ```python
@@ -102,15 +163,17 @@ for _q in (_p, _os.path.dirname(_p)):
         _sys.path.insert(0, _q)
 ```
 
-（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。正式 GIF+PNG 在文档站 `public/demo/` 入库；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
+（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。**正式三件套（gif/mp4/webp）在文档站 `public/demo/` 入库**；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
 
 ### 4. 验收
 
+- **三件套齐全且同名**：`<功能名>.gif` / `.mp4` / `.webp` 同目录同前缀；mp4 单件 ≤600KB、首页首屏合计 ≤2MB
+- **裁框后四边干净**：抽首帧扫四边，连续浅色带厚度应为 0（原片会有 5~7px）
 - 抽帧检查动作节点/定格/poster 三处内容正确；循环接缝 ≤1（结构性跳变场景除外，需注明）
-- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利；**投放位的最终动画确认必须由用户真实可见渲染完成**
-- **断图回落形态由投放位组件决定，验收预期按组件取**：GifPlayer 直出形态（功能详解页，2026-09-15 起取消 poster 兜底）= 失败回落灰色占位盒；首页叠层形态（FeatureAlternate/DocsShowcase）= 失败回落 poster 常驻
-- 投放位建议优先「GIF 随 SSR 初始直出」的文档流 img——hydration 后 JS 动态插入 + absolute 叠层淡入的 GIF 在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
-- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404）
+- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。`<video>` 同理：自动验证只做非动画侧——`readyState === 4` + `!paused` + 实际渲染尺寸，**最终动画确认必须由用户真实可见渲染完成**；自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利
+- **回落形态由投放位组件决定，验收预期按组件取**：`GifPlayer`（功能详解页）= 视频加载失败回退原 `.gif`，GIF 也失败则灰色占位盒；首页 `FeatureAlternate` / `DocsShowcase` = `poster` 常驻兜底、视频失败摘掉叠层
+- 投放位建议优先「媒体随 SSR 初始直出」的文档流写法——hydration 后 JS 动态插入 + absolute 叠层淡入的动图在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
+- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404；新增的 `.mp4/.webp` 在旧进程里也一直 404）
 - 体积超预算优先降静态保留（--hold），不降宽不降帧（暗色低动态画面 0.9MB 也能全帧锐利，低体高不算缺陷）
 
 ## 自检与定位标准件（`$SKILL/scripts/locate.py` / `$SKILL/scripts/verify.py`，`$SKILL=.agents/skills/ide-demo-gif`）
