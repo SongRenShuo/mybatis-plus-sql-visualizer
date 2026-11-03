@@ -721,7 +721,7 @@ public final class SqlPreviewPanelExecutionKt {
         Project proj = p.project;
         if (proj == null) return;
         // 幂等：换源会新建控制台，其 header 同样按 id 取动作组——确保接管件仍在位。
-        cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled();
+        cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeover.PreviewDataSourceActionHost.ensureInstalled();
         String nativeText = p.nativeEditorDoc != null ? p.nativeEditorDoc.getText() : null;
         String editorText = p.editor != null ? p.editor.getDocument().getText() : null;
         String sql = nativeText != null && !nativeText.isBlank() ? nativeText
@@ -2173,7 +2173,7 @@ public final class SqlPreviewPanelExecutionKt {
         if (proj == null) return;
         // T-NativeSwitchTakeover：接管控制台工具栏的原生数据源下拉（幂等）——必须早于控制台创建，
         // 平台 header 是按 id 从 ActionManager 取 Console.Jdbc.Right 组件的。
-        cn.song.mybatisplus.visualizer.execute.PreviewDataSourceActionHost.ensureInstalled();
+        cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeover.PreviewDataSourceActionHost.ensureInstalled();
         // 2026-11-02 沙盒验收：注解预览（@Select 等）这条链上回退编辑器是**异步**建的，
         // showResult 末尾调用本函数时 `editor` 仍为 null → 旧实现直接 return，控制台永不预热，
         // 面板一直「未绑定数据源」，要等用户点执行才挂上。改为三级回落：原生文档 → 回退编辑器 →
