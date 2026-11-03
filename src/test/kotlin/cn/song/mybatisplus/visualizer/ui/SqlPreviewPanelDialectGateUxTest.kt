@@ -5,6 +5,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -74,7 +75,10 @@ class SqlPreviewPanelDialectGateUxTest : BasePlatformTestCase() {
             val rp = panel.resultPanelForTest()
             assertEquals("放行语义不应进错误态", "EMPTY", rp.stateForTest())
             assertFalse("放行语义不应挂错误文案", rp.currentErrorForTest() != null)
-            assertFalse("放行语义不应挂修复入口", rp.fixActionForTest().isVisible)
+            // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
+            // 放行态也要挂「切换数据源」入口——文案本身就写着「可点「切换数据源」」。
+            assertTrue("放行语义同样要挂换源入口", rp.fixActionForTest().isVisible)
+            assertEquals("切换数据源", rp.fixActionForTest().text)
             val text = rp.infoTextForTest()
             assertTrue("状态行应报出渲染方言", text.contains("PostgreSQL"))
             assertTrue("状态行应报出目标方言", text.contains("MySQL"))
@@ -99,6 +103,43 @@ class SqlPreviewPanelDialectGateUxTest : BasePlatformTestCase() {
             assertEquals("放行语义不应进错误态", "EMPTY", rp.stateForTest())
             assertFalse("放行语义不应挂错误文案", rp.currentErrorForTest() != null)
             assertTrue("状态行应报出双方方言", rp.infoTextForTest().contains("PostgreSQL"))
+            assertTrue("重渲染不可用同样要挂换源入口", rp.fixActionForTest().isVisible)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * T-DialectGatePassDeadChain：信息态状态行同样挂两个蓝字入口，点击分别触发注入的动作。
+     * 直接驱动 [SqlResultPanel.showStatusWithActions]（不经面板换源链，避免真建控制台/会话）。
+     */
+    fun test状态行带动作_两个蓝字入口可点且各自触发() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val rp = panel.resultPanelForTest()
+            var fixed = 0
+            var settings = 0
+            rp.showStatusWithActions(
+                "方言不一致：当前 SQL 按 GaussDB 渲染，所选数据源是 PostgreSQL。",
+                fixLabel = "切换数据源",
+                fixTooltip = "tip",
+                fix = { fixed++ },
+                settingsLabel = "方言设置",
+                settingsTooltip = "tip2",
+                settings = { settings++ },
+            )
+            assertEquals("信息态底色不变", "EMPTY", rp.stateForTest())
+            assertNull("信息态不挂错误文案", rp.currentErrorForTest())
+            val fix = rp.fixActionForTest()
+            val set = rp.settingsActionForTest()
+            assertTrue("换源入口应可见", fix.isVisible)
+            assertEquals("切换数据源", fix.text)
+            assertTrue("设置入口应可见", set.isVisible)
+            assertEquals("方言设置", set.text)
+            fix.doClick()
+            set.doClick()
+            assertEquals("点击应触发换源动作", 1, fixed)
+            assertEquals("点击应触发打开设置动作", 1, settings)
         } finally {
             panel.clear()
         }

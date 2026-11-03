@@ -1785,6 +1785,16 @@ class SqlPreviewService(internal val project: Project) {
             activePreviewDialogs[project]?.get()
 
         /**
+         * T-NativeSwitchTakeover：当前项目存活的预览面板（生产用）。
+         *
+         * 控制台工具栏的原生数据源下拉被接管后，子项只拿到 `Project`（事件里没有面板引用），
+         * 需要据此回到「正在看的那个预览面板」发起换源。未打开预览时返回 null（子项直接放弃，
+         * 不猜目标面板）。
+         */
+        internal fun activePreviewPanel(project: Project): SqlPreviewPanel? =
+            activePreviewDialogs[project]?.get()?.panelForTest()
+
+        /**
          * 后台线程 + 读操作执行转换，EDT 回调结果。
          *
          * PSI 定位/解析（含注解解析）在 IDEA 2025.3+ 属于"慢操作"，禁止在 EDT 上执行；

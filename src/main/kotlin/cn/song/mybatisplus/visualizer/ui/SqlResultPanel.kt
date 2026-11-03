@@ -112,7 +112,9 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         isContentAreaFilled = false
         border = JBUI.Borders.empty(1, 6)
         font = font.deriveFont(11f)
-        foreground = JBColor.namedColor("Link.activeForeground", JBColor.GRAY)
+        // T-DialectGatePassDeadChain：与 errorFixButton 同为「链接」，fallback 统一 BLUE
+        //（原 GRAY 只在主题键缺失时暴露，表现为一段蓝一段灰）。
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.BLUE)
         margin = JBUI.insets(0, 6, 0, 6)
         addActionListener { settingsHandler?.invoke() }
     }
@@ -299,6 +301,54 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         settings: (() -> Unit)? = null,
     ) {
         showError(error)
+        applyErrorActions(fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings)
+        revalidate()
+        repaint()
+    }
+
+    /**
+     * T-DialectGatePassDeadChain（2026-11-02 用户定案「这两应该是蓝色字体可直接点击」）：
+     * 信息态状态行 + 两个就地动作。
+     *
+     * 与 [showStatus] 逐字相同，**唯一差别是清完动作后按入参重新挂上**——放行态（方言冲突只提示
+     * 不拦执行）同样需要「切换数据源」「方言设置」两个蓝色可点入口。此前该态走 [showStatus]，
+     * 它第一行的 `clearErrorActions()` 把链接清掉，文案却仍写着「可点「切换数据源」」，用户找不到。
+     *
+     * 动作形态与错误态完全一致（[showErrorWithActions]）：透明按钮 + `Link.activeForeground`，渲染即蓝字。
+     */
+    fun showStatusWithActions(
+        message: String,
+        fixLabel: String? = null,
+        fixTooltip: String? = null,
+        fix: (() -> Unit)? = null,
+        settingsLabel: String? = null,
+        settingsTooltip: String? = null,
+        settings: (() -> Unit)? = null,
+    ) {
+        state = State.EMPTY
+        currentError = null
+        errorCopyButton.isVisible = false
+        clearErrorActions()
+        applyErrorActions(fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings)
+        setLoadingIconVisible(false)
+        val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        infoLabel.text = "<html>$esc</html>"
+        infoLabel.toolTipText = message
+        infoLabel.foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+        showContent()
+        revalidate()
+        repaint()
+    }
+
+    /** 挂载两个就地动作（错误态与信息态共用；label 或动作缺失即不显示对应入口）。 */
+    private fun applyErrorActions(
+        fixLabel: String?,
+        fixTooltip: String?,
+        fix: (() -> Unit)?,
+        settingsLabel: String?,
+        settingsTooltip: String?,
+        settings: (() -> Unit)?,
+    ) {
         if (fixLabel != null && fix != null) {
             fixHandler = fix
             errorFixButton.text = fixLabel
@@ -311,8 +361,6 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
             errorSettingsButton.toolTipText = settingsTooltip
             errorSettingsButton.isVisible = true
         }
-        revalidate()
-        repaint()
     }
 
     /** T-DialectGateUx：清空全部错误动作（非错误态与每次 showError 的统一起点）。 */

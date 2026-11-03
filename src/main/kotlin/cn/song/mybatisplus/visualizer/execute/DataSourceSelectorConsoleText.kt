@@ -298,16 +298,29 @@ import javax.swing.Icon
      * 注意：执行路径（execute=true）**不清**——执行后 DBN 需重新回显本次 SQL，历史清空会让
      * 执行结果上下文断链，且 consoleErrorBaseline 依赖历史长度基线（清空会改变基线语义）。
      */
-    internal fun DataSourceSelector.clearConsoleHistory(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger) {
+    internal fun DataSourceSelector.clearConsoleHistory(
+        project: com.intellij.openapi.project.Project?,
+        console: Any?,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ) {
         if (console == null) return
         runCatching {
             val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return
             val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return
-            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer) ?: return
-            doc.javaClass.getMethod("setText", String::class.java).invoke(doc, "")
+            // 用平台 Document 类型直接调用，不再反射 `setText`：262 上反射 invoke 抛的
+            // InvocationTargetException 会把真因（写环境断言）裹成方法签名，日志里看不见原因；
+            // 同时 setText 必须落在**写命令**内（262 DocumentImpl 的写环境断言），故包 WriteCommandAction。
+            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
+                as? com.intellij.openapi.editor.Document ?: return
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                doc.setText("")
+            }
             LOG.info("[M36] console history cleared (preview switch)")
         }.onFailure { e ->
-            LOG.warn("[M36] clear console history FAILED: ${e.message}")
+            LOG.warn(
+                "[M36] clear console history FAILED: ${e.javaClass.simpleName} / cause=" +
+                    "${e.cause?.javaClass?.simpleName}: ${e.cause?.message ?: e.message}",
+            )
         }
     }
 

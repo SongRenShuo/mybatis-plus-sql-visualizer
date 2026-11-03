@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -38,9 +39,6 @@ object DataSourceSelector {
 
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     internal const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
-
-    /** DatabaseRunners 类名（反射入口）。 */
-    private const val RUNNERS_CLASS = "com.intellij.database.console.DatabaseRunners"
 
     /** 执行链反射目标类名。 */
     internal const val CONSOLE_PROVIDER_CLASS = "com.intellij.database.console.JdbcConsoleProvider"
@@ -231,10 +229,9 @@ object DataSourceSelector {
         onDialectGate?.invoke(verdict)
         val needsConfirmation = verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ||
             verdict.status == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM
-        if (verdict.status != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
-            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
-            onSubmission?.invoke(ExecutionSubmission.BLOCKED)
-        }
+        // 阻断红字的投递推迟到下面 allowed 判定之后（T-DialectGatePassDeadChain）：原先无论放行
+        // 与否都先投 BLOCKED，放行态因此把执行意图标成已完成（见下方注释）。
+        var blockMessage: String? = null
         val allowed = when (verdict.status) {
             ExecutionDialectGate.Status.MATCH -> true
             ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
@@ -254,7 +251,7 @@ object DataSourceSelector {
                 }.getOrDefault(false)
             }
             ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
-                if (onDialectGate == null) onError?.invoke(dialectGateMessage(verdict))
+                if (onDialectGate == null) blockMessage = dialectGateMessage(verdict)
                 false
             }
             // 用户定案（2026-10-25）：「方言不能影响最终的执行。哪怕方言是错的，用户手动选了
@@ -267,15 +264,24 @@ object DataSourceSelector {
             ExecutionDialectGate.Status.MANUAL_CONFLICT,
             ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
                 // 提示照旧（UI 仍显示方言不一致与「切换数据源」入口），但不拦执行。
-                onError?.invoke(dialectGateMessage(verdict))
+                blockMessage = dialectGateMessage(verdict)
                 true
             }
             ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK,
             ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK -> {
-                onError?.invoke(dialectGateMessage(verdict))
+                blockMessage = dialectGateMessage(verdict)
                 false
             }
         }
+        // T-DialectGatePassDeadChain（2026-11-02 用户真机「执行失败、也换不了数据源」）：
+        // BLOCKED 只在**确实不放行**时投递。此前「非 MATCH 一律投」把放行态也算成未提交，而准备链
+        // 传进来的 onSubmission 就是 QueuedExecuteIntent.onSubmission（`{ complete(it) }`）——
+        // 一投就把本次执行意图标成已完成，下游 `isPrepareActive()` 立刻为假，准备链在
+        // `attachConsole` 之前静默早退：控制台不挂载，单飞门也不释放，随后 60s 内执行/换源全部
+        // 只排队，15s 后报「数据库控制台准备超时」。
+        // 顺序保持原契约：先报未提交，再交付详细红字（onError 通道），互不覆盖。
+        if (!allowed && !needsConfirmation) onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+        blockMessage?.let { onError?.invoke(it) }
         if (!allowed && needsConfirmation) onSubmission?.invoke(ExecutionSubmission.CANCELLED)
         return allowed
     }
@@ -866,6 +872,12 @@ object DataSourceSelector {
         return resultAreaHasContent(ui)
     }
 
+    /** 2026-11-03 真机取证：结果区内容页签名（判定「折叠为什么没生效」时看它被谁喂成非空）。 */
+    internal fun currentResultContentNames(): List<String> {
+        val ui = sharedUi ?: preparedUi ?: return emptyList()
+        return runCatching { resultContents(ui).map { it.displayName } }.getOrDefault(emptyList())
+    }
+
     internal fun isOutputContent(c: com.intellij.ui.content.Content): Boolean =
         c.displayName.equals("Output", ignoreCase = true) ||
             c.displayName.equals("输出", ignoreCase = true)
@@ -1135,66 +1147,6 @@ object DataSourceSelector {
     }.getOrNull()
 
     /**
-     * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
-     * [sessionConsumer] 在选中 runner 执行后收到 DatabaseSession。
-     *
-     * T-ExplainSwitchNative W8（2026-10-24 用户实测「点击切换数据源只有一个数据源？当前可是
-     * 配置了很多」）：**用户主动切换**时优先调平台切换专用入口 `getSwitchDataSourceRunners`，
-     * 失败（含签名/无会话）则回退 attach 版。
-     *
-     * ⚠️ W8-hotfix（同日）：`getSwitchDataSourceRunners` 的签名是
-     * **`(PsiFile, String, DatabaseSession, Consumer)` 四参**（javap 实证），比 attach 版多一个
-     * 「当前会话」——首版按三参反射调用必然 `NoSuchMethodException`，被 runCatching 吞成空列表
-     * → `runners=0` → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条（切换数据源点了就报错）。
-     * 现按真实签名调用；[currentSession] 为 null（预览尚未建会话，切换入口的常态）时**直接用
-     * attach 版**——这正是切换入口此前一直正常工作的形态。
-     *
-     * @param allDataSources 用户主动切换时为 true（尝试切换专用入口）
-     * @param currentSession 当前已 attach 的会话（无则走 attach 版）
-     */
-    internal fun getAttachDataSourceRunners(
-        psiFile: PsiFile,
-        sql: String,
-        sessionConsumer: com.intellij.util.Consumer<Any>,
-        allDataSources: Boolean = false,
-        currentSession: Any? = null,
-    ): List<Any> {
-        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        val attach: () -> List<Any> = {
-            runCatching {
-                val clazz = Class.forName(RUNNERS_CLASS)
-                val method = clazz.getMethod(
-                    "getAttachDataSourceRunners",
-                    PsiFile::class.java,
-                    String::class.java,
-                    com.intellij.util.Consumer::class.java,
-                )
-                val result = method.invoke(null, psiFile, sql, sessionConsumer)
-                (result as? List<*>)?.filterNotNull() ?: emptyList()
-            }.onFailure { e ->
-                LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
-            }.getOrDefault(emptyList())
-        }
-        if (!allDataSources || currentSession == null) return attach()
-        // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
-        val switched = runCatching {
-            val clazz = Class.forName(RUNNERS_CLASS)
-            val method = clazz.getMethod(
-                "getSwitchDataSourceRunners",
-                PsiFile::class.java,
-                String::class.java,
-                Class.forName(SESSION_CLASS),
-                com.intellij.util.Consumer::class.java,
-            )
-            val result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
-            (result as? List<*>)?.filterNotNull() ?: emptyList()
-        }.onFailure { e ->
-            LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): $e", e)
-        }.getOrDefault(emptyList())
-        return switched.ifEmpty { attach() }
-    }
-
-    /**
      * W8 观测缝（用户 2026-10-24「点击切换数据源只有一个数据源？当前可是配置了很多」）：
      * 平台 Runner 枚举走 `DbImplUtil.getAppropriateDataSourcesForExec` →
      * `DbSqlUtilCore.getAppropriateDataSources` → `.filter(CAN_CONNECT_TO)`（反编译实证），
@@ -1456,13 +1408,23 @@ object DataSourceSelector {
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
     internal const val EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L
 
-    /** T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
+    /**
+     * T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
      *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
     internal const val PENDING_EXECUTE_TIMEOUT_MS = 15_000L
 
-    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    /**
+     * T-DialectInferPollution W11：排队意图超时文案。
+     *
+     * T-DialectGatePassDeadChain（2026-11-02）：**不再复用准备超时键**。排队者的真实处境是「上一条
+     * 准备链还没结束」，报「准备超时 + 请重新选择数据源」既误导（用户没超时），又把人指向当时
+     * 根本不存在的入口（预览弹窗没有换源按钮）。
+     */
     internal val PENDING_EXECUTE_TIMEOUT_MESSAGE: String
-        get() = MpSqlVisualizerBundle.message("execute.prepare.timeout")
+        get() = MpSqlVisualizerBundle.message(
+            "execute.prepare.queuedTimeout",
+            PENDING_EXECUTE_TIMEOUT_MS / 1000,
+        )
 
     /**
      * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式

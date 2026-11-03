@@ -17,6 +17,35 @@
 - **外部模板渲染器在 Windows 上把参数 JSON 的双引号弄丢（T-TemplateHook，真机走查抓到）**：`paramsJson` 传 `{"planYear":"2026"}`，用户脚本实际收到 `{planYear:2026}`——Windows 上 `CreateProcess` 只传一条命令行字符串，子进程运行时（CRT / Node / Python 同款规则）会把任何 `"` 当分组符并剥掉；而 `ProcessBuilder` 只给含空格的参数补引号，JSON 没有空格，裸引号就这样没了。POSIX 由 `execve` 直接传 argv，不受影响。现按平台在启动前修正 argv（仅 Windows 且参数含双引号时按 CRT 规则补外层引号并转义，其余逐字节不变），四例守卫加一条真实 node 进程端到端用例
 - **达梦执行计划恒为空（T-Fr45DmGuard，用户真机报障）**：`sqlv_explain` 在 DM 上只返回 `dialect: DM（达梦）`、计划正文为空。真机实测（DM DBMS 8.1.3.12 + DmJdbcDriver18 8.1.3.140）证伪了原证据：**DM8 的裸 `EXPLAIN <sql>` 根本不返回结果集**（`executeQuery` 0 列 0 行、`execute()` 后无第二结果集），所以问题不在多结果集通道、加 `channelNote` 也救不回来；`EXPLAIN FOR <sql>` 才返回 19 列结构化计划表（`OPERATION` / `TAB_NAME` / `IDX_NAME` / `SCAN_TYPE` / `ROW_NUMS` / `COST` / `FILTER` …）。现模板由 `EXPLAIN` 改 `EXPLAIN FOR`，档位由 TEXT 纠为 TABLE——达梦因此同时获得结构化计划面板与计划落历史。TABLE 档下游六处消费点逐一核查均为优雅降级（代价增量可算、行数走字段级变化、索引建议因缺 MySQL 列提前返回空清单）
 
+## [2026.11.3] - 2026-11-03
+
+> 范围＝v2026.11.2 发行包之后的全部用户可见增量；主体是预览窗「执行 SQL」链路的整批修复与原生数据源下拉接管。
+
+### Added
+- **控制台工具栏原生数据源下拉接管，只换源不执行（T-PreviewConsoleOwnership）**：反编译 2026.2 平台实现确认，原生 `ChooseDataSourceAction` 点选后走 `chooseAndRunRunners` → 换源 + 立即执行 + 重挂一个新控制台——新控制台不在预览面板里（面板嵌的仍是旧对象），且绕过 DML 二次确认、`${}` 原文段确认、未知参数确认、方言闸与留痕。现按用户定案接管：新增 `ChooseDataSourceTakeoverGroup`，本插件执行文件的子项改为每个数据源一项，点选走插件换源链（清 pin + 全源枚举 + 只重建控制台，不提交 SQL）；其它文件逐字委托原生组；面板关闭或插件卸载时换回原动作。顺带修好下拉的三个显示问题（按钮只剩图标、弹层不贴按钮、名字里的下划线被当助记符吃掉），枚举改为「全量在册源 + 原生所有集合」两条来源取并集
+- **「更多」菜单常驻「切换数据源」**：状态行的两段可点蓝字只在方言冲突时出现，执行失败后错误行会把它们顶掉，而「想换源」最常发生在执行失败之后。现「更多」菜单始终提供「切换数据源」，点开就地弹原生数据源列表，只换源不自动提交
+
+### Fixed
+- **执行 SQL 后预览面板下半区空白，连原生控制台工具栏都不出现（T-PreviewConsoleOwnership，用户真机报障）**：五个独立缺陷叠加——①预览编辑器与原生控制台共用同一个显示槽，冷启预热超预算时降级装配与迟到换装都落在控制台嵌入之后，各自 `removeAll()` 再挂自建编辑器，`consoleHost` 整块被挤出显示链，而两个「控制台还在不在」的判据只查组件与宿主关系、宿主被摘下仍恒真；②Database 工具窗对同一执行文件复用同一结果面板，新建控制台路径没有清场，旧 Result 页签跨预览残留（预览还没执行就先出现结果栏）；③接管组未覆写 `displayTextInToolbar()`，平台把按钮渲染成纯图标；④结果区 160px 最小高度把折叠分隔条钳住，推到底仍留约 165px；⑤结果区回收守卫无条件把 160px 最小高度写回，窗口放大时分隔条停在旧绝对位置、新增高度全给结果区。修法＝新增 `mountEditorHolderContent` 单一装配口（控制台在位时保留宿主，预览编辑器只作文档/状态载体）+ 归属判据补「宿主仍在显示槽上」+ 预览路径 `clearResultContents`/`clearConsoleHistory` + 覆写 `displayTextInToolbar()` + 折叠时清零最小高度并打标记、回收守卫与分隔条校正读标记让路 + 折叠态常驻 resize 监听重新贴底。清空控制台历史同时改用带类型 Document + 写命令，消除 262 上裸反射 `setText` 的写断言 WARN
+- **方言冲突「放行」把控制台准备链静默卡死（T-DialectGatePassDeadChain，用户真机报障）**：执行报「数据库控制台准备超时，未提交 SQL」，预览窗里找不到「切换数据源」；日志 session 创建后 6ms 就打出 `runRunner invoked OK`，`attachConsole` 一次没到，随后点击全部排队，60 秒逃生才自愈。根因是放行分支仍「非 MATCH 一律投 BLOCKED」，而准备链收到的回执一投就把执行意图标成已完成 → 「准备是否进行中」立刻为假 → 在挂控制台之前静默早退，既不挂控制台也不释放单飞门。修法＝先算放行结果再投回执、BLOCKED 只用于真阻断；准备链 7 处早退改为「结算门 + 返回」；放行态状态行保留「切换数据源」「方言设置」两段可点蓝字；换源就地弹原生列表、单源也弹、只换源不自动提交；排队超时与「被新请求取代」拆成两条独立文案
+- **方言冲突状态渲染实例化整棵设置树，EDT 卡顿且面板停在「执行中」转圈**：判断「方言设置」链接显隐时调了会把整棵设置树实例化的平台 API，第三方设置页构造时抛异常（日志三条 SEVERE），单次 1.2 秒级 EDT 卡顿，异常还把状态行渲染整段吞掉。现链接恒显示、点击时按 id 打开并兜底失败；渲染整段包兜底，失败至少退回纯状态行
+- **注解预览打开后一直「未绑定数据源」，要点一次执行才挂上控制台**：注解预览链的回退编辑器异步创建，准备默认控制台时编辑器还没建好，旧实现直接提前返回。现 SQL 源改为三级回落（原生文档 → 回退编辑器 → 本次预览结果），并补入口锚点日志
+- **折叠结果区后约 2.5 秒又自己长回来；放大窗口时结果区反被撑大**：回收守卫无条件把 160px 最小高度写回（真机 `collapse=true divider=304→508` 后紧跟 `result reclaim guard: bottom re-mounted`），split 变高时分隔条停在旧绝对位置。现守卫读折叠标记、折叠态保持零兜底并重新贴底，展开态才恢复 160px；折叠态挂常驻 resize 监听；准备与复用两处折叠加高度守卫
+- **增强捕获「登记盲区」单条告警平时也出现**：任意一条无登记的执行就打宿主 stderr，而 attach 前的 prepare 是常态（连接池/启动期预热/MyBatis 缓存），看着像常规噪声。现单条降为诊断、默认静默（`logLevel=debug` 可查）；累计 ≥5 次判为系统性盲区才必报，文案改为可行动提示
+- **Marketplace 描述二维码卡片两列不等宽、交流群码部分客户端不显示**：描述区样式覆盖图片 `width` 属性，两个单元格都不写宽度时列宽由说明文字长度决定（本地复现 526px vs 368px，与线上截图 1.43 比例一致）；站点 `group-qr.png` 内容实为 JPEG 却按扩展名返回 `image/png`，配合 nosniff 在部分客户端被拒渲染。现两个 `<td>` 显式等宽、交流群码改引 `.jpg`，原 `.png` 保留不删
+
+### Changed
+- **预览打开速度：每次省 1.7–2.0 秒（T-PreviewConsoleOwnership）**：执行文件的有界等待放在写锁内，后台预热线程先持锁等 EDT，EDT 随后阻塞同一把锁，形成自锁，每次稳定烧满 2000ms 超时；超时后 12–18ms 立刻写完。现临界区收缩为「存在性 + 内容判等 + 首建裸写」，EDT 派发移到锁外；等待失败后重进锁复核，内容仍不一致时不裸写
+
+## [2026.11.2] - 2026-11-02
+
+> 范围＝v2026.10.31 发行包之后的全部用户可见增量；单项修复版，集中在预览窗「执行 SQL」的取源链路与分页 COUNT 判定。
+
+### Fixed
+- **IntelliJ 2026.2 上预览窗「执行 SQL」报“方言不匹配”且无法执行（T-Exec262ReadLock）**：262 起 EDT 不再隐式持有读锁，插件反射调用平台 `DatabaseRunners.getAttachDataSourceRunners` 时，平台内部读 per-file 方言映射直接抛 `Read access is allowed from inside read-action only`；异常被 `runCatching` 吞成空列表，走「没有与该 SQL 方言匹配的已配置数据源」文案，用户被引去改 Dialects 设置（现场：PostgreSQL 数据源配置齐全、方言推断也正确）。现两处反射调用（attach / 切换数据源）统一包 `WriteIntentReadAction.compute`（按 243~262 两平台方法集交集选 `compute(Computable)` 重载，避免 262 上 `NoSuchMethodError`）；并且 `runners` 为空时按「平台调用有没有抛异常」分流红条——平台故障报异常首行并提示反馈，只有平台正常返回零个可用源才报方言不匹配。2026.1 / 2024.3 不受影响，包裹对旧版本无害
+- **`selectList` 等非分页查询的预览凭空多出一条「分页 COUNT」（T-Exec262ReadLock）**：`queryWrapper.last("limit " + n)` 被解析成语句 LIMIT（形参静态不可得 → `LIMIT ?`），而 COUNT 包裹的判据只看「语句有没有 LIMIT」，没看「调用是否真的传了 Page/IPage」，于是把 `last` 的 LIMIT 当成分页附赠 COUNT。现以「确有分页实参解析产物」为唯一闸：`last` 的 LIMIT 照常渲染，但不产 COUNT。XML/注解路径的 Page 形参分页不受影响
+- **预览面板已挂控制台时，勾选参数 / 返回预览会弹 `Access is allowed from write thread only`（T-PreviewDocPersistLock，用户真机报障）**：`SqlPreviewPanelSqlView` 的 nativeDoc 分支把 `setText` 放进 `WriteCommandAction`、`saveDocument` 留在块外——写命令返回时写意图即释放，而 `FileDocumentManager.saveDocument` 首行断言写环境（243 `FileDocumentManagerImpl:323-336` → `TransactionGuardImpl.assertWriteActionAllowed`；262 同形改名），EDT 上硬抛。异常从 `showSql` 外抛后，勾选按钮文案与绑定数据源指示行停在旧态、`lastRenderedSql` 不更新（迟到产物换装与自动折叠同时失效），且落盘一次都没成功过。修法＝把落盘移进同一个写命令块（与 `DataSourceSelectorResults` 既有形态一致）。此缺陷自 2026-10-10 引入、跨 2024.3 / 2026.1 / 2026.2 全版本，现有平台单测抓不到的原因是 `BasePlatformTestCase` 整个测试体被 `runWriteIntentReadAction` 包住，写意图恒在，断言恒过
+
 ## [2026.10.31] - 2026-10-31
 
 > 范围＝v2026.10.30 正式版之后的全部用户可见增量（含 v2026.10.31-beta.1 / beta.2 两轮内测的累计内容）；方言总数 11 → 14。

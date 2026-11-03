@@ -847,7 +847,24 @@ intellijPlatformTesting {
                     fragOfTarget[fragOf] = target
                 }
             }
-            ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
+            // T-ReleasePerf11 券02：装箱完成后按权重**降序**重排槽位——贪心只保证各片负载相近，
+            // 不保证槽位序；限流（MpvTestLaneLimiter）下 Gradle 近似按注册/图序派发，等权装箱下
+            // 槽位序是负载序的随机投影，末波可能拿到最重片拉长尾巴。重排后 testShard1 恒最重、
+            // 末槽恒最轻：lane2 双波与 lane3 两波的末波尾巴都最短。
+            // 置换发生在 ShardPlan 构造前——classes/loads/frag 三张按槽记账的映射全部同步重映射，
+            // 下游所有按 testShardN 名对账的契约（结果目录/hashes/expected/聚合报告）自动一致。
+            // handicap 语义注记：auto-handicap 历史里的 critSlot 是「上一轮重排后」的槽号，重排使
+            // 槽号跨轮不稳定 → 3 连同槽触发自然推迟重学（宁欠勿过方向，无正确性影响）。
+            val weightOrder = loads.indices.sortedByDescending { loads[it] }
+            val remapSlot = IntArray(loads.size) { old -> weightOrder.indexOf(old) }
+            ShardPlan(
+                classes = weightOrder.map { shards[it] },
+                loads = weightOrder.map { loads[it] },
+                fragExcludes = fragExcludes.entries.associate { (slot, v) -> remapSlot[slot] to v },
+                fragIncludes = fragIncludes.entries.associate { (slot, v) -> remapSlot[slot] to v },
+                fragHome = fragOfHome.mapValues { (_, slot) -> remapSlot[slot] },
+                fragTarget = fragOfTarget.mapValues { (_, slot) -> remapSlot[slot] },
+            )
         }
         val shardAssignment = plan.classes
         // task{} 惰性块只捕获可序列化的纯 Map/List（局部类实例进 CC 序列化有拒收风险）
@@ -914,6 +931,12 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
+        // T-ReleasePerf11 券02：重排后的注册序即权重降序（testShard1 恒最重），日志一行自证。
+        logger.lifecycle(
+            "testShards: 槽位已按权重降序重排 loads=" +
+                plan.loads.indices.joinToString(" ") { i -> "shard${i + 1}=%.1fs".format(plan.loads[i]) } +
+                "（类集重映射，testShardN 名义与结果目录不变）",
+        )
         // T-ReleasePerf9：错峰延迟迁至共享前置任务 testShardStagger（原 T-ReleasePerf7 N1
         // 叶子 doFirst sleep 的迁移版，等价性论证见该任务注释）——限流下叶子 sleep 会占槽
         // 令第二波分片白睡整段延迟，共享前置睡一次后释放。分片真实起点不变（≥ t0+285s）。
@@ -956,6 +979,11 @@ intellijPlatformTesting {
                     // 项目根绝对路径走 inputs.property（CC 官方通道，doFirst 相对路径按 daemon
                     // CWD 解析的坑与 testDatabase 同源）。
                     inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+                    // T-ReleasePerf11 券02 修正：分片执行器 JVM 的显式命令行标记——MpvLaneMeter
+                    // 进程扫描的匹配键（原「构建目录/test-sandbox/」字面量在 IPGP 执行器命令行
+                    // 里不存在，E1 两轮 laneOthers 恒 0 实证观测失效）。标记值=构建目录哈希，
+                    // 并行会话/其他工作树互不串扰；test 系统属性随执行器 JVM 命令行可见。
+                    systemProperty("mpvShardMarker", MpvLaneMeter.markerValue(project.projectDir.absolutePath))
                     doFirst {
                         val root = inputs.properties["mpvResultsRootAbs"] as String
                         val dir = File(root, "build/test-results/testShard$i")
@@ -963,13 +991,18 @@ intellijPlatformTesting {
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
                         // T-ReleasePerf7 N1（20261007）的错峰延迟已迁至共享前置任务 testShardStagger
                         // （T-ReleasePerf9，限流下叶子 sleep 占槽的结构性缺陷，等价性论证见该任务注释）。
-                        // T-ReleasePerf10：laneOthers = 本片起跑瞬间**其他**在跑分片执行器数
-                        // （本片自己的 JVM 尚未出生）。与档位日志并排即可判「档位是否真的变成并发」，
-                        // 见 MpvLaneMeter 注释（计数器版本已被实测否掉）。
-                        val laneOthers = MpvLaneMeter.activeShardExecutors(root, logger)
-                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()} laneOthers=$laneOthers")
+                        // T-ReleasePerf10：并发度观测。**时序事实（E1 round3 实证）**：doFirst 在
+                        // 执行器 JVM fork 之前跑（Gradle 主进程内），此刻带标记的测试 JVM 还没出生，
+                        // doFirst 扫描恒 0——观测点只能在 doLast。doLast 时刻本片测试 JVM 已结束、
+                        // 其他分片 JVM 若仍在跑则扫描 >0——laneAtEnd>0 即证明「本片执行期间有
+                        // 并发片」，全程串行时恒 0。落盘供聚合汇总。
                     }
-                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}")
+                    doLast {
+                        val root = inputs.properties["mpvResultsRootAbs"] as String
+                        val dir = File(root, "build/test-results/testShard$i")
+                        val laneAtEnd = MpvLaneMeter.activeShardExecutors(root, logger)
+                        logger.lifecycle("testShard$i END ${System.currentTimeMillis()} laneAtEnd=$laneAtEnd")
+                        File(dir, ".lane-others").writeText(laneAtEnd.toString())
                     }
                 }
             }
@@ -1250,6 +1283,19 @@ tasks.register("testShards") {
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
             if (idx < shardResultDirs.size - 1) shardExec += t
         }
+        // T-ReleasePerf11 券02：并发形态自报——聚合各片 doLast 落盘的 .lane-others（片结束时
+        // 仍在跑的其他分片执行器数，-DmpvShardMarker 进程扫描；doFirst 时刻执行器未出生恒 0，
+        // 观测点只能在 doLast——E1 round3 实证）。任一片 laneAtEnd>0 即证「有过并发」；
+        // 全 0=全程串行。走配置期捕获的 shardResultDirs（E1 轮实证：doLast 内调 Project.file
+        // 引用脚本对象，CC 存储失败——既有聚合块全部走该通道，本块必须同款）。
+        val laneSeq = shardResultDirs.dropLast(1).map { dir ->
+            File(dir, ".lane-others").takeIf { it.isFile }?.readText()?.trim()
+        }
+        val laneMax = laneSeq.mapNotNull { it?.toIntOrNull() }.maxOrNull()
+        logger.lifecycle(
+            "SHARD LANE: laneAtEnd=[" + laneSeq.joinToString(",") { it ?: "n/a" } +
+                "] peak=${laneMax ?: "n/a"}（片结束时其他在跑片数；>0 ⇒ 有并发，全 0 ⇒ 串行）",
+        )
         // T-TestPerf10 S2：失衡/缺权告警（只增 WARN，不改执行面）——把「预期 vs 实测」从人眼
         // 比对固化为机器判据，防 20260929 dev 树 3m07s 式漂移静默复发（批次8 新类零本地权重
         // 被中位数插值 → 所在片实际超重 +13.7%）。失衡判据 12%（并发噪声正常带 ±7% 上限加余量）；
