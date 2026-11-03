@@ -828,6 +828,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "T-M53-II 拆出的项目服务状态规则族：判定内核与其自证用例同文件。",
             ),
+            // ---- T-TestGapSpeed T2：BrowserUtil 泄漏收敛扫描守卫（2026-11-04） ----
+            GuardEntry(
+                "convention/BrowserUtilConvergenceGuardTest.kt",
+                listOf(
+                    DecisionFn("browserUtilCallSites", FnKind.SITES),
+                    DecisionFn("unconvergedBrowserUtilSites", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "headerOpensBody",
+                        FnKind.HELPER,
+                        "fun 头形态谓词（Boolean）：界定「可配平出块体」的函数头，是 browserUtilCallSites " +
+                            "经 functionBodies 的输入谓词；自证经该转发边到达",
+                        via = listOf("functionBodies"),
+                    ),
+                ),
+                "T-TestGapSpeed T2 BrowserUtil 泄漏收敛守卫：src/main 的 browse/open 调用点须处 " +
+                    "isUnitTestMode 收敛分支（围合函数体可见收敛标记）或登记豁免（豁免表反腐烂），" +
+                    "调用面期望计数同步防扫面失明空绿。判定内核与自证用例同文件：" +
+                    "`守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位`（六组合成样本双向判别）。",
+            ),
 
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
