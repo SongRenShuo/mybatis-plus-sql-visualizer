@@ -355,10 +355,20 @@ class PrepareSingleFlightGateTest {
         assertFalse(selector.contains("prepareGate.abort(ExecutionSubmission"))
         assertFalse(selector.contains("prepareGate.consumePendingExecute()"))
         assertFalse(selector.contains("prepareGate.beginSubmission()"))
-        assertEquals("六个 prepareInConsole 失败出口必须传同一个 owner（Java 承载含 abort 无参形态一处）", 6,
-            selector.split("abortPrepareGate(prepareOwner,").size - 1) // Java 承载：console 链五个失败出口（Results 侧走 beginSubmission+finishPrepare 复位）
+        // T-DialectGatePassDeadChain（2026-11-02）：早退结算把 owner 出口从 6 处扩到 13 处——
+        // 新增 7 处「isPrepareActive 早退」（Console 4：prepareAfterEditorResolved 起点/中段 +
+        // prepareInConsole 同步/异步；Results 3：session consumer 起点/闸门后 + 选源回调），
+        // 会话方言闸那 1 处仍由本式扣除。每处都必须把同一个 owner 交给终结器，否则门悬挂 60s。
+        assertEquals("准备链的失败与早退出口必须全部传同一个 owner", 12,
+            selector.split("abortPrepareGate(prepareOwner,").size - 1 - 1) // 另一个在 session 方言闸
         // Java 承载形态：owner 经 beginSubmission 持有（Results 侧复用链）+ console 链消费块
         assertTrue(selector.contains("prepareGate.beginSubmission(prepareOwner)"))
+        // k2j 互操作：master 的同款实参链在 Java 侧随换行折行（两调用点形态各异）——
+        // 改用跨空白匹配「onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest」事实本体。
+        assertTrue(
+            "准备链尾部实参须按 owner→方言闸请求顺序整链透传",
+            Regex("""onErrorRich, wholeScriptExec,\s+prepareOwner,\s+dialectGateRequest""").containsMatchIn(selector),
+        )
         val gate = sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.java")
         for (name in listOf("abort", "finishPrepare", "beginSubmission", "consumePendingExecute")) {
             val body = gate.substringAfter("$name(@Nullable").substringBefore("\n    }")
@@ -379,6 +389,20 @@ class PrepareSingleFlightGateTest {
         assertEquals("两个资源缺失分支必须接入终结器", 2,
             console.split("PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError").size - 1)
         assertTrue(console.contains("PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission"))
+        // T-DialectGatePassDeadChain：异步等待早退由「静默 return」改为「结算门 + return」——
+        // 静默 return 会把单飞门留在 in-flight，后续 60s 内执行/换源全部只排队。
+        // k2j 互操作：master 的 Kotlin `return@invokeLater` 在 Java 侧为裸 `return;`——
+        // 反向断言改钉 Kotlin 标签形态缺失 + 正向断言钉结算注释与 abort 调用在位。
+        val consoleLf = console.replace("\r\n", "\n")
+        assertFalse(
+            "异步等待早退不得再静默 return（Kotlin 标签形态已退役）",
+            consoleLf.contains("return@invokeLater"),
+        )
+        assertTrue(
+            "异步等待早退必须结算单飞门",
+            consoleLf.contains("// T-DialectGatePassDeadChain：异步等待期间被替代/完成同样要结算门。") &&
+                consoleLf.contains("""if (!isPrepareActive.get()) {"""),
+        )
         val signatures = sourceOf("src/test/java/PlatformSignatureChecker.java")
         assertTrue(signatures.contains("missing += checkRunnerFinalStepApi(loader)"))
         assertTrue(signatures.contains("getMethod(\"doFinalStep\", Runnable.class)"))
@@ -464,9 +488,10 @@ class PrepareSingleFlightGateTest {
             2,
             panel.split("embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE)").size - 1,
         )
-        // 预览准备链唯一入口（prepareDefaultConsole onConsole）
+        // 预览准备链入口（prepareDefaultConsole onConsole）+ T-DialectGatePassDeadChain 的换源链
+        //（switchDataSourceInPlace onConsole——同样只准备不执行，故同属 PREVIEW 嵌入）
         assertEquals(
-            1,
+            2,
             panel.split("embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW)").size - 1,
         )
         // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法；承载类静态形态多 p 首参）
