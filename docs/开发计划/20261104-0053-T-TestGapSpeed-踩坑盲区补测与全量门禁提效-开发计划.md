@@ -98,7 +98,7 @@
   ②前提2证伪：闸口径=30 分钟窗内逐类 suite time 求和，本轮 961.9s>900s 实测被拒（报错原文留痕：`pollution gate: latest-round execSum=961.9s > threshold=900.0s over 804 files`）；结果目录仅此一轮、无干净轮可聚合，按脚本自有 `-Force` 显式放行并在 TSV 头部留注记（两路并发轮、相对量级回填语义），未改脚本默认阈值、未静默绕闸。公共 607 类中位比值 0.71（轮次刻度整体偏移，贪心装箱只吃相对量级，另 PluginSettingsPanelUiTest 热轮 1.895s vs 冷轮 ~19.5s 的冷启动偏差属已知局限）。
   ③WARN（3a5fb604）：durationWeights 段未覆盖类占比 >15% 时 logger.warn 提示跑 weight-refresh.ps1，CC 存储/复用均正常。反向验证：摘除 TSV `--no-configuration-cache` help → WARN 触发（803/803=100%）；还原 → 静默；CC 复用态无异常。注：TSV 读取非 CC 输入（weightProfile 段既有语义），摘文件后须 `--no-configuration-cache` 才能触发重配置。
   ④testFast 被 T1 券在途文件 ReplayExportDialogTest.kt 编译错阻塞（protected okAction/doDispose 等约 10 处，全落该文件），与 T4 改动无关；buildSrc 编译与配置期已由 help 两向验证覆盖，testFast 留收口复跑。
-- T5：
-- T6：
+- T5：**完成（20261104，提交 `1d623628`）**。前提3 证实后按计划摘道：两类实测 exec 合计 7.9s（17 例 + 14 例，20261103 轮 XML），摘道代价 ≈ 8s + 一次尾 JVM bootstrap，换整轮重试面收敛。落地：buildSrc `serialTailClasses` 摘出分片计划 + `testShardTail` 尾任务（mustRunAfter 全部分片保证分片全停才起、单跑不拖分片）；聚合报告计进 SHARD TOTAL、不参与失衡/缺权告警（shardExec 只收分片本体，片数经局部 val 捕获防 CC 炸）；根脚本 e2eFakeIde mustRunAfter 追加（任务名不匹配既有 `[0-9]+` 正则）；并行运行器路径走 test-shard-serial-classes.txt 同清单。验证：`help` 绿（buildSrc 编译+CC 存储正常）+ `testShardTail` 实跑绿（XML 17/0/0/0 + 14/0/0/0，laneAtEnd=0）。待收口复跑确认：testShards 全量轮分片计数应不含两类（预计 8503 + 尾道 31）。
+- T6：**完成（20261104，提交 `507bc705`）**。testShardsProgress.ps1 新增 `-ShardCount`（缺省 5 与 mpv-testing 默认对齐，注释写明调片数两边一致）；PS 解析器校验 PARSE OK（PS5.1 中文脚本雷区自查）。CONTRIBUTING 收口轮口径两条：`-PtestShardMaxLane=5` 自适应限流（5m02s 在案）替代单路 33min、禁降片红线不变；全量后台跑必须带进度显示。
 - T7：
 - 收口：
