@@ -328,6 +328,11 @@ fun registerMarketTarget(name: String, ideName: String, tag: String) {
     tasks.register<JavaExec>(name) {
         group = "verification"
         description = "Marketplace 同口径兼容校验（单目标 $tag，在线 + 无豁免）；verifyMarketplace 三目标并行化的子任务"
+        // T-ReleasePerf11 券01 补丁（20261103 发版实测）：聚合任务的 dependsOn(buildPlugin, 三子任务)
+        // 只保证「都执行」不保证先后，版本号变更后 build/distributions 里没有新版本 zip 时，三子任务
+        // 会在 buildPlugin 出包前撞上 doFirst 的「发行包不存在」硬失败（旧版本 zip 在场时被掩盖）。
+        // mustRunAfter 钉死 buildPlugin → 三子任务；三子任务之间仍并行。
+        mustRunAfter("buildPlugin")
         mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
         jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
         jvmArgs(verifierProxyJvmArgs)
