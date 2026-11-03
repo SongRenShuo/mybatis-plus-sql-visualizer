@@ -1,6 +1,6 @@
 ---
 name: ide-demo-gif
-description: "Main-agent-only IntelliJ/JetBrains IDE 功能演示 GIF 录制：脚本重放+帧稳定采样+无损中间产物转制。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环 GIF，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化，主智能体亲自执行，不委派子代理。不适用于网页或移动端录屏。"
+description: "IntelliJ/JetBrains IDE 功能演示 GIF 录制：脚本重放+帧稳定采样+无损中间产物转制。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环 GIF，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
 when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」「给功能页配演示图」且对象是 IDE 内的操作画面时。网页录屏用 browser-use，不要用本 skill。"
 ---
 
