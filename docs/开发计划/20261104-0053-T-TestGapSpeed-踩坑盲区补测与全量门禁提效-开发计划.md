@@ -91,7 +91,13 @@
 （各券完成后在此回填：提交号、定向读数、反例读数、与计划的偏差。）
 
 - T1：**完成（20261104，提交 `b2a85b3e`）**。原派子代理并发限额掉线，主控按「接手掉线代理」纪律接管（工作树仅剩一个在途测试文件、无探针残留）。11 例 headless 用例（DialogWrapper 结构/禁用态诚实降级双保险/导出映射/空输入与缺字段兜底），定向 `test --tests ReplayExportDialogTest` 读数 11/0/0/0。偏差：计划写「不碰 src/main」，实际按仓内惯例给弹窗补 public `doDispose()`（SqlPreviewDialog/RollbackSqlDialog 同款——平台 DialogWrapper.dispose 为 protected，兄弟弹窗全靠该惯例口给测试 tearDown；T4 观察到的「protected okAction/doDispose 约 10 处编译错」即源于测试误摸 protected，已改为经 public wrapCheck/doDispose 访问）。前提1 证实：headless 构造无障碍。
-- T2：（在途）
+- T2：**完成（20261104，提交 `1fdd35e2`）**。
+  ①规则口径：新增 `convention/BrowserUtilConvergenceGuardTest`——src/main 每个 `BrowserUtil.browse(`/`BrowserUtil.open(` 调用点（掩码后计数，注释/字符串片段不计）必须满足其一：最小围合函数体可见收敛标记（`isUnitTestMode` 或 fail-safe 助手 `isTestEnvironment`），或在守卫内 `exemptFiles` 豁免清单逐条登记理由。判定内核按「调用点粒度」，补上既有文件级守卫（BannedApiSourceScanTest 只认 `browse(`、含守卫字样即放行全文件）的两处缺口：PluginSettingsPanel.kt:616 与 ShareDialog.kt:195/:219 的 `BrowserUtil.open(` 此前完全在覆盖外。
+  ②前提5证实：调用面=browse/open 两名（grep src/main 全集 5 个调用点），无第三名；扫描器与豁免清单同类同文件（豁免表字面量留在被扫类源码内，未提常量——按陷阱项执行）。
+  ③豁免清单现状（2 文件逐条）：PluginSettingsPanel（捕获目录打开缝 `captureDirectoryOpener` 默认 lambda——目录 URI 属文件管理器行为且为 internal 测试缝，UiTest 注入替代不触达平台调用；属性 lambda 无 fun 围合无法就地收敛）；ShareDialog（导出后打开刚保存的本地 HTML 报告——html 文件 URI 确会拉默认浏览器，但仅在用户经 FileSaverDialog 手动保存后触发，ShareDialogTest 0 触达；注释写明未来测试触达导出链前须改走 SafeBrowser，不得沿用豁免）。豁免反腐烂：登记文件无调用点在场即红。
+  ④期望计数=5 与生产调用点同步（SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2），防扫面失明空绿；SafeBrowser 收口本体的 fail-safe 形态仍由既有语义锚点用例钉死。
+  ⑤反向验证两次读数：探针（SqlLogPanel.kt 尾部临时未收敛调用点）→ 红，断言原文「期望计数漂移……实际 […、SqlLogPanel.kt:2489 BrowserUtil.browse(、…]」（计数 5→6 双证）；探针还原（git restore，src/main 零残留）→ 全桶 testFast 绿（363 类 4331 例 0 失败 0 错误，含元守卫 8 例与 T2 守卫 3 例）。
+  ⑥联动改动：元守卫 GUARD_CLASSES 登记本类（SITES/VIOLATIONS 逐条 + Boolean 谓词 headerOpensBody 按 HELPER 登记 via）；BannedApiSourceScanTest 的 src/test 禁直调扫描补本守卫文件自豁免（扫描模式与自证语料含被扫片段，同 BannedApiSourceScanTest 自豁免惯例）。偏差：无（计划三项全落地；自证语料六组合成样本双向判别属超出计划的加严）。
 - T3：**完成（20261104，提交 `bfc906b7`）**。清单新增「headless 单测不可验判据」一节：线程与模态 3 项（模态冻结 invokeLater / ModalityState.any write-unsafe / 262 读锁硬抛）、UI 形态 4 项（ToolWindow 悬停渲染 / 接管组 displayTextInToolbar / JOIN 像素 / 设置页导航）、控制台与键位 2 项（`use` 语句超时提示与键位冲突必现，均注明在册缺陷/待拍板现状），每项带触发路径、判据、出处复盘。
 - T4：**完成（20261104，提交 86f16ace + 3a5fb604）**。
   ①画像刷新：weight-refresh.ps1 从主仓 20261103 轮 XML（test+testShard1..5，804 文件）重生成 TSV，612→802 类（新增 195、移除 5 个已删类），头部注记 execSum 846.0→961.9s；新增头部含 O147HistoryUpgradeTest 87.07s（此前被中位数插值的最大失准源）。
