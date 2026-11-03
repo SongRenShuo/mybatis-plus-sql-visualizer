@@ -1424,7 +1424,13 @@ class BannedApiSourceScanTest {
     // 平台探测继续落成 Java try/catch(Throwable)（803 个 .java 文件守卫实测 940 站点）。
     // 新增站点均为降级/探测/兜底语义；落地集 [fatalPassthroughGuardedFiles] 各文件判定计数
     // 本轮守卫实测无漂移，不新增登记。
-    private val fatalCatchSiteTotalBaseline = 940
+    // **940 → 957（T-SyncK2JMaster176 A 波，2026-11-03，本轮重登记净增 +17）**：176 轮生产
+    // 翻译（数据源下拉接管族 ChooseDataSourceTakeover 新件 14 处 + 预览/执行修复族增量 3 处）
+    // 把 master 侧 `runCatching` 降级形态继续落成 Java try/catch(Throwable)（804 个 .java 文件
+    // 守卫实测 957 站点）。新增站点均为降级/探测/兜底语义（接管组呈现兜底/resolveFile/
+    // getChildren 名与图标/actionPerformed 弹层/host 装卸等），无 fatal 透传新增；
+    // 落地集 [fatalPassthroughGuardedFiles] 各文件判定计数本轮守卫实测无漂移，不新增登记。
+    private val fatalCatchSiteTotalBaseline = 957
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

@@ -831,6 +831,9 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // （SqlClickPreview 交互浮层整类退役，降级站点随之消失；Java 注释语义掩码）。
         // T-SyncK2JMaster175 A 波重登 489→514 / 全量 912→940（2026-10-31 守卫实测；A1/A2 方言与推断族/
         // 日志与采集族增量 runCatching 落地，SqlPreviewPanelEditorLifecycleKt 豁免 16→19 同批联动）。
+        // T-SyncK2JMaster176 A 波重登 514→529 / 全量 940→957（2026-11-03 守卫实测；数据源下拉接管族
+        // ChooseDataSourceTakeover 新件 14 处 + 预览/执行修复族增量，其中 2 处落进落地判定文件）。
+        // 全量副本同步重登（见下方 assertEquals 实测值）。
         // 全量对账（Kotlin 守卫读数）：全量 777 = 豁免登记 + 落地文件站点与判定 + 其余未判定 + 其余已判定。
         val exemptSites = throwableCatchExemptions.values.sumOf { it.sites }
         val judgedInLanded = landedFatalJudgmentCounts.values.sum()
@@ -843,12 +846,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            514,
+            529,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            940,
+            957,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
