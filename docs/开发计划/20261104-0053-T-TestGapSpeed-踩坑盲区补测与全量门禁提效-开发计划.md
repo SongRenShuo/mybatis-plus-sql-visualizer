@@ -93,7 +93,11 @@
 - T1：
 - T2：
 - T3：
-- T4：
+- T4：**完成（20261104，提交 86f16ace + 3a5fb604）**。
+  ①画像刷新：weight-refresh.ps1 从主仓 20261103 轮 XML（test+testShard1..5，804 文件）重生成 TSV，612→802 类（新增 195、移除 5 个已删类），头部注记 execSum 846.0→961.9s；新增头部含 O147HistoryUpgradeTest 87.07s（此前被中位数插值的最大失准源）。
+  ②前提2证伪：闸口径=30 分钟窗内逐类 suite time 求和，本轮 961.9s>900s 实测被拒（报错原文留痕：`pollution gate: latest-round execSum=961.9s > threshold=900.0s over 804 files`）；结果目录仅此一轮、无干净轮可聚合，按脚本自有 `-Force` 显式放行并在 TSV 头部留注记（两路并发轮、相对量级回填语义），未改脚本默认阈值、未静默绕闸。公共 607 类中位比值 0.71（轮次刻度整体偏移，贪心装箱只吃相对量级，另 PluginSettingsPanelUiTest 热轮 1.895s vs 冷轮 ~19.5s 的冷启动偏差属已知局限）。
+  ③WARN（3a5fb604）：durationWeights 段未覆盖类占比 >15% 时 logger.warn 提示跑 weight-refresh.ps1，CC 存储/复用均正常。反向验证：摘除 TSV `--no-configuration-cache` help → WARN 触发（803/803=100%）；还原 → 静默；CC 复用态无异常。注：TSV 读取非 CC 输入（weightProfile 段既有语义），摘文件后须 `--no-configuration-cache` 才能触发重配置。
+  ④testFast 被 T1 券在途文件 ReplayExportDialogTest.kt 编译错阻塞（protected okAction/doDispose 等约 10 处，全落该文件），与 T4 改动无关；buildSrc 编译与配置期已由 help 两向验证覆盖，testFast 留收口复跑。
 - T5：
 - T6：
 - T7：
