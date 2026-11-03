@@ -132,8 +132,13 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
-        if (!isPrepareActive.get()) return;
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
+        // 就是 60s 内执行/换源全部只排队。abort 按 owner 幂等，PASS_THROUGH 链（owner=null）恒 no-op。
+        if (!isPrepareActive.get()) {
+            DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
+            return;
+        }
         // T-FirstExecResultInvisible F1：排队执行意图在本链完成准备时消费（下方缓存落地后）。
         // 意图消费后、执行落地前撞上失败 → onFailure 兜底回落意图 onError（面板已 showLoading）。
         QueuedExecuteIntent queuedIntent = null;
@@ -230,7 +235,11 @@ public final class DataSourceSelectorConsoleKt {
             // executeNow = 本链显式执行（selectAndExecute 全链）或排队意图就位；后者按
             // executePrepared 口径执行（见下方消费块）。仅门持有链可消费——PASS_THROUGH
             // 预览链消费会把别人的执行意图打在自己的 SQL 上。
-            if (!isPrepareActive.get()) return;
+            if (!isPrepareActive.get()) {
+                // T-DialectGatePassDeadChain：准备态已缓存但本链已被替代——同样要结算门，否则悬挂 60s。
+                DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
+                return;
+            }
             if (prepareOwner != null) {
                 queuedIntent = prepareGate.consumePendingExecute(prepareOwner);
                 if (queuedIntent != null) {
@@ -1111,8 +1120,13 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
-        if (!isPrepareActive.get()) return;
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
+        // 就是 60s 内执行/换源全部只排队。abort 按 owner 幂等，PASS_THROUGH 链（owner=null）恒 no-op。
+        if (!isPrepareActive.get()) {
+            DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
+            return;
+        }
         try {
             Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
             Class<?> sessionClass = Class.forName(SESSION_CLASS);
@@ -1219,7 +1233,11 @@ public final class DataSourceSelectorConsoleKt {
                     // 模态，any() 恒 write-unsafe（见 DocWriteContext KDoc）。代价：模态弹窗存续期
                     // 准备链延后到弹窗关闭，正是平台对「改模型」要求的语义。
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        if (!isPrepareActive.get()) return;
+                        if (!isPrepareActive.get()) {
+                            // T-DialectGatePassDeadChain：异步等待期间被替代/完成同样要结算门。
+                            DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
+                            return;
+                        }
                         LOG.info("[M36] editor=" + resolved + " (async wait)");
                         if (resolved != null) {
                             if (onEditor != null) onEditor.accept(resolved);
