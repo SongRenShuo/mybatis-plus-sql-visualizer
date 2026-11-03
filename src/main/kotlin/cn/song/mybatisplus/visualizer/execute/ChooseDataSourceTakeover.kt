@@ -70,6 +70,27 @@ internal class ChooseDataSourceTakeoverGroup(
 
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ChooseDataSourceTakeoverGroup::class.java)
 
+    /**
+     * T-NativeSwitchTakeover：工具栏「图标 + 数据源名」的开关。
+     *
+     * 平台在 `AnAction.createTemplatePresentation()` 里按本方法写 `SHOW_TEXT_IN_TOOLBAR`
+     * 客户端属性，`ActionToolbarImpl.createToolbarButton()` 再据此选
+     * `ActionButtonWithText` 还是 `ActionButton`（243 平台 `app-client.jar` 字节码实证）。
+     * 原生 `ChooseDataSourceAction.displayTextInToolbar()` 返回 **true**（javap 实证），
+     * 接管组默认继承 `AnAction` 的 false → 工具栏退化成纯图标、文案只进 tooltip
+     * （真机 2026-11-03 现象）。
+     *
+     * **不能用 `isPopup=false` 换文案**：非 popup 组在工具栏里会把子项摊平成一行按钮，
+     * 实测把控制台 header 整条工具栏挤没（`31d6db38` 已回退）。文案的正确开关只有本方法。
+     *
+     * 覆写里不读 [original]：本方法在 `AnAction` 构造期（`createTemplatePresentation`）就会被调用，
+     * 此时构造参数属性可能尚未赋值——恒 true 与原生返回值一致，且无初始化顺序风险。
+     */
+    override fun displayTextInToolbar(): Boolean = true
+
+    /** 与 [displayTextInToolbar] 同源：原生未覆写（默认 false），此处保持默认。 */
+    override fun useSmallerFontForTextInToolbar(): Boolean = false
+
     /** 一次性取证位（update 每次刷新都会走，只留一条避免刷屏）。 */
     private val updateProbed = java.util.concurrent.atomic.AtomicBoolean()
 

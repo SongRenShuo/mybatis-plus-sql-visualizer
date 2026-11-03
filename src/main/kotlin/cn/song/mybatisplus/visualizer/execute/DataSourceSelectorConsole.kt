@@ -198,6 +198,19 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         preparedUi = ui
         val resultComponent: javax.swing.JComponent? =
             ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+        // T-PreviewResultIsolation（2026-11-03 真机）：预览路径先清掉**上一轮的结果页签与历史回显**。
+        //
+        // 现场：DBN 对同一个 exec 文件复用同一个 `ContentManagerImpl$MyNonOpaquePanel`——两次预览
+        // 的 `resultComponent` 同为 id=839493854、且首次取到时就带 `889x248` 的已布局尺寸；新建
+        // JdbcConsole 时旧的 `Result 1` 页签原样留着。用户侧两条症状：
+        //   ①「还没执行 SQL 就已经出现结果栏」（折叠判据 `resultAreaHasContent` 被旧页签喂成 true）；
+        //   ②「预览 A 后再预览 B，结果栏还是 A 的」。
+        // 复用路径（reuseSharedConsole）本来就有这两步清场，**新建控制台路径一直缺**。
+        // 执行路径（executeNow）不清：结果马上就到，清空只会让 DBN 回显断链（同 clearConsoleHistory KDoc）。
+        if (!executeNow) {
+            clearResultContents(ui, LOG)
+            clearConsoleHistory(project, console, LOG)
+        }
 
         // 4.3 SQL 编辑器组件（EditorImpl.component）
         // M36.5.2：未执行路径下 console 编辑器从未布局，preferredSize=0 且 hidden →
@@ -446,9 +459,10 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                 if (collapse) {
                     // write-safe: UI-only（纯 Swing/只读，无文档写）
                     ApplicationManager.getApplication().invokeLater({
-                        sp.setDividerLocation(1.0)
-                        sp.revalidate()
-                        sp.repaint()
+                        // T-PreviewBottomCollapse：折叠连最小高度一起管（只推 divider 会被 160px 兜底钳住）。
+                        // 高度未就绪时**不要**设——`setDividerLocation(1.0)` 在 h=0 上算出的 0 会让
+                        // 之后的布局把新增高度全给底部（真机「结果栏越拉越大」）。等面板侧首触布局再折。
+                        if (sp.height > 0) applyConsoleBottomCollapse(sp, true, "prepare-preview")
                     }, com.intellij.openapi.application.ModalityState.any())
                 }
             }

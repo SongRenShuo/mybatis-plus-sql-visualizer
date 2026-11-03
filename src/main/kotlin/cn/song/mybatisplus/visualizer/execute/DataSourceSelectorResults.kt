@@ -663,7 +663,7 @@ internal fun DataSourceSelector.reuseSharedConsole(
     // 不残留上个执行/预览 SQL 的回显文本（用户实测"预览 sqlA 时下方显示之前执行过的 sqlB"）。
     if (!executeAfterPrepare) {
         clearResultContents(sharedUi, LOG)
-        clearConsoleHistory(console, LOG)
+        clearConsoleHistory(project, console, LOG)
     }
     // M36.5.7：完整 UI 按**实时结果区组件**刷新——M36.5.41-A4 起不再重建 SplitPane：
     // 持久整控台原位换底（身份稳定，sameAsPrev=true），仅整控台容器缺失时回退重建。
@@ -714,9 +714,9 @@ internal fun DataSourceSelector.reuseSharedConsole(
             if (collapse) {
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
-                    sp.setDividerLocation(1.0)
-                    sp.revalidate()
-                    sp.repaint()
+                    // T-PreviewBottomCollapse：折叠连最小高度一起管；高度未就绪不设（h=0 上算出的
+                    // divider=0 会让后续布局把新增高度全给底部）
+                    if (sp.height > 0) applyConsoleBottomCollapse(sp, true, "reuse-preview")
                 }, com.intellij.openapi.application.ModalityState.any())
             }
         }
@@ -1743,9 +1743,20 @@ internal fun DataSourceSelector.buildConsoleSplitPane(
             override fun componentResized(e: java.awt.event.ComponentEvent) {
                 if (height < 200) return
                 removeComponentListener(this)
+                // T-PreviewBottomCollapse：预览折叠态已由面板侧定好落点，这里不得再无条件弹回 0.6
+                if (getClientProperty(BOTTOM_COLLAPSED_MARK) == true) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java).info(
+                        "[M36][Collapse] buildSplit-firstResize skipped (collapsed) h=$height divider=$dividerLocation",
+                    )
+                    return
+                }
                 setDividerLocation(0.6)
                 revalidate()
                 repaint()
+                // 2026-11-03 取证：本监听是「无条件 0.6」，若它排在面板折叠之后执行就会把折叠弹开
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java).info(
+                    "[M36][Collapse] buildSplit-firstResize → 0.6 (unconditional) h=$height divider=$dividerLocation",
+                )
             }
         })
     }
@@ -1940,12 +1951,21 @@ internal fun DataSourceSelector.reclaimResultBottom(
     state[1] = now
     (candidate.parent)?.takeIf { it !== sp }?.remove(candidate)
     sp.bottomComponent = candidate
-    candidate.minimumSize = java.awt.Dimension(candidate.minimumSize?.width ?: 400, 160)
+    // T-PreviewBottomCollapse：预览折叠态下回收**不得**把 160px 兜底写回去——否则 DBN 每次把
+    // 结果组件抢走、守卫抢回的这 2.5 秒后，divider 立刻被钳回 ~0.68，折叠白做（真机 2026-11-03
+    // 日志实证：`collapse=true divider=304→508` 之后紧跟 `result reclaim guard: bottom re-mounted`）。
+    if (sp.getClientProperty(BOTTOM_COLLAPSED_MARK) == true) {
+        candidate.minimumSize = java.awt.Dimension(0, 0)
+        sp.setDividerLocation(1.0)
+    } else {
+        candidate.minimumSize = java.awt.Dimension(candidate.minimumSize?.width ?: 400, 160)
+    }
     sp.revalidate()
     sp.repaint()
     log.info(
         "[M36] result reclaim guard: bottom re-mounted " +
-            "(id=${System.identityHashCode(candidate)}, n=${state[0]})",
+            "(id=${System.identityHashCode(candidate)}, n=${state[0]}, " +
+            "collapsed=${sp.getClientProperty(BOTTOM_COLLAPSED_MARK) == true})",
     )
     return true
 }
@@ -2006,14 +2026,80 @@ internal fun DataSourceSelector.installExecConflictProbe(project: Project) {
  * internal 供测试。
  */
 
+/**
+ * T-PreviewBottomCollapse：整控台 SplitPane 的「结果区折叠态」标记（客户端属性）。
+ * `true` = 底部已压到 0 高（预览态），[realignDividerOnce] 的非 force 校正必须让路。
+ */
+internal const val BOTTOM_COLLAPSED_MARK = "mpsql.bottomCollapsed"
+
+/** T-PreviewBottomCollapse：折叠态常驻 resize 监听（见 [applyConsoleBottomCollapse]）。 */
+private const val BOTTOM_COLLAPSE_LISTENER = "mpsql.bottomCollapseListener"
+
+/**
+ * T-PreviewBottomCollapse：折叠/展开结果区——**连最小高度与后续放大一起管**。
+ *
+ * 两个坑叠在一起（真机 2026-11-03 截图实证：bottom≈165px、divider≈0.67）：
+ *  1. `setDividerLocation(1.0)` 被子组件 `minimumSize` 钳制——结果区为「执行后不被压回
+ *     preferred 84px」设了 160px 兜底（M36.5.64），折叠必须同时把兜底让出来；
+ *  2. 折叠往往发生在**对话框还没布局完**的那一拍（split 只有几十像素高），此后 split 长高时
+ *     divider 停在旧的**绝对**位置，新增高度全分给结果区——于是折叠又"长"回来了。
+ *     故折叠态挂常驻 resize 监听，每次放大重新贴底；展开时摘掉。
+ */
+internal fun DataSourceSelector.applyConsoleBottomCollapse(
+    sp: javax.swing.JSplitPane,
+    collapse: Boolean,
+    tag: String = "",
+) {
+    val bottom = sp.bottomComponent
+    val minBefore = bottom?.minimumSize
+    val dividerBefore = sp.dividerLocation
+    bottom?.minimumSize = if (collapse) {
+        java.awt.Dimension(0, 0)
+    } else {
+        java.awt.Dimension(bottom.minimumSize?.width ?: 400, 160)
+    }
+    sp.putClientProperty(BOTTOM_COLLAPSED_MARK, collapse)
+    sp.resizeWeight = if (collapse) 1.0 else 0.6
+    val existing = sp.getClientProperty(BOTTOM_COLLAPSE_LISTENER) as? java.awt.event.ComponentAdapter
+    if (collapse) {
+        if (existing == null) {
+            val listener = object : java.awt.event.ComponentAdapter() {
+                override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    if (sp.getClientProperty(BOTTOM_COLLAPSED_MARK) != true) return
+                    sp.setDividerLocation(1.0)
+                }
+            }
+            sp.addComponentListener(listener)
+            sp.putClientProperty(BOTTOM_COLLAPSE_LISTENER, listener)
+        }
+    } else if (existing != null) {
+        sp.removeComponentListener(existing)
+        sp.putClientProperty(BOTTOM_COLLAPSE_LISTENER, null)
+    }
+    sp.setDividerLocation(if (collapse) 1.0 else 0.6)
+    sp.revalidate()
+    sp.repaint()
+    com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java).info(
+        "[M36][Collapse] $tag collapse=$collapse h=${sp.height} " +
+            "divider=$dividerBefore→${sp.dividerLocation} bottomMin=$minBefore→${bottom?.minimumSize}",
+    )
+}
+
 internal fun DataSourceSelector.realignDividerOnce(sp: javax.swing.JSplitPane, force: Boolean) {
     if (sp.height < 100) return   // 布局初无尺寸，等下次
+    // T-PreviewBottomCollapse：预览态（底部已折叠）不做自动展开校正——否则任何一次 resize
+    // 都会把 `topH > total*0.68` 判成「结果区塌缩」再拉回 0.6，折叠态被自己弹开。
+    if (!force && sp.getClientProperty(BOTTOM_COLLAPSED_MARK) == true) return
+    // force = 执行换入：折叠态作废（底部即将显示结果）
+    if (force) sp.putClientProperty(BOTTOM_COLLAPSED_MARK, false)
     val topH = sp.topComponent?.height ?: 0
     val total = sp.height
     val log = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val tooAuto = force || topH < total * 0.35 || topH > total * 0.68
     if (tooAuto) {
         log.debug("[M36] divider realign(force=$force): topH=$topH total=$total → 0.6")
+        // 展开态：resizeWeight 一并复位（折叠期被置 1.0，否则后续放大不会分给结果区）
+        sp.resizeWeight = 0.6
         sp.setDividerLocation(0.6)
         sp.revalidate()
         sp.repaint()

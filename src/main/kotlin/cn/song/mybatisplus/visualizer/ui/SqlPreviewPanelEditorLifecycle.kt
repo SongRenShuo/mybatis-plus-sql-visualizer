@@ -625,10 +625,9 @@ internal fun SqlPreviewPanel.showPreviewPreparingPlaceholder() {
             weighty = 1.0
         },
     )
-    editorHolder.removeAll()
-    editorHolder.add(box)
-    editorHolder.revalidate()
-    editorHolder.repaint()
+    // T-PreviewConsoleOwnership：同样走统一装配口——控制台已在位时它才是显示主体，
+    // 「准备中」占位只服务于编辑器装配前的空窗，不得把控制台顶掉。
+    mountEditorHolderContent(box)
 }
 
 /** T-PrewarmBudget：等待期占位（断言用）——显示路径的观测口（容器观测口复用既有的 [editorHolderForTest]）。 */
@@ -763,21 +762,19 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
         EditorWhitespaceSettings.applyTo(this)
         setPlaceholder(previewEmptyHint) // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
     }
-    editorHolder.removeAll()
+    // T-PreviewConsoleOwnership：走统一装配口——原生控制台在位时保留 consoleHost，
+    // 本编辑器只作状态载体（真机「执行后下半区空白/无原生工具栏」的根因即此处强占显示槽）。
     // T-M27.1：编辑器组件链补 DataProvider——2025.3 平台编辑器内部改为 UiCompatibleDataProvider
     // （仅新 UI 兼容查询路径生效），传统 DataManager.getDataContext 沿父链只认 DataProvider 接口，
     // 面板编辑器获得焦点时 Ctrl+Space 的 CodeCompletionAction 拿不到 CommonDataKeys.EDITOR
     // （断言 editor != null 静默失败）→ 补全无反应（用户实测）。外层包装 DataProvider 提供
-    // EDITOR：真实 IDE 的 DataManagerImpl 沿组件父链查找即命中，快捷键路径恢复
-    editorHolder.add(
+    // EDITOR：真实 IDE 的 DataManagerImpl 沿组件父链查找即命中，快捷键路径恢复。
+    mountEditorHolderContent(
         object : JBPanel<JBPanel<*>>(BorderLayout()), DataProvider {
             override fun getData(dataId: String): Any? =
                 if (CommonDataKeys.EDITOR.`is`(dataId)) created else null
         }.apply { add(created.component, BorderLayout.CENTER) },
-        BorderLayout.CENTER,
     )
-    editorHolder.revalidate()
-    editorHolder.repaint()
     // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
     //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
     EditorCopyShortcuts.install(created, UiTextClipboard::copy)

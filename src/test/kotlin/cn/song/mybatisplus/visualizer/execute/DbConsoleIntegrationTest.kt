@@ -327,6 +327,22 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         assertTrue("第二次执行 onResultsReady 应被回调", secondReady)
         assertTrue("集成链路不应有错误回调 (errors=$execErrors)", execErrors.isEmpty())
 
+        // ⑤b T-ResultOwnership（2026-11-03 真机「IDEA 控制台有结果、预览窗口没变化」）：
+        //     执行后持久整控台 SplitPane 的下半区**必须**挂着结果组件。DBN 会把同一结果组件
+        //     重挂回 ServiceViewComponentWrapper，而 `JSplitPane.remove()` 会把 rightComponent
+        //     置 null —— 那时预览面板下半区就是空白，只有 IDEA 控制台能看到结果。
+        val persistentSplit = DataSourceSelector.preparedFullComponent as? javax.swing.JSplitPane
+        assertNotNull("执行后应有持久整控台 SplitPane", persistentSplit)
+        assertNotNull(
+            "执行后结果组件必须挂在持久 split 的下半区（被平台抽走 = 预览面板空白）",
+            persistentSplit!!.bottomComponent,
+        )
+        assertSame(
+            "持久 split 的下半区应是控制台自己的结果组件（不是别的容器顶包）",
+            DataSourceSelector.preparedResultComponent,
+            persistentSplit.bottomComponent,
+        )
+
         // ⑥ 清理：释放控制台引用（不影响 IDE 管理的 session 生命周期）
         DataSourceSelector.clearPrepared()
         assertEquals("clearPrepared 后 isPrepared() 应为 false", false, DataSourceSelector.isPrepared())
