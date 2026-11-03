@@ -1896,6 +1896,13 @@ public final class SqlPreviewService {
         if (settings != null && settings.getState() != null
                 && !settings.getState().getPaginationCountEnabled()) return null;
         if (chain.getCountConsumed() || chain.getExistsConsumed()) return null;
+        // T-Exec262ReadLock B（2026-11-02 用户实测 `selectList` 调用点凭空多一条 COUNT）：
+        // COUNT 是**分页消费**（Page/IPage 实参）的伴生物，不是 LIMIT 子句的伴生物。
+        // `queryWrapper.last("limit " + n)` 经 QueryWrapperParser 解析进 SelectStatement.limit
+        // （值静态不可得 → `LIMIT ?`），而 pageLimit 仍为 null——旧判据只查 select.limit != null，
+        // 于是把 last 的 LIMIT 当成分页 LIMIT 附赠 COUNT（`pageSearchCount` 无 Page 实参时恒 true，
+        // 兜不住）。此处以「确有分页实参解析产物」为唯一闸：last 的 LIMIT 照常渲染，只是不带 COUNT。
+        if (chain.getPageLimit() == null) return null;
         if (!chain.getPageSearchCount()) return null;
         if (!(statement instanceof SelectStatement)) return null;
         SelectStatement select = (SelectStatement) statement;
@@ -2557,6 +2564,19 @@ public final class SqlPreviewService {
     public static SqlPreviewDialog activePreviewDialogForTest(@NotNull Project project) {
         WeakReference<SqlPreviewDialog> ref = ACTIVE_PREVIEW_DIALOGS.get(project);
         return ref != null ? ref.get() : null;
+    }
+
+    /**
+     * T-NativeSwitchTakeover：当前项目存活的预览面板（生产用）。
+     *
+     * <p>控制台工具栏的原生数据源下拉被接管后，子项只拿到 {@link Project}（事件里没有面板引用），
+     * 需要据此回到「正在看的那个预览面板」发起换源。未打开预览时返回 null（子项直接放弃，
+     * 不猜目标面板）。</p>
+     */
+    public static SqlPreviewPanel activePreviewPanel(@NotNull Project project) {
+        WeakReference<SqlPreviewDialog> ref = ACTIVE_PREVIEW_DIALOGS.get(project);
+        SqlPreviewDialog dialog = ref != null ? ref.get() : null;
+        return dialog != null ? dialog.panelForTest() : null;
     }
 
     /**
