@@ -36,7 +36,7 @@ class ScanBannedApiEdtRefreshGuardTest {
         repeat(6) {
             val candidate = File(dir, "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ScanBannedApiUsagesAction.kt")
             if (candidate.isFile) return candidate.readText()
-            dir = dir.parentFile ?: break
+            dir = dir.parentFile ?: return@repeat
         }
         error("找不到 ScanBannedApiUsagesAction.kt（user.dir=${System.getProperty("user.dir")}）")
     }
@@ -48,23 +48,29 @@ class ScanBannedApiEdtRefreshGuardTest {
         val presentIdx = text.indexOf(presentMarker)
         assertTrue("源码里应有 present 方法", presentIdx > 0)
 
-        val refreshOccurrences = Regex("refreshAndFindFileByIoFile").findAll(text).map { it.range.first }.toList()
+        // 只数**调用形态**：注释/KDoc 里会提到方法名（类注释、后台段注释），裸方法名不计数
+        val callPattern = "LocalFileSystem.getInstance().refreshAndFindFileByIoFile"
+        val refreshOccurrences = Regex(Regex.escape(callPattern)).findAll(text).map { it.range.first }.toList()
         assertEquals(
-            "refreshAndFindFileByIoFile 应恰好出现 1 次（UI-001 修复后只在后台线程段）",
+            "VFS refresh 调用应恰好出现 1 次（UI-001 修复后只在后台线程段）",
             listOf(1),
             listOf(refreshOccurrences.size),
         )
         assertTrue(
-            "refreshAndFindFileByIoFile 必须位于 present 方法之前（后台任务体内），不得回流 EDT 段",
+            "refreshAndFindFileByIoFile 调用必须位于 present 方法之前（后台任务体内），不得回流 EDT 段",
             refreshOccurrences.first() < presentIdx,
         )
 
-        val presentBody = text.substring(presentIdx)
+        // present 方法体只截到下一个成员声明（notify）为止——substring 到文件尾会把
+        // writeTempReport/notify 的定义误算进 present 体内（红跑后绿跑首翻车实证）
+        val presentBodyEnd = text.indexOf("private fun notify(", presentIdx).let { if (it < 0) text.length else it }
+        val presentBody = text.substring(presentIdx, presentBodyEnd)
         listOf(
             "refreshAndFindFileByIoFile",
             "LocalFileSystem",
             "writeTempReport",
-            "Files.",
+            "Files.create", // 裸 "Files." 会误报 scannedFiles.toString()（绿跑首翻车实证）
+            "java.nio.file",
             "findFileByIoFile",
         ).forEach { forbidden ->
             assertFalse(
