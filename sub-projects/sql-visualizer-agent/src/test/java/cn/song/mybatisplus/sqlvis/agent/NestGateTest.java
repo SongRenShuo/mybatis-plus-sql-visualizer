@@ -96,6 +96,27 @@ public class NestGateTest {
         assertNull("两次执行不得多出第三条", queue().poll());
     }
 
+    /**
+     * T-OracleWrapperRegistry 的放大器修复：内层取不到 SQL（登记盲区）时**不得**把外层一起抑制。
+     *
+     * <p>真实形态＝Oracle 包装器语句：prepare 面登记的是包装器，exec 钩子落在内层物理语句上，
+     * 内层查表必然落空。旧实现把「进入过」当「产出过」，内层 exit 时就置 `innerEmitted`，
+     * 结果外层那条本可产出的 SQL 也被吞掉（面板表现为「一条都不出」）。
+     */
+    @Test
+    public void 内层盲区_不得抑制外层() throws Exception {
+        final Object outer = newInstance("NestGateTest$OuterPs");
+        // 只登记外层；内层不登记 = 盲区
+        StatementRegistry.register(outer, "SELECT outer", "jdbc:nest://db");
+
+        outer.getClass().getMethod("executeUpdate").invoke(outer);
+
+        final SqlEvent event = queue().poll();
+        assertNotNull("内层无 SQL 时外层必须兜底产出（旧实现此处为 0 条）", event);
+        assertEquals("SELECT outer", event.sql);
+        assertNull("仍不得双报", queue().poll());
+    }
+
     @Test
     public void 嵌套之后_单帧恢复产出() throws Exception {
         final Object outer = newInstance("NestGateTest$OuterPs");

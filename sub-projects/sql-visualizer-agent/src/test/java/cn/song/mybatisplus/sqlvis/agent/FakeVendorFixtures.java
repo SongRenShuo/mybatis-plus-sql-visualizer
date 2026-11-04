@@ -445,6 +445,59 @@ public class FakeVendorFixtures {
         }
     }
 
+    /**
+     * 包装器形态（T-OracleWrapperRegistry）：与 Oracle {@code OraclePreparedStatementWrapper} 同构——
+     * 对外句柄是包装器自身，{@code execute*}/{@code setXxx} 全部转发给**包内物理语句**，物理语句挂在
+     * 一个 Statement 类型字段上。用来钉住真实形态：prepare 面登记的是包装器，执行钩子却落在内层。
+     */
+    public static class VendorPsWrapper extends VendorPs {
+        private final VendorPs preparedStatement = new VendorPs();
+
+        public VendorPs inner() {
+            return preparedStatement;
+        }
+
+        @Override
+        public ResultSet executeQuery() {
+            return preparedStatement.executeQuery();
+        }
+
+        @Override
+        public boolean execute() {
+            return preparedStatement.execute();
+        }
+
+        @Override
+        public int executeUpdate() {
+            return preparedStatement.executeUpdate();
+        }
+
+        @Override
+        public void setString(int i, String x) {
+            preparedStatement.setString(i, x);
+        }
+
+        @Override
+        public void setInt(int i, int x) {
+            preparedStatement.setInt(i, x);
+        }
+    }
+
+    /**
+     * 双 ATHROW 出口形态（Oracle {@code executeLargeUpdate} 的异常路径同构）：try 内抛出一次
+     * （第一条 athrow），catch 处理器清理后重抛（第二条 athrow）——同一帧会被出口钩子访问两次。
+     * 用来钉「不得因此重复上报」（真机形态：一条失败 DDL 出 3 条事件）。
+     */
+    public static class VendorStmtDoubleExit {
+        public int executeUpdate(String sql) {
+            try {
+                throw new BoomException("boom-in-try");
+            } catch (BoomException e) {
+                throw e;
+            }
+        }
+    }
+
     /** statement 面：带参 execute 族 + addBatch/executeBatch 批处理（无接口依赖，纯实体类）。 */
     public static class VendorStmt {
         public boolean execute(String sql) {

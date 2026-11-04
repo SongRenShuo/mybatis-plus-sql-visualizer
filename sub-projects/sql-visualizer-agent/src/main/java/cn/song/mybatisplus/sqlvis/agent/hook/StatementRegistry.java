@@ -151,6 +151,93 @@ public final class StatementRegistry {
         }
     }
 
+    /**
+     * prepare 面登记（含**包装语句的内层实体语句**）——T-OracleWrapperRegistry。
+     *
+     * <p><b>为什么必须解一层包装。</b>Oracle thin 驱动对外返回的是包装器
+     * {@code oracle.jdbc.driver.OraclePreparedStatementWrapper}（真机 `ShapeProbe` 实测：
+     * `createStatement`/`prepareStatement`/`prepareCall` 分别返回
+     * `OracleStatementWrapper`/`OraclePreparedStatementWrapper`/`OracleCallableStatementWrapper`），
+     * {@code prepareStatement} 出口钩子登记的自然是包装器；而 {@code executeQuery()} 的织入点落在
+     * 包内物理语句（{@code OraclePreparedStatement}/{@code T4CPreparedStatement}）上，回调拿到的
+     * {@code this} 是**内层对象**。同一 SQL 的「登记」与「查询」落在两个不同对象上，查表必然落空——
+     * 2026-11-04 真机形态：plain `Statement`（EXEC_PARAM，SQL 取首参）正常，PreparedStatement
+     * 全丢，宿主 stderr 报「无登记 PS 执行被跳过 psClass=oracle.jdbc.driver.T4CPreparedStatement」。
+     *
+     * <p>参数槽与批串同理：{@code setXxx}/`addBatch` 的织入点在物理语句上，写的是内层对象的登记槽；
+     * 只登记包装器时参数根本无处落。故这里把内层一并登记，一次修掉「SQL 归属」与「绑定参数」。
+     *
+     * <p>解包只做一层、按**字段类型**（可赋给 {@code java.sql.Statement}）而非字段名扫描，
+     * 驱动改字段名不影响；扫描不到就退回只登记包装器（旧行为），绝不外抛。
+     */
+    public static void registerWithDelegates(Object statement, String sql, String url) {
+        if (statement == null || sql == null || sql.isEmpty()) {
+            return;
+        }
+        register(statement, sql, url);
+        final Object delegate = delegateStatementOf(statement);
+        if (delegate != null && delegate != statement) {
+            register(delegate, sql, url);
+        }
+    }
+
+    /**
+     * 包装器持有的内层语句字段（按类缓存；`ClassValue` 不静态钉住驱动类，热部署可回收）。
+     *
+     * <p>缓存的是**候选字段数组**而不是单个字段：同一包装器上可能同时存在多个 Statement 类型字段
+     * （Oracle 的 {@code OracleStatementWrapper} 就有 {@code statement}/{@code closedStatement}/
+     * {@code closedStatementAC}），需要按声明顺序取第一个**当前非空**的，缓存单值会在某些形态下取到空槽。
+     * 上限 4 个，纯防御——正常驱动 1~3 个。
+     */
+    private static final ClassValue<java.lang.reflect.Field[]> DELEGATE_FIELDS =
+            new ClassValue<java.lang.reflect.Field[]>() {
+                @Override
+                protected java.lang.reflect.Field[] computeValue(Class<?> type) {
+                    final java.util.List<java.lang.reflect.Field> out =
+                            new java.util.ArrayList<java.lang.reflect.Field>(2);
+                    try {
+                        for (Class<?> k = type; k != null && k != Object.class && out.size() < 4;
+                             k = k.getSuperclass()) {
+                            for (java.lang.reflect.Field f : k.getDeclaredFields()) {
+                                if (out.size() >= 4) {
+                                    break;
+                                }
+                                if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+                                    continue;
+                                }
+                                if (!java.sql.Statement.class.isAssignableFrom(f.getType())) {
+                                    continue;
+                                }
+                                try {
+                                    f.setAccessible(true);
+                                } catch (Throwable ignore) {
+                                    continue; // 不可访问的候选直接剔除（如 JPMS 强封装场景）
+                                }
+                                out.add(f);
+                            }
+                        }
+                    } catch (Throwable ignore) {
+                        // 字段扫描失败 = 无内层可登记，退回旧行为
+                    }
+                    return out.toArray(new java.lang.reflect.Field[0]);
+                }
+            };
+
+    /** 取包装器持有的内层语句（第一顺位非空者）；无则 null。 */
+    private static Object delegateStatementOf(Object statement) {
+        try {
+            for (java.lang.reflect.Field f : DELEGATE_FIELDS.get(statement.getClass())) {
+                final Object v = f.get(statement);
+                if (v != null && v != statement) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignore) {
+            // 读取失败按无内层处理（登记表契约：拿不到就不登记，不影响宿主）
+        }
+        return null;
+    }
+
     /** 取登记（无则 null）。 */
     public static Ctx get(Object statement) {
         if (statement == null) {

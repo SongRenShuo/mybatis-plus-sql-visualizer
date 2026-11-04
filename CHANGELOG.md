@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Oracle 应用的增强捕获只剩连接校验 SQL，MyBatis 业务 SQL 一条不出（T-OracleWrapperRegistry，用户真机报障）**：Oracle thin 驱动对外返回的是包装器（`OraclePreparedStatementWrapper` / `OracleCallableStatementWrapper` / `OracleStatementWrapper`），prepare 面把我方登记的 SQL 挂在包装器上，而 `executeQuery()` 的织入点在包内物理语句（`T4CPreparedStatement`）——登记对象与执行对象错位，查表永远落空、事件按「盲区」丢弃；plain `Statement` 走「SQL 取首参」不依赖登记表，所以只有 `select 1 from dual` 这类连接校验 SQL 能看见。现 prepare 面登记时按字段类型反射解一层包装，把内层物理语句一并登记（绑定参数与批串随之接回内层）。同时修掉同链路两处去重门缺陷：嵌套门把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉；同一帧「try 内 ATHROW + 处理器重抛」两条出口钩子会让嵌套深度多减一次，一条失败语句重复上报 3 条。真机复验（Oracle Free 23：ojdbc11 23.3 / ojdbc8 19.3 / ojdbc8 12.2，premain 与 attach 双路径，HikariCP 池）：业务 SQL 全部可见且带绑定参数，失败语句只报 1 条
+
 ## [2026.11.3] - 2026-11-03
 
 > 范围＝v2026.11.2 发行包之后的全部用户可见增量；主体是预览窗「执行 SQL」链路的整批修复与原生数据源下拉接管。

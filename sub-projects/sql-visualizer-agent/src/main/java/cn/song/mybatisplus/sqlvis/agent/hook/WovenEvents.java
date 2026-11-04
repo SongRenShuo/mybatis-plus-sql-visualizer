@@ -42,10 +42,10 @@ final class WovenEvents {
         FIRST_FIRE.set(false);
     }
 
-    static void emit(Object stmt, String op, String sql, Object result, Throwable failure,
-                     long startNanos, String url) {
+    static boolean emit(Object stmt, String op, String sql, Object result, Throwable failure,
+                        long startNanos, String url) {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
-            return;
+            return false;
         }
         if (FIRST_FIRE.compareAndSet(false, true)) {
             // 2026-10-14：不再打印 SQL 片段（原 sqlHead=前 80 字符）。本行的用途只是「钩子在产」
@@ -94,5 +94,8 @@ final class WovenEvents {
         event.url = url;
         event.threadName = Thread.currentThread().getName();
         EventBus.offer(event);
+        // T-OracleWrapperRegistry：返回值 = 本帧**真的产出了事件**（供 NestGate 只在此时抑制外层；
+        // 旧实现把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉）
+        return true;
     }
 }
