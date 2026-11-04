@@ -78,3 +78,57 @@
 
 - 2026-11-04 立项（随本期报告同批提交）。
 - 2026-11-04 实施开工。作业拓扑：集成分支 `t-perfsweep30`（工作树 `mpsv-perfsweep30`，基于 dev `5c4af996`）；三车道各自分支/工作树——A `t-perfsweep30-preview`（`mpsv-perf30a`，券01a/1b/1c+02d）、B `t-perfsweep30-dumb`（`mpsv-perf30b`，券02a/2b/2c/2e）、C `t-perfsweep30-ux`（`mpsv-perf30c`，券03+04+05）。文档批（本计划+第七期报告+索引三笔）已 cherry-pick 进集成分支 `79bb909e`（索引冲突按时间倒序裁决）。gradle 并发按 2 路上限分波：A/B 先行、C 待槽。
+
+### 6.1 车道 B：DumbMode 防护面（券02a/02b/02c/02e，4 提交 `cf00a2d7`，已合集成 `1746ca62`）
+
+**前提 1 证伪结果（推翻了计划与分析报告的推断）**：用 `DumbModeTestUtils.computeInDumbModeSynchronously` 造 dumb 夹具实测——
+
+| API | dumb 态实测行为 |
+|---|---|
+| `JavaPsiFacade.findClass(FQN)` / `findClass(短名)` | **抛 IndexNotReadyException** |
+| `PsiShortNamesCache.getClassesByName` | **抛 IndexNotReadyException** |
+| `FileTypeIndex.getFiles(XML)` | **不抛，返回真清单** |
+
+计划 P-1 与报告 §五 推断的「FileTypeIndex 直抛」不成立。MapperXmlLocator 的空表缓存主害因此改为两路：①`runCatching.getOrDefault(emptyList())` 把扫描期竞态/平台回落吞成空表；②dumb 态下逐 vf 的 `PsiManager.findFile` 仍走索引。02a 的「dumb 早退 + IndexNotReady 回落不写槽」双保险因此是必要且正确的。
+
+- **02a**（`b5180c73`）：`currentFileListSlot` 扫描前 `DumbService.isDumb` 早退返回一次性空槽（不赋 `fileListSlot`，TTL 窗口不成立）；IndexNotReadyException 回落同样不写槽。先红（日志跳转用例 1 红）→ 后绿 5/5；反向验证撤闸再红（`1 test completed, 1 failed`）；既有 `MapperXmlLocatorTest` 三个 TTL 用例 11/11 保持绿。
+- **02b**（`9845b9b0`）：`resolveClass` 的 isDumb 闸前移到 project 空判之后、全部 findClass 之前（原闸在末段 PsiShortNamesCache，保不住前置查询）；`resolveInterfaceMethod` 补同样闸。先红（gutter 双跳抛 IndexNotReady）→ 后绿；`MybatisXmlReferenceTest` 20/20。
+- **02c**（`578abb0d`）：`EntityClassResolver.resolveWithAliasCandidates` 入口早退返回空 Resolution；`EntityClassFinder.find` 入口早退返回空列表（覆盖快路径三处 + 反查全量扫描 + 库扫描回取）、`runLibrarySweepNow` 早退返回 -1（触顶语义不落缓存）、`requestLibrarySweep` 早退不投递。只加闸不改扫描结构。先红（预览链抛 IndexNotReady）→ 后绿；`EntityClassResolverHeavyTest` 13/13、`EntityClassFinderIntegrationTest` 21/21。
+- **02e**（`cf00a2d7`）：新增 `DumbModeClickChainGuardTest` 5 例（gutter 双跳 / 日志跳转 / 预览链 / 前提 1 探针）。未修复代码 5 case 4 红 → 修复后 5/5 绿；三处撤闸反向验证均红后恢复，合并验证 70 case 0 失败。
+
+遗留：02d 属车道 A 地盘，B 未碰（已由 A 完成）；02b/02c 的反向验证失败摘要被 tail 截断（仅留 BUILD FAILED 退出码），02a 有完整读数。
+
+### 6.2 车道 A：预览首开链（券01a/01b/01c/02d，1 提交 `ead67d72`，已合集成 `2e786892`）
+
+车道 A 原代理掉线后由主控接手，接管时发现并修正了三处**会导致功能形同虚设**的问题：
+
+1. **RED-PROBE 撤闸残留**：`ExecTempFileFactory` 里 cache-only 判等条件被改成 `existing != null && false && ...`（探针未清），cache-only 恒不生效。
+2. **01b 判据恒 false**：原实现把 `lastConsoleEmbeddedId == null` 判在 `embedConsole()` **之后**——而 `embedConsole` 内部（:1487）就赋值了，判据恒 false，打点永不输出。改为嵌入前捕获 + 抽纯函数 `shouldLogConsoleVisible`。
+3. **判据选错**：首次反向验证「撤 cache-only → 写次数应红」时**没红**，暴露出真实机制——`projectExecFile:1394` 的 T-PreviewFast P1 差量快路径在内容一致时本来就零写，所以「写次数」证明不了 cache-only 的价值。改判据为「是否进入 `projectExecFile`」（新增 `execProjectFileCallCounter`）——cache-only 真正省的是其后两段 `syncExecVfContentIfNeeded` 收敛（各付一次 invokeLater＋最长 2s 有界等待）。
+
+- **01a**：预热链加 cache-only（`ExecTempFileFactory`）：VFS 已有条目且内容一致即跳过写盘，只做 refresh＋方言映射＋findFile＋填槽；两条不变量保持（首建裸写在锁内原子、已有条目绝不裸写）。渲染回填与方言重渲染预热同步切 `cacheOnly = true`。
+- **01b**：打点只首嵌（纯函数 `shouldLogConsoleVisible(prevEmbeddedId, requestMs)`）；`previewAsync` 异常分支把 `lastPreviewRequestMs` 清零，消除跨请求失真读数。
+- **01c**：新增 `ExecFileWriteMetrics`（独立小文件——`DataSourceSelector.kt` 因加计数缝一度涨到 2021 行破 GiantFileBudget 预算，抽文件后回 1983 行）＋ `ExecFileWriteCountTest` 七例：cache-only 零写 / 跳过 projectExecFile / 无证据保守回落 / 无重渲染 ≤1 写 / 方言重渲染 ≤2 写 / 判等早退不计数 / 回填计数。**反向验证实测**：撤 cache-only 短路 → `testCacheOnlySkipsProjectExecFile` 恰 1 红（7/1），恢复后 7/0/0。
+- **02d**：`previewAsync` 把 IndexNotReadyException 从「吞成 null＋WARN」改为单独分流 → `DumbService.runWhenSmart` 重试一次；成功静默交付，仍失败给可见通知（新增 `action.indexNotReady.message` 中英双语），与 runners=0 的方言/`NOT_A_SQL_DATASOURCE` 归因链互斥不混道。`PreviewDumbModeRetryTest` 4 例。
+
+定向读数：ExecFileWriteCountTest 7/0/0、PreviewDumbModeRetryTest 4/0/0、ConsoleVisibleLogGateTest 3/0/0；语义红线回归 ExecDocSyncTest 14/0/0、ExecDocPrewarmDisposeGuardTest 4/0/0、SqlPreviewPanelPrewarmConsumeTest 4/0/0、SqlPreviewPanelPrewarmLateRecoverTest 5/0/0、PreviewEditorAssemblyKeepsConsoleTest 4/0/0；守卫批（BundlePlaceholderArity/ExecTempFileEdt/GiantFileBudget/HardcodedUiText/LastUsedWriteOnEdt/SyncRefreshWriteIntent）23 例全绿。
+
+另修一处测试基建坑：计数缝从成员函数改为扩展函数后，测试 class 未重编导致 `NoSuchMethodError`（增量编译缓存），`touch` 无效，删 `build/classes/kotlin/test` 后重编才恢复。
+
+### 6.3 车道 C：红线面、缓存上限化与基线卫生（券03/04/05，1 提交 `4b525787`，已合集成 `9869d87d`）
+
+- **04a 导出落盘移出 EDT**：ShareDialog 两处 HTML 导出（诊断报告/普通报告）的 `saveHtmlReport` 从按钮回调（EDT）移进 `Task.Backgroundable.run`，`BrowserUtil.open` 留 `onSuccess`（EDT）；形态对照既有 `ScanBannedApiUsagesAction`。只移落盘——HTML 组装与面板状态读取留 EDT（前者纯字符串拼接，后者必须 EDT 读 Swing 状态，一并下移会把组件访问带进后台线程）。新增 `share.dialog.exportTitle` 中英双语文案。新增 `ShareExportOffEdtGuardTest` 锁形态（落盘只在 run 内、打开只在 onSuccess 后）＋合成缺陷源码反向对照（证明守卫看得见它要防的形态）。
+- **04b 逐键比较去分配**：`SqlDockedPreview.isPinned` 原用 `document.text`（每次复制整份文本）逐键比较，改 `charsSequence` 视图——长度先比、相同再逐字符比，零 String 分配，语义与 `text != originalSql` 逐字等价。`SqlDockedPreviewTest` 9/0/0。
+- **04c 消除 Inspection 登记期重复 resolve**：`parameterRoots` 内部已 resolve 接口方法却只返回参数名集合，导航 fix 又解析一次，且 fix 在「每个 finding」循环内构造（同语句 N 个缺失参数 = N+1 次索引查询）。新增 `parameterRootsWithMethod` 同一趟带出方法；`forMissingParameter` 接受已解析方法；`InjectionAndParamInspections` 改为循环外一次解析、fix 构造一次共享（LocalQuickFix 无状态、只持 SmartPointer，可被多 descriptor 共享）。`MapperSqlInspectionTest` 15/0/0。
+- **05a 两处无显式上限缓存上限化**（同族 countCache 形态——超限整体清空）：`DataSourceSettings` 反射 `classCache`/`methodCache`（`REFLECT_CACHE_MAX = 256`）、`ExecutionTimeParser.customPrefixRegexCache`（`CUSTOM_PREFIX_CACHE_MAX = 64`）。「键域天然有界」是观察不是保证；清空代价 = 下次重付 `forName`/`getMethod` 或重编译一条 Regex（微秒级）。**本系列基线「技术性无上限缓存」条目至此清零，不再是「登记接受」**。
+- **05b 单参 DocumentListener 收口**：`LogToSqlPanel` 双注册与 `SqlDockedPreview` 单注册改挂宿主 Disposable（两处宿主本就实现 Disposable，dispose 即平台自动摘除）。存量清零。
+- **03 状态栏 widget「先测后判」→ 判定登记不动**：`StatusBarWidgetTickCostTest` 实测 2s 池化 tick **4.61µs**（n=2000，预热 200 次后均值；占 CPU ≈0.0002%），远低于 100µs 判据 → 事件化收益不成立，不引入项目级 Topic（避免为 4.61µs 新增一条事件面与订阅生命周期）。用例另钉「快照读取不得创建 SqlLogManager」的只读入口契约：日后 tick 变贵该用例会红，那时再上 Topic。读数已回填报告 §4.2。
+
+定向读数：ShareExportOffEdtGuardTest 2/0/0、StatusBarWidgetTickCostTest 2/0/0、SqlDockedPreviewTest 9/0/0、MapperSqlInspectionTest 15/0/0、BundlePlaceholderArity 4/0/0、HardcodedUiText 3/0/0、GiantFileBudget 2/0/0（合计 37 例 0 失败）。
+
+C 车道首跑撞一处编译错：`SqlDockedPreview.documentDiffersFromOriginal` 里 `originalSql` 是可空字段，逐字符比较漏了 null 分支（`Only safe calls allowed on nullable receiver`），补 `?: return false` 后过。
+
+### 6.4 汇总
+
+三车道三提交全部合入集成分支：B `cf00a2d7`（4 件）→ A `ead67d72`（4 件）→ C `4b525787`（5 件）；合并点 `1746ca62` / `2e786892` / `9869d87d`。券01d（预热预算调参）按计划**未动**——等 T0 重采样读数；T0 真机四项（沿期三项＋预热预算重采样）仍为移交项。
+
