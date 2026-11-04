@@ -516,6 +516,24 @@ internal fun DataSourceSelector.chooseAndPrepare(
             callback?.invoke(true)
         }
         else -> {
+            // UI-003（2026-11-04 真机）：**预览默认准备不再弹「选择数据源」模态列表**。
+            // 现场：打开 XML 预览即弹 7 源列表、面板右上仍是「未绑定数据源」——与本函数
+            // T-DsCover 注释声明的意图（「预览默认准备静默」）相反。判据收口在 [PreviewPreparePick]。
+            //
+            // master 侧只实施 A 方案（dev 的「学习绑定静默选源」依赖 ExecBindFallback，master 无
+            // 该文件）：走到本分支的预览准备必然是「多源且无记忆」——last-used 静默命中与单源
+            // 直选已在本分支之前各自建链（allowsSilentLastUsed / shouldBeChosenIfAlone）。
+            if (!PreviewPreparePick.shouldPopup(executeAfterPrepare, forceChoose, forceChoosePopup)) {
+                LOG.info(
+                    "[UI-003] preview prepare: no unique target among ${runners.size} runners — " +
+                        "stay unbound, wait for explicit execute",
+                )
+                // 不弹窗、不建链、不投递 onError（面板保持「未绑定」灰字）。
+                // 单飞门**必须结算**：不结算会让下一次执行排队到 60s 超时（门持有链不复位）。
+                if (ownsGate) prepareGate.finishPrepare(prepareOwner)
+                callback?.invoke(false)
+                return@chooseAndPrepare
+            }
             LOG.info("[M36] show popup with ${runners.size} runners")
             prepareGate.beginInteraction(prepareOwner)
             showRunnerPopup(project, runners) { runner ->
