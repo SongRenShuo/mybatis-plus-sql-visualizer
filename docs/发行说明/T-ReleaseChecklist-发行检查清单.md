@@ -55,6 +55,11 @@
 - [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
 - [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
+- [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
+  - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
+  - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
+  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 run#5 实测九 job 全绿、总墙钟 **35 分钟**（build 21.7 + verify×3 并行 8.8~9.8 + test×5 并行 9.2~13.2）。CI 比本地快 16 分钟的原因是三目标与五片都并行，但它的 `build` 要 21.7 分钟（冷编译 + 下载 IDE + clone demo），而本地增量编译只要 13 秒——**所以 CI 不作为默认路径**。
+  - CI 通道的三个已知前置（都已在 workflow 内解决，勿再踩）：verify job 必须自己跑一次 `:verifyPlugin` 预热 verifier-cli（跨 job 的 gradle 缓存不可靠）；`上传编译产物` 必须 `if: !cancelled()`（否则 verifyPlugin 失败会连坐九个下游 job）；依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
 
 ## 三、双通道发布段
 
