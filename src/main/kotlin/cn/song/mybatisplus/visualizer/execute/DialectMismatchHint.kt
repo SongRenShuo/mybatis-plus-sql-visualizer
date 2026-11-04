@@ -117,46 +117,53 @@ internal fun buildDialectMismatchHint(
  *
  * 标题写「下一步」而不是「执行失败」：这是缺配置，不是插件坏掉。
  */
-internal fun DialectMismatchHint.statusMessage(): String = when {
-    uniqueLikely != null -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.status.unique",
-        uniqueLikely.name,
-        dialectDisplay,
-    )
-    likely.size > 1 -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.status.multiple",
-        likely.size,
-        dialectDisplay,
-    )
-    else -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.status.unknown",
-        dialectDisplay,
-    )
+internal fun DialectMismatchHint.statusMessage(): String {
+    // 先取值再判空：uniqueLikely 是自定义 getter（`likely.singleOrNull()`），Kotlin 不对其做智能转换。
+    val unique = uniqueLikely
+    return when {
+        unique != null -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.status.unique",
+            unique.name,
+            dialectDisplay,
+        )
+        likely.size > 1 -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.status.multiple",
+            likely.size,
+            dialectDisplay,
+        )
+        else -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.status.unknown",
+            dialectDisplay,
+        )
+    }
 }
 
 /**
  * 悬停详文：解释归因（缺配置）、点名推断源、折叠其余源，并说明属性页底部 Dialect 下拉的位置。
  */
-internal fun DialectMismatchHint.detailMessage(): String = when {
-    uniqueLikely != null -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.detail.unique",
-        totalRegistered,
-        dialectDisplay,
-        uniqueLikely.name,
-        uniqueLikely.url ?: "",
-    ) + foldSuffix()
-    likely.size > 1 -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.detail.multiple",
-        totalRegistered,
-        dialectDisplay,
-        likely.size,
-        likelyNamesSummary(),
-    ) + foldSuffix()
-    else -> MpSqlVisualizerBundle.message(
-        "execute.datasource.dialectMismatch.detail.unknown",
-        totalRegistered,
-        dialectDisplay,
-    )
+internal fun DialectMismatchHint.detailMessage(): String {
+    val unique = uniqueLikely
+    return when {
+        unique != null -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.detail.unique",
+            totalRegistered,
+            dialectDisplay,
+            unique.name,
+            unique.url ?: "",
+        ) + foldSuffix()
+        likely.size > 1 -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.detail.multiple",
+            totalRegistered,
+            dialectDisplay,
+            likely.size,
+            likelyNamesSummary(),
+        ) + foldSuffix()
+        else -> MpSqlVisualizerBundle.message(
+            "execute.datasource.dialectMismatch.detail.unknown",
+            totalRegistered,
+            dialectDisplay,
+        )
+    }
 }
 
 /** 其余源折叠说明：0 个时不追加，避免「另有 0 个源」这类噪音。 */
