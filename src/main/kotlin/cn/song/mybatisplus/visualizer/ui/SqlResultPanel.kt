@@ -315,6 +315,11 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      * 它第一行的 `clearErrorActions()` 把链接清掉，文案却仍写着「可点「切换数据源」」，用户找不到。
      *
      * 动作形态与错误态完全一致（[showErrorWithActions]）：透明按钮 + `Link.activeForeground`，渲染即蓝字。
+     *
+     * @param tooltip 悬停完整说明；null = 与可见行相同。可见行受面板宽度省略时，折叠掉的
+     *                「其余 N 个源」等细节仍可从悬停读到。
+     * @param warning true = 橘色警示态（`WarningForeground`）——用于「缺配置、需用户处理」
+     *                但并非执行失败的信息；默认 false 保持既有灰色信息态。
      */
     fun showStatusWithActions(
         message: String,
@@ -324,6 +329,8 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         settingsLabel: String? = null,
         settingsTooltip: String? = null,
         settings: (() -> Unit)? = null,
+        tooltip: String? = null,
+        warning: Boolean = false,
     ) {
         state = State.EMPTY
         currentError = null
@@ -333,8 +340,12 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         setLoadingIconVisible(false)
         val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         infoLabel.text = "<html>$esc</html>"
-        infoLabel.toolTipText = message
-        infoLabel.foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+        infoLabel.toolTipText = tooltip ?: message
+        infoLabel.foreground = if (warning) {
+            JBColor.namedColor("WarningForeground", JBColor.ORANGE)
+        } else {
+            JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+        }
         showContent()
         revalidate()
         repaint()

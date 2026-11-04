@@ -212,6 +212,17 @@ internal fun DataSourceSelector.chooseAndPrepare(
     preferredRunnerName: String? = null,
     /** T-ExplainSwitchNative W6：必须弹选择器（跳过 `shouldBeChosenIfAlone` 直选分支）。 */
     forceChoosePopup: Boolean = false,
+    /**
+     * UI-049：空 Runner「方言不匹配」态的结构化提示通道。
+     *
+     * 与 `onError` **互斥**（同 `deliverError` 的富/旧通道纪律）：提供本回调时不再投递旧的长文案，
+     * 由面板渲染成「下一步」信息/警示态 + 可点入口；null = 保持既有文案（控制台、MCP、回滚弹窗等
+     * 未接入方零回归）。
+     *
+     * 只在「平台正常返回零个 Runner 且项目有在册数据源」这一态触发；无源/平台调用失败（归因由
+     * `emptyRunnersReason` 判定）绝不走本通道。
+     */
+    onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -231,6 +242,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     val queuedIntent = QueuedExecuteIntent(
         onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
         dialectGateRequest, onDialectGate, onSubmission,
+        onDialectMismatchHint = onDialectMismatchHint,
     )
     val onSubmission = queuedIntent.onSubmission
     var ownsGate = false
@@ -319,6 +331,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             intendedDsId = intendedDsId,
             prepareOwner = prepareOwner,
             queuedIntent = queuedIntent,
+            onDialectMismatchHint = onDialectMismatchHint,
         )
     }
 }
@@ -358,6 +371,8 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     intendedDsId: String?,
     prepareOwner: QueuedExecuteIntent?,
     queuedIntent: QueuedExecuteIntent,
+    /** UI-049：方言不匹配态结构化提示；null = 回落既有 `onError` 文案。 */
+    onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (temp == null) {
@@ -544,6 +559,7 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
                         project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
                         onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
                         forceChoose, preferredRunnerName, forceChoosePopup,
+                        onDialectMismatchHint = onDialectMismatchHint,
                     )
                     return
                 }
@@ -580,9 +596,25 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
                             ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
                     }
                 val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
-                onError?.invoke(
-                    MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
-                )
+                // UI-049：结构化提示与旧文案**互斥**。面板侧用 URL 子协议挑出「看起来是目标方言」
+                // 的源（unique/multiple/none 三种点名口径），渲染成「下一步」+ 可点入口；没有接入
+                // 新通道的调用方（控制台/MCP/回滚弹窗）保持原文案，归因与既有读法零变化。
+                if (onDialectMismatchHint != null) {
+                    // 呈现层异常不得打断准备链的收尾（onSubmission/单飞门 abort 在下方）——
+                    // 退化回旧文案，至少用户仍能看到原因。
+                    runCatching {
+                        onDialectMismatchHint(buildDialectMismatchHint(dialectDisplay, registered))
+                    }.onFailure { e ->
+                        LOG.warn("[UI-049] dialect mismatch hint sink FAILED: ${e.javaClass.simpleName}: ${e.message}")
+                        onError?.invoke(
+                            MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+                        )
+                    }
+                } else {
+                    onError?.invoke(
+                        MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+                    )
+                }
             }
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
