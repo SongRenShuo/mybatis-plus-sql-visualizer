@@ -975,8 +975,11 @@ internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: Strin
     val sql = lastRenderedSql
     if (proj != null && !sql.isNullOrBlank()) {
         ApplicationManager.getApplication().executeOnPooledThread {
+            // T-PerfSweep30 01a：方言重渲染预热走 cache-only——exec 文件内容已由渲染回填写成
+            // 渲染文本（lastRenderedSql），内容一致即零写盘（原形态会经 projectExecFile 的 document
+            // 判等兜底，但缓存未命中时会先派一次 document 写再判等，属重复改写）。
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
-                proj, sql, target.name,
+                proj, sql, target.name, cacheOnly = true,
             )
         }
     }
@@ -1299,14 +1302,20 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
         // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
         // 与本预览回调互不影响。
         onConsole = { consoleComponent ->
+            // T-PerfSweep30 01b：**嵌入前**捕获「本面板是否首次嵌入」——判据必须早于 embedConsole，
+            // 后者内部（:1487）就会把 lastConsoleEmbeddedId 赋成本次 id，事后判 `== null` 恒 false
+            // 会让打点永不输出（接手复核实测）。
+            val prevEmbeddedId = lastConsoleEmbeddedId
             // T-FirstExecResultInvisible F3：预览准备链显式 PREVIEW——旧形态传默认值
             //（布尔 false=execute 语义）靠 DS 侧折叠兜底，语义拧置归口 embedMode 后显式化
             embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
             resultPanel.showEmpty()
             // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
+            // T-PerfSweep30 01b：**只在首次嵌入打点**——embedConsole 同实例早退（同组件被平台摘走
+            // 再挂回等）会重复触发本回调，旧形态每次回调都打，同一次预览打出多条读数。
             runCatching {
                 val req = SqlPreviewService.lastPreviewRequestMs
-                if (req > 0) {
+                if (shouldLogConsoleVisible(prevEmbeddedId, req)) {
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                         .info("[T-PreviewFast] request→console-visible: ${System.currentTimeMillis() - req}ms")
                 }
@@ -1787,6 +1796,20 @@ internal fun primaryButton(text: String, action: () -> Unit): JButton = JButton(
 internal fun SqlPreviewPanel.modeButtonText(): String = MpSqlVisualizerBundle.message(
     if (compactMode) "panel.mode.multiline" else "panel.mode.singleline",
 )
+
+/**
+ * T-PerfSweep30 01b 测试缝：`request→console-visible` 打点判据（纯函数）。
+ *
+ * 只在**首次嵌入**且请求起点有效时打点：
+ *  - [prevEmbeddedId] 必须为 null——由调用方在 `embedConsole` **之前**捕获（`embedConsole` 内部
+ *    会立刻把 `lastConsoleEmbeddedId` 赋成本次 id，事后判 `== null` 恒 false，打点永不输出）；
+ *  - [requestMs] > 0——失败请求已把起点清零（`previewAsync` 异常分支），不得复用旧读数打出
+ *    跨请求失真值（真机曾出现 10151ms）。
+ *
+ * 反向验证：把判据改回「事后比较 lastConsoleEmbeddedId」或去掉 requestMs 闸 → 对应用例红。
+ */
+internal fun shouldLogConsoleVisible(prevEmbeddedId: Int?, requestMs: Long): Boolean =
+    requestMs > 0L && prevEmbeddedId == null
 
 // ------------------------------------------------------------------
 // 展示与渲染

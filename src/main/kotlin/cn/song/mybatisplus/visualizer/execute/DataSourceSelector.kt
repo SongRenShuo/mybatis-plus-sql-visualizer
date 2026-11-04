@@ -137,6 +137,11 @@ object DataSourceSelector {
     /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
     private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** T-PerfSweep30 01c：真实内容写计数（定义在 [ExecFileWriteMetrics]，此处只留写点调用）。 */
+    internal fun countExecFileWrite() {
+        ExecFileWriteMetrics.countWrite()
+    }
+
     /**
      * T-UiFixGate9 测试缝：exec 预暖链在途标记读数。victim 面板测试（rerender 触发预暖链）
      * 收尾前等「链静止」（先见置位、再候复位），让写收敛落在用例生命周期内——链跨出用例后，
@@ -1378,7 +1383,14 @@ object DataSourceSelector {
                 // 外部覆盖须走既有冲突语义）仍走 document 路径，T-EC-01 同临界区落盘语义不变。
                 val fileDoc = fdm.getCachedDocument(vf)
                 if (fileDoc == null || (!isExecDocOpenInEditor(vf) && !fdm.isDocumentUnsaved(fileDoc))) {
-                    vf.setBinaryContent(text.toByteArray())
+                    // T-PerfSweep30 01c：零窗口直写分支同样先内容判等——「内容已一致」时
+                    // setBinaryContent 会把相同字节再写一遍（VFS 时间戳/索引噪音），旧实现仅靠
+                    // 上游 projectExecFile 差量快路径拦，直调面（syncExecVfContentIfNeeded 等）
+                    // 无保护。判等不计数、不一致才计数并写。
+                    if (fileDoc == null || fileDoc.text != text) {
+                        countExecFileWrite() // T-PerfSweep30 01c：真实内容变更（零窗口直写）计入写次数缝
+                        vf.setBinaryContent(text.toByteArray())
+                    }
                     if (fileDoc != null) {
                         // 缓存 doc 是干净态：同步从盘重载对齐新内容（平台对「外部改盘+干净 doc」
                         // 的既有语义），不产生 modified 位
@@ -1386,6 +1398,7 @@ object DataSourceSelector {
                     }
                 } else {
                     if (fileDoc.text != text) {
+                        countExecFileWrite() // T-PerfSweep30 01c：真实内容变更（document 分支）计入写次数缝
                         fileDoc.setText(text)
                     }
                     // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
@@ -1725,13 +1738,14 @@ object DataSourceSelector {
         sql: String,
         renderedDialectName: String? = null,
         LOG: com.intellij.openapi.diagnostic.Logger,
+        cacheOnly: Boolean = false,
     ) {
         if (ApplicationManager.getApplication().isDispatchThread) {
             LOG.warn("[M36] prewarmExecTempFileOnBackgroundThread called on EDT — refused (slow ops)")
             return
         }
         if (project.isDisposed || sql.isBlank()) return
-        prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
+        prewarmExecTempFileInner(project, sql, LOG, renderedDialectName, cacheOnly)
     }
 
     /**
@@ -1752,7 +1766,12 @@ object DataSourceSelector {
      * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    fun prewarmExecTempFile(project: Project, sql: String, renderedDialectName: String? = null) {
+    fun prewarmExecTempFile(
+        project: Project,
+        sql: String,
+        renderedDialectName: String? = null,
+        cacheOnly: Boolean = false,
+    ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (ApplicationManager.getApplication().isDispatchThread) {
             LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)")
@@ -1780,6 +1799,8 @@ object DataSourceSelector {
             // T-UiFixGate9：有界派发（原 T-PreviewFast P2 的 nonBlocking=true fire-and-forget 已退役，
             // 见 projectExecFile 内注释）——缓存命中刷新同样不得留下跨边界的排队写：排队拍落在
             // 测试/交互边界时，迟到的 VFS 会话会命中 setText→save 窗口的「已改未存」态收集冲突。
+            // T-PerfSweep30 01a：缓存命中形态一律 cache-only——projectExecFile 自身的内容判等
+            // 快路径（document/快照双源）保证内容一致时零写盘，与预热链判据同函数同口径。
             runCatching { projectExecFile(project, sql) }.onFailure { e ->
                 // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
                 // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
@@ -1799,7 +1820,7 @@ object DataSourceSelector {
         // 重建兜底。中断能否真正唤醒平台内部等待不作依赖（RefreshSessionImpl.waitFor 的
         // runBlockingMaybeCancellable 通常响应中断）；即便不可中断，业务也已脱困，滞留线程无 WIL 在身。
         val prewarmFuture = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit {
-            prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
+            prewarmExecTempFileInner(project, sql, LOG, renderedDialectName, cacheOnly)
         }
         try {
             prewarmFuture.get(EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
