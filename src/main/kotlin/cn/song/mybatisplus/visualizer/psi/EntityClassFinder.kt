@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootModificationTracker
 import com.intellij.openapi.util.Key
@@ -51,6 +52,11 @@ class EntityClassFinder(private val project: Project) {
      */
     fun find(tableName: String): List<PsiClass> {
         if (tableName.isBlank()) return emptyList()
+        // T-PerfSweep30 券02（02c）：dumb 态入口早退返回空列表——本方法覆盖的全部索引访问
+        // （快路径 PsiShortNamesCache.getClassName 三个点 + @TableName 反查全量扫描 + 库扫描
+        // 缓存回取 restoreMatched）在索引构建期都不可信，返回空列表即既有「无实体 → 字符串列名
+        // 回落」语义，不改扫描结构与缓存。
+        if (DumbService.isDumb(project)) return emptyList()
         val resolver = EntityResolver()
         // 源码优先：既有行为逐字不变（项目 scope 命中即返回）
         findByCandidateNames(tableName, resolver, GlobalSearchScope.projectScope(project))
@@ -123,6 +129,9 @@ class EntityClassFinder(private val project: Project) {
      */
     private fun requestLibrarySweep() {
         if (!isLibrarySweepEnabled()) return
+        // T-PerfSweep30 券02（02c）：dumb 态不投递后台扫描（runLibrarySweepNow 内另有早退兜底，
+        // 此处先行拦下可避免白占「本版本已投递」登记）。
+        if (DumbService.isDumb(project)) return
         if (!markSweepDispatched()) return
         if (inFlightSweep.get() >= MAX_IN_FLIGHT_SWEEP) return
         sweepDispatchForTest?.let { sink ->
@@ -224,6 +233,10 @@ class EntityClassFinder(private val project: Project) {
      * @return 扫到的「表名 → 类」条目数；**-1 = 触顶未扫完**（不落缓存，调用方应允许重投）
      */
     internal fun runLibrarySweepNow(): Int {
+        // T-PerfSweep30 券02（02c）：dumb 态早退——短名清单与逐名检索（PsiShortNamesCache 两处）
+        // 都是索引访问。返回 -1（触顶语义：未扫完 → 不落缓存，调用方允许重投），smart 恢复后
+        // 重新投递即可，不改分片扫描结构与冷却窗口。
+        if (DumbService.isDumb(project)) return -1
         val startedMs = sweepNow()
         // 版本号**先取**：扫描期间项目结构若变化，落盘的 count 仍是开始时的版本 ⇒ 缓存立即
         // 被判为过期（下次反查重投），不会把「基于旧状态的结果」当成当前版本的有效缓存
