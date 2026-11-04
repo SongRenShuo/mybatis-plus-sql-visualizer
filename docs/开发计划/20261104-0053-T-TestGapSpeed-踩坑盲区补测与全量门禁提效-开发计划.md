@@ -41,6 +41,22 @@
 - 修法：完成证据检测（Output 里的 `affected`/`completed in`/`query ok` 等完成态回显，取既有状态词表的完成语义子集；`executing`/`fetching` 等进度词不算完成，长查询挂死不误报）+ `onInfo` 中性回调穿层（面板 `showStatus` 灰字，不进红条错误通道）。onInfo 缺席的调用方（LogToSqlPanel 等）保持既有行为。
 - 待验证前提：①`use` 语句 DBN 是否写完成回显**未知**（无真机形态样本）——若 DBN 对 `use` 只写回显不写摘要，则文本判据无法与挂死区分，该场景维持旧提示，如实标注证据边界；真机验收步骤交用户。②链路 11 处签名穿层（SqlExecutor→selectAndExecute/executePrepared→chooseAndPrepare→prepareInConsole→prepareAfterEditorResolved→executeOnConsole→afterSubmitted→startResultTabRetry + 面板三调用点），全部默认参数向后兼容。
 
+**T9-O147ForkMerge（20261104 用户批准 A 档实施）**
+- 析因（上轮 XML 逐例铁证）：`O147HistoryUpgradeTest` 87.1s 中 5 个 AgreesAcrossAllReaders 场景各占 ~16.5s（合计 80.6s），**8MiB 与 129MiB 夹具耗时几乎相同 ⇒ 大头是 fork 子 JVM（Windows 启动+classpath）而非解析**；其余 21 例近乎零耗时。
+- 动作：5 fork → 1。场景测试只登记 (文件, 期望指纹, 标签)，`@AfterClass` 单次 fork 逐文件验证；探针 main 改 (路径,指纹,标签) 三元组契约；大夹具目录延后类级清理（券05 防泄漏语义不变）。
+- **断言映射表**（T9 纪律：断言一条不减）：
+
+| 原断言（每场景一次） | 新落点 | 强度 |
+|---|---|---|
+| 子进程指纹 == 父侧 expected（exitValue==0 + `O147_STRING_OK`） | `verifyLargeStringsInOneChildJvm`：同探针同判据，任何文件不符即退出非 0 | 逐字等强（逐文件比对，还多出 per-file 归因输出） |
+| （隐含）每场景恰做一次子验证 | 登记数==5 断言（场景早退=登记缺失，@AfterClass 二次显红） | 新增，防子验证静默缩水 |
+| 父侧 4 读取口一致/预算判定/provenance 断言 | 原地不动 | 不变 |
+
+- 已知边界：单方法过滤运行本类会因登记不全在 @AfterClass 显红（本类按整类跑，KDoc 已注明）；生产代码零改动。
+- 反向验证（破坏对照）：临时改坏 `SqlLogFileReader.parseContent` 使指纹变化 → @AfterClass 必红；还原回绿。
+- **T9 实施记录（20261104，提交 `4260424f`）**：落点=登记表 + @AfterClass 单次 fork（探针三元组契约）+ 大夹具目录类级清理。定向 26/0/0/0；破坏对照两处显红（`revisionCountLimitAndUnknownIdDoNotInventEntries` 断言红 + `classMethod` 登记缺失防护红——缩水保护按设计触发），还原回绿 26/0/0/0。类耗时 **87.1s → 67.9s**（fork 合并收益 + 轮间方差并存，保守记 5~19s）。**析因修正（重要）**：初判「fork 主导」基于「8MiB 与 129MiB 夹具耗时相同」——实测五夹具全是 ~134MiB（MAX_REVISIONS=2048×64KiB，注释里的 8MiB 是预算记账口径非文件体积），剩余 67.9s 为父侧对真实预算夹具的多遍读取+物化，是测试目的本身，不可再压。
+- **A 档其余两项按前置不满足放弃（20261104 逐例证据判定）**：①reverse 双件——GateTest 25.5s 集中于单个方法（连接词签名闭环），GeneratorTest 26s 在另三个方法（条件组矩阵/聚合投影真实 MP 编译），**大耗时场景互不重叠**，无重复付费可归一；②实体三件——耗时为长尾分布（每例 1~2s），仅 VO/DTO 排除一对名字相近（0.67s vs 1.57s），收益上限 ~2s 撑不起映射表+破坏对照成本。结论：A 档实际落点仅 O147 一件；「删测试换秒数」的诱惑就此打住，B 档维持不做。
+
 ## 二、券清单
 
 ### 线一：测试盲区补测
