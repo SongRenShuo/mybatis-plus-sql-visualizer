@@ -1116,6 +1116,72 @@ internal fun DataSourceSelector.logDataContextCheck(
  *             两条分支的成因不同（同步：调用方在非 EDT；异步：EDT 首查未命中后后台轮询）
  */
 
+/**
+ * T-ThreadFix B：控制台就绪后、[prepareAfterEditorResolved]（EDT）之前的 **PSI 预暖 + EDT 续接**。
+ *
+ * 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」共 9 条）：
+ * ```
+ * SEVERE - SlowOperations
+ *   at FileManagerImpl.findDirectory → ProjectFileIndexImpl.isUnderIgnored
+ *        → WorkspaceFileIndexDataImpl.ensureIsUpToDate
+ *   at PsiUtilCore.getPsiFile → JdbcConsole.getFile → JdbcConsole.updateScriptModel
+ *   at JdbcConsole.getScriptModel
+ *   at DataSourceSelectorConsoleKt.prepareAfterEditorResolved(DataSourceSelectorConsole.kt:78)
+ * ```
+ * `console.getScriptModel()` 内部 `PsiUtilCore.getPsiFile(project, console.getVirtualFile())` 会
+ * **首次实例化**该 vf 的 `PsiFile`，而 `AbstractFileViewProvider.shouldCreatePsi` 每次都走
+ * `PsiManager.findDirectory` → `ProjectFileIndex.isUnderIgnored` → WorkspaceFileIndex 的
+ * `ensureIsUpToDate`——平台把它归为慢操作，**EDT 上调用即 SEVERE**。
+ *
+ * 为什么不能靠缓存：exec 临时文件的 PSI 在 `createTempPsiFile`（BGT）里刚建好，但
+ * `mapDialectBeforePsi` 的 `setMapping` 会触发 `LanguageSubstitutors.requestReparsing` →
+ * `FileManagerImpl.forceReload`，把这份 PSI 作废（同一轮日志的 write-unsafe 栈里可见这条
+ * forceReload）。所以「EDT 上 findFile 必命中缓存」不成立。
+ *
+ * 形态：**BGT 上先建好 PSI（慢操作合法线程）→ `invokeLater(nonModal)` 回 EDT 续接**
+ * （与 `createTempPsiFileAsync` 同款三段式；续接链会写控制台文档，故必须 write-safe 投递，
+ * 不能用 `ModalityState.any()`）。非 EDT 调用方就地预暖后就地续接（保持原同步语义）。
+ *
+ * 预热只是**把慢操作挪到合法线程**，不改变准备链的任何语义：预热失败/拿不到 PSI 时
+ * `getScriptModel` 照旧自己建 PSI（最差等价改前，只是又会慢一次）。
+ *
+ * @param console attachConsole 产出的原生控制台（反射取 `getVirtualFile`；取不到只预热 [vf]）
+ */
+internal fun warmConsolePsiThen(
+    project: Project,
+    vf: com.intellij.openapi.vfs.VirtualFile,
+    console: Any?,
+    onReady: () -> Unit,
+) {
+    val consoleVf = runCatching {
+        console?.javaClass?.getMethod("getVirtualFile")?.invoke(console)
+            as? com.intellij.openapi.vfs.VirtualFile
+    }.getOrNull()
+    val targets = if (consoleVf != null && consoleVf != vf) listOf(vf, consoleVf) else listOf(vf)
+    val warm = {
+        runCatching {
+            @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+            ReadAction.compute<Unit, Throwable> {
+                for (target in targets) {
+                    runCatching { PsiManager.getInstance(project).findFile(target) }
+                }
+            }
+        }
+        Unit
+    }
+    val app = ApplicationManager.getApplication()
+    if (!app.isDispatchThread) {
+        warm()
+        onReady()
+        return
+    }
+    app.executeOnPooledThread {
+        warm()
+        // write-safe: 续接链含控制台文档写（writeVfTextViaDocument）——any() 恒 write-unsafe
+        app.invokeLater({ onReady() }, com.intellij.openapi.application.ModalityState.nonModal())
+    }
+}
+
 internal fun DataSourceSelector.prepareInConsole(
     project: Project,
     session: Any,
@@ -1139,6 +1205,32 @@ internal fun DataSourceSelector.prepareInConsole(
     if (!isPrepareActive()) {
         abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
         return
+    }
+    // T-ThreadFix B：准备链失败收口抽成局部函数——同步分支的续接已改为异步（先 BGT 预暖控制台 PSI、
+    // 再 write-safe 回 EDT），续接里的异常不再能冒泡到下方 `runCatching{}.onFailure`，必须由续接
+    // 自己走**同一套**收口（否则门悬挂 60s、面板恒「执行中」）。
+    val handlePrepareFailure: (Throwable) -> Unit = { e ->
+        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
+        LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+        // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
+        val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
+        // 特判，见 prepareAfterEditorResolved onFailure）
+        val failureMsg: String = if (cause is com.intellij.util.IncorrectOperationException &&
+            cause.message?.contains("already been disposed") == true
+        ) {
+            LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: ${cause.message?.take(120)}")
+            clearPrepared()
+            dropSharedConsole()
+            MpSqlVisualizerBundle.message("execute.console.disposed")
+        } else {
+            cause.message ?: cause.toString()
+        }
+        onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+        onError?.invoke(failureMsg)
+        // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
+        // 排队执行意图回落错误回调
+        abortPrepareGate(prepareOwner, failureMsg, LOG)
     }
     runCatching {
         val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
@@ -1225,11 +1317,19 @@ internal fun DataSourceSelector.prepareInConsole(
             val ed = editor
             // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
             onEditor?.invoke(ed)
-            prepareAfterEditorResolved(
-                project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
-                onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest, onDialectGate, onSubmission,
-                isPrepareActive,
-            )
+            // T-ThreadFix B：先 BGT 预暖控制台 vf 的 PSI，再回 EDT 续接——
+            // prepareAfterEditorResolved 第一件事就是 `console.getScriptModel()`（内部
+            // PsiUtilCore.getPsiFile → findDirectory），PSI 未建即 EDT 慢操作。
+            // 续接已是异步：失败收口必须显式走 handlePrepareFailure（同外层 runCatching 口径）。
+            warmConsolePsiThen(project, vf, console) {
+                runCatching {
+                    prepareAfterEditorResolved(
+                        project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
+                        onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest, onDialectGate, onSubmission,
+                        isPrepareActive,
+                    )
+                }.onFailure(handlePrepareFailure)
+            }
         } else {
             ApplicationManager.getApplication().executeOnPooledThread {
                 var editor: com.intellij.openapi.editor.Editor? = null
@@ -1252,20 +1352,23 @@ internal fun DataSourceSelector.prepareInConsole(
                     LOG.info("[M36] editor=$resolved (async wait)")
                     if (resolved != null) {
                         onEditor?.invoke(resolved)
-                        runCatching {
-                            prepareAfterEditorResolved(
-                                project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
-                                document, resolved, onErrorRich, wholeScriptExec, prepareOwner,
-                                dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
-                            )
-                        }.onFailure { e ->
-                            NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
-                            LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
-                            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-                            onError?.invoke(cause.message ?: cause.toString())
-                            // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
-                            // 门持有链复位 + 排队执行意图回落错误回调
-                            abortPrepareGate(prepareOwner, cause.message ?: cause.toString(), LOG)
+                        // T-ThreadFix B：同同步分支——先 BGT 预暖控制台 PSI 再回 EDT 续接。
+                        warmConsolePsiThen(project, vf, console) {
+                            runCatching {
+                                prepareAfterEditorResolved(
+                                    project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
+                                    document, resolved, onErrorRich, wholeScriptExec, prepareOwner,
+                                    dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
+                                )
+                            }.onFailure { e ->
+                                NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
+                                LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+                                val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+                                onError?.invoke(cause.message ?: cause.toString())
+                                // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
+                                // 门持有链复位 + 排队执行意图回落错误回调
+                                abortPrepareGate(prepareOwner, cause.message ?: cause.toString(), LOG)
+                            }
                         }
                     } else {
                         // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
@@ -1280,29 +1383,7 @@ internal fun DataSourceSelector.prepareInConsole(
                 }, com.intellij.openapi.application.ModalityState.nonModal())
             }
         }
-    }.onFailure { e ->
-        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
-        LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
-        // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
-        val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-        // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
-        // 特判，见 prepareAfterEditorResolved onFailure）
-        val failureMsg: String = if (cause is com.intellij.util.IncorrectOperationException &&
-            cause.message?.contains("already been disposed") == true
-        ) {
-            LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: ${cause.message?.take(120)}")
-            clearPrepared()
-            dropSharedConsole()
-            MpSqlVisualizerBundle.message("execute.console.disposed")
-        } else {
-            cause.message ?: cause.toString()
-        }
-        onSubmission?.invoke(ExecutionSubmission.BLOCKED)
-        onError?.invoke(failureMsg)
-        // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
-        // 排队执行意图回落错误回调
-        abortPrepareGate(prepareOwner, failureMsg, LOG)
-    }
+    }.onFailure(handlePrepareFailure)
 }
 
 /**
