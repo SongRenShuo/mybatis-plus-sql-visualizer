@@ -142,3 +142,11 @@ C 车道首跑撞一处编译错：`SqlDockedPreview.documentDiffersFromOriginal
 6. **widget 与 CaptureStatusBar 轮询口径**——券03 不引入 Topic，不存在只改一处的分叉。
 7. **insight 合流增量**——不在本券范围，合流轮另跑走查。
 
+### 6.6 门禁读数
+
+- **中央编译门禁**（集成分支，三车道合流后）：`compileKotlin + compileTestKotlin` BUILD SUCCESSFUL 1m54s。
+- **统一全量门禁**（集成分支）：`testShards` 5 片 **864 套件 / 9015 用例 / failures 0 / errors 0 / skipped 17**，EXIT=0。
+  - 首轮（`eb663beb` 之前）9015 用例 3 失败，逐个归因并修复：元守卫登记缺（本券新增两个守卫类未登记＋长期欠登的 `ScanBannedApiEdtRefreshGuardTest`）、tick 用例断言过强（分片同 JVM 前提不成立）、`VersionHighlightsActivityTest` 既有顺序脆弱（dev `5c4af996` 引入，非本券，改 assume）。
+  - 反向验证读数：cache-only 撤闸 → `testCacheOnlySkipsProjectExecFile` 恰 1 红（7/1）；dumb 三链撤闸 → 对应用例红（02a 完整读数 `1 test completed, 1 failed`，02b/02c 仅留 BUILD FAILED 退出码）。
+- **未跑**：`verifyGate`/`verifyPlugin`/`buildPlugin`（本券未动 build.gradle.kts 依赖、plugin.xml EP/since-build、新平台 API 面或 MCP 工具声明——按三档分层不触发构建校验档）。
+
