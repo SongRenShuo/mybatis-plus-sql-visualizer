@@ -54,6 +54,7 @@
 
 - [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
+- [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
 
 ## 三、双通道发布段
 
