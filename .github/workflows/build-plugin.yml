@@ -118,7 +118,12 @@ jobs:
         run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
 
       - name: 上传编译产物（供 verify / test 的 matrix job 复用，避免各自重编译）
-        if: inputs.mode != 'publish'
+        # T-CiMatrix（2026-11-04 run#1 实证）：必须 !cancelled() 而非默认的 success()——
+        # 首跑时本步因前一步 verifyPlugin 失败而 skipped，导致九个下游 matrix job 全部
+        # 「下载编译产物失败 → 分片/兼容门禁 skipped」，testShards 一片都没跑。
+        # 产物在 buildPlugin 成功时就已生成，与 verifyPlugin 成败无关；让下游照常跑，
+        # 才能看到「测试绿不绿」这个独立信息（本 job 仍会因 verifyPlugin 失败标红）。
+        if: ${{ !cancelled() && inputs.mode != 'publish' }}
         uses: actions/upload-artifact@v4
         with:
           name: build-outputs
