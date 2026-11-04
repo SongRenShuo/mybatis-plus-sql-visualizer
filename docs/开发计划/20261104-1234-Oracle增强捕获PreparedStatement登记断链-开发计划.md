@@ -181,12 +181,29 @@ executeUpdate:2494       ← 86.55ms（外层）
 
 ### 9.3 门禁与反向验证
 
+- `testShards`（5 片，单路，2026-11-04 13:27）：**8534 例 / 0 失败 / 0 错误 / 13 skip**，`BUILD SUCCESSFUL in 31m 07s`
+  （分片 1756 / 1602 / 1813 / 1598 / 1765；13 个 skip 为环境性，Docker daemon 未启动等）
 - `:sql-visualizer-agent:test`：**247 例 / 0 失败 / 0 错误 / 1 skip**（46 个结果类，`BUILD SUCCESSFUL in 1m 27s`）
 - 主仓定向 `cn.song.mybatisplus.visualizer.log.agent.*`（含 `StatementWeaveWiringGuardTest`）：**217 例 / 0 失败 / 0 错误 / 0 skip**（28 类，`BUILD SUCCESSFUL in 3m 59s`）
 - 反向验证（三处，逐一摘除→必红→还原）：
   1. `onStatementPrepare` 退回 `register` ⇒ `包装器形态_prepare登记解一层_执行在内层时仍取到SQL与参数` **红**（13 例 1 红）
   2. NestGate 退回「进入即置位（产出）」⇒ `内层盲区_不得抑制外层` **红**（17 例 1 红）
   3. 去掉 `lastExitToken` 去重 ⇒ `异常路径双ATHROW出口_只报一条` **红**（真机形态即 3 条重复）
+
+### 9.5 复现语料（demo 仓，2026-11-04 新增）
+
+`mybatis-plus-sql-visualizer-demo/oracle-demo`（commit `fc0094a`）：Spring Boot 2.6.3 + MyBatis-Plus 3.5.7 + ojdbc8，无 web，
+Hikari 配 `connection-test-query=select 1 from dual`，业务四条全走 `BaseMapper`（insert / selectById / selectList / updateById）。
+
+同一实例、premain 挂载、假接收端计帧：
+
+| agent 产物 | 事件 |
+|---|---|
+| 改前（`64371dd8^` 构建，`git worktree`） | **3 条**：`select 1 from dual`、`drop table DEMO_USER`、`create table DEMO_USER …`——四条业务 SQL 全丢 |
+| 改后（`64371dd8`） | **7 条**：上述 3 条 + INSERT / SELECT…WHERE ID=? / SELECT 列表 / UPDATE…SET NAME=?,AGE=?（后三条带绑定参数） |
+
+复现装置的另一条坑：agent 发送是异步的，应用跑完立刻退出会丢未发出的帧（首轮只收到 3 条，误判成修复无效）；
+`ReproRunner` 末尾留 2 秒排空，README 已写明。
 
 ### 9.4 已知边界（本轮不改）
 
