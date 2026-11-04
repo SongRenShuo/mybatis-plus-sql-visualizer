@@ -4,15 +4,9 @@
 
 ## [Unreleased]
 
-## [2026.11.4-beta.2] - 2026-11-04
+## [2026.11.4] - 2026-11-04
 
-> 内测版（Gitee 抢先体验通道）。范围＝beta.1 之后的单一增量：空 Runner「方言不匹配」提示改为可操作的「下一步」。
-
-### Changed
-- **没有匹配方言的数据源时，用户不知道该怎么办（UI-049，用户真机反馈「非常不友好，看到错误会不知道怎么处理」）**：原文案是红色「执行失败：没有与该 SQL 方言（MySQL）匹配的已配置数据源……请打开 Database 工具窗口，在目标数据源属性的 Dialects 设置中把 SQL 方言与语句对齐」，一次列出全部 12 个源名，且与面板右上「未绑定数据源」读起来互相矛盾。现在：①用 JDBC URL 子协议推断哪些源看起来就是目标方言，唯一命中直接把源名写进标题（「下一步：给「mp_demo@localhost」启用 MySQL 方言」），多个则点名前 5 个、其余折叠，推断不出则只说「给一个数据源启用」；②状态行从红色错误降级为橙色提示，右侧给「打开数据源属性」与「切换数据源」两个可点入口，前者直接打开数据源对话框并选中推断出的源；③悬停详文写明「右上角「未绑定数据源」就是这个状态——这不是执行失败」，并给出准确落点：属性页**底部**的 Dialect 下拉（旧文案说的「属性 → Dialects」位置描述不准）。runners 筛选逻辑与五态归因未动，只接第五态「方言不匹配」
-## [2026.11.4-beta.1] - 2026-11-04
-
-> 内测版（Gitee 抢先体验通道）。范围＝v2026.11.3 发行包之后的全部用户可见增量：Oracle 增强捕获的 PreparedStatement 登记断链修复，以及从 dev 回 port 到 master 的五项预览、方言与线程修复。
+> 范围＝v2026.11.3 发行包之后的全部用户可见增量：Oracle 增强捕获的 PreparedStatement 登记断链修复、从 dev 回 port 到 master 的五项预览/方言/线程修复，以及空 Runner「方言不匹配」提示的可操作化改造。
 
 ### Fixed
 - **Oracle 应用的增强捕获只剩连接校验 SQL，MyBatis 业务 SQL 一条不出（T-OracleWrapperRegistry，用户真机报障）**：Oracle thin 驱动对外返回的是包装器（`OraclePreparedStatementWrapper` / `OracleCallableStatementWrapper` / `OracleStatementWrapper`），prepare 面把我方登记的 SQL 挂在包装器上，而 `executeQuery()` 的织入点在包内物理语句（`T4CPreparedStatement`）——登记对象与执行对象错位，查表永远落空、事件按「盲区」丢弃；plain `Statement` 走「SQL 取首参」不依赖登记表，所以只有 `select 1 from dual` 这类连接校验 SQL 能看见。现 prepare 面登记时按字段类型反射解一层包装，把内层物理语句一并登记（绑定参数与批串随之接回内层）。同时修掉同链路两处去重门缺陷：嵌套门把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉；同一帧「try 内 ATHROW + 处理器重抛」两条出口钩子会让嵌套深度多减一次，一条失败语句重复上报 3 条。真机复验（Oracle Free 23：ojdbc11 23.3 / ojdbc8 19.3 / ojdbc8 12.2，premain 与 attach 双路径，HikariCP 池）：业务 SQL 全部可见且带绑定参数，失败语句只报 1 条
@@ -21,6 +15,9 @@
 - **控制台数据源下拉每次刷新都在界面线程读 PSI（T-ThreadFix A）**：接管组覆写了 `update()` 与 `displayTextInToolbar()`，平台据此判定它不是默认 update，线程落回 EDT；而它逐字委托的原生 `ChooseDataSourceAction` 自己返回 BGT，PSI 走平台预缓存 DataContext。一次「预览 + 执行」里 IDE 日志出现 1 条 PreCachedDataContext 与 8 条慢操作告警，全部指向这个类。现在声明 `ActionUpdateThread.BGT`，与原生动作一致，update 体仍只读写 Presentation，不碰 PSI 与 Swing
 - **执行 SQL 时在界面线程做 PSI/VFS 目录查找（T-ThreadFix B）**：准备链第一次取控制台脚本模型会实例化临时文件的 PSI，平台内部走 `findDirectory → isUnderIgnored → ensureIsUpToDate`，EDT 上调用即记慢操作，一次执行 9 条。靠缓存也不行——方言映射的 `setMapping` 会触发重解析把 PSI 作废。现在 attach 之后先到后台线程用读锁预热 PSI，再以 `nonModal` 回 EDT 续接准备；非 EDT 调用方保持原同步语义；续接异常统一走 `handlePrepareFailure`，单飞门不会悬挂 60 秒。预热失败只是退回「取模型时自己建 PSI」的旧行为
 - **执行入口与方言映射的写派发不是写安全的（T-ThreadFix C）**：`submitExplainDirectConsole` 用 `ModalityState.any()` 投递，`DialectPreMapping` 从后台线程用省略模态派发 `setMapping`；`any()` 恒为 write-unsafe，链内改文档与改模型的写动作因此没有写资格，一次执行出现 3 条 TransactionGuard 告警，写有被平台拒绝的风险。现在两处派发统一改 `ModalityState.nonModal()`，投递顺序、回调内容与异常路径都没变；方言映射仍保留原有有界等待与超时降级（模态弹窗存续期映射延后，预算内未落地即回落 GenericSQL）
+
+### Changed
+- **没有匹配方言的数据源时，用户不知道该怎么办（UI-049，用户真机反馈「非常不友好，看到错误会不知道怎么处理」）**：原文案是红色「执行失败：没有与该 SQL 方言（MySQL）匹配的已配置数据源……请打开 Database 工具窗口，在目标数据源属性的 Dialects 设置中把 SQL 方言与语句对齐」，一次列出全部 12 个源名，且与面板右上「未绑定数据源」读起来互相矛盾。现在：①用 JDBC URL 子协议推断哪些源看起来就是目标方言，唯一命中直接把源名写进标题（「下一步：给「mp_demo@localhost」启用 MySQL 方言」），多个则点名前 5 个、其余折叠，推断不出则只说「给一个数据源启用」；②状态行从红色错误降级为橙色提示，右侧给「打开数据源属性」与「切换数据源」两个可点入口，前者直接打开数据源对话框并选中推断出的源；③悬停详文写明「右上角「未绑定数据源」就是这个状态——这不是执行失败」，并给出可执行的下一步：右键目标数据源 → Properties，用「Test Connection」确认能连上（平台在连接成功后才把该源识别为该方言）。初版文案写的「属性页底部 Dialect 下拉框」经反编译核实不成立（243/262 的方言 UI 是只读标签，点不进去），已在发版前改掉。runners 筛选逻辑与五态归因未动，只接第五态「方言不匹配」
 
 ## [2026.11.3] - 2026-11-03
 
