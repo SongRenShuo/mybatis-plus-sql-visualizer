@@ -1266,6 +1266,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                 listOf(
                     DecisionFn("offendersOf", FnKind.VIOLATIONS),
                     DecisionFn("writeSafeDeliveryOffenders", FnKind.VIOLATIONS),
+                    // UI-002（2026-11-04 真机）：`psi.isValid` 在池线程无读锁硬抛（Read access is
+                    // allowed from inside read-action only）。判定按**括号作用域**判「每处 .isValid 是否
+                    // 落在 ReadAction.compute{…} 内」，防「函数里出现过 ReadAction 但判定裸奔」。
+                    DecisionFn("psiValidityReadLockOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "unprotectedIsValidSites",
+                        FnKind.HELPER,
+                        "单函数体判定内核（private）：逐处 .isValid 校验 ReadAction 括号作用域、"
+                            + "并防空绿（一处都没有＝判定被整体删除）；违规行号按整文件行号报，"
+                            + "是 psiValidityReadLockOffenders 的判定内核；自证经该调用边到达",
+                        via = listOf("psiValidityReadLockOffenders"),
+                    ),
                     DecisionFn(
                         "deliveryVerdict",
                         FnKind.HELPER,
