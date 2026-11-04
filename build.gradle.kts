@@ -142,7 +142,7 @@ dependencies {
         // Plugin Verifier 按目标 IDE 集合校验。database API 在 com.intellij.database（仅 Ultimate）。
         // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
         // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
-        // 注：本机日常 IDE 为 Ultimate 2026.2.3（2026-09-17 起，T-VerifyIde2623），243 平台需下载（gradle.properties 已配代理）。
+        // 注：本机日常 IDE 为 Ultimate 2026.2.4（2026-11-04 升版），243 平台需下载（gradle.properties 已配代理）。
         intellijIdeaUltimate(if (gifRecord) "2026.2.1" else "2024.3.7.1")
         testFramework(TestFrameworkType.Platform)
 

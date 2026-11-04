@@ -31,17 +31,17 @@ intellijPlatform {
                 "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "minimal" -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
                 }
                 // T-CiMatrix（2026-11-04）：单版本选择——CI matrix 三 job 并行各验一个目标，
                 // 把三目标串行的约 5 分钟压到一个目标的墙钟。本地发版仍走默认全量三版本。
                 "243" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "253" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-                "262" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                "262" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
                 else -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
                 }
             }
         }
@@ -218,12 +218,12 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
         }
         val targets = when (verifyIdes) {
             "smoke" -> listOf(ide243)
-            "minimal" -> listOf(ide243, ideDir("idea-2026.2.3-win"))
+            "minimal" -> listOf(ide243, ideDir("idea-2026.2.4-win"))
             // T-CiMatrix：单版本目标（CI matrix 并行用）
             "243" -> listOf(ide243)
             "253" -> listOf(ideDir("idea-2025.3.5-win"))
-            "262" -> listOf(ideDir("idea-2026.2.3-win"))
-            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.3-win"))
+            "262" -> listOf(ideDir("idea-2026.2.4-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.4-win"))
         }
         buildList {
             add("check-plugin")
@@ -317,7 +317,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 val mpMarketTargets: List<Pair<String, String>> = listOf(
     "ideaIU-2024.3.7.1-win" to "243",
     "idea-2025.3.5-win" to "253",
-    "idea-2026.2.3-win" to "262",
+    "idea-2026.2.4-win" to "262",
 )
 
 // 三个单目标子任务与聚合任务共同的 zip/报告路径解析（配置期捕获为局部值，CC 可序列化）。
