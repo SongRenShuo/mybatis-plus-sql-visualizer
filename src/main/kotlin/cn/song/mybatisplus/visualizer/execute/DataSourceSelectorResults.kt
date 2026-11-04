@@ -5,12 +5,14 @@ import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import javax.swing.Icon
@@ -289,7 +291,75 @@ internal fun DataSourceSelector.chooseAndPrepare(
     }
 
     // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
-    val temp = createTempPsiFile(project, submitSql, dialectGateRequest?.renderedDialectName)
+    // T-ExecSlowOps-BP（2026-11-04 回 port dev ba314f42）：本段含 VFS refresh 与
+    // PsiManager.findFile 两个平台慢操作（243/262「Slow operations are prohibited on EDT」
+    // 断言实证，栈见 createTempPsiFileAsync KDoc）——**EDT 上只做派发**，结果经
+    // invokeLater(nonModal) 回到 EDT 续接准备链（弹窗/内嵌控制台/结果面板仍全部在 EDT）。
+    // 契约影响：本函数的后续全链已迁入 [continuePrepareAfterTempFile]，由 onReady 驱动。
+    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp ->
+        continuePrepareAfterTempFile(
+            project = project,
+            temp = temp,
+            sql = sql,
+            submitSql = submitSql,
+            executeAfterPrepare = executeAfterPrepare,
+            onConsole = onConsole,
+            onEditor = onEditor,
+            onError = onError,
+            callback = callback,
+            onErrorRich = onErrorRich,
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
+            onSubmission = onSubmission,
+            forceChoose = forceChoose,
+            forceChoosePopup = forceChoosePopup,
+            preferredRunnerName = preferredRunnerName,
+            intendedDs = intendedDs,
+            intendedDsId = intendedDsId,
+            prepareOwner = prepareOwner,
+            queuedIntent = queuedIntent,
+        )
+    }
+}
+
+/**
+ * T-ExecSlowOps-BP：`chooseAndPrepare` 的**后半链**——临时文件就绪（异步回调形态）之后的
+ * 数据源绑定对齐 / Runner 枚举 / last-used 静默命中 / 选择器弹窗 / 建链执行。
+ *
+ * 为什么单独成函数：`createTempPsiFile` 的慢段必须离开 EDT（见 [createTempPsiFileAsync]），
+ * 续接只能写在回调里；而回调体内原先的 `return@chooseAndPrepare`（S2-12 绑定回落与重映射重试
+ * 两处）在 lambda 里不成立，故整段逐字搬出。**本函数必须在 EDT 上执行**（弹窗/内嵌控制台/
+ * 结果组件全是 UI 动作）——异步入口保证经 `invokeLater` 回到 EDT。
+ *
+ * @param temp [createTempPsiFileAsync] 的产物；null = 建链失败（阶段原因在 `lastTempFileFailure`）
+ * @param sql 面板/调用方原文（重映射重试按原文重入 `chooseAndPrepare`，与 submitSql 不同）
+ * @param prepareOwner 门持有链的排队意图（null = PASS_THROUGH 预览链，不持有单飞门）
+ */
+internal fun DataSourceSelector.continuePrepareAfterTempFile(
+    project: Project,
+    temp: Pair<VirtualFile, PsiFile>?,
+    sql: String,
+    submitSql: String,
+    executeAfterPrepare: Boolean,
+    onConsole: ((javax.swing.JComponent) -> Unit)?,
+    onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)?,
+    onError: ((String) -> Unit)?,
+    callback: ((Boolean) -> Unit)?,
+    onErrorRich: ((ExecutionErrorInfo) -> Unit)?,
+    wholeScriptExec: Boolean,
+    dialectGateRequest: ExecutionDialectGate.Request?,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)?,
+    onSubmission: (ExecutionSubmission) -> Unit,
+    forceChoose: Boolean,
+    forceChoosePopup: Boolean,
+    preferredRunnerName: String?,
+    intendedDs: Any?,
+    intendedDsId: String?,
+    prepareOwner: QueuedExecuteIntent?,
+    queuedIntent: QueuedExecuteIntent,
+) {
+    val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (temp == null) {
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
@@ -334,7 +404,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
 
     // consumer：runner.run 建好 session 后回调 → 续接准备链（attachConsole → 拼合 → 可选执行）
     var chosenRunnerName: String? = null
-    fun isPrepareActive(): Boolean = !queuedIntent.isCompleted && (!ownsGate || prepareGate.isOwner(queuedIntent))
+    fun isPrepareActive(): Boolean = !queuedIntent.isCompleted &&
+        (prepareOwner == null || prepareGate.isOwner(queuedIntent))
     val runnerError: (String) -> Unit = { message ->
         if (isPrepareActive()) failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null, message)
     }
@@ -372,6 +443,15 @@ internal fun DataSourceSelector.chooseAndPrepare(
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
             onSubmission = onSubmission, isPrepareActive = ::isPrepareActive,
         )
+    }
+
+    // T-ExecSlowOps-BP：**迟到的续接守卫**——临时文件构建已改为异步（池线程 → invokeLater），
+    // 窗口内门可能已被 60s 逃生/用户取消终结，或本链已不是 owner。此时继续枚举 Runner/弹选择器
+    // 会在新链上建第二条会话/控制台（T-FirstExecResultInvisible F1 的单飞纪律）。原生同步链没有
+    // 这个窗口，是异步化引入的新竞态面，必须在这里收口。
+    if (!isPrepareActive()) {
+        LOG.info("[M36][T-ExecSlowOps-BP] temp file ready but prepare chain no longer active — abandoned")
+        return
     }
 
     // T-ExplainSwitchNative W8-hotfix（2026-10-24 用户实测「点击切换数据源就报错」）：
@@ -458,11 +538,14 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 LOG.info("[M36] runners empty → remapped exec file to target dialect, retry runners=${retry.size}")
                 if (retry.isNotEmpty()) {
                     // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）
-                    return@chooseAndPrepare chooseAndPrepare(
+                    // T-ExecSlowOps-BP：本函数已从 chooseAndPrepare 拆出，标签返回改为普通 return
+                    //（原 `return@chooseAndPrepare chooseAndPrepare(...)`，递归结果同为 Unit）
+                    chooseAndPrepare(
                         project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
                         onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
                         forceChoose, preferredRunnerName, forceChoosePopup,
                     )
+                    return
                 }
             }
             val emptyReason = emptyRunnersReason(registered.isEmpty(), enumeration.failure)
@@ -506,7 +589,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             // M36.3：无数据源时通知 UI 从「执行中」恢复
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
             onSubmission(ExecutionSubmission.BLOCKED)
-            if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
+            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
             callback?.invoke(false)
         }
         runners.size == 1 && shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup -> {
@@ -530,9 +613,9 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 )
                 // 不弹窗、不建链、不投递 onError（面板保持「未绑定」灰字）。
                 // 单飞门**必须结算**：不结算会让下一次执行排队到 60s 超时（门持有链不复位）。
-                if (ownsGate) prepareGate.finishPrepare(prepareOwner)
+                if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner)
                 callback?.invoke(false)
-                return@chooseAndPrepare
+                return
             }
             LOG.info("[M36] show popup with ${runners.size} runners")
             prepareGate.beginInteraction(prepareOwner)
@@ -552,7 +635,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 callback?.invoke(runner != null)
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
                 if (runner == null) {
-                    if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)
+                    if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)
                     onSubmission(ExecutionSubmission.CANCELLED)
                 }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
@@ -1452,6 +1535,104 @@ internal fun DataSourceSelector.installOutputHistoryFillLayout(root: java.awt.Co
 }
 
 /**
+ * T-ExecSlowOps-BP：**EDT 入口**——把 [createTempPsiFile] 的慢段整体挪出 EDT。
+ *
+ * 缺陷实证（2026-11-04 真机 master 包 `v2026.11.4-beta.1`，`idea.log` 一轮 36 条）：
+ * ```
+ * SqlPreviewDialog.<init> → showResult → prepareDefaultConsole
+ *   → SqlExecutor.prepareConsole → DataSourceSelector.prepareConsole
+ *     → chooseAndPrepare → createTempPsiFile
+ *       → ReadAction.compute { PsiManager.getInstance(project).findFile(vf) }
+ *         → FileManagerImpl.findDirectory → ProjectFileIndexImpl.isUnderIgnored
+ *           → WorkspaceFileIndexDataImpl.ensureIsUpToDate     ← 慢操作
+ * ```
+ * `ReadAction.compute` 只保证读语义、**不改变线程**——PSI 首次实例化照跑在 EDT 上，平台
+ * `SlowOperations` 断言必然 SEVERE。冷路径（缓存未命中）三路皆可达：执行 SQL / 执行计划 /
+ * 回滚快照都走 `prepareConsole → chooseAndPrepare → createTempPsiFile`。
+ *
+ * 线程契约：
+ *  - **EDT 调用**（生产唯一形态）：立刻返回，慢段在池线程执行，结果经**write-safe 投递**回到 EDT
+ *    交给 [onReady]——续接链里的弹窗/内嵌控制台/结果面板动作因此仍全部在 EDT；
+ *  - 非 EDT 调用（防御分支，生产不可达）：慢段在调用线程就地跑（BGT 上合法），**回调同样经
+ *    write-safe 投递回 EDT**——续接链是 UI + 文档写，不能由后台线程承接。
+ *
+ * **写安全**：投递模态必须是 `ModalityState.nonModal()`，**不能用 `any()`**。
+ * `TransactionGuardImpl` 构造期只把 `nonModal` 登记为 write-safe；`any()` 排出的回调不套
+ * `runWithWritingAllowed`，而续接链 [continuePrepareAfterTempFile] 内含文档写（共享控制台
+ * `editor.document.setText`、控制台文档 `setText` + `PsiDocumentManager.commitDocument`），
+ * 于是每次执行都紧跟一条 `SEVERE TransactionGuardImpl … Write-unsafe context`
+ * （dev 2026-11-01 真机三连实证；仓内定案见 `ExecWriteSafeDispatchGuardTest`）。
+ *
+ * 契约影响：本函数**异步**——调用方不得在调用返回后立即使用临时文件，必须写在 [onReady] 里
+ * （`chooseAndPrepare` 的后续全链已按此迁入 [continuePrepareAfterTempFile]）。
+ *
+ * @param onReady 结果回调；null = 建链失败（阶段原因在 `lastTempFileFailure`）。EDT 调用时
+ *   回调保证在 EDT 上、且处于 write-safe 上下文（可写文档）。
+ */
+internal fun DataSourceSelector.createTempPsiFileAsync(
+    project: Project,
+    sql: String,
+    renderedDialectName: String? = null,
+    onReady: (Pair<VirtualFile, PsiFile>?) -> Unit,
+) {
+    val app = ApplicationManager.getApplication()
+    if (!app.isDispatchThread) {
+        // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
+        // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
+        val pair = createTempPsiFile(project, sql, renderedDialectName)
+        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
+        return
+    }
+    app.executeOnPooledThread {
+        val pair = createTempPsiFile(project, sql, renderedDialectName)
+        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
+    }
+}
+
+/**
+ * T-ExecPsiInvalid：异步窗口内的 **PSI 失效兜底**。
+ *
+ * 缺陷形态：`createTempPsiFile` 在池线程 `findFile` 拿到的 [PsiFile] 到 EDT 回调消费之间有一个
+ * 空窗。空窗里只要该文件内容发生一次变化（doc 驱动的三方同步落盘、防抖自动落盘、用户/其他写方
+ * 覆盖 `mpsql-exec.sql`），平台就会丢掉旧 PSI——`vf.isValid` 仍为 true（**只有内容变了**），
+ * 而 `psi.text` 硬抛 `PsiInvalidElementAccessException`。旧同步实现把整段压在 EDT 上，EDT 被
+ * 占住时排队的内容变化落不下来，所以该窗口一直没暴露；改异步后它成了真窗口（dev 全量门禁实证）。
+ *
+ * 兜底口径：**只有 PSI 失效才重解析**（有效即原样返回，热路径零额外开销）；重解析仍失败则
+ * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。
+ *
+ * 线程契约（UI-002）：本函数在 **EDT**（write-safe 投递内）执行，但 `psi.isValid` / `findFile`
+ * 都是 PSI API，**读权限一律显式取**——不依赖 EDT 隐式读权限（新线程模型下
+ * `Application.isReadAccessAllowed()` 只看本线程读许可；`TransactionGuard` 的 write-safe 只放开
+ * 文档写、不放读）。后台误调本函数也不会打平台读锁断言。
+ */
+internal fun revalidateOnEdt(
+    project: Project,
+    pair: Pair<VirtualFile, PsiFile>?,
+): Pair<VirtualFile, PsiFile>? {
+    if (pair == null) return null
+    val (vf, psi) = pair
+    val stillValid = try {
+        ReadAction.compute<Boolean, Throwable> { psi.isValid }
+    } catch (e: Throwable) {
+        if (FatalErrors.isFatal(e)) throw e
+        false
+    }
+    if (stillValid) return pair
+    // 重解析 + 有效性判定同一次读锁内完成——判出的 fresh 出了锁再判 isValid 会多一次读权限要求
+    //（且中间仍有失效窗口），合并后只读一次平台状态。
+    val fresh = try {
+        ReadAction.compute<PsiFile?, Throwable> {
+            PsiManager.getInstance(project).findFile(vf)?.takeIf { it.isValid }
+        }
+    } catch (e: Throwable) {
+        if (FatalErrors.isFatal(e)) throw e
+        null
+    }
+    return if (fresh != null) vf to fresh else null
+}
+
+/**
  * M36.5.75：目标子组件填充布局——[target] 占满容器可用高度（可见 [javax.swing.JScrollBar]
  * 占底部条位），其余子组件高度 0（Output 内的输入编辑器是重复编辑表面，用户在 topBlock
  * 编辑 SQL）。每次 validate 自动重跑（幂等），不存在一次性 setSize 被压回的问题；
@@ -1463,6 +1644,9 @@ internal fun DataSourceSelector.createTempPsiFile(
     sql: String,
     renderedDialectName: String? = null,
 ): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
+    // T-ExecSlowOps-BP：**慢段本体，只允许后台线程调用**（EDT 调用会撞平台
+    // `Slow operations are prohibited on EDT`）。EDT 侧唯一入口是 [createTempPsiFileAsync]，
+    // 由它派发到池线程；[prewarmExecTempFileInner] 走同款 BGT 裸调形态。
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
     fun fail(stage: String, detail: String = ""): Nothing? {
@@ -1508,11 +1692,21 @@ internal fun DataSourceSelector.createTempPsiFile(
     // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 KDoc）；
     // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
     // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
+    // T-ExecSlowOps-BP：**线程分流**——本函数现由 createTempPsiFileAsync 在池线程调用，
+    // BGT 上包 WIRA × 同步 refresh 会自锁（T-PrewarmWilDeadlock：持写意向锁等 RefreshSession
+    // 推进，而会话推进需 WIL/EDT，2026.2 真机 threadDump 全 IDE not responding 实证），故 BGT
+    // **裸调**；EDT 分支（本券后生产不可达，仅防御）保留 WIRA——262 平台 EDT + plain ReadAction
+    // 内同步 refresh 硬抛 write thread only（F2b 修复本体）。守卫：
+    // SyncRefreshWriteIntentGuardTest 规则二/规则三 + ExecTempFileEdtGuardTest。
     val vf = try {
-        com.intellij.openapi.application.WriteIntentReadAction
-            .compute<com.intellij.openapi.vfs.VirtualFile?> {
-                LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
-            }
+        if (ApplicationManager.getApplication().isDispatchThread) {
+            com.intellij.openapi.application.WriteIntentReadAction
+                .compute<com.intellij.openapi.vfs.VirtualFile?> {
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+                }
+        } else {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+        }
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         return fail("refreshVfs", "${e.javaClass.simpleName}: ${e.message}")

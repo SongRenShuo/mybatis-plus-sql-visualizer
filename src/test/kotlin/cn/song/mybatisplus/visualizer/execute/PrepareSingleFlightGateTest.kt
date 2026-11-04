@@ -373,7 +373,11 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `真实资源缺失分支和弹窗取消接入终结器`() {
         val selector = selectorUnion()
-        assertTrue(selector.contains("if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"))
+        // T-ExecSlowOps-BP：取消路径的终结器随 chooseAndPrepare 后半链迁入
+        // continuePrepareAfterTempFile——该函数里没有 `ownsGate` 局部变量（门持有事实由
+        // prepareOwner 非空表达，见 chooseAndPrepare 的 `queuedIntent.takeIf { ownsGate }`），
+        // 判据等价于原 `if (ownsGate) …`。
+        assertTrue(selector.contains("if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"))
         assertTrue(selector.contains("prepareGate.expire(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.beginInteraction(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.endInteraction(prepareOwner)"))

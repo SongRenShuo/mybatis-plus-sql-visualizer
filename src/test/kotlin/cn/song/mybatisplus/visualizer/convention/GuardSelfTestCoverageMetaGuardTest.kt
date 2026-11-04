@@ -1212,6 +1212,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "invokeLater 实参区必须含 nonModal、且至少有一处派发（防空绿）。自证语料=「any 与省略模态必被" +
                     "点名」「无派发必红」「nonModal 不误报」。",
             ),
+            // ---- T-ExecSlowOps-BP：执行临时文件构建移出 EDT（2026-11-04 回 port dev ba314f42） ----
+            GuardEntry(
+                "convention/ExecTempFileEdtGuardTest.kt",
+                listOf(DecisionFn("tempPsiEdtOffenders", FnKind.VIOLATIONS)),
+                "T-ExecSlowOps-BP：执行临时文件构建的 EDT 慢操作守卫（master 真机一轮 36 条 " +
+                    "`Slow operations are prohibited on EDT`，栈 chooseAndPrepare → createTempPsiFile → " +
+                    "PsiManager.findFile → WorkspaceFileIndex.ensureIsUpToDate）。判据六条：chooseAndPrepare " +
+                    "不得直接调 createTempPsiFile（必须经 createTempPsiFileAsync）；async 三段式 + nonModal + " +
+                    "revalidateOnEdt 兜底；revalidate 两处 PSI 判定包 ReadAction；慢段 refresh 按线程分流" +
+                    "（BGT 裸调防 WIRA 自锁）；续接链保留 failPrepareRequests 与迟到守卫 isPrepareActive。" +
+                    "自证语料=「同步直调/any 投递/缺分流/丢收口必被点名」+「合规形态不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",
