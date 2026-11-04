@@ -1170,6 +1170,48 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
                     "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
             ),
+            // ---- T-ThreadFix：执行链三类线程契约守卫（2026-11-04 真机 243 沙盒） ----
+            GuardEntry(
+                "convention/TakeoverUpdateThreadGuardTest.kt",
+                listOf(DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix A：控制台数据源下拉接管组的 update 线程契约守卫。真机 SEVERE：" +
+                    "`'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation` + " +
+                    "同链 9 条 SlowOperations（findFile → findDirectory → isUnderIgnored）。根因是本类覆写了 " +
+                    "update/displayTextInToolbar，`ActionClassMetaData.isDefaultUpdate` 为 false → 平台默认落 " +
+                    "EDT，而它委托的原生 ChooseDataSourceAction javap 实证是 BGT。判据两条：必须显式声明 " +
+                    "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
+                    "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
+            ),
+            GuardEntry(
+                "convention/ConsolePsiWarmGuardTest.kt",
+                listOf(
+                    DecisionFn("psiWarmChainOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isDeclarationAt",
+                        FnKind.HELPER,
+                        "调用点/声明点判别谓词（Boolean 形态）：判断某 token 出现处前面是否为 `fun`，" +
+                            "供 psiWarmChainOffenders 只统计真实调用点；自证经该调用边到达",
+                        via = listOf("psiWarmChainOffenders"),
+                    ),
+                ),
+                "T-ThreadFix B：控制台 PSI 预暖线程契约守卫。真机 SEVERE：`prepareAfterEditorResolved:78` 的 " +
+                    "`console.getScriptModel()` 内部 `PsiUtilCore.getPsiFile` 首次实例化 PSI → " +
+                    "`FileManagerImpl.findDirectory` → WorkspaceFileIndex `ensureIsUpToDate`（EDT 慢操作，一次点击 9 条）。" +
+                    "判据：warmConsolePsiThen 必须是「isDispatchThread + executeOnPooledThread + ReadAction/PsiManager + " +
+                    "invokeLater(nonModal)」三段式，且 prepareAfterEditorResolved 的每个调用点都落在其续接 lambda 作用域内。" +
+                    "自证语料=「预暖缺段与续接点裸调必被点名」+「合规预暖形态不误报」。",
+            ),
+            GuardEntry(
+                "convention/ExecWriteSafeDispatchGuardTest.kt",
+                listOf(DecisionFn("writeSafeDispatchOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix C：执行入口/方言映射派发的 write-safe 投递守卫。真机 3 条 " +
+                    "`TransactionGuardImpl Write-unsafe context`：执行链入口（submitExplainDirectConsole）用 " +
+                    "ModalityState.any() 投递，链内 reuseSharedConsole 的 document.setText 与 executeOnConsole 的 " +
+                    "writeVfTextViaDocument 全部无写资格；方言预映射从 BGT 用省略模态派发 setMapping，平台内部 " +
+                    "reparseFiles + requestReparsing 两拍写动作同样无写资格。判据：作用域内不得有 any()、每个 " +
+                    "invokeLater 实参区必须含 nonModal、且至少有一处派发（防空绿）。自证语料=「any 与省略模态必被" +
+                    "点名」「无派发必红」「nonModal 不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",

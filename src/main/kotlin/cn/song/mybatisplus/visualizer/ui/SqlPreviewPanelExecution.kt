@@ -693,8 +693,19 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
         // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
         // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
-        renderedDialectName = result?.effectiveDialect?.name
-            ?: currentDialectDecision?.compatibilityFallbackName
+        // UI-004（2026-11-04 真机）：不能无条件优先 `result.effectiveDialect`——它是预览生成时
+        // 固化的快照，XML 载体无法经 rerenderForExecutionTarget 重写，会与顶部（currentDialectDecision，
+        // 随绑定/刷新重算）分裂成「顶部 MySQL、底部 PostgreSQL」。方言无关载体（XML 原文/纯文本）
+        // 取最新决策，模型/批量/分页载体仍取渲染事实——判据与理由见 [DialectGateRenderDialect]。
+        renderedDialectName = DialectGateRenderDialect.resolve(
+            effectiveDialectName = result?.effectiveDialect?.name,
+            decisionDialectName = currentDialectDecision?.dialectName,
+            dialectNeutral = DialectGateRenderDialect.isDialectNeutralCarrier(
+                hasPreviewModel = result?.previewModel != null,
+                hasBatchModel = result?.batchModel != null,
+                hasPaginationLimitLine = result?.paginationLimitLine != null,
+            ),
+        ) ?: currentDialectDecision?.compatibilityFallbackName
             ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
         intent = intent,
         canLosslesslyRerender = canRerender,
@@ -713,7 +724,9 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
             val target = verdict.targetDialectName
             if (target != null && rerenderForExecutionTarget(target)) {
-                resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict))
+                val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+                lastDialectGateMessage = message
+                resultPanel.showStatus(message)
             } else {
                 showDialectGateError(
                     verdict.copy(status = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE),
@@ -732,6 +745,9 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT,
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
             val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+            // UI-004：记下「底部当前显示的是方言提示」——刷新链据此判断能否安全替换/清空
+            //（绝不动执行结果与真实执行错误）。
+            lastDialectGateMessage = message
             // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
             // 放行态同样要给出口——文案本身就写着「可点「切换数据源」」，而 showStatus 第一行的
             // clearErrorActions() 会把两个链接清掉。改用 showStatusWithActions：信息态底色不变，
@@ -856,6 +872,7 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String
             embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
             // 换源成功即清掉旧状态行：方言提示按新目标重新判定（MATCH 时不再提示）
             resultPanel.showEmpty()
+            lastDialectGateMessage = null
         },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
         onError = { errorMsg -> resultPanel.showError(errorMsg) },
@@ -1306,6 +1323,22 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
     val prewarmDone = java.util.concurrent.atomic.AtomicBoolean(false)
     val continueChain = {
         if (prewarmDone.compareAndSet(false, true)) {
+            // T-ThreadFix C：**必须 write-safe 投递（nonModal），不得用 any()**。
+            //
+            // 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」3 条）：
+            // ```
+            // SEVERE - TransactionGuardImpl - Write-unsafe context!
+            //   at DataSourceSelectorResultsKt.reuseSharedConsole(...)
+            //        [WriteCommandAction { editor.document.setText(sql) }]
+            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(...)
+            //        [WriteAction { writeVfTextViaDocument(...) }]
+            //   at SqlExecutor.execute → chooseAndPrepare
+            //   at submitExplainDirectConsole$lambda$0$0
+            // ```
+            // `ModalityState.any()` 恒 write-unsafe（平台构造期只把 nonModal 登记为 write-safe），
+            // 于是整条执行链（复用控制台的 `document.setText`、执行前的 vf 文档同步）都在
+            // 无写资格的上下文里改模型。改成 nonModal 后，续接链整体获得写资格——这条链本来就是
+            // 「用户点了执行计划」的后续，模态弹窗存续期延后到弹窗关闭正是平台要求的语义。
             ApplicationManager.getApplication().invokeLater({
                 if (Disposer.isDisposed(this) || proj.isDisposed) return@invokeLater
                 resultPanel.showLoading()
@@ -1320,7 +1353,7 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
                 )
-            }, com.intellij.openapi.application.ModalityState.any())
+            }, com.intellij.openapi.application.ModalityState.nonModal())
         }
     }
     ApplicationManager.getApplication().executeOnPooledThread {
@@ -1336,8 +1369,11 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                 .info("[W8] exec prewarm before explain failed (fallback to cold path): ${e.javaClass.simpleName}: ${e.message}")
         }
         // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
+        // T-ThreadFix C：write-safe 模态（同 continueChain 内的说明）——这里的 runnable 虽只
+        // 转投一拍，但它是执行链的投递入口，保持 nonModal 口径避免「入口先 any() 再内层 nonModal」
+        // 的双口径。
         ApplicationManager.getApplication().invokeLater({ continueChain() },
-            com.intellij.openapi.application.ModalityState.any())
+            com.intellij.openapi.application.ModalityState.nonModal())
     }
 }
 

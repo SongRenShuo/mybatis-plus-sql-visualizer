@@ -285,6 +285,11 @@ internal fun SqlPreviewPanel.refreshView() {
     displayMode = PreviewDisplayMode.NORMAL
     modeButton.text = modeButtonText()
     renderSql()
+    // UI-004（2026-11-04 真机）：刷新必须**重算方言证据**。用户改 IDEA 的 SQL 方言不会发任何
+    // 事件，旧实现只重渲染模型文本 → 顶部/底部方言停在旧值（「改了方言并刷新，底部仍报旧方言」）。
+    // includeSourceFile = true：按预览生成时的同一份证据（源文件 → IDEA 方言映射）重算；
+    // 重算在池线程，EDT 仅做仅升级替换 + 方言无关载体的证据对齐 + 底部提示重判。
+    refreshDialectStatusRow(includeSourceFile = true)
 }
 
 /** 设置「SQL 格式化输出」（false=压缩）；环境异常兜底 true（多行）。 */
@@ -572,6 +577,8 @@ internal fun SqlPreviewPanel.clear() {
     fieldFillStatus = null
     current = null
     sourceModuleKey = null
+    sourceVirtualFile = null
+    lastDialectGateMessage = null
     // 下次预热在结果到达前使用兼容 MySQL；结果到达后再按实际生成方言重映射。
     previewDesiredDialectName = null
     enabledIds.clear()
