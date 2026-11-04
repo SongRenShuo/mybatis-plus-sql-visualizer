@@ -67,9 +67,9 @@ class ShareExportOffEdtGuardTest {
         assertEquals("ShareDialog 导出落盘形态违规：$problems", emptyList<String>(), problems)
     }
 
-    /** 反向对照：把落盘挪回 EDT 回调（run 之前）→ 守卫必须报出问题。 */
+    /** 反向对照（自证）：把落盘挪回 EDT 回调（run 之前）→ 守卫必须报出问题。 */
     @Test
-    fun testGuardCatchesEdtDirectWrite() {
+    fun test自证_守卫看得见EDT直写形态() {
         val synthetic = """
             private fun exportHtmlReport() {
                 val html = "x"

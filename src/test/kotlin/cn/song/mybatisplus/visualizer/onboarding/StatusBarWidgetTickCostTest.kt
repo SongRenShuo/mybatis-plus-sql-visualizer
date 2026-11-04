@@ -38,11 +38,13 @@ class StatusBarWidgetTickCostTest : BasePlatformTestCase() {
         val before = cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated(project)
         repeat(50) { computeSnapshot(project, executeAvailable = true) }
         val after = cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated(project)
+        // 判据只锁「快照不改变服务创建状态」：全量分片里同 JVM 的前序用例可能已创建过
+        // SqlLogManager，此时「未创建」这一前提不成立（本用例曾因此在分片里假红）。
+        // 真正要防的回归是「widget 轮询把容器毒化」——即调用前后状态不一致。
         assertEquals(
             "快照读取不得创建 SqlLogManager（只读入口契约，否则 widget 会毒化容器）",
             before,
             after,
         )
-        assertNull("夹具前提：本用例项目未启用捕获，服务应仍未创建", after)
     }
 }

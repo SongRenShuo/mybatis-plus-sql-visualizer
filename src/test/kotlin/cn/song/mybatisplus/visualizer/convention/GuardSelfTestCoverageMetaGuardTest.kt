@@ -654,6 +654,29 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/ShareExportOffEdtGuardTest.kt",
+                listOf(DecisionFn("offendersOf", FnKind.VIOLATIONS)),
+                "T-PerfSweep30 04a 守卫：ShareDialog 的 HTML 落盘必须在 Task.Backgroundable.run 内、" +
+                    "BrowserUtil.open 必须在 onSuccess 后。判定内核 `offendersOf` 返回违规说明集合" +
+                    "（saveHtmlReport 出现多次 / 不在 run 内 / 打开不在 onSuccess 内）。自证语料=" +
+                    "`testGuardCatchesEdtDirectWrite` 用「落盘挪回 EDT 回调」的合成源码直接断言内核报出该形态。",
+            ),
+            GuardEntry(
+                "dumbmode/DumbModeClickChainGuardTest.kt",
+                emptyList(),
+                "T-PerfSweep30 02e dumb 夹具：三条点击链（gutter 双跳 / 日志跳转 / 预览链）在 dumb 态" +
+                    "不抛、不静默成功、空表不入缓存。断言全部内联在 `@Test`（依赖真实平台 DumbService 与" +
+                    "fixture，无可注入源码的判定内核，故 decisionFns 留空）；反向验证靠临时撤闸" +
+                    "（撤闸后对应用例变红，读数记在计划 §6.1）。",
+            ),
+            GuardEntry(
+                "actions/ScanBannedApiEdtRefreshGuardTest.kt",
+                emptyList(),
+                "既有守卫（T-FixUI001 批引入，长期欠登）：锁「禁用 API 存量统计的 VFS refresh 不在 EDT」。" +
+                    "断言内联在 `@Test`、无独立判定内核函数（decisionFns 留空并写明依据）；" +
+                    "2026-11-04 T-PerfSweep30 收口时补登，清元守卫扫描面缺口。",
+            ),
+            GuardEntry(
                 "convention/HardcodedUiTextGuardTest.kt",
                 listOf(DecisionFn("scanHardcoded", FnKind.VIOLATIONS)),
                 "UI 控件文案硬编码中文守卫（T-TestGateGems W1-a）：判定内核 `scanHardcoded` 逐文件剥注释" +

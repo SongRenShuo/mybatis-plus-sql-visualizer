@@ -262,7 +262,13 @@ class VersionHighlightsActivityTest {
 
     @Test
     fun test无应用环境静默跳过() = withPinnedVersion(REGISTERED_VERSION) {
-        assertNull("前置：纯 JUnit 进程无 Application", ApplicationManager.getApplication())
+        // T-PerfSweep30 收口：本用例的前提是「进程里没有 Application」，只在纯 JUnit 进程成立。
+        // 全量门禁的分片 JVM 里，同片前序平台测试会创建 Application（headless unit test），
+        // 前提不成立——用 assume 跳过而不是让它假红（原断言在 testShards 上必红，属既有顺序脆弱）。
+        org.junit.Assume.assumeTrue(
+            "分片 JVM 已有 Application（前序平台测试创建），本用例前提不成立，跳过",
+            ApplicationManager.getApplication() == null,
+        )
         val settings = PluginSettings()
         VersionHighlightsActivity.resetForTest()
 
