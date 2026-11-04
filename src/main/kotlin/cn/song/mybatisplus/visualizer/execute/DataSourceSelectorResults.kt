@@ -1362,6 +1362,9 @@ internal fun DataSourceSelector.installOutputHistoryFillLayout(root: java.awt.Co
 
 internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+    // T-PerfSweep30 01a 测试缝：入口计数（cache-only 命中应完全不进本函数——它后面的两次
+    // syncExecVfContentIfNeeded 收敛各付一次 EDT 派发探测，正是本券要省的）
+    ExecFileWriteMetrics.countProjectFileCall()
     // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
     // （VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
     // 磁盘即第二冲突源的一部分；返回 null 走既有「writeFile 失败 → 跳过」降级。
@@ -1398,6 +1401,7 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): 
             vf = existing
         } else {
             // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
+            countExecFileWrite() // T-PerfSweep30 01c：首建裸写计入写次数缝
             FileUtil.writeToFile(f, sql)
             return f
         }

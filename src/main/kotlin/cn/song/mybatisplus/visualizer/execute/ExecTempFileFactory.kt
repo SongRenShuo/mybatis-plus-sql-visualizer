@@ -243,6 +243,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     sql: String,
     LOG: Logger,
     renderedDialectName: String? = null,
+    cacheOnly: Boolean = false,
 ) {
     lastTempFileFailure = null
     // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
@@ -252,18 +253,61 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
         LOG.info("[M36] exec prewarm abandoned (project disposed, T-UiFixGate9)")
         return
     }
+    // T-PerfSweep30 01a：cache-only 形态——VFS 已有 exec 条目且内容与本次 SQL 一致时**跳过写盘**，
+    // 只做 refresh＋方言映射＋findFile＋填缓存槽（性能分析 §4.1 账本①：同一预览打开内预热原文写盘
+    // 与渲染回填/方言重渲染预热重复改写同一文件）。两条不变量保持不变：
+    //  ① 首建（VFS 无条目）裸写仍在 execFileWriteLock 锁内、与存在性检查原子（下方 projectExecFile 未走）；
+    //  ② VFS 已有条目绝不裸写（T-ExecDocSync3）——cache-only 判等成立即返回，判等不成立才走既有写路径。
+    // 判等口径与写路径**同函数**（projectExecFile 锁内即用它）：document 文本优先、否则读「最近写入
+    // 内容+写入时 VFS 时间戳」快照；两者皆不可用（外部写入/无 document）时不采信 → 保守走写路径。
+    var cacheOnlyHit = false
+    if (cacheOnly) {
+        val base = project.basePath
+        if (base == null) {
+            LOG.warn("[M36] exec prewarm cache-only abandoned: project.basePath null")
+            return
+        }
+        val f = java.io.File(
+            java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
+            "mpsql-exec.sql",
+        )
+        // 判等前先 refresh 到 VFS 可见——首次裸写（FileUtil.writeToFile）后 VFS 条目可能尚未建立，
+        // findFileByIoFile 会返回 null（误判「not visible」→ 保守走写路径）。refresh 是只读操作，
+        // 不触写；与下方主链 refresh 段同款（BGT 裸调合法）。
+        val existing = runCatching {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
+        }.getOrNull()
+        if (existing != null && execFileContentMatches(project, existing, sql)) {
+            LOG.info("[M36] exec prewarm cache-only: content already matches — write SKIPPED (T-PerfSweep30 01a)")
+            // 零写盘：跳过下方 projectExecFile（其差量快路径同判据，但会多一次 document 派发探测），
+            // 保留 pre-refresh 收敛（恒 no-op）＋ refresh＋映射＋findFile＋填槽。
+            cacheOnlyHit = true
+        } else {
+            LOG.info(
+                "[M36] exec prewarm cache-only: content mismatch (or not visible) — falling back to write path " +
+                    "(T-PerfSweep30 01a)",
+            )
+        }
+    }
     // T-PrewarmWilDeadlock：下方 refresh 段**必须裸调**（BGT 严禁 WIRA×同步 refresh）——T-ExecSlowOps
     // 曾自 EDT 冷路径同款复制 WIRA 包装，2026.2 真机（threadDump-20261015-181620）实证自锁：本线程
     // 持写意向锁阻塞在 RefreshSessionImpl.waitFor，而会话推进需 WIL/EDT，互等成环（EDT 再被预览
     // 编辑器 mousePressed 排队等 WIL 即扩大为全 IDE「not responding」）。BGT 裸调即平台合法形态
     // （下方 pre-refresh 的 findFileByIoFile 同款；EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，须保留）。
-    val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
-        // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
-        // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
-        if (FatalErrors.isFatal(e)) throw e
-        LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
-        return
-    } ?: return
+    val ioFile = if (cacheOnlyHit) {
+        java.io.File(
+            java.io.File(project.basePath!!, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
+            "mpsql-exec.sql",
+        )
+    } else {
+        runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
+            // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
+            if (FatalErrors.isFatal(e)) throw e
+            LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        } ?: return
+    }
     // T-UiFixGate9：阶段守卫——写链推进期间（文件 IO 毫秒级，VFS refresh 更长）项目随时可能
     // 进入收尾 dispose；每段写/收敛动作前复查，死项目即放弃（投机性写入不重跑）。
     if (project.isDisposed) {
@@ -275,13 +319,18 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // 态；此时 refresh 命中「doc 已修改 && 磁盘≠文档」即弹 File Cache Conflict（第四轮残余竞态，
     // 开发计划 §1.3）。findFileByIoFile（与 projectExecFile 内裸调同形态，prewarm DONE 日志
     // 实证 BGT 可调）命中即过一遍分叉探测 + EDT 派发收敛，正常恒 no-op。
-    try {
-        LocalFileSystem.getInstance().findFileByIoFile(ioFile)?.let { vf0 ->
-            syncExecVfContentIfNeeded(project, vf0, sql)
+    // T-PerfSweep30 01a：cache-only 命中形态**跳过本收敛**——判等已证内容一致（document 文本或
+    // 写入快照），不存在分叉面；且本收敛的 dispatchDocWriteOnEdt 会把相同内容再派一次 document
+    // 写（旧实现下 cache-only 快路径形同虚设）。
+    if (!cacheOnlyHit) {
+        try {
+            LocalFileSystem.getInstance().findFileByIoFile(ioFile)?.let { vf0 ->
+                syncExecVfContentIfNeeded(project, vf0, sql)
+            }
+        } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
+            LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
-    } catch (e: Throwable) {
-        if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
-        LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: ${e.javaClass.simpleName}: ${e.message}")
     }
     val vf = try {
         // T-PrewarmWilDeadlock：裸调（见本方法首部注释）——262 平台 BGT 持 WIL 时同步 refresh
@@ -303,12 +352,15 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
         return
     }
     // T-EC-04：同冷路径——裸写残留的防御收口（正常恒 no-op）
-    try {
-        syncExecVfContentIfNeeded(project, vf, sql)
-    } catch (e: Throwable) {
-        if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
-        LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
-        return
+    // T-PerfSweep30 01a：cache-only 命中同样跳过（判等已证内容一致，无防御面；避免重复派写）
+    if (!cacheOnlyHit) {
+        try {
+            syncExecVfContentIfNeeded(project, vf, sql)
+        } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
+            LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        }
     }
     // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
     // O-145 W7：预览提供了渲染方言时 exec PSI 同步该事实；旧调用仍走 O-136 数据源路由。
