@@ -28,7 +28,7 @@ import java.time.format.DateTimeFormatter
  *  - **不执行任何 SQL**：只读内存计数、设置值、方言决策（方言决策内部只做 URL 探测与设置读取）；
  *  - **不创建未创建过的服务**：AgentManager / SqlLogManager 一律 `getServiceIfCreated`——体检是
  *    旁路诊断，不得为了「看一眼」而拉起增强捕获或日志管理器的常驻线程；
- *  - **有界取数**：五项采集逐项施加时间上界（见 [EnvironmentCheckBounded]）——任一项卡住只降级该项，
+ *  - **有界取数**：六项采集逐项施加时间上界（见 [EnvironmentCheckBounded]）——任一项卡住只降级该项，
  *    整单照常产出。调用方仍应在池线程调 [collect]（平台 API 与文件索引都不该在 EDT 上跑），
  *    但**不需要**再自己加超时：本函数保证在总预算内返回。
  */
@@ -53,6 +53,8 @@ internal object EnvironmentCheckCollector {
                 EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_COMMUNITY) {
                     EnvironmentCheckRules.community(databaseAvailable)
                 },
+                // 档 2：日志尾部匹配（只读 idea.log，不读轮转文件；失败/缺失只降级本项）。
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_LOG) { logDiagnosisItem() },
             ),
         )
         return EnvironmentCheckReport(
@@ -96,10 +98,10 @@ internal object EnvironmentCheckCollector {
             .getOrNull()
             ?: return EnvironmentCheckRules.dialect(null, null, weak = true)
         val text = DialectPreviewStatusText.describe(decision)
-        // 手动/已解析＝强证据；歧义/冲突/不可用＝弱证据（给修复指引，但不报错）
+        // 手动/已解析＝强证据；歧义/冲突/不可用＝弱证据（给三段式说明，但不报错）
         val weak = decision.status != DialectDecisionEngine.Status.MANUAL &&
             decision.status != DialectDecisionEngine.Status.RESOLVED
-        return EnvironmentCheckRules.dialect(text.visible, text.details, weak)
+        return EnvironmentCheckRules.dialect(text.visible, text.details, weak, decision.status)
     }
 
     /**
@@ -159,4 +161,21 @@ internal object EnvironmentCheckCollector {
             epShortCircuited = runCatching { bridge?.epActiveShortCircuitCount?.get() }.getOrNull() ?: 0L,
         )
     }
+
+    /**
+     * 档 2：近期日志诊断。
+     *
+     * 只读 `PathManager.getLogPath()/idea.log` 的尾部固定窗口（见 [IdeaLogTails]），按
+     * [KnownIssueCatalog] 匹配已知异常模式。三条约束：
+     *  - **不读轮转文件**（`idea.log.1` …）：上一进程/跨会话的异常会污染本次诊断；
+     *  - **原文不出本函数**：日志只用于匹配，体检单里只有规则 id / 结论文案 / 命中次数；
+     *  - **读不到就降级**：文件缺失/读取失败都只让本项 UNAVAILABLE，其余项与整单照常产出。
+     */
+    private fun logDiagnosisItem(): EnvironmentCheckItem =
+        when (val tail = IdeaLogTails.readTail()) {
+            is IdeaLogTails.Tail.Missing -> EnvironmentCheckRules.logUnavailable("envCheck.log.missing")
+            is IdeaLogTails.Tail.Failed ->
+                EnvironmentCheckRules.logUnavailable("envCheck.log.readFailed", tail.errorType)
+            is IdeaLogTails.Tail.Ok -> EnvironmentCheckRules.logDiagnosis(tail.text, tail.bytes)
+        }
 }
