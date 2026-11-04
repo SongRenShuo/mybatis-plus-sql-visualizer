@@ -1323,6 +1323,22 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
     val prewarmDone = java.util.concurrent.atomic.AtomicBoolean(false)
     val continueChain = {
         if (prewarmDone.compareAndSet(false, true)) {
+            // T-ThreadFix C：**必须 write-safe 投递（nonModal），不得用 any()**。
+            //
+            // 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」3 条）：
+            // ```
+            // SEVERE - TransactionGuardImpl - Write-unsafe context!
+            //   at DataSourceSelectorResultsKt.reuseSharedConsole(...)
+            //        [WriteCommandAction { editor.document.setText(sql) }]
+            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(...)
+            //        [WriteAction { writeVfTextViaDocument(...) }]
+            //   at SqlExecutor.execute → chooseAndPrepare
+            //   at submitExplainDirectConsole$lambda$0$0
+            // ```
+            // `ModalityState.any()` 恒 write-unsafe（平台构造期只把 nonModal 登记为 write-safe），
+            // 于是整条执行链（复用控制台的 `document.setText`、执行前的 vf 文档同步）都在
+            // 无写资格的上下文里改模型。改成 nonModal 后，续接链整体获得写资格——这条链本来就是
+            // 「用户点了执行计划」的后续，模态弹窗存续期延后到弹窗关闭正是平台要求的语义。
             ApplicationManager.getApplication().invokeLater({
                 if (Disposer.isDisposed(this) || proj.isDisposed) return@invokeLater
                 resultPanel.showLoading()
@@ -1337,7 +1353,7 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
                 )
-            }, com.intellij.openapi.application.ModalityState.any())
+            }, com.intellij.openapi.application.ModalityState.nonModal())
         }
     }
     ApplicationManager.getApplication().executeOnPooledThread {
@@ -1353,8 +1369,11 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                 .info("[W8] exec prewarm before explain failed (fallback to cold path): ${e.javaClass.simpleName}: ${e.message}")
         }
         // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
+        // T-ThreadFix C：write-safe 模态（同 continueChain 内的说明）——这里的 runnable 虽只
+        // 转投一拍，但它是执行链的投递入口，保持 nonModal 口径避免「入口先 any() 再内层 nonModal」
+        // 的双口径。
         ApplicationManager.getApplication().invokeLater({ continueChain() },
-            com.intellij.openapi.application.ModalityState.any())
+            com.intellij.openapi.application.ModalityState.nonModal())
     }
 }
 

@@ -1201,6 +1201,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "invokeLater(nonModal)」三段式，且 prepareAfterEditorResolved 的每个调用点都落在其续接 lambda 作用域内。" +
                     "自证语料=「预暖缺段与续接点裸调必被点名」+「合规预暖形态不误报」。",
             ),
+            GuardEntry(
+                "convention/ExecWriteSafeDispatchGuardTest.kt",
+                listOf(DecisionFn("writeSafeDispatchOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix C：执行入口/方言映射派发的 write-safe 投递守卫。真机 3 条 " +
+                    "`TransactionGuardImpl Write-unsafe context`：执行链入口（submitExplainDirectConsole）用 " +
+                    "ModalityState.any() 投递，链内 reuseSharedConsole 的 document.setText 与 executeOnConsole 的 " +
+                    "writeVfTextViaDocument 全部无写资格；方言预映射从 BGT 用省略模态派发 setMapping，平台内部 " +
+                    "reparseFiles + requestReparsing 两拍写动作同样无写资格。判据：作用域内不得有 any()、每个 " +
+                    "invokeLater 实参区必须含 nonModal、且至少有一处派发（防空绿）。自证语料=「any 与省略模态必被" +
+                    "点名」「无派发必红」「nonModal 不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",
