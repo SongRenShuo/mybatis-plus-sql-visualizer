@@ -46,11 +46,13 @@ concurrency:
 
 
 jobs:
-  ci:
+  build:
     # publish 模式只发布既有产物，不重建不重测
+    # T-CiMatrix（2026-11-04）：原单 job 串行拆为 build / verify(matrix×3) / test(matrix×5)，
+    # 三目标兼容验证与五片测试各自并行，墙钟从「串行相加」变成「取最长」。
     if: inputs.mode != 'publish'
     runs-on: windows-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
 
     defaults:
       run:
@@ -107,31 +109,34 @@ jobs:
         #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
         run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
 
-      - name: 权威兼容门禁（verifyGate，三目标 243/253/262）
-        if: inputs.mode == 'gate' || inputs.mode == 'release'
-        # -PverifyOnly=true：复用上一步的发行包，不重打包（Jar 带 MPV-Build 时间戳恒重跑）
-        run: ./gradlew.bat :verifyGate -PverifyOnly=true -PgifRecord=false --console=plain
+      # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行，
+      # 此处只保留「必须单次跑」的两段——打包/verifyPlugin（为后续 job 预热 verifier-cli 与 IDE 缓存）
+      # 与 Marketplace 同口径在线门禁（它要拿真实发行包上传，不适合多份并行）。
 
       - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
         if: inputs.mode == 'gate' || inputs.mode == 'release'
         run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
 
-      - name: 全量分片测试（testShards，真机类剔除）
+      - name: 上传编译产物（供 verify / test 的 matrix job 复用，避免各自重编译）
         if: inputs.mode != 'publish'
-        # 步骤级超时：历史耗时约 10 分钟（O147 子进程另加约 2 分钟），25 分钟 = 2 倍余量。
-        # 20261025 已两次实测分片 JVM 在 runner 上偶发挂起（步骤内挂死只能烧满 job 的 240 分钟），
-        # 超时把挂起转化为快速失败——if: failure() 的诊断/上传步骤得以执行，工件里能看到哪个
-        # 分片没有结果 XML（= 挂起元凶），下次挂起即可定位。
-        timeout-minutes: 25
-        # 三类真机依赖用例在 CI 剔除（与 testDatabase / e2eFakeIde 同口径，本地发版前照跑）：
-        #   AttachPoolWarmGateTest——child JVM 起 Hikari 真池直连本机 MySQL；
-        #   DataSourceJdbcSmokeTest——demo 数据源 JDBC 直连 127.0.0.1:3306；
-        #   O147RealAgentAcceptanceTest——需要本机 JDK8（sqlvis.jdk8home 默认硬编码本机路径）。
-        # root 侧用既有 -PtestShardExcludeClasses 隔离口，agent 侧用 -PagentTestExclude（同语义）。
-        run: >-
-          ./gradlew.bat :testShards -PgifRecord=false --console=plain
-          "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
-          "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs
+          # 只传「后续 job 需要且重新生成昂贵」的目录：主 jar / 发行 zip / 编译产物 / 测试类 /
+          # plugin.xml 补丁产物 / agent 子项目产物。缺失只会导致下游重新编译（慢），不会导致错误。
+          path: |
+            build/libs/
+            build/distributions/
+            build/classes/
+            build/resources/
+            build/tmp/patchPluginXml/
+            build/generated/
+            sub-projects/sql-visualizer-agent/build/libs/
+            sub-projects/sql-visualizer-agent/build/classes/
+            sub-projects/sql-visualizer-agent/build/resources/
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 7
 
       - name: 上传插件 ZIP
         if: inputs.mode == 'gate' || inputs.mode == 'release'
@@ -176,12 +181,159 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
+  # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
+  # targets 两处都已支持）。原串行 2m43s 的三段现在同起，墙钟 ≈ 单目标 1m27s + 缓存/下载开销。
+  verify:
+    needs: build
+    if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ide: ['243', '253', '262']
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v4
+        with:
+          name: build-outputs
+
+      - name: 兼容门禁 ${{ matrix.ide }}
+        # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
+        # -PgateStaggerMs=0 关掉「等 marketplace 高占用段」的 285s 错峰延迟（并行 job 各自独立 runner，无需错峰）
+        run: >-
+          ./gradlew.bat :verifyGate -PverifyOnly=true -PverifyIdes=${{ matrix.ide }}
+          -PgateStaggerMs=0 -PgifRecord=false --console=plain
+
+  # T-CiMatrix（2026-11-04）：五片测试并行——每个 job 只跑一片。
+  test:
+    needs: build
+    if: ${{ !cancelled() && inputs.mode != 'publish' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1', '2', '3', '4', '5']
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 准备测试 demo
+        # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v4
+        with:
+          name: build-outputs
+
+      - name: 分片 ${{ matrix.shard }}
+        # 三类真机依赖用例在 CI 剔除（本地发版前照跑）：AttachPoolWarmGateTest / DataSourceJdbcSmokeTest /
+        # O147RealAgentAcceptanceTest——它们需要本机 MySQL 或本机 JDK8。
+        timeout-minutes: 30
+        run: >-
+          ./gradlew.bat :testShard${{ matrix.shard }} -PgifRecord=false --console=plain
+          "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
+          "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+
+      - name: 失败诊断输出（断言消息打到任务日志）
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results, sub-projects/sql-visualizer-agent/build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($failMatches.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              foreach ($m in $failMatches) {
+                Write-Host ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
+                Write-Host '-----'
+              }
+            }
+          }
+
+      - name: 失败时上传测试报告（诊断通道）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-shard${{ matrix.shard }}-${{ github.run_number }}
+          path: |
+            build/reports/tests/
+            build/test-results/
+            sub-projects/sql-visualizer-agent/build/test-results/
+          if-no-files-found: ignore
+
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
     # （仓库 Settings → Environments → release 配 required reviewers；未配审批人则直接发布）
-    needs: ci
+    # T-CiMatrix：门禁已拆为 build / verify / test 三个 job，release 模式须三者全绿；
+    # publish 模式只依赖 build（它只下载既有产物，不看门禁 job 结果）。
+    needs: [build, verify, test]
     # !cancelled() 而不是 always()：取消运行时不能把发布 job 拉起来
-    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.ci.result == 'success')) }}
+    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.build.result == 'success' && needs.verify.result == 'success' && needs.test.result == 'success')) }}
     environment: release
     runs-on: windows-latest
     timeout-minutes: 30
