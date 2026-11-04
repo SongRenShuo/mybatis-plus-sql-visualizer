@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -82,6 +83,22 @@ class EnvironmentCheckReportTest {
         assertNull("绿灯不添噪", item.guidance)
         assertTrue(item.facts.any { it.contains("3") })
         assertTrue(item.facts.any { it.contains("mp_demo@localhost") })
+        assertFalse(
+            "已绑定时不应出现未绑定提示",
+            item.facts.any { it.contains("未绑定") },
+        )
+    }
+
+    @Test
+    fun test数据源有源但未绑定时等级仍OK但须给出未绑定提示() {
+        // 用户真机场景：7 个源、无默认绑定、无上次使用 → 预览会弹选源 / 右上「未绑定数据源」。
+        // 等级保持 OK（不打扰刚配好的用户），但事实行必须点出「未绑定」，否则体检对此态等于没诊断。
+        val item = EnvironmentCheckRules.dataSource(true, 7, null, null)
+        assertEquals("有源即不报黄，避免刚配置就变黄", CheckLevel.OK, item.level)
+        assertTrue(
+            "必须给出未绑定提示：${item.facts}",
+            item.facts.any { it.contains("未绑定") },
+        )
     }
 
     @Test

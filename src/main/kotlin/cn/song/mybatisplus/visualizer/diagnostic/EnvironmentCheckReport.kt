@@ -251,7 +251,19 @@ internal object EnvironmentCheckRules {
                 guidance = MpSqlVisualizerBundle.message("envCheck.dataSource.none.guidance"),
             )
         } else {
-            EnvironmentCheckItem(title = title, level = CheckLevel.OK, facts = facts)
+            // 有源但既无默认绑定、也无上次使用记录——正是用户真机「预览打开弹选源 / 右上未绑定数据源」
+            // 的场景。等级保持 OK（不打扰「刚配好还没执行」的用户、不翻转总评），但事实行必须带上，
+            // 否则体检对最想看的这个态只说「已配置 N 个」，等于没诊断。
+            val unbound = defaultName.isNullOrBlank() && lastUsedName.isNullOrBlank()
+            EnvironmentCheckItem(
+                title = title,
+                level = CheckLevel.OK,
+                facts = if (unbound) {
+                    facts + MpSqlVisualizerBundle.message("envCheck.dataSource.unboundHint")
+                } else {
+                    facts
+                },
+            )
         }
     }
 
