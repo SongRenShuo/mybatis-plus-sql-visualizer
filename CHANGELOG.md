@@ -4,8 +4,17 @@
 
 ## [Unreleased]
 
+## [2026.11.4-beta.1] - 2026-11-04
+
+> 内测版（Gitee 抢先体验通道）。范围＝v2026.11.3 发行包之后的全部用户可见增量：Oracle 增强捕获的 PreparedStatement 登记断链修复，以及从 dev 回 port 到 master 的五项预览、方言与线程修复。
+
 ### Fixed
 - **Oracle 应用的增强捕获只剩连接校验 SQL，MyBatis 业务 SQL 一条不出（T-OracleWrapperRegistry，用户真机报障）**：Oracle thin 驱动对外返回的是包装器（`OraclePreparedStatementWrapper` / `OracleCallableStatementWrapper` / `OracleStatementWrapper`），prepare 面把我方登记的 SQL 挂在包装器上，而 `executeQuery()` 的织入点在包内物理语句（`T4CPreparedStatement`）——登记对象与执行对象错位，查表永远落空、事件按「盲区」丢弃；plain `Statement` 走「SQL 取首参」不依赖登记表，所以只有 `select 1 from dual` 这类连接校验 SQL 能看见。现 prepare 面登记时按字段类型反射解一层包装，把内层物理语句一并登记（绑定参数与批串随之接回内层）。同时修掉同链路两处去重门缺陷：嵌套门把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉；同一帧「try 内 ATHROW + 处理器重抛」两条出口钩子会让嵌套深度多减一次，一条失败语句重复上报 3 条。真机复验（Oracle Free 23：ojdbc11 23.3 / ojdbc8 19.3 / ojdbc8 12.2，premain 与 attach 双路径，HikariCP 池）：业务 SQL 全部可见且带绑定参数，失败语句只报 1 条
+- **打开预览就弹「选择数据源」列表，多源工程每次预览都要先选一次（T-PreviewPreparePick，用户真机报障）**：预览默认准备与显式执行走同一个 `chooseAndPrepare` 分支，`else -> showRunnerPopup` 不区分两者，工程里配了多个数据源又没有 last-used 记忆时必弹，面板右上同时还显示「未绑定数据源」——与该函数自己声明的「预览默认准备静默」意图矛盾。现在预览准备阶段（`executeAfterPrepare=false`，且不是显式要求选源）不再弹窗、不建链、不报错，面板保持未绑定灰字，等点「执行 SQL」时再弹；单飞门按 owner 正常结算，下一次执行不会排队到 60 秒超时。显式执行与「切换数据源」两个入口的弹窗行为不变。多源无记忆这一档预览控制台留空是有意取舍
+- **改了 IDEA 方言并刷新预览后，底部方言红条仍按旧方言报冲突（T-DialectGateRenderDialect，用户真机报障）**：顶部写「方言: MySQL（已绑定数据源）」、SQL 已按 MySQL 渲染、数据源也是 MySQL，底部却报「当前 SQL 按 PostgreSQL 渲染」。三条原因叠在一起：闸门请求无条件优先取生成时固化的 `effectiveDialect` 快照，而顶部决策会随绑定与刷新升级，两份方言事实分裂；XML 载体不能无损重渲染，AUTO 被降级成 RERENDER_UNAVAILABLE，红字两边方言都取自陈旧值；「刷新」按钮只重渲染文本，既不重算决策也不更新 `effectiveDialect`。现在方言无关载体（XML 原文 / 纯文本，排除分页 LIMIT 行）的闸门渲染方言取最新决策，与顶部同源；模型 / 批量 / 分页载体仍取渲染事实，`canLosslesslyRerender` 的既有判定未动；点「刷新」按预览生成时的同一份证据重算决策，MATCH 就清掉红条，仍不一致则报真实的两边方言。只在结果区纯信息态动作，不覆盖执行结果
+- **控制台数据源下拉每次刷新都在界面线程读 PSI（T-ThreadFix A）**：接管组覆写了 `update()` 与 `displayTextInToolbar()`，平台据此判定它不是默认 update，线程落回 EDT；而它逐字委托的原生 `ChooseDataSourceAction` 自己返回 BGT，PSI 走平台预缓存 DataContext。一次「预览 + 执行」里 IDE 日志出现 1 条 PreCachedDataContext 与 8 条慢操作告警，全部指向这个类。现在声明 `ActionUpdateThread.BGT`，与原生动作一致，update 体仍只读写 Presentation，不碰 PSI 与 Swing
+- **执行 SQL 时在界面线程做 PSI/VFS 目录查找（T-ThreadFix B）**：准备链第一次取控制台脚本模型会实例化临时文件的 PSI，平台内部走 `findDirectory → isUnderIgnored → ensureIsUpToDate`，EDT 上调用即记慢操作，一次执行 9 条。靠缓存也不行——方言映射的 `setMapping` 会触发重解析把 PSI 作废。现在 attach 之后先到后台线程用读锁预热 PSI，再以 `nonModal` 回 EDT 续接准备；非 EDT 调用方保持原同步语义；续接异常统一走 `handlePrepareFailure`，单飞门不会悬挂 60 秒。预热失败只是退回「取模型时自己建 PSI」的旧行为
+- **执行入口与方言映射的写派发不是写安全的（T-ThreadFix C）**：`submitExplainDirectConsole` 用 `ModalityState.any()` 投递，`DialectPreMapping` 从后台线程用省略模态派发 `setMapping`；`any()` 恒为 write-unsafe，链内改文档与改模型的写动作因此没有写资格，一次执行出现 3 条 TransactionGuard 告警，写有被平台拒绝的风险。现在两处派发统一改 `ModalityState.nonModal()`，投递顺序、回调内容与异常路径都没变；方言映射仍保留原有有界等待与超时降级（模态弹窗存续期映射延后，预算内未落地即回落 GenericSQL）
 
 ## [2026.11.3] - 2026-11-03
 
