@@ -1299,6 +1299,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "合规异步形态不误报」「工厂内第二处同步调用点必被抓」「any/省略模态必红、nonModal 与" +
                     "invokeLaterWriteSafe 放行」。",
             ),
+            // ---- T-ThreadFix：执行链三类线程契约守卫（2026-11-04 真机 243 沙盒） ----
+            GuardEntry(
+                "convention/TakeoverUpdateThreadGuardTest.kt",
+                listOf(DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix A：控制台数据源下拉接管组的 update 线程契约守卫。真机 SEVERE：" +
+                    "`'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation` + " +
+                    "同链 9 条 SlowOperations（findFile → findDirectory → isUnderIgnored）。根因是本类覆写了 " +
+                    "update/displayTextInToolbar，`ActionClassMetaData.isDefaultUpdate` 为 false → 平台默认落 " +
+                    "EDT，而它委托的原生 ChooseDataSourceAction javap 实证是 BGT。判据两条：必须显式声明 " +
+                    "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
+                    "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",
