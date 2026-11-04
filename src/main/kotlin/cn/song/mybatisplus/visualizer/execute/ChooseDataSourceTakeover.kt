@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.update.BarrierRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
@@ -91,6 +92,32 @@ internal class ChooseDataSourceTakeoverGroup(
     /** 与 [displayTextInToolbar] 同源：原生未覆写（默认 false），此处保持默认。 */
     override fun useSmallerFontForTextInToolbar(): Boolean = false
 
+    /**
+     * T-ThreadFix A：**update 必须在 BGT 执行**——本组把呈现权委托给原生
+     * `ChooseDataSourceAction.update`，而它内部走 `getClientPsiFile(e)` 读 `PSI_FILE`。
+     *
+     * 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」）：`embedConsole` 把控制台组件挂进
+     * 可见层级 → 原生 header 的工具栏立刻刷新 → 本组 update 在 EDT 被调用 → 原生 update 读 PSI：
+     * ```
+     * SEVERE - PreCachedDataContext - 'psi.File' is requested on EDT by
+     *   ChooseDataSourceTakeoverGroup#presentation@EditorToolbar
+     *   at ChooseDataSourceAction.getClientPsiFile → getContext → update
+     * ```
+     * 同一条链还叠 9 条 `SlowOperations`（`PsiManager.findFile` → `FileManagerImpl.findDirectory`
+     * → `ProjectFileIndexImpl.isUnderIgnored` → `WorkspaceFileIndexDataImpl.ensureIsUpToDate`）。
+     *
+     * 为什么必须**显式**声明：`AnAction.getActionUpdateThread()` 默认实现是「实现
+     * `UpdateInBackground` 且为 true → BGT；`ActionClassMetaData.isDefaultUpdate` 为 true → BGT；
+     * 否则 EDT」，而 `isDefaultUpdate` 判的是「重写 `update()` 的类是不是 `AnAction` 本身」——
+     * 本类覆写了 `update()` 与 `displayTextInToolbar()`，默认落 EDT。**原生
+     * `ChooseDataSourceAction` 自己 javap 实证返回 `ActionUpdateThread.BGT`**，即它的 update 本就
+     * 按 BGT 设计（PSI 读走平台预缓存 DataContext），本包装组跟随即可。
+     *
+     * 约束：update 体内只允许「读状态 + 写 `e.presentation`/模板 Presentation」，不得触碰
+     * Swing 组件、文档或 EDT-only API。
+     */
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
     /** 一次性取证位（update 每次刷新都会走，只留一条避免刷屏）。 */
     private val updateProbed = java.util.concurrent.atomic.AtomicBoolean()
 
@@ -165,7 +192,14 @@ internal class ChooseDataSourceTakeoverGroup(
         return merged
     }
 
-    /** 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。 */
+    /**
+     * 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。
+     *
+     * T-ThreadFix A：本方法现在**跑在 BGT**（见 [getActionUpdateThread]）。因此体内只做
+     * `Presentation` 层面的读写：`original.update(e)` 的 PSI 读取走平台预缓存 DataContext（原生
+     * 动作自己就声明 BGT），`templatePresentation` 也是普通 Presentation 对象、不是 Swing 组件。
+     * **不得**在这里加 `SwingUtilities` / 文档 / `Invoker` 之类 EDT-only 调用。
+     */
     override fun update(e: AnActionEvent) {
         original.update(e)
         if (updateProbed.compareAndSet(false, true)) {
