@@ -191,6 +191,8 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     // 由映射侧继承平台设置——不再让渲染端与 PSI 各自落 MySQL。
     val result = input.withResolvedDialect(project)
     current = result
+    // UI-004：新预览的结果区是干净的，旧方言提示不跨预览残留。
+    lastDialectGateMessage = null
     // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
     executionDialectRenderMode = project?.let {
         if (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(it).effectiveDialectAuto()) {
