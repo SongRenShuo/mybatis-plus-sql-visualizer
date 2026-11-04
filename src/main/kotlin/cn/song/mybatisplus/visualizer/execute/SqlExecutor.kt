@@ -50,6 +50,8 @@ object SqlExecutor {
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
         /** T-DialectGateUx：强制弹数据源选择器（方言闸门的「切换数据源」入口）。 */
         forceChoose: Boolean = false,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥；null = 既有红字文案）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         executionAttemptForTest?.let { it(sql); return }
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -83,6 +85,7 @@ object SqlExecutor {
             onDialectGate = onDialectGate,
             onSubmission = if (onSubmission == null) null else receipt,
             forceChoose = forceChoose,
+            onDialectMismatchHint = onDialectMismatchHint,
         )
     }
 
@@ -99,6 +102,8 @@ object SqlExecutor {
         callback: ((Boolean) -> Unit)? = null,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥；null = 既有红字文案）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         if (!ExecuteSqlSupport.isAvailable()) {
             // 社区版：静默回退（不弹提示——自研编辑器已是回退态）
@@ -113,6 +118,7 @@ object SqlExecutor {
             callback = callback,
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
+            onDialectMismatchHint = onDialectMismatchHint,
         )
     }
 

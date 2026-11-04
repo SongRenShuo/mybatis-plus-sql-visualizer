@@ -609,12 +609,17 @@ object DataSourceSelector {
          * 看不到列表）。仅「切换数据源」入口置 true；预览默认准备与显式执行不受影响。
          */
         forceChoosePopup: Boolean = false,
+        /**
+         * UI-049：空 Runner「方言不匹配」态结构化提示（面板据此出「下一步」+ 可点入口）。
+         * 提供时不再投递 `onError` 长红字；null = 既有行为。
+         */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
             forceChoose = forceChoose, preferredRunnerName = preferredRunnerName,
-            forceChoosePopup = forceChoosePopup)
+            forceChoosePopup = forceChoosePopup, onDialectMismatchHint = onDialectMismatchHint)
     }
 
     /**
@@ -676,11 +681,14 @@ object DataSourceSelector {
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
         /** T-DialectGateUx：强制弹选择器（跳过共享控制台复用与 last-used 静默命中）。 */
         forceChoose: Boolean = false,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
             wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            onSubmission = onSubmission, forceChoose = forceChoose)
+            onSubmission = onSubmission, forceChoose = forceChoose,
+            onDialectMismatchHint = onDialectMismatchHint)
     }
 
     /**
