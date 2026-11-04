@@ -236,6 +236,15 @@ jobs:
         with:
           name: build-outputs
 
+      - name: 预热 verifier-cli 与目标 IDE ${{ matrix.ide }}
+        # T-CiMatrix（2026-11-04 run#3 实证）：verifyGate 是 verifier-cli 直驱任务，它在配置期
+        # 就要从 gradle 缓存里找 verifier-cli jar（找不到直接 "Could not create task ':verifyGate'"），
+        # 而这个 jar 是 verifyPlugin 下载的。verify 是本 runner 的新 job，build job 的 gradle 缓存
+        # 保存又失败了（多 job 并发写同一 key，日志见 run#3 的 "Failed to save cache entry"），
+        # 所以必须在本 job 自己跑一次 verifyPlugin 把 jar 与目标 IDE 一起落下。
+        # 本步只做预热（报告仍生成）；判定交给下面的 verifyGate。
+        run: ./gradlew.bat :verifyPlugin -PverifyIdes=${{ matrix.ide }} -PgifRecord=false --console=plain
+
       - name: 兼容门禁 ${{ matrix.ide }}
         # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
         # -PgateStaggerMs=0 关掉「等 marketplace 高占用段」的 285s 错峰延迟（并行 job 各自独立 runner，无需错峰）
