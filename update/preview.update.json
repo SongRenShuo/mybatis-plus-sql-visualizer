@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.3",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.3/mybatis-plus-sql-visualizer-2026.11.3.zip",
-  "changeNotes": "修复执行 SQL 后预览面板下半区空白、连原生控制台工具栏都不出现的问题，结果不再只落在 Database 工具窗\n修复预览结果栏跨预览残留，没执行就出现上一次的结果页签\n修复折叠结果区后约 2.5 秒又自己长回来、放大窗口时结果区反被撑大的问题\n修复方言冲突点「放行」后报数据库控制台准备超时、预览窗里找不到切换数据源的问题\n修复方言冲突状态行渲染时卡顿、面板停在执行中转圈的问题\n修复注解预览打开后一直显示未绑定数据源、要点一次执行才挂上控制台的问题\n控制台工具栏的数据源下拉改为只换源不执行，点选不再绕过二次确认与方言闸直接提交 SQL\n数据源下拉按钮现在显示数据源名，弹层贴着按钮弹出，名字里的下划线不再丢失\n「更多」菜单常驻切换数据源入口，执行失败后也能就地换源\n预览打开速度优化，每次省 1.7 到 2.0 秒\n增强捕获的登记盲区告警改为系统性才报，单条盲区默认静默\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-03",
+  "version": "2026.11.4-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.4-beta.1/mybatis-plus-sql-visualizer-2026.11.4-beta.1.zip",
+  "changeNotes": "修复 Oracle 数据库的增强捕获只采到连接校验 SQL、MyBatis 业务 SQL 一条不出的问题，业务 SQL 现在全部可见并带绑定参数\n修复同一条执行失败的语句重复上报 3 条的问题\n打开预览不再自动弹出数据源选择列表；没有唯一目标时面板保持未绑定，点「执行 SQL」时再选源\n修复改了 IDEA 方言并刷新预览后，底部方言红条仍按旧方言报冲突的问题，现在与顶部状态、实际渲染同源\n修复控制台数据源下拉刷新时在界面线程读 PSI、IDE 日志刷 SEVERE 且界面卡顿的问题\n修复执行 SQL 时在界面线程做目录查找、IDE 日志刷慢操作告警的问题\n修复执行与方言映射派发没有走写安全模态、日志出现 Write-unsafe 告警的问题，写文档不再有被平台拒绝的风险\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-04",
   "sinceBuild": "243"
 }
