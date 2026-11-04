@@ -77,3 +77,4 @@
 （回填写实施者工作树里的副本；每完成一件可提交的立即提交；掉线恢复先 git status＋搜临时探针/RED PROBE 注释）
 
 - 2026-11-04 立项（随本期报告同批提交）。
+- 2026-11-04 实施开工。作业拓扑：集成分支 `t-perfsweep30`（工作树 `mpsv-perfsweep30`，基于 dev `5c4af996`）；三车道各自分支/工作树——A `t-perfsweep30-preview`（`mpsv-perf30a`，券01a/1b/1c+02d）、B `t-perfsweep30-dumb`（`mpsv-perf30b`，券02a/2b/2c/2e）、C `t-perfsweep30-ux`（`mpsv-perf30c`，券03+04+05）。文档批（本计划+第七期报告+索引三笔）已 cherry-pick 进集成分支 `79bb909e`（索引冲突按时间倒序裁决）。gradle 并发按 2 路上限分波：A/B 先行、C 待槽。
