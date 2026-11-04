@@ -225,6 +225,27 @@ class EnvironmentCheckDiagnosisTest {
 
     /** 每条规则一条真机形态样本（消息行 + 栈续行），供命中/大小写/缺特征三例共用。 */
     private val samples: Map<String, String> = mapOf(
+        // 三条「症状类别」样本一律取**真机 2026-11-04 12:40 那次「预览+执行」的原始形态**，
+        // 且刻意的落点不是 ui-001/ui-002（执行链 / action update / SqlExecutor）——这正是首版
+        // 规则漏检的场景：18 条真机 SlowOperations 无一落在 ScanBannedApiUsages 上。
+        "edt-slow-operations" to
+            "2026-11-04 12:40:20,355 [ 101950] SEVERE - #c.i.u.SlowOperations - " +
+            "Slow operations are prohibited on EDT. See SlowOperations.assertSlowOperationsAreAllowed javadoc.\n" +
+            "java.lang.Throwable: Slow operations are prohibited on EDT.\n" +
+            "\tat com.intellij.util.SlowOperations.assertSlowOperationsAreAllowed(SlowOperations.java:114)\n" +
+            "\tat cn.song.mybatisplus.visualizer.execute.DataSourceSelectorConsoleKt." +
+            "prepareInConsole(DataSourceSelectorConsole.kt:1)",
+        "edt-psi-request" to
+            "2026-11-04 12:40:31,001 [2358357] SEVERE - #c.i.o.a.i.PreCachedDataContext - " +
+            "'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation@EditorToolbar " +
+            "(cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeoverGroup) " +
+            "\"Console.Jdbc.ChooseDataSource\". See ActionUpdateThread javadoc.\n" +
+            "\tat cn.song.mybatisplus.visualizer.execute.ChooseDataSourceTakeoverGroup." +
+            "update(ChooseDataSourceTakeover.kt:170)",
+        "write-unsafe" to
+            "2026-11-04 12:40:35,000 [2359000] SEVERE - #c.i.o.a.TransactionGuardImpl - " +
+            "Write-unsafe context! Model changes are allowed from write-safe contexts only.\n" +
+            "\tat cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(SqlExecutor.kt:59)",
         "ui-001" to "2026-11-04 12:00:00,123 [  42] SEVERE - Slow operations are prohibited on EDT\n" +
             "\tat cn.song.mybatisplus.visualizer.action.ScanBannedApiUsagesAction.present(ScanBannedApiUsagesAction.kt:66)",
         "ui-002" to "2026-11-04 12:00:01,456 [  42] ERROR - Read access is allowed from inside read-action only\n" +
@@ -241,9 +262,9 @@ class EnvironmentCheckDiagnosisTest {
     )
 
     @Test
-    fun test规则表七条且样本齐全() {
-        assertEquals("第一批规则固定 7 条", 7, KnownIssueCatalog.rules.size)
-        assertEquals("id 不得重复", 7, KnownIssueCatalog.rules.map { it.id }.toSet().size)
+    fun test规则表十条且样本齐全() {
+        assertEquals("第一批规则固定 10 条（7 条原始 + 3 条线程症状类别）", 10, KnownIssueCatalog.rules.size)
+        assertEquals("id 不得重复", 10, KnownIssueCatalog.rules.map { it.id }.toSet().size)
         assertEquals(
             "每条规则都必须有真机形态样本（否则本组用例会假绿）",
             KnownIssueCatalog.rules.map { it.id }.toSet(),
@@ -278,6 +299,25 @@ class EnvironmentCheckDiagnosisTest {
                 KnownIssueCatalog.scan(sabotaged).isEmpty(),
             )
         }
+    }
+
+    @Test
+    fun test已知特化命中时通用症状类别不重复报() {
+        // 通用规则是特化的超集：ui-001 的样本必然也含「slow operations on EDT + 插件栈帧」。
+        // 若不去重，用户会看到「插件在 EDT 慢操作」和「已知缺陷 UI-001」两条同源结论而不知先修哪个。
+        val ui001 = samples.getValue("ui-001")
+        assertEquals(
+            "已知特化命中时通用规则必须让位",
+            listOf("ui-001"),
+            KnownIssueCatalog.scan(ui001).map { it.id },
+        )
+        // 未知落点（真机那次执行链/action update 的形态）仍由通用规则兜底。
+        val unknownSite = samples.getValue("edt-slow-operations")
+        assertEquals(
+            "未知落点必须由通用规则兜住",
+            listOf("edt-slow-operations"),
+            KnownIssueCatalog.scan(unknownSite).map { it.id },
+        )
     }
 
     @Test
@@ -324,7 +364,7 @@ class EnvironmentCheckDiagnosisTest {
     fun test日志命中项等级取最高且上限五条() {
         val text = samples.values.joinToString("\n")
         val item = EnvironmentCheckRules.logDiagnosis(text, text.length.toLong())
-        assertEquals("命中 7 条，最多列 5 条", 5, item.facts.size)
+        assertEquals("命中 10 条，最多列 5 条", 5, item.facts.size)
         assertEquals("等级取最高命中项（driver-missing 为失败）", CheckLevel.FAIL, item.level)
         assertTrue("最严重的一条要排在最前：${item.facts}", item.facts.first().contains("driver-missing"))
         assertNotNull(item.symptom)

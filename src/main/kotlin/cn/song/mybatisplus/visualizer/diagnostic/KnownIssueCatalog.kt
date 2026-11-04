@@ -15,6 +15,11 @@ import java.util.Locale
  *  - [anyOf]：为空则不约束，否则至少出现一个（OR）；
  *  - [eachOfAny]：每个子列表各自「至少出现一个」（组间 AND、组内 OR）——用于
  *    「异常类名 × 驱动包名」这类双维特征：两个维度都得命中，但每个维度内部是选择题。
+ *
+ * [noneOf] 是**去重闸**：任一出现即不命中。用途是让「症状类别」规则给「已知特化」规则让路——
+ * 通用规则是特化规则的超集（`ui-001` 的样本必然满足 `edt-slow-operations`），若不禁，
+ * 同一个现象会报两条，而用户要的是「先修哪个」的唯一结论。已知缺陷命中时通用规则让位；
+ * 通用规则只在**未知落点**兜底。
  */
 internal data class KnownIssueRule(
     val id: String,
@@ -23,6 +28,7 @@ internal data class KnownIssueRule(
     val allOf: List<String> = emptyList(),
     val anyOf: List<String> = emptyList(),
     val eachOfAny: List<List<String>> = emptyList(),
+    val noneOf: List<String> = emptyList(),
     /** 命中后该项结论的等级（多条命中取最高）。 */
     val severity: CheckLevel,
     /** 已修复版本；null＝仍在册（本轮两条已知缺陷都只在 dev 修好、尚未发行，故为 null）。 */
@@ -32,9 +38,11 @@ internal data class KnownIssueRule(
     private val required: List<String> = allOf.map { it.lowercase(Locale.ROOT) }
     private val optional: List<String> = anyOf.map { it.lowercase(Locale.ROOT) }
     private val grouped: List<List<String>> = eachOfAny.map { group -> group.map { it.lowercase(Locale.ROOT) } }
+    private val excluded: List<String> = noneOf.map { it.lowercase(Locale.ROOT) }
 
     /** [record] 必须是**已小写化**的一条日志记录；调用方先小写化整段文本，避免逐规则重复转换。 */
     fun matches(record: String): Boolean {
+        if (excluded.any { record.contains(it) }) return false
         if (required.any { !record.contains(it) }) return false
         if (optional.isNotEmpty() && optional.none { record.contains(it) }) return false
         return grouped.all { group -> group.any { record.contains(it) } }
@@ -61,6 +69,36 @@ internal object KnownIssueCatalog {
     private const val MAX_RECORD_CHARS = 8 * 1024
 
     val rules: List<KnownIssueRule> = listOf(
+        // ---- 线程违规的三个「症状类别」（2026-11-04 真机补） ----
+        // 教训：首版把慢操作规则写成缺陷指纹（`slow operations` AND `scanbannedapiusages`），
+        // 结果真机日志里 18 条 SlowOperations 全部落在**别的**落点（执行链 / action update）→
+        // 体检报「未发现已知异常」，等于没诊断。故这类规则按**症状类别**写：只要消息 + 插件栈帧
+        // 同现就命中，具体落点交给 action 文案引导用户看栈；ui-001/ui-002 退化为它的两个已知特化。
+        KnownIssueRule(
+            id = "edt-slow-operations",
+            titleKey = "envCheck.log.edt-slow-operations.title",
+            actionKey = "envCheck.log.edt-slow-operations.action",
+            allOf = listOf("slow operations are prohibited on edt", "cn.song.mybatisplus.visualizer"),
+            // 已知特化让位：ui-001 的样本必然也满足本规则（通用是超集），不排除就会同一现象报两条。
+            // 用户要的是「先修哪个」的唯一结论，所以已知缺陷命中时这里静默。
+            noneOf = listOf("scanbannedapiusages", "consumecachedtemppsifile"),
+            severity = CheckLevel.WARN,
+        ),
+        KnownIssueRule(
+            id = "edt-psi-request",
+            titleKey = "envCheck.log.edt-psi-request.title",
+            actionKey = "envCheck.log.edt-psi-request.action",
+            // 平台原文：`'psi.File' is requested on EDT by Xxx#presentation@EditorToolbar …`
+            allOf = listOf("'psi.file' is requested on edt", "cn.song.mybatisplus.visualizer"),
+            severity = CheckLevel.WARN,
+        ),
+        KnownIssueRule(
+            id = "write-unsafe",
+            titleKey = "envCheck.log.write-unsafe.title",
+            actionKey = "envCheck.log.write-unsafe.action",
+            allOf = listOf("write-unsafe context", "cn.song.mybatisplus.visualizer"),
+            severity = CheckLevel.WARN,
+        ),
         KnownIssueRule(
             id = "ui-001",
             titleKey = "envCheck.log.ui-001.title",
