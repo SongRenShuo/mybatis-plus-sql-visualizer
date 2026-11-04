@@ -603,29 +603,75 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
             callback?.invoke(true)
         }
         else -> {
-            LOG.info("[M36] show popup with ${runners.size} runners")
-            prepareGate.beginInteraction(prepareOwner)
-            showRunnerPopup(project, runners) { runner ->
-                prepareGate.endInteraction(prepareOwner)
-                if (!isPrepareActive()) {
-                    // T-DialectGatePassDeadChain：用户已选源但本链已被替代——结算门，别让它悬挂。
-                    abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
-                    return@showRunnerPopup
+            // UI-003（2026-11-04 真机）：预览默认准备不再弹「选择数据源」模态列表。
+            // 现场：打开 XML 预览即弹 7 源列表、面板右上仍是「未绑定数据源」——与本函数
+            // T-DsCover 注释声明的意图（「预览默认准备静默」）相反。判据/处置收口在
+            // [PreviewPreparePick]（纯函数，可单测）：显式执行与「切换数据源」照旧弹窗；
+            // 预览准备先按「学习绑定 > last-used > 单源」求唯一目标（与 S2-12 同口径），
+            // 唯一命中则静默建链，否则不弹窗不建链、保持未绑定等用户显式执行。
+            val fallbackTargetName = if (!executeAfterPrepare && !forceChoose && !forceChoosePopup) {
+                runCatching {
+                    val registered = DataSourceSettings.getAllDataSources(project)
+                    ExecBindFallback.pickTarget(project, registered, dialectGateRequest?.moduleKey)
+                        ?.let { DataSourceSettings.getName(it) }
+                }.getOrNull()
+            } else null
+            when (val pick = PreviewPreparePick.decide(
+                executeAfterPrepare = executeAfterPrepare,
+                forceChoose = forceChoose,
+                forceChoosePopup = forceChoosePopup,
+                fallbackTargetName = fallbackTargetName,
+                runnerNames = runners.map { getRunnerName(it) },
+            )) {
+                is PreviewPreparePick.Decision.Silent -> {
+                    val picked = runners.first { getRunnerName(it) == pick.runnerName }
+                    LOG.info(
+                        "[UI-003] preview prepare: silent pick '${pick.runnerName}' " +
+                            "among ${runners.size} runners (no chooser popup)",
+                    )
+                    chosenRunnerName = pick.runnerName
+                    runRunner(
+                        project, picked, silent = true, onError = runnerError,
+                        moduleKey = dialectGateRequest?.moduleKey,
+                    )
+                    callback?.invoke(true)
                 }
-                LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
-                // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
-                if (!executeAfterPrepare && runner != null) {
-                    rememberRunnerName(project, getRunnerName(runner), dialectGateRequest?.moduleKey)
+                PreviewPreparePick.Decision.SilentNoop -> {
+                    // 方案 A 兜底：目标不唯一 → 预览阶段不弹窗、不建链，onError 不投递
+                    //（面板保持「未绑定」灰字）。单飞门必须结算，否则下次执行会排队到超时。
+                    LOG.info(
+                        "[UI-003] preview prepare: no unique target among ${runners.size} runners — " +
+                            "stay unbound, wait for explicit execute",
+                    )
+                    if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner)
+                    callback?.invoke(false)
                 }
-                if (runner != null) chosenRunnerName = getRunnerName(runner)
-                callback?.invoke(runner != null)
-                // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
-                if (runner == null) {
-                    if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)
-                    onSubmission(ExecutionSubmission.CANCELLED)
+                PreviewPreparePick.Decision.Popup -> {
+                    LOG.info("[M36] show popup with ${runners.size} runners")
+                    prepareGate.beginInteraction(prepareOwner)
+                    showRunnerPopup(project, runners) { runner ->
+                        prepareGate.endInteraction(prepareOwner)
+                        if (!isPrepareActive()) {
+                            // T-DialectGatePassDeadChain：用户已选源但本链已被替代——结算门，别让它悬挂。
+                            abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG)
+                            return@showRunnerPopup
+                        }
+                        LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
+                        // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
+                        if (!executeAfterPrepare && runner != null) {
+                            rememberRunnerName(project, getRunnerName(runner), dialectGateRequest?.moduleKey)
+                        }
+                        if (runner != null) chosenRunnerName = getRunnerName(runner)
+                        callback?.invoke(runner != null)
+                        // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
+                        if (runner == null) {
+                            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)
+                            onSubmission(ExecutionSubmission.CANCELLED)
+                        }
+                        // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
+                        if (runner != null) runRunner(project, runner, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
+                    }
                 }
-                // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
             }
         }
     }

@@ -394,6 +394,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var previewDialectMappedLanguageId: String? = null
     /** O-145 W1/W6：面板只保留不可变模块键，不持有宿主 PSI 或 JDBC URL。 */
     internal var sourceModuleKey: String? = null
+    /**
+     * UI-004：预览来源文件的 VFS 句柄（非 PSI、非凭据）。
+     *
+     * 刷新按钮要按「与预览生成同一份证据」重算方言——`IdeaSourceDialectProbe` 需要源文件才能读到
+     * IDEA 的 SQL 方言映射（用户改方言后不会发任何事件）。与 [previewDialectMappedVf] 同属
+     * VFS 级引用；不持有 PSI，避免编辑后失效对象。
+     */
+    internal var sourceVirtualFile: com.intellij.openapi.vfs.VirtualFile? = null
+    /**
+     * UI-004：当前底部显示着的方言提示原文（仅放行提示态，不含执行错误）。
+     *
+     * 刷新链据此判断「信息行是否仍是方言提示」——是才替换/清空，绝不覆盖执行结果与真实错误。
+     */
+    internal var lastDialectGateMessage: String? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     internal val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -1095,6 +1109,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     fun setSourceContext(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext?) {
         sourceModuleKey = context?.canonicalModuleKey
+        // UI-004：只留 VFS 句柄（刷新重算方言用），不持有 PSI/URL。
+        sourceVirtualFile = context?.hostVirtualFile
     }
 
     /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
