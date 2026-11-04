@@ -125,11 +125,16 @@ object MybatisXmlTargets {
      * 解析类名（`resultType` / `parameterType` / `typeHandler` …）→ [PsiClass]。
      *
      * 三条路线：全限定名直接 findClass；短名先走 namespace 接口所在文件的 import 表；再退到
-     * 短名索引（dumb 态索引不可用 → 返回 null，不报红——引用本身是 soft）。
+     * 短名索引。dumb 态在**方法入口**早退返回 null（不报红——引用本身是 soft），
+     * 覆盖全部三条路线的索引查询（02b 闸前移）。
      */
     fun resolveClass(project: Project?, context: XmlAttributeValue, rawName: String): PsiClass? {
         val name = rawName.trim().substringBefore('<').substringBefore('[')
         if (project == null || name.isEmpty()) return null
+        // T-PerfSweep30 券02（02b）：dumb 闸**前移到方法入口**——原先闸在全部 findClass 之后，
+        // 索引构建期的前置 findClass（全限定名/import 表/同包）都在闸外裸跑。dumb 态返回 null
+        // （KDoc 语义「dumb 不报红」——引用本身是 soft）。
+        if (DumbService.isDumb(project)) return null
         classResolveCount.incrementAndGet()
         val facade = JavaPsiFacade.getInstance(project)
         val scope = GlobalSearchScope.allScope(project)
@@ -158,7 +163,6 @@ object MybatisXmlTargets {
                 facade.findClass("$pkg.$shortName", scope)?.let { return it }
             }
         }
-        if (DumbService.isDumb(project)) return null
         return PsiShortNamesCache.getInstance(project)
             .getClassesByName(shortName, scope)
             .firstOrNull()
@@ -177,6 +181,9 @@ object MybatisXmlTargets {
     fun resolveInterfaceMethod(project: Project?, namespace: String?, methodName: String): PsiMethod? {
         val name = methodName.trim()
         if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return null
+        // T-PerfSweep30 券02（02b）：裸 findClass 补 dumb 闸——消费点 MapperXmlToJava 的
+        // collectSlow/navigate 都在用户点击链上，dumb 态返回 null 走既有回退，不裸跑索引查询。
+        if (DumbService.isDumb(project)) return null
         val iface = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return null
         return iface.findMethodsByName(name, true).firstOrNull()

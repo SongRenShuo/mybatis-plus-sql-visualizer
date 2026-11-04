@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiManager
@@ -152,6 +154,13 @@ object MapperXmlLocator {
                 return slot
             }
         }
+        // T-PerfSweep30 券02（02a）：dumb 态**早退且不入缓存**——索引构建期 FileTypeIndex 给不出
+        // 可信清单（抛 IndexNotReadyException 被 runCatching 吞成空表，或直接回落空表），若照常写
+        // 5s TTL 单槽，smart 恢复后最长一个窗口内命中空槽、点击无反应。早退返回「未命中」等价的
+        // 一次性空槽（不赋给 [fileListSlot]：memo 写在临时对象上即弃，TTL 窗口也不成立）。
+        if (DumbService.isDumb(project)) {
+            return FileListSlot(java.lang.ref.WeakReference(project), emptyList(), now)
+        }
         indexScanCount.incrementAndGet()
         val files = runCatching {
             val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
@@ -161,7 +170,14 @@ object MapperXmlLocator {
                 .filter { it.rootTag?.name == "mapper" }
                 .mapNotNull { it.virtualFile }
                 .toList()
-        }.getOrDefault(emptyList())
+        }.getOrElse { t ->
+            // 02a 配套：扫描中途竞态进入 dumb（IndexNotReadyException）同样**不写槽**——
+            // 返回一次性空槽等价未命中；其余异常维持既有 getOrDefault(emptyList()) 口径不变。
+            if (t is IndexNotReadyException) {
+                return FileListSlot(java.lang.ref.WeakReference(project), emptyList(), now)
+            }
+            emptyList()
+        }
         val slot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
         fileListSlot = slot
         return slot

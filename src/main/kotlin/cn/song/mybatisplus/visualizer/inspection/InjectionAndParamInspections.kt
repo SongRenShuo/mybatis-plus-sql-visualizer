@@ -82,11 +82,18 @@ class MissingParameterInspection : MapperSqlInspectionBase() {
     override fun inspectMapperTag(tag: XmlTag, holder: ProblemsHolder) {
         if (tag.name !in MapperSqlElementSupport.STATEMENT_TAGS) return
         // `<sql>` 片段没有自己的参数上下文（参数来自引用它的语句），不判
-        val knownRoots = MapperSqlElementSupport.parameterRoots(tag) ?: return
+        // T-PerfSweep30 04c：一次解析同时拿到「合法根名」与「接口方法」——旧形态是 parameterRoots
+        // 解析一次、每个 finding 的导航 fix 再解析一次（同语句 N 个缺失参数 = N+1 次索引查询）。
+        val resolved = MapperSqlElementSupport.parameterRootsWithMethod(tag) ?: return
+        val knownRoots = resolved.first
         val declared = MapperSqlElementSupport.bindNames(tag) + MapperSqlElementSupport.foreachNames(tag)
+        // fix 在循环外构造一次（无状态：只持 SmartPointer，可被多个 descriptor 共享）
+        val navFixes = NavigationFixes.forMissingParameter(
+            tag, tag.getAttributeValue("id").orEmpty(), resolved.second,
+        )
         for (slice in MapperSqlElementSupport.textSlices(tag)) {
             SqlInspectionText.missingParameterFindings(slice.text, knownRoots, declared).forEach { finding ->
-                reportInText(holder, slice, finding, NavigationFixes.forMissingParameter(tag, tag.getAttributeValue("id").orEmpty()))
+                reportInText(holder, slice, finding, navFixes)
             }
         }
     }

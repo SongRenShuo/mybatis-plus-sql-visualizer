@@ -34,14 +34,24 @@ object NavigationFixes {
     /**
      * 「跳转到语句 `<id>` 的接口方法」——`#{}` 参数缺失时最有用的去处（去改方法签名）。
      * 接口/方法解析不出就不给修复（只报不改）。
+     *
+     * @param resolvedMethod T-PerfSweep30 04c：调用方**已经解析过**的接口方法（
+     *   `MapperSqlElementSupport.parameterRootsWithMethod` 同一趟带出）。非 null 时直接复用，
+     *   不再 `resolveInterfaceMethod` 二次查询；null 时保持旧行为自行解析。
      */
-    fun forMissingParameter(tag: XmlTag, statementId: String): Array<LocalQuickFix> {
+    fun forMissingParameter(
+        tag: XmlTag,
+        statementId: String,
+        resolvedMethod: PsiMethod? = null,
+    ): Array<LocalQuickFix> {
         val project = tag.project
         val root = (tag.containingFile as? XmlFile)?.rootTag ?: return LocalQuickFix.EMPTY_ARRAY
         val namespace = root.getAttributeValue("namespace") ?: return LocalQuickFix.EMPTY_ARRAY
         if (namespace.isBlank() || statementId.isBlank()) return LocalQuickFix.EMPTY_ARRAY
-        val method = runCatching { MybatisXmlTargets.resolveInterfaceMethod(project, namespace, statementId) }
-            .getOrNull() ?: return LocalQuickFix.EMPTY_ARRAY
+        val method = resolvedMethod
+            ?: runCatching { MybatisXmlTargets.resolveInterfaceMethod(project, namespace, statementId) }
+                .getOrNull()
+            ?: return LocalQuickFix.EMPTY_ARRAY
         val pointer = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(method)
         return arrayOf(NavigateToElementFix(pointer, "inspection.sqlv.navigate.methodOf", statementId))
     }

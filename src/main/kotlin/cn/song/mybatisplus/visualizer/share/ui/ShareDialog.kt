@@ -9,6 +9,9 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.fileChooser.FileChooserFactory
 import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.fileChooser.FileSaverDialog
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
@@ -204,9 +207,7 @@ class ShareDialog(
         val dialog: FileSaverDialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
         val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-diagnostic-report.html")
         if (saved != null) {
-            val file = saved.file
-            shareManager.saveHtmlReport(html, file.absolutePath)
-            BrowserUtil.open(file.toURI().toString())
+            saveHtmlInBackground(html, saved.file)
         }
     }
 
@@ -228,9 +229,33 @@ class ShareDialog(
         val dialog: FileSaverDialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
         val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-report.html")
         if (saved != null) {
-            val file = saved.file
-            shareManager.saveHtmlReport(html, file.absolutePath)
-            BrowserUtil.open(file.toURI().toString())
+            saveHtmlInBackground(html, saved.file)
         }
+    }
+
+    /**
+     * T-PerfSweep30 04a：HTML 落盘移出 EDT（性能分析 §4.6 登记的唯一 EDT 直写盘面）。
+     *
+     * 原形态在按钮回调（EDT）里直接 `shareManager.saveHtmlReport` → `File.writeText`，属 File IO
+     * 红线面；量级小（单文件、用户显式点击）但红线就是红线。形态对照既有先例
+     * `ScanBannedApiUsagesAction`（Task.Backgroundable + 完成回调），落盘在后台、打开浏览器回 EDT。
+     *
+     * 只移**落盘**：HTML 组装（[HtmlReportFormatter.format] / [DiagnosticReportFormatter.formatHtml]）
+     * 与面板状态读取留在 EDT——前者是纯字符串拼接，后者必须 EDT 读 Swing 状态，一并下移会把
+     * 组件访问带进后台线程。组装成本另立观察项（性能分析 §八），不在本券扩面。
+     */
+    private fun saveHtmlInBackground(html: String, file: File) {
+        val title = MpSqlVisualizerBundle.message("share.dialog.exportTitle")
+        ProgressManager.getInstance().run(
+            object : Task.Backgroundable(project, title, false) {
+                override fun run(indicator: ProgressIndicator) {
+                    shareManager.saveHtmlReport(html, file.absolutePath)
+                }
+
+                override fun onSuccess() {
+                    BrowserUtil.open(file.toURI().toString())
+                }
+            },
+        )
     }
 }

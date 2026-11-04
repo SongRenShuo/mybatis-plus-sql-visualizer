@@ -143,8 +143,10 @@ class LogToSqlPanel(
                 resultHintLabel.isVisible = event.document.text.isBlank()
             }
         }
-        inputEditor.document.addDocumentListener(inputSync)
-        resultEditor.document.addDocumentListener(resultSync)
+        // T-PerfSweep30 05b：两处注册挂本面板 Disposable（本类实现 Disposable，dispose 时平台
+        // 自动摘除）——旧形态单参注册，靠 editor 组件回收间接失效，属「存量单参 DocumentListener」。
+        inputEditor.document.addDocumentListener(inputSync, this)
+        resultEditor.document.addDocumentListener(resultSync, this)
         inputHintLabel.isVisible = inputEditor.document.text.isBlank()
         resultHintLabel.isVisible = resultEditor.document.text.isBlank()
     }
