@@ -1275,12 +1275,36 @@ object DataSourceSelector {
      * .ensureIsUpToDate）。冷路径仅存于无预览链触达的显式执行首跑等场景。原"后台化经评估
      * 否决"（BGT 无法安全做 EDT-only 的 setMapping）已被 [DialectPreMapping.ensureMapped]
      * 两段式（BGT 读探测 + invokeLater 派 EDT + 有界 latch 等待，绝不 invokeAndWait）解决。
+     *
+     * **线程契约（UI-002，2026-11-04 真机）**：本方法**允许在后台线程调用**（生产唯一调用点是
+     * [createTempPsiFile] 的池线程段），但 `psi.isValid` 是 PSI API，**必须在读锁内**——新线程模型
+     * 下 `Application.isReadAccessAllowed()` 只看本线程是否持读许可（write-safe 投递只放开文档写、
+     * 不放读；EDT 的隐式读权限是平台过渡行为，平台注释明确将移除）。本方法的调用点在池线程，
+     * 任何隐式权限都不成立，无读锁时 262 平台 `FileManagerImpl.evaluateValidity` 的
+     * `@RequiresReadLock` 断言打 `Read access is allowed from inside read-action only`
+     * （真机栈三连：evaluateValidity / findDirectory / ensureIsUpToDate，内层帧不同、根因同一）。
+     * `vf.isValid`（VirtualFile）是 VFS 判定，不需要读锁，故先判 vf 再判 PSI（保持短路：
+     * 跨项目缓存不白跑 PSI 判定）。守卫：ExecTempFileEdtGuardTest 规则六。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     internal fun consumeCachedTempPsiFile(project: Project): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return cachedTempPsiFile?.let { (vf, psi) ->
-            if (isCacheUsable(project, vf) && runCatching { psi.isValid }.getOrDefault(true)) { // T-ExecPsiInvalid：vf.isValid 判不出 PSI 失效（内容一变就丢旧 PSI）；runCatching 兜底 true＝代理桩不应答按旧口径放行
+            // T-ExecPsiInvalid：vf.isValid 判不出 PSI 失效（内容一变就丢旧 PSI），故 vf 通过后还要判 PSI。
+            // UI-002：PSI 判定包读锁（BGT 无读权限）；判定**失败按不可用**处理——旧口径 getOrDefault(true)
+            // 会把判定不出的 PSI 当有效递进 Runner，正是 T-ExecPsiInvalid 的 PsiInvalidElementAccessException
+            // 形态。代理桩（CachedTempPsiFileTest）正常应答 isValid，不受兜底方向影响。
+            val cacheUsable = if (!isCacheUsable(project, vf)) {
+                false
+            } else {
+                try {
+                    ReadAction.compute<Boolean, Throwable> { psi.isValid }
+                } catch (e: Throwable) {
+                    if (FatalErrors.isFatal(e)) throw e
+                    false
+                }
+            }
+            if (cacheUsable) {
                 LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
                 vf to psi
             } else {
