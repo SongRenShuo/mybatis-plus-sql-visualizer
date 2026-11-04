@@ -234,6 +234,9 @@ class EnvironmentCheckReportTest {
         val report = sampleReport(EnvironmentCheckRules.community(false))
         val text = report.render()
         assertTrue("应标注不可用：$text", text.contains("不可用"))
-        assertTrue("应带修复指引前缀：$text", text.contains("修复指引："))
+        // 2026-11-04 三段式：guidance 语义收窄为「动作」，标签随之由「修复指引」改为「动作」。
+        assertTrue("应带动作段前缀：$text", text.contains("动作："))
+        assertTrue("非绿灯项应带症状段：$text", text.contains("症状："))
+        assertTrue("非绿灯项应带原因段：$text", text.contains("原因："))
     }
 }
