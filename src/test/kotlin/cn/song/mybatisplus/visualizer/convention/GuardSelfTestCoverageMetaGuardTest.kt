@@ -1182,6 +1182,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
                     "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
             ),
+            GuardEntry(
+                "convention/ConsolePsiWarmGuardTest.kt",
+                listOf(
+                    DecisionFn("psiWarmChainOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isDeclarationAt",
+                        FnKind.HELPER,
+                        "调用点/声明点判别谓词（Boolean 形态）：判断某 token 出现处前面是否为 `fun`，" +
+                            "供 psiWarmChainOffenders 只统计真实调用点；自证经该调用边到达",
+                        via = listOf("psiWarmChainOffenders"),
+                    ),
+                ),
+                "T-ThreadFix B：控制台 PSI 预暖线程契约守卫。真机 SEVERE：`prepareAfterEditorResolved:78` 的 " +
+                    "`console.getScriptModel()` 内部 `PsiUtilCore.getPsiFile` 首次实例化 PSI → " +
+                    "`FileManagerImpl.findDirectory` → WorkspaceFileIndex `ensureIsUpToDate`（EDT 慢操作，一次点击 9 条）。" +
+                    "判据：warmConsolePsiThen 必须是「isDispatchThread + executeOnPooledThread + ReadAction/PsiManager + " +
+                    "invokeLater(nonModal)」三段式，且 prepareAfterEditorResolved 的每个调用点都落在其续接 lambda 作用域内。" +
+                    "自证语料=「预暖缺段与续接点裸调必被点名」+「合规预暖形态不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",
