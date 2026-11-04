@@ -144,4 +144,82 @@ class SqlPreviewPanelDialectGateUxTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    // ------------------------------------------------------------------
+    // UI-004：底部方言闸门取值与顶部/实际渲染同源
+    // ------------------------------------------------------------------
+
+    private fun mysqlDecision() = cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision(
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.RESOLVED,
+        "MySQL",
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Confidence.STRONG,
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source.BOUND_DATASOURCE,
+    )
+
+    private fun plainResult(limitLine: String? = null) =
+        cn.song.mybatisplus.visualizer.model.PreviewResult(
+            sql = "SELECT 1",
+            compactSql = "SELECT 1",
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = null,
+            tableName = null,
+            renderedDialect = cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
+            paginationLimitLine = limitLine,
+        )
+
+    /**
+     * 现场矛盾的直接回归：顶部决策已是 MySQL（已绑定数据源），预览结果里固化的渲染方言仍是
+     * PostgreSQL（XML 载体无法重渲染）——闸门必须报 MySQL（MATCH），不得报 PostgreSQL。
+     */
+    fun test闸门取值_方言无关载体取最新决策不得报陈旧方言() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(plainResult())
+            panel.currentDialectDecision = mysqlDecision()
+            val request = panel.executionDialectGateRequest(ExecutionDialectGate.Intent.QUERY)
+            assertEquals("方言无关载体应取最新决策", "MySQL", request.renderedDialectName)
+            assertFalse("XML/纯文本载体本就无法无损重渲染", request.canLosslesslyRerender)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 方言敏感载体（分页 LIMIT 行按方言生成）仍以渲染事实为准。 */
+    fun test闸门取值_分页载体保留渲染事实() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(plainResult(limitLine = "LIMIT ?, ?"))
+            panel.currentDialectDecision = mysqlDecision()
+            val request = panel.executionDialectGateRequest(ExecutionDialectGate.Intent.QUERY)
+            assertEquals("分页 LIMIT 行是方言敏感产物，渲染事实优先", "PostgreSQL", request.renderedDialectName)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 证据对齐只对「文本未编辑」的方言无关载体生效。 */
+    fun test证据对齐_方言无关且文本未编辑时更新渲染方言() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(plainResult())
+            assertEquals("前置：渲染方言应为 PostgreSQL", "PostgreSQL", panel.currentDialect())
+            assertTrue("方言无关载体应允许证据对齐", panel.adoptDialectForNeutralCarrier(mysqlDecision()))
+            assertEquals("对齐后与顶部决策同源", "MySQL", panel.currentDialect())
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun test证据对齐_方言敏感载体不动() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(plainResult(limitLine = "LIMIT ?, ?"))
+            assertFalse("分页载体不得被证据对齐（LIMIT 行按方言生成）",
+                panel.adoptDialectForNeutralCarrier(mysqlDecision()))
+            assertEquals("渲染事实保持不变", "PostgreSQL", panel.currentDialect())
+        } finally {
+            panel.clear()
+        }
+    }
 }

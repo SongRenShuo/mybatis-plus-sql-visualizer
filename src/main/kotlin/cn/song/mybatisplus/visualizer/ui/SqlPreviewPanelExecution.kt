@@ -693,8 +693,19 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
         // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
         // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
-        renderedDialectName = result?.effectiveDialect?.name
-            ?: currentDialectDecision?.compatibilityFallbackName
+        // UI-004（2026-11-04 真机）：不能无条件优先 `result.effectiveDialect`——它是预览生成时
+        // 固化的快照，XML 载体无法经 rerenderForExecutionTarget 重写，会与顶部（currentDialectDecision，
+        // 随绑定/刷新重算）分裂成「顶部 MySQL、底部 PostgreSQL」。方言无关载体（XML 原文/纯文本）
+        // 取最新决策，模型/批量/分页载体仍取渲染事实——判据与理由见 [DialectGateRenderDialect]。
+        renderedDialectName = DialectGateRenderDialect.resolve(
+            effectiveDialectName = result?.effectiveDialect?.name,
+            decisionDialectName = currentDialectDecision?.dialectName,
+            dialectNeutral = DialectGateRenderDialect.isDialectNeutralCarrier(
+                hasPreviewModel = result?.previewModel != null,
+                hasBatchModel = result?.batchModel != null,
+                hasPaginationLimitLine = result?.paginationLimitLine != null,
+            ),
+        ) ?: currentDialectDecision?.compatibilityFallbackName
             ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
         intent = intent,
         canLosslesslyRerender = canRerender,
@@ -713,7 +724,9 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
             val target = verdict.targetDialectName
             if (target != null && rerenderForExecutionTarget(target)) {
-                resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict))
+                val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+                lastDialectGateMessage = message
+                resultPanel.showStatus(message)
             } else {
                 showDialectGateError(
                     verdict.copy(status = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE),
@@ -732,6 +745,9 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT,
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> {
             val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+            // UI-004：记下「底部当前显示的是方言提示」——刷新链据此判断能否安全替换/清空
+            //（绝不动执行结果与真实执行错误）。
+            lastDialectGateMessage = message
             // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
             // 放行态同样要给出口——文案本身就写着「可点「切换数据源」」，而 showStatus 第一行的
             // clearErrorActions() 会把两个链接清掉。改用 showStatusWithActions：信息态底色不变，
@@ -856,6 +872,7 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String
             embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
             // 换源成功即清掉旧状态行：方言提示按新目标重新判定（MATCH 时不再提示）
             resultPanel.showEmpty()
+            lastDialectGateMessage = null
         },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
         onError = { errorMsg -> resultPanel.showError(errorMsg) },

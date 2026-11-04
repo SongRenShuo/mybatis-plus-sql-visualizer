@@ -506,6 +506,14 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     /** M36.5.49：当前状态（测试断言用）。 */
     internal fun stateForTest(): String = state.name
 
+    /**
+     * UI-004：是否处于「纯信息态」——只有信息行，没有执行结果、没有执行错误。
+     *
+     * 方言提示（showStatus/showStatusWithActions 写的 infoLabel）可以在这个态下被安全替换/清除；
+     * 一旦是 SUCCESS/ERROR 就绝不能碰（否则刷新会把真实执行错误抹掉）。
+     */
+    internal fun isInfoOnlyState(): Boolean = state == State.EMPTY
+
     /** T-DialectGatePass：状态行文本（测试断言放行提示用，showStatus/showError 均写 infoLabel）。 */
     internal fun infoTextForTest(): String = infoLabel.text
 }
