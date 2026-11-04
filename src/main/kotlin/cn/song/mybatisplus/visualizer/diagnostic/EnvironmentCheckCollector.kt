@@ -28,8 +28,9 @@ import java.time.format.DateTimeFormatter
  *  - **不执行任何 SQL**：只读内存计数、设置值、方言决策（方言决策内部只做 URL 探测与设置读取）；
  *  - **不创建未创建过的服务**：AgentManager / SqlLogManager 一律 `getServiceIfCreated`——体检是
  *    旁路诊断，不得为了「看一眼」而拉起增强捕获或日志管理器的常驻线程；
- *  - **慢操作留在后台线程**：方言决策可能读数据源 URL（反射 + 缓存探测），调用方必须在池线程
- *    调 [collect]，EDT 只做展示。
+ *  - **有界取数**：五项采集逐项施加时间上界（见 [EnvironmentCheckBounded]）——任一项卡住只降级该项，
+ *    整单照常产出。调用方仍应在池线程调 [collect]（平台 API 与文件索引都不该在 EDT 上跑），
+ *    但**不需要**再自己加超时：本函数保证在总预算内返回。
  */
 internal object EnvironmentCheckCollector {
 
@@ -38,13 +39,21 @@ internal object EnvironmentCheckCollector {
 
     /** 收集一张体检单；[project] 为 null（无打开项目）时仍产出 IDE/Community 两项事实。 */
     fun collect(project: Project?): EnvironmentCheckReport {
+        val startedNs = System.nanoTime()
         val databaseAvailable = ExecuteSqlSupport.isAvailable()
-        val items = listOf(
-            dataSourceItem(project, databaseAvailable),
-            dialectItem(project),
-            agentItem(project),
-            captureItem(project),
-            EnvironmentCheckRules.community(databaseAvailable),
+        // UI-005：顺序提交 + 足量线程池（见 EnvironmentCheckBounded 的模型说明）。
+        val items = EnvironmentCheckBounded.run(
+            listOf(
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_DATA_SOURCE) {
+                    dataSourceItem(project, databaseAvailable)
+                },
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_DIALECT) { dialectItem(project) },
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_AGENT) { agentItem(project) },
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_CAPTURE) { captureItem(project) },
+                EnvironmentCheckTask(EnvironmentCheckRules.TITLE_KEY_COMMUNITY) {
+                    EnvironmentCheckRules.community(databaseAvailable)
+                },
+            ),
         )
         return EnvironmentCheckReport(
             generatedAt = TIME_FORMATTER.format(LocalDateTime.now()),
@@ -53,6 +62,7 @@ internal object EnvironmentCheckCollector {
             ideName = ideName(),
             projects = openProjectNames(),
             items = items,
+            totalElapsedMs = (System.nanoTime() - startedNs) / 1_000_000L,
         )
     }
 
@@ -92,6 +102,18 @@ internal object EnvironmentCheckCollector {
         return EnvironmentCheckRules.dialect(text.visible, text.details, weak)
     }
 
+    /**
+     * 增强捕获项：**只读快照**，不触发任何 attach 探测（UI-005 复核结论）。
+     *
+     * 逐条核对过这条链上没有会阻塞的调用：
+     *  - `getServiceIfCreated`——未创建返回 null，不构造 AgentManager（构造会起监听/巡检线程）；
+     *  - `statusSummary()`——只读 `CopyOnWriteArrayList` 会话表与若干 `AtomicBoolean`，无锁等待；
+     *  - `AgentAttachReport.latest()`——`AtomicReference.get()`，读的是**已上报**的最近一次计数，
+     *    本身不会去枚举 JVM 进程（`VirtualMachine.list()`/attach API 只在真正 attach 时才用）；
+     *  - `premainChannels`——`CopyOnWriteArrayList` 遍历。
+     *
+     * 因此本项**不需要**改成「只读缓存」以外的形态：它本来就不主动探测。真正的慢点不在 agent。
+     */
     private fun agentItem(project: Project?): EnvironmentCheckItem {
         val settings = runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state }
             .getOrNull()
@@ -112,7 +134,8 @@ internal object EnvironmentCheckCollector {
         )
     }
 
-    private fun captureItem(project: Project?): EnvironmentCheckItem {        if (project == null) {
+    private fun captureItem(project: Project?): EnvironmentCheckItem {
+        if (project == null) {
             return EnvironmentCheckRules.capture(
                 capturing = false,
                 entries = 0,

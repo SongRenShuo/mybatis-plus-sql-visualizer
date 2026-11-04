@@ -16,6 +16,8 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
  *  - 取数全部只读：不执行任何 SQL、不发起数据源连接、不创建未创建过的服务；
  *  - 「不可用」必须如实显示为 [CheckLevel.UNAVAILABLE]，绝不把缺失读数编成 0 或绿灯——
  *    这正是 NEW-18 立项要防的「看着支持、一条不出」。
+ *  - UI-005：每一项都带**采集耗时**与**结果来源**（[CheckOutcome]）。超时/失败的项降级为「未采集」，
+ *    整单照常产出——体检单本身就是诊断工具，它自己卡死是最不可接受的形态。
  */
 internal enum class CheckLevel(val severity: Int) {
     OK(0),
@@ -24,13 +26,40 @@ internal enum class CheckLevel(val severity: Int) {
     FAIL(3),
 }
 
-/** 体检单项：标题 + 等级 + 事实行 + 非绿灯时的修复指引。 */
+/**
+ * UI-005：单项采集结果来源。
+ *
+ * 除了「采到了」，其余三态都是**降级**：体检单照常产出，该项标「未采集」并写清原因与耗时——
+ * 用户贴工单时能直接看出是哪一项慢/失败，而不是整单不出、只看到「体检中…」。
+ */
+internal enum class CheckOutcome {
+    /** 正常采集完成。 */
+    COLLECTED,
+
+    /** 单项预算耗尽（该项仍在跑，已被放弃）。 */
+    ITEM_TIMEOUT,
+
+    /** 整张体检单预算耗尽（含「前几项吃光预算，本项未提交」）。 */
+    TOTAL_TIMEOUT,
+
+    /** 采集抛异常（含 Error）。 */
+    FAILED,
+}
+
+/** 体检单项：标题 + 等级 + 事实行 + 非绿灯时的修复指引 + 采集耗时/结果来源。 */
 internal data class EnvironmentCheckItem(
     val title: String,
     val level: CheckLevel,
     val facts: List<String>,
     val guidance: String? = null,
-)
+    /** 该项采集耗时（ms）。纯规则构造的项为 null——不是采集来的，没有耗时可言。 */
+    val elapsedMs: Long? = null,
+    /** 采集结果来源；[CheckOutcome.COLLECTED] 之外的取值都表示该项已降级。 */
+    val outcome: CheckOutcome = CheckOutcome.COLLECTED,
+) {
+    /** 是否降级（未采到事实，只报了原因）。 */
+    val degraded: Boolean get() = outcome != CheckOutcome.COLLECTED
+}
 
 /**
  * 体检单。`items` 顺序即展示顺序（数据源 → 方言 → 增强捕获 → 捕获覆盖 → Community 可用性）。
@@ -41,6 +70,8 @@ internal data class EnvironmentCheckReport(
     val ideName: String,
     val projects: List<String>,
     val items: List<EnvironmentCheckItem>,
+    /** UI-005：整张体检单的取数总耗时（ms）；工单里一眼看出「慢在哪一项」。 */
+    val totalElapsedMs: Long = 0L,
 ) {
     /** 总评取最严重项（FAIL > WARN > UNAVAILABLE > OK）。 */
     val overallLevel: CheckLevel
@@ -60,6 +91,7 @@ internal data class EnvironmentCheckReport(
             ),
         )
         appendLine(MpSqlVisualizerBundle.message("envCheck.summary", levelLabel(overallLevel)))
+        appendLine(MpSqlVisualizerBundle.message("envCheck.header.elapsed", totalElapsedMs.toString()))
         items.forEachIndexed { index, item ->
             appendLine()
             appendLine(
@@ -70,6 +102,10 @@ internal data class EnvironmentCheckReport(
                     levelLabel(item.level),
                 ),
             )
+            // UI-005：耗时逐项落地——「哪一项慢」是用户贴工单时最想被回答的问题。
+            item.elapsedMs?.let { elapsed ->
+                appendLine(MpSqlVisualizerBundle.message("envCheck.item.elapsed", elapsed.toString()))
+            }
             item.facts.forEach { fact ->
                 appendLine(MpSqlVisualizerBundle.message("envCheck.item.fact", fact))
             }
@@ -102,6 +138,46 @@ internal data class EnvironmentCheckReport(
  */
 internal object EnvironmentCheckRules {
 
+    // 五项标题键：采集侧（[EnvironmentCheckBounded] 的任务表）与降级项共用同一组键，
+    // 保证「降级项标题」与「正常项标题」逐字一致（成败不该改变用户看到的项名）。
+    const val TITLE_KEY_DATA_SOURCE = "envCheck.item.dataSource"
+    const val TITLE_KEY_DIALECT = "envCheck.item.dialect"
+    const val TITLE_KEY_AGENT = "envCheck.item.agent"
+    const val TITLE_KEY_CAPTURE = "envCheck.item.capture"
+    const val TITLE_KEY_COMMUNITY = "envCheck.item.community"
+
+    /**
+     * UI-005：降级项（超时/失败）——如实说「没采到」，不编造读数、也不让整单失败。
+     *
+     * 等级固定 [CheckLevel.UNAVAILABLE]：缺失读数就该显示为不可用（与「读数为 0」严格区分），
+     * 也避免把一次超时升级成 FAIL 把整单总评压成红色。
+     */
+    fun degraded(
+        titleKey: String,
+        outcome: CheckOutcome,
+        elapsedMs: Long,
+        budgetMs: Long,
+        reason: String? = null,
+    ): EnvironmentCheckItem {
+        val fact = when (outcome) {
+            CheckOutcome.ITEM_TIMEOUT ->
+                MpSqlVisualizerBundle.message("envCheck.degraded.itemTimeout", budgetMs.toString())
+            CheckOutcome.TOTAL_TIMEOUT ->
+                MpSqlVisualizerBundle.message("envCheck.degraded.totalTimeout", budgetMs.toString())
+            CheckOutcome.FAILED ->
+                MpSqlVisualizerBundle.message("envCheck.degraded.failed", reason ?: "?")
+            CheckOutcome.COLLECTED -> ""
+        }
+        return EnvironmentCheckItem(
+            title = MpSqlVisualizerBundle.message(titleKey),
+            level = CheckLevel.UNAVAILABLE,
+            facts = listOf(fact),
+            guidance = MpSqlVisualizerBundle.message("envCheck.degraded.guidance"),
+            elapsedMs = elapsedMs,
+            outcome = outcome,
+        )
+    }
+
     /** 数据源识别：Community 下 Database 插件缺席 → 如实「不可用」，不把 0 个源报成正常。 */
     fun dataSource(
         databaseAvailable: Boolean,
@@ -109,7 +185,7 @@ internal object EnvironmentCheckRules {
         defaultName: String?,
         lastUsedName: String?,
     ): EnvironmentCheckItem {
-        val title = MpSqlVisualizerBundle.message("envCheck.item.dataSource")
+        val title = MpSqlVisualizerBundle.message(TITLE_KEY_DATA_SOURCE)
         if (!databaseAvailable) {
             return EnvironmentCheckItem(
                 title = title,
@@ -144,7 +220,7 @@ internal object EnvironmentCheckRules {
      * 弱证据不等于错误——手动指定与已解析是绿灯，其余给「为什么会这样 + 怎么变强」。
      */
     fun dialect(visible: String?, details: String?, weak: Boolean): EnvironmentCheckItem {
-        val title = MpSqlVisualizerBundle.message("envCheck.item.dialect")
+        val title = MpSqlVisualizerBundle.message(TITLE_KEY_DIALECT)
         if (visible.isNullOrBlank()) {
             return EnvironmentCheckItem(
                 title = title,
@@ -181,7 +257,7 @@ internal object EnvironmentCheckRules {
         stats: AgentAttachStats?,
         premainSession: Boolean,
     ): EnvironmentCheckItem {
-        val title = MpSqlVisualizerBundle.message("envCheck.item.agent")
+        val title = MpSqlVisualizerBundle.message(TITLE_KEY_AGENT)
         if (!enabled) {
             return EnvironmentCheckItem(
                 title = title,
@@ -259,7 +335,7 @@ internal object EnvironmentCheckRules {
         replayDropped: Long,
         epShortCircuited: Long,
     ): EnvironmentCheckItem {
-        val title = MpSqlVisualizerBundle.message("envCheck.item.capture")
+        val title = MpSqlVisualizerBundle.message(TITLE_KEY_CAPTURE)
         val facts = buildList {
             add(
                 MpSqlVisualizerBundle.message(
@@ -293,7 +369,7 @@ internal object EnvironmentCheckRules {
 
     /** Community 可用性：无 Database 插件时执行入口不可用（预览/复制不受影响）。 */
     fun community(databaseAvailable: Boolean): EnvironmentCheckItem {
-        val title = MpSqlVisualizerBundle.message("envCheck.item.community")
+        val title = MpSqlVisualizerBundle.message(TITLE_KEY_COMMUNITY)
         return if (databaseAvailable) {
             EnvironmentCheckItem(
                 title = title,
