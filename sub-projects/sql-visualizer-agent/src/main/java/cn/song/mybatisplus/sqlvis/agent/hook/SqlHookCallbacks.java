@@ -151,7 +151,7 @@ public final class SqlHookCallbacks {
             // T-CaptureCatchAll 券 07：出栈必须排在一切早退之前——本帧只要入过栈就必须出栈，
             // 否则一次「取不到 SQL 的盲区语句」就会把线程深度永久抬高，后续真实语句全被误判为
             // 外层而抑制。判定 false = 本帧外层已由内层产事件（Hikari/MyBatis 包装层形态）。
-            if (!NestGate.exit()) {
+            if (!NestGate.exit(token)) {
                 return;
             }
             String sql = sqlParam;
@@ -178,7 +178,11 @@ public final class SqlHookCallbacks {
             if (url == null) {
                 url = resolveUrl(stmt);
             }
-            WovenEvents.emit(stmt, op, sql, result, failure, token, url);
+            // T-OracleWrapperRegistry：只有真的产出事件才让 NestGate 抑制外层——内层登记盲区
+            // （Oracle 包装器语句在执行内层物理语句时才查表）不得连带吞掉外层能出的那条
+            if (WovenEvents.emit(stmt, op, sql, result, failure, token, url)) {
+                NestGate.markEmitted();
+            }
         } catch (Throwable t) {
             // 采集红线：出口回调自吞，宿主 execute 语义不受影响
         }
@@ -244,13 +248,20 @@ public final class SqlHookCallbacks {
         }
     }
 
-    /** prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。 */
+    /**
+     * prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。
+     *
+     * <p>T-OracleWrapperRegistry：走 {@link StatementRegistry#registerWithDelegates}——Oracle 返回的是
+     * 包装器（{@code OraclePreparedStatementWrapper}），而 {@code executeQuery()} 的织入点在包内物理语句上，
+     * 只登记包装器会让「登记对象」与「执行对象」错位（真机：PS 全丢、只剩 plain Statement 的校验 SQL）。
+     * 无内层可解包时行为与 {@code register} 完全一致。
+     */
     public static void onStatementPrepare(Object ps, String sql, Object connection) {
         try {
             if (ps == null || sql == null || sql.isEmpty()) {
                 return;
             }
-            StatementRegistry.register(ps, sql, UrlResolver.resolve(connection));
+            StatementRegistry.registerWithDelegates(ps, sql, UrlResolver.resolve(connection));
         } catch (Throwable t) {
             // 采集红线：自吞
         }
