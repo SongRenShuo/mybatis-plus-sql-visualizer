@@ -287,9 +287,11 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // T-ExplainSwitchNative W10（用户实测「为什么 sql 无法执行」）：effectiveDialect 为 null
         // 只发生在「渲染链没记方言」的载体，而渲染器 byName(null) 的既有语义是回落 MySQL
         // （Dialect.kt:908-909）——闸门请求侧必须同口径回落，否则 RENDER_UNKNOWN_BLOCK 会阻断执行。
-        val idx = code.indexOf("renderedDialectName = result?.effectiveDialect?.name")
+        // UI-004（2026-11-04）：赋值形态改为先经 DialectGateRenderDialect.resolve 取方言
+        // （方言无关载体取最新决策），**回落链不变**——锚点随实现更新，W10 语义仍由下面的回落断言守住。
+        val idx = code.indexOf("renderedDialectName = DialectGateRenderDialect.resolve(")
         assertTrue("闸门请求须含 renderedDialectName 赋值（W10）", idx >= 0)
-        val slice = code.substring(idx, (idx + 260).coerceAtMost(code.length))
+        val slice = code.substring(idx, (idx + 700).coerceAtMost(code.length))
         assertTrue(
             "renderedDialectName 为 null 时须回落 MySqlDialect.name（W10）",
             slice.contains("?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name"),
