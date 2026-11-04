@@ -40,6 +40,13 @@ import com.intellij.psi.PsiManager
  *  - 非 EDT 调用（防御分支，生产不可达）：慢段在调用线程就地跑（BGT 上合法），**回调同样经
  *    write-safe 投递回 EDT**——续接链是 UI + 文档写，不能由后台线程承接。
  *
+ * **读锁（UI-002，2026-11-04 真机）**：慢段搬上池线程后，段内**两处 PSI 判定各自要读锁**——
+ * 缓存命中路径的有效性判定（`consumeCachedTempPsiFile` 内 `psi.isValid`）与冷路径的
+ * `PsiManager.findFile`。`ReadAction` 在这里解决的是**读权限**（BGT 没有），与「慢操作必须离开
+ * EDT」是两条独立的纪律：前者缺了打 `Read access is allowed from inside read-action only`，
+ * 后者缺了打 `Slow operations are prohibited on EDT`。EDT 侧回调里的 PSI 判定（[revalidateOnEdt]）
+ * 同样显式取读锁，不依赖 EDT 隐式权限。守卫：ExecTempFileEdtGuardTest 规则六。
+ *
  * **写安全（2026-11-01 真机回归，243.28141.41 字节码逐帧实证）**：投递模态必须是
  * `ModalityState.nonModal()`，**不能用 `any()`**。
  *  - `TransactionGuardImpl.<init>` 字节码：`createConcurrentWeakMap()` 之后立即
@@ -103,6 +110,12 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
  * 兜底口径：**只有 PSI 失效才重解析**（有效即原样返回，热路径零额外开销）；重解析仍失败则
  * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。
  * 调用点固定为 EDT 投递 lambda 内（守卫 ExecTempFileEdtGuardTest 规则五同时盯住投递模态）。
+ *
+ * 线程契约（UI-002）：本函数在 **EDT**（write-safe 投递内）执行，但 `psi.isValid` / `findFile`
+ * 都是 PSI API，**读权限一律显式取**——不依赖 EDT 隐式读权限（新线程模型下
+ * `Application.isReadAccessAllowed()` 只看本线程读许可，`TransactionGuard` 的 write-safe 只放开
+ * 文档写、不放读；平台注释亦声明该隐式权限将在后续版本移除）。因此两处 `isValid` 都落在
+ * `ReadAction` 作用域内（第二处随 `findFile` 同一次读锁），后台误调本函数也不会打平台读锁断言。
  */
 internal fun revalidateOnEdt(
     project: Project,
@@ -110,14 +123,24 @@ internal fun revalidateOnEdt(
 ): Pair<VirtualFile, PsiFile>? {
     if (pair == null) return null
     val (vf, psi) = pair
-    if (psi.isValid) return pair
+    val stillValid = try {
+        ReadAction.compute<Boolean, Throwable> { psi.isValid }
+    } catch (e: Throwable) {
+        if (FatalErrors.isFatal(e)) throw e
+        false
+    }
+    if (stillValid) return pair
+    // 重解析 + 有效性判定同一次读锁内完成——判出的 fresh 出了锁再判 isValid 会多一次读权限要求
+    // （且中间仍有失效窗口），合并后只读一次平台状态。
     val fresh = try {
-        ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
+        ReadAction.compute<PsiFile?, Throwable> {
+            PsiManager.getInstance(project).findFile(vf)?.takeIf { it.isValid }
+        }
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
         null
     }
-    return if (fresh != null && fresh.isValid) vf to fresh else null
+    return if (fresh != null) vf to fresh else null
 }
 
 /**
@@ -140,7 +163,11 @@ internal fun revalidateOnEdt(
  *     承担（BGT 读探测 → invokeLater 派 EDT 写 → 有界等待，EDT 永不反向阻塞；与
  *     [prewarmExecTempFileInner] 同款）。此处**不得**改成裸反射 setMapping；
  *  4. PSI 查找（下方 [PSI] 段）：ReadAction 只保证读语义、不改变线程，故必须整段在 BGT 上
- *     （本券修复本体）。
+ *     （本券修复本体）。**读权限与线程是两条纪律**：本段是 BGT，`ReadAction` 在这里是**必需**的
+ *     （不是可选的语义包装）——BGT 无读许可，裸读 PSI 打 `Read access is allowed from inside
+ *     read-action only`；
+ *  5. 缓存命中路径的 PSI 有效性判定（[consumeCachedTempPsiFile] 内 `psi.isValid`）：同样在 BGT，
+ *     同样必须包 `ReadAction`（UI-002 真机栈本体；`vf.isValid` 是 VFS 判定不需要读锁）。
  */
 internal fun DataSourceSelector.createTempPsiFile(
     project: Project,

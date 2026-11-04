@@ -46,6 +46,14 @@ import java.io.File
  *
  * 函数体一律按**大括号配平**取真实区间（固定长度窗口会跨界读到邻居函数，造成假绿——
  * LastUsedWriteOnEdtGuardTest 反向验证时踩过这个坑）。
+ *
+ * 规则六（UI-002，2026-11-04 真机）：**PSI 有效性判定必须在读锁内**。慢段搬上池线程后，
+ * `consumeCachedTempPsiFile` 的 `psi.isValid`（BGT）与 `revalidateOnEdt` 的两处 `isValid`
+ * （EDT 回调）都不能靠「EDT 隐式读权限」或「readCatching 兜底」蒙混——新线程模型下
+ * `Application.isReadAccessAllowed()` 只看本线程读许可，无锁即打
+ * `Read access is allowed from inside read-action only`（真机三连栈）。判定口径：
+ * 这两个函数体内的每处 `.isValid` 都必须落在 `ReadAction.compute{…}` 的**大括号作用域**内
+ * （不是「函数里出现过 ReadAction」），且判定不许被整段删掉（删了就是空绿）。
  */
 class ExecTempFileEdtGuardTest {
 
@@ -53,11 +61,20 @@ class ExecTempFileEdtGuardTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt"
     private val factoryPath =
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/ExecTempFileFactory.kt"
+    private val selectorPath =
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt"
 
     /**
      * 判定内核（VIOLATIONS）：返回违规点描述。可注入合成源码自证——主用例与自证语料共用同一实现。
+     *
+     * @param selectorSource [consumeCachedTempPsiFile] 所在文件源码（规则六站点一）；缺省用合规合成语料，
+     *   自证用例可只喂 results/factory 两段。
      */
-    internal fun offendersOf(resultsSource: String, factorySource: String): List<String> {
+    internal fun offendersOf(
+        resultsSource: String,
+        factorySource: String,
+        selectorSource: String = COMPLIANT_SELECTOR,
+    ): List<String> {
         val out = ArrayList<String>()
         val results = stripComments(resultsSource)
         val factory = stripComments(factorySource)
@@ -121,6 +138,112 @@ class ExecTempFileEdtGuardTest {
 
         // ---- 规则五：结果回调必须是 write-safe 投递（any() 恒 write-unsafe） ----
         out += writeSafeDeliveryOffenders(factorySource)
+
+        // ---- 规则六：PSI 有效性判定必须在读锁内（BGT / EDT 都不隐含读权限） ----
+        out += psiValidityReadLockOffenders(selectorSource, factorySource)
+        return out
+    }
+
+    /**
+     * 判定内核（VIOLATIONS）：PSI 有效性判定是否处于读锁作用域。
+     *
+     * UI-002（2026-11-04 真机）：`createTempPsiFile` 搬上池线程后，缓存命中路径的
+     * `consumeCachedTempPsiFile` 里 `runCatching { psi.isValid }` 没有读锁——平台
+     * `FileManagerImpl.evaluateValidity`（`@RequiresReadLock`）打
+     * `Read access is allowed from inside read-action only`（真机同一栈三连：evaluateValidity /
+     * findDirectory / ensureIsUpToDate）。同族风险在 `revalidateOnEdt`（EDT 回调内两处 `isValid`），
+     * 那里同样显式取读锁，不依赖 EDT 隐式权限。
+     *
+     * 判定：两个函数体内的**每处 `.isValid`** 都必须落在 `ReadAction.compute{…}` 的括号作用域内；
+     * 只看「函数里出现过 ReadAction」会被「锁包在别处、判定裸奔」骗过（反向验证锚点：摘掉
+     * `ReadAction` 必须变红）。另：判定整体消失也算违规（防空绿——缓存会把死 PSI 递进续接链）。
+     */
+    internal fun psiValidityReadLockOffenders(selectorSource: String, factorySource: String): List<String> {
+        val out = ArrayList<String>()
+        val selector = stripComments(selectorSource)
+        val consumeRange = bodyRangeOf(selector, CONSUME_CACHE)
+        if (consumeRange == null) {
+            out += "$selectorPath: 未定位到 $CONSUME_CACHE 函数体（函数改名/搬家后守卫须同步跟进）"
+        } else {
+            out += unprotectedIsValidSites(
+                selector.substring(consumeRange.first, consumeRange.last + 1),
+                CONSUME_CACHE,
+                selectorPath,
+                lineBase = lineOf(selector, consumeRange.first) - 1,
+            )
+        }
+        val factory = stripComments(factorySource)
+        val revalidateRange = bodyRangeOf(factory, REVALIDATE)
+        if (revalidateRange == null) {
+            out += "$factoryPath: 未定位到 $REVALIDATE 函数体（PSI 失效兜底消失？）"
+        } else {
+            out += unprotectedIsValidSites(
+                factory.substring(revalidateRange.first, revalidateRange.last + 1),
+                REVALIDATE,
+                factoryPath,
+                lineBase = lineOf(factory, revalidateRange.first) - 1,
+            )
+        }
+        return out
+    }
+
+    /**
+     * 单个函数体：每处 `.isValid` 必须在 `ReadAction.compute{…}` 作用域内；且不得一处都没有。
+     *
+     * @param lineBase 函数体首行之前的行数（违规行号按**整文件**行号报，方便直接跳源码）
+     */
+    private fun unprotectedIsValidSites(
+        body: String,
+        fn: String,
+        path: String,
+        lineBase: Int,
+    ): List<String> {
+        val out = ArrayList<String>()
+        val scopes = readActionComputeScopes(body)
+        var count = 0
+        var idx = body.indexOf(".isValid")
+        while (idx >= 0) {
+            count++
+            if (scopes.none { idx in it }) {
+                out += "$path:${lineBase + lineOf(body, idx)} $fn 的 `.isValid` 不在 ReadAction 作用域内" +
+                    "（无读锁读 PSI = 平台 Read access is allowed from inside read-action only）"
+            }
+            idx = body.indexOf(".isValid", idx + 1)
+        }
+        if (count == 0) {
+            out += "$path: $fn 未见 `.isValid`（PSI 有效性判定被整体删除？缓存会把死 PSI 递进续接链）"
+        }
+        return out
+    }
+
+    /**
+     * `ReadAction.compute{…}` 的作用域区间（大括号配平取**内部**）。
+     *
+     * 认形态：`ReadAction.compute {` / `ReadAction.compute<T, E> {`——取 `{` 前的紧邻文本匹配，
+     * 避免把「函数里别处的 ReadAction」当成保护；`ReadAction.run` 同样收（语义等价）。
+     */
+    private fun readActionComputeScopes(body: String): List<IntRange> {
+        val out = ArrayList<IntRange>()
+        val pattern = Regex("""ReadAction\.(compute|run)(<[^>{]*>)?\s*\{""")
+        for (m in pattern.findAll(body)) {
+            val open = body.indexOf('{', m.range.first)
+            if (open < 0) continue
+            var depth = 0
+            var i = open
+            while (i < body.length) {
+                when (body[i]) {
+                    '{' -> depth++
+                    '}' -> {
+                        depth--
+                        if (depth == 0) {
+                            out += (open + 1)..(i - 1)
+                            break
+                        }
+                    }
+                }
+                i++
+            }
+        }
         return out
     }
 
@@ -215,7 +338,7 @@ class ExecTempFileEdtGuardTest {
 
     @Test
     fun `执行临时文件构建链不得在 EDT 上做慢操作`() {
-        val offenders = offendersOf(read(resultsPath), read(factoryPath))
+        val offenders = offendersOf(read(resultsPath), read(factoryPath), read(selectorPath))
         assertTrue(
             "执行临时文件构建链的线程纪律被破坏（EDT 上 VFS refresh / PSI 查找 = 平台 SEVERE " +
                 "SlowOperations，三路共用入口全部受累）。违规 ${offenders.size} 处：\n" +
@@ -326,12 +449,88 @@ class ExecTempFileEdtGuardTest {
         )
     }
 
+    /**
+     * 自证：PSI 有效性判定的读锁作用域判定——裸判 / 「ReadAction 在别处但判定裸奔」/ 判定被删
+     * 三态必红，合规包锁不误报。这是 UI-002（2026-11-04 真机 BGT 无读锁读 PSI）的锚点。
+     */
+    @Test
+    fun `自证_PSI有效性判定必须落在ReadAction作用域内`() {
+        // 形态一：裸判（真机形态——runCatching 只兜返回值，平台照样记 error）
+        val nakedSelector = """
+            internal fun DataSourceSelector.consumeCachedTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
+                return cachedTempPsiFile?.let { (vf, psi) ->
+                    if (isCacheUsable(project, vf) && runCatching { psi.isValid }.getOrDefault(true)) vf to psi else null
+                }
+            }
+        """.trimIndent()
+        val naked = psiValidityReadLockOffenders(nakedSelector, goodAsyncFactory())
+        assertTrue("裸 psi.isValid 必须被点名：$naked", naked.any { it.contains("不在 ReadAction 作用域内") })
+
+        // 形态二：ReadAction 出现在同一函数里，但没包住判定——「出现过 ReadAction」不算数
+        val lockedElsewhere = """
+            internal fun DataSourceSelector.consumeCachedTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
+                val name = ReadAction.compute<String, Throwable> { vf.name }
+                return cachedTempPsiFile?.let { (vf, psi) ->
+                    if (isCacheUsable(project, vf) && psi.isValid) vf to psi else null
+                }
+            }
+        """.trimIndent()
+        val elsewhere = psiValidityReadLockOffenders(lockedElsewhere, goodAsyncFactory())
+        assertTrue(
+            "ReadAction 在别处、判定裸奔同样必须被点名（作用域判定不是「函数里出现过」）：$elsewhere",
+            elsewhere.any { it.contains("不在 ReadAction 作用域内") },
+        )
+
+        // 形态三：判定被整体删除——空绿防线
+        val deleted = """
+            internal fun DataSourceSelector.consumeCachedTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
+                return cachedTempPsiFile?.let { (vf, psi) -> if (isCacheUsable(project, vf)) vf to psi else null }
+            }
+        """.trimIndent()
+        val gone = psiValidityReadLockOffenders(deleted, goodAsyncFactory())
+        assertTrue("PSI 判定被整体删除必须被点名：$gone", gone.any { it.contains("未见 `.isValid`") })
+
+        // 形态四：revalidateOnEdt 的 EDT 侧判定裸奔
+        val badFactory = """
+            internal fun revalidateOnEdt(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
+                if (pair == null) return null
+                val (vf, psi) = pair
+                if (psi.isValid) return pair
+                val fresh = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
+                return if (fresh != null && fresh.isValid) vf to fresh else null
+            }
+        """.trimIndent()
+        val edtNaked = psiValidityReadLockOffenders(COMPLIANT_SELECTOR, badFactory)
+        assertTrue("revalidateOnEdt 的裸 psi.isValid 必须被点名：$edtNaked", edtNaked.any { it.contains("不在 ReadAction 作用域内") })
+        assertTrue(
+            "revalidateOnEdt 锁外 fresh.isValid 必须被点名：$edtNaked",
+            edtNaked.count { it.contains("不在 ReadAction 作用域内") } >= 2,
+        )
+
+        // 合规：两站点都在读锁内 → 不误报
+        assertEquals(
+            "合规读锁形态不应误报：${psiValidityReadLockOffenders(COMPLIANT_SELECTOR, goodAsyncFactory())}",
+            0,
+            psiValidityReadLockOffenders(COMPLIANT_SELECTOR, goodAsyncFactory()).size,
+        )
+    }
+
     /** 合成合规异步入口：两分支都经 `invokeLater(…, nonModal)` 投递（与生产形态同构）。 */
     private fun goodAsyncFactory(): String = """
         internal fun DataSourceSelector.createTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
             val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
             val psi = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
             return null
+        }
+
+        internal fun revalidateOnEdt(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
+            if (pair == null) return null
+            val (vf, psi) = pair
+            if (ReadAction.compute<Boolean, Throwable> { psi.isValid }) return pair
+            val fresh = ReadAction.compute<PsiFile?, Throwable> {
+                PsiManager.getInstance(project).findFile(vf)?.takeIf { it.isValid }
+            }
+            return if (fresh != null) vf to fresh else null
         }
 
         internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
@@ -442,6 +641,24 @@ class ExecTempFileEdtGuardTest {
         private const val ASYNC_ENTRY = "createTempPsiFileAsync"
         private const val CONTINUATION = "continuePrepareAfterTempFile"
         private const val ON_READY = "onReady"
+
+        /** 规则六站点：缓存命中路径（BGT）与异步窗口兜底（EDT 回调）。 */
+        private const val CONSUME_CACHE = "consumeCachedTempPsiFile"
+        private const val REVALIDATE = "revalidateOnEdt"
+
+        /** 规则六缺省语料（合规形态）：自证用例只喂 results/factory 两段时不误报。 */
+        private const val COMPLIANT_SELECTOR = """
+            internal fun DataSourceSelector.consumeCachedTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
+                return cachedTempPsiFile?.let { (vf, psi) ->
+                    val ok = try {
+                        ReadAction.compute<Boolean, Throwable> { psi.isValid }
+                    } catch (e: Throwable) {
+                        false
+                    }
+                    if (isCacheUsable(project, vf) && ok) vf to psi else null
+                }
+            }
+        """
 
         /** 投递形态白/黑名单：`invokeLater` 需看模态实参，另两个自身即 write-safe 收口。 */
         private val DELIVERY_CALLS = listOf(
