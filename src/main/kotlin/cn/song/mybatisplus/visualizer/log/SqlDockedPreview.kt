@@ -116,9 +116,11 @@ internal class SqlDockedPreview(
             cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(previewCopySafeText(it, maskMode, allowList))
         }, close = onClose).also { built ->
             content = built
+            // T-PerfSweep30 05b：挂本面板 Disposable（本类实现 Disposable，dispose 即摘除）——
+            // 旧形态单参注册，靠 editor 组件回收间接失效。
             built.editor.document.addDocumentListener(object : DocumentListener {
                 override fun documentChanged(event: DocumentEvent) = updatePinnedStatus()
-            })
+            }, this)
         }
         if (current.editor.document.text != sql) {
             updating = true
@@ -137,8 +139,24 @@ internal class SqlDockedPreview(
 
     private fun isPinned(): Boolean {
         isPinnedCallCountForTest++ // F98 测试缝
-        return displayedEntry != null &&
-            content?.editor?.document?.text != originalSql
+        return displayedEntry != null && documentDiffersFromOriginal()
+    }
+
+    /**
+     * T-PerfSweep30 04b：逐键路径去分配——`document.text` 每次都复制整份文本（O(n) 分配），
+     * 而本判定挂在 documentChanged 上逐键触发。改用 `charsSequence` 视图逐段比较：长度先比，
+     * 不同即早退；相同长度再逐字符比，零 String 分配。
+     *
+     * 语义与 `document.text != originalSql` 逐字等价（Document 的 charsSequence 就是 text 的视图）。
+     */
+    private fun documentDiffersFromOriginal(): Boolean {
+        val chars = content?.editor?.document?.charsSequence ?: return false
+        val original = originalSql ?: return false
+        if (chars.length != original.length) return true
+        for (i in 0 until chars.length) {
+            if (chars[i] != original[i]) return true
+        }
+        return false
     }
 
     private fun updatePinnedStatus() {

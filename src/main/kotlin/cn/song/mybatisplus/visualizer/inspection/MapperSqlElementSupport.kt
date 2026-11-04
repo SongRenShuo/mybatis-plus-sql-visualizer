@@ -119,7 +119,19 @@ object MapperSqlElementSupport {
      *
      * @return null = 不判定（dumb 态 / interface 或方法解析不出 / 单参无 `@Param`）
      */
-    fun parameterRoots(tag: XmlTag): Set<String>? {
+    fun parameterRoots(tag: XmlTag): Set<String>? = parameterRootsWithMethod(tag)?.first
+
+    /**
+     * T-PerfSweep30 04c：与 [parameterRoots] **同一趟解析**，额外把接口方法带出。
+     *
+     * 导航 fix（`NavigationFixes.forMissingParameter`）需要同一个方法对象——旧形态是调用方先经
+     * [parameterRoots] 解析一次、fix 内部再 `resolveInterfaceMethod` 解析第二次，且该 fix 在
+     * 「每个 finding」循环内构造（同一条语句 N 个缺失参数 = N+1 次索引查询）。带出方法后
+     * 调用方一次解析、循环外构造一次 fix，登记期零重复查询。
+     *
+     * @return null = 不判定（语义同 [parameterRoots]）
+     */
+    fun parameterRootsWithMethod(tag: XmlTag): Pair<Set<String>, PsiMethod>? {
         val project = tag.project
         if (project.isDefault || DumbService.isDumb(project)) return null
         val root = (tag.containingFile as? XmlFile)?.rootTag ?: return null
@@ -127,7 +139,7 @@ object MapperSqlElementSupport {
         val statementId = tag.getAttributeValue("id")?.takeIf(String::isNotBlank) ?: return null
         val method = runCatching { MybatisXmlTargets.resolveInterfaceMethod(project, namespace, statementId) }
             .getOrNull() ?: return null
-        return methodParamRoots(method)
+        return methodParamRoots(method)?.let { it to method }
     }
 
     /** 方法参数 → 合法根名（`@Param` 值优先 + `param1..N`）；单参且无 `@Param` → null（不可判定）。 */
