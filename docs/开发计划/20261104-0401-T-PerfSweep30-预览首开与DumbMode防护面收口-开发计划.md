@@ -132,3 +132,13 @@ C 车道首跑撞一处编译错：`SqlDockedPreview.documentDiffersFromOriginal
 
 三车道三提交全部合入集成分支：B `cf00a2d7`（4 件）→ A `ead67d72`（4 件）→ C `4b525787`（5 件）；合并点 `1746ca62` / `2e786892` / `9869d87d`。券01d（预热预算调参）按计划**未动**——等 T0 重采样读数；T0 真机四项（沿期三项＋预热预算重采样）仍为移交项。
 
+### 6.5 待验证前提核销（§五七条的实测结论）
+
+1. **IndexNotReadyException 是否真从 findClass/PsiShortNamesCache 抛**——**成立**（B 路 dumb 夹具实测抛）；但连带证伪了「FileTypeIndex 直抛」：它 dumb 态不抛、返回真清单。故 02a 的收益是「空表不写槽」而非「拦抛出的异常」。
+2. **3016ms 是单次冷启样例**——按计划未据此调参（01d 挂 T0 重采样）。
+3. **showSql 对 exec 文档是否已内容判等**——**已判等**（`SqlPreviewPanelSqlView.kt:678` `if (nativeDoc.text != text)`，editor 分支 :733 同款）。计划原文「setText 无条件」不成立；01a/01c 因此按「回填天然早退」设计，不额外加判等。
+4. **迟到换装是设计内恢复出口**——未动换装语义；`PreviewEditorAssemblyKeepsConsoleTest` 4/0/0、`SqlPreviewPanelPrewarmLateRecoverTest` 5/0/0 保持绿。
+5. **language="" 使 buildVisitor 对全文件被调**——券03 判定不动（tick 4.61µs），本前提不触发。
+6. **widget 与 CaptureStatusBar 轮询口径**——券03 不引入 Topic，不存在只改一处的分叉。
+7. **insight 合流增量**——不在本券范围，合流轮另跑走查。
+
