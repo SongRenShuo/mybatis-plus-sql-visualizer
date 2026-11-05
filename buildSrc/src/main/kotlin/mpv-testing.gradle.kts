@@ -1106,10 +1106,14 @@ intellijPlatformTesting {
                     )
                     // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
                     // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
-                    systemProperty("http.proxyHost", "127.0.0.1")
-                    systemProperty("http.proxyPort", "7890")
-                    systemProperty("https.proxyHost", "127.0.0.1")
-                    systemProperty("https.proxyPort", "7890")
+                    // T-CiProxy（2026-11-05）：与 mpv-verification 的 verifierProxyJvmArgs 同口径——
+                    // 从 daemon 系统属性读取（本机 gradle.properties 的 systemProp.* 会设入 daemon JVM，
+                    // 与原硬编码 127.0.0.1:7890 等价）；CI 会剥掉代理行，此时**不设**代理 → 直连，
+                    // 不再撞死 runner 上不存在的本地代理。原先的硬编码是 DB 集成腿搬上 CI 的第一道墙。
+                    System.getProperty("http.proxyHost")?.let { systemProperty("http.proxyHost", it) }
+                    System.getProperty("http.proxyPort")?.let { systemProperty("http.proxyPort", it) }
+                    System.getProperty("https.proxyHost")?.let { systemProperty("https.proxyHost", it) }
+                    System.getProperty("https.proxyPort")?.let { systemProperty("https.proxyPort", it) }
                     // T-ExecDocGate 20260917：doFirst 需要项目根绝对路径——相对路径在 doFirst 按
                     // daemon CWD 解析（实测为 .gradle/daemon/<ver>，跨构建不一致）；直接捕获
                     // project 字符串又是脚本对象引用（配置缓存拒绝）。inputs.property 是官方
