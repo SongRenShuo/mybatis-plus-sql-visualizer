@@ -92,7 +92,7 @@ javap 实证 `GotoDeclarationAction.findTargetElementsNoVS` 的顺序：
 1. `sourceElement is PsiIdentifier`；
 2. `parent is PsiMethod` 且 `method.nameIdentifier === sourceElement`；
 3. `method.containingClass?.isInterface == true`（与 gutter 同口径，见 `MapperNavigationLineMarkerProviders.kt:103-104`）；
-4. `qualifiedName` 非空 → `MybatisXmlTargets.resolveStatementTag(project, namespace, method.name)`；
+4. `qualifiedName` 非空 → `MybatisXmlTargets.resolveStatementTags(project, namespace, method.name)`；
 5. 命中 → 返回 XML 语句的 `id` 值 token；未命中 → `null`。
 
 **XML 侧判定链**
@@ -113,7 +113,7 @@ javap 实证 `GotoDeclarationAction.findTargetElementsNoVS` 的顺序：
 
 ### 4.2 解析 API：复用为主，只加一个 PSI 版入口
 
-- 新增 `MybatisXmlTargets.resolveStatementTag(project, namespace, id): XmlTag?` —— 复用现有 `findMapperFileByNamespace`（单槽 namespace memo + 清单 TTL 5s）与标签遍历，不新建缓存、不引监听器（红线维持）。
+- 新增 `MybatisXmlTargets.resolveStatementTags(project, namespace, id): List<XmlTag>`（返回全部同名标签，含 `databaseId` 变体） —— 复用现有 `findMapperFileByNamespace`（单槽 namespace memo + 清单 TTL 5s）与标签遍历，不新建缓存、不引监听器（红线维持）。
 - **不改** `MapperXmlLocator`：它是行号版，服务日志跳转与 gutter 点击，返回 `Location(virtualFile, line)`；两套缓存的重复登记为后续券，本券不合并。
 - 不新建索引、不加 `FileBasedIndex` 扩展。
 
@@ -171,7 +171,7 @@ javap 实证 `GotoDeclarationAction.findTargetElementsNoVS` 的顺序：
 | 波次 | 内容 | 写集 | 验收判据 |
 |---|---|---|---|
 | W0 前提核验（不改码） | 在 243 沙盒与用户 2026.2 真机各做一次现状读数：Java 方法名 Ctrl+B、XML 标签名 Ctrl+B、XML `id` 值 Ctrl+B、Java 方法 Alt+F7 | 无（读数落本册 §八） | 三条现状与 §一 一致；若 `id` 值处 Ctrl+B 实际不可用，W2 的「已可用」前提改写为待修 |
-| W1 Java → XML | 新增 handler + `resolveStatementTag` + EP 注册 | `ui/nav/MapperNavigationGotoDeclarationHandler.kt`（新）、`ui/ref/MybatisXmlTargets.kt`、`plugin.xml` | 方法名 Ctrl+B / Ctrl+Click 跳到对应语句 id；非接口/无 XML/非 mapper 一律回落原生 |
+| W1 Java → XML | 新增 handler + `resolveStatementTags` + EP 注册 | `ui/nav/MapperNavigationGotoDeclarationHandler.kt`（新）、`ui/ref/MybatisXmlTargets.kt`、`plugin.xml` | 方法名 Ctrl+B / Ctrl+Click 跳到对应语句 id；非接口/无 XML/非 mapper 一律回落原生 |
 | W2 XML → Java | 同一 handler 覆盖标签名与 `id` 属性名/值 | 同 W1 文件 | 标签名 Ctrl+B 跳方法；`id` 值行为与现有引用一致；非 mapper XML 零影响 |
 | W3（可选）关联符号 | `GotoRelatedProvider` + EP 注册 | `ui/nav/MapperNavigationGotoRelatedProvider.kt`（新）、`plugin.xml` | Ctrl+Alt+Home 弹出「Mapper 语句 / 接口方法」项并可跳转 |
 | W4 收口 | 定向测试、反向验证、构建校验 | 测试目录 | 见 §七 |
@@ -230,7 +230,39 @@ W1 与 W2 写集重合，串行；W3 只依赖 W1 的解析 API，可并行。
 | 大项目首跳卡顿 | 复用 `MybatisXmlTargets` 既有清单缓存（TTL 5s）；P-4 实测兜底 |
 | 新 EP 名写错被平台静默忽略 | `PluginXmlExtensionPointResolutionTest` 自动覆盖；W0 读数同时确认「按键有反应」 |
 
-## 十、变更记录
+## 十、实施记录（2026-11-05）
+
+### 10.1 落位
+
+| 项 | 内容 |
+|---|---|
+| 分支 / 工作树 | `t-mapper-nav-shortcut` / `mybatis-plus-sql-visualizer-mns`，自 master `029864bf` 派生 |
+| 解析层 | `ui/ref/MybatisXmlTargets.kt` 新增 `resolveStatementTags`（PSI 版，复用 namespace 单槽 memo + 清单 TTL 缓存）；`STATEMENT_TAGS` 提升为单一事实源（`MybatisXmlAttributeReferenceProvider` 里的私有副本删除） |
+| 判定层 | `ui/nav/MapperNavigationTargets.kt`：Java→XML / XML→Java / 祖先爬升 / 落点选择 |
+| 入口层 | `ui/nav/MapperNavigationGotoDeclarationHandler.kt`（Ctrl+B / Ctrl+Click）、`ui/nav/MapperNavigationGotoRelatedProvider.kt`（Ctrl+Alt+Home） |
+| 接线 | `plugin.xml` 两条 EP（无 keymap）；双语 `nav.related.group.*` 两条分组文案 |
+
+### 10.2 与计划的差异（实施期订正）
+
+| 计划 | 实际 | 原因 |
+|---|---|---|
+| `resolveStatementTag(): XmlTag?` | `resolveStatementTags(): List<XmlTag>` | `databaseId` 多方言变体须全部返回，平台自动弹选择器 |
+| 落点取 `id` 值元素 | 取 `XML_ATTRIBUTE_VALUE_TOKEN` | `XmlAttributeValue.firstChild` 是开引号，直接用会落在 `"` 上（定向首轮实测） |
+
+### 10.3 读数
+
+- 定向：`./gradlew test --tests "cn.song.mybatisplus.visualizer.ui.nav.*"` → **21/0/0/0**（Handler 16 + Related 5）。
+- 反向验证（两次读数）：
+  - 摘 Java 分支 → `testJavaMethod_命中XML语句落点` 红（该过滤组 3 例 1 红；另两例是「无 XML / 无 mapper」负路径，本就不依赖分支）；
+  - 摘 XML 分支 → `testXml*` 7 例 4 红（起始标签名 / 闭标签名 / `id` 属性名 / `id` 属性值），3 条负路径仍绿；
+  - 还原后全包 21/0/0/0。
+- 构建校验：`plugin.xml` 新增 EP 命中「大改动判据」，按用户口径本轮只跑定向，`verifyPlugin` 留发版前。
+
+### 10.4 环境插曲（如实登记）
+
+首轮测试期撞上并行会话的 DB 集成测试（主树 `build/test-sandbox/database/testDbDiagram` 的沙盒 JVM 持有共享 `transforms` 目录），出现两次 `Could not determine the dependencies of task ':test'`（`Unable to delete directory …/cfd911…`）与一次 Gradle daemon 原生内存 OOM（`hs_err_pid9080.log`：`in-process` Kotlin 策略叠加双路构建）。处置＝去掉 `-Pkotlin.compiler.execution.strategy=in-process`、`--max-workers=2`，等对方构建结束后重跑即绿；崩溃产物（`hs_err_pid*.log` / `replay_pid*.log`）已删除，未进提交。
+
+## 十一、变更记录
 
 | 日期 | 记录 |
 |---|---|
