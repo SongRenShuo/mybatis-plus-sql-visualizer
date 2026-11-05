@@ -58,14 +58,16 @@
 - [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
   - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
   - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
-  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8（逐段拆解）→ run#9/#10 19.4 → **run#12 十 job 全绿 18.4 分钟**（build 8.2 + verify×3 并行 4.0~6.0 + test×5 并行 8.6~11.2 + marketplace 10.0 + gate 0.1；test 与 build 同起跑）。CI 比本地快的原因是四路并行，但它仍要恢复约 9.6GB 的 Gradle 缓存（1.9~3 分钟/job）并从头编译（约 4 分钟），**所以 CI 不作为默认路径**。
+  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8 → run#9/#10 19.4 → run#12 18.4 → **run#19 十四 job 全绿 13.4 分钟**（build 6.3 + verifyplugin 5.0 + verify×3 并行 3.9~4.3 + marketplace×3 并行 5.4~6.9 + test×5 并行 8.2~11.0，test 与 build 同起跑）。CI 比本地快的原因是全面并行，但它仍要恢复约 9.6GB 的 Gradle 缓存并从头编译，**所以 CI 不作为默认路径**。⚠️动 `buildSrc` 的提交会让缓存 key 换新，该轮 build 的缓存保存要整份重存（实测 +7 分钟，run#13）。
   - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
-    ① **任何需要 verifier-cli 的独立 job 都要自己预热**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar，而该 jar 是 `verifyPlugin` 下载的；跨 job 的 gradle 缓存只读且不含它（build 保存缓存时 jar 还没进 `modules-2`，且 setup-gradle 同 key 不覆盖）。verify×3 与 marketplace 各有一步 `:verifyPlugin -PverifyIdes=<目标>` 预热。
-    ② `上传编译产物` 必须 `if: !cancelled()`（否则 verifyPlugin 失败会连坐九个下游 job）。
+    ① **任何需要 verifier-cli 的独立 job 都要自己拿到 jar**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar。现由各腿按 `dev-support/verifier-cli-version.txt`（当前 `1.411`）从 Maven Central 直取后播种；IPGP 升级 verifier 时必须同步改钉子，`VerifierCliVersionGuardTest` 会在本机全量测试里红。
+    ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。
     ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
     ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
   - **不要**为了跳过重编译把项目级 `.gradle` 塞进工件：收益约 2 分钟，而它把构建状态交给跨 job 的文件搬运，多一层不可控（run#8 试过、已撤回）。
-  - 已知 flake：分片配置期偶发 `ClosedFileSystemException`（被报成 `Could not find bundled plugin with ID: 'com.intellij.database'`），约 3/25 片，与缓存残缺无关（是 Gradle 并行解析时关闭 zip 文件系统句柄的竞态）。workflow 已对该签名做一次定向重跑并打 `::warning::`；看到这条 warning 说明命中过该竞态，不是测试失败。
+  - 已知 flake 与处置（都属「用固定时间当同步」）：
+    ① 分片/兼容腿偶发 `ClosedFileSystemException`（被报成 `Could not find bundled plugin with ID: 'com.intellij.database'`），约 4/25 片。**原地重跑无效**（Gradle daemon 复用，关闭状态留在 daemon 里），九处 Gradle 调用统一走 `dev-support/ci/run-gradle-retry.ps1`（先 `--stop` 再重跑）。看到 `::warning::命中 Gradle zip 文件系统竞态` 说明命中过该竞态、已自动重跑，不是测试失败。
+    ② 异步生效点的断言一律用有界等待（`SqlLogAutoSaverPruneGuardTest` 的裁剪、`DiagramPanelTest` 的加载态），不要写 `Thread.sleep(N)` + 立即断言。
 
 ## 三、双通道发布段
 

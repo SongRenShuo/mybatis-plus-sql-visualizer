@@ -199,3 +199,51 @@ dbx 是 Rust/Tauri 桌面客户端，全量运行 47 分钟 / 51 job / 247 runne
 | sccache / mold / 自托管 runner | `ci.yml:250-277` 等 | 不可用：JVM 无对应物，对方也全是 GitHub 托管 runner |
 
 一句话：dbx 的价值在「缓存写入纪律 + 门禁防假绿」，不在压缩墙钟。
+
+## 八、第三、四轮提速：18.4 → 13.4 分钟（2026-11-05 晚）
+
+目标是把墙钟压进 15 分钟。到 run#12 为止的构成是 `build 8.2 + marketplace 10.0`，两处都是「等」出来的，不是干活干出来的。
+
+### 1. 三处结构改动
+
+| 改动 | 依据 | 效果 |
+|---|---|---|
+| `test` 五片去掉 `needs: build` | `testShardN` 的依赖只有 `verifyDemoFixture` + `testShardStagger`（`mpv-testing.gradle.kts:972-975`），测试源码零处读 `build/distributions`；而它们下载了产物仍从头编译（run#10 test(4)：compileKotlin 1m02 + compileTestKotlin 28s） | 五片从 +8.1 起跑变成 0 |
+| `:verifyPlugin` 移出 build，独立成 job 且加 `-x buildPlugin` | 它要 1.5 分钟而六条腿全在等它；`-x` 让它直接用工件里的发行包，不再重编译（run#14 该 job 8.7 分钟里有 2.4 是编译） | build 8.2 → 5.2~6.9；该 job 8.7 → 5.0 |
+| marketplace 拆三条腿（`verifyMarketplaceVerdict<tag>`） | 三个 verifier JVM 挤在 2 核 runner 上互相争抢（run#11 同一份工作 162.9s / 249.3s / 256.7s） | 10.0 → 最晚 6.9 |
+
+`verifyMarketplaceVerdict<tag>` 是新增的单目标门禁任务：`doLast` 里调的是聚合任务同一个 `checkMarketplaceVerdicts`，只是 `reportsDir` 从三个减到一个（该函数本就按目录逐个判）。聚合任务 `verifyMarketplace` 原样保留，本地 `releaseGate` 行为零变化。
+
+**拆腿的连带代价**：verifier-cli 不能再靠「build 跑过 verifyPlugin」顺带拿到，改为按 `dev-support/verifier-cli-version.txt`（`1.411`）从 Maven Central 直取。版本写死会跟 IPGP 升级脱钩，因此加了 `VerifierCliVersionGuardTest`（本机缓存里出现不同版本即红）；反向验证：把钉子改成 `9.999` 后必红（`:47`），已还原。
+
+### 2. 读数
+
+| run | 总墙钟 | build | verifyplugin | verify ×3 | marketplace ×3 | test ×5 |
+|---|---|---|---|---|---|---|
+| #12 | 18.4 | 8.2 | （在 build 内） | 4.0~6.0 | 10.0（1 job 三目标） | 8.6~11.2 |
+| #13 | 23.9 | 15.2（冷缓存：改 buildSrc 换 key，Post 保存 7.95） | 7.6 | 3.8~4.3 | 6.2/7.4/8.5 | 11.2~12.7 |
+| #14 | 15.3（红） | 6.6 | 8.7 | 3.7~5.3 | 5.3/6.4/7.3 | 8.6~10.7 |
+| #16 | 13.2（红） | 5.2 | 4.5 | 3.6~4.2 | 5.2/6.2/7.8 | 10.2~11.6 |
+| **#19** | **13.4（全绿）** | 6.3 | 5.0 | 3.9/4.3/4.3 | 5.4/6.7/6.9 | 8.2~11.0 |
+
+run#13 是冷缓存轮：改 `buildSrc` 会让 setup-gradle 的缓存 key 换新，build 的 `Post 配置 Gradle 缓存` 因此要整份重存 9.6GB（0.3 → 7.95 分钟）。**结论：动 buildSrc 的提交必然多付一次约 7 分钟。**
+
+### 3. 这一轮踩到的三个 flake（都不是结构问题）
+
+| 现象 | 真因 | 处置 |
+|---|---|---|
+| `ClosedFileSystemException` 读 243 的 `database-plugin.jar` → `Could not find bundled plugin 'com.intellij.database'`，约 4/25 片 | Gradle 自身 zip 文件系统句柄竞态。**关键证据：原地重跑 4 秒就同样失败**——Gradle daemon 跨两次客户端调用复用，关闭状态留在 daemon 里 | `dev-support/ci/run-gradle-retry.ps1`：命中该签名先 `--stop` 换新 daemon 再重跑；九处 Gradle 调用统一走它 |
+| `SqlLogAutoSaverPruneGuardTest:176` 断言「写批后 200ms 内完成裁剪」 | 固定 `Thread.sleep(200)` 当同步，2 核 + 十三 job 并行时不够 | 改 `awaitFileGone` 有界轮询（5s/20ms） |
+| `DiagramPanelTest:189` 断言「clear 必须复位加载态」 | `JBLoadingPanel.startLoading/stopLoading` 异步落 EDT，测试线程同步读会读到旧值 | 改 `awaitLoading` 有界轮询（5s/10ms） |
+
+三条都是「用固定时间当同步」的同一类缺陷。**教训**：CI 并行度一提，所有靠「跑得够快」的断言都会开始假红；凡是有异步生效点的断言，一律写成有界等待，超时才算失败。
+
+另：`DiagramPanelTest` 需要平台测试框架（本地 `test` 任务里没有 Application，10 例全 NPE），只能在分片环境验证——派活/自查时别拿本地 `test` 绿当依据。
+
+### 4. 当前瓶颈与不再动的理由
+
+`marketplace(262)` 6.7 分钟是尾巴，构成是：缓存恢复约 2 + Gradle 启动与配置约 1 + 在线验证约 3.5。三条都是固定成本：
+
+- 在线验证要下载插件元数据（`-offline` 会漏报可选依赖 API，这是 verifyMarketplace 存在的理由）；
+- 缓存恢复是 9.6GB（4 个 IDE 的 zip + 解包产物）；
+- 想让它更早起跑，只能让 build 更快，而 build 的 6.3 里约 2.5 是 Kotlin 编译（无执行历史，跨 job 复用需要 `.gradle` 或 build cache，前者试过失败、后者是项目明令关闭的）。
