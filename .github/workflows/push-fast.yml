@@ -1,0 +1,91 @@
+# 推送快检（自动触发）——与手动门禁 workflow（build-plugin.yml）分开的独立文件。
+#
+# 为什么单独一个文件：
+#   ① build-plugin.yml 的每个 job 都用 `if: inputs.mode == ...` 判模式，而 push 事件没有 inputs
+#      （空串会让所有 if 变假，整轮只剩 test 跑、gate 必红）。要合进同一个文件就得给每个 if
+#      加 event_name 分流，改动面大且容易出错。
+#   ② 手动门禁（gate / release / publish / tests）的语义与并发纪律保持不变，发行链零风险。
+#
+# 定位：**便宜档**——只回答「这次推送有没有把编译或纯逻辑测试弄坏」，约 6 分钟、1 个 runner、
+# 约 7 runner 分钟。全量门禁（14 job / 约 105 runner 分钟）仍走 build-plugin.yml 手动 dispatch。
+#
+# 高频推送友好：并发组按分支、cancel-in-progress: true——新推送直接取消同分支在跑的快检，
+# 队列永远只留最新提交，延迟固定（不像全量门禁那样串行积压）。
+#
+# 缓存只读：写权限留给手动门禁的 build job（多 job 并发写同一 key 会全部保存失败）。
+name: 推送快检（自动）
+run-name: 推送快检 · ${{ github.ref_name }} @ ${{ github.sha }}
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: plugin-ci-fast-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        # 仅修改 Runner 中的副本，移除本地代理并使用 Gradle 官方下载源（与手动门禁同口径）
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 编译 + 纯逻辑快测
+        # testFast = 源码零 com.intellij 引用的测试类（秒级反馈桶），不依赖 IDE 沙盒与 demo 工程。
+        # 走 run-gradle-retry：同一处 Gradle zip 文件系统竞态也会打在配置期。
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":compileKotlin :compileTestKotlin testFast -PgifRecord=false --console=plain"
+
+      - name: 失败诊断输出（断言消息打到任务日志）
+        # Gradle 精简控制台不显示断言消息（expected/actual），失败时把它们直接打进任务日志。
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($failMatches.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              foreach ($m in $failMatches) {
+                Write-Host ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
+                Write-Host '-----'
+              }
+            }
+          }
