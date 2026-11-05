@@ -36,5 +36,8 @@ if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -
 
 Write-Host '::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非代码缺陷）：停 daemon 后重跑一次'
 & ./gradlew.bat --stop 2>&1 | Out-Null
-& ./gradlew.bat @argList 2>&1 | Tee-Object -FilePath $log -Append
+# 重跑加 --max-workers=1：该异常的形态是「同一份 classpath 被两个任务并行解析，先完成的把 zip
+# 文件系统关掉，另一个撞上 ClosedFileSystemException」。run#16 与夜间首轮实证：只换 daemon 不够
+# （第二次 11 秒同样失败），必须同时把并行度压到 1 才能换掉触发条件。
+& ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
 exit $LASTEXITCODE
