@@ -510,7 +510,7 @@ class SqlLogEntryBuffer(
                 val diagMerged = mergeDiagMerged
                 if (diagExisting != null && diagMerged != null) {
                     onEntryMerged?.invoke(diagExisting, diagMerged)
-                    logAttributionThrottled {
+                    logCrossChannelThrottled {
                         "重复观测跨通道融合: 指纹=${entry.dedupeKey.take(8)} " +
                             "通道=${diagExisting.captureProvenance}+${entry.captureProvenance}" +
                             "→${diagMerged.captureProvenance} 升级=${mergeUpgradedAspects(diagExisting, diagMerged)}"
@@ -529,7 +529,7 @@ class SqlLogEntryBuffer(
             if (diagExisting != null && diagMerged != null && diagKey != null) {
                 notifyContentChangedThrottled()
                 onEntryMerged?.invoke(diagExisting, diagMerged)
-                logAttributionThrottled { crossChannelMergeDiagText(diagKey, diagExisting, entry, diagMerged) }
+                logCrossChannelThrottled { crossChannelMergeDiagText(diagKey, diagExisting, entry, diagMerged) }
             }
             return false
         }
@@ -539,7 +539,7 @@ class SqlLogEntryBuffer(
             val diagExisting = crossDiagExisting
             val diagKey = crossDiagKey
             if (diagExisting != null && diagKey != null) {
-                logAttributionThrottled { crossChannelUnfoldedDiagText(diagKey, diagExisting, entry) }
+                logCrossChannelThrottled { crossChannelUnfoldedDiagText(diagKey, diagExisting, entry) }
             }
         }
         // O-147 W0：缺源码条目的通道归因诊断（限频）——「增强已开启却无法跳转」现场的直接证据行
@@ -801,22 +801,36 @@ class SqlLogEntryBuffer(
     // ---------- T-AgentCaptureProvenance（O-147）W0：归因诊断限频出口 ----------
 
     /**
-     * 归因诊断限频（缺源码入队与跨通道融合两条共用）：[ATTRIB_DIAG_INTERVAL_NANOS] 窗内首条
-     * 即时输出、其余累计抑制数随下次输出带上。message 为惰性——被抑制时不构造字符串。
+     * 归因诊断限频：`[ATTRIB_DIAG_INTERVAL_NANOS]` 窗内首条即时输出、其余累计抑制数随下次输出带上。
+     * message 为惰性——被抑制时不构造字符串。
      * 平台 Logger 用 `by lazy` 延迟到首条诊断才初始化（纯 JUnit 不触发诊断的用例零平台触达）。
+     *
+     * **T-CaptureGateStability P3（2026-11-05 真机实测）**：跨通道折叠类诊断改用**独立通道**
+     * （[crossChannelLogNanos]）。此前三类共用本通道，而控制台条目入队必然先打「捕获归因」（缺源码），
+     * 紧随其后的折叠日志被同一 10s 窗吃掉——真机复验四次折叠、日志一条都没有，现场无法确认折叠发生。
      */
     private val attributionLogNanos = AtomicLong(Long.MIN_VALUE / 2)
     private val attributionSuppressed = AtomicLong()
 
-    private fun logAttributionThrottled(message: () -> String) {
+    /** P3：跨通道折叠/未折叠诊断的独立限频通道（不与「捕获归因」互相压窗口）。 */
+    private val crossChannelLogNanos = AtomicLong(Long.MIN_VALUE / 2)
+    private val crossChannelSuppressed = AtomicLong()
+
+    private fun logAttributionThrottled(message: () -> String) =
+        logThrottled(attributionLogNanos, attributionSuppressed, message)
+
+    private fun logCrossChannelThrottled(message: () -> String) =
+        logThrottled(crossChannelLogNanos, crossChannelSuppressed, message)
+
+    private fun logThrottled(nanos: AtomicLong, suppressed: AtomicLong, message: () -> String) {
         val now = System.nanoTime()
-        val last = attributionLogNanos.get()
-        if (now - last >= ATTRIB_DIAG_INTERVAL_NANOS && attributionLogNanos.compareAndSet(last, now)) {
-            val suppressed = attributionSuppressed.getAndSet(0)
+        val last = nanos.get()
+        if (now - last >= ATTRIB_DIAG_INTERVAL_NANOS && nanos.compareAndSet(last, now)) {
+            val dropped = suppressed.getAndSet(0)
             val text = message()
-            LOG.info(if (suppressed > 0L) "$text（期间另有 $suppressed 条同形态未逐条记）" else text)
+            LOG.info(if (dropped > 0L) "$text（期间另有 $dropped 条同形态未逐条记）" else text)
         } else {
-            attributionSuppressed.incrementAndGet()
+            suppressed.incrementAndGet()
         }
     }
 
