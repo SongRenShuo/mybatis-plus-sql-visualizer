@@ -7,6 +7,7 @@ import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.dataSource.artifacts.DatabaseArtifactLoader
 import com.intellij.database.dataSource.artifacts.DatabaseArtifactManager
 import com.intellij.database.util.Version
+import org.junit.Assume.assumeTrue
 import com.intellij.openapi.application.PathManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
@@ -43,6 +44,14 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     fun testDriverArtifactResolvesToJarsOnClasspath() {
         // ① artifact 清单能解析出钉定版本（清单来自沙盒 jdbc-drivers.xml / options 副本）
         DbIntegrationSeedSupport.seedDriverFiles()
+        // T-CiNightly（2026-11-05）：jdbc-drivers 清单来自 dev 沙盒（本地 runIde 产物），
+        // CI 上没有这个沙盒 → 清单缺失、artifact 集为空。这里显式跳过并打印原因，
+        // 不做「零 artifact 也算过」的静默假绿。
+        val driverManifest = File(PathManager.getConfigPath(), "jdbc-drivers/jdbc-drivers.xml")
+        assumeTrue(
+            "需要 dev 沙盒的 jdbc-drivers 清单（本地 runIde 产生），CI 无此产物：${driverManifest.absolutePath}",
+            driverManifest.isFile,
+        )
         val artifacts = DatabaseArtifactManager.getArtifacts()
         val resolved = artifacts.resolveVersion(ARTIFACT_ID, Version.of(ARTIFACT_VERSION))
         assertTrue(
@@ -356,6 +365,14 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     @Test
     fun testSeedFilesLandWhereDbLooksForThem() {
         DbIntegrationSeedSupport.seedDriverFiles()
+        // T-CiNightly（2026-11-05）：jdbc-drivers 清单来自 dev 沙盒（本地 runIde 产物），
+        // CI 上没有这个沙盒 → 清单缺失、artifact 集为空。这里显式跳过并打印原因，
+        // 不做「零 artifact 也算过」的静默假绿。
+        val driverManifest = File(PathManager.getConfigPath(), "jdbc-drivers/jdbc-drivers.xml")
+        assumeTrue(
+            "需要 dev 沙盒的 jdbc-drivers 清单（本地 runIde 产生），CI 无此产物：${driverManifest.absolutePath}",
+            driverManifest.isFile,
+        )
         val options = File(PathManager.getConfigPath(), "options")
         assertTrue("options/databaseDrivers.xml 应在 ${options.absolutePath}", File(options, "databaseDrivers.xml").isFile)
         assertTrue(

@@ -153,20 +153,25 @@ jobs:
           cache-read-only: true
       - name: 准备测试 demo
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
-      - name: 签名护栏 + 性能尾道 + agent 子项目
-        # 三个任务同一次调用：testExternal 起外部 JBR 逐个核验签名、testShardTail 跑计时类用例、
-        # :sql-visualizer-agent:test 是 agent 子项目的全量（分片轮次里根本不含）。
+      - name: 签名护栏 + agent 子项目
+        # T-CiNightly（2026-11-05 首轮实证）：**不含 testShardTail**——那两例是计时类断言
+        # （墙钟/吞吐预算），阈值按本机 6 核标定，2 核 runner 上必红（首轮实测 LogEntryRailPerfTest
+        # 失败）。计时类仍由本地 releaseGate 的 testShardTail 覆盖；CI 上跑它只会制造假红。
         timeout-minutes: 50
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":testExternal :testShardTail :sql-visualizer-agent:test -PgifRecord=false --console=plain"
+          ":testExternal :sql-visualizer-agent:test -PgifRecord=false --console=plain"
 
   # 真机方言验证（需 secret：矩阵文件全文）。缺失时只写一行说明并正常结束。
   dialect:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    # T-CiNightly（2026-11-05 首轮实证）：50 分钟不够——不是卡死，是**跨洋往返延迟**。
+    # 该套件对每个实例跑「全量保留字逐个当标识符建表/查询」，本地（国内网络）约 5~10 分钟，
+    # 从 GitHub runner 到 114.66.55.245 / 103.36.220.245 每轮往返 200ms+，实测 50 分钟仍未跑完。
+    # 夜间时间充足，故放宽到 120 分钟；若仍超时，说明需要按实例做并行或裁剪 CI 矩阵。
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
@@ -205,7 +210,7 @@ jobs:
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
-        timeout-minutes: 50
+        timeout-minutes: 100
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"
@@ -349,6 +354,20 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath $demo)) { throw "demo 克隆失败：$demo" }
           Write-Host "demo 就绪：$demo"
+      - name: 播种 verifier-cli
+        # T-CiNightly（2026-11-05 首轮实证）：:e2eFakeIde 会连带配置 :verifyGate，而 verifyGate
+        # 在**配置期**就要从 gradle 缓存里找 verifier-cli jar，找不到直接拒绝建任务
+        # （"Could not create task ':verifyGate' > verifier-cli jar 未在 gradle 缓存找到"）。
+        run: |
+          $v = (Get-Content -LiteralPath 'dev-support/verifier-cli-version.txt' -Raw).Trim()
+          if (-not $v) { throw 'dev-support/verifier-cli-version.txt 为空' }
+          $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $jar = Join-Path $dst "verifier-cli-$v-all.jar"
+          $url = "https://repo1.maven.org/maven2/org/jetbrains/intellij/plugins/verifier-cli/$v/verifier-cli-$v-all.jar"
+          Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
+          Write-Host "verifier-cli 已播种：$jar（$v）"
+
       - name: 真机端到端（e2eFakeIde）
         env:
           MPV_DB_URL: ${{ secrets.MPV_DB_URL }}
