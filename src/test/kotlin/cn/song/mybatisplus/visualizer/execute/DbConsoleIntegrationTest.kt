@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -69,7 +70,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
 
     private val dbPassword: String
-        get() = "root" // M36.5.23：从 demo 项目 application.yml 复制（root/root，本地开发库无敏感性）
+        get() = DbTestCredentials.password("root") // M36.5.23：从 demo 项目 application.yml 复制（root/root，本地开发库无敏感性）
 
     /** demo dataSources.xml 中目标数据源的连接信息。 */
     private data class DataSourceInfo(val url: String, val user: String, val driverClass: String)
@@ -95,7 +96,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = child.textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         // 用户名在 local.xml（<user-name>）
         if (info != null && localXml.isFile) {

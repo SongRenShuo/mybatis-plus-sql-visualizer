@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpene
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinFkRegistry
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -89,7 +90,7 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
                         "jdbc-driver" -> driver = child.textContent.trim()
                     }
                 }
-                if (url != null) return@runCatching DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+                if (url != null) return@runCatching DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
             }
             null
         }.getOrNull()
@@ -111,7 +112,7 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ds.workingDir = project.basePath
         ds.passwordStorage = LocalDataSource.Storage.MEMORY
         mgr.addDataSource(ds)
-        DbCredentialManager().setPassword(ds, OneTimeString("root"), LocalDataSource.Storage.MEMORY)
+        DbCredentialManager().setPassword(ds, OneTimeString(DbTestCredentials.password("root")), LocalDataSource.Storage.MEMORY)
         return ds
     }
 

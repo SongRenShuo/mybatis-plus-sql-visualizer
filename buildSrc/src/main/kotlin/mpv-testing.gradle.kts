@@ -1104,6 +1104,13 @@ intellijPlatformTesting {
                         "mpDemoProjectDir",
                         mpDemoProjectDir,
                     )
+                    // T-CiDbConn（2026-11-05）：连接串与凭据可覆盖（-PmpvDbUrl / -PmpvDbUser /
+                    // -PmpvDbPassword），缺省不设 → 测试侧回落到「demo 的 dataSources.xml + root/root」，
+                    // 本机行为零变化。CI 夜间轮用它指向 DBX「开发测试连接」分组的 MySQL，
+                    // 不再要求 runner 上有本地 root/root 库。
+                    providers.gradleProperty("mpvDbUrl").orNull?.let { systemProperty("mpvDbUrl", it) }
+                    providers.gradleProperty("mpvDbUser").orNull?.let { systemProperty("mpvDbUser", it) }
+                    providers.gradleProperty("mpvDbPassword").orNull?.let { systemProperty("mpvDbPassword", it) }
                     // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
                     // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
                     // T-CiProxy（2026-11-05）：与 mpv-verification 的 verifierProxyJvmArgs 同口径——

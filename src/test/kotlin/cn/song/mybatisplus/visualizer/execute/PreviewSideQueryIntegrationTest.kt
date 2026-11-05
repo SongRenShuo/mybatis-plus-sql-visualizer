@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.ui.PreviewSideQuery
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -136,7 +137,7 @@ class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = children.item(j).textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         if (info != null && localXml.isFile) {
             val local = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(localXml)
@@ -172,7 +173,7 @@ class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
         created.workingDir = project.basePath
         created.passwordStorage = LocalDataSource.Storage.MEMORY
         manager.addDataSource(created)
-        DbCredentialManager().setPassword(created, OneTimeString("root"), LocalDataSource.Storage.MEMORY)
+        DbCredentialManager().setPassword(created, OneTimeString(DbTestCredentials.password("root")), LocalDataSource.Storage.MEMORY)
         dataSource = created
         return introspectDataSource(created)
     }

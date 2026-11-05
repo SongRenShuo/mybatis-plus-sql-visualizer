@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -67,7 +68,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
 
     /** 与 DbConsoleIntegrationTest 同口径：demo 本地开发库 root/root（application.yml 复制）。 */
     private val dbPassword: String
-        get() = "root"
+        get() = DbTestCredentials.password("root")
 
     private data class DataSourceInfo(val url: String, val user: String, val driverClass: String)
 
@@ -92,7 +93,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = child.textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         if (info != null && localXml.isFile) {
             val local = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(localXml)
