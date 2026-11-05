@@ -309,6 +309,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
         var logAutoOpenOnCapture: Boolean = true,
 
+        /**
+         * F-03 工具窗常驻与随项目启动（默认关）：项目打开即自动显示 SQL 日志工具窗并进入记录态。
+         * 由 [cn.song.mybatisplus.visualizer.log.LogStartupCapture]（postStartupActivity，懒启动——
+         * 关闭时项目打开零动作、不创建面板）承接；项目关闭随服务销毁停转，show/startCapture 均幂等
+         * 不重复挂载。用户显式停止过自动监听（logAutoCaptureSuppressed）时不强制进入记录态，
+         * 只开窗口（同既有「已显式停止」语义）。
+         */
+        var logToolWindowAutoShowOnStart: Boolean = false,
+
         /** 列表条目显示捕获时间戳（默认开）。 */
         var logTimestampEnabled: Boolean = true,
 
