@@ -200,7 +200,7 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 | 1 | 布尔参数 `true(Boolean)` | 2 条 | 1 条，耗时/位置/行数取 agent 侧 |
 | 2 | 日期参数 `Timestamp` | 2 条 | 1 条 |
 | 3 | 块注释内含 `?`（agent 数量守卫不还原） | 2 条 | 1 条 |
-| 4 | 参数个数不等（agent 少捕一个） | 2 条 | 1 条 |
+| 4 | 参数个数不等（agent 少捕一个） | 2 条 | **2 条**（设计边界，见 §9.9；捕获面已补齐，现场不再产生此形态） |
 | 5 | 全限定类型名 `java.lang.Long` | 2 条 | 1 条 |
 | 6 | 控制台先到、agent 后到 | 2 条 | 1 条，`captureProvenance=MERGED` |
 | 7 | agent 先到、控制台后到 | 2 条 | 1 条，字段不被降级 |
@@ -283,7 +283,7 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 
 > **2026-11-05 后续：两条均已在 `t-cross-channel-residual` 清掉，见 §9.7。**
 
-1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。当时钉成「已知残余」用例（断言仍 2 行）；真因是 agent 捕获面缺口，§9.7 已修。
+1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。当时钉成「已知残余」用例（断言仍 2 行）。**2026-11-05 复验后的准确表述**：§9.7 修的是**捕获面**（现场不再产出「少捕」形态），不是让这种形态能折——手工构造一个缺参数的 agent 事件，今天仍留 2 行，这是**设计边界**而非缺陷，见 §9.9。
 2. **§六 表格第 5 行「全限定类型名」的原始形态不可达**。`MyBatisLogParser.parseParams` 的类型分组是 `[A-Za-z_$][\w$]*(?:\[\])*`（**不含点号**），`42(java.lang.Long)` 匹配不上带类型分支 → 回落逗号粗分 → `value="42(java.lang.Long)"`、`type=null`，签名因此与 agent 侧不同；且 agent 侧 `ParamCapture.simpleTypeName` 本来就会剥包名。真实 MyBatis 日志打印简单类名，故此形态不构成现场风险。§9.7 已把类型分组放宽到允许点号，该形态现在能折。
 
 另：复现代理实测（2026-11-05）确认现场是 12 参数 INSERT，**只有第 10（setBoolean）、第 11（setTimestamp）个参数分叉**，与 @Async / SQL Server 方言无关；`LocalDateTime` 还多一处差异（控制台 `TIMESTAMP '…'` / agent `'…T…'` 的 ISO `T` 未归一）。已按此补「现场 12 参数」与「LocalDateTime」两条用例。
@@ -334,4 +334,62 @@ toString 后降级为 `<byte[]>` / `<Blob>`——两侧值文本不可比 → �
 
 副作用边界（已写进 KDoc）：归一后「同一条 SQL 连续两次执行且参数是不同的二进制内容」签名相同——
 但二进制值本来就不可比，且跨通道折叠还有 5s 窗 + 异通道双重限制，影响限于毫秒级耗时归属。
+
+### 9.9 修复后复验（2026-11-05，复用原复现夹具）
+
+用**最初那个复现代理**（同一工作树、同一份夹具，先 `git merge master` 再跑），不是新写验证。
+分支 `t-cross-channel-dedupe-repro`：`e3c93e4a`（merge master）+ `70d44bf4`（断言更新）。
+
+**先原样跑旧断言（一字未改）**，6 例 `size == 2` 变红、实际均为 1：布尔 / Timestamp / LocalDateTime /
+块注释内 `?` / 多行+datetime / 现场 12 参数。这组红本身就是修复生效的证据。
+
+一个值得留档的细节：红的只是**后一条** size 断言，它前面的 `assertNotEquals(consoleKey, agentKey)`
+**通过**——说明折叠不是「两套还原器终于对齐」，而是兜底键在起作用。与 §9.1 的定性一致。
+
+真库复验（本地 SQL Server `127.0.0.1:14333`）：
+
+```
+console.dedupeKey: 8674ba1dc8d427f4     ← 与修复前逐字相同
+agent.dedupeKey  : 55f81f92dfdeae7e     ← 与修复前逐字相同
+buffer.size      : 1
+merged.provenance: MERGED
+merged.duration  : 8ms
+merged.source    : OperationLogService.java:42
+merged.update    : 1
+merged.database  : SQL Server · master@127.0.0.1:14333
+```
+
+两键未变、结果从 2 行变 1 行——还原器口径没动，动的只有判重路径，符合设计。
+
+九形态逐项结论：
+
+| 形态 | 结果 | 键相等 | 通道 |
+|---|---|---|---|
+| String+Long（对照） | 同键折叠 | 是 | MERGED |
+| Boolean | 兜底折叠 | 否 | MERGED |
+| Timestamp | 兜底折叠 | 否 | MERGED |
+| LocalDateTime | 兜底折叠 | 否（agent 仍留 ISO `T`） | MERGED |
+| 块注释内 `?` | 兜底折叠 | 否 | MERGED |
+| 多行 SQL | 同键折叠 | 是 | MERGED |
+| 多行 + Timestamp | 兜底折叠 | 否 | MERGED |
+| 12 参数现场 | 兜底折叠 | 否 | MERGED |
+| 点号类型名 | 兜底折叠 | 否 | MERGED |
+| 二进制 | 兜底折叠 | 否 | MERGED |
+| **参数个数不等** | **仍 2 行** | 否 | — |
+
+**唯一剩余形态的定性（决定不修）**：`crossChannelKey` 的签名是逐参数值 join，控制台 2 个、agent 1 个
+时长度就不同，结构上折不上——不是数值碰巧不匹配。不修的两条理由：
+
+1. §9.7 已把捕获面补齐（白名单四族 + 四参 `setObject`），现场不再产出「少捕」形态；这个用例是手工
+   构造缺参数的 agent 事件，模拟的是「捕获再次出缺口」。
+2. 签名不等即无法证明是同一次执行的两份观测，此时留两行是**保守正确**。硬折要靠「共同参数前缀匹配」，
+   会在同模板多次执行时引入错配风险，收益只在捕获再次出缺口时才兑现。
+
+两个附带发现：
+
+- 点号类型名那条同时验证了 §9.7 的解析器改动：控制台 restoredSql 是 `TIMESTAMP '…'`，说明
+  `java.sql.Timestamp` 真被 `parseParams` 吃进去了；且它的两个 key 与简单名 `Timestamp` 那条**完全相同**，
+  等于附证「点号名与简单名等同」。
+- agent 侧 `byte[]` 的实际降级形态是 `<[B>`（`simpleTypeName` 对数组返回 JVM 名），不是 §9.8 正文写的
+  `<byte[]>`。两种形态都在 `AGENT_DEGRADED_REGEX` + `BINARY_TYPE_MARKERS` 覆盖内，行为一致，措辞订正于此。
 
