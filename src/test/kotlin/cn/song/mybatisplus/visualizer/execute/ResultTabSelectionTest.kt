@@ -4,7 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.content.Content
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Test
 import java.lang.reflect.Proxy
 
 /**
@@ -57,7 +56,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
      * DBN 复用同一个 Content 实例并改名：快照时是 Result 1，提交后变为 Result 2。
      * 必须第 1 拍即选中（此前实例身份过滤会返回 null → 滞后一轮）。
      */
-    @Test
     fun testRenamedContentInstancePickedImmediately() {
         val reused = FakeContent("Result 1")
         val preExisting = setOf("Result 1") // 提交时刻的名称快照
@@ -69,7 +67,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     }
 
     /** 同上场景，但通过 resultContents 快照 + rename 验证完整判定链（名称快照来源）。 */
-    @Test
     fun testSnapshotThenRenameFullChain() {
         val reused = FakeContent("Result 1")
         val ui = FakeUi(arrayOf(reused.proxy))
@@ -87,7 +84,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
 
     // ==================== 场景二：新 Tab 新名称 ====================
 
-    @Test
     fun testNewTabNameWinsImmediately() {
         val old = FakeContent("Result 1").proxy
         val newTab = FakeContent("Result 2").proxy
@@ -95,7 +91,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertEquals("Result 2", picked?.displayName)
     }
 
-    @Test
     fun testMultipleNewTabsPicksFirst() {
         val a = FakeContent("Result 2").proxy
         val b = FakeContent("Result 3").proxy
@@ -106,7 +101,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     // ==================== 场景三：旧 Tab 复用阈值（M36.5.22 防抢跑；M36.5.44 降至 4 拍 1.6s） ====================
 
     /** 只有旧名称 Tab 时，阈值前不得选中——否则把上一轮结果顶进面板（滞后一轮真因）。 */
-    @Test
     fun testStaleTabNotPickedBeforeThreshold() {
         val stale = FakeContent("Result 1").proxy
         val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS - 1)
@@ -114,7 +108,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     }
 
     /** 阈值后接受复用（DBN 可能不建新 Tab；打点 result tab reused，避免永远等待）。 */
-    @Test
     fun testStaleTabAcceptedAtThreshold() {
         val stale = FakeContent("Result 1").proxy
         val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS)
@@ -123,7 +116,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
 
     // ==================== 场景四：Output 过滤 ====================
 
-    @Test
     fun testOutputTabExcluded() {
         val output = FakeContent("Output").proxy
         val result = FakeContent("Result 1").proxy
@@ -131,7 +123,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertEquals("Result 1", picked?.displayName)
     }
 
-    @Test
     fun testChineseOutputTabExcluded() {
         val output = FakeContent("输出").proxy
         val result = FakeContent("Result 1").proxy
@@ -139,13 +130,11 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertEquals("Result 1", picked?.displayName)
     }
 
-    @Test
     fun testOnlyOutputYieldsNull() {
         val output = FakeContent("Output").proxy
         assertNull(DataSourceSelector.pickResultTab(arrayOf(output), emptySet(), attempts = 40))
     }
 
-    @Test
     fun testEmptyContentsYieldsNull() {
         assertNull(DataSourceSelector.pickResultTab(emptyArray(), emptySet(), attempts = 40))
     }
@@ -157,7 +146,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
      * `contentAdded: `）。空名 ∉ 空快照集合恒真，此前第 1 拍即被当新结果选中并强制换入
      * （网格尚未构建），事后无人补换入 → 结果滞留原生控制台。
      */
-    @Test
     fun testBlankNamePlaceholderNotPickedAsNew() {
         val blank = FakeContent("").proxy
         assertNull("空名占位不得当新结果选中", DataSourceSelector.pickResultTab(arrayOf(blank), emptySet(), attempts = 1))
@@ -165,7 +153,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     }
 
     /** 空名占位与旧名 Tab 并存：不选空名，走旧 Tab 阈值语义。 */
-    @Test
     fun testBlankNameWithStaleTabWaitsForThreshold() {
         val blank = FakeContent("").proxy
         val stale = FakeContent("Result 1").proxy
@@ -174,7 +161,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     }
 
     /** 占位改名后（"" → "Result 1"）第 1 拍即选中——真机首点病灶的完整链路复现。 */
-    @Test
     fun testPlaceholderRenamedPickedImmediately() {
         val placeholder = FakeContent("")
         val preExisting = DataSourceSelector.resultContents(FakeUi(arrayOf(placeholder.proxy))).map { it.displayName }.toSet()
@@ -185,7 +171,6 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
 
     // ==================== resultContents 反射读取 ====================
 
-    @Test
     fun testResultContentsFiltersOutputTabs() {
         val output = FakeContent("Output").proxy
         val outputCn = FakeContent("输出").proxy
@@ -194,12 +179,10 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertEquals(listOf("Result 1"), list.map { it.displayName })
     }
 
-    @Test
     fun testResultContentsNullUiYieldsEmpty() {
         assertTrue(DataSourceSelector.resultContents(null).isEmpty())
     }
 
-    @Test
     fun testResultContentsNonReflectiveUiYieldsEmpty() {
         // 无 getContents 方法的对象：反射失败 → 空列表（不抛异常）
         assertTrue(DataSourceSelector.resultContents(Any()).isEmpty())

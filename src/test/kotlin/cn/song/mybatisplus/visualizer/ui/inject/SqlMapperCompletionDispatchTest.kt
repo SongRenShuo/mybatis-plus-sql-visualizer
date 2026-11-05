@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributor
 import com.intellij.codeInsight.completion.CompletionContributor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * 补全贡献器的**真实分派路径**守卫（T-XmlGap 收口第三轮补）。
@@ -19,7 +18,6 @@ import org.junit.Test
  */
 class SqlMapperCompletionDispatchTest : BasePlatformTestCase() {
 
-    @Test
     fun test_补全贡献器按语言分派可达() {
         val contributors = CompletionContributor.forLanguage(SqlMapperLanguage)
         val ours = contributors.filter { it is XmlSqlCompletionContributor }
@@ -31,7 +29,6 @@ class SqlMapperCompletionDispatchTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun test_语言ID可被平台按名查到() {
         // 平台多处按语言 ID 解析（LanguageExtensionPoint / findLanguageByID）；
         // 本语言由代码创建、无 <language> EP，故这条是「按 ID 能否解析」的直接读数。

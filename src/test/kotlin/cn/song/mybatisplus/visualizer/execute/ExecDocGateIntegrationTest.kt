@@ -18,7 +18,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -193,7 +192,6 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
      * 落盘纪律端到端：prepare → reuse → 手改防抖落盘。
      * 单方法承载三断言（DbConsoleIntegrationTest 同形态，规避类内测试顺序耦合）。
      */
-    @Test
     fun testExecDocSavedStateAcrossPrepareReuseAndManualEdit() {
         // 显式跳过而非 assumeTrue：平台 runner 会把 AssumptionViolatedException 记为 failure
         // 红掉整个 testDatabase 任务（四集成类既有痛点，20260917 实测）；基建可用时全量真跑

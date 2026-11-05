@@ -4,7 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-ExecSilentNoop F2：执行失败提示分流的纯逻辑判定测试。
@@ -50,7 +49,6 @@ class ExecSilentNoopHintTest : BasePlatformTestCase() {
      * 8 秒连接监控先判定失败并 report 后，40 拍超时窗口不得对同一次执行再报一次——此前二者
      * 各按同一 key 报一次，用户见两次红字。
      */
-    @Test
     fun testSameExecutionReportsHintOnlyOnce() {
         val gate = HintGate()
         // 8 秒监控先 claim
@@ -62,20 +60,17 @@ class ExecSilentNoopHintTest : BasePlatformTestCase() {
     // ==================== F2b：无错误痕迹时的分流 ====================
 
     /** demoted（freshModel 回落）= DBN 侧静默拒绝 → 未提交提示，不再误报凭据。 */
-    @Test
     fun testDemotedFallbackMapsToNotSubmittedHint() {
         assertEquals("execute.notSubmitted.hint", HintGate().hintKey(dumb = false, demotedOverride = true))
     }
 
     /** 索引中 → indexing 提示（查询提交被推迟，非失败）。 */
-    @Test
     fun testDumbModeMapsToIndexingHintEvenWhenDemoted() {
         assertEquals("execute.indexing.hint", HintGate().hintKey(dumb = true, demotedOverride = true))
         assertEquals("execute.indexing.hint", HintGate().hintKey(dumb = true, demotedOverride = false))
     }
 
     /** 非 demoted、非 dumb、又无 console 错误痕迹 → 真正的超时提示（连接的确实发起了）。 */
-    @Test
     fun testNoErrorNoDemoteMapsToTimeoutHint() {
         assertEquals("execute.timeout.hint", HintGate().hintKey(dumb = false, demotedOverride = false))
     }
@@ -86,7 +81,6 @@ class ExecSilentNoopHintTest : BasePlatformTestCase() {
      * console history 出现真实错误（如 Unknown column）时，直接上报错误文本，不走笼统提示；
      * 且该上报也占用去重旗标，8s/40 拍后续不再补报。
      */
-    @Test
     fun testRealConsoleErrorTakesPrecedenceAndClaimsGate() {
         val gate = HintGate()
         val realError = "Unknown column 'x' in 'field list'"

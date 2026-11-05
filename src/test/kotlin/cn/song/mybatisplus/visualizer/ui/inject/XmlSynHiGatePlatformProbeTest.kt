@@ -13,7 +13,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlSynHi D68/T-DevAcceptFix ④：宿主级「其他注入器会不会给这个宿主上色」探测——门与探测主体分级用例。
@@ -61,7 +60,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 会让位语义：另一注入器判定会注入 → 让位（该宿主归对方，不双写）。 */
-    @Test
     fun testF68_探针判定会注入_让位() {
         val host = firstMapperText()
         withProbeSeam({ _, _ -> true }) {
@@ -70,7 +68,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 关键修复用例：对方不会注入 → 不让位（未覆盖位由本插件补色）。 */
-    @Test
     fun testF68_探针判定不会注入_不让位() {
         val host = firstMapperText()
         withProbeSeam({ _, _ -> false }) {
@@ -82,7 +79,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** fail-safe：整体探针抛异常 → 让位（探测不了时回到保守让位）。 */
-    @Test
     fun testF68_探针抛异常_保守让位() {
         val host = firstMapperText()
         withProbeSeam({ _, _ -> throw IllegalStateException("probe boom") }) {
@@ -91,7 +87,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 探针收到的是分发后的同一个宿主实例（per-host 语义的形态证据）。 */
-    @Test
     fun testF68_探针收到分发后同款宿主() {
         val host = firstMapperText()
         var received: PsiElement? = null
@@ -102,7 +97,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 短路序：设置开关关 → 探针零咨询（喂入税面上探针只在共通线全过才走）。 */
-    @Test
     fun testF68_开关关_探针零咨询() {
         val host = firstMapperText()
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
@@ -124,7 +118,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 喂入命中 + startInjecting 被调 → 让位（平台族）。 */
-    @Test
     fun testF68_注入器_喂入命中且start_让位() {
         val host = firstMapperText()
         val fake = FakePlatformInjector(listOf(XmlText::class.java), start = true)
@@ -136,7 +129,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 喂入命中但未 startInjecting（未覆盖该位）→ 不让位。 */
-    @Test
     fun testF68_注入器_喂入命中但未start_不让位() {
         val host = firstMapperText()
         val fake = FakePlatformInjector(listOf(XmlText::class.java), start = false)
@@ -148,7 +140,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 喂入契约预筛：elementsToInjectIn 不含宿主类型 → 不咨询、不让位。 */
-    @Test
     fun testF68_注入器_喂入不命中_不咨询不让位() {
         val host = firstMapperText()
         val fake = FakePlatformInjector(listOf(com.intellij.psi.PsiFile::class.java))
@@ -157,7 +148,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 自身族排除：本插件包前缀的注入器即使会 start 也不让位（自身让位由其余各线负责）。 */
-    @Test
     fun testF68_自身族注入器_排除不咨询() {
         val host = firstMapperText()
         val fake = FakeSelfInjector(listOf(XmlText::class.java))
@@ -168,7 +158,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     // ---- T-DevAcceptFix ④：三方族并入 per-host 探测（用户在位≠覆盖，真上色才让位） ----
 
     /** 第三方注入器（占满宿主）：喂入命中且 start → 让位（该位确实归它）。 */
-    @Test
     fun testDevAcceptFix04_三方注入器_喂入命中且start_让位() {
         val host = firstMapperText()
         val fake = com.example.thirdparty.fakeprobe.FakeThirdPartyInjector(listOf(XmlText::class.java))
@@ -180,7 +169,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 三方族未 start（在位但不覆盖该宿主，即用户真机无色现场）→ 不让位，本插件补色。 */
-    @Test
     fun testDevAcceptFix04_三方注入器_未start_不让位() {
         val host = firstMapperText()
         val fake = com.example.thirdparty.fakeprobe.FakeThirdPartyInjector(listOf(XmlText::class.java), start = false)
@@ -192,7 +180,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 未知三方包注入器同权：喂入命中且 start → 让位（探测域=除自身族外全部在册项）。 */
-    @Test
     fun testDevAcceptFix04_未知三方注入器_start_让位() {
         val host = firstMapperText()
         val fake = org.example.fakeprobe.FakeUnknownInjector(listOf(XmlText::class.java))
@@ -207,7 +194,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
      * 单注入器试探异常 → **跳过该注入器继续问下一个**（T-DevAcceptFix ④ 语义修订）：
      * 覆盖不可判的坏注入器不得把本插件一起拖成零着色；紧随其后的会注入者仍应命中。
      */
-    @Test
     fun testDevAcceptFix04_单注入器抛异常_跳过续问下一个() {
         val host = firstMapperText()
         val throwing = FakePlatformInjector(listOf(XmlText::class.java), throwOnInject = true)
@@ -220,7 +206,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 单个坏注入器（无人上色）→ 跳过后续问尽仍无命中 → 不让位（本插件补色）。 */
-    @Test
     fun testDevAcceptFix04_仅坏注入器_不让位() {
         val host = firstMapperText()
         val throwing = FakePlatformInjector(listOf(XmlText::class.java), throwOnInject = true)
@@ -231,7 +216,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 喂入类型表读取异常同口径：跳过该注入器（不因它整体让位）。 */
-    @Test
     fun testDevAcceptFix04_喂入类型表抛异常_跳过() {
         val host = firstMapperText()
         val fake = FakePlatformInjector(emptyList(), throwOnFeed = true)
@@ -250,7 +234,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
      * （注入链在此环境必须活）。T-XmlGap W1 起生产入口是 [XmlSynHiGate.occupiedRanges]
      * （区间形态），此处按其判定面断言——布尔缝未覆写时二者语义一致。
      */
-    @Test
     fun testF68_默认探针_真实EP环境_不炸且裸环境判不让位() {
         val host = firstMapperText()
         val result = XmlSynHiGate.shouldYield(project, host)
@@ -259,7 +242,6 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
     }
 
     /** 空清单形态：无在册注入器 → 不让位（Community 无 DatabaseTools 的常态）。 */
-    @Test
     fun testF68_空注入器清单_不让位() {
         val host = firstMapperText()
         assertFalse(XmlSynHiGate.foreignInjectorsWouldInject(emptyList(), host))

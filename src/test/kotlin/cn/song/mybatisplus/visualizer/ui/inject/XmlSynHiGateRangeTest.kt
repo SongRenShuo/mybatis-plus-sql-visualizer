@@ -8,7 +8,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlGap W1 门级用例：让位判定从**宿主级**下沉到**区间级**。
@@ -48,7 +47,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 只占 `#{}` 的注入器 → 区间被记录、布尔形态仍判「覆盖」（布尔面语义不变）。 */
-    @Test
     fun testW1_区间主体_只占参数区间_记录区间且布尔判覆盖() {
         val host = statementText("SELECT * FROM t WHERE a = #{id}")
         val fake = FakeParamRangeInjector(listOf(XmlText::class.java))
@@ -64,7 +62,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 未命中喂入契约 → 不咨询、无区间。 */
-    @Test
     fun testW1_区间主体_喂入不命中_零咨询零区间() {
         val host = statementText("SELECT * FROM t WHERE a = #{id}")
         val fake = FakeParamRangeInjector(listOf(com.intellij.psi.PsiFile::class.java))
@@ -73,7 +70,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 自身族排除：本插件包前缀的注入器不咨询。 */
-    @Test
     fun testW1_区间主体_自身族排除() {
         val host = statementText("SELECT * FROM t WHERE a = #{id}")
         val fake = FakeSelfInjector(listOf(XmlText::class.java))
@@ -86,7 +82,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 部分占用 → **不让位**（这是 W1 的核心修复；宿主级形态在此必红）。 */
-    @Test
     fun testW1_部分占用_不让位() {
         val host = statementText("SELECT * FROM t WHERE a = #{id} AND b = 2")
         val open = host.text.indexOf("#{")
@@ -100,7 +95,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 全覆盖哨兵 → 让位（保守线保留）。 */
-    @Test
     fun testW1_全覆盖_让位() {
         val host = statementText("SELECT 1")
         withRangeSeam({ _, h -> InjectRangePlan.yieldAll(h.textLength) }) {
@@ -109,7 +103,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 占用为空 → 不让位。 */
-    @Test
     fun testW1_无占用_不让位() {
         val host = statementText("SELECT 1")
         withRangeSeam({ _, _ -> emptyList() }) {
@@ -119,7 +112,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 区间缝抛异常 → 全覆盖哨兵（fail-safe 保守让位，D68 口径不回归）。 */
-    @Test
     fun testW1_区间缝抛异常_保守让位() {
         val host = statementText("SELECT 1")
         withRangeSeam({ _, _ -> throw IllegalStateException("range probe boom") }) {
@@ -128,7 +120,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 设置开关关闭 → 零咨询 + 让位（短路序不变）。 */
-    @Test
     fun testW1_开关关_零咨询且让位() {
         val host = statementText("SELECT 1")
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
@@ -147,7 +138,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 布尔缝仍被尊重（既有 D68 用例的兼容面）：true → 全覆盖。 */
-    @Test
     fun testW1_布尔缝覆写_true_全覆盖() {
         val host = statementText("SELECT 1")
         val original = XmlSynHiGate.foreignInjectionProbe
@@ -161,7 +151,6 @@ class XmlSynHiGateRangeTest : BasePlatformTestCase() {
     }
 
     /** 布尔缝 false → 空区间（既有接线用例靠这条固定环境，语义不变）。 */
-    @Test
     fun testW1_布尔缝覆写_false_空区间() {
         val host = statementText("SELECT 1")
         val original = XmlSynHiGate.foreignInjectionProbe

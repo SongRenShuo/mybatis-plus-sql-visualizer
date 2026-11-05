@@ -16,7 +16,6 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-WriteSafeCtx：程序性文档写入的写安全闸门行为测试。
@@ -41,7 +40,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     // ======================== 判据与投递语义 ========================
 
     /** 探针优先于一切内置判定（单测放行、EDT/事务判据都被覆盖）。 */
-    @Test
     fun testProbeOverridesBuiltinJudgement() {
         DocWriteContext.writeAllowedProbe = { true }
         assertTrue("probe=true 应判可写", DocWriteContext.isWriteAllowedNow())
@@ -50,13 +48,11 @@ class DocWriteContextTest : BasePlatformTestCase() {
     }
 
     /** 无探针时（真实判据）：测试环境按放行处理——否则全部既有面板测试会因渲染被推迟而红。 */
-    @Test
     fun testUnitTestModeAllowsWriteByDefault() {
         assertTrue("单测环境无真实事务/模态语义，闸门一律放行", DocWriteContext.isWriteAllowedNow())
     }
 
     /** 不可写上下文：runWriteSafe 必须**不同步写**，而是投递一拍（计数 +1）。 */
-    @Test
     fun testRunWriteSafeDefersWhenContextUnsafe() {
         DocWriteContext.writeAllowedProbe = { false }
         val before = DocWriteContext.deferredCount.get()
@@ -69,7 +65,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     }
 
     /** 可写上下文：就地执行，零投递（闸门不得给正常路径加延迟）。 */
-    @Test
     fun testRunWriteSafeRunsInlineWhenAllowed() {
         DocWriteContext.writeAllowedProbe = { true }
         val before = DocWriteContext.deferredCount.get()
@@ -82,7 +77,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     }
 
     /** 投递出去的一拍：owner 已销毁则整拍丢弃（面板关闭后不再回写文档）。 */
-    @Test
     fun testDeferredWriteDroppedWhenOwnerDisposed() {
         val owner = Disposer.newDisposable()
         try {
@@ -117,7 +111,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     )
 
     /** 面板渲染属文档写：非 write-safe 上下文下 renderSql 必须只投递、不改文档。 */
-    @Test
     fun testPanelRenderSqlDefersInsteadOfWritingWhenContextUnsafe() {
         val panel = newRenderedPanel()
         try {
@@ -146,7 +139,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     }
 
     /** 可写上下文的常态渲染：就地渲染，零投递（闸门不改变既有行为）。 */
-    @Test
     fun testPanelRenderSqlWritesInlineWhenAllowed() {
         DocWriteContext.writeAllowedProbe = { true }
         val panel = newRenderedPanel()
@@ -188,7 +180,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
      * 反证（实施时实测）：把 setResultText 的 runWriteSafe 临时换成直写 → 本用例必红
      * （文档当场变成 AFTER，且 deferredCount 不动）。
      */
-    @Test
     fun testResultTextDefersInsteadOfWritingWhenContextUnsafe() {
         val panel = newReversePanel()
         try {
@@ -215,7 +206,6 @@ class DocWriteContextTest : BasePlatformTestCase() {
     }
 
     /** 可写上下文的常态写：就地写、零投递（闸门不得给正常路径加一拍延迟）。 */
-    @Test
     fun testResultTextWritesInlineWhenContextAllowed() {
         val panel = newReversePanel()
         try {

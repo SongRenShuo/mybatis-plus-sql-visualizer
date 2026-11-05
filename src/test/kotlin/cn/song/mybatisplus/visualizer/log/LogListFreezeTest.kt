@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-LogListFreeze 单元测试：列表刷新性能优化（EDT 冻结修复）。
@@ -13,7 +12,6 @@ import org.junit.Test
  */
 class LogListFreezeTest : BasePlatformTestCase() {
 
-    @Test
     fun test首屏批次数大于0且小于总批次数() {
         // REFRESH_FIRST_BATCH_SIZE 和 REFRESH_CHUNK_SIZE 应为合理正数
         assertTrue("首屏批次应 > 0", REFRESH_FIRST_BATCH_SIZE > 0)
@@ -21,7 +19,6 @@ class LogListFreezeTest : BasePlatformTestCase() {
         assertTrue("首屏批次应 <= 异步批次 × 3（保证首屏足够快）", REFRESH_FIRST_BATCH_SIZE <= REFRESH_CHUNK_SIZE * 3)
     }
 
-    @Test
     fun test200条数据分两批以上写入() {
         val total = 200
         val firstBatchSize = REFRESH_FIRST_BATCH_SIZE

@@ -10,7 +10,6 @@ import com.intellij.database.util.Version
 import com.intellij.openapi.application.PathManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 
 /**
@@ -39,7 +38,6 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     /** 解析出的 classpath 里必须出现的驱动 jar 名。 */
     private val expectedJar = "mysql-connector-j-$ARTIFACT_VERSION.jar"
 
-    @Test
     fun testDriverArtifactResolvesToJarsOnClasspath() {
         // ① artifact 清单能解析出钉定版本（清单来自沙盒 jdbc-drivers.xml / options 副本）
         DbIntegrationSeedSupport.seedDriverFiles()
@@ -145,7 +143,6 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     }
 
     /** T-M19/V178：真实 DatabaseTools 服务，不建连、不读取 demo 配置、不替换生产 hook。 */
-    @Test
     fun testRealSqlMappingInheritanceAndReparse() {
         println("V178 runtime build=${com.intellij.openapi.application.ApplicationInfo.getInstance().build} " +
             "java=${System.getProperty("java.version")} " +
@@ -199,7 +196,6 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testRealDataSourceScopeUuidRenameUrlChangeAndRemoval() {
         val manager = LocalDataSourceManager.getInstance(project)
         assertTrue("isolated sandbox must start empty", manager.dataSources.isEmpty())
@@ -264,7 +260,6 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testRealDisconnectedSessionAndConsoleTargetApis() {
         val manager = LocalDataSourceManager.getInstance(project)
         val ds = manager.createEmpty()
@@ -364,7 +359,6 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     }
 
     /** 种子文件落点断言：DBN 只认 `<configPath>/options/<name>`（见助手 KDoc ②）。 */
-    @Test
     fun testSeedFilesLandWhereDbLooksForThem() {
         DbIntegrationSeedSupport.seedDriverFiles()
         // T-CiNightly（2026-11-05）：jdbc-drivers 清单来自 dev 沙盒（本地 runIde 产物），

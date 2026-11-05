@@ -19,7 +19,6 @@ import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -176,7 +175,6 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ),
     )
 
-    @Test
     fun testDatabaseDiagramEmbedChainWithVirtualFk() {
         // 必须最先守卫：database jar 缺席（普通 test 任务）时任何 database 类触碰即 NoClassDefFoundError
         if (!ExecuteSqlSupport.isAvailable()) {

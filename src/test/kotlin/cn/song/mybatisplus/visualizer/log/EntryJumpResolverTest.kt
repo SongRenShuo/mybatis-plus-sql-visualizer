@@ -4,7 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-SourceJumpFunnel 纯逻辑测试：跳转目标统一解析（[EntryJumpResolver]）+ 历史持久化往返。
@@ -32,13 +31,11 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
         sourceCandidates = candidates,
     )
 
-    @Test
     fun test主位置缺失且无候选_MissingSource() {
         val t = EntryJumpResolver.resolve(project = project, entry = entry())
         assertTrue(t is EntryJumpResolver.JumpTarget.MissingSource)
     }
 
-    @Test
     fun testMP分页计数标记_NoSource_优先于工程解析() {
         val t = EntryJumpResolver.resolve(
             project = project,
@@ -47,7 +44,6 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
         assertTrue(t is EntryJumpResolver.JumpTarget.NoSource)
     }
 
-    @Test
     fun test主位置不可解析且候选不可解析_NotFound带候选明细() {
         val t = EntryJumpResolver.resolve(
             project = project,
@@ -63,7 +59,6 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
         assertEquals(2, nf.candidates.size)
     }
 
-    @Test
     fun test候选含MP分页标记_跳过不误选() {
         val t = EntryJumpResolver.resolve(
             entry = entry(
@@ -75,7 +70,6 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
         assertTrue(t is EntryJumpResolver.JumpTarget.MissingSource)
     }
 
-    @Test
     fun test栈快照仅透传不参与判定_历史读回payload往返() {
         // Codec 往返：候选/类名/栈快照落盘后读回，跳转解析消费同一数据
         val origin = LogSqlEntry(
@@ -95,7 +89,6 @@ class EntryJumpResolverTest : BasePlatformTestCase() {
         assertEquals(origin.stackDigest, decoded.stackDigest)
     }
 
-    @Test
     fun test旧版payload无候选键_解码缺省空() {
         val json = """
             {"r":"SELECT 1","p":[["x","String"]]}

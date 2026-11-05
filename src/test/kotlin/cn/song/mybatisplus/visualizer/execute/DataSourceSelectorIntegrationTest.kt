@@ -18,7 +18,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -204,7 +203,6 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      * 20260918：清空后还须**有界等待发现链收敛到 0**（见 [awaitRunners]）——否则取样落在
      * facade 尚未跟上的中间态上，仍会走弹窗分支。
      */
-    @Test
     fun testNoDataSourceReportedAsUnavailable() {
         if (!ExecuteSqlSupport.isAvailable()) {
             println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
@@ -259,7 +257,6 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      * 20260918：① 前置清空 + 数据源名带唯一后缀——名字断言才有区分度（同名残留会让「含数据源名」
      * 恒真）；② 发现结果有界等待收敛（[awaitRunners]）。
      */
-    @Test
     fun testSingleSourceDiscoverableByRunner() {
         if (!ExecuteSqlSupport.isAvailable()) {
             println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
@@ -306,7 +303,6 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      * `FileSystemException: 另一个程序正在使用此文件` 随稳定工程目录一并消失
      * （根因见 [DbIntegrationProjectSupport] 类注释——该异常与断言无关，是工程目录被删）。
      */
-    @Test
     fun testMultiSourceDiscoveryReturnsAllRunners() {
         if (!ExecuteSqlSupport.isAvailable()) {
             println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
@@ -357,7 +353,6 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      * `prepareInConsole` 的 `getEditors(consoleDocument)` 恒空 → 静默返回 → 120s 不就绪且
      * errors=[]（基线 idea.log `[M36] editor=null (async wait)` 实证）。
      */
-    @Test
     fun testPrepareConsoleSilentlySelectsSingleSource() {
         if (!ExecuteSqlSupport.isAvailable()) {
             println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
@@ -431,7 +426,6 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      *
      * 环境门槛同本类其余 DB 用例（testDatabase 任务 + demo 数据源 + 本地 MySQL）。
      */
-    @Test
     fun testPrepareConsoleWithoutConsoleEditorReportsError() {
         if (!ExecuteSqlSupport.isAvailable()) {
             println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")

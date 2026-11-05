@@ -10,7 +10,6 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.ui.tabs.impl.JBTabsImpl
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Test
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -690,7 +689,6 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
 
     /** R19：历史 tab 常驻——未开启自动保存且无历史文件时 tab 仍在（原 F-44 条件挂载废除），
      *  空态由文件列表引导文案承接（开启自动保存的指引）。 */
-    @Test
     fun testR19_历史tab常驻_未开启自动保存也无历史文件时仍在() {
         runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled = false }
         val manager = SqlLogManager(project)
@@ -711,7 +709,6 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
      * 动作对象仍在工具栏组内（能力代码保留），但 update 恒置不可见/不可用；
      * 恢复方案 A 时改回条件可见并更新本用例。
      */
-    @Test
     fun test增强暂停动作在方案B下始终不可见() {
         val panel = SqlLogPanel(project, manager)
         val state = PluginSettings.getInstance().state

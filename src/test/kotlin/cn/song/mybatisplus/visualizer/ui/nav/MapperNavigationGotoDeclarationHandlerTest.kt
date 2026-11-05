@@ -15,7 +15,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-MapperNavShortcut：双向 `GotoDeclarationHandler` 用例。
@@ -81,7 +80,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
     // Java → XML
     // ------------------------------------------------------------------
 
-    @Test
     fun testJavaMethod_命中XML语句落点() {
         val java = addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -93,7 +91,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertSame("落点应在 mapper XML 内", xml, result[0].containingFile)
     }
 
-    @Test
     fun testJavaMethod_无对应XML语句_返回null() {
         val java = addMapper()
         addXml("<select id=\"selectById\">select 1</select>")
@@ -101,13 +98,11 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertTrue("无同名语句的方法不得接管 Ctrl+B", targets(identifierOf(java, "missing")).isEmpty())
     }
 
-    @Test
     fun testJavaMethod_无mapperXML_返回null() {
         val java = addMapper()
         assertTrue("项目内没有 mapper XML 时不得接管", targets(identifierOf(java, "selectById")).isEmpty())
     }
 
-    @Test
     fun test普通类方法_返回null() {
         val java = myFixture.addFileToProject(
             "com/demo/UserService.java",
@@ -123,7 +118,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertTrue("非接口方法不是 mapper 方法", targets(identifierOf(java, "selectById")).isEmpty())
     }
 
-    @Test
     fun test方法体内调用点_不接管() {
         val java = myFixture.addFileToProject(
             "com/demo/OtherMapper.java",
@@ -146,7 +140,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertTrue(hits[0].parent is PsiMethod)
     }
 
-    @Test
     fun test同名多databaseId_返回全部目标() {
         val java = addMapper()
         addXml(
@@ -161,7 +154,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
     // XML → Java
     // ------------------------------------------------------------------
 
-    @Test
     fun testXml起始标签名_跳接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -173,7 +165,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertEquals("selectById", (result[0] as PsiMethod).name)
     }
 
-    @Test
     fun testXml闭标签名_不接管() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -183,7 +174,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertEquals("只有起始标签名接管", 1, nameTokens.count { targets(it).isNotEmpty() })
     }
 
-    @Test
     fun testXml_id属性值_跳接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -195,7 +185,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertEquals("selectById", (result[0] as PsiMethod).name)
     }
 
-    @Test
     fun testXml_id属性名_跳接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -204,7 +193,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertEquals(1, targets(nameToken).size)
     }
 
-    @Test
     fun testXml_其它属性_不接管() {
         addMapper()
         val xml = addXml("<select id=\"selectById\" databaseId=\"mysql\">select 1</select>")
@@ -213,7 +201,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertTrue("只有 id 属性参与跳转", targets(databaseIdToken).isEmpty())
     }
 
-    @Test
     fun testXml_非mapper根_不接管() {
         addMapper()
         val xml = myFixture.addFileToProject(
@@ -224,7 +211,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         assertTrue(targets(startTagNameToken(xml, "select")).isEmpty())
     }
 
-    @Test
     fun testXml_sql片段_不接管() {
         val xml = addXml("<sql id=\"selectById\">x</sql>")
         assertTrue("片段标签没有接口方法", targets(startTagNameToken(xml, "sql")).isEmpty())
@@ -238,7 +224,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
             .readBytes().toString(Charsets.UTF_8)
 
-    @Test
     fun testPluginXml_gotoDeclarationHandler接线在场() {
         assertTrue(
             "plugin.xml 须注册 <gotoDeclarationHandler implementation=…MapperNavigationGotoDeclarationHandler>",
@@ -248,7 +233,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testPluginXml_gotoRelatedProvider接线在场() {
         assertTrue(
             "plugin.xml 须注册 <gotoRelatedProvider implementation=…MapperNavigationGotoRelatedProvider>",
@@ -263,7 +247,6 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
      * 键位必须由平台 `GotoDeclaration` / `GotoRelated` action 持有——用户改 Keymap 后自动跟随；
      * 一旦有人在这里写死键位，用户改键就会失效（用户 2026-11-05 明确要求）。
      */
-    @Test
     fun test新增注册段_不声明私有键位() {
         val xml = pluginXml().replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
         val start = xml.indexOf("<gotoDeclarationHandler")

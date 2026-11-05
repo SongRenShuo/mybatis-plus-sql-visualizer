@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.execute
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import java.io.File
 import java.sql.DriverManager
@@ -136,7 +135,6 @@ class DataSourceJdbcSmokeTest : BasePlatformTestCase() {
         return local
     }
 
-    @Test
     fun testAllDemoDataSourcesReachable() {
         val sources = readAllDataSources()
         // 环境门控＝「显式绿跳」：平台 runner 把 AssumptionViolatedException 记为 failure 红任务
@@ -163,7 +161,6 @@ class DataSourceJdbcSmokeTest : BasePlatformTestCase() {
         assertTrue("以下数据源 JDBC 直连失败: $failures", failures.isEmpty())
     }
 
-    @Test
     fun testExecuteValidationSqlOnEachSource() {
         val sources = readAllDataSources()
         if (sources.isEmpty()) {

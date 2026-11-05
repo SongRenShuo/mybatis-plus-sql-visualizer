@@ -14,7 +14,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlGap W7 引用解析用例：mapper XML 内九类属性 → 目标元素。
@@ -43,7 +42,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** `include@refid` → 同文件 `<sql id>`。 */
-    @Test
     fun testW7_refid_同文件_sql片段() {
         myFixture.configureByText(
             "mapper.xml",
@@ -60,7 +58,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `include@refid` 跨文件 `ns.id` → 另一 mapper 文件的 `<sql id>`。 */
-    @Test
     fun testW7_refid_跨文件_namespace点号() {
         myFixture.addFileToProject(
             "other/OtherMapper.xml",
@@ -78,7 +75,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `resultMap=` → 同文件 `<resultMap id>`。 */
-    @Test
     fun testW7_resultMap_同文件() {
         myFixture.configureByText(
             "mapper.xml",
@@ -93,7 +89,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `resultMap@extends` → 同文件 `<resultMap id>`。 */
-    @Test
     fun testW7_extends_同文件resultMap() {
         myFixture.configureByText(
             "mapper.xml",
@@ -108,7 +103,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `parameterMap=` → 同文件 `<parameterMap id>`。 */
-    @Test
     fun testW7_parameterMap_同文件() {
         myFixture.configureByText(
             "mapper.xml",
@@ -127,7 +121,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** `namespace` → Java 接口。 */
-    @Test
     fun testW7_namespace_接口() {
         myFixture.addFileToProject("com/demo/UserMapper.java", "package com.demo;\npublic interface UserMapper { int count(); }\n")
         myFixture.configureByText("mapper.xml", """<mapper namespace="com.demo.UserMapper"/>""")
@@ -137,7 +130,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** statement `id` → 接口方法。 */
-    @Test
     fun testW7_statementId_接口方法() {
         myFixture.addFileToProject("com/demo/UserMapper.java", "package com.demo;\npublic interface UserMapper { int count(); }\n")
         myFixture.configureByText(
@@ -150,7 +142,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `resultType` → 类（短名走 namespace 接口同包解析）。 */
-    @Test
     fun testW7_resultType_短名类() {
         myFixture.addFileToProject("com/demo/UserMapper.java", "package com.demo;\npublic interface UserMapper { }\n")
         myFixture.addFileToProject("com/demo/UserVo.java", "package com.demo;\npublic class UserVo { String name; }\n")
@@ -164,7 +155,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `resultType` 全限定名直接命中。 */
-    @Test
     fun testW7_resultType_全限定名() {
         myFixture.addFileToProject("com/demo/UserVo.java", "package com.demo;\npublic class UserVo { String name; }\n")
         myFixture.configureByText(
@@ -175,7 +165,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `jdbcType` → MyBatis `JdbcType` 枚举常量（按类名运行时解析，生产零 mybatis 依赖）。 */
-    @Test
     fun testW7_jdbcType_枚举常量() {
         myFixture.addFileToProject(
             "org/apache/ibatis/type/JdbcType.java",
@@ -195,7 +184,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** `property` → 实体字段（持有者类来自最近祖先标签的 `type`）。 */
-    @Test
     fun testW7_property_实体字段() {
         myFixture.addFileToProject("com/demo/UserVo.java", "package com.demo;\npublic class UserVo { private String name; }\n")
         myFixture.configureByText(
@@ -216,7 +204,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 目标不存在 → `resolve()` 返回 null；引用仍必须存在且 **soft**（不标红）。 */
-    @Test
     fun testW7_目标缺失_soft引用零报红() {
         myFixture.configureByText(
             "mapper.xml",
@@ -229,7 +216,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** 非 mapper 根标签（如 mybatis-config）→ 零引用。 */
-    @Test
     fun testW7_非mapper根_零引用() {
         myFixture.configureByText(
             "config.xml",
@@ -245,7 +231,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** 未覆盖的属性（如 `statementType`）→ 零引用（不做无意义引用，避免噪音）。 */
-    @Test
     fun testW7_未覆盖属性_零引用() {
         myFixture.configureByText(
             "mapper.xml",
@@ -265,7 +250,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 同一 namespace 二次解析不重复实查（memo 命中）；文件清单代不变。 */
-    @Test
     fun testF96_同namespace二次解析_不重复实查() {
         myFixture.addFileToProject(
             "m/UserMapper.xml",
@@ -295,7 +279,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** 负结果同样入 memo：不存在的 namespace 二次解析不重复实查。 */
-    @Test
     fun testF96_不存在namespace_负结果也入memo() {
         myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
         MybatisXmlTargets.clearFileListCacheForTest()
@@ -308,7 +291,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** 文件清单换代（TTL 过期重扫）后 memo 失效：新增同 namespace 文件可被后续解析看到。 */
-    @Test
     fun testF96_清单换代后memo失效_新增文件可见() {
         myFixture.addFileToProject("m/A.xml", """<mapper namespace="m.same"><sql id="a">SELECT 1</sql></mapper>""")
         myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
@@ -340,7 +322,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
      * 只有解析失败才会继续往上走满祖先链，因此这个形态才真正暴露「同名重复解析」。
      * 修复前每层各解析一次（本例 3 次），memo 后压到 1 次。
      */
-    @Test
     fun testF97_同名类在祖先链重复出现_只解析一次() {
         myFixture.configureByText(
             "mapper.xml",
@@ -373,7 +354,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** plugin.xml 须声明 `psi.referenceContributor language="XML"`（EP 声明冻结但接线不可丢）。 */
-    @Test
     fun testW7_pluginXml_psiReferenceContributor接线在场() {
         val xml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
             .readBytes().toString(Charsets.UTF_8)
@@ -386,7 +366,6 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     /** 红线守卫：本包源码不得出现 inspection/annotator/ProblemHolder 类注册面。 */
-    @Test
     fun testW7_红线_本包无校验器形态() {
         val dir = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref")
         assertTrue("W7 源码目录存在", dir.isDirectory)

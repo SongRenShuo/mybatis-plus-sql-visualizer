@@ -32,7 +32,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 
 /**
@@ -153,7 +152,6 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
      * （completeBasic）须产出 SQL 关键字候选。修复前红灯形态：production 无 MpSqlMapper EP
      * （派发层断）/ 测试程序化注册 EP 后坐标还原断（position 落 mapper 头部零补全）。
      */
-    @Test
     fun test注入开启_语句文本内补全_平台全链路产出候选() {
         val (file, caret) = openMapperWithCaret(mapperXml)
         assertInjectionAtCaret(file, caret, expected = true)
@@ -168,7 +166,6 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
      * 注入关闭：光标落宿主 XML——补全经 language="XML" 注册派发，同内容同断言
      * （宿主形态回归钉：修复不得破坏既有 XML 派发路径）。
      */
-    @Test
     fun test注入关闭_宿主XML形态补全_平台全链路产出候选() {
         val settings = PluginSettings.getInstance()
         val old = settings.state.xmlSynHiEnabled
@@ -195,7 +192,6 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
      * 手工建参（注入位 position/offset + myFixture.editor 宿主文档）直调贡献器：
      * 还原须从注入文件 DocumentWindow 取映射，旧代码此形态零补全（反向验证判别器）。
      */
-    @Test
     fun test注入形态_生产坐标建参_宿主还原产出候选() {
         val (file, caret) = openMapperWithCaret(mapperXml)
         assertInjectionAtCaret(file, caret, expected = true)
@@ -227,7 +223,6 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
     }
 
     /** plugin.xml 双语言 EP 声明钉（派发层修复的声明面，资源断言同 wiring test 口径）。 */
-    @Test
     fun test_pluginXml双语言completionContributor声明在场() {
         val pluginXml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
             .readBytes().toString(Charsets.UTF_8)

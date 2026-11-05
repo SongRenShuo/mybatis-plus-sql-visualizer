@@ -18,7 +18,6 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 import java.sql.SQLException
 import javax.xml.parsers.DocumentBuilderFactory
@@ -213,7 +212,6 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
      * 端到端：准备 → 执行 → 改参 → 再执行 → 断言新结果 Tab。
      * 「滞后一轮」回归：第二次执行后必须出现与第一次**不同**的结果 Tab（M36.5.22b 行为）。
      */
-    @Test
     fun testPrepareExecuteAndParameterChangeEndToEnd() {
         // 前置：Database 插件已加载（testDatabase 任务不排 jar）+ demo 项目可达。
         // 注意：密码 assume 放在「执行」前——无密码时 prepare 层（插件/数据源/控制台准备）仍被验证。

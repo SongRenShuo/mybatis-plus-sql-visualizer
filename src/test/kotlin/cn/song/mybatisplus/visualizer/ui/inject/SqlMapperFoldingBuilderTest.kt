@@ -9,7 +9,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlGap W6：mapper 语句标签的带 id 折叠（[SqlMapperFoldingBuilder]）用例。
@@ -38,7 +37,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
   </select>
 </mapper>"""
 
-    @Test
     fun testW6_多行语句_建区且占位为标签名井号id() {
         val regions = regionsOf(multiLineSelect)
         assertEquals("多行 select 应恰好一个 fold 区", 1, regions.size)
@@ -48,13 +46,11 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
         assertEquals("折叠范围须为整个标签", tag.textRange, region.range)
     }
 
-    @Test
     fun testW6_单行语句_不建区() {
         val regions = regionsOf("""<mapper namespace="n"><select id="a">SELECT 1</select></mapper>""")
         assertEquals("单行标签折叠无视觉意义，不建区", 0, regions.size)
     }
 
-    @Test
     fun testW6_无id语句_不建区() {
         val regions = regionsOf(
             """<mapper namespace="n">
@@ -66,7 +62,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
         assertEquals("无 id 无占位可加，不建区", 0, regions.size)
     }
 
-    @Test
     fun testW6_非mapper文件_不建区() {
         val regions = regionsOf(
             """<configuration>
@@ -79,7 +74,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
         assertEquals("非 mapper 根 → 零 fold 区（不抢平台区）", 0, regions.size)
     }
 
-    @Test
     fun testW6_sql片段_带id多行_建区() {
         val regions = regionsOf(
             """<mapper namespace="n">
@@ -92,7 +86,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
         assertEquals("sql#baseColumns", regions.single().placeholderText)
     }
 
-    @Test
     fun testW6_resultMap族_不建区() {
         val regions = regionsOf(
             """<mapper namespace="n">
@@ -104,7 +97,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
         assertEquals("resultMap 族 id 语义弱且通常很短，本类不建区", 0, regions.size)
     }
 
-    @Test
     fun testW6_不自动折叠() {
         myFixture.configureByText("mapper.xml", multiLineSelect)
         val tag = PsiTreeUtil.collectElementsOfType(myFixture.file, XmlTag::class.java).first { it.name == "select" }
@@ -115,7 +107,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
     }
 
     /** EP 接线守卫：plugin.xml 须声明 lang.foldingBuilder language=XML。 */
-    @Test
     fun testW6_pluginXml_折叠接线在场() {
         val xml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
             .readBytes().toString(Charsets.UTF_8)
@@ -136,7 +127,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
      * 随后 daemon `CodeFoldingPass` 会以 `quick=false` 全量重建）必须短路返回空集，
      * 不做全 PSI 子树遍历；折叠区由后续 quick=false 重建补齐（平台 XML 折叠兜底）。
      */
-    @Test
     fun testF95_quickTrue_短路返回空() {
         myFixture.configureByText("mapper.xml", multiLineSelect)
         val file = myFixture.file
@@ -146,7 +136,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
     }
 
     /** F95 反向对照：`quick=false`（含键入后的常规重建）行为不回归，正常 mapper 仍产折叠区。 */
-    @Test
     fun testF95_quickFalse_正常mapper仍建区() {
         myFixture.configureByText("mapper.xml", multiLineSelect)
         val file = myFixture.file
@@ -157,7 +146,6 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
     }
 
     /** F95 体量熔断：文本超 `XmlSynHiGate.MAX_TEXT_LENGTH`（100K）不建区（与注入族同阈值）。 */
-    @Test
     fun testF95_超长文本_体量熔断返回空() {
         val stmt = "<select id=\"s\">\n  SELECT 1\n</select>\n"
         val xml = "<mapper namespace=\"n\">\n" + stmt.repeat(3000) + "</mapper>"

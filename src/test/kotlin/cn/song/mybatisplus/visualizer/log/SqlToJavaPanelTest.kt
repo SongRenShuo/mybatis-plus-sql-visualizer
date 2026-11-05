@@ -16,7 +16,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JList
 import javax.swing.ListCellRenderer
 
@@ -260,7 +259,6 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     // T-M49：唯一可推断时跳过实体选择弹窗
     // ------------------------------------------------------------------
 
-    @Test
     fun `test canAutoInferEntitySelection_uniqueMainAndSingleSub_returnsTrue`() {
         // 主表 1 候选 + 每个副表各 1 候选 → 唯一可推断 → 跳过弹窗
         val mainCandidates = listOf(mockCandidate("User"))
@@ -271,7 +269,6 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun `test canAutoInferEntitySelection_multipleMainCandidates_returnsFalse`() {
         // 主表多候选 → 有歧义 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"), mockCandidate("UserEntity"))
@@ -282,7 +279,6 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun `test canAutoInferEntitySelection_multipleSubCandidates_returnsFalse`() {
         // 副表多候选 → 有歧义 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"))
@@ -293,7 +289,6 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun `test canAutoInferEntitySelection_emptySubCandidates_returnsFalse`() {
         // 副表 0 候选 → 不可推断 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"))
@@ -304,7 +299,6 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun `test canAutoInferEntitySelection_noSubTables_returnsTrue`() {
         // 主表 1 候选 + 无副表（空 map）→ all 对空集合返回 true → 唯一可推断
         val mainCandidates = listOf(mockCandidate("User"))

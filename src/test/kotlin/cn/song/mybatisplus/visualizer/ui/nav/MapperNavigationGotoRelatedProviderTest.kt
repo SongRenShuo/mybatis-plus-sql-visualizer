@@ -11,7 +11,6 @@ import com.intellij.psi.xml.XmlTokenType
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-MapperNavShortcut：`Ctrl+Alt+Home`（GotoRelated）关联项用例。
@@ -60,7 +59,6 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
                     .first { it.tokenType == XmlTokenType.XML_NAME && it.text == tagName && it.parent === tag }
             }
 
-    @Test
     fun test接口方法_列出XML语句() {
         val java = addMapper()
         addXml("<select id=\"selectById\">select 1</select>")
@@ -74,7 +72,6 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
         assertEquals("selectById", items[0].customName)
     }
 
-    @Test
     fun testXML语句_列出接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -88,7 +85,6 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
         assertEquals("UserMapper#selectById", items[0].customName)
     }
 
-    @Test
     fun test语句体内_也能列出接口方法() {
         addMapper()
         val xml = addXml("<select id=\"selectById\">select 1</select>")
@@ -101,7 +97,6 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
         assertTrue(items[0].element is PsiMethod)
     }
 
-    @Test
     fun test无关Java方法_零关联项() {
         val java = myFixture.addFileToProject(
             "com/demo/UserService.java",
@@ -117,7 +112,6 @@ class MapperNavigationGotoRelatedProviderTest : BasePlatformTestCase() {
         assertTrue("普通类方法不是 mapper 方法", provider.getItems(identifierOf(java, "selectById")).isEmpty())
     }
 
-    @Test
     fun test无XML语句_零关联项() {
         val java = addMapper()
         addXml("<select id=\"other\">select 1</select>")
