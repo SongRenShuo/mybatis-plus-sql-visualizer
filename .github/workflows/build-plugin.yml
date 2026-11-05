@@ -415,10 +415,32 @@ jobs:
         # 三类真机依赖用例在 CI 剔除（本地发版前照跑）：AttachPoolWarmGateTest / DataSourceJdbcSmokeTest /
         # O147RealAgentAcceptanceTest——它们需要本机 MySQL 或本机 JDK8。
         timeout-minutes: 30
-        run: >-
-          ./gradlew.bat :testShard${{ matrix.shard }} -PgifRecord=false --console=plain
-          "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
-          "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+        # T-CiZipFsFlake（2026-11-05）：Gradle 配置期读 IDE 自带插件描述符时会偶发
+        # `java.nio.file.ClosedFileSystemException`（栈顶是 plugin-structure 的
+        # FsHandlerFileSystemProvider.checkAccess → Files.exists），随后被报成
+        # "Could not find bundled plugin with ID: 'com.intellij.database'"。
+        # 实证分布：run#8 1/5 片、run#11 2/5 片，run#7/#9/#10 共 15 片零命中；失败片的
+        # gradle 缓存恢复是**完整**的（4775MB + 4385MB），所以与缓存残缺、.gradle 工件无关，
+        # 是 Gradle 自身 zip 文件系统句柄在并行解析下被关闭的竞态（同一 jar 被多线程打开）。
+        # 处置：只针对这一个签名重跑一次（测试真失败不会命中该签名，因此不会掩盖问题）。
+        run: |
+          $gradleArgs = @(
+            ':testShard${{ matrix.shard }}',
+            '-PgifRecord=false',
+            '--console=plain',
+            '-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest',
+            '-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest'
+          )
+          $log = Join-Path $env:RUNNER_TEMP "shard-${{ matrix.shard }}.log"
+          ./gradlew.bat @gradleArgs 2>&1 | Tee-Object -FilePath $log
+          $rc = $LASTEXITCODE
+          if ($rc -eq 0) { exit 0 }
+          if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
+            exit $rc
+          }
+          Write-Host "::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非测试失败），重跑一次"
+          ./gradlew.bat @gradleArgs 2>&1 | Tee-Object -FilePath $log -Append
+          exit $LASTEXITCODE
 
       - name: 失败诊断输出（断言消息打到任务日志）
         if: failure()
