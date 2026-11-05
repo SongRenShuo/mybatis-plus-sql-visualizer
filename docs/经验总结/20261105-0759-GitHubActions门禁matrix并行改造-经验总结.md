@@ -341,3 +341,28 @@ marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看）�
   与 T-TestPerf5 当年「6 片 execSum 膨胀、回劣」同向。
 - 下次要动片数，先看 `dev-support/test-shard-weights.tsv` 的实际分布（Top3 类占比）再决定，
   别按「总时长 ÷ 片数」推。
+
+## 十三、GitHub 的 schedule 靠不住：加一条幂等兜底派发（2026-11-06 凌晨实证）
+
+夜间全量 `nightly-full.yml` 的 cron 是 `0 18 * * *`（北京 02:00）。2026-11-05 当天：
+
+| 观察 | 读数 |
+|---|---|
+| cron 应触发时刻 | 18:00Z（北京 02:00） |
+| 实际首次检查 | 19:12Z —— 晚了 72 分钟，无任何 `event=schedule` 记录 |
+| 90 分钟守望后 | 20:14Z —— 晚了 2 小时 14 分，仍然没有 |
+| githubstatus.com | All Systems Operational（不是平台事故） |
+| 仓库状态 | `default_branch=master`、`archived=false`、`disabled=false`、workflow `state=active`、最近 push 16:23Z |
+| 历史 | 9 轮夜间**全是 `workflow_dispatch`**，cron 从上线起一次没跑过 |
+
+**结论**：GitHub 的定时器是 best-effort，官方不保证准时；把「每晚自动跑」押在它身上等于没有。
+处置：在 `push-test.yml` 加一条 `nightly-nudge`（需要 `permissions: actions: write`）：
+
+- 判据同源：夜间只在「前 24 小时有代码提交」时真跑，而这条 job 只在 push 到 master 时执行，
+  所以「有 push 的那天」正好是夜间该跑的那天；
+- **幂等**：先查当天有没有任何夜间轮，有就跳过——避免和迟到的 schedule 撞成两轮
+  （夜间的并发组是 `cancel-in-progress: false`，撞上会排队白烧一轮）；
+- **不连坐**：查询失败（gh 异常）只打 warning 就退出，不让兜底动作把推送轮打红。
+
+教训写在这里而不是只写在脚本里：**定时类自动化要有「谁保证它真的跑了」的答案**。
+GitHub Actions 的答案只能是「另一条确定会跑的 workflow」。
