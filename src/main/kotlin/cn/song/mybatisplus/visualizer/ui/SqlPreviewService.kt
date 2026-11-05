@@ -1200,6 +1200,8 @@ class SqlPreviewService(internal val project: Project) {
                     dialectOverride = dialect,
                     dialectDecision = decision,
                     placeholderParamNames = result.placeholderParamNames,
+                    // T-PagesHql：降级清单随结果透传（默认空，既有 JPA 链行为不变）
+                    degradations = result.degradations,
                 )
             }
         }

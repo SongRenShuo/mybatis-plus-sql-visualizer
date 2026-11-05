@@ -648,6 +648,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                 toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
             })
+            // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
+                model = DefaultComboBoxModel(pagesSourceOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.pagesSource.tip")
+            })
             // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
             addRow(p, g, "", xmlSynHiCheck)
             addRow(p, g, "", joinDiagramNativeCheck.apply {

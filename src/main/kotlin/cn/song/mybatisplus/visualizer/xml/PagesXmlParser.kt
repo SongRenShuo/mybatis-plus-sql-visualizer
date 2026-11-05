@@ -10,6 +10,11 @@ data class PagesStatement(
     val entityClass: String,
     val sql: String,
     val columns: List<PagesColumn>,
+    /**
+     * T-PagesHql：`<datasource type="...">` 显式声明（hql / jpql / sql）；缺省 null。
+     * 部分框架版本用它标注源语言，是最权威的判定证据。
+     */
+    val declaredType: String? = null,
 )
 
 /** 列元数据 */
@@ -59,10 +64,12 @@ class PagesXmlParser {
         // <datasource> CDATA → sql
         val datasourceTag = childElements(element).firstOrNull { it.tagName == "datasource" }
         val sql = datasourceTag?.textContent?.trim().orEmpty()
+        // T-PagesHql：可选 type 属性（hql / jpql / sql）
+        val declaredType = datasourceTag?.getAttribute("type")?.trim()?.takeIf { it.isNotEmpty() }
         // <columns>/<column> → 列元数据
         val columnsTag = childElements(element).firstOrNull { it.tagName == "columns" }
         val columns = columnsTag?.let { parseColumns(it) } ?: emptyList()
-        return PagesStatement(id, title, autoQuery, entityClass, sql, columns)
+        return PagesStatement(id, title, autoQuery, entityClass, sql, columns, declaredType)
     }
 
     private fun parseColumns(columnsTag: Element): List<PagesColumn> =
