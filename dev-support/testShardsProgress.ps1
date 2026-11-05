@@ -10,6 +10,7 @@
 #   ... -NoConfigCache:$false                 # 需要复用配置缓存时关掉（默认关缓存，防分片清单被钉死）
 #   ... -ProgressLogPath D:\tmp\gate.log       # 进度文件落点（默认 build/test-shards-progress.log）
 #   ... -ExtraArgs "--tests", "..."            # 追加任意 gradle 参数
+#   ... -ShardCount 4                          # 分片数（须与 -PtestShardCount 一致，默认 5）
 #
 # 两路输出（内容一致）：
 #   1. 当前终端：每 IntervalSeconds 一行
@@ -30,7 +31,10 @@ param(
     [int]$IntervalSeconds = 10,
     [switch]$NoConfigCache = $true,
     [string]$ProgressLogPath = "",
-    [string[]]$ExtraArgs = @()
+    [string[]]$ExtraArgs = @(),
+    # T-TestGapSpeed T6：与 gradlew -PtestShardCount 对齐（缺省 5 = mpv-testing 默认片数）；
+    # 调片数跑分片时两边要一起改，否则进度行的「分片 N/M」与结果解析都会错。
+    [int]$ShardCount = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +44,7 @@ Set-Location $root
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = Join-Path $env:TEMP "mpsv-testshards-$stamp.log"
 $errLog = Join-Path $env:TEMP "mpsv-testshards-$stamp.err.log"
-$shardCount = 5
+$shardCount = $ShardCount
 
 if ([string]::IsNullOrWhiteSpace($ProgressLogPath)) {
     $ProgressLogPath = Join-Path $root 'build/test-shards-progress.log'

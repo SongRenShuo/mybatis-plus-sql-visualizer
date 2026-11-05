@@ -30,6 +30,8 @@ internal fun DataSourceSelector.startResultTabRetry(
     demotedOverride: Boolean = false,
     sqlText: String? = null,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+    /** T8：中性信息回调（工具语句/更新语句成功完成时面板 showStatus，不走红条错误通道）。 */
+    onInfo: ((String) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val selectRetry = object : java.awt.event.ActionListener {
@@ -129,29 +131,39 @@ internal fun DataSourceSelector.startResultTabRetry(
                     } else {
                         null
                     }
+                    // T8：无错误、无残余时再看完成证据——`use`/DML 这类无结果 Tab 的语句成功时
+                    // 完成回显就写在 Output，走中性 showStatus 而不是超时提示（onInfo 缺席的
+                    // 调用方保持既有行为不动）。
+                    val completed = if (realError == null && residue == null) {
+                        hasConsoleCompletionEvidence(sharedConsole ?: preparedConsole)
+                    } else {
+                        false
+                    }
                     // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
                     // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
                     // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
                     // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
                     if (realError == null && !executionHintReported) {
                         executionHintReported = true
-                        val message = if (residue != null) {
-                            // 如实标注：这是控制台新增输出，**不是**已识别的错误形态（不猜原因）
-                            "${MpSqlVisualizerBundle.message("execute.error.unknownShape")}\n$residue"
-                        } else {
-                            when {
-                                dumb -> MpSqlVisualizerBundle.message("execute.indexing.hint")
-                                demotedOverride -> MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
-                                else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
-                            }
+                        val message = when {
+                            residue != null ->
+                                // 如实标注：这是控制台新增输出，**不是**已识别的错误形态（不猜原因）
+                                "${MpSqlVisualizerBundle.message("execute.error.unknownShape")}\n$residue"
+                            completed && onInfo != null -> MpSqlVisualizerBundle.message("execute.toolStatementDone")
+                            dumb -> MpSqlVisualizerBundle.message("execute.indexing.hint")
+                            demotedOverride -> MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
+                            else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
                         }
                         LOG.info(
                             "[M36] result tab not appeared, no console error (dumb=$dumb, " +
-                                "demoted=$demotedOverride, residue=${residue != null}) - hint via 40-tick window",
+                                "demoted=$demotedOverride, residue=${residue != null}, completed=$completed) - hint via 40-tick window",
                         )
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
+                        // T8：完成态走中性通道（showStatus 灰字），不进红条错误通道——把成功
+                        // 说成失败与 T-CEC-03 的「错向归因」同性质。onInfo 缺席时维持旧路径。
+                        val deliverToInfo = completed && onInfo != null
                         ApplicationManager.getApplication().invokeLater({
-                            onError?.invoke(message)
+                            if (deliverToInfo) onInfo?.invoke(message) else onError?.invoke(message)
                         }, com.intellij.openapi.application.ModalityState.any())
                     } else if (realError != null) {
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
@@ -198,6 +210,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    /** T8：中性信息回调（工具语句成功完成时面板 showStatus；穿层见 startResultTabRetry 注释）。 */
+    onInfo: ((String) -> Unit)? = null,
     /** T-DialectGateExit：强制弹数据源选择器（跳过共享控制台复用与 last-used 静默命中）。 */
     forceChoose: Boolean = false,
     /**
@@ -324,6 +338,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
             onSubmission = onSubmission,
+            onInfo = onInfo,
             forceChoose = forceChoose,
             forceChoosePopup = forceChoosePopup,
             preferredRunnerName = preferredRunnerName,
@@ -373,6 +388,8 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     queuedIntent: QueuedExecuteIntent,
     /** UI-049：方言不匹配态结构化提示；null = 回落既有 `onError` 文案。 */
     onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
+    /** T8（T-TestGapSpeed）：中性信息回调（工具语句成功完成时面板 showStatus）。 */
+    onInfo: ((String) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (temp == null) {
@@ -456,7 +473,7 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
             project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
             onErrorRich, wholeScriptExec, prepareOwner = prepareOwner,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            onSubmission = onSubmission, isPrepareActive = ::isPrepareActive,
+            onSubmission = onSubmission, isPrepareActive = ::isPrepareActive, onInfo = onInfo,
         )
     }
 
@@ -558,7 +575,10 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
                     chooseAndPrepare(
                         project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
                         onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
-                        forceChoose, preferredRunnerName, forceChoosePopup,
+                        // 合并说明（T-TestGapSpeed × UI-049）：onInfo（T8）插在 onSubmission 与
+                        // forceChoose 之间后，尾部位置传参会错位——此处一律具名（同 T8 当时的教训）。
+                        onInfo = onInfo, forceChoose = forceChoose,
+                        preferredRunnerName = preferredRunnerName, forceChoosePopup = forceChoosePopup,
                         onDialectMismatchHint = onDialectMismatchHint,
                     )
                     return
@@ -1192,6 +1212,7 @@ internal fun DataSourceSelector.afterSubmitted(
     sqlText: String? = null,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    onInfo: ((String) -> Unit)? = null,
 ) {
     onSubmission?.invoke(ExecutionSubmission.SUBMITTED)
     // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
@@ -1285,7 +1306,7 @@ internal fun DataSourceSelector.afterSubmitted(
         }
         // ④ 结果 Tab 监听（只认新 Tab 名）
         if (ui != null) {
-            startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride, sqlText = sqlText, onErrorRich = onErrorRich)
+            startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride, sqlText = sqlText, onErrorRich = onErrorRich, onInfo = onInfo)
         }
     }, com.intellij.openapi.application.ModalityState.any())
 }

@@ -622,11 +622,21 @@ intellijPlatformTesting {
         // 任务单独跑。缺省空集 = 既有串行语义逐字不变。
         val shardExcludeClasses: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
             ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
+        // T-TestGapSpeed T5：负载敏感性能用例串行尾道——计时断言类用例（墙钟/吞吐预算）在
+        // 限流并发 + verifier JVM 同场下假红，会把整轮分片拖进 33min 级重试税（v2026.11.2
+        // 发行说明 flake 处置在案）。摘出并发分片，testShards 聚合末尾由 testShardTail 单 JVM
+        // 串行补跑（跨进程并行运行器路径走 test-shard-serial-classes.txt 同清单隔离）。
+        // 新增成员直接加进本清单（类发现扫描不看这里）。
+        val serialTailClasses: Set<String> = setOf(
+            "cn.song.mybatisplus.visualizer.log.LogEntryRailPerfTest",
+            "cn.song.mybatisplus.visualizer.log.LogPipelinePerfTest",
+        )
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
             .filter { it !in testExternalClasses }
             .filter { it !in shardExcludeClasses }
+            .filter { it !in serialTailClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -689,6 +699,24 @@ intellijPlatformTesting {
             }
             val known = (smoothed.values + weightProfile.values).sorted()
             val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+            // T-TestGapSpeed T4-B：画像保鲜告警（只告警不挡构建）。检出类中既无本地样本又无
+            // 入库画像覆盖的占比 >15% 时提示重跑画像刷新——占比高说明画像已陈旧到「大面积
+            // 中位数插值」，正是批次8 PluginSettingsPanelUiTest 4例19.5s 被 ~1.5s 插值、临界片
+            // 失衡 +13.7% 的退化形态。阈值 15%：正常轮未覆盖类只有零星新增（<2%），超 15% 即
+            // 结构性陈旧。配置期纯计算 + logger.warn，无新文件写入，不破坏 configuration-cache
+            // （TSV 读取本就在上方 weightProfile 段、已被 CC 输入追踪）。
+            run {
+                val uncovered = discoveredTestClasses.count { it !in smoothed && it !in weightProfile }
+                val ratio = if (discoveredTestClasses.isEmpty()) 0.0
+                else uncovered.toDouble() / discoveredTestClasses.size
+                if (ratio > 0.15) {
+                    logger.warn(
+                        "mpv-test-lane: 测试权重画像陈旧——${uncovered}/${discoveredTestClasses.size} 个检出测试类" +
+                            "（${"%.0f".format(ratio * 100)}%）既无本地样本也无画像覆盖，将按中位数插值装箱" +
+                            "（易致临界片失衡）；请跑 dev-support/weight-refresh.ps1 刷新 dev-support/test-shard-weights.tsv"
+                    )
+                }
+            }
             discoveredTestClasses.associateWith { smoothed[it] ?: weightProfile[it] ?: median }
         }
         // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
@@ -1007,6 +1035,45 @@ intellijPlatformTesting {
                 }
             }
         }
+        // T-TestGapSpeed T5：负载敏感性能用例串行尾道（清单 serialTailClasses 见 discoveredTestClasses
+        // 上方）。形态照 testShardN（独立沙盒、mcpStub classpath、round-start 戳、lane 观测），
+        // 但不进分片计划；mustRunAfter 全部分片保证「分片全停了才起」——单跑 testShardTail 不拖
+        // 分片（mustRunAfter 只定序不结依赖，与根脚本 e2eFakeIde 同款语义）。聚合报告把它计进
+        // SHARD TOTAL，但不参与失衡/缺权告警（shardExec 只收分片本体，见聚合块）。
+        register("testShardTail") {
+            testFramework(TestFrameworkType.Platform)
+            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shardTail"))
+            task {
+                dependsOn("verifyDemoFixture")
+                mustRunAfter(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+                // IPGP 只给默认 test 任务自动配置 sourceSets 输出（同 testShardN 注释）
+                testClassesDirs = sourceSets["test"].output.classesDirs
+                classpath = classpath + sourceSets["test"].output
+                testLogging {
+                    events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                }
+                classpath = classpath + files(sourceSets.named("mcpStub").map { it.output })
+                filter {
+                    serialTailClasses.forEach { includeTestsMatching(it) }
+                }
+                systemProperty("mpvShardMarker", MpvLaneMeter.markerValue(project.projectDir.absolutePath))
+                inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+                doFirst {
+                    val root = inputs.properties["mpvResultsRootAbs"] as String
+                    val dir = File(root, "build/test-results/testShardTail")
+                    dir.mkdirs()
+                    File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+                }
+                doLast {
+                    val root = inputs.properties["mpvResultsRootAbs"] as String
+                    val dir = File(root, "build/test-results/testShardTail")
+                    val laneAtEnd = MpvLaneMeter.activeShardExecutors(root, logger)
+                    logger.lifecycle("testShardTail END ${System.currentTimeMillis()} laneAtEnd=$laneAtEnd")
+                    File(dir, ".lane-others").writeText(laneAtEnd.toString())
+                }
+            }
+        }
         // T-TestPerf14 S2（D44 转正）：testDatabase 五类并行化。原形态=单任务 filter 五类 +
         // forkEvery=1 串行换 JVM（+2~3min，T-Fix-TestDb 20260918 在案）。拆五任务后每类：
         //   ① 独占 JVM（原 forkEvery=1 的「类间换 JVM」语义由「每类一任务」承载，应用级单例
@@ -1200,6 +1267,9 @@ tasks.register("testShards") {
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
     dependsOn("testExternal")
+    // T-TestGapSpeed T5：负载敏感性能用例串行尾道——依赖边 + 任务内 mustRunAfter(全部分片)
+    // 共同保证「分片全停才起」，时序语义见 testShardTail 注册块注释。
+    dependsOn("testShardTail")
     // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
@@ -1215,7 +1285,13 @@ tasks.register("testShards") {
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
     val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") } +
+        file("build/test-results/testShardTail") +
         file("build/test-results/testExternal")
+    // T-TestGapSpeed T5：尾道目录插在 testExternal 之前——「末位=testExternal」的既有语义
+    // （laneSeq dropLast(1)、shardExec 不含末位）维持。shardExec 只收前 testShardCount 个目录
+    // （分片本体），尾道计进 SHARD TOTAL 但不参与失衡/缺权告警；片数经局部 val 捕获
+    // （doLast 引用脚本顶层对象会炸配置缓存，同 shardResultDirs 通道）。
+    val shardCountForReport = testShardCount
     doLast {
         fun suiteXmls(dir: File): List<File> =
             dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
@@ -1236,7 +1312,7 @@ tasks.register("testShards") {
         var skipped = 0
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
-        // T-TestPerf10 S2：各分片本轮实测 exec（不含 testExternal），供失衡/缺权告警
+        // T-TestPerf10 S2：各分片本轮实测 exec（不含 testExternal 与 testShardTail 尾道），供失衡/缺权告警
         val shardExec = ArrayList<Double>()
         shardResultDirs.forEachIndexed { idx, dir ->
             // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
@@ -1281,7 +1357,7 @@ tasks.register("testShards") {
                 "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
-            if (idx < shardResultDirs.size - 1) shardExec += t
+            if (idx < shardCountForReport) shardExec += t
         }
         // T-ReleasePerf11 券02：并发形态自报——聚合各片 doLast 落盘的 .lane-others（片结束时
         // 仍在跑的其他分片执行器数，-DmpvShardMarker 进程扫描；doFirst 时刻执行器未出生恒 0，

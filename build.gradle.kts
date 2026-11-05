@@ -368,5 +368,7 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
 // 挂到叶子后，即使某个 shard 失败，e2e 仍等所有分片收尾再起（--continue 语义保留：e2e 照样跑）。
 tasks.named("e2eFakeIde") {
     mustRunAfter(tasks.matching { it.name.matches(Regex("testShard[0-9]+")) })
+    // T-TestGapSpeed T5：负载敏感性能用例串行尾道（任务名不匹配上方 [0-9]+ 正则，单独挂边）
+    mustRunAfter("testShardTail")
     mustRunAfter("testExternal")
 }

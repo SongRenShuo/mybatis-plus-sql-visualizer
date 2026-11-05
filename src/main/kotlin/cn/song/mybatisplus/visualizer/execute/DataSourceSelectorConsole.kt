@@ -33,6 +33,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     isPrepareActive: () -> Boolean = { true },
+    /** T8：中性信息回调（工具语句成功完成时面板 showStatus；穿层见 startResultTabRetry 注释）。 */
+    onInfo: ((String) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
@@ -487,6 +489,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                 dialectGateRequest = queuedIntent?.dialectGateRequest ?: dialectGateRequest,
                 onDialectGate = queuedIntent?.onDialectGate ?: onDialectGate,
                 onSubmission = selectPrepareSubmission(queuedIntent, onSubmission),
+                onInfo = onInfo,
             )
             if (queuedIntent != null) queuedExecuted = true
         }
@@ -546,6 +549,7 @@ internal fun DataSourceSelector.executeOnConsole(
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    onInfo: ((String) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // O-145 W7：真实提交总口再次从 JdbcConsole 取实际数据源；必须早于任何文档改写、失效、
@@ -818,7 +822,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                 doRunMethod.invoke(null, console, info)
                                                 // 真实提交完成——此刻才启动结果监听
                                                 LOG.info("[M36] native query SUBMITTED (starting result watch)")
-                                                afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission)
+                                                afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission, onInfo = onInfo)
                                                 } catch (t: Throwable) {
                                                     val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                     // T-FP-02：反射包装层（InvocationTargetException）是普通异常，
@@ -887,7 +891,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                 // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
                 if (submitted) {
-                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission)
+                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission, onInfo = onInfo)
                 }
             }
         }
@@ -1198,6 +1202,8 @@ internal fun DataSourceSelector.prepareInConsole(
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     isPrepareActive: () -> Boolean = { true },
+    /** T8：中性信息回调（工具语句成功完成时面板 showStatus；穿层见 startResultTabRetry 注释）。 */
+    onInfo: ((String) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
@@ -1326,7 +1332,7 @@ internal fun DataSourceSelector.prepareInConsole(
                     prepareAfterEditorResolved(
                         project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
                         onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest, onDialectGate, onSubmission,
-                        isPrepareActive,
+                        isPrepareActive, onInfo,
                     )
                 }.onFailure(handlePrepareFailure)
             }
@@ -1358,7 +1364,7 @@ internal fun DataSourceSelector.prepareInConsole(
                                 prepareAfterEditorResolved(
                                     project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
                                     document, resolved, onErrorRich, wholeScriptExec, prepareOwner,
-                                    dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
+                                    dialectGateRequest, onDialectGate, onSubmission, isPrepareActive, onInfo,
                                 )
                             }.onFailure { e ->
                                 NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
