@@ -126,13 +126,13 @@ jobs:
           name: build-outputs
           # 只传「后续 job 需要且重新生成昂贵」的目录：主 jar / 发行 zip / 编译产物 / 测试类 /
           # plugin.xml 补丁产物 / agent 子项目产物。缺失只会导致下游重新编译（慢），不会导致错误。
-          # T-CiSkipRecompile（2026-11-05 run#7 实测）：**必须带上项目级 .gradle**。原先只传
-          # build/classes 等产物，但 Gradle 的「任务是否 UP-TO-DATE」判据是 .gradle/<ver> 里的
-          # 执行历史与输入指纹，缺了它每个下游 job 都重编译（run#7 test(4) 实测 compileKotlin
-          # 1m45s + compileTestKotlin 1m00s，而真正的测试只跑 3m15s）。同一运行、同一提交、
-          # 同一绝对路径，历史与产物完全对应，恢复后按 UP-TO-DATE 直接跳过编译。
+          # 【2026-11-05 run#8 撤回】曾把项目级 .gradle/ 也塞进工件，想让下游按执行历史判
+          # UP-TO-DATE 跳过编译。实测 test(4) 因此编译期报 ClosedFileSystemException
+          # （读 243 的 database-plugin.jar 时 zip FS 已被关闭）→ "Could not find bundled plugin
+          # com.intellij.database"，一片红。收益（每片省约 2 分钟）与「发布门禁偶发红」的风险
+          # 不对等，撤回；要再试必须先把 transform 缓存恢复口径（transforms-4 vs 9.7.0/transforms）
+          # 与并发时序验干净。
           path: |
-            .gradle/
             build/libs/
             build/distributions/
             build/classes/
@@ -143,9 +143,6 @@ jobs:
             sub-projects/sql-visualizer-agent/build/classes/
             sub-projects/sql-visualizer-agent/build/resources/
           if-no-files-found: error
-          # .gradle 是隐藏目录，upload-artifact v4.4+ 默认 exclude hidden files——不开这个开关
-          # 它会被**静默跳过**（其它路径存在，if-no-files-found 也不会报错），下游照旧重编译。
-          include-hidden-files: true
           compression-level: 1
           retention-days: 7
 
@@ -241,6 +238,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: build-outputs
+
+      - name: 预热 verifier-cli
+        # T-CiSplitMarketplace（2026-11-05 run#8 实证）：与 verify job 同一条坑——verifyMarketplace
+        # 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 verifier-cli jar，而这个 jar 是
+        # verifyPlugin 下载的。本 job 是独立 runner，跨 job 的 gradle 缓存只读且不含它，必须先自己
+        # 预热一次（run#8 缺这一步，直接 "Could not create task ':verifyMarketplace262'"）。
+        # 用单目标预热即可（只为一个 jar），三个目标的 IDE 发行版已在缓存里。
+        run: ./gradlew.bat :verifyPlugin -PverifyIdes=243 -PgifRecord=false --console=plain
 
       - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
         # 三目标逐个上传真实发行包做在线验证（无豁免清单，与 Marketplace 审核同口径）
