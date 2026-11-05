@@ -67,33 +67,61 @@ if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -
     exit $rc2
 }
 
-# ---------- 第三级（2026-11-05 晚 run#23 实证后新增） ----------
-# 第二级已被实测证伪：run#23 的 test(6) 命中该竞态后，`--stop` + 删 transforms/*/transformed/idea*
-# 重跑，**1 分 39 秒后同样报** "Could not find bundled plugin with ID: 'com.intellij.database'"
-# （9 个任务全 up-to-date，说明重解包完成、错误依旧）。这推翻了「坏状态只在 transforms 解包产物里」
-# 的判断：IDE 发行版本身还有一份解包产物在 modules-2（files-2.1/com.jetbrains.intellij.idea/ideaIU/<ver>/…），
-# transforms 只是它的副本——副本重造仍从坏源取字节，所以固定复现。
-# 第三级：连 IDE 发行版解包产物一起删，逼 Gradle 重新下载 + 重新解包（约 1~3 分钟，仅在这条路径上付）。
-Write-Host '::warning::zip-FS 竞态第二级未恢复：清 IDE 发行版解包产物（modules-2）后重试第三级，会重新下载约 1GB'
+# ---------- 第三、四级（2026-11-05 深夜 run#23/#24 两次实测后重写） ----------
+# 已被证伪的三条路（别再走）：
+#   ❌ 第二级（--stop + --max-workers=1 + 删 transforms/*/transformed/idea*）：run#23 的 test(6)、
+#      run#24 的 test(5)/fast(2) 三次命中，全部在重解包完成后 1m32s~1m41s 报同一条错。
+#   ❌ 删 modules-2 的 IDE 发行版产物（原第三级）：run#24 实测，删完 1m32s 又同错，且**没有触发重新下载**
+#      （1GB 的发行版不可能 1 分半下完）——说明坏的不是磁盘字节。
+# 现在的事实（run#24 两条腿的完整栈）：
+#   失败点在**配置期**解析 :compileClasspath 时，plugin-structure 的 JarsResourceResolver 去
+#   `Files.exists(.../transforms/<hash>/transformed/ideaIU-2024.3.7.1-win/plugins/DatabaseTools/lib/database-plugin.jar)`，
+#   而那个 jar 的 ZipFileSystem 已经关掉了；栈里出现 `NioFileInterceptors.intercept_exists`
+#   ——即**配置缓存（CC）的类路径插桩**在中间。所以「重跑同一条命令」不改任何状态：同一份
+#   确定性执行序，第一次踩坑，第一百次还踩坑（这正是三级重跑全灭的原因）。
+# 因此第三、四级改成**换执行路径**（都不再下载任何东西，每条 1~2 分钟）：
+#   第三级：`--no-configuration-cache`（去掉插桩那条路径）
+#   第四级：再加 `-Dorg.gradle.vfs.watch=false`（去掉文件系统监听，排除「监听器关闭 FS」这条因）
+Write-Host '::warning::zip-FS 竞态第二级未恢复：换执行路径重试（关配置缓存）'
 & ./gradlew.bat --stop 2>&1 | Out-Null
 
-$cachesRoot = Join-Path $env:GRADLE_USER_HOME 'caches'
-# ① 整个 transforms 树（不止 idea*：同名 hash 目录里的 metadata 也指向旧的解包结果）
-Get-ChildItem -Path $cachesRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+# 诊断（写进日志，下一轮判因用）：那个 jar 到底在不在、多大
+$cachesRootForDiag = Join-Path $env:GRADLE_USER_HOME 'caches'
+Get-ChildItem -Path $cachesRootForDiag -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     $td = Join-Path $_.FullName 'transforms'
-    if (Test-Path -LiteralPath $td) {
-        Remove-Item -LiteralPath $td -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $td)) { return }
+    Get-ChildItem -Path $td -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $jar = Join-Path $_.FullName 'transformed\ideaIU-2024.3.7.1-win\plugins\DatabaseTools\lib\database-plugin.jar'
+        if (Test-Path -LiteralPath $jar) {
+            $item = Get-Item -LiteralPath $jar
+            Write-Host ("诊断：{0} 存在，{1} 字节，mtime={2}" -f $jar, $item.Length, $item.LastWriteTime)
+        }
     }
 }
-# ② IDE 发行版的解包产物本身（IPGP 把发行版登记成普通 artifact，展开形态落在 files-2.1 下）
-$artifactRoot = Join-Path $cachesRoot 'modules-2/files-2.1'
-foreach ($g in @('com.jetbrains.intellij.idea', 'idea')) {
-    $p = Join-Path $artifactRoot $g
-    if (Test-Path -LiteralPath $p) {
-        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "已清理 IDE 发行版产物：$p"
+
+# 第三级：只换执行路径，不动缓存（保留 IDE 解包产物，删掉上一次可能半截的产物）
+Get-ChildItem -Path $cachesRootForDiag -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    $td = Join-Path $_.FullName 'transforms'
+    if (-not (Test-Path -LiteralPath $td)) { return }
+    Get-ChildItem -Path $td -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $transformed = Join-Path $_.FullName 'transformed'
+        if (-not (Test-Path -LiteralPath $transformed)) { return }
+        Get-ChildItem -Path $transformed -Directory -Filter 'idea*' -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
-Write-Host '第三级重跑（会重新下载 IDE 发行版）'
-& ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
+Write-Host '第三级重跑：--no-configuration-cache'
+& ./gradlew.bat @argList --max-workers=1 --no-configuration-cache 2>&1 | Tee-Object -FilePath $log -Append
+$rc3 = $LASTEXITCODE
+if ($rc3 -eq 0) { exit 0 }
+if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
+    exit $rc3
+}
+
+# 第四级：再关文件系统监听（判「监听器触发 FS 失效」这条因）
+Write-Host '::warning::zip-FS 竞态第三级（关配置缓存）未恢复：再关 VFS 监听重试第四级'
+& ./gradlew.bat --stop 2>&1 | Out-Null
+Write-Host '第四级重跑：--no-configuration-cache -Dorg.gradle.vfs.watch=false'
+& ./gradlew.bat @argList --max-workers=1 --no-configuration-cache '-Dorg.gradle.vfs.watch=false' 2>&1 |
+    Tee-Object -FilePath $log -Append
 exit $LASTEXITCODE
