@@ -226,6 +226,10 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
     // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
     "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
+    // T-CiNightly（2026-11-05）：连通性冒烟从默认 test 桶挪进 DB 集成通道。它要真实 MySQL，
+    // 而分片/默认 test 在 CI 上是排除它的（-PtestShardExcludeClasses），等于长期没人跑；
+    // 挂进 testDatabase 后，夜间那条 DB 腿会自动带上它。纯 JDBC 断言，不需要平台沙盒。
+    "testDbJdbcSmoke" to "cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。

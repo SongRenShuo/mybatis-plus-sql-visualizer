@@ -61,6 +61,10 @@ if [ -z "$DEMO_DIR" ]; then
   exit 3
 fi
 MVN="${MVN:-${MPSV_MVN:-$(command -v mvnd 2>/dev/null || command -v mvn 2>/dev/null || true)}}"
+# T-CiNightly（2026-11-05）：离线开关。默认 1（沿用 -o，本机 ~/.m2 已有依赖时最快）；
+# CI 上首次跑没有 ~/.m2，传 MVN_OFFLINE=0 走联网解析（夜间时间充足，多等几分钟）。
+MVN_OFFLINE="${MVN_OFFLINE:-1}"
+MVN_OFFLINE_FLAG=""; [ "$MVN_OFFLINE" = "1" ] && MVN_OFFLINE_FLAG="-o"
 if [ -z "$MVN" ]; then
   echo "缺少 MVN：请设 MPSV_MVN（见 .local/local.env.example），或把 mvnd / mvn 放进 PATH。" >&2
   exit 3
@@ -132,12 +136,12 @@ fi
 CP_FILE="$DEMO_DIR/target/e2e-cp.txt"
 if [ ! -f "$CP_FILE" ]; then
   echo "[2/6] 生成 demo classpath（$CP_FILE）"
-  ( cd "$DEMO_DIR" && "$MVN" -q -o dependency:build-classpath -Dmdep.outputFile=target/e2e-cp.txt ) || {
-    echo "classpath 生成失败（离线模式；确认 ~/.m2 已有依赖）"; exit 3; }
+  ( cd "$DEMO_DIR" && "$MVN" -q $MVN_OFFLINE_FLAG dependency:build-classpath -Dmdep.outputFile=target/e2e-cp.txt ) || {
+    echo "classpath 生成失败（离线模式时确认 ~/.m2 已有依赖；CI 上可传 MVN_OFFLINE=0）"; exit 3; }
 fi
 if [ ! -d "$DEMO_DIR/target/classes" ]; then
   echo "编译 demo 工程"
-  ( cd "$DEMO_DIR" && "$MVN" -q -o compile ) || { echo "demo 编译失败"; exit 3; }
+  ( cd "$DEMO_DIR" && "$MVN" -q $MVN_OFFLINE_FLAG compile ) || { echo "demo 编译失败"; exit 3; }
 fi
 APP_CP="$(winpath "$DEMO_DIR/target/classes");$(cat "$CP_FILE")"
 

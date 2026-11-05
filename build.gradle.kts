@@ -348,6 +348,13 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
     // 环境覆盖透传（配置期取值，兼容配置缓存）
     providers.gradleProperty("e2eDemoDir").orNull?.let { environment("DEMO_DIR", it) }
     providers.gradleProperty("e2eMvn").orNull?.let { environment("MVN", it) }
+    // T-CiNightly（2026-11-05）：CI 上 e2e 要指向共享测试实例的库，并允许联网解析 Maven 依赖。
+    // demo 是 Spring Boot 应用（`--spring.profiles.active=mysql`），这三个环境变量会被松散绑定
+    // 覆盖 application.yml 里的 datasource；MVN_OFFLINE=0 让 run-e2e.sh 去掉 `-o`（CI 首次没有 ~/.m2）。
+    providers.gradleProperty("e2eDbUrl").orNull?.let { environment("SPRING_DATASOURCE_URL", it) }
+    providers.gradleProperty("e2eDbUser").orNull?.let { environment("SPRING_DATASOURCE_USERNAME", it) }
+    providers.gradleProperty("e2eDbPassword").orNull?.let { environment("SPRING_DATASOURCE_PASSWORD", it) }
+    providers.gradleProperty("e2eMavenOffline").orNull?.let { environment("MVN_OFFLINE", it) }
     // JDK：Gradle daemon 的 PATH 不含交互式 shell 里的本机 JDK8（脚本首跑实测 `javac: command not found`），
     // 故显式把 JDK 交给脚本（脚本会把 $JAVA_HOME/bin 前置进 PATH）。默认取本机 JDK8，不存在则不设
     // （留给调用方 PATH / -Pe2eJavaHome=），脚本侧另有「缺 javac 即硬失败」的检查。
