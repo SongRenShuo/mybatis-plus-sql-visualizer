@@ -228,3 +228,50 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 3. §4.5 附带修（一行级别）。
 4. §4.2 辅修（改动面大，单独券，需先跑还原器既有用例）。
 5. §4.4 二期评估（不承诺本期）。
+
+## 九、实施记录（2026-11-05，分支 `t-cross-channel-dedupe`）
+
+### 9.1 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/main/kotlin/.../log/SqlLogEntryBuffer.kt` | 主修：`crossChannelIndex`（crossKey = `logTimeKey` + `'\u0002'` + `logTimeParamSignature`）、`canFoldAcrossChannels`（两侧通道不同 + 5s 窗）、`purgeExpiredCrossChannelLocked`、`replaceEntryLocked` / `repointCrossChannelLocked`；入队未命中 dedupeKey 时查跨通道索引并复用 `mergeDuplicateEntry` 原位替换；维护面与 `dedupeIndex` 同锁同生命周期（入队 upsert / 淘汰摘键 / 融合重指 / `removeEntry` 单键重算 / `clear` / `rebuildDedupeIndexLocked` / `rebuildDedupeIndexAfterHandoff`，后者同 grace 截断）；`bindErrorToRecent` 原位替换后同步重指两个索引（此前 dedupeIndex 也留陈旧实例） |
+| `src/main/kotlin/.../log/LogSqlModels.kt` | §4.3 诊断文本：`crossChannelUnfoldedDiagText` / `crossChannelMergeDiagText`（只有指纹前缀、通道与升级面，沿用 `provenanceDiagText` 红线） |
+| `src/main/kotlin/.../log/SqlLogConsoleBridge.kt` | §4.5：`flushSettledEntries` 入队前补 `captureProvenance = CONSOLE_BRIDGE`，循环内复查 `SqlCaptureGate.bridgeSuppressed()`（被丢弃条目计数留痕） |
+| `src/test/kotlin/.../log/CrossChannelDedupeTest.kt` | 新增 12 例，全部走 `processConsoleLine` → `buffer.addEntry(通道=CONSOLE_BRIDGE)` + `AgentEventAdapter.toEntry` → 同一 buffer |
+
+### 9.2 与计划的差异
+
+1. **诊断行拆成两条**：`跨通道同源未折叠` 只在「同 crossKey + 异 dedupeKey + 同窗内、但折叠条件不满足（同通道已知标记）」时输出；折叠成功另打 `跨通道等价键融合`。这样 §6.4「`跨通道同源未折叠` 计数为 0」仍是可判定的验收口径——若把折叠成功也打成「未折叠」，该计数永远不为 0。两条共用 `logAttributionThrottled` 限频。
+2. **折叠判据加了时间窗**（计划 §4.3 字面判据只有「同 crossKey + 异 dedupeKey」）：不加窗时，同一模板同一参数在 60s 外的两次**独立执行**（同键已被窗口去重放行、跨通道渲染又分叉）会被误报为「未折叠」。窗口取 `CROSS_CHANNEL_WINDOW_MS = 5000`。
+3. **淘汰路径不反扫跨通道索引**：索引存该键**最后入队**实例、淘汰取**最旧**，故「索引命中被淘汰者」即等价于「队内已无同键余条」，直接摘键（唯一键稳态零额外 O(n)）；`removeEntry` 可能拿走最新实例，保留反扫。
+4. 计划 §6.1 表格第 5 行（全限定类型名）与第 4 行（参数个数不等）**未能按「修复后 1 条」验收**，原因见 9.4。
+
+### 9.3 测试读数
+
+| 任务 | 用例类 | 读数 |
+|---|---|---|
+| `testFast --tests ...CrossChannelDedupeTest` | CrossChannelDedupeTest | `12 tests completed`，XML 汇总 tests=12 / skipped=0 / failures=0 / errors=0 |
+| `testFast`（§6.3 定向回归，9 类） | SqlLogEntryBufferTest(59) / SqlLogEntryBufferDedupeIndexTest(18) / AgentLogTimeParityTest(14) / AgentEventAdapterTest(13) / CaptureActivityFallbackTest(8) / SqlCaptureGateSniffTest(4) / LogSqlModelsTest(12) / SqlErrorBindBufferTest(9) / O147HistoryUpgradeTest(26) | 合计 163 例，0 失败（`BUILD SUCCESSFUL in 1m 43s`） |
+| `test --tests ...`（平台桶，`testFast` 按「源码含 com.intellij 即排除」不收） | ConsoleSettleFlushTest(5) / SqlLogPanelFilterTest(36) | 合计 41 例，0 失败（`BUILD SUCCESSFUL in 1m 25s`） |
+
+### 9.4 反向验证（§6.2）两次读数
+
+临时把 `canFoldAcrossChannels` 首行改为 `if (true) return false`（等价摘除跨通道折叠；直接注释 `if` 条件会丢 `crossHit` 的智能转换导致编译失败，故改在判据函数上摘）：
+
+- **红**：`12 tests completed, 8 failed` —— 恰为 8 个依赖兜底的用例（布尔 / 日期 / LocalDateTime / 现场 12 参数 / 块注释 `?` / agent 侧点号类型 / 控制台先到 / agent 先到）；4 个非兜底用例（参数个数不等、点号类型名、不同 SQL、同通道同 SQL）保持绿。
+- **绿**：恢复后 `BUILD SUCCESSFUL`，XML 汇总 tests=12 / failures=0。
+
+### 9.5 计划前提被证伪（2 条）
+
+1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。该形态要折叠必须先做 §4.2（还原器口径收敛 + 参数序号 1..N 连续性校验），本期如实钉成「已知残余」用例（断言仍 2 行）。
+2. **§六 表格第 5 行「全限定类型名」的原始形态不可达**。`MyBatisLogParser.parseParams` 的类型分组是 `[A-Za-z_$][\w$]*(?:\[\])*`（**不含点号**），`42(java.lang.Long)` 匹配不上带类型分支 → 回落逗号粗分 → `value="42(java.lang.Long)"`、`type=null`，签名因此与 agent 侧不同；且 agent 侧 `ParamCapture.simpleTypeName` 本来就会剥包名。真实 MyBatis 日志打印简单类名，故此形态不构成现场风险。用例改为两例：一例守「agent 侧带包名时兜底仍折」（协议层容错），一例钉住解析器边界（断言仍 2 行）。
+
+另：复现代理实测（2026-11-05）确认现场是 12 参数 INSERT，**只有第 10（setBoolean）、第 11（setTimestamp）个参数分叉**，与 @Async / SQL Server 方言无关；`LocalDateTime` 还多一处差异（控制台 `TIMESTAMP '…'` / agent `'…T…'` 的 ISO `T` 未归一）。已按此补「现场 12 参数」与「LocalDateTime」两条用例。
+
+### 9.6 遗留
+
+- §4.2（参数渲染口径收敛，含参数序号连续性校验）——第 4/5 行两类残余的正解，单独成券。
+- §4.4（控制台 DML 耗时估算）——二期，未动。
+- 真机复验（§6.4）未做：需用户应用 + 20 次 `saveAsync` 插入，且要看 `idea.log` 里 `跨通道同源未折叠` 计数。
+

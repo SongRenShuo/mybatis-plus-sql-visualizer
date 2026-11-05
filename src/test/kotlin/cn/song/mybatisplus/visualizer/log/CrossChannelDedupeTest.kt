@@ -283,17 +283,18 @@ class CrossChannelDedupeTest {
 
     @Test
     fun `控制台先到_agent后到_折叠为一行且保留首条行号与捕获时间`() {
-        val sql = "INSERT INTO sys_operation_log (user_name, title) VALUES (?, ?)"
+        // 参数含布尔位（控制台 true / agent 'true'）→ dedupeKey 分叉，必须由跨通道兜底折
+        val sql = "INSERT INTO sys_operation_log (user_name, status) VALUES (?, ?)"
         val buffer = SqlLogEntryBuffer(maxEntries = 20)
         val console = addConsole(
             buffer,
             "==>  Preparing: $sql",
-            "==> Parameters: admin(String), 用户管理(String)",
+            "==> Parameters: admin(String), true(Boolean)",
         )
         val consoleRow = buffer.snapshot().single()
         assertEquals("控制台条目先入队占行号 #1", 1L, consoleRow.sequenceNumber)
         assertFalse("跨通道折叠不算新捕获（onEntryAccepted 语义）",
-            buffer.addEntry(agentEntry(sql, listOf(Triple(1, "admin", "String"), Triple(2, "用户管理", "String")))))
+            buffer.addEntry(agentEntry(sql, listOf(Triple(1, "admin", "String"), Triple(2, "true", "Boolean")))))
         val merged = buffer.snapshot().single()
         assertEquals("行号稳定（列表不跳行）", 1L, merged.sequenceNumber)
         assertEquals("捕获时间保留首条", consoleRow.timestamp, merged.timestamp)
