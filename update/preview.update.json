@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.4",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.4/mybatis-plus-sql-visualizer-2026.11.4.zip",
-  "changeNotes": "增强捕获修好 Oracle，MyBatis 业务 SQL 不再只剩连接校验那一条，失败语句也不再重复上报\n打开预览不再自动弹出数据源选择列表，没有唯一目标时保持未绑定，点「执行 SQL」时再选源\n改了 IDEA 方言并刷新预览后，底部方言提示不再按旧方言报冲突，与顶部状态和实际渲染同源\n修掉三处界面线程上的重活，预览与执行不再卡顿，IDE 日志也不再刷告警\n没有匹配方言的数据源时，直接点名该给哪个源启用方言，并给出「打开数据源属性」入口\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-04",
+  "version": "2026.11.6-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.6-beta.1/mybatis-plus-sql-visualizer-2026.11.6-beta.1.zip",
+  "changeNotes": "自研框架 pages 页面数据源支持 HQL，自动识别并转换为可执行 SQL——实体名映射表名、属性路径映射列名、参数自动提取，面板新增「原文」页签，转换失败自动回退原文\nMapper 接口与 XML 语句双向跳转接入 IDEA 原生快捷键，Ctrl+B 跳转、Ctrl+Alt+Home 打开关联符号，不再只依赖鼠标点左侧图标\n同一次执行的 SQL 不再在日志列表留两条，控制台与增强捕获通道的重复条目自动折叠为一条并融合两边的耗时、行数与跳转信息\n工具语句/更新语句执行完成后不再误报超时提示，改为明确告知已完成\n日志列表新增可选项，在来源位置后显示「类名#方法名」，默认关闭\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-06",
   "sinceBuild": "243"
 }
