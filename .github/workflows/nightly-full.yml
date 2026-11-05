@@ -1,10 +1,12 @@
 # 夜间全量（自动触发）——每晚跑一次「推送轮次不覆盖」的那批：全量测试 + 外部签名护栏 +
-# 性能尾道 + agent 子项目测试 +（可选）真机方言验证 / DB 集成。
+# 性能尾道 + agent 子项目测试 + 兼容验证（verifyPlugin）+ Marketplace 三档点验 +
+#（可选）真机方言验证 / DB 集成 / e2e。
 #
 # 与另两个 workflow 的分工：
-#   - push-test.yml     每次推送 → 5 片全量测试（约 11 分钟，快反馈）
+#   - push-test.yml     每次推送 → 6 片全量测试 + 2 条纯逻辑快桶腿（约 11~13 分钟，快反馈）
 #   - build-plugin.yml  发版前手动 → build + verify×3 + marketplace×3 + verifyplugin + 测试（13~15 分钟）
-#   - nightly-full.yml  每晚 → 上面两条都不跑的「慢/重/需外部实例」部分
+#   - nightly-full.yml  每晚 → 上面两条都不跑的「慢/重/需外部实例」部分；2026-11-05 晚起把
+#                       verifyplugin 与 marketplace 也纳进来（原先只有手动门禁才有这两面读数）
 #
 # **只在前 24 小时有代码提交时跑**：changes job 用 `git log --since` 扫代码路径（src / buildSrc /
 # sub-projects / gradle 脚本），全无则其余 job 全部 skip——纯文档日不烧 runner。
@@ -68,15 +70,189 @@ jobs:
             "code=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
 
-  # 全量测试五片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
+  # T-CiNightlyCompat（2026-11-05 晚，用户要求）：夜里补上「兼容/市场」两面——原先夜间只跑测试类
+  # 腿，一条 verifyPlugin 与三条 marketplace 都要靠人手动 dispatch 手动门禁才会有读数。现在夜间
+  # 也有：build（只打包）→ verifyplugin（离线兼容验证）→ marketplace（三档在线点验）。
+  #
+  # 为什么必须先 build：verifyPlugin / verifyMarketplace 要吃「已打包的那份字节」（发行包 + 编译产物），
+  # 各自重编译会让「验证过的字节」与「要发的字节」不是同一份；工件名沿用 build-plugin.yml 的
+  # build-outputs，两条 workflow 的消费口径完全一致（改这里同步改那边）。
+  # 墙钟代价：三条腿与测试/真机腿并行，夜间关键路径仍是方言腿（27.8 分钟），故不拉长整轮。
+  build:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        # 与手动门禁的 build 同口径：写权限只给这一条腿，其余腿一律 cache-read-only
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 打包插件
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":buildPlugin -PgifRecord=false --console=plain"
+
+      - name: 上传编译产物（供 verifyplugin / marketplace 复用）
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-outputs
+          path: |
+            build/libs/
+            build/distributions/
+            build/classes/
+            build/resources/
+            build/tmp/patchPluginXml/
+            build/generated/
+            sub-projects/sql-visualizer-agent/build/libs/
+            sub-projects/sql-visualizer-agent/build/classes/
+            sub-projects/sql-visualizer-agent/build/resources/
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 3
+
+  # IPGP 原生兼容验证（离线 + 豁免清单）。-x buildPlugin：发行包取自 build 的工件，不重打包。
+  verifyplugin:
+    needs: build
+    # 必须判 build 的 result 而不是 !cancelled()：changes=false 那天 build 是 skipped，
+    # 而 skipped 的依赖对 !cancelled() 是「继续跑」——它会去下载并不存在的 build-outputs 工件然后红。
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v8
+        with:
+          name: build-outputs
+
+      - name: 官方兼容验证（verifyPlugin）
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":verifyPlugin -x buildPlugin -PgifRecord=false --console=plain"
+
+  # Marketplace 三档在线点验（243/253/263 各一条腿，逐份 verdict 判定）。
+  # verifier-cli 不再依赖 build 导出：按 dev-support/verifier-cli-version.txt 钉的版本从
+  # Maven Central 播种（与手动门禁 marketplace job 逐字同口径，改一处要同步另一处）。
+  marketplace:
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ['243', '253', '263']
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v8
+        with:
+          name: build-outputs
+
+      - name: 播种 verifier-cli
+        run: |
+          $v = (Get-Content -LiteralPath 'dev-support/verifier-cli-version.txt' -Raw).Trim()
+          if (-not $v) { throw 'dev-support/verifier-cli-version.txt 为空' }
+          $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $jar = Join-Path $dst "verifier-cli-$v-all.jar"
+          $url = "https://repo1.maven.org/maven2/org/jetbrains/intellij/plugins/verifier-cli/$v/verifier-cli-$v-all.jar"
+          Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
+          Write-Host "verifier-cli 已播种：$jar（$v）"
+
+      - name: Marketplace 门禁 ${{ matrix.tag }}（在线 + 无豁免 + 逐份 verdict 判定）
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain"
+
+  # 全量测试六片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
   # 注：分片只装平台类是 T-JUnit5Eval 方案 2 之后的形态，纯逻辑类在同目录下方 `fast` job 里跑。
+  # T-CiShard6（2026-11-05 晚）：5 → 6 片（-PtestShardCount=6 与 matrix 必须同步改，只改一处会
+  # 出现「testShard6 不存在」或「第 6 片装了空清单」）。本机默认仍是 5 片，不受影响。
   tests:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3', '4', '5']
+        shard: ['1', '2', '3', '4', '5', '6']
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -107,7 +283,7 @@ jobs:
         timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
+          ":testShard${{ matrix.shard }} -PtestShardCount=6 -PgifRecord=false --console=plain
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
           -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
       - name: 失败诊断输出（断言消息打到任务日志）
@@ -125,9 +301,14 @@ jobs:
 
   # T-JUnit5Eval 方案 2（2026-11-05）：纯逻辑快桶腿——分片只装平台类，零 com.intellij 引用的
   # 374 类 / 4393 例由本 job（testFast）承载。与 tests matrix 并列，漏了就整桶不跑。
+  # T-CiFastSplit（2026-11-05 晚）：再拆两片（与 push-test 同口径），每片约 300s。
   fast:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: ['1', '2']
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -154,11 +335,12 @@ jobs:
           cache-read-only: true
       - name: 准备测试 demo
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
-      - name: 纯逻辑快桶
+      - name: 纯逻辑快桶 ${{ matrix.slice }}/2
         timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":testFast -PgifRecord=false --console=plain
+          -PfastBucketSliceCount=2 -PfastBucketSlice=${{ matrix.slice }}
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
       - name: 失败诊断输出（断言消息打到任务日志）
         if: failure()
