@@ -61,6 +61,28 @@ object MybatisXmlTargets {
     }
 
     /**
+     * T-MapperNavShortcut：按 namespace + 语句 id 定位**语句标签本身**（返回全部同名标签，
+     * 含 `databaseId` 多方言变体）。
+     *
+     * 与 [findIdAttributeInFile] 的分工：那条服务 XML 内部引用（返回 `id` 属性值元素，Ctrl+B
+     * 落在值上）；这条服务 Java → XML 导航（返回标签，落点由调用方决定）。
+     *
+     * 文件定位复用 [findMapperFileByNamespace]（单槽 namespace memo + 清单 TTL 缓存），
+     * 不新建缓存、不引监听器。语句标签限定 `<mapper>` 直接子级（`subTags`），与
+     * `log/MapperXmlLocator` 同口径。
+     */
+    fun resolveStatementTags(project: Project?, namespace: String?, id: String): List<XmlTag> {
+        val name = id.trim()
+        if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return emptyList()
+        val file = findMapperFileByNamespace(project, namespace) ?: return emptyList()
+        val root = file.rootTag ?: return emptyList()
+        return root.subTags.filter { it.name in STATEMENT_TAGS && it.getAttributeValue("id") == name }
+    }
+
+    /** MyBatis 四类语句标签（`<mapper>` 直接子级；与 `XmlSqlGutterLineMarkerProvider` 同集合）。 */
+    internal val STATEMENT_TAGS: Set<String> = setOf("select", "insert", "update", "delete")
+
+    /**
      * 解析 `ns.id` / 同文件 `id` 形态的标识引用 → 目标 `id` 属性值元素。
      *
      * @param contextFile 引用所在文件（无 `ns.` 前缀时在同文件里找）

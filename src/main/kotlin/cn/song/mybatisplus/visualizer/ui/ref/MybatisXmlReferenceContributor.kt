@@ -64,7 +64,7 @@ object MybatisXmlAttributeReferenceProvider : PsiReferenceProvider() {
                 XmlTagIdReference(value, "parameterMap")
             attributeName == "namespace" && tagName == "mapper" ->
                 JavaClassReference(value)
-            attributeName == "id" && tagName in STATEMENT_TAGS ->
+            attributeName == "id" && tagName in MybatisXmlTargets.STATEMENT_TAGS ->
                 MapperMethodReference(value)
             attributeName in CLASS_ATTRIBUTES ->
                 JavaClassReference(value)
@@ -77,7 +77,6 @@ object MybatisXmlAttributeReferenceProvider : PsiReferenceProvider() {
         return if (reference == null) arrayOf() else arrayOf(reference)
     }
 
-    private val STATEMENT_TAGS = setOf("select", "insert", "update", "delete")
     private val CLASS_ATTRIBUTES = setOf(
         "resultType", "parameterType", "type", "ofType", "javaType", "typeHandler",
     )
