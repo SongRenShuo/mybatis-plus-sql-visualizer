@@ -415,6 +415,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
             })
+            // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+            addRow(p, g, "", logShowMethodCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.showMethod")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.showMethod.tip")
+            })
             // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
             addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail")

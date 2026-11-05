@@ -255,12 +255,16 @@ data class LogSqlEntry(
      */
     var cachedHeaderCore: List<SqlTextFragment>? = null
 
-    /** 来源段缓存（`[文件.java:行号]`；无源码位置为空列表），与 [cachedHeaderCore] 同键生命周期。 */
+    /**
+     * 来源段缓存（`[文件.java:行号]`，T-LogMethodName 开启时再跟一段 `[类名#方法名]`；
+     * 无源码位置为空列表），与 [cachedHeaderCore] 同键生命周期。
+     */
     var cachedHeaderSource: List<SqlTextFragment>? = null
 
     /**
      * 缓存键（[HeaderStaticCacheKey]）：showDuration+时间戳设置+角标细节+
-     * 慢查询阈值——键含设置值，任一设置变更自动失效重算（显示格式严格跟随设置，免失效钩子）。
+     * 慢查询阈值+来源后方法名开关——键含设置值，任一设置变更自动失效重算
+     * （显示格式严格跟随设置，免失效钩子）。
      */
     var cachedHeaderKey: HeaderStaticCacheKey? = null
 

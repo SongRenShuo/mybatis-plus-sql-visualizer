@@ -213,9 +213,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R90：独立默认关闭的原始计划保留授权 +1 后为 45，不与结构化渲染共用；
             // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
             // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47。
+            // T-LogMethodName：来源位置后显示「类名#方法名」开关（logShowMethodCheck）+1 后为 48。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 47", 47, texts.size)
+            assertEquals("复选框总数应为 48", 48, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -289,6 +290,24 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertFalse("清空后应为出厂默认 false", settings.state.dataSourceBadgeDetail)
             settings.loadState(saved)                         // 模拟重启重载
             assertTrue("往返后显式开启值应保持 true", settings.state.dataSourceBadgeDetail)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testStateRoundTripKeepsShowMethodInLogList() {
+        // T-LogMethodName：来源后方法名开关随 State 持久化往返保留（O-58 / O-133 同款契约）。
+        // 默认关＝列表形态与历史版本逐字节一致；显式开启的值必须跨重启保留。
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            assertFalse("出厂默认应为关", PluginSettings.State().showMethodInLogList)
+            settings.state.showMethodInLogList = true
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（false）
+            assertFalse("清空后应为出厂默认 false", settings.state.showMethodInLogList)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertTrue("往返后显式开启值应保持 true", settings.state.showMethodInLogList)
         } finally {
             settings.loadState(snapshot)
         }
