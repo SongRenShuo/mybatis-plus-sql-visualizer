@@ -67,22 +67,23 @@ if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -
     exit $rc2
 }
 
-# ---------- 第三、四级（2026-11-05 深夜 run#23/#24 两次实测后重写） ----------
-# 已被证伪的三条路（别再走）：
-#   ❌ 第二级（--stop + --max-workers=1 + 删 transforms/*/transformed/idea*）：run#23 的 test(6)、
-#      run#24 的 test(5)/fast(2) 三次命中，全部在重解包完成后 1m32s~1m41s 报同一条错。
-#   ❌ 删 modules-2 的 IDE 发行版产物（原第三级）：run#24 实测，删完 1m32s 又同错，且**没有触发重新下载**
-#      （1GB 的发行版不可能 1 分半下完）——说明坏的不是磁盘字节。
-# 现在的事实（run#24 两条腿的完整栈）：
-#   失败点在**配置期**解析 :compileClasspath 时，plugin-structure 的 JarsResourceResolver 去
-#   `Files.exists(.../transforms/<hash>/transformed/ideaIU-2024.3.7.1-win/plugins/DatabaseTools/lib/database-plugin.jar)`，
-#   而那个 jar 的 ZipFileSystem 已经关掉了；栈里出现 `NioFileInterceptors.intercept_exists`
-#   ——即**配置缓存（CC）的类路径插桩**在中间。所以「重跑同一条命令」不改任何状态：同一份
-#   确定性执行序，第一次踩坑，第一百次还踩坑（这正是三级重跑全灭的原因）。
-# 因此第三、四级改成**换执行路径**（都不再下载任何东西，每条 1~2 分钟）：
-#   第三级：`--no-configuration-cache`（去掉插桩那条路径）
-#   第四级：再加 `-Dorg.gradle.vfs.watch=false`（去掉文件系统监听，排除「监听器关闭 FS」这条因）
-Write-Host '::warning::zip-FS 竞态第二级未恢复：换执行路径重试（关配置缓存）'
+# ---------- 第三、四级（2026-11-05 深夜 run#23/#24/#25 三次实测后重写） ----------
+# 已被**实测**证伪的五条（别再走）：
+#   ❌ 第二级 --stop + --max-workers=1 + 删 transforms/*/transformed/idea*：run#23/#24/#25 五次命中，
+#      全部在重解包完成后 54s~1m41s 报同一条错。
+#   ❌ 删 modules-2 的 IDE 发行版产物：run#24，1m32s 同错且没有触发重新下载。
+#   ❌ --no-configuration-cache（run#25 第三级）：54s 同错。
+#   ❌ 再加 -Dorg.gradle.vfs.watch=false（run#25 第四级）：16s 同错。
+# run#25 的诊断还排除了「文件坏了」：那个 jar 存在、147,727,903 字节，与本机同一份字节数完全一致。
+#
+# 现在最像的因：IPGP 把 IDE 的**布局索引**（product-info / bundled plugin 描述符路径）缓存在
+# **项目目录** `.intellijPlatform/layoutIndex/*.json` 与 `extracted-plugins/`，不是 GRADLE_USER_HOME。
+# 前面的每一级都在清 GRADLE_USER_HOME（transforms / modules-2），而 CI 的 workspace 是复用的
+# （同一 job 内四次重跑共享同一份 `.intellijPlatform`），所以清错地方了。
+# 第三、四级改为清**项目侧**缓存；每条 1~4 分钟：
+#   三级：--stop + 删 transforms/*/transformed/idea* + 删 .intellijPlatform/layoutIndex 与 extracted-plugins
+#   四级：再退到「干净工作树」——git clean -xdf（保留 .local）后重跑，等价于换一份 workspace
+Write-Host '::warning::zip-FS 竞态第二级未恢复：清项目侧 IPGP 缓存（.intellijPlatform/layoutIndex）后重试'
 & ./gradlew.bat --stop 2>&1 | Out-Null
 
 # 诊断（写进日志，下一轮判因用）：那个 jar 到底在不在、多大
@@ -99,7 +100,14 @@ Get-ChildItem -Path $cachesRootForDiag -Directory -ErrorAction SilentlyContinue 
     }
 }
 
-# 第三级：只换执行路径，不动缓存（保留 IDE 解包产物，删掉上一次可能半截的产物）
+# 第三级：清项目侧 IPGP 缓存 + 重解包 IDE
+foreach ($rel in @('.intellijPlatform\layoutIndex', '.intellijPlatform\extracted-plugins')) {
+    $pth = Join-Path (Get-Location) $rel
+    if (Test-Path -LiteralPath $pth) {
+        Remove-Item -LiteralPath $pth -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "已清理项目侧缓存：$pth"
+    }
+}
 Get-ChildItem -Path $cachesRootForDiag -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     $td = Join-Path $_.FullName 'transforms'
     if (-not (Test-Path -LiteralPath $td)) { return }
@@ -110,18 +118,23 @@ Get-ChildItem -Path $cachesRootForDiag -Directory -ErrorAction SilentlyContinue 
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
-Write-Host '第三级重跑：--no-configuration-cache'
-& ./gradlew.bat @argList --max-workers=1 --no-configuration-cache 2>&1 | Tee-Object -FilePath $log -Append
+Write-Host '第三级重跑：清项目侧 IPGP 缓存后重来'
+& ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
 $rc3 = $LASTEXITCODE
 if ($rc3 -eq 0) { exit 0 }
 if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
     exit $rc3
 }
 
-# 第四级：再关文件系统监听（判「监听器触发 FS 失效」这条因）
-Write-Host '::warning::zip-FS 竞态第三级（关配置缓存）未恢复：再关 VFS 监听重试第四级'
+# 第四级：干净工作树（保留 .local——方言矩阵/凭据在那里）。等价于给这条腿换一份 workspace。
+# **只在 CI 上做**：本机跑这条脚本时工作树可能有未提交改动，git clean -xdf 会直接抹掉别人的活。
+if (-not $env:GITHUB_ACTIONS) {
+    Write-Host '本机执行：跳过第四级（git clean -xdf 会抹掉工作树，仅 CI 上允许）'
+    exit $rc3
+}
+Write-Host '::warning::zip-FS 竞态第三级未恢复：退到干净工作树（git clean -xdf，保留 .local）重试第四级'
 & ./gradlew.bat --stop 2>&1 | Out-Null
-Write-Host '第四级重跑：--no-configuration-cache -Dorg.gradle.vfs.watch=false'
-& ./gradlew.bat @argList --max-workers=1 --no-configuration-cache '-Dorg.gradle.vfs.watch=false' 2>&1 |
-    Tee-Object -FilePath $log -Append
+git clean -xdf -e .local 2>&1 | Select-Object -Last 5
+Write-Host '第四级重跑：干净工作树'
+& ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
 exit $LASTEXITCODE
