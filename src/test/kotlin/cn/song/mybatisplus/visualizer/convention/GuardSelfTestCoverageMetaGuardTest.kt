@@ -1280,6 +1280,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
                     "`自证_注释里的调用不算`。",
             ),
+            // ---- T-Junit4Migration P2.5：JUnit3 语义守卫（2026-11-05） ----
+            GuardEntry(
+                "convention/Junit3SemanticsGuardTest.kt",
+                listOf(
+                    DecisionFn("junit3Violations", FnKind.VIOLATIONS),
+                    DecisionFn("annotationViolations", FnKind.VIOLATIONS),
+                    DecisionFn("assumeViolations", FnKind.VIOLATIONS),
+                    DecisionFn("namingViolations", FnKind.VIOLATIONS),
+                ),
+                "JUnit3 语义守卫（T-Junit4Migration P2.5）：扫 src/test/kotlin 里继承 JUnit3 基类" +
+                    "（含中转基类，简单类名固定点传播）的类，断言 ① 无 @Test/@Before/@After/@Rule/@RunWith/@Ignore" +
+                    "（JUnit38ClassRunner 只按 test* 方法名收集，注解无效）；② 无 Assume.assume* 调用/import" +
+                    "（AssumptionViolatedException 被记为 failed，P1 反向实验实测 failures=1）；" +
+                    "③ 反引号方法名以 test 开头（否则永不执行，P0 实测 tests= 23→28）。" +
+                    "四条规则各自有合成样本自证（违规必红 + 合规必绿），另有中转基类与字符串字面量两个边界用例。",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
