@@ -137,9 +137,15 @@ class ExecBindFallbackTest {
         val direct = results.indexOf("ExecBindFallback.directRunner(")
         val hint = results.indexOf("EmptyRunnersHint.message(project, registered")
         if (emptyBranch < 0 || pick < 0 || direct < 0 || hint < 0) return false
-        if (results.indexOf("ExecBindFallback.pickTarget(", pick + 1) >= 0) return false
+        // S1-7 合并订正（2026-11-06）：UI-003 预览静默选源（0a2cd8b3）是**第二处合法接线**——
+        // 「学习绑定 > last-used > 单源」同一口径复用于预览准备，不是旁路。守卫收严为：
+        // 恰好两处 pickTarget（S2-12 空分支回落 + UI-003 else 分支静默选源），第三处即红；
+        // directRunner 仍唯一；两处 pick 都必须在空分支锚点之后（顺序不回跳）。
+        val pick2 = results.indexOf("ExecBindFallback.pickTarget(", pick + 1)
+        if (pick2 < 0) return false
+        if (results.indexOf("ExecBindFallback.pickTarget(", pick2 + 1) >= 0) return false
         if (results.indexOf("ExecBindFallback.directRunner(", direct + 1) >= 0) return false
-        return emptyBranch < pick && pick < direct && direct < hint
+        return emptyBranch < pick && pick < direct && direct < hint && hint < pick2
     }
 
     @Test

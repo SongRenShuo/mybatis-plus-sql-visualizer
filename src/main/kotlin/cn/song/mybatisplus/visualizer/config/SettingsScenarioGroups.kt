@@ -69,6 +69,8 @@ object SettingsScenarioGroups {
             "jdbcSqlPreviewEnabled",
             // SQL 列表/日志条目的可读性元信息
             "logFormatSql", "logTimestampEnabled", "showDurationInLogList", "dataSourceBadgeDetail",
+            // T-LogMethodName（S1-7 并入 master）：来源位置后显示「类名#方法名」开关
+            "showMethodInLogList",
             // 看之前的保护：展示层脱敏（含旧布尔迁移源）
             "displayMaskEnabled",
             // 引导与日常维护

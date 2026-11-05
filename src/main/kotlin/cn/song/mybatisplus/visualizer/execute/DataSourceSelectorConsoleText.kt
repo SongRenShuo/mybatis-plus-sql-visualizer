@@ -272,6 +272,26 @@ import javax.swing.Icon
         return CONSOLE_STATUS_LINES.any { n.contains(it) } || CONSOLE_STATUS_WORDS.containsMatchIn(n)
     }
 
+    /**
+     * T8（T-TestGapSpeed，master `3c55f11f` 并入）：完成证据检测——Output 里的**完成态**回显
+     * （`completed in` / `query ok` / `affected` / `fetched` / `took ` / `elapsed`）。
+     * 判据取 [CONSOLE_STATUS_LINES] / [CONSOLE_STATUS_WORDS] 的**完成语义子集**：进度词
+     * （`executing` / `fetching` / `connected`）不算完成——长查询挂死不误报（宁少勿错），
+     * 漏报退化=既有超时提示。配套中性回调穿层见 [onInfo] 参数链（SqlExecutor 起 11 处签名）。
+     */
+    internal fun DataSourceSelector.hasConsoleCompletionEvidence(console: Any?): Boolean {
+        val text = newConsoleText(console) ?: return false
+        return text.lines().any { line ->
+            val n = stripTimestamp(line.trim()).lowercase()
+            COMPLETION_EVIDENCE_LINES.any { n.contains(it) } || CONSOLE_STATUS_WORDS.containsMatchIn(n)
+        }
+    }
+
+    /** T8：完成语义子集（对照 [CONSOLE_STATUS_LINES]，刻意不含进度词）。 */
+    private val COMPLETION_EVIDENCE_LINES = listOf(
+        "completed in", "query ok", "affected", "fetched", "took ", "elapsed",
+    )
+
     /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
     internal fun DataSourceSelector.isSqlLine(line: String): Boolean {
         val lower = line.trim().lowercase()
