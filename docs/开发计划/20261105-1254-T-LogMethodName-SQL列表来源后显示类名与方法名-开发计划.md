@@ -1,6 +1,7 @@
 # T-LogMethodName：SQL 列表来源位置后显示「类名#方法名」（2026-11-05）
 
 - 立项：2026-11-05 12:54
+> 状态：**已实施并合 master**（`0f9e199c`，默认关；复选框计数 47→48、缓存键加 methodInSource 维度、搜索索引同批）
 - 目标分支：`master`（立项时 tip `6491b4b4`；建树时已前进到 `26604b7d`，本册分支自后者切出）
 - 实施分支：`t-log-method-name`；工作树 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-lmn`
 - 需求原文：插件 SQL 日志新增一个配置，默认关闭；打开后在 SQL 列表显示时方法名跟到类名后面，参考 IDEA 原生显示格式，`#` 后面是方法名

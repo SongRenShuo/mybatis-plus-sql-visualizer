@@ -1,6 +1,7 @@
 # T-MapperNavShortcut：Mapper 接口与 XML 语句跳转接入 IDEA 原生快捷键（2026-11-05）
 
 - 立项：2026-11-05 14:04
+> 状态：**已实施并合 master**（`f299417b`——Mapper 双向跳转接入原生 Ctrl+B / Ctrl+Alt+Home，实施记录见本册 §十）
 - 目标分支：`master`（立项时 tip `8bf489ff`）
 - 建议实施分支：`t-mapper-nav-shortcut`
 - 需求原文：用户反馈「mapper 和 xml 跳转不支持快捷键，正常应该跟着 IDEA 原生的快捷键支持跳转」

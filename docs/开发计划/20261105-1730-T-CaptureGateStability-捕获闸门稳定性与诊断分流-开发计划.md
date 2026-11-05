@@ -1,6 +1,7 @@
 # T-CaptureGateStability：捕获闸门稳定性与诊断分流（2026-11-05）
 
 - 立项：2026-11-05 17:30
+> 状态：**主修复已验收并合 master**（闸门抖动/活性回落/折叠诊断 `5d1d2f79`；与去重开关解耦 `00145199`；P3 限频单测收口；真机正向撞车待自然出现时复核）
 - 目标分支：`master`（验收基线 `00145199`，验收工作树 `mpsv-acc`）
 - 来源：GUI 沙盒验收（demo `mybatis-plus-join-demo`，MySQL 3306，`/mpj/user/joinList` 连打 4 次）
 

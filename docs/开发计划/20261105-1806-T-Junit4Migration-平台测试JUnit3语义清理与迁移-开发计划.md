@@ -1,6 +1,7 @@
 # T-Junit4Migration：平台测试的 JUnit3 语义清理与 JUnit4 迁移
 
 - 立项：2026-11-05 18:06
+> 状态：**P0/P1/P2 已实施合 master**（313 条无效注解清理 `3a07ee7a`、DB 集成 SKIP 口径 `0aa0542d`、13 个从未执行用例复活 `9dc0c263`、`Junit3SemanticsGuardTest` `99f4c0bb`；P3 全量迁移不排期；遗留＝分片复读与 DB 集成真库路径）
 - 目标分支：`master`（tip `e1053a07` 附近）
 - 触发：CI 夜间全量接上后，修 DB 集成用例时发现「JUnit3 的 `BasePlatformTestCase` 不认 `Assume`」，追查后扫出全仓范围的问题
 - 性质：测试基建重构，不改产品行为
