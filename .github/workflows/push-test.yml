@@ -6,10 +6,12 @@
 #      加 event_name 分流，改动面大且容易出错。
 #   ② 手动门禁（gate / release / publish）的语义与并发纪律保持不变，发行链零风险。
 #
-# 定位：**推送即跑全量测试**（5 片并行，不含兼容验证三条腿）。
+# 定位：**推送即跑全量测试**（5 片平台类 + 1 条纯逻辑快桶腿，不含兼容验证三条腿）。
 # 读数依据（2026-11-05 实测）：5 片各自独立编译，最慢片 8.2~11.0 分钟，5 个 job、约 50 runner 分钟。
+# T-JUnit5Eval 方案 2（2026-11-05）后分片只装平台类（446 类 / 4202 例），零 com.intellij 引用的
+# 374 类 / 4393 例由第 6 条 job（testFast）承载——两条腿覆盖的类互不重叠，合起来仍是全量。
 # 对比过的另一条路——单 job 跑「编译 + testFast 纯逻辑桶」：墙钟 10.7 分钟（缓存 2.6 + 编译 3 +
-# 4382 个用例 4.5），只覆盖一半测试。**同样的墙钟，5 片给的是全量**，故取 5 片。
+# 4382 个用例 4.5），只覆盖一半测试。**同样的墙钟，5 片给的是全量**，故取 5 片 + 快桶腿。
 #
 # 与手动门禁的分工：
 #   - 推送 → 本 workflow 跑全量测试，约 11 分钟出结论；
@@ -96,6 +98,74 @@ jobs:
         if: failure()
         run: |
           $files = Get-ChildItem -Path build/test-results, sub-projects/sql-visualizer-agent/build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($failMatches.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              foreach ($m in $failMatches) {
+                Write-Host ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
+                Write-Host '-----'
+              }
+            }
+          }
+
+  # T-JUnit5Eval 方案 2（2026-11-05）：纯逻辑快桶腿。分片只装平台类（源码引用 com.intellij 的），
+  # 零平台引用的 374 类 / 4393 例改由 testFast 在自己的 JVM 里跑——它不进分片 matrix 的任何一片，
+  # 漏了这条 job 就是「4000+ 例在 CI 上没人跑」且总数看起来只少一点。
+  # 与分片同口径：同样准备 demo、同样 run-gradle-retry 包装、同样失败诊断输出；
+  # -PtestShardExcludeClasses 照传——testFast 与分片同源尊重该清单（被排除的纯逻辑类不能从这条腿溜回来）。
+  fast:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 准备测试 demo
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+
+      - name: 纯逻辑快桶
+        timeout-minutes: 30
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testFast -PgifRecord=false --console=plain
+          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
+
+      - name: 失败诊断输出（断言消息打到任务日志）
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
           foreach ($f in $files) {
             $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
             $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')

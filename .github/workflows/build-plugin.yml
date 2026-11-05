@@ -417,17 +417,20 @@ jobs:
           ":verifyGate -PverifyOnly=true -PverifyIdes=${{ matrix.ide }} -PgateStaggerMs=0 -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：五片测试并行——每个 job 只跑一片。
+  # T-JUnit5Eval 方案 2（2026-11-05）：matrix 加第 6 个取值 `fast`——分片只装平台类，零 com.intellij
+  # 引用的纯逻辑类（374 类 / 4393 例）由该 job 跑 :testFast；命令按取值分派，见下方 step。
   # T-CiTestDecouple（2026-11-05）：分片**不再等 build**。依据：testShardN 的依赖只有
   # verifyDemoFixture + testShardStagger（mpv-testing.gradle.kts:972-975），没有 buildPlugin；
   # 测试源码里也没有任何一处读 build/distributions。而 run#10 的 test(4) 明明下载了编译产物，
   # 仍从头编译（compileKotlin 1m02 + jar/prepareSandbox 30s + compileTestKotlin 28s）——
   # 产物对分片是白传的，还让五片白等整个 build（约 8 分钟）。去掉 needs 后五片与 build 同起。
+  # testFast 同理由（非沙盒 JVM，classpath 复用默认 test 成品），同样不等 build。
   test:
     if: ${{ !cancelled() && inputs.mode != 'publish' }}
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3', '4', '5']
+        shard: ['1', '2', '3', '4', '5', 'fast']
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -474,18 +477,34 @@ jobs:
         # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
 
-      - name: 分片 ${{ matrix.shard }}
+      - name: 测试腿 ${{ matrix.shard }}
         # 三类真机依赖用例在 CI 剔除（本地发版前照跑）：AttachPoolWarmGateTest / DataSourceJdbcSmokeTest /
         # O147RealAgentAcceptanceTest——它们需要本机 MySQL 或本机 JDK8。
+        # T-JUnit5Eval 方案 2：matrix 取值分派——`fast` 走 :testFast（纯逻辑快桶腿，非沙盒 JVM），
+        # 其余走 :testShardN。两个 -P 排除口对 testFast 的语义不同：-PagentTestExclude 属 agent 子项目
+        # （快桶腿不跑子项目，无需传）；-PtestShardExcludeClasses **要传**——testFast 与分片同源尊重
+        # 该清单（O147RealAgentAcceptanceTest 属纯逻辑类，不传就会在没有本机 JDK8/agent 池的 runner 上红）。
         timeout-minutes: 30
         # T-CiZipFsFlake（2026-11-05）：Gradle 配置期解析 243 的 database-plugin.jar 时偶发
         # ClosedFileSystemException（约 4/25 片）。原地重跑无效——Gradle daemon 跨调用复用，
         # 关闭状态留在 daemon 里，所以包装脚本会先 `--stop` 再重跑一次（详见脚本头注释）。
-        run: >-
-          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
-          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
-          -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+        env:
+          LEG: ${{ matrix.shard }}
+        run: |
+          $common = @('-PgifRecord=false', '--console=plain')
+          if ($env:LEG -eq 'fast') {
+            $gradleArgs = (@(':testFast') + $common + @(
+              '-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest'
+            )) -join ' '
+          } else {
+            $gradleArgs = (@(":testShard$($env:LEG)") + $common + @(
+              '-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest',
+              '-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest'
+            )) -join ' '
+          }
+          Write-Host "gradle args: $gradleArgs"
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs $gradleArgs
+          exit $LASTEXITCODE
 
       - name: 失败诊断输出（断言消息打到任务日志）
         if: failure()
@@ -557,7 +576,7 @@ jobs:
           if ($bad.Count -gt 0) {
             throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
           }
-          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×3 / verify×3 / test×5'
+          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×3 / verify×3 / test×6（5 片 + 快桶腿）'
 
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准

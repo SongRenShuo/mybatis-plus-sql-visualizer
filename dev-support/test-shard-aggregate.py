@@ -131,6 +131,18 @@ def main():
         total["skipped"] += s
         tsum += t
 
+    # T-JUnit5Eval 方案 2：纯逻辑快桶腿（testShards 聚合 dependsOn testFast）。计进 SHARD TOTAL
+    # 与官方聚合同口径——分片只装平台类后，这 4000+ 例是分片之外的第二条腿，不计就等于「少了一大块
+    # 还说总数正常」；不进 shard_exec（失衡判据只看分片本体，与官方实现一致）。
+    d = os.path.join(args.results_dir, "testFast")
+    if os.path.isdir(d):
+        n, f, e, s, t, counted, xmls_n, _ = collect(d)
+        print(f"testFast: tests={n} failures={f} errors={e} skipped={s} time={t:.1f}s")
+        total["tests"] += n
+        total["failures"] += f
+        total["errors"] += e
+        total["skipped"] += s
+
     print(f"SHARD TOTAL: tests={total['tests']} failures={total['failures']} errors={total['errors']} "
           f"skipped={total['skipped']} execSum={tsum:.1f}s (类并集 {len(seen_all)}，parity 计划集校验以官方聚合为准)")
 

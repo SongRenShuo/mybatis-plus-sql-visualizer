@@ -69,6 +69,7 @@ jobs:
           }
 
   # 全量测试五片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
+  # 注：分片只装平台类是 T-JUnit5Eval 方案 2 之后的形态，纯逻辑类在同目录下方 `fast` job 里跑。
   tests:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
@@ -109,6 +110,56 @@ jobs:
           ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
           -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+      - name: 失败诊断输出（断言消息打到任务日志）
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $c = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $m = [regex]::Matches($c, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($m.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              $m | ForEach-Object { Write-Host ([System.Net.WebUtility]::HtmlDecode($_.Groups[1].Value)); Write-Host '-----' }
+            }
+          }
+
+  # T-JUnit5Eval 方案 2（2026-11-05）：纯逻辑快桶腿——分片只装平台类，零 com.intellij 引用的
+  # 374 类 / 4393 例由本 job（testFast）承载。与 tests matrix 并列，漏了就整桶不跑。
+  fast:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+      - name: 准备测试 demo
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+      - name: 纯逻辑快桶
+        timeout-minutes: 30
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testFast -PgifRecord=false --console=plain
+          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
       - name: 失败诊断输出（断言消息打到任务日志）
         if: failure()
         run: |

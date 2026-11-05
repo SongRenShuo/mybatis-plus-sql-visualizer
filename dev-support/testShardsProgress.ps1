@@ -126,6 +126,7 @@ while (-not $proc.HasExited) {
             $totalFail += ($s.Failures + $s.Errors)
         }
     }
+    $text = ''
     if (Test-Path $log) {
         $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
         for ($i = 1; $i -le $shardCount; $i++) {
@@ -133,6 +134,14 @@ while (-not $proc.HasExited) {
                 $running += "shard$i"
             }
         }
+    }
+    # T-JUnit5Eval 方案 2：快桶腿与分片并行，进度行也要能看出它在不在跑（约 4~5 分钟一段）。
+    $fastStats = Get-ShardStats -DirName 'testFast'
+    if ($fastStats) {
+        $totalTests += $fastStats.Tests
+        $totalFail += ($fastStats.Failures + $fastStats.Errors)
+    } elseif ($text -and $text.Contains('> Task :testFast')) {
+        $running += 'fast'
     }
     $elapsed = (Get-Date) - $started
     $elapsedText = '{0:mm\:ss}' -f $elapsed
@@ -164,6 +173,9 @@ $failNames = New-Object System.Collections.Generic.List[string]
 # 此前脚本只统计分片，尾道失败不会出现在任何计数里）。
 $buckets = @(1..$shardCount | ForEach-Object { @{ Label = "shard$_"; Dir = "testShard$_" } })
 $buckets += @{ Label = 'tail'; Dir = 'testShardTail' }
+# T-JUnit5Eval 方案 2：纯逻辑快桶从分片摘出后单独成腿（testShards 聚合 dependsOn testFast），
+# 不进汇总面就等于「4000+ 例跑了但看不见」——失败也不会出现在失败用例清单里。
+$buckets += @{ Label = 'fast'; Dir = 'testFast' }
 $buckets += @{ Label = 'external'; Dir = 'testExternal' }
 foreach ($b in $buckets) {
     $s = Get-ShardStats -DirName $b.Dir
