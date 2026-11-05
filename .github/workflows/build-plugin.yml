@@ -98,32 +98,15 @@ jobs:
         # -SkipDb：CI 无本机 MySQL，testDatabase / e2eFakeIde 属本地真库环节，不在本流水线内
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
 
-      - name: 打包插件 + 官方兼容验证
+      - name: 打包插件
         if: inputs.mode == 'gate' || inputs.mode == 'release'
         # T-CiRelease（20261025）：各 gradle 步骤不再用 --no-daemon——单次 daemon JVM 在构建
         # 结束后须整进程退出，任何测试泄漏的非 daemon 线程都会把退出卡死（20261025 run
         # 40150222557 实证：五片 01:47 全部结束后静默 69 分钟直至取消）。常驻 daemon 下客户端
         # 在构建完成即返回，泄漏线程随 runner 回收；daemon 跨步骤复用顺带提速。
-        # 发版链前半（对应本地 releaseGate）：verifyPlugin 在线报告口径为「离线 + 豁免清单」，
-        # 同时为后续 verifyGate/verifyMarketplace 预热 verifier-cli 与 253/262 发行版缓存
-        #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
-        run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
-
-      - name: 导出 verifier-cli 供下游 job 播种
-        # T-CiVerifierSeed（2026-11-05）：verifyGate / verifyMarketplace 是 verifier-cli 直驱任务，
-        # 配置期就要在 gradle 缓存里找到 verifier-cli-*-all.jar。这个 jar 是 verifyPlugin 下载的，
-        # 而 build 保存 gradle 缓存时它还没进 modules-2，且 setup-gradle 默认「同 key 不覆盖」——
-        # 于是每个独立 job 都得自己跑一次 :verifyPlugin 预热（连带重新编译整个项目，4~5 分钟）。
-        # 这里把 build 已经用过的那个 jar 随工件发下去，下游直接播种进缓存目录，免掉预热。
-        if: inputs.mode == 'gate' || inputs.mode == 'release'
-        run: |
-          $root = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli'
-          $jar = Get-ChildItem -Path $root -Recurse -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if (-not $jar) { throw "verifier-cli jar 未在 gradle 缓存找到：$root（verifyPlugin 是否真的跑过？）" }
-          New-Item -ItemType Directory -Force -Path 'build/verifier-cli' | Out-Null
-          Copy-Item -LiteralPath $jar.FullName -Destination 'build/verifier-cli' -Force
-          Write-Host "verifier-cli 已导出：$($jar.Name)（$(('{0:N1}' -f ($jar.Length/1MB))) MB）"
+        # T-CiMarketSplit（2026-11-05）：`:verifyPlugin` 从这里挪到独立 job（见 verifyplugin）——
+        # 它要 1.5 分钟且下游六条腿全在等它，挪走后 build 从 8.2 降到约 6.7，市场门禁提前起跑。
+        run: ./gradlew.bat :buildPlugin -PgifRecord=false --console=plain
 
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
       # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
@@ -157,7 +140,6 @@ jobs:
             build/resources/
             build/tmp/patchPluginXml/
             build/generated/
-            build/verifier-cli/
             sub-projects/sql-visualizer-agent/build/libs/
             sub-projects/sql-visualizer-agent/build/classes/
             sub-projects/sql-visualizer-agent/build/resources/
@@ -208,13 +190,68 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # T-CiSplitMarketplace（2026-11-05 run#7 实测立项）：Marketplace 同口径在线门禁（三目标串行，
-  # 实测 4.8 分钟）从 build 里拆出来独立跑。它只需要 buildPlugin 产出的发行包，与 verifyPlugin
-  # 无关；留在 build 里等于让九个下游 job 都陪它多等 4.8 分钟（run#7 墙钟 27.8 中 build 占 13.3，
-  # 其中 marketplace 是纯粹的串行尾巴）。拆出后 market 与 verify/test 三路同起，各占一台 runner。
+  # T-CiMarketSplit（2026-11-05）：`:verifyPlugin` 从 build 里独立出来。它是 IPGP 原生兼容验证
+  # （离线 + 豁免清单，报告口径），要 1.5 分钟，而下游六条腿全在等 build 结束。挪成并行 job 后
+  # build 从 8.2 降到约 6.7 分钟，市场/兼容门禁都能提前起跑；覆盖面不缩水（gate 仍要求本 job 绿）。
+  verifyplugin:
+    needs: build
+    if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v8
+        with:
+          name: build-outputs
+
+      - name: 官方兼容验证（verifyPlugin，离线 + 豁免清单）
+        run: ./gradlew.bat :verifyPlugin -PgifRecord=false --console=plain
+
+  # T-CiSplitMarketplace（2026-11-05）：Marketplace 同口径在线门禁独立成 job（它只依赖打包产物）。
+  # T-CiMarketSplit（2026-11-05 晚）：再拆成三条腿——原先三个 verifier JVM 挤在一台 2 核 runner 上
+  # 互相争抢（run#11 实测同一份工作分别跑 162.9s / 249.3s / 256.7s），拆开后每条腿独占一台，
+  # 判定口径不变（verifyMarketplaceVerdict<tag> 用的是同一个 checkMarketplaceVerdicts）。
   marketplace:
     needs: build
     if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ['243', '253', '262']
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -259,21 +296,23 @@ jobs:
           name: build-outputs
 
       - name: 播种 verifier-cli
-        # 与 verify job 同一条：只缺一个 jar，不再为此跑 :verifyPlugin（那会连带重新编译约 4 分钟）。
+        # T-CiMarketSplit（2026-11-05）：不再依赖 build 跑过 :verifyPlugin 导出 jar——直接按
+        # dev-support/verifier-cli-version.txt 钉住的版本从 Maven Central 取（约 30MB，几秒）。
+        # 版本漂移由 VerifierCliVersionGuardTest 在本机全量测试里兜（IPGP 升级后钉子不一致即红）。
         run: |
-          $src = Get-ChildItem -Path 'build/verifier-cli' -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if (-not $src) { throw '工件里没有 build/verifier-cli/*.jar——build job 的导出步骤是否失败？' }
+          $v = (Get-Content -LiteralPath 'dev-support/verifier-cli-version.txt' -Raw).Trim()
+          if (-not $v) { throw 'dev-support/verifier-cli-version.txt 为空' }
           $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
-          Write-Host "verifier-cli 已播种：$dst\$($src.Name)"
+          $jar = Join-Path $dst "verifier-cli-$v-all.jar"
+          $url = "https://repo1.maven.org/maven2/org/jetbrains/intellij/plugins/verifier-cli/$v/verifier-cli-$v-all.jar"
+          Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
+          Write-Host "verifier-cli 已播种：$jar（$v）"
 
-      - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
-        # 三目标逐个上传真实发行包做在线验证（无豁免清单，与 Marketplace 审核同口径）。
-        # -PverifyOnly=true：发行包取自 build 的工件，不再重打包（重打包会让「已验证的字节」
-        # 与「最终上传的字节」不是同一份，且白烧约 4 分钟编译）。
-        run: ./gradlew.bat :verifyMarketplace -PverifyOnly=true -PgifRecord=false --console=plain
+      - name: Marketplace 门禁 ${{ matrix.tag }}（在线 + 无豁免 + 逐份 verdict 判定）
+        # 发行包取自 build 的工件（不再重打包：重打包会让「已验证的字节」与「最终上传的字节」不是同一份）。
+        # 判定由 verifyMarketplaceVerdict<tag> 在 doLast 里做，与聚合任务同一个 checkMarketplaceVerdicts。
+        run: ./gradlew.bat :verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -333,18 +372,18 @@ jobs:
           name: build-outputs
 
       - name: 播种 verifier-cli
-        # T-CiVerifierSeed（2026-11-05）：替代原先「跑一次 :verifyPlugin 预热」的做法——预热会连带
-        # 重新编译整个项目（约 4 分钟），而这里只缺一个 jar。build 已把用过的 jar 随工件发下来，
-        # 直接放进缓存目录（verifyGate/verifyMarketplace 按 walkTopDown 在 verifier-cli 下找
-        # `verifier-cli-*-all.jar`，子目录层级不限）。
+        # T-CiMarketSplit（2026-11-05）：替代原先「跑一次 :verifyPlugin 预热」——预热会连带重新编译
+        # 整个项目（约 4 分钟），而这里只缺一个 jar。改为按 dev-support/verifier-cli-version.txt
+        # 钉住的版本从 Maven Central 直取；版本漂移由 VerifierCliVersionGuardTest 兜底。
         run: |
-          $src = Get-ChildItem -Path 'build/verifier-cli' -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if (-not $src) { throw '工件里没有 build/verifier-cli/*.jar——build job 的导出步骤是否失败？' }
+          $v = (Get-Content -LiteralPath 'dev-support/verifier-cli-version.txt' -Raw).Trim()
+          if (-not $v) { throw 'dev-support/verifier-cli-version.txt 为空' }
           $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
-          Write-Host "verifier-cli 已播种：$dst\$($src.Name)"
+          $jar = Join-Path $dst "verifier-cli-$v-all.jar"
+          $url = "https://repo1.maven.org/maven2/org/jetbrains/intellij/plugins/verifier-cli/$v/verifier-cli-$v-all.jar"
+          Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
+          Write-Host "verifier-cli 已播种：$jar（$v）"
 
       - name: 兼容门禁 ${{ matrix.ide }}
         # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
@@ -474,9 +513,9 @@ jobs:
   # if: !cancelled()，一旦某条 leg 因条件求值意外为假、matrix 写错、或 needs 链断掉而被 skip，
   # 运行结论照样可能是绿的，等于「没验也过」。dbx 用 ci-gate.mjs 逐 job 校验「该跑的必须成功、
   # 不该跑的才允许 skipped」（其 .github/scripts/ci-gate.mjs:4-66）。
-  # 这里把同一语义落在 needs 上：四条腿必须全部 success，skipped 也判红并点名是哪条。
+  # 这里把同一语义落在 needs 上：五条腿必须全部 success，skipped 也判红并点名是哪条。
   gate:
-    needs: [build, marketplace, verify, test]
+    needs: [build, verifyplugin, marketplace, verify, test]
     if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
     runs-on: windows-latest
     timeout-minutes: 5
@@ -486,19 +525,21 @@ jobs:
         shell: pwsh
 
     steps:
-      - name: 校验四条腿的真实结论
+      - name: 校验五条腿的真实结论
         env:
           R_BUILD: ${{ needs.build.result }}
+          R_VERIFYPLUGIN: ${{ needs.verifyplugin.result }}
           R_MARKETPLACE: ${{ needs.marketplace.result }}
           R_VERIFY: ${{ needs.verify.result }}
           R_TEST: ${{ needs.test.result }}
         run: |
           $ErrorActionPreference = 'Stop'
           $legs = [ordered]@{
-            'build'       = $env:R_BUILD
-            'marketplace' = $env:R_MARKETPLACE
-            'verify'      = $env:R_VERIFY
-            'test'        = $env:R_TEST
+            'build'        = $env:R_BUILD
+            'verifyplugin' = $env:R_VERIFYPLUGIN
+            'marketplace'  = $env:R_MARKETPLACE
+            'verify'       = $env:R_VERIFY
+            'test'         = $env:R_TEST
           }
           $bad = @()
           foreach ($k in $legs.Keys) {
@@ -510,7 +551,7 @@ jobs:
           if ($bad.Count -gt 0) {
             throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
           }
-          Write-Host '四条腿全部 success：build / marketplace / verify×3 / test×5'
+          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×3 / verify×3 / test×5'
 
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准

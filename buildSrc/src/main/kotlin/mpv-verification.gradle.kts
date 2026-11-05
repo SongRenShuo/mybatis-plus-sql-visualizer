@@ -397,6 +397,29 @@ mpMarketTargets.forEach { (ideName, tag) ->
     registerMarketTarget("verifyMarketplace$tag", ideName, tag)
 }
 
+// T-CiMarketSplit（2026-11-05）：单目标 Marketplace 门禁——把聚合任务的 verdict 判定下沉到每目标。
+// 背景：聚合任务在一个 job 里并行跑三个 verifier JVM，而 CI runner 只有 2 核，三者互相争抢
+// （run#11 实测同一份工作在 2 核上分别跑了 162.9s / 249.3s / 256.7s）。拆成三条独立腿后，
+// 每条腿独占一台 runner，判定口径与聚合任务逐字一致（同一个 checkMarketplaceVerdicts，
+// 只是 reportsDir 从三个减到一个——该函数本就按目录逐个判，单目录输入与拆分前等价）。
+// 聚合任务 verifyMarketplace 保留不动：本地 releaseGate 仍走它，行为零变化。
+mpMarketTargets.forEach { (_, tag) ->
+    tasks.register("verifyMarketplaceVerdict$tag") {
+        group = "verification"
+        description =
+            "Marketplace 单目标门禁：跑 verifyMarketplace$tag 并按同口径判定（在线 + 无豁免 + baseline）；供 CI 拆腿用"
+        dependsOn("verifyMarketplace$tag")
+        val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
+        val baselineFile = layout.projectDirectory.file("dev-support/verifier-marketplace-baseline.txt").asFile
+        doFirst { logger.lifecycle("verifyMarketplaceVerdict$tag START ${System.currentTimeMillis()}") }
+        doLast {
+            logger.lifecycle("verifyMarketplaceVerdict$tag END ${System.currentTimeMillis()}")
+            mpv.verification.checkMarketplaceVerdicts(reportsDir, baselineFile, logger)
+            logger.lifecycle("verifyMarketplaceVerdict$tag verdict OK（$tag）")
+        }
+    }
+}
+
 val verifyMarketplace = tasks.register("verifyMarketplace") {
     group = "verification"
     description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"

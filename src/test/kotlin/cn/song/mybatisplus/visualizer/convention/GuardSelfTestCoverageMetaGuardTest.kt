@@ -654,6 +654,15 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/VerifierCliVersionGuardTest.kt",
+                emptyList(),
+                "T-CiMarketSplit verifier-cli 版本钉子守卫：判定内核内联于用例——读 " +
+                    "dev-support/verifier-cli-version.txt 与本机 gradle 缓存里 verifier-cli-*-all.jar 的版本集合" +
+                    "比对，不一致即红（CI 的 verify/marketplace 腿按钉子版本从 Maven Central 取 jar，" +
+                    "IPGP 升级后不更新钉子会让门禁静默用旧版 verifier）。无「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=把钉子改成 9.999 后本机跑必红（缓存里存在 jar 时）。",
+            ),
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
