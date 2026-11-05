@@ -73,7 +73,7 @@
 
 - P1：`AgentManagerPauseGateTest` 补「CONFIG 下发后回执前闸门保持关闭」；反向=还原清空点→必红。
 - P2：`CaptureActivityFallbackTest` 补「已收到过事件时不回落」；反向=还原判据→必红。
-- P3：`SqlLogEntryBufferTest` 补「两条诊断各自限频、互不吞」；反向=改回共用通道→必红。
+- P3：`SqlLogEntryBufferTest` 补「两条诊断各自限频、互不吞」；反向=改回共用通道→必红。**已落地**（60 例中反向恰 1 红）。
 
 ## 五、不做
 
@@ -92,9 +92,11 @@
 
 **P1 通过**：日志里只有 `CONFIG 已生效（ACK#2/#3）` 与紧随的接管沿，不再出现「闸门回落（待确认）」。
 **P2 通过**：间隔 14 秒（>10s 阈值）三次调用，`活性回落` 一次都没有；列表也没有再出现无耗时条目。
-**P3 未取得正向读数**：本轮没有产生「控制台条目 + agent 条目同窗碰撞」，日志里 `跨通道等价键融合` 为 0 条。
-改动本身是确定性的（拆出独立 `crossChannelLogNanos` / `crossChannelSuppressed`），但「折叠发生且日志可见」
-这条真机判据本轮**未被触发**，如实标为代码可判面、待下次自然碰撞时确认。
+**P3 由单测收口**：本轮真机没产生「控制台条目 + agent 条目同窗碰撞」，`跨通道等价键融合` 为 0 条。
+补 `SqlLogEntryBufferTest.跨通道诊断与捕获归因各自限频_互不吞`：加两条 `internal` 测试缝读各自通道的
+「最近输出时刻」——控制台条目入队后只有「捕获归因」通道被消耗，随后的跨通道折叠必须让**另一条通道**也被消耗。
+反向验证：把 `logCrossChannelThrottled` 改回 `logAttributionThrottled` → 60 例中恰 1 红；恢复后绿。
+真机正向撞车待自然出现时复核（不改本条结论）。
 
 证据帧：`record/tmp/18-reacc-ready.png`、`19-reacc-call*.png`、`24-after-dedupe.png`、`25-reacc-call*.png`。
 

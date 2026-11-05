@@ -834,6 +834,15 @@ class SqlLogEntryBuffer(
         }
     }
 
+    /**
+     * T-CaptureGateStability P3 测试缝：两条诊断通道各自的「最近一次真正输出」时刻。
+     * 初值 `Long.MIN_VALUE / 2`（与字段初值同源）表示从未输出。仅供 `SqlLogEntryBufferTest`
+     * 断言两者**互不吞窗口**（改回共用通道时第二个断言必红），生产零读。
+     */
+    internal fun attributionDiagStampForTest(): Long = attributionLogNanos.get()
+
+    internal fun crossChannelDiagStampForTest(): Long = crossChannelLogNanos.get()
+
     /** O-147 W0：诊断用（懒加载，见 [logAttributionThrottled]）。 */
     private val LOG: com.intellij.openapi.diagnostic.Logger by lazy {
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlLogEntryBuffer::class.java)
