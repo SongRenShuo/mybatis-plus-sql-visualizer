@@ -261,56 +261,56 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     @Test
-    fun `canAutoInferEntitySelection_uniqueMainAndSingleSub_returnsTrue`() {
+    fun `test canAutoInferEntitySelection_uniqueMainAndSingleSub_returnsTrue`() {
         // 主表 1 候选 + 每个副表各 1 候选 → 唯一可推断 → 跳过弹窗
         val mainCandidates = listOf(mockCandidate("User"))
         val subCandidates = mapOf("t1" to listOf(mockCandidate("Address")), "t2" to listOf(mockCandidate("Order")))
         assertTrue(
             "主表 1 候选 + 所有副表各 1 候选应唯一可推断",
-            SqlToJavaPanel(project).canAutoInferEntitySelection(mainCandidates, subCandidates),
+            panel.canAutoInferEntitySelection(mainCandidates, subCandidates),
         )
     }
 
     @Test
-    fun `canAutoInferEntitySelection_multipleMainCandidates_returnsFalse`() {
+    fun `test canAutoInferEntitySelection_multipleMainCandidates_returnsFalse`() {
         // 主表多候选 → 有歧义 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"), mockCandidate("UserEntity"))
         val subCandidates = mapOf("t1" to listOf(mockCandidate("Address")))
         assertTrue(
             "主表多候选应有歧义（弹窗）",
-            !SqlToJavaPanel(project).canAutoInferEntitySelection(mainCandidates, subCandidates),
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates),
         )
     }
 
     @Test
-    fun `canAutoInferEntitySelection_multipleSubCandidates_returnsFalse`() {
+    fun `test canAutoInferEntitySelection_multipleSubCandidates_returnsFalse`() {
         // 副表多候选 → 有歧义 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"))
         val subCandidates = mapOf("t1" to listOf(mockCandidate("Address"), mockCandidate("AddressEntity")))
         assertTrue(
             "副表多候选应有歧义（弹窗）",
-            !SqlToJavaPanel(project).canAutoInferEntitySelection(mainCandidates, subCandidates),
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates),
         )
     }
 
     @Test
-    fun `canAutoInferEntitySelection_emptySubCandidates_returnsFalse`() {
+    fun `test canAutoInferEntitySelection_emptySubCandidates_returnsFalse`() {
         // 副表 0 候选 → 不可推断 → 弹窗
         val mainCandidates = listOf(mockCandidate("User"))
         val subCandidates = mapOf("t1" to emptyList<SqlToJavaConverter.EntityCandidate>())
         assertTrue(
             "副表 0 候选应弹窗",
-            !SqlToJavaPanel(project).canAutoInferEntitySelection(mainCandidates, subCandidates),
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates),
         )
     }
 
     @Test
-    fun `canAutoInferEntitySelection_noSubTables_returnsTrue`() {
+    fun `test canAutoInferEntitySelection_noSubTables_returnsTrue`() {
         // 主表 1 候选 + 无副表（空 map）→ all 对空集合返回 true → 唯一可推断
         val mainCandidates = listOf(mockCandidate("User"))
         assertTrue(
             "主表 1 候选 + 无副表应唯一可推断",
-            SqlToJavaPanel(project).canAutoInferEntitySelection(mainCandidates, emptyMap()),
+            panel.canAutoInferEntitySelection(mainCandidates, emptyMap()),
         )
     }
 
