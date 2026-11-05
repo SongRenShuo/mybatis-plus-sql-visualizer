@@ -231,13 +231,16 @@ class SqlLogEntryBuffer(
             // T-CrossChannelDedupe：跨通道索引与 dedupeIndex 同口径——接管沿同样只留「新鲜键」。
             // 陈旧键若留在跨通道索引里，接管后 agent 首批事件会被折进桥纪元条目（P3 症状的跨通道形态）。
             crossChannelIndex.clear()
-            if (!dedupeEnabled) return
-            rebuildDedupeKeyPresenceLocked() // F83：计数按队内现存全量补账（与索引的 grace 截断口径不同，条目仍留队的陈旧键不缺账）
+            // T-DedupeDecouple：跨通道索引与去重开关解耦——去重关闭期间它照样要重建，
+            // 否则「关掉 SQL 去重」会让兜底整段失效（catch 只在 dedupeEnabled 时建索引）。
+            if (dedupeEnabled) rebuildDedupeKeyPresenceLocked() // F83：计数按队内现存全量补账（与索引的 grace 截断口径不同，条目仍留队的陈旧键不缺账）
             val cutoff = nowMs - graceMs
             for (e in entries) {
                 if (!canDedupe(e) || e.timestamp < cutoff) continue
-                val latest = dedupeIndex[e.dedupeKey]
-                if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
+                if (dedupeEnabled) {
+                    val latest = dedupeIndex[e.dedupeKey]
+                    if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
+                }
                 crossChannelIndex[crossChannelKey(e)] = e
             }
         }
@@ -405,13 +408,22 @@ class SqlLogEntryBuffer(
                 // 两侧还原器口径分叉（布尔/日期族/注释内 ?/参数个数守卫/全限定类型名）会让同一次执行产出
                 // 两个不同 dedupeKey，同键分支永远折不上——本分支用「占位符版 rawSql + 参数值签名」再判一次。
                 // 只在未命中时计算（命中即返回，热路径零额外成本）。
-                val crossKey = if (dedupeEnabled && canDedupe(entry)) crossChannelKey(entry) else null
+                // T-CrossChannelDedupe：跨通道兜底**不依赖** [dedupeEnabled]——它折叠的是「同一次执行
+                // 的两份观测」，不是「重复执行」。绑在用户去重开关上会让「关掉 SQL 去重」直接退化成
+                // 「同一次执行出现两条」（一条带耗时位置、一条全空），即 T-DedupeDecouple 的真机报障：
+                // 状态栏「控制台已捕获 N / 增强已收 M」并存 + 列表里出现无字段副本。
+                val crossKey = if (canDedupe(entry)) crossChannelKey(entry) else null
                 val crossHit = if (crossKey != null) crossChannelIndex[crossKey] else null
                 val crossDivergent = crossHit != null && crossHit.dedupeKey != entry.dedupeKey
                 // 【反向验证探针锚点】T-CrossChannelDedupe：注释掉下面这个 if 分支 = 摘除跨通道兜底折叠，
                 // CrossChannelDedupeTest 的布尔/日期族/注释内 ?/全限定类型名/先后到 用例必红（同一次执行留两行），
                 // 恢复后转绿。
-                if (crossKey != null && crossHit != null && crossDivergent && canFoldAcrossChannels(crossHit, entry)) {
+                //
+                // T-DedupeDecouple：折叠条件**不再要求 crossDivergent**（dedupeKey 不同）。原判据假定
+                // 「同键副本由上面的同键去重分支处理」，但那条分支受 dedupeEnabled 门控——用户关掉
+                // 「SQL 去重」后，键相同的跨通道副本两边都不管，同一次执行照样两条。去重开启时同键分支
+                // 先命中、根本走不到这里，故去掉该条件不改变既有路径。
+                if (crossKey != null && crossHit != null && canFoldAcrossChannels(crossHit, entry)) {
                     // 兜底折叠：复用同键融合（补空不覆盖、通道归并 MERGED），原位替换不新增行。
                     // 不计 recordDedupeDrop——这不是「重复 SQL 被丢弃」，是同一次执行两份观测的合并。
                     crossMerged = true
@@ -445,7 +457,10 @@ class SqlLogEntryBuffer(
                         dedupeIndex[added.dedupeKey] = added
                         // F83：键级在队计数 +1（与索引同条件同锁维护）
                         dedupeKeyPresence[added.dedupeKey] = (dedupeKeyPresence[added.dedupeKey] ?: 0) + 1
-                        // T-CrossChannelDedupe：跨通道索引 upsert + 时间窗惰性清理（同锁同条件）
+                    }
+                    // T-DedupeDecouple：跨通道索引与去重开关**解耦**——去重关闭时它照样维护，
+                    // 否则兜底查不到候选（真机：关掉「SQL 去重」后同一次执行又出现两条）。
+                    if (canDedupe(added)) {
                         crossChannelIndex[crossChannelKey(added)] = added
                         purgeExpiredCrossChannelLocked(System.currentTimeMillis())
                     }
@@ -471,12 +486,12 @@ class SqlLogEntryBuffer(
                                     dedupeIndex.remove(k)
                                 }
                             }
-                            // T-CrossChannelDedupe：跨通道索引同锁回收。索引存该键**最后入队**实例、淘汰取
-                            // **最旧**——命中被淘汰者即说明队内已无同键余条（唯一键稳态零反扫）。
-                            if (canDedupe(evicted)) {
-                                val ck = crossChannelKey(evicted)
-                                if (crossChannelIndex[ck] === evicted) crossChannelIndex.remove(ck)
-                            }
+                        }
+                        // T-DedupeDecouple：跨通道索引回收与去重开关解耦（去重关闭时索引仍在维护）。
+                        // 索引存该键**最后入队**实例、淘汰取**最旧**——命中被淘汰者即说明队内已无同键余条。
+                        if (canDedupe(evicted)) {
+                            val ck = crossChannelKey(evicted)
+                            if (crossChannelIndex[ck] === evicted) crossChannelIndex.remove(ck)
                         }
                         evictedEntries.add(evicted)
                         evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
@@ -697,8 +712,10 @@ class SqlLogEntryBuffer(
                 }
                 val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
                 if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
-                // T-CrossChannelDedupe：跨通道索引同口径单键重算（用户右键低频，O(n) 一次可接受）。
-                // 删除可能拿走该键**最新入队**实例（与淘汰不同），故必须反扫队内余条而非直接摘键。
+            }
+            // T-DedupeDecouple：跨通道索引重算与去重开关解耦（去重关闭时索引仍在维护）。
+            // 删除可能拿走该键**最新入队**实例（与淘汰不同），故必须反扫队内余条而非直接摘键。
+            if (removed && canDedupe(entry)) {
                 val ck = crossChannelKey(entry)
                 if (crossChannelIndex[ck] === entry) {
                     val crossStillThere = entries.lastOrNull { canDedupe(it) && crossChannelKey(it) == ck }
@@ -760,12 +777,13 @@ class SqlLogEntryBuffer(
                     // T-CrossChannelDedupe：两个索引持有的是**队内实例**——原位替换后必须同步重指，
                     // 否则后续同键去重/跨通道兜底会融合进已不在队内的旧副本（升级在列表上不可见）。
                     // 键不变（errorText 不入 dedupeKey / crossKey），只换值。
-                    if (dedupeEnabled) {
-                        if (dedupeIndex[updated.dedupeKey] === recent) dedupeIndex[updated.dedupeKey] = updated
-                        if (canDedupe(updated)) {
-                            val ck = crossChannelKey(updated)
-                            if (crossChannelIndex[ck] === recent) crossChannelIndex[ck] = updated
-                        }
+                    // T-DedupeDecouple：去重索引受 dedupeEnabled 约束，跨通道索引不受。
+                    if (dedupeEnabled && dedupeIndex[updated.dedupeKey] === recent) {
+                        dedupeIndex[updated.dedupeKey] = updated
+                    }
+                    if (canDedupe(updated)) {
+                        val ck = crossChannelKey(updated)
+                        if (crossChannelIndex[ck] === recent) crossChannelIndex[ck] = updated
                     }
                     replaced = true
                     ErrorBindResult.BOUND

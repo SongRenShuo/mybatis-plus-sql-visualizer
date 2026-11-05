@@ -265,6 +265,55 @@ class CrossChannelDedupeTest {
         assertEquals("值未被二进制归一改写", "SELECT * FROM t WHERE code = 'deadbeef'", rows.single().restoredSql)
     }
 
+    // ---------- T-DedupeDecouple：跨通道折叠与「SQL 去重」开关解耦 ----------
+
+    /**
+     * T-DedupeDecouple（20261105 真机报障）：用户取消「SQL 去重」后，跨通道兜底必须仍然生效。
+     *
+     * 此前 `crossKey` 的构造与 `crossChannelIndex` 的维护都挂在 `dedupeEnabled` 上——去重一关，
+     * 同一次执行立刻退化成两条（控制台一条无耗时/位置、agent 一条完整），且因为索引压根没维护，
+     * 连「跨通道同源未折叠」诊断行都不会留（真机只能靠截图反推）。
+     *
+     * 语义依据：去重开关管的是「重复执行要不要折叠」，本兜底管的是「同一次执行的两份观测要不要合并」
+     * ——后者不是用户可选的偏好，留两条只会让用户以为发生了两次。
+     */
+    @Test
+    fun `去重关闭时_跨通道兜底仍折叠`() {
+        val sql = "SELECT * FROM t WHERE flag = ?"
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
+        buffer.disableDedupe()
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: true(Boolean)")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "true", "Boolean"))))
+        assertFoldedToAgentFacts(buffer, "去重关闭 + 跨通道折叠")
+    }
+
+    /** 去重关闭时，「两次不同执行」不得被跨通道兜底误折——兜底只合并同一次执行的两份观测。 */
+    @Test
+    fun `去重关闭时_两次不同执行不误折`() {
+        val sql = "SELECT * FROM t WHERE id = ?"
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
+        buffer.disableDedupe()
+        // 第一次执行：控制台 + agent 各一份（同参数 → 折叠成一条）
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: 1(Long)")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "1", "Long"))))
+        // 第二次执行：参数不同 → 签名不同 → 不折
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: 2(Long)")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "2", "Long"))))
+        assertEquals("两次不同执行各留一条（共 2 条）", 2, buffer.snapshot().size)
+    }
+
+    /** 去重关闭→再开启后，兜底不得失效（索引生命周期与开关无关）。 */
+    @Test
+    fun `去重开关来回切换_兜底仍折叠`() {
+        val sql = "SELECT * FROM t WHERE flag = ?"
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
+        buffer.disableDedupe()
+        buffer.dedupeEnabled = true
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: false(Boolean)")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "false", "Boolean"))))
+        assertFoldedToAgentFacts(buffer, "去重开关切换后")
+    }
+
     /**
      * **安全边界**：agent 侧参数确实少于控制台侧时，两侧 `logTimeParamSignature` 不等
      * （`1\u00012` vs `1`）、crossKey 不同，兜底**不折叠**。
