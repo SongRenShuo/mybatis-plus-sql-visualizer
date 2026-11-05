@@ -92,11 +92,8 @@ jobs:
         # 缓存 Gradle User Home：verifyPlugin 下载的三版本 IDE 发行版与 verifier-cli 跨轮复用
         uses: gradle/actions/setup-gradle@v5
 
-      - name: 准备测试 demo
-        if: inputs.mode != 'publish'
-        # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）；
-        # -SkipDb：CI 无本机 MySQL，testDatabase / e2eFakeIde 属本地真库环节，不在本流水线内
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+      # T-CiMarketSplit（2026-11-05）：build 不再准备测试 demo——它只打包，不跑测试。
+      # demo 由 test 各片自己准备（Demo* 普查用例硬断言 demo 源码存在）。省 0.2 分钟且让下游提前起跑。
 
       - name: 打包插件
         if: inputs.mode == 'gate' || inputs.mode == 'release'
