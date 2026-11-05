@@ -419,7 +419,65 @@ internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSq
  * 相关器驻留有界（桥嗅探 put 与 agent take 共用本函数，截断天然等价）。
  */
 internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
-    params.joinToString("\u0001") { (it.value ?: "\u0000").take(PARAM_SIGNATURE_MAX_CHARS) }
+    params.joinToString("\u0001") { paramSignatureToken(it).take(PARAM_SIGNATURE_MAX_CHARS) }
+
+// ---------- T-BinaryParamSig（20261105）：二进制参数签名归一 ----------
+
+/**
+ * 二进制占位（两侧归一口径）。只参与匹配，不进展示——列表仍显示各自原文
+ * （控制台 `'[B@1a2b3c'`、agent `'<byte[]>'`）。
+ */
+internal const val BINARY_PARAM_PLACEHOLDER = "<binary>"
+
+/** null 参数的签名 token（与原口径 `"\u0000"` 逐字一致，不改变既有配对语义）。 */
+private const val NULL_SIGNATURE_TOKEN = "\u0000"
+
+/**
+ * 二进制族类型标注：控制台 MyBatis 打印的简单名（`byte[]` / `Blob` / `Clob`）+ agent
+ * `ParamCapture.simpleTypeName` 对数组类型产出的 JVM 名（`[B`）+ 全限定名（旧日志/第三方日志）。
+ */
+private val BINARY_TYPE_MARKERS = setOf(
+    "byte[]", "[B", "Blob", "Clob", "NClob", "InputStream", "Reader",
+    "java.sql.Blob", "java.sql.Clob", "java.sql.NClob",
+    "java.io.InputStream", "java.io.Reader",
+)
+
+/** 对象默认 toString 形态（`[B@1a2b3c`、`[Ljava.lang.String;@7f3a`）——控制台日志对二进制参数打的就是它。 */
+private val OBJECT_ADDRESS_REGEX = Regex("""^\[+[A-Za-z.;/]*@[0-9a-fA-F]+$""")
+
+/** agent 侧降级形态（`<byte[]>` / `<Blob>` / `<InputStream>`，见 `ParamCapture.renderValue`）。 */
+private val AGENT_DEGRADED_REGEX = Regex("""^<([A-Za-z\[\].;$]+)>$""")
+
+/**
+ * T-BinaryParamSig：是否为「值文本两侧天然不可比」的二进制族参数。
+ *
+ * 判据三条任一成立：类型标注命中 [BINARY_TYPE_MARKERS]；值是对象默认 toString（`[B@1a2b3c`）；
+ * 值是 agent 降级形态（`<byte[]>`）且内层类型名命中同一集合。三条都要求类型/形态证据，
+ * 普通字符串（哪怕长得像十六进制，如 `deadbeef`）不会被误判。
+ */
+internal fun isBinaryParam(param: LogSqlParam): Boolean {
+    val type = param.type
+    if (type != null && type in BINARY_TYPE_MARKERS) return true
+    val value = param.value ?: return false
+    if (OBJECT_ADDRESS_REGEX.matches(value)) return true
+    val degraded = AGENT_DEGRADED_REGEX.find(value)?.groupValues?.get(1) ?: return false
+    return degraded in BINARY_TYPE_MARKERS
+}
+
+/**
+ * T-BinaryParamSig：单个参数的签名 token。
+ *
+ * 二进制族归一为 [BINARY_PARAM_PLACEHOLDER]——否则同一次执行在控制台侧是 `[B@1a2b3c`、
+ * agent 侧是 `<byte[]>`，签名不等、crossKey 查不到，兜底折不上；而 `跨通道同源未折叠` 哨兵
+ * 只在 crossKey 相同时才报，这类形态既不会折叠也不会留痕（真机上只能靠截图反推）。
+ *
+ * 副作用边界：归一后「同一条 SQL 连续两次执行且参数是不同的二进制内容」签名相同——但二进制值
+ * 本来就不可比，且跨通道折叠还有 5s 窗 + 异通道双重限制，影响限于毫秒级耗时归属。
+ */
+internal fun paramSignatureToken(param: LogSqlParam): String {
+    val value = param.value ?: return NULL_SIGNATURE_TOKEN
+    return if (isBinaryParam(param)) BINARY_PARAM_PLACEHOLDER else value
+}
 
 // ---------- T-AgentCaptureProvenance（O-147）：同去重桶字段级融合与归因诊断 ----------
 
