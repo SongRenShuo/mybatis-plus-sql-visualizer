@@ -446,21 +446,37 @@ open class SqlLogConsoleBridge(
      */
     internal fun flushSettledEntries(nowMs: Long = System.currentTimeMillis()): Int {
         var produced = 0
+        var skipped = 0
         val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
         for (ctx in snapshot) {
             synchronized(ctx) {
                 ctx.jdbcParser.flushSettled(nowMs)
                 for (entry in ctx.jdbcParser.takeEntries()) {
-                    if (buffer.addEntry(entry)) produced++
+                    // T-CrossChannelDedupe §4.5：循环内复查闸门——外层判据只覆盖调用时刻，EDT 冲刷与
+                    // agent 接管沿之间仍有窗口；已封停就丢弃本拍冲刷条目（接管后由 agent 通道产出）。
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++
+                        continue
+                    }
+                    // T-CrossChannelDedupe §4.5：与 emitEntries 同款打通道标记——此前静默冲刷条目在
+                    // 归因诊断里显示「通道=UNKNOWN」，干扰现场裁决。
+                    if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                 }
                 // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
                 if (ctx.shardingEnabled) {
                     ctx.shardingParser.flushSettled(nowMs)
                     for (entry in ctx.shardingParser.takeEntries()) {
-                        if (buffer.addEntry(entry)) produced++
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++
+                            continue
+                        }
+                        if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                     }
                 }
             }
+        }
+        if (skipped > 0) {
+            LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 $skipped 条（由 agent 通道产出）")
         }
         if (produced > 0) {
             LOG.info(

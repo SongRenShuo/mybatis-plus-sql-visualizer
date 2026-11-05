@@ -77,6 +77,8 @@ private fun isDuplicate(entry: LogSqlEntry): Boolean {
 上面每一行都是一个能让两个 `dedupeKey` 分叉的点。这不是理论推演——仓库里已有实测记录：
 
 - `AgentLogTimeParityTest` 的类注释（`src/test/kotlin/.../log/AgentLogTimeParityTest.kt:16-19`）写明：旧口径用还原后 SQL 指纹做跨通道关联键，「在布尔参数、注释内 `?`、参数个数不等、多行 SQL 四类形态下静默失配」。
+
+  **2026-11-05 本地复现订正**：四类里「多行 SQL」在**去重口径**下不分叉——`normalizeSqlWhitespace` 折叠空白后同键（实测 `buffer.size == 1`），它只在叠加日期/布尔参数时才跟着分叉。日志时间口径当时把多行算进去是因为它用 `logTimeKey` 之外的旧键，与去重面不是同一判据。真正影响 `dedupeKey` 的是布尔、日期族、注释内 `?`、参数个数守卫四类。
 - `AgentEventAdapterTest.dedupeKey与桥通道一致`（`.../agent/AgentEventAdapterTest.kt:180-196`）自己注明：该用例是「手写一条 restoredSql 与自己比对（自证）」，「不是跨通道集成守卫」，发现不了布尔参数渲染、注释内 `?`、参数个数守卫三类失配。
 - 其中「块注释内含问号」用例（`AgentLogTimeParityTest.kt:176-190`）直接把分叉钉成断言：agent 侧因注释里的 `?` 触发数量守卫、整句不还原，控制台侧正常还原。
 
@@ -159,6 +161,21 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 
 ## 五、待验证前提（实施者先证伪）
 
+**2026-11-05 本地复现已证实第 3 条**（复现分支 `t-cross-channel-dedupe-repro` 提交 `7642a00b`，只加测试文件）：
+
+用本地 SQL Server 2022（`127.0.0.1:14333`，容器 `mpsv-mssql` 原为 Exited，`docker start` 后可用）真跑了一条 12 参数 INSERT，两侧 rawSql 完全一致，还原后**只有第 10、11 个参数不同**：
+
+```
+10: setBoolean(java.lang.Boolean)   = true            console `true`        agent `'true'`
+11: setTimestamp(java.sql.Timestamp)= 2026-11-05 11:37:20.0
+                                     console `TIMESTAMP '2026-11-05 11:37:20.0'`
+                                     agent   `'2026-11-05 11:37:20.0'`
+```
+
+`buffer.size == 2`，两键 `8674ba1dc8d427f4` / `55f81f92dfdeae7e`。所以「表里有 `bit` 或 `datetime` 列」就必然分叉，与 `@Async`、SQL Server 方言都无关。复现覆盖的其余形态：布尔、Timestamp、LocalDateTime（agent 还留着 ISO 的 `T`）、块注释内 `?`、参数个数不等，全部实测分叉；纯 String+Long 与纯多行 SQL 不分叉（对照组）。
+
+第 1、2 条仍待用户现场日志裁决（没有 `idea.log`，暂不能定论走的是哪条让位失效路径）。第 4、5 条在实施时按 KDoc 记录即可。
+
 1. **现场 #11 的通道归属**：让用户在 `idea.log` 里 grep
    ```
    捕获归因|重复观测跨通道融合|增强捕获闸门回落|增强捕获活性回落|增强捕获接管沿|CONFIG 已生效
@@ -168,7 +185,7 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
    - 出现 `增强捕获活性回落` → 解封窗（§3.3 第 2 条）；
    - 三者都没有却仍出现控制台条目 → 说明还有第四条让位失效路径，先查再修。
 2. **两侧 agent jar 版本是否一致**（§3.3 第 1 条的前提）。`CONFIG 已生效` 行是否出现在该时段。
-3. **那条 INSERT 的完整参数清单**：需要拿到第 12 个及之后的参数类型，确认是否命中日期族/布尔/全限定名中的哪一类。若不方便取，用 §六 的六类形态用例覆盖即可。
+3. ~~那条 INSERT 的完整参数清单~~ **已由本地复现给出**：12 参数，命中布尔与日期族两类，见上。
 4. **`crossChannelIndex` 的误配面**：同一 mapper 语句 5s 内执行多次且参数相同时，跨通道配对按 FIFO 可能错位。需确认融合只补空（不覆盖已有非空值）时错位影响可接受——耗时为毫秒级差异，位置来自同一条语句的同一栈帧，判定可接受并写进 KDoc。
 5. **`canDedupe` 的 ShardingSphere 例外**：跨通道折叠是否要覆盖 SHARDINGSPHERE 与 agent 的并存形态。UI013 的既有裁决是「Logic 未绑定，文本相同不能证明同一次执行」，建议维持不折叠，但需确认这不影响本症状（本症状是 MyBatis）。
 
@@ -228,3 +245,50 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 3. §4.5 附带修（一行级别）。
 4. §4.2 辅修（改动面大，单独券，需先跑还原器既有用例）。
 5. §4.4 二期评估（不承诺本期）。
+
+## 九、实施记录（2026-11-05，分支 `t-cross-channel-dedupe`）
+
+### 9.1 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/main/kotlin/.../log/SqlLogEntryBuffer.kt` | 主修：`crossChannelIndex`（crossKey = `logTimeKey` + `'\u0002'` + `logTimeParamSignature`）、`canFoldAcrossChannels`（两侧通道不同 + 5s 窗）、`purgeExpiredCrossChannelLocked`、`replaceEntryLocked` / `repointCrossChannelLocked`；入队未命中 dedupeKey 时查跨通道索引并复用 `mergeDuplicateEntry` 原位替换；维护面与 `dedupeIndex` 同锁同生命周期（入队 upsert / 淘汰摘键 / 融合重指 / `removeEntry` 单键重算 / `clear` / `rebuildDedupeIndexLocked` / `rebuildDedupeIndexAfterHandoff`，后者同 grace 截断）；`bindErrorToRecent` 原位替换后同步重指两个索引（此前 dedupeIndex 也留陈旧实例） |
+| `src/main/kotlin/.../log/LogSqlModels.kt` | §4.3 诊断文本：`crossChannelUnfoldedDiagText` / `crossChannelMergeDiagText`（只有指纹前缀、通道与升级面，沿用 `provenanceDiagText` 红线） |
+| `src/main/kotlin/.../log/SqlLogConsoleBridge.kt` | §4.5：`flushSettledEntries` 入队前补 `captureProvenance = CONSOLE_BRIDGE`，循环内复查 `SqlCaptureGate.bridgeSuppressed()`（被丢弃条目计数留痕） |
+| `src/test/kotlin/.../log/CrossChannelDedupeTest.kt` | 新增 12 例，全部走 `processConsoleLine` → `buffer.addEntry(通道=CONSOLE_BRIDGE)` + `AgentEventAdapter.toEntry` → 同一 buffer |
+
+### 9.2 与计划的差异
+
+1. **诊断行拆成两条**：`跨通道同源未折叠` 只在「同 crossKey + 异 dedupeKey + 同窗内、但折叠条件不满足（同通道已知标记）」时输出；折叠成功另打 `跨通道等价键融合`。这样 §6.4「`跨通道同源未折叠` 计数为 0」仍是可判定的验收口径——若把折叠成功也打成「未折叠」，该计数永远不为 0。两条共用 `logAttributionThrottled` 限频。
+2. **折叠判据加了时间窗**（计划 §4.3 字面判据只有「同 crossKey + 异 dedupeKey」）：不加窗时，同一模板同一参数在 60s 外的两次**独立执行**（同键已被窗口去重放行、跨通道渲染又分叉）会被误报为「未折叠」。窗口取 `CROSS_CHANNEL_WINDOW_MS = 5000`。
+3. **淘汰路径不反扫跨通道索引**：索引存该键**最后入队**实例、淘汰取**最旧**，故「索引命中被淘汰者」即等价于「队内已无同键余条」，直接摘键（唯一键稳态零额外 O(n)）；`removeEntry` 可能拿走最新实例，保留反扫。
+4. 计划 §6.1 表格第 5 行（全限定类型名）与第 4 行（参数个数不等）**未能按「修复后 1 条」验收**，原因见 9.4。
+
+### 9.3 测试读数
+
+| 任务 | 用例类 | 读数 |
+|---|---|---|
+| `testFast --tests ...CrossChannelDedupeTest` | CrossChannelDedupeTest | `12 tests completed`，XML 汇总 tests=12 / skipped=0 / failures=0 / errors=0 |
+| `testFast`（§6.3 定向回归，9 类） | SqlLogEntryBufferTest(59) / SqlLogEntryBufferDedupeIndexTest(18) / AgentLogTimeParityTest(14) / AgentEventAdapterTest(13) / CaptureActivityFallbackTest(8) / SqlCaptureGateSniffTest(4) / LogSqlModelsTest(12) / SqlErrorBindBufferTest(9) / O147HistoryUpgradeTest(26) | 合计 163 例，0 失败（`BUILD SUCCESSFUL in 1m 43s`） |
+| `test --tests ...`（平台桶，`testFast` 按「源码含 com.intellij 即排除」不收） | ConsoleSettleFlushTest(5) / SqlLogPanelFilterTest(36) | 合计 41 例，0 失败（`BUILD SUCCESSFUL in 1m 25s`） |
+
+### 9.4 反向验证（§6.2）两次读数
+
+临时把 `canFoldAcrossChannels` 首行改为 `if (true) return false`（等价摘除跨通道折叠；直接注释 `if` 条件会丢 `crossHit` 的智能转换导致编译失败，故改在判据函数上摘）：
+
+- **红**：`12 tests completed, 8 failed` —— 恰为 8 个依赖兜底的用例（布尔 / 日期 / LocalDateTime / 现场 12 参数 / 块注释 `?` / agent 侧点号类型 / 控制台先到 / agent 先到）；4 个非兜底用例（参数个数不等、点号类型名、不同 SQL、同通道同 SQL）保持绿。
+- **绿**：恢复后 `BUILD SUCCESSFUL`，XML 汇总 tests=12 / failures=0。
+
+### 9.5 计划前提被证伪（2 条）
+
+1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。该形态要折叠必须先做 §4.2（还原器口径收敛 + 参数序号 1..N 连续性校验），本期如实钉成「已知残余」用例（断言仍 2 行）。
+2. **§六 表格第 5 行「全限定类型名」的原始形态不可达**。`MyBatisLogParser.parseParams` 的类型分组是 `[A-Za-z_$][\w$]*(?:\[\])*`（**不含点号**），`42(java.lang.Long)` 匹配不上带类型分支 → 回落逗号粗分 → `value="42(java.lang.Long)"`、`type=null`，签名因此与 agent 侧不同；且 agent 侧 `ParamCapture.simpleTypeName` 本来就会剥包名。真实 MyBatis 日志打印简单类名，故此形态不构成现场风险。用例改为两例：一例守「agent 侧带包名时兜底仍折」（协议层容错），一例钉住解析器边界（断言仍 2 行）。
+
+另：复现代理实测（2026-11-05）确认现场是 12 参数 INSERT，**只有第 10（setBoolean）、第 11（setTimestamp）个参数分叉**，与 @Async / SQL Server 方言无关；`LocalDateTime` 还多一处差异（控制台 `TIMESTAMP '…'` / agent `'…T…'` 的 ISO `T` 未归一）。已按此补「现场 12 参数」与「LocalDateTime」两条用例。
+
+### 9.6 遗留
+
+- §4.2（参数渲染口径收敛，含参数序号连续性校验）——第 4/5 行两类残余的正解，单独成券。
+- §4.4（控制台 DML 耗时估算）——二期，未动。
+- 真机复验（§6.4）未做：需用户应用 + 20 次 `saveAsync` 插入，且要看 `idea.log` 里 `跨通道同源未折叠` 计数。
+
