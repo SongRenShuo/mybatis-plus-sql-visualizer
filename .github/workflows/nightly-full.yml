@@ -190,7 +190,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: ['243', '253', '263']
+        # T-CiMarketIdeProvision（2026-11-06）：ide = 该目标在 gradle transforms 里的解包目录名，
+        # 供「确认验证目标 IDE 已解包」那步做存在性检查（名字错了就永远判定缺失、白跑一次 verifyPlugin）。
+        include:
+          - tag: '243'
+            ide: ideaIU-2024.3.7.1-win
+          - tag: '253'
+            ide: idea-2025.3.5-win
+          - tag: '263'
+            ide: idea-2026.3-win
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -237,6 +245,33 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
           Write-Host "verifier-cli 已播种：$jar（$v）"
 
+      - name: 确认验证目标 IDE 已解包（缺则先跑一次该目标的 verifyPlugin）
+        # T-CiMarketIdeProvision（2026-11-06 首跑实证）：verifyMarketplace<tag> 的 ideDir() 是**硬校验**
+        # ——它只在 gradle 缓存的 transforms/*/transformed/<IDE 目录名> 里找发行版，找不到直接报
+        # 「IDE 发行目录 … 未在 gradle 缓存 transforms 找到」。手工门禁里 243/253 之所以一直能过，
+        # 是因为历史上 build job 内联跑过 verifyPlugin、把它们解包进了可写缓存；263 是后加的目标，
+        # 从没被解包过 → nightly 首跑 marketplace(263) 70 秒就红。
+        # 这里显式兜住：该目标的 IDE 不在 transforms 里时，先跑一次 `:verifyPlugin -PverifyIdes=<tag>`
+        # （约 4 分钟，只在那条腿付），把解包产物做出来，再跑 marketplace。
+        run: |
+          $ideName = '${{ matrix.ide }}'
+          $found = $false
+          foreach ($c in Get-ChildItem -Path (Join-Path $env:GRADLE_USER_HOME 'caches') -Directory -ErrorAction SilentlyContinue) {
+            $t = Join-Path $c.FullName 'transforms'
+            if (-not (Test-Path -LiteralPath $t)) { continue }
+            foreach ($h in Get-ChildItem -Path $t -Directory -ErrorAction SilentlyContinue) {
+              if (Test-Path -LiteralPath (Join-Path $h.FullName "transformed\$ideName")) { $found = $true; break }
+            }
+            if ($found) { break }
+          }
+          if ($found) {
+            Write-Host "验证目标 IDE 已解包：$ideName（跳过 provisioning）"
+          } else {
+            Write-Host "::notice::验证目标 IDE 未解包：$ideName → 先跑该目标的 verifyPlugin 填充 transforms"
+            pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs `
+              ":verifyPlugin -PverifyIdes=${{ matrix.tag }} -x buildPlugin -PgifRecord=false --console=plain"
+            if ($LASTEXITCODE -ne 0) { throw "provisioning 失败（verifyPlugin ${{ matrix.tag }}）" }
+          }
       - name: Marketplace 门禁 ${{ matrix.tag }}（在线 + 无豁免 + 逐份 verdict 判定）
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs

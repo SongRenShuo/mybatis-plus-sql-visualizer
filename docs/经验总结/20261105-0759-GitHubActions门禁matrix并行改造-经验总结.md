@@ -313,7 +313,15 @@ marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看）�
 - 三条腿照抄手动门禁的同名 job（工件名同为 `build-outputs`，两边口径必须同步改）。
 - 顺序不能省 `build`：`verifyPlugin` / `verifyMarketplace` 吃的是「已打包的那份字节」，
   各自重编译会让「验过的字节」与「要发的字节」不是同一份。
-- 墙钟代价为零：它们与测试/真机腿并行，夜间关键路径仍是方言腿（27.8 分钟）。
+- 墙钟代价为零：它们与测试/真机腿并行，夜间关键路径仍是方言腿（23~28 分钟）。
+- **首跑就抓到一个潜伏的坑（marketplace(263) 70 秒红）**：`verifyMarketplace<tag>` 里的 `ideDir()` 是硬校验——
+  只在 gradle 缓存的 `transforms/*/transformed/<IDE 目录名>` 里找发行版，找不到直接报
+  「IDE 发行目录 … 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）」。
+  243/253 一直能过，是因为历史上 build job 内联跑过 verifyPlugin、把它们解包进了可写缓存；
+  **263 是后加的目标，从来没被解包过**。手工门禁同样中招（只是还没轮到它跑）。
+  处置：marketplace 每条腿前加一步「确认验证目标 IDE 已解包」，缺失时先跑
+  `:verifyPlugin -PverifyIdes=<tag> -x buildPlugin`（约 4 分钟，只在那条腿付），再跑 verdict。
+  matrix 改 `include`（tag + ide 目录名成对，名字错了会永远判缺失、白跑一次 verifyPlugin）。
 - **`if` 判 `needs.build.result == 'success'` 而不是 `!cancelled()`**：`changes` 判无代码提交那天
   `build` 是 skipped，而 skipped 的依赖对 `!cancelled()` 是「继续跑」——它会去下载不存在的
   工件然后红。这是本仓第二次踩「skipped 不等于通过」的同一个坑（第一次是 build-plugin 的聚合 gate）。
