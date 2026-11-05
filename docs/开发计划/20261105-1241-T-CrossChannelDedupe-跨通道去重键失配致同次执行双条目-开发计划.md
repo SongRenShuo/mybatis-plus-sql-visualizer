@@ -281,14 +281,34 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 
 ### 9.5 计划前提被证伪（2 条）
 
-1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。该形态要折叠必须先做 §4.2（还原器口径收敛 + 参数序号 1..N 连续性校验），本期如实钉成「已知残余」用例（断言仍 2 行）。
-2. **§六 表格第 5 行「全限定类型名」的原始形态不可达**。`MyBatisLogParser.parseParams` 的类型分组是 `[A-Za-z_$][\w$]*(?:\[\])*`（**不含点号**），`42(java.lang.Long)` 匹配不上带类型分支 → 回落逗号粗分 → `value="42(java.lang.Long)"`、`type=null`，签名因此与 agent 侧不同；且 agent 侧 `ParamCapture.simpleTypeName` 本来就会剥包名。真实 MyBatis 日志打印简单类名，故此形态不构成现场风险。用例改为两例：一例守「agent 侧带包名时兜底仍折」（协议层容错），一例钉住解析器边界（断言仍 2 行）。
+> **2026-11-05 后续：两条均已在 `t-cross-channel-residual` 清掉，见 §9.7。**
+
+1. **§六 表格第 4 行「参数个数不等 → 修复后 1 条」不成立**。crossKey 含参数值签名，agent 少捕一个参数时签名是另一串（`1\u00012` vs `1`），索引根本查不到。当时钉成「已知残余」用例（断言仍 2 行）；真因是 agent 捕获面缺口，§9.7 已修。
+2. **§六 表格第 5 行「全限定类型名」的原始形态不可达**。`MyBatisLogParser.parseParams` 的类型分组是 `[A-Za-z_$][\w$]*(?:\[\])*`（**不含点号**），`42(java.lang.Long)` 匹配不上带类型分支 → 回落逗号粗分 → `value="42(java.lang.Long)"`、`type=null`，签名因此与 agent 侧不同；且 agent 侧 `ParamCapture.simpleTypeName` 本来就会剥包名。真实 MyBatis 日志打印简单类名，故此形态不构成现场风险。§9.7 已把类型分组放宽到允许点号，该形态现在能折。
 
 另：复现代理实测（2026-11-05）确认现场是 12 参数 INSERT，**只有第 10（setBoolean）、第 11（setTimestamp）个参数分叉**，与 @Async / SQL Server 方言无关；`LocalDateTime` 还多一处差异（控制台 `TIMESTAMP '…'` / agent `'…T…'` 的 ISO `T` 未归一）。已按此补「现场 12 参数」与「LocalDateTime」两条用例。
 
 ### 9.6 遗留
 
-- §4.2（参数渲染口径收敛，含参数序号连续性校验）——第 4/5 行两类残余的正解，单独成券。
+- ~~§4.2（参数渲染口径收敛，含参数序号连续性校验）~~ —— §9.7 用「修捕获面 + 放宽解析器」替代，未做还原器收敛；剩余未覆盖面见 §9.7 末条。
 - §4.4（控制台 DML 耗时估算）——二期，未动。
 - 真机复验（§6.4）未做：需用户应用 + 20 次 `saveAsync` 插入，且要看 `idea.log` 里 `跨通道同源未折叠` 计数。
+
+### 9.7 残余清理（2026-11-05，分支 `t-cross-channel-residual`，合并 `2cfd509c`）
+
+两条残余都没有走「给去重加二级匹配」，而是回到源头修：
+
+1. **agent 捕获面缺口**（`ParamCapture.java`）：
+   - 白名单补 `setNClob` / `setRowId` / `setSQLXML` / `setRef` 四族——此前不织入，参数整段缺失；
+   - `tryCapture` 的 `args.length > 3` 放宽到 `> 4`——`setObject(int, Object, int, int)` 四参重载此前**织入器按 ≥2 参织了钩子、捕获层却拒绝**，形成「织了不捕」。
+   两侧参数个数因此对齐，跨通道参数值签名相同，一级兜底直接命中，去重逻辑一行未改。
+2. **解析器类型分组**（`MyBatisLogParser.parseParams`）：`[A-Za-z_$][\w$]*` → `[A-Za-z_$][\w$.]*`，允许 `java.lang.Long` 形态，使 `LogSqlRestorer.PLAIN_TYPES` 里既有的全限定名映射真正生效（此前那段映射是死代码）。
+
+测试与读数：
+- 新增 `ParamCaptureTest`（agent 子项目，5 例）：四参 `setObject`、四族 setter、三参回归、非参数 setter 拒绝。
+- `CrossChannelDedupeTest` 两个残余用例改为「已折叠」与「签名不等时不误折」的安全边界。
+- 绿：`CrossChannelDedupeTest` 12/0/0、`ParamCaptureTest` 5/0/0、`ParamEdgeCaseRegressionTest` 20/0/0、`DualParserIntegrationTest` 11/0/0、`SqlLogCaptureRealtimeScenarioTest` 9/0/0、`AgentLogTimeParityTest` 14/0/0、`CaptureRulesTest` 15/0/0。
+- 反向验证：还原捕获面 → `ParamCaptureTest` 恰 2 红（四参 setObject、四族 setter）；还原正则 → 点号类型用例恰 1 红。恢复后转绿。
+
+**仍未覆盖**：`byte[]` / `Blob` / `Clob` 类参数的**值文本**两侧天然不同（控制台日志是 `[B@1a2b`，agent 是 `<byte[]>`），签名无法对齐，兜底接不住。这类参数在普通业务里少见，且没有稳定可比的文本形态；若现场出现，正解是让跨通道匹配退到「rawSql + 参数个数 + 参数位置类型」，属独立券。
 
