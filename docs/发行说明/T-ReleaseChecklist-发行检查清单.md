@@ -69,6 +69,8 @@
   - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
   - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
   - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8 → run#9/#10 19.4 → run#12 18.4 → **run#19/#20 十四 job 全绿 13.4 / 14.5 分钟**（build 6.3~6.6 + verifyplugin 5.0~5.1 + verify×3 并行 3.9~4.3 + marketplace×3 并行 5.4~7.7 + test×5 并行 8.2~10.7，test 与 build 同起跑；墙钟由 marketplace(262) 这条腿决定）。CI 比本地快的原因是全面并行，但它仍要恢复约 9.6GB 的 Gradle 缓存并从头编译，**所以 CI 不作为默认路径**。⚠️动 `buildSrc` 的提交会让缓存 key 换新，该轮 build 的缓存保存要整份重存（实测 +7 分钟，run#13）。
+  - **推送自动跑全量测试**（2026-11-05 起）：push 到 master 自动触发 `push-test.yml`——5 片并行、不带 build/兼容验证，约 11 分钟出结论、约 50 runner 分钟；并发组按分支且 `cancel-in-progress: true`（连推多次只跑最后一轮）。**分工**：推送管测试，发版前的 `mode=gate` 管 build + verify×3 + marketplace×3 + verifyplugin；测试部分与推送那轮同口径，可用 RC-P1c 的「零代码改动复用」判据省掉。
+  - 并发纪律（2026-11-05 改）：`build-plugin.yml` 的 gate 与 release/publish **分组不同**——gate 组可被新提交取消，release/publish 组永不取消（发行不能被打断、也不允许两次发行并发覆盖同一 Release 资产）。
   - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
     ① **任何需要 verifier-cli 的独立 job 都要自己拿到 jar**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar。现由各腿按 `dev-support/verifier-cli-version.txt`（当前 `1.411`）从 Maven Central 直取后播种；IPGP 升级 verifier 时必须同步改钉子，`VerifierCliVersionGuardTest` 会在本机全量测试里红。
     ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。

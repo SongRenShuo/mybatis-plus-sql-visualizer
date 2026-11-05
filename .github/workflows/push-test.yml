@@ -1,36 +1,47 @@
-# 推送快检（自动触发）——与手动门禁 workflow（build-plugin.yml）分开的独立文件。
+# 推送测试（自动触发）——与手动门禁 workflow（build-plugin.yml）分开的独立文件。
 #
 # 为什么单独一个文件：
 #   ① build-plugin.yml 的每个 job 都用 `if: inputs.mode == ...` 判模式，而 push 事件没有 inputs
 #      （空串会让所有 if 变假，整轮只剩 test 跑、gate 必红）。要合进同一个文件就得给每个 if
 #      加 event_name 分流，改动面大且容易出错。
-#   ② 手动门禁（gate / release / publish / tests）的语义与并发纪律保持不变，发行链零风险。
+#   ② 手动门禁（gate / release / publish）的语义与并发纪律保持不变，发行链零风险。
 #
-# 定位：**便宜档**——只回答「这次推送有没有把编译或纯逻辑测试弄坏」，约 6 分钟、1 个 runner、
-# 约 7 runner 分钟。全量门禁（14 job / 约 105 runner 分钟）仍走 build-plugin.yml 手动 dispatch。
+# 定位：**推送即跑全量测试**（5 片并行，不含兼容验证三条腿）。
+# 读数依据（2026-11-05 实测）：5 片各自独立编译，最慢片 8.2~11.0 分钟，5 个 job、约 50 runner 分钟。
+# 对比过的另一条路——单 job 跑「编译 + testFast 纯逻辑桶」：墙钟 10.7 分钟（缓存 2.6 + 编译 3 +
+# 4382 个用例 4.5），只覆盖一半测试。**同样的墙钟，5 片给的是全量**，故取 5 片。
 #
-# 高频推送友好：并发组按分支、cancel-in-progress: true——新推送直接取消同分支在跑的快检，
-# 队列永远只留最新提交，延迟固定（不像全量门禁那样串行积压）。
+# 与手动门禁的分工：
+#   - 推送 → 本 workflow 跑全量测试，约 11 分钟出结论；
+#   - 发版前 → build-plugin.yml 手动 gate，跑 build + verify×3 + marketplace×3 + verifyplugin
+#     + 全量测试（测试部分与推送那轮同口径，可用 RC-P1c 的「零代码改动复用」判据省掉）。
+#
+# 高频推送友好：并发组按分支、cancel-in-progress: true——新推送直接取消同分支在跑的整轮，
+# 队列永远只留最新提交，延迟固定；连推 5 次也只按最后那一次计成本。
 #
 # 缓存只读：写权限留给手动门禁的 build job（多 job 并发写同一 key 会全部保存失败）。
-name: 推送快检（自动）
-run-name: 推送快检 · ${{ github.ref_name }} @ ${{ github.sha }}
+name: 推送测试（自动）
+run-name: 推送测试 · ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   push:
     branches: [master]
 
 concurrency:
-  group: plugin-ci-fast-${{ github.ref_name }}
+  group: plugin-ci-push-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  fast:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1', '2', '3', '4', '5']
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     defaults:
       run:
@@ -66,18 +77,25 @@ jobs:
         with:
           cache-read-only: true
 
-      - name: 编译 + 纯逻辑快测
-        # testFast = 源码零 com.intellij 引用的测试类（秒级反馈桶），不依赖 IDE 沙盒与 demo 工程。
+      - name: 准备测试 demo
+        # Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+
+      - name: 分片 ${{ matrix.shard }}
+        # 与手动门禁同口径剔除三类真机依赖用例（本机 MySQL / 本机 JDK8 / agent 池）；
         # 走 run-gradle-retry：同一处 Gradle zip 文件系统竞态也会打在配置期。
+        timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":compileKotlin :compileTestKotlin testFast -PgifRecord=false --console=plain"
+          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
+          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
+          -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
 
       - name: 失败诊断输出（断言消息打到任务日志）
         # Gradle 精简控制台不显示断言消息（expected/actual），失败时把它们直接打进任务日志。
         if: failure()
         run: |
-          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          $files = Get-ChildItem -Path build/test-results, sub-projects/sql-visualizer-agent/build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
           foreach ($f in $files) {
             $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
             $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
