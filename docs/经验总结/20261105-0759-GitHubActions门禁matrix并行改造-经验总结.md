@@ -293,7 +293,7 @@ run#13 是冷缓存轮：改 `buildSrc` 会让 setup-gradle 的缓存 key 换新
 | 2 | 落盘文件里 `instances = ` 与 `mysql84, pg16` 断成两行，测试判「矩阵未声明任何实例」 | `@("# 注释", "x = " + ($arr -join ', '))`：数组字面量里 `+` 与 `,` 的优先级把第二个元素切成两项 | 一律用 `-f` 格式化：`$out += ("instances = {0}" -f (...))`；**落盘类操作要把产物读回来逐行验形态**，退出码 0 不代表内容对 |
 | 3 | e2e 业务请求全 HTTP 500，而 agent 心路正常 | JDBC URL 带 `&`，作为 `-P` 参数穿过 `gradlew.bat` 被 **cmd 当命令分隔符**截断 | 参数改**文件注入**（写 `gradle.properties`，由 `providers.gradleProperty` 读回） |
 | 4 | `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，而官方链接存在 | IPGP 读**项目内缓存**的 product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore），缓存早于发布 | `rm -rf .intellijPlatform/productReleases` 重跑；`--info` 可见 `Reading product releases listing from cache: …`；CI 不受影响 |
-| 5 | 分片偶发 `ClosedFileSystemException`（读 243 的 `database-plugin.jar`） | Gradle zip 文件系统句柄被关闭后又被 plugin-structure 使用 | 重跑策略逐级加码：原地重跑 ❌ → `--stop` ❌ → `--stop`+`--max-workers=1` ❌ → **删 `caches/*/transforms/*/transformed/idea*`**（待验证）；判据是日志出现「已清理 IDE 解包目录 N 个」 |
+| 5 | 分片偶发 `ClosedFileSystemException`（读 243 的 `database-plugin.jar`） | Gradle zip 文件系统句柄被关闭后又被 plugin-structure 使用 | 重跑策略逐级加码：原地重跑 ❌ → `--stop` ❌ → `--stop`+`--max-workers=1` ❌ → 删 `caches/*/transforms/*/transformed/idea*` ❌（**run#23 证伪**：重解包后 1m39s 同样报同一条错）→ 第三级：连 IDE 发行版解包产物一起删（`modules-2/files-2.1/com.jetbrains.intellij.idea` 与 `idea`），逼重新下载（约 1GB，待验证）；判据是日志出现「清 IDE 发行版解包产物」 |
 | 6 | 分片本身 `BUILD SUCCESSFUL`，但 job 判红在三个 post 动作 | 收尾清理时文件仍被残留 JVM 持有（该轮日志末尾有 `Terminate orphan process: pid … (java)`） | 先观察是否复现；若复现，在测试步骤末尾补 `./gradlew --stop` 收尾 |
 | 7 | 全量 12 实例的 `dialectExternalVerify` 跑 91 分钟仍未完 | 跨洋 RTT × 每实例上千次建表/查询的乘数效应（本地同一套矩阵 5~10 分钟） | CI 只跑代表实例子集（`mysql84`+`pg16`，`CI_DIALECT_KEYS` 可覆盖），预算 40/50 分钟；**全量以本地 `releaseGate` 为准** |
 | 8 | `testFast` 以为「秒级」，CI 上 4382 例要 4.5 分钟 | 本地热 JVM + 6 核，CI 冷 JVM + 2 核 | 按 CI 实测估时；本机与 CI 的单测耗时不可互相外推 |
@@ -323,7 +323,9 @@ marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看）�
 - 切法复用分片均衡器那套画像：`dev-support/test-shard-weights.tsv` 权重降序 + 同权按类名升序，
   装当前最轻片（LPT）。零画像类取中位数。
 - 配置期实测（本机冷配置）：**187 类 / 116.4s + 187 类 / 116.4s**，两片完全对齐（全集 374 类 232.8s）。
-  对 CI 而言每片约 350~380s（本地 116s × 约 3×），对比拆前 601s。
+- CI 实测（run#23）：**373s / 471s**，对比拆前 601s（−21% / −130s）。两片没有像画像预示的那样对齐
+  （116.4 : 116.4 → 373 : 471，偏差 26%），说明画像刻度能定「谁重」，但定不了「这批类在 CI 的冷 JVM
+  上分摊多少」——分片那边同样的偏差被 5 片平均掉了。要再压，只能说下表里实测定权（像分片那样两轮挤出自愈）。
 - 覆盖面红线做成配置期 `require`：两片并集必须恒等于 `fastBucketClasses − shardExcludeClassNames`。
   这条断言是本轮最值钱的一行——快桶漏一片就是 2000+ 例在 CI 上静默不跑，而总数看起来只少一点。
 - 结果目录仍写 `build/test-results/testFast`：切片模式只给 CI（每片独占一台 runner）。
@@ -333,6 +335,9 @@ marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看）�
 
 - `-PtestShardCount=6` 上线前先算账：每片约 2.4 分钟是同等的编译固定成本，测试执行按 6/5 缩
   （本地片均值 147s × 3 ≈ 440s → 约 370s），预期 433~495s → 约 400~440s，整轮省 1~1.5 分钟。
-- **这只是推算**，本仓惯例是片数每次负载形态变化都要实测；本轮改成 6 片后跑一轮对比，
-  不合算就退回 5（matrix 与 `-PtestShardCount` 必须同步改，只改一处会出「testShard6 不存在」
-  或「第 6 片装空清单」）。
+- **A/B 实测结论（run#23）：不合算，退回 5 片。** 6 片的分片步骤 455~492s，5 片基线 433~495s，
+  即「多一条腿、每片几乎不降」；墙钟上 test(5) 反而 11.8 分钟（基线 10.2~10.5）。原因是每条腿都要
+  重新编译（约 2.4 分钟）与恢复缓存（89~219s），这两项按腿数线性增长，把切分收益吃掉了——
+  与 T-TestPerf5 当年「6 片 execSum 膨胀、回劣」同向。
+- 下次要动片数，先看 `dev-support/test-shard-weights.tsv` 的实际分布（Top3 类占比）再决定，
+  别按「总时长 ÷ 片数」推。

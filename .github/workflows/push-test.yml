@@ -41,11 +41,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # T-CiShard6（2026-11-05 晚）：5 → 6 片做 A/B。每片 ~2.4 分钟是同等的编译固定成本，
-        # 测试执行部分按 6/5 缩（本地片均值 147s × CI 约 3× ≈ 440s → 约 370s），预期每片
-        # 433~495s → 约 400~440s、整轮省 1~1.5 分钟。跑一轮对比后不合算就退回 5（本仓惯例：
-        # 片数每次负载形态变化都要实测，不靠推算）。
-        shard: ['1', '2', '3', '4', '5', '6']
+        # T-CiShard6 A/B 结论（2026-11-05 晚 run#23 实测）：**6 片不合算，退回 5 片**。
+        # 6 片的分片步骤 455~492s，5 片基线 433~495s——没有变化；而每条腿都要重新编译
+        # （约 2.4 分钟固定成本）与恢复缓存（89~219s），多一条腿只多烧 runner 时间不小墙钟。
+        # 墙钟上 test(5) 反而 11.8 分钟（5 片基线 10.2~10.5）。结论与 T-TestPerf5 当年 6 片回劣同向。
+        # 想再试先读 dev-support/test-shard-weights.tsv 的实际分布，别按「除以片数」推。
+        shard: ['1', '2', '3', '4', '5']
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -93,7 +94,7 @@ jobs:
         timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":testShard${{ matrix.shard }} -PtestShardCount=6 -PgifRecord=false --console=plain
+          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
           -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
 

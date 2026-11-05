@@ -242,17 +242,18 @@ jobs:
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain"
 
-  # 全量测试六片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
+  # 全量测试五片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
   # 注：分片只装平台类是 T-JUnit5Eval 方案 2 之后的形态，纯逻辑类在同目录下方 `fast` job 里跑。
-  # T-CiShard6（2026-11-05 晚）：5 → 6 片（-PtestShardCount=6 与 matrix 必须同步改，只改一处会
-  # 出现「testShard6 不存在」或「第 6 片装了空清单」）。本机默认仍是 5 片，不受影响。
+  # T-CiShard6 A/B（2026-11-05 晚 run#23）：6 片实测无收益（分片步骤 455~492s vs 5 片 433~495s），
+  # 退回 5 片；若再试，`-PtestShardCount` 与 matrix 必须同步改——只改一处会出「testShard6 不存在」
+  # 或「第 6 片装空清单」。
   tests:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3', '4', '5', '6']
+        shard: ['1', '2', '3', '4', '5']
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -283,7 +284,7 @@ jobs:
         timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":testShard${{ matrix.shard }} -PtestShardCount=6 -PgifRecord=false --console=plain
+          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
           -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
       - name: 失败诊断输出（断言消息打到任务日志）

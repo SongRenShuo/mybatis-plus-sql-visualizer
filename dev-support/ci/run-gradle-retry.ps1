@@ -1,4 +1,4 @@
-# CI 用的 Gradle 调用包装：命中「zip 文件系统竞态」时停 daemon 后重跑一次。
+# CI 用的 Gradle 调用包装：命中「zip 文件系统竞态」时逐级处置后重跑（三级，见文件末尾）。
 #
 # 背景（T-CiZipFsFlake，2026-11-05 实证）：Gradle 配置期解析 IDE 自带插件（com.intellij.database
 # 来自 243 发行版的 DatabaseTools/lib/database-plugin.jar）时会偶发
@@ -60,5 +60,40 @@ Write-Host "已清理 IDE 解包目录 $script:removed 个（重跑会重新解�
 # 重跑加 --max-workers=1：该异常的形态是「同一份 classpath 被两个任务并行解析，先完成的把 zip
 # 文件系统关掉，另一个撞上 ClosedFileSystemException」。run#16 与夜间首轮实证：只换 daemon 不够
 # （第二次 11 秒同样失败），必须同时把并行度压到 1 才能换掉触发条件。
+& ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
+$rc2 = $LASTEXITCODE
+if ($rc2 -eq 0) { exit 0 }
+if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
+    exit $rc2
+}
+
+# ---------- 第三级（2026-11-05 晚 run#23 实证后新增） ----------
+# 第二级已被实测证伪：run#23 的 test(6) 命中该竞态后，`--stop` + 删 transforms/*/transformed/idea*
+# 重跑，**1 分 39 秒后同样报** "Could not find bundled plugin with ID: 'com.intellij.database'"
+# （9 个任务全 up-to-date，说明重解包完成、错误依旧）。这推翻了「坏状态只在 transforms 解包产物里」
+# 的判断：IDE 发行版本身还有一份解包产物在 modules-2（files-2.1/com.jetbrains.intellij.idea/ideaIU/<ver>/…），
+# transforms 只是它的副本——副本重造仍从坏源取字节，所以固定复现。
+# 第三级：连 IDE 发行版解包产物一起删，逼 Gradle 重新下载 + 重新解包（约 1~3 分钟，仅在这条路径上付）。
+Write-Host '::warning::zip-FS 竞态第二级未恢复：清 IDE 发行版解包产物（modules-2）后重试第三级，会重新下载约 1GB'
+& ./gradlew.bat --stop 2>&1 | Out-Null
+
+$cachesRoot = Join-Path $env:GRADLE_USER_HOME 'caches'
+# ① 整个 transforms 树（不止 idea*：同名 hash 目录里的 metadata 也指向旧的解包结果）
+Get-ChildItem -Path $cachesRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    $td = Join-Path $_.FullName 'transforms'
+    if (Test-Path -LiteralPath $td) {
+        Remove-Item -LiteralPath $td -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+# ② IDE 发行版的解包产物本身（IPGP 把发行版登记成普通 artifact，展开形态落在 files-2.1 下）
+$artifactRoot = Join-Path $cachesRoot 'modules-2/files-2.1'
+foreach ($g in @('com.jetbrains.intellij.idea', 'idea')) {
+    $p = Join-Path $artifactRoot $g
+    if (Test-Path -LiteralPath $p) {
+        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "已清理 IDE 发行版产物：$p"
+    }
+}
+Write-Host '第三级重跑（会重新下载 IDE 发行版）'
 & ./gradlew.bat @argList --max-workers=1 2>&1 | Tee-Object -FilePath $log -Append
 exit $LASTEXITCODE
