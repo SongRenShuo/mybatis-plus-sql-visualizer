@@ -239,7 +239,11 @@ jobs:
           name: build-outputs
 
       - name: 官方兼容验证（verifyPlugin，离线 + 豁免清单）
-        run: ./gradlew.bat :verifyPlugin -PgifRecord=false --console=plain
+        # -x buildPlugin：发行包来自 build 的工件（build/distributions 随 build-outputs 下发），
+        # 本 job 不需要重新编译——不加这一项它会从头编一遍（run#14 实测该 job 8.7 分钟，
+        # 其中约 2.4 分钟是编译），而编译产物与发行包本来就在工件里。本地已验证
+        # `:verifyPlugin -x buildPlugin` 可跑通（BUILD SUCCESSFUL）。
+        run: ./gradlew.bat :verifyPlugin -x buildPlugin -PgifRecord=false --console=plain
 
   # T-CiSplitMarketplace（2026-11-05）：Marketplace 同口径在线门禁独立成 job（它只依赖打包产物）。
   # T-CiMarketSplit（2026-11-05 晚）：再拆成三条腿——原先三个 verifier JVM 挤在一台 2 核 runner 上
