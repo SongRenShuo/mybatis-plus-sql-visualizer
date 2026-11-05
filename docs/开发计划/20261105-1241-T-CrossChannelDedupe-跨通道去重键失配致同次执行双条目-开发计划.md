@@ -393,3 +393,29 @@ merged.database  : SQL Server · master@127.0.0.1:14333
 - agent 侧 `byte[]` 的实际降级形态是 `<[B>`（`simpleTypeName` 对数组返回 JVM 名），不是 §9.8 正文写的
   `<byte[]>`。两种形态都在 `AGENT_DEGRADED_REGEX` + `BINARY_TYPE_MARKERS` 覆盖内，行为一致，措辞订正于此。
 
+### 9.10 与「SQL 去重」开关解耦（2026-11-05 真机第二次报障，`67520e95`）
+
+用户沙盒复验仍出现无字段副本。现场证据（截图）：列表里同一条语句一条带 `96ms [MySQL] [UserServiceImpl.java:50]`、
+另一条只有 `—`；底部状态栏「控制台: 已捕获 8 个 / 增强: 已收事件 14 条」——**两通道都在产出**（桥没让位，
+属 §3.3 已知形态）；右上角「SQL 去重」复选框**未勾选**。
+
+根因是跨通道兜底被绑在 `dedupeEnabled` 上，两处：
+
+1. `crossKey` 的构造（`val crossKey = if (dedupeEnabled && canDedupe(entry)) …`）与 `crossChannelIndex`
+   的**全部维护面**（入队 upsert / 淘汰回收 / `removeEntry` 重算 / `bindErrorToRecent` 重指 /
+   handoff 重建）都在 `if (dedupeEnabled)` 里。用户一关「SQL 去重」，兜底整段失效，索引压根没维护，
+   连 `跨通道同源未折叠` 诊断行都不会留——现场只能靠截图反推。
+2. 折叠条件还要求 `crossDivergent`（`dedupeKey` 不同）。原判据的前提是「同键副本由上面的同键去重分支
+   处理」，但那条分支同样受 `dedupeEnabled` 门控——去重一关，**键相同的副本两边都没人管**。
+
+修法：跨通道折叠只依赖 `canDedupe`（ShardingSphere 例外）+ 5s 窗 + 异通道，与用户去重偏好无关；
+折叠条件去掉 `crossDivergent`（去重开启时同键分支先命中、走不到这里，故不改变既有路径）；
+`crossChannelIndex` 的五个维护面全部移出 `dedupeEnabled` 判断；`rebuildDedupeIndexAfterHandoff` 里
+把「去重关闭就 return」改成只在 dedupe 部分条件化，跨通道索引照常重建。
+
+语义依据：去重开关管的是「重复执行要不要折叠」，跨通道兜底管的是「同一次执行的两份观测要不要合并」
+——后者不是用户可选的偏好，留两条只会让用户以为发生过两次。
+
+测试：`CrossChannelDedupeTest` 新增 3 例（去重关闭时仍折叠 / 两次不同执行不误折 / 开关来回切换后仍折叠）；
+绿读数 18 + 59 + 18 + 14 全绿。反向验证分两次：还原开关依赖 → 恰 2 红；还原 `crossDivergent` → 恰 1 红。
+
