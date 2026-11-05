@@ -10,11 +10,15 @@
 | 项 | 读数 | 影响 |
 |---|---|---|
 | 继承 JUnit3 基类的测试类（`BasePlatformTestCase` 等） | **398 个** | `@Test` / `@Before` / `@After` / `@Rule` 全部**无效**（JUnit3 按方法名 `test*` 收集） |
-| 反引号命名但**不以 `test` 开头**的用例 | **13 个**（散在 5 个类） | **从未执行过**（JUnit3 不收集），测试结果 XML 里根本不出现 |
+| 反引号命名但**不以 `test` 开头**的用例 | 立项扫出 13 个，**实施时实测只有 5 个**（见 §8.1 的订正：扫描正则未限定顶格，命中了字符串夹具里的示例源码，另有一处混合文件的注解归属错算） | 那 5 个从未执行过（JUnit3 不收集）；首跑即全红，根因是测试自身夹具缺陷（面板未 dispose） |
 | 使用 `org.junit.Assume` 的类 | 5 个 | `assume` 不生效：本想「环境不具备就跳过」，实际被当失败或直接跑下去 |
 | 使用 `@Before/@After/@Rule/@RunWith` 的类 | 1 个 | 前置/收尾不执行 |
 
-**最值钱的 13 个**（真·从不执行）：
+**订正（2026-11-05 实施后实测）**：真·从不执行的是 **5 个**，全部在 `SqlToJavaPanelTest`（`canAutoInferEntitySelection_*`）；
+立项时列的 `BannedApiScanServiceStateTest` 4 条与 `ResultMapColumnsGapTest` 4 条**其实一直在跑**（它们是纯 JUnit4 类，
+被扫描正则误判）。详见 §8.1。
+
+立项时的初判（保留原文以便对照）：
 
 - `BannedApiScanServiceStateTest`（4 个，含两条 `自证` 用例）——**禁止 API 扫描守卫的灵敏度自证一直没跑过**，「该守卫能抓住违规」的声明属空口；
 - `SqlToJavaPanelTest`（5 个 `canAutoInferEntitySelection_*`）；
