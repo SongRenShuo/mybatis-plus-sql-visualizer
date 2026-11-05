@@ -58,7 +58,7 @@
 - [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
   - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
   - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
-  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8（逐段拆解）→ **run#9 十 job 全绿 19.4 分钟**（build 7.3 + verify×3 并行 5.8~7.6 + test×5 并行 8.9~11.4 + marketplace 12.1）。CI 比本地快的原因是四路并行，但它仍要恢复约 9.6GB 的 Gradle 缓存（1.9~2.9 分钟/job）并从头编译（约 4 分钟），**所以 CI 不作为默认路径**。
+  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8（逐段拆解）→ run#9/#10 19.4 → **run#12 十 job 全绿 18.4 分钟**（build 8.2 + verify×3 并行 4.0~6.0 + test×5 并行 8.6~11.2 + marketplace 10.0 + gate 0.1；test 与 build 同起跑）。CI 比本地快的原因是四路并行，但它仍要恢复约 9.6GB 的 Gradle 缓存（1.9~3 分钟/job）并从头编译（约 4 分钟），**所以 CI 不作为默认路径**。
   - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
     ① **任何需要 verifier-cli 的独立 job 都要自己预热**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar，而该 jar 是 `verifyPlugin` 下载的；跨 job 的 gradle 缓存只读且不含它（build 保存缓存时 jar 还没进 `modules-2`，且 setup-gradle 同 key 不覆盖）。verify×3 与 marketplace 各有一步 `:verifyPlugin -PverifyIdes=<目标>` 预热。
     ② `上传编译产物` 必须 `if: !cancelled()`（否则 verifyPlugin 失败会连坐九个下游 job）。
