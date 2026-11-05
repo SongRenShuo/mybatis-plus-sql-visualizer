@@ -102,3 +102,125 @@ for root,_,files in os.walk('src/test/kotlin'):
 
 - 本任务不放松任何判据：13 个用例跑起来后若红，属「测试腐烂」或「真缺陷」，按证据处理；
 - 取号前已 `grep` 查重（`T-Junit4Migration` 无冲突）。
+
+## 八、实施记录
+
+> 实施：2026-11-05。范围按用户后续定调扩为 P0 / P1 / P2 / P2.5；**P3 不做**（理由见 8.6）。
+> 提交（只提交未推送）：P0 `9dc0c263`、P1 `0aa0542d`、P2 `3a07ee7a`、P2.5 `99f4c0bb`。
+
+### 8.1 动手前的前提证伪：三条被推翻
+
+**① 「13 个从不执行」——只有 5 个是真的。** §一 的扫描正则没限定「顶格类声明」，两类假阳性：
+
+- `BannedApiScanServiceStateTest.kt` 里 17 处 `class XxxSampleTest : BasePlatformTestCase()` 全在**字符串字面量**里（该扫描守卫自己的夹具）；文件本身是纯 JUnit4 类（`class ... : BannedApiScanSupport()`），4 条用例都带 `@Test`；
+- `ResultMapColumnsGapTest.kt` 里第 2、3 个类才是 JUnit3，正则却把 4 条注解归属记到了同文件的纯 JUnit4 类 `ResultMapColumnsGapTest` 头上。
+
+`./gradlew test --tests <三个类>` 的 XML 读数（`build/test-results/test`）：
+
+| 类 | tests= | 5/4 条目标用例是否在 XML 里 | 结论 |
+|---|---|---|---|
+| BannedApiScanServiceStateTest | 4 | 4 条（含两条「自证」）全部在 | 一直在跑 |
+| ResultMapColumnsGapTest（纯 JUnit4 类） | 4 | 4 条全在 | 一直在跑 |
+| SqlToJavaPanelTest | 23 | 5 条 `canAutoInferEntitySelection_*` 缺席 | 真·漏网 |
+
+因此 P0 的实际范围是 **5 条（一个类）**，不是 13 条（五个类）。两条「守卫灵敏度自证」用例一直绿，守卫的灵敏度声明本来就成立；本轮只是把它从「被误记为没跑」纠正为「有 XML 证据在跑」。
+
+**② 「`@Test` 在 JUnit3 类里无效」——成立。** 同一张表就是对照实验：JUnit3 的 `SqlToJavaPanelTest` 里 5 条带 `@Test` 的方法不被收集，同文件 23 条 `test*` 方法照常执行；纯 JUnit4 类里的 `@Test` 正常执行。机制是 JUnit38ClassRunner 只按方法名收集。
+
+**③ 「1 个用 `@Before/@After/@Rule/@RunWith` 的类」——不存在。** 扫描命中的是 `BannedApiScanServiceStateTest:493/730`，两处 `@After`/`@Before` 都在三引号字符串夹具里（该守卫自测「收尾/初始化入口」规则的示例源码）。全仓真注解使用者只有纯 JUnit4 类，那里的注解有效，不需处理。
+
+前提③（平台 JUnit4 基类可用）未验证也不需要——全程按「向 JUnit3 收口」实施，零 JUnit4 迁移。
+
+### 8.2 P0：让漏网用例真正执行（`9dc0c263`）
+
+做法取计划里的「改名」（零结构风险），与仓内 144 处 `fun \`test ...\`` 先例同形态：
+`fun \`canAutoInferEntitySelection_xxx\`` → `fun \`test canAutoInferEntitySelection_xxx\``。
+
+读数（`build/test-results/test/TEST-...SqlToJavaPanelTest.xml`）：
+
+- 改前：`tests=23 skipped=0 failures=0`（5 条目标缺席）
+- 改名后首跑：`tests=28 failures=5` —— 5 条全红
+- 修完：`tests=28 skipped=0 failures=0`
+
+5 条红的定性是**测试自身缺陷**（既非产品缺陷、也非断言陈旧）：用例体里 `SqlToJavaPanel(project)` 每次新建面板且从不 dispose，`tearDown` 的平台检查报 `Editor EditorImpl[null] hasn't been released`。改为复用 `setUp` 创建、`tearDown` 释放的 `panel` 字段即全绿；断言与输入数据一行未改（不存在「改成恒真」）。
+
+其余 8 条（BannedApiScanServiceStateTest 4 条、ResultMapColumnsGapTest 4 条）确认一直在跑，未改动。
+
+### 8.3 P1：跳过语义（`0aa0542d`）
+
+5 个类全部按仓内既有口径改：`assumeTrue(cond, msg)` → `if (!cond) { println("[DB-IT] SKIP: <原因>"); return }`；前置/收尾仍走 `override setUp/tearDown`，**没有迁 JUnit4 基类**。
+
+| 类 | 处数 |
+|---|---|
+| DataSourceSelectorIntegrationTest | 14 |
+| DbConsoleIntegrationTest | 3（含「未配置 mpTestDbPassword」那条多行 assume） |
+| HeavyNativeDatabaseDiagramJoinChainTest | 2 |
+| PreviewSideQueryIntegrationTest | 1 |
+| ExecDocGateIntegrationTest | 0（此前已改口径），本轮只清残留的 `import org.junit.Assume` 死 import |
+
+判据：构造「环境不具备」——`-PmpDemoProjectDir` 指向空目录 + `-PskipDemoFixtureCheck=true`，逐任务跑：
+
+| 任务 | tests= | skipped= | failures= | `[DB-IT] SKIP` 打印 |
+|---|---|---|---|---|
+| testDbSelector | 5 | 0 | 0 | 4 |
+| testDbConsole | 9 | 0 | 0 | 1 |
+| testDbDiagram | 1 | 0 | 0 | 1 |
+| testDbExecDocGate | 1 | 0 | 0 | 0（本类不依赖 demo 配置，正常执行） |
+| testDbPreviewSideQuery | 1 | 0 | 0 | 1 |
+
+反向实验（PreviewSideQueryIntegrationTest，把判定临时改回 `assumeTrue` 再跑同一场景）：
+
+- 改前（`assumeTrue`）：`tests=1 skipped=0 failures=1`，失败信息 `org.junit.AssumptionViolatedException: REVERSE-PROBE ...`
+- 改后（打印+return）：`tests=1 skipped=0 failures=0`，system-out 含 `[DB-IT] SKIP: MySQL 未就绪，跳过真库旁路查询：demo dataSources.xml 未找到 mpj_demo`
+
+这条把「JUnit3 下 assume 记 failed」从注释里的经验变成可复现读数；探针改动已还原。
+
+### 8.4 P2：清死注解（`3a07ee7a`）
+
+范围：只动**类本身（或经中转基类）继承 JUnit3 基类**的顶层测试类（46 个文件、47 个类），其中 `ResultMapColumnsGapTest.kt` 是混合文件——同文件 1 个纯 JUnit4 类（4 条 `@Test` 保留）+ 2 个 JUnit3 类（4 条删除）。
+
+数量：删 **313 条 `@Test`** + **52 条**已无用的 `import org.junit.Test`（唯一保留 import 的是上述混合文件）。diff 形态 0 insertions / 365 deletions，无行尾换行被改动。
+
+判据（同一批 5 个类，覆盖 config/execute/log/mcp/ui.ref 五个包，改前改后各跑一次）：
+
+| 类 | 改前 tests= | 改后 tests= |
+|---|---|---|
+| ProjectPluginSettingsTest | 7 | 7 |
+| ConsoleErrorExtractTest | 21 | 21 |
+| SqlToJavaPanelTest | 28 | 28 |
+| CrudSqlToolTest | 4 | 4 |
+| MybatisXmlReferenceTest | 20 | 20 |
+
+合计 80 → 80，无用例因删注解停跑。ProjectPluginSettingsTest 改前改后同为 `failures=3`，失败是既有的 `NoSuchMethodError: PluginSettings$State.copy$default`（陈旧编译产物，与本轮无关，两轮读数相同）。
+
+### 8.5 P2.5：JUnit3 语义守卫（`99f4c0bb`）
+
+新增 `convention/Junit3SemanticsGuardTest.kt`，扫 `src/test/kotlin` 里继承 JUnit3 基类的类（含中转基类），断言三条：
+
+1. 类上不得出现 `@Test/@Before/@After/@Rule/@RunWith/@Ignore`；
+2. 不得 `import org.junit.Assume` 或调用 `Assume.assume*`（多类文件只校验函数体调用，避免 import 归属误报）；
+3. 反引号方法名必须以 `test` 开头。
+
+实现上两处关键：扫描前先做**字符串/注释掩码**（否则示例源码会被当真类——正是 §一 那 13 个假阳性的成因）；继承链按简单类名做**固定点传播**，中转基类可识别。
+
+读数：`Junit3SemanticsGuardTest tests=5 failures=0`（1 条全仓用例 + 4 条自证/边界用例：注解规则、Assume 规则、命名规则各「违规必红 + 合规必绿」，另加中转基类传播与字符串字面量不参与扫描两个边界）。
+已按判据 4 登记 `GUARD_CLASSES`（4 个 `*Violations` 判定函数逐条登记），元守卫 `GuardSelfTestCoverageMetaGuardTest tests=8 failures=0`。
+
+反向验证（真实文件探针，不是只看合成样本）：在 `ProjectPluginSettingsTest` 上临时加 `@Test` + 把一个方法改成不以 test 开头的反引号名 → 守卫变红并逐条点名：
+
+```
+ProjectPluginSettingsTest.kt:24 类 ProjectPluginSettingsTest 上的 @Test 在 JUnit3 下不生效（JUnit38ClassRunner 只按 test* 方法名收集用例）：请删除该注解
+ProjectPluginSettingsTest.kt:25 方法 `REVERSE_PROBE_never_runs` 不以 test 开头——JUnit3 按方法名收集用例，这条用例永远不会执行：改名为 `test REVERSE_PROBE_never_runs`
+```
+
+还原探针后 `tests=5 failures=0`。
+
+### 8.6 P3 不做（本轮结论）
+
+全量迁移到 JUnit4 基类不排期，理由：平台自身演进方向是 JUnit5（243 的 `testFramework.jar` 里 90+ 个 `com.intellij.testFramework.junit5.*` 类），JUnit4 基类只剩一个薄适配器；迁 JUnit4 是往旁支走。将来若升级，应直接评估 JUnit5（`@TestApplication` / `@RunInEdt`），那是独立工程。本轮 P2.5 的守卫已把「新代码再写回 JUnit3 无效语义」堵住，是这条路的长期解。
+
+### 8.7 遗留与待决定
+
+- **分片复读未做**：本轮按任务红线未跑 `testShards`（也不跑 `testDatabase` 整体）。P0 后该类在全量里的条数会从 23 变 28，需要在收口轮从分片 XML 复读一次确认收集面一致；若分片权重表（`test-shard-weights.tsv`）按类时长自动积累，这 5 条首次执行会带来一次微小的权重漂移，建议随收口轮一起刷新。
+- 五个 DB 集成类只验证了「环境不具备 → SKIP」路径；「环境具备 → 真库断言」路径本轮未跑（需真实 MySQL，属 `testDatabase` 通道）。
+
