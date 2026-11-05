@@ -221,8 +221,9 @@ jobs:
     # T-CiNightly（2026-11-05 首轮实证）：50 分钟不够——不是卡死，是**跨洋往返延迟**。
     # 该套件对每个实例跑「全量保留字逐个当标识符建表/查询」，本地（国内网络）约 5~10 分钟，
     # 从 GitHub runner 到 114.66.55.245 / 103.36.220.245 每轮往返 200ms+，实测 50 分钟仍未跑完。
-    # 夜间时间充足，故放宽到 120 分钟；若仍超时，说明需要按实例做并行或裁剪 CI 矩阵。
-    timeout-minutes: 120
+    # 现改为「代表实例子集」（见落矩阵那步），预算按子集收回到 40 分钟：
+    # 子集正常应 5~15 分钟，跑飞也不会再烧两小时。全量矩阵仍由本地 releaseGate 覆盖。
+    timeout-minutes: 40
     defaults:
       run:
         shell: pwsh
@@ -249,6 +250,8 @@ jobs:
         id: matrix
         env:
           MATRIX: ${{ secrets.DIALECT_MATRIX_PROPERTIES }}
+          # 想换代表实例改这里（逗号分隔，key 取自矩阵文件）
+          CI_DIALECT_KEYS: 'mysql84,pg16'
         run: |
           if (-not $env:MATRIX) {
             Write-Host '::notice::未配置 secret DIALECT_MATRIX_PROPERTIES，跳过真机方言验证（本地 releaseGate 仍会跑）'
@@ -256,12 +259,33 @@ jobs:
             exit 0
           }
           New-Item -ItemType Directory -Force -Path '.local' | Out-Null
-          Set-Content -LiteralPath '.local/dialect-external-matrix.properties' -Value $env:MATRIX -Encoding utf8
-          Write-Host '方言矩阵已落盘（.local/dialect-external-matrix.properties）'
+          # T-CiNightly（2026-11-05 run#6 实证）：**CI 只跑代表实例冒烟，全量矩阵留给本地**。
+          # run#6 的这份矩阵在 2 核 runner 上跑了 91 分钟仍未完（步骤超时 100 分钟），而本地同一套
+          # 矩阵 5~10 分钟。根因是跨洋往返延迟：套件对每个实例跑「全量保留字逐个建表/查询」，
+          # 每轮 200ms+ 的 RTT 叠上千次查询 → 不可行。加预算只是延迟失败。
+          # 做法：从 secret 里只保留 CI_DIALECT_KEYS 列的实例（默认按「一种协议一条」挑代表），
+          # 其余实例仍由本地 releaseGate / dialectExternalVerify 覆盖。
+          $keep = ($env:CI_DIALECT_KEYS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if (-not $keep) { $keep = @('mysql84', 'pg16') }
+          $lines = $env:MATRIX -split "`r?`n"
+          $byKey = @{}
+          foreach ($l in $lines) {
+            $m = [regex]::Match($l, '^\s*([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*=\s*(.*)$')
+            if (-not $m.Success) { continue }
+            $k = $m.Groups[1].Value
+            if (-not $byKey.ContainsKey($k)) { $byKey[$k] = @() }
+            $byKey[$k] += ("{0}.{1} = {2}" -f $k, $m.Groups[2].Value, $m.Groups[3].Value)
+          }
+          $missing = $keep | Where-Object { -not $byKey.ContainsKey($_) }
+          if ($missing) { throw "矩阵里找不到这些 key：$($missing -join ',')（现有：$($byKey.Keys -join ',')）" }
+          $out = @("# CI 冒烟子集（全量见本地 .local/dialect-external-matrix.properties）", "instances = " + ($keep -join ', '))
+          foreach ($k in $keep) { $out += $byKey[$k] }
+          Set-Content -LiteralPath '.local/dialect-external-matrix.properties' -Value $out -Encoding utf8
+          Write-Host "方言矩阵已落盘（子集 $($keep -join ',' / '')，原矩阵 $(($byKey.Keys | Measure-Object).Count) 个实例）"
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"

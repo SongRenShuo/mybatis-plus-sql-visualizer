@@ -74,6 +74,9 @@
     - 需在仓库 Secrets 配三个才会启用 DB / e2e 两条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：`MPV_DB_URL` / `MPV_DB_USER` / `MPV_DB_PASSWORD`——指向测试服务器上的 MySQL（2026-11-05 部署：`103.36.220.245:25900`，库 `mpj_demo`；URL 必须带 `sessionVariables=sql_mode=ANSI_QUOTES`，与 demo 数据源同口径）。`dialectExternalVerify` 另需 `DIALECT_MATRIX_PROPERTIES`（`.local/dialect-external-matrix.properties` 全文）。
     - 连接覆盖机制：`-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword`（DB 集成）与 `-Pe2eDbUrl/-Pe2eDbUser/-Pe2eDbPassword`（e2e，映射成 Spring 的 `SPRING_DATASOURCE_*`）。不传时回落到「demo 的 dataSources.xml + root/root」，本机行为不变。
     - 已知坑：`mysql:8.0` 官方 tag 是 Oracle Linux 9 基底，在无 x86-64-v2 的虚机上会 `Fatal glibc error`，须用 `mysql:8.0-debian`；容器内 `LANG` 为空会让 mysql 客户端按 latin1 灌数据导致中文双编码，init 脚本首行须 `SET NAMES utf8mb4`。
+    - **`dialectExternalVerify` 在 CI 上只跑代表实例子集**（`mysql84` + `pg16`，可用 `CI_DIALECT_KEYS` 覆盖）：
+      全量 12 实例在 2 核 runner 上跑 91 分钟仍未完（2026-11-05 run#6 实证），根因是跨洋 RTT × 每实例
+      上千次建表/查询；本地同一套矩阵 5~10 分钟。**全量矩阵以本地 `releaseGate` 为准**，CI 只留冒烟信号。
     - `e2eFakeIde` 在 CI 的额外前置：JDK8（`setup-java` 装完记录路径再恢复 JDK17）、Maven 联网（`-Pe2eMavenOffline=0`，首次冷仓库）、demo 克隆（Gitee 失败回落 GitHub 镜像）。
   - 并发纪律（2026-11-05 改）：`build-plugin.yml` 的 gate 与 release/publish **分组不同**——gate 组可被新提交取消，release/publish 组永不取消（发行不能被打断、也不允许两次发行并发覆盖同一 Release 资产）。
   - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
