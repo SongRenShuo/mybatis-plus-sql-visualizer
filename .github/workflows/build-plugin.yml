@@ -109,13 +109,10 @@ jobs:
         #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
         run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
 
-      # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行，
-      # 此处只保留「必须单次跑」的两段——打包/verifyPlugin（为后续 job 预热 verifier-cli 与 IDE 缓存）
-      # 与 Marketplace 同口径在线门禁（它要拿真实发行包上传，不适合多份并行）。
-
-      - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
-        if: inputs.mode == 'gate' || inputs.mode == 'release'
-        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
+      # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
+      # T-CiSplitMarketplace（2026-11-05 run#7 实测）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
+      # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点——
+      # 拆出去后 build 从 13.3 降到约 8.5，marketplace 与 verify/test 三路并行。
 
       - name: 上传编译产物（供 verify / test 的 matrix job 复用，避免各自重编译）
         # T-CiMatrix（2026-11-04 run#1 实证）：必须 !cancelled() 而非默认的 success()——
@@ -124,12 +121,18 @@ jobs:
         # 产物在 buildPlugin 成功时就已生成，与 verifyPlugin 成败无关；让下游照常跑，
         # 才能看到「测试绿不绿」这个独立信息（本 job 仍会因 verifyPlugin 失败标红）。
         if: ${{ !cancelled() && inputs.mode != 'publish' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-outputs
           # 只传「后续 job 需要且重新生成昂贵」的目录：主 jar / 发行 zip / 编译产物 / 测试类 /
           # plugin.xml 补丁产物 / agent 子项目产物。缺失只会导致下游重新编译（慢），不会导致错误。
+          # T-CiSkipRecompile（2026-11-05 run#7 实测）：**必须带上项目级 .gradle**。原先只传
+          # build/classes 等产物，但 Gradle 的「任务是否 UP-TO-DATE」判据是 .gradle/<ver> 里的
+          # 执行历史与输入指纹，缺了它每个下游 job 都重编译（run#7 test(4) 实测 compileKotlin
+          # 1m45s + compileTestKotlin 1m00s，而真正的测试只跑 3m15s）。同一运行、同一提交、
+          # 同一绝对路径，历史与产物完全对应，恢复后按 UP-TO-DATE 直接跳过编译。
           path: |
+            .gradle/
             build/libs/
             build/distributions/
             build/classes/
@@ -140,12 +143,15 @@ jobs:
             sub-projects/sql-visualizer-agent/build/classes/
             sub-projects/sql-visualizer-agent/build/resources/
           if-no-files-found: error
+          # .gradle 是隐藏目录，upload-artifact v4.4+ 默认 exclude hidden files——不开这个开关
+          # 它会被**静默跳过**（其它路径存在，if-no-files-found 也不会报错），下游照旧重编译。
+          include-hidden-files: true
           compression-level: 1
           retention-days: 7
 
       - name: 上传插件 ZIP
         if: inputs.mode == 'gate' || inputs.mode == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plugin-${{ github.run_number }}
           path: build/distributions/*.zip
@@ -175,7 +181,7 @@ jobs:
         # 任务失败时把测试报告与结果 XML 打成工件——CI 控制台的精简格式不显示断言消息
         # （expected/actual、子进程日志都只在报告里），下载工件即可定位，终结盲猜轮次。
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-${{ github.run_number }}
           path: |
@@ -185,6 +191,60 @@ jobs:
             sub-projects/sql-visualizer-agent/build/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  # T-CiSplitMarketplace（2026-11-05 run#7 实测立项）：Marketplace 同口径在线门禁（三目标串行，
+  # 实测 4.8 分钟）从 build 里拆出来独立跑。它只需要 buildPlugin 产出的发行包，与 verifyPlugin
+  # 无关；留在 build 里等于让九个下游 job 都陪它多等 4.8 分钟（run#7 墙钟 27.8 中 build 占 13.3，
+  # 其中 marketplace 是纯粹的串行尾巴）。拆出后 market 与 verify/test 三路同起，各占一台 runner。
+  marketplace:
+    needs: build
+    if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        # 与 verify/test 同口径只读：写权限只留给 build job，避免多 job 并发写同一 key 全部失败
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v8
+        with:
+          name: build-outputs
+
+      - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
+        # 三目标逐个上传真实发行包做在线验证（无豁免清单，与 Marketplace 审核同口径）
+        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -239,7 +299,7 @@ jobs:
           cache-read-only: true
 
       - name: 下载编译产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-outputs
 
@@ -314,7 +374,7 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
 
       - name: 下载编译产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-outputs
 
@@ -345,7 +405,7 @@ jobs:
 
       - name: 失败时上传测试报告（诊断通道）
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-shard${{ matrix.shard }}-${{ github.run_number }}
           path: |
@@ -357,11 +417,11 @@ jobs:
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
     # （仓库 Settings → Environments → release 配 required reviewers；未配审批人则直接发布）
-    # T-CiMatrix：门禁已拆为 build / verify / test 三个 job，release 模式须三者全绿；
+    # T-CiMatrix：门禁已拆为 build / verify / test / marketplace 四个 job，release 模式须全部绿；
     # publish 模式只依赖 build（它只下载既有产物，不看门禁 job 结果）。
-    needs: [build, verify, test]
+    needs: [build, verify, test, marketplace]
     # !cancelled() 而不是 always()：取消运行时不能把发布 job 拉起来
-    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.build.result == 'success' && needs.verify.result == 'success' && needs.test.result == 'success')) }}
+    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.build.result == 'success' && needs.verify.result == 'success' && needs.test.result == 'success' && needs.marketplace.result == 'success')) }}
     environment: release
     runs-on: windows-latest
     timeout-minutes: 30
@@ -422,7 +482,7 @@ jobs:
 
       - name: 下载门禁产物（publish 模式）
         if: inputs.mode == 'publish'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: plugin-${{ steps.source.outputs.run_number }}
           run-id: ${{ steps.source.outputs.run_id }}
@@ -431,7 +491,7 @@ jobs:
 
       - name: 下载本次构建产物（release 模式）
         if: inputs.mode == 'release'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: plugin-${{ github.run_number }}
           path: build/distributions
