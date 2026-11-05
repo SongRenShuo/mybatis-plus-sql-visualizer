@@ -246,4 +246,51 @@ class CaptureActivityFallbackTest {
         CaptureActivityFallback.onGateChanged(false, now)
         assertFalse("闸门回落（agent 恢复接管/关闭增强）后解封态必须清空", CaptureActivityFallback.isActive())
     }
+
+    /**
+     * T-CaptureGateStability P2（2026-11-05 真机实测）：本纪元**收到过** agent 事件后，
+     * 「静默 ≥ 阈值」不得再触发回落。
+     *
+     * 改之前的判据只有「静默 + 控制台有 SQL 行」，于是用户两次操作间隔超过 10 秒就解封一次，
+     * 解封瞬间的 SQL 由控制台产出、成为一条无耗时/无位置的条目（沙盒里每次间隔调用都发生）。
+     * 收到过任何事件即证明织入器在工作，静默只说明「没人操作」。
+     */
+    @Test
+    fun `已收到过事件_静默超阈值也不回落`() {
+        beginDoubleSilence()
+        val ctx = newCtx()
+        CaptureActivityFallback.onAgentEvent(now) // 织入器被证明在工作
+        now += 60_000                             // 长时间无人操作，远超阈值
+        val produced = processConsoleLine(prep("SELECT 1 FROM t WHERE id = ?"), ctx, null, {}) +
+            processConsoleLine(params("1(Long)"), ctx, null, {})
+        assertTrue("收到过事件 → 不得解封：$produced", produced.isEmpty())
+        assertFalse("回落态保持 false", CaptureActivityFallback.isActive())
+        assertEquals("无解封计数", 0L, CaptureActivityFallback.engagements.get())
+    }
+
+    /** P2 对照：从未收到事件（白名单漏驱动的真实故障形态）时，静默达阈值仍必须解封。 */
+    @Test
+    fun `从未收到事件_静默达阈值仍解封`() {
+        beginDoubleSilence()
+        val ctx = newCtx()
+        now += 10_000
+        val produced = processConsoleLine(prep("SELECT 1 FROM t WHERE id = ?"), ctx, null, {}) +
+            processConsoleLine(params("1(Long)"), ctx, null, {})
+        assertEquals("双哑必须被打破", 1, produced.size)
+        assertTrue(CaptureActivityFallback.isActive())
+    }
+
+    /** P2 纪元切换：闸门回落（agent 断线）后清零，下一次接管重新起算，不被上一纪元的「收到过」永久挡住。 */
+    @Test
+    fun `纪元切换后重新起算`() {
+        beginDoubleSilence()
+        CaptureActivityFallback.onAgentEvent(now)
+        CaptureActivityFallback.onGateChanged(false, now) // 回落：清态
+        CaptureActivityFallback.onGateChanged(true, now)  // 重新接管
+        val ctx = newCtx()
+        now += 10_000
+        val produced = processConsoleLine(prep("SELECT 1 FROM t WHERE id = ?"), ctx, null, {}) +
+            processConsoleLine(params("1(Long)"), ctx, null, {})
+        assertEquals("新纪元未收到事件 → 双哑仍可解封", 1, produced.size)
+    }
 }
