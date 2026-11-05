@@ -33,6 +33,11 @@ pluginManagement {
 
 plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+    // ⚠️ 升级本行 IPGP 版本时，必须同步 dev-support/verifier-cli-version.txt（当前 1.411）：
+    // CI 的 verify / marketplace 六条腿按该文件里的版本从 Maven Central 取 verifier-cli，
+    // 不同步就会**静默用旧版 verifier 跑判定**（不报错、门禁照绿）。步骤见
+    // docs/发行说明/T-ReleaseChecklist-发行检查清单.md 的 RC-P2c；改完跑
+    // VerifierCliVersionGuardTest 确认（本机缓存有 jar 时生效，CI 上会 skip）。
     id("org.jetbrains.intellij.platform.settings") version "2.18.1"
 }
 

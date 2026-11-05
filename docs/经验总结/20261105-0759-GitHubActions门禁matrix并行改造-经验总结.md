@@ -247,3 +247,11 @@ run#13 是冷缓存轮：改 `buildSrc` 会让 setup-gradle 的缓存 key 换新
 - 在线验证要下载插件元数据（`-offline` 会漏报可选依赖 API，这是 verifyMarketplace 存在的理由）；
 - 缓存恢复是 9.6GB（4 个 IDE 的 zip + 解包产物）；
 - 想让它更早起跑，只能让 build 更快，而 build 的 6.3 里约 2.5 是 Kotlin 编译（无执行历史，跨 job 复用需要 `.gradle` 或 build cache，前者试过失败、后者是项目明令关闭的）。
+
+### 5. 新维护点：verifier-cli 版本钉子
+
+拆腿后 CI 的 verify/marketplace 六条腿按 `dev-support/verifier-cli-version.txt`（当前 `1.411`）从 Maven Central 直取 verifier-cli，不再靠「build 跑过 `:verifyPlugin`」顺带获得。
+
+**升级 IPGP（`settings.gradle.kts:36`）后必须同步改这个钉子**，否则 CI 会继续用旧版 verifier 跑判定且不报错——门禁绿不代表按新版口径验过。具体操作写在 `docs/发行说明/T-ReleaseChecklist-发行检查清单.md` 的 RC-P2c（跑一次 `:verifyPlugin` → 查缓存里的 jar 版本 → 改钉子 → 跑 `VerifierCliVersionGuardTest` 确认绿）。
+
+守卫本身只在本机缓存里有 jar 时生效（CI 上会 skip），**是本地防线而不是 CI 防线**——所以它挂在「升级 IPGP」这个动作上，而不是挂在门禁上。

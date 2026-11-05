@@ -38,6 +38,16 @@
 - [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/262 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
+- [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
+  - 背景：CI 的 `verify` / `marketplace` 六条腿不再靠跑 `:verifyPlugin` 顺带获得 verifier-cli，而是按 `dev-support/verifier-cli-version.txt` 里的版本从 Maven Central 直取后播种进 gradle 缓存（拆腿提速的前提）。版本号本身由 IPGP 内部决定，我们只能钉。
+  - **风险形态**：IPGP 升级（改 `settings.gradle.kts:36` 的 `org.jetbrains.intellij.platform.settings` 版本）后若不同步改钉子，CI 会**继续用旧版 verifier 跑判定且不报错**——门禁绿不代表按新版口径验过。
+  - 操作（改 IPGP 版本后立刻做，别等发版）：
+    1. `./gradlew :verifyPlugin -PgifRecord=false` 跑一次（让新版 verifier-cli 落进 gradle 缓存）；
+    2. 查缓存里的实际版本：`ls ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/*/*/verifier-cli-*-all.jar`（Windows 上 gradle home 可能是 junction，按 `GRADLE_USER_HOME` 解析）；
+    3. 把版本号写进 `dev-support/verifier-cli-version.txt`（文件只有版本号一行）；
+    4. `./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"` 必须绿；
+    5. 提交时在信息里写明「IPGP x.y.z → verifier-cli a.b.c」。
+  - 判据：`VerifierCliVersionGuardTest` 绿（本机缓存里存在与钉子不同版本的 jar 时它会红并点名两边版本）。注意该守卫只在本机跑过 `:verifyPlugin`（缓存有 jar）时生效，CI 上因缓存不同会 skip——**它不是 CI 防线，是本地防线**。
 - [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
 
