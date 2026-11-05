@@ -338,3 +338,5 @@ val originalSql: String? = null,
 | 日期 | 内容 |
 |---|---|
 | 2026-11-05 | 立项。用户反馈 `<datasource>` 内 HQL 未被识别；本册给出 entityClass 相关性判据、复用 `previewHbmNamedQuery` 的接入方案、`#{}` 预处理、证据/降级可见化与三态开关，并列出 6 个决策点、7 条待验证前提。未动生产代码。 |
+| 2026-11-05 | 实施并合入 master（`98554a4f` + 合并 `08fab428`）：检测器/转换接入/`#{}`/原文页签/三态开关/demo 夹具；定向 11 类 118/0/0/0。 |
+| 2026-11-05 | 用户追问两处泛化并已实施：① 页面标签名不固定（`maintainPage` / `listPage` / `queryPage` …）→ 口径改为「`<pages>` 直接子级 + 带 `<datasource>`」（无 datasource 的旧 `<maintainPage/>` 保留兼容）；② 无 `type`/无 `entityClass` 的通用载体（`<dataValue>`）→ 通用 XML 内嵌链接入同一检测器，靠「根标识符可解析为实体且表名不同」自动判 HQL。 |
