@@ -77,6 +77,8 @@ private fun isDuplicate(entry: LogSqlEntry): Boolean {
 上面每一行都是一个能让两个 `dedupeKey` 分叉的点。这不是理论推演——仓库里已有实测记录：
 
 - `AgentLogTimeParityTest` 的类注释（`src/test/kotlin/.../log/AgentLogTimeParityTest.kt:16-19`）写明：旧口径用还原后 SQL 指纹做跨通道关联键，「在布尔参数、注释内 `?`、参数个数不等、多行 SQL 四类形态下静默失配」。
+
+  **2026-11-05 本地复现订正**：四类里「多行 SQL」在**去重口径**下不分叉——`normalizeSqlWhitespace` 折叠空白后同键（实测 `buffer.size == 1`），它只在叠加日期/布尔参数时才跟着分叉。日志时间口径当时把多行算进去是因为它用 `logTimeKey` 之外的旧键，与去重面不是同一判据。真正影响 `dedupeKey` 的是布尔、日期族、注释内 `?`、参数个数守卫四类。
 - `AgentEventAdapterTest.dedupeKey与桥通道一致`（`.../agent/AgentEventAdapterTest.kt:180-196`）自己注明：该用例是「手写一条 restoredSql 与自己比对（自证）」，「不是跨通道集成守卫」，发现不了布尔参数渲染、注释内 `?`、参数个数守卫三类失配。
 - 其中「块注释内含问号」用例（`AgentLogTimeParityTest.kt:176-190`）直接把分叉钉成断言：agent 侧因注释里的 `?` 触发数量守卫、整句不还原，控制台侧正常还原。
 
@@ -159,6 +161,21 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 
 ## 五、待验证前提（实施者先证伪）
 
+**2026-11-05 本地复现已证实第 3 条**（复现分支 `t-cross-channel-dedupe-repro` 提交 `7642a00b`，只加测试文件）：
+
+用本地 SQL Server 2022（`127.0.0.1:14333`，容器 `mpsv-mssql` 原为 Exited，`docker start` 后可用）真跑了一条 12 参数 INSERT，两侧 rawSql 完全一致，还原后**只有第 10、11 个参数不同**：
+
+```
+10: setBoolean(java.lang.Boolean)   = true            console `true`        agent `'true'`
+11: setTimestamp(java.sql.Timestamp)= 2026-11-05 11:37:20.0
+                                     console `TIMESTAMP '2026-11-05 11:37:20.0'`
+                                     agent   `'2026-11-05 11:37:20.0'`
+```
+
+`buffer.size == 2`，两键 `8674ba1dc8d427f4` / `55f81f92dfdeae7e`。所以「表里有 `bit` 或 `datetime` 列」就必然分叉，与 `@Async`、SQL Server 方言都无关。复现覆盖的其余形态：布尔、Timestamp、LocalDateTime（agent 还留着 ISO 的 `T`）、块注释内 `?`、参数个数不等，全部实测分叉；纯 String+Long 与纯多行 SQL 不分叉（对照组）。
+
+第 1、2 条仍待用户现场日志裁决（没有 `idea.log`，暂不能定论走的是哪条让位失效路径）。第 4、5 条在实施时按 KDoc 记录即可。
+
 1. **现场 #11 的通道归属**：让用户在 `idea.log` 里 grep
    ```
    捕获归因|重复观测跨通道融合|增强捕获闸门回落|增强捕获活性回落|增强捕获接管沿|CONFIG 已生效
@@ -168,7 +185,7 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
    - 出现 `增强捕获活性回落` → 解封窗（§3.3 第 2 条）；
    - 三者都没有却仍出现控制台条目 → 说明还有第四条让位失效路径，先查再修。
 2. **两侧 agent jar 版本是否一致**（§3.3 第 1 条的前提）。`CONFIG 已生效` 行是否出现在该时段。
-3. **那条 INSERT 的完整参数清单**：需要拿到第 12 个及之后的参数类型，确认是否命中日期族/布尔/全限定名中的哪一类。若不方便取，用 §六 的六类形态用例覆盖即可。
+3. ~~那条 INSERT 的完整参数清单~~ **已由本地复现给出**：12 参数，命中布尔与日期族两类，见上。
 4. **`crossChannelIndex` 的误配面**：同一 mapper 语句 5s 内执行多次且参数相同时，跨通道配对按 FIFO 可能错位。需确认融合只补空（不覆盖已有非空值）时错位影响可接受——耗时为毫秒级差异，位置来自同一条语句的同一栈帧，判定可接受并写进 KDoc。
 5. **`canDedupe` 的 ShardingSphere 例外**：跨通道折叠是否要覆盖 SHARDINGSPHERE 与 agent 的并存形态。UI013 的既有裁决是「Logic 未绑定，文本相同不能证明同一次执行」，建议维持不折叠，但需确认这不影响本症状（本症状是 MyBatis）。
 
