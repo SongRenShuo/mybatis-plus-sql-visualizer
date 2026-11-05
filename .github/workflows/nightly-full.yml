@@ -221,9 +221,12 @@ jobs:
     # T-CiNightly（2026-11-05 首轮实证）：50 分钟不够——不是卡死，是**跨洋往返延迟**。
     # 该套件对每个实例跑「全量保留字逐个当标识符建表/查询」，本地（国内网络）约 5~10 分钟，
     # 从 GitHub runner 到 114.66.55.245 / 103.36.220.245 每轮往返 200ms+，实测 50 分钟仍未跑完。
-    # 现改为「代表实例子集」（见落矩阵那步），预算按子集收回到 40 分钟：
-    # 子集正常应 5~15 分钟，跑飞也不会再烧两小时。全量矩阵仍由本地 releaseGate 覆盖。
-    timeout-minutes: 40
+    # 现改为「代表实例子集」（见落矩阵那步）。全量矩阵仍由本地 releaseGate 覆盖。
+    # 2026-11-05 run#9 实测子集内部读数：mysql84 18.6min（262 个保留字）+ pg16 3.3min（86 个）
+    # + 冷启动约 6min = 27.8min，离 30min 的步骤上限只剩 2.2min 余量——一次抖动就会把绿腿打成红。
+    # 故步骤放宽到 40min（预算 27.8 → 余量 12min），job 放到 50min。跨洋按字计费是硬成本：
+    # mysql84 约 4.3s/字（200ms RTT × 每字多次往返），要再压缩只能减少保留字或把 runner 挪到近网。
+    timeout-minutes: 50
     defaults:
       run:
         shell: pwsh
@@ -289,7 +292,8 @@ jobs:
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
-        timeout-minutes: 30
+        # run#9 实测 27.8min（mysql84 18.6 + pg16 3.3 + 冷启动 6）；30 只剩 2.2min 余量，放宽到 40
+        timeout-minutes: 40
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"

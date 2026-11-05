@@ -295,7 +295,10 @@ run#13 是冷缓存轮：改 `buildSrc` 会让 setup-gradle 的缓存 key 换新
 | 4 | `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，而官方链接存在 | IPGP 读**项目内缓存**的 product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore），缓存早于发布 | `rm -rf .intellijPlatform/productReleases` 重跑；`--info` 可见 `Reading product releases listing from cache: …`；CI 不受影响 |
 | 5 | 分片偶发 `ClosedFileSystemException`（读 243 的 `database-plugin.jar`） | Gradle zip 文件系统句柄被关闭后又被 plugin-structure 使用 | 重跑策略逐级加码：原地重跑 ❌ → `--stop` ❌ → `--stop`+`--max-workers=1` ❌ → **删 `caches/*/transforms/*/transformed/idea*`**（待验证）；判据是日志出现「已清理 IDE 解包目录 N 个」 |
 | 6 | 分片本身 `BUILD SUCCESSFUL`，但 job 判红在三个 post 动作 | 收尾清理时文件仍被残留 JVM 持有（该轮日志末尾有 `Terminate orphan process: pid … (java)`） | 先观察是否复现；若复现，在测试步骤末尾补 `./gradlew --stop` 收尾 |
-| 7 | 全量 12 实例的 `dialectExternalVerify` 跑 91 分钟仍未完 | 跨洋 RTT × 每实例上千次建表/查询的乘数效应（本地同一套矩阵 5~10 分钟） | CI 只跑代表实例子集（`mysql84`+`pg16`，`CI_DIALECT_KEYS` 可覆盖），预算 30/40 分钟；**全量以本地 `releaseGate` 为准** |
+| 7 | 全量 12 实例的 `dialectExternalVerify` 跑 91 分钟仍未完 | 跨洋 RTT × 每实例上千次建表/查询的乘数效应（本地同一套矩阵 5~10 分钟） | CI 只跑代表实例子集（`mysql84`+`pg16`，`CI_DIALECT_KEYS` 可覆盖），预算 40/50 分钟；**全量以本地 `releaseGate` 为准** |
 | 8 | `testFast` 以为「秒级」，CI 上 4382 例要 4.5 分钟 | 本地热 JVM + 6 核，CI 冷 JVM + 2 核 | 按 CI 实测估时；本机与 CI 的单测耗时不可互相外推 |
+| 9 | 子集版方言腿跑通了，但只差 2.2 分钟就撞步骤上限（27.8 vs 30） | 成本**按字计费**：mysql84 262 个保留字 1113s（≈4.3s/字）、pg16 86 个 196s（≈2.3s/字），加冷启动 6 分钟；跨洋 200ms RTT × 每字多次往返 | 预算按「实测 + 余量」订，别按「感觉 5~15 分钟」订；要再压缩只能减保留字或把 runner 挪近网，**加预算只是延迟失败** |
+
+**run#9 / 推送#21 收官读数（2026-11-05，两个 workflow 首个全绿轮）**：夜间 11 腿全绿（含首次真绿的真机 DB 与 e2e），总 30.5 分钟，唯一长腿是 dialect 27.8 分钟；推送档全绿 13.2 分钟，关键路径是 `fast`（601s）而不是分片（433~495s）——快桶单腿装的是本地 226s 的量，等于一个半分片，**它才是便宜档的天花板**。
 
 **方法论层面两条**：①参数面板/落盘类脚本，**产物要读回来验形态**；②CI 上「偶发」的红先做**处置梯度实验**（原地→换 daemon→降并发→换目录），每一步都贴读数，别一步跳到结论——本轮 zip-FS 就是前三级都证伪后才定位到磁盘状态。
