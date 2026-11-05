@@ -280,13 +280,17 @@ jobs:
             exit 0
           }
           $demo = Join-Path (Split-Path -Parent $PWD) 'mybatis-plus-sql-visualizer-demo'
-          $argList = @(
-            ':testDatabase', '-PgifRecord=false', '--console=plain',
-            "-PmpDemoProjectDir=$demo",
-            "-PmpvDbUrl=$env:MPV_DB_URL",
-            "-PmpvDbUser=$env:MPV_DB_USER",
-            "-PmpvDbPassword=$env:MPV_DB_PASSWORD"
-          )
+          # T-CiNightly（2026-11-05 run#3 实证）：JDBC URL 含 `&`，作为 -P 参数穿过 gradlew.bat 时
+          # 会被 cmd 当命令分隔符吃掉（e2e 侧表现就是业务请求全 500）。改为写进 gradle.properties，
+          # 由 buildSrc 的 providers.gradleProperty 读回——文件注入完全绕开命令行解析。
+          Add-Content -LiteralPath 'gradle.properties' -Value @(
+            "",
+            "# CI 注入（不入库，仅本 job 的 runner 副本）",
+            "mpvDbUrl=$env:MPV_DB_URL",
+            "mpvDbUser=$env:MPV_DB_USER",
+            "mpvDbPassword=$env:MPV_DB_PASSWORD"
+          ) -Encoding utf8
+          $argList = @(':testDatabase', '-PgifRecord=false', '--console=plain', "-PmpDemoProjectDir=$demo")
           ./gradlew.bat @argList
           exit $LASTEXITCODE
 
@@ -381,14 +385,28 @@ jobs:
           }
           $demo = Join-Path (Split-Path -Parent $PWD) 'mybatis-plus-sql-visualizer-demo'
           $joinDemo = Join-Path $demo 'mybatis-plus-join-demo'
+          # 同上：URL 含 `&`，走文件注入而不是 -P 参数。
+          Add-Content -LiteralPath 'gradle.properties' -Value @(
+            "",
+            "# CI 注入（不入库，仅本 job 的 runner 副本）",
+            "e2eDbUrl=$env:MPV_DB_URL",
+            "e2eDbUser=$env:MPV_DB_USER",
+            "e2eDbPassword=$env:MPV_DB_PASSWORD",
+            "e2eMavenOffline=0"
+          ) -Encoding utf8
           $argList = @(
             ':e2eFakeIde', '-PgifRecord=false', '--console=plain',
             "-Pe2eJavaHome=$env:E2E_JAVA_HOME",
-            "-Pe2eDemoDir=$joinDemo",
-            '-Pe2eMavenOffline=0',
-            "-Pe2eDbUrl=$env:MPV_DB_URL",
-            "-Pe2eDbUser=$env:MPV_DB_USER",
-            "-Pe2eDbPassword=$env:MPV_DB_PASSWORD"
+            "-Pe2eDemoDir=$joinDemo"
           )
           ./gradlew.bat @argList
           exit $LASTEXITCODE
+      - name: 上传 e2e 证据（失败诊断）
+        # 首轮失败时只能看到「业务请求 500」而看不到 app.log；把证据挂出来，下次直接定位。
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-evidence
+          path: dev-support/e2e-fake-ide/evidence/
+          if-no-files-found: ignore
+          retention-days: 14
