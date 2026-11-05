@@ -63,12 +63,16 @@ object HqlConverter {
      * @param placeholderParamNames T-JpaParamOrder F3：HQL 命名参数名序（首现序，与替换后
      *         SQL 中 `?` 一一对应）；位置参数 `?N` 不在内。调用方据此做按名回填——
      *         仅当 SQL 全部 `?` 均来自命名参数时可用（位置参数混入时数量不齐）。
+     * @param degradations T-PagesHql：转换降级清单（关联路径需 JOIN / 推断 ON 条件 /
+     *         实体不可解析 / 高级构造透传等）。空表 = 无降级。pages 链把它并入 warning 展示；
+     *         其它调用方可忽略（默认空，零行为变化）。
      */
     data class Result(
         val sql: String,
         val statement: SqlStatement,
         val inClauseParams: Set<String> = emptySet(),
         val placeholderParamNames: List<String> = emptyList(),
+        val degradations: List<String> = emptyList(),
     )
 
     /**
@@ -195,6 +199,7 @@ object HqlConverter {
                 ),
                 inClauseParams = inClauseParams,
                 placeholderParamNames = placeholderParamNames,
+                degradations = degradationsOf(sql, null),
             )
         }
 
@@ -212,19 +217,59 @@ object HqlConverter {
                     ),
                     inClauseParams = inClauseParams,
                     placeholderParamNames = placeholderParamNames,
+                    degradations = degradationsOf(sql, null),
                 )
             }
             // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
         }
 
+        val statementComment = advancedConstructComment(sql) ?: inheritanceBoundaryComment(table)
         return Result(
             sql = sql,
             statement = SelectStatement(
                 table = table,
-                comment = advancedConstructComment(sql) ?: inheritanceBoundaryComment(table),
+                comment = statementComment,
             ),
             inClauseParams = inClauseParams,
             placeholderParamNames = placeholderParamNames,
+            degradations = degradationsOf(sql, statementComment),
+        )
+    }
+
+    /**
+     * T-PagesHql：从转换产物里收集降级说明。
+     *
+     * 转换器的降级信息以 SQL 注释/语句 comment 形式落地（「关联字段，需 JOIN …」等注释），
+     * 这里按已知文案标记归一成人话清单——不改写任何转换行为，只让调用方能把「产物不可直接执行
+     * 的原因」展示到面板上（用户不看 SQL 注释就不知道）。
+     */
+    private fun degradationsOf(sql: String, statementComment: String?): List<String> {
+        val notes = LinkedHashSet<String>()
+        if (!statementComment.isNullOrBlank()) {
+            val mapped = Degradations.DEGRADATION_MARKERS.firstOrNull { statementComment.contains(it.first) }
+            if (mapped != null) {
+                notes += mapped.second
+            } else {
+                notes += statementComment.removeSurrounding("/* ", " */").take(120)
+            }
+        }
+        Degradations.DEGRADATION_MARKERS.forEach { (marker, note) ->
+            if (sql.contains(marker)) notes += note
+        }
+        return notes.toList()
+    }
+
+    private object Degradations {
+        /** 标记 → 展示文案（顺序即输出顺序，保证产物稳定可断言）。 */
+        val DEGRADATION_MARKERS: List<Pair<String, String>> = listOf(
+            "关联字段，需 JOIN" to "关联字段路径需 JOIN（已保留原文）",
+            "推断的ON条件，请验证" to "JOIN ON 条件为推断值，需人工验证",
+            "实体不可解析" to "存在无法解析的实体（列清单未展开）",
+            "ON 条件中的" to "ON 条件含未映射限定符",
+            "HQL 高级特性" to "HQL 高级特性（CTE/UNION/INSERT-SELECT）仅透传",
+            "@Inheritance(" to "继承策略与单表列口径不一致",
+            "MEMBER OF" to "MEMBER OF 未转成 SQL",
+            "副表" to "副表列元数据缺失，已按别名.* 降级",
         )
     }
 

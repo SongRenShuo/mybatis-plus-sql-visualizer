@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.xml
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -187,6 +188,27 @@ class PagesXmlParserTest {
         assertEquals("com.example.model.User", stmt.entityClass)
         assertTrue(stmt.sql.contains("from User u"))
         assertTrue(stmt.sql.contains("order by u.createdDate desc"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-PagesHql：<datasource type="..."> 显式源语言声明
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `datasource的type属性_解析进declaredType`() {
+        val xml = """
+            <pages>
+                <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
+                    <datasource type="hql"><![CDATA[from A a]]></datasource>
+                </maintainPage>
+                <maintainPage id="p2" title="P2" autoQuery="true" entityClass="com.B">
+                    <datasource><![CDATA[SELECT * FROM b]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals("hql", model.statements[0].declaredType)
+        assertNull("无 type 属性时为 null", model.statements[1].declaredType)
     }
 
     // ------------------------------------------------------------------

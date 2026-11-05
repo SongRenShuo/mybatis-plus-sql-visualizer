@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.SourceLanguage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -16,7 +17,7 @@ class PagesXmlPreviewServiceTest {
         <pages>
             <maintainPage id="maintainLangLibPage" title="maintainLangLibPage"
                           autoQuery="true" entityClass="com.vtradex.forest.model.lang.TfLangLib">
-                <datasource><![CDATA[
+                <datasource type="sql"><![CDATA[
                 SELECT
                     t.id,
                     a.name,
@@ -169,7 +170,7 @@ class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    fun `HQL内容_直接展示无参数`() {
+    fun `HQL内容_无工程时识别为HQL并回退原文`() {
         val xml = """
             <pages>
                 <maintainPage id="hqlPage" title="HQL" autoQuery="true"
@@ -183,11 +184,15 @@ class PagesXmlPreviewServiceTest {
             </pages>
         """.trimIndent()
         val result = PagesXmlPreviewService.preview(xml, "hqlPage")
+        // T-PagesHql：entityClass 简单名 User == 根标识符 User → 识别为 HQL；
+        // 无工程索引时不能转换，回退原文并给出原因（不再把 HQL 当原生 SQL 静默直显）
         assertTrue(result.sql.contains("User"))
         assertTrue(result.sql.contains("order by"))
-        // HQL 无占位符 → 参数列表为空
         assertEquals(emptyList<String>(), result.unresolvedParams)
         assertNull(result.paramTable)
+        assertEquals(SourceLanguage.HQL, result.sourceLanguage)
+        assertEquals(result.sql, result.originalSql)
+        assertNotNull(result.warning)
     }
 
     @Test

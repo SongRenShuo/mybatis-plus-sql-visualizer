@@ -695,7 +695,8 @@ class ConvertToSqlAction : AnAction() {
     /** 预览单个 maintainPage（后台转换，EDT 渲染）。 */
     private fun previewPages(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+            // T-PagesHql：传 PSI 宿主锚点，HQL 转换按该 XML 所属模块收窄实体检索范围
+            PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, tag)
         }) { result ->
             SqlPreviewService.showResult(project, result)
         }

@@ -259,6 +259,8 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
     placeholderParamNames: List<String> = emptyList(),
     duplicateParamNames: Set<String> = emptySet(),
     initialParamValues: Map<String, String> = emptyMap(),
+    /** T-PagesHql：转换降级清单（空 = 无降级）；pages 链据此并入 warning 展示。 */
+    degradations: List<String> = emptyList(),
 ): PreviewResult {
     // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
     val dialect = dialectOverride ?: currentDialect()
@@ -302,6 +304,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         // T-PresetMethodScope：HQL/JPA 链路不落历史条目（recordHistory 未调用），作用域必须在此写入，
         // 否则同一段 HQL 写在两个方法里仍共用「表名 + SQL 指纹」键。
         originScopeKey = cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(method, project),
+        degradations = degradations,
     )
 }
 

@@ -61,7 +61,8 @@ class PagesXmlGutterLineMarkerProvider : LineMarkerProvider {
             val tag = elt.parent as? XmlTag ?: return
             val file = tag.containingFile as? XmlFile ?: return
             SqlPreviewService.previewAsync(project, {
-                PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+                // T-PagesHql：传 PSI 宿主锚点，HQL 转换按该 XML 所属模块收窄实体检索范围
+                PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, tag)
             }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
