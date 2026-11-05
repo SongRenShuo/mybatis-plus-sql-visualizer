@@ -229,7 +229,14 @@ jobs:
             Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
 
       - name: 配置 Gradle 缓存
+        # T-CiMatrix（2026-11-05 run#3/#4 实证）：matrix 下的 verify/test 一律**只读**。
+        # 九个 job 并发写同一个 cache key 时只有第一个能成功，其余日志里是
+        # "Failed to save cache entry"，于是 IDE distro（约 700MB/目标）与 verifier-cli
+        # 每轮重下——verify 单 job 8~13 分钟的主因就在这。写权限只留给 build job
+        # （它跑全量 :verifyPlugin，会把三个目标一并下载进缓存）。
         uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
 
       - name: 下载编译产物
         uses: actions/download-artifact@v4
@@ -293,7 +300,14 @@ jobs:
             Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
 
       - name: 配置 Gradle 缓存
+        # T-CiMatrix（2026-11-05 run#3/#4 实证）：matrix 下的 verify/test 一律**只读**。
+        # 九个 job 并发写同一个 cache key 时只有第一个能成功，其余日志里是
+        # "Failed to save cache entry"，于是 IDE distro（约 700MB/目标）与 verifier-cli
+        # 每轮重下——verify 单 job 8~13 分钟的主因就在这。写权限只留给 build job
+        # （它跑全量 :verifyPlugin，会把三个目标一并下载进缓存）。
         uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
 
       - name: 准备测试 demo
         # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
