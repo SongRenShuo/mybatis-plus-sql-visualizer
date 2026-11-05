@@ -226,6 +226,20 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
             callback = { cbResult = it },
         )
         // 无数据源：选择逻辑走到 runners.isEmpty() 分支 → 打开 Database 工具窗 + onError + callback(false)
+        //
+        // 20261105：原断言「prepareConsole 返回后 callback 已到」基于**同步**准备链——当时
+        // chooseAndPrepare 在调用线程内一路跑到 `runners.isEmpty()` 分支再 `callback(false)`。
+        // 现行为：`c62f23b8`（T-ExecSlowOps-BP，2026-11-04 回 port ba314f42）把临时文件构建
+        // 挪出 EDT——`chooseAndPrepare` 只做派发，续接链在 `createTempPsiFileAsync` 的
+        // `invokeLater(ModalityState.nonModal())` 回调里（DataSourceSelectorResults.kt
+        // `createTempPsiFileAsync` KDoc「本函数**异步**——调用方不得在调用返回后立即使用」），
+        // 而 `callback?.invoke(false)` 在 `continuePrepareAfterTempFile` 内（同文件
+        // `runners.isEmpty()` 分支）。本方法体又跑在 EDT（`EdtTestUtil.runInEdtAndWait`），
+        // 因此调用返回后立刻读 cbResult 恒为 null。
+        // 契约不变（必须回调、必须 false），只把「异步窗口」从断言里挪出去：有界等待 + 每轮派发
+        // EDT 队列（waitWithPump 同款理由见其 KDoc）。
+        val notified = DbIntegrationProjectSupport.waitWithPump(60_000) { cbResult != null }
+        assertTrue("prepareConsole 应回调（无论成败）——60s 内未收到 callback（异步续接链未落地）", notified)
         assertNotNull("prepareConsole 应回调（无论成败）", cbResult)
         assertEquals("无数据源时 prepareConsole 应回调 false", false, cbResult)
         assertTrue("无数据源时 onError 应非空（引导用户配置数据源）", errors.isNotEmpty())
