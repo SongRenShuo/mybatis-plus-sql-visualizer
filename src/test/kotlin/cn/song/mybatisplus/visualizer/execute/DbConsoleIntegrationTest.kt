@@ -18,7 +18,6 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.sql.SQLException
@@ -152,9 +151,9 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
      * `checkcast SqlDataSource` 失败 → `containsFile(vf)` 过滤返回 false → runner 列表空
      * （M36.5.23b diag 实证）。建连后 DBN 自动 introspect，delegate 切换为 SqlDataSource 实例。
      *
-     * MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：返回失败原因（调用方 assumeTrue skip）。
+     * MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：返回失败原因（调用方打印 `[DB-IT] SKIP` 后 return）。
      *
-     * @return null=成功；非 null=失败原因（用于 assumeTrue message）
+     * @return null=成功；非 null=失败原因（用于 `[DB-IT] SKIP` 消息）
      */
     private fun introspectDataSource(ds: LocalDataSource): String? = runCatching {
         val proxyHost = System.getProperty("http.proxyHost")
@@ -218,10 +217,16 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
     fun testPrepareExecuteAndParameterChangeEndToEnd() {
         // 前置：Database 插件已加载（testDatabase 任务不排 jar）+ demo 项目可达。
         // 注意：密码 assume 放在「执行」前——无密码时 prepare 层（插件/数据源/控制台准备）仍被验证。
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val dsInfo = info!!
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
+        val dsInfo = info
 
         // ⓪ 清空应用级残留数据源：LocalDataSourceManager 跨用例存活，本用例走的是「唯一数据源静默
         //    复用」契约，多一条残留即退化成多 runner 弹窗分支（headless 无 frame → NPE，基线实证）
@@ -285,11 +290,13 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         assertTrue("prepare 阶段不应有错误 (errors=$errors)", errors.isEmpty())
 
         // ③ executePrepared：真实 MySQL 执行 → 结果 Tab 出现（需要密码；未配置则 skip 余下场景）
-        assumeTrue(
-            "未配置 mpTestDbPassword——请在 ~/.gradle/gradle.properties 添加 mpTestDbPassword=<MySQL密码>" +
-                "（无密码时仅验证 prepare 层）",
-            dbPassword.isNotEmpty(),
-        )
+        if (dbPassword.isEmpty()) {
+            println(
+                "[DB-IT] SKIP: 未配置 mpTestDbPassword——请在 ~/.gradle/gradle.properties 添加 mpTestDbPassword=<MySQL密码>" +
+                    "（无密码时仅验证 prepare 层）",
+            )
+            return
+        }
         var resultsReady = false
         val execErrors = mutableListOf<String>()
         DataSourceSelector.executePrepared(

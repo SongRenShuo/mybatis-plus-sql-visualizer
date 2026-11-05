@@ -18,7 +18,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -46,7 +45,8 @@ import javax.xml.parsers.DocumentBuilderFactory
  *   - URL/用户名/驱动：解析 demo 项目 `.idea/dataSources.xml` + `dataSources.local.xml`
  *     （系统属性 `mpDemoProjectDir`，默认兄弟目录）。
  *   - 密码：硬编码 `root`（本地开发库无敏感性）。
- *   - MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：DB 相关断言 assumeTrue skip（不 fail）；
+ *   - MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：DB 相关用例打印 `[DB-IT] SKIP` 后 return（显式绿跳，
+ *     JUnit3 基类会把 `AssumptionViolatedException` 记为 failure，故不用 `assumeTrue`）；
  *     无数据源路径（用例 1）不依赖 MySQL，始终运行以证明集成骨架本身可执行。
  *
  * 运行：`./gradlew testDatabase`
@@ -143,7 +143,7 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
 
     /**
      * 触发数据源 introspection（连接 + schema 加载）——delegate 切换为 SqlDataSource 后
-     * `containsFile(vf)` 过滤才通过，runner 列表才非空。MySQL 未启动 → 返回失败原因（assumeTrue skip）。
+     * `containsFile(vf)` 过滤才通过，runner 列表才非空。MySQL 未启动 → 返回失败原因（调用方打印 `[DB-IT] SKIP` 后 return）。
      */
     private fun introspectDataSource(ds: LocalDataSource): String? = runCatching {
         val mgr = DatabaseConnectionManager.getInstance()
@@ -206,11 +206,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      */
     @Test
     fun testNoDataSourceReportedAsUnavailable() {
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val removed = DbIntegrationProjectSupport.clearDataSources(project)
         val psi = DbIntegrationProjectSupport.ensureExecFile(project, "SELECT 1")
-        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
-        val runners = DbIntegrationProjectSupport.awaitRunners(psi!!.second, "SELECT 1", expected = 0)
+        if (psi == null) {
+            println("[DB-IT] SKIP: 临时执行 PsiFile 构造失败（VFS/方言映射）")
+            return
+        }
+        val runners = DbIntegrationProjectSupport.awaitRunners(psi.second, "SELECT 1", expected = 0)
         assertEquals(
             "清空数据源后平台不应再发现 runner（清掉=$removed，残留=${DbIntegrationProjectSupport.dataSourceNames(project)}，" +
                 "发现=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
@@ -255,11 +261,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      */
     @Test
     fun testSingleSourceDiscoverableByRunner() {
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
         DbIntegrationProjectSupport.clearDataSources(project)
-        val ds = createDataSource(info!!, "-single")
+        val ds = createDataSource(info, "-single")
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {
@@ -269,8 +281,11 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
 
         val sql = "SELECT id FROM car_device_info WHERE id = 1"
         val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
-        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
-        val (_, psiFile) = psi!!
+        if (psi == null) {
+            println("[DB-IT] SKIP: 临时执行 PsiFile 构造失败（VFS/方言映射）")
+            return
+        }
+        val (_, psiFile) = psi
 
         val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
         assertEquals(
@@ -293,11 +308,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      */
     @Test
     fun testMultiSourceDiscoveryReturnsAllRunners() {
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
         DbIntegrationProjectSupport.clearDataSources(project)
-        val ds1 = createDataSource(info!!, "-multi1")
+        val ds1 = createDataSource(info, "-multi1")
         val ds2 = createDataSource(info, "-multi2")
         val e1 = introspectDataSource(ds1)
         val e2 = introspectDataSource(ds2)
@@ -309,8 +330,11 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
 
         val sql = "SELECT id FROM car_device_info WHERE id = 1"
         val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
-        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
-        val (_, psiFile) = psi!!
+        if (psi == null) {
+            println("[DB-IT] SKIP: 临时执行 PsiFile 构造失败（VFS/方言映射）")
+            return
+        }
+        val (_, psiFile) = psi
 
         val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 2)
         assertEquals(
@@ -335,11 +359,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      */
     @Test
     fun testPrepareConsoleSilentlySelectsSingleSource() {
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
         DbIntegrationProjectSupport.clearDataSources(project)
-        val ds = createDataSource(info!!, "-silent")
+        val ds = createDataSource(info, "-silent")
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {
@@ -349,8 +379,11 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
 
         val sql = "SELECT id, station_id FROM car_device_info WHERE id = 1"
         val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
-        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
-        val (_, psiFile) = psi!!
+        if (psi == null) {
+            println("[DB-IT] SKIP: 临时执行 PsiFile 构造失败（VFS/方言映射）")
+            return
+        }
+        val (_, psiFile) = psi
         // 单数据源是静默选择分支的输入，先钉住（残留数据源会让契约退化成弹窗分支）
         val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
         assertEquals(
@@ -400,11 +433,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      */
     @Test
     fun testPrepareConsoleWithoutConsoleEditorReportsError() {
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
         DbIntegrationProjectSupport.clearDataSources(project)
-        val ds = createDataSource(info!!, "-noeditor")
+        val ds = createDataSource(info, "-noeditor")
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {
@@ -422,8 +461,11 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
         // 让本用例留下的内容与下一个用例一致，下一个用例就整段跳过 setText+save，不再走那条登记链。
         val sql = "SELECT id, station_id FROM car_device_info WHERE id = 1"
         val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
-        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
-        val (_, psiFile) = psi!!
+        if (psi == null) {
+            println("[DB-IT] SKIP: 临时执行 PsiFile 构造失败（VFS/方言映射）")
+            return
+        }
+        val (_, psiFile) = psi
         // 单数据源是静默选择分支的输入，先钉住（残留数据源会让准备链退化成弹窗分支）
         val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
         assertEquals(
