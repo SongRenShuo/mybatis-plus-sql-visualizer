@@ -224,18 +224,22 @@ class CrossChannelDedupeTest {
     }
 
     /**
-     * **已知残余（计划前提被证伪）**：agent 少捕一个参数时 `logTimeParamSignature` 两侧不等
-     * （`1\u00012` vs `1`），crossKey 因此不同，兜底折叠不触发——本形态需要 §4.2（还原器口径收敛 /
-     * 参数序号连续性校验）才能解决，本期如实钉成断言，不假装已修。
+     * **安全边界**：agent 侧参数确实少于控制台侧时，两侧 `logTimeParamSignature` 不等
+     * （`1\u00012` vs `1`）、crossKey 不同，兜底**不折叠**。
+     *
+     * 这是兜底应有的保守性——签名不等就无法证明是同一次执行的两份观测，宁可留两行也不误配。
+     * 真正的修复点在**捕获面**：`ParamCapture` 白名单补齐 `setNClob`/`setRowId`/`setSQLXML`/`setRef`、
+     * 四参 `setObject` 上限由 3 放宽到 4（T-CrossChannelResidual），现场不再产出「少捕」形态；
+     * 守卫见 agent 子项目 `ParamCaptureTest`。
      */
     @Test
-    fun `参数个数不等_签名不一致_兜底不生效_记录已知残余`() {
+    fun `参数个数不等_兜底不误折叠_安全边界`() {
         val sql = "SELECT * FROM t WHERE a = ? AND b = ?"
         val buffer = SqlLogEntryBuffer(maxEntries = 20)
         addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: 1(Long), 2(Long)")
         buffer.addEntry(agentEntry(sql, listOf(Triple(1, "1", "Long"))))
         val rows = buffer.snapshot()
-        assertEquals("签名不同 → crossKey 不同 → 仍两行（已知残余，§4.2 解决）", 2, rows.size)
+        assertEquals("签名不同 → crossKey 不同 → 不折叠（保守，避免误配）", 2, rows.size)
         assertEquals("控制台行", CaptureProvenance.CONSOLE_BRIDGE, rows[0].captureProvenance)
         assertEquals("agent 行", CaptureProvenance.AGENT, rows[1].captureProvenance)
     }
@@ -261,22 +265,23 @@ class CrossChannelDedupeTest {
     }
 
     /**
-     * **计划 §六 表格第 5 行原始形态的前提被证伪**：`MyBatisLogParser.parseParams` 的类型分组是
-     * `[A-Za-z_$][\w$]*(?:\[\])*`——**不含点号**，`42(java.lang.Long)` 匹配不上带类型分支，回落逗号
-     * 粗分 → `value="42(java.lang.Long)"`、`type=null`。于是参数值签名与 agent 侧（`42`）不等，
-     * crossKey 不同，兜底折叠不触发。真实 MyBatis 日志打印的是简单类名，此形态不可达，故作为解析器
-     * 边界钉住（真要支持需同时改 `parseParams` 与 §4.2 的还原器收敛）。
+     * 全限定类型名（`java.lang.Long`）走**控制台解析器**：T-CrossChannelResidual 放宽
+     * `parseParams` 的类型分组到 `[A-Za-z_$][\w$.]*` 后，`42(java.lang.Long)` 解析出
+     * `type=java.lang.Long` / `value=42`，`LogSqlRestorer.PLAIN_TYPES` 里本就有 `java.lang.Long`
+     * 条目（此前解析器从不产出该形态，那段映射等于死代码），于是控制台还原 `42`；
+     * agent 侧 `NUMERIC_TYPE_REGEX` 认不出点号 → `'42'`。两侧 dedupeKey 分叉，但**参数值签名相同**
+     * （都是 `42`）→ 跨通道兜底折叠生效。
      */
     @Test
-    fun `全限定类型名_控制台解析器不识别点号类型_兜底不生效_记录已知残余`() {
+    fun `全限定类型名_控制台解析器识别点号类型_跨通道折叠为一行`() {
         val sql = "INSERT INTO t (amount) VALUES (?)"
         val buffer = SqlLogEntryBuffer(maxEntries = 20)
         val console = addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: 42(java.lang.Long)")
         val consoleParam = console.single().params.single()
-        assertEquals("解析器不识别点号类型：类型标注丢失", null, consoleParam.type)
-        assertEquals("整个 `值(类型)` 被当成参数值", "42(java.lang.Long)", consoleParam.value)
+        assertEquals("类型标注完整保留（含包名）", "java.lang.Long", consoleParam.type)
+        assertEquals("参数值不再吞掉类型标注", "42", consoleParam.value)
         buffer.addEntry(agentEntry(sql, listOf(Triple(1, "42", "java.lang.Long"))))
-        assertEquals("参数值签名不同 → crossKey 不同 → 仍两行（已知残余）", 2, buffer.snapshot().size)
+        assertFoldedToAgentFacts(buffer, "全限定类型名（控制台解析器）")
     }
 
     // ---------- 6~7：两条到达顺序 ----------
