@@ -19,13 +19,17 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $argList = $GradleArgs -split '\s+' | Where-Object { $_ -ne '' }
-$log = Join-Path $env:RUNNER_TEMP 'gradle-run.log'
+# RUNNER_TEMP 只在 GitHub runner 上有；本机试跑时为空会让 Join-Path 产出 null，
+# 进而 Tee-Object/Select-String 报错、`-not (...)` 误判成「命中竞态」。回落到系统临时目录。
+$logDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$log = Join-Path $logDir 'gradle-run.log'
 
 Write-Host "run-gradle-retry: ./gradlew.bat $GradleArgs"
 & ./gradlew.bat @argList 2>&1 | Tee-Object -FilePath $log
 $rc = $LASTEXITCODE
 if ($rc -eq 0) { exit 0 }
 
+if (-not (Test-Path -LiteralPath $log)) { exit $rc }
 if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
     exit $rc
 }
