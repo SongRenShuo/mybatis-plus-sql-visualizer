@@ -133,13 +133,19 @@ GitHub 里被 skip 的 job 不会让整轮运行变红，而 verify / marketplac
 
 **反向验证**（门禁类改动必须做）：把 workflow 里那段脚本原文抽出来，喂四种输入跑 pwsh——四腿全 `success` 退出 0；`test=skipped`、`verify=skipped`、`build=failure` 各自退出 1 并点名对应腿。绿路径由 run#10 在 GitHub 上真跑证明（`gate` success），红路径由同一文本反证。只有绿路径的读数不算数：一个永远绿的 gate 与没有 gate 等价。
 
-### 3. 试错：把项目级 `.gradle` 塞进工件（失败，已撤回）
+### 3. 试错：把项目级 `.gradle` 塞进工件（已撤回）
 
 推理是：下游 job 恢复了 `build/classes` 却判不了 UP-TO-DATE，因为 Gradle 的执行历史与输入指纹在 `.gradle/<ver>` 里；同一运行、同一提交、同一绝对路径，恢复后应当直接跳过编译（实测每片省约 2.75 分钟）。
 
-实测 run#8：test(4) 编译期 `ClosedFileSystemException`（读 243 的 `database-plugin.jar` 时 zip 文件系统已被关闭）→ 报成 `Could not find bundled plugin with ID: 'com.intellij.database'`，一片红。同轮该 job 的 `gradle-transforms` 缓存恢复只花 77s 且体积明显偏小（正常 117s / 4775MB），即变换缓存没真正到位。收益 2 分钟、风险是发布门禁偶发红，不对等，撤回。
+实测 run#8：test(4) 编译期 `ClosedFileSystemException`（读 243 的 `database-plugin.jar` 时 zip 文件系统已被关闭）→ 报成 `Could not find bundled plugin with ID: 'com.intellij.database'`，一片红。当时判为 `.gradle` 引起，撤回。
 
-**教训**：工件里塞构建状态（`.gradle`）会把「任务是否重跑」交给跨 job 的文件搬运，而变换缓存的完整性不受我们控制。要么彻底验干净，要么不碰。
+**归因订正（2026-11-05 晚）**：撤回后 run#11 的 test(1)/test(4) 犯了**同一个**异常，且失败片的 `gradle-transforms` 缓存是**完整恢复**的（4775MB + 4385MB，126 秒）——所以根因不是缓存残缺，也不是 `.gradle` 工件，而是 Gradle 自身在并行解析时关闭了 zip 文件系统句柄（同一 IDE jar 被多线程打开，plugin-structure 的 `FsHandlerFileSystemProvider.checkAccess` 随后撞上已关闭的 FS）。实证分布：run#8 1/5 片、run#11 2/5 片、run#7/#9/#10 共 15 片零命中，约 3/25。
+
+`.gradle` 仍然保持撤回状态——理由不是「它导致了这个异常」，而是「收益 2 分钟，而它把构建状态交给跨 job 的文件搬运，多一层不可控」。要再试必须单独验证。
+
+**处置**：分片步骤对 `ClosedFileSystemException` 这一个签名做一次定向重跑（测试真失败不会命中该签名，不会掩盖问题），并打 `::warning::` 留痕。
+
+**教训**：一次红不等于找到根因。同一个签名在改动撤回后复发，是判定「与我的改动无关」的最直接反证——所以任何归因落文档前，要么有反向验证，要么等下一次复发来证伪。
 
 ### 4. 缓存认知（本轮量出来的事实）
 

@@ -64,7 +64,8 @@
     ② `上传编译产物` 必须 `if: !cancelled()`（否则 verifyPlugin 失败会连坐九个下游 job）。
     ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
     ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
-  - **不要**为了跳过重编译把项目级 `.gradle` 塞进工件：run#8 实测 test(4) 编译期 `ClosedFileSystemException`（变换缓存恢复残缺），一片红，已撤回。
+  - **不要**为了跳过重编译把项目级 `.gradle` 塞进工件：收益约 2 分钟，而它把构建状态交给跨 job 的文件搬运，多一层不可控（run#8 试过、已撤回）。
+  - 已知 flake：分片配置期偶发 `ClosedFileSystemException`（被报成 `Could not find bundled plugin with ID: 'com.intellij.database'`），约 3/25 片，与缓存残缺无关（是 Gradle 并行解析时关闭 zip 文件系统句柄的竞态）。workflow 已对该签名做一次定向重跑并打 `::warning::`；看到这条 warning 说明命中过该竞态，不是测试失败。
 
 ## 三、双通道发布段
 
