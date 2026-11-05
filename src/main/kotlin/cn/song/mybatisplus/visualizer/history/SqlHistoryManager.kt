@@ -242,6 +242,50 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         return entries.filter { it.sql.lowercase().contains(q) || it.compactSql.lowercase().contains(q) }
     }
 
+    // ---------- F-08：项目维度 ----------
+
+    /**
+     * F-08：按项目过滤条目（时间倒序）。
+     *
+     * @param projectIdentity 项目身份（[SqlHistoryEntry.projectIdentity]，即 projectId）；
+     *   空白 → 返回「未归属」档（旧数据 / 非文件型项目写入的条目，读回兼容口径见
+     *   [SqlHistoryEntry.projectIdentity] KDoc）。
+     */
+    fun filterByProject(projectIdentity: String): List<SqlHistoryEntry> =
+        if (projectIdentity.isBlank()) entries.filter { it.projectIdentity.isBlank() }
+        else entries.filter { it.projectIdentity == projectIdentity }
+
+    /**
+     * F-08：按项目清空（过滤/清空按项目隔离）——只删该项目名下的条目，两个分区
+     * （收藏 + 普通）一并清；其他项目与「未归属」档不受影响。返回删除条数。
+     */
+    @Synchronized
+    fun clearProject(projectIdentity: String): Int {
+        if (projectIdentity.isBlank()) {
+            // 未归属档：只清 identity 空白的条目，不动任何已归属项目
+            val before = state.entries.size + state.favoriteEntries.size
+            state.entries.removeAll { it.projectIdentity.isBlank() }
+            state.favoriteEntries.removeAll { it.projectIdentity.isBlank() }
+            return before - state.entries.size - state.favoriteEntries.size
+        }
+        val before = state.entries.size + state.favoriteEntries.size
+        state.entries.removeAll { it.projectIdentity == projectIdentity }
+        state.favoriteEntries.removeAll { it.projectIdentity == projectIdentity }
+        return before - state.entries.size - state.favoriteEntries.size
+    }
+
+    /**
+     * F-08：项目清单（identity → 显示名），供 UI 的项目过滤下拉取选项。
+     * 同 identity 多条目时取**最新一条**的 [SqlHistoryEntry.projectName]（项目改名后跟随新名）；
+     * 「未归属」条目以空串键参与（UI 侧自行渲染「未归属」文案）。
+     */
+    fun projectNames(): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        // entries 已时间倒序：先到先写即「最新者优先」，后到的旧条目不覆盖
+        entries.forEach { entry -> map.putIfAbsent(entry.projectIdentity, entry.projectName) }
+        return map
+    }
+
     // ---------- R51：参数快照回写（O-105 余半·主体） ----------
 
     /**
@@ -270,6 +314,49 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         val entry = entries.firstOrNull { match(it) && it.paramSnapshot.isNotEmpty() } ?: return null
         return entry.paramSnapshot
     }
+
+    /**
+     * F-08：把参数快照回写到**本项目**最新一条满足 [match] 的条目——项目收窄版
+     * [updateNewestParamSnapshot]。双项目并发同表名/同 SQL 不串快照。
+     *
+     * 收窄判据（[matchesProject]）：identity **非空且不同**的条目出局；identity 空白的旧条目
+     * 保持可命中（旧数据读回兼容，不因新维度收紧而失去既有回落能力）。
+     * 独立命名而非加默认参数：既有调用点混用「括号内 lambda」与「尾 lambda」两种形态，
+     * 动既有签名两种形态都救不了（K2 实证），项目维度单独成方法零波及。
+     *
+     * @return 是否命中并更新（未命中不抛——面板链路静默容错）
+     */
+    fun updateNewestParamSnapshotForProject(
+        projectIdentity: String,
+        match: (SqlHistoryEntry) -> Boolean,
+        snapshot: Map<String, String>,
+    ): Boolean {
+        if (snapshot.isEmpty()) return false
+        val entry = entries.firstOrNull { match(it) && matchesProject(it, projectIdentity) } ?: return false
+        entry.paramSnapshot.clear()
+        entry.paramSnapshot.putAll(snapshot)
+        return true
+    }
+
+    /**
+     * F-08：取**本项目**最新一条满足 [match] 的条目的参数快照——项目收窄版
+     * [newestParamSnapshot]（收窄判据同 [updateNewestParamSnapshotForProject]）。
+     */
+    fun newestParamSnapshotForProject(
+        projectIdentity: String,
+        match: (SqlHistoryEntry) -> Boolean,
+    ): Map<String, String>? {
+        val entry = entries.firstOrNull {
+            match(it) && it.paramSnapshot.isNotEmpty() && matchesProject(it, projectIdentity)
+        } ?: return null
+        return entry.paramSnapshot
+    }
+
+    /**
+     * F-08 项目收窄判据：条目 identity 空白（旧数据/未归属）放行；否则须与请求方 identity 相等。
+     */
+    private fun matchesProject(entry: SqlHistoryEntry, projectIdentity: String): Boolean =
+        entry.projectIdentity.isBlank() || entry.projectIdentity == projectIdentity
 
     // ---------- 删除 / 清空 ----------
 

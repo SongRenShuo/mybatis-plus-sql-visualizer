@@ -46,8 +46,18 @@ data class SqlHistoryEntry(
      * 用 LinkedHashMap 而非 Set 系（同 [tags] 注释口径，Set 不稳）。
      */
     var paramSnapshot: LinkedHashMap<String, String> = LinkedHashMap(),
-    /** R90：APP 历史域的项目归属；旧条目缺省空，不猜测归属。 */
+    /**
+     * R90：APP 历史域的项目归属（F-08 的 projectId 维度）——basePath 的 SHA-256
+     * （[ExplainPlanKey.projectIdentity]），不落本机路径、跨机稳定。旧条目缺省空，不猜测归属。
+     */
     var projectIdentity: String = "",
+    /**
+     * F-08：项目显示名（[com.intellij.openapi.project.Project.getName] 的落库快照）——
+     * 过滤/展示用的人类可读维度，与 [projectIdentity]（projectId）成对；
+     * identity 相同的条目以最新一条的名字为准刷新（[SqlHistoryManager.projectNames]）。
+     * 旧历史文件无本字段 → 缺省空串，读回不炸（XmlSerializer 缺字段走默认值）。
+     */
+    var projectName: String = "",
     var explainPlans: MutableList<ExplainPlanSnapshot> = mutableListOf(),
     /**
      * T-PresetMethodScope：预览语句的声明作用域（方法身份短哈希，见
