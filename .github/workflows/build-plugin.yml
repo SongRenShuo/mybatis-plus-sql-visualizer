@@ -109,12 +109,30 @@ jobs:
         #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
         run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
 
+      - name: 导出 verifier-cli 供下游 job 播种
+        # T-CiVerifierSeed（2026-11-05）：verifyGate / verifyMarketplace 是 verifier-cli 直驱任务，
+        # 配置期就要在 gradle 缓存里找到 verifier-cli-*-all.jar。这个 jar 是 verifyPlugin 下载的，
+        # 而 build 保存 gradle 缓存时它还没进 modules-2，且 setup-gradle 默认「同 key 不覆盖」——
+        # 于是每个独立 job 都得自己跑一次 :verifyPlugin 预热（连带重新编译整个项目，4~5 分钟）。
+        # 这里把 build 已经用过的那个 jar 随工件发下去，下游直接播种进缓存目录，免掉预热。
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        run: |
+          $root = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli'
+          $jar = Get-ChildItem -Path $root -Recurse -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $jar) { throw "verifier-cli jar 未在 gradle 缓存找到：$root（verifyPlugin 是否真的跑过？）" }
+          New-Item -ItemType Directory -Force -Path 'build/verifier-cli' | Out-Null
+          Copy-Item -LiteralPath $jar.FullName -Destination 'build/verifier-cli' -Force
+          Write-Host "verifier-cli 已导出：$($jar.Name)（$(('{0:N1}' -f ($jar.Length/1MB))) MB）"
+
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
       # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
       # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点。
       # 拆出后 build 实测 13.3 → 7.3 分钟（run#9），marketplace 与 verify/test 三路并行。
 
-      - name: 上传编译产物（供 verify / test 的 matrix job 复用，避免各自重编译）
+      - name: 上传编译产物（供 verify / marketplace 复用，避免各自重编译）
+        # T-CiTestDecouple（2026-11-05）：**test 分片不再下载本工件**——它们拿不到执行历史，
+        # 下了也照样从头编译（run#10 test(4) 实测 compileKotlin 1m02），且为此白等整个 build。
         # T-CiMatrix（2026-11-04 run#1 实证）：必须 !cancelled() 而非默认的 success()——
         # 首跑时本步因前一步 verifyPlugin 失败而 skipped，导致九个下游 matrix job 全部
         # 「下载编译产物失败 → 分片/兼容门禁 skipped」，testShards 一片都没跑。
@@ -139,6 +157,7 @@ jobs:
             build/resources/
             build/tmp/patchPluginXml/
             build/generated/
+            build/verifier-cli/
             sub-projects/sql-visualizer-agent/build/libs/
             sub-projects/sql-visualizer-agent/build/classes/
             sub-projects/sql-visualizer-agent/build/resources/
@@ -239,17 +258,22 @@ jobs:
         with:
           name: build-outputs
 
-      - name: 预热 verifier-cli
-        # T-CiSplitMarketplace（2026-11-05 run#8 实证）：与 verify job 同一条坑——verifyMarketplace
-        # 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 verifier-cli jar，而这个 jar 是
-        # verifyPlugin 下载的。本 job 是独立 runner，跨 job 的 gradle 缓存只读且不含它，必须先自己
-        # 预热一次（run#8 缺这一步，直接 "Could not create task ':verifyMarketplace262'"）。
-        # 用单目标预热即可（只为一个 jar），三个目标的 IDE 发行版已在缓存里。
-        run: ./gradlew.bat :verifyPlugin -PverifyIdes=243 -PgifRecord=false --console=plain
+      - name: 播种 verifier-cli
+        # 与 verify job 同一条：只缺一个 jar，不再为此跑 :verifyPlugin（那会连带重新编译约 4 分钟）。
+        run: |
+          $src = Get-ChildItem -Path 'build/verifier-cli' -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $src) { throw '工件里没有 build/verifier-cli/*.jar——build job 的导出步骤是否失败？' }
+          $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
+          Write-Host "verifier-cli 已播种：$dst\$($src.Name)"
 
       - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
-        # 三目标逐个上传真实发行包做在线验证（无豁免清单，与 Marketplace 审核同口径）
-        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
+        # 三目标逐个上传真实发行包做在线验证（无豁免清单，与 Marketplace 审核同口径）。
+        # -PverifyOnly=true：发行包取自 build 的工件，不再重打包（重打包会让「已验证的字节」
+        # 与「最终上传的字节」不是同一份，且白烧约 4 分钟编译）。
+        run: ./gradlew.bat :verifyMarketplace -PverifyOnly=true -PgifRecord=false --console=plain
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -308,14 +332,19 @@ jobs:
         with:
           name: build-outputs
 
-      - name: 预热 verifier-cli 与目标 IDE ${{ matrix.ide }}
-        # T-CiMatrix（2026-11-04 run#3 实证）：verifyGate 是 verifier-cli 直驱任务，它在配置期
-        # 就要从 gradle 缓存里找 verifier-cli jar（找不到直接 "Could not create task ':verifyGate'"），
-        # 而这个 jar 是 verifyPlugin 下载的。verify 是本 runner 的新 job，build job 的 gradle 缓存
-        # 保存又失败了（多 job 并发写同一 key，日志见 run#3 的 "Failed to save cache entry"），
-        # 所以必须在本 job 自己跑一次 verifyPlugin 把 jar 与目标 IDE 一起落下。
-        # 本步只做预热（报告仍生成）；判定交给下面的 verifyGate。
-        run: ./gradlew.bat :verifyPlugin -PverifyIdes=${{ matrix.ide }} -PgifRecord=false --console=plain
+      - name: 播种 verifier-cli
+        # T-CiVerifierSeed（2026-11-05）：替代原先「跑一次 :verifyPlugin 预热」的做法——预热会连带
+        # 重新编译整个项目（约 4 分钟），而这里只缺一个 jar。build 已把用过的 jar 随工件发下来，
+        # 直接放进缓存目录（verifyGate/verifyMarketplace 按 walkTopDown 在 verifier-cli 下找
+        # `verifier-cli-*-all.jar`，子目录层级不限）。
+        run: |
+          $src = Get-ChildItem -Path 'build/verifier-cli' -Filter 'verifier-cli-*-all.jar' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $src) { throw '工件里没有 build/verifier-cli/*.jar——build job 的导出步骤是否失败？' }
+          $dst = Join-Path $env:GRADLE_USER_HOME 'caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
+          Write-Host "verifier-cli 已播种：$dst\$($src.Name)"
 
       - name: 兼容门禁 ${{ matrix.ide }}
         # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
@@ -325,8 +354,12 @@ jobs:
           -PgateStaggerMs=0 -PgifRecord=false --console=plain
 
   # T-CiMatrix（2026-11-04）：五片测试并行——每个 job 只跑一片。
+  # T-CiTestDecouple（2026-11-05）：分片**不再等 build**。依据：testShardN 的依赖只有
+  # verifyDemoFixture + testShardStagger（mpv-testing.gradle.kts:972-975），没有 buildPlugin；
+  # 测试源码里也没有任何一处读 build/distributions。而 run#10 的 test(4) 明明下载了编译产物，
+  # 仍从头编译（compileKotlin 1m02 + jar/prepareSandbox 30s + compileTestKotlin 28s）——
+  # 产物对分片是白传的，还让五片白等整个 build（约 8 分钟）。去掉 needs 后五片与 build 同起。
   test:
-    needs: build
     if: ${{ !cancelled() && inputs.mode != 'publish' }}
     strategy:
       fail-fast: false
@@ -377,11 +410,6 @@ jobs:
       - name: 准备测试 demo
         # testShards 的 Demo* 普查用例硬断言 demo 源码存在（clone 到仓库兄弟目录的固定位置）
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
-
-      - name: 下载编译产物
-        uses: actions/download-artifact@v8
-        with:
-          name: build-outputs
 
       - name: 分片 ${{ matrix.shard }}
         # 三类真机依赖用例在 CI 剔除（本地发版前照跑）：AttachPoolWarmGateTest / DataSourceJdbcSmokeTest /
