@@ -1,0 +1,277 @@
+# 夜间全量（自动触发）——每晚跑一次「推送轮次不覆盖」的那批：全量测试 + 外部签名护栏 +
+# 性能尾道 + agent 子项目测试 +（可选）真机方言验证 / DB 集成。
+#
+# 与另两个 workflow 的分工：
+#   - push-test.yml     每次推送 → 5 片全量测试（约 11 分钟，快反馈）
+#   - build-plugin.yml  发版前手动 → build + verify×3 + marketplace×3 + verifyplugin + 测试（13~15 分钟）
+#   - nightly-full.yml  每晚 → 上面两条都不跑的「慢/重/需外部实例」部分
+#
+# **只在前 24 小时有代码提交时跑**：changes job 用 `git log --since` 扫代码路径（src / buildSrc /
+# sub-projects / gradle 脚本），全无则其余 job 全部 skip——纯文档日不烧 runner。
+#
+# 需要 secrets 才启用的两条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：
+#   DIALECT_MATRIX_PROPERTIES  = .local/dialect-external-matrix.properties 的**完整内容**
+#                                （格式见 dev-support/dialect-external/matrix.example.properties）
+#   DB_DATASOURCES_XML         = demo 工程 .idea/dataSources.xml 的完整内容（指向可达的 MySQL）
+#
+# 已知限制（2026-11-05 核查）：
+#   ① `testDatabase` 从 demo 的 dataSources.xml 取连接，且任务里硬编码 127.0.0.1:7890 代理给 DBN 用
+#      （mpv-testing.gradle.kts 的 registerDbShard）——GitHub runner 上既无本地 MySQL 也无该代理，
+#      所以这条腿要真跑起来需要先改代码（去代理 / 指向外部库），当前按「有 secret 才试」处理。
+#   ② `e2eFakeIde` 同样依赖 demo + 本机 MySQL + 本机 JDK8，不在本 workflow 内。
+name: 夜间全量（自动）
+run-name: 夜间全量 · ${{ github.ref_name }} @ ${{ github.sha }}
+
+on:
+  schedule:
+    # 02:00 北京时间（UTC 18:00）
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: plugin-ci-nightly-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      code: ${{ steps.scan.outputs.code }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出目标分支（含历史）
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 前 24 小时是否有代码提交
+        id: scan
+        run: |
+          $since = (Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss')
+          $code = git log --since=$since --oneline -- src buildSrc sub-projects gradle `
+            settings.gradle.kts build.gradle.kts '*.gradle.kts' 2>$null
+          if ($LASTEXITCODE -ne 0) { throw 'git log 失败' }
+          $lines = @($code | Where-Object { $_ -and $_.Trim() })
+          if ($lines.Count -gt 0) {
+            Write-Host "近 24 小时代码提交 $($lines.Count) 笔："
+            $lines | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
+            "code=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            Write-Host "近 24 小时无代码提交（since=$since），本轮夜间全量跳过。"
+            "code=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+  # 全量测试五片（与 push-test 同口径；夜间跑不赶时间，用来兜住「白天没人推、测试悄悄腐烂」）
+  tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1', '2', '3', '4', '5']
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+      - name: 准备测试 demo
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+      - name: 分片 ${{ matrix.shard }}
+        timeout-minutes: 30
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
+          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
+          -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
+      - name: 失败诊断输出（断言消息打到任务日志）
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $c = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $m = [regex]::Matches($c, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($m.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              $m | ForEach-Object { Write-Host ([System.Net.WebUtility]::HtmlDecode($_.Groups[1].Value)); Write-Host '-----' }
+            }
+          }
+
+  # 分片轮次不覆盖的慢/重部分：外部签名护栏（起外部 JBR 核验签名）、性能计时尾道、
+  # agent 子项目全量。三者都是纯 JVM，不需要外部实例。
+  extras:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+      - name: 准备测试 demo
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+      - name: 签名护栏 + 性能尾道 + agent 子项目
+        # 三个任务同一次调用：testExternal 起外部 JBR 逐个核验签名、testShardTail 跑计时类用例、
+        # :sql-visualizer-agent:test 是 agent 子项目的全量（分片轮次里根本不含）。
+        timeout-minutes: 50
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testExternal :testShardTail :sql-visualizer-agent:test -PgifRecord=false --console=plain"
+
+  # 真机方言验证（需 secret：矩阵文件全文）。缺失时只写一行说明并正常结束。
+  dialect:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+      - name: 落方言矩阵（来自 secret DIALECT_MATRIX_PROPERTIES）
+        id: matrix
+        env:
+          MATRIX: ${{ secrets.DIALECT_MATRIX_PROPERTIES }}
+        run: |
+          if (-not $env:MATRIX) {
+            Write-Host '::notice::未配置 secret DIALECT_MATRIX_PROPERTIES，跳过真机方言验证（本地 releaseGate 仍会跑）'
+            "ready=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path '.local' | Out-Null
+          Set-Content -LiteralPath '.local/dialect-external-matrix.properties' -Value $env:MATRIX -Encoding utf8
+          Write-Host '方言矩阵已落盘（.local/dialect-external-matrix.properties）'
+          "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: 真机方言验证
+        if: steps.matrix.outputs.ready == 'true'
+        timeout-minutes: 50
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":dialectExternalVerify -PgifRecord=false --console=plain"
+      - name: 上传方言验证摘要
+        if: steps.matrix.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dialect-verify-summary
+          path: build/reports/dialectExternalVerify/summary.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  # DB 集成（需 secret：demo 的 dataSources.xml）。已知限制见文件头注释①——runner 上无本地 MySQL
+  # 与 127.0.0.1:7890 代理，这条腿要在 CI 真跑起来需先改代码；此处按「有 secret 才试」处理。
+  database:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 配置 CI 下载环境
+        run: |
+          $p = 'gradle.properties'
+          (Get-Content -LiteralPath $p) | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $p -Encoding utf8
+          $w = 'gradle/wrapper/gradle-wrapper.properties'
+          (Get-Content -LiteralPath $w -Raw).Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $w -Encoding utf8 -NoNewline
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+      - name: 准备测试 demo
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
+      - name: 落 dataSources.xml（来自 secret DB_DATASOURCES_XML）
+        id: ds
+        env:
+          DS: ${{ secrets.DB_DATASOURCES_XML }}
+        run: |
+          if (-not $env:DS) {
+            Write-Host '::notice::未配置 secret DB_DATASOURCES_XML，跳过 DB 集成（本地 releaseGate 仍会跑）'
+            "ready=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          $demo = Join-Path (Split-Path -Parent $PWD) 'mybatis-plus-demo'
+          if (-not (Test-Path -LiteralPath $demo)) {
+            Write-Host "::warning::demo 工程不在预期位置（$demo），跳过 DB 集成"
+            "ready=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path (Join-Path $demo '.idea') | Out-Null
+          Set-Content -LiteralPath (Join-Path $demo '.idea/dataSources.xml') -Value $env:DS -Encoding utf8
+          Write-Host "dataSources.xml 已落盘：$demo/.idea/dataSources.xml"
+          "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: DB 集成（testDatabase）
+        if: steps.ds.outputs.ready == 'true'
+        timeout-minutes: 50
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testDatabase -PgifRecord=false --console=plain"
