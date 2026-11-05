@@ -278,7 +278,11 @@ jobs:
           }
           $missing = $keep | Where-Object { -not $byKey.ContainsKey($_) }
           if ($missing) { throw "矩阵里找不到这些 key：$($missing -join ',')（现有：$($byKey.Keys -join ',')）" }
-          $out = @("# CI 冒烟子集（全量见本地 .local/dialect-external-matrix.properties）", "instances = " + ($keep -join ', '))
+          # 注意：不要写成 `@(..., "instances = " + (...))`——数组字面量里 `+` 与 `,` 的优先级会让它
+          # 被拆成两个元素（本机落盘实测：instances 行断成 `instances = ` + `mysql84, pg16` 两行，
+          # 测试侧会判「矩阵未声明任何实例」）。统一用 -f 格式化。
+          $out = @("# CI 冒烟子集（全量见本地 .local/dialect-external-matrix.properties）")
+          $out += ("instances = {0}" -f ($keep -join ', '))
           foreach ($k in $keep) { $out += $byKey[$k] }
           Set-Content -LiteralPath '.local/dialect-external-matrix.properties' -Value $out -Encoding utf8
           Write-Host ("方言矩阵已落盘（子集 {0}；原矩阵 {1} 个实例中取 {2} 个）" -f ($keep -join ','), $byKey.Keys.Count, $keep.Count)
