@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 
@@ -117,5 +118,44 @@ class HeaderFragmentCacheTest : BasePlatformTestCase() {
             SqlEntryPresentation.headerCoreComputeCount,
         )
         assertEquals("选中/非选中的头部行文本内容一致（仅颜色差异，颜色不进 metaTextForTest）", unselected, renderer.metaTextForTest)
+    }
+
+    /**
+     * 判据⑤（T-LogMethodName）：来源段缓存键含「来源后方法名」开关——切换后必须重算。
+     *
+     * 断言走文本变化而不是计数缝：来源段与静态段共用 `cachedHeaderKey`，
+     * 键缺这一维时开关切换会一直复用旧片段（用户视角＝「设置改了没反应」）。
+     */
+    fun test来源后方法名开关切换后缓存失效重算() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state.copy()
+        try {
+            // 关掉时间戳与耗时，把头部压到最短——避免 600px 列表把末尾方法名段裁掉造成假红
+            settings.state.logTimestampEnabled = false
+            settings.state.showDurationInLogList = false
+            settings.state.showMethodInLogList = false
+            val renderer = LogEntryListCellRenderer()
+            val l = list()
+            val e = LogSqlEntry(
+                rawSql = "SELECT 1",
+                restoredSql = "SELECT 1",
+                params = emptyList(),
+                timestamp = 1_700_000_000_000L,
+                sourceFile = "src/main/java/UserMapper.java",
+                sourceLine = 41,
+                mapperStatement = "com.example.mapper.UserMapper.selectById",
+            )
+            renderOnce(renderer, l, e)
+            val off = renderer.metaTextForTest
+            assertFalse("关闭态不得含方法名片段: $off", off.contains("UserMapper#selectById"))
+
+            settings.state.showMethodInLogList = true
+            renderOnce(renderer, l, e)
+            val on = renderer.metaTextForTest
+            assertTrue("打开后必须重算并显示方法名片段（缓存键缺这一维就会一直是 $off）: $on", on.contains("[UserMapper#selectById]"))
+            assertTrue("来源位置仍在: $on", on.contains("[UserMapper.java:41]"))
+        } finally {
+            settings.loadState(snapshot)
+        }
     }
 }

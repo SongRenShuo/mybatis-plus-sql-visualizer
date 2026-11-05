@@ -176,6 +176,7 @@ val methodInSource: Boolean,   // = state.showMethodInLogList
 | `config/PluginSettingsPanel.kt` | `logShowMethodCheck` 字段 + `isModified` / `apply` / `reset` 三处 | +6 行 |
 | `config/PluginSettingsPanelSections.kt` | SQL 日志页新增一行复选框 | +5 行 |
 | `config/PluginSettingsFolderConfigurable.kt` | `buildSearchableFields()` 登记一条 | +1 行 |
+| `log/LogSqlModels.kt` | `cachedHeaderSource` / `cachedHeaderKey` 两处 KDoc 补新形态（无逻辑改动） | +4/-2 行 |
 | `resources/messages/MpSqlVisualizerBundle.properties` | `settings.log.showMethod` / `.tip`（英文） | +2 行 |
 | `resources/messages/MpSqlVisualizerBundle_zh.properties` | 同上（中文） | +2 行 |
 | `docs/架构设计/02-核心流程详解.md` | `:524` 的头部字段序与 `:526` 的 `SqlEntryPresentation` 行同步「开关打开时来源段追加 `[类名#方法名]`」 | +2 处 |
@@ -271,3 +272,53 @@ val methodInSource: Boolean,   // = state.showMethodInLogList
 4. 历史页用例 8 与架构文档同步
 5. 反向验证两次读数 + 定向回归；产物交收口代理跑全量
 6. 真机步骤交用户执行（§6.4）
+
+## 九、实施记录（2026-11-05）
+
+### 9.1 落地范围
+
+- 分支 `t-log-method-name`，工作树 `mybatis-plus-sql-visualizer-lmn`，基线 `26604b7d`（立项册提交 `1d77a21e`）
+- 逐文件改动见 §四；实现与计划一致，另补 `LogSqlModels.kt` 两处 KDoc（无逻辑改动，已补进 §四 清单）
+- 计划里写「新增用例 6 + 配套 3」，实际 `LogMethodNameFragmentTest` 落 10 例（多出「混写包名与井号」「metadata 口径与渲染器一致」两条，均为口径钉桩）
+
+### 9.2 定向回归读数（8 类，含恢复后复跑）
+
+命令（走 `dev-support/gradle-gate.ps1` 排队，独立沙盒 `MPSV-lmn`，`-Pkotlin.compiler.execution.strategy=in-process`）：
+
+```
+.\gradlew test --tests=…LogMethodNameFragmentTest --tests=…HeaderFragmentCacheTest
+  --tests=…HistoryCellRendererTest --tests=…SqlEntryPresentationTest
+  --tests=…SqlLogPanelRendererUiTest --tests=…PluginSettingsPersistenceTest
+  --tests=…SettingsPanelSearchableGuardTest --tests=…SettingsRealityGuardTest
+```
+
+| 类 | 例数 | 失败 | 错误 | 跳过 |
+|---|---|---|---|---|
+| PluginSettingsPersistenceTest | 19 | 0 | 0 | 0 |
+| SettingsPanelSearchableGuardTest | 4 | 0 | 0 | 0 |
+| SettingsRealityGuardTest | 4 | 0 | 0 | 0 |
+| HeaderFragmentCacheTest | 5 | 0 | 0 | 0 |
+| HistoryCellRendererTest | 30 | 0 | 0 | 0 |
+| LogMethodNameFragmentTest | 10 | 0 | 0 | 0 |
+| SqlEntryPresentationTest | 12 | 0 | 0 | 0 |
+| SqlLogPanelRendererUiTest | 53 | 0 | 0 | 0 |
+| **合计** | **137** | **0** | **0** | **0** |
+
+8 个类均有结果文件（非零例），排除「过滤没命中造成空绿」。反向验证后恢复代码再跑同一命令，读数与上表一致。
+
+### 9.3 反向验证（三个探针，各红一条且只红预期那条）
+
+| 探针 | 临时改动 | 变红用例与读数 |
+|---|---|---|
+| ① 缓存键维度 | `methodInSource = state.showMethodInLogList` → `false` | `HeaderFragmentCacheTest.test来源后方法名开关切换后缓存失效重算`：`关闭态不得含方法名片段: [UserMapper.java:41] [UserMapper#selectById]` |
+| ② 搜索索引 | 注释掉 `buildSearchableFields()` 里的 `settings.log.showMethod` 登记 | `SettingsPanelSearchableGuardTest.test面板输入型文本均能在搜索索引命中或列白名单`：zh/en 双语都报同一键 `settings.log.showMethod` |
+| ③ 开关短路 | 注释掉 `formatMethodFragment` 的 `showMethodInLogList` 早退 | `LogMethodNameFragmentTest.test开关关闭时不产出方法名片段`：`expected:<1> but was:<2>` |
+
+三探针同一次运行：19 例中 3 红 16 绿，红的三条与上表逐条对应，无附带失败。恢复后 `grep -rn "RED PROBE" src/` 零命中，复跑 137/0/0/0。
+
+### 9.4 未做与边界
+
+- 真机（runIde）视觉走查未做，按 §6.4 交用户执行；窄侧栏裁剪程度需真机确认
+- 全量门禁与构建校验未跑（按仓库分层纪律交收口代理；本轮未动 `build.gradle.kts`、依赖、plugin.xml EP 或平台 API 面）
+- MP 分页 COUNT 条目仍无方法名（合成标记不带语句 id），与 §七 一致
+- 未纳入 `SettingsIO` 导出/导入（与 `logTimestampEnabled` / `showDurationInLogList` 同族显示项一致）

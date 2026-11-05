@@ -406,6 +406,31 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     private var savedTsFormat: String = ""
     private var savedTsEnabled: Boolean = true
 
+    /**
+     * T-LogMethodName：历史二级列表与日志页共用 [RailCellRendererBase]，开关同样生效。
+     *
+     * 历史条目的 `mapperStatement` 由 pd 载荷读回（SqlLogFileReader），因此不需要额外接线；
+     * 本用例钉住「历史页也跟随设置」，防日后有人把来源段在历史侧另写一套。
+     */
+    fun test历史二级列表跟随来源后方法名开关() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val snapshot = settings.state.copy()
+        try {
+            settings.state.logTimestampEnabled = false
+            val e = sqlEntry("SELECT 1", sourceFile = "src/main/java/UserMapper.java", sourceLine = 41)
+                .copy(mapperStatement = "com.example.mapper.UserMapper.selectById")
+            settings.state.showMethodInLogList = false
+            val off = detail(renderSql(e))
+            assertFalse("关闭态不得含方法名片段: $off", off.contains("UserMapper#selectById"))
+            settings.state.showMethodInLogList = true
+            val on = detail(renderSql(e))
+            assertTrue("历史列表打开后应显示方法名片段: $on", on.contains("[UserMapper#selectById]"))
+            assertTrue("来源位置仍在: $on", on.contains("[UserMapper.java:41]"))
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
     override fun setUp() {
         super.setUp()
         val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state

@@ -310,6 +310,52 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
 }
 
 /**
+ * T-LogMethodName：`mapperStatement` → 「类名#方法名」显示串。纯字符串操作，无正则、无 PSI、无服务查找。
+ *
+ * 两条通道的字段语义本来就不同（见 [LogSqlEntry.mapperStatement] 的 KDoc）：
+ *  - 控制台桥：MyBatis 语句 id `com.example.mapper.UserMapper.selectById`——**mapper 接口**，不是调用点；
+ *  - 增强捕获：调用栈业务帧 `DeviceInfoServiceImpl#joinRightAlias`——与 [LogSqlEntry.sourceFile] 同一帧。
+ *
+ * 所以本函数只做「取简单类名 + 方法名」，不与来源文件比对：列表里两段并排显示，
+ * 硬拼成一段会造出不存在的成员（`UserServiceImpl#selectById`）。场景清单见
+ * `docs/开发计划/20261105-1254-T-LogMethodName-SQL列表来源后显示类名与方法名-开发计划.md` §3.3。
+ *
+ * 不可解析一律返回 null——宁可不显示，不显示错的：null / 空白 / 无 `.` 也无 `#` /
+ * 类名段为空 / 方法段为空。内部类原样保留 `$`（`Outer$Inner.selectById` → `Outer$Inner#selectById`）。
+ */
+internal fun mapperStatementLabel(mapperStatement: String?): String? {
+    val raw = mapperStatement?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    // agent 形态优先：`#` 右侧是方法名，左侧可能是简单类名也可能带包名（混写兜底）
+    val hash = raw.lastIndexOf('#')
+    if (hash >= 0) {
+        val cls = raw.substring(0, hash).substringAfterLast('.').trim()
+        val method = raw.substring(hash + 1).trim()
+        return if (cls.isEmpty() || method.isEmpty()) null else "$cls#$method"
+    }
+    // 桥通道形态：最后一段是方法名，倒数第二段是简单类名
+    val dot = raw.lastIndexOf('.')
+    if (dot <= 0 || dot == raw.length - 1) return null
+    val cls = raw.substring(0, dot).substringAfterLast('.').trim()
+    val method = raw.substring(dot + 1).trim()
+    return if (cls.isEmpty() || method.isEmpty()) null else "$cls#$method"
+}
+
+/**
+ * T-LogMethodName：来源位置之后的「类名#方法名」片段（`showMethodInLogList` 门控，默认关）。
+ *
+ * 与 [formatSourceFragment] 并排产出（来源段在前、本段在后），属性完全对齐来源片段；
+ * 选中态由 `bindHeaderLine` 的 `selectedAttributes` 统一覆盖，片段层只给非选中态。
+ * 没有方法名（Hibernate / JdbcTemplate / ShardingSphere / MP 分页计数 / 旧日志）返回 null，
+ * 不占位、不改动既有形态。
+ */
+internal fun formatMethodFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    if (!PluginSettings.getInstance().state.showMethodInLogList) return null
+    val label = mapperStatementLabel(entry.mapperStatement) ?: return null
+    return "[$label] " to if (isSelected) SimpleTextAttributes.REGULAR_ATTRIBUTES else LIST_META_GRAY
+}
+
+/**
  * 日志列表条目单元格渲染器（T-LogListHeader）。
  *
  * 版面：`[色条] 头部行（全部元信息） / SQL 行… / 可选错误行`。

@@ -640,6 +640,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val slowQueryThresholdField = JBTextField(12)
     internal val logShowDurationCheck = JBCheckBox()
 
+    // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+    internal val logShowMethodCheck = JBCheckBox()
+
     // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
     internal val dataSourceBadgeDetailCheck = JBCheckBox()
 
@@ -1242,6 +1245,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            || logShowMethodCheck.isSelected != s.showMethodInLogList
             || dataSourceBadgeDetailCheck.isSelected != s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
@@ -1374,6 +1378,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            s.showMethodInLogList = logShowMethodCheck.isSelected
             s.dataSourceBadgeDetail = dataSourceBadgeDetailCheck.isSelected
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
@@ -1577,6 +1582,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            logShowMethodCheck.isSelected = s.showMethodInLogList
             dataSourceBadgeDetailCheck.isSelected = s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled

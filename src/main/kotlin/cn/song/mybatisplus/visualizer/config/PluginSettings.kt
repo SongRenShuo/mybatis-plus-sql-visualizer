@@ -381,6 +381,21 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showDurationInLogList: Boolean = true,
 
         /**
+         * 在来源位置后显示「类名#方法名」（T-LogMethodName，**默认关**）。
+         *
+         * 开启后日志/历史列表在 `[文件.java:行号]` 之后追加一段 `[类名#方法名]`，例如
+         * `[OrderServiceImpl.java:41] [UserMapper#selectById]`。方法名取自
+         * [cn.song.mybatisplus.visualizer.log.LogSqlEntry.mapperStatement]：
+         *  - 控制台桥通道 = MyBatis 语句 id（mapper 接口的方法，**不是**调用点的方法）；
+         *  - 增强捕获通道 = 调用栈业务帧（与来源文件同一个类）。
+         *
+         * 无该信息的条目（Hibernate / JdbcTemplate / ShardingSphere / MP 分页计数 / 旧日志）
+         * 保持原样、不占位。显示侧门控：落盘与检索语义零变化，切换即时生效（缓存键含本值）。
+         * 默认关闭的理由：头部行已是顺序截断，窄侧栏下新段会最先被裁掉。
+         */
+        var showMethodInLogList: Boolean = false,
+
+        /**
          * 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，**默认关**＝仅显示数据库类型）。
          * false 时日志/历史两页的目标库角标只取「方言显示名」段（如 `[MySQL]`）；true 时显示
          * 全量「方言 · 连接事实」（如 `[MySQL · jpa_demo@localhost:3306]`）。
