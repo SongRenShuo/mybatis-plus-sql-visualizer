@@ -115,3 +115,63 @@ CI 快的原因只是「三目标与五片并行」，它的 `build` 段 21.7 �
 6. 换 IDE 版本先让 `verifyPlugin` 下载一次，再看 transforms 实际目录名
 7. 用时间阈值做判据的全局态，测试里注入显式开关，不依赖跑得快
 8. 每轮都取 `jobs` API 的**逐 job 耗时**，别只看总墙钟——才能看出是哪一段吃掉收益
+9. 任何「需要 verifier-cli 的独立 job」都要复制第 3 条（本轮 marketplace 就是漏了它才红）
+10. 聚合门禁必须把 `skipped` 判红——GitHub 里被 skip 的 job 不会让整轮变红
+11. 不要为了跳过重编译把项目级 `.gradle` 塞进工件（见 §七.3 的实证失败）
+
+## 七、第二轮提速：从 27.8 到 19.4 分钟（2026-11-05 下午）
+
+第一轮把串行拆成并行后，`build` 成了墙钟起点。逐段读数显示它 13.3 分钟里有 4.8 分钟是 `verifyMarketplace` 串行跑（三目标 2m41s / 4m06s / 4m17s），而九个下游 job 全在等它。
+
+### 1. 把 marketplace 拆成独立 job（build 13.3 → 7.3）
+
+`verifyMarketplace` 只依赖 `buildPlugin` 产出的发行包，与 `verifyPlugin` 无关。拆出去后它与 verify×3 / test×5 三路并行，各占一台 runner。**注意它也要预热 verifier-cli**——第一次拆出去时照抄了 verify 的结构却漏了这一步，直接红在 `Could not create task ':verifyMarketplace262'`（与 §三.2 同一条坑）。
+
+### 2. 聚合门禁：skipped 不能当通过
+
+GitHub 里被 skip 的 job 不会让整轮运行变红，而 verify / marketplace / test 都带 `if: !cancelled()`。一旦某条腿因条件求值意外为假、matrix 写错或 needs 链断掉而被 skip，运行结论照样可以是绿的——等于「没验也过」。新增 `gate` job 逐条读 `needs.<job>.result`，`success` 之外一律判红并点名；`publish` 的 release 判定改为只看 `gate` 一条。
+
+### 3. 试错：把项目级 `.gradle` 塞进工件（失败，已撤回）
+
+推理是：下游 job 恢复了 `build/classes` 却判不了 UP-TO-DATE，因为 Gradle 的执行历史与输入指纹在 `.gradle/<ver>` 里；同一运行、同一提交、同一绝对路径，恢复后应当直接跳过编译（实测每片省约 2.75 分钟）。
+
+实测 run#8：test(4) 编译期 `ClosedFileSystemException`（读 243 的 `database-plugin.jar` 时 zip 文件系统已被关闭）→ 报成 `Could not find bundled plugin with ID: 'com.intellij.database'`，一片红。同轮该 job 的 `gradle-transforms` 缓存恢复只花 77s 且体积明显偏小（正常 117s / 4775MB），即变换缓存没真正到位。收益 2 分钟、风险是发布门禁偶发红，不对等，撤回。
+
+**教训**：工件里塞构建状态（`.gradle`）会把「任务是否重跑」交给跨 job 的文件搬运，而变换缓存的完整性不受我们控制。要么彻底验干净，要么不碰。
+
+### 4. 缓存认知（本轮量出来的事实）
+
+| 事实 | 读数 |
+|---|---|
+| 共享缓存条目总量 | 约 9.6GB：`modules-2` 4.4GB（4 个 IDE 的 zip）+ `transforms` 4.8GB（解包后） |
+| 每个 job 恢复耗时 | 1.9~2.9 分钟；九 job 同起时最慢一次 5.2 分钟（抢同一条目） |
+| 子缓存 key 与提交的关系 | **无关**：run#8 与 run#9 提交不同，`gradle-transforms` / `dependencies` / `kotlin-dsl` 三个 key 完全一致 |
+| key 一次性换新的代价 | run#8 那轮 build 的 `Post 配置 Gradle 缓存` 3.13 分钟（整份重存），之后回落到 0.98 |
+| verifier-cli 为何每个 job 都要预热 | build 保存缓存时 jar 还没进 `modules-2`，且 setup-gradle 默认「同 key 不覆盖」→ 之后每轮都不再更新该条目。根治要把它改成按依赖懒解析（动门禁核心，当前墙钟归 test，收益 0.6 分钟，暂不做） |
+
+### 5. 三轮读数
+
+| run | 总墙钟 | build | verify ×3 | test ×5 | marketplace |
+|---|---|---|---|---|---|
+| #5 | 35.0 | 21.7 | 8.8/9.6/9.8 | 9.2/10.2/10.8/12.0/13.2 | 串在 build 里 |
+| #7 | 27.8 | 13.3 | 7.3/7.8/8.2 | 10.0/10.7/11.2/11.9/14.4 | 串在 build 里（4.8） |
+| #8 | 22.5（2 红） | 12.2 | 6.2/6.8/7.4 | 8.0/8.7/9.6/10.2 + 1 红 | 2.7（缺预热，红） |
+| **#9** | **19.4** | **7.3** | 5.8/7.5/7.6 | 8.9/9.8/10.2/10.6/11.4 | 12.1 |
+
+当前瓶颈：test 最慢片 11.4 分钟（缓存 2 + 编译 2.75 + 测试 3.2 + Gradle 启动与配置约 2），以及 marketplace 12.1（其中约 4 分钟是预热连带的重编译）。
+
+### 6. 参考 t8y2/dbx 的调研结论（2026-11-05）
+
+dbx 是 Rust/Tauri 桌面客户端，全量运行 47 分钟 / 51 job / 247 runner 分钟，**比我们重**，不是「压到几分钟」的样本；它的 Gradle 部分只有两个小 job 且没开 build cache / configuration cache。可迁移与不可迁移如下：
+
+| 做法 | 出处 | 结论 |
+|---|---|---|
+| 聚合门禁把 skipped 判红 | `.github/scripts/ci-gate.mjs:4-66` | **已采用**（§七.2） |
+| 缓存 key 里清零 CI 选择变量（分片号不进 key） | `ci.yml:279-283` | 不适用：实测我们的子 key 与提交无关，无此问题 |
+| 缓存只在主分支写、失败不写 | `ci.yml:291-293` | 部分已具备（verify/test 只读）；`cache-on-failure` 无对应输入 |
+| 廉价前置 lane（fmt/契约 1 分钟挡住 30 分钟） | `ci.yml:1424-1464` | 不适用：我们的同类守卫是 Kotlin 测试，必须先编译约 4 分钟 |
+| 最重的 job 不恢复大缓存 | `ci.yml:1101` | 不适用：分片不恢复就要重下 IDE，约 5 分钟/片，比 2 分钟恢复更亏 |
+| 跨 run 复用预编译产物 | `find-win7-prebuilt-artifact.mjs` | 暂不做：要改 IPGP 的 IDE 解析路径，收益不确定 |
+| sccache / mold / 自托管 runner | `ci.yml:250-277` 等 | 不可用：JVM 无对应物，对方也全是 GitHub 托管 runner |
+
+一句话：dbx 的价值在「缓存写入纪律 + 门禁防假绿」，不在压缩墙钟。
