@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.execute
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JPanel
 
 /**
@@ -24,7 +23,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     private fun newHost() = JPanel()
 
     /** 稳态：已换入且仍在位——不得再换（防每拍重建导致闪烁）。 */
-    @Test
     fun testSteadyStateNeedsNoSwap() {
         val host = newHost()
         val live = JPanel()
@@ -48,7 +46,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
      * ★A48 核心回归：DBN 把同一实例重新挂回原生宿主（ServiceView）——身份与名称都没变，
      * 仅 parent 变了，必须判为需要回收重挂。
      */
-    @Test
     fun testReparentedComponentNeedsReclaim() {
         val host = newHost()
         val live = JPanel()
@@ -72,7 +69,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** DBN 完全释放（parent=null）同样须回收重挂。 */
-    @Test
     fun testParentlessComponentNeedsReclaim() {
         val host = newHost()
         val live = JPanel()
@@ -92,7 +88,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** 底部被换成别的组件（hostBottom 不再指向 live）也要重挂。 */
-    @Test
     fun testReplacedBottomNeedsReclaim() {
         val host = newHost()
         val live = JPanel()
@@ -116,7 +111,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     // ==================== 既有三条判据不回退 ====================
 
     /** 判据一：found 结果页签后的强制首换（本拍尚未换过）。 */
-    @Test
     fun testForcedFirstSwap() {
         val host = newHost()
         val live = JPanel()
@@ -138,7 +132,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** 判据一不得退化成每拍强制（已在位 + 换过 + forceSwapIn）→ 不换。 */
-    @Test
     fun testForceSwapInDoesNotChurnAfterFirstSwapped() {
         val host = newHost()
         val live = JPanel()
@@ -159,7 +152,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** 判据二：组件实例变化（DBN 重建结果组件）→ 换。 */
-    @Test
     fun testInstanceChangedSwaps() {
         val host = newHost()
         val previous = JPanel()
@@ -181,7 +173,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** 判据三：结果页签名称集合变化（空名占位改名/新页签）→ 换。 */
-    @Test
     fun testNamesChangedSwaps() {
         val host = newHost()
         val live = JPanel()
@@ -204,7 +195,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     // ==================== 边界 ====================
 
     /** live 取不到（反射失败）→ 不换（与既有 getOrNull 语义一致）。 */
-    @Test
     fun testNullLiveNeedsNoSwap() {
         val host = newHost()
 
@@ -223,7 +213,6 @@ class ResultSwapNeededTest : BasePlatformTestCase() {
     }
 
     /** 非分栏形态（host=null）时第四判据不生效——避免回退路径每拍空换。 */
-    @Test
     fun testNullHostDoesNotTriggerReclaim() {
         val live = JPanel()
         JPanel().add(live)

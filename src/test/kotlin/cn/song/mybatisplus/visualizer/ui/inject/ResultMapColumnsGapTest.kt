@@ -103,7 +103,6 @@ class ResultMapColumnCompletionGapTest : BasePlatformTestCase() {
         return resultSet.collected.map { it.lookupString }
     }
 
-    @Test
     fun test_column候选来自引用该resultMap的select投影列() {
         val strings = completeAt(
             """
@@ -119,7 +118,6 @@ class ResultMapColumnCompletionGapTest : BasePlatformTestCase() {
         assertFalse("无关 select 的列不得混入：$strings", strings.contains("unrelated"))
     }
 
-    @Test
     fun test_property候选来自resultMap的type类字段() {
         myFixture.addFileToProject(
             "Device.java",
@@ -142,7 +140,6 @@ class ResultMapColumnCompletionGapTest : BasePlatformTestCase() {
         assertTrue("property 候选应含 type 类字段 name：$strings", strings.contains("name"))
     }
 
-    @Test
     fun test_非结果映射上下文零候选() {
         val strings = completeAt(
             """
@@ -188,7 +185,6 @@ class ResultMapColumnCompletionGapTest : BasePlatformTestCase() {
  */
 class ResultMapColumnResultMapMemoTest : BasePlatformTestCase() {
 
-    @Test
     fun test_同文件同resultMap二次提取_命中memo零重扫() {
         val file = myFixture.configureByText(
             "m.xml",

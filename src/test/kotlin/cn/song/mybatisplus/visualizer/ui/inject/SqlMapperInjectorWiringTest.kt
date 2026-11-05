@@ -11,7 +11,6 @@ import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlText
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Test
 import java.io.File
 
 /**
@@ -94,7 +93,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         return count
     }
 
-    @Test
     fun testF37_mapper文件_语句文本与白名单属性注入位均收集() {
         val file = openPhysicalFile(mapper)
         // 语句文本（select 直属文本 + if 内嵌文本）+ test 属性值各 1 位；namespace/id 属性不在
@@ -102,7 +100,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         assertEquals("mapper 文件应收集语句文本与 test 属性注入位", 3, myLanguagePlaceCount(file))
     }
 
-    @Test
     fun testF37_非mapper文件_零注入位() {
         val notMapper = mapper.replace("<mapper namespace=\"n\">", "<configuration>")
         val file = openPhysicalFile(notMapper)
@@ -113,7 +110,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
      * F79 刀一（管线级判别）：非 mapper XML 的高亮喂入 pass 全程探针零咨询——
      * 修复前 probe 跑在 mapper 判定之前，每宿主白付全链（计数 >0 → 红）。
      */
-    @Test
     fun testF79_非mapper文件_管线级探针零咨询() {
         val notMapper = mapper.replace("<mapper namespace=\"n\">", "<configuration>")
         val file = openPhysicalFile(notMapper)
@@ -127,7 +123,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF37_让位态_零注入位() {
         val file = openPhysicalFile(mapper)
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
@@ -141,7 +136,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF68_平台探针让位_零注入位() {
         val file = openPhysicalFile(mapper)
         // D68 关键让位形态（管线级）：探针判定平台会注入该宿主 → 全族让位 → 零注入位
@@ -153,7 +147,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF37_pluginXml_multiHostInjector_EP接线在场() {
         // EP 声明冻结但接线不可丢——钉住 multiHostInjector 声明（同 typedHandler EP 测试口径）
         val xml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
@@ -193,7 +186,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
      * 形态坑（本轮真红实证）：**缝必须在 `openPhysicalFile` 之前设**——平台在文件入 VFS/配置编辑器
      * 阶段就会算一次注入并把结果缓存在 PSI 上，之后再改缝也拿不到新结果（首跑两例皆红的根因）。
      */
-    @Test
     fun testW1_外来只占参数区间_我方仍注入余下区间() {
         val pattern = Regex("""[#$]\{[^}]*}""")
         withRangeSeam({ host -> pattern.findAll(host.text).map { TextRange(it.range.first, it.range.last + 1) }.toList() }) {
@@ -208,7 +200,6 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
     }
 
     /** 反向：外来注入器占满整宿主 → 我方在语句文本上零着色（保守线保留）。 */
-    @Test
     fun testW1_外来占满整宿主_语句文本零着色() {
         withRangeSeam({ host -> InjectRangePlan.yieldAll(host.textLength) }) {
             val file = openPhysicalFile(paramMapper)

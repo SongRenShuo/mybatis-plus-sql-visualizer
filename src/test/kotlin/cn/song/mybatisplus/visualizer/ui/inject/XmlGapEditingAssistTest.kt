@@ -10,7 +10,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlGap W6 编辑辅助三件：编辑脏区放大、`#{}`/`${}` 成对删、live template 上下文。
@@ -30,7 +29,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     // 编辑脏区放大
     // ------------------------------------------------------------------
 
-    @Test
     fun testW6_脏区_语句内文本_放大到所属语句标签() {
         myFixture.configureByText("mapper.xml", mapper)
         val text = PsiTreeUtil.collectElementsOfType(myFixture.file, XmlText::class.java)
@@ -40,7 +38,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
         assertEquals("脏区收窄到所属语句标签", "select", (scope as XmlTag).name)
     }
 
-    @Test
     fun testW6_脏区_非mapper文件_不介入() {
         myFixture.configureByText(
             "other.xml",
@@ -71,7 +68,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** 平台删掉 `#{` 的 `{` 后（残留 `#` + `}`）→ 本类补删两个字符，`#{}` 整段消失。 */
-    @Test
     fun testW6_成对删_井号参数() {
         myFixture.configureByText(
             "mapper.xml",
@@ -83,7 +79,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** `${}` 同形：平台删掉 `{` 后残留 `$` + `}` → 本类补删。 */
-    @Test
     fun testW6_成对删_美元参数() {
         myFixture.configureByText(
             "mapper.xml",
@@ -95,7 +90,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** 非配对形态（左邻不是 `#`/`$`）→ 零介入，平台已删的 `{` 之外一个字符都不动。 */
-    @Test
     fun testW6_成对删_非配对形态_零介入() {
         myFixture.configureByText(
             "mapper.xml",
@@ -106,7 +100,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** 非 mapper 文件 → 零介入（不在本插件作用域）。 */
-    @Test
     fun testW6_成对删_非mapper文件_零介入() {
         myFixture.configureByText(
             "other.xml",
@@ -117,7 +110,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** 右邻不是 `}`（如 `#{id}` 里删掉 `{`）→ 不误删，交给用户继续输入。 */
-    @Test
     fun testW6_成对删_右邻非花括号_零介入() {
         myFixture.configureByText(
             "mapper.xml",
@@ -131,7 +123,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     // live template 上下文
     // ------------------------------------------------------------------
 
-    @Test
     fun testW6_模板上下文_语句内为真_根下为假() {
         myFixture.configureByText("mapper.xml", mapper)
         val ctx = MybatisSqlTemplateContextType()
@@ -143,7 +134,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
         assertFalse("根标签标记区（非语句内）→ 上下文为假", ctx.isInContext(file, rootTag.textRange.startOffset + 1))
     }
 
-    @Test
     fun testW6_模板上下文_非mapper文件为假() {
         myFixture.configureByText("other.xml", """<configuration><settings/></configuration>""")
         val ctx = MybatisSqlTemplateContextType()
@@ -151,7 +141,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** 模板文件在场 + context id 与上下文类常量对齐（防「模板静默不生效」）。 */
-    @Test
     fun testW6_模板文件在场且上下文id对齐() {
         val stream = javaClass.classLoader.getResourceAsStream("templates/mybatis-sql.xml")
         assertNotNull("模板文件须随资源打包（resources/templates/mybatis-sql.xml）", stream)
@@ -171,7 +160,6 @@ class XmlGapEditingAssistTest : BasePlatformTestCase() {
     }
 
     /** EP 接线守卫：四个 W6 EP 均在 plugin.xml 声明。 */
-    @Test
     fun testW6_pluginXml_四个EP接线在场() {
         val xml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
             .readBytes().toString(Charsets.UTF_8)

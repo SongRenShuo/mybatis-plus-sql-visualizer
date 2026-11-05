@@ -145,6 +145,22 @@ data class PreviewResult(
      * `var` 供 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 的 recordHistory 回写（同 [historyEntryId]）。
      */
     var originScopeKey: String = "",
+    /**
+     * T-PagesHql：源语言（默认 SQL = 未发生语言转换）。
+     *
+     * 仅 `<pages>` 的 HQL 转换链会置 [SourceLanguage.HQL]；面板 meta 行据此展示
+     * 「来源：HQL（已转换）」，让「插件到底转没转」可核对（用户投诉的一半是「不知道它做了什么」）。
+     */
+    val sourceLanguage: SourceLanguage = SourceLanguage.SQL,
+    /**
+     * T-PagesHql：转换前的原文（仅 [sourceLanguage] 非 SQL 时非空）；面板「原文」只读页签展示。
+     */
+    val originalSql: String? = null,
+    /**
+     * T-PagesHql：转换降级清单（关联路径未映射 / 推断的 ON 条件 / 实体不可解析等）。
+     * 空表 = 无降级。pages 链会把它压成一行并入 [warning]；其它 JPA 链路只携带不展示（惰性字段）。
+     */
+    val degradations: List<String> = emptyList(),
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

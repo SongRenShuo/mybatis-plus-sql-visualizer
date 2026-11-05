@@ -163,6 +163,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
         override fun toString(): String = label
     }
 
+    /** T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）。 */
+    internal data class PagesSourceOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
     internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
@@ -225,6 +230,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
             PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH,
             MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.componentPath"),
         ),
+    )
+
+    /** T-PagesHql：maintainPage `<datasource>` 源语言选项（自动 / 仅 SQL / 仅 HQL）。 */
+    internal fun pagesSourceOptions(): Array<PagesSourceOption> = arrayOf(
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_AUTO, MpSqlVisualizerBundle.message("settings.pagesSource.auto")),
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_SQL, MpSqlVisualizerBundle.message("settings.pagesSource.sql")),
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_HQL, MpSqlVisualizerBundle.message("settings.pagesSource.hql")),
     )
 
     // T-TenantLine 诊断日志：输出 UI Apply 决策链路。
@@ -585,6 +597,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 嵌入列命名约定下拉（T-EmbeddedColPrefix：AUTO/NONE/COMPONENT_PATH）。 */
     internal val embeddedNamingCombo = JComboBox<EmbeddedNamingOption>()
 
+    /** maintainPage `<datasource>` 源语言档（T-PagesHql：AUTO/SQL/HQL）。 */
+    internal val pagesSourceCombo = JComboBox<PagesSourceOption>()
+
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
 
@@ -698,6 +713,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logTimePrefixField = JBTextField(12)
     internal val slowQueryThresholdField = JBTextField(12)
     internal val logShowDurationCheck = JBCheckBox()
+
+    // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+    internal val logShowMethodCheck = JBCheckBox()
 
     // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
     internal val dataSourceBadgeDetailCheck = JBCheckBox()
@@ -1306,6 +1324,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            || logShowMethodCheck.isSelected != s.showMethodInLogList
             || dataSourceBadgeDetailCheck.isSelected != s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
@@ -1342,6 +1361,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected != s.mapperNavYieldToCodeHelper
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
+            // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
+            || (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value != s.pagesXmlSourceMode
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
@@ -1437,6 +1458,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            s.showMethodInLogList = logShowMethodCheck.isSelected
             s.dataSourceBadgeDetail = dataSourceBadgeDetailCheck.isSelected
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
@@ -1488,6 +1510,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             GutterGroupSwitches.applyTo(s, gutterGroupMultiSelect.selectedFlags())
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
+            // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
+            s.pagesXmlSourceMode = (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value
+                ?: PluginSettings.PAGES_SOURCE_AUTO
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
@@ -1598,6 +1623,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterGroupMultiSelect.setFlags(GutterGroupSwitches.flagsFrom(s))
             mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
+            // T-PagesHql：maintainPage 源语言档回填
+            pagesSourceCombo.selectedItem = pagesSourceOptions().firstOrNull { it.value == s.pagesXmlSourceMode }
+                ?: pagesSourceOptions().first()
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
@@ -1639,6 +1667,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            logShowMethodCheck.isSelected = s.showMethodInLogList
             dataSourceBadgeDetailCheck.isSelected = s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled

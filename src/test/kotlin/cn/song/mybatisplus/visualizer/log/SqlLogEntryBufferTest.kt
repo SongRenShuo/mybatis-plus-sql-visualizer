@@ -841,4 +841,55 @@ class SqlLogEntryBufferTest {
         assertTrue(buf.addEntry(consoleProvEntry("A", 5_000L)))
         assertEquals(listOf("C", "A"), buf.snapshot().map { it.restoredSql })
     }
+
+    /**
+     * T-CaptureGateStability P3：跨通道诊断与「捕获归因」**各自限频**，互不吞窗口。
+     *
+     * 改之前三条诊断共用一个 10s 窗口：控制台条目入队必然先打「捕获归因」（缺源码），
+     * 紧随其后的折叠日志被同一窗口吃掉——真机 4 次折叠、日志 0 条，现场无法确认折叠发生。
+     * 拆通道后两者各自计时，本用例钉住「折叠那一次真的输出了」。
+     *
+     * 反向验证：把 `logCrossChannelThrottled` 改回 `logAttributionThrottled`，第二段断言必红
+     * （折叠的 CAS 落在同一窗口内，跨通道通道时刻保持不变）。
+     */
+    @Test
+    fun `跨通道诊断与捕获归因各自限频_互不吞`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 20)
+        val never = Long.MIN_VALUE / 2
+        assertEquals("前置：捕获归因通道未输出过", never, buf.attributionDiagStampForTest())
+        assertEquals("前置：跨通道通道未输出过", never, buf.crossChannelDiagStampForTest())
+
+        val now = System.currentTimeMillis()
+        // 1) 缺源码的控制台条目 → 触发「捕获归因」
+        val console = LogSqlEntry(
+            rawSql = "SELECT * FROM t WHERE f = ?",
+            restoredSql = "SELECT * FROM t WHERE f = true",
+            params = listOf(LogSqlParam("true", "Boolean")),
+            timestamp = now,
+            source = SqlSource.MYBATIS,
+            captureProvenance = CaptureProvenance.CONSOLE_BRIDGE,
+        )
+        assertTrue("控制台条目正常入队", buf.addEntry(console))
+        assertTrue("捕获归因通道应被消耗", buf.attributionDiagStampForTest() != never)
+        assertEquals("此时跨通道通道仍未被消耗", never, buf.crossChannelDiagStampForTest())
+
+        // 2) 同一次执行由 agent 在同窗内再观测一次（dedupeKey 不同、crossKey 相同）→ 兜底折叠
+        val agent = LogSqlEntry(
+            rawSql = "SELECT * FROM t WHERE f = ?",
+            restoredSql = "SELECT * FROM t WHERE f = 'true'",
+            params = listOf(LogSqlParam("true", "Boolean")),
+            timestamp = now + 50,
+            source = SqlSource.AGENT,
+            executionTimeMs = 5L,
+            sourceFile = "src/main/java/com/example/Mapper.java",
+            sourceLine = 10,
+            captureProvenance = CaptureProvenance.AGENT,
+        )
+        assertFalse("跨通道兜底折叠（不是新捕获）", buf.addEntry(agent))
+        assertTrue(
+            "跨通道通道必须被独立消耗（未被捕获归因吃掉窗口）",
+            buf.crossChannelDiagStampForTest() != never,
+        )
+        assertEquals("折叠后只剩一行", 1, buf.size())
+    }
 }

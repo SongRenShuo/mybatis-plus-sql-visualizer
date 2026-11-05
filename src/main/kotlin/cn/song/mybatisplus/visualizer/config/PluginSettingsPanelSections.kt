@@ -416,6 +416,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
             })
+            // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+            addRow(p, g, "", logShowMethodCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.showMethod")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.showMethod.tip")
+            })
             // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
             addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail")
@@ -673,6 +678,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", xmlInlineSqlCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                 toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
+            })
+            // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
+                model = DefaultComboBoxModel(pagesSourceOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.pagesSource.tip")
             })
             // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
             addRow(p, g, "", xmlSynHiCheck)

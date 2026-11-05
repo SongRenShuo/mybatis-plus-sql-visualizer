@@ -613,12 +613,17 @@ object DataSourceSelector {
          * 看不到列表）。仅「切换数据源」入口置 true；预览默认准备与显式执行不受影响。
          */
         forceChoosePopup: Boolean = false,
+        /**
+         * UI-049：空 Runner「方言不匹配」态结构化提示（面板据此出「下一步」+ 可点入口）。
+         * 提供时不再投递 `onError` 长红字；null = 既有行为。
+         */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
             forceChoose = forceChoose, preferredRunnerName = preferredRunnerName,
-            forceChoosePopup = forceChoosePopup)
+            forceChoosePopup = forceChoosePopup, onDialectMismatchHint = onDialectMismatchHint)
     }
 
     /**
@@ -637,6 +642,7 @@ object DataSourceSelector {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        onInfo: ((String) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
@@ -648,6 +654,7 @@ object DataSourceSelector {
             dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
             onDialectGate = onDialectGate ?: preparedDialectGateCallback,
             onSubmission = onSubmission,
+            onInfo = onInfo,
         )
         // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true
@@ -680,11 +687,16 @@ object DataSourceSelector {
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
         /** T-DialectGateUx：强制弹选择器（跳过共享控制台复用与 last-used 静默命中）。 */
         forceChoose: Boolean = false,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
+        /** T8：中性信息回调（工具语句成功完成时面板 showStatus，不走红条错误通道）。 */
+        onInfo: ((String) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
             wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            onSubmission = onSubmission, forceChoose = forceChoose)
+            onSubmission = onSubmission, forceChoose = forceChoose,
+            onDialectMismatchHint = onDialectMismatchHint, onInfo = onInfo)
     }
 
     /**

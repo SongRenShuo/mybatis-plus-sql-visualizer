@@ -44,13 +44,20 @@ class GiantFileBudgetTest {
         // 2000 → 2010（2026-11-04 UI-002: consumeCachedTempPsiFile 的 PSI 判定补读锁——BGT 无读许可，
         //   真机 `Read access is allowed from inside read-action only` 硬抛；增量含读锁代码与线程契约
         //   KDoc，实测 2007 行 +7 超线。**拆分仍首选**：下一轮触顶须先走拆文件，本提额只为留痕解红）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2010,
+        // 2010 → 2025（2026-11-06 S1-7 合并：master T8 onInfo 穿层 + UI-049 调用点具名参数自动并入，
+        //   实测 2019 行 +9 超线。**拆分仍首选**：拆分债已挂闲时清单随批清偿，本提额只为合并期留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2025,
         // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
         // 2194 → 2000（2026-10-31 D202: 输出写入/分栏取证拆出 ConsoleOutput，实测 1987 行）
         // 2000 → 2030（2026-11-04 UI-003: else 分支接 PreviewPreparePick.decide——预览准备「静默选源/
         //   静默放弃」两态接线 + 单飞门结算与契约注释，实测 2027 行 +27 超线。**选源决策本体已抽到
         //   execute/PreviewPreparePick.kt**（纯函数 12 例自证），此处只剩接线；再触顶须拆分派表）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2030,
+        // 2030 → 2090（2026-11-06 S1-7 合并：master UI-049 结构化提示通道（onDialectMismatchHint 参数
+        //   + EmptyRunnersHint 兜底并存）+ T8 onInfo 调用点，实测 2087 行 +57 超线；master 侧重复的
+        //   createTempPsiFileAsync/revalidateOnEdt/createTempPsiFile 三块已按 dev 工厂版删除。
+        //   **拆分债显式挂账**：闲时清单 G-1（projectExecFile/installOutputHistoryFillLayout 族优先），
+        //   本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2090,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,

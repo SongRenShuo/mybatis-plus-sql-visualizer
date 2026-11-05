@@ -11,7 +11,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * 实体类右键生成 CRUD SQL action 测试（T-TestGuard-07 零覆盖补测：T-CrudSql-02 的

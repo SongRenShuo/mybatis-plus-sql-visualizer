@@ -1418,6 +1418,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         /** F-45：列信息标签页标题。 */
         internal const val COLUMN_INFO_TAB_TITLE = "列信息"
 
+        /** T-PagesHql：HQL 转换前的原文标签页标题（仅 [cn.song.mybatisplus.visualizer.model.PreviewResult.originalSql] 非空时出现）。 */
+        internal const val ORIGINAL_SQL_TAB_TITLE = "原文"
+
         /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
         internal const val MIN_META_BUDGET_PX = 80
 

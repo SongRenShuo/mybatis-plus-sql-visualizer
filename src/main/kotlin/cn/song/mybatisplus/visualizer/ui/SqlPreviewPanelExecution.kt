@@ -6,6 +6,9 @@ import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import cn.song.mybatisplus.visualizer.execute.DialectMismatchHint
+import cn.song.mybatisplus.visualizer.execute.detailMessage
+import cn.song.mybatisplus.visualizer.execute.statusMessage
 import cn.song.mybatisplus.visualizer.execute.installOutputHistoryFillLayout
 import cn.song.mybatisplus.visualizer.execute.applyConsoleBottomCollapse
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -500,6 +503,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
                     wholeScriptExec = wholeScriptExec,
                     dialectGateRequest = dialectGateRequest,
                     onSubmission = receipt,
+                    onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
                 )
                 return
             }
@@ -531,6 +535,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
         wholeScriptExec = wholeScriptExec,
         dialectGateRequest = dialectGateRequest,
         onSubmission = receipt,
+        onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
     )
 }
 
@@ -725,7 +730,6 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
         // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
         // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
-        //
         // UI-004（2026-11-04 真机）：不能无条件优先 `result.effectiveDialect`——它是预览生成时
         // 固化的快照，XML 载体无法经 rerenderForExecutionTarget 重写，会与顶部（currentDialectDecision，
         // 随绑定/刷新重算）分裂成「顶部 MySQL、底部 PostgreSQL」。方言无关载体（XML 原文/纯文本）
@@ -915,6 +919,8 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String
         // 指定了目标源（原生工具栏点选）→ 不弹列表，选谁就是谁；无目标（状态行/更多菜单）→ 必弹列表，单源也弹。
         forceChoosePopup = preferredRunnerName == null,
         preferredRunnerName = preferredRunnerName,
+        // UI-049：换源失败若仍是「方言不匹配」，给同一套「下一步」提示（不再落回红字）。
+        onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
     )
 }
 
@@ -925,6 +931,148 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String
 internal fun SqlPreviewPanel.switchDataSourceTo(dataSourceName: String) {
     switchDataSourceInPlace(preferredRunnerName = dataSourceName)
 }
+
+/**
+ * UI-049（2026-11-04 用户真机「用户看到错误会不知道怎么处理」）：空 Runner「方言不匹配」态的
+ * 面板内呈现——**不是执行失败，是缺配置**。
+ *
+ * 与旧红字的三处差别：
+ *  1. 走 [SqlResultPanel.showStatusWithActions] 信息/警示态，不写「执行失败：」前缀，不挂复制错误按钮；
+ *  2. 可见行是一句「下一步」，悬停详文里点名 URL 推断出的源、折叠其余源，并明说与右上角
+ *     「未绑定数据源」是同一状态；
+ *  3. 右侧挂两个可点入口：打开目标数据源属性（[openDataSourceProperties]，属性页底部即
+ *     Dialect 下拉框）、切换数据源（沿用既有平台原生列表入口）。
+ *
+ * 用 invokeLater：与 `showDialectGateError` 同款，让本次准备链的其它收尾（`onSubmission(BLOCKED)`、
+ * 单飞门 abort）先落地，避免同栈后续状态覆盖本行；面板已关闭则直接放弃。
+ */
+internal fun SqlPreviewPanel.showDialectMismatchHint(hint: DialectMismatchHint) {
+    val proj = project ?: return
+    val message = hint.statusMessage()
+    val detail = hint.detailMessage()
+    // 唯一推断源 → 属性对话框直接定位它；多个/没有 → 打开列表（首个源高亮）由用户自己选，
+    // 不替用户猜。文案在悬停里已点名全部推断源。
+    val target = hint.likely.firstOrNull()
+    // write-safe: 回调只改结果面板状态行（Swing 组件 + tooltip），不触碰任何文档。
+    ApplicationManager.getApplication().invokeLater {
+        if (previewDisposed) return@invokeLater
+        // 本行不是方言闸门提示；清掉旧标记，防止刷新链按旧闸门结论改写它。
+        lastDialectGateMessage = null
+        val fixTooltip = if (target != null) {
+            MpSqlVisualizerBundle.message(
+                "execute.datasource.dialectMismatch.action.openProperties.tip",
+                target.name,
+                hint.dialectDisplay,
+            )
+        } else {
+            MpSqlVisualizerBundle.message(
+                "execute.datasource.dialectMismatch.action.openProperties.tip.any",
+                hint.dialectDisplay,
+            )
+        }
+        runCatching {
+            resultPanel.showStatusWithActions(
+                message = message,
+                fixLabel = MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch.action.openProperties"),
+                fixTooltip = fixTooltip,
+                fix = { openDataSourceProperties(proj, target?.handle) },
+                settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                settings = { switchDataSourceInPlace() },
+                tooltip = detail,
+                warning = true,
+            )
+        }.onFailure { e ->
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .warn("[UI-049] dialect mismatch status render FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            // 渲染失败也不能静默：退回纯信息行（无动作），至少让用户看到「下一步」。
+            resultPanel.showStatus(message)
+        }
+    }
+}
+
+/**
+ * UI-049：打开平台「Data Sources and Drivers」并定位到 [dataSource]（LocalDataSource 句柄）。
+ *
+ * 平台查证（javap 2024.3.7.1 / 2026.2.3 双版本实证）：平台自己的右键「Properties」动作
+ * `DatabaseView.PropertiesAction` → `ManageDataSourcesAction.actionPerformed` 调的就是
+ * `DataSourceManagerDialog.showDialog(Project, Object, DatabaseCredentials)`；选中项即第二个参数。
+ * 打开后 SQL 数据源属性页的 `getCommonBar()`（`DataSourceConfigurable` 的 dialect 组件）渲染在
+ * 属性面板底部，标签为 `Dialect:`——这就是用户要改的地方，不需要再定位 Tab。
+ *
+ * 走反射而非直接引用：本文件在 Community 也会加载，`com.intellij.database.*` 类不在场时
+ * 直接符号引用有 NoClassDefFoundError 风险（项目既有约定见 `DataSourceSettings`/`ExecDialectRouting`）；
+ * 该动作只在 Ultimate 的「方言不匹配」提示里可达。
+ *
+ * @return true = 对话框已打开；false = 平台调用失败，已回退打开 Database 工具窗口
+ */
+internal fun openDataSourceProperties(proj: Project, dataSource: Any?): Boolean =
+    runCatching {
+        val dialogClass = Class.forName("com.intellij.database.view.ui.DataSourceManagerDialog")
+        val showDialog = dialogClass.getMethod(
+            "showDialog",
+            Project::class.java,
+            Any::class.java,
+            Class.forName("com.intellij.database.access.DatabaseCredentials"),
+        )
+        // 平台的选中项是 DbDataSource（侧栏 SidePanelItem 的 key 是 DbDataSourceImpl，identity map）；
+        // 我们手里是 DataSourceStorage 的 LocalDataSource——先按 uniqueId/名字换成 DbDataSource，
+        // 换不到就传 null（打开列表由用户选），绝不把 LocalDataSource 直接塞进去（navigateTo 找不到）。
+        val selection = resolveDbDataSourceSelection(proj, dataSource)
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[UI-049] open data source properties: selection=${selection?.javaClass?.simpleName ?: "(none)"}")
+        showDialog.invoke(null, proj, selection, null)
+        true
+    }.getOrElse { e ->
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[UI-049] open data source properties FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj)
+        false
+    }
+
+/**
+ * UI-049：把 `DataSourceStorage` 的 `LocalDataSource` 换成平台 `DbDataSource`（对话框选中项口径）。
+ *
+ * 依据（javap 2024.3.7.1）：`DataSourcesSideTab.createItem(DbDataSource)` 用 `DbDataSourceImpl`
+ * 作 `SidePanelItem` 的 key，`DatabaseConfigSideTab.getSidePanelItem` 是 identity map 查找；
+ * `AbstractDataSourceConfigurable.isTempTarget` 也只认 `DasDataSource`——LocalDataSource 直接传
+ * 进 `showDialog` 定位不到（还可能让 navigateTo 拿到空 Place）。`DbDataSource.getDelegate()`
+ * 正是 LocalDataSource，按 uniqueId/名字匹配即可。
+ *
+ * 全部反射：Community/无 Database 插件下返回 null，不触发类加载。
+ */
+private fun resolveDbDataSourceSelection(proj: Project, local: Any?): Any? {
+    if (local == null) return null
+    val localClass = runCatching { Class.forName("com.intellij.database.dataSource.LocalDataSource") }.getOrNull()
+        ?: return null
+    val localId = runCatching { localClass.getMethod("getUniqueId").invoke(local) as? String }.getOrNull()
+    val localName = runCatching { localClass.getMethod("getName").invoke(local) as? String }.getOrNull()
+    return runCatching {
+        val facadeClass = Class.forName("com.intellij.database.psi.DbPsiFacade")
+        val facade = facadeClass.getMethod("getInstance", Project::class.java).invoke(null, proj)
+        @Suppress("UNCHECKED_CAST")
+        val all = facadeClass.getMethod("getDataSources").invoke(facade) as? List<Any?> ?: return null
+        val byId = if (localId.isNullOrBlank()) {
+            null
+        } else {
+            all.firstOrNull { db ->
+                val raw = dbDelegate(db) ?: return@firstOrNull false
+                uniqueIdOf(raw) == localId
+            }
+        }
+        byId ?: if (localName.isNullOrBlank()) null else all.firstOrNull { db ->
+            runCatching { db?.javaClass?.getMethod("getName")?.invoke(db) as? String }.getOrNull() == localName
+        }
+    }.getOrNull()
+}
+
+private fun dbDelegate(db: Any?): Any? = runCatching {
+    db?.javaClass?.getMethod("getDelegate")?.invoke(db)
+}.getOrNull()
+
+private fun uniqueIdOf(raw: Any): String? = runCatching {
+    raw.javaClass.getMethod("getUniqueId").invoke(raw) as? String
+}.getOrNull()
 
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
 internal const val SQL_DIALECTS_SETTING_ID = "SQL Dialects"
@@ -1089,6 +1237,8 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                    onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
+                    onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
                 )
                 return
             }
@@ -1109,6 +1259,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             dialectGateRequest = dialectGateRequest,
             onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+            onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
         )
         if (executed) return
     }
@@ -1123,7 +1274,9 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         dialectGateRequest = dialectGateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
         forceChoose = forceChoose,
+        onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
     )
 }
 
@@ -1357,10 +1510,12 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
             }, com.intellij.openapi.application.ModalityState.nonModal())
         },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        // 默认准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
+        // 其余准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
         onError = null,
         dialectGateRequest = gateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        // UI-049：但「方言不匹配」不再静默——预览打开即给「下一步」+ 可点入口（不改归因，只改呈现）。
+        onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
     )
 }
 

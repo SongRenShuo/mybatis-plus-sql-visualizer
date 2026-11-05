@@ -91,6 +91,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var xmlInlineSqlEnabled: Boolean = true,
 
         /**
+         * T-PagesHql（默认 [PAGES_SOURCE_AUTO]）：maintainPage `<datasource>` 的源语言判定档。
+         *
+         * - [PAGES_SOURCE_AUTO]：按 `type` 属性 / 根标识符与 entityClass 的关系自动推断（默认 SQL 保守）；
+         * - [PAGES_SOURCE_SQL]：一律按原生 SQL（关闭 HQL 转换，用于自动判定误判时退回旧行为）；
+         * - [PAGES_SOURCE_HQL]：一律按 HQL（自动判定漏判时的强制档）。
+         */
+        var pagesXmlSourceMode: String = PAGES_SOURCE_AUTO,
+
+        /**
          * R5（T-PerfSweep910 同期小件）：快捷模板「抽样」的 LIMIT 行数（默认 10，现值硬编码于
          * SampleSelectedTableAction）。范围钳制 1..10000（防误输入全表扫）；仅影响抽样语句。
          */
@@ -383,6 +392,21 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * false 时隐藏耗时，节省列表宽度。
          */
         var showDurationInLogList: Boolean = true,
+
+        /**
+         * 在来源位置后显示「类名#方法名」（T-LogMethodName，**默认关**）。
+         *
+         * 开启后日志/历史列表在 `[文件.java:行号]` 之后追加一段 `[类名#方法名]`，例如
+         * `[OrderServiceImpl.java:41] [UserMapper#selectById]`。方法名取自
+         * [cn.song.mybatisplus.visualizer.log.LogSqlEntry.mapperStatement]：
+         *  - 控制台桥通道 = MyBatis 语句 id（mapper 接口的方法，**不是**调用点的方法）；
+         *  - 增强捕获通道 = 调用栈业务帧（与来源文件同一个类）。
+         *
+         * 无该信息的条目（Hibernate / JdbcTemplate / ShardingSphere / MP 分页计数 / 旧日志）
+         * 保持原样、不占位。显示侧门控：落盘与检索语义零变化，切换即时生效（缓存键含本值）。
+         * 默认关闭的理由：头部行已是顺序截断，窄侧栏下新段会最先被裁掉。
+         */
+        var showMethodInLogList: Boolean = false,
 
         /**
          * 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，**默认关**＝仅显示数据库类型）。
@@ -870,6 +894,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 嵌入列命名：组件路径前缀（Hibernate component-path，`qty.baseQty` → `qty_base_qty`）。 */
         const val EMBEDDED_NAMING_COMPONENT_PATH = "COMPONENT_PATH"
+
+        /** T-PagesHql：maintainPage `<datasource>` 源语言自动判定（默认，按 entityClass 相关性推断）。 */
+        const val PAGES_SOURCE_AUTO = "AUTO"
+
+        /** T-PagesHql：maintainPage `<datasource>` 一律按原生 SQL 处理（关闭 HQL 转换）。 */
+        const val PAGES_SOURCE_SQL = "SQL"
+
+        /** T-PagesHql：maintainPage `<datasource>` 一律按 HQL 处理（自动判定漏判时的强制档）。 */
+        const val PAGES_SOURCE_HQL = "HQL"
 
         // ---------- SQL 日志默认值（T-M31.14） ----------
         const val DEFAULT_LOG_SQL_PREFIX = "Preparing:"

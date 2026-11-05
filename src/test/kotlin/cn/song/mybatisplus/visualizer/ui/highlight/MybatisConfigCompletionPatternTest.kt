@@ -7,7 +7,6 @@ import com.intellij.psi.xml.XmlToken
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-PerfSweep26 F101：配置文件补全贡献器的位置模式约束直接用例。
@@ -23,7 +22,6 @@ import org.junit.Test
  */
 class MybatisConfigCompletionPatternTest : BasePlatformTestCase() {
 
-    @Test
     fun testF101_配置文件内XML补全位_模式仍接受() {
         myFixture.configureByText(
             "mybatis-config.xml",
@@ -43,7 +41,6 @@ class MybatisConfigCompletionPatternTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF101_非XML语言元素_模式拒绝() {
         val text = PsiFileFactory.getInstance(project)
             .createFileFromText("plain.txt", PlainTextFileType.INSTANCE, "plain text token")

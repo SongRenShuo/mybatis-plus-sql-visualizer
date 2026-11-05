@@ -5,3 +5,8 @@
 # 一行一个 FQCN；# 开头为注释。只收「串行必绿、并发可复现失败」的类，
 # 不把真回归当 flake 屏蔽（新失败先按回归排查）。
 cn.song.mybatisplus.visualizer.log.agent.AgentManagerPremainReattachTest
+# T-TestGapSpeed T5：负载敏感性能用例串行尾道（与 buildSrc serialTailClasses 同清单——
+# 计时断言在限流并发下假红；并行运行器路径由本文件隔离串行补跑，testShards 路径由
+# buildSrc 内置 testShardTail 任务承担，两路径行为对齐）
+cn.song.mybatisplus.visualizer.log.LogEntryRailPerfTest
+cn.song.mybatisplus.visualizer.log.LogPipelinePerfTest

@@ -10,7 +10,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * ProjectPluginSettings 项目级设置测试（O-5 Phase B）：
@@ -21,7 +20,6 @@ import org.junit.Test
  */
 class ProjectPluginSettingsTest : BasePlatformTestCase() {
 
-    @Test
     fun testProjectSettingsIndependentFromGlobal() {
         // 项目设置修改不影响全局设置
         val projectSettings = project.service<ProjectPluginSettings>()
@@ -35,7 +33,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
         assertEquals("全局 dialect 不受项目设置影响", globalDialectBefore, globalSettings.state.dialect)
     }
 
-    @Test
     fun testUseProjectSettingsToggle() {
         val projectSettings = project.service<ProjectPluginSettings>()
         val snapshot = projectSettings.getState().copy()
@@ -59,7 +56,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testStateRoundTrip() {
         val projectSettings = project.service<ProjectPluginSettings>()
         val snapshot = projectSettings.getState().copy()
@@ -97,7 +93,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testEffectiveSettingsFallbackToGlobal() {
         // 项目设置关闭时，effective 方法应返回全局设置
         val projectSettings = project.service<ProjectPluginSettings>()
@@ -129,7 +124,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testDefaultStateHasCorrectDefaults() {
         val state = ProjectPluginSettings.State()
         assertFalse("useProjectSettings 默认关", state.useProjectSettings)
@@ -149,7 +143,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
      * 优先级语义：项目级是**显式声明**、全局是**默认值**——故项目级「启用 + dialectAuto 非 null」
      * 时项目值压过全局（含项目 true 压过全局 false）；总开关关闭或 dialectAuto=null 时跟随全局。
      */
-    @Test
     fun testEffectiveDialectAutoMatrix() {
         val ps = project.service<ProjectPluginSettings>()
         val global = PluginSettings.getInstance()
@@ -196,7 +189,6 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
      *
      * 测试环境推断链必然未命中（无 agent 会话、无 IDE 数据源）→ auto=true 的期望 = `byName(null)`。
      */
-    @Test
     fun testDialectRegistryEffectiveMatrix() {
         val ps = project.service<ProjectPluginSettings>()
         val global = PluginSettings.getInstance()

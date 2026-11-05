@@ -264,6 +264,15 @@
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperXmlToJavaLineMarkerProvider"/>
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider"/>
+        <!-- T-MapperNavShortcut：Mapper 双向跳转接入平台原生快捷键——Ctrl+B / Ctrl+Click
+             （GotoDeclaration）与 Ctrl+Alt+Home（GotoRelated）。
+             **不得在本段加 <keyboard-shortcut> / <mouse-shortcut>**：键位归平台 action 所有，
+             用户改 Keymap 后自动跟随；插件侧不留第二份键位配置（测试有断言钉住）。
+             handler 优先于 reference 且返回 null 即回落原生，故非 Mapper 位置行为零变化。 -->
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationGotoDeclarationHandler"/>
+        <gotoRelatedProvider
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationGotoRelatedProvider"/>
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>

@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.log
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -15,6 +17,23 @@ import org.junit.Test
  *  - 错误块被普通行终止；MyBatis `###` 续行不重开块；行数上限收敛。
  */
 class SqlErrorLineBridgeTest {
+
+    /**
+     * T-CiMatrix（2026-11-04 GitHub Actions 稳定复现）：接管期用例必须先把 [CaptureActivityFallback]
+     * 关掉——它按「让位 ≥10s 且控制台仍有 SQL 行」自动解封，CI 的 2 核 runner 跑到断言时通常已过
+     * 10s，于是 paused 期间照常产出条目/错误块，断言落空。本地 6 核几百毫秒即过，一直未见。
+     */
+    @Before
+    fun setUp() {
+        CaptureActivityFallback.resetForTest()
+        CaptureActivityFallback.enabledOverride = false
+    }
+
+    @After
+    fun tearDown() {
+        SqlCaptureGate.paused.set(false)
+        CaptureActivityFallback.resetForTest()
+    }
 
     private fun newCtx(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)

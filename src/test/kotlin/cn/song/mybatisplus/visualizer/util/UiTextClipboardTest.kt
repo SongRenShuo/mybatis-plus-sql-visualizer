@@ -4,7 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.openapi.ide.CopyPasteManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
 import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 

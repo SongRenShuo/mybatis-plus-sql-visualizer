@@ -21,7 +21,6 @@ import com.intellij.testFramework.DumbModeTestUtils
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 
 /**
@@ -177,7 +176,6 @@ class XmlSqlCompletionInjectedChainTest : BasePlatformTestCase() {
      * 全链路 · 语句文本中段：主实体（demo 同款 BaseMapper 泛型路径）列名必须在候选内。
      * 缺 main 解析时红灯形态：仅关键字（`username`/`id` 非关键字 → 用户按补全空响应）。
      */
-    @Test
     fun test全链路_语句文本中段_主实体列名候选产出() {
         addDemoShapedEntity()
         val (file, caret) = openMapperWithCaret(midStatementXml)
@@ -195,7 +193,6 @@ class XmlSqlCompletionInjectedChainTest : BasePlatformTestCase() {
      * `id`/`image` 均非关键字 → 其在场即证列名分支在区间尾端点（`findElementAt(textLength)`
      * 边界 + 支① 区间尾映射）仍走到。
      */
-    @Test
     fun test全链路_注入区间尾端点_列名候选产出() {
         addDemoShapedEntity()
         val (file, caret) = openMapperWithCaret(rangeEndXml)
@@ -212,7 +209,6 @@ class XmlSqlCompletionInjectedChainTest : BasePlatformTestCase() {
      * WrapperCompletionContributor 两兄弟口径一致），否则索引期（DbSrc 方言 push / 项目初扫等
      * dumb 窗口）按补全整体零响应。反向验证：移除 DumbAware 声明 → 本用例红。
      */
-    @Test
     fun test_dumb态_FilterByDumbAwareness仍派发本贡献器() {
         DumbModeTestUtils.runInDumbModeSynchronously(project) {
             val consulted = CompletionContributor

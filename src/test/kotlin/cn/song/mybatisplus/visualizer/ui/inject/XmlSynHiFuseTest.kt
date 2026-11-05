@@ -7,7 +7,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * T-XmlGap W8：注入守卫的**熔断阈值**与根守卫用例（计划 §六 W8 验收列了「熔断阈值测试」，
@@ -29,7 +28,6 @@ class XmlSynHiFuseTest : BasePlatformTestCase() {
         return PsiTreeUtil.collectElementsOfType(myFixture.file, XmlTag::class.java).first { it.name == "select" }
     }
 
-    @Test
     fun testW8_语句文本熔断_恰好阈值放行_超一熔断() {
         val overhead = selectTagWithBody(10).textLength - 10
         val atLimit = selectTagWithBody(XmlSynHiGate.MAX_TEXT_LENGTH - overhead)
@@ -40,7 +38,6 @@ class XmlSynHiFuseTest : BasePlatformTestCase() {
         assertFalse("超阈值一个字符 → 熔断", XmlSynHiGate.allowStatementText(over))
     }
 
-    @Test
     fun testW8_属性值熔断_4096边界() {
         val whitelisted = "test"
         assertTrue("白名单属性值恰 4096 → 放行", XmlSynHiGate.allowAttributeValue(whitelisted, "a".repeat(4096)))
@@ -52,7 +49,6 @@ class XmlSynHiFuseTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testW8_根守卫_非mapper文件不放行() {
         myFixture.configureByText("other.xml", "<configuration><settings><setting name=\"a\" value=\"b\"/></settings></configuration>")
         val root = (myFixture.file as XmlFile).rootTag!!
@@ -63,7 +59,6 @@ class XmlSynHiFuseTest : BasePlatformTestCase() {
     }
 
     /** 反向验证位：把上限调成 0 语义（即「任何非空文本都超限」）时，放行侧必须变红——本用例给出判据形态。 */
-    @Test
     fun testW8_熔断判据是内容长度而非恒真() {
         val tag = selectTagWithBody(64)
         assertTrue("短文本必须放行（若守卫被写成恒 false，此处红）", XmlSynHiGate.allowStatementText(tag))

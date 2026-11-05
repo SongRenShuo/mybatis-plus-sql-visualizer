@@ -10,6 +10,7 @@
 #   ... -NoConfigCache:$false                 # 需要复用配置缓存时关掉（默认关缓存，防分片清单被钉死）
 #   ... -ProgressLogPath D:\tmp\gate.log       # 进度文件落点（默认 build/test-shards-progress.log）
 #   ... -ExtraArgs "--tests", "..."            # 追加任意 gradle 参数
+#   ... -ShardCount 4                          # 分片数（须与 -PtestShardCount 一致，默认 5）
 #
 # 两路输出（内容一致）：
 #   1. 当前终端：每 IntervalSeconds 一行
@@ -30,7 +31,10 @@ param(
     [int]$IntervalSeconds = 10,
     [switch]$NoConfigCache = $true,
     [string]$ProgressLogPath = "",
-    [string[]]$ExtraArgs = @()
+    [string[]]$ExtraArgs = @(),
+    # T-TestGapSpeed T6：与 gradlew -PtestShardCount 对齐（缺省 5 = mpv-testing 默认片数）；
+    # 调片数跑分片时两边要一起改，否则进度行的「分片 N/M」与结果解析都会错。
+    [int]$ShardCount = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +44,7 @@ Set-Location $root
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = Join-Path $env:TEMP "mpsv-testshards-$stamp.log"
 $errLog = Join-Path $env:TEMP "mpsv-testshards-$stamp.err.log"
-$shardCount = 5
+$shardCount = $ShardCount
 
 if ([string]::IsNullOrWhiteSpace($ProgressLogPath)) {
     $ProgressLogPath = Join-Path $root 'build/test-shards-progress.log'
@@ -75,8 +79,11 @@ $proc = Start-Process -FilePath (Join-Path $root 'gradlew.bat') -ArgumentList $g
 
 # 只认本次运行产出的结果文件（mtime ≥ 启动时刻），避免上一轮残留被当成「已完成」。
 function Get-ShardStats {
-    param([int]$Index)
-    $dir = Join-Path $root "build/test-results/testShard$Index"
+    param([int]$Index = 0, [string]$DirName = '')
+    # T-TestGapSpeed T10：支持按目录名统计——T5 新增的 testShardTail 与 testExternal 桶
+    # 此前不在汇总面内，尾道失败在汇总里完全不可见（20261105 实测踩到）。
+    $bucket = if ($DirName) { $DirName } else { "testShard$Index" }
+    $dir = Join-Path $root "build/test-results/$bucket"
     if (-not (Test-Path $dir)) { return $null }
     $all = @(Get-ChildItem -Path $dir -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue)
     $files = @($all | Where-Object { $_.LastWriteTimeUtc -ge $script:startedUtc })
@@ -119,6 +126,7 @@ while (-not $proc.HasExited) {
             $totalFail += ($s.Failures + $s.Errors)
         }
     }
+    $text = ''
     if (Test-Path $log) {
         $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
         for ($i = 1; $i -le $shardCount; $i++) {
@@ -126,6 +134,14 @@ while (-not $proc.HasExited) {
                 $running += "shard$i"
             }
         }
+    }
+    # T-JUnit5Eval 方案 2：快桶腿与分片并行，进度行也要能看出它在不在跑（约 4~5 分钟一段）。
+    $fastStats = Get-ShardStats -DirName 'testFast'
+    if ($fastStats) {
+        $totalTests += $fastStats.Tests
+        $totalFail += ($fastStats.Failures + $fastStats.Errors)
+    } elseif ($text -and $text.Contains('> Task :testFast')) {
+        $running += 'fast'
     }
     $elapsed = (Get-Date) - $started
     $elapsedText = '{0:mm\:ss}' -f $elapsed
@@ -138,18 +154,36 @@ while (-not $proc.HasExited) {
 }
 
 $proc.Refresh()
+# T-TestGapSpeed T10：Start-Process -PassThru 的 ExitCode 在未 WaitForExit 时读不到
+# （20261105 实测：尾道失败但脚本报「退出码 」，把失败伪装成通过）。此处显式等进程收尾。
+if (-not $proc.HasExited) { $proc.WaitForExit() }
 $exit = $proc.ExitCode
+if ($null -eq $exit) {
+    # 仍读不到时按日志判定，绝不静默当成功
+    $logText = if (Test-Path $log) { Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue } else { '' }
+    $exit = if ($logText -match 'BUILD SUCCESSFUL') { 0 } elseif ($logText -match 'BUILD FAILED') { 1 } else { -1 }
+    Write-Line "WARN: 进程退出码不可读，按日志判定为 $exit"
+}
 Write-Line ""
 Write-Line "=== 门禁结束（退出码 $exit，耗时 $('{0:mm\:ss}' -f ((Get-Date) - $started)) ） ==="
+if ($exit -ne 0) { Write-Line "*** 门禁失败（退出码 $exit）——下方计数仅供参考，以退出码与失败用例清单为准 ***" }
 $grandTests = 0; $grandFail = 0; $grandErr = 0; $grandSkip = 0
 $failNames = New-Object System.Collections.Generic.List[string]
-for ($i = 1; $i -le $shardCount; $i++) {
-    $s = Get-ShardStats -Index $i
+# T-TestGapSpeed T10：汇总面 = 分片 + 尾道 + 外部护栏桶（后两者 T5/T-TestPerf6 引入，
+# 此前脚本只统计分片，尾道失败不会出现在任何计数里）。
+$buckets = @(1..$shardCount | ForEach-Object { @{ Label = "shard$_"; Dir = "testShard$_" } })
+$buckets += @{ Label = 'tail'; Dir = 'testShardTail' }
+# T-JUnit5Eval 方案 2：纯逻辑快桶从分片摘出后单独成腿（testShards 聚合 dependsOn testFast），
+# 不进汇总面就等于「4000+ 例跑了但看不见」——失败也不会出现在失败用例清单里。
+$buckets += @{ Label = 'fast'; Dir = 'testFast' }
+$buckets += @{ Label = 'external'; Dir = 'testExternal' }
+foreach ($b in $buckets) {
+    $s = Get-ShardStats -DirName $b.Dir
     if ($s) {
-        Write-Line ("  shard{0}: tests={1} failures={2} errors={3} skipped={4} classes={5}" -f `
-            $i, $s.Tests, $s.Failures, $s.Errors, $s.Skipped, $s.Classes)
+        Write-Line ("  {0}: tests={1} failures={2} errors={3} skipped={4} classes={5}" -f `
+            $b.Label, $s.Tests, $s.Failures, $s.Errors, $s.Skipped, $s.Classes)
         $grandTests += $s.Tests; $grandFail += $s.Failures; $grandErr += $s.Errors; $grandSkip += $s.Skipped
-        $dir = Join-Path $root "build/test-results/testShard$i"
+        $dir = Join-Path $root "build/test-results/$($b.Dir)"
         Get-ChildItem -Path $dir -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue |
             Where-Object { $_.LastWriteTimeUtc -ge $script:startedUtc } |
             ForEach-Object {
@@ -161,7 +195,7 @@ for ($i = 1; $i -le $shardCount; $i++) {
                 } catch { }
             }
     } else {
-        Write-Line ("  shard{0}: 无结果（未执行或产物缺失）" -f $i)
+        Write-Line ("  {0}: 无结果（未执行或产物缺失）" -f $b.Label)
     }
 }
 Write-Line ("  合计: tests={0} failures={1} errors={2} skipped={3}" -f $grandTests, $grandFail, $grandErr, $grandSkip)

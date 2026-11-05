@@ -227,6 +227,8 @@ internal class QueuedExecuteIntent(
     val dialectGateRequest: ExecutionDialectGate.Request? = null,
     val onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     private val submissionSink: ((ExecutionSubmission) -> Unit)? = null,
+    /** UI-049：方言不匹配态结构化提示（排队意图自身的面板可据此出「下一步」，而不是红字）。 */
+    val onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
 ) {
     private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
     val isCompleted: Boolean get() = completed.get()

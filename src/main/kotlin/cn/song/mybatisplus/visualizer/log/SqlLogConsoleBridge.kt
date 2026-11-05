@@ -446,21 +446,37 @@ open class SqlLogConsoleBridge(
      */
     internal fun flushSettledEntries(nowMs: Long = System.currentTimeMillis()): Int {
         var produced = 0
+        var skipped = 0
         val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
         for (ctx in snapshot) {
             synchronized(ctx) {
                 ctx.jdbcParser.flushSettled(nowMs)
                 for (entry in ctx.jdbcParser.takeEntries()) {
-                    if (buffer.addEntry(entry)) produced++
+                    // T-CrossChannelDedupe §4.5：循环内复查闸门——外层判据只覆盖调用时刻，EDT 冲刷与
+                    // agent 接管沿之间仍有窗口；已封停就丢弃本拍冲刷条目（接管后由 agent 通道产出）。
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++
+                        continue
+                    }
+                    // T-CrossChannelDedupe §4.5：与 emitEntries 同款打通道标记——此前静默冲刷条目在
+                    // 归因诊断里显示「通道=UNKNOWN」，干扰现场裁决。
+                    if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                 }
                 // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
                 if (ctx.shardingEnabled) {
                     ctx.shardingParser.flushSettled(nowMs)
                     for (entry in ctx.shardingParser.takeEntries()) {
-                        if (buffer.addEntry(entry)) produced++
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++
+                            continue
+                        }
+                        if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                     }
                 }
             }
+        }
+        if (skipped > 0) {
+            LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 $skipped 条（由 agent 通道产出）")
         }
         if (produced > 0) {
             LOG.info(
@@ -919,6 +935,18 @@ object CaptureActivityFallback {
     private var lastAgentEventMs = 0L
     private var lastConsoleSqlMs = 0L
 
+    /**
+     * T-CaptureGateStability P2（2026-11-05 真机实测）：本纪元内是否**收到过** agent 事件。
+     *
+     * 回落机制要防的是「白名单漏驱动 → agent 从头到尾零事件 → 双通道全哑」，与「用户手点间隔长」
+     * 是两回事。原判据只有「静默 ≥10s + 控制台有 SQL」，于是正常操作间隔超过 10 秒就解封一次，
+     * 解封瞬间的 SQL 由控制台捕获、产出一条无耗时/无位置的条目（实测每次间隔调用都发生）。
+     *
+     * 收到过任何一条事件即证明织入器在工作，此后不再允许回落；真断线由 `online=false` 那条路径
+     * 恢复桥，不会双哑。纪元切换（闸门置假）时清零，下一次接管重新起算。
+     */
+    private var everReceivedAgentEvent = false
+
     @Volatile
     private var active = false
 
@@ -979,6 +1007,7 @@ object CaptureActivityFallback {
         runCatching {
             val wasActive = synchronized(lock) {
                 lastAgentEventMs = now
+                everReceivedAgentEvent = true // P2：收到过即证明织入在工作，此后不再回落
                 val was = active
                 if (was) {
                     active = false
@@ -1015,6 +1044,8 @@ object CaptureActivityFallback {
             if (sqlSeen) lastConsoleSqlMs = now
             alreadyActive = active
             engagedNow = !active && run {
+                // P2：本纪元收到过任何 agent 事件 → 织入器在工作，静默只是「没人操作」，不回落。
+                if (everReceivedAgentEvent) return@run false
                 val silenceStart = maxOf(pausedSinceMs, lastAgentEventMs)
                 val silentLongEnough = now - silenceStart >= threshold
                 val consoleHasSql = sqlSeen || (lastConsoleSqlMs > 0L && now - lastConsoleSqlMs <= threshold)
@@ -1044,6 +1075,7 @@ object CaptureActivityFallback {
         pausedSinceMs = 0L
         lastAgentEventMs = 0L
         lastConsoleSqlMs = 0L
+        everReceivedAgentEvent = false // P2：新一次接管从零起算，不继承上一纪元的「收到过」
     }
 
     /** 测试收尾：状态 + 注入点 + 计数全部复位。 */

@@ -615,6 +615,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.maxCount"), b.message("settings.log.maxCount.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timePrefix"), b.message("settings.log.timePrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.slowQueryThreshold"), b.message("settings.log.slowQueryThreshold.tip"), "settings.section.sqlLog", l))
+            // T-LogMethodName：新开关必须登记（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
+            fields.add(SearchableField(b.message("settings.log.showMethod"), b.message("settings.log.showMethod.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.enabled"), b.message("settings.log.hibernate.enabled.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.sqlPrefix"), b.message("settings.log.hibernate.sqlPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.paramPrefix"), b.message("settings.log.hibernate.paramPrefix.tip"), "settings.section.sqlLog", l))
@@ -647,6 +649,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
             fields.add(SearchableField(b.message("settings.xmlInlineSql"), b.message("settings.xmlInlineSql.tip"), "settings.section.ui", u))
+            // T-PagesHql：maintainPage `<datasource>` 源语言档（界面节）
+            fields.add(SearchableField(b.message("settings.pagesSource"), b.message("settings.pagesSource.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))

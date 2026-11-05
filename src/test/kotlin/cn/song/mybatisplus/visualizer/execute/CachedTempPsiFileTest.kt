@@ -95,7 +95,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     }
 
     /** disposable 触发即清槽——项目关闭后不再残留 vf+psi 强引用。 */
-    @Test
     fun testDisposableFiredClearsSlot() {
         val (main, vf) = mainProjectAndVf()
         val gate = Disposer.newDisposable()
@@ -107,7 +106,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     }
 
     /** 钩子是一次性的：触发后同项目再次写入应重新挂上（hookedProjects 成员随触发移除）。 */
-    @Test
     fun testRehookAfterFire() {
         val (main, vf) = mainProjectAndVf()
         val gate1 = Disposer.newDisposable()
@@ -122,7 +120,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     }
 
     /** 别项目的缓存不因本项目钩子误清——槽归属比对按 psi.project 身份。 */
-    @Test
     fun testOtherProjectCacheNotCleared() {
         val (main, vf) = mainProjectAndVf()
         val gate = Disposer.newDisposable()

@@ -226,6 +226,10 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
     // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
     "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
+    // T-CiNightly（2026-11-05）：连通性冒烟从默认 test 桶挪进 DB 集成通道。它要真实 MySQL，
+    // 而分片/默认 test 在 CI 上是排除它的（-PtestShardExcludeClasses），等于长期没人跑；
+    // 挂进 testDatabase 后，夜间那条 DB 腿会自动带上它。纯 JDBC 断言，不需要平台沙盒。
+    "testDbJdbcSmoke" to "cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -374,6 +378,13 @@ val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test
         Triple(pkg, classNames.ifEmpty { listOf(f.name.substringBeforeLast('.')) }, text)
     }.toList()
 
+// -PtestShardExcludeClasses（并发不安全类隔离口）的单一解析点。历史上只有分片计划吃它
+// （testIde 块内）；T-JUnit5Eval 方案 2 把纯逻辑类从分片摘到 testFast 后，快桶也必须同源尊重
+// 同一份清单——否则 CI 上被排除的类（如 O147RealAgentAcceptanceTest，源码零 com.intellij 引用
+// 属快桶成员）会改由快桶腿在无本机 JDK8/agent 池的 runner 上跑，把「排除」变成「换个地方红」。
+val shardExcludeClassNames: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
+    ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
+
 // T-TestPerf3（2026-09-17）：testFast 秒级反馈通道。
 // 划桶规则（保守）：源码零 `com.intellij` 引用的测试类才进快桶——凡是 import 平台类的
 // 一律留平台桶。第一轮 T-TestPerf-03 实证 68 个「纯逻辑」用例隐性依赖同 worker JVM 平台
@@ -508,7 +519,7 @@ tasks.register<Test>("dialectExternalVerify") {
 tasks.register<Test>("testFast") {
     group = "verification"
     description =
-        "纯逻辑快测（源码零 com.intellij 引用的测试类，秒级反馈通道；全量权威仍是 test/testShards）"
+        "纯逻辑快测（源码零 com.intellij 引用的测试类；testShards 的快桶腿，全量权威仍是 test/testShards）"
     testClassesDirs = sourceSets["test"].output.classesDirs
     // classpath 三段构造（T-TestPerf3 实测两轮定案）：
     //  ① main+test output **前置**——PluginBuildInfo 的「开发/测试形态类从 classes 目录加载、
@@ -523,9 +534,23 @@ tasks.register<Test>("testFast") {
             !it.name.startsWith("mybatis-plus-sql-visualizer-")
         }
     filter {
-        fastBucketClasses.forEach { includeTestsMatching(it) }
+        // T-JUnit5Eval 方案 2：快桶=分片摘出的那批，两边同源；再减去隔离口（见 shardExcludeClassNames
+        // 注释——被 -PtestShardExcludeClasses 排除的类不能从快桶这条路溜回来）。
+        fastBucketClasses.filter { it !in shardExcludeClassNames }.forEach { includeTestsMatching(it) }
     }
     maxParallelForks = 1
+    // T-JUnit5Eval 方案 2：testShards 聚合要按 .round-start 戳只计本轮 XML；本桶 classpath 不含
+    // 插件 jar，无源码变更的连跑会被判 UP-TO-DATE 静默跳过（testExternal 同款实证），聚合就会读到
+    // 上一轮的陈旧计数。强制每轮真跑（与 testExternal 同语义），墙钟代价=与分片并行的那一段。
+    outputs.upToDateWhen { false }
+    inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+    doFirst {
+        val root = inputs.properties["mpvResultsRootAbs"] as String
+        val dir = File(root, "build/test-results/testFast")
+        dir.mkdirs()
+        File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+    }
+    doLast { logger.lifecycle("testFast END ${System.currentTimeMillis()}") }
 }
 
 // T-TestPerf4：聚合报告「预期 vs 实测」对照与并集 parity 校验的数据通道——testIde 配置期
@@ -620,14 +645,33 @@ intellijPlatformTesting {
         // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
         // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿
         // 任务单独跑。缺省空集 = 既有串行语义逐字不变。
-        val shardExcludeClasses: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
-            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
+        // 解析已提到顶层（shardExcludeClassNames，testFast 快桶同源尊重同一份清单）。
+        val shardExcludeClasses: Set<String> = shardExcludeClassNames
+        // T-TestGapSpeed T5：负载敏感性能用例串行尾道——计时断言类用例（墙钟/吞吐预算）在
+        // 限流并发 + verifier JVM 同场下假红，会把整轮分片拖进 33min 级重试税（v2026.11.2
+        // 发行说明 flake 处置在案）。摘出并发分片，testShards 聚合末尾由 testShardTail 单 JVM
+        // 串行补跑（跨进程并行运行器路径走 test-shard-serial-classes.txt 同清单隔离）。
+        // 新增成员直接加进本清单（类发现扫描不看这里）。
+        val serialTailClasses: Set<String> = setOf(
+            "cn.song.mybatisplus.visualizer.log.LogEntryRailPerfTest",
+            "cn.song.mybatisplus.visualizer.log.LogPipelinePerfTest",
+        )
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
             .filter { it !in testExternalClasses }
             .filter { it !in shardExcludeClasses }
+            .filter { it !in serialTailClasses }
             .sorted()
+        // T-JUnit5Eval 方案 2（2026-11-05，调研报告 §四）：纯逻辑快桶摘出分片，单独成一条并行腿。
+        // 依据（2026-11-05 全量轮实测）：快桶 374 类 / 4393 例 / 276s 全部不依赖平台沙盒，却按权重
+        // 均摊进 5 片，每片都混着「平台类 EDT 串行」与「纯逻辑」两种形态；摘出后分片只装平台类
+        // （446 类 / 4202 例 / 924s），快桶由 testFast 在自己的 JVM 里与分片同时跑，testShards 聚合
+        // dependsOn 两者——覆盖面零变化，只是把一条腿拆成两条能并行的。
+        // 口径与 testFast 的 filter 同源（fastBucketClasses），故不存在「两边都不跑」的类；
+        // 配置期覆盖断言见下方 shardAssignment 之后的 run{} 块。
+        val shardBucketClasses: List<String> = discoveredTestClasses.filter { it !in fastBucketClasses }
+        val shardBucketClassSet: Set<String> = shardBucketClasses.toSet()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
         // 并发膨胀噪声且各片随机分布（预期均衡 209.8s×3 实测 195.3/209.3/196.7，T-TestPerf4
@@ -689,6 +733,24 @@ intellijPlatformTesting {
             }
             val known = (smoothed.values + weightProfile.values).sorted()
             val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+            // T-TestGapSpeed T4-B：画像保鲜告警（只告警不挡构建）。检出类中既无本地样本又无
+            // 入库画像覆盖的占比 >15% 时提示重跑画像刷新——占比高说明画像已陈旧到「大面积
+            // 中位数插值」，正是批次8 PluginSettingsPanelUiTest 4例19.5s 被 ~1.5s 插值、临界片
+            // 失衡 +13.7% 的退化形态。阈值 15%：正常轮未覆盖类只有零星新增（<2%），超 15% 即
+            // 结构性陈旧。配置期纯计算 + logger.warn，无新文件写入，不破坏 configuration-cache
+            // （TSV 读取本就在上方 weightProfile 段、已被 CC 输入追踪）。
+            run {
+                val uncovered = discoveredTestClasses.count { it !in smoothed && it !in weightProfile }
+                val ratio = if (discoveredTestClasses.isEmpty()) 0.0
+                else uncovered.toDouble() / discoveredTestClasses.size
+                if (ratio > 0.15) {
+                    logger.warn(
+                        "mpv-test-lane: 测试权重画像陈旧——${uncovered}/${discoveredTestClasses.size} 个检出测试类" +
+                            "（${"%.0f".format(ratio * 100)}%）既无本地样本也无画像覆盖，将按中位数插值装箱" +
+                            "（易致临界片失衡）；请跑 dev-support/weight-refresh.ps1 刷新 dev-support/test-shard-weights.tsv"
+                    )
+                }
+            }
             discoveredTestClasses.associateWith { smoothed[it] ?: weightProfile[it] ?: median }
         }
         // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
@@ -799,14 +861,17 @@ intellijPlatformTesting {
             val classShard = HashMap<String, Int>()
             val fragOfHome = HashMap<String, Int>()
             val fragOfTarget = HashMap<String, Int>()
-            discoveredTestClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
+            // T-JUnit5Eval 方案 2：装箱输入改 shardBucketClasses（快桶已由 testFast 单独跑）
+            shardBucketClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
                 shards[0] += name
                 loads[0] += effectiveWeights[name] ?: 0.0
                 classShard[name] = 0
             }
             val items = ArrayList<Triple<String, Double, String?>>() // (名, 权重, 非null=片段B所属类)
             effectiveWeights.entries
-                .filter { it.key !in machineGlobalAffinityClasses }
+                // T-JUnit5Eval 方案 2：只装分片桶（durationWeights 仍是 discoveredTestClasses 全集，
+                // 快桶成员的权重留在表里无害——它只是不参与装箱）。
+                .filter { it.key in shardBucketClassSet && it.key !in machineGlobalAffinityClasses }
                 .forEach { (name, w) ->
                     val frag = splitFragments[name]
                     if (frag == null) items += Triple(name, w, null)
@@ -867,6 +932,39 @@ intellijPlatformTesting {
             )
         }
         val shardAssignment = plan.classes
+        // T-JUnit5Eval 方案 2 的配置期覆盖断言（零遗漏守卫）：testFileEntries 展开的每个测试类必须
+        // 落在某个**真实执行面**上——已装箱进某片 / fastBucket（testFast 腿）/ dbIntegration /
+        // testExternal / shardExclude / serialTail。缺一个就是「静默不跑」，必须在配置期 require 失败
+        // 并点名，不能等 CI 上用「总数差不多」糊过去（快桶摘出后，一个类掉出两侧的形态从「少跑一例」
+        // 升级为「整桶少跑」，计数对比更难发现）。
+        // 只断言「无遗漏」，**不断言互斥**：testExternal 与 fastBucket 历史上就重叠（EnumReachability
+        // GuardTest 等 3 类既是源码扫描护栏又是纯逻辑类），testShards 聚合会把它们计两次——既有形态，
+        // 不是本次引入，也不顺手改（改了等于动 testExternal 的桶定义，超出本任务范围）。
+        // 「分片桶」这一项取 plan.classes 的实际装箱结果而非 shardBucketClasses 变量：装箱遍历的是
+        // effectiveWeights.entries，若哪天权重表漏了某个类，变量还在、计划里却没有——拿装箱结果做
+        // 判据才抓得到这种「声明有、执行无」的形态。
+        run {
+            val allTestClasses: Set<String> = testFileEntries
+                .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+                .toSet()
+            val plannedForExecution: Set<String> = shardAssignment.flatten()
+                .filterNot { it.endsWith("#fragB") }
+                .toSet()
+            val covered: Set<String> = plannedForExecution + fastBucketClasses + dbIntegrationClasses +
+                testExternalClasses + shardExcludeClasses + serialTailClasses
+            val uncovered: List<String> = (allTestClasses - covered).sorted()
+            require(uncovered.isEmpty()) {
+                "测试桶覆盖缺口：${uncovered.size} 个测试类不在任何执行面（分片/fastBucket/dbIntegration/" +
+                    "testExternal/shardExclude/serialTail），会在全量里静默不跑：" + uncovered.joinToString("、")
+            }
+            logger.lifecycle(
+                "testShards bucket: all=${allTestClasses.size} shardBucket=${shardBucketClasses.size}" +
+                    "(planned=${plannedForExecution.size}) fastBucket=${fastBucketClasses.size}" +
+                    "(leg=${(fastBucketClasses.toSet() - shardExcludeClasses).size}) " +
+                    "db=${dbIntegrationClasses.size} external=${testExternalClasses.size} " +
+                    "exclude=${shardExcludeClasses.size} tail=${serialTailClasses.size}（并集零遗漏）",
+            )
+        }
         // task{} 惰性块只捕获可序列化的纯 Map/List（局部类实例进 CC 序列化有拒收风险）
         val fragExcludesByShard: Map<Int, List<String>> =
             plan.fragExcludes.mapValues { (_, v) -> v.toList() }
@@ -929,7 +1027,9 @@ intellijPlatformTesting {
         shardPlanExpectedLoads = plan.loads.indices.joinToString("|") { i ->
             "%.1f".format(plan.loads[i] / (if (i == effHandicapTarget - 1) effHandicapFactor else 1.0))
         }
-        shardPlanClasses = discoveredTestClasses.joinToString("\n")
+        // T-JUnit5Eval 方案 2：parity 输入=分片桶（快桶由 testFast 腿产出结果，聚合报告里单列，
+        // 否则「计划类 446 个 vs 结果类 800+ 个」的差额会被误判成漏跑）。
+        shardPlanClasses = shardBucketClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
         // T-ReleasePerf11 券02：重排后的注册序即权重降序（testShard1 恒最重），日志一行自证。
         logger.lifecycle(
@@ -1007,6 +1107,45 @@ intellijPlatformTesting {
                 }
             }
         }
+        // T-TestGapSpeed T5：负载敏感性能用例串行尾道（清单 serialTailClasses 见 discoveredTestClasses
+        // 上方）。形态照 testShardN（独立沙盒、mcpStub classpath、round-start 戳、lane 观测），
+        // 但不进分片计划；mustRunAfter 全部分片保证「分片全停了才起」——单跑 testShardTail 不拖
+        // 分片（mustRunAfter 只定序不结依赖，与根脚本 e2eFakeIde 同款语义）。聚合报告把它计进
+        // SHARD TOTAL，但不参与失衡/缺权告警（shardExec 只收分片本体，见聚合块）。
+        register("testShardTail") {
+            testFramework(TestFrameworkType.Platform)
+            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shardTail"))
+            task {
+                dependsOn("verifyDemoFixture")
+                mustRunAfter(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+                // IPGP 只给默认 test 任务自动配置 sourceSets 输出（同 testShardN 注释）
+                testClassesDirs = sourceSets["test"].output.classesDirs
+                classpath = classpath + sourceSets["test"].output
+                testLogging {
+                    events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                }
+                classpath = classpath + files(sourceSets.named("mcpStub").map { it.output })
+                filter {
+                    serialTailClasses.forEach { includeTestsMatching(it) }
+                }
+                systemProperty("mpvShardMarker", MpvLaneMeter.markerValue(project.projectDir.absolutePath))
+                inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+                doFirst {
+                    val root = inputs.properties["mpvResultsRootAbs"] as String
+                    val dir = File(root, "build/test-results/testShardTail")
+                    dir.mkdirs()
+                    File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+                }
+                doLast {
+                    val root = inputs.properties["mpvResultsRootAbs"] as String
+                    val dir = File(root, "build/test-results/testShardTail")
+                    val laneAtEnd = MpvLaneMeter.activeShardExecutors(root, logger)
+                    logger.lifecycle("testShardTail END ${System.currentTimeMillis()} laneAtEnd=$laneAtEnd")
+                    File(dir, ".lane-others").writeText(laneAtEnd.toString())
+                }
+            }
+        }
         // T-TestPerf14 S2（D44 转正）：testDatabase 五类并行化。原形态=单任务 filter 五类 +
         // forkEvery=1 串行换 JVM（+2~3min，T-Fix-TestDb 20260918 在案）。拆五任务后每类：
         //   ① 独占 JVM（原 forkEvery=1 的「类间换 JVM」语义由「每类一任务」承载，应用级单例
@@ -1037,12 +1176,23 @@ intellijPlatformTesting {
                         "mpDemoProjectDir",
                         mpDemoProjectDir,
                     )
+                    // T-CiDbConn（2026-11-05）：连接串与凭据可覆盖（-PmpvDbUrl / -PmpvDbUser /
+                    // -PmpvDbPassword），缺省不设 → 测试侧回落到「demo 的 dataSources.xml + root/root」，
+                    // 本机行为零变化。CI 夜间轮用它指向 DBX「开发测试连接」分组的 MySQL，
+                    // 不再要求 runner 上有本地 root/root 库。
+                    providers.gradleProperty("mpvDbUrl").orNull?.let { systemProperty("mpvDbUrl", it) }
+                    providers.gradleProperty("mpvDbUser").orNull?.let { systemProperty("mpvDbUser", it) }
+                    providers.gradleProperty("mpvDbPassword").orNull?.let { systemProperty("mpvDbPassword", it) }
                     // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
                     // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
-                    systemProperty("http.proxyHost", "127.0.0.1")
-                    systemProperty("http.proxyPort", "7890")
-                    systemProperty("https.proxyHost", "127.0.0.1")
-                    systemProperty("https.proxyPort", "7890")
+                    // T-CiProxy（2026-11-05）：与 mpv-verification 的 verifierProxyJvmArgs 同口径——
+                    // 从 daemon 系统属性读取（本机 gradle.properties 的 systemProp.* 会设入 daemon JVM，
+                    // 与原硬编码 127.0.0.1:7890 等价）；CI 会剥掉代理行，此时**不设**代理 → 直连，
+                    // 不再撞死 runner 上不存在的本地代理。原先的硬编码是 DB 集成腿搬上 CI 的第一道墙。
+                    System.getProperty("http.proxyHost")?.let { systemProperty("http.proxyHost", it) }
+                    System.getProperty("http.proxyPort")?.let { systemProperty("http.proxyPort", it) }
+                    System.getProperty("https.proxyHost")?.let { systemProperty("https.proxyHost", it) }
+                    System.getProperty("https.proxyPort")?.let { systemProperty("https.proxyPort", it) }
                     // T-ExecDocGate 20260917：doFirst 需要项目根绝对路径——相对路径在 doFirst 按
                     // daemon CWD 解析（实测为 .gradle/daemon/<ver>，跨构建不一致）；直接捕获
                     // project 字符串又是脚本对象引用（配置缓存拒绝）。inputs.property 是官方
@@ -1194,12 +1344,20 @@ tasks.register("testDatabase") {
 tasks.register("testShards") {
     group = "verification"
     description =
-        "分片全量测试（时长均衡自动分区 $testShardCount 片；测试链并发限流见 -PtestShardConcurrency，缺省 2、" +
+        "分片全量测试（平台类时长均衡自动分区 $testShardCount 片 + 纯逻辑快桶腿 testFast + 尾道；" +
+            "测试链并发限流见 -PtestShardConcurrency，缺省 2、" +
             "releaseGate 编排内 3；限流压的是同时执行的片数，片数与覆盖面不变；跨进程并行用 dev-support/test-shards-parallel.ps1）"
     dependsOn("verifyDemoFixture")
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
     dependsOn("testExternal")
+    // T-JUnit5Eval 方案 2：纯逻辑快桶是分片之外的第二条腿——分片只装平台类后，这 4000+ 例
+    // 全靠这条边进全量；漏挂=整桶静默不跑（配置期覆盖断言只保证「类有归属」，保证不了「归属的执行面
+    // 真被本命令拉起」，两条守卫缺一不可）。
+    dependsOn("testFast")
+    // T-TestGapSpeed T5：负载敏感性能用例串行尾道——依赖边 + 任务内 mustRunAfter(全部分片)
+    // 共同保证「分片全停才起」，时序语义见 testShardTail 注册块注释。
+    dependsOn("testShardTail")
     // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
@@ -1215,7 +1373,17 @@ tasks.register("testShards") {
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
     val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") } +
+        file("build/test-results/testShardTail") +
+        // T-JUnit5Eval 方案 2：快桶腿插在 testExternal **之前**——「末位=testExternal」的既有语义
+        // （下方 laneSeq 的 dropLast(1)、shardExec 只收前 testShardCount 位）保持不变；快桶没有
+        // .lane-others 落盘（非沙盒 JVM，不做并发观测），laneSeq 里对应项显示 n/a 属正常。
+        file("build/test-results/testFast") +
         file("build/test-results/testExternal")
+    // T-TestGapSpeed T5：尾道目录插在 testExternal 之前——「末位=testExternal」的既有语义
+    // （laneSeq dropLast(1)、shardExec 不含末位）维持。shardExec 只收前 testShardCount 个目录
+    // （分片本体），尾道计进 SHARD TOTAL 但不参与失衡/缺权告警；片数经局部 val 捕获
+    // （doLast 引用脚本顶层对象会炸配置缓存，同 shardResultDirs 通道）。
+    val shardCountForReport = testShardCount
     doLast {
         fun suiteXmls(dir: File): List<File> =
             dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
@@ -1236,7 +1404,10 @@ tasks.register("testShards") {
         var skipped = 0
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
-        // T-TestPerf10 S2：各分片本轮实测 exec（不含 testExternal），供失衡/缺权告警
+        // T-JUnit5Eval 方案 2：快桶腿用例数单列——分片计划集已不含快桶类，若 parity 行仍报「计划类
+        // 全集」的单一数字，下次有人拿它和 SHARD TOTAL 对账会把 4000+ 例差额当成漏跑。
+        var fastLegTests = 0
+        // T-TestPerf10 S2：各分片本轮实测 exec（不含 testExternal 与 testShardTail 尾道），供失衡/缺权告警
         val shardExec = ArrayList<Double>()
         shardResultDirs.forEachIndexed { idx, dir ->
             // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
@@ -1280,8 +1451,9 @@ tasks.register("testShards") {
             logger.lifecycle(
                 "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
+            if (label == "testFast") fastLegTests = n
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
-            if (idx < shardResultDirs.size - 1) shardExec += t
+            if (idx < shardCountForReport) shardExec += t
         }
         // T-ReleasePerf11 券02：并发形态自报——聚合各片 doLast 落盘的 .lane-others（片结束时
         // 仍在跑的其他分片执行器数，-DmpvShardMarker 进程扫描；doFirst 时刻执行器未出生恒 0，
@@ -1327,6 +1499,9 @@ tasks.register("testShards") {
             }
             // T-TestPerf14 S1：失衡历史落盘（auto-handicap 跨轮状态通道）。每轮一行追加，
             // 写入失败静默跳过（历史是优化输入不是正确性依赖，runCatching 兜磁盘异常）。
+            // T-JUnit5Eval 方案 2 口径变化：`execSum` 自此只含平台分片腿（快桶已摘出，单独 ~226s）。
+            // 跨这道改动的 execSum 不可直接比（旧 ~960s 含快桶）；relCrit 已按全局漂移归一化，
+            // 是跨轮唯一可比的读数，auto-handicap 也只用它。
             runCatching {
                 val histDir = File(inputs.properties["mpvHistDirAbs"] as String)
                 val hashes = (inputs.properties["mpvShardHashes"] as? String ?: "").split("|")
@@ -1348,14 +1523,18 @@ tasks.register("testShards") {
         }
         logger.lifecycle(
             "SHARD TOTAL: tests=$total failures=$failed errors=$errored skipped=$skipped " +
-                "(parity 口径 = 串行 ./gradlew test 计数；两者同出一份自动分区清单，DB 集成三类都在 testDatabase)"
+                "(分片 $shardCountForReport 片 + 快桶腿 testFast + 尾道 + testExternal；" +
+                "parity 口径 = 串行 ./gradlew test 计数，DB 集成在 testDatabase)"
         )
         // 计划类并集校验（T-TestPerf4）：某个计划类没产出结果 XML=进了分片却没被执行——
         // 类发现回归或假绿嫌疑，必须可见。抽象基类/测试全在嵌套类的形态会误报，只 WARN 不 fail。
         if (plannedClasses.isNotEmpty() && seenClasses.isNotEmpty()) {
             val missing = plannedClasses - seenClasses
             if (missing.isEmpty()) {
-                logger.lifecycle("testShards parity: 计划类全集 ${plannedClasses.size} 个均有结果 XML")
+                logger.lifecycle(
+                    "testShards parity: 计划类全集 ${plannedClasses.size} 个均有结果 XML" +
+                        "（分片桶口径；快桶腿 testFast 单跑 $fastLegTests 例，见上方 testFast 行）",
+                )
             } else {
                 logger.warn(
                     "testShards parity: ${missing.size} 个计划类无结果 XML（抽象基类/嵌套套件形态可忽略，其余排查类发现回归）:",
@@ -1402,3 +1581,10 @@ tasks.test {
 // 结论：全量权威=串行 ./gradlew test；真并行=./gradlew testShards 一命令（T-TestPerf2 收编，
 // 时长均衡自动分区；旧「双开终端」用法仍可用但已非必需）；
 // 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
+//
+// 2026-11-05 修订（T-JUnit5Eval 方案 2，见 docs/调研报告/20261105-1830-…-调研报告.md §四）：
+// 上面的「不引入纯逻辑分桶」结论只对**旧前提**成立——当时纯逻辑桶总量仅 12.5s，摘出无收益。
+// 该前提已被实测推翻：快桶现为 374 类 / 4393 例 / 276s（占全量 20%+），且分片按权重均摊导致每片
+// 都混跑两种形态。现形态=分片只装平台类（446 类 / 4202 例），快桶由 testFast 独立 JVM 与分片并行，
+// testShards 聚合 dependsOn 两者（覆盖面零变化，配置期覆盖断言兜底）。68 例隐性平台依赖的教训
+// 仍然有效——fastBucketClasses 的 4 类排除名单就是它的落点，新增踩坑类继续往那里加。

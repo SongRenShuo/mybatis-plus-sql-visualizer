@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpene
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinFkRegistry
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -18,8 +19,6 @@ import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.junit.Assume.assumeTrue
-import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -89,7 +88,7 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
                         "jdbc-driver" -> driver = child.textContent.trim()
                     }
                 }
-                if (url != null) return@runCatching DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+                if (url != null) return@runCatching DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
             }
             null
         }.getOrNull()
@@ -111,7 +110,7 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ds.workingDir = project.basePath
         ds.passwordStorage = LocalDataSource.Storage.MEMORY
         mgr.addDataSource(ds)
-        DbCredentialManager().setPassword(ds, OneTimeString("root"), LocalDataSource.Storage.MEMORY)
+        DbCredentialManager().setPassword(ds, OneTimeString(DbTestCredentials.password("root")), LocalDataSource.Storage.MEMORY)
         return ds
     }
 
@@ -176,13 +175,18 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ),
     )
 
-    @Test
     fun testDatabaseDiagramEmbedChainWithVirtualFk() {
         // 必须最先守卫：database jar 缺席（普通 test 任务）时任何 database 类触碰即 NoClassDefFoundError
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val ds = createDataSource(info!!)
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
+        val ds = createDataSource(info)
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {

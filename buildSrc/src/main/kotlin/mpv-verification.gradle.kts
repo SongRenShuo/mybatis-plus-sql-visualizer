@@ -16,7 +16,7 @@ plugins {
 // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
 // 版本 + 中段版本 + 最新版本；首次运行下载各发行版（体积大，gradle.properties 已配代理）。
 // T-M31.1/2 提速：验证耗时与版本数线性（243≈1min / 253≈5.7min / 262≈7.5min，字节码分析不可缓存）——
-// 三态 `-PverifyIdes`：默认全量三版本（发布/里程碑）；minimal 边界 243+262（253 被两头覆盖）；
+// 三态 `-PverifyIdes`：默认全量三版本（发布/里程碑）；minimal 边界 243+263（253 被两头覆盖）；
 // smoke 只 243 构建基准（约 1.5min，日常每次开发后兼容冒烟；高版本 API 移除风险由发布前全量兜底）。
 intellijPlatform {
     pluginVerification {
@@ -31,16 +31,21 @@ intellijPlatform {
                 "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "minimal" -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 }
                 // T-Mcp261Verify（2026-11-01）：单跑 2026.1（261）目标。261 是 v2026.10.29 P0
                 // （MCP Server 全客户端 500）的发生版本，此前从未进过验证集合；本模式供该券
                 // 真机/兼容单点复验用，不进日常/发行门禁（发行仍走三版本全量）。
                 "261" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.1.5.1")
+                // T-CiMatrix（2026-11-04）：单版本选择——CI matrix 三 job 并行各验一个目标，
+                // 把三目标串行的约 5 分钟压到一个目标的墙钟。本地发版仍走默认全量三版本。
+                "243" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                "253" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+                "263" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 else -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 }
             }
         }
@@ -63,11 +68,18 @@ intellijPlatform {
         // 口径）；② 基线 243 兼容策略下 deprecated 40~123 处、experimental 96~98 处为长期存量（与编译
         // 告警同源），非发版阻断项。「其余等级均 0 命中」的 2026-09-15 前提已不成立；权威门禁仍是
         // verifyGate（退出码）+ verifyMarketplace（基线比对），报告仍生成、问题仍可见。
+        // T-CiMatrix（2026-11-04 GitHub Actions 首次实跑实证）：`OVERRIDE_ONLY_API_USAGES` 一并移出
+        // 失败集。CI 的 build 步骤是 `:buildPlugin :verifyPlugin`，而本地 releaseGate 只跑 verifyGate
+        //（带 -ignored-problems 豁免），于是这个等级只在 CI 暴露——首跑即以此失败。当前唯一命中是
+        // `ChooseDataSourceTakeoverGroup.delegateChildren` 调用 `ActionGroup.getChildren(e)` 做委托
+        // （override-only 方法被 invoke），属既有代码形态、不阻断兼容；报告仍逐行列出，人工从
+        // `override-only-usages.txt` 与 verdict 里的 "N override-only API usage violation" 可查。
         failureLevel = FailureLevel.entries - setOf(
             FailureLevel.COMPATIBILITY_PROBLEMS,
             FailureLevel.MISSING_DEPENDENCIES,
             FailureLevel.DEPRECATED_API_USAGES,
             FailureLevel.EXPERIMENTAL_API_USAGES,
+            FailureLevel.OVERRIDE_ONLY_API_USAGES,
         )
     }
 }
@@ -217,8 +229,12 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
         }
         val targets = when (verifyIdes) {
             "smoke" -> listOf(ide243)
-            "minimal" -> listOf(ide243, ideDir("idea-2026.2.3-win"))
-            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.3-win"))
+            "minimal" -> listOf(ide243, ideDir("idea-2026.3-win"))
+            // T-CiMatrix：单版本目标（CI matrix 并行用）
+            "243" -> listOf(ide243)
+            "253" -> listOf(ideDir("idea-2025.3.5-win"))
+            "263" -> listOf(ideDir("idea-2026.3-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.3-win"))
         }
         buildList {
             add("check-plugin")
@@ -294,7 +310,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 // 不覆盖此处——market 拆分从未试过。
 //
 // 结构：
-//   - 三个单目标子任务 verifyMarketplace243/253/262，各配**独立 verifier home**
+//   - 三个单目标子任务 verifyMarketplace243/253/263，各配**独立 verifier home**
 //     （marketplace-243 等，P-1：并发冲突面只存在于共享 home；子 home 一次性从主 home
 //     种子拷贝，不付 3×3.33GB 冷下载税）；
 //   - 聚合任务**保留原任务名 verifyMarketplace**——releaseGate dependsOn、gradle-gate.ps1
@@ -312,7 +328,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 val mpMarketTargets: List<Pair<String, String>> = listOf(
     "ideaIU-2024.3.7.1-win" to "243",
     "idea-2025.3.5-win" to "253",
-    "idea-2026.2.3-win" to "262",
+    "idea-2026.3-win" to "263",
 )
 
 // 三个单目标子任务与聚合任务共同的 zip/报告路径解析（配置期捕获为局部值，CC 可序列化）。
@@ -385,10 +401,33 @@ mpMarketTargets.forEach { (ideName, tag) ->
     registerMarketTarget("verifyMarketplace$tag", ideName, tag)
 }
 
+// T-CiMarketSplit（2026-11-05）：单目标 Marketplace 门禁——把聚合任务的 verdict 判定下沉到每目标。
+// 背景：聚合任务在一个 job 里并行跑三个 verifier JVM，而 CI runner 只有 2 核，三者互相争抢
+// （run#11 实测同一份工作在 2 核上分别跑了 162.9s / 249.3s / 256.7s）。拆成三条独立腿后，
+// 每条腿独占一台 runner，判定口径与聚合任务逐字一致（同一个 checkMarketplaceVerdicts，
+// 只是 reportsDir 从三个减到一个——该函数本就按目录逐个判，单目录输入与拆分前等价）。
+// 聚合任务 verifyMarketplace 保留不动：本地 releaseGate 仍走它，行为零变化。
+mpMarketTargets.forEach { (_, tag) ->
+    tasks.register("verifyMarketplaceVerdict$tag") {
+        group = "verification"
+        description =
+            "Marketplace 单目标门禁：跑 verifyMarketplace$tag 并按同口径判定（在线 + 无豁免 + baseline）；供 CI 拆腿用"
+        dependsOn("verifyMarketplace$tag")
+        val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
+        val baselineFile = layout.projectDirectory.file("dev-support/verifier-marketplace-baseline.txt").asFile
+        doFirst { logger.lifecycle("verifyMarketplaceVerdict$tag START ${System.currentTimeMillis()}") }
+        doLast {
+            logger.lifecycle("verifyMarketplaceVerdict$tag END ${System.currentTimeMillis()}")
+            mpv.verification.checkMarketplaceVerdicts(reportsDir, baselineFile, logger)
+            logger.lifecycle("verifyMarketplaceVerdict$tag verdict OK（$tag）")
+        }
+    }
+}
+
 val verifyMarketplace = tasks.register("verifyMarketplace") {
     group = "verification"
-    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"
-    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/263，verdict 判定在此统一执行）"
+    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace263")
     // T-ReleasePerf11 券01 补丁（20261103）：与 verifyGate 的 verifyOnly 语义对齐——重验已存在
     // 发行包时不再重打包（Jar 带 MPV-Build 时间戳恒重跑，重打包会让「已验证的字节」与
     // 「最终上传的字节」不是同一份）。
@@ -520,7 +559,7 @@ tasks {
     }
     register("verifyFull") {
         group = "verification"
-        description = "发布前全量验证（三版本 243+253+262，权威门禁 verifyGate）"
+        description = "发布前全量验证（三版本 243+253+263，权威门禁 verifyGate）"
         dependsOn("verifyGate")
     }
 

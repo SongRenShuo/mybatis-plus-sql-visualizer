@@ -9,7 +9,7 @@ description: 数据库真机环境搭建与验证作业法——在远程 Linux 
 `2af473a2-f9fc-4478-846a-4b5202d606c5`）。本文件是把 2026-10 这一轮部署十来个实例踩出来的东西固化下来，
 **照单执行能省掉至少一半返工**。
 
-三条铁律先记住：
+四条铁律先记住：
 
 1. **端口只用 20000–29999**（用户定的，安全组已整段放行）。容器内端口照旧（5432/3306/1433/2881），
    宿主一律映射到这个段里，别把 5432 这类常用端口暴露出去。
@@ -17,6 +17,8 @@ description: 数据库真机环境搭建与验证作业法——在远程 Linux 
    同理，厂商镜像的 license/trial 状态、密码策略这些坑要写进台账，别只留在脑子里。
 3. **容器一律 `--restart unless-stopped`**，并且**数据卷/数据目录不要随手重建**——多数实例的账号与库
    是首次 initdb 时按环境变量建的，重建等于从头再来一遍凭据流程。
+4. **靶机随时可能被重装系统**，所以凡是部署都得能「从零重放」：实例清单 + 种子脚本 + `scripts/bootstrap-db-env.sh`
+   是资产，手工 `docker run` 出来的东西不是。见 §9。
 
 ## 0. 开工前先查五件事
 
@@ -270,6 +272,9 @@ select current_user, current_database(),
 | 第二次跑渲染套件必红 | 上一轮残留夹具表 | 确认套件已幂等（建前收尾都 DROP） |
 | 绿了但验的不是目标库 | 配置缓存复用上一族 URL / 方言名回退 MySQL | `--no-configuration-cache` + 方言名逐字核对断言 |
 | `gs_ctl restart` 卡死 | 容器 PID1 是 tail，僵尸不回收 | `--init` 重起容器 |
+| `mysql:8.0` 容器秒退，日志 `Fatal glibc error: CPU does not support x86-64-v2` | 官方 `mysql:8.0` 是 **Oracle Linux 9** 基底，glibc 以 x86-64-v2 为基线；靶机是 QEMU 虚机（`/proc/cpuinfo` 无 `sse4_1/sse4_2/popcnt`，只有 `cx16`） | 换 **`mysql:8.0-debian`**（Debian 12）。已拉的 OL9 版在本机不可用，别反复试 |
+| 灌进库的中文变 `C3A5C2BCC2A0…`（HEX 可验） | 容器内 `LANG` 为空 → mysql 客户端 `--default-character-set=auto` 落到 **latin1**，initdb 阶段 UTF-8 种子被双编码 | 初始化脚本**首行**加 `SET NAMES utf8mb4;` 后重灌；重建卷时这行必须保留（原始副本留 `.orig`） |
+| 容器起来了但外部连不上（容器内/localhost 正常） | MySQL 的 `root` 默认只允许 `localhost` | 起容器加 `-e MYSQL_ROOT_HOST=%` |
 
 ## 8. 与插件验证的关系（为什么值得花这个功夫）
 
@@ -278,3 +283,53 @@ select current_user, current_database(),
 单位量级错（10s 变成 10^10ms）。这些在 H2 兼容模式与「MySQL 承载 MariaDB 驱动」的替代读数里全是绿的。
 
 所以：**装环境不是目的，取到引擎级读数才是**。装完立刻按 §4 第三档跑一遍，跑不出读数就等于没装。
+
+## 9. 灾难重建：整套环境从零恢复（靶机随时可能被重装）
+
+**前提变了**（2026-11-05 用户定调）：测试服务器的服务**可能随时被重装系统**，容器、卷、数据、initdb 结果全部
+丢失。所以「部署」不再是手工操作，而必须是**声明式 + 幂等可重放**的：
+
+- **唯一事实源是清单**：`.local/db-env-instances.tsv`（gitignored，可含明文凭据），模板见
+  `scripts/instances.example.tsv`；台账 `.local/test-databases.md` 记录连接/凭据/坑。
+- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <清单>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
+  按 `verifyCmd` 轮询就绪、最后打印端口汇总并列出未就绪项。**可反复执行**，失败重跑只补没起来的那些。
+- **种子数据要能自动灌**：把 `.sql` 放清单的 `initDir`（挂到 `/docker-entrypoint-initdb.d:ro`），镜像首次
+  初始化时自动执行；每条 `.sql` 首行必须 `SET NAMES utf8mb4;`（见 §7 的双编码坑）。
+
+### 重建顺序（靶机是全新系统时照这个走）
+
+```bash
+# 0) 宿主就绪：Docker 在跑、daemon.json 有可用 mirror（见 §1）
+docker info >/dev/null && echo ok
+free -g | head -2                      # 按 §0 的内存账排布实例，别一次全上
+
+# 1) 上传清单与种子（本地 → 靶机）
+#    .local/db-env-instances.tsv          实例清单（含凭据）
+#    /root/<实例>-init/*.sql              种子脚本（首行 SET NAMES utf8mb4;）
+scp .local/db-env-instances.tsv root@103.36.220.245:/root/
+scp -r dev-support/db-seed/<实例>/*  root@103.36.220.245:/root/<实例>-init/
+
+# 2) 一键重建
+ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/db-env-instances.tsv'
+
+# 3) 外部可达性 + 数据正确性（两档都要取，别只看容器 Running）
+#    - 从本机用 DBX/客户端实连一次（SELECT 1 / VERSION()）
+#    - 中文正确性用 HEX 钉死：SELECT HEX(name) —— 必须等于 HEX('张三') = E5BCA0E4B889
+#    - 表与行数：SHOW TABLES + 逐表 COUNT(*)
+
+# 4) 收尾：台账补行 → DBX 登记（首个查询可能 CONNECTION_OUT_OF_SCOPE，放行一次）→
+#    若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
+```
+
+### 重建时不做的事
+
+- **不要**为了「快点」改用 apt 装系统级数据库（§7 已记 mariadb 的冲突案例）；
+- **不要**动宿主系统参数（`vm.max_map_count` 等）——对既有实例是风险；
+- **不要**在没有清单的情况下手工 `docker run` 一串——那样下次重装还得从头踩一遍；
+- **不要**把凭据写进 `docs/`、`src/`、skill 本体——只落 `.local/`。
+
+### 恢复演练（可选但建议）
+
+判定「这套东西真能重建」的唯一证据是**真跑一次**：删掉一个非关键容器 → 用脚本重建 → 复读端口/表数/中文 HEX。
+不做演练的声明只能算「应该有」，与 skill §4 的三档证据同一口径。
+

@@ -6,7 +6,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JPanel
 
 /**
@@ -28,7 +27,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     // ======================== F3：监听生命周期 ========================
 
     /** embedConsole 挂接的监听在 detachConsole 时显式移除——旧实现不移除（僵尸监听根因）。 */
-    @Test
     fun testDetachRemovesRehostListener() {
         val panel = newPanel()
         val console = JPanel()
@@ -42,7 +40,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     }
 
     /** 换入新控制台时旧组件上的本面板监听同步移除（旧组件不被本面板任何监听残挂）。 */
-    @Test
     fun testReembedRemovesListenerFromOldConsole() {
         val panel = newPanel()
         val first = JPanel()
@@ -59,7 +56,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     }
 
     /** dispose 显式 detach——弹窗关闭后面板监听不残活。 */
-    @Test
     fun testDisposeDetachesConsole() {
         val panel = newPanel()
         val console = JPanel()
@@ -74,7 +70,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     // ======================== F4：所有权卫队 ========================
 
     /** consoleAttachedToMe：挂在自己 host 内 true；被别人收养/完全释放 false。 */
-    @Test
     fun testConsoleAttachedToMeOwnershipMatrix() {
         val panelA = newPanel()
         val panelB = newPanel()
@@ -94,7 +89,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     }
 
     /** 失联组件经 rehost 重挂后归属恢复（兜底链有效，卫队不误锁死）。 */
-    @Test
     fun testOwnershipRecoversAfterRehost() {
         val panel = newPanel()
         val console = JPanel()
@@ -111,7 +105,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     // ======================== F3：去抖复查 ========================
 
     /** 去抖窗口内的释放不丢弃：debounced skip 后延迟复查仍能把失联组件重挂回来。 */
-    @Test
     fun testDebounceSkipStillRehostsAfterRetry() {
         val panel = newPanel()
         val console = JPanel()
@@ -157,7 +150,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     )
 
     /** 二次 showResult：旧弹窗被关闭、登记表中只剩新弹窗（多弹窗僵尸源头消灭）。 */
-    @Test
     fun testShowResultSingletonizesPreviousDialog() {
         val project = this.project
         val result = previewResult()
@@ -182,7 +174,6 @@ class RefreshDbStealTest : BasePlatformTestCase() {
     }
 
     /** 单例关闭幂等：重复 doDispose 不抛异常（单例化路径 + 用户手动关闭的竞态兜底）。 */
-    @Test
     fun testDisposeIdempotentAfterSingletonClose() {
         val project = this.project
         SqlPreviewService.showResult(project, previewResult())

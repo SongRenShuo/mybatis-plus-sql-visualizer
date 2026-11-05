@@ -35,9 +35,19 @@
 
 ## 二、准备段（门禁与元数据）
 
-- [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/262 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+- [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/263 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
+- [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
+  - 背景：CI 的 `verify` / `marketplace` 六条腿不再靠跑 `:verifyPlugin` 顺带获得 verifier-cli，而是按 `dev-support/verifier-cli-version.txt` 里的版本从 Maven Central 直取后播种进 gradle 缓存（拆腿提速的前提）。版本号本身由 IPGP 内部决定，我们只能钉。
+  - **风险形态**：IPGP 升级（改 `settings.gradle.kts:36` 的 `org.jetbrains.intellij.platform.settings` 版本）后若不同步改钉子，CI 会**继续用旧版 verifier 跑判定且不报错**——门禁绿不代表按新版口径验过。
+  - 操作（改 IPGP 版本后立刻做，别等发版）：
+    1. `./gradlew :verifyPlugin -PgifRecord=false` 跑一次（让新版 verifier-cli 落进 gradle 缓存）；
+    2. 查缓存里的实际版本：`ls ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/*/*/verifier-cli-*-all.jar`（Windows 上 gradle home 可能是 junction，按 `GRADLE_USER_HOME` 解析）；
+    3. 把版本号写进 `dev-support/verifier-cli-version.txt`（文件只有版本号一行）；
+    4. `./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"` 必须绿；
+    5. 提交时在信息里写明「IPGP x.y.z → verifier-cli a.b.c」。
+  - 判据：`VerifierCliVersionGuardTest` 绿（本机缓存里存在与钉子不同版本的 jar 时它会红并点名两边版本）。注意该守卫只在本机跑过 `:verifyPlugin`（缓存有 jar）时生效，CI 上因缓存不同会 skip——**它不是 CI 防线，是本地防线**。
 - [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
 
@@ -54,6 +64,33 @@
 
 - [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
+- [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
+- [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
+  - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
+  - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
+  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8 → run#9/#10 19.4 → run#12 18.4 → **run#19/#20 十四 job 全绿 13.4 / 14.5 分钟**（build 6.3~6.6 + verifyplugin 5.0~5.1 + verify×3 并行 3.9~4.3 + marketplace×3 并行 5.4~7.7 + test×5 并行 8.2~10.7，test 与 build 同起跑；墙钟由 marketplace(263) 这条腿决定）。CI 比本地快的原因是全面并行，但它仍要恢复约 9.6GB 的 Gradle 缓存并从头编译，**所以 CI 不作为默认路径**。⚠️动 `buildSrc` 的提交会让缓存 key 换新，该轮 build 的缓存保存要整份重存（实测 +7 分钟，run#13）。
+  - **推送自动跑全量测试**（2026-11-05 起）：push 到 master 自动触发 `push-test.yml`——5 片并行、不带 build/兼容验证，约 11 分钟出结论、约 50 runner 分钟；并发组按分支且 `cancel-in-progress: true`（连推多次只跑最后一轮）。**分工**：推送管测试，发版前的 `mode=gate` 管 build + verify×3 + marketplace×3 + verifyplugin；测试部分与推送那轮同口径，可用 RC-P1c 的「零代码改动复用」判据省掉。
+  - **夜间全量**（2026-11-05 起）：`nightly-full.yml` 每晚 02:00（北京时间）跑分片轮次不覆盖的那批——5 片全量 + `testExternal`（签名护栏）+ `testShardTail`（性能尾道）+ `:sql-visualizer-agent:test` + `testDatabase`（8 个 testDb*，含连通性冒烟 `testDbJdbcSmoke`）+ `dialectExternalVerify` + `e2eFakeIde`（真机端到端）。**只在前 24 小时有代码提交时跑**（`changes` job 用 `git log --since` 扫 src/buildSrc/sub-projects/gradle 脚本），纯文档日不烧 runner。
+    - 需在仓库 Secrets 配三个才会启用 DB / e2e 两条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：`MPV_DB_URL` / `MPV_DB_USER` / `MPV_DB_PASSWORD`——指向测试服务器上的 MySQL（2026-11-05 部署：`103.36.220.245:25900`，库 `mpj_demo`；URL 必须带 `sessionVariables=sql_mode=ANSI_QUOTES`，与 demo 数据源同口径）。`dialectExternalVerify` 另需 `DIALECT_MATRIX_PROPERTIES`（`.local/dialect-external-matrix.properties` 全文）。
+    - 连接覆盖机制：`-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword`（DB 集成）与 `-Pe2eDbUrl/-Pe2eDbUser/-Pe2eDbPassword`（e2e，映射成 Spring 的 `SPRING_DATASOURCE_*`）。不传时回落到「demo 的 dataSources.xml + root/root」，本机行为不变。
+    - 已知坑：`mysql:8.0` 官方 tag 是 Oracle Linux 9 基底，在无 x86-64-v2 的虚机上会 `Fatal glibc error`，须用 `mysql:8.0-debian`；容器内 `LANG` 为空会让 mysql 客户端按 latin1 灌数据导致中文双编码，init 脚本首行须 `SET NAMES utf8mb4`。
+    - `e2eFakeIde` 在 CI 的额外前置：JDK8（`setup-java` 装完记录路径再恢复 JDK17）、Maven 联网（`-Pe2eMavenOffline=0`，首次冷仓库）、demo 克隆（Gitee 失败回落 GitHub 镜像）。
+  - 并发纪律（2026-11-05 改）：`build-plugin.yml` 的 gate 与 release/publish **分组不同**——gate 组可被新提交取消，release/publish 组永不取消（发行不能被打断、也不允许两次发行并发覆盖同一 Release 资产）。
+  - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
+    ① **任何需要 verifier-cli 的独立 job 都要自己拿到 jar**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar。现由各腿按 `dev-support/verifier-cli-version.txt`（当前 `1.411`）从 Maven Central 直取后播种；IPGP 升级 verifier 时必须同步改钉子，`VerifierCliVersionGuardTest` 会在本机全量测试里红。
+    ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。
+    ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
+    ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
+  - **换验证目标 IDE 版本当天的坑**（2026-11-05 2026.2.4→2026.3 实测）：IPGP 读的是**项目内缓存的**
+    product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore）。若该缓存是在新版
+    发布前抓的，跑 `:verifyPlugin` 会报 `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，
+    而官方下载链接其实已存在（`download.jetbrains.com/idea/idea-2026.3.win.zip`）。
+    处置：`rm -rf .intellijPlatform/productReleases` 后重跑，IPGP 会重新拉取清单。
+    CI 不受影响（每次都是干净 workspace，无缓存）。
+  - **不要**为了跳过重编译把项目级 `.gradle` 塞进工件：收益约 2 分钟，而它把构建状态交给跨 job 的文件搬运，多一层不可控（run#8 试过、已撤回）。
+  - 已知 flake 与处置（都属「用固定时间当同步」）：
+    ① 分片/兼容腿偶发 `ClosedFileSystemException`（被报成 `Could not find bundled plugin with ID: 'com.intellij.database'`），约 4/25 片。**原地重跑无效**（Gradle daemon 复用，关闭状态留在 daemon 里），九处 Gradle 调用统一走 `dev-support/ci/run-gradle-retry.ps1`（先 `--stop` 再重跑）。看到 `::warning::命中 Gradle zip 文件系统竞态` 说明命中过该竞态、已自动重跑，不是测试失败。
+    ② 异步生效点的断言一律用有界等待（`SqlLogAutoSaverPruneGuardTest` 的裁剪、`DiagramPanelTest` 的加载态），不要写 `Thread.sleep(N)` + 立即断言。
 
 ## 三、双通道发布段
 

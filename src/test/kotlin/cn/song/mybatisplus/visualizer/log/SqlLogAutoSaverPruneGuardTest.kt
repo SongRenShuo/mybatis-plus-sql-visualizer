@@ -172,8 +172,10 @@ class SqlLogAutoSaverPruneGuardTest {
         saver.submit(entryOf("SELECT 1"))
         awaitBlockContaining(File(dir), "SELECT 1")
         // writeBatch 先落盘、随后同任务（同监视器串行）裁剪：首裁删最旧名族组
-        Thread.sleep(200)
-        assertFalse("写批后裁剪应删名族最旧组", File(dir, "sql-history-2026-09-10.sql").exists())
+        // T-CiMarketSplit（2026-11-05）：原为 Thread.sleep(200) + assertFalse，在 CI 上假红过
+        // （run#14 test(4) 在 176 行失败）——裁剪在 saver 写线程里，固定睡眠在 2 核 + 十三 job
+        // 并行时不够。改成有界轮询：真没删照样红，只是不再把机器慢判成缺陷。
+        awaitFileGone(File(dir, "sql-history-2026-09-10.sql"))
         // 窗口内第二批写批：裁剪被节流跳过
         makeFile(dir, "sql-history-2026-09-10.sql", 1000)
         saver.submit(entryOf("SELECT 2"))
@@ -193,6 +195,16 @@ class SqlLogAutoSaverPruneGuardTest {
             Thread.sleep(20)
         }
         throw AssertionError("等待超时：目录 ${dir.absolutePath} 内未出现含 $marker 的条目")
+    }
+
+    /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。 */
+    private fun awaitFileGone(file: File, timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!file.exists()) return
+            Thread.sleep(20)
+        }
+        assertFalse("等待超时：${file.name} 应在写批后随裁剪被删除（${timeoutMs}ms 内仍在）", file.exists())
     }
 
     private fun entryOf(sql: String) = LogSqlEntry(

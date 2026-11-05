@@ -21,12 +21,20 @@ import java.util.TreeMap;
  */
 public final class ParamCapture {
 
-    /** 白名单方法：参数个数 2~3 且首参为 Integer（parameterIndex）。 */
+    /**
+     * 白名单方法：参数个数 2~4 且首参为 Integer（parameterIndex）。
+     *
+     * T-CrossChannelResidual（20261105）：补齐 `setNClob` / `setRowId` / `setSQLXML` / `setRef` 四族。
+     * 它们此前不在白名单 → agent 侧这些参数**整段缺失**，而控制台日志总是打全参数，跨通道参数值签名
+     * 因此不等、同一次执行折不上（面板出现一条带耗时位置、一条全是 `—`）。四族都是标准
+     * `setXxx(int, T)` 参数设置方法，与既有成员同语义，不引入非参数 setter。
+     */
     private static final java.util.Set<String> WHITELIST = new java.util.HashSet<String>(java.util.Arrays.asList(
             "setString", "setInt", "setLong", "setDouble", "setFloat", "setBigDecimal",
             "setBoolean", "setByte", "setShort", "setDate", "setTime", "setTimestamp",
             "setObject", "setNull", "setBytes", "setURL", "setArray", "setBlob", "setClob",
-            "setNString", "setAsciiStream", "setBinaryStream", "setCharacterStream"));
+            "setNString", "setAsciiStream", "setBinaryStream", "setCharacterStream",
+            "setNClob", "setRowId", "setSQLXML", "setRef"));
 
     private final Map<Integer, Object[]> captured = new TreeMap<Integer, Object[]>();
 
@@ -54,7 +62,10 @@ public final class ParamCapture {
         if (!WHITELIST.contains(methodName)) {
             return false;
         }
-        if (!(args[0] instanceof Integer) || args.length < 2 || args.length > 3) {
+        // T-CrossChannelResidual（20261105）：上限由 3 放到 4——`setObject(int, Object, int, int)`
+        // 是标准四参重载（部分驱动的 TypeHandler 走它）。此前织入器按「≥2 参」织了钩子、本函数却
+        // 在 4 参时返回 false，形成「织了不捕」：参数静默缺失 → 跨通道签名不等 → 同一次执行两条。
+        if (!(args[0] instanceof Integer) || args.length < 2 || args.length > 4) {
             return false;
         }
         final boolean isSetNull = "setNull".equals(methodName);

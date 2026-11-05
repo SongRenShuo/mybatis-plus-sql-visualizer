@@ -9,7 +9,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * CriteriaQueryLocator 单元测试（F-JPA-02）。
@@ -57,7 +56,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
     // 基础定位测试
     // ------------------------------------------------------------------
 
-    @Test
     fun testCreateQuery_from_识别实体类() {
         myFixture.configureByText(
             "CriteriaDemo.java",
@@ -100,7 +98,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
         assertEquals("UserEntity", model!!.entityClassName)
     }
 
-    @Test
     fun testCreateQuery_未找到返回null() {
         myFixture.configureByText(
             "NoQuery.java",
@@ -121,7 +118,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
     // WHERE 条件解析测试
     // ------------------------------------------------------------------
 
-    @Test
     fun testCb_equal_解析为Simple条件() {
         myFixture.configureByText(
             "CriteriaDemo.java",
@@ -190,7 +186,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
         assertEquals("=", simple.op)
     }
 
-    @Test
     fun testCb_greaterThan_解析为大于条件() {
         myFixture.configureByText(
             "CriteriaDemo.java",
@@ -253,7 +248,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
     // ORDER BY / SELECT / JOIN 解析测试
     // ------------------------------------------------------------------
 
-    @Test
     fun testCq_orderBy_解析为排序项() {
         myFixture.configureByText(
             "CriteriaDemo.java",
@@ -312,7 +306,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
         assertEquals(true, ob.asc)
     }
 
-    @Test
     fun testCq_multiselect_解析为列列表() {
         myFixture.configureByText(
             "CriteriaDemo.java",
@@ -374,7 +367,6 @@ class CriteriaQueryLocatorTest : BasePlatformTestCase() {
     // 集成测试：完整条件链
     // ------------------------------------------------------------------
 
-    @Test
     fun test完整CriteriaQuery_解析所有子句() {
         myFixture.configureByText(
             "CriteriaDemo.java",

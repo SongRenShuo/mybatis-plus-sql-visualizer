@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.ui.SqlResultPanel
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JComponent
 import javax.swing.JLabel
 
@@ -24,7 +23,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试：Database 插件不可用时，onError 回调被调用。
      * （单元测试环境无 Database 插件，isAvailable() 返回 false）
      */
-    @Test
     fun testErrorCallbackInvokedWhenPluginUnavailable() {
         val errors = mutableListOf<String>()
         var callbackResult: Boolean? = null
@@ -49,7 +47,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：未设置 onError 回调时不会空指针异常。
      */
-    @Test
     fun testNoErrorCallbackDoesNotThrow() {
         // 不应抛异常
         DataSourceSelector.selectAndExecute(
@@ -65,7 +62,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试：runners 为空（无数据源）时，onError 回调被调用。
      * 这是 M36.3 修复的核心场景：用户无数据源时点击执行，应提示配置数据源。
      */
-    @Test
     fun testErrorCallbackInvokedWhenRunnersEmpty() {
         val errors = mutableListOf<String>()
         var callbackResult: Boolean? = null
@@ -88,7 +84,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：SqlResultPanel.showError 正确设置错误文本和颜色。
      */
-    @Test
     fun testResultPanelShowError() {
         val panel = SqlResultPanel()
         panel.showError("Connection failed")
@@ -107,7 +102,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：SqlResultPanel 从 loading 状态切换到 error 状态。
      */
-    @Test
     fun testResultPanelLoadingToErrorTransition() {
         val panel = SqlResultPanel()
 
@@ -129,7 +123,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试：SqlResultPanel 初始/空状态隐藏（不占高度，消除底部空白占位），
      * 有内容（错误/loading）时显示。
      */
-    @Test
     fun testResultPanelAutoVisibility() {
         val panel = SqlResultPanel()
         // 初始隐藏
@@ -151,7 +144,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试（M36.5.49）：showError 后 showIdle 保留错误——防止执行失败的错误文本
      * 被后续 results refreshed 触发的 embedConsole 同实例 showIdle() 覆盖（"一闪而过"）。
      */
-    @Test
     fun testShowIdlePreservesError() {
         val panel = SqlResultPanel()
         panel.showError("Table 'xx' doesn't exist")
@@ -174,7 +166,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试：executePrepared 在控制台未就绪时返回 false（不抛异常）——
      * 调用方据此回退 prepare+execute 全链。
      */
-    @Test
     fun testExecutePreparedNotReadyReturnsFalse() {
         DataSourceSelector.clearPrepared()
         val executed = DataSourceSelector.executePrepared(project)
@@ -185,7 +176,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试（M36.5.2）：executePrepared 未就绪时不触发 onResultsReady（不抛异常）——
      * 结果区换入回调仅在真实执行触发成功后发生。
      */
-    @Test
     fun testExecutePreparedNotReadyDoesNotFireResultsReady() {
         DataSourceSelector.clearPrepared()
         var resultsReadyFired = false
@@ -200,7 +190,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试（M36.5.2）：SqlExecutor.executePrepared 同样在未就绪时返回 false（沙盒无 Database 插件）。
      */
-    @Test
     fun testSqlExecutorExecutePreparedNotReadyReturnsFalse() {
         SqlExecutor.clearPrepared()
         assertTrue(
@@ -215,7 +204,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试（M36.5.2）：embedConsole 替换旧控制台；同一组件重复回调不重复内嵌（防闪烁）——
      * 缓存完整 UI 在重复执行时回调同一实例，面板须幂等。
      */
-    @Test
     fun testEmbedConsoleReplacesAndDebounces() {
         val panel = cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel(project)
         val first = javax.swing.JPanel()
@@ -240,7 +228,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
      * 测试：SqlExecutor.prepareConsole 在插件不可用环境（单元测试沙盒）静默回退——
      * callback(false) 且不抛异常、不弹提示（社区版回退语义）。
      */
-    @Test
     fun testPrepareConsoleSilentFallbackWhenPluginUnavailable() {
         var callbackResult: Boolean? = null
         var errorInvoked = false
@@ -259,7 +246,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：clearPrepared 重置就绪状态。
      */
-    @Test
     fun testClearPrepared() {
         DataSourceSelector.clearPrepared()
         assertTrue("isPrepared should be false after clearPrepared", !DataSourceSelector.isPrepared())
@@ -268,7 +254,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：SqlResultPanel.clear 清空状态。
      */
-    @Test
     fun testResultPanelClear() {
         val panel = SqlResultPanel()
         panel.showError("Some error")
@@ -283,7 +268,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：SqlExecutor.execute 在插件不可用时调用 onError。
      */
-    @Test
     fun testSqlExecutorPropagatesError() {
         val errors = mutableListOf<String>()
 
@@ -302,7 +286,6 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     /**
      * 测试：SqlExecutor.execute 未设置 onError 时不抛异常。
      */
-    @Test
     fun testSqlExecutorNoErrorCallbackDoesNotThrow() {
         SqlExecutor.execute(
             project = project,

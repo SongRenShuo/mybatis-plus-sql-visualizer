@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SourceLanguage
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.withResolvedDialect
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
@@ -27,8 +28,10 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JTabbedPane
+import javax.swing.JTextArea
 import javax.swing.KeyStroke
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.COLUMN_INFO_TAB_TITLE
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.ORIGINAL_SQL_TAB_TITLE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.MIN_META_BUDGET_PX
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.dollarMarkDismissedSession
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
@@ -256,6 +259,8 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     updateDiagramTab(result)
     // F-45：更新列信息标签页（仅 <pages> 预览时显示）
     updateColumnInfoTab(result)
+    // T-PagesHql：HQL 转换前的原文标签页（仅转换过的预览显示）
+    updateOriginalSqlTab(result)
     // O-4：缓存当前 SQL 供下次 Compare
     // UI-023：首渲染链上 editor 可能尚未创建（控制台/预热抢占），只读 editor 会恒 null——
     // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
@@ -566,8 +571,62 @@ internal fun SqlPreviewPanel.removeColumnInfoTab() {
     }
 }
 
-/** 检查标签页是否已存在指定标题。 */
+/**
+ * T-PagesHql：根据当前预览结果更新「原文」标签页。
+ *
+ * 仅当 [PreviewResult.originalSql] 非空（HQL/JPQL 被转换过）时显示；连续预览不同语句时替换内容，
+ * 非 HQL 预览则移除页签并恢复纯 SQL 视图。原文只读、等宽字体、不参与编辑/执行。
+ */
+internal fun SqlPreviewPanel.updateOriginalSqlTab(result: PreviewResult) {
+    val original = result.originalSql?.takeIf { it.isNotBlank() }
+    if (original == null) {
+        removeOriginalSqlTab()
+        return
+    }
+    ensureTabbedContent(addDiagramTab = false)
+    val tabPane = contentTabPane ?: return
+    val panel = buildOriginalSqlPanel(original)
+    val existing = (0 until tabPane.tabCount).firstOrNull { tabPane.getTitleAt(it) == ORIGINAL_SQL_TAB_TITLE }
+    if (existing == null) {
+        tabPane.addTab(ORIGINAL_SQL_TAB_TITLE, panel)
+    } else {
+        tabPane.setComponentAt(existing, panel)
+    }
+}
 
+/** 构建原文只读面板（等宽字体 + 不折行，便于与转换后 SQL 逐行对照）。 */
+internal fun SqlPreviewPanel.buildOriginalSqlPanel(text: String): JComponent {
+    val area = JTextArea(text).apply {
+        isEditable = false
+        lineWrap = false
+        font = com.intellij.openapi.editor.colors.EditorColorsManager.getInstance()
+            .globalScheme.getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN)
+        border = JBUI.Borders.empty(6)
+        caretPosition = 0
+    }
+    return JBScrollPane(area)
+}
+
+/** 移除原文标签页（只剩 SQL 时恢复纯 SQL 视图）。 */
+internal fun SqlPreviewPanel.removeOriginalSqlTab() {
+    val tabPane = contentTabPane ?: return
+    for (i in tabPane.tabCount - 1 downTo 0) {
+        if (tabPane.getTitleAt(i) == ORIGINAL_SQL_TAB_TITLE) {
+            tabPane.removeTabAt(i)
+            break
+        }
+    }
+    if (tabPane.tabCount == 1) {
+        val sqlContent = tabPane.getComponentAt(0)
+        remove(tabPane)
+        add(sqlContent, BorderLayout.CENTER)
+        contentTabPane = null
+        revalidate()
+        repaint()
+    }
+}
+
+/** 检查标签页是否已存在指定标题。 */
 internal fun SqlPreviewPanel.hasTabTitle(tabPane: JTabbedPane, title: String): Boolean {
     for (i in 0 until tabPane.tabCount) {
         if (tabPane.getTitleAt(i) == title) return true
@@ -587,6 +646,10 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
         result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: $it") }
+        // T-PagesHql：源语言非 SQL 时明示「已转换」（用户投诉的一半是「不知道插件做了什么」）
+        if (result.sourceLanguage != SourceLanguage.SQL) {
+            add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.sourceLanguage.name))
+        }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         result.xmlModel?.let { xml ->
             add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")

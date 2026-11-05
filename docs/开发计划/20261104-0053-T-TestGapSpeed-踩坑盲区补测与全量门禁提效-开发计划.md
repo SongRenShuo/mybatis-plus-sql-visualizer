@@ -31,10 +31,32 @@
 
 ### 登记不修（本任务边界，防范围失控）
 
-- `use` 语句 timeout hint：真缺陷，但行为修复需真机报错形态验证，登记缺陷票不动生产。
+- ~~`use` 语句 timeout hint~~：**20261104 用户令改实施**（升 T8 券，见下），从本边界移出。
 - 键位冲突结构性死路：待用户拍板，不动。
 - 回滚 identity T-IIR-02：O-59 在册，不动。
 - `releaseGate` stagger 240s 静态错峰改动态让路：列为可选 T7，前六券收口且有余量才做。
+
+**T8-useToolStatementDone（20261104 用户令追加）**
+- 缺陷：`use`/DML 等无结果 Tab 的语句**成功**执行后走满 40 拍窗口落 `execute.timeout.hint`（把成功说成密码/驱动超时）——pitfall-console-error-signature-coverage 顺带观察在案。
+- 修法：完成证据检测（Output 里的 `affected`/`completed in`/`query ok` 等完成态回显，取既有状态词表的完成语义子集；`executing`/`fetching` 等进度词不算完成，长查询挂死不误报）+ `onInfo` 中性回调穿层（面板 `showStatus` 灰字，不进红条错误通道）。onInfo 缺席的调用方（LogToSqlPanel 等）保持既有行为。
+- 待验证前提：①`use` 语句 DBN 是否写完成回显**未知**（无真机形态样本）——若 DBN 对 `use` 只写回显不写摘要，则文本判据无法与挂死区分，该场景维持旧提示，如实标注证据边界；真机验收步骤交用户。②链路 11 处签名穿层（SqlExecutor→selectAndExecute/executePrepared→chooseAndPrepare→prepareInConsole→prepareAfterEditorResolved→executeOnConsole→afterSubmitted→startResultTabRetry + 面板三调用点），全部默认参数向后兼容。
+
+**T9-O147ForkMerge（20261104 用户批准 A 档实施）**
+- 析因（上轮 XML 逐例铁证）：`O147HistoryUpgradeTest` 87.1s 中 5 个 AgreesAcrossAllReaders 场景各占 ~16.5s（合计 80.6s），**8MiB 与 129MiB 夹具耗时几乎相同 ⇒ 大头是 fork 子 JVM（Windows 启动+classpath）而非解析**；其余 21 例近乎零耗时。
+- 动作：5 fork → 1。场景测试只登记 (文件, 期望指纹, 标签)，`@AfterClass` 单次 fork 逐文件验证；探针 main 改 (路径,指纹,标签) 三元组契约；大夹具目录延后类级清理（券05 防泄漏语义不变）。
+- **断言映射表**（T9 纪律：断言一条不减）：
+
+| 原断言（每场景一次） | 新落点 | 强度 |
+|---|---|---|
+| 子进程指纹 == 父侧 expected（exitValue==0 + `O147_STRING_OK`） | `verifyLargeStringsInOneChildJvm`：同探针同判据，任何文件不符即退出非 0 | 逐字等强（逐文件比对，还多出 per-file 归因输出） |
+| （隐含）每场景恰做一次子验证 | 登记数==5 断言（场景早退=登记缺失，@AfterClass 二次显红） | 新增，防子验证静默缩水 |
+| 父侧 4 读取口一致/预算判定/provenance 断言 | 原地不动 | 不变 |
+
+- 已知边界：单方法过滤运行本类会因登记不全在 @AfterClass 显红（本类按整类跑，KDoc 已注明）；生产代码零改动。
+- 反向验证（破坏对照）：临时改坏 `SqlLogFileReader.parseContent` 使指纹变化 → @AfterClass 必红；还原回绿。
+- **T9 实施记录（20261104，提交 `4260424f`）**：落点=登记表 + @AfterClass 单次 fork（探针三元组契约）+ 大夹具目录类级清理。定向 26/0/0/0；破坏对照两处显红（`revisionCountLimitAndUnknownIdDoNotInventEntries` 断言红 + `classMethod` 登记缺失防护红——缩水保护按设计触发），还原回绿 26/0/0/0。类耗时 **87.1s → 67.9s**（fork 合并收益 + 轮间方差并存，保守记 5~19s）。**析因修正（重要）**：初判「fork 主导」基于「8MiB 与 129MiB 夹具耗时相同」——实测五夹具全是 ~134MiB（MAX_REVISIONS=2048×64KiB，注释里的 8MiB 是预算记账口径非文件体积），剩余 67.9s 为父侧对真实预算夹具的多遍读取+物化，是测试目的本身，不可再压。
+- **A 档其余两项按前置不满足放弃（20261104 逐例证据判定）**：①reverse 双件——GateTest 25.5s 集中于单个方法（连接词签名闭环），GeneratorTest 26s 在另三个方法（条件组矩阵/聚合投影真实 MP 编译），**大耗时场景互不重叠**，无重复付费可归一；②实体三件——耗时为长尾分布（每例 1~2s），仅 VO/DTO 排除一对名字相近（0.67s vs 1.57s），收益上限 ~2s 撑不起映射表+破坏对照成本。结论：A 档实际落点仅 O147 一件；「删测试换秒数」的诱惑就此打住，B 档维持不做。
+- **T9 收口补记（20261104 08:56 轮）**：全量 `testShards` 后台带进度、退出码 0、墙钟 20:57：分片 **8521/0/0/13** + 尾道 testShardTail 全绿（laneAtEnd=0 实证），T9 重构后的 O147 在分片内真跑通过。tip `8d426aa7`，工作树干净。
 
 ## 二、券清单
 
@@ -90,11 +112,24 @@
 
 （各券完成后在此回填：提交号、定向读数、反例读数、与计划的偏差。）
 
-- T1：
-- T2：
-- T3：
-- T4：
-- T5：
-- T6：
-- T7：
-- 收口：
+- T1：**完成（20261104，提交 `b2a85b3e`）**。原派子代理并发限额掉线，主控按「接手掉线代理」纪律接管（工作树仅剩一个在途测试文件、无探针残留）。11 例 headless 用例（DialogWrapper 结构/禁用态诚实降级双保险/导出映射/空输入与缺字段兜底），定向 `test --tests ReplayExportDialogTest` 读数 11/0/0/0。偏差：计划写「不碰 src/main」，实际按仓内惯例给弹窗补 public `doDispose()`（SqlPreviewDialog/RollbackSqlDialog 同款——平台 DialogWrapper.dispose 为 protected，兄弟弹窗全靠该惯例口给测试 tearDown；T4 观察到的「protected okAction/doDispose 约 10 处编译错」即源于测试误摸 protected，已改为经 public wrapCheck/doDispose 访问）。前提1 证实：headless 构造无障碍。
+- T2：**完成（20261104，提交 `1fdd35e2`）**。
+  ①规则口径：新增 `convention/BrowserUtilConvergenceGuardTest`——src/main 每个 `BrowserUtil.browse(`/`BrowserUtil.open(` 调用点（掩码后计数，注释/字符串片段不计）必须满足其一：最小围合函数体可见收敛标记（`isUnitTestMode` 或 fail-safe 助手 `isTestEnvironment`），或在守卫内 `exemptFiles` 豁免清单逐条登记理由。判定内核按「调用点粒度」，补上既有文件级守卫（BannedApiSourceScanTest 只认 `browse(`、含守卫字样即放行全文件）的两处缺口：PluginSettingsPanel.kt:616 与 ShareDialog.kt:195/:219 的 `BrowserUtil.open(` 此前完全在覆盖外。
+  ②前提5证实：调用面=browse/open 两名（grep src/main 全集 5 个调用点），无第三名；扫描器与豁免清单同类同文件（豁免表字面量留在被扫类源码内，未提常量——按陷阱项执行）。
+  ③豁免清单现状（2 文件逐条）：PluginSettingsPanel（捕获目录打开缝 `captureDirectoryOpener` 默认 lambda——目录 URI 属文件管理器行为且为 internal 测试缝，UiTest 注入替代不触达平台调用；属性 lambda 无 fun 围合无法就地收敛）；ShareDialog（导出后打开刚保存的本地 HTML 报告——html 文件 URI 确会拉默认浏览器，但仅在用户经 FileSaverDialog 手动保存后触发，ShareDialogTest 0 触达；注释写明未来测试触达导出链前须改走 SafeBrowser，不得沿用豁免）。豁免反腐烂：登记文件无调用点在场即红。
+  ④期望计数=5 与生产调用点同步（SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2），防扫面失明空绿；SafeBrowser 收口本体的 fail-safe 形态仍由既有语义锚点用例钉死。
+  ⑤反向验证两次读数：探针（SqlLogPanel.kt 尾部临时未收敛调用点）→ 红，断言原文「期望计数漂移……实际 […、SqlLogPanel.kt:2489 BrowserUtil.browse(、…]」（计数 5→6 双证）；探针还原（git restore，src/main 零残留）→ 全桶 testFast 绿（363 类 4331 例 0 失败 0 错误，含元守卫 8 例与 T2 守卫 3 例）。
+  ⑥联动改动：元守卫 GUARD_CLASSES 登记本类（SITES/VIOLATIONS 逐条 + Boolean 谓词 headerOpensBody 按 HELPER 登记 via）；BannedApiSourceScanTest 的 src/test 禁直调扫描补本守卫文件自豁免（扫描模式与自证语料含被扫片段，同 BannedApiSourceScanTest 自豁免惯例）。偏差：无（计划三项全落地；自证语料六组合成样本双向判别属超出计划的加严）。
+- T3：**完成（20261104，提交 `bfc906b7`）**。清单新增「headless 单测不可验判据」一节：线程与模态 3 项（模态冻结 invokeLater / ModalityState.any write-unsafe / 262 读锁硬抛）、UI 形态 4 项（ToolWindow 悬停渲染 / 接管组 displayTextInToolbar / JOIN 像素 / 设置页导航）、控制台与键位 2 项（`use` 语句超时提示与键位冲突必现，均注明在册缺陷/待拍板现状），每项带触发路径、判据、出处复盘。
+- T4：**完成（20261104，提交 86f16ace + 3a5fb604）**。
+  ①画像刷新：weight-refresh.ps1 从主仓 20261103 轮 XML（test+testShard1..5，804 文件）重生成 TSV，612→802 类（新增 195、移除 5 个已删类），头部注记 execSum 846.0→961.9s；新增头部含 O147HistoryUpgradeTest 87.07s（此前被中位数插值的最大失准源）。
+  ②前提2证伪：闸口径=30 分钟窗内逐类 suite time 求和，本轮 961.9s>900s 实测被拒（报错原文留痕：`pollution gate: latest-round execSum=961.9s > threshold=900.0s over 804 files`）；结果目录仅此一轮、无干净轮可聚合，按脚本自有 `-Force` 显式放行并在 TSV 头部留注记（两路并发轮、相对量级回填语义），未改脚本默认阈值、未静默绕闸。公共 607 类中位比值 0.71（轮次刻度整体偏移，贪心装箱只吃相对量级，另 PluginSettingsPanelUiTest 热轮 1.895s vs 冷轮 ~19.5s 的冷启动偏差属已知局限）。
+  ③WARN（3a5fb604）：durationWeights 段未覆盖类占比 >15% 时 logger.warn 提示跑 weight-refresh.ps1，CC 存储/复用均正常。反向验证：摘除 TSV `--no-configuration-cache` help → WARN 触发（803/803=100%）；还原 → 静默；CC 复用态无异常。注：TSV 读取非 CC 输入（weightProfile 段既有语义），摘文件后须 `--no-configuration-cache` 才能触发重配置。
+  ④testFast 被 T1 券在途文件 ReplayExportDialogTest.kt 编译错阻塞（protected okAction/doDispose 等约 10 处，全落该文件），与 T4 改动无关；buildSrc 编译与配置期已由 help 两向验证覆盖，testFast 留收口复跑。
+- T5：**完成（20261104，提交 `1d623628`）**。前提3 证实后按计划摘道：两类实测 exec 合计 7.9s（17 例 + 14 例，20261103 轮 XML），摘道代价 ≈ 8s + 一次尾 JVM bootstrap，换整轮重试面收敛。落地：buildSrc `serialTailClasses` 摘出分片计划 + `testShardTail` 尾任务（mustRunAfter 全部分片保证分片全停才起、单跑不拖分片）；聚合报告计进 SHARD TOTAL、不参与失衡/缺权告警（shardExec 只收分片本体，片数经局部 val 捕获防 CC 炸）；根脚本 e2eFakeIde mustRunAfter 追加（任务名不匹配既有 `[0-9]+` 正则）；并行运行器路径走 test-shard-serial-classes.txt 同清单。验证：`help` 绿（buildSrc 编译+CC 存储正常）+ `testShardTail` 实跑绿（XML 17/0/0/0 + 14/0/0/0，laneAtEnd=0）。待收口复跑确认：testShards 全量轮分片计数应不含两类（预计 8503 + 尾道 31）。
+- T6：**完成（20261104，提交 `507bc705`）**。testShardsProgress.ps1 新增 `-ShardCount`（缺省 5 与 mpv-testing 默认对齐，注释写明调片数两边一致）；PS 解析器校验 PARSE OK（PS5.1 中文脚本雷区自查）。CONTRIBUTING 收口轮口径两条：`-PtestShardMaxLane=5` 自适应限流（5m02s 在案）替代单路 33min、禁降片红线不变；全量后台跑必须带进度显示。
+- T7：**未实施**（按计划边界：前六券收口后余量评估不做；releaseGate 动态让路留待办，须 A/B 双轮读数才定案）。
+- T8：**完成（20261104，提交 `3c55f11f`，用户令追加券）**。缺陷=use/DML 等无结果 Tab 语句成功后落 `execute.timeout.hint`（错向归因）。修法两层：①`hasConsoleCompletionEvidence` 完成证据检测（Output 完成态回显 `affected`/`completed in`/`query ok`/`fetched`/`took `/`elapsed` + 行数词正则，取既有状态词表**完成语义子集**；`executing`/`fetching`/`connected` 进度词不算——长查询挂死不误报，漏报退化=现状，误报=把挂死说成完成，故宁少勿错）；②`onInfo` 中性回调穿层（面板 `showStatus` 灰字，不进红条错误通道）——SqlExecutor.execute/executePrepared → selectAndExecute/executePrepared → chooseAndPrepare → prepareInConsole → prepareAfterEditorResolved → executeOnConsole → afterSubmitted → startResultTabRetry 共 11 处签名，全部默认参数向后兼容，onInfo 缺席的调用方（LogToSqlPanel/模板动作等）行为逐字不变；面板三调用点（回退全链/executePrepared/全链）接 `resultPanel.showStatus`。读数：`ConsoleErrorExtractTest` 21/0/0/0（新增 4 例：DML 完成证据检出/纯回显不判/进度词不判/控制台不可读不判）；**反向验证**：判据摘除探针 → 恰好 1 红（testCompletionEvidenceDetectedForSuccessfulDml），还原回绿 21/0/0/0；受影响链定向回归 ExecuteSqlErrorHandlingTest 16 + PreviewResultIsolationTest 6 + ConnectionErrorClassifierTest 10 全绿。**证据边界（前提①）**：`use` 语句 DBN 是否写完成回显无真机样本——若 DBN 对 `use` 只写回显不写摘要行，文本判据无法与挂死区分，该场景维持旧提示；DML 完成回显形态（`1 row affected`/`completed in …`）有真机留证（pitfall 文档原文）。踩坑备注：chooseAndPrepare 递归调用点是位置传参，插参后错位编译红——改具名传参解。
+- 收口：**完成（20261104 02:07 收口轮，工作树 mpsv-testgap-speed）**。全量 `testShards` 后台带进度跑（testShardsProgress.ps1，10 秒一行），退出码 0、墙钟 20:30（自适应限流）：分片本体 **8517/0/0/13**（shard1 1711 / shard2 1668+2 跳 / shard3 1502+4 跳 / shard4 1904+7 跳 / shard5 1732，0 失败 0 错误 0 WARN 失衡告警）+ 尾道 testShardTail 31/0/0/0（本轮 02:07 新鲜 XML 实证）+ testExternal 6 套件全绿。分片计数与预期吻合（8534 基线 − perf 摘出 31 + T1 新增 11 ≈ 8514，13 跳过为 Docker/Assume 常态构成）。全六券 T1~T6 提交齐、工作树干净；未推远端（欠推待用户令）。**T8 收口轮（0247 起）：见下方补记。**
+
+> **T8 收口补记（20261104 05:02 轮）**：T8 生产改动后的全量门禁复跑，`testShards` 后台带进度、退出码 0、墙钟 17:29（自适应限流）：分片 **8521/0/0/13**（含 T8 新增 4 例：8517+4=8521 吻合）+ 尾道 testShardTail 31/0/0/0（17+14 新鲜 XML 实证）。tip `2de89918`。

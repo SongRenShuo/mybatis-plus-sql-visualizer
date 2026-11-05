@@ -9,7 +9,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * R24：mybatis-config.xml 合成夹具判别测试（XML PSI 编辑层）。
@@ -39,7 +38,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
 
     // ---------- 正向：注册与落位 ----------
 
-    @Test
     fun test注册_无plugins节_新建并挂入() {
         val file = xmlFile("""<?xml version="1.0" encoding="UTF-8"?>
             <configuration>
@@ -58,7 +56,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
         assertTrue("plugins 应在 environments 之前（DTD 习惯序）", pluginsIdx in 0 until envIdx)
     }
 
-    @Test
     fun test注册_已有plugins节_追加不新建() {
         val file = xmlFile("""<?xml version="1.0" encoding="UTF-8"?>
             <configuration>
@@ -75,7 +72,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
         assertEquals(fqcn, pluginTags[1].getAttributeValue("interceptor"))
     }
 
-    @Test
     fun test注册_typeAliases在场_plugins挂其保持DTD习惯序() {
         val file = xmlFile("""<?xml version="1.0" encoding="UTF-8"?>
             <configuration>
@@ -88,7 +84,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
         assertEquals("plugins 必须紧跟 typeAliases 之后、mappers 之前", listOf("typeAliases", "plugins", "mappers"), names)
     }
 
-    @Test
     fun test幂等_重复注册零副作用() {
         val file = xmlFile("""<?xml version="1.0" encoding="UTF-8"?>
             <configuration>
@@ -104,7 +99,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
 
     // ---------- 反向：fail-closed ----------
 
-    @Test
     fun test反向_根标签非configuration_拒写() {
         val file = xmlFile("""<?xml version="1.0" encoding="UTF-8"?>
             <beans/>""")
@@ -114,7 +108,6 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
 
     // ---------- VFS 发现层 ----------
 
-    @Test
     fun test发现_resources下config按名收集() {
         val root = myFixture.tempDirFixture.findOrCreateDir("mod/src/main/java")
         // VFS 写（createChildData）须在写动作内（PersistentFSImpl 线程断言，243 沙盒实证）
@@ -129,13 +122,11 @@ class MyBatisNativeConfigXmlEditTest : BasePlatformTestCase() {
         assertEquals(setOf(cfg, cfgSub), found.toSet())
     }
 
-    @Test
     fun test发现_无resources目录_空清单() {
         val root = myFixture.tempDirFixture.findOrCreateDir("mod2/src/main/java")
         assertTrue(MyBatisNativeWiring.findConfigCandidates(root).isEmpty())
     }
 
-    @Test
     fun test发现_根标签读取_非xml与无根均null() {
         val res = myFixture.tempDirFixture.findOrCreateDir("mod3/src/main/resources")
         val good = WriteCommandAction.runWriteCommandAction(project, Computable {

@@ -692,6 +692,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
             ),
             GuardEntry(
+                "convention/VerifierCliVersionGuardTest.kt",
+                emptyList(),
+                "T-CiMarketSplit verifier-cli 版本钉子守卫：判定内核内联于用例——读 " +
+                    "dev-support/verifier-cli-version.txt 与本机 gradle 缓存里 verifier-cli-*-all.jar 的版本集合" +
+                    "比对，不一致即红（CI 的 verify/marketplace 腿按钉子版本从 Maven Central 取 jar，" +
+                    "IPGP 升级后不更新钉子会让门禁静默用旧版 verifier）。无「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=把钉子改成 9.999 后本机跑必红（缓存里存在 jar 时）。",
+            ),
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
@@ -886,6 +895,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                     DecisionFn("teardownServiceLookupOffenders", FnKind.VIOLATIONS),
                 ),
                 "T-M53-II 拆出的项目服务状态规则族：判定内核与其自证用例同文件。",
+            ),
+            // ---- T-TestGapSpeed T2：BrowserUtil 泄漏收敛扫描守卫（2026-11-04） ----
+            GuardEntry(
+                "convention/BrowserUtilConvergenceGuardTest.kt",
+                listOf(
+                    DecisionFn("browserUtilCallSites", FnKind.SITES),
+                    DecisionFn("unconvergedBrowserUtilSites", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "headerOpensBody",
+                        FnKind.HELPER,
+                        "fun 头形态谓词（Boolean）：界定「可配平出块体」的函数头，是 browserUtilCallSites " +
+                            "经 functionBodies 的输入谓词；自证经该转发边到达",
+                        via = listOf("functionBodies"),
+                    ),
+                ),
+                "T-TestGapSpeed T2 BrowserUtil 泄漏收敛守卫：src/main 的 browse/open 调用点须处 " +
+                    "isUnitTestMode 收敛分支（围合函数体可见收敛标记）或登记豁免（豁免表反腐烂），" +
+                    "调用面期望计数同步防扫面失明空绿。判定内核与自证用例同文件：" +
+                    "`守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位`（六组合成样本双向判别）。",
             ),
 
             GuardEntry(
@@ -1368,6 +1396,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "自证语料：`自证_裸调用与跨行全限定调用均被抓`（含真实历史跨行形态）/ " +
                     "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
                     "`自证_注释里的调用不算`。",
+            ),
+            // ---- T-Junit4Migration P2.5：JUnit3 语义守卫（2026-11-05） ----
+            GuardEntry(
+                "convention/Junit3SemanticsGuardTest.kt",
+                listOf(
+                    DecisionFn("junit3Violations", FnKind.VIOLATIONS),
+                    DecisionFn("annotationViolations", FnKind.VIOLATIONS),
+                    DecisionFn("assumeViolations", FnKind.VIOLATIONS),
+                    DecisionFn("namingViolations", FnKind.VIOLATIONS),
+                ),
+                "JUnit3 语义守卫（T-Junit4Migration P2.5）：扫 src/test/kotlin 里继承 JUnit3 基类" +
+                    "（含中转基类，简单类名固定点传播）的类，断言 ① 无 @Test/@Before/@After/@Rule/@RunWith/@Ignore" +
+                    "（JUnit38ClassRunner 只按 test* 方法名收集，注解无效）；② 无 Assume.assume* 调用/import" +
+                    "（AssumptionViolatedException 被记为 failed，P1 反向实验实测 failures=1）；" +
+                    "③ 反引号方法名以 test 开头（否则永不执行，P0 实测 tests= 23→28）。" +
+                    "四条规则各自有合成样本自证（违规必红 + 合规必绿），另有中转基类与字符串字面量两个边界用例。",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

@@ -610,26 +610,32 @@ class ConvertToSqlAction : AnAction() {
         val element = file.findElementAt(editor.caretModel.offset)
         val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
         var statement = tag
-        while (statement != null && statement.name != "maintainPage") {
+        // 页面标签名不固定：上爬到「直接父级是 <pages> 且自身是 SQL 载体」的标签
+        while (statement != null &&
+            !(statement.parentTag?.name == "pages" &&
+                PagesXmlGutterLineMarkerProvider.isPageStatementTag(statement))
+        ) {
             statement = statement.parentTag
         }
         if (statement != null) {
             previewPages(project, file, statement)
             return
         }
-        // 光标不在 maintainPage 内 → 全部候选
+        // 光标不在页面语句内 → 全部候选
         // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（同 mapper 语句分支）
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
-                    val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-                        .filter { it.name == "maintainPage" }
+                    val root = file.rootTag
+                    val statements = root?.children?.filterIsInstance<XmlTag>()
+                        ?.filter { PagesXmlGutterLineMarkerProvider.isPageStatementTag(it) }
+                        .orEmpty()
                     val displayTexts = statements.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
                         val text = tag.text?.trim().orEmpty()
                         SqlSelectionDialog.Row.of(
-                            "${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
+                            "${tag.getAttributeValue("id") ?: tag.name}（第 ${line} 行）",
                             text,
                         )
                     }
@@ -695,7 +701,14 @@ class ConvertToSqlAction : AnAction() {
     /** 预览单个 maintainPage（后台转换，EDT 渲染）。 */
     private fun previewPages(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+            // T-PagesHql：传 PSI 宿主锚点，HQL 转换按该 XML 所属模块收窄实体检索范围；
+            // id 缺省时用标签名（解析器同口径回落）
+            PagesXmlPreviewService.preview(
+                file.text,
+                tag.getAttributeValue("id") ?: tag.name,
+                project,
+                tag,
+            )
         }) { result ->
             SqlPreviewService.showResult(project, result)
         }

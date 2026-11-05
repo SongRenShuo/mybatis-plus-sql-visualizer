@@ -172,7 +172,7 @@ class DiagramPanelTest {
         assertTrue("渲染本身不得摘转圈——摘转圈是调用方的收尾动作", panel.isLoadingForTest())
 
         panel.hideLoading()
-        assertFalse("hideLoading 后应退出加载态", panel.isLoadingForTest())
+        assertFalse("hideLoading 后应退出加载态", awaitLoading(panel, false))
         assertEquals("加载态应恰好翻转一次进入 + 一次退出", listOf(true, false), seq)
     }
 
@@ -186,6 +186,23 @@ class DiagramPanelTest {
         panel.showLoading()
         assertTrue("前置：应处于加载态", panel.isLoadingForTest())
         panel.clear()
-        assertFalse("clear 必须复位加载态", panel.isLoadingForTest())
+        assertFalse("clear 必须复位加载态", awaitLoading(panel, false))
+    }
+
+    /**
+     * T-CiMarketSplit（2026-11-05）：等加载态翻到期望值，有界轮询替代同步读。
+     *
+     * `JBLoadingPanel.startLoading/stopLoading` 的生效是异步落到 EDT 的，测试线程直接读
+     * `isLoading` 在 CI 的 2 核 runner 上会读到旧值（run#18 test(2)：`clear 必须复位加载态`
+     * 在 DiagramPanelTest.kt:189 假红；同代码的 run#14/#16 是绿的）。有界等待不改变判据：
+     * 真的没复位照样超时红，只是不再把 EDT 调度慢判成缺陷。
+     */
+    private fun awaitLoading(panel: DiagramPanel, expected: Boolean, timeoutMs: Long = 5_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (panel.isLoadingForTest() == expected) return expected
+            Thread.sleep(10)
+        }
+        return panel.isLoadingForTest()
     }
 }

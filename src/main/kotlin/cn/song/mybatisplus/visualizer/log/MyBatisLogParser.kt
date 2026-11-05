@@ -309,7 +309,15 @@ internal fun parseParams(text: String): List<LogSqlParam> {
     return result
 }
 
-/** `null` 分支在前（见 [parseParams] KDoc）；`\A`/`\z` 锚定避免跨参数误配。 */
+/**
+ * `null` 分支在前（见 [parseParams] KDoc）；`\A`/`\z` 锚定避免跨参数误配。
+ *
+ * T-CrossChannelResidual（20261105）：类型分组由 `[A-Za-z_$][\w$]*` 放宽为 `[A-Za-z_$][\w$.]*`，
+ * 允许全限定类型名（`42(java.lang.Long)`）。原口径匹配不上 → 回落逗号粗分 → `value` 里残留
+ * `(java.lang.Long)`、`type=null`，与控制台还原后的字面量形态分叉（`LogSqlRestorer.PLAIN_TYPES`
+ * 本就有 `java.lang.*` 条目，但解析器从不产出这种形态，那段映射等于死代码）。
+ * 真实 MyBatis 日志打简单类名，故现场不可达；放宽只为关掉这个边界并让既有映射真正生效。
+ */
 private val PARAM_REGEX = Regex(
-    """(?:\A|,\s*)(null)(?=,\s*|\z)|(?:\A|,\s*)(.+?)\(([A-Za-z_$][\w$]*(?:\[\])*)\)(?=,\s*|\z)""",
+    """(?:\A|,\s*)(null)(?=,\s*|\z)|(?:\A|,\s*)(.+?)\(([A-Za-z_$][\w$.]*(?:\[\])*)\)(?=,\s*|\z)""",
 )
