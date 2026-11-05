@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.4-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.4-beta.1/mybatis-plus-sql-visualizer-2026.11.4-beta.1.zip",
-  "changeNotes": "修复 Oracle 数据库的增强捕获只采到连接校验 SQL、MyBatis 业务 SQL 一条不出的问题，业务 SQL 现在全部可见并带绑定参数\n修复同一条执行失败的语句重复上报 3 条的问题\n打开预览不再自动弹出数据源选择列表；没有唯一目标时面板保持未绑定，点「执行 SQL」时再选源\n修复改了 IDEA 方言并刷新预览后，底部方言红条仍按旧方言报冲突的问题，现在与顶部状态、实际渲染同源\n修复控制台数据源下拉刷新时在界面线程读 PSI、IDE 日志刷 SEVERE 且界面卡顿的问题\n修复执行 SQL 时在界面线程做目录查找、IDE 日志刷慢操作告警的问题\n修复执行与方言映射派发没有走写安全模态、日志出现 Write-unsafe 告警的问题，写文档不再有被平台拒绝的风险\n好用的话，欢迎到 Marketplace 页评分留言",
+  "version": "2026.11.4-beta.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.4-beta.2/mybatis-plus-sql-visualizer-2026.11.4-beta.2.zip",
+  "changeNotes": "没有匹配方言的数据源时，直接点名该给哪个源启用方言，并给出「打开数据源属性」入口，不再只丢一段红字让人自己找\n修复 Oracle 数据库的增强捕获只采到连接校验 SQL、MyBatis 业务 SQL 一条不出的问题，业务 SQL 现在全部可见并带绑定参数\n修复同一条执行失败的语句重复上报 3 条的问题\n打开预览不再自动弹出数据源选择列表；没有唯一目标时面板保持未绑定，点「执行 SQL」时再选源\n修复改了 IDEA 方言并刷新预览后，底部方言红条仍按旧方言报冲突的问题，现在与顶部状态、实际渲染同源\n修复控制台数据源下拉刷新时在界面线程读 PSI、IDE 日志刷 SEVERE 且界面卡顿的问题\n修复执行 SQL 时在界面线程做目录查找、IDE 日志刷慢操作告警的问题\n修复执行与方言映射派发没有走写安全模态、日志出现 Write-unsafe 告警的问题，写文档不再有被平台拒绝的风险\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-04",
   "sinceBuild": "243"
 }
