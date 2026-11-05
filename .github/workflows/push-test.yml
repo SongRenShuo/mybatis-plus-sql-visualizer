@@ -58,8 +58,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # 兜底动作本身不该把推送轮打红：查询失败按「未知」处理并跳过派发
-          set -uo pipefail
+          # 兜底动作本身不该把推送轮打红。
+          # ⚠️GitHub 对 `run:` 的包装是 `bash -e {0}`（日志里可见 shell: /usr/bin/bash -e {0}），
+          # 所以**不能用 pipefail，也不能让管道里任何一段返回非零**——run#1 就是 grep 没匹配到
+          # （本轮 0 轮夜间轮＝正常情况）退出 1，被 -e 直接中止，step 报「Process completed with exit code 1」。
+          set -u
           # 判据＝**本轮 cron 周期**，不是「日历日」：cron 是 18:00Z，所以「最近一次应触发时刻」
           # 是今天的 18:00Z；若现在还没到 18:00Z，则是昨天的 18:00Z。这之后有过夜间轮就不派发。
           # 2026-11-06 首次落地的坑：按「UTC 日历日」判，白天手动跑的那轮（run#9，14:11Z）把
@@ -69,7 +72,10 @@ jobs:
           if [ "$now" -lt "$due" ]; then due=$(date -u -d "yesterday 18:00" +%s); fi
           due_iso=$(date -u -d "@$due" +%Y-%m-%dT%H:%M:%SZ)
           echo "本轮 cron 应触发时刻：$due_iso"
-          count=$(gh run list --repo "$REPO" --workflow nightly-full.yml --limit 20             --created ">=$due_iso" --json databaseId 2>/dev/null | grep -o '"databaseId"' | wc -l | tr -d ' ')
+          # grep -c 在 0 命中时退出码为 1（正常路径！），用 || true 保住 stdout 的 "0"
+          count=$(gh run list --repo "$REPO" --workflow nightly-full.yml --limit 20 \
+            --created ">=$due_iso" --json databaseId 2>/dev/null | grep -c '"databaseId"' || true)
+          count=$(printf '%s' "$count" | tr -d ' ')
           if ! [[ "$count" =~ ^[0-9]+$ ]]; then
             echo '::warning::查询本轮夜间轮失败（gh 调用异常），本轮跳过兜底派发'
             exit 0
