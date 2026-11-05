@@ -516,6 +516,41 @@ internal fun isConsoleFallbackWithoutSource(entry: LogSqlEntry): Boolean =
     }
 
 /**
+ * T-CrossChannelDedupe（20261105）：**跨通道同源未折叠**的诊断行——同 crossKey（占位符版 rawSql +
+ * 参数值签名）、异 dedupeKey（两套还原器口径分叉），且在折叠窗内，却仍未折成一行。
+ *
+ * 用途：这次现场（同一条 INSERT 一行带耗时/位置、一行全 `—`）只能靠截图反推，因为没有「键不同 →
+ * 各占一行」的痕迹。修完之后这行仍要保留——它是「还原器又分叉了、且兜底也接不住」的长期哨兵。
+ *
+ * **内容红线**（沿用 [provenanceDiagText]）：只有 crossKey 指纹前缀、两侧 dedupeKey 前缀与通道名——
+ * 绝不含 SQL 原文、参数值与连接凭据（诊断行进 idea.log）。
+ */
+internal fun crossChannelUnfoldedDiagText(
+    crossKey: String,
+    existing: LogSqlEntry,
+    incoming: LogSqlEntry,
+): String =
+    "跨通道同源未折叠: crossKey=${crossKey.take(8)} " +
+        "dedupeA=${existing.dedupeKey.take(8)}(通道=${existing.captureProvenance}) " +
+        "dedupeB=${incoming.dedupeKey.take(8)}(通道=${incoming.captureProvenance})"
+
+/**
+ * T-CrossChannelDedupe：跨通道等价键**折叠成功**的诊断行（与 [crossChannelUnfoldedDiagText] 同红线：
+ * 只有指纹前缀、通道与升级面）。它回答「兜底真的在工作」，是 §6.4 真机复验「兜底触发次数」的读数来源；
+ * 未折叠哨兵与它分开成两行，故 `跨通道同源未折叠` 的计数为 0 仍可当作「无残余分叉」的判据。
+ */
+internal fun crossChannelMergeDiagText(
+    crossKey: String,
+    existing: LogSqlEntry,
+    incoming: LogSqlEntry,
+    merged: LogSqlEntry,
+): String =
+    "跨通道等价键融合: crossKey=${crossKey.take(8)} " +
+        "dedupeA=${existing.dedupeKey.take(8)}(通道=${existing.captureProvenance}) " +
+        "dedupeB=${incoming.dedupeKey.take(8)}(通道=${incoming.captureProvenance})" +
+        "→${merged.captureProvenance} 升级=${mergeUpgradedAspects(existing, merged)}"
+
+/**
  * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）走同一函数天然等价；
  * 截断签名不同则拒绝配对；相同前缀的碰撞风险仍属于既有签名表示边界，本次不改编码。
  */
