@@ -16,7 +16,7 @@ plugins {
 // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
 // 版本 + 中段版本 + 最新版本；首次运行下载各发行版（体积大，gradle.properties 已配代理）。
 // T-M31.1/2 提速：验证耗时与版本数线性（243≈1min / 253≈5.7min / 262≈7.5min，字节码分析不可缓存）——
-// 三态 `-PverifyIdes`：默认全量三版本（发布/里程碑）；minimal 边界 243+262（253 被两头覆盖）；
+// 三态 `-PverifyIdes`：默认全量三版本（发布/里程碑）；minimal 边界 243+263（253 被两头覆盖）；
 // smoke 只 243 构建基准（约 1.5min，日常每次开发后兼容冒烟；高版本 API 移除风险由发布前全量兜底）。
 intellijPlatform {
     pluginVerification {
@@ -31,17 +31,17 @@ intellijPlatform {
                 "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "minimal" -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 }
                 // T-CiMatrix（2026-11-04）：单版本选择——CI matrix 三 job 并行各验一个目标，
                 // 把三目标串行的约 5 分钟压到一个目标的墙钟。本地发版仍走默认全量三版本。
                 "243" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "253" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-                "262" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
+                "263" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 else -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.4")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
                 }
             }
         }
@@ -225,12 +225,12 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
         }
         val targets = when (verifyIdes) {
             "smoke" -> listOf(ide243)
-            "minimal" -> listOf(ide243, ideDir("idea-2026.2.4-win"))
+            "minimal" -> listOf(ide243, ideDir("idea-2026.3-win"))
             // T-CiMatrix：单版本目标（CI matrix 并行用）
             "243" -> listOf(ide243)
             "253" -> listOf(ideDir("idea-2025.3.5-win"))
-            "262" -> listOf(ideDir("idea-2026.2.4-win"))
-            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.4-win"))
+            "263" -> listOf(ideDir("idea-2026.3-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.3-win"))
         }
         buildList {
             add("check-plugin")
@@ -306,7 +306,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 // 不覆盖此处——market 拆分从未试过。
 //
 // 结构：
-//   - 三个单目标子任务 verifyMarketplace243/253/262，各配**独立 verifier home**
+//   - 三个单目标子任务 verifyMarketplace243/253/263，各配**独立 verifier home**
 //     （marketplace-243 等，P-1：并发冲突面只存在于共享 home；子 home 一次性从主 home
 //     种子拷贝，不付 3×3.33GB 冷下载税）；
 //   - 聚合任务**保留原任务名 verifyMarketplace**——releaseGate dependsOn、gradle-gate.ps1
@@ -324,7 +324,7 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
 val mpMarketTargets: List<Pair<String, String>> = listOf(
     "ideaIU-2024.3.7.1-win" to "243",
     "idea-2025.3.5-win" to "253",
-    "idea-2026.2.4-win" to "262",
+    "idea-2026.3-win" to "263",
 )
 
 // 三个单目标子任务与聚合任务共同的 zip/报告路径解析（配置期捕获为局部值，CC 可序列化）。
@@ -422,8 +422,8 @@ mpMarketTargets.forEach { (_, tag) ->
 
 val verifyMarketplace = tasks.register("verifyMarketplace") {
     group = "verification"
-    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"
-    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/263，verdict 判定在此统一执行）"
+    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace263")
     // T-ReleasePerf11 券01 补丁（20261103）：与 verifyGate 的 verifyOnly 语义对齐——重验已存在
     // 发行包时不再重打包（Jar 带 MPV-Build 时间戳恒重跑，重打包会让「已验证的字节」与
     // 「最终上传的字节」不是同一份）。
@@ -555,7 +555,7 @@ tasks {
     }
     register("verifyFull") {
         group = "verification"
-        description = "发布前全量验证（三版本 243+253+262，权威门禁 verifyGate）"
+        description = "发布前全量验证（三版本 243+253+263，权威门禁 verifyGate）"
         dependsOn("verifyGate")
     }
 

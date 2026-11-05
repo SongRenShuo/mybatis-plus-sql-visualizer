@@ -2,7 +2,7 @@ name: 插件门禁与发行（手动）
 run-name: 插件 CI（${{ inputs.mode }}）· ${{ inputs.branch || github.ref_name }}
 
 # 四种运行模式（同一条流水线，按 mode 裁剪步骤）：
-#   gate    全量分片测试 + buildPlugin/verifyPlugin + verifyGate(243/253/262) + verifyMarketplace，产物留 14 天，不发布
+#   gate    全量分片测试 + buildPlugin/verifyPlugin + verifyGate(243/253/263) + verifyMarketplace，产物留 14 天，不发布
 #   release 同上，跑完直接发布 GitHub Release
 #   publish 只下载某次已成功门禁运行的插件产物并发布——不重建、不重跑门禁，发出去的字节就是门禁验过的那一份
 #   tests   只跑全量分片测试
@@ -272,7 +272,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: ['243', '253', '262']
+        tag: ['243', '253', '263']
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -338,7 +338,7 @@ jobs:
           ":verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
-  # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
+  # （-PverifyIdes=243/253/263 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
   # targets 两处都已支持）。原串行 2m43s 的三段现在同起，墙钟 ≈ 单目标 1m27s + 缓存/下载开销。
   verify:
     needs: build
@@ -346,7 +346,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ide: ['243', '253', '262']
+        ide: ['243', '253', '263']
     runs-on: windows-latest
     timeout-minutes: 30
 
