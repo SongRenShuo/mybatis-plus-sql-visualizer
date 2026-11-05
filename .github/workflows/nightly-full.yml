@@ -281,7 +281,7 @@ jobs:
           $out = @("# CI 冒烟子集（全量见本地 .local/dialect-external-matrix.properties）", "instances = " + ($keep -join ', '))
           foreach ($k in $keep) { $out += $byKey[$k] }
           Set-Content -LiteralPath '.local/dialect-external-matrix.properties' -Value $out -Encoding utf8
-          Write-Host "方言矩阵已落盘（子集 $($keep -join ',' / '')，原矩阵 $(($byKey.Keys | Measure-Object).Count) 个实例）"
+          Write-Host ("方言矩阵已落盘（子集 {0}；原矩阵 {1} 个实例中取 {2} 个）" -f ($keep -join ','), $byKey.Keys.Count, $keep.Count)
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
