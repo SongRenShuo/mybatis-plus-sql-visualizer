@@ -376,3 +376,15 @@ marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看）�
 
 教训写在这里而不是只写在脚本里：**定时类自动化要有「谁保证它真的跑了」的答案**。
 GitHub Actions 的答案只能是「另一条确定会跑的 workflow」。
+
+### 12.4 夜间十腿全绿首轮读数（2026-11-06 凌晨，run#11）
+
+`build` 7.3 / `verifyplugin` 8.5 / `marketplace` 7.4 · 7.2 · 9.8（263 含约 4 分钟 IDE provisioning）/
+`tests` 8.1~10.8 ×5 / `fast` 9.1 · 9.8 / `extras` 8.7 / `database` 11.2 / `e2e` 4.3 / `dialect` 24.9。
+**17 个 job 全绿，整轮约 25 分钟**，关键路径仍是方言腿。
+
+三条结论：
+- 夜间现在真正覆盖「测试 + 兼容 + 市场」三面，而这三面此前只有手动 dispatch 才有读数；
+- `marketplace(263)` 在补了 provisioning 前置后转绿——**2026.3 在 CI 上的 marketplace 与 verifyPlugin
+  首次拿到实跑读数**（9.8 分钟，其中约 4 分钟是解包目标 IDE 的一次性成本）；
+- `fast` 两片都绿（上一轮的 `ShardingSphereLogParserTest` 没复现，属偶发，已补断言消息待下次定因）。
