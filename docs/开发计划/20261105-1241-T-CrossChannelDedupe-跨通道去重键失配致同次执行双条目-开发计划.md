@@ -310,5 +310,28 @@ crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
 - 绿：`CrossChannelDedupeTest` 12/0/0、`ParamCaptureTest` 5/0/0、`ParamEdgeCaseRegressionTest` 20/0/0、`DualParserIntegrationTest` 11/0/0、`SqlLogCaptureRealtimeScenarioTest` 9/0/0、`AgentLogTimeParityTest` 14/0/0、`CaptureRulesTest` 15/0/0。
 - 反向验证：还原捕获面 → `ParamCaptureTest` 恰 2 红（四参 setObject、四族 setter）；还原正则 → 点号类型用例恰 1 红。恢复后转绿。
 
-**仍未覆盖**：`byte[]` / `Blob` / `Clob` 类参数的**值文本**两侧天然不同（控制台日志是 `[B@1a2b`，agent 是 `<byte[]>`），签名无法对齐，兜底接不住。这类参数在普通业务里少见，且没有稳定可比的文本形态；若现场出现，正解是让跨通道匹配退到「rawSql + 参数个数 + 参数位置类型」，属独立券。
+**仍未覆盖**：`byte[]` / `Blob` / `Clob` 类参数的**值文本**两侧天然不同（控制台日志是 `[B@1a2b`，agent 是 `<byte[]>`），签名无法对齐，兜底接不住。这类参数在普通业务里少见，且没有稳定可比的文本形态；若现场出现，正解是让跨通道匹配退到「rawSql + 参数个数 + 参数位置类型」，属独立券。**→ 已于 §9.8 用签名归一解决。**
+
+### 9.8 二进制参数签名归一（2026-11-05，分支 `t-binary-param-signature`，合并 `83e2520f` 之后）
+
+§9.7 末条登记的未覆盖面。它的危险不在频率，而在**完全静默**：控制台日志对二进制参数打对象地址
+（`[B@1a2b3c`、`com.mysql.cj.jdbc.Blob@7f3a`），agent 侧 `ParamCapture.renderValue` 检测到默认
+toString 后降级为 `<byte[]>` / `<Blob>`——两侧值文本不可比 → 签名不等 → crossKey 查不到 → 不折叠；
+而 `跨通道同源未折叠` 哨兵只在 crossKey **相同**时才触发，于是既不会折叠也不会留痕，真机上只能靠
+截图反推，与最初报障同一处境。
+
+修法（`LogSqlModels.kt`）：
+
+- `paramSignatureToken`：二进制族归一为 `<binary>`——**只影响匹配，不影响展示**（列表仍显示各自原文）。
+- `isBinaryParam` 三条判据任一成立：类型标注命中二进制族（`byte[]` / `[B` / `Blob` / `Clob` / `NClob` /
+  `InputStream` / `Reader` 及全限定名）；值是对象默认 toString（`[B@hex`）；值是 agent 降级形态
+  （`<byte[]>` / `<Blob>`）且内层类型名命中同一集合。普通字符串（如 `deadbeef`）不会被误判。
+- `logTimeParamSignature` 改走该函数；null token 仍是 `"\u0000"`，与原口径逐字一致，既有日志时间配对语义不变。
+
+测试与读数：`CrossChannelDedupeTest` 补 3 例（`byte[]`、`Blob`、不误伤普通字符串）；绿读数
+`CrossChannelDedupeTest` 15/0/0、`AgentLogTimeParityTest` 14/0/0、`SqlLogEntryBufferTest` 59/0/0。
+反向验证：摘掉归一 → 恰 2 红（`byte[]`、`Blob`），普通字符串仍绿；恢复后转绿。
+
+副作用边界（已写进 KDoc）：归一后「同一条 SQL 连续两次执行且参数是不同的二进制内容」签名相同——
+但二进制值本来就不可比，且跨通道折叠还有 5s 窗 + 异通道双重限制，影响限于毫秒级耗时归属。
 
