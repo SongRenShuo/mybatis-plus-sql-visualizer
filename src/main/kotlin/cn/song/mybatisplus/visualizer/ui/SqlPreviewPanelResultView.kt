@@ -534,6 +534,14 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
     }).apply {
         autoResizeMode = com.intellij.ui.table.JBTable.AUTO_RESIZE_ALL_COLUMNS
         tableHeader.reorderingAllowed = false
+        // F-13（DBX #317）：列头点击排序——三面板共用 ColumnOrderings 这一套比较逻辑；
+        // 默认无 sortKeys 时视图序 = 模型序（原样渲染），零行为变更。
+        val sorter = javax.swing.table.TableRowSorter(model)
+        val cellOrder = java.util.Comparator<Any?> { a, b ->
+            cn.song.mybatisplus.visualizer.util.ColumnOrderings.compareCells(a, b)
+        }
+        for (i in 0 until model.columnCount) sorter.setComparator(i, cellOrder)
+        rowSorter = sorter
     }
     // O-85：列信息表恢复 Ctrl+A 全选（IDEA 全局 Ctrl+A 被「选中文本」语义抢占、
     // JBTable 默认 selectAll 绑定在此场景不生效——显式绑 InputMap/ActionMap）。
