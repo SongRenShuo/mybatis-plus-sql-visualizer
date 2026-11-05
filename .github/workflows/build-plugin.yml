@@ -110,9 +110,9 @@ jobs:
         run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
 
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
-      # T-CiSplitMarketplace（2026-11-05 run#7 实测）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
-      # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点——
-      # 拆出去后 build 从 13.3 降到约 8.5，marketplace 与 verify/test 三路并行。
+      # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
+      # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点。
+      # 拆出后 build 实测 13.3 → 7.3 分钟（run#9），marketplace 与 verify/test 三路并行。
 
       - name: 上传编译产物（供 verify / test 的 matrix job 复用，避免各自重编译）
         # T-CiMatrix（2026-11-04 run#1 实证）：必须 !cancelled() 而非默认的 success()——
@@ -419,14 +419,57 @@ jobs:
             sub-projects/sql-visualizer-agent/build/test-results/
           if-no-files-found: ignore
 
+  # T-CiGateAggregate（2026-11-05，取自 t8y2/dbx 的 ci-gate 思路）：聚合门禁。
+  # 背景：GitHub 里 skipped 的 job 不会让整轮运行变红——而 verify / marketplace / test 都带
+  # if: !cancelled()，一旦某条 leg 因条件求值意外为假、matrix 写错、或 needs 链断掉而被 skip，
+  # 运行结论照样可能是绿的，等于「没验也过」。dbx 用 ci-gate.mjs 逐 job 校验「该跑的必须成功、
+  # 不该跑的才允许 skipped」（其 .github/scripts/ci-gate.mjs:4-66）。
+  # 这里把同一语义落在 needs 上：四条腿必须全部 success，skipped 也判红并点名是哪条。
+  gate:
+    needs: [build, marketplace, verify, test]
+    if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
+    runs-on: windows-latest
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 校验四条腿的真实结论
+        env:
+          R_BUILD: ${{ needs.build.result }}
+          R_MARKETPLACE: ${{ needs.marketplace.result }}
+          R_VERIFY: ${{ needs.verify.result }}
+          R_TEST: ${{ needs.test.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $legs = [ordered]@{
+            'build'       = $env:R_BUILD
+            'marketplace' = $env:R_MARKETPLACE
+            'verify'      = $env:R_VERIFY
+            'test'        = $env:R_TEST
+          }
+          $bad = @()
+          foreach ($k in $legs.Keys) {
+            $v = $legs[$k]
+            Write-Host ("{0,-12} = {1}" -f $k, $v)
+            # success 之外一律判红：skipped 意味着这条门禁没跑（不是「不需要跑」）
+            if ($v -ne 'success') { $bad += "$k=$v" }
+          }
+          if ($bad.Count -gt 0) {
+            throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
+          }
+          Write-Host '四条腿全部 success：build / marketplace / verify×3 / test×5'
+
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
     # （仓库 Settings → Environments → release 配 required reviewers；未配审批人则直接发布）
-    # T-CiMatrix：门禁已拆为 build / verify / test / marketplace 四个 job，release 模式须全部绿；
-    # publish 模式只依赖 build（它只下载既有产物，不看门禁 job 结果）。
-    needs: [build, verify, test, marketplace]
+    # T-CiMatrix：门禁已拆为 build / verify / test / marketplace 四个 job，release 模式由聚合门禁
+    # （gate）统一判定四腿全 success；publish 模式只依赖 build（它只下载既有产物，不看门禁结果）。
+    needs: [build, verify, test, marketplace, gate]
     # !cancelled() 而不是 always()：取消运行时不能把发布 job 拉起来
-    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.build.result == 'success' && needs.verify.result == 'success' && needs.test.result == 'success' && needs.marketplace.result == 'success')) }}
+    if: ${{ !cancelled() && (inputs.mode == 'publish' || (inputs.mode == 'release' && needs.gate.result == 'success')) }}
     environment: release
     runs-on: windows-latest
     timeout-minutes: 30
