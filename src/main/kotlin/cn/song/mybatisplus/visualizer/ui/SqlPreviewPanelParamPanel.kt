@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.TypedLiteralRenderer
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -1884,6 +1885,11 @@ internal fun SqlPreviewPanel.renderParamValue(v: String?, hint: ParamHint?, sour
     // T-PT-04 / O-79：空输入按设置策略出 ?（默认占位档）/ NULL / ''——**仅对带签名类型信息的
     // 参数**生效；无类型信息（UNKNOWN）恒 `?` 占位提示（宁缺勿错）
     if (v.isBlank()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
+    // F-01 类型感知字面量：类型标注优先取 hint.typeText，缺失时用面板已有的签名类别
+    // （paramKindOf）派生；UNKNOWN = 无类型信息 → typeText 保持 null → 渲染走既有启发式，
+    // 行为与升级前逐字节一致
+    val typeText = hint?.typeText
+        ?: source?.let { paramKindOf(it).takeIf { kind -> kind != ParamKind.UNKNOWN }?.name }
     val like = hint?.likePosition
     // M19.6（用户实测）：IN 列表多值回填——逗号分割，每个值独立渲染（引号规则同单值），
     // 输入 `1,2` → `('1','2')`（原实现拼成 `'1,2'` 单值）
@@ -1891,18 +1897,18 @@ internal fun SqlPreviewPanel.renderParamValue(v: String?, hint: ParamHint?, sour
         val parts = v.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         // 逗号分割后无有效值（如 `,` 形态）：按空输入档处理
         if (parts.isEmpty()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
-        return parts.joinToString(", ") { renderSingleValue(it, hint) }
+        return parts.joinToString(", ") { renderSingleValue(it, hint, typeText) }
     }
     val escaped = v.replace("'", "''")
     return when {
-        // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）
+        // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）——LIKE 值是文本匹配语义，不参与类型感知
         like != null -> when (like) {
             LikePosition.ANYWHERE -> "'%$escaped%'"
             LikePosition.LEFT -> "'%$escaped'"
             LikePosition.RIGHT -> "'$escaped%'"
             LikePosition.NONE -> "'$escaped'"
         }
-        else -> renderSingleValue(v, hint)
+        else -> renderSingleValue(v, hint, typeText)
     }
 }
 
@@ -1923,9 +1929,18 @@ internal fun SqlPreviewPanel.emptyParamLiteral(): String = when (PluginSettings.
 internal fun SqlPreviewPanel.hasSignatureTypeInfo(source: String?): Boolean =
     source != null && paramKindOf(source) != ParamKind.UNKNOWN
 
-/** 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。 */
+/**
+ * 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。
+ *
+ * F-01 类型感知：[typeText] 非 null 时先交 [TypedLiteralRenderer] 按「类型 × 方言」判字面量
+ * （判不了返回 null 落回下方既有规则——回退行为与升级前逐字节一致）；方言取面板当前生效方言
+ * （[SqlPreviewPanel.currentDialect]，未判出为 null → 渲染器走通用档）。
+ */
 
-internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?): String {
+internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?, typeText: String? = null): String {
+    if (typeText != null) {
+        TypedLiteralRenderer.render(raw, typeText, currentDialect())?.let { return it }
+    }
     val escaped = raw.replace("'", "''")
     return when {
         hint?.quote == true -> "'$escaped'"

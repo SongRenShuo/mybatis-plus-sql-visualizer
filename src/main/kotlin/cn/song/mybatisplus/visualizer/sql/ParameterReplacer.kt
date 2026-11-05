@@ -53,6 +53,8 @@ object ParameterReplacer {
      *
      * 替换规则（与面板回填 [SqlPreviewPanel] 一致）：
      *  - 值未填写（空/空白）→ 保留 `?`
+     *  - [ParamHint.typeText] 在场 → 先走 [TypedLiteralRenderer]（F-01 类型感知：按 JDBC/Java
+     *    类型 × 方言出字面量）；渲染器判不了（null）→ 落入下方既有规则，行为不变
      *  - [ParamHint.quote] = true → 单引号包裹（String/日期列）
      *  - [ParamHint.quote] = false → 原样渲染（数值列）
      *  - [ParamHint.quote] = null → 数值启发式（纯数字原样，否则引号包裹）
@@ -66,6 +68,7 @@ object ParameterReplacer {
      * @param sources    参数来源列表（与 SQL 中 `?` 按出现顺序对应）
      * @param paramValues 参数值映射（source → 用户输入值）
      * @param hints      与 [sources] 并行的回填提示（引号规则）；缺失走启发式
+     * @param dialect    F-01：目标方言注册名（`Dialect.name`）；null = 方言未知，类型感知走通用档
      * @return 替换后的可执行 SQL
      */
     fun buildExecutableSql(
@@ -73,6 +76,7 @@ object ParameterReplacer {
         sources: List<String>,
         paramValues: Map<String, String>,
         hints: List<ParamHint> = emptyList(),
+        dialect: String? = null,
     ): String {
         if (sources.isEmpty()) return sql
         val positions = placeholderPositions(sql)
@@ -84,7 +88,7 @@ object ParameterReplacer {
             sb.append(sql, prev, pos)
             val source = sources.getOrNull(paramIndex)
             val value = source?.let { paramValues[it] }
-            sb.append(renderValue(value, hints.getOrNull(paramIndex)))
+            sb.append(renderValue(value, hints.getOrNull(paramIndex), dialect))
             paramIndex++
             prev = pos + 1
         }
@@ -93,11 +97,15 @@ object ParameterReplacer {
     }
 
     /**
-     * 单值渲染：按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。
+     * 单值渲染：[ParamHint.typeText] 在场先走 [TypedLiteralRenderer]（F-01，判不了返回 null
+     * 落回旧规则）；再按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。
      * 空值/空白 → 返回 `?`（保留占位符）。
      */
-    private fun renderValue(value: String?, hint: ParamHint?): String {
+    private fun renderValue(value: String?, hint: ParamHint?, dialect: String?): String {
         if (value.isNullOrBlank()) return "?"
+        if (hint?.typeText != null) {
+            TypedLiteralRenderer.render(value, hint.typeText, dialect)?.let { return it }
+        }
         val escaped = value.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"
@@ -128,9 +136,15 @@ object ParameterReplacer {
      * @param sql         含 `:name` 的 SQL（`?` 与 `:name` 可共存）
      * @param paramValues 参数值映射（source → 用户输入值）；source 即命名参数名
      * @param hints       参数名 → 引号提示；缺失走启发式（数值裸 / 字符串引号）
+     * @param dialect     F-01：目标方言注册名；null = 方言未知，类型感知走通用档
      * @return 替换后的 SQL
      */
-    fun replaceNamedParams(sql: String, paramValues: Map<String, String>, hints: Map<String, ParamHint>): String {
+    fun replaceNamedParams(
+        sql: String,
+        paramValues: Map<String, String>,
+        hints: Map<String, ParamHint>,
+        dialect: String? = null,
+    ): String {
         if (paramValues.isEmpty() || hints.isEmpty()) return sql
         return NAMED_PARAM_PATTERN.replace(sql) { m ->
             val name = m.groupValues[1]
@@ -138,13 +152,16 @@ object ParameterReplacer {
             if (value.isNullOrBlank()) {
                 m.value // 空值 → 原样保留 `:name`
             } else {
-                renderNamedValue(value, hints[name])
+                renderNamedValue(value, hints[name], dialect)
             }
         }
     }
 
-    /** 命名参数单值渲染：按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。 */
-    private fun renderNamedValue(value: String, hint: ParamHint?): String {
+    /** 命名参数单值渲染：typeText 在场先走 [TypedLiteralRenderer]；再按 [ParamHint.quote] 决定引号规则。 */
+    private fun renderNamedValue(value: String, hint: ParamHint?, dialect: String?): String {
+        if (hint?.typeText != null) {
+            TypedLiteralRenderer.render(value, hint.typeText, dialect)?.let { return it }
+        }
         val escaped = value.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"

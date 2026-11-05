@@ -599,6 +599,43 @@
                          level="WARNING"
                          dumbAware="true"
                          implementationClass="cn.song.mybatisplus.visualizer.inspection.OgnlTautologyInspection"/>
+
+        <!-- F-02 参数可解析性三规则（闲时任务册 §一之二 F-02）：判定在纯逻辑层
+             （inspection/ParamResolveRules），实现类都是薄壳（照 BannedApi/NEW-26 范式）。
+             **默认关闭（enabledByDefault=false）**：三条规则的「误报 0」口径依赖工程索引可见面
+             （DTO 类型解析 / 同 namespace 片段扫描 / 接口方法解析），索引盲区（JAR 内 mapper、
+             未编译接口、跨工程片段）下的残余误报无法静态排除——先以 disabledByDefault 落地，
+             语料验证跑满一轮 0 误报后再评估默认开（与 NEW-26 P-4 口径一致）。 -->
+        <localInspection language=""
+                         shortName="SqlvParamProperty"
+                         key="inspection.sqlv.paramProperty.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="false"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.ParamPropertyInspection"/>
+        <localInspection language=""
+                         shortName="SqlvParamReference"
+                         key="inspection.sqlv.paramRef.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="false"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.ParamReferenceInspection"/>
+        <localInspection language=""
+                         shortName="SqlvMissingFragment"
+                         key="inspection.sqlv.fragment.displayName"
+                         bundle="messages.MpSqlVisualizerBundle"
+                         groupKey="inspection.sqlv.groupName"
+                         groupBundle="messages.MpSqlVisualizerBundle"
+                         enabledByDefault="false"
+                         level="WARNING"
+                         dumbAware="true"
+                         implementationClass="cn.song.mybatisplus.visualizer.inspection.MissingSqlFragmentInspection"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
