@@ -727,7 +727,10 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 })
             }
         } finally {
-            if (!closed) fixture.close()
+            // 20261105：项目真实关闭成功时也必须收掉夹具自建的数据源——`close()` 里那步
+            // `removeDataSource` 是应用级清理，不随项目销毁发生（LocalDataSourceManager 是
+            // 应用级服务），漏掉就把 `UI016-offline-mp_demo` 留在后续用例的数据源列表里。
+            if (!closed) fixture.close() else fixture.releaseDataSource()
             com.intellij.openapi.util.Disposer.dispose(parent)
             directory.toFile().deleteRecursively()
         }
@@ -761,6 +764,24 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 .invoke(this, "mysql.8")
             resolveDriver()
             sources.addDataSource(this)
+            // 20261105：建数据源后必须等它在 DbPsiFacade 里可见，再让用例 attach 控制台。
+            // 机制（javap 实证 + 仓内既有记录，见 DbIntegrationProjectSupport.awaitConnectionsReleased
+            // 注释）：JdbcConsole.isValid() = !isDisposed && isViewValid && isTargetValid，
+            // isTargetValid = DataSourceUtil.isDataSourceValid(DbPsiFacade.getInstance(project), ds)
+            // ——facade 的数据源列表是缓存，新增后经 invokeLater 失效重建。缓存未跟上的窗口里
+            // 新建控制台 isValid=false，而 ScriptingDatabaseSessionClientHolder.getActiveClients
+            // 会对每条 !isValid 的控制台直接 Disposer.dispose（attachConsole / build() 内部都会
+            // 走它）。引擎终止（上一个用例关连接）恰好也会触发这次清扫，于是「刚 attach 的控制台
+            // 已被 dispose」——20261105 实测复现组合：testPrepareExecuteAndParameterChangeEndToEnd
+            // 之后紧接本用例，attachConsole 返回即已 dispose（BridgeDataBus.initParent 硬抛）。
+            // 修复后同一轮仍抓到一次真实陈旧窗口（打印 `visible in DbPsiFacade after 56ms (1 ticks)`），
+            // 说明这个等待不是摆设：不补上就会被清扫。
+            awaitDataSourceVisibleInPsiFacade(owner, this)
+        }
+
+        /** 幂等收掉夹具自建的数据源（项目真实关闭路径也要走一次）。 */
+        fun releaseDataSource() {
+            runCatching { sources.removeDataSource(source) }
         }
 
         fun track(client: com.intellij.database.console.JdbcConsole) {
@@ -803,7 +824,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 sessions.forEach { com.intellij.openapi.util.Disposer.dispose(it) }
             } finally {
                 DataSourceSelector.releaseForPanel()
-                sources.removeDataSource(source)
+                releaseDataSource()
             }
         }
     }
@@ -824,6 +845,41 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
         super.tearDown()
     }
+}
+
+/**
+ * 有界等待新建数据源出现在 `DbPsiFacade` 的数据源列表里（= 控制台 `isTargetValid()` 的前提）。
+ *
+ * 超时**硬失败**而不是静默放行：facade 不可见时控制台 `isValid()=false`，平台清扫会把刚
+ * attach 的控制台 dispose 掉，后续断言只会报出「parent 已 dispose」这种离故障源很远的形态。
+ * 每轮派发一次 EDT 队列——facade 的缓存失效是 `Application.invokeLater`，而测试方法体本身
+ * 跑在 EDT（`EdtTestUtil.runInEdtAndWait`），纯 sleep 会把失效任务永远堵在队列里。
+ */
+private fun awaitDataSourceVisibleInPsiFacade(
+    project: com.intellij.openapi.project.Project,
+    ds: LocalDataSource,
+    timeoutMs: Long = 15_000,
+) {
+    val started = System.currentTimeMillis()
+    var ticks = 0
+    while (System.currentTimeMillis() - started < timeoutMs) {
+        val visible = runCatching {
+            com.intellij.database.psi.DbPsiFacade.getInstance(project).findDataSource(ds.uniqueId) != null
+        }.getOrDefault(false)
+        if (visible) {
+            if (ticks > 0) {
+                println("[DB-IT] data source '${ds.name}' visible in DbPsiFacade after ${System.currentTimeMillis() - started}ms ($ticks ticks)")
+            }
+            return
+        }
+        com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        Thread.sleep(50)
+        ticks++
+    }
+    error(
+        "前提失败：数据源 '${ds.name}' 在 ${timeoutMs}ms 内未出现在 DbPsiFacade —— " +
+            "此时 JdbcConsole.isTargetValid()=false，平台清扫会 dispose 刚 attach 的控制台",
+    )
 }
 
 /**
