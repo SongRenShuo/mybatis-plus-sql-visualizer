@@ -38,11 +38,26 @@ permissions:
   contents: write
   actions: read
 
-# 同一分支串行排队（三种模式共用一组）：既避免两次发行并发覆盖同一 Release 资产，
-# 也避免门禁/全量测试与发行抢同一台 runner 的资源
+# 并发分组（2026-11-05 改）：gate 与 release/publish **分开两组**。
+#
+# 为什么拆：原先三种模式共用一组且 cancel-in-progress: false，对「手动偶尔跑」是对的，但一旦
+# 接上 push 触发，高频推送会按 13~15 分钟/轮串行积压——第 N 次推送的结论要等 (N-1)×14 分钟，
+# 中间那些轮次测的全是过时提交。而直接开 cancel-in-progress: true 又会让「新推送取消正在进行的
+# 发行」，这是绝对不能发生的。
+#
+# 现在：
+#   - gate（含未来 push 触发的空 mode）自成一组，新提交取消同组旧运行 → 队列永远只留最新提交，
+#     延迟固定；
+#   - release / publish 单独一组且永不取消（发行不能被中途打断，也不允许两次发行并发覆盖同一
+#     Release 资产）；它们与 gate 组可并行，但两边都只有一个 build 会写 gradle 缓存，
+#     偶发并发写失败只会退化成下游缓存未命中（慢），不会出错。
+#
+# 注意：push 事件没有 inputs，`inputs.mode` 为空串——上面两个表达式都按「非 release/publish
+# 即 gate」写，空串会落到 gate 组且可取消，语义正确。
 concurrency:
-  group: plugin-ci-${{ inputs.branch || github.ref_name }}
-  cancel-in-progress: false
+  group: >-
+    plugin-ci-${{ (inputs.mode == 'release' || inputs.mode == 'publish') && 'release' || 'gate' }}-${{ inputs.branch || github.ref_name }}
+  cancel-in-progress: ${{ inputs.mode != 'release' && inputs.mode != 'publish' }}
 
 
 jobs:
