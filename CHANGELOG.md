@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [2026.11.6-beta.1] - 2026-11-06
+
+> 内测版（Gitee 抢先体验通道）。范围＝v2026.11.4 发行包之后的全部用户可见增量：自研框架页面数据源的 HQL 识别与转换、Mapper 双向跳转接入原生快捷键两项新能力，跨通道重复条目与工具语句误报超时两项修复，以及日志列表可选的「类名#方法名」显示。
+
+### Added
+- **自研框架 `<pages>` 页面数据源识别 HQL 并转换为可执行 SQL（T-PagesHql，用户反馈「这种场景下的 hql 没有正常识别」）**：`<pages>` 页面 XML 的 `<datasource>` 此前一律按原生 SQL 直显——`FROM BaseLocation location` 原样展示（真执行会报「表不存在」）、`location.updateInfo.beDelete` 这类实体属性路径不映射列名、`:name` / `?1` / `#{...}` 参数一概不提取。现在按「entityClass 与语句根标识符的关系」判定源语言（用户样本形态 `FROM BaseLocation` ↔ `entityClass="...BaseLocation"` 判 HQL；demo 的 `orderMaintain` 反例——entityClass 是 Order、`<datasource>` 却是原生 SQL——保证「有 entityClass」不会被误判成 HQL），命中后复用既有 JPA/HQL 转换管道：实体名→表名、按别名作用域的属性路径→列名、JOIN 副表实体映射、命名/位置参数提取；框架占位符 `#{SESSION_BASE_ORGAN}` 预处理成命名参数 `:SESSION_BASE_ORGAN` 走既有参数链（字符串字面量内的 `#{...}` 不替换，与 HQL 自带 `:x` 同名时合并为同一参数）。泛化件同批落地：页面标签名不再限定 `maintainPage`（listPage 等任意页面标签都认），`<dataValue>` 这类无 entityClass 的通用 SQL 载体同样走该判定；gutter 图标与右键预览两条入口都生效。设置新增「自研框架数据源语言（HQL/SQL）」三档：自动（默认，判不准按 SQL）/ 仅 SQL / 仅 HQL。面板元信息行新增「来源: HQL（已转换）」，并新增「原文」只读页签可随时回看转换前文本；无工程索引 / 根实体解析不了 / 转换异常三种情况回退显示原文并给出提示，不报错
+- **Mapper 接口与 XML 语句跳转接入 IDEA 原生快捷键（T-MapperNavShortcut，用户反馈「mapper 和 xml 跳转不支持快捷键，正常应该跟着 IDEA 原生的快捷键支持跳转」）**：此前双向跳转只有 gutter 图标（鼠标专用）——Java 接口方法上 Ctrl+B / Ctrl+Click 无反应，XML 语句标签名上同样无反应（只有 `id` 属性值位置本来就有引用跳转）。现注册平台 `gotoDeclarationHandler` 与 `gotoRelatedProvider` 两个扩展点：Ctrl+B / Ctrl+Click 在 Mapper 接口方法与 XML 语句间双向跳转，Ctrl+Alt+Home 弹出「关联符号」（对侧 Mapper XML 语句 / 接口方法）。handler 优先于 reference 且返回 null 即回落原生，非 Mapper 位置行为零变化；键位归平台 action 所有，用户改 Keymap 自动跟随，插件侧不留第二份键位配置
+
+### Fixed
+- **同一次执行的 SQL 在日志列表留两条，其中一条没有耗时与执行位置（T-CrossChannelDedupe，用户真机报障「部分 INSERT 没有捕获到耗时和执行位置」）**：控制台通道（解析 MyBatis 日志）与增强捕获通道（agent）对同一条 INSERT 各出一条——控制台条目耗时恒为空（MyBatis 对 DML 只打 `Updates: N` 不打耗时行）、无库角标无源码位置，增强通道条目信息齐全，两条并存看着像漏采。信息其实都在，缺的是「两份折叠成一份」：既有去重只认完全相同的去重键，两通道的 SQL 还原器口径不同源（日期族/布尔/全限定类型名/注释内 `?`/参数个数守卫等六类文本差异）导致键永不相等。现加跨通道等价键兜底折叠：5 秒窗口内按归一化等价键折叠为一条，agent 副本到达时融合升级（耗时、影响行数、库角标、可跳转的执行位置补齐），不计入 ⨉N 重复计数；且与「SQL 去重」开关解耦——开关关闭时也折叠，因为这不是重复执行而是同一次执行。二进制参数（byte[]/Blob/Clob）签名归一为 `<binary>`，不再因参数文本不同漏折；同批补齐 agent 参数捕获面（四族 `setObject` 等此前织入点盖到但捕获不到的形态），点号类型名匹配放宽。沙盒再验收又抓到同链路两处一并修掉：①配置周期性下发会在「清空 → 回执」之间放开一道 0.2~1.25 秒的控制台桥放行窗，每轮都让桥完整解析并与 agent 各产一条（闸门抖动），现下发保留上一次确认值，配置未变即无窗；②活性回落判据「静默 ≥10 秒 + 控制台有 SQL」在用户两次操作间隔超 10 秒时就误解封一次，解封瞬间的 SQL 又落成一条无耗时条目，现收窄为「本纪元从未收到过 agent 事件」才回落
+- **工具语句/更新语句执行成功却报「超时」提示（T-TestGapSpeed T8，用户令）**：不产生结果页签的语句（工具语句、更新语句）成功完成时，执行链仍按「等待结果超时」归因，提示引导用户去排查连接与日志——实际 SQL 已成功执行完。现对「已提交且确认完成、只是没有结果页签」的形态给出中性提示：SQL 已提交执行并完成（工具语句/更新语句不产生结果页签），详情见控制台 Output
+
+### Changed
+- **日志列表来源位置后可选显示「类名#方法名」（默认关，T-LogMethodName）**：设置开启后在每条 SQL 的来源位置后追加一段「类名#方法名」，如 `[OrderServiceImpl.java:41] [UserMapper#selectById]`。控制台桥通道的方法名取捕获到的 mapper 语句 id（与来源位置常不是同一个类，故不合并成一段）；增强捕获通道取调用栈里的业务方法。无方法信息的条目（Hibernate、JdbcTemplate、ShardingSphere、旧日志）保持原样
+
 ## [2026.11.4] - 2026-11-04
 
 > 范围＝v2026.11.3 发行包之后的全部用户可见增量：Oracle 增强捕获的 PreparedStatement 登记断链修复、从 dev 回 port 到 master 的五项预览/方言/线程修复，以及空 Runner「方言不匹配」提示的可操作化改造。
