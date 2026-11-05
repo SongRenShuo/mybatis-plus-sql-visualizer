@@ -43,36 +43,44 @@ jobs:
   # 2026-11-05 的 `0 18 * * *`（北京 02:00）到 20:14Z 仍未触发，晚了 2 小时 14 分，
   # 期间 githubstatus 全绿、default_branch=master、workflow state=active、仓库无归档，
   # 历史上 9 轮夜间全是 workflow_dispatch（cron 从上线起一次没跑过）。
-  # 结论：不能把「每晚自动」押在 GitHub 定时器上。这里加一道自愈：**当天还没有夜间轮就派发一次**。
+  # 结论：不能把「每晚自动」押在 GitHub 定时器上。这里加一道自愈：**本轮 cron 周期内还没有
+  # 夜间轮就派发一次**（周期起点＝最近一次应触发的 18:00Z，不是 UTC 日历日）。
   # 判据与夜间自身的 changes 闸门同源——夜间只在「前 24 小时有代码提交」时真跑，而这条 job 只在
   # push 到 master 时执行，所以「有 push 的那天」正好是夜间该跑的那天。
-  # 幂等：先查当天是否已有 nightly 轮（任何 event），有就跳过，避免和迟到的 schedule 撞成两轮。
+  # 幂等：先查本轮周期内是否已有 nightly 轮（任何 event），有就跳过，避免和迟到的 schedule 撞成两轮。
+  # ⚠️首版按「UTC 日历日」判，被白天手动跑的那轮（run#9，14:11Z）吃掉了——job 绿了却什么都没派发。
   nightly-nudge:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 当天没有夜间轮就派发一次
+      - name: 本轮 cron 周期内没有夜间轮就派发一次
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           # 兜底动作本身不该把推送轮打红：查询失败按「未知」处理并跳过派发
           set -uo pipefail
-          today=$(date -u +%Y-%m-%d)
-          count=$(gh run list --repo "$REPO" --workflow nightly-full.yml --limit 50 \
-            --json createdAt --jq "[.[] | select(.createdAt | startswith(\"$today\"))] | length" 2>/dev/null || echo "")
+          # 判据＝**本轮 cron 周期**，不是「日历日」：cron 是 18:00Z，所以「最近一次应触发时刻」
+          # 是今天的 18:00Z；若现在还没到 18:00Z，则是昨天的 18:00Z。这之后有过夜间轮就不派发。
+          # 2026-11-06 首次落地的坑：按「UTC 日历日」判，白天手动跑的那轮（run#9，14:11Z）把
+          # 兜底吃掉了——job 绿了却什么都没派发。按 cron 周期判才符合「每晚一轮」的意图。
+          now=$(date -u +%s)
+          due=$(date -u -d "today 18:00" +%s)
+          if [ "$now" -lt "$due" ]; then due=$(date -u -d "yesterday 18:00" +%s); fi
+          due_iso=$(date -u -d "@$due" +%Y-%m-%dT%H:%M:%SZ)
+          echo "本轮 cron 应触发时刻：$due_iso"
+          count=$(gh run list --repo "$REPO" --workflow nightly-full.yml --limit 20             --created ">=$due_iso" --json databaseId 2>/dev/null | grep -o '"databaseId"' | wc -l | tr -d ' ')
           if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-            echo '::warning::查询当天夜间轮失败（gh 调用异常），本轮跳过兜底派发'
+            echo '::warning::查询本轮夜间轮失败（gh 调用异常），本轮跳过兜底派发'
             exit 0
           fi
-          echo "今天（$today UTC）已有夜间轮 $count 个"
+          echo "本轮周期内已有夜间轮 $count 个"
           if [ "$count" -gt 0 ]; then
-            echo '::notice::今天已有夜间轮，跳过兜底派发'
+            echo '::notice::本轮周期已有夜间轮，跳过兜底派发'
             exit 0
           fi
-          # 容错：workflow 文件若尚未出现在默认分支，派发会 404——降级成 notice，不把推送轮打红
           if gh workflow run nightly-full.yml --repo "$REPO" 2>/dev/null; then
-            echo '::notice::已兜底派发夜间全量'
+            echo '::notice::已兜底派发夜间全量（GitHub schedule 未在应触发时刻出现）'
           else
             echo '::warning::兜底派发失败（workflow 不在默认分支或 API 拒绝），夜间仍依赖 schedule'
           fi
