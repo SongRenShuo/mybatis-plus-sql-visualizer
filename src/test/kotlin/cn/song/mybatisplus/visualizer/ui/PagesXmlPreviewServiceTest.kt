@@ -105,11 +105,12 @@ class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    fun `无maintainPage_空结果加warning`() {
+    fun `无页面语句_空结果加warning`() {
         val result = PagesXmlPreviewService.preview("<pages></pages>", null)
         assertEquals("", result.sql)
         assertNotNull(result.warning)
-        assertTrue(result.warning?.contains("maintainPage") == true)
+        // T-PagesHql：页面标签名不固定，提示按「带 datasource 的页面语句」表述
+        assertTrue(result.warning?.contains("页面语句") == true)
     }
 
     @Test

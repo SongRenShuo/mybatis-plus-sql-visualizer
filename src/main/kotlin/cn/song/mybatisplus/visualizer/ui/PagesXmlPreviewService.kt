@@ -4,11 +4,8 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SourceLanguage
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
-import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor
-import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
-import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
@@ -25,7 +22,6 @@ import cn.song.mybatisplus.visualizer.xml.PagesXmlParser
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
-import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.xml.XmlTag
@@ -68,7 +64,7 @@ object PagesXmlPreviewService {
 
         val statement = pagesModel.statements.firstOrNull { it.id == maintainPageId }
             ?: pagesModel.statements.firstOrNull()
-            ?: return emptyResult("未找到可预览的 SQL 语句（<pages> 中无 <maintainPage>）。")
+            ?: return emptyResult("未找到可预览的 SQL 语句（<pages> 下无带 <datasource> 的页面语句）。")
 
         val detection = detect(statement, project, contextTag)
         if (detection.language == PagesSourceLanguage.HQL) {
@@ -116,26 +112,9 @@ object PagesXmlPreviewService {
         PluginSettings.getInstance().state.pagesXmlSourceMode
     }.getOrDefault(PluginSettings.PAGES_SOURCE_AUTO)
 
-    /** 实体探针：名字 → (实体名, 表名)；解析不到返回 null。 */
+    /** 实体探针：名字 → (实体名, 表名)；解析不到返回 null（与通用 XML 链共用同一实现）。 */
     private fun resolveProbe(project: Project, name: String, context: PsiElement?): PagesEntityProbe? =
-        runCatching {
-            val clazz = resolveEntityClass(project, name, context) ?: return null
-            val table = JpaEntityResolver().resolve(clazz, context)
-            PagesEntityProbe(
-                entityName = JpaMetadataReader.entityNameOf(clazz)?.takeIf { it.isNotBlank() } ?: clazz.name,
-                tableName = table.tableName.takeIf { it.isNotBlank() },
-            )
-        }.getOrNull()
-
-    private fun resolveEntityClass(project: Project, name: String, context: PsiElement?): PsiClass? {
-        val byName = runCatching { EntityAliasSweep.resolve(project, name, context).psiClass }.getOrNull()
-        if (byName != null) return byName
-        // FQCN 兜底：别名扫描在 dumb 态直接 unresolved，限定名还能走 findClass
-        if (!name.contains('.')) return null
-        return runCatching {
-            JavaPsiFacade.getInstance(project).findClass(name, GlobalSearchScope.allScope(project))
-        }.getOrNull()
-    }
+        PagesEntityProbeResolver.probe(project, name, context)
 
     // ------------------------------------------------------------------
     // T-PagesHql：HQL 转换（复用既有管道）

@@ -212,6 +212,39 @@ class PagesXmlParserTest {
     }
 
     // ------------------------------------------------------------------
+    // T-PagesHql：页面标签名不固定（自研框架各家不同）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `页面标签名不固定_按datasource识别`() {
+        val xml = """
+            <pages>
+                <listPage id="lp1" entityClass="com.A">
+                    <datasource><![CDATA[SELECT 1]]></datasource>
+                </listPage>
+                <queryPage id="qp1">
+                    <datasource><![CDATA[SELECT 2]]></datasource>
+                </queryPage>
+                <other/>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals(listOf("lp1", "qp1"), model.statements.map { it.id })
+    }
+
+    @Test
+    fun `页面无id_回落标签名`() {
+        val xml = """
+            <pages>
+                <listPage><datasource><![CDATA[SELECT 1]]></datasource></listPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals("listPage", model.statements.single().id)
+        assertEquals("listPage", model.statements.single().title)
+    }
+
+    // ------------------------------------------------------------------
     // T-XmlDtdHardening T-XDH-05：PagesXmlParser 的 DOCTYPE / XXE 回归（改前零覆盖）
     // 与 mapper 解析器共用 SecureXml（T-XDH-01 配置收敛）——此组用例是该共用事实的回归护栏。
     // ------------------------------------------------------------------

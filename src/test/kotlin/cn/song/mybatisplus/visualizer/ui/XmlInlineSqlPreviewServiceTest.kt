@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.SourceLanguage
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
@@ -89,5 +90,37 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         val result = XmlInlineSqlPreviewService.preview(project, tagNamed("statement"))
         assertNotNull(result)
         assertTrue("至少应展示原文，实际：${result.sql}", result.sql.contains("qc.code"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-PagesHql 泛化：无 type、无 entityClass 的载体标签（<dataValue> 形态）
+    // ------------------------------------------------------------------
+
+    fun test无type无entityClass_HQL按根实体自动识别并转换() {
+        myFixture.addFileToProject(
+            "WmsQuality.java",
+            """
+            @javax.persistence.Entity
+            @javax.persistence.Table(name = "wms_quality")
+            public class WmsQuality {
+                @javax.persistence.Id
+                private Long id;
+                private String code;
+            }
+            """.trimIndent(),
+        )
+        xmlFile("<root><dataValue><![CDATA[SELECT qc.code FROM WmsQuality qc]]></dataValue></root>")
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        assertEquals("应自动识别为 HQL", SourceLanguage.HQL, result.sourceLanguage)
+        assertTrue("实体名应映射为表名，实际：${result.sql}", result.sql.contains("wms_quality"))
+        assertEquals("原文应保留", "SELECT qc.code FROM WmsQuality qc", result.originalSql)
+    }
+
+    fun test无type无entityClass_原生SQL保持直显() {
+        xmlFile("<root><dataValue><![CDATA[SELECT * FROM t_order]]></dataValue></root>")
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        assertEquals("根名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
+        assertNull(result.originalSql)
+        assertEquals("SELECT * FROM t_order", result.sql)
     }
 }
