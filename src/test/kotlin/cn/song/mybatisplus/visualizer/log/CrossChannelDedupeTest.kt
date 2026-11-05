@@ -224,6 +224,48 @@ class CrossChannelDedupeTest {
     }
 
     /**
+     * 二进制参数：控制台日志打的是对象地址 `[B@1a2b3c(byte[])`，agent 侧 `ParamCapture.renderValue`
+     * 检测到默认 toString 后降级为 `<byte[]>`——两侧值文本天然不可比，签名对不上、兜底不折，
+     * 症状与用户报障完全一致（一条带耗时位置、一条全空），而且因为签名不同，`跨通道同源未折叠`
+     * 哨兵也不会触发（它只在 crossKey 相同时才报）。
+     *
+     * 修复：签名函数把二进制形态归一为同一占位——只影响匹配，不影响展示（列表仍显示各自原文）。
+     */
+    @Test
+    fun `二进制参数_值文本不可比_归一后折叠为一行`() {
+        val sql = "INSERT INTO t (avatar) VALUES (?)"
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: [B@1a2b3c(byte[])")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "<byte[]>", "[B"))))
+        assertFoldedToAgentFacts(buffer, "二进制参数")
+    }
+
+    /** Blob/Clob 同属二进制族：控制台侧多为 `类型@hash(Blob)` 形态，agent 侧降级为 `<Blob>`。 */
+    @Test
+    fun `Blob参数_值文本不可比_归一后折叠为一行`() {
+        val sql = "INSERT INTO t (attach) VALUES (?)"
+        val buffer = SqlLogEntryBuffer(maxEntries = 20)
+        addConsole(buffer, "==>  Preparing: $sql", "==> Parameters: com.mysql.cj.jdbc.Blob@7f3a(Blob)")
+        buffer.addEntry(agentEntry(sql, listOf(Triple(1, "<Blob>", "Blob"))))
+        assertFoldedToAgentFacts(buffer, "Blob 参数")
+    }
+
+    /** 归一不能误伤：普通字符串参数恰好长得像十六进制也不该被当成二进制。 */
+    @Test
+    fun `普通字符串参数_不被二进制归一误伤`() {
+        val sql = "SELECT * FROM t WHERE code = ?"
+        val (buffer, _) = runConsoleThenAgent(
+            sql = sql,
+            consoleParams = "deadbeef(String)",
+            agentParams = listOf(Triple(1, "deadbeef", "String")),
+        )
+        // 两侧还原后同键，走的是既有同键去重分支（会计 ⨉N 徽章），故不用 assertFoldedToAgentFacts
+        val rows = buffer.snapshot()
+        assertEquals("同键折叠为一行", 1, rows.size)
+        assertEquals("值未被二进制归一改写", "SELECT * FROM t WHERE code = 'deadbeef'", rows.single().restoredSql)
+    }
+
+    /**
      * **安全边界**：agent 侧参数确实少于控制台侧时，两侧 `logTimeParamSignature` 不等
      * （`1\u00012` vs `1`）、crossKey 不同，兜底**不折叠**。
      *
