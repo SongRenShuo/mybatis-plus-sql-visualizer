@@ -14,6 +14,11 @@ import com.intellij.openapi.startup.ProjectActivity
  *
  * T-M51-04-DEL：删除 ProjectManagerListener 兜底（projectOpened 已 for-removal），
  * 仅保留 postStartupActivity 触发。startCapture() 幂等，onConsoleAppeared 兜底捕捉。
+ *
+ * F-03 工具窗常驻与随项目启动：设置「项目打开时自动打开日志窗口」开启时，项目打开即
+ * [decideStartupToolWindowAction] 决定动作——显示工具窗（懒启动：面板内容由平台在首次显示时
+ * 才创建，关闭开关的项目打开零动作）并进入记录态（startCapture，幂等不重复挂载）。
+ * 项目关闭 = 项目服务销毁 + premain/会话全收口（既有 dispose 链），自然「关闭即停」。
  */
 class LogStartupCapture : ProjectActivity {
 
@@ -21,7 +26,26 @@ class LogStartupCapture : ProjectActivity {
         // T-EnhancedCaptureDefaultOn（2026-10-19）：项目打开期不再做注入确认——增强捕获默认开启，
         // 开关打开即授权，premain/attach 由运行配置与进程事件各自承接。
         val settings = PluginSettings.getInstance().state
-        LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${settings.logAutoCaptureOnStart}, suppressed=${settings.logAutoCaptureSuppressed}）")
+        LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${settings.logAutoCaptureOnStart}, suppressed=${settings.logAutoCaptureSuppressed}, autoShow=${settings.logToolWindowAutoShowOnStart}）")
+
+        // F-03：工具窗随项目打开自动显示（在捕捉决策之前——窗口先到位，记录态随后接上）
+        when (decideStartupToolWindowAction(
+            autoShow = settings.logToolWindowAutoShowOnStart,
+            suppressed = settings.logAutoCaptureSuppressed,
+        )) {
+            StartupToolWindowAction.NONE -> Unit
+            StartupToolWindowAction.SHOW_ONLY -> {
+                LOG.info("LogStartupCapture: 自动显示日志工具窗（用户曾显式停止自动监听——只开窗不强制记录态）")
+                showLogToolWindow(project)
+                // 与既有「已显式停止」语义对齐：仍挂载桥+轮询（检测项目启动），不进入 armed 态
+                sqlLogManagerOrNull(project)?.startListeningOnly()
+            }
+            StartupToolWindowAction.SHOW_AND_CAPTURE -> {
+                LOG.info("LogStartupCapture: 自动显示日志工具窗并进入记录态（F-03）")
+                showLogToolWindow(project)
+                tryStartCaptureManager(project)
+            }
+        }
 
         // 自动启动条件：设置开启 且 用户未显式停止
         if (!shouldStartCapture(settings.logAutoCaptureSuppressed, settings.logAutoCaptureOnStart, hasOpenProject = true)) return
@@ -37,6 +61,28 @@ class LogStartupCapture : ProjectActivity {
             // 用户已显式停止：仍挂载桥+轮询（检测项目启动），但不进入 armed 态
             LOG.info("LogStartupCapture: 用户已显式停止，仅挂载桥+轮询（project=${project.name}）")
             manager.startListeningOnly()
+            return
+        }
+        tryStartCapture(manager, project, attempt = 0)
+    }
+
+    /** F-03：显示日志工具窗（不抢焦点；平台懒建内容——此刻才创建 SqlLogPanel）。 */
+    private fun showLogToolWindow(project: Project) {
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
+            val tw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project)
+                .getToolWindow(SqlLogManager.TOOL_WINDOW_ID) ?: return@invokeLater
+            tw.show()
+            LOG.info("LogStartupCapture: 日志工具窗已随项目打开显示（懒启动——面板此刻才创建）")
+        }
+    }
+
+    /** F-03：进入记录态（复用既有重试链；管理器取用走 sqlLogManagerOrNull 防毒化服务容器）。 */
+    private fun tryStartCaptureManager(project: Project) {
+        val manager = sqlLogManagerOrNull(project) ?: return
+        if (manager.processListenerActive) {
+            // 进程级监听已接管的被动模式：Run 项目时自然驱动捕捉，无需 armed
+            LOG.info("LogStartupCapture: 进程级监听已接管——被动等待项目 Run（F-03 不重复 armed）")
             return
         }
         tryStartCapture(manager, project, attempt = 0)
@@ -88,5 +134,33 @@ class LogStartupCapture : ProjectActivity {
             if (!hasOpenProject) return false
             return true
         }
+
+        /**
+         * F-03 决策（测试缝，纯函数）：项目打开时工具窗该做什么。
+         *
+         * 条件矩阵：
+         *  - autoShow=false → [StartupToolWindowAction.NONE]（懒启动：开关关闭的项目打开零动作）
+         *  - autoShow=true, suppressed=true → [StartupToolWindowAction.SHOW_ONLY]
+         *    （用户曾显式停止自动监听——窗口照开，不强制进入记录态）
+         *  - autoShow=true, suppressed=false → [StartupToolWindowAction.SHOW_AND_CAPTURE]
+         *    （显示 + 进入记录态；与「项目启动时自动开始监听」独立，本开关自带记录态语义）
+         */
+        internal fun decideStartupToolWindowAction(autoShow: Boolean, suppressed: Boolean): StartupToolWindowAction = when {
+            !autoShow -> StartupToolWindowAction.NONE
+            suppressed -> StartupToolWindowAction.SHOW_ONLY
+            else -> StartupToolWindowAction.SHOW_AND_CAPTURE
+        }
     }
+}
+
+/** F-03：项目打开时日志工具窗的动作档。 */
+internal enum class StartupToolWindowAction {
+    /** 什么都不做（开关关闭——懒启动）。 */
+    NONE,
+
+    /** 只显示工具窗，不强制进入记录态（用户曾显式停止自动监听）。 */
+    SHOW_ONLY,
+
+    /** 显示工具窗并进入记录态（startCapture）。 */
+    SHOW_AND_CAPTURE,
 }

@@ -96,6 +96,8 @@ object SettingsScenarioGroups {
             // 捕获行为
             "logMixedPrefix", "logAutoCaptureOnStart", "logAutoCaptureSuppressed",
             "logStopOnToolWindowClose", "logAutoOpenOnCapture", "logAutoSaveEnabled",
+            // F-03：工具窗随项目启动（自动显示 + 进入记录态）
+            "logToolWindowAutoShowOnStart",
             // 日志框架门
             "logHibernateEnabled", "logJdbcEnabled", "logShardingSphereEnabled",
             // 恢复与兜底

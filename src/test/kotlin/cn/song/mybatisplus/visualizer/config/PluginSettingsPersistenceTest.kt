@@ -217,9 +217,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // 并入 master 后：本分支 W2 已把 displayMaskCheck 布尔复选框改分级下拉（JComboBox，-1）——合并态 46（实跑核对）。
             // T-SettingsConverge：六组 gutter 分组开关合并为一个多选控件（6 个勾选框移入浮层、不进面板主树）-6 → 40（实跑核对）。
             // T-LogMethodName（S1-7 并入 master）：来源位置后显示「类名#方法名」开关（logShowMethodCheck）+1 → 41。
+            // F-03（t-idle-f2）：项目打开时自动打开日志窗口开关（logToolWindowAutoShowCheck）+1 → 42。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 41", 41, texts.size)
+            // F-03：新增「项目打开时自动打开日志窗口」开关后为 42（实跑核对）
+            assertEquals("复选框总数应为 42", 42, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -310,6 +312,24 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertFalse("清空后应为出厂默认 false", settings.state.showMethodInLogList)
             settings.loadState(saved)                         // 模拟重启重载
             assertTrue("往返后显式开启值应保持 true", settings.state.showMethodInLogList)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testStateRoundTripKeepsToolWindowAutoShowOnStart() {
+        // F-03：工具窗随项目启动开关随 State 持久化往返保留（O-58 同款契约）。
+        // 默认关＝不改变任何既有项目打开行为；显式开启的值必须跨重启保留。
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            assertFalse("出厂默认应为关", PluginSettings.State().logToolWindowAutoShowOnStart)
+            settings.state.logToolWindowAutoShowOnStart = true
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（false）
+            assertFalse("清空后应为出厂默认 false", settings.state.logToolWindowAutoShowOnStart)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertTrue("往返后显式开启值应保持 true", settings.state.logToolWindowAutoShowOnStart)
         } finally {
             settings.loadState(snapshot)
         }

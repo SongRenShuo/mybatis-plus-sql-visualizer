@@ -605,6 +605,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoCapture"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoOpen"), "", "settings.section.sqlLog", l))
+            // F-03：工具窗随项目启动开关（新开关必须登记——SettingsPanelSearchableGuardTest 断言一）
+            fields.add(SearchableField(b.message("settings.log.autoShowToolWindow"), b.message("settings.log.autoShowToolWindow.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestamp"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestampFormat"), b.message("settings.log.timestampFormat.tip"), "settings.section.sqlLog", l))
