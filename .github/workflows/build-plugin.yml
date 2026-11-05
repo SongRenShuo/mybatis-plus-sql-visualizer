@@ -106,7 +106,10 @@ jobs:
         # 在构建完成即返回，泄漏线程随 runner 回收；daemon 跨步骤复用顺带提速。
         # T-CiMarketSplit（2026-11-05）：`:verifyPlugin` 从这里挪到独立 job（见 verifyplugin）——
         # 它要 1.5 分钟且下游六条腿全在等它，挪走后 build 从 8.2 降到约 6.7，市场门禁提前起跑。
-        run: ./gradlew.bat :buildPlugin -PgifRecord=false --console=plain
+        # 走 run-gradle-retry 包装：这条腿一旦踩到 zip 文件系统竞态，整轮全灭。
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":buildPlugin -PgifRecord=false --console=plain"
 
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
       # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
@@ -243,7 +246,9 @@ jobs:
         # 本 job 不需要重新编译——不加这一项它会从头编一遍（run#14 实测该 job 8.7 分钟，
         # 其中约 2.4 分钟是编译），而编译产物与发行包本来就在工件里。本地已验证
         # `:verifyPlugin -x buildPlugin` 可跑通（BUILD SUCCESSFUL）。
-        run: ./gradlew.bat :verifyPlugin -x buildPlugin -PgifRecord=false --console=plain
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":verifyPlugin -x buildPlugin -PgifRecord=false --console=plain"
 
   # T-CiSplitMarketplace（2026-11-05）：Marketplace 同口径在线门禁独立成 job（它只依赖打包产物）。
   # T-CiMarketSplit（2026-11-05 晚）：再拆成三条腿——原先三个 verifier JVM 挤在一台 2 核 runner 上
@@ -316,7 +321,9 @@ jobs:
       - name: Marketplace 门禁 ${{ matrix.tag }}（在线 + 无豁免 + 逐份 verdict 判定）
         # 发行包取自 build 的工件（不再重打包：重打包会让「已验证的字节」与「最终上传的字节」不是同一份）。
         # 判定由 verifyMarketplaceVerdict<tag> 在 doLast 里做，与聚合任务同一个 checkMarketplaceVerdicts。
-        run: ./gradlew.bat :verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":verifyMarketplaceVerdict${{ matrix.tag }} -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -391,10 +398,11 @@ jobs:
 
       - name: 兼容门禁 ${{ matrix.ide }}
         # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
-        # -PgateStaggerMs=0 关掉「等 marketplace 高占用段」的 285s 错峰延迟（并行 job 各自独立 runner，无需错峰）
+        # -PgateStaggerMs=0 关掉「等 marketplace 高占用段」的 285s 错峰延迟（并行 job 各自独立 runner，无需错峰）。
+        # 走 run-gradle-retry 包装：同一处 zip 文件系统竞态也会打在这条腿的配置期。
         run: >-
-          ./gradlew.bat :verifyGate -PverifyOnly=true -PverifyIdes=${{ matrix.ide }}
-          -PgateStaggerMs=0 -PgifRecord=false --console=plain
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":verifyGate -PverifyOnly=true -PverifyIdes=${{ matrix.ide }} -PgateStaggerMs=0 -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：五片测试并行——每个 job 只跑一片。
   # T-CiTestDecouple（2026-11-05）：分片**不再等 build**。依据：testShardN 的依赖只有
@@ -458,32 +466,14 @@ jobs:
         # 三类真机依赖用例在 CI 剔除（本地发版前照跑）：AttachPoolWarmGateTest / DataSourceJdbcSmokeTest /
         # O147RealAgentAcceptanceTest——它们需要本机 MySQL 或本机 JDK8。
         timeout-minutes: 30
-        # T-CiZipFsFlake（2026-11-05）：Gradle 配置期读 IDE 自带插件描述符时会偶发
-        # `java.nio.file.ClosedFileSystemException`（栈顶是 plugin-structure 的
-        # FsHandlerFileSystemProvider.checkAccess → Files.exists），随后被报成
-        # "Could not find bundled plugin with ID: 'com.intellij.database'"。
-        # 实证分布：run#8 1/5 片、run#11 2/5 片，run#7/#9/#10 共 15 片零命中；失败片的
-        # gradle 缓存恢复是**完整**的（4775MB + 4385MB），所以与缓存残缺、.gradle 工件无关，
-        # 是 Gradle 自身 zip 文件系统句柄在并行解析下被关闭的竞态（同一 jar 被多线程打开）。
-        # 处置：只针对这一个签名重跑一次（测试真失败不会命中该签名，因此不会掩盖问题）。
-        run: |
-          $gradleArgs = @(
-            ':testShard${{ matrix.shard }}',
-            '-PgifRecord=false',
-            '--console=plain',
-            '-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest',
-            '-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest'
-          )
-          $log = Join-Path $env:RUNNER_TEMP "shard-${{ matrix.shard }}.log"
-          ./gradlew.bat @gradleArgs 2>&1 | Tee-Object -FilePath $log
-          $rc = $LASTEXITCODE
-          if ($rc -eq 0) { exit 0 }
-          if (-not (Select-String -LiteralPath $log -Pattern 'ClosedFileSystemException' -SimpleMatch -Quiet)) {
-            exit $rc
-          }
-          Write-Host "::warning::命中 Gradle zip 文件系统竞态（ClosedFileSystemException，非测试失败），重跑一次"
-          ./gradlew.bat @gradleArgs 2>&1 | Tee-Object -FilePath $log -Append
-          exit $LASTEXITCODE
+        # T-CiZipFsFlake（2026-11-05）：Gradle 配置期解析 243 的 database-plugin.jar 时偶发
+        # ClosedFileSystemException（约 4/25 片）。原地重跑无效——Gradle daemon 跨调用复用，
+        # 关闭状态留在 daemon 里，所以包装脚本会先 `--stop` 再重跑一次（详见脚本头注释）。
+        run: >-
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
+          ":testShard${{ matrix.shard }} -PgifRecord=false --console=plain
+          -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest
+          -PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
 
       - name: 失败诊断输出（断言消息打到任务日志）
         if: failure()

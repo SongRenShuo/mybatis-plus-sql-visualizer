@@ -1,0 +1,230 @@
+# T-CrossChannelDedupe：跨通道去重键失配导致同一次执行出现两条（2026-11-05）
+
+- 立项：2026-11-05 12:41
+- 目标分支：`master`（当前 tip `6491b4b4`）
+- 用户报障：部分 INSERT 语句没有捕获到耗时和执行位置
+
+## 一、现象
+
+用户截图（`sys_operation_log` 的一次插入，应用侧 `@Async("LogExecutor") saveAsync` → `logMapper.insert(entity)`）：
+
+```
+#8  [11:37:20]  7ms [SQL Server] x1 [UserService...]   SELECT COUNT(*) ...
+#9  [11:37:20]  1ms [SQL Server] x1 [UserService...]   SELECT id,username,... FROM sys_user ORDER BY id ASC OFFSET ...
+#10 [11:37:20]  2ms [SQL Server] x1 [UserService...]   SELECT ur.user_id AS userId,... FROM sys_user_role ur JOIN sys_role r ...
+#11 [11:37:20]  —                                      INSERT INTO sys_operation_log (...) VALUES ('admin', '用户管理', ...)
+#13 [11:37:20]  8ms [SQL Server] (1 rows) [Opera...]   INSERT INTO sys_operation_log (...) VALUES ('admin', '用户管理', ...)
+```
+
+`#11` 与 `#13` 是同一条 INSERT、同一组参数、同一秒。区别只在头部元信息：
+
+| 条目 | 耗时 | 库角标 | 影响行数 | 执行位置 |
+|---|---|---|---|---|
+| #11 | `—`（null） | 无 | 无 | 无 |
+| #13 | `8ms` | `[SQL Server]` | `(1 rows)` | `[Opera…]` |
+
+## 二、两个问题分开回答
+
+### 2.1 信息有没有捕获到——捕获到了，没有丢
+
+同一次执行的耗时（8ms）、影响行数（1 rows）、源码位置、目标库都在 `#13` 里。`#13` 是 agent 增强通道产出的条目：耗时来自 `AgentEvent.durationNanos`，行数来自 `getUpdateCount`，位置来自应用内调用栈（`AgentEventAdapter.toEntry`，`AgentEventAdapter.kt:36-73`）。
+
+所以「没有捕获到耗时和执行位置」这个描述只对 `#11` 成立，对这次执行整体不成立。
+
+### 2.2 是不是控制台与增强捕获重复了——是，而且正是根因
+
+`#11` 是控制台通道（EP 过滤器或桥轮询）解析 MyBatis 日志得到的同一条 SQL：
+
+- 耗时恒为 null：MyBatis 对 DML 只打印 `<==    Updates: N`，不打印耗时行；控制台条目的耗时来自 `ExecutionTimeParser.parse(line, timePrefix)`（`SqlLogConsoleBridge.kt:1154`），对 INSERT 的日志行取不到任何耗时形态（`ExecutionTimeParser.kt:54-88` 的七种形态全部要求行内有 `elapsed/TimeCount/ExecuteTime/executeMillis/尾部 Nms`）。
+- 位置恒为 null：控制台条目的位置只来自拦截器注入的源码标记（`finishEntries` 的 `ctx.pendingSource`，`SqlLogConsoleBridge.kt:1155`）。未注入 `SqlSourceInterceptor` 时没有标记，就没有位置。
+- 库角标恒为 null：`databaseName` 只有 agent 通道从连接 URL 解析（`AgentEventAdapter.kt:65`）。
+
+三条同时为 null，是控制台条目的固有形态，不是「捕获失败」。
+
+**结论：不是「没捕获到」，是「捕获到了两份，其中一份天然缺字段，而且两份没有被折叠成一份」。**
+
+## 三、根因
+
+### 3.1 折叠为什么没发生
+
+去重折叠只有一个入口：`SqlLogEntryBuffer.addEntryInternal` 的去重分支（`SqlLogEntryBuffer.kt:294-313`）。判定用 `dedupeKey`：
+
+```kotlin
+// SqlLogEntryBuffer.kt:457-461
+private fun isDuplicate(entry: LogSqlEntry): Boolean {
+    if (!canDedupe(entry)) return false
+    val latest = dedupeIndex[entry.dedupeKey] ?: return false
+    return entry.timestamp - latest.timestamp < dedupeWindowMs   // 默认 60s
+}
+```
+
+两条同秒入库的条目只要 `dedupeKey` 相同，后到者必然走融合分支（`mergeDuplicateEntry`，`LogSqlModels.kt:446-474`）：先到的是控制台条目、后到的是 agent 条目时，耗时会由 `existing.executionTimeMs ?: incoming.executionTimeMs` 补齐，位置按「真实文件优先」升级。
+
+**现在两条并存，说明两个 `dedupeKey` 不相等。** 这是唯一能让同一次执行留下两行的路径（同键只会折叠，异键才会各占一行）。
+
+`dedupeKey` = `sqlFingerprint(normalizeSqlWhitespace(restoredSql))`（`LogSqlModels.kt:214`），即「参数还原后的 SQL 文本」指纹。两个通道各有一套还原器，口径不同源：
+
+| | 控制台通道 | agent 通道 |
+|---|---|---|
+| 实现 | `LogSqlRestorer`（`LogSqlRestorer.kt:26-49`） | `AgentEventAdapter.restore`（`AgentEventAdapter.kt:79-122`） |
+| 数值类型 | `PLAIN_TYPES` 含 `Long/Integer/...` 与全限定 `java.lang.Long`（`LogSqlRestorer.kt:105-118`） | `NUMERIC_TYPE_REGEX.matches(type)` 全串匹配，**认不出 `java.lang.Long`**（`AgentEventAdapter.kt:156-162`） |
+| 布尔 | `PLAIN_TYPES` 含 `Boolean/boolean` → `true` | 不在数值表 → `'true'` |
+| 日期族 | `DATE '…'` / `TIMESTAMP '…'` ANSI 字面量（`LogSqlRestorer.kt:63-79`） | 无此规则 → `'2026-11-05 11:37:20.0'` |
+| 默认 toString 降级 | 用日志原文（`[B@1a2b`） | 降级为 `<byte[]>` / `<Blob>`（`ParamCapture.java:141-160`） |
+| 占位符计数 | `placeholderPositions` 跳过 `--` 与 `/* */` 注释（`PlaceholderPositions.kt:27-38`） | `countPlaceholders` 不跳注释（`AgentEventAdapter.kt:125-148`） |
+| 参数个数守卫 | 宽容：多退少补（`LogSqlRestorer.kt:33-34`） | 严格：`countPlaceholders != params.size` 就整句不还原（`AgentEventAdapter.kt:82`） |
+
+上面每一行都是一个能让两个 `dedupeKey` 分叉的点。这不是理论推演——仓库里已有实测记录：
+
+- `AgentLogTimeParityTest` 的类注释（`src/test/kotlin/.../log/AgentLogTimeParityTest.kt:16-19`）写明：旧口径用还原后 SQL 指纹做跨通道关联键，「在布尔参数、注释内 `?`、参数个数不等、多行 SQL 四类形态下静默失配」。
+- `AgentEventAdapterTest.dedupeKey与桥通道一致`（`.../agent/AgentEventAdapterTest.kt:180-196`）自己注明：该用例是「手写一条 restoredSql 与自己比对（自证）」，「不是跨通道集成守卫」，发现不了布尔参数渲染、注释内 `?`、参数个数守卫三类失配。
+- 其中「块注释内含问号」用例（`AgentLogTimeParityTest.kt:176-190`）直接把分叉钉成断言：agent 侧因注释里的 `?` 触发数量守卫、整句不还原，控制台侧正常还原。
+
+T-AgentLogTime 当时把**日志时间配对**的键换成了 `logTimeKey`（占位符版 rawSql 指纹，`LogSqlModels.kt:408`），但**面板去重仍然用 `dedupeKey`**。分叉在去重面从来没有被修过，也没有守卫。
+
+### 3.2 为什么这次偏偏是 INSERT
+
+INSERT 的参数多（截图里 12 个以上），任一参数命中上表任一行就分叉。`sys_operation_log` 这类表通常带 `create_time`（`LocalDateTime`/`Timestamp`）——日期族规则直接分叉；SELECT 语句参数少、且多为数值/字符串，两侧口径恰好一致，所以折叠正常。这解释了用户说的「部分 INSERT」而不是「所有语句」。
+
+### 3.3 为什么桥没有让位（三条可能，需日志裁决）
+
+增强捕获在线时桥应当短路（`SqlCaptureGate.paused`，`SqlLogConsoleBridge.kt:854-880`），此时控制台条目根本不该产生。实际产生了，只有三种可能：
+
+1. **旧版 agent 无 CONFIG 回执**：`captureConfirmedActive()` 要求 `configAckDisabled == false`（`AgentManager.kt:1351`），旧 agent 永远不回执 → 闸门恒 false → 桥永久放行。这是 KDoc 里登记的已知边界（`AgentManager.kt:1342-1349`），原文写着「两条通道同时产出同一条 SQL……靠列表去重窗口折叠」——而去重窗口正好在 3.1 失效。
+2. **活性回落解封窗**：agent 静默 ≥10s 且控制台有 SQL 行时桥临时解封（`CaptureActivityFallback`，`SqlLogConsoleBridge.kt:906-1060`）。解封触发的那一行直接产出条目（`SqlLogConsoleBridge.kt:1081-1082`），随后同一条 SQL 的 agent 事件到达又立即重新让位——两条落在同一秒。
+3. **CONFIG 下发→回执窗口抖动**：`configAckDisabled` 每次下发即清回「待确认」（`AgentManager.kt:1323-1326` 注释自述），窗口内闸门瞬时放开。
+
+三条都只会造成「同一秒两条」，与截图吻合。判定靠日志（见 §五）。
+
+### 3.4 附带发现：静默冲刷路径没打通道标记
+
+`flushSettledEntries`（`SqlLogConsoleBridge.kt:447-472`）对 JdbcTemplate/ShardingSphere 的待闭合条目直接 `buffer.addEntry(entry)`，既没走 `emitEntries` 的 `captureProvenance` 打标，也没在循环内复查闸门（闸门只在 `scanAll` 外层判一次，`SqlLogConsoleBridge.kt:233`）。结果这类条目在归因诊断里显示「通道=UNKNOWN」，会干扰本次的现场裁决。与主症状无关，一并修。
+
+## 四、修法
+
+### 4.1 主修：跨通道等价键兜底折叠（不改既有去重语义）
+
+在 `SqlLogEntryBuffer` 增加一个**只服务跨通道**的等价索引，键取两通道同源、不经过参数还原的原材料：
+
+```
+crossKey = logTimeKey(entry) + '\u0002' + logTimeParamSignature(entry.params)
+```
+
+`logTimeKey` = 占位符版 rawSql 指纹；`logTimeParamSignature` = 参数值序列（截断 256 字符）。两者就是 T-AgentLogTime 已经验证过能跨通道命中的口径（`LogSqlModels.kt:408-418`），`AgentLogTimeParityTest` 的四类失配形态下都命中。
+
+入队流程：
+
+1. `dedupeKey` 命中 → 走现有融合分支，一行不改。
+2. `dedupeKey` 未命中 → 查 `crossChannelIndex`；命中且满足全部条件时走融合：
+   - 两侧 `captureProvenance` 不同（`UNKNOWN` 视为可折叠）；
+   - `|entry.timestamp - hit.timestamp| <= CROSS_CHANNEL_WINDOW_MS`（建议 5000，与 `HANDOFF_MERGE_GRACE_MS` 同量级，远小于 60s 去重窗）；
+   - `canDedupe(entry)` 为真（ShardingSphere 维持不折叠，UI013 的既有裁决不动）。
+3. 融合复用 `mergeDuplicateEntry`（补空不覆盖、通道归并 MERGED），**原位替换**，不新增行。
+4. 跨通道融合**不计入 ⨉N 徽章**（`recordDedupeDrop` 只在同键去重分支调用）——它不是「重复 SQL 被丢弃」，是同一次执行的两份观测合并。单独计数供诊断行使用。
+
+维护面与 `dedupeIndex` 完全同锁同生命周期：入队 upsert / 头部淘汰回扫 / `removeEntry` / `clear` / `rebuildDedupeIndexLocked` / `rebuildDedupeIndexAfterHandoff` / `dedupeExisting`。有界性照 `dedupeKeyPresence` 的做法：键域随索引同步增删；另加「时间窗惰性清理」（每次入队清掉超窗项），防长会话驻留。
+
+### 4.2 辅修：参数渲染口径收敛（降低兜底触发率）
+
+主修是兜底，能让键相同更好——同键直接命中，语义最干净，也不依赖 rawSql 两侧逐字一致。
+
+做法：把 `AgentEventAdapter.renderParam` 改为调用共享的渲染函数（从 `LogSqlRestorer.renderParam` 抽出），保留 agent 侧两个安全护栏：
+
+- 严格数量守卫（`countPlaceholders != params.size` → 不还原）**保留**，并补一条「参数序号必须 1..N 连续」校验——`ParamCapture` 用 `TreeMap` 按 index 存，某个 setter 不在白名单时会跳号，`sortedBy { it.first }` 排序后缺口被抹平，直接还原就是错位替换。
+- 数值类型 + 值非数值形态（`type=Long, value="abc"`）→ 仍然加引号（`LogSqlRestorer` 目前只看类型不看形态，直出会产出非法 SQL）。这条要加进共享函数，会改变控制台侧的边缘行为，须先跑 `LogSqlRestorer` 既有测试确认无回归。
+
+这一项改动面比主修大（触达控制台还原的全部既有用例），可独立成券、后置实施。主修先上就能消掉用户可见症状。
+
+### 4.3 诊断：入队期跨通道失配留痕
+
+现在只有「融合成功」有日志（`重复观测跨通道融合`，`SqlLogEntryBuffer.kt:365-369`），融合失败（键不同、各占一行）完全静默——这次现场就是靠截图反推的。
+
+增加一行限频诊断：入队时若 `crossChannelIndex` 里存在**同 crossKey 但异 dedupeKey** 的条目，输出
+
+```
+跨通道同源未折叠: crossKey=xxxxxxxx dedupeA=yyyyyyyy(通道=CONSOLE_EP) dedupeB=zzzzzzzz(通道=AGENT)
+```
+
+只含指纹前缀与通道，不含 SQL 原文与参数值（沿用 `provenanceDiagText` 的隐私红线，`LogSqlModels.kt:497-505`）。修完之后这行仍要保留——它是「还原器又分叉了」的长期哨兵。
+
+### 4.4 二期（可选）：控制台 DML 耗时估算
+
+纯控制台模式（agent 不在线）下，INSERT/UPDATE/DELETE 永远没有耗时——这是日志源本身不含该信息，不是缺陷。若日志行带时间戳前缀，可以把 DML 的闭合时机从 `Parameters:` 行推迟到 `<==    Updates:` 行，用两行时间差估算耗时。
+
+风险明确，故不进本期：`MyBatisLogParser` 在 `Parameters:` 行立即闭合是刻意的（`MyBatisLogParser.kt:139-141` 注释：避免去重窗口时序问题），延后会影响去重窗口、日志时间嗅探（`sniffLogTimestamp`）、静默冲刷三处时序。要做需要单独设计并补三类时序用例。
+
+### 4.5 附带：静默冲刷补通道标记
+
+`flushSettledEntries` 入队前补 `captureProvenance = CONSOLE_BRIDGE`，与 `emitEntries` 同款；循环内复查 `SqlCaptureGate.bridgeSuppressed()`（外层闸门只覆盖调用时刻，EDT 冲刷与 agent 接管沿之间仍有窗口）。
+
+## 五、待验证前提（实施者先证伪）
+
+1. **现场 #11 的通道归属**：让用户在 `idea.log` 里 grep
+   ```
+   捕获归因|重复观测跨通道融合|增强捕获闸门回落|增强捕获活性回落|增强捕获接管沿|CONFIG 已生效
+   ```
+   - 出现 `捕获归因: 通道=CONSOLE_EP` 或 `CONSOLE_BRIDGE` → 确认 #11 是控制台条目；
+   - 出现 `增强捕获闸门回落（桥恢复解析）` → 双通道并存窗口（§3.3 第 1/3 条）；
+   - 出现 `增强捕获活性回落` → 解封窗（§3.3 第 2 条）；
+   - 三者都没有却仍出现控制台条目 → 说明还有第四条让位失效路径，先查再修。
+2. **两侧 agent jar 版本是否一致**（§3.3 第 1 条的前提）。`CONFIG 已生效` 行是否出现在该时段。
+3. **那条 INSERT 的完整参数清单**：需要拿到第 12 个及之后的参数类型，确认是否命中日期族/布尔/全限定名中的哪一类。若不方便取，用 §六 的六类形态用例覆盖即可。
+4. **`crossChannelIndex` 的误配面**：同一 mapper 语句 5s 内执行多次且参数相同时，跨通道配对按 FIFO 可能错位。需确认融合只补空（不覆盖已有非空值）时错位影响可接受——耗时为毫秒级差异，位置来自同一条语句的同一栈帧，判定可接受并写进 KDoc。
+5. **`canDedupe` 的 ShardingSphere 例外**：跨通道折叠是否要覆盖 SHARDINGSPHERE 与 agent 的并存形态。UI013 的既有裁决是「Logic 未绑定，文本相同不能证明同一次执行」，建议维持不折叠，但需确认这不影响本症状（本症状是 MyBatis）。
+
+## 六、验收
+
+### 6.1 新增用例（`src/test/kotlin/.../log/CrossChannelDedupeTest.kt`）
+
+每个用例都走真实链路：`processConsoleLine`（控制台侧）→ `AgentEventAdapter.toEntry`（agent 侧）→ 同一 `SqlLogEntryBuffer` 入队，断言最终条数与字段。
+
+| # | 形态 | 修复前 | 修复后期望 |
+|---|---|---|---|
+| 1 | 布尔参数 `true(Boolean)` | 2 条 | 1 条，耗时/位置/行数取 agent 侧 |
+| 2 | 日期参数 `Timestamp` | 2 条 | 1 条 |
+| 3 | 块注释内含 `?`（agent 数量守卫不还原） | 2 条 | 1 条 |
+| 4 | 参数个数不等（agent 少捕一个） | 2 条 | 1 条 |
+| 5 | 全限定类型名 `java.lang.Long` | 2 条 | 1 条 |
+| 6 | 控制台先到、agent 后到 | 2 条 | 1 条，`captureProvenance=MERGED` |
+| 7 | agent 先到、控制台后到 | 2 条 | 1 条，字段不被降级 |
+| 8 | 两条真正不同的 SQL（rawSql 不同） | 2 条 | 2 条（不误折叠） |
+| 9 | 同通道两条同 SQL | 1 条（既有去重） | 1 条（语义不变） |
+
+用例 1~5 的「修复前 = 2 条」是断言基线，实施时先让它们红，再上修法转绿。
+
+### 6.2 反向验证
+
+临时注释掉 §4.1 的跨通道分支（照 `SqlLogEntryBuffer.kt:296-298` 既有探针注释的写法留锚点），用例 1~7 必须变红；恢复后转绿。两次读数都贴进实施记录。
+
+### 6.3 回归面
+
+- 定向：`SqlLogEntryBufferTest`、`SqlLogEntryBufferDedupeIndexTest`、`AgentLogTimeParityTest`、`AgentEventAdapterTest`、`CaptureActivityFallbackTest`、`SqlCaptureGateSniffTest`、`SqlLogPanelFilterTest`、`LogSqlModelsTest`。
+- 若动 §4.2（共享渲染函数）：追加 `LogSqlRestorer` 相关全部用例 + `SqlLogConsoleBridgeMarkerTest`。
+- 只跑定向，不跑全量、不跑构建校验、不 `clean`（收口由单独只读代理执行）。
+
+### 6.4 真机复验
+
+同一应用、同一 `saveAsync` 路径连续跑 20 次插入，要求：
+
+- SQL 日志列表里 `sys_operation_log` 的 INSERT **不再出现无耗时/无位置的副本**；
+- 每条都带 `(1 rows)` 与 `[XxxService.java:NN]`；
+- `idea.log` 里 `跨通道同源未折叠` 计数为 0（若不为 0，把该行原文交出，说明还有新的分叉形态）。
+
+## 七、风险与回归面
+
+| 风险 | 说明 | 处置 |
+|---|---|---|
+| 误折叠 | 同一模板 5s 内多次执行，跨通道配对错位 | 融合只补空不覆盖；窗口取 5s（远小于 60s 去重窗）；用例 8/9 钉住不误折叠 |
+| 性能 | 入队热路径多一次 `logTimeKey` + 签名计算 | `logTimeKey` 与 `dedupeKey` 同为 O(n) 指纹；只在 `dedupeKey` 未命中时计算（命中即返回，零额外成本）；索引 O(1) |
+| 内存 | `crossChannelIndex` 无界增长 | 与 `dedupeIndex` 同生命周期 + 时间窗惰性清理 + 键域随条目淘汰同步 |
+| ShardingSphere | UI013 裁决是「文本相同不能证明同一次执行」 | `canDedupe` 例外原样保留，跨通道折叠不覆盖 |
+| 隐私 | 诊断行可能带 SQL 原文 | 只输出指纹前缀与通道，沿用 `provenanceDiagText` 红线 |
+| 徽章语义 | 跨通道融合是否计入 ⨉N | 不计入；徽章只统计同键重复丢弃 |
+
+## 八、实施顺序建议
+
+1. §4.3 诊断先行（低风险，先把现场证据钉死，也为 §五 的裁决提供读数）。
+2. §4.1 主修 + §6.1 用例 1~9 + §6.2 反向验证。
+3. §4.5 附带修（一行级别）。
+4. §4.2 辅修（改动面大，单独券，需先跑还原器既有用例）。
+5. §4.4 二期评估（不承诺本期）。
