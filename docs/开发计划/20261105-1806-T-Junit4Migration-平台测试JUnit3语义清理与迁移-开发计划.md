@@ -49,7 +49,7 @@ for root,_,files in os.walk('src/test/kotlin'):
 
 **非目标**
 
-- 不追求「398 个类全部迁到 JUnit4」。平台确实有 JUnit4 基类（`testFramework.jar` 内 `LightPlatformCodeInsightFixture4TestCase`），但 `BasePlatformTestCase` 的 fixture 生命周期、`UsefulTestCase` 的清理钩子、`myFixture` 装配方式都要逐个改；398 个类全迁是另一量级的工程，收益集中在上面三条。
+- 不追求「398 个类全部迁到 JUnit4」，也**不迁 JUnit5**（收益上限 10%、成本 3.5~7 人月，见 20261105-1830 调研报告）。平台确实有 JUnit4 基类（`testFramework.jar` 内 `LightPlatformCodeInsightFixture4TestCase`），但 `BasePlatformTestCase` 的 fixture 生命周期、`UsefulTestCase` 的清理钩子、`myFixture` 装配方式都要逐个改；398 个类全迁是另一量级的工程，收益集中在上面三条。
 - 不改产品代码。
 
 ## 三、分档实施
@@ -99,7 +99,9 @@ for root,_,files in os.walk('src/test/kotlin'):
 
 - [x] 「反引号命名一律不执行」——**已证伪**：以 `test` 开头的反引号方法 JUnit3 会收集（`SelectedTableCaretTextTest` 30 个照常执行）。只有 13 个不以 `test` 开头的才是漏网。
 - [ ] 「`@Test` 在这些类里完全无效」——需在一个类上做对照实验（加/删 `@Test`，看 `tests=` 是否变化）。
-- [ ] 「平台 JUnit4 基类可用」——需确认 `LightPlatformCodeInsightFixture4TestCase` 在 243/262 双目标下都能用（我们编译基准是 243）。
+- [x] 「平台 JUnit4 基类可用」——**已证伪**：`LightPlatformCodeInsightFixture4TestCase` 在 243 与 253 都是
+  `extends BasePlatformTestCase` **且只有构造器**（javap 实证），它不是 JUnit4 适配器，迁过去等于原地不动。
+  这也是「统一向 JUnit3 收口」的直接依据。详见 `docs/调研报告/20261105-1830-JUnit5迁移可行性与测试提速替代方案-调研报告.md` §1.2。
 - [ ] 「P1 的 5 个 Assume 类都在 JUnit3 基类上」——扫描口径需逐条核对继承链（可能有中转基类）。
 
 ## 七、与既有纪律的关系
