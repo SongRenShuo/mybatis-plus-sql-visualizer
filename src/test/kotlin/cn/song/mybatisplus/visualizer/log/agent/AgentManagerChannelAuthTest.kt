@@ -129,6 +129,36 @@ class AgentManagerChannelAuthTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- attach 链（P4 原端口 re-bind 恢复路径）的令牌判据 ----------
+
+    /**
+     * re-bind 重建的通道沿用当年 loadAgent 下发的令牌：令牌不匹配的回连拒绝（端口被无关进程
+     * 复用后的占用者摸不进来），正确令牌（agent 侧记忆的那个）照常重建会话。
+     */
+    fun testP4_rebind通道令牌不匹配被拒_正确令牌放行() {
+        val deadAttachPort = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress()).let { s ->
+            val p = s.localPort
+            s.close()
+            p
+        }
+        val token = "0123456789abcdef0123456789abcdef"
+        manager.attachPorts[424245L] = deadAttachPort
+        manager.attachTokens[424245L] = token
+        assertTrue("P4 恢复应命中登记表", manager.resumeAttachPortIfHit(424245L))
+
+        val wrong = Socket("127.0.0.1", deadAttachPort)
+        writeFrame(wrong, AgentProtocol.CMD_HELLO, """{"pid":424245,"token":"ffffffffffffffffffffffffffffffff"}""")
+        wrong.soTimeout = 3_000
+        assertEquals("令牌不匹配的回连须被服务端关闭", -1, DataInputStream(wrong.getInputStream()).read())
+        assertTrue("被拒回连不得建会话", manager.sessions.isEmpty())
+        wrong.close()
+
+        val right = Socket("127.0.0.1", deadAttachPort)
+        writeFrame(right, AgentProtocol.CMD_HELLO, """{"pid":424245,"token":"$token"}""")
+        awaitTrue("正确令牌的回连未重建会话") { manager.sessions.any { it.pid == 424245L } }
+        right.close()
+    }
+
     // ---------- 辅助 ----------
 
     private fun portOf(vmOption: String): Int =

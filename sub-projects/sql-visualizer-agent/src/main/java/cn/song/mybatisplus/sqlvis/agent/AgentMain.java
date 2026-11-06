@@ -110,7 +110,8 @@ public final class AgentMain {
         // 谓词排除已处理类。premain 阶段只记候选（券 08）：premain 内联未知字节形态失败会让宿主
         // 起不来，这是红线；真正的接口匹配交给启动后补挂轮（daemon 线程，有限轮数 + 预算）。
         CatchAllMatcher.afterInstall(inst, premain);
-        EventBus.start(args.getPort());
+        // T-SAF-02：通道令牌随 args 下发（null 兼容旧 IDE）——SenderLoop HELLO 帧回带，IDE 侧验令牌
+        EventBus.start(args.getPort(), args.getToken());
         System.setProperty(ACTIVE_MARKER, "port=" + args.getPort());
         installed = true;
     }

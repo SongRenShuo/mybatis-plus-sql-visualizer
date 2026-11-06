@@ -108,7 +108,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val port = portOf(option)
         val pid = 424242L
         val socket = Socket("127.0.0.1", port)
-        writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(socket, pid)
 
         awaitTrue("premain 会话未建立") { manager.sessions.isNotEmpty() }
         // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态各自等一次
@@ -143,12 +143,12 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val second = portOf(manager.preparePremainVmOption()!!)
         val pid = 515151L
         val s1 = Socket("127.0.0.1", first)
-        writeFrame(s1, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(s1, pid)
         awaitTrue("首条 premain 会话未建立") { manager.sessions.size == 1 }
 
         val s2 = Socket("127.0.0.1", second)
         s2.soTimeout = 3_000
-        writeFrame(s2, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(s2, pid)
         // 服务端应主动关闭重复连接（客户端读到 EOF）
         assertEquals("重复回连应被服务端关闭", -1, DataInputStream(s2.getInputStream()).read())
         assertEquals("同 pid 只允许一条会话", 1, manager.sessions.size)
@@ -167,7 +167,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val port = portOf(manager.preparePremainVmOption()!!)
         val pid = 636_001L
         val first = Socket("127.0.0.1", port)
-        writeFrame(first, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(first, pid)
         awaitTrue("首条 premain 会话未建立") { manager.sessions.size == 1 }
         awaitTrue("首条会话未置在线态") { manager.online }
 
@@ -179,7 +179,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
         // 同一 pid 再次回连（agent 侧 SenderLoop 无限重连同一端口，断线退避 1s→5s）
         val second = Socket("127.0.0.1", port)
-        writeFrame(second, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(second, pid)
         awaitTrue("摘除后重连未重建会话（通道是否 accept 一次即关？）") { manager.sessions.size == 1 }
         awaitTrue("重连后在线态未恢复") { manager.online }
         assertEquals("重连应复用同一 pid", pid, manager.sessions[0].pid)
@@ -196,7 +196,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val pid = 636_002L
         repeat(10) { i ->
             val socket = Socket("127.0.0.1", port)
-            writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+            writeHello(socket, pid)
             awaitTrue("第 ${i + 1} 轮回连未建立会话") { manager.sessions.size == 1 }
             manager.sessions[0].close()
             manager.sweepOffline()
@@ -226,7 +226,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
             val port = portOf(option!!)
             val channel = manager.premainChannels[0]
             val socket = Socket("127.0.0.1", port)
-            writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":${636_100L + i}}""")
+            writeHello(socket, 636_100L + i)
             awaitTrue("第 ${i + 1} 次运行的 premain 会话未建立") { manager.sessions.size == 1 }
 
             manager.onRunEnded()
@@ -247,7 +247,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         val pid = 636_003L
         repeat(AgentManager.MAX_PREMAIN_RECONNECTS) { i ->
             Socket("127.0.0.1", port).use { socket ->
-                writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+                writeHello(socket, pid)
                 awaitTrue("第 ${i + 1} 轮回连未建立会话") { manager.sessions.size == 1 }
                 manager.sessions[0].close()
                 manager.sweepOffline()
@@ -285,7 +285,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
         val sweepsBefore = manager.fallbackSweepCount
         val first = Socket("127.0.0.1", port)
-        writeFrame(first, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(first, pid)
         // **必须等处理线程越过兜底清扫**（T-PS6-06③ 复核订正）：处理线程在 `sessions.add` 之后才调
         // `ensureMonitorStarted`，其末尾有一次**同步** `sweepOffline()`。若只等 `sessions.size == 1`
         // 就推进假时钟，这条刚建好的会话会被那次兜底清扫摘除 → 第二次连接的去重分支根本不发生 →
@@ -306,7 +306,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
         val second = Socket("127.0.0.1", port)
         second.soTimeout = 1_500
-        writeFrame(second, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeHello(second, pid)
         val firstByte = try {
             DataInputStream(second.getInputStream()).read()
         } catch (e: java.net.SocketTimeoutException) {
@@ -393,6 +393,15 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     private fun portOf(vmOption: String): Int =
         Regex("port=(\\d+)").find(vmOption)?.groupValues?.get(1)?.toInt()
             ?: error("VM 选项里没有 port：$vmOption")
+
+    /**
+     * T-SAF-02：正常 agent 路径的 HELLO 写帧——随通道令牌回带（token 取自当前 premain 通道）。
+     * 令牌缺失/不匹配的连接在修复后会被 IDE 侧拒绝，故所有「期望建立会话」的用例一律走本helper。
+     */
+    private fun writeHello(socket: Socket, pid: Long) {
+        val token = manager.premainChannels[0].channelToken
+        writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid,"token":"$token"}""")
+    }
 
     private fun writeFrame(socket: Socket, cmd: Int, body: String) {
         val bytes = body.toByteArray(Charsets.UTF_8)
