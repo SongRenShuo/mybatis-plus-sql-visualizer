@@ -103,6 +103,10 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-IbatisPanwei（2026-11-06）：磐维 PanWeiDB 驱动——公开仓库拿不到厂商标，jar 入库在
+    // database-lab/vendor/drivers/，按仓库相对路径挂**测试 classpath**（仅测试面，供
+    // dialectExternalVerify 连磐维 A/B 实例跑方言渲染套件；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar"))
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。

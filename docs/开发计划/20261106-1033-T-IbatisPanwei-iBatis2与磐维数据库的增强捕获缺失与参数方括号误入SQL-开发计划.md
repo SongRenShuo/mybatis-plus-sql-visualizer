@@ -289,6 +289,27 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 宿主可用内存仅约 966MB（16GB / 11 个既有容器），再上实例前须先腾；镜像需三处补丁（CPU 预检、cgroup v2 的 `checkDockerEnv`、`listen_addresses` 绑死安装期 IP）才能起，报告里有逐条处置；
 - **未做**：V1 驱动连 3.4.0、方言渲染套件（`DialectDockerVerificationTest` 外部实例模式）在本实例上的跑批。
 
+### 12.1 V1 驱动真机（2026-11-06 14:47~14:49，分支 `t-panwei-render`）
+
+- **驱动级探针**（JDK8，`panweidb-jdbc-1.0.0.jar` 直接挂 classpath，探针源在 `/tmp` 不入库）：`Class.forName("org.panweidb.Driver")` 加载成功，连 A 实例（`jdbc:panweidb://103.36.220.245:26101/panweidb`）成功。三条读数：`select version()` → `PostgreSQL 9.2.4 on x86_64-pc-linux-gnu, compiled by g++ (GCC) 7.3.0, 64-bit`；`select dummy from dual` → `X`；`select count(*) from t_order` → `4`。驱动内部日志显示连接走 `org.panweidb.core.v3.ConnectionFactoryImpl`，与 V2 jar 同族协议层——「V1 不是 pgjdbc 改名包」这一 §十二 结论在真机侧再确认一次。
+- **假 IDE 四窗口**（`script-silent-window.txt`，`APP_PORT=8194` / `PROBE_PORT=54994`，demo 用 `-Dpanweidb.version=1.0.0` 重编）：**PASS=12 FAIL=0，ALL-PASS，43.5s**；HELLO +2205ms；四个窗口窗口内事件 29 / 1 / 1 / 1（A 窗那 29 条含 demo 定时任务每次建连时的 `pg_settings` 探测与 `CREATE TABLE IF NOT EXISTS mpsv_tmp_ddl_demo`）；每条事件都带 `u=jdbc:panweidb://103.36.220.245:26101/panweidb`；栈来源 `org.panweidb.jdbc.PgPreparedStatement#execute:145` / `org.panweidb.jdbc.PgStatement#executeQuery:245` / `#executeUpdate:277`——三面登记在 V1 驱动上真在产事件，不是接口兜底。
+- 收尾：`target/e2e-cp.txt` 已重算回 2.0.0（现指向 `panweidb-jdbc-2.0.0.jar`）；demo 源码零改动；`dev-support/e2e-fake-ide/evidence/*` 用 `git checkout --` 还原，读数只在报告与本节。
+
+### 12.2 方言渲染套件（`dialectExternalVerify` 外部实例矩阵，2026-11-06 15:07）
+
+- 矩阵 `.local/dialect-external-matrix.properties`（gitignored）三条：`panwei_a`（Oracle + `jdbc:panweidb://…:26101/panweidb`，用户真实形态）、`panwei_b`（MySQL + `:26100`，验「B 模式手动改选 MySQL」这条路径）、`gaussdb_kernel503`（GaussDB + `jdbc:opengauss://…:25882/xc3_test`，对照）。
+- `build.gradle.kts` 增 `testImplementation(files("database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar"))`，注释写明仅测试面、供本任务连磐维。
+- 读数（`build/reports/dialectExternalVerify/summary.md`）：**通过 2 / 跳过 0 / 失败 1**，整轮 827.8s。
+  - PASS `panwei_b` MySQL words=262 195.8s
+  - PASS `gaussdb_kernel503` GaussDB words=197 545.5s
+  - FAIL `panwei_a`（Oracle）保留字扫描 1/109 个词：`rowid` -> `ERROR: column name "rowid" conflicts with a system column name`
+- 判读：**不是插件渲染缺陷**，是套件前提与磐维 A 内核相撞。三条证据：
+  1. 按断言顺序，`runTcSuite`（分页 / 保留字列 SELECT / IN / 聚合 / UPDATE / INSERT 绑定 / UPSERT）与「保留字词表 ≥ 50」两关都已过，抛出的正是最后那条「扫描失败」断言（`DialectExternalMatrixVerificationTest.kt:144`）——A 模式的方言渲染产能在真引擎上是跑通的。
+  2. 独立探针在 A 实例复现：`CREATE TABLE mpsv_rowid_probe (id INT PRIMARY KEY, "rowid" INT)` 报同一句 `conflicts with a system column name`；`select rowid from t_order` 可用，`pg_attribute` 里 attnum<0 的系统列 = `xc_node_id rowid tableoid cmax xmax cmin xmin ctid`。磐维 A 内核（openGauss 系）把 `rowid` 做成了真系统列，加引用符也救不回；插件把它渲染成 `"rowid"` 本身没错。
+  3. 对照真 Oracle 23 Free（`114.66.55.245:20095`）：同一条加引号 DDL **建表成功**（已 drop），说明「引号包裹的保留字可作列名」对 Oracle 成立；`rowid` 只在 ORACLE / 金仓两个集合里，GaussDB 集合没有，所以 GaussDB 那轮 197 词天然绕过了它。
+- 未做任何放宽：没删词、没标 `optional`、没改断言。`rowid` 的处置（从 Oracle 集合剔除，还是在 sweep 里为「内核系统列名」加一条有据可查的例外）是产品决策，留给主控。
+- 顺带（非本任务范围）：`.local/test-databases.md` 记「两者库 `panweidb` 与 `postgres` 都已灌过 `schema-gaussdb.sql`（58/0）」，实测只有 A 的两库各有 13 张 demo 表；B 的 `panweidb` 库 public 下只有 `pw_login_info` / `pw_probe`，`postgres` 库 1 张，B 侧其实没灌。本套件自带夹具，不受影响。
+
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
 提交：`47a28ef1`（agent 侧 D+E）、`6efd2e48`（IDE 侧 D 展示）、`7510dc79`（名字快筛门控）。
