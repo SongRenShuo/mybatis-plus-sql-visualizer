@@ -1,7 +1,7 @@
 # T-IbatisPanwei：iBatis 2.x + 磐维（Panwei）的增强捕获缺失与参数方括号误入 SQL（2026-11-06）
 
 - 立项：2026-11-06 10:33
-- 状态：**待拍板**（根因分析完成；未动生产代码）
+- 状态：**实施中**（2026-11-06 四路后台并行，见 §十一；根因分析已完成）
 - 目标分支：`master`（券 A/B 可独立先落；券 C 需驱动 jar 才能开工）
 - 来源：用户真机报障——国产库「磐维」（Oracle 模式，驱动 `org.panweidb.Driver`）①增强捕获抓不到；②最终 SELECT 把中括号带进了 SQL；用户补充：项目是 iBatis（非 MyBatis 3）、日志框架 log4j2
 - 取证材料：用户控制台原文（`{pstm-N}` 三行一组，见 §2.1）、两张预览截图（INSERT 全 NULL / SELECT 带中括号）
@@ -212,3 +212,16 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 5. 数据源 URL（可脱敏 host，保留 `jdbc:` 子协议段）——券 F 的键名依据。
 
 > 本券只做分析，不改 `update/update.json`、不推送、不合流；实施与合流按仓库既有纪律另行授权。
+
+## 十一、实施分工（2026-11-06 派工）
+
+用户拍板：全部内容后台并行实施，允许新建分支/工作树防冲突，主控统一合并；只跑定向测试；决策点按本文推荐项执行（D-1 Oracle / D-2 prepare 行不产条目 / D-3 一期复用 MYBATIS）。同日晚用户进一步放开**本地并发限制**（构建位不再受 2 路上限约束），`parallel_tasks.py` 登记与「只跑定向」纪律保留。
+
+| 车道 | 分支 / 工作树 | 券 | 写集（互斥） |
+|---|---|---|---|
+| A | `t-ibatis-parse` / `.worktrees/ibatis-parse` | A、B | `MyBatisLogParser.kt` 及其测试（控制台解析链） |
+| C | `t-catchall-diag` / `.worktrees/catchall-diag` | D、E | agent `CaptureBudget`/`CatchAllMatcher` + `AgentAttachStats`/`CaptureDiagnostics`/`CaptureStatusBar` + i18n |
+| B | `t-panwei-driver` / `.worktrees/panwei-driver` | C（取证，jar 到位才登记） | `DriverRegistry` / `WeaveSpecs` / `StatementWeaverVendorCoverageTest` / 驱动取证报告 |
+| F | `t-panwei-dialect` / `.worktrees/panwei-dialect` | F | `JdbcUrlDialects` / `UrlSubprotocolDialects` / `PreviewDialectResolver.dialectFromBadge` + 测试 |
+
+收口约定：各车道自提交、不推送、不合流、不建 tag；主控在集成分支上合并并按 §六 重跑权威定向，再由用户决定推送与发行节奏。
