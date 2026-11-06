@@ -83,6 +83,9 @@ object XmlPreviewService {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
             val crossNamespace = XmlCrossNsFragmentResolver.resolve(fileText, project)
             val parsed = XmlMapperParser().parse(fileText, crossNamespace)
+            // F-06③：预算超限的降级模型——没有语句树，errors 里就是「为什么没解析 + 语句 id 清单」。
+            // 按既有 warning 通道展示，不能落到下面「mapper 中无语句」的误导文案。
+            if (parsed.degraded) return emptyResult(parsed.errors.joinToString("\n"))
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
             parsedRef = Triple(parsed.namespace, statement.id, statement.kind)

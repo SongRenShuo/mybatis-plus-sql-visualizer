@@ -61,6 +61,13 @@ data class PreviewResult(
     /** F-45：maintainPage 列元数据（仅 pages XML 预览非 null；面板「列信息」tab 展示源）。 */
     val pagesColumns: List<PagesColumn>? = null,
     /**
+     * F-06①：实体字段名清单（驼峰声明形态）——列头溯源 tooltip 的判定输入。
+     * 与 [columns]（列名）同源解析，无实体上下文时为空（空 = 列头零变化）。
+     */
+    val entityFieldNames: List<String> = emptyList(),
+    /** F-06①：实体类简单名（如 `User`）；未知为 null（tooltip 不带「（实体 X）」）。 */
+    val entityName: String? = null,
+    /**
      * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示。
      *
      * 非空时面板按名回填（同名参数全部出现共用输入值）；空表示纯 `?` 顺序回填（既有语义）。

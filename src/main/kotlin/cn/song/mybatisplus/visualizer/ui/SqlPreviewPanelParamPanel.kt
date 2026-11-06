@@ -190,6 +190,23 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         return
     }
 
+    // F-09：超大 SQL 护栏——逐值渲染（每个参数一行输入框 + 文档监听）在超大文本下成倍放大耗时；
+    // 超限只给条数汇总（正文与执行链照旧用原文，见 SqlSizeGuard）。
+    val sizePlan = cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(result.sql)
+    if (!sizePlan.perValueParamsEnabled) {
+        paramPanel.add(JBLabel(MpSqlVisualizerBundle.message(
+            "panel.param.sizeGuard",
+            sizePlan.chars.toString(),
+            cn.song.mybatisplus.visualizer.util.paramCountOf(result).toString(),
+        )).apply {
+            name = "paramSizeGuardSummary"
+            border = JBUI.Borders.empty(6, 8)
+        })
+        paramPanel.revalidate()
+        paramPanel.repaint()
+        return
+    }
+
     // R22 T-04：方案行（设计定稿位置——首个早退之后、batchModel 分支之前）
     paramPanel.add(buildSchemeRow())
 

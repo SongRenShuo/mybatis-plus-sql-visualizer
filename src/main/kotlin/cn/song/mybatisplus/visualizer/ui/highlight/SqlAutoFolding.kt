@@ -46,6 +46,12 @@ object SqlAutoFolding {
     /** 按当前设置对 editor 重建折叠区域；text = 当前全文。关/异常 → 清除本方区域后静默返回。 */
     fun applyTo(editor: Editor, text: String) {
         if (editor.isDisposed) return
+        // F-09：超大 SQL 护栏——折叠规划与逐区域建区随文本长度线性增长，超限直接清空本方区域
+        //（正文不动，执行/导出照用原文）。
+        if (!cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(text).decorationsEnabled) {
+            clearOwnRegions(editor)
+            return
+        }
         val state = runCatching { PluginSettings.getInstance().state }.getOrNull()
         val enabled = state?.autoFoldEnabled ?: false
         if (!enabled) {

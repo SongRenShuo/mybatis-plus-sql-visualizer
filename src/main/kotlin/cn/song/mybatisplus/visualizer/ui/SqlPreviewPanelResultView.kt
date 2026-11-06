@@ -509,7 +509,7 @@ internal fun SqlPreviewPanel.updateColumnInfoTab(result: PreviewResult) {
         val tabPane = contentTabPane ?: return
         // 已添加则不重复添加
         if (!hasTabTitle(tabPane, COLUMN_INFO_TAB_TITLE)) {
-            val panel = buildColumnInfoPanel(result.pagesColumns)
+            val panel = buildColumnInfoPanel(result)
             tabPane.addTab(COLUMN_INFO_TAB_TITLE, panel)
         }
     } else {
@@ -519,7 +519,8 @@ internal fun SqlPreviewPanel.updateColumnInfoTab(result: PreviewResult) {
 
 /** 构建列信息面板（列标识/标题/类型/可见性 表格）。 */
 
-internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): JComponent {
+internal fun SqlPreviewPanel.buildColumnInfoPanel(result: PreviewResult): JComponent {
+    val columns = result.pagesColumns.orEmpty()
     val header = arrayOf(
         MpSqlVisualizerBundle.message("pages.columns.id"),
         MpSqlVisualizerBundle.message("pages.columns.title"),
@@ -534,6 +535,18 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
     }).apply {
         autoResizeMode = com.intellij.ui.table.JBTable.AUTO_RESIZE_ALL_COLUMNS
         tableHeader.reorderingAllowed = false
+        // F-06①：列头溯源 tooltip——「列标识」列对回实体字段；判不出的列（函数列/别名/无实体上下文）
+        // 不进 map，map 为空时连渲染器都不装（零行为变更）。
+        val traceTooltips = cn.song.mybatisplus.visualizer.util.columnFieldTraceTooltips(
+            columnNames = columns.map { it.id },
+            tableName = result.tableName,
+            entityFields = result.entityFieldNames,
+            entityName = result.entityName,
+        )
+        if (traceTooltips.isNotEmpty()) {
+            tableHeader.defaultRenderer = columnFieldTraceHeaderRenderer(tableHeader.defaultRenderer, traceTooltips)
+            javax.swing.ToolTipManager.sharedInstance().registerComponent(tableHeader)
+        }
         // F-13（DBX #317）：列头点击排序——三面板共用 ColumnOrderings 这一套比较逻辑；
         // 默认无 sortKeys 时视图序 = 模型序（原样渲染），零行为变更。
         val sorter = javax.swing.table.TableRowSorter(model)
@@ -555,6 +568,34 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
         }
     })
     return JBScrollPane(table)
+}
+
+/**
+ * F-06①：列头 tooltip 渲染器——包住默认渲染器，按列序号补 tooltip。
+ *
+ * `JTableHeader.getToolTipText(MouseEvent)` 就是取「该列渲染器产出的组件」的 tooltip，
+ * 故只需在渲染时挂上；不在 [tooltips] 里的列显式清空（默认渲染器是共享实例，不清会把
+ * 上一列的文案带到下一列）。
+ */
+internal fun columnFieldTraceHeaderRenderer(
+    delegate: javax.swing.table.TableCellRenderer?,
+    tooltips: Map<Int, String>,
+): javax.swing.table.TableCellRenderer {
+    val inner = delegate ?: javax.swing.table.DefaultTableCellRenderer()
+    return object : javax.swing.table.TableCellRenderer {
+        override fun getTableCellRendererComponent(
+            table: javax.swing.JTable?,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int,
+        ): java.awt.Component {
+            val component = inner.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+            if (component is javax.swing.JComponent) component.toolTipText = tooltips[column]
+            return component
+        }
+    }
 }
 
 /** 移除列信息标签页。 */
@@ -699,10 +740,18 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     errorCopyButton?.isVisible = currentWarning != null
     // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
     // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+    val sizePlan = cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(result.sql)
     if (currentWarning != null) {
         degradationBanner.show(
             DegradationBanner.Kind.RENDER_WARNING,
             MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+        )
+    } else if (sizePlan.showRetentionNotice) {
+        // F-09：超大 SQL 的诚实降级提示——装饰已关（见 SqlSizeGuard 各接线点），
+        // 正文完整保留，用户需要知道「为什么没有高亮/标注」以及原文还能怎么用。
+        degradationBanner.show(
+            DegradationBanner.Kind.RENDER_WARNING,
+            MpSqlVisualizerBundle.message("panel.sql.size.notice", sizePlan.chars.toString()),
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
