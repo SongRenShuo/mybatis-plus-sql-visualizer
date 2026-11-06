@@ -1,0 +1,44 @@
+{
+  "run_id": "mybatis-plus-sql-visualizer-run-1",
+  "repo": "mybatis-plus-sql-visualizer",
+  "target": "E:\\code\\Java\\Gitee\\SongRenShuo\\mybatis-plus-sql-visualizer",
+  "source_ref": {
+    "commit": "30312d461e3fc54d5be553662dc3beb516bfa4e8",
+    "worktree_dirty": true,
+    "dirty_note": "Only untracked addition: .agents/skills/security-audit/ (the audit skill itself). No target source modified."
+  },
+  "profile": "standard",
+  "scope_paths": [
+    "."
+  ],
+  "budget": null,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "prior_runs": [],
+  "companion_files": [
+    "AI-AND-LLM.md",
+    "DESKTOP-MOBILE-AND-LOCAL-IPC.md",
+    "PROTOCOLS-RPC-AND-MESSAGING.md",
+    "SUPPLY-CHAIN-AND-RELEASE.md",
+    "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md"
+  ],
+  "shared_file_owners": {
+    "run-metadata.json": "parent",
+    "architecture.md": "parent",
+    "coverage-ledger.json": "parent",
+    "findings.json": "parent",
+    "REPORT.md": "parent",
+    "FINDINGS-DETAIL.md": "parent",
+    "NEEDS-VALIDATION.md": "parent"
+  },
+  "run_status": "complete",
+  "execution_notes": "Windows host cannot enforce the OS sandbox; run performed source-review only per SKILL.md execution-safety rules. validate-*.cjs run via run-local copies with a documented Windows lstat fallback (tools/ dir); skill originals unmodified.",
+  "wave2_units_added_by_critic": 2,
+  "agents_spent": {
+    "reconnaissance": 4,
+    "hunters": 14,
+    "critics": 2,
+    "phase3_verifiers": 7
+  },
+  "phase4": "findings.json: 25 needs_validation records; both validators PASS",
+  "phase5": "25/25 records independently verified (23 verified, 2 non-material citation/line corrections applied and revalidated)"
+}

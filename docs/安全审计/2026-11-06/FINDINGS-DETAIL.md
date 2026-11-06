@@ -1,0 +1,3 @@
+# FINDINGS-DETAIL — mybatis-plus-sql-visualizer (run-1)
+
+This run produced **zero confirmed findings**. Per the audit contract, confirmed severity requires a bounded locally observed result across the stated boundary, which was impossible on this host (no OS-enforced sandbox for target-controlled execution). All 25 independently verified leads are therefore retained as `needs_validation` records with exact blockers and resolution plans — see NEEDS-VALIDATION.md. When a lead's local check lands, promote it from that document; do not treat any entry here or in NEEDS-VALIDATION.md as a confirmed vulnerability.

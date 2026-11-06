@@ -1,0 +1,1098 @@
+# NEEDS-VALIDATION — mybatis-plus-sql-visualizer (run-1)
+
+Generated 2026-11-05T18:21:09.249Z from findings.json (25 records, all verdict `needs_validation`, sorted by owner-actionability). Each lead is source-grounded with an exact blocker; none carries severity. This run could not execute target-controlled code (no OS-enforced sandbox on the audit host), so every record needs one bounded local check and/or one owner-observed deployment check to settle.
+
+Legend: **L** = run the bounded local check, **D** = owner-observed deployment check.
+
+| # | Lead | Boundary | First step |
+|---|---|---|---|
+| 1 | Working database credential committed in .agents/skills/db-env-provisioning/SKILL.md for a public test-server instance | committed runbook | L+D |
+| 2 | Unauthenticated loopback agent channel: any local process can inject fabricated SQL events, seize capture control, suppress attach, and eavesdrop on the agent's SQL frames | acceptPremain accept loop (accept at :1001; same shape as attachAndOffer accept at :825) | L+D |
+| 3 | MCP read-only execution guard is client-side only: SELECT-invoked server-side side effects execute with full datasource privileges while sqlv_explain advertises readOnlyHint=TRUE | sqlv_explain MCP tool | L+D |
+| 4 | Native execute affordance wired into the plugin preview console bypasses the plugin DML confirm / unbounded-write / dialect-gate chain | SqlPreviewPanel.executeSql | L+D |
+| 5 | Update artifact plugin-id gate uses a regex that XML comments can desync from the platform descriptor parser | downloadAndInstall | L+D |
+| 6 | Update zip guard bounds sizes and counts but delegates entry-name sanitization (zip-slip, Windows reserved names) entirely to unverified platform extractors | downloadAndInstall | L+D |
+| 7 | sqlv_history_search returns restored SQL with literal parameter values unmasked even when the plugin's MCP output masking setting is enabled | sqlv_history_search | L+D |
+| 8 | Imported or VCS-shared settings fields are concatenated into rendered/executed SQL without content validation, letting a shared settings file change statement semantics | settings-file import | L+D |
+| 9 | Exported SQL/HTML report interpolates lower-trust tableName and parameter-source names unescaped and auto-opens the file in a browser | EntityResolver.resolve / annotationValue | L+D |
+| 10 | Lower-trust strings interpolated unescaped into HTML-enabled Swing labels and tooltips in rollback dialog, preview meta line, and error tooltip | rollback generator | L+D |
+| 11 | Guard's INTO structural check is top-level only: SELECT ... INTO &lt;table&gt; inside a CTE or derived table escapes both hasIntoClause and the phrase sweep | checkSingleSelect | L+D |
+| 12 | Token-less log lines share one fallback parser bucket, restoring cross-thread Preparing/Parameters mispairing that reaches SQL execution | threadTokenOf (invoked per line at SqlLogConsoleBridge.kt:1155 and LogToSqlPanel.kt:490) | L+D |
+| 13 | Autosave writer opens the history file with CREATE+APPEND following symlinks while the revision path enforces no-follow, enabling append into a planted symlink target outside the project | resolveHistoryDir (write-side configure and read-side HistorySqlLogPanel share it) | L |
+| 14 | Dependency resolution prefers the Aliyun mirror over Maven Central with no dependency verification, so substituted mirror bytes flow into the shipped plugin unchallenged | dependencyResolutionManagement.repositories | L+D |
+| 15 | Gradle wrapper distribution is fetched from the Tencent mirror with no distributionSha256Sum, so local builds (including the Gitee beta release build) run an unverified toolchain | distributionUrl | L+D |
+| 16 | Marketplace/compat gate resolves the verifier-cli jar by first-match cache walk, silently ignoring the pinned version whenever multiple versions coexist in the Gradle cache | pinned verifier-cli version | L+D |
+| 17 | MCP text-analysis tools (sqlv_check_sql, sqlv_rollback_plan, sqlv_reverse_sql, sqlv_perf_advice) parse agent-supplied SQL of unbounded length while the sibling render-logs path enforces a 20k cap for the same sink class | sqlv_check_sql | L |
+| 18 | SqlReverseParser recursive-descent has no nesting-depth guard: deeply parenthesized or nested-subquery SQL reaches StackOverflowError through sqlv_reverse_sql | sqlv_reverse_sql | L |
+| 19 | OgnlEvaluator.parse leaks NumberFormatException (integer literals &gt; Long.MAX_VALUE) and StackOverflowError (deep nesting) out of its ParseResult/Err contract, reaching MCP mapper-check and UI preview uncaught | entrypoint | L+D |
+| 20 | MyBatis Parameters text parsed by quadratic regex without the existing maxParseLength cap freezes the console parse thread | EpLineFilter.applyFilter / SqlLogConsoleBridge.handleConsoleLine (SqlLogConsoleBridge.kt:391) | L+D |
+| 21 | ExecutionTimeParser trailing-ms regex backtracks quadratically over whitespace runs on unbounded console lines | finishEntries (called from processConsoleLine :1170 and the sniffed-unseal path :1114) | L+D |
+| 22 | MyBatis/Hibernate parser thread buckets are never evicted while pending, accumulating unbounded retained SQL per console | feedInto branch 1 | L+D |
+| 23 | Planted or oversized .sql history file buffers unbounded non-revision lines and blocks in IDE memory during history read and MCP history search | scanHistoryFiles (countInFile per listed file) | L+D |
+| 24 | Agent-supplied regex in sqlv_history_search is evaluated without timeout or cost budget over history SQL, enabling catastrophic-backtracking CPU exhaustion inside the IDE process | sqlv_history_search | L+D |
+| 25 | Imported dynamic-table-name regex rules are compiled and executed with no complexity or timeout bound on the preview render path | settings import | L+D |
+
+---
+
+## 1. Working database credential committed in .agents/skills/db-env-provisioning/SKILL.md for a public test-server instance
+
+- **fingerprint**: `db-env-provisioning.skill.highgo-xc3-password`
+- **boundary/entrypoint**: committed runbook — Verified verbatim: `CREATE USER xc3 PASSWORD 'Zq7#Pq9m2026';` inside the passwordcheck workaround instructions; line 164 states this credential can only be maintained outside the policy, i.e. it stays valid.
+
+### Description
+
+The repository ships a literal HighGo (瀚高) database password for user xc3 alongside the public IP of the maintainer's test server and the Docker port mapping for that instance, in a committed operational skill document. Verified read-only: the literal exists at the cited line in the working tree AND in git HEAD (git show HEAD grep hit), the file is git-tracked (git ls-files --error-unmatch), and it is not covered by .gitignore (git check-ignore exit 1). The same document explicitly states this credential cannot be changed through the engine's password policy and must be maintained as-is, so it plausibly remains the operative password for the xc3 account on that instance. If the mapped port is published to the internet, anyone reading the public repository can connect to that database instance as xc3.
+
+### Claimed root cause
+
+An operational runbook was committed with a real (not placeholder) password literal, while every sibling instance in the same runbook and the example TSV use redacted placeholders (<强口令>, change-me); no pre-commit guard exists for credential literals in documentation trees.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `.agents/skills/db-env-provisioning/SKILL.md:160` | committed runbook | Verified verbatim: `CREATE USER xc3 PASSWORD 'Zq7#Pq9m2026';` inside the passwordcheck workaround instructions; line 164 states this credential can only be maintained outside the policy, i.e. it stays valid. |
+| propagation | `.agents/skills/db-env-provisioning/SKILL.md:81` | instance ledger | Verified: same document commits the HighGo instance row with host-port mapping 25866→5866, tying the credential to a network-reachable endpoint on the host committed at line 8 (103.36.220.245). |
+| propagation | `.agents/skills/db-env-provisioning/SKILL.md:8` | environment header | Verified: commits the test server identity/IP (103.36.220.245) used by the runbook; sibling workflow docs (.github/workflows/nightly-full.yml:308-309, docs/发行说明/T-ReleaseChecklist-发行检查清单.md:74) confirm this host serves CI-reachable database instances (MySQL on 25900 via MPV_DB_* secrets). |
+| sink | `.agents/skills/db-env-provisioning/SKILL.md:201` | external-instance invocation | Verified: the runbook instructs running the verification suite against these instances via -Dmpvs.dialect.jdbcUrl pointing at the public host (illustrated with the MariaDB instance jdbc:mariadb://103.36.220.245:23306/xc3_test), demonstrating the intended remote (non-loopback) usage pattern of the committed endpoints. |
+
+### Evidence
+
+- `.agents/skills/db-env-provisioning/SKILL.md:160` — Verified: plaintext password literal Zq7#Pq9m2026 for user xc3, present in working tree and in git HEAD (file tracked per git ls-files, not gitignored per git check-ignore).
+- `.agents/skills/db-env-provisioning/SKILL.md:164` — Verified: document states any ALTER USER … PASSWORD is rejected again, so the committed credential remains the operative one for xc3.
+- `.agents/skills/db-env-provisioning/SKILL.md:81` — Verified: instance table commits host port mapping 25866→5866 for the HighGo container.
+- `.agents/skills/db-env-provisioning/scripts/instances.example.tsv:20` — Verified: sibling instance passwords are redacted placeholders (<强口令>), showing the SKILL.md literal is the anomaly, not the convention.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- deployment observation missing: whether the test server's HighGo listener (103.36.220.245:25866) is exposed beyond the maintainer's network and whether the committed credential is still valid for the xc3 account — no network contact permitted in this source-only run
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Add a source-scan guard (existing pattern: BannedApiSourceScanTest-style guard) asserting no PASSWORD '...' literals or unredacted jdbc password properties in .agents/**, docs/**, dev-support/**, then verify it turns red against the current SKILL.md:160 content.
+
+**Owner-observed deployment check:** Owner-observed only: from the maintainer's own environment, check whether docker publishes 25866 on 0.0.0.0 (docker port for the highgo container, ss -tlnp), confirm from host logs whether xc3@25866 has inbound non-maintainer connections, then rotate the xc3 credential on the instance and scrub the literal from the file and git history.
+
+---
+
+## 2. Unauthenticated loopback agent channel: any local process can inject fabricated SQL events, seize capture control, suppress attach, and eavesdrop on the agent's SQL frames
+
+- **fingerprint**: `agent-ipc-loopback-unauth-session-trust`
+- **boundary/entrypoint**: acceptPremain accept loop (accept at :1001; same shape as attachAndOffer accept at :825) — Loopback accept loop accepts any local TCP connection to the premain/attach port; no peer credential, token, or origin check exists between accept() and session creation (verified: no getRemoteSocketAddress/peer-credential/remote-address check anywhere in log/agent/).
+
+### Description
+
+The IDE-agent IPC channel has no peer authentication in either direction. The IDE's loopback ServerSockets (attach chain AgentManager.kt:799, premain channels :899, re-bind :1577-1581) accept any local connection and turn it into a full AgentSession whose frames are treated as agent-authoritative; session identity is a self-reported HELLO pid. Consequences for a malicious local process: (1) inject fabricated SQL events that flow into the same sinks as console lines (panel, autosave files with attacker-chosen provenance headers, jump-to-source navigation, history and dialect inference); (2) spoof CMD_CONFIG_ACK to control SqlCaptureGate.paused (suppress the console bridge or fake 'agent confirmed active'), and poison attachedPids with a chosen pid to suppress attach of real targets; (3) receive the agent's EVENT frames (SQL text and literal parameter values) by winning the port race, sustaining the stream past the 15s watchdog with a forged CONFIG. Verified as strongest source-visible controls on this path: loopback-only bind, 1MB frame caps (AgentProtocol.kt:41, SenderLoop.java:53), capture-state/user-pause gates (AgentSessionSupport.kt:513,538), per-pid HELLO dedup (AgentManager.kt:1156-1160), and SenderLoop MAX_FAST_DROPS (SenderLoop.java:112) — all are capture-state, rate, or per-pid mechanisms, none is a peer-identity check; no token, shared secret, HMAC, OS peer credential, or remote-address check exists in either the IDE-side (src/main/kotlin/.../log/agent/) or agent-side (sub-projects/sql-visualizer-agent) code, and the negotiated port is passed to the target JVM with no capability secret (AgentProtocol.kt:67-68). The decisive OS-level facts (which local adversary model applies, loopback reachability across users, port discovery) were not locally observable in this source-only run.
+
+### Claimed root cause
+
+AgentManager binds loopback ServerSockets (AgentManager.kt:799 attach, :899 premain, :1577-1581 re-bind) and grants every accepted connection full session authority with no OS peer credential, shared secret, or channel-ownership check; HELLO pid (AgentManager.kt:157, :1196-1210) is self-reported and trusted for attachedPids registration (AgentManager.kt:1162) and premain channel pid; AgentSession.handleFrame (AgentSessionSupport.kt:486-588) applies EVENT/HEARTBEAT/CONFIG_ACK frames from any connected socket to the panel/autosave/navigation sinks and the SqlCaptureGate bridge gate; agent-side SenderLoop (SenderLoop.java:225) unconditionally writes HELLO/HEARTBEAT/EVENT frames (SQL + literal parameter values) to whatever answers the negotiated port and applies inbound CONFIG from that peer (SenderLoop.java:429-471).
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:993` | acceptPremain accept loop (accept at :1001; same shape as attachAndOffer accept at :825) | Loopback accept loop accepts any local TCP connection to the premain/attach port; no peer credential, token, or origin check exists between accept() and session creation (verified: no getRemoteSocketAddress/peer-credential/remote-address check anywhere in log/agent/). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:1196` | readHelloPid / HELLO_PID_REGEX (:157) | Session identity is established from the self-reported HELLO body; the digits-only regex accepts any attacker-chosen non-negative pid, and a missing/malformed HELLO yields pid=0 which is still tolerated (session committed at :1161, only the attachedPids registration at :1162 is skipped); the session is committed under sessionCommitLock with attachedPids[pid] registered (:1150-1163) regardless of who the peer actually is; the per-pid dedup at :1156-1160 only drops a duplicate of an already-healthy same-pid session, so any other chosen pid is accepted. |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentSessionSupport.kt:486` | AgentSession.handleFrame | EVENT/HEARTBEAT/CONFIG_ACK frames from the unauthenticated socket are honored; the only pre-sink gates are capture-state (listenActiveProvider :513) and user pause (:538), not peer identity; spoofed EVENT is adapted by AgentEventAdapter.toEntry (:523) with fully attacker-chosen sql/params/sourceFile/sourceCandidates/url (AgentEvent.kt:11,21,25,35,39). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentSessionSupport.kt:553` | logManager.entries.addEntry | Fabricated SQL entry enters the panel/autosave/jump-to-source chain identically to console-captured lines; spoofed sourceFile is written verbatim into the autosave header (SqlLogAutoSaver.kt:488-490) and spoofed sourceCandidates drive editor navigation (EntryJumpResolver.kt:33-53). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:1283` | updateOnline / SqlCaptureGate.paused (with AgentSessionSupport.kt:576 configAckDisabled, AgentManager.kt:1351 captureConfirmedActive) | Spoofed CMD_CONFIG_ACK sets configAckDisabled=false (AgentSessionSupport.kt:576) which drives captureConfirmedActive() (AgentManager.kt:1351) and the bridge gate SqlCaptureGate.paused (:1284) — an injected peer controls which capture channel the IDE trusts (the injected session stays 'healthy' merely by sending HEARTBEAT frames it also controls); attachedPids poisoning (:1162 + putIfAbsent at :585) suppresses attach of chosen pids while the injected session stays healthy. |
+| sink | `sub-projects/sql-visualizer-agent/src/main/java/cn/song/mybatisplus/sqlvis/agent/transport/SenderLoop.java:225` | SenderLoop.run dial/write loop (HELLO :237, HEARTBEAT :239, EVENT :263; inbound CONFIG application :429-471, watchdog :295-303) | The agent dials 127.0.0.1:port and writes HELLO/HEARTBEAT/EVENT frames (SQL text and literal parameter values) to whatever answers; a local process that wins the port race receives them, sets configSeen (:282) with any CMD_CONFIG frame to permanently silence the 15s watchdog (:295-303), and keeps AgentState disabled=false via {"disabled":false} (:430-432) so the capture stream keeps flowing to the squatter. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:799` — attachAndOffer: ServerSocket(0, 1, InetAddress.getLoopbackAddress()) then server.accept() at :825 — loopback-only bind, no peer authentication on accept.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:157` — HELLO_PID_REGEX = Regex("\"pid\"\s*:\s*(\d+)") — session pid is self-reported by the connecting peer.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt:1162` — attachedPids[pid] = clockMs() written from the self-reported pid inside onPremainConnected; attachToPid's putIfAbsent (:585) then skips attaching that pid.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentSessionSupport.kt:576` — CMD_CONFIG_ACK branch sets configAckDisabled from any connected socket (:563-584) — the sole truth source for captureConfirmedActive (AgentManager.kt:1351) and the bridge gate SqlCaptureGate.paused (AgentManager.kt:1283-1284).
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentSessionSupport.kt:553` — EVENT frames from the unauthenticated session are added to the log entries (panel/autosave/navigation sinks) after only capture-state gates (:513 listenActiveProvider, :538 pausedProvider) — neither is a peer-identity check.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentProtocol.kt:67` — agentArgs = "port=$port;logLevel=$logLevel;stackFrames=$stackMaxFrames" — the negotiated port is delivered to the target JVM (and readable from its command line) with no shared secret or capability token.
+- `sub-projects/sql-visualizer-agent/src/main/java/cn/song/mybatisplus/sqlvis/agent/transport/SenderLoop.java:225` — socket = dialer.dial("127.0.0.1", serverPort) — the agent trusts whatever listens on the negotiated port and writes SQL frames with literal parameter values to it (EVENT write at :263).
+- `sub-projects/sql-visualizer-agent/src/main/java/cn/song/mybatisplus/sqlvis/agent/transport/SenderLoop.java:429` — handleInbound applies CONFIG from the same unauthenticated peer via contains-based parsing (:430-436, :472), enabling a squatter to keep capture enabled past the watchdog (:295-303) by sending any frame with "disabled":false.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution (this run is source-review only; no local process, socket harness, two-JVM variant, or IDE instance may be started, so no bounded local observed result exists)
+- local adversary model is not source-visible: which cross-principal attacker applies (another unprivileged same-user process vs a different local OS user), and the OS facts that decide reachability — whether a different-user process can connect to/scan the developer's loopback ports and read the -javaagent command line (or attach-chain listener) that carries the negotiated port; Windows loopback ACL behavior is not observable from repository source
+- no bounded local observed result: acceptance of a foreign loopback connection as an agent session, injection of a fabricated panel entry, the CONFIG_ACK gate flip (SqlCaptureGate.paused), attachedPids poisoning suppressing a subsequent attachToPid, and port-squat eavesdropping of the agent's SQL frames past the 15s watchdog were not locally demonstrated
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** From the repo root run the existing real-socket harnesses non-destructively: `gradlew.bat test --tests cn.song.mybatisplus.visualizer.log.agent.AgentManagerPremainTest --tests cn.song.mybatisplus.visualizer.log.agent.AgentManagerIntakeGateTest` (both exist at src/test/kotlin/cn/song/mybatisplus/visualizer/log/agent/; they already drive the premain/accept/intake path over real loopback sockets using plain uncredentialed java.net.Socket clients — AgentManagerPremainTest.kt:110,198,249 and AgentManagerIntakeGateTest.kt:93-94 — so a green run is the in-process baseline that connections with no credential are accepted and their frames honored; note the build needs the IntelliJ platform distro and JDK 17 already in the local Gradle cache, per the repo's offline-build caveat). Then the two-process variant: while the harness holds the accepted premain/attach port, a second JVM process connects to it, writes a 4-byte-length HELLO frame {"pid":<chosen>} plus CMD_EVENT and CMD_HEARTBEAT frames, and asserts (a) a fabricated LogSqlEntry (attacker-chosen sql/params/sourceFile/sourceCandidates) lands in the entry buffer and its sourceFile appears verbatim in the autosave header, (b) a forged CMD_CONFIG_ACK {"disabled":false} flips configAckDisabled and drives SqlCaptureGate.paused=true via updateOnline, and (c) attachedPids registration for the claimed pid makes a subsequent attachToPid(pid) return early at the putIfAbsent (AgentManager.kt:585) without loadAgent; the squatting variant binds the negotiated port before the agent dials, records received CMD_EVENT frames containing literal parameter values, and verifies a forged {"disabled":false} CMD_CONFIG within the 15s watchdog window (SenderLoop.java:71) keeps the stream alive indefinitely.
+
+**Owner-observed deployment check:** Owner-observed check on a real developer machine (own machine, own plugin instance, no third parties): with enhanced capture enabled and an app running under the IDE, start a second local process that connect-scans loopback to find the premain/attach port (or read the target JVM's -javaagent command line for the port), send HELLO+EVENT frames, and observe the fabricated SQL row (with attacker-chosen source header) appear in the plugin panel and the autosave file; separately, bind the agent's negotiated port in a second process (before the agent dials, e.g. during a fresh Run) and observe the agent writing SQL frames (SQL text + parameter literals) to that process and the attach-suppression effect for a spoofed pid in the plugin status/attach log.
+
+---
+
+## 3. MCP read-only execution guard is client-side only: SELECT-invoked server-side side effects execute with full datasource privileges while sqlv_explain advertises readOnlyHint=TRUE
+
+- **fingerprint**: `mcp-select-guard.client-side-only-readonly-gap`
+- **boundary/entrypoint**: sqlv_explain MCP tool — Agent-supplied selectSql enters; guard at line 70 admits any statement shaped as a single plain SELECT, including SELECT <side-effecting-function>(...), and the tool advertises readOnlyHint=TRUE at line 30.
+
+### Description
+
+sqlv_explain tells the MCP agent the tool is strictly read-only (@McpToolHints readOnlyHint=TRUE at SqlVisualizerExplainTool.kt:30 and description 'Strictly read-only ... rejections are fail-closed' at lines 26-27). The actual control is McpSelectGuard.checkSingleSelect — a client-side statement-shape and keyword filter that by design admits any single plain SELECT — followed by McpDbExecutor connecting to the project datasource with its stored credentials and executing the statement without any database-layer read-only enforcement (repo-wide grep of src/main finds no connection.setReadOnly, no SET TRANSACTION READ ONLY, and no session read-only init). A statement that passes the guard as a plain SELECT can still cause server-side writes and state changes through SELECT-invoked functions and stored routines (user-defined functions performing DML; engine builtins such as MySQL load_file(), PostgreSQL pg_read_file/pg_ls_dir/lo_import/dblink/pg_sleep), and through planner-time function evaluation, all with the datasource account's full privileges. The guard's own deny-list (McpSelectGuard.kt:37-45, verified FORBIDDEN_WORDS) covers statement verbs, not function bodies, and no downstream layer narrows the account's authority.
+
+### Claimed root cause
+
+McpSelectGuard enforces read-only as a purely client-side syntactic property (single plain SELECT), and McpDbExecutor.executeQuery never places the connection or session in a read-only mode (no setReadOnly, no read-only transaction start), so the guarantee communicated to the agent (readOnlyHint TRUE) exceeds what any layer in this repository enforces; the effective authority is the datasource account's full privilege set.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerExplainTool.kt:34` | sqlv_explain MCP tool | Agent-supplied selectSql enters; guard at line 70 admits any statement shaped as a single plain SELECT, including SELECT &lt;side-effecting-function&gt;(...), and the tool advertises readOnlyHint=TRUE at line 30. |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.kt:295` | executeQueryInternal connection setup | Connection built over DatabaseConnectionManager with the datasource's stored credentials; setAskPassword is the only builder option set; no read-only session/connection mode is established and setQueryTimeout (lines 311-316) is best-effort only. |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.kt:325` | executeQuery(String) on RemoteStatement | The EXPLAIN-wrapped statement is executed on that connection; a SELECT-invoked function/stored routine executes on the database server with the datasource account's full privileges, and any DML it performs is committed under that account. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:37` — FORBIDDEN_WORDS (lines 37-45) is a statement-verb deny list with a scalar-function-form exemption for insert/truncate; a statement whose only write path is a SELECT-invoked function body is structurally a Select and is allowed.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.kt:311` — Only guard applied at execution is best-effort setQueryTimeout; grep of src/main finds no connection.setReadOnly, SET TRANSACTION READ ONLY, or session read-only setup on this chain.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerExplainTool.kt:30` — Tool metadata asserts readOnlyHint=TRUE (line 30) and the description claims 'Strictly read-only ... rejections are fail-closed' (lines 26-27) to the agent.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured behavior of a supported engine executing a SELECT-invoked side-effecting function/stored routine (e.g. an H2 CREATE ALIAS function performing DML, or PostgreSQL SELECT pg_read_file()) through the DatabaseConnectionManager/RemoteStatement reflection channel with a datasource account — whether the side effect occurs and commits is not source-visible, and neither is whether the platform DBN connection layer applies any read-only attribute of its own
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend McpSelectGuardTest (src/test/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuardTest.kt) corpus with assertAllowed("SELECT MY_WRITE_FN(1)") and a CREATE-ALIAS-style call form to pin that the guard admits function-form SELECTs (pure logic, plain JUnit; run gradle --tests cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest). The end-to-end side-effect observation cannot go through McpDbExecutor in plain JUnit (it reflects into com.intellij.database platform classes), so the engine-level fact is owner-observed separately: on a scratch, disposable in-memory/file H2 database via plain JDBC, CREATE ALIAS a function performing an INSERT, execute SELECT MY_WRITE_FN(1) through a bare Statement (the same JDBC contract RemoteStatement mirrors), and observe the inserted row after the call — establishing the smallest engine-level boundary result with dummy data.
+
+**Owner-observed deployment check:** Owner-observed check on a scratch datasource: call sqlv_explain with a SELECT invoking a stored function that performs DML (e.g. PostgreSQL `SELECT touch_audit_log()`) and confirm from the database side that the DML committed while the tool returned a read-only plan response; optionally verify the same for pg_read_file/load_file availability under the configured account.
+
+---
+
+## 4. Native execute affordance wired into the plugin preview console bypasses the plugin DML confirm / unbounded-write / dialect-gate chain
+
+- **fingerprint**: `execute.embedded-native-console-exec-bypasses-confirm-chain`
+- **boundary/entrypoint**: SqlPreviewPanel.executeSql — Preview SQL taken from nativeEditorDoc/editor — text derived from captured console/log output and rendered by the plugin into the console document
+
+### Description
+
+DataSourceSelector.prepareAfterEditorResolved fabricates a full native execution context inside the plugin's preview panel: it installs a UiDataProvider exposing PROJECT, EDITOR, VIRTUAL_FILE, PSI_FILE and the DBN SessionClientHolder.CLIENT_KEY (DataSourceSelectorConsole.kt:273-303) and builds the native Console.Jdbc.Left/Right header via JdbcConsole.buildHeaderComponent (:342-350), explicitly so the native Execute (▶) toolbar action and Ctrl+Enter are enabled on the embedded console editor (the plugin's own comments document that without this wiring ▶ is permanently disabled because QueryActionBase.update needs EDITOR+console and the embedded panel lacks FileEditor/platform providers). The plugin's own comment at :397-398 enumerates three execution paths over this console ('原生 ▶ / 控制台 Ctrl+Enter / 插件按钮'). Only the plugin-button path runs the execution-authorization chain — SqlTypeClassifier DML confirm with ExecuteConfirmMessages/SchemaValidationGate lines, ${}-raw and unknown-param confirms, ExecutionDialectGate.allowDialectGate. The native ▶ / Ctrl+Enter path submits the console document through the platform action chain with none of these gates, while the document text is SQL the plugin derived from captured console/log output — the lower-trust principal the confirm chain exists to guard. Result: two visually adjacent execute affordances over the same untrusted SQL with different guard sets (sibling-control equivalence failure).
+
+### Claimed root cause
+
+prepareAfterEditorResolved deliberately reconstructs the platform execution data context (CLIENT_KEY/PROJECT/EDITOR/VIRTUAL_FILE/PSI_FILE via UiDataProvider, DataSourceSelectorConsole.kt:273-303) and the native header (:342-350) inside the plugin panel to make ▶/Ctrl+Enter work, but the plugin's execution authorization gates live only in the plugin-driven submission paths (SqlPreviewPanel.executeSql, executeOnConsole, chooseAndPrepare); no gate is attached to the console editor or to the native action path.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt:1123` | SqlPreviewPanel.executeSql | Preview SQL taken from nativeEditorDoc/editor — text derived from captured console/log output and rendered by the plugin into the console document |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt:282` | UiDataProvider.uiDataSnapshot | Provider supplies PROJECT (:282), EDITOR (:283), VIRTUAL_FILE (:284), lazy PSI_FILE (:286-293) and DBN SessionClientHolder.CLIENT_KEY (:294-302), enabling native QueryActionBase inside the plugin's embedded panel |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt:349` | prepareAfterEditorResolved header build | JdbcConsole.buildHeaderComponent invoked reflectively (:349) installs Console.Jdbc.Left (native ▶ execute) on the embedded editor; execution via this affordance never passes allowDialectGate, SqlTypeClassifier confirm, or the ${}-raw/unknown-param gates — those run only in the plugin-button chain (SqlPreviewPanelExecution.kt:1143-1166) |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt:245` | native toolbar execution context | DataProvider wiring makes the embedded panel's action context 'equivalent to the native tool window' (:245), so the platform action submits the console document to the user datasource with zero plugin execution gates (plugin-visible sink is this wiring; the submitting action itself lives in the closed platform Database plugin) |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt:244` — Comment block :240-244 states the DataProvider wiring exists precisely to make the native ▶ execute action resolve the console ('原生头部工具栏动作（▶执行等）经 JdbcConsole.findConsole(event) 解析控制台'), and records sandbox observation that without it ▶ is permanently disabled
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt:398` — Comment enumerates '原生 ▶ / 控制台 Ctrl+Enter / 插件按钮' as three coexisting execution paths over the same console
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt:1146` — Plugin-button path shows the DML confirm via Messages.showYesNoDialog with ExecuteConfirmMessages.build (:1148-1153, including SchemaValidationGate lines) — the gate set the native affordance skips
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt:221` — allowDialectGate is defined here and invoked only from plugin-driven submission paths — executeOnConsole (DataSourceSelectorConsole.kt:559), the chooseAndPrepare session consumer (DataSourceSelectorResults.kt:456) and the structured-EXPLAIN pre-check (SqlPreviewPanelExecution.kt:1738) — never from the native action path
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: whether the native ▶/Ctrl+Enter in the embedded header actually reaches the platform QueryActionBase with the injected UiDataProvider context and submits without any plugin gate — the wiring is reflective and could fail or be rejected by DataValidators on some IDE/Database-plugin versions
+- missing observation: whether the platform Database console applies its own pre-execution confirmation for dangerous statements (e.g. unbounded UPDATE/DELETE) in this embedded configuration; such a platform warning would reduce the gap to a guard-equivalence/wording issue rather than a missing confirm
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** runIde-sandbox robot check plus a headless entry-point scan: extend the ExecutionDialectGateTest-style 'uncovered entry points' scan to enumerate every execution affordance wired by prepareAfterEditorResolved (UiDataProvider keys :277-303, Console.Jdbc.Left actions from buildHeaderComponent :342-350) and assert each resolves to a gated entry; then in the IDE sandbox open a preview of an unbounded DML (UPDATE t SET x=1 with no WHERE) from a log entry, click the embedded native ▶ with a configured dummy loopback datasource, and observe whether any confirm appears before submission; anchor existing tests: ExecutionDialectGateTest, ExecTempFileEdtGuardTest, RollbackSqlPanelTest (confirm-path equivalence baseline)
+
+**Owner-observed deployment check:** owner-observed runIde (IntelliJ 2024.3 + Database plugin) against a local dummy MySQL/PG datasource: execute identical unbounded DML once via the plugin Execute button and once via the embedded native ▶/Ctrl+Enter, then compare console history and rows-affected to establish whether the native path executed without the unbounded-write confirmation
+
+---
+
+## 5. Update artifact plugin-id gate uses a regex that XML comments can desync from the platform descriptor parser
+
+- **fingerprint**: `update.validateArtifact.regex-comment-desync`
+- **boundary/entrypoint**: downloadAndInstall — Update-channel-controlled zip passes UpdateZipGuard bounds check (line 124) and reaches the install seam at line 129
+
+### Description
+
+DynamicInstallSupport.validateArtifact is the sole control binding a downloaded update zip to this plugin's identity before installation. It extracts <id> with the regex <id>(.*?)</id> (DOT_MATCHES_ALL) over the raw plugin.xml text, which matches tag content inside XML comments, whereas the platform descriptor loader used for the actual install parses real XML and ignores comments. A crafted descriptor whose only pre-real <id>...</id> match sits inside a comment passes the gate while the platform reads a foreign plugin id; the dynamic install path passes the zip and the platform-parsed descriptor straight to PluginInstaller.installAndLoadDynamicPlugin with no id comparison of its own, and the restart-script fallback path unpacks the zip's (attacker-named) top-level directory under the plugins root. This defeats the documented 'plugin-id match' invariant of the update-server-to-IDE boundary: a compromised update channel is no longer confined to replacing this plugin but can install content under another plugin's identity. Prerequisite is control of the update channel (manifest or downloadUrl), which already yields arbitrary code as this plugin; the additional gain is planting/replacing a different plugin identity.
+
+### Claimed root cause
+
+checkDescriptorXml validates a regex extraction over raw text (DynamicInstallSupport.kt:182-183) instead of the parsed XML tree the platform consumer uses; the guarantee produced by the gate (id equals PLUGIN_ID) is not the guarantee the consumer assumes (the platform-parsed descriptor id is the visualizer id).
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PluginUpdateRunner.kt:104` | downloadAndInstall | Update-channel-controlled zip passes UpdateZipGuard bounds check (line 124) and reaches the install seam at line 129 |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:183` | extractTag | Regex &lt;id&gt;(.*?)&lt;/id&gt; with DOT_MATCHES_ALL matches the first occurrence anywhere in the raw text, including inside an XML comment placed before the real &lt;id&gt; element; readDescriptorBounded (lines 152-166) performs raw byte-to-string with no comment stripping or XML parsing, so nothing in the pipeline removes commented content |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:174` | checkDescriptorXml | Gate compares the commented benign id against UpdateSource.PLUGIN_ID and returns Ok although the parsed XML declares a foreign id |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:88` | loadDescriptorFromArtifact | Platform parses the same artifact and produces the real (foreign-id) descriptor used for installation |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:260` | unloadAndInstallOnEdt / installAndLoadDynamicPlugin | Platform installs/unpacks the artifact under the identity declared in the real XML (dynamic path); restart-script fallback path unpacks the attacker-named top-level directory under the plugins root (PlatformPluginInstaller.kt:57-59) |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:183` — extractTag builds Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL) and takes the first match over raw descriptor text with no comment/CDATA awareness
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:174` — checkDescriptorXml accepts when the regex-extracted id equals PLUGIN_ID; verified by grep this is the only id comparison of the new artifact in the install chain — the only other PLUGIN_ID use (DynamicInstallSupport.kt:76 findPlugin) looks up the currently installed descriptor, and newDescriptor (line 88) is passed to the platform install call without any id check
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:260` — installAndLoadDynamicPlugin is invoked with (zip, null, newDescriptor); the method performs no id check of its own — class KDoc (lines 28-30) documents newDescriptor as used only for progress title/log/fireState with unpack layout derived from the zip top-level directory name (repo-internal decompilation claim, not platform source)
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupportTest.kt:76` — Existing tests cover wrong-id (validateArtifactRejectsWrongPluginId, lines 72-80) and missing-version rejection but no XML-comment or parser-desync form, so the gate's blind spot is untested
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PluginUpdateRunner.kt:124` — Guard-then-install ordering confirms validateArtifact (inside install) is the only identity gate before platform installation
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- Platform behavior with a mismatched real id (PluginInstaller.installAndLoadDynamicPlugin acceptance, duplicate-id conflict handling, install directory derivation from the zip top-level name, and whether a foreign-id artifact replaces another installed plugin) is implemented in IntelliJ platform jars outside this repository and cannot be observed from source
+- The exact XML the platform parser sees for a dual-form descriptor (commented benign id plus real foreign id) in the IPGP lib-jar layout requires running the platform descriptor loader on a fixture, which is target-controlled execution
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend src/test/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupportTest.kt with a fixture zip whose META-INF/plugin.xml reads '<idea-plugin> <!-- <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id> --> <id>com.example.foreign</id> <version>2099.1.1</version> </idea-plugin>' and assert validateArtifact returns ArtifactCheck.Ok — this proves the gate/consumer desync without touching the platform. Then, inside the approved sandbox, run the existing runIde end-to-end harness (src/test/kotlin/cn/song/mybatisplus/visualizer/heavy/UpdateFlowHeavyTest.kt pattern) with the same fixture served by a local manifest to observe what the platform installs.
+
+**Owner-observed deployment check:** Owner-observed check on a disposable IDE: set -Dmpvs.update.manifest.url to a local HTTP server whose manifest.downloadUrl points at the crafted fixture zip, run the update flow, and record the plugin list/install directory after restart — specifically whether a foreign-id plugin is installed or a duplicate-id conflict is raised.
+
+---
+
+## 6. Update zip guard bounds sizes and counts but delegates entry-name sanitization (zip-slip, Windows reserved names) entirely to unverified platform extractors
+
+- **fingerprint**: `update.UpdateZipGuard.entry-name-platform-delegated`
+- **boundary/entrypoint**: downloadAndInstall — UpdateZipGuard.check passes a zip whose entry names include traversal or Windows-hostile components because the guard only reads sizes and counts (UpdateZipGuard.kt:48-104 never validates entry.name — entry.name appears only in rejection messages at lines 61, 93, 97)
+
+### Description
+
+UpdateZipGuard.check, the plugin-side control at the archive/install boundary, validates only entry counts and declared/actual sizes; it never inspects entry.name. Actual extraction is performed by platform code: StartupActionScriptManager.UnzipCommand on the restart-script path and the unpack inside PluginInstaller.installAndLoadDynamicPlugin on the dynamic path. Neither extractor's canonicalization behavior (rejection of ../ and nested .., absolute or drive-qualified targets, NTFS colon/alternate-data-stream names, reserved device names such as CON/NUL, trailing dots/spaces on Windows, duplicate entry names) is visible in this repository, and no repo test exercises extraction of a traversal-named or Windows-hostile entry name. If either platform extractor writes entries by raw name, a channel-controlled update zip writes files outside the plugins root or into hostile file names on the developer's machine at install time (restart-script path executes at next IDE startup with no re-validation).
+
+### Claimed root cause
+
+The component that guarantees archive bounds (UpdateZipGuard) does not validate the property the consumer relies on (safe entry paths); the extraction components that would enforce it are platform code whose guarantee is assumed, not verified, and the restart-script path re-executes the persisted zip at next startup without re-running any guard.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PluginUpdateRunner.kt:124` | downloadAndInstall | UpdateZipGuard.check passes a zip whose entry names include traversal or Windows-hostile components because the guard only reads sizes and counts (UpdateZipGuard.kt:48-104 never validates entry.name — entry.name appears only in rejection messages at lines 61, 93, 97) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PlatformPluginInstaller.kt:134` | persistZip | The accepted zip is copied to system/mpvs-update for the startup script; restart-script path preserves it past the install call with no further validation |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PlatformPluginInstaller.kt:58` | installRestartScript | UnzipCommand(persistent, pluginsRoot) is scheduled; extraction target root is fixed but per-entry destination paths are derived from entry names by the platform extractor |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupport.kt:260` | installAndLoadDynamicPlugin (dynamic path) | Platform unpack of the same archive; per-entry file writes occur inside platform code outside this repository — the decisive write location for a hostile entry name |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/UpdateZipGuard.kt:48` — check() reads entries, filters directories, and enforces only MAX_ENTRIES / declared single and total caps plus truncated reads; entry.name is used solely in rejection messages (lines 61, 93, 97), never validated
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/UpdateZipGuard.kt:11` — KDoc states the plugin's duty is to stop abnormal packages before the platform unzipper, implicitly conceding path safety is the platform's job — an unverified handoff
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/update/PlatformPluginInstaller.kt:58` — StartupActionScriptManager.UnzipCommand receives the persisted zip and the fixed plugins root; entry-name handling is platform-internal
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/update/UpdateZipGuardTest.kt:23` — Test suite (class declared line 23; covered forms enumerated in KDoc lines 16-21) covers lying headers, entry counts, and size caps but has no traversal-name, absolute-path, colon/ADS, or reserved-name fixture — the zip-slip half of the boundary is untested
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- Entry-path canonicalization behavior of StartupActionScriptManager.UnzipCommand and the PluginInstaller dynamic unpack (including Windows-specific handling of colons/ADS, reserved device names, and trailing dots) is implemented in IntelliJ platform jars outside this repository and is not source-visible here
+- Whether the dynamic unpack path and the startup-script UnzipCommand share the same extractor implementation (so a positive result on one covers the other) is a platform fact not observable from this repository
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** In the approved sandbox, build a fixture zip containing entries '../zipslip-probe.txt', 'C:\absolute-probe.txt', 'probe:ads.txt', 'CON.txt', and a normal entry; run the platform unzip consumed by the install path (StartupActionScriptManager command execution or the PluginInstaller unpack, using the PlatformPluginInstallerTest.kt harness style) against an empty target directory and assert no file appears outside it; additionally extend UpdateZipGuardTest to pin that hostile entry names are at least reported. Record the exact JDK/platform version used.
+
+**Owner-observed deployment check:** Owner-observed check on a disposable Windows IDE: install the crafted probe zip through the real update flow (local manifest via -Dmpvs.update.manifest.url) and, after the scheduled startup-script run, verify no probe files exist outside PathManager.getPluginsDir() and no ADS/reserved-name files were created.
+
+---
+
+## 7. sqlv_history_search returns restored SQL with literal parameter values unmasked even when the plugin's MCP output masking setting is enabled
+
+- **fingerprint**: `mcp.history_search.masking-not-applied`
+- **boundary/entrypoint**: sqlv_history_search — Connected agent calls sqlv_history_search (gated only by the master switch / tool-level enable, McpToolGate) with e.g. keyword=password; the masking setting mcpMaskEnabled is never consulted in this tool.
+
+### Description
+
+The plugin exposes an 'MCP output masking' setting (mcpMaskEnabled, PluginSettings.kt:677, verified: `var mcpMaskEnabled: Boolean = false`). Masking is applied per-tool: only SqlVisualizerRenderLogsTool calls DisplayMasker.maskDisplay on its output (SqlVisualizerRenderLogsTool.kt:112; repo-wide grep confirms this is the only maskDisplay call site in the mcp package). The sibling history channel sqlv_history_search serves the same data class — restoredSql entries whose parameters have been back-filled as literal values — and returns up to 100 previews of 8 lines/600 chars each per call (allDates=true widens to the whole history directory) with no masking applied anywhere on the path. A connected agent can therefore extract sensitive literals the operator asked the plugin to keep out of the AI context by searching history with a keyword targeting the sensitive column.
+
+### Claimed root cause
+
+Output masking is not enforced in the shared toolset output skeleton (McpToolsetSupport.audit returns the raw block string, McpToolsetSupport.kt:127-154); each tool must opt in, and SqlVisualizerHistorySearchTool.formatResult was written without the maskDisplay call, so the mcpMaskEnabled invariant holds on one output channel and silently fails on the other.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerHistorySearchTool.kt:57` | sqlv_history_search | Connected agent calls sqlv_history_search (gated only by the master switch / tool-level enable, McpToolGate) with e.g. keyword=password; the masking setting mcpMaskEnabled is never consulted in this tool. |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:270` | buildResult | hit.sqlPreview = preview(e.restoredSql) — restoredSql is the executable SQL with parameters back-filled as literal values (read back from auto-saved history; SqlLogParamCodec.encodeEntry writes restoredSql as the file body, SqlLogFileReader restores entry.restoredSql verbatim). |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerHistorySearchTool.kt:120` | formatResult | append('\n').append(hit.sqlPreview) — the unmasked SQL text with literal parameter values is returned to the agent; no DisplayMasker.maskDisplay call exists anywhere in the tool or service. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerHistorySearchTool.kt:120` — formatResult appends hit.sqlPreview directly; grep of the mcp package shows DisplayMasker.maskDisplay referenced only in SqlVisualizerRenderLogsTool.kt:112.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:270` — Preview is built from restoredSql (literals back-filled), not from a parameterized or masked form; no mask parameter exists on Query or Hit.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerRenderLogsTool.kt:112` — Contrast: the render-logs channel applies DisplayMasker.maskDisplay(entry.restoredSql, maskOn) under the same mcpMaskEnabled setting (read at lines 99-101), establishing the intended invariant.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettings.kt:677` — mcpMaskEnabled is a global setting (default off) with no per-channel scoping that would exclude history_search; its KDoc states the purpose is keeping sensitive literals out of the AI context.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: a bounded local run has not observed value-level output — that a Hit.sqlPreview produced from a saved-then-restored history entry actually contains a back-filled literal (source establishes the round-trip: SqlLogParamCodec.encodeEntry persists restoredSql as the file body and SqlLogFileReader restores entry.restoredSql verbatim, and McpHistoryIngestTest fixtures show restoredSql round-trips, but the tool's rendered output string was not observed)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Two plain-JUnit steps with dummy data: (1) run gradle --tests cn.song.mybatisplus.visualizer.mcp.McpHistoryIngestTest to confirm the restoredSql round-trip through the saved history file; (2) add a case to cn.song.mybatisplus.visualizer.mcp.HistorySearchToolTest that builds a HistorySearchService.Result containing one Hit whose sqlPreview embeds a dummy sensitive literal (e.g. "password = 'hunter-pw-123'"), calls formatResult, and asserts the literal appears verbatim with no '***' masking; in the same test call the sibling SqlVisualizerRenderLogsTool.renderLogs(..., maskLiterals = true) on the same literal and assert it IS masked — pinning the two-channel inconsistency under identical dummy input.
+
+**Owner-observed deployment check:** Owner-observed, non-destructive: in a sandboxed IDE instance enable 'MCP output masking' in plugin settings, run one SQL with a password-like literal against a scratch datasource so it lands in auto-saved history, connect the built-in MCP server with a test client, call sqlv_history_search with a keyword targeting that column, and observe whether the unmasked literal appears in the response.
+
+---
+
+## 8. Imported or VCS-shared settings fields are concatenated into rendered/executed SQL without content validation, letting a shared settings file change statement semantics
+
+- **fingerprint**: `settings-import.sql-fragment-unvalidated`
+- **boundary/entrypoint**: settings-file import — applyImportedText -> PluginSettings.fromJson merges the file chosen by the operator (importSettings spans ~1692-1716, file.contentsToByteArray read on a pooled thread at 1702-1704) into the live global state (PluginSettings.kt:918-921 passes instance.state.copy() into SettingsIO.importFromJson and loadState back); no preview or diff of SQL-affecting values is shown beyond the generic success label
+
+### Description
+
+SettingsIO.importFromJson accepts arbitrary strings for logicDeleteValue, tenantColumnName, tenantColumnDefault, dataPermissionMockCondition and dynamicTableNameRules.replacement (and tablePrefix/tableSuffix reach the same identifier sink), and every downstream injection site renders these values into SQL text with no quoting, escaping, or syntactic-position enforcement (no value-level validation exists anywhere in SettingsIO.kt or the render layer). A settings file shared by a team (or a committed .idea/mp-sql-visualizer-project.xml) can therefore flip the meaning of the rendered statement: logicDeleteValue='0 OR 1=1' turns the injected guard into 'AND deleted = 0 OR 1=1' (which as 'x AND a OR b' evaluates true for all rows, so a previewed DELETE becomes effectively unfiltered), tenantColumnName='tenant_id=1 OR 1=1 --' replaces the tenant filter, dataPermissionMockCondition appends any WHERE fragment, and a dynamic-table-name replacement can point FROM at arbitrary SQL text. The changed statement is displayed in the preview panel and submitted verbatim to the operator's datasource when executed. The operator-visible control (whitelist merge, version gate) constrains which keys a file may set, never what those keys may contain.
+
+### Claimed root cause
+
+The settings-to-SQL boundary has a key-level whitelist (SettingsIO.kt:91-113) but no value-level validation, while the render layer (SqlGenerator) is pass-through by design (SqlValue.Literal.raw and Condition.Raw.sqlText rendered verbatim; identifiers only quoted on reserved-word collision), so any lower-trust settings channel (shared import file, VCS-shared project XML) can place arbitrary SQL text into WHERE-literal, identifier, and table-name positions of rendered and executed statements.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt:1719` | settings-file import | applyImportedText -&gt; PluginSettings.fromJson merges the file chosen by the operator (importSettings spans ~1692-1716, file.contentsToByteArray read on a pooled thread at 1702-1704) into the live global state (PluginSettings.kt:918-921 passes instance.state.copy() into SettingsIO.importFromJson and loadState back); no preview or diff of SQL-affecting values is shown beyond the generic success label |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIO.kt:99` | whitelist merge | importFromJson assigns logicDeleteValue (line 99), tenantColumnName (101), tenantColumnDefault (102), dataPermissionMockCondition (112), and dynamicTableNameRules via deserializeRules (113, 337-345) directly from the JSON map — strings pass through with no content validation; the version gate (82-86) checks the format number only |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettings.kt:120` | project-level override channel | A second lower-trust channel: .idea/mp-sql-visualizer-project.xml (VCS-shared) carries logicDeleteValue/tablePrefix/tableSuffix; effectiveLogicDeleteValue() (lines 120-122) overrides the global value when useProjectSettings is set, reaching the same sinks via SqlPreviewService.effectiveLogicDeleteValue() |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewServiceEnhancements.kt:393` | logic-delete injection | SqlValue.Literal(logicDeleteValue) is built from the imported value (line 386 reads effectiveLogicDeleteValue()) and appended as the logic-delete condition 'AND &lt;logicColumn&gt; = &lt;raw&gt;' for SELECT (line 393) and sub-joins (403) and DELETE (420); SqlPreviewService.kt:404-406 feeds tenantColumnName/tenantColumnDefault into TenantLineEnhancer.enhanceUpdateSet (TenantLineEnhancer.kt:41-46 SetClause value=SqlValue.Literal(tenantDefault)) and the tenant WHERE; DataPermissionPlaceholder.kt:47-49 appends dataPermissionMockCondition as Condition.Raw |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/SqlGenerator.kt:560` | SQL text rendering and execution | renderValue returns Literal.raw verbatim (SqlGenerator.kt:560; SqlValue.kt:21 'val raw: String' documented as the text rendered into SQL), Condition.Raw.sqlText verbatim (SqlGenerator.kt:513-521), and table/identifier positions render raw unless the value is a reserved word (renderTableName -&gt; Dialect.quoteIfKeyword, Dialect.kt:72-73); the resulting text is the string submitted to SqlExecutor.execute (execute/SqlExecutor.kt:38) from the preview panel |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIO.kt:99` — importFromJson: map.getString("logicDeleteValue")?.let { state.logicDeleteValue = it } — value accepted verbatim; sibling lines 101/102/112/113 for tenantColumnName, tenantColumnDefault, dataPermissionMockCondition, dynamicTableNameRules
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/model/SqlValue.kt:21` — SqlValue.Literal.raw ('val raw: String', KDoc line 15: '渲染进 SQL 的文本') is the text rendered into SQL as-is — no escaping layer exists between settings and SQL text
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/SqlGenerator.kt:560` — renderValue: 'is SqlValue.Literal -> value.raw' — the imported logic-delete/tenant value lands verbatim inside the WHERE clause
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DataPermissionPlaceholder.kt:47` — injectMockCondition appends Condition.Raw(condition) for Select/Update/Delete — the imported mock condition becomes a raw WHERE fragment by construction
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/Dialect.kt:72` — quoteIfKeyword quotes an identifier only when it collides with the dialect reserved-word set — 'tenant_id=1 OR 1=1 --' passes through unquoted as a column reference
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettings.kt:120` — Project-level logicDeleteValue (persisted in .idea/mp-sql-visualizer-project.xml, typically VCS-shared) overrides the global value with no validation
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettings.kt:918` — PluginSettings.fromJson passes the imported JSON plus the live instance state into SettingsIO.importFromJson and loadState — the import overwrites live global state used by every subsequent render
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: locally rendered SQL text for an imported state carrying payload values (e.g. logicDeleteValue='0 OR 1=1', tenantColumnName='tenant_id=1 OR 1=1 --', dynamicTableNameRules replacement containing SQL text) to confirm each fragment lands verbatim in the generated statement
+- missing observation: owner-observed execution against a dummy local datasource confirming the changed row scope when the operator executes the previewed DELETE/UPDATE (e.g. 'AND deleted = 0 OR 1=1' matching all rows due to AND/OR precedence)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Pure-function validation without the IDE: extend src/test/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIOTest.kt with an import JSON whose logicDeleteValue='0 OR 1=1', tenantColumnName='tenant_id=1 OR 1=1 --', dataPermissionMockCondition='1=1 UNION SELECT 1', and a dynamicTableNameRules replacement containing SQL text; then render the resulting statement model with SqlGenerator.generate (no IDE dependency) and assert the WHERE/table text contains each injected fragment; reuse the existing harnesses PluginSettingsTestSupport (src/test/kotlin/cn/song/mybatisplus/visualizer/testutil/PluginSettingsTestSupport.kt), DataPermissionPlaceholderTest and DynamicTableNameProcessorTest as patterns. Run: gradle --tests cn.song.mybatisplus.visualizer.config.SettingsIOTest --tests cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest --tests cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholderTest.
+
+**Owner-observed deployment check:** Owner-observed check on a dummy local MySQL: import the crafted settings JSON via the settings-page import button, preview a @TableLogic entity's wrapper DELETE/SELECT, click Execute through the standard DML confirm, and compare affected/returned rows against the statement MyBatis-Plus actually runs at runtime (the plugin's stated fidelity goal), confirming the imported file changed executed SQL semantics beyond what the operator visibly configured.
+
+---
+
+## 9. Exported SQL/HTML report interpolates lower-trust tableName and parameter-source names unescaped and auto-opens the file in a browser
+
+- **fingerprint**: `share.html-report-export.unescaped-tableName-src`
+- **boundary/entrypoint**: EntityResolver.resolve / annotationValue — Raw string literal of entity @TableName (or @TableField column) annotation read without any validation into TableInfo.tableName; attributeString (:464-472) returns the literal value as-is (only a blank check)
+
+### Description
+
+The F-8 'Export HTML report' share channel writes a standalone HTML file and opens it in the user's default browser (BrowserUtil.open) after the user confirms the save dialog. HtmlReportFormatter escapes SQL tokens and parameter values but interpolates the table name ('<b>$it</b>', :72), dialect (:73), and parameter source names ('<code>$src</code>', :147) raw. PreviewResult.tableName and unresolvedParams carry arbitrary strings from lower-trust project files (entity @TableName/@TableField annotation values, entity column names) — per the architecture a principal below the operator. A hostile cloned project can place markup-bearing strings in these fields; when the developer exports a report the injected markup is rendered as HTML in the file:// context of the opened report. The sibling diagnostic HTML formatter escapes the same fields, showing the intended invariant that this formatter violates.
+
+### Claimed root cause
+
+HtmlReportFormatter.format/buildParamsTable apply escapeHtml only to SQL text and parameter values, omitting it for tableName (HtmlReportFormatter.kt:72), dialect (:73) and parameter source names (:147), while the export flow auto-opens the saved file in a browser; upstream no character validation exists on project-file-derived annotation strings (EntityResolver.kt:454-472).
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/psi/EntityResolver.kt:101` | EntityResolver.resolve / annotationValue | Raw string literal of entity @TableName (or @TableField column) annotation read without any validation into TableInfo.tableName; attributeString (:464-472) returns the literal value as-is (only a blank check) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt:239` | SqlPreviewService preview builders | Unvalidated tableName (jpaCrud.tableName at :239; also specPreview.tableName :467, jpaCrud.tableName :511, table?.tableName :701) and annotation-derived parameter source names (CrudSqlGenerator.kt:167, unresolvedParams = params.map { it.columnName }; actual path src/main/kotlin/cn/song/mybatisplus/visualizer/generator/CrudSqlGenerator.kt) stored into PreviewResult shown in SqlPreviewPanel; panel exposes currentTableName() (SqlPreviewPanel.kt:1131) and unresolvedParams() (:1110) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/share/ui/ShareDialog.kt:206` | ShareDialog.exportHtmlReport | panel.currentTableName() (:206) and panel.unresolvedParams() (:204) passed into HtmlReportFormatter.format; the same values also flow into the diagnostic HTML export via diagnosticInput (:168/:170), which escapes them |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatter.kt:72` | HtmlReportFormatter.format meta block / buildParamsTable | tableName interpolated raw as '&lt;span&gt;Table: &lt;b&gt;$it&lt;/b&gt;&lt;/span&gt;' (:72; dialect raw at :73) and source names raw as '&lt;code&gt;$src&lt;/code&gt;' (:147) into the HTML document; SQL tokens and param values in the same document are escaped (:91/:97/:100/:107), confirming the omission is unintentional |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/share/ui/ShareDialog.kt:219` | ShareDialog.exportHtmlReport delivery | shareManager.saveHtmlReport writes the file and BrowserUtil.open(file.toURI().toString()) launches it in the user's external browser after the FileSaverDialog save, converting stored markup into rendered HTML without additional navigation |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatter.kt:72` — tableName and dialect (:73) interpolated into HTML without escapeHtml, while the SQL token path in the same file uses escapeHtml (:91/:97/:100/:107)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatter.kt:147` — Parameter source name '<code>$src</code>' unescaped; only the paired value uses escapeHtml
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/share/format/DiagnosticReportFormatter.kt:164` — Sibling diagnostic HTML export escapes the whole metaLine — built at :184-190 from input.source/tableName/dialect — and all rendered section lines (:256), establishing the intended invariant
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/psi/EntityResolver.kt:101` — tableName taken verbatim from @TableName annotation string literal; attributeString (:464-472) performs no character validation, only an isNotBlank check
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/share/ui/ShareDialog.kt:219` — Exported report opened in external browser via BrowserUtil.open(file.toURI().toString()) immediately after the save dialog confirms
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatterTest.kt:72` — Existing escaping test ('format_HTML特殊字符_正确转义') only covers SQL text, not tableName or source names — the untested edge
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- script execution behavior for a file:// HTML report in the external browser that BrowserUtil.open launches is a browser/deployment fact not observable from source (modern browsers vary in file-origin script restrictions); without it the observed effect is HTML content injection in the report, not script execution
+- the end-to-end chain (preview a project entity carrying a hostile @TableName, export HTML report, observe the opened report) was not executed in this source-only run
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend src/test/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatterTest.kt (pure JUnit, no IDE): call HtmlReportFormatter.format(sql="SELECT 1", sources=listOf("<img src=x onerror=alert(1)>"), paramValues=mapOf("<img src=x onerror=alert(1)>" to "v"), tableName="<img src=y onerror=alert(2)>", dialect="MySQL") and assert the output contains no raw '<img' outside escaped entities; currently expected to fail for tableName, dialect and the source-name column while DiagnosticReportFormatter.formatHtml passes the same payload. Run with gradle --tests cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatterTest
+
+**Owner-observed deployment check:** In a runIde sandbox with a demo project whose entity carries @TableName("<img src=x onerror=console.log(1)>") and a @TableField column name carrying markup, preview a statement of that entity, run Share > Export HTML Report, and observe whether the auto-opened browser executes the injected handler from the saved file (local dummy payload only, no external calls)
+
+---
+
+## 10. Lower-trust strings interpolated unescaped into HTML-enabled Swing labels and tooltips in rollback dialog, preview meta line, and error tooltip
+
+- **fingerprint**: `ui.swing-html-label.unescaped-lower-trust-text`
+- **boundary/entrypoint**: rollback generator — snapshotSql is built as 'SELECT * FROM $table WHERE $whereText;' from the JSqlParser-parsed original statement, whose text originates in lower-trust sources (console-captured SQL from any hosted process, pasted/previewed SQL, mapper XML)
+
+### Description
+
+The plugin renders lower-trust text (SQL fragments restored from console capture, mapper XML statement identifiers, DB-server error text) through Swing HTML labels. Sibling sites escape consistently and several components use the Swing 'html.disable' client property, but three sinks interpolate such text into <html> JBLabels or tooltips with no escaping and no html.disable: RollbackSqlDialog snapshot query line (:626, plus raw tooltip at :627), SqlPreviewPanel meta line (tableName / XML statementId / parser warning / stack digest; the visible <html> wrap applies when perf-warning segments are present), and SqlResultPanel error tooltip (:277). Swing HTML rendering cannot execute script and these JLabels have no HyperlinkListener, so the boundary effect is limited to HTML content/layout injection plus potential <img src> resource loads (a request issued from the IDE process to an attacker-chosen URL); the actual image-loading behavior of IntelliJ JBLabel/tooltip HTML at runtime is the missing observation.
+
+### Claimed root cause
+
+Per-site ad-hoc HTML escaping with no shared invariant: several call sites escape &<> and five labels disable HTML, but RollbackSqlDialog.kt:626, SqlPreviewPanelResultView.kt fullDisplayText/applyMetaTruncation (:719/:728), and SqlResultPanel.kt:277 (toolTipText) interpolate lower-trust strings into HTML contexts without either escaping or the html.disable client property.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/rollback/RollbackSqlGenerator.kt:283` | rollback generator | snapshotSql is built as 'SELECT * FROM $table WHERE $whereText;' from the JSqlParser-parsed original statement, whose text originates in lower-trust sources (console-captured SQL from any hosted process, pasted/previewed SQL, mapper XML) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt:625` | rollback dialog | assembleSnapshotSection (:623-627) takes currentResult.snapshotSelectSql and applies only a length truncation (SNAPSHOT_DISPLAY_LIMIT) — no character escaping |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt:626` | rollback dialog JBLabel | snapshotQueryLabel.text = "&lt;html&gt;&lt;b&gt;…&lt;/b&gt; &lt;code&gt;$shown&lt;/code&gt;&lt;/html&gt;" on a plain JBLabel (:85), and :627 also sets toolTipText = sql raw — unescaped HTML sinks; the class's own escapeHtml (:1020) is not used here |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt:728` | preview panel meta label | fullDisplayText (:725-728) wraps metaLineText — composed unescaped at :622 (result.tableName) and :629 (xmlModel.statementId), joined with warning text into metaCoreText at :650 — inside '&lt;html&gt;…&lt;/html&gt;' when metaPerfSegments is non-empty (perf warnings present; same wrap in applyMetaTruncation at :717-720), written to metaLabel (SqlPreviewPanel.kt:145, plain JBLabel without html.disable); the unescaped meta content also reaches metaLabel.toolTipText via metaTooltipBase (DialectStatusRefresh.kt:263) |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlResultPanel.kt:277` | execute result panel tooltip | showError escapes the visible label text (:274) and wraps it in &lt;html&gt; (:275) but assigns the raw error string (remote-DB SQLException text) unescaped to infoLabel.toolTipText; Swing tooltips render as HTML only when the text starts with '&lt;html&gt;', which a hostile DB server/proxy error message could arrange |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt:626` — Unescaped $shown interpolation into <html> label while the same class defines escapeHtml at :1020 and uses it for the warning path (:1014-1018)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt:650` — metaCoreText = meta + warningLine where meta includes result.tableName (:622) and xmlModel.statementId (:629) verbatim with no escaping before the <html> wrap at :719/:728
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt:145` — metaLabel created as plain JBLabel() with no html.disable client property, unlike dmlImpactBannerLabel whose putClientProperty("html.disable", true) sits at :664
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlResultPanel.kt:277` — infoLabel.toolTipText = error (raw, unescaped) directly below the escaped visible-label assignment at :274-275
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/DegradationBanner.kt:57` — The codebase's existing control for exactly this risk — putClientProperty("html.disable", true) — applied to DegradationBanner but not to the three affected labels/tooltips
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/CommunityDialog.kt:137` — CommunityDialog defines yet another per-site local escapeHtml (:137-138, escaping &<>" and applied to the <html> description label at :116) — a complete escaper, but itself an ad-hoc per-site variant with no shared utility, reinforcing the per-site ad-hoc escaping root cause (no shared invariant across sinks)
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- not observed whether IntelliJ JBLabel/BasicHTML rendering actually fetches <img src="http(s)://…"> (or file:…) resources from these specific labels — a platform runtime fact that decides whether the effect exceeds layout/content distortion
+- not observed whether ToolTipManager HTML rendering loads <img> resources for the SqlResultPanel error tooltip on this platform version (and the raw tooltip only renders as HTML when the error text itself starts with '<html>')
+- not observed whether these JLabels are reached with attacker-shaped data end-to-end in the runIde sandbox (parsing/truncation steps between console capture and the sinks could alter the payload; the preview meta line's <html> wrap additionally requires perf-warning segments to be present)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** In the IDE test sandbox (headless-capable), run the existing UI harnesses gradle --tests cn.song.mybatisplus.visualizer.ui.RollbackSqlPanelTest (and the SqlResultPanel UI harness) extended with a minimal case: set snapshotQueryLabel.text / metaLabel.text to '<html><img src="http://127.0.0.1:<ephemeral-loopback-port>/probe.png"></html>' and the SqlResultPanel tooltip to a string starting with '<html><img src=…>' while a loopback listener records requests; assert whether a fetch arrives (baseline: the same string escaped). Also assert current behavior with a table fragment containing '<img src=…>' flowing from RollbackSqlGenerator snapshotSelectSql (:283) into snapshotQueryLabel (:626) to confirm the unescaped propagation
+
+**Owner-observed deployment check:** Owner-observed runIde sandbox check: capture a log line whose parsed table fragment contains '<img src=http://<loopback-listener>/x.png>', open the SQL preview (meta line) and the rollback dialog (snapshot query line), and hover an execution error whose message starts with '<html>'; observe via the loopback listener whether the IDE issues image fetches, and confirm no script/link activation is possible on plain JBLabels
+
+---
+
+## 11. Guard's INTO structural check is top-level only: SELECT ... INTO <table> inside a CTE or derived table escapes both hasIntoClause and the phrase sweep
+
+- **fingerprint**: `mcp-select-guard.into-clause-non-recursive-cte-gap`
+- **boundary/entrypoint**: checkSingleSelect — Agent-supplied selectSql enters the guard; a CTE-wrapped statement parses as a single Select and passes the statement-shape gates (ExplainGate also admits WITH as first keyword).
+
+### Description
+
+hasIntoClause (McpSelectGuard.kt:216-222, verified) checks intoTables/intoTempTable only on the top-level PlainSelect and on the direct branches of a SetOperationList; it never visits the PlainSelect bodies inside CTE (WithItem) definitions or derived-table/join subselects. The keyword/phrase sweep that follows (lines 124-126) backstops only the file/variable INTO forms (FORBIDDEN_PHRASES lines 64-67: into outfile, into dumpfile, into var, into @), not plain `SELECT ... INTO <table>` (the SQL Server/H2 table-creating form). The comment at line 215 asserts CTE INTO still lands on a PlainSelect, but the checked PlainSelect is only the outermost one, so a statement like `WITH c AS (SELECT a INTO bak FROM s) SELECT * FROM c` would pass the INTO check and the sweep if JSqlParser 5.3 parses it with the inner PlainSelect holding intoTables and the outer one empty (ExplainGate's first-keyword check admits WITH). Nested FOR UPDATE is not affected (the for update / for share / lock in share mode phrases are substring-swept anywhere in the text).
+
+### Claimed root cause
+
+hasIntoClause is not recursive over nested query bodies (WithItem select bodies, derived tables, joins), and the textual backstop only enumerates file/variable INTO forms, leaving the table-creating SELECT INTO form undetected in nested positions.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:73` | checkSingleSelect | Agent-supplied selectSql enters the guard; a CTE-wrapped statement parses as a single Select and passes the statement-shape gates (ExplainGate also admits WITH as first keyword). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:216` | hasIntoClause | Only top-level PlainSelect and direct SetOperationList branches are inspected; the CTE body's PlainSelect (where an inner INTO would land) is never visited. |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:124` | stripLiterals + scanWords/scanPhrases | Masked text still contains the literal substring `into bak`, but plain INTO &lt;identifier&gt; is not in FORBIDDEN_PHRASES (lines 64-67: only into outfile/dumpfile/var/@ plus locking phrases), so the sweep does not deny it. |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.kt:325` | executeQuery(String) on RemoteStatement | The allowed statement is EXPLAIN-wrapped and executed on the project datasource; if the engine executes the CTE-embedded SELECT INTO, a table is created with the datasource account's privileges. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:217` — hasIntoClause inspects only `select.intoTables`/`intoTempTable` on the statement-level PlainSelect and SetOperationList direct branches (filterIsInstance<PlainSelect> over select.selects); no recursion into WithItem or subselect bodies.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:64` — FORBIDDEN_PHRASES covers only `for update`, `for share`, `lock in share mode`, `into outfile`, `into dumpfile`, `into var`, `into @`, `for browse` — plain `INTO <table>` is intentionally absent (a bare `into` substring would false-positive on ordinary identifiers), so the sweep cannot backstop this form.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt:215` — Comment claims CTE INTO still lands on PlainSelect, but the routine only checks the outermost one — the stated rationale does not match the implementation's coverage.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured JSqlParser 5.3 behavior on `WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c` (and the derived-table form) — whether it parses as a single Select with intoTables on the inner PlainSelect and the outer intoTables null, or fails to parse (which would re-establish fail-closed)
+- missing observation: measured acceptance of SELECT ... INTO <table> inside a CTE/derived table by any supported engine (H2, SQL Server, MySQL, PostgreSQL, DM, KingBase) — without engine acceptance the structural gap has no reachable effect
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend McpSelectGuardTest (src/test/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuardTest.kt) with the exact fixture `WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c` (and a derived-table variant `(SELECT a INTO b FROM s)`) plus assertions on the JSqlParser 5.3 AST shape via SqlAstParser.parseStatements — which PlainSelect holds intoTables and whether the guard's verdict allows it — run with gradle --tests cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest; if the guard allows it, add an engine-level check against a scratch in-memory H2 (which supports SELECT...INTO) executed through plain JDBC (not McpDbExecutor, which needs platform classes) to settle whether the nested form executes.
+
+**Owner-observed deployment check:** Owner-observed check: run sqlv_explain with the CTE-INTO statement against a scratch SQL Server or H2 datasource and observe on the database side whether table `b`/`bak` is created.
+
+---
+
+## 12. Token-less log lines share one fallback parser bucket, restoring cross-thread Preparing/Parameters mispairing that reaches SQL execution
+
+- **fingerprint**: `log.threadrouter.failopen-fallback-cross-thread-param-mixing`
+- **boundary/entrypoint**: threadTokenOf (invoked per line at SqlLogConsoleBridge.kt:1155 and LogToSqlPanel.kt:490) — Lines without a DEBUG/TRACE/INFO/WARN/ERROR keyword anchor (or without a nearby bracket segment) yield null token - typical for bare '==> Preparing: ...' stdout output
+
+### Description
+
+Thread bucketing - the fix for concurrent parameter mispairing - fails open when threadTokenOf cannot extract a token: such lines route to a single shared fallback bucket with single-slot pendingSql/pendingParams state (LogThreadRouter.kt:45,117). Two threads logging bare '==> Preparing:'/'==> Parameters:' lines (no log-framework level keyword, typical of stdout MyBatis logging) interleave in that one bucket. Source reconstruction of the deterministic interleaving A-Preparing(a), B-Preparing(b), A-Parameters(1), B-Parameters(9): B's Preparing closes A's statement parameterless (branch-1 closePending), A's Parameters then pairs with B's pendingSql producing an entry 'b restored with A's values' (branch 4 at MyBatisLogParser.kt:138 + closePending:194 + positional restorer.restore), and B's Parameters is dropped (paramWithoutContext). The console-capture variant surfaces this mispaired restoredSql in SqlLogPanel and in export (SqlLogPanelActions.kt:108 is the export row build); the execution boundary is LogToSqlPanel, which feeds pasted log text through the same MyBatisLogParser/LogThreadRouter fail-open path (LogToSqlPanel.kt:490-491) and sends the converted statements to SqlExecutor.execute (LogToSqlPanel.kt:302/323 -> executeSql:340 -> SqlExecutor.execute:359), i.e. SQL executes with parameter values from a different statement (DML confirm and dialect gate remain, but the user cannot detect the mispairing from the confirmed SQL text).
+
+### Claimed root cause
+
+LogThreadRouter.bucketForToken returns the shared fallback bucket whenever threadTokenOf(line) returns null (deliberate fail-open to avoid losing continuation lines), and the fallback bucket carries the same single-slot pairing state machine that the bucketing fix was built to replace; no guard rejects a Parameters line whose token differs from the pendingSql's token because token-less lines carry no identity at all.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:171` | threadTokenOf (invoked per line at SqlLogConsoleBridge.kt:1155 and LogToSqlPanel.kt:490) | Lines without a DEBUG/TRACE/INFO/WARN/ERROR keyword anchor (or without a nearby bracket segment) yield null token - typical for bare '==&gt; Preparing: ...' stdout output |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:117` | bucketForToken | token == null and no token-bucket collecting (fallback is not in the buckets map, so its collecting state never routes other lines) lands every token-less line in the one shared fallback bucket |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:194` | closePending (invoked from branch 1 at :86 and branch 4 at :141) | Interleaved Preparing/Parameters lines in the shared bucket close entries pairing SQL from one thread with parameters from another; LogSqlRestorer.restore backfills them positionally |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt:359` | executeSql -&gt; SqlExecutor.execute (converted statements chosen at :302/:323) | Mispaired restored SQL is converted from the same fail-open parser path (feed at :491) and executed against the user's datasource; the console-capture variant displays the mispaired entry in SqlLogPanel and exports it (SqlLogPanelActions.kt:108). Execution gates (DML confirm, dialect gate) are the execute unit's controls |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:112` — Documented fail-open: 'MyBatis/JdbcTemplate：收集态桶优先（其裸行必在等待态桶内），否则回退共享桶' - no identity check possible for token-less lines
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:45` — Single fallback bucket instance shared by all token-less lines of the console/parser
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:19` — KDoc records the original defect this state machine was built to fix ('并发下条目严重不正确'), confirming the mispairing impact class when bucketing is bypassed (quote is at this line, not :17)
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: deterministic interleaving fixture demonstrating a concrete mispaired entry (thread B's Preparing SQL restored with thread A's Parameters values) reaching LogSqlEntry.restoredSql
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Pure-JVM: extend LogParseConcurrencyTest / LogThreadRouterTest (both exist; gradle --tests cn.song.mybatisplus.visualizer.log.LogParseConcurrencyTest) with two interleaved token-less streams fed through MyBatisLogParser.feed(line): A: '==> Preparing: SELECT * FROM a WHERE id = ?', B: '==> Preparing: INSERT INTO b VALUES (?)', A: '==> Parameters: 1(Long)', B: '==> Parameters: 9(Long)'. On current source the expected mispair shape is: entry 1 = A's SQL with no params (closed by B's Preparing), entry 2 = B's SQL restored with A's value 1(Long), B's value dropped with LogParseDiag.paramWithoutContext incremented; assert exactly which cross-thread pairing is produced, then re-run with token-bearing lines to confirm the bucketed path pairs correctly.
+
+**Owner-observed deployment check:** Owner-observed: sandboxed demo app with two threads executing different statements with MyBatis logging to stdout (no log prefix), capture enabled, then inspect panel entries for cross-paired parameter values; and/or paste the same interleaved stdout text into the Log-to-SQL panel and observe the converted SQL offered for execution.
+
+---
+
+## 13. Autosave writer opens the history file with CREATE+APPEND following symlinks while the revision path enforces no-follow, enabling append into a planted symlink target outside the project
+
+- **fingerprint**: `history.autosave.append-open-symlink-follow`
+- **boundary/entrypoint**: resolveHistoryDir (write-side configure and read-side HistorySqlLogPanel share it) — resolveHistoryDir returns the operator-set custom path verbatim or <projectBasePath>/.idea/sql-visualizer/sql-history - a project-writable directory by default
+
+### Description
+
+The merge/revision append path carefully refuses non-collaborating files: fileKey() reads attributes NOFOLLOW and rejects non-regular files and symlinks (SqlLogAutoSaver.kt:98-102), and the revision write re-opens with LinkOption.NOFOLLOW_LINKS plus a file lock (:136-141). The primary entry-write path does not: openWriterForCurrent opens Files.newBufferedWriter(path, CREATE, APPEND) with no LinkOption.NOFOLLOW_LINKS and no regular-file check (:436-451, open at :441). The default saveDir lives inside the project (.idea/sql-visualizer/sql-history, resolveHistoryDir at :626-630; operator-set custom path taken verbatim), so anything that can plant a symlink at the configured pattern-derived name before the writer opens the file (configure, IDE startup, date-placeholder change, or roll - the BufferedWriter handle is held between opens) redirects every append from that open - header line, attacker-influenced restoredSql derived from untrusted console text, and the Base64 pd line (writeEntryText, restoredSql written at :526) - to a target outside the project such as a file under user.home; the merge path's fileKey CAS would have rejected this exact state.
+
+### Claimed root cause
+
+openWriterForCurrent (SqlLogAutoSaver.kt:436-451) lacks the NOFOLLOW_LINKS option and the isRegularFile/!isSymbolicLink vetting that the revision path (fileKey, SqlLogAutoSaver.kt:98-102) already implements - two write paths to the same file family with inconsistent symlink containment.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:626` | resolveHistoryDir (write-side configure and read-side HistorySqlLogPanel share it) | resolveHistoryDir returns the operator-set custom path verbatim or &lt;projectBasePath&gt;/.idea/sql-visualizer/sql-history - a project-writable directory by default |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:436` | openWriterForCurrent (open at :441) | openWriterForCurrent calls Files.newBufferedWriter(file.toPath(), CREATE, APPEND) without LinkOption.NOFOLLOW_LINKS or a regular-file/symlink check, so a symlink planted at the pattern-derived name before this open is followed |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:526` | writeEntryText entry write | writeEntryText appends header text plus entry.restoredSql (derived from untrusted console/log text via the parsers) and the Base64 pd payload to whatever the path pointed at when opened, including targets outside the project directory; the merge path's fileKey CAS would have rejected this exact state |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:441` — CREATE+APPEND open with no NOFOLLOW_LINKS and no file-type vetting
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:101` — fileKey explicitly treats symlinks as untrustworthy ('a.isRegularFile && !a.isSymbolicLink'), proving the codebase's own threat model considers planted links in these directories
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:137` — Revision append re-opens with LinkOption.NOFOLLOW_LINKS - the control exists in-repo but is not applied to the entry-open path
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: whether a symlink planted at the pattern-derived name before openWriterForCurrent runs (the writer holds the open handle between configure/roll opens, so planting must precede the open) is actually followed by the CREATE+APPEND open on the target OS and the appended bytes land in the link target during a real write batch
+- missing observation: whether symlinked .idea/sql-visualizer/sql-history entries survive a git checkout on the owner's platform (checkout behavior is outside source)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend the SqlLogAutoSaverTest harness (test file exists; gradle --tests cn.song.mybatisplus.visualizer.log.SqlLogAutoSaverTest): create a temp saveDir, create a symlink named per the default pattern pointing to a second temp file BEFORE configuring the saver (matching the real plant-before-open window), configure the saver with clock injection, submit one entry, and assert whether the link target received the appended bytes; then apply NOFOLLOW_LINKS/regular-file vetting to openWriterForCurrent and add the regression assertion that the write is refused and logged instead.
+
+---
+
+## 14. Dependency resolution prefers the Aliyun mirror over Maven Central with no dependency verification, so substituted mirror bytes flow into the shipped plugin unchallenged
+
+- **fingerprint**: `gradle-deps-aliyun-mirror-first-no-verification`
+- **boundary/entrypoint**: dependencyResolutionManagement.repositories — Verified: maven("https://maven.aliyun.com/repository/public") declared at position 1, ahead of mavenCentral at line 52; Gradle uses the first repository containing each module, so mirror bytes win whenever present.
+
+### Description
+
+settings.gradle.kts declares https://maven.aliyun.com/repository/public (line 50) before mavenCentral (line 52) in dependencyResolutionManagement, and Gradle resolves each module from the first repository that contains it. There is no gradle/verification-metadata.xml (verified: gradle/ contains only libs.versions.toml, plugin-change-notes.html and wrapper/), so no artifact checksum is enforced anywhere in the build. CI hardening steps (five occurrences in build-plugin.yml) strip only proxy properties and rewrite the Gradle wrapper URL, leaving the dependency mirror active. The sole runtime dependency, com.github.jsqlparser:jsqlparser:5.3, is therefore resolved through this priority chain and its bytes are packed into build/distributions/*.zip, uploaded as the plugin artifact and published to GitHub Releases and the Gitee beta self-update channel (update/update.json downloadUrl). Whoever can influence what the mirror serves for these coordinates (mirror operator compromise, mirror-to-Central drift) reaches executed plugin code without any integrity check noticing.
+
+### Claimed root cause
+
+Repository resolution order grants a third-party mirror priority over the canonical Maven Central while the build defines no dependency verification (checksums/signatures), so the intended control (Central as trusted root) is bypassed by configuration rather than compromised.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `settings.gradle.kts:50` | dependencyResolutionManagement.repositories | Verified: maven("https://maven.aliyun.com/repository/public") declared at position 1, ahead of mavenCentral at line 52; Gradle uses the first repository containing each module, so mirror bytes win whenever present. |
+| propagation | `.github/workflows/build-plugin.yml:91` | build job, '配置 CI 下载环境' step (run block at :93) | Verified: CI strips only systemProp proxy lines (:95-98) and rewrites the wrapper URL (:100-102) but does not remove or deprioritize the Aliyun repository, so gate/release builds resolve dependencies through the same mirror-first chain; the wrapper rewrite demonstrates the mirror is not considered equally trusted. |
+| sink | `build.gradle.kts:130` | implementation dependency com.github.jsqlparser:jsqlparser:5.3 | Verified: the only implementation (runtime) dependency is resolved via the mirror-first chain with no checksum verification (no gradle/verification-metadata.xml) and is packed into the shipped plugin zip (buildPlugin), which build-plugin.yml uploads ('上传插件 ZIP' at :165, path build/distributions/*.zip) and publishes to GitHub Release (gh release upload at :806 / gh release create at :821, args constructed :813-814) and onward to the Gitee beta self-update channel (update/update.json downloadUrl). |
+
+### Evidence
+
+- `settings.gradle.kts:50` — Verified: Aliyun public mirror declared before mavenCentral with the comment at :47-49 asserting the mirror is '与 Central 同源同版本' — an unverified assumption and the exact trust handoff at issue.
+- `gradle/libs.versions.toml:1` — Verified: the gradle/ directory contains only libs.versions.toml, plugin-change-notes.html and wrapper/ — no verification-metadata.xml exists anywhere in the repository (confirmed by find over the working tree excluding .git), so no artifact checksum or signature is enforced anywhere in the build.
+- `.github/workflows/build-plugin.yml:102` — Verified: CI rewrites gradle-wrapper.properties from mirrors.cloud.tencent.com to services.gradle.org/distributions (comment at :94 '使用 Gradle 官方下载源'), an in-repo admission that the third-party mirror is not treated as an equally trusted source; the equivalent distrust is not applied to the dependency mirror.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution (running gradle resolution against the target repository is prohibited)
+- the bytes served by mirrors for these coordinates (maven.aliyun.com vs repo1.maven.org) are not source-visible; whether they currently differ is a deployment fact only an owner-observed download/compare can settle
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Inside the approved sandbox with external network disabled and a local registry/config: generate verification metadata with `./gradlew --write-verification-metadata sha256 buildPlugin` (or `help` plus resolution tasks) and inspect the recorded sha256 for com.github.jsqlparser:jsqlparser:5.3 against the canonical Central artifact digest; enabling strict verification (verification-metadata.xml with the Central digests) makes any mirror deviation fail the build deterministically.
+
+**Owner-observed deployment check:** Owner-observed check, no live probing beyond the two public artifact URLs already configured: download https://maven.aliyun.com/repository/public/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar and https://repo1.maven.org/maven2/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar, compare sha256; then commit gradle/verification-metadata.xml pinning digests (and optionally reorder mavenCentral first) so substitution fails closed.
+
+---
+
+## 15. Gradle wrapper distribution is fetched from the Tencent mirror with no distributionSha256Sum, so local builds (including the Gitee beta release build) run an unverified toolchain
+
+- **fingerprint**: `gradle-wrapper-tencent-mirror-no-sha256`
+- **boundary/entrypoint**: distributionUrl — Verified: distributionUrl points at mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip; the 10-line file has no distributionSha256Sum, so wrapper-downloaded Gradle is unverified.
+
+### Description
+
+gradle/wrapper/gradle-wrapper.properties pins distributionUrl (line 3) to mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip and contains no distributionSha256Sum (verified across the whole 10-line file), so the wrapper accepts whatever bytes the mirror serves for the Gradle 9.7.0 distribution. Every GitHub Actions workflow rewrites this URL to the official services.gradle.org source at run start (build-plugin.yml:102 among five occurrences, nightly-full.yml:99 among six, push-test.yml:74 among two) — an in-repo admission that the mirror is not trusted equally — but local developer builds, including the maintainer's local buildPlugin + gitee-release.py flow that produces the Gitee beta-channel release zip (update/update.json downloadUrl points at gitee.com releases), run the wrapper unmodified. A compromised or drifted mirror thus reaches the developer's build toolchain and from there the beta release artifacts, with no checksum to detect substitution.
+
+### Claimed root cause
+
+The Gradle distribution source is a third-party mirror without an independent integrity pin (distributionSha256Sum), so the toolchain bytes have no verified root on machines that do not apply the CI-side URL rewrite.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `gradle/wrapper/gradle-wrapper.properties:3` | distributionUrl | Verified: distributionUrl points at mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip; the 10-line file has no distributionSha256Sum, so wrapper-downloaded Gradle is unverified. |
+| propagation | `.github/workflows/build-plugin.yml:102` | '配置 CI 下载环境' step (repeated in all workflows) | Verified: CI replaces the mirror host with services.gradle.org/distributions (:102, also :243/:305/:379/:463; nightly-full.yml:99 etc.; push-test.yml:74 etc.), confirming the authors' own trust differential; this rewrite exists only on hosted runners, not in the wrapper properties committed for local use. |
+| sink | `build.gradle.kts:1` | any local gradlew invocation (buildPlugin / gitee beta release flow) | The unverified distribution is unpacked to GRADLE_USER_HOME/wrapper/dists and executes the entire build; the resulting build/distributions zip is uploaded to Gitee by dev-support/gitee-release.py (upload_zip at :94) and referenced by update/update.json for the plugin self-update channel, so substituted toolchain bytes propagate into shipped artifacts. |
+
+### Evidence
+
+- `gradle/wrapper/gradle-wrapper.properties:3` — Verified: Tencent mirror distributionUrl with networkTimeout/retries tuning but no distributionSha256Sum (absence verified across the whole file).
+- `.github/workflows/push-test.yml:74` — Verified: same mirror→official rewrite on every automated workflow, showing the mirror is knowingly not the trusted root; local/developer machines get no such protection.
+- `dev-support/gitee-release.py:268` — Verified: the Gitee beta release path's verify_artifact compares the local zip against the downloaded attachment by sha256, which protects transport after build but not the toolchain that produced the local zip.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution (running ./gradlew for the target repository is prohibited)
+- whether mirrors.cloud.tencent.com currently serves byte-identical Gradle 9.7.0 distributions to services.gradle.org is not source-visible and requires an owner-observed download comparison
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** In the sandbox without external network, add distributionSha256Sum to gradle-wrapper.properties and point distributionUrl at a local fixture directory serving a modified copy of the distribution zip — `./gradlew --version` must fail the checksum check; then serve the unmodified zip and observe success, proving the control closes the gap.
+
+**Owner-observed deployment check:** Owner-observed check: download https://mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip and https://services.gradle.org/distributions/gradle-9.7.0-bin.zip, compare sha256, then commit distributionSha256Sum (the checksum published for the official distribution) into gradle/wrapper/gradle-wrapper.properties so both local and CI wrapper downloads fail closed on substitution.
+
+---
+
+## 16. Marketplace/compat gate resolves the verifier-cli jar by first-match cache walk, silently ignoring the pinned version whenever multiple versions coexist in the Gradle cache
+
+- **fingerprint**: `verifier-cli-gate-jar-first-match-ignores-pin`
+- **boundary/entrypoint**: pinned verifier-cli version — Verified: pin file contains 1.411; build-plugin.yml:319-331 and :397-409 seed verifier-cli-1.411-all.jar into GRADLE_USER_HOME/caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed/ (verified verbatim, downloaded from repo1.maven.org), alongside any older version directories restored by the setup-gradle cache.
+
+### Description
+
+The authoritative release gates (verifyGate and the three verifyMarketplaceVerdict legs that build-plugin.yml's gate job requires before publish) select their verifier-cli jar via walkTopDown().maxDepth(4).filter{verifier-cli-*-all.jar}.firstOrNull() over the Gradle cache module directory, with no comparison against dev-support/verifier-cli-version.txt (pin: 1.411, verified at line 1). CI seeds the pinned jar into a ci-seed subdirectory of the same module dir, and gradle/actions/setup-gradle caches persist older version jars across runs, so multiple versions can coexist and the picked jar depends on unspecified walk order. The only guard, VerifierCliVersionGuardTest, asserts only that the pinned version is among the cached versions (extra versions allowed) and skips on CI and on empty cache by its own documentation. The repository's own comment records a real incident of this walk picking the unintended older 1.409 while 1.410 was expected, and that the two versions produce different verdict outcomes. Consequence: the gate can compute its release-blocking verdict with a verifier version nobody pinned, and the release proceeds green.
+
+### Claimed root cause
+
+The gate's trust handoff from the version pin (dev-support/verifier-cli-version.txt) to the executed verifier binary is not enforced at the resolution site: first-match filesystem walk replaces the pin, and the compensating test does not assert what the gate actually runs.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `dev-support/verifier-cli-version.txt:1` | pinned verifier-cli version | Verified: pin file contains 1.411; build-plugin.yml:319-331 and :397-409 seed verifier-cli-1.411-all.jar into GRADLE_USER_HOME/caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/ci-seed/ (verified verbatim, downloaded from repo1.maven.org), alongside any older version directories restored by the setup-gradle cache. |
+| propagation | `buildSrc/src/main/kotlin/mpv-verification.gradle.kts:204` | verifyGate classpath (also :357 and :481 for the marketplace legs and refresh task) | Verified at all three sites: walkTopDown().maxDepth(4) over the verifier-cli module dir picks the first file matching verifier-cli-.+-all.jar — ci-seed and normal version dirs both match the regex; no version comparison against the pin exists at any of the three resolution sites. |
+| propagation | `src/test/kotlin/cn/song/mybatisplus/visualizer/convention/VerifierCliVersionGuardTest.kt:50` | assert pinned in cached | Verified: the guard asserts only `pinned in cached` (set membership; extra versions allowed) and skips outright when the cache is empty or missing (:38, :46), so it never constrains which jar the gate executes. |
+| sink | `buildSrc/src/main/kotlin/mpv-verification.gradle.kts:155` | verifyGate / verifyMarketplaceVerdict* JavaExec verdict | Verified: verifyGate is a JavaExec (mainClass com.jetbrains.pluginverifier.PluginVerifierMain, :161) whose classpath is the arbitrarily picked jar; its exit-code verdict and the marketplace MarketVerdictChecker baseline matching are what build-plugin.yml's gate job (gate: :542, needs build/verifyplugin/marketplace/verify/test, skipped-also-fails logic) requires before the publish job (:581) uploads the release — a stale-verifier verdict authorizes the release. |
+
+### Evidence
+
+- `buildSrc/src/main/kotlin/mpv-verification.gradle.kts:128` — Verified (comment spans :127-129): 'verifyGate 走 walkTopDown 字典序实际取 1.409 故独活' — the walk already picked an unintended older verifier version once, and the same comment establishes 1.410 and 1.409 produce different pass/fail outcomes on the same home configuration.
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/convention/VerifierCliVersionGuardTest.kt:18` — Verified (:18-19): guard's own coverage statement — it only runs where the local cache has verifier jars, skips on empty cache, and '守的是「本机全量测试」，不是 CI' — CI gate runs have no version assertion at all.
+- `settings.gradle.kts:38` — Verified (corrected from :47): the plugins block comment at :36-40 documents the accepted failure mode verbatim: an unsynced pin means the gate '静默用旧版 verifier 跑判定（不报错、门禁照绿）' — the invariant failure the pin was introduced to prevent.
+- `.github/workflows/build-plugin.yml:326` — Verified (corrected from :323): the seed step's run block writes the pinned jar into $dst = .../verifier-cli/ci-seed inside the cache path the walk later scans, but nothing removes or shadows other version jars restored by the gradle cache.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution (observing which jar verifyGate picks in a multi-version cache requires running gradle against the target)
+- the concrete pick order of walkTopDown over a two-version cache on the CI runner (windows-latest, NTFS) is not source-visible; the in-repo comment evidences order-dependence but not the current runner's behavior
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** In the sandbox: place two jar files named verifier-cli-1.410-all.jar and verifier-cli-1.411-all.jar in a scratch GRADLE_USER_HOME under caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/{1.410/<hash>/,ci-seed/}, run `./gradlew verifyGate -PverifyOnly=true -PverifyIdes=smoke` (or a minimal task that reproduces the same walkTopDown().firstOrNull() expression) and record which version the classpath resolves; repeat with reversed creation order to demonstrate order-dependence. Regression case: assert the resolved jar's version equals dev-support/verifier-cli-version.txt at all three resolution sites (:204, :357, :481).
+
+**Owner-observed deployment check:** Owner-observed check on the CI environment: on a windows-latest runner with the restored setup-gradle cache, log the resolved verifier-cli jar path/version in the verify and marketplace jobs before dispatching a release run; alternatively enforce the pin at resolution time (filter the walk to verifier-cli-<pin>-all.jar or fail when multiple versions match) and confirm the gate still finds the seeded jar.
+
+---
+
+## 17. MCP text-analysis tools (sqlv_check_sql, sqlv_rollback_plan, sqlv_reverse_sql, sqlv_perf_advice) parse agent-supplied SQL of unbounded length while the sibling render-logs path enforces a 20k cap for the same sink class
+
+- **fingerprint**: `mcp-sqlv-text-tools-unbounded-sql-input`
+- **boundary/entrypoint**: sqlv_check_sql — suspend fun sqlv_check_sql(sql: String) accepts the raw agent string with no length validation before checkSql (same shape at SqlVisualizerRollbackPlanTool.kt:37-40, SqlVisualizerReverseSqlTool.kt:44-48, SqlVisualizerPerfAdviceTool.kt:56-57).
+
+### Description
+
+The four MCP text-analysis tools accept a raw sql: String from the connected AI agent and synchronously parse it (JSqlParser via the shared SqlAstParser through UnboundedWriteDetector.parseStatementsShared / RollbackSqlGenerator.generate / SqlPerfAnalyzer, plus SqlStatementSplitter which itself has no length bound) on the IDE's MCP dispatch path with no input-length or parse-cost bound (verified: sqlv_check_sql at SqlVisualizerCheckSqlTool.kt:39, sqlv_rollback_plan at SqlVisualizerRollbackPlanTool.kt:37-40, sqlv_reverse_sql at SqlVisualizerReverseSqlTool.kt:44-48, sqlv_perf_advice at SqlVisualizerPerfAdviceTool.kt:56-57 — none validates length; only isBlank checks exist). The console/render-logs parsers feeding the same JSqlParser sink enforce PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH=20000 (PluginSettings.kt:832, applied in SqlVisualizerRenderLogsTool.kt:82), establishing the intended bounded-evaluation invariant for this sink class. A single MCP call carrying megabytes of SQL (or repeated calls) drives unbounded parse work and AST memory amplification inside the IDE process, and parser-level StackOverflowError/OutOfMemoryError escapes the tool Exception handlers because the audit boundary deliberately rethrows VirtualMachineError (FatalErrors.isFatal, McpToolsetSupport.kt:147).
+
+### Claimed root cause
+
+The four MCP tool entry points and the shared SqlAstParser were built without the input-length gate that the log-parsing path already has (maxParseLength=20000); parse cost and AST allocation are unbounded exactly at the trust boundary where an AI agent supplies the SQL text, and the rollback pipeline's only bounds (MAX_STATEMENTS=500, MAX_TOTAL_CHARS=256KiB) apply to output, not input.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerCheckSqlTool.kt:39` | sqlv_check_sql | suspend fun sqlv_check_sql(sql: String) accepts the raw agent string with no length validation before checkSql (same shape at SqlVisualizerRollbackPlanTool.kt:37-40, SqlVisualizerReverseSqlTool.kt:44-48, SqlVisualizerPerfAdviceTool.kt:56-57). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/UnboundedWriteDetector.kt:104` | parseStatementsShared | check_sql (detect calls parseStatementsShared at line 161) and rollback_plan (RollbackSqlGenerator.generate at RollbackSqlGenerator.kt:126) both feed the unbounded normalized text into the shared JSqlParser entry with no cap; SqlStatementSplitter (check_sql's statement count) likewise has no length bound. |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/SqlAstParser.kt:36` | parseStatements | CCJSqlParserUtil.parseStatements invoked on the full unbounded string; no FeatureConfiguration bound on input size or parse depth (parseSingle at line 44, same for perf_advice via sql/SqlPerfAnalyzer.kt:122). |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpToolsetSupport.kt:147` | audit fatal passthrough | Unbounded parse work executes on the IDE's MCP dispatch path; a parser StackOverflowError/OutOfMemoryError bypasses the Exception-only catches (UnboundedWriteDetector.kt:162, RollbackSqlGenerator.kt:133) and is rethrown to the platform because FatalErrors.isFatal classifies VirtualMachineError as fatal. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettings.kt:832` — DEFAULT_LOG_MAX_PARSE_LENGTH = 20000 — the sibling bound the same sink class already has on the log-parsing path.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerRenderLogsTool.kt:82` — The MCP render-logs tool applies maxParseLength = state.logMaxParseLength, proving the invariant is enforced for one MCP channel but not the four text-analysis channels.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/rollback/RollbackSqlGenerator.kt:101` — MAX_STATEMENTS=500 and MAX_TOTAL_CHARS=256*1024 (line 104) are output-only bounds (enforceLimits, lines ~594-603); no input cap exists in generate (line 126) which parses the full cleaned text.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/util/FatalErrors.kt:52` — isFatal returns true for VirtualMachineError (StackOverflowError/OutOfMemoryError), so parser Errors are intentionally not contained by the audit catch at McpToolsetSupport.kt:146-147.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- no locally observed parse-cost/AST-memory growth curve for a bounded adversarial SQL fixture on JSqlParser 5.3 (source analysis establishes the missing cap and the sibling 20k bound, not the measured growth)
+- containment of an uncaught VirtualMachineError by the IntelliJ platform MCP dispatcher (tool-call failure vs thread death vs process impact) is platform behavior not visible in this repository
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Plain-JUnit harness on the existing pure-function cores (all callable without platform types): extend cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest, RollbackPlanToolTest and PerfAdviceToolTest (and cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest for the reverse channel) with a bounded adversarial fixture (e.g. 'SELECT 1 OR 1 OR ...' chains and a multi-megabyte statement list) run under JVM -Xmx/-Xss limits; measure parse time and peak memory growth against the equivalent 20k-capped sibling input, verify a parser StackOverflowError escapes checkSql/rollbackPlan (Exception-only catch at UnboundedWriteDetector.kt:162 / RollbackSqlGenerator.kt:133) and is rethrown by FatalErrors.isFatal, then assert a new input-length cap (parity with DEFAULT_LOG_MAX_PARSE_LENGTH) rejects the fixture. Run with gradle --tests cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest (and the sibling test classes).
+
+---
+
+## 18. SqlReverseParser recursive-descent has no nesting-depth guard: deeply parenthesized or nested-subquery SQL reaches StackOverflowError through sqlv_reverse_sql
+
+- **fingerprint**: `sql-reverse-parser-unbounded-recursion`
+- **boundary/entrypoint**: sqlv_reverse_sql — sql: String accepted with no length cap and no nesting validation; reverseSql catches only SqlReverseException (lines 55-65).
+
+### Description
+
+SqlReverseParser is a hand-written recursive-descent parser whose parenthesized-condition branch recurses through the cycle parseConditionInternal (line 856) -> parseGroup (line 962) -> parseConditionList (line 782) -> parseAndSegment (line 801) -> parseCondition (line 842) -> parseConditionInternal, consuming roughly 4-5 stack frames per nesting level, with a second recursion cycle parseSubqueryTable (line 679) -> parseSubqueryStructure (line 707) -> parse (line 34) per FROM-subquery level. Neither cycle has a depth counter (verified by grep: the only 'depth' variables in the file are paren-balance counters, and no recursion-depth limit exists), and the entry tool sqlv_reverse_sql accepts the SQL string uncapped and catches only SqlReverseException (SqlVisualizerReverseSqlTool.kt:57), so a compact adversarial input (kilobytes of '(') drives StackOverflowError, which the MCP audit boundary rethrows as a VirtualMachineError (FatalErrors.isFatal) to the platform dispatcher. Unlike JSqlParser this does not even require a large input: the nesting depth per byte is maximal.
+
+### Claimed root cause
+
+Recursive-descent parser written without a recursion-depth guard or input bound; per-paren-level frame cost means stack depth grows linearly with attacker-chosen nesting while no layer (tool, parser, or audit) bounds that depth.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerReverseSqlTool.kt:44` | sqlv_reverse_sql | sql: String accepted with no length cap and no nesting validation; reverseSql catches only SqlReverseException (lines 55-65). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/reverse/SqlReverseParser.kt:34` | parse | Full input tokenized and dispatched; parenthesized condition branch at parseConditionInternal (lines 856-866) enters the recursive group path; nested FROM subqueries enter parseSubqueryTable (line 679) -&gt; parseSubqueryStructure (line 707) -&gt; parse (line 34). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/reverse/SqlReverseParser.kt:962` | parseGroup | parseGroup calls parseConditionList (line 782, call at 963) -&gt; parseAndSegment (line 801) -&gt; parseCondition (line 842) -&gt; parseConditionInternal (line 856) with no depth parameter or counter anywhere in the file. |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpToolsetSupport.kt:147` | audit fatal passthrough | StackOverflowError (VirtualMachineError) bypasses the SqlReverseException-only tool catch and the Throwable audit catch rethrows it to the platform MCP dispatcher. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/reverse/SqlReverseParser.kt:962` — parseGroup recurses into parseConditionList with no depth guard; grep confirms no recursion-depth/limit counter exists in the file (the only depth variables are token-level paren-balance counters).
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerReverseSqlTool.kt:57` — catch (e: SqlReverseException) only — JVM Errors propagate out of the tool.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/util/FatalErrors.kt:52` — VirtualMachineError classified fatal and rethrown by the audit boundary (McpToolsetSupport.kt:146-147).
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- no locally observed StackOverflowError threshold (nesting depth x frames-per-level vs JVM default stack) for a bounded fixture on the JVM actually running the parser
+- containment of the rethrown VirtualMachineError by the IntelliJ platform MCP dispatcher is platform behavior not visible in this repository
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Add a case to cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest and cn.song.mybatisplus.visualizer.mcp.ReverseSqlToolTest (both exist as plain JUnit over the pure cores): call reverseSql on 'SELECT * FROM t WHERE ' + '('*20000 + 'a=1' + ')'*20000 (and a nested FROM-subquery variant) under a bounded -Xss; without a depth guard expect StackOverflowError to escape reverseSql, then assert acceptance-with-degradation or a structured error once a depth guard/input cap is added. Run with gradle --tests cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest.
+
+---
+
+## 19. OgnlEvaluator.parse leaks NumberFormatException (integer literals > Long.MAX_VALUE) and StackOverflowError (deep nesting) out of its ParseResult/Err contract, reaching MCP mapper-check and UI preview uncaught
+
+- **fingerprint**: `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt@parse-exception-confinement`
+- **boundary/entrypoint**: entrypoint — Lower-trust mapper XML text (AI-agent-supplied snippet or project file) enters XmlMapperParser().parse inside the tool handler, which builds XmlPreviewModel.from and later renderSql for every statement
+
+### Description
+
+The custom OGNL evaluator used for <if test>, <bind value>, ${} and foreach collection expressions degrades all parse failures to ParseResult.Err and all evaluation-time failures to EvalResult.Err — but only OgnlParseException is caught in parseUncached (Ognl.kt:133-137) and evaluate(text) calls parse() outside the Throwable-guarded AST evaluator (Ognl.kt:153-157; the KDoc at :152 scopes its degradation promise to evaluation time 求值期, while parse() itself presents ParseResult.Err as its only caller-facing failure mode and every helper built on parse assumes it does not throw). A plain integer literal of 20+ digits makes Lexer.number() throw java.lang.NumberFormatException from raw.toLong() (Ognl.kt:686), and deeply nested parentheses exhaust the stack in the recursive-descent parser (Ognl.kt:749,771-995), so an uncaught NumberFormatException/StackOverflowError propagates out of XmlPreviewModel.from (XmlPreviewModel.kt:263->297 collect->rootPaths, :333 classifyDetail during model construction; XmlPreviewModel.kt contains no try/catch) and XmlPreviewModel.renderSql (via TextSqlNode.kt:44, IfSqlNode.kt:69, ForeachSqlNode.kt:61; XmlSqlRenderer.kt contains no try/catch). Mapper XML is a lower-trust input (project files, AI-agent-supplied snippets via the MCP mapper-check tool), and the concrete sink is SqlVisualizerMapperCheckTool, which catches only XmlParseException (SqlVisualizerMapperCheckTool.kt:93-99) before calling XmlPreviewModel.from and model.renderSql() (SqlVisualizerMapperCheckTool.kt:116-117); the audit wrapper only rethrows unexpected exceptions (McpToolsetSupport.kt:146-149), and ui/XmlPreviewService.toResult (XmlPreviewService.kt:257) is likewise unguarded. Expected smallest effect: an agent- or mapper-authored statement containing <bind name="x" value="99999999999999999999"/> or <if test="ts > 99999999999999999999"/> makes the tool/preview path throw instead of returning degraded output with an error row.
+
+### Claimed root cause
+
+Exception-confinement gap in OgnlEvaluator.parse: Lexer.number() (src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686) performs raw.toLong() without catching NumberFormatException for over-Long literals, and parseUncached/parse/evaluate(text) (Ognl.kt:133-137,124-131,153-157) only catch OgnlParseException, so runtime exceptions from the lexer (and StackOverflowError from the unbounded recursive descent in Parser, Ognl.kt:749,771-995) bypass the Err-degradation contract and escape to callers that assume parse()/evaluate() never throw.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerMapperCheckTool.kt:94` | entrypoint | Lower-trust mapper XML text (AI-agent-supplied snippet or project file) enters XmlMapperParser().parse inside the tool handler, which builds XmlPreviewModel.from and later renderSql for every statement |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686` | propagation | Lexer.number() throws uncaught NumberFormatException from raw.toLong() on an integer literal of 20+ digits (e.g. 99999999999999999999) inside a test/bind/${}/collection expression; StackOverflowError likewise escapes from the unbounded recursive descent (parseOr..parsePrimary) at Ognl.kt:771-995 for deeply nested parentheses |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:133` | propagation | parseUncached catches only OgnlParseException; parse() (Ognl.kt:124-131) adds no confinement; evaluate(text,...) (Ognl.kt:153-157) calls parse() outside the Throwable-guarded AST evaluator (Ognl.kt:160-165). The KDoc at :152 scopes its Err promise to evaluation time, but parse()'s caller-facing contract (ParseResult.Err for all failures) is what helpers rootPaths (:282-288), rootVariables (:270-276), classifyDetail (:368-376), staticFieldRefs and unsupportedPropertyPaths rely on |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlPreviewModel.kt:297` | propagation | XmlPreviewModel.from (line 247) -&gt; collect (263) -&gt; collectExpressionPaths calls OgnlEvaluator.rootPaths(expression) at 297 (and classifyDetail at :333) during model construction, so the exception fires before any render-level handling; renderSql reaches the same parse via TextSqlNode.kt:44 / IfSqlNode.kt:69 / ForeachSqlNode.kt:61 (XmlPreviewModel.kt and XmlSqlRenderer.kt contain no try/catch) |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerMapperCheckTool.kt:117` | sink | model.renderSql() (after XmlPreviewModel.from at :116) executes inside the MCP tool whose handler catches only XmlParseException (SqlVisualizerMapperCheckTool.kt:93-99), so the NumberFormatException/StackOverflowError escapes the tool body; the audit wrapper rethrows unexpected exceptions (McpToolsetSupport.kt:146-149) and the UI path ui/XmlPreviewService.kt:257 (toResult -&gt; renderSql) is equally unguarded |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686` — Lexer.number(): 'val value = if (raw.contains('.')) raw.toDouble() else raw.toLong()' — toLong() throws NumberFormatException for literals exceeding Long.MAX_VALUE (20+ digits); no catch anywhere in the lexer
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:135` — parseUncached: 'catch (e: OgnlParseException)' is the only catch between the lexer and every caller of parse()/evaluate(text,...)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:152` — KDoc '求值期异常安全降级为 EvalResult.Err' — the Throwable guard at Ognl.kt:160-165 wraps only AST evaluation; the parse step performed by evaluate(text) at :153-157 (and by parse()'s direct callers rootPaths :282-288 / classifyDetail :368-376) is outside any confinement
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlPreviewModel.kt:297` — XmlPreviewModel.from -> collect (line 263) -> OgnlEvaluator.rootPaths(expression) at 297 (also classifyDetail at :333) parses every ${}/bind/test expression during model construction — the first unguarded entry point for mapper-authored text; file contains no try/catch
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerMapperCheckTool.kt:95` — Tool handler catches only XmlParseException ('catch (e: ... XmlParseException)') while calling XmlPreviewModel.from at :116 and model.renderSql() at :117 — no confinement for runtime exceptions from the OGNL layer
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpToolsetSupport.kt:146` — audit wrapper catches Throwable only to record the audit and rethrows: 'if (FatalErrors.isFatal(e)) throw e ... throw gate.onFailure(e)' (KDoc line 106: '非预期异常不在此吞（平台记 Internal error）') — unexpected exceptions from the tool body propagate out of the tool; only the platform MCP shell's handling lies beyond
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/xml/OgnlEvaluatorTest.kt:218` — Existing test '解析失败返回Err_非法语法与未闭合' pins Err-degradation for syntax errors only; no case covers over-Long numeric literals or pathological nesting, so the gap is untested
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- Missing observation: bounded local run of OgnlEvaluator.parse("99999999999999999999") / OgnlEvaluator.evaluate over a statement with <bind name="x" value="99999999999999999999"/> to observe the actual thrown NumberFormatException versus the expected ParseResult.Err/EvalResult.Err (source review establishes the escape path but not the observed runtime result)
+- Missing observation: bounded local run of OgnlEvaluator.parse with a deeply nested parenthesized test expression to observe StackOverflowError versus graceful Err, and the recursion depth at which it occurs on the target JVM
+- Missing observation: whether the platform MCP shell above McpToolsetSupport.audit (McpToolsetDynamicRegistrar-generated tool shell / IntelliJ MCP server) converts an uncaught Throwable from SqlVisualizerMapperCheckTool into a structured tool error or propagates it as a tool failure — source review of this unit establishes the exception escapes both the XmlParseException handler (SqlVisualizerMapperCheckTool.kt:95) and the audit wrapper's rethrow (McpToolsetSupport.kt:146-149), but the registrar is outside this unit's reviewed paths (owned by the mcp hunter)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend src/test/kotlin/cn/song/mybatisplus/visualizer/xml/OgnlEvaluatorTest.kt with: (1) assert OgnlEvaluator.parse("99999999999999999999") returns ParseResult.Err and does not throw; (2) assert OgnlEvaluator.evaluate("99999999999999999999 > 1", emptyMap()) returns EvalResult.Err; (3) a render-level case in XmlPreviewModelTest/XmlScriptBuilderTest parsing a mapper with <bind name="x" value="99999999999999999999"/> and <if test="ts > 99999999999999999999"> and asserting XmlPreviewModel.from/renderSql produce degraded output plus an errors row rather than throwing; (4) a depth case feeding a deeply nested parenthesized expression (e.g. 50,000 nested parens) and asserting a bounded failure instead of StackOverflowError. Run with gradle --tests cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest --tests cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest. If the assertions fail with the thrown exception, the candidate is confirmed at severity per its observed availability/robustness impact.
+
+**Owner-observed deployment check:** Owner-observed check in the IDE sandbox: invoke the sqlv_mapper_check MCP tool (or open the preview panel) on a mapper XML containing <bind name="x" value="99999999999999999999"/> and confirm whether the tool returns a structured error result or an unhandled exception surfaces in the IDE error log.
+
+---
+
+## 20. MyBatis Parameters text parsed by quadratic regex without the existing maxParseLength cap freezes the console parse thread
+
+- **fingerprint**: `log.mybatis.parseparams.unbounded-quadratic-regex`
+- **boundary/entrypoint**: EpLineFilter.applyFilter / SqlLogConsoleBridge.handleConsoleLine (SqlLogConsoleBridge.kt:391) — Platform ConsoleView filter delivers the full console line text with no length bound to the parse pipeline (verified: no truncation in applyFilter, handleConsoleLine, or processConsoleLine before the parsers)
+
+### Description
+
+The console filter hands whole console lines to the parsers unbounded. MyBatisLogParser truncates the Preparing SQL body to maxParseLength (line 87), but the Parameters: remainder is passed to parseParams untruncated (branch 4 line 131/138, and the prefix-only Parameters continuation branch at line 125). PARAM_REGEX's (?:\A|,\s*)(.+?)\(...\)(?=,\s*|\z) lazy-expansion with comma-alternation start positions makes findAll quadratic in the line length for comma-heavy text without parentheses (each comma start position lazily rescans to end of input looking for a '(' before the quadratic-cost fallback text.split(',') at parseParams:307 is ever reached), so a single multi-hundred-KB '==> Parameters:' console line from any hosted process drives superlinear CPU on the console filter/EP thread, stalling capture and UI responsiveness. Source check confirmed there is no truncation anywhere between applyFilter (SqlConsoleBridgeFilterProvider.kt:83) and parseParams — processConsoleLine and handleConsoleLine pass the raw line through (SqlLogConsoleBridge.kt:1094-1171).
+
+### Claimed root cause
+
+The existing per-line bound (maxParseLength, deliberately applied to pendingSql at MyBatisLogParser.kt:87 and to every other parser's SQL body) was never applied to the Parameters text before parseParams, and PARAM_REGEX has quadratic worst-case backtracking on comma-dense paren-free input.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlConsoleBridgeFilterProvider.kt:83` | EpLineFilter.applyFilter / SqlLogConsoleBridge.handleConsoleLine (SqlLogConsoleBridge.kt:391) | Platform ConsoleView filter delivers the full console line text with no length bound to the parse pipeline (verified: no truncation in applyFilter, handleConsoleLine, or processConsoleLine before the parsers) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:131` | feedInto branch 4 | paramsText = extractAfterKeyword(line, paramPrefix) - remainder is not truncated with maxParseLength, unlike the SQL body at line 87 |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:138` | parseParams(paramsText) | Unbounded attacker-influenced text enters the regex param splitter (same via the branch-3 continuation parseParams(line.trim()) at line 125) |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:321` | PARAM_REGEX.findAll (parseParams loop at :298) | Quadratic backtracking: O(commas) start positions x O(n) lazy expansion per position on paren-free comma-heavy text; CPU spike on the console output/EDT-adjacent filter thread |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:87` — Control exists and is applied to the SQL body: bucket.pendingSql = sql.take(maxParseLength)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:131` — Same control absent on the parameter text path: extractAfterKeyword result goes to parseParams (line 138) without take()
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:321` — PARAM_REGEX alternation '(?:\A|,\s*)' admits every comma as a match start; lazy '(.+?)' rescans to end of string per start before the linear split(',') fallback at :307 can run
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured wall-clock growth curve (1k/10k/100k-char comma-heavy Parameters line) proving superlinear parse cost and the resulting console-thread stall in the IDE host
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Pure-JVM unit harness, no IDE: extend the existing MyBatisLogParser test set (MyBatisLogParserTest.kt / LogParseConcurrencyTest.kt both exist, run via gradle --tests cn.song.mybatisplus.visualizer.log.MyBatisLogParserTest). Feed MyBatisLogParser(maxParseLength=20000).feed("==> Parameters: " + "a,".repeat(n)) for n = 1_000 / 10_000 / 100_000 and time feed(); expected ~10x/100x superlinear growth confirms the bound failure; then assert the fix paramsText.take(maxParseLength) before parseParams restores linear time.
+
+**Owner-observed deployment check:** Owner-observed: in a sandboxed runIde, print a single 200k-char comma-dense '==> Parameters:' line from a demo app with capture enabled and observe the console output thread stall / capture lag in the plugin diagnostics (consoleLinesSeen vs entries produced).
+
+---
+
+## 21. ExecutionTimeParser trailing-ms regex backtracks quadratically over whitespace runs on unbounded console lines
+
+- **fingerprint**: `log.executiontimeparser.trailing-ms-whitespace-backtracking`
+- **boundary/entrypoint**: finishEntries (called from processConsoleLine :1170 and the sniffed-unseal path :1114) — lineDuration = ExecutionTimeParser.parse(line, timePrefix) receives the complete raw console line (only entries-producing lines, but the line itself is unbounded)
+
+### Description
+
+finishEntries runs ExecutionTimeParser.parse on the full, untruncated console line of every entry-producing line (both the normal processConsoleLine exit at SqlLogConsoleBridge.kt:1170 and the sniffed-unseal exit at :1114). TRAILING_MS_REGEX = [\]\s]\s*(\d+)\s*ms\s*$ (MULTILINE, ExecutionTimeParser.kt:36) begins with a character class that matches every space, so on a whitespace-heavy line the engine retries at every whitespace index and greedily consumes then backtracks through the entire remaining whitespace run: O(run length^2) per whitespace run, i.e. quadratic in line length. Source check confirmed all five earlier regexes have literal-ish leading tokens (elapsed/consumed, TimeCount, time, executeMillis, ExecuteTime) that fail O(1) per non-matching position; only TRAILING_MS_REGEX's leading [\]\s] makes every space a full-attempt position. A single ~500KB padded line (e.g. '==> Parameters: 1(Long)' followed by hundreds of KB of spaces) from a hosted process costs a superlinear number of engine steps per line on the parse thread.
+
+### Claimed root cause
+
+A hot-path duration regex whose leading token is an unanchored whitespace-matching character class is applied to full unbounded console lines; unlike the parsers' maxParseLength-bound SQL bodies, the line passed to ExecutionTimeParser.parse is never truncated.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt:1186` | finishEntries (called from processConsoleLine :1170 and the sniffed-unseal path :1114) | lineDuration = ExecutionTimeParser.parse(line, timePrefix) receives the complete raw console line (only entries-producing lines, but the line itself is unbounded) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/ExecutionTimeParser.kt:78` | parse step 6 | TRAILING_MS_REGEX.find(text) - the five earlier regexes have literal leading tokens and fail O(1) per position; only this pattern's leading [\]\s] matches at every whitespace index |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/ExecutionTimeParser.kt:36` | TRAILING_MS_REGEX definition | Greedy \s* followed by (\d+) backtracks char-by-char through each whitespace run per start index: O(run^2) engine steps on whitespace-dense lines |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/ExecutionTimeParser.kt:36` — Leading [\]\s] class makes every space a match attempt position; \s*(\d+) forces full-run backtracking per attempt
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt:1186` — Full untruncated line is the parse input; no maxParseLength truncation precedes this call
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:87` — Contrast: the same pipeline truncates SQL bodies to maxParseLength, showing the intended per-line bound not extended to this path
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured CPU-time growth on whitespace-run fixtures of 1k/10k/100k chars demonstrating the quadratic curve and the perceptible per-line stall in the IDE parse path
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Pure-JVM: extend ExecutionTimeParserTest (gradle --tests cn.song.mybatisplus.visualizer.log.ExecutionTimeParserTest) with a growth fixture - ExecutionTimeParser.parse("==> Parameters: 1(Long)" + " ".repeat(n)) for n = 1_000 / 10_000 / 100_000, assert wall-clock scaling is not superlinear after fix (pre-truncate the line or anchor the pattern); the unfixed build should show ~100x growth from 10k to 100k.
+
+**Owner-observed deployment check:** Owner-observed: in a sandboxed runIde with capture enabled, have a demo app print one padded multi-hundred-KB Parameters line and observe capture-lag diagnostics (consoleLinesSeen advance vs time) on the console output thread.
+
+---
+
+## 22. MyBatis/Hibernate parser thread buckets are never evicted while pending, accumulating unbounded retained SQL per console
+
+- **fingerprint**: `log.threadrouter.unbounded-nonidle-bucket-retention`
+- **boundary/entrypoint**: feedInto branch 1 — Preparing line sets bucket.pendingSql (<= 20000 chars) and continuing=true; HibernateLogParser.feedIdle equivalently sets collecting=true (HibernateLogParser.kt:135-141, collecting=true at :136)
+
+### Description
+
+LogThreadRouter caps buckets at 64 (DEFAULT_MAX_BUCKETS) but evictIdle removes only isIdle buckets. A MyBatisLogParser bucket that received a Preparing:/bare-SQL line without a closing Parameters line holds pendingSql (up to maxParseLength=20000 chars, plus the untruncated pendingLogLine raw line) or prefixMatched/paramPrefixMatched wait state and is therefore never idle (isIdle at MyBatisLogParser.kt:65 requires pendingSql == null && !prefixMatched && !paramPrefixMatched). HibernateLogParser.feedIdle equivalently sets collecting=true. Unlike JdbcTemplate and ShardingSphere parsers, MyBatisLogParser and HibernateLogParser have no flushSettled: source-wide grep confirmed flushSettled/settledBuckets is invoked only for jdbcParser and shardingParser (SqlLogConsoleBridge.kt:1165-1166 in the per-line path and :453/:467 in the EDT-periodic flushSettledEntries), and the capture path never calls ctx.myBatisParser.closePending()/ctx.hibernateParser.closePending() (closePending() callers are only LogToSqlPanel and SqlVisualizerRenderLogsTool, each on its own parser instances). So each unique thread token that printed one unclosed statement retains its SQL text for the life of the console: sustained log volume with varying thread names grows retained memory linearly with total printed SQL volume while the IDE console cycle buffer discards the same text.
+
+### Claimed root cause
+
+Eviction eligibility (isIdle) is defined as having no pending statement, and the settled-flush mechanism that would move pending buckets to idle exists only for the JdbcTemplate and ShardingSphere parsers; MyBatis/Hibernate pending buckets are permanently ineligible for the 64-bucket cap.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:87` | feedInto branch 1 | Preparing line sets bucket.pendingSql (&lt;= 20000 chars) and continuing=true; HibernateLogParser.feedIdle equivalently sets collecting=true (HibernateLogParser.kt:135-141, collecting=true at :136) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:96` | bucketForToken | One bucket created per unique thread token; at size &gt;= maxBuckets evictIdle runs |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:134` | evictIdle | Only isIdle buckets are removable; isIdle requires pendingSql == null (MyBatisLogParser.kt:65) so every pending bucket is permanent and bucket count grows past the 64 cap without bound |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt:1165` | processConsoleLine / flushSettledEntries (:453/:467) | Settle flush covers only jdbc and sharding parsers; MyBatis/Hibernate pending state is never aged out, retained per-console until project close |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogThreadRouter.kt:32` — evictIdle skips non-idle buckets by design — the quoted rationale '淘汰不作为即丢状态，故只淘汰空闲桶' is the isIdle parameter KDoc at this line (evictIdle body implementing it is at :134-144)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt:1165` — Only ctx.jdbcParser.flushSettled() and ctx.shardingParser.flushSettled() are invoked (same in the EDT-periodic flushSettledEntries at :453/:467); no MyBatis/Hibernate counterpart anywhere in the capture path (grep-verified)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt:65` — isIdle = pendingSql == null && !prefixMatched && !paramPrefixMatched - a pendingSql bucket can never be evicted
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured retained-bucket count and heap growth over a bounded fixture of N unique-token unclosed Preparing lines (e.g. N = 1k/10k/100k) proving unbounded retention beyond the 64-bucket cap
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Pure-JVM: extend LogThreadRouterTest / LogParseConcurrencyTest (both exist; gradle --tests cn.song.mybatisplus.visualizer.log.LogThreadRouterTest) - feed MyBatisLogParser N lines '2026-01-01 [thread-i] DEBUG ==> Preparing: <20k-char SQL>' with distinct thread-i, then assert router.bucketCount() stays bounded and buckets become evictable; on current source bucketCount() grows to N with each bucket retaining up to 20k chars of pendingSql plus the raw pendingLogLine.
+
+**Owner-observed deployment check:** Owner-observed: sandboxed runIde demo app with a per-request thread pool emitting parameterless statements; observe IDE heap retention attributable to parser buckets after the console cycle buffer has trimmed the same output.
+
+---
+
+## 23. Planted or oversized .sql history file buffers unbounded non-revision lines and blocks in IDE memory during history read and MCP history search
+
+- **fingerprint**: `history.reader.unbounded-line-buffering`
+- **boundary/entrypoint**: scanHistoryFiles (countInFile per listed file) — scanHistoryFiles lists every *.sql (case-sensitive extension here; case-insensitive in HistorySearchService.kt:137) in resolveHistoryDir output - by default inside the project - with no size or identity check; showFileContent:526 then calls readFromFile on a background task
+
+### Description
+
+SqlLogFileReader streams files line-by-line to avoid whole-file buffering (T-SqlHistoryFull), but boundedLines only folds lines that start with the revision prefix '-- pd: o147-revision: ' (collapse conditioned at SqlLogFileReader.kt:115). Every other line - SQL body, headers, or the main '-- pd: <base64> --' payload line - is accumulated without any length or total-size bound, and EntryBlockScanner additionally retains every body line of a block until the next header (bodyLines.add at :297, only after a header line). The 100MB cap named in the design is only the writer-side roll threshold (SqlLogAutoSaver.kt:31 rollThresholdBytes); the reader accepts files of any size - readFromFile/forEachEntry/countInFile have no file-size gate (verified). Anything with write access to the project directory (e.g. a repository committing .idea/sql-visualizer/sql-history/*.sql, or any local process) can plant such a file; it is parsed when the user opens the history tab (background task, HistorySqlLogPanel.kt:526) and, via MCP tool sqlv_history_search, when an AI agent calls HistorySearchService.search - whose MAX_SCAN_ENTRIES=200_000 caps entry counts but not bytes per entry (HistorySearchService.kt:60).
+
+### Claimed root cause
+
+boundedLines (SqlLogFileReader.kt:99-118) applies its length-collapse only to REVISION_PREFIX lines; there is no per-line, per-block, or per-file byte bound on the non-revision path (EntryBlockScanner.bodyLines accumulation at SqlLogFileReader.kt:297, full-copy joinToString at :336, Base64-decode + JSON-parse full copies at :322-332), and no file-size gate in readFromFile/forEachEntry/countInFile.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt:633` | scanHistoryFiles (countInFile per listed file) | scanHistoryFiles lists every *.sql (case-sensitive extension here; case-insensitive in HistorySearchService.kt:137) in resolveHistoryDir output - by default inside the project - with no size or identity check; showFileContent:526 then calls readFromFile on a background task |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogFileReader.kt:99` | boundedLines | boundedLines accumulates every non-revision-prefixed line in a StringBuilder with no length limit; only '-- pd: o147-revision: ' lines longer than MAX_REVISION_PAYLOAD+150 are collapsed (condition at :115) |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogFileReader.kt:297` | EntryBlockScanner.offer | EntryBlockScanner.offer appends every non-header line after a header to bodyLines, so one block with no following header retains the entire remainder of the file; parseBlockLines:336 joins a second full copy and the pd line at :322-332 Base64-decodes and JSON-parses further full copies |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:152` | MCP-triggered read (second sink: HistorySqlLogPanel.kt:526) | forEachEntry consumes the same unbounded reader for the AI-agent history-search tool; a single planted oversized line/entry exhausts or stalls the IDE process heap despite the 200000-entry scan cap (entry count, not bytes) |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogFileReader.kt:115` — Over-limit collapse is conditioned on 'revision && logicalLength > MAX_REVISION_PAYLOAD + 150' - non-revision lines have no bound
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogFileReader.kt:139` — Comment claims streaming with peak 'approx one SQL entry' - but a single entry/line is itself unbounded on the read path
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogAutoSaver.kt:31` — rollThresholdBytes 100MB is writer-side only; no reader-side counterpart exists (readFromFile/forEachEntry/countInFile never check file length)
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:60` — MAX_SCAN_ENTRIES = 200_000 caps parsed entry count, not bytes; one entry can be arbitrarily large
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/log/O147HistoryUpgradeTest.kt:133` — Existing tests only exercise the over-limit collapse for REVISION_PREFIX lines (the giant 'A'.repeat(MAX_REVISION_PAYLOAD+500) revision line here); the non-revision giant-line path is untested
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured heap growth/retention (or OOM) of the IDE-process parse path when reading a bounded oversized fixture (e.g. one 64-128MB single non-revision line, and one 64MB '-- pd: ' payload line) by readFromFile, forEachEntry and countInFile
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** gradle --tests cn.song.mybatisplus.visualizer.log.SqlLogFileReaderTest plus the O147HistoryUpgradeTest harness pattern (both test files exist): write a temp .sql containing one non-revision line of 64MB and one block with a 64MB '-- pd: ' payload line, then run SqlLogFileReader.readFromFile, forEachEntry and countInFile under a constrained JVM heap (e.g. -Xmx256m) and observe heap growth/OOM versus the revision-prefixed control line that is collapsed; assert new per-line/per-file bounds once added. Also verify the agent path with the HistorySearchService tests (HistorySearchFilterTest exists) using the same fixture and scanEntryCap.
+
+**Owner-observed deployment check:** owner observes on a real IDE: commit a project containing .idea/sql-visualizer/sql-history/planted.sql with a single 512MB line, open the SQL Visualizer history tab and/or invoke sqlv_history_search from an MCP client, and observe IDE memory/hang in the profiler.
+
+---
+
+## 24. Agent-supplied regex in sqlv_history_search is evaluated without timeout or cost budget over history SQL, enabling catastrophic-backtracking CPU exhaustion inside the IDE process
+
+- **fingerprint**: `mcp.history_search.agent-regex-unbounded-backtracking`
+- **boundary/entrypoint**: sqlv_history_search — Agent supplies regex (and optionally first plants a long-token SQL into history via sqlv_explain, recorded by mcpHistoryEntry in McpToolsetSupport.kt:302-320).
+
+### Description
+
+sqlv_history_search accepts an agent-controlled regex that is compiled with only a syntax check (HistorySearchService.kt:231, runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }) and evaluated with containsMatchIn against rawSql/restoredSql of every scanned history entry (line 221) on the IDE's MCP dispatch path. The scan cap (MAX_SCAN_ENTRIES = 200_000, line 60) bounds entry count but not per-regex evaluation cost; console-captured entries are bounded by the 20k log maxParseLength, and MCP-planted entries (mcpHistoryEntry) carry the raw agent selectSql up to the McpSelectGuard.MAX_SQL_LENGTH = 200_000 bound. Java's regex engine has no built-in evaluation timeout, so a pathological pattern evaluated against a long token can stall the calling thread for unbounded time. The adversarial input is plantable within the same tool surface: the agent can first record an arbitrary selectSql into history via sqlv_explain (recorded through mcpHistoryEntry into the autosave chain), or rely on console-captured SQL already containing long tokens.
+
+### Claimed root cause
+
+HistorySearchService compiles and applies the agent regex with no pattern complexity limit, no input-length-dependent guard, and no evaluation timeout; the only budgets in the service bound result count and entry count, not per-regex cost.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerHistorySearchTool.kt:51` | sqlv_history_search | Agent supplies regex (and optionally first plants a long-token SQL into history via sqlv_explain, recorded by mcpHistoryEntry in McpToolsetSupport.kt:302-320). |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:231` | CompiledFilters.of | Regex(pattern, RegexOption.IGNORE_CASE) compiled with syntax check only; no complexity cap, no timeout; IGNORE_CASE roughly doubles matching cost. |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:221` | CompiledFilters.matches | regex.containsMatchIn(e.rawSql)/containsMatchIn(e.restoredSql) executes the backtracking search over the full entry SQL (20k chars for console-captured entries, up to 200k chars for MCP-planted entries per McpSelectGuard.MAX_SQL_LENGTH) for up to 200,000 entries on the IDE's MCP dispatch thread. |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:231` — Agent regex compiled via runCatching { Regex(pattern, IGNORE_CASE) } with only syntax-failure handling (InvalidQueryException); no length, complexity, or evaluation budget.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/HistorySearchService.kt:221` — containsMatchIn evaluated per entry over both rawSql and restoredSql; the MAX_SCAN_ENTRIES cap (line 60) bounds entry count only.
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpToolsetSupport.kt:302` — mcpHistoryEntry records agent-chosen selectSql verbatim (rawSql = restoredSql = trimmed input, no length reduction; outer bound is McpSelectGuard.MAX_SQL_LENGTH = 200_000, McpSelectGuard.kt:24) into the history chain with source SqlSource.MCP, giving the agent a self-service way to plant long adversarial tokens that the regex is then evaluated against.
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: measured wall-clock of a catastrophic pattern (e.g. '(a+)+b') against a 20k-character entry under JDK java.util.regex in this code path, to size the actual stall per call
+- missing observation: whether the platform MCP server channel imposes a per-call timeout or serialization bound that would contain the stalled dispatch thread (platform behavior not visible in this repository)
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Extend the existing pure-logic test cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest (which drives HistorySearchService.search(perFile, query, nowMs) without platform types): build perFile with one entry whose restoredSql is 20k 'a' characters, call search with Query(regex = "(a+)+b") under a wall-clock assertion (e.g. must return within 2 seconds), and observe the timeout — establishing the unbounded-backtracking stall with dummy data. Run with gradle --tests cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest.
+
+**Owner-observed deployment check:** Owner-observed: with the plugin's MCP server running in a sandboxed IDE, plant one long-token statement via sqlv_explain, then call sqlv_history_search with the pathological regex and observe IDE responsiveness/idea.log for the stalled call.
+
+---
+
+## 25. Imported dynamic-table-name regex rules are compiled and executed with no complexity or timeout bound on the preview render path
+
+- **fingerprint**: `dynamic-tablename-rule.regex-unbounded`
+- **boundary/entrypoint**: settings import — deserializeRules (337-345) builds TableNameRule(pattern, replacement, enabled) straight from the imported JSON array with no pattern screening
+
+### Description
+
+DynamicTableNameProcessor compiles each rule pattern with Regex(pattern) and runs regex.find(tableName) (DynamicTableNameProcessor.kt:39) on every wrapper preview render, with no timeout, input-length bound, or complexity screen. dynamicTableNameRules is one of the fields an imported settings file can set, so a shared file can install a catastrophic-backtracking pattern (nested quantifiers over alternation) that hangs the preview render when the operator previews any statement whose table name triggers the pathological path — an availability effect reaching beyond the file author. The regex result cache is also an unsynchronized mutableMapOf (line 26) that can be read during render and cleared by PluginCacheManager.clearAll (PluginCacheManager.kt:33) from another thread.
+
+### Claimed root cause
+
+User/importer-supplied regex from settings is executed on the render path without a ReDoS bound (no timeout, no pattern screening, no input cap) and the compile cache is unsynchronized.
+
+### Source trace
+
+| kind | file:line | scope | description |
+|---|---|---|---|
+| entrypoint | `src/main/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIO.kt:344` | settings import | deserializeRules (337-345) builds TableNameRule(pattern, replacement, enabled) straight from the imported JSON array with no pattern screening |
+| propagation | `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt:1495` | preview render pipeline | processDynamicTableName (called at SqlPreviewService.kt:412 inside the statement-build chain) passes all enabled, non-blank rules to DynamicTableNameProcessor.process(table.tableName, rules) on each wrapper preview render |
+| sink | `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DynamicTableNameProcessor.kt:39` | regex execution | regex.find(tableName) executes the imported pattern with no timeout or complexity bound; compileRegex (48-56) caches Regex(pattern) in the unbounded, unsynchronized mutableMapOf at line 26 and runCatching guards compilation failure only; resolveReplacement (61-68) then expands $tableName/$n groups literally |
+
+### Evidence
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DynamicTableNameProcessor.kt:50` — runCatching { Regex(pattern) } guards compilation failure only; the execution call regex.find(tableName) at line 39 has no timeout, step limit, or pattern-complexity screen
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DynamicTableNameProcessor.kt:26` — regexCache is a plain mutableMapOf<String, Regex?> mutated in compileRegex (49-54) and cleared by PluginCacheManager.clearAll (util/PluginCacheManager.kt:33 calls DynamicTableNameProcessor.clearCache()) — unsynchronized cross-thread access
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIO.kt:344` — Imported rule patterns are accepted verbatim from the shared settings file ('TableNameRule(pattern, replacement, enabled)')
+
+### Blockers (exact)
+
+- no OS-enforced sandbox available on this host for target-controlled execution
+- missing observation: local timing measurement proving a pathological imported pattern (nested-quantifier form) against a realistic table name (roughly 20-64 chars) produces a long-running regex.find on the JVM used by this project
+
+### Resolution plan
+
+**Local (bounded, non-destructive):** Add a timed case to src/test/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DynamicTableNameProcessorTest.kt: TableNameRule with a nested-quantifier pattern (e.g. '(a+)+$'-style) against a 30+ character adversarial table-name string, assert/wall-clock the process() call locally; run with gradle --tests cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest and record elapsed time under a bounded wall clock.
+
+**Owner-observed deployment check:** Owner-observed: import a settings file containing the pathological rule in a runIde sandbox, preview a wrapper whose table name triggers the pathological backtracking path (non-matching input of realistic length), and observe the IDE render path stall — then confirm the fix (timeout/step-bounded match) removes the stall.
+
+---
+
