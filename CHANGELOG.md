@@ -33,6 +33,9 @@
   - **历史读取器读侧上限（T-SAF-23，6f778d74c）**：单行 1MB 折叠占位注释 + 单文件 100MB 闸（对齐写侧滚动阈值），三个读取器统一，植入超大历史文件不再无界缓冲
   - **历史搜索正则三道闸（T-SAF-24，f49190dde）**：模式长度 256 / 复杂度初筛（量化分组套无界量词、双重量词）/ 求值预算（单条目 50ms、整查 2s 结构化失败），代理正则不再可能无限期卡住 IDE 分派线程
   - **动态表名正则预算（T-SAF-25，99ac9a88f）**：新增 `BoundedRegex`（字符读预算 200k 超限视为无匹配）+ 编译缓存改并发有界（封顶 256），病态导入规则不再挂住预览渲染
+  - **SQL 反解析深度守卫（T-SAF-18，6c6fb091a）**：`SqlReverseParser` 递归下降两环（括号/FROM 子查询）加 depth 局部贯穿守卫（上限 256），超限抛 `SqlReverseException` 结构化拒绝——深度嵌套 SQL 经 `sqlv_reverse_sql` 不再炸穿栈（合并验证修正 e8d2a635d：FROM 用例定案 500 层口径）
+  - **OGNL Err 契约封闭（T-SAF-19，dcf869d17）**：超长整数面值改 `toLongOrNull` 入 Err 通道、parse/evaluate 外层 Throwable 收敛 `ParseResult.Err`/`EvalResult.Err`、递归下降深度上限 512——mapper `<bind>`/`<if test>` 的病态表达式不再外抛炸穿 mapper-check 与 UI 预览（BannedApiScan 豁免登记 1→3，catch Throwable 是契约本体）
+  - **依赖解析可信根 + 严格校验（T-SAF-14，b51f664af）**：`settings.gradle.kts` mavenCentral 置前（阿里云镜像降为可用性后备）+ `gradle/verification-metadata.xml`（356 组件 sha256，write-verification-metadata 26 分钟实跑生成）——镜像字节偏差即构建失败关闭；分发到 testShards/runIde 等更广任务时若出现未登记构件，按 gradle 提示扩清单
 
 ## [2026.11.6-beta.2] - 2026-11-06
 

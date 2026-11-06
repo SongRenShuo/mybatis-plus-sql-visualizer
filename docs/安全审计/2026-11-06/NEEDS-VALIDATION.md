@@ -4,7 +4,7 @@
 
 ## 2026-11-07 修复落地更新（T-SecurityAuditFixes 分支，账本闭环）
 
-修复批次落地后本文件对应的 `findings.json` 已更新（双验证器 PASS）：**21 条线索转 `confirmed`（已修复）**——lane_a（T-SAF-20/21/22/12/02）、lane_b（T-SAF-05/06/03/07/11/17/24）、lane_c（T-SAF-04/08/09/10/13/23/25）共 19 项 src/main 修复 + 构建防线 T-SAF-15/16（提交 965a15168），每条均以「先红复现测试在修复前转红 → 修复提交落地 → 回归通过」定案，并按 report-schema confirmed 分支补齐 intended_behavior / conditions / execution / remediation / severity / confidence。**4 条维持 `needs_validation`**：#1 凭据为**所有者明示豁免**（2026-11-06 定案：测试服务器口径，不轮换、不清理、不加守卫——豁免而非缩水）；#14 修复进行中（mavenCentral 置前已改未提交、verification-metadata.xml 未生成入库）；#18/#19 修复未开工（全分支核查无修复提交）。
+修复批次落地后本文件对应的 `findings.json` 已更新（双验证器 PASS）：**24 条线索转 `confirmed`（已修复）**——lane_a（T-SAF-20/21/22/12/02）、lane_b（T-SAF-05/06/03/07/11/17/24）、lane_c（T-SAF-04/08/09/10/13/23/25）共 19 项 src/main 修复 + 构建防线 T-SAF-15/16（提交 965a15168）+ 车道 D 补齐 T-SAF-18/19（5dba1ac62/6c6fb091a、f07c7d8b7/dcf869d17，合并验证修正 e8d2a635d）+ 构建防线 T-SAF-14（b51f664af：mavenCentral 置前 + verification-metadata.xml 356 组件 sha256 严格校验），每条均以「先红复现测试在修复前转红 → 修复提交落地 → 回归通过」定案（T-SAF-14 为配置型控制，以 write-verification-metadata 实跑生成 + 严格模式 compileKotlin/testFast 全绿背书），并按 report-schema confirmed 分支补齐 intended_behavior / conditions / execution / remediation / severity / confidence。**唯一遗留 `needs_validation`：#1 凭据，为所有者明示豁免**（2026-11-06 定案：测试服务器口径，不轮换、不清理、不加守卫——豁免而非缩水）。
 
 以下正文保留审计原判轨迹（原始 blockers / validation_plan 与逐条记录），供审计追溯，不逐条重写；confirmed 记录的最终口径以 `findings.json` 为准。
 

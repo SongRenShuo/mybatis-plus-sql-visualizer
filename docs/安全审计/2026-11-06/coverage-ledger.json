@@ -249,9 +249,11 @@
     ],
     "fix_dispositions": [
       {
-        "fingerprint": "维持",
+        "fingerprint": "已修复",
         "fix": "T-SAF-14",
-        "commits": []
+        "commits": [
+          "b51f664af"
+        ]
       },
       {
         "fingerprint": "已修复",
@@ -3385,9 +3387,12 @@
         ]
       },
       {
-        "fingerprint": "维持",
+        "fingerprint": "已修复",
         "fix": "T-SAF-18",
-        "commits": []
+        "commits": [
+          "5dba1ac62",
+          "6c6fb091a"
+        ]
       }
     ]
   },
@@ -4567,9 +4572,12 @@
     ],
     "fix_dispositions": [
       {
-        "fingerprint": "维持",
+        "fingerprint": "已修复",
         "fix": "T-SAF-19",
-        "commits": []
+        "commits": [
+          "f07c7d8b7",
+          "dcf869d17"
+        ]
       }
     ]
   },

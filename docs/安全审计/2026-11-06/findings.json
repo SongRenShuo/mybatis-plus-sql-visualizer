@@ -374,11 +374,12 @@
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "gradle-deps-aliyun-mirror-first-no-verification",
-    "title": "依赖解析优先使用阿里云镜像而非 Maven Central 且无依赖校验，被替换的镜像字节未经质疑地进入发布的插件",
-    "description": "settings.gradle.kts 在 dependencyResolutionManagement 中先于 mavenCentral（第 52 行）声明 https://maven.aliyun.com/repository/public（第 50 行），而 Gradle 对每个模块都从第一个包含它的仓库解析。仓库中没有 gradle/verification-metadata.xml（已核实：gradle/ 只含 libs.versions.toml、plugin-change-notes.html 和 wrapper/），因此整个构建中任何地方都没有强制任何构件校验和。CI 加固步骤（build-plugin.yml 中五处）只剥离代理属性并重写 Gradle wrapper URL，依赖镜像仍处于激活状态。唯一的运行时依赖 com.github.jsqlparser:jsqlparser:5.3 因此经由这条优先级链解析，其字节被打进 build/distributions/*.zip，作为插件构件上传，并发布到 GitHub Releases 与 Gitee beta 自更新通道（update/update.json downloadUrl）。任何能影响该镜像为这些坐标提供内容的人（镜像运营方被攻破、镜像与 Central 漂移）都能触达被执行的插件代码，而没有任何完整性检查会察觉。",
-    "claimed_root_cause": "仓库解析顺序让第三方镜像优先于权威 Maven Central，而构建未定义任何依赖校验（校验和/签名），因此预期控制（Central 作为可信根）是被配置绕过，而非被攻破。",
+    "title": "依赖解析优先使用阿里云镜像而非 Maven Central 且无依赖校验，被替换的镜像字节未经质疑地进入发布的插件（已修复）",
+    "description": "settings.gradle.kts 在 dependencyResolutionManagement 中先于 mavenCentral（第 52 行）声明 https://maven.aliyun.com/repository/public（第 50 行），而 Gradle 对每个模块都从第一个包含它的仓库解析。仓库中没有 gradle/verification-metadata.xml（已核实：gradle/ 只含 libs.versions.toml、plugin-change-notes.html 和 wrapper/），因此整个构建中任何地方都没有强制任何构件校验和。CI 加固步骤（build-plugin.yml 中五处）只剥离代理属性并重写 Gradle wrapper URL，依赖镜像仍处于激活状态。唯一的运行时依赖 com.github.jsqlparser:jsqlparser:5.3 因此经由这条优先级链解析，其字节被打进 build/distributions/*.zip，作为插件构件上传，并发布到 GitHub Releases 与 Gitee beta 自更新通道（update/update.json downloadUrl）。任何能影响该镜像为这些坐标提供内容的人（镜像运营方被攻破、镜像与 Central 漂移）都能触达被执行的插件代码，而没有任何完整性检查会察觉。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-14：settings.gradle.kts mavenCentral 置前（阿里云镜像降为可用性后备）+ gradle/verification-metadata.xml（356 组件 sha256，write-verification-metadata 26 分钟实跑生成）依赖严格校验（D4=A）（提交 b51f664af）；回归通过。",
+    "root_cause": "仓库解析顺序让第三方镜像优先于权威 Maven Central，而构建未定义任何依赖校验（校验和/签名），因此预期控制（Central 作为可信根）是被配置绕过，而非被攻破。",
+    "intended_behavior": "依赖解析以 Maven Central 为可信根并强制构件完整性：镜像降为后备，任何组件字节与 verification-metadata.xml 登记的 sha256 不符即构建失败关闭（替换字节 fail-closed）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -419,14 +420,44 @@
         "description": "已核实：CI 把 gradle-wrapper.properties 从 mirrors.cloud.tencent.com 重写为 services.gradle.org/distributions（:94 注释『使用 Gradle 官方下载源』），这是仓库内自认第三方镜像未被同等信任的佐证；对依赖镜像并未施加同等的不信任。"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱（禁止对目标仓库运行 gradle 解析）",
-      "镜像为这些坐标提供的字节（maven.aliyun.com 与 repo1.maven.org）在源码中不可见；两者当前是否不同，只有 owner 观察到的下载/比对才能定论",
-      "修复进度（2026-11-07）：mavenCentral 置前已改（settings.gradle.kts 工作区改动、未提交），gradle/verification-metadata.xml 尚未生成入库（lane-reports 登记 in_progress）——不满足「先红复现 + 修复提交」转 confirmed 门槛，维持 needs_validation。"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是镜像（maven.aliyun.com）为某坐标提供被替换/漂移的字节；镜像与 Central 的现实偏差从未实测，严格校验使该偏差不再能进入构建产物"
+      },
+      {
+        "kind": "system_configuration",
+        "description": "verification 严格模式覆盖当前依赖闭包（356 组件）；分发到 testShards/runIde 等更广任务时若出现未登记构件，按 gradle 提示扩清单"
+      }
     ],
-    "validation_plan": {
-      "local": "在批准的沙箱内、禁用外网并配置本地 registry：用 `./gradlew --write-verification-metadata sha256 buildPlugin`（或 `help` 加解析任务）生成 verification metadata，对照权威 Central 构件摘要检查 com.github.jsqlparser:jsqlparser:5.3 记录的 sha256；启用严格校验（带 Central 摘要的 verification-metadata.xml）会让任何镜像偏差确定性地构建失败。",
-      "deployment": "由 owner 观察验证，除已配置的两个公共构件 URL 外不做任何在线探测：下载 https://maven.aliyun.com/repository/public/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar 与 https://repo1.maven.org/maven2/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar，比对 sha256；然后提交 pin 住摘要的 gradle/verification-metadata.xml（可选把 mavenCentral 调到前面），使替换 fail-closed。"
+    "execution": {
+      "attacker_perspective": "被攻陷/漂移的镜像为 jsqlparser 等坐标提供替换字节，经由镜像优先解析链打进发布插件 zip 并流入 GitHub Releases/Gitee beta 自更新通道，无任何完整性检查察觉。",
+      "payloads": [
+        "com.github.jsqlparser:jsqlparser:5.3 被替换字节（settings.gradle.kts 镜像优先解析链 → buildPlugin 产物）"
+      ],
+      "instructions": [
+        "gradlew.bat dependency verification（严格校验：verification-metadata.xml 随构建强制；篡改任一登记构件即失败关闭）",
+        "gradlew.bat testFast（verification 严格模式下 compileKotlin/testFast 全绿；分发到 testShards/runIde 等更广任务时若出现未登记构件，按 gradle 提示扩清单）"
+      ],
+      "observed_result": "配置型控制无先红单测口径：修复提交 b51f664af 落地（settings.gradle.kts 镜像降后备 + verification-metadata.xml 356 组件 sha256，write-verification-metadata 26 分钟实跑生成）后，verification 严格模式下 compileKotlin/testFast 全绿——镜像字节偏差即构建失败关闭。"
+    },
+    "remediation": {
+      "strategy": "D4=A：mavenCentral 置前（可信根）+ verification-metadata.xml 356 组件 sha256 严格校验；镜像保留为代理失效时的可用性后备；未登记构件按 gradle 提示扩清单。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "low",
+        "reason": "利用前提是第三方镜像基础设施被攻陷或漂移（仓库内 CI 对 wrapper 镜像的重写佐证镜像未被等信任）；严格校验落地后该通道确定性失败关闭"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "供应链完整性：替换字节本可触达被执行的插件代码与发布构件（GitHub Releases/Gitee beta）；校验和锚定后影响被压缩到构建失败"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "配置型控制无先红单测；完整性由 356 组件 sha256 严格校验（write-verification-metadata 26 分钟实跑生成）与 verification 严格模式 compileKotlin/testFast 全绿背书，修复提交 b51f664af 入库"
     }
   },
   {
@@ -1730,11 +1761,12 @@
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "sql-reverse-parser-unbounded-recursion",
-    "title": "SqlReverseParser 递归下降没有嵌套深度守卫：深度括号或嵌套子查询 SQL 经由 sqlv_reverse_sql 触发 StackOverflowError",
-    "description": "SqlReverseParser 是一个手写递归下降解析器，其括号条件分支经由循环 parseConditionInternal（line 856）-> parseGroup（line 962）-> parseConditionList（line 782）-> parseAndSegment（line 801）-> parseCondition（line 842）-> parseConditionInternal 递归，每层嵌套消耗约 4-5 个栈帧，另有第二个递归循环 parseSubqueryTable（line 679）-> parseSubqueryStructure（line 707）-> parse（line 34）对应每个 FROM 子查询层级。两个循环均无深度计数器（经 grep 核实：文件中唯一的 'depth' 变量是括号平衡计数器，不存在递归深度限制），入口工具 sqlv_reverse_sql 接受未设上限的 SQL 字符串且只捕获 SqlReverseException（SqlVisualizerReverseSqlTool.kt:57），因此紧凑的对抗性输入（数千字节的 '('）会驱动 StackOverflowError，MCP 审计边界将其作为 VirtualMachineError（FatalErrors.isFatal）重新抛给平台分派器。与 JSqlParser 不同，这甚至不需要大输入：每字节的嵌套深度是最大的。",
-    "claimed_root_cause": "递归下降解析器编写时没有递归深度守卫或输入上限；每层括号的帧成本意味着栈深度随攻击者选择的嵌套线性增长，而没有任何层（工具、解析器或审计）限制该深度。",
+    "title": "SqlReverseParser 递归下降没有嵌套深度守卫：深度括号或嵌套子查询 SQL 经由 sqlv_reverse_sql 触发 StackOverflowError（已修复）",
+    "description": "SqlReverseParser 是一个手写递归下降解析器，其括号条件分支经由循环 parseConditionInternal（line 856）-> parseGroup（line 962）-> parseConditionList（line 782）-> parseAndSegment（line 801）-> parseCondition（line 842）-> parseConditionInternal 递归，每层嵌套消耗约 4-5 个栈帧，另有第二个递归循环 parseSubqueryTable（line 679）-> parseSubqueryStructure（line 707）-> parse（line 34）对应每个 FROM 子查询层级。两个循环均无深度计数器（经 grep 核实：文件中唯一的 'depth' 变量是括号平衡计数器，不存在递归深度限制），入口工具 sqlv_reverse_sql 接受未设上限的 SQL 字符串且只捕获 SqlReverseException（SqlVisualizerReverseSqlTool.kt:57），因此紧凑的对抗性输入（数千字节的 '('）会驱动 StackOverflowError，MCP 审计边界将其作为 VirtualMachineError（FatalErrors.isFatal）重新抛给平台分派器。与 JSqlParser 不同，这甚至不需要大输入：每字节的嵌套深度是最大的。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-18：递归下降加深度守卫——depth 参数局部贯穿 parseConditionInternal/parseSubqueryTable 两个递归环（上限 256，无状态 object 不用成员变量防并发串扰），超限抛 SqlReverseException 结构化拒绝；合并验证修正 e8d2a635d：FROM 子查询用例降 500 层（20000 层 token 化先 OOM，500 层越守卫先红仍有区分度）（提交 5dba1ac62/6c6fb091a）；回归通过。",
+    "root_cause": "递归下降解析器编写时没有递归深度守卫或输入上限；每层括号的帧成本意味着栈深度随攻击者选择的嵌套线性增长，而没有任何层（工具、解析器或审计）限制该深度。",
+    "intended_behavior": "递归下降解析对攻击者可控嵌套深度有界：括号与 FROM 子查询两个递归环带深度计数（上限 256），超限抛 SqlReverseException 走工具既有结构化错误通道，而非 StackOverflowError 逃逸 MCP 分派器。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1782,22 +1814,49 @@
         "description": "VirtualMachineError 被归类为致命并被审计边界重新抛出（McpToolsetSupport.kt:146-147）。"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "未在实际运行解析器的 JVM 上对受限 fixture 本地观测到 StackOverflowError 阈值（嵌套深度 x 每层帧数 vs JVM 默认栈）",
-      "IntelliJ 平台 MCP 分派器对重新抛出的 VirtualMachineError 的遏制是本仓库不可见的平台行为",
-      "修复进度（2026-11-07）：未开工——SqlReverseParser 无递归深度守卫改动、无修复提交（全分支/全工作树核查）；维持 needs_validation。"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理常被投喂不可信内容：经 sqlv_reverse_sql 提交深度嵌套 SQL 即触达（每字节嵌套是最大深度放大形态）；已知口径——子查询环超限异常被既有回落通道收编为「有界降级」，主体结构化拒绝 repro 由括号用例承载"
+      }
     ],
-    "validation_plan": {
-      "local": "在 cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest 和 cn.song.mybatisplus.visualizer.mcp.ReverseSqlToolTest（两者都存在，是基于纯核心的 plain JUnit）中添加用例：在受限 -Xss 下对 'SELECT * FROM t WHERE ' + '('*20000 + 'a=1' + ')'*20000（以及嵌套 FROM 子查询变体）调用 reverseSql；若无深度守卫，预期 StackOverflowError 逃逸 reverseSql，然后断言在添加深度守卫/输入上限后接受并降级或返回结构化错误。使用 gradle --tests cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest 运行。"
+    "execution": {
+      "attacker_perspective": "代理经 sqlv_reverse_sql 提交数千字节的深度括号嵌套 SQL，驱动每层 4-5 个栈帧的递归下降耗尽 JVM 栈，StackOverflowError 作为 VirtualMachineError 被 MCP 审计边界透传平台。",
+      "payloads": [
+        "'SELECT * FROM t WHERE ' + '('*20000 + 'a=1' + ')'*20000",
+        "深度嵌套 FROM 子查询变体（定案口径 500 层）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest"
+      ],
+      "observed_result": "修复前先红测试（深度括号嵌套_结构化拒绝而非栈溢出：20000 层括号断言 SqlReverseException）被 StackOverflowError 炸穿 assertThrows 即复现；修复提交 5dba1ac62/6c6fb091a 落地后回归通过（合并验证修正 e8d2a635d：FROM 子查询用例降 500 层、现实深度防误杀）。"
+    },
+    "remediation": {
+      "strategy": "两个递归环入口加 depth 局部参数贯穿（上限 256），超限抛 SqlReverseException 走结构化拒绝；object 保持无状态、深度以局部参数传递防并发串扰。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "已连接 agent 单次调用即可触发，紧凑对抗输入（数千字节括号）即最大化深度（先红测试 SqlReverseParserTest 深度括号用例在修复前被 SOE 炸穿）"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "IDE MCP 分派路径 StackOverflowError 透传属可用性影响（FatalErrors 将 VirtualMachineError 归类致命）；平台遏制范围之外无数据外泄或持久破坏"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 SqlReverseParserTest 深度括号用例在修复前被 StackOverflowError 炸穿（审计缺陷复现）、修复提交 6c6fb091a 后回归通过（e8d2a635d 定案口径）"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt@parse-exception-confinement",
-    "title": "OgnlEvaluator.parse 泄漏 NumberFormatException（整数面值 > Long.MAX_VALUE）和 StackOverflowError（深度嵌套）出其 ParseResult/Err 契约，未捕获地到达 MCP mapper-check 和 UI 预览",
-    "description": "用于 <if test>、<bind value>、${} 和 foreach collection 表达式的自定义 OGNL 求值器将所有解析失败降级为 ParseResult.Err，所有求值期失败降级为 EvalResult.Err——但 parseUncached（Ognl.kt:133-137）只捕获 OgnlParseException，而 evaluate(text) 在 Throwable 保护的 AST 求值器之外调用 parse()（Ognl.kt:153-157；:152 的 KDoc 将其降级承诺限定在求值期，而 parse() 本身将 ParseResult.Err 呈现为其唯一的面向调用者的失败模式，每个基于 parse 构建的辅助函数都假设它不会抛出）。一个 20+ 位的普通整数面值会使 Lexer.number() 从 raw.toLong() 抛出 java.lang.NumberFormatException（Ognl.kt:686），而深度嵌套的括号会在递归下降解析器中耗尽栈（Ognl.kt:749,771-995），因此未捕获的 NumberFormatException/StackOverflowError 从 XmlPreviewModel.from（XmlPreviewModel.kt:263->297 collect->rootPaths，模型构建期间 :333 classifyDetail；XmlPreviewModel.kt 不含 try/catch）和 XmlPreviewModel.renderSql（经由 TextSqlNode.kt:44、IfSqlNode.kt:69、ForeachSqlNode.kt:61；XmlSqlRenderer.kt 不含 try/catch）传播出去。Mapper XML 是较低信任的输入（项目文件、经由 MCP mapper-check 工具的 AI agent 提供的片段），具体 sink 是 SqlVisualizerMapperCheckTool，它在调用 XmlPreviewModel.from 和 model.renderSql()（SqlVisualizerMapperCheckTool.kt:116-117）之前只捕获 XmlParseException（SqlVisualizerMapperCheckTool.kt:93-99）；审计包装器只重新抛出意外异常（McpToolsetSupport.kt:146-149），ui/XmlPreviewService.toResult（XmlPreviewService.kt:257）同样无保护。预期最小影响：agent 或 mapper 编写的包含 <bind name=\"x\" value=\"99999999999999999999\"/> 或 <if test=\"ts > 99999999999999999999\"/> 的语句会使工具/预览路径抛出异常，而不是返回带错误行的降级输出。",
-    "claimed_root_cause": "OgnlEvaluator.parse 中的异常隔离缺口：Lexer.number()（src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686）执行 raw.toLong() 时未捕获超长面值的 NumberFormatException，parseUncached/parse/evaluate(text)（Ognl.kt:133-137,124-131,153-157）只捕获 OgnlParseException，因此词法器的运行时异常（以及 Parser 无界递归下降的 StackOverflowError，Ognl.kt:749,771-995）绕过 Err 降级契约，逃逸到假设 parse()/evaluate() 从不抛出的调用者。",
+    "title": "OgnlEvaluator.parse 泄漏 NumberFormatException（整数面值 > Long.MAX_VALUE）和 StackOverflowError（深度嵌套）出其 ParseResult/Err 契约，未捕获地到达 MCP mapper-check 和 UI 预览（已修复）",
+    "description": "用于 <if test>、<bind value>、${} 和 foreach collection 表达式的自定义 OGNL 求值器将所有解析失败降级为 ParseResult.Err，所有求值期失败降级为 EvalResult.Err——但 parseUncached（Ognl.kt:133-137）只捕获 OgnlParseException，而 evaluate(text) 在 Throwable 保护的 AST 求值器之外调用 parse()（Ognl.kt:153-157；:152 的 KDoc 将其降级承诺限定在求值期，而 parse() 本身将 ParseResult.Err 呈现为其唯一的面向调用者的失败模式，每个基于 parse 构建的辅助函数都假设它不会抛出）。一个 20+ 位的普通整数面值会使 Lexer.number() 从 raw.toLong() 抛出 java.lang.NumberFormatException（Ognl.kt:686），而深度嵌套的括号会在递归下降解析器中耗尽栈（Ognl.kt:749,771-995），因此未捕获的 NumberFormatException/StackOverflowError 从 XmlPreviewModel.from（XmlPreviewModel.kt:263->297 collect->rootPaths，模型构建期间 :333 classifyDetail；XmlPreviewModel.kt 不含 try/catch）和 XmlPreviewModel.renderSql（经由 TextSqlNode.kt:44、IfSqlNode.kt:69、ForeachSqlNode.kt:61；XmlSqlRenderer.kt 不含 try/catch）传播出去。Mapper XML 是较低信任的输入（项目文件、经由 MCP mapper-check 工具的 AI agent 提供的片段），具体 sink 是 SqlVisualizerMapperCheckTool，它在调用 XmlPreviewModel.from 和 model.renderSql()（SqlVisualizerMapperCheckTool.kt:116-117）之前只捕获 XmlParseException（SqlVisualizerMapperCheckTool.kt:93-99）；审计包装器只重新抛出意外异常（McpToolsetSupport.kt:146-149），ui/XmlPreviewService.toResult（XmlPreviewService.kt:257）同样无保护。预期最小影响：agent 或 mapper 编写的包含 <bind name=\"x\" value=\"99999999999999999999\"/> 或 <if test=\"ts > 99999999999999999999\"/> 的语句会使工具/预览路径抛出异常，而不是返回带错误行的降级输出。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-19：三处异常封闭：①Lexer.number 改 toLongOrNull，超长整数面值入既有 Err 通道 ②parse/evaluate 外层补 catch Throwable 收敛 ParseResult.Err/EvalResult.Err（对齐 KDoc 承诺；BannedApiScan 豁免登记 1→3，catch Throwable 是 Err 契约本体）③递归下降深度上限 512（提交 f07c7d8b7/dcf869d17）；回归通过。",
+    "root_cause": "OgnlEvaluator.parse 中的异常隔离缺口：Lexer.number()（src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686）执行 raw.toLong() 时未捕获超长面值的 NumberFormatException，parseUncached/parse/evaluate(text)（Ognl.kt:133-137,124-131,153-157）只捕获 OgnlParseException，因此词法器的运行时异常（以及 Parser 无界递归下降的 StackOverflowError，Ognl.kt:749,771-995）绕过 Err 降级契约，逃逸到假设 parse()/evaluate() 从不抛出的调用者。",
+    "intended_behavior": "OGNL 求值器的 Err 降级契约完整：词法、解析、求值各层任何失败（含超长整数面值与深度嵌套）都降级为 ParseResult.Err/EvalResult.Err，不再有 NumberFormatException/StackOverflowError 逃逸到假设 parse()/evaluate() 从不抛出的调用者（MCP mapper-check 与 UI 预览）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1872,16 +1931,42 @@
         "description": "现有测试 '解析失败返回Err_非法语法与未闭合' 只固定语法错误的 Err 降级；没有用例覆盖超长数值面值或病态嵌套，因此该缺口未经测试"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "缺失观察：对包含 <bind name=\"x\" value=\"99999999999999999999\"/> 的语句进行 OgnlEvaluator.parse(\"99999999999999999999\") / OgnlEvaluator.evaluate 的受限本地运行，以观察实际抛出的 NumberFormatException 与预期的 ParseResult.Err/EvalResult.Err（源码审查确立了逃逸路径但未确立观测到的运行时结果）",
-      "缺失观察：对深度嵌套括号 test 表达式进行 OgnlEvaluator.parse 的受限本地运行，以观察 StackOverflowError 与优雅 Err，以及目标 JVM 上发生时的递归深度",
-      "缺失观察：McpToolsetSupport.audit 之上的平台 MCP shell（McpToolsetDynamicRegistrar 生成的工具 shell / IntelliJ MCP server）是否将来自 SqlVisualizerMapperCheckTool 的未捕获 Throwable 转换为结构化工具错误或将其作为工具失败传播——对本单元的源码审查确立了异常既逃逸 XmlParseException 处理器（SqlVisualizerMapperCheckTool.kt:95）又逃逸审计包装器的重新抛出（McpToolsetSupport.kt:146-149），但 registrar 在本单元审查路径之外（由 mcp hunter 拥有）",
-      "修复进度（2026-11-07）：未开工——Ognl.kt 无三处封闭改动（toLongOrNull/外层 Throwable 捕获/深度计数）、无修复提交（全分支/全工作树核查）；维持 needs_validation。"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "mapper XML 为较低信任输入（项目文件或 AI agent 经 sqlv_mapper_check 提供的片段）：test/bind/${}/collection 表达式内 20+ 位整数面值或深度嵌套即触发"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展 src/test/kotlin/cn/song/mybatisplus/visualizer/xml/OgnlEvaluatorTest.kt：(1) 断言 OgnlEvaluator.parse(\"99999999999999999999\") 返回 ParseResult.Err 且不抛出；(2) 断言 OgnlEvaluator.evaluate(\"99999999999999999999 > 1\", emptyMap()) 返回 EvalResult.Err；(3) 在 XmlPreviewModelTest/XmlScriptBuilderTest 中的 render 层用例，解析包含 <bind name=\"x\" value=\"99999999999999999999\"/> 和 <if test=\"ts > 99999999999999999999\"> 的 mapper，断言 XmlPreviewModel.from/renderSql 产生降级输出加 errors 行而非抛出；(4) 深度用例馈入深度嵌套括号表达式（例如 50,000 层嵌套括号）并断言有界失败而非 StackOverflowError。使用 gradle --tests cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest --tests cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest 运行。如果断言以抛出的异常失败，则按其观测到的可用性/健壮性影响确认候选。",
-      "deployment": "所有者在 IDE 沙箱中观察检查：对包含 <bind name=\"x\" value=\"99999999999999999999\"/> 的 mapper XML 调用 sqlv_mapper_check MCP 工具（或打开预览面板），确认工具返回结构化错误结果还是在 IDE 错误日志中出现未处理异常。"
+    "execution": {
+      "attacker_perspective": "agent 或恶意 mapper 在 <bind value>/<if test> 写超长整数面值或深度嵌套表达式，NumberFormatException/StackOverflowError 逃逸 Err 契约，炸穿 XmlPreviewModel 模型构建与工具处理器。",
+      "payloads": [
+        "<bind name=\"x\" value=\"99999999999999999999\"/>",
+        "<if test=\"ts > 99999999999999999999\">",
+        "50000 层嵌套括号 test 表达式"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest",
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest"
+      ],
+      "observed_result": "修复前先红测试转红即复现（OgnlEvaluatorTest：超长整数 parse 外抛 NumberFormatException、50000 层嵌套 StackOverflowError；XmlPreviewModelTest：超长整数 bind 炸穿模型构建）；修复提交 f07c7d8b7/dcf869d17 落地后回归通过（合并验证修正 e8d2a635d：BannedApiScan 豁免登记 1→3）。"
+    },
+    "remediation": {
+      "strategy": "三处封闭：toLongOrNull 入 Err 通道 + parse/evaluate 外层 Throwable 收敛 Err（契约本体，BannedApiScan 豁免登记）+ 递归下降深度上限 512。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "mapper 片段是 agent 可直接供给的低信任输入（先红测试 OgnlEvaluatorTest/XmlPreviewModelTest 三用例钉住外抛形态），单次 mapper-check 或预览即触发"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "未处理异常炸穿 MCP 工具与 UI 预览路径属可用性/健壮性影响（工具返回未定形态而非降级输出）；无数据外泄或越权"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 OgnlEvaluatorTest（超长整数/50000 层嵌套）与 XmlPreviewModelTest（bind 渲染层）在修复前转红（审计缺陷复现）、修复提交 dcf869d17 后回归通过"
     }
   },
   {
