@@ -123,6 +123,43 @@ class WrapperAnchorDetectorNegativeTest : BasePlatformTestCase() {
         assertTrue("基类型变量 + 非 wrapper 初始化不应产生锚点，实际: $anchors", anchors.isEmpty())
     }
 
+    // ========== T-WriteFamily（R4）：写族名字撞名的非 MP receiver 负例 ==========
+
+    fun testNonMpReceiversWithDeleteRemoveNullHaveNoAnchor() {
+        // R4.5 不变量：`delete` / `remove` 是通用方法名——非 MP CRUD receiver 上即使实参是 null
+        // 也不得亮图标（宁可漏标不可误标）。`redisTemplate.delete(null)` / `cache.delete(null)` /
+        // `list.remove(null)`（`List.remove(Object)` 合法且常见）/ `list.remove(0)`。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import java.util.List;
+
+            public class Demo {
+                private RedisTemplate<String, String> redisTemplate;
+                private LocalCache cache;
+
+                public void ops(List<String> list) {
+                    redisTemplate.delete(null);
+                    cache.delete(null);
+                    list.remove(null);
+                    list.remove(0);
+                }
+
+                static class RedisTemplate<K, V> {}
+
+                static class LocalCache {
+                    public boolean delete(Object o) { return false; }
+                }
+            }
+            """,
+        )
+        val anchors = collectedAnchors()
+        assertTrue(
+            "非 MP CRUD receiver 上的 delete/remove 不应产生任何锚点，实际: $anchors",
+            anchors.isEmpty(),
+        )
+    }
+
     // ========== Kotlin：文本级行匹配分支（F-4 MVP 高危区） ==========
 
     fun testKotlinCommentStringImportAndNoOpLinesHaveNoAnchor() {

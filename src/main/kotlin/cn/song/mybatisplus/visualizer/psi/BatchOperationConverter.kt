@@ -16,8 +16,12 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
+import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiThisExpression
+import com.intellij.psi.PsiTypeCastExpression
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.util.PsiTreeUtil
 
@@ -41,6 +45,11 @@ import com.intellij.psi.util.PsiTreeUtil
  *  - `removeByMap(map)` / `deleteByMap(map)`（T-M20-07，MP/MPJ Map 条件删除）与
  *    `selectByMap(map)` / `listByMap(map)`（T-M20-07 Map 条件查询）：
  *    WHERE Map 等值条件占位（键值静态不可得，可读占位文本）
+ *  - `delete(Wrapper)` / `remove(Wrapper)` / `update(T, Wrapper)`（T-WriteFamily R4 写族补全）：
+ *    **只接管 Wrapper 实参为 `null` 字面量**的形态——`delete(null)` / `remove(null)` → `DELETE FROM 表`
+ *    （@TableLogic 转 `UPDATE 表 SET deleted = 1 WHERE deleted = 0`）；`update(entity, null)` →
+ *    `UPDATE 表 SET 实体列 = ?`（**无 WHERE**）；两者都带全表写操作警示（[NO_WHERE_DELETE_WARNING] /
+ *    [NO_WHERE_UPDATE_WARNING]）。非 null 形态返回 null：由 Wrapper 链路径承载（绝不退化成无 WHERE）
  *  - `getById(id)` / `getOptById(id)`（T-M20-10，IService 3.5.15）/ `listByIds(ids)` / `selectByIds(ids)`
  *    （M19.5，实体单条查询，P2-08 同点合并）：SELECT 全列 FROM 表 WHERE 主键 =/IN；
  *    **T-M23-01**：实体含 @TableLogic 时 WHERE 追加 `AND deleted = 0`（对齐 MP 内置 SQL）
@@ -84,6 +93,13 @@ object BatchOperationConverter {
         "deleteByIds" to Operation.DELETE,
         // T-M22-04：Mapper.deleteById(id) 与 ActiveRecord 无参形态（entity.deleteById()）同模板——主键等值
         "deleteById" to Operation.DELETE,
+        // T-WriteFamily（R4）：空 Wrapper 写族——`BaseMapper.delete(Wrapper)`（3.5.17 javap 实证，参数可 null）/
+        // `BaseMapper.update(T, Wrapper)` / `IService.remove(Wrapper)`。三者只认「Wrapper 实参为 null 字面量」这一
+        // 精确形态（[isNullWrapperShape]），非空 Wrapper 由 Wrapper 链锚点承载、本注册表不接管（return null）。
+        // 名字同时是 Wrapper 工厂/链终结点（delete/update），锚点侧另有接收者守卫（[hasMpCrudReceiver]）。
+        "delete" to Operation.DELETE,
+        "update" to Operation.UPDATE,
+        "remove" to Operation.DELETE,
         // T-M20-10 核对：IService 3.5.15 便捷重载 removeBatchByIds(Collection)——核对时补注册（与 removeByIds 同模板）
         "removeBatchByIds" to Operation.DELETE,
         // T-M20-07：Map 条件消费（MP/MPJ）——DELETE/SELECT WHERE Map 等值条件（独立 builder，见 [buildMapConditionBatch]）
@@ -125,6 +141,37 @@ object BatchOperationConverter {
     internal val batchOperationMethodNames: Set<String> = BATCH_OPERATIONS.keys
 
     /**
+     * T-WriteFamily（R4）：只认「Wrapper 实参为 null 字面量」的写族方法名
+     * （`delete` / `remove` 单参 null；`update` 两参第二参 null）。
+     *
+     * 与其余批量方法名的差别：其余名字的实参是实体/集合/主键，方法名本身即足够；
+     * 这三个名字的 Wrapper 实参才是语句载体，**非空 Wrapper 必须让位给链锚点**，
+     * 因此锚点侧（[WrapperAnchorDetector] 场景 D）与选择区候选侧（[WrapperLocator.isSqlCandidate]）
+     * 都要叠加 [isNoWrapperConsumingCall] 的精确形态 + 接收者判定。
+     */
+    internal val nullWrapperWriteMethodNames: Set<String> = setOf("delete", "update", "remove")
+
+    /** T-WriteFamily：无 WHERE 全表删除警示（与 JPA BlockAttack / EasyQuery 全表警示同文案口径）。 */
+    internal const val NO_WHERE_DELETE_WARNING = "⚠ 无 WHERE 条件，将删除全表数据！"
+
+    /** T-WriteFamily：无 WHERE 全表更新警示。 */
+    internal const val NO_WHERE_UPDATE_WARNING = "⚠ 无 WHERE 条件，将更新全表数据！"
+
+    /** T-WriteFamily：MP CRUD 基类 FQN 前缀（优先按 FQN 判定）。 */
+    private const val MP_CRUD_FQN_PREFIX = "com.baomidou.mybatisplus"
+
+    /**
+     * T-WriteFamily：MP CRUD 基类简名集合（`BaseMapper` / `IService` / `ServiceImpl` / `AbstractModel`）——
+     * 类型父链（含父链的父链）命中任一即视为 MP 写族 receiver。
+     * 简名兜底用于「依赖不在索引里」的工程（含测试桩）；口径见计划 P-5（同名自有基类风险已知并接受）。
+     */
+    private val MP_CRUD_BASE_SIMPLE_NAMES: Set<String> =
+        setOf("BaseMapper", "IService", "ServiceImpl", "AbstractModel")
+
+    /** T-WriteFamily：类型父链遍历深度上限（`XxxServiceImpl → ServiceImpl → IService` 两跳够用，留一档余量）。 */
+    private const val MP_CRUD_SUPER_TYPE_DEPTH = 3
+
+    /**
      * T-M23-02：单个 `?` 的参数登记（source + 回填引号提示，供面板参数行）。
      */
     private data class ParamEntry(val source: String, val hint: ParamHint)
@@ -138,6 +185,8 @@ object BatchOperationConverter {
         val params: List<ParamEntry> = emptyList(),
         val paramGroups: String? = null,
         val model: BatchModel? = null,
+        /** T-WriteFamily（R4）：无 WHERE 写操作警示（delete/remove/update 的全表形态）。 */
+        val warning: String? = null,
     )
 
     /**
@@ -195,7 +244,9 @@ object BatchOperationConverter {
         val target = resolveEntityTable(call) ?: return null
         val table = target.table
         // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 分支）
-        val build = if (methodName in MAP_CONDITION_METHODS) {
+        // T-WriteFamily（R4）：空 Wrapper 写族在各自 builder 内按「null 字面量」精确判定，非该形态返回 null
+        // （绝不退化成无 WHERE）→ 本条链路整体 return null，交回 Wrapper 路径 / 如实无预览
+        val build = (if (methodName in MAP_CONDITION_METHODS) {
             buildMapConditionBatch(call, methodName, table, injectLogicDelete)
         } else {
             when (operation) {
@@ -205,7 +256,7 @@ object BatchOperationConverter {
                 Operation.UPSERT -> buildUpsertBatch(call, methodName, table)
                 Operation.SELECT -> buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables)
             }
-        }
+        }) ?: return null
         return BatchPreview(
             methodName = methodName,
             tableName = table.tableName,
@@ -214,7 +265,127 @@ object BatchOperationConverter {
             paramSources = build.params.map { it.source },
             paramHints = build.params.map { it.hint },
             batchModel = build.model,
+            warning = build.warning,
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-WriteFamily（R4）：空 Wrapper 写族的精确形态 + 接收者守卫
+    // ------------------------------------------------------------------
+
+    /**
+     * 调用是否为批量/写族候选（[WrapperLocator.isSqlCandidate] 选择区扫描用）。
+     *
+     * 普通批量方法名（`getById` / `save` / `removeById` …）只要在注册表内即算候选（存量行为）；
+     * T-WriteFamily 新增的 [nullWrapperWriteMethodNames] 必须叠加
+     * [isNoWrapperConsumingCall]（空 Wrapper 精确形态 + MP receiver），否则 `redisTemplate.delete(null)`、
+     * `list.remove(0)` 之类会进多 SQL 选择列表。
+     */
+    internal fun isBatchOperationCall(call: PsiMethodCallExpression): Boolean {
+        val methodName = call.methodExpression.referenceName ?: return false
+        if (methodName !in BATCH_OPERATIONS) return false
+        return methodName !in nullWrapperWriteMethodNames || isNoWrapperConsumingCall(call)
+    }
+
+    /**
+     * 调用是否为「空 Wrapper 消费」形态（T-WriteFamily R4）：
+     *  - `delete` / `remove`：**恰好 1 个实参且为 `null` 字面量**（解一层 `PsiTypeCastExpression`）；
+     *  - `update`：**至少 2 个实参且第 2 个为 `null` 字面量**（解一层 cast）。
+     *
+     * `delete(new LambdaQueryWrapper<>()...)` / `delete(wrapperVar)` / `update(entity, wrapperVar)` /
+     * `service.update(null)`（单参，SQL 本身非法）都不满足——锚点让位给 Wrapper 链（场景 A/B/C）。
+     */
+    internal fun isNullWrapperShape(call: PsiMethodCallExpression): Boolean {
+        val args = call.argumentList.expressions
+        return when (call.methodExpression.referenceName) {
+            "delete", "remove" -> args.size == 1 && isNullLiteral(args[0])
+            "update" -> args.size >= 2 && isNullLiteral(args[1])
+            else -> false
+        }
+    }
+
+    /**
+     * 空 Wrapper 写族调用的完整门（注册表 + 形态 + receiver）：锚点与选择区候选共用同一判定，
+     * 保证 gutter 亮图标与预览可产出严格一致（宁可无图标，不可误亮）。
+     *
+     * **注册表成员资格也是门的一部分**：名字不在 [BATCH_OPERATIONS] 时预览链路必然 null，
+     * 此时若锚点仍亮就是死图标（反向验证「去掉注册表的 delete」必须同时打掉锚点与预览）。
+     */
+    internal fun isNoWrapperConsumingCall(call: PsiMethodCallExpression): Boolean =
+        call.methodExpression.referenceName in BATCH_OPERATIONS &&
+            isNullWrapperShape(call) &&
+            hasMpCrudReceiver(call)
+
+    /** 表达式是否为 `null` 字面量（解一层 `(Wrapper<X>) null` 强转包裹）。 */
+    private fun isNullLiteral(expr: PsiExpression): Boolean {
+        val unwrapped = (expr as? PsiTypeCastExpression)?.operand ?: expr
+        val literal = unwrapped as? PsiLiteralExpression ?: return false
+        return literal.value == null
+    }
+
+    /**
+     * receiver 是否为 MyBatis-Plus CRUD 家族（形态对齐 [cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter.hasJpaCrudReceiver]）。
+     *
+     * 判定顺序：
+     *  1. qualifier 变量 / 形参 / 字段的类型（含父类型链）命中 `BaseMapper` / `IService` / `ServiceImpl` /
+     *     `AbstractModel`（FQN 前缀 `com.baomidou.mybatisplus` 优先，简名兜底）；
+     *  2. qualifier 是 `getBaseMapper()` 调用或变量名 `baseMapper` → 直接放行（MP ServiceImpl 惯用形态）；
+     *  3. 隐式 / 显式 `this` → 所在类父链含 `ServiceImpl` / `IService`（Service 内部 `update(entity, null)`）。
+     *
+     * 成本：只在 [isNullWrapperShape] 通过后调用（形态门已把负例压到极小），一次变量 resolve +
+     * 类型父链文本匹配，与场景 E 的 receiver 判定同款微秒级文档化例外。
+     */
+    internal fun hasMpCrudReceiver(call: PsiMethodCallExpression): Boolean = runCatching {
+        when (val qualifier = call.methodExpression.qualifierExpression) {
+            null -> isMpCrudClassChain(PsiTreeUtil.getParentOfType(call, PsiClass::class.java))
+            is PsiThisExpression -> isMpCrudClassChain(PsiTreeUtil.getParentOfType(call, PsiClass::class.java))
+            is PsiMethodCallExpression ->
+                qualifier.methodExpression.referenceName == "getBaseMapper" || isMpCrudType(receiverType(qualifier))
+            is PsiReferenceExpression ->
+                qualifier.referenceName == "baseMapper" || isMpCrudType(receiverType(qualifier))
+            else -> isMpCrudType(qualifier.type as? PsiClassType)
+        }
+    }.getOrDefault(false)
+
+    /** qualifier 表达式的接收者类型（变量优先解析声明类型，方法调用用返回类型）。 */
+    private fun receiverType(expr: PsiExpression): PsiClassType? = when (expr) {
+        is PsiReferenceExpression ->
+            (expr.resolve() as? PsiVariable)?.type as? PsiClassType ?: expr.type as? PsiClassType
+        else -> expr.type as? PsiClassType
+    }
+
+    /** 类型自身或父链是否命中 MP CRUD 基类。 */
+    private fun isMpCrudType(type: PsiClassType?, depth: Int = MP_CRUD_SUPER_TYPE_DEPTH): Boolean {
+        if (type == null || depth < 0) return false
+        if (isMpCrudTypeText(type.canonicalText)) return true
+        return isMpCrudClassChain(type.resolve(), depth - 1)
+    }
+
+    /** 类自身的父类型链（含父链的父链）是否命中 MP CRUD 基类。 */
+    private fun isMpCrudClassChain(clazz: PsiClass?, depth: Int = MP_CRUD_SUPER_TYPE_DEPTH): Boolean {
+        if (clazz == null || depth < 0) return false
+        for (superType in clazz.superTypes) {
+            if (isMpCrudTypeText(superType.canonicalText)) return true
+            if (isMpCrudClassChain(superType.resolve(), depth - 1)) return true
+        }
+        return false
+    }
+
+    /**
+     * 类型文本是否为 MP CRUD 基类。
+     *
+     * FQN 可得且以 `com.baomidou.mybatisplus` 开头 → 直接按基类简名认定（优先口径）；
+     * FQN 不可得 / 工程未索引依赖 / 测试桩只有简名 → **简名兜底**（同集合）。
+     * 两条路径的接受集合相同，差别只在语义来源：前者是真 MP 类型，后者是计划 P-5 登记并接受的
+     * 「同名自有基类」误放面（D-7 已明确不把该守卫扩到 insert 族，避免改变既有锚点集合）。
+     */
+    private fun isMpCrudTypeText(canonicalText: String?): Boolean {
+        if (canonicalText.isNullOrBlank()) return false
+        val raw = canonicalText.substringBefore('<').trim()
+        // FQN 前缀优先：真 MP 全限定名（com.baomidou.mybatisplus.*）按基类简名认定
+        if (raw.startsWith(MP_CRUD_FQN_PREFIX)) return raw.substringAfterLast('.') in MP_CRUD_BASE_SIMPLE_NAMES
+        // 简名兜底：工程未索引 MP 依赖（含测试桩）时 canonicalText 只有简名或别的包名
+        return raw.substringAfterLast('.') in MP_CRUD_BASE_SIMPLE_NAMES
     }
 
     /**
@@ -403,7 +574,12 @@ object BatchOperationConverter {
      * T-M23-04：SET 列为可勾选（默认全勾选，用户可按需取消——近似 NOT_NULL"只更新需要修改的字段"），
      * WHERE 主键/@Version 为固定列（无勾选）；初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
-    private fun buildUpdateBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
+    private fun buildUpdateBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild? {
+        // T-WriteFamily（R4）：`BaseMapper.update(T entity, Wrapper<T> updateWrapper)` 的 null-wrapper 形态
+        // （`update(entity, null)` / `update(entity, (Wrapper<X>) null)`）——全列 SET 且**无任何 WHERE**。
+        // 不复用 [modelBuild]：[BatchModel.renderSql] 的 UPDATE 分支把 fixedColumns 硬编码成 WHERE
+        // （BatchModel.kt UPDATE 分支），复用会凭空多出 `WHERE id = ?` 与版本条件。
+        if (methodName == "update") return buildNoWhereUpdateBatch(call, table)
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val versionColumn = table.versionColumn
         val setColumns = table.columns.filter { it.columnName != idColumn.columnName && it.columnName != versionColumn }
@@ -417,6 +593,40 @@ object BatchOperationConverter {
         })
         val paramGroups = buildParamGroups(setColumns.map { it.columnName } + idColumn.columnName + listOfNotNull(versionColumn))
         return modelBuild(BatchModel(BatchKind.UPDATE, table.tableName, toggleColumns, fixedColumns, versionColumn), call).copy(paramGroups = paramGroups)
+    }
+
+    /**
+     * T-WriteFamily（R4）：`update(entity, null)` 的**无 WHERE** 更新模板 —— `UPDATE 表 SET 实体列 = ?`。
+     *
+     * 语义（对齐 MP `SqlMethod.UPDATE` + `sqlWhereEntityWrapper`：wrapper 为 null 时该片段不产生 WHERE）：
+     *  - SET 列与 [buildUpdateBatch]（updateById）同口径：排除主键列与 @Version 列；
+     *  - **不生成任何 WHERE**——@Version 乐观锁条件也不得生成（没有 wrapper 就没有可定位的行）；
+     *  - 不复用 [BatchModel]（其 UPDATE 渲染把主键硬编码成 WHERE）→ `batchModel = null`，面板不提供列勾选；
+     *  - 附 [NO_WHERE_UPDATE_WARNING] 全表更新警示。
+     *
+     * 非「第二参为 null 字面量」的形态（`update(entity, wrapperVar)` / 单参 `update(Wrapper)` / 无参）
+     * 一律返回 null：前者由 Wrapper 链路径承载，后者 SQL 本身非法（`UPDATE t SET` 无赋值）。
+     */
+    private fun buildNoWhereUpdateBatch(call: PsiMethodCallExpression, table: TableInfo): BatchBuild? {
+        if (!isNullWrapperShape(call)) return null
+        val dialect = currentDialect(call.project)
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        val versionColumn = table.versionColumn
+        val setColumns = table.columns.filter {
+            it.columnName != idColumn.columnName && it.columnName != versionColumn
+        }
+        // 只有主键（+版本列）的实体没有可赋值列 → UPDATE 无 SET，SQL 非法，如实无预览
+        if (setColumns.isEmpty()) return null
+        val prefix = entityPrefix(call)
+        val sql = "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET " +
+            setColumns.joinToString(", ") { "${dialect.quoteIfKeyword(it.columnName)} = ?" }
+        return BatchBuild(
+            sql = sql,
+            params = setColumns.map {
+                ParamEntry(idSource(prefix, it.columnName), ParamHint(quote = ParamQuote.decide(it.fieldType)))
+            },
+            warning = NO_WHERE_UPDATE_WARNING,
+        )
     }
 
     /**
@@ -493,7 +703,12 @@ object BatchOperationConverter {
         table: TableInfo,
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
-    ): BatchBuild {
+    ): BatchBuild? {
+        // T-WriteFamily（R4）：`BaseMapper.delete(Wrapper)` / `IService.remove(Wrapper)` 的 null-wrapper 形态——
+        // 无 WHERE（无逻辑删除 → DELETE FROM 表；有 @TableLogic → UPDATE 表 SET deleted = 1 WHERE deleted = 0，
+        // 对齐 MP `SqlMethod.LOGIC_DELETE` + TableInfo.getLogicDeleteSql）；附全表删除警示。
+        // 非 null 字面量实参（wrapper 变量 / 内联链 / 其它对象）→ null：由 Wrapper 链路径承载，绝不退化成无 WHERE。
+        if (methodName == "delete" || methodName == "remove") return buildNoWhereDeleteBatch(call, table, injectLogicDelete)
         val dialect = currentDialect(call.project)
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
@@ -515,6 +730,37 @@ object BatchOperationConverter {
                 sql = "DELETE FROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $idWhere",
                 params = idParams,
             )
+        }
+    }
+
+    /**
+     * T-WriteFamily（R4）：`delete(null)` / `remove(null)` 的**无 WHERE** 删除模板。
+     *
+     *  - 无 @TableLogic（或逻辑删除开关关闭）→ `DELETE FROM 表`（对齐 MP `SqlMethod.DELETE`：
+     *    wrapper 为 null 时 `sqlWhereEntityWrapper` 不产生 WHERE）；
+     *  - 有 @TableLogic → `UPDATE 表 SET deleted = 1 WHERE deleted = 0`（对齐 `SqlMethod.LOGIC_DELETE`：
+     *    逻辑删除片段**无条件**追加 `TableInfo.getLogicDeleteSql`，即 `deleted = 0`）——
+     *    该 WHERE 只是软删除的记录范围，不是行定位条件，仍按全表写操作警示。
+     *
+     * 形态门 = [isNullWrapperShape]（恰好 1 个 null 字面量实参，解一层 cast）；其余形态返回 null。
+     */
+    private fun buildNoWhereDeleteBatch(
+        call: PsiMethodCallExpression,
+        table: TableInfo,
+        injectLogicDelete: Boolean,
+    ): BatchBuild? {
+        if (!isNullWrapperShape(call)) return null
+        val dialect = currentDialect(call.project)
+        val tableName = dialect.quoteIfKeyword(table.tableName)
+        val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
+        return if (logicColumn != null) {
+            val logic = dialect.quoteIfKeyword(logicColumn)
+            BatchBuild(
+                sql = "UPDATE $tableName\nSET $logic = 1\nWHERE $logic = 0",
+                warning = NO_WHERE_DELETE_WARNING,
+            )
+        } else {
+            BatchBuild(sql = "DELETE FROM $tableName", warning = NO_WHERE_DELETE_WARNING)
         }
     }
 

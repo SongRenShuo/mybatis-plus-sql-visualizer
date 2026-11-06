@@ -35,6 +35,11 @@ import com.intellij.psi.util.PsiTreeUtil
  *  - 让位：D（批量族）的调用若**实参是 Wrapper 链/变量**（`userMapper.selectList(wrapper)`），
  *    语句承载在实参链上、锚点由 B/C 承载，本场景让位（T-GutterDupFreeze，避免「查询调用」
  *    被当批量操作再挂一枚）。
+ *  - T-WriteFamily（R4）场景 D-0：写族 `delete` / `update` / `remove` 只在**空 Wrapper 精确形态**
+ *    （`delete(null)` / `remove(null)` 单参 null；`update(entity, null)` 第二参 null）且 receiver 属
+ *    MP CRUD 家族（[BatchOperationConverter.hasMpCrudReceiver]）时才以方法名作锚点；
+ *    `delete(new ...)` / `delete(wrapperVar)` / `update(entity, wrapperVar)` / `JoinWrappers.delete(...)` /
+ *    `service.lambdaUpdate()...update()` 的锚点仍归链（A/B/C），同一语句不出第二枚图标。
  */
 object WrapperAnchorDetector {
 
@@ -108,6 +113,20 @@ object WrapperAnchorDetector {
             ) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 return if (isInsideWrapperVariableInitializer(call)) null else element
+            }
+            // 场景 D-0（T-WriteFamily R4）：空 Wrapper 写族——`mapper.delete(null)` / `service.remove(null)` /
+            // `mapper.update(entity, null)`。三个名字里 `delete` / `update` 同时是 Wrapper 工厂/服务链方法名，
+            // 下方场景 C 对「非工厂、非链起点」的调用会直接 `return null`（`JoinWrappers.delete(...)`、
+            // `service.update(wrapper)` 用的就是这条短路），因此本判定必须**先于**工厂块；
+            // 形态门是精确的「Wrapper 实参为 null 字面量」（[BatchOperationConverter.isNoWrapperConsumingCall]
+            // ＝形态 + MP receiver），`delete(new LambdaQueryWrapper<>()...)` / `delete(wrapperVar)` /
+            // `update(entity, wrapperVar)` 都不满足 → 落到场景 C/D，锚点仍由链（A/B/C）承载，不产生第二枚图标。
+            if (ref.referenceName in BatchOperationConverter.nullWrapperWriteMethodNames) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (BatchOperationConverter.isNoWrapperConsumingCall(call)) return element
+                // 仅 delete/update 继续走工厂判定（JoinWrappers.delete(Entity.class) 等）；
+                // remove 不是工厂名，非空 Wrapper 形态由 Wrapper 链锚点承载，此处不亮
+                if (ref.referenceName !in WrapperLocator.wrapperFactoryMethodNames) return null
             }
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null

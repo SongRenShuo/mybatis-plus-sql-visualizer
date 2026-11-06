@@ -538,6 +538,9 @@ class SqlPreviewService(internal val project: Project) {
             tableName = batch.tableName,
             paramHints = batch.paramHints,
             batchModel = batch.batchModel,
+            // T-WriteFamily（R4）：空 Wrapper 写操作（`delete(null)` / `update(entity, null)` /
+            // `remove(null)`）的全表写警示透传面板红字
+            warning = batch.warning,
         )
         recordHistory(result, anchor)
         return result
