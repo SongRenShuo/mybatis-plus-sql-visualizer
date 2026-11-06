@@ -2,7 +2,7 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.6-beta.2] - 2026-11-06
 
 ### Added
 - **MP 写族「空 Wrapper」调用有预览图标与可执行 SQL（T-WriteFamily，6fbc763b）**：`mapper.delete(null)` / `service.remove(null)` / `mapper.update(entity, null)` 此前既没有 gutter 图标也没有预览入口——`delete`/`update`/`remove` 都不在批量注册表，空 Wrapper 又没有链可锚。现在三者按「空 Wrapper 精确形态 + MP receiver 家族」双门控挂锚点：`delete`/`remove` → `DELETE FROM 表`（实体有 `@TableLogic` 时转 `UPDATE 表 SET 删除标记 = 1 WHERE 标记 = 0`），`update(entity, null)` → `UPDATE 表 SET …`；无 WHERE 时面板给全表删除/更新红字警示。非空 Wrapper（内联链/变量）锚点仍在链上，同一语句不出第二枚图标；`redisTemplate.delete(null)` / `list.remove(null)` 等非 MP receiver 不亮
@@ -18,6 +18,7 @@
 - **attach 到运行中应用时，attach 之后才懒加载数据源的进程增强捕获一条不出（T-IbatisPanwei 券 E，47a28ef1 / 7510dc79）**：attach 路径此前只跑一轮接口兜底扫描，驱动类在扫描之后才加载就永远漏扫（premain 侧早有补挂轮，attach 侧没有）。现在 attach 首轮之后再补挂 2 轮（默认 5s / 20s，`sqlvis.agent.catchAllAttachDelayMs` / `...AttachRepeatMs` / `...AttachPasses` 可配），复用已处理去重、每轮开跑前重查总开关与熔断；扫描预算从「遍历到的每个类」改为「候选类」（JDK 前缀、接口/枚举/数组/基本型/bootstrap/动态代理这些零成本排除项不再占 5000 上限），名字带 JDBC 线索的候选优先评估，数组顺序不再决定谁被截断。20k 类实测一轮扫描 4~6ms，attach 全链一次性约 10~20ms
 - **iBatis 2.x 项目的 SQL 参数被一对中括号包住、INSERT 大片变 NULL（T-IbatisPanwei 券 A/B，用户真机报障，6a5cef96）**：iBatis 的 JDBC 日志代理打三行一组——`{pstm-N} Executing Statement:` 后跟 `Parameters: [v1, null, v2, …]` 与 `Types: [java.lang.String, null, …]`，参数行是 Java 集合的 `toString`，而控制台解析器只认 MyBatis 的「值(类型)」语法：单值会把整段方括号当字面量渲染成 `'[00340025002200200006]'`；含 null 的多值只匹配到 null 项、其余值被丢弃并按序错位填充（36 个占位符只剩前 13 个被填成 `NULL`）。现解析器按行内 `{pstm-N}` / `{conn-N}` 标记识别 iBatis 行并优先消费——用户把日志设置里的 SQL 前缀配成 `Executing Statement:` 也不会产生双条目：参数列表剥一层方括号、按顶层逗号切分、裸 null 记为 null 值；`Parameters:` 行按 pstm id 挂起，紧随的 `Types:` 行按位置并入类型后闭合。类型必须并入——`00340025002200200006` 这类纯数字串在无类型启发式下会裸出成数值字面量（Oracle 模式语义错误），只有拿到 `java.lang.String` 才按字符串加引号渲染。`Types:` 缺行时按原无类型口径兜底、不伪造类型；`{conn-N} Preparing Statement:` 只消费不产条目（与随后的 execute 重复，两条都收会让条目翻倍）。已知边界：元素内含逗号或嵌套方括号时按逗号切分（`List.toString` 不可逆），iBatis 批处理一期不支持
 - **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障，2769e1b8）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
+- **增强捕获被平台侧停采时现在会说清原因，不再静默（T-AgentSilentAfter16s，1cc28d7c）**：agent 有一条 T-07 保守策略——会话建立后 15s 内收不到 IDE 的 CONFIG 帧就主动停采（「不知道用户要不要采 → 不采」）。此前这条自停完全不可见，用户侧表现成「采集开着，过一会儿就不出 SQL 了」。现在自停会带归因：心跳 body 新增 `gate` 字段（0=正常 / 1=看门狗自停），宿主控制台留一行点名「会话建立后 15000ms 内未收到任何 CONFIG，按保守策略主动停采……下发任一 CONFIG 即解除」。采集语义未改，只是把原因摆出来；真 IDE 正常路径不受影响
 
 ## [2026.11.6-beta.1] - 2026-11-06
 
