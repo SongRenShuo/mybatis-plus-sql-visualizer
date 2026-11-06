@@ -155,7 +155,7 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 ### 券 F（P2）URL 方言映射
 
 - `JdbcUrlDialects` 加 `panwei` / `panweidb` → 角标 `Panwei（磐维）`；
-- `UrlSubprotocolDialects` 同键 → 渲染方言：默认 `Oracle`（D-1，用户现网 Oracle 模式且 SQL 全 Oracle 语法）；URL 带 `db_compatibility` 时按值覆盖（`oracle`→Oracle / `postgresql`→openGauss / `mysql`→MySQL，见 §十二 V2 指南补充）；
+- `UrlSubprotocolDialects` 同键 → 渲染方言：**恒 `Oracle`**（D-1；依据是建库参数 `DBCOMPATIBILITY` 默认 A=Oracle，见 §十二 订正——JDBC 的 `db_compatibility` 客户端参数**不参与**推断）；
 - 子协议串以实际数据源 URL 为准（P-2），两个都登记即可覆盖。
 
 ### 券 G（P2）文档与指引
@@ -266,7 +266,8 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 **V2 官方指南补充（`磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf`，2026-11-06 读取）**：
 
 - **三代驱动命名已明确**：①V1 `panweidb-jdbc-1.0.0.jar` → `org.panweidb.Driver`（用户现场，已登记）；②V2 p 版（默认 `postgresql.jar`，驱动类 `org.postgresql.Driver` + `jdbc:postgresql:`）——**现有 pgjdbc 三面登记已覆盖，无需新登记**；③V2 v 版 `panweidb-jdbc-<$version>v.jar` → `cn.com.panweidb.Driver` + `jdbc:panweidb:`（未登记，需该 jar 才能定 `cn.com.panweidb.*` 类形）。
-- **`db_compatibility` 连接参数**（§4.4.5）：默认 `postgresql`，可设 `postgresql` / `oracle` / `mysql`；oracle 模式下列名以大写返回、`disableColumnSanitiser=false` 失效。券 F 据此改为**参数感知**：URL 显式给出时按值映射（`oracle`→Oracle / `postgresql`→openGauss / `mysql`→MySQL），缺省或未识别值仍走 D-1 默认档 Oracle。V1 驱动没有该参数（jar 内只有协议层 `compatibilityMode` 字段），故 V1 现场恒走默认档。
+- **~~`db_compatibility` 连接参数~~（2026-11-06 订正，依据《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5）**：磐维有**两个**容易混淆的参数——① 建库参数 `DBCOMPATIBILITY`：Oracle(A，**默认**) / MySQL(B) / TD(C) / SQL Server / PostgreSQL，决定 SQL 语法行为；② JDBC 连接参数 `db_compatibility`（V2-S3.0.0_Beta 指南 §4.4.5，默认 `postgresql`）：只控制 ResultSetMetaData 返回列名的大小写，**不表示 SQL 兼容模式**。原「按 `db_compatibility` 覆盖方言」的实现在此订正为**恒映射 Oracle**（A 是出厂默认），PG/MySQL 模式的库手动改选；`DialectInferenceTest.panweiClientDbCompatibilityMustNotChangeDialect` 钉住这条不变式（反向探针：重新加回覆盖分支 → 恰 1 红）。
+- **V2 2.0.0 驱动实测（2026-11-06，用户提供 `panweidb-jdbc-2.0.0.jar`）**：890,254 B（sha256 `ed4e0dca…5fb5d`，2023-12-28 构建，class 52）；`org/panweidb/` 条目 **399**、`org/postgresql/` 0、`cn/com/panweidb/` 0，`META-INF/services` 仍声明 **`org.panweidb.Driver`**，`Driver.class` 常量池仍只认 `jdbc:panweidb:` / `jdbc:dws:iam:`；`PgPreparedStatement` / `PgStatement` / `PgCallableStatement` / `PgConnection` 的方法形态与 V1 逐项一致 → **现有三面登记直接覆盖 V2，无需新增类名**。字节层已用该 jar 实测：四类全部织入 + 隔离子 loader 定义 + 初始化过 JVM 校验（`磐维字节层` 用例自动遍历 `database-lab/vendor/drivers/panweidb-jdbc-*.jar`，V1/V2 两代同轮全过，15/0/0/0）。指南里提到的 `cn.com.panweidb.Driver` 是「v 版」另一支制品，与 2.0.0 这个 jar 不是同一个。
 - V1 `Driver.class` 常量池实测接受 `jdbc:panweidb:` 与 `jdbc:dws:iam:` 两个前缀（后者与海量同键，既有 Vastbase 映射不动）。
 - **仍未闭环**：V2-v 的 `cn.com.panweidb.*` 类形待 jar；真机复验（磐维应用上的「已收事件 N>0 / 角标 / 未登记类名消失」）待用户环境。
 

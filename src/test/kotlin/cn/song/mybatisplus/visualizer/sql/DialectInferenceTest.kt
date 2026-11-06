@@ -58,48 +58,30 @@ class DialectInferenceTest {
     }
 
     @Test
-    fun panweiDbCompatibilityParamOverridesDialect() {
-        // V2 官方《应用程序开发指南》§4.4.5：db_compatibility 默认 postgresql，可设 oracle / mysql。
-        // 参数显式给出时以参数为准；缺省或未识别值仍走 D-1 默认档（Oracle）。
-        assertEquals(
-            "Oracle",
-            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=oracle"),
-        )
-        assertEquals(
-            "openGauss",
-            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=postgresql"),
-        )
-        assertEquals(
-            "MySQL",
-            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=mysql"),
-        )
-        // 参数名与值都大小写不敏感；与其它参数混排、带前导 ?/& 也能取到
-        assertEquals(
-            "MySQL",
-            UrlSubprotocolDialects.dialectName(
-                "jdbc:panweidb://h:5432/db?currentSchema=nacos&DB_COMPATIBILITY=MySQL",
-            ),
-        )
-        // 缺省 / 未识别值 → 默认档 Oracle（不猜近似方言）
-        assertEquals("Oracle", UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db"))
-        assertEquals(
-            "Oracle",
-            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=unknown"),
-        )
-        // 磐维 V2 p 版驱动（org.postgresql.Driver）走 jdbc:postgresql:，同一个 db_compatibility 参数照样生效
-        assertEquals(
-            "Oracle",
-            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=oracle"),
-        )
-        // 普通 PostgreSQL URL（无该参数）逐字不变
+    fun panweiClientDbCompatibilityMustNotChangeDialect() {
+        // 2026-11-06 订正（依据《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5）：
+        //  - 数据库 SQL 兼容模式是**建库参数 DBCOMPATIBILITY**：Oracle(A，默认) / MySQL(B) / TD(C) /
+        //    SQL Server / PostgreSQL；
+        //  - JDBC 连接参数 `db_compatibility`（默认 `postgresql`）只控制 ResultSetMetaData 列名大小写，
+        //    **不表示 SQL 兼容模式**。
+        // 所以 URL 里带不带、带什么 db_compatibility，都不许改变方言映射——本用例就是这条的回归守卫。
+        listOf(
+            "jdbc:panweidb://h:5432/db",
+            "jdbc:panweidb://h:5432/db?db_compatibility=oracle",
+            "jdbc:panweidb://h:5432/db?db_compatibility=postgresql",
+            "jdbc:panweidb://h:5432/db?db_compatibility=mysql",
+            "jdbc:panweidb://h:5432/db?currentSchema=nacos&DB_COMPATIBILITY=MySQL",
+        ).forEach { url ->
+            assertEquals("$url 应恒判 Oracle（方言不由客户端参数决定）", "Oracle",
+                UrlSubprotocolDialects.dialectName(url))
+        }
+        // 普通 PostgreSQL 连接（磐维 p 版驱动走 jdbc:postgresql:）逐字不变，不受该参数影响
         assertEquals(
             "PostgreSQL",
-            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db"),
+            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=oracle"),
         )
-        // 映射值必须被 DialectRegistry 命中（openGauss / MySQL 都是注册方言）
-        listOf("openGauss", "MySQL").forEach { name ->
-            assertEquals(name, DialectRegistry.byName(name).name)
-        }
+        // 映射值必须被 DialectRegistry 命中
+        assertEquals("Oracle", DialectRegistry.byName("Oracle").name)
     }
 
     @Test

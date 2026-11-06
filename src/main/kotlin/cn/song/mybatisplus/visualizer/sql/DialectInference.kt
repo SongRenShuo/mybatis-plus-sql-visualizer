@@ -39,43 +39,19 @@ internal object UrlSubprotocolDialects {
         "highgo" to "HighGo",
         "vastbase" to "Vastbase",
         "dws" to "Vastbase",
-        // T-IbatisPanwei（券 F，D-1）：磐维（中国移动，Oracle 兼容模式）驱动 org.panweidb.Driver。
-        // 用户现网是 Oracle 模式且 SQL 全 Oracle 语法（SYSDATE / dual / to_date），故映射到
-        // Oracle 方言而非 openGauss；PG 模式用户可在面板手动改选。值必须是 OracleDialect.name
-        // 原文（"Oracle"），拼错即 byName 静默回落 MySQL。
+        // T-IbatisPanwei（券 F）：磐维（中国移动）驱动 `org.panweidb.Driver`，V1 1.0.0 与 V2 2.0.0
+        // 都是整包重命名、URL 前缀同为 `jdbc:panweidb:`。
+        //
+        // **方言依据是建库参数 `DBCOMPATIBILITY`，不是 JDBC 的 `db_compatibility`**（2026-11-06 订正，
+        // 依据《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5）：数据库 SQL 兼容模式有 Oracle(A，**默认**) /
+        // MySQL(B) / TD(C) / SQL Server / PostgreSQL 五种，A 模式是出厂默认；而 JDBC 连接参数
+        // `db_compatibility`（默认值 `postgresql`）只控制 ResultSetMetaData 返回列名的大小写，
+        // **不表示 SQL 兼容模式**——拿它推方言会让「Oracle 模式的库 + 为了小写列名设 postgresql」被
+        // 误判成 openGauss。故此处恒映射 Oracle，PG/MySQL 模式的库由用户在面板手动改选。
+        // 值必须是 OracleDialect.name 原文（"Oracle"），拼错即 byName 静默回落 MySQL。
         "panwei" to "Oracle",
         "panweidb" to "Oracle",
     )
-
-    /**
-     * 磐维（PanWeiDB）子协议：`jdbc:panweidb:` 是 V1（`org.panweidb.Driver`）与 V2-v
-     * （`cn.com.panweidb.Driver`）驱动的前缀；`jdbc:panwei:` 是容错键。
-     *
-     * 方言可由 URL 的 `db_compatibility` 连接参数覆盖（V2 官方《应用程序开发指南》§4.4.5：
-     * 默认 `postgresql`，可设 `postgresql` / `oracle` / `mysql`）；参数缺省时沿用 D-1 的现场口径
-     * （磐维主力部署是 Oracle 兼容模式）。V1 驱动没有该连接参数（jar 内只有协议层
-     * `compatibilityMode` 字段），故 V1 现场恒走默认档。
-     */
-    private val PANWEI_SUBPROTOCOLS = setOf("panwei", "panweidb")
-
-    /** `db_compatibility` 取值 → 方言名；未识别的值返回 null（调用方回落默认档，不猜）。 */
-    private fun panweiCompatibilityDialect(url: String): String? {
-        val query = url.substringAfter('?', "")
-        if (query.isEmpty()) return null
-        for (pair in query.split('&')) {
-            val eq = pair.indexOf('=')
-            if (eq <= 0) continue
-            if (!pair.substring(0, eq).trim().equals("db_compatibility", ignoreCase = true)) continue
-            return when (pair.substring(eq + 1).trim().lowercase()) {
-                "oracle" -> "Oracle"
-                // 磐维内核是 openGauss 系，PG 兼容模式按 openGauss 渲染（插件无独立 Panwei 方言）
-                "postgresql" -> "openGauss"
-                "mysql" -> "MySQL"
-                else -> null
-            }
-        }
-        return null
-    }
 
     /**
      * 从 JDBC URL 提取子协议并映射方言名。
@@ -87,11 +63,6 @@ internal object UrlSubprotocolDialects {
         if (!trimmed.startsWith("jdbc:", ignoreCase = true)) return null
         val subprotocol = trimmed.substring(5).substringBefore(':').lowercase()
         val mapped = SUBPROTOCOL_TO_DIALECT[subprotocol] ?: return null
-        // 磐维两个前缀 + 它的默认 p 版驱动（org.postgresql.Driver 走 jdbc:postgresql:）都认
-        // db_compatibility；参数缺省时 panweiCompatibilityDialect 返回 null，普通 PG URL 不受影响。
-        if (subprotocol in PANWEI_SUBPROTOCOLS || subprotocol == "postgresql") {
-            return panweiCompatibilityDialect(trimmed) ?: mapped
-        }
         return mapped
     }
 }

@@ -21,9 +21,11 @@
 | 文件 | 大小 | sha256 | 来源 |
 |---|---|---|---|
 | `drivers/panweidb-jdbc-1.0.0.jar` | 844,003 B | `b17065f589a10bdb418b87b47f6ba53a2bfa24a42617cdf7828ec98240ca1156` | 磐维 PanWeiDB V1 驱动（厂商渠道；墨天轮同名 2.0.0 需登录） |
+| `drivers/panweidb-jdbc-2.0.0.jar` | 890,254 B | `ed4e0dcade650c5d1760bc37ad76218155f5159a5171af780d6567bb1b95fb5d` | 磐维 V2 驱动（用户从墨天轮下载，2023-12-28 构建；类形与 V1 一致） |
 | `docs/磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | 3,288,977 B | `9b79be7e7fe265312f064a0c21998808b2ca52272e0a2411855af52556fba698` | open.10086.cn 官方文档 |
+| `docs/磐维数据库_V2.0.0 开发者指南.pdf` | 8,301,620 B | `0b08de3ea5575cfdef2226f14e6a7538f96c72e1c6f21b91baa1d6ab129d49aa` | 用户提供；1955 页，表 1-1~1-5 是方言兼容模式的权威依据 |
 
-消费方：`sub-projects/sql-visualizer-agent` 的 `StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验`。
+消费方：`sub-projects/sql-visualizer-agent` 的 `StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验`——自动遍历 `drivers/panweidb-jdbc-*.jar`，**每一代都验**（V1/V2 同轮）。
 
 ## 约定
 
