@@ -219,6 +219,12 @@ class JdbcTemplateSqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("WHERE (...) 的右括号应在场: $compact", compact.contains(")"))
         assertEquals("单引号应平衡: $compact", 0, compact.count { it == '\'' } % 2)
         assertTrue("占位应形如 /* 运行时值: ... */: $compact", compact.contains("/* 运行时值: "))
+        // P1（polish）：循环占位带清洗后的模板摘要——用户能看出循环里追加的是什么，
+        // 且摘要里没有三元条件 / 变量源码（含 … 代替）；引号已换安全同形字符
+        assertTrue(
+            "循环占位应带模板摘要: $compact",
+            compact.contains("循环内追加 id=’…’ / or id=’…’（运行时重复）"),
+        )
         assertTrue("静态尾段应保留: $compact", compact.contains("tz") && compact.contains("Asia/Shanghai"))
         assertFalse("三元源码不应以活 SQL 形态出现: $compact", compact.contains("k == 0 ?"))
         assertNotNull("应有降级 warning", result.warning)

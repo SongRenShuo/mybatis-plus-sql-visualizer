@@ -269,6 +269,101 @@ class SqlStringConcatenatorTest : BasePlatformTestCase() {
         assertEquals("同一循环只降级一次: ${result.sql}", 1, commentOpenCount(result.sql))
     }
 
+    // ------------------------------------------------------------------
+    // P1（polish）— 循环占位带「模板摘要」
+    // ------------------------------------------------------------------
+
+    fun testConcat_appendInsideLoop_carriesSanitizedTemplateSummary() {
+        // P1：占位要告诉用户「循环里追加的是什么」——摘要只取循环体 append 的字符串字面量片段，
+        // 变量引用 / 三元条件 / 方法调用一律替换为 …，绝不把源码原样带出（`k == 0 ?` 不得出现）
+        myFixture.configureByText("Demo.java", """
+            public class Demo {
+                public void query(java.util.List<String> ids) {
+                    StringBuilder sb = new StringBuilder("SELECT * FROM t WHERE ");
+                    for (int k = 0; k < ids.size(); k++) {
+                        sb.append(k == 0 ? "id='" + ids.get(k) + "' " : "or id='" + ids.get(k) + "' ");
+                    }
+                }
+            }
+        """.trimIndent())
+        val result = concatVariable("sb")
+        assertNotNull(result)
+        val r = result!!
+        assertFalse("循环内追加应标记 incomplete", r.complete)
+        assertTrue(
+            "占位应带清洗后的模板摘要: ${r.sql}",
+            r.sql.contains("循环内追加 id=’…’ / or id=’…’"),
+        )
+        assertTrue("应标明循环重复: ${r.sql}", r.sql.contains("（运行时重复）"))
+        assertFalse("三元条件不得带出: ${r.sql}", r.sql.contains("k == 0 ?"))
+        assertFalse("变量 / 方法调用源码不得带出: ${r.sql}", r.sql.contains("ids.get(k)"))
+        assertEquals("应只有一条注释起始: ${r.sql}", 1, commentOpenCount(r.sql))
+        assertEquals("应只有一个注释结束符: ${r.sql}", 1, commentCloseCount(r.sql))
+    }
+
+    fun testConcat_appendInsideLoop_multiAppendSummarySeparatesFragments() {
+        // 循环体跨多条 append：片段之间要有 … 分隔，否则 `or id='` + 变量 + `' ` 会读成 `or id=''`
+        // （像是一个空字面量，等于编造内容）
+        myFixture.configureByText("Demo.java", """
+            public class Demo {
+                public void query(java.util.List<String> ids) {
+                    StringBuilder sb = new StringBuilder("SELECT * FROM t WHERE 1=1 ");
+                    for (int k = 0; k < ids.size(); k++) {
+                        sb.append("or id='").append(ids.get(k)).append("' ");
+                    }
+                }
+            }
+        """.trimIndent())
+        val result = concatVariable("sb")
+        assertNotNull(result)
+        val r = result!!
+        assertTrue("摘要应含字面量片段与 … 分隔: ${r.sql}", r.sql.contains("or id=’…’"))
+        assertFalse("循环片段不应线性拼接进 SQL: ${r.sql}", r.sql.contains("or id='"))
+        assertFalse("变量源码不得带出: ${r.sql}", r.sql.contains("ids.get(k)"))
+        assertEquals("同一循环只降级一次: ${r.sql}", 1, commentOpenCount(r.sql))
+    }
+
+    fun testConcat_appendInsideLoop_noLiteralSummary_fallsBackToPlainLabel() {
+        // 摘要取不到任何字符串字面量 → 回落现文案，不得凭空编造
+        myFixture.configureByText("Demo.java", """
+            public class Demo {
+                public void query(String fragment) {
+                    StringBuilder sb = new StringBuilder("SELECT * FROM t WHERE 1=1 ");
+                    for (int k = 0; k < 3; k++) {
+                        sb.append(fragment);
+                    }
+                }
+            }
+        """.trimIndent())
+        val result = concatVariable("sb")
+        assertNotNull(result)
+        val r = result!!
+        assertTrue("取不到字面量时回落现文案: ${r.sql}", r.sql.contains("循环内追加，运行时重复执行"))
+        assertFalse("不得带后缀（无摘要时不加）：${r.sql}", r.sql.contains("（运行时重复）"))
+    }
+
+    fun testConcat_appendInsideLoop_templateSummaryIsSanitized() {
+        // 摘要与常规占位走同一套安全化：注释结束符不得原样进产物、引号换安全同形字符
+        myFixture.configureByText("Demo.java", """
+            public class Demo {
+                public void query(String v) {
+                    StringBuilder sb = new StringBuilder("SELECT * FROM t WHERE 1=1 ");
+                    for (int k = 0; k < 3; k++) {
+                        sb.append("note = 'a*/b' " + v);
+                    }
+                }
+            }
+        """.trimIndent())
+        val result = concatVariable("sb")
+        assertNotNull(result)
+        val r = result!!
+        assertTrue("摘要应含清洗后的字面量片段: ${r.sql}", r.sql.contains("note = ’a* /b’"))
+        assertFalse("注释结束符不得原样出现: ${r.sql}", r.sql.contains("a*/b"))
+        assertEquals("应只有一条注释起始: ${r.sql}", 1, commentOpenCount(r.sql))
+        assertEquals("应只有一个注释结束符: ${r.sql}", 1, commentCloseCount(r.sql))
+        assertEquals("原文引号已换安全同形字符: ${r.sql}", 0, r.sql.count { it == '\'' } % 2)
+    }
+
     fun testConcat_appendInsideIfElsePaired_bothDegraded() {
         // if/else 两支都对同一 builder 追加：互斥片段不能同时出现在 SQL 里 → 两支都降级
         myFixture.configureByText("Demo.java", """
