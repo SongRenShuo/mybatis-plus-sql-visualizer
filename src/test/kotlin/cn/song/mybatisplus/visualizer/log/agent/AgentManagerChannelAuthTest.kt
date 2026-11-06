@@ -31,14 +31,17 @@ class AgentManagerChannelAuthTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         manager = AgentManager.getInstance(project)
-        PluginSettings.getInstance().state.enhancedCaptureEnabled = false
+        // 本类驱动 preparePremainVmOption/attach 链（受 enhancedCaptureEnabled 门控，
+        // 关闭时恒返回 null）——与既有 AgentManagerPremainTest 同口径保持开启；
+        // 测试环境无 process-appeared 事件源，开启不会触发后台 attach 扫描。
+        PluginSettings.getInstance().state.enhancedCaptureEnabled = true
         manager.clockMs = { System.currentTimeMillis() }
     }
 
     override fun tearDown() {
         try {
             manager.shutdownAll()
-            PluginSettings.getInstance().state.enhancedCaptureEnabled = false
+            PluginSettings.getInstance().state.enhancedCaptureEnabled = true
             manager.clockMs = { System.currentTimeMillis() }
         } finally {
             super.tearDown()
