@@ -39,6 +39,12 @@ internal object UrlSubprotocolDialects {
         "highgo" to "HighGo",
         "vastbase" to "Vastbase",
         "dws" to "Vastbase",
+        // T-IbatisPanwei（券 F，D-1）：磐维（中国移动，Oracle 兼容模式）驱动 org.panweidb.Driver。
+        // 用户现网是 Oracle 模式且 SQL 全 Oracle 语法（SYSDATE / dual / to_date），故映射到
+        // Oracle 方言而非 openGauss；PG 模式用户可在面板手动改选。值必须是 OracleDialect.name
+        // 原文（"Oracle"），拼错即 byName 静默回落 MySQL。
+        "panwei" to "Oracle",
+        "panweidb" to "Oracle",
     )
 
     /**

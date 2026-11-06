@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -34,8 +35,26 @@ class DialectInferenceTest {
             "jdbc:highgo://localhost:5866/db" to "HighGo",
             "jdbc:vastbase://localhost:5432/db" to "Vastbase",
             "jdbc:dws:iam://localhost:5432/db" to "Vastbase",
+            // T-IbatisPanwei（券 F，D-1）：磐维 Oracle 兼容模式 → Oracle 方言
+            "jdbc:panwei://localhost:5432/db" to "Oracle",
+            "jdbc:panweidb://localhost:5432/db" to "Oracle",
         )
         expected.forEach { (url, name) -> assertEquals(name, UrlSubprotocolDialects.dialectName(url)) }
+    }
+
+    @Test
+    fun panweiSubprotocolsResolveToOracleThroughRegistry() {
+        // 券 F 反向契约：映射值必须被 DialectRegistry.byName 命中为 Oracle——
+        // 失配会静默回落 MySQL（Oracle 语法 SYSDATE/dual/to_date 就会被 MySQL 渲染）。
+        listOf("jdbc:panwei://dbhost.example:5432/pwdb", "jdbc:panweidb://dbhost.example:5432/pwdb").forEach { url ->
+            val name = UrlSubprotocolDialects.dialectName(url)
+            assertEquals("映射层必须给出 Oracle", "Oracle", name)
+            val dialect = DialectRegistry.byName(name!!)
+            assertEquals("byName 必须命中 Oracle", "Oracle", dialect.name)
+            assertNotEquals("不得落到 MySQL 兜底", "MySQL", dialect.name)
+            // 也走一遍推断优先级链（agent 端优先）
+            assertEquals("Oracle", DialectInference.infer(url, "jdbc:mysql://ide:3306/db").dialectName)
+        }
     }
 
     @Test
