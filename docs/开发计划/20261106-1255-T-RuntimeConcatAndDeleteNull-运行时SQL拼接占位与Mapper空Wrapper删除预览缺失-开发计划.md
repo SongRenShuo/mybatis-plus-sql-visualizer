@@ -649,39 +649,53 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 
 测试：`SqlStringConcatenatorTest` +4 例——摘要形态与源码不外泄（断言含 `循环内追加 id=’…’ / or id=’…’`、不含 `k == 0 ?` / `ids.get(k)`）、多 append 片段分隔（含 `or id=’…’`、不含 ASCII `or id='`）、无字面量回落原文案（含 `循环内追加，运行时重复执行`、不含 `（运行时重复）`）、摘要清洗（`a*/b` 不得原样出现、注释符各 1、引号平衡）；`JdbcTemplateSqlPreviewServiceTest.testPreview_loopTernaryConcat_keepsWellFormedSql` 补一条端到端摘要断言。
 
-### 14.3 定向读数：**未取得（两次尝试，两种闸门，零编译零测试）**
+### 14.3 定向读数：**已取得（主控空窗复跑，29 例全绿）**
+
+代理三次尝试全部在配置期/编译期之前失败（读数见下「14.3.1 代理侧三次失败」）。主控在空窗复跑，**先修两处编译错**再取读数：
+
+| 顺序 | 现象 | 处置 |
+|---|---|---|
+| 首轮编译 | `e:` 在 `SqlStringConcatenator.kt:602` 报 10 处 `Syntax error: Expecting member declaration` | KDoc 正文里写了**字面** `*/`（`（`*/` → `* /`…`），注释提前闭合，其后文字被当代码。改写该行为「注释结束符拆成 `* /`」，提交 `8e0aab07` |
+| 首轮编译（续） | 新增 4 例报 4 处 `Only safe (?.) or non-null asserted (!!.) calls are allowed … 'ConcatenationResult?'` | JUnit 的 `assertNotNull` 在 Kotlin 侧不产生 smart-cast，新用例在它之后直接 `result.sql`；改为 `val r = result!!` 后统一用 `r`，同提交 |
+| 第二轮 `:test` | `java.nio.file.NoSuchFileException: …\transforms\cfd91130…\transformed\ideaIU-2024.3.7.1-win\bin\idea64.exe.vmoptions` | 共享 transform 工作区已成**半截**（`bin/` 空、目录 3.4G）。确认无在跑构建后整目录删除 + 按 PID 杀 3 个 9.7.0 daemon（只清项目 configuration-cache 无效：daemon 内存记着「transform 已完成」，会继续把不存在的路径交给 IPGP，改报 `Cannot resolve 'product-info.json'`）。重跑后 Gradle 从 `caches/modules-2/files-2.1/idea/ideaIU/2024.3.7.1/…zip` 重新解包 |
+
+绿读数（`build/test-results/test/` 计数）：
+
+```
+TEST-…psource.SqlStringConcatenatorTest.xml          tests="19" skipped="0" failures="0" errors="0"
+TEST-…psource.JdbcTemplateSqlPreviewServiceTest.xml  tests="10" skipped="0" failures="0" errors="0"
+```
+
+合计 **29/0/0/0**，与派活预期（19 + 10 = 29）一致。
+
+#### 14.3.1 代理侧三次失败（失败发生在配置期，零编译零测试）
 
 | 时点 | 尝试 | 读数 |
 |---|---|---|
 | 16:27 | 首次定向（实现前，作「先红」基线） | 构建**未到测试阶段**：Gradle daemon 被系统内存耗尽打死（`hs_err_pid50316.log`：`There is insufficient memory … Native memory allocation (malloc) failed to allocate 1478592 bytes. Error detail: Chunk::new`）。**无任何测试读数** |
 | 16:30~16:54 | 复跑窗口探测 | `parallel_tasks.py check` 全程显示 2 个他人活跃构建（`t-release-beta2` 主仓发行批、期间还有 `cr-wt-i18n` 另一仓）；`\Memory\Available MBytes` 0~3.2GB、`Committed 73810 / Commit Limit 76465 MB`（96.5%）→ 按派活纪律「已有 2 个活跃构建则不构建」未跑 |
 | 16:58 | 隔离 daemon 复跑（`-Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"`，避免与共享 daemon 同生共死，`--console=plain`，日志落系统临时目录） | **配置期失败，零编译零测试**：`The contents of the immutable workspace 'C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb' have been modified … The modification might have been caused by an external process`——共享 transform 工作区（`ideaIU-2024.3.7.1-win`）被并发构建改动 |
-| 17:00 / 17:07 | 原样重试两次（其间登记表只剩 1 个他人构建，闸门已开） | **同样配置期失败，零编译零测试**：Gradle 试图重建该工作区而 `Unable to delete directory … Failed to delete some children. This might happen because a process has files open or has its working directory set in the target directory`（`ideaIU-2024.3.7.1-win\lib\*.jar` 被占用，18s 失败）；同次日志首行 `Starting a Gradle Daemon, 7 busy … Daemons could not be reused`——机器上有 7 个 daemon 在跑 |
+| 17:00 / 17:07 | 原样重试两次（其间登记表只剩 1 个他人构建，闸门已开） | **同样配置期失败，零编译零测试**：Gradle 试图重建该工作区而 `Unable to delete directory … Failed to delete some files. This might happen because a process has files open or has its working directory set in the target directory`（`ideaIU-2024.3.7.1-win\lib\*.jar` 被占用，18s 失败）；同次日志首行 `Starting a Gradle Daemon, 7 busy … Daemons could not be reused`——机器上有 7 个 daemon 在跑 |
 
-两次失败都发生在**依赖解析/配置期**，与本券代码无关：共享 transform 工作区被并发会话占用而无法重建。**本会话不能自救**——清 `caches\9.7.0\transforms\cfd…` 会打断正在用它的构建（他人发行批），按纪律禁做。
+教训（已入全局记忆 `pitfall-gradle-transform-partial-delete`）：**无超时的真机矩阵（`dialectExternalVerify`）挂在实例侧时不得不杀进程，若正好落在 transform 解包/写入窗口，会留下半截工作区**；此后任何构建都可能报变换相关的怪错。处置顺序＝①确认无在跑构建 ②删整个 hash 目录 ③按 PID 杀 daemon ④重跑。**只清 configuration-cache 不够**。
 
-交主控复跑的前提与命令：
+### 14.4 反向验证：**已执行（4 例转红，回落用例仍绿）**
 
-1. 等 `parallel_tasks.py check` 空窗，且该 transform 工作区不再被占用（若仍报 second 条错误，由主控在所有会话停手后删除 `C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb` 让其重建）。
-   - 只删这一条 transform 目录是安全的前提：**没有任何构建在跑**（否则同样的「files open」会复现）。
-   - 并入不了空窗时的备选：给本次跑一个独立 `GRADLE_USER_HOME`（`./gradlew -g <空目录> test …`）——代价是重新解包 2024.3.7.1 平台（约 1.5GB，走 gradle.properties 已配的本地代理），换来与并发会话完全隔离的 transform/缓存，不会互相删。**不要**用裸 `--stop`（会打掉他人 in-flight 构建的 daemon）。
-2. 单跑一条（勿串管道读退出码）：
+1. 定向绿：29/0/0/0（见 14.3）。
+2. 摘掉摘要分支（`summarizeLoopTemplate` 首行插入 `if (true) return null`）→ 复跑：
 
 ```
-./gradlew test --tests "cn.song.mybatisplus.visualizer.psource.SqlStringConcatenatorTest" \
-  --tests "cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewServiceTest" \
-  -Pkotlin.compiler.execution.strategy=in-process > log 2>&1; echo EXIT=$?
+SqlStringConcatenatorTest          tests="19" failures="3"
+  testConcat_appendInsideLoop_carriesSanitizedTemplateSummary
+  testConcat_appendInsideLoop_multiAppendSummarySeparatesFragments
+  testConcat_appendInsideLoop_templateSummaryIsSanitized
+JdbcTemplateSqlPreviewServiceTest  tests="10" failures="1"
+  testPreview_loopTernaryConcat_keepsWellFormedSql
 ```
 
-3. 计数读 `build/test-results/test/TEST-cn.song.mybatisplus.visualizer.psource.*.xml`（预期 19 + 10 = 29 例全绿）。
-
-### 14.4 反向验证：**未执行**（原因同 14.3）
-
-待复跑三步（还原用 `git checkout -- <生产文件>`）：
-
-1. 定向绿：两条类全跑，预期 29 例全绿。
-2. 摘掉摘要分支（`summarizeLoopTemplate` 首行加 `return null`）→ 预期 **5 例红**：`SqlStringConcatenatorTest` 的摘要形态 / 多 append 分隔 / 摘要清洗 3 例 + `JdbcTemplateSqlPreviewServiceTest` 用户原例 1 条摘要断言（回落用例 `noLiteralSummary_fallsBackToPlainLabel` 应**仍绿**，它钉的是回落路径）。
-3. 还原 → 复跑转绿，并复核既有两条：`compact.contains("k == 0 ?")` 为假、`WHERE (` 与 `)` 在场、引号 4 个平衡。
+   `testConcat_appendInsideLoop_noLiteralSummary_fallsBackToPlainLabel`（回落路径）**仍绿**——证明红的正是摘要这条新路径，回落文案没被顺手改掉。
+3. 与派活预估的偏差：派活写「预期 5 例红」，实测 **4 例**。对账后确认清单多算了一条——`SqlStringConcatenatorTest` 侧并没有第 4 条摘要用例，被数进去的「用户原例那条摘要断言」就是 `JdbcTemplateSqlPreviewServiceTest` 里这 1 例。以实测 4 例为准。
+4. 还原（`git checkout -- src/main/.../SqlStringConcatenator.kt`）→ 复跑 **29/0/0/0** 转绿；`k == 0 ?` 不出现、`WHERE (` 与 `)` 在场、引号平衡三条既有断言同轮通过（探针无残留：`grep -n "RED PROBE"` 零命中，工作树干净）。
 
 ### 14.5 P2 处置：只写决策记录，不改 UI
 
@@ -701,7 +715,7 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 
 ### 14.7 偏差与未完成
 
-1. **P1 未编译、未跑测试**（见 14.3）——代码按 PSI 类型与既有口径逐行推得，未过编译器。已单独核对的一条依赖：`PsiBinaryExpression extends PsiPolyadicExpression`（`ideaIU-2024.3.7.1-sources.jar` 内 `com/intellij/psi/PsiBinaryExpression.java:27`，javap/unzip 实证），因为 2 操作数 `+` 链是否为 polyadic 直接决定摘要能否取到片段。
+1. ~~**P1 未编译、未跑测试**~~ → **已由主控复跑收口**（见 14.3 / 14.4）：修掉两处编译错（KDoc 字面 `*/` 提前闭合注释；新用例裸用可空 `result`，提交 `8e0aab07`）后定向 29/0/0/0，反向验证 4 例转红、回落用例仍绿、还原后转绿。代理侧原始预期的依赖经编译器实证成立：`PsiBinaryExpression extends PsiPolyadicExpression`（`ideaIU-2024.3.7.1-sources.jar` 内 `com/intellij/psi/PsiBinaryExpression.java:27`），2 操作数 `+` 链走 polyadic 分支、摘要能取到片段（多 append 分隔那条用例即覆盖此形态）。
 2. 只改**循环**一种降级占位（P1 指定范围）。`PAIRED_APPEND_LABEL`（互斥分支）与三种 `OPTIONAL` 说明注释未带摘要——同型增强，若用户认可循环这套文案，可同批推给互斥/可选分支。
 3. HQL 两条通道（`CustomDaoHqlLocator` / `HqlQueryLocator`）共用本拼接器，改动同一函数；已 grep 确认 `CustomDaoHqlLocatorTest` 只断言 `contains("/* 运行时值: ")`、且无循环 append 样本（不受摘要影响），但**未跑**这些类（按纪律只跑派活指定的两条）。主控收口若求稳，加上 `psi.jpa.CustomDaoHqlLocatorTest`。
 4. §12.3 / §12.4 / §12.5 是 R1~R3 的**历史读数**，本次 polish 会改变其中记录的产物文案（`循环内追加，运行时重复执行` → 带摘要），但**不在本册改历史记录**，避免篡改既有证据；对照点写在 14.2。
