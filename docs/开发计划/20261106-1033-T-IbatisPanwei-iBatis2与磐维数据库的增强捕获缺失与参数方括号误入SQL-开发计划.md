@@ -284,7 +284,7 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 
 - 镜像：Docker Hub / quay / ghcr 均无官方镜像；命中阿里云 ACR 深圳 `shine_fei/panweidb:3.4.0`（**个人命名空间重打包，非厂商官方分发**），内含 `PanWeiDB_V3.0-S3.4.0_B01` 安装包；
 - 实例：`panweidb-ora` @ `103.36.220.245:26101`（`datcompatibility=A`，`select dummy from dual` → X）、`panweidb-test` @ `:26100`（B 档）；凭据 `pwadmin` / `Panwei@2026`；DBX 已登记（`c571fb15…` / `d2ae303a…`）；台账在 `.local/test-databases.md`（不入库）；
-- demo 新增 `panwei` profile（`jdbc:panweidb://103.36.220.245:26101/panweidb`），`schema-gaussdb.sql` 在 `panweidb` 与 `postgres` 各执行一遍 **58/0**；
+- demo 新增 `panwei` profile（`jdbc:panweidb://103.36.220.245:26101/panweidb`），`schema-gaussdb.sql` 在 **A 实例**的两个库（`postgres`、`panweidb`）各执行一遍 **58/0**；**B 实例（26100）未灌 demo schema**（2026-11-06 实测其 public 下只有 `pw_login_info` / `pw_probe`；渲染套件自带夹具，不影响读数）
 - 假 IDE 四窗口（V2 驱动 `panweidb-jdbc-2.0.0.jar`）：**PASS=12 FAIL=0，ALL-PASS，41.1s**，四窗口 24/1/1/1；事件带 SQL、参数（`[[1,"100","BigDecimal"],…]`）与 `url=jdbc:panweidb://103.36.220.245:26101/panweidb`；栈来自 `org.panweidb.jdbc.PgPreparedStatement#execute`；
 - 宿主可用内存仅约 966MB（16GB / 11 个既有容器），再上实例前须先腾；镜像需三处补丁（CPU 预检、cgroup v2 的 `checkDockerEnv`、`listen_addresses` 绑死安装期 IP）才能起，报告里有逐条处置；
 - **未做**：V1 驱动连 3.4.0、方言渲染套件（`DialectDockerVerificationTest` 外部实例模式）在本实例上的跑批。
