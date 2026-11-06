@@ -143,4 +143,67 @@ fun check(currentVersion: String?, fetch: (String) -> FetchOutcome = ..., manife
 
 ## 八、实施记录
 
-<!-- 待回填 -->
+> 实施：2026-11-06，分支 `t-dev-update-channel`（工作树 `.worktrees/dev-update`）。
+> 实现提交 `cda8f3e5`（12 文件，+626/-31）；本文档与 CHANGELOG 回填另行提交。
+> 决策全部按「推荐」落地（D-1 7 次/2 秒且每次点击重开窗口、D-2 内存态 + `-D` 直通、
+> D-3 只挂构建号、D-4 只改 tooltip 不弹窗、D-5 复用失败分诊、D-6 新增 `NotPublished`）。
+
+### 8.1 落点与实现要点
+
+| 文件 | 改动 |
+|---|---|
+| `update/DevUpdateMode.kt`（新） | `REQUIRED_CLICKS=7` / `CLICK_WINDOW_MS=2000` / `ENABLED_PROPERTY=mpvs.update.devMode`；`@Volatile` 内存态 + `unlock()` + `registerClick(now)`（相邻点击间隔 ≤ 窗口才累加，超窗从 1 重开）+ `parseEnabledProperty`；`resetForTest()` 供用例隔离 |
+| `update/UpdateSource.kt` | `PREVIEW_MANIFEST_PATH` / `DEFAULT_PREVIEW_MANIFEST_URL` / `PREVIEW_MANIFEST_URL_OVERRIDE` / `previewManifestUrl()`（专用覆盖优先，否则 `manifestUrl()` 同源改路径；换源值不含 `update/update.json` 时回落默认预览地址，不静默复用正式 URL）；`logOverrideIfAny` 认预览默认地址，避免把预览通道误报成「已换源」 |
+| `update/PluginUpdateRunner.kt` | `check(currentVersion, manifestUrl = UpdateSource.manifestUrl(), fetch = …)`；`InstallResult.NotPublished(status)`；`downloadAndInstall` 用 `httpStatusOf()` 挖异常链（含被 IOException 包一层），404/410 → `LOG.info` 一行（URL + 状态码）并返回 `NotPublished`，其余仍 `Failed` |
+| `config/UpdateSection.kt` | `Channel{STABLE,PREVIEW}`、`checkRunner: (String) -> CheckResult`、`checkPreviewButton`（构造隐藏）、`applyDevVisibility()` 唯一可见性赋值点、`updateTexts()` 里重算可见性、`refreshDevModeVisibility()`、状态行通道后缀、`NotPublished` 渲染 + 兜底链接可见 |
+| `config/PluginSettingsPanelSections.kt` | 构建号 `JBLabel` 提为局部变量 + `MouseAdapter.mouseClicked` 喂 `DevUpdateMode.registerClick()`，解锁后改 tooltip 并调 `updateSection.refreshDevModeVisibility()` |
+| `update/StartupUpdateCheck.kt` | **写集外补一处**：`when (result)` 是 exhaustive，新增 sealed 分支后不加分支编译不过；按「启动通道也不许甩异常原文」补 `NotPublished` 分支（复用 WARNING 通知，正文用友好文案并去掉设置页链接行的尾冒号） |
+| `messages/MpSqlVisualizerBundle{,_zh}.properties` | `settings.update.checkPreview` / `settings.update.channel.preview` / `settings.update.notPublished` / `settings.update.devMode.tip`（中英对齐，均无占位符） |
+
+### 8.2 待验证前提结论（P-1~P-5）
+
+| 编号 | 结论 | 证据 |
+|---|---|---|
+| P-1 | **原方案会翻车，已改参数顺序** | Kotlin 尾随 lambda 绑定**最后一个**形参。若写成 `check(version, fetch = …, manifestUrl = …)`，既有 `check(x) { … }` 调用（`PluginUpdateRunnerTest` / `UpdateCheckDiagnosisTest` / `UpdateFlowHeavyTest` 等 14 处）会把 lambda 当 `String` → 编译失败。实施取 `check(version, manifestUrl = …, fetch = …)`，尾随 lambda 仍落 `fetch`，既有调用点零改动（KDoc 已写明原因）。`checkDefaultManifestUrlIsStableChannel` 钉住「不传第三参仍读正式清单」 |
+| P-2 | **成立** | `curl .../raw/master/update/preview.update.json` 无 UA 返回 302→CDN 签名 URL，`-L` 跟随后 200 / 1164 bytes，内容正是预览清单（`version=2026.11.6-beta.2`）；带浏览器 UA 同为 302→200。`HttpRequests` 默认跟随 redirect（`UpdateApi` 既有注释实证），与正式清单同一条通路 |
+| P-3 | **成立且必须显式恢复** | `updateTexts()` 确实由 rebuild 调用（`PluginSettingsPanelSections.kt` 的 `updateSection.apply { updateTexts() }`；`UpdateSectionTest.testLanguageSwitchRefreshesTexts` 既有用例）。可见性统一走 `applyDevVisibility()`，反向验证 2 红在 `testPreviewButtonVisibilitySurvivesUpdateTexts` |
+| P-4 | **无计数类守卫，4 个面板守卫全绿** | `SettingsRealityGuardTest`（4 例）/ `SettingsPanelSearchableGuardTest`（4 例）/ `PluginSettingsPanelBuildInfoTest`（3 例）/ `PluginSettingsPanelBindingTest`（16 例）全 0 failures。`SettingsRealityGuardTest` 只断言「控件字段数 ≥ 60」，新按钮声明在 `UpdateSection.kt` 不在其扫描面；`SettingsPanelSearchableGuardTest` 只采 `JToggleButton`/`JLabel`，`JButton` 不在采集面 |
+| P-5 | **成立** | 4 个新键均无 `{n}` 占位符，`BundlePlaceholderArityTest` 无新增风险 |
+
+### 8.3 定向测试读数（命令 + XML 关键字段）
+
+命令（四条类一起）：
+
+```
+./gradlew test --tests "cn.song.mybatisplus.visualizer.update.DevUpdateModeTest" \
+  --tests "cn.song.mybatisplus.visualizer.update.UpdateSourceTest" \
+  --tests "cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest" \
+  --tests "cn.song.mybatisplus.visualizer.config.UpdateSectionTest" \
+  -Pkotlin.compiler.execution.strategy=in-process
+```
+
+恢复后绿（`build/test-results/test/*.xml`，2026-11-06 20:33）：
+
+| 类 | tests | failures | errors |
+|---|---|---|---|
+| `update.DevUpdateModeTest` | 7 | 0 | 0 |
+| `update.UpdateSourceTest` | 6 | 0 | 0 |
+| `update.PluginUpdateRunnerTest` | 21 | 0 | 0 |
+| `config.UpdateSectionTest` | 24 | 0 | 0 |
+
+合计 58 例全绿；`BUILD SUCCESSFUL`。
+
+### 8.4 反向验证（摘掉前红 / 恢复后绿）
+
+| # | 探针 | 摘掉后（红） | 恢复后（绿） |
+|---|---|---|---|
+| 1 | `previewManifestUrl()` 改成 `return manifestUrl()` | `UpdateSectionTest tests=24 failures=1`，`testPreviewButtonReadsPreviewManifestUrl FAILED`，message=`开发版按钮必须读预览清单，实际=https://gitee.com/.../raw/master/update/update.json` | 24 / 0 / 0 |
+| 2 | 删掉 `updateTexts()` 里的 `applyDevVisibility()` | `UpdateSectionTest tests=24 failures=2`：`testPreviewButtonVisibilitySurvivesUpdateTexts FAILED` + `testPreviewButtonVisibleAfterUnlock FAILED`（message=`解锁后应出现开发版按钮`） | 24 / 0 / 0 |
+| 3 | 去掉 `downloadAndInstall` 的 404/410 分支（统一 `Failed`） | `PluginUpdateRunnerTest tests=21 failures=3`：`downloadAndInstall404IsNotPublished` / `downloadAndInstall410IsNotPublished` / `downloadAndInstallWrapped404IsStillNotPublished` 全红；同轮 `UpdateSectionTest` 仍 24/0/0（渲染层不受影响，证明分诊点在编排层） | 21 / 0 / 0 |
+
+### 8.5 未做 / 风险
+
+- **未跑**：全量 `testShards`、`verifyGate` / `verifyPlugin` / `buildPlugin`、runIde 沙盒真机走查（连点 7 次、切语言、真 404 下载）。按券令只做定向。
+- `-Dmpvs.update.devMode=true` 只在 object 首次触达时读（同 `mpvs.update.manifest.url` 口径），运行中改属性需重启——已写进 `DevUpdateMode` KDoc，未动 README（写集外）。
+- 预览清单的 `downloadUrl` 目前指向 `2026.11.6-beta.2`；该 Release 是否存在未实测（本次只验证清单可读）。若不存在，用户点「下载并安装」就会看到新增的「该更新包还没有发布」友好态——正是本次要求的形态。
+
