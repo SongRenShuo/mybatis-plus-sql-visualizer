@@ -31,7 +31,24 @@ import cn.song.mybatisplus.visualizer.reverse.SqlTokenizer.TokenType
 object SqlReverseParser {
 
     /** 解析入口。 @throws SqlReverseException 不支持或语法错误 */
-    fun parse(sqlText: String): SqlReverseResult {
+    fun parse(sqlText: String): SqlReverseResult = parse(sqlText, depth = 0)
+
+    /**
+     * 解析入口（带递归深度计数，T-SAF-18：sql-reverse-parser-unbounded-recursion）。
+     *
+     * [SqlReverseParser] 是无状态 object（可并发重入），深度计数必须以参数形式局部传递、
+     * 不用成员变量（防并发串扰）。两个递归环共用一个 depth：
+     *  - FROM 子查询环：parseSubqueryTable → parseSubqueryStructure → 本入口（每层 +1，此处检查）；
+     *  - 括号条件环：parseConditionInternal → parseGroup → parseConditionList → parseAndSegment
+     *    → parseCondition（每层括号 +1，[parseConditionList] 入口检查）。
+     *
+     * 超限抛 [SqlReverseException]——工具层 sqlv_reverse_sql 已有该异常通道
+     * （catch SqlReverseException → 结构化错误），fail-closed 语义成立。
+     */
+    private fun parse(sqlText: String, depth: Int): SqlReverseResult {
+        if (depth > MAX_RECURSION_DEPTH) {
+            throw SqlReverseException(0, KEY_PARSE, "SQL 嵌套过深（> $MAX_RECURSION_DEPTH 层），已拒绝解析")
+        }
         val tokens = SqlTokenizer().tokenize(sqlText)
         if (tokens.isEmpty()) {
             throw SqlReverseException(0, KEY_PARSE, "SQL 文本为空")
@@ -42,15 +59,15 @@ object SqlReverseParser {
         return when {
             cursor.isKeyword(cursor.current, "SELECT") -> {
                 cursor.advance()
-                parseSelectBody(cursor)
+                parseSelectBody(cursor, depth)
             }
             cursor.isKeyword(cursor.current, "UPDATE") -> {
                 cursor.advance()
-                parseUpdateBody(cursor)
+                parseUpdateBody(cursor, depth)
             }
             cursor.isKeyword(cursor.current, "DELETE") -> {
                 cursor.advance()
-                parseDeleteBody(cursor)
+                parseDeleteBody(cursor, depth)
             }
             cursor.isKeyword(cursor.current, "INSERT") -> {
                 cursor.advance()
@@ -68,7 +85,7 @@ object SqlReverseParser {
     }
 
     /** SELECT 主体：列清单 + FROM 表 + 子句序列（T-M37：含 JOIN 解析）。 */
-    private fun parseSelectBody(cursor: Cursor): SqlReverseResult {
+    private fun parseSelectBody(cursor: Cursor, depth: Int): SqlReverseResult {
         val (selectColumns, distinct) = parseSelectColumns(cursor)
         if (!cursor.isKeyword(cursor.current, "FROM")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "缺少 FROM 子句")
@@ -78,14 +95,14 @@ object SqlReverseParser {
         val tableName = if (cursor.current?.type == TokenType.SYMBOL && cursor.current?.text == "(") {
             // FROM 子查询：别名已并入 tableName 文本（parseSubqueryTable 返回含别名的整段），此处无独立别名
             tableAlias = null
-            parseSubqueryTable(cursor).first
+            parseSubqueryTable(cursor, depth).first
         } else {
             val name = parseTableName(cursor)
             tableAlias = consumeOptionalAlias(cursor)
             name
         }
         val (conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate, unions) =
-            parseTailClauses(cursor, allowJoin = true)
+            parseTailClauses(cursor, depth, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
             selectColumns = selectColumns,
@@ -104,7 +121,7 @@ object SqlReverseParser {
     }
 
     /** UPDATE 主体：表 + SET 赋值 + 子句序列（T-M36.7）。 */
-    private fun parseUpdateBody(cursor: Cursor): SqlReverseResult {
+    private fun parseUpdateBody(cursor: Cursor, depth: Int): SqlReverseResult {
         val tableName = parseTableName(cursor)
         val tableAlias = consumeOptionalAlias(cursor)
         if (!cursor.isKeyword(cursor.current, "SET")) {
@@ -112,7 +129,7 @@ object SqlReverseParser {
         }
         cursor.advance()
         val sets = parseSets(cursor)
-        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor, depth)
         return SqlReverseResult(
             tableName = tableName,
             conditions = conditions,
@@ -130,7 +147,7 @@ object SqlReverseParser {
      * `DELETE FROM 表 [WHERE ...]`（无目标清单，单表，现状不变）或
      * `DELETE t, t1 FROM 表 [别名] [JOIN 链] [WHERE ...]`（目标清单 → deleteTargets，联表删除）。
      */
-    private fun parseDeleteBody(cursor: Cursor): SqlReverseResult {
+    private fun parseDeleteBody(cursor: Cursor, depth: Int): SqlReverseResult {
         val deleteTargets = mutableListOf<String>()
         if (!cursor.isKeyword(cursor.current, "FROM")) {
             // DELETE 目标清单：逗号分隔的别名/表名（剥反引号）
@@ -156,7 +173,7 @@ object SqlReverseParser {
         val tableName = parseTableName(cursor)
         val tableAlias = consumeOptionalAlias(cursor)
         // 联表删除：DELETE 的尾子句放开 JOIN（UPDATE 的 JOIN 保持报错不变）
-        val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
+        val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, depth, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
             conditions = conditions,
@@ -279,7 +296,7 @@ object SqlReverseParser {
      * 尾子句序列（SELECT/UPDATE/DELETE 共用）：WHERE / ORDER BY / LIMIT 及不支持子句报错。
      * T-M37：allowJoin=true（SELECT）时解析 JOIN 链；DELETE 多表删除同样放开（UPDATE 保持报错）。
      */
-    private fun parseTailClauses(cursor: Cursor, allowJoin: Boolean = false): TailClauses {
+    private fun parseTailClauses(cursor: Cursor, depth: Int, allowJoin: Boolean = false): TailClauses {
         val warnings = mutableListOf<String>()
         var conditions = emptyList<Condition>()
         var orderBy = emptyList<OrderByItem>()
@@ -294,7 +311,7 @@ object SqlReverseParser {
             when {
                 cursor.isKeyword(t, "WHERE") -> {
                     cursor.advance()
-                    conditions = parseConditionList(cursor, warnings)
+                    conditions = parseConditionList(cursor, warnings, depth)
                 }
                 cursor.isKeyword(t, "ORDER") -> {
                     cursor.advance()
@@ -308,7 +325,7 @@ object SqlReverseParser {
                 }
                 cursor.isKeyword(t, "HAVING") -> {
                     cursor.advance()
-                    having = parseHaving(cursor, warnings)
+                    having = parseHaving(cursor, warnings, depth)
                 }
                 cursor.isKeyword(t, "LIMIT") -> {
                     cursor.advance()
@@ -322,7 +339,7 @@ object SqlReverseParser {
                     cursor.advance()
                     limit = parseFetchFirst(cursor)
                 }
-                allowJoin && isJoinStart(cursor) -> joins.add(parseJoin(cursor, warnings))
+                allowJoin && isJoinStart(cursor) -> joins.add(parseJoin(cursor, warnings, depth))
                 cursor.isKeyword(t, "FOR") -> {
                     // FOR UPDATE（MySQL/PostgreSQL 行锁）；FOR 后非 UPDATE → 不支持
                     if (cursor.isKeyword(cursor.peek(), "UPDATE")) {
@@ -411,8 +428,8 @@ object SqlReverseParser {
      * HAVING 条件（T-SqlToJavaPromote G2）：单条件直取；多条件包 [Condition.Group](AND)。
      * 聚合表达式（`COUNT(*) > 1`）经 [parseCondition] 的 KEY_UNSUPPORTED 降级为 [Condition.Raw]（记 warning）。
      */
-    private fun parseHaving(cursor: Cursor, warnings: MutableList<String>): Condition {
-        val conditions = parseConditionList(cursor, warnings)
+    private fun parseHaving(cursor: Cursor, warnings: MutableList<String>, depth: Int): Condition {
+        val conditions = parseConditionList(cursor, warnings, depth)
         if (conditions.isEmpty()) {
             throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "HAVING 后缺少条件")
         }
@@ -443,7 +460,7 @@ object SqlReverseParser {
     }
 
     /** 解析一个 JOIN 子句：类型 + 副表[别名] + ON 条件（等值列对 → ColumnComparison）。 */
-    private fun parseJoin(cursor: Cursor, warnings: MutableList<String>): ReverseJoin {
+    private fun parseJoin(cursor: Cursor, warnings: MutableList<String>, depth: Int): ReverseJoin {
         val type = when {
             cursor.isKeyword(cursor.current, "JOIN") -> {
                 cursor.advance()
@@ -462,14 +479,14 @@ object SqlReverseParser {
                 }
             }
         }
-        val (tableName, alias, subQuery) = parseJoinTableExpression(cursor)
+        val (tableName, alias, subQuery) = parseJoinTableExpression(cursor, depth)
         if (!cursor.isKeyword(cursor.current, "ON")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "JOIN 缺少 ON 子句")
         }
         cursor.advance()
         // 收集 ON 原文（raw join 字符串透传用；从 ON 后首个 token 到条件解析结束）
         val onStart = cursor.current?.offset
-        val onConditions = parseOnConditions(cursor, warnings)
+        val onConditions = parseOnConditions(cursor, warnings, depth)
         val rawOn = if (onStart != null && cursor.tokens.isNotEmpty()) {
             val last = cursor.tokens.getOrNull(cursor.pos - 1)
             if (last != null && last.offset >= onStart) {
@@ -499,7 +516,7 @@ object SqlReverseParser {
     }
 
     /** ON 条件列表（AND 连接；等值列对自动识别为 ColumnComparison；遇下一个 JOIN/子句结束）。 */
-    private fun parseOnConditions(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
+    private fun parseOnConditions(cursor: Cursor, warnings: MutableList<String>, depth: Int): List<Condition> {
         val conditions = mutableListOf<Condition>()
         while (true) {
             val t = cursor.current ?: break
@@ -511,7 +528,7 @@ object SqlReverseParser {
                 continue
             }
             if (cursor.isKeyword(t, "OR")) unsupported(cursor, "ON 内 OR 嵌套条件")
-            conditions.add(parseCondition(cursor, warnings))
+            conditions.add(parseCondition(cursor, warnings, depth))
         }
         return conditions
     }
@@ -676,7 +693,7 @@ object SqlReverseParser {
      *
      * @throws SqlReverseException 括号不匹配（KEY_PARSE）
      */
-    private fun parseSubqueryTable(cursor: Cursor): Pair<String, JoinSubQuery?> {
+    private fun parseSubqueryTable(cursor: Cursor, depth: Int): Pair<String, JoinSubQuery?> {
         val startToken = cursor.current
             ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "缺少子查询")
         val startOffset = startToken.offset
@@ -691,7 +708,7 @@ object SqlReverseParser {
                     cursor.advance()
                     val subqueryText = cursor.source.substring(startOffset, endOffset)
                     val alias = consumeJoinAlias(cursor)
-                    val structure = parseSubqueryStructure(subqueryText, alias ?: "")
+                    val structure = parseSubqueryStructure(subqueryText, alias ?: "", depth)
                     return (if (alias != null) "$subqueryText $alias" else subqueryText) to structure
                 }
             }
@@ -704,7 +721,7 @@ object SqlReverseParser {
      * 尝试解析子查询内部结构（简单单表查询）。
      * 成功返回 [JoinSubQuery]，不满足条件（含 JOIN/嵌套子查询/复杂 SELECT）返回 null。
      */
-    private fun parseSubqueryStructure(subqueryText: String, alias: String): JoinSubQuery? {
+    private fun parseSubqueryStructure(subqueryText: String, alias: String, depth: Int): JoinSubQuery? {
         // 去掉外层括号
         val inner = subqueryText.trim()
         if (!inner.startsWith("(") || !inner.endsWith(")")) return null
@@ -712,7 +729,9 @@ object SqlReverseParser {
         if (!selectSql.uppercase().startsWith("SELECT")) return null
 
         return try {
-            val result = parse(selectSql)
+            // FROM 子查询环（T-SAF-18）：每层子查询 +1，深度检查在 parse 入口；
+            // 超限的 SqlReverseException 落入下方 catch → 回落字符串形态（有界，不外溢）
+            val result = parse(selectSql, depth + 1)
             // 必须是简单单表查询：无 JOIN、无嵌套子查询、表名是简单 WORD
             if (result.joins.isNotEmpty()) return null
             if (result.tableName.startsWith("(")) return null
@@ -738,11 +757,11 @@ object SqlReverseParser {
      *   - 普通表：("table", "alias", null)
      *   - 子查询：("(SELECT ...) alias", null, JoinSubQuery?)
      */
-    private fun parseJoinTableExpression(cursor: Cursor): Triple<String, String?, JoinSubQuery?> {
+    private fun parseJoinTableExpression(cursor: Cursor, depth: Int): Triple<String, String?, JoinSubQuery?> {
         val t = cursor.current
             ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "缺少 JOIN 表名")
         if (t.type == TokenType.SYMBOL && t.text == "(") {
-            val (text, structure) = parseSubqueryTable(cursor)
+            val (text, structure) = parseSubqueryTable(cursor, depth)
             return Triple(text, null, structure)
         }
         return Triple(parseTableName(cursor), consumeJoinAlias(cursor), null)
@@ -779,12 +798,14 @@ object SqlReverseParser {
      * `a = 1 OR b = 2` → `[Group(OR, [a, b])]`；
      * `a = 1 AND b = 2 OR c = 3` → `[Group(OR, [Group(AND, [a, b]), c])]`（AND 优先级高于 OR）。
      */
-    private fun parseConditionList(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
+    private fun parseConditionList(cursor: Cursor, warnings: MutableList<String>, depth: Int): List<Condition> {
+        // 括号条件环深度检查（T-SAF-18）：括号分支每层 +1 后经 parseGroup 到此，超限结构化拒绝
+        checkDepth(cursor, depth)
         val orSegments = mutableListOf<List<Condition>>()
-        orSegments.add(parseAndSegment(cursor, warnings))
+        orSegments.add(parseAndSegment(cursor, warnings, depth))
         while (cursor.isKeyword(cursor.current, "OR")) {
             cursor.advance()
-            orSegments.add(parseAndSegment(cursor, warnings))
+            orSegments.add(parseAndSegment(cursor, warnings, depth))
         }
         if (orSegments.size == 1) return orSegments[0]
         return listOf(
@@ -798,7 +819,7 @@ object SqlReverseParser {
     }
 
     /** AND 连接的条件段（遇 OR / `)` / 子句起点 / 分号终止，均不消费）。 */
-    private fun parseAndSegment(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
+    private fun parseAndSegment(cursor: Cursor, warnings: MutableList<String>, depth: Int): List<Condition> {
         val conditions = mutableListOf<Condition>()
         while (true) {
             val t = cursor.current ?: break
@@ -809,7 +830,7 @@ object SqlReverseParser {
                 continue
             }
             if (cursor.isKeyword(t, "OR")) break
-            conditions.add(parseCondition(cursor, warnings))
+            conditions.add(parseCondition(cursor, warnings, depth))
         }
         return conditions
     }
@@ -839,11 +860,11 @@ object SqlReverseParser {
      * 解析失败且为"表达式形态不支持"（[KEY_UNSUPPORTED]：函数、子查询、列对列、`?` 占位符等）
      * → 降级为 [Condition.Raw] 整条件 apply() 透传（记 warning）；语法错误（[KEY_PARSE]）保持报错。
      */
-    private fun parseCondition(cursor: Cursor, warnings: MutableList<String>): Condition {
+    private fun parseCondition(cursor: Cursor, warnings: MutableList<String>, depth: Int): Condition {
         val startOffset = cursor.current?.offset
             ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "条件不完整")
         return try {
-            parseConditionInternal(cursor, warnings)
+            parseConditionInternal(cursor, warnings, depth)
         } catch (e: SqlReverseException) {
             if (e.key == KEY_UNSUPPORTED) {
                 degradeToRaw(cursor, startOffset, warnings)
@@ -853,17 +874,17 @@ object SqlReverseParser {
         }
     }
 
-    private fun parseConditionInternal(cursor: Cursor, warnings: MutableList<String>): Condition {
+    private fun parseConditionInternal(cursor: Cursor, warnings: MutableList<String>, depth: Int): Condition {
         val head = cursor.current ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "条件不完整")
-        // 括号组 `( ... )` / `NOT ( ... )`（T-M36.1）
+        // 括号组 `( ... )` / `NOT ( ... )`（T-M36.1）——每层括号嵌套深度 +1（T-SAF-18）
         if (head.type == TokenType.SYMBOL && head.text == "(") {
             cursor.advance()
-            return parseGroup(cursor, warnings, negated = false)
+            return parseGroup(cursor, warnings, negated = false, depth = depth + 1)
         }
         if (cursor.isKeyword(head, "NOT") && cursor.isSymbol(cursor.peek(), "(")) {
             cursor.advance()
             cursor.advance()
-            return parseGroup(cursor, warnings, negated = true)
+            return parseGroup(cursor, warnings, negated = true, depth = depth + 1)
         }
         val column = parseColumnRef(cursor)
         // 操作符判定基于列名之后的当前 token（P0 行为：t 为列名解析后的 current）
@@ -959,8 +980,8 @@ object SqlReverseParser {
      * WHERE 多渲染一层 nested；`NOT (a = 1)` 取反组仍保留 Group 承载 negated 标记。
      * 其余多条件情况包 `Group(AND, ...)`（保留括号，round-trip 等价）。空组报语法错误。
      */
-    private fun parseGroup(cursor: Cursor, warnings: MutableList<String>, negated: Boolean): Condition {
-        val inner = parseConditionList(cursor, warnings)
+    private fun parseGroup(cursor: Cursor, warnings: MutableList<String>, negated: Boolean, depth: Int): Condition {
+        val inner = parseConditionList(cursor, warnings, depth)
         expectSymbol(cursor, ")")
         if (inner.isEmpty()) {
             throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "空括号组")
@@ -1406,6 +1427,20 @@ object SqlReverseParser {
     const val KEY_NOT_SELECT = "reverse.error.notSelect"
     const val KEY_UNSUPPORTED = "reverse.error.unsupported"
     const val KEY_PARSE = "reverse.error.parse"
+
+    /** 递归深度上限（T-SAF-18）：括号条件环与 FROM 子查询环共用，现实 SQL 远低于此。 */
+    private const val MAX_RECURSION_DEPTH = 256
+
+    /** 深度守卫检查（T-SAF-18，口径见 [parse] 带深度重载的 KDoc）：超限抛 SqlReverseException 结构化拒绝。 */
+    private fun checkDepth(cursor: Cursor, depth: Int) {
+        if (depth > MAX_RECURSION_DEPTH) {
+            throw SqlReverseException(
+                cursor.current?.offset ?: 0,
+                KEY_PARSE,
+                "SQL 嵌套过深（> $MAX_RECURSION_DEPTH 层），已拒绝解析",
+            )
+        }
+    }
 
     /** Token 游标。 */
     private class Cursor(val tokens: List<Token>, val source: String) {
