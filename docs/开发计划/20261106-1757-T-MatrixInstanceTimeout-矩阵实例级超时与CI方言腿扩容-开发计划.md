@@ -135,4 +135,92 @@
 
 ## 十一、实施记录（券 B）
 
-<!-- 待回填 -->
+分支 `t-ci-dialect-keys`，工作树 `.worktrees/ci-dialect-keys`（自 master `629dcba8`）。
+
+**提交**：
+
+- `85ddc139` `ci(dialect): CI 方言冒烟子集 2 → 5 实例（纳入磐维 A/B 与 GaussDB 内核 503）+ 按算式重算预算`
+
+### 改动清单（前后对照）
+
+| 文件 | 位置 | 改前 → 改后 |
+|---|---|---|
+| `.github/workflows/nightly-full.yml` | `dialect` job 的 `timeout-minutes` | `50` → **`100`** |
+| 同上 | 「真机方言验证」步的 `timeout-minutes` | `40` → **`90`** |
+| 同上 | 「落方言矩阵」步 `env.CI_DIALECT_KEYS` | `'mysql84,pg16'` → `'mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b'` |
+| 同上 | 三处注释 | ①`dialect` job 头部补预算算式/取数/两个前提 ②`CI_DIALECT_KEYS` 处补扩子集原因、砍序、手动触发命令 ③落盘步注释补「本步只按 key 摘录、不解析 `instances` 行」与口径重申 |
+| `docs/发行说明/T-ReleaseChecklist-发行检查清单.md` | 第 86 行「CI 只跑代表实例子集」段 | 子集 2 → 5 实例 + 原因 + 预算算式 + 触发复验命令 + 两个前置 + 一处口径缺口；**「全量矩阵以本地 `releaseGate` 为准」原样保留** |
+
+### 预算算式（已写进 workflow 的 `dialect` job 头部注释）
+
+`步骤 timeout = Σ(每实例预算) + 冷启动与收尾余量(≈8min)`；
+每实例预算 ＝ 矩阵条目 `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s。
+必须 ≥ Σ 的理由：最坏情况是**每个实例都挂到各自预算**，那时期望看门狗逐个判 TIMEOUT 并照常产出
+`summary`；步骤上限小于 Σ 就退化成 CI 掐断进程——没有 summary 工件，也分不清「超时」与「崩溃」。
+
+按 CI 实测最坏率 **4.3s/字**（mysql84 262 字 → 1113s；pg16 86 字 → 196s ≈2.3s/字）外推本子集：
+
+| 实例 | 保留字 | CI 投影 | CI 实测 | 建议矩阵 `timeoutSeconds` |
+|---|---|---|---|---|
+| `mysql84` | 262 | 1127s | 1113s（模型自校准） | 1200 |
+| `pg16` | 86 | 370s | 196s | 400 |
+| `panwei_a` | 109 | 470s | 本机 66.5s（非 CI 读数） | 500 |
+| `gaussdb_kernel503` | 197 | 850s | — | 900 |
+| `panwei_b` | 262 | 1130s | — | 1200 |
+
+Σ 预期 ≈ 3950s ≈ 66min；Σ 预算上界 = 4200s = 70min → 步骤 90min（70+8=78，再留 12min 抗抖动）、
+job 100min。
+
+### P5 / P6 结论
+
+- **P6 成立**：`nightly-full.yml` 的 `on:` 同时声明 `schedule` 与 `workflow_dispatch`（文件第 28~31 行），
+  pyyaml 解析出的触发器为 `['schedule', 'workflow_dispatch']`；仓库历史夜间轮次本就全是 `workflow_dispatch`
+  （清单第 83 行：「历史上 9 轮夜间全是 workflow_dispatch」）。故 `gh workflow run nightly-full.yml`
+  可用，命令已写进 workflow 注释供事后复验。
+- **P5 不成立（计划里两个默认假设都站不住），且无法由现有读数定论**：
+  1. **「5 × 默认 300s = 25min，+10min 余量 → 现值 40min 仍够」不成立**。300s 是券 A 的**默认**单实例
+     预算，而 mysql84 在 CI 实测 1113s；矩阵不给显式 `timeoutSeconds`，看门狗会在第 5 分钟把这条
+     现在会通过的腿判成 TIMEOUT（现存绿腿变红）。最坏值必须按矩阵显式预算的 Σ 计，不是 5×300。
+  2. **「B 的预算取券 A 的实测读数」不能直接照搬**。券 A 的读数是**本机国内网络**读数（`panwei_a`
+     109 词 66.5s ≈ 0.61s/字），比 CI 低一个量级（同字数按 CI 的 4.3s/字 ≈ 470s）。CI 预算只能按跨洋率
+     外推；券 A 的读数在预算上的作用是「证明实例没挂、能跑完」，不是给秒数。
+  3. 结论：变更后步骤预算由 40min 提到 90min。这是 cap 不是耗时，只有挂起时才生效；按外推的 66min
+     预期，与两实例子集时的 27.8min 相比，增加的部分就是追加三个方言的必然成本（跨洋按字计费）。
+     若要压回去，只有三条路：减实例（按尾部砍序）、减保留字扫描量、或把 runner 挪到近网。
+
+### 取证读数（本券不跑 gradle、不触发 CI）
+
+1. YAML 语法：`python -c "import yaml; yaml.safe_load(...)"` 通过；解析结果
+   `dialect.timeout-minutes = 100`、验证步 `90`、
+   `CI_DIALECT_KEYS = mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b`、触发器 `['schedule','workflow_dispatch']`。
+2. 落盘逻辑仿真（把 workflow 里「落方言矩阵」步的摘录代码原样搬进临时 `.ps1`，喂**本机**矩阵文件
+   充当看不到的 secret，输出只落 `$TEMP`、不覆盖仓库 `.local/`）：
+   - 命中 **5/5** key（缺 key 会硬抛，未抛）；口径行
+     `方言矩阵已落盘（子集 mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b；原矩阵 15 个实例中取 5 个）`；
+   - `panwei_a.skipWords = rowid` 与 `skipReason` 原文带过来 → **CI 不会因 rowid 假红**。
+
+### 未做项 / 未核实项（交回主控）
+
+1. **未触发 CI**：验收硬性要求「至少一次 `workflow_dispatch` 跑通」属对外动作，等用户授权后由主控执行。
+   在此之前**不得写「CI 已覆盖」**（对照读数：当前最后一次 run 的落盘行只含 `mysql84,pg16`）。
+2. **secret `DIALECT_MATRIX_PROPERTIES` 内容未核实**（助手看不到）。间接推断它**大概率仍是 11-05 版、
+   缺 `panwei_a`/`panwei_b`**：2026-11-05 run#9 日志记「原矩阵 **13** 个实例」（＝当时 secret 的 key 数），
+   而本机 `.local/dialect-external-matrix.properties` 今天已是 **15** 个 key，多出的两条正是磐维。
+   若未同步，落盘步会对缺 key **硬抛**（整条腿红）。→ 首次 dispatch 前必须把更新后的矩阵文件全文重写进 secret。
+3. **矩阵实例预算未落地**：`mysql84`/`panwei_b` 的显式 `timeoutSeconds`（≥1200s，`pg16` ≥400s）要写进
+   `.local/dialect-external-matrix.properties`，该文件由主控维护，不在本券写集内；券 A 的默认 300s 若直接
+   生效会把 mysql84 判 TIMEOUT。**这是 A、B 合流前必须一起处理的前置**。
+4. **口径缺口（本券发现）**：本机矩阵的 `instances` 行目前**不含** `panwei_a`/`panwei_b`（条目在文件里、
+   不在 `instances` 列表）→ **本地 `releaseGate` 眼下不跑磐维**，「全量矩阵以本地 `releaseGate` 为准」
+   对磐维暂时不成立，磐维的常驻覆盖只有本条 CI 冒烟。要恢复口径需把这两个 key 加进 `instances`。
+5. 券 A 的实例级超时（`timeoutSeconds` 语义、TIMEOUT 桶）**尚未合流**，本券注释里的预算语义按本计划
+   §五 的口径书写；若 A 落地时改了属性名或默认值，需按同一算式回算这两处 `timeout-minutes`。
+
+### 还差哪一步才算「CI 已覆盖」
+
+① 把含磐维条目的矩阵全文同步进 secret `DIALECT_MATRIX_PROPERTIES`；② 矩阵给 `mysql84`/`panwei_b`
+显式 `timeoutSeconds`（≥1200s）；③ A 先合流、B 后合流；④ 跑一次
+`gh workflow run nightly-full.yml`，在 `dialect` job 里读到
+`方言矩阵已落盘（子集 mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b；原矩阵 N 个实例中取 5 个）`，
+且工件 `dialect-verify-summary` 的 `summary.md` 有「通过/跳过/超时/失败」行、`panwei_a`/`panwei_b`/
+`gaussdb_kernel503` 三条各有 PASS 或可辨结局（超时必须带预算值，不计 PASS）。
