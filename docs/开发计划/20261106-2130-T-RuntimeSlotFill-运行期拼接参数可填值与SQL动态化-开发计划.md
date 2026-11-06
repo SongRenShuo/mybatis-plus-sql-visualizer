@@ -230,6 +230,7 @@ data class RuntimeSlot(
 | `RuntimeSlotTest`（新增，10 例） | `tests="10" failures="0" errors="0"` |
 | `SqlStringConcatenatorTest`（既有 19 例，未改） | `tests="19" failures="0" errors="0"` |
 | `JdbcTemplateSqlPreviewServiceTest`（既有 10 例，未改） | `tests="10" failures="0" errors="0"` |
+| 附加（剥括号改动波及的另一路消费者）：`CustomDaoHqlLocatorTest` / `HqlQueryLocatorTest` | `tests="27" failures="0"` / `tests="24" failures="0"` |
 
 **留空回归**：夹具 1/2/3 各一条用例，把 `result.compactSql` 里的 ` · rtN` 剥掉后与**券 A 改动前实测产物**
 逐字比较（基线来自改动前 probe 读数，原样写进测试）。三处 diff 形态均为「仅多 ` · rtN`」：
