@@ -313,3 +313,29 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 名字快筛是**优先级**而非过滤器（漏命中退回单轮尽力而为），所以「名字里没有任何 JDBC 线索」的
   未知驱动在超 5000 候选的巨型应用里仍可能被预算截断（与修复前同等，只是不再被数组顺序坑）。
 - `AgentSniffDecoupleTest` 的 500ms 时间窗用例在并行构建下会抖（既有用例，未改）。
+
+## 十四、实施结果与权威复核（2026-11-06）
+
+四路分支全部合入 `t-ibatis-panwei-integration`：`t-ibatis-parse`（券 A/B）、`t-catchall-diag`（券 D/E）、`t-panwei-dialect`（券 F）、`t-panwei-driver`（券 C 取证报告）。合并时两处冲突（CHANGELOG 与本文）均按「保留双方」解开，本文章节顺序＝§十一 分工 → §十二 券 C 取证 → §十三 D+E 记录 → §十四 结果。未推送、未建 tag。
+
+**权威定向读数**（集成树单次跑，不是各支自报之和）：
+
+| 范围 | 类数 | tests | failures | errors | skipped |
+|---|---|---|---|---|---|
+| 根项目 `log.*` + `DialectInferenceTest` + `PreviewDialectResolverTest` + `DialectInferFallbackGuardTest` + `BundleParityGuardTest` | 173 | **1907** | 0 | 0 | 0 |
+| agent `CaptureBudgetTest` / `CatchAllMatcherTest` / `CatchAllRedLineTest` / `HeartbeatDiagnosticsTest` / `StatementWeaverVendorCoverageTest` | 5 | **44** | 0 | 0 | 0 |
+
+**反向验证汇总**（每项均「摘除必红、还原回绿」，两次读数由各车道报告）：
+
+- 券 A/B：摘 iBatis 分支 → 7 红（7 个 iBatis 用例全红、两条 MyBatis 回归保绿）；摘 Types 并入 → 4 红（含裸数字 `ORGID = 0034…` 与类型缺失两条）。
+- 券 A/B 追加守卫（用户追问「值自带方括号会不会被吞」）：把 `parseIbatisParams` 改成 `trim('[', ']')` 全剥 → **恰 1 红**（`[[abc], [], a[b]c]` 用例），其余 10 例保绿。
+- 券 D/E：摘 attach 补挂轮 → 2 红；摘心跳 `unreg` 段 → 2 红；摘诊断行分支 → 1 红；摘状态栏拼接 → 1 红。
+- 券 F：一次摘掉三处映射（两张子协议表 + 角标别名表）→ 4 红，红点与三条链一一对应。
+
+**未闭环**：
+
+- 券 C 登记：待驱动 jar（§十二；公网无、墨天轮需登录）。
+- 真机复验：磐维应用上的「已收事件 N>0 / 未登记类名可见 / 角标显示 / 预览不再降级」需用户环境。
+- 按用户「只跑定向」口径未跑：`testShards` 全量、`verifyGate` / `verifyPlugin` / `buildPlugin`、runIde 沙盒。
+
+**顺带发现（非本券改动）**：`docs/LESSONS.md` 只在 `dev` 分支存在，`docs/开发流程-派活与验收清单.md` 在 master/dev 都不存在，而仓库 `AGENTS.md` 第 1、3 条引用了这两份文件——在 master 上开工的代理会读不到。
