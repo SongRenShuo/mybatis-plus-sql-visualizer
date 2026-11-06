@@ -2,7 +2,11 @@ package cn.song.mybatisplus.sqlvis.agent;
 
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -27,6 +31,22 @@ import java.util.concurrent.ConcurrentHashMap;
  * premain 织入失败＝类定义失败＝宿主 JVM 起不来，比「采不到」严重一个数量级。故 premain 只
  * 记录候选（计数 + 一行诊断），真正的接口匹配交给启动后的补挂轮（默认 10s 后首轮、每 60s 一轮、
  * 共 5 轮，均可配）。补挂轮走 retransform——单类失败由 JVM 拒绝后原字节保留，宿主无感。
+ *
+ * <p><b>attach 补挂（T-IbatisPanwei 券 E）。</b>attach 路径此前**只跑一轮**，于是「attach 之后
+ * 才懒加载数据源」的进程（Spring 延迟初始化 / 多数据源按需建池）永远漏扫——现场磐维驱动的
+ * 零产出就有这一条独立成因。现在 attach 首轮之后再加 2 轮补挂（默认 5s / 20s，可配，
+ * 见 {@link CaptureBudget#PROP_ATTACH_PASSES}）：与首轮共用 {@link #PROCESSED} 去重、
+ * 每轮开跑前重查 {@link CaptureBudget#attachMatchEnabled()}（kill switch 与总开关都不得被绕过）。
+ * premain 补挂链保持原样（它的节奏与 attach 场景不同，见 {@link CaptureBudget#DEFAULT_ATTACH_DELAY_MS}）。
+ *
+ * <p><b>扫描预算语义（券 E）。</b>{@code catchAllScanLimit} 计的是**候选类**（真正跑了接口判定的
+ * 类），JDK 前缀、接口/枚举/数组/基本型、无 classloader、JDK 动态代理这些零成本排除项不占预算。
+ * 判定顺序改为「名字快筛命中的候选**先**评估，其余类在其后」，因此数组顺序再也不能把某个 JDBC
+ * 实现挤到预算之外——截断只会落到「名字里看不出 JDBC 线索」的类上（与修复前同等尽力而为）。
+ *
+ * <p><b>未登记实现取证（券 D）。</b>接口命中但不在白名单的类名按首次发现顺序记入
+ * {@link CaptureBudget#noteUnregisteredDriver(String)}（有界 8 个），心跳带出给 IDE——
+ * 「下一个未知驱动是谁」不再只能靠人工猜。
  *
  * <p><b>零 ASM 依赖</b>：本类在 premain 路径被触达（记录候选），任何对 ASM 的静态引用都会把
  * 「ASM 不可见」的第三方 agent 现场变成宿主启动失败（T-JRebelPremainCrash）。故这里只做反射与
@@ -77,35 +97,56 @@ final class CatchAllMatcher {
      * 绝不影响 attach 的其余类与宿主。
      */
     static StatementWeaver.Kind[] specOf(Class<?> c) {
-        if (c == null) {
-            return null;
-        }
         try {
-            if (c.isInterface() || c.isArray() || c.isPrimitive() || c.isEnum()) {
+            if (cheapExcluded(c)) {
                 return null;
             }
             final String name = c.getName();
             if (excludedName(name)) {
                 return null;
             }
-            // bootstrap（JDK 自身实现）无织入意义；同时避免把 java.sql 内部类拖进 retransform 面
-            if (c.getClassLoader() == null) {
-                return null;
-            }
-            // JDK 动态代理（MyBatis Mapper/PreparedStatementLogger 等）：方法体只是转发 trampoline，
-            // 织它得不到自有 SQL，且代理类是运行时生成物，retransform 支持面因 JDK 版本而异
-            if (Proxy.isProxyClass(c)) {
-                return null;
-            }
-            // PreparedStatement/CallableStatement 都继承 Statement，一条判定覆盖三接口
-            if (java.sql.Statement.class.isAssignableFrom(c)) {
-                return WeaveSpecs.catchAllStatementFace();
-            }
-            if (java.sql.Connection.class.isAssignableFrom(c)) {
-                return WeaveSpecs.catchAllPrepareFace();
-            }
+            return interfaceSpecOf(c);
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    /**
+     * 零成本排除（**不读类名、不做接口判定**）：接口/数组/基本型/枚举、bootstrap 装载的 JDK 自身实现、
+     * JDK 动态代理。
+     *
+     * <p>券 E 把「是否占扫描预算」与「是否做接口判定」拆开：本方法只读 {@link Class} 自带的布尔标志
+     * （JVM 侧缓存，无分配、无反射），命中即与「不是 JDBC 实现」等价，因此不必计入
+     * {@code catchAllScanLimit}。大型应用里 `java.*` / 接口 / 注解 / 枚举常占半数以上，旧口径把它们
+     * 全算进 5000 预算，真正候选反被数组顺序挤掉。
+     */
+    private static boolean cheapExcluded(Class<?> c) {
+        if (c == null) {
+            return true;
+        }
+        if (c.isInterface() || c.isArray() || c.isPrimitive() || c.isEnum()) {
+            return true;
+        }
+        // bootstrap（JDK 自身实现）无织入意义；同时避免把 java.sql 内部类拖进 retransform 面
+        if (c.getClassLoader() == null) {
+            return true;
+        }
+        // JDK 动态代理（MyBatis Mapper/PreparedStatementLogger 等）：方法体只是转发 trampoline，
+        // 织它得不到自有 SQL，且代理类是运行时生成物，retransform 支持面因 JDK 版本而异
+        return Proxy.isProxyClass(c);
+    }
+
+    /**
+     * 接口判定本体（调用方已保证：非接口/枚举/代理、有 classloader、名字未被排除）。
+     *
+     * <p>PreparedStatement/CallableStatement 都继承 Statement，一条判定覆盖三接口。
+     */
+    private static StatementWeaver.Kind[] interfaceSpecOf(Class<?> c) {
+        if (java.sql.Statement.class.isAssignableFrom(c)) {
+            return WeaveSpecs.catchAllStatementFace();
+        }
+        if (java.sql.Connection.class.isAssignableFrom(c)) {
+            return WeaveSpecs.catchAllPrepareFace();
         }
         return null;
     }
@@ -162,6 +203,34 @@ final class CatchAllMatcher {
         return dotted == null ? null : ACCEPTED.get(dotted);
     }
 
+    /**
+     * 类名快筛线索（大小写不敏感子串）。**只决定扫描优先级，不决定是否参与判定**——
+     * 命中者先评估（保证 JDBC 实现不会因 {@code getAllLoadedClasses()} 的数组顺序被预算截断），
+     * 未命中者随后照常判定（尽力而为，与修复前等价）。故这些词故意放宽：
+     * 误命中的代价只是「早评估一个普通类」，漏命中的代价是「退回旧口径」，两者都不改变正确性。
+     */
+    private static final String[] JDBC_NAME_HINTS = {
+            "statement", "connection", "jdbc", "conn", "stmt", "sql"};
+
+    /** 类名是否带 JDBC 线索（券 E 扫描优先级；零反射、零异常）。 */
+    static boolean nameHintsJdbc(String dotted) {
+        if (dotted == null || dotted.isEmpty()) {
+            return false;
+        }
+        final String lower;
+        try {
+            lower = dotted.toLowerCase(Locale.ROOT);
+        } catch (Throwable t) {
+            return false;
+        }
+        for (String hint : JDBC_NAME_HINTS) {
+            if (lower.contains(hint)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 已接受的兜底类名 → 形态（测试观测/取证用；生产路径只经 {@link #acceptedSpec} 读）。 */
     static Map<String, StatementWeaver.Kind[]> acceptedSpecs() {
         return Collections.unmodifiableMap(ACCEPTED);
@@ -185,10 +254,16 @@ final class CatchAllMatcher {
         }
         if (premain) {
             recordPremainCandidates(inst);
-            scheduleDeferredPasses(inst);
+            scheduleDeferredPasses(inst, CaptureBudget.premainDelayMs(), CaptureBudget.premainRepeatMs(),
+                    CaptureBudget.premainPasses(), "premain pass");
             return;
         }
         runPass(inst, "attach interface-match");
+        // 券 E：attach 后补挂 2 轮（默认 5s/20s）。覆盖「attach 之后才懒加载数据源」的进程——
+        // 这类进程首轮必然漏扫，此前没有第二轮，表现就是「挂上了却一条不出」。补挂失败只影响
+        // 覆盖，预热/白名单/事件链不受影响（runPass 内部逐类吞异常 + 每轮重查 kill switch）。
+        scheduleDeferredPasses(inst, CaptureBudget.attachDelayMs(), CaptureBudget.attachRepeatMs(),
+                CaptureBudget.attachPasses(), "attach pass");
     }
 
     /**
@@ -198,22 +273,26 @@ final class CatchAllMatcher {
      * 与后续补挂轮的 matched/wove 配对即可区分「类还没加载」与「匹配失效」。
      */
     private static void recordPremainCandidates(Instrumentation inst) {
-        int scanned = 0;
+        final int limit = CaptureBudget.scanLimit();
+        int evaluated = 0;
         int candidates = 0;
+        boolean limitHit = false;
         try {
             final Class<?>[] loaded = inst.getAllLoadedClasses();
             if (loaded != null) {
                 for (Class<?> c : loaded) {
-                    if (scanned >= CaptureBudget.scanLimit()) {
-                        break;
-                    }
-                    scanned++;
                     try {
                         final String name = c.getName();
-                        if (isWhitelisted(name)) {
+                        // 与 runPass 同口径：白名单与零成本排除项不占候选预算（券 E）
+                        if (isWhitelisted(name) || excludedName(name) || cheapExcluded(c)) {
                             continue;
                         }
-                        if (specOf(c) != null) {
+                        if (evaluated >= limit) {
+                            limitHit = true;
+                            break;
+                        }
+                        evaluated++;
+                        if (interfaceSpecOf(c) != null) {
                             candidates++;
                         }
                     } catch (Throwable ignore) {
@@ -224,23 +303,29 @@ final class CatchAllMatcher {
         } catch (Throwable ignore) {
             // 枚举失败：本阶段无候选可言（补挂轮会重试）
         }
-        CaptureBudget.diag("premain: " + candidates + " interface candidate(s) among " + scanned
-                + " loaded class(es); premain never inlines unknown byte shapes"
+        CaptureBudget.diag("premain: " + candidates + " interface candidate(s) among " + evaluated
+                + " evaluated candidate class(es)" + (limitHit ? "+limit(" + limit + ")" : "")
+                + "; premain never inlines unknown byte shapes"
                 + " — interface weaving deferred to post-start pass(es)");
     }
 
     /**
-     * premain 启动后补挂（券 08）：daemon 线程、有限轮数、每轮受扫描上限与 kill switch 约束。
+     * 启动后补挂（券 08 premain / 券 E attach）：daemon 线程、有限轮数、每轮受候选预算与 kill switch 约束。
      *
-     * <p>为什么必须延后：premain 时点类还没加载完（驱动/连接池通常在 Spring 上下文启动后才装载），
-     * 立即匹配命中率为零；而在 premain 阶段内联织入未知字节形态正是红线禁止项。延后到应用
-     * 启动后走 retransform，失败只影响「该类不增强」。
+     * <p>为什么必须延后（premain）：premain 时点类还没加载完（驱动/连接池通常在 Spring 上下文启动后
+     * 才装载），立即匹配命中率为零；而在 premain 阶段内联织入未知字节形态正是红线禁止项。
+     * 为什么 attach 也要补（券 E）：「attach 之后才懒加载数据源」的进程首轮同样必然漏扫。
+     *
+     * <p>两条铁律在 {@code run()} 里逐轮重查，不在排程时一次性判定：① 总开关
+     * {@link CaptureBudget#attachMatchEnabled()}（kill switch 触发后它返回 false）；
+     * ② 每轮调用前都重新取延迟（CONFIG 热更新/测试注入都按当前值生效）。
+     *
+     * @return 已启动的补挂线程（null = 未排程）；测试用它 join 以获得确定性
      */
-    private static void scheduleDeferredPasses(final Instrumentation inst) {
-        final long delayMs = CaptureBudget.premainDelayMs();
-        final int passes = CaptureBudget.premainPasses();
+    private static Thread scheduleDeferredPasses(final Instrumentation inst, final long delayMs,
+            final long repeatMs, final int passes, final String phasePrefix) {
         if (delayMs <= 0L || passes <= 0) {
-            return;
+            return null;
         }
         try {
             final Thread t = new Thread(new Runnable() {
@@ -253,26 +338,38 @@ final class CatchAllMatcher {
                         } catch (InterruptedException ie) {
                             return;
                         }
+                        // 每轮开跑前重查：kill switch / catchAll=false 都不得被补挂轮绕过
                         if (!CaptureBudget.attachMatchEnabled()) {
                             return;
                         }
                         try {
-                            runPass(inst, "premain pass " + (i + 1) + "/" + passes);
+                            runPass(inst, phasePrefix + " " + (i + 1) + "/" + passes);
                         } catch (Throwable ignore) {
                             // 单轮失败不终止后续轮（预算/kill switch 在 runPass 内已记账）
                         }
-                        waitMs = CaptureBudget.premainRepeatMs();
+                        waitMs = repeatMs;
                         if (waitMs <= 0L) {
-                            waitMs = CaptureBudget.premainDelayMs();
+                            waitMs = delayMs;
                         }
                     }
                 }
             }, "SqlVisAgent-catchall");
             t.setDaemon(true);
+            lastDeferredThread = t;
             t.start();
+            return t;
         } catch (Throwable ignore) {
             // 线程创建失败（极端受限环境）：放弃补挂，宿主不受影响
+            return null;
         }
+    }
+
+    /** 最近一次启动的补挂线程（仅测试用：join 以获得确定性，避免 sleep 轮询）。 */
+    private static volatile Thread lastDeferredThread;
+
+    /** 仅测试用：取最近一次排程的补挂线程（未排程为 null）。 */
+    static Thread lastDeferredThreadForTest() {
+        return lastDeferredThread;
     }
 
     /**
@@ -281,6 +378,13 @@ final class CatchAllMatcher {
      * <p>顺序即「白名单优先」：先按白名单谓词排除（这些类已由 {@code AgentMain} 的名单轮织过），
      * 再对剩余类做接口判定。命中类先登记进 {@link #ACCEPTED}，再 retransform——transformer 在
      * 同一次调用里就能查到形态，走既有织入通道。
+     *
+     * <p>券 E 的两处改动：
+     * <ul>
+     *   <li>预算只对**候选类**计数：接口/枚举/数组/基本型/bootstrap/JDK 代理、JDK 前缀名这些都是
+     *       零成本排除，不占 {@code catchAllScanLimit}；</li>
+     *   <li>名字带 JDBC 线索的候选**先**评估，其余类随后——数组顺序不再能决定谁被截断。</li>
+     * </ul>
      */
     private static void runPass(Instrumentation inst, String phase) {
         final Class<?>[] loaded;
@@ -294,70 +398,133 @@ final class CatchAllMatcher {
         if (loaded == null) {
             return;
         }
-        final int limit = CaptureBudget.scanLimit();
-        int scanned = 0;
-        int whitelist = 0;
-        int matched = 0;
-        int wove = 0;
-        int skipped = 0;
-        int failed = 0;
-        boolean limitHit = false;
-        final StringBuilder failures = new StringBuilder();
+        final PassStats stats = new PassStats(CaptureBudget.scanLimit());
+        // 第一轮：名字快筛命中者优先（含全部已知/未知驱动的语句与连接实现）
+        final Set<Class<?>> hinted = Collections.newSetFromMap(
+                new IdentityHashMap<Class<?>, Boolean>());
         for (Class<?> c : loaded) {
-            if (CaptureBudget.killed()) {
+            if (stats.stop) {
                 break;
             }
-            if (scanned >= limit) {
-                limitHit = true;
-                break;
-            }
-            scanned++;
-            final String name;
-            try {
-                name = c.getName();
-            } catch (Throwable t) {
+            final String name = nameOf(c);
+            if (name == null || !nameHintsJdbc(name)) {
                 continue;
             }
-            try {
-                if (isWhitelisted(name)) {
-                    whitelist++;
-                    continue;
-                }
-                final StatementWeaver.Kind[] spec = specOf(c);
-                if (spec == null) {
-                    continue;
-                }
-                // 周期补挂去重：同一 Class 只处理一次（失败也不重试——失败形态是稳定的）
-                if (!PROCESSED.add(c)) {
-                    continue;
-                }
-                matched++;
-                CaptureBudget.noteInterfaceMatched();
-                ACCEPTED.put(name, spec);
-                if (!inst.isModifiableClass(c)) {
-                    skipped++;
-                    CaptureBudget.noteInterfaceSkipped();
-                    continue;
-                }
-                inst.retransformClasses(c);
-                wove++;
-                CaptureBudget.noteInterfaceWoven();
-                CaptureBudget.noteCatchAllSuccess();
-            } catch (Throwable t) {
-                failed++;
-                CaptureBudget.noteInterfaceFailed();
-                CaptureBudget.noteCatchAllFailure(name + "=" + t.getClass().getSimpleName());
-                if (failures.length() < 400) {
-                    failures.append(name).append('=').append(t.getClass().getSimpleName()).append(' ');
-                }
+            hinted.add(c);
+            evaluate(inst, c, name, stats);
+        }
+        // 第二轮：其余类（与修复前同等尽力而为，只是在候选之后评估）
+        for (Class<?> c : loaded) {
+            if (stats.stop) {
+                break;
+            }
+            if (hinted.contains(c)) {
+                continue;
+            }
+            final String name = nameOf(c);
+            if (name == null) {
+                continue;
+            }
+            evaluate(inst, c, name, stats);
+        }
+        CaptureBudget.diag(phase + ": matched=" + stats.matched + " wove=" + stats.wove
+                + " (whitelist=" + stats.whitelist + " interface=" + stats.matched + ")"
+                + " scan=" + stats.candidates + (stats.limitHit ? "+limit(" + stats.limit + ")" : "")
+                + " total=" + loaded.length
+                + " skipped=" + stats.skipped + " failed=" + stats.failed
+                + (stats.failures.length() > 0 ? " [" + stats.failures.toString().trim() + "]" : "")
+                + (CaptureBudget.killed() ? " KILLED(" + CaptureBudget.killReason() + ")" : ""));
+    }
+
+    /** 单类名（异常即视为「该类不可判定」，不占预算也不中断整轮）。 */
+    private static String nameOf(Class<?> c) {
+        try {
+            return c == null ? null : c.getName();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 单个候选类的判定 + 织入（券 01/09 原逻辑，拆出来供两轮扫描共用）。
+     *
+     * <p>预算检查放在**做完零成本排除之后**：被排除的类既不做接口判定也不占
+     * {@code catchAllScanLimit}，这正是券 E 要的语义。
+     */
+    private static void evaluate(Instrumentation inst, Class<?> c, String name, PassStats stats) {
+        try {
+            if (isWhitelisted(name)) {
+                stats.whitelist++;
+                return;
+            }
+            if (excludedName(name)) {
+                return;
+            }
+            if (cheapExcluded(c)) {
+                return;
+            }
+            if (stats.candidates >= stats.limit) {
+                stats.limitHit = true;
+                stats.stop = true;
+                return;
+            }
+            stats.candidates++;
+            final StatementWeaver.Kind[] spec = interfaceSpecOf(c);
+            if (spec == null) {
+                return;
+            }
+            // 券 D：接口命中但不在白名单——记下类名（有界），心跳带出给 IDE
+            CaptureBudget.noteUnregisteredDriver(name);
+            // 周期补挂去重：同一 Class 只处理一次（失败也不重试——失败形态是稳定的）
+            if (!PROCESSED.add(c)) {
+                return;
+            }
+            stats.matched++;
+            CaptureBudget.noteInterfaceMatched();
+            ACCEPTED.put(name, spec);
+            if (!inst.isModifiableClass(c)) {
+                stats.skipped++;
+                CaptureBudget.noteInterfaceSkipped();
+                return;
+            }
+            inst.retransformClasses(c);
+            stats.wove++;
+            CaptureBudget.noteInterfaceWoven();
+            CaptureBudget.noteCatchAllSuccess();
+        } catch (Throwable t) {
+            stats.failed++;
+            CaptureBudget.noteInterfaceFailed();
+            CaptureBudget.noteCatchAllFailure(name + "=" + t.getClass().getSimpleName());
+            if (stats.failures.length() < 400) {
+                stats.failures.append(name).append('=').append(t.getClass().getSimpleName()).append(' ');
             }
         }
-        CaptureBudget.diag(phase + ": matched=" + matched + " wove=" + wove
-                + " (whitelist=" + whitelist + " interface=" + matched + ")"
-                + " scan=" + scanned + (limitHit ? "+limit(" + limit + ")" : "")
-                + " skipped=" + skipped + " failed=" + failed
-                + (failures.length() > 0 ? " [" + failures.toString().trim() + "]" : "")
-                + (CaptureBudget.killed() ? " KILLED(" + CaptureBudget.killReason() + ")" : ""));
+        if (CaptureBudget.killed()) {
+            stats.stop = true;
+        }
+    }
+
+    /**
+     * 单轮扫描读数（券 E 把预算语义改成「候选类计数」后，limit 与累计计数都挂在这里）。
+     *
+     * <p>刻意用可变对象而不是局部基本型：两轮扫描共用同一份账，且 {@code limitHit} 一旦置真
+     * 就必须让两轮都停（预算是整轮的约束，不是某一轮的）。
+     */
+    private static final class PassStats {
+        final int limit;
+        int candidates;
+        int whitelist;
+        int matched;
+        int wove;
+        int skipped;
+        int failed;
+        boolean limitHit;
+        boolean stop;
+        final StringBuilder failures = new StringBuilder();
+
+        PassStats(int limit) {
+            this.limit = limit;
+        }
     }
 
     /** 白名单谓词（零 ASM；与 {@code AgentMain} 名单轮同一判定口径）。 */
@@ -367,11 +534,12 @@ final class CatchAllMatcher {
                 || DriverRegistry.isPrepareWeavable(dotted);
     }
 
-    /** 仅测试用：清空接受表与已处理集合。 */
+    /** 仅测试用：清空接受表、已处理集合与补挂线程记录。 */
     static void resetForTest() {
         ACCEPTED.clear();
         synchronized (PROCESSED) {
             PROCESSED.clear();
         }
+        lastDeferredThread = null;
     }
 }

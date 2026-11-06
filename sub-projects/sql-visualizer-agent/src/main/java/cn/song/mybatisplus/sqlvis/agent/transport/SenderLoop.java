@@ -368,6 +368,11 @@ final class SenderLoop implements Runnable {
      * major 版本闸挡下的类数，{@code catchAll} 为兜底状态（0=只白名单，1=transformer 兜底开，
      * 2=已熔断）。键序固定、无空格——与 CONFIG ACK body 同一书写纪律。
      *
+     * <p>T-IbatisPanwei 券 D 追加 {@code unreg}：接口命中但不在驱动白名单的**类名**（逗号分隔、
+     * 有界 8 个、恒出现，无则空串）。它是「下一个未知驱动是谁」的取证出口——磐维现场就是靠人工
+     * 猜包名才走到白名单漏登记这一步。字符串值而非数组：IDE 侧沿用宽容扫描（不解析 JSON），
+     * 旧版 agent 的 body 没有该键时 IDE 侧零行为变化。
+     *
      * <p>任何异常回落 {@code "{}"}：心跳是 IDE 侧在线判定的唯一凭据，诊断字段的失败绝不能让
      * 心跳帧本身丢掉。
      */
@@ -387,9 +392,50 @@ final class SenderLoop implements Runnable {
                     + ",\"skippedByVersion\":"
                     + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.skippedByVersionCount()
                     + ",\"catchAll\":" + catchAllState()
+                    // T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界、逗号分隔、只类名）。
+                    // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
+                    // 不能靠缺键表达「本次没有未登记实现」。
+                    + ",\"unreg\":\"" + unregisteredDriversCsv() + "\""
                     + "}";
         } catch (Throwable t) {
             return "{}";
+        }
+    }
+
+    /**
+     * 未登记 JDBC 实现类名（逗号分隔；无则空串）。逐项做 JSON 最小转义（`"` 与 `\`）——
+     * 类名本身不含这两字符，但心跳 body 是**跨侧字面契约**，宁可在写入侧守一次。
+     */
+    static String unregisteredDriversCsv() {
+        try {
+            final java.util.List<String> names =
+                    cn.song.mybatisplus.sqlvis.agent.CaptureBudget.unregisteredDrivers();
+            if (names == null || names.isEmpty()) {
+                return "";
+            }
+            final StringBuilder sb = new StringBuilder(160);
+            for (int i = 0; i < names.size(); i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                appendJsonEscaped(sb, names.get(i));
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static void appendJsonEscaped(StringBuilder sb, String raw) {
+        if (raw == null) {
+            return;
+        }
+        for (int i = 0; i < raw.length(); i++) {
+            final char c = raw.charAt(i);
+            if (c == '"' || c == '\\') {
+                sb.append('\\');
+            }
+            sb.append(c);
         }
     }
 
