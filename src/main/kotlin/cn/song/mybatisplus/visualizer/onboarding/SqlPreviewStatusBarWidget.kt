@@ -124,13 +124,6 @@ class SqlPreviewStatusBarWidget(private val project: Project) : StatusBarWidget,
         scheduleNextRefresh()
     }
 
-    private fun openLogPanel() {
-        if (project.isDisposed) return
-        runCatching {
-            ToolWindowManager.getInstance(project).getToolWindow(SqlLogManager.TOOL_WINDOW_ID)?.show()
-        }
-    }
-
     /**
      * F-10：点击处理（内部缝，返回本次点击将弹出的菜单项供测试观察——摘除菜单构建即空集，
      * 测试恰红）。EDT 调用；弹出位置由 [e] 的组件决定。
