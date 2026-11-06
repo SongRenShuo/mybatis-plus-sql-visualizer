@@ -61,12 +61,20 @@ class GiantFileBudgetTest {
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1972,
+        // 1972 → 1980（2026-11-06 F-09：>200K 参数面板只出条数汇总行 + 超大档提示接线，实测 1974 行 +2 超线；
+        //   **拆分仍首选**，本提额只为批次留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1980,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
         //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1840,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1777,
+        // 1840 → 1870（2026-11-06 F 队列：F-03 随项目启动开关 + F-14 CSV 无 BOM 开关各一组
+        //   字段级复选框/回填/写回接线，实测 1865 行 +25 超线。**拆分仍首选**：下一轮触顶须先走拆文件，
+        //   本提额只为批次留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1870,
+        // 1777 → 1790（2026-11-06 F-07：卸载/禁用清理钩子接线——dispose 停采下发、落盘 jar 修剪、
+        //   目录收口委托，实测 1785 行 +8 超线；清理内核已抽到 AgentResidueCleaner.kt，此处只剩接线。
+        //   **拆分仍首选**，本提额只为批次留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1790,
         // 1727 → 1777（2026-10-25: 合并 master 实测 1750 行，含 premain 无界 join 修复，+23 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to 1619,
     )

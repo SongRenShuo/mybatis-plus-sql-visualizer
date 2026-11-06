@@ -6,14 +6,14 @@ import com.intellij.codeInspection.LocalInspectionEP
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
- * NEW-26 五条 inspection 的**注册形态**平台测试。
+ * 编辑器内 SQL 检查（NEW-26 五条 + F-02 三条）的**注册形态**平台测试。
  *
  * 为什么必须有它：`<localInspection>` 属性写错时平台**不报错**，检查只是静默不出现在设置树里
  * （`BannedApiRuleSerializationTest` 已为第一条踩过这个坑）。这里逐条验：
  *  - EP 存在、`instantiateTool()` 得到预期实现类；
  *  - 显示名/分组名解析成 bundle 文案（不是键原文）；
  *  - `shortName` 与 `SqlInspectionRule.shortName` 同值（`@SuppressWarnings` / XML suppress id 靠它）；
- *  - `language=""`（空串 = 全语言）——五条规则同时覆盖 mapper XML 与 Java 注解 SQL。写成 `XML`
+ *  - `language=""`（空串 = 全语言）——各条同时覆盖 mapper XML 与 Java 注解 SQL。写成 `XML`
  *    则注解 SQL 一侧永不运行；写成 `"any"` 更糟：平台把它当**语言 ID 字面量**去找
  *    `Language.findLanguageByID("any")`（结果 null），`LocalInspectionsPass` 按语言分桶时
  *    整条检查被跳过——实测「EP 内建实例能跑、`myFixture.enableInspections` 跑不出来」就是它。
@@ -32,6 +32,10 @@ class SqlInspectionRegistrationTest : BasePlatformTestCase() {
             SqlInspectionRule.RESULT_MAP_PROPERTY to ResultMapPropertyInspection::class.java,
             SqlInspectionRule.DIALECT_QUOTE to DialectQuoteInspection::class.java,
             SqlInspectionRule.OGNL_TAUTOLOGY to OgnlTautologyInspection::class.java,
+            // F-02 参数可解析性三规则（默认关闭，注册形态与五条首批同验）
+            SqlInspectionRule.PARAM_PROPERTY to ParamPropertyInspection::class.java,
+            SqlInspectionRule.PARAM_REFERENCE to ParamReferenceInspection::class.java,
+            SqlInspectionRule.MISSING_SQL_FRAGMENT to MissingSqlFragmentInspection::class.java,
         )
         for ((rule, clazz) in expected) {
             val ep = epOf(rule) ?: error("plugin.xml 未注册 ${rule.shortName}")
@@ -97,11 +101,25 @@ class SqlInspectionRegistrationTest : BasePlatformTestCase() {
                 SqlInspectionRule.RESULT_MAP_PROPERTY -> ResultMapPropertyInspection()
                 SqlInspectionRule.DIALECT_QUOTE -> DialectQuoteInspection()
                 SqlInspectionRule.OGNL_TAUTOLOGY -> OgnlTautologyInspection()
+                SqlInspectionRule.PARAM_PROPERTY -> ParamPropertyInspection()
+                SqlInspectionRule.PARAM_REFERENCE -> ParamReferenceInspection()
+                SqlInspectionRule.MISSING_SQL_FRAGMENT -> MissingSqlFragmentInspection()
             }
             assertEquals(
                 "${rule.shortName}：getShortName 必须与 plugin.xml shortName 同值（suppress id 靠它）",
                 rule.shortName,
                 tool.shortName,
+            )
+        }
+    }
+
+    /** F-02 三条新规则默认关闭（误报 0 才允许默认开——索引盲区残余风险未清零前先 disabledByDefault）。 */
+    fun testF02三规则默认关闭() {
+        for (rule in setOf(SqlInspectionRule.PARAM_PROPERTY, SqlInspectionRule.PARAM_REFERENCE, SqlInspectionRule.MISSING_SQL_FRAGMENT)) {
+            val ep = epOf(rule) ?: error("plugin.xml 未注册 ${rule.shortName}")
+            assertTrue(
+                "${rule.shortName} 须 enabledByDefault=false（0 误报口径未满，见 plugin.xml 注释）",
+                !rule.enabledByDefault && !ep.enabledByDefault,
             )
         }
     }

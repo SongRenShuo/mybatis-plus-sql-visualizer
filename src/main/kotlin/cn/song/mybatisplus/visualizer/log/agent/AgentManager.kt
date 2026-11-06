@@ -1252,13 +1252,16 @@ class AgentManager(private val project: Project) : Disposable {
             target
         }.getOrNull()
         if (extracted != null) cachedPremainAgentJar = extracted
-        return extracted
+        return extracted?.also {
+            // F-07：当前构建产物落位后顺带修剪同目录的陈旧 CRC 名 jar（旧构建残留）——
+            // 只删「不是现在这份」的本族文件，attach/premain 零影响；宁漏删不误删口径见清理器 KDoc。
+            val pruned = AgentResidueCleaner.pruneStalePremainJars(it.parentFile, it.name)
+            if (pruned > 0) LOG.info("extractPremainAgentJar: 修剪陈旧 premain jar $pruned 个（旧构建产物）")
+        }
     }
 
-    /** premain jar 目录根：插件临时目录优先（平台 API 在 headless 测试环境可能未初始化，故带回退）。 */
-    private fun premainAgentDir(): File = runCatching {
-        File(com.intellij.openapi.application.PathManager.getPluginTempPath())
-    }.getOrElse { File(System.getProperty("java.io.tmpdir") ?: ".") }
+    /** premain jar 目录根：收口到 [AgentResidueCleaner.premainAgentDir]（落盘与清理同一来源）。 */
+    private fun premainAgentDir(): File = AgentResidueCleaner.premainAgentDir()
 
     // ---------- 会话/在线态 ----------
 
@@ -1738,6 +1741,9 @@ class AgentManager(private val project: Project) : Disposable {
 
     override fun dispose() {
         runCatching {
+            // F-07：收口前 best-effort 下发停采指令——插件禁用/卸载时本方法同样被调（插件容器
+            // 级联释放项目服务），先让应用侧尽早停止上报，再关闭连接（发不出也不阻塞收口）。
+            sessions.forEach { runCatching { it.sendConfig(disabled = true) } }
             sessions.forEach { it.close() }
             sessions.clear()
             // T-PS5-04：项目销毁 → 推断 URL 条目清除（不引入跨项目残留）
@@ -1753,7 +1759,27 @@ class AgentManager(private val project: Project) : Disposable {
             // T-CaptureCatchAll 券02/03：项目销毁 → 活性回落状态与 attach 覆盖计数一并清空
             CaptureActivityFallback.reset()
             AgentAttachReport.reset()
+            // F-07：宿主侧磁盘残留清理——attach 随机临时 jar 本会话私有，直接删；premain 目录
+            // （CRC 名共享缓存）仅当没有其他已创建 AgentManager 的项目在场时清（最后一个持有者动手，
+            // 防他项目正在准备 -javaagent 注入时文件被抽走）。普通项目关闭即窄口径（attach jar），
+            // 插件卸载/禁用=全项目服务级联 dispose，末次 dispose 命中宽口径（premain 目录一并清）。
+            AgentResidueCleaner.cleanupAttachTempJar(cachedAgentJar)
+            cachedAgentJar = null
+            if (!otherProjectsHoldAgentManager()) {
+                val removed = AgentResidueCleaner.cleanupPremainResidue(File(AgentResidueCleaner.premainAgentDir(), AgentResidueCleaner.PREMAIN_DIR_NAME))
+                if (removed > 0) LOG.info("dispose: premain 残留清理完成（删除 $removed 个文件；本服务是最后一个持有者）")
+                cachedPremainAgentJar = null
+            }
         }
     }
+
+    /**
+     * F-07：是否还有**其他**打开项目已创建 AgentManager 服务（premain 目录清理闸）。
+     * 服务未创建 = 该项目从未用过增强捕获 = 不持有共享 jar；查询失败按「有」处理（宁漏删不误删）。
+     */
+    private fun otherProjectsHoldAgentManager(): Boolean = runCatching {
+        val pm = com.intellij.openapi.project.ProjectManager.getInstanceIfCreated() ?: return@runCatching false
+        pm.openProjects.any { other -> other != project && runCatching { other.getServiceIfCreated(AgentManager::class.java) }.getOrNull() != null }
+    }.getOrDefault(true)
 }
 

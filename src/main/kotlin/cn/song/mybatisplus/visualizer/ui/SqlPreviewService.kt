@@ -1652,6 +1652,7 @@ class SqlPreviewService(internal val project: Project) {
                     tableName = result.tableName ?: "",
                     executionTimeMs = executionTimeMs,
                     projectIdentity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath),
+                    projectName = project.name, // F-08：项目显示名随条目落库（过滤/展示用）
                     originScopeKey = originScopeKey,
                 ),
             ).id

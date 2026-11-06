@@ -483,7 +483,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         historySnapshotFallbackSource?.let { return it(key) }
         if (ApplicationManager.getApplication().isUnitTestMode) return null
         return runCatching {
-            SqlHistoryManager.getInstance().newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
+            // F-08：按本项目收窄回落面（双项目并发同表名/同 SQL 不串参数快照）；
+            // 项目身份解析失败（非文件型项目等）回落不过滤，行为同旧版。
+            val identity = runCatching {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath)
+            }.getOrDefault("")
+            if (identity.isBlank()) {
+                SqlHistoryManager.getInstance()
+                    .newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
+            } else {
+                SqlHistoryManager.getInstance()
+                    .newestParamSnapshotForProject(identity) { entry ->
+                        this@historySnapshotFallback.matchesSnapshotKey(entry, key)
+                    }
+            }
         }.getOrNull()
     }
 
@@ -514,10 +527,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         historySnapshotSink?.invoke(key, snapshot)
         if (ApplicationManager.getApplication().isUnitTestMode) return
         runCatching {
-            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
-                { entry -> matchesSnapshotKey(entry, key) },
-                snapshot,
-            )
+            // F-08：项目收窄版回写（快照只落本项目条目）；身份解析失败回落不过滤（行为同旧版）
+            val identity = runCatching {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath)
+            }.getOrDefault("")
+            val manager = SqlHistoryManager.getInstance()
+            if (identity.isBlank()) {
+                manager.updateNewestParamSnapshot({ entry -> matchesSnapshotKey(entry, key) }, snapshot)
+            } else {
+                manager.updateNewestParamSnapshotForProject(identity, { entry -> matchesSnapshotKey(entry, key) }, snapshot)
+            }
         }
     }
 

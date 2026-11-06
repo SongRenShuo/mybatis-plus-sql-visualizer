@@ -932,6 +932,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      */
     internal fun buildSqlContextMenu(entry: LogSqlEntry, selectedEntries: List<LogSqlEntry>): DefaultActionGroup {
         val group = DefaultActionGroup()
+        // F-12（DBX #316）：一键重跑——把该条目原样送回既有执行链（三态均可；不可解析给明确提示）
+        group.add(RerunSqlAction(entry))
         group.add(CopySqlAction(selectedEntries))
         // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰，
         // 置灰逻辑在 CopyTimestampAction.update）
@@ -996,6 +998,22 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT/SQL，后台写盘） ----------
+
+    /**
+     * F-12（DBX #316）：一键重跑——把被右键条目原样送回既有执行链
+     * （[HistorySqlRerunner]：SQL/参数逐字段同源，不可解析在通知里说明，不弹窗不写盘）。
+     */
+    private inner class RerunSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.rerun")
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.rerun.tip")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            HistorySqlRerunner.rerun(project, entry)
+        }
+    }
 
     private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
@@ -1101,6 +1119,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                         PluginSettings.getInstance().displayMaskExportOn(),
                         PluginSettings.getInstance().displayMaskAllowList(),
                     ),
+                    // F-14（DBX #318）：CSV 导出默认带 UTF-8 BOM（Excel 直开不乱码）；设置省略则不带。
+                    SqlExportService.bomFor(format, PluginSettings.getInstance().csvExportNoBom()),
                 )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()

@@ -284,6 +284,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
     /**
+     * F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（默认不勾 = 带 BOM，Excel 直开不乱码）。
+     * 历史/日志与可移植两条 CSV 导出链共用此开关。
+     */
+    internal val csvExportNoBomCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.csv.export.noBom"))
+
+    /**
      * R60（T-LaneB D96）→ T-MagpieGems W2：展示/导出链脱敏动作分级下拉
      * （关闭/打码/警示/阻断；默认关闭=既有默认观感不变）。行标签复用 settings.display.mask
      * 键（搜索索引既有条目即本控件的可搜索身份，防「跳了不亮」幽灵条目）。
@@ -639,6 +645,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logMixedPrefixCheck = JBCheckBox()
     internal val logAutoCaptureCheck = JBCheckBox()
     internal val logAutoOpenCheck = JBCheckBox()
+
+    /** F-03：项目打开即自动显示 SQL 日志工具窗并进入记录态（默认关）。 */
+    internal val logToolWindowAutoShowCheck = JBCheckBox()
     internal val logStopOnToolWindowCloseCheck = JBCheckBox()
     internal val logTimestampCheck = JBCheckBox()
     internal val logTimestampFormatField = JBTextField(12)
@@ -1312,6 +1321,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
             || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
+            // F-03：工具窗随项目启动开关
+            || logToolWindowAutoShowCheck.isSelected != s.logToolWindowAutoShowOnStart
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
@@ -1333,6 +1344,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // （与访问器归一后的有效值比，防空哨兵未迁移态造成常驻假「已修改」）
             || selectedDisplayMaskMode() != PluginSettings.getInstance().displayMaskMode().name
             || displayMaskAllowListArea.text.trim() != s.displayMaskAllowList.trim()
+            // F-14（DBX #318）：CSV 导出 BOM 开关改动判定
+            || csvExportNoBomCheck.isSelected != s.csvExportNoBom
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1445,6 +1458,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logMixedPrefix = logMixedPrefixCheck.isSelected
             s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
             s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+            s.logToolWindowAutoShowOnStart = logToolWindowAutoShowCheck.isSelected // F-03
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
@@ -1471,6 +1485,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.displayMaskMode = maskMode
             s.displayMaskAllowList = displayMaskAllowListArea.text.trim()
             s.displayMaskEnabled = maskMode != "OFF"
+            // F-14（DBX #318）：CSV 导出 BOM 开关写回
+            s.csvExportNoBom = csvExportNoBomCheck.isSelected
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1651,6 +1667,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMixedPrefixCheck.isSelected = s.logMixedPrefix
             logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
             logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+            logToolWindowAutoShowCheck.isSelected = s.logToolWindowAutoShowOnStart // F-03
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat
@@ -1677,6 +1694,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 .indexOfFirst { it.value == PluginSettings.getInstance().displayMaskMode().name }
                 .coerceAtLeast(0)
             displayMaskAllowListArea.text = s.displayMaskAllowList
+            // F-14（DBX #318）：CSV 导出 BOM 开关回填
+            csvExportNoBomCheck.isSelected = s.csvExportNoBom
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

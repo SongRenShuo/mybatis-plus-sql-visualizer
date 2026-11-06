@@ -73,6 +73,8 @@ object SettingsScenarioGroups {
             "showMethodInLogList",
             // 看之前的保护：展示层脱敏（含旧布尔迁移源）
             "displayMaskEnabled",
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM（导出文件形态，随历史/日志导出链）
+            "csvExportNoBom",
             // 引导与日常维护
             "onboardingAnchorTipEnabled", "onboardingAnchorTipShown", "sqlListPreviewHintSeen",
             "autoCheckUpdate",
@@ -96,6 +98,8 @@ object SettingsScenarioGroups {
             // 捕获行为
             "logMixedPrefix", "logAutoCaptureOnStart", "logAutoCaptureSuppressed",
             "logStopOnToolWindowClose", "logAutoOpenOnCapture", "logAutoSaveEnabled",
+            // F-03：工具窗随项目启动（自动显示 + 进入记录态）
+            "logToolWindowAutoShowOnStart",
             // 日志框架门
             "logHibernateEnabled", "logJdbcEnabled", "logShardingSphereEnabled",
             // 恢复与兜底

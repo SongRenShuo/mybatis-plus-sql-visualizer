@@ -309,6 +309,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
         var logAutoOpenOnCapture: Boolean = true,
 
+        /**
+         * F-03 工具窗常驻与随项目启动（默认关）：项目打开即自动显示 SQL 日志工具窗并进入记录态。
+         * 由 [cn.song.mybatisplus.visualizer.log.LogStartupCapture]（postStartupActivity，懒启动——
+         * 关闭时项目打开零动作、不创建面板）承接；项目关闭随服务销毁停转，show/startCapture 均幂等
+         * 不重复挂载。用户显式停止过自动监听（logAutoCaptureSuppressed）时不强制进入记录态，
+         * 只开窗口（同既有「已显式停止」语义）。
+         */
+        var logToolWindowAutoShowOnStart: Boolean = false,
+
         /** 列表条目显示捕获时间戳（默认开）。 */
         var logTimestampEnabled: Boolean = true,
 
@@ -700,6 +709,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var displayMaskAllowList: String = "",
 
         /**
+         * F-14（DBX #318）：CSV 导出省略 UTF-8 BOM（**默认 false = 带 BOM**）。
+         *
+         * BOM 让 Excel 直接识别 UTF-8（中文不乱码），是导出默认；管程/脚本管道（awk、
+         * 逐字节拼接等）吃 BOM 会多出 3 字节脏字符，勾选后历史/日志与可移植两条 CSV 导出链
+         * 均省略。TSV/TXT/SQL/MD 等其它格式不受本开关影响（一律无 BOM）。
+         */
+        var csvExportNoBom: Boolean = false,
+
+        /**
          * R60（T-LaneB D96/D97）：MCP 输出面脱敏开关（sqlv_render_logs 还原语句打码；
          * **默认关**——脱敏降低 AI 诊断价值，承审计册口径「默认不脱并在工具描述里声明」）。
          * 与 [displayMaskEnabled] 分离：MCP 消费方是 agent（可另选口径），UI 展示面是本机用户。
@@ -834,6 +852,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
      * mode != OFF 一律按 MASK 打码（WARN 不给原文离开产品）。
      */
     fun displayMaskExportOn(): Boolean = displayMaskMode() != cn.song.mybatisplus.visualizer.util.DisplayMasker.MaskMode.OFF
+
+    /** F-14（DBX #318）：CSV 导出是否省略 UTF-8 BOM（默认 false = 带 BOM，Excel 直开不乱码）。 */
+    fun csvExportNoBom(): Boolean = state.csvExportNoBom
 
     companion object {
         const val DEFAULT_DIALECT = "MySQL"

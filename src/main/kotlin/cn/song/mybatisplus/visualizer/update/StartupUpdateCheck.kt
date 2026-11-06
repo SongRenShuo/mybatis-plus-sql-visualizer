@@ -29,6 +29,10 @@ import com.intellij.util.ui.RestartDialogImpl
 class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // F-11：上游 MyBatis 版本监听（独立于插件自更新开关——它看的是项目依赖面而不是本插件
+        // 版本；自身有每项目一次守卫 + 无变化静默，见 UpstreamVersionMonitor）。放在自动检查
+        // 开关判定之前，保证 autoCheckUpdate 关着时版本变化仍可见。
+        runCatching { UpstreamVersionMonitor.checkOnce(project) }
         val settings = PluginSettings.getInstance()
         if (!shouldStartupCheck(settings.state.autoCheckUpdate, alreadyChecked)) return
         alreadyChecked = true

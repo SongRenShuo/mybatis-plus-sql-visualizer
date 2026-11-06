@@ -211,4 +211,45 @@ class SqlExportServiceTest {
             SqlExportService.defaultSqlExportFileName().matches(Regex("sql-export-\\d{8}-\\d{6}\\.sql")),
         )
     }
+
+    // ------------------------------------------------------------------
+    // F-14（DBX #318）：CSV 导出 BOM——默认带、设置省略、其余格式永不带
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testBomFor_CSV默认带_设置省略_其余格式永不带() {
+        // 默认（无 BOM 开关未勾）CSV 带 BOM；勾选 csvExportNoBom 后省略
+        assertTrue(SqlExportService.bomFor(SqlExportFormat.CSV, csvNoBomSetting = false))
+        assertFalse(SqlExportService.bomFor(SqlExportFormat.CSV, csvNoBomSetting = true))
+        // TSV/TXT/SQL 与设置无关，一律不带（BOM 是 CSV/Excel 语义）
+        for (format in listOf(SqlExportFormat.TSV, SqlExportFormat.TXT, SqlExportFormat.SQL)) {
+            assertFalse("$format 不应带 BOM", SqlExportService.bomFor(format, csvNoBomSetting = false))
+            assertFalse("$format 不应带 BOM", SqlExportService.bomFor(format, csvNoBomSetting = true))
+        }
+    }
+
+    @Test
+    fun testExportToFile_字节级BOM在不在() {
+        val content = "time,source,duration_ms,sql\n"
+        val dir = java.nio.file.Files.createTempDirectory("mpsv-f14-bom")
+        val withBom = dir.resolve("with.csv").toFile()
+        val noBom = dir.resolve("without.csv").toFile()
+        try {
+            SqlExportService.exportToFile(withBom, content, bom = true)
+            SqlExportService.exportToFile(noBom, content, bom = false)
+            // 字节级对照：带 BOM 文件前 3 字节 = EF BB BF，其后与原文逐字节一致
+            val withBytes = withBom.readBytes()
+            assertEquals(0xEF.toByte(), withBytes[0])
+            assertEquals(0xBB.toByte(), withBytes[1])
+            assertEquals(0xBF.toByte(), withBytes[2])
+            assertEquals(content, String(withBytes, 3, withBytes.size - 3, Charsets.UTF_8))
+            // 无 BOM 文件 = 原文 UTF-8 逐字节一致（旧形态不变）
+            val noBytes = noBom.readBytes()
+            assertEquals(content.toByteArray(Charsets.UTF_8).toList(), noBytes.toList())
+        } finally {
+            withBom.delete()
+            noBom.delete()
+            java.nio.file.Files.deleteIfExists(dir)
+        }
+    }
 }

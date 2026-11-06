@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,6 +14,8 @@ import org.junit.Test
  *  - suppressed=false, autoStart=true, hasOpenProject=true → 启动
  *  - suppressed=false, autoStart=false, hasOpenProject=true → 不启动
  *  - suppressed=false, autoStart=false, hasOpenProject=false → 不启动
+ *
+ * F-03：工具窗随项目启动动作档（decideStartupToolWindowAction 纯函数）条件矩阵同测。
  *
  * 纯函数测试，不需要 PSI 环境。
  */
@@ -68,6 +71,37 @@ class LogStartupCaptureTest {
         assertFalse(
             "hasOpenProject=false 时应不启动",
             LogStartupCapture.shouldStartCapture(suppressed = false, autoStart = true, hasOpenProject = false),
+        )
+    }
+
+    // ---------- F-03：工具窗随项目启动动作档 ----------
+
+    @Test
+    fun `F03_开关关闭时项目打开零动作`() {
+        // autoShow=false → NONE（懒启动：不开窗、不进记录态；autoCapture 的既有链路另行承接）
+        assertEquals(
+            StartupToolWindowAction.NONE,
+            LogStartupCapture.decideStartupToolWindowAction(autoShow = false, suppressed = false),
+        )
+        assertEquals(
+            StartupToolWindowAction.NONE,
+            LogStartupCapture.decideStartupToolWindowAction(autoShow = false, suppressed = true),
+        )
+    }
+
+    @Test
+    fun `F03_开关开启未抑制时显示并进入记录态`() {
+        assertEquals(
+            StartupToolWindowAction.SHOW_AND_CAPTURE,
+            LogStartupCapture.decideStartupToolWindowAction(autoShow = true, suppressed = false),
+        )
+    }
+
+    @Test
+    fun `F03_用户显式停止过时只开窗不强制记录态`() {
+        assertEquals(
+            StartupToolWindowAction.SHOW_ONLY,
+            LogStartupCapture.decideStartupToolWindowAction(autoShow = true, suppressed = true),
         )
     }
 }

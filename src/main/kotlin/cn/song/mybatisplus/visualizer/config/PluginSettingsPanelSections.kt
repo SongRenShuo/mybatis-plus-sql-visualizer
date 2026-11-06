@@ -372,6 +372,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             })
             addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
             addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+            // F-03：工具窗常驻与随项目启动（默认关）
+            addRow(p, g, "", logToolWindowAutoShowCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.autoShowToolWindow")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoShowToolWindow.tip")
+            })
             addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
             addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
@@ -640,11 +645,38 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 },
                 fill = GridBagConstraints.HORIZONTAL,
             )
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（默认不勾 = 带 BOM；与脱敏同属
+            // 「文本怎么出去」的导出形态组）。字段级实例随 rebuild 复用——text 须在此随语言
+            // 显式刷新（同 logFormatSqlCheck 口径；否则切 EN 后残留 zh 文案，PersistenceTest 真红实证）。
+            addRow(p, g, "", csvExportNoBomCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.csv.export.noBom")
+                toolTipText = MpSqlVisualizerBundle.message("settings.csv.export.noBom.tip")
+            })
             // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
             })
             addRow(p, g, "", enhancedStatusLabel)
+            // F-07：卸载/禁用清理边界说明（用户可见口径——不可清理面如实告知，不留糊弄话）
+            g.gridx = 0
+            g.gridwidth = 2
+            g.weightx = 1.0
+            g.fill = GridBagConstraints.HORIZONTAL
+            p.add(
+                JPanel(BorderLayout()).apply {
+                    isOpaque = false
+                    add(
+                        JBLabel(
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.agent.residue.hint")),
+                        ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
+                        BorderLayout.CENTER,
+                    )
+                },
+                g,
+            )
+            g.gridwidth = 1
+            g.fill = GridBagConstraints.NONE
+            g.gridy++
             // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
             frameSkipPrefixesField.apply {
                 text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
