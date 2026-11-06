@@ -656,13 +656,15 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 | 16:27 | 首次定向（实现前，作「先红」基线） | 构建**未到测试阶段**：Gradle daemon 被系统内存耗尽打死（`hs_err_pid50316.log`：`There is insufficient memory … Native memory allocation (malloc) failed to allocate 1478592 bytes. Error detail: Chunk::new`）。**无任何测试读数** |
 | 16:30~16:54 | 复跑窗口探测 | `parallel_tasks.py check` 全程显示 2 个他人活跃构建（`t-release-beta2` 主仓发行批、期间还有 `cr-wt-i18n` 另一仓）；`\Memory\Available MBytes` 0~3.2GB、`Committed 73810 / Commit Limit 76465 MB`（96.5%）→ 按派活纪律「已有 2 个活跃构建则不构建」未跑 |
 | 16:58 | 隔离 daemon 复跑（`-Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"`，避免与共享 daemon 同生共死，`--console=plain`，日志落系统临时目录） | **配置期失败，零编译零测试**：`The contents of the immutable workspace 'C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb' have been modified … The modification might have been caused by an external process`——共享 transform 工作区（`ideaIU-2024.3.7.1-win`）被并发构建改动 |
-| 17:00 | 原样重试 | **配置期失败，零编译零测试**：Gradle 试图重建该工作区而 `Unable to delete directory … Failed to delete some children. This might happen because a process has files open or has its working directory set in the target directory`（`ideaIU-2024.3.7.1-win\lib\*.jar` 被占用）；同次日志首行 `Starting a Gradle Daemon, 7 busy … Daemons could not be reused`——机器上有 7 个 daemon 在跑 |
+| 17:00 / 17:07 | 原样重试两次（其间登记表只剩 1 个他人构建，闸门已开） | **同样配置期失败，零编译零测试**：Gradle 试图重建该工作区而 `Unable to delete directory … Failed to delete some children. This might happen because a process has files open or has its working directory set in the target directory`（`ideaIU-2024.3.7.1-win\lib\*.jar` 被占用，18s 失败）；同次日志首行 `Starting a Gradle Daemon, 7 busy … Daemons could not be reused`——机器上有 7 个 daemon 在跑 |
 
 两次失败都发生在**依赖解析/配置期**，与本券代码无关：共享 transform 工作区被并发会话占用而无法重建。**本会话不能自救**——清 `caches\9.7.0\transforms\cfd…` 会打断正在用它的构建（他人发行批），按纪律禁做。
 
 交主控复跑的前提与命令：
 
 1. 等 `parallel_tasks.py check` 空窗，且该 transform 工作区不再被占用（若仍报 second 条错误，由主控在所有会话停手后删除 `C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb` 让其重建）。
+   - 只删这一条 transform 目录是安全的前提：**没有任何构建在跑**（否则同样的「files open」会复现）。
+   - 并入不了空窗时的备选：给本次跑一个独立 `GRADLE_USER_HOME`（`./gradlew -g <空目录> test …`）——代价是重新解包 2024.3.7.1 平台（约 1.5GB，走 gradle.properties 已配的本地代理），换来与并发会话完全隔离的 transform/缓存，不会互相删。**不要**用裸 `--stop`（会打掉他人 in-flight 构建的 daemon）。
 2. 单跑一条（勿串管道读退出码）：
 
 ```
