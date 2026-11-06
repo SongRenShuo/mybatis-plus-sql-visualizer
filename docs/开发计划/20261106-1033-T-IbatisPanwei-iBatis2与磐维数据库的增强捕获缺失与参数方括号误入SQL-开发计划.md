@@ -277,8 +277,17 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 探针：`HELLO` 2.8s 到达；`EVENT` 栈摘要命中 `org.panweidb.jdbc.PgPreparedStatement#execute:145` / `org.panweidb.jdbc.PgStatement#executeQuery:245`——**登记的三面真在产事件**（不是接口兜底）。
 - 业务事件：`GET /order/list?minAmount=100&maxAmount=300&status=1` → SQL `SELECT id,order_no,… FROM t_order WHERE (amount BETWEEN ? AND ? AND status = ?) ORDER BY create_time DESC`，参数 `[[1,"100","BigDecimal"],[2,"300","BigDecimal"],[3,"1","Integer"]]`，`url=jdbc:panweidb://103.36.220.245:25882/xc3_test`；断言 **4/0 ALL-PASS**。
 - 方言：`UrlSubprotocolDialects.dialectName(该 URL)` = `Oracle`（默认档；纯函数单测已钉，探针只负责带出 url 原材料）。
-- **已知观测（待三查，不阻塞本券）**：应用启动约 16s 后钩子不再产出（请求仍 200、心跳仍在）；关 `nestGate`、关 `catchAll` 均复现 → 与 NestGate 和 premain 兜底扫描无关，倾向「Hikari 池预热后后续 PS 的 SQL 归属取不到」（宿主 stderr 仅一条 `织入通道登记盲区 … psClass=org.panweidb.jdbc.PgPreparedStatement unresolvedCount=1`）。已记入 `dev-support/e2e-fake-ide/README.md` 已知边界。
+- **~~已知观测：启动约 16s 后静默~~ 已结案（T-AgentSilentAfter16s）**：不是采集缺陷，是 agent 的 T-07 CONFIG 看门狗（会话建立后 15s 未收到 CONFIG → 保守停采）被假 IDE 脚本触发；补 CONFIG 后四窗口全过。已让自停可见（心跳 `gate` + 告警行），详见该立项。
 - **口径**：GaussDB Kernel 503.1.0 + 磐维 V1 驱动；服务端不是磐维，**不得写「磐维真机已验证」**。
+
+**真磐维真机验收（2026-11-06 14:5x，PanWeiDB 3.4.0）**：子代理查找容器镜像后部署出真实实例（`docs/调研报告/20261106-1435-磐维PanWeiDB容器镜像搜索与真机部署-调研报告.md`）：
+
+- 镜像：Docker Hub / quay / ghcr 均无官方镜像；命中阿里云 ACR 深圳 `shine_fei/panweidb:3.4.0`（**个人命名空间重打包，非厂商官方分发**），内含 `PanWeiDB_V3.0-S3.4.0_B01` 安装包；
+- 实例：`panweidb-ora` @ `103.36.220.245:26101`（`datcompatibility=A`，`select dummy from dual` → X）、`panweidb-test` @ `:26100`（B 档）；凭据 `pwadmin` / `Panwei@2026`；DBX 已登记（`c571fb15…` / `d2ae303a…`）；台账在 `.local/test-databases.md`（不入库）；
+- demo 新增 `panwei` profile（`jdbc:panweidb://103.36.220.245:26101/panweidb`），`schema-gaussdb.sql` 在 `panweidb` 与 `postgres` 各执行一遍 **58/0**；
+- 假 IDE 四窗口（V2 驱动 `panweidb-jdbc-2.0.0.jar`）：**PASS=12 FAIL=0，ALL-PASS，41.1s**，四窗口 24/1/1/1；事件带 SQL、参数（`[[1,"100","BigDecimal"],…]`）与 `url=jdbc:panweidb://103.36.220.245:26101/panweidb`；栈来自 `org.panweidb.jdbc.PgPreparedStatement#execute`；
+- 宿主可用内存仅约 966MB（16GB / 11 个既有容器），再上实例前须先腾；镜像需三处补丁（CPU 预检、cgroup v2 的 `checkDockerEnv`、`listen_addresses` 绑死安装期 IP）才能起，报告里有逐条处置；
+- **未做**：V1 驱动连 3.4.0、方言渲染套件（`DialectDockerVerificationTest` 外部实例模式）在本实例上的跑批。
 
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
