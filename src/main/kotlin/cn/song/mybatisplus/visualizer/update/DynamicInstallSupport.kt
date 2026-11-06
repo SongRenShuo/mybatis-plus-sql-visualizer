@@ -18,12 +18,15 @@ import javax.swing.JComponent
  * 任一步不满足或失败都回退 [PlatformPluginInstaller.installRestartScript] 启动脚本路径
  * （重启生效，M28 原行为），全程无中间死态。
  *
- * 平台 API 全走反射探测（F0 javap 243 + 反编译 262 双端实证，签名与语义一致）：
+ * 平台 API 全走反射探测（243/262/263 三版 jar 实测，签名与语义已对齐；263 的入口替换见 T-DynUpdate263）：
  * - `PluginDescriptorLoader.loadDescriptorFromArtifact(Path, BuildNumber)`：从发行 zip 读新版描述（两平台 public）；
- * - `DynamicPlugins.allowLoadUnloadWithoutRestart(descriptor)`：卸载可行性预检——EP dynamic 属性
- *   （本插件注册的 EP 全部落在平台声明 `dynamic="true"` 的点位上，当前 57 个注册 0 违规；
- *   由 `DynamicEpComplianceGuardTest` 守卫，新增 EP 若落在非 dynamic 点位即红）、
- *   `ide.dynamicPluginVetoer`、依赖插件图（两平台 public）；
+ * - 卸载可行性预检按**能力族**解析（T-DynUpdate263），**旧入口优先**（243/262 与改动前逐字同路径）：
+ *   `allowLoadUnloadWithoutRestart(descriptor): Boolean`（243/262）→ 缺失时用
+ *   `validateCanUnloadWithoutRestart(descriptor): String?`（非空=不可卸载原因）或
+ *   `checkCanUnloadWithoutRestart(descriptor): Boolean`（262/263）。243 的 check 同名但返回
+ *   **String**，故解析必须连返回类型一起判，见 [resolveUnloadGate]。预检覆盖 EP dynamic 属性（本插件注册的 EP 全部落在平台声明
+ *   `dynamic="true"` 的点位上，由 `DynamicEpComplianceGuardTest` 守卫，新增 EP 若落在非 dynamic
+ *   点位即红）、`ide.dynamicPluginVetoer`、依赖插件图；
  * - `DynamicPlugins.unloadPlugin(descriptor)`：运行期卸载旧版（两平台 public，内部走 EDT write action）；
  * - `PluginInstaller.installAndLoadDynamicPlugin(Path, JComponent?, descriptor)`：解包 + 动态装载新版
  *   （两平台 public；双端反编译实证 descriptor 参数仅用于进度标题/日志/fireState，解包布局由 zip
@@ -66,7 +69,7 @@ object DynamicInstallSupport {
         // 2. 开发态守卫（runIde/测试从 build/classes 加载，卸载/替换会误删构建产物）
         PlatformPluginInstaller.devGuardOrFailure()?.let { return it }
 
-        // 3. 平台能力探测：五个反射入口任一缺失（未来版本签名漂移/裁剪发行版）即回退
+        // 3. 平台能力探测：任一入口缺失（未来版本签名漂移/裁剪发行版）即回退；缺失项全量进日志
         val api = PlatformApis.probe()
         if (api == null) {
             return fallbackToRestartScript(zip, "platform dynamic-install APIs unavailable")
@@ -79,9 +82,14 @@ object DynamicInstallSupport {
         }
 
         // 5. 卸载可行性预检：本插件注册的 EP 全部落在平台 dynamic 点位（DynamicEpComplianceGuardTest 守卫），
-        //    此处主要防 vetoer/依赖图否决
-        if (!api.allowLoadUnload(current)) {
-            return fallbackToRestartScript(zip, "dynamic unload rejected by platform (vetoer/EP/dependency)")
+        //    此处主要防 vetoer/依赖图否决；Validate 族会给出平台原话，直接进日志（T-DynUpdate263）
+        val gate = api.evaluateUnloadGate(current)
+        if (!gate.allowed) {
+            return fallbackToRestartScript(
+                zip,
+                "dynamic unload rejected by platform (family=${api.unloadGateFamily}): " +
+                    (gate.reason ?: "platform gave no reason"),
+            )
         }
 
         // 6. 新版描述（仅作 installAndLoadDynamicPlugin 的日志/状态广播参数，见类 KDoc）
@@ -191,10 +199,11 @@ object DynamicInstallSupport {
     // 平台反射门面（F0 实证的五入口；探测一次缓存，缺失整体降级）
     // ------------------------------------------------------------------
 
-    /** 五入口齐备才可用；任一缺失 = 平台签名漂移/裁剪发行版 → 整体回退脚本路径。 */
+    /** 入口齐备才可用（卸载预检按能力族，三族任一即可）；任一缺失 = 平台签名漂移/裁剪发行版 → 整体回退脚本路径。 */
     internal class PlatformApi internal constructor(
         private val dynamicPlugins: Any,
-        private val allowLoadUnloadMethod: Method,
+        /** 卸载可行性预检入口（能力族，T-DynUpdate263）。 */
+        private val unloadGate: UnloadGate,
         private val unloadPluginMethod: Method,
         /** 双参 unloadPlugin 形态时的默认 UnloadPluginOptions 实例（单参形态为 null）。 */
         private val unloadPluginOptions: Any?,
@@ -202,25 +211,24 @@ object DynamicInstallSupport {
         private val loadFromArtifactMethod: Method,
         private val findPluginMethod: Method,
     ) {
+        /** 命中的预检能力族（validate/check/legacy），供日志取证。 */
+        val unloadGateFamily: String get() = unloadGate.family.id
+
         /** 当前已装插件描述（未安装/描述缺失返回 null）。 */
         fun findPlugin(pluginId: String): Any? = runCatching {
-            invoke(findPluginMethod, null, PluginId.getId(pluginId))
+            invokePlatform(findPluginMethod, null, PluginId.getId(pluginId))
         }.getOrElse {
             LOG.warn("findPlugin reflective call failed: ${it.message}")
             null
         }
 
-        /** 卸载可行性预检（平台否决返回 false）。 */
-        fun allowLoadUnload(currentDescriptor: Any): Boolean = runCatching {
-            invoke(allowLoadUnloadMethod, dynamicPlugins, currentDescriptor) as Boolean
-        }.getOrElse {
-            LOG.warn("allowLoadUnloadWithoutRestart reflective call failed: ${it.message}")
-            false
-        }
+        /** 卸载可行性预检；[GateDecision.reason] 是平台原话（Validate 族才有，其余族为 null）。 */
+        fun evaluateUnloadGate(currentDescriptor: Any): GateDecision =
+            unloadGate.evaluate(dynamicPlugins, currentDescriptor)
 
         /** 从发行 zip 读新版描述（失败返回 null——不阻断流程，装载仍可进行）。 */
         fun loadDescriptorFromArtifact(zip: Path): Any? = runCatching {
-            invoke(loadFromArtifactMethod, null, zip, null as BuildNumber?)
+            invokePlatform(loadFromArtifactMethod, null, zip, null as BuildNumber?)
         }.getOrElse {
             LOG.warn("loadDescriptorFromArtifact reflective call failed: ${it.message}")
             null
@@ -249,7 +257,7 @@ object DynamicInstallSupport {
                     } else {
                         arrayOf(currentDescriptor)
                     }
-                    invoke(unloadPluginMethod, dynamicPlugins, *args) as Boolean
+                    invokePlatform(unloadPluginMethod, dynamicPlugins, *args) as Boolean
                 }.getOrElse {
                     LOG.warn("unloadPlugin reflective call failed: ${it.message}")
                     false
@@ -257,7 +265,7 @@ object DynamicInstallSupport {
                 LOG.info("dynamic update: old version unloaded=$unloaded")
                 if (unloaded && newDescriptor != null) {
                     installed = runCatching {
-                        invoke(installAndLoadMethod, null, zip, null as JComponent?, newDescriptor) as Boolean
+                        invokePlatform(installAndLoadMethod, null, zip, null as JComponent?, newDescriptor) as Boolean
                     }.getOrElse {
                         LOG.warn("installAndLoadDynamicPlugin reflective call failed: ${it.message}")
                         false
@@ -267,14 +275,6 @@ object DynamicInstallSupport {
             }
             return unloaded to installed
         }
-
-        /** @JvmStatic 双形态统一调用：静态方法 null receiver，实例方法传对象单例。 */
-        private fun invoke(method: Method, receiver: Any?, vararg args: Any?): Any? =
-            if (java.lang.reflect.Modifier.isStatic(method.modifiers)) {
-                method.invoke(null, *args)
-            } else {
-                method.invoke(receiver, *args)
-            }
     }
 
     // ------------------------------------------------------------------
@@ -336,7 +336,7 @@ object DynamicInstallSupport {
         @Volatile
         private var probed = false
 
-        /** 探测五入口（首次后缓存）；任一缺失返回 null。 */
+        /** 探测入口（首次后缓存）；任一缺失返回 null——缺失项全量列进日志（T-DynUpdate263）。 */
         fun probe(): PlatformApi? {
             if (probed) return cached
             synchronized(this) {
@@ -344,6 +344,7 @@ object DynamicInstallSupport {
                     cached = runCatching { buildApi() }.onFailure {
                         LOG.info("dynamic-install platform APIs unavailable: ${it.message}")
                     }.getOrNull()
+                    cached?.let { LOG.info("dynamic-install api family=${it.unloadGateFamily}") }
                     probed = true
                 }
                 return cached
@@ -359,48 +360,75 @@ object DynamicInstallSupport {
             val descriptorLoaderClass = Class.forName("com.intellij.ide.plugins.PluginDescriptorLoader", true, loader)
             val coreClass = Class.forName("com.intellij.ide.plugins.PluginManagerCore", true, loader)
 
-            fun method(clazz: Class<*>, name: String, vararg params: Class<*>): Method =
+            // 缺失项累计后一次性报：原先首个缺失即抛，用户日志里只看到一个名字（263 漂移时就只报了旧入口）
+            val missing = mutableListOf<String>()
+
+            fun method(clazz: Class<*>, name: String, vararg params: Class<*>): Method? =
                 clazz.methods.filter { it.name == name && it.parameterTypes.contentEquals(params) }
                     .minByOrNull { if (java.lang.reflect.Modifier.isStatic(it.modifiers)) 0 else 1 }
                     ?.also { it.isAccessible = true }
-                    ?: error("$name(${params.joinToString { it.simpleName }}) not found on ${clazz.name}")
+                    ?: run {
+                        missing += "$name(${params.joinToString { it.simpleName }})"
+                        null
+                    }
 
             // unloadPlugin 首参类型跨版本漂移：243=IdeaPluginDescriptorImpl、262=其子类
             // PluginMainDescriptor（262 反编译实证）——精确匹配会探测失败回退重启（实测）。
             // 弹性匹配：首参与描述类互为可赋值即可，优先最少参数；双参形态构造 options 无参实例。
             val unload = resolveMethodByFirstParam(dpClass, "unloadPlugin", descriptorClass)
-                ?: error("unloadPlugin(<descriptor>) not found on ${dpClass.name}")
-            val unloadOptions = if (unload.parameterTypes.size >= 2) {
-                runCatching {
-                    unload.parameterTypes[1].getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-                }.getOrElse { error("unloadPlugin options no-arg constructor unavailable: ${it.message}") }
-            } else {
-                null
+                ?.also { it.isAccessible = true }
+                ?: run {
+                    missing += "unloadPlugin(<descriptor>)"
+                    null
+                }
+            val unloadOptions = unload?.let { candidate ->
+                if (candidate.parameterTypes.size >= 2) {
+                    runCatching {
+                        candidate.parameterTypes[1].getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+                    }.getOrElse {
+                        missing += "unloadPlugin options no-arg ctor (${it.message})"
+                        null
+                    }
+                } else {
+                    null
+                }
+            }
+
+            // 卸载预检能力族（T-DynUpdate263）：263 移除 allowLoadUnloadWithoutRestart，
+            // 262/263 改用 validate/check——三族全缺才判平台失去动态卸载能力
+            val unloadGate = resolveUnloadGate(dpClass, descriptorClass)
+            if (unloadGate == null) {
+                missing += "unload gate (validateCanUnloadWithoutRestart|checkCanUnloadWithoutRestart|" +
+                    "allowLoadUnloadWithoutRestart)"
+            }
+
+            val installAndLoad = method(
+                installerClass,
+                "installAndLoadDynamicPlugin",
+                Path::class.java,
+                JComponent::class.java,
+                descriptorClass,
+            )
+            val loadFromArtifact = method(
+                descriptorLoaderClass,
+                "loadDescriptorFromArtifact",
+                Path::class.java,
+                BuildNumber::class.java,
+            )
+            val findPlugin = method(coreClass, "findPlugin", PluginId::class.java)
+
+            if (missing.isNotEmpty()) {
+                error("missing platform entries: ${missing.joinToString(", ")}")
             }
 
             return PlatformApi(
                 dynamicPlugins = dynamicPlugins,
-                // allowLoadUnload 与 unloadPlugin 同样存在首参漂移风险（262 实证），一并弹性匹配；
-                // 最少参数优先自动命中 1 参重载（262/243 均为 1/2/3 参并存）
-                allowLoadUnloadMethod = resolveMethodByFirstParam(dpClass, "allowLoadUnloadWithoutRestart", descriptorClass)
-                    ?.also { it.isAccessible = true }
-                    ?: error("allowLoadUnloadWithoutRestart(<descriptor>) not found on ${dpClass.name}"),
-                unloadPluginMethod = unload.also { it.isAccessible = true },
+                unloadGate = requireNotNull(unloadGate) { "unload gate unresolved" },
+                unloadPluginMethod = requireNotNull(unload) { "unloadPlugin unresolved" },
                 unloadPluginOptions = unloadOptions,
-                installAndLoadMethod = method(
-                    installerClass,
-                    "installAndLoadDynamicPlugin",
-                    Path::class.java,
-                    JComponent::class.java,
-                    descriptorClass,
-                ),
-                loadFromArtifactMethod = method(
-                    descriptorLoaderClass,
-                    "loadDescriptorFromArtifact",
-                    Path::class.java,
-                    BuildNumber::class.java,
-                ),
-                findPluginMethod = method(coreClass, "findPlugin", PluginId::class.java),
+                installAndLoadMethod = requireNotNull(installAndLoad) { "installAndLoadDynamicPlugin unresolved" },
+                loadFromArtifactMethod = requireNotNull(loadFromArtifact) { "loadDescriptorFromArtifact unresolved" },
+                findPluginMethod = requireNotNull(findPlugin) { "findPlugin unresolved" },
             )
         }
     }
@@ -419,4 +447,84 @@ object DynamicInstallSupport {
                         it.parameterTypes[0].isAssignableFrom(firstParamBase))
             }
             .minByOrNull { it.parameterTypes.size }
+
+    // ------------------------------------------------------------------
+    // 卸载预检能力族（T-DynUpdate263：263 移除了 allowLoadUnloadWithoutRestart）
+    // ------------------------------------------------------------------
+
+    /** 卸载预检能力族；[id] 直接进日志，便于跨版本排查命中的是哪一条。 */
+    internal enum class UnloadGateFamily(val id: String) {
+        /**
+         * 返回 String：null/空白=可卸载，非空=不可卸载原因。
+         * 263 是 `validateCanUnloadWithoutRestart`；243 的 `checkCanUnloadWithoutRestart` 同名但同样返回 String。
+         */
+        VALIDATE("validate"),
+
+        /** 返回 boolean 的 `checkCanUnloadWithoutRestart`（262/263）。 */
+        CHECK("check"),
+
+        /** 返回 boolean 的旧入口 `allowLoadUnloadWithoutRestart`（243/262）。 */
+        LEGACY("legacy"),
+    }
+
+    /** 预检结论：[reason] 是平台原话，仅 Validate 族有（其余族平台只给布尔）。 */
+    internal class GateDecision(val allowed: Boolean, val reason: String?) {
+        override fun toString(): String = if (allowed) "allowed" else "rejected(${reason ?: "no reason"})"
+    }
+
+    /** 卸载预检入口：族 + 已解析方法；[evaluate] 把三族语义收敛成同一个结论。 */
+    internal class UnloadGate(val family: UnloadGateFamily, val method: Method) {
+        fun evaluate(receiver: Any?, descriptor: Any): GateDecision = runCatching {
+            val raw = invokePlatform(method, receiver, descriptor)
+            if (family == UnloadGateFamily.VALIDATE) {
+                val reason = raw as? String
+                GateDecision(reason.isNullOrBlank(), reason?.takeIf { it.isNotBlank() })
+            } else {
+                GateDecision(raw as Boolean, null)
+            }
+        }.getOrElse {
+            GateDecision(false, "reflective call failed: ${it.message}")
+        }
+    }
+
+    /**
+     * 解析卸载预检入口（纯函数，单测直覆盖）：按「方法名 + 返回类型」绑能力族，
+     * 优先级 **Legacy > Validate > Check**。
+     *
+     * 为什么旧入口优先：243/262 上必须与本次改动前**逐字同一条路径**——
+     * 243 的 `allowLoadUnloadWithoutRestart` 源码就是 `checkCanUnloadWithoutRestart(...) == null`
+     * 的布尔包装；262 的旧入口走 `validateDynamicReconfigurationPossible(newState)`（整组重配置预演），
+     * 与单插件的 `validateCanUnloadWithoutRestart`（`pretendDisabled` 单点校验）不是同一套判定。
+     * 老版本维持旧入口，只有 263（旧入口已删除）才落到新族，行为差异被限制在「原本就不工作」的那一版。
+     *
+     * 为什么必须看返回类型：243 的 `checkCanUnloadWithoutRestart(<descriptor>)` 返回 **String**
+     * （不可卸载原因，null=可卸载），262/263 同名方法返回 boolean。只按名字匹配会把 243 的原因串
+     * 当布尔用（ClassCastException → 一律判不可卸载 → 永远回退重启）。
+     */
+    internal fun resolveUnloadGate(clazz: Class<*>, descriptorClass: Class<*>): UnloadGate? {
+        fun gate(family: UnloadGateFamily, method: Method?): UnloadGate? =
+            method?.also { it.isAccessible = true }?.let { UnloadGate(family, it) }
+
+        val validate = resolveMethodByFirstParam(clazz, "validateCanUnloadWithoutRestart", descriptorClass)
+            ?.takeIf { it.returnType == String::class.java }
+        val checkAsReason = resolveMethodByFirstParam(clazz, "checkCanUnloadWithoutRestart", descriptorClass)
+            ?.takeIf { it.returnType == String::class.java }
+        val checkAsBoolean = resolveMethodByFirstParam(clazz, "checkCanUnloadWithoutRestart", descriptorClass)
+            ?.takeIf { it.returnType == Boolean::class.javaPrimitiveType }
+        val legacy = resolveMethodByFirstParam(clazz, "allowLoadUnloadWithoutRestart", descriptorClass)
+            ?.takeIf { it.returnType == Boolean::class.javaPrimitiveType }
+
+        return gate(UnloadGateFamily.LEGACY, legacy)
+            ?: gate(UnloadGateFamily.VALIDATE, validate)
+            ?: gate(UnloadGateFamily.VALIDATE, checkAsReason)
+            ?: gate(UnloadGateFamily.CHECK, checkAsBoolean)
+    }
+
+    /** 反射调用统一入口：静态方法 null receiver，实例方法传对象单例。 */
+    internal fun invokePlatform(method: Method, receiver: Any?, vararg args: Any?): Any? =
+        if (java.lang.reflect.Modifier.isStatic(method.modifiers)) {
+            method.invoke(null, *args)
+        } else {
+            method.invoke(receiver, *args)
+        }
 }
