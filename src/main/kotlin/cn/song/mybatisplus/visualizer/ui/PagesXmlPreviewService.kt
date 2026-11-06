@@ -201,31 +201,44 @@ object PagesXmlPreviewService {
             unresolvedParams = params,
             paramTable = ParameterReplacer.buildParamTable(params),
             wrapperType = null,
-            tableName = entityContext?.tableName,
-            columns = entityContext?.columns.orEmpty(),
-            columnComments = entityContext?.columnComments.orEmpty(),
-            tableComment = entityContext?.tableComment,
+            tableName = entityContext?.completion?.tableName,
+            columns = entityContext?.completion?.columns.orEmpty(),
+            columnComments = entityContext?.completion?.columnComments.orEmpty(),
+            tableComment = entityContext?.completion?.tableComment,
             warning = null,
             xmlModel = null,
             previewModel = null,
             pagesColumns = statement.columns.ifEmpty { null },
+            entityFieldNames = entityContext?.fieldNames.orEmpty(),
+            entityName = entityContext?.entityName,
         )
     }
 
-    /** 实体类推断：全限定名 → PSI findClass → EntityResolver → SqlCompletionContext。 */
-    private fun resolveEntityContext(entityClass: String?, project: Project?): SqlCompletionContext? {
+    /** 页面实体上下文：补全用的列/表信息 + F-06① 列头溯源用的字段名与实体名。 */
+    private data class PagesEntityContext(
+        val completion: SqlCompletionContext,
+        val fieldNames: List<String>,
+        val entityName: String?,
+    )
+
+    /** 实体类推断：全限定名 → PSI findClass → EntityResolver → 补全上下文 + 字段名清单。 */
+    private fun resolveEntityContext(entityClass: String?, project: Project?): PagesEntityContext? {
         if (entityClass.isNullOrBlank() || project == null) return null
         val psiClass = JavaPsiFacade.getInstance(project)
             .findClass(entityClass, GlobalSearchScope.allScope(project)) ?: return null
-        val tableInfo = EntityResolver().resolve(psiClass) ?: return null
-        return SqlCompletionContext(
-            tableName = tableInfo.tableName,
-            columns = tableInfo.allColumnNames,
-            tableAlias = null,
-            columnComments = tableInfo.columns.mapNotNull { col ->
-                col.comment?.takeIf { it.isNotBlank() }?.let { col.columnName to it }
-            }.toMap(),
-            tableComment = tableInfo.comment,
+        val tableInfo = EntityResolver().resolve(psiClass)
+        return PagesEntityContext(
+            completion = SqlCompletionContext(
+                tableName = tableInfo.tableName,
+                columns = tableInfo.allColumnNames,
+                tableAlias = null,
+                columnComments = tableInfo.columns.mapNotNull { col ->
+                    col.comment?.takeIf { it.isNotBlank() }?.let { col.columnName to it }
+                }.toMap(),
+                tableComment = tableInfo.comment,
+            ),
+            fieldNames = tableInfo.columns.map { it.fieldName }.distinct(),
+            entityName = tableInfo.entityClassName.takeIf { it.isNotBlank() },
         )
     }
 
