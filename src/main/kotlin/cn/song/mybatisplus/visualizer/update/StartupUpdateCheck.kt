@@ -117,6 +117,13 @@ class StartupUpdateCheck : ProjectActivity {
                             showInstalledLive(project, result.version)
                         is PluginUpdateRunner.InstallResult.InstalledRestartRequired -> showInstalled(project)
                         is PluginUpdateRunner.InstallResult.Failed -> showInstallFailed(project, result.message)
+                        // T-DevUpdateChannel：sealed 新增 NotPublished（404/410）——启动通道同样不许甩异常原文。
+                        // 沿用 WARNING 通知，正文重写友好文案；尾冒号是设置页链接行的引导符，通知里没有
+                        // 后续链接行，去掉。
+                        is PluginUpdateRunner.InstallResult.NotPublished -> showInstallFailed(
+                            project,
+                            MpSqlVisualizerBundle.message("settings.update.notPublished").trimEnd('：', ':'),
+                        )
                     }
                 }
             }

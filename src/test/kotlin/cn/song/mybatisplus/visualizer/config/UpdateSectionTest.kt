@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
@@ -25,6 +26,8 @@ class UpdateSectionTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // T-DevUpdateChannel：解锁态是进程级内存态，跨用例会串味——每个用例从「未解锁」起跑
+        cn.song.mybatisplus.visualizer.update.DevUpdateMode.resetForTest()
         section = UpdateSection(PluginSettings.getInstance())
         host = javax.swing.JFrame()
         host.contentPane.add(section)
@@ -33,6 +36,7 @@ class UpdateSectionTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
+        DevUpdateMode.resetForTest()
         host.dispose()
         super.tearDown()
     }
@@ -231,6 +235,104 @@ class UpdateSectionTest : BasePlatformTestCase() {
     fun testGiteeLinkPresent() {
         // T-M28.4：变更日志关联 Gitee——链接存在且文案走 bundle
         assertEquals(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), section.giteeLink.text)
+    }
+
+    // ------------------------------------------------------------------
+    // T-DevUpdateChannel：开发版通道（解锁可见性 / URL 分流 / 渲染保持 / 404 友好化）
+    // ------------------------------------------------------------------
+
+    fun testPreviewButtonHiddenByDefault() {
+        assertFalse("默认（未解锁）不得露出开发版按钮", section.checkPreviewButton.isVisible)
+    }
+
+    fun testPreviewButtonVisibleAfterUnlock() {
+        DevUpdateMode.unlock()
+        section.updateTexts()
+        assertTrue("解锁后应出现开发版按钮", section.checkPreviewButton.isVisible)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.checkPreview"),
+            section.checkPreviewButton.text,
+        )
+    }
+
+    fun testPreviewButtonVisibilitySurvivesUpdateTexts() {
+        // P-3 的钉子：语言切换 rebuild 只重建文本，可见性必须按解锁态重算。
+        // 模拟 rebuild 的方式：把可见性打回构造默认（false）后再调 updateTexts。
+        DevUpdateMode.unlock()
+        section.updateTexts()
+        assertTrue(section.checkPreviewButton.isVisible)
+
+        section.checkPreviewButton.isVisible = false
+        section.updateTexts()
+        assertTrue("updateTexts 丢失可见性恢复 → 切语言后按钮消失", section.checkPreviewButton.isVisible)
+    }
+
+    fun testPreviewButtonReadsPreviewManifestUrl() {
+        DevUpdateMode.unlock()
+        section.updateTexts()
+        var seen: String? = null
+        section.checkRunner = { url -> seen = url; CheckResult.UpToDate }
+        section.checkPreviewButton.doClick()
+        waitForState(UpdateSection.State.UpToDate)
+        assertTrue("开发版按钮必须读预览清单，实际=$seen", seen!!.contains("preview.update.json"))
+        assertEquals(UpdateSection.Channel.PREVIEW, section.channel)
+        // 状态行标出通道，避免与正式通道读数混淆
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.upToDate") +
+                MpSqlVisualizerBundle.message("settings.update.channel.preview"),
+            section.statusLabel.text,
+        )
+    }
+
+    fun testStableButtonStillReadsStableManifestUrl() {
+        // 回归：正式按钮一字不变（分流不得污染正式通道）
+        var seen: String? = null
+        section.checkRunner = { url -> seen = url; CheckResult.UpToDate }
+        section.checkButton.doClick()
+        waitForState(UpdateSection.State.UpToDate)
+        assertTrue("正式按钮应读 update/update.json，实际=$seen", seen!!.endsWith("update/update.json"))
+        assertFalse(seen!!.contains("preview.update.json"))
+        assertEquals(UpdateSection.Channel.STABLE, section.channel)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.statusLabel.text)
+    }
+
+    fun testInstallNotPublishedShowsFriendlyTextAndLinks() {
+        // 404 友好化：不渲染异常原文，给「还没发布」+ 发布页链接
+        val manifest = UpdateManifest("2026.11.6-beta.3", "https://example.com/missing.zip", null, null, null)
+        section.renderCheck(CheckResult.Available(manifest))
+        section.renderInstall(InstallResult.NotPublished(404))
+
+        assertEquals(UpdateSection.State.Failed, section.state)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.notPublished"),
+            section.statusLabel.text,
+        )
+        assertFalse(
+            "状态行不得出现异常/状态码原文：${section.statusLabel.text}",
+            section.statusLabel.text.contains("HttpStatusException") ||
+                section.statusLabel.text.contains("Not Found for url"),
+        )
+        assertFalse(
+            "不得渲染通用「更新失败」文案",
+            section.statusLabel.text.startsWith(MpSqlVisualizerBundle.message("settings.update.installFailed", "").trimEnd()),
+        )
+        assertTrue("404 态应给发布页兜底链接", section.fallbackLinksContainer.isVisible)
+        // 重试路径仍可用
+        assertTrue(section.checkButton.isEnabled)
+    }
+
+    fun testInstallFailed500StillShowsFailure() {
+        // 反扩散：500/IO 等其余失败仍是 Failed（普通「更新失败」文案、不显示兜底链接）
+        val manifest = UpdateManifest("2026.11.6-beta.3", "https://example.com/missing.zip", null, null, null)
+        section.renderCheck(CheckResult.Available(manifest))
+        section.renderInstall(InstallResult.Failed("HTTP 500"))
+
+        assertEquals(UpdateSection.State.Failed, section.state)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.installFailed", "HTTP 500"),
+            section.statusLabel.text,
+        )
+        assertFalse("普通安装失败不给兜底链接", section.fallbackLinksContainer.isVisible)
     }
 
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */

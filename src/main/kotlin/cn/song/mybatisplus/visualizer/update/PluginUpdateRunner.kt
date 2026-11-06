@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.update
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.util.io.FileUtil
+import com.intellij.util.io.HttpRequests
 import java.io.File
 import java.nio.file.Path
 import java.util.zip.ZipFile
@@ -49,6 +50,14 @@ object PluginUpdateRunner {
         /** 已调度启动脚本替换（平台否决/动态链失败回退——重启生效，M28 原行为）。 */
         data object InstalledRestartRequired : InstallResult
 
+        /**
+         * 更新包尚未发布（T-DevUpdateChannel，HTTP 404/410）：清单已指向某版本，但 Release 附件
+         * 还不存在（预览清单最常撞上）。与 [Failed] 分开——不是「插件坏了」，不该把
+         * `HttpStatusException` 原文甩给用户；UI 给友好文案 + 发布页兜底链接。
+         * [status] 保留原始状态码（日志对账/文案不依赖它）。
+         */
+        data class NotPublished(val status: Int) : InstallResult
+
         data class Failed(val message: String) : InstallResult
     }
 
@@ -60,16 +69,20 @@ object PluginUpdateRunner {
      * NETWORK（消息带状态码，诚实降级不冒充通道缺失）。
      *
      * @param currentVersion 当前插件版本（[PluginVersion.current]）；不可读视为失败。
+     * @param manifestUrl 本次读取的清单地址（T-DevUpdateChannel：开发版通道传
+     *   [UpdateSource.previewManifestUrl]）。**刻意排在 `fetch` 之前**——Kotlin 的尾随 lambda
+     *   绑定最后一个形参，放在末尾会让既有 `check(x) { … }` 全部编译失败（P-1 实证结论）。
      * @param fetch 清单获取 seam（默认 [UpdateApi.fetchOutcome]）。
      */
     fun check(
         currentVersion: String?,
+        manifestUrl: String = UpdateSource.manifestUrl(),
         fetch: (String) -> UpdateApi.FetchOutcome = { UpdateApi.fetchOutcome(it) },
     ): CheckResult {
         if (!VersionComparator.isRecognizable(currentVersion)) {
             return CheckResult.Failure(FailureKind.VERSION_UNREADABLE, "current version unavailable")
         }
-        val url = UpdateSource.manifestUrl()
+        val url = manifestUrl
         UpdateSource.logOverrideIfAny(url)
         return when (val outcome = fetch(url)) {
             is UpdateApi.FetchOutcome.NetworkError ->
@@ -131,11 +144,36 @@ object PluginUpdateRunner {
                 }
             }
         } catch (e: Exception) {
-            LOG.warn("downloadAndInstall: failed — ${e.message}", e)
-            InstallResult.Failed(e.message ?: e.toString())
+            // T-DevUpdateChannel：404/410 = 「包还没发布」，不是插件坏了。预览清单的 downloadUrl
+            // 常指向尚未建仓的 Release 附件；旧口径把 HttpStatusException 原文塞进 Failed，
+            // 用户看到一串 HTTP 文本。这里分流成 NotPublished（UI 给友好文案 + 发布页链接），
+            // 其余异常（网络不通/非法 zip/安装失败）仍走 Failed，不扩散。
+            val status = httpStatusOf(e)
+            if (status == 404 || status == 410) {
+                LOG.info("downloadAndInstall: package not published — url=${manifest.downloadUrl} status=$status")
+                InstallResult.NotPublished(status)
+            } else {
+                LOG.warn("downloadAndInstall: failed — ${e.message}", e)
+                InstallResult.Failed(e.message ?: e.toString())
+            }
         } finally {
             FileUtil.delete(temp)
         }
+    }
+
+    /**
+     * 挖异常链上的 HTTP 状态码（0 层 HttpStatusException + 被包一层的 IOException 都认）；
+     * 非 HTTP 异常返回 null。深度设上限防自引用链。
+     */
+    private fun httpStatusOf(error: Throwable): Int? {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 8) {
+            (current as? HttpRequests.HttpStatusException)?.let { return it.statusCode }
+            current = current.cause
+            depth++
+        }
+        return null
     }
 
     /** zip 校验：存在、非空、可被 ZipFile 打开（防下载中断/HTML 错误页落盘）。 */
