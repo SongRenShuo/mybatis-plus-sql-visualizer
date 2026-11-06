@@ -252,16 +252,16 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 登记三面：`DriverRegistry` 加 `org.panweidb.Driver`（connect）；`WeaveSpecs` 语句面加 `PgStatement` / `PgPreparedStatement` / `PgCallableStatement`，prepare 面加 `PgConnection`。
 - 字节层（真实 jar）：`StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验` 用 jar 支撑的 URLClassLoader 做资源回退，四个类全部「织入 changed → 隔离子 loader 定义 → 初始化过 JVM 校验」；定向读数 **15/0/0/0（0 skip）**。
 - 反向验证：摘掉 `PgPreparedStatement` 登记 → 恰 3 红（语句面谓词、登记名单单一真相、磐维字节层），还原后复绿。
-- jar 从仓库夹具 `vendor/drivers/panweidb-jdbc-1.0.0.jar` 读取（可用 `-Dpanwei.jar=<path>` / 环境变量 `PANWEI_JAR` 覆盖）；文件不在位时该用例显式 skip（谓词层与厂商对齐守卫仍生效）。
+- jar 从仓库夹具 `database-lab/vendor/drivers/panweidb-jdbc-1.0.0.jar` 读取（可用 `-Dpanwei.jar=<path>` / 环境变量 `PANWEI_JAR` 覆盖）；文件不在位时该用例显式 skip（谓词层与厂商对齐守卫仍生效）。
 
-**fixture 存放（2026-11-06 定，用户拍板入库）**：驱动 jar 与官方指南 PDF 都属于「公开渠道拿不到或极不稳定」的厂商原件，统一放仓库顶层 `vendor/`（`vendor/drivers` / `vendor/docs`，约定见 `vendor/README.md`），**纳入版本控制**：
+**fixture 存放（2026-11-06 定，用户拍板入库）**：驱动 jar 与官方指南 PDF 都属于「公开渠道拿不到或极不稳定」的厂商原件，归口到既有的 `database-lab/`（该目录本就是「方言真实验证环境的配方资产」，避免在仓库根再开一级目录），子目录 `vendor/drivers` / `vendor/docs`，约定见 `database-lab/vendor/README.md`，**纳入版本控制**：
 
 | 文件 | 仓库路径 | 大小 | sha256 |
 |---|---|---|---|
-| `panweidb-jdbc-1.0.0.jar` | `vendor/drivers/panweidb-jdbc-1.0.0.jar` | 844,003 B | `b17065f589a10bdb418b87b47f6ba53a2bfa24a42617cdf7828ec98240ca1156` |
-| `磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | `vendor/docs/磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | 3,288,977 B | `9b79be7e7fe265312f064a0c21998808b2ca52272e0a2411855af52556fba698` |
+| `panweidb-jdbc-1.0.0.jar` | `database-lab/vendor/drivers/panweidb-jdbc-1.0.0.jar` | 844,003 B | `b17065f589a10bdb418b87b47f6ba53a2bfa24a42617cdf7828ec98240ca1156` |
+| `磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | `database-lab/vendor/docs/磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | 3,288,977 B | `9b79be7e7fe265312f064a0c21998808b2ca52272e0a2411855af52556fba698` |
 
-字节层用例默认就从 `vendor/drivers/` 自动发现（从 `user.dir` 逐级向上找），**无需环境变量**：`./gradlew :sql-visualizer-agent:test --tests "*StatementWeaverVendorCoverageTest"`（15/0/0/0、0 skip）。`vendor/` 不进插件发行包、不进编译 classpath；新增/替换夹具的规矩（登记 sha256、单文件 ≤ 20MB、公开可下载的不落盘）见 `vendor/README.md`。
+字节层用例默认就从 `database-lab/vendor/drivers/` 自动发现（从 `user.dir` 逐级向上找），**无需环境变量**：`./gradlew :sql-visualizer-agent:test --tests "*StatementWeaverVendorCoverageTest"`（15/0/0/0、0 skip）。该目录不进插件发行包、不进编译 classpath；新增/替换夹具的规矩（登记 sha256、单文件 ≤ 20MB、公开可下载的不落盘）见 `database-lab/vendor/README.md`。
 
 **V2 官方指南补充（`磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf`，2026-11-06 读取）**：
 
