@@ -155,7 +155,7 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 ### 券 F（P2）URL 方言映射
 
 - `JdbcUrlDialects` 加 `panwei` / `panweidb` → 角标 `Panwei（磐维）`；
-- `UrlSubprotocolDialects` 同键 → 渲染方言（D-1 决策：推荐 `Oracle`，因为用户现网是 Oracle 模式且 SQL 全 Oracle 语法；PG 模式用户可手动选 openGauss）；
+- `UrlSubprotocolDialects` 同键 → 渲染方言：默认 `Oracle`（D-1，用户现网 Oracle 模式且 SQL 全 Oracle 语法）；URL 带 `db_compatibility` 时按值覆盖（`oracle`→Oracle / `postgresql`→openGauss / `mysql`→MySQL，见 §十二 V2 指南补充）；
 - 子协议串以实际数据源 URL 为准（P-2），两个都登记即可覆盖。
 
 ### 券 G（P2）文档与指引
@@ -254,7 +254,12 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 反向验证：摘掉 `PgPreparedStatement` 登记 → 恰 3 红（语句面谓词、登记名单单一真相、磐维字节层），还原后复绿。
 - jar 不入库：测试经 `-Dpanwei.jar=<path>` 或环境变量 `PANWEI_JAR` 读取；未提供时该用例显式 skip（谓词层与厂商对齐守卫仍生效）。
 
-**仍未闭环**：V2 文档写的 `cn.com.panweidb.Driver`（多代命名分裂）未登记——需要 V2 驱动 jar 或真机类清单才能确认是否另一套包形；真机复验（磐维应用上的「已收事件 N>0 / 角标 / 未登记类名消失」）待用户环境。
+**V2 官方指南补充（`磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf`，2026-11-06 读取）**：
+
+- **三代驱动命名已明确**：①V1 `panweidb-jdbc-1.0.0.jar` → `org.panweidb.Driver`（用户现场，已登记）；②V2 p 版（默认 `postgresql.jar`，驱动类 `org.postgresql.Driver` + `jdbc:postgresql:`）——**现有 pgjdbc 三面登记已覆盖，无需新登记**；③V2 v 版 `panweidb-jdbc-<$version>v.jar` → `cn.com.panweidb.Driver` + `jdbc:panweidb:`（未登记，需该 jar 才能定 `cn.com.panweidb.*` 类形）。
+- **`db_compatibility` 连接参数**（§4.4.5）：默认 `postgresql`，可设 `postgresql` / `oracle` / `mysql`；oracle 模式下列名以大写返回、`disableColumnSanitiser=false` 失效。券 F 据此改为**参数感知**：URL 显式给出时按值映射（`oracle`→Oracle / `postgresql`→openGauss / `mysql`→MySQL），缺省或未识别值仍走 D-1 默认档 Oracle。V1 驱动没有该参数（jar 内只有协议层 `compatibilityMode` 字段），故 V1 现场恒走默认档。
+- V1 `Driver.class` 常量池实测接受 `jdbc:panweidb:` 与 `jdbc:dws:iam:` 两个前缀（后者与海量同键，既有 Vastbase 映射不动）。
+- **仍未闭环**：V2-v 的 `cn.com.panweidb.*` 类形待 jar；真机复验（磐维应用上的「已收事件 N>0 / 角标 / 未登记类名消失」）待用户环境。
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
 提交：`47a28ef1`（agent 侧 D+E）、`6efd2e48`（IDE 侧 D 展示）、`7510dc79`（名字快筛门控）。
