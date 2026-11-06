@@ -645,23 +645,24 @@ object DialectVerifySupport {
      * 执行「分号分隔的多语句」（一次往返）。
      *
      * 结果集在这里不是断言对象，但必须**读干净**：不消费的游标会让部分驱动把连接留在半开状态，
-     * 后续 DROP 就会撞上「上一个结果集还没关」这类与目标无关的报错。读结果本身出错也不该判该词失败
-     * （引擎是否接受多语句已由第一条语句的异常/成功给出结论），故 drain 只做 best-effort。
+     * 后续 DROP 就会撞上「上一个结果集还没关」这类与目标无关的报错。
+     *
+     * drain **不吞异常**：部分驱动（SQL Server 实测形态）把后续语句的错误留到 `getMoreResults()` 才抛，
+     * 吞掉就等于把「第二条其实失败了」读成成功（假绿）。抛出去 → 调用方回退逐条，代价是往返，
+     * 换来的是不会漏判。
      */
     fun execBatch(connection: Connection, sql: String): Int =
         connection.createStatement().use { st ->
             st.execute(sql)
-            runCatching {
-                var isResultSet = true
-                var guard = 0
-                while (guard++ < 64) {
-                    if (isResultSet) {
-                        st.getResultSet()?.use { rs -> while (rs.next()) Unit }
-                    } else if (st.updateCount == -1) {
-                        break
-                    }
-                    isResultSet = st.getMoreResults()
+            var isResultSet = true
+            var guard = 0
+            while (guard++ < 64) {
+                if (isResultSet) {
+                    st.getResultSet()?.use { rs -> while (rs.next()) Unit }
+                } else if (st.updateCount == -1) {
+                    break
                 }
+                isResultSet = st.getMoreResults()
             }
             -1
         }

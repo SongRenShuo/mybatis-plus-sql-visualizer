@@ -145,11 +145,6 @@ class DialectExternalMatrixVerificationTest {
         keys.indices.forEach { index -> summary.record(outcomes[index].first, outcomes[index].second) }
 
         // 反向验证 3 的钉子：桶内顺序必须是声明顺序。若把记账改成「完成即记账」，这里必红。
-        assertBucketOrder(summary.passed, keys, "PASS")
-        assertBucketOrder(summary.skipped, keys, "SKIP")
-        assertBucketOrder(summary.timedOut, keys, "TIMEOUT")
-        assertBucketOrder(summary.failed, keys, "FAIL")
-
         val report = buildString {
             appendLine("# 外部实例方言验证 · ${LocalDateTime.now()}")
             appendLine()
@@ -173,6 +168,13 @@ class DialectExternalMatrixVerificationTest {
         summaryFile.parentFile?.mkdirs()
         summaryFile.writeText(report, Charsets.UTF_8)
         println(report)
+
+        // 反向验证 3 的钉子：桶内顺序必须是声明顺序（把记账改成「完成即记账」时这里必红）。
+        // 放在写 summary **之后**：顺序断言红了也要留得下当轮工件，否则只剩 JUnit 断言文本可查。
+        assertBucketOrder(summary.passed, keys, "PASS")
+        assertBucketOrder(summary.skipped, keys, "SKIP")
+        assertBucketOrder(summary.timedOut, keys, "TIMEOUT")
+        assertBucketOrder(summary.failed, keys, "FAIL")
 
         assertTrue("外部实例验证失败 ${summary.failed.size} 项：\n" + summary.failed.joinToString("\n"), summary.failed.isEmpty())
         assertTrue(
