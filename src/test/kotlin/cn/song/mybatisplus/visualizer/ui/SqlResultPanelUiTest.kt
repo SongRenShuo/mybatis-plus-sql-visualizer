@@ -412,4 +412,30 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    // ======================== T-SAF-10：错误 tooltip 安全化 ========================
+
+    /**
+     * T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）回归：showError 曾把原始
+     * 错误字符串（远程 DB SQLException 文本，低信任）直接挂 infoLabel.toolTipText（:277）——
+     * Swing 工具提示仅在文本以 <html> 起结时按 HTML 渲染，以 <html> 起结的恶意错误消息可
+     * 注入内容并触发 <img src> 资源加载。修复语义：HTML 起结文本转义为字面量显示，
+     * 纯文本原样保留（M36.5.53「tooltip 完整错误」语义不变）。
+     */
+    fun testErrorTooltipHtmlPrefixedTextIsNeutralized_TSAF10() {
+        val panel = SqlResultPanel()
+        try {
+            val payload = "<html><img src=http://127.0.0.1:1/probe.png></html>"
+            panel.showError(payload)
+            waitForEdt()
+            val tooltip = panel.infoTooltipForTest().orEmpty()
+            assertFalse("tooltip 不得保留可渲染的 <html> 起结：$tooltip", tooltip.startsWith("<html"))
+            // 纯文本错误：tooltip 原样保留（显示语义不变）
+            panel.showError("plain failure: value < 10")
+            waitForEdt()
+            assertEquals("plain failure: value < 10", panel.infoTooltipForTest())
+        } finally {
+            panel.clear()
+        }
+    }
 }

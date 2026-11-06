@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -87,7 +88,7 @@ internal fun SqlPreviewPanel.showExplainErrorDialog(
     var dialog: ExplainPlanDialog? = null
     val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         add(
-            JBLabel("<html>" + escapeHtml(message) + "</html>").apply {
+            JBLabel("<html>" + HtmlEscape.escape(message) + "</html>").apply {
                 border = JBUI.Borders.empty(8)
                 foreground = com.intellij.ui.JBColor.RED
             },
@@ -116,6 +117,4 @@ internal fun SqlPreviewPanel.showExplainErrorDialog(
     dialog = ExplainPlanDialog(proj, panel)
     showExplainDialog(dialog!!)
 }
-
-private fun escapeHtml(text: String): String =
-    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+// T-SAF-10：本地 escapeHtml 变体移除，统一走 util.HtmlEscape（转义集 & < > " ' 全集）

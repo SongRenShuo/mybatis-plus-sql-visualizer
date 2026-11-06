@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.SafeBrowser
 import com.intellij.openapi.application.ApplicationManager
@@ -111,9 +112,12 @@ internal class CommunityDialog(
         val titleLabel = JLabel(title, SwingConstants.CENTER).apply {
             alignmentX = 0.5f
             font = font.deriveFont(java.awt.Font.BOLD)
+            // T-SAF-10：纯 bundle 文案、无 markup 需求，禁用 HTML 解析（对齐 DegradationBanner 同款约定）
+            putClientProperty("html.disable", true)
         }
         val descriptionLabel = JLabel(
-            "<html><div style='width:${JBUI.scale(188)}px;text-align:center'>${escapeHtml(description)}</div></html>",
+            // T-SAF-10：转义收敛到共享 HtmlEscape（原本地变体缺 `'` 转义）
+            "<html><div style='width:${JBUI.scale(188)}px;text-align:center'>${HtmlEscape.escape(description)}</div></html>",
             SwingConstants.CENTER,
         ).apply {
             alignmentX = 0.5f
@@ -133,9 +137,6 @@ internal class CommunityDialog(
             add(descriptionLabel)
         }
     }
-
-    private fun escapeHtml(text: String): String = text.replace("&", "&amp;")
-        .replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     companion object {
         private const val QR_SIZE = 180

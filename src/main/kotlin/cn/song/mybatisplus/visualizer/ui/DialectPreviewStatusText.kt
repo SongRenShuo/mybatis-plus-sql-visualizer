@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 
 internal object DialectPreviewStatusText {
@@ -17,14 +18,21 @@ internal object DialectPreviewStatusText {
                 if (decision.source == DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE)
                     "panel.meta.dialectStatus.scopeUnavailable" else "panel.meta.dialectStatus.unavailable")
         }
-        val rendered = decision.dialectName ?: decision.compatibilityFallbackName ?: "MySQL"
+        // T-SAF-10：rendered（方言名可来自绑定源 URL 探测/低信任证据）与 ids（数据源 UUID
+        // 集合）是数据位——进 meta 可见行（<html> 包装态）与 tooltip 前转义（T-DialectStatusLiveRefresh
+        // 经 DialectStatusRefresh.applyDialectStatusSegment 组装 metaLineHead / metaTooltipBase）。
+        val rendered = HtmlEscape.escape(
+            decision.dialectName ?: decision.compatibilityFallbackName ?: "MySQL",
+        )
         val visible = if (decision.dialectName == null) {
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.fallback", rendered, status)
         } else "$title: $rendered ($status)"
         val confidence = MpSqlVisualizerBundle.message("panel.meta.dialectStatus.confidence.${decision.confidence.name}")
-        val ids = decision.dataSourceIds.joinToString(", ").ifBlank {
-            MpSqlVisualizerBundle.message("panel.meta.dialectStatus.noCandidates")
-        }
+        val ids = HtmlEscape.escape(
+            decision.dataSourceIds.joinToString(", ").ifBlank {
+                MpSqlVisualizerBundle.message("panel.meta.dialectStatus.noCandidates")
+            },
+        )
         return Text(visible, MpSqlVisualizerBundle.message("panel.meta.dialectStatus.details",
             title, rendered, status, confidence, ids))
     }

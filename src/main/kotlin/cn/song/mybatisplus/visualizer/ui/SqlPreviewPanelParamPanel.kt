@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.ExprReason
 import cn.song.mybatisplus.visualizer.xml.ExprSupport
@@ -84,9 +85,8 @@ private fun fieldFillText(text: String, font: java.awt.Font, limitPx: Int = JBUI
         if (character != '\n') line.append(character)
     }
     lines += line.toString()
-    return "<html>" + lines.joinToString("<br>") {
-        it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    } + "</html>"
+    // T-SAF-10：内联转义链收敛到共享 HtmlEscape（& < > " ' 全集，防二次转义）
+    return "<html>" + lines.joinToString("<br>") { HtmlEscape.escape(it) } + "</html>"
 }
 
 /** 名称单元：字段名/复选框 + [fill=...] 角标同一行（角标不再单独占一行）。 */
