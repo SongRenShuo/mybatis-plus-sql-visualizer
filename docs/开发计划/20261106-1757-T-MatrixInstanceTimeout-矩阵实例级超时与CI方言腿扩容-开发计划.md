@@ -131,7 +131,135 @@
 
 ## 十、实施记录（券 A）
 
-<!-- 待回填 -->
+实施分支 `t-matrix-instance-timeout`，工作树 `.worktrees/matrix-timeout`。提交：`59b67fc5`（看门狗与四桶）、
+`b4839307`（超时取证：线程退出原因 + 处置空转标记）、本节回填随第三个提交落地。
+
+### 10.1 交付物与设计选择
+
+| 文件 | 变化 |
+|---|---|
+| `src/test/kotlin/…/sql/verify/InstanceBudgetSupport.kt` | 新增（预算解析 / 看门狗 / 超时处置 / 四桶归档） |
+| `src/test/kotlin/…/sql/verify/InstanceBudgetSupportTest.kt` | 新增（5 例，零真机零 JDBC） |
+| `src/test/kotlin/…/sql/verify/DialectExternalMatrixVerificationTest.kt` | 改写（逐实例带预算、四桶 summary、第五条判红底线、JDBC 句柄发布） |
+| `dev-support/dialect-external/matrix.example.properties` | 补 `timeoutSeconds` 与超时口径说明 |
+
+**支撑类为什么独立成 `InstanceBudgetSupport` 而不是塞进 `DialectVerifySupport`**：①职责不同——`DialectVerifySupport`
+是「插件渲染 SQL 的构造与执行」，被 H2 / SQLite / Docker / 外部实例四条入口共用；本类只管「一个实例跑多久算没进展、
+到点怎么收尾、结局怎么归档」，只服务真机矩阵。②可测面必须切开——本类要能在零真机、零 JDBC 的条件下用「永久阻塞的
+假任务」单测（P1 不成立时唯一站得住的一层），而 `DialectVerifySupport` 的任何一例都要连引擎。③不触既有类的 import 面，
+真机读数与既有四条判红底线的代码路径零改动。
+
+**「正在执行的那条语句」怎么拿到**：`DialectVerifySupport` 的语句是 `createStatement()/prepareStatement()` 即取即用、
+`use {}` 就地释放，句柄不外传——真挂起时那条语句只在 worker 线程栈上，看门狗拿不到它。测试侧用一个 `Connection`
+动态代理截获工厂方法返回值，把语句记进 `@Volatile` 字段（代理构建失败时静默回退原对象，宁可丢 cancel 一步也不弄坏真机读数）。
+处置步骤在**独立线程**里执行，所以这也顺带证明了连接/语句确实被跨线程看见（P2）。
+
+### 10.2 读数（命令 + 原始关键行）
+
+**① 不摸真机的用例**（注入永久阻塞的假任务，断言到点判 TIMEOUT、后续实例照常执行、TIMEOUT 不进 PASS 桶）
+
+```
+./gradlew test --tests "cn.song.mybatisplus.visualizer.sql.verify.InstanceBudgetSupportTest" \
+  -Pkotlin.compiler.execution.strategy=in-process --console=plain
+# build/test-results/test/TEST-…InstanceBudgetSupportTest.xml
+<testsuite name="…InstanceBudgetSupportTest" tests="5" skipped="0" failures="0" errors="0"   → BUILD SUCCESSFUL in 22s
+```
+（同读数在 b4839307 的取证增强后再复跑一次：`tests="5" skipped="0" failures="0" errors="0"`，BUILD SUCCESSFUL in 25s。）
+
+**② 反向验证：摘掉看门狗**（把 `future.get(budgetSeconds, TimeUnit.SECONDS)` 换成无参 `future.get()`）
+
+```
+# 摘掉前（红）
+InstanceBudgetSupportTest > 阻塞实例到点判TIMEOUT_后续实例照常执行_超时不进PASS桶 FAILED
+InstanceBudgetSupportTest > 超时处置按序执行并逐步骤取证_线程被中断即不标放弃 FAILED
+InstanceBudgetSupportTest > 处置步骤抛错只记该步失败_不中断后续步骤 FAILED
+5 tests completed, 3 failed                                   → BUILD FAILED in 54s
+<testsuite name="…InstanceBudgetSupportTest" tests="5" skipped="0" failures="3" errors="0"
+  三条失败消息均为 java.lang.AssertionError: expected:<TIMEOUT> but was:<PASS>
+  （InstanceBudgetSupportTest.kt:89 / :132 / :163）——看门狗缺席时阻塞实例被当作 PASS，即本券要防的形态。
+
+# 恢复后（绿）
+<testsuite name="…InstanceBudgetSupportTest" tests="5" skipped="0" failures="0" errors="0"   → BUILD SUCCESSFUL in 22s
+```
+
+**③ 真机超时路径实证**（单实例子集 + 1s 预算）
+
+```
+./gradlew dialectExternalVerify \
+  -PdialectExternalMatrix=<工作树>/.local/matrix.panwei_a_1s.properties    # instances=panwei_a + panwei_a.timeoutSeconds=1
+---
+通过 0 / 跳过 0 / 超时 1 / 失败 0
+- TIMEOUT  panwei_a  预算 1s  处置=[statement.cancel✗(超时点无正在执行的语句（超时落在语句间隙）)
+  connection.close✗(超时点尚未建立连接（挂在登录握手里，由 loginTimeout 兜）) thread.interrupt✓]
+  线程未退出（daemon 放弃）  耗时 2055ms
+BUILD FAILED in 23s（整次 gradle 墙钟 25s）
+```
+超时落进 TIMEOUT 桶、summary 单列、任务判红、整轮**秒级结束**。该点尚未建连（1s 落在登录握手里），
+两步处置因此是空转并被显式标成 ✗——不是「做过且无效」，两者在报告里可区分。
+
+**③′ 同一路径在「有活连接 + 有在执行语句」时的现场证据**（15s 预算，panwei_a 正常工作时被切断）
+
+```
+通过 0 / 跳过 0 / 超时 1 / 失败 0
+- TIMEOUT  panwei_a  预算 15s  处置=[statement.cancel✓ connection.close✓ thread.interrupt✓]
+  线程已退出：panwei_a（Oracle）保留字扫描失败 102/108 个词: / as -> [10.10.0.24:62432/103.36.220.245:26101]
+  socket is closed; Sending Urgent packet failed, detail: Socket closed. An I/O error occured while sending to the
+  backend.detail:Socket closed;  / asc -> This connection has been closed.   耗时 15177ms
+```
+看门狗线程的 `connection.close()` 真的打断了 worker 正在做的 socket I/O：worker 之后每个语句都抛
+「socket is closed / Socket closed / This connection has been closed.」并在宽限内退出（`abandoned=false`）。
+这就是 P1 在真机上的直接证据（不是推断）。
+
+**④ 单实例耗时**（默认 300s 预算，单实例子集逐条跑；`-PdialectExternalMatrix=<该实例的子集文件>`）
+
+```
+- PASS  panwei_a  Oracle  words=109  skip=1(rowid)  68932ms
+- PASS  panwei_b  MySQL  words=262  167250ms
+- PASS  gaussdb_kernel503  GaussDB  words=197  201551ms
+# 转换锚点（同一台测试服务器、同一天、同一套夹具）
+- PASS  mysql84  MySQL  words=262  102967ms       ← CI 侧同一实例 18.6 min（run 42128985512）
+```
+
+### 10.3 待验证前提逐条结论
+
+| 编号 | 结论 | 证据 |
+|---|---|---|
+| P1 | **成立**（pg 族与 SQL Server 两侧都成立） | 源码级：pgjdbc 42.7.1 `PgConnection.close()` → `PgConnectionCleaningAction.clean()` → `QueryExecutor.close()` → `PGStream.close()` → `pgOutput.close(); pgInput.close(); Socket.close()`；mssql-jdbc 12.4.2 `TDSChannel.close()` → `socket.close()` / `socketChannel.close()`。字节码级：panwei 2.0.0 `PgConnection.close()` → `QueryExecutor.close()`。运行时：③′ 的 15s 读数——close 之后 worker 抛出 socket closed 并退出 |
+| P2 | **成立**（本次按「拿到连接立刻放进共享引用」实现，故不存在原描述的 `use{}` 藏句柄问题） | `InstanceJdbcHandle.publish(raw)` 在 `getConnection` 返回后立即写 `@Volatile` 字段，再交给 `conn.use{}`；处置步骤跑在独立线程上仍能读到该字段（③′ 的 ✓✓ 即跨线程可见的证明） |
+| P3 | **不成立**（`statement.cancel()` 对「读挂起」无效，且可能自耗 10s） | pgjdbc `PgStatement.cancel()` 只在 `statementState==IN_QUERY` 时 CAS 后走 `connection.cancelQuery()`；`QueryExecutorBase.sendQueryCancel()` 是**另开一条连接**发 CancelRequest 再 `receiveEOF()`，受 `cancelSignalTimeout`（默认 10s）限制，超时异常被内部吞掉——它从不关本地 socket，服务端沉默时本地读照旧阻塞。panwei 2.0.0 字节码同形（`cancelQuery` → `sendQueryCancel` → `receiveEOF`，`cancelSignalTimeout` 字段） |
+| P4 | **成立，但依赖 daemon**（Windows 实证；Linux runner 同一 JVM 规则） | 独立探针 `ThreadExitProbe`：阻塞线程 `daemon=true` → 主线程退出后 JVM 952ms 正常退出（exit=0）；同一探针 `daemon=false` → JVM 退不出去，被 `timeout 6` 杀掉（exit=124）。故每实例 executor、每个处置步骤线程、兜底放行线程一律 daemon |
+| P5 | **不成立（现有 `timeout-minutes: 40` 装不下 5 实例）** | 本地三新实例合计 68.9+167.3+201.6 = 437.8s ≈ 7.3 min；本地→CI 倍率由 mysql84 锚点算出 1116s/103.0s ≈ **10.8×** ⇒ 三新实例 CI 侧 ≈ 7.7 / 30.1 / 36.3 min，加既有 mysql84 18.6 + pg16 3.3 ⇒ 五实例 ≈ **100 min**；即便按词数比例从 mysql84 线性外推（偏乐观）也 ≈ 62 min。券 B 需按实测上调步骤 `timeout-minutes`（≥ 110 min 才保险）或按 §六 尾部裁剪（先砍 panwei_b，它是三者里最贵的） |
+| P6 | **成立** | `.github/workflows/nightly-full.yml:31` 有 `workflow_dispatch:`；`workflow_dispatch` 走仓内 secrets（与 schedule 同权限），可不等 nightly。触发仍属对外动作，需用户授权 |
+
+### 10.4 与计划的偏差（必须知道）
+
+1. **`-Dmpvs.external.instanceTimeout` 传不到 `dialectExternalVerify` 的测试 JVM**。实证：`./gradlew dialectExternalVerify
+   -Dmpvs.external.instanceTimeout=1 -PdialectExternalMatrix=<probe>` 的报告写「实例级预算：默认 300s（默认）」。
+   根因：`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:1616-1620` 的 `-Dmpvs.*` 透传只挂在 `tasks.test` 上，
+   `dialectExternalVerify`（同文件 :534）没有这段。修法是给 `tasks.withType<Test>().configureEach`（:108）补同一循环，
+   但**该文件不在券 A 写集内**，故未改；本券的真机 1s 实证改用优先级 1 的实例条目 `timeoutSeconds`（文档里的首选通道），
+   两者语义等价。建议券 B 或后续小批补这一行（否则 CI 侧无法用 `-D` 统一调预算）。
+2. 计划 §五.4 只要求 TIMEOUT 行带实例 key 与预算值；实现里另加「处置逐步取证 + 线程退出原因」，因为 P1/P3 的结论
+   只能靠这两项现场读数判定（P3 判为不成立正是靠它区分的）。
+3. 计划 §五 未规定「非 optional 的超时是否判红」。实现按 §八「nightly 会因实例抖动变红」与 §五.4「optional 是唯一的
+   降级通道」定为**判红**（新增第五条判红底线），并在 KDoc 与 summary 里写明；如需只可见不判红，改一处 `assertTrue` 即可。
+
+### 10.5 未做项与残留风险
+
+- **CI 侧读数未取**（券 B 的地盘，且触发 CI 属对外动作，需用户授权）：上表 P5 的 CI 估算是「本地实测 × mysql84 锚点倍率」，
+  不是 CI 实测，券 B 必须以真跑复核。
+- **`docs/架构设计/03-开发与测试指南.md:127` 的类计数未动**（`sql/verify`（9）→ 现应 10，新增 `InstanceBudgetSupportTest`；
+  `InstanceBudgetSupport.kt` 是支撑对象不计入测试类）。该文件不在券 A 写集内，留给合流时一并改。
+- **`CHANGELOG.md` 未记**：本改动全在 `src/test` 与 `dev-support/` 模板，用户不可感（AGENTS.md 第 6 条只对 `src/main`
+  用户可感改动要求随提交回填），故按 §七「可省略」处理。
+- **放弃线程的资源上限**：每次超时最多留 1 个挂起的 daemon worker 线程 + 最多 3 个处置线程（每步上限 2s，之后仍存活）。
+  真实收口路径（③′）里 worker 会退出；只有「连 socket 都没建」的形态（③）才会留线程——daemon 不阻止 JVM 退出（P4 实证），
+  但同一 JVM 内连跑多个此类实例会累积线程，属已知边界。
+- **处置步内上限 2s 是经验值**：`statement.cancel()` 在服务端沉默时理论可耗 `cancelSignalTimeout`（10s），2s 让看门狗
+  不被它拖住；代价是那一步被记成 `✗(超时未返回)`（真实读数里 cancel 在可响应实例上是 ✓，说明 2s 够用）。
+- **`statement.cancel` 一步实际无收益**（P3 结论）：保留它是为了按 §五规定顺序执行并留下「试过且无效」的证据；
+  真正的收口靠 `connection.close()`。若后续要压缩超时收口时间，可考虑把 close 提到第一步，但那是口径变更，需计划册改。
+
 
 ## 十一、实施记录（券 B）
 
