@@ -181,3 +181,4 @@ awk 'BEGIN{RS="";ORS="\n\n"} /MPJInterceptor/ && /DeviceInfoServiceImpl/ {print;
   → 与 NestGate、premain 兜底扫描都无关，指向「Hikari 池预热完成后，后续 PS 的 SQL 归属取不到」
   （宿主 stderr 有且仅有一条 `织入通道登记盲区：无登记 PS 执行被跳过 psClass=org.panweidb.jdbc.PgPreparedStatement unresolvedCount=1`）。
   暂按**观察项**登记，不阻塞磐维采集验收：`script-panwei-gaussdb.txt` 只保留一条业务请求（落在 16s 内）。
+  单独立项在 [`docs/开发计划/20261106-1336-T-AgentSilentAfter16s-…`](../开发计划/20261106-1336-T-AgentSilentAfter16s-增强捕获启动约16秒后停止产出-开发计划.md)（含 4 轮读数、已排除项与取证计划）。
