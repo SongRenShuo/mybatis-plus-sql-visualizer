@@ -355,3 +355,83 @@ data class RuntimeSlot(
   （`SqlCommentStripper` 既有行为，不是本券引入）。
 - 未跑全量 / 分片 / `verifyGate` / `buildPlugin`（按券纪律，只跑定向）。
 
+### 券 C（面板接线）— 完成（分支 `t-runtime-slot-c`，提交 `36dc8da3`）
+
+**补掉的口子**：券 B 报告的 P-6 唯一开口——面板没有 `slotValues` 状态，预览渲染与导出回放各走各的，
+会出现「预览填了、复制/导出没填」。
+
+**四条链路的接线点**
+
+| 链路 | 接线点 | 做法 |
+|---|---|---|
+| 预览 | `ui/SqlPreviewPanelSqlView.kt:176` `applyRuntimeSlotsAndNamedParams` | 占位 + `:name` 走 `buildExecutableSqlWithSlots` **一次扫描**（防值里的 `:nm` 被二次替换）；`?` 仍走既有 `backfillParamsBySource`（LIKE / 空值策略 / 模拟字面量口径不动） |
+| 复制 | `ui/SqlPreviewPanelSqlView.kt:559` `copyExecutableSql` | `CopyExecutableSqlAction.execute(this, slotValuesSnapshot())`（先填占位再剥注释，券 B 定的顺序） |
+| 导出回放 | `ui/SqlPreviewPanelExecution.kt:147` `previewSqlForExport` | `previewSqlForReadonly()` 之后补一次 `fillRuntimeSlots`（编辑器文本已是填好形态时为无操作） |
+| 执行 | `ui/SqlPreviewPanelExecution.kt:1145` `executeSql` | 顶部 `val sql = fillRuntimeSlots(rawSql)`，之后分类 / 闸门 / 快照 / 执行全用这份；写回文档仍用 `rawSql`（不回写已填值，避免污染预览文本） |
+
+**落点（文件:行）**
+
+| 内容 | 位置 |
+|---|---|
+| `slotValues` / `slotRenderWarnings` / `runtimeSlotRows` / 诊断行引用 | `ui/SqlPreviewPanel.kt:628,636,639,642` |
+| 占位值快照 / 填占位（导出/执行取词口） | `ui/SqlPreviewPanelSqlView.kt:197,206` |
+| 随新预览整表清空（D-6） | `ui/SqlPreviewPanelResultView.kt:193` |
+| 分区标题 / 行控件组 / 建行 / LOOP 展开预览 / 诊断发布 | `ui/SqlPreviewPanelParamPanel.kt:2003,2020,2052,2180,2208` |
+| 分区插入点（仅在 `runtimeSlots` 非空时） | 同上 `:324` |
+| 文案 `panel.slot.*`（中英各 24 键） | `messages/MpSqlVisualizerBundle{,_zh}.properties:91` 起 |
+
+**控件按 kind**：VALUE = 类型下拉（自动/字符串/数字/布尔/NULL）+ 文本框；LOOP = 文本框 + 右侧灰字展开
+预览（前 3 项，**直接喂真实回填引擎**算，不另写拼接）；TERNARY = 分支下拉（两支模板预览）+ 文本框；
+OPTIONAL = 「包含这段」复选框 + 文本框。控件变更只更新本占位的那一项（`SlotValue.copy`），再走既有
+`scheduleRender` 防抖链。
+
+**券 B 声明的限制在面板上的落实**
+
+- 引号内占位只转义不重复加引号：由引擎负责，面板不加壳；用例 `create_time >= '2026-01-01 00:00:00'` 钉住。
+- 复制链先填占位再剥注释：面板只传值，顺序在 `CopyExecutableSqlAction.assembleProduct`（券 B 已定）。
+- `OPTIONAL`「默认勾选 = 未动作」：行内复选框 tooltip 写明「必须填了值或显式取消勾选才算一次动作；
+  片段没有可填位置时填任意非空文本（不影响产物）」。
+- `LOOP` 逗号/换行都是分隔符：文本框 tooltip 写明「项内含逗号会被拆成两项，这类值请每行一个」。
+- 模板 `%s` 计数不符 / 展开形态未知 / 方言无布尔字面量等拒绝：渲染后写入 `slotRenderWarnings`，
+  分区下方灰字诊断行显示「首条 + 条数」，完整清单进 tooltip——**不静默**（用例钉住）。
+
+**定向测试读数**（`./gradlew test --tests … -Pkotlin.compiler.execution.strategy=in-process`）
+
+| 类 | XML 读数 |
+|---|---|
+| `SqlPreviewPanelRuntimeSlotTest`（新增 8 例） | `tests="8" skipped="0" failures="0" errors="0"` |
+| `RuntimeSlotChainConsistencyTest`（券 B，未改） | `tests="3" skipped="0" failures="0" errors="0"` |
+| `SqlPreviewPanelTest`（既有，未改） | `tests="31" skipped="0" failures="0" errors="0"` |
+| `SqlPreviewPanelImportTest`（既有，未改） | `tests="22" skipped="0" failures="0" errors="0"` |
+| `PreviewReadonlySnapshotTest`（既有，未改） | `tests="4" skipped="0" failures="0" errors="0"` |
+| `SqlPreviewPanelParamFieldTest` / `SqlPreviewPanelEmptyHintTest`（既有，未改） | `tests="2" failures="0"` / `tests="1" failures="0"` |
+
+**六组用例覆盖**：①无占位 → 不建任何占位行、参数区零变化；②行数 = 占位数且 kind ↔ 控件类型正确；
+③填值后预览变化（含 `(id='1' or id='2' or id='3' )`、引号内时间值、无 `运行时值` 残留）；④留空时四条
+链路逐字节一致；⑤切语言（zh→en 重建）后占位行仍在且标签更新；⑥券 B 的 `%s` 计数拒绝在面板上可见。
+另加一条正向链路一致用例（填值后 预览 / 复制 / 导出回放 / 执行 同一份文本）。
+
+**反向验证（两条，红/绿对）**
+
+| 反向改动 | 读数 |
+|---|---|
+| R1 预览渲染不传 slot（`applyRuntimeSlotsAndNamedParams` 直接 `applyNamedParams`） | `SqlPreviewPanelRuntimeSlotTest tests="8" failures="4"`，失败信息为「循环应展开成模板形态: SELECT … `(/* 运行时值: … · rt1 */)`…」「预览里不许残留占位」「模板 %s 计数不符必须报出来: []」；回退后 `tests="8" failures="0"` |
+| R2 导出取词口不传 slot（`previewSqlForExport` 退回裸 `previewSqlForReadonly`） | `tests="8" failures="1"`，失败信息 `expected:<…create_time >= '[2026-01-01 00:00:00]'…> but was:<…'[/* 运行时值: startTime · rt2 */]'…>`；回退后 `tests="8" failures="0"` |
+
+**留空逐字一致的对照形态**：`result.sql`（未回填）与「预览编辑器文本 / 复制产物 / 导出取词 / 执行取词」
+四处**逐字节相等**（用例 `testEmptySlotValuesKeepFourChainsByteIdentical`，无 `NULL` 转换）；零占位的预览
+（Wrapper/XML/批量/JPA 全链）走 `applyNamedParams` 旧路径，产物与改动前一致。
+
+**本券未做 / 遗留**
+
+- 占位值不进参数历史与参数预设（`buildHistorySnapshot` / `serializeParamsToJson` 仍只收 `paramValues`）：
+  与 D-6「不跨会话持久化」同向，但用户切预设时占位值会丢。
+- 「导入参数」按 `paramValues` 的 source 匹配，占位 id（`rtN`）不在匹配集合内——导入 JSON 里的 `rtN`
+  会被报成未匹配（预期，不静默失败）。
+- 「差异对比」读的是编辑器文本（已含填值），填值本身会显示成与上次预览的差异（正常）。
+- EXPLAIN 链未接 `fillRuntimeSlots`（本券口径是复制 / 导出 / 执行三处）；预览文本已填时 EXPLAIN 与预览一致，
+  用户手改回占位形态时仍会把块注释送进 EXPLAIN。
+- 分享对话框里的「可执行 SQL」走 `SqlShareManager.copyExecutableSql`（读编辑器文本，已填）——不另传值，
+  与预览一致；它不在本券写集内，未改。
+- 未跑全量 / 分片 / `verifyGate` / `buildPlugin`（按券纪律，只跑定向）。
+
