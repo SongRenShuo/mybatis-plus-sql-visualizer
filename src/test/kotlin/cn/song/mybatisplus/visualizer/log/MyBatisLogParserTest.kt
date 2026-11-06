@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -341,5 +342,63 @@ class MyBatisLogParserTest {
         val entries = p.takeEntries()
         assertEquals(1, entries.size)
         assertEquals("SELECT * FROM t WHERE id = 3", entries[0].restoredSql)
+    }
+
+    // ---------- T-SAF-20（log.mybatis.parseparams.unbounded-quadratic-regex）：参数文本超长截断 ----------
+
+    /**
+     * Parameters 文本须与 Preparing SQL 正文同受 [MyBatisLogParser.maxParseLength] 截断。
+     *
+     * 审计复核证据（NEEDS-VALIDATION #20）：修复前 Preparing 的 SQL 正文在 `sql.take(maxParseLength)`
+     * 截断，而 Parameters 余下文本不经截断直入 [parseParams]——其 PARAM_REGEX 以 `(?:\A|,\s*)` 为
+     * 匹配起点，对逗号密集无括号文本每个逗号起点都惰性重扫到行尾，二次复杂度。
+     */
+    @Test
+    fun `超长Parameters行截断到maxParseLength`() {
+        val p = MyBatisLogParser(maxParseLength = 20000)
+        p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?")
+        // 3 万个 `a,` = 6 万字符逗号密集无括号文本（PARAM_REGEX 二次回溯的最坏形态）
+        p.feed("==> Parameters: " + "a,".repeat(30_000))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertTrue(
+            "参数条数须被 maxParseLength 截断（修复前约 30000 且解析秒级卡顿）",
+            entries[0].params.size <= 10_100,
+        )
+    }
+
+    /** Parameters 独占一行的续行形态（分支 3）同样受截断。 */
+    @Test
+    fun `超长续行参数文本同样截断`() {
+        val p = MyBatisLogParser(maxParseLength = 20000)
+        p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?")
+        p.feed("==> Parameters: ")
+        // 无 `(类型)` 标注的纯逗号文本：走 PARAM_REGEX 二次回溯 + split(',') 回落两条路径
+        p.feed("1, 2, " + "a,".repeat(30_000))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("截断点之前的参数照常解析", "1", entries[0].params.firstOrNull()?.value)
+        assertTrue(
+            "参数条数须被 maxParseLength 截断（修复前约 30002）",
+            entries[0].params.size <= 10_102,
+        )
+    }
+
+    /** iBatis 2.x 的参数/类型行（集合 toString 形态）超长时同样截断（按无类型边界放弃解析）。 */
+    @Test
+    fun `iBatis超长参数与类型行截断`() {
+        val p = MyBatisLogParser()
+        p.feed("{pstm-1} Executing Statement: INSERT INTO t VALUES (?, ?)")
+        p.feed("{pstm-1} Parameters: [" + "v, ".repeat(30_000) + "v]")
+        p.feed("{pstm-1} Types: [" + "java.lang.String, ".repeat(30_000) + "java.lang.String]")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertTrue(
+            "iBatis 参数条数须被 maxParseLength 截断（修复前约 30001）",
+            entries[0].params.size <= 10_100,
+        )
     }
 }
