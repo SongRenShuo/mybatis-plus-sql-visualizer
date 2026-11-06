@@ -1446,6 +1446,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "本元守卫自身：判定内核为纯函数（fnDecls/selfTestFns/decisionShapedDecls/uncoveredNames），" +
                     "灵敏度由 `元守卫灵敏度自证_未自证的判定函数必红_自证与KDoc边界各归其位` 用例钉住",
             ),
+            GuardEntry(
+                "util/SqlSizeGuardTest.kt",
+                emptyList(),
+                "F-09 交互面超大 SQL 护栏（200K 关装饰 / 1M 关装饰+提示）：判定入口 `SqlSizeGuard.plan` " +
+                    "返回档位对象而非违规点集合，不命中 *Offenders/*Sites/*Hits 命名形状，故 decisionFns 留空；" +
+                    "反向验证＝把 plan() 恒返回 FULL 后 7 例中 3 例恰红（两档阈值 + 耗时读数）。",
+            ),
         )
     }
 }

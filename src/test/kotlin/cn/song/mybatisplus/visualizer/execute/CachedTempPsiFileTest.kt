@@ -7,7 +7,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Test
 import java.lang.reflect.Proxy
 
 /**
@@ -80,7 +79,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
      * 覆盖 mpsql-exec.sql）平台就丢掉旧 PSI，而 vf 依旧有效——此时命中缓存会把死 PSI 递进
      * Runner 枚举，读 `psi.text` 硬抛 `PsiInvalidElementAccessException`。
      */
-    @Test
     fun testInvalidPsiRejectedAsCacheMiss() {
         val (main, vf) = mainProjectAndVf()
         val gate = Disposer.newDisposable()

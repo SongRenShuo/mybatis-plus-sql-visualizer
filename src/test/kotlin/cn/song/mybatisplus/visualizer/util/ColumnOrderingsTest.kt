@@ -9,8 +9,9 @@ import org.junit.Test
 /**
  * F-13（DBX #317）：[ColumnOrderings] 单一列比较器锚点用例。
  *
- * 覆盖计划要求的四个锚点形态——空表 / 单列 / 多列 / 同值稳定序——外加方向取反、
- * 空值恒排后、数值串感知、列名/列序号两种寻址与查不到返回 null 的诚实降级。
+ * 覆盖计划要求的四个锚点形态——空表 / 单列 / 多列 / 同值稳定序——外加空值恒排后、数值串感知、
+ * 列名/列序号两种寻址与查不到返回 null 的诚实降级。**方向不在本对象**：升/降序由平台
+ * `TableRowSorter` 反转比较器承担，此处只钉升序语义（降序用 `reversed()` 模拟平台行为）。
  * 纯函数零 com.intellij 依赖，进 testFast 快桶。
  */
 class ColumnOrderingsTest {
@@ -22,14 +23,14 @@ class ColumnOrderingsTest {
     @Test
     fun 空表排序保持空表() {
         val rows = emptyList<List<String?>>()
-        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.ASC) { row, i -> row[i] }
+        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }
         assertNotNull(comparator)
         assertEquals(emptyList<List<String?>>(), rows.sortedWith(comparator!!))
     }
 
     @Test
     fun 空列清单按列名寻址返回null() {
-        val comparator = ColumnOrderings.byColumnName<List<String?>>("id", ColumnOrderings.Direction.ASC, emptyList()) { row, i -> row[i] }
+        val comparator = ColumnOrderings.byColumnName<List<String?>>("id", emptyList()) { row, i -> row[i] }
         assertNull(comparator)
     }
 
@@ -40,7 +41,7 @@ class ColumnOrderingsTest {
     @Test
     fun 单行表排序保持原序() {
         val rows = listOf(listOf("only"))
-        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.DESC) { row, i -> row[i] }
+        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }
         assertEquals(listOf(listOf("only")), rows.sortedWith(comparator!!))
     }
 
@@ -55,10 +56,10 @@ class ColumnOrderingsTest {
             listOf("a", "1"),
             listOf("c", "3"),
         )
-        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.ASC) { row, i -> row[i] }!!
+        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }!!
         assertEquals(listOf("a", "b", "c"), rows.sortedWith(asc).map { it[0] })
-        val desc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.DESC) { row, i -> row[i] }!!
-        assertEquals(listOf("c", "b", "a"), rows.sortedWith(desc).map { it[0] })
+        // 降序＝平台 TableRowSorter 对升序比较器取反（reversed），同值仍为 0
+        assertEquals(listOf("c", "b", "a"), rows.sortedWith(asc.reversed()).map { it[0] })
     }
 
     @Test
@@ -67,7 +68,7 @@ class ColumnOrderingsTest {
             listOf("x", "9"),
             listOf("y", "1"),
         )
-        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(1, ColumnOrderings.Direction.ASC) { row, i -> row[i] }!!
+        val comparator = ColumnOrderings.byColumnIndex<List<String?>>(1) { row, i -> row[i] }!!
         assertEquals(listOf("y", "x"), rows.sortedWith(comparator).map { it[0] })
     }
 
@@ -78,24 +79,24 @@ class ColumnOrderingsTest {
             listOf("1", "b"),
             listOf("2", "a"),
         )
-        val comparator = ColumnOrderings.byColumnName<List<String?>>("ID", ColumnOrderings.Direction.ASC, columns) { row, i -> row[i] }!!
+        val comparator = ColumnOrderings.byColumnName<List<String?>>("ID", columns) { row, i -> row[i] }!!
         assertEquals(listOf("1", "2"), rows.sortedWith(comparator).map { it[0] })
     }
 
     @Test
     fun 列名查不到与序号越界都返回null() {
         assertNull(
-            ColumnOrderings.byColumnName<List<String?>>("missing", ColumnOrderings.Direction.ASC, listOf("a", "b")) { row, i -> row[i] },
+            ColumnOrderings.byColumnName<List<String?>>("missing", listOf("a", "b")) { row, i -> row[i] },
         )
         // 正向越界校验须知道列总数（columnCount）；-1 = 未知列数，只挡负数序号
         assertNull(
-            ColumnOrderings.byColumnIndex<List<String?>>(5, ColumnOrderings.Direction.ASC, columnCount = 2) { row, i -> row[i] },
+            ColumnOrderings.byColumnIndex<List<String?>>(5, columnCount = 2) { row, i -> row[i] },
         )
         assertNotNull(
-            ColumnOrderings.byColumnIndex<List<String?>>(1, ColumnOrderings.Direction.ASC, columnCount = 2) { row, i -> row[i] },
+            ColumnOrderings.byColumnIndex<List<String?>>(1, columnCount = 2) { row, i -> row[i] },
         )
         assertNull(
-            ColumnOrderings.byColumnIndex<List<String?>>(-1, ColumnOrderings.Direction.ASC) { row, i -> row[i] },
+            ColumnOrderings.byColumnIndex<List<String?>>(-1) { row, i -> row[i] },
         )
     }
 
@@ -110,19 +111,19 @@ class ColumnOrderingsTest {
             listOf("a", "second"),
             listOf("a", "third"),
         )
-        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.ASC) { row, i -> row[i] }!!
+        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }!!
         assertEquals(listOf("first", "second", "third"), rows.sortedWith(asc).map { it[1] })
     }
 
     @Test
     fun 同值行降序同样保持原始顺序() {
-        // 取反实现只翻非零结果，同值恒 0——降序不翻转同值行的原始顺序。
+        // 平台取反只翻非零结果，同值恒 0——降序不翻转同值行的原始顺序。
         val rows = listOf(
             listOf("a", "first"),
             listOf("a", "second"),
             listOf("a", "third"),
         )
-        val desc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.DESC) { row, i -> row[i] }!!
+        val desc = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }!!.reversed()
         assertEquals(listOf("first", "second", "third"), rows.sortedWith(desc).map { it[1] })
     }
 
@@ -138,10 +139,9 @@ class ColumnOrderingsTest {
             listOf("", "r3"),
         )
         // 两个空值行彼此相等，稳定排序保持原始顺序（r1 在前）——升序降序一致。
-        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.ASC) { row, i -> row[i] }!!
+        val asc = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }!!
         assertEquals(listOf("r2", "r1", "r3"), rows.sortedWith(asc).map { it[1] })
-        val desc = ColumnOrderings.byColumnIndex<List<String?>>(0, ColumnOrderings.Direction.DESC) { row, i -> row[i] }!!
-        assertEquals(listOf("r2", "r1", "r3"), rows.sortedWith(desc).map { it[1] })
+        assertEquals(listOf("r2", "r1", "r3"), rows.sortedWith(asc.reversed()).map { it[1] })
     }
 
     @Test

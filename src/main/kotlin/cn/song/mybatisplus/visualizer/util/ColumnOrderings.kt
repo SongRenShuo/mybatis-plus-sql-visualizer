@@ -10,14 +10,15 @@ import java.util.Comparator
  * 三个面板里排出三种顺序。面板侧经 TableRowSorter 逐列安装 [compareCells]（列头点击排序），
  * 默认无 sortKeys 时视图序 = 模型序，零行为变更。
  *
- * 锚点用例见 ColumnOrderingsTest（空表 / 单列 / 多列 / 同值稳定序 / 方向 / 空值 / 数值串）。
+ * **方向不进本对象**：升/降序由平台 `TableRowSorter` 的 `SortOrder` 承担（它按需反转比较器），
+ * 插件侧只提供升序语义的单一判据——自带方向参数会让「谁负责反转」出现两个口径，也会长出
+ * 无人消费的死分支（EnumReachabilityGuard 曾据此报红）。
+ *
+ * 锚点用例见 ColumnOrderingsTest（空表 / 单列 / 多列 / 同值稳定序 / 空值 / 数值串）。
  */
 object ColumnOrderings {
 
-    /** 排序方向。降序由升序结果取反实现（同值恒为 0），稳定排序下同值行不因方向翻转。 */
-    enum class Direction { ASC, DESC }
-
-    /** 空值/空白统一判定：null 与纯空白串都按「无值」处理，恒排在有值之后（与方向无关）。 */
+    /** 空值/空白统一判定：null 与纯空白串都按「无值」处理，恒排在有值之后。 */
     private fun isAbsent(v: Any?): Boolean = v == null || (v is String && v.isBlank())
 
     /**
@@ -42,6 +43,41 @@ object ColumnOrderings {
             if (byValue != 0) return byValue
         }
         return a.toString().compareTo(b.toString(), ignoreCase = true)
+    }
+
+    /**
+     * 按列序号取值的行比较器（升序语义，三面板装配用）。
+     *
+     * @param cell 行 → 单元格值的取值函数（入参 = 行对象与列序号）
+     * @param columnCount 列总数（用于序号越界校验）；-1 = 列数未知（只挡负数序号）
+     * @return 比较器；序号越界返回 null——调用方保持原序（不猜、不静默取首列）
+     */
+    @JvmStatic
+    fun <T> byColumnIndex(
+        columnIndex: Int,
+        columnCount: Int = -1,
+        cell: (T, Int) -> Any?,
+    ): Comparator<T>? {
+        if (columnIndex < 0) return null
+        if (columnCount >= 0 && columnIndex >= columnCount) return null
+        return Comparator { x, y -> compareCells(cell(x, columnIndex), cell(y, columnIndex)) }
+    }
+
+    /**
+     * 按列名取值的行比较器（列名大小写不敏感）。
+     *
+     * @param columns 列名清单（下标即列序号）
+     * @return 比较器；列名查不到返回 null——调用方保持原序（同上，不猜）
+     */
+    @JvmStatic
+    fun <T> byColumnName(
+        name: String,
+        columns: List<String>,
+        cell: (T, Int) -> Any?,
+    ): Comparator<T>? {
+        val index = columns.indexOfFirst { it.equals(name, ignoreCase = true) }
+        if (index < 0) return null
+        return byColumnIndex(index, columns.size, cell)
     }
 
     /** 双方可解析为数值时给出数值对（Number 直取；字符串非空白且能 parse 才算），否则 null。 */
@@ -76,59 +112,5 @@ object ColumnOrderings {
         if (digits.isEmpty() || !digits.all { it in "0123456789abcdef" }) return null
         val value = runCatching { digits.toLong(radix).toDouble() }.getOrNull() ?: return null
         return if (negative) -value else value
-    }
-
-    /**
-     * 行比较器：按**列序号**定位关键列，行按该列值升降排。
-     *
-     * @param cell        行 → 单元格值的取值函数（入参 = 行对象与列序号）
-     * @param columnCount 列总数（用于序号越界校验）；-1 = 列数未知（只挡负数序号）
-     * @return 比较器；序号越界返回 null——调用方保持原序（不猜、不静默取首列）
-     */
-    @JvmStatic
-    fun <T> byColumnIndex(
-        columnIndex: Int,
-        direction: Direction,
-        columnCount: Int = -1,
-        cell: (T, Int) -> Any?,
-    ): Comparator<T>? {
-        if (columnIndex < 0) return null
-        if (columnCount >= 0 && columnIndex >= columnCount) return null
-        return object : Comparator<T> {
-            override fun compare(x: T, y: T): Int =
-                directedCompare(cell(x, columnIndex), cell(y, columnIndex), direction)
-        }
-    }
-
-    /**
-     * 行比较器：按**列名**定位关键列（大小写不敏感），行按该列值升降排。
-     *
-     * @param columns 列名清单（下标即列序号）
-     * @return 比较器；列名查不到返回 null——调用方保持原序（同上，不猜）
-     */
-    @JvmStatic
-    fun <T> byColumnName(
-        name: String,
-        direction: Direction,
-        columns: List<String>,
-        cell: (T, Int) -> Any?,
-    ): Comparator<T>? {
-        val index = columns.indexOfFirst { it.equals(name, ignoreCase = true) }
-        if (index < 0) return null
-        return byColumnIndex(index, direction, columns.size, cell)
-    }
-
-    /**
-     * 带方向的单对比较：空值恒排最后（方向无关），其余按方向取反。
-     * 取反只作用于非零结果——同值恒 0，稳定排序下两种方向的同值行都保持原始顺序。
-     */
-    private fun directedCompare(a: Any?, b: Any?, direction: Direction): Int {
-        val aAbsent = isAbsent(a)
-        val bAbsent = isAbsent(b)
-        if (aAbsent && bAbsent) return 0
-        if (aAbsent) return 1
-        if (bAbsent) return -1
-        val base = compareCells(a, b)
-        return if (direction == Direction.ASC) base else -base
     }
 }

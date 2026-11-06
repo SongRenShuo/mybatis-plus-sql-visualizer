@@ -26,11 +26,11 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
         myFixture.doHighlighting().filter { it.description?.contains(fragment) == true }
 
     /** 双语命中（headless bundle 语言随平台环境，正反断言一律中英双查，与既有测试同口径）。 */
-    private fun paramPropertyHits() = hits("不存在属性路径") + hits("does not exist on parameter")
+    private fun propertyMessages() = hits("不存在属性路径") + hits("does not exist on parameter")
 
-    private fun paramRefHits() = hits("从未引用") + hits("never referenced")
+    private fun refMessages() = hits("从未引用") + hits("never referenced")
 
-    private fun fragmentHits() = hits("未命中") + hits("does not match any")
+    private fun fragmentMessages() = hits("未命中") + hits("does not match any")
 
     // ------------------------------------------------------------------
     // 规则①：参数属性缺失
@@ -70,7 +70,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             mapperXml("""<select id="list">select * from t where id = #{p.noem} and name = #{p.name}</select>"""),
         )
         myFixture.enableInspections(ParamPropertyInspection())
-        val found = paramPropertyHits()
+        val found = propertyMessages()
         assertEquals("p.noem 应命中 1 条（p.name 放行）：$found", 1, found.size)
     }
 
@@ -93,7 +93,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
         myFixture.enableInspections(ParamPropertyInspection())
         assertTrue(
             "Map 型参数的 key 静态不可知（竞品同域误报重灾区），必须沉默",
-            paramPropertyHits().isEmpty(),
+            propertyMessages().isEmpty(),
         )
     }
 
@@ -113,7 +113,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             mapperXml("""<select id="list">select * from t where id = #{p.noem}</select>"""),
         )
         myFixture.enableInspections(ParamPropertyInspection())
-        assertTrue("参数类型解析不出必须沉默", paramPropertyHits().isEmpty())
+        assertTrue("参数类型解析不出必须沉默", propertyMessages().isEmpty())
     }
 
     // ------------------------------------------------------------------
@@ -136,7 +136,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             mapperXml("""<select id="list">select * from t where name = #{userName}</select>"""),
         )
         myFixture.enableInspections(ParamReferenceInspection())
-        val found = paramRefHits()
+        val found = refMessages()
         assertEquals("station 声明未引用应命中 1 条：$found", 1, found.size)
         assertTrue("userName 已引用不得报：$found", found.single().description.orEmpty().contains("station"))
     }
@@ -157,7 +157,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             mapperXml("""<select id="list">select * from t where name = #{userName} and sid = #{param2}</select>"""),
         )
         myFixture.enableInspections(ParamReferenceInspection())
-        assertTrue("param2 位置别名算引用，必须沉默", paramRefHits().isEmpty())
+        assertTrue("param2 位置别名算引用，必须沉默", refMessages().isEmpty())
     }
 
     fun test规则2_反例_include闸门沉默() {
@@ -183,7 +183,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
         myFixture.enableInspections(ParamReferenceInspection())
         assertTrue(
             "语句含 <include>：片段文本不在 PSI，station 在片段里被引用，引用面不可见必须沉默",
-            paramRefHits().isEmpty(),
+            refMessages().isEmpty(),
         )
     }
 
@@ -211,7 +211,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             ),
         )
         myFixture.enableInspections(ParamReferenceInspection())
-        assertTrue("foreach collection 属性引用算引用：${paramRefHits()}", paramRefHits().isEmpty())
+        assertTrue("foreach collection 属性引用算引用：${refMessages()}", refMessages().isEmpty())
     }
 
     fun test规则2_注解SQL_声明未引用报() {
@@ -228,7 +228,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         myFixture.enableInspections(ParamReferenceInspection())
-        val found = paramRefHits()
+        val found = refMessages()
         assertEquals("ghost 声明未引用应命中：$found", 1, found.size)
     }
 
@@ -247,7 +247,7 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
             ),
         )
         myFixture.enableInspections(MissingSqlFragmentInspection())
-        val found = fragmentHits()
+        val found = fragmentMessages()
         assertEquals("nope 应命中 1 条：$found", 1, found.size)
         assertTrue("base 已命中不得报", found.single().description.orEmpty().contains("nope"))
     }
@@ -269,8 +269,8 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
         )
         myFixture.enableInspections(MissingSqlFragmentInspection())
         assertTrue(
-            "本地命中 / 动态 refid / 不可见 namespace 三类都必须沉默：${fragmentHits()}",
-            fragmentHits().isEmpty(),
+            "本地命中 / 动态 refid / 不可见 namespace 三类都必须沉默：${fragmentMessages()}",
+            fragmentMessages().isEmpty(),
         )
     }
 
@@ -286,8 +286,8 @@ class ParamResolveInspectionTest : BasePlatformTestCase() {
         )
         myFixture.enableInspections(MissingSqlFragmentInspection())
         assertTrue(
-            "同 namespace 其它文件提供的片段必须命中（MyBatis 片段表语义）：${fragmentHits()}",
-            fragmentHits().isEmpty(),
+            "同 namespace 其它文件提供的片段必须命中（MyBatis 片段表语义）：${fragmentMessages()}",
+            fragmentMessages().isEmpty(),
         )
     }
 }
