@@ -158,6 +158,72 @@ class SqlLogAutoSaverTest {
         saver.close()
     }
 
+    // ======================== T-SAF-13：openWriterForCurrent 符号链接拒写 ========================
+
+    /**
+     * T-SAF-13（history.autosave.append-open-symlink-follow）回归：
+     * 主条目写入路径 openWriterForCurrent 以 CREATE+APPEND 打开且曾不审查/不 NOFOLLOW——
+     * 在 configure（打开）之前按 pattern 名植入符号链接时，打开会跟随链接，
+     * 把头行 + restoredSql + Base64 pd 载荷追加到链接目标（可指向项目外）。
+     * 修复语义：打开前 NOFOLLOW 审查（isRegularFile && !isSymbolicLink，与修订路径 fileKey 同款）+
+     * NOFOLLOW_LINKS 打开；被拒时告警并跳过本批写入。
+     *
+     * **修复前失败断言**：`符号链接目标不得收到追加字节`——修复前目标文件被追加写入
+     * （CREATE+APPEND 跟随符号链接，等于修订路径 fileKey CAS 会拒绝的确切状态）。
+     */
+    @Test
+    fun `打开前发现植入符号链接拒绝写入_T-SAF-13`() {
+        val dir = tempDir()
+        val target = File(dir, "outside-target.sql")
+        target.writeText("original-bytes\n")
+        val link = File(dir, "test.sql")
+        try {
+            Files.createSymbolicLink(link.toPath(), target.toPath())
+        } catch (e: Exception) {
+            // Windows 无管理员/开发者模式时无 SeCreateSymbolicLinkPrivilege——环境不支持则跳过
+            org.junit.Assume.assumeTrue("symlink not supported in this environment: $e", false)
+        }
+        val saver = SqlLogAutoSaver()
+        try {
+            saver.configure("", "test.sql", dir)
+            saver.write(entry("SELECT 1"))
+        } finally {
+            saver.close()
+        }
+        assertEquals("符号链接目标不得收到追加字节", "original-bytes\n", target.readText())
+        assertFalse("拒写时不应认领被拒文件为当前写入文件", File(dir, "test.sql").let { it.exists() && !it.isSymbolicLink })
+    }
+
+    /**
+     * T-SAF-13 回归（不丢其他条目）：链接拒写只跳过该名下的批次，后续新名/新目录照常落盘。
+     */
+    @Test
+    fun `符号链接拒写不阻断后续批次写入_T-SAF-13`() {
+        val dir = tempDir()
+        val target = File(dir, "outside-target.sql")
+        target.writeText("original-bytes\n")
+        val link = File(dir, "bad.sql")
+        try {
+            Files.createSymbolicLink(link.toPath(), target.toPath())
+        } catch (e: Exception) {
+            org.junit.Assume.assumeTrue("symlink not supported in this environment: $e", false)
+        }
+        val saver = SqlLogAutoSaver()
+        try {
+            saver.configure("", "bad.sql", dir)
+            saver.write(entry("SELECT 1")) // 被拒：跳过本批
+            // 换名重配后应恢复写入
+            saver.configure("", "good.sql", dir)
+            saver.write(entry("SELECT 2"))
+            val file = saver.currentFile()
+            assertNotNull("换名后应恢复写入", file)
+            assertTrue("换名文件应包含新条目", file!!.readText().contains("SELECT 2"))
+            assertEquals("链接目标仍不得收到字节", "original-bytes\n", target.readText())
+        } finally {
+            saver.close()
+        }
+    }
+
     @Test
     fun `configure 关闭旧文件重置状态`() {
         val saver = SqlLogAutoSaver()
