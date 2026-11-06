@@ -1,11 +1,17 @@
 package cn.song.mybatisplus.visualizer.onboarding
 
+import cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.openapi.ui.popup.PopupStep
+import com.intellij.openapi.ui.popup.util.BaseListPopupStep
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
@@ -85,7 +91,13 @@ class SqlPreviewStatusBarWidget(private val project: Project) : StatusBarWidget,
 
     override fun getTooltipText(): String = snapshot.tooltip
 
-    override fun getClickConsumer(): Consumer<MouseEvent> = Consumer { openLogPanel() }
+    override fun getClickConsumer(): Consumer<MouseEvent> = Consumer { e ->
+        // F-10：左键弹快捷菜单（原「直达日志面板」保留为首项，取消直达——取舍：常驻入口的
+        // 三条动作都需要可达性，直达只是其中一条；tooltip 文案已同步）。
+        ApplicationManager.getApplication().invokeLater {
+            if (!disposed && !project.isDisposed) handleWidgetClick(e)
+        }
+    }
 
     override fun install(statusBar: StatusBar) {
         this.statusBar = statusBar
@@ -117,6 +129,39 @@ class SqlPreviewStatusBarWidget(private val project: Project) : StatusBarWidget,
         runCatching {
             ToolWindowManager.getInstance(project).getToolWindow(SqlLogManager.TOOL_WINDOW_ID)?.show()
         }
+    }
+
+    /**
+     * F-10：点击处理（内部缝，返回本次点击将弹出的菜单项供测试观察——摘除菜单构建即空集，
+     * 测试恰红）。EDT 调用；弹出位置由 [e] 的组件决定。
+     */
+    internal fun handleWidgetClick(e: MouseEvent): List<WidgetMenuItem> {
+        val items = buildWidgetMenuItems(currentMenuState())
+        if (items.isNotEmpty()) showPopup(items, e)
+        return items
+    }
+
+    private fun showPopup(items: List<WidgetMenuItem>, e: MouseEvent) {
+        runCatching {
+            val step = object : BaseListPopupStep<WidgetMenuItem>(null, items) {
+                override fun getTextFor(value: WidgetMenuItem): String = value.label
+                override fun onChosen(value: WidgetMenuItem, finalChoice: Boolean): PopupStep<*>? {
+                    return doFinalStep { executeWidgetMenuAction(project, value.action) }
+                }
+            }
+            val anchor = e.component
+            val popup = JBPopupFactory.getInstance().createListPopup(step)
+            if (anchor != null && anchor.isShowing) popup.showInCenterOf(anchor) else popup.showInFocusCenter()
+        }
+    }
+
+    /** 菜单状态取数（EDT 调用，只读内存态；与工具窗内状态栏同口径）。 */
+    private fun currentMenuState(): WidgetMenuState {
+        val summary = runCatching { AgentManager.getInstance(project).statusSummary() }.getOrNull()
+        return WidgetMenuState(
+            enhancedEnabled = summary != null,
+            paused = runCatching { AgentManager.getInstance(project).userPaused }.getOrDefault(false),
+        )
     }
 
     override fun dispose() {
@@ -190,3 +235,68 @@ class SqlPreviewStatusBarWidgetFactory : StatusBarWidgetFactory {
 
 /** [SqlPreviewStatusBarWidgetFactory.isAvailable] 的纯判定（测试缝：不依赖真实 Project）。 */
 internal fun isWidgetAvailable(projectDisposed: Boolean): Boolean = !projectDisposed
+
+// ---------------------------------------------------------------------------
+// F-10（widget 点击菜单化）：菜单模型与纯构建
+// ---------------------------------------------------------------------------
+
+/** 菜单项动作（全部走既有入口，零新语义：工具窗/AgentManager 暂停位/设置页）。 */
+internal enum class WidgetMenuAction {
+    /** 打开 SQL 日志工具窗（原 widget 点击行为，保留为首项）。 */
+    OPEN_LOG_PANEL,
+
+    /** 暂停/恢复增强捕获（AgentManager.setUserPaused 翻转既有位）。 */
+    TOGGLE_PAUSE,
+
+    /** 打开插件设置页（既有 PluginSettingsFolderConfigurable 入口）。 */
+    OPEN_SETTINGS,
+}
+
+/** 菜单项：标签（bundle 文案随语言）+ 动作。 */
+internal data class WidgetMenuItem(val label: String, val action: WidgetMenuAction)
+
+/** 菜单构建输入（只读内存态快照）。 */
+internal data class WidgetMenuState(
+    /** 增强捕获总开关是否开启（[AgentManager.statusSummary] 非 null = 开）。 */
+    val enhancedEnabled: Boolean,
+    /** 增强捕获当前是否已暂停（决定 TOGGLE_PAUSE 项的标签）。 */
+    val paused: Boolean,
+)
+
+/**
+ * 菜单项纯构建（headless 覆盖矩阵）：
+ * - 首项恒为「打开 SQL 日志面板」（原点击行为的落位）；
+ * - 增强通道开启时第二项为「暂停捕获/恢复捕获」（标签随 [WidgetMenuState.paused] 取反语义）；
+ *   通道关闭时暂停位无意义，不出项（与面板侧方案 B 隐藏语义一致，不造无入口项）；
+ * - 末项「打开设置页」恒在。
+ */
+internal fun buildWidgetMenuItems(state: WidgetMenuState): List<WidgetMenuItem> {
+    val items = mutableListOf(
+        WidgetMenuItem(MpSqlVisualizerBundle.message("statusbar.sqlviz.menu.openLog"), WidgetMenuAction.OPEN_LOG_PANEL),
+    )
+    if (state.enhancedEnabled) {
+        val pauseKey = if (state.paused) "statusbar.sqlviz.menu.resume" else "statusbar.sqlviz.menu.pause"
+        items += WidgetMenuItem(MpSqlVisualizerBundle.message(pauseKey), WidgetMenuAction.TOGGLE_PAUSE)
+    }
+    items += WidgetMenuItem(MpSqlVisualizerBundle.message("statusbar.sqlviz.menu.settings"), WidgetMenuAction.OPEN_SETTINGS)
+    return items
+}
+
+/** 菜单动作执行（全部走既有入口；调用方保证 EDT 与项目存活）。 */
+internal fun executeWidgetMenuAction(project: Project, action: WidgetMenuAction) {
+    when (action) {
+        WidgetMenuAction.OPEN_LOG_PANEL ->
+            runCatching {
+                ToolWindowManager.getInstance(project).getToolWindow(SqlLogManager.TOOL_WINDOW_ID)?.show()
+            }
+        WidgetMenuAction.TOGGLE_PAUSE ->
+            runCatching {
+                val am = AgentManager.getInstance(project)
+                am.setUserPaused(!am.userPaused)
+            }
+        WidgetMenuAction.OPEN_SETTINGS ->
+            runCatching {
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsFolderConfigurable::class.java)
+            }
+    }
+}
