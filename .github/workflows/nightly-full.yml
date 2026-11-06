@@ -441,10 +441,30 @@ jobs:
     # 从 GitHub runner 到 114.66.55.245 / 103.36.220.245 每轮往返 200ms+，实测 50 分钟仍未跑完。
     # 现改为「代表实例子集」（见落矩阵那步）。全量矩阵仍由本地 releaseGate 覆盖。
     # 2026-11-05 run#9 实测子集内部读数：mysql84 18.6min（262 个保留字）+ pg16 3.3min（86 个）
-    # + 冷启动约 6min = 27.8min，离 30min 的步骤上限只剩 2.2min 余量——一次抖动就会把绿腿打成红。
-    # 故步骤放宽到 40min（预算 27.8 → 余量 12min），job 放到 50min。跨洋按字计费是硬成本：
-    # mysql84 约 4.3s/字（200ms RTT × 每字多次往返），要再压缩只能减少保留字或把 runner 挪到近网。
-    timeout-minutes: 50
+    # + 冷启动约 6min = 27.8min。跨洋按字计费是硬成本：mysql84 约 4.3s/字（200ms RTT × 每字多次往返）、
+    # pg16 约 2.3s/字；要再压缩只能减少保留字或把 runner 挪到近网。
+    #
+    # T-CiMatrixDialect（2026-11-06 券 B）子集 2 → 5 实例后按算式重算预算。**改子集、或改矩阵里
+    # 实例的 `timeoutSeconds`，都要用下面同一算式重算这两处 timeout**，不要凭感觉加：
+    #   步骤 timeout = Σ(每实例预算) + 冷启动与收尾余量
+    #     每实例预算 = 矩阵条目 `timeoutSeconds` → 系统属性 `-Dmpvs.external.instanceTimeout`
+    #                  → 默认 300s（券 A 口径）
+    #     冷启动与收尾余量 ≈ 8min（checkout + 配置 gradle + 落盘矩阵 ≈ 2min，首次配置与编译 ≈ 6min，
+    #                              含摘要上传）
+    #   为什么必须 ≥ Σ：最坏情况是**每个实例都挂到各自预算**——那时看门狗逐个判 TIMEOUT 并照常产出
+    #   summary；步骤上限一旦小于 Σ，就退化成 CI 掐断进程，既没有 summary 工件，也分不清「超时」和「崩」。
+    #   按 4.3s/字（CI 实测最坏值）外推本子集，字数取各方言保留字表大小：
+    #     mysql84 262 字 ≈ 1127s（实测 1113s，模型自校准）、pg16 86 字 ≈ 370s（实测 196s）、
+    #     panwei_a 109 字 ≈ 470s、gaussdb_kernel503 197 字 ≈ 850s、panwei_b 262 字 ≈ 1130s
+    #   → Σ 预期 ≈ 3950s ≈ 66min；矩阵按外推值给足预算时 Σ 上界 = 1200+400+500+900+1200 = 4200s = 70min
+    #   → 步骤 90min（70 + 8 = 78，再留 12min 抗抖动），job 放到 100min（步骤之上留 10min 收尾）。
+    # ⚠️ 前置（不满足会让现存绿腿变红）：券 A 的默认预算 300s **小于 mysql84 实测 1113s** ——
+    #   矩阵里必须给 mysql84、panwei_b 显式写 `timeoutSeconds`（≥1200s；pg16 ≥400s），否则看门狗
+    #   会在第 5 分钟把本来会通过的实例判成 TIMEOUT。预算落在 `.local/dialect-external-matrix.properties`
+    #   （＝ secret 的来源），由主控维护，不在本 workflow 内。
+    # ⚠️ 券 A 交出的单实例读数是**本机国内网络**读数，比 CI 小一个量级（panwei_a 本机 66.5s vs
+    #   CI 投影 470s），**不能直接当 CI 预算**；CI 侧一律按 4.3s/字 的跨洋率外推。
+    timeout-minutes: 100
     defaults:
       run:
         shell: pwsh
@@ -471,8 +491,25 @@ jobs:
         id: matrix
         env:
           MATRIX: ${{ secrets.DIALECT_MATRIX_PROPERTIES }}
-          # 想换代表实例改这里（逗号分隔，key 取自矩阵文件）
-          CI_DIALECT_KEYS: 'mysql84,pg16'
+          # 想换代表实例改这里（逗号分隔，key 取自矩阵文件）。**顺序＝挑选顺序**：
+          # T-CiMatrixDialect（2026-11-06 券 B）由 2 个扩到 5 个 —— 2026.11.6 的主打方言是磐维
+          # PanWeiDB（A 模式 Oracle 兼容 / B 模式 MySQL 兼容，用户真实形态是 `jdbc:panweidb:`），
+          # 原先进程只跑 mysql84+pg16，CI 冒烟对磐维与 GaussDB 内核 503 **零覆盖**；
+          # 磐维是 2026.11.6 的主打方言，CI 冒烟必须覆盖，故本版加进来。
+          # **预算吃紧时从尾部砍**：先砍 panwei_b（262 字，最贵），再 gaussdb_kernel503，
+          # 磐维 A 优先保（109 字，且是用户报障的原始形态）；砍完记得按 job 头部的算式回算 timeout。
+          # 前置：secret 必须**真的含**这三个 key 的条目——本机来源 `.local/dialect-external-matrix.properties`
+          # 2026-11-06 实测已含 panwei_a / panwei_b / gaussdb_kernel503（及其 skipWords/skipReason）。
+          # 缺 key 时下面 `$missing` 分支是**硬抛**，不会静默少跑；但 secret 全文助手看不到，
+          # 只能由「落盘行 + 一次真实 dispatch」实证（见下）。
+          # 事后复验（本 workflow 支持 workflow_dispatch，P6 求证：文件顶部 `on.workflow_dispatch:` 已有）：
+          #   gh workflow run nightly-full.yml            # 默认分支；换分支加 --ref <branch>
+          #   然后看该 run 的 dialect job → 「落方言矩阵」步的日志行：
+          #   方言矩阵已落盘（子集 mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b；原矩阵 N 个实例中取 5 个）
+          #   以及工件 dialect-verify-summary（summary.md 里的 `通过/跳过/超时/失败` 行）。
+          # 注：下面脚本里的兜底默认值保持 mysql84+pg16 不动——env 一旦被清空，宁可少跑两条
+          # 已知稳定的腿，也不要在 secret 缺新 key 时误红。
+          CI_DIALECT_KEYS: 'mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b'
         run: |
           if (-not $env:MATRIX) {
             Write-Host '::notice::未配置 secret DIALECT_MATRIX_PROPERTIES，跳过真机方言验证（本地 releaseGate 仍会跑）'
@@ -486,6 +523,10 @@ jobs:
           # 每轮 200ms+ 的 RTT 叠上千次查询 → 不可行。加预算只是延迟失败。
           # 做法：从 secret 里只保留 CI_DIALECT_KEYS 列的实例（默认按「一种协议一条」挑代表），
           # 其余实例仍由本地 releaseGate / dialectExternalVerify 覆盖。
+          # 子集内容与挑选顺序见上面 CI_DIALECT_KEYS 的注释；**全量矩阵仍以本地 releaseGate /
+          # dialectExternalVerify 为准**（2026-11-05 起的口径未变，CI 只留冒烟信号，本版只是扩子集）。
+          # 注意本步只做「按 key 摘录」，不解析 `instances` 行——所以矩阵条目（含 skipWords /
+          # skipReason / timeoutSeconds）会原样带过来，磐维 A 的 skipWords 例外在 CI 同样生效。
           $keep = ($env:CI_DIALECT_KEYS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
           if (-not $keep) { $keep = @('mysql84', 'pg16') }
           $lines = $env:MATRIX -split "`r?`n"
@@ -510,8 +551,9 @@ jobs:
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
-        # run#9 实测 27.8min（mysql84 18.6 + pg16 3.3 + 冷启动 6）；30 只剩 2.2min 余量，放宽到 40
-        timeout-minutes: 40
+        # 预算算式与取数见本 job 头部注释：5 实例子集 Σ 预期 ≈66min、Σ 上界 70min + 8min 冷启动收尾
+        # → 步骤 90min（2 实例子集时是 40min，run#9 实测 27.8min）。子集或矩阵实例预算一变，按同一算式重算。
+        timeout-minutes: 90
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"
