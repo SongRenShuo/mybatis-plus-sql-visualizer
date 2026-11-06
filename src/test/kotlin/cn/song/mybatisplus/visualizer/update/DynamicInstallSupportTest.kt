@@ -112,6 +112,48 @@ class DynamicInstallSupportTest {
         assertTrue((result as DynamicInstallSupport.ArtifactCheck.Invalid).reason.contains("not readable"))
     }
 
+    // ---------------- T-SAF-05（update.validateArtifact.regex-comment-desync） ----------------
+
+    @Test
+    fun validateArtifactRejectsCommentDesyncForeignId() {
+        // NEEDS-VALIDATION #5 fixture：真 id 只存在于 XML 注释里、真实 <id> 是外部身份——
+        // 改前 regex 首匹配命中注释内的真 id → 误放行 Ok（门判定与平台消费者去同步，外部 id 包可装进安装链）；
+        // 改后真 XML 解析忽略注释 → id mismatch 拒绝（先红：本断言在正则实现下失败，原因是返回 Ok）
+        val zip = tmp.root.toPath().resolve("comment-desync.zip")
+        val desyncXml = """
+            <idea-plugin>
+                <!-- <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id> -->
+                <id>com.example.foreign</id>
+                <version>2099.1.1</version>
+            </idea-plugin>
+        """.trimIndent()
+        buildIpgpLayoutZip(zip, desyncXml)
+        val result = DynamicInstallSupport.validateArtifact(zip)
+        assertTrue("注释内假 id 不得通过身份门：$result", result is DynamicInstallSupport.ArtifactCheck.Invalid)
+        assertTrue(
+            (result as DynamicInstallSupport.ArtifactCheck.Invalid).reason.contains("id mismatch"),
+        )
+    }
+
+    @Test
+    fun validateArtifactAcceptsDescriptorWithForeignIdInComment() {
+        // 去同步的另一面：注释里残留旧/外部 id、真实 <id> 是本插件——
+        // 改前 regex 首匹配命中注释内的外部 id → 误拒（正常包被错杀，同样先红）；
+        // 改后真解析忽略注释 → 放行
+        val zip = tmp.root.toPath().resolve("comment-benign.zip")
+        val benignXml = """
+            <idea-plugin>
+                <!-- 历史遗留：曾用 id com.example.old，勿恢复 -->
+                <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
+                <name>SQL Visualizer</name>
+                <version>2026.9.11-beta.1</version>
+            </idea-plugin>
+        """.trimIndent()
+        buildIpgpLayoutZip(zip, benignXml)
+        val result = DynamicInstallSupport.validateArtifact(zip)
+        assertTrue("注释不参与身份判定，正常包不误杀：$result", result is DynamicInstallSupport.ArtifactCheck.Ok)
+    }
+
     @Test
     fun validateArtifactReadsVersionAcrossLines() {
         // DOTALL 提取：version 标签跨行形态
