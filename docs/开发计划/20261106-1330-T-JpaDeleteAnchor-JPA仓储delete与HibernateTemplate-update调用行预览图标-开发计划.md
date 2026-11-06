@@ -1,7 +1,7 @@
 # T-JpaDeleteAnchor：JPA `delete(entity)` / `update(entity)` 调用行预览图标（2026-11-06）
 
 - 立项：2026-11-06 13:30
-- 状态：**待拍板**（独立立项，未改生产代码）
+- 状态：**已实施**（`0c26618b`，见 §十 实施记录）
 - 目标分支：`master`
 - 来源：用户对 [T-RuntimeConcatAndDeleteNull](20261106-1255-T-RuntimeConcatAndDeleteNull-运行时SQL拼接占位与Mapper空Wrapper删除预览缺失-开发计划.md) 的补充意见——「是否顺带让 JPA `repository.delete(entity)` 也有图标，可以单独立项」
 - 依赖：与 T-RuntimeConcatAndDeleteNull 的 R4 都改 `WrapperAnchorDetector`，两券必须串行或同批合流；本券不改变 MP 侧的锚点/注册表
@@ -132,3 +132,52 @@ if (!isWrappersFactory && !isServiceChain) {
 | 日期 | 内容 |
 |---|---|
 | 2026-11-06 | 立项。现状（预览已支持、锚点被场景 C 短路）、场景 C 内 JPA 分支方案、去重不变量表、测试与反向验证、4 条待验证前提。未改生产代码。 |
+
+## 十、实施记录
+
+- 日期：2026-11-06
+- 工作树 / 分支：`F:\code\Java\Gitee\SongRenShuo\mpsv-t-jpa` @ `t-jpa-delete`（从 `master` `9390b461` 建）
+- 提交：`0c26618b feat(jpa): anchor delete/update calls on JPA receivers`
+- 改动文件（只这两处）：
+  - `src/main/kotlin/cn/song/mybatisplus/visualizer/psi/WrapperAnchorDetector.kt`
+    - 新增 `private val JPA_COLLIDING_METHOD_NAMES: Set<String> = setOf("delete", "update")`；
+    - 场景 C 的 `if (!isWrappersFactory && !isServiceChain)` 改为：命中撞名名单时先问一次
+      `JpaCrudOperationConverter.hasJpaCrudReceiver(call)`，命中 `return element`，未命中 `return null`；
+    - 分支处注释写明优先级「工厂 > 服务链 > JPA > 无锚点」。
+  - `src/test/kotlin/cn/song/mybatisplus/visualizer/psi/WrapperAnchorDetectorJpaAndWholeFileTest.kt`
+    - 新增 5 个用例：`testJpaRepositoryDeleteAnchored`、`testHibernateTemplateDeleteAndUpdateAnchored`、
+      `testJoinWrappersDeleteUpdateStayFactoryOnly`、`testServiceUpdateVariantsNotAnchored`、
+      `testJpaExistingAnchorsKept`；
+    - 新增元素级扫描助手 `collectedAnchorElements()`（集合断言按文本去重，抓不到个数/落点差异）。
+- 未改动（按派活范围）：`JpaCrudOperationConverter.crudAnchorMethodNames`、`WRAPPER_FACTORY_COLLIDING_NAMES`、
+  场景 C/D/E 顺序、`GutterPreviewConsistencyTest.kt`、`BatchOperationConverter`、`SqlStringConcatenator`、
+  `CHANGELOG.md`、`docs/架构设计/`。
+
+### 定向读数
+
+命令：`./gradlew test --tests "cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorJpaAndWholeFileTest" --tests "cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorTest" -Pkotlin.compiler.execution.strategy=in-process`
+
+| 类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `WrapperAnchorDetectorJpaAndWholeFileTest` | 18 | 0 | 0 | 0 |
+| `WrapperAnchorDetectorTest` | 28 | 0 | 0 | 0 |
+
+`BUILD SUCCESSFUL`。未跑全量 / testShards / verifyGate / verifyPlugin / buildPlugin，未 clean、未 `--stop`。
+
+### 反向验证读数
+
+| 编号 | 临时改动 | 读数 | 还原后 |
+|---|---|---|---|
+| R1 | 去掉场景 C 的 JPA 分支（`if (!isWrappersFactory && !isServiceChain) return null`） | `18 tests completed, 2 failed`：`testJpaRepositoryDeleteAnchored`、`testHibernateTemplateDeleteAndUpdateAnchored`；`BUILD FAILED` | 绿（18/0/0/0） |
+| R2（字面形态） | 把 JPA 分支提到工厂判定之前，命中 `return element`、未命中下落继续 | **`BUILD SUCCESSFUL`，18 全绿**——该形状只会新增锚点；`JoinWrappers` 的 qualifier 是类引用，`hasJpaCrudReceiver` 返回 false，工厂调用不会被它抢走，故字面形态不构成可证伪读数 | — |
+| R2b（自然误写形态） | JPA 分支提到工厂判定之前 **且**未命中即 `return null` | `18 tests completed, 1 failed`：`testJoinWrappersDeleteUpdateStayFactoryOnly`（整文件集合丢掉 `delete`/`update` 工厂锚点）；`BUILD FAILED` | 绿（18/0/0/0） |
+| R3 | 去掉 `hasJpaCrudReceiver` 家族判定（只按方法名 `if (ref.referenceName in JPA_COLLIDING_METHOD_NAMES) return element`） | `18 tests completed, 1 failed`：`testServiceUpdateVariantsNotAnchored`（`service.update(wrapper)` 被误锚）；`BUILD FAILED` | 绿（18/0/0/0） |
+
+还原动作已核对：`git diff --stat` 为空、全仓 `grep "RED PROBE"` 无命中，工作树等于提交 `0c26618b`。
+
+### 偏差与未验证项
+
+1. **R2 需换形态才有读数**：计划里「把 JPA 分支提到工厂判定之前 → JoinWrappers 整文件集合用例红」不成立（字面形态恒绿）。真正被钉住的是「工厂分支优先、且 JPA 分支不得成为 `delete`/`update` 的统一出口」，故补 R2b 读数；两条都如实登记，不拿 R2b 冒充 R2。
+2. **`GutterPreviewConsistencyTest` 未跑**：派活明确不改该文件（另一代理在改），因此计划 §四「锚点存在 → preview 非 null」的接缝断言本轮未取读数。
+3. **`SqlPreviewServiceJpaCrudTest` 未跑**：不在定向清单内。本券未触及转换器，但待验证前提 **P-3（`ht.update(entity)` 预览 SQL 形态）因此仍未验证**。
+4. P-1 已由本券用例间接钉住（`service.update(wrapper)` / 链终结点 `update` 负例绿）；P-2 由 `testJoinWrappersDeleteUpdateStayFactoryOnly` 钉住；P-4 依赖 MP 券同批合流，本轮未验证。
