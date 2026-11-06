@@ -60,8 +60,29 @@ object SqlStringConcatenator {
     /** 占位文本长度上限（R1.4：超出截断加 `…`，避免整段三元把 SQL 撑爆）。 */
     private const val DYNAMIC_PLACEHOLDER_MAX_LENGTH = 120
 
-    /** R3：循环体内追加的降级占位说明（运行期重复 N 次，线性拼接必错）。 */
+    /** R3：循环体内追加的降级占位说明（运行期重复 N 次，线性拼接必错）。摘要取不到时回落本条。 */
     private const val LOOP_APPEND_LABEL = "循环内追加，运行时重复执行"
+
+    /** P1：循环占位带模板摘要时的前缀（后接清洗后的模板摘要）。 */
+    private const val LOOP_APPEND_SUMMARY_PREFIX = "循环内追加 "
+
+    /** P1：循环占位带模板摘要时的后缀（摘要取不到时整条回落 [LOOP_APPEND_LABEL]，不加本后缀）。 */
+    private const val LOOP_APPEND_SUMMARY_SUFFIX = "（运行时重复）"
+
+    /** P1：模板摘要里「非字符串字面量片段」（变量引用 / 方法调用 / 任意表达式）的替代符。 */
+    private const val TEMPLATE_ELLIPSIS = "…"
+
+    /** P1：三元两支模板的分隔符——运行期只走一支，接起来会读成「两段都在」。 */
+    private const val TEMPLATE_BRANCH_SEPARATOR = " / "
+
+    /**
+     * P1：模板摘要长度预算。
+     *
+     * 摘要先按本上限截断，再拼前后缀——保证整条占位不超 [DYNAMIC_PLACEHOLDER_MAX_LENGTH]，
+     * 否则外层清洗的长度上限会把 `（运行时重复）` 从尾巴上截掉（那正是这条摘要的意义所在）。
+     */
+    private val TEMPLATE_SUMMARY_MAX_LENGTH: Int =
+        DYNAMIC_PLACEHOLDER_MAX_LENGTH - LOOP_APPEND_SUMMARY_PREFIX.length - LOOP_APPEND_SUMMARY_SUFFIX.length
 
     /** R3：if/else 互斥两支都对同一 builder 追加时的降级占位说明。 */
     private const val PAIRED_APPEND_LABEL = "互斥分支追加，运行时只取一支"
@@ -124,8 +145,16 @@ object SqlStringConcatenator {
     private fun dynamicPlaceholder(exprText: String): String =
         "$DYNAMIC_PLACEHOLDER_PREFIX${sanitizePlaceholderText(exprText)} */"
 
-    /** 占位文本清洗（规则见 [dynamicPlaceholder]）。 */
-    private fun sanitizePlaceholderText(exprText: String): String {
+    /**
+     * 占位文本清洗（规则见 [dynamicPlaceholder]）。
+     *
+     * @param maxLength 长度上限；默认 [DYNAMIC_PLACEHOLDER_MAX_LENGTH]，「还要再包一层前后缀」的
+     *   场景（循环模板摘要）传更小的预算，见 [TEMPLATE_SUMMARY_MAX_LENGTH]。
+     */
+    private fun sanitizePlaceholderText(
+        exprText: String,
+        maxLength: Int = DYNAMIC_PLACEHOLDER_MAX_LENGTH,
+    ): String {
         val normalized = exprText
             .replace("*/", "* /")
             .replace('\'', '’')
@@ -133,8 +162,8 @@ object SqlStringConcatenator {
             .replace(Regex("\\s+"), " ")
             .trim()
         val text = normalized.ifEmpty { "表达式" }
-        return if (text.length > DYNAMIC_PLACEHOLDER_MAX_LENGTH) {
-            text.take(DYNAMIC_PLACEHOLDER_MAX_LENGTH - 1) + "…"
+        return if (text.length > maxLength) {
+            text.take(maxLength - 1) + "…"
         } else {
             text
         }
@@ -385,7 +414,15 @@ object SqlStringConcatenator {
                 AppendFlow.LOOP -> {
                     // 循环体内：贡献整体降级为占位注释（运行期重复 N 次，线性拼接必错）
                     if (anchor != null && !degradedContexts.add(anchor)) continue
-                    results += ConcatenationResult(sql = dynamicPlaceholder(LOOP_APPEND_LABEL), complete = false)
+                    // P1：占位带上循环体的模板摘要（只取字符串字面量，其余替换为 …），
+                    // 摘要取不到时回落 LOOP_APPEND_LABEL 现文案
+                    val summary = summarizeLoopTemplate(loopContextArguments(appendCalls, variable, anchor))
+                    val label = if (summary == null) {
+                        LOOP_APPEND_LABEL
+                    } else {
+                        LOOP_APPEND_SUMMARY_PREFIX + summary + LOOP_APPEND_SUMMARY_SUFFIX
+                    }
+                    results += ConcatenationResult(sql = dynamicPlaceholder(label), complete = false)
                 }
                 AppendFlow.PAIRED -> {
                     // if/else 互斥两支都追加：互斥片段不能同时出现在 SQL 里 → 两支都降级
@@ -525,6 +562,104 @@ object SqlStringConcatenator {
             }
         }
         return null
+    }
+
+    // ------------------------------------------------------------------
+    // P1（polish）— 循环占位的「模板摘要」
+    // ------------------------------------------------------------------
+
+    /**
+     * 收集同一循环上下文内全部 `append` 的实参（按源码顺序），作为模板摘要的取样集合。
+     *
+     * 循环体的追加常见形态是**跨多条 append**（`sb.append("or id='").append(ids.get(k)).append("' ")`），
+     * 只取「第一个触发降级的 append」会把摘要截成半截，所以按同一循环锚点整段取样。
+     *
+     * @param appendCalls 已按源码顺序排好、且都已筛成「对目标 builder 的 append」的调用列表
+     * @param variable    目标 builder 变量
+     * @param anchor      循环锚点（[analyzeAppendPosition] 给出的 `loop` 元素）
+     * @return 该循环体内各 append 的首个实参（顺序同源码）
+     */
+    private fun loopContextArguments(
+        appendCalls: List<PsiMethodCallExpression>,
+        variable: PsiVariable,
+        anchor: PsiElement?,
+    ): List<PsiExpression> {
+        if (anchor == null) return emptyList()
+        return appendCalls
+            .filter { analyzeAppendPosition(it, variable).anchor === anchor }
+            .mapNotNull { it.argumentList.expressions.firstOrNull() }
+    }
+
+    /**
+     * 把循环体的 append 序列汇成一条**模板摘要**（P1）：告诉用户「循环里追加的是什么」。
+     *
+     * 硬约束（与 [dynamicPlaceholder] 的清洗口径一致，见开发计划 R1.1）：
+     *  - 只保留**字符串字面量片段**，变量引用 / 方法调用 / 任意表达式一律替换为 [TEMPLATE_ELLIPSIS]
+     *    ——`k == 0 ?`、`ids.get(k)` 这类源码绝不出现在产物里；
+     *  - 取不到字面量的实参贡献一个 [TEMPLATE_ELLIPSIS] 占位——相邻片段之间必须有分隔，
+     *    否则 `append("or id='")` + `append(变量)` + `append("' ")` 会读成 `or id=''`（像空字面量）；
+     *  - 整段一个字面量都取不到 → 返回 null，调用方回落 [LOOP_APPEND_LABEL] 现文案，不凭空编造；
+     *  - 摘要仍走 [sanitizePlaceholderText]（`*/` → `* /`、引号换安全同形字符、空白折叠、长度上限）。
+     *
+     * @param args 循环体内各 append 的实参（源码顺序）
+     */
+    private fun summarizeLoopTemplate(args: List<PsiExpression>): String? {
+        if (args.isEmpty()) return null
+        val raw = StringBuilder()
+        var hasLiteral = false
+        for (arg in args) {
+            val fragment = summarizeExpression(arg)
+            if (fragment == null) {
+                raw.append(TEMPLATE_ELLIPSIS)
+            } else {
+                raw.append(fragment)
+                hasLiteral = true
+            }
+        }
+        if (!hasLiteral) return null
+        return sanitizePlaceholderText(raw.toString(), TEMPLATE_SUMMARY_MAX_LENGTH)
+    }
+
+    /**
+     * 表达式 → 模板片段（P1），**只读结构、不 resolve**。
+     *
+     *  - 字符串字面量 → 字面量值（`"or id='"` → `or id='`，后续由清洗换安全同形引号）；
+     *  - `+` 拼接 → 各操作数片段级联，非字面量操作数占一个 [TEMPLATE_ELLIPSIS]；
+     *  - 三元 → 两支片段以 [TEMPLATE_BRANCH_SEPARATOR] 分隔（缺片段的一支用 `…` 顶位）；
+     *  - 其余（变量引用 / 方法调用 / 任意表达式）→ null（由调用方决定补 `…` 还是回落）。
+     *
+     * 返回 null 的语义是「本表达式里没有字符串字面量」，不是「算不出来」——所以
+     * `ids.get(k)` / `k == 0` 这类内容结构上就不可能被带出来。
+     */
+    private fun summarizeExpression(expr: PsiExpression): String? {
+        when (expr) {
+            is PsiLiteralExpression -> return (expr.value as? String)?.takeIf { it.isNotEmpty() }
+            is PsiConditionalExpression -> {
+                val thenFragment = expr.thenExpression?.let { summarizeExpression(it) }
+                val elseFragment = expr.elseExpression?.let { summarizeExpression(it) }
+                if (thenFragment == null && elseFragment == null) return null
+                // 两支都要在场：只留一支会读成「循环里只有这一种形态」
+                return (thenFragment ?: TEMPLATE_ELLIPSIS) +
+                    TEMPLATE_BRANCH_SEPARATOR +
+                    (elseFragment ?: TEMPLATE_ELLIPSIS)
+            }
+            is PsiPolyadicExpression -> {
+                if (expr.operationTokenType != JavaTokenType.PLUS) return null
+                val raw = StringBuilder()
+                var hasLiteral = false
+                for (operand in expr.operands) {
+                    val fragment = summarizeExpression(operand)
+                    if (fragment == null) {
+                        raw.append(TEMPLATE_ELLIPSIS)
+                    } else {
+                        raw.append(fragment)
+                        hasLiteral = true
+                    }
+                }
+                return if (hasLiteral) raw.toString() else null
+            }
+            else -> return null
+        }
     }
 
     // ------------------------------------------------------------------
