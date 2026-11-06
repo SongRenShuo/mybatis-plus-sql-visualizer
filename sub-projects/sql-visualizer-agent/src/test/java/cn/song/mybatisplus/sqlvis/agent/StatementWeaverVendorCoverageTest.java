@@ -520,67 +520,88 @@ public class StatementWeaverVendorCoverageTest {
     // ---------- 磐维（T-IbatisPanwei 券 C）字节层 ----------
 
     /**
-     * 磐维字节层：驱动 jar 不入库、不在测试 classpath，经 {@code -Dpanwei.jar=<path>} 或环境变量
-     * {@code PANWEI_JAR} 提供；未提供时显式 skip（谓词层与厂商对齐守卫仍生效）。
+     * 磐维字节层：驱动 jar 不入库、不在测试 classpath。查找顺序＝{@code -Dpanwei.jar=<path>} /
+     * 环境变量 {@code PANWEI_JAR}（单 jar 覆盖），否则自动遍历仓库夹具
+     * `database-lab/vendor/drivers/panweidb-jdbc-*.jar`（**每一代都验**——V1 1.0.0 与 V2 2.0.0 的
+     * 包名/类名/方法形态相同，但版本漂移必须能被这条用例抓住）；都没有时显式 skip。
      *
-     * <p>jar 内是整包重命名（org/panweidb 374 条、org/postgresql 0 条），父类与接口同样只在 jar 里，
-     * 故用 jar 支撑的 URLClassLoader 作资源回退——与 classpath 驱动族同一套「织入 → 隔离子 loader
-     * 定义 → 初始化过 JVM 校验」。
+     * <p>jar 内是整包重命名（`org/panweidb` 条目 374/399 个、`org/postgresql` 0 个），父类与接口同样
+     * 只在 jar 里，故用 jar 支撑的 URLClassLoader 作资源回退——与 classpath 驱动族同一套
+     * 「织入 → 隔离子 loader 定义 → 初始化过 JVM 校验」。
      */
     @Test
     public void 磐维字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
-        final java.io.File jar = panweiJarOrNull();
+        final java.util.List<java.io.File> jars = panweiJars();
         org.junit.Assume.assumeTrue(
-                "未提供 -Dpanwei.jar / PANWEI_JAR，且仓库内 database-lab/vendor/drivers/panweidb-jdbc-1.0.0.jar 不在位，"
+                "未提供 -Dpanwei.jar / PANWEI_JAR，且 database-lab/vendor/drivers 下无 panweidb-jdbc-*.jar，"
                         + "磐维字节层跳过（谓词层已覆盖）",
-                jar != null);
+                !jars.isEmpty());
         final String[] classes = {
                 "org.panweidb.jdbc.PgStatement",
                 "org.panweidb.jdbc.PgPreparedStatement",
                 "org.panweidb.jdbc.PgCallableStatement",
                 "org.panweidb.jdbc.PgConnection",
         };
-        try (java.net.URLClassLoader jarLoader = new java.net.URLClassLoader(
-                new java.net.URL[]{jar.toURI().toURL()},
-                StatementWeaverVendorCoverageTest.class.getClassLoader())) {
-            for (String dotted : classes) {
-                final byte[] original = readJarEntry(jar, dotted.replace('.', '/') + ".class");
-                final StatementWeaver.Kind[] face = StatementWeaver.specOf(dotted);
-                assertNotNull(dotted + " 未登记进 SPECS", face);
-                final byte[] woven = StatementWeaver.weaveSpec(face, jarLoader, original);
-                assertFalse(dotted + " 必须被真实织入（changed）——登记了却零命中即假覆盖",
-                        Arrays.equals(original, woven));
-                final VerificationLoader loader = new VerificationLoader(
-                        dotted, woven, vendorPrefix(dotted), jarLoader);
-                loader.loadClass(dotted);
-                assertNotNull(dotted + " 织入产物必须通过 JVM 校验（jar 资源回退 + 初始化）",
-                        Class.forName(dotted, true, loader));
+        for (java.io.File jar : jars) {
+            final String label = jar.getName() + ": ";
+            try (java.net.URLClassLoader jarLoader = new java.net.URLClassLoader(
+                    new java.net.URL[]{jar.toURI().toURL()},
+                    StatementWeaverVendorCoverageTest.class.getClassLoader())) {
+                for (String dotted : classes) {
+                    final byte[] original = readJarEntry(jar, dotted.replace('.', '/') + ".class");
+                    final StatementWeaver.Kind[] face = StatementWeaver.specOf(dotted);
+                    assertNotNull(label + dotted + " 未登记进 SPECS", face);
+                    final byte[] woven = StatementWeaver.weaveSpec(face, jarLoader, original);
+                    assertFalse(label + dotted + " 必须被真实织入（changed）——登记了却零命中即假覆盖",
+                            Arrays.equals(original, woven));
+                    final VerificationLoader loader = new VerificationLoader(
+                            dotted, woven, vendorPrefix(dotted), jarLoader);
+                    loader.loadClass(dotted);
+                    assertNotNull(label + dotted + " 织入产物必须通过 JVM 校验（jar 资源回退 + 初始化）",
+                            Class.forName(dotted, true, loader));
+                }
             }
         }
     }
 
-    private static java.io.File panweiJarOrNull() {
+    private static java.util.List<java.io.File> panweiJars() {
+        final java.util.List<java.io.File> out = new java.util.ArrayList<java.io.File>();
         String p = System.getProperty("panwei.jar");
         if (p == null || p.isEmpty()) {
             p = System.getenv("PANWEI_JAR");
         }
         if (p != null && !p.isEmpty()) {
             final java.io.File f = new java.io.File(p);
-            return f.isFile() ? f : null;
+            if (f.isFile()) {
+                out.add(f);
+            }
+            return out;
         }
-        // 缺省回落仓库内夹具 database-lab/vendor/drivers/panweidb-jdbc-1.0.0.jar（见该目录 README）。
+        // 缺省回落仓库夹具 database-lab/vendor/drivers/panweidb-jdbc-*.jar（见该目录 README）。
         // 从 user.dir 逐级向上找：agent 子项目测试的 cwd 是子项目目录，往上两级才是仓库根。
         java.io.File dir = new java.io.File(System.getProperty("user.dir", ".")).getAbsoluteFile();
         for (int i = 0; i < 8 && dir != null; i++) {
-            final java.io.File candidate = new java.io.File(
-                    new java.io.File(new java.io.File(new java.io.File(dir, "database-lab"), "vendor"), "drivers"),
-                    "panweidb-jdbc-1.0.0.jar");
-            if (candidate.isFile()) {
-                return candidate;
+            final java.io.File drivers = new java.io.File(
+                    new java.io.File(new java.io.File(dir, "database-lab"), "vendor"), "drivers");
+            if (drivers.isDirectory()) {
+                final java.io.File[] jars = drivers.listFiles(
+                        new java.io.FilenameFilter() {
+                            @Override
+                            public boolean accept(java.io.File d, String n) {
+                                return n.startsWith("panweidb-jdbc-") && n.endsWith(".jar");
+                            }
+                        });
+                if (jars != null) {
+                    java.util.Arrays.sort(jars);
+                    for (java.io.File j : jars) {
+                        out.add(j);
+                    }
+                }
+                return out;
             }
             dir = dir.getParentFile();
         }
-        return null;
+        return out;
     }
 
     private static byte[] readJarEntry(java.io.File jar, String entry) throws Exception {
