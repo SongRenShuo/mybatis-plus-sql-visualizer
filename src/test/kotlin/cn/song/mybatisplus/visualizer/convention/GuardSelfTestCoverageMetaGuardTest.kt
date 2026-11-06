@@ -674,6 +674,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=摘掉一条 lang.parserDefinition 注册必红（实施轮实测）。",
             ),
             GuardEntry(
+                "convention/DynamicEpComplianceGuardTest.kt",
+                emptyList(),
+                "T-HotSwapUnloadSafety 守卫：本插件扩展的**非动态 EP**必须登记在 PlatformEpDynamism 里，" +
+                    "且只许落在可选依赖描述文件（主 plugin.xml 无条件加载，DatabaseTools 缺席时 " +
+                    "NoClassDefFoundError）。判定内核＝extendedEps 文本解析（剥注释后取 " +
+                    "<extensions defaultExtensionNs> 的子元素与 point= 属性）+ 三条断言，无「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。灵敏度实测（2026-11-06）：①把登记表置空 → " +
+                    "PlatformEpDynamismTest 3 红 + 本类 1 红；②把一条 <sql.dialect> 搬进主 plugin.xml → " +
+                    "「只允许落在可选依赖描述文件」红；两次还原后均转绿。首轮还因 EP 名解析字符类漏掉「.」" +
+                    "（<sql.dialect> 整条匹配不上）假红一次，已在源码注释留痕。",
+            ),
+            GuardEntry(
                 "log/EmptyTextLinkApiGuardTest.kt",
                 emptyList(),
                 "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +
