@@ -66,10 +66,21 @@ object SqlExportService {
         }
     }
 
-    /** 写盘（调用方保证后台线程）。 */
-    fun exportToFile(file: File, content: String) {
+    /** UTF-8 BOM（CSV 导出默认首缀——Excel 直开按 UTF-8 识别，中文不乱码；F-14 DBX #318）。 */
+    internal const val UTF8_BOM = "\uFEFF"
+
+    /**
+     * F-14（DBX #318）：CSV 导出是否带 BOM 的**单一判定**（两条导出链共用，勿各写一份）。
+     * 仅 CSV 关心 BOM（TSV/TXT/SQL/MD 一律无）；设置项 csvExportNoBom（PluginSettings.State）
+     * 勾选 = 管程/脚本管道场景，省略 BOM。设置值由调用方读入传入——本类保持不触平台设置。
+     */
+    fun bomFor(format: SqlExportFormat, csvNoBomSetting: Boolean): Boolean =
+        format == SqlExportFormat.CSV && !csvNoBomSetting
+
+    /** 写盘（调用方保证后台线程）。[bom] 为 true 时内容前写 UTF-8 BOM（CSV 导出链默认带）。 */
+    fun exportToFile(file: File, content: String, bom: Boolean = false) {
         file.parentFile?.mkdirs()
-        file.writeText(content)
+        file.writeText(if (bom) UTF8_BOM + content else content)
     }
 
     /**

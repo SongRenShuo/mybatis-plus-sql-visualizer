@@ -19,6 +19,12 @@ package cn.song.mybatisplus.visualizer.log
  *
  * 边界：List.toString 不携带类型或转义，001/true/逗号字符串均不能据此确定字面量。
  * 不拆 Actual 参数，不伪造类型或逻辑绑定；4.x 不在本次范围。
+ *
+ * 与其余解析器的互斥（F-04）：本解析器只认 `Logic SQL:` / `Actual SQL:` 关键字，
+ * 不吃 MyBatis `Preparing:`/`Parameters:` 行、Hibernate `Hibernate:` 行、
+ * JdbcTemplate `Executing prepared SQL statement` 行——各族的行形态互不重叠，
+ * 桥 [SqlLogConsoleBridge.processConsoleLine] 对每行四解析器并行喂入即天然互斥，
+ * 同一条语句不会被重复计数（判别用例见 `ShardingSphereLogParserTest.真实格式桥分派开关和其余三族互不干扰`）。
  */
 class ShardingSphereLogParser(
     /** 行解析最大长度（超长截断，防控制台大输出卡顿；与其余解析器同口径）。 */

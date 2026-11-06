@@ -282,6 +282,23 @@ class ShardingSphereLogParserTest {
         assertTrue(parser.takeEntries().isEmpty())
     }
 
+    /**
+     * F-04 互斥反例：MyBatis 三族行直接喂本解析器必须零产出——`Logic SQL:`/`Actual SQL:`
+     * 关键字判定不吃普通 MyBatis Preparing/Parameters 行（正向互斥见
+     * `真实格式桥分派开关和其余三族互不干扰`，此处钉解析器本体的单侧边界）。
+     */
+    @Test
+    fun `MyBatis行不被ShardingSphere解析器吃`() {
+        val parser = ShardingSphereLogParser()
+        parser.feed("Preparing: SELECT * FROM mb WHERE id = ?")
+        parser.feed("Parameters: 7(Integer)")
+        parser.feed("Total: 1")
+        parser.feed("18:32:08.911 INFO  [main] c.e.Mapper.selectById - Preparing: SELECT * FROM mb WHERE id = ?")
+        parser.feed("18:32:08.912 INFO  [main] c.e.Mapper.selectById - Parameters: 7(Integer)")
+        parser.closePending()
+        assertTrue("MyBatis 行形态不得进入 ShardingSphere 条目链", parser.takeEntries().isEmpty())
+    }
+
     @Test
     fun `Actual先于Logic无上下文_丢弃不产条目`() {
         val parser = ShardingSphereLogParser()

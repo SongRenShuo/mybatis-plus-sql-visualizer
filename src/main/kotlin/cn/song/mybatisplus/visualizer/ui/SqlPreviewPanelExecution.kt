@@ -383,6 +383,11 @@ internal fun SqlPreviewPanel.exportPortableSql() {
                             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskExportOn(),
                             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().displayMaskAllowList(),
                         ),
+                        // F-14（DBX #318）：CSV 导出默认带 UTF-8 BOM（Excel 直开不乱码）；设置省略则不带。
+                        cn.song.mybatisplus.visualizer.log.SqlExportService.bomFor(
+                            format,
+                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().csvExportNoBom(),
+                        ),
                     )
         }.onSuccess {
             com.intellij.notification.NotificationGroupManager.getInstance()

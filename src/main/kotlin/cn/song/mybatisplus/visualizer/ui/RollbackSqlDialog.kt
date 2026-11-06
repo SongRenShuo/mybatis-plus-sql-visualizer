@@ -403,6 +403,13 @@ class RollbackSqlDialog(
         )
         // 新数据回到原始顺序；行号与列宽随内容刷新。
         snapshotSorter.sortKeys = emptyList()
+        // F-13（DBX #317）：三面板（列信息/EXPLAIN 网格/本表）统一排序语义——逐列装
+        // ColumnOrderings 比较（数值串按数值比、空白恒排后）；旧默认字典序只在点列头后才
+        // 生效，故无排序态行为不变。setDataVector 可能换列数，比较器随数据重装。
+        val cellOrder = java.util.Comparator<Any?> { a, b ->
+            cn.song.mybatisplus.visualizer.util.ColumnOrderings.compareCells(a, b)
+        }
+        for (i in 0 until snapshotTableModel.columnCount) snapshotSorter.setComparator(i, cellOrder)
         updateSnapshotRowHeader()
         autoFitSnapshotColumns()
         snapshotSummary.text = MpSqlVisualizerBundle.message(
