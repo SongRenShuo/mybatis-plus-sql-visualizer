@@ -623,7 +623,7 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 |---|---|
 | `10441d9b` | `feat(concat): loop placeholder carries a sanitized template summary (P1 polish)`——P1 生产改动 + 两条测试类的新增/补强用例（3 文件，+238/−6） |
 | 本条（计划回写） | 仅文档：本文件 §十四 + `CHANGELOG.md` 新增 `[Unreleased]` 一条 |
-| 随后一次仅文档提交 | 14.3 补两次复跑失败的读数（共享 transform 工作区被并发会话占死） |
+| 随后两次仅文档提交 | 仅文档：14.3 补齐三次复跑失败的读数与两条复跑前提（哈希见 `git log t-runtimeconcat-polish`） |
 
 ### 14.2 改动点
 
