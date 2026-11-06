@@ -201,8 +201,8 @@ maintenance-note: >-
 | [20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md](./发行说明/20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md) | v2026.10.6 正式版：@Embedded 三族识别补全、日志屏蔽、信创方言扩至 11 种、通用 XML 内嵌 SQL 识别 |
 | [20260923-1058-回滚链与增强捕获可靠性大修-发行说明.md](./发行说明/20260923-1058-回滚链与增强捕获可靠性大修-发行说明.md) | v2026.9.23 正式版：一键回滚 SQL、增强捕获三项根治、错误定位全链、MCP 十工具上线、方言智能推断、执行安全双闸门 |
 | [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md) | 版本号规范（YYYY.M.D 一日一版） |
-| [Gitee自动发行工作流-说明文档.md](./发行说明/Gitee自动发行工作流-说明文档.md) | **门禁→八处同步→发行提交→buildPlugin→标签→Gitee API 发行→回读校验全链路**；API 参数陷阱、脚本三模式、`inspect-plugin-zip.py`、tag 前移不删发行版 |
-| [T-ReleaseChecklist-发行检查清单.md](./发行说明/T-ReleaseChecklist-发行检查清单.md) | **发行检查清单**：发行链每步给动作/命令/判据，判据不满足不得勾选；发行上传维持人工 |
+| [Gitee自动发行工作流-说明文档.md](./发行说明/Gitee自动发行工作流-说明文档.md) | **门禁→八处同步→发行提交→buildPlugin→标签→Gitee API 发行→回读校验全链路**；API 参数陷阱、脚本三模式、`inspect-plugin-zip.py`、tag 前移不删发行版；**双通道正文分工**（GitHub=CI 生成速览+折叠历史，Gitee=发行说明全文，不对齐）与**改正文 PATCH 三字段**（漏 `prerelease` 会把内测版改成正式版） |
+| [T-ReleaseChecklist-发行检查清单.md](./发行说明/T-ReleaseChecklist-发行检查清单.md) | **发行检查清单**：发行链每步给动作/命令/判据，判据不满足不得勾选；发行上传维持人工；含 RC-P4b 双通道正文分工与 RC-R2c 发行后补正文 |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | 首次发布 Marketplace 全流程（双仓订正：源码链接填 GitHub 镜像、日常同步走 `push-all.ps1`）；含内测包用户升级路径 |
 | [marketplace-custom-page.md](./发行说明/marketplace-custom-page.md) | Marketplace 自定义页 Markdown 版（整页复制到市场 Documentation 编辑器） |
 | [20260923-marketplace-审核回复稿.md](./发行说明/20260923-marketplace-审核回复稿.md) | Marketplace 审核邮件回复稿 v2（internal API usage & compatibility） |

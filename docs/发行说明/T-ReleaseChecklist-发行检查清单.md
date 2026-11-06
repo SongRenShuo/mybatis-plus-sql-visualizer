@@ -116,6 +116,12 @@
   - **本机发布**（本机 buildPlugin 出的 zip）：网页创建发行版，标签同名，附同名 zip，正文用发行说明全文。
     判据：Release 页可见附件且文件名含正确版本号。两条路完成后都可
     `python dev-support/gitee-release.py --version {版本号} --verify-only` 复查。
+  - **RC-R2c 发行后补正文**（2026-11-06 定例）：正文要补内容（测试读数、构建记录行、错别字）时用
+    `PATCH /releases/{id}` 原地改，**不要 `--replace`**（删了重建会重传附件、可能踩 CDN 缓存）。
+    PATCH 是整体覆盖语义，`tag_name` / `name` / `prerelease` 三个字段必须一并传——
+    漏 `prerelease` 会静默把内测版改成正式版（2026-11-06 实证）。改完回读必须查
+    `prerelease` + 正文尾段 + 附件名，不能只看 HTTP 200。操作细节见
+    `Gitee自动发行工作流-说明文档.md` §三.6。
 - [ ] RC-R2b GitHub Release 镜像（仅**本机发布**场景需要；CI 发布已在 Actions 里完成）：
   `python dev-support/mirror-releases-to-github.py --tag {版本号}`（幂等，可反复跑；已存在则只补附件）。
   判据：`--verify-only` 通过、GitHub Releases 页出现同版本且附件 size 与本地 zip 一致。
