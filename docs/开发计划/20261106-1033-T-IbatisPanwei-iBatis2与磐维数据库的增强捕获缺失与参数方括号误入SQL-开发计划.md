@@ -241,4 +241,6 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - 应用 `WEB-INF/lib/` 下的驱动 jar 本体（`panweidb-jdbc-*` / `panwei-client-*` / `panweidb_jdbc_*`），放本机任意路径，测试用 `-Dpanwei.jar=<path>` 读取、不入库；
 - 或 `jcmd <pid> VM.class_hierarchy | grep -i -E "panwei|panweidb"` 输出（够登记，字节层校验只能标「未做」）。
 
+**墨天轮渠道实测（2026-11-06 11:38）**：用户给出的两个文件页 `https://www.modb.pro/doc/123758`（`panweidb-jdbc-2.0.0.jar`，约 869K）与 `/doc/123759`（`panweidb-jdbc-postgresql-2.0.0.jar`，约 871K）**匿名访问均 404**，下载接口 `/api/doc/download/<id>` 返回 `401 {"operateMessage":"请登录后操作"}`——需要用户登录后自行下载。两个制品的并存本身是有用线索：基名 jar 大概率是**整包重命名**（需登记语句面 + prepare 面），`-postgresql` 后缀那个大概率是 pgjdbc 兼容别名（只需 connect 面）；仍以 jar 内 `org/panweidb/jdbc/*` 与 `org/postgresql/jdbc/*` 的条目数为准。
+
 在 jar 到位前，磐维用户的采集由**接口兜底 + 券 D 的未登记诊断**承接：兜底命中即可采（无参 `executeQuery` 仍需连接类同时命中），零命中时状态栏会直接报出 `org.panweidb.jdbc.*` 未增强，不再静默。
