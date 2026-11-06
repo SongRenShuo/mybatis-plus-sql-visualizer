@@ -246,4 +246,49 @@ class IbatisLogParseTest {
         assertEquals(1, entries.size)
         assertEquals("SELECT * FROM t WHERE a = 1 AND b = 'abc'", entries[0].restoredSql)
     }
+
+    // ---------- 值本身带方括号：只剥结构层一层（用户 2026-11-06 追问） ----------
+
+    @Test
+    fun `参数值本身带方括号时只剥结构层一层`() {
+        // Java List.toString 的形态：单值 "[abc]" → "[[abc]]"，单值 "[]" → "[[]]"，
+        // 值 "a[b]c" → "[a[b]c]"。剥的永远是最外那一层结构括号，元素内括号原样保留。
+        val sql = "select * from t where a = ? and b = ? and c = ?"
+        val entries = feedAll(
+            parser(),
+            listOf(
+                "${logPrefix}{pstm-9} Executing Statement: $sql",
+                "${logPrefix}{pstm-9} Parameters: [[abc], [], a[b]c]",
+                "${logPrefix}{pstm-9} Types: [java.lang.String, java.lang.String, java.lang.String]",
+            ),
+        )
+        assertEquals(1, entries.size)
+        assertEquals(3, entries[0].params.size)
+        assertEquals("[abc]", entries[0].params[0].value)
+        assertEquals("[]", entries[0].params[1].value)
+        assertEquals("a[b]c", entries[0].params[2].value)
+        // 值里的方括号原样进入字符串字面量，不被吞掉
+        assertEquals(
+            "select * from t where a = '[abc]' and b = '[]' and c = 'a[b]c'",
+            entries[0].restoredSql,
+        )
+    }
+
+    @Test
+    fun `参数值含逗号属已登记边界按逗号切分`() {
+        // List.toString 不可逆：值 "a,b" 与两个值 a / b 的打印形态完全相同，只能按两个参数处理。
+        // 这条锁住「边界是登记过的，不是悄悄改语义」——与 ListParamRenderer 同口径。
+        val entries = feedAll(
+            parser(),
+            listOf(
+                "${logPrefix}{pstm-11} Executing Statement: select * from t where a = ?",
+                "${logPrefix}{pstm-11} Parameters: [a,b]",
+                "${logPrefix}{pstm-11} Types: [java.lang.String]",
+            ),
+        )
+        assertEquals(1, entries.size)
+        assertEquals(2, entries[0].params.size)
+        assertEquals("a", entries[0].params[0].value)
+        assertEquals("b", entries[0].params[1].value)
+    }
 }
