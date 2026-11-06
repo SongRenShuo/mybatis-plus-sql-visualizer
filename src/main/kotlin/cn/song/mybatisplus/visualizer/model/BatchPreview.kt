@@ -19,6 +19,9 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
  * @param paramHints  与 [paramSources] 并行的回填引号提示（T-M23-02，按列类型 [ParamQuote]）
  * @param batchModel  批量可选参数模型（T-M23-04）：INSERT/UPDATE/UPSERT 的列级勾选结构，
  *                    驱动面板勾选重建 SQL；SELECT/DELETE 等无列级选择的方法为 null
+ * @param warning     T-WriteFamily（R4）：无 WHERE 条件的高危写操作警示（`delete(null)` /
+ *                    `update(entity, null)` / `remove(null)`），透传到 [cn.song.mybatisplus.visualizer.model.PreviewResult]；
+ *                    null 表示无警示
  */
 data class BatchPreview(
     val methodName: String,
@@ -28,4 +31,5 @@ data class BatchPreview(
     val paramSources: List<String> = emptyList(),
     val paramHints: List<ParamHint> = emptyList(),
     val batchModel: BatchModel? = null,
+    val warning: String? = null,
 )

@@ -135,10 +135,13 @@ object WrapperLocator {
      * T-M23.7：调用是否为 SQL 候选——**wrapper 链首** 或 **批量操作方法调用**
      * （`getById`/`save`/`removeById`/`selectAll` 等，注册表 [BatchOperationConverter.batchOperationMethodNames]；
      * 用户实测：选择区含 `bannerService.getById(id)` 时也应进多 SQL 选择列表）。
+     * T-WriteFamily（R4）：写族新增的 `delete`/`update`/`remove` 措辞与链工厂/终结点撞名，
+     * 须叠加「空 Wrapper 精确形态 + MP receiver」门（[BatchOperationConverter.isBatchOperationCall]），
+     * 否则 `redisTemplate.delete(null)` / `list.remove(0)` 会进候选列表。
      * internal 供选择区扫描（[sqlCandidatesInRange]）与 ConvertToSqlAction 复用。
      */
     internal fun isSqlCandidate(call: PsiMethodCallExpression): Boolean =
-        isChainHeadCall(call) || call.methodExpression.referenceName in BatchOperationConverter.batchOperationMethodNames
+        isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call)
 
     /**
      * T-M23.7：扫描选择区（offset 范围）内全部 SQL 候选调用（wrapper 链首 + 批量操作方法，
