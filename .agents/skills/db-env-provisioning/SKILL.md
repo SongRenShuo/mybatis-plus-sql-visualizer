@@ -342,6 +342,11 @@ select current_user, current_database(),
 | OceanBase | `com.oceanbase:oceanbase-client:2.4.19` | `com.oceanbase.jdbc.Driver`，URL `jdbc:oceanbase://` |
 | MariaDB | `org.mariadb.jdbc:mariadb-java-client:3.3.3` | 3.x 全部自有类，不复用 MySQL `StatementImpl` |
 | 瀚高/海量/金仓 | `com.highgo:HgdbJdbc:6.2.5` / `cn.com.vastdata:vastbase-jdbc:2.16.1v` / `cn.com.kingbase:kingbase8:9.0.1` | 都在 Maven Central |
+| 磐维 PanWeiDB | 本地 jar `database-lab/vendor/drivers/panweidb-jdbc-{1.0.0,2.0.0}.jar`（V1/V2 类形一致；插件三面登记已覆盖两代） | **无 Maven 坐标**（厂商渠道拿不到公开仓库包）。安装到本机仓库：`mvn install:install-file -Dfile=database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar -DgroupId=org.panweidb -DartifactId=panweidb-jdbc -Dversion=2.0.0 -Dpackaging=jar`，之后坐标 `org.panweidb:panweidb-jdbc:<ver>` |
+
+磐维两代 jar 实测同一形态：`META-INF/services/java.sql.Driver` 都是 `org.panweidb.Driver`，`org/panweidb/` 条目
+374（V1）/ 399（V2），`cn/com/panweidb/` 均为 0——**V2 文档写的 `cn.com.panweidb.Driver` 在两代 jar 里都不存在**，
+按 jar 实测登记即可。测试侧由 `StatementWeaverVendorCoverageTest` 遍历 `drivers/panweidb-jdbc-*.jar` 每一代都验。
 
 拉驱动不方便时让服务器自己去阿里云 maven 镜像拿：
 `curl -sL -o <file> https://maven.aliyun.com/repository/public/<group/path>/<artifact>-<ver>.jar`。
