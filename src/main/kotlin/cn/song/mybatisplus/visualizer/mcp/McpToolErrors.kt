@@ -23,6 +23,12 @@ object McpToolErrors {
     /** 数据源别名不匹配 / 无数据源。 */
     const val DATASOURCE_NOT_FOUND = "DATASOURCE_NOT_FOUND"
 
+    /**
+     * 连接层只读强制失败（T-SAF-03，D3=A fail-closed）：setReadOnly(true) 入口缺失或调用
+     * 失败时拒绝执行，绝不降级为读写执行。
+     */
+    const val READ_ONLY_ENFORCEMENT_FAILED = "MCP_READ_ONLY_UNENFORCED"
+
     /** 建连/执行失败（不可达、鉴权失败等）。 */
     const val DATASOURCE_UNREACHABLE = "DATASOURCE_UNREACHABLE"
 
@@ -43,4 +49,11 @@ object McpToolErrors {
 
     /** 结构化错误文本：`[CODE] message`（agent 可读；DBX `[MCP_READ_ONLY]` 同款形态）。 */
     fun code(code: String, message: String): String = "[$code] $message"
+
+    /**
+     * 超长入参的结构化错误（T-SAF-17，mcp-sqlv-text-tools-unbounded-sql-input）：
+     * 四个文本工具共用的 INVALID_ARGUMENT 文案，单一表述点防漂移。
+     */
+    fun maxLength(param: String, cap: Int): String =
+        code(INVALID_ARGUMENT, "$param exceeds the maximum length of $cap characters.")
 }

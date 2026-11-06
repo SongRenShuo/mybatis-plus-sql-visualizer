@@ -125,6 +125,116 @@ class HistorySearchServiceTest {
         assertTrue(r.hits[0].sqlPreview.contains("SELECT"))
     }
 
+    // ------------------------------------------------------------------
+    // T-SAF-24（mcp.history_search.agent-regex-unbounded-backtracking）：正则预算
+    // ------------------------------------------------------------------
+
+    /** 纯逻辑核捷径：空清单走编译/校验路径（不触目录 IO）。 */
+    private fun compileQuery(query: HistorySearchService.Query) {
+        HistorySearchService.search(emptyList<Pair<String, List<cn.song.mybatisplus.visualizer.log.LogSqlEntry>>>(), query, nowMs)
+    }
+
+    @Test
+    fun test嵌套量词高危正则_拒绝（先红）() {
+        // 灾难性回溯经典构造（(a+)+b 在 "aaaa…!" 上指数级）：改前只查编译合法性——
+        // 该模式合法编译并逐条目无预算求值（先红：断言 InvalidQueryException 失败，
+        // 实际返回正常结果或挂死）
+        try {
+            compileQuery(HistorySearchService.Query(regex = "(a+)+b"))
+            org.junit.Assert.fail("嵌套量词高危正则应抛 InvalidQueryException")
+        } catch (expected: HistorySearchService.InvalidQueryException) {
+            assertTrue(expected.message!!.contains("regex"))
+        }
+    }
+
+    @Test
+    fun test量词化分组内含量词_拒绝（先红）() {
+        // (a+)* 与 (a+)+ 同族；分支分组 (a|b)+ 无内含量词不误杀（合法命中回归见 test正则命中）
+        try {
+            compileQuery(HistorySearchService.Query(regex = "(a+)*x"))
+            org.junit.Assert.fail("量词化分组嵌套应抛 InvalidQueryException")
+        } catch (expected: HistorySearchService.InvalidQueryException) {
+            assertTrue(expected.message!!.contains("regex"))
+        }
+    }
+
+    @Test
+    fun test超长正则模式_拒绝（先红）() {
+        // 模式长度上限：超长模式多携带病态构造，先于编译拒绝（先红：改前无上限）
+        try {
+            compileQuery(HistorySearchService.Query(regex = "a".repeat(300)))
+            org.junit.Assert.fail("超长正则模式应抛 InvalidQueryException")
+        } catch (expected: HistorySearchService.InvalidQueryException) {
+            assertTrue(expected.message!!.contains("regex"))
+        }
+    }
+
+    @Test
+    fun test合法正则_初筛不误杀正常命中() {
+        // 初筛回归：普通模式（分支分组、有界量词、字符类）照常编译与命中
+        val r = HistorySearchService.search(
+            listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+            HistorySearchService.Query(regex = "^select .+ from (t_\\w+)"),
+            nowMs,
+        )
+        assertEquals(1, r.totalHits)
+    }
+
+    @Test
+    fun test单条目超预算_记miss检索不失败() {
+        // 预算缝注入（-1 = 任何求值即超）：命中条目记 miss（totalHits=0），检索不失败；
+        // 整查预算放宽（MAX_VALUE）确保只有单条目预算生效
+        val savedEntry = HistorySearchService.entryRegexBudgetNs
+        val savedTotal = HistorySearchService.totalRegexBudgetNs
+        try {
+            HistorySearchService.entryRegexBudgetNs = -1L
+            HistorySearchService.totalRegexBudgetNs = Long.MAX_VALUE
+            val r = HistorySearchService.search(
+                listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+                HistorySearchService.Query(regex = "t_user"),
+                nowMs,
+            )
+            assertEquals("超预算条目应记 miss", 0, r.totalHits)
+        } finally {
+            HistorySearchService.entryRegexBudgetNs = savedEntry
+            HistorySearchService.totalRegexBudgetNs = savedTotal
+        }
+    }
+
+    @Test
+    fun test整查超预算_结构化失败() {
+        // 单条目预算放宽（MAX_VALUE 永不触发）、整查预算 -1（首个条目求值即超）：
+        // 抛 InvalidQueryException（MCP 侧转译 INVALID_ARGUMENT）
+        val savedEntry = HistorySearchService.entryRegexBudgetNs
+        val savedTotal = HistorySearchService.totalRegexBudgetNs
+        try {
+            HistorySearchService.entryRegexBudgetNs = Long.MAX_VALUE
+            HistorySearchService.totalRegexBudgetNs = -1L
+            try {
+                HistorySearchService.search(
+                    listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+                    HistorySearchService.Query(regex = "t_user"),
+                    nowMs,
+                )
+                org.junit.Assert.fail("整查超预算应抛 InvalidQueryException")
+            } catch (expected: HistorySearchService.InvalidQueryException) {
+                assertTrue(expected.message!!.contains("budget"))
+            }
+        } finally {
+            HistorySearchService.entryRegexBudgetNs = savedEntry
+            HistorySearchService.totalRegexBudgetNs = savedTotal
+        }
+    }
+
+    /** 内存条目夹具（纯逻辑核入参；字段口径与 entryText 的 pd 载荷同构）。 */
+    private fun entry(ts: Long, sql: String) = cn.song.mybatisplus.visualizer.log.LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        timestamp = ts,
+        sourceFile = null,
+    )
+
     @Test
     fun test非法正则_预期异常() {
         try {

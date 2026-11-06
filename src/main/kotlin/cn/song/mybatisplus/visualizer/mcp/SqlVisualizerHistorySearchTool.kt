@@ -79,8 +79,19 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
     /**
      * 结果格式化（agent 面向文案，英文常量不进 bundle——McpToolErrors 同口径，纯函数可测）。
      * 0 命中是合法结果：正常返回 + 指引，不走错误通道（sqlv_render_logs 同款）。
+     *
+     * T-SAF-07（mcp.history_search.masking-not-applied）：sqlPreview 携带参数已回填为字面量
+     * 的还原 SQL，此前该通道从不查阅 mcpMaskEnabled——「MCP 输出脱敏」不变式只在
+     * sqlv_render_logs 成立，agent 可用关键字搜索历史提取敏感字面量。现与 renderLogs 同款：
+     * [maskLiterals] null 读设置（服务未注册兜底关），true/false 供测试与调用方显式覆盖；
+     * 打码经 [cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay]（双条件规则与
+     * 采集 agent 同表）。
      */
-    internal fun formatResult(result: HistorySearchService.Result): String {
+    internal fun formatResult(
+        result: HistorySearchService.Result,
+        /** T-SAF-07：null 读设置 mcpMaskEnabled（默认关）；测试注入 true/false 钉行为。 */
+        maskLiterals: Boolean? = null,
+    ): String {
         if (result.totalHits == 0) {
             return buildString {
                 append("No history entries matched.")
@@ -90,6 +101,10 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
             }
         }
         return buildString {
+            // T-SAF-07：脱敏开关（null 读设置，renderLogs 同款；只打码输出文本，不影响命中判定）
+            val maskOn = maskLiterals ?: runCatching {
+                PluginSettings.getInstance().state.mcpMaskEnabled
+            }.getOrDefault(false)
             append("Found ").append(result.totalHits).append(" match(es)")
             append("; showing ").append(result.returned).append(" newest-first")
             if (result.truncated) {
@@ -117,7 +132,10 @@ open class SqlVisualizerHistorySearchTool : McpToolsetSupport("sqlv_history_sear
                 hit.mapperStatement?.let { append(" mapper=").append(it) }
                 hit.errorText?.let { append(" error=").append(it) }
                 append(" in ").append(hit.historyFile)
-                append('\n').append(hit.sqlPreview)
+                // T-SAF-07：sqlPreview 与 renderLogs 的 restoredSql 同一数据类（字面量已回填），
+                // 同一 mcpMaskEnabled 设置必须同一脱敏不变式
+                append('\n')
+                    .append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(hit.sqlPreview, maskOn))
             }
         }
     }

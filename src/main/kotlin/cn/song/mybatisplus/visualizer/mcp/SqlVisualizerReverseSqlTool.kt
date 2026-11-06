@@ -52,6 +52,13 @@ open class SqlVisualizerReverseSqlTool : McpToolsetSupport("sqlv_reverse_sql") {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."))
         }
+        // T-SAF-17（mcp-sqlv-text-tools-unbounded-sql-input）：输入长度上限（render-logs 通道
+        // 同款 20000 默认口径）——超长 SQL 不再直通 SqlReverseParser 递归下降
+        if (sql.length > cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH) {
+            throwExpected(
+                McpToolErrors.maxLength("sql", cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH),
+            )
+        }
         val result = try {
             SqlReverseParser.parse(sql)
         } catch (e: SqlReverseException) {
