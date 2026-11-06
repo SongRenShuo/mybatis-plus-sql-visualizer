@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.model
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -161,6 +162,16 @@ data class PreviewResult(
      * 空表 = 无降级。pages 链会把它压成一行并入 [warning]；其它 JPA 链路只携带不展示（惰性字段）。
      */
     val degradations: List<String> = emptyList(),
+    /**
+     * T-RuntimeSlotFill 券 A：本次预览里的**可回填运行期占位**（[RuntimeSlot]）。
+     *
+     * 每个元素对应 SQL 文本里一条带 id 的占位注释（`运行时值: … · rtN`），承载类别、表达式摘要、
+     * 展开模板与回填语义；面板据此建输入行（券 C），回填时按 [RuntimeSlot.token] 定位并整体替换
+     * 那段注释（券 B）。空表 = 无运行期占位，或没有可填的值（纯说明性注释放不进本表）。
+     *
+     * 默认空表，既有构造点零影响（向后兼容）。
+     */
+    val runtimeSlots: List<RuntimeSlot> = emptyList(),
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }
