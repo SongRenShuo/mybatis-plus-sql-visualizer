@@ -133,6 +133,13 @@ internal class LogThreadRouter<B : Any>(
     /** 全部桶（分桶在前、回退桶在后）——closePending 全量冲刷用。 */
     fun allBuckets(): List<B> = buckets.values.toList() + fallback
 
+    /**
+     * 该桶是否为**共享回退桶**（T-SAF-12）：无 token 行 fail-open 的归属地。回退桶携带全部
+     * 无 token 行的配对状态，是多来源交错错配的唯一风险面——解析器的配对防护按此判据收窄，
+     * 带 token 的线程桶不受影响。
+     */
+    internal fun isFallback(bucket: B): Boolean = bucket === fallback
+
     /** 当前活跃桶数（诊断/测试用）。 */
     fun bucketCount(): Int = buckets.size
 
@@ -274,15 +281,26 @@ internal object LogParseDiag {
     /** 参数文本命中日志行特征被拒（最后一道防污染）。 */
     val paramWithLogMarker = java.util.concurrent.atomic.AtomicLong()
 
-    /** 上次已上报的计数快照（仅上报增量，避免刷屏）。 */
-    private var reported = longArrayOf(0, 0, 0, 0)
+    /** T-SAF-12：兜底桶无 token 参数行因多来源疑似而延迟配对（needsThreadContext 挂起计数）。 */
+    val fallbackPairingDelayed = java.util.concurrent.atomic.AtomicLong()
 
-    /** 当前各计数（[paramWithoutContext], [swallowedLineBlocked], [partialMultilineClosed], [paramWithLogMarker]）。 */
+    /** T-SAF-12：兜底桶跨线程错配实证被拦下（同一挂起窗口第二条无 token 参数行 → 挂起语句按无参数闭合）。 */
+    val crossThreadMixBlocked = java.util.concurrent.atomic.AtomicLong()
+
+    /** 上次已上报的计数快照（仅上报增量，避免刷屏）。 */
+    private var reported = longArrayOf(0, 0, 0, 0, 0, 0)
+
+    /**
+     * 当前各计数（[paramWithoutContext], [swallowedLineBlocked], [partialMultilineClosed],
+     * [paramWithLogMarker], [fallbackPairingDelayed], [crossThreadMixBlocked]）。
+     */
     fun counts(): LongArray = longArrayOf(
         paramWithoutContext.get(),
         swallowedLineBlocked.get(),
         partialMultilineClosed.get(),
         paramWithLogMarker.get(),
+        fallbackPairingDelayed.get(),
+        crossThreadMixBlocked.get(),
     )
 
     /**
@@ -295,7 +313,8 @@ internal object LogParseDiag {
         val delta = LongArray(now.size) { now[it] - reported[it] }
         reported = now
         return "控制台解析诊断（增量）：参数行无上下文丢弃=${delta[0]} 空参数行拦下=${delta[1]} " +
-            "多行残句闭合=${delta[2]} 参数含日志特征被拒=${delta[3]}（累计 ${now.joinToString("/")}）"
+            "多行残句闭合=${delta[2]} 参数含日志特征被拒=${delta[3]} " +
+            "兜底桶配对延迟=${delta[4]} 跨线程错配拦下=${delta[5]}（累计 ${now.joinToString("/")}）"
     }
 
     /** 全量归零（测试/会话切换）。 */
@@ -305,6 +324,8 @@ internal object LogParseDiag {
         swallowedLineBlocked.set(0)
         partialMultilineClosed.set(0)
         paramWithLogMarker.set(0)
-        reported = longArrayOf(0, 0, 0, 0)
+        fallbackPairingDelayed.set(0)
+        crossThreadMixBlocked.set(0)
+        reported = longArrayOf(0, 0, 0, 0, 0, 0)
     }
 }
