@@ -183,6 +183,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：在注释里断言「已由某某守卫保证」「全部落在 dynamic 点位」，既没落测试也没写适用版本；三周后按这条老结论排查，代价是一轮误判。
 **Seen 1× (2026-11-06)**
 
+### L17 测试环境容器 cap 必须按实测峰值给（1.5~2×），且必须同步压 DB 内部参数并留 swap
+
+**证据**：`103.36.220.245`（16GB）上 12 个数据库容器 cap 合计 **41 GiB**、**0 swap**、`available` 只剩 775MB（2026-11-06 23:5x 实测）；同一批容器的 DB 内部参数照大机器配——磐维 `max_connections=3000`（`postgresql.conf` 第 955 行覆盖第 82 行的 200）、`bulk_write_ring_size=2GB`、`cstore_buffers=512MB`，Oracle `sga_max_size=1.5G`，SQL Server `max server memory` 无上限，openGauss 族 `shared_buffers=1GB`。只压 cap 时容器会被自己的 DB 撑到 OOM-kill；只留 swap 则把泄漏掩盖成「慢」。本轮「swap 4GB + 内部参数 + cap 19.25GiB」三步做完：`available` 775MB → 3265MB，最高占用率 79.0%（OceanBase），`panwei_a` 109 词 / `gaussdb_kernel503` 197 词方言矩阵不退化（2026-11-07 00:5x）。
+**正例**：`cap ≈ 实测常驻 1.5~2×` 且**必须高于 cgroup `memory.stat` 的 `anon`**（`docker stats` 含 page cache，会骗人）；先压 DB 内部参数再改 cap；主机 0 swap 时先加 4GB `/swapfile` + `vm.swappiness=10`；改完跑一次方言单实例子集确认词数与基线一致；反向验证要把 cap 压到**明显低于实际常驻**（本轮 64M 对 highgo 不够、16M 才 `OOMKilled=true/ExitCode=137`）。
+**反例**：照「机器有多少内存」或「镜像 README 推荐值」给 cap，不看实测、不压内部参数；改完只贴「已设置 limit」而不验证容器真的被约束（也不验证数据库还能连通、方言矩阵还绿）。另有两个具体坑：磐维容器是 `--privileged`，它内部 `/etc/sysctl.conf` 的 `vm.swappiness=0` 会在容器重启时被 systemd-sysctl 写进宿主内核，把宿主设置冲掉；SQL Server 改小 `max server memory` 后内存不归还，必须重启容器才生效。
+**Seen 1× (2026-11-07)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
