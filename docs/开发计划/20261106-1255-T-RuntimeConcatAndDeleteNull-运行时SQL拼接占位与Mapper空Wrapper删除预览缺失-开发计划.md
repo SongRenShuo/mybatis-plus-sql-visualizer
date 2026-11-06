@@ -1,8 +1,8 @@
 # T-RuntimeConcatAndDeleteNull：运行期拼接占位破坏 SQL 与 `delete(null)` 无预览（2026-11-06）
 
 - 立项：2026-11-06 12:55
-- 状态：**待拍板**（仅完成源码走查与方案设计，未改生产代码、未跑构建）
-- 目标分支：`master`（实施后按 `k2j-port-sync` 决定是否回 port）
+- 状态：**已实施**，集成分支 `t-runtime-write-integration` 待合并 master——R1/R2/R3 `53de1ee4`、R4 `6fbc763b`、JPA 券 `0c26618b`；合流回归修复与最终读数见 §十三 13.6
+- 目标分支：`master`（实施在集成分支 `t-runtime-write-integration`，按用户要求暂不合 master）
 - 来源：用户两条反馈 + 两张截图
   1. 「运行时的数据查询sql拼接的有问题」——`GBAreaCalpointCodeServiceImpl.getAreaPowerGeneration()` 的 InfluxDB SQL 预览里出现 Java 三元表达式原文与悬空 `*/`，`WHERE (...)` 的右括号丢失；
   2. 「这种调用没 sql 预览图标 `deviceInfoMapper.delete(null)`，而 `deviceInfoMapper.delete(new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1))` 就可以」
@@ -557,3 +557,56 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 3. **同一上下文去重**是新增行为（计划未写）：同一循环/同一 if 内多条链式 append 只降级/标注一次，避免预览里刷出多条同文案注释。
 4. 未跑全量、未跑 `testShards`、未跑 `verifyGate/verifyPlugin/buildPlugin`、未 clean（按派活纪律）。**本报告「全绿」只指上表 52 例定向读数**。
 5. P-1 未单独用 `SqlFormatter.format` 做「格式化前含 `") and time >= '"`、格式化后括号丢失」的对照实验；R1 后的产物（上表 SQL）已直接证明括号与引号恢复正常，反向验证 ① 也证明「不清洗 → 注释提前闭合」这一环。P-1 的「格式化器参与度」仍属未证前提。
+
+## 十三、实施记录（R4 写族，t-write-family）
+
+### 13.1 提交
+
+| 哈希 | 内容 |
+|---|---|
+| `6fbc763b` | `feat(write-family): null-wrapper delete/update/remove anchors and previews`（9 文件，+764/−5） |
+
+### 13.2 改动点
+
+生产（5）：
+
+- `BatchOperationConverter`：注册表加 `delete→DELETE` / `update→UPDATE` / `remove→DELETE`；新增 `nullWrapperWriteMethodNames`、`isNullWrapperShape`（delete/remove 恰 1 个 null 字面量；update ≥2 参且第 2 参 null，均解一层 `PsiTypeCastExpression`）、`hasMpCrudReceiver`、`isNoWrapperConsumingCall`（注册表 + 形态 + receiver 三道门）、`isBatchOperationCall`；`buildNoWhereDeleteBatch`（无逻辑删除 `DELETE FROM 表`；`@TableLogic` → `UPDATE 表 SET 标记 = 1 WHERE 标记 = 0`；非 null 实参返回 null）；`buildNoWhereUpdateBatch`（直接拼 SQL、`batchModel=null`、无任何 WHERE，含 `@Version` 也不生成；SET 与 updateById 同口径）；`BatchBuild.warning` 默认字段 + `convert` 透传。
+- `BatchPreview`：末尾加 `val warning: String? = null`。
+- `WrapperAnchorDetector`：**场景 D-0 先于工厂块**——`delete`/`update` 同时在 `wrapperFactoryMethodNames` 里，场景 C 对「非工厂、非链起点」的调用会先 `return null`，D-0 放在 C 之前才可达；形态门是精确空 Wrapper，`delete(new ...)` / `delete(wrapperVar)` / `update(entity, wrapperVar)` 不满足，仍落回 C/D，锚点归链。
+- `WrapperLocator.isSqlCandidate`：改用 `BatchOperationConverter.isBatchOperationCall`。
+- `SqlPreviewService`：批量分支 `warning = batch.warning`。
+
+测试（4 个既有类）：`WrapperAnchorDetectorTest`（+6 例，整文件 `collectedAnchors()` 集合断言）、`WrapperAnchorDetectorNegativeTest`（+4 负例：`redisTemplate.delete(null)` / `cache.delete(null)` / `list.remove(null)` / `list.remove(0)`）、`SqlPreviewServiceBatchTest`（+5：delete(null) 物理/逻辑删除、update(entity,null)、remove(null)、delete(wrapper) 回归）、`GutterPreviewConsistencyTest`（+2 接缝）。
+
+### 13.3 定向读数
+
+| 类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `WrapperAnchorDetectorTest` | 36 | 0 | 0 | 0 |
+| `WrapperAnchorDetectorNegativeTest` | 6 | 0 | 0 | 0 |
+| `SqlPreviewServiceBatchTest` | 18 | 0 | 0 | 0 |
+| `GutterPreviewConsistencyTest` | 10 | 0 | 0 | 0 |
+
+### 13.4 反向验证（改前红 / 改后绿）
+
+| # | 临时改动 | 红读数 | 还原后 |
+|---|---|---|---|
+| ① | 去掉注册表 `delete` | 4 红：锚点为 null、Gutter 接缝红、两个 delete(null) 预览 null | 全 0 |
+| ② | 去掉 `hasMpCrudReceiver` | 1 红：`非 MP CRUD receiver 上的 delete/remove 不应产生任何锚点，实际: [delete, remove]` | 6/0 |
+| ③ | 去掉空 Wrapper 精确判定（名字在注册表就锚） | 5 红：`delete(内联 Wrapper)` → `[delete, new]`、`update(entity, wrapperVar)` → `[w, update]`、`service.update(null)` → `[update]`、既有 `service.update(wrapper)` 被锚、NegativeTest `[delete, remove]` | 36/0、6/0 |
+| ④ | 去掉 `hasWrapperArgument` 让位 | 1 红：`selectList(wrapperVar) 只应在 Wrapper 变量上有锚点 expected:<[w]> but was:<[w, selectList]>` | 36/0 |
+
+偏离说明（如实）：按「空 Wrapper 精确形态」落地后，`delete/update` 的 Wrapper 实参已被形态门结构性排除，`hasWrapperArgument` 在其上只是第二道防线，因此 ④ 的可红性由既有 `selectList(wrapperVar)` 不变量行承载，不冒充「delete 行能单独抓 ④」。
+
+### 13.5 偏差与主控注意
+
+1. **场景 D-0 必须在场景 C 之前**（与 §4 R4.5「场景 C 顺序不动」的字面表述不同）：因为 `delete`/`update` 在 `wrapperFactoryMethodNames` 里，C 会先 `return null`；D-0 只认空 Wrapper 精确形态，`JoinWrappers.delete(Class)` 不满足，仍走 C 工厂分支。合并后顺序为 **D-0（空 Wrapper 写族）> C（工厂 / 服务链 / JPA）> D（批量）**，已用整文件锚点集合用例钉住。
+2. **`remove(Wrapper)` 签名已 javap 实证**：`mybatis-plus-extension-3.5.18.jar` 的 `IRepository` 含 `remove(Wrapper<T>)` 与 `update(T, Wrapper<T>)`，`mybatis-plus-spring-3.5.18.jar` 的 `IService` 继承它；接收者守卫按 `com.baomidou.mybatisplus` FQN 前缀判定，3.5.17 / 3.5.18 包路径差异不影响（P-7 关闭）。
+3. `update(entity, null)` 的 SET 排除 `@Version` 列且不生成版本 WHERE；只有主键（+版本列）的实体会因「无 SET 列」返回 null（`UPDATE 表 SET` 非法）。
+4. **Bash 管道陷阱**：`./gradlew ... | tail` 后台跑时构建失败仍可能报 exit 0；后续一律 `> log 2>&1; echo EXIT=$?` 并回读 `build/test-results/test/TEST-*.xml` 计数。
+5. 计划 §R4.5 的 `service.remove(null)` 行（D-4）已实现并有锚点 + 预览两类用例；`insert` / `selectJoinMaps` / `selectJoinMapsPage` 的既有锚点路径未改（D-7 未扩守卫）。
+
+### 13.6 合流说明
+
+- 三条实施分支合入 `t-runtime-write-integration`：JPA 券 `008c5c9a`、拼接器券 `9b81f72a`、写族券（本条，合并提交见下方「主控合流收口」）。
+- `WrapperAnchorDetector.kt` 的 C 券改动（场景 C 内 JPA 分支）与 B 券改动（场景 D-0）位置不同，`ort` 自动合并成功；合并后逐形态核对：`repository.delete(entity)` / `ht.delete(entity)` / `ht.update(entity)` 仍由 C 的 JPA 分支锚定，`delete(null)` / `update(entity,null)` / `remove(null)` 由 D-0 锚定，`JoinWrappers.delete/update` 仍归工厂，`service.update(wrapper)` / 链终结点 `update` 不锚。
