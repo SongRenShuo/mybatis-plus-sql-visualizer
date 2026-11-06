@@ -43,6 +43,14 @@ open class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."))
         }
+        // T-SAF-17（mcp-sqlv-text-tools-unbounded-sql-input）：输入长度上限——对齐 render-logs
+        // 通道 logMaxParseLength 默认 20000 口径（PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH），
+        // agent 提供的无界 SQL 不再直通语句拆分/解析/探测链（超长即结构化拒绝）
+        if (sql.length > cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH) {
+            throwExpected(
+                McpToolErrors.maxLength("sql", cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH),
+            )
+        }
         val statements = SqlStatementSplitter.splitStripped(sql)
         val risk = UnboundedWriteDetector.detect(sql)
         return buildString {
