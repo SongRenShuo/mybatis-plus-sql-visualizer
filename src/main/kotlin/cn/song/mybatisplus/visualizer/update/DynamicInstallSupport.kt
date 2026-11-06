@@ -201,10 +201,28 @@ object DynamicInstallSupport {
         return out.toByteArray().decodeToString()
     }
 
-    /** plugin.xml 文本 → id/version 校验（regex 提取，无 XML 依赖）。 */
+    /**
+     * plugin.xml 文本 → id/version 校验。
+     *
+     * T-SAF-05（update.validateArtifact.regex-comment-desync）：此前用
+     * `Regex("<tag>(.*?)</tag>", DOTALL)` 在**原始文本**上取首匹配——注释内的 `<id>…</id>`
+     * 会抢走首匹配，与平台描述符加载器按真 XML 语义（忽略注释）读到的身份去同步：
+     * 门判定的是「注释里的 id」，装进安装链的却是「真 XML 声明的 id」。现改走
+     * [cn.song.mybatisplus.visualizer.xml.SecureXml]（本仓 XML 解析安全配置唯一实现：
+     * 外部实体/DTD 读取拦死、内部子集膨胀预扫）做**真解析**——注释、CDATA、实体展开
+     * 全按 XML 语义处理，id/version 与平台消费者同源。解析失败（非良构 XML）按 Invalid
+     * 拒绝：正则时代连非 XML 文本都能提取出「id」，那是更宽的放行面，收紧属 fail closed。
+     */
     private fun checkDescriptorXml(xml: String): ArtifactCheck {
-        val idValue = extractTag(xml, "id")?.trim()
-        val versionValue = extractTag(xml, "version")?.trim()
+        val document = try {
+            cn.song.mybatisplus.visualizer.xml.SecureXml.parse(xml)
+        } catch (e: Exception) {
+            return ArtifactCheck.Invalid("plugin.xml is not well-formed XML: ${e.message}")
+        }
+        val root = document.documentElement
+            ?: return ArtifactCheck.Invalid("plugin.xml has no root element")
+        val idValue = root.firstElementText("id")
+        val versionValue = root.firstElementText("version")
         return when {
             idValue == null -> ArtifactCheck.Invalid("plugin.xml has no <id>")
             idValue != UpdateSource.PLUGIN_ID ->
@@ -214,9 +232,10 @@ object DynamicInstallSupport {
         }
     }
 
-    /** 提取首个 `<tag>…</tag>` 文本（DOTALL，容忍跨行）。 */
-    private fun extractTag(xml: String, tag: String): String? =
-        Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
+    /** 第一个同名子元素的规范化文本（注释不参与；无该元素返回 null）。 */
+    private fun org.w3c.dom.Element.firstElementText(tagName: String): String? =
+        getElementsByTagName(tagName).item(0)?.textContent?.trim()
+
 
     private const val MAX_INNER_ENTRIES = 2000
 
