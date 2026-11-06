@@ -33,14 +33,30 @@ cat /etc/docker/daemon.json                                      # 已配的 mir
 是每个实例的部署原文与探针读数。**先看有没有现成实例能用**，别上来就装——`114.66.55.245` 那台
 DBX 测试主机上本来就有一批（MySQL/PG/Oracle/DM/金仓/GBASE/虚谷/StarRocks/Doris…），很多时候只缺驱动。
 
-内存账（15G 宿主的实际配法，超了会 OOM 或让引擎起不来）：瀚高 3g、海量 A 4g、海量 B 2g、OceanBase 8g
-（容器内 `OB_MEMORY_LIMIT=6G`）、SQL Server 2g、GaussDB 4g、MariaDB 2g。全部同时在线时宿主要留出
-buff/cache 之外的余量，装新实例前先看 `free -g` 的 available。
+内存账（15G 宿主上在役实例的实际配法，超了会 OOM 或让引擎起不来）：
 
-**内存闸门（起新库前必看读数，不是「大概够」）**：2026-11-06 磐维两个实例上线后，16G 宿主 + 11 个既有容器
-的 `available` 只剩约 **960 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
-不是想压就压：磐维 `max_process_memory` 低于约 5 GB 直接拒启（见 §2 磐维段）。所以流程是
-**先 `free -m` 看 available → 不够就先停/降配既有实例 → 再起新的**，别先起后救。
+| 实例（容器名） | `--memory` | `--shm-size` | 其他必带 flag / 引擎内记账 |
+|---|---|---|---|
+| 瀚高 `xc3-highgo` | 3g | — | 命名卷 `xc3_highgo_data` |
+| 海量 A `xc3-vastbase` | 4g | 2g | 停起走 `/opt/xc3-vastbase/start.sh` |
+| 海量 B `xc3-vastbase-b` | 2g | 1g | `DBCOMPATIBILITY=B` |
+| OceanBase `xc3-oceanbase` | 8g | — | 容器内 `OB_MEMORY_LIMIT=6G`；`--ulimit nofile=65535:65535 --ulimit stack=-1` |
+| SQL Server `xc3-mssql` | 2g | — | `MSSQL_MEMORY_LIMIT_MB=1536`（首启不落 `mssql.conf`，实际靠 cgroup） |
+| GaussDB `xc3-gaussdb-kernel503` | 4g | 2g | `--init` 必须 |
+| openGauss `xc3-opengauss` | 4g | 2g | `--privileged --ulimit nofile=65535` |
+| MariaDB `xc3-mariadb` | 2g | — | |
+| MySQL `xc3-mysql8` | 1g | — | 命名卷 `xc3-mysql8-data` |
+| 磐维 A `panweidb-ora` | 3g | 2g | `--privileged`；`dbcompatibility=A`；引擎内 `max_process_memory=8GB`（记账上限，非预占）、`shared_buffers=256MB` |
+| 磐维 B `panweidb-test` | 4g | 2g | `--privileged`；`dbcompatibility=B`；同上引擎记账 |
+
+**别把这张表当预算加总**：11 个实例的 `--memory` 合计约 **37g**，宿主只有 15G——limit 是记账上限不是预占，
+真正要盯的是 `free -m` 的 available 与实际 RSS（磐维压过 `shared_buffers` 后单实例约 0.9GB）。
+
+**内存闸门（起新库前必看读数，不是「大概够」）**：2026-11-06 磐维两个实例上线后，16G 宿主 + 11 个在役容器的
+`available` 只剩约 **966 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
+不是想压就压：磐维 `max_process_memory` 低于约 5057MB 直接拒启（见 §2 磐维段，唯一能压的是 `shared_buffers`）。
+所以流程固定为 **先 `free -m` 看 available → 不足就先腾（`docker stop` 掉当前不用的实例，或压 `shared_buffers`）→
+再起新的**，别先起后救。腾量参考：停 MariaDB/MySQL 各回收 ~2g/1g 的 limit 预算，停一个磐维实例回收 ~3~4g。
 
 ## 1. 选镜像：先解决「拉不动」
 
