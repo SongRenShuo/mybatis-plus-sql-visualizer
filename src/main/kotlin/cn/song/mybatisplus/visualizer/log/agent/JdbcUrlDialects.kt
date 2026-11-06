@@ -39,6 +39,11 @@ internal object JdbcUrlDialects {
         "gbasedbt-sqli" to "GBASE",
         "gbasedbt" to "GBASE",
         "gbase" to "GBASE",
+        // T-IbatisPanwei（券 F）：磐维（中国移动，Oracle 兼容模式）驱动 org.panweidb.Driver。
+        // 实际子协议以数据源 URL 为准（计划 P-2 未实测），panwei / panweidb 两种都登记覆盖，
+        // 键不冲突。角标只如实展示产品名，不暗示渲染方言（那条映射在 UrlSubprotocolDialects）。
+        "panwei" to "Panwei（磐维）",
+        "panweidb" to "Panwei（磐维）",
     )
 
     /**
@@ -108,6 +113,8 @@ internal object JdbcUrlDialects {
         val data = rest.substringAfter(':')
         return when (subprotocol) {
             "oracle" -> oracleTarget(data)
+            // T-IbatisPanwei（券 F）：panwei/panweidb 的 URL 形态未实测（计划 P-2），按通用 authority
+            // 解析（`//host:port/db`）；若真机是 thin 式登录前缀，届时再按实测补分支，不预先猜。
             else -> authorityTarget(data)
         }
     }
