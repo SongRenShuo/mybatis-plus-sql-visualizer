@@ -213,4 +213,29 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    // ======================== T-SAF-10：meta 行（可见行 + tooltip）低信任数据转义 ========================
+
+    /**
+     * T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）回归：updateMeta 曾把
+     * result.tableName（实体注解字面量，低信任）、xmlModel.statementId、警示文本等未转义
+     * 地组合进 metaCoreText（:622/:629/:650），经 fullDisplayText/applyMetaTruncation 的
+     * <html> 包装（:719/:728）成为活 markup，并经 metaTooltipBase 到达 tooltip。
+     *
+     * **修复前失败断言**：`可见行不得含未转义标记`——修复前载荷原样进入可见行与 tooltip。
+     */
+    fun testMetaLineEscapesLowTrustTableNameAndWarning_TSAF10() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val payload = "<img src=http://127.0.0.1:1/probe.png>"
+            panel.showResult(makeResult("").copy(tableName = payload, warning = "warn<$payload>"))
+            waitForEdt()
+            val visible = panel.metaLabelForTest()
+            assertFalse("可见行不得含未转义标记：$visible", visible.contains("<img"))
+            val tooltip = panel.metaTooltipForTest().orEmpty()
+            assertFalse("tooltip 不得含未转义标记：$tooltip", tooltip.contains("<img"))
+        } finally {
+            panel.clear()
+        }
+    }
 }
