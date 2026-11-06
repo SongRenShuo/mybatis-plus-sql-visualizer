@@ -91,7 +91,8 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      * 脱敏同 R60 口径（`displayMaskEnabled`，投影级）：开启时脚本字面量打码并在注释头标 `masked`。
      */
     internal fun SqlPreviewPanel.exportReplayScript() {
-        val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() } ?: return
+        // T-RuntimeSlotFill 券 C：导出回放与预览/复制/执行共用同一份运行期占位值
+        val sql = previewSqlForExport() ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
@@ -134,6 +135,17 @@ internal fun SqlPreviewPanel.showRollbackSql() {
             }
         }
     }
+
+/**
+ * T-RuntimeSlotFill 券 C：**导出类动作**的取词口——预览快照 + 运行期占位回填。
+ *
+ * 与 [previewSqlForReadonly] 的分工：后者回答「当前预览是哪条 SQL」（编辑器/执行视图判据不变），
+ * 本函数在其上按面板同一份 [SqlPreviewPanel.slotValues] 把运行期占位填掉。编辑器文本已由预览
+ * 渲染填过时是无操作；文本仍是占位形态（用户手改回、控制台漂移）时补填，避免导出物带注释。
+ * 占位值全为空 = 逐字节原样（D-5）。
+ */
+internal fun SqlPreviewPanel.previewSqlForExport(): String? =
+    previewSqlForReadonly()?.let { fillRuntimeSlots(it) }?.takeIf { it.isNotBlank() }
 
     /** T-PreviewSideQuery P1 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
     internal var dmlImpactTargetForTest: (() -> Any?)? = null
@@ -1120,13 +1132,17 @@ internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: Strin
 internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
     val proj = project ?: return
     // M36.4：优先取原生编辑器文档，兜底自研编辑器
-    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+    val rawSql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
         ?: run {
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .warn("[M36] executeSql aborted: no SQL text (nativeDoc=${nativeEditorDoc != null}, editor=${editor != null})")
             return
         }
+    // T-RuntimeSlotFill 券 C：执行前把运行期占位填掉——与预览/复制/导出同一份占位值。
+    // 编辑器文本已由预览渲染填过时这里无操作（token 已不在）；用户手改回占位时补填，
+    // 避免把块注释原样送进数据库。留空（未填值）= 逐字节原样，沿用既有「不替你猜」口径。
+    val sql = fillRuntimeSlots(rawSql)
     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         .info("[M36] executeSql: len=${sql.length}, prepared=${SqlExecutor.isPrepared()}")
 
@@ -1209,9 +1225,11 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             }
         }
         // 执行前同步当前 SQL（用户可能改过参数/手动编辑）
+        // T-RuntimeSlotFill 券 C：只把**编辑器原文**与文档对账——执行用的已回填文本不回写编辑器，
+        // 否则占位值会污染预览文本（下一次渲染又按 result 重算，视觉上会「闪一下」）
         nativeEditorDoc?.let { doc ->
-            if (doc.text != sql) {
-                WriteCommandAction.runWriteCommandAction(proj) { doc.setText(sql) }
+            if (doc.text != rawSql) {
+                WriteCommandAction.runWriteCommandAction(proj) { doc.setText(rawSql) }
             }
         }
         val executed = SqlExecutor.executePrepared(

@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -160,6 +161,59 @@ internal fun SqlPreviewPanel.applyNamedParams(sql: String): String {
     return ParameterReplacer.replaceNamedParams(sql, paramValues, result.namedParamHints)
 }
 
+/**
+ * T-RuntimeSlotFill 券 C：预览渲染的**唯一**回填入口——运行期占位与 `:name` 一次扫描
+ * （[ParameterReplacer.buildExecutableSqlWithSlots]），`?` 仍由既有 [backfillParamsBySource]
+ * 按序回填（它的 LIKE/空值策略/模拟字面量口径本券不动）。
+ *
+ * 为什么占位与 `:name` 必须同遍：用户填的占位值里可能带 `:nm` 形态，分两步做会被
+ * `NAMED_PARAM_PATTERN` 二次当命名参数替换（券 B 的 R2 反向验证实测过）。同遍扫描下每种替换
+ * 整段产出、产出不再被扫描，二次误伤在结构上不会发生。
+ *
+ * 零占位时**直接走既有 [applyNamedParams]**：没有运行期占位的预览（Wrapper/XML/批量/JPA 全链）
+ * 产物与改动前逐字节一致。
+ */
+internal fun SqlPreviewPanel.applyRuntimeSlotsAndNamedParams(sql: String): String {
+    val result = current ?: return sql
+    if (result.runtimeSlots.isEmpty()) return applyNamedParams(sql)
+    val render = ParameterReplacer.buildExecutableSqlWithSlots(
+        sql = sql,
+        slots = result.runtimeSlots,
+        slotValues = slotValuesSnapshot(),
+        paramValues = paramValues,
+        namedHints = result.namedParamHints,
+        dialectName = result.effectiveDialect?.name,
+    )
+    // 券 B 的拒绝/风险必须可见（不许静默），展示位在参数区「运行时值」分区下方
+    publishRuntimeSlotWarnings(render.warnings)
+    return render.sql
+}
+
+/**
+ * T-RuntimeSlotFill 券 C：当前占位值的不可变快照（回填引擎唯一值载体）。
+ *
+ * 复制 / 导出 / 执行三处与预览渲染共用同一份——避免「预览填了、复制/导出没填」。
+ */
+internal fun SqlPreviewPanel.slotValuesSnapshot(): RuntimeSlotValues =
+    RuntimeSlotValues(slotValues.toMap())
+
+/**
+ * T-RuntimeSlotFill 券 C：把当前占位值填进一段**已经参数回填过**的 SQL（导出 / 执行等取词口）。
+ *
+ * 只填占位（[ParameterReplacer.replaceRuntimeSlots]），不碰 `?` / `:name`——那些文本在编辑器里
+ * 已经是回填后的形态。占位值全为空时逐字节原样返回（D-5）。
+ */
+internal fun SqlPreviewPanel.fillRuntimeSlots(sql: String): String {
+    val slots = current?.runtimeSlots.orEmpty()
+    if (slots.isEmpty()) return sql
+    return ParameterReplacer.replaceRuntimeSlots(
+        sql = sql,
+        slots = slots,
+        values = slotValuesSnapshot(),
+        dialectName = current?.effectiveDialect?.name,
+    ).sql
+}
+
 /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
 /**
  * R12 T-PaginationSim：模型级重渲染后把分页 LIMIT 行带回主 SQL 尾部。
@@ -249,7 +303,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
                 enabledConditionIds = enabledIds.toSet(),
             )
             // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
-            showSql(backfillParamsBySource(applyNamedParams(withPaginationLimitLine(generated.sql)), generated.unresolvedParams, generated.paramHints))
+            // T-RuntimeSlotFill 券 C：命名参数与运行期占位同遍（无占位时逐字节等于旧路径）
+            showSql(backfillParamsBySource(applyRuntimeSlotsAndNamedParams(withPaginationLimitLine(generated.sql)), generated.unresolvedParams, generated.paramHints))
         }
         else -> {
             // 旧文本路径（无可勾选动态条件，如批量操作）
@@ -258,7 +313,7 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             // T-JpaParamOrder F3：JPA 占位符名序非空时按名回填（同名占位复用同值，
             // 与 setParameter 书写顺序解耦）；hints 在服务端已与该 sources 序平行
             val sources = result.placeholderParamNames.ifEmpty { result.unresolvedParams }
-            showSql(backfillParamsBySource(applyNamedParams(base), sources, result.paramHints))
+            showSql(backfillParamsBySource(applyRuntimeSlotsAndNamedParams(base), sources, result.paramHints))
         }
     }
     // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
@@ -502,7 +557,8 @@ internal var SqlPreviewPanel.copyNotificationActionsForTest: MutableList<String>
  */
 
 internal fun SqlPreviewPanel.copyExecutableSql() {
-    CopyExecutableSqlAction(project).execute(this)
+    // T-RuntimeSlotFill 券 C：与预览渲染共用同一份占位值（否则会「预览填了、复制没填」）
+    CopyExecutableSqlAction(project).execute(this, slotValuesSnapshot())
 }
 
 /**
