@@ -135,9 +135,14 @@ object WrapperAnchorDetector {
             if (ref.referenceName in BatchOperationConverter.nullWrapperWriteMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 if (BatchOperationConverter.isNoWrapperConsumingCall(call)) return element
-                // 仅 delete/update 继续走工厂判定（JoinWrappers.delete(Entity.class) 等）；
-                // remove 不是工厂名，非空 Wrapper 形态由 Wrapper 链锚点承载，此处不亮
-                if (ref.referenceName !in WrapperLocator.wrapperFactoryMethodNames) return null
+                // delete/update 继续走工厂判定（JoinWrappers.delete(Entity.class) 等）。
+                // remove 不是工厂名：非空实参时 JPA 的 `em.remove(entity)` 仍归场景 E 口径——这里
+                // 直接按同一判定返回，不能无条件 return null，否则会把既有 JPA remove 锚点一起挡掉
+                // （T-JpaDeleteAnchor × T-WriteFamily 合流实测：testJpaExistingAnchorsKept 1 红）。
+                // 其余非 MP receiver（`list.remove(obj)` 等）不亮。
+                if (ref.referenceName !in WrapperLocator.wrapperFactoryMethodNames) {
+                    return if (JpaCrudOperationConverter.hasJpaCrudReceiver(call)) element else null
+                }
             }
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
