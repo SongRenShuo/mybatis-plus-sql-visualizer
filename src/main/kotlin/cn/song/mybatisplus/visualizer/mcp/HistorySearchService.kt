@@ -59,6 +59,25 @@ object HistorySearchService {
     /** 扫描条目封顶：超出后停止读后续文件（scanTruncated=true），防失控目录无界扫描。 */
     private const val MAX_SCAN_ENTRIES = 200_000
 
+    // ---------------- T-SAF-24（mcp.history_search.agent-regex-unbounded-backtracking） ----------------
+
+    /** 正则模式长度上限：超长模式多携带病态构造，先于编译拒绝。 */
+    const val MAX_REGEX_PATTERN_LENGTH = 256
+
+    /** 单条目正则求值预算默认值（纳秒）：超限条目记 miss（不整查失败）。 */
+    const val DEFAULT_ENTRY_REGEX_BUDGET_NS = 50_000_000L
+
+    /** 整次检索正则累计预算默认值（纳秒）：超限抛 [InvalidQueryException]（结构化失败）。 */
+    const val DEFAULT_TOTAL_REGEX_BUDGET_NS = 2_000_000_000L
+
+    /** 预算缝（测试注入；生产用 [DEFAULT_ENTRY_REGEX_BUDGET_NS] 默认）。 */
+    @Volatile
+    internal var entryRegexBudgetNs: Long = DEFAULT_ENTRY_REGEX_BUDGET_NS
+
+    /** 预算缝（测试注入；生产用 [DEFAULT_TOTAL_REGEX_BUDGET_NS] 默认）。 */
+    @Volatile
+    internal var totalRegexBudgetNs: Long = DEFAULT_TOTAL_REGEX_BUDGET_NS
+
     /** 入参形态非法（正则编译失败 / 时间范围倒置）——MCP 侧转译为 INVALID_ARGUMENT。 */
     class InvalidQueryException(message: String) : IllegalArgumentException(message)
 
@@ -208,6 +227,10 @@ object HistorySearchService {
         val scopeFrom: Long?,
         val toMs: Long?,
     ) {
+        /** 正则求值累计耗时（纳秒；本对象一次 search 一份，单线程逐条累加）。 */
+        var regexElapsedNs = 0L
+            private set
+
         /** 四维匹配（范围/关键词/正则/来源文件）——语义与旧纯核的 inScope+textMatches+sourceFilter 逐字一致。 */
         fun matches(e: LogSqlEntry): Boolean {
             if (scopeFrom != null && e.timestamp < scopeFrom) return false
@@ -218,7 +241,26 @@ object HistorySearchService {
                     e.mapperStatement?.contains(keyword, ignoreCase = true) == true
                 if (!keywordHit) return false
             }
-            if (regex != null && !regex.containsMatchIn(e.rawSql) && !regex.containsMatchIn(e.restoredSql)) return false
+            if (regex != null) {
+                // T-SAF-24：正则求值预算——单条目超 [entryRegexBudgetNs] 记 miss（检索继续，
+                // 防单个病态条目霸占检索）；整查累计超 [totalRegexBudgetNs] 抛
+                // [InvalidQueryException]（MCP 侧转译 INVALID_ARGUMENT，结构化失败）。
+                // 局限：预算在求值返回后结算——单条灾难性回溯仍会先耗完自身时长（步数级
+                // 预算需共享 BoundedRegex 工具，登记 followup）；编译前高危形态初筛
+                // （[regexComplexityIssue]）+ 模式长度上限把这类构造挡在求值之前。
+                val startedAt = System.nanoTime()
+                val hit = regex.containsMatchIn(e.rawSql) || regex.containsMatchIn(e.restoredSql)
+                val elapsed = System.nanoTime() - startedAt
+                regexElapsedNs += elapsed
+                if (regexElapsedNs > totalRegexBudgetNs) {
+                    throw InvalidQueryException(
+                        "regex evaluation exceeded the total budget of " +
+                            "${totalRegexBudgetNs / 1_000_000} ms; narrow the query " +
+                            "(keyword/sourceFile/time range) or simplify the pattern.",
+                    )
+                }
+                if (!hit || elapsed > entryRegexBudgetNs) return false
+            }
             if (sourceFileFilter != null && e.sourceFile?.contains(sourceFileFilter, ignoreCase = true) != true) return false
             return true
         }
@@ -228,6 +270,18 @@ object HistorySearchService {
                 val maxResults = query.maxResults.coerceIn(1, HARD_MAX_RESULTS)
                 val keyword = query.keyword?.trim()?.takeIf { it.isNotEmpty() }
                 val regex = query.regex?.trim()?.takeIf { it.isNotEmpty() }?.let { pattern ->
+                    // T-SAF-24：模式长度上限 + 高危复杂度初筛（编译前拒绝），再走既有编译校验
+                    if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+                        throw InvalidQueryException(
+                            "regex pattern too long (${pattern.length} > $MAX_REGEX_PATTERN_LENGTH characters).",
+                        )
+                    }
+                    regexComplexityIssue(pattern)?.let { issue ->
+                        throw InvalidQueryException(
+                            "regex rejected ($issue): pattern carries catastrophic-backtracking risk; " +
+                                "use a simpler pattern or the keyword filter.",
+                        )
+                    }
                     runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrElse { e ->
                         throw InvalidQueryException("invalid regex '$pattern': ${e.message}")
                     }
@@ -245,6 +299,105 @@ object HistorySearchService {
                 return CompiledFilters(maxResults, keyword, regex, sourceFileFilter, scopeFrom, query.toMs)
             }
         }
+    }
+
+    /**
+     * 高危复杂度初筛（T-SAF-24，保守启发式）：拒绝「量词化分组再套无界量词」与「双重量词」
+     * 两类已证实的灾难性回溯构造（(a+)+b / (a*)* / a** 形态族）。非高危形态交由求值预算
+     * 兜底——初筛宁可少拦（保守），不追求完备。
+     *
+     * 扫描器语义：`\` 转义取双字符；`[…]` 字符类整段跳过（类内量词是字面量）；`(?:…)`
+     * 等非捕获组同样入栈；`?`/`+` 紧随量词之后视作懒惰/占有修饰符（`.*?` 合法）而非量词；
+     * `{n,m}` 识别为量词（无界 `{n,}` 与可空 `{0,m}` 计入风险面），非量词形态按字面量。
+     * 有界内层量词（`(\d{1,3}\.){3}` 等 IP 段形态）不拦——外层量词必须无界才构成风险。
+     *
+     * @return null=放行；非 null=拒绝原因短语（进 [InvalidQueryException] 消息）
+     */
+    internal fun regexComplexityIssue(pattern: String): String? {
+        /** 一个分组的扫描态：[riskInside] = 组内出现过无界或可空量词。 */
+        class Frame {
+            var riskInside = false
+        }
+
+        val stack = ArrayDeque<Frame>()
+        var lastGroupRisk = false
+        var lastWasQuantifier = false
+        var i = 0
+        while (i < pattern.length) {
+            val c = pattern[i]
+            when {
+                c == '\\' -> {
+                    i += 2
+                    lastGroupRisk = false
+                    lastWasQuantifier = false
+                }
+                c == '[' -> {
+                    // 字符类：跳到未转义的 `]`（类内量词是字面量）；类后可跟量词（[ab]+ 合法）
+                    i++
+                    while (i < pattern.length && pattern[i] != ']') {
+                        i += if (pattern[i] == '\\') 2 else 1
+                    }
+                    i++
+                    lastGroupRisk = false
+                    lastWasQuantifier = false
+                }
+                c == '(' -> {
+                    stack.addLast(Frame())
+                    lastGroupRisk = false
+                    lastWasQuantifier = false
+                    i++
+                }
+                c == ')' -> {
+                    val closed = stack.removeLastOrNull()
+                    lastGroupRisk = closed?.riskInside == true
+                    // 风险向父组传播（((a+))+ 形态：内层风险经中间组直抵外层量词）
+                    if (lastGroupRisk) stack.lastOrNull()?.riskInside = true
+                    lastWasQuantifier = false
+                    i++
+                }
+                c == '*' || c == '+' || c == '?' -> {
+                    if (lastWasQuantifier && (c == '?' || c == '+')) {
+                        // 懒惰（*?）／占有（*+）修饰符：消费掉，不按量词判定
+                        i++
+                        continue
+                    }
+                    val unbounded = c != '?'
+                    if (lastWasQuantifier) return "double quantifier"
+                    if (lastGroupRisk && unbounded) return "nested quantifier"
+                    stack.lastOrNull()?.let { frame ->
+                        if (unbounded || c == '?') frame.riskInside = true
+                    }
+                    lastWasQuantifier = true
+                    i++
+                }
+                c == '{' -> {
+                    val end = pattern.indexOf('}', i)
+                    val body = if (end > i) pattern.substring(i + 1, end) else ""
+                    val isQuantifier = body.isNotEmpty() && body.all { it.isDigit() || it == ',' }
+                    if (isQuantifier) {
+                        if (lastWasQuantifier) return "double quantifier"
+                        val unbounded = !body.contains(',')
+                        val emptyable = body.startsWith("0") || body.startsWith(",") || body == ","
+                        if (lastGroupRisk && unbounded) return "nested quantifier"
+                        stack.lastOrNull()?.let { frame ->
+                            if (unbounded || emptyable) frame.riskInside = true
+                        }
+                        lastWasQuantifier = true
+                        i = end + 1
+                    } else {
+                        lastGroupRisk = false
+                        lastWasQuantifier = false
+                        i++
+                    }
+                }
+                else -> {
+                    lastGroupRisk = false
+                    lastWasQuantifier = false
+                    i++
+                }
+            }
+        }
+        return null
     }
 
     /**

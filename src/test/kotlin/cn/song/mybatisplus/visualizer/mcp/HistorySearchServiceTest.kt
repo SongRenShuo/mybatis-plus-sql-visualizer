@@ -170,6 +170,72 @@ class HistorySearchServiceTest {
     }
 
     @Test
+    fun test合法正则_初筛不误杀正常命中() {
+        // 初筛回归：普通模式（分支分组、有界量词、字符类）照常编译与命中
+        val r = HistorySearchService.search(
+            listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+            HistorySearchService.Query(regex = "^select .+ from (t_\\w+)"),
+            nowMs,
+        )
+        assertEquals(1, r.totalHits)
+    }
+
+    @Test
+    fun test单条目超预算_记miss检索不失败() {
+        // 预算缝注入（-1 = 任何求值即超）：命中条目记 miss（totalHits=0），检索不失败；
+        // 整查预算放宽（MAX_VALUE）确保只有单条目预算生效
+        val savedEntry = HistorySearchService.entryRegexBudgetNs
+        val savedTotal = HistorySearchService.totalRegexBudgetNs
+        try {
+            HistorySearchService.entryRegexBudgetNs = -1L
+            HistorySearchService.totalRegexBudgetNs = Long.MAX_VALUE
+            val r = HistorySearchService.search(
+                listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+                HistorySearchService.Query(regex = "t_user"),
+                nowMs,
+            )
+            assertEquals("超预算条目应记 miss", 0, r.totalHits)
+        } finally {
+            HistorySearchService.entryRegexBudgetNs = savedEntry
+            HistorySearchService.totalRegexBudgetNs = savedTotal
+        }
+    }
+
+    @Test
+    fun test整查超预算_结构化失败() {
+        // 单条目预算放宽（MAX_VALUE 永不触发）、整查预算 -1（首个条目求值即超）：
+        // 抛 InvalidQueryException（MCP 侧转译 INVALID_ARGUMENT）
+        val savedEntry = HistorySearchService.entryRegexBudgetNs
+        val savedTotal = HistorySearchService.totalRegexBudgetNs
+        try {
+            HistorySearchService.entryRegexBudgetNs = Long.MAX_VALUE
+            HistorySearchService.totalRegexBudgetNs = -1L
+            try {
+                HistorySearchService.search(
+                    listOf("h.sql" to listOf(entry(nowMs, "SELECT * FROM t_user WHERE id = 1"))),
+                    HistorySearchService.Query(regex = "t_user"),
+                    nowMs,
+                )
+                org.junit.Assert.fail("整查超预算应抛 InvalidQueryException")
+            } catch (expected: HistorySearchService.InvalidQueryException) {
+                assertTrue(expected.message!!.contains("budget"))
+            }
+        } finally {
+            HistorySearchService.entryRegexBudgetNs = savedEntry
+            HistorySearchService.totalRegexBudgetNs = savedTotal
+        }
+    }
+
+    /** 内存条目夹具（纯逻辑核入参；字段口径与 entryText 的 pd 载荷同构）。 */
+    private fun entry(ts: Long, sql: String) = cn.song.mybatisplus.visualizer.log.LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        timestamp = ts,
+        sourceFile = null,
+    )
+
+    @Test
     fun test非法正则_预期异常() {
         try {
             search(dir(), HistorySearchService.Query(regex = "[unclosed"))
