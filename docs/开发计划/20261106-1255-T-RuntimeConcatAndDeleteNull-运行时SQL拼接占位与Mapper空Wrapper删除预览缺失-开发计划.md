@@ -610,3 +610,91 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 
 - 三条实施分支合入 `t-runtime-write-integration`：JPA 券 `008c5c9a`、拼接器券 `9b81f72a`、写族券（本条，合并提交见下方「主控合流收口」）。
 - `WrapperAnchorDetector.kt` 的 C 券改动（场景 C 内 JPA 分支）与 B 券改动（场景 D-0）位置不同，`ort` 自动合并成功；合并后逐形态核对：`repository.delete(entity)` / `ht.delete(entity)` / `ht.update(entity)` 仍由 C 的 JPA 分支锚定，`delete(null)` / `update(entity,null)` / `remove(null)` 由 D-0 锚定，`JoinWrappers.delete/update` 仍归工厂，`service.update(wrapper)` / 链终结点 `update` 不锚。
+
+## 十四、实施记录（P1 polish，t-runtimeconcat-polish）
+
+派活指定的落点是「§十二 Polish 实施记录」，§十二 已被 R1~R3 占用、§十三 是 R4 写族，故顺延为 §十四（既有小节编号不重排，避免打乱外部引用）。
+
+实施代理：T-RuntimeConcat-Polish（分支 `t-runtimeconcat-polish`，工作树 `.worktrees/concat-polish`，基线 master `0e94445b`）。范围＝P1 摘要（做）、P2 引号内占位（评估后只记录）、P3/P4（只写决策）。
+
+### 14.1 提交
+
+| 哈希 | 内容 |
+|---|---|
+| `10441d9b` | `feat(concat): loop placeholder carries a sanitized template summary (P1 polish)`——P1 生产改动 + 两条测试类的新增/补强用例（3 文件，+238/−6） |
+| 本条（计划回写） | 仅文档：本文件 §十四 + `CHANGELOG.md` 新增 `[Unreleased]` 一条 |
+
+### 14.2 改动点
+
+P1（必做）——生产为单文件 `src/main/kotlin/cn/song/mybatisplus/visualizer/psource/SqlStringConcatenator.kt`：
+
+- 新增 `summarizeExpression`：表达式 → 模板片段，**只读结构、不 resolve**。字符串字面量 → 字面量值；`+` 拼接 → 各操作数片段级联（非字面量操作数占一个 `…`）；三元 → 两支片段以 ` / ` 分隔（缺片段的一支用 `…` 顶位）；其余（变量引用 / 方法调用 / 任意表达式）→ `null`。返回 `null` 的语义是「这里没有字符串字面量」——`k == 0 ?` / `ids.get(k)` 这类源码**结构上**进不了产物。
+- 新增 `summarizeLoopTemplate`：把循环体的 append 序列汇成一条摘要。取不到字面量的实参贡献一个 `…` 分隔（相邻片段之间必须有分隔，否则 `append("or id='")` + `append(变量)` + `append("' ")` 会读成 `or id=''`，像是空字面量）；整段一个字面量都取不到 → `null`。
+- 新增 `loopContextArguments`：按**同一循环锚点**整段取样——循环体的追加常跨多条 append，只取「触发降级的那一条」会把摘要截成半截。
+- `sanitizePlaceholderText` 增 `maxLength` 形参（默认仍 120）。摘要按 `TEMPLATE_SUMMARY_MAX_LENGTH = 120 − 前缀长 − 后缀长` 单独截断，保证后缀 `（运行时重复）` 不会被外层长度上限从尾巴上截掉。
+- `collectAppendCalls` 的 `AppendFlow.LOOP` 分支：摘要非空 → `循环内追加 <摘要>（运行时重复）`；摘要为空 → 回落原 `LOOP_APPEND_LABEL`（`循环内追加，运行时重复执行`，**逐字不变**），不凭空编造。`PAIRED` / `OPTIONAL` / `STRAIGHT` 三支未动。
+
+清洗（摘要复用 R1.1 同一函数）：`*/` → `* /`、`'` → `’`（U+2019）、`"` → `”`、空白折叠单空格、长度上限。
+
+用户原例（`getAreaPowerGeneration`）polish 后的新占位文本：
+
+```
+SELECT * FROM hplt.autogen.calpoint
+WHERE ( /* 运行时值: 循环内追加 id=’…’ / or id=’…’（运行时重复） */ )
+AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
+```
+
+（摘要里的引号渲染成 U+2019 是清洗口径使然——摘要可能落在字符串字面量内部；测试断言按原样写 `’`。）
+
+测试：`SqlStringConcatenatorTest` +4 例——摘要形态与源码不外泄（断言含 `循环内追加 id=’…’ / or id=’…’`、不含 `k == 0 ?` / `ids.get(k)`）、多 append 片段分隔（含 `or id=’…’`、不含 ASCII `or id='`）、无字面量回落原文案（含 `循环内追加，运行时重复执行`、不含 `（运行时重复）`）、摘要清洗（`a*/b` 不得原样出现、注释符各 1、引号平衡）；`JdbcTemplateSqlPreviewServiceTest.testPreview_loopTernaryConcat_keepsWellFormedSql` 补一条端到端摘要断言。
+
+### 14.3 定向读数：**未取得（资源闸门关闭）**
+
+| 时点 | 读数 |
+|---|---|
+| 16:27 首次定向（实现前，作「先红」基线） | 构建**未到测试阶段**：Gradle daemon 被系统内存耗尽打死（`hs_err_pid50316.log`：`There is insufficient memory … Native memory allocation (malloc) failed to allocate 1478592 bytes. Error detail: Chunk::new`）。**无任何测试读数** |
+| 16:30~16:54 复跑窗口 | `parallel_tasks.py check` 全程显示 2 个他人活跃构建（`t-release-beta2` 主仓发行批、期间还有 `cr-wt-i18n` 另一仓）；`\Memory\Available MBytes` 0~3.2GB，`Committed 73810 / Commit Limit 76465 MB`（96.5%，见 §13.5 同源教训：瓶颈是内存提交量）→ 按派活纪律「已有 2 个活跃构建则不构建」全程未复跑 |
+
+交主控复跑的命令（**单跑一条即可**，勿串管道读退出码）：
+
+```
+./gradlew test --tests "cn.song.mybatisplus.visualizer.psource.SqlStringConcatenatorTest" \
+  --tests "cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewServiceTest" \
+  -Pkotlin.compiler.execution.strategy=in-process > log 2>&1; echo EXIT=$?
+```
+
+计数读 `build/test-results/test/TEST-cn.song.mybatisplus.visualizer.psource.*.xml`（预期 19 + 10 = 29 例全绿）。
+
+隔离提醒：16:27 崩掉的是**共享** daemon（daemon 日志 `Starting 3rd build in daemon`）——复跑前先确认发行批不与本次共用同一 daemon，或显式给不同 `-Dorg.gradle.jvmargs=…` 起独立 daemon，否则崩掉的一次会连带打掉别人的构建（本次即有此风险，如实登记）。
+
+### 14.4 反向验证：**未执行**（原因同 14.3）
+
+待复跑三步（还原用 `git checkout -- <生产文件>`）：
+
+1. 定向绿：两条类全跑，预期 29 例全绿。
+2. 摘掉摘要分支（`summarizeLoopTemplate` 首行加 `return null`）→ 预期 **5 例红**：`SqlStringConcatenatorTest` 的摘要形态 / 多 append 分隔 / 摘要清洗 3 例 + `JdbcTemplateSqlPreviewServiceTest` 用户原例 1 条摘要断言（回落用例 `noLiteralSummary_fallsBackToPlainLabel` 应**仍绿**，它钉的是回落路径）。
+3. 还原 → 复跑转绿，并复核既有两条：`compact.contains("k == 0 ?")` 为假、`WHERE (` 与 `)` 在场、引号 4 个平衡。
+
+### 14.5 P2 处置：只写决策记录，不改 UI
+
+「引号内占位」（`AND time >= '/* 运行时值: startTime */'`）的引号是**位置语义**，SQL 文本不改。UI 侧低成本标记的评估结论：**不做，只记录**，两条实证支撑：
+
+1. **已有隐性标记**：预览面板 SQL 编辑器挂的是自研 `SqlSyntaxHighlighter`（`ui/SqlPreviewPanelEditorLifecycle.kt:755`），其词法器 `SqlLexer.scanString`（`ui/highlight/SqlLexer.kt:102-118`）把 `'` 到 `'` 之间整体吃成一个 `STRING` token——引号内的占位因此渲染成**字符串色**，与引号外的注释色天然分得开。再加显式标记的信息增量有限。
+2. **显式标记成本不低**：要标出「哪些占位落在引号内」，得让拼接器报告占位在产物文本中的 span（以及该 span 是否落在字面量内）。当前 `ConcatenationResult` / `PreviewResult` 只有扁平字符串、没有 span 模型，这条元数据要穿 JDBC / 自定义 DAO / Hibernate 三条通道到面板渲染层，属契约改动，不属「低成本表达方式」。
+
+再评估触发条件：用户仍反馈看不清（把引号内占位当真值读）时立项；届时最小形态是 `PreviewResult` 末尾追加默认空字段 `placeholderSpans`（不动既有构造点），面板侧用 RangeHighlighter 上色或加 tooltip。
+
+### 14.6 P3 / P4 决策（只写决策，不写代码）
+
+| 编号 | 事项 | 决策 |
+|---|---|---|
+| P3 | `tz (` 的空格 | **不做特判**。`to_date (` / `tz (` 同形，是格式化器（`SqlFormatter`）的通行面貌；为单例加特判会把一个全局约定变成特例，且治标不治本（换一个函数名又会出现）。登记为已知面貌，不列待办 |
+| P4 | 「固定模板 + 循环」的符号展开示例（展开两项并标「示例」） | **不实现，列入待评估**。展开几项、`k == 0` 两支怎么持久化、循环次数多少，全靠渲染器猜——产出是「像真 SQL 的假 SQL」，与 R1~R3 已立的「宁缺不错、不编造」口径冲突。<br>**触发条件**：有用户明确反馈「想直接复制多值预览」且接受「示例」标识 + 不可执行声明；或产品侧愿意引入「运行期值填参」交互（用户给出 ids 的具体值）——那就不再是猜测，可立项。<br>**风险**：一旦展开又缺强标识，用户会当真实语句执行（`WHERE (id='1' or id='2')` 在多值语义下少一项即错结果集），风险高于信息增益 |
+
+### 14.7 偏差与未完成
+
+1. **P1 未编译、未跑测试**（见 14.3）——代码按 PSI 类型与既有口径逐行推得，未过编译器。已单独核对的一条依赖：`PsiBinaryExpression extends PsiPolyadicExpression`（`ideaIU-2024.3.7.1-sources.jar` 内 `com/intellij/psi/PsiBinaryExpression.java:27`，javap/unzip 实证），因为 2 操作数 `+` 链是否为 polyadic 直接决定摘要能否取到片段。
+2. 只改**循环**一种降级占位（P1 指定范围）。`PAIRED_APPEND_LABEL`（互斥分支）与三种 `OPTIONAL` 说明注释未带摘要——同型增强，若用户认可循环这套文案，可同批推给互斥/可选分支。
+3. HQL 两条通道（`CustomDaoHqlLocator` / `HqlQueryLocator`）共用本拼接器，改动同一函数；已 grep 确认 `CustomDaoHqlLocatorTest` 只断言 `contains("/* 运行时值: ")`、且无循环 append 样本（不受摘要影响），但**未跑**这些类（按纪律只跑派活指定的两条）。主控收口若求稳，加上 `psi.jpa.CustomDaoHqlLocatorTest`。
+4. §12.3 / §12.4 / §12.5 是 R1~R3 的**历史读数**，本次 polish 会改变其中记录的产物文案（`循环内追加，运行时重复执行` → 带摘要），但**不在本册改历史记录**，避免篡改既有证据；对照点写在 14.2。
+5. 未跑全量、未跑 `testShards` / `verifyGate` / `verifyPlugin` / `buildPlugin`、未 clean、未 push、未合流、未建 tag、未动 `update/update.json`。
