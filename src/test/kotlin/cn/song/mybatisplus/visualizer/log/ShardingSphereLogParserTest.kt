@@ -136,7 +136,11 @@ class ShardingSphereLogParserTest {
                 entry.rawSql.count { it == '?' }, exported.count { it == '?' })
             assertTrue("format=$format 不应含分片标记 ' ::: '，产物=$exported", !exported.contains(" ::: "))
             assertTrue("format=$format 不应含物理表名 BOOK，产物=$exported", !exported.contains("BOOK"))
-            assertTrue("format=$format 不应含 001（占位符/控制字符残留），产物=$exported", !exported.contains("001"))
+            // T-CiFastFlake（2026-11-06 run 42135405574 定因）：「001」扫描此前含导出头部
+            // `-- Exported … at 2026-11-06 08:22:36.001`——毫秒恰为 001 时（1/1000）必然红，
+            // 与「本地与相邻轮都绿」的偶发形态吻合。收窄到去头部后的正文再扫。
+            val exportedBody = exported.lines().filterNot { it.startsWith("-- Exported") }.joinToString("\n")
+            assertTrue("format=$format 不应含 001（占位符/控制字符残留），产物=$exported", !exportedBody.contains("001"))
             assertTrue("format=$format 不应含物理分页参数 [0, 30]，产物=$exported", !exported.contains("[0, 30]"))
         }
     }
