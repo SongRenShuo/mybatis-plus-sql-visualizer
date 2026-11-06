@@ -111,6 +111,104 @@ class UpdateZipGuardTest {
         }
     }
 
+    // ---------------- T-SAF-06（update.UpdateZipGuard.entry-name-platform-delegated） ----------------
+    // 条目名恶意形态（zip-slip / 盘符绝对路径 / NTFS ADS / Windows 保留设备名 / 尾点尾空格）：
+    // 改前守卫只读大小与数量、从不校验 entry.name——这些包全部放行（先红：断言 Reject 失败，
+    // 实际返回 Ok），清洗被完全委托给未验证的平台解压器。修复后插件侧先行拒绝，与平台行为无关。
+
+    @Test
+    fun traversalEntryNameIsRejected() {
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("../zipslip-probe.txt"))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue(".. 遍历条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+            assertTrue((result as UpdateZipGuard.GuardResult.Reject).reason.contains(".."))
+        }
+    }
+
+    @Test
+    fun driveQualifiedAbsoluteEntryNameIsRejected() {
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("C:\\absolute-probe.txt"))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("盘符绝对路径条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+        }
+    }
+
+    @Test
+    fun alternateDataStreamColonEntryNameIsRejected() {
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("probe:ads.txt"))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("NTFS ADS（冒号）条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+        }
+    }
+
+    @Test
+    fun windowsReservedDeviceNameEntryIsRejected() {
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("CON.txt"))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("Windows 保留设备名条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+            assertTrue(
+                (result as UpdateZipGuard.GuardResult.Reject).reason.contains("reserved"),
+            )
+        }
+    }
+
+    @Test
+    fun trailingDotOrSpaceEntryNameIsRejected() {
+        // Windows 会剥掉路径段尾部的点/空格（写盘时名字被改写/重定向）
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("probe.txt."))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("尾部点条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+        }
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("probe.txt "))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("尾部空格条目必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+        }
+    }
+
+    @Test
+    fun nestedTraversalSegmentIsRejected() {
+        // 深层目录内的 .. 段同样拒绝（不局限于首段）
+        withTempZip { zip ->
+            ZipOutputStream(zip.toFile().outputStream().buffered()).use { z ->
+                z.putNextEntry(ZipEntry("lib/ok/../../escape.txt"))
+                z.write("probe".toByteArray())
+                z.closeEntry()
+            }
+            val result = UpdateZipGuard.check(zip)
+            assertTrue("嵌套 .. 段必须拦截: $result", result is UpdateZipGuard.GuardResult.Reject)
+        }
+    }
+
     // ---------------- 编排层接线：守卫拒绝不触 install ----------------
 
     @Test
