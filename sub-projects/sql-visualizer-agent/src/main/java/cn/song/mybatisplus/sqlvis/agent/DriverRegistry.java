@@ -64,6 +64,12 @@ public final class DriverRegistry {
         // `jdbc:oceanbase:` 唯一（com.oceanbase.jdbc.UrlParser 常量池实证）。语句面/prepare 面在
         // WeaveSpecs，勿只登记一半。
         s.add("com.oceanbase.jdbc.Driver");
+        // 磐维 PanweiDB（T-IbatisPanwei 券 C；panweidb-jdbc-1.0.0.jar，2022-10-27 构建，class 52）。
+        // 谱系：官方《应用开发指南》明载基于 openGauss-connector-jdbc，但**整包重命名**——
+        // jar 内 org/panweidb/ 条目 374 个、org/postgresql/ 为 0，META-INF/services 声明
+        // org.panweidb.Driver，故三面必须各自登记（语句面/prepare 面在 WeaveSpecs，勿只登记一半）。
+        // V2 文档另写 cn.com.panweidb.Driver（多代命名分裂），该形态待真机 jar 到位再登记。
+        s.add("org.panweidb.Driver");
         DRIVER_CLASSES = Collections.unmodifiableSet(s);
         // T-StatementWeave 语句面/prepare 面名单在 StatementWeaver.SPECS（单一真相，形态标注
         // 跟类走）；本表只保留驱动 connect 面。两新面谓词委托 specOf 判定。

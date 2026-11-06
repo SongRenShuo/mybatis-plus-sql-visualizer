@@ -108,6 +108,15 @@ public class StatementWeaverVendorCoverageTest {
             "com.oceanbase.jdbc.OceanBaseStatement",
             "com.oceanbase.jdbc.JDBC4PreparedStatement",
             "com.oceanbase.jdbc.JDBC4ServerPreparedStatement",
+            // 磐维 PanweiDB（T-IbatisPanwei 券 C，panweidb-jdbc-1.0.0.jar）：整包重命名的
+            // openGauss-connector-jdbc 谱系（org/panweidb 条目 374、org/postgresql 为 0）。
+            // PgPreparedStatement extends PgStatement，自有 execute 全族；PgCallableStatement
+            // extends PgPreparedStatement 且自有 executeUpdate()/executeWithFlags(int)，按 pgjdbc
+            // 同族先例单列。jar 不在测试 classpath → 进 JAR_OPTIONAL_BYTE_LAYER，字节层由
+            // 磐维字节层专项用例（-Dpanwei.jar）出具。
+            "org.panweidb.jdbc.PgStatement",
+            "org.panweidb.jdbc.PgPreparedStatement",
+            "org.panweidb.jdbc.PgCallableStatement",
     };
 
     /**
@@ -151,6 +160,8 @@ public class StatementWeaverVendorCoverageTest {
             // OceanBase 连接（T-CaptureCoverage 券 03）：OceanBaseConnection implements ConnectionImpl，
             // 自有 6 个 prepareStatement + 3 个 prepareCall 出口，非 MySQL ConnectionImpl 子类
             "com.oceanbase.jdbc.OceanBaseConnection",
+            // 磐维 PanweiDB（T-IbatisPanwei 券 C）：prepare 面单列，getURL() javap 实测 public
+            "org.panweidb.jdbc.PgConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -163,6 +174,14 @@ public class StatementWeaverVendorCoverageTest {
             "com.mysql.jdbc.ServerPreparedStatement",
             "com.mysql.cj.jdbc.ConnectionImpl",
             "com.mysql.jdbc.ConnectionImpl",
+            // 磐维（T-IbatisPanwei 券 C）：驱动 jar 不入库、不在测试 classpath，批量字节层跳过；
+            // 字节层由磐维专项用例（-Dpanwei.jar / PANWEI_JAR）出具。注意**不要**放进
+            // JAR_OPTIONAL_BYTE_LAYER——那张表参与 MariaDB/SQLite 用例的 absent 判据，
+            // 混入会被误报成「MariaDB/SQLite 缺 jar」而把该用例整条 skip 掉。
+            "org.panweidb.jdbc.PgStatement",
+            "org.panweidb.jdbc.PgPreparedStatement",
+            "org.panweidb.jdbc.PgCallableStatement",
+            "org.panweidb.jdbc.PgConnection",
     };
 
     // ---------- 谓词层 ----------
@@ -498,6 +517,75 @@ public class StatementWeaverVendorCoverageTest {
         }
     }
 
+    // ---------- 磐维（T-IbatisPanwei 券 C）字节层 ----------
+
+    /**
+     * 磐维字节层：驱动 jar 不入库、不在测试 classpath，经 {@code -Dpanwei.jar=<path>} 或环境变量
+     * {@code PANWEI_JAR} 提供；未提供时显式 skip（谓词层与厂商对齐守卫仍生效）。
+     *
+     * <p>jar 内是整包重命名（org/panweidb 374 条、org/postgresql 0 条），父类与接口同样只在 jar 里，
+     * 故用 jar 支撑的 URLClassLoader 作资源回退——与 classpath 驱动族同一套「织入 → 隔离子 loader
+     * 定义 → 初始化过 JVM 校验」。
+     */
+    @Test
+    public void 磐维字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
+        final java.io.File jar = panweiJarOrNull();
+        org.junit.Assume.assumeTrue(
+                "未提供 -Dpanwei.jar=<path> 或 PANWEI_JAR，磐维字节层跳过（谓词层已覆盖）",
+                jar != null);
+        final String[] classes = {
+                "org.panweidb.jdbc.PgStatement",
+                "org.panweidb.jdbc.PgPreparedStatement",
+                "org.panweidb.jdbc.PgCallableStatement",
+                "org.panweidb.jdbc.PgConnection",
+        };
+        try (java.net.URLClassLoader jarLoader = new java.net.URLClassLoader(
+                new java.net.URL[]{jar.toURI().toURL()},
+                StatementWeaverVendorCoverageTest.class.getClassLoader())) {
+            for (String dotted : classes) {
+                final byte[] original = readJarEntry(jar, dotted.replace('.', '/') + ".class");
+                final StatementWeaver.Kind[] face = StatementWeaver.specOf(dotted);
+                assertNotNull(dotted + " 未登记进 SPECS", face);
+                final byte[] woven = StatementWeaver.weaveSpec(face, jarLoader, original);
+                assertFalse(dotted + " 必须被真实织入（changed）——登记了却零命中即假覆盖",
+                        Arrays.equals(original, woven));
+                final VerificationLoader loader = new VerificationLoader(
+                        dotted, woven, vendorPrefix(dotted), jarLoader);
+                loader.loadClass(dotted);
+                assertNotNull(dotted + " 织入产物必须通过 JVM 校验（jar 资源回退 + 初始化）",
+                        Class.forName(dotted, true, loader));
+            }
+        }
+    }
+
+    private static java.io.File panweiJarOrNull() {
+        String p = System.getProperty("panwei.jar");
+        if (p == null || p.isEmpty()) {
+            p = System.getenv("PANWEI_JAR");
+        }
+        if (p == null || p.isEmpty()) {
+            return null;
+        }
+        final java.io.File f = new java.io.File(p);
+        return f.isFile() ? f : null;
+    }
+
+    private static byte[] readJarEntry(java.io.File jar, String entry) throws Exception {
+        try (java.util.jar.JarFile jf = new java.util.jar.JarFile(jar)) {
+            final java.util.jar.JarEntry e = jf.getJarEntry(entry);
+            assertNotNull("jar 内缺条目：" + entry, e);
+            try (InputStream in = jf.getInputStream(e)) {
+                final ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                final byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                return bos.toByteArray();
+            }
+        }
+    }
+
     // ---------- 工具 ----------
 
     private void assertWovenAndVerifiable(String dotted) throws Exception {
@@ -588,12 +676,24 @@ public class StatementWeaverVendorCoverageTest {
         private final String target;
         private final byte[] woven;
         private final String childFirstPrefix;
+        /**
+         * 非目标类的字节来源（默认系统 classpath）。磐维（T-IbatisPanwei 券 C）的驱动 jar 不在
+         * 测试 classpath，父类/接口只在 jar 里，故由专项用例传入 jar 支撑的 URLClassLoader。
+         */
+        private final ClassLoader resourceLoader;
 
         VerificationLoader(String target, byte[] woven, String childFirstPrefix) {
+            this(target, woven, childFirstPrefix,
+                    StatementWeaverVendorCoverageTest.class.getClassLoader());
+        }
+
+        VerificationLoader(String target, byte[] woven, String childFirstPrefix,
+                           ClassLoader resourceLoader) {
             super(StatementWeaverVendorCoverageTest.class.getClassLoader());
             this.target = target;
             this.woven = woven;
             this.childFirstPrefix = childFirstPrefix;
+            this.resourceLoader = resourceLoader;
         }
 
         @Override
@@ -618,7 +718,7 @@ public class StatementWeaverVendorCoverageTest {
 
         @Override
         protected Class<?> findClass(String name) throws ClassNotFoundException {
-            final byte[] b = readResourceQuiet(name.replace('.', '/') + ".class");
+            final byte[] b = readResourceQuiet(resourceLoader, name.replace('.', '/') + ".class");
             if (b == null) {
                 throw new ClassNotFoundException(name);
             }
@@ -627,7 +727,11 @@ public class StatementWeaverVendorCoverageTest {
     }
 
     private static byte[] readResourceQuiet(String path) {
-        try (InputStream in = ClassLoader.getSystemClassLoader().getResourceAsStream(path)) {
+        return readResourceQuiet(ClassLoader.getSystemClassLoader(), path);
+    }
+
+    private static byte[] readResourceQuiet(ClassLoader loader, String path) {
+        try (InputStream in = loader.getResourceAsStream(path)) {
             if (in == null) {
                 return null;
             }
