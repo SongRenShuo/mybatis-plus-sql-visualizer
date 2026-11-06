@@ -1580,6 +1580,10 @@ class SqlLogPanel(
                         agentLivePids = am.healthyPids(),
                         agentPaused = am.userPaused,
                         agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                        // T-IbatisPanwei 券 D：未登记驱动具名事实（有界、只类名）——空态诊断行在
+                        // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
+                        unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
+                            .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
                     ),
                 )
             }.getOrNull()

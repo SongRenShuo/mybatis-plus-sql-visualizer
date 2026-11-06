@@ -35,6 +35,14 @@ internal data class CaptureStatusLine(
     val agentPaused: Boolean,
     /** 增强 agent 通道：已收事件累计（[AgentEventAdapter.receivedEvents]）。 */
     val agentEventsReceived: Long,
+    /**
+     * T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界 ≤8，只类名）。
+     *
+     * 为什么必须落在状态栏：空态诊断行在 `entryCount > 0` 时直接返回 null（控制台有产出就完全不
+     * 显示），而「驱动没登记」这条事实恰恰在「控制台有产出、增强零产出」的现场最需要被看见。
+     * 状态栏是捕捉期间常驻的那一处，不新造面板。
+     */
+    val unregisteredImplementations: List<String> = emptyList(),
 )
 
 /**
@@ -61,5 +69,15 @@ internal fun captureStatusLineText(d: CaptureStatusLine): Pair<String, String>? 
         // 未挂载：等待/冷却/回落等既有五态文案
         else -> MpSqlVisualizerBundle.message("log.statusbar.agent.summary", d.agentStatus)
     }
-    return console to agent
+    // 券 D：未登记驱动具名事实挂尾（有界；增强未开启时无意义，不挂）
+    val agentWithDrivers = if (d.agentStatus != null && d.unregisteredImplementations.isNotEmpty()) {
+        MpSqlVisualizerBundle.message(
+            "log.statusbar.agent.unregistered",
+            agent,
+            d.unregisteredImplementations.joinToString(", "),
+        )
+    } else {
+        agent
+    }
+    return console to agentWithDrivers
 }
