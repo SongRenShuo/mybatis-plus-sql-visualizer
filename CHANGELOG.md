@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **磐维（PanweiDB）驱动的增强捕获支持（T-IbatisPanwei 券 C，94235f8d）**：磐维驱动此前不在白名单，只能靠接口兜底，attach 后常常一条不出。现按 `panweidb-jdbc-1.0.0.jar` 的真实字节登记三面——连接面 `org.panweidb.Driver`、语句面 `org.panweidb.jdbc.PgStatement` / `PgPreparedStatement` / `PgCallableStatement`、prepare 面 `PgConnection`（jar 内 `org/panweidb` 374 条、`org/postgresql` 0 条，确认是整包重命名的 openGauss-connector-jdbc 谱系；四个类均通过「织入 → 隔离 loader 定义 → 初始化过 JVM 校验」）。驱动 jar 不入库，字节层用例经 `-Dpanwei.jar` / `PANWEI_JAR` 读取，未提供时显式跳过
 - **「未登记 JDBC 实现」成为面板可见事实（T-IbatisPanwei 券 D，47a28ef1 / 6efd2e48）**：接口兜底扫到「是 JDBC 实现但不在驱动白名单」的类时，按首次发现顺序记下类名（最多 8 个、只类名），随 agent 心跳上报；空态诊断行显示「发现未登记 JDBC 实现：…（未纳入驱动白名单，增强仅靠接口兜底）」，而控制台有产出时（空态诊断行整条不显示）改挂在 SQL 日志页签底部常驻状态栏。磐维那次「增强捕获一条不出」是靠人工猜驱动包名才定位到白名单漏登记，此后同类问题一眼可见
 
 ### Fixed

@@ -1,7 +1,7 @@
 # T-IbatisPanwei：iBatis 2.x + 磐维（Panwei）的增强捕获缺失与参数方括号误入 SQL（2026-11-06）
 
 - 立项：2026-11-06 10:33
-- 状态：**已实施（2026-11-06，四路后台并行后合入 `t-ibatis-panwei-integration`）**：券 A/B/D/E/F 落地，券 C 阻塞于公网无驱动 jar（见 §十二），券 G 文档随本批回填
+- 状态：**已实施（2026-11-06）**：券 A/B/D/E/F 合入 `t-ibatis-panwei-integration`；券 C 用本机 V1 驱动 jar（`panweidb-jdbc-1.0.0.jar`）完成三面登记与字节层校验（见 §十二）；券 G 文档随本批回填。V2 命名形态与真机复验待用户
 - 目标分支：`master`（券 A/B 可独立先落；券 C 需驱动 jar 才能开工）
 - 来源：用户真机报障——国产库「磐维」（Oracle 模式，驱动 `org.panweidb.Driver`）①增强捕获抓不到；②最终 SELECT 把中括号带进了 SQL；用户补充：项目是 iBatis（非 MyBatis 3）、日志框架 log4j2
 - 取证材料：用户控制台原文（`{pstm-N}` 三行一组，见 §2.1）、两张预览截图（INSERT 全 NULL / SELECT 带中括号）
@@ -244,6 +244,17 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 **墨天轮渠道实测（2026-11-06 11:38）**：用户给出的两个文件页 `https://www.modb.pro/doc/123758`（`panweidb-jdbc-2.0.0.jar`，约 869K）与 `/doc/123759`（`panweidb-jdbc-postgresql-2.0.0.jar`，约 871K）**匿名访问均 404**，下载接口 `/api/doc/download/<id>` 返回 `401 {"operateMessage":"请登录后操作"}`——需要用户登录后自行下载。两个制品的并存本身是有用线索：基名 jar 大概率是**整包重命名**（需登记语句面 + prepare 面），`-postgresql` 后缀那个大概率是 pgjdbc 兼容别名（只需 connect 面）；仍以 jar 内 `org/panweidb/jdbc/*` 与 `org/postgresql/jdbc/*` 的条目数为准。
 
 在 jar 到位前，磐维用户的采集由**接口兜底 + 券 D 的未登记诊断**承接：兜底命中即可采（无参 `executeQuery` 仍需连接类同时命中），零命中时状态栏会直接报出 `org.panweidb.jdbc.*` 未增强，不再静默。
+
+**解除（2026-11-06 12:28，已实施）**：用户在本机驱动目录提供了 `panweidb-jdbc-1.0.0.jar`（844,003 B，2022-10-27 构建，class 52 / Java 8），券 C 阶段 2 完成。实测读数：
+
+- jar 内 `org/panweidb/` 条目 **374** 个、`org/postgresql/` **0** 个，`META-INF/services/java.sql.Driver` 声明 `org.panweidb.Driver`——确认是**整包重命名**，不是 pgjdbc 别名。
+- javap 形态：`PgPreparedStatement extends PgStatement implements PreparedStatement`（自有 `executeQuery()` / `executeUpdate()` / `execute()` / `executeLargeUpdate()` / `setObject` 三档 / `setNull` 两档 / `setString`）；`PgStatement implements Statement`（execute 全族 + `addBatch` / `clearBatch` / `executeBatch`）；`PgCallableStatement extends PgPreparedStatement` 且自有 `executeUpdate()` / `executeWithFlags(int)`（按 pgjdbc 同族先例单列）；`PgConnection` 的 `prepareStatement` / `prepareCall` / `getURL()` 均 public。
+- 登记三面：`DriverRegistry` 加 `org.panweidb.Driver`（connect）；`WeaveSpecs` 语句面加 `PgStatement` / `PgPreparedStatement` / `PgCallableStatement`，prepare 面加 `PgConnection`。
+- 字节层（真实 jar）：`StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验` 用 jar 支撑的 URLClassLoader 做资源回退，四个类全部「织入 changed → 隔离子 loader 定义 → 初始化过 JVM 校验」；定向读数 **15/0/0/0（0 skip）**。
+- 反向验证：摘掉 `PgPreparedStatement` 登记 → 恰 3 红（语句面谓词、登记名单单一真相、磐维字节层），还原后复绿。
+- jar 不入库：测试经 `-Dpanwei.jar=<path>` 或环境变量 `PANWEI_JAR` 读取；未提供时该用例显式 skip（谓词层与厂商对齐守卫仍生效）。
+
+**仍未闭环**：V2 文档写的 `cn.com.panweidb.Driver`（多代命名分裂）未登记——需要 V2 驱动 jar 或真机类清单才能确认是否另一套包形；真机复验（磐维应用上的「已收事件 N>0 / 角标 / 未登记类名消失」）待用户环境。
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
 提交：`47a28ef1`（agent 侧 D+E）、`6efd2e48`（IDE 侧 D 展示）、`7510dc79`（名字快筛门控）。
