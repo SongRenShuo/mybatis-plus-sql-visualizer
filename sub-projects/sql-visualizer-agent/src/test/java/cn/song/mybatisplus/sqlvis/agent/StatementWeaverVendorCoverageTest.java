@@ -531,7 +531,8 @@ public class StatementWeaverVendorCoverageTest {
     public void 磐维字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
         final java.io.File jar = panweiJarOrNull();
         org.junit.Assume.assumeTrue(
-                "未提供 -Dpanwei.jar=<path> 或 PANWEI_JAR，磐维字节层跳过（谓词层已覆盖）",
+                "未提供 -Dpanwei.jar / PANWEI_JAR，且仓库内 vendor/drivers/panweidb-jdbc-1.0.0.jar 不在位，"
+                        + "磐维字节层跳过（谓词层已覆盖）",
                 jar != null);
         final String[] classes = {
                 "org.panweidb.jdbc.PgStatement",
@@ -563,11 +564,23 @@ public class StatementWeaverVendorCoverageTest {
         if (p == null || p.isEmpty()) {
             p = System.getenv("PANWEI_JAR");
         }
-        if (p == null || p.isEmpty()) {
-            return null;
+        if (p != null && !p.isEmpty()) {
+            final java.io.File f = new java.io.File(p);
+            return f.isFile() ? f : null;
         }
-        final java.io.File f = new java.io.File(p);
-        return f.isFile() ? f : null;
+        // 缺省回落仓库内夹具 vendor/drivers/panweidb-jdbc-1.0.0.jar（见 vendor/README.md）。
+        // 从 user.dir 逐级向上找：agent 子项目测试的 cwd 是子项目目录，往上两级才是仓库根。
+        java.io.File dir = new java.io.File(System.getProperty("user.dir", ".")).getAbsoluteFile();
+        for (int i = 0; i < 8 && dir != null; i++) {
+            final java.io.File candidate = new java.io.File(
+                    new java.io.File(new java.io.File(dir, "vendor"), "drivers"),
+                    "panweidb-jdbc-1.0.0.jar");
+            if (candidate.isFile()) {
+                return candidate;
+            }
+            dir = dir.getParentFile();
+        }
+        return null;
     }
 
     private static byte[] readJarEntry(java.io.File jar, String entry) throws Exception {
