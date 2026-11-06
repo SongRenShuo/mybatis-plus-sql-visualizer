@@ -381,7 +381,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ide: ['243', '253', '263']
+        # T-CiVerifyIdeProvision（2026-11-06）：ideDir = 该目标在 gradle transforms 里的解包目录名，
+        # 供「确认验证目标 IDE 已解包」那步做存在性检查（名字错了就永远判定缺失、白跑一次 verifyPlugin）。
+        include:
+          - ide: '243'
+            ideDir: ideaIU-2024.3.7.1-win
+          - ide: '253'
+            ideDir: idea-2025.3.5-win
+          - ide: '263'
+            ideDir: idea-2026.3-win
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -442,6 +450,33 @@ jobs:
           $url = "https://repo1.maven.org/maven2/org/jetbrains/intellij/plugins/verifier-cli/$v/verifier-cli-$v-all.jar"
           Invoke-WebRequest -Uri $url -OutFile $jar -UseBasicParsing
           Write-Host "verifier-cli 已播种：$jar（$v）"
+
+      - name: 确认验证目标 IDE 已解包（缺则先跑一次该目标的 verifyPlugin）
+        # T-CiVerifyIdeProvision（2026-11-06 首跑实证）：verifyGate 的 ideDir() 预检是硬校验——
+        # 发行 v2026.11.6-beta.1 轮 verify(263) 红而 marketplace(263) 绿，正因 marketplace 腿有
+        # T-CiMarketIdeProvision 的 provisioning 前置、verify 腿没有：263 从没被解包进这条腿
+        # 恢复的只读缓存（里面只有 243/253 的历史解包）→ verifyGate 配置期直接报
+        # 「IDE 发行目录 idea-2026.3-win 未在 gradle 缓存 transforms 找到」。
+        # 兜法与 marketplace 腿相同：缺则先跑 `:verifyPlugin -PverifyIdes=<tag>`（约 4 分钟）填充 transforms。
+        run: |
+          $ideName = '${{ matrix.ideDir }}'
+          $found = $false
+          foreach ($c in Get-ChildItem -Path (Join-Path $env:GRADLE_USER_HOME 'caches') -Directory -ErrorAction SilentlyContinue) {
+            $t = Join-Path $c.FullName 'transforms'
+            if (-not (Test-Path -LiteralPath $t)) { continue }
+            foreach ($h in Get-ChildItem -Path $t -Directory -ErrorAction SilentlyContinue) {
+              if (Test-Path -LiteralPath (Join-Path $h.FullName "transformed\$ideName")) { $found = $true; break }
+            }
+            if ($found) { break }
+          }
+          if ($found) {
+            Write-Host "验证目标 IDE 已解包：$ideName（跳过 provisioning）"
+          } else {
+            Write-Host "::notice::验证目标 IDE 未解包：$ideName → 先跑该目标的 verifyPlugin 填充 transforms"
+            pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs `
+              ":verifyPlugin -PverifyIdes=${{ matrix.ide }} -x buildPlugin -PgifRecord=false --console=plain"
+            if ($LASTEXITCODE -ne 0) { throw "provisioning 失败（verifyPlugin ${{ matrix.ide }}）" }
+          }
 
       - name: 兼容门禁 ${{ matrix.ide }}
         # -PverifyOnly=true 复用 build job 产出的发行包；-PverifyIdes 单版本；
