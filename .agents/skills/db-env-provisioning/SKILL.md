@@ -57,7 +57,9 @@ DBX 测试主机上本来就有一批（MySQL/PG/Oracle/DM/金仓/GBASE/虚谷/S
 `available` 只剩约 **966 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
 不是想压就压：磐维 `max_process_memory` 低于约 5057MB 直接拒启（见 §2 磐维段，唯一能压的是 `shared_buffers`）。
 所以流程固定为 **先 `free -m` 看 available → 不足就先腾（`docker stop` 掉当前不用的实例，或压 `shared_buffers`）→
-再起新的**，别先起后救。腾量参考：停 MariaDB/MySQL 各回收 ~2g/1g 的 limit 预算，停一个磐维实例回收 ~3~4g。
+再起新的**，别先起后救。腾量口径别算错：停实例腾出来的是**实际 RSS 不是 limit**（MariaDB 空闲时只有
+几百 MB），真要腾出 GB 级余量就停 OceanBase（容器内 `memory_limit=6G`）或一个磐维实例（压过
+`shared_buffers` 后约 0.9GB/实例）。
 
 ## 1. 选镜像：先解决「拉不动」
 
