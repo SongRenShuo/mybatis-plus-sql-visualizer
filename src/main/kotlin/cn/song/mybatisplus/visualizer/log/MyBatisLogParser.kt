@@ -62,6 +62,12 @@ class MyBatisLogParser(
     var paramPrefix: String = DEFAULT_PARAM_PREFIX,
     var mixedPrefix: Boolean = true,
     var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
+
+    /**
+     * T-SAF-22：老化判定时钟（毫秒）。与 [LogThreadRouter] 共用同一时钟源（JdbcTemplate/
+     * ShardingSphere 先例）：驱动挂起桶与 iBatis 挂起态的老化淘汰判定；测试注入可控件以获得确定性。
+     */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -88,6 +94,10 @@ class MyBatisLogParser(
         // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
         isCollecting = { it.continuing || it.prefixMatched || it.paramPrefixMatched },
         isIdle = { it.pendingSql == null && !it.prefixMatched && !it.paramPrefixMatched },
+        // T-SAF-22：挂起桶老化——静默超阈值的未闭合语句在容量压力下强制闭合产出后淘汰
+        // （isIdle 判据让挂起桶永无淘汰资格，64 上限被废掉、滞留随控制台无界增长）
+        forceClose = { closePending(it) },
+        clock = clock,
     )
 
     /**
@@ -100,6 +110,8 @@ class MyBatisLogParser(
         val sql: String,
         val logLine: String,
         var params: List<LogSqlParam>? = null,
+        /** T-SAF-22：挂起态创建时刻（毫秒）——老化淘汰判据（静默超 TTL 兜底闭合）。 */
+        val createdAtMs: Long,
     )
 
     /**
@@ -231,6 +243,7 @@ class MyBatisLogParser(
      */
     private fun feedIbatis(bucket: Bucket, line: String): Boolean {
         if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)) return false
+        evictExpiredIbatis()
         val marker = IBATIS_MARKER.find(line) ?: return false
         val id = marker.groupValues[2]
         val rest = line.substring(marker.range.last + 1).trim()
@@ -263,7 +276,24 @@ class MyBatisLogParser(
         // 语句行同时终止 MyBatis 侧的未闭合语句/续行（与分支 1 同语义）
         closePending(bucket)
         if (sql.isEmpty()) return
-        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line)
+        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line, createdAtMs = clock())
+    }
+
+    /**
+     * T-SAF-22：iBatis 挂起态老化——静默超 [IBATIS_PENDING_TTL_MS] 的挂起组按无类型兜底闭合
+     * 产出后淘汰（与线程桶老化同一判据与量级）。挂起表按插入序持有，表首最老，首个未超龄条目
+     * 处即可停扫；每条 iBatis 标记行喂入时检查一次（摊还 O(1)，无后台线程）。
+     */
+    private fun evictExpiredIbatis() {
+        if (ibatisPending.isEmpty()) return
+        val now = clock()
+        val iterator = ibatisPending.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (now - entry.value.createdAtMs < IBATIS_PENDING_TTL_MS) break
+            iterator.remove()
+            emitIbatis(entry.value)
+        }
     }
 
     /** `{pstm-N} Parameters:`：挂起等 Types；无对应语句（上下文已丢）按既有诊断计数丢弃。 */
@@ -280,7 +310,7 @@ class MyBatisLogParser(
             // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
             ibatisPending.remove(id)
             emitIbatis(pending)
-            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params)
+            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params, createdAtMs = clock())
         } else {
             pending.params = params
         }
@@ -424,6 +454,13 @@ class MyBatisLogParser(
         private const val DEFAULT_SQL_PREFIX = "Preparing:"
         private const val DEFAULT_PARAM_PREFIX = "Parameters:"
         private const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /**
+         * T-SAF-22：iBatis 挂起态老化 TTL（毫秒）——与 [LogThreadRouter.DEFAULT_BUCKET_IDLE_TIMEOUT_MS]
+         * 同量级（60s）：`Types:` 与参数行是相邻输出，正常间隔毫秒级，静默 60s 即认定
+         * 「Types 行不会再来了」，按无类型兜底闭合优于永久滞留（挂起表无条目上限的 #22 同类问题）。
+         */
+        private const val IBATIS_PENDING_TTL_MS = 60_000L
 
         // ---------- iBatis 2.x 标记（券 A/B） ----------
 

@@ -136,6 +136,48 @@ class LogThreadRouterTest {
         )
     }
 
+    /** 老化淘汰必须先走 forceClose 兜底闭合（挂起语句产出条目，不静默丢弃）。 */
+    @Test
+    fun `非空闲桶老化时先强制闭合再淘汰`() {
+        var now = 1_000_000L
+        var closed = 0
+        val r = LogThreadRouter(
+            factory = { Bucket() },
+            isCollecting = { it.waiting },
+            isIdle = { it.idle },
+            maxBuckets = 4,
+            forceClose = { closed++ },
+            clock = { now },
+        )
+        repeat(10) { i ->
+            now += 61_000L
+            r.bucketFor("2026-09-16 10:00:00.000 DEBUG [t-$i] x - a").apply { idle = false }
+        }
+        assertTrue("老化淘汰的桶都须先强制闭合（实际 closed=$closed）", closed >= 6)
+        assertTrue("桶数仍有界", r.bucketCount() <= 4)
+    }
+
+    /** 老化阈值内的新鲜非空闲桶不被淘汰（宁超上限也不丢活跃状态——既有语义不变）。 */
+    @Test
+    fun `新鲜非空闲桶不被老化`() {
+        var now = 1_000_000L
+        var closed = 0
+        val r = LogThreadRouter(
+            factory = { Bucket() },
+            isCollecting = { it.waiting },
+            isIdle = { it.idle },
+            maxBuckets = 2,
+            forceClose = { closed++ },
+            clock = { now },
+        )
+        r.bucketFor("2026-09-16 10:00:00.000 DEBUG [a] x - a").apply { idle = false }
+        r.bucketFor("2026-09-16 10:00:00.001 DEBUG [b] x - b").apply { idle = false }
+        now += 59_000L // 未达 60s 阈值
+        r.bucketFor("2026-09-16 10:00:00.002 DEBUG [c] x - c").apply { idle = false }
+        assertEquals("阈值内活跃桶不得被老化淘汰", 3, r.bucketCount())
+        assertEquals("未发生强制闭合", 0, closed)
+    }
+
     // ---------- 日志行判定 ----------
 
     @Test

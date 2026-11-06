@@ -34,6 +34,19 @@ internal class LogThreadRouter<B : Any>(
     private val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
     /** 无 token 且无收集态桶时，是否归属最近使用的桶（T-HibConc；默认关闭=回退共享桶）。 */
     private val routeNoTokenToRecent: Boolean = false,
+    /**
+     * T-SAF-22：非空闲桶的老化阈值（毫秒）——静默超过它的非空闲桶在容量压力下强制闭合后淘汰。
+     * [isIdle] 判据让「有 pendingSql 的桶」永不具备淘汰资格（#22 病灶：64 上限被废掉，滞留随
+     * 控制台无界增长），本阈值是第二条淘汰规则：挂起态静默超过它即认定「后续行不会再来了」，
+     * 闭合产出优于永久滞留。
+     */
+    private val bucketIdleTimeoutMs: Long = DEFAULT_BUCKET_IDLE_TIMEOUT_MS,
+    /**
+     * T-SAF-22：老化淘汰前的强制闭合回调（解析器传入各自的 closePending(bucket)）——
+     * 被淘汰的挂起语句先按无参数兜底闭合产出（进 entries 由调用方取走），而不是静默丢弃；
+     * null 时老化桶直接淘汰（路由层兜底有界性，条目丢弃由解析器层面自行权衡）。
+     */
+    private val forceClose: ((B) -> Unit)? = null,
     /** settle 判定的时钟（毫秒）；测试注入可控件以获得确定性（T-ConsolePendingFlush）。 */
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -130,7 +143,14 @@ internal class LogThreadRouter<B : Any>(
         recent = null
     }
 
-    /** 淘汰空闲桶直到低于上限（新建桶前调用）。 */
+    /**
+     * 淘汰直到低于上限（新建桶前调用）。两条规则：
+     * ① 空闲桶（isIdle）——既有规则，淘汰不丢待闭合状态；
+     * ② 非空闲但静默超 [bucketIdleTimeoutMs] 的桶（T-SAF-22）——先 [forceClose] 兜底闭合
+     *    （产出挂起条目）再淘汰。isIdle 判据让挂起桶永无淘汰资格（#22 病灶：64 上限被废掉，
+     *    滞留随控制台无界增长），本规则把「挂起但已静默超时」的桶纳入同一上限治理：
+     *    静默超阈值即认定后续行不会再来了，闭合产出优于永久滞留。
+     */
     private fun evictIdle() {
         val iterator = buckets.entries.iterator()
         while (iterator.hasNext() && buckets.size >= maxBuckets) {
@@ -141,11 +161,31 @@ internal class LogThreadRouter<B : Any>(
                 iterator.remove()
             }
         }
+        if (buckets.size < maxBuckets) return
+        val now = clock()
+        val aged = buckets.entries.iterator()
+        while (aged.hasNext() && buckets.size >= maxBuckets) {
+            val entry = aged.next()
+            val last = lastActivity[entry.value] ?: continue
+            if (now - last >= bucketIdleTimeoutMs) {
+                forceClose?.invoke(entry.value) // 挂起语句兜底闭合（产出进 entries，不静默丢弃）
+                if (recent === entry.value) recent = null
+                lastActivity.remove(entry.value)
+                aged.remove()
+            }
+        }
     }
 
     companion object {
         /** 单实例最大线程桶数（超限时空闲桶冲刷淘汰，防异常形态下内存膨胀）。 */
         const val DEFAULT_MAX_BUCKETS = 64
+
+        /**
+         * T-SAF-22：非空闲桶老化阈值（静默 60s 即视为「后继行不会再来了」）——与 settledBuckets
+         * 静默判据同一量级（参数行与语句行同线程相邻输出，正常间隔 1ms 量级），取 60s 容忍
+         * 低频慢查询的语句间隔，同时封住「每条未闭合语句一个永久桶」的无界滞留。
+         */
+        const val DEFAULT_BUCKET_IDLE_TIMEOUT_MS = 60_000L
 
         /** 线程 token 提取时，日志级别关键词前后窗口大小（字符）。 */
         private const val THREAD_WINDOW = 35

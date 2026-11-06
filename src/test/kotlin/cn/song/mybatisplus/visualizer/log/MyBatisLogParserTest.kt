@@ -401,4 +401,41 @@ class MyBatisLogParserTest {
             entries[0].params.size <= 10_100,
         )
     }
+
+    // ---------- T-SAF-22（log.threadrouter.unbounded-nonidle-bucket-retention）：挂起态老化 ----------
+
+    /**
+     * 未闭合语句桶静默超阈值后被老化强制闭合产出（T-SAF-22）。
+     * 不调 closePending：条目只能来自老化淘汰前的强制闭合——修复前 0 条产出且桶无界。
+     */
+    @Test
+    fun `未闭合语句桶老化强制闭合产出`() {
+        var now = 1_000_000L
+        val p = MyBatisLogParser(maxParseLength = 20000, clock = { now })
+        repeat(100) { i ->
+            now += 61_000L
+            p.feed("2026-09-16 10:00:00.000 DEBUG [t-$i] x - ==>  Preparing: SELECT * FROM t WHERE id = $i")
+        }
+        val entries = p.takeEntries()
+        assertTrue(
+            "老化桶须强制闭合产出（实际 ${entries.size}，修复前 0 条且桶数无界）",
+            entries.size >= 100 - 64,
+        )
+    }
+
+    /** iBatis 挂起态（pstm 键表）静默超阈值后按无类型兜底闭合（Types 缺行的兜底语义不变）。 */
+    @Test
+    fun `iBatis挂起态老化兜底闭合产出`() {
+        var now = 1_000_000L
+        val p = MyBatisLogParser(clock = { now })
+        repeat(100) { i ->
+            now += 61_000L
+            p.feed("{pstm-$i} Executing Statement: INSERT INTO t VALUES (?)")
+        }
+        val entries = p.takeEntries()
+        assertTrue(
+            "老化挂起态须兜底闭合产出（实际 ${entries.size}，修复前 0 条且挂起表无界）",
+            entries.size >= 100 - 64,
+        )
+    }
 }
