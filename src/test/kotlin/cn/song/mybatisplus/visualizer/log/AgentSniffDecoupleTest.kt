@@ -22,6 +22,12 @@ class AgentSniffDecoupleTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // 跨用例隔离（与 SqlCaptureGateSniffTest / SqlErrorLineBridgeTest 同款护栏）：本类假定
+        // 接管态下 processConsoleLine 必走嗅探路径，而 CaptureActivityFallback 是全局状态——
+        // 其它用例遗留的让位起点/解封态会让它直接判定「已解封」并跳过嗅探（采集数 0）。
+        // 全量定向（log.*）里这类污染随分叉/顺序变化才会显形：单类跑必绿、全量跑必红。
+        CaptureActivityFallback.resetForTest()
+        CaptureActivityFallback.enabledOverride = false
         val state = PluginSettings.getInstance().state
         savedEnabled = state.logTimestampEnabled
         savedSource = state.logTimestampSource
@@ -34,6 +40,7 @@ class AgentSniffDecoupleTest : BasePlatformTestCase() {
             state.logTimestampSource = savedSource
             SqlCaptureGate.paused.set(false)
             LogTimeCorrelator.clear()
+            CaptureActivityFallback.resetForTest()
         } finally {
             super.tearDown()
         }
