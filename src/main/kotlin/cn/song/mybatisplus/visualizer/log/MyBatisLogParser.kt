@@ -171,7 +171,7 @@ class MyBatisLogParser(
                 feed(line)
                 return
             }
-            bucket.pendingParams += parseParams(line.trim())
+            bucket.pendingParams += parseParams(line.trim().take(maxParseLength))
             closePending(bucket)
             return
         }
@@ -184,7 +184,10 @@ class MyBatisLogParser(
                 LogParseDiag.paramWithoutContext.incrementAndGet() // T-LPC-05：静默丢弃留痕
                 return
             }
-            bucket.pendingParams += parseParams(paramsText)
+            // T-SAF-20：参数文本与 SQL 正文同受 maxParseLength 截断——此前 Parameters 余下文本
+            // 无界直入 parseParams，其 PARAM_REGEX 对逗号密集无括号文本是二次复杂度（每个逗号
+            // 起点惰性重扫到行尾），单条数百 KB 的 Parameters 行可冻结控制台解析线程。
+            bucket.pendingParams += parseParams(paramsText.take(maxParseLength))
             // 立即闭合——MyBatis 单条语句 Parameters 行后参数完整，立即生成条目避免去重窗口时序问题；
             // 多 Parameters 行（极端）合并逻辑：若下一行仍是 Parameters，pendingParams 已被清空后重开。
             closePending(bucket)
@@ -270,7 +273,9 @@ class MyBatisLogParser(
             LogParseDiag.paramWithoutContext.incrementAndGet()
             return
         }
-        val params = parseIbatisParams(text)
+        // T-SAF-20：超长列表截断——截断会破坏 `[...]` 结构，parseIbatisParams 按非列表形态
+        // 返回空表（超长即放弃解析，不产出错位的半截参数），与 maxParseLength 的兜底语义一致。
+        val params = parseIbatisParams(text.take(maxParseLength))
         if (pending.params != null) {
             // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
             ibatisPending.remove(id)
@@ -286,7 +291,8 @@ class MyBatisLogParser(
         val pending = ibatisPending[id] ?: return
         val params = pending.params ?: return // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
         ibatisPending.remove(id)
-        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)))
+        // T-SAF-20：Types 行与参数行同受截断（超长截断的错位边界与参数行同口径登记）
+        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text.take(maxParseLength))))
     }
 
     /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
