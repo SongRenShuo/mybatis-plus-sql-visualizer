@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
-- **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
+- **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障，2769e1b8）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
 
 ## [2026.11.6-beta.1] - 2026-11-06
 
