@@ -124,7 +124,14 @@ object OgnlEvaluator {
     fun parse(text: String): ParseResult {
         val cached = parseCache[text]
         if (cached != null) return cached
-        val fresh = parseUncached(text)
+        // T-SAF-19：Err 降级契约对**所有**失败形态成立——parseUncached 只 catch OgnlParseException，
+        // Lexer.number 的 NumberFormatException、递归下降残余的 StackOverflowError 等在此收敛为 Err
+        // （catch 后直接构造 Err 返回，不做任何可能再抛的重活——栈濒耗时尤其如此）
+        val fresh = try {
+            parseUncached(text)
+        } catch (t: Throwable) {
+            ParseResult.Err(t.message ?: t::class.java.simpleName)
+        }
         if (parseCache.size >= PARSE_CACHE_MAX) parseCache.clear()
         parseCache[text] = fresh
         return fresh
@@ -149,11 +156,16 @@ object OgnlEvaluator {
         }
     }
 
-    /** 解析 + 求值（bindings 为变量上下文；staticFieldValues 为 `@class@field` → 值的映射，T-M25.2）。求值期异常安全降级为 [EvalResult.Err]。 */
+    /** 解析 + 求值（bindings 为变量上下文；staticFieldValues 为 `@class@field` → 值的映射，T-M25.2）。解析/求值失败均安全降级为 [EvalResult.Err]（T-SAF-19：不限于求值期）。 */
     fun evaluate(text: String, bindings: Map<String, Any?>, staticFieldValues: Map<String, Any?> = emptyMap()): EvalResult =
-        when (val p = parse(text)) {
-            is ParseResult.Err -> EvalResult.Err(p.message)
-            is ParseResult.Ok -> evaluate(p.expr, bindings, staticFieldValues)
+        try {
+            when (val p = parse(text)) {
+                is ParseResult.Err -> EvalResult.Err(p.message)
+                is ParseResult.Ok -> evaluate(p.expr, bindings, staticFieldValues)
+            }
+        } catch (t: Throwable) {
+            // T-SAF-19：对齐 Err 契约——parse 阶段残余异常同样收敛，不外抛
+            EvalResult.Err(t.message ?: t::class.java.simpleName)
         }
 
     /** 求值（AST）。 */
@@ -683,7 +695,14 @@ object OgnlEvaluator {
                 while (pos < text.length && text[pos].isDigit()) pos++
             }
             val raw = text.substring(start, pos)
-            val value = if (raw.contains('.')) raw.toDouble() else raw.toLong()
+            // T-SAF-19：20+ 位整数字面量 raw.toLong() 抛 NumberFormatException 逃出 Err 契约 →
+            // 转 OgnlParseException 进既有 Err 降级通道（消息带被拒字面量前缀防混淆）
+            val value = if (raw.contains('.')) {
+                raw.toDouble()
+            } else {
+                raw.toLongOrNull()
+                    ?: throw OgnlParseException("integer literal out of Long range: '${raw.take(24)}'")
+            }
             return Token(TokenKind.NUMBER, raw, value)
         }
 
@@ -749,6 +768,20 @@ object OgnlEvaluator {
     private class Parser(private val lexer: Lexer) {
         private var current = lexer.next()
 
+        /**
+         * 递归深度计数（T-SAF-19）：Parser 每次 parseUncached 新建实例，成员计数实例局部、
+         * 无并发串扰。守卫 [parseOr]（括号 / 下标 / 实参 / 列表所有嵌套环的公共下降入口）与
+         * [parseUnary]（`!`/`not`/`-` 自递归环），超限抛 OgnlParseException → Err 降级——
+         * 不依赖 parse() 外层 catch Throwable 吞 Error 当常态。
+         */
+        private var depth = 0
+
+        private fun enterDepth() {
+            if (++depth > MAX_PARSE_DEPTH) {
+                throw OgnlParseException("expression nesting too deep (> $MAX_PARSE_DEPTH)")
+            }
+        }
+
         fun parseExpression(): ParseResult = try {
             val expr = parseOr()
             if (current.kind != TokenKind.EOF) {
@@ -769,13 +802,18 @@ object OgnlEvaluator {
         }
 
         private fun parseOr(): OgnlExpr {
-            var left = parseAnd()
-            while (current.text == "or" || current.text == "||") {
-                val op = current.text
-                advance()
-                left = OgnlExpr.Binary(op, left, parseAnd())
+            enterDepth()
+            try {
+                var left = parseAnd()
+                while (current.text == "or" || current.text == "||") {
+                    val op = current.text
+                    advance()
+                    left = OgnlExpr.Binary(op, left, parseAnd())
+                }
+                return left
+            } finally {
+                depth--
             }
-            return left
         }
 
         private fun parseAnd(): OgnlExpr {
@@ -842,16 +880,21 @@ object OgnlEvaluator {
         }
 
         private fun parseUnary(): OgnlExpr {
-            if (current.text == "!" || current.text == "not") {
-                val op = current.text
-                advance()
-                return OgnlExpr.Unary(op, parseUnary())
+            enterDepth()
+            try {
+                if (current.text == "!" || current.text == "not") {
+                    val op = current.text
+                    advance()
+                    return OgnlExpr.Unary(op, parseUnary())
+                }
+                if (current.text == "-") {
+                    advance()
+                    return OgnlExpr.Unary("-", parseUnary())
+                }
+                return parsePostfix()
+            } finally {
+                depth--
             }
-            if (current.text == "-") {
-                advance()
-                return OgnlExpr.Unary("-", parseUnary())
-            }
-            return parsePostfix()
         }
 
         private fun parsePostfix(): OgnlExpr {
@@ -996,6 +1039,9 @@ object OgnlEvaluator {
 
         companion object {
             val RELATIONAL_OPS = setOf("<", ">", "<=", ">=", "in")
+
+            /** 递归深度上限（T-SAF-19）：OGNL 表达式现实深度远小于此。 */
+            const val MAX_PARSE_DEPTH = 512
         }
     }
 
