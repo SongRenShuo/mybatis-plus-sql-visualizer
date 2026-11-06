@@ -383,7 +383,9 @@ final class CatchAllMatcher {
      * <ul>
      *   <li>预算只对**候选类**计数：接口/枚举/数组/基本型/bootstrap/JDK 代理、JDK 前缀名这些都是
      *       零成本排除，不占 {@code catchAllScanLimit}；</li>
-     *   <li>名字带 JDBC 线索的候选**先**评估，其余类随后——数组顺序不再能决定谁被截断。</li>
+     *   <li>名字带 JDBC 线索的候选**先**评估，其余类随后——数组顺序不再能决定谁被截断。
+     *       这一遍排序只在 {@code loaded.length > limit}（**可能截断**）时做：中小应用单轮就扫得完，
+     *       排序零收益却要多付一遍名字扫描（实测 20k 类约 4~5ms/轮）。</li>
      * </ul>
      */
     private static void runPass(Instrumentation inst, String phase) {
@@ -399,21 +401,31 @@ final class CatchAllMatcher {
             return;
         }
         final PassStats stats = new PassStats(CaptureBudget.scanLimit());
-        // 第一轮：名字快筛命中者优先（含全部已知/未知驱动的语句与连接实现）
-        final Set<Class<?>> hinted = Collections.newSetFromMap(
-                new IdentityHashMap<Class<?>, Boolean>());
-        for (Class<?> c : loaded) {
-            if (stats.stop) {
-                break;
+        // 名字快筛只在**可能截断**时才做：loaded.length <= limit 时单轮就扫得完，排序没有收益，
+        // 白付一遍名字扫描（实测 20k 类约 4~5ms/轮，见券 E 实测）。这一条让中小应用的成本
+        // 与修复前持平，大应用才为「候选不被数组顺序挤掉」付那一遍钱。
+        final boolean prioritize = loaded.length > stats.limit;
+        final Set<Class<?>> hinted = prioritize
+                ? Collections.newSetFromMap(new IdentityHashMap<Class<?>, Boolean>())
+                : Collections.<Class<?>>emptySet();
+        if (prioritize) {
+            // 第一轮：名字快筛命中者优先（含全部已知/未知驱动的语句与连接实现）
+            for (Class<?> c : loaded) {
+                if (stats.stop) {
+                    break;
+                }
+                if (cheapExcluded(c)) {
+                    continue;
+                }
+                final String name = nameOf(c);
+                if (name == null || !nameHintsJdbc(name)) {
+                    continue;
+                }
+                hinted.add(c);
+                evaluate(inst, c, name, stats);
             }
-            final String name = nameOf(c);
-            if (name == null || !nameHintsJdbc(name)) {
-                continue;
-            }
-            hinted.add(c);
-            evaluate(inst, c, name, stats);
         }
-        // 第二轮：其余类（与修复前同等尽力而为，只是在候选之后评估）
+        // 第二轮（或唯一一轮）：其余类，与修复前同等尽力而为
         for (Class<?> c : loaded) {
             if (stats.stop) {
                 break;
