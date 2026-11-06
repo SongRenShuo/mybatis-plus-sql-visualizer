@@ -283,6 +283,14 @@ class O147HistoryUpgradeTest {
             SqlLogFileReader.readFromFile(File(dir, "test.sql")).single().captureProvenance)
     }
 
+    @org.junit.After
+    fun resetSqlLogFileReaderSeams() {
+        // T-SAF-23 读闸/行宽测试缝复位：本类大预算夹具经缝放开读闸（fixture 故意超 100MB），
+        // 用后复位防缝泄漏到同 JVM 的其他测试类。
+        SqlLogFileReader.maxReadFileBytesForTest = null
+        SqlLogFileReader.maxLineCharsForTest = null
+    }
+
     @Test fun oversizedRevisionBudgetAgreesAcrossAllReaders() {
         val dir = dir(deferToClassEnd = true); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
         // 此大预算夹具用已知耗时避免头部破折号触发整串 UTF-16 膨胀；Unicode 另有用例。
@@ -297,6 +305,9 @@ class O147HistoryUpgradeTest {
             repeat(SqlLogFileReader.MAX_REVISIONS) { out.write(oversized) }
             out.write(revision)
         }
+        // T-SAF-23 读闸（100MB，对齐写侧滚动阈值）与本压力夹具（2048×~65KB ≈ 134MB，故意超写侧
+        // 阈值以钉修订预算）冲突：经测试缝放开本测试的读闸；子 JVM 验证走 parseContent 无闸不受影响。
+        SqlLogFileReader.maxReadFileBytesForTest = Long.MAX_VALUE
         val loaded = SqlLogFileReader.readFromFile(file)
         val streamed = mutableListOf<LogSqlEntry>()
         SqlLogFileReader.forEachEntry(file) { streamed += it; true }
@@ -337,6 +348,8 @@ class O147HistoryUpgradeTest {
             repeat(SqlLogFileReader.MAX_REVISIONS) { out.write(invalid); out.write(ending) }
             out.write(valid); out.write(ending)
         }
+        // T-SAF-23 读闸与压力夹具冲突：同 oversized 场景，经测试缝放开（见上）。
+        SqlLogFileReader.maxReadFileBytesForTest = Long.MAX_VALUE
         val expected = if (excess == 0) CaptureProvenance.MERGED else CaptureProvenance.CONSOLE_BRIDGE
         // At the exact limit the 8 MiB budget admits only 127 invalid rows, leaving room for
         // the small valid revision; over-limit rows cost a prefix each and exhaust the count.

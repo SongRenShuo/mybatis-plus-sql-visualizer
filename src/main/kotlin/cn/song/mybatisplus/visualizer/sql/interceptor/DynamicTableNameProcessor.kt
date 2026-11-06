@@ -34,7 +34,13 @@ object DynamicTableNameProcessor {
     private const val REGEX_CACHE_MAX = 256
 
     /** 正则编译缓存（pattern → Regex?）；值 null 表示编译失败（缓存避免重复日志警告）。 */
-    private val regexCache = java.util.concurrent.ConcurrentHashMap<String, Regex?>()
+    private val regexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
+    /**
+     * T-SAF-25 修正：编译失败的 pattern 记入 [invalidPatterns]（负缓存）——ConcurrentHashMap
+     * 不能存 null（旧 mutableMapOf 口径靠缓存 null 跳过重复编译/告警），负缓存同样封顶防膨胀。
+     */
+    private val invalidPatterns = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
     /** T-SAF-25 测试缝：缓存当前条数（容量封顶断言用）。 */
     internal fun regexCacheSizeForTest(): Int = regexCache.size
@@ -64,13 +70,16 @@ object DynamicTableNameProcessor {
      */
     private fun compileRegex(pattern: String): Regex? {
         regexCache[pattern]?.let { return it }
+        if (pattern in invalidPatterns) return null
         if (regexCache.size >= REGEX_CACHE_MAX) {
             LOG.warn("DynamicTableName: 正则编译缓存超上限（$REGEX_CACHE_MAX），整体清空重建")
             regexCache.clear()
         }
+        if (invalidPatterns.size >= REGEX_CACHE_MAX) invalidPatterns.clear()
         val regex = runCatching { Regex(pattern) }.getOrElse { e ->
             LOG.warn("DynamicTableName: 正则编译失败，跳过规则 pattern=$pattern, error=${e.message}")
-            null
+            invalidPatterns += pattern
+            return null
         }
         regexCache[pattern] = regex
         return regex

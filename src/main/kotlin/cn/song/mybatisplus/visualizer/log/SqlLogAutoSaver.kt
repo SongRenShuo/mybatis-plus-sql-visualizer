@@ -448,7 +448,14 @@ class SqlLogAutoSaver(
         // （isRegularFile && !isSymbolicLink）。pattern 推导名在打开前被植入符号链接时，
         // CREATE+APPEND 曾会跟随链接把头行 + restoredSql + Base64 pd 载荷追加到项目外目标；
         // 现拒绝本次打开（告警并跳过本批写入，不丢其他条目），与修订路径的符号链接遏制对齐。
-        if (!isRegularFileNoFollow(file)) {
+        // T-SAF-13 修正：非法路径（Windows 非法字符等）在 toPath() 即抛 InvalidPathException
+        //（非 IOException 子类，外层 runCatching 曾未覆盖到这一步），与原「无效路径不抛异常」
+        // 口径对齐——按拒绝处理（warn + 跳过本批，openRefusedForName 备忘防刷屏）。
+        val regular = runCatching { isRegularFileNoFollow(file) }.getOrElse {
+            LOG.warn("自动保存历史 SQL：目标路径无法解析为安全路径，拒绝本批写入 ${file.absolutePath}", it)
+            false
+        }
+        if (!regular) {
             LOG.warn("自动保存历史 SQL：目标文件非常规文件或为符号链接，拒绝本批写入 ${file.absolutePath}")
             openRefusedForName = currentResolvedName
             writer = null

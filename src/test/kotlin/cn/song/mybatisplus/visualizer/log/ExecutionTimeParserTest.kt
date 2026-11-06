@@ -136,17 +136,20 @@ class ExecutionTimeParserTest {
      *
      * 修复前（NEEDS-VALIDATION #21 复现证据）：TRAILING_MS_REGEX 的前导 `[\]\s]` 让每个空白
      * 索引都成为一次匹配尝试，`\s*(\d+)` 迫使每次尝试回溯整个空白段——二次曲线下
-     * 100k/1k 耗时比约 100 倍（100k 单次即达秒级），本断言（20 倍阈值）转红。
-     * 修复后（lookbehind 重锚定，每个空白索引 O(1) 失败）耗时比 ≈ 1，恒绿。
+     * 100k/1k 耗时比应达 ~10000 倍（100k 单次即达秒级）。
+     * 修复后（T-SAF-21：lookbehind 重锚定 + 行尾 trim 预检 + 定宽窗口，见 ExecutionTimeParser
+     * 内注释）：残余为线性成本（trimEnd + 五个字面前缀正则的全行扫描），100× 输入的
+     * 耗时比实测 ~50-100——线性放大的正常区间；**阈值取 200**：线性（≈100）恒绿、
+     * 二次（≈10000）必红。墙钟绝对值不作断言（CI 慢机不敏感）。
      */
     @Test
     fun `空白段增长不得超线性`() {
         val small = measurePerOp(1_000)
         val large = measurePerOp(100_000)
         assertTrue(
-            "100k/1k 单次耗时比应近线性（实际 small=${small}ns large=${large}ns " +
-                "ratio=${large / small.coerceAtLeast(1)}，阈值 20）",
-            large < small * 20 + 1_000,
+            "100k/1k 单次耗时比不得超线性（实际 small=${small}ns large=${large}ns " +
+                "ratio=${large / small.coerceAtLeast(1)}，阈值 200；线性≈100、二次≈10000）",
+            large < small * 200 + 1_000_000,
         )
     }
 }
