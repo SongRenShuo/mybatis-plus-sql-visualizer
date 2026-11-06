@@ -90,15 +90,20 @@
       - 2026-11-06 扩子集的原因：磐维 PanWeiDB 是 2026.11.6 的主打方言（A 模式 Oracle 兼容 / B 模式 MySQL
         兼容，用户真实形态是 `jdbc:panweidb:`）；原先进程只跑 `mysql84`+`pg16`，CI 冒烟对磐维与 GaussDB
         内核 503 零覆盖，所以本版把这两族拉进冒烟子集。
-      - 预算：步骤 `timeout-minutes` 按 **Σ(每实例预算) + 8min 冷启动与收尾** 算（每实例预算＝矩阵条目
-        `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s）。取数用**券 A 的本机实测 × 跨洋倍率**
-        （mysql84 锚点 1116s(CI) ÷ 103.0s(本机) ≈ 10.8×）：mysql84 18.6min / pg16 3.3min（CI 实测）+
-        panwei_a ≈12.4min + gaussdb ≈36.3min ≈ **70.6min** 预期；矩阵给出显式预算时 **Σ 上界 = 6600s = 110min**
-        → 步骤 **120min** / job **130min**（2 实例子集时代是 40min / 50min）。
+      - 预算：步骤 `timeout-minutes` 按 **max(每实例预算) + 8min 冷启动与收尾** 算（每实例预算＝矩阵条目
+        `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s）。**2026-11-06 起口径由 Σ 改成 max**：
+        `dialectExternalVerify` 改为同 JVM 内按实例并发（默认 `min(实例数, 4)`，可用
+        `-Dmpvs.external.maxConcurrency` 或矩阵全局 `maxConcurrency` 覆盖），墙钟不再等于「各实例相加」。
+        最坏情况是**最贵那个实例挂满自己的预算**（看门狗判它 TIMEOUT、其余实例照常收口），故
+        步骤必须 ≥ max(预算)，否则「实例级超时按设计判红」会退化成 CI 掐断进程（没有 summary 工件、
+        也分不清超时与崩溃）。四实例预算 1800/600/1200/3000 ⇒ max = 3000s = 50min → 步骤 **60min** /
+        job **70min**（串行时代是 120min / 130min，Σ 上界 6600s）。取数仍用**券 A 的本机实测 × 跨洋倍率**
+        （mysql84 锚点 1116s(CI) ÷ 103.0s(本机) ≈ 10.8×）：串行投影 mysql84 18.6min / pg16 3.3min（CI 实测）+
+        panwei_a ≈12.4min + gaussdb ≈36.3min ≈ **70.6min**；并行后预期墙钟 ≈ max(实测) ≈ 20~40min。
+        ⚠️只有「并发度 ≥ 实例数」时才是 max；压小并发度后算式回到 `ceil(实例数 / 并发度) × max(预算)`。
         **`panwei_b` 已从子集剔除**：262 个保留字、CI 投影 ≈30min，是最贵的一条，且与 mysql84 同属 MySQL
         协议/词表族；磐维的价值在 Oracle 兼容面，已由 `panwei_a` 覆盖。再吃紧的砍序：`gaussdb_kernel503` → `panwei_a`。
-        步骤必须 ≥ Σ，否则「实例级超时按设计判红」会退化成 CI 掐断进程（没有 summary 工件、也分不清超时
-        与崩溃）。**改子集或改矩阵里的实例预算都要按同一算式重算**，算式落在 workflow 的 `dialect` job 头部注释。
+        **改子集、改矩阵里的实例预算、或改并发度都要按同一算式重算**，算式落在 workflow 的 `dialect` job 头部注释。
       - 触发与复验：nightly 是 `schedule` + `workflow_dispatch` 双触发，可手工
         `gh workflow run nightly-full.yml`（换分支加 `--ref <branch>`）；判据＝该 run 的 `dialect` job 里
         「方言矩阵已落盘（子集 …）」行 + 工件 `dialect-verify-summary`（`summary.md` 的「通过/跳过/超时/失败」行）。
