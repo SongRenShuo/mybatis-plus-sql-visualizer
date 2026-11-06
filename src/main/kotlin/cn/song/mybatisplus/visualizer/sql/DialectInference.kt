@@ -87,7 +87,9 @@ internal object UrlSubprotocolDialects {
         if (!trimmed.startsWith("jdbc:", ignoreCase = true)) return null
         val subprotocol = trimmed.substring(5).substringBefore(':').lowercase()
         val mapped = SUBPROTOCOL_TO_DIALECT[subprotocol] ?: return null
-        if (subprotocol in PANWEI_SUBPROTOCOLS) {
+        // 磐维两个前缀 + 它的默认 p 版驱动（org.postgresql.Driver 走 jdbc:postgresql:）都认
+        // db_compatibility；参数缺省时 panweiCompatibilityDialect 返回 null，普通 PG URL 不受影响。
+        if (subprotocol in PANWEI_SUBPROTOCOLS || subprotocol == "postgresql") {
             return panweiCompatibilityDialect(trimmed) ?: mapped
         }
         return mapped

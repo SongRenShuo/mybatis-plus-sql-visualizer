@@ -86,10 +86,15 @@ class DialectInferenceTest {
             "Oracle",
             UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=unknown"),
         )
-        // 非磐维子协议不受影响
+        // 磐维 V2 p 版驱动（org.postgresql.Driver）走 jdbc:postgresql:，同一个 db_compatibility 参数照样生效
+        assertEquals(
+            "Oracle",
+            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=oracle"),
+        )
+        // 普通 PostgreSQL URL（无该参数）逐字不变
         assertEquals(
             "PostgreSQL",
-            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=mysql"),
+            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db"),
         )
         // 映射值必须被 DialectRegistry 命中（openGauss / MySQL 都是注册方言）
         listOf("openGauss", "MySQL").forEach { name ->
