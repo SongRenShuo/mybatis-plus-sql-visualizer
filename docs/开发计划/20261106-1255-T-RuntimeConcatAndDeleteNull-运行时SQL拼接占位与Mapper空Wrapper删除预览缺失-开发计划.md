@@ -623,6 +623,7 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 |---|---|
 | `10441d9b` | `feat(concat): loop placeholder carries a sanitized template summary (P1 polish)`——P1 生产改动 + 两条测试类的新增/补强用例（3 文件，+238/−6） |
 | 本条（计划回写） | 仅文档：本文件 §十四 + `CHANGELOG.md` 新增 `[Unreleased]` 一条 |
+| 随后一次仅文档提交 | 14.3 补两次复跑失败的读数（共享 transform 工作区被并发会话占死） |
 
 ### 14.2 改动点
 
@@ -648,14 +649,21 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
 
 测试：`SqlStringConcatenatorTest` +4 例——摘要形态与源码不外泄（断言含 `循环内追加 id=’…’ / or id=’…’`、不含 `k == 0 ?` / `ids.get(k)`）、多 append 片段分隔（含 `or id=’…’`、不含 ASCII `or id='`）、无字面量回落原文案（含 `循环内追加，运行时重复执行`、不含 `（运行时重复）`）、摘要清洗（`a*/b` 不得原样出现、注释符各 1、引号平衡）；`JdbcTemplateSqlPreviewServiceTest.testPreview_loopTernaryConcat_keepsWellFormedSql` 补一条端到端摘要断言。
 
-### 14.3 定向读数：**未取得（资源闸门关闭）**
+### 14.3 定向读数：**未取得（两次尝试，两种闸门，零编译零测试）**
 
-| 时点 | 读数 |
-|---|---|
-| 16:27 首次定向（实现前，作「先红」基线） | 构建**未到测试阶段**：Gradle daemon 被系统内存耗尽打死（`hs_err_pid50316.log`：`There is insufficient memory … Native memory allocation (malloc) failed to allocate 1478592 bytes. Error detail: Chunk::new`）。**无任何测试读数** |
-| 16:30~16:54 复跑窗口 | `parallel_tasks.py check` 全程显示 2 个他人活跃构建（`t-release-beta2` 主仓发行批、期间还有 `cr-wt-i18n` 另一仓）；`\Memory\Available MBytes` 0~3.2GB，`Committed 73810 / Commit Limit 76465 MB`（96.5%，见 §13.5 同源教训：瓶颈是内存提交量）→ 按派活纪律「已有 2 个活跃构建则不构建」全程未复跑 |
+| 时点 | 尝试 | 读数 |
+|---|---|---|
+| 16:27 | 首次定向（实现前，作「先红」基线） | 构建**未到测试阶段**：Gradle daemon 被系统内存耗尽打死（`hs_err_pid50316.log`：`There is insufficient memory … Native memory allocation (malloc) failed to allocate 1478592 bytes. Error detail: Chunk::new`）。**无任何测试读数** |
+| 16:30~16:54 | 复跑窗口探测 | `parallel_tasks.py check` 全程显示 2 个他人活跃构建（`t-release-beta2` 主仓发行批、期间还有 `cr-wt-i18n` 另一仓）；`\Memory\Available MBytes` 0~3.2GB、`Committed 73810 / Commit Limit 76465 MB`（96.5%）→ 按派活纪律「已有 2 个活跃构建则不构建」未跑 |
+| 16:58 | 隔离 daemon 复跑（`-Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"`，避免与共享 daemon 同生共死，`--console=plain`，日志落系统临时目录） | **配置期失败，零编译零测试**：`The contents of the immutable workspace 'C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb' have been modified … The modification might have been caused by an external process`——共享 transform 工作区（`ideaIU-2024.3.7.1-win`）被并发构建改动 |
+| 17:00 | 原样重试 | **配置期失败，零编译零测试**：Gradle 试图重建该工作区而 `Unable to delete directory … Failed to delete some children. This might happen because a process has files open or has its working directory set in the target directory`（`ideaIU-2024.3.7.1-win\lib\*.jar` 被占用）；同次日志首行 `Starting a Gradle Daemon, 7 busy … Daemons could not be reused`——机器上有 7 个 daemon 在跑 |
 
-交主控复跑的命令（**单跑一条即可**，勿串管道读退出码）：
+两次失败都发生在**依赖解析/配置期**，与本券代码无关：共享 transform 工作区被并发会话占用而无法重建。**本会话不能自救**——清 `caches\9.7.0\transforms\cfd…` 会打断正在用它的构建（他人发行批），按纪律禁做。
+
+交主控复跑的前提与命令：
+
+1. 等 `parallel_tasks.py check` 空窗，且该 transform 工作区不再被占用（若仍报 second 条错误，由主控在所有会话停手后删除 `C:\Users\USER\.gradle\caches\9.7.0\transforms\cfd9113040487d86d63d9022472046cb` 让其重建）。
+2. 单跑一条（勿串管道读退出码）：
 
 ```
 ./gradlew test --tests "cn.song.mybatisplus.visualizer.psource.SqlStringConcatenatorTest" \
@@ -663,9 +671,7 @@ AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
   -Pkotlin.compiler.execution.strategy=in-process > log 2>&1; echo EXIT=$?
 ```
 
-计数读 `build/test-results/test/TEST-cn.song.mybatisplus.visualizer.psource.*.xml`（预期 19 + 10 = 29 例全绿）。
-
-隔离提醒：16:27 崩掉的是**共享** daemon（daemon 日志 `Starting 3rd build in daemon`）——复跑前先确认发行批不与本次共用同一 daemon，或显式给不同 `-Dorg.gradle.jvmargs=…` 起独立 daemon，否则崩掉的一次会连带打掉别人的构建（本次即有此风险，如实登记）。
+3. 计数读 `build/test-results/test/TEST-cn.song.mybatisplus.visualizer.psource.*.xml`（预期 19 + 10 = 29 例全绿）。
 
 ### 14.4 反向验证：**未执行**（原因同 14.3）
 
