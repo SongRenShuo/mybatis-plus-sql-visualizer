@@ -60,6 +60,17 @@ object WrapperAnchorDetector {
     private val MAPS_TERMINAL_NAMES: Set<String> = setOf("selectJoinMaps", "selectJoinMapsPage")
 
     /**
+     * 与 [WrapperLocator.wrapperFactoryMethodNames] / [WrapperLocator.serviceChainMethodNames] 撞名的
+     * JPA 写方法名（T-JpaDeleteAnchor）：`repository.delete(entity)` / `ht.delete(entity)` / `ht.update(entity)`。
+     *
+     * 这两个名字在场景 C 走「非工厂、非服务链」分支即 `return null`，**在场景 E 之前短路**，
+     * 于是 `JpaCrudOperationConverter.crudAnchorMethodNames` 刻意剔除了它们（`WRAPPER_FACTORY_COLLIDING_NAMES`）。
+     * 本分支只补锚点入口，不改那两个注册表：receiver 家族判定直接复用
+     * [JpaCrudOperationConverter.hasJpaCrudReceiver]（家族 × 方法名双重判定，与场景 E 同口径）。
+     */
+    private val JPA_COLLIDING_METHOD_NAMES: Set<String> = setOf("delete", "update")
+
+    /**
      * 元素是否为 Wrapper 锚点；是则返回作为 gutter marker 的叶子元素（即元素自身），否则 null。
      *
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
@@ -119,7 +130,18 @@ object WrapperAnchorDetector {
                 val isServiceChain = ref.referenceName in WrapperLocator.serviceChainMethodNames &&
                     !qualifierIsNewExpression &&
                     WrapperLocator.isServiceChainStart(call)
-                if (!isWrappersFactory && !isServiceChain) return null
+                if (!isWrappersFactory && !isServiceChain) {
+                    // 优先级：工厂 > 服务链 > JPA > 无锚点（T-JpaDeleteAnchor）。
+                    // `delete` / `update` 同时是 Wrapper 工厂/链方法名，上面两个分支优先认领
+                    // （`JoinWrappers.delete(Class)` / `JoinWrappers.update(Class)` 仍走工厂分支）；
+                    // 落到这里才问一次 JPA 家族：`repository.delete(entity)` / `ht.delete(entity)` /
+                    // `ht.update(entity)` 有预览能力、只缺 gutter 入口。家族判定失败（含
+                    // `service.update(wrapper)` 消费调用、wrapper 链终结点 `update`）保持原 `return null`。
+                    if (ref.referenceName in JPA_COLLIDING_METHOD_NAMES &&
+                        JpaCrudOperationConverter.hasJpaCrudReceiver(call)
+                    ) return element
+                    return null
+                }
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return if (isInsideWrapperVariableInitializer(call)) null else element
             }
