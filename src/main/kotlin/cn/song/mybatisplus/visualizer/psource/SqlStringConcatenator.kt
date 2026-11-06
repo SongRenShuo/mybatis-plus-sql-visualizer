@@ -599,7 +599,7 @@ object SqlStringConcatenator {
      *  - 取不到字面量的实参贡献一个 [TEMPLATE_ELLIPSIS] 占位——相邻片段之间必须有分隔，
      *    否则 `append("or id='")` + `append(变量)` + `append("' ")` 会读成 `or id=''`（像空字面量）；
      *  - 整段一个字面量都取不到 → 返回 null，调用方回落 [LOOP_APPEND_LABEL] 现文案，不凭空编造；
-     *  - 摘要仍走 [sanitizePlaceholderText]（`*/` → `* /`、引号换安全同形字符、空白折叠、长度上限）。
+     *  - 摘要仍走 [sanitizePlaceholderText]（注释结束符拆成 `* /`、引号换安全同形字符、空白折叠、长度上限）。
      *
      * @param args 循环体内各 append 的实参（源码顺序）
      */
