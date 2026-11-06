@@ -5,6 +5,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -39,6 +40,39 @@ public class HeartbeatDiagnosticsTest {
             assertTrue("心跳必须带出 " + key + "（C2 覆盖自检的取值面）：" + body,
                     body.contains("\"" + key + "\":"));
         }
+        // T-IbatisPanwei 券 D：未登记实现键**恒出现**（无则空串）——缺键会被 IDE 侧读成
+        // 「旧版 agent 未上报」，与「本次确实没有未登记实现」混为一谈。
+        assertTrue("心跳必须恒带 unreg 键（无未登记实现时为空串）：" + body,
+                body.contains("\"unreg\":\""));
+    }
+
+    /**
+     * 券 D：未登记 JDBC 实现随心跳带出（逗号分隔、只类名、有界 8 个）。
+     *
+     * <p>反向验证：把 heartbeatBody 里的 {@code "unreg"} 段摘掉，本用例必须红。
+     */
+    @Test
+    public void 心跳body_未登记实现按类名逗号分隔带出且有界() {
+        assertTrue("无未登记实现时为空串：" + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"unreg\":\"\""));
+
+        CaptureBudget.noteUnregisteredDriver("org.panweidb.jdbc.PgPreparedStatement");
+        CaptureBudget.noteUnregisteredDriver("org.panweidb.jdbc.PgConnection");
+        final String body = SenderLoop.heartbeatBody();
+        assertTrue("两个类名按逗号分隔：" + body,
+                body.contains("\"unreg\":\"org.panweidb.jdbc.PgPreparedStatement,"
+                        + "org.panweidb.jdbc.PgConnection\""));
+
+        for (int i = 0; i < 20; i++) {
+            CaptureBudget.noteUnregisteredDriver("com.example.driver.Impl" + i);
+        }
+        final String bounded = SenderLoop.heartbeatBody();
+        final int from = bounded.indexOf("\"unreg\":\"") + "\"unreg\":\"".length();
+        final int to = bounded.indexOf('"', from);
+        final String[] names = bounded.substring(from, to).split(",");
+        assertEquals("心跳上报有界（≤8 个类名）：" + bounded, CaptureBudget.MAX_UNREGISTERED, names.length);
+        assertTrue("未登记类名不得带空格/换行（单行 JSON 契约）：" + bounded,
+                !bounded.contains("\n"));
     }
 
     @Test

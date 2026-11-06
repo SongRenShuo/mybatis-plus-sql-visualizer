@@ -1,7 +1,7 @@
 # T-IbatisPanwei：iBatis 2.x + 磐维（Panwei）的增强捕获缺失与参数方括号误入 SQL（2026-11-06）
 
 - 立项：2026-11-06 10:33
-- 状态：**实施中**（2026-11-06 四路后台并行，见 §十一；根因分析已完成；**券 C 阻塞于公网无驱动 jar**，见 §十二）
+- 状态：**已实施（2026-11-06，四路后台并行后合入 `t-ibatis-panwei-integration`）**：券 A/B/D/E/F 落地，券 C 阻塞于公网无驱动 jar（见 §十二），券 G 文档随本批回填
 - 目标分支：`master`（券 A/B 可独立先落；券 C 需驱动 jar 才能开工）
 - 来源：用户真机报障——国产库「磐维」（Oracle 模式，驱动 `org.panweidb.Driver`）①增强捕获抓不到；②最终 SELECT 把中括号带进了 SQL；用户补充：项目是 iBatis（非 MyBatis 3）、日志框架 log4j2
 - 取证材料：用户控制台原文（`{pstm-N}` 三行一组，见 §2.1）、两张预览截图（INSERT 全 NULL / SELECT 带中括号）
@@ -244,3 +244,72 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 **墨天轮渠道实测（2026-11-06 11:38）**：用户给出的两个文件页 `https://www.modb.pro/doc/123758`（`panweidb-jdbc-2.0.0.jar`，约 869K）与 `/doc/123759`（`panweidb-jdbc-postgresql-2.0.0.jar`，约 871K）**匿名访问均 404**，下载接口 `/api/doc/download/<id>` 返回 `401 {"operateMessage":"请登录后操作"}`——需要用户登录后自行下载。两个制品的并存本身是有用线索：基名 jar 大概率是**整包重命名**（需登记语句面 + prepare 面），`-postgresql` 后缀那个大概率是 pgjdbc 兼容别名（只需 connect 面）；仍以 jar 内 `org/panweidb/jdbc/*` 与 `org/postgresql/jdbc/*` 的条目数为准。
 
 在 jar 到位前，磐维用户的采集由**接口兜底 + 券 D 的未登记诊断**承接：兜底命中即可采（无参 `executeQuery` 仍需连接类同时命中），零命中时状态栏会直接报出 `org.panweidb.jdbc.*` 未增强，不再静默。
+## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
+
+提交：`47a28ef1`（agent 侧 D+E）、`6efd2e48`（IDE 侧 D 展示）、`7510dc79`（名字快筛门控）。
+
+### 13.1 券 D 落地形态
+
+- agent：`CaptureBudget.noteUnregisteredDriver` 有界快照（≤8、去重、只点分类名、首次发现顺序），
+  `CatchAllMatcher.evaluate` 在「接口命中 + 不在白名单」处记账；心跳 body 追加 `"unreg":"a.b.C,d.e.F"`
+  （恒出现，无则空串；既有数值键一个不动）。
+- IDE：`AgentAttachStats.unregisteredImplementations` 宽容解析（值域只收类名字符 + 逗号 + 空格，
+  逐项 trim、去空项、去重、截 8）；`attachCoverageNotes` 出「发现未登记 JDBC 实现：…」；
+  同一事实挂到 `captureStatusLineText`（状态栏），因为 `captureDiagnosticsText` 在 `entryCount > 0`
+  时整条返回 null——「控制台有产出、增强零产出」的现场恰好看不见空态诊断行。
+- i18n：`log.diag.attachUnregistered` / `log.statusbar.agent.unregistered`，中英双份。
+  `BundleParityGuardTest`（键集合 + 占位符形态）通过；两键不在 `RollbackWarning` 静态核对面内，
+  无需登记 `BundlePlaceholderArityTest` 的站点表。
+- **与派单文案的偏离（有意）**：派单写「（未增强）」，实现写「（未纳入驱动白名单，增强仅靠接口兜底）」。
+  理由：这些类往往正是靠接口兜底织上的，说成「未增强」是假事实；要回答的问题是「哪个驱动没登记」。
+
+### 13.2 券 E 落地形态
+
+- attach 路径补挂 2 轮（`catchAllAttachDelayMs`/`RepeatMs`/`Passes`，默认 5000/20000/2），
+  与 premain 共用排程方法；每轮开跑前重查 `attachMatchEnabled()`（kill switch 不得被绕过），
+  复用 `PROCESSED` 去重；premain 既有链节奏不变。
+- 预算语义：`catchAllScanLimit` 只计**候选类**（跑过接口判定的类）；接口/枚举/数组/基本型/
+  bootstrap/JDK 代理/JDK 前缀名不占预算；`limitHit` 保留并追加 `total=`（本轮枚举数）。
+- 名字快筛**只在 `loaded.length > limit`（可能截断）时启用**：中小应用单轮扫得完，排序零收益
+  却要多付一遍名字扫描。
+- 默认上限仍为 5000（未调大）：语义修正已消除「数组顺序决定谁被截断」，调大上限对覆盖的边际
+  收益不足以为它付宿主成本。
+
+### 13.3 实测数字（临时探针，跑完已删；20k 类真实 Class 对象数组，5 预热 + 10 轮，3 路并行构建下）
+
+| 场景 | best | avg |
+|---|---|---|
+| 两轮优先扫描（limit 不生效，20k） | 4.6~6.2 ms | 5.9~6.3 ms |
+| 旧语义等价物（单循环，每类都判定，20k） | 3.6~6.2 ms | 5.1~7.2 ms |
+| 默认预算档（5000 候选，20k 数组） | 4.1~4.2 ms | 4.95~5.2 ms |
+| 仅枚举 + 取类名基线（20k） | 0.11~0.21 ms | — |
+| 4000 类（不触发排序） | 新 1.98 / 旧 1.25 ms | — |
+
+结论：单轮扫描仍是毫秒级；attach 全链（首轮 + 2 轮补挂）一次性约 10~20ms，补挂分布在 5s/20s
+之后，不构成宿主可感开销。噪声来源：同机 3 路并行构建（读数已在报告里标明区间而非单值）。
+
+### 13.4 定向测试读数
+
+- agent：`CaptureBudgetTest` 10、`CatchAllMatcherTest` 12、`HeartbeatDiagnosticsTest` 3、
+  `CatchAllRedLineTest` 5 —— 30 项 0 失败；改门控后连同 `CatchAllTransformTest` /
+  `CatchAllStructureTest` 复跑仍全绿。
+- 主仓：`log.*` 包 1873 项跑完仅 `AgentSniffDecoupleTest.test时间显示关闭时嗅探仍采集` 失败，
+  单跑该类转绿（500ms 时间窗用例在并行构建下超窗，与本次改动无关，已记入风险）；
+  本次三组 `AgentAttachStatsTest` 13 / `CaptureDiagnosticsTest` 27 / `CaptureStatusBarTest` 9 全绿，
+  `BundleParityGuardTest` 5 全绿。
+
+### 13.5 反向验证读数
+
+| 摘除项 | 变红用例 | 还原后 |
+|---|---|---|
+| attach 补挂排程 | `attach补挂轮_迟到类在后续轮被补扫并织入`、`attach补挂轮_kill开关触发后不再补扫`（2 failed / 12） | 12 项全绿 |
+| 心跳 `unreg` 段 | `心跳body_单行JSON且字段齐全`、`心跳body_未登记实现按类名逗号分隔带出且有界`（2 failed / 3） | 3 项全绿 |
+| 诊断行 unreg 分支 | `test未登记JDBC实现必须具名可见`（1 failed / 27） | 27 项全绿 |
+| 状态栏 unreg 拼接 | `test未登记JDBC实现挂到增强段且保留既有叙事`（1 failed / 9） | 9 项全绿 |
+
+### 13.6 未完成 / 风险
+
+- 真机复验（磐维应用上的「已收事件 N>0」与未登记类名）未做——需要用户环境；本券只到单测 + 实测耗时。
+- 名字快筛是**优先级**而非过滤器（漏命中退回单轮尽力而为），所以「名字里没有任何 JDBC 线索」的
+  未知驱动在超 5000 候选的巨型应用里仍可能被预算截断（与修复前同等，只是不再被数组顺序坑）。
+- `AgentSniffDecoupleTest` 的 500ms 时间窗用例在并行构建下会抖（既有用例，未改）。

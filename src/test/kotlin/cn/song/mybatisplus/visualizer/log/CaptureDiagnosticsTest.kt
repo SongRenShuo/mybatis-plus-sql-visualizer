@@ -294,4 +294,33 @@ class CaptureDiagnosticsTest {
         assertTrue("首行应同时含增强状态、回落与覆盖事实：${lines[0]}", lines[0].contains("已挂载 pid=1") &&
             lines[0].contains("增强捕获疑似空转") && lines[0].contains("本次 attach 命中 0 个驱动"))
     }
+
+    // ---------- T-IbatisPanwei 券 D：未登记 JDBC 实现（具名事实） ----------
+
+    /**
+     * 券 D 守卫：「发现未登记 JDBC 实现：…」必须出现在空态诊断行里，且只报类名。
+     *
+     * 反向验证：摘掉 [attachCoverageNotes] 里的 unregistered 分支，本用例必须红。
+     */
+    @Test
+    fun test未登记JDBC实现必须具名可见() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            matched = 2L, weavable = 2L, woven = 2L, matchedByInterface = 2L,
+            unregisteredImplementations = listOf("org.panweidb.jdbc.PgPreparedStatement"),
+        )
+        val text = captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("必须报「发现未登记 JDBC 实现」：$text", text.contains("发现未登记 JDBC 实现"))
+        assertTrue("必须带出类名（下一个未知驱动的取证）：$text", text.contains("org.panweidb.jdbc.PgPreparedStatement"))
+        assertTrue("必须说明是「未纳入白名单」而不是「未增强」：$text", text.contains("未纳入驱动白名单"))
+    }
+
+    @Test
+    fun test无未登记实现时零噪音且仍三行() {
+        val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats(
+            matched = 2L, weavable = 2L, woven = 2L,
+        )
+        val text = captureDiagnosticsText(diagWithCoverage(stats = stats))!!
+        assertTrue("无未登记实现不得出现该行：$text", !text.contains("未登记 JDBC 实现"))
+        assertEquals("三行语义形态不得被改变", 3, wrapEmptyTextLines(text, 4000, stubMeasure).size)
+    }
 }

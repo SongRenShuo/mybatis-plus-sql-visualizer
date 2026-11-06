@@ -38,6 +38,51 @@ public class CaptureBudgetTest {
         assertFalse(CaptureBudget.killed());
     }
 
+    /**
+     * T-IbatisPanwei 券 E：attach 补挂默认节奏（5s 首轮 / 20s 间隔 / 2 轮）。
+     *
+     * <p>为什么钉死默认值：这两档是「懒加载数据源」覆盖与「宿主里不留长期轮询线程」的折中，
+     * 谁把它改成 0 就等于悄悄退回「attach 只跑一轮」（磐维现场那条独立成因）。
+     */
+    @Test
+    public void 默认值_attach补挂2轮_5秒首轮20秒间隔() {
+        assertEquals("attach 补挂首轮延迟 5s", 5_000L, CaptureBudget.attachDelayMs());
+        assertEquals("attach 补挂间隔 20s", 20_000L, CaptureBudget.attachRepeatMs());
+        assertEquals("attach 补挂 2 轮", 2, CaptureBudget.attachPasses());
+        // 与 premain 补挂节奏相互独立（两条链的时点语义不同，改一条不得牵连另一条）
+        assertEquals(10_000L, CaptureBudget.premainDelayMs());
+        assertEquals(60_000L, CaptureBudget.premainRepeatMs());
+        assertEquals(5, CaptureBudget.premainPasses());
+    }
+
+    /** 券 D：未登记实现快照有界（≤8）、去重、只类名、可复位。 */
+    @Test
+    public void 未登记实现快照_有界去重且可复位() {
+        assertTrue("初始为空", CaptureBudget.unregisteredDrivers().isEmpty());
+
+        CaptureBudget.noteUnregisteredDriver("org.panweidb.jdbc.PgPreparedStatement");
+        CaptureBudget.noteUnregisteredDriver("org.panweidb.jdbc.PgPreparedStatement");
+        assertEquals("同名只记一次", 1, CaptureBudget.unregisteredDrivers().size());
+
+        for (int i = 0; i < 20; i++) {
+            CaptureBudget.noteUnregisteredDriver("com.example.driver.Impl" + i);
+        }
+        assertEquals("上报有界（≤8 个类名，防未知驱动生态把心跳撑大）",
+                CaptureBudget.MAX_UNREGISTERED, CaptureBudget.unregisteredDrivers().size());
+        assertEquals("首个发现者保留（顺序即首次发现顺序）",
+                "org.panweidb.jdbc.PgPreparedStatement",
+                CaptureBudget.unregisteredDrivers().get(0));
+
+        CaptureBudget.noteUnregisteredDriver(null);
+        CaptureBudget.noteUnregisteredDriver("");
+        assertEquals("空值不占位", CaptureBudget.MAX_UNREGISTERED,
+                CaptureBudget.unregisteredDrivers().size());
+
+        CaptureBudget.resetForTest();
+        assertTrue("复位必须清空（跨用例/跨 attach 不得残留）",
+                CaptureBudget.unregisteredDrivers().isEmpty());
+    }
+
     @Test
     public void 连续失败达上限_整体kill且白名单不受影响() {
         CaptureBudget.setKillAfterForTest(3);
@@ -148,5 +193,15 @@ public class CaptureBudgetTest {
                 text.contains("premainDelayMs = msProp("));
         assertFalse("premainRepeatMs 不得经 msProp 初始化（会放大 10^6 倍，线程永不执行）",
                 text.contains("premainRepeatMs = msProp("));
+        // T-IbatisPanwei 券 E：attach 补挂的两个延迟同属**毫秒**语义（直接喂 Thread.sleep），
+        // 误用 msProp 会让「attach 后 5s 补挂」变成 5×10^6 秒——现象与 premain 那次一模一样。
+        assertTrue("attachDelayMs 必须经 rawMsProp 初始化（毫秒语义，不得走纳秒换算）",
+                text.contains("attachDelayMs = rawMsProp("));
+        assertTrue("attachRepeatMs 必须经 rawMsProp 初始化（毫秒语义，不得走纳秒换算）",
+                text.contains("attachRepeatMs = rawMsProp("));
+        assertFalse("attachDelayMs 不得经 msProp 初始化（会放大 10^6 倍，补挂线程永不执行）",
+                text.contains("attachDelayMs = msProp("));
+        assertFalse("attachRepeatMs 不得经 msProp 初始化（会放大 10^6 倍，补挂线程永不执行）",
+                text.contains("attachRepeatMs = msProp("));
     }
 }

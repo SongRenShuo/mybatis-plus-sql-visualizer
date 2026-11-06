@@ -23,8 +23,10 @@ class CaptureStatusBarTest {
         agentLivePids: List<Long> = listOf(11L),
         agentPaused: Boolean = false,
         agentEventsReceived: Long = 3L,
+        unregistered: List<String> = emptyList(),
     ) = CaptureStatusLine(
         capturing, consolesAttached, linesSeen, agentStatus, agentLivePids, agentPaused, agentEventsReceived,
+        unregistered,
     )
 
     @Test
@@ -71,5 +73,38 @@ class CaptureStatusBarTest {
         val (console, _) = captureStatusLineText(line(consolesAttached = 2, linesSeen = 88L))!!
         assertTrue("控制台段应带已挂载数 2：$console", console.contains("2"))
         assertTrue("控制台段应带已扫描行数 88：$console", console.contains("88"))
+    }
+
+    // ---------- T-IbatisPanwei 券 D：未登记 JDBC 实现落状态栏 ----------
+
+    /**
+     * 券 D 守卫：控制台有产出时空态诊断行整条不显示（entryCount>0 早退），
+     * 「驱动没登记」这条事实只能靠常驻状态栏被看见。
+     *
+     * 反向验证：摘掉 [captureStatusLineText] 里的 unregistered 拼接，本用例必须红。
+     */
+    @Test
+    fun test未登记JDBC实现挂到增强段且保留既有叙事() {
+        val (_, agent) = captureStatusLineText(
+            line(unregistered = listOf("org.panweidb.jdbc.PgPreparedStatement")),
+        )!!
+        assertTrue("必须带出未登记类名：$agent", agent.contains("org.panweidb.jdbc.PgPreparedStatement"))
+        assertTrue("必须保留既有增强叙事（已挂载/已收事件）：$agent", agent.contains("已挂载"))
+        assertTrue("必须保留已收事件读数：$agent", agent.contains("已收事件"))
+        assertTrue("必须明示「未登记」：$agent", agent.contains("未登记 JDBC 实现"))
+    }
+
+    @Test
+    fun test未登记列表为空时不改变既有文案() {
+        val (_, agent) = captureStatusLineText(line())!!
+        assertTrue("无未登记实现不得出现该段：$agent", !agent.contains("未登记"))
+    }
+
+    @Test
+    fun test增强未开启时不挂未登记段() {
+        val (_, agent) = captureStatusLineText(
+            line(agentStatus = null, unregistered = listOf("a.b.C")),
+        )!!
+        assertEquals("增强未开启时无 attach 事实可报", "增强：未开启", agent)
     }
 }

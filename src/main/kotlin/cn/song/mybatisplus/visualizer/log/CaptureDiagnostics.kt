@@ -70,6 +70,10 @@ internal data class CaptureDiagnostics(
  *  - `matched > 0 && woven == 0`：命中了却没织上 → 织入器/可见性闸门（不是「没装 agent」）；
  *  - `failed > 0`：JVM 拒绝 retransform（版本/VerifyError）——数量足够说明形态漂移；
  *  - `matchedByInterface > 0`：接口兜底生效的**正向事实**（旧版 agent 恒缺省 0，不显示）。
+ *
+ * T-IbatisPanwei 券 D 追加：`unregisteredImplementations` 非空时报「发现未登记 JDBC 实现：…」。
+ * 这是**未登记**（不在驱动白名单）而不是「未增强」——这些类往往正是靠接口兜底织上的，说成未增强
+ * 就是假事实。它要回答的是「现场到底是哪个驱动没登记」，磐维那次全靠人工猜包名才走到这一步。
  */
 internal fun attachCoverageNotes(stats: cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats?): List<String> {
     if (stats == null) return emptyList()
@@ -89,6 +93,15 @@ internal fun attachCoverageNotes(stats: cn.song.mybatisplus.visualizer.log.agent
         if (stats.catchAllKilled) add(MpSqlVisualizerBundle.message("log.diag.attachCatchAllKilled"))
         if (stats.matchedByInterface > 0L) {
             add(MpSqlVisualizerBundle.message("log.diag.attachInterface", stats.matchedByInterface, stats.interfaceWoven))
+        }
+        // 券 D：未登记驱动具名事实（有界、只类名）——「下一个未知驱动是谁」的取证出口
+        if (stats.unregisteredImplementations.isNotEmpty()) {
+            add(
+                MpSqlVisualizerBundle.message(
+                    "log.diag.attachUnregistered",
+                    stats.unregisteredImplementations.joinToString(", "),
+                ),
+            )
         }
     }
 }
