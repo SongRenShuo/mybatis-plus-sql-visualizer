@@ -76,6 +76,7 @@ demo 工程位置由环境变量 `MPSV_DEMO_ROOT` 提供（其下的 `mybatis-pl
 | `script-e2e.txt` | 主验证脚本：握手 → A 停采 → B 恢复 → C 位置 → D 脱敏 → 收口 |
 | `script-panwei-gaussdb.txt` | 磐维 V1 驱动 + GaussDB 内核的采集验收脚本（`/order/list` 无参 + 带参 + `GROUP BY` 三种形态）；用法见下节「换驱动/换库」 |
 | `script-stackprobe.txt` | P-1 栈采样专用脚本（只握手 + 开采集 + 保持连接 45s） |
+| `script-silent-window.txt` | 长窗口验收脚本（`/order/list` 无参 → 带参 → `GROUP BY` → 复测，总时长 >30s）——T-AgentSilentAfter16s 用它证明「过了 15s 关也不静默」；**开头必须下发 CONFIG**，理由见「已知边界」 |
 | `run-e2e.sh` | 驱动：编译探针 → 起探针 → 起应用（`-javaagent`）→ 等脚本 → 收口 → 打印读数 |
 
 ## 换驱动 / 换库（DEMO_DIR / DEMO_PROFILE / APP_MAIN / E2E_SCRIPT）
@@ -175,10 +176,16 @@ awk 'BEGIN{RS="";ORS="\n\n"} /MPJInterceptor/ && /DeviceInfoServiceImpl/ {print;
   且脚本里用 `MSYS2_ARG_CONV_EXCL='*'` 关掉 MSYS 的路径/参数转换。
 - **MSYS 路径与 Java 不兼容**：`/f/code/...` 交给 java 会被当相对路径（实测 `错误: 找不到或无法加载主类`），
   脚本统一经 `cygpath -w` 转换。
-- **磐维驱动 + GaussDB 场景：应用启动约 16s 后钩子不再产出**（2026-11-06 复现 4 次，待三查）。
-  现象：前 ~16s 事件正常（含参数与 url），之后 `execute` 不再产事件，但请求仍 200、心跳仍发
-  （sender 活着）；`-Dsqlvis.agent.nestGate=false`、`-Dsqlvis.agent.catchAll=false` 关掉后现象不变
-  → 与 NestGate、premain 兜底扫描都无关，指向「Hikari 池预热完成后，后续 PS 的 SQL 归属取不到」
-  （宿主 stderr 有且仅有一条 `织入通道登记盲区：无登记 PS 执行被跳过 psClass=org.panweidb.jdbc.PgPreparedStatement unresolvedCount=1`）。
-  暂按**观察项**登记，不阻塞磐维采集验收：`script-panwei-gaussdb.txt` 只保留一条业务请求（落在 16s 内）。
-  单独立项在 [`docs/开发计划/20261106-1336-T-AgentSilentAfter16s-…`](../开发计划/20261106-1336-T-AgentSilentAfter16s-增强捕获启动约16秒后停止产出-开发计划.md)（含 4 轮读数、已排除项与取证计划）。
+- **「应用启动约 16s 后钩子不再产出」＝ CONFIG 看门狗自停，不是采集链缺陷**（2026-11-06 T-AgentSilentAfter16s 定案）。
+  现象：前 ~15s 事件正常（含参数与 url），之后 `execute` 不再产事件，但请求仍 200、心跳仍发（sender 活着）；
+  `-Dsqlvis.agent.nestGate=false`、`-Dsqlvis.agent.catchAll=false` 关掉后现象不变。根因是 agent 的
+  T-07 看门狗（`SenderLoop.DEFAULT_CONFIG_WATCHDOG_MS=15s`：**会话建立后窗口内从未收到任何 CONFIG → 保守停采**）
+  ——**探针脚本没下发 CONFIG** 时它按设计在 HELLO+15s 把采集关掉。实测读数（磐维 + GaussDB）：HELLO `+4170ms`、
+  末条事件 `+19106ms`（= 4170+15000 的下一轮轮询）、其后三段请求 0 条，`app.log` 有且仅有一条
+  `[T-AgentConfigChannel] 会话建立后 15000ms 内未收到任何 CONFIG，按保守策略主动停采…`；同一脚本补一行
+  `config {"disabled":false,…}` + `expect-ack` 后，四个窗口（19s / 28s / 37s / 46s）全部有事件、断言 12 PASS 0 FAIL。
+  两条口径：① **写探针脚本必须像真 IDE 一样先下发 CONFIG**（`AgentManager.attachToPid` /
+  `onPremainConnected` 两处都在会话建立后立刻下发），否则测到的是看门狗自停；② agent 心跳此后带 `gate` 键
+  （0=无自停 / 1=看门狗自停生效中），对端一条帧即可区分「自停」与「钩子在跑但产不出」。
+  长窗口验收脚本：`script-silent-window.txt`（A 无参 / A2 带参 / B 分组 / C 复测，总时长 >30s）。
+  立项与实施记录：[`docs/开发计划/20261106-1336-T-AgentSilentAfter16s-…`](../开发计划/20261106-1336-T-AgentSilentAfter16s-增强捕获启动约16秒后停止产出-开发计划.md)。

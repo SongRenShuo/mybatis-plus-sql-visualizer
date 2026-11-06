@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.sqlvis.agent.transport;
 
+import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import cn.song.mybatisplus.sqlvis.agent.CaptureBudget;
 import org.junit.After;
 import org.junit.Before;
@@ -23,11 +24,13 @@ public class HeartbeatDiagnosticsTest {
     @Before
     public void setUp() {
         CaptureBudget.resetForTest();
+        AgentState.setDisabled(false); // 进程级状态：本类断言 gate 键，起点必须是「未自停」
     }
 
     @After
     public void tearDown() {
         CaptureBudget.resetForTest();
+        AgentState.setDisabled(false);
     }
 
     @Test
@@ -92,5 +95,47 @@ public class HeartbeatDiagnosticsTest {
         CaptureBudget.noteCatchAllFailure("fixture");
         assertTrue("kill 后状态码 2（IDE 侧诊断行据此显示已熔断）：" + SenderLoop.heartbeatBody(),
                 SenderLoop.heartbeatBody().contains("\"catchAll\":2"));
+    }
+
+    /**
+     * T-AgentSilentAfter16s：心跳恒带自停归因 {@code gate}（0=无自停 / 1=CONFIG 看门狗自停）。
+     *
+     * <p>为什么这是一条契约级用例而不是「实现细节」：现场四轮取证里，agent 自停与「钩子不产事件」
+     * 在探针侧完全同形（都是 EVENT 归零、心跳照发、请求 200），只能靠宿主 stderr 一条告警归因。
+     * 归因上心跳后，「为什么没事件」变成对端一条帧就能回答的事实；本用例钉住三件事：
+     * 键恒出现、默认 0、看门狗自停后为 1、任何显式开关（CONFIG 恢复）后归零。
+     *
+     * <p>反向验证（实测两次读数见计划「实施记录」）：把 {@code heartbeatBody} 里的 {@code "gate"}
+     * 段摘掉 → 本用例与 {@code ConfigApplyEndToEndTest.看门狗_…} 同时转红。
+     */
+    @Test
+    public void 心跳body_自停归因恒带出且随CONFIG恢复归零() {
+        assertTrue("未停采时 gate 恒为 0（归因只在确实停了时有意义）：" + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"gate\":0"));
+
+        AgentState.setDisabledByWatchdog();
+        assertTrue("看门狗自停后 gate=1（心跳是这条链上唯一还活着的通道）：" + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"gate\":1"));
+        assertTrue("自停仍是停采态（gate 只补归因，不改停采语义）", AgentState.isDisabled());
+
+        // CONFIG 下发（等价于对端恢复控制通道）→ 自停解除、归因归零
+        AgentState.setDisabled(false);
+        assertTrue("CONFIG 恢复后不得再自称自停：" + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"gate\":0"));
+    }
+
+    /**
+     * 用户/IDE 主动停采（CONFIG {@code disabled:true}）**不**算自停：gate 必须回 0。
+     * 否则「用户自己关的采集」会被心跳报成 agent 自停，把排查引向错误方向。
+     */
+    @Test
+    public void 心跳body_主动停采不报自停归因() {
+        AgentState.setDisabledByWatchdog();
+        assertTrue(AgentState.gateCode() == AgentState.GATE_CONFIG_WATCHDOG);
+
+        AgentState.setDisabled(true); // 显式停采（CONFIG disabled=true 走同一入口）
+        assertTrue("主动停采不是自停：gate 应回 0 —— " + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"gate\":0"));
+        assertEquals(AgentState.GATE_NONE, AgentState.gateCode());
     }
 }

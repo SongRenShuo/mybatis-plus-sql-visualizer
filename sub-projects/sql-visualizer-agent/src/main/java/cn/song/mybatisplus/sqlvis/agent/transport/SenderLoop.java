@@ -298,8 +298,11 @@ final class SenderLoop implements Runnable {
                         System.err.println("[T-AgentConfigChannel] 会话建立后 " + watchdogMs
                                 + "ms 内未收到任何 CONFIG，按保守策略主动停采（fail-open 看门狗，"
                                 + "本连接仅此一条告警；若为控制通道失效，IDE 侧会同时表现为"
-                                + "「已下发但无 CONFIG ACK」）");
-                        AgentState.setDisabled(true);
+                                + "「已下发但无 CONFIG ACK」）。停采原因随心跳带出（gate="
+                                + AgentState.GATE_CONFIG_WATCHDOG + "）——对端据此可把「agent 自停」"
+                                + "与「钩子不产事件」分开；下发任一 CONFIG 即解除");
+                        // T-AgentSilentAfter16s：走带归因的入口，心跳 gate 键才说得清「为什么没有事件」
+                        AgentState.setDisabledByWatchdog();
                     }
                     // 4) 空转轮询节奏（有事件突发时不睡，保持事件吞吐）；
                     //    睡眠不得跨过下一次心跳时刻，否则读阻塞会把心跳推后一整轮
@@ -373,6 +376,13 @@ final class SenderLoop implements Runnable {
      * 猜包名才走到白名单漏登记这一步。字符串值而非数组：IDE 侧沿用宽容扫描（不解析 JSON），
      * 旧版 agent 的 body 没有该键时 IDE 侧零行为变化。
      *
+     * <p>T-AgentSilentAfter16s 追加 {@code gate}：**采集自停归因**（整数、恒出现）——
+     * 0 = 无自停，1 = CONFIG 看门狗自停生效中（{@link AgentState#GATE_CONFIG_WATCHDOG}）。
+     * 为什么心跳是它的正确落点：该自停的现场表现就是「事件归零但心跳照发」，而心跳是这条链上
+     * 唯一还活着的通道；把原因挂在事件帧上传不出去（事件已经不产了），挂 stderr 只有应用运维看得见。
+     * 兼容口径同 {@code unreg}：整数键、键序固定、无空格，旧版 IDE 的宽容扫描（
+     * {@code AgentAttachStats.parse} 只认已知键）零行为变化。
+     *
      * <p>任何异常回落 {@code "{}"}：心跳是 IDE 侧在线判定的唯一凭据，诊断字段的失败绝不能让
      * 心跳帧本身丢掉。
      */
@@ -392,6 +402,8 @@ final class SenderLoop implements Runnable {
                     + ",\"skippedByVersion\":"
                     + cn.song.mybatisplus.sqlvis.agent.SqlHookTransformer.skippedByVersionCount()
                     + ",\"catchAll\":" + catchAllState()
+                    // T-AgentSilentAfter16s：自停归因（0=无 / 1=CONFIG 看门狗自停）。
+                    + ",\"gate\":" + AgentState.gateCode()
                     // T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界、逗号分隔、只类名）。
                     // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
                     // 不能靠缺键表达「本次没有未登记实现」。
