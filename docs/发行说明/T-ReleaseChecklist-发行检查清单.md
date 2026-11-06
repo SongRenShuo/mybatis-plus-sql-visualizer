@@ -62,6 +62,13 @@
 | 7 | `marketplace-custom-page.html` | 功能矩阵行 + 「为什么选它」按能力类别判定 |
 | 8 | `docs/MEMORY.md` + `docs/变更记录.md` | 发行说明索引最新在上，总册按日期倒序补齐 |
 
+  **RC-P4b 双通道正文分工（2026-11-06 定例，不是漂移）**：GitHub 与 Gitee 的发行版正文**本来就不一样，不要对齐**。
+  - GitHub 正文由 CI 自动生成：`## 本版变更`（取 changeNotes 的本版块）+ 元信息（附件名 / 标签与提交号 / 完整发行说明链接 / 全部发行版本 / Gitee 同版链接 / 构建记录）+ 反馈与二维码 + `<details>` 折叠的全部历史变更。
+  - Gitee 正文用**发行说明全文**（`--notes` 传入）：新增 / 修复 / 改进 / 测试 / 已知边界 / 兼容性 / 安装 / 文档 / 反馈。
+  - 为什么分工：Gitee 是 `update.json` 指向的自更新通道与国内用户主入口，内测用户要看的是「怎么装、兼容哪些 IDE、这版有哪些已知边界」；GitHub 是技术读者与归档，要的是速览、提交号、构建记录、可折叠历史。GitHub 正文里已挂「完整发行说明」链接，两边是「摘要 + 入口」与「全文」的关系，信息不割裂。
+  - 代价对照（决定过、不再重议）：Gitee 改速览会丢安装与已知边界；GitHub 改全文要动 CI 模板且丢折叠历史与构建记录，收益与风险不成比例。
+  - **发行说明尾部须带一行构建记录链接**（`构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`）——Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者也能核验「这版跑了哪一轮门禁」。
+
 - [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
 - [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
