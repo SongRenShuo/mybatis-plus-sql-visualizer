@@ -250,14 +250,28 @@ class DialectExternalMatrixVerificationTest {
             }
         }
 
-        /** 处置第 1 步：取消正在执行的语句（无在执行的语句时是无操作）。 */
+        /**
+         * 处置第 1 步：取消正在执行的语句。
+         *
+         * 超时点没有在执行的语句时**显式抛错**而不是静默成功——报告里的 `statement.cancel✗(…)` 与
+         * `statement.cancel✓` 因此能区分「这一步真的做了」与「这一步没有对象可做」，
+         * 免得把无操作读成「cancel 已经试过且有效」。
+         */
         fun cancelCurrentStatement() {
-            currentStatement?.cancel()
+            val statement = currentStatement
+                ?: throw IllegalStateException("超时点无正在执行的语句（超时落在语句间隙）")
+            statement.cancel()
         }
 
-        /** 处置第 2 步：关闭连接（pg 族关 socket 让阻塞读抛错返回；也是本层的主力手段）。 */
+        /**
+         * 处置第 2 步：关闭连接（pg 族关 socket 让阻塞读抛错返回；也是本层的主力手段）。
+         *
+         * 超时点尚未建立连接（例如挂在登录握手里）时显式抛错，理由同 [cancelCurrentStatement]。
+         */
         fun closeConnection() {
-            connection?.close()
+            val connection = this.connection
+                ?: throw IllegalStateException("超时点尚未建立连接（挂在登录握手里，由 loginTimeout 兜）")
+            connection.close()
         }
 
         private fun track(statement: Statement): Statement {

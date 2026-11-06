@@ -104,6 +104,7 @@ object InstanceBudgetSupport {
         task: () -> String,
     ): InstanceResult {
         val finished = AtomicBoolean(false)
+        val workerError = AtomicReference<Throwable?>(null)
         val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, THREAD_NAME_PREFIX + key).apply { isDaemon = true }
         }
@@ -114,6 +115,7 @@ object InstanceBudgetSupport {
                     try {
                         TaskOutcome(detail = task(), error = null)
                     } catch (t: Throwable) {
+                        workerError.set(t)
                         TaskOutcome(detail = null, error = t)
                     } finally {
                         finished.set(true)
@@ -135,8 +137,14 @@ object InstanceBudgetSupport {
                 steps += boundedStep("thread.interrupt") { future.cancel(true) }
                 val abandoned = !awaitFinished(finished, ABANDON_GRACE_MS)
                 val elapsed = System.currentTimeMillis() - startedAt
-                val detail = "预算 ${budgetSeconds}s  处置=[${steps.joinToString(" ")}]  " +
-                    (if (abandoned) "线程未退出（daemon 放弃）" else "线程已退出") +
+                // 线程退出原因是 P1（close/cancel 能否解开挂起的 socket 读）的现场证据：若退出原因是
+                // 驱动抛出的「连接已关闭/socket closed」一类异常，说明处置真的把阻塞读打断了。
+                val exitReason = if (abandoned) {
+                    "线程未退出（daemon 放弃）"
+                } else {
+                    "线程已退出：${workerError.get()?.let { brief(it) } ?: "正常返回"}"
+                }
+                val detail = "预算 ${budgetSeconds}s  处置=[${steps.joinToString(" ")}]  $exitReason" +
                     "  耗时 ${elapsed}ms"
                 InstanceResult(key, Outcome.TIMEOUT, detail, elapsed, budgetSeconds, steps, abandoned)
             }

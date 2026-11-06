@@ -141,6 +141,9 @@ class InstanceBudgetSupportTest {
         assertTrue(result.cleanupSteps[2], result.cleanupSteps[2].startsWith("thread.interrupt✓"))
         assertFalse("interrupt 生效后线程应已退出，不该标放弃", result.abandoned)
         assertTrue(result.detail.contains("线程已退出"))
+        // 线程退出原因是 P1 现场证据：真机上若看到「连接已关闭/socket closed」一类驱动异常，
+        // 即证明处置真的打断了阻塞读；这里用 InterruptedException 钉住该字段确实被填充。
+        assertTrue("线程退出原因缺失：${result.detail}", result.detail.contains("InterruptedException"))
         latch.countDown()
     }
 
