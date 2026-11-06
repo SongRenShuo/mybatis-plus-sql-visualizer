@@ -58,6 +58,46 @@ class DialectInferenceTest {
     }
 
     @Test
+    fun panweiDbCompatibilityParamOverridesDialect() {
+        // V2 官方《应用程序开发指南》§4.4.5：db_compatibility 默认 postgresql，可设 oracle / mysql。
+        // 参数显式给出时以参数为准；缺省或未识别值仍走 D-1 默认档（Oracle）。
+        assertEquals(
+            "Oracle",
+            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=oracle"),
+        )
+        assertEquals(
+            "openGauss",
+            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=postgresql"),
+        )
+        assertEquals(
+            "MySQL",
+            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=mysql"),
+        )
+        // 参数名与值都大小写不敏感；与其它参数混排、带前导 ?/& 也能取到
+        assertEquals(
+            "MySQL",
+            UrlSubprotocolDialects.dialectName(
+                "jdbc:panweidb://h:5432/db?currentSchema=nacos&DB_COMPATIBILITY=MySQL",
+            ),
+        )
+        // 缺省 / 未识别值 → 默认档 Oracle（不猜近似方言）
+        assertEquals("Oracle", UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db"))
+        assertEquals(
+            "Oracle",
+            UrlSubprotocolDialects.dialectName("jdbc:panweidb://h:5432/db?db_compatibility=unknown"),
+        )
+        // 非磐维子协议不受影响
+        assertEquals(
+            "PostgreSQL",
+            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=mysql"),
+        )
+        // 映射值必须被 DialectRegistry 命中（openGauss / MySQL 都是注册方言）
+        listOf("openGauss", "MySQL").forEach { name ->
+            assertEquals(name, DialectRegistry.byName(name).name)
+        }
+    }
+
+    @Test
     fun xcDialects3SubprotocolsInferThroughPriorityChain() {
         // 推断优先级链上三前缀各自落位；HighGo/Vastbase 的 object 在 A 路（Dialect.kt）合并——
         // 此处只断言映射层的字符串名（A 路合并前 DialectRegistry.byName("HighGo") 仍回退 MySQL，
