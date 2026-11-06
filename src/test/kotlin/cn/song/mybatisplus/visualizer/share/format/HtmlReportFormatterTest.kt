@@ -100,4 +100,31 @@ class HtmlReportFormatterTest {
         )
         assertTrue(html.contains("class=\"cmt\""))
     }
+
+    // ======================== T-SAF-09：低信任元信息转义 ========================
+
+    /**
+     * T-SAF-09（share.html-report-export.unescaped-tableName-src）回归：
+     * tableName/dialect/参数来源名称携带较低信任字符串（实体 @TableName/@TableField 注解
+     * 字面量、注解列名——信任主体低于操作员的项目文件内容），导出的 HTML 报告曾对这三处
+     * 不转义（tableName :72、dialect :73、来源 <code>$src</code> :147），注入标记在浏览器
+     * 打开报告时成为活 HTML。
+     *
+     * **修复前失败断言**：`不得含未转义的注入标记`——修复前 <img 载荷在 tableName、
+     * dialect 与来源名三处原样进入 HTML。
+     */
+    @Test
+    fun `format_低信任tableName_dialect与参数来源_全部转义_T-SAF-09`() {
+        val payload = "<img src=x onerror=alert(1)>"
+        val html = HtmlReportFormatter.format(
+            sql = "SELECT 1",
+            sources = listOf(payload),
+            paramValues = mapOf(payload to "v"),
+            tableName = "<img src=y onerror=alert(2)>",
+            dialect = "<b>MySQL</b>",
+        )
+        assertFalse("不得含未转义的注入标记：$html", html.contains("<img"))
+        assertFalse("dialect 不得含未转义标记：$html", html.contains("<b>MySQL</b>"))
+        assertTrue("载荷应以转义实体出现", html.contains("&lt;img"))
+    }
 }

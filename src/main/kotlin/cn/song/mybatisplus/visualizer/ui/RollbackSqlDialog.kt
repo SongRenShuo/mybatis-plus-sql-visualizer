@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.editor.Editor
@@ -79,7 +80,11 @@ class RollbackSqlDialog(
     internal val snapshotEntry: RollbackSnapshotStore.SnapshotEntry? = null,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
-    private val bannerLabel = JBLabel()
+    private val bannerLabel = JBLabel().apply {
+        // T-SAF-10：评级横幅文本恒为 bundle 文案（无 markup 需求），禁用 HTML 解析纯文本渲染
+        //（对齐 DegradationBanner 同款约定，防未来赋值携带数据时被当 markup）
+        putClientProperty("html.disable", true)
+    }
     private val warningLabel = JBLabel()
     private val countCheckLabel = JBLabel()
     private val snapshotQueryLabel = JBLabel()
@@ -623,8 +628,13 @@ class RollbackSqlDialog(
     private fun assembleSnapshotSection() {
         val sql = currentResult.snapshotSelectSql ?: return
         val shown = if (sql.length > SNAPSHOT_DISPLAY_LIMIT) sql.take(SNAPSHOT_DISPLAY_LIMIT) + "…" else sql
-        snapshotQueryLabel.text = "<html><b>${MpSqlVisualizerBundle.message("rollback.snapshot.section")}</b> <code>$shown</code></html>"
-        snapshotQueryLabel.toolTipText = sql
+        // T-SAF-10：snapshotSelectSql 源自较低信任的捕获/解析文本（RollbackSqlGenerator
+        // 'SELECT * FROM $table WHERE ...'）——$shown 插进 <html><code> 前必须转义
+        //（原 :626 漏转义，本类 escapeHtml 曾只服务警示路径）
+        snapshotQueryLabel.text = "<html><b>${MpSqlVisualizerBundle.message("rollback.snapshot.section")}</b> <code>${escapeHtml(shown)}</code></html>"
+        // T-SAF-10：tooltip 原值以 <html> 起结时被 Swing 按 HTML 渲染（内容/布局注入 +
+        // 潜在 <img src> 资源加载）——HTML 起结文本转义为字面量显示，纯文本原样保留
+        snapshotQueryLabel.toolTipText = HtmlEscape.tooltipText(sql)
     }
 
     // ------------------------------------------------------------------
@@ -1017,8 +1027,11 @@ class RollbackSqlDialog(
         return "<html><ul style='margin-left:12px'>$items</ul></html>"
     }
 
-    private fun escapeHtml(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    /**
+     * HTML 转义（T-SAF-10：收敛到共享 [HtmlEscape]，本类不再持有本地变体——
+     * 本地实现曾缺 `'` 转义且未覆盖快照行）。
+     */
+    private fun escapeHtml(s: String): String = HtmlEscape.escape(s)
 
     private fun copyToClipboard(text: String) {
         Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)

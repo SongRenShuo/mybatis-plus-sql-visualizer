@@ -259,4 +259,41 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
             global.loadState(globalSnapshot)
         }
     }
+
+    // ======================== T-SAF-08：项目级读取路径值级校验 ========================
+
+    /**
+     * T-SAF-08（settings-import.sql-fragment-unvalidated）项目级读取路径回归：
+     * `.idea/mp-sql-visualizer-project.xml`（VCS 共享，低信任通道）携带的 logicDeleteValue /
+     * tablePrefix 曾在 effectiveLogicDeleteValue()/effectiveTablePrefix() 处无校验直通渲染 SQL。
+     * 修复语义：项目值未通过 SettingsValueValidator 校验时 warn 回退全局值（覆盖被拒绝），
+     * 合法值照常覆盖。
+     *
+     * **修复前失败断言**：『载荷值应被拒并回退全局』——修复前 effectiveLogicDeleteValue()
+     * 原样返回 `0 OR 1=1`（恒真条件注入）。
+     */
+    fun testProjectSqlFragmentOverridesRejectedOnReadPath() {
+        val projectSettings = project.service<ProjectPluginSettings>()
+        val snapshot = projectSettings.getState().copy()
+        val globalLogicDelete = PluginSettings.getInstance().state.logicDeleteValue
+        try {
+            projectSettings.loadState(
+                ProjectPluginSettings.State(
+                    useProjectSettings = true,
+                    logicDeleteValue = "0 OR 1=1",
+                    tablePrefix = "p_",
+                    tableSuffix = "_ok",
+                ),
+            )
+            assertEquals(
+                "载荷值应被拒并回退全局",
+                globalLogicDelete,
+                projectSettings.effectiveLogicDeleteValue(),
+            )
+            assertEquals("合法前缀应照常生效", "p_", projectSettings.effectiveTablePrefix())
+            assertEquals("合法后缀应照常生效", "_ok", projectSettings.effectiveTableSuffix())
+        } finally {
+            projectSettings.loadState(snapshot)
+        }
+    }
 }

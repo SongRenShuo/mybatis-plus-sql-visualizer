@@ -75,6 +75,8 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
 
     private var state = State()
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ProjectPluginSettings::class.java)
+
     override fun getState(): State = state
 
     override fun loadState(state: State) {
@@ -116,20 +118,52 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
         if (state.useProjectSettings) state.injectLogicDelete ?: PluginSettings.getInstance().state.injectLogicDelete
         else PluginSettings.getInstance().state.injectLogicDelete
 
-    /** 项目级逻辑删除值（未启用或空则回退全局）。 */
+    /**
+     * 项目级逻辑删除值（未启用或空则回退全局）。
+     * T-SAF-08：`.idea/mp-sql-visualizer-project.xml` 是 VCS 共享的低信任通道——项目值未通过
+     * [SettingsValueValidator] 值级校验（SQL 位形单字面量）时 warn 回退全局值（覆盖被拒绝）。
+     */
     fun effectiveLogicDeleteValue(): String =
-        if (state.useProjectSettings && state.logicDeleteValue.isNotBlank()) state.logicDeleteValue
-        else PluginSettings.getInstance().state.logicDeleteValue
+        if (state.useProjectSettings && state.logicDeleteValue.isNotBlank()) {
+            validatedOrGlobal(
+                "logicDeleteValue", state.logicDeleteValue,
+                SettingsValueValidator::checkLogicDeleteValue,
+            ) { PluginSettings.getInstance().state.logicDeleteValue }
+        } else PluginSettings.getInstance().state.logicDeleteValue
 
-    /** 项目级表前缀（未启用或空则回退全局）。 */
+    /** 项目级表前缀（未启用或空则回退全局）。T-SAF-08：标识符形状校验，同上。 */
     fun effectiveTablePrefix(): String =
-        if (state.useProjectSettings && state.tablePrefix.isNotBlank()) state.tablePrefix
-        else PluginSettings.getInstance().state.tablePrefix
+        if (state.useProjectSettings && state.tablePrefix.isNotBlank()) {
+            validatedOrGlobal(
+                "tablePrefix", state.tablePrefix,
+                SettingsValueValidator::checkTablePrefix,
+            ) { PluginSettings.getInstance().state.tablePrefix }
+        } else PluginSettings.getInstance().state.tablePrefix
 
-    /** 项目级表后缀（未启用或空则回退全局）。 */
+    /** 项目级表后缀（未启用或空则回退全局）。T-SAF-08：标识符形状校验，同上。 */
     fun effectiveTableSuffix(): String =
-        if (state.useProjectSettings && state.tableSuffix.isNotBlank()) state.tableSuffix
-        else PluginSettings.getInstance().state.tableSuffix
+        if (state.useProjectSettings && state.tableSuffix.isNotBlank()) {
+            validatedOrGlobal(
+                "tableSuffix", state.tableSuffix,
+                SettingsValueValidator::checkTableSuffix,
+            ) { PluginSettings.getInstance().state.tableSuffix }
+        } else PluginSettings.getInstance().state.tableSuffix
+
+    /**
+     * T-SAF-08 共享闸：项目级 SQL 位形值通过校验则原样生效；未通过时 warn（拒绝报告）
+     * 并回退全局值（覆盖被拒绝，与导入路径的「拒绝+报告」同口径——本路径无 UI 反馈面，落 warn 日志）。
+     */
+    private fun validatedOrGlobal(
+        field: String,
+        projectValue: String,
+        check: (String) -> SettingsValueValidator.Violation?,
+        globalFallback: () -> String,
+    ): String {
+        val violation = check(projectValue)
+        if (violation == null) return projectValue
+        LOG.warn("项目级设置 $field 未通过 SQL 位形安全校验（${violation.reason}），回退全局值")
+        return globalFallback()
+    }
 
     /** 项目级表名推断策略（未启用或空则回退全局）。 */
     fun effectiveTableNameInference(): String =

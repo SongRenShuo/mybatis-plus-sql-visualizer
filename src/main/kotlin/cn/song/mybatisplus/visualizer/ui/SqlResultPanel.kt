@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.ui.AnimatedIcon
@@ -250,9 +251,10 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         errorCopyButton.isVisible = false
         clearErrorActions()
         setLoadingIconVisible(false)
-        val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val esc = HtmlEscape.escape(message)
         infoLabel.text = "<html>$esc</html>"
-        infoLabel.toolTipText = message
+        // T-SAF-10：状态文本可能含 SQL 片段——以 <html> 起结时被 Swing 按 HTML 渲染，统一安全化
+        infoLabel.toolTipText = HtmlEscape.tooltipText(message)
         infoLabel.foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
         showContent()
         revalidate()
@@ -271,10 +273,13 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         setLoadingIconVisible(false)
         // M36.5.53：转义 HTML（错误含 < > & [charset] 等会破坏布局），并有界显示——
         // 长错误不横向挤压（infoLabel 单行 + tooltip 完整），复制按钮在 EAST 不被挤掉。
-        val esc = error.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        // T-SAF-10：转义收敛到共享 HtmlEscape（& < > " ' 全集，防二次转义）
+        val esc = HtmlEscape.escape(error)
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.error", esc)}</html>"
         infoLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
-        infoLabel.toolTipText = error   // M36.5.53：hover 显示完整错误（超长不截断可读）
+        // T-SAF-10：远程 DB SQLException 文本是低信任文本，以 <html> 起结时 tooltip 被 Swing
+        // 按 HTML 渲染——HTML 起结转义为字面量显示，纯文本原样保留（M36.5.53 语义不变）
+        infoLabel.toolTipText = HtmlEscape.tooltipText(error)   // M36.5.53：hover 显示完整错误（超长不截断可读）
         // M36.5.48：错误时显示复制按钮（用户可一键复制完整错误文本）
         errorCopyButton.isVisible = true
         errorCopyButton.revalidate()
@@ -338,9 +343,9 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         clearErrorActions()
         applyErrorActions(fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings)
         setLoadingIconVisible(false)
-        val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val esc = HtmlEscape.escape(message)
         infoLabel.text = "<html>$esc</html>"
-        infoLabel.toolTipText = tooltip ?: message
+        infoLabel.toolTipText = HtmlEscape.tooltipText(tooltip ?: message)
         infoLabel.foreground = if (warning) {
             JBColor.namedColor("WarningForeground", JBColor.ORANGE)
         } else {
@@ -443,7 +448,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      */
     fun showDdlEffectiveWarning(target: String, probedAt: String) {
         if (state != State.ERROR) return
-        val esc = target.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val esc = HtmlEscape.escape(target)
         infoLabel.text = "<html>" +
             MpSqlVisualizerBundle.message("execute.ddl.effective.warning", esc, probedAt) +
             "</html>"
@@ -516,6 +521,9 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
     /** M36.5.49：当前状态（测试断言用）。 */
     internal fun stateForTest(): String = state.name
+
+    /** T-SAF-10：infoLabel 当前 tooltip（测试断言用——tooltip 是本面板的低信任数据面）。 */
+    internal fun infoTooltipForTest(): String? = infoLabel.toolTipText
 
     /**
      * UI-004：是否处于「纯信息态」——只有信息行，没有执行结果、没有执行错误。

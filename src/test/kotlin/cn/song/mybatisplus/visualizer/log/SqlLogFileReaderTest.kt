@@ -489,4 +489,85 @@ class SqlLogFileReaderTest {
         SqlLogFileReader.forEachEntry(File("no-such-v47-file.sql")) { seen++; true }
         assertEquals(0, seen)
     }
+
+    // ======================== T-SAF-23：读侧逐行/逐文件上限 ========================
+
+    /**
+     * T-SAF-23（history.reader.unbounded-line-buffering）回归：boundedLines 的超限折叠
+     * 曾只对 revision 前缀行生效（SqlLogFileReader.kt:115），非 revision 行（SQL 正文 /
+     * 头部 / `-- pd: ` 载荷行）无任何长度上限累积——被植入或超大的 .sql 历史文件会在
+     * 历史读取与 MCP 历史搜索（HistorySearchService → forEachEntry）期间把整行缓冲进
+     * IDE 内存。修复语义：非 revision 单行累积上限 1MB，超限折叠为占位注释
+     * 「sql-visualizer: 超长行已折叠（单行超 1MB 上限）」（SQL 块注释形态，不判为头部，
+     * 块连续性保持；逐字文本见下方断言）。
+     *
+     * **修复前失败断言**：`超长行内容不得全量保留`（占位断言同样失败）——修复前 1MB+1KB
+     * 的植入行被全量读入并作为条目正文返回。
+     */
+    @Test
+    fun `超长非revision行折叠为占位注释_T-SAF-23`() {
+        val dir = Files.createTempDirectory("tsaf23-line-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "planted.sql")
+        val header = "-- source: unknown | time: 1ms | 2026-11-06 10:00:00.000 --\n"
+        val giant = "A".repeat(1024 * 1024 + 1024)
+        file.writeText(header + giant + "\n\n")
+        val entries = SqlLogFileReader.readFromFile(file)
+        assertEquals("条目本身仍应解析出来（折叠不劈块）", 1, entries.size)
+        val sql = entries[0].restoredSql
+        assertTrue(
+            "超长行应折叠为占位注释: ${sql.take(120)}",
+            sql.contains("/* sql-visualizer: 超长行已折叠（单行超 1MB 上限） */"),
+        )
+        assertFalse("超长行内容不得全量保留", sql.contains(giant))
+        assertTrue("折叠后条目体量应有界", sql.length < 4096)
+    }
+
+    /**
+     * T-SAF-23 回归（单文件闸门）：超读取上限（对齐写侧 100MB rollThreshold）的文件在
+     * readFromFile/forEachEntry/countInFile 三入口一律拒读（空列表/零回调/计数 0）。
+     * 上限经内部测试缝注入小值（100MB 夹具过重）；随 fix 提交落地（缝在修复前不存在）。
+     */
+    @Test
+    fun `单文件超读取上限拒读_T-SAF-23`() {
+        val dir = Files.createTempDirectory("tsaf23-gate-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "planted.sql")
+        file.writeText("-- source: unknown | time: 1ms | 2026-11-06 10:00:00.000 --\nSELECT 1\n\n")
+        SqlLogFileReader.maxReadFileBytesForTest = 64L
+        try {
+            assertTrue("readFromFile 应拒读", SqlLogFileReader.readFromFile(file).isEmpty())
+            assertEquals("countInFile 应拒读", 0, SqlLogFileReader.countInFile(file))
+            var seen = 0
+            SqlLogFileReader.forEachEntry(file) { seen++; true }
+            assertEquals("forEachEntry 应零回调", 0, seen)
+        } finally {
+            SqlLogFileReader.maxReadFileBytesForTest = null
+        }
+        // 缝复位后同文件正常读取（拒读不产生持久副作用）
+        assertEquals(1, SqlLogFileReader.readFromFile(file).size)
+    }
+
+    /**
+     * T-SAF-23 回归（占位不劈块）：超长行折叠后，同一块内的已有正文行仍归属同一头部
+     * （占位注释不满足任何头部判据），块内已有内容不因折叠丢失。
+     */
+    @Test
+    fun `超长行折叠不劈块_已有正文仍归属同一条目_T-SAF-23`() {
+        val dir = Files.createTempDirectory("tsaf23-block-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "planted.sql")
+        file.writeText(
+            "-- source: A.java:9 | time: 1ms | 2026-11-06 10:00:00.000 --\n" +
+                "SELECT 1\n" +
+                "B".repeat(1024 * 1024 + 512) + "\n" +
+                "\n",
+        )
+        val entries = SqlLogFileReader.readFromFile(file)
+        assertEquals(1, entries.size)
+        val sql = entries[0].restoredSql
+        assertTrue("折叠前的正文行应保留", sql.contains("SELECT 1"))
+        assertTrue("折叠占位应在场", sql.contains("/* sql-visualizer: 超长行已折叠（单行超 1MB 上限） */"))
+        assertFalse("超长行内容不得全量保留", sql.contains("B".repeat(1024)))
+    }
 }
