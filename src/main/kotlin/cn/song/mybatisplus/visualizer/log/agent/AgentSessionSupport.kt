@@ -169,6 +169,12 @@ internal class PremainChannel(
     val port: Int,
     val server: ServerSocket,
     val preparedAtMs: Long,
+    /**
+     * T-SAF-02：本通道的 HELLO 令牌（[AgentProtocol.newChannelToken] 产物，随 agentArgs 下发、
+     * agent HELLO 回带、[AgentManager] 验令牌通过才提交会话）。生产链路恒非 null；
+     * null 为异常态——验令牌按 fail-closed 拒绝一切回连。
+     */
+    val channelToken: String?,
 ) : Disposable {
 
     /** 是否已等到**首次**回连（[AgentManager.hasPendingPremainChannel] 的跳过判据读它）。 */

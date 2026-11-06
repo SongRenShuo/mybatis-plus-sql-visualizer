@@ -248,4 +248,87 @@ class LogParseConcurrencyTest {
         assertEquals(ms("2026-09-16 14:19:13.387"), entries[0].logTimestamp)
         assertEquals("SELECT * FROM t WHERE id = 7", entries[0].restoredSql)
     }
+
+    // ---------- T-SAF-12（log.threadrouter.failopen-fallback-cross-thread-param-mixing）：兜底桶错配 ----------
+
+    /**
+     * 多来源控制台（近期出现过 ≥2 个线程 token）下的无 token 交错流：兜底桶配对必须延迟处置，
+     * 不得把 A 的参数还原进 B 的语句。
+     *
+     * 复现证据（NEEDS-VALIDATION #12，审计边界/入点 threadTokenOf 的 fail-open）：裸
+     * `==> Preparing:` / `==> Parameters:` 行（stdout MyBatis 形态，无级别关键字）全部落共享
+     * 兜底桶，A/B 两线程的语句在其中交错——修复前 B 的 SQL 被用 A 的参数还原
+     * （`INSERT INTO b VALUES (1)`，参数直达执行链），断言转红。
+     */
+    @Test
+    fun `多来源控制台下无token行配对不再错配`() {
+        val p = myBatis()
+        listOf(
+            "2026-09-16 10:00:00.000 INFO [exec-1] app - booted",
+            "2026-09-16 10:00:00.001 INFO [exec-2] app - booted",
+            "==>  Preparing: SELECT * FROM a WHERE id = ?",
+            "==>  Preparing: INSERT INTO b VALUES (?)",
+            "==> Parameters: 1(Long)",
+            "==> Parameters: 9(Long)",
+        ).forEach { p.feed(it) }
+        p.closePending()
+        val entries = p.takeEntries()
+
+        val b = entries.first { it.rawSql.contains("INSERT INTO b") }
+        assertTrue(
+            "B 的语句不得用 A 的参数还原（修复前 restoredSql=${b.restoredSql}）",
+            b.params.isEmpty() || b.restoredSql == b.rawSql,
+        )
+        val a = entries.first { it.rawSql.contains("FROM a WHERE") }
+        assertTrue("A 的语句同样不得被错配还原", a.params.isEmpty() || a.restoredSql == a.rawSql)
+    }
+
+    /**
+     * 纯裸流（全程无 token）的交错：第一轮无可判定信号（信息论边界——首条错配即探测信号），
+     * 第二轮起兜底桶已自学「多来源疑似」，同形交错不得再产出错配还原。
+     */
+    @Test
+    fun `纯裸流第二轮交错起不再错配`() {
+        val p = myBatis()
+        // 第一轮：建立「参数行无上下文 + 刚发生过错配」的自学信号
+        listOf(
+            "==>  Preparing: SELECT * FROM a WHERE id = ?",
+            "==>  Preparing: INSERT INTO b VALUES (?)",
+            "==> Parameters: 1(Long)",
+            "==> Parameters: 9(Long)",
+        ).forEach { p.feed(it) }
+        // 第二轮：同形交错（不同 SQL/参数值）
+        listOf(
+            "==>  Preparing: SELECT * FROM c WHERE id = ?",
+            "==>  Preparing: DELETE FROM d WHERE id = ?",
+            "==> Parameters: 2(Long)",
+            "==> Parameters: 8(Long)",
+        ).forEach { p.feed(it) }
+        p.closePending()
+        val entries = p.takeEntries()
+
+        val d = entries.first { it.rawSql.contains("DELETE FROM d") }
+        assertTrue(
+            "第二轮 D 的语句不得用 C 的参数还原（修复前 restoredSql=${d.restoredSql}）",
+            d.params.isEmpty() || d.restoredSql == d.rawSql,
+        )
+    }
+
+    /** 对照组：单一流（无多来源信号）裸行配对行为不变——两条语句各自正确还原。 */
+    @Test
+    fun `单一流裸行配对行为不变`() {
+        val p = myBatis()
+        listOf(
+            "==>  Preparing: SELECT * FROM a WHERE id = ?",
+            "==> Parameters: 1(Long)",
+            "==>  Preparing: INSERT INTO b VALUES (?)",
+            "==> Parameters: 9(Long)",
+        ).forEach { p.feed(it) }
+        p.closePending()
+        val entries = p.takeEntries()
+
+        assertEquals(2, entries.size)
+        assertEquals("SELECT * FROM a WHERE id = 1", entries[0].restoredSql)
+        assertEquals("INSERT INTO b VALUES (9)", entries[1].restoredSql)
+    }
 }

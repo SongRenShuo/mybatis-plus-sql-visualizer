@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -341,5 +342,100 @@ class MyBatisLogParserTest {
         val entries = p.takeEntries()
         assertEquals(1, entries.size)
         assertEquals("SELECT * FROM t WHERE id = 3", entries[0].restoredSql)
+    }
+
+    // ---------- T-SAF-20（log.mybatis.parseparams.unbounded-quadratic-regex）：参数文本超长截断 ----------
+
+    /**
+     * Parameters 文本须与 Preparing SQL 正文同受 [MyBatisLogParser.maxParseLength] 截断。
+     *
+     * 审计复核证据（NEEDS-VALIDATION #20）：修复前 Preparing 的 SQL 正文在 `sql.take(maxParseLength)`
+     * 截断，而 Parameters 余下文本不经截断直入 [parseParams]——其 PARAM_REGEX 以 `(?:\A|,\s*)` 为
+     * 匹配起点，对逗号密集无括号文本每个逗号起点都惰性重扫到行尾，二次复杂度。
+     */
+    @Test
+    fun `超长Parameters行截断到maxParseLength`() {
+        val p = MyBatisLogParser(maxParseLength = 20000)
+        p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?")
+        // 3 万个 `a,` = 6 万字符逗号密集无括号文本（PARAM_REGEX 二次回溯的最坏形态）
+        p.feed("==> Parameters: " + "a,".repeat(30_000))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertTrue(
+            "参数条数须被 maxParseLength 截断（修复前约 30000 且解析秒级卡顿）",
+            entries[0].params.size <= 10_100,
+        )
+    }
+
+    /** Parameters 独占一行的续行形态（分支 3）同样受截断。 */
+    @Test
+    fun `超长续行参数文本同样截断`() {
+        val p = MyBatisLogParser(maxParseLength = 20000)
+        p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?")
+        p.feed("==> Parameters: ")
+        // 无 `(类型)` 标注的纯逗号文本：走 PARAM_REGEX 二次回溯 + split(',') 回落两条路径
+        p.feed("1, 2, " + "a,".repeat(30_000))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("截断点之前的参数照常解析", "1", entries[0].params.firstOrNull()?.value)
+        assertTrue(
+            "参数条数须被 maxParseLength 截断（修复前约 30002）",
+            entries[0].params.size <= 10_102,
+        )
+    }
+
+    /** iBatis 2.x 的参数/类型行（集合 toString 形态）超长时同样截断（按无类型边界放弃解析）。 */
+    @Test
+    fun `iBatis超长参数与类型行截断`() {
+        val p = MyBatisLogParser()
+        p.feed("{pstm-1} Executing Statement: INSERT INTO t VALUES (?, ?)")
+        p.feed("{pstm-1} Parameters: [" + "v, ".repeat(30_000) + "v]")
+        p.feed("{pstm-1} Types: [" + "java.lang.String, ".repeat(30_000) + "java.lang.String]")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertTrue(
+            "iBatis 参数条数须被 maxParseLength 截断（修复前约 30001）",
+            entries[0].params.size <= 10_100,
+        )
+    }
+
+    // ---------- T-SAF-22（log.threadrouter.unbounded-nonidle-bucket-retention）：挂起态老化 ----------
+
+    /**
+     * 未闭合语句桶静默超阈值后被老化强制闭合产出（T-SAF-22）。
+     * 不调 closePending：条目只能来自老化淘汰前的强制闭合——修复前 0 条产出且桶无界。
+     */
+    @Test
+    fun `未闭合语句桶老化强制闭合产出`() {
+        var now = 1_000_000L
+        val p = MyBatisLogParser(maxParseLength = 20000, clock = { now })
+        repeat(100) { i ->
+            now += 61_000L
+            p.feed("2026-09-16 10:00:00.000 DEBUG [t-$i] x - ==>  Preparing: SELECT * FROM t WHERE id = $i")
+        }
+        val entries = p.takeEntries()
+        assertTrue(
+            "老化桶须强制闭合产出（实际 ${entries.size}，修复前 0 条且桶数无界）",
+            entries.size >= 100 - 64,
+        )
+    }
+
+    /** iBatis 挂起态（pstm 键表）静默超阈值后按无类型兜底闭合（Types 缺行的兜底语义不变）。 */
+    @Test
+    fun `iBatis挂起态老化兜底闭合产出`() {
+        var now = 1_000_000L
+        val p = MyBatisLogParser(clock = { now })
+        repeat(100) { i ->
+            now += 61_000L
+            p.feed("{pstm-$i} Executing Statement: INSERT INTO t VALUES (?)")
+        }
+        val entries = p.takeEntries()
+        assertTrue(
+            "老化挂起态须兜底闭合产出（实际 ${entries.size}，修复前 0 条且挂起表无界）",
+            entries.size >= 100 - 64,
+        )
     }
 }

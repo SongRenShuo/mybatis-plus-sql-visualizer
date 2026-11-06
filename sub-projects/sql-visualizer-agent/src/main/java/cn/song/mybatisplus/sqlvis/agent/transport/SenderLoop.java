@@ -118,9 +118,17 @@ final class SenderLoop implements Runnable {
     private final int maxFastDrops;
     /** 拨号函数缝（T-PerfSweep7 T-PS7-02）：默认真拨号，仅同包测试构造器可达（不新增生产可配置面）。 */
     private final SocketDialer dialer;
+    /** 通道令牌（T-SAF-02）：HELLO 帧回带；null = 旧 IDE 未下发（HELLO 不带 token 键，行为不变）。 */
+    private final String channelToken;
 
     SenderLoop(int serverPort) {
-        this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS);
+        this(serverPort, null);
+    }
+
+    /** T-SAF-02：带通道令牌构造（生产路径：EventBus.start(port, token) 下发）。 */
+    SenderLoop(int serverPort, String channelToken) {
+        this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS,
+                DEFAULT_DIAL, channelToken);
     }
 
     /**
@@ -128,7 +136,7 @@ final class SenderLoop implements Runnable {
      * 退避节奏是秒级，靠系统属性压时间会给生产侧多出一个可配置面，故改为构造器注入。
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops) {
-        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, DEFAULT_DIAL);
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, DEFAULT_DIAL, null);
     }
 
     /**
@@ -137,12 +145,19 @@ final class SenderLoop implements Runnable {
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
             SocketDialer dialer) {
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer, null);
+    }
+
+    /** 全参构造器（T-SAF-02 追加令牌；既有测试缝构造器全部委托到此）。 */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
+            SocketDialer dialer, String channelToken) {
         this.serverPort = serverPort;
         this.backoffInitialMs = backoffInitialMs;
         this.backoffMaxMs = backoffMaxMs;
         this.backoffResetAfterMs = backoffResetAfterMs;
         this.maxFastDrops = maxFastDrops;
         this.dialer = dialer;
+        this.channelToken = channelToken;
     }
 
     /** 拨号函数缝：与被替换的 {@code new Socket(host, port)} 逐字同形（生产缺省实现）。 */
@@ -234,7 +249,7 @@ final class SenderLoop implements Runnable {
 
                 final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 final DataInputStream in = new DataInputStream(socket.getInputStream());
-                writeFrame(out, EventBus.CMD_HELLO, "{\"pid\":" + pid() + "}");
+                writeFrame(out, EventBus.CMD_HELLO, helloBody());
                 // 连接建立即补发一条心跳：即便首轮迭代被 CONFIG 读超时拖住，IDE 侧 lastSeen 也从头新鲜
                 writeFrame(out, EventBus.CMD_HEARTBEAT, heartbeatBody());
                 long lastOutboundMs = System.currentTimeMillis();
@@ -353,6 +368,25 @@ final class SenderLoop implements Runnable {
                 closeQuietly(socket);
             }
         }
+    }
+
+    /**
+     * HELLO body（T-SAF-02）：`{"pid":<n>}` + 通道令牌回带 `,"token":"<hex>"`。
+     *
+     * <p>令牌随 agentArgs（-javaagent / loadAgent 参数，AgentArgs.parse 的 {@code token} 键）
+     * 下发，agent **原样回带**——验令牌判定位恒在 IDE 侧（HELLO 校验通过才提交会话）。
+     * hex 形态无需 JSON 转义。旧 IDE 不解析 token 键（宽容扫描），天然兼容；
+     * 旧版 agent（args 无 token 键）→ channelToken 为 null → 不带该键，
+     * IDE 侧按「无令牌」拒绝（插件与 agent 同制品分发、版本恒同对，见计划 D5/审计 #2 修复口径）。
+     */
+    private String helloBody() {
+        final StringBuilder sb = new StringBuilder(48);
+        sb.append("{\"pid\":").append(pid());
+        if (channelToken != null && !channelToken.isEmpty()) {
+            sb.append(",\"token\":\"").append(channelToken).append('"');
+        }
+        sb.append('}');
+        return sb.toString();
     }
 
     /**

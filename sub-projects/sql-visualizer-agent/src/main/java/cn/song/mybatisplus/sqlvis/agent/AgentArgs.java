@@ -2,11 +2,15 @@ package cn.song.mybatisplus.sqlvis.agent;
 
 /**
  * loadAgent 参数契约（§4.3 端口前置协商）：k=v 逗号分隔——
- * {@code port=53210;logLevel=warn;disable=0;stackFrames=24}。外部配置文件兜底不实现（优先级低于 args，
- * 一期由 IDE 独占下发，杜绝多方写配置的竞争面）。
+ * {@code port=53210;logLevel=warn;disable=0;stackFrames=24[;token=<hex>]}。外部配置文件兜底不实现
+ * （优先级低于 args，一期由 IDE 独占下发，杜绝多方写配置的竞争面）。
  *
  * <p>T-StackHoverUi：新增可选键 {@code stackFrames}（调用栈快照总帧数，钳位见
  * [AgentState#setStackMaxFrames]；缺省 24）。旧 IDE 不下发该键 → 缺省值兜底；未知键继续容忍。
+ *
+ * <p>T-SAF-02：新增可选键 {@code token}（通道令牌，IDE 侧逐通道生成的 128bit hex）——agent 在
+ * HELLO 帧原样回带，IDE 侧验令牌通过才提交会话（loopback 绑定不是对端认证）。旧 IDE 不下发该键
+ * → token 为 null、HELLO 不带 token 键（行为与修复前逐字一致）；未知键继续容忍。
  */
 public final class AgentArgs {
 
@@ -14,12 +18,14 @@ public final class AgentArgs {
     private final String logLevel;
     private final boolean startDisabled;
     private final int stackMaxFrames;
+    private final String token;
 
-    private AgentArgs(int port, String logLevel, boolean startDisabled, int stackMaxFrames) {
+    private AgentArgs(int port, String logLevel, boolean startDisabled, int stackMaxFrames, String token) {
         this.port = port;
         this.logLevel = logLevel;
         this.startDisabled = startDisabled;
         this.stackMaxFrames = stackMaxFrames;
+        this.token = token;
     }
 
     public static AgentArgs parse(String raw) {
@@ -27,6 +33,7 @@ public final class AgentArgs {
         String logLevel = "warn";
         boolean startDisabled = false;
         int stackMaxFrames = 24;
+        String token = null;
         if (raw != null && !raw.isEmpty()) {
             // loadAgent 的 args 按 Agentmain（或 -javaagent）原样传入：分号/逗号都容忍
             String[] pairs = raw.replace(';', ',').split(",");
@@ -60,10 +67,13 @@ public final class AgentArgs {
                     } catch (NumberFormatException ignore) {
                         // 非法值留缺省——AgentState 写入口会再钳位
                     }
+                } else if ("token".equals(k)) {
+                    // T-SAF-02：通道令牌（hex 原样持有，不校验形态——IDE 侧验令牌是唯一判定位）
+                    token = v.isEmpty() ? null : v;
                 }
             }
         }
-        return new AgentArgs(port, logLevel, startDisabled, stackMaxFrames);
+        return new AgentArgs(port, logLevel, startDisabled, stackMaxFrames, token);
     }
 
     public int getPort() {
@@ -80,5 +90,10 @@ public final class AgentArgs {
 
     public int getStackMaxFrames() {
         return stackMaxFrames;
+    }
+
+    /** 通道令牌（T-SAF-02；旧 IDE 不下发该键时为 null——HELLO 不带 token 键）。 */
+    public String getToken() {
+        return token;
     }
 }

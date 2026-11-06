@@ -34,6 +34,9 @@ class HibernateLogParser(
 
     /** 是否识别无前缀的纯 SQL 行（行首即 SELECT/INSERT/UPDATE/DELETE）。 */
     var recognizeBareSql: Boolean = true,
+
+    /** T-SAF-22：老化判定时钟（毫秒），与 [LogThreadRouter] 同源（JdbcTemplate 先例）；测试注入可控件。 */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -72,6 +75,10 @@ class HibernateLogParser(
         isCollecting = { it.collecting },
         isIdle = { !it.collecting && !it.inComment && it.pendingParams.isEmpty() && it.pendingShadow == null },
         routeNoTokenToRecent = true,
+        // T-SAF-22：挂起桶老化（与 MyBatisLogParser 同批接入）——静默超阈值的收集态桶
+        // 在容量压力下强制闭合产出后淘汰（collecting 态同样让 isIdle 恒假，#22 病灶的一半）
+        forceClose = { closePending(it) },
+        clock = clock,
     )
 
     /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */

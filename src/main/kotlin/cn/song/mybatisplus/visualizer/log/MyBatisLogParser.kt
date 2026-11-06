@@ -62,6 +62,12 @@ class MyBatisLogParser(
     var paramPrefix: String = DEFAULT_PARAM_PREFIX,
     var mixedPrefix: Boolean = true,
     var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
+
+    /**
+     * T-SAF-22：老化判定时钟（毫秒）。与 [LogThreadRouter] 共用同一时钟源（JdbcTemplate/
+     * ShardingSphere 先例）：驱动挂起桶与 iBatis 挂起态的老化淘汰判定；测试注入可控件以获得确定性。
+     */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -80,6 +86,20 @@ class MyBatisLogParser(
 
         /** 多行 SQL 续行态（T-LPC-07）：下一行是裸文本则并入 `pendingSql`。 */
         var continuing = false
+
+        // ---------- T-SAF-12：兜底桶多来源疑似态（仅回退桶会置位，线程桶不触达） ----------
+
+        /** 无 token 参数行已在本桶延迟挂起（归属不明，等闭合点按现状闭合；第二条参数行到达即实证丢弃）。 */
+        var needsThreadContext = false
+
+        /**
+         * 自学校信号：本桶曾出现「参数行无上下文 + 刚闭合出带参数条目」——单一流不可能的形态
+         * （Prep,Prep,Params,Params），多来源交错实证；此后本桶无 token 配对一律延迟处置。
+         */
+        var noTokenMultiOrigin = false
+
+        /** 最近一次本桶闭合产出的条目是否带参数（自学校信号的判据）。 */
+        var lastCloseHadParams = false
     }
 
     private val router = LogThreadRouter(
@@ -88,6 +108,10 @@ class MyBatisLogParser(
         // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
         isCollecting = { it.continuing || it.prefixMatched || it.paramPrefixMatched },
         isIdle = { it.pendingSql == null && !it.prefixMatched && !it.paramPrefixMatched },
+        // T-SAF-22：挂起桶老化——静默超阈值的未闭合语句在容量压力下强制闭合产出后淘汰
+        // （isIdle 判据让挂起桶永无淘汰资格，64 上限被废掉、滞留随控制台无界增长）
+        forceClose = { closePending(it) },
+        clock = clock,
     )
 
     /**
@@ -100,6 +124,8 @@ class MyBatisLogParser(
         val sql: String,
         val logLine: String,
         var params: List<LogSqlParam>? = null,
+        /** T-SAF-22：挂起态创建时刻（毫秒）——老化淘汰判据（静默超 TTL 兜底闭合）。 */
+        val createdAtMs: Long,
     )
 
     /**
@@ -109,9 +135,30 @@ class MyBatisLogParser(
      */
     private val ibatisPending = LinkedHashMap<String, IbatisPending>()
 
+    /**
+     * T-SAF-12：本控制台近期出现过的线程 token（有界 FIFO，最多 [MAX_TRACKED_TOKENS] 个）。
+     * 「近期出现过 ≥2 个不同线程来源」即多来源控制台——无 token 行在兜底桶里的配对自此视为
+     * 归属不明（延迟处置判据之一）。纯裸流（全程无 token）无此信号，由桶级自学校信号兜底
+     * （见 [Bucket.noTokenMultiOrigin]）。
+     */
+    private val recentTokens = ArrayDeque<String>()
+
+    /** T-SAF-12：延迟配对判据的 token 追踪窗口（有界，防长会话线程名漂移膨胀）。 */
+    private fun noteTokenOrigin(token: String?) {
+        if (token == null) return
+        recentTokens.remove(token)
+        recentTokens.addLast(token)
+        while (recentTokens.size > MAX_TRACKED_TOKENS) recentTokens.removeFirst()
+    }
+
+    /** T-SAF-12：无 token 行归属是否不明（多来源疑似）——兜底桶延迟配对判据。 */
+    private fun noTokenAmbiguous(bucket: Bucket): Boolean =
+        bucket.noTokenMultiOrigin || recentTokens.size >= 2
+
     /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
-        feedInto(router.bucketFor(line), line)
+        val token = LogThreadRouter.threadTokenOf(line)
+        feedInto(router.bucketForToken(token), line, token)
     }
 
     /**
@@ -120,10 +167,11 @@ class MyBatisLogParser(
      * token=null 即「提取不到」的 fail-open 回退语义，与 [feed] 内部自提逐字等价。
      */
     fun feed(line: String, threadToken: String?) {
-        feedInto(router.bucketForToken(threadToken), line)
+        feedInto(router.bucketForToken(threadToken), line, threadToken)
     }
 
-    private fun feedInto(bucket: Bucket, line: String) {
+    private fun feedInto(bucket: Bucket, line: String, token: String?) {
+        noteTokenOrigin(token)
         // 分支 0（券 A/B）：iBatis 2.x 标记行——命中即消费并返回，绝不落到下方用户配置前缀分支
         if (feedIbatis(bucket, line)) return
 
@@ -162,7 +210,11 @@ class MyBatisLogParser(
         if (bucket.paramPrefixMatched) {
             bucket.paramPrefixMatched = false
             if (line.isBlank()) return // 跳过空行
-            if (bucket.pendingSql == null) return // 无 SQL 上下文，忽略
+            if (bucket.pendingSql == null) {
+                // 无 SQL 上下文，忽略（T-SAF-12：顺带登记多来源自学校信号）
+                noteOrphanParams(bucket)
+                return
+            }
             // T-LPC-03：等到的行若本身是日志行 → 该语句**无参数**（MyBatis 对无参语句打印空前缀行）。
             // 闭合且不吞该行（按正常流程重新喂入——含它自己的线程桶路由；本等待态已复位，不会再进本分支）。
             if (looksLikeLogLine(line, sqlPrefix, paramPrefix)) {
@@ -171,8 +223,7 @@ class MyBatisLogParser(
                 feed(line)
                 return
             }
-            bucket.pendingParams += parseParams(line.trim())
-            closePending(bucket)
+            pairParams(bucket, parseParams(line.trim().take(maxParseLength)), token)
             return
         }
 
@@ -182,12 +233,16 @@ class MyBatisLogParser(
             bucket.prefixMatched = false // 清除等待态（罕见：Preparing 独占一行后紧跟正常 Parameters）
             if (bucket.pendingSql == null) {
                 LogParseDiag.paramWithoutContext.incrementAndGet() // T-LPC-05：静默丢弃留痕
+                noteOrphanParams(bucket) // T-SAF-12：多来源自学校信号
                 return
             }
-            bucket.pendingParams += parseParams(paramsText)
+            // T-SAF-20：参数文本与 SQL 正文同受 maxParseLength 截断——此前 Parameters 余下文本
+            // 无界直入 parseParams，其 PARAM_REGEX 对逗号密集无括号文本是二次复杂度（每个逗号
+            // 起点惰性重扫到行尾），单条数百 KB 的 Parameters 行可冻结控制台解析线程。
+            // T-SAF-12：配对统一走 [pairParams]（兜底桶多来源疑似时延迟处置）。
             // 立即闭合——MyBatis 单条语句 Parameters 行后参数完整，立即生成条目避免去重窗口时序问题；
             // 多 Parameters 行（极端）合并逻辑：若下一行仍是 Parameters，pendingParams 已被清空后重开。
-            closePending(bucket)
+            pairParams(bucket, parseParams(paramsText.take(maxParseLength)), token)
             return
         }
 
@@ -228,6 +283,7 @@ class MyBatisLogParser(
      */
     private fun feedIbatis(bucket: Bucket, line: String): Boolean {
         if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)) return false
+        evictExpiredIbatis()
         val marker = IBATIS_MARKER.find(line) ?: return false
         val id = marker.groupValues[2]
         val rest = line.substring(marker.range.last + 1).trim()
@@ -260,7 +316,24 @@ class MyBatisLogParser(
         // 语句行同时终止 MyBatis 侧的未闭合语句/续行（与分支 1 同语义）
         closePending(bucket)
         if (sql.isEmpty()) return
-        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line)
+        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line, createdAtMs = clock())
+    }
+
+    /**
+     * T-SAF-22：iBatis 挂起态老化——静默超 [IBATIS_PENDING_TTL_MS] 的挂起组按无类型兜底闭合
+     * 产出后淘汰（与线程桶老化同一判据与量级）。挂起表按插入序持有，表首最老，首个未超龄条目
+     * 处即可停扫；每条 iBatis 标记行喂入时检查一次（摊还 O(1)，无后台线程）。
+     */
+    private fun evictExpiredIbatis() {
+        if (ibatisPending.isEmpty()) return
+        val now = clock()
+        val iterator = ibatisPending.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (now - entry.value.createdAtMs < IBATIS_PENDING_TTL_MS) break
+            iterator.remove()
+            emitIbatis(entry.value)
+        }
     }
 
     /** `{pstm-N} Parameters:`：挂起等 Types；无对应语句（上下文已丢）按既有诊断计数丢弃。 */
@@ -270,12 +343,14 @@ class MyBatisLogParser(
             LogParseDiag.paramWithoutContext.incrementAndGet()
             return
         }
-        val params = parseIbatisParams(text)
+        // T-SAF-20：超长列表截断——截断会破坏 `[...]` 结构，parseIbatisParams 按非列表形态
+        // 返回空表（超长即放弃解析，不产出错位的半截参数），与 maxParseLength 的兜底语义一致。
+        val params = parseIbatisParams(text.take(maxParseLength))
         if (pending.params != null) {
             // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
             ibatisPending.remove(id)
             emitIbatis(pending)
-            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params)
+            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params, createdAtMs = clock())
         } else {
             pending.params = params
         }
@@ -286,7 +361,8 @@ class MyBatisLogParser(
         val pending = ibatisPending[id] ?: return
         val params = pending.params ?: return // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
         ibatisPending.remove(id)
-        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)))
+        // T-SAF-20：Types 行与参数行同受截断（超长截断的错位边界与参数行同口径登记）
+        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text.take(maxParseLength))))
     }
 
     /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
@@ -340,15 +416,67 @@ class MyBatisLogParser(
     }
 
     /** 闭合指定桶的未完成条目（新语句到来 / 面板刷新时调用）。 */
-    private fun closePending(bucket: Bucket): LogSqlEntry? {
+    private fun closePending(bucket: Bucket): LogSqlEntry? = closePending(bucket, dropParams = false)
+
+    /**
+     * 闭合指定桶的未完成条目；[dropParams]=true（T-SAF-12 跨线程错配实证路径）时按**无参数**
+     * 闭合（`?` 保留、不产出错配还原 SQL），挂起参数一并丢弃。
+     */
+    private fun closePending(bucket: Bucket, dropParams: Boolean): LogSqlEntry? {
         val sql = bucket.pendingSql ?: return null
         bucket.pendingSql = null
         bucket.continuing = false
         val logLine = bucket.pendingLogLine
         bucket.pendingLogLine = null
-        val params = bucket.pendingParams.toList()
-        bucket.pendingParams.clear()
+        val params = if (dropParams) {
+            bucket.pendingParams.clear()
+            emptyList()
+        } else {
+            bucket.pendingParams.toList().also { bucket.pendingParams.clear() }
+        }
+        bucket.needsThreadContext = false
+        bucket.lastCloseHadParams = params.isNotEmpty()
         return emitEntry(sql, logLine, params)
+    }
+
+    /**
+     * T-SAF-12（D5 温和版）：参数配对唯一入口（分支 3/4 共用）。
+     *
+     * 兜底桶（无 token 行 fail-open 的归属地，[LogThreadRouter.isFallback]）内，若「无 token 行
+     * 归属不明」（[noTokenAmbiguous]：控制台近期出现过 ≥2 个线程来源，或本桶已自学校多来源实证），
+     * 则**延迟配对**：参数挂起、标记 [Bucket.needsThreadContext] 并计数
+     * [LogParseDiag.fallbackPairingDelayed]，由闭合点（下一条语句行 / [closePending()] / 老化淘汰）
+     * 按现状闭合——单一线程流语义不变（挂起参数在闭合点照常还原，只是产出时点后移）。
+     *
+     * 延迟挂起期间同一挂起窗口内再到达一条无 token 参数行：单一线程不可能产生（第一条参数行
+     * 已闭合挂起语句）——跨线程交错实证，挂起语句按**无参数**闭合（[LogParseDiag.crossThreadMixBlocked]
+     * 计数），两组疑似参数一并丢弃：宁可参数不还原，也不产出「B 的 SQL 配 A 的参数」的错配
+     * 还原 SQL（该形态直达执行链）。带 token 的参数行走各自线程桶，本判据不触达。
+     */
+    private fun pairParams(bucket: Bucket, params: List<LogSqlParam>, token: String?) {
+        val delayed = token == null && router.isFallback(bucket) && noTokenAmbiguous(bucket)
+        if (delayed && bucket.pendingParams.isNotEmpty()) {
+            LogParseDiag.crossThreadMixBlocked.incrementAndGet()
+            closePending(bucket, dropParams = true)
+            return
+        }
+        bucket.pendingParams += params
+        if (delayed) {
+            bucket.needsThreadContext = true
+            LogParseDiag.fallbackPairingDelayed.incrementAndGet()
+            return // 延迟闭合：由闭合点按现状闭合
+        }
+        closePending(bucket)
+    }
+
+    /**
+     * T-SAF-12：无 token 参数行无上下文被丢弃时的自学校信号——若本桶刚闭合出**带参数**的条目，
+     * 即「Prep,Prep,Params,Params」交错形态（单一流不可能产生），登记多来源实证（粘滞）。
+     */
+    private fun noteOrphanParams(bucket: Bucket) {
+        if (router.isFallback(bucket) && bucket.lastCloseHadParams) {
+            bucket.noTokenMultiOrigin = true
+        }
     }
 
     /**
@@ -418,6 +546,16 @@ class MyBatisLogParser(
         private const val DEFAULT_SQL_PREFIX = "Preparing:"
         private const val DEFAULT_PARAM_PREFIX = "Parameters:"
         private const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /**
+         * T-SAF-22：iBatis 挂起态老化 TTL（毫秒）——与 [LogThreadRouter.DEFAULT_BUCKET_IDLE_TIMEOUT_MS]
+         * 同量级（60s）：`Types:` 与参数行是相邻输出，正常间隔毫秒级，静默 60s 即认定
+         * 「Types 行不会再来了」，按无类型兜底闭合优于永久滞留（挂起表无条目上限的 #22 同类问题）。
+         */
+        private const val IBATIS_PENDING_TTL_MS = 60_000L
+
+        /** T-SAF-12：多来源判据的 token 追踪窗口（最近 N 个不同线程 token；有界防膨胀）。 */
+        private const val MAX_TRACKED_TOKENS = 8
 
         // ---------- iBatis 2.x 标记（券 A/B） ----------
 
