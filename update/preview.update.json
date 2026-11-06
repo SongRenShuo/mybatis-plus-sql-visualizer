@@ -1,7 +1,7 @@
 {
   "version": "2026.11.6-beta.2",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.6-beta.2/mybatis-plus-sql-visualizer-2026.11.6-beta.2.zip",
-  "changeNotes": "新增国产数据库磐维 PanWeiDB 的增强捕获支持，驱动 V1/V2 两代都已适配，运行期 SQL、参数与目标库可直接采集；同一 URL 的方言按 Oracle 渲染\niBatis 2.x 项目的控制台 SQL 日志现在能正确解析：参数不再被方括号包住，含 null 的参数也不再让 INSERT 整片变成 NULL\n修复 IDEA 2026.3 上更新插件提示「需要重启」的问题，热替换恢复生效\n增强捕获挂载后补扫两次，attach 之后才懒加载数据源的驱动不再漏采；遇到未登记的 JDBC 驱动会在面板点名，不再静默零产出\n新增 MP 空 Wrapper 的删除/更新预览图标与 JPA delete/update 调用行预览；空 Wrapper 会给出全表操作的警示\n修复运行期拼接的 SQL 预览把 Java 源码当成活 SQL、括号与引号被吃掉的问题\n好用的话，欢迎到 Marketplace 页评分留言",
+  "changeNotes": "新增国产数据库磐维 PanWeiDB 的增强捕获支持，驱动 V1/V2 两代都已适配，运行期 SQL、参数与目标库可直接采集；同一 URL 的方言按 Oracle 渲染\niBatis 2.x 项目的控制台 SQL 日志现在能正确解析——参数不再被方括号包住，含 null 的参数也不再让 INSERT 整片变成 NULL\n修复 IDEA 2026.3 上更新插件提示「需要重启」的问题，热替换恢复生效\n增强捕获挂载后补扫两次，attach 之后才懒加载数据源的驱动不再漏采；遇到未登记的 JDBC 驱动会在面板点名，不再静默零产出\n新增 MP 空 Wrapper 的删除/更新预览图标与 JPA delete/update 调用行预览；空 Wrapper 会给出全表操作的警示\n修复运行期拼接的 SQL 预览把 Java 源码当成活 SQL、括号与引号被吃掉的问题\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-06",
   "sinceBuild": "243"
 }
