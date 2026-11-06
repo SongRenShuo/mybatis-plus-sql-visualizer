@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.update
 
 import com.intellij.openapi.util.io.FileUtil
+import com.intellij.util.io.HttpRequests
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,6 +68,34 @@ class PluginUpdateRunnerTest {
         }
         assertTrue(same is PluginUpdateRunner.CheckResult.UpToDate)
         assertTrue(older is PluginUpdateRunner.CheckResult.UpToDate)
+    }
+
+    // ---------- T-DevUpdateChannel：manifestUrl 第三参（带默认值，不破坏既有尾随 lambda 调用） ----------
+
+    @Test
+    fun checkUsesInjectedManifestUrl() {
+        val preview = "https://example.com/update/preview.update.json"
+        var seen: String? = null
+        val result = PluginUpdateRunner.check("2026.8.14", preview) { url ->
+            seen = url
+            UpdateApi.FetchOutcome.Success(
+                """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}""",
+            )
+        }
+        assertEquals("开发版通道必须读注入的预览清单地址", preview, seen)
+        assertEquals(PluginUpdateRunner.CheckResult.Available(manifest), result)
+    }
+
+    @Test
+    fun checkDefaultManifestUrlIsStableChannel() {
+        // 不传第三参时仍读正式清单（回归：分流不得污染正式通道）
+        var seen: String? = null
+        PluginUpdateRunner.check("2026.8.14") { url ->
+            seen = url
+            UpdateApi.FetchOutcome.Success("""{"version":"2026.8.14","downloadUrl":"https://example.com/p.zip"}""")
+        }
+        assertEquals(UpdateSource.manifestUrl(), seen)
+        assertFalse("正式通道不得读预览清单", seen!!.contains("preview.update.json"))
     }
 
     // ---------------- downloadAndInstall ----------------
@@ -150,6 +179,65 @@ class PluginUpdateRunnerTest {
         )
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
         assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("boom"))
+    }
+
+    // ---------- T-DevUpdateChannel：下载 404/410 = 「包还没发布」，与普通失败分开 ----------
+
+    @Test
+    fun downloadAndInstall404IsNotPublished() {
+        var installCalled = false
+        val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
+            download = { url, _ ->
+                throw HttpRequests.HttpStatusException("Not Found for url: $url", 404, url)
+            },
+            install = { installCalled = true; PluginUpdateRunner.InstallResult.InstalledRestartRequired },
+        )
+        assertEquals(PluginUpdateRunner.InstallResult.NotPublished(404), result)
+        assertFalse("包没发布时不得进入安装", installCalled)
+    }
+
+    @Test
+    fun downloadAndInstall410IsNotPublished() {
+        val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
+            download = { url, _ -> throw HttpRequests.HttpStatusException("Gone for url: $url", 410, url) },
+            install = { throw AssertionError("install must not be called") },
+        )
+        assertEquals(PluginUpdateRunner.InstallResult.NotPublished(410), result)
+    }
+
+    @Test
+    fun downloadAndInstallWrapped404IsStillNotPublished() {
+        // saveToFile 视版本可能把状态异常包一层 IOException——挖异常链，别漏判
+        val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
+            download = { url, _ ->
+                throw java.io.IOException(
+                    "download failed",
+                    HttpRequests.HttpStatusException("Not Found for url: $url", 404, url),
+                )
+            },
+            install = { throw AssertionError("install must not be called") },
+        )
+        assertEquals(PluginUpdateRunner.InstallResult.NotPublished(404), result)
+    }
+
+    @Test
+    fun downloadAndInstallHttp500IsFailedNotNotPublished() {
+        // 反扩散：404 友好化不得吞掉其余失败
+        val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
+            download = { url, _ -> throw HttpRequests.HttpStatusException("Server Error for url: $url", 500, url) },
+            install = { throw AssertionError("install must not be called") },
+        )
+        assertTrue("HTTP 500 必须仍是 Failed", result is PluginUpdateRunner.InstallResult.Failed)
+    }
+
+    @Test
+    fun downloadAndInstallIoFailureIsFailedNotNotPublished() {
+        val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
+            download = { _, _ -> throw java.io.IOException("connection reset") },
+            install = { throw AssertionError("install must not be called") },
+        )
+        assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
+        assertTrue((result as PluginUpdateRunner.InstallResult.Failed).message.contains("connection reset"))
     }
 
     // ---------------- isValidZip ----------------

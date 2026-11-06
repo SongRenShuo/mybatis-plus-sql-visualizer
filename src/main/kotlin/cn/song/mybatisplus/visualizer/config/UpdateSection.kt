@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
@@ -46,9 +47,19 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     internal enum class State { Idle, Checking, UpToDate, Available, Downloading, Installed, InstalledLive, Failed }
 
+    /** 本次（最近一次）检查走的通道（T-DevUpdateChannel）：决定读哪个清单与状态行后缀。 */
+    internal enum class Channel { STABLE, PREVIEW }
+
+    /** 最近一次检查所用通道（渲染时给状态行加「（开发版通道）」后缀）。 */
+    internal var channel: Channel = Channel.STABLE
+        private set
+
     private var pendingManifest: UpdateManifest? = null
 
     private var failureReason: String? = null
+
+    /** T-DevUpdateChannel：最近一次安装失败是否「包还没发布」（404/410，友好文案 + 发布页链接）。 */
+    private var notPublished: Boolean = false
 
     /** R62：最近一次检查失败的分类（渲染文案与兜底链接可见性分流）。 */
     private var failureKind: PluginUpdateRunner.FailureKind? = null
@@ -56,9 +67,12 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     /**
      * 检查编排 seam（T-M28.1）：测试注入 fake 不触网；默认走 [PluginUpdateRunner.check] 真实实现。
      * 与按钮绑定配套——交互测试经 doClick 驱动全链路。
+     *
+     * T-DevUpdateChannel：入参为本通道实际读取的清单 URL（正式=update.json / 开发版=preview.update.json），
+     * 测试据此断言分流；既有 `{ calls++; … }` 注入写法（忽略入参）继续有效。
      */
-    internal var checkRunner: () -> PluginUpdateRunner.CheckResult =
-        { PluginUpdateRunner.check(PluginVersion.current()) }
+    internal var checkRunner: (String) -> PluginUpdateRunner.CheckResult =
+        { url -> PluginUpdateRunner.check(PluginVersion.current(), url) }
 
     /** 下载安装编排 seam（T-M28.1：测试注入 fake；默认真实实现，indicator 驱动进度条）。 */
     internal var installRunner: (UpdateManifest, ProgressIndicator?) -> PluginUpdateRunner.InstallResult =
@@ -70,6 +84,14 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     internal val versionLabel = JBLabel()
     internal val autoCheckCheck = JCheckBox()
     internal val checkButton = JButton()
+
+    /**
+     * 「检测更新（开发版）」按钮（T-DevUpdateChannel）：构造即隐藏，`DevUpdateMode.isEnabled()`
+     * 为真时可见。构造之后的可见性**只由 [applyDevVisibility] 决定**（[updateTexts] 与解锁回调
+     * 都走它），不在别处直接赋值——否则语言切换 rebuild 会把按钮弄丢。
+     */
+    internal val checkPreviewButton = JButton().apply { isVisible = false }
+
     internal val statusLabel = JBLabel()
     internal val progressBar = JProgressBar()
     internal val notesArea = JBTextArea(5, 42)
@@ -141,7 +163,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         notesArea.lineWrap = true
         notesArea.wrapStyleWord = true
         // T-M28.1：三按钮事件绑定（此前缺失——用户实测点击检查更新无反应；测试盲区：只测渲染未测交互）
-        checkButton.addActionListener { runCheck() }
+        checkButton.addActionListener { runCheck(Channel.STABLE) }
+        checkPreviewButton.addActionListener { runCheck(Channel.PREVIEW) }
         installButton.addActionListener { runInstall() }
         restartButton.addActionListener { restartIde() }
         // T-ErrReport：报告问题（手动形态，无异常预填）
@@ -178,6 +201,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             isOpaque = false
             add(versionLabel)
             add(checkButton)
+            add(checkPreviewButton)
             add(installButton)
             add(statusLabel)
         })
@@ -202,6 +226,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     /** 检查结果渲染（EDT；测试直接调用）。 */
     internal fun renderCheck(result: CheckResult) {
+        notPublished = false
         when (result) {
             is CheckResult.Available -> {
                 pendingManifest = result.manifest
@@ -238,12 +263,17 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         Regex("^\\d+").find(ApplicationInfo.getInstance().build.asStringWithoutProductCode())
             ?.value?.toIntOrNull()
 
-    /** 安装结果渲染（EDT；测试直接调用）。三分支：热生效 / 回退重启 / 失败（保留 pendingManifest 区分文案）。 */
+    /**
+     * 安装结果渲染（EDT；测试直接调用）。四分支：热生效 / 回退重启 / 未发布（404 友好态）/ 失败
+     * （保留 pendingManifest 区分文案）。
+     */
     internal fun renderInstall(result: InstallResult) {
         failureReason = (result as? InstallResult.Failed)?.message
+        notPublished = result is InstallResult.NotPublished
         state = when (result) {
             is InstallResult.InstalledDynamic -> State.InstalledLive
             is InstallResult.InstalledRestartRequired -> State.Installed
+            is InstallResult.NotPublished -> State.Failed
             is InstallResult.Failed -> State.Failed
         }
         renderState()
@@ -253,6 +283,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         val s = state
         val done = s == State.Installed || s == State.InstalledLive
         checkButton.isEnabled = !done && s != State.Checking && s != State.Downloading
+        checkPreviewButton.isEnabled = checkButton.isEnabled
         installButton.isVisible = s == State.Available || s == State.Downloading
         installButton.isEnabled = s == State.Available
         restartButton.isVisible = s == State.Installed
@@ -269,25 +300,33 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             State.Downloading -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.downloading")
             State.Installed -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
             State.InstalledLive -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installedLive")
-            State.Failed -> statusLabel.text = if (pendingManifest == null) {
-                // R62：检查失败按 [PluginUpdateRunner.FailureKind] 分流文案（三态可诊断）；
-                // 安装失败（pendingManifest 非空）维持原文案
-                when (failureKind) {
-                    PluginUpdateRunner.FailureKind.CHANNEL_MISSING ->
-                        MpSqlVisualizerBundle.message("settings.update.fail.channel404", failureReason ?: "?")
-                    PluginUpdateRunner.FailureKind.NETWORK ->
-                        MpSqlVisualizerBundle.message("settings.update.fail.network", failureReason ?: "?")
-                    else ->
-                        MpSqlVisualizerBundle.message("settings.update.checkFailed", failureReason ?: "?")
+            State.Failed -> statusLabel.text = when {
+                pendingManifest == null -> {
+                    // R62：检查失败按 [PluginUpdateRunner.FailureKind] 分流文案（三态可诊断）；
+                    // 安装失败（pendingManifest 非空）另走下面两支
+                    when (failureKind) {
+                        PluginUpdateRunner.FailureKind.CHANNEL_MISSING ->
+                            MpSqlVisualizerBundle.message("settings.update.fail.channel404", failureReason ?: "?")
+                        PluginUpdateRunner.FailureKind.NETWORK ->
+                            MpSqlVisualizerBundle.message("settings.update.fail.network", failureReason ?: "?")
+                        else ->
+                            MpSqlVisualizerBundle.message("settings.update.checkFailed", failureReason ?: "?")
+                    }
                 }
-            } else {
-                MpSqlVisualizerBundle.message("settings.update.installFailed", failureReason ?: "?")
+                // T-DevUpdateChannel：包没发布（HTTP 404/410）不渲染异常原文，给友好文案 + 发布页链接
+                notPublished -> MpSqlVisualizerBundle.message("settings.update.notPublished")
+                else -> MpSqlVisualizerBundle.message("settings.update.installFailed", failureReason ?: "?")
             }
             State.Idle -> statusLabel.text = " "
         }
-        // R62：兜底链接行只在「检查失败且通道缺失」态可见（网络态/安装失败/其他态一律隐藏）
-        fallbackLinksContainer.isVisible =
-            s == State.Failed && pendingManifest == null && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING
+        // T-DevUpdateChannel：开发版通道的检查走同一条状态机，只在文案尾巴标出通道，避免误读
+        if (channel == Channel.PREVIEW && s != State.Idle) {
+            statusLabel.text = statusLabel.text + MpSqlVisualizerBundle.message("settings.update.channel.preview")
+        }
+        // R62：兜底链接行在「检查失败且通道缺失」或「包未发布」态可见（网络态/其他安装失败/其他态隐藏）
+        fallbackLinksContainer.isVisible = s == State.Failed && (
+            (pendingManifest == null && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING) || notPublished
+            )
     }
 
     /** 版本行/开关/日志与按钮文本刷新（语言切换 rebuild 时调用，仿 ShortcutEditor.updateTexts）。 */
@@ -297,6 +336,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         autoCheckCheck.text = MpSqlVisualizerBundle.message("settings.update.autoCheck")
         autoCheckCheck.toolTipText = MpSqlVisualizerBundle.message("settings.update.autoCheck.tip")
         checkButton.text = MpSqlVisualizerBundle.message("settings.update.check")
+        checkButton.toolTipText = UpdateSource.manifestUrl()
+        checkPreviewButton.text = MpSqlVisualizerBundle.message("settings.update.checkPreview")
+        // tooltip 写实际读取的 URL：开发版对账「到底读了哪个文件」（预览清单常指向未发布版本）
+        checkPreviewButton.toolTipText = UpdateSource.previewManifestUrl()
         installButton.text = MpSqlVisualizerBundle.message("settings.update.downloadInstall")
         installedLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
         restartButton.text = MpSqlVisualizerBundle.message("settings.update.restartNow")
@@ -304,7 +347,24 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         giteeLink.text = MpSqlVisualizerBundle.message("settings.update.viewOnGitee")
         reportProblemButton.text = MpSqlVisualizerBundle.message("settings.update.reportProblem")
         feedbackPoolLink.text = MpSqlVisualizerBundle.message("settings.update.feedbackPool")
+        // P-3 的钉子：rebuild 只重建文本，可见性必须按**当前解锁态**重算，否则切语言按钮消失
+        applyDevVisibility()
         renderState()
+    }
+
+    /**
+     * 按 [DevUpdateMode] 重新决定开发版按钮可见性（唯一的赋值点）。
+     * 解锁回调（面板连点）与 [updateTexts] 都走这里——两处任一失守都会表现为「开发模式失效」。
+     */
+    internal fun applyDevVisibility() {
+        checkPreviewButton.isVisible = DevUpdateMode.isEnabled()
+    }
+
+    /** 解锁当场刷新（面板连点达到阈值后调用）：补文本 + 补可见性 + 让布局重算。 */
+    internal fun refreshDevModeVisibility() {
+        updateTexts()
+        revalidate()
+        repaint()
     }
 
     /** 从配置加载（Settings 打开/Reset 时调用）。 */
@@ -313,7 +373,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         pendingManifest = null
         failureReason = null
         failureKind = null
+        notPublished = false
+        channel = Channel.STABLE
         state = State.Idle
+        applyDevVisibility()
         renderState()
     }
 
@@ -321,9 +384,14 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     // 异步流程（Task.Backgroundable；回调 EDT + 判活，面板销毁则静默）
     // ------------------------------------------------------------------
 
-    /** 检查更新（防重入：Checking/Downloading 中忽略）。 */
-    internal fun runCheck() {
+    /**
+     * 检查更新（防重入：Checking/Downloading 中忽略）。两个按钮共用本状态机，只有 [channel] 不同：
+     * 正式通道读 `update/update.json`，开发版通道读 `update/preview.update.json`。
+     */
+    internal fun runCheck(channel: Channel = Channel.STABLE) {
         if (state == State.Checking || state == State.Downloading) return
+        this.channel = channel
+        val url = if (channel == Channel.PREVIEW) UpdateSource.previewManifestUrl() else UpdateSource.manifestUrl()
         state = State.Checking
         renderState()
         ProgressManager.getInstance().run(object : Task.Backgroundable(
@@ -332,7 +400,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             true,
         ) {
             override fun run(indicator: ProgressIndicator) {
-                val result = checkRunner()
+                val result = checkRunner(url)
                 ApplicationManager.getApplication().invokeLater {
                     if (isDisplayable) renderCheck(result)
                 }

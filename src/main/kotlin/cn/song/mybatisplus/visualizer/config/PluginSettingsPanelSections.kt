@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -42,6 +43,8 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JComboBox
@@ -706,11 +709,24 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             g.anchor = GridBagConstraints.NORTHWEST
             addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
             g.anchor = GridBagConstraints.WEST
+            // T-DevUpdateChannel：构建号就是开发者模式的解锁入口（D-3：只挂这一个标签）。
+            // 连点阈值/窗口在 DevUpdateMode（纯逻辑单测覆盖），这里只做「喂点击 + 解锁后刷新」。
+            val buildNumberLabel = JBLabel().apply {
+                text = PluginBuildInfo.displayText()
+                toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
+            }
+            buildNumberLabel.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (DevUpdateMode.isEnabled()) return
+                    if (DevUpdateMode.registerClick()) {
+                        // D-4：不弹窗，只改 tooltip + 让开发版按钮现身
+                        buildNumberLabel.toolTipText = MpSqlVisualizerBundle.message("settings.update.devMode.tip")
+                        updateSection.refreshDevModeVisibility()
+                    }
+                }
+            })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
-                add(JBLabel().apply {
-                    text = PluginBuildInfo.displayText()
-                    toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
-                }, BorderLayout.CENTER)
+                add(buildNumberLabel, BorderLayout.CENTER)
                 add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
                     isEnabled = PluginBuildInfo.mpvBuild() != null
                     addActionListener {
