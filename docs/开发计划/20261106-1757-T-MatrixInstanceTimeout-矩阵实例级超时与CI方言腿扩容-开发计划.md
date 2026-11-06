@@ -352,3 +352,32 @@ job 100min。
 `方言矩阵已落盘（子集 mysql84,pg16,panwei_a,gaussdb_kernel503,panwei_b；原矩阵 N 个实例中取 5 个）`，
 且工件 `dialect-verify-summary` 的 `summary.md` 有「通过/跳过/超时/失败」行、`panwei_a`/`panwei_b`/
 `gaussdb_kernel503` 三条各有 PASS 或可辨结局（超时必须带预算值，不计 PASS）。
+
+## 十二、合流订正（2026-11-06 主控，两券读数对账后）
+
+两券各自给出的 CI 预算互相矛盾——券 B 按「4.3s/字」外推得 Σ≈66min（建议 90/100min），券 A 用 mysql84 锚点
+算出**本地→CI 倍率 10.8×**、五实例投影约 100min。合流时以券 A 的实测为准，并据此收缩子集：
+
+| 项 | 券 B 原案 | 合流后 | 依据 |
+|---|---|---|---|
+| 子集 | mysql84, pg16, panwei_a, gaussdb_kernel503, panwei_b | **砍掉 panwei_b，留 4 个** | panwei_b 262 词、CI 投影 ≈30min，是最贵一条；与 mysql84 同属 MySQL 协议/词表族。磐维价值在 Oracle 兼容面，已由 panwei_a 覆盖。再吃紧砍序：gaussdb → panwei_a |
+| 步骤 timeout | 90min | **120min** | 最坏 Σ(预算)=1800+600+1200+3000=6600s=110min，步骤必须 ≥ Σ |
+| job timeout | 100min | **130min** | 步骤之上留收尾 |
+| 实例预算 | 1200/400/500/900/1200 | **1800 / 600 / 1200 / 3000（/ panwei_b 2400 本地）** | 券 A 实测 CI 投影（mysql84 1116s、gaussdb ≈2177s）留 ≥1.3× 余量；默认 300s 会误杀 mysql84 |
+
+同批补的两件事：
+
+1. **`-Dmpvs.external.instanceTimeout` 此前根本没接线**（券 A 偏差 #1）：`buildSrc/.../mpv-testing.gradle.kts`
+   的 `-Dmpvs.*` 透传只挂 `tasks.test`，`dialectExternalVerify` 没有那段 → 计划册与模板把系统属性写成
+   「可用通道」属假文档。现补到该任务的 configure 块（扫描放两条显式 `systemProperty` 之前）。
+   实证：单实例子集 + `-Dmpvs.external.instanceTimeout=1`
+   → summary 写 `实例级预算（超时看门狗）：默认 1s（系统属性 -Dmpvs.external.instanceTimeout）`，
+   `pg16` 落 TIMEOUT 桶、耗时 1079ms、处置 `[statement.cancel✗(语句间隙) connection.close✓ thread.interrupt✓]`、
+   线程已退出。
+2. **本地矩阵口径缺口补齐**：`instances` 行原先不含 `panwei_a`/`panwei_b`（条目在文件里但不在列表），
+   等于本地 `releaseGate` 不跑磐维。现已加入，并按上表补齐每个实例的 `timeoutSeconds`；
+   矩阵全文已重新同步进 GitHub secret `DIALECT_MATRIX_PROPERTIES`（`updated_at` 2026-11-06T10:48Z）。
+
+仍未做（需一次真实 dispatch 才能销案）：CI 侧 4 实例的实跑读数。判据改成
+`方言矩阵已落盘（子集 mysql84,pg16,panwei_a,gaussdb_kernel503；原矩阵 15 个实例中取 4 个）`
+＋ 工件里 `panwei_a` / `gaussdb_kernel503` 各有 PASS 或可辨结局（TIMEOUT 不计 PASS）。

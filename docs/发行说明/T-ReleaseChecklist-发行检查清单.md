@@ -84,15 +84,19 @@
     - 连接覆盖机制：`-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword`（DB 集成）与 `-Pe2eDbUrl/-Pe2eDbUser/-Pe2eDbPassword`（e2e，映射成 Spring 的 `SPRING_DATASOURCE_*`）。不传时回落到「demo 的 dataSources.xml + root/root」，本机行为不变。
     - 已知坑：`mysql:8.0` 官方 tag 是 Oracle Linux 9 基底，在无 x86-64-v2 的虚机上会 `Fatal glibc error`，须用 `mysql:8.0-debian`；容器内 `LANG` 为空会让 mysql 客户端按 latin1 灌数据导致中文双编码，init 脚本首行须 `SET NAMES utf8mb4`。
     - **`dialectExternalVerify` 在 CI 上只跑代表实例子集**（2026-11-06 起 ＝ `mysql84` + `pg16` + `panwei_a` +
-      `gaussdb_kernel503` + `panwei_b`，可用 `CI_DIALECT_KEYS` 覆盖，**顺序＝挑选顺序、预算吃紧从尾部砍**）：
+      `gaussdb_kernel503`，可用 `CI_DIALECT_KEYS` 覆盖，**顺序＝挑选顺序、预算吃紧从尾部砍**）：
       全量 12 实例在 2 核 runner 上跑 91 分钟仍未完（2026-11-05 run#6 实证），根因是跨洋 RTT × 每实例
       上千次建表/查询；本地同一套矩阵 5~10 分钟。**全量矩阵以本地 `releaseGate` 为准**，CI 只留冒烟信号。
       - 2026-11-06 扩子集的原因：磐维 PanWeiDB 是 2026.11.6 的主打方言（A 模式 Oracle 兼容 / B 模式 MySQL
         兼容，用户真实形态是 `jdbc:panweidb:`）；原先进程只跑 `mysql84`+`pg16`，CI 冒烟对磐维与 GaussDB
         内核 503 零覆盖，所以本版把这两族拉进冒烟子集。
       - 预算：步骤 `timeout-minutes` 按 **Σ(每实例预算) + 8min 冷启动与收尾** 算（每实例预算＝矩阵条目
-        `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s）；按 CI 实测 4.3s/字 外推本子集，
-        Σ 预期 ≈66min、Σ 上界 70min → 步骤 90min / job 100min（原 2 实例子集是 40min / 50min）。
+        `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s）。取数用**券 A 的本机实测 × 跨洋倍率**
+        （mysql84 锚点 1116s(CI) ÷ 103.0s(本机) ≈ 10.8×）：mysql84 18.6min / pg16 3.3min（CI 实测）+
+        panwei_a ≈12.4min + gaussdb ≈36.3min ≈ **70.6min** 预期；矩阵给出显式预算时 **Σ 上界 = 6600s = 110min**
+        → 步骤 **120min** / job **130min**（2 实例子集时代是 40min / 50min）。
+        **`panwei_b` 已从子集剔除**：262 个保留字、CI 投影 ≈30min，是最贵的一条，且与 mysql84 同属 MySQL
+        协议/词表族；磐维的价值在 Oracle 兼容面，已由 `panwei_a` 覆盖。再吃紧的砍序：`gaussdb_kernel503` → `panwei_a`。
         步骤必须 ≥ Σ，否则「实例级超时按设计判红」会退化成 CI 掐断进程（没有 summary 工件、也分不清超时
         与崩溃）。**改子集或改矩阵里的实例预算都要按同一算式重算**，算式落在 workflow 的 `dialect` job 头部注释。
       - 触发与复验：nightly 是 `schedule` + `workflow_dispatch` 双触发，可手工
@@ -105,11 +109,12 @@
            + `skipReason`，摘录步按 key 原文带过来，所以 CI 不会因 rowid 假红）；但 2026-11-05 run#9 日志里
            「原矩阵 **13** 个实例」＝当时 secret 的 key 数，而本机文件今天已是 **15** 个 key —— 多出的两条正是
            磐维，**secret 大概仍是 11-05 那版**。若没同步，落盘步会对缺 key **硬抛**（整条腿红，不是静默少跑）。
-        ② 矩阵里要给 `mysql84`、`panwei_b` 显式写 `timeoutSeconds`（≥1200s；`pg16` ≥400s）：券 A 的默认
-           300s **小于** mysql84 实测 1113s，不写就会把本来会通过的实例判成 TIMEOUT。
-      - ⚠️ 口径缺口：本机矩阵的 `instances` 行目前**没有** `panwei_a`/`panwei_b`（条目在文件里、但不在
-        `instances` 列表），也就是说**本地 `releaseGate` 眼下不跑磐维**——「全量以本地为准」对磐维暂时不成立，
-        磐维的常驻覆盖只有这条 CI 冒烟。要恢复口径，需把这两个 key 加进 `instances`（本机文件由主控维护）。
+        ② 矩阵必须给**每个**实例显式写 `timeoutSeconds`：券 A 的默认 300s **小于** mysql84 实测 1113s，
+           不写就会把本来会通过的实例判成 TIMEOUT。当前取值（本机文件）：mysql84 1800 / pg16 600 /
+           panwei_a 1200 / gaussdb_kernel503 3000 / panwei_b 2400（本地用）/ 其余 600。
+      - ✅ 口径缺口已补（2026-11-06）：本机矩阵的 `instances` 行原先**没有** `panwei_a`/`panwei_b`（条目在
+        文件里、但不在 `instances` 列表），等于本地 `releaseGate` 不跑磐维。现已把两个 key 加进 `instances`，
+        本地与 CI 双向覆盖；同一批还按券 A 的实测把每个实例的 `timeoutSeconds` 补齐。
     - `e2eFakeIde` 在 CI 的额外前置：JDK8（`setup-java` 装完记录路径再恢复 JDK17）、Maven 联网（`-Pe2eMavenOffline=0`，首次冷仓库）、demo 克隆（Gitee 失败回落 GitHub 镜像）。
   - 并发纪律（2026-11-05 改）：`build-plugin.yml` 的 gate 与 release/publish **分组不同**——gate 组可被新提交取消，release/publish 组永不取消（发行不能被打断、也不允许两次发行并发覆盖同一 Release 资产）。
   - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
