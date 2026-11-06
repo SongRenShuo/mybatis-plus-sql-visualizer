@@ -1,7 +1,7 @@
 # T-JpaDeleteAnchor：JPA `delete(entity)` / `update(entity)` 调用行预览图标（2026-11-06）
 
 - 立项：2026-11-06 13:30
-- 状态：**已实施**（`0c26618b`，见 §十 实施记录）
+- 状态：**已实施并合并 master**（实现 `0c26618b`，合并 `a1f9a961`，见 §十 实施记录）
 - 目标分支：`master`
 - 来源：用户对 [T-RuntimeConcatAndDeleteNull](20261106-1255-T-RuntimeConcatAndDeleteNull-运行时SQL拼接占位与Mapper空Wrapper删除预览缺失-开发计划.md) 的补充意见——「是否顺带让 JPA `repository.delete(entity)` 也有图标，可以单独立项」
 - 依赖：与 T-RuntimeConcatAndDeleteNull 的 R4 都改 `WrapperAnchorDetector`，两券必须串行或同批合流；本券不改变 MP 侧的锚点/注册表

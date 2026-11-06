@@ -1,8 +1,8 @@
 # T-RuntimeConcatAndDeleteNull：运行期拼接占位破坏 SQL 与 `delete(null)` 无预览（2026-11-06）
 
 - 立项：2026-11-06 12:55
-- 状态：**已实施**，集成分支 `t-runtime-write-integration` 待合并 master——R1/R2/R3 `53de1ee4`、R4 `6fbc763b`、JPA 券 `0c26618b`；合流回归修复与最终读数见 §十三 13.6
-- 目标分支：`master`（实施在集成分支 `t-runtime-write-integration`，按用户要求暂不合 master）
+- 状态：**已实施并合并 master**（合并提交 `a1f9a961`）——R1/R2/R3 `53de1ee4`、R4 `6fbc763b`、JPA 券 `0c26618b`；合流回归修复 `94413ed9`，集成分支 9 类定向 171/0/0/0
+- 目标分支：`master`（已合入；按用户要求实施期间走独立分支与工作树）
 - 来源：用户两条反馈 + 两张截图
   1. 「运行时的数据查询sql拼接的有问题」——`GBAreaCalpointCodeServiceImpl.getAreaPowerGeneration()` 的 InfluxDB SQL 预览里出现 Java 三元表达式原文与悬空 `*/`，`WHERE (...)` 的右括号丢失；
   2. 「这种调用没 sql 预览图标 `deviceInfoMapper.delete(null)`，而 `deviceInfoMapper.delete(new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1))` 就可以」
