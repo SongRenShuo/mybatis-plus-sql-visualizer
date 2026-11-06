@@ -270,6 +270,27 @@ class XmlPreviewModelTest {
         assertTrue("求值成功不应记错误：${rendered.errors}", rendered.errors.isEmpty())
     }
 
+    @Test
+    fun `超长整数bind面值_模型构建与渲染降级不抛`() {
+        // T-SAF-19（Ognl.kt@parse-exception-confinement）：修复前 XmlPreviewModel.from →
+        // collectExpressionPaths → OgnlEvaluator.parse 对 20+ 位面值抛未捕获 NumberFormatException，
+        // 模型构建直接炸穿（本文件与 renderSql 链路均无 try/catch）；修复后 parse 收敛为
+        // ParseResult.Err → rootPaths 返回空集，渲染走 bind 求值 Err 降级并记 errors 行
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="x" value="99999999999999999999"/>
+                SELECT * FROM t WHERE id = #{x}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val rendered = m.renderSql()
+        assertTrue(
+            "bind 求值失败应留下可见错误：${rendered.errors}",
+            rendered.errors.any { it.contains("无法解析 bind 表达式") },
+        )
+    }
+
     // ------------------------------------------------------------------
     // T-ExprAstPrecheck T-EP-03：条件行支持面预检标注
     // ------------------------------------------------------------------
