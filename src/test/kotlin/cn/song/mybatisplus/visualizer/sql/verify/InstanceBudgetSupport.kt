@@ -208,6 +208,14 @@ object InstanceBudgetSupport {
         val timedOut = mutableListOf<String>()
         val failed = mutableListOf<String>()
 
+        /**
+         * 记账（可并发调用）。
+         *
+         * T-DialectSweepSpeed（2026-11-06）：实例并行后，若调用方选择「完成即记账」就会并发写这四个桶；
+         * 加锁让本类自身线程安全，落桶口径不变。**输出顺序仍由调用方保证按 `instances` 声明顺序记账**
+         * ——[allLines] 是「桶序 + 桶内记账序」，锁不会替它排序。
+         */
+        @Synchronized
         fun record(result: InstanceResult, optional: Boolean) {
             val line = lineOf(result, optional)
             when (bucketOf(result, optional)) {

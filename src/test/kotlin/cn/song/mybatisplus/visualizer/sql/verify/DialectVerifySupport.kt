@@ -333,69 +333,156 @@ object DialectVerifySupport {
         }
     }
 
+    /** 多语句探测结论（[supported] = 分号分隔的多语句被接受**且每条都真的执行**）。 */
+    data class BatchProbe(val supported: Boolean, val evidence: String)
+
+    /** 多语句探测表（一次性，探测完即删；与保留字探测表分开，互不影响）。 */
+    private const val BATCH_PROBE_TABLE = "mpv_batch_probe"
+
+    /**
+     * 探测引擎是否接受「分号分隔的多语句」**且每条都真的执行**（T-DialectSweepSpeed，2026-11-06）。
+     *
+     * 只判「有没有抛异常」不够：部分驱动会在分号处**静默截断**、只执行第一条而不报错，那样批处理会让
+     * 后面几条悄悄不执行——扫描照旧全绿，覆盖已经掉了。所以探测用「CREATE + INSERT 两条，再单独
+     * SELECT 数行」：读到 1 行才证明第二条真的生效；0 行 = 被截断，按不支持处理（宁可少省往返，不可假绿）。
+     *
+     * 探测本身也顺带产出 P-3 的读数：引擎拒绝时把它的原话首行带出来（记进 summary 明细，见
+     * [sweepReservedWords] 的 `notes`），「不支持」因此可审计，而不是靠猜。
+     */
+    fun probeMultiStatement(connection: Connection): BatchProbe {
+        runCatching { exec(connection, "DROP TABLE $BATCH_PROBE_TABLE") }
+        return try {
+            execBatch(
+                connection,
+                "CREATE TABLE $BATCH_PROBE_TABLE (id INT PRIMARY KEY); " +
+                    "INSERT INTO $BATCH_PROBE_TABLE (id) VALUES (7)",
+            )
+            val rows = exec(connection, "SELECT id FROM $BATCH_PROBE_TABLE")
+            if (rows == 1) {
+                BatchProbe(true, "多语句受支持且两条都生效")
+            } else {
+                BatchProbe(false, "多语句只生效了第一条（期望 1 行，实得 $rows 行）")
+            }
+        } catch (e: Exception) {
+            BatchProbe(false, "引擎拒绝多语句：${e.message?.lineSequence()?.firstOrNull()}")
+        } finally {
+            runCatching { exec(connection, "DROP TABLE $BATCH_PROBE_TABLE") }
+        }
+    }
+
     /**
      * 保留字扫描：对 [words] 中每个词构造「插件渲染的 SELECT + INSERT + UPDATE + UPSERT」
      * 并在引擎上执行（列名经 dialect.quoteIfKeyword 包裹）。
      * UPSERT 执行遵循 [spec.upsertMode]：SKIP = 引擎不支持该方言的 upsert 形态则跳过该步
      * （如 H2 各模式均不支持 PG 的 `ON CONFLICT DO UPDATE`——该形态由 Docker 真 PG 覆盖）。
      * 返回失败明细（词 → 异常首行），空列表 = 全部通过。
+     *
+     * 往返压缩（T-DialectSweepSpeed，2026-11-06；判据与覆盖口径一字未改）：
+     *  1. **去掉每词预备 DROP**：表名按词序唯一（`kw_probe_<idx>`），只在本词 `finally` 收尾时删。
+     *     唯一表名也挡不住「同轮重跑/上一轮崩溃」的同名残留，所以 `CREATE` 失败时 DROP 后**重试一次**
+     *     （只在失败路径多一个往返）。逐词往返 8 → 7。
+     *  2. **四条渲染 DML 合成一次执行**：探测通过时把 SELECT / INSERT(带参) / UPDATE / UPSERT(带参)
+     *     以分号拼接成一次 `execute`（参数按面板回填形态内联成字面量），逐词往返 7 → 4。
+     *     批处理失败即**清表重建后按逐条 `?` 绑定重跑**，拿到该词精确明细（批内已部分生效时直接续跑，
+     *     会把「主键已存在」误记成该词的失败，故必须重建）；若逐条重跑通过，说明是批处理形态不被接受，
+     *     该词照 PASS 记账、后续词回退逐条，并把降级写进 [notes]。
+     *
+     * @param notes 可选诊断出口：追加 `batch=on` / `batch=off(<引擎原话>)` / `batch=degraded(<原因>)`，
+     *              供真机矩阵把「这轮批处理到底生效没有」写进 summary——省了多少往返必须能取证。
      */
-    fun sweepReservedWords(connection: Connection, spec: EngineSpec, words: Collection<String>): List<String> {
-        val dialect = spec.dialect
+    fun sweepReservedWords(
+        connection: Connection,
+        spec: EngineSpec,
+        words: Collection<String>,
+        notes: MutableList<String>? = null,
+    ): List<String> {
+        val probe = probeMultiStatement(connection)
+        var batchEnabled = probe.supported
+        notes?.add(if (probe.supported) "batch=on" else "batch=off(${probe.evidence})")
+
         val failures = mutableListOf<String>()
-        for (word in words) {
-            val table = "kw_probe"
-            val kwTable = TableInfo(
-                entityClassName = "KwEntity",
-                tableName = table,
-                columns = listOf(ColumnInfo("id", "id", isId = true), ColumnInfo(word, word)),
-            )
+        words.forEachIndexed { index, word ->
             try {
-                // 夹具 DDL：方言引用符号包裹保留字列（与插件渲染的引用一致）；DROP 兼容无 IF EXISTS 引擎
-                runCatching { exec(connection, "DROP TABLE $table") }
-                exec(connection, "CREATE TABLE $table (id INT PRIMARY KEY, ${dialect.quoteIdentifier(word)} INT)")
-                exec(connection, "INSERT INTO $table (id, ${dialect.quoteIdentifier(word)}) VALUES (1, 1)")
+                val batchedOk = sweepOneWord(connection, spec, word, "kw_probe_$index", batchEnabled)
+                if (batchEnabled && !batchedOk) {
+                    batchEnabled = false
+                    // 「批处理失败但逐条通过」不是该词的缺陷：插件渲染 SQL 是好的，不被接受的是批处理形态
+                    notes?.add("batch=degraded(批处理执行失败、逐条通过，后续词回退逐条)")
+                }
+            } catch (e: Exception) {
+                failures.add("$word -> ${e.message?.lineSequence()?.firstOrNull()}")
+            }
+        }
+        return failures
+    }
 
-                // 插件渲染：SELECT（WHERE + LIMIT）
-                val select = SqlGenerator.generate(
-                    SelectStatement(
-                        table = kwTable,
-                        selectColumns = listOf(ColumnRef(columnName = word)),
-                        conditions = listOf(Condition.Simple(ColumnRef(columnName = word), "=", SqlValue.Literal("1"))),
-                        limit = LimitClause(count = SqlValue.Literal("10")),
-                    ),
-                    compact = false,
-                    dialect = dialect,
-                )
-                exec(connection, select)
+    /**
+     * 单个保留字（一轮 1 张唯一表）。
+     *
+     * @return true = 走批处理且成功；false = 走逐条（或批处理失败后回退到逐条），本词本身无失败。
+     * @throws Exception 该词在引擎上确实执行失败（异常首行即失败明细）。
+     */
+    private fun sweepOneWord(
+        connection: Connection,
+        spec: EngineSpec,
+        word: String,
+        table: String,
+        batchEnabled: Boolean,
+    ): Boolean {
+        val dialect = spec.dialect
+        val quoted = dialect.quoteIdentifier(word)
+        val kwTable = TableInfo(
+            entityClassName = "KwEntity",
+            tableName = table,
+            columns = listOf(ColumnInfo("id", "id", isId = true), ColumnInfo(word, word)),
+        )
+        // 夹具 DDL：方言引用符号包裹保留字列（与插件渲染的引用一致）
+        val ddl = "CREATE TABLE $table (id INT PRIMARY KEY, $quoted INT)"
+        val seed = "INSERT INTO $table (id, $quoted) VALUES (1, 1)"
+        createWithRetry(connection, table, ddl)
+        try {
+            exec(connection, seed)
 
-                // 插件渲染：INSERT 模板（全列，`?` 绑定）
-                val insert = BatchModel(
-                    kind = BatchKind.INSERT,
-                    tableName = table,
-                    toggleColumns = listOf(
-                        BatchColumn("id", "entity.id", quote = null, checked = true),
-                        BatchColumn(word, "entity.$word", quote = null, checked = true),
-                    ),
-                    dialect = dialect,
-                ).renderSql(setOf("id", word))
-                execParams(connection, insert, listOf(50, 1))
+            // 插件渲染：SELECT（WHERE + LIMIT）
+            val select = SqlGenerator.generate(
+                SelectStatement(
+                    table = kwTable,
+                    selectColumns = listOf(ColumnRef(columnName = word)),
+                    conditions = listOf(Condition.Simple(ColumnRef(columnName = word), "=", SqlValue.Literal("1"))),
+                    limit = LimitClause(count = SqlValue.Literal("10")),
+                ),
+                compact = false,
+                dialect = dialect,
+            )
+            // 插件渲染：INSERT 模板（全列，`?` 绑定）
+            val insert = BatchModel(
+                kind = BatchKind.INSERT,
+                tableName = table,
+                toggleColumns = listOf(
+                    BatchColumn("id", "entity.id", quote = null, checked = true),
+                    BatchColumn(word, "entity.$word", quote = null, checked = true),
+                ),
+                dialect = dialect,
+            ).renderSql(setOf("id", word))
+            // 插件渲染：UPDATE（SET 保留字列）
+            val update = SqlGenerator.generate(
+                UpdateStatement(
+                    table = kwTable,
+                    sets = listOf(SetClause(column = ColumnRef(columnName = word), value = SqlValue.Literal("2"))),
+                    conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+                ),
+                compact = false,
+                dialect = dialect,
+            )
+            val statements = mutableListOf(
+                SweepStatement(select, emptyList()),
+                SweepStatement(insert, listOf(50, 1)),
+                SweepStatement(update, emptyList()),
+            )
 
-                // 插件渲染：UPDATE（SET 保留字列）
-                val update = SqlGenerator.generate(
-                    UpdateStatement(
-                        table = kwTable,
-                        sets = listOf(SetClause(column = ColumnRef(columnName = word), value = SqlValue.Literal("2"))),
-                        conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-                    ),
-                    compact = false,
-                    dialect = dialect,
-                )
-                exec(connection, update)
-
-                // 插件渲染：UPSERT（冲突键 = id；保留字列进更新列表——EXCLUDED./VALUES()/MERGE 引用路径）
-                // SKIP：引擎不支持该方言 upsert 形态（PG@H2 的 ON CONFLICT DO UPDATE）→ 跳过该步
-                if (spec.upsertMode == UpsertMode.SKIP) continue
+            // 插件渲染：UPSERT（冲突键 = id；保留字列进更新列表——EXCLUDED./VALUES()/MERGE 引用路径）
+            // SKIP：引擎不支持该方言 upsert 形态（PG@H2 的 ON CONFLICT DO UPDATE）→ 跳过该步
+            if (spec.upsertMode != UpsertMode.SKIP) {
                 val upsert = BatchModel(
                     kind = BatchKind.UPSERT,
                     tableName = table,
@@ -406,20 +493,83 @@ object DialectVerifySupport {
                     conflictColumn = "id",
                     dialect = dialect,
                 ).renderSql(setOf("id", word))
-                if (upsert.startsWith("INSERT") && !upsert.contains("ON ")) {
+                val values = if (upsert.startsWith("INSERT") && !upsert.contains("ON ")) {
                     // 降级纯 INSERT（Oracle/SQL Server/DM）：id=1 已存在 → 用新主键
-                    execParams(connection, upsert, listOf(60, 2))
+                    listOf(60, 2)
                 } else {
                     // 原生 upsert：id=1 冲突 → 更新分支（VALUES()/EXCLUDED./MERGE KEY 引用保留字列）
-                    execParams(connection, upsert, listOf(1, 2))
+                    listOf(1, 2)
                 }
-            } catch (e: Exception) {
-                failures.add("$word -> ${e.message?.lineSequence()?.firstOrNull()}")
-            } finally {
-                runCatching { exec(connection, "DROP TABLE $table") }
+                statements += SweepStatement(upsert, values)
             }
+
+            if (!batchEnabled) {
+                statements.forEach { runSweepStatement(connection, it) }
+                return false
+            }
+
+            val batched = runCatching { execBatch(connection, mergeStatements(statements)) }
+            if (batched.isSuccess) return true
+
+            // 批处理失败 → 清表重建再逐条重跑：批内可能已部分生效（如 INSERT 成功、UPDATE 失败），
+            // 直接续跑会把「主键已存在」记成该词失败，读数就成了假的。
+            runCatching { exec(connection, "DROP TABLE $table") }
+            createWithRetry(connection, table, ddl)
+            exec(connection, seed)
+            statements.forEach { runSweepStatement(connection, it) }
+            return false
+        } finally {
+            runCatching { exec(connection, "DROP TABLE $table") }
         }
-        return failures
+    }
+
+    /** 一条待执行的渲染语句（[params] 非空即带 `?` 占位，逐条路径走 PreparedStatement 绑定）。 */
+    private class SweepStatement(val sql: String, val params: List<Any?>)
+
+    private fun runSweepStatement(connection: Connection, statement: SweepStatement) {
+        if (statement.params.isEmpty()) exec(connection, statement.sql)
+        else execParams(connection, statement.sql, statement.params)
+    }
+
+    /**
+     * 把多条语句拼成一次执行（参数内联成字面量——对齐面板「参数回填后执行」的形态）。
+     *
+     * 占位符个数与参数个数不一致时直接抛错（→ 调用方回退逐条），不做「猜着填」。
+     */
+    private fun mergeStatements(statements: List<SweepStatement>): String =
+        statements.joinToString("; ") { inlineParams(it.sql, it.params) }
+
+    private fun inlineParams(sql: String, values: List<Any?>): String {
+        if (values.isEmpty()) {
+            require(!sql.contains('?')) { "批处理拼接：无参数语句里出现 `?`（无法内联）" }
+            return sql
+        }
+        val expected = sql.count { it == '?' }
+        require(expected == values.size) { "批处理拼接：占位符 $expected 个、参数 ${values.size} 个，无法内联" }
+        val out = StringBuilder(sql.length + 32)
+        var next = 0
+        sql.forEach { ch ->
+            if (ch == '?') out.append(sqlLiteral(values[next++])) else out.append(ch)
+        }
+        return out.toString()
+    }
+
+    /** 字面量化（只用于扫描套件的中小整数与短字符串；null → NULL）。 */
+    private fun sqlLiteral(value: Any?): String = when (value) {
+        null -> "NULL"
+        is Number -> value.toString()
+        is Boolean -> if (value) "1" else "0"
+        else -> "'" + value.toString().replace("'", "''") + "'"
+    }
+
+    /** 建表：失败时清掉同名残留后重试一次（唯一表名也可能撞上一轮崩溃的残留）。 */
+    private fun createWithRetry(connection: Connection, table: String, ddl: String) {
+        try {
+            exec(connection, ddl)
+        } catch (_: Exception) {
+            runCatching { exec(connection, "DROP TABLE $table") }
+            exec(connection, ddl)
+        }
     }
 
     /**
@@ -489,5 +639,31 @@ object DialectVerifySupport {
                 while (rs.next()) n++
                 n
             }
+        }
+
+    /**
+     * 执行「分号分隔的多语句」（一次往返）。
+     *
+     * 结果集在这里不是断言对象，但必须**读干净**：不消费的游标会让部分驱动把连接留在半开状态，
+     * 后续 DROP 就会撞上「上一个结果集还没关」这类与目标无关的报错。
+     *
+     * drain **不吞异常**：部分驱动（SQL Server 实测形态）把后续语句的错误留到 `getMoreResults()` 才抛，
+     * 吞掉就等于把「第二条其实失败了」读成成功（假绿）。抛出去 → 调用方回退逐条，代价是往返，
+     * 换来的是不会漏判。
+     */
+    fun execBatch(connection: Connection, sql: String): Int =
+        connection.createStatement().use { st ->
+            st.execute(sql)
+            var isResultSet = true
+            var guard = 0
+            while (guard++ < 64) {
+                if (isResultSet) {
+                    st.getResultSet()?.use { rs -> while (rs.next()) Unit }
+                } else if (st.updateCount == -1) {
+                    break
+                }
+                isResultSet = st.getMoreResults()
+            }
+            -1
         }
 }
