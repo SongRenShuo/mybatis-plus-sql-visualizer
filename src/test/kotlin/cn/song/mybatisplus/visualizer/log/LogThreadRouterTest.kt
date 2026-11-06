@@ -106,6 +106,36 @@ class LogThreadRouterTest {
         assertEquals(0, r.bucketCount())
     }
 
+    // ---------- T-SAF-22（log.threadrouter.unbounded-nonidle-bucket-retention）：挂起桶老化 ----------
+
+    /**
+     * 非空闲但静默超阈值的桶必须可被淘汰（淘汰资格不再只有 isIdle）。
+     *
+     * 复现证据（NEEDS-VALIDATION #22）：修复前 evictIdle 只打 isIdle 桶，而 isIdle 要求
+     * pendingSql == null——每条未闭合语句（有 Preparing 无 Parameters）的桶永久在册，
+     * 64 上限形同虚设，10000 个唯一线程 token 把桶数推到 10000（本断言转红，且每桶
+     * 至多滞留 20k 字符 pendingSql + 原始行）；修复后非空闲桶静默超阈值即老化淘汰，桶数有界。
+     */
+    @Test
+    fun `非空闲桶静默超阈值后被淘汰`() {
+        var now = 1_000_000L
+        val r = LogThreadRouter(
+            factory = { Bucket() },
+            isCollecting = { it.waiting },
+            isIdle = { it.idle },
+            maxBuckets = 64,
+            clock = { now },
+        )
+        repeat(10_000) { i ->
+            now += 61_000L // 每桶此后静默 61s（> 60s 老化阈值）
+            r.bucketFor("2026-09-16 10:00:00.000 DEBUG [t-$i] x - a").apply { idle = false }
+        }
+        assertTrue(
+            "桶数须有界（修复前增长到 10000，64 上限被 isIdle 判据废掉）",
+            r.bucketCount() <= 64,
+        )
+    }
+
     // ---------- 日志行判定 ----------
 
     @Test
