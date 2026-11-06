@@ -549,6 +549,13 @@ tasks.register<Test>("dialectExternalVerify") {
     // 每轮真跑：实例侧数据会被套件自行清理，但任务本身无源码变更时会被判 UP-TO-DATE，
     // 读旧 XML 等于拿上一轮读数冒充本轮（与 testExternal 同款理由）
     outputs.upToDateWhen { false }
+    // 与 tasks.test 同口径：-Dmpvs.* 透传到测试 JVM。
+    // 券 A 实测（T-MatrixInstanceTimeout，2026-11-06）：不带这段时 `-Dmpvs.external.instanceTimeout`
+    // 被静默忽略——实例预算只认矩阵条目的 `timeoutSeconds`，而计划册/模板把它列为系统属性通道，
+    // 属「文档写了但没接线」。扫描放两条显式 systemProperty 之前：矩阵/摘要路径仍由构建配置定。
+    System.getProperties().forEach { (k, v) ->
+        if (k is String && k.startsWith("mpvs.") && v is String) systemProperty(k, v)
+    }
     systemProperty("mpvs.external.matrix", dialectExternalMatrixPath)
     systemProperty(
         "mpvs.external.summary",

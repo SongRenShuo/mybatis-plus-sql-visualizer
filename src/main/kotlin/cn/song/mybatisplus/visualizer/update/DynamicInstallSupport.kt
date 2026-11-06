@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.update
 
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.TransactionGuard
@@ -24,9 +25,16 @@ import javax.swing.JComponent
  *   `allowLoadUnloadWithoutRestart(descriptor): Boolean`（243/262）→ 缺失时用
  *   `validateCanUnloadWithoutRestart(descriptor): String?`（非空=不可卸载原因）或
  *   `checkCanUnloadWithoutRestart(descriptor): Boolean`（262/263）。243 的 check 同名但返回
- *   **String**，故解析必须连返回类型一起判，见 [resolveUnloadGate]。预检覆盖 EP dynamic 属性（本插件注册的 EP 全部落在平台声明
- *   `dynamic="true"` 的点位上，由 `DynamicEpComplianceGuardTest` 守卫，新增 EP 若落在非 dynamic
- *   点位即红）、`ide.dynamicPluginVetoer`、依赖插件图；
+ *   **String**，故解析必须连返回类型一起判，见 [resolveUnloadGate]。预检同时覆盖
+ *   `ide.dynamicPluginVetoer` 与依赖插件图；
+ *
+ *   ⚠️ **EP dynamic 属性本身会挡住热卸载（2026-11-06 实证）**：本插件在
+ *   `META-INF/database-optional.xml` 里为四个自注册方言（DM / GaussDB / HighGo / Vastbase）
+ *   扩展了 `com.intellij.sql.dialect`，该 EP 在 **243 上非动态**（253/263 起平台才标
+ *   `dynamic="true"`）。于是 243 上平台必然拒绝卸载本插件：日志里 `DynamicPlugins` 会写
+ *   `is not unload-safe because of extension to non-dynamic EP …`，更新只能走「重启生效」。
+ *   事实表、取证方法与平台版本分界见 [PlatformEpDynamism]；本仓描述文件的静态守卫见
+ *   `DynamicEpComplianceGuardTest`。
  * - `DynamicPlugins.unloadPlugin(descriptor)`：运行期卸载旧版（两平台 public，内部走 EDT write action）；
  * - `PluginInstaller.installAndLoadDynamicPlugin(Path, JComponent?, descriptor)`：解包 + 动态装载新版
  *   （两平台 public；双端反编译实证 descriptor 参数仅用于进度标题/日志/fireState，解包布局由 zip
@@ -85,11 +93,7 @@ object DynamicInstallSupport {
         //    此处主要防 vetoer/依赖图否决；Validate 族会给出平台原话，直接进日志（T-DynUpdate263）
         val gate = api.evaluateUnloadGate(current)
         if (!gate.allowed) {
-            return fallbackToRestartScript(
-                zip,
-                "dynamic unload rejected by platform (family=${api.unloadGateFamily}): " +
-                    (gate.reason ?: "platform gave no reason"),
-            )
+            return fallbackToRestartScript(zip, describeUnloadRefusal(api.unloadGateFamily, gate.reason))
         }
 
         // 6. 新版描述（仅作 installAndLoadDynamicPlugin 的日志/状态广播参数，见类 KDoc）
@@ -110,6 +114,30 @@ object DynamicInstallSupport {
     private fun fallbackToRestartScript(zip: Path, reason: String): PluginUpdateRunner.InstallResult {
         LOG.info("dynamic install not applicable — falling back to restart script: $reason")
         return PlatformPluginInstaller.installRestartScript(zip)
+    }
+
+    /**
+     * 把「平台拒绝卸载」翻译成**可查**原因。
+     *
+     * VALIDATE 族会带平台原话，直接采用；ALLOW/CHECK 族只返回 boolean、平台不给原因字符串——
+     * 这时用 [PlatformEpDynamism] 的确定事实补位（非动态 EP + 平台版本分界），再不命中才回落
+     * 「平台未给原因 + idea.log 指路」。**不再写「platform gave no reason」了事**：2026-11-06 真机里
+     * 平台上一行就写了确切 EP（`is not unload-safe because of extension to non-dynamic EP …`），
+     * 我们却把它丢了，定位多绕了一轮。
+     */
+    private fun describeUnloadRefusal(family: String, platformReason: String?): String {
+        val explicit = platformReason?.takeIf { it.isNotBlank() }
+        val known = runCatching {
+            PlatformEpDynamism.refusalExplanation(ApplicationInfo.getInstance().build.baselineVersion)
+        }.getOrNull()
+        val head = "dynamic unload rejected by platform (family=$family)"
+        return when {
+            explicit != null -> "$head: $explicit" + (known?.let { "；另：$it" } ?: "")
+            known != null -> "$head: 平台未返回原因，已定位到确定原因——$known" +
+                "（平台在同一次 idea.log 里会打 `is not unload-safe because of extension to non-dynamic EP …`）"
+            else -> "$head: 平台未返回原因；在 idea.log 里 grep `is not unload-safe` 可拿到确切项" +
+                "（本插件声明的 EP 与平台版本分界见 PlatformEpDynamism）"
+        }
     }
 
     // ------------------------------------------------------------------
