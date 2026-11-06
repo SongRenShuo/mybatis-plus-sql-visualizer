@@ -76,6 +76,33 @@ system/p05pass 以脚本环境变量为准）。
 `DmJdbcDriver18.jar` / `kingbase8.jar` 装进本地 maven 仓库或直接放入测试 classpath；
 未配置驱动时该命令会在建连阶段报 `No suitable driver`——属环境缺失而非用例失败。
 
+## 内存基线（2026-11-06 采集，2026-11-07 收缩后更新）
+
+测试机「不大-北京-16G」（`103.36.220.245`）在 16GB 物理内存上跑 12 个数据库容器。
+**新增库照此给预算：容器 cap ≈ 该引擎实测常驻的 1.5~2×，且必须同步压 DB 内部参数**（只压 cap 会 OOM-kill）。
+完整作业法见 `.agents/skills/db-env-provisioning/SKILL.md` §2.5。
+
+| 容器 | 引擎 | cap | 关键内部参数 |
+|---|---|---|---|
+| xc3-oceanbase | OceanBase | 5.5 GiB | `memory_limit=5G`、test unit `MEMORY_SIZE=2G` |
+| xc3-oracle-free | Oracle 26ai Free | 2.5 GiB | `sga_max_size=512M`、`pga_aggregate_target=256M` |
+| panweidb-ora | 磐维 A 模式 | 1.5 GiB | `shared_buffers=256MB`、`cstore_buffers=128MB`、`bulk_write_ring_size=512MB`、`max_connections=200` |
+| panweidb-test | 磐维 B 模式 | 1.5 GiB | `shared_buffers=384MB`、`cstore_buffers=128MB`、`bulk_write_ring_size=512MB`、`max_connections=200` |
+| xc3-mssql | SQL Server 2022 | 1.5 GiB | `max server memory=512MB` |
+| xc3-vastbase | Vastbase | 1.5 GiB | `shared_buffers=256MB`、`cstore_buffers=128MB` |
+| xc3-gaussdb-kernel503 | GaussDB Kernel 503 | 1.5 GiB | `shared_buffers=32MB`（保持） |
+| xc3-opengauss | openGauss | 1 GiB | `shared_buffers=256MB` |
+| xc3-mysql8 | MySQL 8.0.46 | 768 MiB | `innodb_buffer_pool_size=128MB` |
+| xc3-vastbase-b | Vastbase | 1 GiB | `shared_buffers=256MB`、`cstore_buffers=128MB` |
+| xc3-mariadb | MariaDB 10.11 | 512 MiB | `innodb_buffer_pool_size=128MB` |
+| xc3-highgo | HighGo 6.0.1 | 512 MiB | `shared_buffers=128MB`（保持） |
+
+宿主另有 4GB swap（`/swapfile`，`vm.swappiness=10`）。治理前后：`available` 775MB → 3265MB，
+容器 cap 合计 41 GiB → 19.25 GiB。回退命令见
+`docs/经验总结/20261107-0030-测试服务器数据库容器内存收缩与过载治理-经验总结.md` §六。
+
+> 注意：`docker stats` 的 MemUsage 含 page cache，判断「还能压多少」要看 cgroup `memory.stat` 的 `anon`。
+
 ## 验证状态台账（诚实口径）
 
 | 环节 | 状态 |

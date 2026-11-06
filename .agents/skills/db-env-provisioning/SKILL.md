@@ -265,6 +265,130 @@ sed -i "/^listen_addresses/c\\listen_addresses = 'localhost,${ip}'" /database/pa
   ≈ 5057MB` 时直接 `FATAL: the values of memory out of limit`。想省内存就压 `shared_buffers`
   （1GB→256MB，实测常驻 RSS 从 1.42GB 降到 0.9GB），`max_process_memory` 抬到 8GB 即可（它是记账上限，不是预占）。
 
+## 2.5 内存预算与过载治理（2026-11-07 实录）
+
+靶机 16GB 物理内存上跑 12 个数据库容器时，「容器上限合计 41GiB」不是预留但**任一个失控都能吃干主机**；
+本轮实测 `available` 只剩 775MB、swap 为 0，一次峰值就是 OOM-kill。治理按「swap → 容器 cap → DB 内部参数」
+三步走，缺一步都不算做完。
+
+### 定 cap 的规则
+
+`cap ≈ 实测峰值的 1.5~2×`，且**必须高于进程的 anon 常驻**（`docker stats` 的 MemUsage 含 page cache，
+不可回收的 anon 才是硬地板，见下）。本轮 12 个容器（容器名 / 改前实测 / 旧 cap / 新 cap）：
+
+| 容器 | 改前实测 | 旧 cap | 新 cap | 备注 |
+|---|---|---|---|---|
+| xc3-oceanbase | 4.39 GiB | 8 GiB | 5.5 GiB | anon 硬地板 4.21GiB，压到 4GiB 会立刻 OOM |
+| xc3-oracle-free | 2.17 GiB | 4 GiB | 2.5 GiB | 压 SGA 后实际降到 0.95GiB |
+| panweidb-ora | 1.14 GiB | 3 GiB | 1.5 GiB | 压 `max_connections` 后 0.49GiB |
+| panweidb-test | 1.08 GiB | 4 GiB | 1.5 GiB | 同上 0.49GiB |
+| xc3-mssql | 1.02 GiB | 2 GiB | 1.5 GiB | `max server memory` 768MB 后仍 1.0GiB |
+| xc3-vastbase | 724 MiB | 4 GiB | 1.5 GiB | 改后 533MiB |
+| xc3-gaussdb-kernel503 | 647 MiB | 4 GiB | 1.5 GiB | 改后 639MiB |
+| xc3-opengauss | 589 MiB | 4 GiB | 1 GiB | 改后 469MiB |
+| xc3-mysql8 | 371 MiB | 1 GiB | 768 MiB | |
+| xc3-vastbase-b | 219 MiB → 改后 593 MiB | 2 GiB | 1 GiB | 重启后实测反涨，**按改后值定**，512MiB 会不够 |
+| xc3-mariadb | 193 MiB | 2 GiB | 512 MiB | |
+| xc3-highgo | 45 MiB | 3 GiB | 512 MiB | 反向验证用这个容器 |
+
+改 cap 一律 `docker update --memory <新值> --memory-swap <新值> <容器>`（`--memory-swap` 必须 ≥ `--memory`，
+与 memory 相等表示不给额外 swap）。**一次改一个，改完立刻 `docker inspect` 复核 + `docker ps` 看是否 Up**，
+异常就按回退表恢复原值再继续。
+
+### cap 不是全部：必须同步压 DB 内部参数
+
+容器 cap 只是外框，DB 内部参数才是它「想用多少」。只压 cap 不压参数，等于让容器被自己的 DB 撑到 OOM-kill。
+
+| 引擎 | 参数 | 建议值 | 改法 |
+|---|---|---|---|
+| OceanBase | `memory_limit` | 按 `sum(unit MEMORY_SIZE) + system_memory` 定，本轮 6G→5G | 在线 `ALTER SYSTEM`；但**先压 unit**，见下 |
+| OceanBase | 租户 `MEMORY_SIZE` | 3G→2G（`ALTER RESOURCE UNIT <unit> MEMORY_SIZE='2048M'`） | 在线；2G 是下限之一 |
+| openGauss 族（磐维 / GaussDB / Vastbase / openGauss） | `shared_buffers` | 256~384MB | 改 conf + **重启** |
+| openGauss 族 | `cstore_buffers` | 512MB→128MB（列存，测试库基本不用） | 改 conf + **重启** |
+| 磐维 PanWeiDB | `bulk_write_ring_size` | 2GB→512MB | 改 conf + **重启** |
+| 磐维 PanWeiDB | `max_connections` | 3000→200（**实测常驻从 950MiB 降到 500MiB**） | 改 conf + **重启** |
+| Oracle | `sga_max_size` / `sga_target` / `pga_aggregate_target` | 512M / 512M / 256M | `sga_target`/`pga` 可在线；`sga_max_size` 只能 `scope=spfile` + 重启才真正释放 |
+| SQL Server | `max server memory (MB)` | 512~1024 | 在线改；**改小不会归还内存，必须重启容器才生效** |
+| MySQL / MariaDB | `innodb_buffer_pool_size` | 128~256MB | 在线 `SET GLOBAL` + 写 conf |
+
+OceanBase 的两个坑：①`memory_limit` 不能低于 `sum(unit MEMORY_SIZE) + system_memory`，直接 `ALTER` 会报
+`ERROR 4147 Invalid config`，要先把租户 unit 压下来；②unit 有 `__min_full_resource_pool_memory` 下限
+（本机 bootstrap 写死 2GB，`ALTER SYSTEM` 改不动），所以单租户压不到 2GB 以下；③`ALTER RESOURCE UNIT`
+不接受 `'1.5G'` 这类小数（`Parse error`），用整数 `1536M`；④unit 压太狠会触发
+`The memory of memstore needs to be less than 90% of the new memory ... shrink is not supported`，
+先看 `GV$OB_MEMSTORE` 的 `memstore_used` 再决定压到多少。即使压了 `memory_limit`，observer 的 anon 常驻
+也**不会立即释放**（本轮 6G→5G 后 anon 纹丝不动在 4.21GiB），定 cap 要照 anon 而不是照 memory_limit。
+
+### 哪些改法在线、哪些要重启
+
+- **在线**：OceanBase（`ALTER SYSTEM` / `ALTER RESOURCE UNIT`）、MySQL/MariaDB（`SET GLOBAL`）、
+  Oracle 的 `sga_target`/`pga_aggregate_target`。
+- **在线改但必须重启才真释放**：SQL Server 的 `max server memory`——`sp_configure` + `RECONFIGURE` 报成功，
+  cgroup anon 却纹丝不动（本轮 991MB 停在原地，`DBCC DROPCLEANBUFFERS`/`FREEPROCCACHE` 也没用），
+  重启容器后才降到 633MB。
+- **必须重启**：openGauss 族的 `shared_buffers`/`cstore_buffers`、Oracle 的 `sga_max_size`。openGauss 族重启
+  实测 20~40 秒停机；Oracle Free 约 1 分钟。**重启窗口内先确认没有别人在跑方言矩阵**。
+- 磐维容器重启后 `gs_ctl` 可能因残留的**空 `postmaster.pid`** 报 `invalid data in PID file`，删掉再
+  `docker exec <c> su - omm -c 'gs_ctl start'` 即可；直接 `docker exec -u omm ... gs_ctl start` 会因缺少
+  `GAUSSHOME` 报 `Get environment of GAUSSHOME failed`，**必须走 `su - omm`**。
+
+### swap：主机 0 swap 时一次峰值就是 OOM-kill
+
+```bash
+fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo "/swapfile none swap sw 0 0" >> /etc/fstab
+printf 'vm.swappiness = 10\nvm.vfs_cache_pressure = 50\n' > /etc/sysctl.d/99-mpvs-swap.conf
+sysctl -w vm.swappiness=10
+```
+
+**坑（本轮实证）**：`vm.swappiness` 设完过一会儿又变回 0。真凶是 `--privileged` 的磐维容器——它内部
+`/etc/sysctl.conf` 写着 `vm.swappiness = 0`，容器重启时 systemd-sysctl 直接写进宿主内核。**特权容器的
+sysctl 会落到宿主**，所以要么把容器内那份也改成 10，要么每次重启后复查（本轮两者都做了）。
+
+### 采集与判定
+
+```bash
+free -m                                            # 看 available
+docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+docker inspect -f '{{.HostConfig.Memory}}|{{.HostConfig.MemorySwap}}' <容器>
+free -m | awk '/Mem:/{print $7}'                   # available MB
+```
+
+判定口径三条：①`available` ≥ 3GB；②`docker stats` 无容器贴 cap 90% 以上；③12 个容器全部 `Up`、无 Restarting。
+`available` 受 page cache 影响很大，采数前可先 `sync; echo 3 > /proc/sys/vm/drop_caches` 看**真实的**压力态余量
+（本轮 drop 后 2549MB、压完参数后 3357MB），不要拿刚缓存的读数自欺。
+
+### 改完必须验数据面
+
+cap 和内部参数都改了，必须跑插件自己的方言验证子集，确认渲染词数没退化：
+
+```bash
+./gradlew dialectExternalVerify \
+  -PdialectExternalMatrix="<你的工作树>/.local/matrix.memcheck.properties" \
+  -Pkotlin.compiler.execution.strategy=in-process --console=plain
+```
+
+注意是 **`-P`** 不是 `-D`；矩阵文件整目录在 `.local/`（gitignore），**凭据不许进仓**。子集文件只留一行
+`instances = panwei_a`（或 `gaussdb_kernel503`），跑完对照基线词数（panwei_a 109 词且 `skip=1(rowid)`、
+gaussdb_kernel503 197 词）。
+
+### 反向验证
+
+把一个小容器的 cap 临时压到**明显低于它的实际常驻**，证明 cap 真的生效：
+
+```bash
+docker update --memory 16m --memory-swap 16m xc3-highgo
+docker ps --filter name=xc3-highgo --format '{{.Status}}'   # 应 Restarting (137)
+docker inspect -f 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' xc3-highgo
+docker update --memory 512m --memory-swap 512m xc3-highgo    # 改回即恢复
+```
+
+只贴「设了 cap」不算验证；必须看到被压的容器真的异常、改回真的恢复，两次读数都要留。
+**量级别拍脑袋**：本轮按计划压到 64M，highgo 照常 `Up`（空闲只占 21~39MiB，`MemPerc` 分母已变成 64MiB、
+说明参数生效但它不缺内存），继续压到 16M 才 `OOMKilled=true`/`ExitCode=137`/`RestartCount=7`。
+压得不够低，验证的只是「docker 接受了这个参数」。
+
 ## 3. 凭据与权限：真正卡人的都在这
 
 **瀚高 `passwordcheck`**（最费时间的一个）。initdb 会拒含 `_` 和 `-` 的密码，要求大小写+数字+特殊字符，
