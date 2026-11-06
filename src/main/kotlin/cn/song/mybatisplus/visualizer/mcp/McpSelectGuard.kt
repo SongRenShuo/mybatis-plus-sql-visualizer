@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.execute.SqlAstParser
 import net.sf.jsqlparser.statement.Statement
+import net.sf.jsqlparser.statement.select.ParenthesedSelect
 import net.sf.jsqlparser.statement.select.PlainSelect
 import net.sf.jsqlparser.statement.select.Select
 import net.sf.jsqlparser.statement.select.SetOperationList
@@ -124,6 +125,14 @@ object McpSelectGuard {
         val masked = stripLiterals(trimmed).lowercase()
         scanWords(masked)?.let { return it }
         scanPhrases(masked)?.let { return it }
+        // T-SAF-11 词法兜底：AST 判定覆盖不到的位置（表达式标量子查询，或解析器成功解析
+        // 却丢弃 INTO 的形态）由括号上下文的 `INTO <非关键字标识符>` 扫描拦下
+        if (lexicallyBlockedNestedInto(masked)) {
+            return deny(
+                McpToolErrors.SQL_BLOCKED,
+                "SELECT INTO inside a subquery/CTE is not allowed.",
+            )
+        }
         return Verdict(allowed = true)
     }
 
@@ -212,13 +221,88 @@ object McpSelectGuard {
         return null
     }
 
-    /** 顶层及 UNION 各分支的 INTO 判定（CTE 包装在 Select 自身，into 仍落在 PlainSelect）。 */
-    private fun hasIntoClause(select: Select): Boolean = when (select) {
-        is PlainSelect -> !select.intoTables.isNullOrEmpty() || select.intoTempTable != null
-        is SetOperationList -> select.selects.filterIsInstance<PlainSelect>().any { branch ->
-            !branch.intoTables.isNullOrEmpty() || branch.intoTempTable != null
+    /**
+     * INTO 结构判定（T-SAF-11 递归化）：此前只查最外层 PlainSelect 与 SetOperationList 直接
+     * 分支——CTE（WithItem）体、派生表、JOIN 右侧子查询内的 `SELECT ... INTO <表>` 同时绕过
+     * 本判定与短语扫描。现递归遍历全部嵌套 Select 位置：
+     * - WITH 子句挂在 [Select] 基类（JSqlParser 5.3 `getWithItemsList`），CTE 体是
+     *   [ParenthesedSelect]，先于分支判定统一走查；
+     * - [PlainSelect] 除自身 intoTables/intoTempTable 外，递归 fromItem 与 JOIN 右侧
+     *   （派生表形态 `[SELECT ... INTO ...]` 别名）；
+     * - 表达式位置的标量子查询（`WHERE x = (SELECT ... INTO ...)`）不在 AST 遍历面内，
+     *   由 [lexicallyBlockedNestedInto] 词法兜底。
+     */
+    private fun hasIntoClause(select: Select): Boolean {
+        select.withItemsList?.forEach { item ->
+            item.select?.let { if (hasIntoClause(it)) return true }
         }
-        else -> false
+        return when (select) {
+            is PlainSelect -> {
+                if (!select.intoTables.isNullOrEmpty() || select.intoTempTable != null) return true
+                fromItemHoldsInto(select.fromItem) ||
+                    select.joins.orEmpty().any { join -> fromItemHoldsInto(join.rightItem) }
+            }
+            is SetOperationList -> select.selects.any { hasIntoClause(it) }
+            is ParenthesedSelect -> select.select?.let { hasIntoClause(it) } == true
+            else -> false
+        }
+    }
+
+    /** 派生表 / 子查询 FromItem 的递归入口（[ParenthesedSelect] 之外的 Table 等形态无 INTO 面）。 */
+    private fun fromItemHoldsInto(fromItem: net.sf.jsqlparser.statement.select.FromItem?): Boolean =
+        (fromItem as? ParenthesedSelect)?.let { hasIntoClause(it) } == true
+
+    /** INTO 后随词的豁免表：outfile/dumpfile 已由 FORBIDDEN_PHRASES 以专用文案拒绝（不重复拦）。 */
+    private val LEXICAL_INTO_ALLOWED_FOLLOWERS = setOf("outfile", "dumpfile")
+
+    /**
+     * 词法兜底（T-SAF-11）：剥离字面量/注释后的小写文本上，扫描**括号上下文内**（子查询/CTE/
+     * 派生表都在括号里）的 `INTO <非关键字标识符>`——普通建表形态的兜底拦截面。
+     *
+     * 误杀面控制：全词比较（词起点判据，`constrainto` 内嵌 into 子串不命中）+ 词后必须
+     * 是标识符（`into @v` 走短语闸、`into outfile` 走短语闸）+ 字面量/注释已在剥离层排除。
+     */
+    internal fun lexicallyBlockedNestedInto(maskedLower: String): Boolean {
+        var depth = 0
+        var i = 0
+        val n = maskedLower.length
+        while (i < n) {
+            when (maskedLower[i]) {
+                '(' -> {
+                    depth++
+                    i++
+                }
+                ')' -> {
+                    if (depth > 0) depth--
+                    i++
+                }
+                else -> {
+                    if (depth > 0 && isWordStartAt(maskedLower, i) && wordAt(maskedLower, i) == "into") {
+                        var j = i + "into".length
+                        while (j < n && maskedLower[j].isWhitespace()) j++
+                        if (j < n && isWordChar(maskedLower[j])) {
+                            if (wordAt(maskedLower, j) !in LEXICAL_INTO_ALLOWED_FOLLOWERS) return true
+                        }
+                        i += "into".length
+                    } else {
+                        i++
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_' || c == '$'
+
+    /** 词起点：词字符且前一个字符不是词字符（防标识符内部子串误命中）。 */
+    private fun isWordStartAt(text: String, index: Int): Boolean =
+        isWordChar(text[index]) && (index == 0 || !isWordChar(text[index - 1]))
+
+    private fun wordAt(text: String, start: Int): String {
+        var end = start
+        while (end < text.length && isWordChar(text[end])) end++
+        return text.substring(start, end)
     }
 
     private fun deny(code: String, reason: String): Verdict = Verdict(allowed = false, errorCode = code, reason = reason)
