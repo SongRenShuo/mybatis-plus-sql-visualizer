@@ -3,8 +3,13 @@ package cn.song.mybatisplus.visualizer.psource
 import com.intellij.psi.JavaTokenType
 import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiCodeBlock
+import com.intellij.psi.PsiConditionalExpression
+import com.intellij.psi.PsiDoWhileStatement
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiForStatement
+import com.intellij.psi.PsiForeachStatement
+import com.intellij.psi.PsiIfStatement
 import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -15,7 +20,9 @@ import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiReturnStatement
 import com.intellij.psi.PsiStatement
+import com.intellij.psi.PsiSwitchStatement
 import com.intellij.psi.PsiVariable
+import com.intellij.psi.PsiWhileStatement
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
@@ -43,8 +50,30 @@ object SqlStringConcatenator {
         val complete: Boolean,
     )
 
-    /** 运行时值占位标记前缀（预览 warning 与 SQL 中保留位置）。 */
-    const val DYNAMIC_PLACEHOLDER_PREFIX = "/*运行时值*/"
+    /**
+     * 运行时值占位标记前缀（预览 warning 与 SQL 中保留位置）。
+     *
+     * R1：取值带空格与冒号，配合 [dynamicPlaceholder] 的收尾构成**单条自洽块注释**。
+     */
+    const val DYNAMIC_PLACEHOLDER_PREFIX = "/* 运行时值: "
+
+    /** 占位文本长度上限（R1.4：超出截断加 `…`，避免整段三元把 SQL 撑爆）。 */
+    private const val DYNAMIC_PLACEHOLDER_MAX_LENGTH = 120
+
+    /** R3：循环体内追加的降级占位说明（运行期重复 N 次，线性拼接必错）。 */
+    private const val LOOP_APPEND_LABEL = "循环内追加，运行时重复执行"
+
+    /** R3：if/else 互斥两支都对同一 builder 追加时的降级占位说明。 */
+    private const val PAIRED_APPEND_LABEL = "互斥分支追加，运行时只取一支"
+
+    /** R3：无 else 的条件追加 — 保留片段，前面插本条说明注释。 */
+    private const val CONDITIONAL_APPEND_NOTE = "/* 运行时值: 条件追加，可能不出现 */"
+
+    /** R3：switch 分支内追加 — 保留片段，前面插本条说明注释。 */
+    private const val SWITCH_APPEND_NOTE = "/* 运行时值: 分支追加，可能不出现 */"
+
+    /** R3：lambda / 回调内追加 — 执行时机与次数由调用方决定。 */
+    private const val LAMBDA_APPEND_NOTE = "/* 运行时值: 回调内追加，执行时机不定 */"
 
     /** 变量 initializer 追踪最大深度（防循环引用）。 */
     private const val MAX_TRACE_DEPTH = 5
@@ -66,10 +95,78 @@ object SqlStringConcatenator {
         if (expr == null) return null
         return when (expr) {
             is PsiLiteralExpression -> concatLiteral(expr)
+            is PsiConditionalExpression -> concatConditional(expr)
             is PsiBinaryExpression, is PsiPolyadicExpression -> concatPolyadic(expr)
             is PsiReferenceExpression -> concatReference(expr)
             else -> null
         }
+    }
+
+    // ------------------------------------------------------------------
+    // R1 — 运行时值占位（单条自洽块注释）
+    // ------------------------------------------------------------------
+
+    /**
+     * 生成一条**自洽的**运行时值占位注释（R1）：块注释起始符 + ` 运行时值: ` + 清洗后文本 + 空格 + 块注释结束符。
+     *
+     * 输出必须是一条完整块注释 —— 不允许出现「注释先闭合 + 源码裸露 + 悬空收尾」的形态
+     * （旧实现把前缀写成当场闭合的注释、源码原样跟在后面、末尾再补一个结束符，
+     * 正是用户截图里右括号丢失、引号错位的根因，见开发计划 §2.2）。
+     *
+     * 清洗规则（缺一不可，见开发计划 R1.1）：
+     *  1. 注释结束符 → `* /`：否则注释提前闭合，后面的源码变成活 SQL；
+     *  2. 单/双引号 → 同形安全字符（`’` / `”`）：占位可能落在字符串字面量内部，原文引号会截断字符串；
+     *  3. 空白（换行 / 制表 / 连续空格）折叠为单空格：多行注释会打乱格式化器的行结构；
+     *  4. 长度上限 [DYNAMIC_PLACEHOLDER_MAX_LENGTH]，超出截断并加 `…`。
+     *
+     * @param exprText 静态不可求值的表达式原文
+     */
+    private fun dynamicPlaceholder(exprText: String): String =
+        "$DYNAMIC_PLACEHOLDER_PREFIX${sanitizePlaceholderText(exprText)} */"
+
+    /** 占位文本清洗（规则见 [dynamicPlaceholder]）。 */
+    private fun sanitizePlaceholderText(exprText: String): String {
+        val normalized = exprText
+            .replace("*/", "* /")
+            .replace('\'', '’')
+            .replace('"', '”')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val text = normalized.ifEmpty { "表达式" }
+        return if (text.length > DYNAMIC_PLACEHOLDER_MAX_LENGTH) {
+            text.take(DYNAMIC_PLACEHOLDER_MAX_LENGTH - 1) + "…"
+        } else {
+            text
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // R2 — 条件表达式（三元）分派
+    // ------------------------------------------------------------------
+
+    /**
+     * 聚合 Java 三元表达式（R2）。
+     *
+     * 三元在运行期**只会走一支**，因此绝不把两支都拼进 SQL（那等于编造 SQL）：
+     *  - 条件是 `true` / `false` 字面量 → 直接聚合对应分支；
+     *  - 两支都聚合成功且文本相同 → 折叠取该文本（`complete` = 两支的与）；
+     *  - 其余（分支文本不同 / 有一支聚合失败）→ 单条占位注释，`complete=false`。
+     */
+    private fun concatConditional(expr: PsiConditionalExpression): ConcatenationResult? {
+        val conditionValue = (expr.condition as? PsiLiteralExpression)?.value as? Boolean
+        if (conditionValue != null) {
+            val branch = if (conditionValue) expr.thenExpression else expr.elseExpression
+            return branch?.let { concat(it) }
+        }
+        val thenResult = expr.thenExpression?.let { concat(it) }
+        val elseResult = expr.elseExpression?.let { concat(it) }
+        if (thenResult != null && elseResult != null && thenResult.sql == elseResult.sql) {
+            return ConcatenationResult(
+                sql = thenResult.sql,
+                complete = thenResult.complete && elseResult.complete,
+            )
+        }
+        return ConcatenationResult(sql = dynamicPlaceholder(expr.text), complete = false)
     }
 
     /**
@@ -118,7 +215,7 @@ object SqlStringConcatenator {
      *  - 深层跟随有上限 [MAX_METHOD_FOLLOW_DEPTH]，防递归与环。
      *
      * 运行时值照既有口径降级：方法体内出现参数 / 调用等静态不可求值片段时，聚合结果带
-     * `/*运行时值*​/…*/` 占位并置 `complete=false`，不编造内容。
+     * 单条自洽占位注释（见 [dynamicPlaceholder]）并置 `complete=false`，不编造内容。
      */
     private fun concatMethodReturn(call: PsiMethodCallExpression, depth: Int): ConcatenationResult? {
         if (depth >= MAX_METHOD_FOLLOW_DEPTH) return null
@@ -169,9 +266,9 @@ object SqlStringConcatenator {
         for (operand in expr.operands) {
             when (val r = concat(operand)) {
                 null -> {
-                    // 不可静态求值的操作数（运行时值）→ 标记降级 + 保留占位
+                    // 不可静态求值的操作数（运行时值）→ 标记降级 + 单条自洽占位注释
                     complete = false
-                    parts += "$DYNAMIC_PLACEHOLDER_PREFIX${operand.text}*/"
+                    parts += dynamicPlaceholder(operand.text)
                 }
                 else -> {
                     if (!r.complete) complete = false
@@ -225,7 +322,7 @@ object SqlStringConcatenator {
             when (val r = concat(initExpr)) {
                 null -> {
                     complete = false
-                    parts += "$DYNAMIC_PLACEHOLDER_PREFIX${initExpr.text}*/"
+                    parts += dynamicPlaceholder(initExpr.text)
                 }
                 else -> {
                     if (!r.complete) complete = false
@@ -259,7 +356,6 @@ object SqlStringConcatenator {
         val varName = variable.name ?: return emptyList()
         if (varName.isBlank()) return emptyList()
 
-        val results = mutableListOf<ConcatenationResult>()
         val appendCalls = PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
             .filter { call ->
                 val methodName = call.methodExpression.referenceName ?: return@filter false
@@ -274,21 +370,138 @@ object SqlStringConcatenator {
             // 此时按文本长度升序（内层最短 → 排前面），保证 append 实参按正确顺序拼接
             .sortedWith(compareBy({ it.textRange.startOffset }, { it.textLength }))
 
+        val results = mutableListOf<ConcatenationResult>()
+        // R3：同一控制流上下文（同一个循环 / if / switch / lambda）只降级或只标注一次，避免同一片段刷三条注释
+        val degradedContexts = mutableSetOf<PsiElement>()
+        val notedContexts = mutableSetOf<PsiElement>()
+
         for (call in appendCalls) {
             val args = call.argumentList.expressions
             if (args.isEmpty()) continue
             val argExpr = args[0]
-            when (val r = concat(argExpr)) {
-                null -> {
-                    results += ConcatenationResult(
-                        sql = "$DYNAMIC_PLACEHOLDER_PREFIX${argExpr.text}*/",
+            val position = analyzeAppendPosition(call, variable)
+            val anchor = position.anchor
+            when (position.flow) {
+                AppendFlow.LOOP -> {
+                    // 循环体内：贡献整体降级为占位注释（运行期重复 N 次，线性拼接必错）
+                    if (anchor != null && !degradedContexts.add(anchor)) continue
+                    results += ConcatenationResult(sql = dynamicPlaceholder(LOOP_APPEND_LABEL), complete = false)
+                }
+                AppendFlow.PAIRED -> {
+                    // if/else 互斥两支都追加：互斥片段不能同时出现在 SQL 里 → 两支都降级
+                    if (anchor != null && !degradedContexts.add(anchor)) continue
+                    results += ConcatenationResult(sql = dynamicPlaceholder(PAIRED_APPEND_LABEL), complete = false)
+                }
+                AppendFlow.OPTIONAL -> {
+                    val r = concat(argExpr) ?: ConcatenationResult(
+                        sql = dynamicPlaceholder(argExpr.text),
+                        complete = false,
+                    )
+                    val note = position.note.orEmpty()
+                    val emitNote = note.isNotEmpty() && (anchor == null || notedContexts.add(anchor))
+                    results += if (emitNote) {
+                        ConcatenationResult(sql = note + r.sql, complete = false)
+                    } else {
+                        // 非直线形态即便片段可聚合，也必须标 complete=false（位置不确定）
+                        if (r.complete) ConcatenationResult(sql = r.sql, complete = false) else r
+                    }
+                }
+                AppendFlow.STRAIGHT -> {
+                    // 直线代码：维持既有输出
+                    results += concat(argExpr) ?: ConcatenationResult(
+                        sql = dynamicPlaceholder(argExpr.text),
                         complete = false,
                     )
                 }
-                else -> results += r
             }
         }
         return results
+    }
+
+    // ------------------------------------------------------------------
+    // R3 — append 的控制流位置
+    // ------------------------------------------------------------------
+
+    /** append 相对方法体的控制流位置（R3）。 */
+    private enum class AppendFlow {
+        /** 直线代码：维持既有输出。 */
+        STRAIGHT,
+
+        /** 循环体内：运行期重复 N 次，线性拼接必错 → 整体降级为占位注释。 */
+        LOOP,
+
+        /** 条件 / 分支 / 回调内：保留片段，前置一条说明注释。 */
+        OPTIONAL,
+
+        /** if/else 互斥两支都对该 builder 追加 → 两支贡献都降级为占位注释。 */
+        PAIRED,
+    }
+
+    /**
+     * append 的控制流判定结果。
+     *
+     * @param flow   控制流形态
+     * @param anchor 同一上下文的锚点（loop / if / switch / 三元 / lambda），用于同上下文只标注一次
+     * @param note   [AppendFlow.OPTIONAL] 的前置说明注释
+     */
+    private data class AppendPosition(
+        val flow: AppendFlow,
+        val anchor: PsiElement? = null,
+        val note: String? = null,
+    )
+
+    /**
+     * 判定一条 `append` 调用相对所在方法体的控制流位置（R3）。
+     *
+     * 向上找最近的 [PsiForStatement] / [PsiForeachStatement] / [PsiWhileStatement] /
+     * [PsiDoWhileStatement] / [PsiIfStatement] / [PsiSwitchStatement] /
+     * [PsiConditionalExpression] / [PsiLambdaExpression]；遇到所在方法即停（不看外层类）。
+     *
+     * 循环优先于条件分支：`if` 落在循环内时按循环处理（重复 + 可选，降级即可覆盖）。
+     */
+    private fun analyzeAppendPosition(call: PsiMethodCallExpression, variable: PsiVariable): AppendPosition {
+        var loop: PsiElement? = null
+        var branch: PsiElement? = null
+        var current: PsiElement? = call.parent
+        while (current != null && current !is PsiMethod) {
+            if (current is PsiForStatement || current is PsiForeachStatement ||
+                current is PsiWhileStatement || current is PsiDoWhileStatement
+            ) {
+                if (loop == null) loop = current
+            } else if (branch == null &&
+                (current is PsiIfStatement || current is PsiSwitchStatement ||
+                    current is PsiConditionalExpression || current is PsiLambdaExpression)
+            ) {
+                branch = current
+            }
+            current = current.parent
+        }
+        loop?.let { return AppendPosition(AppendFlow.LOOP, it) }
+        return when (branch) {
+            null -> AppendPosition(AppendFlow.STRAIGHT)
+            is PsiIfStatement -> {
+                val inThenBranch = branch.thenBranch?.let { PsiTreeUtil.isAncestor(it, call, false) } == true
+                val otherBranch = if (inThenBranch) branch.elseBranch else branch.thenBranch
+                if (containsAppendTo(otherBranch, variable)) {
+                    AppendPosition(AppendFlow.PAIRED, branch)
+                } else {
+                    AppendPosition(AppendFlow.OPTIONAL, branch, CONDITIONAL_APPEND_NOTE)
+                }
+            }
+            is PsiSwitchStatement -> AppendPosition(AppendFlow.OPTIONAL, branch, SWITCH_APPEND_NOTE)
+            is PsiConditionalExpression -> AppendPosition(AppendFlow.OPTIONAL, branch, CONDITIONAL_APPEND_NOTE)
+            is PsiLambdaExpression -> AppendPosition(AppendFlow.OPTIONAL, branch, LAMBDA_APPEND_NOTE)
+            else -> AppendPosition(AppendFlow.STRAIGHT)
+        }
+    }
+
+    /** 指定分支内是否存在对同一 builder 变量的 `append`（if/else 成对判定）。 */
+    private fun containsAppendTo(branch: PsiElement?, variable: PsiVariable): Boolean {
+        if (branch == null) return false
+        return PsiTreeUtil.collectElementsOfType(branch, PsiMethodCallExpression::class.java).any { call ->
+            call.methodExpression.referenceName == "append" &&
+                resolveRootVariable(call.methodExpression.qualifierExpression) == variable
+        }
     }
 
     /**
