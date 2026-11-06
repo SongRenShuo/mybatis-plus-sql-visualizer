@@ -29,18 +29,37 @@ docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}'      # 镜像是不�
 cat /etc/docker/daemon.json                                      # 已配的 mirror（不代表好用）
 ```
 
-第五件是**读台账**：`.local/test-databases.md` 里已有全部实例的连接、凭据、已知坑；`tmp/xc3-env-init/*.md`
+第五件是**读台账**：`.local/db-env-instances.tsv` 是实例索引（有哪些实例、宿主端口、镜像/卷、内存与坑，
+字段见 §9），`.local/test-databases.md` 是连接、凭据与已知坑；`tmp/xc3-env-init/*.md`
 是每个实例的部署原文与探针读数。**先看有没有现成实例能用**，别上来就装——`114.66.55.245` 那台
 DBX 测试主机上本来就有一批（MySQL/PG/Oracle/DM/金仓/GBASE/虚谷/StarRocks/Doris…），很多时候只缺驱动。
 
-内存账（15G 宿主的实际配法，超了会 OOM 或让引擎起不来）：瀚高 3g、海量 A 4g、海量 B 2g、OceanBase 8g
-（容器内 `OB_MEMORY_LIMIT=6G`）、SQL Server 2g、GaussDB 4g、MariaDB 2g。全部同时在线时宿主要留出
-buff/cache 之外的余量，装新实例前先看 `free -g` 的 available。
+内存账（15G 宿主上在役实例的实际配法，超了会 OOM 或让引擎起不来）：
 
-**内存闸门（起新库前必看读数，不是「大概够」）**：2026-11-06 磐维两个实例上线后，16G 宿主 + 11 个既有容器
-的 `available` 只剩约 **960 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
-不是想压就压：磐维 `max_process_memory` 低于约 5 GB 直接拒启（见 §2 磐维段）。所以流程是
-**先 `free -m` 看 available → 不够就先停/降配既有实例 → 再起新的**，别先起后救。
+| 实例（容器名） | `--memory` | `--shm-size` | 其他必带 flag / 引擎内记账 |
+|---|---|---|---|
+| 瀚高 `xc3-highgo` | 3g | — | 命名卷 `xc3_highgo_data` |
+| 海量 A `xc3-vastbase` | 4g | 2g | 停起走 `/opt/xc3-vastbase/start.sh` |
+| 海量 B `xc3-vastbase-b` | 2g | 1g | `DBCOMPATIBILITY=B` |
+| OceanBase `xc3-oceanbase` | 8g | — | 容器内 `OB_MEMORY_LIMIT=6G`；`--ulimit nofile=65535:65535 --ulimit stack=-1` |
+| SQL Server `xc3-mssql` | 2g | — | `MSSQL_MEMORY_LIMIT_MB=1536`（首启不落 `mssql.conf`，实际靠 cgroup） |
+| GaussDB `xc3-gaussdb-kernel503` | 4g | 2g | `--init` 必须 |
+| openGauss `xc3-opengauss` | 4g | 2g | `--privileged --ulimit nofile=65535` |
+| MariaDB `xc3-mariadb` | 2g | — | |
+| MySQL `xc3-mysql8` | 1g | — | 命名卷 `xc3-mysql8-data` |
+| 磐维 A `panweidb-ora` | 3g | 2g | `--privileged`；`dbcompatibility=A`；引擎内 `max_process_memory=8GB`（记账上限，非预占）、`shared_buffers=256MB` |
+| 磐维 B `panweidb-test` | 4g | 2g | `--privileged`；`dbcompatibility=B`；同上引擎记账 |
+
+**别把这张表当预算加总**：11 个实例的 `--memory` 合计约 **37g**，宿主只有 15G——limit 是记账上限不是预占，
+真正要盯的是 `free -m` 的 available 与实际 RSS（磐维压过 `shared_buffers` 后单实例约 0.9GB）。
+
+**内存闸门（起新库前必看读数，不是「大概够」）**：2026-11-06 磐维两个实例上线后，16G 宿主 + 11 个在役容器的
+`available` 只剩约 **966 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
+不是想压就压：磐维 `max_process_memory` 低于约 5057MB 直接拒启（见 §2 磐维段，唯一能压的是 `shared_buffers`）。
+所以流程固定为 **先 `free -m` 看 available → 不足就先腾（`docker stop` 掉当前不用的实例，或压 `shared_buffers`）→
+再起新的**，别先起后救。腾量口径别算错：停实例腾出来的是**实际 RSS 不是 limit**（MariaDB 空闲时只有
+几百 MB），真要腾出 GB 级余量就停 OceanBase（容器内 `memory_limit=6G`）或一个磐维实例（压过
+`shared_buffers` 后约 0.9GB/实例）。
 
 ## 1. 选镜像：先解决「拉不动」
 
@@ -342,6 +361,11 @@ select current_user, current_database(),
 | OceanBase | `com.oceanbase:oceanbase-client:2.4.19` | `com.oceanbase.jdbc.Driver`，URL `jdbc:oceanbase://` |
 | MariaDB | `org.mariadb.jdbc:mariadb-java-client:3.3.3` | 3.x 全部自有类，不复用 MySQL `StatementImpl` |
 | 瀚高/海量/金仓 | `com.highgo:HgdbJdbc:6.2.5` / `cn.com.vastdata:vastbase-jdbc:2.16.1v` / `cn.com.kingbase:kingbase8:9.0.1` | 都在 Maven Central |
+| 磐维 PanWeiDB | 本地 jar `database-lab/vendor/drivers/panweidb-jdbc-{1.0.0,2.0.0}.jar`（V1/V2 类形一致；插件三面登记已覆盖两代） | **无 Maven 坐标**（厂商渠道拿不到公开仓库包）。安装到本机仓库：`mvn install:install-file -Dfile=database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar -DgroupId=org.panweidb -DartifactId=panweidb-jdbc -Dversion=2.0.0 -Dpackaging=jar`，之后坐标 `org.panweidb:panweidb-jdbc:<ver>` |
+
+磐维两代 jar 实测同一形态：`META-INF/services/java.sql.Driver` 都是 `org.panweidb.Driver`，`org/panweidb/` 条目
+374（V1）/ 399（V2），`cn/com/panweidb/` 均为 0——**V2 文档写的 `cn.com.panweidb.Driver` 在两代 jar 里都不存在**，
+按 jar 实测登记即可。测试侧由 `StatementWeaverVendorCoverageTest` 遍历 `drivers/panweidb-jdbc-*.jar` 每一代都验。
 
 拉驱动不方便时让服务器自己去阿里云 maven 镜像拿：
 `curl -sL -o <file> https://maven.aliyun.com/repository/public/<group/path>/<artifact>-<ver>.jar`。
@@ -350,7 +374,8 @@ select current_user, current_database(),
 ## 6. 台账与收尾
 
 - **连接/凭据/已知坑** → `.local/test-databases.md`（gitignored）。新增实例补一行：URL、账号、容器名、
-  镜像、停起命令、该实例特有的坑。
+  镜像、停起命令、该实例特有的坑。**同一实例还要在 `.local/db-env-instances.tsv` 登记一行**（无凭据的实例
+  索引，字段见 §9），两份台账缺一份都算没登记。
 - **部署原文与探针读数** → `tmp/xc3-env-init/<产品>.md`（gitignored）。含 docker run 原文、逐条探针输出、
   结论表、未取证清单。
 - **停/起**：`docker stop|start <容器>`；海量是 `bash /opt/xc3-vastbase/start.sh`。**不要 `docker rm`**——
@@ -393,9 +418,17 @@ select current_user, current_database(),
 **前提变了**（2026-11-05 用户定调）：测试服务器的服务**可能随时被重装系统**，容器、卷、数据、initdb 结果全部
 丢失。所以「部署」不再是手工操作，而必须是**声明式 + 幂等可重放**的：
 
-- **唯一事实源是清单**：`.local/db-env-instances.tsv`（gitignored，可含明文凭据），模板见
-  `scripts/instances.example.tsv`；台账 `.local/test-databases.md` 记录连接/凭据/坑。
-- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <清单>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
+- **唯一事实源是实例清单**：`.local/db-env-instances.tsv`（gitignored，**不含凭据**）——一行一个实例，
+  Tab 分隔 10 列：`name kind host hostPort ctrPort db user image volume notes`。`name` 是容器名/实例短名；
+  `ctrPort` 是**容器内**端口（磐维 17700，不是 5432）；`notes` 记内存与 shm、特权位/ulimit、DBX 连接 id、
+  停起方式与该实例特有的坑。**新增实例必须就地登记一行**（部署完就补、别攒）——漏登记的实例在靶机重装后
+  等于不存在。
+- **凭据只落台账**：`.local/test-databases.md` 记连接 URL、账号口令、已知坑；清单的 `user` 列只写账号名。
+- **重放吃的是派生出来的 replay manifest**：`bootstrap-db-env.sh` 的输入是 Docker 子集的 9 列清单
+  （`name image hostPort containerPort memLimit volumeName env initDir verifyCmd`，模板
+  `scripts/instances.example.tsv`），`env` 位放口令、从台账现填。**manifest 含明文口令，只落本机 `.local/`
+  与靶机 `/root/`，不入库**：实例清单回答「该有哪些」，manifest 回答「怎么起」。
+- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <replay.tsv>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
   按 `verifyCmd` 轮询就绪、最后打印端口汇总并列出未就绪项。**可反复执行**，失败重跑只补没起来的那些。
 - **种子数据要能自动灌**：把 `.sql` 放清单的 `initDir`（挂到 `/docker-entrypoint-initdb.d:ro`），镜像首次
   初始化时自动执行；每条 `.sql` 首行必须 `SET NAMES utf8mb4;`（见 §7 的双编码坑）。
@@ -407,23 +440,37 @@ select current_user, current_database(),
 docker info >/dev/null && echo ok
 free -g | head -2                      # 按 §0 的内存账排布实例，别一次全上
 
-# 1) 上传清单与种子（本地 → 靶机）
-#    .local/db-env-instances.tsv          实例清单（含凭据）
+# 1) 派生 replay manifest（实例清单的 Docker 子集 + 台账口令现拼，9 列见 scripts/instances.example.tsv）
+#    .local/db-env-instances.tsv          实例清单（无凭据，用来核对「该有哪些」）
+#    .local/replay.tsv                    本次重放清单（9 列，env 位含口令；不外传）
 #    /root/<实例>-init/*.sql              种子脚本（首行 SET NAMES utf8mb4;）
-scp .local/db-env-instances.tsv root@103.36.220.245:/root/
+scp .local/replay.tsv root@103.36.220.245:/root/
 scp -r dev-support/db-seed/<实例>/*  root@103.36.220.245:/root/<实例>-init/
 
 # 2) 一键重建
-ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/db-env-instances.tsv'
+ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/replay.tsv'
 
 # 3) 外部可达性 + 数据正确性（两档都要取，别只看容器 Running）
 #    - 从本机用 DBX/客户端实连一次（SELECT 1 / VERSION()）
 #    - 中文正确性用 HEX 钉死：SELECT HEX(name) —— 必须等于 HEX('张三') = E5BCA0E4B889
 #    - 表与行数：SHOW TABLES + 逐表 COUNT(*)
 
-# 4) 收尾：台账补行 → DBX 登记（首个查询可能 CONNECTION_OUT_OF_SCOPE，放行一次）→
-#    若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
+# 4) 收尾：台账补行（test-databases.md + db-env-instances.tsv 两处都补）→ DBX 登记（首个查询可能
+#    CONNECTION_OUT_OF_SCOPE，放行一次）→ 若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
 ```
+
+### 磐维 PanWeiDB：不能「一把梭」，三处补丁有时序
+
+两个磐维实例（`panweidb-test` B 档 / `panweidb-ora` A 档）的容器起得来，但**装不上**：补丁必须在**解包之后、
+`gs_local` 跑到 `checkos` 之前**打进去，而 `init-db.service` 一开机就自己开跑，时间窗只有几十秒到几分钟。
+处置顺序：
+
+- `dev-support/db-lab/patch-panweidb-image.sh` **若该脚本在位则用它**（起容器 → 轮询等
+  `/database/panweidb/soft/script/` 解包出来 → 打补丁 → 放行安装）；**不在位就按 §2 磐维段手工打三处**：
+  `PreInstallUtility.py` 的 `raise` → `pass`、`Common.py` 的 `checkDockerEnv()`、`run.sh` 的 `listen_addresses` 自愈。
+- 持久性不一样，别记混：前两处在 `/database` 卷里、随卷持久（同一卷重建容器不必重打）；
+  `/root/run.sh` 与 `/etc/sysconfig/network-scripts/` 在镜像层，**每次重建容器都要重打**。
+- 兼容档是安装期参数（§2），A/B 必须两个容器，不能在一个容器里切。
 
 ### 重建时不做的事
 
