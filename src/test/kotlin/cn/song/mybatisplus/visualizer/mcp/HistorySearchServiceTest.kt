@@ -135,7 +135,7 @@ class HistorySearchServiceTest {
     }
 
     @Test
-    fun test嵌套量词高危正则_拒绝（先红）() {
+    fun test嵌套量词高危正则_拒绝() {
         // 灾难性回溯经典构造（(a+)+b 在 "aaaa…!" 上指数级）：改前只查编译合法性——
         // 该模式合法编译并逐条目无预算求值（先红：断言 InvalidQueryException 失败，
         // 实际返回正常结果或挂死）
@@ -148,7 +148,7 @@ class HistorySearchServiceTest {
     }
 
     @Test
-    fun test量词化分组内含量词_拒绝（先红）() {
+    fun test量词化分组内含量词_拒绝() {
         // (a+)* 与 (a+)+ 同族；分支分组 (a|b)+ 无内含量词不误杀（合法命中回归见 test正则命中）
         try {
             compileQuery(HistorySearchService.Query(regex = "(a+)*x"))
@@ -159,7 +159,7 @@ class HistorySearchServiceTest {
     }
 
     @Test
-    fun test超长正则模式_拒绝（先红）() {
+    fun test超长正则模式_拒绝() {
         // 模式长度上限：超长模式多携带病态构造，先于编译拒绝（先红：改前无上限）
         try {
             compileQuery(HistorySearchService.Query(regex = "a".repeat(300)))

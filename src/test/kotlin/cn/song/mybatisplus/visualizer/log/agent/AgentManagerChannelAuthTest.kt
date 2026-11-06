@@ -125,7 +125,7 @@ class AgentManagerChannelAuthTest : BasePlatformTestCase() {
         assertTrue("各通道令牌相互独立（不得复用同一秘密）", token1 != token2)
         assertTrue(
             "通道令牌不得写进状态行/日志摘要（statusSummary 不含 token）",
-            !manager.statusSummary().contains(token1),
+            !(manager.statusSummary() ?: "").contains(token1!!),
         )
     }
 

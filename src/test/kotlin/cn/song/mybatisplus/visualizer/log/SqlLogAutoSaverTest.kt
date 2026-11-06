@@ -191,7 +191,7 @@ class SqlLogAutoSaverTest {
             saver.close()
         }
         assertEquals("符号链接目标不得收到追加字节", "original-bytes\n", target.readText())
-        assertFalse("拒写时不应认领被拒文件为当前写入文件", File(dir, "test.sql").let { it.exists() && !it.isSymbolicLink })
+        assertFalse("拒写时不应认领被拒文件为当前写入文件", File(dir, "test.sql").let { it.exists() && !java.nio.file.Files.isSymbolicLink(it.toPath()) })
     }
 
     /**

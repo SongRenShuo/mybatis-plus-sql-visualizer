@@ -1,8 +1,6 @@
 package cn.song.mybatisplus.visualizer.util
 
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.regex.Matcher
-import java.util.regex.Pattern
 
 /**
  * 有界正则求值（T-SAF-25，dynamic-tablename-rule.regex-unbounded）：
@@ -33,25 +31,29 @@ object BoundedRegex {
      * 有界 [Regex.find]：超预算返回 null（视为无匹配）并至多告警一次。
      */
     fun find(regex: Regex, input: CharSequence, maxCharReads: Int = DEFAULT_MAX_CHAR_READS): MatchResult? =
-        runBounded(regex.toPattern(), input, maxCharReads) { it.find() }
+        try {
+            regex.find(CountingCharSequence(input, maxCharReads))
+        } catch (_: BudgetExceeded) {
+            warnOnce(maxCharReads)
+            null
+        }
 
     /**
      * 有界 [Regex.matches]：超预算返回 false（视为不匹配）并至多告警一次。
      */
     fun matches(regex: Regex, input: CharSequence, maxCharReads: Int = DEFAULT_MAX_CHAR_READS): Boolean =
-        runBounded(regex.toPattern(), input, maxCharReads) { it.matches() } == true
-
-    private fun <T> runBounded(pattern: Pattern, input: CharSequence, maxCharReads: Int, op: (Matcher) -> T): T? {
-        val bounded = CountingCharSequence(input, maxCharReads)
-        return try {
-            op(pattern.matcher(bounded))
+        try {
+            regex.matches(CountingCharSequence(input, maxCharReads))
         } catch (_: BudgetExceeded) {
-            // over-budget = no match；告警至多一次（风暴期不刷日志）
-            if (warnedOnce.compareAndSet(false, true)) {
-                com.intellij.openapi.diagnostic.Logger.getInstance(BoundedRegex::class.java)
-                    .warn("BoundedRegex: 正则求值超预算（maxCharReads=$maxCharReads），视为无匹配（仅告警一次）")
-            }
-            null
+            warnOnce(maxCharReads)
+            false
+        }
+
+    private fun warnOnce(maxCharReads: Int) {
+        // over-budget = no match；告警至多一次（风暴期不刷日志）
+        if (warnedOnce.compareAndSet(false, true)) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(BoundedRegex::class.java)
+                .warn("BoundedRegex: 正则求值超预算（maxCharReads=$maxCharReads），视为无匹配（仅告警一次）")
         }
     }
 
