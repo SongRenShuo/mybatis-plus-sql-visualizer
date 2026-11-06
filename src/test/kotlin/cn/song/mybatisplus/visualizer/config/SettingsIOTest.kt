@@ -292,4 +292,153 @@ class SettingsIOTest {
             SettingsIO.importFromJson(withoutKey, PluginSettings.State(dialectAuto = false)).dialectAuto,
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-SAF-08：SQL 位形设置值级校验（settings-import.sql-fragment-unvalidated）
+    // ------------------------------------------------------------------
+
+    /** 组装最小导入 JSON（只含指定键；值按 JSON 字符串原样嵌入）。 */
+    private fun importJsonOf(vararg pairs: Pair<String, String>): String = buildString {
+        appendLine("{")
+        appendLine("  \"version\": $currentVersion,")
+        pairs.forEachIndexed { i, (k, v) ->
+            append("  \"$k\": \"")
+            append(v.replace("\\", "\\\\").replace("\"", "\\\""))
+            append("\"")
+            if (i < pairs.size - 1) appendLine(",") else appendLine()
+        }
+        appendLine("}")
+    }
+
+    private fun importRejectsField(json: String, expectedField: String) {
+        var caught: SettingsIO.ImportException? = null
+        try {
+            SettingsIO.importFromJson(json)
+        } catch (e: SettingsIO.ImportException) {
+            caught = e
+        }
+        assertTrue(
+            "载荷字段 $expectedField 应被拒绝导入（抛 ImportException）",
+            caught != null,
+        )
+        assertTrue(
+            "拒绝报告应逐字段点名（含 $expectedField）：${caught!!.message}",
+            caught.message!!.contains(expectedField),
+        )
+    }
+
+    /**
+     * T-SAF-08 回归：logicDeleteValue 曾原样进入渲染 SQL 的 WHERE 字面量位
+     *（SqlValue.Literal.raw 直通），共享设置文件可用 `'0 OR 1=1'` 把注入的
+     * `AND deleted = 0` 翻转成恒真条件。
+     * **修复前失败断言**：caught != null——修复前值无校验原样合入，导入不抛异常。
+     */
+    @Test
+    fun testImportRejectsLogicDeleteValueOrConnector() {
+        importRejectsField(importJsonOf("logicDeleteValue" to "0 OR 1=1"), "logicDeleteValue")
+    }
+
+    @Test
+    fun testImportRejectsLogicDeleteValueSqlCommentAndSemicolon() {
+        importRejectsField(importJsonOf("logicDeleteValue" to "0--x"), "logicDeleteValue")
+        importRejectsField(importJsonOf("logicDeleteValue" to "0;DELETE x"), "logicDeleteValue")
+        importRejectsField(importJsonOf("logicDeleteValue" to "0 /*x*/"), "logicDeleteValue")
+    }
+
+    /** T-SAF-08：tenantColumnName 走标识符形状白名单（曾可携带 `tenant_id=1 OR 1=1 --`）。 */
+    @Test
+    fun testImportRejectsTenantColumnNamePayload() {
+        importRejectsField(importJsonOf("tenantColumnName" to "tenant_id=1 OR 1=1 --"), "tenantColumnName")
+        importRejectsField(importJsonOf("tenantColumnName" to "tenant id"), "tenantColumnName")
+        importRejectsField(importJsonOf("tenantColumnName" to "1tenant"), "tenantColumnName")
+    }
+
+    /** T-SAF-08：tenantColumnDefault 单字面量校验。 */
+    @Test
+    fun testImportRejectsTenantColumnDefaultPayload() {
+        importRejectsField(importJsonOf("tenantColumnDefault" to "1;DROP TABLE x"), "tenantColumnDefault")
+        importRejectsField(importJsonOf("tenantColumnDefault" to "1 OR 1=1"), "tenantColumnDefault")
+    }
+
+    /** T-SAF-08：tablePrefix/tableSuffix 标识符形状白名单（空串放行 = 无前缀安全语义）。 */
+    @Test
+    fun testImportRejectsTableNameFragmentPayload() {
+        importRejectsField(importJsonOf("tablePrefix" to "p_--x"), "tablePrefix")
+        importRejectsField(importJsonOf("tablePrefix" to "p_;DROP"), "tablePrefix")
+        importRejectsField(importJsonOf("tableSuffix" to "_log OR 1=1"), "tableSuffix")
+    }
+
+    /** T-SAF-08：dataPermissionMockCondition 长度上限 + 注释/分号拒绝（追加为原始 WHERE 片段）。 */
+    @Test
+    fun testImportRejectsDataPermissionMockConditionPayload() {
+        importRejectsField(importJsonOf("dataPermissionMockCondition" to "1=1;DROP TABLE x"), "dataPermissionMockCondition")
+        importRejectsField(importJsonOf("dataPermissionMockCondition" to "1=1 --x"), "dataPermissionMockCondition")
+        importRejectsField(importJsonOf("dataPermissionMockCondition" to "a".repeat(513)), "dataPermissionMockCondition")
+    }
+
+    /** T-SAF-08：dynamicTableNameRules pattern sanity（可编译 + 长度上限）。 */
+    @Test
+    fun testImportRejectsUnsafeDynamicTableNameRulePatterns() {
+        val broken = """
+            {
+              "version": $currentVersion,
+              "dynamicTableNameRules": [
+                {"pattern": "user[invalid", "replacement": "order", "enabled": true}
+              ]
+            }
+        """.trimIndent()
+        importRejectsField(broken, "dynamicTableNameRules")
+        val oversized = """
+            {
+              "version": $currentVersion,
+              "dynamicTableNameRules": [
+                {"pattern": "${"a".repeat(300)}", "replacement": "order", "enabled": true}
+              ]
+            }
+        """.trimIndent()
+        importRejectsField(oversized, "dynamicTableNameRules")
+    }
+
+    /** T-SAF-08：一次导入多个载荷字段时，拒绝报告逐字段全部点名（不静默丢一个不报）。 */
+    @Test
+    fun testImportRejectionReportsEveryOffendingField() {
+        var caught: SettingsIO.ImportException? = null
+        try {
+            SettingsIO.importFromJson(
+                importJsonOf(
+                    "logicDeleteValue" to "0 OR 1=1",
+                    "tenantColumnName" to "tenant_id=1 OR 1=1 --",
+                ),
+            )
+        } catch (e: SettingsIO.ImportException) {
+            caught = e
+        }
+        assertTrue("多字段载荷应整体拒绝", caught != null)
+        val message = caught!!.message ?: ""
+        assertTrue("报告应点名 logicDeleteValue：$message", message.contains("logicDeleteValue"))
+        assertTrue("报告应点名 tenantColumnName：$message", message.contains("tenantColumnName"))
+    }
+
+    /** T-SAF-08：合法值与出厂默认导出→导入往返不受校验影响（防误伤）。 */
+    @Test
+    fun testImportStillAcceptsLegitSqlPositionValues() {
+        val state = SettingsIO.importFromJson(
+            importJsonOf(
+                "logicDeleteValue" to "0",
+                "tenantColumnName" to "tenant_id",
+                "tenantColumnDefault" to "1",
+                "tablePrefix" to "sys_",
+                "tableSuffix" to "_log",
+                "dataPermissionMockCondition" to "dept_id = 1",
+            ),
+        )
+        assertEquals("0", state.logicDeleteValue)
+        assertEquals("tenant_id", state.tenantColumnName)
+        assertEquals("1", state.tenantColumnDefault)
+        assertEquals("sys_", state.tablePrefix)
+        assertEquals("_log", state.tableSuffix)
+        assertEquals("dept_id = 1", state.dataPermissionMockCondition)
+        // 出厂默认导出（含空 tablePrefix/tableSuffix）必须原样可导入
+        SettingsIO.importFromJson(SettingsIO.exportToJson(PluginSettings.State()))
+    }
 }
