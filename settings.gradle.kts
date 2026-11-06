@@ -44,12 +44,14 @@ plugins {
 dependencyResolutionManagement {
     // Configure all projects' repositories
     repositories {
-        // P-立项-05：阿里云公共镜像（Central 全量镜像）置前——本机代理（gradle.properties systemProp
-        // 127.0.0.1:7890）失效时 Maven Central 直连失败，新增测试依赖（H2/sqlite-jdbc 等）无法解析；
-        // 镜像与 Central 同源同版本，代理恢复后不影响构建正确性。
-        maven("https://maven.aliyun.com/repository/public")
-
+        // T-SAF-14（gradle-deps-aliyun-mirror-first-no-verification，D4=A 2026-11-06 定案）：
+        // Maven Central 置前（可信根），阿里云镜像降为后备——Gradle 按首个含该模块的仓库解析，
+        // 镜像置前时「与 Central 同源同版本」只是未验证假设（CI 对 wrapper 镜像的重写已证明
+        // 作者并不将其视为等信任源）。镜像保留：代理失效/直连受阻时的可用性后备；
+        // 配合 gradle/verification-metadata.xml 对字节做严格校验（替换字节失败关闭）。
         mavenCentral()
+
+        maven("https://maven.aliyun.com/repository/public")
 
         // IntelliJ Platform Gradle Plugin Repositories Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-repositories-extension.html
         intellijPlatform {
