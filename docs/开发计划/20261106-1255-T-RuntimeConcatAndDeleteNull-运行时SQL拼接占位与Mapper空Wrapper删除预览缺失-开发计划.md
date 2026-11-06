@@ -488,3 +488,72 @@ W1/W2/W3 与 W4 写集不重叠，可并行两路（构建并发上限 2 路）�
 |---|---|
 | 2026-11-06 | 立项。两问题的源码级根因、MP 3.5.17 注入 SQL 核对、R1~R5 方案、测试与反向验证清单、6 条待验证前提、5 个决策点。未改生产代码。 |
 | 2026-11-06 | 按用户三点补充修订：① 增加 §3.6 同类缺口审计（`insert`/`save` 已覆盖，`update(entity, null)` / `remove(null)` 同型缺失，查询族另券）；R4 扩为写族补全（delete/update/remove）；② R1 增加「占位形态」论证，默认改为 `/* 运行时值: ... */`，并说明 `--` 内联不安全，新增 D-6；③ JPA `repository.delete(entity)` 另立项（D-5），本券不碰 JPA 锚点顺序。另按用户提醒增加 R4.5 去重不变量表、§6.2 第 6/7 项重复图标反向验证、P-9 锚点基线前提、D-7（不扩 `insert` 守卫）。 |
+
+## 十二、实施记录
+
+实施代理：T-RuntimeConcat（只做 R1/R2/R3；分支 `t-runtime-concat`，工作树 `mpsv-t-concat`）。R4/R5 未动，`CHANGELOG` 与 `docs/架构设计/` 由主控收口。
+
+### 12.1 提交
+
+| 哈希 | 内容 |
+|---|---|
+| `53de1ee4` | `feat(concat): well-formed runtime placeholder, ternary and control-flow awareness` —— R1/R2/R3 生产改动 + 三个测试类的新增/更新用例 |
+| 本条（计划回写） | 仅文档：本文件 §十二 |
+
+### 12.2 改动点
+
+生产（单文件 `src/main/kotlin/cn/song/mybatisplus/visualizer/psource/SqlStringConcatenator.kt`）：
+
+- **R1**：新增 `dynamicPlaceholder(exprText)` + `sanitizePlaceholderText`，三处兜底（`concatPolyadic` / `concatNewStringBuilder` 初值 / `collectAppendCalls` 实参）全部收口到它；`DYNAMIC_PLACEHOLDER_PREFIX` 取值改为 `"/* 运行时值: "`，收尾 `" */"` 由同一函数生成。清洗：`*/`→`* /`、`'`→`’`、`"`→`”`、空白折叠单空格、上限 120 字符（超出截断加 `…`）。
+- **R2**：`concat()` 增加 `is PsiConditionalExpression -> concatConditional(expr)`；条件是 `true`/`false` 字面量取对应分支；两支聚合文本相同 → 折叠；其余 → 单条占位注释 + `complete=false`。两支从不同时拼入。
+- **R3**：新增 `analyzeAppendPosition` / `containsAppendTo` / `AppendFlow` / `AppendPosition`。`collectAppendCalls` 对每条 append 向上找最近的循环（for/foreach/while/do-while，优先）/ if / switch / 三元 / lambda，遇方法即停：
+  - 循环内 → 整条贡献降级为占位注释（`循环内追加，运行时重复执行`）；
+  - if/else 两支都对同一 builder 追加 → 两支都降级（`互斥分支追加，运行时只取一支`）；
+  - 无 else 的 if → 保留片段，前置说明注释（`条件追加，可能不出现`）；switch / 三元 / lambda 同口径（各自文案）；
+  - 直线代码 → 原路径不变。
+  - 同一上下文（同一循环 / 同一 if 等）只降级或只标注一次，避免链式 append 刷出三条注释。
+
+测试：
+
+- `SqlStringConcatenatorTest`：新增 8 例（R1 清洗 1、R2 三元 3、R3 循环/互斥/可选/直线 4）。
+- `JdbcTemplateSqlPreviewServiceTest`：新增用户 `getAreaPowerGeneration` 样本 1 例；既有 `if` 样本补「条件追加应带说明注释」断言。
+- `CustomDaoHqlLocatorTest:554`：`contains("/*运行时值*/")` → `contains("/* 运行时值: ")`。
+
+### 12.3 定向读数（52 例，逐类）
+
+| 类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `psource.SqlStringConcatenatorTest` | 15 | 0 | 0 | 0 |
+| `psource.JdbcTemplateSqlPreviewServiceTest` | 10 | 0 | 0 | 0 |
+| `psi.jpa.CustomDaoHqlLocatorTest` | 27 | 0 | 0 | 0 |
+| 合计 | 52 | 0 | 0 | 0 |
+
+命令：`./gradlew test --tests "...SqlStringConcatenatorTest" --tests "...JdbcTemplateSqlPreviewServiceTest" --tests "...CustomDaoHqlLocatorTest" -Pkotlin.compiler.execution.strategy=in-process`（首轮 1 红：自拟断言把 `tz('Asia/Shanghai')` 写成整串，格式化器输出 `tz ('Asia/Shanghai')`，改为分段断言后全绿；非生产断言问题）。
+
+用户样本实际产物（测试内断言原文）：
+
+```
+SELECT * FROM hplt.autogen.calpoint
+WHERE ( /* 运行时值: 循环内追加，运行时重复执行 */ )
+AND time >= '/* 运行时值: startTime */' tz ('Asia/Shanghai');
+```
+
+右括号在场、引号 4 个平衡、`*/` 只剩占位自己的一个。
+
+### 12.4 反向验证（改前红 / 改后绿）
+
+| # | 临时改动 | 红读数 | 还原后 |
+|---|---|---|---|
+| ① | `sanitizePlaceholderText` 直接 `return exprText`（去掉清洗） | `SqlStringConcatenatorTest` 25 例 1 红：`应只有一个注释结束符（不允许多余的悬空结束符）: SELECT * FROM t WHERE note = '/* 运行时值: raw("a*/b") */' expected:<1> but was:<2>` | 该用例转绿 |
+| ② | `concatConditional` 首行 `return null`（退回兜底） | 15 例 2 红：`expected:<AND a = 1 > but was:</* 运行时值: true ? ”AND a = 1 ” : ”AND b = 2 ” */>`、`expected:<SELECT 1 AND a = 1 > but was:<SELECT 1 /* 运行时值: flag ? ”AND a = 1 ” : ”AND a = 1 ” */>` | 两例转绿 |
+| ③ | `analyzeAppendPosition` 首行恒 `return AppendPosition(AppendFlow.STRAIGHT)` | 15 例 3 红：`条件追加应标记 incomplete`、`应标明循环内重复追加: SELECT * FROM t WHERE 1=1 or id='/* 运行时值: ids.get(k) */'`（循环片段被线性拼接一次）、`互斥分支追加应标记 incomplete` | 三例转绿 |
+
+三次临时改动均用 `git checkout -- <生产文件>` 还原，还原后 `grep -c "RED PROBE"` = 0，并复跑一次三类定向全绿（52/0/0/0）。
+
+### 12.5 偏差与未完成
+
+1. **R3 的 if/else 成对判定按「另一支是否存在对同一变量的 append」**，不做「两支文本互补」推断；`else` 存在但无 append 时按可选处理（保留片段 + 说明注释）。
+2. **三元作为 append 实参时不重复判控制流**：R2 已把「两支不同」定为占位；`concatConditional` 的「两支相同→折叠」仍判 `complete=true`（文本确定），与 §4 R3「非直线形态 complete=false」的字面表述有细微差异，理由是运行期走哪支文本都一样。若主控要求更严格，改一行 `concatConditional` 的折叠分支即可。
+3. **同一上下文去重**是新增行为（计划未写）：同一循环/同一 if 内多条链式 append 只降级/标注一次，避免预览里刷出多条同文案注释。
+4. 未跑全量、未跑 `testShards`、未跑 `verifyGate/verifyPlugin/buildPlugin`、未 clean（按派活纪律）。**本报告「全绿」只指上表 52 例定向读数**。
+5. P-1 未单独用 `SqlFormatter.format` 做「格式化前含 `") and time >= '"`、格式化后括号丢失」的对照实验；R1 后的产物（上表 SQL）已直接证明括号与引号恢复正常，反向验证 ① 也证明「不清洗 → 注释提前闭合」这一环。P-1 的「格式化器参与度」仍属未证前提。
