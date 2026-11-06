@@ -198,7 +198,8 @@ class SqlLogAutoSaverPruneGuardTest {
     }
 
     /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。 */
-    private fun awaitFileGone(file: File, timeoutMs: Long = 5_000) {
+    private fun awaitFileGone(file: File, timeoutMs: Long = 15_000) {
+        // 15s（原 5s）：全量切片重载（同 JVM 大夹具并行 I/O）下裁剪节流时序余量不足，两次实测超时；
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (!file.exists()) return

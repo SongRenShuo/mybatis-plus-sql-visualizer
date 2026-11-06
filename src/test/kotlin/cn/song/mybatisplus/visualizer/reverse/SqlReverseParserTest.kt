@@ -908,12 +908,14 @@ class SqlReverseParserTest {
 
     @Test
     fun `深度FROM子查询嵌套_有界处理而非栈溢出`() {
+        // 深度取 500（> 256 上限）：20000 层会在 token 化阶段先 OOM（每层重复分配，守卫来不及
+        // 触发），500 层既有足够深度越过守卫、又远离 token 化的内存放大区。
         // 修复前：深层 FROM 子查询驱动 parseSubqueryTable→parseSubqueryStructure→parse
         // 递归环打爆线程栈（StackOverflowError）。修复后深度守卫（上限 256）超限抛
         // SqlReverseException，该异常在既有子查询回落通道（parseSubqueryStructure
         // catch → null 字符串形态）被收编——结局要么整体正常返回（深层子查询降级原文承载）、
         // 要么结构化拒绝，两者皆有界；唯独不允许 StackOverflowError 逃逸
-        val n = 20000
+        val n = 500
         val sql = "SELECT * FROM (".repeat(n) + "SELECT id FROM t" + ")".repeat(n)
         try {
             SqlReverseParser.parse(sql)

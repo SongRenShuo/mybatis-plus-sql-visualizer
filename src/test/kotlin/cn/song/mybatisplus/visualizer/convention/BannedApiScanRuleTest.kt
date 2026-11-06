@@ -640,7 +640,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             CatchExemption(2, "帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串"),
         // 1 处：OGNL 求值器对用户表达式收敛为 Err。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt" to
-            CatchExemption(1, "OGNL 求值器须把用户表达式的任何失败收敛为 Err（同 McpSelectGuard fail-closed 族）"),
+            // T-SAF-19 后为 3 处：①原 AST 求值守卫 ②parse() 外层 ③evaluate(text) 外层——
+            // catch Throwable 是 Err 降级契约本体（StackOverflowError 契约化降级，非吞异常反模式），
+            // 递归深度另有 512 上限守卫（depth 参数），catch 是最后一道契约边界。
+            CatchExemption(3, "OGNL 求值器须把用户表达式的任何失败收敛为 Err（同 McpSelectGuard fail-closed 族）"),
         // 1 处：DasModel 遍历失败 bail。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/DatabaseSchemaResolver.kt" to
             CatchExemption(1, "平台 DasModel 形态差异探测：遍历失败 bail + warn（解析降级）"),
