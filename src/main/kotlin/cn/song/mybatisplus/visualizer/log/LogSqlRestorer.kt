@@ -45,6 +45,10 @@ class LogSqlRestorer {
         val value = param.value ?: return NULL_SQL // null 字面量（value/type 均 null）
         val type = param.type ?: return renderUntyped(value)
         renderDateFamily(value, type)?.let { return it }
+        // F-15（DBX #319）：空间二进制反解分支——0x 十六进制形态 + EWKB 结构解析成功才出
+        // `geometry::STGeomFromText('WKT', SRID)`（SQL Server 方言）；解析失败/非空间二进制
+        // （`[B@…`/`<byte[]>` 等）一律回落下方原渲染路径（引号包裹），双门槛判据见 SpatialLiteral。
+        SpatialLiteral.render(value)?.let { return it }
         return if (type in PLAIN_TYPES) value else quote(value)
     }
 
