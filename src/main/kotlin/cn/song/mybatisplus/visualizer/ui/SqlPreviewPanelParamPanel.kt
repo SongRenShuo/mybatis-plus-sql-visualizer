@@ -2067,9 +2067,15 @@ internal fun SqlPreviewPanel.buildRuntimeSlotRow(slot: RuntimeSlot, index: Int):
         val previous = slotValues[slot.id] ?: SlotValue.UNSET
         val combo = branchCombo
         val box = includeBox
-        val next = previous.copy(
-            type = (typeCombo?.selectedItem as? ValueType) ?: previous.type,
-            text = field.text,
+        val selectedType = (typeCombo?.selectedItem as? ValueType) ?: previous.type
+        // 选「布尔」时走 SlotValue.bool（归一化 true/false 并带上 BOOLEAN 类型）；
+        // 其余类型沿用 copy 语义——只覆盖本控件负责的字段，未动作的字段保持不变
+        val base = if (selectedType == ValueType.BOOLEAN) {
+            SlotValue.bool(field.text)
+        } else {
+            previous.copy(type = selectedType, text = field.text)
+        }
+        val next = base.copy(
             // 三元：下拉明确选了「未选」时 branch 必须回到 null（不能沿用上一次的分支）
             branch = if (combo != null) runtimeSlotBranchOf(combo.selectedIndex) else previous.branch,
             include = if (box != null) box.isSelected else previous.include,

@@ -86,6 +86,16 @@ data class SlotValue(
         /** SQL NULL。 */
         fun sqlNull(): SlotValue = SlotValue(type = ValueType.NULL)
 
+        /**
+         * 布尔（面板类型下拉选「布尔」时走这里）。
+         *
+         * 值按 `true`/`false` 渲染；Oracle / 达梦没有布尔字面量，渲染层会给「改用 1/0」的提示
+         * （见 [ParameterReplacer] 的 `NO_BOOLEAN_LITERAL_DIALECTS`）。这里只做归一化（去空白 +
+         * 小写），非 `true`/`false` 的文本原样保留——不猜用户想表达什么。
+         */
+        fun bool(value: String): SlotValue =
+            SlotValue(type = ValueType.BOOLEAN, text = value.trim().lowercase())
+
         /** 三元挑支。 */
         fun branch(index: Int, value: String = ""): SlotValue = SlotValue(text = value, branch = index)
 
