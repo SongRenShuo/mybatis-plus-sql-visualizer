@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **磐维（Panwei）数据源的日志条目没有库角标，预览按 MySQL 渲染导致 Oracle 语法降级（T-IbatisPanwei 券 F，46c05b5f）**：`jdbc:panwei:` / `jdbc:panweidb:` 此前不在 JDBC URL 的两张子协议表里——角标解析为 null（列表里看不到目标库），方言推断无结论后回落 MySQL，`SYSDATE` / `dual` / `to_date` 这类 Oracle 语法走 MySQL 渲染，预览常以简化模式打开。现在两种子协议都登记：角标显示「Panwei（磐维） · 库名@host:port」，渲染方言按 Oracle 推断（磐维现网是 Oracle 兼容模式；PG 模式可在面板手动改选）。历史条目持久化的角标也能被方言兜底解析——角标显示名与注册方言名不同名时走显式别名表，未登记的显示名仍返回 null（不猜近似方言）
 - **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障，2769e1b8）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
 
 ## [2026.11.6-beta.1] - 2026-11-06
