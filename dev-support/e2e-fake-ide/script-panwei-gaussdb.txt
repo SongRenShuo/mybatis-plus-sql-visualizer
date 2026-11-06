@@ -1,0 +1,23 @@
+# 假 IDE 探针脚本：磐维 V1 驱动 + GaussDB 内核（T-IbatisPanwei 真机验收）
+#
+# 目标：证明插件对 org.panweidb.Driver 的三面登记真生效——应用用磐维驱动跑在 GaussDB 503.1.0 上，
+#      agent 能收到 execute 事件（SQL 文本 / 参数 / 耗时 / 来源 / url）。
+# 方言映射（jdbc:panweidb → Oracle）不在探针里断言：它是插件侧纯函数，由 DialectInferenceTest 钉住；
+# 这里只把事件里的 url 带出来（EVENT 行的 u= 列）供对照。
+#
+# 口径：结论写「GaussDB 503.1.0 + 磐维 V1 驱动」，服务端不是磐维，不得写「磐维真机已验证」。
+# 注意：本 demo 在约 16s 后会出现「钩子不再产出」的已知观测（见 e2e README「已知边界」），
+#      故只保留一条业务请求，避免把该现象误判成本次验收失败。
+
+mark 0 握手：等 agent 回连（premain 阶段即连）
+wait-hello 90000
+wait-http http://localhost:8082/order/list 180000
+
+mark A 采集 + 参数：MP LambdaQueryWrapper 带参查 t_order
+reset-events
+get http://localhost:8082/order/list?minAmount=100&maxAmount=300&status=1
+assert-events 5000
+report-events
+
+summary
+quit

@@ -74,8 +74,27 @@ demo 工程位置由环境变量 `MPSV_DEMO_ROOT` 提供（其下的 `mybatis-pl
 | --- | --- |
 | `FakeIde.java` | 假 IDE 探针（自包含，仅 JDK 标准库，Java 8 编译） |
 | `script-e2e.txt` | 主验证脚本：握手 → A 停采 → B 恢复 → C 位置 → D 脱敏 → 收口 |
+| `script-panwei-gaussdb.txt` | 磐维 V1 驱动 + GaussDB 内核的采集验收脚本（`/order/list` 无参 + 带参 + `GROUP BY` 三种形态）；用法见下节「换驱动/换库」 |
 | `script-stackprobe.txt` | P-1 栈采样专用脚本（只握手 + 开采集 + 保持连接 45s） |
 | `run-e2e.sh` | 驱动：编译探针 → 起探针 → 起应用（`-javaagent`）→ 等脚本 → 收口 → 打印读数 |
+
+## 换驱动 / 换库（DEMO_DIR / DEMO_PROFILE / APP_MAIN / E2E_SCRIPT）
+
+默认跑 join-demo + mysql。要验「别的驱动」或「别的库」，四个变量一起给，命令行参数优先级高于 demo 构建态：
+
+```bash
+DEMO_DIR=<demo 仓>/mybatis-plus-demo \
+DEMO_PROFILE=panwei-gaussdb \
+APP_MAIN=cn.song.mybatisplusdemo.MybatisPlusDemoApplication \
+E2E_SCRIPT=$PWD/dev-support/e2e-fake-ide/script-panwei-gaussdb.txt \
+  bash dev-support/e2e-fake-ide/run-e2e.sh
+```
+
+- `DEMO_DIR` 必须指向**具体模块**（有 `pom.xml` 与 `target/` 的那层）；
+- `DEMO_PROFILE` 是 Spring profile，对应 demo 的 `application-<profile>.yml`；
+- `APP_MAIN` 是该模块的 Spring Boot 启动类全限定名；
+- `E2E_SCRIPT` 是探针脚本；脚本里的 `http://localhost:8082/` 会被替换成本轮 `APP_PORT`。
+- 探针日志的 `EVENT` 行带 `u=`（事件 url）——它是 IDE 侧角标/方言映射的输入，换库验收时先看这一列。
 
 ## 协议契约（与仓库源码逐值一致）
 
@@ -156,3 +175,9 @@ awk 'BEGIN{RS="";ORS="\n\n"} /MPJInterceptor/ && /DeviceInfoServiceImpl/ {print;
   且脚本里用 `MSYS2_ARG_CONV_EXCL='*'` 关掉 MSYS 的路径/参数转换。
 - **MSYS 路径与 Java 不兼容**：`/f/code/...` 交给 java 会被当相对路径（实测 `错误: 找不到或无法加载主类`），
   脚本统一经 `cygpath -w` 转换。
+- **磐维驱动 + GaussDB 场景：应用启动约 16s 后钩子不再产出**（2026-11-06 复现 4 次，待三查）。
+  现象：前 ~16s 事件正常（含参数与 url），之后 `execute` 不再产事件，但请求仍 200、心跳仍发
+  （sender 活着）；`-Dsqlvis.agent.nestGate=false`、`-Dsqlvis.agent.catchAll=false` 关掉后现象不变
+  → 与 NestGate、premain 兜底扫描都无关，指向「Hikari 池预热完成后，后续 PS 的 SQL 归属取不到」
+  （宿主 stderr 有且仅有一条 `织入通道登记盲区：无登记 PS 执行被跳过 psClass=org.panweidb.jdbc.PgPreparedStatement unresolvedCount=1`）。
+  暂按**观察项**登记，不阻塞磐维采集验收：`script-panwei-gaussdb.txt` 只保留一条业务请求（落在 16s 内）。

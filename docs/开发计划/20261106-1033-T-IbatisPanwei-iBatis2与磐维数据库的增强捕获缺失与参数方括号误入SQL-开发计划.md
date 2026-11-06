@@ -269,6 +269,16 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 - **`db_compatibility` 连接参数**（§4.4.5）：默认 `postgresql`，可设 `postgresql` / `oracle` / `mysql`；oracle 模式下列名以大写返回、`disableColumnSanitiser=false` 失效。券 F 据此改为**参数感知**：URL 显式给出时按值映射（`oracle`→Oracle / `postgresql`→openGauss / `mysql`→MySQL），缺省或未识别值仍走 D-1 默认档 Oracle。V1 驱动没有该参数（jar 内只有协议层 `compatibilityMode` 字段），故 V1 现场恒走默认档。
 - V1 `Driver.class` 常量池实测接受 `jdbc:panweidb:` 与 `jdbc:dws:iam:` 两个前缀（后者与海量同键，既有 Vastbase 映射不动）。
 - **仍未闭环**：V2-v 的 `cn.com.panweidb.*` 类形待 jar；真机复验（磐维应用上的「已收事件 N>0 / 角标 / 未登记类名消失」）待用户环境。
+
+**真机验收（2026-11-06，非 GUI，假 IDE 探针）**：demo 新增 `panwei-gaussdb` profile（磐维 V1 驱动 + GaussDB Kernel 503.1.0 @ `103.36.220.245:25882/xc3_test`），用 `dev-support/e2e-fake-ide` 跑：
+
+- 驱动级：`Class.forName("org.panweidb.Driver")` + `jdbc:panweidb://103.36.220.245:25882/xc3_test` 连通，`version()=gaussdb (GaussDB Kernel 503.1.0 build f53b4ed8)`、`t_order` 4 行（直接用 `database-lab/vendor/drivers/panweidb-jdbc-1.0.0.jar` 跑的小程序）。
+- 探针：`HELLO` 2.8s 到达；`EVENT` 栈摘要命中 `org.panweidb.jdbc.PgPreparedStatement#execute:145` / `org.panweidb.jdbc.PgStatement#executeQuery:245`——**登记的三面真在产事件**（不是接口兜底）。
+- 业务事件：`GET /order/list?minAmount=100&maxAmount=300&status=1` → SQL `SELECT id,order_no,… FROM t_order WHERE (amount BETWEEN ? AND ? AND status = ?) ORDER BY create_time DESC`，参数 `[[1,"100","BigDecimal"],[2,"300","BigDecimal"],[3,"1","Integer"]]`，`url=jdbc:panweidb://103.36.220.245:25882/xc3_test`；断言 **4/0 ALL-PASS**。
+- 方言：`UrlSubprotocolDialects.dialectName(该 URL)` = `Oracle`（默认档；纯函数单测已钉，探针只负责带出 url 原材料）。
+- **已知观测（待三查，不阻塞本券）**：应用启动约 16s 后钩子不再产出（请求仍 200、心跳仍在）；关 `nestGate`、关 `catchAll` 均复现 → 与 NestGate 和 premain 兜底扫描无关，倾向「Hikari 池预热后后续 PS 的 SQL 归属取不到」（宿主 stderr 仅一条 `织入通道登记盲区 … psClass=org.panweidb.jdbc.PgPreparedStatement unresolvedCount=1`）。已记入 `dev-support/e2e-fake-ide/README.md` 已知边界。
+- **口径**：GaussDB Kernel 503.1.0 + 磐维 V1 驱动；服务端不是磐维，**不得写「磐维真机已验证」**。
+
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
 提交：`47a28ef1`（agent 侧 D+E）、`6efd2e48`（IDE 侧 D 展示）、`7510dc79`（名字快筛门控）。
