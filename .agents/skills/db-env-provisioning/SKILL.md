@@ -328,7 +328,8 @@ select current_user, current_database(),
 - `dbx_add_connection` **没有分组参数**，新建的连接只能落在默认位置，得请用户手动拖进 Song 分组；
   MCP 也没有 edit/update 连接的工具（只有 add/duplicate/remove）。
 - **`db_type` 不是任意值**：`oceanbase` 不支持（`INVALID_CONNECTION_TYPE`），用 `mysql` 类型 + 用户名带租户；
-  `highgo/vastbase/kingbase/dameng/sqlserver/opengauss` 原生支持。
+  `highgo/vastbase/kingbase/dameng/sqlserver/opengauss` 原生支持。**没有专门类型的国产库一律先试 `opengauss`**
+  （openGauss 系）/ `mysql`（MySQL 协议系）：磐维 PanWeiDB 实测 `opengauss` 可用，MCP 直连取到 `version()`。
 - 新连接默认**不在 MCP 授权范围**（`CONNECTION_OUT_OF_SCOPE`），要用户在 DBX 里放行；放行后连接名可能变，
   **按连接 ID 访问才可靠**。另外 DBX 的凭据是每条连接独立密文，`.local` 里那份「通用密码」对多主机已失效。
 
