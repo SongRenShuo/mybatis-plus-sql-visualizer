@@ -146,6 +146,8 @@ internal fun SqlLogPanel.exportVisibleEntries() {
                     PluginSettings.getInstance().displayMaskExportOn(),
                     PluginSettings.getInstance().displayMaskAllowList(),
                 ),
+                // F-14（DBX #318）：CSV 导出默认带 UTF-8 BOM（Excel 直开不乱码）；设置省略则不带。
+                SqlExportService.bomFor(format, PluginSettings.getInstance().csvExportNoBom()),
             )
         }.onSuccess {
             com.intellij.notification.NotificationGroupManager.getInstance()

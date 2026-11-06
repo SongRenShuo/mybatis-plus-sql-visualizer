@@ -636,6 +636,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
             // T-MagpieGems W2：豁免白名单文本域（行标签同键）；「白名单/豁免」可搜索命中
             fields.add(SearchableField(b.message("settings.display.mask.allowList"), b.message("settings.display.mask.allowList.tip"), "settings.section.sqlLog", l))
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（「BOM/CSV/导出」可搜索命中）
+            fields.add(SearchableField(b.message("settings.csv.export.noBom"), b.message("settings.csv.export.noBom.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 

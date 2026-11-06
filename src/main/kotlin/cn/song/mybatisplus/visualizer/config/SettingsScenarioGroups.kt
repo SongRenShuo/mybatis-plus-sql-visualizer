@@ -73,6 +73,8 @@ object SettingsScenarioGroups {
             "showMethodInLogList",
             // 看之前的保护：展示层脱敏（含旧布尔迁移源）
             "displayMaskEnabled",
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM（导出文件形态，随历史/日志导出链）
+            "csvExportNoBom",
             // 引导与日常维护
             "onboardingAnchorTipEnabled", "onboardingAnchorTipShown", "sqlListPreviewHintSeen",
             "autoCheckUpdate",

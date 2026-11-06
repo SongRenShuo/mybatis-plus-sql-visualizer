@@ -217,9 +217,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // 并入 master 后：本分支 W2 已把 displayMaskCheck 布尔复选框改分级下拉（JComboBox，-1）——合并态 46（实跑核对）。
             // T-SettingsConverge：六组 gutter 分组开关合并为一个多选控件（6 个勾选框移入浮层、不进面板主树）-6 → 40（实跑核对）。
             // T-LogMethodName（S1-7 并入 master）：来源位置后显示「类名#方法名」开关（logShowMethodCheck）+1 → 41。
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（csvExportNoBomCheck）+1 → 42。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 41", 41, texts.size)
+            assertEquals("复选框总数应为 42", 42, texts.size)
         } finally {
             settings.state.language = old
         }

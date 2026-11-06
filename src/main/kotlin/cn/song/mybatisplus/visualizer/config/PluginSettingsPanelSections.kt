@@ -640,6 +640,13 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 },
                 fill = GridBagConstraints.HORIZONTAL,
             )
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（默认不勾 = 带 BOM；与脱敏同属
+            // 「文本怎么出去」的导出形态组）。字段级实例随 rebuild 复用——text 须在此随语言
+            // 显式刷新（同 logFormatSqlCheck 口径；否则切 EN 后残留 zh 文案，PersistenceTest 真红实证）。
+            addRow(p, g, "", csvExportNoBomCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.csv.export.noBom")
+                toolTipText = MpSqlVisualizerBundle.message("settings.csv.export.noBom.tip")
+            })
             // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
