@@ -61,6 +61,60 @@ class HistorySearchToolTest {
         assertTrue("应含落盘文件", text.contains("in sql-history-2026-09-30.sql"))
     }
 
+    // ------------------------------------------------------------------
+    // T-SAF-07（mcp.history_search.masking-not-applied）：输出脱敏
+    // ------------------------------------------------------------------
+
+    private fun maskedResult(): HistorySearchService.Result {
+        val hit = HistorySearchService.Hit(
+            timestamp = 1_759_190_400_000,
+            sqlPreview = "SELECT * FROM t_user WHERE password = 'hunter-pw-123'",
+            source = "UNKNOWN",
+            sourceFile = null,
+            sourceLine = 0,
+            executionTimeMs = null,
+            databaseName = null,
+            mapperStatement = null,
+            errorText = null,
+            historyFile = "sql-history-2026-09-30.sql",
+        )
+        return HistorySearchService.Result(
+            totalHits = 1, returned = 1, truncated = false,
+            scannedFiles = 1, scannedEntries = 1, scanTruncated = false,
+            scopeStartMs = null, hits = listOf(hit),
+        )
+    }
+
+    @Test
+    fun test脱敏开_敏感字面量打码() {
+        // T-SAF-07 先红：改前 formatResult 直接追加 hit.sqlPreview（无任何 maskDisplay 调用），
+        // maskOn 下断言「字面量不出现在输出」失败——敏感字面量原样进 agent 上下文。
+        // 打码口径与 SqlVisualizerRenderLogsTool（DisplayMasker.maskDisplay）一致。
+        val text = tool.formatResult(maskedResult(), maskLiterals = true)
+        assertTrue(
+            "maskOn 时敏感字面量必须打码：$text",
+            !text.contains("hunter-pw-123"),
+        )
+        assertTrue("打码值应为 '***'：$text", text.contains("'***'"))
+    }
+
+    @Test
+    fun test脱敏关_字面量原样() {
+        val text = tool.formatResult(maskedResult(), maskLiterals = false)
+        assertTrue(
+            "maskOff 时字面量应原样保留（诊断口径）：$text",
+            text.contains("hunter-pw-123"),
+        )
+    }
+
+    @Test
+    fun test脱敏默认_设置不可读兜底关() {
+        // 默认路径读设置 mcpMaskEnabled（普通 JUnit 无平台服务 → runCatching 兜底关），
+        // 与 renderLogs 同款语义：输出与无脱敏版一致
+        val text = tool.formatResult(maskedResult())
+        assertTrue(text.contains("hunter-pw-123"))
+    }
+
     @Test
     fun test扫描截断_输出警示() {
         val r = HistorySearchService.Result(
