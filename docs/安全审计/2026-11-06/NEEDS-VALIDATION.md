@@ -2,6 +2,12 @@
 
 生成时间 2026-11-06T00:31:45.481Z，由 findings.json 派生（25 条记录，全部为 `needs_validation`，按「所有者可行动性」排序）。每条线索均有源码级轨迹与精确阻塞点，均不带严重级别。本次运行无法执行目标受控代码（审计主机无 OS 级沙箱），因此每条记录都需要一次有界本地检查与 / 或一次由所有者观察的部署检查来定案。
 
+## 2026-11-07 修复落地更新（T-SecurityAuditFixes 分支，账本闭环）
+
+修复批次落地后本文件对应的 `findings.json` 已更新（双验证器 PASS）：**21 条线索转 `confirmed`（已修复）**——lane_a（T-SAF-20/21/22/12/02）、lane_b（T-SAF-05/06/03/07/11/17/24）、lane_c（T-SAF-04/08/09/10/13/23/25）共 19 项 src/main 修复 + 构建防线 T-SAF-15/16（提交 965a15168），每条均以「先红复现测试在修复前转红 → 修复提交落地 → 回归通过」定案，并按 report-schema confirmed 分支补齐 intended_behavior / conditions / execution / remediation / severity / confidence。**4 条维持 `needs_validation`**：#1 凭据为**所有者明示豁免**（2026-11-06 定案：测试服务器口径，不轮换、不清理、不加守卫——豁免而非缩水）；#14 修复进行中（mavenCentral 置前已改未提交、verification-metadata.xml 未生成入库）；#18/#19 修复未开工（全分支核查无修复提交）。
+
+以下正文保留审计原判轨迹（原始 blockers / validation_plan 与逐条记录），供审计追溯，不逐条重写；confirmed 记录的最终口径以 `findings.json` 为准。
+
 图例：**本** = 运行有界本地检查；**部** = 所有者观察部署事实。
 
 | # | 线索 | 边界 | 首步 |

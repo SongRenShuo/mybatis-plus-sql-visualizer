@@ -17,7 +17,35 @@
 
 ## 3. 已确认发现
 
-**无。** 由于审计主机没有 OS 级沙箱，任何候选都无法产生 `confirmed` 判定所需的有界本地观测结果。零条 confirmed 记录是本次运行执行边界的属性，并非「代码库无漏洞」的断言——下方 25 条已验证线索正是「一次有界本地检查即可定案」之处。
+**审计原判（2026-11-06）：无。** 审计主机没有 OS 级沙箱，任何候选都无法产生 `confirmed` 判定所需的有界本地观测结果。零条 confirmed 记录是本次运行执行边界的属性，并非「代码库无漏洞」的断言——下方 25 条已验证线索正是「一次有界本地检查即可定案」之处。
+
+**修复落地更新（2026-11-07，T-SecurityAuditFixes 分支）：21 条转 `confirmed`（已修复）。** 每条以「先红复现测试在修复前转红（审计缺陷复现）→ 修复提交落地 → 回归通过」定案；严重级别按 skill 校准锚（桌面单用户模型：本地恶意进程边界=medium；AI 代理驱动的控制失效=medium~high；hostile-project/共享设置通道=medium；资源无界/ReDoS=low~medium；更新链/构建防线=medium；UI HTML 注入=low~medium）。`findings.json` 中各 confirmed 记录附 intended_behavior / conditions / execution / remediation / severity / confidence 完整口径：
+
+| # | 线索（一句话） | 修复提交 | 严重级别 |
+|---|---|---|---|
+| 2 | 环回 agent 通道无对端认证——同机进程可注入伪造 SQL 事件、翻转捕获门、窃听 agent SQL 帧 | 5ac6fdb4f/0495ade42（双向通道令牌认证） | medium |
+| 3 | MCP `sqlv_explain` 只读仅在客户端——SELECT 调用的副作用函数以数据源完整权限执行 | 8f556d347/4da7b48a4（setReadOnly 强制，fail-closed） | medium |
+| 4 | 内嵌预览面板原生 ▶/Ctrl+Enter 绕过插件 DML 确认/无界写入/方言门链 | 1ba06bf43/10e26eeba（D1=A：撤 CLIENT_KEY/EDITOR 注入，禁原生入口） | medium |
+| 5 | 更新 plugin-id 门正则可被 XML 注释与平台描述符解析器去同步 | daf6617af/addc3f3de（SecureXml 真解析） | medium |
+| 6 | 更新 zip 防护将条目名清洗完全委托给未验证的平台解压器 | efefc4eaf/98eff6fa8（插件侧条目名校验） | medium |
+| 7 | `sqlv_history_search` 无视 MCP 输出脱敏设置，敏感字面量直达代理 | 0619a92d3/79efe38f7（formatResult 接入 maskDisplay） | medium |
+| 8 | 导入/共享设置字段无值级校验即拼接进渲染/执行 SQL，可翻转语句语义 | ee31117f9/586d5d40（SettingsValueValidator 双读取路径） | medium |
+| 9 | HTML 报告导出未转义插值 tableName/来源名称并自动在浏览器打开 | 7a56f934f/d3e7ebd1b（补转义，共享 HtmlEscape） | low |
+| 10 | 三处 Swing HTML 汇聚未转义插值低信任文本（回滚对话框/预览元信息/错误 tooltip） | 7a56f934f/d3e7ebd1b（共享 HtmlEscape + html.disable） | low |
+| 11 | MCP 守卫 INTO 检查未递归进 CTE/派生表——嵌套 SELECT INTO 绕过 | a895a914a/14c4574a0/78f41eea4（递归遍历 + 词法兜底） | medium |
+| 12 | 无 token 行共用兜底桶——跨线程 Preparing/Parameters 错配直达执行 | 35477751f/4707e1d87（D5 温和版延迟配对） | medium |
+| 13 | 自动保存写入器跟随符号链接，追加写入可被重定向到项目外 | d88923012/d4a31a032（NOFOLLOW 对齐修订路径） | low |
+| 15 | Gradle wrapper 分发包来自腾讯云镜像且无 distributionSha256Sum | 965a15168（官方校验和锚定，2026-11-06 实取） | medium |
+| 16 | 发行门禁首次匹配遍历选取 verifier-cli jar，多版本缓存下无视 pin | 965a15168（三解析点 pin 精确匹配 + 缺失即失败） | medium |
+| 17 | 四个 MCP 文本工具解析 agent SQL 无输入长度上限（兄弟通道 20k） | d02ddec0d/b0c7bf701（20000 字符结构化拒绝） | medium |
+| 20 | MyBatis Parameters 文本未截断进入二次复杂度正则，冻结解析线程 | a3a9ef9cb/9cf2425cd（take(maxParseLength) 同规） | medium |
+| 21 | ExecutionTimeParser 行尾 ms 正则对连续空白段平方级回溯 | 302d41947/fbdd4f997（lookbehind 重锚定 + 行尾窗口） | low |
+| 22 | MyBatis/Hibernate pending 解析桶永不被淘汰，保留内存无界增长 | da90431c3/9069bad33（静默 >60s forceClose 淘汰） | low |
+| 23 | 历史 .sql 读取器无逐行/逐文件字节上限（含 MCP 触发路径） | 3d8150c55/6f778d74c（1MB 行折叠 + 100MB 文件闸） | low |
+| 24 | agent 提供的历史搜索正则无成本预算，可 CPU 耗尽 | fc81f5684/f49190dde/78f41eea4（长度/复杂度/求值三道闸） | medium |
+| 25 | 导入的动态表名正则规则在渲染路径上无界求值 | 9c122fe68/99ac9a88f（BoundedRegex 预算 + 并发有界缓存） | low |
+
+**未转 confirmed 的 4 条**：#1 凭据为**所有者明示豁免**（测试服务器口径，2026-11-06 定案）；#14 依赖校验修复进行中（mavenCentral 置前已改未提交、`verification-metadata.xml` 未生成入库）；#18（SqlReverseParser 深度守卫）与 #19（Ognl Err 契约封闭）修复未开工——三条均维持 `needs_validation`，修复落地后按同一「先红→修复→回归」口径补转。
 
 ## 4. 待验证线索（25 条，均经独立复核）
 
@@ -76,3 +104,5 @@
 | blocked / deferred / out_of_scope | 0 |
 
 27 个单元、两个波次（波次二由波后批评家追加：`sqlv_schema_context`、MCP 文本工具解析边界）；**终局批评家返回 `stop=true`**——无缺失单元、无重指派。两份验证器对最终产物均通过（`validate-findings.cjs`：25 条记录有效；`validate-coverage-ledger.cjs`：27 个单元有效）。这是本仓库的首次运行：按 skill 设计，单次运行约覆盖重复运行可发现漏洞的一半——账本与 `findings.json` 是未来任何运行的累加基线。
+
+> **2026-11-07 修复批次尾注（账本闭环）**：修复分支 `t-security-audit-fixes`（提交区间 7389cde46..965a15168，审计基线 30312d461 之后）落地三车道 19 项 src/main 修复 + 构建防线 2 项，**21 条线索转 `confirmed`**（见 §3），双验证器 PASS。复核波 R-01/R-02/R-03 结论全部**维持**原判定（6 条受审计后代码变化影响的线索病灶未变）；**新增信任面快扫（2 个）结论均 info、无新发现**——DevUpdateMode 预览通道的下载安装走与正式通道同一 downloadAndInstall → UpdateZipGuard.check → validateArtifact 全链（纯内存连点解锁不构成新信任面）；PlatformEpDynamism 纯编译期常量、零反射零 IO，卸载门失败一律 fallbackToRestartScript（fail-closed）。账本单元级 bookkeeping 字段 `fix_dispositions` 已登记（19 个含 result_fingerprints 的单元、28 条指纹：已修复 21 / 维持 3（T-SAF-14/18/19）/ 豁免 1（T-SAF-01）），单元审计语义字段与 status 保持不动。已知 followup（共享骨架出口脱敏、共享 BoundedRegex 预算统一、剩余局部 escapeHtml 变体、项目级设置 UI 内联校验、所有者 runIde 端到端核对）登记于 lane-reports followups。

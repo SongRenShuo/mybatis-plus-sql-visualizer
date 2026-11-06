@@ -13,6 +13,26 @@
 ### Fixed
 - **下载更新包遇到 404/410 不再甩出一串 HTTP 异常，改为「该更新包还没有发布」并给发布页链接（T-DevUpdateChannel，cda8f3e5）**：清单里的 `downloadUrl` 常指向尚未建仓的 Release 附件（预览清单最常撞上），旧口径把 `HttpStatusException` 原文塞进「更新失败：{0}」，看着像插件坏了。现在 404/410 单独判为「未发布」——设置页写「该更新包还没有发布（HTTP 404），请稍后重试，或到发布页手动下载」并露出既有发布页兜底链接，日志只记一行带 URL 与状态码的 info；启动通道给同文案的 WARNING 通知。网络不通、非法 zip、安装失败等其余失败仍是普通「更新失败」，不扩散
 - **更新被平台拒绝时日志给出确定原因，不再只说「平台没给原因」（T-HotSwapUnloadSafety）**：旧版探测入口（`allowLoadUnloadWithoutRestart` / `checkCanUnloadWithoutRestart`）只返回真假，插件在拒绝时统一写一句「platform gave no reason」，而平台其实在同一份 `idea.log` 上一行就点名了确切项。现在按「非动态 EP 事实表」补位，日志直接写出「本插件扩展了 `com.intellij.sql.dialect`，平台自 baseline 253 起才把它标为动态，当前 243」并说明后果是重启生效。同时确认一条**平台边界**（已写进已知边界）：243（2024.3.x）上 `com.intellij.sql.dialect` 是非动态 EP，扩展它的插件不可被动态卸载，因此**更新只能重启生效**；253 / 262 / 263 上该 EP 已是 `dynamic="true"`，免重启热替换可用
+- **安全审计 run-1 修复批次（T-SecurityAuditFixes，三车道 19 项 src/main 修复 + 构建防线 2 项；21 条线索转 confirmed，见 `docs/安全审计/2026-11-06/`）**，各项一句：
+  - **agent 通道双向令牌认证（T-SAF-02，0495ade42）**：每通道生成 128bit 随机令牌随 agentArgs 下发、HELLO 回带，IDE 三处会话提交点恒量时间验令牌，无令牌/错令牌的本地连接在提交会话前被拒（协议 break：旧 agent + 新插件被拒，已登记）
+  - **sqlv_explain 数据库层只读强制（T-SAF-03，4da7b48a4）**：建连后立即 `setReadOnly(true)`，入口缺失或设置失败抛 `MCP_READ_ONLY_UNENFORCED` 拒绝执行（fail-closed），SELECT 调用的副作用函数不再以可写连接跑
+  - **内嵌预览面板禁用原生执行入口（T-SAF-04，10e26eeba）**：移除 `CLIENT_KEY`/`EDITOR` 注入，原生 ▶/Ctrl+Enter 在内嵌面板不可用，执行只留插件按钮全门禁链（DML 确认/无界写入/方言门）
+  - **更新包身份门改真 XML 解析（T-SAF-05，addc3f3de）**：`checkDescriptorXml` 弃用正则提取、改 `SecureXml.parse`，注释内假 id 不再生效，非良构描述符直接拒绝
+  - **更新 zip 条目名插件侧校验（T-SAF-06，98eff6fa8）**：`UpdateZipGuard.check` 前置拒绝 `..` 段/绝对盘符/ADS 冒号/Windows 保留设备名/段尾点空格，不再依赖平台解压器兜底
+  - **sqlv_history_search 输出脱敏（T-SAF-07，79efe38f7）**：`formatResult` 按 `mcpMaskEnabled` 对 `sqlPreview` 过 `DisplayMasker.maskDisplay`，与 render-logs 同口径（共享骨架统一出口脱敏登记 followup）
+  - **设置值级校验双路径接入（T-SAF-08，586d5d40）**：新增 `SettingsValueValidator`（标识符白名单/单字面量/mock condition 长度+危险片段），导入整体拒绝逐字段报告，项目级 `.idea` XML 读取路径同规——共享设置文件不能再翻转渲染语句语义
+  - **共享 HtmlEscape 收敛转义（T-SAF-09+10，d3e7ebd1b）**：六处逐点 escapeHtml 变体收敛到 `util/HtmlEscape.kt`，补齐 HTML 报告导出的 tableName/dialect/来源名与三处 Swing 汇聚（回滚对话框快照行/预览元信息链/错误 tooltip），无需 HTML 的标签加 `html.disable`
+  - **MCP 守卫 INTO 检查递归化（T-SAF-11，14c4574a0）**：`hasIntoClause` 遍历 WithItem/派生表/JOIN/SetOperationList + 括号上下文 INTO 词法兜底，CTE 内 `SELECT INTO` 建表被拒（量词形态判定修正随 78f41eea4）
+  - **兜底桶错配防护（T-SAF-12，4707e1d87）**：多来源信号下无 token 行延迟配对（`needsThreadContext` 挂起 + 诊断计数），不再把一条语句的 SQL 与另一来源的参数还原到一起；单流行为不变
+  - **自动保存符号链接遏制（T-SAF-13，d4a31a032）**：主条目写入路径对齐修订路径——打开前 NOFOLLOW 属性审查 + `NOFOLLOW_LINKS` 打开，植入链接拒写并跳过本批（不丢其他条目）
+  - **构建防线：wrapper 校验和 + verifier pin 精确匹配（T-SAF-15/16，965a15168）**：`gradle-wrapper.properties` 加官方 9.7.0-bin.zip `distributionSha256Sum`（2026-11-06 实取）；verifier-cli 三解析点改 pin 精确匹配 + 缺失即失败，守卫测试反转为「选中版本==pin」
+  - **MCP 文本工具输入上限（T-SAF-17，b0c7bf701）**：四个文本分析工具入口 20000 字符上限（对齐 `DEFAULT_LOG_MAX_PARSE_LENGTH`），超限 `INVALID_ARGUMENT` 结构化拒绝
+  - **Parameters 文本截断（T-SAF-20，9cf2425cd）**：解析分支 3/4 参数文本与 iBatis 参数/类型行统一 `take(maxParseLength)`，超长逗号密集行不再驱动二次复杂度正则冻结解析线程
+  - **行尾 ms 正则重锚定（T-SAF-21，fbdd4f997）**：`TRAILING_MS_REGEX` 改 lookbehind + trim 尾预检 + 128 字符行尾窗口，空白炸弹行 O(1) 拒绝
+  - **解析桶静默老化淘汰（T-SAF-22，9069bad33）**：`evictIdle` 第二规则——非空闲但静默 >60s 的桶先 forceClose 再淘汰，`ibatisPending` 挂起态同判据老化，保留内存不再随未闭合语句无界增长
+  - **历史读取器读侧上限（T-SAF-23，6f778d74c）**：单行 1MB 折叠占位注释 + 单文件 100MB 闸（对齐写侧滚动阈值），三个读取器统一，植入超大历史文件不再无界缓冲
+  - **历史搜索正则三道闸（T-SAF-24，f49190dde）**：模式长度 256 / 复杂度初筛（量化分组套无界量词、双重量词）/ 求值预算（单条目 50ms、整查 2s 结构化失败），代理正则不再可能无限期卡住 IDE 分派线程
+  - **动态表名正则预算（T-SAF-25，99ac9a88f）**：新增 `BoundedRegex`（字符读预算 200k 超限视为无匹配）+ 编译缓存改并发有界（封顶 256），病态导入规则不再挂住预览渲染
 
 ## [2026.11.6-beta.2] - 2026-11-06
 
