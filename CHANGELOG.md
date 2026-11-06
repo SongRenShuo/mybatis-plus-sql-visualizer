@@ -4,7 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+- **「未登记 JDBC 实现」成为面板可见事实（T-IbatisPanwei 券 D，47a28ef1 / 6efd2e48）**：接口兜底扫到「是 JDBC 实现但不在驱动白名单」的类时，按首次发现顺序记下类名（最多 8 个、只类名），随 agent 心跳上报；空态诊断行显示「发现未登记 JDBC 实现：…（未纳入驱动白名单，增强仅靠接口兜底）」，而控制台有产出时（空态诊断行整条不显示）改挂在 SQL 日志页签底部常驻状态栏。磐维那次「增强捕获一条不出」是靠人工猜驱动包名才定位到白名单漏登记，此后同类问题一眼可见
+
 ### Fixed
+- **attach 到运行中应用时，attach 之后才懒加载数据源的进程增强捕获一条不出（T-IbatisPanwei 券 E，47a28ef1 / 7510dc79）**：attach 路径此前只跑一轮接口兜底扫描，驱动类在扫描之后才加载就永远漏扫（premain 侧早有补挂轮，attach 侧没有）。现在 attach 首轮之后再补挂 2 轮（默认 5s / 20s，`sqlvis.agent.catchAllAttachDelayMs` / `...AttachRepeatMs` / `...AttachPasses` 可配），复用已处理去重、每轮开跑前重查总开关与熔断；扫描预算从「遍历到的每个类」改为「候选类」（JDK 前缀、接口/枚举/数组/基本型/bootstrap/动态代理这些零成本排除项不再占 5000 上限），名字带 JDBC 线索的候选优先评估，数组顺序不再决定谁被截断。20k 类实测一轮扫描 4~6ms，attach 全链一次性约 10~20ms
 - **IDEA 2026.3 上更新插件一律提示「需要重启 IDE」，热替换不再生效（T-DynUpdate263，用户真机报障，2769e1b8）**：2026.3 的平台删掉了 `DynamicPlugins.allowLoadUnloadWithoutRestart(...)`，卸载预检改由 `validateCanUnloadWithoutRestart`（返回不可卸载原因）/ `checkCanUnloadWithoutRestart`（布尔）承担；插件把「旧方法存在」当成热替换的总开关，方法一消失整条动态安装链就降级成重启脚本。现按**能力族**解析预检入口（旧入口优先，243/262 与改动前走同一条路径；旧入口缺失时才用新的 validate/check），并连返回类型一起判——2024.3 的同名 `checkCanUnloadWithoutRestart` 返回的是原因字符串，只按名字匹配会把字符串当布尔。平台否决时把原因原话写进日志，探测失败时列出全部缺失项（此前只报第一个）；签名护栏同步改口径并在 2026.3 上实测通过，2026.3 用户更新恢复免重启
 
 ## [2026.11.6-beta.1] - 2026-11-06
