@@ -889,6 +889,51 @@ class SqlReverseParserTest {
         assertNull("嵌套子查询应回落 null", join.subQuery)
     }
 
+    // ------------------------------------------------------------------
+    // 递归深度守卫（T-SAF-18：sql-reverse-parser-unbounded-recursion）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `深度括号嵌套_结构化拒绝而非栈溢出`() {
+        // 修复前：20000 层括号驱动条件递归环 parseConditionInternal→parseGroup→
+        // parseConditionList→parseAndSegment→parseCondition（每层 4-5 帧）打爆线程栈，
+        // StackOverflowError 逃出 SqlReverseException 通道直达 sqlv_reverse_sql 调用方
+        // （MCP 审计边界按 VirtualMachineError 致命透传）；
+        // 修复后：深度守卫（上限 256）超限抛 SqlReverseException，结构化拒绝
+        val sql = "SELECT * FROM t WHERE " + "(".repeat(20000) + "a = 1" + ")".repeat(20000)
+        val e = assertThrows { SqlReverseParser.parse(sql) }
+        assertEquals(SqlReverseParser.KEY_PARSE, e.key)
+        assertTrue("错误应提示嵌套过深：${e.detail}", e.detail.contains("嵌套过深"))
+    }
+
+    @Test
+    fun `深度FROM子查询嵌套_有界处理而非栈溢出`() {
+        // 修复前：深层 FROM 子查询驱动 parseSubqueryTable→parseSubqueryStructure→parse
+        // 递归环打爆线程栈（StackOverflowError）。修复后深度守卫（上限 256）超限抛
+        // SqlReverseException，该异常在既有子查询回落通道（parseSubqueryStructure
+        // catch → null 字符串形态）被收编——结局要么整体正常返回（深层子查询降级原文承载）、
+        // 要么结构化拒绝，两者皆有界；唯独不允许 StackOverflowError 逃逸
+        val n = 20000
+        val sql = "SELECT * FROM (".repeat(n) + "SELECT id FROM t" + ")".repeat(n)
+        try {
+            SqlReverseParser.parse(sql)
+        } catch (e: SqlReverseException) {
+            // 结构化拒绝：有界结局，接受
+        }
+    }
+
+    @Test
+    fun `现实嵌套深度_守卫不误杀`() {
+        // 防误杀回归：20 层括号 / 10 层 FROM 子查询（现实上限远高于此）照常解析
+        val parens = "(".repeat(20) + "a = 1" + ")".repeat(20)
+        val r1 = SqlReverseParser.parse("SELECT * FROM t WHERE $parens")
+        assertEquals(1, r1.conditions.size)
+        val sub = "SELECT * FROM (".repeat(10) + "SELECT id FROM u" + ")".repeat(10)
+        val r2 = SqlReverseParser.parse(sub)
+        // 深层子查询无法建简单单表结构 → 回落表名原文承载，但解析本身不报错
+        assertTrue("应正常解析：${r2.tableName}", r2.tableName.contains("SELECT id FROM u"))
+    }
+
     private fun assertThrows(block: () -> Unit): SqlReverseException =
         try {
             block()
