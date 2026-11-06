@@ -524,6 +524,31 @@ class SqlLogFileReaderTest {
     }
 
     /**
+     * T-SAF-23 回归（单文件闸门）：超读取上限（对齐写侧 100MB rollThreshold）的文件在
+     * readFromFile/forEachEntry/countInFile 三入口一律拒读（空列表/零回调/计数 0）。
+     * 上限经内部测试缝注入小值（100MB 夹具过重）；随 fix 提交落地（缝在修复前不存在）。
+     */
+    @Test
+    fun `单文件超读取上限拒读_T-SAF-23`() {
+        val dir = Files.createTempDirectory("tsaf23-gate-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "planted.sql")
+        file.writeText("-- source: unknown | time: 1ms | 2026-11-06 10:00:00.000 --\nSELECT 1\n\n")
+        SqlLogFileReader.maxReadFileBytesForTest = 64L
+        try {
+            assertTrue("readFromFile 应拒读", SqlLogFileReader.readFromFile(file).isEmpty())
+            assertEquals("countInFile 应拒读", 0, SqlLogFileReader.countInFile(file))
+            var seen = 0
+            SqlLogFileReader.forEachEntry(file) { seen++; true }
+            assertEquals("forEachEntry 应零回调", 0, seen)
+        } finally {
+            SqlLogFileReader.maxReadFileBytesForTest = null
+        }
+        // 缝复位后同文件正常读取（拒读不产生持久副作用）
+        assertEquals(1, SqlLogFileReader.readFromFile(file).size)
+    }
+
+    /**
      * T-SAF-23 回归（占位不劈块）：超长行折叠后，同一块内的已有正文行仍归属同一头部
      * （占位注释不满足任何头部判据），块内已有内容不因折叠丢失。
      */
