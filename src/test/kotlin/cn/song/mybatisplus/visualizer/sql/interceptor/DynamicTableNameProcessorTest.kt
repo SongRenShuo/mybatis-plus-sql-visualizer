@@ -113,4 +113,27 @@ class DynamicTableNameProcessorTest {
         val rules = listOf(TableNameRule("user_(\\d+)", "user", enabled = true))
         assertEquals("user", DynamicTableNameProcessor.process("user_2024", rules))
     }
+
+    /**
+     * T-SAF-25 回归：编译缓存容量封顶——regexCache 曾是普通 mutableMapOf 且无界（还非线程
+     * 安全），海量 distinct pattern 灌入可无界膨胀。断言经内部测试缝（修复前不存在，随
+     * fix 提交落地）读缓存条数 ≤ 256。
+     */
+    @Test
+    fun `正则编译缓存容量封顶_T-SAF-25`() {
+        try {
+            repeat(400) { i ->
+                DynamicTableNameProcessor.process(
+                    "order_$i",
+                    listOf(TableNameRule("distinct_pattern_$i", "x", enabled = true)),
+                )
+            }
+            assertTrue(
+                "缓存应封顶在 256（实际 ${DynamicTableNameProcessor.regexCacheSizeForTest()}）",
+                DynamicTableNameProcessor.regexCacheSizeForTest() <= 256,
+            )
+        } finally {
+            DynamicTableNameProcessor.clearCache()
+        }
+    }
 }
