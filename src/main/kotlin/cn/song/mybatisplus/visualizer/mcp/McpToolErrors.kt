@@ -23,6 +23,12 @@ object McpToolErrors {
     /** 数据源别名不匹配 / 无数据源。 */
     const val DATASOURCE_NOT_FOUND = "DATASOURCE_NOT_FOUND"
 
+    /**
+     * 连接层只读强制失败（T-SAF-03，D3=A fail-closed）：setReadOnly(true) 入口缺失或调用
+     * 失败时拒绝执行，绝不降级为读写执行。
+     */
+    const val READ_ONLY_ENFORCEMENT_FAILED = "MCP_READ_ONLY_UNENFORCED"
+
     /** 建连/执行失败（不可达、鉴权失败等）。 */
     const val DATASOURCE_UNREACHABLE = "DATASOURCE_UNREACHABLE"
 
