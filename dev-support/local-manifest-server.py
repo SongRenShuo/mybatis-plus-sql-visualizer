@@ -64,8 +64,8 @@ if __name__ == "__main__":
         print(f"[local-错误] 清单文件不存在: {MANIFEST_FILE}")
         print("[local-提示] 请先编辑 update/update.json 填写测试内容")
         sys.exit(1)
-    # 读取并显示清单内容摘要
-    with open(MANIFEST_FILE) as f:
+    # 读取并显示清单内容摘要（必须显式 UTF-8：Windows 默认 GBK，清单里有中文会 UnicodeDecodeError）
+    with open(MANIFEST_FILE, encoding="utf-8") as f:
         manifest = json.load(f)
     print(f"[local-清单] 版本 {manifest.get('version', '?')} → http://localhost:{PORT}/update.json")
     print(f"[local-清单] 来源: {MANIFEST_FILE}")
