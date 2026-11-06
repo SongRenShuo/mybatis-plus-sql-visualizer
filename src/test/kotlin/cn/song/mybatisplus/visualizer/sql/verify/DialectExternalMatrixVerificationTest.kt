@@ -24,11 +24,14 @@ import java.util.Properties
  *
  * 为什么矩阵放在 `.local/`：文件里有明文凭据，`.local/` 整目录已 gitignore；仓库里只留无凭据的模板。
  *
- * 判红的三条底线（都来自既往假绿案例）：
+ * 判红的四条底线（都来自既往假绿案例）：
  *  1. 方言名必须与 [DialectRegistry] **逐字**命中——`byName` 对未知名静默回退 MySQL，
  *     名字写错/中文被转码时会拿 MySQL 方言去跑别的库，全绿但验错了方言；
  *  2. 保留字词表 < 50 词即失败——词表没接上时扫描集合为空，`failures.isEmpty()` 必然成立（空扫即空绿）；
- *  3. 整轮至少产生一个 PASS——矩阵全被 optional 跳过时没有证据力，不能算通过。
+ *  3. 整轮至少产生一个 PASS——矩阵全被 optional 跳过时没有证据力，不能算通过；
+ *  4. `skipWords`（T-IbatisPanwei，2026-11-06）必须配 `skipReason`，且词必须在方言词表里——
+ *     它只用于「内核把该词当系统列/伪列」这类语义冲突（磐维 A 的 `rowid`），不用于掩盖渲染缺陷；
+ *     缺理由或拼错词直接判红，例外因此永远可审计。
  */
 class DialectExternalMatrixVerificationTest {
 
@@ -75,6 +78,16 @@ class DialectExternalMatrixVerificationTest {
             val password = prop(props, key, "password")
             val optional = prop(props, key, "optional")?.toBooleanStrictOrNull() ?: false
             val multiRowValues = prop(props, key, "multiRowValues")?.toBooleanStrictOrNull() ?: true
+            // T-IbatisPanwei：按实例声明保留字扫描的**例外词**（只用于「内核把该词当系统列/伪列」这类
+            // 语义冲突，不用于掩盖渲染缺陷）。例外必须带理由，否则等于静默放宽。
+            val skipWords = prop(props, key, "skipWords")
+                ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+                ?: emptySet()
+            val skipReason = prop(props, key, "skipReason")?.trim().orEmpty()
+            if (skipWords.isNotEmpty() && skipReason.isEmpty()) {
+                failed += "$key：skipWords 非空但未写 skipReason——例外必须可审计（写在矩阵文件里）"
+                continue
+            }
 
             val dialect = DialectRegistry.byName(dialectName)
             if (dialect.name != dialectName) {
@@ -100,19 +113,28 @@ class DialectExternalMatrixVerificationTest {
                 conn.use { c ->
                     DialectVerifySupport.runTcSuite(c, spec)
                     val words = dialect.reservedWords
+                    val unknownSkips = skipWords - words
                     assertTrue(
-                        "$key（$dialectName）保留字清单仅 ${words.size} 个词——空扫即空绿，不能当证据",
-                        words.size >= MIN_RESERVED_WORDS,
+                        "$key（$dialectName）skipWords 里的 $unknownSkips 不在该方言保留字表中" +
+                            "（拼写错误或方言名不对）",
+                        unknownSkips.isEmpty(),
                     )
-                    val sweepFailures = DialectVerifySupport.sweepReservedWords(c, spec, words)
+                    val swept = words - skipWords
                     assertTrue(
-                        "$key（$dialectName）保留字扫描失败 ${sweepFailures.size}/${words.size} 个词:\n" +
+                        "$key（$dialectName）保留字清单仅 ${swept.size} 个词（扣除 skipWords）" +
+                            "——空扫即空绿，不能当证据",
+                        swept.size >= MIN_RESERVED_WORDS,
+                    )
+                    val sweepFailures = DialectVerifySupport.sweepReservedWords(c, spec, swept)
+                    assertTrue(
+                        "$key（$dialectName）保留字扫描失败 ${sweepFailures.size}/${swept.size} 个词:\n" +
                             sweepFailures.joinToString("\n"),
                         sweepFailures.isEmpty(),
                     )
                 }
-                passed += "PASS  $key  ${dialect.name}  words=${dialect.reservedWords.size}  " +
-                    "${System.currentTimeMillis() - startedAt}ms"
+                passed += "PASS  $key  ${dialect.name}  words=${dialect.reservedWords.size}" +
+                    (if (skipWords.isEmpty()) "" else "  skip=${skipWords.size}(${skipWords.joinToString(",")})") +
+                    "  ${System.currentTimeMillis() - startedAt}ms"
             } catch (t: Throwable) {
                 val message = (t.message ?: t::class.java.simpleName)
                     .lineSequence().take(3).joinToString(" / ")

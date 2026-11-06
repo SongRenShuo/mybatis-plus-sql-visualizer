@@ -308,7 +308,10 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
   2. 独立探针在 A 实例复现：`CREATE TABLE mpsv_rowid_probe (id INT PRIMARY KEY, "rowid" INT)` 报同一句 `conflicts with a system column name`；`select rowid from t_order` 可用，`pg_attribute` 里 attnum<0 的系统列 = `xc_node_id rowid tableoid cmax xmax cmin xmin ctid`。磐维 A 内核（openGauss 系）把 `rowid` 做成了真系统列，加引用符也救不回；插件把它渲染成 `"rowid"` 本身没错。
   3. 对照真 Oracle 23 Free（`114.66.55.245:20095`）：同一条加引号 DDL **建表成功**（已 drop），说明「引号包裹的保留字可作列名」对 Oracle 成立；`rowid` 只在 ORACLE / 金仓两个集合里，GaussDB 集合没有，所以 GaussDB 那轮 197 词天然绕过了它。
 - 未做任何放宽：没删词、没标 `optional`、没改断言。`rowid` 的处置（从 Oracle 集合剔除，还是在 sweep 里为「内核系统列名」加一条有据可查的例外）是产品决策，留给主控。
-- 顺带（非本任务范围）：`.local/test-databases.md` 记「两者库 `panweidb` 与 `postgres` 都已灌过 `schema-gaussdb.sql`（58/0）」，实测只有 A 的两库各有 13 张 demo 表；B 的 `panweidb` 库 public 下只有 `pw_login_info` / `pw_probe`，`postgres` 库 1 张，B 侧其实没灌。本套件自带夹具，不受影响。
+- **决策与落地（2026-11-06 15:2x，用户拍板「矩阵加 skipWords」）**：外部实例矩阵新增两个按实例字段——`skipWords`（逗号分隔）与 `skipReason`（**必填**，缺则判红）；`skipWords` 里的词不在该方言词表里同样判红（防拼写错误）。sweep 只扫 `words - skipWords`，≥50 词的空扫守卫改按扣除后的集合算；PASS 行带出 `skip=N(词表)` 供台账。产品保留字表（`ORACLE_RESERVED`）**不动**——真 Oracle 上 `rowid` 仍是伪列语义，剔掉会让 Oracle 侧漏检。
+  - 复跑读数：`panwei_a` **PASS  words=109  skip=1(rowid)  66452ms**（通过 1 / 跳过 0 / 失败 0）；
+  - 反向验证：矩阵里只给 `skipWords` 不给 `skipReason` → 直接判红 `panwei_a：skipWords 非空但未写 skipReason——例外必须可审计`（20s，未连库）。
+- 顺带（非本任务范围）：`.local/test-databases.md` 记「两者库 `panweidb` 与 `postgres` 都已灌过 `schema-gaussdb.sql`（58/0）」，实测只有 A 的两库各有 13 张 demo 表；B 的 `panweidb` 库 public 下只有 `pw_login_info` / `pw_probe`，`postgres` 库 1 张，B 侧其实没灌。本套件自带夹具，不受影响。台账与本文档 §十二 已同步订正。
 
 ## 十三、实施记录：券 D + 券 E（2026-11-06，分支 `t-catchall-diag`）
 
