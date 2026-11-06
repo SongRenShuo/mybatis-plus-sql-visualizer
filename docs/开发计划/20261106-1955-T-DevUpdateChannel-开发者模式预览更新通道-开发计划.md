@@ -70,6 +70,19 @@ fun check(currentVersion: String?, fetch: (String) -> FetchOutcome = ..., manife
 
 既有两处调用（`StartupUpdateCheck`、`UpdateSection.checkRunner` 默认值）与测试里 `check(x) { … }` 的 lambda 尾参写法**都不用改**（第三参有默认值）。
 
+### 3.5 下载 404 必须友好提示，不得抛错（用户 2026-11-06 明确要求）
+
+预览清单的 `downloadUrl` 极可能指向**尚未发布的 release**（典型：`preview.update.json` 已写 `2026.11.6-beta.3`，但 Gitee 上还没有该 tag 的附件）。现状会很难看：
+
+- `UpdateApi.download` 用 `.throwStatusCodeException(true)`，404 直接抛 `HttpRequests.HttpStatusException`；
+- `PluginUpdateRunner.downloadAndInstall` 把它变成 `InstallResult.Failed(message)`，UI 渲染 `settings.update.installFailed=更新失败：{0}` —— 用户看到一串 HTTP 异常文本，像是插件坏了。
+
+要求（两条通道都适用，不只开发版）：
+
+1. **新增一种可辨识结局**：`InstallResult.NotPublished`（404/410 专用），与 `Failed` 分开；
+2. **文案与出口**：状态行写「该更新包还没有发布（HTTP 404），请稍后重试，或到发布页手动下载」，并显示**已有的 Gitee 发布页链接**（`UpdateSource.GITEE_RELEASES_URL`，与 `CHANNEL_MISSING` 兜底同款出口）——不显示原始异常文本，不打日志 ERROR（`LOG.info` 一行带 URL 与状态码即可）；
+3. 其余失败（网络不通/非法 zip/安装失败）仍走 `Failed`，**不要**把 404 的友好化扩散成「所有失败都说没发布」。
+
 ### 3.4 渲染保持（最容易漏的坑）
 
 `updateTexts()` / 语言切换 rebuild 会重建按钮文本与 `renderState()`。新按钮的可见性必须**在渲染路径里按 `DevUpdateMode.enabled` 重新决定**，不能只在点击解锁那一刻 `isVisible=true` —— 否则切一次语言按钮就消失（现象会被误报成「开发模式失效」）。
@@ -83,6 +96,7 @@ fun check(currentVersion: String?, fetch: (String) -> FetchOutcome = ..., manife
 | D-3 | 点击目标 | **只挂构建号**（不额外挂版本标签） | 用户原话就是构建号；双入口会让「怎么触发的」难以复述 |
 | D-4 | 解锁提示 | 只改 tooltip + 出现按钮，**不弹窗** | 弹窗会把彩蛋变成打扰 |
 | D-5 | 开发版按钮的失败态 | 完全复用四类失败分诊 | 预览清单的 `downloadUrl` 常指向未发布的 release，404 必须按 CHANNEL_MISSING 显示兜底链接，而不是「检查更新失败」一句 |
+| D-6 | 下载 404 的呈现 | **新增 `InstallResult.NotPublished`**（不与 `Failed` 混）+ 发布页链接，文案「该更新包还没有发布」 | 用户明确要求「404 要友好提示不要报错」；`Failed` 现会渲染原始 `HttpStatusException` 文本，像插件坏了 |
 
 ## 五、待验证前提（实施者先证伪再动手）
 
@@ -105,7 +119,9 @@ fun check(currentVersion: String?, fetch: (String) -> FetchOutcome = ..., manife
 5. `config/PluginSettingsPanelSections.kt`：构建号 label 提为变量 + 连点计数挂监听 + 解锁后刷新按钮
 6. `messages/MpSqlVisualizerBundle{,_zh}.properties`：`settings.update.checkPreview`、`settings.update.channel.preview`、`settings.update.devMode.tip`
 7. `CHANGELOG.md` `[Unreleased]`（用户可感：开发者模式入口）
-8. 测试：`UpdateSectionTest` 补 4 例 + `DevUpdateModeTest`（纯逻辑）+ `UpdateSourceTest` 补 URL 分流
+8. `update/PluginUpdateRunner.kt`：新增 `InstallResult.NotPublished`；`downloadAndInstall` 把 404/410 分流出来（其余异常仍 `Failed`）
+9. `config/UpdateSection.kt`：`NotPublished` 的渲染分支（友好文案 + 发布页链接），复用 `CHANNEL_MISSING` 的兜底出口
+10. 测试：`UpdateSectionTest` 补 4 例 + `DevUpdateModeTest`（纯逻辑）+ `UpdateSourceTest` 补 URL 分流 + 404 两条
 
 **测试要求（反向验证必须有）**
 
@@ -116,6 +132,8 @@ fun check(currentVersion: String?, fetch: (String) -> FetchOutcome = ..., manife
 - 语言切换（`updateTexts()` 再调一次）后按钮仍可见（**P-3 的钉子**）；
 - 反向 1：把 `previewManifestUrl()` 改成返回正式 URL → 分流断言必红；
 - 反向 2：删掉 `updateTexts()` 里的可见性恢复 → 「切换后仍可见」必红。
+- **404 友好化（两条，必须各有用例）**：①注入一个抛 404 的 download seam → 结果必须是 `NotPublished` 且 UI 文案**不含**异常原文，含发布页链接；②注入抛 500/IOException 的 seam → 必须仍是 `Failed`（防止友好化扩散）。
+- 反向 3：把 404 分支去掉（统一走 `Failed`）→ ①那条用例必红。
 
 ## 七、风险
 
