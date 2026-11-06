@@ -34,7 +34,8 @@ object UpdateZipGuard {
     }
 
     /**
-     * 有界校验更新包：中央目录计数/总量/单条目三重上限 + 逐条目有界读取防头谎报。
+     * 有界校验更新包：条目名恶意形态校验（T-SAF-06，见 [entryNameIssue]）+ 中央目录计数/
+     * 总量/单条目三重上限 + 逐条目有界读取防头谎报。
      *
      * 头谎报机制说明（java.util.zip 实现差异）：「声明小实际大」的暴露形态因 JDK 而异——
      * 本机 JBR17 实测为读超声明字节（截断读取命中），部分实现按声明截断+CRC 校验以读取
@@ -47,7 +48,17 @@ object UpdateZipGuard {
      */
     fun check(zip: Path): GuardResult = runCatching {
         ZipFile(zip.toFile()).use { zf ->
-            val entries = zf.entries().asSequence().filter { !it.isDirectory }.toList()
+            val all = zf.entries().asSequence().toList()
+            // T-SAF-06（update.UpdateZipGuard.entry-name-platform-delegated）：条目名插件侧先行校验
+            // （目录条目同样过名检——平台解压器会按名建目录）。此前 entry.name 只出现在拒绝消息里，
+            // zip-slip/盘符/ADS/保留设备名等清洗被完全委托给未验证的平台解压器；现无论平台行为
+            // 如何，恶意名包都拦在解压之前（fail closed）
+            for (entry in all) {
+                entryNameIssue(entry.name)?.let {
+                    return@runCatching GuardResult.Reject("entry '${entry.name}' $it")
+                }
+            }
+            val entries = all.filter { !it.isDirectory }
             if (entries.size > MAX_ENTRIES) {
                 return@runCatching GuardResult.Reject(
                     "too many entries: ${entries.size} > $MAX_ENTRIES",
@@ -102,4 +113,41 @@ object UpdateZipGuard {
             GuardResult.Ok
         }
     }.getOrElse { GuardResult.Reject("zip guard read failed: ${it.message}") }
+
+    /** Windows 保留设备名（大小写不敏感；含带扩展名形态 CON.txt——取首个点前的基名判定）。 */
+    private val WINDOWS_RESERVED_DEVICE_NAMES: Set<String> = buildSet {
+        addAll(listOf("CON", "PRN", "AUX", "NUL"))
+        for (i in 1..9) {
+            add("COM$i")
+            add("LPT$i")
+        }
+    }
+
+    /**
+     * 条目名恶意形态判定（T-SAF-06）：null=安全；非 null=原因短语（拼进拒绝消息）。
+     *
+     * 统一分隔符后逐段检查（zip 条目名可混用 / 与 \）：`..` 遍历段、绝对/盘符限定路径、
+     * `:`（NTFS 备用数据流，同时覆盖盘符冒号）、Windows 保留设备名（CON/PRN/AUX/NUL/
+     * COM1-9/LPT1-9，取段内首个点前基名，大小写不敏感）、段尾点/空格（Windows 写盘时
+     * 会剥掉，名字被改写/重定向）。空段容忍（连续分隔符无路径语义）；`.` 段无害放行。
+     */
+    internal fun entryNameIssue(name: String): String? {
+        if (name.isBlank()) return "has an empty entry name"
+        val normalized = name.replace('\\', '/')
+        if (normalized.startsWith("/")) return "uses an absolute path"
+        if (normalized.contains(':')) {
+            return "contains ':' (drive-qualified path or NTFS alternate data stream)"
+        }
+        for (segment in normalized.split('/')) {
+            if (segment.isEmpty()) continue
+            if (segment == "..") return "contains a '..' traversal segment"
+            if (segment.substringBefore('.').uppercase() in WINDOWS_RESERVED_DEVICE_NAMES) {
+                return "uses a reserved Windows device name ('${segment.substringBefore('.')}')"
+            }
+            if (segment.endsWith(".") || segment.endsWith(" ")) {
+                return "has a segment ending with a trailing dot/space (Windows strips it)"
+            }
+        }
+        return null
+    }
 }
