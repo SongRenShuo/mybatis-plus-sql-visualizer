@@ -29,7 +29,8 @@ docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}'      # 镜像是不�
 cat /etc/docker/daemon.json                                      # 已配的 mirror（不代表好用）
 ```
 
-第五件是**读台账**：`.local/test-databases.md` 里已有全部实例的连接、凭据、已知坑；`tmp/xc3-env-init/*.md`
+第五件是**读台账**：`.local/db-env-instances.tsv` 是实例索引（有哪些实例、宿主端口、镜像/卷、内存与坑，
+字段见 §9），`.local/test-databases.md` 是连接、凭据与已知坑；`tmp/xc3-env-init/*.md`
 是每个实例的部署原文与探针读数。**先看有没有现成实例能用**，别上来就装——`114.66.55.245` 那台
 DBX 测试主机上本来就有一批（MySQL/PG/Oracle/DM/金仓/GBASE/虚谷/StarRocks/Doris…），很多时候只缺驱动。
 
@@ -371,7 +372,8 @@ select current_user, current_database(),
 ## 6. 台账与收尾
 
 - **连接/凭据/已知坑** → `.local/test-databases.md`（gitignored）。新增实例补一行：URL、账号、容器名、
-  镜像、停起命令、该实例特有的坑。
+  镜像、停起命令、该实例特有的坑。**同一实例还要在 `.local/db-env-instances.tsv` 登记一行**（无凭据的实例
+  索引，字段见 §9），两份台账缺一份都算没登记。
 - **部署原文与探针读数** → `tmp/xc3-env-init/<产品>.md`（gitignored）。含 docker run 原文、逐条探针输出、
   结论表、未取证清单。
 - **停/起**：`docker stop|start <容器>`；海量是 `bash /opt/xc3-vastbase/start.sh`。**不要 `docker rm`**——
@@ -414,9 +416,17 @@ select current_user, current_database(),
 **前提变了**（2026-11-05 用户定调）：测试服务器的服务**可能随时被重装系统**，容器、卷、数据、initdb 结果全部
 丢失。所以「部署」不再是手工操作，而必须是**声明式 + 幂等可重放**的：
 
-- **唯一事实源是清单**：`.local/db-env-instances.tsv`（gitignored，可含明文凭据），模板见
-  `scripts/instances.example.tsv`；台账 `.local/test-databases.md` 记录连接/凭据/坑。
-- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <清单>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
+- **唯一事实源是实例清单**：`.local/db-env-instances.tsv`（gitignored，**不含凭据**）——一行一个实例，
+  Tab 分隔 10 列：`name kind host hostPort ctrPort db user image volume notes`。`name` 是容器名/实例短名；
+  `ctrPort` 是**容器内**端口（磐维 17700，不是 5432）；`notes` 记内存与 shm、特权位/ulimit、DBX 连接 id、
+  停起方式与该实例特有的坑。**新增实例必须就地登记一行**（部署完就补、别攒）——漏登记的实例在靶机重装后
+  等于不存在。
+- **凭据只落台账**：`.local/test-databases.md` 记连接 URL、账号口令、已知坑；清单的 `user` 列只写账号名。
+- **重放吃的是派生出来的 replay manifest**：`bootstrap-db-env.sh` 的输入是 Docker 子集的 9 列清单
+  （`name image hostPort containerPort memLimit volumeName env initDir verifyCmd`，模板
+  `scripts/instances.example.tsv`），`env` 位放口令、从台账现填。**manifest 含明文口令，只落本机 `.local/`
+  与靶机 `/root/`，不入库**：实例清单回答「该有哪些」，manifest 回答「怎么起」。
+- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <replay.tsv>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
   按 `verifyCmd` 轮询就绪、最后打印端口汇总并列出未就绪项。**可反复执行**，失败重跑只补没起来的那些。
 - **种子数据要能自动灌**：把 `.sql` 放清单的 `initDir`（挂到 `/docker-entrypoint-initdb.d:ro`），镜像首次
   初始化时自动执行；每条 `.sql` 首行必须 `SET NAMES utf8mb4;`（见 §7 的双编码坑）。
@@ -428,23 +438,37 @@ select current_user, current_database(),
 docker info >/dev/null && echo ok
 free -g | head -2                      # 按 §0 的内存账排布实例，别一次全上
 
-# 1) 上传清单与种子（本地 → 靶机）
-#    .local/db-env-instances.tsv          实例清单（含凭据）
+# 1) 派生 replay manifest（实例清单的 Docker 子集 + 台账口令现拼，9 列见 scripts/instances.example.tsv）
+#    .local/db-env-instances.tsv          实例清单（无凭据，用来核对「该有哪些」）
+#    .local/replay.tsv                    本次重放清单（9 列，env 位含口令；不外传）
 #    /root/<实例>-init/*.sql              种子脚本（首行 SET NAMES utf8mb4;）
-scp .local/db-env-instances.tsv root@103.36.220.245:/root/
+scp .local/replay.tsv root@103.36.220.245:/root/
 scp -r dev-support/db-seed/<实例>/*  root@103.36.220.245:/root/<实例>-init/
 
 # 2) 一键重建
-ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/db-env-instances.tsv'
+ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/replay.tsv'
 
 # 3) 外部可达性 + 数据正确性（两档都要取，别只看容器 Running）
 #    - 从本机用 DBX/客户端实连一次（SELECT 1 / VERSION()）
 #    - 中文正确性用 HEX 钉死：SELECT HEX(name) —— 必须等于 HEX('张三') = E5BCA0E4B889
 #    - 表与行数：SHOW TABLES + 逐表 COUNT(*)
 
-# 4) 收尾：台账补行 → DBX 登记（首个查询可能 CONNECTION_OUT_OF_SCOPE，放行一次）→
-#    若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
+# 4) 收尾：台账补行（test-databases.md + db-env-instances.tsv 两处都补）→ DBX 登记（首个查询可能
+#    CONNECTION_OUT_OF_SCOPE，放行一次）→ 若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
 ```
+
+### 磐维 PanWeiDB：不能「一把梭」，三处补丁有时序
+
+两个磐维实例（`panweidb-test` B 档 / `panweidb-ora` A 档）的容器起得来，但**装不上**：补丁必须在**解包之后、
+`gs_local` 跑到 `checkos` 之前**打进去，而 `init-db.service` 一开机就自己开跑，时间窗只有几十秒到几分钟。
+处置顺序：
+
+- `dev-support/db-lab/patch-panweidb-image.sh` **若该脚本在位则用它**（起容器 → 轮询等
+  `/database/panweidb/soft/script/` 解包出来 → 打补丁 → 放行安装）；**不在位就按 §2 磐维段手工打三处**：
+  `PreInstallUtility.py` 的 `raise` → `pass`、`Common.py` 的 `checkDockerEnv()`、`run.sh` 的 `listen_addresses` 自愈。
+- 持久性不一样，别记混：前两处在 `/database` 卷里、随卷持久（同一卷重建容器不必重打）；
+  `/root/run.sh` 与 `/etc/sysconfig/network-scripts/` 在镜像层，**每次重建容器都要重打**。
+- 兼容档是安装期参数（§2），A/B 必须两个容器，不能在一个容器里切。
 
 ### 重建时不做的事
 
