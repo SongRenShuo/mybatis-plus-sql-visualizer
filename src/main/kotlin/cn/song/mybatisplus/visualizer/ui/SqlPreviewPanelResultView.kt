@@ -188,6 +188,10 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     paramValues.clear()
     result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, result.initialParamValues[source] ?: "") }
     result.previewModel?.conditionViews.orEmpty().forEach { view -> view.valueSource?.let { paramValues.putIfAbsent(it, "") } }
+    // T-RuntimeSlotFill 券 C：运行期占位值随新预览整表清空（D-6：不跨预览持久化）——
+    // 旧占位 id 的值若残留，新预览里同 id 的占位会被「莫名其妙地填上」。
+    slotValues.clear()
+    slotRenderWarnings = emptyList()
     // 动态条件启用集合初始化（M13：复选框纯手动）——仅按 defaultEnabled，值空不联动勾选态
     enabledIds.clear()
     result.previewModel?.conditionViews.orEmpty().forEach { view ->
