@@ -259,3 +259,99 @@ data class RuntimeSlot(
   回落 `null`（不编造）；正常情况下 SQL 字面量不会有 NUL。
 - `PreviewResult.sql`（格式化文本）与 `compactSql` 都带 id；券 C 面板展示与券 B 替换都应以 `token` 为准。
 
+### 券 B（回填引擎）— 完成（分支 `t-runtime-slot-b`，提交 `15de3ede`）
+
+**§五 待验证前提的实测结论**
+
+- **P-2 选「区间记账」，而且比计划册要求的更紧：占位 + `?` + `:name` 收成一次前向扫描。**
+  实测把三步串起来跑（R2 反向验证）暴露了两处真实二次误伤，都不是 `?` 而是 `:name`：
+  `NAMED_PARAM_PATTERN` 不是串/注释感知的正则，会把**用户值里的 `:nm`** 与**未回填占位注释里的
+  `: y`** 一起替换（读数见下方反向验证表）。`?` 侧的二次误伤在结构上不会发生（值要么被引号包住、
+  要么是裸数字，`placeholderPositions` 本就串感知），但 `:name` 侧必须靠「原子产出 + 不再扫描」解决。
+  因此 `buildExecutableSqlWithSlots` 单次扫描里每种替换整段产出、产出不再被扫描；同时替换区间仍
+  记账在 `RuntimeSlotRender.protectedSpans`，并给 `buildExecutableSql` / `replaceNamedParams`
+  加了 `protectedSpans` 形参（默认空表 = 既有行为逐字节不变），供后续步骤跳过。
+- **新增前提（计划册未列）：占位可能落在字符串字面量内。** 夹具 1 的
+  `create_time >= '/* 运行时值: startTime · rt2 */'` 与夹具 2 的 `'%/* 运行时值: keyword */%'`
+  都在引号里，券 A 用 `hint.quote=true` 标了出来。回填时**只能做转义、不能再加外层引号**，否则产物
+  变成 `''值''`。落点：`ParameterReplacer.literal()` 的 `inQuoted` 分支（由 `stringMask()` 逐字符
+  标记引号态得出）。模板里的 `%s` 同口径：模板自带 `id='%s' ` 时值在引号内，模板写 `amount >= %s`
+  时值在引号外，按**模板自己的引号态**判断，不按占位 token 的。
+- **新增前提：复制链会先剥注释。** `CopyExecutableSqlAction` 原先是
+  `strip(raw)` → `buildExecutableSql`，而占位本身是一条块注释——先剥就再也定位不到（产物留
+  `WHERE ( )`）。复制链改成「占位 → `?` → 剥注释」。`?` 位点口径不变（`placeholderPositions`
+  在剥注释前后计数相同：注释里的 `?` 本来就不算）。
+- **P-7 成立，且取更严的一档**：Oracle / 达梦的布尔值**拒绝回填并提示改 1/0**（不造 `TRUE`）；
+  其余方言 `true/false` → `TRUE/FALSE`，`1/0` 原样（它们本来就是数字）。
+
+**落点（文件:行）**
+
+| 内容 | 位置 |
+|---|---|
+| `ValueType` / `SlotValue`（含 `isUnset` 留空判定）/ `RuntimeSlotValues` | `sql/RuntimeSlotValues.kt:9,48,103` |
+| 静态校验 `validate`（未知 id / 循环空值超限 / 三元未选支 / 超长 / 数字类型非法） | 同上 `:128` |
+| 多值拆分 `splitList`（逗号 / 换行 / 中文逗号） | 同上 `:194` |
+| `RuntimeSlotRender`（产物 + 已填 id + 警告 + 替换区间） | `sql/ParameterReplacer.kt:221` |
+| `replaceRuntimeSlots`（只填占位，供导出 / 预览 / 复制前段） | 同上 `:247` |
+| `buildExecutableSqlWithSlots`（占位 → `?` → `:name` 单次扫描） | 同上 `:324` |
+| 四类渲染 `fillValueSlot` / `fillLoopSlot` / `fillTernarySlot` / `fillOptionalSlot` | 同上 `:468,496,528,543` |
+| `%s` 计数校验 + 模板填充 `fillTemplate` | 同上 `:566` |
+| 字面量渲染 `literal`（引号内只转义 / 数字校验 / NULL / 布尔） | 同上 `:598` |
+| 引号态标记 `stringMask` | 同上 `:686` |
+| `buildExecutableSql` / `replaceNamedParams` 的 `protectedSpans` | 同上 `:81,150` |
+| 可执行 SQL 唯一入口 `Product` / `format` / `formatWithDiagnostics` | `share/format/ExecutableSqlFormatter.kt:27,48,74` |
+| 复制链产物 `Product` / `assembleProduct`（纯函数）/ `execute(panel, slotValues)` | `ui/components/CopyExecutableSqlAction.kt:54,68,128` |
+| 执行链 `renderForExecution` / `executeWithRuntimeSlots` | `execute/ExecuteSqlSupport.kt:60,81` |
+
+**定向测试读数**（`./gradlew test --tests … -Pkotlin.compiler.execution.strategy=in-process`）
+
+| 类 | XML 读数 |
+|---|---|
+| `ParameterReplacerTest`（既有 18 例 + 新增 22 例） | `tests="40" skipped="0" failures="0" errors="0"` |
+| `RuntimeSlotValuesTest`（新增 10 例） | `tests="10" skipped="0" failures="0" errors="0"` |
+| `RuntimeSlotChainConsistencyTest`（新增 3 例） | `tests="3" skipped="0" failures="0" errors="0"` |
+| `ExecuteSqlSupportTest`（既有 3 例 + 新增 2 例） | `tests="5" skipped="0" failures="0" errors="0"` |
+| `ParameterReplacerNamedTest`（既有，未改） | `tests="17" skipped="0" failures="0" errors="0"` |
+| `ExecutableSqlFormatterTest`（既有，未改） | `tests="8" skipped="0" failures="0" errors="0"` |
+| `InjectionGateTest`（既有，覆盖复制链标记） | `tests="18" skipped="0" failures="0" errors="0"` |
+
+**留空逐字一致（D-5）的对照形态**
+
+三条断言同向，都要求**逐字节相等**：
+
+1. `buildExecutableSqlWithSlots(sql, slots, RuntimeSlotValues.EMPTY, sources, paramValues, hints)`
+   == 改前的 `buildExecutableSql(sql, sources, paramValues, hints)`；
+2. 登记了 `SlotValue.UNSET`（有行、没动作）时同上；
+3. `replaceRuntimeSlots(sql, slots, RuntimeSlotValues.EMPTY).sql` == 入参 `sql` 本身，
+   且产物不含 `NULL`（不是把空值转成 NULL）。
+
+链路上同理：`ExecutableSqlFormatter.format(sql, …, slotValues = EMPTY)` == 入参 `sql`；
+复制链留空时只剩「剥注释」这一既有动作（引号内的占位原样保留，块注释形态的占位被剥掉），
+`slotsApplied` 为空表。
+
+**反向验证（三条，红/绿对）**
+
+| 反向改动 | 读数 |
+|---|---|
+| R1 把占位替换摘掉（一律原样输出 token） | `RuntimeSlotChainConsistencyTest tests="3" failures="2"`；回退后 `tests="3" failures="0"` |
+| R2 改成「占位 → `:name` → `?`」三步串行且不做区间记账 | `ParameterReplacerTest tests="40" failures="2"`，两条失败信息分别为 `expected:<… 'a?b [:nm]'> but was:<… 'a?b ['O''Brien']'>` 与 `expected:<… k == 0 ? x [: y] · rt1 …> but was:<… k == 0 ? x ['V'] · rt1 …>`；回退后 `tests="40" failures="0"` |
+| R3 把留空改成 `NULL` | `ParameterReplacerTest tests="40" failures="2"` + `RuntimeSlotChainConsistencyTest tests="3" failures="2"`；回退后 `tests="40" failures="0"` / `tests="3" failures="0"` |
+
+**本券未做 / 留给后续券**
+
+- **面板接线是券 C 的活**：面板还没有 `slotValues` 状态，`CopyExecutableSqlAction.execute(panel, slotValues)`、
+  `ExecuteSqlSupport.executeWithRuntimeSlots(...)` 的 slot 参数目前由调用方传（默认空表 = 零变化）。
+  预览渲染路径（`SqlPreviewPanelSqlView` 里那次 `replaceNamedParams`）与导出
+  （`previewSqlForReadonly()` → 回放脚本）也必须接到
+  `ExecutableSqlFormatter.formatWithDiagnostics` / `ParameterReplacer.replaceRuntimeSlots` 上，
+  否则仍会「预览填了、导出没填」。这是 P-6 唯一还开着的口子。
+- `PAIRED`（if/else 互斥两支）仍不可填——券 A 已声明两支原文被丢弃，没有可填对象。
+- **限制（需写进面板文案）**：`OPTIONAL` 的「包含这段」默认勾选，与「用户没动」不可区分，
+  因此必须**带值**或**显式取消勾选**才算一次动作；纯字面量片段（模板里没有 `%s`）请在值里填
+  任意非空文本用于「已动作」判定，不影响产物。
+- **限制**：`LOOP` / `LIST` 的拆分口径是「逗号与换行都是分隔符」，项本身含逗号会被拆成两项
+  （`SlotValue.list` 的 KDoc 已写明；这种值请改用 `STRING` 单值）。
+- **既有行为带过来的细节**：复制链在占位之后仍要剥注释，多行用户值会被逐行 trim 尾部空白
+  （`SqlCommentStripper` 既有行为，不是本券引入）。
+- 未跑全量 / 分片 / `verifyGate` / `buildPlugin`（按券纪律，只跑定向）。
+
