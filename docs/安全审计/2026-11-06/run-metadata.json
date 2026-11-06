@@ -5,7 +5,7 @@
   "source_ref": {
     "commit": "30312d461e3fc54d5be553662dc3beb516bfa4e8",
     "worktree_dirty": true,
-    "dirty_note": "Only untracked addition: .agents/skills/security-audit/ (the audit skill itself). No target source modified."
+    "dirty_note": "仅新增未跟踪内容：.agents/skills/security-audit/（审计 skill 本体）。未修改任何目标源码。"
   },
   "profile": "standard",
   "scope_paths": [
@@ -31,7 +31,7 @@
     "NEEDS-VALIDATION.md": "parent"
   },
   "run_status": "complete",
-  "execution_notes": "Windows host cannot enforce the OS sandbox; run performed source-review only per SKILL.md execution-safety rules. validate-*.cjs run via run-local copies with a documented Windows lstat fallback (tools/ dir); skill originals unmodified.",
+  "execution_notes": "Windows 主机无法强制执行 OS 沙箱；按 SKILL.md 执行安全规则，本次仅做源码审查。validate-*.cjs 通过运行本地副本执行，附文档化的 Windows lstat 回退（tools/ 目录）；skill 原件未改动。",
   "wave2_units_added_by_critic": 2,
   "agents_spent": {
     "reconnaissance": 4,
@@ -39,6 +39,6 @@
     "critics": 2,
     "phase3_verifiers": 7
   },
-  "phase4": "findings.json: 25 needs_validation records; both validators PASS",
-  "phase5": "25/25 records independently verified (23 verified, 2 non-material citation/line corrections applied and revalidated)"
+  "phase4": "findings.json：25 条 needs_validation 记录；两个验证器均 PASS",
+  "phase5": "25/25 记录经独立复核（23 条 verified，2 处非实质性引用/行号修正已应用并复验）"
 }
