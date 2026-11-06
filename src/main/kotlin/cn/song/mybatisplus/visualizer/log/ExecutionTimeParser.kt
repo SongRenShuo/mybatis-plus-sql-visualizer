@@ -32,8 +32,17 @@ object ExecutionTimeParser {
     /** MP ExecuteTime 格式：`ExecuteTime: 456ms` / `ExecuteTime=789`。 */
     private val MP_EXECUTE_TIME_REGEX = Regex("""(?i)\bExecuteTime\s*[:=]\s*(\d+)\s*ms?\b""")
 
-    /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
-    private val TRAILING_MS_REGEX = Regex("""[\]\s]\s*(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
+    /**
+     * 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。
+     *
+     * T-SAF-21：前导由**消费式**字符类 `[\]\s]` 改为**定宽 lookbehind** `(?<=[\]\s])`——
+     * 语义逐字等价（数字前紧邻字符是 `]` 或空白即命中；中间的空白段本就由「紧邻」覆盖），
+     * 但回溯形态从二次降为线性：旧形态下每个空白索引都是一次匹配尝试起点、`\s*(\d+)`
+     * 迫使每次尝试回溯整个空白段（O(段长²)）；lookbehind 形态下每个不命中索引 O(1) 失败
+     * （后看一位 + 数字判定），无界控制台长行的空白填充段不再产生平方级回溯。
+     * 分组仍是 1 = 数字（调用方只取 groupValues[1]，匹配区间前移无行为差）。
+     */
+    private val TRAILING_MS_REGEX = Regex("""(?<=[\]\s])(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
 
     /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
     private val customPrefixRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
