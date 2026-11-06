@@ -121,11 +121,13 @@
 
 | 轮次 | 驱动 / profile | 脚本 | 各窗口事件数 | 断言 | app.log 看门狗行 |
 |---|---|---|---|---|---|
-| **主验收（修复后）** | 磐维 V1 + GaussDB 503.1.0（`panwei-gaussdb`） | `script-silent-window.txt`（含 CONFIG 握手） | 31 / 2 / 1 / 1（@21.5 / 30.8 / 40.0 / 49.0s） | **PASS=12 FAIL=0，ALL-PASS**，总长 49.0s，无静默段 | 0 |
+| **主验收（修复后）** | 磐维 V1 + GaussDB 503.1.0（`panwei-gaussdb`） | `script-silent-window.txt`（含 CONFIG 握手） | 30 / 2 / 1 / 1（@19.7 / 28.9 / 38.1 / 47.2s） | **PASS=12 FAIL=0，ALL-PASS**，总长 47.2s，无静默段 | 0 |
 | 负对照（修复后仍不发 CONFIG，脚本不入库） | 同上 | `dev-support/e2e-fake-ide/build/script-nocfg-gate.txt` | 业务请求窗口 0 条（预期自停） | FAIL 1（预期：自停仍成立） | 1；心跳 `gate` 由 #1/#2 的 0 → #3（HELLO+21.5s）起 **1** |
 | 跨驱动（修复后） | 华为原生驱动 + `jdbc:gaussdb:`（`gaussdb`） | `script-silent-window.txt` | 33 / 4 / 3 / 3（@24.3 / 33.4 / 42.5 / 51.7s） | **PASS=12 FAIL=0，ALL-PASS**，总长 51.7s | 0 |
 
 负对照那一行是本修复的验收要点：同样的「不发 CONFIG」形态，修复前对端只能看到 0 条事件；修复后心跳一帧就写着 `"gate":1`。
+
+主验收轮连跑两次（改动前一次 31 / 2 / 1 / 1 @21.5 / 30.8 / 40.0 / 49.0s、提交后按提交树重构建 agent jar 再一次为表内读数），两次都是 PASS=12 FAIL=0、零条看门狗行——读数稳定，不靠单次运气。
 
 ### 5. 未完成与风险
 
