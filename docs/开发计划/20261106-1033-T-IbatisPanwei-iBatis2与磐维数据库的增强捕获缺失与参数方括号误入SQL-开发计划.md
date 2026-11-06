@@ -1,7 +1,7 @@
 # T-IbatisPanwei：iBatis 2.x + 磐维（Panwei）的增强捕获缺失与参数方括号误入 SQL（2026-11-06）
 
 - 立项：2026-11-06 10:33
-- 状态：**实施中**（2026-11-06 四路后台并行，见 §十一；根因分析已完成）
+- 状态：**实施中**（2026-11-06 四路后台并行，见 §十一；根因分析已完成；**券 C 阻塞于公网无驱动 jar**，见 §十二）
 - 目标分支：`master`（券 A/B 可独立先落；券 C 需驱动 jar 才能开工）
 - 来源：用户真机报障——国产库「磐维」（Oracle 模式，驱动 `org.panweidb.Driver`）①增强捕获抓不到；②最终 SELECT 把中括号带进了 SQL；用户补充：项目是 iBatis（非 MyBatis 3）、日志框架 log4j2
 - 取证材料：用户控制台原文（`{pstm-N}` 三行一组，见 §2.1）、两张预览截图（INSERT 全 NULL / SELECT 带中括号）
@@ -184,7 +184,7 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 ## 七、待验证前提（P）
 
 - **P-1** 磐维驱动的类名与包形（是否 `org.panweidb.jdbc.Pg*`）——需 jar 或 `jcmd <pid> VM.class_hierarchy`；未证实前**不登记**（禁猜类名）。
-- **P-2** 实际 JDBC URL 子协议（`jdbc:panweidb:` / `jdbc:panwei:` / 复用 `jdbc:opengauss:`）——需应用数据源配置或连接织入后读 `UrlResolver`。
+- **P-2** ~~实际 JDBC URL 子协议~~ **已收口（2026-11-06）**：`jdbc:panweidb:`（nacos-plugins 配置原文 `jdbc:panweidb://localhost:15432/dbname?currentSchema=nacos&reWriteBatchedInserts=true`，URL 参数为 pgjdbc 风格）。券 F 已按 `panwei` / `panweidb` 双键登记（后者为真值，前者为容错）。
 - **P-3** iBatis 版本与日志代理实现（`com.ibatis.sqlmap.engine.log.*` 具体类名）——需项目依赖树确认；行为相关的只有格式，已由日志原文钉住。
 - **P-4** 增强捕获是否真的零事件（区别于「有事件但没显示」）——看状态栏「已收事件 N」，N=0 才落 §3.2。
 - **P-5** 全量扫描耗时（券 E 的取舍依据）——需在 2~4 万类的进程上实测。
@@ -225,3 +225,20 @@ iBatis 2.x 的 JDBC 日志代理每次执行打三行：`Executing Statement` �
 | F | `t-panwei-dialect` / `.worktrees/panwei-dialect` | F | `JdbcUrlDialects` / `UrlSubprotocolDialects` / `PreviewDialectResolver.dialectFromBadge` + 测试 |
 
 收口约定：各车道自提交、不推送、不合流、不建 tag；主控在集成分支上合并并按 §六 重跑权威定向，再由用户决定推送与发行节奏。
+
+## 十二、券 C 取证结论（2026-11-06 11:15）
+
+公网**拿不到**磐维 JDBC 驱动 jar，券 C 阶段 2（登记）阻塞；阶段 1 取证有实质产出（报告：`docs/调研报告/20261106-1115-磐维PanweiJDBC驱动取证-调研报告.md`，分支 `t-panwei-driver` 提交 `20651b6d`）。
+
+已钉死的事实：
+
+1. 驱动类 `org.panweidb.Driver` 四源互证（用户栈 + bboss `DBFactory` / `DBPanwei` + nacos-plugins 配置 + DBeaver/Smartbi 文档）；**V2 文档写 `cn.com.panweidb.Driver`**，存在多代命名分裂。
+2. URL 子协议 `jdbc:panweidb:` 证实（P-2 收口，见 §七）。
+3. 谱系：官方《PanWeiDB V2.0-S3.0.0_Beta 应用开发指南》§4.1.1 明载基于 **openGauss-connector-jdbc**；bboss `DBPanwei extends DBPostgres`。用户栈的 `org.panweidb.util.PSQLException` 说明是**整包重命名**（pgjdbc 为 `org.postgresql.util.*`、openGauss 2.x/3.x 为 `org.opengauss.util.*`）。
+4. 无 jar 时**不登记**的理由：登记范围取决于一个二选一形态判别——jar 内 `org/panweidb/jdbc/*` 有类且 `org/postgresql/jdbc/*` 为 0（整包重命名，需登记语句面 + prepare 面），还是只多一个 Driver 别名（语句面已被 `org.postgresql.*` 覆盖，只需 connect 面）。手册 §4.2 示例仍写 `org.postgresql.Driver`（照抄 openGauss 文档），照文档登记会得出「已覆盖」的错误结论。
+
+**待用户提供（二选一）**：
+- 应用 `WEB-INF/lib/` 下的驱动 jar 本体（`panweidb-jdbc-*` / `panwei-client-*` / `panweidb_jdbc_*`），放本机任意路径，测试用 `-Dpanwei.jar=<path>` 读取、不入库；
+- 或 `jcmd <pid> VM.class_hierarchy | grep -i -E "panwei|panweidb"` 输出（够登记，字节层校验只能标「未做」）。
+
+在 jar 到位前，磐维用户的采集由**接口兜底 + 券 D 的未登记诊断**承接：兜底命中即可采（无参 `executeQuery` 仍需连接类同时命中），零命中时状态栏会直接报出 `org.panweidb.jdbc.*` 未增强，不再静默。
