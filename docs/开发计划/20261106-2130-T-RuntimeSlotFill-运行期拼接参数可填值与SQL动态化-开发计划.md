@@ -182,4 +182,79 @@ data class RuntimeSlot(
 
 ## 九、实施记录
 
-<!-- 待回填 -->
+### 券 A（地基）— 完成（分支 `t-runtime-slot-a`，提交 `745cfe3c`）
+
+**§五 待验证前提的实测结论**
+
+- **P-1 成立（不改写块注释内容）**。实测：把 `/* 运行时值: 循环内追加 id=’…’ / or id=’…’（运行时重复） · rt1 */`
+  与落在引号内的 `'/* 运行时值: startTime · rt2 */'` 一起喂给 `SqlFormatter.format`，产物
+  `P1-KEEP-COMMENT=true`、`P1-KEEP-QUOTED=true`、注释符 open=2/close=2；再测带源码形态的
+  `/* 运行时值: k == 0 ? x : y · rt3 */` → `P1-KEEP2=true`、open=1/close=1。
+  格式化器**只把注释挪到独立行**（`SELECT a FROM t WHERE b =\n/* … */\nAND c = 1`），文本逐字保留。
+  结论：身份内嵌注释文本的方案可用；char range 确认不可用（同一输入被重排成 6 行）。
+  **副作用**：注释被挪行意味着实际产物里占位与前后 token 之间的空白会变——这与 β.2 现状一致，非本券引入。
+- **P-3 成立（循环模板可稳定抽取）**。`loopContextArguments` 已能按锚点拿到循环体内全部 append 实参；
+  把「字面量取原值、非字面量位置填 `%s`」的结构遍历（`shapeTemplate`）接到同一批实参上，
+  夹具 1 得到首项 `id='%s' ` / 其余 `or id='%s' `（断言实测，见 `RuntimeSlotTest:101-102`）。
+  多 append 交错形态（夹具 3）得到单形态 `AND order_no LIKE '%%s%' ` / `AND amount >= %s `。
+- **P-4 成立（三元两支分别可拿）**。`concatConditional` 内部本来就分别算出 `thenResult` / `elseResult`
+  （`SqlStringConcatenator.kt:411-412` 处两支文本比较），只是过去只留摘要；现在同一处把两支各跑一遍
+  `shapeTemplate`，夹具 2 得到 then=`""`（空支）、else=` AND status = %s`。
+  附带发现并修掉一个前提漏洞：**括号包住的三元在原实现里根本没被当三元**（`add` 的操作数是
+  `PsiParenthesizedExpression`，`concat` 对它返回 null，于是整段按「普通运行时值」降级成一条 VALUE 占位）。
+  现在 `concatExpression` 先 `PsiUtil.skipParenthesizedExprDown`：聚合交给内层，占位文本仍用外层原文，
+  既有产物因此逐字不变。
+
+**落点（文件:行）**
+
+| 内容 | 位置 |
+|---|---|
+| `SlotKind` / `RuntimeSlot` / 两支编码 `joinBranches` / `templateBranches`·`firstTemplate`·`restTemplate` | `sql/RuntimeSlot.kt:18,61,123,77-101` |
+| `ConcatenationResult.runtimeSlots`（默认空表） | `psource/SqlStringConcatenator.kt:65` |
+| 会话与草稿（id 顶层出口统一分配） | 同上 `:144` `:166`，`concat` 入口 `:184-195` |
+| 占位登记 `slotPlaceholder` / id 写回 `finalizeSlots` / `withSlotId` | 同上 `:254` `:292` `:321` |
+| hint 推断 `inferHint`（引号内）/ `insideInList`（IN 括号内） | 同上 `:336` `:343` |
+| 展开模板 `repetitionTemplate` / `twoBranchTemplate` / `shapeTemplate` | 同上 `:954` `:980` `:1000` |
+| 可选片段上下文 `withOptionalContext` | 同上 `:928` |
+| `PreviewResult.runtimeSlots`（默认空表） | `model/PreviewResult.kt:174` |
+| 服务层填充 `collectRuntimeSlots` | `psource/JdbcTemplateSqlPreviewService.kt:125,142` |
+
+**产物形态**：占位统一为 `/* 运行时值: <摘要> · rtN */`，id 按产物首次出现顺序 `rt1..rtN`，
+同一次预览内唯一；说明性注释（`条件追加，可能不出现` / `互斥分支追加…` / `回调内追加…`）不是可填值
+对象，**不带 id、不进 slot**（否则夹具 3 会多出两条无法填的 slot，与「两个 OPTIONAL slot」的验收冲突）。
+
+**定向测试读数**（`./gradlew test --tests … -Pkotlin.compiler.execution.strategy=in-process`）
+
+| 类 | XML 读数 |
+|---|---|
+| `RuntimeSlotTest`（新增，10 例） | `tests="10" failures="0" errors="0"` |
+| `SqlStringConcatenatorTest`（既有 19 例，未改） | `tests="19" failures="0" errors="0"` |
+| `JdbcTemplateSqlPreviewServiceTest`（既有 10 例，未改） | `tests="10" failures="0" errors="0"` |
+
+**留空回归**：夹具 1/2/3 各一条用例，把 `result.compactSql` 里的 ` · rtN` 剥掉后与**券 A 改动前实测产物**
+逐字比较（基线来自改动前 probe 读数，原样写进测试）。三处 diff 形态均为「仅多 ` · rtN`」：
+
+```
+- WHERE (/* 运行时值: 循环内追加 id=’…’ / or id=’…’（运行时重复） */) and create_time >= '/* 运行时值: startTime */';
++ WHERE (/* 运行时值: 循环内追加 id=’…’ / or id=’…’（运行时重复） · rt1 */) and create_time >= '/* 运行时值: startTime · rt2 */';
+```
+
+**反向验证（两次，红/绿对）**
+
+| 反向改动 | 读数 |
+|---|---|
+| id 分配改成常量 `rt1` | `RuntimeSlotTest tests="10" failures="2"`；失败信息 `expected:<[rt1, rt2]> but was:<[rt1, rt1]>`（`RuntimeSlotTest.kt:95` 循环夹具、`:145` 三元夹具） |
+| LOOP 模板改成 `null` | `RuntimeSlotTest tests="10" failures="1"`；失败信息 `expected:<id='%s' > but was:<null>`（`RuntimeSlotTest.kt:101`） |
+| 两处均回退后复跑 | `tests="10" failures="0"`、`tests="19" failures="0"`、`tests="10" failures="0"` |
+
+**本券未做 / 留给后续券**
+
+- 不生成可执行 SQL、不动 `ParameterReplacer`、不动面板（按券切分）。
+- `PAIRED`（if/else 互斥两支都追加）仍只有说明性注释：两支内容都已丢弃，没有可填的值对象，
+  券 B/C 若要支持得先在拼接器里保留两支原文——**当前没有**，不要假装能填。
+- 模板里 `%s` 是字面标记：用户源码若本来就有 `%s`（如 `LIKE '%s%'`），回填解析会多认一个占位。
+  券 B 渲染时须按「模板里 `%s` 个数 = 预期值个数」校验，或改用更罕见的标记（本券按计划册 §3.2 用 `%s`）。
+- `LOOP`/`TERNARY` 两支编码用 NUL 分隔（`RuntimeSlot.BRANCH_SEPARATOR`）：分支文本含 NUL 时整条模板
+  回落 `null`（不编造）；正常情况下 SQL 字面量不会有 NUL。
+- `PreviewResult.sql`（格式化文本）与 `compactSql` 都带 id；券 C 面板展示与券 B 替换都应以 `token` 为准。
+
