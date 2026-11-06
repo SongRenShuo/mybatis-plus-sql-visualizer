@@ -326,9 +326,13 @@ class McpSelectGuardTest {
         val select = parsed.single() as Select
         val top = select as PlainSelect
         val topHolds = !top.intoTables.isNullOrEmpty() || top.intoTempTable != null
-        val nestedHolds = top.withItemsList.orEmpty().mapNotNull { it.select }
-            .filterIsInstance<PlainSelect>()
-            .any { !it.intoTables.isNullOrEmpty() || it.intoTempTable != null }
+        // CTE 体形态：WithItem.select = ParenthesedSelect（内层再持真实 PlainSelect）——逐层探测
+        fun anyInto(s: Select?): Boolean = when (s) {
+            is PlainSelect -> !s.intoTables.isNullOrEmpty() || s.intoTempTable != null
+            is net.sf.jsqlparser.statement.select.ParenthesedSelect -> anyInto(s.select)
+            else -> false
+        }
+        val nestedHolds = top.withItemsList.orEmpty().any { anyInto(it.select) }
         // 形状记录（失败消息携带实测读数）：②nested / ③dropped——两者改前都放行（先红），
         // 修复后任一形态都由 AST 递归或词法兜底拒绝；形态②的断言读数在守卫拒绝消息中可见
         val shape = when {

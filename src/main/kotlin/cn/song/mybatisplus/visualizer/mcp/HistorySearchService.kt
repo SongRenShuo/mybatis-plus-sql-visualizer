@@ -376,8 +376,9 @@ object HistorySearchService {
                     val isQuantifier = body.isNotEmpty() && body.all { it.isDigit() || it == ',' }
                     if (isQuantifier) {
                         if (lastWasQuantifier) return "double quantifier"
-                        val unbounded = !body.contains(',')
-                        val emptyable = body.startsWith("0") || body.startsWith(",") || body == ","
+                        // 量词形态：{n} 有界、{n,} 尾逗号开口=无界、{n,m} 有界、{0,m}/{,m} 可空
+                        val unbounded = body.endsWith(",")
+                        val emptyable = body.startsWith("0") || body.startsWith(",")
                         if (lastGroupRisk && unbounded) return "nested quantifier"
                         stack.lastOrNull()?.let { frame ->
                             if (unbounded || emptyable) frame.riskInside = true
