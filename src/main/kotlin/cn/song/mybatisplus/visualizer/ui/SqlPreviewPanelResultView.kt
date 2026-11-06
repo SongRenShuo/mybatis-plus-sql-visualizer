@@ -740,10 +740,18 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     errorCopyButton?.isVisible = currentWarning != null
     // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
     // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+    val sizePlan = cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(result.sql)
     if (currentWarning != null) {
         degradationBanner.show(
             DegradationBanner.Kind.RENDER_WARNING,
             MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+        )
+    } else if (sizePlan.showRetentionNotice) {
+        // F-09：超大 SQL 的诚实降级提示——装饰已关（见 SqlSizeGuard 各接线点），
+        // 正文完整保留，用户需要知道「为什么没有高亮/标注」以及原文还能怎么用。
+        degradationBanner.show(
+            DegradationBanner.Kind.RENDER_WARNING,
+            MpSqlVisualizerBundle.message("panel.sql.size.notice", sizePlan.chars.toString()),
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
