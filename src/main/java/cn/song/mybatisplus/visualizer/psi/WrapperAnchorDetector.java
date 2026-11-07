@@ -38,6 +38,13 @@ import java.util.Set;
  *   <li>让位：D（批量族）的调用若<b>实参是 Wrapper 链/变量</b>（{@code userMapper.selectList(wrapper)}），
  *       语句承载在实参链上、锚点由 B/C 承载，本场景让位（T-GutterDupFreeze，避免「查询调用」
  *       被当批量操作再挂一枚）。</li>
+ *   <li>T-WriteFamily（R4）场景 D-0：写族 {@code delete} / {@code update} / {@code remove} 只在
+ *       <b>空 Wrapper 精确形态</b>（{@code delete(null)} / {@code remove(null)} 单参 null；
+ *       {@code update(entity, null)} 第二参 null）且 receiver 属 MP CRUD 家族
+ *       （{@code BatchOperationConverter.hasMpCrudReceiver}）时才以方法名作锚点；
+ *       {@code delete(new ...)} / {@code delete(wrapperVar)} / {@code update(entity, wrapperVar)} /
+ *       {@code JoinWrappers.delete(...)} / {@code service.lambdaUpdate()...update()} 的锚点仍归链（A/B/C），
+ *       同一语句不出第二枚图标。</li>
  * </ul>
  */
 public final class WrapperAnchorDetector {
@@ -62,6 +69,19 @@ public final class WrapperAnchorDetector {
      * 不覆盖本族——否则 {@code WrapperAnchorDetectorTest} 三个 Maps 形态不变量用例转红。
      */
     private static final Set<String> MAPS_TERMINAL_NAMES = Set.of("selectJoinMaps", "selectJoinMapsPage");
+
+    /**
+     * 与 {@link WrapperLocator#WRAPPER_FACTORY_METHOD_NAMES} / {@link WrapperLocator#SERVICE_CHAIN_METHOD_NAMES}
+     * 撞名的 JPA 写方法名（T-JpaDeleteAnchor）：{@code repository.delete(entity)} /
+     * {@code ht.delete(entity)} / {@code ht.update(entity)}。
+     *
+     * <p>这两个名字在场景 C 走「非工厂、非服务链」分支即 {@code return null}，<b>在场景 E 之前短路</b>，
+     * 于是 {@code JpaCrudOperationConverter.crudAnchorMethodNames} 刻意剔除了它们
+     * （{@code WRAPPER_FACTORY_COLLIDING_NAMES}）。本分支只补锚点入口，不改那两个注册表：
+     * receiver 家族判定直接复用 {@code JpaCrudOperationConverter.hasJpaCrudReceiver}
+     * （家族 × 方法名双重判定，与场景 E 同口径）。</p>
+     */
+    private static final Set<String> JPA_COLLIDING_METHOD_NAMES = Set.of("delete", "update");
 
     private WrapperAnchorDetector() {}
 
@@ -126,6 +146,27 @@ public final class WrapperAnchorDetector {
                     return isInsideWrapperVariableInitializer(call) ? null : element;
                 }
             }
+            // 场景 D-0（T-WriteFamily R4）：空 Wrapper 写族——`mapper.delete(null)` / `service.remove(null)` /
+            // `mapper.update(entity, null)`。三个名字里 `delete` / `update` 同时是 Wrapper 工厂/服务链方法名，
+            // 下方场景 C 对「非工厂、非链起点」的调用会直接 `return null`（`JoinWrappers.delete(...)`、
+            // `service.update(wrapper)` 用的就是这条短路），因此本判定必须**先于**工厂块；
+            // 形态门是精确的「Wrapper 实参为 null 字面量」（BatchOperationConverter.isNoWrapperConsumingCall
+            // ＝形态 + MP receiver），`delete(new LambdaQueryWrapper<>()...)` / `delete(wrapperVar)` /
+            // `update(entity, wrapperVar)` 都不满足 → 落到场景 C/D，锚点仍由链（A/B/C）承载，不产生第二枚图标。
+            if (BatchOperationConverter.NULL_WRAPPER_WRITE_METHOD_NAMES.contains(referenceName)) {
+                if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
+                PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
+                if (BatchOperationConverter.isNoWrapperConsumingCall(call)) return element;
+                // delete/update 继续走工厂判定（JoinWrappers.delete(Entity.class) 等）。
+                // remove 不是工厂名：非空实参时 JPA 的 `em.remove(entity)` 仍归场景 E 口径——这里
+                // 直接按同一判定返回，不能无条件 return null，否则会把既有 JPA remove 锚点一起挡掉
+                // （T-JpaDeleteAnchor × T-WriteFamily 合流实测：testJpaExistingAnchorsKept 1 红）。
+                // 其余非 MP receiver（`list.remove(obj)` 等）不亮。
+                if (!WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES.contains(referenceName)) {
+                    return cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
+                            .hasJpaCrudReceiver(call) ? element : null;
+                }
+            }
             if (WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES.contains(referenceName)) {
                 if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
                 PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
@@ -140,7 +181,20 @@ public final class WrapperAnchorDetector {
                 boolean isServiceChain = WrapperLocator.SERVICE_CHAIN_METHOD_NAMES.contains(referenceName)
                     && !qualifierIsNewExpression
                     && WrapperLocator.isServiceChainStart(call);
-                if (!isWrappersFactory && !isServiceChain) return null;
+                if (!isWrappersFactory && !isServiceChain) {
+                    // 优先级：工厂 > 服务链 > JPA > 无锚点（T-JpaDeleteAnchor）。
+                    // `delete` / `update` 同时是 Wrapper 工厂/链方法名，上面两个分支优先认领
+                    // （`JoinWrappers.delete(Class)` / `JoinWrappers.update(Class)` 仍走工厂分支）；
+                    // 落到这里才问一次 JPA 家族：`repository.delete(entity)` / `ht.delete(entity)` /
+                    // `ht.update(entity)` 有预览能力、只缺 gutter 入口。家族判定失败（含
+                    // `service.update(wrapper)` 消费调用、wrapper 链终结点 `update`）保持原 `return null`。
+                    if (JPA_COLLIDING_METHOD_NAMES.contains(referenceName)
+                            && cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
+                                    .hasJpaCrudReceiver(call)) {
+                        return element;
+                    }
+                    return null;
+                }
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return isInsideWrapperVariableInitializer(call) ? null : element;
             }
