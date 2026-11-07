@@ -20,6 +20,9 @@ import java.util.concurrent.ConcurrentHashMap
  * 计数/均值/分位（[sampleStats]，压测复测程序化读数出口）；每累计 [SAMPLE_SUMMARY_EVERY]
  * 个样本打一条 INFO 分布摘要（沿用本类既有「idea.log 留痕」呈现方式）；[resetSamples]
  * 供压测复测划窗口。采样成本每次一入环 + 一次取模判断（锁内短临界区，实测开销见券D报告）。
+ *
+ * T-SqlListCatchup 券E（2026-11-07）：补 [recordGauge]——非耗时型读数（gauge）共用同一
+ * 分布设施，供桥侧逐行/积压量打点（`LogBridge.handleLine` / `LogBridge.settledBacklog`）。
  */
 object LogPerfProbe {
 
@@ -51,6 +54,22 @@ object LogPerfProbe {
             LOG.info("[T-SqlLogPerf] $name ${costMs}ms$suffix")
         }
         return result
+    }
+
+    /**
+     * T-SqlListCatchup 券E：非耗时型读数（gauge）入环——与 [measure] 共用环形分布设施
+     * （[sampleStats] / [resetSamples]），但 value 的量纲由调用方定义（如「条」）：环内按
+     * 纳秒耗时口径存取（[SampleRing.stats] 出数时 ÷1e6 折毫秒），gauge 值先 ×1e6 入环，
+     * 使 stats 读数原值回显（[SampleStats] 的 ms 字样对 gauge 名只是名义单位）。value 达
+     * [THRESHOLD_MS] 走同款 INFO 留痕（量纲与场景写进 detail）。
+     * 券E 消费点：`LogBridge.settledBacklog`（flushSettledEntries 每拍的待产出条目数）。
+     */
+    internal inline fun recordGauge(name: String, value: Long, detail: () -> String = { "" }) {
+        recordSample(name, value * 1_000_000)
+        if (value >= THRESHOLD_MS) {
+            val suffix = detail().takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""
+            LOG.info("[T-SqlLogPerf] $name $value$suffix")
+        }
     }
 
     // ---------- T-SqlListCatchup 券D：全量分布采样 ----------

@@ -172,6 +172,38 @@ class ConsoleSettleFlushTest : BasePlatformTestCase() {
     }
 
     /**
+     * T-SqlListCatchup 券 E：桥侧逐行探针接线守卫——经 filter 链驱动的每一行（含噪音行）必须
+     * 在 `LogBridge.handleLine` 分布落一枚样本；轮询冲刷拍必须在 `LogBridge.settledBacklog`
+     * gauge 落一枚样本且本拍待产出条数入环。反向验证：摘掉 handleConsoleLine 的 measure 包裹
+     * 或 flushSettledEntries 的 recordGauge 调用，本用例必红。
+     */
+    fun test桥侧探针_逐行与冲刷拍读数非空() {
+        LogPerfProbe.resetSamples()
+        val buffer = SqlLogEntryBuffer().apply { dedupeEnabled = false }
+        val (bridge, pair) = newBridgeFilter(buffer)
+        val filter = pair.first
+        try {
+            filter.applyFilter(springBootLine("nio-8086-exec-1", stmt1), 200)
+            filter.applyFilter(springBootLine("nio-8086-exec-2", stmt2), 400)
+            val lineStats = LogPerfProbe.sampleStats("LogBridge.handleLine")
+            assertTrue(
+                "逐行探针应每行落样本（2 行 → count ≥2）：$lineStats",
+                lineStats != null && lineStats.count >= 2,
+            )
+            assertTrue("冲刷拍前 gauge 不应存在（未走冲刷）", LogPerfProbe.sampleStats("LogBridge.settledBacklog") == null)
+
+            Thread.sleep(JdbcTemplateLogParser.DEFAULT_SETTLE_MS + 150)
+            bridge.scanAll()
+            val gauge = LogPerfProbe.sampleStats("LogBridge.settledBacklog")
+            assertTrue("冲刷拍应落 gauge 样本：$gauge", gauge != null && gauge.count >= 1)
+            assertEquals("本拍待产出 2 条应按原值入环", 2.0, gauge!!.maxMs, 1e-9)
+            assertEquals("冲刷产出 2 条", 2, buffer.snapshot().size)
+        } finally {
+            LogPerfProbe.resetSamples()
+        }
+    }
+
+    /**
      * 旧代际 filter 失活：2026.2 平台无 `removeMessageFilter`（只有 `clearMessageFilters`），
      * stop→start 留下的旧代理摘不掉；若它按 console 键取到**新**上下文就会与新代理逐行重复解析/计数。
      */

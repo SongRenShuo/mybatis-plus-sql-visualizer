@@ -275,6 +275,44 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-SqlListCatchup 券 E：refreshList 拆拍探针接线守卫——每个刷新拍必须给五段（snapshot /
+     * diagnostics / counts / filters / diffModel）各落一枚样本（券 E 分项账单的数据源）。
+     * 反向验证：摘掉任一段的 LogPerfProbe.measure 包裹，本用例对应该 key 必红。
+     */
+    fun testTSqlListCatchupE_refreshList拆拍探针五段读数非空() {
+        LogPerfProbe.resetSamples()
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            manager.entries.addEntry(
+                LogSqlEntry(
+                    rawSql = "SELECT 1 FROM probe_e_t",
+                    restoredSql = "SELECT 1 FROM probe_e_t",
+                    params = emptyList(),
+                    timestamp = 1L,
+                ),
+            )
+            waitForEdt()
+            for (key in listOf(
+                "LogPanel.refreshList.snapshot",
+                "LogPanel.refreshList.diagnostics",
+                "LogPanel.refreshList.counts",
+                "LogPanel.refreshList.filters",
+                "LogPanel.refreshList.diffModel",
+            )) {
+                val stats = LogPerfProbe.sampleStats(key)
+                assertNotNull("拆拍段 $key 应有读数（每拍必打点）", stats)
+                assertTrue("拆拍段 $key count 应 ≥1：$stats", stats!!.count >= 1)
+            }
+        } finally {
+            LogPerfProbe.resetSamples()
+            panel.dispose()
+        }
+    }
+
     fun test注入耗时信息_排序方式选择器保持可见() {
         val panel = SqlLogPanel(project, manager)
         try {
