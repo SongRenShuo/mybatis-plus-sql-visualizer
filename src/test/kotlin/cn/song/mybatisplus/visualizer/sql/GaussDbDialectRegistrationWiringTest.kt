@@ -102,9 +102,13 @@ class GaussDbDialectRegistrationWiringTest {
             "database-optional.xml 应含 Vastbase sql.dialect 注册（T-XcDialects3 券 08）",
             xml.contains("cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect"),
         )
+        assertTrue(
+            "database-optional.xml 应含 GoldenDB sql.dialect 注册（T-GoldenDbDialect 券 A）",
+            xml.contains("cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect"),
+        )
         assertEquals(
-            "应恰有四个 sql.dialect 注册（DM + GaussDB + HighGo + Vastbase）；增删都要在本用例留痕",
-            4,
+            "应恰有五个 sql.dialect 注册（DM + GaussDB + HighGo + Vastbase + GoldenDB）；增删都要在本用例留痕",
+            5,
             Regex("<sql\\.dialect\\b").findAll(xml).count(),
         )
         // 平台 Dbms 枚举无 GaussDB/HighGo/Vastbase → 必须与 DM 同款注册 UNKNOWN，保留语言 id 承载身份

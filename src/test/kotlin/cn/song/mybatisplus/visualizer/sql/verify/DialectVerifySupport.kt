@@ -51,7 +51,11 @@ import java.util.concurrent.atomic.AtomicInteger
  *    H2 兼容模式按官方文档模拟各库语法形态（分页/引用/UPSERT 形态级证据）；
  *  - SQLite 3.50.3（sqlite-jdbc 内嵌原生引擎）：SQLite 方言——100% 真实证据；
  *  - PostgreSQL 的 `ON CONFLICT DO UPDATE` 在 H2 任何模式不支持（引擎实证）→ 该形态只能由
- *    Docker 测试（真实 PG 容器）覆盖，H2 配对下标记 [UpsertMode.SKIP]。
+ *    Docker 测试（真实 PG 容器）覆盖，H2 配对下标记 [UpsertMode.SKIP]；
+ *  - **GoldenDB 无 H2 配对**（H2 无 GoldenDB 兼容模式，也不必加）：GoldenDB 渲染形态与
+ *    MySQL 逐项相同（分页 LIMIT / 反引号 / ON DUPLICATE KEY UPDATE，T-GoldenDbDialect 计划
+ *    §1.2.3 文档级实证），故上方 `MODE=MySQL` 配对读数只作**形态级对照证据**，非 GoldenDB
+ *    引擎证据——引擎级验证只能走真机矩阵（`dialectExternalVerify`）。
  */
 object DialectVerifySupport {
 

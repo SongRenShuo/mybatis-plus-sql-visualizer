@@ -69,6 +69,13 @@ internal object ExecDialectRouting {
         // 候选链恒落 PG 兜底——照 GaussDB 同款「本名 → PG 兜底」写法。
         "HighGo" to listOf("HighGo", "PostgreSQL"),
         "Vastbase" to listOf("Vastbase", "PostgreSQL"),
+        // T-GoldenDbDialect（券 A）：自注册方言 GoldenDbSqlDialect（见 database-optional.xml）——
+        // 262 平台无 GoldenDB 方言模块（.intellijPlatform/localPlatformArtifacts/IU-262.9437.185
+        // 全量 xml grep golden 零命中，正对照 mysql/greenplum 命中，2026-11-07），注册后语言
+        // id `GoldenDB` 进入平台可用清单、候选链首项即命中。GoldenDB 是 MySQL 血统
+        // （p37「完全兼容 MySQL 客户端」+ manifest "MySQL Connector Java"），平台缺位时落
+        // MySQL 兜底（渲染形态逐项相同）。
+        "GoldenDB" to listOf("GoldenDB", "MySQL"),
     )
 
     /** 目标数据源解析测试缝（headless 无 DataSourceStorage；生产恒 null 走真链）。 */

@@ -51,7 +51,8 @@ class DialectVerifySupportUpsertModeTest {
         // 覆盖注册表里所有**不是**上面三族的方言：任一族的渲染入口被误删都会在这里变红
         val degradeNames = setOf(OracleDialect.name, SqlServerDialect.name, DmDialect.name)
         val natives = DialectRegistry.dialects.filter { it.name !in degradeNames }
-        assertEquals("注册表应含 11 族原生 upsert 方言", 11, natives.size)
+        // T-GoldenDbDialect（券 A）：p66 ON DUPLICATE KEY UPDATE 原生 upsert，第 12 族
+        assertEquals("注册表应含 12 族原生 upsert 方言", 12, natives.size)
         for (dialect in natives) {
             assertEquals(
                 "${dialect.name} 应推导为 REAL",

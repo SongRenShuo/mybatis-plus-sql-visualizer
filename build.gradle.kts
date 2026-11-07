@@ -107,6 +107,10 @@ dependencies {
     // database-lab/vendor/drivers/，按仓库相对路径挂**测试 classpath**（仅测试面，供
     // dialectExternalVerify 连磐维 A/B 实例跑方言渲染套件；插件运行时零依赖不变）。
     testImplementation(files("database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar"))
+    // T-GoldenDbDialect（2026-11-07）：中兴 GoldenDB 驱动——同磐维口径，公开仓库拿不到厂商标，
+    // jar 入库 database-lab/vendor/drivers/ 挂**测试 classpath**（供矩阵/外指腿连驱动级替代实例；
+    // §7.6 驱动级替代读数的长效注入，替代 .local init script 临时方案；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/gdb_mysql-connector-java-oracle-5.1.46.99.jar"))
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
