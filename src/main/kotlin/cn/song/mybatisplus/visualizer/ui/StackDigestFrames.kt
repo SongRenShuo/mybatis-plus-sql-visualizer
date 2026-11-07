@@ -154,6 +154,8 @@ internal object StackDigestFrames {
             "cn.com.vastbase.", "com.highgo.",
             // OceanBase（独立实现非 MySQL 分叉）
             "com.oceanbase.",
+            // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）
+            "com.goldendb.",
             "org.apache.commons.dbcp2.", "com.ibm.db2.", "com.teradata.", "org.hibernate.",
             "com.baomidou.", "org.springframework.transaction.", "org.springframework.jdbc.",
         ).any { name.startsWith(it) }

@@ -61,6 +61,33 @@ enum class SqlInspectionRule(
         displayNameKey = "inspection.sqlv.ognl.displayName",
         enabledByDefault = true,
     ),
+
+    /**
+     * F-02 规则①：`#{p.prop}` 的属性段在参数类型（@Param 声明的 DTO）里不存在。
+     * Map 型参数的 key 静态不可知（`#{map.key}` 一类正是竞品误报重灾区）——不判，宁缺勿错。
+     */
+    PARAM_PROPERTY(
+        id = "paramProperty",
+        shortName = "SqlvParamProperty",
+        displayNameKey = "inspection.sqlv.paramProperty.displayName",
+        enabledByDefault = false,
+    ),
+
+    /** F-02 规则②：`@Param("x")` 显式声明但对应语句从未引用（声明/引用两侧不一致）。 */
+    PARAM_REFERENCE(
+        id = "paramReference",
+        shortName = "SqlvParamReference",
+        displayNameKey = "inspection.sqlv.paramRef.displayName",
+        enabledByDefault = false,
+    ),
+
+    /** F-02 规则③：`<include refid="…">` 指向的 `<sql>` 片段解析不到。 */
+    MISSING_SQL_FRAGMENT(
+        id = "missingSqlFragment",
+        shortName = "SqlvMissingFragment",
+        displayNameKey = "inspection.sqlv.fragment.displayName",
+        enabledByDefault = false,
+    ),
 }
 
 /** 一条检查结论（纯数据，不含任何平台类型——偏移由调用方映射回 PSI）。 */

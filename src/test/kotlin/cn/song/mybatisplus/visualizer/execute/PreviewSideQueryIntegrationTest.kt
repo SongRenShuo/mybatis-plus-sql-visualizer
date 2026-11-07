@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.ui.PreviewSideQuery
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -14,7 +15,6 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -30,8 +30,8 @@ import javax.xml.parsers.DocumentBuilderFactory
  *  3. 失败解包：不存在的表 → `Failed`，消息来自真实驱动的 `InvocationTargetException` 目标异常。
  *
  * 环境门槛与 [DataSourceSelectorIntegrationTest] 一致：demo 项目 `.idea/dataSources.xml`
- * 提供 URL/用户名/驱动，密码硬编码 root（本地开发库无敏感性）；MySQL 未启动时
- * `assumeTrue` skip 而非失败。
+ * 提供 URL/用户名/驱动，密码硬编码 root（本地开发库无敏感性）；MySQL 未启动时打印
+ * `[DB-IT] SKIP` 后 return（显式绿跳，不用 `assumeTrue`——JUnit3 基类会把它记为 failure）。
  */
 class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
 
@@ -55,7 +55,10 @@ class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
 
     fun testCountExplainAndFailureAgainstRealMySql() {
         val failure = prepareDataSource()
-        assumeTrue("MySQL 未就绪，跳过真库旁路查询：$failure", failure == null)
+        if (failure != null) {
+            println("[DB-IT] SKIP: MySQL 未就绪，跳过真库旁路查询：$failure")
+            return
+        }
 
         val count = runSideQuery("SELECT COUNT(*) FROM user WHERE id = 2", scalar = true)
         assertTrue("COUNT 应返回标量：$count", count is PreviewSideQuery.Result.Scalar)
@@ -136,7 +139,7 @@ class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = children.item(j).textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         if (info != null && localXml.isFile) {
             val local = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(localXml)
@@ -172,7 +175,7 @@ class PreviewSideQueryIntegrationTest : BasePlatformTestCase() {
         created.workingDir = project.basePath
         created.passwordStorage = LocalDataSource.Storage.MEMORY
         manager.addDataSource(created)
-        DbCredentialManager().setPassword(created, OneTimeString("root"), LocalDataSource.Storage.MEMORY)
+        DbCredentialManager().setPassword(created, OneTimeString(DbTestCredentials.password("root")), LocalDataSource.Storage.MEMORY)
         dataSource = created
         return introspectDataSource(created)
     }

@@ -61,6 +61,28 @@ object MybatisXmlTargets {
     }
 
     /**
+     * T-MapperNavShortcut：按 namespace + 语句 id 定位**语句标签本身**（返回全部同名标签，
+     * 含 `databaseId` 多方言变体）。
+     *
+     * 与 [findIdAttributeInFile] 的分工：那条服务 XML 内部引用（返回 `id` 属性值元素，Ctrl+B
+     * 落在值上）；这条服务 Java → XML 导航（返回标签，落点由调用方决定）。
+     *
+     * 文件定位复用 [findMapperFileByNamespace]（单槽 namespace memo + 清单 TTL 缓存），
+     * 不新建缓存、不引监听器。语句标签限定 `<mapper>` 直接子级（`subTags`），与
+     * `log/MapperXmlLocator` 同口径。
+     */
+    fun resolveStatementTags(project: Project?, namespace: String?, id: String): List<XmlTag> {
+        val name = id.trim()
+        if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return emptyList()
+        val file = findMapperFileByNamespace(project, namespace) ?: return emptyList()
+        val root = file.rootTag ?: return emptyList()
+        return root.subTags.filter { it.name in STATEMENT_TAGS && it.getAttributeValue("id") == name }
+    }
+
+    /** MyBatis 四类语句标签（`<mapper>` 直接子级；与 `XmlSqlGutterLineMarkerProvider` 同集合）。 */
+    internal val STATEMENT_TAGS: Set<String> = setOf("select", "insert", "update", "delete")
+
+    /**
      * 解析 `ns.id` / 同文件 `id` 形态的标识引用 → 目标 `id` 属性值元素。
      *
      * @param contextFile 引用所在文件（无 `ns.` 前缀时在同文件里找）
@@ -125,11 +147,16 @@ object MybatisXmlTargets {
      * 解析类名（`resultType` / `parameterType` / `typeHandler` …）→ [PsiClass]。
      *
      * 三条路线：全限定名直接 findClass；短名先走 namespace 接口所在文件的 import 表；再退到
-     * 短名索引（dumb 态索引不可用 → 返回 null，不报红——引用本身是 soft）。
+     * 短名索引。dumb 态在**方法入口**早退返回 null（不报红——引用本身是 soft），
+     * 覆盖全部三条路线的索引查询（02b 闸前移）。
      */
     fun resolveClass(project: Project?, context: XmlAttributeValue, rawName: String): PsiClass? {
         val name = rawName.trim().substringBefore('<').substringBefore('[')
         if (project == null || name.isEmpty()) return null
+        // T-PerfSweep30 券02（02b）：dumb 闸**前移到方法入口**——原先闸在全部 findClass 之后，
+        // 索引构建期的前置 findClass（全限定名/import 表/同包）都在闸外裸跑。dumb 态返回 null
+        // （KDoc 语义「dumb 不报红」——引用本身是 soft）。
+        if (DumbService.isDumb(project)) return null
         classResolveCount.incrementAndGet()
         val facade = JavaPsiFacade.getInstance(project)
         val scope = GlobalSearchScope.allScope(project)
@@ -158,7 +185,6 @@ object MybatisXmlTargets {
                 facade.findClass("$pkg.$shortName", scope)?.let { return it }
             }
         }
-        if (DumbService.isDumb(project)) return null
         return PsiShortNamesCache.getInstance(project)
             .getClassesByName(shortName, scope)
             .firstOrNull()
@@ -177,6 +203,9 @@ object MybatisXmlTargets {
     fun resolveInterfaceMethod(project: Project?, namespace: String?, methodName: String): PsiMethod? {
         val name = methodName.trim()
         if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return null
+        // T-PerfSweep30 券02（02b）：裸 findClass 补 dumb 闸——消费点 MapperXmlToJava 的
+        // collectSlow/navigate 都在用户点击链上，dumb 态返回 null 走既有回退，不裸跑索引查询。
+        if (DumbService.isDumb(project)) return null
         val iface = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return null
         return iface.findMethodsByName(name, true).firstOrNull()

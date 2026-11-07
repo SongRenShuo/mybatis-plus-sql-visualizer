@@ -1,0 +1,23 @@
+# 实例清单模板 —— 复制到 .local/db-env-instances.tsv 再填真实凭据
+#
+# 字段（Tab 分隔，9 列，顺序不能变）：
+#   name	image	hostPort	containerPort	memLimit	volumeName	env	initDir	verifyCmd
+#
+# - hostPort 只用 20000–29999（用户定的，安全组整段放行）
+# - env 用分号分隔 KEY=VALUE；值里不要含分号
+# - volumeName 留空 = 不挂持久卷（仅一次性测试用）；有数据的实例务必填
+# - initDir 挂到 /docker-entrypoint-initdb.d:ro（镜像首次初始化时自动执行里面的 .sql/.sh）
+# - verifyCmd 是被轮询的就绪探针，写「在容器内能秒回」的命令
+#
+# ⚠️ 三个实测坑（2026-11-05）：
+#   1) mysql:8.0 默认 tag 是 Oracle Linux 9 基底，在无 x86-64-v2 的虚机（QEMU/KVM 老 CPU）上
+#      mysqld 直接 `Fatal glibc error: CPU does not support x86-64-v2` → 必须用 mysql:8.0-debian。
+#   2) 容器内 LANG 为空 → mysql 客户端 --default-character-set=auto 落到 latin1，灌 UTF-8 种子数据
+#      会双编码（中文变 C3A5C2BC…）。initDir 里每条 .sql 首行写 SET NAMES utf8mb4;
+#   3) root 默认只允许容器内登录 → 远程连接要加 MYSQL_ROOT_HOST=%
+#
+# 示例（MySQL 8.0 承载 mpj_demo 集成测试库）：
+# xc3-mysql8	mysql:8.0-debian	25900	3306	1g	xc3-mysql8-data	MYSQL_ROOT_PASSWORD=<强口令>;MYSQL_DATABASE=mpj_demo;MYSQL_ROOT_HOST=%	/root/xc3-mysql8-init	mysql -uroot -p<强口令> -e "select 1"
+#
+# 示例（PostgreSQL，无种子）：
+# xc3-pg16	postgres:16	20033	5432	2g	xc3-pg16-data	POSTGRES_PASSWORD=<强口令>;POSTGRES_DB=dbx_test		pg_isready -U postgres

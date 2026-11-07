@@ -145,9 +145,10 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L13 改设置页/面板布局后 testFast 绿不算绿——平台 UI 测试只在全量 `testShards` 跑到
 
-**证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）。
+**证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）；**2026-11-07 T-SqlListCatchup 合 master `a0cc268e` 后 CI 三轮红 8 例**——券 A 给 `notifyUi` 加了 150ms 刷新窗（通知转 Alarm 延迟补刷），`SqlLogTailFollowTest`×5 / `SqlLogPanelFilterTest`×1 / `SqlListV179HeadlessTest`×1 断言的「动作后列表已同步刷新」全部失效（headless 泵不到未到点的 Alarm），另 `ReplayGuardStormVerdictTest` 未登记进元守卫。本战役六轮定向 + 244 例集成收口全绿，**一个都没抓到**，全靠 CI 全量。
 **正例**：动设置页 section 控件/面板布局/增删 JComboBox 等控件的提交，报告里写明「平台 UI 测试面，全量未跑＝not run 待收口」；**反例**：testFast 快桶绿就宣称设置页改动收口。
-**Seen 2× (2026-10-25, 2026-10-26)**
+**追加口径（2026-11-07）**：**引入「延迟/异步化」机制的改动与改布局同价**——任何把同步刷新改成延迟补刷（时间窗、节流、Alarm、invokeLater 链）的提交，都会让既有 UI 测试里的「动作后立即断言」失效；此类改动的定向面必须显式列出受影响的面板测试类（`SqlLogTailFollow*`/`SqlLogPanel*`/`SqlListV179*` 等）并逐个跑到，或直接以 CI 全量轮为准再收口。修复口径＝测试侧注入同步调度器（`manager.catchUpScheduler = { _, action -> action() }`，机制本身由专项用例覆盖），不要为了让测试变绿去放宽生产窗口。
+**Seen 3× (2026-10-25, 2026-10-26, 2026-11-07)**
 
 ### L12 守卫的口径要以生产代码的实际契约为准，不能按「更严格更好」想象
 
@@ -161,6 +162,85 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **证据**：T-TestGateGems（2026-10-24）`gate-readout.ps1` 无 BOM 落盘，PS 5.1 解析报「Missing closing '}'」且行号指向 `switch` 行（真实原因是中文注释的字节被 ANSI 解码后引号错配）；仓内既有 `push-all.ps1`/`ci-verify.ps1` 均带 BOM。
 **正例**：新建 `.ps1` 一律带 BOM；另注意 Git Bash 直调 `powershell -File` 会吞退出码，核验退出码须 `-Command "& '...ps1' ...; exit $LASTEXITCODE"`。
 **Seen 1× (2026-10-24)**
+
+### L14 判「搜不到」之前必须先跑对照查询，证明搜索接口本身是好的
+
+**证据**：`docs/调研报告/20261106-1435-磐维PanWeiDB容器镜像搜索与真机部署-调研报告.md` §1（Docker Hub `query=panweidb` 回 `count=0`，同接口 `query=opengauss` 回 `count=111` ⇒ 0 是真 0；反之 ghcr.io 连公开对照组 `homebrew/core/hello` 都取不到 200 ⇒ 该源本轮不可信，只能写「未取到」而不能写「没有」）；同族前例见 L7/L8 的「0 命中等结论必须配正对照」。
+**正例**：每个「0」旁边并排给出同接口的已知非零查询读数；源本身不可用时把结论降级为「未取到」并写明原因。
+**反例**：「搜了一遍没有」——不区分「接口坏了/被限流」与「确实不存在」，把工具故障写成事实结论。
+**Seen 1× (2026-11-06)**
+
+### L15 个人/社区重打包的厂商镜像只能作内部验证，对外结论必须标来源与「非官方」定语
+
+**证据**：`f111b4de`（skill 增补「个人命名空间重打包镜像的识别与定级」）、`da16ff75`（经验总结 §三：`registry.cn-shenzhen.aliyuncs.com/shine_fei/panweidb:3.4.0` 个人命名空间，index digest `sha256:18ecce71…`，包内确为厂商产物 `PanWeiDB_V3.0-S3.4.0_B01`，但分发链无人背书）。
+**正例**：先按「产品专属指纹」定性（磐维：`gs_install`/`gs_om`/`pwadmin`/`pwaudit`/`pwsso` 在场 ⇒ 真厂商产物被重打包；只有 openGauss 通用件 ⇒ 改名冒牌，禁用）；引用时逐处带仓库全名 + digest + 构建时间 + 「第三方重打包，非厂商官方分发」。
+**反例**：搜到同名镜像就当官方镜像写进结论/文档（与「不拿 openGauss 冒充」同根，只是更隐蔽——内容是真的，背书是假的）。
+**Seen 1× (2026-11-06)**
+
+### L16 注释里点名的守卫必须真的存在；平台能力结论必须带「在哪一版成立」的取证
+
+**证据**：`DynamicInstallSupport` 类注释写「本插件注册的 EP 全部落在平台 `dynamic="true"` 点位上，由 `DynamicEpComplianceGuardTest` 守卫」——`grep -rn "class DynamicEpComplianceGuardTest" src/` **零命中**，这条「已合规」从未被机器验过。事实相反：243（IU-2024.3.7.1）的 `com.intellij.sql.dialect` 两处声明都**没有** `dynamic`，253/262/263 都有（`dev-support/probe-platform-ep-dynamism.py` 按 HTTP Range 抽发行包实测，2026-11-06）。于是 243 上更新必然回退「重启生效」（平台日志 `is not unload-safe because of extension to non-dynamic EP …`），用户报障时先被怀疑成渠道问题。时间线：`<sql.dialect>` 注册自 2026-10-14（`6199a2a7`）起，仓库里 2026-09-11 那次「免重启热替换实测通过」发生在注册之前——能力是后来退化的，文档没跟上。
+**正例**：能力结论写成矩阵并带可复跑取证——「253/262/263 可热卸载；243 不可（平台 EP 非动态）」＋ 取证脚本路径；守卫写成能反向验证的静态扫描（登记表 ↔ 描述文件双向一致、取证必填、注册只许落在可选依赖描述文件）。
+**反例**：在注释里断言「已由某某守卫保证」「全部落在 dynamic 点位」，既没落测试也没写适用版本；三周后按这条老结论排查，代价是一轮误判。
+**Seen 1× (2026-11-06)**
+
+### L17 测试环境容器 cap 必须按实测峰值给（1.5~2×），且必须同步压 DB 内部参数并留 swap
+
+**证据**：`103.36.220.245`（16GB）上 12 个数据库容器 cap 合计 **41 GiB**、**0 swap**、`available` 只剩 775MB（2026-11-06 23:5x 实测）；同一批容器的 DB 内部参数照大机器配——磐维 `max_connections=3000`（`postgresql.conf` 第 955 行覆盖第 82 行的 200）、`bulk_write_ring_size=2GB`、`cstore_buffers=512MB`，Oracle `sga_max_size=1.5G`，SQL Server `max server memory` 无上限，openGauss 族 `shared_buffers=1GB`。只压 cap 时容器会被自己的 DB 撑到 OOM-kill；只留 swap 则把泄漏掩盖成「慢」。本轮「swap 4GB + 内部参数 + cap 19.25GiB」三步做完：`available` 775MB → 3265MB，最高占用率 79.0%（OceanBase），`panwei_a` 109 词 / `gaussdb_kernel503` 197 词方言矩阵不退化（2026-11-07 00:5x）。
+**正例**：`cap ≈ 实测常驻 1.5~2×` 且**必须高于 cgroup `memory.stat` 的 `anon`**（`docker stats` 含 page cache，会骗人）；先压 DB 内部参数再改 cap；主机 0 swap 时先加 4GB `/swapfile` + `vm.swappiness=10`；改完跑一次方言单实例子集确认词数与基线一致；反向验证要把 cap 压到**明显低于实际常驻**（本轮 64M 对 highgo 不够、16M 才 `OOMKilled=true/ExitCode=137`）。
+**反例**：照「机器有多少内存」或「镜像 README 推荐值」给 cap，不看实测、不压内部参数；改完只贴「已设置 limit」而不验证容器真的被约束（也不验证数据库还能连通、方言矩阵还绿）。另有两个具体坑：磐维容器是 `--privileged`，它内部 `/etc/sysctl.conf` 的 `vm.swappiness=0` 会在容器重启时被 systemd-sysctl 写进宿主内核，把宿主设置冲掉；SQL Server 改小 `max server memory` 后内存不归还，必须重启容器才生效。
+**Seen 1× (2026-11-07)**
+
+### L18 时序类判据断言「调度值」，不要断言墙钟间隔比值
+
+**证据**：`SenderLoopBackoffTest` 原本用「相邻两次 accept 的墙钟间隔」断言退避在增长（`gap2 * 2 >= gap1 * 3`，即要求 gap2 ≥ 1.5×gap1）。nightly run 42230813933 在 2 核 runner 上红：`gap1=235ms`（设计 150ms）、`gap2=306ms`（设计 300ms）→ 612 < 705。反推开销：**第一段多出 85ms、第二段只多 6ms**——第一轮连接付类加载/JIT/首次握手的一次性成本，被算进了「退避」；同一提交重跑即绿（run 42258160804）。
+**正例**：给被测对象加**睡眠注入缝**（`BackoffSleeper`，生产 `Thread::sleep`、测试注入记录器），断言「被请求睡多久」的序列：`[150, 300]`；再补一条封顶用例（上限放到 5 次断开）断言 `[150, 300, 600, 600]`——与机器快慢完全无关，且比原来的比值断言更强（翻倍与封顶都被钉住）。反向探针：把 `backoffMs = min(backoffMs*2, max)` 改成常量 → 恰 2 红，报错直接给出期望/实际序列。
+**反例**：拿 `System.currentTimeMillis()` 差值当判据、把一次性预热成本算进第一段；或为了「稳」把比例阈值一降再降（降到 1.1 时「完全不增长」也能过，判据失效）。
+**Seen 1× (2026-11-07)**
+
+### L19 夹具钉定值必须指向「CI 克隆的那个远端」可达的提交
+
+**证据**：`c2358cb6` 把 `dev-support/test-demo/demo-revision.txt` 从 `74cc257` 改成 `fcb1faf`，而 `fcb1faf` 只是 `.worktrees/mybatis-plus-sql-visualizer-demo` 那个 demo 克隆里的本地合并提交——Gitee 与 GitHub 两侧 demo 仓都没有它。push-test run 42351712089 的 7 条测试腿（`fast (1)`/`fast (2)`/`test (1)`~`test (5)`）全部红在「准备测试 demo」步，日志 `error: pathspec 'fcb1faf' did not match any file(s) known to git` → `[test-demo] ERROR: git checkout fcb1faf failed`，一条断言都没跑到；同轮 `build` 与 `verify 243/253` 是绿的，说明红与代码无关。此后 gate run 42352333430 复现同一红。
+**正例**：钉定值只在「已 push 到 CI 克隆的那个远端」时才成立。改钉定值前先跑两条只读判据——`git -C <demo> ls-remote origin master` 取远端 head、`git merge-base --is-ancestor <新钉> <远端head>` 判可达；两条都过再提交。本次处置：把该提交合入 demo master（`be5b727`）后双推（Gitee `99f0cb3..be5b727` / GitHub `7ded665..be5b727`），`fcb1faf` 成为 master 祖先，钉定值一字不改即全绿（gate run 42353060693 15 job 全 success）。注意那份克隆比远端还旧（连 `99f0cb3` 都没有），直接 `git push master` 是非快进，必须先 fetch + merge。
+**反例**：在某个工作树的兄弟目录里做完夹具改动就提交钉定值，不确认那份克隆的远端有没有这条提交；或凭「本地能跑」判断 CI 也能跑——本地能跑恰恰因为对象就躺在本机那个克隆里，与远端无关。
+**Seen 1× (2026-11-07)**
+
+### L20 覆盖安装（就地换 jar）后，会话内所有插件读数都不可信——必须重启再验收
+
+**证据**：2026-11-07 16:15 在日常 IDEA 2026.3（`IU-263.7307.200`）里用「Install Plugin from Disk」把 `2026.11.7` 换成 `2026.11.8-beta.1`，日志时序可逐毫秒对上：`16:15:11,913` 平台 SEVERE 落到本插件、`16:15:12,112` `SqlLogManager dispose`（旧实例卸载）、`16:15:12,391` 起 `Light service cn.song.mybatisplus.visualizer.config.PluginSettings not loaded because classloader is being unloaded` 开始刷、`16:15:15,95` 新 jar 写入 `plugins/mybatis-plus-sql-visualizer/lib/`、`16:15:16,11` 新版本加载。此后该会话一直刷到 16:31 仍未停（`idea.log` 单文件 16634 条，当天所有滚动日志合计 10 万+）。关键判据是**起点早于文件替换 3 秒**：平台是先卸载旧插件、再落新包、再加载，所以刷屏的起点正是旧 classloader 被 dispose 的时刻。旧版本的界面对象（预览页签、控制台 header 里被 `replaceAction` 接管过的工具按钮）仍挂在 UI 上，每次重绘成批回问那颗已死的 classloader——实测批次多为 11 的整数倍（11/22/33/55/77/88/110/242/286），卸载瞬间另有整段爆发（49/60/158 等），说明调用点是「一次重绘里若干次设置读取」，但**具体调用方未取证**（它在旧 classloader 里，新版本代码中不存在这条路径）。同一进程此前的日志段（`idea.11.log`/`idea.12.log`，替换动作之前）该串计数为 0。
+
+**正例**：覆盖安装后**立刻重启 IDE**，再做任何验收；验收报告里注明「本轮是重启后的干净会话」。要判断某条 WARN 是不是插件缺陷，先看它在**未发生替换的会话**里是否复现——不复现就是卸载残留，别去 `src/main` 找调用点（调用方是已卸载的旧类加载器，新版本代码里根本不存在这条路径）。同理，就地换包的那个会话里做功能验收，结论一律标「会话态可疑」，只用来取证现象，不用来判定修复是否达标。
+
+**反例**：把刷屏当插件缺陷去排查（会一路查到「谁在轮询 `PluginSettings`」，但那 11 次/批的调用方在旧 classloader 里，新版本怎么改都消不掉）；或者在刚换完包的会话里直接宣布「换源失效已复现/已修复」——本轮正是这个会话里同时看到 263 的 `setMapping` 真缺陷和这堆残留噪音，两者混在一份日志里极易互相误判为因果。
+**Seen 1× (2026-11-07)**
+
+### L21 改 data class 构造签名后，跨工作树的定向读数必须核对重编——增量编译残留旧字节码会伪装成回归
+
+**证据**：券 F2b（`2521991a`）给 `AgentEvent` data class 加 `aggregatedCount` 字段。F 券自己工作树首跑 24 红全是 `NoSuchMethodError: AgentEvent.<init>`（删 `build/classes/*/test` 重编归零）；同日集成分支收口（merge `fc15e8da` 后）`CrossChannelDedupeTest` 17/18 红同一报错——该工作树从未跑过 F 的代码，陈旧 class 来自更早的编译产物；删 `build/classes` 重编后 217 例全绿。两次都在不同工作树复现，**生产代码零缺陷**。
+**正例**：改 data class / 构造函数签名后，凡「别的检出过红」或「跨工作树合并」的定向跑，先 `rm -rf build/classes` 再跑；或在报告里声明「已核对本次编译任务实际执行（gradle 输出 compileKotlin/compileTestKotlin 非 UP-TO-DATE）」。
+**反例**：看到 NoSuchMethodError 就去查「谁改了调用点」——调用点没错，是磁盘上的旧 class；或把这种红当真回归去回滚修复提交。
+**Seen 2× (2026-11-07)**
+
+### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉
+
+**证据**：`./gradlew buildPlugin 2>&1 | tail -15` 后台跑，失败后日志文件只有 gradle 警告尾 + `BUILD FAILED in 9s`，`What went wrong` 段整段丢失；重跑不带 tail 全量落盘才看到真因（`prepareSandbox` 对沙盒内 jsqlparser jar 的 mmap 锁，`请求的操作无法在使用用户映射区域打开的文件上执行`）。tail 先于异常处理执行，等于把排障证据裁掉只留结论行。
+**正例**：后台长命令重定向全量到文件（`> /tmp/build.log 2>&1`），判读用 grep 提取；必须 tail 时对失败路径重跑一次不截断的采集。`reverse_probe.py` 据此固定为全量捕获 + 失败时打错误行子集。
+**反例**：`| tail -N` 当作「日志瘦身」常态化——tail 的 N 行里恰好没有失败原因时，二次重跑 whole job 的成本远大于第一次就落全量。
+**Seen 1× (2026-11-07)**
+
+### L23 runIde 沙盒开着时 gradle 构建失败 ≠ 构建坏——先探针验证沙盒里的部署再决定重建
+
+**证据**：集成分支 `buildPlugin` 两次 `BUILD FAILED in 4~9s`，`What went wrong`＝`prepareSandbox` 拷贝 `jsqlparser-5.3.jar` 到沙盒插件目录报 mmap 锁（用户正开着从该工作树启动的 runIde）。但沙盒内 `mybatis-plus-sql-visualizer-2026.11.7.jar` 部署时间（13:32）晚于全部合流，python zipfile 扫 class 找 `MIN_FLUSH_INTERVAL_MS`/`CountSnapshotAccumulator`/`catchUpBehind`/`hasStalePendingNotify` 四标记全命中——**沙盒已是目标构建，构建失败无需处置**。同日 L22 的 tail 截断让第一次还误判为「构建坏了要修」。
+**正例**：runIde 沙盒存活期间要出新包：①先用类内字符串探针（zipfile 扫新增符号）验证沙盒 jar 是否已含目标改动；②含→直接用，不含→请用户关 IDE 后再 build（覆盖 mmap 文件必然失败）。runIde 每次启动自动部署当前源码构建，「部署失败」与「部署过期」要分开判。
+**反例**：反复重跑 buildPlugin 撞同一把锁；或为绕锁去改 gradle 配置/清沙盒——沙盒是用户的活会话，动了直接打断验收。
+**Seen 1× (2026-11-07)**
+
+### L24 方言套件外指共享实例时固定表名互删——跑前先错峰确认，根治＝运行唯一前缀（已登记未实施）
+
+**规则**：多个方言套件轮次（本地 Docker 外指腿 / `dialectExternalVerify` / CI 夜间方言腿 / DBX 临时探测）并发打**同一共享实例**会互删表——套件用固定表名 `dev_info` / `mpv_batch_probe` / `kw_probe_<词下标>`，`createWithRetry` 开跑先 `DROP TABLE`、finale 再 `DROP`，两轮并发即互相删对方的表。
+**证据**：`DialectVerifySupport.kt:265/317/345/437/521-528/601/606/654/674`（固定表名与 DROP 逻辑，20261107 调研册 §五-3 代码级取证）；T-DockerGateOffload（2026-11-07，`a7c924e2`）把 Docker 五腿也并入外指通道后，共享实例的并发源面扩大（本地 `-PmpvDockerTests=true` 腿新增）。既有缓解仅「建表失败清残留重试一次」，对持续并发无效。
+**正例**：跑外指腿前确认该实例当前无其他套件轮次（本地其他车道/夜间 CI 时刻表错峰）；**反例**：两轮套件同时打同一实例，A 轮种子表被 B 轮开头 DROP，读数红且难归因。
+**Seen 1× (2026-11-07)**——本轮只登记不重构；根治方案（运行唯一 schema/表前缀）在计划册实施记录挂账，待复发或外指面再扩大时立项。
 
 ## 升级记录
 

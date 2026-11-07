@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.junit.Test
 import org.junit.Assert.assertEquals
 
 /**
@@ -40,7 +39,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         myFixture.editor.caretModel.moveToOffset(off + 1)
     }
 
-    @Test
     fun testD5_语句文本内敲井号_自动闭合花括号() {
         val text = mapper.replace("<caret>", "")
         val caret = text.indexOf("WHERE id = ") + "WHERE id = ".length
@@ -56,7 +54,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testD5_先查后插_光标后方已有花括号不双插() {
         val base = "<mapper namespace=\"n\">\n  <select id=\"a\">SELECT * FROM t WHERE id = <caret>{}</select>\n</mapper>"
         val caret = base.indexOf("<caret>")
@@ -71,7 +68,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testD5_语句标签外_不接管() {
         val base = "<mapper namespace=\"n\"><caret>\n  <select id=\"a\">SELECT 1</select>\n</mapper>"
         val caret = base.indexOf("<caret>")
@@ -86,7 +82,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testD5_子标签标记区内_不接管() {
         // 20260928 真机实证：光标落 <trim prefix=|"where"> 属性间隙（父=select 语句标签），
         // 旧宽判（parentTag∈语句标签）误接管闭合 #{}——子标签自身标记区必须放行
@@ -103,7 +98,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testD5_子标签边界之后_接管() {
         // `</if>` 右侧属父语句内容区，敲 # 应接管（offset >= 子标签 endOffset）
         val base = "<mapper namespace=\"n\">\n  <update id=\"u\">update t\n    <if></if><caret>\n  </update>\n</mapper>"
@@ -119,7 +113,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testD5_pluginXml_typedHandler_EP接线在场() {
         // 真机实证（20260928）：TypedHandlerDelegate.EP_NAME 实际常量=「com.intellij.typedHandler」
         // （243/253/262 三版 javap 一致）；写成「typedHandlerDelegate」会被平台按未知 EP **静默忽略**，
@@ -151,7 +144,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testXmlBraceNested_where下if体内_接管() {
         // R15 实测主形态：真实 mapper 几乎全是 <where><if> 排版，旧判据在此全灭。
         // 光标须落在「敲 # 前」的位置（体内正文行尾）；光标后方是 `{` 会撞先查后插守卫（非本判据）
@@ -169,7 +161,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testXmlBraceNested_choose下when体内_接管() {
         val base = "<mapper namespace=\"n\">\n" +
             "  <select id=\"a\">SELECT 1\n" +
@@ -185,7 +176,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testXmlBraceNested_单层if体内_接管() {
         // 直接子标签体内正文：旧判据因 offset < 子标签 endOffset 误判成「标记区」也不接管
         val base = "<mapper namespace=\"n\">\n" +
@@ -200,7 +190,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testXmlBraceNested_语句标签自身属性区_不接管() {
         // 同族洞：旧判据 tag∈STATEMENT_TAGS 直放，`<select id="a|">` 里敲 # 会插出 #{}
         val base = "<mapper namespace=\"n\">\n" +
@@ -213,7 +202,6 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testXmlBraceNested_自闭合子标签之后_接管() {
         val base = "<mapper namespace=\"n\">\n" +
             "  <select id=\"a\">SELECT 1\n" +

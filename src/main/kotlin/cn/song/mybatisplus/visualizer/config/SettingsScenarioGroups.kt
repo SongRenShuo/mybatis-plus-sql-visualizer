@@ -69,8 +69,12 @@ object SettingsScenarioGroups {
             "jdbcSqlPreviewEnabled",
             // SQL 列表/日志条目的可读性元信息
             "logFormatSql", "logTimestampEnabled", "showDurationInLogList", "dataSourceBadgeDetail",
+            // T-LogMethodName（S1-7 并入 master）：来源位置后显示「类名#方法名」开关
+            "showMethodInLogList",
             // 看之前的保护：展示层脱敏（含旧布尔迁移源）
             "displayMaskEnabled",
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM（导出文件形态，随历史/日志导出链）
+            "csvExportNoBom",
             // 引导与日常维护
             "onboardingAnchorTipEnabled", "onboardingAnchorTipShown", "sqlListPreviewHintSeen",
             "autoCheckUpdate",
@@ -94,12 +98,15 @@ object SettingsScenarioGroups {
             // 捕获行为
             "logMixedPrefix", "logAutoCaptureOnStart", "logAutoCaptureSuppressed",
             "logStopOnToolWindowClose", "logAutoOpenOnCapture", "logAutoSaveEnabled",
+            // F-03：工具窗随项目启动（自动显示 + 进入记录态）
+            "logToolWindowAutoShowOnStart",
             // 日志框架门
             "logHibernateEnabled", "logJdbcEnabled", "logShardingSphereEnabled",
             // 恢复与兜底
             "literalParamRecovery",
-            // agent 采集
-            "enhancedCaptureEnabled", "enhancedCaptureConfirmed",
+            // agent 采集（enhancedCaptureConfirmed 是迁移期兼容字段，只在 loadState 归一里读，
+            //   不是场景成员——由 EnhancedCaptureDefaultOnGuardTest 的 compatOnly 豁免守卫钉住）
+            "enhancedCaptureEnabled",
         ),
     )
 

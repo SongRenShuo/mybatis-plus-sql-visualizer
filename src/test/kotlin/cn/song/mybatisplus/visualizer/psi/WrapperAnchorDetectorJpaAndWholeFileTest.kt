@@ -415,6 +415,177 @@ class WrapperAnchorDetectorJpaAndWholeFileTest: BasePlatformTestCase() {
         assertEquals("普通类实例撞名链不应产生任何锚点", emptySet<String>(), collectedAnchors())
     }
 
+    // ------------------------------------------------------------------
+    // T-JpaDeleteAnchor：与 Wrapper 工厂/链方法撞名的 JPA 写方法锚点
+    // ------------------------------------------------------------------
+
+    fun testJpaRepositoryDeleteAnchored() {
+        // T-JpaDeleteAnchor：`delete` 同时是 Wrapper 工厂名，场景 C 旧实现直接 return null（在场景 E 之前），
+        // 于是 repository.delete(entity) 只有预览、没有 gutter 入口。此处钉住新增的 JPA 分支。
+        configure(
+            """
+            public class Demo {
+                private UserRepository userRepository;
+
+                public void ops() {
+                    userRepository.delete(entity);
+                }
+            }
+
+            interface UserRepository extends JpaRepository<UserEntity, Long> {}
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; }
+            """,
+        )
+        val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "delete" }
+        assertSame(
+            "JPA Repository 上的 delete 应为锚点",
+            call.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+        )
+        assertEquals(
+            "整文件只有 delete 一枚锚点",
+            setOf("delete"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testHibernateTemplateDeleteAndUpdateAnchored() {
+        // T-JpaDeleteAnchor：`ht.delete(entity)` / `ht.update(entity)`——update 同时是
+        // Wrapper 工厂名与服务链方法名，两者都要经 JPA 分支才可达。
+        configure(
+            """
+            public class Demo {
+                private HibernateTemplate hibernateTemplate;
+
+                public void ops() {
+                    hibernateTemplate.delete(entity);
+                    hibernateTemplate.update(entity);
+                }
+            }
+
+            class HibernateTemplate {}
+            class UserEntity { private Long id; }
+            """,
+        )
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+        for (name in listOf("delete", "update")) {
+            val call = calls.first { it.methodExpression.referenceName == name }
+            assertSame(
+                "HibernateTemplate 上的 $name 应为锚点",
+                call.methodExpression.referenceNameElement,
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+        assertEquals(
+            "整文件恰好 delete/update 两枚锚点",
+            setOf("delete", "update"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testJoinWrappersDeleteUpdateStayFactoryOnly() {
+        // T-JpaDeleteAnchor 去重不变量（硬性）：delete/update 是 JoinWrappers 工厂方法名，
+        // 工厂分支必须优先——JPA 分支不得抢跑，也不得在同一语句上再补一枚。
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void ops() {
+                    JoinWrappers.delete(Entity.class);
+                    JoinWrappers.update(Entity.class);
+                }
+
+                static class Entity { private Long id; }
+            }
+            """,
+        )
+        assertEquals(
+            "JoinWrappers.delete/update 只锚工厂方法名",
+            setOf("delete", "update"),
+            collectedAnchors(),
+        )
+        // 元素级：恰好 2 个锚点元素，且都落在被调方法名上（qualifier `JoinWrappers` 不算）
+        val anchorElements = collectedAnchorElements()
+        assertEquals("整文件恰好 2 个锚点元素", 2, anchorElements.size)
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+        val methodNameElements = calls.map { it.methodExpression.referenceNameElement }.toSet()
+        assertTrue(
+            "锚点元素必须是被调方法名（工厂名），不出现第二枚",
+            anchorElements.all { it in methodNameElements },
+        )
+    }
+
+    fun testServiceUpdateVariantsNotAnchored() {
+        // T-JpaDeleteAnchor 负例守卫：`update` 撞名面最大——
+        // `service.update(wrapper)`（消费调用）与 `service.lambdaUpdate()...update()`（链终结点）
+        // 都不是 JPA 家族，必须保持不锚 update。
+        configure(
+            """
+            public class Demo {
+                private Object wrapper;
+
+                public void ops() {
+                    service.update(wrapper);
+                    service.lambdaUpdate().eq("id", 1).update();
+                }
+            }
+            """,
+        )
+        val updateCalls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .filter { it.methodExpression.referenceName == "update" }
+        assertEquals("两种 update 形态都在夹具内", 2, updateCalls.size)
+        for (call in updateCalls) {
+            assertNull(
+                "非 JPA receiver 的 update 不应标锚点",
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+        assertEquals(
+            "整文件只剩链起点 lambdaUpdate 一枚锚点",
+            setOf("lambdaUpdate"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testJpaExistingAnchorsKept() {
+        // T-JpaDeleteAnchor 回归：本券不改既有形态——em.remove(entity)（场景 E）与
+        // repository.deleteById(id)（场景 E）的锚点必须保持。
+        configure(
+            """
+            public class Demo {
+                private UserRepository userRepository;
+                private javax.persistence.EntityManager em;
+
+                public void ops() {
+                    em.remove(entity);
+                    userRepository.deleteById(1L);
+                }
+            }
+
+            interface UserRepository extends JpaRepository<UserEntity, Long> {}
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; }
+            """,
+        )
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+        for (name in listOf("remove", "deleteById")) {
+            val call = calls.first { it.methodExpression.referenceName == name }
+            assertSame(
+                "既有 JPA 锚点 $name 不应丢失",
+                call.methodExpression.referenceNameElement,
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+        assertEquals(
+            "整文件恰好 remove/deleteById 两枚锚点",
+            setOf("remove", "deleteById"),
+            collectedAnchors(),
+        )
+    }
+
     private fun configure(code: String) {
         myFixture.configureByText("Demo.java", code.trimIndent())
     }
@@ -440,6 +611,20 @@ class WrapperAnchorDetectorJpaAndWholeFileTest: BasePlatformTestCase() {
             .forEach { anchors += (WrapperAnchorDetector.anchorElement(it)?.text ?: return@forEach) }
         PsiTreeUtil.collectElementsOfType(myFixture.file, PsiKeyword::class.java)
             .forEach { anchors += (WrapperAnchorDetector.anchorElement(it)?.text ?: return@forEach) }
+        return anchors
+    }
+
+    /**
+     * 元素级锚点扫描（T-JpaDeleteAnchor）：同 [collectedAnchors]，但返回元素本身。
+     * 集合断言按文本去重，抓不到「同一语句两枚同文本图标」之外的形态差异；
+     * 元素级断言用来钉住「锚点个数恰好」与「锚点落在被调方法名而非 qualifier」。
+     */
+    private fun collectedAnchorElements(): List<com.intellij.psi.PsiElement> {
+        val anchors = mutableListOf<com.intellij.psi.PsiElement>()
+        PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
+            .forEach { WrapperAnchorDetector.anchorElement(it)?.let { a -> anchors += a } }
+        PsiTreeUtil.collectElementsOfType(myFixture.file, PsiKeyword::class.java)
+            .forEach { WrapperAnchorDetector.anchorElement(it)?.let { a -> anchors += a } }
         return anchors
     }
 }

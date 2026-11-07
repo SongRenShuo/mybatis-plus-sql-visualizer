@@ -1,0 +1,10 @@
+import time
+import walk_util as W
+import pyautogui
+
+W.front()
+time.sleep(0.3)
+W.assert_front()
+pyautogui.click(720, 228)
+time.sleep(1.2)
+W.shot("w38-dialect-popup")

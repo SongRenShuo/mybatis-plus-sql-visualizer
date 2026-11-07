@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.ui.inject
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Test
 
 /**
  * T-PerfSweep16 F40：补全链全文重扫单槽 memo——同一文件（url+modificationStamp 未变）
@@ -11,7 +10,6 @@ import org.junit.Test
  */
 class ResultMapColumnCompletionMemoTest : BasePlatformTestCase() {
 
-    @Test
     fun testF40_同文件二次提取_命中memo零重扫() {
         val file = myFixture.configureByText(
             "m.xml",
@@ -32,7 +30,6 @@ class ResultMapColumnCompletionMemoTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF40_stamp变化_memo失效重扫() {
         val file = myFixture.configureByText(
             "m.xml",
@@ -61,7 +58,6 @@ class ResultMapColumnCompletionMemoTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun testF89_两文件交替补全_双槽零互相驱逐() {
         // F89（T-PerfSweep25）：两份 mapper 交替补全——修复前进程级单槽，每次交替即驱逐重扫
         // （4 次调用 4 次全文重扫 → 红）；双槽化后两文件各占一槽，交替零互相驱逐。

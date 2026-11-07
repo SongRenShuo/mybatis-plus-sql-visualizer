@@ -34,6 +34,9 @@ class SqlDialectParserDefinitionPairingGuardTest {
         "cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect" to "GaussDB",
         "cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect" to "HighGo",
         "cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect" to "Vastbase",
+        // T-GoldenDbDialect（券 A / P-8）：第五对——262 平台无 GoldenDB 方言（IU-262.9437.185
+        // 全量 xml grep golden 零命中，正对照 mysql/greenplum 命中），自注册成对落位。
+        "cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect" to "GoldenDB",
     )
 
     private fun descriptor(): String =

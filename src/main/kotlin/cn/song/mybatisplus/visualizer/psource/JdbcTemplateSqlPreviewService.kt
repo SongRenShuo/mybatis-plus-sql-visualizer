@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.psource
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
@@ -83,8 +85,10 @@ object JdbcTemplateSqlPreviewService {
         val namedSources = namedParams.map { it.name }
         val namedHints = namedParams.associate { it.name to NamedParamParser.quoteHint(it) }
 
-        // `?` 占位符来源（按出现顺序，`?` 数量）
-        val placeholderCount = sqlText.count { it == '?' }
+        // `?` 占位符来源（按出现顺序，`?` 数量）——用 string-aware 位点扫描：块注释里的
+        // 三元问号（`/* 运行时值: status == null ? … */`）与字符串字面量里的 `?` 都不是 JDBC 占位符。
+        // 朴素 count 会造出没有落点的 `#param1`（T-RuntimeSlotOptionalFill）。
+        val placeholderCount = placeholderPositions(sqlText).size
         val placeholderSources = if (placeholderCount > 0) {
             (1..placeholderCount).map { "param$it" }
         } else {
@@ -121,7 +125,24 @@ object JdbcTemplateSqlPreviewService {
             paramHints = paramHints,
             namedParamHints = namedHints,
             initialParamValues = emptyMap(),
+            runtimeSlots = collectRuntimeSlots(call),
         )
+    }
+
+    /**
+     * 重新聚合一次拿到结构化运行期占位（T-RuntimeSlotFill 券 A）。
+     *
+     * 为什么要重算：[JdbcTemplateSqlLocator.JdbcTemplateSqlCall] 只带聚合后的**文本**，而 slot 的
+     * id、模板、类别只能由拼接器产出。重算对同一 PSI 是确定性的，且与 `call.sqlString` 逐字相同；
+     * 一旦两者不一致（理论上不该发生——两边走的是同一个 [SqlStringConcatenator.concat]），
+     * 就放弃 slot：宁可面板上没有可填值，也不能给出一份与 SQL 文本错位的身份。
+     */
+    private fun collectRuntimeSlots(
+        call: JdbcTemplateSqlLocator.JdbcTemplateSqlCall,
+    ): List<RuntimeSlot> {
+        val aggregated = SqlStringConcatenator.concat(call.sqlExpr) ?: return emptyList()
+        if (aggregated.sql != call.sqlString) return emptyList()
+        return aggregated.runtimeSlots
     }
 
     // ------------------------------------------------------------------

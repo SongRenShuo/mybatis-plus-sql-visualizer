@@ -367,6 +367,9 @@ class EnumReachabilityGuardTest {
                 "KDoc 明示预留：成功即关窗，不需要写状态行（ErrorReportDialog.submitStatusText 分支返回 null）",
             "Capability.EXPLAIN" to
                 "有意保留的未产出位（R52）：矩阵单列 EXPLAIN 保完整，缺口归 ExplainGate 轻通知、不进确认弹窗",
+            "Kind.GEOGRAPHY" to
+                "有意保留的未产出位（F-15）：还原层拿不到列类型（geometry/geography 只能按值反解），" +
+                "生产恒用 GEOMETRY 前缀；常量留给真库列类型接入后按列分派，语法对称仅前缀不同",
         )
     }
 }

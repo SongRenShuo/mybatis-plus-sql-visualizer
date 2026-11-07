@@ -8,7 +8,6 @@ import com.intellij.psi.xml.XmlTag
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * 折叠**优先级**的结构取证（T-XmlGap 收口：计划 §十 遗留项「折叠占位 `select#id` 与平台标签折叠
@@ -55,7 +54,6 @@ class SqlMapperFoldingPriorityTest : BasePlatformTestCase() {
     }
 
     /** 1：`order="first"` 生效——我方 builder 在 XML 语言里排第 0 位。 */
-    @Test
     fun testW8_我方折叠builder在XML语言中排第一() {
         val builders = xmlFoldingBuilders()
         assertTrue("XML 语言应有多个折叠 builder（我方 + 平台 XmlFoldingBuilder），实际 ${builders.size}", builders.size >= 2)
@@ -68,7 +66,6 @@ class SqlMapperFoldingPriorityTest : BasePlatformTestCase() {
     }
 
     /** 3：我方区 = 整个标签；平台区 = 内容区；两者范围**不逐字相同** ⇒ 不被 `CompositeFoldingBuilder` 吞。 */
-    @Test
     fun testW8_我方整标签区与平台内容区范围不同_不被同范围去重吞掉() {
         val builders = xmlFoldingBuilders()
         val tag = PsiTreeUtil.collectElementsOfType(myFixture.file, XmlTag::class.java).first { it.name == "select" }
@@ -93,7 +90,6 @@ class SqlMapperFoldingPriorityTest : BasePlatformTestCase() {
     }
 
     /** 作用面边界回归位：非 mapper 文件我方零区（不抢平台区）——「先到先得」护栏的前提。 */
-    @Test
     fun testW8_非mapper文件我方零区() {
         myFixture.configureByText(
             "mybatis-config.xml",

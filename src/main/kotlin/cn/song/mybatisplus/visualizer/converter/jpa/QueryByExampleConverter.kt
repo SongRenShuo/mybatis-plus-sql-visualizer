@@ -154,7 +154,13 @@ object QueryByExampleConverter {
                 StringMatcher.ENDING -> LikePosition.LEFT
                 else -> null
             }
-            val value = evaluateValue(field.valueExpr, ctx, ParamQuote.decide(columnInfo?.fieldType), likePosition)
+            val value = evaluateValue(
+                field.valueExpr,
+                ctx,
+                ParamQuote.decide(columnInfo?.fieldType),
+                likePosition,
+                temporal = ParamQuote.isTemporal(columnInfo?.fieldType),
+            )
             conditions += buildFieldCondition(column, value, stringMatcher, matcher.ignoreCase)
         }
 
@@ -476,14 +482,20 @@ object QueryByExampleConverter {
     // ------------------------------------------------------------------
 
     /** probe 字段值求值：字面量/可追踪变量内联；运行时值 `?` 占位 + 参数行（LIKE 条件带 likePosition）。 */
-    private fun evaluateValue(expr: PsiExpression, ctx: Ctx, quoteHint: Boolean?, likePosition: LikePosition? = null): SqlValue {
+    private fun evaluateValue(
+        expr: PsiExpression,
+        ctx: Ctx,
+        quoteHint: Boolean?,
+        likePosition: LikePosition? = null,
+        temporal: Boolean = false,
+    ): SqlValue {
         val value = if (ctx.resolveVariables) ExpressionEvaluator.evaluate(expr) else SqlValue.Placeholder(expr.text)
         return when (value) {
             is SqlValue.Literal -> value
             is SqlValue.Placeholder -> {
                 val source = expr.text.ifBlank { "?" }
                 ctx.paramSources += source
-                ctx.paramHints += ParamHint(quote = quoteHint, likePosition = likePosition)
+                ctx.paramHints += ParamHint(quote = quoteHint, likePosition = likePosition, temporal = temporal)
                 SqlValue.Placeholder(source)
             }
         }

@@ -11,12 +11,37 @@ import java.util.concurrent.atomic.AtomicLong;
  * T-AgentConfigChannel T-01b：`disabled` 的**下降沿**（false → true）顺带清空
  * {@link EventBus} 已排队事件——否则停采指令生效瞬间，连接建立前的存量事件仍会被补投到面板
  * （应用侧「真停」就只停住了后续采集，停不住已经排队的）。
- * T-AgentConfigChannel T-07：看门狗在会话建立后迟迟收不到 CONFIG 时会走同一条 setDisabled(true)。
+ * T-AgentConfigChannel T-07：看门狗在会话建立后迟迟收不到 CONFIG 时会走 {@link #setDisabledByWatchdog()}
+ * ——与显式停采同一停采动作，只是额外记下自停归因（T-AgentSilentAfter16s：随心跳 `gate` 键带出）。
  */
 public final class AgentState {
 
     /** 全局禁用开关：true = 采集短路（钩子零开销直返），已 retransform 的类不还原（Instrumentation 不可逆）。 */
     private static volatile boolean disabled = false;
+
+    // ---------- 自停归因（T-AgentSilentAfter16s） ----------
+
+    /**
+     * 闸门码：无自停——停采（若发生）是用户在 CONFIG 里显式要求的，不是 agent 自己停的。
+     *
+     * <p>为什么需要「归因」而不只是一个 boolean：现场（磐维 + GaussDB 验收轮）看到的形态是
+     * 「HELLO 之后约 15s 起一条事件都没有，业务请求照旧 200、心跳照发」——它与「钩子坏了」
+     * 「SQL 归属丢了」「连接代理没挂上」在面板/探针侧**完全同形**，只能读宿主 stderr 那一条
+     * 告警才能归因，于是被当成采集链缺陷查了四轮。把停采原因写进心跳后，对端一条帧就能分开
+     * 「agent 自停」与「agent 在采但产不出」。
+     */
+    public static final int GATE_NONE = 0;
+
+    /**
+     * 闸门码：CONFIG 看门狗自停（{@code SenderLoop} 的 T-07：会话建立后窗口内从未收到任何 CONFIG）。
+     *
+     * <p>语义是**保守停采**（不知道用户是否要求采集 → 不采），不是故障；恢复走既有 CONFIG 通道
+     * ——对端一旦下发 CONFIG（含 {@code disabled:false}），{@link #setDisabled(boolean)} 立刻清归因。
+     */
+    public static final int GATE_CONFIG_WATCHDOG = 1;
+
+    /** 当前自停归因（只在 {@link #disabled} 为真时有意义；{@link #gateCode()} 已做这门控）。 */
+    private static volatile int gate = GATE_NONE;
 
     /** CONFIG 下发的脱敏开关：true = 打码（默认开，数据不出应用 JVM 前已处理）。 */
     private static volatile boolean desensitize = true;
@@ -52,6 +77,30 @@ public final class AgentState {
     }
 
     public static void setDisabled(boolean value) {
+        applyDisabled(value);
+        // 显式开关（CONFIG 下发 / 测试缝）一律清归因：闸门只描述「agent 自己停的那一次」，
+        // 用户/IDE 主动停采不属于自停（心跳里报成自停会把排查引向错误方向）。
+        gate = GATE_NONE;
+    }
+
+    /**
+     * 看门狗停采（T-07 的停采动作入口）：语义与 {@link #setDisabled(boolean)} 相同，额外记下归因
+     * {@link #GATE_CONFIG_WATCHDOG}，随心跳带出（T-AgentSilentAfter16s）。
+     *
+     * <p>写入顺序：**先置归因再停采**——心跳线程按 {@link #gateCode()} 读（disabled 门控），
+     * 这个顺序保证它不会观察到「已停采但归因为空」的窗口。
+     */
+    public static void setDisabledByWatchdog() {
+        gate = GATE_CONFIG_WATCHDOG;
+        applyDisabled(true);
+    }
+
+    /**
+     * 停采动作本体（不动归因；调用方负责归因写入顺序）。
+     *（车道5 合并注：t-sql-insight 侧原在 setDisabled 内以 CaptureLedger 类锁串行开关沿并记
+     * captureBoundary——dev 重构出 applyDisabled 后，把该临界区整体移进本体的同一同步块，语义不变。）
+     */
+    private static void applyDisabled(boolean value) {
         synchronized (cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.class) {
             final boolean prev = disabled;
             disabled = value;
@@ -61,6 +110,15 @@ public final class AgentState {
                 EventBus.clearQueued();
             }
         }
+    }
+
+    /**
+     * 当前自停归因码（心跳 {@code gate} 键的取值面）：{@link #GATE_NONE} /
+     * {@link #GATE_CONFIG_WATCHDOG}。未停采时恒 0——归因只在「确实停了」时有意义，
+     * 这样读取侧不会看到「还在采却自称自停」的中间态。
+     */
+    public static int gateCode() {
+        return disabled ? gate : GATE_NONE;
     }
 
     public static boolean isDesensitize() {

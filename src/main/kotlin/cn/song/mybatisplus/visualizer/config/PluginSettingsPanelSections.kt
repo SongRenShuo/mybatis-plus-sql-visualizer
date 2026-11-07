@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -43,6 +44,8 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JComboBox
@@ -372,6 +375,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             })
             addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
             addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+            // F-03：工具窗常驻与随项目启动（默认关）
+            addRow(p, g, "", logToolWindowAutoShowCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.autoShowToolWindow")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoShowToolWindow.tip")
+            })
             addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
             addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
@@ -415,6 +423,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", logShowDurationCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
+            })
+            // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+            addRow(p, g, "", logShowMethodCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.showMethod")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.showMethod.tip")
             })
             // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
             addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
@@ -635,11 +648,38 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 },
                 fill = GridBagConstraints.HORIZONTAL,
             )
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（默认不勾 = 带 BOM；与脱敏同属
+            // 「文本怎么出去」的导出形态组）。字段级实例随 rebuild 复用——text 须在此随语言
+            // 显式刷新（同 logFormatSqlCheck 口径；否则切 EN 后残留 zh 文案，PersistenceTest 真红实证）。
+            addRow(p, g, "", csvExportNoBomCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.csv.export.noBom")
+                toolTipText = MpSqlVisualizerBundle.message("settings.csv.export.noBom.tip")
+            })
             // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
             })
             addRow(p, g, "", enhancedStatusLabel)
+            // F-07：卸载/禁用清理边界说明（用户可见口径——不可清理面如实告知，不留糊弄话）
+            g.gridx = 0
+            g.gridwidth = 2
+            g.weightx = 1.0
+            g.fill = GridBagConstraints.HORIZONTAL
+            p.add(
+                JPanel(BorderLayout()).apply {
+                    isOpaque = false
+                    add(
+                        JBLabel(
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.agent.residue.hint")),
+                        ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
+                        BorderLayout.CENTER,
+                    )
+                },
+                g,
+            )
+            g.gridwidth = 1
+            g.fill = GridBagConstraints.NONE
+            g.gridy++
             // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
             frameSkipPrefixesField.apply {
                 text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
@@ -673,6 +713,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", xmlInlineSqlCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                 toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
+            })
+            // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
+                model = DefaultComboBoxModel(pagesSourceOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.pagesSource.tip")
             })
             // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
             addRow(p, g, "", xmlSynHiCheck)
@@ -735,11 +780,24 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             g.anchor = GridBagConstraints.NORTHWEST
             addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
             g.anchor = GridBagConstraints.WEST
+            // T-DevUpdateChannel：构建号就是开发者模式的解锁入口（D-3：只挂这一个标签）。
+            // 连点阈值/窗口在 DevUpdateMode（纯逻辑单测覆盖），这里只做「喂点击 + 解锁后刷新」。
+            val buildNumberLabel = JBLabel().apply {
+                text = PluginBuildInfo.displayText()
+                toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
+            }
+            buildNumberLabel.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (DevUpdateMode.isEnabled()) return
+                    if (DevUpdateMode.registerClick()) {
+                        // D-4：不弹窗，只改 tooltip + 让开发版按钮现身
+                        buildNumberLabel.toolTipText = MpSqlVisualizerBundle.message("settings.update.devMode.tip")
+                        updateSection.refreshDevModeVisibility()
+                    }
+                }
+            })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
-                add(JBLabel().apply {
-                    text = PluginBuildInfo.displayText()
-                    toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
-                }, BorderLayout.CENTER)
+                add(buildNumberLabel, BorderLayout.CENTER)
                 add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
                     isEnabled = PluginBuildInfo.mpvBuild() != null
                     addActionListener {

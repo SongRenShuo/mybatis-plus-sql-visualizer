@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.update
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -180,5 +182,111 @@ class DynamicInstallSupportTest {
             FakePluginsTwoOnly::class.java, "unloadPlugin", String::class.java,
         )
         assertEquals(null, m)
+    }
+
+    // ---------------- 卸载预检能力族（T-DynUpdate263） ----------------
+
+    /** 263 形态：旧入口已移除，validate(String?) 与 check(boolean) 并存。 */
+    @Suppress("unused")
+    private class Gate263 {
+        fun validateCanUnloadWithoutRestart(p: BaseDescriptor): String? = null
+        fun checkCanUnloadWithoutRestart(p: BaseDescriptor): Boolean = true
+    }
+
+    /** 262 形态：新旧并存，旧入口优先（与改动前同路径）。 */
+    @Suppress("unused")
+    private class Gate262 {
+        fun validateCanUnloadWithoutRestart(p: BaseDescriptor): String? = null
+        fun checkCanUnloadWithoutRestart(p: BaseDescriptor): Boolean = true
+        fun allowLoadUnloadWithoutRestart(p: BaseDescriptor): Boolean = true
+    }
+
+    /** 243 形态：只有旧入口。 */
+    @Suppress("unused")
+    private class Gate243Legacy {
+        fun allowLoadUnloadWithoutRestart(p: BaseDescriptor): Boolean = true
+    }
+
+    /** 243 的 check 同名但返回 String（原因串）——必须归入 validate 语义，不能当布尔。 */
+    @Suppress("unused")
+    private class Gate243CheckString {
+        fun checkCanUnloadWithoutRestart(p: BaseDescriptor): String? = null
+    }
+
+    /** 三族全缺（平台裁掉动态装卸能力）。 */
+    @Suppress("unused")
+    private class GateNone
+
+    /** Validate 族返回原因串 → 不可卸载且带平台原话。 */
+    @Suppress("unused")
+    private class GateRejecting {
+        fun validateCanUnloadWithoutRestart(p: BaseDescriptor): String = "not a dynamic plugin"
+    }
+
+    /** Legacy 族返回 false → 不可卸载，平台不给原因。 */
+    @Suppress("unused")
+    private class GateLegacyRejecting {
+        fun allowLoadUnloadWithoutRestart(p: BaseDescriptor): Boolean = false
+    }
+
+    @Test
+    fun unloadGateOn263UsesValidateFamily() {
+        val gate = DynamicInstallSupport.resolveUnloadGate(Gate263::class.java, BaseDescriptor::class.java)
+        assertEquals(DynamicInstallSupport.UnloadGateFamily.VALIDATE, gate?.family)
+        assertEquals("validateCanUnloadWithoutRestart", gate?.method?.name)
+    }
+
+    @Test
+    fun unloadGatePrefersLegacyWhenPresent() {
+        // 262 新旧并存：必须仍走旧入口，与本次改动前逐字同路径（262 旧入口走整组重配置预演，
+        // 与单插件的 validate 不是同一套判定）——保证老版本行为零变化
+        val gate = DynamicInstallSupport.resolveUnloadGate(Gate262::class.java, BaseDescriptor::class.java)
+        assertEquals(DynamicInstallSupport.UnloadGateFamily.LEGACY, gate?.family)
+        assertEquals("allowLoadUnloadWithoutRestart", gate?.method?.name)
+    }
+
+    @Test
+    fun unloadGateFallsBackToLegacyOn243() {
+        val gate = DynamicInstallSupport.resolveUnloadGate(Gate243Legacy::class.java, BaseDescriptor::class.java)
+        assertEquals(DynamicInstallSupport.UnloadGateFamily.LEGACY, gate?.family)
+    }
+
+    @Test
+    fun unloadGateTreats243CheckStringAsValidate() {
+        // 只按名字绑会把 243 的原因串当布尔（ClassCastException → 永远判不可卸载 → 永远回退重启）
+        val gate = DynamicInstallSupport.resolveUnloadGate(Gate243CheckString::class.java, BaseDescriptor::class.java)
+        assertEquals(DynamicInstallSupport.UnloadGateFamily.VALIDATE, gate?.family)
+        assertEquals("checkCanUnloadWithoutRestart", gate?.method?.name)
+    }
+
+    @Test
+    fun unloadGateAbsentWhenNoFamilyResolvable() {
+        assertNull(DynamicInstallSupport.resolveUnloadGate(GateNone::class.java, BaseDescriptor::class.java))
+    }
+
+    @Test
+    fun unloadGateValidateCarriesPlatformReason() {
+        val gate = DynamicInstallSupport.resolveUnloadGate(GateRejecting::class.java, BaseDescriptor::class.java)!!
+        val decision = gate.evaluate(GateRejecting(), BaseDescriptor())
+        assertFalse("平台拒绝必须判不可卸载", decision.allowed)
+        assertEquals("not a dynamic plugin", decision.reason)
+    }
+
+    @Test
+    fun unloadGateValidateNullMeansAllowed() {
+        val gate = DynamicInstallSupport.resolveUnloadGate(Gate263::class.java, BaseDescriptor::class.java)!!
+        val decision = gate.evaluate(Gate263(), BaseDescriptor())
+        assertTrue(decision.allowed)
+        assertNull(decision.reason)
+    }
+
+    @Test
+    fun unloadGateLegacyFalseIsRejectedWithoutReason() {
+        val gate = DynamicInstallSupport.resolveUnloadGate(
+            GateLegacyRejecting::class.java, BaseDescriptor::class.java,
+        )!!
+        val decision = gate.evaluate(GateLegacyRejecting(), BaseDescriptor())
+        assertFalse(decision.allowed)
+        assertNull(decision.reason)
     }
 }

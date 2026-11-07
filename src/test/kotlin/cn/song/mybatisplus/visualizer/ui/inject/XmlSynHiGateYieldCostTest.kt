@@ -7,7 +7,6 @@ import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlText
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Test
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -64,7 +63,6 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
         return fresh
     }
 
-    @Test
     fun testF47_喂入税基准对照_计数与耗时() {
         val file = openMapperFile()
         val elements = feedElements(file)
@@ -115,7 +113,6 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
      * F47 修复后守卫：喂入 pass 零服务查找（快照直读）。
      * 反向验证：摘掉快照（退回每元素 runCatching+getInstance）→ 计数 == 元素数 → 红。
      */
-    @Test
     fun testF47_修复后_喂入pass零服务查找() {
         val file = openMapperFile()
         val elements = feedElements(file)
@@ -130,7 +127,6 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
     }
 
     /** F47 快照刷新漏斗：设置切换（经 loadState，生产 apply 契约）即时生效且可逆。 */
-    @Test
     fun testF47_快照漏斗_设置切换生效且可逆() {
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
         val old = settings.state.xmlSynHiEnabled

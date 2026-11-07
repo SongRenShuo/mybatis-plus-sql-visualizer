@@ -18,50 +18,130 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * Phase 2（Tier 2）：Docker 真实数据库方言验证（P-立项-05）。
+ * Phase 2（Tier 2）：真实数据库方言验证（P-立项-05；T-DockerGateOffload，2026-11-07 通道改造）。
  *
- * 使用 Testcontainers 拉起**真实数据库引擎**，执行与 H2/SQLite 测试相同的插件渲染 SQL 套件
- * （[DialectVerifySupport.runTcSuite] + 保留字全量扫描）——这是「真实环境测试」的可自动化部分，
- * 证据级别最高：
+ * 执行与 H2/SQLite 测试相同的插件渲染 SQL 套件（[DialectVerifySupport.runTcSuite] + 保留字全量扫描）
+ * ——这是「真实环境测试」的可自动化部分，证据级别最高。前五例每例两条通道，**外指优先、容器兜底**：
  *
- * | 容器 | 验证方言 | UPSERT |
- * |------|----------|--------|
- * | mysql:8.0 | MySQL | ON DUPLICATE KEY UPDATE + VALUES() |
- * | postgres:16 | PostgreSQL | ON CONFLICT (id) DO UPDATE + EXCLUDED（H2 无法模拟，此处补齐） |
- * | mariadb:11 | MariaDB | 同 MySQL 形态 |
- * | mssql/server:2022 | SQL Server | 无原生 → 降级纯 INSERT |
- * | gvenzl/oracle-free:23 | Oracle | 无原生 → 降级纯 INSERT |
+ * | 用例 | 验证方言 | 外指对位（默认矩阵 key） | 容器兜底（仅无外指端点时） |
+ * |------|----------|------------------------|--------------------------|
+ * | 真实MySQL80 | MySQL | `mysql84`（8.4.6；容器镜像 8.0.36 的版本差见下方登记） | mysql:8.0.36 |
+ * | 真实PostgreSQL16 | PostgreSQL | `pg16`（16.14；容器 16.2 微差） | postgres:16.2 |
+ * | 真实MariaDB11 | MariaDB | `mariadb`（10.11.11；**容器 11.2 的大版本差**） | mariadb:11.2 |
+ * | 真实SQLServer2022 | SQL Server | `sqlserver2022`（2022 CU27-GDR） | mssql/server:2022-CU12 |
+ * | 真实Oracle23free | Oracle | `oracle23`（Oracle Free 23） | gvenzl/oracle-free:23.5-slim |
  *
- * 运行条件与策略：
- *  - 本机/CI **无 Docker 时自动跳过**（[assumeTrue] 探测 Docker daemon），日常 `./gradlew test`
- *    零影响；有 Docker 时随全量测试自动执行；
- *  - Oracle/SQL Server 镜像体积大（数 GB）首次拉取慢——本地手动跑时可先
- *    `docker pull` 预热，或用 test/resources/docker-compose-dialects.yml 自建环境后
- *    以 -Dmpvs.dialect.jdbcUrl 等系统属性指向外部库执行（见 [externalEngines]）。
+ * 外指通道读 `.local/dialect-external-matrix.properties`（与 `./gradlew dialectExternalVerify`
+ * 同一份矩阵、同一批测试服务器实例凭据，[DockerGateOffload] 2026-11-07 定例：本地不再依赖 Docker
+ * Desktop；矩阵 key 可用文件内 `dockerext.<engine> = <key>` 行覆盖默认映射）。条目缺失或文件不存在
+ * 时回落容器路径；容器路径仍受 Docker daemon 守卫。
  *
- * DM（达梦）/ KingBase（人大金仓）无公开自动化镜像——真实环境验证需用户侧连接实例执行
- * （文档级验证见 [DialectDocGoldenTest]），本测试不支持。
+ * **运行开关与通道的交互**（总开关只有 `-PmpvDockerTests=true` 一把，构建侧经 mpv-testing 注入
+ * `mpvs.docker.tests.enabled`）：
+ *  - 开关缺省（日常门禁/CI）：六例全部秒级跳过——外指腿不连任何网络、容器腿不碰 daemon；
+ *  - 开关开启 + 外指端点已配置：五例连测试服务器实例（**零 daemon 触达**），连不上=红不跳过；
+ *  - 开关开启 + 无外指端点：回落容器路径（`assumeDockerAvailable` 探测 daemon，无 Docker 显式跳过）。
+ *
+ * 外指通道不承担实例级预算看门狗（那是 [DialectExternalMatrixVerificationTest] 的矩阵口径）；
+ * 单库登录超时 20s 兜住不可达端点——显式开着开关跑就要求真读数，连不上判红而不是静默跳过。
+ *
+ * 版本差登记（外指实例 vs 原容器镜像）：MySQL 8.4.6（8.0.36 无对位真机）、MariaDB 10.11.11
+ * （11.x 新语法面无真机——套件通过即按等价读数采信，不通过处登记「11.2 缺真机」）；
+ * PostgreSQL 16.14、SQL Server 2022 CU27-GDR、Oracle Free 23 与容器同代微差。
+ *
+ * 第 6 例 `外部实例_方言套件与保留字扫描` 是**单实例手动入口**（`-Dmpvs.dialect.*` 逐参指定），
+ * 服务于 DM/KingBase 这类无矩阵条目的自建库；矩阵实例请走 `dialectExternalVerify` 或前五例外指腿。
  *
  * **本类不承担发版判据**（2026-10-31 用户定例：真机方言验证走测试服务器外部实例、DBX 只做临时探测）。
- * 发版门禁改由 `./gradlew dialectExternalVerify` 承担（[DialectExternalMatrixVerificationTest] 读实例
- * 矩阵，产出可归档的 JUnit 计数）；Docker 用例只在本地想验时用 `-PmpvDockerTests=true` 手工开启。
+ * 发版门禁由 `./gradlew dialectExternalVerify` 承担（[DialectExternalMatrixVerificationTest] 读实例
+ * 矩阵，产出可归档的 JUnit 计数）。
  */
-@Suppress("TestClassWithoutTestCases") // 容器用例全部经 Assume 守卫（无 Docker 时静默跳过）
+@Suppress("TestClassWithoutTestCases") // 真实引擎用例全部经 Assume/开关守卫（未启用时静默跳过）
 class DialectDockerVerificationTest {
 
+    private companion object {
+        /** 外指端点矩阵文件的系统属性名（构建侧注入，`-PdialectExternalMatrix=<路径>` 可覆盖）。 */
+        const val EXTERNAL_MATRIX_PROPERTY = "mpvs.dockerext.matrix"
+
+        /** 矩阵文件缺省路径（相对测试 JVM 工作目录=项目目录；与 dialectExternalVerify 默认一致）。 */
+        const val DEFAULT_EXTERNAL_MATRIX_PATH = ".local/dialect-external-matrix.properties"
+
+        /**
+         * 五引擎 → 矩阵 key 的默认映射（T-DockerGateOffload，2026-11-07）。
+         * 取矩阵文件里**现成条目**（全部已进发版门禁矩阵并被真机跑绿），不新采凭据；
+         * 同文件写 `dockerext.<engine> = <key>` 可逐引擎改指（key 指到矩阵里不存在的条目
+         * ＝该腿回落容器路径）。
+         */
+        val DEFAULT_ENGINE_MATRIX_KEYS = mapOf(
+            "mysql" to "mysql84",
+            "postgresql" to "pg16",
+            "mariadb" to "mariadb",
+            "sqlserver" to "sqlserver2022",
+            "oracle" to "oracle23",
+        )
+
+        /** 外指腿单库登录超时（秒）——不可达端点在这条线内判红，不做静默跳过。 */
+        const val EXTERNAL_LOGIN_TIMEOUT_SECONDS = 20
+    }
+
+    /** 外指端点（解析自矩阵文件条目）。 */
+    private data class ExternalEndpoint(
+        val engineKey: String,
+        val matrixKey: String,
+        val dialectName: String,
+        val url: String,
+        val user: String?,
+        val password: String?,
+    )
+
+    /** 每条真实引擎用例的通道：外指端点已解析 → external；否则回落容器。 */
+    private sealed interface LegChannel {
+        data class External(val endpoint: ExternalEndpoint) : LegChannel
+        object ContainerFallback : LegChannel
+    }
+
+    /**
+     * 解析该引擎的外指端点：矩阵文件缺失 / 映射 key 未指条目 / 条目缺 url 或方言名 → null（回落容器）。
+     * 只读文件不连库——连不上属于运行期判红（见 [runExternalLeg]），不在解析层吞掉。
+     */
+    private fun resolveExternalEndpoint(engineKey: String): ExternalEndpoint? {
+        val matrixPath = System.getProperty(EXTERNAL_MATRIX_PROPERTY)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_EXTERNAL_MATRIX_PATH
+        val file = java.io.File(matrixPath)
+        if (!file.isFile) return null
+        val props = java.util.Properties().apply { file.reader(Charsets.UTF_8).use { load(it) } }
+        val matrixKey = props.getProperty("dockerext.$engineKey")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_ENGINE_MATRIX_KEYS[engineKey]
+            ?: return null
+        val dialectName = props.getProperty("$matrixKey.dialect")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val url = props.getProperty("$matrixKey.url")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val user = props.getProperty("$matrixKey.user")?.trim()?.takeIf { it.isNotEmpty() }
+        val password = props.getProperty("$matrixKey.password")?.trim()?.takeIf { it.isNotEmpty() }
+        return ExternalEndpoint(engineKey, matrixKey, dialectName, url, user, password)
+    }
+
+    private fun channelFor(engineKey: String): LegChannel {
+        val endpoint = resolveExternalEndpoint(engineKey)
+        return if (endpoint != null) LegChannel.External(endpoint) else LegChannel.ContainerFallback
+    }
+
+    /** 真实引擎用例总开关（外指腿与容器腿共用；构建侧经 mpv-testing 注入，`-PmpvDockerTests=true` 开启）。 */
+    private fun assumeRealEngineTestsEnabled() {
+        // Docker/真机测试默认关闭（20260923 用户定例；20261107 扩为「真机验证总开关」）：
+        // 开关缺省时外指腿不连网络、容器腿不碰 daemon，日常门禁与 CI 全部秒级跳过。
+        assumeTrue(
+            "真实引擎方言验证未启用（-PmpvDockerTests=true 开启），跳过（H2/SQLite 嵌入式验证已覆盖语法形态）",
+            System.getProperty("mpvs.docker.tests.enabled") == "true",
+        )
+    }
+
     // ------------------------------------------------------------------
-    // Docker 可用性守卫（无 Docker → 测试跳过而非失败）
+    // 容器路径守卫（仅无外指端点时走到；无 Docker → 测试跳过而非失败）
     // ------------------------------------------------------------------
 
     private fun assumeDockerAvailable() {
-        // Docker 测试默认关闭（20260923 用户定例，构建侧经 mpv-testing 注入该系统属性）：
-        // 只有 -PmpvDockerTests=true 才允许触达 daemon。根因=daemon 半活态时下方 ping 探测
-        // 会阻塞且无超时（try/catch 只兜异常、兜不住阻塞，20260923 发行门禁实录三片挂起），
-        // daemon 活着时真容器验证的 pull/run 耗时也不可控——开关前置后两者都不会发生。
-        assumeTrue(
-            "Docker 测试未启用（-PmpvDockerTests=true 开启），跳过真实数据库方言验证（H2/SQLite 嵌入式验证已覆盖语法形态）",
-            System.getProperty("mpvs.docker.tests.enabled") == "true",
-        )
+        // daemon 半活态时 ping 探测会阻塞且无超时（try/catch 只兜异常、兜不住阻塞，
+        // 20260923 发行门禁实录三片挂起）；开关前置后只有显式开启才探 daemon。
         val available = try {
             DockerClientFactory.instance().client().pingCmd().exec() != null
             true
@@ -72,11 +152,58 @@ class DialectDockerVerificationTest {
     }
 
     // ------------------------------------------------------------------
-    // 真实引擎套件
+    // 外指腿（测试服务器实例；连不上判红不跳过）
+    // ------------------------------------------------------------------
+
+    private fun runExternalLeg(endpoint: ExternalEndpoint) {
+        val dialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName(endpoint.dialectName)
+        // 防静默回退（T-SuiteIdempotent）：byName 对未知名称回退 MySQL，矩阵条目方言名写错时
+        // 会拿 MySQL 方言去跑别的库 → 全绿但验错了方言。这里逐字核对，不命中直接失败。
+        assertEquals(
+            "外指条目 ${endpoint.matrixKey}（引擎 ${endpoint.engineKey}）的方言名未逐字命中 " +
+                "DialectRegistry（会静默回退 MySQL，读数无效）：请求 [${endpoint.dialectName}] 实际 [${dialect.name}]",
+            endpoint.dialectName,
+            dialect.name,
+        )
+        val spec = DialectVerifySupport.EngineSpec(
+            label = "${dialect.name} (external ${endpoint.matrixKey})",
+            jdbcUrlTemplate = endpoint.url,
+            dialect = dialect,
+            // 由方言能力推导（T-SuiteIdempotent）：无原生 upsert 的方言（Oracle/SQL Server）只验降级路径
+            upsertMode = DialectVerifySupport.upsertModeOf(dialect),
+            multiRowValues = true,
+        )
+        DriverManager.setLoginTimeout(EXTERNAL_LOGIN_TIMEOUT_SECONDS)
+        println(
+            "[DockerGateOffload] engine=${endpoint.engineKey} channel=external key=${endpoint.matrixKey} url=${endpoint.url}",
+        )
+        val conn: Connection = if (endpoint.user == null) {
+            DriverManager.getConnection(endpoint.url)
+        } else {
+            DriverManager.getConnection(endpoint.url, endpoint.user, endpoint.password)
+        }
+        conn.use {
+            DialectVerifySupport.runTcSuite(it, spec)
+            val failures = DialectVerifySupport.sweepReservedWords(it, spec, dialect.reservedWords)
+            assertSweepClean("${dialect.name} (external ${endpoint.matrixKey})", dialect.reservedWords.size, failures)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 真实引擎套件（外指优先，容器兜底）
     // ------------------------------------------------------------------
 
     @Test
     fun `真实MySQL80_方言套件与保留字扫描`() {
+        assumeRealEngineTestsEnabled()
+        when (val channel = channelFor("mysql")) {
+            is LegChannel.External -> runExternalLeg(channel.endpoint)
+            LegChannel.ContainerFallback -> runMysqlContainerLeg()
+        }
+    }
+
+    /** 容器兜底：MySQL 8.0.36（仅矩阵文件无 mysql 外指条目时走到）。 */
+    private fun runMysqlContainerLeg() {
         assumeDockerAvailable()
         MySQLContainer<Nothing>("mysql:8.0.36").apply {
             withUrlParam("useSSL", "false")
@@ -99,6 +226,15 @@ class DialectDockerVerificationTest {
 
     @Test
     fun `真实PostgreSQL16_方言套件与保留字扫描`() {
+        assumeRealEngineTestsEnabled()
+        when (val channel = channelFor("postgresql")) {
+            is LegChannel.External -> runExternalLeg(channel.endpoint)
+            LegChannel.ContainerFallback -> runPostgresqlContainerLeg()
+        }
+    }
+
+    /** 容器兜底：PostgreSQL 16.2。 */
+    private fun runPostgresqlContainerLeg() {
         assumeDockerAvailable()
         PostgreSQLContainer<Nothing>("postgres:16.2").use { container ->
             container.start()
@@ -118,6 +254,15 @@ class DialectDockerVerificationTest {
 
     @Test
     fun `真实MariaDB11_方言套件与保留字扫描`() {
+        assumeRealEngineTestsEnabled()
+        when (val channel = channelFor("mariadb")) {
+            is LegChannel.External -> runExternalLeg(channel.endpoint)
+            LegChannel.ContainerFallback -> runMariadbContainerLeg()
+        }
+    }
+
+    /** 容器兜底：MariaDB 11.2（外指对位为 10.11 等价读数，版本差见类注释登记）。 */
+    private fun runMariadbContainerLeg() {
         assumeDockerAvailable()
         MariaDBContainer<Nothing>("mariadb:11.2").use { container ->
             container.start()
@@ -137,6 +282,15 @@ class DialectDockerVerificationTest {
 
     @Test
     fun `真实SQLServer2022_方言套件与保留字扫描`() {
+        assumeRealEngineTestsEnabled()
+        when (val channel = channelFor("sqlserver")) {
+            is LegChannel.External -> runExternalLeg(channel.endpoint)
+            LegChannel.ContainerFallback -> runSqlserverContainerLeg()
+        }
+    }
+
+    /** 容器兜底：SQL Server 2022 CU12。 */
+    private fun runSqlserverContainerLeg() {
         assumeDockerAvailable()
         MSSQLServerContainer<Nothing>("mcr.microsoft.com/mssql/server:2022-CU12-ubuntu-22.04").use { container ->
             container.acceptLicense()
@@ -157,6 +311,15 @@ class DialectDockerVerificationTest {
 
     @Test
     fun `真实Oracle23free_方言套件与保留字扫描`() {
+        assumeRealEngineTestsEnabled()
+        when (val channel = channelFor("oracle")) {
+            is LegChannel.External -> runExternalLeg(channel.endpoint)
+            LegChannel.ContainerFallback -> runOracleContainerLeg()
+        }
+    }
+
+    /** 容器兜底：Oracle Free 23.5 slim。 */
+    private fun runOracleContainerLeg() {
         assumeDockerAvailable()
         OracleContainer("gvenzl/oracle-free:23.5-slim").use { container ->
             container.start()

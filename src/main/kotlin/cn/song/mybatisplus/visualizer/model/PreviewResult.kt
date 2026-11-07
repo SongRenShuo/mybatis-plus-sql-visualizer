@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.model
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -60,6 +61,13 @@ data class PreviewResult(
     val previousSql: String? = null,
     /** F-45：maintainPage 列元数据（仅 pages XML 预览非 null；面板「列信息」tab 展示源）。 */
     val pagesColumns: List<PagesColumn>? = null,
+    /**
+     * F-06①：实体字段名清单（驼峰声明形态）——列头溯源 tooltip 的判定输入。
+     * 与 [columns]（列名）同源解析，无实体上下文时为空（空 = 列头零变化）。
+     */
+    val entityFieldNames: List<String> = emptyList(),
+    /** F-06①：实体类简单名（如 `User`）；未知为 null（tooltip 不带「（实体 X）」）。 */
+    val entityName: String? = null,
     /**
      * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示。
      *
@@ -145,6 +153,32 @@ data class PreviewResult(
      * `var` 供 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 的 recordHistory 回写（同 [historyEntryId]）。
      */
     var originScopeKey: String = "",
+    /**
+     * T-PagesHql：源语言（默认 SQL = 未发生语言转换）。
+     *
+     * 仅 `<pages>` 的 HQL 转换链会置 [SourceLanguage.HQL]；面板 meta 行据此展示
+     * 「来源：HQL（已转换）」，让「插件到底转没转」可核对（用户投诉的一半是「不知道它做了什么」）。
+     */
+    val sourceLanguage: SourceLanguage = SourceLanguage.SQL,
+    /**
+     * T-PagesHql：转换前的原文（仅 [sourceLanguage] 非 SQL 时非空）；面板「原文」只读页签展示。
+     */
+    val originalSql: String? = null,
+    /**
+     * T-PagesHql：转换降级清单（关联路径未映射 / 推断的 ON 条件 / 实体不可解析等）。
+     * 空表 = 无降级。pages 链会把它压成一行并入 [warning]；其它 JPA 链路只携带不展示（惰性字段）。
+     */
+    val degradations: List<String> = emptyList(),
+    /**
+     * T-RuntimeSlotFill 券 A：本次预览里的**可回填运行期占位**（[RuntimeSlot]）。
+     *
+     * 每个元素对应 SQL 文本里一条带 id 的占位注释（`运行时值: … · rtN`），承载类别、表达式摘要、
+     * 展开模板与回填语义；面板据此建输入行（券 C），回填时按 [RuntimeSlot.token] 定位并整体替换
+     * 那段注释（券 B）。空表 = 无运行期占位，或没有可填的值（纯说明性注释放不进本表）。
+     *
+     * 默认空表，既有构造点零影响（向后兼容）。
+     */
+    val runtimeSlots: List<RuntimeSlot> = emptyList(),
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

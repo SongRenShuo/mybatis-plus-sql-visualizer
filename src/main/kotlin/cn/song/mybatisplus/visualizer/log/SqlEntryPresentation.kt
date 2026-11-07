@@ -11,6 +11,9 @@ import javax.swing.JPanel
  * 键含设置值 = 显示格式严格跟随设置（切换即时重算，免失效钩子），
  * 形态对照 `timestampFormatterCache`「键=格式串天然跟随设置变更」先例。
  * 顶层 public 类型：LogSqlEntry 的缓存字段（public data class 成员）须公开引用它。
+ *
+ * T-LogMethodName 起 `methodInSource` 也是本键的一维：来源段与方法名段同用
+ * `cachedHeaderKey`，键缺这一维会让开关切换后已渲染条目一直复用旧片段（表现为「设置改了没反应」）。
  */
 data class HeaderStaticCacheKey(
     val showDuration: Boolean,
@@ -19,6 +22,7 @@ data class HeaderStaticCacheKey(
     val tsSource: String,
     val badgeDetail: Boolean,
     val slowThresholdMs: Long,
+    val methodInSource: Boolean,
 )
 
 internal object SqlEntryPresentation {
@@ -39,6 +43,7 @@ internal object SqlEntryPresentation {
             tsSource = state.logTimestampSource,
             badgeDetail = state.dataSourceBadgeDetail,
             slowThresholdMs = state.slowQueryThresholdMs,
+            methodInSource = state.showMethodInLogList,
         )
     }
 
@@ -58,6 +63,10 @@ internal object SqlEntryPresentation {
      *    不再按优先级丢片段（退化梯度机制已删除）。
      *
      * `(影响行数)` 只在 DML 上有值；SELECT 不显示（不补空占位——那会让每行多出一段空白）。
+     *
+     * T-LogMethodName：来源段之后可再跟一段 `[类名#方法名]`（`showMethodInLogList` 门控，默认关）。
+     * 两段并排、各自独立——控制台通道的方法名属于 mapper 接口，与来源文件不是同一个类，
+     * 拼进同一片段会造出不存在的成员（详见 [mapperStatementLabel] 与开发计划 §3.3）。
      *
      * 券01（T-PerfSweep27-01）拆段：本函数保持原签名与输出序列（存量测试零改动），
      * 内部改为 [headerStaticFragments] + [headerBadgeFragments] + [headerSourceFragments]
@@ -114,9 +123,15 @@ internal object SqlEntryPresentation {
         }
     }
 
-    /** 来源段（券01 可缓存部分）：`[文件.java:行号]`，无源码位置为空列表。恒非选中态。 */
-    fun headerSourceFragments(entry: LogSqlEntry): List<SqlTextFragment> =
-        formatSourceFragment(entry, false)?.let { listOf(SqlTextFragment(it.first, it.second)) } ?: emptyList()
+    /**
+     * 来源段（券01 可缓存部分）：`[文件.java:行号]`，无源码位置为空列表。恒非选中态。
+     * T-LogMethodName：开关打开时在其后追加 `[类名#方法名]`（同用 [HeaderStaticCacheKey]，
+     * 开关切换即整段重算）。
+     */
+    fun headerSourceFragments(entry: LogSqlEntry): List<SqlTextFragment> = buildList {
+        formatSourceFragment(entry, false)?.let { add(SqlTextFragment(it.first, it.second)) }
+        formatMethodFragment(entry, false)?.let { add(SqlTextFragment(it.first, it.second)) }
+    }
 
     /**
      * 通栏注脚片段（历史遗留：`bed58b64` 把角标/徽章放在 SQL 下方通栏）。
@@ -172,6 +187,8 @@ internal object SqlEntryPresentation {
         }
         addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
         addFragment(formatSourceFragment(entry, selected))
+        // T-LogMethodName：与渲染器同一组合口径（来源在前、方法名在后），两处不得漂移
+        addFragment(formatMethodFragment(entry, selected))
     }
 }
 

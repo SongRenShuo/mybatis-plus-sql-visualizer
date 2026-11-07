@@ -28,6 +28,11 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 3. **提权与输入**：沙盒 IDE 是提权进程，非提权 SendInput 被 UIPI 拦（光标能动、点击/按键全无效）。**整条探针提权跑**：`record/_run_elev.bat`（内容必须纯 ASCII）+ `Start-Process -Verb RunAs -WindowStyle Hidden`。提权进程杀得掉别的提权进程；非提权杀不掉。
 4. **验收前置检查**：IDE 全屏+置顶（`SetWindowPos(HWND_TOPMOST)` 后读回 ex=0x8 才算落实）；demo 工程干净、端口无监听；**沙盒在役包核验**（重大）：javap 沙盒 `plugins/<plugin>/lib/*.jar` 确认被验修复符号在役（JDK8 javap 读不了 21 字节码，用 `~/.jdks/ms-21`），jar mtime 必须晚于修复提交且早于 IDE 启动——**「javap 过 build 产物」不作数**，installPlugin 时点与探针时点错位 2 小时即全盘误诊（实锤过）。
 5. **IDE 状态归一**：等索引完成（右上 Analyzing 消失，轮询区域亮度，最多 90s）再触发动作；关闭 Distraction Free Mode（`Ctrl+Shift+A → Exit Distraction Free Mode`）；工具窗被收起时用 Find Action 搜工具窗名重开；重启后会话页签自动恢复可直接用。
+6. **沙盒 config 的真实层级**（2026-11-01 实锤）：不是 `build/<沙盒容器>/config`，而是 **`build/<沙盒容器>/<插件名>/<IU-版本>/config`**。`idea.key` 拷错层级＝弹「Manage Licenses」+ 日志 `JBA connection error`，界面照常能用但**数据库类功能不可用**（错过一次，白跑一轮）。
+7. **沙盒没有 JDBC 驱动实体**：数据源属性报「Download missing driver files」，Test Connection 跑不起来。整拷宿主 `%APPDATA%/JetBrains/IntelliJIdea<ver>/jdbc-drivers`（含 `jdbc-drivers.xml` 与各驱动目录）进沙盒 config 后**必须重启 IDE**——驱动清单在启动期读取，重启前面板仍显示 Problems。
+8. **沙盒 JDBC 驱动要两份文件，缺一必 CNFE**（2026-11-01 实测，三轮才定位）：`config/jdbc-drivers/jdbc-drivers.xml` + 各驱动目录只是**目录清单**（有哪些 artifact/版本），`config/options/databaseDrivers.xml` 才是**已安装状态**（`<driver id="mysql.8"><artifact id="MySQL ConnectorJ" version="9.7.0"/></driver>`）。只拷前者 → 远程 JDBC 进程 classpath 空 → `RemoteProcessSupport … ClassNotFoundException`，表现为「EXPLAIN/执行静默回退原生控制台」，极易误判成插件缺陷。**正确做法＝把宿主 `config/options/databaseDrivers.xml` 整份拷进沙盒 + 确认 jar 实体在场 + 重启 IDE**。两个弯路别重复：①把 `driver-ref` 写成 `MySQL ConnectorJ/9.7.0` 会被 IDE 回写成 `mysql.8`（driver-ref 只认 driver id）；②只往目录清单补 `<version>` 无效。**判据**：日志出现 `ClassNotFoundException: <驱动类>` 就是这两份没配齐，不是插件问题——别去怀疑 URL/凭据/方言（那几样只会连接失败，不会类加载失败）。
+9. **「Trust and Open Project」对话框标题为空**，`EnumWindows` 按标题找不到，且会被别的窗口压在下层（截屏里看得见、点不到）。处置＝**按 rect 命中 HWND → `SetWindowPos(HWND_TOP)` → 再点**；直接按坐标点会落在压着它的那个窗口上（本轮两次空点）。
+10. **硬杀 IDE 会留下用户映射文件锁**：下一次 `prepareSandbox` 报 `Could not copy file … alpn-api-*.jar（请求的操作无法在使用用户映射区域打开的文件上执行）`＝`ERROR_USER_MAPPED_FILE`。处置＝连**卡住的 gradle wrapper 进程**一起杀，用 `Stop-Process -Id`（Git Bash 里写 `taskkill /PID` 会被 MSYS 把 `/PID` 转成路径而报「Invalid argument」）。
 
 ## 定位法优先级（禁手工换算坐标）
 
@@ -47,6 +52,62 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **列表/历史**：日志列表右键菜单＝**先左键选中条目、再右键条目正文**（右键空白头部只出横幅）；工具窗页签/按钮坐标随面板宽度漂，每次截图现量。
 - **「生成 CRUD SQL」类编辑器右键动作**：菜单项在册可用截图留证，但弹层内交互不可靠——**行为语义改由生成器单测收口**。
 - **执行类**：数据源绑定缺失时可能弹「选择数据源」选择器——「面板无变化」类断言必须是「面板变化 OR 预期弹层在场」二者取一（实测过把选择器弹出误判成无变化）。
+
+## 通道类功能真机验证（增强 agent / MCP / 方言推断）
+
+面板类功能看 UI 就够，**通道类**（agent 织入、MCP 服务、方言推断）要验的是「数据真的从另一头过来了」，
+判据和坑都不一样。三套配方都是 2026-11-01~02 真机跑通的。
+
+### 增强捕获 agent：必须走 IDE Run 链路
+
+**外部启动的 JVM 挂不上**（实证）：`onProcessAppeared` 只接 IDE Run 链路（`RunConfigurationProcessListener`）；
+唯一覆盖外部 JVM 的入口是设置变更**上升沿**（`enhancedCaptureEnabled` false→true → `scanAndAttachRunningProcesses`），
+而真机把「增强捕获」关→开→Apply 之后该上升沿日志并未出现（`设置变更：增强捕获重新开启` 零命中），
+**是否设置页 apply 真跑了至今未定论**（该字段默认 true，不落盘，证明不了）。别在这条路上继续耗。
+
+**正解**：让平台自己注入 `-javaagent`——
+1. demo `pom.xml` 加**system-scope** 依赖指向厂商驱动 jar（jar 直接取插件沙盒 `plugins-test/<plugin>/lib/` 里那份，与插件在用的是同一批）；
+2. 改 `src/main/resources/application.yml` 的 datasource 四项（驱动类/URL/账号/密码）；
+3. IDE 里 Shift+F10 跑应用（Run 配置已存在）→ `updateJavaParameters` 自动注入 agent → premain 回连 → 事件进面板；
+4. 每族跑 ~40s（定时任务每 3s 一条），读面板角标后换下一族（**会弹「Process is running，Stop and Run」**，点它）。
+
+**给 `target/classes` 解压驱动再跑不成立**——`DataSourceProperties.determineDriverClassName` 断言失败（驱动类不在运行 classpath），
+必须走 pom。三族实测角标：`[HighGo]` / `[Vastbase]` / `[Kingbase]（人大金仓）`，**同一份代码换 datasource 即换角标**。
+
+**顺手确认一件重要的事**：失败语句**同样回流**（三族都对 PG 族保留字 `user` 报 `column "id" does not exist`，
+面板照常出条目并带 `Caused by: … PSQLException`）——说明捕获钩子挂在执行入口而非成功分支。
+所以「条目里有错误链」不是缺陷，反而证明钩子位置对。
+
+### MCP Server：跨版本真机验证不改构建基准
+
+**不要试图用 `-PplatformVersion=<高版本>` 编高版本沙盒**（实证：261 上 `compileJava` 35 错，
+`ContentManagerEvent`/`SearchSession` 等在 261 已拆成独立模块，得补一堆 `bundledModule`）。
+**正解＝基线产物装进目标版本 IDE**（plugin.xml `since-build=243` 无 `until-build`，向上兼容是设计内）：
+
+1. `./gradlew buildPlugin -PgifRecord=false` 出 zip；
+2. 解压进目标 IDE 的插件目录（用 `-Didea.plugins.path=<私有目录>` 隔离，别污染宿主）；
+3. 目标 IDE 用**私有副本**：`-Didea.config.path` / `-Didea.system.path` 指到独立目录，
+   `idea.key` 拷进 config，许可 agent 写进**该副本**的 `bin/idea64.exe.vmoptions`；
+4. 设置页 Tools › MCP Server 勾 Enable（平台有二次确认框，点 Enable）→ OK。
+
+**客户端探针不用装 MCP 客户端**（`curl` 就够）：
+
+```
+curl -N http://127.0.0.1:64342/sse          # 收 event: endpoint + sessionId
+POST /message?sessionId=<sid>  initialize   # → 202 accepted（500 即 P0 复发）
+POST /message?sessionId=<sid>  notifications/initialized
+POST /message?sessionId=<sid>  tools/list   # 数 sqlv_* 个数
+POST /message?sessionId=<sid>  tools/call   # 参数里必须带 projectPath，否则报「无法确定目标工程」
+```
+结果从 SSE 的 `data:` 行读。**判据三层**：端点 200+sessionId / `initialize` 非 500 / `tools/call` `isError:false`；
+再加一条负向对照——日志里 P0 特征签名（`CollectionsKt.addAll` NPE、`Parameter specified as non-null is null`、`HTTP 500`）**零命中**。
+
+### 方言推断类：夹具必须是「恰好」的目标形态
+
+验「非 SQL 源不再带偏推断」时，`.idea/dataSources.xml` 要改成**恰好 1 个 SQL 源 + 1 个非 SQL 源**，
+**必须移除原有的其它 SQL 源**——留着原 MySQL 源就变成「两 SQL 源」，本身就是歧义，测不到修复。
+判据＝预览头「方言: X」；本轮 1 PG + 1 Redis → 推断出 **PostgreSQL**（旧实现会判 AMBIGUOUS 回落 MySQL 兜底）。
+注意「数据源（上次使用）」显示已删除的旧源属缓存残留，只影响执行默认连接、不影响推断结论。
 
 ## 截图与证据纪律
 
@@ -72,7 +133,7 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **万条/大文本语料**：合成文件显式标 synthetic（编号、哨兵词如 `UI_MATCH` 恰 N 条、五种耗时循环），落盘前用**在役 JAR 的同类**（如 `SqlLogFileReader`/`HistorySearchService`）读回核数；**首版探针的期望值要对照源码常量**（如 `HARD_MAX_RESULTS=100`——期望 1000 被钳到 100 是探针错不是产品错）。
 - **「插件生成的坏 SQL」夹具**：预览入口不可点达时，在 demo 仓临时加 `@Select("SELECT 错列 FROM …")` + 触发端点，验完 `git checkout` 撤销并确认干净。
 - **PG/非默认方言**：手写 `.idea/dataSources.xml` **注册表条目**可行（模型文件被 DAS 隔离）；驱动树整拷沙盒 `config/jdbc-drivers/<Driver>/` 免下载；口令经 dbx MCP 先验再走 IDE Change Credentials（Until restart）；**首连前的源不进控制台选择器**，先经 Data Sources 对话框触碰一次。
-- demo 应用**必须从 IDE 里 Run**（外部启动捕获链挂不上）；控制台通道条目无方言/耗时/源码（那是增强 agent 通道才有）——「列表没这些列」先查通道再疑缺陷。
+- demo 应用**必须从 IDE 里 Run**（外部启动捕获链挂不上，配方见「通道类功能真机验证」节）；控制台通道条目无方言/耗时/源码（那是增强 agent 通道才有）——「列表没这些列」先查通道再疑缺陷。
 - **Database 控制台执行的 SQL 不进捕捉面**（2026-10-31 实测）：诊断行恒「已挂载 0 个」。要 SQL 条目必须让应用自己执行（定时任务/接口）。
 - **沙盒构建静默死亡先查外部工程配置**（2026-10-31）：`build.log` 停在 `Pre-loaded process ready` + 运行配置报 `Process not started` ⇒ 查 `<sandbox>/system/projects/<proj>.<hash>/external_build_system/modules/<module>.xml` 的 `LANGUAGE_LEVEL`（改 demo `.idea/compiler.xml` 无效）。
 
@@ -91,7 +152,11 @@ when_to_use: "用户说「验收」「走查」「沙盒里验一遍」「合流
 - **期望模型错误**：①OGNL 空串/零值「该出条件没出」——未勾选动态条件时填值本就不触发（勾选才把 `<if>` 加入 WHERE），插件行为正确；②「期望 3 个历史文件」——自动保存实为**按日聚合单文件**；③「列表空」——捕捉开关没开（空态文案/诊断行可判）。判「缺陷」前先核对实现的期望模型。
 - **rect 语义**：预览 rect 是 `(l,t,r,b)` 四元组——当 (x,y,w,h) 用会点进参数区（实测）。
 - **断言设计**：「填参后 SQL 应变」错——占位形态下填参不改 SQL，联动语义是勾选复选框；「面板无变化」可能是选择器弹出了——断言写「面板变化 OR 预期弹层在场」。
+- **fail-closed 回退会掩盖「功能其实没生效」**（2026-11-01 实锤）：S2-15 OB 面板带 127/0 单测合入，真机一跑解析失败→静默回退原生控制台，面板上只多一行「结构化视图不可用」的提示，看起来像「设计内降级」。**验收这类功能必须验到成功路径**（结构化面板真的出现 + 建议条真的显示），把「回退提示正常」当通过＝把功能失效记成设计行为。
+- **解析类功能的单测样本必须取自真机原始产物**：OB `EXPLAIN` 真机返回「单列×多行」（一行计划=一个 row），而单测按文档描述合成「一个 cell 装整段多行文本」——规则能解析合成样本，却解析不了真实结果，127 例全绿而功能全废。**验收时要拿真机 dump 去喂一遍解析器**，别只看单测绿。
+- **「点了没反应」先排除四类探针因**（2026-11-01 一次踩齐）：①**对话框工具栏坐标每会话漂移 25~27px**（实测 y=226 不是 209、x=1305 不是 1342）——靠裁剪放大读坐标或悬停高亮自证，别复用上轮坐标；②**探针里的 `front()` 会把主窗提到模态对话框之上**，点击落主窗——点对话框内控件要用 `EnumWindows` 按 rect 命中该对话框 HWND 再 `SetWindowPos(HWND_TOP)`，置前成功读回 `GetForegroundWindow()==hwnd` 自证；③**阳性对照要选「点了一定会变」的按钮**——拿「格式化」对照已格式化的 SQL、拿「压缩」对照已压缩态，都会没变化而被误读成「整行不可达」；④**插件自绘工具栏/列表对 robot 树完全不可见**（查询结果只剩 `JBPanel`/`NonOpaquePanel` 这类平台壳），此时别在组件树上耗时间。每次点击后立刻 `grep` 该动作的固定日志前缀作为「是否真触发」的硬判据，比看界面可靠。
 - **错误文案会撒谎**：`click_button` 失败文案把「anchor 缺模板」误写成「robot 未启」——探针的失败文案必须精确到真实原因，误导性文案留档会让下一轮排障白烧。
+- **`runners=0` 不等于「数据源没连上」**（2026-11-01 真机实证）：平台 `DatabaseRunners.getAttachDataSourceRunners` 按**「文件→数据源」绑定**筛 Runner；本轮把唯一数据源连上、并在 Database 树里展开到 `Tables (11)`（表级内省完成）后，`runners=0` 依旧。判因前先看预览的绑定行（「未绑定数据源（在控制台执行一次查询即可绑定）」），别把 0 直接归因成连接或内省问题——本仓 `DataSourceSelector.kt:419-422` 的 KDoc 早就记着「Database 视图已连接仍为 0」。
 - **robot 按类名查控件先核真实类名**：转换输入框实际是 `EditorComponentImpl`（`EditorTextField/JBTextField` 均不存在）——用 robot 逐个类名探一遍再写死。
 - **Paste 落点自证**：粘贴类操作必须带「面板已变化」自证（像素指纹/文本 diff），工具回执不算落地证据；Esc 误关面板后样本可能粘进编辑器内存——磁盘是否污染以 `git status` 为准，内存污染杀 IDE 即弃。
 - **GUI 改设置三条路全堵的兜底**：滚轮 no-op＋搜索对自定义 Configurable 无索引（"Nothing to show"）＋对话框拉到上限仍装不下时，改读沙盒 `config/options/<plugin>.xml` 记录状态并如实标注「XML 兜底记录，非 GUI 操作」。

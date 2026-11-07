@@ -45,12 +45,22 @@ class SqlPreviewStatusBarWidgetTest : BasePlatformTestCase() {
     }
 
     fun `test取快照不得创建SqlLogManager服务`() {
-        assertNull("前置：本用例开始时服务不应已创建", sqlLogManagerIfCreated(project))
+        // 判据演进（2026-11-01 两轮全量实测）：
+        //  v1「本用例开始时服务不应已创建」—— SqlLogManager 是应用级单例、跨用例存活，同 shard 里
+        //     任何前置用例（含 widget 的 2s 池化轮询）碰过它就必红，而单类定向跑是绿的（假红/假绿同源）。
+        //  v2「相对基线不新增创建」—— 只断言「仍为 null」，基线已创建时同样必红，等价于没修。
+        //  v3（现行）「**实例身份不变**」—— 无论基线是 null 还是某实例，真正要证的都是
+        //     「computeSnapshot 不主动拉起/替换服务」：基线为 null 时结果必须仍为 null；
+        //     基线已有实例时结果必须仍是**同一个实例**。这样既不依赖全局干净，也不放弃判据。
+        val baseline = sqlLogManagerIfCreated(project)
         val snapshot = computeSnapshot(project, executeAvailable = true)
         assertNotNull("快照必须非空", snapshot)
-        assertNull(
-            "computeSnapshot 走只读入口，不得发起服务创建（否则毒化容器 + 无用功能也建服务）",
-            sqlLogManagerIfCreated(project),
+        val after = sqlLogManagerIfCreated(project)
+        assertSame(
+            "computeSnapshot 走只读入口，不得创建或替换 SqlLogManager 服务" +
+                "（否则毒化服务容器 + 无用功能也建服务）；基线＝${baseline?.javaClass?.simpleName ?: "未创建"}",
+            baseline,
+            after,
         )
     }
 

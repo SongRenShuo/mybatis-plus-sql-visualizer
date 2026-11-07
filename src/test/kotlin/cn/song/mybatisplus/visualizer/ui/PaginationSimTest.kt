@@ -186,6 +186,89 @@ class PaginationSimTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-Exec262ReadLock B：last("limit …") 不是分页消费，不得附赠 COUNT
+    // ------------------------------------------------------------------
+
+    fun testSelectListWithLastLimitProducesNoCountSql() {
+        // 2026-11-02 用户实测形态：selectList(w.last("limit 100")) 预览凭空多一条 COUNT。
+        // COUNT 只跟随 Page/IPage 分页消费；last 给的 LIMIT 照常渲染、但不产 COUNT。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .last("limit 100");
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertTrue("last 的 LIMIT 照常渲染：${result!!.compactSql}", result.compactSql.endsWith("LIMIT 100"))
+        assertNull("last 的 LIMIT 不是分页消费，不产 COUNT 包裹", result.countSql)
+    }
+
+    fun testSelectListWithLastLimitVariableProducesNoCountSql() {
+        // 用户现场形态：last("limit " + n) → LIMIT ?（形参值静态不可得），同样不产 COUNT
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query(int n) {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .last("limit " + n);
+                    mapper.selectList(w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertTrue("last 拼接口径渲染占位 LIMIT：${result!!.compactSql}", result.compactSql.endsWith("LIMIT ?"))
+        assertNull("占位 LIMIT 也不是分页消费，不产 COUNT 包裹", result.countSql)
+    }
+
+    fun testSelectPageWithLastLimitStillProducesCountSql() {
+        // 正对照（防本闸误杀）：真分页消费 + last 并存 → 以分页为准，COUNT 仍在
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .last("LIMIT 1");
+                    mapper.selectList(new Page<>(3, 15), w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertEquals(
+            "真分页消费仍产 COUNT 包裹",
+            "SELECT COUNT(*) FROM (SELECT id FROM device_info_entity WHERE id = 1001) TOTAL",
+            result!!.countSql,
+        )
+    }
+
+    // ------------------------------------------------------------------
     // T-01b：XML 语句路径（mapper 接口 Page/IPage 形参）
     // ------------------------------------------------------------------
 

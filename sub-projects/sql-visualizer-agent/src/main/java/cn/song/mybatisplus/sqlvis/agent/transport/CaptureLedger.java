@@ -10,9 +10,14 @@ import java.util.UUID;
 public final class CaptureLedger {
     public static final String RUN_ID = UUID.randomUUID().toString();
     private static long generated, completed, omitted, captureFailed, encodingFailed, transportUncertain, written;
-    private static long captureEpoch;
+    //（车道5 合并注：改 volatile 并补无锁读 currentEpoch——EventBus.offer 入账路径红线
+    //「宿主线程绝不阻塞」（T-SqlListCatchup 守卫 EventBusOverflowLedgerTest 扫描禁列），
+    // epoch 门控的读侧不能再走 synchronized 的 captureEpoch()。写侧 captureBoundary 仍同步。）
+    private static volatile long captureEpoch;
 
     public static synchronized long captureEpoch() { return captureEpoch; }
+    /** 无锁读当前 epoch（offer 入账路径专用——同字段 volatile 读，语义与 captureEpoch() 一致）。 */
+    public static long currentEpoch() { return captureEpoch; }
     public static synchronized void captureBoundary() { captureEpoch++; }
 
     public static synchronized long begin() {

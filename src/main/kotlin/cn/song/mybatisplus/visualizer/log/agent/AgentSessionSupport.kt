@@ -625,7 +625,9 @@ internal class AgentSession(
 
     fun sendConfig(disabled: Boolean, desensitize: Boolean =
         PluginSettings.getInstance().state.enhancedCaptureDesensitize,
-        preserveCaptureConfirmation: Boolean = false) {
+        // 车道5 合并注：T-CaptureGateStability P1 修订后「保留上一次确认值」为无条件行为，
+        // 本参数不再控制清空（兼容既有调用方与测试，见下方合并注）。
+        @Suppress("UNUSED_PARAMETER") preserveCaptureConfirmation: Boolean = false) {
         try {
             // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
             val prefixes = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
@@ -649,16 +651,18 @@ internal class AgentSession(
                 output.write(body)
                 output.flush()
             }
-            // 追加 P-5：下发即转「待确认」——应用侧是否真的应用了这次 CONFIG，只有回执说了算。
-            // 随后立即重算桥闸门：待确认（null）与「确认停采」在闸门上一视同仁，都不封桥——
-            // 这是有意的取侧：宁可在一个 ACK 往返（毫秒级、且列表去重窗口会折叠同指纹条目）里
-            // 短暂双通道产出，也不接受「桥封着 + 应用侧静默 = 零捕获且无任何可见信号」。
-            // 注意次序：先清确认态再排超时巡检（巡检到点时读的是清空后的挂起，语义一致）。
-            if (!preserveCaptureConfirmation) {
-                configAckDisabled = null
-                onCaptureConfirmationChanged()
-                markConfigSent(disabled)
-            }
+            // 追加 P-5 后修订（T-CaptureGateStability P1，2026-11-05 真机实测）：下发后**保留上一次的
+            // 确认值**，不再「清回待确认」。原口径在周期性 CONFIG 下发（配置根本没变）时会开出一段
+            // 「清空 → 回执到达」的桥放行窗，实测 2ms~1.25s；窗口内控制台桥完整解析一轮并与 agent
+            // 各产一条（沙盒日志`增强捕获闸门回落：确认态=[pid=..:待确认]` 就紧跟在接管沿后 2ms）。
+            //
+            // 保留旧值后的语义：配置未变 → 无窗；配置真变了 → 窗口内按旧值封桥（变更未确认前不假定
+            // 已生效，这是安全的一侧）。回执到达照常覆盖；会话断开/关闭仍走 clearPendingConfigAck +
+            // 清空（无回执可等时不该拿旧确认当真）。超时巡检只计数与告警，不动确认值。
+            //（车道5 合并注：t-sql-insight 侧原 `preserveCaptureConfirmation=false 清回待确认` 分支
+            //  已被本修订吸收——「保留旧值」成为无条件行为，该参数退化为调用方兼容占位。）
+            onCaptureConfirmationChanged()
+            markConfigSent(disabled)
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（原状：静默置 alive=false，致命错误会丢现场）
             alive = false

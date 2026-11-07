@@ -324,17 +324,20 @@ class ExecDialectRoutingTest {
     @Test
     fun `接线守卫_执行文件方言映射走数据源方言路由`() {
         val selector = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
-        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        // T-ExecPlanEdtSlowOp：`createTempPsiFile` 一族（缓存命中路径 + BGT 预热链）已从
+        // DataSourceSelectorResults.kt 拆到 ExecTempFileFactory.kt，两条接线锚点随迁。
+        val factory = mainSource("cn/song/mybatisplus/visualizer/execute/ExecTempFileFactory.kt")
         assertTrue(
             "mapDialectBeforePsi 未接数据源方言路由（resolveTargetLanguage 缺失）——DM 等非 MySQL 数据源将从预览执行链隐形",
             selector.contains("resolveTargetLanguage(") && selector.contains("resolveTargetDataSource("),
         )
         assertTrue(
             "createTempPsiFile 缓存命中路径未对齐方言映射（缓存复用会跳过路由）",
-            Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,200}mapDialectBeforePsi""").containsMatchIn(results),
+            // 窗口 400：迁移后的调用点上方带 P-3 线程归属注释（setMapping 写仍落 EDT），200 会切在
+            // 注释中间；两处调用之间仍只有注释，没有第三个调用点
+            Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,400}mapDialectBeforePsi""").containsMatchIn(factory),
         )
-        val prewarmBody = results.substringAfter("internal fun DataSourceSelector.prewarmExecTempFileInner(")
-            .substringBefore("internal fun DataSourceSelector.buildConsoleSplitPane(")
+        val prewarmBody = factory.substringAfter("internal fun DataSourceSelector.prewarmExecTempFileInner(")
         assertTrue("prewarmExecTempFileInner 函数切片为空（扫描锚点漂移）", prewarmBody.contains("val ioFile"))
         assertTrue(
             "prewarmExecTempFileInner 未走统一方言映射入口（BGT 预热仍硬编码 MySQL）",
@@ -369,19 +372,29 @@ class ExecDialectRoutingTest {
     @Test
     fun `接线守卫_弹窗前展开组Runner`() {
         val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        // T-Exec262ReadLock：枚举入口有列表版与详情版两个（后者带平台调用异常，供 runners 为空
+        // 时三分归因）；守卫钉的是「枚举 → expandGroupRunners(enumerated)」这条接线本身，
+        // 不是入口名，故两种入口名都接受。
         assertTrue(
             "chooseAndPrepare 未展开组 Runner——方言不匹配的数据源（DM 等）将藏在死组项里不可选",
-            Regex("""getAttachDataSourceRunners\(psiFile, submitSql, sessionConsumer\)[\s\S]{0,800}expandGroupRunners\(enumerated\)""")
-                .containsMatchIn(results),
+            Regex(
+                """(?:getAttachDataSourceRunners|enumerateDataSourceRunners)\(psiFile, submitSql, sessionConsumer\)""" +
+                    """[\s\S]{0,800}expandGroupRunners\(enumerated\)""",
+            ).containsMatchIn(results),
         )
     }
 
     @Test
     fun `接线守卫_空Runner分支给方言不匹配文案`() {
+        val hint = mainSource("cn/song/mybatisplus/visualizer/execute/EmptyRunnersHint.kt")
         val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
         assertTrue(
-            "chooseAndPrepare 空 Runner 分支未接方言不匹配可行动文案（D3/V3）——用户将继续面对笼统空数据源提示或超时",
-            results.contains("execute.datasource.dialectMismatch"),
+            "空 Runner 归因文案未覆盖方言不匹配（D3/V3）——用户将继续面对笼统空数据源提示或超时",
+            hint.contains("execute.datasource.dialectMismatch"),
+        )
+        assertTrue(
+            "空 Runner 分支未走统一文案出口（EmptyRunnersHint），归因/文案散落两处会再次写出假因果",
+            results.contains("EmptyRunnersHint.message(project, registered, renderedDialectName, vf)"),
         )
         val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
         val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
@@ -420,5 +433,371 @@ class ExecDialectRoutingTest {
         val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
         assertTrue("en bundle 缺 execute.datasource.noRunnable", en.contains("execute.datasource.noRunnable="))
         assertTrue("zh bundle 缺 execute.datasource.noRunnable", zh.contains("execute.datasource.noRunnable="))
+    }
+
+    // ------------------------------------------------------------------
+    // UI-046 A：兜底目标源挑选（四档确定性优先级，每档一个用例）
+    // ------------------------------------------------------------------
+
+    private fun idsOf(vararg ids: String?): List<String?> = ids.toList()
+
+    /** 桩数据源：判定函数按名字给方言 id 清单（真实判定由 platformDialectId/urlFallbackId 注入）。 */
+    private fun dialectMap(vararg pairs: Pair<String, List<String?>>): (Any) -> List<String?> {
+        val map = pairs.toMap()
+        return { ds -> map[ds as String].orEmpty() }
+    }
+
+    @Test
+    fun `兜底目标源_既有解析命中时原样返回`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = "memory-hit",
+            dataSources = listOf("mysql-a", "mysql-b"),
+            renderedDialectName = "MySQL",
+            dialectIdsOf = dialectMap("mysql-a" to idsOf("MySQL"), "mysql-b" to idsOf("MySQL")),
+        )
+        assertEquals("last-used/默认源命中时必须原样返回（既有行为零变化）", "memory-hit", picked)
+    }
+
+    @Test
+    fun `兜底目标源_按渲染方言唯一匹配`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("mysql-a", "pg-a", "h2-a"),
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = dialectMap(
+                "mysql-a" to idsOf("MySQL"),
+                "pg-a" to idsOf("PostgreSQL"),
+                "h2-a" to idsOf("H2"),
+            ),
+        )
+        assertEquals("恰好 1 个与渲染方言匹配时必须选它", "pg-a", picked)
+    }
+
+    @Test
+    fun `兜底目标源_单源无歧义兜底`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("only-one"),
+            // 未连接/未内省：平台与 URL 都判不出方言
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = { idsOf(null, null) },
+        )
+        assertEquals("判不出方言但在册源只有 1 个时用它（单源无歧义）", "only-one", picked)
+    }
+
+    @Test
+    fun `兜底目标源_多候选不猜`() {
+        val picked = ExecDialectRouting.pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = listOf("pg-a", "pg-b"),
+            renderedDialectName = "PostgreSQL",
+            dialectIdsOf = dialectMap("pg-a" to idsOf("PostgreSQL"), "pg-b" to idsOf("PostgreSQL")),
+        )
+        assertNull("两个源都匹配渲染方言时是歧义，不许猜", picked)
+    }
+
+    @Test
+    fun `兜底目标源_零在册源返回空`() {
+        assertNull(
+            "没有在册源时无从挑选",
+            ExecDialectRouting.pickTargetDataSourceForDialect(
+                existing = null,
+                dataSources = emptyList(),
+                renderedDialectName = "MySQL",
+                dialectIdsOf = { idsOf("MySQL") },
+            ),
+        )
+    }
+
+    @Test
+    fun `渲染方言匹配_大小写与URL兜底id同口径`() {
+        assertTrue(
+            "方言名比对不区分大小写，且 URL 兜底 id 与平台 id 同权",
+            ExecDialectRouting.dialectMatchesRendered("mysql", idsOf(null, "MySQL")),
+        )
+        assertTrue(
+            "家族别名按 PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS 收敛（MariaDB 候选含 MySQL）",
+            ExecDialectRouting.dialectMatchesRendered("MariaDB", idsOf("MySQL")),
+        )
+        assertFalse(
+            "判不出方言的源不得被当成匹配",
+            ExecDialectRouting.dialectMatchesRendered("MySQL", idsOf(null, null)),
+        )
+        assertFalse(
+            "渲染方言不在登记表里时无从匹配（不猜）",
+            ExecDialectRouting.dialectMatchesRendered("UnknownDialect", idsOf("MySQL")),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // UI-046 B：空 Runner 归因三分类（文案必须说真话）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `空Runner归因_零在册源`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(emptyList(), "MySQL") { idsOf("MySQL") }
+        assertEquals(ExecDialectRouting.EmptyRunnersReason.NO_DATA_SOURCE, reason)
+        assertEquals("execute.datasource.empty", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_有源但均判不出方言`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("ds-1", "ds-2"),
+            "MySQL",
+        ) { idsOf(null, null) }
+        assertEquals(
+            "全部源都判不出方言＝未连接/未内省，不是方言不匹配",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_UNKNOWN,
+            reason,
+        )
+        assertEquals("execute.datasource.notConnected", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_方言对得上却仍无Runner`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a", "pg-a"),
+            "MySQL",
+        ) { ds -> if (ds == "mysql-a") idsOf("MySQL") else idsOf("PostgreSQL") }
+        assertEquals(
+            "有源与渲染方言匹配却枚举不出 Runner＝源不可 attach（未连接/未内省）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertEquals("execute.datasource.notConnected", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_方言可判但都对不上`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("pg-a"),
+            "MySQL",
+        ) { idsOf("PostgreSQL") }
+        assertEquals(ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH, reason)
+        assertEquals("execute.datasource.dialectMismatch", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_渲染方言缺失时按方言不匹配处理`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(listOf("pg-a"), null) { idsOf("PostgreSQL") }
+        assertEquals(
+            "无渲染事实时不能断言「对得上」，沿用既有 W7 反推口径",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MISMATCH,
+            reason,
+        )
+    }
+
+    @Test
+    fun `接线守卫_空Runner分支接方言兜底与三分类`() {
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "空 Runner 分支未接方言兜底目标源解析——全新项目（无 last-used/默认源）会直接落到方言不匹配文案",
+            results.contains("resolveTargetDataSourceForDialect(project, renderedDialectName)"),
+        )
+        assertTrue(
+            "空 Runner 分支未按真实原因归因",
+            mainSource("cn/song/mybatisplus/visualizer/execute/EmptyRunnersHint.kt")
+                .contains("classifyEmptyRunners(project, registeredDataSources, renderedDialectName, execFile)"),
+        )
+        val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        val enLine = en.lineSequence().firstOrNull { it.startsWith("execute.datasource.notConnected=") }
+        val zhLine = zh.lineSequence().firstOrNull { it.startsWith("execute.datasource.notConnected=") }
+        assertTrue("en bundle 缺 execute.datasource.notConnected", enLine != null)
+        assertTrue("zh bundle 缺 execute.datasource.notConnected", zhLine != null)
+        assertTrue("en 文案缺占位符 {0}（在册数据源个数）", enLine.orEmpty().contains("{0}"))
+        assertTrue("zh 文案缺占位符 {0}（在册数据源个数）", zhLine.orEmpty().contains("{0}"))
+    }
+
+    // ------------------------------------------------------------------
+    // UI-048：归因补一维「绑定态」（未绑定 ≠ 未连接）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `空Runner归因_方言对得上但文件未绑定`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a"),
+            "MySQL",
+            boundToDataSource = false,
+        ) { idsOf("MySQL") }
+        assertEquals(
+            "探针明确说「未绑定」时不得再归因成「未连接/未内省」（2026-11-01 真机：已连上且已内省，文案却是假的）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND,
+            reason,
+        )
+        assertEquals("execute.datasource.notBound", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_已绑定仍枚举不出才说未连接`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a"),
+            "MySQL",
+            boundToDataSource = true,
+        ) { idsOf("MySQL") }
+        assertEquals(
+            "已绑定仍无 Runner＝源确实不可 attach，此时「连接/内省」才是站得住的归因",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertEquals("execute.datasource.notConnected", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `空Runner归因_绑定态未知退回既有口径`() {
+        // 默认参数 null = 探针不可用（Community/反射失败）：不得凭空断言「未绑定」，保持旧口径。
+        val reason = ExecDialectRouting.classifyEmptyRunners(listOf("mysql-a"), "MySQL") { idsOf("MySQL") }
+        assertEquals(
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertFalse(
+            "绑定态未知时不许落到未绑定向导（那是没验证过的结论）",
+            ExecDialectRouting.emptyRunnersHintKey(reason) == "execute.datasource.notBound",
+        )
+    }
+
+    @Test
+    fun `空Runner归因_全部判不出方言优先于未绑定`() {
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("ds-1"),
+            "MySQL",
+            boundToDataSource = false,
+        ) { idsOf(null, null) }
+        assertEquals(
+            "方言判不出时先给「平台定位不到」的中性文案（既有档位不变）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_UNKNOWN,
+            reason,
+        )
+    }
+
+    @Test
+    fun `接线守卫_未绑定文案键双语齐备`() {
+        val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        for (key in listOf("execute.datasource.notBound", "execute.datasource.notConnected")) {
+            val enLine = en.lineSequence().firstOrNull { it.startsWith("$key=") }
+            val zhLine = zh.lineSequence().firstOrNull { it.startsWith("$key=") }
+            assertTrue("en bundle 缺 $key", enLine != null)
+            assertTrue("zh bundle 缺 $key（漏加会让中文环境显示裸键名）", zhLine != null)
+            assertTrue("en $key 缺占位符 {0}（在册数据源个数）", enLine.orEmpty().contains("{0}"))
+            assertTrue("zh $key 缺占位符 {0}（在册数据源个数）", zhLine.orEmpty().contains("{0}"))
+            // 新文案不许再把「未连接」和「未内省」捆成一句断言（UI-048 的缺陷原文）
+            assertFalse(
+                "$key 仍在断言「都还没有连接成功或尚未完成内省」——这正是 UI-048 要摘掉的假因果",
+                zhLine.orEmpty().contains("都还没有连接成功"),
+            )
+        }
+    }
+
+    @Test
+    fun `接线守卫_归因文案分档覆盖全部归因且生产入口探绑定`() {
+        val hint = mainSource("cn/song/mybatisplus/visualizer/execute/EmptyRunnersHint.kt")
+        for (branch in ExecDialectRouting.EmptyRunnersReason.values()) {
+            assertTrue(
+                "EmptyRunnersHint.messageFor 未覆盖归因 $branch（when 缺档会让文案落到错误分支）",
+                hint.contains("EmptyRunnersReason.$branch"),
+            )
+        }
+        val routing = mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.kt")
+        assertTrue(
+            "生产归因未调用绑定探针 ExecFileBinding.probeExecBind——UI-048 的「未绑定」档会永远是死代码",
+            routing.contains("ExecFileBinding.probeExecBind(project, file)"),
+        )
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "空 Runner 分支未把 exec 文件交给归因（漏传 vf 等于绑定态未知）",
+            results.contains("EmptyRunnersHint.message(project, registered, renderedDialectName, vf)"),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // UI-049：探针三态（「探不到」≠「确定未绑定」）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `探针三态_反射失败不得当成未绑定`() {
+        // 243 基线（IU-2024.3.7.1）整个类 com.intellij.database.dataSource.DataSourcePerFileMappingsImpl
+        // 都不存在（真机日志 08:29:57 ClassNotFoundException），per-file 一路恒降级 → UNKNOWN。
+        val degraded = ExecFileBinding.ExecBindProbe(null, null, probeOk = false)
+        assertEquals(
+            "有一路探测失败且没有任何 pin 事实 → 绑定态不可知",
+            ExecFileBinding.BindState.UNKNOWN,
+            degraded.bindingState,
+        )
+        val flag = ExecDialectRouting.boundToDataSourceFlag(degraded)
+        assertNull("探针降级时归因必须拿到未知（null），不能压成 false", flag)
+        val reason = ExecDialectRouting.classifyEmptyRunners(listOf("mysql-a"), "MySQL", flag) { idsOf("MySQL") }
+        assertEquals(
+            "探针降级只能退回既有口径——不得落「未绑定」档（UI-049 的核心回归点）",
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+            reason,
+        )
+        assertFalse(
+            "探针降级时出「未绑定」文案就是把探测失败当因果",
+            ExecDialectRouting.emptyRunnersHintKey(reason) == "execute.datasource.notBound",
+        )
+    }
+
+    @Test
+    fun `探针三态_明确未绑定仍归因未绑定`() {
+        // 两路都正常跑完且确实没有 pin：这才是硬事实 UNBOUND（UI-048 成果不许被三态化回退）。
+        val unbound = ExecFileBinding.ExecBindProbe(null, null, probeOk = true)
+        assertEquals(ExecFileBinding.BindState.UNBOUND, unbound.bindingState)
+        assertEquals(false, ExecDialectRouting.boundToDataSourceFlag(unbound))
+        val reason = ExecDialectRouting.classifyEmptyRunners(
+            listOf("mysql-a"),
+            "MySQL",
+            ExecDialectRouting.boundToDataSourceFlag(unbound),
+        ) { idsOf("MySQL") }
+        assertEquals(
+            ExecDialectRouting.EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND,
+            reason,
+        )
+        assertEquals("execute.datasource.notBound", ExecDialectRouting.emptyRunnersHintKey(reason))
+    }
+
+    @Test
+    fun `探针三态_任一路探到pin即为已绑定`() {
+        assertEquals(
+            "per-file 一路失败不影响已由挂载控制台探到的 pin（BOUND 是硬事实）",
+            ExecFileBinding.BindState.BOUND,
+            ExecFileBinding.ExecBindProbe("uuid-mp", null, probeOk = false).bindingState,
+        )
+        assertEquals(
+            ExecFileBinding.BindState.BOUND,
+            ExecFileBinding.ExecBindProbe(null, "uuid-mp-2").bindingState,
+        )
+        assertEquals(
+            "探到 pin 即绑定态确定，归因不得落未绑定档",
+            true,
+            ExecDialectRouting.boundToDataSourceFlag(ExecFileBinding.ExecBindProbe(null, "uuid-mp-2")),
+        )
+        assertNull("完全没有探针结果时同样是未知", ExecDialectRouting.boundToDataSourceFlag(null))
+    }
+
+    @Test
+    fun `接线守卫_归因绑定态走三态映射`() {
+        val routing = mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.kt")
+        assertTrue(
+            "生产归因未走三态映射 boundToDataSourceFlag（UI-049 接线缺失）",
+            routing.contains("boundToDataSourceFlag(probe)"),
+        )
+        assertFalse(
+            "归因层仍在用 probe.pinnedDsId != null 判绑定——UNKNOWN 会被压成 false，243 上一律误报未绑定",
+            routing.contains("probeExecBind(project, file).pinnedDsId != null"),
+        )
+        assertTrue(
+            "UNKNOWN 必须显式映射为 null（未知），不能落到 false",
+            Regex("""BindState\.UNKNOWN, null -> null""").containsMatchIn(routing),
+        )
+        val binding = mainSource("cn/song/mybatisplus/visualizer/execute/ExecFileBinding.kt")
+        assertTrue("ExecBindProbe 缺 probeOk 状态位（探针失败与无 pin 不可区分）", binding.contains("val probeOk: Boolean = true"))
+        assertTrue(
+            "probeExecBind 未在失败分支置 probeOk=false——三态永远是 UNBOUND",
+            Regex("""onFailure \{[^}]*probeOk = false""").containsMatchIn(binding),
+        )
+        assertTrue("ExecBindProbe 缺 bindingState 三态投影", binding.contains("val bindingState: BindState"))
     }
 }

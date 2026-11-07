@@ -184,4 +184,24 @@ class AgentManagerPauseGateTest : BasePlatformTestCase() {
 
         assertFalse("关开关应复位用户暂停（V80③：总开关关 > 暂停）", manager.userPaused)
     }
+
+    /**
+     * T-CaptureGateStability P1（2026-11-05 真机实测）：CONFIG 下发**不得**把确认态清回「待确认」。
+     *
+     * 原口径下发即清空，于是「清空 → 回执到达」之间开出一段桥放行窗（真机实测 2ms~1.25s）；
+     * 周期性 CONFIG 下发（配置根本没变）每轮都会触发，控制台桥在窗内完整解析一轮并与 agent
+     * 各产一条。保留旧确认值后：配置未变无窗，配置真变了窗口内按旧值封桥（安全的一侧）。
+     */
+    fun testConfig下发不清确认态_闸门保持封停() {
+        val manager = freshManager()
+        val session = newSession(8611L, manager)
+        manager.sessions.add(session)
+        writeFrame(8611L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
+        awaitTrue("前置：确认在采集后桥应让位") { SqlCaptureGate.paused.get() }
+
+        // 再下发一次（配置未变）——确认态必须保留，闸门不得放开
+        session.sendConfig(disabled = false, desensitize = false)
+        assertTrue("CONFIG 下发后闸门仍应封停（不清回待确认）", SqlCaptureGate.paused.get())
+        assertEquals("确认态保持 false 而非 null", false, session.configAckDisabled)
+    }
 }

@@ -16,7 +16,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * F79（T-PerfSweep24 性能二十四轮）：per-host 探针税两刀的判别断言。
@@ -82,7 +81,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 非 mapper XML 的文本宿主：本地守卫拒绝 → 探针零咨询（修复前 probe 先跑 → 每问必红）。 */
-    @Test
     fun testF79_刀一_非mapper文本宿主_探针零咨询() {
         myFixture.configureByText(
             "configuration.xml",
@@ -97,7 +95,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     }
 
     /** 非 mapper XML 的属性值宿主：inMapperFile 拒绝 → 探针零咨询。 */
-    @Test
     fun testF79_刀一_非mapper属性宿主_探针零咨询() {
         myFixture.configureByText(
             "configuration.xml",
@@ -112,7 +109,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     }
 
     /** mapper 文件内非白名单属性（id）：白名单拒绝 → 探针零咨询。 */
-    @Test
     fun testF79_刀一_非白名单属性_探针零咨询() {
         myFixture.configureByText(
             "mapper.xml",
@@ -128,7 +124,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     }
 
     /** 白名单属性宿主（mapper 内 test）：探针恰咨询一次，让位未命中时注入照常（重排不扰正常路径）。 */
-    @Test
     fun testF79_刀一_mapper白名单宿主_探针恰一次且注入不扰() {
         myFixture.configureByText(
             "mapper.xml",
@@ -151,7 +146,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 同宿主未修改：首问探针、后续 memo 命中——探针只问一次（修复前每问必探 → 红）。 */
-    @Test
     fun testF79_刀二_同宿主未修改_探针只问一次() {
         myFixture.configureByText(
             "mapper.xml",
@@ -170,7 +164,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
      * 重解析存活）→ 同对象下一问必须重探且新结论生效——若 memo 不随修改戳失效则残留旧
      * false → 红。
      */
-    @Test
     fun testF79_刀二_文档提交后_结论失效重探() {
         myFixture.configureByText(
             "mapper.xml",
@@ -200,7 +193,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     }
 
     /** 探针异常的 fail-safe 让位不入缓存：探针恢复后下一问须重探（缓存 stale true → 红）。 */
-    @Test
     fun testF79_刀二_探针异常_让位结论不缓存() {
         myFixture.configureByText(
             "mapper.xml",
@@ -225,7 +217,6 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /** 开关开启：首问实探计入 probeRuns、次问 memo 命中计入 memoHits；关闭时零计数。 */
-    @Test
     fun testV38_计数缝_实探与命中分计() {
         myFixture.configureByText(
             "ProbeTaxMapper.xml",

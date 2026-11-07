@@ -168,6 +168,35 @@ public class ConfigApplyEndToEndTest {
         final Frame f = awaitFrame(in, 3000L);
         assertNotNull("看门狗停采后会话不得关闭（应仍有心跳帧）", f);
         assertEquals("停采后仍应为心跳（会话存活）", EventBus.CMD_HEARTBEAT, f.cmd);
+
+        // T-AgentSilentAfter16s：自停必须**在线上可见**。
+        // 现场（磐维 + GaussDB 验收轮）看到的形态正是「HELLO 之后约 15s 起一条事件都没有，
+        // 但业务请求照旧 200、心跳照发」——它与「钩子坏了」「SQL 归属丢了」在面板侧完全同形，
+        // 当时只能靠宿主 stderr 那一条告警归因。心跳带 gate 后对端可自行判别：
+        // 0 = 无自停，1 = CONFIG 看门狗自停生效中。
+        // 断言写法：跳过停采前已排队的心跳（gate=0），在窗口内等到带 gate=1 的那一帧。
+        Frame gated = null;
+        final long gateDeadline = System.currentTimeMillis() + 3000L;
+        while (System.currentTimeMillis() < gateDeadline) {
+            final Frame cand = awaitFrame(in, 500L);
+            if (cand == null) {
+                continue;
+            }
+            if (cand.cmd == EventBus.CMD_HEARTBEAT && cand.payload.contains("\"gate\":1")) {
+                gated = cand;
+                break;
+            }
+        }
+        assertNotNull("看门狗自停后心跳须带 gate=1（否则对端只能看到「静默」，无法把「自停」与"
+                + "「钩子不产」分开——T-AgentSilentAfter16s 的现场误判正源于此）", gated);
+
+        // 控制通道一旦恢复（CONFIG 到达），自停立刻解除，心跳回到 gate=0——恢复走既有 CONFIG 通道。
+        final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG, "{\"disabled\":false}");
+        assertNotNull("恢复采集的 CONFIG 应获 ACK", awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L));
+        assertFalse("CONFIG 到达后应解除自停", AgentState.isDisabled());
+        assertTrue("恢复后心跳不得再报自停：" + SenderLoop.heartbeatBody(),
+                SenderLoop.heartbeatBody().contains("\"gate\":0"));
     }
 
     /**

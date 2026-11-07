@@ -258,7 +258,7 @@ intellijPlatform {
 - **截图**：推荐 1200×760，展示预览弹窗、动态条件面板、日志工具窗口实际效果（禁止默认主题截图、误导性图片）；
 - **Additional Information**：可加 Gitee 仓库链接、官网需求池（https://sql-visualizer.jvtools.cn/about/feedback）等，**外链必须公网可达**。
 
-### 8.1 描述（description）的同步通道与时序（T-PluginDescReshape 实测登记）
+### 8.1 描述（description）的同步通道与时序（T-PluginDescReshape 实测登记，20261104 补错开复盘）
 
 **页面描述与包内描述是两份数据，别搞反时序**：
 
@@ -266,6 +266,17 @@ intellijPlatform {
   「**始终使用页面描述**」或「**页面描述用到下次上传为止**」。只有前者会让包内描述永久失效——本仓要的是后者（页面临时、包内权威），选错会让下次发版的新描述上不去。
 - 实测口径（2026-10-08，插件 33633）：最新已上架版本 `2026.10.7`，其页面描述与 10.7 包内描述**逐字同源**（`preserveUIEdits=false`）⇒ 现状是「随上传生效」模式；**只改 `plugin.xml` 不会立刻改线上页面**，要等下一次版本上传。
 - 因此流程上：描述改动与版本号变更一起走 Step ⑤ 上传；若要在不发行版本的前提下修线上文案，才走页面编辑通道，并在选择模式时挑「用到下次上传为止」。
+
+**⚠️ 20261104 错开复盘（「修了还在」的真因）**：20261103 修二维码等宽时只改了 jar 内 `plugin.xml`（提交 `2aa4f080`），线上页面**纹丝不动**——因为该插件当时后台开关是「**Use changes from UI**」（`preserveUIEdits=true`，页面永远优先），包内描述被页面那份旧描述压着，发多少版都不会生效。判据与修法：
+
+| 要改的地方 | 入口 | 作用 |
+|---|---|---|
+| `preserveUIEdits` | 后台 `General Information` → **Preserve changes from UI** | `Use changes from UI`＝页面权威（**改 plugin.xml 无效**）；`Use data from plugin.xml`＝包内权威（**推荐**） |
+| 读当前值 | `GET /api/plugins/33633?fullInfo=true` → `preserveUIEdits` 字段 | `true`/`false` 直接给出模式，不用猜 |
+
+- 已在 20261104 把本插件改为 **Use data from plugin.xml**（`preserveUIEdits=false`），回到「包内权威」；当次页面描述改动会在下次发版时被包内版覆盖（包内版本来就是对的，无损失）。
+- **排查手法**：`curl https://plugins.jetbrains.com/api/plugins/<id>?fullInfo=true` 拿 `description`（脱敏后成品 HTML）与本地 `plugin.xml` 对比——不一致就是两份数据错开；一致才是同源。
+- **判描述改动有没有真上线的唯一口径**：比对 API 的 `description` 与本地 `plugin.xml`，**不要只看本地文件改了没有**。
 
 **平台会剥离的内容（本地写了也不显示）**：
 

@@ -50,6 +50,22 @@ class AgentAttachStatsTest {
         assertTrue("weavable>0 即非零命中", !stats.zeroMatched)
     }
 
+    // ---------- T-SqlListCatchup 券 F2a：事件队列丢弃累计随心跳带出 ----------
+
+    @Test
+    fun `丢弃累计键可解析`() {
+        val stats = AgentAttachStats.parse(
+            """{"weavable":9,"woven":9,"failed":0,"dropped":138}""",
+        )!!
+        assertEquals("dropped 键按单调累计整体覆盖口径解析", 138L, stats.dropped)
+    }
+
+    @Test
+    fun `旧版agent无dropped键按0降级`() {
+        val stats = AgentAttachStats.parse("""{"weavable":3,"woven":3,"failed":0}""")!!
+        assertEquals("旧版心跳缺 dropped 键 → 0（状态栏不挂段）", 0L, stats.dropped)
+    }
+
     @Test
     fun `旧版agent心跳空body返回null_零行为变化`() {
         assertNull("旧版心跳 body 为 {}：不得产生任何覆盖结论", AgentAttachStats.parse("{}"))
@@ -103,5 +119,60 @@ class AgentAttachStatsTest {
         // 不含 attach 键的帧不覆盖现值
         AgentAttachReport.updateFromFrame("{}")
         assertEquals("普通心跳不得清掉已有覆盖事实", 1L, AgentAttachReport.latest()!!.matched)
+    }
+
+    // ---------- T-IbatisPanwei 券 D：未登记 JDBC 实现（unreg 键） ----------
+
+    /**
+     * 券 D 守卫：心跳 `unreg` 值必须被解析成类名列表。
+     *
+     * 反向验证：摘掉 agent 侧 `heartbeatBody` 的 unreg 段（或本侧解析），本组用例必须红。
+     */
+    @Test
+    fun `未登记实现随心跳解析为类名列表`() {
+        val stats = AgentAttachStats.parse(
+            """{"weavable":2,"woven":2,"matched":2,"unreg":"org.panweidb.jdbc.PgPreparedStatement,org.panweidb.jdbc.PgConnection"}""",
+        )!!
+        assertEquals(
+            "两个未登记类名按序解析",
+            listOf("org.panweidb.jdbc.PgPreparedStatement", "org.panweidb.jdbc.PgConnection"),
+            stats.unregisteredImplementations,
+        )
+    }
+
+    @Test
+    fun `未登记实现为空串或旧版无键时为空列表`() {
+        // 新版 agent 无未登记实现：键在、值为空串
+        val empty = AgentAttachStats.parse("""{"matched":1,"woven":1,"unreg":""}""")!!
+        assertTrue("空串 = 本次确实没有未登记实现", empty.unregisteredImplementations.isEmpty())
+        // 旧版 agent：body 里根本没有该键
+        val legacy = AgentAttachStats.parse("""{"matched":1,"woven":1}""")!!
+        assertTrue("旧版 agent 未上报 → 空列表（不编造事实）", legacy.unregisteredImplementations.isEmpty())
+    }
+
+    @Test
+    fun `未登记实现解析去空项去重且有界`() {
+        val spaced = AgentAttachStats.parse(
+            """{"matched":1,"unreg":"a.b.C, ,a.b.C,d.e.F "}""",
+        )!!
+        assertEquals("空格容忍、空项丢弃、重复去重、逐项 trim", listOf("a.b.C", "d.e.F"), spaced.unregisteredImplementations)
+
+        val many = (0 until 20).joinToString(",") { "com.example.driver.Impl$it" }
+        val bounded = AgentAttachStats.parse("""{"matched":1,"unreg":"$many"}""")!!
+        assertEquals(
+            "上报有界（≤8，与 agent 侧同值）",
+            AgentAttachStats.MAX_UNREGISTERED,
+            bounded.unregisteredImplementations.size,
+        )
+    }
+
+    @Test
+    fun `未登记实现值含非法字符时不解析且不抛异常`() {
+        // 形态漂移（值里混进引号/反斜杠）：宁可不解析，也不把脏串端到面板上
+        val stats = AgentAttachStats.parse(
+            """{"matched":1,"unreg":"a.b.C;DROP TABLE x, d.e.F"}""",
+        )!!
+        assertTrue("非法字符整段不认（不误读成类名）", stats.unregisteredImplementations.isEmpty())
+        assertEquals("其余计数照常解析", 1L, stats.matched)
     }
 }

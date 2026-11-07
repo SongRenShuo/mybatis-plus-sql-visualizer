@@ -11,7 +11,7 @@
 #   ... -SkipPrep             # 跳过预热（已在同一工作树预热过）
 #   ... -UseDaemon            # 复用常驻 Gradle daemon（缺省 --no-daemon 省内存）
 #
-# 退出码 = 0 仅当：所有分片、串行隔离类、testExternal、agent 单测全部成功。
+# 退出码 = 0 仅当：所有分片、串行隔离类、testExternal、testFast（纯逻辑快桶腿）、agent 单测全部成功。
 # 结果聚合复用 dev-support/test-shard-aggregate.py（与 testShards 同口径）。
 
 param(
@@ -172,6 +172,20 @@ $extArgs = @('testExternal') + $excl + @(
     '-Pkotlin.compiler.execution.strategy=in-process') + $planProps + $daemonArg
 $extProc = Start-GradleLine ($extArgs -join ' ') (Join-Path $cacheRoot 'external.log')
 
+# T-JUnit5Eval 方案 2：纯逻辑快桶是分片之外的第二条腿（分片只装平台类后，这 4000+ 例只由
+# testFast 承载）。它与分片同样只读共享编译产物，单独一条 lane 与分片并行。
+# 排除清单照传：testFast 与分片同源尊重 -PtestShardExcludeClasses（被排除的纯逻辑类不能从这条路溜回来）。
+Remove-Item -Recurse -Force (Join-Path $root 'build/test-results/testFast') -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $root 'build/reports/tests/testFast') -ErrorAction SilentlyContinue
+$fastArgs = @('testFast') + $excl
+if ($excludeProp) { $fastArgs += $excludeProp }
+$fastArgs += @(
+    '--project-cache-dir', (Join-Path $cacheRoot 'pc-fast'),
+    '--no-configuration-cache', '--offline', '--console=plain',
+    '-PmpvBuildSrcDir=build-lane-fast',
+    '-Pkotlin.compiler.execution.strategy=in-process') + $planProps + $daemonArg
+$fastProc = Start-GradleLine ($fastArgs -join ' ') (Join-Path $cacheRoot 'fast.log')
+
 Remove-Item -Recurse -Force (Join-Path $root 'sub-projects/sql-visualizer-agent/build/test-results/test') -ErrorAction SilentlyContinue
 $agentArgs = @(':sql-visualizer-agent:test', '--project-cache-dir', (Join-Path $cacheRoot 'pc-agent'),
     '--no-configuration-cache', '--offline', '--console=plain',
@@ -237,6 +251,11 @@ $extCode = Get-BuildExit (Join-Path $cacheRoot 'external.log')
 $externalFailed = $extCode -ne 0
 Write-Output "[parallel] testExternal exit=$extCode"
 
+$fastProc.WaitForExit()
+$fastCode = Get-BuildExit (Join-Path $cacheRoot 'fast.log')
+$fastFailed = $fastCode -ne 0
+Write-Output "[parallel] testFast exit=$fastCode"
+
 $agentProc.WaitForExit()
 $agentCode = Get-BuildExit (Join-Path $cacheRoot 'agent.log')
 $agentFailed = $agentCode -ne 0
@@ -248,9 +267,9 @@ if ($excluded.Count -gt 0) { $agg += @('--quarantine-dir', 'build/test-results/t
 & python @agg
 Write-Output ("[parallel] total wall: {0:N1} min" -f ((Get-Date) - $started).TotalMinutes)
 
-if ($shardFailed -or $quarantineFailed -or $externalFailed -or $agentFailed) {
-    Write-Output ("[parallel] FAILED shard={0} quarantine={1} external={2} agent={3}" -f `
-        $shardFailed, $quarantineFailed, $externalFailed, $agentFailed)
+if ($shardFailed -or $quarantineFailed -or $externalFailed -or $agentFailed -or $fastFailed) {
+    Write-Output ("[parallel] FAILED shard={0} quarantine={1} external={2} agent={3} fast={4}" -f `
+        $shardFailed, $quarantineFailed, $externalFailed, $agentFailed, $fastFailed)
     exit 1
 }
 Write-Output '[parallel] ALL GREEN'

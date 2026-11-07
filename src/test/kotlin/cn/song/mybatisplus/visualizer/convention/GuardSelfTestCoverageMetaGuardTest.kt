@@ -654,6 +654,29 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "convention/ShareExportOffEdtGuardTest.kt",
+                listOf(DecisionFn("offendersOf", FnKind.VIOLATIONS)),
+                "T-PerfSweep30 04a 守卫：ShareDialog 的 HTML 落盘必须在 Task.Backgroundable.run 内、" +
+                    "BrowserUtil.open 必须在 onSuccess 后。判定内核 `offendersOf` 返回违规说明集合" +
+                    "（saveHtmlReport 出现多次 / 不在 run 内 / 打开不在 onSuccess 内）。自证语料=" +
+                    "`testGuardCatchesEdtDirectWrite` 用「落盘挪回 EDT 回调」的合成源码直接断言内核报出该形态。",
+            ),
+            GuardEntry(
+                "dumbmode/DumbModeClickChainGuardTest.kt",
+                emptyList(),
+                "T-PerfSweep30 02e dumb 夹具：三条点击链（gutter 双跳 / 日志跳转 / 预览链）在 dumb 态" +
+                    "不抛、不静默成功、空表不入缓存。断言全部内联在 `@Test`（依赖真实平台 DumbService 与" +
+                    "fixture，无可注入源码的判定内核，故 decisionFns 留空）；反向验证靠临时撤闸" +
+                    "（撤闸后对应用例变红，读数记在计划 §6.1）。",
+            ),
+            GuardEntry(
+                "actions/ScanBannedApiEdtRefreshGuardTest.kt",
+                emptyList(),
+                "既有守卫（T-FixUI001 批引入，长期欠登）：锁「禁用 API 存量统计的 VFS refresh 不在 EDT」。" +
+                    "断言内联在 `@Test`、无独立判定内核函数（decisionFns 留空并写明依据）；" +
+                    "2026-11-04 T-PerfSweep30 收口时补登，清元守卫扫描面缺口。",
+            ),
+            GuardEntry(
                 "convention/HardcodedUiTextGuardTest.kt",
                 listOf(DecisionFn("scanHardcoded", FnKind.VIOLATIONS)),
                 "UI 控件文案硬编码中文守卫（T-TestGateGems W1-a）：判定内核 `scanHardcoded` 逐文件剥注释" +
@@ -669,6 +692,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
             ),
             GuardEntry(
+                "convention/VerifierCliVersionGuardTest.kt",
+                emptyList(),
+                "T-CiMarketSplit verifier-cli 版本钉子守卫：判定内核内联于用例——读 " +
+                    "dev-support/verifier-cli-version.txt 与本机 gradle 缓存里 verifier-cli-*-all.jar 的版本集合" +
+                    "比对，不一致即红（CI 的 verify/marketplace 腿按钉子版本从 Maven Central 取 jar，" +
+                    "IPGP 升级后不更新钉子会让门禁静默用旧版 verifier）。无「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=把钉子改成 9.999 后本机跑必红（缓存里存在 jar 时）。",
+            ),
+            GuardEntry(
                 "convention/SqlDialectParserDefinitionPairingGuardTest.kt",
                 emptyList(),
                 "T-PreviewPsiDialect 根因守卫：database-optional.xml 里每个 <sql.dialect> 必须有同名 " +
@@ -678,6 +710,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "（dialectClasses / parserDefinitionLanguages 两个提取器 + 数量与配对断言），" +
                     "无返回违规点集合的 Boolean 判定函数，故 decisionFns 留空；" +
                     "灵敏度=摘掉一条 lang.parserDefinition 注册必红（实施轮实测）。",
+            ),
+            GuardEntry(
+                "convention/DynamicEpComplianceGuardTest.kt",
+                emptyList(),
+                "T-HotSwapUnloadSafety 守卫：本插件扩展的**非动态 EP**必须登记在 PlatformEpDynamism 里，" +
+                    "且只许落在可选依赖描述文件（主 plugin.xml 无条件加载，DatabaseTools 缺席时 " +
+                    "NoClassDefFoundError）。判定内核＝extendedEps 文本解析（剥注释后取 " +
+                    "<extensions defaultExtensionNs> 的子元素与 point= 属性）+ 三条断言，无「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。灵敏度实测（2026-11-06）：①把登记表置空 → " +
+                    "PlatformEpDynamismTest 3 红 + 本类 1 红；②把一条 <sql.dialect> 搬进主 plugin.xml → " +
+                    "「只允许落在可选依赖描述文件」红；两次还原后均转绿。首轮还因 EP 名解析字符类漏掉「.」" +
+                    "（<sql.dialect> 整条匹配不上）假红一次，已在源码注释留痕。",
             ),
             GuardEntry(
                 "log/EmptyTextLinkApiGuardTest.kt",
@@ -864,6 +908,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "T-M53-II 拆出的项目服务状态规则族：判定内核与其自证用例同文件。",
             ),
+            // ---- T-TestGapSpeed T2：BrowserUtil 泄漏收敛扫描守卫（2026-11-04） ----
+            GuardEntry(
+                "convention/BrowserUtilConvergenceGuardTest.kt",
+                listOf(
+                    DecisionFn("browserUtilCallSites", FnKind.SITES),
+                    DecisionFn("unconvergedBrowserUtilSites", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "headerOpensBody",
+                        FnKind.HELPER,
+                        "fun 头形态谓词（Boolean）：界定「可配平出块体」的函数头，是 browserUtilCallSites " +
+                            "经 functionBodies 的输入谓词；自证经该转发边到达",
+                        via = listOf("functionBodies"),
+                    ),
+                ),
+                "T-TestGapSpeed T2 BrowserUtil 泄漏收敛守卫：src/main 的 browse/open 调用点须处 " +
+                    "isUnitTestMode 收敛分支（围合函数体可见收敛标记）或登记豁免（豁免表反腐烂），" +
+                    "调用面期望计数同步防扫面失明空绿。判定内核与自证用例同文件：" +
+                    "`守卫自证_未收敛调用点必红_收敛豁免与注释形态各归其位`（六组合成样本双向判别）。",
+            ),
 
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
@@ -937,6 +1000,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "与 SettingsScenarioGroups 的场景清单对账——未归组的 Boolean 即红并点名，清单里的陈旧键同样红。" +
                     "三个判定内核均可注入合成源码；自证语料=「未归组的 Boolean 必被点名且陈旧键可检出」" +
                     "「非 Boolean 字段不得误判」两例，覆盖正反两面。",
+            ),
+            GuardEntry(
+                "convention/LastUsedWriteOnEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                ),
+                "last-used 写入 EDT 归位守卫（T-LastUsedEdt 守卫）：项目级 PropertiesComponent 写入必须在 EDT——"
+                    + "`rememberRunner` 曾由 Database 插件 runner session 回调（非 EDT）直行，与平台保存竞争后把"
+                    + "用户 `.idea/workspace.xml` 的 `mpsql.visualizer.last.runner.id` 值写坏（丢开头引号，"
+                    + "每次启动 JsonDecodingException 且平台不重写该条目）。判定内核扫三个写入口函数体前 1200 字符"
+                    + "是否含 isDispatchThread + invokeLater；headless 下行为测试测不出竞争，形态守卫是唯一可机器化判据。"
+                    + "自证语料=「缺归位的三个入口都被点名」与「带归位的合规形态不误报」两例。",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
@@ -1061,6 +1136,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "log/ReplayGuardLine0ReadTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；attach(:65) 为夹具",
+            ),
+            GuardEntry(
+                "log/ReplayGuardStormVerdictTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；newArmedFilter/stmt/feedStream/feedReplay/settle 均为夹具，无 Boolean 判定函数",
             ),
             GuardEntry(
                 "log/SqlLogAutoSaverPruneGuardTest.kt",
@@ -1224,6 +1304,87 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
                     "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
             ),
+            // ---- T-ExecPlanEdtSlowOp：执行计划链 EDT 慢操作收口守卫（2026-11-01） ----
+            GuardEntry(
+                "convention/ExecTempFileEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("offendersOf", FnKind.VIOLATIONS),
+                    DecisionFn("writeSafeDeliveryOffenders", FnKind.VIOLATIONS),
+                    // UI-002（2026-11-04 真机）：`psi.isValid` 在池线程无读锁硬抛（Read access is
+                    // allowed from inside read-action only）。判定按**括号作用域**判「每处 .isValid 是否
+                    // 落在 ReadAction.compute{…} 内」，防「函数里出现过 ReadAction 但判定裸奔」。
+                    DecisionFn("psiValidityReadLockOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "unprotectedIsValidSites",
+                        FnKind.HELPER,
+                        "单函数体判定内核（private）：逐处 .isValid 校验 ReadAction 括号作用域、"
+                            + "并防空绿（一处都没有＝判定被整体删除）；违规行号按整文件行号报，"
+                            + "是 psiValidityReadLockOffenders 的判定内核；自证经该调用边到达",
+                        via = listOf("psiValidityReadLockOffenders"),
+                    ),
+                    DecisionFn(
+                        "deliveryVerdict",
+                        FnKind.HELPER,
+                        "投递形态判定谓词（返回 DeliveryVerdict，非 Boolean 也不命中命名形状）："
+                            + "按最近投递调用 + 实参区括号配平判 onReady 是否落在 write-safe 投递内，"
+                            + "是 writeSafeDeliveryOffenders 的判定内核；自证经该调用边到达",
+                        via = listOf("writeSafeDeliveryOffenders"),
+                    ),
+                ),
+                "exec 临时文件构建链的 EDT 慢操作守卫：2026-11-01 真机点「执行计划」时 " +
+                    "`createTempPsiFile → ReadAction.compute { PsiManager.findFile }` 跑在 EDT，平台抛 " +
+                    "SEVERE SlowOperations（三路共用入口：执行 SQL/执行计划/回滚快照）。判定内核按大括号" +
+                    "配平取真实函数体，扫五条规则（EDT 入口不得出现 PSI/ReadAction 且必须经异步入口、" +
+                    "慢段只允许被异步入口调用、异步入口须 isDispatchThread+池线程+invokeLater、" +
+                    "慢段须仍含 refresh+PSI 获取、结果回调须 write-safe 投递）。" +
+                    "write-safe 规则来自同日真机回归：首版用 ModalityState.any() 投递，续接链文档写每次" +
+                    "点执行计划都触发 TransactionGuard Write-unsafe（any() 恒 write-unsafe，平台构造期" +
+                    "只把 nonModal 登记为 write-safe）。自证语料三例：「EDT 直做 PSI + 同步调用必被点名且" +
+                    "合规异步形态不误报」「工厂内第二处同步调用点必被抓」「any/省略模态必红、nonModal 与" +
+                    "invokeLaterWriteSafe 放行」。",
+            ),
+            // ---- T-ThreadFix：执行链三类线程契约守卫（2026-11-04 真机 243 沙盒） ----
+            GuardEntry(
+                "convention/TakeoverUpdateThreadGuardTest.kt",
+                listOf(DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix A：控制台数据源下拉接管组的 update 线程契约守卫。真机 SEVERE：" +
+                    "`'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation` + " +
+                    "同链 9 条 SlowOperations（findFile → findDirectory → isUnderIgnored）。根因是本类覆写了 " +
+                    "update/displayTextInToolbar，`ActionClassMetaData.isDefaultUpdate` 为 false → 平台默认落 " +
+                    "EDT，而它委托的原生 ChooseDataSourceAction javap 实证是 BGT。判据两条：必须显式声明 " +
+                    "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
+                    "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
+            ),
+            GuardEntry(
+                "convention/ConsolePsiWarmGuardTest.kt",
+                listOf(
+                    DecisionFn("psiWarmChainOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isDeclarationAt",
+                        FnKind.HELPER,
+                        "调用点/声明点判别谓词（Boolean 形态）：判断某 token 出现处前面是否为 `fun`，" +
+                            "供 psiWarmChainOffenders 只统计真实调用点；自证经该调用边到达",
+                        via = listOf("psiWarmChainOffenders"),
+                    ),
+                ),
+                "T-ThreadFix B：控制台 PSI 预暖线程契约守卫。真机 SEVERE：`prepareAfterEditorResolved:78` 的 " +
+                    "`console.getScriptModel()` 内部 `PsiUtilCore.getPsiFile` 首次实例化 PSI → " +
+                    "`FileManagerImpl.findDirectory` → WorkspaceFileIndex `ensureIsUpToDate`（EDT 慢操作，一次点击 9 条）。" +
+                    "判据：warmConsolePsiThen 必须是「isDispatchThread + executeOnPooledThread + ReadAction/PsiManager + " +
+                    "invokeLater(nonModal)」三段式，且 prepareAfterEditorResolved 的每个调用点都落在其续接 lambda 作用域内。" +
+                    "自证语料=「预暖缺段与续接点裸调必被点名」+「合规预暖形态不误报」。",
+            ),
+            GuardEntry(
+                "convention/ExecWriteSafeDispatchGuardTest.kt",
+                listOf(DecisionFn("writeSafeDispatchOffenders", FnKind.VIOLATIONS)),
+                "T-ThreadFix C：执行入口/方言映射派发的 write-safe 投递守卫。真机 3 条 " +
+                    "`TransactionGuardImpl Write-unsafe context`：执行链入口（submitExplainDirectConsole）用 " +
+                    "ModalityState.any() 投递，链内 reuseSharedConsole 的 document.setText 与 executeOnConsole 的 " +
+                    "writeVfTextViaDocument 全部无写资格；方言预映射从 BGT 用省略模态派发 setMapping，平台内部 " +
+                    "reparseFiles + requestReparsing 两拍写动作同样无写资格。判据：作用域内不得有 any()、每个 " +
+                    "invokeLater 实参区必须含 nonModal、且至少有一处派发（防空绿）。自证语料=「any 与省略模态必被" +
+                    "点名」「无派发必红」「nonModal 不误报」。",
+            ),
             // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
             GuardEntry(
                 "execute/ExecDocPrewarmDisposeGuardTest.kt",
@@ -1251,6 +1412,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "自证语料：`自证_裸调用与跨行全限定调用均被抓`（含真实历史跨行形态）/ " +
                     "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
                     "`自证_注释里的调用不算`。",
+            ),
+            // ---- T-Junit4Migration P2.5：JUnit3 语义守卫（2026-11-05） ----
+            GuardEntry(
+                "convention/Junit3SemanticsGuardTest.kt",
+                listOf(
+                    DecisionFn("junit3Violations", FnKind.VIOLATIONS),
+                    DecisionFn("annotationViolations", FnKind.VIOLATIONS),
+                    DecisionFn("assumeViolations", FnKind.VIOLATIONS),
+                    DecisionFn("namingViolations", FnKind.VIOLATIONS),
+                ),
+                "JUnit3 语义守卫（T-Junit4Migration P2.5）：扫 src/test/kotlin 里继承 JUnit3 基类" +
+                    "（含中转基类，简单类名固定点传播）的类，断言 ① 无 @Test/@Before/@After/@Rule/@RunWith/@Ignore" +
+                    "（JUnit38ClassRunner 只按 test* 方法名收集，注解无效）；② 无 Assume.assume* 调用/import" +
+                    "（AssumptionViolatedException 被记为 failed，P1 反向实验实测 failures=1）；" +
+                    "③ 反引号方法名以 test 开头（否则永不执行，P0 实测 tests= 23→28）。" +
+                    "四条规则各自有合成样本自证（违规必红 + 合规必绿），另有中转基类与字符串字面量两个边界用例。",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(
@@ -1284,6 +1461,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "本元守卫自身：判定内核为纯函数（fnDecls/selfTestFns/decisionShapedDecls/uncoveredNames），" +
                     "灵敏度由 `元守卫灵敏度自证_未自证的判定函数必红_自证与KDoc边界各归其位` 用例钉住",
+            ),
+            GuardEntry(
+                "util/SqlSizeGuardTest.kt",
+                emptyList(),
+                "F-09 交互面超大 SQL 护栏（200K 关装饰 / 1M 关装饰+提示）：判定入口 `SqlSizeGuard.plan` " +
+                    "返回档位对象而非违规点集合，不命中 *Offenders/*Sites/*Hits 命名形状，故 decisionFns 留空；" +
+                    "反向验证＝把 plan() 恒返回 FULL 后 7 例中 3 例恰红（两档阈值 + 耗时读数）。",
             ),
         )
     }

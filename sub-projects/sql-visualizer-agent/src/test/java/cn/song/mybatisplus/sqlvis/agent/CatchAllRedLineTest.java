@@ -53,6 +53,10 @@ public class CatchAllRedLineTest {
         SqlHookTransformer.resetCountersForTest();
         StatementRegistry.clearForTest();
         queue().clear();
+        // T-IbatisPanwei 券 E：attach 路径默认会排 2 轮补挂（5s/20s）。本类用敌对/损坏的
+        // Instrumentation 桩验证红线，遗留的 daemon 线程会在后续用例里继续抛错并改计数——一律关闭，
+        // 补挂行为由 CatchAllMatcherTest 的专用用例覆盖。
+        CaptureBudget.setAttachScheduleForTest(0L, 0L, 1);
         savedDisabled = AgentState.isDisabled();
         AgentState.setDisabled(false);
 

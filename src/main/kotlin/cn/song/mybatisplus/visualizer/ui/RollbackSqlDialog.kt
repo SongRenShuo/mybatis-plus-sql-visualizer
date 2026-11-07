@@ -83,6 +83,9 @@ class RollbackSqlDialog(
     private val warningLabel = JBLabel()
     private val countCheckLabel = JBLabel()
     private val snapshotQueryLabel = JBLabel()
+
+    /** 「执行快照查询」按钮引用（S2-4 券②：Community 置灰态断言用；buildSnapshotBlock 时赋值）。 */
+    private var snapshotRunButton: JButton? = null
     private val pasteArea = JBTextArea(4, 60).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -205,7 +208,17 @@ class RollbackSqlDialog(
     // 底部动作以字段持有——DialogWrapper 无公开 getActions()（javap 实证），粘贴生成后
     // 启用态只能经自身引用刷新；字段初始化先于 init()（createActions 在 init() 内调用）
     private val executeAction = object : DialogWrapperAction(MpSqlVisualizerBundle.message("rollback.action.execute")) {
+        init {
+            // UX Community 执行入口预判置灰（S2-4 券②）：执行回滚送原生控制台执行，无 Database
+            // 插件时构造期即灰置 + tooltip 说明（与 SqlPreviewDialog 执行 SQL 按钮同款），
+            // 不再「点了才报错」。doAction 保留二次守卫（防程序化触发）。
+            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()?.let { hint ->
+                putValue(Action.SHORT_DESCRIPTION, hint)
+            }
+        }
+
         override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+            if (!cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) return
             executeRollback()
         }
     }
@@ -320,9 +333,20 @@ class RollbackSqlDialog(
                 add(
                     JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                         isOpaque = false
-                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
+                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).also { btn -> snapshotRunButton = btn }.apply {
+                            // UX Community 执行入口预判置灰（S2-4 券②）：快照查询走只读旁路对
+                            // 数据源执行，无 Database 插件时构造期灰置 + tooltip（不可用时原
+                            // 「查询说明」tooltip 被置灰说明替换——灰按钮悬停先答「为什么不可点」）
                             toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
-                            addActionListener { runSnapshotQuery() }
+                            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint()?.let { hint ->
+                                isEnabled = false
+                                toolTipText = hint
+                            }
+                            addActionListener {
+                                if (cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) {
+                                    runSnapshotQuery()
+                                }
+                            }
                         })
                         add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
                             addActionListener {
@@ -379,6 +403,13 @@ class RollbackSqlDialog(
         )
         // 新数据回到原始顺序；行号与列宽随内容刷新。
         snapshotSorter.sortKeys = emptyList()
+        // F-13（DBX #317）：三面板（列信息/EXPLAIN 网格/本表）统一排序语义——逐列装
+        // ColumnOrderings 比较（数值串按数值比、空白恒排后）；旧默认字典序只在点列头后才
+        // 生效，故无排序态行为不变。setDataVector 可能换列数，比较器随数据重装。
+        val cellOrder = java.util.Comparator<Any?> { a, b ->
+            cn.song.mybatisplus.visualizer.util.ColumnOrderings.compareCells(a, b)
+        }
+        for (i in 0 until snapshotTableModel.columnCount) snapshotSorter.setComparator(i, cellOrder)
         updateSnapshotRowHeader()
         autoFitSnapshotColumns()
         snapshotSummary.text = MpSqlVisualizerBundle.message(
@@ -633,7 +664,8 @@ class RollbackSqlDialog(
 
     override fun createActions(): Array<Action> {
         val hasStatements = currentResult.statements.isNotEmpty()
-        executeAction.isEnabled = hasStatements
+        // UX Community 预判置灰（S2-4 券②）：启用态 = 有语句 && Database 插件在场
+        executeAction.isEnabled = hasStatements && cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
         copyAction.isEnabled = hasStatements
         return arrayOf(executeAction, copyAction, cancelAction)
     }
@@ -992,7 +1024,8 @@ class RollbackSqlDialog(
         }
         assembleBanner()
         val hasStatements = currentResult.statements.isNotEmpty()
-        executeAction.isEnabled = hasStatements
+        // UX Community 预判置灰（S2-4 券②）：与 createActions 同判据
+        executeAction.isEnabled = hasStatements && cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
         copyAction.isEnabled = hasStatements
     }
 
@@ -1077,6 +1110,9 @@ class RollbackSqlDialog(
     internal fun executeActionForTest(): Action = executeAction
     internal fun copyActionForTest(): Action = copyAction
     internal fun snapshotQueryLabelForTest(): JBLabel = snapshotQueryLabel
+
+    /** 测试访问器：「执行快照查询」按钮（S2-4 券② Community 置灰断言；无快照工作流时为 null）。 */
+    internal fun snapshotRunButtonForTest(): JButton? = snapshotRunButton
 
     companion object {
         /** 尺寸记忆 key。 */

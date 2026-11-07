@@ -605,6 +605,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoCapture"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoOpen"), "", "settings.section.sqlLog", l))
+            // F-03：工具窗随项目启动开关（新开关必须登记——SettingsPanelSearchableGuardTest 断言一）
+            fields.add(SearchableField(b.message("settings.log.autoShowToolWindow"), b.message("settings.log.autoShowToolWindow.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestamp"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timestampFormat"), b.message("settings.log.timestampFormat.tip"), "settings.section.sqlLog", l))
@@ -615,6 +617,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.maxCount"), b.message("settings.log.maxCount.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.timePrefix"), b.message("settings.log.timePrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.slowQueryThreshold"), b.message("settings.log.slowQueryThreshold.tip"), "settings.section.sqlLog", l))
+            // T-LogMethodName：新开关必须登记（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
+            fields.add(SearchableField(b.message("settings.log.showMethod"), b.message("settings.log.showMethod.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.enabled"), b.message("settings.log.hibernate.enabled.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.sqlPrefix"), b.message("settings.log.hibernate.sqlPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.hibernate.paramPrefix"), b.message("settings.log.hibernate.paramPrefix.tip"), "settings.section.sqlLog", l))
@@ -634,6 +638,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
             // T-MagpieGems W2：豁免白名单文本域（行标签同键）；「白名单/豁免」可搜索命中
             fields.add(SearchableField(b.message("settings.display.mask.allowList"), b.message("settings.display.mask.allowList.tip"), "settings.section.sqlLog", l))
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（「BOM/CSV/导出」可搜索命中）
+            fields.add(SearchableField(b.message("settings.csv.export.noBom"), b.message("settings.csv.export.noBom.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 
@@ -647,6 +653,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
             fields.add(SearchableField(b.message("settings.xmlInlineSql"), b.message("settings.xmlInlineSql.tip"), "settings.section.ui", u))
+            // T-PagesHql：maintainPage `<datasource>` 源语言档（界面节）
+            fields.add(SearchableField(b.message("settings.pagesSource"), b.message("settings.pagesSource.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))

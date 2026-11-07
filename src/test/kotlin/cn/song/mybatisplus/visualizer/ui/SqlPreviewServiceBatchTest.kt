@@ -563,4 +563,201 @@ class SqlPreviewServiceBatchTest : BasePlatformTestCase() {
             global.loadState(savedGlobal)
         }
     }
+
+    // ==================================================================
+    // T-WriteFamily（R4）：空 Wrapper 写族（delete(null) / update(entity, null) / remove(null)）
+    // ==================================================================
+
+    fun testDeleteNullWithoutLogicDeleteRendersDeleteWithoutWhereAndWarning() {
+        // R4：`BaseMapper.delete(Wrapper)` 实参为 null → 无 WHERE 的 `DELETE FROM 表`（对齐 MP
+        // SqlMethod.DELETE：wrapper 为 null 时 sqlWhereEntityWrapper 不产生 WHERE）+ 全表删除警示
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void remove() {
+                    deviceInfoMapper.delete(null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("delete(null) 应产出预览结果", result)
+        assertEquals("DELETE FROM device_info_entity", result!!.sql)
+        assertTrue("null Wrapper 不得生成 WHERE：${result.sql}", !result.sql.contains("WHERE"))
+        assertEquals(
+            "无 WHERE 删除应带全表删除警示",
+            "⚠ 无 WHERE 条件，将删除全表数据！",
+            result.warning,
+        )
+        assertTrue("无参数占位", result.unresolvedParams.isEmpty())
+    }
+
+    fun testDeleteNullWithTableLogicRendersSoftDelete() {
+        // R4：实体含 @TableLogic → 删除转软删除 `UPDATE 表 SET deleted = 1 WHERE deleted = 0`
+        // （对齐 MP SqlMethod.LOGIC_DELETE：逻辑删除片段无条件追加 TableInfo.getLogicDeleteSql）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void remove() {
+                    deviceInfoMapper.delete(null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("delete(null) 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE device_info_entity
+            SET deleted = 1
+            WHERE deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals("软删除仍属全表写操作，应带警示", "⚠ 无 WHERE 条件，将删除全表数据！", result.warning)
+    }
+
+    fun testUpdateEntityNullWrapperRendersUpdateWithoutWhere() {
+        // R4：`BaseMapper.update(T, Wrapper)` 第二参为 null → SET 走实体列（与 updateById 同口径：
+        // 排除主键/@Version），**不得生成任何 WHERE**（BatchModel 的 UPDATE 渲染把主键硬编码成 WHERE，
+        // 故本分支直接拼 SQL、batchModel=null）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void update(DeviceInfoEntity entity) {
+                    deviceInfoMapper.update(entity, null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("update(entity, null) 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE device_info_entity
+            SET name = ?, dic_status = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertTrue("null Wrapper 更新不得生成 WHERE：${result.sql}", !result.sql.contains("WHERE"))
+        assertEquals(
+            "实体列参数行（与 updateById 同口径）",
+            listOf("entity.name", "entity.dic_status"),
+            result.unresolvedParams,
+        )
+        assertEquals(
+            "无 WHERE 更新应带全表更新警示",
+            "⚠ 无 WHERE 条件，将更新全表数据！",
+            result.warning,
+        )
+        assertNull("无 WHERE 分支不提供列勾选模型", result.batchModel)
+    }
+
+    fun testRemoveNullRendersDeleteWithoutWhereAndWarning() {
+        // R4（D-4）：`IService.remove(Wrapper)` 实参为 null → 与 delete(null) 同模板（无 WHERE 删除 + 全表警示）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void remove() {
+                    deviceInfoService.remove(null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                interface IService<T> {}
+
+                interface DeviceInfoService extends IService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("remove(null) 应产出预览结果", result)
+        assertEquals("DELETE FROM device_info_entity", result!!.sql)
+        assertTrue("null Wrapper 不得生成 WHERE：${result.sql}", !result.sql.contains("WHERE"))
+        assertEquals("remove(null) 应带全表删除警示", "⚠ 无 WHERE 条件，将删除全表数据！", result.warning)
+    }
+
+    fun testDeleteWrapperVariableStillRendersWrapperConditions() {
+        // R4 回归：非 null Wrapper（变量形态）不走空 Wrapper 分支——Wrapper 链路径照旧出 DELETE + WHERE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void remove() {
+                    com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DeviceInfoEntity> w =
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    deviceInfoMapper.delete(w);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val variableId = PsiTreeUtil.findChildOfType(myFixture.file, PsiLocalVariable::class.java)!!.nameIdentifier!!
+        val result = newService().preview(variableId)
+        assertNotNull("delete(wrapper) 应仍走 Wrapper 链路径并产出预览", result)
+        assertTrue("应生成 DELETE：${result!!.sql}", result.sql.startsWith("DELETE FROM"))
+        assertTrue("Wrapper 条件应保留 WHERE：${result.sql}", result.sql.contains("WHERE"))
+        assertNull("有 Wrapper 条件时不带全表警示", result.warning)
+    }
 }

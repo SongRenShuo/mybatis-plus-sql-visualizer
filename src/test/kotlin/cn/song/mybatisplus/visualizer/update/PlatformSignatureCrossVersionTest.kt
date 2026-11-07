@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.update
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -53,6 +54,43 @@ class PlatformSignatureCrossVersionTest {
         val emptyLoader = object : ClassLoader(null) {}
         assertEquals("平台类缺失必须拒绝", 1, PlatformSignatureChecker.checkAttachTargetApis(emptyLoader))
     }
+
+    /**
+     * T-DynUpdate263：卸载预检能力族判定——旧入口优先（243/262 与改动前同路径），
+     * 263 才落到 validate；同名不同返回类型（243 的 `checkCanUnloadWithoutRestart` 返回 String、
+     * 262/263 返回 boolean）必须分开绑。三族全缺必须判缺失，证明本项真在核签名而不是空绿。
+     */
+    @Test
+    fun unloadGateSignatureIsExact() {
+        assertEquals("243/262 有旧入口时必须命中 legacy", "legacy",
+            PlatformSignatureChecker.resolveUnloadGateFamily(GateLegacy::class.java, GateBase::class.java))
+        assertEquals("263 形态（旧入口已删）应命中 validate", "validate",
+            PlatformSignatureChecker.resolveUnloadGateFamily(Gate263::class.java, GateBase::class.java))
+        assertEquals("243 的 check 返回 String，应归 validate 语义", "validate(243-name)",
+            PlatformSignatureChecker.resolveUnloadGateFamily(Gate243Check::class.java, GateBase::class.java))
+        assertEquals("check 形态应命中 check", "check",
+            PlatformSignatureChecker.resolveUnloadGateFamily(GateCheckOnly::class.java, GateBase::class.java))
+        assertNull("三族全缺必须返回 null",
+            PlatformSignatureChecker.resolveUnloadGateFamily(GateEmpty::class.java, GateBase::class.java))
+        assertEquals("三族全缺必须判缺失", 1,
+            PlatformSignatureChecker.checkUnloadGateApis(GateEmpty::class.java, GateBase::class.java))
+    }
+
+    open class GateBase
+    class Gate263 {
+        fun validateCanUnloadWithoutRestart(p: GateBase): String? = null
+        fun checkCanUnloadWithoutRestart(p: GateBase): Boolean = true
+    }
+    class Gate243Check {
+        fun checkCanUnloadWithoutRestart(p: GateBase): String? = null
+    }
+    class GateCheckOnly {
+        fun checkCanUnloadWithoutRestart(p: GateBase): Boolean = true
+    }
+    class GateLegacy {
+        fun allowLoadUnloadWithoutRestart(p: GateBase): Boolean = true
+    }
+    class GateEmpty
 
     open class CommandLinePublic { fun getCommandLine(): String = "unused" }
     class CommandLineInherited : CommandLinePublic()
@@ -180,6 +218,10 @@ class PlatformSignatureCrossVersionTest {
             }
             assertTrue("IU-$family 必须实际执行UI-007签名登记，不能仅凭RESULT OK空绿：\n${result.output}",
                 result.output.lineSequence().any { it.startsWith("OK   BaseProcessHandler.getCommandLine[] -> ") })
+            // T-DynUpdate263：每个发行版都必须解析出卸载预检能力族（263 移除了旧入口，
+            // 护栏若仍绑旧名字会在这里红，而不是等用户升级后才发现）
+            assertTrue("IU-$family 必须解析出卸载预检能力族（T-DynUpdate263）：\n${result.output}",
+                result.output.lineSequence().any { it.startsWith("OK   unload gate family=") })
             for (signature in listOf(
                 "EditorEx.setContextMenuGroupId[class java.lang.String]",
                 "EditorEx.getContextMenuGroupId[]",

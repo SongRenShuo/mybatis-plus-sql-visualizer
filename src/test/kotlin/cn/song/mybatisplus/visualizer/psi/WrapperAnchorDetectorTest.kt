@@ -742,4 +742,174 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
         )
     }
+
+    // ==================================================================
+    // T-WriteFamily（R4）：空 Wrapper 写族锚点 + 去重不变量（§4.5）
+    //
+    // 全部按 collectedAnchors() **整文件锚点集合**断言（不是逐元素）：集合恰好等于预期
+    // 才等于「无多余图标」——同一语句多挂一枚时集合会多出元素而转红。
+    // ==================================================================
+
+    /** R4 夹具骨架：MP 写族 receiver（`DeviceInfoMapper extends BaseMapper<Entity>`）+ 实体。 */
+    private fun configureWriteFamily(body: String, params: String = "") {
+        configure(
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void op($params) {
+                    $body
+                }
+
+                static class DeviceInfoEntity { private Long id; private String name; }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """,
+        )
+    }
+
+    fun testDeleteNullAnchorsOnDeleteIdentifier() {
+        // R4 不变量 `mapper.delete(null)` → 锚点=delete identifier（本券新增）
+        configureWriteFamily("deviceInfoMapper.delete(null);")
+        assertEquals(
+            "delete(null) 只应在 delete 方法名上有一枚锚点",
+            setOf("delete"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testDeleteInlineWrapperAnchorsOnlyNewKeyword() {
+        // R4 不变量 `mapper.delete(new LambdaQueryWrapper<>()...)` → 锚点=new（场景 A），delete 不得再标
+        configureWriteFamily(
+            "deviceInfoMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DeviceInfoEntity>()" +
+                ".eq(DeviceInfoEntity::getId, 1L));",
+        )
+        assertEquals(
+            "delete(内联 Wrapper) 只应在 new 上有一枚锚点（delete 让位给链锚点）",
+            setOf("new"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testUpdateNullWrapperAnchorsOnUpdateIdentifier() {
+        // R4 不变量 `mapper.update(entity, null)` → 锚点=update identifier（本券新增）
+        configureWriteFamily("deviceInfoMapper.update(entity, null);", "DeviceInfoEntity entity")
+        assertEquals(
+            "update(entity, null) 只应在 update 方法名上有一枚锚点",
+            setOf("update"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testUpdateWrapperVariableAnchorsOnlyVariable() {
+        // R4 不变量 `mapper.update(entity, wrapperVar)` → 锚点=变量声明行，update 不得再标
+        configureWriteFamily(
+            "deviceInfoMapper.update(entity, w);",
+            "DeviceInfoEntity entity, com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DeviceInfoEntity> w",
+        )
+        assertEquals(
+            "update(entity, wrapperVar) 只应在 Wrapper 变量上有锚点（update 让位）",
+            setOf("w"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testServiceUpdateSingleArgNotAnchor() {
+        // R4 不变量 `service.update(null)`（单参，SQL 本身非法 `UPDATE t SET` 无赋值）→ 零锚点
+        configure(
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void op() {
+                    deviceInfoService.update(null);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+
+                interface IService<T> {}
+
+                interface DeviceInfoService extends IService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "单参 update(null) 不应产生任何锚点",
+            emptySet<String>(),
+            collectedAnchors(),
+        )
+    }
+
+    fun testServiceRemoveNullAnchorsOnRemoveIdentifier() {
+        // R4.5 不变量：`service.remove(null)`（IService.remove(Wrapper)，D-4 纳入）→ 锚点=remove identifier。
+        // remove 不是 Wrapper 工厂名，走的是场景 D-0 → 场景 D 之前的判定路径。
+        configure(
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void op() {
+                    deviceInfoService.remove(null);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+
+                interface IService<T> {}
+
+                interface DeviceInfoService extends IService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "service.remove(null) 只应在 remove 方法名上有一枚锚点",
+            setOf("remove"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testUpdateCastNullWrapperAnchorsOnUpdateIdentifier() {
+        // R4 形态门：`update(entity, (Wrapper<X>) null)` 的强转包裹（解一层 PsiTypeCastExpression）仍识别为空 Wrapper
+        configure(
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void op(DeviceInfoEntity entity) {
+                    deviceInfoMapper.update(entity,
+                        (com.baomidou.mybatisplus.core.conditions.Wrapper<DeviceInfoEntity>) null);
+                }
+
+                static class DeviceInfoEntity { private Long id; private String name; }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "强转 null 的 update 也应只锚 update 方法名",
+            setOf("update"),
+            collectedAnchors(),
+        )
+    }
+
+    fun testWrapperArgumentYieldPreventsSecondIconOnSelectList() {
+        // R4.5 不变量第 3 行（让位逻辑复用）：`mapper.selectList(wrapperVar)` 的语句承载在实参链上，
+        // 锚点只由场景 B（变量声明行）承载——批量族让位，同一语句不得出第二枚图标。
+        // 该用例同时是「去掉 hasWrapperArgument 让位」反向验证的唯一红点（delete/update 的空 Wrapper
+        // 形态门已结构性排除 Wrapper 实参，让位在其上属第二道防线）。
+        configureWriteFamily(
+            "deviceInfoMapper.selectList(w);",
+            "com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DeviceInfoEntity> w",
+        )
+        assertEquals(
+            "selectList(wrapperVar) 只应在 Wrapper 变量上有锚点（批量族让位）",
+            setOf("w"),
+            collectedAnchors(),
+        )
+    }
 }

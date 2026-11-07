@@ -365,6 +365,52 @@ class ExplainIndexAdvisorTest {
         assertTrue(ExplainIndexAdvisor.ruleInventory().any { it.rule == "TABLE_FULL_SCAN" })
     }
 
+    // ---------- 2026-11-01 真机形态：单列 × 多行（一行一个 cell） ----------
+
+    /**
+     * 真机原文照录（OB CE 4.3.5.6，`EXPLAIN SELECT * FROM t_order`，IDE 控制台单列 `Query Plan`）：
+     * 表头与数据行各占一行、中间有空行、尾部有 `Outputs & filters` 段。首版逐 cell 扫单行文本，
+     * 表头单独命中后取不到数据行 → 建议永不触发（真机面板 toast 同时暴露了同一根因）。
+     */
+    private val realObLines = listOf(
+        "",
+        "|ID|OPERATOR |NAME |EST.ROWS|EST.TIME(us)|",
+        "",
+        "|0 |TABLE FULL SCAN|t_order|500000 |3 |",
+        "",
+        "Outputs & filters:",
+        "  ------------------------------------",
+        "  output([t_order.id], [t_order.order_no], [t_order.amount])",
+    )
+
+    @Test
+    fun test真机形态_单列多行_OB全表扫提示() {
+        val rows = realObLines.map { listOf(it) }
+        val hints = ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), rows)
+        assertEquals(1, hints.size)
+        assertEquals("TABLE_FULL_SCAN", hints[0].rule)
+        assertEquals("t_order", hints[0].target)
+        assertTrue("建议文案应含估算行数", hints[0].advice.contains("500000"))
+    }
+
+    @Test
+    fun test真机形态_单列多行_小表不提示() {
+        val rows = realObLines.map { it.replace("500000 ", "3 ") }.map { listOf(it) }
+        assertTrue(ExplainIndexAdvisor.advise("OceanBase", listOf("Query Plan"), rows).isEmpty())
+    }
+
+    @Test
+    fun test真机形态_单列多行_PG规则不受影响() {
+        // 展平路径只在 OB 表头命中时接管；PG 文本树（多行 cell）仍走逐 cell 正则
+        val rows = listOf(
+            listOf("Seq Scan on big_table  (cost=0.00..35000.00 rows=300000 width=64)"),
+            listOf("  Filter: (status = 1)"),
+        )
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), rows)
+        assertEquals(1, hints.size)
+        assertEquals("SEQ_SCAN", hints[0].rule)
+    }
+
     @Test
     fun test无命中渲染零差异() {
         assertEquals("", ExplainIndexAdvisor.formatHints(emptyList()))

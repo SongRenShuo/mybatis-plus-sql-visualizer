@@ -29,6 +29,10 @@ import com.intellij.util.ui.RestartDialogImpl
 class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // F-11：上游 MyBatis 版本监听（独立于插件自更新开关——它看的是项目依赖面而不是本插件
+        // 版本；自身有每项目一次守卫 + 无变化静默，见 UpstreamVersionMonitor）。放在自动检查
+        // 开关判定之前，保证 autoCheckUpdate 关着时版本变化仍可见。
+        runCatching { UpstreamVersionMonitor.checkOnce(project) }
         val settings = PluginSettings.getInstance()
         if (!shouldStartupCheck(settings.state.autoCheckUpdate, alreadyChecked)) return
         alreadyChecked = true
@@ -117,6 +121,13 @@ class StartupUpdateCheck : ProjectActivity {
                             showInstalledLive(project, result.version)
                         is PluginUpdateRunner.InstallResult.InstalledRestartRequired -> showInstalled(project)
                         is PluginUpdateRunner.InstallResult.Failed -> showInstallFailed(project, result.message)
+                        // T-DevUpdateChannel：sealed 新增 NotPublished（404/410）——启动通道同样不许甩异常原文。
+                        // 沿用 WARNING 通知，正文重写友好文案；尾冒号是设置页链接行的引导符，通知里没有
+                        // 后续链接行，去掉。
+                        is PluginUpdateRunner.InstallResult.NotPublished -> showInstallFailed(
+                            project,
+                            MpSqlVisualizerBundle.message("settings.update.notPublished").trimEnd('：', ':'),
+                        )
                     }
                 }
             }

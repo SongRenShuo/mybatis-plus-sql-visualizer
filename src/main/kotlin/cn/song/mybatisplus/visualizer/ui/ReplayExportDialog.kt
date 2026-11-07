@@ -40,6 +40,11 @@ class ReplayExportDialog(
         init()
     }
 
+    /** 程序化关闭（同 [SqlPreviewDialog.doDispose] / [RollbackSqlDialog.doDispose] 惯例；测试 tearDown 用）。 */
+    fun doDispose() {
+        dispose()
+    }
+
     /** 生效的事务包裹意愿（禁用态恒 false，双保险）。 */
     internal val wrapTransaction: Boolean
         get() = transactionBegin != null && wrapCheck.isSelected

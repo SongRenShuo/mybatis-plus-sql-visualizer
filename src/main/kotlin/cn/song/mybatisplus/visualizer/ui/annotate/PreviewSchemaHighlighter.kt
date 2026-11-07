@@ -185,6 +185,12 @@ internal object PreviewSchemaHighlighter {
         private fun recompute(token: Int) {
             val document = editor.document
             val text = document.text
+            // F-09：超大 SQL 护栏——一次 SQL 校验 + 逐 mark 建 highlighter 的成本随文本长度放大；
+            // 超限走「无标注」路径（与无目标同形态），正文与执行链不受影响。
+            if (!cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(text).decorationsEnabled) {
+                clear(token)
+                return
+            }
             val project = editor.project
             if (project == null || project.isDisposed || editor.isDisposed) {
                 clear(token)

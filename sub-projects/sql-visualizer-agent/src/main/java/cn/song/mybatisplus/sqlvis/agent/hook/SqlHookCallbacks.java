@@ -153,17 +153,18 @@ public final class SqlHookCallbacks {
         if (scope == null) {
             // 防御：token 有效但 scope 已不在栈上（异常出口重复等）。账本无可收口，但入过闸
             // 就必须出闸（T-CaptureCatchAll 券 07），防线程深度永久抬高误杀后续单帧。
-            NestGate.exit();
+            NestGate.exit(token);
             return;
         }
         scope.failed = failure != null;
         try {
             // T-CaptureCatchAll 券 07（master 并入）：出闸排在一切早退之前——本帧只要入过栈
-            // （token!=0 即 begin 成功过）就必须出栈，否则一次「取不到 SQL 的盲区语句」就会把
+            //（token!=0 即 begin 成功过）就必须出栈，否则一次「取不到 SQL 的盲区语句」就会把
             // 线程深度永久抬高，后续真实语句全被误判为外层而抑制。判定 false = 本帧外层已由
             // 内层产事件（Hikari/MyBatis 包装层形态）——抑制上报，但 scope 照常在 finally close
-            // （账本/请求关联收口不受抑制影响）。
-            if (!NestGate.exit()) {
+            //（账本/请求关联收口不受抑制影响）。exit 带 token 同帧去重（T-OracleWrapperRegistry：
+            // 一次失败调用命中两条 ATHROW 出口钩子，同帧出栈两次会多减深度）。
+            if (!NestGate.exit(token)) {
                 return;
             }
             String sql = sqlParam;
@@ -192,7 +193,13 @@ public final class SqlHookCallbacks {
             if (url == null) {
                 url = resolveUrl(stmt);
             }
-            WovenEvents.emit(stmt, op, sql, result, failure, scope.startNanos, url, scope);
+            // T-OracleWrapperRegistry：只有真的产出事件才让 NestGate 抑制外层——内层登记盲区
+            //（Oracle 包装器语句在执行内层物理语句时才查表）不得连带吞掉外层能出的那条。
+            //（车道5 合并注：emit 保留 insight 的 8 参形态带 ExecutionScope；返回值以
+            // offerTracked 对账为准——队列拒收同样未真产出，不得抑制外层。）
+            if (WovenEvents.emit(stmt, op, sql, result, failure, scope.startNanos, url, scope)) {
+                NestGate.markEmitted();
+            }
         } catch (Throwable t) {
             cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureFailed();
         } finally {
@@ -260,13 +267,20 @@ public final class SqlHookCallbacks {
         }
     }
 
-    /** prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。 */
+    /**
+     * prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。
+     *
+     * <p>T-OracleWrapperRegistry：走 {@link StatementRegistry#registerWithDelegates}——Oracle 返回的是
+     * 包装器（{@code OraclePreparedStatementWrapper}），而 {@code executeQuery()} 的织入点在包内物理语句上，
+     * 只登记包装器会让「登记对象」与「执行对象」错位（真机：PS 全丢、只剩 plain Statement 的校验 SQL）。
+     * 无内层可解包时行为与 {@code register} 完全一致。
+     */
     public static void onStatementPrepare(Object ps, String sql, Object connection) {
         try {
             if (ps == null || sql == null || sql.isEmpty()) {
                 return;
             }
-            StatementRegistry.register(ps, sql, UrlResolver.resolve(connection));
+            StatementRegistry.registerWithDelegates(ps, sql, UrlResolver.resolve(connection));
         } catch (Throwable t) {
             // 采集红线：自吞
         }

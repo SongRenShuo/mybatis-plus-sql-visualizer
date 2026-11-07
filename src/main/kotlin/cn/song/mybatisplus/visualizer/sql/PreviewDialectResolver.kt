@@ -21,6 +21,18 @@ import com.intellij.openapi.project.Project
  */
 internal object PreviewDialectResolver {
 
+    /**
+     * 角标头段显示名 → 注册方言名（只登记**显示名与注册名不同**的已知同义头，键小写）。
+     *
+     * 角标由 [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects] 产出，是事实展示名；
+     * 渲染方言必须是 [DialectRegistry] 命名空间里的名字。两者不同名的产品在这里显式桥接——
+     * 未登记的头仍走 [knownDialect]，未知→null（不猜近似方言）。
+     */
+    private val BADGE_HEAD_ALIASES: Map<String, String> = mapOf(
+        // T-IbatisPanwei（券 F，D-1）：磐维（Oracle 兼容模式）角标保留产品名，方言按 Oracle 渲染。
+        "panwei（磐维）" to "Oracle",
+    )
+
     /** 归一化到注册方言名；未知/空 → null（绝不回落到 MySQL）。 */
     fun knownDialect(name: String?): String? {
         val trimmed = name?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -32,10 +44,12 @@ internal object PreviewDialectResolver {
      *
      * 兜底用途：旧条目没有 pd 载荷里的 `dl` 键，但角标随 `-- … | db: …` 头持久化过。
      * 角标里的显示名与注册名在 MySQL/PostgreSQL/Oracle/SQL Server/H2/SQLite/MariaDB/DM/KingBase/
-     * OceanBase/openGauss 上同名；`HSQL`/`GBASE` 无注册方言 → null（不猜近似方言）。
+     * OceanBase/openGauss 上同名；显示名与注册名不同名的已知产品走 [BADGE_HEAD_ALIASES]
+     * （如 `Panwei（磐维）` → Oracle）；`HSQL`/`GBASE` 等无注册方言 → null（不猜近似方言）。
      */
     fun dialectFromBadge(badge: String?): String? {
         val head = badge?.substringBefore('·')?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        BADGE_HEAD_ALIASES[head.lowercase()]?.let { alias -> return knownDialect(alias) }
         return knownDialect(head)
     }
 

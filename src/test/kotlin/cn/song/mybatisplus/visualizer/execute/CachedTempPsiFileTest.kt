@@ -7,7 +7,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Test
 import java.lang.reflect.Proxy
 
 /**
@@ -50,6 +49,8 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     ) { proxy, method, args ->
         when (method.name) {
             "getProject" -> owner
+            // T-ExecPsiInvalid：缓存可用性现在同时看 PSI 有效性，桩必须能应答 isValid（否则拆箱 NPE）
+            "isValid" -> true
             "equals" -> proxy === args?.get(0)
             "hashCode" -> System.identityHashCode(proxy)
             "toString" -> "PsiFileProxy(${owner.name})"
@@ -57,13 +58,41 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
         }
     } as PsiFile
 
+    /** 死 PSI 桩（isValid=false）：钉「缓存槽里躺着失效 PSI 时必须弃缓存重扫」。 */
+    private fun deadPsi(owner: Project): PsiFile = Proxy.newProxyInstance(
+        javaClass.classLoader, arrayOf(PsiFile::class.java),
+    ) { proxy, method, args ->
+        when (method.name) {
+            "getProject" -> owner
+            "isValid" -> false
+            "equals" -> proxy === args?.get(0)
+            "hashCode" -> System.identityHashCode(proxy)
+            "toString" -> "DeadPsiProxy(${owner.name})"
+            else -> null
+        }
+    } as PsiFile
+
+    /**
+     * T-ExecPsiInvalid（2026-11-01 门禁实证）：槽里是**失效 PSI** 时不得命中。
+     *
+     * 缺陷形态：`vf.isValid` 只反映文件还在不在；内容一变（doc 落盘 / 防抖自动保存 / 其他写方
+     * 覆盖 mpsql-exec.sql）平台就丢掉旧 PSI，而 vf 依旧有效——此时命中缓存会把死 PSI 递进
+     * Runner 枚举，读 `psi.text` 硬抛 `PsiInvalidElementAccessException`。
+     */
+    fun testInvalidPsiRejectedAsCacheMiss() {
+        val (main, vf) = mainProjectAndVf()
+        val gate = Disposer.newDisposable()
+        DataSourceSelector.markCachedTempPsiFile(main, vf, deadPsi(main), gate)
+        assertNull("失效 PSI 必须判为未命中（否则续接链拿到死 PSI 必崩）", DataSourceSelector.consumeCachedTempPsiFile(main))
+        assertNull("弃缓存后槽应清空，避免下次再撞", DataSourceSelector.consumeCachedTempPsiFile(main))
+    }
+
     override fun tearDown() {
         DataSourceSelector.clearCachedTempPsiFileForTest()
         super.tearDown()
     }
 
     /** disposable 触发即清槽——项目关闭后不再残留 vf+psi 强引用。 */
-    @Test
     fun testDisposableFiredClearsSlot() {
         val (main, vf) = mainProjectAndVf()
         val gate = Disposer.newDisposable()
@@ -75,7 +104,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     }
 
     /** 钩子是一次性的：触发后同项目再次写入应重新挂上（hookedProjects 成员随触发移除）。 */
-    @Test
     fun testRehookAfterFire() {
         val (main, vf) = mainProjectAndVf()
         val gate1 = Disposer.newDisposable()
@@ -90,7 +118,6 @@ class CachedTempPsiFileTest : BasePlatformTestCase() {
     }
 
     /** 别项目的缓存不因本项目钩子误清——槽归属比对按 psi.project 身份。 */
-    @Test
     fun testOtherProjectCacheNotCleared() {
         val (main, vf) = mainProjectAndVf()
         val gate = Disposer.newDisposable()

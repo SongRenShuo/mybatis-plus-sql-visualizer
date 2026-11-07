@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.sqlvis.agent;
 
+import cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks;
 import cn.song.mybatisplus.sqlvis.agent.hook.StatementRegistry;
 import cn.song.mybatisplus.sqlvis.agent.hook.WeaveGate;
 import cn.song.mybatisplus.sqlvis.agent.model.SqlEvent;
@@ -51,7 +52,10 @@ public class StatementWeaveEndToEndTest {
         AgentState.setDisabled(false);
         dir = Files.createTempDirectory("sqlvis-stmtweave-").toFile();
         writeWoven("VendorStmt", STATEMENT_FACE);
+        writeWoven("VendorStmtDoubleExit", STATEMENT_FACE);
         writeWoven("VendorPs", PS_FACE);
+        // VendorPsWrapper **刻意不织入**：Oracle 的包装器类不在 WeaveSpecs 名单里（驱动私有实现），
+        // 现场只有内层物理语句带钩子——这个夹具必须保持同构，否则「外层包装器兜底」会掩盖登记断链
         writeWoven("VendorConn", PREPARE_FACE);
         loader = childFirstLoader();
     }
@@ -156,6 +160,25 @@ public class StatementWeaveEndToEndTest {
                 "INSERT INTO fresh VALUES (1)", event.sql);
     }
 
+    /**
+     * 失败语句的双 ATHROW 出口不得重复上报：try 内抛出的 athrow 与处理器重抛的 athrow 都带出口钩子，
+     * 同一帧因此被访问两次。真机形态（Oracle Free 23 + ojdbc11）：一条失败 DDL 产出 3 条事件
+     * （内层两次 + 外层一次）——改前必红。
+     */
+    @Test
+    public void 异常路径双ATHROW出口_只报一条() throws Exception {
+        final Object stmt = newInstance("VendorStmtDoubleExit");
+        try {
+            invokeInt(stmt, "executeUpdate", "UPDATE dbl SET x=1");
+        } catch (java.lang.reflect.InvocationTargetException expected) {
+            // 织入出口原样重抛：此处只断言没有 Normal 返回
+        }
+        final SqlEvent event = queue().poll();
+        assertNotNull("异常路径必须产出事件", event);
+        assertEquals("UPDATE dbl SET x=1", event.sql);
+        assertNull("同一帧的第二条 ATHROW 出口不得再产一条（真机为 3 条重复）", queue().poll());
+    }
+
     // ---------- prepare 面 + PS 面：登记表形态 ----------
 
     @Test
@@ -169,6 +192,30 @@ public class StatementWeaveEndToEndTest {
         assertEquals("SELECT 1", event.sql);
         assertEquals("URL 应取 prepare 时连接的 getURL()", "jdbc:fakevendor://db1", event.url);
         assertEquals("executeUpdate 无参形态影响行数取返回值", Long.valueOf(3L), event.updateCount);
+    }
+
+    /**
+     * 包装器形态端到端（T-OracleWrapperRegistry）：Oracle 对外句柄是包装器
+     * （{@code OraclePreparedStatementWrapper}），prepare 面登记到的是它，而 execute 钩子落在
+     * 包内物理语句上。此处复刻该形态：只把包装器交给 prepare 面，执行仍在内层发生——
+     * 事件必须产出、SQL 与参数都要取到，且不得双报（NestGate 只在真产出后抑制外层）。
+     *
+     * <p>改前形态（只登记包装器 + NestGate 进入即置位）：内层盲区把外层一起吞掉 → 零事件。
+     */
+    @Test
+    public void 包装器形态_prepare登记解一层_执行在内层时仍取到SQL与参数() throws Exception {
+        final Object wrapper = newInstance("VendorPsWrapper");
+        SqlHookCallbacks.onStatementPrepare(wrapper, "SELECT name FROM t WHERE id = ?", null);
+        wrapper.getClass().getMethod("setString", int.class, String.class).invoke(wrapper, 1, "abc");
+        wrapper.getClass().getMethod("executeQuery").invoke(wrapper);
+
+        final SqlEvent event = queue().poll();
+        assertNotNull("包装器语句必须产出事件（否则 Oracle 只剩 plain Statement 能看见）", event);
+        assertEquals("SELECT name FROM t WHERE id = ?", event.sql);
+        assertNotNull("参数槽在内层物理语句上，必须随登记一起挂上", event.params);
+        assertEquals(1, event.params.size());
+        assertEquals("abc", event.params.get(0)[1]);
+        assertNull("嵌套链不得双报", queue().poll());
     }
 
     @Test

@@ -27,4 +27,18 @@ object DbTypeQuoteHint {
         // 数值族 → false（原样），其余（文本/时间等）→ true（加引号）
         return !NUMERIC_MARKERS.any { base.contains(it) }
     }
+
+    /** 日期/时间族类型名关键词（T-DateLiteralBackfill；覆盖 date/datetime/timestamp/time）。 */
+    private val TEMPORAL_MARKERS = listOf("date", "time")
+
+    /**
+     * 是否日期/时间族（T-DateLiteralBackfill）：DB 侧自省只有 SQL 类型名，命中
+     * `date` / `datetime` / `timestamp` / `time` 即视为可产 ANSI 类型字面量（`time` 的值形态
+     * 不含日期，[cn.song.mybatisplus.visualizer.sql.SqlDateLiteral] 会因形态不匹配回落引号）。
+     */
+    fun isTemporal(dbTypeName: String?): Boolean {
+        val base = dbTypeName?.lowercase()?.substringBefore('(')?.trim()
+        if (base.isNullOrEmpty()) return false
+        return TEMPORAL_MARKERS.any { base.contains(it) }
+    }
 }

@@ -30,6 +30,9 @@ import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
+import cn.song.mybatisplus.visualizer.sql.SlotValue
+import cn.song.mybatisplus.visualizer.sql.SlotWarning
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -416,6 +419,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var previewDialectMappedLanguageId: String? = null
     /** O-145 W1/W6：面板只保留不可变模块键，不持有宿主 PSI 或 JDBC URL。 */
     internal var sourceModuleKey: String? = null
+    /**
+     * UI-004：预览来源文件的 VFS 句柄（非 PSI、非凭据）。
+     *
+     * 刷新按钮要按「与预览生成同一份证据」重算方言——`IdeaSourceDialectProbe` 需要源文件才能读到
+     * IDEA 的 SQL 方言映射（用户改方言后不会发任何事件）。与 [previewDialectMappedVf] 同属
+     * VFS 级引用；不持有 PSI，避免编辑后失效对象。
+     */
+    internal var sourceVirtualFile: com.intellij.openapi.vfs.VirtualFile? = null
+    /**
+     * UI-004：当前底部显示着的方言提示原文（仅放行提示态，不含执行错误）。
+     *
+     * 刷新链据此判断「信息行是否仍是方言提示」——是才替换/清空，绝不覆盖执行结果与真实错误。
+     */
+    internal var lastDialectGateMessage: String? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     internal val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -491,7 +508,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         historySnapshotFallbackSource?.let { return it(key) }
         if (ApplicationManager.getApplication().isUnitTestMode) return null
         return runCatching {
-            SqlHistoryManager.getInstance().newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
+            // F-08：按本项目收窄回落面（双项目并发同表名/同 SQL 不串参数快照）；
+            // 项目身份解析失败（非文件型项目等）回落不过滤，行为同旧版。
+            val identity = runCatching {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath)
+            }.getOrDefault("")
+            if (identity.isBlank()) {
+                SqlHistoryManager.getInstance()
+                    .newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
+            } else {
+                SqlHistoryManager.getInstance()
+                    .newestParamSnapshotForProject(identity) { entry ->
+                        this@historySnapshotFallback.matchesSnapshotKey(entry, key)
+                    }
+            }
         }.getOrNull()
     }
 
@@ -522,10 +552,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         historySnapshotSink?.invoke(key, snapshot)
         if (ApplicationManager.getApplication().isUnitTestMode) return
         runCatching {
-            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
-                { entry -> matchesSnapshotKey(entry, key) },
-                snapshot,
-            )
+            // F-08：项目收窄版回写（快照只落本项目条目）；身份解析失败回落不过滤（行为同旧版）
+            val identity = runCatching {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath)
+            }.getOrDefault("")
+            val manager = SqlHistoryManager.getInstance()
+            if (identity.isBlank()) {
+                manager.updateNewestParamSnapshot({ entry -> matchesSnapshotKey(entry, key) }, snapshot)
+            } else {
+                manager.updateNewestParamSnapshotForProject(identity, { entry -> matchesSnapshotKey(entry, key) }, snapshot)
+            }
         }
     }
 
@@ -638,6 +674,27 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     internal val enabledIds = mutableSetOf<String>()
     internal val paramValues = mutableMapOf<String, String>()
+
+    // T-RuntimeSlotFill 券 C：运行期占位值（slotId → 用户输入），与 paramValues 平行但独立。
+    //
+    // 只在 [PreviewResult.runtimeSlots] 非空时建行、才会被填；空表 = 留空 = 占位原样保留（D-5），
+    // 因此「没有占位 / 有占位但没填」两种情况的产物都与改动前逐字节一致。
+    // 随新预览整表清空（[showResult]），不做跨预览持久化（D-6）。
+    internal val slotValues = mutableMapOf<String, SlotValue>()
+
+    /**
+     * 最近一次预览渲染的占位回填诊断（模板 `%s` 计数不符 / 展开形态未知 / 方言拒绝布尔 等）。
+     *
+     * 由 [renderSql] 的占位回填分支写入，参数区「运行时值」分区下方如实展示——券 B 的拒绝必须
+     * 让用户看见，不许静默（否则表现为「填了没生效」）。
+     */
+    internal var slotRenderWarnings: List<SlotWarning> = emptyList()
+
+    /** 运行时占位行控件登记（slotId → 控件组；随 [rebuildLeftPanel] 清场，测试与行内联动用）。 */
+    internal val runtimeSlotRows = mutableMapOf<String, RuntimeSlotRowControls>()
+
+    /** 占位诊断行（[slotRenderWarnings] 的展示位；无占位行时为 null）。 */
+    internal var runtimeSlotWarningLabel: JBLabel? = null
     // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文；
     // T-M26.4：bind 覆盖状态已移除——bind 值由「参数」区输入统一承担）
     internal val xmlForEachCounts = mutableMapOf<String, Int>()
@@ -858,8 +915,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
                 if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
             },
         )
-        // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板只刷新头部
-        // 绑定行与方言徽章，不重渲染 SQL、不新增常驻轮询。连接绑定本面板 Disposable，
+        // UX 换源重渲染：last-used 数据源变更（执行/换源写入记忆）→ 存活的预览面板刷新头部
+        // 绑定行与方言徽章，并按新源方言重渲染 SQL（S2-4 券①：护栏见 rerenderIfBoundDialectDiffers
+        // ——仅绑定源证据、方言不同、用户未编辑；不新增常驻轮询）。连接绑定本面板 Disposable，
         // dispose 时自动注销（与上方设置 Topic 同款）。
         project?.messageBus?.connect(this)?.subscribe(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LAST_USED_CHANGE_TOPIC,
@@ -1137,6 +1195,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     fun setSourceContext(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext?) {
         sourceModuleKey = context?.canonicalModuleKey
+        // UI-004：只留 VFS 句柄（刷新重算方言用），不持有 PSI/URL。
+        sourceVirtualFile = context?.hostVirtualFile
     }
 
     /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
@@ -1305,6 +1365,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal fun dmlImpactBannerTextForTest(): String = dmlImpactBannerLabel.text
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
+
+    /** T-RuntimeSlotFill 券 C：当前运行期占位值快照（断言用）。 */
+    internal fun slotValuesForTest(): Map<String, SlotValue> = slotValues.toMap()
+
+    /** T-RuntimeSlotFill 券 C：当前占位值（回填引擎唯一值载体，链路一致用例用）。 */
+    internal fun slotValuesSnapshotForTest(): RuntimeSlotValues = slotValuesSnapshot()
+
+    /** T-RuntimeSlotFill 券 C：最近一次渲染的占位回填诊断（断言「拒绝不静默」）。 */
+    internal fun slotRenderWarningsForTest(): List<SlotWarning> = slotRenderWarnings
+
+    /** T-RuntimeSlotFill 券 C：已建的占位行数（= 当前预览的 slot 数；无占位为 0）。 */
+    internal fun slotRowCountForTest(): Int = runtimeSlotRows.size
+
+    /** T-RuntimeSlotFill 券 C：某个占位行的控件组（断言 kind ↔ 控件类型）。 */
+    internal fun slotRowControlsForTest(id: String): RuntimeSlotRowControls? = runtimeSlotRows[id]
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
     internal fun flushHistoryForTest() = flushHistoryToCache()
     /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
@@ -1349,6 +1424,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal fun clearStateForTest() {
         enabledIds.clear()
         paramValues.clear()
+        slotValues.clear()
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
     }
@@ -1446,6 +1522,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
         /** F-45：列信息标签页标题。 */
         internal const val COLUMN_INFO_TAB_TITLE = "列信息"
+
+        /** T-PagesHql：HQL 转换前的原文标签页标题（仅 [cn.song.mybatisplus.visualizer.model.PreviewResult.originalSql] 非空时出现）。 */
+        internal const val ORIGINAL_SQL_TAB_TITLE = "原文"
 
         /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
         internal const val MIN_META_BUDGET_PX = 80

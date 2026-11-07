@@ -355,7 +355,11 @@ class PrepareSingleFlightGateTest {
         assertFalse(selector.contains("prepareGate.abort(ExecutionSubmission"))
         assertFalse(selector.contains("prepareGate.consumePendingExecute()"))
         assertFalse(selector.contains("prepareGate.beginSubmission()"))
-        assertEquals("五个 prepareInConsole 失败出口必须传同一个 owner", 5,
+        // T-DialectGatePassDeadChain（2026-11-02）：早退结算把 owner 出口从 5 处扩到 12 处——
+        // 新增 7 处「isPrepareActive 早退」（Console 4：prepareAfterEditorResolved 起点/中段 +
+        // prepareInConsole 同步/异步；Results 3：session consumer 起点/闸门后 + 选源回调），
+        // 会话方言闸那 1 处仍由本式扣除。每处都必须把同一个 owner 交给终结器，否则门悬挂 60s。
+        assertEquals("准备链的失败与早退出口必须全部传同一个 owner", 12,
             selector.split("abortPrepareGate(prepareOwner,").size - 1 - 1) // 另一个在 session 方言闸
         assertTrue(selector.contains("onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest"))
         val gate = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.kt")
@@ -369,7 +373,12 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `真实资源缺失分支和弹窗取消接入终结器`() {
         val selector = selectorUnion()
-        assertTrue(selector.contains("if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"))
+        // T-ExecPlanEdtSlowOp：弹窗取消分支随 chooseAndPrepare 后半链迁入 continuePrepareAfterTempFile，
+        // 门持有判定由局部 ownsGate 改为 prepareOwner != null（二者等价：prepareOwner 正是
+        // queuedIntent.takeIf { ownsGate } 的产物），锚点同步。
+        assertTrue(
+            selector.contains("if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"),
+        )
         assertTrue(selector.contains("prepareGate.expire(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.beginInteraction(prepareOwner)"))
         assertTrue(selector.contains("prepareGate.endInteraction(prepareOwner)"))
@@ -381,7 +390,17 @@ class PrepareSingleFlightGateTest {
             assertTrue(body.contains("onSubmission, onError, queuedIntent"))
         }
         assertTrue(console.contains("selectPrepareSubmission(queuedIntent, onSubmission)"))
-        assertTrue(console.contains("if (!isPrepareActive()) return@invokeLater"))
+        // T-DialectGatePassDeadChain：异步等待早退由「静默 return」改为「结算门 + return」——
+        // 静默 return 会把单飞门留在 in-flight，后续 60s 内执行/换源全部只排队。
+        val consoleLf = console.replace("\r\n", "\n")
+        assertFalse(
+            "异步等待早退不得再静默 return",
+            consoleLf.contains("if (!isPrepareActive()) return@invokeLater"),
+        )
+        assertTrue(
+            "异步等待早退必须结算单飞门",
+            consoleLf.contains("// T-DialectGatePassDeadChain：异步等待期间被替代/完成同样要结算门。"),
+        )
         val signatures = sourceOf("src/test/java/PlatformSignatureChecker.java")
         assertTrue(signatures.contains("missing += checkRunnerFinalStepApi(loader)"))
         assertTrue(signatures.contains("getMethod(\"doFinalStep\", Runnable.class)"))
@@ -466,10 +485,12 @@ class PrepareSingleFlightGateTest {
             2,
             panel.split("embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE)").size - 1,
         )
-        // 预览准备链唯一入口（prepareDefaultConsole onConsole）——T-ExplainSwitchNative W12 撤掉
-        // switchDataSourceViaNativeChooser 后不再有第二个 PREVIEW 嵌入点。
+        // 预览准备链入口（prepareDefaultConsole onConsole）+ T-DialectGatePassDeadChain 的换源链
+        //（switchDataSourceInPlace onConsole——同样只准备不执行，故同属 PREVIEW 嵌入）。
+        //（车道5 合并注：insight 侧曾由 T-ExplainSwitchNative W12 撤掉 switchDataSourceViaNativeChooser
+        //  而判「唯一入口」；8f4492d5 带入的换源链是后来新增的第二处，与该历史不矛盾。）
         assertEquals(
-            1,
+            2,
             panel.split("embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)").size - 1,
         )
         // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法）

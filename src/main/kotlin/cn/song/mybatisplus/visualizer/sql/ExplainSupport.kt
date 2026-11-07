@@ -70,6 +70,13 @@ object ExplainSupport {
          * 输出与无此字段时逐字节一致（防回归硬门禁的判据）。
          */
         val channelNote: String? = null,
+        /**
+         * TEXT 档但面板结构化通道**有解析面**的显式登记（T-ObPanelAdvice）：该方言的 TEXT
+         * 输出是可解析成结构化行列的计划表（OceanBase ASCII 计划树），解析成功即进
+         * EXPLAIN 面板，fail-closed 收窄为「解析失败才回退原生」。默认 false = 无解析面
+         * （H2/SQLite/Oracle 等 TEXT 档维持整族直送——不硬解析红线）。
+         */
+        val structuredTextPlan: Boolean = false,
     ) {
         /** 本方言是否接入 EXPLAIN。 */
         val supported: Boolean get() = template != null
@@ -154,6 +161,7 @@ object ExplainSupport {
                 "（算子 TABLE RANGE SCAN、含 partitions/is_index_back），非官方文档所述的 TRADITIONAL 表格行；" +
                 "EXPLAIN FORMAT=JSON 为 OB 专用紧凑 JSON（ID/OPERATOR/EST.ROWS），非 MySQL query_block。" +
                 "档位误登 TABLE 会让索引建议走 MySQL 列名分支而永不触发（T-OBExplainFormat）",
+            structuredTextPlan = true,
         ),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
         Entry(
@@ -184,6 +192,14 @@ object ExplainSupport {
         ),
         Entry("HighGo", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：HighGo V6.0.1 / PostgreSQL 12.3，FORMAT JSON 单列 QUERY PLAN JSON 文本（镜像 xuxuclassmate/highgo:6.0.1，非厂商官方）"),
         Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：Vastbase G100 V3.0 Build 9（openGauss 6.0.0）A 模式 FORMAT JSON 单列 JSON 文本（镜像 apecloud/vastbase，非厂商官方）"),
+        // T-GoldenDbDialect（券 A，P-9 销案）：**不接入**（template=null，能力矩阵 EXPLAIN 行如实
+        // 显示 false）。EXPLAIN 语法确在官方文档（1.10.15.1《EXPLAIN》p323-325：`EXPLAIN
+        // [DB|PROXY|explain_format] explainable_stmt [STORAGEDB]`，FORMAT 可选 JSON|Oracle），
+        // 但原文**只有语法与选项、没有任何输出形态示例**（5 个示例语句均未给返回结果）——
+        // 行式表格 / 文本树两种档位都定不了。照 OceanBase 教训（T-OBExplainFormat：档位误登
+        // 会让索引建议走错解析分支而永不触发），未取证前不猜档——真机 `EXPLAIN SELECT 1`
+        // 读数到位后按实际档位登记。
+        Entry("GoldenDB", null, null, "官方文档级（开发支持 V6.1.03.10 p323-325）：EXPLAIN 语法在册（可选项 FORMAT=JSON|Oracle、DB/PROXY 节点级计划），但原文无任何输出形态示例——TABLE 行式 / TEXT 树式定不了档，P-9 诚实不接入；真机读数到位后按档登记"),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

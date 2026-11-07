@@ -65,3 +65,19 @@ metadata:
 
 **Why:** 这条报障的模态串带 `Unloading of <插件名>` 时，根因在**派发卸载的模态**而不在某次写；只看「哪行写了文档」会一直找不到落点。
 **How to apply:** 见到 `Write-unsafe context` 先读模态串——带卸载/关闭类 sentinel 就往「窗口是怎么进入的」查（谁用什么模态派发了 enterModal 的那个动作）；本仓自更新链路即 `DynamicInstallSupport` 的派发模态。要派发「会间接改模型的平台动作」时，**别用 `any()`**：从 EDT 取当前模态实例，写安全就用它（保证立即执行），否则退 `nonModal`。守卫写不出来时，先问「这个危险动作是不是集中在某个包/某个类」——按包封口比按写令牌可靠。相关：[[project-dynamic-unload-barriers]]（卸载屏障与 T-DynUpdate 反射入口）、[[pitfall-guard-covers-audited-targets]]（守卫对真实站点不可见的空绿族）、[[pitfall-verification-blindspots-and-wrapup]]。
+
+---
+
+## 同族复发（2026-11-01）：间接写形态骗过了既有守卫
+
+执行链把「临时文件构建」移出 EDT 时（T-ExecPlanEdtSlowOp），异步回调用 `invokeLater({ onReady(pair) }, ModalityState.any())` 派发。`onReady` 续接链里有 `consoleDoc.setText` + `PsiDocumentManager.commitDocument` + `saveDocument`——**写发生在回调内部**，于是 `any()` 又把回调变成了 write-unsafe 上下文，平台每次点「执行计划」都报一次 `TransactionGuardImpl … Plugin to blame: SQL Visualizer / Last Action: ConvertToSql`。
+
+**为什么既有守卫没抓到**：`BannedApiScanRuleTest.anyModalityWriteOffenders` 只认**直接写令牌**（`setText(`/`commitDocument(`）出现在 `any()` 回调里。`invokeLater { callback(…) }` 这种**间接形态**里回调名不在写令牌表内，守卫全绿而真机必报。
+
+**正确模态**：`ModalityState.nonModal()`。243 平台字节码实证——`TransactionGuardImpl.<init>` 里 `createConcurrentWeakMap()` 之后立刻 `put(ModalityState.nonModal(), TRUE)`，**只有 nonModal 在构造期被登记为 write-safe**；`wrapLaterInvocation` 产出的 `TransactionGuardImpl$1.run` 仅在 `isWriteSafeModality(模态)` 为真时才 `assertWriteIntentLockAcquired()` + `runWithWritingAllowed(runnable)`，否则裸 run。`TransactionGuard.submitTransaction` 系列在 243 已全部 `Deprecated`，不划算。
+
+**新的守卫形态**（`ExecTempFileEdtGuardTest` 规则五）：异步函数内**每个**回调调用点都必须落在 `invokeLater(…, ModalityState.nonModal())` / `DocWriteContext.invokeLaterWriteSafe` / `submitTransaction` 之内，且函数体不得出现 `ModalityState.any()`；实参区按**括号配平**取（固定长度窗口会跨界读到下一个函数的调用而假绿——本轮同型踩过一次）。另加一条行为断言：回调内 `TransactionGuard.getInstance().isWritingAllowed()` 必须为 true（headless 下有判别力，`any()` 下实测 false）。
+
+**判据一句话**：把「同步调用」改成「异步回调」时，**写资格会跟着上下文一起丢**——原来靠 action 的 write-safe 上下文合法，异步后必须显式用 write-safe 投递。
+
+相关：[[pitfall-explain-result-shape-real-vs-synthetic]]（同一轮真机抓到的另一条）。

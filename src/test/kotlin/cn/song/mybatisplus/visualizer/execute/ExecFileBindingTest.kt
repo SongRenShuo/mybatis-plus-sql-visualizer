@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.execute
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
@@ -277,6 +278,30 @@ class ExecFileBindingTest : BasePlatformTestCase() {
             ExecFileBinding.Action.NOOP,
             ExecFileBinding.resolveBindAction(false, "uuid-mp-demo", probe).action,
         )
+    }
+
+    // ======================== T-ConsoleBind263：对齐结果对象的不变量 ========================
+    //
+    // 本组只钉**结果对象自身的不变量**（可观测、与平台版本无关）：失败必带归因串、CLEAR 期望
+    // 身份恒 null、verified 蕴含回读一致。真实 263 上「哪条策略生效」由 §六 真机验收与
+    // 263 字节码取证覆盖——测试平台的 Database 类是 243 版本，跑不出 263 形态。
+
+    /** 对齐在轻平台下必须 fail-closed 并如实报结果，不得抛。 */
+    fun testRealignReturnsReportWithoutThrowingOnBarePlatform() {
+        val vf = WriteActionTemp.vf()
+        val report = ExecFileBinding.realignExecBind(project, vf, null)
+        assertNull("CLEAR 的期望身份恒为 null（语义：清关联）", report.expectedId)
+        if (report.mapped) {
+            assertNotNull("mapped ⇒ 必带生效策略名（日志可直接 grep）", report.strategy)
+        } else {
+            assertTrue(
+                "P0-3：失败必须带可 grep 的归因串（策略 + 原因），不允许只有一条 NoSuchMethodException",
+                !report.failure.isNullOrBlank(),
+            )
+        }
+        if (report.verified) {
+            assertEquals("verified ⇒ 回读必须与期望一致", report.expectedId, report.observedId)
+        }
     }
 }
 

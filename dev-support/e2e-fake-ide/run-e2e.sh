@@ -61,6 +61,10 @@ if [ -z "$DEMO_DIR" ]; then
   exit 3
 fi
 MVN="${MVN:-${MPSV_MVN:-$(command -v mvnd 2>/dev/null || command -v mvn 2>/dev/null || true)}}"
+# T-CiNightly（2026-11-05）：离线开关。默认 1（沿用 -o，本机 ~/.m2 已有依赖时最快）；
+# CI 上首次跑没有 ~/.m2，传 MVN_OFFLINE=0 走联网解析（夜间时间充足，多等几分钟）。
+MVN_OFFLINE="${MVN_OFFLINE:-1}"
+MVN_OFFLINE_FLAG=""; [ "$MVN_OFFLINE" = "1" ] && MVN_OFFLINE_FLAG="-o"
 if [ -z "$MVN" ]; then
   echo "缺少 MVN：请设 MPSV_MVN（见 .local/local.env.example），或把 mvnd / mvn 放进 PATH。" >&2
   exit 3
@@ -68,6 +72,12 @@ fi
 PROBE_PORT="${PROBE_PORT:-53999}"
 APP_PORT="${APP_PORT:-8082}"
 LOGLEVEL="${LOGLEVEL:-info}"
+# T-IbatisPanwei：被测应用可换（默认仍是 join-demo + mysql）。换 profile / 探针脚本 / 主类三件一起给，
+# 例如磐维驱动 + GaussDB：DEMO_DIR=<demo>/mybatis-plus-demo DEMO_PROFILE=panwei-gaussdb
+#   APP_MAIN=cn.song.mybatisplusdemo.MybatisPlusDemoApplication E2E_SCRIPT=$HERE/script-panwei-gaussdb.txt
+DEMO_PROFILE="${DEMO_PROFILE:-mysql}"
+APP_MAIN="${APP_MAIN:-cn.song.mpjdemo.MybatisPlusJoinDemoApplication}"
+E2E_SCRIPT="${E2E_SCRIPT:-$HERE/script-e2e.txt}"
 
 case "$APP_PORT" in
   ''|*[!0-9]*) echo "无效应用端口：$APP_PORT" >&2; exit 3 ;;
@@ -108,7 +118,7 @@ echo "[1/6] 编译假 IDE 探针"
 mkdir -p "$HERE/build"
 javac -encoding UTF-8 -d "$HERE/build" "$HERE/FakeIde.java" || { echo "探针编译失败"; exit 3; }
 RESOLVED_SCRIPT="$HERE/build/script-e2e-$APP_PORT.txt"
-sed "s|http://localhost:8082/|http://localhost:$APP_PORT/|g" "$HERE/script-e2e.txt" > "$RESOLVED_SCRIPT" || exit 3
+sed "s|http://localhost:8082/|http://localhost:$APP_PORT/|g" "$E2E_SCRIPT" > "$RESOLVED_SCRIPT" || exit 3
 
 # ── 2) agent 产物检查 ─────────────────────────────────────────
 if [ ! -f "$AGENT_JAR" ]; then
@@ -132,12 +142,12 @@ fi
 CP_FILE="$DEMO_DIR/target/e2e-cp.txt"
 if [ ! -f "$CP_FILE" ]; then
   echo "[2/6] 生成 demo classpath（$CP_FILE）"
-  ( cd "$DEMO_DIR" && "$MVN" -q -o dependency:build-classpath -Dmdep.outputFile=target/e2e-cp.txt ) || {
-    echo "classpath 生成失败（离线模式；确认 ~/.m2 已有依赖）"; exit 3; }
+  ( cd "$DEMO_DIR" && "$MVN" -q $MVN_OFFLINE_FLAG dependency:build-classpath -Dmdep.outputFile=target/e2e-cp.txt ) || {
+    echo "classpath 生成失败（离线模式时确认 ~/.m2 已有依赖；CI 上可传 MVN_OFFLINE=0）"; exit 3; }
 fi
 if [ ! -d "$DEMO_DIR/target/classes" ]; then
   echo "编译 demo 工程"
-  ( cd "$DEMO_DIR" && "$MVN" -q -o compile ) || { echo "demo 编译失败"; exit 3; }
+  ( cd "$DEMO_DIR" && "$MVN" -q $MVN_OFFLINE_FLAG compile ) || { echo "demo 编译失败"; exit 3; }
 fi
 APP_CP="$(winpath "$DEMO_DIR/target/classes");$(cat "$CP_FILE")"
 
@@ -167,21 +177,23 @@ echo "[4/6] 启动 demo 应用（javaagent 注入）"
   echo "agent_jar=$AGENT_JAR"
   echo "agent_jar_sha256=$(sha256sum "$AGENT_JAR" | awk '{print $1}')"
   echo "demo_dir=$DEMO_DIR"
+  echo "demo_profile=$DEMO_PROFILE app_main=$APP_MAIN e2e_script=$E2E_SCRIPT"
   echo "java=$(java -version 2>&1 | head -1)"
   echo "demo_git_head=$(cd "$DEMO_DIR" && git rev-parse HEAD 2>/dev/null)"
   echo "repo_git_head=$(cd "$REPO_ROOT" && git rev-parse HEAD)"
 } > "$META"
 
-# T-ReleasePerf7 R0（20261007）：钉死 mysql profile——demo target/classes 的 application.yml
+# T-ReleasePerf7 R0（20261007）：**默认**钉死 mysql profile——demo target/classes 的 application.yml
 # 是 mvn 资源过滤产物（@profiles.active@），demo 工程被其他轮以 -Dprofiles.active=dm 重编后
 # e2e 静默吃到 dm（达梦驱动被织入改写 VerifyError，应用起不来）。命令行 arg 优先级最高，
 # 不受 demo 构建态污染；README 前置本就写明 MySQL mpj_demo。
+# T-IbatisPanwei：DEMO_PROFILE 显式给出时按它走（换驱动/换库的真机验收），默认行为不变。
 MSYS2_ARG_CONV_EXCL='*' java \
   "-javaagent:$(winpath "$AGENT_JAR")=port=$PROBE_PORT;logLevel=$LOGLEVEL" \
   -Dfile.encoding=UTF-8 \
   -cp "$APP_CP" \
-  cn.song.mpjdemo.MybatisPlusJoinDemoApplication \
-  --spring.profiles.active=mysql --server.port="$APP_PORT" \
+  "$APP_MAIN" \
+  --spring.profiles.active="$DEMO_PROFILE" --server.port="$APP_PORT" \
   > "$APP_LOG" 2>&1 &
 APP_PID=$!
 echo "      应用已启动（pid=$APP_PID），日志：$APP_LOG"

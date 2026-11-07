@@ -195,6 +195,15 @@ class ExplainPlanResultView(
                 JBTable(model).apply {
                     autoResizeMode = JBTable.AUTO_RESIZE_ALL_COLUMNS
                     tableHeader.reorderingAllowed = false
+                    // F-13（DBX #317）：列头点击排序，与列信息/回滚快照两面板共用
+                    // ColumnOrderings 比较逻辑（数值串按数值比，EXPLAIN cost 列受益）；
+                    // 默认无 sortKeys 时视图序 = 模型序，零行为变更。
+                    val sorter = javax.swing.table.TableRowSorter(model)
+                    val cellOrder = java.util.Comparator<Any?> { a, b ->
+                        cn.song.mybatisplus.visualizer.util.ColumnOrderings.compareCells(a, b)
+                    }
+                    for (i in 0 until model.columnCount) sorter.setComparator(i, cellOrder)
+                    rowSorter = sorter
                 }
             }
             ExplainOutputFormat.JSON -> {

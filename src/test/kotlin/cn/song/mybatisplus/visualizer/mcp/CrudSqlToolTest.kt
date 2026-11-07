@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * sqlv_crud_sql 工具测试（T-McpToolset2 / T-MTS2-02）：className 定位实体 → 四件套生成；
@@ -37,7 +36,6 @@ class CrudSqlToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase
         )
     }
 
-    @Test
     fun testClassName定位实体_生成四件套() {
         addEntity()
         val output = crud("className" to "UserEntity")
@@ -48,7 +46,6 @@ class CrudSqlToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase
         assertTrue(output, output.contains("DELETE"))
     }
 
-    @Test
     fun test空列实体_诚实拒绝() {
         // 无任何可映射字段的实体 → CrudSqlGenerator 返回空清单 → crudOutput 拒绝
         myFixture.configureByText(
@@ -66,14 +63,12 @@ class CrudSqlToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase
         assertTrue((error?.message ?: "").contains("no mappable columns"))
     }
 
-    @Test
     fun test类不存在_预期错误() {
         val error = runCatching { crud("className" to "com.example.NoSuchEntity") }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("class not found"))
     }
 
-    @Test
     fun test无入参_预期错误() {
         val error = runCatching { tool.resolveSpec(project, "", "") }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)

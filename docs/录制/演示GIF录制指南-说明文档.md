@@ -1,6 +1,7 @@
 # 演示 GIF 录制指南
 
 > 2026-09-12 沉淀，2026-10-31 从文档站 `docs/演示GIF录制指南-说明文档.md` 迁入插件仓（**录制起点自此固定在插件仓**）。
+> **2026-11-03 交付格式升级**：录完不再只交 GIF + PNG——统一交 GIF + MP4 + WebP 三件套（MP4 为站点主用），并强制裁掉录制窗框，见「成品规格」与「管线流程」。
 > 本文是面向下一次录制/补拍的操作手册；管线原理与平台坑的完整分析见 `docs/经验总结/20260910-0100-IntelliJ演示GIF录制-经验总结.md`（§十、§十一为增量），两处不重复维护。
 > 方法论已固化为 skill **`.agents/skills/ide-demo-gif/`**（在插件仓内，2026-10-31 从全局下沉；含通用脚本与场景模板，自然语言「录一张演示 GIF」可触发）。本文保留作背景与规格依据；通用能力改动以 skill 内 `scripts/` 为权威源。
 > 录制脚本在 `record/`（**已入库 master**，2026-09-15 起录制基线就是 master；分支只用于隔离并行开发），中间产物 `record/perf/` 不入库。
@@ -10,17 +11,49 @@
 
 | 项 | 值 |
 |------|------|
-| 构图 | 窗口 1370×984 @ 屏幕 (277,25)，录制区域=窗口外框 |
+| 构图 | 窗口 1370×984 @ 屏幕 (277,25)，录制区域再内缩 8px 去阴影 → `(285,26,1354,974)` |
 | IDE 缩放 | 120%（Settings → Appearance → Zoom） |
 | 编辑器字体 | 13pt（2026.2 默认值，不要再设 18pt） |
 | 主题 | Islands Dark |
 | 导出宽度 | 1280，wrapper-preview 因首页共用 1440 |
 | 帧率 | 15fps |
-| 体积 | 预算 4~6MB（本轮实际 0.3~2.6MB 全部富余） |
-| 文件 | `public/demo/<功能名>.gif` + 同名 `.png` poster（取关键定格帧） |
+| **交付** | **三件套同名**：`<功能名>.gif`（源/兜底）+ `<功能名>.mp4`（站点主用）+ `<功能名>.webp`（poster） |
+| **体积** | 按 **MP4** 验收：单件 ≤600KB，首页第一屏（3~4 张）合计 ≤2MB（GIF 体积不再作指标，它只是源） |
 | 循环 | 首尾帧一致，接缝 diff ≤1（sql-log 场景的结构性跳变除外） |
 
-16 个功能页 md 不用动——文件同名，替换即生效。
+功能页 md 不用动——`GifPlayer` 按 `src` 同名推导 `.mp4`，文件同名替换即生效；markdown 直插的图要按「站点侧引用」改成 `<video>`。
+
+### 三件套怎么出
+
+录完 `assemble.py` 的产物只是源，还要过一道后处理（裁框 → mp4 → webp → 校验），一条命令：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py record/perf/tN.gif --out record/perf/deliver
+# 产物：tN.gif（已裁框） / tN.mp4 / tN.webp，同时打印体积与 PSNR
+```
+
+它做的三件事与手工等价命令：
+
+```bash
+# 1) 裁 GIF：必须带调色板，否则体积涨 40~277 倍；dither=none 才能逐像素一致
+ffmpeg -i in.gif -filter_complex "[0:v]crop=W:H:X:Y,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none" -loop 0 out.gif
+# 2) 视频：yuv420p 要求偶数尺寸
+ffmpeg -i in.gif -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart \
+  -vf "crop=W:H:X:Y,scale=trunc(iw/2)*2:trunc(ih/2)*2" out.mp4
+# 3) poster：取关键定格帧再裁
+ffmpeg -i in.gif -frames:v 1 -vf "crop=W:H:X:Y" -c:v libwebp -quality 82 -compression_level 6 out.webp
+```
+
+**为什么必须裁框**：录制区域虽已内缩 8px，成片四边仍残留 5~7px 浅灰窗框（2026-11-03 全量扫描文档站 90 个素材，34 个有框：左/右 5~7、底 4~7、顶 0~1）。站点曾用 `clip-path` 百分比补偿，结果对无框素材反而切掉真实画面、留一圈透明边（浅色主题下就是白边），对 7px 框又只切一半——补偿已全部撤掉，改为裁源。`cropdetect` 只认黑边，浅灰框要逐像素扫（`deliver.py` 已实现）。
+
+**体积基线（2026-11-03 全站实测）**：69 个 GIF 52.06MB → MP4 18.7MB（−64%）；22 张 poster PNG 6.45MB → WebP 1.25MB（−81%）；`guide/configuration` 整页媒体 2.71MB → 0.85MB（−69%）。
+
+### 站点侧引用（文档站仓）
+
+- 组件：`GifPlayer` 的 `src` 仍传 `.gif`，内部按同名推导 `.mp4`，视频失败回退 GIF；首页 `FeatureAlternate` / `HeroSteps` / `DocsShowcase` 用 `<video poster>` + 同名 `.webp`；
+- markdown 直插：`<figure><video :src="'/demo/x.mp4'" :poster="'/demo/x.webp'" autoplay muted loop playsinline preload="metadata"><figcaption class="visually-hidden">原 alt</figcaption></figure>`；**必须用绑定字符串**，写成 `src="/demo/x.mp4"` 会被 Vite 的 `transformAssetUrls` 当模块解析，构建报 `failed to resolve import`；
+- 静态截图同样转 WebP（`-c:v libwebp -quality 82 -compression_level 6 -preset picture`）后引用 `.webp`。
+
 
 ## 环境启动
 
@@ -47,6 +80,7 @@
 标定（shot.py 抓帧定坐标 → 改 scene 脚本常量）
 → scene_tN.py 重放（mss 15fps 无损 mp4 + curlog 光标日志）
 → assemble.py 转制（空白压缩 + 光标回绘 + palette GIF + poster）
+→ deliver.py 交付（扫四边裁窗框 → GIF/MP4/WebP 三件套 + 零损失校验）
 → ffmpeg 抽帧逐点验收（动作节点/定格/poster 三处）
 ```
 
@@ -168,11 +202,20 @@
 ## 落地清单（录完到 commit）
 
 ```
-□ 7+1 张 gif+png 复制进 docs 仓库 public/demo/（路径用正斜杠，反斜杠 cp 会静默写错位置）
+□ deliver.py 跑完三件套（gif 已裁框 / mp4 / webp），PSNR 与体积读数留档
+□ 三件套复制进 docs 仓库 public/demo/（路径用正斜杠，反斜杠 cp 会静默写错位置）
 □ md5 抽查源/目标一致
-□ npm run build 通过，.vitepress/dist/demo/ 资产齐全
-□ npm run preview + puppeteer 抽查：功能页与首页 GIF 结构（img 挂载/complete）、poster 淡入结构、686px 列宽清晰度（**重建 dist 后必须重启 preview 服务器**——sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404）
-□ **动画是否在播必须真实可见渲染确认（用户目视 / 真实浏览器前台，IAB 正常播）**——canvas 像素采样与单帧截图不可作动画判据（drawImage 对动画 GIF 只画首帧，2026-09-15 实证，详见《开发笔记/20260915-1300-GIF动画播放验证与渲染结构》）
+□ mp4 单件 ≤600KB、首页首屏合计 ≤2MB；超了先降 CRF 前先降静态保留（--hold），别降宽降帧
+□ 裁框后抽首帧扫四边：连续浅色带厚度应为 0（原片是 5~7px）
+□ npm run build 通过，.vitepress/dist/demo/ 资产齐全（含 .mp4/.webp）
+□ npm run preview + 浏览器抽查：GifPlayer 的 <video> 取到同名 mp4、readyState=4；
+  首页海报与视频叠层结构正常；686px 列宽下文字清晰
+  （**重建 dist 后必须重启 preview 服务器**——sirv 启动时预扫文件表，陈旧映射对
+   重新生成的页面返回 404，新增的 .mp4/.webp 在旧进程里也一直 404）
+□ **动画是否在播必须真实可见渲染确认（用户目视 / 真实浏览器前台，IAB 正常播）**——
+  canvas 像素采样与单帧截图不可作判据（drawImage 对动画 GIF 只画首帧，2026-09-15
+  实证，详见《开发笔记/20260915-1300-GIF动画播放验证与渲染结构》）；<video> 只看
+  readyState + !paused，最终仍以肉眼为准
 □ 计划文档实施状态更新（逐张规格）
 □ 只 add 本次文件 commit，不 push，部署等用户确认
 □ 环境还原：demo 应用停掉（Services ■ 或按端口杀进程）、沙盒 IDE 关窗、并行登记 done --name 注销、IME 按需切回

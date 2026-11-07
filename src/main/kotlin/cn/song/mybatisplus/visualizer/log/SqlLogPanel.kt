@@ -96,13 +96,109 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
 /**
+ * T-SqlListCatchup 券B：面板计数快照的**增量累积器**（纯逻辑，无平台依赖，可纯 JUnit 做口径等价性验证）。
+ *
+ * 维护两张累积 map——⨉N 去重丢弃徽章计数（键 = dedupeKey）与「×N 同结构」徽章计数（键 = structureKey），
+ * 代替旧实现「每拍 dedupeCountsSnapshot() + structureKeyCounts(snapshot) 两份全量 O(N) 重算」：
+ * 全量只在 [apply] 收到 `fullRebuild`（buffer 侧兜底事件置位，见
+ * [SqlLogEntryBuffer.drainCountRebuildFlag]）或本累积器尚无基线（首拍）时执行；其余拍按 drain 到的
+ * 变更键（[SqlLogEntryBuffer.drainChangedKeys]）做**状态对账式**增量——每个变更键用 buffer 的当下
+ * 在队计数（presence）与镜像的上次已应用值求净差，节流窗内同键的多次增减折叠为一次净变化、
+ * 无悬挂余量；「structureKey 未变的条目计数沿用」即由此成立（未 drain 到的键不动对应条目）。
+ *
+ * 等价性口径（本类正确性的命门，随机操作序列测试钉住）：
+ * - `currentDedupeCounts` ≡ buffer.dedupeCountsSnapshot()——buffer 侧丢弃计数的全部变更源
+ *   （recordDedupeDrop / 整体清零 / 键上限溢出）要么登记变更键、要么置全量重建标记；
+ * - `currentTemplateCounts` ≡ structureKeyCounts(snapshot)——presence 只覆盖「去重开启 + 可去重」
+ *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / ShardingSphere 条目）一律由 buffer 置
+ *   全量重建标记，增量路径只消费口径内键。淘汰扫出键域（presence 归零摘键）**不在此列**——
+ *   券E 起按变更键净差增量核销（确定性减账，被淘汰键随变更键集出域，见
+ *   SqlLogEntryBuffer.countFullRebuildPending KDoc）。
+ *
+ * 线程模型：面板 EDT 单线程消费（与 refreshList 同线程），内部状态无并发面。
+ */
+internal class CountSnapshotAccumulator(
+    /** buffer 丢弃计数快照（全量重建基线）。 */
+    private val dropCountsSnapshot: () -> Map<String, Int>,
+    /** 按键读 ⨉N 丢弃计数（增量重读）。 */
+    private val dropCountForKey: (String) -> Int,
+    /** 按键读在队计数（buffer dedupeKeyPresence 消费出口）。 */
+    private val presenceForKey: (String) -> Int,
+    /** 按键取保留实例 structureKey（buffer dedupeIndex O(1)；键不在索引时为 null）。 */
+    private val structureKeyForKey: (String) -> String?,
+) {
+    private var dedupeCounts: MutableMap<String, Int>? = null
+    private var templateCounts: MutableMap<String, Int>? = null
+
+    /** 上次已应用的在队计数镜像（增量净差的基准；键随淘汰出域，有界性随现存键域封顶）。 */
+    private val presenceMirror = HashMap<String, Int>()
+
+    /** dedupeKey → structureKey（structureKey 惰性首算昂贵，键在队期间只算一次）。 */
+    private val keyToStructure = HashMap<String, String>()
+
+    /** 当前 ⨉N 徽章计数（无基线时为空 map）。 */
+    val currentDedupeCounts: Map<String, Int> get() = dedupeCounts ?: emptyMap()
+
+    /** 当前「×N 同结构」徽章计数（无基线时为空 map）。 */
+    val currentTemplateCounts: Map<String, Int> get() = templateCounts ?: emptyMap()
+
+    /**
+     * 应用一拍：[fullRebuild]（buffer 兜底事件）或本累积器无基线时全量重建并重铸镜像；
+     * 否则按 [changedKeys] 逐键对账。消费顺序约定：调用方**先 drain 变更键、后 drain 全量标记**
+     * ——标记若落在两次 drain 之间则本拍即走全量，不产生一拍陈旧窗口。
+     */
+    fun apply(snapshot: List<LogSqlEntry>, fullRebuild: Boolean, changedKeys: Set<String>) {
+        if (fullRebuild || dedupeCounts == null || templateCounts == null) {
+            // 全量重建：两张累积 map 与镜像一并按当下快照重新锚定（兜底事件点全部由 buffer 置位，
+            // 每个事件点为什么必须全量见 SqlLogEntryBuffer.countFullRebuildPending KDoc 与各置位处注释）。
+            dedupeCounts = dropCountsSnapshot().toMutableMap()
+            templateCounts = structureKeyCounts(snapshot).toMutableMap()
+            presenceMirror.clear()
+            keyToStructure.clear()
+            for (e in snapshot) {
+                keyToStructure[e.dedupeKey] = e.structureKey
+                presenceMirror[e.dedupeKey] = (presenceMirror[e.dedupeKey] ?: 0) + 1
+            }
+            return
+        }
+        if (changedKeys.isEmpty()) return
+        val dc = dedupeCounts!!
+        val tc = templateCounts!!
+        for (key in changedKeys) {
+            // ⨉N 徽章：buffer 丢弃计数按变更键重读即对齐（唯一变更源是 recordDedupeDrop，逐键 +1）。
+            val dropCount = dropCountForKey(key)
+            if (dropCount > 0) dc[key] = dropCount else dc.remove(key)
+            // 「×N 同结构」：在队计数净差 → structureKey 计数增减（同 dedupeKey 的条目 structureKey
+            // 恒同——两者都是 restoredSql 的确定性指纹，前者仅多一层字面量参数化）。
+            val newPresence = presenceForKey(key)
+            val oldPresence = presenceMirror[key] ?: 0
+            if (newPresence != oldPresence) {
+                val structure = keyToStructure[key]
+                    ?: structureKeyForKey(key)?.also { keyToStructure[key] = it }
+                if (structure != null) {
+                    val merged = (tc[structure] ?: 0) + (newPresence - oldPresence)
+                    if (merged > 0) tc[structure] = merged else tc.remove(structure)
+                }
+                if (newPresence > 0) {
+                    presenceMirror[key] = newPresence
+                } else {
+                    // 键出队即出镜像域——镜像/映射有界性随现存键域封顶（presence 同口径）。
+                    presenceMirror.remove(key)
+                    keyToStructure.remove(key)
+                }
+            }
+        }
+    }
+}
+
+/**
  * 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。
  *
  * 筛选项精简改造（2026-08-27）：
  * - 类型筛选：工具栏行「SQL类型」多选按钮（弹窗勾选，替代原两行按钮组）
  * - 高频折叠：整体移除（识别重复 SQL 的价值由去重 ⨉N 徽章承接）
  * - 去重徽章：开启「移除重复的sql」后被丢弃的 SQL 在条目旁累加显示 ⨉N
- * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收起）
+ * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收口）
  */
 class SqlLogPanel(
     internal val project: Project,
@@ -198,11 +294,28 @@ class SqlLogPanel(
     @Volatile
     internal var activeFocus: FocusFilter? = null
 
-    /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
+    /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。
+     *  T-SqlListCatchup 券B 起：指向 [countAccumulator] 的累积 map，按变更键增量更新而非每拍全量重算。 */
     internal var dedupeCounts: Map<String, Int> = emptyMap()
 
-    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
+    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。
+     *  T-SqlListCatchup 券B 起：指向 [countAccumulator] 的累积 map，按变更键增量更新而非每拍全量重算。 */
     internal var templateCounts: Map<String, Int> = emptyMap()
+
+    // ---------- T-SqlListCatchup 券B：计数快照增量累积 ----------
+
+    /**
+     * 券B：计数累积器——dedupeCounts/templateCounts 不再每拍全量重算，改为按 buffer 的变更键
+     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 键上限溢出等）由 buffer 置位，drain 到后
+     * 回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
+     */
+    internal val countAccumulator = CountSnapshotAccumulator(
+        dropCountsSnapshot = { manager.entries.dedupeCountsSnapshot() },
+        dropCountForKey = { manager.entries.dedupeCountForKey(it) },
+        presenceForKey = { manager.entries.dedupePresenceForKey(it) },
+        structureKeyForKey = { manager.entries.structureKeyForKey(it) },
+    )
 
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
@@ -211,6 +324,15 @@ class SqlLogPanel(
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     internal var lastRendered: List<LogSqlEntry> = emptyList()
+
+    /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
+     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     * **声明于 init 前**：init 块内首次 refreshList 即经 syncDiagnostics 读它（构造期序坑，同上注）。
+     */
+    internal val catchUpBadgeState = CatchUpBadgeState()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
@@ -469,6 +591,12 @@ class SqlLogPanel(
     /** 当前列表模型条目 restoredSql 列表（测试断言）。 */
     internal val visibleEntries: List<String>
         get() = (0 until listModel.size()).map { listModel.getElementAt(it).restoredSql }
+
+    /** 券B（T-SqlListCatchup）：面板侧 ⨉N 徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    internal val dedupeCountsForTest: Map<String, Int> get() = dedupeCounts
+
+    /** 券B（T-SqlListCatchup）：面板侧「×N 同结构」徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    internal val templateCountsForTest: Map<String, Int> get() = templateCounts
 
     /** 当前激活的类型过滤集合（测试断言）。 */
     internal val currentFilter: Set<StatementType> get() = activeFilter.toSet()

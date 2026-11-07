@@ -9,7 +9,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * 项目类型检测行为测试（T-TestGuard-07 零覆盖补测：log/ProjectTypeDetector 此前零覆盖）。

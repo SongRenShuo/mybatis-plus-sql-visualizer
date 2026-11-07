@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -17,8 +18,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
-import org.junit.Test
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -67,7 +66,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
 
     /** 与 DbConsoleIntegrationTest 同口径：demo 本地开发库 root/root（application.yml 复制）。 */
     private val dbPassword: String
-        get() = "root"
+        get() = DbTestCredentials.password("root")
 
     private data class DataSourceInfo(val url: String, val user: String, val driverClass: String)
 
@@ -92,7 +91,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = child.textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         if (info != null && localXml.isFile) {
             val local = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(localXml)
@@ -193,7 +192,6 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
      * 落盘纪律端到端：prepare → reuse → 手改防抖落盘。
      * 单方法承载三断言（DbConsoleIntegrationTest 同形态，规避类内测试顺序耦合）。
      */
-    @Test
     fun testExecDocSavedStateAcrossPrepareReuseAndManualEdit() {
         // 显式跳过而非 assumeTrue：平台 runner 会把 AssumptionViolatedException 记为 failure
         // 红掉整个 testDatabase 任务（四集成类既有痛点，20260917 实测）；基建可用时全量真跑

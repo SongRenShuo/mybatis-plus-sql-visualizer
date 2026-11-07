@@ -7,7 +7,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import cn.song.mybatisplus.visualizer.update.BarrierRegistry
 
 /**
@@ -28,7 +27,6 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
         super.tearDown()
     }
 
-    @Test
     fun testF48_注册在位且登记簿有账() {
         SqlMapperParserDefinition.ensureRegistered()
         assertNotNull("注入前注册在位（F37 语义保持）", LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage))
@@ -42,7 +40,6 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testF48_摘除路径运行时证据() {
         SqlMapperParserDefinition.ensureRegistered()
         assertNotNull(LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage))
@@ -57,7 +54,6 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
      * 纯性能微件——短路与原 forLanguage 在位判定行为等价（都不重建实例），黑盒无独占判别面，
      * 此处钉「行为等价」两面：已注册态重复调用零副作用（实例同一）、摘除后短路失效须重注册。
      */
-    @Test
     fun testF67_前置短路_已注册态重复调用零副作用且摘除后失效() {
         SqlMapperParserDefinition.ensureRegistered()
         val first = LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage)
@@ -77,7 +73,6 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun testF48_裸注册与挂靠注册对照() {
         val registry = LanguageParserDefinitions.INSTANCE
         // 清场：本测试的 assertNull 断言依赖注册表无残留（ensureRegistered 可能被同类/前序用例触发过）

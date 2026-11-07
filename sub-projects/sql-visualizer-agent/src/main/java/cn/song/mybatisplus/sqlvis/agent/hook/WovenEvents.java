@@ -44,16 +44,16 @@ final class WovenEvents {
         FIRST_FIRE.set(false);
     }
 
-    static void emit(Object stmt, String op, String sql, Object result, Throwable failure,
-                     long startNanos, String url) {
-        emit(stmt, op, sql, result, failure, startNanos, url, null);
+    static boolean emit(Object stmt, String op, String sql, Object result, Throwable failure,
+                        long startNanos, String url) {
+        return emit(stmt, op, sql, result, failure, startNanos, url, null);
     }
 
-    static void emit(Object stmt, String op, String sql, Object result, Throwable failure,
-                     long startNanos, String url, ExecutionScope scope) {
+    static boolean emit(Object stmt, String op, String sql, Object result, Throwable failure,
+                        long startNanos, String url, ExecutionScope scope) {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
             if (scope != null) cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.omitted();
-            return;
+            return false;
         }
         if (FIRST_FIRE.compareAndSet(false, true)) {
             // 2026-10-14：不再打印 SQL 片段（原 sqlHead=前 80 字符）。本行的用途只是「钩子在产」
@@ -106,5 +106,10 @@ final class WovenEvents {
         EventBuilder.applyResult(event, op, result, failure);
         boolean accepted = EventBus.offerTracked(event);
         if (scope != null) scope.reported = accepted;
+        // T-OracleWrapperRegistry：返回值 = 本帧**真的产出了事件**（供 NestGate 只在此时抑制外层；
+        // 旧实现把「进入过」当「产出过」，内层盲区会连外层能出的 SQL 一起吞掉）。
+        //（车道5 合并注：insight 的 offerTracked 带对账返回——队列拒收同样未真产出，
+        // 故以 accepted 为准，比 8f4492d5 侧的恒 true 更严格。）
+        return accepted;
     }
 }

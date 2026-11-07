@@ -71,6 +71,8 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
         val bad = srcTestKotlinTree
             .filter { (f, _) -> f.extension == "kt" }
             .filter { (f, _) -> f.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
+            // T-TestGapSpeed T2（2026-11-04）：BrowserUtil 收敛守卫本体——扫描模式与自证语料含该片段
+            .filter { (f, _) -> f.name != "BrowserUtilConvergenceGuardTest.kt" }
             .filter { (_, text) -> stripComments(text).contains("BrowserUtil.browse(") }
             .map { (f, _) -> f.relativeTo(repoRoot()).path.replace('\\', '/') }
             .toList()

@@ -8,7 +8,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JPanel
 
 /**
@@ -28,7 +27,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     // ======================== A2 持久宿主 ========================
 
     /** 嵌入走 consoleHost，容器稳定在 editorHolder（显示链宿主不变）。 */
-    @Test
     fun testEmbedGoesThroughPersistentHost() {
         val panel = newPanel()
         val console = JPanel()
@@ -44,7 +42,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     }
 
     /** DBN 拿走 console → host 容器与显示链不断；rehost 条件成立时重挂成功。 */
-    @Test
     fun testDbnTakingChildKeepsHostAndRehosts() {
         val panel = newPanel()
         val console = JPanel()
@@ -68,7 +65,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     }
 
     /** rehost 只接受当前嵌入实例；已挂回的组件不重复处理。 */
-    @Test
     fun testRehostRefusesForeignOrAlreadyHosted() {
         val panel = newPanel()
         val console = JPanel()
@@ -84,7 +80,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     // ======================== 幂等与替换 ========================
 
     /** 同一实例重复回调（重复执行触发 onResultsReady）→ 幂等，不摘挂不重建。 */
-    @Test
     fun testSameInstanceReembedIsIdempotent() {
         val panel = newPanel()
         val console = JPanel()
@@ -98,7 +93,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     }
 
     /** 换入新控制台组件：旧组件摘除、host 子层替换为新实例。 */
-    @Test
     fun testReembedReplacesOldChild() {
         val panel = newPanel()
         val first = JPanel()
@@ -121,7 +115,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     }
 
     /** P3a：执行视图必须提供显式「返回预览」，不再只能靠刷新按钮。 */
-    @Test
     fun testExecuteEmbedShowsBackToPreviewHeader() {
         val panel = newPanel()
         panel.embedConsoleForTest(JPanel())
@@ -132,7 +125,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     }
 
     /** P3a：返回预览必须移除执行视图头部（不能只重渲染 SQL 留着「执行结果」标识）。 */
-    @Test
     fun testBackToPreviewRemovesExecuteHeader() {
         val panel = newPanel()
         panel.embedConsoleForTest(JPanel())
@@ -154,7 +146,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     // ======================== A2 清空语义 ========================
 
     /** 清空预览：host 子层清空、容器保留（再次嵌入复用同一容器实例）。 */
-    @Test
     fun testDetachClearsHostButKeepsContainer() {
         val panel = newPanel()
         val console = JPanel()
@@ -175,7 +166,6 @@ class ConsoleHostTest : BasePlatformTestCase() {
     // ======================== A1 身份探针 ========================
 
     /** 身份探针基线：首次嵌入记录 id，换入新实例后 id 更新，同实例幂等不改变。 */
-    @Test
     fun testIdentityProbeTracksEmbeddedConsole() {
         val panel = newPanel()
         val first = JPanel()

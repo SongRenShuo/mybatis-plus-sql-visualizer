@@ -69,6 +69,13 @@ internal object ExecDialectRouting {
         // 候选链恒落 PG 兜底——照 GaussDB 同款「本名 → PG 兜底」写法。
         "HighGo" to listOf("HighGo", "PostgreSQL"),
         "Vastbase" to listOf("Vastbase", "PostgreSQL"),
+        // T-GoldenDbDialect（券 A）：自注册方言 GoldenDbSqlDialect（见 database-optional.xml）——
+        // 262 平台无 GoldenDB 方言模块（.intellijPlatform/localPlatformArtifacts/IU-262.9437.185
+        // 全量 xml grep golden 零命中，正对照 mysql/greenplum 命中，2026-11-07），注册后语言
+        // id `GoldenDB` 进入平台可用清单、候选链首项即命中。GoldenDB 是 MySQL 血统
+        // （p37「完全兼容 MySQL 客户端」+ manifest "MySQL Connector Java"），平台缺位时落
+        // MySQL 兜底（渲染形态逐项相同）。
+        "GoldenDB" to listOf("GoldenDB", "MySQL"),
     )
 
     /** 目标数据源解析测试缝（headless 无 DataSourceStorage；生产恒 null 走真链）。 */
@@ -108,6 +115,55 @@ internal object ExecDialectRouting {
             }
         }
         return defaultDataSource()
+    }
+
+    /** 插件方言名 → 平台 SQL 方言 language id 候选（逐字查表，大小写与首尾空白不参与比对）。 */
+    internal fun sqlLanguageIdCandidates(pluginDialectName: String?): List<String> {
+        val name = pluginDialectName?.trim()?.takeIf { it.isNotEmpty() } ?: return emptyList()
+        return PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS.entries
+            .firstOrNull { it.key.equals(name, ignoreCase = true) }?.value.orEmpty()
+    }
+
+    /**
+     * 渲染方言 ↔ 数据源方言 id 候选 是否匹配（纯函数）。
+     *
+     * 用「渲染方言 → 平台 language id 候选」正向比对，而不是把平台 id 反查成插件方言名：
+     * 反查在 PostgreSQL 一族（PostgreSQL/KingBase/openGauss/GaussDB/HighGo/Vastbase）上不唯一，
+     * 正向比对则天然按 [PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS] 已登记的家族别名收敛（如 MariaDB
+     * 的候选含 MySQL）。渲染方言不在表里 → 无从匹配（false），不猜。
+     */
+    internal fun dialectMatchesRendered(renderedDialectName: String?, dsDialectIds: List<String?>): Boolean {
+        val candidates = sqlLanguageIdCandidates(renderedDialectName)
+        if (candidates.isEmpty()) return false
+        return dsDialectIds.filterNotNull().filter { it.isNotBlank() }
+            .any { id -> candidates.any { it.equals(id, ignoreCase = true) } }
+    }
+
+    /**
+     * 兜底目标数据源挑选（纯函数，UI-046 A2/A3）。
+     *
+     * 背景：`resolveTargetDataSource` 只有「last-used 记忆 → 插件默认源」两条路，全新项目/换机器
+     * 后两者都空 → 返回 null → 空 Runner 分支的方言重映射整条被跳过，明明有在册数据源却直接落到
+     * 「方言不匹配」文案（2026-11-01 真机实证：12 个在册源、3 个 MySQL，首次执行必失败）。
+     *
+     * 确定性优先级（**只在「选中目标源」这一步扩路，不新增任何执行拦截**）：
+     *  1. 调用方已给出目标源（last-used/默认源）→ 原样返回；
+     *  2. 按 [dialectIdsOf] 判方言，**恰好 1 个**与渲染方言匹配 → 用它；
+     *  3. 仍无匹配但在册源**只有 1 个** → 用它（单源无歧义）；
+     *  4. 多候选 / 零候选 → null（不猜，交给选择器或报错）。
+     */
+    internal fun pickTargetDataSourceForDialect(
+        existing: Any?,
+        dataSources: List<Any>,
+        renderedDialectName: String?,
+        dialectIdsOf: (Any) -> List<String?>,
+    ): Any? {
+        if (existing != null) return existing
+        if (dataSources.isEmpty()) return null
+        val matched = dataSources.filter { dialectMatchesRendered(renderedDialectName, dialectIdsOf(it)) }
+        if (matched.size == 1) return matched.first()
+        if (dataSources.size == 1) return dataSources.first()
+        return null
     }
 
     /**
@@ -155,9 +211,79 @@ internal object ExecDialectRouting {
     /**
      * 空 Runner 文案选择（D3）：项目存在已配置数据源 → 方言不匹配可行动文案；
      * 真的没有任何数据源 → 既有空数据源引导文案。
+     *
+     * 保留作「无渲染方言、也无方言判定函数」时的退化口径；带方言事实的调用方应改用
+     * [classifyEmptyRunners] + [emptyRunnersHintKey]（UI-046 B：二分口径会把「源都没连上」
+     * 误报成「方言不匹配」）。
      */
     internal fun emptyRunnersHintKey(hasRegisteredDataSources: Boolean): String =
         if (hasRegisteredDataSources) "execute.datasource.dialectMismatch" else "execute.datasource.empty"
+
+    /** 空 Runner 的真实归因（UI-046 B：文案必须说真话，不再一律「方言不匹配」）。 */
+    internal enum class EmptyRunnersReason {
+        /** 零个在册数据源。 */
+        NO_DATA_SOURCE,
+
+        /** 有在册源，但一个都判不出方言（未连接/未内省）——真实原因不是方言不匹配。 */
+        DIALECT_UNKNOWN,
+
+        /**
+         * 方言判得出、也与渲染方言对得上，但**exec 文件尚未与任何数据源绑定**（UI-048）。
+         *
+         * 平台 `getAttachDataSourceRunners` 按「文件 → 数据源」关联筛 Runner，未绑定必空——
+         * 2026-11-01 真机实证：单源已连接 + 已表级内省、本文件未绑定时点执行，runners=0，
+         * 而此前的归因把它混进「未连接/未内省」（假因果）。
+         */
+        DIALECT_MATCHED_BUT_UNBOUND,
+
+        /** 方言判得出、也与渲染方言对得上、文件**已绑定**，平台却仍枚举不出 Runner（源不可 attach）。 */
+        DIALECT_MATCHED_BUT_UNUSABLE,
+
+        /** 方言判得出，但都对不上渲染方言。 */
+        DIALECT_MISMATCH,
+    }
+
+    /**
+     * 空 Runner 归因（纯函数）：零源 → [EmptyRunnersReason.NO_DATA_SOURCE]；全部判不出方言 →
+     * [EmptyRunnersReason.DIALECT_UNKNOWN]；有源与渲染方言对得上、但 [boundToDataSource] 明确为
+     * false → [EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND]；对得上且已绑定（或绑定态未知）→
+     * [EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE]；其余 → [EmptyRunnersReason.DIALECT_MISMATCH]。
+     *
+     * **未绑定优先于未连接**（UI-048）：绑定态是现场探针的硬事实，而「没连上」只是推测；两者都
+     * 成立时按硬事实出文案，不许把推测写成因果。绑定态未知（[boundToDataSource] 为 null，如
+     * Community / 反射失败 / 测试未注入）时退回既有口径（[EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE]）。
+     *
+     * 后几档都是「平台枚举不出 Runner」的事实，但用户可行动作不同：未绑定 → 先做一次绑定；已绑定
+     * 仍不可用 → 查连接/内省/Dialects 标注；方言对不上 → 调 Dialects 映射。渲染方言缺失时无法判定
+     * 「对得上」，按方言不匹配处理（与既有 W7 反推口径一致）。
+     */
+    internal fun classifyEmptyRunners(
+        dataSources: List<Any>,
+        renderedDialectName: String?,
+        boundToDataSource: Boolean? = null,
+        dialectIdsOf: (Any) -> List<String?>,
+    ): EmptyRunnersReason {
+        if (dataSources.isEmpty()) return EmptyRunnersReason.NO_DATA_SOURCE
+        val idsPerSource = dataSources.map { ds -> dialectIdsOf(ds).filterNotNull().filter { it.isNotBlank() } }
+        if (idsPerSource.all { it.isEmpty() }) return EmptyRunnersReason.DIALECT_UNKNOWN
+        val rendered = renderedDialectName?.takeIf { it.isNotBlank() }
+        if (rendered != null && idsPerSource.any { dialectMatchesRendered(rendered, it) }) {
+            // UI-048：绑定态是探针硬事实，优先于「未连接」这类推测（反向验证锚点）。
+            if (boundToDataSource == false) return EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND
+            return EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE
+        }
+        return EmptyRunnersReason.DIALECT_MISMATCH
+    }
+
+    /** 归因 → 文案键（五档文案：空源 / 无法定位 / **未绑定** / 方言不匹配）。 */
+    internal fun emptyRunnersHintKey(reason: EmptyRunnersReason): String = when (reason) {
+        EmptyRunnersReason.NO_DATA_SOURCE -> "execute.datasource.empty"
+        EmptyRunnersReason.DIALECT_UNKNOWN,
+        EmptyRunnersReason.DIALECT_MATCHED_BUT_UNUSABLE,
+        -> "execute.datasource.notConnected"
+        EmptyRunnersReason.DIALECT_MATCHED_BUT_UNBOUND -> "execute.datasource.notBound"
+        EmptyRunnersReason.DIALECT_MISMATCH -> "execute.datasource.dialectMismatch"
+    }
 
     // ------------------------------------------------------------------
     // 反射段（平台不可用一律降级 null / 空清单）
@@ -225,6 +351,67 @@ internal object ExecDialectRouting {
             registeredDataSources = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList()),
             dataSourceName = { ds -> DataSourceSettings.getName(ds) },
             defaultDataSource = { runCatching { DataSourceSettings.getDefaultDataSource(project) }.getOrNull() },
+        )
+    }
+
+    /**
+     * 目标数据源解析（生产链，UI-046 A）：last-used 记忆 → 插件默认源 → **按渲染方言唯一匹配** →
+     * **单源兜底** → null。
+     *
+     * 只在「选中目标源」这一步扩路，不新增任何执行拦截（用户既有定案：方言不能影响最终执行）。
+     * 前两档与 [resolveTargetDataSource] 完全一致，故既有项目行为零变化。
+     */
+    internal fun resolveTargetDataSourceForDialect(project: Project, renderedDialectName: String?): Any? {
+        val existing = resolveTargetDataSource(project)
+        if (existing != null) return existing
+        val available = runCatching { availableLanguageIds(project) }.getOrDefault(emptyList())
+        val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+        return pickTargetDataSourceForDialect(
+            existing = null,
+            dataSources = registered,
+            renderedDialectName = renderedDialectName,
+            dialectIdsOf = { ds -> listOf(platformDialectId(ds), urlFallbackId(ds, available)) },
+        )
+    }
+
+    /**
+     * 探针结果 → 归因用的绑定事实（UI-049 纯函数）：[ExecFileBinding.BindState.BOUND] → true，
+     * [ExecFileBinding.BindState.UNBOUND] → false，`UNKNOWN` → **null（未知）**，退回既有口径。
+     *
+     * 为什么必须单独一个函数：旧写法 `probe.pinnedDsId != null` 把「探不到」压成 false，于是
+     * 在 243 基线（`DataSourcePerFileMappingsImpl` **整个类都不存在**，真机日志 08:29:57 的
+     * ClassNotFoundException 是常态而非偶发）上，任何 runners=0 都会被报成「未绑定」——就算
+     * 文件其实已绑定。UI-048 修的是「把推测当因果」，这是同一病症的反向版。
+     */
+    internal fun boundToDataSourceFlag(probe: ExecFileBinding.ExecBindProbe?): Boolean? =
+        when (probe?.bindingState) {
+            ExecFileBinding.BindState.BOUND -> true
+            ExecFileBinding.BindState.UNBOUND -> false
+            ExecFileBinding.BindState.UNKNOWN, null -> null
+        }
+
+    /**
+     * 空 Runner 归因（生产链）：方言 id 候选 = 平台 DAS 方言 → URL 兜底（可用清单只取一次）；
+     * 绑定态由 [ExecFileBinding.probeExecBind] 现场探测（UI-048/UI-049）——**探针只在这一层调用**，
+     * 判定内核仍是上面的纯函数。
+     *
+     * @param execFile exec 草稿文件；null（或探针降级为 UNKNOWN）= 绑定态未知，退回既有口径
+     */
+    internal fun classifyEmptyRunners(
+        project: Project,
+        registeredDataSources: List<Any>,
+        renderedDialectName: String?,
+        execFile: com.intellij.openapi.vfs.VirtualFile? = null,
+    ): EmptyRunnersReason {
+        val available = runCatching { availableLanguageIds(project) }.getOrDefault(emptyList())
+        val probe = execFile?.let { file ->
+            runCatching { ExecFileBinding.probeExecBind(project, file) }.getOrNull()
+        }
+        return classifyEmptyRunners(
+            dataSources = registeredDataSources,
+            renderedDialectName = renderedDialectName,
+            boundToDataSource = boundToDataSourceFlag(probe),
+            dialectIdsOf = { ds -> listOf(platformDialectId(ds), urlFallbackId(ds, available)) },
         )
     }
 

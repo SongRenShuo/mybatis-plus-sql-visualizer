@@ -1,6 +1,6 @@
 ---
 name: ide-demo-gif
-description: "IntelliJ/JetBrains IDE 功能演示 GIF 录制：脚本重放+帧稳定采样+无损中间产物转制。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环 GIF，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
+description: "IntelliJ/JetBrains IDE 功能演示动图录制：脚本重放+帧稳定采样+无损中间产物转制，交付 GIF+MP4+WebP 三件套（MP4 为站点主用，体积约 GIF 的 1/3）。当用户要求录制、补拍或重录 IDE 插件功能演示动图，把 IDE 内操作过程做成循环动画，给文档站/README/发行说明配功能演示图时使用。Windows + pyautogui 桌面自动化；**同一时刻只允许一个 GUI 操作者**——主控或用户明确指派的子代理都可以做，但禁止两路并发操作桌面（合成输入会互相打死）。不适用于网页或移动端录屏。"
 when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」「给功能页配演示图」且对象是 IDE 内的操作画面时。网页录屏用 browser-use，不要用本 skill。"
 ---
 
@@ -14,7 +14,7 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 
 | 位置 | 内容 | 权威性 |
 |---|---|---|
-| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
+| `.agents/skills/ide-demo-gif/scripts/` | 通用基建：`gifkit` `shot` `assemble` `deliver` `scene_template` `locate` `verify` `black_underlay` `clipread` | **权威源**（改这里，再同步到 `record/` 工作副本） |
 | `record/` | 场景脚本 `scene_*.py`、`BASELINE.md`、`preflight.py`/`prep_env.py`、`lib/nav.py`、`_run_elev.bat` | 项目侧工作位置（场景动作、坐标、沙盒预置） |
 | `record/` 里的 `anchor.py` `robot.py` `mcpnav.py` | 图像锚点 / robot-server 组件树 / IDE MCP 开文件 | 项目侧，**不在** skill scripts 内（未通用化） |
 
@@ -34,11 +34,64 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 | 构图 | 窗口外框 1370×984 @ 屏幕 (277,25)；**录制区域再内缩 8px 去阴影** → `(285,26,1354,974)`（见坑 49） |
 | IDE 缩放 / 编辑器字号 | 120% / 13pt（13pt 是 2026.2 默认值，别再调大） |
 | 主题 | Islands Dark（或目标项目定的官方暗色基准） |
-| 导出 | 15fps，宽 1280（多投放位共用的那张 1440），4~6MB 预算 |
-| 文件 | `<功能名>.gif` + 同名 `.png` poster（关键定格帧） |
+| 导出 | 15fps，宽 1280（多投放位共用的那张 1440） |
+| 交付 | **三件套同名**：`<功能名>.gif`（源/兜底）+ `<功能名>.mp4`（站点主用）+ `<功能名>.webp`（poster）；见下节 |
+| 体积 | 按 **MP4** 验收：单个 ≤600KB，首页第一屏（3~4 张）合计 ≤2MB |
 | 循环 | 首尾帧一致，接缝 diff ≤1 |
 
 投放宽度决定导出宽度：导出宽 ≥ 显示宽 × 1.8 才锐利。换投放位/构图后，脚本里标过的坐标全部要重标。
+
+## 交付三件套（2026-11-03 定例，录完必做）
+
+`assemble.py` 吐出的 GIF + PNG poster 只是**源**。进文档站前必须再过一道后处理，产出三份同名文件：
+
+| 产物 | 编码 | 站点用法 |
+|---|---|---|
+| `<功能名>.gif` | assemble.py 原生 | 源文件；视频加载失败时兜底 |
+| `<功能名>.mp4` | H.264 `crf 24 -preset slow` | **默认加载的就是它**（体积约为 GIF 的 1/3） |
+| `<功能名>.webp` | libwebp `q 82` | poster（视频未就绪/失败时显示；体积约为 PNG 的 1/5） |
+
+一条命令做完（裁框 → mp4 → webp → 校验）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py <gif 路径> --out <输出目录>
+```
+
+### 1. 必须裁窗框
+
+录制区域虽然已内缩 8px（坑 49），成片四边仍会残留 **5~7px 浅灰窗框**——2026-11-03 全量扫描 90 个站点素材，34 个有框：左/右 5~7px、底 4~7px、顶 0~1px。**逐张量、逐张裁**，不要套固定百分比（`cropdetect` 只认黑边，浅灰框得自己扫像素）。
+
+手工等价命令（`deliver.py` 内部就是这几条）：
+
+```bash
+# 裁 GIF 必须带调色板，否则体积会涨 40~277 倍；dither=none 才能逐像素一致
+ffmpeg -i in.gif -filter_complex "[0:v]crop=W:H:X:Y,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none" -loop 0 out.gif
+# 视频（偶数尺寸才能走 yuv420p）
+ffmpeg -i in.gif -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart \
+  -vf "crop=W:H:X:Y,scale=trunc(iw/2)*2:trunc(ih/2)*2" out.mp4
+# poster 取关键定格帧再裁
+ffmpeg -i in.gif -frames:v 1 -vf "crop=W:H:X:Y" -c:v libwebp -quality 82 -compression_level 6 out.webp
+```
+
+**零损失校验**：`ffmpeg -i out -i in -filter_complex "[1:v]crop=W:H:X:Y[ref];[0:v][ref]psnr" -f null -`，PNG/poster 应为 `inf`；GIF 多数 `inf`，少数 78~89 dB（单通道 ±1，肉眼不可辨）。
+
+### 2. 体积基线（2026-11-03 全站实测）
+
+| | 原 | 现 | 降幅 |
+|---|---|---|---|
+| 69 个演示 GIF → MP4 | 52.06MB | 18.7MB | −64% |
+| 22 张 poster PNG → WebP | 6.45MB | 1.25MB | −81% |
+| `guide/configuration` 整页媒体 | 2.71MB | 0.85MB | −69% |
+
+GIF 体积不再作为预算指标（它只是源）。慢网下首屏一次拉 7MB 动图要 20 秒以上，视频可流式播放。
+
+### 3. 站点侧引用（文档站仓）
+
+- 组件（`GifPlayer`）：`src` 仍传 `.gif`，组件内部按同名推导 `.mp4`，失败回退 GIF；
+- markdown 直插动图：用 `<figure><video :src="'/demo/x.mp4'" :poster="'/demo/x.webp'" autoplay muted loop playsinline preload="metadata"><figcaption class="visually-hidden">原 alt 文案</figcaption></figure>`；
+  ⚠️ 写成 `src="/demo/x.mp4"`（非绑定字符串）会被 Vite 的 `transformAssetUrls` 当模块解析，构建报 `failed to resolve import`；
+- 静态截图同样转 WebP 后引用 `.webp`。
+
 
 ## 环境就位清单
 
@@ -52,6 +105,9 @@ when_to_use: "用户说「录一张演示 GIF」「补拍/重录 demo 动图」�
 7. **排查置顶覆盖层**：ZCode 自动化面板、PixPin 等常驻应用若是置顶态会盖住沙盒窗口，坐标点击会打进覆盖层。EnumWindows 核对前台窗口标题与 rect；需要时让 IDE 持续保持 TOPMOST 干完活再撤（TOPMOST→NOTOPMOST 舞步结束就回到非置顶带，对置顶覆盖层无效）。**反过来也要留意**：主窗口的 TOPMOST 会盖住设置对话框等独立窗口（见坑表 39）。
 8. **常驻截图工具录制期临时退出**（PixPin 实录为头号干扰源）：全局热键劫持面广（Ctrl+Shift+A/F12、Alt+1 等），其弹窗对合成点击免疫成僵尸弹窗，低层钩子还随机吞合成事件（症状=输入时灵时不灵）。`taskkill //IM PixPin.exe //F` 后全部恢复，录完重启（安装路径先 wmic 查；提权进程如 Snipaste 杀不掉，一般不捣乱）。ZCode 桌面通知 toast 会抢焦点顶掉打开中的浮层——动作链必须在单脚本内一次跑完，不留跨调用间隙。
 9. **录「执行类」画面（EXPLAIN / 执行 SQL / 真实结果）前，核对 IDE 数据源的连接参数与应用配置逐字一致**。本项目实测：应用 `application.yml` 的 MySQL URL 带 `sessionVariables=sql_mode=ANSI_QUOTES`，而 `.idea/dataSources.xml` 里的同名数据源没有 → 同一句 `FROM "user"` 应用能跑、IDE 侧报 `1064`，白查数小时（详见坑表 29）。两边 URL 拉平后**需重启 IDE 生效**（`.idea/` 通常已 gitignore，属本机状态不进仓）。
+11. **录「执行类」画面还要确认沙盒 JDBC 驱动是两份文件齐全**（2026-11-01 实测）：`config/jdbc-drivers/`（目录清单+jar）只说明有哪些版本，`config/options/databaseDrivers.xml`（已安装状态，形如 `<driver id="mysql.8"><artifact id="MySQL ConnectorJ" version="9.7.0"/></driver>`）才决定 driver id 绑哪个 artifact。只拷前者 → 远程 JDBC 进程 classpath 空 → `RemoteProcessSupport … ClassNotFoundException`，画面表现为「执行/EXPLAIN 静默回退原生控制台」，很容易拍出一条「看着正常其实功能没跑」的废片。做法＝整份拷宿主 `config/options/databaseDrivers.xml` + 确认 jar 实体在场 + 重启 IDE；**别改 `driver-ref` 为 `artifact/version` 写法**（IDE 会回写成 `mysql.8`）。
+12. **要拍「信创/多库真实捕获」画面，先给 demo 补驱动再起应用**（2026-11-02 真机实证）：demo 默认只有 MySQL 驱动，换 datasource 到瀚高/海量/金仓会起不来（`DataSourceProperties.determineDriverClassName` 断言失败）。做法＝`pom.xml` 加**system-scope** 依赖指向厂商 jar（jar 直接取插件沙盒 `plugins-test/<plugin>/lib/` 里那份，与插件在用的是同一批）+ 改 `src/main/resources/application.yml` 的 datasource 四项，然后**在 IDE 里 Shift+F10 起应用**——平台 `updateJavaParameters` 会自动注入 `-javaagent`，增强捕获链路才通（外部启动的 JVM 挂不上，见验收 skill「通道类功能真机验证」）。**往 `target/classes` 解压驱动再跑不成立**（驱动类不在运行 classpath）。换族时会弹「Process is running，Stop and Run」，点它即可；每族跑 40s 攒够条目再换。录完把 pom/yml/`lib/` 全部还原。
+13. **要在比构建基线更新的 IDE 上录**（如 2026.1/261）：**不要改 `-PplatformVersion` 重编**（高版本把 `ContentManagerEvent`/`SearchSession` 等拆成独立模块，`compileJava` 会报一堆找不到符号）。正解＝基线版本 `buildPlugin` 产物解压进目标 IDE 的插件目录（plugin.xml `since-build=243` 无 `until-build`，向上兼容是设计内），目标 IDE 用私有 `-Didea.config/system/plugins.path` 隔离副本 + 拷 `idea.key` + 许可 agent 写进该副本的 `idea64.exe.vmoptions`。画面差异（新 UI 细节、设置页布局）属预期，成片前请用户确认要不要在旧版本重录。
 10. **要拍设置页里「首屏之下」的分组，先请用户把设置页滚到位**（合成滚动是 no-op，见坑表 35）——这条要在开工前就问，别等到录的时候才发现够不着。
 
 ## 工作流
@@ -91,6 +147,14 @@ python assemble.py perf/tN.mp4 perf/tN.gif --width 1280 --poster perf/tN.png
 
 转制后核对 `decoded 帧数 == Recorder 打印的 frames`（assemble 已修残留帧 bug，但核对是最后防线）。poster 需要指定帧时直接从 mp4 抽：`ffmpeg -i mp4 -vf "select='eq(n\,N)',scale=1280:-2" poster.png`。
 
+**转制完还有一道交付后处理**（裁窗框 → mp4 → webp，一条命令）：
+
+```bash
+python .agents/skills/ide-demo-gif/scripts/deliver.py perf/tN.gif --out perf/deliver
+```
+
+产出 `tN.gif / tN.mp4 / tN.webp` 三件套并自动校验零损失，规格见上文「交付三件套」。**交接给文档站的是 `deliver/` 下这三份**，不是 `perf/` 里未裁框的原片。
+
 **入库分层（本项目）**：可复用的 `record/scene_*.py`、`anchor.py`、`robot.py`、bootstrap 与 `_run_elev.bat` 逐项检查后显式 `git add`；`record/perf/` 存 MP4/转制帧、`record/shots/` 存过程截图、`record/templates/` 存本机模板、`record/robot-plugins/` 存下载插件，均是被 git 忽略的本地产物。一次性 `_probe*.py` / `probe_*.py`、进程检查 PS1 等**新文件放 `record/tmp/`**（本机忽略目录），不要散落在根目录；若探针需要导入 `gifkit` 等根目录模块，显式把 `record/` 加进 `sys.path`。**移入 tmp 的探针统一带幂等兜底块**（2026-10-19 定例）：`sys.path` 初始化不要只取 `dirname(__file__)`——从 record 根移进 tmp 后会只剩 tmp 在路径里、`import ac/bc_common` 直接失败。模板：
 
 ```python
@@ -102,15 +166,17 @@ for _q in (_p, _os.path.dirname(_p)):
         _sys.path.insert(0, _q)
 ```
 
-（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。正式 GIF+PNG 在文档站 `public/demo/` 入库；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
+（`ROOT=Path(__file__).resolve().parents[1]` 的写法在 tmp 下正好指向 record/，无需改；硬编码绝对路径的也无需改。批量改 tmp 文件时注意 PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1——脚本内容必须纯 ASCII，否则中文注释会变乱码并与下一行粘连。）已跟踪的历史 probe 文件不受忽略规则影响。提权封装生成的 `record/_elev_run.log` 也忽略。**正式三件套（gif/mp4/webp）在文档站 `public/demo/` 入库**；先核对截图无账号、许可证和项目隐私。不要 `git add record/` 全包暂存，按明确路径提交正式脚本。
 
 ### 4. 验收
 
+- **三件套齐全且同名**：`<功能名>.gif` / `.mp4` / `.webp` 同目录同前缀；mp4 单件 ≤600KB、首页首屏合计 ≤2MB
+- **裁框后四边干净**：抽首帧扫四边，连续浅色带厚度应为 0（原片会有 5~7px）
 - 抽帧检查动作节点/定格/poster 三处内容正确；循环接缝 ≤1（结构性跳变场景除外，需注明）
-- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利；**投放位的最终动画确认必须由用户真实可见渲染完成**
-- **断图回落形态由投放位组件决定，验收预期按组件取**：GifPlayer 直出形态（功能详解页，2026-09-15 起取消 poster 兜底）= 失败回落灰色占位盒；首页叠层形态（FeatureAlternate/DocsShowcase）= 失败回落 poster 常驻
-- 投放位建议优先「GIF 随 SSR 初始直出」的文档流 img——hydration 后 JS 动态插入 + absolute 叠层淡入的 GIF 在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
-- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404）
+- **动画是否在播只能以真实可见渲染（用户目视 / 真实浏览器前台）为准**。IAB（ZCode 内嵌浏览器）**能正常播放 GIF**（2026-09-15 用户实测）；但 canvas 像素采样与单帧截图**不能**作为动画判据——`canvas.drawImage` 对动画 GIF 只绘制首帧（Chromium 行为），像素指纹恒定会产生「静止」假象（2026-09-15 实证：误判 IAB 不播 GIF）。`<video>` 同理：自动验证只做非动画侧——`readyState === 4` + `!paused` + 实际渲染尺寸，**最终动画确认必须由用户真实可见渲染完成**；自动验证只做非动画侧：资产多帧（ffprobe 帧数 >60）+ 播放组件结构就绪态 + 断图回落 + 亮暗色 + 实际列宽下文字锐利
+- **回落形态由投放位组件决定，验收预期按组件取**：`GifPlayer`（功能详解页）= 视频加载失败回退原 `.gif`，GIF 也失败则灰色占位盒；首页 `FeatureAlternate` / `DocsShowcase` = `poster` 常驻兜底、视频失败摘掉叠层
+- 投放位建议优先「媒体随 SSR 初始直出」的文档流写法——hydration 后 JS 动态插入 + absolute 叠层淡入的动图在部分 Chromium 环境存在解码停帧（2026-09-15 用户真实浏览器实证：首页直出结构动画正常、详解页动态插入结构静止，直出后修复）
+- **站点重建后必须重启本地 preview 服务器**（sirv 启动时预扫文件表，陈旧映射对重新生成过的页面返回 404；新增的 `.mp4/.webp` 在旧进程里也一直 404）
 - 体积超预算优先降静态保留（--hold），不降宽不降帧（暗色低动态画面 0.9MB 也能全帧锐利，低体高不算缺陷）
 
 ## 自检与定位标准件（`$SKILL/scripts/locate.py` / `$SKILL/scripts/verify.py`，`$SKILL=.agents/skills/ide-demo-gif`）
@@ -205,6 +271,18 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
 | `create_database_connection` / `edit_database_connection` | 建/改数据源（`name`/`dbms`/`url`/`needToCheckDs`，凭据可写进 URL） |
 | `list_database_connections` / `list_database_schemas` / `test_database_connection` | 查连接与 schema、验连通 |
 | `execute_sql_query` | 直接跑 SQL 验数据 |
+
+### 最小连通性自证（不装 MCP 客户端）
+
+怀疑 MCP Server 没起来时，`curl` 就够，不必绕 ZCode 的 mcp.servers 配置：
+
+```
+curl -N http://127.0.0.1:64342/sse           # 收 event: endpoint + sessionId（401 = 没启用；500 = 平台契约问题）
+POST /message?sessionId=<sid>  {"method":"initialize",...}    # 202 = 通
+POST /message?sessionId=<sid>  {"method":"notifications/initialized"}
+POST /message?sessionId=<sid>  {"method":"tools/list"}         # 数工具个数
+```
+结果从 SSE 的 `data:` 行读，工具调用参数里**必须带 `projectPath`**。这套探针也用于跨版本验证平台 MCP 是否被插件拖挂（判据：`initialize` 非 500 + 日志无 `CollectionsKt.addAll` NPE）。
 
 ### 三个实测约束
 
@@ -361,6 +439,11 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
 3. **`anchor.py` 模板（兜底）**：只用于 robot 真查不到的纯图形元素。模板必须按 **120% ideScale** 标定
    （实测：屏幕缩放偏离 1.0 时，不缩放模板得分掉到 0.68~0.78，低于 0.85 阈值 → 表现为「明明在屏幕上却找不到」）。
 4. **硬编码坐标（最后手段）**：写完必须配一条 `verify.Guard.require()` 断言，否则布局一变就是白录。
+   **坐标类目标再按这三条走**（2026-11-01 验收轮实测，四类「点了没反应」全在探针侧）：
+   - **对话框内工具栏坐标每会话漂移 25~27px**：同一对话框、同一分辨率，两次会话按钮中心实测 y=226 vs 209、x=1305 vs 1342。复用上轮坐标＝整行点空。**读坐标靠裁剪放大**（`ImageGrab.crop(...).resize(2x)`）而不是看整屏截图，或**悬停到候选点看有没有 hover 高亮**自证。
+   - **脚本里的 `front()` 会把主窗提到模态对话框之上**，点击就落在主窗编辑器上——现象与「按钮不响应」完全一样。点对话框内控件时改用「`EnumWindows` 按 rect 命中该对话框 HWND → `SetWindowPos(HWND_TOP)` → `SetForegroundWindow`」，并读回 `GetForegroundWindow()==hwnd` 自证；**不要置前主窗**。
+   - **插件自绘工具栏/列表对 robot 树完全不可见**（全量查询只剩 `JBPanel`/`NonOpaquePanel` 这类平台壳）——此时别在组件树上耗时间，直接走「裁剪放大 + 悬停自证」。
+   - **阳性对照要选「点了一定会变」的按钮**：拿「格式化」对照已格式化的 SQL、拿「压缩」对照已压缩态都会没变化，从而把「点击没落上」误读成「整行不可达」。更省事的判据是**每次点击后立刻 grep 该动作的固定日志前缀**（如 `[M37.2] explainSql`），比看界面可靠。
 
 **正在推进的能力（报告 §5 第二期）**：robot-server 有未启用的 `/js/execute` 通道（反编译实证 + 20 项沙盒实测），
 可进程内触发 Action、读弹窗内部状态、30fps 截图、合成鼠标事件。接通后可用「等真实状态」替代 `sleep(3.6)` 这种猜时间。

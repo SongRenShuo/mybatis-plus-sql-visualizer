@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -157,7 +158,65 @@ internal fun SqlPreviewPanel.buildCompletionContext(): SqlCompletionContext = Sq
 internal fun SqlPreviewPanel.applyNamedParams(sql: String): String {
     val result = current ?: return sql
     if (result.namedParamHints.isEmpty()) return sql
-    return ParameterReplacer.replaceNamedParams(sql, paramValues, result.namedParamHints)
+    return ParameterReplacer.replaceNamedParams(
+        sql,
+        paramValues,
+        result.namedParamHints,
+        dialectName = result.effectiveDialect?.name,
+    )
+}
+
+/**
+ * T-RuntimeSlotFill 券 C：预览渲染的**唯一**回填入口——运行期占位与 `:name` 一次扫描
+ * （[ParameterReplacer.buildExecutableSqlWithSlots]），`?` 仍由既有 [backfillParamsBySource]
+ * 按序回填（它的 LIKE/空值策略/模拟字面量口径本券不动）。
+ *
+ * 为什么占位与 `:name` 必须同遍：用户填的占位值里可能带 `:nm` 形态，分两步做会被
+ * `NAMED_PARAM_PATTERN` 二次当命名参数替换（券 B 的 R2 反向验证实测过）。同遍扫描下每种替换
+ * 整段产出、产出不再被扫描，二次误伤在结构上不会发生。
+ *
+ * 零占位时**直接走既有 [applyNamedParams]**：没有运行期占位的预览（Wrapper/XML/批量/JPA 全链）
+ * 产物与改动前逐字节一致。
+ */
+internal fun SqlPreviewPanel.applyRuntimeSlotsAndNamedParams(sql: String): String {
+    val result = current ?: return sql
+    if (result.runtimeSlots.isEmpty()) return applyNamedParams(sql)
+    val render = ParameterReplacer.buildExecutableSqlWithSlots(
+        sql = sql,
+        slots = result.runtimeSlots,
+        slotValues = slotValuesSnapshot(),
+        paramValues = paramValues,
+        namedHints = result.namedParamHints,
+        dialectName = result.effectiveDialect?.name,
+    )
+    // 券 B 的拒绝/风险必须可见（不许静默），展示位在参数区「运行时值」分区下方
+    publishRuntimeSlotWarnings(render.warnings)
+    return render.sql
+}
+
+/**
+ * T-RuntimeSlotFill 券 C：当前占位值的不可变快照（回填引擎唯一值载体）。
+ *
+ * 复制 / 导出 / 执行三处与预览渲染共用同一份——避免「预览填了、复制/导出没填」。
+ */
+internal fun SqlPreviewPanel.slotValuesSnapshot(): RuntimeSlotValues =
+    RuntimeSlotValues(slotValues.toMap())
+
+/**
+ * T-RuntimeSlotFill 券 C：把当前占位值填进一段**已经参数回填过**的 SQL（导出 / 执行等取词口）。
+ *
+ * 只填占位（[ParameterReplacer.replaceRuntimeSlots]），不碰 `?` / `:name`——那些文本在编辑器里
+ * 已经是回填后的形态。占位值全为空时逐字节原样返回（D-5）。
+ */
+internal fun SqlPreviewPanel.fillRuntimeSlots(sql: String): String {
+    val slots = current?.runtimeSlots.orEmpty()
+    if (slots.isEmpty()) return sql
+    return ParameterReplacer.replaceRuntimeSlots(
+        sql = sql,
+        slots = slots,
+        values = slotValuesSnapshot(),
+        dialectName = current?.effectiveDialect?.name,
+    ).sql
 }
 
 /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
@@ -250,7 +309,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
                 enabledConditionIds = enabledIds.toSet(),
             )
             // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
-            showSql(backfillParamsBySource(applyNamedParams(withPaginationLimitLine(generated.sql)), generated.unresolvedParams, generated.paramHints))
+            // T-RuntimeSlotFill 券 C：命名参数与运行期占位同遍（无占位时逐字节等于旧路径）
+            showSql(backfillParamsBySource(applyRuntimeSlotsAndNamedParams(withPaginationLimitLine(generated.sql)), generated.unresolvedParams, generated.paramHints))
         }
         else -> {
             // 旧文本路径（无可勾选动态条件，如批量操作）
@@ -259,7 +319,7 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             // T-JpaParamOrder F3：JPA 占位符名序非空时按名回填（同名占位复用同值，
             // 与 setParameter 书写顺序解耦）；hints 在服务端已与该 sources 序平行
             val sources = result.placeholderParamNames.ifEmpty { result.unresolvedParams }
-            showSql(backfillParamsBySource(applyNamedParams(base), sources, result.paramHints))
+            showSql(backfillParamsBySource(applyRuntimeSlotsAndNamedParams(base), sources, result.paramHints))
         }
     }
     // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
@@ -286,6 +346,11 @@ internal fun SqlPreviewPanel.refreshView() {
     displayMode = PreviewDisplayMode.NORMAL
     modeButton.text = modeButtonText()
     renderSql()
+    // UI-004（2026-11-04 真机）：刷新必须**重算方言证据**。用户改 IDEA 的 SQL 方言不会发任何
+    // 事件，旧实现只重渲染模型文本 → 顶部/底部方言停在旧值（「改了方言并刷新，底部仍报旧方言」）。
+    // includeSourceFile = true：按预览生成时的同一份证据（源文件 → IDEA 方言映射）重算；
+    // 重算在池线程，EDT 仅做仅升级替换 + 方言无关载体的证据对齐 + 底部提示重判。
+    refreshDialectStatusRow(includeSourceFile = true)
 }
 
 /** 设置「SQL 格式化输出」（false=压缩）；环境异常兜底 true（多行）。 */
@@ -498,7 +563,8 @@ internal var SqlPreviewPanel.copyNotificationActionsForTest: MutableList<String>
  */
 
 internal fun SqlPreviewPanel.copyExecutableSql() {
-    CopyExecutableSqlAction(project).execute(this)
+    // T-RuntimeSlotFill 券 C：与预览渲染共用同一份占位值（否则会「预览填了、复制没填」）
+    CopyExecutableSqlAction(project).execute(this, slotValuesSnapshot())
 }
 
 /**
@@ -573,6 +639,8 @@ internal fun SqlPreviewPanel.clear() {
     fieldFillStatus = null
     current = null
     sourceModuleKey = null
+    sourceVirtualFile = null
+    lastDialectGateMessage = null
     // 下次预热在结果到达前使用兼容 MySQL；结果到达后再按实际生成方言重映射。
     previewDesiredDialectName = null
     enabledIds.clear()
@@ -683,27 +751,35 @@ internal fun SqlPreviewPanel.showSql(sql: String, countSql: String? = current?.c
                 // T-PreviewFast P4：程序性写入开闸——否则本次写入会触发执行文件的 1.5s 防抖
                 // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
                 cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring {
-                    WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
-                    // T-PS4-12 定案①：同临界区落盘（照 DataSourceSelector.writeVfTextViaDocument
-                    // 手法，isDocumentUnsaved → saveDocument）——闸门前提「内容由本写入落盘」
-                    // 在此成真，formatted 文本不再滞留 modified-unsaved（第七轮审计发现本体）。
-                    //
-                    // 「磁盘存原文还是 formatted」核实结论（T-PreviewConsoleFmt F1/F2 +
-                    // T-PreviewFast P1/P3 定例）：挂载后磁盘跟随 document 是既定语义——
-                    //  1) ConsoleFmt F1 定例 = 控制台挂载后渲染链把 formatted 回填进控制台
-                    //     文档，文档内容（=控制台所见）即权威；
-                    //  2) T-PreviewFast P1 `execFileContentMatches` 定例 = 有已加载 document
-                    //     时以 document 文本为准（注释原文「也是落盘会写入的内容」）；
-                    //  3) 「磁盘存预览原文」仅是预热路径的写入，且只发生在文档未挂编辑器时
-                    //     （ConsoleFmt F2 + PreviewFast P3：文档打开时预热跳过内容刷新）；
-                    //  4) 落盘 formatted 不改变执行语义：执行链执行前同步的是控制台文档内容，
-                    //     用户手改兜底（F5）落盘的同样是 document 内容。
-                    // 故本写入落盘 formatted 与既有定例一致；孤儿文档（getFile null，测试缝
-                    // createDocument 形态）无盘可落，自然跳过。
-                    val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
-                    val vf = fdm.getFile(nativeDoc)
-                    if (vf != null && fdm.isDocumentUnsaved(nativeDoc)) {
-                        fdm.saveDocument(nativeDoc)
+                    // T-PreviewDocPersistLock：`setText` 与 `saveDocument` 必须落在**同一个写命令块**内。
+                    // `FileDocumentManager.saveDocument` 首行即断言写环境（243 FileDocumentManagerImpl:327-329
+                    // → TransactionGuardImpl.assertWriteActionAllowed；262 同形改名），而
+                    // `runWriteCommandAction` 是一次性写动作——lambda 返回时写意图释放，
+                    // 落盘留在块外就是「EDT + 无写意图」帧，硬抛
+                    // 「Access is allowed from write thread only」（用户 2026-11-02 真机双栈）。
+                    WriteCommandAction.runWriteCommandAction(project) {
+                        nativeDoc.setText(text)
+                        // T-PS4-12 定案①：同临界区落盘（照 DataSourceSelector.writeVfTextViaDocument
+                        // 手法，isDocumentUnsaved → saveDocument）——闸门前提「内容由本写入落盘」
+                        // 在此成真，formatted 文本不再滞留 modified-unsaved（第七轮审计发现本体）。
+                        //
+                        // 「磁盘存原文还是 formatted」核实结论（T-PreviewConsoleFmt F1/F2 +
+                        // T-PreviewFast P1/P3 定例）：挂载后磁盘跟随 document 是既定语义——
+                        //  1) ConsoleFmt F1 定例 = 控制台挂载后渲染链把 formatted 回填进控制台
+                        //     文档，文档内容（=控制台所见）即权威；
+                        //  2) T-PreviewFast P1 `execFileContentMatches` 定例 = 有已加载 document
+                        //     时以 document 文本为准（注释原文「也是落盘会写入的内容」）；
+                        //  3) 「磁盘存预览原文」仅是预热路径的写入，且只发生在文档未挂编辑器时
+                        //     （ConsoleFmt F2 + PreviewFast P3：文档打开时预热跳过内容刷新）；
+                        //  4) 落盘 formatted 不改变执行语义：执行链执行前同步的是控制台文档内容，
+                        //     用户手改兜底（F5）落盘的同样是 document 内容。
+                        // 故本写入落盘 formatted 与既有定例一致；孤儿文档（getFile null，测试缝
+                        // createDocument 形态）无盘可落，自然跳过。
+                        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                        val vf = fdm.getFile(nativeDoc)
+                        if (vf != null && fdm.isDocumentUnsaved(nativeDoc)) {
+                            fdm.saveDocument(nativeDoc)
+                        }
                     }
                 }
             } finally {

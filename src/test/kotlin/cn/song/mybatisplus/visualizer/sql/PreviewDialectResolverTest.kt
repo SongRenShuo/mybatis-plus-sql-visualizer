@@ -37,6 +37,19 @@ class PreviewDialectResolverTest {
     }
 
     @Test
+    fun `panwei badge head maps to oracle while keeping display name`() {
+        // T-IbatisPanwei（券 F）：角标保留产品名 Panwei（磐维），方言解析成 Oracle（D-1）
+        assertEquals("Oracle", PreviewDialectResolver.dialectFromBadge("Panwei（磐维）"))
+        assertEquals(
+            "Oracle",
+            PreviewDialectResolver.dialectFromBadge("Panwei（磐维） · pwdb@dbhost.example:5432"),
+        )
+        // 别名表只登记已知同义头：未知/近似头仍返回 null（不猜近似方言）
+        assertNull(PreviewDialectResolver.dialectFromBadge("Panwei2（磐维） · pwdb@h:5432"))
+        assertNull(PreviewDialectResolver.dialectFromBadge("GBASE · h:9088"))
+    }
+
+    @Test
     fun `captured dialect is exact and wins over sql syntax`() {
         val result = preview(
             sql = "select `id` from t limit 1, 2",

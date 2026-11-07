@@ -40,7 +40,9 @@ import java.nio.file.Files
  *    （选择「不跑」而不是「runWhenSmart 排队」——全项目扫描排队到索引完成才开始，用户会以为
  *    动作没响应）；
  *  - **不在 EDT 扫**：进度任务 `Task.Backgroundable` 后台线程 + 可取消进度；PSI 读取整体包在
- *    `runReadAction` 内（后台线程持读锁，不占 EDT）；
+ *    `runReadAction` 内（后台线程持读锁，不占 EDT）；报告写盘与 VFS refresh
+ *    （`refreshAndFindFileByIoFile`，UI-001 修复：262 平台 EDT 上调它是 SlowOperations SEVERE）
+ *    同样留在后台线程，`present` 只收解析好的 `VirtualFile`、内部仅剩 UI 操作；
  *  - **扫描失败可降级不崩**：异常吞掉并给错误通知；报告文件写盘失败时退化为**内存编辑器**展示
  *    全文（`LightVirtualFile`，不落盘也不弹框）；
  *  - **明细截断**：[BannedApiScanReport.MAX_DETAIL_ENTRIES] 上限，超出在报告尾部标注「已截断」。
@@ -128,9 +130,20 @@ class ScanBannedApiUsagesAction : AnAction() {
                         LOG.warn("Banned API 报告写盘失败，降级为内存编辑器展示", failure)
                         null
                     }
+                    // VFS refresh（refreshAndFindFileByIoFile）也是慢操作，与写盘同批留在后台线程：
+                    // 临时文件刚由 java.io 写出、VFS 尚不知晓，必须走 refresh 路径才能解析出 VirtualFile，
+                    // 该调用在后台线程合法，进了 EDT 就是 SlowOperations SEVERE（UI-001）。
+                    val reportVFile = reportFile?.let { file ->
+                        runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) }
+                            .onFailure { failure ->
+                                if (FatalErrors.isFatal(failure)) throw failure
+                                LOG.warn("Banned API 报告文件 VFS 解析失败，降级为内存编辑器展示", failure)
+                            }
+                            .getOrNull()
+                    }
                     ApplicationManager.getApplication().invokeLater {
                         if (project.isDisposed) return@invokeLater
-                        present(project, result, report, reportFile)
+                        present(project, result, report, reportVFile)
                     }
                 }
             },
@@ -138,14 +151,15 @@ class ScanBannedApiUsagesAction : AnAction() {
     }
 
     /**
-     * EDT：无命中给通知；有命中优先打开磁盘报告，落盘失败则用内存编辑器（`LightVirtualFile`）
-     * 直出全文——**不为展示报告弹模态框**（弹窗克制红线）。
+     * EDT：无命中给通知；有命中优先打开磁盘报告（`reportVFile` 已在后台线程解析好，
+     * 本方法内只剩 UI 操作，不含任何 VFS refresh / 磁盘 IO），解析失败则用内存编辑器
+     * （`LightVirtualFile`）直出全文——**不为展示报告弹模态框**（弹窗克制红线）。
      */
     private fun present(
         project: Project,
         result: BannedApiScanResult,
         report: String,
-        reportFile: File?,
+        reportVFile: VirtualFile?,
     ) {
         if (result.totalHits == 0 && !result.canceled) {
             notify(
@@ -155,10 +169,7 @@ class ScanBannedApiUsagesAction : AnAction() {
             )
             return
         }
-        val onDisk: VirtualFile? = reportFile?.let {
-            runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(it) }.getOrNull()
-        }
-        val target: VirtualFile = onDisk ?: LightVirtualFile(REPORT_FILE_NAME, report)
+        val target: VirtualFile = reportVFile ?: LightVirtualFile(REPORT_FILE_NAME, report)
         FileEditorManager.getInstance(project).openFile(target, true)
     }
 

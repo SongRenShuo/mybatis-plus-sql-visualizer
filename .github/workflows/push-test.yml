@@ -27,10 +27,13 @@ run-name: 推送测试 · ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   push:
-    # T-CiBranchFanout（2026-11-08 车道 2）：t-sql-insight 分支从基线 95e107b1 落地推送测试 workflow。
+    # T-CiBranchFanout（2026-11-08 车道 1）：dev 分支推送也跑全量推送测试（闲时任务 offpeak-6a4afce2）。
+    # T-CiBranchFanout（2026-11-08 车道 2）：t-sql-insight 分支从基线 95e107b1 落地推送测试 workflow
+    #（车道 5 合并 8f4492d5 后 branches 取三支并集）。
+    # workflow 文件取自被推分支自身的树，各分支上的副本与本列表共同生效。
     # 任务口径与 buildSrc 实测对齐：testShard1-5（默认 5 片）+ testFast 全桶（fastBucketSliceCount
     # 属性本分支无人读＝no-op，两片各自跑全桶，只多耗 runner 分钟不会红）。
-    branches: [t-sql-insight]
+    branches: [master, dev, t-sql-insight]
 
 concurrency:
   group: plugin-ci-push-${{ github.ref_name }}
@@ -53,8 +56,10 @@ jobs:
   # 幂等：先查本轮周期内是否已有 nightly 轮（任何 event），有就跳过，避免和迟到的 schedule 撞成两轮。
   # ⚠️首版按「UTC 日历日」判，被白天手动跑的那轮（run#9，14:11Z）吃掉了——job 绿了却什么都没派发。
   nightly-nudge:
-    # T-CiBranchFanout（2026-11-08 车道 2）：夜间兜底是 master 专属语义，本分支上恒 skip；
-    # 保留 job 结构与 master 一致，降低将来 insight→dev 合并的冲突面。
+    # T-CiBranchFanout（2026-11-08 车道 1）：夜间兜底是 master 专属语义（夜间轮只跑默认分支），
+    # 扩到 dev/t-sql-insight 后，非 master 推送一律不派发夜间轮，保持上方「只在 push 到 master 时执行」的口径。
+    # T-CiBranchFanout（2026-11-08 车道 2）：t-sql-insight 分支上恒 skip；保留 job 结构与 master 一致，
+    # 降低将来 insight→dev 合并的冲突面。
     if: github.ref_name == 'master'
     runs-on: ubuntu-latest
     timeout-minutes: 10

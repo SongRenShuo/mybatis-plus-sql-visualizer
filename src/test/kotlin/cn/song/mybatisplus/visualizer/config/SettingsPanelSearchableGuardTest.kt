@@ -197,6 +197,8 @@ class SettingsPanelSearchableGuardTest : BasePlatformTestCase() {
         "settings.sourceFrameSkipPrefixes.hint",
         // S1-4⑥：注入链边界明示行（跨两列直挂的说明标签，无自身状态值）
         "settings.log.autoInjectInterceptor.boundary",
+        // F-07：卸载/禁用清理边界说明行（跨两列直挂的说明标签，无自身状态值，与上一条同形态）
+        "settings.agent.residue.hint",
         "settings.storage.captureFiles", "settings.storage.previewHistory",
         "settings.storage.paramHistory", "settings.storage.clearBoundary",
         "settings.update.changelog", "settings.update.viewOnGitee", "settings.update.feedbackPool",

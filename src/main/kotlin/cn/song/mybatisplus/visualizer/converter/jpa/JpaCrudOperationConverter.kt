@@ -538,7 +538,7 @@ object JpaCrudOperationConverter {
                 val (where, whereParams) = idCondition(null, idColumn, prefix, resolveVariables, dialect)
                 Build(
                     sql = "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET $setSql\nWHERE $where",
-                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamHint(quote = ParamQuote.decide(it.fieldType))) } + whereParams,
+                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamQuote.hint(it.fieldType)) } + whereParams,
                     notes = listOf("merge：托管/detached 实体 → UPDATE；new 实体（无主键）→ INSERT（静态按 UPDATE 呈现，二义性标注）"),
                 )
             }
@@ -629,7 +629,7 @@ object JpaCrudOperationConverter {
                 val (where, whereParams) = idCondition(null, idColumn, prefix, resolveVariables, dialect)
                 Build(
                     sql = "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET $setSql\nWHERE $where",
-                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamHint(quote = ParamQuote.decide(it.fieldType))) } + whereParams,
+                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamQuote.hint(it.fieldType)) } + whereParams,
                     notes = listOf("merge：detached → UPDATE；new 实体 → INSERT（静态按 UPDATE 呈现，二义性标注）"),
                 )
             }
@@ -645,7 +645,7 @@ object JpaCrudOperationConverter {
                 }
                 Build(
                     sql = "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET $setSql\nWHERE $where",
-                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamHint(quote = ParamQuote.decide(it.fieldType))) } + whereParams,
+                    params = setColumns.map { ParamEntry(idSource(prefix, it.columnName), ParamQuote.hint(it.fieldType)) } + whereParams,
                     notes = notes,
                 )
             }
@@ -722,6 +722,7 @@ object JpaCrudOperationConverter {
                 source = idSource(prefix, col.columnName),
                 quote = ParamQuote.decide(col.fieldType),
                 checked = true,
+                temporal = ParamQuote.isTemporal(col.fieldType),
             )
         }
         val active = toggleColumns.map { it.columnName }.toSet()
@@ -739,7 +740,9 @@ object JpaCrudOperationConverter {
         }
         return Build(
             sql = model.renderSql(active),
-            params = model.orderedColumns(active).map { ParamEntry(it.source, ParamHint(quote = it.quote)) },
+            params = model.orderedColumns(active).map {
+                ParamEntry(it.source, ParamHint(quote = it.quote, temporal = it.temporal))
+            },
             paramGroups = batchParamGroups(insertColumns.map { it.columnName }, prefix),
             notes = notes,
             model = model,
@@ -766,11 +769,11 @@ object JpaCrudOperationConverter {
             return when (value) {
                 is SqlValue.Literal -> "$idName = ${value.raw}" to emptyList()
                 is SqlValue.Placeholder ->
-                    "$idName = ?" to listOf(ParamEntry(value.source, ParamHint(quote = ParamQuote.decide(idColumn.fieldType))))
+                    "$idName = ?" to listOf(ParamEntry(value.source, ParamQuote.hint(idColumn.fieldType)))
             }
         }
         return "$idName = ?" to listOf(
-            ParamEntry(idSource(entityPrefix.orEmpty(), idColumn.columnName), ParamHint(quote = ParamQuote.decide(idColumn.fieldType))),
+            ParamEntry(idSource(entityPrefix.orEmpty(), idColumn.columnName), ParamQuote.hint(idColumn.fieldType)),
         )
     }
 

@@ -389,6 +389,17 @@ open class SqlLogConsoleBridge(
      * 冲刷同一套解析器状态 → 以 ctx 为锁互斥（同线程重入无副作用；无 Swing 调用，不构成 EDT 死锁面）。
      */
     private fun handleConsoleLine(console: Any, generation: Long, line: String, endOffset: Int) {
+        // T-SqlListCatchup 券E：逐行处理探针——整方法入环采样（守卫短路行也计：平台 filter 链为
+        // 每一行支付的**总**成本才是控制台输出线程的账单；风暴期每条 SQL 约 8-10 行噪音行，
+        // 行速率数万/秒，每行成本此前无读数）。环形采样走券D 分布设施；阈值 INFO 沿用
+        // LogPerfProbe 既有模式（≥100ms 单行才留痕，常态零输出）。
+        LogPerfProbe.measure("LogBridge.handleLine", { "chars=${line.length}" }) {
+            handleConsoleLineBody(console, generation, line, endOffset)
+        }
+    }
+
+    /** 券E 拆出：handleConsoleLine 的实际处理体（外壳负责逐行打点）。 */
+    private fun handleConsoleLineBody(console: Any, generation: Long, line: String, endOffset: Int) {
         val context = consoleContexts[console] ?: return
         if (context.generation != generation) return // 旧代际代理：惰性退出
         // T-CaptureTruth T-CT-03：控制台观测行计数（短路行也计——「桥看到过多少行」是面板零产出诊断的输入）
@@ -419,6 +430,9 @@ open class SqlLogConsoleBridge(
                     // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
                     // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
                     context.line0Reader,
+                    // 券 G2：文档长度提供者惰性传递——只有 stamp 变分支才求值（clear/截断
+                    // 后的陈旧水位核销判据，见 ConsoleReplayGuard.decide KDoc）
+                    context.docLengthReader,
                 )) {
                     ConsoleReplayGuard.Decision.Replay -> context.replayDropCount.incrementAndGet()
                     else -> emitEntries(processConsoleLine(line, context, timePrefixCache, syncBufferConfig, onErrorText = ::bindConsoleError))
@@ -446,21 +460,46 @@ open class SqlLogConsoleBridge(
      */
     internal fun flushSettledEntries(nowMs: Long = System.currentTimeMillis()): Int {
         var produced = 0
+        var skipped = 0
+        // T-SqlListCatchup 券E：本拍入队前的待产出条目数 gauge（takeEntries 取出的即冲刷侧
+        // 真实积压——parsers 无 peek 出口，取出计数与「入队前」同刻）。每拍记录一次（含 0，
+        // 拍距即采样间隔）；环形分布走券D 设施，量纲为「条」（见 recordGauge KDoc）。
+        var beatBacklog = 0L
         val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
         for (ctx in snapshot) {
             synchronized(ctx) {
                 ctx.jdbcParser.flushSettled(nowMs)
-                for (entry in ctx.jdbcParser.takeEntries()) {
-                    if (buffer.addEntry(entry)) produced++
+                val jdbcTaken = ctx.jdbcParser.takeEntries()
+                beatBacklog += jdbcTaken.size
+                for (entry in jdbcTaken) {
+                    // T-CrossChannelDedupe §4.5：循环内复查闸门——外层判据只覆盖调用时刻，EDT 冲刷与
+                    // agent 接管沿之间仍有窗口；已封停就丢弃本拍冲刷条目（接管后由 agent 通道产出）。
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++
+                        continue
+                    }
+                    // T-CrossChannelDedupe §4.5：与 emitEntries 同款打通道标记——此前静默冲刷条目在
+                    // 归因诊断里显示「通道=UNKNOWN」，干扰现场裁决。
+                    if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                 }
                 // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
                 if (ctx.shardingEnabled) {
                     ctx.shardingParser.flushSettled(nowMs)
-                    for (entry in ctx.shardingParser.takeEntries()) {
-                        if (buffer.addEntry(entry)) produced++
+                    val shardingTaken = ctx.shardingParser.takeEntries()
+                    beatBacklog += shardingTaken.size
+                    for (entry in shardingTaken) {
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++
+                            continue
+                        }
+                        if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                     }
                 }
             }
+        }
+        LogPerfProbe.recordGauge("LogBridge.settledBacklog", beatBacklog)
+        if (skipped > 0) {
+            LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 $skipped 条（由 agent 通道产出）")
         }
         if (produced > 0) {
             LOG.info(
@@ -509,6 +548,13 @@ open class SqlLogConsoleBridge(
                     }
                     cachedLine0
                 }.getOrNull()
+            }
+            // 券 G2：文档长度读（clear/截断的陈旧水位核销判据）——复用同一 getCharsSequence
+            // 免拷贝视图取 .length，无新反射句柄；不可得（反射桩缺该方法）时 null = 守卫回退旧行为。
+            ctx.docLengthReader = {
+                runCatching {
+                    (getCharsSequence.invoke(doc) as? CharSequence)?.length ?: Int.MIN_VALUE
+                }.getOrDefault(Int.MIN_VALUE)
             }
         }
     }
@@ -821,6 +867,14 @@ internal class BridgeLineContext(
     var line0Reader: (() -> String?)? = null
 
     /**
+     * 控制台文档总长度读取函数（券 G2 重置判定用；editor/文档不可得时为 null）。
+     *
+     * 只在守卫 stamp 变分支惰性求值（流式/纯重放热路径零反射调用）；复用 attachReplayGuard
+     * 已解析的 `getCharsSequence` 句柄取 `.length`——免拷贝视图的长度读，无全文档扫描成本。
+     */
+    var docLengthReader: (() -> Int)? = null
+
+    /**
      * 重放丢弃行累计计数（T-RA-03：面板链路诊断行经 [SqlLogConsoleBridge.replayDropCount] 读取）。
      *
      * AtomicLong 而非普通 Long：自增在控制台出线程（filter 回调），读取在 EDT（诊断定时器），
@@ -919,6 +973,18 @@ object CaptureActivityFallback {
     private var lastAgentEventMs = 0L
     private var lastConsoleSqlMs = 0L
 
+    /**
+     * T-CaptureGateStability P2（2026-11-05 真机实测）：本纪元内是否**收到过** agent 事件。
+     *
+     * 回落机制要防的是「白名单漏驱动 → agent 从头到尾零事件 → 双通道全哑」，与「用户手点间隔长」
+     * 是两回事。原判据只有「静默 ≥10s + 控制台有 SQL」，于是正常操作间隔超过 10 秒就解封一次，
+     * 解封瞬间的 SQL 由控制台捕获、产出一条无耗时/无位置的条目（实测每次间隔调用都发生）。
+     *
+     * 收到过任何一条事件即证明织入器在工作，此后不再允许回落；真断线由 `online=false` 那条路径
+     * 恢复桥，不会双哑。纪元切换（闸门置假）时清零，下一次接管重新起算。
+     */
+    private var everReceivedAgentEvent = false
+
     @Volatile
     private var active = false
 
@@ -979,6 +1045,7 @@ object CaptureActivityFallback {
         runCatching {
             val wasActive = synchronized(lock) {
                 lastAgentEventMs = now
+                everReceivedAgentEvent = true // P2：收到过即证明织入在工作，此后不再回落
                 val was = active
                 if (was) {
                     active = false
@@ -1015,6 +1082,8 @@ object CaptureActivityFallback {
             if (sqlSeen) lastConsoleSqlMs = now
             alreadyActive = active
             engagedNow = !active && run {
+                // P2：本纪元收到过任何 agent 事件 → 织入器在工作，静默只是「没人操作」，不回落。
+                if (everReceivedAgentEvent) return@run false
                 val silenceStart = maxOf(pausedSinceMs, lastAgentEventMs)
                 val silentLongEnough = now - silenceStart >= threshold
                 val consoleHasSql = sqlSeen || (lastConsoleSqlMs > 0L && now - lastConsoleSqlMs <= threshold)
@@ -1044,6 +1113,7 @@ object CaptureActivityFallback {
         pausedSinceMs = 0L
         lastAgentEventMs = 0L
         lastConsoleSqlMs = 0L
+        everReceivedAgentEvent = false // P2：新一次接管从零起算，不继承上一纪元的「收到过」
     }
 
     /** 测试收尾：状态 + 注入点 + 计数全部复位。 */

@@ -33,10 +33,18 @@ class SettingsScenarioGroupCoverageGuardTest {
      *
      * 只认 `var`（State 主构造体的可持久化字段都是 `var`）；`\w` 在 Java 正则里只认 ASCII，
      * 本仓字段名全为 ASCII，够用。`\b` 收尾防 `BooleanXxx` 这类更长类型名被误认。
+     *
+     * **排除 `@Deprecated` 字段**（2026-11-01 修，与 `EnhancedCaptureDefaultOnGuardTest` 的
+     * compatOnly 豁免守卫对撞后的裁决）：兼容字段是「只为 XML/JSON 读回兼容、只在 loadState
+     * 归一里出现」的历史包袱，本就不是用户设置、不该进场景分组。若强行归组，就会在
+     * `SettingsScenarioGroups` 里制造一个「非 config 消费点」，反而触发 compatOnly 守卫报红——
+     * 两个守卫会互斥。**裁决：兼容字段豁免于场景归属**；它们的退役由 compatOnly 守卫盯，
+     * 本守卫只管真设置项。两个守卫的分界写进各自 KDoc。
      */
     internal fun booleanFieldsOf(settingsSource: String): List<String> =
-        Regex("""\n\s+var\s+(\w+)\s*:\s*Boolean\b""")
+        Regex("""(?:@Deprecated[^\n]*\n\s+)?var\s+(\w+)\s*:\s*Boolean\b""")
             .findAll(settingsSource)
+            .filter { !it.value.trimStart().startsWith("@Deprecated") }
             .map { it.groupValues[1] }
             .distinct()
             .toList()

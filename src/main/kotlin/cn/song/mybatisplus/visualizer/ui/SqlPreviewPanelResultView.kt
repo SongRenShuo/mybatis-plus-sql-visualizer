@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SourceLanguage
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.withResolvedDialect
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
@@ -14,7 +15,6 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
-import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.ui.JBColor
@@ -26,8 +26,10 @@ import java.awt.FontMetrics
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JTextArea
 import javax.swing.KeyStroke
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.COLUMN_INFO_TAB_TITLE
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.ORIGINAL_SQL_TAB_TITLE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.MIN_META_BUDGET_PX
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.dollarMarkDismissedSession
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
@@ -86,6 +88,11 @@ internal fun SqlPreviewPanel.toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>
 
 internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = listOf(
     MpSqlVisualizerBundle.message("panel.rollbackSql") to { showRollbackSql() },
+    // T-DialectGatePassDeadChain（2026-11-02 用户实测「换源没有反应」）：换源入口**常驻**——
+    // 状态行那两段蓝字只在方言冲突态出现，一旦执行失败，错误行会把它们顶掉，而「想换源」恰恰
+    // 最常发生在这时。原生控制台下拉靠不住：exec 文件被平台 per-file 关联钉在旧源上
+    //（见 ExecFileBinding），只有插件入口会先 detach + 清 pin 再枚举全源。
+    MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource") to { switchDataSourceInPlace() },
     MpSqlVisualizerBundle.message("insight.action") to { showSqlInsight() },
     MpSqlVisualizerBundle.message("insight.scenario.action") to { showParameterScenarios() },
     MpSqlVisualizerBundle.message("insight.scenario.traceAction") to { showParameterScenarios() },
@@ -145,6 +152,22 @@ internal fun SqlPreviewPanel.showMoreActionsPopup() {
 
 internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Unit>>): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
     object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<String>(null, actions.map { it.first }) {
+        // UX Community 执行入口预判置灰（S2-4 券②）：「更多」菜单里的执行类条目（DML 影响面预演
+        // 对绑定数据源发 COUNT 试算）在无 Database 插件时不可选——平台把不可选项渲染成置灰，
+        // 点了才报错提前成一眼可见。回滚 SQL 条目不算执行类（对话框粘贴生成路径无 DB 也可用，
+        // 其执行钮由 RollbackSqlDialog 自行置灰）。
+        private val executionItems: Set<String> =
+            setOf(MpSqlVisualizerBundle.message("panel.dmlImpact"))
+
+        override fun isSelectable(value: String?): Boolean {
+            if (value != null && value in executionItems &&
+                cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.unavailableHint() != null
+            ) {
+                return false
+            }
+            return super.isSelectable(value)
+        }
+
         override fun onChosen(
             selectedValue: String?,
             finalChoice: Boolean,
@@ -179,6 +202,8 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     // 由映射侧继承平台设置——不再让渲染端与 PSI 各自落 MySQL。
     val result = input.withResolvedDialect(project)
     current = result
+    // UI-004：新预览的结果区是干净的，旧方言提示不跨预览残留。
+    lastDialectGateMessage = null
     // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
     executionDialectRenderMode = project?.let {
         if (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(it).effectiveDialectAuto()) {
@@ -197,6 +222,10 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     paramValues.clear()
     result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, result.initialParamValues[source] ?: "") }
     result.previewModel?.conditionViews.orEmpty().forEach { view -> view.valueSource?.let { paramValues.putIfAbsent(it, "") } }
+    // T-RuntimeSlotFill 券 C：运行期占位值随新预览整表清空（D-6：不跨预览持久化）——
+    // 旧占位 id 的值若残留，新预览里同 id 的占位会被「莫名其妙地填上」。
+    slotValues.clear()
+    slotRenderWarnings = emptyList()
     // 动态条件启用集合初始化（M13：复选框纯手动）——仅按 defaultEnabled，值空不联动勾选态
     enabledIds.clear()
     result.previewModel?.conditionViews.orEmpty().forEach { view ->
@@ -242,6 +271,8 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     updateDiagramTab(result)
     // F-45：更新列信息标签页（仅 <pages> 预览时显示）
     updateColumnInfoTab(result)
+    // T-PagesHql：HQL 转换前的原文标签页（仅转换过的预览显示）
+    updateOriginalSqlTab(result)
     // O-4：缓存当前 SQL 供下次 Compare
     // UI-023：首渲染链上 editor 可能尚未创建（控制台/预热抢占），只读 editor 会恒 null——
     // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
@@ -469,6 +500,7 @@ internal fun SqlPreviewPanel.removeDiagramTab() {
 
 private const val PREVIEW_JOIN_TAB = "join"
 private const val PREVIEW_COLUMNS_TAB = "columns"
+private const val PREVIEW_ORIGINAL_SQL_TAB = "originalSql"
 
 // ------------------------------------------------------------------
 // F-45：maintainPage 列信息标签页
@@ -481,10 +513,10 @@ private const val PREVIEW_COLUMNS_TAB = "columns"
 
 internal fun SqlPreviewPanel.updateColumnInfoTab(result: PreviewResult) {
     if (previewDisposed || project?.isDisposed == true) return
-    val columns = result.pagesColumns
-    if (columns != null) {
+    if (result.pagesColumns != null) {
         // 每份结果刷新列内容，管理器保留该页身份与选中态；标题不再充当身份。
-        previewTabs.put(PREVIEW_COLUMNS_TAB, COLUMN_INFO_TAB_TITLE, buildColumnInfoPanel(columns))
+        //（车道5 合并注：面板构建取 8f4492d5 版——带 F-06① 列头溯源 tooltip 与 F-13 列头排序。）
+        previewTabs.put(PREVIEW_COLUMNS_TAB, COLUMN_INFO_TAB_TITLE, buildColumnInfoPanel(result))
     } else {
         removeColumnInfoTab()
     }
@@ -492,7 +524,8 @@ internal fun SqlPreviewPanel.updateColumnInfoTab(result: PreviewResult) {
 
 /** 构建列信息面板（列标识/标题/类型/可见性 表格）。 */
 
-internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): JComponent {
+internal fun SqlPreviewPanel.buildColumnInfoPanel(result: PreviewResult): JComponent {
+    val columns = result.pagesColumns.orEmpty()
     val header = arrayOf(
         MpSqlVisualizerBundle.message("pages.columns.id"),
         MpSqlVisualizerBundle.message("pages.columns.title"),
@@ -507,6 +540,26 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
     }).apply {
         autoResizeMode = com.intellij.ui.table.JBTable.AUTO_RESIZE_ALL_COLUMNS
         tableHeader.reorderingAllowed = false
+        // F-06①：列头溯源 tooltip——「列标识」列对回实体字段；判不出的列（函数列/别名/无实体上下文）
+        // 不进 map，map 为空时连渲染器都不装（零行为变更）。
+        val traceTooltips = cn.song.mybatisplus.visualizer.util.columnFieldTraceTooltips(
+            columnNames = columns.map { it.id },
+            tableName = result.tableName,
+            entityFields = result.entityFieldNames,
+            entityName = result.entityName,
+        )
+        if (traceTooltips.isNotEmpty()) {
+            tableHeader.defaultRenderer = columnFieldTraceHeaderRenderer(tableHeader.defaultRenderer, traceTooltips)
+            javax.swing.ToolTipManager.sharedInstance().registerComponent(tableHeader)
+        }
+        // F-13（DBX #317）：列头点击排序——三面板共用 ColumnOrderings 这一套比较逻辑；
+        // 默认无 sortKeys 时视图序 = 模型序（原样渲染），零行为变更。
+        val sorter = javax.swing.table.TableRowSorter(model)
+        val cellOrder = java.util.Comparator<Any?> { a, b ->
+            cn.song.mybatisplus.visualizer.util.ColumnOrderings.compareCells(a, b)
+        }
+        for (i in 0 until model.columnCount) sorter.setComparator(i, cellOrder)
+        rowSorter = sorter
     }
     // O-85：列信息表恢复 Ctrl+A 全选（IDEA 全局 Ctrl+A 被「选中文本」语义抢占、
     // JBTable 默认 selectAll 绑定在此场景不生效——显式绑 InputMap/ActionMap）。
@@ -522,10 +575,74 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
     return JBScrollPane(table)
 }
 
+/**
+ * F-06①：列头 tooltip 渲染器——包住默认渲染器，按列序号补 tooltip。
+ *
+ * `JTableHeader.getToolTipText(MouseEvent)` 就是取「该列渲染器产出的组件」的 tooltip，
+ * 故只需在渲染时挂上；不在 [tooltips] 里的列显式清空（默认渲染器是共享实例，不清会把
+ * 上一列的文案带到下一列）。
+ */
+internal fun columnFieldTraceHeaderRenderer(
+    delegate: javax.swing.table.TableCellRenderer?,
+    tooltips: Map<Int, String>,
+): javax.swing.table.TableCellRenderer {
+    val inner = delegate ?: javax.swing.table.DefaultTableCellRenderer()
+    return object : javax.swing.table.TableCellRenderer {
+        override fun getTableCellRendererComponent(
+            table: javax.swing.JTable?,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int,
+        ): java.awt.Component {
+            val component = inner.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+            if (component is javax.swing.JComponent) component.toolTipText = tooltips[column]
+            return component
+        }
+    }
+}
+
 /** 移除列信息标签页。 */
 
 internal fun SqlPreviewPanel.removeColumnInfoTab() {
     previewTabs.remove(PREVIEW_COLUMNS_TAB)
+}
+
+/**
+ * T-PagesHql：根据当前预览结果更新「原文」标签页。
+ *
+ * 仅当 [PreviewResult.originalSql] 非空（HQL/JPQL 被转换过）时显示；连续预览不同语句时替换内容，
+ * 非 HQL 预览则移除页签并恢复纯 SQL 视图。原文只读、等宽字体、不参与编辑/执行。
+ *（车道5 合并注：8f4492d5 侧本走 contentTabPane 裸 JTabbedPane 形态；移植进本分支
+ * PreviewTabManager——put 按 id 去重并保身份/选中态，remove 负责恢复纯 SQL 布局。）
+ */
+internal fun SqlPreviewPanel.updateOriginalSqlTab(result: PreviewResult) {
+    if (previewDisposed || project?.isDisposed == true) return
+    val original = result.originalSql?.takeIf { it.isNotBlank() }
+    if (original == null) {
+        removeOriginalSqlTab()
+        return
+    }
+    previewTabs.put(PREVIEW_ORIGINAL_SQL_TAB, ORIGINAL_SQL_TAB_TITLE, buildOriginalSqlPanel(original))
+}
+
+/** 构建原文只读面板（等宽字体 + 不折行，便于与转换后 SQL 逐行对照）。 */
+internal fun SqlPreviewPanel.buildOriginalSqlPanel(text: String): JComponent {
+    val area = JTextArea(text).apply {
+        isEditable = false
+        lineWrap = false
+        font = com.intellij.openapi.editor.colors.EditorColorsManager.getInstance()
+            .globalScheme.getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN)
+        border = JBUI.Borders.empty(6)
+        caretPosition = 0
+    }
+    return JBScrollPane(area)
+}
+
+/** 移除原文标签页（管理器空时自动恢复纯 SQL 视图）。 */
+internal fun SqlPreviewPanel.removeOriginalSqlTab() {
+    previewTabs.remove(PREVIEW_ORIGINAL_SQL_TAB)
 }
 
 /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。
@@ -540,6 +657,10 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
         result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: $it") }
+        // T-PagesHql：源语言非 SQL 时明示「已转换」（用户投诉的一半是「不知道插件做了什么」）
+        if (result.sourceLanguage != SourceLanguage.SQL) {
+            add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.sourceLanguage.name))
+        }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         result.xmlModel?.let { xml ->
             add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")
@@ -589,10 +710,18 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     errorCopyButton?.isVisible = currentWarning != null
     // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
     // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+    val sizePlan = cn.song.mybatisplus.visualizer.util.SqlSizeGuard.plan(result.sql)
     if (currentWarning != null) {
         degradationBanner.show(
             DegradationBanner.Kind.RENDER_WARNING,
             MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+        )
+    } else if (sizePlan.showRetentionNotice) {
+        // F-09：超大 SQL 的诚实降级提示——装饰已关（见 SqlSizeGuard 各接线点），
+        // 正文完整保留，用户需要知道「为什么没有高亮/标注」以及原文还能怎么用。
+        degradationBanner.show(
+            DegradationBanner.Kind.RENDER_WARNING,
+            MpSqlVisualizerBundle.message("panel.sql.size.notice", sizePlan.chars.toString()),
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)

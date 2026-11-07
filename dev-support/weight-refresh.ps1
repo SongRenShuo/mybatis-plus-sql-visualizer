@@ -9,17 +9,26 @@
 #
 # Semantics mirror the balancer (mpv-testing.gradle.kts durationWeights):
 #   - scan build/test-results/test + testShard1..N (bounded 1..ShardCount, never a wildcard --
-#     lesson 7: stale shard dirs from old shard counts must not leak into the profile)
+#     lesson 7: stale shard dirs from old shard counts must not leak into the profile) + testFast
 #   - per class keep the K most recent samples by mtime, value-median = sorted ascending [count/2]
+#
+# testFast in the scan (T-JUnit5Eval 方案 2, 2026-11-05): the pure-logic bucket left the shards and
+# now runs as its own `testFast` leg, so its ~370 classes have NO samples in testShardN anymore.
+# Without scanning testFast the refreshed profile would silently drop them, and the balancer's
+# staleness gate (uncovered > 15%) would start warning every round. They still matter: a class that
+# gains a `com.intellij` reference moves back into the shard bucket and then needs a real weight
+# instead of median interpolation.
+#
 # The pollution gate refuses to write the profile when the latest round's execSum exceeds
-# -PollutionThresholdSec (clean ~600s scale on the reference machine; ~2x = concurrent-build
-# pollution, lesson 2) unless -Force is given.
+# -PollutionThresholdSec unless -Force is given. Default raised 900 -> 1500 when testFast joined the
+# scan: a clean round is now shards (~880s, platform only) + testFast (~276s) + tail (~31s) ≈ 1200s,
+# so 900 would reject every clean round; 1500 keeps the same "≈1.25x clean = polluted" margin.
 
 param(
     [string]$ResultsDir = "build/test-results",
     [int]$ShardCount = 5,
     [int]$Samples = 2,
-    [double]$PollutionThresholdSec = 900,
+    [double]$PollutionThresholdSec = 1500,
     [switch]$Force,
     [string]$Out = "dev-support/test-shard-weights.tsv"
 )
@@ -45,9 +54,10 @@ function Read-SuiteAttrs([string]$path) {
     return $attrs
 }
 
-# bounded dir set: default test/ + testShard1..N
+# bounded dir set: default test/ + testShard1..N + testFast（快桶腿，见头注释）
 $dirs = @((Join-Path $ResultsDir "test"))
 for ($i = 1; $i -le $ShardCount; $i++) { $dirs += (Join-Path $ResultsDir ("testShard" + $i)) }
+$dirs += (Join-Path $ResultsDir "testFast")
 
 $byClass = @{}          # fqcn -> list of [mtime, seconds] (NOT named $samples: PS vars are case-insensitive)
 $roundSum = 0.0         # latest-round execSum across dirs (30 min window per dir)

@@ -50,6 +50,10 @@ object SqlExecutor {
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
         /** T-DialectGateUx：强制弹数据源选择器（方言闸门的「切换数据源」入口）。 */
         forceChoose: Boolean = false,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥；null = 既有红字文案）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
+        /** T8：中性信息回调（工具语句/更新语句成功完成时面板 showStatus，不走红条错误通道）。 */
+        onInfo: ((String) -> Unit)? = null,
     ) {
         executionAttemptForTest?.let { it(sql); return }
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -83,6 +87,8 @@ object SqlExecutor {
             onDialectGate = onDialectGate,
             onSubmission = if (onSubmission == null) null else receipt,
             forceChoose = forceChoose,
+            onDialectMismatchHint = onDialectMismatchHint,
+            onInfo = onInfo,
         )
     }
 
@@ -99,6 +105,8 @@ object SqlExecutor {
         callback: ((Boolean) -> Unit)? = null,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        /** UI-049：空 Runner「方言不匹配」态结构化提示（与 `onError` 互斥；null = 既有红字文案）。 */
+        onDialectMismatchHint: ((DialectMismatchHint) -> Unit)? = null,
     ) {
         if (!ExecuteSqlSupport.isAvailable()) {
             // 社区版：静默回退（不弹提示——自研编辑器已是回退态）
@@ -113,6 +121,7 @@ object SqlExecutor {
             callback = callback,
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
+            onDialectMismatchHint = onDialectMismatchHint,
         )
     }
 
@@ -134,6 +143,7 @@ object SqlExecutor {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        onInfo: ((String) -> Unit)? = null,
     ): Boolean {
         executionAttemptForTest?.let { it(null); return true }
         if (!ExecuteSqlSupport.isAvailable()) return false
@@ -156,6 +166,7 @@ object SqlExecutor {
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
             onSubmission = if (onSubmission == null) null else receipt,
+            onInfo = onInfo,
         )
     }
 

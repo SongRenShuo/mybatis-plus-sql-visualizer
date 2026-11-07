@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.mcp
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * sqlv_mapper_check 工具测试（T-McpToolset2 / T-MTS2-03）：契约层（语句清单/#{} 参数数/
@@ -30,7 +29,6 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
         </mapper>
     """.trimIndent()
 
-    @Test
     fun test契约层_语句清单参数数与直替数() {
         val output = check(mapper)
         assertTrue(output, output.contains("statements: 2"))
@@ -39,7 +37,6 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
         assertTrue(output, output.contains("substitutions: 1"))
     }
 
-    @Test
     fun test渲染层simulate_无WHERE的UPDATE判危险() {
         val output = check(mapper, simulate = true)
         assertTrue(output, output.contains("DANGEROUS"))
@@ -55,7 +52,6 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
      * 误报。修法=detect 入口空白规范化（execute 包测试钉）+ SqlAstParser null 响亮防御。
      * 本用例钉 mapper_check 全链：多分支动态 XML 模拟后按真实语法判定（不再 PARSE_FAILED）。
      */
-    @Test
     fun test渲染层simulate_多分支动态SQL不再误报PARSE_FAILED() {
         val multiBranch = """
             <mapper namespace="n">
@@ -82,7 +78,6 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
      * T-McpWalkFindings S2：PARSE_FAILED 必带 detail 行（`simulate risk note:`）——真语法错
      * 残余失败场景的归因线索（修复前 detail 被 kinds() 枚举名吞掉，输出零线索）。
      */
-    @Test
     fun test渲染层simulate_PARSE_FAILED带detail归因线索() {
         val broken = """
             <mapper namespace="n">
@@ -101,14 +96,12 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
         )
     }
 
-    @Test
     fun test无语句mapper_预期错误() {
         val error = runCatching { check("<mapper namespace=\"n\"></mapper>") }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("no <select|insert|update|delete>"))
     }
 
-    @Test
     fun test空文本_预期错误() {
         val error = runCatching { SqlVisualizerMapperCheckTool().mapperCheck("", false) }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)

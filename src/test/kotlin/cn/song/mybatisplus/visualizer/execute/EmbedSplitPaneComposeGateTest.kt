@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.execute
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * ★A49：整控台 SplitPane 组入判定 [shouldComposeEmbedSplitPane] 测试。
@@ -26,7 +25,6 @@ import org.junit.Test
 class EmbedSplitPaneComposeGateTest : BasePlatformTestCase() {
 
     /** 无嵌入宿主（onConsole=null）——不得组 SplitPane、不得摘 DBN 结果组件。 */
-    @Test
     fun testNoEmbedHostDoesNotCompose() {
         assertFalse(
             "无嵌入宿主（SQL 快捷模板 / 日志转 SQL 执行链）时不得组 SplitPane 摘走 DBN 结果组件",
@@ -35,7 +33,6 @@ class EmbedSplitPaneComposeGateTest : BasePlatformTestCase() {
     }
 
     /** 结果区组件取不到（DBN 尚未建出）——无从组入。 */
-    @Test
     fun testNoResultComponentDoesNotCompose() {
         assertFalse(
             "结果区组件缺席时无从组入",
@@ -44,7 +41,6 @@ class EmbedSplitPaneComposeGateTest : BasePlatformTestCase() {
     }
 
     /** 有嵌入宿主（预览面板）且结果区组件在场——必须组入（既有行为不回退）。 */
-    @Test
     fun testEmbedHostWithResultComposes() {
         assertTrue(
             "有嵌入宿主且结果区组件在场时必须组入（预览路径不回退）",

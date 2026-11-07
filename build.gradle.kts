@@ -103,6 +103,14 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-IbatisPanwei（2026-11-06）：磐维 PanWeiDB 驱动——公开仓库拿不到厂商标，jar 入库在
+    // database-lab/vendor/drivers/，按仓库相对路径挂**测试 classpath**（仅测试面，供
+    // dialectExternalVerify 连磐维 A/B 实例跑方言渲染套件；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar"))
+    // T-GoldenDbDialect（2026-11-07）：中兴 GoldenDB 驱动——同磐维口径，公开仓库拿不到厂商标，
+    // jar 入库 database-lab/vendor/drivers/ 挂**测试 classpath**（供矩阵/外指腿连驱动级替代实例；
+    // §7.6 驱动级替代读数的长效注入，替代 .local init script 临时方案；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/gdb_mysql-connector-java-oracle-5.1.46.99.jar"))
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
@@ -142,7 +150,7 @@ dependencies {
         // Plugin Verifier 按目标 IDE 集合校验。database API 在 com.intellij.database（仅 Ultimate）。
         // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
         // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
-        // 注：本机日常 IDE 为 Ultimate 2026.2.3（2026-09-17 起，T-VerifyIde2623），243 平台需下载（gradle.properties 已配代理）。
+        // 注：本机日常 IDE 为 Ultimate 2026.2.4（2026-11-04 升版），243 平台需下载（gradle.properties 已配代理）。
         intellijIdeaUltimate(if (gifRecord) "2026.2.1" else "2024.3.7.1")
         testFramework(TestFrameworkType.Platform)
 
@@ -348,6 +356,13 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
     // 环境覆盖透传（配置期取值，兼容配置缓存）
     providers.gradleProperty("e2eDemoDir").orNull?.let { environment("DEMO_DIR", it) }
     providers.gradleProperty("e2eMvn").orNull?.let { environment("MVN", it) }
+    // T-CiNightly（2026-11-05）：CI 上 e2e 要指向共享测试实例的库，并允许联网解析 Maven 依赖。
+    // demo 是 Spring Boot 应用（`--spring.profiles.active=mysql`），这三个环境变量会被松散绑定
+    // 覆盖 application.yml 里的 datasource；MVN_OFFLINE=0 让 run-e2e.sh 去掉 `-o`（CI 首次没有 ~/.m2）。
+    providers.gradleProperty("e2eDbUrl").orNull?.let { environment("SPRING_DATASOURCE_URL", it) }
+    providers.gradleProperty("e2eDbUser").orNull?.let { environment("SPRING_DATASOURCE_USERNAME", it) }
+    providers.gradleProperty("e2eDbPassword").orNull?.let { environment("SPRING_DATASOURCE_PASSWORD", it) }
+    providers.gradleProperty("e2eMavenOffline").orNull?.let { environment("MVN_OFFLINE", it) }
     // JDK：Gradle daemon 的 PATH 不含交互式 shell 里的本机 JDK8（脚本首跑实测 `javac: command not found`），
     // 故显式把 JDK 交给脚本（脚本会把 $JAVA_HOME/bin 前置进 PATH）。默认取本机 JDK8，不存在则不设
     // （留给调用方 PATH / -Pe2eJavaHome=），脚本侧另有「缺 javac 即硬失败」的检查。
@@ -368,5 +383,16 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
 // 挂到叶子后，即使某个 shard 失败，e2e 仍等所有分片收尾再起（--continue 语义保留：e2e 照样跑）。
 tasks.named("e2eFakeIde") {
     mustRunAfter(tasks.matching { it.name.matches(Regex("testShard[0-9]+")) })
+    // T-TestGapSpeed T5：负载敏感性能用例串行尾道（任务名不匹配上方 [0-9]+ 正则，单独挂边）
+    mustRunAfter("testShardTail")
     mustRunAfter("testExternal")
+}
+
+// T-ConsoleBind263：可选的真平台 jar 契约校验（`PlatformMappingContractTest`）。
+// Gradle 的 `-D` 只作用于 Gradle 自己的 JVM，不会自动传给 fork 出去的测试进程——这里显式转发。
+// 未指定时什么都不设，用例自己 assume 跳过（skipped，不是通过）。
+tasks.withType<Test>().configureEach {
+    providers.systemProperty("mpvs.contract.ide").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { systemProperty("mpvs.contract.ide", it) }
 }

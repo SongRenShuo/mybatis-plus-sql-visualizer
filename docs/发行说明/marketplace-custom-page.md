@@ -13,7 +13,7 @@
 - **真实参数一键回填**：`?` 占位符替换为实际值，LIKE 自动拼百分号、按字段类型加引号
 - **运行期捕获（默认开启）**：挂载轻量 agent 直接采集真实执行，不依赖日志格式——真实参数、毫秒级耗时、影响行数、执行报错与真实源码位置；慢查询标红并给出静态性能建议，调用栈悬停弹层可逐帧跳转
 - **控制台日志（回落通道）**：MyBatis / Hibernate / JdbcTemplate 三种格式自动还原，按线程分桶，精确跳转源码
-- **SQL 反向转 Java**：一键生成可直接编译的四种 Wrapper 形态代码
+- **SQL 反向转 Java**：一键生成可直接编译的五种默认形态代码（AUTO 自动 + QueryWrapper / LambdaQueryWrapper / Wrappers 工厂 / MPJLambdaWrapper 四种固定形态）
 - **JOIN 关系图与执行**：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)
 - **CRUD SQL 一步直出**：实体类 / 数据库表右键生成，乐观锁与逻辑删除自动适配
 - **触发零门槛**：代码左侧 gutter 图标 / 右键菜单 / `Alt+Shift+Q`

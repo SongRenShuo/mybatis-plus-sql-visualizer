@@ -163,6 +163,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
         override fun toString(): String = label
     }
 
+    /** T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）。 */
+    internal data class PagesSourceOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
     internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
@@ -227,6 +232,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
         ),
     )
 
+    /** T-PagesHql：maintainPage `<datasource>` 源语言选项（自动 / 仅 SQL / 仅 HQL）。 */
+    internal fun pagesSourceOptions(): Array<PagesSourceOption> = arrayOf(
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_AUTO, MpSqlVisualizerBundle.message("settings.pagesSource.auto")),
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_SQL, MpSqlVisualizerBundle.message("settings.pagesSource.sql")),
+        PagesSourceOption(PluginSettings.PAGES_SOURCE_HQL, MpSqlVisualizerBundle.message("settings.pagesSource.hql")),
+    )
+
     // T-TenantLine 诊断日志：输出 UI Apply 决策链路。
     private val LOG = Logger.getInstance(PluginSettingsPanel::class.java)
 
@@ -270,6 +282,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 脱敏开关（默认关）：对疑似敏感形态打码，agent 采集层执行。 */
     internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+
+    /**
+     * F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（默认不勾 = 带 BOM，Excel 直开不乱码）。
+     * 历史/日志与可移植两条 CSV 导出链共用此开关。
+     */
+    internal val csvExportNoBomCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.csv.export.noBom"))
 
     /**
      * R60（T-LaneB D96）→ T-MagpieGems W2：展示/导出链脱敏动作分级下拉
@@ -585,6 +603,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 嵌入列命名约定下拉（T-EmbeddedColPrefix：AUTO/NONE/COMPONENT_PATH）。 */
     internal val embeddedNamingCombo = JComboBox<EmbeddedNamingOption>()
 
+    /** maintainPage `<datasource>` 源语言档（T-PagesHql：AUTO/SQL/HQL）。 */
+    internal val pagesSourceCombo = JComboBox<PagesSourceOption>()
+
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
 
@@ -624,6 +645,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logMixedPrefixCheck = JBCheckBox()
     internal val logAutoCaptureCheck = JBCheckBox()
     internal val logAutoOpenCheck = JBCheckBox()
+
+    /** F-03：项目打开即自动显示 SQL 日志工具窗并进入记录态（默认关）。 */
+    internal val logToolWindowAutoShowCheck = JBCheckBox()
     internal val logStopOnToolWindowCloseCheck = JBCheckBox()
     internal val logTimestampCheck = JBCheckBox()
     internal val logTimestampFormatField = JBTextField(12)
@@ -698,6 +722,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logTimePrefixField = JBTextField(12)
     internal val slowQueryThresholdField = JBTextField(12)
     internal val logShowDurationCheck = JBCheckBox()
+
+    // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+    internal val logShowMethodCheck = JBCheckBox()
 
     // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
     internal val dataSourceBadgeDetailCheck = JBCheckBox()
@@ -1294,6 +1321,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
             || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
+            // F-03：工具窗随项目启动开关
+            || logToolWindowAutoShowCheck.isSelected != s.logToolWindowAutoShowOnStart
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
@@ -1306,6 +1335,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            || logShowMethodCheck.isSelected != s.showMethodInLogList
             || dataSourceBadgeDetailCheck.isSelected != s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
@@ -1314,6 +1344,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // （与访问器归一后的有效值比，防空哨兵未迁移态造成常驻假「已修改」）
             || selectedDisplayMaskMode() != PluginSettings.getInstance().displayMaskMode().name
             || displayMaskAllowListArea.text.trim() != s.displayMaskAllowList.trim()
+            // F-14（DBX #318）：CSV 导出 BOM 开关改动判定
+            || csvExportNoBomCheck.isSelected != s.csvExportNoBom
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1342,6 +1374,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected != s.mapperNavYieldToCodeHelper
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
+            // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
+            || (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value != s.pagesXmlSourceMode
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
@@ -1424,6 +1458,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logMixedPrefix = logMixedPrefixCheck.isSelected
             s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
             s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+            s.logToolWindowAutoShowOnStart = logToolWindowAutoShowCheck.isSelected // F-03
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
@@ -1437,6 +1472,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            s.showMethodInLogList = logShowMethodCheck.isSelected
             s.dataSourceBadgeDetail = dataSourceBadgeDetailCheck.isSelected
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
@@ -1449,6 +1485,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.displayMaskMode = maskMode
             s.displayMaskAllowList = displayMaskAllowListArea.text.trim()
             s.displayMaskEnabled = maskMode != "OFF"
+            // F-14（DBX #318）：CSV 导出 BOM 开关写回
+            s.csvExportNoBom = csvExportNoBomCheck.isSelected
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1488,6 +1526,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             GutterGroupSwitches.applyTo(s, gutterGroupMultiSelect.selectedFlags())
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
+            // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
+            s.pagesXmlSourceMode = (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value
+                ?: PluginSettings.PAGES_SOURCE_AUTO
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
@@ -1598,6 +1639,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterGroupMultiSelect.setFlags(GutterGroupSwitches.flagsFrom(s))
             mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
+            // T-PagesHql：maintainPage 源语言档回填
+            pagesSourceCombo.selectedItem = pagesSourceOptions().firstOrNull { it.value == s.pagesXmlSourceMode }
+                ?: pagesSourceOptions().first()
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
@@ -1623,6 +1667,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMixedPrefixCheck.isSelected = s.logMixedPrefix
             logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
             logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+            logToolWindowAutoShowCheck.isSelected = s.logToolWindowAutoShowOnStart // F-03
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat
@@ -1639,6 +1684,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            logShowMethodCheck.isSelected = s.showMethodInLogList
             dataSourceBadgeDetailCheck.isSelected = s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
@@ -1648,6 +1694,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 .indexOfFirst { it.value == PluginSettings.getInstance().displayMaskMode().name }
                 .coerceAtLeast(0)
             displayMaskAllowListArea.text = s.displayMaskAllowList
+            // F-14（DBX #318）：CSV 导出 BOM 开关回填
+            csvExportNoBomCheck.isSelected = s.csvExportNoBom
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

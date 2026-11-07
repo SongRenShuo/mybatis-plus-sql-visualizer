@@ -13,6 +13,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -280,5 +281,84 @@ class GutterPreviewConsistencyTest : BasePlatformTestCase() {
         val result = newService().preview(methodCall)
         assertNotNull("服务链 preview 应返回非空结果", result)
         assertTrue("服务链应生成 SELECT: ${result!!.sql}", result.sql.startsWith("SELECT"))
+    }
+
+    // ==================================================================
+    // T-WriteFamily（R4）：空 Wrapper 写族的 gutter ↔ preview 接缝
+    // ==================================================================
+
+    fun testDeleteNullGutterMarkerPresentAndPreviewDelete() {
+        // R4：`mapper.delete(null)` 锚点（delete identifier）→ gutter marker 存在 → 预览产出无 WHERE 的 DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void remove() {
+                    deviceInfoMapper.delete(null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val nameId = firstMethodCall().methodExpression.referenceNameElement!!
+        assertSame(
+            "delete(null) 的 delete identifier 应为锚点",
+            nameId,
+            WrapperAnchorDetector.anchorElement(nameId),
+        )
+        assertNotNull("delete(null) 应产生 gutter marker", provider.getLineMarkerInfo(nameId))
+        val result = newService().preview(nameId)
+        assertNotNull("gutter marker 存在时 preview 应返回非空结果", result)
+        assertTrue("delete(null) 应生成 DELETE：${result!!.sql}", result.sql.startsWith("DELETE FROM"))
+        assertNotNull("全表删除应有警示", result.warning)
+    }
+
+    fun testUpdateNullWrapperGutterMarkerPresentAndPreviewUpdate() {
+        // R4：`mapper.update(entity, null)` 锚点（update identifier）→ gutter marker 存在 → 预览产出无 WHERE 的 UPDATE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void update(DeviceInfoEntity entity) {
+                    deviceInfoMapper.update(entity, null);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                interface BaseMapper<T> {}
+
+                interface DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val nameId = firstMethodCall().methodExpression.referenceNameElement!!
+        assertSame(
+            "update(entity, null) 的 update identifier 应为锚点",
+            nameId,
+            WrapperAnchorDetector.anchorElement(nameId),
+        )
+        assertNotNull("update(entity, null) 应产生 gutter marker", provider.getLineMarkerInfo(nameId))
+        val result = newService().preview(nameId)
+        assertNotNull("gutter marker 存在时 preview 应返回非空结果", result)
+        assertTrue("update(entity, null) 应生成 UPDATE：${result!!.sql}", result.sql.startsWith("UPDATE"))
+        assertTrue("不得生成 WHERE：${result.sql}", !result.sql.contains("WHERE"))
+        assertNotNull("全表更新应有警示", result.warning)
     }
 }

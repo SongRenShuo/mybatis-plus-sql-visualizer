@@ -129,16 +129,19 @@ class ShardingSphereLogParserTest {
         val row = SqlExportRow("", entry.restoredSql, entry.source.name)
         for (format in SqlExportFormat.values()) {
             val exported = SqlExportService.format(listOf(row), format)
-            // SQL 格式文件头带 `-- Exported N ... at yyyy-MM-dd HH:mm:ss.SSS` 的实时时间戳，
-            // 毫秒恰为 001 时会让整串断言假红（曾在本仓全量门禁偶发）。判据只看 SQL 内容区。
-            val content = exported.lineSequence()
-                .filterNot { it.startsWith("-- Exported ") }
-                .joinToString("\n")
-            assertEquals(entry.rawSql.count { it == '?' }, content.count { it == '?' })
-            assertTrue(!content.contains(" ::: "))
-            assertTrue(!content.contains("BOOK"))
-            assertTrue(!content.contains("001"))
-            assertTrue(!content.contains("[0, 30]"))
+            // T-CiDiag（2026-11-06）：CI 上本块第 3 条断言（"001"）曾在 fast 切片腿里失败过，
+            // 而本地与相邻 CI 轮都绿——无消息时只看到一句空 AssertionError，无法判是哪个 format、
+            // 残留了什么。断言消息补上 format 与产物片段（不改变判定条件），下次失败即可定因。
+            assertEquals("format=$format 占位数应与逻辑 SQL 一致，产物=$exported",
+                entry.rawSql.count { it == '?' }, exported.count { it == '?' })
+            assertTrue("format=$format 不应含分片标记 ' ::: '，产物=$exported", !exported.contains(" ::: "))
+            assertTrue("format=$format 不应含物理表名 BOOK，产物=$exported", !exported.contains("BOOK"))
+            // T-CiFastFlake（2026-11-06 run 42135405574 定因）：「001」扫描此前含导出头部
+            // `-- Exported … at 2026-11-06 08:22:36.001`——毫秒恰为 001 时（1/1000）必然红，
+            // 与「本地与相邻轮都绿」的偶发形态吻合。收窄到去头部后的正文再扫。
+            val exportedBody = exported.lines().filterNot { it.startsWith("-- Exported") }.joinToString("\n")
+            assertTrue("format=$format 不应含 001（占位符/控制字符残留），产物=$exported", !exportedBody.contains("001"))
+            assertTrue("format=$format 不应含物理分页参数 [0, 30]，产物=$exported", !exported.contains("[0, 30]"))
         }
     }
 
@@ -285,6 +288,23 @@ class ShardingSphereLogParserTest {
         parser.feed("business log without sql")
         parser.closePending()
         assertTrue(parser.takeEntries().isEmpty())
+    }
+
+    /**
+     * F-04 互斥反例：MyBatis 三族行直接喂本解析器必须零产出——`Logic SQL:`/`Actual SQL:`
+     * 关键字判定不吃普通 MyBatis Preparing/Parameters 行（正向互斥见
+     * `真实格式桥分派开关和其余三族互不干扰`，此处钉解析器本体的单侧边界）。
+     */
+    @Test
+    fun `MyBatis行不被ShardingSphere解析器吃`() {
+        val parser = ShardingSphereLogParser()
+        parser.feed("Preparing: SELECT * FROM mb WHERE id = ?")
+        parser.feed("Parameters: 7(Integer)")
+        parser.feed("Total: 1")
+        parser.feed("18:32:08.911 INFO  [main] c.e.Mapper.selectById - Preparing: SELECT * FROM mb WHERE id = ?")
+        parser.feed("18:32:08.912 INFO  [main] c.e.Mapper.selectById - Parameters: 7(Integer)")
+        parser.closePending()
+        assertTrue("MyBatis 行形态不得进入 ShardingSphere 条目链", parser.takeEntries().isEmpty())
     }
 
     @Test

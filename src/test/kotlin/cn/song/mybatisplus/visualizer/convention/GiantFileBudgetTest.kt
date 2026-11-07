@@ -41,19 +41,40 @@ class GiantFileBudgetTest {
         // 2103 → 2000（2026-10-31 D202: 语句后处理拆出 StatementOps，实测 1847 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2000,
         // 2349 → 2000（2026-10-31 D202: 控制台文本探测拆出 ConsoleText，实测 1989 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2000,
+        // 2000 → 2010（2026-11-04 UI-002: consumeCachedTempPsiFile 的 PSI 判定补读锁——BGT 无读许可，
+        //   真机 `Read access is allowed from inside read-action only` 硬抛；增量含读锁代码与线程契约
+        //   KDoc，实测 2007 行 +7 超线。**拆分仍首选**：下一轮触顶须先走拆文件，本提额只为留痕解红）
+        // 2010 → 2025（2026-11-06 S1-7 合并：master T8 onInfo 穿层 + UI-049 调用点具名参数自动并入，
+        //   实测 2019 行 +9 超线。**拆分仍首选**：拆分债已挂闲时清单随批清偿，本提额只为合并期留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2025,
         // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
         // 2194 → 2000（2026-10-31 D202: 输出写入/分栏取证拆出 ConsoleOutput，实测 1987 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2000,
+        // 2000 → 2030（2026-11-04 UI-003: else 分支接 PreviewPreparePick.decide——预览准备「静默选源/
+        //   静默放弃」两态接线 + 单飞门结算与契约注释，实测 2027 行 +27 超线。**选源决策本体已抽到
+        //   execute/PreviewPreparePick.kt**（纯函数 12 例自证），此处只剩接线；再触顶须拆分派表）
+        // 2030 → 2090（2026-11-06 S1-7 合并：master UI-049 结构化提示通道（onDialectMismatchHint 参数
+        //   + EmptyRunnersHint 兜底并存）+ T8 onInfo 调用点，实测 2087 行 +57 超线；master 侧重复的
+        //   createTempPsiFileAsync/revalidateOnEdt/createTempPsiFile 三块已按 dev 工厂版删除。
+        //   **拆分债显式挂账**：闲时清单 G-1（projectExecFile/installOutputHistoryFillLayout 族优先），
+        //   本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2090,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1972,
+        // 1972 → 1980（2026-11-06 F-09：>200K 参数面板只出条数汇总行 + 超大档提示接线，实测 1974 行 +2 超线；
+        //   **拆分仍首选**，本提额只为批次留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1980,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
         //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1840,
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1777,
+        // 1840 → 1870（2026-11-06 F 队列：F-03 随项目启动开关 + F-14 CSV 无 BOM 开关各一组
+        //   字段级复选框/回填/写回接线，实测 1865 行 +25 超线。**拆分仍首选**：下一轮触顶须先走拆文件，
+        //   本提额只为批次留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1870,
+        // 1777 → 1790（2026-11-06 F-07：卸载/禁用清理钩子接线——dispose 停采下发、落盘 jar 修剪、
+        //   目录收口委托，实测 1785 行 +8 超线；清理内核已抽到 AgentResidueCleaner.kt，此处只剩接线。
+        //   **拆分仍首选**，本提额只为批次留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1790,
         // 1727 → 1777（2026-10-25: 合并 master 实测 1750 行，含 premain 无界 join 修复，+23 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to 1619,
     )

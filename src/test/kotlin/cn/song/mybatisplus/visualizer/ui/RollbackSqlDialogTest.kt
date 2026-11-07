@@ -35,7 +35,15 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         fun getUrl(): String = "jdbc:mysql://localhost:3306/demo"
     }
 
+    override fun setUp() {
+        super.setUp()
+        // S2-4 券②：执行回滚/快照查询按钮在 Community 下预判置灰——本类验的是「Ultimate 态
+        // 行为」（启用态跟随语句有无），headless 无 Database 标记类需覆写探测（DisplayEditorTest 先例）。
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = true
+    }
+
     override fun tearDown() {
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = null
         if (panel.isInitialized()) panel.value.dispose()
         super.tearDown()
     }
@@ -56,6 +64,24 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
     )
 
     // ======================== Complete ========================
+
+
+    /**
+     * T-PrepareGateAwait（2026-11-01 门禁实证）：`prepare` 单飞门是**异步**释放的
+     * （`chooseAndPrepare` 的续接链在 EDT 上收尾），用例在动作后立刻断言「应弹选择器」，
+     * 会撞上「门还在飞 → `shouldPromptForDataSource`=false → 提示被正确跳过」的时序窗。
+     * 本 helper 在动作前先把在飞准备抽干（泵 EDT 等门清空），让断言回到确定态；
+     * 这不是放松断言——生产契约就是异步（S2-16），同步断言只是在吃时序运气。
+     */
+    private fun awaitPrepareGateIdle(timeoutMs: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight()
+            && System.currentTimeMillis() < deadline
+        ) {
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+    }
 
     fun testCompleteResultShowsExecutableView() {
         val result = completeInsertResult()
@@ -245,6 +271,7 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
             )
         }
         try {
+            awaitPrepareGateIdle()
             dialog.runSnapshotQuery()
             assertTrue("无数据源应先弹数据源选择器", prompted)
             assertTrue("绑定后应自动重试并填充表格", dialog.snapshotTableShownForTest())
@@ -393,6 +420,7 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         dialog.snapshotPromptForTest = { _, _, _ -> prompted = true }
         dialog.snapshotAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
         try {
+            awaitPrepareGateIdle()
             dialog.runSnapshotQuery()
             assertTrue("前置：方言冲突露出出口行", dialog.gateExitRowVisibleForTest())
             dialog.switchSourceButtonForTest().doClick()
@@ -661,19 +689,27 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
     }
 
     fun testUI020NonPreparedUnavailableBackendDoesNotMarkSubmitted() {
-        assertFalse("本例验证无Database插件的真实阻断，不伪称验证数据库提交", cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable())
-        val store = project.getService(RollbackSnapshotStore::class.java)
-        val entry = registeredDelete()
-        val dialog = snapshotDialog(entry)
+        // 本例验「真实无 Database 插件」的阻断链：本类 setUp 为验 Ultimate 态启用态而覆写了探测，
+        // 这里必须复位成真实探测（沙盒恒 false），否则用例变成伪验证。
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = null
         try {
-            val before = dialog.bannerTextForTest()
-            TestDialogManager.setTestDialog(TestDialog { Messages.YES }, testRootDisposable)
-            dialog.executeRollback()
-            assertEquals(before, dialog.bannerTextForTest())
-            assertSame(entry, store.findBySql(entry.sql))
+            assertFalse("本例验证无Database插件的真实阻断，不伪称验证数据库提交", cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable())
+            val store = project.getService(RollbackSnapshotStore::class.java)
+            val entry = registeredDelete()
+            val dialog = snapshotDialog(entry)
+            try {
+                val before = dialog.bannerTextForTest()
+                TestDialogManager.setTestDialog(TestDialog { Messages.YES }, testRootDisposable)
+                dialog.executeRollback()
+                assertEquals(before, dialog.bannerTextForTest())
+                assertSame(entry, store.findBySql(entry.sql))
+            } finally {
+                dialog.doDispose()
+                store.clearForTest()
+            }
         } finally {
-            dialog.doDispose()
-            store.clearForTest()
+            // 还原类级 Ultimate 态覆写（tearDown 亦复位，此处保证同类后续用例不受影响）
+            cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.availabilityOverrideForTest = true
         }
     }
 

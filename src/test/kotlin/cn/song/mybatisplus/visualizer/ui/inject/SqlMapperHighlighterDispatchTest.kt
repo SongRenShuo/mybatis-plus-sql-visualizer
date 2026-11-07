@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.ui.inject
 import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Test
 
 /**
  * 着色链路的**真实分派路径**守卫（T-XmlGap 收口补：把此前只能靠真机截图证明的一环变成可自动复核）。
@@ -21,7 +20,6 @@ import org.junit.Test
  */
 class SqlMapperHighlighterDispatchTest : BasePlatformTestCase() {
 
-    @Test
     fun test_高亮器工厂经平台分派返回我方高亮器() {
         val highlighter = SyntaxHighlighterFactory.getSyntaxHighlighter(SqlMapperLanguage, project, null)
         assertTrue(
@@ -32,7 +30,6 @@ class SqlMapperHighlighterDispatchTest : BasePlatformTestCase() {
         )
     }
 
-    @Test
     fun test_关键字token映射到自有键() {
         val highlighter = SyntaxHighlighterFactory.getSyntaxHighlighter(SqlMapperLanguage, project, null)
         val keys = highlighter.getTokenHighlights(SqlMapperTT.KEYWORD)

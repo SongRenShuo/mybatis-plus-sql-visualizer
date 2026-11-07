@@ -74,4 +74,49 @@ class PagesXmlGutterLineMarkerProviderTest : BasePlatformTestCase() {
         // maintainPage 的 parent 是 root 而非 pages → 不应注册
         assertNull("非 <pages> 下的 maintainPage 不应注册 gutter 图标", provider.getLineMarkerInfo(mpToken))
     }
+
+    // ------------------------------------------------------------------
+    // T-PagesHql：页面标签名不固定（listPage / queryPage …）
+    // ------------------------------------------------------------------
+
+    fun testGetLineMarkerInfo_自定义页面标签带datasource也注册() {
+        val file = xmlFile(
+            "<pages>\n" +
+                "  <listPage id=\"lp1\"><datasource><![CDATA[SELECT 1]]></datasource></listPage>\n" +
+                "  <queryPage id=\"qp1\"><datasource><![CDATA[SELECT 2]]></datasource></queryPage>\n" +
+                "</pages>",
+        )
+        val provider = PagesXmlGutterLineMarkerProvider()
+        assertNotNull(
+            "带 <datasource> 的自定义页面标签应注册 gutter 图标",
+            provider.getLineMarkerInfo(tokensNamed(file, "listPage").first()),
+        )
+        assertNotNull(
+            "第二个自定义页面标签同样应注册",
+            provider.getLineMarkerInfo(tokensNamed(file, "queryPage").first()),
+        )
+    }
+
+    fun testStatementsInRange_自定义页面标签按datasource识别() {
+        val file = xmlFile(
+            "<pages>\n" +
+                "  <listPage id=\"lp1\"><datasource><![CDATA[SELECT 1]]></datasource></listPage>\n" +
+                "  <other/>\n" +
+                "  <queryPage id=\"qp1\"><datasource><![CDATA[SELECT 2]]></datasource></queryPage>\n" +
+                "</pages>",
+        )
+        val tags = PagesXmlGutterLineMarkerProvider.statementsInRange(file, 0, file.textLength)
+        assertEquals("应返回 2 个带 datasource 的页面标签（other 被排除）", 2, tags.size)
+        assertEquals("lp1", tags[0].getAttributeValue("id"))
+        assertEquals("qp1", tags[1].getAttributeValue("id"))
+    }
+
+    fun testGetLineMarkerInfo_自定义标签无datasource不注册() {
+        val file = xmlFile("<pages><listPage id=\"lp1\"/></pages>")
+        val provider = PagesXmlGutterLineMarkerProvider()
+        assertNull(
+            "无 <datasource> 的自定义标签没有可预览内容，不应注册图标",
+            provider.getLineMarkerInfo(tokensNamed(file, "listPage").first()),
+        )
+    }
 }

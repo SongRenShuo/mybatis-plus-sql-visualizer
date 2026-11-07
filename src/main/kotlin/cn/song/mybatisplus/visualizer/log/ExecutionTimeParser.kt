@@ -35,11 +35,22 @@ object ExecutionTimeParser {
     /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
     private val TRAILING_MS_REGEX = Regex("""[\]\s]\s*(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
 
-    /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
+    /**
+     * 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。
+     *
+     * T-PerfSweep30 05a：加显式上限（同族 countCache 形态——超限整体清空）。键域是「用户配置的
+     * 耗时前缀」，通常个位数；但配置可被脚本反复改写，无上限的 CHM 在长跑 IDE 里没有回收路径。
+     * 清空代价 = 下次重编译一条 Regex（微秒级）。
+     */
     private val customPrefixRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 
-    private fun customPrefixRegex(customPrefix: String): Regex = customPrefixRegexCache.computeIfAbsent(customPrefix) {
-        Regex("""(?i)${Pattern.quote(it)}\s*(\d+)\s*ms?\b""")
+    private const val CUSTOM_PREFIX_CACHE_MAX = 64
+
+    private fun customPrefixRegex(customPrefix: String): Regex {
+        if (customPrefixRegexCache.size >= CUSTOM_PREFIX_CACHE_MAX) customPrefixRegexCache.clear()
+        return customPrefixRegexCache.computeIfAbsent(customPrefix) {
+            Regex("""(?i)${Pattern.quote(it)}\s*(\d+)\s*ms?\b""")
+        }
     }
 
     /**

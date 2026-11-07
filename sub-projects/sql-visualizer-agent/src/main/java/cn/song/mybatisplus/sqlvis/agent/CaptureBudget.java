@@ -1,5 +1,9 @@
 package cn.song.mybatisplus.sqlvis.agent;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -9,13 +13,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p><b>为什么单独成类且零 ASM 依赖。</b>本类被 premain 路径（{@link AgentMain}）与 transformer
  * 入口（{@link SqlHookTransformer}）共同读取，而 premain 阶段任何一次多余的类初始化都可能成为
  * 「宿主起不来」的成因（见 {@code AgentMain} 的 T-JRebelPremainCrash 注释）。故本类只依赖
- * {@code java.util.concurrent.atomic} 与 {@code System}，不引用任何织入器/ASM 类型。
+ * {@code java.util.concurrent.atomic}、{@code java.util} 集合与 {@code System}（全是 java.base），
+ * 不引用任何织入器/ASM 类型。
  *
  * <p><b>红线口径（用户令）。</b>增强捕获的任何新增采集面都必须「失败即原样返回 + 异常全吞 +
  * 不改返回值 + 不改对象身份 + 有预算上限」。本类承担最后一条：三类上限 + 一个总闸。
  * <ul>
- *   <li>① 接口匹配扫描类数上限（{@code catchAllScanLimit}，默认 5000）：只统计扫描过的类，
- *       达上限即停止扫描（不阻断已匹配类的织入）；</li>
+ *   <li>① 接口匹配**候选类**数上限（{@code catchAllScanLimit}，默认 5000）：只统计真正跑了接口
+ *       判定的候选类（JDK 前缀、接口/枚举/数组/基本型、无 classloader、JDK 动态代理这些零成本
+ *       排除项不占预算）。T-IbatisPanwei 券 E 修正：此前计的是遍历到的每一个类，5000 在大型应用里
+ *       会按 `getAllLoadedClasses()` 的数组顺序截断，把未扫到的候选一并丢掉；</li>
  *   <li>② transformer 兜底累计耗时预算（{@code catchAllBudgetMs}，默认 300ms）：只累计
  *       **兜底分支**自身的耗时（子串预筛 + header 解析 + 兜底织入），不累计白名单路径；超预算即
  *       关闭兜底分支（白名单照旧），打一行诊断；</li>
@@ -60,6 +67,15 @@ public final class CaptureBudget {
     /** 券 08：premain 补挂轮数上限（含首轮）。 */
     static final String PROP_PREMAIN_PASSES = "sqlvis.agent.catchAllPremainPasses";
 
+    /** 券 E（T-IbatisPanwei）：attach 路径补挂首轮延迟（毫秒；0 = 不补挂，只跑 attach 当轮）。 */
+    static final String PROP_ATTACH_DELAY_MS = "sqlvis.agent.catchAllAttachDelayMs";
+
+    /** 券 E（T-IbatisPanwei）：attach 补挂轮间隔（毫秒）。 */
+    static final String PROP_ATTACH_REPEAT_MS = "sqlvis.agent.catchAllAttachRepeatMs";
+
+    /** 券 E（T-IbatisPanwei）：attach 补挂轮数上限。 */
+    static final String PROP_ATTACH_PASSES = "sqlvis.agent.catchAllAttachPasses";
+
     // ---------- 默认值（计划 D5 保守档） ----------
 
     static final int DEFAULT_SCAN_LIMIT = 5000;
@@ -68,6 +84,21 @@ public final class CaptureBudget {
     static final long DEFAULT_PREMAIN_DELAY_MS = 10_000L;
     static final long DEFAULT_PREMAIN_REPEAT_MS = 60_000L;
     static final int DEFAULT_PREMAIN_PASSES = 5;
+
+    /**
+     * attach 补挂默认节奏（券 E）：5s 后首轮、20s 后第二轮。
+     *
+     * <p>为什么是这两档而不是 premain 的 10s/60s×5：attach 到运行中应用时数据源/驱动**通常已经**
+     * 加载完（不像 premain 那样必然早于 Spring 上下文），首轮已覆盖绝大多数候选；剩下的只是
+     * 「attach 之后才懒加载数据源」这一类迟到形态（现场 P-4 的独立成因），两次 5s/20s 足够覆盖，
+     * 又不至于在宿主里长期留着轮询线程。两次都只做反射判定 + retransform，成本与首轮同量级。
+     */
+    static final long DEFAULT_ATTACH_DELAY_MS = 5_000L;
+    static final long DEFAULT_ATTACH_REPEAT_MS = 20_000L;
+    static final int DEFAULT_ATTACH_PASSES = 2;
+
+    /** 未登记 JDBC 实现的上报上限（券 D）：只报类名，绝不带 SQL/凭据/全路径。跨包测试亦读，故 public。 */
+    public static final int MAX_UNREGISTERED = 8;
 
     /** 诊断行前缀（宿主 stderr 唯一出口；不含 SQL 原文/凭据/全路径）。 */
     static final String DIAG_PREFIX = "[SqlVisAgent] catch-all: ";
@@ -92,6 +123,13 @@ public final class CaptureBudget {
     private static volatile long premainRepeatMs = rawMsProp(PROP_PREMAIN_REPEAT_MS, DEFAULT_PREMAIN_REPEAT_MS);
 
     private static volatile int premainPasses = intProp(PROP_PREMAIN_PASSES, DEFAULT_PREMAIN_PASSES, 1);
+
+    // 同 premain 两个延迟字段：**毫秒**语义，直接喂 Thread.sleep，必须走 rawMsProp。
+    private static volatile long attachDelayMs = rawMsProp(PROP_ATTACH_DELAY_MS, DEFAULT_ATTACH_DELAY_MS);
+
+    private static volatile long attachRepeatMs = rawMsProp(PROP_ATTACH_REPEAT_MS, DEFAULT_ATTACH_REPEAT_MS);
+
+    private static volatile int attachPasses = intProp(PROP_ATTACH_PASSES, DEFAULT_ATTACH_PASSES, 1);
 
     // ---------- 熔断态 ----------
 
@@ -121,6 +159,13 @@ public final class CaptureBudget {
     private static final AtomicLong TRANSFORM_MATCHED = new AtomicLong();
     private static final AtomicLong TRANSFORM_WOVEN = new AtomicLong();
     private static final AtomicLong SKIPPED_BY_VERSION = new AtomicLong();
+
+    /**
+     * 券 D（T-IbatisPanwei）：接口命中但**不在驱动白名单**的类名，有界（{@link #MAX_UNREGISTERED}）、
+     * 去重、只类名。锁保护而非并发容器：写入只在扫描轮（低频、单线程），读取在心跳线程。
+     */
+    private static final Object UNREGISTERED_LOCK = new Object();
+    private static final Set<String> UNREGISTERED = new LinkedHashSet<String>();
 
     private CaptureBudget() {
     }
@@ -175,6 +220,21 @@ public final class CaptureBudget {
     /** premain 补挂轮数上限。 */
     public static int premainPasses() {
         return premainPasses;
+    }
+
+    /** attach 补挂首轮延迟（毫秒；0 = 不补挂）。 */
+    public static long attachDelayMs() {
+        return attachDelayMs;
+    }
+
+    /** attach 补挂轮间隔（毫秒）。 */
+    public static long attachRepeatMs() {
+        return attachRepeatMs;
+    }
+
+    /** attach 补挂轮数上限。 */
+    public static int attachPasses() {
+        return attachPasses;
     }
 
     public static long interfaceMatchedCount() {
@@ -262,6 +322,40 @@ public final class CaptureBudget {
     }
 
     /**
+     * 券 D：记下一个「接口命中但不在驱动白名单」的类名（有界 {@link #MAX_UNREGISTERED}、去重）。
+     *
+     * <p>只存点分类名：这是「下一个国产/未知驱动是谁」的取证替代路径（计划券 D），心跳把它带给 IDE，
+     * 面板才能把「增强零产出」从猜测变成一个具名事实。达上限后新类名静默丢弃（诊断有界是硬要求，
+     * 不能让一个未知驱动生态把心跳撑大）。
+     */
+    public static void noteUnregisteredDriver(String dotted) {
+        if (dotted == null || dotted.isEmpty()) {
+            return;
+        }
+        try {
+            synchronized (UNREGISTERED_LOCK) {
+                if (UNREGISTERED.size() >= MAX_UNREGISTERED) {
+                    return;
+                }
+                UNREGISTERED.add(dotted);
+            }
+        } catch (Throwable ignore) {
+            // 诊断记账失败绝不影响采集（红线）
+        }
+    }
+
+    /** 券 D：未登记 JDBC 实现类名快照（只读副本，按首次发现顺序，≤{@link #MAX_UNREGISTERED}）。 */
+    public static List<String> unregisteredDrivers() {
+        try {
+            synchronized (UNREGISTERED_LOCK) {
+                return new ArrayList<String>(UNREGISTERED);
+            }
+        } catch (Throwable ignore) {
+            return new ArrayList<String>(0);
+        }
+    }
+
+    /**
      * 兜底分支耗时记账（券 09②）：累计值超预算即关闭兜底分支并打一行诊断。
      * 只由 transformer 的兜底分支调用，白名单路径不计入。
      */
@@ -326,6 +420,12 @@ public final class CaptureBudget {
         premainDelayMs = DEFAULT_PREMAIN_DELAY_MS;
         premainRepeatMs = DEFAULT_PREMAIN_REPEAT_MS;
         premainPasses = DEFAULT_PREMAIN_PASSES;
+        attachDelayMs = DEFAULT_ATTACH_DELAY_MS;
+        attachRepeatMs = DEFAULT_ATTACH_REPEAT_MS;
+        attachPasses = DEFAULT_ATTACH_PASSES;
+        synchronized (UNREGISTERED_LOCK) {
+            UNREGISTERED.clear();
+        }
         // 2026-10-30：verbose 属于进程级开关，测试必须复位回产品默认（静默），
         // 否则开了 verbose 的用例会把「默认静音」的判据污染给后续用例。
         verboseLogging = false;
@@ -356,6 +456,18 @@ public final class CaptureBudget {
         premainDelayMs = Math.max(0L, delayMs);
         premainRepeatMs = Math.max(0L, repeatMs);
         premainPasses = Math.max(1, passes);
+    }
+
+    /**
+     * 仅测试用：attach 补挂节奏。
+     *
+     * <p>`delayMs <= 0` 即**关闭补挂**（既有 attach 用例都按「不补挂」跑：遗留的 daemon 线程会在
+     * 后续用例里继续 retransform 并改计数，正是 premain 侧早就踩过的污染形态）。
+     */
+    static void setAttachScheduleForTest(long delayMs, long repeatMs, int passes) {
+        attachDelayMs = Math.max(0L, delayMs);
+        attachRepeatMs = Math.max(0L, repeatMs);
+        attachPasses = Math.max(1, passes);
     }
 
     // ---------- 属性解析 ----------

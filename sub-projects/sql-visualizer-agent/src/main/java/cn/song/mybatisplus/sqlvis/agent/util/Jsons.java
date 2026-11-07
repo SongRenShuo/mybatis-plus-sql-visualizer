@@ -72,6 +72,12 @@ public final class Jsons {
         str(sb, first, "sd", e.stackDigest);
         str(sb, first, "th", e.threadName);
         str(sb, first, "url", e.url);
+        // T-SqlListCatchup 券 F2b：聚合计数（EventBus 队列满时同模板聚合的代表条数）。
+        // 仅 >1 时写出——常态事件字节面零变化；旧 IDE（Gson 宽容解析）忽略未知键、
+        // 新 IDE 读旧事件（无此键）按 1 计，双向兼容。
+        if (e.aggregatedCount > 1) {
+            num(sb, first, "c", e.aggregatedCount);
+        }
         if (e.params != null && !e.params.isEmpty()) {
             sep(sb, first);
             sb.append("\"p\":[");

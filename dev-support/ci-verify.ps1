@@ -2,7 +2,7 @@
 # ci-verify.ps1 —— 每周自动 verifyFull（权威门禁 verifyGate 三目标）兼容性巡检包装脚本（T-CiVerifyPromise / O-5）
 #
 # 流程：拉 dev 最新（非 git 仓库 / git 不可用 / 无网络 / 非 dev 分支时容错跳过）
-#       → 调 verify-full.ps1（verifyFull = verifyGate 三目标 243/253/262，约 3.5 分钟；T-RC-02 改挂权威门禁，
+#       → 调 verify-full.ps1（verifyFull = verifyGate 三目标 243/253/263，约 3.5 分钟；T-RC-02 改挂权威门禁，
 #         verifyPlugin 已降级为报告生成器不承担门禁）
 #       → 时间戳日志落 dev-support/verify-logs/verify-<时间戳>.log
 #       → 失败额外写 dev-support/verify-logs/LAST-FAILED.txt（成功自动清除）
@@ -18,7 +18,7 @@
 #   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 #   Register-ScheduledTask -TaskName "MPSqlVisualizer-WeeklyVerify" `
 #       -Action $action -Trigger $trigger -Settings $settings `
-#       -Description "每周三 03:00 自动 verifyFull 三目标（243/253/262，权威门禁 verifyGate）兼容性巡检；关机错过调度开机补跑；失败留痕 dev-support/verify-logs/LAST-FAILED.txt" -Force
+#       -Description "每周三 03:00 自动 verifyFull 三目标（243/253/263，权威门禁 verifyGate）兼容性巡检；关机错过调度开机补跑；失败留痕 dev-support/verify-logs/LAST-FAILED.txt" -Force
 #
 # 注册后核对：
 #   Get-ScheduledTask -TaskName "MPSqlVisualizer-WeeklyVerify" | Get-ScheduledTaskInfo

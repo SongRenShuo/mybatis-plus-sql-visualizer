@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.xml
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 
@@ -25,6 +26,13 @@ data class XmlMapperModel(
     val namespace: String?,
     val statements: List<XmlStatement>,
     val errors: List<String>,
+    /**
+     * F-06③：预算超限降级——本次**没有建语句树**，[errors] 只有「为什么没解析」与语句 id 清单，
+     * [statements] 恒为空。调用方按既有 errors 通道展示即可，不要当成「mapper 里没有语句」。
+     */
+    val degraded: Boolean = false,
+    /** F-06③：降级时文本扫描出的语句 id 清单（文档顺序，上限 [XmlParseBudget.MAX_ID_SCAN]）。 */
+    val statementIds: List<String> = emptyList(),
 )
 
 /** 解析失败（非良构 XML / 根元素不是 mapper）。 */
@@ -58,6 +66,9 @@ data class XmlIncludeScan(
 class XmlMapperParser {
 
     fun parse(fileText: String, crossNamespace: CrossNamespaceFragments = CrossNamespaceFragments.EMPTY): XmlMapperModel {
+        // F-06③：前置预算闸——超限不建树、不抛异常，直接给降级模型（调用方按 errors 通道展示）。
+        // 判定只用文本扫描（字节数 + 开标签计数），成本远低于 DOM 建树。
+        XmlParseBudget.check(fileText)?.let { return degradedModel(fileText, it) }
         val document = parseDocument(fileText)
         val root: Element = document.documentElement ?: throw XmlParseException("XML 文档为空。")
         if (root.tagName != "mapper") {
@@ -85,6 +96,44 @@ class XmlMapperParser {
             }
         return XmlMapperModel(namespace, statements, errors)
     }
+
+    /**
+     * F-06③：预算超限的降级模型。
+     *
+     * 只做两件事：说清「为什么没解析」，列出文本扫描到的语句 id（截断到
+     * [XmlParseBudget.MAX_ID_SCAN] 条）。不解析 DOM、不展开 include、不建语句树。
+     */
+    private fun degradedModel(fileText: String, check: XmlParseBudget.BudgetCheck): XmlMapperModel {
+        val reason = when (check.violation) {
+            XmlParseBudget.Violation.TEXT_TOO_LARGE -> MpSqlVisualizerBundle.message(
+                "xml.parse.budget.text",
+                megabytes(check.actual),
+                megabytes(check.limit),
+            )
+            XmlParseBudget.Violation.TOO_MANY_NODES -> MpSqlVisualizerBundle.message(
+                "xml.parse.budget.nodes",
+                // 以字符串传参：MessageFormat 会给数字加千分位（5001 → 5,001），文案里要的是原值
+                check.actual.toString(),
+                check.limit.toString(),
+            )
+        }
+        val ids = XmlParseBudget.scanStatementIds(fileText)
+        val errors = if (ids.isEmpty()) {
+            listOf(reason)
+        } else {
+            listOf(reason, MpSqlVisualizerBundle.message("xml.parse.budget.ids", ids.joinToString(", ")))
+        }
+        return XmlMapperModel(
+            namespace = null,
+            statements = emptyList(),
+            errors = errors,
+            degraded = true,
+            statementIds = ids,
+        )
+    }
+
+    private fun megabytes(bytes: Int): String =
+        String.format(java.util.Locale.ROOT, "%.1f", bytes / 1024.0 / 1024.0)
 
     /**
      * T-IC-01：轻量片段收集——只扫顶层 `<sql id>` 片段（id → 片段内部 XML 文本），

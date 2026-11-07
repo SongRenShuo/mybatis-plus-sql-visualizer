@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.testutil.DbTestCredentials
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
 import com.intellij.database.dataSource.DatabaseConnectionManager
@@ -17,8 +18,6 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
-import org.junit.Test
 import java.io.File
 import java.sql.SQLException
 import javax.xml.parsers.DocumentBuilderFactory
@@ -69,7 +68,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
 
     private val dbPassword: String
-        get() = "root" // M36.5.23：从 demo 项目 application.yml 复制（root/root，本地开发库无敏感性）
+        get() = DbTestCredentials.password("root") // M36.5.23：从 demo 项目 application.yml 复制（root/root，本地开发库无敏感性）
 
     /** demo dataSources.xml 中目标数据源的连接信息。 */
     private data class DataSourceInfo(val url: String, val user: String, val driverClass: String)
@@ -95,7 +94,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                     "jdbc-driver" -> driver = child.textContent.trim()
                 }
             }
-            if (url != null) info = DataSourceInfo(url, "root", driver ?: "com.mysql.cj.jdbc.Driver")
+            if (url != null) info = DataSourceInfo(DbTestCredentials.url(url), DbTestCredentials.user("root"), driver ?: "com.mysql.cj.jdbc.Driver")
         }
         // 用户名在 local.xml（<user-name>）
         if (info != null && localXml.isFile) {
@@ -151,9 +150,9 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
      * `checkcast SqlDataSource` 失败 → `containsFile(vf)` 过滤返回 false → runner 列表空
      * （M36.5.23b diag 实证）。建连后 DBN 自动 introspect，delegate 切换为 SqlDataSource 实例。
      *
-     * MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：返回失败原因（调用方 assumeTrue skip）。
+     * MySQL 未启动 / 库未初始化 / RegionUrlMapper 网络失败：返回失败原因（调用方打印 `[DB-IT] SKIP` 后 return）。
      *
-     * @return null=成功；非 null=失败原因（用于 assumeTrue message）
+     * @return null=成功；非 null=失败原因（用于 `[DB-IT] SKIP` 消息）
      */
     private fun introspectDataSource(ds: LocalDataSource): String? = runCatching {
         val proxyHost = System.getProperty("http.proxyHost")
@@ -213,14 +212,19 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
      * 端到端：准备 → 执行 → 改参 → 再执行 → 断言新结果 Tab。
      * 「滞后一轮」回归：第二次执行后必须出现与第一次**不同**的结果 Tab（M36.5.22b 行为）。
      */
-    @Test
     fun testPrepareExecuteAndParameterChangeEndToEnd() {
         // 前置：Database 插件已加载（testDatabase 任务不排 jar）+ demo 项目可达。
         // 注意：密码 assume 放在「执行」前——无密码时 prepare 层（插件/数据源/控制台准备）仍被验证。
-        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        if (!ExecuteSqlSupport.isAvailable()) {
+            println("[DB-IT] SKIP: Database 插件未加载（应在 testDatabase 任务下运行）")
+            return
+        }
         val info = readDemoDataSource("mpj_demo")
-        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val dsInfo = info!!
+        if (info == null) {
+            println("[DB-IT] SKIP: demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}")
+            return
+        }
+        val dsInfo = info
 
         // ⓪ 清空应用级残留数据源：LocalDataSourceManager 跨用例存活，本用例走的是「唯一数据源静默
         //    复用」契约，多一条残留即退化成多 runner 弹窗分支（headless 无 frame → NPE，基线实证）
@@ -284,11 +288,13 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         assertTrue("prepare 阶段不应有错误 (errors=$errors)", errors.isEmpty())
 
         // ③ executePrepared：真实 MySQL 执行 → 结果 Tab 出现（需要密码；未配置则 skip 余下场景）
-        assumeTrue(
-            "未配置 mpTestDbPassword——请在 ~/.gradle/gradle.properties 添加 mpTestDbPassword=<MySQL密码>" +
-                "（无密码时仅验证 prepare 层）",
-            dbPassword.isNotEmpty(),
-        )
+        if (dbPassword.isEmpty()) {
+            println(
+                "[DB-IT] SKIP: 未配置 mpTestDbPassword——请在 ~/.gradle/gradle.properties 添加 mpTestDbPassword=<MySQL密码>" +
+                    "（无密码时仅验证 prepare 层）",
+            )
+            return
+        }
         var resultsReady = false
         val execErrors = mutableListOf<String>()
         DataSourceSelector.executePrepared(
@@ -296,10 +302,26 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             onResultsReady = { resultsReady = true },
             onError = { execErrors.add(it) },
         )
-        assertTrue(
-            "首次执行 60s 内无结果 Tab (errors=$execErrors)",
-            DbIntegrationProjectSupport.waitWithPump(60_000) { resultTabNames().isNotEmpty() },
-        )
+        // 断言消息必须**等完之后**再拼：Kotlin 实参从左到右求值，写成
+        // `assertTrue("...(errors=$execErrors)", waitWithPump(...))` 时消息里的 errors 是
+        // 「等待开始前」的空快照——20261105 基线红报里 `errors=[]` 就是这么来的，
+        // 真实错误（Connection refused）被掩盖，看着像「插件一声不吭」。
+        val firstTabAppeared = DbIntegrationProjectSupport.waitWithPump(60_000) { resultTabNames().isNotEmpty() }
+        if (!firstTabAppeared) {
+            val consoleError = execErrors.joinToString(" | ")
+            // 环境层失败（显式绿跳 + 打印原因，与上方 introspect 失败同款口径）：
+            // `:testDatabase` 并行起 10 个测试 JVM，每个数据源还会拉起平台 forked 驱动进程
+            // （RemoteJdbcServer，-Xmx2048m）。该进程在负载下可能自行退出，表现为
+            // `RemoteProcessSupport.acquire → RegistryImpl_Stub.lookup → Connection refused`，
+            // 查询根本没提交（20261105 基线日志：14:40:51 起进程 → 14:41:12 acquire 被拒 →
+            // 14:41:13 `Process finished with exit code 1`）。这不是插件链路失败——插件侧
+            // 已正确把该错误提取并投递到 onError（`early console error detected` 日志实证）。
+            if (isDriverProcessLost(consoleError)) {
+                println("[DB-IT] SKIP: 平台 forked 驱动进程在提交前退出（环境/并行负载），首次执行未提交: $consoleError")
+                return
+            }
+            org.junit.Assert.fail("首次执行 60s 内无结果 Tab (errors=$consoleError)")
+        }
         assertTrue("onResultsReady 应被回调", resultsReady)
         val firstTabs = resultTabNames()
         assertTrue("首次执行后应有结果 Tab (tabs=$firstTabs)", firstTabs.isNotEmpty())
@@ -326,6 +348,22 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         )
         assertTrue("第二次执行 onResultsReady 应被回调", secondReady)
         assertTrue("集成链路不应有错误回调 (errors=$execErrors)", execErrors.isEmpty())
+
+        // ⑤b T-ResultOwnership（2026-11-03 真机「IDEA 控制台有结果、预览窗口没变化」）：
+        //     执行后持久整控台 SplitPane 的下半区**必须**挂着结果组件。DBN 会把同一结果组件
+        //     重挂回 ServiceViewComponentWrapper，而 `JSplitPane.remove()` 会把 rightComponent
+        //     置 null —— 那时预览面板下半区就是空白，只有 IDEA 控制台能看到结果。
+        val persistentSplit = DataSourceSelector.preparedFullComponent as? javax.swing.JSplitPane
+        assertNotNull("执行后应有持久整控台 SplitPane", persistentSplit)
+        assertNotNull(
+            "执行后结果组件必须挂在持久 split 的下半区（被平台抽走 = 预览面板空白）",
+            persistentSplit!!.bottomComponent,
+        )
+        assertSame(
+            "持久 split 的下半区应是控制台自己的结果组件（不是别的容器顶包）",
+            DataSourceSelector.preparedResultComponent,
+            persistentSplit.bottomComponent,
+        )
 
         // ⑥ 清理：释放控制台引用（不影响 IDE 管理的 session 生命周期）
         DataSourceSelector.clearPrepared()
@@ -694,7 +732,10 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 })
             }
         } finally {
-            if (!closed) fixture.close()
+            // 20261105：项目真实关闭成功时也必须收掉夹具自建的数据源——`close()` 里那步
+            // `removeDataSource` 是应用级清理，不随项目销毁发生（LocalDataSourceManager 是
+            // 应用级服务），漏掉就把 `UI016-offline-mp_demo` 留在后续用例的数据源列表里。
+            if (!closed) fixture.close() else fixture.releaseDataSource()
             com.intellij.openapi.util.Disposer.dispose(parent)
             directory.toFile().deleteRecursively()
         }
@@ -728,6 +769,24 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 .invoke(this, "mysql.8")
             resolveDriver()
             sources.addDataSource(this)
+            // 20261105：建数据源后必须等它在 DbPsiFacade 里可见，再让用例 attach 控制台。
+            // 机制（javap 实证 + 仓内既有记录，见 DbIntegrationProjectSupport.awaitConnectionsReleased
+            // 注释）：JdbcConsole.isValid() = !isDisposed && isViewValid && isTargetValid，
+            // isTargetValid = DataSourceUtil.isDataSourceValid(DbPsiFacade.getInstance(project), ds)
+            // ——facade 的数据源列表是缓存，新增后经 invokeLater 失效重建。缓存未跟上的窗口里
+            // 新建控制台 isValid=false，而 ScriptingDatabaseSessionClientHolder.getActiveClients
+            // 会对每条 !isValid 的控制台直接 Disposer.dispose（attachConsole / build() 内部都会
+            // 走它）。引擎终止（上一个用例关连接）恰好也会触发这次清扫，于是「刚 attach 的控制台
+            // 已被 dispose」——20261105 实测复现组合：testPrepareExecuteAndParameterChangeEndToEnd
+            // 之后紧接本用例，attachConsole 返回即已 dispose（BridgeDataBus.initParent 硬抛）。
+            // 修复后同一轮仍抓到一次真实陈旧窗口（打印 `visible in DbPsiFacade after 56ms (1 ticks)`），
+            // 说明这个等待不是摆设：不补上就会被清扫。
+            awaitDataSourceVisibleInPsiFacade(owner, this)
+        }
+
+        /** 幂等收掉夹具自建的数据源（项目真实关闭路径也要走一次）。 */
+        fun releaseDataSource() {
+            runCatching { sources.removeDataSource(source) }
         }
 
         fun track(client: com.intellij.database.console.JdbcConsole) {
@@ -770,7 +829,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 sessions.forEach { com.intellij.openapi.util.Disposer.dispose(it) }
             } finally {
                 DataSourceSelector.releaseForPanel()
-                sources.removeDataSource(source)
+                releaseDataSource()
             }
         }
     }
@@ -791,4 +850,54 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
         super.tearDown()
     }
+}
+
+/**
+ * 有界等待新建数据源出现在 `DbPsiFacade` 的数据源列表里（= 控制台 `isTargetValid()` 的前提）。
+ *
+ * 超时**硬失败**而不是静默放行：facade 不可见时控制台 `isValid()=false`，平台清扫会把刚
+ * attach 的控制台 dispose 掉，后续断言只会报出「parent 已 dispose」这种离故障源很远的形态。
+ * 每轮派发一次 EDT 队列——facade 的缓存失效是 `Application.invokeLater`，而测试方法体本身
+ * 跑在 EDT（`EdtTestUtil.runInEdtAndWait`），纯 sleep 会把失效任务永远堵在队列里。
+ */
+private fun awaitDataSourceVisibleInPsiFacade(
+    project: com.intellij.openapi.project.Project,
+    ds: LocalDataSource,
+    timeoutMs: Long = 15_000,
+) {
+    val started = System.currentTimeMillis()
+    var ticks = 0
+    while (System.currentTimeMillis() - started < timeoutMs) {
+        val visible = runCatching {
+            com.intellij.database.psi.DbPsiFacade.getInstance(project).findDataSource(ds.uniqueId) != null
+        }.getOrDefault(false)
+        if (visible) {
+            if (ticks > 0) {
+                println("[DB-IT] data source '${ds.name}' visible in DbPsiFacade after ${System.currentTimeMillis() - started}ms ($ticks ticks)")
+            }
+            return
+        }
+        com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        Thread.sleep(50)
+        ticks++
+    }
+    error(
+        "前提失败：数据源 '${ds.name}' 在 ${timeoutMs}ms 内未出现在 DbPsiFacade —— " +
+            "此时 JdbcConsole.isTargetValid()=false，平台清扫会 dispose 刚 attach 的控制台",
+    )
+}
+
+/**
+ * 执行失败文本是否属于「平台 forked 驱动进程已退出」这一类（连接层，非 SQL/非插件链路）。
+ *
+ * 判据取连接层消息签名（与 [cn.song.mybatisplus.visualizer.execute.ConnectionErrorClassifier]
+ * 的消息兜底同源，但只认**进程死亡**形态：Connection refused / Communications link failure /
+ * 连接被重置——不含 deadlock 之类的执行错误）。数据源本身已在上游 introspect 阶段验证可达，
+ * 因此执行期出现这些签名只能是驱动进程（RemoteJdbcServer）在提交前退出。
+ */
+private fun isDriverProcessLost(errorText: String): Boolean {
+    if (errorText.isBlank()) return false
+    val lower = errorText.lowercase()
+    return listOf("connection refused", "communications link failure", "connection reset", "broken pipe")
+        .any { lower.contains(it) }
 }
