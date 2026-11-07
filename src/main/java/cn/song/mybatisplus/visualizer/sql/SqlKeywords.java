@@ -29,6 +29,8 @@ import java.util.Set;
  *    R 类实测；T-XcDialects3 券 01）
  *  - {@link #VASTBASE_RESERVED}：海量保留字（官方四份兼容模式关键字表「保留」类并集 ∪ {@link #PG_RESERVED}；
  *    T-XcDialects3 券 02）
+ *  - {@link #GOLDENDB_RESERVED}：GoldenDB（中兴）保留字（官方《开发支持 V6.1.03.10》p351-355 三张
+ *    分模式保留字表的并集；T-GoldenDbDialect 券 A，P-3）
  *
  * <p>判定：大小写不敏感。纯函数，无 IDE 依赖，可独立单测。
  */
@@ -438,6 +440,137 @@ public final class SqlKeywords {
             "trailing", "true", "try", "union", "unique", "unpivot", "update",
             "updating", "user", "using", "varbinary", "variadic", "verbose", "verify",
             "when", "where", "while", "window", "with"
+    );
+
+    /**
+     * GoldenDB（中兴 ZXCLOUD GoldenDB）保留字全量（T-GoldenDbDialect 券 A，P-3 销案）：<b>384 词</b>。
+     *
+     * <p>来源（PDF 抽取实测，{@code python -I} + pymupdf，逐词人工清理）：官方《GoldenDB 产品手册_开发支持
+     * V6.1.03.10》p351-p355 三张分模式保留字表——CN MySQL 模式（355 词）∪ CN Oracle 模式
+     * （352 词，仅多 {@code bulk}/{@code constant}/{@code database}/{@code datafiles} 4 词）∪ DN（219 词，多 {@code cascade}/
+     * {@code cube}/{@code cume_dist}/{@code first_value}/{@code lag}/{@code lead} 等 MySQL 8.0 窗口函数词 26 个）——
+     * <b>三表并集</b>（P-3 定性：同一引擎不同执行层/模式的并集关系，不是互斥集合）。</p>
+     *
+     * <p>落表口径（照 {@link #HIGHGO_RESERVED}/{@link #VASTBASE_RESERVED} 先例）：CN MySQL 模式表为基线——它本身
+     * 已混入 GoldenDB 自有词（{@code chgdiskey}/{@code storagedb}/{@code partitionstoragedb}/{@code gdb_nolock}/{@code gdb_outline}/
+     * {@code samedb}/{@code write_samedb}/{@code readbalance}/{@code readmaster}/{@code readslave}/{@code subdistributed}/{@code distributed}/
+     * {@code redistributing}/{@code gtidset}/{@code nogtid}/{@code mvcc_purge} 等）与 Oracle 兼容词（{@code rownum}/{@code varchar2}/
+     * {@code autonomous_transaction}/{@code connect_by_root}/{@code sys_refcursor}/{@code pls_integer}/{@code minus}/{@code pivot}/
+     * {@code sysdate}/{@code systimestamp} 等），再并上另两张表的差集。</p>
+     *
+     * <p><b>不能照抄 {@link #MYSQL_RESERVED} 的实据</b>：{@code MYSQL_RESERVED}（MySQL 8.0 官方 262 词）与
+     * {@link #GOLDENDB_RESERVED} 双向差集非空——GoldenDB 多 {@code chgdiskey}/{@code storagedb}/{@code gdb_nolock}/
+     * {@code rownum}/{@code varchar2}/{@code autonomous_transaction} 等 120+ 词（用户字段名叫 {@code storagedb} 时不引用
+     * 在真库上是语法错），MySQL 8.0 的 {@code cube}/{@code cume_dist}/{@code lag}/{@code nth_value} 等 GoldenDB CN 表虽
+     * 缺但 DN 表在册（已并入）。</p>
+     *
+     * <p>噪声清理记录（断行噪声逐词核对，pymupdf 断行是字符级、词中可断）：</p>
+     * <ul>
+     *  <li>{@code _GDB_CN}（CN MySQL 与 CN Oracle 表「其他」节）<b>剔除</b>——内部标识符，不是合法用户标识符，
+     *      包不包都不影响用户（P-3/R3 口径）；</li>
+     *  <li>{@code STORAGE CLUSTER}（CN MySQL/CN Oracle 两表的 S 节，与 {@code storagedb} 相邻出现）是<b>两词关键字
+     *      短语</b>（与 DELETE 文法 p274 的 {@code [STORAGEDB groupno]} 同族的子句关键字），不是单个标识符；
+     *      断行抽取无法区分「STORAGECLUSTER 一词」与「两词短语」，且它不可能是列名——三种处理
+     *      （收 {@code storage}/收 {@code cluster}/收 {@code storagecluster}）都是臆造，故整条<b>不落表</b>并在此登记；</li>
+     *  <li>其余 384 词均在三表原文中以逗号分隔条目形态出现，附录表 p168-172（269 词单一列表）为
+     *      三表的真子集，用作抽查对照（{@code semi}/{@code nullcols}/{@code storagedb}/{@code readmaster} 等命中一致）。</li>
+     * </ul>
+     *
+     * <p>证据级别：<b>官方文档级</b>（PDF 物理页号与印刷页码一致，p351 抬头「本版本涉及的 CN MySQL 模式
+     * 保留字如下」逐字）。无真机（P-1 未验证）——「宁可多包」口径下多引用幂等安全，真机到位后按
+     * {@code pg_get_keywords()} 式引擎读数订正（照 openGauss/金仓先例）。</p>
+     */
+    public static final Set<String> GOLDENDB_RESERVED = Set.of(
+            // A
+            "accessible", "add", "all", "alter", "analyze", "and", "array", "as", "asc",
+            "asensitive", "audit", "autonomous_transaction",
+            // B
+            "before", "between", "bigint", "binary", "blob", "both", "breakpoint", "bulk", "by",
+            // C
+            "cascade", "case", "change", "check", "chgdiskey", "clob", "collate", "column",
+            "column_value", "condition", "connect", "connect_by_isleaf", "connect_by_root",
+            "constant", "constraint", "constructor", "continue", "convert", "count", "create",
+            "cross", "cube", "cume_dist", "current_date", "current_role", "current_time",
+            "current_timestamp", "current_user", "currval", "cursor",
+            // D
+            "database", "databases", "datafiles", "day_hour", "day_microsecond", "day_minute",
+            "day_second", "dbtimezone", "deadlock", "debug", "debug_backstrace", "debug_continue",
+            "debug_delete", "debug_finish", "debug_info", "debug_next", "debug_print",
+            "debug_step", "dec", "decimal", "declare", "decode", "default", "delayed", "delete",
+            "deleting", "deterministic", "distinct", "distinctrow", "distributed", "div",
+            "double", "drop", "dual",
+            // E
+            "each", "editionable", "else", "elseif", "elsif", "empty", "enclosed",
+            "entityescaping", "escaped", "except", "exception", "exec", "exists", "exit",
+            "expire", "extend",
+            // F
+            "false", "fetch", "fileline", "final", "first", "first_value", "flashback", "float",
+            "float4", "float8", "for", "forall", "force", "foreign", "from", "from_tz", "full",
+            "fulltext",
+            // G
+            "gdb_nolock", "gdb_outline", "generated", "get", "goto", "grant", "group",
+            "grouping", "groups", "gtidset",
+            // H
+            "having", "high_priority", "hour_microsecond", "hour_minute", "hour_second",
+            // I
+            "if", "ignore", "in", "increment", "index", "indices", "inner", "insensitive",
+            "insert", "inserting", "instantiable", "instead", "int", "int1", "int2", "int3",
+            "int4", "int8", "integer", "intersect", "interval", "into", "io_after_gtids",
+            "io_before_gtids", "is", "iterate",
+            // J
+            "join", "json", "json_table",
+            // K
+            "keep", "keepalive", "key", "kill",
+            // L
+            "lag", "last", "last_value", "lateral", "lead", "leading", "leave", "left", "level",
+            "like", "limit", "linear", "lines", "load", "locals", "localtime", "localtimestamp",
+            "lock", "logging", "long", "longblob", "longtext", "low_priority",
+            // M
+            "master_bind", "master_ssl_verify_server_cert", "match", "materialized_view_tmp_table",
+            "maxvalue", "mediumblob", "mediumint", "mediumtext", "member", "middleint", "minus",
+            "minute_microsecond", "minute_second", "mod", "modifies", "multi_step_query",
+            "mvcc_purge",
+            // N
+            "natural", "never", "next", "nextval", "no_write_to_binlog", "nocache", "nocycle",
+            "noentityescaping", "nogtid", "nologging", "nomaxvalue", "nominvalue",
+            "noneditionable", "noorder", "noparallel", "not", "nth_value", "ntile", "null",
+            "nullcols", "nulls", "numeric",
+            // O
+            "of", "offset", "on", "optimize", "optimizer_costs", "option", "optionally", "or",
+            "order", "others", "out", "outfile", "outline", "outsocket", "over", "overriding",
+            // P
+            "page_checksum", "parallel", "parallel_enable", "parse_vcol_expr", "partition",
+            "partitionstoragedb", "percent_rank", "persist", "persistable", "pivot",
+            "pls_integer", "pragma", "primary", "prior", "private", "procedure", "process",
+            "public", "purge",
+            // R
+            "raise", "raise_application_error", "raw", "read", "readbalance", "readmaster",
+            "reads", "readslave", "read_write", "real", "recursive", "recyclebin",
+            "recyclebin_version", "redistributing", "ref", "references", "referencing", "regexp",
+            "remain", "rename", "replace", "require", "resignal", "returning", "revoke", "right",
+            "rlike", "row", "rownum", "rowtype", "row_number",
+            // S
+            "samedb", "sample", "schemas", "second_microsecond", "select", "semi", "sequences",
+            "sessiontimezone", "session_variables_admin", "set", "show", "siblings", "signal",
+            "skip", "smallint", "snapshotpoint", "sounds", "spatial", "specific", "sql",
+            "sql_big_result", "sql_calc_found_rows", "sql_small_result", "sqlcode", "sqlerrm",
+            "sqlexception", "sqlstate", "sqlwarning", "ssl", "start",
+            "starting", "static", "stats_auto_recalc", "stats_persistent", "stats_sample_pages",
+            "storagedb", "stored", "straight_join", "subdistributed", "synonym", "sysdate",
+            "systimestamp", "sys_connect_by_path", "sys_refcursor",
+            // T
+            "table", "tempfile", "terminated", "then", "tinyblob", "tinyint", "tinytext", "to",
+            "trailing", "transaction_timeout", "trigger", "trim", "true",
+            // U
+            "undo", "union", "unique", "unlock", "unpivot", "unsigned", "update", "updating",
+            "use", "user", "using", "using_hint", "utc_date", "utc_time", "utc_timestamp",
+            // V
+            "values", "varbinary", "varchar", "varchar2", "varcharacter", "varray", "varying",
+            "virtual",
+            // W
+            "when", "where", "while", "window", "with", "write", "write_samedb",
+            // X / Z
+            "xor", "zerofill"
     );
 
     /** 集合并集（不可变）。 */
