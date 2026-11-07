@@ -439,7 +439,8 @@ public final class EasyQueryConverter {
         for (ColumnInfo col : table.getColumns()) {
             if (col.isInsertable() && !ctx.generatedKeyColumns().contains(col.getColumnName())) {
                 toggleColumns.add(new BatchColumn(col.getColumnName(), col.getColumnName(),
-                        ParamQuote.decide(col.getFieldType()), true));
+                        ParamQuote.decide(col.getFieldType()), true, false, null,
+                        ParamQuote.isTemporal(col.getFieldType())));
             }
         }
         BatchModel model = new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns);
