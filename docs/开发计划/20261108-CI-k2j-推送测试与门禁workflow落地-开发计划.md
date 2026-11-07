@@ -38,4 +38,8 @@
 
 ## 实施记录
 
-（待补）
+- 侦察补充：现行 build-plugin.yml 是旧单 job 版且引用的 setup-test-env.ps1 不在树里（对齐即修复）。
+- 步骤 1-3 完成：带入 run-gradle-retry.ps1 + 整个 test-demo/；push-test.yml branches [feature/kotlin-to-java] + nudge master 专属 if；build-plugin.yml 以 master 多 job 版为底做 6 处 k2j 差异化（marketplace 单 job 聚合腿、verify 矩阵 243/253/262、verify 腿无条件单目标 verifyPlugin 预热替代播种+按需探测、verify 超时 45、两处注释口径、gate 聚合日志文案）；YAML 校验通过（jobs = build/verifyplugin/marketplace/verify/test/gate/publish）。
+- 本地编译门禁：`classes testClasses` BUILD SUCCESSFUL in 2m 10s（COMPILE_EXIT=0）。
+- 提交 `1b3d1833`（12 files changed, 1746 insertions）；push-all.ps1 -Branch feature/kotlin-to-java 双仓推送成功（令牌通路）。
+- CI 轮询：后台 ci-watch.py（branch=feature/kotlin-to-java，sha=1b3d1833），结论待出后回填；gate 派发留阶段 3。
