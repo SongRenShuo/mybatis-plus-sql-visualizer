@@ -92,6 +92,8 @@ public final class StackLocator {
             "cn.com.vastbase.", "com.highgo.",
             // OceanBase（com.oceanbase.*）：独立实现非 MySQL 分叉（URL 前缀 jdbc:oceanbase: 唯一）
             "com.oceanbase.",
+            // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）
+            "com.goldendb.",
             // 华为 GaussDB 商用（com.huawei.gaussdb.*）与 openGauss 品牌（com.huawei.opengauss.*）
             // 共用 com.huawei.；社区 openGauss 2.x/3.x 在 org.opengauss.*
             "com.huawei.", "org.opengauss.",
