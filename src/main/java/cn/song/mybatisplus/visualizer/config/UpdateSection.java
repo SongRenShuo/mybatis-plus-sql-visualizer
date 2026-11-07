@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.config;
 
 import cn.song.mybatisplus.visualizer.feedback.FeedbackApi;
 import cn.song.mybatisplus.visualizer.feedback.FeedbackReporting;
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode;
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner;
 import cn.song.mybatisplus.visualizer.update.PluginVersion;
 import cn.song.mybatisplus.visualizer.update.UpdateManifest;
@@ -33,6 +34,7 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function0;
+import kotlin.jvm.functions.Function1;
 import kotlin.jvm.functions.Function2;
 
 /**
@@ -50,16 +52,28 @@ public class UpdateSection extends JPanel {
 
     public enum State { Idle, Checking, UpToDate, Available, Downloading, Installed, InstalledLive, Failed }
 
+    /** 本次（最近一次）检查走的通道（T-DevUpdateChannel）：决定读哪个清单与状态行后缀。 */
+    public enum Channel { STABLE, PREVIEW }
+
+    /** 最近一次检查所用通道（渲染时给状态行加「（开发版通道）」后缀）。 */
+    private Channel channel = Channel.STABLE;
+
     private UpdateManifest pendingManifest = null;
 
     private String failureReason = null;
 
+    /** T-DevUpdateChannel：最近一次安装失败是否「包还没发布」（404/410，友好文案 + 发布页链接）。 */
+    private boolean notPublished = false;
+
     /**
      * 检查编排 seam（T-M28.1）：测试注入 fake 不触网；默认走 {@link PluginUpdateRunner#check} 真实实现。
      * 与按钮绑定配套——交互测试经 doClick 驱动全链路。
+     *
+     * <p>T-DevUpdateChannel：入参为本通道实际读取的清单 URL（正式=update.json / 开发版=preview.update.json），
+     * 测试据此断言分流；既有「忽略入参」的注入写法继续有效。</p>
      */
-    private Function0<PluginUpdateRunner.CheckResult> checkRunner =
-        () -> PluginUpdateRunner.check(PluginVersion.current());
+    private Function1<String, PluginUpdateRunner.CheckResult> checkRunner =
+        url -> PluginUpdateRunner.check(PluginVersion.current(), url);
 
     /** 下载安装编排 seam（T-M28.1：测试注入 fake；默认真实实现，indicator 驱动进度条）。 */
     private Function2<UpdateManifest, ProgressIndicator, PluginUpdateRunner.InstallResult> installRunner =
@@ -74,6 +88,14 @@ public class UpdateSection extends JPanel {
     private final JBLabel versionLabel = new JBLabel();
     private final JCheckBox autoCheckCheck = new JCheckBox();
     private final JButton checkButton = new JButton();
+
+    /**
+     * 「检测更新（开发版）」按钮（T-DevUpdateChannel）：构造即隐藏，{@code DevUpdateMode.isEnabled()}
+     * 为真时可见。构造之后的可见性<b>只由 {@link #applyDevVisibility()} 决定</b>（{@link #updateTexts()} 与解锁回调
+     * 都走它），不在别处直接赋值——否则语言切换 rebuild 会把按钮弄丢。
+     */
+    private final JButton checkPreviewButton = new JButton();
+
     private final JBLabel statusLabel = new JBLabel();
     private final JProgressBar progressBar = new JProgressBar();
     private final JBTextArea notesArea = new JBTextArea(5, 42);
@@ -156,7 +178,9 @@ public class UpdateSection extends JPanel {
         notesArea.setLineWrap(true);
         notesArea.setWrapStyleWord(true);
         // T-M28.1：三按钮事件绑定（此前缺失——用户实测点击检查更新无反应；测试盲区：只测渲染未测交互）
-        checkButton.addActionListener(e -> runCheck());
+        checkButton.addActionListener(e -> runCheck(Channel.STABLE));
+        checkPreviewButton.addActionListener(e -> runCheck(Channel.PREVIEW));
+        checkPreviewButton.setVisible(false);
         installButton.addActionListener(e -> runInstall());
         restartButton.addActionListener(e -> restartIde());
         // T-ErrReport：报告问题（手动形态，无异常预填）
@@ -183,6 +207,7 @@ public class UpdateSection extends JPanel {
         versionRow.setOpaque(false);
         versionRow.add(versionLabel);
         versionRow.add(checkButton);
+        versionRow.add(checkPreviewButton);
         versionRow.add(installButton);
         versionRow.add(statusLabel);
         addRow(versionRow, gbc);
@@ -213,6 +238,7 @@ public class UpdateSection extends JPanel {
 
     /** 检查结果渲染（EDT；测试直接调用）。 */
     public void renderCheck(PluginUpdateRunner.CheckResult result) {
+        notPublished = false;
         if (result instanceof PluginUpdateRunner.CheckResult.Available a) {
             pendingManifest = a.manifest();
             notesArea.setText(renderNotes(a.manifest()));
@@ -259,13 +285,19 @@ public class UpdateSection extends JPanel {
         return null;
     }
 
-    /** 安装结果渲染（EDT；测试直接调用）。三分支：热生效 / 回退重启 / 失败（保留 pendingManifest 区分文案）。 */
+    /**
+     * 安装结果渲染（EDT；测试直接调用）。四分支：热生效 / 回退重启 / 未发布（404 友好态）/ 失败
+     * （保留 pendingManifest 区分文案）。
+     */
     public void renderInstall(PluginUpdateRunner.InstallResult result) {
         failureReason = result instanceof PluginUpdateRunner.InstallResult.Failed f ? f.message() : null;
+        notPublished = result instanceof PluginUpdateRunner.InstallResult.NotPublished;
         if (result instanceof PluginUpdateRunner.InstallResult.InstalledDynamic) {
             state = State.InstalledLive;
         } else if (result instanceof PluginUpdateRunner.InstallResult.InstalledRestartRequired) {
             state = State.Installed;
+        } else if (result instanceof PluginUpdateRunner.InstallResult.NotPublished) {
+            state = State.Failed;
         } else {
             state = State.Failed;
         }
@@ -276,6 +308,7 @@ public class UpdateSection extends JPanel {
         State s = state;
         boolean done = s == State.Installed || s == State.InstalledLive;
         checkButton.setEnabled(!done && s != State.Checking && s != State.Downloading);
+        checkPreviewButton.setEnabled(checkButton.isEnabled());
         installButton.setVisible(s == State.Available || s == State.Downloading);
         installButton.setEnabled(s == State.Available);
         restartButton.setVisible(s == State.Installed);
@@ -284,10 +317,10 @@ public class UpdateSection extends JPanel {
         progressBar.setIndeterminate(true);
         notesContainer.setVisible(s == State.Available);
         doneContainer.setVisible(s == State.Installed);
-        // R62：兜底链接行只在「检查失败且通道缺失」态可见（网络态/安装失败/其他态一律隐藏）
-        fallbackLinksContainer.setVisible(
-            s == State.Failed && pendingManifest == null
-                && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING);
+        // R62：兜底链接行在「检查失败且通道缺失」或「包未发布」态可见（网络态/其他安装失败/其他态隐藏）
+        fallbackLinksContainer.setVisible(s == State.Failed && (
+            (pendingManifest == null && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING) || notPublished
+        ));
         switch (s) {
             case Checking -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.checking"));
             case UpToDate -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.upToDate"));
@@ -297,13 +330,16 @@ public class UpdateSection extends JPanel {
             case Installed -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
             case InstalledLive -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installedLive"));
             case Failed -> {
-                // R62：检查失败按 FailureKind 分流文案（三态可诊断）；安装失败维持原文案
+                // R62：检查失败按 FailureKind 分流文案（三态可诊断）；安装失败（pendingManifest 非空）另走下面两支
                 if (pendingManifest == null && failureKind != null) {
                     statusLabel.setText(MpSqlVisualizerBundle.message(
                         failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING
                             ? "settings.update.fail.channel404"
                             : "settings.update.fail.network",
                         failureReason != null ? failureReason : "?"));
+                } else if (notPublished) {
+                    // T-DevUpdateChannel：包没发布（HTTP 404/410）不渲染异常原文，给友好文案 + 发布页链接
+                    statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.notPublished"));
                 } else {
                     statusLabel.setText(MpSqlVisualizerBundle.message(
                         "settings.update." + (pendingManifest == null ? "checkFailed" : "installFailed"),
@@ -311,6 +347,10 @@ public class UpdateSection extends JPanel {
                 }
             }
             case Idle -> statusLabel.setText(" ");
+        }
+        // T-DevUpdateChannel：开发版通道的检查走同一条状态机，只在文案尾巴标出通道，避免误读
+        if (channel == Channel.PREVIEW && s != State.Idle) {
+            statusLabel.setText(statusLabel.getText() + MpSqlVisualizerBundle.message("settings.update.channel.preview"));
         }
     }
 
@@ -322,6 +362,10 @@ public class UpdateSection extends JPanel {
         autoCheckCheck.setText(MpSqlVisualizerBundle.message("settings.update.autoCheck"));
         autoCheckCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.update.autoCheck.tip"));
         checkButton.setText(MpSqlVisualizerBundle.message("settings.update.check"));
+        checkButton.setToolTipText(UpdateSource.INSTANCE.manifestUrl());
+        checkPreviewButton.setText(MpSqlVisualizerBundle.message("settings.update.checkPreview"));
+        // tooltip 写实际读取的 URL：开发版对账「到底读了哪个文件」（预览清单常指向未发布版本）
+        checkPreviewButton.setToolTipText(UpdateSource.INSTANCE.previewManifestUrl());
         installButton.setText(MpSqlVisualizerBundle.message("settings.update.downloadInstall"));
         installedLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
         restartButton.setText(MpSqlVisualizerBundle.message("settings.update.restartNow"));
@@ -329,7 +373,24 @@ public class UpdateSection extends JPanel {
         giteeLink.setText(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"));
         reportProblemButton.setText(MpSqlVisualizerBundle.message("settings.update.reportProblem"));
         feedbackPoolLink.setText(MpSqlVisualizerBundle.message("settings.update.feedbackPool"));
+        // P-3 的钉子：rebuild 只重建文本，可见性必须按**当前解锁态**重算，否则切语言按钮消失
+        applyDevVisibility();
         renderState();
+    }
+
+    /**
+     * 按 {@link DevUpdateMode} 重新决定开发版按钮可见性（唯一的赋值点）。
+     * 解锁回调（面板连点）与 {@link #updateTexts()} 都走这里——两处任一失守都会表现为「开发模式失效」。
+     */
+    public void applyDevVisibility() {
+        checkPreviewButton.setVisible(DevUpdateMode.isEnabled());
+    }
+
+    /** 解锁当场刷新（面板连点达到阈值后调用）：补文本 + 补可见性 + 让布局重算。 */
+    public void refreshDevModeVisibility() {
+        updateTexts();
+        revalidate();
+        repaint();
     }
 
     /** 从配置加载（Settings 打开/Reset 时调用）。 */
@@ -338,7 +399,10 @@ public class UpdateSection extends JPanel {
         pendingManifest = null;
         failureReason = null;
         failureKind = null;
+        notPublished = false;
+        channel = Channel.STABLE;
         state = State.Idle;
+        applyDevVisibility();
         renderState();
     }
 
@@ -346,9 +410,21 @@ public class UpdateSection extends JPanel {
     // 异步流程（Task.Backgroundable；回调 EDT + 判活，面板销毁则静默）
     // ------------------------------------------------------------------
 
-    /** 检查更新（防重入：Checking/Downloading 中忽略）。 */
+    /** 检查更新（正式通道形态；Kotlin 默认实参的等价重载）。 */
     public void runCheck() {
+        runCheck(Channel.STABLE);
+    }
+
+    /**
+     * 检查更新（防重入：Checking/Downloading 中忽略）。两个按钮共用本状态机，只有 channel 不同：
+     * 正式通道读 {@code update/update.json}，开发版通道读 {@code update/preview.update.json}。
+     */
+    public void runCheck(Channel channel) {
         if (state == State.Checking || state == State.Downloading) return;
+        this.channel = channel;
+        String url = channel == Channel.PREVIEW
+                ? UpdateSource.INSTANCE.previewManifestUrl()
+                : UpdateSource.INSTANCE.manifestUrl();
         state = State.Checking;
         renderState();
         ProgressManager.getInstance().run(new Task.Backgroundable(
@@ -357,7 +433,7 @@ public class UpdateSection extends JPanel {
             true) {
             @Override
             public void run(ProgressIndicator indicator) {
-                PluginUpdateRunner.CheckResult result = checkRunner.invoke();
+                PluginUpdateRunner.CheckResult result = checkRunner.invoke(url);
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (isDisplayable()) renderCheck(result);
                 });
@@ -398,6 +474,16 @@ public class UpdateSection extends JPanel {
 
     public State getState() {
         return state;
+    }
+
+    /** 最近一次检查所用通道（T-DevUpdateChannel；测试断言分流用）。 */
+    public Channel getChannel() {
+        return channel;
+    }
+
+    /** 「检测更新（开发版）」按钮（T-DevUpdateChannel；测试断言可见性/使能用）。 */
+    public JButton getCheckPreviewButton() {
+        return checkPreviewButton;
     }
 
     public JBLabel getVersionLabel() {
@@ -448,7 +534,7 @@ public class UpdateSection extends JPanel {
         return feedbackPoolLink;
     }
 
-    public void setCheckRunner(Function0<PluginUpdateRunner.CheckResult> checkRunner) {
+    public void setCheckRunner(Function1<String, PluginUpdateRunner.CheckResult> checkRunner) {
         this.checkRunner = checkRunner;
     }
 
