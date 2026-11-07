@@ -9,12 +9,16 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 /**
- * maintainPage XML 解析器：解析 <pages> 根元素下的 <maintainPage> 语句清单。
+ * {@code <pages>} XML 解析器：解析根元素下的页面语句清单。
  *
- * - 根元素必须是 <pages>（否则抛 PagesXmlParseException）
- * - 遍历 <maintainPage> 子元素，提取 id/title/autoQuery/entityClass 属性
- * - <datasource> CDATA → sql（trim）
- * - <columns>/<column> → 列元数据列表
+ * <ul>
+ * <li>根元素必须是 {@code <pages>}（否则抛 {@link PagesXmlParseException}）；</li>
+ * <li><b>页面标签名不固定</b>（自研框架各家不同：maintainPage / listPage / queryPage …）：
+ *     判定口径 = 根的直接子元素中「带 {@code <datasource>} 子元素」者；历史上没有 datasource 的
+ *     {@code <maintainPage/>} 仍按兼容口径收下（sql 为空）；</li>
+ * <li>提取 id/title/autoQuery/entityClass 属性（id 缺省回落标签名）；</li>
+ * <li>{@code <datasource>} CDATA → sql（trim）；{@code <columns>/<column>} → 列元数据列表。</li>
+ * </ul>
  */
 public class PagesXmlParser {
 
@@ -25,18 +29,27 @@ public class PagesXmlParser {
             throw new PagesXmlParseException("XML 文档为空。");
         }
         if (!root.getTagName().equals("pages")) {
-            throw new PagesXmlParseException("不是 maintainPage 文件：根元素为 <" + root.getTagName() + ">（期望 <pages>）。");
+            throw new PagesXmlParseException("不是 pages 文件：根元素为 <" + root.getTagName() + ">（期望 <pages>）。");
         }
         List<PagesStatement> statements = childElements(root).stream()
-                .filter(it -> it.getTagName().equals("maintainPage"))
-                .map(PagesXmlParser::parseMaintainPage)
+                .filter(PagesXmlParser::isStatementElement)
+                .map(PagesXmlParser::parseStatement)
                 .toList();
         return new PagesModel(statements);
     }
 
-    private static PagesStatement parseMaintainPage(Element element) {
-        String id = element.getAttribute("id");
-        String title = element.getAttribute("title");
+    /** 页面语句判定：带 {@code <datasource>} 子元素，或历史兼容的 {@code <maintainPage/>}（无 datasource）。 */
+    private static boolean isStatementElement(Element element) {
+        if (element.getTagName().equals("maintainPage")) {
+            return true;
+        }
+        return childElements(element).stream().anyMatch(it -> it.getTagName().equals("datasource"));
+    }
+
+    private static PagesStatement parseStatement(Element element) {
+        // id 缺省回落标签名：gutter/Action 对无 id 的页面仍能按「同标签首个」定位
+        String id = element.getAttribute("id").isBlank() ? element.getTagName() : element.getAttribute("id");
+        String title = element.getAttribute("title").isBlank() ? element.getTagName() : element.getAttribute("title");
         boolean autoQuery = "true".equals(element.getAttribute("autoQuery"));
         String entityClass = element.getAttribute("entityClass");
         // <datasource> CDATA → sql
@@ -46,13 +59,19 @@ public class PagesXmlParser {
                 .orElse(null);
         String sql = datasourceTag != null && datasourceTag.getTextContent() != null
                 ? datasourceTag.getTextContent().trim() : "";
+        // T-PagesHql：可选 type 属性（hql / jpql / sql）
+        String declaredType = null;
+        if (datasourceTag != null) {
+            String raw = datasourceTag.getAttribute("type").trim();
+            declaredType = raw.isEmpty() ? null : raw;
+        }
         // <columns>/<column> → 列元数据
         Element columnsTag = childElements(element).stream()
                 .filter(it -> it.getTagName().equals("columns"))
                 .findFirst()
                 .orElse(null);
         List<PagesColumn> columns = columnsTag != null ? parseColumns(columnsTag) : List.of();
-        return new PagesStatement(id, title, autoQuery, entityClass, sql, columns);
+        return new PagesStatement(id, title, autoQuery, entityClass, sql, columns, declaredType);
     }
 
     private static List<PagesColumn> parseColumns(Element columnsTag) {
