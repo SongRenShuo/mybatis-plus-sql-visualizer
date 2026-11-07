@@ -2,6 +2,11 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Fixed
+- **IDE 2026.3 上换源弹窗又只剩当前一个源、点选静默跑到旧库（T-ConsoleBind263，bd4eff85）**：2026.3 移除了 `DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource)`，插件清平台「文件 → 数据源」绑定的那一步恒抛 `NoSuchMethodException`——绑定清不掉，平台的 forced 关联就把可选数据源短路成单条，于是「切换数据源」只列出当前源，工具栏挑 `mpj_demo@localhost` 却在原来钉住的 Oracle 源上建会话（用户看到的「点了没反应」和「跑错库」是同一个根因的两张脸）。现在写入口按能力族探测（2026.3 的 `setMappingWithWriteAction` → 旧重载 → `setMapping(VirtualFile,String)` → 静态只写入口），每次写完都用平台接口回读核对；2026.3 的写动作入口是异步协程（字节码实证），由同步写兜底并在日志里给出实际生效的策略名。日志分型改为 `setMapping FAILED strategy=… reason=…` / `setMapping UNAVAILABLE …`，首次换源打一行平台契约读数，2026.3 再收走入口时一眼可见。同时补一道防护：**显式选了数据源但可选集合里没有它时直接阻断并说明原因**（不再静默用另一个源执行），平台绑定改不动时面板就地提示实际目标与请求目标。
+
 ## [2026.11.8-beta.1] - 2026-11-07
 
 ### Fixed
