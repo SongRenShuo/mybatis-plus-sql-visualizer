@@ -67,55 +67,14 @@ public class LogSqlRestorer {
     }
 
     /**
-     * 日期族类型标注 → ANSI 类型字面量（R3 缺口矩阵修复）。按简单名归一匹配
-     * （兼容 MyBatis 简单名 {@code Timestamp}、Hibernate JDBC 类型 {@code TIMESTAMP}、全限定名 {@code java.sql.Timestamp}）。
+     * 日期族类型标注 → ANSI 类型字面量（R3 缺口矩阵修复）。
      *
-     * <p>刻意不包装（边界登记）：
-     * <ul>
-     * <li>{@code LocalTime}/{@code Time}：纯时刻比较语义取决于目标列类型（对 TIME 列各库皆可、对 datetime 列
-     *   表现分裂），且 Oracle 不支持 ANSI {@code TIME} 字面量——维持引号；</li>
-     * <li>{@code OffsetDateTime} 等带时区值：ANSI TIMESTAMP 字面量不收时区后缀，方言级包装需
-     *   {@code TO_TIMESTAMP_TZ} 一类机制，超出本件（登记决策点 D3）；</li>
-     * <li>无类型标注：启发式无法区分日期串与字符串列的日期值（{@code WHERE code='2025-01-01'}），
-     *   误包装会改变字符串列语义（决策点 D2）。</li>
-     * </ul>
+     * <p>T-DateLiteralBackfill：规则已上提至 {@code SqlDateLiteral.renderFor}（全链唯一实现），本函数只做
+     * 委托；R3 的 family 限制与「形态不匹配回落引号」语义保持不变（D4 的 TIMESTAMP 族纯日期
+     * 边界由共享渲染器统一产出 {@code DATE}）。</p>
      */
     private String renderDateFamily(String value, String type) {
-        String v = value.trim();
-        if (v.isEmpty()) {
-            return null;
-        }
-        String simple = type.substring(type.lastIndexOf('.') + 1);
-        switch (simple) {
-            case "LocalDate":
-                return DATE_RE.matcher(v).matches() ? "DATE '" + v + "'" : null;
-            case "Date":
-            case "DATE":
-                if (DATE_RE.matcher(v).matches()) {
-                    return "DATE '" + v + "'";
-                }
-                if (TS_RE.matcher(v).matches()) {
-                    return "TIMESTAMP '" + normalizeTs(v) + "'";
-                }
-                return null;
-            case "Timestamp":
-            case "LocalDateTime":
-            case "TIMESTAMP":
-            case "DATETIME":
-                return TS_RE.matcher(v).matches() ? "TIMESTAMP '" + normalizeTs(v) + "'" : null;
-            default:
-                return null;
-        }
-    }
-
-    /** ISO 'T' 分隔符归一为空格（ANSI 字面量不接受 'T'；LocalDateTime.toString 产出 'T'）；缺秒补 {@code :00}（Oracle 实测缺秒 ORA-01861）。 */
-    private String normalizeTs(String v) {
-        String out = (v.length() > 10 && v.charAt(10) == 'T')
-                ? v.substring(0, 10) + ' ' + v.substring(11) : v;
-        if (TS_NO_SEC_RE.matcher(out).matches()) {
-            out += ":00";
-        }
-        return out;
+        return cn.song.mybatisplus.visualizer.sql.SqlDateLiteral.renderFor(value, type);
     }
 
     private String renderUntyped(String value) {
@@ -155,13 +114,4 @@ public class LogSqlRestorer {
 
     /** 数值字面量（含小数与科学计数，如 `1.0E10`）。 */
     private static final Pattern NUMERIC_REGEX = Pattern.compile("-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?");
-
-    /** 日期字面量形态（`yyyy-MM-dd`，Java 日期 toString 标准补零形态）。 */
-    private static final Pattern DATE_RE = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
-
-    /** 时间戳字面量形态（`yyyy-MM-dd[ T]HH:mm[:ss][.f…`，秒与小数可选——缺秒由 normalizeTs 归一）。 */
-    private static final Pattern TS_RE = Pattern.compile("\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d{1,9})?");
-
-    /** 缺秒时间戳（`yyyy-MM-dd HH:mm`）——normalizeTs 补 `:00` 用。 */
-    private static final Pattern TS_NO_SEC_RE = Pattern.compile("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}");
 }
