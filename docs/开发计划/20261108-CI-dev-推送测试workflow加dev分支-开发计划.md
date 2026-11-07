@@ -36,4 +36,8 @@
 
 ## 实施记录
 
-（待补）
+- 侦察读数已入「侦察结论」节（含各属性支持面实测）。
+- 步骤 1-3 完成：push-test.yml 按基线 95e107b1 覆盖，branches 改 [master, dev]，nightly-nudge 加 `if: github.ref_name == 'master'`；YAML 语法校验通过（jobs = nightly-nudge / test / fast）。
+- 本地编译门禁：`classes testClasses` BUILD SUCCESSFUL in 3m 15s（COMPILE_EXIT=0）。
+- 提交 `c499bafa`（push-test.yml + 本计划文件）；push-all.ps1 -Branch dev 双仓推送成功（Gitee + GitHub，令牌通路、无 GCM 弹窗）。
+- CI 轮询：后台 ci-watch.py（branch=dev，sha=c499bafa，单轮上限 25 分钟），结论待出后回填。
