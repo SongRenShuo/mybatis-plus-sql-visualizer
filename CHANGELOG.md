@@ -2,14 +2,13 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.8] - 2026-11-07
+
+> 范围＝v2026.11.7 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.8-beta.1` 一条）：日期族参数改 ANSI 类型字面量、IDE 2026.3 换源退化修复。两条都在 `Fixed`。
 
 ### Fixed
 - **IDE 2026.3 上换源弹窗又只剩当前一个源、点选静默跑到旧库（T-ConsoleBind263，bd4eff85）**：2026.3 移除了 `DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource)`，插件清平台「文件 → 数据源」绑定的那一步恒抛 `NoSuchMethodException`——绑定清不掉，平台的 forced 关联就把可选数据源短路成单条，于是「切换数据源」只列出当前源，工具栏挑 `mpj_demo@localhost` 却在原来钉住的 Oracle 源上建会话（用户看到的「点了没反应」和「跑错库」是同一个根因的两张脸）。现在写入口按能力族探测（2026.3 的 `setMappingWithWriteAction` → 旧重载 → `setMapping(VirtualFile,String)` → 静态只写入口），每次写完都用平台接口回读核对；2026.3 的写动作入口是异步协程（字节码实证），由同步写兜底并在日志里给出实际生效的策略名。日志分型改为 `setMapping FAILED strategy=… reason=…` / `setMapping UNAVAILABLE …`，首次换源打一行平台契约读数，2026.3 再收走入口时一眼可见。同时补一道防护：**显式选了数据源但可选集合里没有它时直接阻断并说明原因**（不再静默用另一个源执行），平台绑定改不动时面板就地提示实际目标与请求目标。
 
-## [2026.11.8-beta.1] - 2026-11-07
-
-### Fixed
 - **日期时间参数回填改用 ANSI 类型字面量，Oracle 预览执行不再报 ORA-01843 / ORA-01861（T-DateLiteralBackfill）**：捕获到的 `LocalDateTime` 值按 `toString()` 是 ISO `T` 形态（`2026-11-07T13:20:14.417`），预览参数行此前只把它包成单引号串，Oracle 对 TIMESTAMP 列的隐式转换按 `NLS_TIMESTAMP_FORMAT` 解析，`T` 分隔符不被接受 → 执行报 ORA-01843；把 `T` 换成空格同样不够（`'2024-01-01 10:00:00.0'` 在 Oracle 11g/23 实测 ORA-01861）。现在日期族参数统一由 `SqlDateLiteral` 产出 ANSI 类型字面量——纯日期 `DATE '…'`、时间戳 `TIMESTAMP '…'`（ISO `T` 归一为空格、缺秒补 `:00`），覆盖面板参数行、复制可执行 SQL、导出/分享、增强捕获列表与 MP/批量/JPA/XML 模型链。形态不匹配或类型未知时仍回落原引号渲染，不会产生非法字面量。SQL Server / SQLite 因 T-SQL 与 SQLite 不支持 ANSI 类型字面量，按方言门禁维持引号形态（SQL Server 的 ISO 8601 引号串本来就能隐式转换）。R3 当时挂起的面板参数行路径（决策点 D1）由此定案为同步 ANSI 化。
 
 ## [2026.11.7] - 2026-11-07
