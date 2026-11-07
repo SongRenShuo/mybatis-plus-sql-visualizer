@@ -38,4 +38,7 @@
 - 步骤 1-2 完成：run-gradle-retry.ps1 与 push-test.yml 按基线 95e107b1 带入，branches 写 [t-sql-insight]，nightly-nudge 加 master 专属 if；YAML 校验通过。
 - 本地编译门禁：`classes testClasses` BUILD SUCCESSFUL in 4m 22s（COMPILE_EXIT=0）。
 - 提交 `04b6c05d`（push-test.yml + run-gradle-retry.ps1 + 本计划文件）；push-all.ps1 -Branch t-sql-insight 双仓推送成功（GitHub 走直连回落，令牌通路）。
-- CI 轮询：后台 ci-watch.py（branch=t-sql-insight，sha=04b6c05d），结论待出后回填。
+- **CI 结论（run 42403761197，failure）**：四项配置判据全过（job 启动、matrix 展开 test×5+fast×2、checkout+编译过、gradle 认得任务名；nightly-nudge 按设计 skipped）——workflow 配置验证完成。测试红 19+3 例属分支自身/环境依赖，非配置问题：
+  - O147RealAgentAcceptanceTest 族在 fast 腿照跑并红——insight 的 buildSrc 旧于 master，testFast 不认 -PtestShardExcludeClasses（master 的「同源尊重」管线是后加的）；车道 5 合并 master buildSrc 后自然排除。
+  - EnhancedCaptureDefaultOnGuardTest / GiantFileBudgetTest / InsightDetailPanelLayoutTest×3 / InsightPresentationTest / InsightSummaryTest / SqlPreviewStatusBarWidgetTest——insight 线自身红或守卫前提过期，留车道 5 合并后裁决。
+- 计划回填笔 4eaa5bc7（本地，未推——避免取消本轮 CI；随车道 5 合并提交一并推）。
