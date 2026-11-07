@@ -184,6 +184,15 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-DockerGateOffload（2026-11-07）：五容器用例的外指端点解析入口。默认与 dialectExternalVerify
+    // 共用同一份矩阵文件（.local/dialect-external-matrix.properties，凭据只在 .local 不进仓），
+    // -PdialectExternalMatrix=<路径> 可覆盖。文件/条目缺失时该用例回落容器路径（容器路径无 Docker
+    // 仍显式跳过）；日常门禁（-PmpvDockerTests 缺省）外指腿同样被上面的开关拦住，零网络触达。
+    systemProperty(
+        "mpvs.dockerext.matrix",
+        providers.gradleProperty("dialectExternalMatrix")
+            .getOrElse(layout.projectDirectory.file(".local/dialect-external-matrix.properties").asFile.absolutePath),
+    )
     // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
     //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
     // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
@@ -409,6 +418,64 @@ val fastBucketClasses: List<String> = testFileEntries
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
     ) }
 
+// T-CiFastSplit（2026-11-05）：快桶切片——-PfastBucketSliceCount=N（默认 1，整桶，既有语义零变化）
+// 与 -PfastBucketSlice=i（1-based）。
+// 由来：推送档实测关键路径是 testFast（601s）而不是分片（433~495s）——一条腿装着本地 226s 的量，
+// 等于一个半分片；拆两片后各约 300s，墙钟回到由分片决定（run#21 读数见经验总结 §十一）。
+// 切法：按 dev-support/test-shard-weights.tsv 的入库画像做 LPT 装箱（权重降序、同权按类名升序，
+// 装当前最轻片），零画像类取已知权重中位数——与分片均衡器同口径，同输入必得同分区。
+// 覆盖面红线：各片并集恒等于 fastBucketClasses − shardExcludeClassNames（配置期 require 兜底，
+// 漏一类就是上千例在 CI 上静默不跑）。
+// 结果目录仍写 build/test-results/testFast：切片模式**只给 CI 用**（每片独占一台 runner）；
+// testShards 聚合的 shardResultDirs 是位置语义列表，本机串行跑两片会混计，勿用。
+val fastBucketSliceCount: Int = providers.gradleProperty("fastBucketSliceCount").orNull
+    ?.toIntOrNull()?.coerceIn(1, 4) ?: 1
+val fastBucketSliceIndex: Int = providers.gradleProperty("fastBucketSlice").orNull
+    ?.toIntOrNull()?.coerceIn(1, fastBucketSliceCount) ?: 1
+val fastBucketExecutableClasses: List<String> =
+    fastBucketClasses.filter { it !in shardExcludeClassNames }
+val fastBucketSlices: List<List<String>> = run {
+    if (fastBucketSliceCount < 2) listOf(fastBucketExecutableClasses) else {
+        val profileFile = file("dev-support/test-shard-weights.tsv")
+        val profile: Map<String, Double> = if (!profileFile.isFile) emptyMap() else runCatching {
+            profileFile.readLines().mapNotNull { line ->
+                if (line.isEmpty() || line.startsWith("#")) return@mapNotNull null
+                val tab = line.indexOf('\t')
+                if (tab <= 0) return@mapNotNull null
+                val seconds = line.substring(tab + 1).trim().toDoubleOrNull() ?: return@mapNotNull null
+                if (seconds <= 0.0) return@mapNotNull null
+                line.substring(0, tab).trim() to seconds
+            }.toMap()
+        }.getOrDefault(emptyMap())
+        val known = profile.values.sorted()
+        val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+        fun weightOf(cls: String): Double = profile[cls] ?: median
+        val buckets = List(fastBucketSliceCount) { mutableListOf<String>() }
+        val loads = DoubleArray(fastBucketSliceCount)
+        fastBucketExecutableClasses
+            .sortedWith(compareByDescending<String> { weightOf(it) }.thenBy { it })
+            .forEach { cls ->
+                val target = loads.indices.minByOrNull { loads[it] }!!
+                buckets[target] += cls
+                loads[target] += weightOf(cls)
+            }
+        require(
+            buckets.flatten().toSet() == fastBucketExecutableClasses.toSet() &&
+                buckets.sumOf { it.size } == fastBucketExecutableClasses.size,
+        ) {
+            "快桶切片丢类：并集 ${buckets.flatten().size} 类 ≠ 全集 ${fastBucketExecutableClasses.size} 类"
+        }
+        buckets.forEachIndexed { i, list ->
+            logger.lifecycle(
+                "testFast slice %d/%d: %d 类, 画像权重和 %.1fs".format(
+                    i + 1, fastBucketSliceCount, list.size, loads[i],
+                ),
+            )
+        }
+        buckets
+    }
+}
+
 // T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
 // 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
 // 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
@@ -491,6 +558,30 @@ tasks.register<Test>("dialectExternalVerify") {
     // 每轮真跑：实例侧数据会被套件自行清理，但任务本身无源码变更时会被判 UP-TO-DATE，
     // 读旧 XML 等于拿上一轮读数冒充本轮（与 testExternal 同款理由）
     outputs.upToDateWhen { false }
+    // -Dmpvs.* 透传到测试 JVM。**逐键用 providers.systemProperty**（configuration-cache 的输入），
+    // 不用 System.getProperties() 全量扫描：后者在配置缓存命中时配置期根本不重跑 → 换了 -D 也被
+    // 静默沿用旧值（2026-11-06 实证：`-Dmpvs.external.maxConcurrency=1` 首次被忽略，summary 仍写
+    // 「默认=4」，须加 --no-configuration-cache 才生效）。
+    // 只列「测试侧真正读的」键（`grep -rhoE '"mpvs\.[a-zA-Z.]+"' src/test` 对账）；新增键请同步。
+    listOf(
+        "mpvs.external.instanceTimeout",
+        "mpvs.external.maxConcurrency",
+        // T-DialectSweepSpeed2（2026-11-07）：单实例内词级并行度上限（1 = 关闭，反向验证用）
+        "mpvs.external.wordWorkers",
+        "mpvs.docker.tests.enabled",
+        "mpvs.dialect.name",
+        "mpvs.dialect.jdbcUrl",
+        "mpvs.dialect.user",
+        "mpvs.dialect.password",
+        "mpvs.dialect.multiRowValues",
+        "mpvs.dm.url",
+        "mpvs.dm.user",
+        "mpvs.dm.password",
+        "mpvs.dump.dir",
+        "mpvs.preview.splitter",
+    ).forEach { key ->
+        providers.systemProperty(key).orNull?.takeIf { it.isNotBlank() }?.let { systemProperty(key, it) }
+    }
     systemProperty("mpvs.external.matrix", dialectExternalMatrixPath)
     systemProperty(
         "mpvs.external.summary",
@@ -536,7 +627,8 @@ tasks.register<Test>("testFast") {
     filter {
         // T-JUnit5Eval 方案 2：快桶=分片摘出的那批，两边同源；再减去隔离口（见 shardExcludeClassNames
         // 注释——被 -PtestShardExcludeClasses 排除的类不能从快桶这条路溜回来）。
-        fastBucketClasses.filter { it !in shardExcludeClassNames }.forEach { includeTestsMatching(it) }
+        // T-CiFastSplit（2026-11-05）：切片模式只装本片清单；缺省 1 片 = 整桶，与旧行为逐字等价。
+        fastBucketSlices[fastBucketSliceIndex - 1].forEach { includeTestsMatching(it) }
     }
     maxParallelForks = 1
     // T-JUnit5Eval 方案 2：testShards 聚合要按 .round-start 戳只计本轮 XML；本桶 classpath 不含
@@ -544,8 +636,17 @@ tasks.register<Test>("testFast") {
     // 上一轮的陈旧计数。强制每轮真跑（与 testExternal 同语义），墙钟代价=与分片并行的那一段。
     outputs.upToDateWhen { false }
     inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+    // T-CiFastSplit：切片标签经 inputs.property 传进 doFirst（doFirst 直接引用脚本级 val 会被
+    // 配置缓存判为 Gradle script object references，同 shardResultDirs 的处置）
+    inputs.property(
+        "mpvFastSliceLabel",
+        "切片 %d/%d（%d 类）".format(
+            fastBucketSliceIndex, fastBucketSliceCount, fastBucketSlices[fastBucketSliceIndex - 1].size,
+        ),
+    )
     doFirst {
         val root = inputs.properties["mpvResultsRootAbs"] as String
+        logger.lifecycle("testFast ${inputs.properties["mpvFastSliceLabel"]} START ${System.currentTimeMillis()}")
         val dir = File(root, "build/test-results/testFast")
         dir.mkdirs()
         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())

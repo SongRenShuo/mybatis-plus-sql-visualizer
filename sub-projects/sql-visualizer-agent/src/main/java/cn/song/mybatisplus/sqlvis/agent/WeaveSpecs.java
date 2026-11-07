@@ -57,6 +57,25 @@ final class WeaveSpecs {
                 "com.mysql.jdbc.StatementImpl",
                 "com.mysql.jdbc.PreparedStatement",
                 "com.mysql.jdbc.ServerPreparedStatement",
+                // GoldenDB（中兴金篆；gdb_mysql-connector-java-oracle-5.1.46.99.jar，T-GoldenDbDialect
+                // 券 B）：MySQL Connector/J 5.1 的整包重命名分叉（jar 内 com/mysql 条目为 0），
+                // 组形态照上组 com.mysql.jdbc.* 逐名对应（计划 §1.1.7 javap 实测）。
+                // StatementImpl 自有 execute/executeQuery/executeUpdate/executeLargeUpdate/
+                // executeBatch/executeLargeBatch/addBatch(String)/clearBatch 全族；
+                // PreparedStatement extends StatementImpl 自有无参 execute 族齐全；
+                // CallableStatement extends PreparedStatement 自有 execute 族齐全，必须单列。
+                // **注意 ServerPreparedStatement**：它自有方法只有 addBatch()（无参）/
+                // executeBatchSerially(int)/executeInternal(...) 等——**自有 execute 族为空，execute
+                // 覆盖来自父类 PreparedStatement**；且无参 addBatch() 不命中任何 Kind（ADD_BATCH 只认
+                // addBatch(String)，该形态在父类声明），full-face changed 实际来自 PARAM 形态 setter 族
+                // （setArray/setAsciiStream/…，字节层实测，见 StatementWeaverVendorCoverageTest 的
+                // GoldenDB 专项断言）。「登记 = 本类覆盖」在这里不成立，勿误读；JDBC4* 子类族
+                // （JDBC4Connection/JDBC4PreparedStatement 等）不登记——父类织入即覆盖，同 MySQL 5.1
+                // 既有口径。
+                "com.goldendb.jdbc.StatementImpl",
+                "com.goldendb.jdbc.PreparedStatement",
+                "com.goldendb.jdbc.ServerPreparedStatement",
+                "com.goldendb.jdbc.CallableStatement",
                 "org.h2.jdbc.JdbcStatement",
                 "org.h2.jdbc.JdbcPreparedStatement",
                 "org.h2.jdbc.JdbcCallableStatement",
@@ -103,7 +122,18 @@ final class WeaveSpecs {
                 // 瀚高 HighGo（HgdbJdbc 6.2.5）：完全重定位（`org/postgresql` 条目数为 0、
                 // 与 pgjdbc 无继承关系），包形 com.highgo.jdbc.jdbc.Pg* 与华为 GaussDB 商用驱动同构
                 "com.highgo.jdbc.jdbc.PgStatement",
-                "com.highgo.jdbc.jdbc.PgPreparedStatement");
+                "com.highgo.jdbc.jdbc.PgPreparedStatement",
+                // 磐维 PanweiDB（T-IbatisPanwei 券 C；panweidb-jdbc-1.0.0.jar）：整包重命名的
+                // openGauss-connector-jdbc 谱系（org/panweidb 条目 374、org/postgresql 为 0），
+                // 方法形态与 pgjdbc 同构（javap 实测：PgPreparedStatement extends PgStatement
+                // implements PreparedStatement，自有 executeQuery()/executeUpdate()/execute()/
+                // executeLargeUpdate() 与 setObject/setNull/setString；PgStatement 自有 execute
+                // 全族 + addBatch/clearBatch/executeBatch）。PgCallableStatement extends
+                // PgPreparedStatement 且自有 executeUpdate()/executeWithFlags(int)，按 pgjdbc 同族
+                // 先例单列。
+                "org.panweidb.jdbc.PgStatement",
+                "org.panweidb.jdbc.PgPreparedStatement",
+                "org.panweidb.jdbc.PgCallableStatement");
         // MariaDB（mariadb-java-client 3.3.3，T-CaptureCoverage 券 01）：3.x 全部重写为自有类
         // （`org.mariadb.jdbc.Statement` / `ClientPreparedStatement` / `ServerPreparedStatement`
         // 均 implements java.sql.* 而非继承 MySQL `StatementImpl`，包名与 com.mysql 无交集），
@@ -156,6 +186,10 @@ final class WeaveSpecs {
         putSpec(prepareFace,
                 "com.mysql.cj.jdbc.ConnectionImpl",
                 "com.mysql.jdbc.ConnectionImpl",
+                // GoldenDB（T-GoldenDbDialect 券 B）：MySQL 5.1 谱系整包重命名，ConnectionImpl
+                // 自有 prepareStatement(String) ×6 重载 + prepareCall(String) ×4 重载（javap 实测），
+                // getURL() 为 public——UrlResolver 的反射兜底可用
+                "com.goldendb.jdbc.ConnectionImpl",
                 "org.h2.jdbc.JdbcConnection",
                 // PG 连接（prepareStatement/prepareCall 出口登记 PS 实例 → SQL）
                 // 同为 openGauss 5.x/7.x 的连接面
@@ -176,7 +210,10 @@ final class WeaveSpecs {
                 // 面单列；getURL() 形态与 pgjdbc 一致，UrlResolver 反射兜底可用
                 "com.kingbase8.jdbc.KbConnection",
                 "cn.com.vastbase.jdbc.PgConnection",
-                "com.highgo.jdbc.jdbc.PgConnection");
+                "com.highgo.jdbc.jdbc.PgConnection",
+                // 磐维 PanweiDB（T-IbatisPanwei 券 C）：prepare 面单列；getURL() javap 实测 public，
+                // UrlResolver 的反射兜底可用
+                "org.panweidb.jdbc.PgConnection");
         // MariaDB 连接（T-CaptureCoverage 券 01）：`org.mariadb.jdbc.Connection` 是 3.x 自有连接类
         // （非 MySQL ConnectionImpl 子类），prepareStatement/prepareCall 出口在此登记 PS→SQL。
         putSpec(prepareFace, "org.mariadb.jdbc.Connection");

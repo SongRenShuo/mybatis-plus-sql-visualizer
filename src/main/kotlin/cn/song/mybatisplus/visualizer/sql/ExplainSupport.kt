@@ -192,6 +192,14 @@ object ExplainSupport {
         ),
         Entry("HighGo", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：HighGo V6.0.1 / PostgreSQL 12.3，FORMAT JSON 单列 QUERY PLAN JSON 文本（镜像 xuxuclassmate/highgo:6.0.1，非厂商官方）"),
         Entry("Vastbase", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "社区镜像引擎级实证：Vastbase G100 V3.0 Build 9（openGauss 6.0.0）A 模式 FORMAT JSON 单列 JSON 文本（镜像 apecloud/vastbase，非厂商官方）"),
+        // T-GoldenDbDialect（券 A，P-9 销案）：**不接入**（template=null，能力矩阵 EXPLAIN 行如实
+        // 显示 false）。EXPLAIN 语法确在官方文档（1.10.15.1《EXPLAIN》p323-325：`EXPLAIN
+        // [DB|PROXY|explain_format] explainable_stmt [STORAGEDB]`，FORMAT 可选 JSON|Oracle），
+        // 但原文**只有语法与选项、没有任何输出形态示例**（5 个示例语句均未给返回结果）——
+        // 行式表格 / 文本树两种档位都定不了。照 OceanBase 教训（T-OBExplainFormat：档位误登
+        // 会让索引建议走错解析分支而永不触发），未取证前不猜档——真机 `EXPLAIN SELECT 1`
+        // 读数到位后按实际档位登记。
+        Entry("GoldenDB", null, null, "官方文档级（开发支持 V6.1.03.10 p323-325）：EXPLAIN 语法在册（可选项 FORMAT=JSON|Oracle、DB/PROXY 节点级计划），但原文无任何输出形态示例——TABLE 行式 / TEXT 树式定不了档，P-9 诚实不接入；真机读数到位后按档登记"),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

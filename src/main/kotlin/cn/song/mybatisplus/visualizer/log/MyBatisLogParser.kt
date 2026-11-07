@@ -23,6 +23,31 @@ package cn.song.mybatisplus.visualizer.log
  *   整行日志当作参数值塞进 `?`（面板出现 `LIMIT 2026-09-16 14:35:00.413 DEBUG …` 这类文字）。
  * - **多行 SQL 续行**（T-LPC-07）：`Preparing:` 之后的裸文本行（不含日志特征、非空）并入当前 SQL——
  *   mapper 里格式化的 SQL 不再只留首行，增强通道两侧 rawSql 同形（日志时间相关器得以命中）。
+ *
+ * T-IbatisPanwei 券 A/B（iBatis 2.x 控制台形态，2026-11-06）：iBatis 的 JDBC 日志代理按
+ * `{pstm-N}` / `{conn-N}` 实例计数打三行一组——`Executing Statement: <sql>` →
+ * `Parameters: [v1, null, v2, …]` → `Types: [java.lang.String, null, …]`。参数行是 Java 集合
+ * `toString`，与 MyBatis 的「值(类型)」语法**不兼容**（旧行为：单值把整段方括号当字面量渲染成
+ * `'[x]'`；含 null 的多值只匹配到 null 项、其余值丢弃并错位填充）。
+ *
+ * 本分支的边界（钉死，不做猜测式增强）：
+ * - **行级识别**：只认带 `{pstm-N}` / `{conn-N}` 标记的行，命中即由本分支消费并返回，绝不落到
+ *   用户配置前缀分支（用户把 SQL 前缀配成 `Executing Statement:` 也不会产生双条目）；
+ * - **列表切分**：外层 `[ ]` 剥一层、按顶层逗号切分、裸 `null` 记为 null 值（切分口径复用
+ *   [ListParamRenderer.splitListElements]）。**元素内含逗号/嵌套方括号/空串元素**（`List.toString`
+ *   不可逆）是已知边界：按逗号切分、不猜转义；`splitListElements` 会滤掉空串元素，这一形态下
+ *   参数与 `Types:` 的位置对齐可能偏移（与 `ListParamRenderer` 同口径，不另造实现）；
+ * - **类型接入**：`Parameters:` 行先挂起（键 = pstm id），同 id 的 `Types:` 行按位置并入
+ *   [LogSqlParam.type] 后闭合。**必须并入类型**：`00340025002200200006` 这类纯数字串在无类型
+ *   启发式下会裸出成数值字面量（Oracle 模式语义错误）。兜底闭合点：同 id 的新 `Executing
+ *   Statement`、`{conn-N} Preparing Statement:`、MyBatis `Preparing:` 语句行、[closePending]；
+ *   `Types:` 缺行时按无类型启发式渲染（现状口径），不伪造类型；
+ * - **[takeEntries] 不冲刷挂起态**：生产桥每行喂入后都会调 [takeEntries]，若在此闭合，`Parameters:`
+ *   行一落地就被取出、随后的 `Types:` 行永远无处并入；
+ * - **`{conn-N} Preparing Statement:` 只消费不产条目**（决策 D-2：iBatis 每条语句都 prepare 一次、
+ *   紧接 execute，两条都收会翻倍）；
+ * - **批处理一期不支持**（iBatis batch 一次性 prepare、多次 `Parameters:`）——同 id 的第二条
+ *   `Parameters:` 会先把上一批按无类型闭合，登记为缺口。
  */
 class MyBatisLogParser(
     private val restorer: LogSqlRestorer = LogSqlRestorer(),
@@ -65,6 +90,25 @@ class MyBatisLogParser(
         isIdle = { it.pendingSql == null && !it.prefixMatched && !it.paramPrefixMatched },
     )
 
+    /**
+     * iBatis 2.x 未闭合语句（券 A/B）：键 = `{pstm-N}` 的 N（配对优先按 id，线程桶只在
+     * 「语句行关闭 MyBatis 侧未闭合条目」时用到）。
+     *
+     * @param params null = `Parameters:` 行未到（仅 SQL 已知）；非 null = 参数已到、等 `Types:` 并入
+     */
+    private class IbatisPending(
+        val sql: String,
+        val logLine: String,
+        var params: List<LogSqlParam>? = null,
+    )
+
+    /**
+     * pstm id → 挂起态（保持插入序，[closePending] 按序冲刷）。
+     * 存在独立于线程桶的第二个理由：`Parameters:` 与 `Types:` 在并发控制台里可能被别的线程的
+     * 语句行夹开，按 id 归位比按线程桶归位更接近 iBatis 的打印事实。
+     */
+    private val ibatisPending = LinkedHashMap<String, IbatisPending>()
+
     /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
         feedInto(router.bucketFor(line), line)
@@ -80,9 +124,14 @@ class MyBatisLogParser(
     }
 
     private fun feedInto(bucket: Bucket, line: String) {
+        // 分支 0（券 A/B）：iBatis 2.x 标记行——命中即消费并返回，绝不落到下方用户配置前缀分支
+        if (feedIbatis(bucket, line)) return
+
         // 分支 1：Preparing 行（有 SQL 同行）
         val sql = extractAfterKeyword(line, sqlPrefix)
         if (sql != null) {
+            // 其它语句行 = iBatis 挂起参数组的兜底闭合点（Types 缺行/日志截断时不丢条目）
+            flushIbatis()
             closePending(bucket) // 上一条未闭合先闭合（无 Parameters 或异常日志）
             bucket.pendingSql = sql.take(maxParseLength)
             bucket.pendingLogLine = line
@@ -170,6 +219,106 @@ class MyBatisLogParser(
         // 分支 7：噪声行（与旧行为一致）
     }
 
+    // ---------- iBatis 2.x 标记行（券 A/B） ----------
+
+    /**
+     * 处理带 `{pstm-N}` / `{conn-N}` 标记的行；返回 true 表示**本行已被消费**（调用方须立即返回）。
+     *
+     * 廉价前置一次 `contains`：MyBatis/Hibernate 日志行在热路径上（每行每解析器调用）零正则开销。
+     */
+    private fun feedIbatis(bucket: Bucket, line: String): Boolean {
+        if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)) return false
+        val marker = IBATIS_MARKER.find(line) ?: return false
+        val id = marker.groupValues[2]
+        val rest = line.substring(marker.range.last + 1).trim()
+        if (marker.groupValues[1] == CONN_KIND) {
+            // `{conn-N} Preparing Statement: <sql>`（及 conn 的其它行）只消费不产条目（D-2）
+            if (rest.startsWith(IBATIS_PREPARING_STATEMENT)) flushIbatis()
+            return true
+        }
+        return when {
+            rest.startsWith(IBATIS_EXECUTING_STATEMENT) -> {
+                onIbatisExecuting(bucket, id, rest.removePrefix(IBATIS_EXECUTING_STATEMENT).trim(), line)
+                true
+            }
+            rest.startsWith(IBATIS_PARAMETERS) -> {
+                onIbatisParameters(id, rest.removePrefix(IBATIS_PARAMETERS).trim())
+                true
+            }
+            rest.startsWith(IBATIS_TYPES) -> {
+                onIbatisTypes(id, rest.removePrefix(IBATIS_TYPES).trim())
+                true
+            }
+            // 其余带 pstm 标记的行（Closing statement 等）只消费不产条目
+            else -> true
+        }
+    }
+
+    /** `{pstm-N} Executing Statement:`：开启一条语句；同 id 的旧挂起态先按无类型兜底闭合。 */
+    private fun onIbatisExecuting(bucket: Bucket, id: String, sql: String, line: String) {
+        ibatisPending.remove(id)?.let { emitIbatis(it) }
+        // 语句行同时终止 MyBatis 侧的未闭合语句/续行（与分支 1 同语义）
+        closePending(bucket)
+        if (sql.isEmpty()) return
+        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line)
+    }
+
+    /** `{pstm-N} Parameters:`：挂起等 Types；无对应语句（上下文已丢）按既有诊断计数丢弃。 */
+    private fun onIbatisParameters(id: String, text: String) {
+        val pending = ibatisPending[id]
+        if (pending == null) {
+            LogParseDiag.paramWithoutContext.incrementAndGet()
+            return
+        }
+        val params = parseIbatisParams(text)
+        if (pending.params != null) {
+            // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
+            ibatisPending.remove(id)
+            emitIbatis(pending)
+            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params)
+        } else {
+            pending.params = params
+        }
+    }
+
+    /** `{pstm-N} Types:`：按位置并入类型后闭合；无对应挂起态（或 Parameters 尚未到）则只消费。 */
+    private fun onIbatisTypes(id: String, text: String) {
+        val pending = ibatisPending[id] ?: return
+        val params = pending.params ?: return // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
+        ibatisPending.remove(id)
+        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)))
+    }
+
+    /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
+    private fun emitIbatis(pending: IbatisPending): LogSqlEntry =
+        emitEntry(pending.sql, pending.logLine, pending.params ?: emptyList())
+
+    /** 冲刷全部 iBatis 挂起态（按插入序），返回首个产出条目（保持 closePending 返回语义）。 */
+    private fun flushIbatis(): LogSqlEntry? {
+        if (ibatisPending.isEmpty()) return null
+        val items = ibatisPending.values.toList()
+        ibatisPending.clear()
+        var first: LogSqlEntry? = null
+        for (item in items) {
+            val produced = emitIbatis(item)
+            if (first == null) first = produced
+        }
+        return first
+    }
+
+    /** 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份）。 */
+    private fun emitEntry(sql: String, logLine: String?, params: List<LogSqlParam>): LogSqlEntry {
+        val entry = LogSqlEntry(
+            rawSql = sql,
+            restoredSql = restorer.restore(sql, params),
+            params = params,
+            source = SqlSource.MYBATIS,
+            logTimestamp = logLine?.let { LogTimestampParser.parse(it) },
+        )
+        entries += entry
+        return entry
+    }
+
     /**
      * 是否像**异构语句行**（其他 ORM/框架的 SQL 行，如 `Hibernate: select …`）——续行判定须拒收：
      * 这类行本身代表另一条语句，并入会污染 MyBatis 条目的 SQL 正文（`DualParserIntegrationTest` 覆盖）。
@@ -195,24 +344,19 @@ class MyBatisLogParser(
         val sql = bucket.pendingSql ?: return null
         bucket.pendingSql = null
         bucket.continuing = false
-        val logTs = bucket.pendingLogLine?.let { LogTimestampParser.parse(it) }
+        val logLine = bucket.pendingLogLine
         bucket.pendingLogLine = null
         val params = bucket.pendingParams.toList()
-        val entry = LogSqlEntry(
-            rawSql = sql,
-            restoredSql = restorer.restore(sql, params),
-            params = params,
-            source = SqlSource.MYBATIS,
-            logTimestamp = logTs,
-        )
-        entries += entry
         bucket.pendingParams.clear()
-        return entry
+        return emitEntry(sql, logLine, params)
     }
 
-    /** 闭合全部桶的未完成条目（面板刷新 / 粘贴末尾时调用）。 */
+    /**
+     * 闭合全部未完成条目（面板刷新 / 粘贴末尾时调用）：iBatis 挂起态先冲刷（按 pstm 插入序），
+     * 再按线程桶序闭合 MyBatis 侧。
+     */
     fun closePending(): LogSqlEntry? {
-        var first: LogSqlEntry? = null
+        var first: LogSqlEntry? = flushIbatis()
         for (bucket in router.allBuckets()) {
             val produced = closePending(bucket)
             if (first == null) first = produced
@@ -220,7 +364,13 @@ class MyBatisLogParser(
         return first
     }
 
-    /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
+    /**
+     * 取出全部已闭合条目并清空缓冲区（面板刷新用）。
+     *
+     * **不冲刷 iBatis 挂起态**：控制台桥每行喂入后都会调用本方法，若在此闭合，`Parameters:` 行
+     * 落地即被取走、紧随的 `Types:` 行再也无处并入（类型丢失 → 纯数字串裸出成语义错误的字面量）。
+     * 挂起态的闭合见类注释「兜底闭合点」。
+     */
     fun takeEntries(): List<LogSqlEntry> {
         val result = entries.toList()
         entries.clear()
@@ -269,6 +419,23 @@ class MyBatisLogParser(
         private const val DEFAULT_PARAM_PREFIX = "Parameters:"
         private const val DEFAULT_MAX_PARSE_LENGTH = 20000
 
+        // ---------- iBatis 2.x 标记（券 A/B） ----------
+
+        /** 廉价前置判据（两次 indexOf 即可挡掉 MyBatis/Hibernate 行，不跑正则）。 */
+        private const val PSTM_MARKER_PREFIX = "{pstm-"
+        private const val CONN_MARKER_PREFIX = "{conn-"
+
+        /** 标记种类分组值：`{conn-N}` 只消费不产条目，其余（pstm）走语句状态机。 */
+        private const val CONN_KIND = "conn"
+
+        private const val IBATIS_EXECUTING_STATEMENT = "Executing Statement:"
+        private const val IBATIS_PREPARING_STATEMENT = "Preparing Statement:"
+        private const val IBATIS_PARAMETERS = "Parameters:"
+        private const val IBATIS_TYPES = "Types:"
+
+        /** iBatis JDBC 日志代理的实例计数器标记：`{pstm-100021}` / `{conn-100022}`。 */
+        private val IBATIS_MARKER = Regex("""\{(pstm|conn)-(\d+)\}""")
+
         /**
          * Hibernate 参数绑定行模式：`binding parameter [N] as [TYPE] - [VALUE]`
          */
@@ -308,6 +475,51 @@ internal fun parseParams(text: String): List<LogSqlParam> {
     }
     return result
 }
+
+/**
+ * iBatis 2.x `Parameters:` 行（`[v1, null, v2]`，Java 集合 `toString` 形态）→ 参数表。
+ *
+ * 外层 `[ ]` 是**结构**不是值的一部分，剥一层后按顶层逗号切分；裸 `null` 记为 null 值
+ * （其余元素原样作为值文本，类型留空等 `Types:` 行并入）。
+ *
+ * 切分口径复用 [ListParamRenderer.splitListElements]（与 IN 子句集合展开同一份实现）。
+ * 已知边界（`toString` 不可逆，与 `ListParamRenderer` 同口径登记）：元素内含逗号/嵌套方括号
+ * 按逗号切分；空串元素会被 `splitListElements` 滤掉，此形态下与 `Types:` 的位置对齐可能偏移。
+ *
+ * 非列表形态（首尾不是 `[` `]`）返回空表——iBatis 恒打列表形态，不猜其它形状。
+ */
+internal fun parseIbatisParams(text: String): List<LogSqlParam> {
+    val elements = ListParamRenderer.splitListElements(text) ?: return emptyList()
+    return elements.map { element ->
+        if (element == IBATIS_NULL_LITERAL) LogSqlParam(null, null) else LogSqlParam(element, null)
+    }
+}
+
+/**
+ * iBatis 2.x `Types:` 行（`[java.lang.String, null, java.lang.Long]`）→ 类型表（按位置对应
+ * `Parameters:` 行）。裸 `null` 表示该位置参数为 null（iBatis 对 null 参数打 `null` 类型），
+ * 记为 null 表示「无类型」——不伪造类型。
+ */
+internal fun parseIbatisTypes(text: String): List<String?> {
+    val elements = ListParamRenderer.splitListElements(text) ?: return emptyList()
+    return elements.map { element -> if (element == IBATIS_NULL_LITERAL) null else element }
+}
+
+/**
+ * 按位置把 `Types:` 并入参数（越界位置保持无类型；[types] 为空表时原样返回）。
+ * 类型来自 iBatis 的**全限定名**（`java.lang.String`），[LogSqlRestorer] 的 PLAIN_TYPES 与
+ * 日期族匹配都已覆盖这类形态（`java.lang.Long` 归一后原样直出、`java.lang.String` 走引号）。
+ */
+internal fun applyIbatisTypes(params: List<LogSqlParam>, types: List<String?>): List<LogSqlParam> {
+    if (types.isEmpty()) return params
+    return params.mapIndexed { index, param ->
+        val type = types.getOrNull(index) ?: return@mapIndexed param
+        param.copy(type = type)
+    }
+}
+
+/** iBatis 列表里的 null 字面量（Java `List.toString()` 对 null 元素打印 `null`）。 */
+private const val IBATIS_NULL_LITERAL = "null"
 
 /**
  * `null` 分支在前（见 [parseParams] KDoc）；`\A`/`\z` 锚定避免跨参数误配。

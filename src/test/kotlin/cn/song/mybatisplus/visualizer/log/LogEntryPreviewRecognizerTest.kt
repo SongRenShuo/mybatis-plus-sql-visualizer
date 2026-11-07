@@ -105,6 +105,19 @@ class LogEntryPreviewRecognizerTest {
         assertEquals(listOf(true, true), recognized.paramHints.map { it.quote })
     }
 
+    @Test
+    fun `日期族类型标注带temporal_字符串日期形值不带`() {
+        // T-DateLiteralBackfill：类型是日期族才置 temporal；字符串列的日期形值不能被误包装
+        val recognized = entry(
+            rawSql = "SELECT * FROM t WHERE a = ? AND b = ?",
+            params = listOf(
+                LogSqlParam("2026-11-07T13:20:14.417", "LocalDateTime"),
+                LogSqlParam("2026-11-07", "String"),
+            ),
+        ).toRecognizedPreview()
+        assertEquals(listOf(true, false), recognized.paramHints.map { it.temporal })
+    }
+
     // ------------------------------------------------------------------
     // 回退（未识别）
     // ------------------------------------------------------------------

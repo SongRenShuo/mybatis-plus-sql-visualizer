@@ -7,7 +7,8 @@ import com.intellij.openapi.diagnostic.Logger
  *
  * 内部更新通道已转为「Gitee 抢先体验通道」，检查 [MANIFEST_PATH] 指向 [update/update.json]
  *（含 `-beta.N` 内测版与正式版提前推送）；稳定版由 JetBrains Marketplace 接管，本通道不参与。
- * 草稿请写 [update/preview.update.json]（不参与检查），发布时复制到 [update/update.json]。
+ * 草稿请写 [update/preview.update.json]，发布时复制到 [update/update.json]——预览清单常规通道不读，
+ * 仅开发者模式「检测更新（开发版）」按 [previewManifestUrl] 读取（T-DevUpdateChannel）。
  *
  * 系统属性 `mpvs.update.manifest.url` 可覆盖清单 URL（沙盒/本地 HTTP server 验证用，
  * 与项目「发布前本地验证」惯例一致；内网私有通道亦复用此入口，见 README「内网与离线环境」）。
@@ -32,6 +33,20 @@ object UpdateSource {
     /** 清单 URL 覆盖系统属性名（沙盒验证/换源用）。 */
     const val MANIFEST_URL_OVERRIDE = "mpvs.update.manifest.url"
 
+    /**
+     * 预览（草稿）清单路径（T-DevUpdateChannel）：开发者模式「检测更新（开发版）」读它。
+     * 与 [MANIFEST_PATH] 同目录同分支，发布流程仍是「草稿写预览、发布复制到正式清单」——
+     * 本常量只新增一个**读取入口**，不改发布流程（见 `docs/开发计划/20261106-1955-…`）。
+     */
+    const val PREVIEW_MANIFEST_PATH = "update/preview.update.json"
+
+    /** 默认预览清单地址（同仓同分支 raw，只需多一条路由即可给本地 server 验证）。 */
+    const val DEFAULT_PREVIEW_MANIFEST_URL =
+        "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/$PREVIEW_MANIFEST_PATH"
+
+    /** 预览清单 URL 覆盖系统属性名（沙盒/本地 server 验证用；空白视为未设置）。 */
+    const val PREVIEW_MANIFEST_URL_OVERRIDE = "mpvs.update.previewManifestUrl"
+
     /** Gitee 发布页（T-M28.4 变更日志链接目标——设置页/通知可点击跳转）。 */
     const val GITEE_RELEASES_URL = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases"
 
@@ -47,11 +62,28 @@ object UpdateSource {
         System.getProperty(MANIFEST_URL_OVERRIDE)?.takeIf { it.isNotBlank() } ?: DEFAULT_MANIFEST_URL
 
     /**
+     * 实际预览清单 URL（T-DevUpdateChannel）：专用覆盖属性优先，否则由 [manifestUrl] 同源改路径
+     *（换源/本地 server 只需多一条 `/update/preview.update.json` 路由，不必再配第二个属性）。
+     *
+     * 换源值里不含 [MANIFEST_PATH] 时（自定义文件名等）同源改名无从谈起，回落默认预览地址，
+     * **不静默复用正式 URL**——否则「开发版通道」会悄悄读正式清单，把彩蛋变成错误读数。
+     */
+    fun previewManifestUrl(): String {
+        System.getProperty(PREVIEW_MANIFEST_URL_OVERRIDE)?.takeIf { it.isNotBlank() }?.let { return it }
+        val stable = manifestUrl()
+        return if (MANIFEST_PATH in stable) {
+            stable.replace(MANIFEST_PATH, PREVIEW_MANIFEST_PATH)
+        } else {
+            DEFAULT_PREVIEW_MANIFEST_URL
+        }
+    }
+
+    /**
      * 换源生效时的诊断日志（T-Intranet-01）：仅在被覆盖时打印一行，默认路径静默。
      * 内网运维排查「配了内网源却仍在打 Gitee」时由此处定位；object 类初始化保证单次。
      */
     internal fun logOverrideIfAny(url: String) {
-        if (url != DEFAULT_MANIFEST_URL) {
+        if (url != DEFAULT_MANIFEST_URL && url != DEFAULT_PREVIEW_MANIFEST_URL) {
             LOG.info("update manifest url overridden by system property: $url")
         }
     }

@@ -195,6 +195,22 @@ internal fun allowsSharedConsoleReuse(forceChoose: Boolean): Boolean = !forceCho
 internal fun allowsSilentLastUsed(executeAfterPrepare: Boolean, forceChoose: Boolean): Boolean =
     !executeAfterPrepare && !forceChoose
 
+/**
+ * T-ConsoleBind263 P0-2：显式指定的数据源在**可选 runner 集合里完全不存在**时必须阻断。
+ *
+ * 2026-11-07 现场：工具栏挑 `mpj_demo@localhost`，runner 集合只有被平台 forced 关联钉住的
+ * Oracle 源（`runners=1`）→ 旧链落到「single runner, run directly」，**静默把会话建在 Oracle 上**，
+ * 用户以为换成了 MySQL。错库代价远高于「让用户重试」：找不到就阻断并给可行动文案。
+ *
+ * 同名多条不在此列（那是歧义，交弹窗让用户亲手挑，不算静默错源）；空白名也不在此列
+ * （取不到名字不是「用户点了某个源」，按旧行为回落弹窗）；**空集合**也不在此列——那由
+ * `runners.isEmpty()` 分支做方言/平台归因（跳过它会把可行动文案换成一句「找不到源」）。
+ */
+internal fun blocksPreferredRunnerMiss(preferredRunnerName: String?, runnerNames: List<String>): Boolean =
+    !preferredRunnerName.isNullOrBlank() &&
+        runnerNames.isNotEmpty() &&
+        runnerNames.none { it == preferredRunnerName }
+
 internal fun DataSourceSelector.chooseAndPrepare(
     project: Project,
     sql: String,
@@ -419,15 +435,41 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
                 "[T-ConsoleBind] exec file pin=${bindProbe.pinnedDsId}, intended=${bindAction.intendedDsId ?: "(clear)"} " +
                     "→ ${bindAction.action}",
             )
-            if (ExecFileBinding.realignExecBind(
-                    project, vf,
-                    intendedDs = if (bindAction.action == ExecFileBinding.Action.REALIGN) intendedDs else null,
-                )
-            ) {
+            val realign = ExecFileBinding.realignExecBind(
+                project, vf,
+                intendedDs = if (bindAction.action == ExecFileBinding.Action.REALIGN) intendedDs else null,
+            )
+            if (realign.applied) {
                 // 被 detach 的可能正是共享/已备控制台（内嵌在预览面板里）——缓存作废，
                 // 本链全量重建（onConsole 回调会重嵌新控制台）。
                 dropSharedConsole()
                 clearPrepared()
+            } else if (bindAction.action == ExecFileBinding.Action.REALIGN && !realign.mapped) {
+                // T-ConsoleBind263 P1-5：写没落地 → 本链紧接着的 runner 枚举仍会被平台 forced 关联
+                // 短路成被钉住的源；在这里就地说明「实际目标 ≠ 请求目标」，别让用户以为换成功了。
+                // 只在**关联没写进去**时提示：仅 detach 失败（mapped=true）时关联已指向目标，
+                // 说「绑定仍指向别的源」是假话——那种情况由 realignExecBind 的日志交代。
+                LOG.warn(
+                    "[T-ConsoleBind] realign NOT applied: strategy=${realign.strategy?.id ?: "none"}, " +
+                        "expected=${realign.expectedId}, observed=${realign.observedId}, failure=${realign.failure}",
+                )
+                val expectedName = bindAction.intendedDsId?.let { id ->
+                    runCatching {
+                        DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                    }.getOrNull()
+                } ?: bindAction.intendedDsId.orEmpty()
+                val observedName = realign.observedId?.let { id ->
+                    runCatching {
+                        DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                    }.getOrNull()
+                } ?: realign.observedId.orEmpty()
+                (onError ?: onInfo)?.invoke(
+                    MpSqlVisualizerBundle.message(
+                        "execute.datasource.realignNotApplied",
+                        expectedName,
+                        observedName.ifBlank { MpSqlVisualizerBundle.message("execute.datasource.realignObservedNone") },
+                    ),
+                )
             }
         }
     }
@@ -535,6 +577,27 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     }
 
     when {
+        // T-ConsoleBind263 P0-2（2026-11-07 用户实测「点了 mpj_demo 却跑到 Oracle」）：**偏好名在
+        // runner 集合里完全不存在**时必须阻断，绝不能掉进下面任何一个分支——
+        //  - 「单 runner 直跑」会拿被平台 forced 关联钉住的 A 源静默建链（现场正是这个形态：
+        //    偏好=mpj_demo@localhost、runner 集合只有 FREEPDB1 的 Oracle 源）；
+        //  - 「弹窗」也会用错集合，用户选完仍旧是 A 源。
+        // 只有「同名多条」这种歧义仍走弹窗（让用户亲手挑，不算静默错源）。
+        // 判据口径：runner 显示名 = `DbDataSource.getName()` = 数据源显示名（263 字节码实证，
+        // `createDataSourceRunner` 走 `getName()`），与偏好名同源，故字符串比对成立。
+        blocksPreferredRunnerMiss(preferredRunnerName, runners.map { getRunnerName(it) }) -> {
+            LOG.warn(
+                "[M36] preferred runner NOT FOUND: '$preferredRunnerName', runners=${runners.size} " +
+                    "[${runners.joinToString(", ") { getRunnerName(it) }}] — blocked (refuse to run on pinned source)",
+            )
+            (onError ?: onInfo)?.invoke(
+                MpSqlVisualizerBundle.message("execute.datasource.preferredNotFound", preferredRunnerName.orEmpty()),
+            )
+            // 收尾口径同 runners.isEmpty()：链就此终结，单飞门必须结算（否则下一次执行排队到超时）。
+            onSubmission(ExecutionSubmission.BLOCKED)
+            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
+            callback?.invoke(false)
+        }
         // T-ExplainFailUx W4：用户已在下拉里显式指定源名 → 按名唯一命中直接建链，不再弹选择器
         //（一次选择即生效；名字未命中/歧义回落弹窗，不猜）。
         preferredRunnerName != null && runners.count { getRunnerName(it) == preferredRunnerName } == 1 -> {

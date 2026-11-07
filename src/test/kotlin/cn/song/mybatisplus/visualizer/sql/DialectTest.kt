@@ -89,7 +89,7 @@ class DialectTest {
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
                 "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
-                "HighGo", "Vastbase",
+                "HighGo", "Vastbase", "GoldenDB",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -111,7 +111,8 @@ class DialectTest {
 
     /**
      * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：方言逐库声明——Oracle / H2 = UPPER、
-     * PostgreSQL / KingBase / openGauss / GaussDB / HighGo / Vastbase = LOWER、其余 6 方言 = NONE。
+     * PostgreSQL / KingBase / openGauss / GaussDB / HighGo / Vastbase = LOWER、其余 7 方言 = NONE
+     * （T-GoldenDbDialect 券 A：GoldenDB 未实测，MySQL 血统默认 NONE，真机核对后增量）。
      *
      * 归属依据（真机/引擎实测，2026-09-22）：
      *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；

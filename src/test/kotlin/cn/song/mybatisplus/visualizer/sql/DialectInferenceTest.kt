@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -34,8 +35,53 @@ class DialectInferenceTest {
             "jdbc:highgo://localhost:5866/db" to "HighGo",
             "jdbc:vastbase://localhost:5432/db" to "Vastbase",
             "jdbc:dws:iam://localhost:5432/db" to "Vastbase",
+            // T-IbatisPanwei（券 F，D-1）：磐维 Oracle 兼容模式 → Oracle 方言
+            "jdbc:panwei://localhost:5432/db" to "Oracle",
+            "jdbc:panweidb://localhost:5432/db" to "Oracle",
         )
         expected.forEach { (url, name) -> assertEquals(name, UrlSubprotocolDialects.dialectName(url)) }
+    }
+
+    @Test
+    fun panweiSubprotocolsResolveToOracleThroughRegistry() {
+        // 券 F 反向契约：映射值必须被 DialectRegistry.byName 命中为 Oracle——
+        // 失配会静默回落 MySQL（Oracle 语法 SYSDATE/dual/to_date 就会被 MySQL 渲染）。
+        listOf("jdbc:panwei://dbhost.example:5432/pwdb", "jdbc:panweidb://dbhost.example:5432/pwdb").forEach { url ->
+            val name = UrlSubprotocolDialects.dialectName(url)
+            assertEquals("映射层必须给出 Oracle", "Oracle", name)
+            val dialect = DialectRegistry.byName(name!!)
+            assertEquals("byName 必须命中 Oracle", "Oracle", dialect.name)
+            assertNotEquals("不得落到 MySQL 兜底", "MySQL", dialect.name)
+            // 也走一遍推断优先级链（agent 端优先）
+            assertEquals("Oracle", DialectInference.infer(url, "jdbc:mysql://ide:3306/db").dialectName)
+        }
+    }
+
+    @Test
+    fun panweiClientDbCompatibilityMustNotChangeDialect() {
+        // 2026-11-06 订正（依据《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5）：
+        //  - 数据库 SQL 兼容模式是**建库参数 DBCOMPATIBILITY**：Oracle(A，默认) / MySQL(B) / TD(C) /
+        //    SQL Server / PostgreSQL；
+        //  - JDBC 连接参数 `db_compatibility`（默认 `postgresql`）只控制 ResultSetMetaData 列名大小写，
+        //    **不表示 SQL 兼容模式**。
+        // 所以 URL 里带不带、带什么 db_compatibility，都不许改变方言映射——本用例就是这条的回归守卫。
+        listOf(
+            "jdbc:panweidb://h:5432/db",
+            "jdbc:panweidb://h:5432/db?db_compatibility=oracle",
+            "jdbc:panweidb://h:5432/db?db_compatibility=postgresql",
+            "jdbc:panweidb://h:5432/db?db_compatibility=mysql",
+            "jdbc:panweidb://h:5432/db?currentSchema=nacos&DB_COMPATIBILITY=MySQL",
+        ).forEach { url ->
+            assertEquals("$url 应恒判 Oracle（方言不由客户端参数决定）", "Oracle",
+                UrlSubprotocolDialects.dialectName(url))
+        }
+        // 普通 PostgreSQL 连接（磐维 p 版驱动走 jdbc:postgresql:）逐字不变，不受该参数影响
+        assertEquals(
+            "PostgreSQL",
+            UrlSubprotocolDialects.dialectName("jdbc:postgresql://h:5432/db?db_compatibility=oracle"),
+        )
+        // 映射值必须被 DialectRegistry 命中
+        assertEquals("Oracle", DialectRegistry.byName("Oracle").name)
     }
 
     @Test

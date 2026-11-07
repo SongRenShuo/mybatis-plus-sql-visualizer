@@ -514,13 +514,15 @@ class CrudSqlGeneratorTest {
      * 折为大写），故已从本清单移出——H2 的目录来源含小写名会加引号，与实体来源不再逐字节一致。
      * T-DialectXcFamily：OceanBase=NONE（MySQL 模式推定）加入本清单；openGauss=LOWER
      * （openGauss 5.0.0 真机实测 2026-09-23）不入本清单。
+     * T-GoldenDbDialect：GoldenDB=NONE（MySQL 形态，反引号标识符不折叠；与 OceanBase 同为
+     * 模式推定档）加入本清单。
      */
     @Test
     fun nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource() {
         val nonFolding = DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
         // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
         assertEquals(
-            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase"),
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase", "GoldenDB"),
             nonFolding.map { it.name },
         )
         nonFolding.forEach { dialect ->

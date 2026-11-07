@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import java.util.ArrayDeque
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -40,6 +41,43 @@ class SqlLogEntryBuffer(
     private val pendingContentNotify = AtomicInteger(0)
     private val lastContentNotifyNanos = AtomicLong(0)
 
+    // ---------- T-SqlListCatchup 券B：计数变更键增量出口 ----------
+
+    /**
+     * T-SqlListCatchup 券B：内容通知节流窗内累积的「计数变更键」集合（键 = dedupeKey）。
+     * 内容侧每发生一次会改变展示层计数的队列变更（新条目入队 / ⨉N 重复丢弃 / 头部淘汰 /
+     * removeEntry），把受影响的 dedupeKey 记进来；面板 [drainChangedKeys] 消费后按键增量更新
+     * 徽章累积 map，不再每拍全量重算。
+     *
+     * 有界性（照 [dedupeKeyPresence] KDoc 口径）：风暴期同键反复变化**只记键不记次数**（Set 语义），
+     * 集合上限以现存键域封顶——键随淘汰/清空同步出域（[clear] 一并清空），不引入新增长面。
+     * 自身锁独立（`synchronized(changedCountKeys)`），登记发生在 `synchronized(entries)` 内
+     * （与 presence 维护同锁登记），锁序恒为 entries → changedCountKeys，无反向获取。
+     */
+    private val changedCountKeys = HashSet<String>()
+
+    /**
+     * T-SqlListCatchup 券B：计数全量重建标记——增量口径的**失效事件点**置位，面板 drain 到后
+     * 回退全量重算一次（对齐 P6 既有「已知事件点全量重建」口径）。置位点及各自为什么必须全量：
+     * - [dedupeEnabled] 翻转：false 期间 presence 冻结不维护，true 时索引全量重建——键域与
+     *   presence 都可能整体跳变，增量键集表达不了；
+     * - [rebuildDedupeIndexAfterHandoff]：接管沿索引按 grace 截断只留新鲜键而条目仍留队，
+     *   索引键域与 presence 口径分叉，按键取 structureKey 的出口可能失配；
+     * - [clear]：全清事件，累积 map 必须与 buffer 双双清零；
+     *   ~~淘汰把键扫出键域（presence 计数归零摘键）~~——**券E 升级为增量**：淘汰是确定性核销
+     *   （presence 减一、归零摘键），被淘汰键已随 [markCountKeyLocked] 进变更键集，面板按
+     *   presence 当下值与镜像求净差即可正确扣账（structureKey 从键域内期缓存取，键出域时
+     *   缓存仍在），无需回退全量。等价性证据见 SqlLogCountAccumulatorEquivalenceTest 的
+     *   「恒满异键风暴」场景（buffer 恒满、键持续进出的随机序列逐键逐值相等）；
+     * - 去重关闭期间的入队/淘汰与不可去重条目（ShardingSphere）变更：presence 口径外，
+     *   增量键集无法表达；
+     * - [dedupeCounts] 键上限溢出（静默淘汰最旧键）：键集无法表达「哪个键被逐出」。
+     *
+     * 原子量：置位发生在任意生产线程（含 entries 锁内），消费在面板 EDT——getAndSet 保证
+     * 「置位落在消费窗口内不丢标记」（标记落两次 drain 之间时本拍即走全量，不产生陈旧窗口）。
+     */
+    private val countFullRebuildPending = AtomicBoolean(false)
+
     @Volatile
     var paused: Boolean = false
         internal set
@@ -52,8 +90,13 @@ class SqlLogEntryBuffer(
         set(value) {
             val changed = value != field
             field = value
-            if (changed && value) {
-                synchronized(entries) { rebuildDedupeIndexLocked() }
+            if (changed) {
+                // 券B：开关翻转是计数增量口径的失效点——false 期间 presence 冻结不维护、true 时索引
+                // 全量重建，面板累积 map 都须回退全量重算一次（P6 重建口径对齐，见 countFullRebuildPending KDoc）。
+                countFullRebuildPending.set(true)
+                if (value) {
+                    synchronized(entries) { rebuildDedupeIndexLocked() }
+                }
             }
         }
 
@@ -97,16 +140,21 @@ class SqlLogEntryBuffer(
      * 参数还原**的原材料：[logTimeKey]（占位符版 rawSql 指纹）+ 参数值签名，即 T-AgentLogTime 已验证
      * 能跨通道命中的口径。
      *
-     * 只在 [dedupeIndex] 未命中时才查（命中即走既有同键融合，零额外成本）；命中后还须满足
-     * [canFoldAcrossChannels]（两侧通道不同、时间差 ≤ [CROSS_CHANNEL_WINDOW_MS]）才折叠。
+     * 只在 [dedupeIndex] 未命中时才查（命中即走既有同键融合，零额外成本）；命中后先走
+     * [canFoldAcrossChannels]（两侧通道不同、时间差 ≤ [CROSS_CHANNEL_WINDOW_MS]）的窗内折叠；
+     * **T-SqlListCatchup 券 F1：超窗时改走 [findStaleSameSourceCandidateLocked] 的越窗兜底对账**
+     * （去重开启态、异通道标记、仍在去重窗内 → 折叠）——控制台条目经平台 ConsoleViewImpl 冲刷
+     * 延迟 >5s 到达时窗内折叠必然错过，此前同一次执行就此留两行（真机第三轮压测缺陷）。
      *
      * 维护面与 [dedupeIndex] **完全同锁同生命周期**（全部在 `synchronized(entries)` 内）：入队 upsert /
      * 头部淘汰摘键 / 融合原位替换重指 / [removeEntry] 单键重算 / [clear] 清空 /
      * [rebuildDedupeIndexLocked] 与 [rebuildDedupeIndexAfterHandoff] 全量重建。
      *
-     * 有界性：键域随条目淘汰同步摘除（索引存该键**最后入队**实例、淘汰取**最旧**，索引命中被淘汰者
-     * 即说明队内已无同键余条，无需反扫）+ [purgeExpiredCrossChannelLocked] 时间窗惰性清理（防长会话里
-     * 「条目仍留队但早已超窗」的键驻留）。
+     * 有界性（券 F1 调整）：键域随条目淘汰同步摘除（索引存该键**最后入队**实例、淘汰取**最旧**，索引
+     * 命中被淘汰者即说明队内已无同键余条，无需反扫）。**不再做 5s 时间窗惰性清除**——超窗键是越窗
+     * 兜底的候选源，清了它兜底就永远接不住迟到副本；键域仍以队内条目数封顶（淘汰/删除/清空同步出域），
+     * 驻留面无新增长点。接管沿重建（[rebuildDedupeIndexAfterHandoff]）仍按 grace 只留新鲜键——越窗
+     * 兜底对被截断的键天然无候选，P3「attach 即生效」可见性不受本调整影响。
      *
      * 误配面（计划 §五-4 已裁决可接受）：同一语句 5s 内以相同参数执行多次时，跨通道配对按 FIFO 可能
      * 错位——融合只补空不覆盖，错位只影响毫秒级耗时与同一条语句同一栈帧的位置，不产生错误数据。
@@ -124,31 +172,60 @@ class SqlLogEntryBuffer(
     }
 
     /**
-     * T-CrossChannelDedupe：跨通道折叠判据——两侧 `captureProvenance` 不同（[CaptureProvenance.UNKNOWN]
-     * 视为可折叠：旧条目/历史读回未打标，不该阻断兜底）且时间差在窗内。
+     * T-CrossChannelDedupe：跨通道折叠判据——通道口径见 [crossChannelProvenanceFoldable]（两侧已知
+     * 异通道、或恰好一侧已知可折；两侧同已知通道 / 两侧都 UNKNOWN 不折），且时间差在窗内。
      *
      * 同通道已知标记一律不折叠：同通道同 crossKey 而异 dedupeKey 不是「两份观测」，是同一通道内的两条
      * 不同语句（或同一渲染器两次不同输出），折叠会吞掉真实条目。
      */
     private fun canFoldAcrossChannels(existing: LogSqlEntry, incoming: LogSqlEntry): Boolean {
-        val sameKnownChannel = existing.captureProvenance != CaptureProvenance.UNKNOWN &&
-            incoming.captureProvenance != CaptureProvenance.UNKNOWN &&
-            existing.captureProvenance == incoming.captureProvenance
-        if (sameKnownChannel) return false
+        if (!crossChannelProvenanceFoldable(existing, incoming)) return false
         return withinCrossChannelWindow(existing, incoming)
     }
 
     /**
-     * T-CrossChannelDedupe：跨通道索引的时间窗惰性清理（每次入队顺带扫一遍，键域 ≤ 队内条目数）。
-     * 超窗条目即使仍留队，也永远不可能是下一次入队的配对候选（[withinCrossChannelWindow] 必然拒绝），
-     * 提前摘键只为把长会话的驻留面压到「窗内键」。
+     * T-SqlListCatchup 券 F1：跨通道对账的**通道半边**判据——两侧已知同通道不可对账（同通道同
+     * crossKey 而异 dedupeKey 是真不同语句/两次渲染，不是两份观测）；**两侧都未打标
+     * （[CaptureProvenance.UNKNOWN]）也不可对账**——观测合并的语义前提是「可识别的两条通道」，
+     * UNKNOWN 对 UNKNOWN 的折叠会把历史读回/旧条目的同语句条目误折，并让「去重关闭=全保留」的
+     * 既有语义失真（本券取消时间清除后由旧时间戳夹具暴露：purge 此前在静默挡住该形态）；
+     * 一侧已知（含 MERGED 保留行）→ 可对账。窗内折叠（[canFoldAcrossChannels]）与越窗兜底
+     * （[findStaleSameSourceCandidateLocked]）共用，保证两路折叠的通道口径永不漂移。
      */
-    private fun purgeExpiredCrossChannelLocked(nowMs: Long) {
-        if (crossChannelIndex.isEmpty()) return
-        val it = crossChannelIndex.values.iterator()
-        while (it.hasNext()) {
-            if (nowMs - it.next().timestamp > CROSS_CHANNEL_WINDOW_MS) it.remove()
-        }
+    private fun crossChannelProvenanceFoldable(existing: LogSqlEntry, incoming: LogSqlEntry): Boolean {
+        if (existing.captureProvenance != CaptureProvenance.UNKNOWN &&
+            incoming.captureProvenance != CaptureProvenance.UNKNOWN &&
+            existing.captureProvenance == incoming.captureProvenance
+        ) return false
+        if (existing.captureProvenance == CaptureProvenance.UNKNOWN &&
+            incoming.captureProvenance == CaptureProvenance.UNKNOWN
+        ) return false
+        return true
+    }
+
+    /**
+     * T-SqlListCatchup 券 F1：**越窗兜底对账候选**（调用方须持 `synchronized(entries)`；仅在既有
+     * 同键去重与 5s 窗内跨通道折叠都未命中、即将开新行的分支里调用）。
+     *
+     * 候选 = [crossChannelIndex] 命中的该 crossKey 最后入队实例（跨通道索引已取消时间清除，超窗键
+     * 仍在场），须同时满足：
+     *  - **超窗**：不在 [CROSS_CHANNEL_WINDOW_MS] 内（窗内未折只会是同通道闸门拦下，另案处理）；
+     *  - **异通道标记**：[crossChannelProvenanceFoldable] 成立（同通道已知标记不互折）；
+     *  - **去重窗内**：`entry.timestamp - candidate.timestamp < [dedupeWindowMs]`（与 [isDuplicate]
+     *    同口径的单边窗判定——兜底不扩大去重语义：同一条语句 60s 后的再执行照常开新行）。
+     *
+     * 红线：融合走 [mergeDuplicateEntry]（只补空不覆盖——agent 先到的耗时/角标/位置全保留）；接管沿
+     * grace 截断摘掉的键不在索引里 → 本函数天然无候选 → P3「attach 即生效」可见性不回破。
+     */
+    private fun findStaleSameSourceCandidateLocked(
+        entry: LogSqlEntry,
+        crossHit: LogSqlEntry?,
+    ): LogSqlEntry? {
+        if (crossHit == null) return null
+        if (withinCrossChannelWindow(crossHit, entry)) return null
+        if (!crossChannelProvenanceFoldable(crossHit, entry)) return null
+        if (entry.timestamp - crossHit.timestamp >= dedupeWindowMs) return null
+        return crossHit
     }
 
     /** java.util.ArrayDeque 无按下标替换：按同一性重建（融合低频，O(n) 锁内可接受）。 */
@@ -175,6 +252,9 @@ class SqlLogEntryBuffer(
     private fun canDedupe(entry: LogSqlEntry): Boolean = entry.source != SqlSource.SHARDINGSPHERE
 
     private fun rebuildDedupeIndexLocked() {
+        // 券B：索引随队全量重建（dedupeExisting 裁剪 / 开关翻 true）——presence 同拍全量重算，
+        // 面板累积 map 必须同拍回退全量锚定（增量键集表达不了重建前后的键域跳变）。
+        countFullRebuildPending.set(true)
         dedupeIndex.clear()
         rebuildDedupeKeyPresenceLocked() // F83：计数随索引一并全量重建
         crossChannelIndex.clear() // T-CrossChannelDedupe：跨通道索引同锁同生命周期全量重建
@@ -227,6 +307,9 @@ class SqlLogEntryBuffer(
         nowMs: Long = System.currentTimeMillis(),
     ) {
         synchronized(entries) {
+            // 券B：接管沿重建是计数增量口径的失效点（grace 截断让索引键域与 presence 分叉——
+            // 条目仍留队的陈旧键被摘出索引，按键取 structureKey 的出口会失配），面板回退全量一次。
+            countFullRebuildPending.set(true)
             dedupeIndex.clear()
             // T-CrossChannelDedupe：跨通道索引与 dedupeIndex 同口径——接管沿同样只留「新鲜键」。
             // 陈旧键若留在跨通道索引里，接管后 agent 首批事件会被折进桥纪元条目（P3 症状的跨通道形态）。
@@ -267,6 +350,8 @@ class SqlLogEntryBuffer(
                 val it = dedupeCounts.keys.iterator()
                 it.next()
                 it.remove()
+                // 券B：键上限溢出静默淘汰最旧键——变更键集表达不了「哪个键被逐出」，面板回退全量对齐。
+                countFullRebuildPending.set(true)
             }
         }
     }
@@ -381,11 +466,19 @@ class SqlLogEntryBuffer(
         var crossDiagExisting: LogSqlEntry? = null
         var crossDiagMerged: LogSqlEntry? = null
         var crossUnfolded = false
+        // 券F1：越窗兜底对账的锁外诊断载荷（同 crossMerged 口径——只放指纹与通道，绝不含 SQL 原文/参数值）
+        var staleMerged = false
+        var staleDiagKey: String? = null
+        var staleDiagExisting: LogSqlEntry? = null
+        var staleDiagMerged: LogSqlEntry? = null
         val evictedEntries = mutableListOf<LogSqlEntry>()
         var storedEntry: LogSqlEntry? = null
         synchronized(entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true
+                // 券B：重复丢弃走 recordDedupeDrop（⨉N 计数 +1），登记变更键供面板按键重读徽章计数；
+                // 同桶融合（mergeChanged）不改 restoredSql → dedupeKey/structureKey 都不变，键登记足够。
+                markCountKeyLocked(entry.dedupeKey)
                 // 【反向验证探针锚点】T-AgentCaptureProvenance O-147 W1：注释掉下方 if 块 =
                 // 摘除「同桶信息融合」——SqlLogEntryBufferTest 的「控制台先到_agent后到_融合升级」
                 // 用例必红（保留条目缺源码/耗时/库标，跳转仍 MissingSource），恢复后转绿。
@@ -447,6 +540,32 @@ class SqlLogEntryBuffer(
                         crossDiagKey = crossKey
                         crossDiagExisting = crossHit
                     }
+                    // 【反向验证探针锚点】T-SqlListCatchup 券F1：注释掉下面 if 块 = 摘除越窗兜底对账，
+                    // CrossChannelStaleReconcileTest 的「agent先到/控制台先到」两超窗用例必红
+                    // （同一次执行留两行——真机第三轮压测缺陷形态），恢复后转绿。
+                    // 去重开启态：同 crossKey 的既有实例仍在队（索引不再做时间清除）但已超 5s 折叠窗、
+                    // 仍在去重窗内、异通道标记 → 按同一次执行的两份观测合并（先到者保留、补空不覆盖）。
+                    // 接管沿截断的键不在索引 → 无候选 → P3 可见性不回破；去重关闭态不折（语义不动）。
+                    if (dedupeEnabled && canDedupe(entry)) {
+                        val staleCandidate = findStaleSameSourceCandidateLocked(entry, crossHit)
+                        if (staleCandidate != null) {
+                            staleMerged = true
+                            staleDiagKey = crossKey
+                            staleDiagExisting = staleCandidate
+                            val merged = mergeDuplicateEntry(staleCandidate, entry)
+                            if (merged !== staleCandidate) {
+                                replaceEntryLocked(staleCandidate, merged)
+                                // 同键索引若指向被替换实例，同步重指（键不变：融合不动 restoredSql）
+                                if (dedupeIndex[merged.dedupeKey] === staleCandidate) {
+                                    dedupeIndex[merged.dedupeKey] = merged
+                                }
+                                // 跨通道索引重指到保留实例（候选与来件同 crossKey，键不变）
+                                repointCrossChannelLocked(staleCandidate, merged)
+                                staleDiagMerged = merged
+                            }
+                        }
+                    }
+                    if (!staleMerged) {
                     // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
                     val added = addNumbered(entry)
                     storedEntry = added
@@ -457,12 +576,19 @@ class SqlLogEntryBuffer(
                         dedupeIndex[added.dedupeKey] = added
                         // F83：键级在队计数 +1（与索引同条件同锁维护）
                         dedupeKeyPresence[added.dedupeKey] = (dedupeKeyPresence[added.dedupeKey] ?: 0) + 1
+                        // 券B：在队计数 +1，登记变更键供面板按 presence 净差增量（同键入队与后续淘汰的
+                        // 增减在 drain 间折叠为一次净变化，无悬挂余量）。
+                        markCountKeyLocked(added.dedupeKey)
+                    } else {
+                        // 券B：去重关闭期间 presence 不维护 / 不可去重条目（ShardingSphere）不在
+                        // presence 口径内——增量键集无法表达，面板回退全量重算（与全量重算的现状同价）。
+                        countFullRebuildPending.set(true)
                     }
                     // T-DedupeDecouple：跨通道索引与去重开关**解耦**——去重关闭时它照样维护，
                     // 否则兜底查不到候选（真机：关掉「SQL 去重」后同一次执行又出现两条）。
+                    // 券F1：不再做 5s 时间窗惰性清除——超窗键是越窗兜底的候选源（见 crossChannelIndex KDoc）。
                     if (canDedupe(added)) {
                         crossChannelIndex[crossChannelKey(added)] = added
-                        purgeExpiredCrossChannelLocked(System.currentTimeMillis())
                     }
                     while (entries.size > maxEntries) {
                         val evicted = entries.removeFirst()
@@ -473,6 +599,17 @@ class SqlLogEntryBuffer(
                             if (canDedupe(evicted)) {
                                 val remaining = (dedupeKeyPresence[k] ?: 0) - 1
                                 if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
+                                // 券B：在队计数 -1，登记被淘汰键（面板等价性用例断言 drain 集合包含被淘汰键）。
+                                markCountKeyLocked(k)
+                                // 券E：键被扫出键域（presence 摘键）**不再回退全量**——淘汰是确定性核销
+                                // （presence 减一、归零摘键，被淘汰键已在变更键集内），面板按净差即可正确
+                                // 扣账（structureKey 从键域内期缓存取）；此前「扫键是历史缺陷高发点 → 回退
+                                // 全量锚定」的保守口径在 buffer 恒满 + 异键风暴下每拍触发整表重算
+                                // （券E 账单与真机 102~232ms 单拍的共同背景），等价性由恒满淘汰序列
+                                // 随机对账用例钉住（SqlLogCountAccumulatorEquivalenceTest）。
+                            } else {
+                                // 券B：不可去重条目淘汰不在 presence 口径内——面板回退全量。
+                                countFullRebuildPending.set(true)
                             }
                             // T-SqlLogPerf P6：索引存的是「最近」实例，仅当被淘汰者恰为该键最新时才需要重算；
                             // F83：队内仍有同键余条（计数 >0）才付 O(maxEntries) 反扫重指次新（超窗重复入队
@@ -486,6 +623,9 @@ class SqlLogEntryBuffer(
                                     dedupeIndex.remove(k)
                                 }
                             }
+                        } else {
+                            // 券B：去重关闭期间 presence 不维护——面板回退全量。
+                            countFullRebuildPending.set(true)
                         }
                         // T-DedupeDecouple：跨通道索引回收与去重开关解耦（去重关闭时索引仍在维护）。
                         // 索引存该键**最后入队**实例、淘汰取**最旧**——命中被淘汰者即说明队内已无同键余条。
@@ -496,8 +636,23 @@ class SqlLogEntryBuffer(
                         evictedEntries.add(evicted)
                         evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
                     }
+                    }
                 }
             }
+        }
+        // T-SqlListCatchup 券F1：越窗兜底对账——同一次执行的两份观测合并，**不是新捕获**：返回 false
+        // （不触发 onEntryAccepted）、不计 ⨉N 徽章（不调 recordDedupeDrop，与窗内跨通道折叠同口径）；
+        // 元数据升级落历史（onEntryMerged）并重绘列表（内容通道）。
+        if (staleMerged) {
+            val diagExisting = staleDiagExisting
+            val diagMerged = staleDiagMerged
+            val diagKey = staleDiagKey
+            if (diagExisting != null && diagMerged != null && diagKey != null) {
+                notifyContentChangedThrottled()
+                onEntryMerged?.invoke(diagExisting, diagMerged)
+                logCrossChannelThrottled { crossChannelStaleReconcileDiagText(diagKey, diagExisting, entry, diagMerged) }
+            }
+            return false
         }
         if (duplicate) {
             recordDedupeDrop(entry.dedupeKey)
@@ -647,6 +802,61 @@ class SqlLogEntryBuffer(
      */
     fun drainEvictedCount(): Int = evictedSinceDrain.getAndSet(0)
 
+    // ---------- T-SqlListCatchup 券B：计数快照增量出口 ----------
+
+    /**
+     * T-SqlListCatchup 券B：未消费的内容通知计数——内容通知节流窗（数量 20 + 时间 200ms 双阈值）内
+     * 已入队但尚未触发内容监听器的条目数（读 [pendingContentNotify]，**只读不消费**）。
+     * 追赶期「落后 N 条」量化读数的缓冲段数据源；**券 D 追赶读数消费方**
+     * （`CaptureStatusBar` / `LogPerfProbe` 据此与桥通道未解析行数取大者）。
+     */
+    fun pendingNotifyCount(): Int = pendingContentNotify.get()
+
+    /**
+     * T-SqlListCatchup 券B：取走自上次调用以来累积的计数变更键（dedupeKey）并清空（消费即清）。
+     * 节流窗内同键反复变化只记键不记次数（Set 语义），有界性见 [changedCountKeys] KDoc。
+     * 单消费方约定（面板 EDT 刷新）：与 [drainEvictedCount] 同款——其他调用方调用会偷走面板的
+     * 增量信息（面板回退全量重算，正确性不受影响）。
+     */
+    fun drainChangedKeys(): Set<String> = synchronized(changedCountKeys) {
+        if (changedCountKeys.isEmpty()) emptySet()
+        else {
+            val drained = HashSet(changedCountKeys)
+            changedCountKeys.clear()
+            drained
+        }
+    }
+
+    /**
+     * T-SqlListCatchup 券B：取走计数全量重建标记并复位。置位点与各点为什么必须全量逐条见
+     * [countFullRebuildPending] KDoc。单消费方约定同 [drainChangedKeys]。
+     */
+    fun drainCountRebuildFlag(): Boolean = countFullRebuildPending.getAndSet(false)
+
+    /** T-SqlListCatchup 券B：按键读 ⨉N 去重丢弃计数（[dedupeCount] 的按键版，供面板按变更键重读；无记录返回 0）。 */
+    fun dedupeCountForKey(key: String): Int = synchronized(dedupeCounts) { dedupeCounts[key] } ?: 0
+
+    /**
+     * T-SqlListCatchup 券B：按键读在队计数（[dedupeKeyPresence] 的消费出口）。
+     * 注意：仅「去重开启 + 可去重条目」有准确读数——去重关闭期间 presence 冻结不维护，读数无效
+     * （该状态下增量口径整体失效，buffer 置全量重建标记，本出口不会被面板在增量路径消费）。
+     */
+    internal fun dedupePresenceForKey(key: String): Int = synchronized(entries) { dedupeKeyPresence[key] } ?: 0
+
+    /**
+     * T-SqlListCatchup 券B：按键取该键保留实例的 structureKey（走 [dedupeIndex] O(1) 查表；
+     * structureKey 惰性缓存首算一次后直达，仅增量路径的新键支付一次指纹计算）。键不在索引返回 null。
+     */
+    internal fun structureKeyForKey(key: String): String? = synchronized(entries) { dedupeIndex[key]?.structureKey }
+
+    /**
+     * T-SqlListCatchup 券B：登记计数变更键。调用方须已持 `synchronized(entries)`——与 presence
+     * 维护同锁登记，保证 drain 读到的键在「去重开启 + 可去重」增量口径内有效。
+     */
+    private fun markCountKeyLocked(key: String) {
+        synchronized(changedCountKeys) { changedCountKeys.add(key) }
+    }
+
     /**
      * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
      * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
@@ -657,7 +867,11 @@ class SqlLogEntryBuffer(
             dedupeIndex.clear() // T-SqlLogPerf P6：索引随队清空
             dedupeKeyPresence.clear() // F83：键级在队计数随队清空
             crossChannelIndex.clear() // T-CrossChannelDedupe：跨通道索引同生命周期清空
+            // 券B：清空后悬挂的变更键作废（面板全量重建不消费键集），集合一并清空保持有界口径。
+            synchronized(changedCountKeys) { changedCountKeys.clear() }
         }
+        // 券B：clear 是兜底全量重建点——累积 map 必须与 buffer 双双清零对齐。
+        countFullRebuildPending.set(true)
         resetDedupeCounts()
         sequenceCounter.set(0)
         pendingContentNotify.set(0) // 面板即将全量重建，悬挂的节流余量作废
@@ -668,6 +882,8 @@ class SqlLogEntryBuffer(
     /** 去重丢弃计数归零（清空列表、面板重新开启去重时调用）。 */
     fun resetDedupeCounts() {
         synchronized(dedupeCounts) { dedupeCounts.clear() }
+        // 券B：丢弃计数整体清零——变更键集表达不了「全部清零」，面板 ⨉N 累积 map 回退全量对齐。
+        countFullRebuildPending.set(true)
     }
 
     /**
@@ -709,9 +925,20 @@ class SqlLogEntryBuffer(
                 if (canDedupe(entry)) {
                     val remaining = (dedupeKeyPresence[k] ?: 0) - 1
                     if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
+                    // 券B：登记变更键供面板按 presence 净差增量。
+                    // 券E：键被扫出键域不再回退全量——与淘汰路径同一机制（确定性核销：presence 减一、
+                    // 归零摘键，被淘汰键随变更键集出域），见 addEntry 淘汰循环内的券E注释。
+                    markCountKeyLocked(k)
+                } else {
+                    // 券B：不可去重条目不在 presence 口径内——面板回退全量。
+                    countFullRebuildPending.set(true)
                 }
+                // T-SqlLogPerf P6：单条删除仅重算该键——反扫队内余条重指或摘键
                 val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
                 if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
+            } else if (removed) {
+                // 券B：去重关闭期间 presence 不维护——面板回退全量。
+                countFullRebuildPending.set(true)
             }
             // T-DedupeDecouple：跨通道索引重算与去重开关解耦（去重关闭时索引仍在维护）。
             // 删除可能拿走该键**最新入队**实例（与淘汰不同），故必须反扫队内余条而非直接摘键。
@@ -869,7 +1096,7 @@ class SqlLogEntryBuffer(
      */
     private fun notifyContentChangedThrottled() {
         val pending = pendingContentNotify.incrementAndGet()
-        val now = System.nanoTime()
+        val now = nowNanos()
         if (pending >= CONTENT_NOTIFY_BATCH ||
             now - lastContentNotifyNanos.get() >= CONTENT_NOTIFY_INTERVAL_NANOS
         ) {
@@ -879,6 +1106,47 @@ class SqlLogEntryBuffer(
         } else {
             onContentNotifySuppressed?.invoke()
         }
+    }
+
+    // ---------- T-SqlListCatchup 券B2：悬挂节流余量的过期冲洗 ----------
+
+    /**
+     * 券B2 测试缝：注入纳秒时钟（null = 生产 [System.nanoTime]）。悬挂态判定与节流时间戳
+     * 统一走 [nowNanos]——时间注入缝照券 B 既有口径（别赌墙钟，用例注入固定时钟）。
+     */
+    @Volatile
+    internal var nowNanosForTest: Long? = null
+
+    private fun nowNanos(): Long = nowNanosForTest ?: System.nanoTime()
+
+    /**
+     * T-SqlListCatchup 券B2：悬挂态判定——pending>0 且距上次内容通知已超
+     * [CONTENT_NOTIFY_INTERVAL_NANOS]。这是「按既有双阈值规则早该通知、却没有后续条目再触发」
+     * 的悬挂态：风暴末尾末批变更不足 [CONTENT_NOTIFY_BATCH] 且落在上次通知 200ms 窗内，之后
+     * 无新条目则再无任何触发源（pendingContentNotify 只在通知触发或 clear 归零）——这几条变更
+     * 一直不落 UI，追赶徽章滞留「落后 N 条」直到下一条 SQL 或 clear，风暴结束后的静默期正好
+     * 命中该形态。供面板 2s 诊断拍探询，命中即 [flushPendingNotify]。
+     */
+    fun hasStalePendingNotify(): Boolean {
+        if (pendingContentNotify.get() <= 0) return false
+        return nowNanos() - lastContentNotifyNanos.get() >= CONTENT_NOTIFY_INTERVAL_NANOS
+    }
+
+    /**
+     * T-SqlListCatchup 券B2：过期冲洗——pending>0 时补上「按双阈值规则本应发生却无人触发」的
+     * 那次内容通知：归零 + 刷新时间戳（冲洗视同一次真实通知，此后新条目照常走既有双阈值路径，
+     * 窗内抑制、超窗即时）+ 触发 listeners（管理器侧 notifyUi 合拍链幂等，refreshList 读当下
+     * 快照，不丢条目）。pending=0 时 no-op（不触发 listeners）。消费即清语义对齐 [drainChangedKeys]。
+     *
+     * 线程安全：pendingContentNotify 为原子量；与并发生产者的竞争最坏是「冲洗与阈值触发各发
+     * 一次幂等通知」（两者都不丢变更），不会吞掉对方的归零——本该由阈值触发的通知被冲洗替代时，
+     * 生产者的 pending 归零后其变更已被冲洗的那次通知覆盖（refreshList 读触发时刻之后的快照）。
+     */
+    fun flushPendingNotify() {
+        if (pendingContentNotify.get() <= 0) return
+        pendingContentNotify.set(0)
+        lastContentNotifyNanos.set(nowNanos())
+        notifyChanged()
     }
 
     companion object {

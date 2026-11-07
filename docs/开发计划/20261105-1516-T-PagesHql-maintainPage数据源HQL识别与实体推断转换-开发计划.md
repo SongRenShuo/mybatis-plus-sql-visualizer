@@ -1,6 +1,6 @@
 # T-PagesHql：maintainPage XML 的 `<datasource>` 识别 HQL 并按实体推断转换（2026-11-05）
 
-> 状态：待拍板（D-1~D-6；未动生产代码）
+> 状态：**已实施并合 master**（`98554a4f`+`d04ffa2d`，泛化件 `8ce33ee4` 删零产出常量；D-1~D-6 拍板与实施记录见本册 §实施记录）
 > 触发：用户 2026-11-05 反馈「这种场景下的 hql 没有正常识别」，并建议「通过 entityClass 进行推断」。
 > 样本：`mybatis-plus-sql-visualizer-demo/mybatis-plus-demo/src/main/resources/pages/user-maintain.xml`；真实工程截图（`<pages>/<maintainPage entityClass="com.vtradex...BaseLocation">/<datasource>` 内为 HQL，含 `#{SESSION_BASE_ORGAN}` 框架占位符与三张副表）。
 

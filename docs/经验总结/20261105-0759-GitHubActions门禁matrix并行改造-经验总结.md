@@ -255,3 +255,136 @@ run#13 是冷缓存轮：改 `buildSrc` 会让 setup-gradle 的缓存 key 换新
 **升级 IPGP（`settings.gradle.kts:36`）后必须同步改这个钉子**，否则 CI 会继续用旧版 verifier 跑判定且不报错——门禁绿不代表按新版口径验过。具体操作写在 `docs/发行说明/T-ReleaseChecklist-发行检查清单.md` 的 RC-P2c（跑一次 `:verifyPlugin` → 查缓存里的 jar 版本 → 改钉子 → 跑 `VerifierCliVersionGuardTest` 确认绿）。
 
 守卫本身只在本机缓存里有 jar 时生效（CI 上会 skip），**是本地防线而不是 CI 防线**——所以它挂在「升级 IPGP」这个动作上，而不是挂在门禁上。
+
+## 九、测试时长的真相：本地那 5 片从来没并行过（2026-11-05 实测）
+
+做「纯逻辑桶独立成腿」时量出来的，推翻了一个长期假设：
+
+**`./gradlew testShards` 在本机的 5 个分片是串行执行的**，`laneAtEnd` 连续两轮全是 `[0,0,0,0,0,0]`，
+各片 END 时刻逐片相接。原因是 `org.gradle.parallel=true` 只在**跨项目**并行，而 5 个 `testShardN`
+同属 root project。所谓「5 片并行」只在两种场合成立：CI（每片独立 runner）与
+`dev-support/test-shards-parallel.ps1`（跨进程）。
+
+这条决定了所有「拆腿提速」的收益方向：
+
+| 场景 | 拆成两条腿的收益 |
+|---|---|
+| 本机（串行） | 总量与失衡下降是实的（execSum 961.3→735.8s，失衡 +20%→+6.6%），但两条腿**串着跑**，墙钟只省总量 |
+| CI（并行） | 两条腿各付一遍固定开销（缓存恢复 2 + 编译 3），test 腿墙钟反而 11.0→11.7 分钟 |
+
+配套实测（2026-11-05）：
+
+- 平台类 446 / 4250 例 / 735.8s；纯逻辑 374 / 4416 例 / 226.6s；合计 833 类、配置期断言并集零遗漏；
+- 全量轮 `tests=8728 / 0 失败`，分片 850/818/781/910/891；
+- 权重画像刷新后一轮：分片 159.3/167.6/155.7/155.1/132.2s，`relCrit 1.088`（<1.10 告警线）。
+
+## 十、JUnit5 不值得迁（速查）
+
+平台 JUnit3 路径已经「每 JVM 一个 Application + 每 JVM 一个 light project 且跨类复用」，
+平台测试 77% 的时间又跑在 EDT 上（`@Execution(CONCURRENT)` 被串行化），所以换框架的上限是 0~10%，
+而成本是 398 个平台类 + 449 个纯逻辑类、约 550~1100 人时。详见
+`docs/调研报告/20261105-1830-JUnit5迁移可行性与测试提速替代方案-调研报告.md`。
+
+## 十一、今日 CI 踩坑清单（2026-11-05 汇总，按「下次别再踩」排序）
+
+| # | 现象 | 真因 | 处置 / 判据 |
+|---|---|---|---|
+| 1 | workflow 的 PowerShell 步骤 2 分钟炸，报语法错 | `$($keep -join ',' / '')` ——手滑写坏的表达式 | **workflow 里的 PowerShell 片段先在本地用真实输入跑一遍**；整段可用 `[System.Management.Automation.Language.Parser]::ParseFile` 做纯语法校验 |
+| 2 | 落盘文件里 `instances = ` 与 `mysql84, pg16` 断成两行，测试判「矩阵未声明任何实例」 | `@("# 注释", "x = " + ($arr -join ', '))`：数组字面量里 `+` 与 `,` 的优先级把第二个元素切成两项 | 一律用 `-f` 格式化：`$out += ("instances = {0}" -f (...))`；**落盘类操作要把产物读回来逐行验形态**，退出码 0 不代表内容对 |
+| 3 | e2e 业务请求全 HTTP 500，而 agent 心路正常 | JDBC URL 带 `&`，作为 `-P` 参数穿过 `gradlew.bat` 被 **cmd 当命令分隔符**截断 | 参数改**文件注入**（写 `gradle.properties`，由 `providers.gradleProperty` 读回） |
+| 4 | `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，而官方链接存在 | IPGP 读**项目内缓存**的 product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore），缓存早于发布 | `rm -rf .intellijPlatform/productReleases` 重跑；`--info` 可见 `Reading product releases listing from cache: …`；CI 不受影响 |
+| 5 | 分片偶发 `ClosedFileSystemException`（读 243 的 `database-plugin.jar`） | Gradle zip 文件系统句柄被关闭后又被 plugin-structure 使用 | **七条重跑路线全部证伪**：原地重跑 ❌ → `--stop` ❌ → `--stop`+`--max-workers=1` ❌ → 删 `transforms/*/transformed/idea*` ❌ → 删 `modules-2` 的 IDE 产物 ❌ → `--no-configuration-cache` ❌ → 再关 `vfs.watch` ❌（run#23/#24/#25 共五次命中，每次 16s~1m41s 同一句话）。**run#25 的诊断把「文件坏了」也排除了**：那个 jar 存在、147,727,903 字节，与本机字节数一模一样。**判断**：重跑类修法在这个形态上注定无效（同一份 workspace 的确定性执行序）；清 GRADLE_USER_HOME 也无效，因为 IPGP 把 IDE 布局索引缓存在**项目目录** `.intellijPlatform/layoutIndex`。现第三级清项目侧缓存（`layoutIndex` + `extracted-plugins` + 重解包），第四级退到干净工作树（CI 专用）。**操作层面的应急**：手动「Re-run failed jobs」= 全新 workspace，比任何脚本级重跑都可靠。
+| 6 | 分片本身 `BUILD SUCCESSFUL`，但 job 判红在三个 post 动作 | 收尾清理时文件仍被残留 JVM 持有（该轮日志末尾有 `Terminate orphan process: pid … (java)`） | 先观察是否复现；若复现，在测试步骤末尾补 `./gradlew --stop` 收尾 |
+| 7 | 全量 12 实例的 `dialectExternalVerify` 跑 91 分钟仍未完 | 跨洋 RTT × 每实例上千次建表/查询的乘数效应（本地同一套矩阵 5~10 分钟） | CI 只跑代表实例子集（`mysql84`+`pg16`，`CI_DIALECT_KEYS` 可覆盖），预算 40/50 分钟；**全量以本地 `releaseGate` 为准** |
+| 8 | `testFast` 以为「秒级」，CI 上 4382 例要 4.5 分钟 | 本地热 JVM + 6 核，CI 冷 JVM + 2 核 | 按 CI 实测估时；本机与 CI 的单测耗时不可互相外推 |
+| 9 | 子集版方言腿跑通了，但只差 2.2 分钟就撞步骤上限（27.8 vs 30） | 成本**按字计费**：mysql84 262 个保留字 1113s（≈4.3s/字）、pg16 86 个 196s（≈2.3s/字），加冷启动 6 分钟；跨洋 200ms RTT × 每字多次往返 | 预算按「实测 + 余量」订，别按「感觉 5~15 分钟」订；要再压缩只能减保留字或把 runner 挪近网，**加预算只是延迟失败** |
+
+**run#9 / 推送#21 收官读数（2026-11-05，两个 workflow 首个全绿轮）**：夜间 11 腿全绿（含首次真绿的真机 DB 与 e2e），总 30.5 分钟，唯一长腿是 dialect 27.8 分钟；推送档全绿 13.2 分钟，关键路径是 `fast`（601s）而不是分片（433~495s）——快桶单腿装的是本地 226s 的量，等于一个半分片，**它才是便宜档的天花板**。
+
+**方法论层面两条**：①参数面板/落盘类脚本，**产物要读回来验形态**；②CI 上「偶发」的红先做**处置梯度实验**（原地→换 daemon→降并发→换目录），每一步都贴读数，别一步跳到结论——本轮 zip-FS 就是前三级都证伪后才定位到磁盘状态。
+
+## 十二、把「关键路径」继续压：夜间补齐兼容面 + 快桶拆两片 + 第六片 A/B（2026-11-05 晚）
+
+前一轮读数把两件事暴露得很清楚：**夜间的覆盖是「测试面全、验证面零」**（verifyPlugin 与
+marketplace 只有人手动 dispatching 手动门禁才跑，夜里没人看），**推送档的天花板是快桶腿而不是分片**。
+
+### 12.1 夜间补 `build → verifyplugin → marketplace`
+
+- 三条腿照抄手动门禁的同名 job（工件名同为 `build-outputs`，两边口径必须同步改）。
+- 顺序不能省 `build`：`verifyPlugin` / `verifyMarketplace` 吃的是「已打包的那份字节」，
+  各自重编译会让「验过的字节」与「要发的字节」不是同一份。
+- 墙钟代价为零：它们与测试/真机腿并行，夜间关键路径仍是方言腿（23~28 分钟）。
+- **首跑就抓到一个潜伏的坑（marketplace(263) 70 秒红）**：`verifyMarketplace<tag>` 里的 `ideDir()` 是硬校验——
+  只在 gradle 缓存的 `transforms/*/transformed/<IDE 目录名>` 里找发行版，找不到直接报
+  「IDE 发行目录 … 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）」。
+  243/253 一直能过，是因为历史上 build job 内联跑过 verifyPlugin、把它们解包进了可写缓存；
+  **263 是后加的目标，从来没被解包过**。手工门禁同样中招（只是还没轮到它跑）。
+  处置：marketplace 每条腿前加一步「确认验证目标 IDE 已解包」，缺失时先跑
+  `:verifyPlugin -PverifyIdes=<tag> -x buildPlugin`（约 4 分钟，只在那条腿付），再跑 verdict。
+  matrix 改 `include`（tag + ide 目录名成对，名字错了会永远判缺失、白跑一次 verifyPlugin）。
+- **`if` 判 `needs.build.result == 'success'` 而不是 `!cancelled()`**：`changes` 判无代码提交那天
+  `build` 是 skipped，而 skipped 的依赖对 `!cancelled()` 是「继续跑」——它会去下载不存在的
+  工件然后红。这是本仓第二次踩「skipped 不等于通过」的同一个坑（第一次是 build-plugin 的聚合 gate）。
+
+### 12.2 快桶拆两片（`-PfastBucketSliceCount=2 -PfastBucketSlice=i`）
+
+- 切法复用分片均衡器那套画像：`dev-support/test-shard-weights.tsv` 权重降序 + 同权按类名升序，
+  装当前最轻片（LPT）。零画像类取中位数。
+- 配置期实测（本机冷配置）：**187 类 / 116.4s + 187 类 / 116.4s**，两片完全对齐（全集 374 类 232.8s）。
+- CI 实测（run#23）：**373s / 471s**，对比拆前 601s（−21% / −130s）。两片没有像画像预示的那样对齐
+  （116.4 : 116.4 → 373 : 471，偏差 26%），说明画像刻度能定「谁重」，但定不了「这批类在 CI 的冷 JVM
+  上分摊多少」——分片那边同样的偏差被 5 片平均掉了。要再压，只能说下表里实测定权（像分片那样两轮挤出自愈）。
+- 覆盖面红线做成配置期 `require`：两片并集必须恒等于 `fastBucketClasses − shardExcludeClassNames`。
+  这条断言是本轮最值钱的一行——快桶漏一片就是 2000+ 例在 CI 上静默不跑，而总数看起来只少一点。
+- 结果目录仍写 `build/test-results/testFast`：切片模式只给 CI（每片独占一台 runner）。
+  本机串行跑两片会混计进 `testShards` 聚合——`shardResultDirs` 是**位置语义**列表，不能随便插成员。
+
+### 12.3 第六片 A/B
+
+- `-PtestShardCount=6` 上线前先算账：每片约 2.4 分钟是同等的编译固定成本，测试执行按 6/5 缩
+  （本地片均值 147s × 3 ≈ 440s → 约 370s），预期 433~495s → 约 400~440s，整轮省 1~1.5 分钟。
+- **A/B 实测结论（run#23）：不合算，退回 5 片。** 6 片的分片步骤 455~492s，5 片基线 433~495s，
+  即「多一条腿、每片几乎不降」；墙钟上 test(5) 反而 11.8 分钟（基线 10.2~10.5）。原因是每条腿都要
+  重新编译（约 2.4 分钟）与恢复缓存（89~219s），这两项按腿数线性增长，把切分收益吃掉了——
+  与 T-TestPerf5 当年「6 片 execSum 膨胀、回劣」同向。
+- 下次要动片数，先看 `dev-support/test-shard-weights.tsv` 的实际分布（Top3 类占比）再决定，
+  别按「总时长 ÷ 片数」推。
+
+## 十三、GitHub 的 schedule 靠不住：加一条幂等兜底派发（2026-11-06 凌晨实证）
+
+夜间全量 `nightly-full.yml` 的 cron 是 `0 18 * * *`（北京 02:00）。2026-11-05 当天：
+
+| 观察 | 读数 |
+|---|---|
+| cron 应触发时刻 | 18:00Z（北京 02:00） |
+| 实际首次检查 | 19:12Z —— 晚了 72 分钟，无任何 `event=schedule` 记录 |
+| 90 分钟守望后 | 20:14Z —— 晚了 2 小时 14 分，仍然没有 |
+| githubstatus.com | All Systems Operational（不是平台事故） |
+| 仓库状态 | `default_branch=master`、`archived=false`、`disabled=false`、workflow `state=active`、最近 push 16:23Z |
+| 历史 | 9 轮夜间**全是 `workflow_dispatch`**，cron 从上线起一次没跑过 |
+
+**结论**：GitHub 的定时器是 best-effort，官方不保证准时；把「每晚自动跑」押在它身上等于没有。
+处置：在 `push-test.yml` 加一条 `nightly-nudge`（需要 `permissions: actions: write`）：
+
+- 判据同源：夜间只在「前 24 小时有代码提交」时真跑，而这条 job 只在 push 到 master 时执行，
+  所以「有 push 的那天」正好是夜间该跑的那天；
+- **幂等**：先查**本轮 cron 周期**（起点＝最近一次应触发的 18:00Z）内有没有夜间轮，有就跳过——
+  避免和迟到的 schedule 撞成两轮（夜间并发组 `cancel-in-progress: false`，撞上会排队白烧一轮）；
+  首版写成「UTC 日历日」，结果被白天手动跑的 run#9（14:11Z）吃掉：job 绿了，什么都没派发。
+  **教训：幂等判据要按「业务周期」写，不能按日历日写**；两个分支都用桩 gh 本地跑过（0 轮→派发 / 2 轮→跳过）；
+- **不连坐**：查询失败（gh 异常）只打 warning 就退出，不让兜底动作把推送轮打红。
+
+教训写在这里而不是只写在脚本里：**定时类自动化要有「谁保证它真的跑了」的答案**。
+GitHub Actions 的答案只能是「另一条确定会跑的 workflow」。
+
+### 12.4 夜间十腿全绿首轮读数（2026-11-06 凌晨，run#11）
+
+`build` 7.3 / `verifyplugin` 8.5 / `marketplace` 7.4 · 7.2 · 9.8（263 含约 4 分钟 IDE provisioning）/
+`tests` 8.1~10.8 ×5 / `fast` 9.1 · 9.8 / `extras` 8.7 / `database` 11.2 / `e2e` 4.3 / `dialect` 24.9。
+**17 个 job 全绿，整轮约 25 分钟**，关键路径仍是方言腿。
+
+三条结论：
+- 夜间现在真正覆盖「测试 + 兼容 + 市场」三面，而这三面此前只有手动 dispatch 才有读数；
+- `marketplace(263)` 在补了 provisioning 前置后转绿——**2026.3 在 CI 上的 marketplace 与 verifyPlugin
+  首次拿到实跑读数**（9.8 分钟，其中约 4 分钟是解包目标 IDE 的一次性成本）；
+- `fast` 两片都绿（上一轮的 `ShardingSphereLogParserTest` 没复现，属偶发，已补断言消息待下次定因）。

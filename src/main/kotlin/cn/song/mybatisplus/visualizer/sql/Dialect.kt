@@ -1184,6 +1184,76 @@ object VastbaseDialect : Dialect {
 }
 
 /**
+ * GoldenDB（中兴 ZXCLOUD GoldenDB 分布式数据库）方言（T-GoldenDbDialect 券 A）：第 15 个方言。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级**（《GoldenDB 产品手册_开发支持 V6.1.03.10》，2025-03 构建，379 页；页码即 PDF
+ * 物理页号）。无真机（P-1：无公开容器镜像、测试服务器无实例）——全部形态按 PDF 逐字页码取证，
+ * **未经真机引擎验证**；真机到位后逐项升档（照 GaussDB/HighGo/Vastbase 的文档级先例）。
+ *
+ * ## 逐项依据（全部带 PDF 页码）
+ *
+ *  - 分页 [renderMySqlStyleLimit]（`LIMIT [offset,] row_count`，offset 从 0 起算）：p73 分页
+ *    专章，示例 `LIMIT 5` / `LIMIT 0,5` / `LIMIT 5,10` 逐字；
+ *  - 事务 `START TRANSACTION`：p83 事务控制语句专章（1.7.3），与 MySQL 同形；
+ *  - 引用反引号 `` `x` ``：p320 `SHOW CREATE PROCEDURE` 回显 `` `root`@`zte-179` `` 形态；
+ *  - upsert [renderMySqlStyleUpsert]（`ON DUPLICATE KEY UPDATE col = VALUES(col)`）：p66
+ *    多行 VALUES + 冲突更新示例逐字；`REPLACE INTO`（p282）与 `MERGE INTO`（p282，Oracle 风格）
+ *    是整语句形态，本插件取 INSERT+后缀形态；
+ *  - DELETE 的 `LIMIT` 尾段 **true**：1.10.8.2 DELETE 文法（p274）逐字含 `[ORDER BY ...]` 与
+ *    `[LIMIT row_count]`，p276 另给可执行示例
+ *    `DELETE FROM somelog WHERE user = 'jcole' ORDER BY timestamp_column LIMIT 1;`——文档级双证
+ *    （比 GaussDB/openGauss 的「语法接受、语义未验证」更强），故不像 PG 族先取 false；
+ *  - 保留字 [GOLDENDB_RESERVED]：p351-p355 三张分模式保留字表并集 384 词（见该 KDoc）。
+ *
+ * ## 两条口径边界（防后人读 PDF 走偏）
+ *
+ * 1. **`oracleMode` 是驱动连接参数、语义未取证（P-2），不参与方言推断**。驱动默认 true
+ *    （`ConnectionPropertiesImpl` 构造器字节码 `iconst_1` 实测），但 PDF 全文检索
+ *    `oracle_mode`/`compatible_mode`/`兼容模式` 零命中——它**不是**服务端 SQL 兼容模式开关，
+ *    依磐维教训（`DialectInference.kt` 的 `db_compatibility` 误判先例）不按参数名猜语义，
+ *    恒按 MySQL 形态渲染；真机对照实验（`oracleMode=true/false` 双连接跑
+ *    `SELECT SYSDATE FROM DUAL`）到位前不分叉。
+ * 2. **1.9.6「双库运行兼容」建议（p159-p166）不是方言语法要求，按 MySQL 形态渲染是正确选择**。
+ *    该章建议「避免使用 LIMIT，使用 ROWNUM」「避免 IFNULL 用 nvl」等——前提是「同一份 SQL 想
+ *    同时跑 Oracle」；本插件渲染的 SQL 是**给 GoldenDB 单库执行**的，没有该需求。GoldenDB 默认
+ *    SQL 方言是 MySQL 形态（p37「完全兼容 MySQL 客户端」+ p66/p73/p320 三面一致），Oracle 兼容面
+ *    （ROWNUM/DUAL/SEQUENCE/MERGE INTO，p224-227、p285、p335-367）是增量能力而非默认模式。
+ */
+object GoldenDbDialect : Dialect {
+    override val name: String = "GoldenDB"
+
+    /** p83 事务控制语句专章（1.7.3），MySQL 同形（见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
+
+    /** p73：`LIMIT [offset,] row_count`，offset 从 0 起算（MySQL 形态）。 */
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    /**
+     * p274 DELETE 文法逐字含 `[ORDER BY ...] [LIMIT row_count]` + p276 可执行示例
+     * `DELETE FROM somelog WHERE user = 'jcole' ORDER BY timestamp_column LIMIT 1;`
+     * （文档级，真机复核「真删 1 行」后完全销案，P-5）。
+     */
+    override val supportsDeleteLimit: Boolean = true
+
+    /** p320：`SHOW CREATE PROCEDURE` 回显反引号标识符。 */
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val identifierQuotes: Set<Char> = setOf('`')
+
+    /** p351-355 三表并集 384 词（见 [GOLDENDB_RESERVED] KDoc 的噪声清理记录）。 */
+    override val reservedWords: Set<String> = GOLDENDB_RESERVED
+
+    /** p66：`ON DUPLICATE KEY UPDATE col_name=expr`（含 `c=VALUES(a)+VALUES(b)` 示例逐字）。 */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
  * 方言注册表：按名称获取方言，未知名称回退 MySQL。
  */
 object DialectRegistry {
@@ -1204,6 +1274,7 @@ object DialectRegistry {
         GaussDbDialect,
         HighGoDialect,
         VastbaseDialect,
+        GoldenDbDialect,
     )
 
     /**

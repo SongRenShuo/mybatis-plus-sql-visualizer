@@ -138,6 +138,10 @@ import cn.song.mybatisplus.visualizer.log.SqlLogPanel.Companion.DIAGNOSTICS_TICK
         val label = statusConsoleLabel ?: return
         val texts = if (manager.capturing) {
             runCatching {
+                // T-SqlListCatchup 券B2：2s 诊断拍过期冲洗——悬挂的节流余量（风暴末尾末批变更不足
+                // 批量阈值、之后无新条目再触发）最迟 2s 补一次通知上屏，列表与追赶徽章不再滞留
+                // 「落后 N 条」。flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有生产线程同路径安全。
+                if (manager.entries.hasStalePendingNotify()) manager.entries.flushPendingNotify()
                 val am = AgentManager.getInstance(project)
                 captureStatusLineText(
                     CaptureStatusLine(
@@ -148,10 +152,23 @@ import cn.song.mybatisplus.visualizer.log.SqlLogPanel.Companion.DIAGNOSTICS_TICK
                         agentLivePids = am.healthyPids(),
                         agentPaused = am.userPaused,
                         agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                        // T-IbatisPanwei 券 D：未登记驱动具名事实（有界、只类名）——空态诊断行在
+                        // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
+                        unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
+                            .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
+                        // T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计（心跳 dropped 键，>0 挂尾）——
+                        // 风暴期队列溢出丢弃从此在用户视角可见，不再只有 agent 进程内计数
+                        agentDropped = cn.song.mybatisplus.visualizer.log.agent
+                            .AgentAttachReport.latest()?.dropped ?: 0L,
+                        // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
+                        catchUpBehind = catchUpBadgeState
+                            .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),
                     ),
                 )
             }.getOrNull()
         } else {
+            // 非捕捉态：追赶节流复位（下次捕捉从干净态起算）
+            catchUpBadgeState.reset()
             null
         }
         if (texts == null) {

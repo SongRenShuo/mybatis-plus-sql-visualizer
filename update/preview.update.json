@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.4",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.4/mybatis-plus-sql-visualizer-2026.11.4.zip",
-  "changeNotes": "增强捕获修好 Oracle，MyBatis 业务 SQL 不再只剩连接校验那一条，失败语句也不再重复上报\n打开预览不再自动弹出数据源选择列表，没有唯一目标时保持未绑定，点「执行 SQL」时再选源\n改了 IDEA 方言并刷新预览后，底部方言提示不再按旧方言报冲突，与顶部状态和实际渲染同源\n修掉三处界面线程上的重活，预览与执行不再卡顿，IDE 日志也不再刷告警\n没有匹配方言的数据源时，直接点名该给哪个源启用方言，并给出「打开数据源属性」入口\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-04",
+  "version": "2026.11.8",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8/mybatis-plus-sql-visualizer-2026.11.8.zip",
+  "changeNotes": "2026.3 上切换数据源不再只剩当前一个源，也不会静默跑到旧库\n选了平台不提供的数据源会直接阻断并说明原因，不再悄悄换源执行\n日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-07",
   "sinceBuild": "243"
 }

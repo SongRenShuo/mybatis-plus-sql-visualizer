@@ -88,7 +88,11 @@ class DynamicUnloadWriteSafeTest : BasePlatformTestCase() {
         }
         val api = DynamicInstallSupport.PlatformApi(
             dynamicPlugins = Any(),
-            allowLoadUnloadMethod = dummyMethod(),
+            // T-DynUpdate263：预检入口换成能力族；本用例只验派发模态，不触预检
+            unloadGate = DynamicInstallSupport.UnloadGate(
+                DynamicInstallSupport.UnloadGateFamily.LEGACY,
+                dummyMethod(),
+            ),
             unloadPluginMethod = dummyMethod(),
             unloadPluginOptions = null,
             installAndLoadMethod = dummyMethod(),

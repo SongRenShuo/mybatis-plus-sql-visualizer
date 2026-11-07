@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.SqlDateLiteral
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 
 /**
@@ -53,41 +54,14 @@ class LogSqlRestorer {
     }
 
     /**
-     * 日期族类型标注 → ANSI 类型字面量（R3 缺口矩阵修复）。按简单名归一匹配
-     * （兼容 MyBatis 简单名 `Timestamp`、Hibernate JDBC 类型 `TIMESTAMP`、全限定名 `java.sql.Timestamp`）。
+     * 日期族类型标注 → ANSI 类型字面量（R3 缺口矩阵修复）。
      *
-     * 刻意不包装（边界登记）：
-     * - `LocalTime`/`Time`：纯时刻比较语义取决于目标列类型（对 TIME 列各库皆可、对 datetime 列
-     *   表现分裂），且 Oracle 不支持 ANSI `TIME` 字面量——维持引号；
-     * - `OffsetDateTime` 等带时区值：ANSI TIMESTAMP 字面量不收时区后缀，方言级包装需
-     *   `TO_TIMESTAMP_TZ` 一类机制，超出本件（登记决策点 D3）；
-     * - 无类型标注：启发式无法区分日期串与字符串列的日期值（`WHERE code='2025-01-01'`），
-     *   误包装会改变字符串列语义（决策点 D2）。
+     * T-DateLiteralBackfill：规则已上提至 [SqlDateLiteral.renderFor]（全链唯一实现），本函数只做
+     * 委托；R3 的 family 限制与「形态不匹配回落引号」语义保持不变（D4 的 TIMESTAMP 族纯日期
+     * 边界由共享渲染器统一产出 `DATE`）。
      */
-    private fun renderDateFamily(value: String, type: String): String? {
-        val v = value.trim()
-        if (v.isEmpty()) return null
-        return when (type.substringAfterLast('.')) {
-            "LocalDate" ->
-                if (DATE_RE.matches(v)) "DATE '$v'" else null
-            "Date", "DATE" ->
-                when {
-                    DATE_RE.matches(v) -> "DATE '$v'"
-                    TS_RE.matches(v) -> "TIMESTAMP '${normalizeTs(v)}'"
-                    else -> null
-                }
-            "Timestamp", "LocalDateTime", "TIMESTAMP", "DATETIME" ->
-                if (TS_RE.matches(v)) "TIMESTAMP '${normalizeTs(v)}'" else null
-            else -> null
-        }
-    }
-
-    /** ISO 'T' 分隔符归一为空格（ANSI 字面量不接受 'T'；LocalDateTime.toString 产出 'T'）；缺秒补 `:00`（Oracle 实测缺秒 ORA-01861）。 */
-    private fun normalizeTs(v: String): String {
-        var out = if (v.length > 10 && v[10] == 'T') v.substring(0, 10) + ' ' + v.substring(11) else v
-        if (TS_NO_SEC_RE.matches(out)) out += ":00"
-        return out
-    }
+    private fun renderDateFamily(value: String, type: String): String? =
+        SqlDateLiteral.renderFor(value, type)
 
     private fun renderUntyped(value: String): String =
         if (value.matches(NUMERIC_REGEX) || value == TRUE || value == FALSE) value else quote(value)
@@ -123,27 +97,20 @@ class LogSqlRestorer {
 
         /** 数值字面量（含小数与科学计数，如 `1.0E10`）。 */
         private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
-
-        /** 日期字面量形态（`yyyy-MM-dd`，Java 日期 toString 标准补零形态）。 */
-        private val DATE_RE = Regex("""\d{4}-\d{2}-\d{2}""")
-
-        /** 时间戳字面量形态（`yyyy-MM-dd[ T]HH:mm[:ss][.f…`，秒与小数可选——缺秒由 normalizeTs 归一）。 */
-        private val TS_RE = Regex("""\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?""")
-
-        /** 缺秒时间戳（`yyyy-MM-dd HH:mm`）——normalizeTs 补 `:00` 用。 */
-        private val TS_NO_SEC_RE = Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}""")
     }
 }
 
 /**
  * 日志参数 → 回填提示（T-M42）：数值/布尔原样直出（[LogSqlRestorer.PLAIN_TYPES]），
  * 其余类型标注引号（对齐 [LogSqlRestorer] 还原语义）；无类型标注走面板启发式（null）。
+ * 日期族额外带 `temporal = true`（T-DateLiteralBackfill）：面板参数行据此产出 ANSI 类型字面量，
+ * 与还原链同口径。
  * 供 [LogSqlEntry.toRecognizedPreview] 识别参数时生成参数行回填提示。
  */
 internal fun LogSqlParam.toHint(): ParamHint = when {
     type == null -> ParamHint()
     type in LogSqlRestorer.PLAIN_TYPES -> ParamHint(quote = false)
-    else -> ParamHint(quote = true)
+    else -> ParamHint(quote = true, temporal = SqlDateLiteral.isTemporalType(type))
 }
 
 // T-PSG-01：string-aware `?` 占位符定位实现已上提至

@@ -61,6 +61,25 @@ class JdbcUrlDialectsTest {
     }
 
     @Test
+    fun `T-IbatisPanwei_磐维子协议角标`() {
+        // 券 F：panwei / panweidb 两种子协议都登记（实际形态计划 P-2 未实测，两条都覆盖键不冲突）
+        assertEquals("Panwei（磐维）", JdbcUrlDialects.displayName("jdbc:panwei://dbhost.example:5432/pwdb"))
+        assertEquals("Panwei（磐维）", JdbcUrlDialects.displayName("jdbc:panweidb://dbhost.example:5432/pwdb"))
+        // 角标合成：方言名 + 库名@host:port
+        assertEquals(
+            "Panwei（磐维） · pwdb@dbhost.example:5432",
+            JdbcUrlDialects.badgeName("jdbc:panweidb://dbhost.example:5432/pwdb"),
+        )
+        assertEquals(
+            "Panwei（磐维） · pwdb@dbhost.example:5432",
+            JdbcUrlDialects.badgeName("jdbc:panwei://dbhost.example:5432/pwdb"),
+        )
+        // 未知近邻子协议不误伤（前缀近似也不命中）
+        assertNull(JdbcUrlDialects.displayName("jdbc:panweix://dbhost.example:5432/pwdb"))
+        assertNull(JdbcUrlDialects.displayName("jdbc:panwei2://dbhost.example:5432/pwdb"))
+    }
+
+    @Test
     fun `大小写不敏感`() {
         assertEquals("MySQL", JdbcUrlDialects.displayName("JDBC:MySQL://localhost/db"))
         assertEquals("DM（达梦）", JdbcUrlDialects.displayName("JDBC:DM://localhost"))

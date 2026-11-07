@@ -95,6 +95,24 @@ public class JsonsEventFormatTest {
         assertFalse("无候选不得产出 cands 键: " + json, json.contains("cands"));
     }
 
+    /**
+     * T-SqlListCatchup 券 F2b：聚合计数键 {@code c} 仅在 &gt;1 时写出——常态事件字节面零变化
+     * （旧 IDE 忽略未知键 / 新 IDE 读旧事件按 1 计的双向兼容前提）。
+     * 反向验证：把 writeEvent 里的 {@code "c"} 段摘掉，第一条断言必红。
+     */
+    @Test
+    public void 聚合计数_仅大于1时写出c键() {
+        String json = Jsons.writeEvent(minimal());
+        assertFalse("常态事件（count=1）不得产出 c 键（字节面零变化）: " + json, json.contains("\"c\":"));
+
+        SqlEvent aggregated = minimal();
+        aggregated.aggregatedCount = 7;
+        String json7 = Jsons.writeEvent(aggregated);
+        assertTrue("聚合代表条应写出 c 键: " + json7, json7.contains("\"c\":7"));
+        assertFalse("聚合键写出后仍不得产生相邻双逗号: " + json7, json7.contains(",,"));
+        assertFalse("聚合键写出后仍不得产生尾逗号: " + json7, json7.contains(",}"));
+    }
+
     @Test
     public void 转义仍生效_引号反斜杠控制字符() {
         SqlEvent e = new SqlEvent();

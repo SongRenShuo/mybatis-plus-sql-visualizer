@@ -248,9 +248,14 @@ public final class FakeIde {
                 final String p = rawField(body, "p");
                 final String sd = strField(body, "sd");
                 final String cands = rawField(body, "cands");
+                // T-IbatisPanwei：事件 url 是 IDE 侧角标/方言映射的唯一输入（JdbcUrlDialects /
+                // UrlSubprotocolDialects），探针把它打出来，才能在无 GUI 的真机验收里核对
+                // 「jdbc:panweidb: → Panwei（磐维） / Oracle」这条链拿到了什么原材料。
+                final String url = strField(body, "url");
                 windowEvents.add(new String[]{sql, sf, sl, mk, p, sd, cands});
                 log("EVENT #" + eventTotal.get() + " sf=" + sf + " sl=" + sl
-                        + " mk=" + mk + " sql=" + clip(sql, 80) + " p=" + clip(p, 160));
+                        + " mk=" + mk + " sql=" + clip(sql, 80) + " p=" + clip(p, 160)
+                        + " u=" + clip(url, 120));
                 log("        sd=" + clip(sd, 900));
                 break;
             }

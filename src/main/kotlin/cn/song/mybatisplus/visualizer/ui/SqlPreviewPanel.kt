@@ -30,6 +30,9 @@ import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
+import cn.song.mybatisplus.visualizer.sql.SlotValue
+import cn.song.mybatisplus.visualizer.sql.SlotWarning
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -635,6 +638,27 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     internal val enabledIds = mutableSetOf<String>()
     internal val paramValues = mutableMapOf<String, String>()
+
+    // T-RuntimeSlotFill 券 C：运行期占位值（slotId → 用户输入），与 paramValues 平行但独立。
+    //
+    // 只在 [PreviewResult.runtimeSlots] 非空时建行、才会被填；空表 = 留空 = 占位原样保留（D-5），
+    // 因此「没有占位 / 有占位但没填」两种情况的产物都与改动前逐字节一致。
+    // 随新预览整表清空（[showResult]），不做跨预览持久化（D-6）。
+    internal val slotValues = mutableMapOf<String, SlotValue>()
+
+    /**
+     * 最近一次预览渲染的占位回填诊断（模板 `%s` 计数不符 / 展开形态未知 / 方言拒绝布尔 等）。
+     *
+     * 由 [renderSql] 的占位回填分支写入，参数区「运行时值」分区下方如实展示——券 B 的拒绝必须
+     * 让用户看见，不许静默（否则表现为「填了没生效」）。
+     */
+    internal var slotRenderWarnings: List<SlotWarning> = emptyList()
+
+    /** 运行时占位行控件登记（slotId → 控件组；随 [rebuildLeftPanel] 清场，测试与行内联动用）。 */
+    internal val runtimeSlotRows = mutableMapOf<String, RuntimeSlotRowControls>()
+
+    /** 占位诊断行（[slotRenderWarnings] 的展示位；无占位行时为 null）。 */
+    internal var runtimeSlotWarningLabel: JBLabel? = null
     // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文；
     // T-M26.4：bind 覆盖状态已移除——bind 值由「参数」区输入统一承担）
     internal val xmlForEachCounts = mutableMapOf<String, Int>()
@@ -1298,6 +1322,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal fun dmlImpactBannerTextForTest(): String = dmlImpactBannerLabel.text
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
+
+    /** T-RuntimeSlotFill 券 C：当前运行期占位值快照（断言用）。 */
+    internal fun slotValuesForTest(): Map<String, SlotValue> = slotValues.toMap()
+
+    /** T-RuntimeSlotFill 券 C：当前占位值（回填引擎唯一值载体，链路一致用例用）。 */
+    internal fun slotValuesSnapshotForTest(): RuntimeSlotValues = slotValuesSnapshot()
+
+    /** T-RuntimeSlotFill 券 C：最近一次渲染的占位回填诊断（断言「拒绝不静默」）。 */
+    internal fun slotRenderWarningsForTest(): List<SlotWarning> = slotRenderWarnings
+
+    /** T-RuntimeSlotFill 券 C：已建的占位行数（= 当前预览的 slot 数；无占位为 0）。 */
+    internal fun slotRowCountForTest(): Int = runtimeSlotRows.size
+
+    /** T-RuntimeSlotFill 券 C：某个占位行的控件组（断言 kind ↔ 控件类型）。 */
+    internal fun slotRowControlsForTest(id: String): RuntimeSlotRowControls? = runtimeSlotRows[id]
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
     internal fun flushHistoryForTest() = flushHistoryToCache()
     /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
@@ -1342,6 +1381,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal fun clearStateForTest() {
         enabledIds.clear()
         paramValues.clear()
+        slotValues.clear()
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
     }

@@ -54,6 +54,10 @@ public class CatchAllMatcherTest {
         SqlHookTransformer.resetCountersForTest();
         StatementRegistry.clearForTest();
         retransformed.clear();
+        // T-IbatisPanwei 券 E：attach 路径现在默认会排 2 轮补挂（5s/20s）。attach 用例一律按
+        // 「不补挂」跑——否则遗留的 daemon 线程会在后续用例里继续 retransform 并改计数
+        // （premain 侧早已踩过同一种污染形态）。需要验证补挂的用例自己显式开启。
+        CaptureBudget.setAttachScheduleForTest(0L, 0L, 1);
     }
 
     @After
@@ -144,14 +148,14 @@ public class CatchAllMatcherTest {
     @Test
     public void 扫描上限_超出即停止扫描() throws Exception {
         CaptureBudget.setScanLimitForTest(1);
+        // 两个真候选（语句面 + 连接面），预算 1 只能评估其中一个
         final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
-        final Class<?> conn = Class.forName(
-                "cn.song.mybatisplus.sqlvis.agent.FakeVendorFixtures$VendorConn", false,
-                getClass().getClassLoader());
+        final Class<?> conn = Class.forName(HIKARI_CONN, false, hikariLoader());
 
         CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{candidate, conn}), false);
 
         assertEquals("扫描类数达上限后不得继续匹配（券 09①）", 1L, CaptureBudget.interfaceMatchedCount());
+        assertEquals("预算 1 只能 retransform 一个类：" + retransformed, 1, retransformed.size());
     }
 
     @Test
@@ -166,6 +170,169 @@ public class CatchAllMatcherTest {
 
         assertTrue("kill 后不得再匹配", retransformed.isEmpty());
         assertTrue("kill 后接受表保持为空", CatchAllMatcher.acceptedSpecs().isEmpty());
+    }
+
+    // ---------- T-IbatisPanwei 券 E：attach 补挂轮（迟到类） ----------
+
+    /**
+     * 迟到类用例：attach 首轮只看得到连接类，语句类在首轮之后才加载。
+     *
+     * <p>现场形态（计划 §3.2 的独立成因）：应用在 attach **之后**才懒加载数据源 → 驱动类在扫描
+     * 之后才加载。修复前 attach 只跑一轮，这类进程 100% 漏扫；券 E 加 2 轮补挂后必须补上。
+     * 反向验证：摘掉 attach 路径的 {@code scheduleDeferredPasses} 调用，本用例必须红。
+     */
+    @Test
+    public void attach补挂轮_迟到类在后续轮被补扫并织入() throws Exception {
+        // 首轮只看得见连接类（Hikari 池包装 Connection，白名单外）；补挂轮才看得见语句类。
+        // 注：VendorConn 是普通夹具类（不 implements java.sql.Connection），不能当「已命中的连接类」。
+        final Class<?> conn = Class.forName(HIKARI_CONN, false, hikariLoader());
+        final Class<?> latePs = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+
+        CaptureBudget.setAttachScheduleForTest(1L, 1L, 2);
+        final Instrumentation inst = stubInstrumentationRounds(
+                new Class<?>[][]{{conn}, {conn, latePs}}, false);
+
+        CatchAllMatcher.afterInstall(inst, false);
+        final Thread deferred = CatchAllMatcher.lastDeferredThreadForTest();
+        assertNotNull("attach 路径必须排补挂轮（券 E）", deferred);
+        deferred.join(10_000L);
+
+        assertTrue("迟到类必须被补挂轮补扫到：" + retransformed,
+                retransformed.contains(STATEMENT_CANDIDATE));
+        assertEquals("连接类与迟到语句类各织一次（PROCESSED 去重不得重复 retransform）：" + retransformed,
+                2, retransformed.size());
+        assertEquals("两轮命中合计", 2L, CaptureBudget.interfaceMatchedCount());
+        assertEquals("两轮织入合计", 2L, CaptureBudget.interfaceWovenCount());
+    }
+
+    /**
+     * 补挂轮不得绕过 kill switch：首轮就熔断时，后续轮一个类也不得再碰。
+     *
+     * <p>反向验证：把 {@code run()} 里的 {@code attachMatchEnabled()} 重查删掉，本用例必须红
+     * （迟到的连接类会被补挂轮织入）。
+     */
+    @Test
+    public void attach补挂轮_kill开关触发后不再补扫() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> lateConn = Class.forName(HIKARI_CONN, false, hikariLoader());
+
+        CaptureBudget.setKillAfterForTest(1);
+        CaptureBudget.setAttachScheduleForTest(1L, 1L, 2);
+        // 首轮：只有语句类，且 retransform 被 JVM 拒绝 → 连败达上限即熔断
+        final Instrumentation inst = stubInstrumentationRounds(
+                new Class<?>[][]{{candidate}, {lateConn}}, true);
+
+        CatchAllMatcher.afterInstall(inst, false);
+        assertTrue("首轮失败必须熔断", CaptureBudget.killed());
+        final Thread deferred = CatchAllMatcher.lastDeferredThreadForTest();
+        assertNotNull("补挂线程照旧排程（是否执行由 kill switch 决定）", deferred);
+        deferred.join(10_000L);
+
+        assertTrue("kill 后补挂轮不得再 retransform 任何类（只剩首轮那一次尝试）：" + retransformed,
+                retransformed.size() == 1 && retransformed.contains(STATEMENT_CANDIDATE));
+        assertFalse("kill 后补挂轮不得登记接受表",
+                CatchAllMatcher.acceptedSpecs().containsKey(HIKARI_CONN));
+        assertEquals("kill 后命中计数不得增长", 1L, CaptureBudget.interfaceMatchedCount());
+    }
+
+    // ---------- T-IbatisPanwei 券 D：未登记 JDBC 实现取证 ----------
+
+    @Test
+    public void 未登记实现_接口命中即记入快照且白名单类不计() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> whitelisted = h2IsolatedClass("org.h2.jdbc.JdbcStatement");
+
+        CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{candidate, whitelisted}), false);
+
+        assertTrue("白名单外的接口命中类必须记入未登记快照（券 D 取证替代路径）："
+                        + CaptureBudget.unregisteredDrivers(),
+                CaptureBudget.unregisteredDrivers().contains(STATEMENT_CANDIDATE));
+        assertFalse("白名单类不得被报成未登记：", CaptureBudget.unregisteredDrivers().contains(
+                "org.h2.jdbc.JdbcStatement"));
+    }
+
+    // ---------- T-SqlListCatchup 券 G1：已知连接池包装族从「未登记」曝光排除 ----------
+
+    /**
+     * 池包装类是包装层不是驱动：从「未登记 JDBC 实现」曝光排除，织入面零变化。
+     *
+     * <p>真机形态（2026-11-07 join-demo，修复前）：Hikari 三类
+     * （{@code HikariProxyPreparedStatement}/{@code ProxyStatement}/{@code ProxyConnection}）
+     * 常驻诊断行「发现未登记 JDBC 实现：…」。修复后：该行不再出现池包装类；同时池包装类
+     * **照旧兜底匹配并织入**（真机记忆里「解一层包装登记内层」的先例＝
+     * StatementRegistry 内层登记 + NestGate 嵌套去重，采集语义不动）。
+     *
+     * <p>反向验证（S2）：从 {@link CatchAllMatcher} 的池包装前缀表里删掉
+     * {@code com.zaxxer.hikari.pool.} 重跑，本用例必红（Hikari 类重新混进未登记快照）。
+     */
+    @Test
+    public void 池包装类_不报未登记但仍织入() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> hikariPs = Class.forName(HIKARI_PS, false, hikariLoader());
+        final Class<?> hikariConn = Class.forName(HIKARI_CONN, false, hikariLoader());
+
+        CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{candidate, hikariPs, hikariConn}), false);
+
+        assertTrue("真实未知驱动仍必须报（池排除不得误伤取证路径）："
+                        + CaptureBudget.unregisteredDrivers(),
+                CaptureBudget.unregisteredDrivers().contains(STATEMENT_CANDIDATE));
+        assertFalse("Hikari PS 生成物不得再报未登记（券 G1）：", CaptureBudget.unregisteredDrivers().contains(HIKARI_PS));
+        assertFalse("Hikari Connection 生成物不得再报未登记（券 G1）：",
+                CaptureBudget.unregisteredDrivers().contains(HIKARI_CONN));
+        assertTrue("池包装类织入面零变化：仍须登记接受表（transformer 走同一织入通道）",
+                CatchAllMatcher.acceptedSpecs().containsKey(HIKARI_PS)
+                        && CatchAllMatcher.acceptedSpecs().containsKey(HIKARI_CONN));
+        assertEquals("三类各织一次（真驱动 1 + 池包装 2）：" + retransformed, 3, retransformed.size());
+    }
+
+    /**
+     * 前缀表覆盖五族已知池包装且不放行真驱动类名。
+     *
+     * <p>形态核对口径见 {@link CatchAllMatcher} POOL_WRAPPER_PREFIXES KDoc（真机 jar 仅有
+     * Hikari，其余四族按字节/常识形态列具名代表；前缀级判定整族覆盖）。
+     */
+    @Test
+    public void 池包装前缀表_已知族命中且不放行真驱动() {
+        assertTrue("Hikari 生成物（真机三类之一）",
+                CatchAllMatcher.isKnownPoolWrapper("com.zaxxer.hikari.pool.ProxyStatement"));
+        assertTrue("c3p0 NewProxy*（impl 子包被前缀覆盖）",
+                CatchAllMatcher.isKnownPoolWrapper("com.mchange.v2.c3p0.impl.NewProxyPreparedStatement"));
+        assertTrue("DBCP 2.x Delegating*/Poolable*",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.commons.dbcp2.PoolablePreparedStatement"));
+        assertTrue("DBCP 1.x（遗留应用仍在用）",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.commons.dbcp.PoolableConnection"));
+        assertTrue("Tomcat-JDBC 静态包装（其语句代理多为 JDK 动态代理，另被代理排除兜住）",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.tomcat.jdbc.pool.ProxyConnection"));
+        assertTrue("Druid DruidPooled*",
+                CatchAllMatcher.isKnownPoolWrapper("com.alibaba.druid.pool.DruidPooledPreparedStatement"));
+
+        assertFalse("真驱动类名不得被误吞（国产驱动取证面）",
+                CatchAllMatcher.isKnownPoolWrapper("org.panweidb.jdbc.PgPreparedStatement"));
+        assertFalse("仓内夹具驱动不得被误吞", CatchAllMatcher.isKnownPoolWrapper(STATEMENT_CANDIDATE));
+        assertFalse("非池包前缀的同名字类不得被误吞",
+                CatchAllMatcher.isKnownPoolWrapper("cn.example.pool.HikariProxyPreparedStatement"));
+        assertFalse("null 安全", CatchAllMatcher.isKnownPoolWrapper(null));
+    }
+
+    // ---------- T-IbatisPanwei 券 E：扫描预算只对候选类计数 ----------
+
+    /**
+     * 预算语义：零成本排除项（这里是枚举，现场对应 `java.*` / 接口 / 注解 / 代理）不占扫描上限。
+     *
+     * <p>反向验证：把 {@code cheapExcluded} 的短路去掉（回到「遍历到的每个类都占预算」），
+     * 上限 1 会被枚举吃掉，本用例的 matched 变 0 → 必须红。
+     */
+    @Test
+    public void 扫描预算_零成本排除项不占上限() throws Exception {
+        CaptureBudget.setScanLimitForTest(1);
+        final Class<?> enumClass = StatementWeaver.Kind.class; // 应用命名、非 JDK 前缀，但 isEnum
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+
+        CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{enumClass, candidate}), false);
+
+        assertEquals("枚举不得占用候选预算（上限 1 仍须扫到候选）：" + retransformed,
+                STATEMENT_CANDIDATE, retransformed.isEmpty() ? null : retransformed.get(0));
+        assertEquals("预算 1 = 只评估 1 个候选类", 1L, CaptureBudget.interfaceMatchedCount());
     }
 
     // ---------- premain 轮（券 08，红线核心） ----------
@@ -191,18 +358,35 @@ public class CatchAllMatcherTest {
     // ---------- 辅助 ----------
 
     private Instrumentation stubInstrumentation(final Class<?>[] loaded) {
+        return stubInstrumentationRounds(new Class<?>[][]{loaded}, false);
+    }
+
+    /**
+     * 多轮枚举桩：第 i 次 {@code getAllLoadedClasses()} 返回 {@code rounds[i]}（越界取最后一轮），
+     * 用来模拟「补挂轮才看见的迟到类」。
+     *
+     * @param throwOnRetransform true = 每次 retransform 先记账再抛（模拟 JVM 拒绝重转换）
+     */
+    private Instrumentation stubInstrumentationRounds(final Class<?>[][] rounds,
+            final boolean throwOnRetransform) {
+        final java.util.concurrent.atomic.AtomicInteger call =
+                new java.util.concurrent.atomic.AtomicInteger();
         return (Instrumentation) Proxy.newProxyInstance(
                 CatchAllMatcherTest.class.getClassLoader(),
                 new Class<?>[]{Instrumentation.class},
                 (proxy, method, args) -> {
                     switch (method.getName()) {
                         case "getAllLoadedClasses":
-                            return loaded;
+                            final int i = call.getAndIncrement();
+                            return rounds[Math.min(i, rounds.length - 1)];
                         case "isModifiableClass":
                             return true;
                         case "retransformClasses":
                             for (Object c : (Object[]) args[0]) {
                                 retransformed.add(((Class<?>) c).getName());
+                            }
+                            if (throwOnRetransform) {
+                                throw new IllegalStateException("fixture: retransform rejected");
                             }
                             return null;
                         case "addTransformer":

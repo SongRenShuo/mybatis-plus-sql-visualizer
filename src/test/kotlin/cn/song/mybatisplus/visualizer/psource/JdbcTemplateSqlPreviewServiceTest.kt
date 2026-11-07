@@ -185,6 +185,50 @@ class JdbcTemplateSqlPreviewServiceTest : BasePlatformTestCase() {
         // 含运行时值 → warning 提示
         assertNotNull("应有降级 warning", result.warning)
         assertTrue("warning 应提及运行时值", result.warning!!.contains("运行时"))
+        // R3：无 else 的条件追加 → 保留片段 + 前置说明注释（可能不出现）
+        assertTrue("条件追加应带说明注释: ${result.sql}", result.sql.contains("条件追加"))
+    }
+
+    // ------------------------------------------------------------------
+    // R1/R2/R3 端到端：用户 getAreaPowerGeneration 样本（循环 + 三元 + 尾部拼接）
+    // ------------------------------------------------------------------
+
+    fun testPreview_loopTernaryConcat_keepsWellFormedSql() {
+        // 用户原始代码：for 循环里按三元拼 id 条件，再拼进 WHERE (...)，尾部拼 startTime
+        // 关键验证：占位是单条自洽注释 → WHERE 的右括号在场、引号平衡、无源码裸露
+        myFixture.configureByText("Demo.java", """
+            import org.springframework.jdbc.core.JdbcTemplate;
+            public class Demo {
+                public java.util.List<java.util.Map<String, Object>> getAreaPowerGeneration(
+                        JdbcTemplate jdbcTemplate, java.util.List<String> ids, String startTime) {
+                    StringBuilder idStr = new StringBuilder();
+                    for (int k = 0; k < ids.size(); k++) {
+                        idStr.append(k == 0 ? "id='" + ids.get(k) + "' " : "or id='" + ids.get(k) + "' ");
+                    }
+                    String sql = "SELECT * FROM hplt.autogen.calpoint " +
+                        " WHERE (" + idStr + ") and time >= '" + startTime + "' tz('Asia/Shanghai')";
+                    return jdbcTemplate.queryForList(sql);
+                }
+            }
+        """.trimIndent())
+        val call = findFirstCall("queryForList")!!
+        val result = previewOfCall(call)
+        assertNotNull("应定位到 JdbcTemplate 调用", result)
+        val compact = result!!.sql.replace("\\s+".toRegex(), " ").trim()
+        assertTrue("WHERE ( 应在场: $compact", compact.contains("WHERE ("))
+        assertTrue("WHERE (...) 的右括号应在场: $compact", compact.contains(")"))
+        assertEquals("单引号应平衡: $compact", 0, compact.count { it == '\'' } % 2)
+        assertTrue("占位应形如 /* 运行时值: ... */: $compact", compact.contains("/* 运行时值: "))
+        // P1（polish）：循环占位带清洗后的模板摘要——用户能看出循环里追加的是什么，
+        // 且摘要里没有三元条件 / 变量源码（含 … 代替）；引号已换安全同形字符
+        assertTrue(
+            "循环占位应带模板摘要: $compact",
+            compact.contains("循环内追加 id=’…’ / or id=’…’（运行时重复）"),
+        )
+        assertTrue("静态尾段应保留: $compact", compact.contains("tz") && compact.contains("Asia/Shanghai"))
+        assertFalse("三元源码不应以活 SQL 形态出现: $compact", compact.contains("k == 0 ?"))
+        assertNotNull("应有降级 warning", result.warning)
+        assertTrue("warning 应提及运行时值", result.warning!!.contains("运行时"))
     }
 
     // ------------------------------------------------------------------

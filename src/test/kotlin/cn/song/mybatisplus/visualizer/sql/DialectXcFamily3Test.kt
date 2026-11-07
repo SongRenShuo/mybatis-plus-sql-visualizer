@@ -42,16 +42,17 @@ class DialectXcFamily3Test {
     // ---------- 注册表身份（反向验证的绿态基准） ----------
 
     /**
-     * 摘掉 `DialectRegistry.dialects` 末两项的反向验证中，本用例全红：byName 回落 [MySqlDialect]
-     * （assertSame 失配）、末两位名单失配、经 byName 的分页渲染变 MySQL 形态
+     * 摘掉 `DialectRegistry.dialects` 中 HighGo/Vastbase 的反向验证中，本用例全红：byName 回落
+     * [MySqlDialect]（assertSame 失配）、注册表名单失配、经 byName 的分页渲染变 MySQL 形态
      * （`LIMIT 5, 10` ≠ `LIMIT 10 OFFSET 5`）。
      */
     @Test
     fun `注册表身份_末两位HighGo与Vastbase_摘掉注册即红`() {
         assertSame(HighGoDialect, DialectRegistry.byName("HighGo"))
         assertSame(VastbaseDialect, DialectRegistry.byName("Vastbase"))
-        assertEquals(14, DialectRegistry.dialects.size)
-        assertEquals(listOf("HighGo", "Vastbase"), DialectRegistry.dialects.takeLast(2).map { it.name })
+        // T-GoldenDbDialect（券 A）：第 15 个方言追加在注册表末位，HighGo/Vastbase 从末两位变末三位
+        assertEquals(15, DialectRegistry.dialects.size)
+        assertEquals(listOf("HighGo", "Vastbase", "GoldenDB"), DialectRegistry.dialects.takeLast(3).map { it.name })
         // 未知名/空值回退 MySQL（既有口径不被新方言稀释）
         assertSame(MySqlDialect, DialectRegistry.byName("NoSuchDbms"))
         assertSame(MySqlDialect, DialectRegistry.byName(null))

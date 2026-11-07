@@ -46,7 +46,7 @@ class ParameterReplacerTypedLiteralTest {
             sources = listOf("created"),
             paramValues = mapOf("created" to "2024-01-01"),
             hints = listOf(ParamHint(quote = true, typeText = "DATE")),
-            dialect = "Oracle",
+            dialectName = "Oracle",
         )
         assertEquals("select * from t where created >= DATE '2024-01-01'", oracle)
 
@@ -55,7 +55,7 @@ class ParameterReplacerTypedLiteralTest {
             sources = listOf("created"),
             paramValues = mapOf("created" to "2024-01-01"),
             hints = listOf(ParamHint(quote = true, typeText = "DATE")),
-            dialect = "MySQL",
+            dialectName = "MySQL",
         )
         assertEquals("select * from t where created >= '2024-01-01'", mysql)
     }
@@ -67,7 +67,7 @@ class ParameterReplacerTypedLiteralTest {
             sources = listOf("flag"),
             paramValues = mapOf("flag" to "true"),
             hints = listOf(ParamHint(quote = true, typeText = "Boolean")),
-            dialect = "Oracle",
+            dialectName = "Oracle",
         )
         assertEquals("update t set flag = 1", oracle)
 
@@ -76,7 +76,7 @@ class ParameterReplacerTypedLiteralTest {
             sources = listOf("flag"),
             paramValues = mapOf("flag" to "true"),
             hints = listOf(ParamHint(quote = true, typeText = "BOOLEAN")),
-            dialect = "PostgreSQL",
+            dialectName = "PostgreSQL",
         )
         assertEquals("update t set flag = TRUE", pg)
     }
@@ -149,7 +149,7 @@ class ParameterReplacerTypedLiteralTest {
             sql = "select * from t where created >= :created",
             paramValues = mapOf("created" to "2024-01-01"),
             hints = mapOf("created" to ParamHint(quote = true, typeText = "DATE")),
-            dialect = "Oracle",
+            dialectName = "Oracle",
         )
         assertEquals("select * from t where created >= DATE '2024-01-01'", sql)
     }

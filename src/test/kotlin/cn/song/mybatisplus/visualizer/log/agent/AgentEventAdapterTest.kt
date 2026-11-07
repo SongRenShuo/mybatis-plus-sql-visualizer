@@ -65,6 +65,29 @@ class AgentEventAdapterTest {
         assertNull(AgentEvent.parse("""{"sql":"  "}"""))
     }
 
+    // ---------- T-SqlListCatchup 券 F2b：事件聚合计数（协议双向兼容） ----------
+
+    @Test
+    fun 事件解析_聚合计数_c键大于1时解析() {
+        // agent 队列满聚合形态：c 键仅 >1 时写出（Jsons.writeEvent 契约）
+        val e = AgentEvent.parse("""{"sql":"INSERT INTO t VALUES (?)","ts":1,"dn":5,"c":7}""")!!
+        assertEquals("聚合代表条带出累计执行次数", 7, e.aggregatedCount)
+    }
+
+    @Test
+    fun 事件解析_聚合计数_旧版agent无c键按1计() {
+        val e = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1}""")!!
+        assertEquals("旧版事件无 c 键 → 按 1 计（协议向后兼容）", 1, e.aggregatedCount)
+    }
+
+    @Test
+    fun 事件解析_聚合计数_畸形值回落1() {
+        // c<=1 / 非数值：按「无聚合」处理，不抛错
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":1}""")!!.aggregatedCount)
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":-3}""")!!.aggregatedCount)
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":"x"}""")!!.aggregatedCount)
+    }
+
     @Test
     fun 事件解析_候选帧_T_AgentSourceJump() {
         val body = """{"sql":"SELECT 1","ts":1,"dn":1,"sf":"com/github/pagehelper/PageInterceptor.java","sl":132,"cands":[["com/example/service/UserServiceImpl.java",36],["com/example/controller/UserController.java",48]]}"""
@@ -174,6 +197,40 @@ class AgentEventAdapterTest {
         assertEquals("SELECT '+1'", render("+1", "Long"))
         assertEquals("SELECT '1e3'", render("1e3", "Double"))
         assertEquals("SELECT ' 7'", render(" 7", "Long"))
+    }
+
+    @Test
+    fun 日期族参数还原为ANSI字面量() {
+        // T-DateLiteralBackfill：agent 还原链与 LogSqlRestorer 同口径（ISO T 归一 + ANSI 包装）
+        val restored = AgentEventAdapter.restore(
+            "UPDATE t SET update_time = ? WHERE id = ?",
+            listOf(LogSqlParam("2026-11-07T13:20:14.417", "LocalDateTime"), LogSqlParam("1", "Long")),
+        )
+        assertEquals(
+            "UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417' WHERE id = 1",
+            restored,
+        )
+    }
+
+    @Test
+    fun SQLServer方言_日期族回落引号() {
+        // T-SQL 不支持 ANSI 类型字面量；SQL Server 的 ISO 8601 引号串本来就能隐式转换
+        val restored = AgentEventAdapter.restore(
+            "UPDATE t SET update_time = ?",
+            listOf(LogSqlParam("2026-11-07T13:20:14.417", "LocalDateTime")),
+            dialectName = "SQL Server",
+        )
+        assertEquals("UPDATE t SET update_time = '2026-11-07T13:20:14.417'", restored)
+    }
+
+    @Test
+    fun 字符串日期形值_仍加引号() {
+        // 无日期族类型标注 → 不能启发式包装（字符串列语义）
+        val restored = AgentEventAdapter.restore(
+            "SELECT * FROM t WHERE code = ?",
+            listOf(LogSqlParam("2026-11-07", "String")),
+        )
+        assertEquals("SELECT * FROM t WHERE code = '2026-11-07'", restored)
     }
 
     @Test

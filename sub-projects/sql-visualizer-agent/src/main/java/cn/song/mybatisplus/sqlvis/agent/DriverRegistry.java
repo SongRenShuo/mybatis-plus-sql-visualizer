@@ -64,6 +64,22 @@ public final class DriverRegistry {
         // `jdbc:oceanbase:` 唯一（com.oceanbase.jdbc.UrlParser 常量池实证）。语句面/prepare 面在
         // WeaveSpecs，勿只登记一半。
         s.add("com.oceanbase.jdbc.Driver");
+        // 磐维 PanweiDB（T-IbatisPanwei 券 C；panweidb-jdbc-1.0.0.jar，2022-10-27 构建，class 52）。
+        // 谱系：官方《应用开发指南》明载基于 openGauss-connector-jdbc，但**整包重命名**——
+        // jar 内 org/panweidb/ 条目 374 个、org/postgresql/ 为 0，META-INF/services 声明
+        // org.panweidb.Driver，故三面必须各自登记（语句面/prepare 面在 WeaveSpecs，勿只登记一半）。
+        // V2 文档另写 cn.com.panweidb.Driver（多代命名分裂），该形态待真机 jar 到位再登记。
+        s.add("org.panweidb.Driver");
+        // GoldenDB（中兴金篆；gdb_mysql-connector-java-oracle-5.1.46.99.jar，T-GoldenDbDialect 券 B）。
+        // 谱系：MySQL Connector/J 5.1 的整包重命名分叉（jar 内 com/mysql 条目为 0、上游
+        // org.gjt.mm.mysql.Driver 改名 org.gjt.mm.goldendb.Driver，计划 §1.1.3/§1.1.4 javap+zip 实测）。
+        // 关键坑（计划 §1.1.4 实测）：com.goldendb.jdbc.Driver 自身只声明构造器与 static {}，
+        // connect(String, Properties) 声明在父类 com.goldendb.jdbc.NonRegisteringDriver——
+        // ConnectWeaver 只遍历本类 methods，只登记 Driver 会零命中。故必须登记 NonRegisteringDriver
+        // （com.mysql.cj.jdbc.NonRegisteringDriver 已有同款先例）；Driver 仍登记（零命中、只为按名可查）。
+        // 语句面/prepare 面在 WeaveSpecs，勿只登记一半。
+        s.add("com.goldendb.jdbc.NonRegisteringDriver");
+        s.add("com.goldendb.jdbc.Driver");
         DRIVER_CLASSES = Collections.unmodifiableSet(s);
         // T-StatementWeave 语句面/prepare 面名单在 StatementWeaver.SPECS（单一真相，形态标注
         // 跟类走）；本表只保留驱动 connect 面。两新面谓词委托 specOf 判定。

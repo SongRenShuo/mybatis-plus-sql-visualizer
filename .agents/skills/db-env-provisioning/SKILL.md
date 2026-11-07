@@ -1,6 +1,6 @@
 ---
 name: db-env-provisioning
-description: 数据库真机环境搭建与验证作业法——在远程 Linux 靶机上用 Docker 部署国产/商业数据库（瀚高、海量、OceanBase、GaussDB、SQL Server、MariaDB、达梦、金仓等）、选镜像源、配端口与凭据、登记 DBX，并用插件自己的渲染套件在真引擎上验证。当用户要求「装个 XX 数据库」「补真机环境」「部署测试实例」「镜像拉不动」「实例连不上」「真机读数怎么取」时使用。
+description: 数据库真机环境搭建与验证作业法——在远程 Linux 靶机上用 Docker 部署国产/商业数据库（瀚高、海量、OceanBase、GaussDB、SQL Server、MariaDB、达梦、金仓、磐维 PanWeiDB 等）、选镜像源、找不到官方镜像时按矩阵取证并降级到第三方重打包镜像、配端口与凭据、登记 DBX，并用插件自己的渲染套件在真引擎上验证。当用户要求「装个 XX 数据库」「补真机环境」「部署测试实例」「镜像拉不动」「找不到官方镜像」「实例连不上」「真机读数怎么取」时使用。
 ---
 
 # db-env-provisioning 数据库真机环境作业法
@@ -29,13 +29,37 @@ docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}'      # 镜像是不�
 cat /etc/docker/daemon.json                                      # 已配的 mirror（不代表好用）
 ```
 
-第五件是**读台账**：`.local/test-databases.md` 里已有全部实例的连接、凭据、已知坑；`tmp/xc3-env-init/*.md`
+第五件是**读台账**：`.local/db-env-instances.tsv` 是实例索引（有哪些实例、宿主端口、镜像/卷、内存与坑，
+字段见 §9），`.local/test-databases.md` 是连接、凭据与已知坑；`tmp/xc3-env-init/*.md`
 是每个实例的部署原文与探针读数。**先看有没有现成实例能用**，别上来就装——`114.66.55.245` 那台
 DBX 测试主机上本来就有一批（MySQL/PG/Oracle/DM/金仓/GBASE/虚谷/StarRocks/Doris…），很多时候只缺驱动。
 
-内存账（15G 宿主的实际配法，超了会 OOM 或让引擎起不来）：瀚高 3g、海量 A 4g、海量 B 2g、OceanBase 8g
-（容器内 `OB_MEMORY_LIMIT=6G`）、SQL Server 2g、GaussDB 4g、MariaDB 2g。全部同时在线时宿主要留出
-buff/cache 之外的余量，装新实例前先看 `free -g` 的 available。
+内存账（15G 宿主上在役实例的实际配法，超了会 OOM 或让引擎起不来）：
+
+| 实例（容器名） | `--memory` | `--shm-size` | 其他必带 flag / 引擎内记账 |
+|---|---|---|---|
+| 瀚高 `xc3-highgo` | 3g | — | 命名卷 `xc3_highgo_data` |
+| 海量 A `xc3-vastbase` | 4g | 2g | 停起走 `/opt/xc3-vastbase/start.sh` |
+| 海量 B `xc3-vastbase-b` | 2g | 1g | `DBCOMPATIBILITY=B` |
+| OceanBase `xc3-oceanbase` | 8g | — | 容器内 `OB_MEMORY_LIMIT=6G`；`--ulimit nofile=65535:65535 --ulimit stack=-1` |
+| SQL Server `xc3-mssql` | 2g | — | `MSSQL_MEMORY_LIMIT_MB=1536`（首启不落 `mssql.conf`，实际靠 cgroup） |
+| GaussDB `xc3-gaussdb-kernel503` | 4g | 2g | `--init` 必须 |
+| openGauss `xc3-opengauss` | 4g | 2g | `--privileged --ulimit nofile=65535` |
+| MariaDB `xc3-mariadb` | 2g | — | |
+| MySQL `xc3-mysql8` | 1g | — | 命名卷 `xc3-mysql8-data` |
+| 磐维 A `panweidb-ora` | 3g | 2g | `--privileged`；`dbcompatibility=A`；引擎内 `max_process_memory=8GB`（记账上限，非预占）、`shared_buffers=256MB` |
+| 磐维 B `panweidb-test` | 4g | 2g | `--privileged`；`dbcompatibility=B`；同上引擎记账 |
+
+**别把这张表当预算加总**：11 个实例的 `--memory` 合计约 **37g**，宿主只有 15G——limit 是记账上限不是预占，
+真正要盯的是 `free -m` 的 available 与实际 RSS（磐维压过 `shared_buffers` 后单实例约 0.9GB）。
+
+**内存闸门（起新库前必看读数，不是「大概够」）**：2026-11-06 磐维两个实例上线后，16G 宿主 + 11 个在役容器的
+`available` 只剩约 **966 MB**（`Mem: 16003 total / 9068 used / 966 available`）。且**国产库常有引擎内存下限**，
+不是想压就压：磐维 `max_process_memory` 低于约 5057MB 直接拒启（见 §2 磐维段，唯一能压的是 `shared_buffers`）。
+所以流程固定为 **先 `free -m` 看 available → 不足就先腾（`docker stop` 掉当前不用的实例，或压 `shared_buffers`）→
+再起新的**，别先起后救。腾量口径别算错：停实例腾出来的是**实际 RSS 不是 limit**（MariaDB 空闲时只有
+几百 MB），真要腾出 GB 级余量就停 OceanBase（容器内 `memory_limit=6G`）或一个磐维实例（压过
+`shared_buffers` 后约 0.9GB/实例）。
 
 ## 1. 选镜像：先解决「拉不动」
 
@@ -74,6 +98,51 @@ docker tag  docker.m.daocloud.io/library/mariadb:10.11.11 mariadb:10.11.11
 `dockerproxy.net` 逐层 curl 是最后的兜底（瀚高那次 daemon 对多分层镜像挂死就是用它救的：
 按 registry v2 API 下 blob → 校验 sha256 → 组 manifest → `docker load`；注意并发 8 路会 429，要串行）。
 
+### 国产库容器镜像：找不到官方镜像时怎么取证、怎么降级（2026-11-06 磐维 PanWeiDB 实录）
+
+国产库（尤其运营商系）经常**根本没有官方镜像**。这时要交出「我查过、查了哪些源、各自什么结果」的取证，
+不是一句「搜不到」。按下面的矩阵逐源走，**HTTP 状态与命中数逐行记进报告**：
+
+| # | 源 | 探法 | 判读 |
+|---|---|---|---|
+| 1 | Docker Hub | `hub.docker.com/v2/search/repositories/?query=<名>` | 200 + `count`。**必须先跑一次对照查询**（如 `query=opengauss` 回 111 条）证明接口本身正常，否则本产品的 0 不能当结论 |
+| 2 | quay.io | `quay.io/api/v1/find/repositories?query=<名>` | 200 + `results: []` 同口径 |
+| 3 | ghcr.io | 匿名 token（`ghcr.io/token?scope=repository:<n>:pull`）→ `manifests/latest` | token 环节就拿不到时，**对照公开仓库也拿不到 ⇒ 该源不可信**，结论只能写「未取到」，禁写「没有」 |
+| 4 | 阿里云 ACR | `registry.cn-<区>.aliyuncs.com/v2/<ns>/<repo>/tags/list` | 401 只是**未鉴权**（不代表不存在）；走匿名 token 流才能判 200/404 |
+| 5 | 华为云 SWR / 腾讯云 ccr | 同 `/v2/<ns>/<repo>/tags/list` | 401 需凭据，如实登记「需鉴权未继续」 |
+| 6 | 厂商官网 / 社区 | `panwei.tech`、`open.10086.cn`、GitHub/Gitee 搜产品名 | 常只有白皮书与 tarball 安装介质——**记形态，别硬转成镜像**；顺带拿到 tarball 命名（生产/OM 两个包）对后续自建有用 |
+
+本地已有 PDF/文档时先 grep 一遍（`pdftotext` + `grep -i "docker\|镜像"`）：**文档全篇不提容器**本身
+就是「无官方镜像」的一条旁证，比纯搜索结果更硬。
+
+阿里云匿名 token 流（ACR 仓库设为 public 即可匿名列 tag，2026-11-06 实测可用）：
+
+```bash
+# 1) 取 challenge，读出 realm / service / scope
+curl -sI "https://registry.cn-shenzhen.aliyuncs.com/v2/<ns>/<repo>/manifests/<tag>" | grep -i www-authenticate
+# 2) 用同一 scope 换匿名 token（公开仓库不鉴权也发）
+curl -s "https://dockerauth.cn-hangzhou.aliyuncs.com/auth?service=registry.aliyuncs.com:cn-shenzhen:26842&scope=repository:<ns>/<repo>:pull"
+# 3) 带 token 列 tag；取 manifest 要带 Accept: ...manifest.v2+json 或 ...oci.image.index.v1+json
+curl -s -H "Authorization: Bearer <token>" "https://registry.cn-shenzhen.aliyuncs.com/v2/<ns>/<repo>/tags/list"
+```
+
+命中后**先把 digest 与包内版本钉死再起容器**：list 出 tag → 取 index manifest 拿 amd64 manifest digest →
+`docker pull` 后在容器内验产品版本（磐维是 `/root/PanWeiDB_db.tar.gz` 与解包出的
+`PanWeiDB_V3.0-S3.4.0_B01-Linux-64bit.tar.bz2`），**别用 `latest`，也别用 tag 名猜版本**。
+
+**个人命名空间重打包镜像：怎么识别、怎么定级**
+
+先看包内有没有真厂商产物，再定性：
+
+- **真厂商产物指纹**：包内是产品自有安装器与目录结构（磐维：`script/gs_install`、`script/gs_om`、
+  `/root/PanWeiDB_db.tar.gz`、角色 `pwadmin`/`pwaudit`/`pwsso`、`gs_initdb --dbcompatibility`）。
+  ⇒ 这是**厂商 tarball 被第三方重打包**：内容是真的，但**分发链无人背书**（版本来源、是否被改、有无夹带都不可证）。
+- **改名冒牌**：包内只有 openGauss/GaussDB 通用件、没有任何该产品专属指纹 ⇒ **禁止**当该产品用
+  （这正是本 skill 开头「不拿 openGauss 冒充」红线的落点）。
+
+定级与写法：**只作内部验证环境**；对外结论与文档必须逐处标注来源（仓库全名 + digest + 构建时间）并写明
+「第三方重打包，非厂商官方分发」；长期使用建议向厂商索取官方分发，或直接用厂商 tarball 自行构建。
+
 ### 各产品的实测坐标（都在册，可直接复用）
 
 | 产品 | 镜像 | 宿主端口 | 特殊要求 |
@@ -85,6 +154,7 @@ docker tag  docker.m.daocloud.io/library/mariadb:10.11.11 mariadb:10.11.11
 | GaussDB 商用内核 Kernel 503 | `apecloud/gaussdb:2.23.01.200-r2` | 25882→5432 | 无 entrypoint，手工 `gs_initdb` + `gs_ctl`；**`--init` 必须** |
 | SQL Server 2022 | `mcr.microsoft.com/mssql/server:2022-latest` | 21433→1433 | `ACCEPT_EULA=Y`；首启 90~120s 才接受连接 |
 | MariaDB 10.11 | `mariadb:10.11.11` | 23306→3306 | 一行 env 起库，最省事的一个 |
+| 磐维 PanWeiDB V3.0-S3.4.0_B01 | `registry.cn-shenzhen.aliyuncs.com/shine_fei/panweidb:3.4.0`（**阿里云个人命名空间，第三方重打包**；index digest `sha256:18ecce71…`） | 26100→17700（B 档）/ 26101→17700（A 档） | openEuler+systemd，开机 ansible 自动装（约 10 分钟）；容器内端口 **17700**；**需三处补丁**（见 §2 磐维段）；兼容档安装期决定 |
 | 达梦 DM8 | 无 Docker 官方镜像 | — | 用现成实例 `114.66.55.245:20096`（DBX 在册） |
 
 ## 2. 起容器：通用骨架 + 各产品必带的 flag
@@ -147,6 +217,177 @@ READY 判据是容器内 `vsql -d postgres -Atc 'SELECT 1;'` 能回。宿主目�
 
 **MariaDB**——最省事：`-e MARIADB_ROOT_PASSWORD=… -e MARIADB_DATABASE=… -e MARIADB_USER=… -e MARIADB_PASSWORD=…`
 一行起库。注意 `lower_case_table_names=0`（Linux 默认），跟 OceanBase 的 `1` 相反，两边折叠行为不能互推。
+
+**磐维 PanWeiDB（系统镜像 + 开机自动安装型）**——镜像是 openEuler + systemd（`ENTRYPOINT /usr/sbin/init`），
+开机 `init-db.service` 跑 `/root/run.sh`：解包 → ansible（user/env/xml）→ `gs_install` → 改 `pwadmin` 密码 →
+`tail -f /dev/null`。首装约 10 分钟（bzip2 解包占大头），**容器内端口 17700，不是 5432**：
+
+```bash
+mkdir -p /www/panweidb/data && chmod 755 /www/panweidb/data
+docker run -d --name panweidb-test --restart unless-stopped --privileged=true \
+  --memory=4g --shm-size=2g -v /www/panweidb/data:/database -p 26100:17700 \
+  -e dbcompatibility=B registry.cn-shenzhen.aliyuncs.com/shine_fei/panweidb:3.4.0
+```
+
+**本宿主上它有三处硬阻塞，不打完起不来**（三处都在容器内改，改前留 `.orig`）：
+
+1. **CPU 预检是门槛，不是真实依赖**。`check_cpu_instructions` 要求 `lscpu` **同时**命中 `avx` 与 `rdtscp`
+   （`lscpu | grep rdtscp && lscpu | grep avx`），QEMU vCPU（无 avx/avx2/rdtscp/sse4.x/popcnt）直接抛
+   `Warning: This cluster is missing the rdtscp or avx instruction`。把
+   `script/local/PreInstallUtility.py` 该函数末尾的 `raise Exception(cpu_mission)` 改成 `pass` 后，
+   **initdb、引擎启动、`gs_checkos` 全部正常** ⇒ 预检过严（判定依据要写清：绕过的是门槛，不是硬件能力）。
+2. **cgroup v2 让 `checkDockerEnv()` 恒假**。它 grep `/proc/1/cgroup` 的 cgroup v1 形态
+   （`egrep '^1:.+(docker|lxc|kubepods)'`），新版宿主只有 `0::/init.scope` ⇒ 恒 False ⇒
+   **9 处「容器内可容忍」分支（LocalCheckOS / LocalCheck / inspection items）全部失效**，先后卡在
+   `find /etc/sysconfig/network-scripts -iname 'ifcfg-*-lo'`（GAUSS-51400）与
+   `/sbin/ethtool -g eth0`（GAUSS-50612 `Operation not supported`）。
+   **修厂商自己的探测函数比逐个 patch 检查点干净**：在 `gspylib/common/Common.py` 的 `checkDockerEnv()`
+   开头加 `if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"): return True`；
+   另可顺手 `mkdir -p /etc/sysconfig/network-scripts`（find 无匹配时返回 0，空目录即可过）。
+3. **`listen_addresses` 绑死安装期容器 IP**。`run.sh` 把 `localhost` 替换成当次 `ifconfig` 取到的 `172.17.0.x`，
+   容器重启换 IP 后 `gs_ctl start` 报 `FATAL: could not create listen socket for "172.17.0.x:17700"`。
+   在 `run.sh` 的启动分支（`gs_ctl start` 之前）按当前 IP 重写 `postgresql.conf` 即可自愈。
+   注意 **`gs_guc` 不接受 `*`，也不接受逗号值**（`ERROR: The parameter(*) exists illegal character:*` /
+   `The value "0.0.0.0,localhost" ... is incorrect`），只能改文件：
+
+```bash
+ip=$(hostname -I | awk '{print $1}')
+sed -i "/^listen_addresses/c\\listen_addresses = 'localhost,${ip}'" /database/panweidb/data/postgresql.conf
+```
+
+另外两条与产品语义绑定的规矩：
+
+- **兼容档是安装期参数，不能切片**。3.4.0 的 `CREATE DATABASE` **没有** `DBCOMPATIBILITY` 选项
+  （`\h create database` 实证），`-e dbcompatibility=A|B|PG` 只在首装时生效 ⇒ **A/Oracle 与 B/MySQL 必须两个实例**，
+  别指望单实例内切档（实例内所有库连同 `template*` 都是同一个 `datcompatibility`）。
+- **内存有引擎下限，且下限不是容器 limit**。`max_process_memory` 低于
+  `2GB + cstore_buffers(512MB) + (udf_memory_limit - UDF_DEFAULT_MEMORY) + shared_buffers + preserved memory(2241MB)
+  ≈ 5057MB` 时直接 `FATAL: the values of memory out of limit`。想省内存就压 `shared_buffers`
+  （1GB→256MB，实测常驻 RSS 从 1.42GB 降到 0.9GB），`max_process_memory` 抬到 8GB 即可（它是记账上限，不是预占）。
+
+## 2.5 内存预算与过载治理（2026-11-07 实录）
+
+靶机 16GB 物理内存上跑 12 个数据库容器时，「容器上限合计 41GiB」不是预留但**任一个失控都能吃干主机**；
+本轮实测 `available` 只剩 775MB、swap 为 0，一次峰值就是 OOM-kill。治理按「swap → 容器 cap → DB 内部参数」
+三步走，缺一步都不算做完。
+
+### 定 cap 的规则
+
+`cap ≈ 实测峰值的 1.5~2×`，且**必须高于进程的 anon 常驻**（`docker stats` 的 MemUsage 含 page cache，
+不可回收的 anon 才是硬地板，见下）。本轮 12 个容器（容器名 / 改前实测 / 旧 cap / 新 cap）：
+
+| 容器 | 改前实测 | 旧 cap | 新 cap | 备注 |
+|---|---|---|---|---|
+| xc3-oceanbase | 4.39 GiB | 8 GiB | 5.5 GiB | anon 硬地板 4.21GiB，压到 4GiB 会立刻 OOM |
+| xc3-oracle-free | 2.17 GiB | 4 GiB | 2.5 GiB | 压 SGA 后实际降到 0.95GiB |
+| panweidb-ora | 1.14 GiB | 3 GiB | 1.5 GiB | 压 `max_connections` 后 0.49GiB |
+| panweidb-test | 1.08 GiB | 4 GiB | 1.5 GiB | 同上 0.49GiB |
+| xc3-mssql | 1.02 GiB | 2 GiB | 1.5 GiB | `max server memory` 768MB 后仍 1.0GiB |
+| xc3-vastbase | 724 MiB | 4 GiB | 1.5 GiB | 改后 533MiB |
+| xc3-gaussdb-kernel503 | 647 MiB | 4 GiB | 1.5 GiB | 改后 639MiB |
+| xc3-opengauss | 589 MiB | 4 GiB | 1 GiB | 改后 469MiB |
+| xc3-mysql8 | 371 MiB | 1 GiB | 768 MiB | |
+| xc3-vastbase-b | 219 MiB → 改后 593 MiB | 2 GiB | 1 GiB | 重启后实测反涨，**按改后值定**，512MiB 会不够 |
+| xc3-mariadb | 193 MiB | 2 GiB | 512 MiB | |
+| xc3-highgo | 45 MiB | 3 GiB | 512 MiB | 反向验证用这个容器 |
+
+改 cap 一律 `docker update --memory <新值> --memory-swap <新值> <容器>`（`--memory-swap` 必须 ≥ `--memory`，
+与 memory 相等表示不给额外 swap）。**一次改一个，改完立刻 `docker inspect` 复核 + `docker ps` 看是否 Up**，
+异常就按回退表恢复原值再继续。
+
+### cap 不是全部：必须同步压 DB 内部参数
+
+容器 cap 只是外框，DB 内部参数才是它「想用多少」。只压 cap 不压参数，等于让容器被自己的 DB 撑到 OOM-kill。
+
+| 引擎 | 参数 | 建议值 | 改法 |
+|---|---|---|---|
+| OceanBase | `memory_limit` | 按 `sum(unit MEMORY_SIZE) + system_memory` 定，本轮 6G→5G | 在线 `ALTER SYSTEM`；但**先压 unit**，见下 |
+| OceanBase | 租户 `MEMORY_SIZE` | 3G→2G（`ALTER RESOURCE UNIT <unit> MEMORY_SIZE='2048M'`） | 在线；2G 是下限之一 |
+| openGauss 族（磐维 / GaussDB / Vastbase / openGauss） | `shared_buffers` | 256~384MB | 改 conf + **重启** |
+| openGauss 族 | `cstore_buffers` | 512MB→128MB（列存，测试库基本不用） | 改 conf + **重启** |
+| 磐维 PanWeiDB | `bulk_write_ring_size` | 2GB→512MB | 改 conf + **重启** |
+| 磐维 PanWeiDB | `max_connections` | 3000→200（**实测常驻从 950MiB 降到 500MiB**） | 改 conf + **重启** |
+| Oracle | `sga_max_size` / `sga_target` / `pga_aggregate_target` | 512M / 512M / 256M | `sga_target`/`pga` 可在线；`sga_max_size` 只能 `scope=spfile` + 重启才真正释放 |
+| SQL Server | `max server memory (MB)` | 512~1024 | 在线改；**改小不会归还内存，必须重启容器才生效** |
+| MySQL / MariaDB | `innodb_buffer_pool_size` | 128~256MB | 在线 `SET GLOBAL` + 写 conf |
+
+OceanBase 的两个坑：①`memory_limit` 不能低于 `sum(unit MEMORY_SIZE) + system_memory`，直接 `ALTER` 会报
+`ERROR 4147 Invalid config`，要先把租户 unit 压下来；②unit 有 `__min_full_resource_pool_memory` 下限
+（本机 bootstrap 写死 2GB，`ALTER SYSTEM` 改不动），所以单租户压不到 2GB 以下；③`ALTER RESOURCE UNIT`
+不接受 `'1.5G'` 这类小数（`Parse error`），用整数 `1536M`；④unit 压太狠会触发
+`The memory of memstore needs to be less than 90% of the new memory ... shrink is not supported`，
+先看 `GV$OB_MEMSTORE` 的 `memstore_used` 再决定压到多少。即使压了 `memory_limit`，observer 的 anon 常驻
+也**不会立即释放**（本轮 6G→5G 后 anon 纹丝不动在 4.21GiB），定 cap 要照 anon 而不是照 memory_limit。
+
+### 哪些改法在线、哪些要重启
+
+- **在线**：OceanBase（`ALTER SYSTEM` / `ALTER RESOURCE UNIT`）、MySQL/MariaDB（`SET GLOBAL`）、
+  Oracle 的 `sga_target`/`pga_aggregate_target`。
+- **在线改但必须重启才真释放**：SQL Server 的 `max server memory`——`sp_configure` + `RECONFIGURE` 报成功，
+  cgroup anon 却纹丝不动（本轮 991MB 停在原地，`DBCC DROPCLEANBUFFERS`/`FREEPROCCACHE` 也没用），
+  重启容器后才降到 633MB。
+- **必须重启**：openGauss 族的 `shared_buffers`/`cstore_buffers`、Oracle 的 `sga_max_size`。openGauss 族重启
+  实测 20~40 秒停机；Oracle Free 约 1 分钟。**重启窗口内先确认没有别人在跑方言矩阵**。
+- 磐维容器重启后 `gs_ctl` 可能因残留的**空 `postmaster.pid`** 报 `invalid data in PID file`，删掉再
+  `docker exec <c> su - omm -c 'gs_ctl start'` 即可；直接 `docker exec -u omm ... gs_ctl start` 会因缺少
+  `GAUSSHOME` 报 `Get environment of GAUSSHOME failed`，**必须走 `su - omm`**。
+
+### swap：主机 0 swap 时一次峰值就是 OOM-kill
+
+```bash
+fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo "/swapfile none swap sw 0 0" >> /etc/fstab
+printf 'vm.swappiness = 10\nvm.vfs_cache_pressure = 50\n' > /etc/sysctl.d/99-mpvs-swap.conf
+sysctl -w vm.swappiness=10
+```
+
+**坑（本轮实证）**：`vm.swappiness` 设完过一会儿又变回 0。真凶是 `--privileged` 的磐维容器——它内部
+`/etc/sysctl.conf` 写着 `vm.swappiness = 0`，容器重启时 systemd-sysctl 直接写进宿主内核。**特权容器的
+sysctl 会落到宿主**，所以要么把容器内那份也改成 10，要么每次重启后复查（本轮两者都做了）。
+
+### 采集与判定
+
+```bash
+free -m                                            # 看 available
+docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+docker inspect -f '{{.HostConfig.Memory}}|{{.HostConfig.MemorySwap}}' <容器>
+free -m | awk '/Mem:/{print $7}'                   # available MB
+```
+
+判定口径三条：①`available` ≥ 3GB；②`docker stats` 无容器贴 cap 90% 以上；③12 个容器全部 `Up`、无 Restarting。
+`available` 受 page cache 影响很大，采数前可先 `sync; echo 3 > /proc/sys/vm/drop_caches` 看**真实的**压力态余量
+（本轮 drop 后 2549MB、压完参数后 3357MB），不要拿刚缓存的读数自欺。
+
+### 改完必须验数据面
+
+cap 和内部参数都改了，必须跑插件自己的方言验证子集，确认渲染词数没退化：
+
+```bash
+./gradlew dialectExternalVerify \
+  -PdialectExternalMatrix="<你的工作树>/.local/matrix.memcheck.properties" \
+  -Pkotlin.compiler.execution.strategy=in-process --console=plain
+```
+
+注意是 **`-P`** 不是 `-D`；矩阵文件整目录在 `.local/`（gitignore），**凭据不许进仓**。子集文件只留一行
+`instances = panwei_a`（或 `gaussdb_kernel503`），跑完对照基线词数（panwei_a 109 词且 `skip=1(rowid)`、
+gaussdb_kernel503 197 词）。
+
+### 反向验证
+
+把一个小容器的 cap 临时压到**明显低于它的实际常驻**，证明 cap 真的生效：
+
+```bash
+docker update --memory 16m --memory-swap 16m xc3-highgo
+docker ps --filter name=xc3-highgo --format '{{.Status}}'   # 应 Restarting (137)
+docker inspect -f 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' xc3-highgo
+docker update --memory 512m --memory-swap 512m xc3-highgo    # 改回即恢复
+```
+
+只贴「设了 cap」不算验证；必须看到被压的容器真的异常、改回真的恢复，两次读数都要留。
+**量级别拍脑袋**：本轮按计划压到 64M，highgo 照常 `Up`（空闲只占 21~39MiB，`MemPerc` 分母已变成 64MiB、
+说明参数生效但它不缺内存），继续压到 16M 才 `OOMKilled=true`/`ExitCode=137`/`RestartCount=7`。
+压得不够低，验证的只是「docker 接受了这个参数」。
 
 ## 3. 凭据与权限：真正卡人的都在这
 
@@ -230,7 +471,8 @@ select current_user, current_database(),
 - `dbx_add_connection` **没有分组参数**，新建的连接只能落在默认位置，得请用户手动拖进 Song 分组；
   MCP 也没有 edit/update 连接的工具（只有 add/duplicate/remove）。
 - **`db_type` 不是任意值**：`oceanbase` 不支持（`INVALID_CONNECTION_TYPE`），用 `mysql` 类型 + 用户名带租户；
-  `highgo/vastbase/kingbase/dameng/sqlserver/opengauss` 原生支持。
+  `highgo/vastbase/kingbase/dameng/sqlserver/opengauss` 原生支持。**没有专门类型的国产库一律先试 `opengauss`**
+  （openGauss 系）/ `mysql`（MySQL 协议系）：磐维 PanWeiDB 实测 `opengauss` 可用，MCP 直连取到 `version()`。
 - 新连接默认**不在 MCP 授权范围**（`CONNECTION_OUT_OF_SCOPE`），要用户在 DBX 里放行；放行后连接名可能变，
   **按连接 ID 访问才可靠**。另外 DBX 的凭据是每条连接独立密文，`.local` 里那份「通用密码」对多主机已失效。
 
@@ -243,6 +485,11 @@ select current_user, current_database(),
 | OceanBase | `com.oceanbase:oceanbase-client:2.4.19` | `com.oceanbase.jdbc.Driver`，URL `jdbc:oceanbase://` |
 | MariaDB | `org.mariadb.jdbc:mariadb-java-client:3.3.3` | 3.x 全部自有类，不复用 MySQL `StatementImpl` |
 | 瀚高/海量/金仓 | `com.highgo:HgdbJdbc:6.2.5` / `cn.com.vastdata:vastbase-jdbc:2.16.1v` / `cn.com.kingbase:kingbase8:9.0.1` | 都在 Maven Central |
+| 磐维 PanWeiDB | 本地 jar `database-lab/vendor/drivers/panweidb-jdbc-{1.0.0,2.0.0}.jar`（V1/V2 类形一致；插件三面登记已覆盖两代） | **无 Maven 坐标**（厂商渠道拿不到公开仓库包）。安装到本机仓库：`mvn install:install-file -Dfile=database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar -DgroupId=org.panweidb -DartifactId=panweidb-jdbc -Dversion=2.0.0 -Dpackaging=jar`，之后坐标 `org.panweidb:panweidb-jdbc:<ver>` |
+
+磐维两代 jar 实测同一形态：`META-INF/services/java.sql.Driver` 都是 `org.panweidb.Driver`，`org/panweidb/` 条目
+374（V1）/ 399（V2），`cn/com/panweidb/` 均为 0——**V2 文档写的 `cn.com.panweidb.Driver` 在两代 jar 里都不存在**，
+按 jar 实测登记即可。测试侧由 `StatementWeaverVendorCoverageTest` 遍历 `drivers/panweidb-jdbc-*.jar` 每一代都验。
 
 拉驱动不方便时让服务器自己去阿里云 maven 镜像拿：
 `curl -sL -o <file> https://maven.aliyun.com/repository/public/<group/path>/<artifact>-<ver>.jar`。
@@ -251,7 +498,8 @@ select current_user, current_database(),
 ## 6. 台账与收尾
 
 - **连接/凭据/已知坑** → `.local/test-databases.md`（gitignored）。新增实例补一行：URL、账号、容器名、
-  镜像、停起命令、该实例特有的坑。
+  镜像、停起命令、该实例特有的坑。**同一实例还要在 `.local/db-env-instances.tsv` 登记一行**（无凭据的实例
+  索引，字段见 §9），两份台账缺一份都算没登记。
 - **部署原文与探针读数** → `tmp/xc3-env-init/<产品>.md`（gitignored）。含 docker run 原文、逐条探针输出、
   结论表、未取证清单。
 - **停/起**：`docker stop|start <容器>`；海量是 `bash /opt/xc3-vastbase/start.sh`。**不要 `docker rm`**——
@@ -275,6 +523,11 @@ select current_user, current_database(),
 | `mysql:8.0` 容器秒退，日志 `Fatal glibc error: CPU does not support x86-64-v2` | 官方 `mysql:8.0` 是 **Oracle Linux 9** 基底，glibc 以 x86-64-v2 为基线；靶机是 QEMU 虚机（`/proc/cpuinfo` 无 `sse4_1/sse4_2/popcnt`，只有 `cx16`） | 换 **`mysql:8.0-debian`**（Debian 12）。已拉的 OL9 版在本机不可用，别反复试 |
 | 灌进库的中文变 `C3A5C2BCC2A0…`（HEX 可验） | 容器内 `LANG` 为空 → mysql 客户端 `--default-character-set=auto` 落到 **latin1**，initdb 阶段 UTF-8 种子被双编码 | 初始化脚本**首行**加 `SET NAMES utf8mb4;` 后重灌；重建卷时这行必须保留（原始副本留 `.orig`） |
 | 容器起来了但外部连不上（容器内/localhost 正常） | MySQL 的 `root` 默认只允许 `localhost` | 起容器加 `-e MYSQL_ROOT_HOST=%` |
+| `gs_preinstall` 报 `This cluster is missing the rdtscp or avx instruction` 并退出 | 预检要求 `lscpu` 同时有 avx 与 rdtscp，QEMU vCPU 没有；**引擎本体不需要** | 把 `script/local/PreInstallUtility.py` 里 `check_cpu_instructions` 的 `raise` 改成 `pass`（留 `.orig`） |
+| `gs_checkos` 报 GAUSS-51400（`find /etc/sysconfig/network-scripts` 失败）或 GAUSS-50612（`ethtool -g eth0` Operation not supported） | cgroup v2 下 `checkDockerEnv()` 恒假 ⇒ 9 处「容器内可容忍」分支失效 | 在 `checkDockerEnv()` 加 `/.dockerenv` 判定（首选）；或补 `mkdir -p /etc/sysconfig/network-scripts` |
+| 容器重启后 `FATAL: could not create listen socket for "172.17.0.x:17700"` | `listen_addresses` 写死了安装时的容器 IP，重启换了 IP | 启动脚本里按 `hostname -I` 重写 `postgresql.conf` 的 `listen_addresses`（`gs_guc` 不收 `*`/逗号值） |
+| 起库报 `the values of memory out of limit ... = 5057MB` | `max_process_memory` 被压到引擎下限以下 | 抬回 ≥5GB（记账上限非预占），改压 `shared_buffers` |
+| `CREATE DATABASE … DBCOMPATIBILITY 'A'` 报 `option "dbcompatibility" not recognized` | 该产品的兼容档是**安装期**参数，不是建库选项 | 另起一个容器按目标档安装，别在单实例里切档 |
 
 ## 8. 与插件验证的关系（为什么值得花这个功夫）
 
@@ -289,9 +542,17 @@ select current_user, current_database(),
 **前提变了**（2026-11-05 用户定调）：测试服务器的服务**可能随时被重装系统**，容器、卷、数据、initdb 结果全部
 丢失。所以「部署」不再是手工操作，而必须是**声明式 + 幂等可重放**的：
 
-- **唯一事实源是清单**：`.local/db-env-instances.tsv`（gitignored，可含明文凭据），模板见
-  `scripts/instances.example.tsv`；台账 `.local/test-databases.md` 记录连接/凭据/坑。
-- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <清单>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
+- **唯一事实源是实例清单**：`.local/db-env-instances.tsv`（gitignored，**不含凭据**）——一行一个实例，
+  Tab 分隔 10 列：`name kind host hostPort ctrPort db user image volume notes`。`name` 是容器名/实例短名；
+  `ctrPort` 是**容器内**端口（磐维 17700，不是 5432）；`notes` 记内存与 shm、特权位/ulimit、DBX 连接 id、
+  停起方式与该实例特有的坑。**新增实例必须就地登记一行**（部署完就补、别攒）——漏登记的实例在靶机重装后
+  等于不存在。
+- **凭据只落台账**：`.local/test-databases.md` 记连接 URL、账号口令、已知坑；清单的 `user` 列只写账号名。
+- **重放吃的是派生出来的 replay manifest**：`bootstrap-db-env.sh` 的输入是 Docker 子集的 9 列清单
+  （`name image hostPort containerPort memLimit volumeName env initDir verifyCmd`，模板
+  `scripts/instances.example.tsv`），`env` 位放口令、从台账现填。**manifest 含明文口令，只落本机 `.local/`
+  与靶机 `/root/`，不入库**：实例清单回答「该有哪些」，manifest 回答「怎么起」。
+- **重放引擎是脚本**：`scripts/bootstrap-db-env.sh <replay.tsv>`——已存在的容器跳过、镜像缺失才拉（带镜像源回退）、
   按 `verifyCmd` 轮询就绪、最后打印端口汇总并列出未就绪项。**可反复执行**，失败重跑只补没起来的那些。
 - **种子数据要能自动灌**：把 `.sql` 放清单的 `initDir`（挂到 `/docker-entrypoint-initdb.d:ro`），镜像首次
   初始化时自动执行；每条 `.sql` 首行必须 `SET NAMES utf8mb4;`（见 §7 的双编码坑）。
@@ -303,23 +564,37 @@ select current_user, current_database(),
 docker info >/dev/null && echo ok
 free -g | head -2                      # 按 §0 的内存账排布实例，别一次全上
 
-# 1) 上传清单与种子（本地 → 靶机）
-#    .local/db-env-instances.tsv          实例清单（含凭据）
+# 1) 派生 replay manifest（实例清单的 Docker 子集 + 台账口令现拼，9 列见 scripts/instances.example.tsv）
+#    .local/db-env-instances.tsv          实例清单（无凭据，用来核对「该有哪些」）
+#    .local/replay.tsv                    本次重放清单（9 列，env 位含口令；不外传）
 #    /root/<实例>-init/*.sql              种子脚本（首行 SET NAMES utf8mb4;）
-scp .local/db-env-instances.tsv root@103.36.220.245:/root/
+scp .local/replay.tsv root@103.36.220.245:/root/
 scp -r dev-support/db-seed/<实例>/*  root@103.36.220.245:/root/<实例>-init/
 
 # 2) 一键重建
-ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/db-env-instances.tsv'
+ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/replay.tsv'
 
 # 3) 外部可达性 + 数据正确性（两档都要取，别只看容器 Running）
 #    - 从本机用 DBX/客户端实连一次（SELECT 1 / VERSION()）
 #    - 中文正确性用 HEX 钉死：SELECT HEX(name) —— 必须等于 HEX('张三') = E5BCA0E4B889
 #    - 表与行数：SHOW TABLES + 逐表 COUNT(*)
 
-# 4) 收尾：台账补行 → DBX 登记（首个查询可能 CONNECTION_OUT_OF_SCOPE，放行一次）→
-#    若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
+# 4) 收尾：台账补行（test-databases.md + db-env-instances.tsv 两处都补）→ DBX 登记（首个查询可能
+#    CONNECTION_OUT_OF_SCOPE，放行一次）→ 若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
 ```
+
+### 磐维 PanWeiDB：不能「一把梭」，三处补丁有时序
+
+两个磐维实例（`panweidb-test` B 档 / `panweidb-ora` A 档）的容器起得来，但**装不上**：补丁必须在**解包之后、
+`gs_local` 跑到 `checkos` 之前**打进去，而 `init-db.service` 一开机就自己开跑，时间窗只有几十秒到几分钟。
+处置顺序：
+
+- `dev-support/db-lab/patch-panweidb-image.sh` **若该脚本在位则用它**（起容器 → 轮询等
+  `/database/panweidb/soft/script/` 解包出来 → 打补丁 → 放行安装）；**不在位就按 §2 磐维段手工打三处**：
+  `PreInstallUtility.py` 的 `raise` → `pass`、`Common.py` 的 `checkDockerEnv()`、`run.sh` 的 `listen_addresses` 自愈。
+- 持久性不一样，别记混：前两处在 `/database` 卷里、随卷持久（同一卷重建容器不必重打）；
+  `/root/run.sh` 与 `/etc/sysconfig/network-scripts/` 在镜像层，**每次重建容器都要重打**。
+- 兼容档是安装期参数（§2），A/B 必须两个容器，不能在一个容器里切。
 
 ### 重建时不做的事
 

@@ -126,6 +126,8 @@ class ReplayScriptExportTest {
             MySqlDialect.name to "START TRANSACTION",
             MariaDbDialect.name to "START TRANSACTION",
             OceanBaseDialect.name to "START TRANSACTION",
+            // T-GoldenDbDialect（券 A）：p83 事务控制语句专章（文档级），与 MySQL 同形
+            "GoldenDB" to "START TRANSACTION",
             PostgreSQLDialect.name to "BEGIN",
             KingBaseDialect.name to "BEGIN",
             OpenGaussDialect.name to "BEGIN",

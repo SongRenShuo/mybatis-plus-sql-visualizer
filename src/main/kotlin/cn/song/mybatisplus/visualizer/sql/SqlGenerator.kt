@@ -268,7 +268,7 @@ object SqlGenerator {
                         set.rawSql.orEmpty()
                     }
                     set.column != null -> "${renderQualified(set.column, dialect)} = ${renderValue(
-                        set.value ?: SqlValue.Placeholder("?"), paramSink, hintSink, quoteHint(statement.table, set.column),
+                        set.value ?: SqlValue.Placeholder("?"), paramSink, hintSink, paramHint(statement.table, set.column),
                     )}"
                     else -> ""
                 }
@@ -467,7 +467,7 @@ object SqlGenerator {
         dialect: Dialect = MySqlDialect,
     ): String = when (condition) {
         is Condition.Simple ->
-            "${renderQualified(condition.column, dialect)} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, quoteHint(table, condition.column))}"
+            "${renderQualified(condition.column, dialect)} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, paramHint(table, condition.column))}"
 
         is Condition.Unary ->
             "${renderQualified(condition.column, dialect)} ${condition.op}"
@@ -479,7 +479,7 @@ object SqlGenerator {
                 when (value) {
                     is SqlValue.Placeholder -> {
                         paramSink?.add(value.source)
-                        hintSink?.add(ParamHint(quote = quoteHint(table, condition.column), inList = true))
+                        hintSink?.add(paramHint(table, condition.column).copy(inList = true))
                         "?"
                     }
                     is SqlValue.Literal -> value.raw
@@ -490,7 +490,7 @@ object SqlGenerator {
 
         is Condition.Between -> {
             val op = if (condition.negated) "NOT BETWEEN" else "BETWEEN"
-            "${renderQualified(condition.column, dialect)} $op ${renderValue(condition.lo, paramSink, hintSink, quoteHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, quoteHint(table, condition.column))}"
+            "${renderQualified(condition.column, dialect)} $op ${renderValue(condition.lo, paramSink, hintSink, paramHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, paramHint(table, condition.column))}"
         }
 
         is Condition.Like -> {
@@ -556,11 +556,11 @@ object SqlGenerator {
     /**
      * 渲染参数值：字面量原样输出；占位符输出 `?` 并收集来源与回填提示（M13）。
      */
-    private fun renderValue(value: SqlValue, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?, quote: Boolean?): String = when (value) {
+    private fun renderValue(value: SqlValue, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?, hint: ParamHint?): String = when (value) {
         is SqlValue.Literal -> value.raw
         is SqlValue.Placeholder -> {
             paramSink?.add(value.source)
-            hintSink?.add(ParamHint(quote = quote))
+            hintSink?.add(hint ?: ParamHint())
             "?"
         }
     }
@@ -599,13 +599,13 @@ object SqlGenerator {
     }
 
     /**
-     * 列值引号提示（M13，T-M23-03 修正）：按实体字段类型判定——
-     * **除确定的数值类型（int/long 等）外，其他类型默认带引号**（用户确认：LocalDateTime/Date/Boolean
-     * 等非数值类型原实现一律不加引号，回填后 SQL 无效）；列或类型未知返回 null（面板走原数字启发式）。
+     * 列值回填提示（M13，T-M23-03 修正；T-DateLiteralBackfill 补日期族）：
+     * 引号按实体字段类型判定（**除确定的数值类型外默认带引号**），日期族额外带 `temporal`
+     * 让面板/复制链产出 ANSI 类型字面量。列或类型未知返回 `quote=null`（面板走数字启发式）。
      * 判定逻辑见 [ParamQuote]（批量模板路径共用，T-M23-02）。
      */
-    private fun quoteHint(table: TableInfo?, column: ColumnRef): Boolean? {
+    private fun paramHint(table: TableInfo?, column: ColumnRef): ParamHint {
         val type = table?.columns?.firstOrNull { it.columnName == column.columnName }?.fieldType
-        return ParamQuote.decide(type)
+        return ParamQuote.hint(type)
     }
 }

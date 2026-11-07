@@ -601,6 +601,24 @@ internal fun crossChannelUnfoldedDiagText(
         "dedupeB=${incoming.dedupeKey.take(8)}(通道=${incoming.captureProvenance})"
 
 /**
+ * T-SqlListCatchup 券 F1（20261107 真机第三轮压测缺陷）：**越窗兜底对账**的诊断行——同 crossKey、
+ * 异 dedupeKey、超 5s 折叠窗但仍在去重窗内的两份观测被折回一行（修复前留两行）。
+ *
+ * **内容红线**（沿用 [crossChannelUnfoldedDiagText]）：只有 crossKey 指纹前缀、两侧 dedupeKey 前缀与
+ * 通道名——绝不含 SQL 原文、参数值与连接凭据（诊断行进 idea.log）。
+ */
+internal fun crossChannelStaleReconcileDiagText(
+    crossKey: String,
+    existing: LogSqlEntry,
+    incoming: LogSqlEntry,
+    merged: LogSqlEntry,
+): String =
+    "超窗兜底对账: crossKey=${crossKey.take(8)} " +
+        "dedupeA=${existing.dedupeKey.take(8)}(通道=${existing.captureProvenance}) " +
+        "dedupeB=${incoming.dedupeKey.take(8)}(通道=${incoming.captureProvenance})" +
+        "→${merged.captureProvenance} 升级=${mergeUpgradedAspects(existing, merged)}"
+
+/**
  * T-CrossChannelDedupe：跨通道等价键**折叠成功**的诊断行（与 [crossChannelUnfoldedDiagText] 同红线：
  * 只有指纹前缀、通道与升级面）。它回答「兜底真的在工作」，是 §6.4 真机复验「兜底触发次数」的读数来源；
  * 未折叠哨兵与它分开成两行，故 `跨通道同源未折叠` 的计数为 0 仍可当作「无残余分叉」的判据。

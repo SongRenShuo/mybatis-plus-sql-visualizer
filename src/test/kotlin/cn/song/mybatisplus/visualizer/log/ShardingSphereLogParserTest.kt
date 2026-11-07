@@ -129,11 +129,19 @@ class ShardingSphereLogParserTest {
         val row = SqlExportRow("", entry.restoredSql, entry.source.name)
         for (format in SqlExportFormat.values()) {
             val exported = SqlExportService.format(listOf(row), format)
-            assertEquals(entry.rawSql.count { it == '?' }, exported.count { it == '?' })
-            assertTrue(!exported.contains(" ::: "))
-            assertTrue(!exported.contains("BOOK"))
-            assertTrue(!exported.contains("001"))
-            assertTrue(!exported.contains("[0, 30]"))
+            // T-CiDiag（2026-11-06）：CI 上本块第 3 条断言（"001"）曾在 fast 切片腿里失败过，
+            // 而本地与相邻 CI 轮都绿——无消息时只看到一句空 AssertionError，无法判是哪个 format、
+            // 残留了什么。断言消息补上 format 与产物片段（不改变判定条件），下次失败即可定因。
+            assertEquals("format=$format 占位数应与逻辑 SQL 一致，产物=$exported",
+                entry.rawSql.count { it == '?' }, exported.count { it == '?' })
+            assertTrue("format=$format 不应含分片标记 ' ::: '，产物=$exported", !exported.contains(" ::: "))
+            assertTrue("format=$format 不应含物理表名 BOOK，产物=$exported", !exported.contains("BOOK"))
+            // T-CiFastFlake（2026-11-06 run 42135405574 定因）：「001」扫描此前含导出头部
+            // `-- Exported … at 2026-11-06 08:22:36.001`——毫秒恰为 001 时（1/1000）必然红，
+            // 与「本地与相邻轮都绿」的偶发形态吻合。收窄到去头部后的正文再扫。
+            val exportedBody = exported.lines().filterNot { it.startsWith("-- Exported") }.joinToString("\n")
+            assertTrue("format=$format 不应含 001（占位符/控制字符残留），产物=$exported", !exportedBody.contains("001"))
+            assertTrue("format=$format 不应含物理分页参数 [0, 30]，产物=$exported", !exported.contains("[0, 30]"))
         }
     }
 

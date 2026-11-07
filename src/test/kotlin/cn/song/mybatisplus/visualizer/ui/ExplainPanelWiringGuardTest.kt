@@ -321,15 +321,33 @@ class ExplainPanelWiringGuardTest {
         )
         for (marker in readonlyActions) {
             val body = functionBody(source, marker)
+            // T-RuntimeSlotFill 券 C（2026-11-07）：回放导出改成走 previewSqlForExport()——它在
+            // previewSqlForReadonly() 之上再填一次运行期占位（不填的话导出物里会留 `/* 运行时值 … */`）。
+            // 判据从「必须直接调 previewSqlForReadonly」放宽为「必须走快照链」：直接调快照，或调
+            // previewSqlForExport；后者本身是否仍走快照由下面单独断言，链条没断。
             assertTrue(
-                "$marker 必须走 previewSqlForReadonly()（执行视图下才拿得到预览 SQL）",
-                body.contains("previewSqlForReadonly()"),
+                "$marker 必须走 previewSqlForReadonly() 或其封装 previewSqlForExport()" +
+                    "（执行视图下才拿得到预览 SQL；回放导出还要把运行期占位填掉）",
+                body.contains("previewSqlForReadonly()") || body.contains("previewSqlForExport()"),
             )
             assertFalse(
                 "$marker 不得裸读 currentEditorSql()（执行视图下会漂移成 EXPLAIN 语句）",
                 body.contains("currentEditorSql()"),
             )
         }
+        // 放宽的前提：封装本身必须仍走快照（否则上面那条会变成空判据）。
+        // 注意 functionBody 的边界识别只认「行首」的 internal/private/fun 与 KDoc，
+        // 缩进的 `    /**` 不算边界——所以这里必须再加一条「不得出现 currentEditorSql()」，
+        // 否则把封装改成读实时编辑器时，body 会一路吞到后面某个调用快照的函数而假绿。
+        val exportHelper = functionBody(source, "internal fun SqlPreviewPanel.previewSqlForExport(")
+        assertTrue(
+            "previewSqlForExport() 必须基于 previewSqlForReadonly()（否则回放导出会绕过预览快照）",
+            exportHelper.contains("previewSqlForReadonly()"),
+        )
+        assertFalse(
+            "previewSqlForExport() 不得读实时编辑器（currentEditorSql()）——执行视图下会漂移成 EXPLAIN 语句",
+            exportHelper.contains("currentEditorSql()"),
+        )
         // 执行链本身必须仍读真实编辑器（用户手改要生效），不得走快照
         val execute = functionBody(source, "internal fun SqlPreviewPanel.executeSql(")
         assertTrue(

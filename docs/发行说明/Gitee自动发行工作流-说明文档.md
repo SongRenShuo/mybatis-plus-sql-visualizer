@@ -53,6 +53,26 @@ parallel_tasks check/register
 description / 市场页定位是纯能力陈列，不承担「最近更新」播报（2026-09-12 用户定案）；
 功能更新对外可见性由 changeNotes / preview.update.json / CHANGELOG / 发行说明四处承担。
 
+### 双通道发行版正文分工（2026-11-06 定例）
+
+GitHub 与 Gitee 的发行版正文**本来就不一样，不要对齐**。两条通道的读者与用途不同：
+
+| 通道 | 正文构成 | 生成方式 | 读者与用途 |
+|------|---------|---------|-----------|
+| GitHub | `## 本版变更`（changeNotes 本版块）+ 元信息（附件名 / 标签与提交号 / 完整发行说明链接 / 全部发行版本 / Gitee 同版链接 / 构建记录）+ 反馈与二维码 + `<details>` 折叠的全部历史变更 | CI 自动（`build-plugin.yml` 的 publish job） | 技术读者与归档：速览、提交号、构建记录、可折叠历史 |
+| Gitee | 发行说明全文：新增 / 修复 / 改进 / 测试 / 已知边界 / 兼容性 / 安装 / 文档 / 反馈 | 人工 `--notes` 传入发行说明 | 国内用户主入口与自更新通道（`update.json` 指向此处）：怎么装、兼容哪些 IDE、有哪些已知边界 |
+
+两边不是信息割裂：GitHub 正文里已挂「完整发行说明」链接，点过去就是 Gitee 那份全文，
+是「摘要 + 入口」与「全文」的关系。
+
+统一任何一边都是净损失（决定过、不再重议）：Gitee 改速览会丢安装步骤与已知边界；
+GitHub 改全文要动 CI 模板、且丢掉折叠历史与构建记录。
+
+**配套约束**：发行说明尾部须带一行构建记录链接
+（`构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`）。
+Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者也能核验「这版跑了哪一轮门禁」。
+清单侧对应条目为 RC-P4b。
+
 ### 内测 beta 系列专项规则
 
 - 对外更新清单（changeNotes / preview.update.json）**只保留最新一个 `-beta.N` 标题块**，
@@ -220,12 +240,36 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 |------|-------------|
 | 400 `{"messages":["body is missing"]}` | 描述参数用了 `description` → 改 `body` |
 | 404 `upload_files` / `assets` | 端点不存在 → 用 `attach_files` |
-| 405 `PUT /releases/{id}` | Gitee 不支持 PUT 编辑发行版 → 改正文用 `PATCH /releases/{id}`（须带 `tag_name`）；要换附件才需 `--replace` 删了重建 |
+| 405 `PUT /releases/{id}` | Gitee 不支持 PUT 编辑发行版 → 改正文用 `PATCH /releases/{id}`；要换附件才需 `--replace` 删了重建 |
+| 400 `{"messages":["tag_name is missing","name is missing"]}` | PATCH 是**整体覆盖**语义，`tag_name` 与 `name` 必带；只传 `body` 会被拒 |
+| 改完正文后内测版变成正式版（`prerelease: false`） | PATCH 未传的字段**回落默认值**，`prerelease` 默认 false → 三个字段 `tag_name` / `name` / `prerelease` 必须一并传（2026-11-06 实证，见下） |
 | 同 tag 再建报 400「该标签已经存在发行版」 | 已有发行版 → `gitee-release.py … --replace`（先删后重建） |
 | 同名附件重传后线上仍是旧包 | CDN 缓存 → 稍后用 `--verify-only` 复查 sha256 |
 | 补建版本显示在列表下方 | 列表按创建时间倒序 → 见 §4 删除重建 |
 | 自更新收不到通知 | downloadUrl 与附件 URL 尾段不一致 |
 
+### 6. 改已有发行版的正文（PATCH 三字段必带）
+
+发行后才发现正文要补内容（补测试读数、补构建记录行、改错别字）时，**不要 `--replace`**——
+那是删了重建，会重传附件并可能踩 CDN 缓存。用 PATCH 原地改正文，附件不动：
+
+```python
+# PATCH /repos/{owner}/{repo}/releases/{id}
+data = urllib.parse.urlencode({
+    "access_token": token,
+    "tag_name":     "<版本号>",      # 必带，缺了报 "tag_name is missing"
+    "name":         "<发行版标题>",   # 必带，缺了报 "name is missing"
+    "prerelease":   "true",          # 内测必带！缺了静默回落 false，内测版变正式版
+    "body":         notes_markdown,
+}).encode("utf-8")
+```
+
+PATCH 是**整体覆盖**语义：没传的字段回落默认值，不是「保持不变」。所以三个字段一并传，
+改完立即回读断言 `prerelease` / `body` 尾段 / 附件名，别只看 HTTP 200。
+
+2026-11-06 实证（v2026.11.6-beta.1 补构建记录行）：第一次只传 `body` → 400
+`tag_name is missing`；补 `tag_name` + `name` 后 200，但 `prerelease` 已被改成 `false`，
+回读才发现，再补 `prerelease=true` 才修回。**回读必须查 `prerelease`，不能只查正文长度。**
 
 ### 附：Python 无依赖参考实现
 

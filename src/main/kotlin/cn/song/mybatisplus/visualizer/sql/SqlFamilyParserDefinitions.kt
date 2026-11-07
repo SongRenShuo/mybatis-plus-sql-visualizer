@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect
 import cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect
+import cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect
 import cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect
 import cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect
 import com.intellij.lang.Language
@@ -86,6 +87,9 @@ class HighGoParserDefinition : MpvSqlFamilyParserDefinition(HighGoSqlDialect.INS
 
 /** 海量 Vastbase（语言 id `Vastbase`）。 */
 class VastbaseParserDefinition : MpvSqlFamilyParserDefinition(VastbaseSqlDialect.INSTANCE, "MPV_VASTBASE_SQL_FILE")
+
+/** GoldenDB（语言 id `GoldenDB`，T-GoldenDbDialect 券 A——与上面四个自注册方言同款成对注册）。 */
+class GoldenDbParserDefinition : MpvSqlFamilyParserDefinition(GoldenDbSqlDialect.INSTANCE, "MPV_GOLDENDB_SQL_FILE")
 
 /**
  * 绑定本方言语言的 `IFileElementType`——**用核心 `IElementType(String, Language)` 直接实现**

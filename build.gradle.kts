@@ -103,6 +103,14 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-IbatisPanwei（2026-11-06）：磐维 PanWeiDB 驱动——公开仓库拿不到厂商标，jar 入库在
+    // database-lab/vendor/drivers/，按仓库相对路径挂**测试 classpath**（仅测试面，供
+    // dialectExternalVerify 连磐维 A/B 实例跑方言渲染套件；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar"))
+    // T-GoldenDbDialect（2026-11-07）：中兴 GoldenDB 驱动——同磐维口径，公开仓库拿不到厂商标，
+    // jar 入库 database-lab/vendor/drivers/ 挂**测试 classpath**（供矩阵/外指腿连驱动级替代实例；
+    // §7.6 驱动级替代读数的长效注入，替代 .local init script 临时方案；插件运行时零依赖不变）。
+    testImplementation(files("database-lab/vendor/drivers/gdb_mysql-connector-java-oracle-5.1.46.99.jar"))
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
@@ -378,4 +386,13 @@ tasks.named("e2eFakeIde") {
     // T-TestGapSpeed T5：负载敏感性能用例串行尾道（任务名不匹配上方 [0-9]+ 正则，单独挂边）
     mustRunAfter("testShardTail")
     mustRunAfter("testExternal")
+}
+
+// T-ConsoleBind263：可选的真平台 jar 契约校验（`PlatformMappingContractTest`）。
+// Gradle 的 `-D` 只作用于 Gradle 自己的 JVM，不会自动传给 fork 出去的测试进程——这里显式转发。
+// 未指定时什么都不设，用例自己 assume 跳过（skipped，不是通过）。
+tasks.withType<Test>().configureEach {
+    providers.systemProperty("mpvs.contract.ide").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { systemProperty("mpvs.contract.ide", it) }
 }

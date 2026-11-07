@@ -15,10 +15,14 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
  *                     [cn.song.mybatisplus.visualizer.xml.ParamKind] 枚举名，三来源归一由
  *                     [TypedLiteralRenderer.classify] 承担）；null = 无类型信息 → 渲染链
  *                     走既有 quote/启发式回退，行为与升级前逐字节一致
+ * @param temporal     T-DateLiteralBackfill：该值已知是日期/时间族——渲染时先试 ANSI 类型字面量
+ *                     （`DATE '…'` / `TIMESTAMP '…'`，见 [SqlDateLiteral]），形态不匹配再走 [quote]。
+ *                     默认 false = 既有行为（引号/启发式），保证既有构造与 `equals` 不破。
  */
 data class ParamHint(
     val quote: Boolean? = null,
     val likePosition: LikePosition? = null,
     val inList: Boolean = false,
     val typeText: String? = null,
+    val temporal: Boolean = false,
 )

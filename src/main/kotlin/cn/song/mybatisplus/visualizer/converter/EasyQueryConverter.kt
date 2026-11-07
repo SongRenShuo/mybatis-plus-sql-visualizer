@@ -281,6 +281,7 @@ object EasyQueryConverter {
                 source = col.columnName,
                 quote = ParamQuote.decide(col.fieldType),
                 checked = true,
+                temporal = ParamQuote.isTemporal(col.fieldType),
             )
         }
         val model = BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)
