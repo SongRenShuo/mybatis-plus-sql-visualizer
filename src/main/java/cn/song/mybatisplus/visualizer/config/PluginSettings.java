@@ -156,6 +156,17 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean xmlInlineSqlEnabled = true;
 
         /**
+         * T-PagesHql（默认 {@link #PAGES_SOURCE_AUTO}）：maintainPage {@code <datasource>} 的源语言判定档。
+         *
+         * <ul>
+         * <li>{@link #PAGES_SOURCE_AUTO}：按 {@code type} 属性 / 根标识符与 entityClass 的关系自动推断（默认 SQL 保守）；</li>
+         * <li>{@link #PAGES_SOURCE_SQL}：一律按原生 SQL（关闭 HQL 转换，用于自动判定误判时退回旧行为）；</li>
+         * <li>{@link #PAGES_SOURCE_HQL}：一律按 HQL（自动判定漏判时的强制档）。</li>
+         * </ul>
+         */
+        private String pagesXmlSourceMode = PAGES_SOURCE_AUTO;
+
+        /**
          * R5（T-PerfSweep910 同期小件）：快捷模板「抽样」的 LIMIT 行数（默认 10，现值硬编码于
          * SampleSelectedTableAction）。范围钳制 1..10000（防误输入全表扫）；仅影响抽样语句。
          */
@@ -296,6 +307,23 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * false 时隐藏耗时，节省列表宽度。
          */
         private boolean showDurationInLogList = true;
+
+        /**
+         * 在来源位置后显示「类名#方法名」（T-LogMethodName，<b>默认关</b>）。
+         *
+         * <p>开启后日志/历史列表在 {@code [文件.java:行号]} 之后追加一段 {@code [类名#方法名]}，例如
+         * {@code [OrderServiceImpl.java:41] [UserMapper#selectById]}。方法名取自
+         * {@code cn.song.mybatisplus.visualizer.log.LogSqlEntry.mapperStatement}：
+         * <ul>
+         * <li>控制台桥通道 = MyBatis 语句 id（mapper 接口的方法，<b>不是</b>调用点的方法）；</li>
+         * <li>增强捕获通道 = 调用栈业务帧（与来源文件同一个类）。</li>
+         * </ul></p>
+         *
+         * <p>无该信息的条目（Hibernate / JdbcTemplate / ShardingSphere / MP 分页计数 / 旧日志）
+         * 保持原样、不占位。显示侧门控：落盘与检索语义零变化，切换即时生效（缓存键含本值）。
+         * 默认关闭的理由：头部行已是顺序截断，窄侧栏下新段会最先被裁掉。</p>
+         */
+        private boolean showMethodInLogList = false;
 
         /**
          * 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，<b>默认关</b>＝仅显示数据库类型）。
@@ -595,6 +623,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getXmlInlineSqlEnabled() { return xmlInlineSqlEnabled; }
         public void setXmlInlineSqlEnabled(boolean xmlInlineSqlEnabled) { this.xmlInlineSqlEnabled = xmlInlineSqlEnabled; }
 
+        /** T-PagesHql：maintainPage datasource 源语言判定档（AUTO/SQL/HQL，默认 AUTO）。 */
+        public String getPagesXmlSourceMode() { return pagesXmlSourceMode; }
+        public void setPagesXmlSourceMode(String pagesXmlSourceMode) { this.pagesXmlSourceMode = pagesXmlSourceMode; }
+
         /** 快捷模板「抽样」的 LIMIT 行数（R5，默认 10；范围钳制 1..10000）。 */
         public int getSampleLimit() { return sampleLimit; }
         public void setSampleLimit(int sampleLimit) { this.sampleLimit = sampleLimit; }
@@ -764,6 +796,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getShowDurationInLogList() { return showDurationInLogList; }
         public void setShowDurationInLogList(boolean showDurationInLogList) { this.showDurationInLogList = showDurationInLogList; }
 
+        /** 在来源位置后显示「类名#方法名」（T-LogMethodName，默认关）。 */
+        public boolean getShowMethodInLogList() { return showMethodInLogList; }
+        public void setShowMethodInLogList(boolean showMethodInLogList) { this.showMethodInLogList = showMethodInLogList; }
+
         /** 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，默认关＝仅显示数据库类型）。 */
         public boolean getDataSourceBadgeDetail() { return dataSourceBadgeDetail; }
         public void setDataSourceBadgeDetail(boolean dataSourceBadgeDetail) { this.dataSourceBadgeDetail = dataSourceBadgeDetail; }
@@ -910,6 +946,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
             c.xmlInlineSqlEnabled = xmlInlineSqlEnabled;
+            c.pagesXmlSourceMode = pagesXmlSourceMode;
             c.sampleLimit = sampleLimit;
             c.xmlSynHiEnabled = xmlSynHiEnabled;
             c.gutterGroupMapperXml = gutterGroupMapperXml;
@@ -963,6 +1000,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logTimePrefix = logTimePrefix;
             c.slowQueryThresholdMs = slowQueryThresholdMs;
             c.showDurationInLogList = showDurationInLogList;
+            c.showMethodInLogList = showMethodInLogList;
             c.dataSourceBadgeDetail = dataSourceBadgeDetail;
             c.crudColorStyle = crudColorStyle;
             c.crudColorSelect = crudColorSelect;
@@ -1055,6 +1093,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
                     && logAutoSaveMaxFiles == that.logAutoSaveMaxFiles
                     && showDurationInLogList == that.showDurationInLogList
+                    && showMethodInLogList == that.showMethodInLogList
                     && dataSourceBadgeDetail == that.dataSourceBadgeDetail
                     && historyMaxSize == that.historyMaxSize
                     && autoFoldFieldThreshold == that.autoFoldFieldThreshold
@@ -1092,6 +1131,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
                     && libraryEntitySweepEnabled == that.libraryEntitySweepEnabled
                     && sqlListPreviewHintSeen == that.sqlListPreviewHintSeen
+                    && Objects.equals(pagesXmlSourceMode, that.pagesXmlSourceMode)
                     && Objects.equals(logSqlPrefix, that.logSqlPrefix)
                     && Objects.equals(logParamPrefix, that.logParamPrefix)
                     && Objects.equals(logTimestampFormat, that.logTimestampFormat)
@@ -1127,7 +1167,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
                     showGutterIcon, xmlInlineSqlEnabled, editorShowWhitespaces, language, injectLogicDelete,
-                    sampleLimit, xmlSynHiEnabled,
+                    sampleLimit, xmlSynHiEnabled, pagesXmlSourceMode,
                     gutterGroupMapperXml, gutterGroupAnnotation, gutterGroupJpaHql, gutterGroupJdbc,
                     gutterGroupOther, gutterGroupInlineFallback,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
@@ -1139,6 +1179,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logAutoSaveMaxFiles, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
+                    showMethodInLogList,
                     dataSourceBadgeDetail,
                     crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
                     paramHistoryJson, paramSchemesJson, paramActiveScheme, paramActiveSchemeByKey, paramSchemeRecentKey,
@@ -1216,6 +1257,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     /** 嵌入列命名：组件路径前缀（Hibernate component-path，`qty.baseQty` → `qty_base_qty`）。 */
     public static final String EMBEDDED_NAMING_COMPONENT_PATH = "COMPONENT_PATH";
+
+    /** T-PagesHql：maintainPage {@code <datasource>} 源语言自动判定（默认，按 entityClass 相关性推断）。 */
+    public static final String PAGES_SOURCE_AUTO = "AUTO";
+
+    /** T-PagesHql：maintainPage {@code <datasource>} 一律按原生 SQL 处理（关闭 HQL 转换）。 */
+    public static final String PAGES_SOURCE_SQL = "SQL";
+
+    /** T-PagesHql：maintainPage {@code <datasource>} 一律按 HQL 处理（自动判定漏判时的强制档）。 */
+    public static final String PAGES_SOURCE_HQL = "HQL";
 
     // ---------- SQL 日志默认值（T-M31.14） ----------
     public static final String DEFAULT_LOG_SQL_PREFIX = "Preparing:";
