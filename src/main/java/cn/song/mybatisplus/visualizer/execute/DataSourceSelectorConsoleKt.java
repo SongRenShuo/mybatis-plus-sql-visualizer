@@ -16,6 +16,7 @@ import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DataKey;
 import com.intellij.openapi.actionSystem.DataSink;
 import com.intellij.openapi.actionSystem.UiDataProvider;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
@@ -1187,7 +1188,7 @@ public final class DataSourceSelectorConsoleKt {
                 // 预热失败不阻断：getScriptModel 照旧自己建 PSI（最差等价改前）
             }
         };
-        ApplicationManager app = ApplicationManager.getApplication();
+        Application app = ApplicationManager.getApplication();
         if (!app.isDispatchThread()) {
             warm.run();
             onReady.run();

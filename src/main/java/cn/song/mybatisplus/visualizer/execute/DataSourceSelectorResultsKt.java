@@ -16,6 +16,7 @@ import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DataKey;
 import com.intellij.openapi.actionSystem.DataSink;
 import com.intellij.openapi.actionSystem.UiDataProvider;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
@@ -1859,7 +1860,7 @@ public final class DataSourceSelectorResultsKt {
             @NotNull String sql,
             @Nullable String renderedDialectName,
             @NotNull Consumer<DataSourceSelector.TempPsiFile> onReady) {
-        ApplicationManager app = ApplicationManager.getApplication();
+        Application app = ApplicationManager.getApplication();
         if (!app.isDispatchThread()) {
             // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
             // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）

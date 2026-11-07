@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute;
 
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
@@ -720,7 +721,7 @@ final class ExecFileBinding {
 
     /** 模型写：EDT 上包写命令；已是写上下文或不在 EDT（平台会自己拒绝）则原样调用。 */
     private static void inWriteCommand(Project project, Runnable block) {
-        ApplicationManager app = ApplicationManager.getApplication();
+        Application app = ApplicationManager.getApplication();
         if (app == null || app.isWriteAccessAllowed() || !app.isDispatchThread()) {
             block.run();
             return;
