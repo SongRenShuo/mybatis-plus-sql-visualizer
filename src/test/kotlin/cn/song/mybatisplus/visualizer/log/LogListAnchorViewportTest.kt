@@ -38,7 +38,10 @@ class LogListAnchorViewportTest : BasePlatformTestCase() {
         savedThreshold = state.slowQueryThresholdMs
         // 多行模式才有可变行高与真实滚动（锚定补偿按行高计算，SINGLE_LINE 固定行高路径另测）
         state.logListSqlDisplayMode = SqlListDisplayMode.KEYWORD_WRAP.name
-        manager = SqlLogManager(project)
+        // T-SqlListCatchup 券A（随 20261108 合并进 dev）：notifyUi 有 150ms 刷新窗，headless 泵不到
+        // 未到点的 Alarm——锚定用例全部断言「动作后列表已同步刷新」，注入同步调度器（master 侧
+        // SqlLogTailFollowTest 等同款修复口径，机制本身由 SqlLogManagerFlushWindowTest 覆盖）。
+        manager = SqlLogManager(project).also { it.catchUpScheduler = { _, action -> action() } }
         manager.entries.dedupeEnabled = false
     }
 

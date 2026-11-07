@@ -620,6 +620,9 @@ internal object ExecFileBinding {
             val ds = method.invoke(null, project, vf) ?: return PerFileProbeResult(null, probeOk = true)
             PerFileProbeResult(DataSourceSettings.getUniqueId(ds), probeOk = true)
         } catch (t: Throwable) {
+            // T-FP-02：反射链的 fatal 藏在 InvocationTargetException 里，解包后判定再透传（见 util/FatalErrors.kt）
+            val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(cause)) throw cause
             LOG.info("[T-ConsoleBind] probe per-file mapping FAILED (treat as unmapped): ${t.javaClass.simpleName}: ${t.message}")
             PerFileProbeResult(null, probeOk = false)
         }

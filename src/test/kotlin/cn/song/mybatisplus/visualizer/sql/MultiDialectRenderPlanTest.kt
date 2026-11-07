@@ -18,14 +18,14 @@ import org.junit.Test
  * NEW-21 信创兼容性体检编排层定向测试。
  *
  * 覆盖：①P-5 证伪（逐方言渲染是否需 PSI/工程上下文 → 不需要，纯 JUnit 即证）；
- * ②14 方言渲染矩阵（行数/方言集合/产物形态）+ 耗时实测（判据 < 200ms）；
+ * ②15 方言渲染矩阵（行数/方言集合/产物形态）+ 耗时实测（判据 < 200ms）；
  * ③四档差异各配正例 + 反例（不误报）；
  * ④P-6 隐式转换的可判定子集（数值列 vs 非数值字面量）+ 无类型证据时的诚实降级。
  * 纯逻辑——无 IDE 类型。
  */
 class MultiDialectRenderPlanTest {
 
-    /** 判据夹具：14 个注册方言。 */
+    /** 判据夹具：15 个注册方言。 */
     private val allDialects = DialectRegistry.dialects
 
     private val table = TableInfo(
@@ -43,22 +43,22 @@ class MultiDialectRenderPlanTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `P5证伪_逐方言渲染不需要工程上下文_纯JUnit即可跑满14方言`() {
+    fun `P5证伪_逐方言渲染不需要工程上下文_纯JUnit即可跑满15方言`() {
         // 本类无 BasePlatformTestCase、无 Project 实例，plan() 直接跑通即证伪「需要 project」
         val result = MultiDialectRenderPlan.plan(
             MultiDialectRenderPlan.Source.Model(SelectStatement(table = table, limit = LimitClause(count = 10))),
             allDialects,
         )
-        assertEquals("14 方言各一行", 14, result.rows.size)
+        assertEquals("15 方言各一行", 15, result.rows.size)
         assertTrue("每行都有渲染产物", result.rows.all { it.sql.isNotBlank() })
     }
 
     // ------------------------------------------------------------------
-    // 判据：14 方言矩阵 + 耗时
+    // 判据：15 方言矩阵 + 耗时
     // ------------------------------------------------------------------
 
     @Test
-    fun `14方言渲染矩阵_行数与方言集合与注册表一致`() {
+    fun `15方言渲染矩阵_行数与方言集合与注册表一致`() {
         val result = MultiDialectRenderPlan.plan(
             MultiDialectRenderPlan.Source.Model(
                 SelectStatement(
@@ -71,12 +71,12 @@ class MultiDialectRenderPlanTest {
             ),
             allDialects,
         )
-        assertEquals(14, result.rows.size)
+        assertEquals(15, result.rows.size)
         assertEquals(allDialects.map { it.name }, result.rows.map { it.dialectName })
     }
 
     @Test
-    fun `14方言渲染矩阵_分页形态随方言变化`() {
+    fun `15方言渲染矩阵_分页形态随方言变化`() {
         val result = MultiDialectRenderPlan.plan(
             MultiDialectRenderPlan.Source.Model(
                 SelectStatement(
@@ -101,7 +101,7 @@ class MultiDialectRenderPlanTest {
     }
 
     @Test
-    fun `渲染总耗时_14方言在200ms内`() {
+    fun `渲染总耗时_15方言在200ms内`() {
         // 预热一次（JIT + 类初始化），再连测 5 次取均值——判据是「不阻塞 EDT」，取稳定读数。
         // 用 nanoTime 直接量（elapsedMillis 是整型，亚毫秒读数会被压成 0，贴不出可信数）。
         val source = MultiDialectRenderPlan.Source.Model(
@@ -121,10 +121,10 @@ class MultiDialectRenderPlanTest {
         }
         val avgMs = nanos.average() / 1_000_000.0
         println(
-            "NEW-21 14 方言渲染耗时实测：样本=${nanos.map { "%.3f".format(it / 1_000_000.0) }}ms " +
+            "NEW-21 15 方言渲染耗时实测：样本=${nanos.map { "%.3f".format(it / 1_000_000.0) }}ms " +
                 "均值=${"%.3f".format(avgMs)}ms 最大=${"%.3f".format(nanos.max() / 1_000_000.0)}ms",
         )
-        assertTrue("14 方言渲染均值应 < 200ms，实测样本 $nanos ns", avgMs < 200.0)
+        assertTrue("15 方言渲染均值应 < 200ms，实测样本 $nanos ns", avgMs < 200.0)
     }
 
     // ------------------------------------------------------------------

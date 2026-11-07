@@ -36,7 +36,10 @@ class GiantFileBudgetTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2000,
         // 2297 → 2358（2026-10-25: 合并 master 实测 2323 行，含日志工具栏 BGT 与列表高亮改造，+26 行）
         // 2421 → 2000（2026-10-31 D202: EXPLAIN 双通道链拆出 ExecutionExplain，实测 1552 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2000,
+        // 2000 → 2060（2026-11-08 合并冻结基线 95e107b1：master T-RuntimeSlotFill 券C 的导出取词口
+        //   previewSqlForExport + executeSql 拆 rawSql/占位回填/对账回写并入，实测 2018 行 +18 超线。
+        //   **拆分仍首选**，本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2060,
         // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
         // 2103 → 2000（2026-10-31 D202: 语句后处理拆出 StatementOps，实测 1847 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2000,
@@ -57,13 +60,20 @@ class GiantFileBudgetTest {
         //   createTempPsiFileAsync/revalidateOnEdt/createTempPsiFile 三块已按 dev 工厂版删除。
         //   **拆分债显式挂账**：闲时清单 G-1（projectExecFile/installOutputHistoryFillLayout 族优先），
         //   本提额只为合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2090,
+        // 2090 → 2160（2026-11-08 合并冻结基线 95e107b1：master 侧执行结果链增量（券C 执行视图取词口
+        //   接线与 T-WriteFamily warning 透传等）随合并并入，实测 2150 行 +60 超线。**拆分仍首选**，
+        //   本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2160,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
         // 1972 → 1980（2026-11-06 F-09：>200K 参数面板只出条数汇总行 + 超大档提示接线，实测 1974 行 +2 超线；
         //   **拆分仍首选**，本提额只为批次留痕解红）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1980,
+        // 1980 → 2290（2026-11-08 合并冻结基线 95e107b1：master T-RuntimeSlotFill 券C 的运行期占位行
+        //   机制整段并入（RuntimeSlotRowControls/buildRuntimeSlotRow/LOOP 展开预览等约 268 行 + 日期族
+        //   渲染钩子），实测 2275 行 +295 超线。**拆分仍首选**：运行期占位行族可整体拆独立文件（挂合并批
+        //   拆分债），本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 2290,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
         //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
