@@ -230,7 +230,11 @@ public final class GenerateCrudSqlFromEntityAction extends AnAction {
                     col.getComment(),
                     col.isId(),
                     col.isIdTypeAuto(),
-                    ParamQuote.decide(col.getFieldType())));
+                    ParamQuote.decide(col.getFieldType()),
+                    // R48：@TableField(fill=...) 解析值贯通（角标/手填模拟值数据面；DB 侧无此元数据恒 null）
+                    col.getFill(),
+                    // T-DateLiteralBackfill：实体字段类型日期族 → 参数行产 ANSI 类型字面量
+                    ParamQuote.isTemporal(col.getFieldType())));
         }
         return new CrudTableSpec(
                 table.getTableName(),
