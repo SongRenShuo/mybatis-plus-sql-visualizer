@@ -61,4 +61,8 @@
 
 ## 实施记录
 
-（待补：波次产出+提交哈希+CI run id+读数+下一步）
+- 波次 0：本计划 `8cf96ef3`。
+- 波次 A1（14/14 件，14 笔提交 `9f74a0bb`…`188f3f2f`）：ParamHint/ParamQuote temporal 族、ParameterReplacer 运行期占位+日期字面量（+728 行）、GoldenDbDialect/GoldenDbParserDefinition/GoldenDbSqlDialect 三件、SqlKeywords 384 词（逐词比对 384/384）、RuntimeSlot/SlotKind/ValueType/SlotValue/RuntimeSlotValues/SlotWarning/SqlDateLiteral 七新件、SqlGenerator quoteHint→paramHint、UrlSubprotocolDialects/PreviewDialectResolver/ExplainSupport/DialectInference 方言桥接。子代理自检 javac 隔离解析 0 错。
+- 中央编译（A1 后）：BUILD SUCCESSFUL in 18s，COMPILE_EXIT=0。
+- 推送 `68514340`（A1 14 笔 + docs 3 笔）→ CI run 42405958799（failure，中段预期红）：test(1)(2) 绿；新增红=方言族普查滞后（DialectTest 14→15、DialectVerifySupportUpsertMode、DialectXcFamily3、CrudSqlGenerator 大小写折叠族）+ EnumReachabilityGuard（SlotKind/ValueType 未登记）+ PluginXmlStructureGuard（GoldenDB EP 未进资源面）+ ReplayScriptExport——全部归波次 B（测试/守卫基线）与波次 C（plugin.xml/database-optional.xml）收口；另有既有潜藏红 ParamHistoryCache 19 + ExecutionDialectGate 2。
+- 波次 A2（execute 12 件 + ui 非面板 14 件）与 A3（log 21 + config 5 + update 5 件）已并行派出。
