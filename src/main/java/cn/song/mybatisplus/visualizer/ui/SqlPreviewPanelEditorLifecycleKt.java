@@ -617,10 +617,9 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         constraints.weightx = 1.0;
         constraints.weighty = 1.0;
         box.add(new JBLabel(MpSqlVisualizerBundle.message("panel.preview.preparing")), constraints);
-        p.editorHolder.removeAll();
-        p.editorHolder.add(box);
-        p.editorHolder.revalidate();
-        p.editorHolder.repaint();
+        // T-PreviewConsoleOwnership：同样走统一装配口——控制台已在位时它才是显示主体，
+        // 「准备中」占位只服务于编辑器装配前的空窗，不得把控制台顶掉。
+        SqlPreviewPanelExecutionKt.mountEditorHolderContent(p, box);
     }
 
     /** T-PrewarmBudget：等待期占位（断言用）——显示路径的观测口（容器观测口复用既有的 editorHolderForTest）。 */
@@ -707,14 +706,13 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
         EditorWhitespaceSettings.applyTo(createdEx);
         createdEx.setPlaceholder(p.previewEmptyHint); // T-UxOnboard T-UX-02：空态提示原生件
-        p.editorHolder.removeAll();
+        // T-PreviewConsoleOwnership：走统一装配口——原生控制台在位时保留 consoleHost，
+        // 本编辑器只作状态载体（真机「执行后下半区空白/无原生工具栏」的根因即此处强占显示槽）。
         // T-M27.1：编辑器组件链补 DataProvider——外层包装 DataProvider 提供 EDITOR
         final Editor createdForData = created;
         JBPanel<JBPanel<?>> wrapper = new EditorDataProviderPanel(createdForData);
         wrapper.add(created.getComponent(), BorderLayout.CENTER);
-        p.editorHolder.add(wrapper, BorderLayout.CENTER);
-        p.editorHolder.revalidate();
-        p.editorHolder.repaint();
+        SqlPreviewPanelExecutionKt.mountEditorHolderContent(p, wrapper);
         // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
         EditorCopyShortcuts.install(created, UiTextClipboard::copy);
         // T-PreviewLineCommentDash O-134/D136：打标接管行注释统一插 `--`
