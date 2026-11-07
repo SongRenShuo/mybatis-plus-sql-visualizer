@@ -1014,7 +1014,7 @@ class SqlLogEntryBuffer(
      */
     private fun notifyContentChangedThrottled() {
         val pending = pendingContentNotify.incrementAndGet()
-        val now = System.nanoTime()
+        val now = nowNanos()
         if (pending >= CONTENT_NOTIFY_BATCH ||
             now - lastContentNotifyNanos.get() >= CONTENT_NOTIFY_INTERVAL_NANOS
         ) {
@@ -1024,6 +1024,47 @@ class SqlLogEntryBuffer(
         } else {
             onContentNotifySuppressed?.invoke()
         }
+    }
+
+    // ---------- T-SqlListCatchup 券B2：悬挂节流余量的过期冲洗 ----------
+
+    /**
+     * 券B2 测试缝：注入纳秒时钟（null = 生产 [System.nanoTime]）。悬挂态判定与节流时间戳
+     * 统一走 [nowNanos]——时间注入缝照券 B 既有口径（别赌墙钟，用例注入固定时钟）。
+     */
+    @Volatile
+    internal var nowNanosForTest: Long? = null
+
+    private fun nowNanos(): Long = nowNanosForTest ?: System.nanoTime()
+
+    /**
+     * T-SqlListCatchup 券B2：悬挂态判定——pending>0 且距上次内容通知已超
+     * [CONTENT_NOTIFY_INTERVAL_NANOS]。这是「按既有双阈值规则早该通知、却没有后续条目再触发」
+     * 的悬挂态：风暴末尾末批变更不足 [CONTENT_NOTIFY_BATCH] 且落在上次通知 200ms 窗内，之后
+     * 无新条目则再无任何触发源（pendingContentNotify 只在通知触发或 clear 归零）——这几条变更
+     * 一直不落 UI，追赶徽章滞留「落后 N 条」直到下一条 SQL 或 clear，风暴结束后的静默期正好
+     * 命中该形态。供面板 2s 诊断拍探询，命中即 [flushPendingNotify]。
+     */
+    fun hasStalePendingNotify(): Boolean {
+        if (pendingContentNotify.get() <= 0) return false
+        return nowNanos() - lastContentNotifyNanos.get() >= CONTENT_NOTIFY_INTERVAL_NANOS
+    }
+
+    /**
+     * T-SqlListCatchup 券B2：过期冲洗——pending>0 时补上「按双阈值规则本应发生却无人触发」的
+     * 那次内容通知：归零 + 刷新时间戳（冲洗视同一次真实通知，此后新条目照常走既有双阈值路径，
+     * 窗内抑制、超窗即时）+ 触发 listeners（管理器侧 notifyUi 合拍链幂等，refreshList 读当下
+     * 快照，不丢条目）。pending=0 时 no-op（不触发 listeners）。消费即清语义对齐 [drainChangedKeys]。
+     *
+     * 线程安全：pendingContentNotify 为原子量；与并发生产者的竞争最坏是「冲洗与阈值触发各发
+     * 一次幂等通知」（两者都不丢变更），不会吞掉对方的归零——本该由阈值触发的通知被冲洗替代时，
+     * 生产者的 pending 归零后其变更已被冲洗的那次通知覆盖（refreshList 读触发时刻之后的快照）。
+     */
+    fun flushPendingNotify() {
+        if (pendingContentNotify.get() <= 0) return
+        pendingContentNotify.set(0)
+        lastContentNotifyNanos.set(nowNanos())
+        notifyChanged()
     }
 
     companion object {

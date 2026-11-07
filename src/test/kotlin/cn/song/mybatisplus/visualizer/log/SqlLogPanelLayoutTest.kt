@@ -203,6 +203,49 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
     }
 
     /**
+     * T-SqlListCatchup 券B2：诊断拍过期冲洗接线守卫——悬挂节流余量（末批不足批量阈值、时间推过
+     * 200ms 窗且无后续触发源）在 [SqlLogPanel.syncCaptureStatusBar] 诊断拍被冲洗：pending 归零、
+     * 悬挂条目经 notifyUi 合拍链上屏。反向验证：摘掉 syncCaptureStatusBar 里的
+     * hasStalePendingNotify/flushPendingNotify 分支，本用例必红（pending 滞留 + 列表缺悬挂条目）。
+     */
+    fun testTSqlListCatchupB2_诊断拍冲洗悬挂节流余量() {
+        manager.setCapturingForTest(true)
+        manager.entries.paused = false
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val baseNanos = 1_000_000_000L
+            // 首条即时通知；随后 2 条窗内（+50ms）抑制 → 悬挂候选 pending=2（<批量阈值 20）
+            manager.entries.nowNanosForTest = baseNanos
+            manager.entries.addEntry(LogSqlEntry("SELECT 1 FROM stale_t", "SELECT 1 FROM stale_t", emptyList(), 1L))
+            manager.entries.nowNanosForTest = baseNanos + 50_000_000L
+            repeat(2) { i ->
+                manager.entries.addEntry(
+                    LogSqlEntry(
+                        "SELECT ${i + 2} FROM stale_t",
+                        "SELECT ${i + 2} FROM stale_t",
+                        emptyList(),
+                        (i + 2).toLong(),
+                    ),
+                )
+            }
+            assertEquals(2, manager.entries.pendingNotifyCount())
+            // 时间推过窗口 → 悬挂态成立，此后无新条目（无触发源）
+            manager.entries.nowNanosForTest = baseNanos + 250_000_000L
+            assertTrue(manager.entries.hasStalePendingNotify())
+
+            // 诊断拍（syncStatusBarForTest 直驱 syncCaptureStatusBar）：冲洗悬挂余量
+            panel.syncStatusBarForTest()
+            assertEquals("诊断拍冲洗悬挂节流余量", 0, manager.entries.pendingNotifyCount())
+            waitForEdt()
+            assertEquals("悬挂条目经冲洗通知上屏", 3, panel.visibleEntryCount)
+        } finally {
+            manager.entries.nowNanosForTest = null
+            panel.dispose()
+        }
+    }
+
+    /**
      * T-SqlListCatchup 券 D：refreshList 全拍探针接线守卫——每次刷新拍必落一枚样本到
      * `LogPanel.refreshList` 分布（计划 §七.1「探针读数非空」）。反向验证：摘掉 refreshList
      * 的 LogPerf.measure 包裹，本用例必须红。
