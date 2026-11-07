@@ -811,3 +811,23 @@ BannedApiScanRuleTest 12）。
 | P-8 平台方言 | **销案（券 A）** | IU-262.9437.185 全量 345 xml `grep -il golden` 零命中（正对照 mysql/greenplum 命中）→ 平台无 → 自注册四件套落位（第五对成对，守卫绿） |
 | P-9 EXPLAIN 档位 | **销案（券 A）——诚实不接入** | p323-325 原文只有语法与 FORMAT=JSON/Oracle 选项、无任何输出形态示例 → `ExplainSupport` 落 template=null 条目（矩阵 EXPLAIN=false），真机读数到位后按档登记 |
 | P-10 架构文档副本 | **销案（券 D）** | `grep Vastbase docs/架构设计/` 命中 1 处＝测试服务器备份文档（非方言清单，不改）；计数副本在 `01-项目架构总览.md:14`（14→15 已改）＋包清单 `:258` 补 `goldendb/`；02/03 篇为过程性文档无逐方言清单 |
+
+### 7.6 驱动级替代读数（2026-11-07，用户拍板档）
+
+**定性（全节统一措辞，禁混写）**：**驱动级替代读数：GoldenDB 官方驱动（5.1.46.99）× MySQL 协议实例（8.0.x）承载，MySQL 协议兼容面验证；非 GoldenDB 引擎验证，引擎行为类结论（P-2/P-5/P-9/保留字引擎扫描）仍为未验证**。依据锚点＝《GoldenDB开发支持》p37「GoldenDB 完全兼容 MySQL 客户端」＋ demo 仓 `t-goldendb-demo-cases` 已实测 GoldenDB vendor jar 连 MySQL 实例 19 例全绿（分支已合 demo master `fcb1faf`）。本节所有读数只证「插件渲染 SQL 经 GoldenDB 官方驱动在 MySQL 协议实例上可执行」，不证任何 GoldenDB 引擎行为。
+
+**端点与握手**：用户点名的 MySQL 8.0.46 实例（103.36.220.245:25900/mpj_demo，容器 `xc3-mysql8`，`mysql:8.0-debian`，实例见 `.local/db-env-instances.tsv:44`）。GoldenDB vendor 驱动 5.1.46.99 直连**成功、无回落**（JDK 8 与 JDK 17 双环境均通）：`DatabaseMetaData` 读出 `PRODUCT=MySQL / 8.0.46`、`DRIVER=GoldenDB Connector Java / gdb_mysql-connector-java-oracle-5.1.46.99`；连接初始化序列（`SET NAMES utf8mb4` / `SET character_set_results=NULL` / `SET autocommit=1`）被端点全量接受。**未触发 MySQL 8.4 回落**（`.local` 矩阵 mysql84 条目 114.66.55.245:20084 备而未用）；`caching_sha2_password` 握手失败预案未启用。
+
+**驱动进测试 classpath 的方式**：vendor jar 已入库（`database-lab/vendor/drivers/`）但未挂测试 classpath（`matrix.example.properties` 已注明）；本轮**不改 `build.gradle.kts`**（写集红线），经 `.local/goldendb-testcp.init.gradle`（gitignored 临时 init script）在配置期向 `testImplementation` 注入同一 jar，等效于磐维先例的一行 `testImplementation(files(...))`。若读数被采纳，长效正解＝build.gradle.kts 仿磐维行落一行（未落，留决策）。
+
+**矩阵验证（`dialectExternalVerify`，单实例矩阵 `.local/dialect-external-matrix.properties`）**：
+
+- **首轮（预算 900s）＝ TIMEOUT，非缺陷**：复现探针（`.local/GdbSuiteProbe.java`，JDK 17 + 同 URL）逐类实测——TC 套件 12 步（建/删夹具表、多行 VALUES 种子、`LIMIT 10`/`LIMIT 1,2` 分页、反引号保留字列 SELECT/LIKE/ORDER BY、IN、聚合 GROUP BY、UPDATE 保留字列、`?` 绑定 INSERT、`ON DUPLICATE KEY UPDATE` 冲突与插入两路、DELETE）**全部可执行**；多语句探测 `CREATE…; INSERT…` 一次往返且第二条生效（rows=1，batch=on）；词扫描 CREATE+5 语句批+DROP 对 `limit`/`select`/`order`/`table`/`status`/`storagedb`/`rownum`/`index`/`gdb_nolock`/`chgdiskey` 十词全过。慢源＝该 8.0.46 容器（1g 内存）DDL 单条 1.5~7.5s，逐词 ≈6.3s/词，384 词×4 worker 超出 900s 预算。
+- **复跑（预算 1500s，预算依据已写进矩阵条目注释，非掩盖性调大）＝ PASS**：`goldendb  GoldenDB  words=384  batch=on wordWorkers=4  494861ms`——通过 1 / 跳过 0 / 超时 0 / 失败 0；**384 词全量扫描零失败明细**（词数与 `GOLDENDB_RESERVED.size` 384 一致，非空扫）；渲染 TC 套件全绿。
+- **EXPLAIN 行**：矩阵对 GoldenDB **不执行** EXPLAIN（`ExplainSupport` template=null 如实不接入，§7.1 P-9 口径不变）——EXPLAIN 在引擎上的输出形态仍为未验证。
+
+**表残留对比（mpj_demo，共享实例固定表名互删债 L19 在册）**：跑前基线 `area | car_device_info | station_info | user | user_2026 | user_address`（6 表）。首轮被看门狗掐断后残留 3 张夹具表（`kw_probe_380`/`kw_probe_382`——恰为 4 worker 分片下 worker 0/2 的最后一个词，扫描在 900s 处已近完成；`kw_par_1`——复现探针自身首版 bug 留下），已清零；**复跑后 SHOW TABLES 与基线逐字一致，零残留**。
+
+**本轮 not run 条款**：未跑全量测试（禁）；未跑 buildPlugin/verifyGate（无 src/main 与 plugin.xml 改动，不构成大改动）；MySQL 8.4 回落腿未跑（8.0 直连成功，无回落事由）；DialectDockerVerificationTest 外指腿读数见下（若在档）。
+
+**外指腿（DialectDockerVerificationTest `外部实例_方言套件与保留字扫描`，`-Dmpvs.dialect.*` 指向同一端点）**：**通过**——`test` 任务按类过滤定向跑（`--tests` 单类，容器腿 5 例按 `mpvs.docker.tests.enabled=false` Assume 跳过，未触 Docker），该外指方法 923.4s 真跑成功：`tests=6 failures=0 errors=0 skipped=5`（run 2 矩阵 + 外指腿三轮累计后 SHOW TABLES 与 6 表基线逐字一致，零残留）。此腿走的是 `DialectDockerVerificationTest` 的同一 `runTcSuite`+`sweepReservedWords` 链路，与矩阵腿互为独立执行器的二次确认，读数同口径（驱动级替代读数，非 GoldenDB 引擎验证）。
