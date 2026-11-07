@@ -10,7 +10,7 @@ healthcheck + 不起库即可 CI 校验的脚本化守卫（`DockerComposeLabCon
 | `../src/test/resources/docker-compose-dialects.yml` | 五开源库配方（mysql:8.0.36 / postgres:16.2 / mariadb:11.2 / mssql:2022-CU12 / oracle-free:23.5-slim），钉版本 + healthcheck |
 | `docker-compose.dialects-cn.example.yml` | 国产库示例片段（DM8 / KingbaseES，镜像名占位待 load 后替换） |
 | `load-dm8.ps1` / `load-kingbase.ps1` | 官方 tar 包导入脚本（docker load + 后续步骤提示） |
-| `vendor/drivers/`、`vendor/docs/` | 公开渠道拿不到的厂商驱动 jar 与官方手册 PDF（磐维 V1 驱动 + V2 应用开发指南），供增强捕获字节层用例与离线查阅；约定与清单见 `vendor/README.md` |
+| `vendor/drivers/`、`vendor/docs/` | 公开渠道拿不到的厂商驱动 jar 与官方手册 PDF（磐维 V1/V2 驱动 + V2 应用开发指南；中兴 GoldenDB 驱动 + 开发支持手册 V6.1.03.10），供增强捕获字节层用例与离线查阅；约定与清单见 `vendor/README.md` |
 | `DockerComposeLabConsistencyTest`（测试源码） | 配方一致性守卫：钉版本 / 端口避让 / 必填 env / healthcheck 四硬约束 + 本 README 端口引用一致性 |
 
 ## 五开源库：一键起环境
