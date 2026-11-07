@@ -5,6 +5,9 @@ package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues;
+import cn.song.mybatisplus.visualizer.sql.SlotValue;
+import cn.song.mybatisplus.visualizer.sql.SlotWarning;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel;
 import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope;
@@ -146,6 +149,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     /** F-45：列信息标签页标题。 */
     public static final String COLUMN_INFO_TAB_TITLE = "列信息";
+
+    /**
+     * T-PagesHql：HQL 转换前的原文标签页标题（仅 PreviewResult.originalSql 非空时出现）。
+     */
+    public static final String ORIGINAL_SQL_TAB_TITLE = "原文";
 
     /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
     public static final int MIN_META_BUDGET_PX = 80;
@@ -513,6 +521,22 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** 预览来源模块规范键（方言决策/闸门的模块作用域信号；null = 无来源模块）。 */
     public String sourceModuleKey = null;
 
+    /**
+     * UI-004：预览来源文件的 VFS 句柄（非 PSI、非凭据）。
+     *
+     * <p>刷新按钮要按「与预览生成同一份证据」重算方言——{@code IdeaSourceDialectProbe} 需要源文件
+     * 才能读到 IDEA 的 SQL 方言映射（用户改方言后不会发任何事件）。与 {@code previewDialectMappedVf}
+     * 同属 VFS 级引用；不持有 PSI，避免编辑后失效对象。</p>
+     */
+    public VirtualFile sourceVirtualFile = null;
+
+    /**
+     * UI-004：当前底部显示着的方言提示原文（仅放行提示态，不含执行错误）。
+     *
+     * <p>刷新链据此判断「信息行是否仍是方言提示」——是才替换/清空，绝不覆盖执行结果与真实错误。</p>
+     */
+    public String lastDialectGateMessage = null;
+
     /** R48 自动填充预演载体（FieldFill 面板与预览结果回填链路）。 */
     public cn.song.mybatisplus.visualizer.model.PreviewResult fieldFillPreview = null;
 
@@ -617,6 +641,27 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     public final Set<String> enabledIds = new LinkedHashSet<>();
     public final Map<String, String> paramValues = new LinkedHashMap<>();
+
+    // T-RuntimeSlotFill 券 C：运行期占位值（slotId → 用户输入），与 paramValues 平行但独立。
+    //
+    // 只在 PreviewResult.runtimeSlots 非空时建行、才会被填；空表 = 留空 = 占位原样保留（D-5），
+    // 因此「没有占位 / 有占位但没填」两种情况的产物都与改动前逐字节一致。
+    // 随新预览整表清空（showResult），不做跨预览持久化（D-6）。
+    public final Map<String, SlotValue> slotValues = new LinkedHashMap<>();
+
+    /**
+     * 最近一次预览渲染的占位回填诊断（模板 {@code %s} 计数不符 / 展开形态未知 / 方言拒绝布尔 等）。
+     *
+     * <p>由 renderSql 的占位回填分支写入，参数区「运行时值」分区下方如实展示——券 B 的拒绝必须
+     * 让用户看见，不许静默（否则表现为「填了没生效」）。</p>
+     */
+    public List<SlotWarning> slotRenderWarnings = List.of();
+
+    /** 运行时占位行控件登记（slotId → 控件组；随 rebuildLeftPanel 清场，测试与行内联动用）。 */
+    public final Map<String, RuntimeSlotRowControls> runtimeSlotRows = new LinkedHashMap<>();
+
+    /** 占位诊断行（slotRenderWarnings 的展示位；无占位行时为 null）。 */
+    public JBLabel runtimeSlotWarningLabel = null;
     // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文；
     // T-M26.4：bind 覆盖状态已移除——bind 值由「参数」区输入统一承担）
     public final Map<String, Integer> xmlForEachCounts = new LinkedHashMap<>();
@@ -1245,6 +1290,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // F-46：来源位置（来源列默认值）
     // ------------------------------------------------------------------
 
+    /** 设置预览来源上下文（模块键 + VFS 句柄；UI-004）。 */
+    public void setSourceContext(cn.song.mybatisplus.visualizer.context.PreviewSourceContext context) {
+        sourceModuleKey = context != null ? context.canonicalModuleKey() : null;
+        // UI-004：只留 VFS 句柄（刷新重算方言用），不持有 PSI/URL。
+        sourceVirtualFile = context != null ? context.hostVirtualFile() : null;
+    }
+
     /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
     public void setSourceLocation(String loc) {
         sourceLocation = loc;
@@ -1523,6 +1575,31 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return new LinkedHashMap<>(paramValues);
     }
 
+    /** T-RuntimeSlotFill 券 C：当前运行期占位值快照（断言用）。 */
+    public Map<String, SlotValue> slotValuesForTest() {
+        return new LinkedHashMap<>(slotValues);
+    }
+
+    /** T-RuntimeSlotFill 券 C：当前占位值（回填引擎唯一值载体，链路一致用例用）。 */
+    public RuntimeSlotValues slotValuesSnapshotForTest() {
+        return SqlPreviewPanelSqlViewKt.slotValuesSnapshot(this);
+    }
+
+    /** T-RuntimeSlotFill 券 C：最近一次渲染的占位回填诊断（断言「拒绝不静默」）。 */
+    public List<SlotWarning> slotRenderWarningsForTest() {
+        return slotRenderWarnings;
+    }
+
+    /** T-RuntimeSlotFill 券 C：已建的占位行数（= 当前预览的 slot 数；无占位为 0）。 */
+    public int slotRowCountForTest() {
+        return runtimeSlotRows.size();
+    }
+
+    /** T-RuntimeSlotFill 券 C：某个占位行的控件组（断言 kind ↔ 控件类型）。 */
+    public RuntimeSlotRowControls slotRowControlsForTest(String id) {
+        return runtimeSlotRows.get(id);
+    }
+
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
     public void flushHistoryForTest() {
         SqlPreviewPanelParamPanelKt.flushHistoryToCache(this);
@@ -1612,6 +1689,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public void clearStateForTest() {
         enabledIds.clear();
         paramValues.clear();
+        slotValues.clear();
         xmlForEachValues.clear();
         xmlForEachNulls.clear();
     }
