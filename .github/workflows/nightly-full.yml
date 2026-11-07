@@ -442,7 +442,7 @@ jobs:
     # 现改为「代表实例子集」（见落矩阵那步）。全量矩阵仍由本地 releaseGate 覆盖。
     # 2026-11-05 run#9 实测子集内部读数：mysql84 18.6min（262 个保留字）+ pg16 3.3min（86 个）
     # + 冷启动约 6min = 27.8min。跨洋按字计费是硬成本：mysql84 约 4.3s/字（200ms RTT × 每字多次往返）、
-    # pg16 约 2.3s/字；要再压缩只能减少保留字或把 runner 挪到近网。
+    # pg16 约 2.3s/字；要再压缩只能减少往返、减少保留字或把 runner 挪到近网。
     #
     # T-DialectSweepSpeed（2026-11-06）：**实例改为同 JVM 内并发**（默认 min(实例数, 4)），
     # 墙钟从 Σ 变成 max，预算算式随之改口径（旧口径「步骤必须 ≥ Σ」已作废）：
@@ -454,21 +454,37 @@ jobs:
     #   ⚠️ 只有「并发度 ≥ 实例数」时才是 max；若用 `-Dmpvs.external.maxConcurrency` 压到更小，
     #   算式回到 ceil(实例数 / 并发度) × max(预算)（凑不满一组时按最坏同组计）。
     #
-    # 预算取数（2026-11-06 券 A 本机实测 × 跨洋倍率，不是拍脑袋）：
-    #   本机：mysql84 103.0s / panwei_a 68.9s / gaussdb_kernel503 201.6s / pg16 约 60s
-    #   倍率：mysql84 锚点 1116s(CI, run#9) ÷ 103.0s(本机) ≈ 10.8×（同日同实例）
-    #   CI 投影（串行时代）：mysql84 18.6min（实测）/ pg16 3.3min（实测）/ panwei_a ≈12.4min / gaussdb ≈36.3min
-    #   → 取 max 而不是 Σ：矩阵四实例预算 1800 / 600 / 1200 / **3000** ⇒ max = 3000s = 50min
-    #   → 步骤 60min（50 + 8min 余量 + 抖动），job 70min（步骤之上留收尾与工件上传）。
-    #   并行后预期墙钟 ≈ max(实测) + 并发争抢，落在 20~40min（mysql84 侧另有「去预备 DROP + 多语句
-    #   批处理」的往返压缩，单独省 7 → 4 个往返/词）。
+    # T-DialectSweepSpeed2（2026-11-07）：**单实例内再加词级并行**（默认 min(4, 词数)，可用
+    #   `-Dmpvs.external.wordWorkers` 或矩阵全局 `wordWorkers` 覆盖；1 = 关闭），并把夹具种子 INSERT
+    #   并入批处理。逐词往返从 7（batch=off）/ 4（batch=on）统一压到 3，再按 4 路并行摊到 RTT 上。
+    #   实例级预算/看门狗语义不变（仍按整实例计时）。
+    #
+    # 预算取数（2026-11-07 本机实测 × 跨洋倍率，不是拍脑袋）：
+    #   本机四实例（同一份矩阵，实例并发 4）实测墙钟：mysql84 87.2s→20.3s、pg16 7.1s→3.7s、
+    #   panwei_a 23.6s→23.3s、gaussdb_kernel503 75.9s→78.8s（箭头 = 改前 → 全开）；
+    #   mysql84 是干净可复现的 4.3×（批处理 1.4× × 词并行 3.2×，反向验证读数见计划册 §五）。
+    #   PG 族在本机没有收益（两个容器同跑在 2 核测试机上，服务端已饱和，4 worker 只换来抖动）；
+    #   **CI 的收益机制是 RTT**（跨洋 200ms × 每字 3 个往返 × 4 路并行），与本机服务端饱和无关。
+    #   CI 投影（按往返数折算，897s/477s/204s/92s 为 run 42315646150 实测）：
+    #     mysql84 897 × 3/7 ≈ 385s，再 ÷4 ≈ 96s；gaussdb 477 ÷4 ≈ 120s；
+    #     panwei_a 204 ÷4 ≈ 51s；pg16 92 ÷4 ≈ 23s ⇒ 墙钟 ≈ max ≈ 120s ≈ 2min
+    #   ⇒ 全腿 ≈ 冷启动 6min + 实例启动 1min + 2min ≈ 9min（目标 10~12min，取上界 12min 留抖动）。
+    #   预算（**悲观口径：假设词并行在 CI 一点不省**，即只吃批处理那部分）：
+    #     mysql84 385s → 900s；gaussdb 477s → 900s；panwei_a 204s → 600s；pg16 92s → 300s
+    #     ⇒ max = 900s = 15min → 步骤 = 15 + 8 = 23 → **25min**；job = 步骤 + 收尾/工件上传 → **35min**
+    #   ⚠️ **前提**：矩阵（secret `DIALECT_MATRIX_PROPERTIES`）里的实例预算已按上表下调为 ≤900s。
+    #     若 secret 仍是旧值（1800/600/1200/**3000**），max 仍是 3000s=50min，25min 的步骤会在
+    #     实例真挂住时被 CI 掐断（丢 summary 工件、分不清超时与崩溃）——**先同步 secret 再依赖本值**；
+    #     未同步前想跑，把本 job/步骤临时改回 70/60。
     # 为什么砍掉 panwei_b：262 个保留字、CI 投影 ≈30min，是这套子集里最贵的一条；而它与 mysql84
     #   同属 MySQL 协议/词表族，磐维的真价值在 Oracle 兼容面（已由 panwei_a 覆盖）。
     #   再吃紧时的砍序：gaussdb_kernel503 → panwei_a（先保磐维，再保 GaussDB）。
-    # ⚠️ 前置：矩阵必须给每个实例显式 `timeoutSeconds`——默认 300s 小于 mysql84 实测 1113s，
+    # ⚠️ 前置：矩阵必须给每个实例显式 `timeoutSeconds`——默认 300s 小于 mysql84 改前的 897s，
     #   不写会让本来能通过的实例在第 5 分钟被判 TIMEOUT。预算落在
     #   `.local/dialect-external-matrix.properties`（＝ secret 来源），由主控维护。
-    timeout-minutes: 70
+    # ⚠️ MySQL 族的 URL 必须带 `allowMultiQueries=true`（否则 batch=off，逐词 7 个往返、
+    #   mysql84 退回 ~900s 量级，25min 的步骤仍够但白丢一半收益；探测结论会写进 summary 明细行）。
+    timeout-minutes: 35
     defaults:
       run:
         shell: pwsh
@@ -555,10 +571,11 @@ jobs:
           "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: 真机方言验证
         if: steps.matrix.outputs.ready == 'true'
-        # 预算算式见本 job 头部注释（T-DialectSweepSpeed 起改为 max 口径）：
-        #   步骤 = max(每实例预算) + 8min 余量 ≈ 50 + 8 → 60min。**改子集或改矩阵实例预算都要按同一算式重算**；
-        #   若把并发度压到小于实例数，算式回到 ceil(实例数/并发度) × max(预算)。
-        timeout-minutes: 60
+        # 预算算式见本 job 头部注释（T-DialectSweepSpeed 起改为 max 口径，T-DialectSweepSpeed2 按新读数重算）：
+        #   步骤 = max(每实例预算 900s = 15min) + 8min 余量 = 23 → 25min。
+        #   **改子集或改矩阵实例预算都要按同一算式重算**；若把并发度压到小于实例数，
+        #   算式回到 ceil(实例数/并发度) × max(预算)。前提是 secret 里的实例预算已下调为 ≤900s。
+        timeout-minutes: 25
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"

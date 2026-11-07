@@ -96,14 +96,30 @@
         `-Dmpvs.external.maxConcurrency` 或矩阵全局 `maxConcurrency` 覆盖），墙钟不再等于「各实例相加」。
         最坏情况是**最贵那个实例挂满自己的预算**（看门狗判它 TIMEOUT、其余实例照常收口），故
         步骤必须 ≥ max(预算)，否则「实例级超时按设计判红」会退化成 CI 掐断进程（没有 summary 工件、
-        也分不清超时与崩溃）。四实例预算 1800/600/1200/3000 ⇒ max = 3000s = 50min → 步骤 **60min** /
-        job **70min**（串行时代是 120min / 130min，Σ 上界 6600s）。取数仍用**券 A 的本机实测 × 跨洋倍率**
-        （mysql84 锚点 1116s(CI) ÷ 103.0s(本机) ≈ 10.8×）：串行投影 mysql84 18.6min / pg16 3.3min（CI 实测）+
-        panwei_a ≈12.4min + gaussdb ≈36.3min ≈ **70.6min**；并行后预期墙钟 ≈ max(实测) ≈ 20~40min。
+        也分不清超时与崩溃）。
+        - **2026-11-07（T-DialectSweepSpeed2）按新读数重算**：单实例内再加**词级并行**（默认
+          `min(4, 词数)`，可用 `-Dmpvs.external.wordWorkers` 或矩阵全局 `wordWorkers` 覆盖，1 = 关闭），
+          并把夹具种子 INSERT 并入批处理 ⇒ 逐词往返统一压到 3。CI 投影（按往返数折算，
+          897/477/204/92s 为 run 42315646150 实测）：mysql84 `897×3/7÷4 ≈ 96s`、gaussdb `477÷4 ≈ 120s`、
+          panwei_a `204÷4 ≈ 51s`、pg16 `92÷4 ≈ 23s` ⇒ 墙钟 ≈ max ≈ **2min**，全腿 ≈ 冷启动 6min +
+          实例启动 1min + 2min ≈ **9min**（目标 10~12min）。
+          预算按**悲观口径**（假设词并行在 CI 一点不省）取：mysql84 `385s→900s`、gaussdb `477s→900s`、
+          panwei_a `204s→600s`、pg16 `92s→300s` ⇒ max = 900s = 15min → 步骤 = 15 + 8 = 23 → **25min**，
+          job = 步骤 + 收尾/工件上传 → **35min**（旧值 60min / 70min）。
+          ⚠️ **前提是 secret 里的实例预算已按上表下调为 ≤900s**；若仍是旧值（1800/600/1200/**3000**），
+          max 仍是 50min，25min 的步骤会在实例真挂住时被 CI 掐断——**先同步 secret 再依赖该值**，
+          未同步前临时改回 70/60。
+          ⚠️ MySQL 族 URL 必须带 `allowMultiQueries=true`（否则 `batch=off`、逐词 7 个往返，
+          mysql84 退回 ~900s 量级；探测结论会写进 summary 明细行的 `batch=on/off(<引擎原话>)`）。
+        - 本机实测（2026-11-07，四实例子集，实例并发 4）：mysql84 **87.2s → 20.3s**（批处理 1.4× ×
+          词并行 3.2×）、pg16 7.1s → 3.7s、panwei_a 23.6s → 23.3s、gaussdb 75.9s → 78.8s。
+          PG 族在本机无收益是**测试机 2 核饱和**（gaussdb/panwei 容器同机），不是并行失效；
+          CI 的收益机制是跨洋 RTT（200ms × 3 往返 × 4 路并行），与本机服务端饱和无关。
         ⚠️只有「并发度 ≥ 实例数」时才是 max；压小并发度后算式回到 `ceil(实例数 / 并发度) × max(预算)`。
         **`panwei_b` 已从子集剔除**：262 个保留字、CI 投影 ≈30min，是最贵的一条，且与 mysql84 同属 MySQL
         协议/词表族；磐维的价值在 Oracle 兼容面，已由 `panwei_a` 覆盖。再吃紧的砍序：`gaussdb_kernel503` → `panwei_a`。
-        **改子集、改矩阵里的实例预算、或改并发度都要按同一算式重算**，算式落在 workflow 的 `dialect` job 头部注释。
+        **改子集、改矩阵里的实例预算、改并发度或改词级并行度都要按同一算式重算**，算式落在 workflow 的
+        `dialect` job 头部注释。
       - 触发与复验：nightly 是 `schedule` + `workflow_dispatch` 双触发，可手工
         `gh workflow run nightly-full.yml`（换分支加 `--ref <branch>`）；判据＝该 run 的 `dialect` job 里
         「方言矩阵已落盘（子集 …）」行 + 工件 `dialect-verify-summary`（`summary.md` 的「通过/跳过/超时/失败」行）。
@@ -114,9 +130,13 @@
            + `skipReason`，摘录步按 key 原文带过来，所以 CI 不会因 rowid 假红）；但 2026-11-05 run#9 日志里
            「原矩阵 **13** 个实例」＝当时 secret 的 key 数，而本机文件今天已是 **15** 个 key —— 多出的两条正是
            磐维，**secret 大概仍是 11-05 那版**。若没同步，落盘步会对缺 key **硬抛**（整条腿红，不是静默少跑）。
-        ② 矩阵必须给**每个**实例显式写 `timeoutSeconds`：券 A 的默认 300s **小于** mysql84 实测 1113s，
+        ② 矩阵必须给**每个**实例显式写 `timeoutSeconds`：券 A 的默认 300s **小于** mysql84 改前实测 897s，
            不写就会把本来会通过的实例判成 TIMEOUT。当前取值（本机文件）：mysql84 1800 / pg16 600 /
            panwei_a 1200 / gaussdb_kernel503 3000 / panwei_b 2400（本地用）/ 其余 600。
+           **2026-11-07 起 CI 子集建议下调为** mysql84 900 / pg16 300 / panwei_a 600 / gaussdb_kernel503 900
+           （理由与算式见上一条；本地全量矩阵可维持旧值，本地不受 CI 步骤时限约束）。
+        ③ MySQL 族 URL 必须带 `allowMultiQueries=true`（T-DialectSweepSpeed2）：漏写只损失性能不判红，
+           summary 明细行会写 `batch=off(引擎拒绝多语句：...)`，据此核对是否生效。
       - ✅ 口径缺口已补（2026-11-06）：本机矩阵的 `instances` 行原先**没有** `panwei_a`/`panwei_b`（条目在
         文件里、但不在 `instances` 列表），等于本地 `releaseGate` 不跑磐维。现已把两个 key 加进 `instances`，
         本地与 CI 双向覆盖；同一批还按券 A 的实测把每个实例的 `timeoutSeconds` 补齐。
