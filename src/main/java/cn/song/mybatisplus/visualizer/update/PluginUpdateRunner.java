@@ -87,6 +87,14 @@ public final class PluginUpdateRunner {
     }
 
     /**
+     * 检查更新（指定清单地址形态；fetch 默认——Kotlin {@code check(currentVersion, manifestUrl)} 具名默认参形态的
+     * 等价重载，UpdateSection 默认 checkRunner 与开发版通道走它）。
+     */
+    public static CheckResult check(String currentVersion, String manifestUrl) {
+        return check(currentVersion, manifestUrl, UpdateApi.INSTANCE::fetchOutcome);
+    }
+
+    /**
      * 检查更新：拉取清单 → 解析 → 与当前版本比较。
      *
      * <p>R62：fetch seam 改 {@link UpdateApi.FetchOutcome}（网络/HTTP 状态分层），失败按 {@link FailureKind}
