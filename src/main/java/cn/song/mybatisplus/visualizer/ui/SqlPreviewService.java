@@ -738,7 +738,9 @@ public final class SqlPreviewService {
                 batch.getParamGroups(),
                 null,
                 batch.getTableName(),
-                null,
+                // T-WriteFamily（R4）：空 Wrapper 写操作（`delete(null)` / `update(entity, null)` /
+                // `remove(null)`）的全表写警示透传面板红字
+                batch.getWarning(),
                 List.of(),
                 Map.of(),
                 null,
@@ -1020,15 +1022,15 @@ public final class SqlPreviewService {
     /**
      * T-JpaParamOrder F3：全部 {@code ?} 均来自命名参数替换时返回名序（供按名回填），否则 null
      * 维持按序回填。位置参数混入时名序数量与 {@code ?} 不齐，按名会把无名的 {@code ?} 配空值——
-     * 保守回退既有语义。{@code ?} 计数用朴素 count（判定用途，非替换位点）。
+     * 保守回退既有语义。{@code ?} 计数用 string-aware 位点（注释/字符串里的 {@code ?} 不计，
+     * T-RuntimeSlotOptionalFill）。
      */
     @Nullable
     public List<String> usableNamedPlaceholderSources(@NotNull String sql, @NotNull List<String> namedParamNames) {
-        int questionMarks = 0;
-        for (int i = 0; i < sql.length(); i++) {
-            if (sql.charAt(i) == '?') questionMarks++;
-        }
-        return !namedParamNames.isEmpty() && namedParamNames.size() == questionMarks ? namedParamNames : null;
+        return !namedParamNames.isEmpty()
+                && namedParamNames.size() == cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt
+                        .placeholderPositions(sql).size()
+                ? namedParamNames : null;
     }
 
     // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
@@ -1780,26 +1782,52 @@ public final class SqlPreviewService {
             if (paramName.equals(p.getName())) { param = p; break; }
         }
         if (param == null) return false;
-        PsiType type = param.getType();
-        String elementType;
-        if (type instanceof PsiClassType) {
-            String className = ((PsiClassType) type).getCanonicalText();
-            Matcher m = GENERIC_COLLECTION_TYPE.matcher(className);
-            elementType = m.find() ? m.group(1) : className;
-        } else if (type instanceof PsiArrayType) {
-            elementType = ((PsiArrayType) type).getComponentType().getCanonicalText();
-        } else {
-            elementType = type.getCanonicalText();
-        }
+        String elementType = paramElementTypeText(param.getType());
         for (String t : NUMERIC_TYPES) {
             if (elementType.endsWith(t)) return true;
         }
         return false;
     }
 
+    /**
+     * T-DateLiteralBackfill：方法参数是否日期/时间族（含集合/数组元素类型）——JPA 预览的参数行
+     * 据此产出 ANSI 类型字面量（{@code LocalDateTime}/{@code Timestamp}/{@code Date} 等）。
+     */
+    public boolean isTemporalParam(@Nullable PsiMethod method, @NotNull String paramName) {
+        if (method == null) return false;
+        PsiParameter param = null;
+        for (PsiParameter p : method.getParameterList().getParameters()) {
+            if (paramName.equals(p.getName())) { param = p; break; }
+        }
+        if (param == null) return false;
+        String elementType = paramElementTypeText(param.getType());
+        for (String t : TEMPORAL_TYPES) {
+            if (elementType.endsWith(t)) return true;
+        }
+        return false;
+    }
+
+    /** 提取集合/数组元素类型文本（{@code List<LocalDateTime>} → {@code LocalDateTime}）；非集合取自身类型。 */
+    private static String paramElementTypeText(PsiType type) {
+        if (type instanceof PsiClassType) {
+            String className = ((PsiClassType) type).getCanonicalText();
+            Matcher m = GENERIC_COLLECTION_TYPE.matcher(className);
+            return m.find() ? m.group(1) : className;
+        }
+        if (type instanceof PsiArrayType) {
+            return ((PsiArrayType) type).getComponentType().getCanonicalText();
+        }
+        return type.getCanonicalText();
+    }
+
     private static final Set<String> NUMERIC_TYPES = Set.of(
             "Integer", "int", "Long", "long", "Short", "short", "Byte", "byte",
             "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number");
+
+    /** 日期/时间族类型简单名（与 {@code cn.song.mybatisplus.visualizer.sql.SqlDateLiteral} 同一口径）。 */
+    private static final Set<String> TEMPORAL_TYPES = Set.of(
+            "LocalDate", "LocalDateTime", "LocalTime",
+            "Timestamp", "Date", "OffsetDateTime", "ZonedDateTime", "Instant");
 
     /**
      * JPA 语句风险警示：DELETE/UPDATE 无 WHERE 时提示全表删除/更新（BlockAttack 风格）。
