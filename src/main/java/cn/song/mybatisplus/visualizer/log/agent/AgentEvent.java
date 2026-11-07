@@ -45,13 +45,30 @@ public record AgentEvent(
     /** 执行线程名。 */
     String threadName,
     /** connect 时连接 URL（T-AgentDialectLoop；旧版 agent 无此键 → null 容错）。 */
-    String url
+    String url,
+    /**
+     * T-SqlListCatchup 券 F2b：聚合计数——agent 侧事件队列满时同模板（同 sql）事件聚合为一条，
+     * 本字段是该条代表的执行次数（agent 心跳之外的事件 JSON {@code c} 键，仅 &gt;1 时写出）。
+     * 旧版 agent 无此键 → 1（按单次执行计），协议双向兼容。
+     * 口径说明：「已收事件」计数（AgentEventAdapter.markReceived）按帧计 1，不受本字段影响。
+     */
+    int aggregatedCount
 ) {
 
     /** T-AgentDialectLoop：copy(url=…) 的 Java 等价（测试/回填用）。 */
     public AgentEvent withUrl(String newUrl) {
         return new AgentEvent(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-                sourceCandidates, candidateClasses, methodKey, requestTag, stackDigest, params, threadName, newUrl);
+                sourceCandidates, candidateClasses, methodKey, requestTag, stackDigest, params, threadName,
+                newUrl, aggregatedCount);
+    }
+
+    /** 便捷构造器：aggregatedCount 缺省 = 1（旧全参形态兼容，Kotlin 默认参数）。 */
+    public AgentEvent(String sql, long timestamp, long durationNanos, Long updateCount, String errorText,
+                      String sourceFile, int sourceLine, List<Pair<String, Integer>> sourceCandidates,
+                      List<String> candidateClasses, String methodKey, String requestTag, String stackDigest,
+                      List<Triple<Integer, String, String>> params, String threadName, String url) {
+        this(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine, sourceCandidates,
+                candidateClasses, methodKey, requestTag, stackDigest, params, threadName, url, 1);
     }
 
     /** 便捷构造器：sourceCandidates/candidateClasses/stackDigest 缺省（Kotlin 默认参数）。 */
@@ -59,7 +76,7 @@ public record AgentEvent(
                       String sourceFile, int sourceLine, String methodKey, String requestTag,
                       List<Triple<Integer, String, String>> params, String threadName, String url) {
         this(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-            List.of(), List.of(), methodKey, requestTag, null, params, threadName, url);
+            List.of(), List.of(), methodKey, requestTag, null, params, threadName, url, 1);
     }
 
     /** 便捷构造器：sourceCandidates/candidateClasses/stackDigest/url 均缺省（Kotlin 默认参数）。 */
@@ -67,7 +84,7 @@ public record AgentEvent(
                       String sourceFile, int sourceLine, String methodKey, String requestTag,
                       List<Triple<Integer, String, String>> params, String threadName) {
         this(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-            List.of(), List.of(), methodKey, requestTag, null, params, threadName, null);
+            List.of(), List.of(), methodKey, requestTag, null, params, threadName, null, 1);
     }
 
     /**
@@ -125,7 +142,9 @@ public record AgentEvent(
                 primitiveStringOrNull(o.get("sd")),
                 params,
                 primitiveStringOrNull(o.get("th")),
-                primitiveStringOrNull(o.get("url")));
+                primitiveStringOrNull(o.get("url")),
+                // T-SqlListCatchup 券 F2b：聚合计数（旧版 agent 无此键按 1；畸形值回落 1）
+                aggregatedCountOrNull(o.get("c")));
         } catch (Throwable e) {
             return null;
         }
@@ -193,5 +212,16 @@ public record AgentEvent(
             return el.getAsLong();
         }
         return null;
+    }
+
+    /** T-SqlListCatchup 券 F2b：仅数字 primitive 且 &gt;1 取值，否则 1（对应 Kotlin asInt.takeIf { it > 1 } ?: 1）。 */
+    private static int aggregatedCountOrNull(JsonElement el) {
+        if (el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber()) {
+            int v = el.getAsInt();
+            if (v > 1) {
+                return v;
+            }
+        }
+        return 1;
     }
 }
