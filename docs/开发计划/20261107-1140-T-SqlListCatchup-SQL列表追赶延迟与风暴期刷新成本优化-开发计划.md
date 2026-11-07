@@ -126,3 +126,17 @@
 - 定向测试读数：5 类 **99 例 0 红**（`SqlLogEntryBufferTest` 60 / `SqlLogEntryBufferDedupeIndexTest` 18 / `SqlLogEntryBufferChangedKeysTest` 8 / `SqlLogCountAccumulatorEquivalenceTest` 5 / `SqlLogPanelDedupeToggleTest` 8；`--tests` 定向 + `-Pkotlin.compiler.execution.strategy=in-process`）。首轮 4 红均为测试侧缺陷（预 drain 致断言失真 ×2、presence 算术口径错、键上限 4096 封顶断言错），修正后全绿，生产代码零返工。
 - not run：全量门禁（本券纪律不跑）；真机 GUI 走查（面板卡顿体感）待用户；前后对比压测读数待券 D 探针落位后统一复测（计划 §七.2）。
 
+### 券 D：追赶量化读数（2026-11-07）
+
+- 分支：`t-sqllist-catchup-d`（工作树 `.worktrees/sqllist-catchup-d`），提交：`5bdefafc`（生产：追赶读数 + 探针与分布采样；含测试）、`d0c0c005`（返工两处：构造期序坑 / reset 后 null 语义）、`4766081c`（探针接线守卫 + 反向验证读数）。
+- 写集：`CaptureStatusBar.kt`、`LogPerfProbe.kt`、`SqlLogPanel.kt`（最小接线）、双语 bundle（`log.statusbar.catchup`）、测试三处。
+- **口径修正（主控 2026-11-07 转达，券 C 证伪链）**：`SqlLogConsoleBridge` 为 **filter 逐行制**（每行解析在控制台输出线程完成，`SqlLogConsoleBridge.kt:388-390` KDoc 自证）——「桥逐拍解析积压」这个量不存在，券 C 实码取消；追赶读数唯一数据源＝buffer 的 `pendingNotifyCount()`（券 B），**未留 bridgeBacklog supplier 死接缝**（仓规不留无接线计划的口子），`BRIDGE_SCAN_ALL` 打点亦取消。**给主控的合流接线清单：无（桥接缝与桥打点已随券 C 证伪取消）**。
+- 机制：`CaptureStatusLine.catchUpBehind`（默认 0）>0 时控制台段尾挂「追赶中：落后 N 条」，=0 不挂；`CatchUpBadgeState` 一拍节流（>0 立即显示；归零首拍持有上一读数＝计划「=0 持续一拍后消失」口径；持有拍内又升起无缝续显，抖动不闪烁）；接线不新开轮询——驱动拍与状态栏既有刷新拍同源（2s 诊断定时器 + refreshList→syncDiagnostics 链，前提「核实既有通知链可挂」成立）；非捕捉态 reset。
+- 探针：`refreshList` 拆门（`flushRebuildChainSync`）与拍体 `refreshListBeat`，全拍耗时打点 key=`LogPanel.refreshList`（补完让路的空拍不计入）；既有 `LogPanel.refreshList.snapshot` 打点不动。**LogPerfProbe 补全量分布采样**（阈值 INFO 只留 ≥100ms 拍，refreshList 单拍常态低于阈值拿不到中位数）：每名环形 1024 样本、`sampleStats(name)` 取 count/mean/p50/p90/max、`resetSamples` 划压测窗口、每累计 512 样本打一条 INFO 分布摘要（沿用 idea.log 留痕呈现）。
+- 前提证伪结论（§五.1 后半）：「refreshList 单拍中位数 vs 桥 scanAll 单拍中位数」对比在探针落位前拿不到——已把 API 与点位备好（`sampleStats`/`resetSamples` + `LogPanel.refreshList` 点位），measure 开销实测可忽略：**211ns/次**（百万次空块均值，上界断言 1000ns，`LogPerfProbeSampleTest`）。压测复测取数路径：`LogPerfProbe.resetSamples()` 划窗口 → 复测 → `sampleStats("LogPanel.refreshList")`。
+- 已知边界（数据源口径，登记不越写集修）：`pendingContentNotify` 只在通知触发（批 20 / 下一条落 200ms 窗外）或 `clear()` 时归零——风暴**末尾**被抑制的余量若之后无新条目，计数会悬挂 >0，「追赶中」徽章随之滞留显示，直到下一条条目触发通知或清空。修复方向在 buffer 侧（券 B 写集 / 主控合流评估），面板与状态栏侧不越界处理。
+- 返工两处（`d0c0c005`）：①`catchUpBadgeState` 声明误落在 init 块后——init 内首次 refreshList 即读它 → SqlLogPanelLayoutTest 19 例 NPE（构造期序坑同族，声明已移 init 前统一区块）；②`sampleStats` 无样本应返回 null（reset 后原返回 count=0 零读数）。
+- 定向测试读数：3 类 **43 例 0 红**（`CaptureStatusBarTest` 18 / `LogPerfProbeSampleTest` 4（新增） / `SqlLogPanelLayoutTest` 21；`--tests` 定向 + `-Pkotlin.compiler.execution.strategy=in-process`，JUnit XML 判据数核对）。
+- 反向验证（S2）：临时摘除三处修复分支重跑——追赶读数拼接 1 红（`test追赶读数大于零时挂控制台段尾`）、pendingNotifyCount 接线 1 红（面板接线用例）、全拍打点 1 红（探针接线守卫），**恰 3 红**；其余用例（=0 不挂、节流状态机、既有 20 例）语义在旧机制下同样成立保持绿；恢复分支后 43 例全绿。
+- not run：join-demo 压测复测前后对比读数（§七.2，探针已备好、由主控统一复测）；真机 GUI 走查（追赶徽章观感）待用户；全量门禁与 convention 守卫（§七.3）按券序由收口轮统一跑。
+
