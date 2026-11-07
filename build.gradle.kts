@@ -383,3 +383,12 @@ tasks.named("e2eFakeIde") {
     mustRunAfter("testShardTail")
     mustRunAfter("testExternal")
 }
+
+// T-ConsoleBind263：可选的真平台 jar 契约校验（`PlatformMappingContractTest`）。
+// Gradle 的 `-D` 只作用于 Gradle 自己的 JVM，不会自动传给 fork 出去的测试进程——这里显式转发。
+// 未指定时什么都不设，用例自己 assume 跳过（skipped，不是通过）。
+tasks.withType<Test>().configureEach {
+    providers.systemProperty("mpvs.contract.ide").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { systemProperty("mpvs.contract.ide", it) }
+}

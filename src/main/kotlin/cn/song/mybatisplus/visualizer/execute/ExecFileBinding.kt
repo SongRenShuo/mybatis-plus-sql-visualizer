@@ -296,46 +296,104 @@ internal object ExecFileBinding {
         val applied: Boolean get() = detached && mapped
     }
 
-    /** 平台可用的写入策略（按固定顺序；探测结果进程内一次性缓存）。 */
+    /**
+     * 平台可用的写入策略（按固定顺序；探测结果进程内一次性缓存）。
+     *
+     * 缓存只服务于生产路径（每次换源都探一遍纯属浪费）；[detectMappingStrategies] 是无缓存的
+     * 纯探测，供契约测试注入自己的类来源——测试要的正是「换一版平台形态，探测会不会跟着变」。
+     */
     internal fun availableMappingStrategies(): List<MappingStrategy> {
         probedStrategies?.let { return it }
         synchronized(this) {
             probedStrategies?.let { return it }
-            val impl = cachedClass(PER_FILE_MAPPINGS_CLASS)
-            val localDs = cachedClass(LOCAL_DS_CLASS)
-            val api = cachedClass(PER_FILE_MAPPINGS_API_CLASS)
-            val available = ArrayList<MappingStrategy>(MappingStrategy.values().size)
-            // S1：263 在实现类覆写、接口声明——任一侧可解析即视为可用（两边都查，避免代理/接口形态差异）
-            if (localDs != null) {
-                if (cachedMethod(impl, "setMappingWithWriteAction", VirtualFile::class.java, localDs, Runnable::class.java) != null ||
-                    cachedMethod(api, "setMappingWithWriteAction", VirtualFile::class.java, localDs, Runnable::class.java) != null
-                ) {
-                    available += MappingStrategy.WRITE_ACTION
-                }
-                if (cachedMethod(impl, "setMapping", VirtualFile::class.java, localDs) != null) {
-                    available += MappingStrategy.LEGACY_DS
-                }
-            }
-            if (cachedMethod(impl, "setMapping", VirtualFile::class.java, String::class.java) != null) {
-                available += MappingStrategy.STRING_ID
-            }
-            if (localDs != null &&
-                cachedMethod(
-                    impl,
-                    "setDataSourcePerFileMapping",
-                    Project::class.java,
-                    VirtualFile::class.java,
-                    localDs,
-                ) != null
-            ) {
-                available += MappingStrategy.STATIC_WRITE_ONLY
-            }
+            val available = detectMappingStrategies { fqcn -> cachedClass(fqcn) }
             probedStrategies = available
             // T-ConsoleBind263 §4.3：契约探针**首次换源时**打一行（D2 定案：不放启动——社区版/无
             // Database 插件场景不该多付一次类加载）。IDE 大版本再次移除入口时，这一行就是读数。
             LOG.info("[T-ConsoleBind] platform mapping contract: preferred=${available.firstOrNull()?.id ?: "UNAVAILABLE"}, available=$available")
             return available
         }
+    }
+
+    /**
+     * 一条策略的**签名契约**：探测时会去哪些类上找哪个方法、参数类型是什么。
+     *
+     * 抽成数据是为了让契约测试能拿它去核对**真实平台 jar 的 class 文件**——263 的 class 是
+     * Java 25 字节码（major 69），而测试 JVM 是 17，`Class.forName` 必然 `UnsupportedClassVersionError`，
+     * 所以「真实 jar 校验」只能读字节不改类加载。两边共用这一份 spec，才不会出现「测试验的签名
+     * 与生产查的签名不是同一组」。
+     *
+     * @param owners 允许声明该方法的类（S1 在 263 实现类覆写、接口也声明——任一侧命中即可）
+     * @param paramTypes 参数类型的**全限定名**（`VirtualFile` 等平台核心类型照常走类解析，
+     *   `LocalDataSource` 来自 Database 插件、缺失时整条策略缺席）
+     */
+    internal data class MappingSpec(
+        val strategy: MappingStrategy,
+        val owners: List<String>,
+        val methodName: String,
+        val paramTypes: List<String>,
+    )
+
+    /** 平台核心类型（恒在）；Database 侧类型见 [LOCAL_DS_CLASS]。 */
+    private const val VIRTUAL_FILE_CLASS = "com.intellij.openapi.vfs.VirtualFile"
+    private const val PROJECT_CLASS = "com.intellij.openapi.project.Project"
+    private const val RUNNABLE_CLASS = "java.lang.Runnable"
+    private const val STRING_CLASS = "java.lang.String"
+
+    /** 探测契约（顺序即策略优先级 S1→S4，见 [selectMappingStrategies]）。 */
+    internal val MAPPING_SPECS: List<MappingSpec> = listOf(
+        MappingSpec(
+            MappingStrategy.WRITE_ACTION,
+            owners = listOf(PER_FILE_MAPPINGS_CLASS, PER_FILE_MAPPINGS_API_CLASS),
+            methodName = "setMappingWithWriteAction",
+            paramTypes = listOf(VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS, RUNNABLE_CLASS),
+        ),
+        MappingSpec(
+            MappingStrategy.LEGACY_DS,
+            owners = listOf(PER_FILE_MAPPINGS_CLASS),
+            methodName = "setMapping",
+            paramTypes = listOf(VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS),
+        ),
+        MappingSpec(
+            MappingStrategy.STRING_ID,
+            owners = listOf(PER_FILE_MAPPINGS_CLASS),
+            methodName = "setMapping",
+            paramTypes = listOf(VIRTUAL_FILE_CLASS, STRING_CLASS),
+        ),
+        MappingSpec(
+            MappingStrategy.STATIC_WRITE_ONLY,
+            owners = listOf(PER_FILE_MAPPINGS_CLASS),
+            methodName = "setDataSourcePerFileMapping",
+            paramTypes = listOf(PROJECT_CLASS, VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS),
+        ),
+    )
+
+    /**
+     * 无缓存探测：给定「类名 → Class」的来源，返回该平台上可用的写入策略集合（顺序恒 S1→S4）。
+     *
+     * **为什么要注入**：契约测试得能喂两种形态——合成夹具（钉住反射签名，防我们自己写错方法名）
+     * 与真实平台 jar（见 [MAPPING_SPECS] 的说明：263 只能读字节）。生产调用一律走
+     * [availableMappingStrategies] 的缓存版本。
+     *
+     * 解析不到某个类（社区版 / 无 Database 插件）时对应策略直接缺席——不猜测、不兜底成「都有」。
+     */
+    internal fun detectMappingStrategies(resolve: (String) -> Class<*>?): List<MappingStrategy> {
+        val resolved = HashMap<String, Class<*>?>(8)
+        fun classOf(fqcn: String): Class<*>? = resolved.getOrPut(fqcn) { resolve(fqcn) }
+
+        val available = ArrayList<MappingStrategy>(MappingStrategy.values().size)
+        for (spec in MAPPING_SPECS) {
+            // 任一参数类型解析不到 → 这条策略无法被反射命中（宁可缺席，也不猜「大概有」）。
+            val paramClasses = spec.paramTypes.map { classOf(it) }
+            if (paramClasses.any { it == null }) continue
+            val params = paramClasses.filterNotNull().toTypedArray()
+            val hit = spec.owners.any { owner ->
+                val clazz = classOf(owner)
+                clazz != null && runCatching { clazz.getMethod(spec.methodName, *params) }.isSuccess
+            }
+            if (hit) available += spec.strategy
+        }
+        return available
     }
 
     /** T-ConsoleBind263 §4.3：契约探针——首选策略名；平台无任何入口时 null（调用方只记日志）。 */
