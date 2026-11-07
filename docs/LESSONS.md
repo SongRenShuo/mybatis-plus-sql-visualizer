@@ -213,6 +213,27 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：把刷屏当插件缺陷去排查（会一路查到「谁在轮询 `PluginSettings`」，但那 11 次/批的调用方在旧 classloader 里，新版本怎么改都消不掉）；或者在刚换完包的会话里直接宣布「换源失效已复现/已修复」——本轮正是这个会话里同时看到 263 的 `setMapping` 真缺陷和这堆残留噪音，两者混在一份日志里极易互相误判为因果。
 **Seen 1× (2026-11-07)**
 
+### L21 改 data class 构造签名后，跨工作树的定向读数必须核对重编——增量编译残留旧字节码会伪装成回归
+
+**证据**：券 F2b（`2521991a`）给 `AgentEvent` data class 加 `aggregatedCount` 字段。F 券自己工作树首跑 24 红全是 `NoSuchMethodError: AgentEvent.<init>`（删 `build/classes/*/test` 重编归零）；同日集成分支收口（merge `fc15e8da` 后）`CrossChannelDedupeTest` 17/18 红同一报错——该工作树从未跑过 F 的代码，陈旧 class 来自更早的编译产物；删 `build/classes` 重编后 217 例全绿。两次都在不同工作树复现，**生产代码零缺陷**。
+**正例**：改 data class / 构造函数签名后，凡「别的检出过红」或「跨工作树合并」的定向跑，先 `rm -rf build/classes` 再跑；或在报告里声明「已核对本次编译任务实际执行（gradle 输出 compileKotlin/compileTestKotlin 非 UP-TO-DATE）」。
+**反例**：看到 NoSuchMethodError 就去查「谁改了调用点」——调用点没错，是磁盘上的旧 class；或把这种红当真回归去回滚修复提交。
+**Seen 2× (2026-11-07)**
+
+### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉
+
+**证据**：`./gradlew buildPlugin 2>&1 | tail -15` 后台跑，失败后日志文件只有 gradle 警告尾 + `BUILD FAILED in 9s`，`What went wrong` 段整段丢失；重跑不带 tail 全量落盘才看到真因（`prepareSandbox` 对沙盒内 jsqlparser jar 的 mmap 锁，`请求的操作无法在使用用户映射区域打开的文件上执行`）。tail 先于异常处理执行，等于把排障证据裁掉只留结论行。
+**正例**：后台长命令重定向全量到文件（`> /tmp/build.log 2>&1`），判读用 grep 提取；必须 tail 时对失败路径重跑一次不截断的采集。`reverse_probe.py` 据此固定为全量捕获 + 失败时打错误行子集。
+**反例**：`| tail -N` 当作「日志瘦身」常态化——tail 的 N 行里恰好没有失败原因时，二次重跑 whole job 的成本远大于第一次就落全量。
+**Seen 1× (2026-11-07)**
+
+### L23 runIde 沙盒开着时 gradle 构建失败 ≠ 构建坏——先探针验证沙盒里的部署再决定重建
+
+**证据**：集成分支 `buildPlugin` 两次 `BUILD FAILED in 4~9s`，`What went wrong`＝`prepareSandbox` 拷贝 `jsqlparser-5.3.jar` 到沙盒插件目录报 mmap 锁（用户正开着从该工作树启动的 runIde）。但沙盒内 `mybatis-plus-sql-visualizer-2026.11.7.jar` 部署时间（13:32）晚于全部合流，python zipfile 扫 class 找 `MIN_FLUSH_INTERVAL_MS`/`CountSnapshotAccumulator`/`catchUpBehind`/`hasStalePendingNotify` 四标记全命中——**沙盒已是目标构建，构建失败无需处置**。同日 L22 的 tail 截断让第一次还误判为「构建坏了要修」。
+**正例**：runIde 沙盒存活期间要出新包：①先用类内字符串探针（zipfile 扫新增符号）验证沙盒 jar 是否已含目标改动；②含→直接用，不含→请用户关 IDE 后再 build（覆盖 mmap 文件必然失败）。runIde 每次启动自动部署当前源码构建，「部署失败」与「部署过期」要分开判。
+**反例**：反复重跑 buildPlugin 撞同一把锁；或为绕锁去改 gradle 配置/清沙盒——沙盒是用户的活会话，动了直接打断验收。
+**Seen 1× (2026-11-07)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

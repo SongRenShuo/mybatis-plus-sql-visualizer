@@ -328,3 +328,12 @@
 **定向读数**：`SenderLoopDrainRateTest` 4 例 0 failures（红→绿两轮读数见上表）；`:sql-visualizer-agent:test` 全量 **49 类 276 例 0 failures 0 errors 1 skipped**（skip 为既有预置条件用例，与本券无关；基线 270 例 + 本券 4 例 + 桩类计数口径差 2）。
 
 **not run**：真机压测复测（排水速率的真机端到端读数——需新 agent jar 注入宿主，归主控统一复测条款；本券速率对比以桩缩放换算交付）；IDE 侧全量门禁与 convention 守卫（券纪律，收口轮统一）；CHANGELOG 回填（主控合流补账）。
+
+
+### 战役终态（主控，2026-11-07 晚）
+
+- **合入 master**：（基线 v2026.11.8 正式版  之上；CHANGELOG 冲突按「[Unreleased] 在上 + [2026.11.8] 在下」双段保留）。九券 A/B/C/D/B2/E/F1/F2/G1/G2/G3/H 全部落账，CHANGELOG [Unreleased] 共九条。
+- **真机验收收官（第七轮，去重关闭 + 券 H 构建）**：已收事件 158,015 条（上轮 11,136，14 倍——券 H 排水天花板移除后到达量跟随生产与采集预算）、已丢弃 110 条（上轮 1,402，降 13 倍）、静默后**秒停**（用户确认）；慢拍 0、徽章 0 触发、插件 SEVERE 0；101,586 请求风暴两相位 0 失败。「没跟上」从现象到根因闭环。
+- **全量门禁**：按用户令交 CI（本地 testShards 启动后停止），门禁读数以 CI 轮为准。
+- **清理**：五棵工作树（集成+e/f/g/h）与五条分支（t-sqllist-catchup 及子券）全部删除，删前逐条  复验已含 master。
+- **经验沉淀**： + LESSONS L21（data class 签名跨工作树伪红，Seen 2×）/ L22（后台 tail 吞失败正文）/ L23（prepareSandbox mmap 锁＝沙盒占用）。
