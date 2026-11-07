@@ -430,6 +430,9 @@ open class SqlLogConsoleBridge(
                     // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
                     // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
                     context.line0Reader,
+                    // 券 G2：文档长度提供者惰性传递——只有 stamp 变分支才求值（clear/截断
+                    // 后的陈旧水位核销判据，见 ConsoleReplayGuard.decide KDoc）
+                    context.docLengthReader,
                 )) {
                     ConsoleReplayGuard.Decision.Replay -> context.replayDropCount.incrementAndGet()
                     else -> emitEntries(processConsoleLine(line, context, timePrefixCache, syncBufferConfig, onErrorText = ::bindConsoleError))
@@ -545,6 +548,13 @@ open class SqlLogConsoleBridge(
                     }
                     cachedLine0
                 }.getOrNull()
+            }
+            // 券 G2：文档长度读（clear/截断的陈旧水位核销判据）——复用同一 getCharsSequence
+            // 免拷贝视图取 .length，无新反射句柄；不可得（反射桩缺该方法）时 null = 守卫回退旧行为。
+            ctx.docLengthReader = {
+                runCatching {
+                    (getCharsSequence.invoke(doc) as? CharSequence)?.length ?: Int.MIN_VALUE
+                }.getOrDefault(Int.MIN_VALUE)
             }
         }
     }
@@ -855,6 +865,14 @@ internal class BridgeLineContext(
 
     /** 控制台首行文本读取函数（混合态判定用；editor 不可得时为 null）。 */
     var line0Reader: (() -> String?)? = null
+
+    /**
+     * 控制台文档总长度读取函数（券 G2 重置判定用；editor/文档不可得时为 null）。
+     *
+     * 只在守卫 stamp 变分支惰性求值（流式/纯重放热路径零反射调用）；复用 attachReplayGuard
+     * 已解析的 `getCharsSequence` 句柄取 `.length`——免拷贝视图的长度读，无全文档扫描成本。
+     */
+    var docLengthReader: (() -> Int)? = null
 
     /**
      * 重放丢弃行累计计数（T-RA-03：面板链路诊断行经 [SqlLogConsoleBridge.replayDropCount] 读取）。
