@@ -414,6 +414,31 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull List<String> placeholderParamNames,
             @NotNull Set<String> duplicateParamNames,
             @NotNull Map<String, String> initialParamValues) {
+        return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,
+                dialectOverride, dialectDecision, placeholderParamNames, duplicateParamNames, initialParamValues,
+                List.of());
+    }
+
+    /**
+     * T-PagesHql 全参形态。
+     *
+     * @param degradations 转换降级清单（空 = 无降级）；pages 链据此并入 warning 展示
+     */
+    @NotNull
+    public static PreviewResult buildJpaPreviewResult(
+            @NotNull SqlPreviewService p,
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
+            @Nullable Dialect dialectOverride,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision,
+            @NotNull List<String> placeholderParamNames,
+            @NotNull Set<String> duplicateParamNames,
+            @NotNull Map<String, String> initialParamValues,
+            @NotNull List<String> degradations) {
         // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
         Dialect dialect = dialectOverride != null ? dialectOverride : p.currentDialect();
         List<ConditionView> views = p.collectConditionViews(statement);
@@ -434,7 +459,10 @@ public final class SqlPreviewServiceEnhancementsKt {
             for (String name : backfillSources) {
                 boolean inList = inClauseParams.contains(name);
                 boolean isNumeric = p.isNumericParam(method, name);
-                paramHints.add(new ParamHint(Boolean.valueOf(!isNumeric), null, inList));
+                // 数值类型不加引号，其他类型（String/Date 等）加引号；
+                // T-DateLiteralBackfill：日期族额外置 temporal，回填时产 ANSI 类型字面量
+                paramHints.add(new ParamHint(Boolean.valueOf(!isNumeric), null, inList,
+                        p.isTemporalParam(method, name)));
             }
         } else {
             paramHints = List.of();
@@ -479,7 +507,12 @@ public final class SqlPreviewServiceEnhancementsKt {
                 dialect,
                 dialectDecision,
                 null,
-                null);
+                null,
+                // T-PagesHql：降级清单随结果透传（默认空，既有 JPA 链行为不变）
+                cn.song.mybatisplus.visualizer.model.SourceLanguage.SQL,
+                null,
+                degradations,
+                List.of());
         // T-PresetMethodScope：HQL/JPA 链路不落历史条目（recordHistory 未调用），作用域必须在此写入，
         // 否则同一段 HQL 写在两个方法里仍共用「表名 + SQL 指纹」键。
         result.setOriginScopeKey(
