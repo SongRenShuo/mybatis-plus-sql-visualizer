@@ -144,10 +144,25 @@ public class StartupUpdateCheck implements ProjectActivity {
                         showInstalled(project);
                     } else if (result instanceof PluginUpdateRunner.InstallResult.Failed failed) {
                         showInstallFailed(project, failed.message());
+                    } else if (result instanceof PluginUpdateRunner.InstallResult.NotPublished) {
+                        // T-DevUpdateChannel：sealed 新增 NotPublished（404/410）——启动通道同样不许甩异常原文。
+                        // 沿用 WARNING 通知，正文重写友好文案；尾冒号是设置页链接行的引导符，通知里没有
+                        // 后续链接行，去掉。
+                        showInstallFailed(project, trimTrailingColons(
+                                MpSqlVisualizerBundle.message("settings.update.notPublished")));
                     }
                 });
             }
         });
+    }
+
+    /** Kotlin trimEnd('：', ':') 等价：去掉尾部全角/半角冒号。 */
+    private static String trimTrailingColons(String s) {
+        int end = s.length();
+        while (end > 0 && (s.charAt(end - 1) == '：' || s.charAt(end - 1) == ':')) {
+            end--;
+        }
+        return s.substring(0, end);
     }
 
     /** 「已更新并立即生效」通知（T-DynUpdate：动态热替换成功，无需重启）。 */
