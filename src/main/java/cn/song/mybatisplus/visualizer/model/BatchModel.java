@@ -149,7 +149,8 @@ public final class BatchModel {
         List<BatchColumn> cols = orderedColumns(activeColumns);
         List<ParamHint> result = new ArrayList<>();
         for (BatchColumn c : cols) {
-            result.add(new ParamHint(c.getQuote(), null, false));
+            // T-DateLiteralBackfill：日期族列提示随行透传（temporal=false 既有列产物不变）
+            result.add(new ParamHint(c.getQuote(), null, false, c.isTemporal()));
         }
         return result;
     }
