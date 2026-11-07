@@ -95,16 +95,20 @@ public class EventBusAggregateTest {
         assertEquals("执行总次数不丢（2047 + 2 = 2049）", CAPACITY + 1, aggregatedTotal);
     }
 
-    /** ②队列满 + 异模板：逐出最旧给新模板腾位，被逐出者计丢弃、最新入队。 */
+    /**
+     * ②队列满 + 异模板：逐出最旧给新模板腾位。券 I 起被逐出者**不再计丢弃**——先入溢出账本
+     * 保全部数（发送线程补发聚合事件），只有账本也满收不下才计真丢弃（见 OverflowLedger 测试）。
+     */
     @Test
-    public void 队列满_异模板逐出最旧计丢弃_新模板入队() {
+    public void 队列满_异模板逐出最旧入账本保全_新模板入队() {
         fillDistinct(CAPACITY);
         final long droppedBefore = EventBus.droppedCount();
 
         EventBus.offer(ev("brand-new"));
 
-        assertEquals("被逐出的最旧事件计丢弃（DROPPED 语义 = 未能完好到达 IDE）",
-                droppedBefore + 1, EventBus.droppedCount());
+        assertEquals("被逐出的最旧事件入账本保全，不计丢弃（券 I 语义收窄：真丢失只剩账本满）",
+                droppedBefore, EventBus.droppedCount());
+        assertEquals("被逐者已在账本（模板 tpl-0、1 次执行）", 1L, EventBus.overflowEventTotal());
         assertEquals("逐旧后新模板占位（队列仍满）", CAPACITY, EventBus.queuedCount());
 
         final List<SqlEvent> all = drainAll();
@@ -115,7 +119,7 @@ public class EventBusAggregateTest {
             if ("tpl-0".equals(e.sql)) sawOldest = true;
         }
         assertTrue("新模板事件已入队（腾位成功）", sawNew);
-        assertTrue("被逐出的恰是最旧（队头 tpl-0）", !sawOldest);
+        assertTrue("被逐出的恰是最旧（队头 tpl-0，已转账本不在队列）", !sawOldest);
     }
 
     /** ③未满时零聚合零丢弃：同模板事件各自入队、计数恒 1（聚合只在满时发生）。 */

@@ -41,6 +41,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * 改按 {@code in.available()>0} 探测入站数据，无数据跳过读帧（此前每排 64 条干等一个 SO_TIMEOUT，
  * 默认 1s → 持续风暴下投递速率被钉死在 ~64 条/秒）；队列排空才回长超时阻塞读。心跳/看门狗按
  * 真实流逝时间判据与 CONFIG 到达即处理语义均不变，协议字节面零变化。
+ *
+ * T-SqlListCatchup 券 I：溢出账本出账（主循环步骤 1.5）——每轮排空队列后把
+ * {@link EventBus} 溢出账本（队列满时被逐事件的「模板 → 累计次数」，键数封顶 512）转成
+ * 聚合事件直接写帧，被逐事件的「执行了 N 次」不再随丢弃计数整段丢失；写帧失败回账重连后
+ * 重试，停采下降沿账本随队列一并清空入 CLEARED（停采后不补投语义不回破）。
  */
 final class SenderLoop implements Runnable {
 
@@ -308,6 +313,21 @@ final class SenderLoop implements Runnable {
                                 // 编码失败：丢弃该事件继续（EventBus.droppedCount 可观测）
                             }
                         }
+                        // 1.5) T-SqlListCatchup 券 I：溢出账本出账——队列排空后把「被逐事件」的
+                        //      模板计数转成聚合事件**直接写帧**（不走队列，不再受 2048 容量约束；
+                        //      协议零改动，聚合计数经既有键 c 带出）。写帧 IOException = 连接死，
+                        //      条目已回账（restoreCount）后上抛走重连，重连后下轮重试——
+                        //      「发出成功才离开账本」以「失败必回账」等价达成；编码缺陷该帧按帧
+                        //      语义计真丢失（DROPPED）并继续。账本有界 512 模板键，单轮出账
+                        //      ≤512 帧（毫秒级），不构成排水长尾；burst 累加出账帧数，使本轮
+                        //      入站读走 probe 路径（与大量出站工作的既有判据一致）。
+                        final int overflowFlushed =
+                                EventBus.drainOverflow(agg -> writeFrame(out, EventBus.CMD_EVENT,
+                                        EventBus.encodeEvent(agg)));
+                        if (overflowFlushed > 0) {
+                            burst += overflowFlushed;
+                            lastOutboundMs = System.currentTimeMillis();
+                        }
                     }
                     // 2) 心跳：按真实流逝时间判（每轮都执行，不被 burst 分支包住——事件突发期间也按节奏发）
                     if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
@@ -457,6 +477,8 @@ final class SenderLoop implements Runnable {
                     + ",\"gate\":" + AgentState.gateCode()
                     // T-SqlListCatchup 券 F2a：事件队列丢弃累计（单调计数、恒出现）——风暴期队列
                     // 打满时 offer() 满即丢（非阻塞红线），丢了多少必须让 IDE 用户看得见。
+                    // T-SqlListCatchup 券 I 语义收窄：读数 = 「连溢出账本都未能保全的真丢失」
+                    // （账本满收不下新模板 / 入出账异常兜底），被逐事件已先经账本补发聚合事件。
                     // 兼容口径同 gate/unreg：整数键、键序固定、无空格，旧版 IDE 的宽容扫描
                     // （AgentAttachStats.parse 只认已知键）零行为变化。
                     + ",\"dropped\":" + cn.song.mybatisplus.sqlvis.agent.transport.EventBus.droppedCount()
