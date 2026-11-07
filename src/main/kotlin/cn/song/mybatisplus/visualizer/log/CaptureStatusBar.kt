@@ -52,6 +52,15 @@ internal data class CaptureStatusLine(
      * 无逐拍解析积压量，桥接缝已随券C取消，本字段是追赶读数的唯一数据源。
      */
     val catchUpBehind: Int = 0,
+    /**
+     * T-SqlListCatchup 券 F2a：agent 侧事件队列**丢弃累计**（agent 心跳 `dropped` 键 →
+     * [cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats.dropped]）。
+     *
+     * 为什么必须落在状态栏：风暴期事件队列打满时 agent 侧 `offer()` 满即丢（非阻塞红线，丢弃本身
+     * 是对的），但「丢了多少」此前只在 agent 进程内可见——用户视角是「已收事件 2,227 条就不再涨了」，
+     * 无法区分「应用真停了」和「队列溢出在丢」。0 或旧版 agent 未上报时不挂段。
+     */
+    val agentDropped: Long = 0L,
 )
 
 /**
@@ -133,5 +142,12 @@ internal fun captureStatusLineText(d: CaptureStatusLine): Pair<String, String>? 
     } else {
         agent
     }
-    return console to agentWithDrivers
+    // 券 F2a：agent 侧事件队列丢弃累计挂尾（>0 才挂——零丢弃/旧版 agent 未上报时不加噪音）
+    // 【反向验证探针锚点】注释掉下面 if 块 = 摘除丢弃可见化，CaptureStatusBarTest 丢弃用例必红。
+    val agentWithDropped = if (d.agentStatus != null && d.agentDropped > 0L) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.dropped", agentWithDrivers, d.agentDropped)
+    } else {
+        agentWithDrivers
+    }
+    return console to agentWithDropped
 }

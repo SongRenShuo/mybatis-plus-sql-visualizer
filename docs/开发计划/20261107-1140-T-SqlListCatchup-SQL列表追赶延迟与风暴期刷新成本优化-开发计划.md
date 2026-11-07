@@ -214,3 +214,44 @@
 **定向测试读数**（`--tests` 定向 + `-Pkotlin.compiler.execution.strategy=in-process`，XML 判据数核对）：12 类 **163 例 0 failures 0 errors 0 skipped**（BufferTest 60 / DedupeIndexTest 18 / ChangedKeysTest 8 / EquivalenceTest 6（新增 1）/ PendingNotifyFlush 4 / PanelDedupeToggle 8 / PanelLayout 23 / Probe 6 / 桥 4 类 30）+ 渲染器共用基类连坐面 5 类 **115 例全绿**（HistoryCellRenderer 30 / PanelRendererUi 53 / RailPerf 17 / ListParamRenderer 10 / HistoryScrollToEnd 5）。探针接线反向验证（9d760fa0）：断开三处探针 key 重跑恰 2 红（面板 diffModel 段 / 桥 handleLine），恢复全绿。
 
 **not run**：真机 GUI 走查（面板卡顿体感/贴底滚动观感）待用户；join-demo 压测复测前后对比（需新插件包装进 IDE，主控统一复测条款——探针与分布采样已就位，`sampleStats` 逐 key 可取）；全量门禁 testShards 与 convention 守卫（券纪律，收口轮统一）；暂缓：diffModel 段余量 ~7ms 的下一层（逐格 bind/片段裁剪成本）有账单可查但已达标未动。
+
+### 券 F：真机验收缺陷两件（F1 跨通道重复兜底对账 / F2 队列风暴丢弃可见化与聚合）（2026-11-07）
+
+- 分支：`t-sqllist-catchup-f`（工作树 `.worktrees/sqllist-catchup-f`，基线 = 集成 tip `6c52564a`），提交三笔：`f7c20f7b`（F1）、`bb5652ed`（F2a）、`2521991a`（F2b）。
+
+#### F1：跨通道重复条目在去重开启态共存
+
+**定因（两候选机制的裁决）**：机制①（六族还原器指纹分叉）**不是独立成因**——六族分叉只动 `dedupeKey`（还原后 SQL 指纹），不动 crossKey 的原材料（占位符版 rawSql + 参数值签名，两侧同源），窗内折叠本就接得住（`CrossChannelDedupeTest` 既有 18 例钉死）。真缺陷 = **机制②（超窗）**：`crossChannelIndex` 的 5s 折叠窗错过——控制台副本经平台 ConsoleViewImpl 冲刷延迟 >5s 到达，且风暴期 `purgeExpiredCrossChannelLocked`（`SqlLogEntryBuffer.kt:189`，每次入队用**墙钟**惰性清除 >5s 的键）把 agent 行的 crossKey 提前摘掉 → 窗内窗两路都接不住，同一次执行各占一行（真机形态：`#1 [15:36:09] —` 控制台行 + `4ms [MYSQL] ⨉123 [来源]` agent 行）。
+
+**修法**（`f7c20f7b`，写集 `SqlLogEntryBuffer.kt` + `LogSqlModels.kt` + 新测试）：
+
+1. `crossChannelIndex` **取消 5s 时间窗惰性清除**——超窗键是越窗兜底的候选源；键域仍随队列生命周期封顶（upsert / 融合重指 / 淘汰摘键 / removeEntry 反扫 / clear / 两类重建同步出域），无新增长面；
+2. 入队折叠窗未命中时追加**越窗兜底对账** `findStaleSameSourceCandidateLocked`：同 crossKey 索引命中、超 `CROSS_CHANNEL_WINDOW_MS`、异通道标记（`crossChannelProvenanceFoldable`，窗内/越窗共用同一判据防漂移）、仍在去重窗（60s，与 `isDuplicate` 同款单边判定）内 → `mergeDuplicateEntry` 折回一行（先到者保留、补空不覆盖——agent 耗时/角标/位置全保留，红线「agent 先到不覆盖」），不计 ⨉N、不占捕获序号，与窗内跨通道折叠同口径；两到达顺序（agent 先到/控制台先到占 #1）都覆盖；
+3. 通道判据收紧一处：**两侧都 UNKNOWN 不折**（观测合并的语义前提是可识别通道）——取消时间清除后由旧时间戳夹具暴露 `purge` 此前在静默挡住「UNKNOWN 对 UNKNOWN 落窗内折叠」的失真形态（`SqlLogEntryBufferTest` 六红根因，修后语义 = 历史读回/未打标条目按去重口径走，不被观测合并误折）；
+4. **接管沿语义不回破**：`rebuildDedupeIndexAfterHandoff` 的 grace 截断照旧清索引——被截断的键不在索引，越窗兜底天然无候选，P3「attach 即生效」可见性不受影响（专守卫用例 `接管沿截断后_agent首批_不被越窗兜底折进桥纪元条目` 钉住）。已知边界：接管沿截断形态（控制台行 >5s 旧时 attach、随后 agent 新执行开新行）**不在本券修复范围**——它与 P3 可见性语义互斥（buffer 无法区分「同一次执行的迟到副本」与「attach 后的新执行」），保持 P3 优先。
+
+**测试**：`CrossChannelStaleReconcileTest` 新增 8 例（超窗异指纹 agent 先到/控制台先到、超窗同指纹走既有同键去重、越去重窗不折、同通道不折、去重关闭不折、接管沿截断不折、折叠后副本续折）；真实链路夹具（控制台行真解析 + AgentEventAdapter 真适配），合成时间戳注入不赌墙钟（L18）。
+
+**反向验证（S2）**：摘除越窗兜底分支重跑**恰 3 红**（两超窗复现 + 后续副本续折），5 个守卫/安全用例保持绿；恢复后全绿。过程记录一次判据演进：首版兜底未收紧 UNKNOWN 口径时 `SqlLogEntryBufferTest` dedupeExisting 面 6 红（purge 移除暴露的既有语义失真），加「至少一侧已知通道」判据后归零——教训：时间清除曾是语义载体，摘它必须先验它挡了什么。
+
+**F1 定向读数**：核心 6 类 **118 例 0 红**（StaleReconcile 8 / CrossChannel 18 / Buffer 60 / DedupeIndex 18 / ChangedKeys 8 / Equivalence 6）+ 外围 8 类 112 例 0 红（O147 4 / PanelLayout 23 / CaptureStatusBar 18 / 桥 3 类 24 / ManagerBehavior 35）。
+
+#### F2a：agent 事件队列丢弃计数可见化（`bb5652ed`）
+
+- 链路（全复用既有搭载点，零新协议命令）：agent `SenderLoop.heartbeatBody()` 追加整数键 `dropped`（`EventBus.droppedCount()`，恒出现、键序固定、无空格；旧 IDE 宽容扫描零行为变化）→ IDE `AgentAttachStats.dropped`（缺键按 0 降级）→ `AgentAttachReport.latest()` → `CaptureStatusLine.agentDropped`（`SqlLogPanel.syncCaptureStatusBar` 2s 诊断拍接线）→ 增强段尾挂「｜已丢弃 N 条」（>0 才挂）→ bundle 双语 `log.statusbar.agent.dropped`（占位符 {0}{1} 两侧一致，BundlePlaceholderArity 口径）。
+- 测试：`CaptureStatusBarTest` +3（挂尾保既有叙事 / =0 不挂 / 增强未开启不挂）、`AgentAttachStatsTest` +2、agent `HeartbeatDiagnosticsTest` +1（键恒出现且与 `EventBus.droppedCount()` 同源——静态累计量测试间共享，值断言用同源比对禁断言字面 0）。
+- 反向验证（S2）：摘 `agentDropped` 拼接重跑恰 1 红，恢复全绿。读数：IDE 3 类 59 例 0 红 + agent HeartbeatDiagnostics 6 例 0 红。
+
+#### F2b：队列满时同模板聚合，降精度不丢信号（`2521991a`）
+
+- 机制（agent 侧 `EventBus`，`offer()` 全程非阻塞红线不碰）：满队列时①**同模板聚合**——同模板（同 sql，PreparedStatement 占位符文本即模板）事件移除队内旧条、聚合计数并入最新事件重投（`SqlEvent.aggregatedCount`），腾出容量给新模板；②**异模板逐旧**——无同模板候选时逐出队头最旧事件计丢弃，保最新弃最旧；竞争失败回落原丢弃语义。「已收事件」口径不变（仍按帧计 1）。
+- **协议兼容（双向）**：JSON 键 `c` 仅在 >1 时写出（`Jsons.writeEvent`）——常态事件字节面零变化；旧 IDE（Gson 宽容解析）忽略未知键；新 IDE（`AgentEvent.parse`）读旧事件（无 `c` 键）按 1 计、畸形值回落 1。`AgentProtocolSyncTest` 约束（CMD 常量两侧同值 / 帧形态唯一性 / 心跳节奏 ≥3×间隔不变量）全部未触。
+- 测试：agent `EventBusAggregateTest` 新增 5 例（满+同模板聚合零丢弃且执行总次数不丢 / 满+异模板逐最旧且新模板入队 / 未满不聚合常态计数恒 1 / offer 恒非阻塞+null 计丢弃 / 聚合后 clearQueued 语义不变）、`JsonsEventFormatTest` +1、IDE `AgentEventAdapterTest` +3。
+- 反向验证（S2）：摘聚合+逐旧分支重跑恰 2 红，守卫用例保持绿。
+- 已知边界：面板级消费（聚合余量计入 ⨉N 徽章）未做——需 buffer 计数 API 扩展，超本券写集；聚合计数已在协议层不丢（`AgentEvent.aggregatedCount` 可读），留待主控评估是否立券。
+
+**F2 综合读数**：agent 子项目全量 `:sql-visualizer-agent:test` **48 类 270 例 0 failures 0 errors 1 skipped**（skip 为既有预置条件用例，与本券无关）；IDE 侧 F 面 **18 类 478 例 0 红**（含 F1 全部核心/外围 + F2a/F2b 接线面 + agent 包 `AgentEventAdapter` 16 / `AgentAttachStats` 15 / `AgentManagerIntakeGate` 21 / 状态文本等）。
+
+**工程记录**：构建期并行登记 `sqllist-f`（沙盒 `sqllist-f-sandbox` 临时隔离已用后还原，未入库）；F2b 落地后 IDE 侧首跑 24 红＝`AgentEvent` 构造签名变更后 Kotlin 增量编译残留旧测试字节码（NoSuchMethodError），删除 `build/classes/*/test` 强制重编后归零——非真实回归，**改 data class 构造签名后定向读数必须核对是否重编**。
+
+**not run**：全量门禁 testShards 与 convention 守卫（券纪律，收口轮统一；BundlePlaceholderArity/GiantFileBudget 等由收口连坐）；join-demo 压测复测（主控统一条款——F2a 上线后状态栏可直接观察 dropped 读数，F2b 聚合效果看「已收事件」与 dropped 差值）；真机 GUI 走查（F1 两行并存的消失、F2a「已丢弃 N 条」观感）待用户；面板级聚合计数消费（见 F2b 已知边界）。

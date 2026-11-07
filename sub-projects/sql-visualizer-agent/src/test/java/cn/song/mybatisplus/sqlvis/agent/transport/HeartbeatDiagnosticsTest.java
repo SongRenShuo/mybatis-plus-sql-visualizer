@@ -47,6 +47,27 @@ public class HeartbeatDiagnosticsTest {
         // 「旧版 agent 未上报」，与「本次确实没有未登记实现」混为一谈。
         assertTrue("心跳必须恒带 unreg 键（无未登记实现时为空串）：" + body,
                 body.contains("\"unreg\":\""));
+        // T-SqlListCatchup 券 F2a：事件队列丢弃累计键**恒出现**（整数、默认 0）——
+        // 风暴期队列溢出丢弃必须让 IDE 用户看得见（状态栏「已丢弃 N 条」的取数面）。
+        assertTrue("心跳必须恒带 dropped 键（零丢弃时为 0）：" + body,
+                body.contains("\"dropped\":"));
+    }
+
+    /**
+     * 券 F2a：事件队列丢弃累计随心跳带出且与 {@link EventBus#droppedCount()} 同源。
+     *
+     * <p>反向验证：把 {@code heartbeatBody} 里的 {@code "dropped"} 段摘掉，本用例必红。
+     * 值断言用同源比对而非字面 0：DROPPED 是进程级累计（同类/他类测试先跑过就会非零），
+     * 断「恒为 0」会撞测试间静态状态——同源比对在任何执行序下都成立。
+     */
+    @Test
+    public void 心跳body_丢弃累计与EventBus计数同源() throws Exception {
+        final String body = SenderLoop.heartbeatBody();
+        final long expected = EventBus.droppedCount();
+        final java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"dropped\":(\\d{1,15})").matcher(body);
+        assertTrue("心跳必须恒带 dropped 键：" + body, m.find());
+        assertEquals("dropped 值与 EventBus.droppedCount() 同源", expected, Long.parseLong(m.group(1)));
     }
 
     /**

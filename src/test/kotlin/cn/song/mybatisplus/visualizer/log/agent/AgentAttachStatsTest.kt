@@ -50,6 +50,22 @@ class AgentAttachStatsTest {
         assertTrue("weavable>0 即非零命中", !stats.zeroMatched)
     }
 
+    // ---------- T-SqlListCatchup 券 F2a：事件队列丢弃累计随心跳带出 ----------
+
+    @Test
+    fun `丢弃累计键可解析`() {
+        val stats = AgentAttachStats.parse(
+            """{"weavable":9,"woven":9,"failed":0,"dropped":138}""",
+        )!!
+        assertEquals("dropped 键按单调累计整体覆盖口径解析", 138L, stats.dropped)
+    }
+
+    @Test
+    fun `旧版agent无dropped键按0降级`() {
+        val stats = AgentAttachStats.parse("""{"weavable":3,"woven":3,"failed":0}""")!!
+        assertEquals("旧版心跳缺 dropped 键 → 0（状态栏不挂段）", 0L, stats.dropped)
+    }
+
     @Test
     fun `旧版agent心跳空body返回null_零行为变化`() {
         assertNull("旧版心跳 body 为 {}：不得产生任何覆盖结论", AgentAttachStats.parse("{}"))

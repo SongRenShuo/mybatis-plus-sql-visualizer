@@ -1716,6 +1716,10 @@ class SqlLogPanel(
                         // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
                         unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
                             .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
+                        // T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计（心跳 dropped 键，>0 挂尾）——
+                        // 风暴期队列溢出丢弃从此在用户视角可见，不再只有 agent 进程内计数
+                        agentDropped = cn.song.mybatisplus.visualizer.log.agent
+                            .AgentAttachReport.latest()?.dropped ?: 0L,
                         // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
                         catchUpBehind = catchUpBadgeState
                             .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),

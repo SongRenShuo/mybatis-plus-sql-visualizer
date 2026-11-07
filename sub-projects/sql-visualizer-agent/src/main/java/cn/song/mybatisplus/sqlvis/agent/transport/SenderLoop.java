@@ -429,6 +429,11 @@ final class SenderLoop implements Runnable {
                     + ",\"catchAll\":" + catchAllState()
                     // T-AgentSilentAfter16s：自停归因（0=无 / 1=CONFIG 看门狗自停）。
                     + ",\"gate\":" + AgentState.gateCode()
+                    // T-SqlListCatchup 券 F2a：事件队列丢弃累计（单调计数、恒出现）——风暴期队列
+                    // 打满时 offer() 满即丢（非阻塞红线），丢了多少必须让 IDE 用户看得见。
+                    // 兼容口径同 gate/unreg：整数键、键序固定、无空格，旧版 IDE 的宽容扫描
+                    // （AgentAttachStats.parse 只认已知键）零行为变化。
+                    + ",\"dropped\":" + cn.song.mybatisplus.sqlvis.agent.transport.EventBus.droppedCount()
                     // T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界、逗号分隔、只类名）。
                     // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
                     // 不能靠缺键表达「本次没有未登记实现」。
