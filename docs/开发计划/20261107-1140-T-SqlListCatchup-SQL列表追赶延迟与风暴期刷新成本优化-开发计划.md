@@ -115,3 +115,14 @@
 **反向验证（S2）**：摘除 notifyUi 时间窗分支重跑 → 窗口机制 5 例（test03 合拍 / test04 多波次 / test05 在途竞态 / test06 dispose / test07 removeUiListener）**全红**，窗口外语义 2 例（test01/test02）保持绿（语义在旧机制下同样成立）；恢复分支后 7 例全绿。
 
 **not run**：join-demo 压测复测读数（§七.2 前后对比）待券 D 探针落位后统一复测；真机 GUI 卡顿体感待用户走查；CHANGELOG 回填未做（写集限本券两文件，合流收口时由主控统一补账）。
+### 券 B：计数快照增量化（2026-11-07）
+
+- 分支：`t-sqllist-catchup-b`（工作树 `.worktrees/sqllist-catchup-b`），提交：`5a32e33d`（生产：buffer 变更键出口 + 面板累积器）、`3440f739`（测试：等价性反向验证用例）。
+- 写集：`SqlLogEntryBuffer.kt`（`pendingNotifyCount()` / `drainChangedKeys()` / `drainCountRebuildFlag()` / 按键出口 `dedupeCountForKey`·`dedupePresenceForKey`·`structureKeyForKey`）、`SqlLogPanel.kt`（纯逻辑累积器 `CountSnapshotAccumulator` + `refreshCountMaps`）。
+- **前提证伪（§五.3）**：成立。`structureKeyCounts` = `entries.groupingBy { it.structureKey }.eachCount()`（LogSqlModels.kt:388），`structureKey` 是 LogSqlEntry 的 body lazy 属性（每实例首算一次后缓存；入队实例即快照实例，生命周期内不重算指纹）——全量聚合确是便宜的一遍扫，收益估算不需重估。附带发现：`dedupeKey` 同为 lazy，但条目入库走 `entry.copy(sequenceNumber=…)`，惰性缓存在**入库实例**上首算，与快照实例同一，无重复计算面。
+- 增量机制：面板每拍先 drain 变更键、后 drain 全量标记（标记落两次 drain 之间则本拍即走全量，无陈旧窗口）；增量路径是**状态对账式**——变更键用 buffer presence 当前值与面板镜像求净差，节流窗内同键多次增减折叠为一次净变化、无悬挂余量。兜底全量重建点（buffer 置位，面板回退一次）：dedupeEnabled 翻转 / rebuildDedupeIndexAfterHandoff / clear / 淘汰扫出键域（F83 短路与 P6 重指的缺陷高发点，键域收缩时重新锚定基线）/ 去重关闭期间或不可去重条目（ShardingSphere）变更（presence 口径外）/ dedupeCounts 键上限溢出（静默逐键键集无法表达）。
+- 已知边界：buffer 满 + 异键风暴下每拍都有键扫出域 → 该形态每拍仍走全量（与现状同价，无退化；该场景由券 A 的合拍承担降频）。面板 EDT 与生产线程并发时标记用 AtomicBoolean getAndSet 消费，不丢标记。
+- 等价性验证：`SqlLogCountAccumulatorEquivalenceTest` 随机操作序列（3 种子 × 600 操作 × 1~3 拍合并 drain）下增量累积与每拍全量重算逐键逐值相等；淘汰路径 drain 含被淘汰键；节流窗同键折叠净差正确；clear 后双双清空。buffer 侧守卫 `SqlLogEntryBufferChangedKeysTest` 8 例；面板接线面 2 例（`SqlLogPanelDedupeToggleTest` 追加）。
+- 定向测试读数：5 类 **99 例 0 红**（`SqlLogEntryBufferTest` 60 / `SqlLogEntryBufferDedupeIndexTest` 18 / `SqlLogEntryBufferChangedKeysTest` 8 / `SqlLogCountAccumulatorEquivalenceTest` 5 / `SqlLogPanelDedupeToggleTest` 8；`--tests` 定向 + `-Pkotlin.compiler.execution.strategy=in-process`）。首轮 4 红均为测试侧缺陷（预 drain 致断言失真 ×2、presence 算术口径错、键上限 4096 封顶断言错），修正后全绿，生产代码零返工。
+- not run：全量门禁（本券纪律不跑）；真机 GUI 走查（面板卡顿体感）待用户；前后对比压测读数待券 D 探针落位后统一复测（计划 §七.2）。
+
