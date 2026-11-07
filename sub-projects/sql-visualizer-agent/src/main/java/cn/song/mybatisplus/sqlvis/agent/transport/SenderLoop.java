@@ -119,6 +119,9 @@ final class SenderLoop implements Runnable {
     /** 拨号函数缝（T-PerfSweep7 T-PS7-02）：默认真拨号，仅同包测试构造器可达（不新增生产可配置面）。 */
     private final SocketDialer dialer;
 
+    /** 退避睡眠缝（生产 = Thread::sleep；测试注入记录器）。 */
+    private final BackoffSleeper backoffSleeper;
+
     SenderLoop(int serverPort) {
         this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS);
     }
@@ -137,17 +140,38 @@ final class SenderLoop implements Runnable {
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
             SocketDialer dialer) {
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer, Thread::sleep);
+    }
+
+    /**
+     * 退避睡眠注入构造器（时序加固，同包测试缝）：**只**包住退避那一处 sleep，
+     * 空转轮询节奏仍走真实 {@link Thread#sleep}。
+     *
+     * 为什么需要：退避用例过去用「相邻两次 accept 的墙钟间隔之比」断言增长
+     * （{@code gap2 * 2 >= gap1 * 3}）。CI 2 核 runner 上第一轮连接要付类加载/JIT 的一次性成本，
+     * gap1 被抬到 235ms（设计值 150）、gap2 只有 306ms（设计值 300），比值 1.3 小于 1.5 →
+     * 稳定假红（2026-11-06 nightly run 42230813933 实证：重跑即绿）。改为注入记录器直接断言
+     * **调度值序列**，与墙钟彻底解耦。
+     */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
+            SocketDialer dialer, BackoffSleeper backoffSleeper) {
         this.serverPort = serverPort;
         this.backoffInitialMs = backoffInitialMs;
         this.backoffMaxMs = backoffMaxMs;
         this.backoffResetAfterMs = backoffResetAfterMs;
         this.maxFastDrops = maxFastDrops;
         this.dialer = dialer;
+        this.backoffSleeper = backoffSleeper;
     }
 
     /** 拨号函数缝：与被替换的 {@code new Socket(host, port)} 逐字同形（生产缺省实现）。 */
     interface SocketDialer {
         Socket dial(String host, int port) throws IOException;
+    }
+
+    /** 退避睡眠缝：生产缺省 {@link Thread#sleep}；测试注入记录器（可同时决定是否真睡）。 */
+    interface BackoffSleeper {
+        void sleep(long ms) throws InterruptedException;
     }
 
     /** 默认拨号：真拨号（与 T-PS7-02 改造前同一行代码，零行为变化）。 */
@@ -344,7 +368,8 @@ final class SenderLoop implements Runnable {
                     fastDrops = 0;
                 }
                 try {
-                    Thread.sleep(backoffMs);
+                    // 退避睡眠走注入缝（测试据此断言调度值序列，不靠墙钟间隔比值）
+                    backoffSleeper.sleep(backoffMs);
                 } catch (InterruptedException ie) {
                     return;
                 }
