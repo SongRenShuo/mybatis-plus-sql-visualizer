@@ -66,7 +66,7 @@ public class MybatisXmlAttributeReferenceProvider extends PsiReferenceProvider {
             reference = new XmlTagIdReference(value, "parameterMap");
         } else if (attributeName.equals("namespace") && tagName.equals("mapper")) {
             reference = new JavaClassReference(value);
-        } else if (attributeName.equals("id") && STATEMENT_TAGS.contains(tagName)) {
+        } else if (attributeName.equals("id") && MybatisXmlTargets.STATEMENT_TAGS.contains(tagName)) {
             reference = new MapperMethodReference(value);
         } else if (CLASS_ATTRIBUTES.contains(attributeName)) {
             reference = new JavaClassReference(value);
@@ -79,8 +79,6 @@ public class MybatisXmlAttributeReferenceProvider extends PsiReferenceProvider {
         }
         return reference != null ? new PsiReference[]{reference} : new PsiReference[0];
     }
-
-    private static final Set<String> STATEMENT_TAGS = Set.of("select", "insert", "update", "delete");
 
     private static final Set<String> CLASS_ATTRIBUTES = Set.of(
             "resultType", "parameterType", "type", "ofType", "javaType", "typeHandler");
