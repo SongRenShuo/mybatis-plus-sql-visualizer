@@ -14,6 +14,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import cn.song.mybatisplus.visualizer.sql.extract.TableExtractor;
@@ -200,7 +201,66 @@ public final class SqlPreviewPanelSqlViewKt {
         PreviewResult result = p.current;
         if (result == null) return sql;
         if (result.getNamedParamHints().isEmpty()) return sql;
-        return ParameterReplacer.replaceNamedParams(sql, p.paramValues, result.getNamedParamHints());
+        return ParameterReplacer.replaceNamedParams(sql, p.paramValues, result.getNamedParamHints(),
+                List.of(), result.getEffectiveDialect() != null ? result.getEffectiveDialect().getName() : null);
+    }
+
+    /**
+     * T-RuntimeSlotFill 券 C：预览渲染的<b>唯一</b>回填入口——运行期占位与 {@code :name} 一次扫描
+     * （{@code ParameterReplacer.buildExecutableSqlWithSlots}），{@code ?} 仍由既有
+     * {@code backfillParamsBySource} 按序回填（它的 LIKE/空值策略/模拟字面量口径本券不动）。
+     *
+     * <p>为什么占位与 {@code :name} 必须同遍：用户填的占位值里可能带 {@code :nm} 形态，分两步做会被
+     * {@code NAMED_PARAM_PATTERN} 二次当命名参数替换（券 B 的 R2 反向验证实测过）。同遍扫描下每种替换
+     * 整段产出、产出不再被扫描，二次误伤在结构上不会发生。</p>
+     *
+     * <p>零占位时<b>直接走既有 {@link #applyNamedParams}</b>：没有运行期占位的预览（Wrapper/XML/批量/JPA
+     * 全链）产物与改动前逐字节一致。</p>
+     */
+    public static String applyRuntimeSlotsAndNamedParams(@NotNull SqlPreviewPanel p, String sql) {
+        PreviewResult result = p.current;
+        if (result == null) return sql;
+        if (result.getRuntimeSlots().isEmpty()) return applyNamedParams(p, sql);
+        ParameterReplacer.RuntimeSlotRender render = ParameterReplacer.buildExecutableSqlWithSlots(
+                sql,
+                result.getRuntimeSlots(),
+                slotValuesSnapshot(p),
+                List.of(),
+                p.paramValues,
+                List.of(),
+                result.getNamedParamHints(),
+                result.getEffectiveDialect() != null ? result.getEffectiveDialect().getName() : null);
+        // 券 B 的拒绝/风险必须可见（不许静默），展示位在参数区「运行时值」分区下方
+        SqlPreviewPanelParamPanelKt.publishRuntimeSlotWarnings(p, render.getWarnings());
+        return render.getSql();
+    }
+
+    /**
+     * T-RuntimeSlotFill 券 C：当前占位值的不可变快照（回填引擎唯一值载体）。
+     *
+     * <p>复制 / 导出 / 执行三处与预览渲染共用同一份——避免「预览填了、复制/导出没填」。</p>
+     */
+    public static cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues slotValuesSnapshot(
+            @NotNull SqlPreviewPanel p) {
+        return new cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues(new LinkedHashMap<>(p.slotValues));
+    }
+
+    /**
+     * T-RuntimeSlotFill 券 C：把当前占位值填进一段<b>已经参数回填过</b>的 SQL（导出 / 执行等取词口）。
+     *
+     * <p>只填占位（{@code ParameterReplacer.replaceRuntimeSlots}），不碰 {@code ?} / {@code :name}
+     * ——那些文本在编辑器里已经是回填后的形态。占位值全为空时逐字节原样返回（D-5）。</p>
+     */
+    public static String fillRuntimeSlots(@NotNull SqlPreviewPanel p, String sql) {
+        PreviewResult current = p.current;
+        List<RuntimeSlot> slots = current != null ? current.getRuntimeSlots() : List.of();
+        if (slots == null || slots.isEmpty()) return sql;
+        return ParameterReplacer.replaceRuntimeSlots(
+                sql,
+                slots,
+                slotValuesSnapshot(p),
+                current.getEffectiveDialect() != null ? current.getEffectiveDialect().getName() : null
+        ).getSql();
     }
 
     /**
@@ -287,8 +347,9 @@ public final class SqlPreviewPanelSqlViewKt {
                     model.getDialect(),
                     new LinkedHashSet<>(p.enabledIds));
             // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+            // T-RuntimeSlotFill 券 C：命名参数与运行期占位同遍（无占位时逐字节等于旧路径）
             showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p,
-                    applyNamedParams(p, withPaginationLimitLine(p, generated.getSql())),
+                    applyRuntimeSlotsAndNamedParams(p, withPaginationLimitLine(p, generated.getSql())),
                     generated.getUnresolvedParams(),
                     generated.getParamHints()));
         } else {
@@ -299,7 +360,8 @@ public final class SqlPreviewPanelSqlViewKt {
             // 与 setParameter 书写顺序解耦）；hints 在服务端已与该 sources 序平行
             List<String> sources = !result.getPlaceholderParamNames().isEmpty()
                     ? result.getPlaceholderParamNames() : result.getUnresolvedParams();
-            showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p, applyNamedParams(p, base), sources,
+            showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p,
+                    applyRuntimeSlotsAndNamedParams(p, base), sources,
                     result.getParamHints()));
         }
         // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
@@ -329,6 +391,11 @@ public final class SqlPreviewPanelSqlViewKt {
         p.displayMode = SqlPreviewPanel.PreviewDisplayMode.NORMAL;
         p.modeButton.setText(SqlPreviewPanelExecutionKt.modeButtonText(p));
         renderSql(p);
+        // UI-004（2026-11-04 真机）：刷新必须**重算方言证据**。用户改 IDEA 的 SQL 方言不会发任何
+        // 事件，旧实现只重渲染模型文本 → 顶部/底部方言停在旧值（「改了方言并刷新，底部仍报旧方言」）。
+        // includeSourceFile = true：按预览生成时的同一份证据（源文件 → IDEA 方言映射）重算；
+        // 重算在池线程，EDT 仅做仅升级替换 + 方言无关载体的证据对齐 + 底部提示重判。
+        DialectStatusRefreshKt.refreshDialectStatusRow(p, true);
     }
 
     /** 设置「SQL 格式化输出」（false=压缩）；环境异常兜底 true（多行）。 */
@@ -546,7 +613,8 @@ public final class SqlPreviewPanelSqlViewKt {
      * 委托 {@link CopyExecutableSqlAction} 处理替换逻辑与通知。
      */
     public static void copyExecutableSql(@NotNull SqlPreviewPanel p) {
-        new CopyExecutableSqlAction(p.project).execute(p);
+        // T-RuntimeSlotFill 券 C：与预览渲染共用同一份占位值（否则会「预览填了、复制没填」）
+        new CopyExecutableSqlAction(p.project).execute(p, slotValuesSnapshot(p));
     }
 
     /**
@@ -619,6 +687,8 @@ public final class SqlPreviewPanelSqlViewKt {
      */
     public static void clear(@NotNull SqlPreviewPanel p) {
         p.current = null;
+        p.sourceVirtualFile = null;
+        p.lastDialectGateMessage = null;
         p.enabledIds.clear();
         p.paramValues.clear();
         p.paramFields.clear();
