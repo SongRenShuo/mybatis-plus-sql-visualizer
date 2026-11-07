@@ -435,6 +435,8 @@ public final class DataSourceSelectorResultsKt {
                 intendedDsId = null;
             }
         }
+        // lambda 捕获要求有效终态：try/catch 重赋值后落最终副本（仅供下方异步续接链使用）
+        final String intendedDsIdFinal = intendedDsId;
         if (allowsSharedConsoleReuse(forceChoose) && reuseSharedConsole(project, submitSql, executeAfterPrepare,
                 onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
                 dialectGateRequest, onDialectGate, submission, prepareOwner, moduleKey, intendedDsId)) {
@@ -457,7 +459,7 @@ public final class DataSourceSelectorResultsKt {
                         onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
                         dialectGateRequest, onDialectGate, submission, onInfo,
                         forceChoose, forceChoosePopup, preferredRunnerName,
-                        intendedDs, intendedDsId, prepareOwner, queuedIntent, onDialectMismatchHint));
+                        intendedDs, intendedDsIdFinal, prepareOwner, queuedIntent, onDialectMismatchHint));
     }
 
     /**
@@ -1903,7 +1905,7 @@ public final class DataSourceSelectorResultsKt {
             stillValid = Boolean.TRUE.equals(ReadAction.compute(
                     (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) psi::isValid));
         } catch (Throwable e) {
-            if (FatalErrors.isFatal(e)) throw e;
+            if (FatalErrors.isFatal(e)) throw sneakyThrow(e);
             stillValid = false;
         }
         if (stillValid) return pair;
@@ -1916,10 +1918,16 @@ public final class DataSourceSelectorResultsKt {
                 return found != null && found.isValid() ? found : null;
             });
         } catch (Throwable e) {
-            if (FatalErrors.isFatal(e)) throw e;
+            if (FatalErrors.isFatal(e)) throw sneakyThrow(e);
             fresh = null;
         }
         return fresh != null ? new DataSourceSelector.TempPsiFile(vf, fresh) : null;
+    }
+
+    /** 受检异常透传（Kotlin 无受检异常检查的等价形态，同 DataSourceSelector/ExecFileBinding 既有形态）：
+     * {@code ReadAction.compute(ThrowableComputable)} 的 catch(Throwable) 分支经此透传 fatal，绕开 Java 受检声明。 */
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
     }
 
     /**

@@ -188,7 +188,9 @@ public class UpdateSectionTest extends BasePlatformTestCase {
 
     public void testCheckButtonClickShowsCheckingThenResult() throws Exception {
         final int[] calls = {0};
-        section.setCheckRunner(() -> {
+        // 177 轮 A3：setCheckRunner 签名随 master 升为 Function1<String, CheckResult>（url 入参）——
+        // 旧无参 lambda 补形参适配；波次 B 移植 master 版测试时以 master 原文为准。
+        section.setCheckRunner(url -> {
             calls[0]++;
             return PluginUpdateRunner.CheckResult.UpToDate.INSTANCE;
         });

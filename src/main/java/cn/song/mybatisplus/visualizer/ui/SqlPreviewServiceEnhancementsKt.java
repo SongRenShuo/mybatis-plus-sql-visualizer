@@ -495,6 +495,8 @@ public final class SqlPreviewServiceEnhancementsKt {
                 null,
                 Map.of(),
                 null,
+                // threadName（T-StackBizFrame S3）无值传 null——39 参规范构造器的位置实参槽位
+                null,
                 false,
                 null,
                 null,

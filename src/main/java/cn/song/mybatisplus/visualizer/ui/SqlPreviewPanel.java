@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.execute.SqlExecutor;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues;
 import cn.song.mybatisplus.visualizer.sql.SlotValue;
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelParamPanelKt.RuntimeSlotRowControls;
 import cn.song.mybatisplus.visualizer.sql.SlotWarning;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel;

@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
  *   <li>把可见行（一句话）与悬停详文（折叠其余源）拆成两个 bundle 模板。</li>
  * </ol>
  */
-final class DialectMismatchHintKt {
+public final class DialectMismatchHintKt {
 
     private DialectMismatchHintKt() {
     }

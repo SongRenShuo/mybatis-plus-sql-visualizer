@@ -926,8 +926,9 @@ public class SqlLogEntryBuffer {
                 }
                 final LogSqlEntry diagExisting = staleDiagExisting;
                 final LogSqlEntry diagMerged = staleDiagMerged;
+                final String diagKey = staleDiagKey;
                 logCrossChannelThrottled(() -> LogSqlModelsKt.crossChannelStaleReconcileDiagText(
-                        staleDiagKey, diagExisting, entry, diagMerged));
+                        diagKey, diagExisting, entry, diagMerged));
             }
             return false;
         }
@@ -968,8 +969,9 @@ public class SqlLogEntryBuffer {
                 }
                 final LogSqlEntry diagExisting = crossDiagExisting;
                 final LogSqlEntry diagMerged = crossDiagMerged;
+                final String diagKey = crossDiagKey;
                 logCrossChannelThrottled(() -> LogSqlModelsKt.crossChannelMergeDiagText(
-                        crossDiagKey, diagExisting, entry, diagMerged));
+                        diagKey, diagExisting, entry, diagMerged));
             }
             return false;
         }
@@ -978,8 +980,9 @@ public class SqlLogEntryBuffer {
         if (crossUnfolded) {
             if (crossDiagExisting != null && crossDiagKey != null) {
                 final LogSqlEntry diagExisting = crossDiagExisting;
+                final String diagKey = crossDiagKey;
                 logCrossChannelThrottled(() -> LogSqlModelsKt.crossChannelUnfoldedDiagText(
-                        crossDiagKey, diagExisting, entry));
+                        diagKey, diagExisting, entry));
             }
         }
         // 缺源码条目的通道归因诊断（限频）——「增强已开启却无法跳转」现场的直接证据行。

@@ -400,11 +400,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 回退全量重算一次。等价性口径见 {@link CountSnapshotAccumulator} KDoc。
      * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
      */
-    private final CountSnapshotAccumulator countAccumulator = new CountSnapshotAccumulator(
-            () -> manager.getEntries().dedupeCountsSnapshot(),
-            key -> manager.getEntries().dedupeCountForKey(key),
-            key -> manager.getEntries().dedupePresenceForKey(key),
-            key -> manager.getEntries().structureKeyForKey(key));
+    private final CountSnapshotAccumulator countAccumulator;
 
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
@@ -719,6 +715,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
         super(new BorderLayout());
         this.project = project;
         this.manager = manager;
+        // 券B 计数累积器须在 manager 赋值后建（四条快照读 lambda 捕获构造参数，天然终态）；
+        // Kotlin 属性初始化序天然合法，Java 字段初始化器先于构造体——故挪到此处赋值。
+        this.countAccumulator = new CountSnapshotAccumulator(
+                () -> manager.getEntries().dedupeCountsSnapshot(),
+                key -> manager.getEntries().dedupeCountForKey(key),
+                key -> manager.getEntries().dedupePresenceForKey(key),
+                key -> manager.getEntries().structureKeyForKey(key));
 
         this.dedupeCheckBox = new JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe"));
         dedupeCheckBox.setSelected(manager.getEntries().isDedupeEnabled());
