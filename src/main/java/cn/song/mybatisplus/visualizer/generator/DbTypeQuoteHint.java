@@ -49,4 +49,27 @@ public final class DbTypeQuoteHint {
         }
         return Boolean.TRUE;
     }
+
+    /** 日期/时间族类型名关键词（T-DateLiteralBackfill；覆盖 date/datetime/timestamp/time）。 */
+    private static final List<String> TEMPORAL_MARKERS = List.of("date", "time");
+
+    /**
+     * 是否日期/时间族（T-DateLiteralBackfill）：DB 侧自省只有 SQL 类型名，命中
+     * {@code date} / {@code datetime} / {@code timestamp} / {@code time} 即视为可产 ANSI 类型字面量
+     * （{@code time} 的值形态不含日期，{@link cn.song.mybatisplus.visualizer.sql.SqlDateLiteral}
+     * 会因形态不匹配回落引号）。
+     */
+    public static boolean isTemporal(@Nullable String dbTypeName) {
+        String base = null;
+        if (dbTypeName != null) {
+            // Kotlin substringBefore('(')：不含 '(' 时返回原文
+            int paren = dbTypeName.indexOf('(');
+            String lower = dbTypeName.toLowerCase(Locale.ROOT);
+            base = (paren >= 0 ? lower.substring(0, paren) : lower).trim();
+        }
+        if (base == null || base.isEmpty()) {
+            return false;
+        }
+        return TEMPORAL_MARKERS.stream().anyMatch(base::contains);
+    }
 }
