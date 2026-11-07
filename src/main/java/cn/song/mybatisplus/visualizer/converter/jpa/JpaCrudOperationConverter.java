@@ -705,7 +705,7 @@ public final class JpaCrudOperationConverter {
                 List<ParamEntry> params = new ArrayList<>();
                 for (ColumnInfo column : setColumns) {
                     params.add(new ParamEntry(idSource(prefix, column.getColumnName()),
-                            new ParamHint(ParamQuote.decide(column.getFieldType()))));
+                            ParamQuote.hint(column.getFieldType())));
                 }
                 params.addAll(condition.params);
                 build = new Build(
@@ -810,7 +810,7 @@ public final class JpaCrudOperationConverter {
                 List<ParamEntry> params = new ArrayList<>();
                 for (ColumnInfo column : setColumns) {
                     params.add(new ParamEntry(idSource(prefix, column.getColumnName()),
-                            new ParamHint(ParamQuote.decide(column.getFieldType()))));
+                            ParamQuote.hint(column.getFieldType())));
                 }
                 params.addAll(condition.params);
                 build = new Build(
@@ -829,7 +829,7 @@ public final class JpaCrudOperationConverter {
                 List<ParamEntry> params = new ArrayList<>();
                 for (ColumnInfo column : setColumns) {
                     params.add(new ParamEntry(idSource(prefix, column.getColumnName()),
-                            new ParamHint(ParamQuote.decide(column.getFieldType()))));
+                            ParamQuote.hint(column.getFieldType())));
                 }
                 params.addAll(condition.params);
                 List<String> notes = methodName.equals("replicate")
@@ -929,7 +929,8 @@ public final class JpaCrudOperationConverter {
         for (ColumnInfo column : insertColumns) {
             toggleColumns.add(new BatchColumn(column.getColumnName(),
                     idSource(prefix, column.getColumnName()),
-                    ParamQuote.decide(column.getFieldType()), true));
+                    ParamQuote.decide(column.getFieldType()), true, false, null,
+                    ParamQuote.isTemporal(column.getFieldType())));
         }
         Set<String> active = new LinkedHashSet<>();
         for (BatchColumn toggleColumn : toggleColumns) {
@@ -950,7 +951,8 @@ public final class JpaCrudOperationConverter {
         }
         List<ParamEntry> params = new ArrayList<>();
         for (BatchColumn column : model.orderedColumns(active)) {
-            params.add(new ParamEntry(column.getSource(), new ParamHint(column.getQuote())));
+            params.add(new ParamEntry(column.getSource(),
+                    new ParamHint(column.getQuote(), null, false, column.isTemporal())));
         }
         List<String> insertColumnNames = new ArrayList<>();
         for (ColumnInfo column : insertColumns) {
@@ -986,12 +988,12 @@ public final class JpaCrudOperationConverter {
             if (value instanceof SqlValue.Placeholder placeholder) {
                 return new IdConditionResult(idName + " = ?", List.of(new ParamEntry(
                         placeholder.getSource(),
-                        new ParamHint(ParamQuote.decide(idColumn.getFieldType())))));
+                        ParamQuote.hint(idColumn.getFieldType()))));
             }
         }
         return new IdConditionResult(idName + " = ?", List.of(new ParamEntry(
                 idSource(entityPrefix != null ? entityPrefix : "", idColumn.getColumnName()),
-                new ParamHint(ParamQuote.decide(idColumn.getFieldType())))));
+                ParamQuote.hint(idColumn.getFieldType()))));
     }
 
     /** 主键条件渲染结果（where 文本 + 参数行）。 */
