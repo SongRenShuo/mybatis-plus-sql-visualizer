@@ -89,6 +89,32 @@ public final class SqlExecutor {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             boolean forceChoose) {
+        execute(project, sql, dataSource, isQuery, onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+                dialectGateRequest, onDialectGate, onSubmission, forceChoose, null, null);
+    }
+
+    /**
+     * 全参形态 + 结构化提示 / 中性信息通道（UI-049 / T8）。
+     *
+     * @param onDialectMismatchHint UI-049：空 Runner「方言不匹配」态结构化提示（与 {@code onError} 互斥；null = 既有红字文案）。
+     * @param onInfo                T8：中性信息回调（工具语句/更新语句成功完成时面板 showStatus，不走红条错误通道）。
+     */
+    public static void execute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Object dataSource,
+            boolean isQuery,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint,
+            @Nullable Consumer<String> onInfo) {
         ExecutionAttempt attempt = executionAttemptForTest;
         if (attempt != null) {
             attempt.attempt(sql);
@@ -103,7 +129,8 @@ public final class SqlExecutor {
                         }
                     }
                 },
-                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose);
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose,
+                onDialectMismatchHint, onInfo);
     }
 
     /** M36.5：准备控制台（不执行）。Community 下静默失败（callback(false)）。 */
@@ -132,12 +159,28 @@ public final class SqlExecutor {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             boolean forceChoose) {
+        prepareConsole(project, sql, onConsole, onEditor, onError, callback, dialectGateRequest, onDialectGate,
+                forceChoose, null);
+    }
+
+    /** UI-049：空 Runner「方言不匹配」态结构化提示（与 {@code onError} 互斥；null = 既有行为）。 */
+    public static void prepareConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            boolean forceChoose,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint) {
         if (!ExecuteSqlSupport.isAvailable()) {
             if (callback != null) callback.accept(false);
             return;
         }
         DataSourceSelector.prepareConsole(project, sql, onConsole, onEditor, onError, callback,
-                dialectGateRequest, onDialectGate, forceChoose);
+                dialectGateRequest, onDialectGate, forceChoose, null, false, onDialectMismatchHint);
     }
 
     /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code onErrorRich = null} 形态）。 */
@@ -183,6 +226,21 @@ public final class SqlExecutor {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        return executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec, dialectGateRequest,
+                onDialectGate, onSubmission, null);
+    }
+
+    /** 全参 + 中性信息通道（T8）：工具语句成功完成时面板 showStatus，不走红条错误通道。 */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo) {
         if (!ExecuteSqlSupport.isAvailable()) return false;
         ExecutionAttempt attempt = executionAttemptForTest;
         if (attempt != null) {
@@ -205,7 +263,7 @@ public final class SqlExecutor {
                     onErrorRich.accept(info);
                 },
                 wholeScriptExec, dialectGateRequest, onDialectGate,
-                onSubmission == null ? null : receipt);
+                onSubmission == null ? null : receipt, onInfo);
     }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
