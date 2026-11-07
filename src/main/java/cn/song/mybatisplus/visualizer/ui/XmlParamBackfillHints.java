@@ -67,11 +67,14 @@ public final class XmlParamBackfillHints {
                     Boolean quoted = xml.quoteFor(source);
                     quote = quoted != null ? quoted : Boolean.TRUE;
                 }
-                result.add(new ParamHint(quote, null, true));
+                // T-DateLiteralBackfill：List<LocalDate>/List<LocalDateTime> 的每个元素产 ANSI 字面量
+                result.add(new ParamHint(quote, null, true, elementKind == ParamKind.TEMPORAL));
             } else {
                 Boolean quoted = xml.quoteFor(source);
                 Boolean quote = quoted != null ? quoted : Boolean.TRUE;
-                result.add(new ParamHint(quote, null, shapeInListIndices.contains(index)));
+                // T-DateLiteralBackfill：LocalDate/LocalDateTime 参数产 ANSI 字面量（info 缺失按非时间态）
+                result.add(new ParamHint(quote, null, shapeInListIndices.contains(index),
+                        info != null && info.kind() == ParamKind.TEMPORAL));
             }
         }
         return result;
