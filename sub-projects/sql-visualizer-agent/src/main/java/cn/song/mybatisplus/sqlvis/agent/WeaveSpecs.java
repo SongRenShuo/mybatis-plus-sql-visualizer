@@ -57,6 +57,25 @@ final class WeaveSpecs {
                 "com.mysql.jdbc.StatementImpl",
                 "com.mysql.jdbc.PreparedStatement",
                 "com.mysql.jdbc.ServerPreparedStatement",
+                // GoldenDB（中兴金篆；gdb_mysql-connector-java-oracle-5.1.46.99.jar，T-GoldenDbDialect
+                // 券 B）：MySQL Connector/J 5.1 的整包重命名分叉（jar 内 com/mysql 条目为 0），
+                // 组形态照上组 com.mysql.jdbc.* 逐名对应（计划 §1.1.7 javap 实测）。
+                // StatementImpl 自有 execute/executeQuery/executeUpdate/executeLargeUpdate/
+                // executeBatch/executeLargeBatch/addBatch(String)/clearBatch 全族；
+                // PreparedStatement extends StatementImpl 自有无参 execute 族齐全；
+                // CallableStatement extends PreparedStatement 自有 execute 族齐全，必须单列。
+                // **注意 ServerPreparedStatement**：它自有方法只有 addBatch()（无参）/
+                // executeBatchSerially(int)/executeInternal(...) 等——**自有 execute 族为空，execute
+                // 覆盖来自父类 PreparedStatement**；且无参 addBatch() 不命中任何 Kind（ADD_BATCH 只认
+                // addBatch(String)，该形态在父类声明），full-face changed 实际来自 PARAM 形态 setter 族
+                // （setArray/setAsciiStream/…，字节层实测，见 StatementWeaverVendorCoverageTest 的
+                // GoldenDB 专项断言）。「登记 = 本类覆盖」在这里不成立，勿误读；JDBC4* 子类族
+                // （JDBC4Connection/JDBC4PreparedStatement 等）不登记——父类织入即覆盖，同 MySQL 5.1
+                // 既有口径。
+                "com.goldendb.jdbc.StatementImpl",
+                "com.goldendb.jdbc.PreparedStatement",
+                "com.goldendb.jdbc.ServerPreparedStatement",
+                "com.goldendb.jdbc.CallableStatement",
                 "org.h2.jdbc.JdbcStatement",
                 "org.h2.jdbc.JdbcPreparedStatement",
                 "org.h2.jdbc.JdbcCallableStatement",
@@ -167,6 +186,10 @@ final class WeaveSpecs {
         putSpec(prepareFace,
                 "com.mysql.cj.jdbc.ConnectionImpl",
                 "com.mysql.jdbc.ConnectionImpl",
+                // GoldenDB（T-GoldenDbDialect 券 B）：MySQL 5.1 谱系整包重命名，ConnectionImpl
+                // 自有 prepareStatement(String) ×6 重载 + prepareCall(String) ×4 重载（javap 实测），
+                // getURL() 为 public——UrlResolver 的反射兜底可用
+                "com.goldendb.jdbc.ConnectionImpl",
                 "org.h2.jdbc.JdbcConnection",
                 // PG 连接（prepareStatement/prepareCall 出口登记 PS 实例 → SQL）
                 // 同为 openGauss 5.x/7.x 的连接面
