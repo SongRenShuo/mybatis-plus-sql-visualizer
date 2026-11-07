@@ -315,7 +315,10 @@ public record LogSqlEntry(
         }
     }
 
-    /** 来源段缓存（`[文件.java:行号]`；无源码位置为空列表），与 {@link #cachedHeaderCore()} 同键生命周期。 */
+    /**
+     * 来源段缓存（{@code [文件.java:行号]}，T-LogMethodName 开启时再跟一段 {@code [类名#方法名]}；
+     * 无源码位置为空列表），与 {@link #cachedHeaderCore()} 同键生命周期。
+     */
     public List<SqlTextFragment> cachedHeaderSource() {
         HeaderCacheEntry e = HEADER_CACHE.get(this);
         return e != null ? e.source() : null;
@@ -336,7 +339,8 @@ public record LogSqlEntry(
 
     /**
      * 缓存键（{@link HeaderStaticCacheKey}）：showDuration+时间戳设置+角标细节+
-     * 慢查询阈值——键含设置值，任一设置变更自动失效重算（显示格式严格跟随设置，免失效钩子）。
+     * 慢查询阈值+来源后方法名开关——键含设置值，任一设置变更自动失效重算
+     * （显示格式严格跟随设置，免失效钩子）。
      */
     public HeaderStaticCacheKey cachedHeaderKey() {
         HeaderCacheEntry e = HEADER_CACHE.get(this);

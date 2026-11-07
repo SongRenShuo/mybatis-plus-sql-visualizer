@@ -158,12 +158,74 @@ public final class LogSqlModelsKt {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < params.size(); i++) {
             if (i > 0) sb.append('\u0001');
-            String v = params.get(i).value();
-            String rendered = v != null ? v : "\u0000";
+            String rendered = paramSignatureToken(params.get(i));
             sb.append(rendered.length() > PARAM_SIGNATURE_MAX_CHARS
                 ? rendered.substring(0, PARAM_SIGNATURE_MAX_CHARS) : rendered);
         }
         return sb.toString();
+    }
+
+    // ---------- T-BinaryParamSig（20261105）：二进制参数签名归一 ----------
+
+    /**
+     * 二进制占位（两侧归一口径）。只参与匹配，不进展示——列表仍显示各自原文
+     * （控制台 {@code '[B@1a2b3c'}、agent {@code '<byte[]>'}）。
+     */
+    public static final String BINARY_PARAM_PLACEHOLDER = "<binary>";
+
+    /** null 参数的签名 token（与原口径 {@code "\u0000"} 逐字一致，不改变既有配对语义）。 */
+    private static final String NULL_SIGNATURE_TOKEN = "\u0000";
+
+    /**
+     * 二进制族类型标注：控制台 MyBatis 打印的简单名（{@code byte[]} / {@code Blob} / {@code Clob}）+ agent
+     * {@code ParamCapture.simpleTypeName} 对数组类型产出的 JVM 名（{@code [B}）+ 全限定名（旧日志/第三方日志）。
+     */
+    private static final java.util.Set<String> BINARY_TYPE_MARKERS = java.util.Set.of(
+        "byte[]", "[B", "Blob", "Clob", "NClob", "InputStream", "Reader",
+        "java.sql.Blob", "java.sql.Clob", "java.sql.NClob",
+        "java.io.InputStream", "java.io.Reader");
+
+    /** 对象默认 toString 形态（{@code [B@1a2b3c}、{@code [Ljava.lang.String;@7f3a}）——控制台日志对二进制参数打的就是它。 */
+    private static final java.util.regex.Pattern OBJECT_ADDRESS_REGEX =
+        java.util.regex.Pattern.compile("^\\[+[A-Za-z.;/]*@[0-9a-fA-F]+$");
+
+    /** agent 侧降级形态（{@code <byte[]>} / {@code <Blob>} / {@code <InputStream>}，见 {@code ParamCapture.renderValue}）。 */
+    private static final java.util.regex.Pattern AGENT_DEGRADED_REGEX =
+        java.util.regex.Pattern.compile("^<([A-Za-z\\[\\].;$]+)>$");
+
+    /**
+     * T-BinaryParamSig：是否为「值文本两侧天然不可比」的二进制族参数。
+     *
+     * <p>判据三条任一成立：类型标注命中 {@link #BINARY_TYPE_MARKERS} 集合；值是对象默认 toString
+     * （{@code [B@1a2b3c}）；值是 agent 降级形态（{@code <byte[]>}）且内层类型名命中同一集合。
+     * 三条都要求类型/形态证据，普通字符串（哪怕长得像十六进制，如 {@code deadbeef}）不会被误判。</p>
+     */
+    public static boolean isBinaryParam(LogSqlParam param) {
+        String type = param.type();
+        if (type != null && BINARY_TYPE_MARKERS.contains(type)) return true;
+        String value = param.value();
+        if (value == null) return false;
+        if (OBJECT_ADDRESS_REGEX.matcher(value).matches()) return true;
+        java.util.regex.Matcher degraded = AGENT_DEGRADED_REGEX.matcher(value);
+        if (!degraded.matches()) return false;
+        return BINARY_TYPE_MARKERS.contains(degraded.group(1));
+    }
+
+    /**
+     * T-BinaryParamSig：单个参数的签名 token。
+     *
+     * <p>二进制族归一为 {@link #BINARY_PARAM_PLACEHOLDER}——否则同一次执行在控制台侧是
+     * {@code [B@1a2b3c}、agent 侧是 {@code <byte[]>}，签名不等、crossKey 查不到，兜底折不上；
+     * 而「跨通道同源未折叠」哨兵只在 crossKey 相同时才报，这类形态既不会折叠也不会留痕
+     * （真机上只能靠截图反推）。</p>
+     *
+     * <p>副作用边界：归一后「同一条 SQL 连续两次执行且参数是不同的二进制内容」签名相同——但二进制值
+     * 本来就不可比，且跨通道折叠还有 5s 窗 + 异通道双重限制，影响限于毫秒级耗时归属。</p>
+     */
+    public static String paramSignatureToken(LogSqlParam param) {
+        String value = param.value();
+        if (value == null) return NULL_SIGNATURE_TOKEN;
+        return isBinaryParam(param) ? BINARY_PARAM_PLACEHOLDER : value;
     }
 
     /**
@@ -264,6 +326,55 @@ public final class LogSqlModelsKt {
             case CONSOLE_EP, CONSOLE_BRIDGE, MERGED -> true;
             default -> false;
         };
+    }
+
+    /** Kotlin String.take(n) 等价（越界安全）。 */
+    private static String take(String s, int n) {
+        return s.substring(0, Math.min(n, s.length()));
+    }
+
+    /**
+     * T-CrossChannelDedupe（20261105）：**跨通道同源未折叠**的诊断行——同 crossKey（占位符版 rawSql +
+     * 参数值签名）、异 dedupeKey（两套还原器口径分叉），且在折叠窗内，却仍未折成一行。
+     *
+     * <p>用途：这次现场（同一条 INSERT 一行带耗时/位置、一行全 {@code —}）只能靠截图反推，因为没有「键不同 →
+     * 各占一行」的痕迹。修完之后这行仍要保留——它是「还原器又分叉了、且兜底也接不住」的长期哨兵。</p>
+     *
+     * <p><b>内容红线</b>（沿用 {@link #provenanceDiagText}）：只有 crossKey 指纹前缀、两侧 dedupeKey 前缀与通道名——
+     * 绝不含 SQL 原文、参数值与连接凭据（诊断行进 idea.log）。</p>
+     */
+    public static String crossChannelUnfoldedDiagText(String crossKey, LogSqlEntry existing, LogSqlEntry incoming) {
+        return "跨通道同源未折叠: crossKey=" + take(crossKey, 8)
+            + " dedupeA=" + take(existing.dedupeKey(), 8) + "(通道=" + existing.captureProvenance() + ")"
+            + " dedupeB=" + take(incoming.dedupeKey(), 8) + "(通道=" + incoming.captureProvenance() + ")";
+    }
+
+    /**
+     * T-SqlListCatchup 券 F1（20261107 真机第三轮压测缺陷）：**越窗兜底对账**的诊断行——同 crossKey、
+     * 异 dedupeKey、超 5s 折叠窗但仍在去重窗内的两份观测被折回一行（修复前留两行）。
+     *
+     * <p><b>内容红线</b>（沿用 {@link #crossChannelUnfoldedDiagText}）：只有 crossKey 指纹前缀、两侧 dedupeKey 前缀与
+     * 通道名——绝不含 SQL 原文、参数值与连接凭据（诊断行进 idea.log）。</p>
+     */
+    public static String crossChannelStaleReconcileDiagText(String crossKey, LogSqlEntry existing,
+            LogSqlEntry incoming, LogSqlEntry merged) {
+        return "超窗兜底对账: crossKey=" + take(crossKey, 8)
+            + " dedupeA=" + take(existing.dedupeKey(), 8) + "(通道=" + existing.captureProvenance() + ")"
+            + " dedupeB=" + take(incoming.dedupeKey(), 8) + "(通道=" + incoming.captureProvenance() + ")"
+            + "→" + merged.captureProvenance() + " 升级=" + mergeUpgradedAspects(existing, merged);
+    }
+
+    /**
+     * T-CrossChannelDedupe：跨通道等价键**折叠成功**的诊断行（与 {@link #crossChannelUnfoldedDiagText} 同红线：
+     * 只有指纹前缀、通道与升级面）。它回答「兜底真的在工作」，是 §6.4 真机复验「兜底触发次数」的读数来源；
+     * 未折叠哨兵与它分开成两行，故 {@code 跨通道同源未折叠} 的计数为 0 仍可当作「无残余分叉」的判据。
+     */
+    public static String crossChannelMergeDiagText(String crossKey, LogSqlEntry existing,
+            LogSqlEntry incoming, LogSqlEntry merged) {
+        return "跨通道等价键融合: crossKey=" + take(crossKey, 8)
+            + " dedupeA=" + take(existing.dedupeKey(), 8) + "(通道=" + existing.captureProvenance() + ")"
+            + " dedupeB=" + take(incoming.dedupeKey(), 8) + "(通道=" + incoming.captureProvenance() + ")"
+            + "→" + merged.captureProvenance() + " 升级=" + mergeUpgradedAspects(existing, merged);
     }
 
     /** O-90：同模板徽章显示阈值（≥N 显示「×N 同模板」；常量起步不做设置项——缩范围定案）。 */
