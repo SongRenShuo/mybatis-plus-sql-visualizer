@@ -21,8 +21,17 @@ import javax.swing.JPanel
 import javax.swing.SwingUtilities
 
 class SqlLogTailFollowTest : BasePlatformTestCase() {
+
+    /**
+     * T-SqlListCatchup 券 A：notifyUi 的 150ms 刷新窗在 headless 下泵不到 Alarm（到点触发依赖真实
+     * 时钟），而本类断言的是「动作之后列表已同步刷新」。注入同步调度器恢复「通知即刷」语义——
+     * 窗口机制本身由 SqlLogManagerFlushWindowTest 覆盖，这里只测面板行为。
+     */
+    private fun newManager(): SqlLogManager =
+        SqlLogManager(project).also { it.catchUpScheduler = { _, action -> action() } }
+
     fun testClearActionTemplateHasPlatformClearIcon() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             val action = panel.toolbarGroup.getChildren(null)[2]
@@ -36,7 +45,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun testClearActionUpdateRestoresPlatformClearIcon() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             val action = panel.toolbarGroup.getChildren(null)[2]
@@ -63,7 +72,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun testClearActionClearsEntriesAndResumesTailFollow() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             manager.entries.dedupeEnabled = false
@@ -153,7 +162,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun test滚轮滚动条与键盘暂停_滚回底部恢复跟随() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             val scroll = requireNotNull(panel.listScrollPaneForTest)
@@ -191,7 +200,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun test暂停后新SQL不抢走实际滚动视口() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             panel.setSize(460, 420)
@@ -227,7 +236,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun test滚底动作对象能从暂停态恢复并真正贴底() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             panel.setSize(460, 420)
@@ -269,7 +278,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun test缓冲已满并淘汰头部时仍跟随新SQL() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             manager.entries.maxEntries = 80
@@ -328,7 +337,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         var manager: SqlLogManager? = null
         var panel: SqlLogPanel? = null
         try {
-            val logManager = SqlLogManager(project).also { manager = it }
+            val logManager = newManager().also { manager = it }
             logManager.entries.maxEntries = 200
             logManager.entries.dedupeEnabled = false
             logManager.entries.setPaused(false)
@@ -458,7 +467,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
     }
 
     fun test程序性列表刷新不改变用户暂停状态() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             val scroll = requireNotNull(panel.listScrollPaneForTest)
@@ -528,7 +537,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
      * JList 没有滚动锚定，旧实现里整屏内容被顶上去一行高（视口像素位置不动）。
      */
     fun test暂停且缓冲已满_头部淘汰不得移动用户视口() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             fillToCapacity(panel, manager)
@@ -571,7 +580,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
      * `test滚底判据_位置变小与程序性滚动都不算用户手势`；本条只作端到端冒烟。
      */
     fun test暂停贴底附近_头部淘汰后仍保持暂停() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             fillToCapacity(panel, manager)
@@ -601,7 +610,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
 
     /** 暂停态下改排序触发全量重建：视口应回到原条目，而不是回顶。 */
     fun test暂停态全量重建按锚点条目复原视口() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             // 耗时与时间同序 → 按耗时降序排即整体倒序，diffVisible 必判 FullRebuild
@@ -641,7 +650,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
      * 真实时序（仍需 `runIde` 沙盒，见计划 §九 判据 4）。这是 P-3 在本环境的证据上限，不要当闭环。
      */
     fun test锚点复原后经revalidate重布局仍停在原条目() {
-        val manager = SqlLogManager(project)
+        val manager = newManager()
         val panel = SqlLogPanel(project, manager)
         try {
             fillToCapacity(panel, manager) { index -> index.toLong() }

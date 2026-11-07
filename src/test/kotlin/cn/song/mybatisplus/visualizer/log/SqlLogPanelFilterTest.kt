@@ -15,11 +15,20 @@ import org.junit.Assert.assertTrue
  */
 class SqlLogPanelFilterTest : BasePlatformTestCase() {
 
+    /**
+     * T-SqlListCatchup 券 A：notifyUi 的 150ms 刷新窗在 headless 下泵不到 Alarm（到点触发依赖真实
+     * 时钟），而本类断言的是「动作之后列表已同步刷新」。注入同步调度器恢复「通知即刷」语义——
+     * 窗口机制本身由 SqlLogManagerFlushWindowTest 覆盖，这里只测面板行为。
+     */
+    private fun newManager(): SqlLogManager =
+        SqlLogManager(project).also { it.catchUpScheduler = { _, action -> action() } }
+
+
     private lateinit var manager: SqlLogManager
 
     override fun setUp() {
         super.setUp()
-        manager = SqlLogManager(project)
+        manager = newManager()
         // 管线测试需要重复 SQL 场景，关闭去重避免相同 SQL 被丢弃
         manager.entries.dedupeEnabled = false
     }
