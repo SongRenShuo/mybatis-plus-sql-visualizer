@@ -202,6 +202,36 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-SqlListCatchup 券 D：refreshList 全拍探针接线守卫——每次刷新拍必落一枚样本到
+     * `LogPanel.refreshList` 分布（计划 §七.1「探针读数非空」）。反向验证：摘掉 refreshList
+     * 的 LogPerf.measure 包裹，本用例必须红。
+     */
+    fun testTSqlListCatchupD_refreshList全拍探针读数非空() {
+        LogPerfProbe.resetSamples()
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            manager.entries.addEntry(
+                LogSqlEntry(
+                    rawSql = "SELECT 1 FROM probe_t",
+                    restoredSql = "SELECT 1 FROM probe_t",
+                    params = emptyList(),
+                    timestamp = 1L,
+                ),
+            )
+            waitForEdt()
+            val stats = LogPerfProbe.sampleStats("LogPanel.refreshList")
+            assertNotNull("刷新拍后全拍探针应有读数（key=LogPanel.refreshList）", stats)
+            assertTrue("读数 count 应 ≥1：$stats", stats!!.count >= 1)
+        } finally {
+            LogPerfProbe.resetSamples()
+            panel.dispose()
+        }
+    }
+
     fun test注入耗时信息_排序方式选择器保持可见() {
         val panel = SqlLogPanel(project, manager)
         try {
