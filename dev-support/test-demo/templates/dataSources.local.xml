@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  testDatabase / testDb* 夹具用的最小 dataSources.local.xml。
+  测试从这里读取 <user-name>；密码由测试常量提供（root/root）。
+  由 dev-support/test-demo/setup-test-env.ps1 复制到 <demo>/.idea/dataSources.local.xml。
+-->
+<project version="4">
+  <component name="dataSourceStorageLocal">
+    <data-source name="mpj_demo@localhost" uuid="56965ec0-638e-4648-98d9-acb7096d698d">
+      <secret-storage>master_key</secret-storage>
+      <user-name>root</user-name>
+    </data-source>
+    <data-source name="mp_demo@localhost" uuid="8d6c2a1b-f817-44fd-a3db-6798b116bc78">
+      <secret-storage>master_key</secret-storage>
+      <user-name>root</user-name>
+    </data-source>
+  </component>
+</project>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  testDatabase / testDb* 夹具用的最小 dataSources.xml。
+  由 dev-support/test-demo/setup-test-env.ps1 复制到 <demo>/.idea/dataSources.xml。
+  测试只读取名称含 mpj_demo 的 data-source 的 jdbc-url / jdbc-driver；
+  用户名从 dataSources.local.xml 读取，密码由测试常量提供（root/root，本地开发库）。
+-->
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="mpj_demo@localhost" uuid="56965ec0-638e-4648-98d9-acb7096d698d">
+      <driver-ref>mysql.8</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.mysql.cj.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mysql://localhost:3306/mpj_demo?useUnicode=true&amp;characterEncoding=utf8&amp;useSSL=false&amp;serverTimezone=Asia/Shanghai&amp;allowPublicKeyRetrieval=true&amp;sessionVariables=sql_mode=ANSI_QUOTES</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+    <data-source source="LOCAL" name="mp_demo@localhost" uuid="8d6c2a1b-f817-44fd-a3db-6798b116bc78">
+      <driver-ref>mysql.8</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.mysql.cj.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mysql://localhost:3306/mp_demo?useUnicode=true&amp;characterEncoding=utf8&amp;useSSL=false&amp;serverTimezone=Asia/Shanghai&amp;allowPublicKeyRetrieval=true</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+  </component>
+</project>
