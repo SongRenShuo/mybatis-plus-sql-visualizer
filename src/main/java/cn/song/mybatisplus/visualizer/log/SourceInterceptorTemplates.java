@@ -286,6 +286,8 @@ public class SqlSourceInterceptor implements InnerInterceptor {
                 cn.startsWith("cn.song.mybatisplus.visualizer.") || cn.startsWith("cn.song.mybatisplus.sqlvis.") ||
                 // 驱动家族
                 cn.startsWith("com.mysql.") || cn.startsWith("org.mariadb.") || cn.startsWith("org.postgresql.") ||
+                // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）
+                cn.startsWith("com.goldendb.") ||
                 cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
                 cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
                 cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||
