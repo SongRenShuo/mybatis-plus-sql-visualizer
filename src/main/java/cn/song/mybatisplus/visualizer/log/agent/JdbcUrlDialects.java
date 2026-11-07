@@ -44,7 +44,16 @@ public final class JdbcUrlDialects {
         Map.entry("dws", "Vastbase"),
         Map.entry("gbasedbt-sqli", "GBASE"),
         Map.entry("gbasedbt", "GBASE"),
-        Map.entry("gbase", "GBASE"));
+        Map.entry("gbase", "GBASE"),
+        // T-IbatisPanwei（券 F）：磐维（中国移动，Oracle 兼容模式）驱动 org.panweidb.Driver。
+        // 实际子协议以数据源 URL 为准（计划 P-2 未实测），panwei / panweidb 两种都登记覆盖，
+        // 键不冲突。角标只如实展示产品名，不暗示渲染方言（那条映射在 UrlSubprotocolDialects）。
+        Map.entry("panwei", "Panwei（磐维）"),
+        Map.entry("panweidb", "Panwei（磐维）"),
+        // T-GoldenDbDialect（券 A）：中兴 GoldenDB 官方驱动 URL 前缀 jdbc:goldendb://
+        //（p9/p11/p37 文档级 + 驱动字节码 URL_PREFIX 常量双证）。角标是事实展示命名空间，
+        // 显示名即产品名（与渲染方言的注册名同为 "GoldenDB"，但两者映射独立维护）。
+        Map.entry("goldendb", "GoldenDB"));
 
     /**
      * 从 JDBC URL 提取子协议并映射显示名。
@@ -137,6 +146,8 @@ public final class JdbcUrlDialects {
             return null;
         }
         String data = colon >= 0 ? rest.substring(colon + 1) : rest;
+        // T-IbatisPanwei（券 F）：panwei/panweidb 的 URL 形态未实测（计划 P-2），按通用 authority
+        // 解析（//host:port/db）；若真机是 thin 式登录前缀，届时再按实测补分支，不预先猜。
         return "oracle".equals(subprotocol) ? oracleTarget(data) : authorityTarget(data);
     }
 
