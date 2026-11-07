@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.model;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.xml.PagesColumn;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
@@ -160,6 +161,30 @@ public final class PreviewResult {
      * 回写（同 {@link #historyEntryId}）。</p>
      */
     private String originScopeKey = "";
+    /**
+     * T-PagesHql：源语言（默认 {@link SourceLanguage#SQL} = 未发生语言转换）。
+     *
+     * <p>仅 {@code <pages>} 的 HQL 转换链会置 {@link SourceLanguage#HQL}；面板 meta 行据此展示
+     * 「来源：HQL（已转换）」，让「插件到底转没转」可核对（用户投诉的一半是「不知道它做了什么」）。</p>
+     */
+    private final SourceLanguage sourceLanguage;
+    /**
+     * T-PagesHql：转换前的原文（仅 {@link #sourceLanguage} 非 SQL 时非空）；面板「原文」只读页签展示。
+     */
+    private final String originalSql;
+    /**
+     * T-PagesHql：转换降级清单（关联路径未映射 / 推断的 ON 条件 / 实体不可解析等）。
+     * 空表 = 无降级。pages 链会把它压成一行并入 {@code warning}；其它 JPA 链路只携带不展示（惰性字段）。
+     */
+    private final List<String> degradations;
+    /**
+     * T-RuntimeSlotFill 券 A：本次预览里的<b>可回填运行期占位</b>（{@link RuntimeSlot}）。
+     *
+     * <p>每个元素对应 SQL 文本里一条带 id 的占位注释（{@code 运行时值: … · rtN}），承载类别、表达式摘要、
+     * 展开模板与回填语义；面板据此建输入行（券 C），回填时按 {@code RuntimeSlot.token} 定位并整体替换
+     * 那段注释（券 B）。空表 = 无运行期占位，或没有可填的值（纯说明性注释放不进本表）。</p>
+     */
+    private final List<RuntimeSlot> runtimeSlots;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -229,10 +254,10 @@ public final class PreviewResult {
     }
 
     /**
-     * 规范构造器（35 参）：K2J 侧 {@code threadName}/{@code countSql}/{@code paginationLimitLine}/
-     * {@code diagramStatement}/{@code historyFingerprintSeed} 为 master 新增的带默认值后置字段
-     * （Kotlin 默认参），历史短参形态在 Kotlin 调用方天然合法——Java 侧保留对应重载（见上/下）委托
-     * 本构造器、新参取默认值（null，与 master 默认值等价）。
+     * K2J 互操作（T-PagesHql / T-RuntimeSlotFill 券 A）：master 在 {@code originScopeKey} 之后追加
+     * {@code sourceLanguage}/{@code originalSql}/{@code degradations}/{@code runtimeSlots} 四个带默认值尾参，
+     * Kotlin 调用方（具名实参）天然合法——Java 侧本 35 参历史形态保留，四新参取默认值
+     * （SQL / null / 空表 / 空表，与 master 默认值等价）。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -247,6 +272,65 @@ public final class PreviewResult {
                          SelectStatement diagramStatement, String historyFingerprintSeed,
                          List<String> paginationParamSources, Dialect renderedDialect,
                          DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                SourceLanguage.SQL, null, List.of(), List.of());
+    }
+
+    /**
+     * K2J 互操作：37 参形态（35 参 + sourceLanguage/originalSql；A2 波次 XmlInlineSqlPreviewService.
+     * withHqlSource / PagesXmlPreviewService.withHqlMeta 两处单点引用），degradations/runtimeSlots
+     * 取默认空表。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, String threadName,
+                         boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed,
+                         List<String> paginationParamSources, Dialect renderedDialect,
+                         DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql,
+                         SourceLanguage sourceLanguage, String originalSql) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                paginationParamSources, renderedDialect, dialectDecision, historyEntryId, actualSql,
+                sourceLanguage, originalSql, List.of(), List.of());
+    }
+
+    /**
+     * 规范构造器（39 参）：35 参历史序 + 四个 T-PagesHql / T-RuntimeSlotFill 券 A 尾参
+     * （sourceLanguage/originalSql/degradations/runtimeSlots）。K2J 侧 {@code threadName}/
+     * {@code countSql}/{@code paginationLimitLine}/{@code diagramStatement}/{@code historyFingerprintSeed}
+     * 为更早的带默认值后置字段（Kotlin 默认参），历史短参形态在 Kotlin 调用方天然合法——
+     * Java 侧保留对应重载（见上/下）委托本构造器、新参取默认值（null，与 master 默认值等价）。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, String threadName,
+                         boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed,
+                         List<String> paginationParamSources, Dialect renderedDialect,
+                         DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql,
+                         SourceLanguage sourceLanguage, String originalSql,
+                         List<String> degradations, List<RuntimeSlot> runtimeSlots) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -282,6 +366,10 @@ public final class PreviewResult {
         this.dialectDecision = dialectDecision;
         this.historyEntryId = historyEntryId != null ? historyEntryId : "";
         this.actualSql = actualSql;
+        this.sourceLanguage = sourceLanguage != null ? sourceLanguage : SourceLanguage.SQL;
+        this.originalSql = originalSql;
+        this.degradations = degradations != null ? degradations : List.of();
+        this.runtimeSlots = runtimeSlots != null ? runtimeSlots : List.of();
     }
 
     /** K2J 互操作：master 新五参取默认值的 29 参形态（既有调用点零改动）。 */
@@ -514,6 +602,26 @@ public final class PreviewResult {
         this.originScopeKey = originScopeKey != null ? originScopeKey : "";
     }
 
+    /** T-PagesHql：源语言（默认 SQL = 未发生语言转换；HQL = 由 HQL 原文转换而来）。 */
+    public SourceLanguage getSourceLanguage() {
+        return sourceLanguage;
+    }
+
+    /** T-PagesHql：转换前的原文（仅 sourceLanguage 非 SQL 时非空）；面板「原文」只读页签展示。 */
+    public String getOriginalSql() {
+        return originalSql;
+    }
+
+    /** T-PagesHql：转换降级清单（空表 = 无降级）。 */
+    public List<String> getDegradations() {
+        return degradations;
+    }
+
+    /** T-RuntimeSlotFill 券 A：本次预览里的可回填运行期占位（空表 = 无运行期占位）。 */
+    public List<RuntimeSlot> getRuntimeSlots() {
+        return runtimeSlots;
+    }
+
     /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */
     public Dialect getEffectiveDialect() {
         if (previewModel != null && previewModel.getDialect() != null) {
@@ -591,7 +699,11 @@ public final class PreviewResult {
                 && Objects.equals(placeholderParamNames, that.placeholderParamNames)
                 && Objects.equals(duplicateParamNames, that.duplicateParamNames)
                 && Objects.equals(diagramStatement, that.diagramStatement)
-                && Objects.equals(historyFingerprintSeed, that.historyFingerprintSeed);
+                && Objects.equals(historyFingerprintSeed, that.historyFingerprintSeed)
+                && sourceLanguage == that.sourceLanguage
+                && Objects.equals(originalSql, that.originalSql)
+                && Objects.equals(degradations, that.degradations)
+                && Objects.equals(runtimeSlots, that.runtimeSlots);
     }
 
     @Override
@@ -600,7 +712,8 @@ public final class PreviewResult {
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
                 stackDigest, threadName, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
-                duplicateParamNames, diagramStatement, historyFingerprintSeed);
+                duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                sourceLanguage, originalSql, degradations, runtimeSlots);
     }
 
     @Override
@@ -620,6 +733,10 @@ public final class PreviewResult {
                 + ", placeholderParamNames=" + placeholderParamNames
                 + ", duplicateParamNames=" + duplicateParamNames
                 + ", diagramStatement=" + diagramStatement
-                + ", historyFingerprintSeed=" + historyFingerprintSeed + ")";
+                + ", historyFingerprintSeed=" + historyFingerprintSeed
+                + ", sourceLanguage=" + sourceLanguage
+                + ", originalSql=" + originalSql
+                + ", degradations=" + degradations
+                + ", runtimeSlots=" + runtimeSlots + ")";
     }
 }
