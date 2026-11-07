@@ -67,7 +67,10 @@ public final class DbTableSpecAdapter {
                     comment != null && !comment.isBlank() ? comment : null,
                     primaryKeys.contains(col.getName()),
                     das.getColumnAttrs(col).contains(DasColumn.Attribute.AUTO_GENERATED),
-                    DbTypeQuoteHint.decide(col.getDasType().toDataType().typeName)));
+                    DbTypeQuoteHint.decide(col.getDasType().toDataType().typeName),
+                    // T-DateLiteralBackfill：日期族列标记（A4a 跨层依赖——isTemporal 与 CrudColumn
+                    // temporal 尾参属 A4c generator×3 增量，落位后本行转绿；照 master 终态先译调用方）
+                    DbTypeQuoteHint.isTemporal(col.getDasType().toDataType().typeName)));
         }
         return new CrudTableSpec(
                 das.getName(),
