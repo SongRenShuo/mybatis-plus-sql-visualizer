@@ -55,7 +55,7 @@ public final class PluginUpdateRunner {
         NETWORK, CHANNEL_MISSING, MANIFEST_MALFORMED, VERSION_UNREADABLE
     }
 
-    /** 安装结果（T-DynUpdate 扩容：热生效 / 回退重启 / 失败三分支）。 */
+    /** 安装结果（T-DynUpdate 扩容：热生效 / 回退重启 / 未发布 / 失败四分支）。 */
     public sealed interface InstallResult {
         /** 已动态热生效：旧版已卸载、新版已装载，无需重启（T-DynUpdate 主路径成功）。 */
         public record InstalledDynamic(String version) implements InstallResult {}
@@ -65,6 +65,14 @@ public final class PluginUpdateRunner {
             public static final InstalledRestartRequired INSTANCE = new InstalledRestartRequired();
             private InstalledRestartRequired() {}
         }
+
+        /**
+         * 更新包尚未发布（T-DevUpdateChannel，HTTP 404/410）：清单已指向某版本，但 Release 附件
+         * 还不存在（预览清单最常撞上）。与 {@link Failed} 分开——不是「插件坏了」，不该把
+         * {@code HttpStatusException} 原文甩给用户；UI 给友好文案 + 发布页兜底链接。
+         * {@code status} 保留原始状态码（日志对账/文案不依赖它）。
+         */
+        public record NotPublished(int status) implements InstallResult {}
 
         public record Failed(String message) implements InstallResult {}
     }
@@ -89,10 +97,22 @@ public final class PluginUpdateRunner {
      * @param fetch 清单获取 seam（默认 [UpdateApi.fetchOutcome]）。
      */
     public static CheckResult check(String currentVersion, Function<String, UpdateApi.FetchOutcome> fetch) {
+        return check(currentVersion, UpdateSource.INSTANCE.manifestUrl(), fetch);
+    }
+
+    /**
+     * 检查更新全参形态。
+     *
+     * @param manifestUrl 本次读取的清单地址（T-DevUpdateChannel：开发版通道传
+     *   {@code UpdateSource.previewManifestUrl()}）。
+     * @param fetch 清单获取 seam（默认 [UpdateApi.fetchOutcome]）。
+     */
+    public static CheckResult check(String currentVersion, String manifestUrl,
+            Function<String, UpdateApi.FetchOutcome> fetch) {
         if (!VersionComparator.INSTANCE.isRecognizable(currentVersion)) {
             return new CheckResult.Failure(FailureKind.VERSION_UNREADABLE, "current version unavailable");
         }
-        String url = UpdateSource.INSTANCE.manifestUrl();
+        String url = manifestUrl;
         UpdateSource.logOverrideIfAny(url);
         UpdateApi.FetchOutcome outcome = fetch.apply(url);
         if (outcome instanceof UpdateApi.FetchOutcome.NetworkError networkError) {
@@ -169,12 +189,38 @@ public final class PluginUpdateRunner {
                 }
             }
         } catch (Exception e) {
+            // T-DevUpdateChannel：404/410 = 「包还没发布」，不是插件坏了。预览清单的 downloadUrl
+            // 常指向尚未建仓的 Release 附件；旧口径把 HttpStatusException 原文塞进 Failed，
+            // 用户看到一串 HTTP 文本。这里分流成 NotPublished（UI 给友好文案 + 发布页链接），
+            // 其余异常（网络不通/非法 zip/安装失败）仍走 Failed，不扩散。
+            Integer status = httpStatusOf(e);
+            if (status != null && (status == 404 || status == 410)) {
+                LOG.info("downloadAndInstall: package not published — url=" + manifest.downloadUrl() + " status=" + status);
+                return new InstallResult.NotPublished(status);
+            }
             LOG.warn("downloadAndInstall: failed — " + e.getMessage(), e);
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             return new InstallResult.Failed(msg);
         } finally {
             FileUtil.delete(temp);
         }
+    }
+
+    /**
+     * 挖异常链上的 HTTP 状态码（0 层 HttpStatusException + 被包一层的 IOException 都认）；
+     * 非 HTTP 异常返回 null。深度设上限防自引用链。
+     */
+    private static Integer httpStatusOf(Throwable error) {
+        Throwable current = error;
+        int depth = 0;
+        while (current != null && depth < 8) {
+            if (current instanceof com.intellij.util.io.HttpRequests.HttpStatusException httpStatus) {
+                return httpStatus.getStatusCode();
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return null;
     }
 
     /** zip 校验：存在、非空、可被 ZipFile 打开（防下载中断/HTML 错误页落盘）。 */
