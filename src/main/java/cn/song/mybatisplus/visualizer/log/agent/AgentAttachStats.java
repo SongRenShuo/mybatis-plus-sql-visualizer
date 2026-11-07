@@ -46,8 +46,30 @@ public record AgentAttachStats(
         /** 类文件 major 版本闸挡下的类数（C1 路 {@code skippedByVersion}）——「命中了但没织」的一条硬原因。 */
         long skippedByVersion,
         /** 兜底状态码（C1 路 {@code catchAll}）：0=纯白名单，1=transformer 兜底开，2=已熔断。 */
-        int catchAll
+        int catchAll,
+        /**
+         * T-IbatisPanwei 券 D：接口命中但<b>不在驱动白名单</b>的类名（agent 心跳 {@code unreg} 键，逗号分隔、
+         * 有界 8 个）。空 = 旧版 agent 未上报，或本次确实没有未登记实现——两者都按「无事实可报」处理。
+         *
+         * <p>为什么要有这条：磐维现场「增强零产出」全靠人工猜驱动包名才定位到「白名单漏登记」。
+         * 类名本身就是「下一个国产驱动是谁」的取证（计划券 D 也是券 C 拿不到 jar 时的替代路径）。</p>
+         */
+        List<String> unregisteredImplementations,
+        /**
+         * T-SqlListCatchup 券 F2a：agent 侧事件队列<b>丢弃累计</b>（agent 心跳 {@code dropped} 键，单调累计、
+         * 整体覆盖口径与 {@code matched} 等键一致）。0 = 旧版 agent 未上报，或确实零丢弃——状态栏只对
+         * &gt;0 挂段，两种「0」都不产生噪音。
+         */
+        long dropped
 ) {
+
+    /** 便捷构造器：unregisteredImplementations/dropped 缺省（Kotlin 默认参数；旧调用点兼容）。 */
+    public AgentAttachStats(long matched, long weavable, long woven, long matchedByInterface,
+                            long interfaceWoven, long failed, long unmodifiable, long skippedByVersion,
+                            int catchAll) {
+        this(matched, weavable, woven, matchedByInterface, interfaceWoven, failed, unmodifiable,
+                skippedByVersion, catchAll, List.of(), 0L);
+    }
 
     /** 命中类数（{@code matched} 与 {@code weavable} 取大——心跳只带后者时的零命中判据）。 */
     public long matchedTotal() {
@@ -71,7 +93,19 @@ public record AgentAttachStats(
 
     /** 单键匹配：{@code "matched":12}（允许冒号后空白；值域只认整数，防止把 JSON 字符串误读成数字）。 */
     private static final Pattern KEY_VALUE = Pattern.compile(
-            "\"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll)\"\\s*:\\s*(-?\\d{1,15})");
+            "\"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped)\"\\s*:\\s*(-?\\d{1,15})");
+
+    /**
+     * 券 D：未登记实现类名（{@code "unreg":"a.b.C,d.e.F"}）。
+     *
+     * <p>值域刻意只收「类名字符 + 逗号 + 空格」：任何其它字符（引号、反斜杠、换行、SQL 片段）
+     * 都说明 body 形态漂移，宁可不解析也不把脏串端到面板上。空格容忍是为了「逗号后带空格」
+     * 这类无害写法（逐项 trim 后丢弃空项）。</p>
+     */
+    private static final Pattern UNREG_VALUE = Pattern.compile("\"unreg\"\\s*:\\s*\"([A-Za-z0-9_.$, ]*)\"");
+
+    /** 未登记实现的上报上限（与 agent 侧 {@code CaptureBudget.MAX_UNREGISTERED} 同值；超出的丢弃）。 */
+    public static final int MAX_UNREGISTERED = 8;
 
     /** 单帧 body 上限：attach 计数行是短 JSON；超长 body（事件/堆栈）直接跳过，避免无谓扫描。 */
     private static final int MAX_BODY_CHARS = 8 * 1024;
@@ -105,7 +139,24 @@ public record AgentAttachStats(
                 values.getOrDefault("failed", 0L),
                 values.getOrDefault("unmodifiable", 0L),
                 values.getOrDefault("skippedByVersion", 0L),
-                values.getOrDefault("catchAll", 0L).intValue());
+                values.getOrDefault("catchAll", 0L).intValue(),
+                parseUnregistered(body),
+                values.getOrDefault("dropped", 0L));
+    }
+
+    /** {@code unreg} 值 → 类名列表（去空白、去空项、去重、截到 {@link #MAX_UNREGISTERED}；无键=空列表）。 */
+    private static List<String> parseUnregistered(String body) {
+        Matcher m = UNREG_VALUE.matcher(body);
+        String raw = m.find() ? m.group(1) : null;
+        if (raw == null || raw.isEmpty()) return List.of();
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                out.add(trimmed);
+            }
+        }
+        return out.stream().limit(MAX_UNREGISTERED).collect(java.util.stream.Collectors.toList());
     }
 
     /** Kotlin {@code String.toLongOrNull} 等价（非数值/溢出 → null）。 */
