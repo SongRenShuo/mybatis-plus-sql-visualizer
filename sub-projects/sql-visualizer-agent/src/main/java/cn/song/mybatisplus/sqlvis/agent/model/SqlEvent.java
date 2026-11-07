@@ -36,4 +36,16 @@ public final class SqlEvent {
     public String url;
     /** 执行线程名。 */
     public String threadName;
+    /**
+     * T-SqlListCatchup 券 F2b：**聚合计数**——本事件代表的同模板（同 sql）执行条数，恒 ≥1。
+     *
+     * <p>为什么需要：风暴期事件队列（{@code EventBus}，有界 2048）打满时 {@code offer()} 满即丢
+     * （非阻塞红线，丢事件不丢线程），而同模板语句在风暴里大量重复——盲丢会把「执行了 N 次」
+     * 这个事实整段丢掉。队列满时同模板事件在队内聚合为一条（保留最新、计数累加），腾出的容量
+     * 让给新模板。正常路径恒为 1，零语义变化。
+     *
+     * <p>协议兼容：JSON 键 {@code c} 仅在 &gt;1 时写出（Jsons.writeEvent）——旧 IDE 读新事件忽略
+     * 未知键、新 IDE 读旧事件（无 {@code c} 键）按 1 计，双向兼容。
+     */
+    public int aggregatedCount = 1;
 }

@@ -50,6 +50,12 @@ internal data class AgentAttachStats(
      * 类名本身就是「下一个国产驱动是谁」的取证（计划券 D 也是券 C 拿不到 jar 时的替代路径）。
      */
     val unregisteredImplementations: List<String> = emptyList(),
+    /**
+     * T-SqlListCatchup 券 F2a：agent 侧事件队列**丢弃累计**（agent 心跳 `dropped` 键，单调累计、
+     * 整体覆盖口径与 [matched] 等键一致）。0 = 旧版 agent 未上报，或确实零丢弃——状态栏只对
+     * >0 挂段，两种「0」都不产生噪音。
+     */
+    val dropped: Long = 0L,
 ) {
     /** 命中类数（`matched` 与 `weavable` 取大——心跳只带后者时的零命中判据）。 */
     val matchedTotal: Long get() = maxOf(matched, weavable)
@@ -66,7 +72,7 @@ internal data class AgentAttachStats(
     companion object {
         /** 单键匹配：`"matched":12`（允许冒号后空白；值域只认整数，防止把 JSON 字符串误读成数字）。 */
         private val KEY_VALUE = Regex(
-            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll)"\s*:\s*(-?\d{1,15})""",
+            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped)"\s*:\s*(-?\d{1,15})""",
         )
 
         /**
@@ -107,6 +113,7 @@ internal data class AgentAttachStats(
                 skippedByVersion = values["skippedByVersion"] ?: 0L,
                 catchAll = (values["catchAll"] ?: 0L).toInt(),
                 unregisteredImplementations = parseUnregistered(body),
+                dropped = values["dropped"] ?: 0L,
             )
         }
 

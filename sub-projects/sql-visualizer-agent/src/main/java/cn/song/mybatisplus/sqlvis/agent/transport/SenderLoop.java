@@ -36,6 +36,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * AgentState.disabled 永远停在 fail-open 初值。畸形长度现在**抛异常走重连**并 WARN 记长度与首字节。
  * T-02：CONFIG 应用成功回一帧 {@link EventBus#CMD_CONFIG_ACK}（「生效」不再靠推断）。
  * T-07：会话建立后 X 毫秒内从未收到任何 CONFIG → 主动停采 + 一次性 WARN（每连接一次，不新开线程）。
+ *
+ * T-SqlListCatchup 券 H：突发排水免交「读超时税」——burst 达尽出上限（[EVENT_BURST_MAX]）的轮次
+ * 改按 {@code in.available()>0} 探测入站数据，无数据跳过读帧（此前每排 64 条干等一个 SO_TIMEOUT，
+ * 默认 1s → 持续风暴下投递速率被钉死在 ~64 条/秒）；队列排空才回长超时阻塞读。心跳/看门狗按
+ * 真实流逝时间判据与 CONFIG 到达即处理语义均不变，协议字节面零变化。
  */
 final class SenderLoop implements Runnable {
 
@@ -72,6 +77,13 @@ final class SenderLoop implements Runnable {
 
     /** 空转轮询节奏（决定事件轮询响应性）：每轮最多睡这么久，且不得跨过下一次心跳时刻。 */
     private static final long POLL_IDLE_MS = 200L;
+
+    /**
+     * 单轮事件尽出上限（§4.3 防饿死心跳）。
+     * T-SqlListCatchup 券 H：本值同时是读超时税的判据锚点——burst 达上限即「队列很可能仍非空」，
+     * 该形态下的入站读改走 {@code available()>0} 探测（见主循环步骤 3）。
+     */
+    private static final int EVENT_BURST_MAX = 64;
 
     /** 入站 CONFIG 读超时上限（§4.3 轮询式短超时；默认心跳间隔下即 1s，行为与修复前一致）。 */
     private static final int CONFIG_READ_TIMEOUT_MAX_MS = 1000;
@@ -280,9 +292,12 @@ final class SenderLoop implements Runnable {
                     //    仍可能先写出 ≤64 条存量事件。这些事件发生在用户点停之前，语义上合法；且 IDE 侧
                     //    入队闸门（T-03，capturing=false 丢弃）会兜住，用户可见结果正确。反过来把读帧提到
                     //    尽出之前，会让每次事件投递都多等一个读超时（默认 1s），得不偿失。
+                    //    T-SqlListCatchup 券 H：持续突发下「每一批都交一个读超时税」的形态由步骤 3 的
+                    //    probe 免除（burst 达上限且无入站数据时跳过读帧）；本边界（停采帧当轮可能先出
+                    //    ≤64 条存量）不受影响，仍成立。
                     int burst = 0;
                     if (!AgentState.isDisabled()) {
-                        while (burst < 64 && EventBus.pollEvent(slot, 0)) {
+                        while (burst < EVENT_BURST_MAX && EventBus.pollEvent(slot, 0)) {
                             try {
                                 writeFrame(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
                                 burst++;
@@ -300,19 +315,30 @@ final class SenderLoop implements Runnable {
                         lastOutboundMs = System.currentTimeMillis();
                     }
                     // 3) 入站帧（非阻塞轮询：超时=无数据）——[len][cmd][body]，畸形帧抛异常走重连
-                    try {
-                        final InboundFrame frame = readInboundFrame(in);
-                        if (frame.cmd == EventBus.CMD_CONFIG) {
-                            configSeen = true;
+                    //    T-SqlListCatchup 券 H（排水读超时税）：burst 达上限（=队列很可能仍非空）时，
+                    //    若照旧做带 SO_TIMEOUT 的阻塞读，每排 64 条就要干等一个读超时（默认 1s）——
+                    //    agent→IDE 方向平时无入站流量（CONFIG 仅会话初期一次），持续风暴下投递速率
+                    //    被钉死在 ~64 条/秒（真机六轮压测：风暴生产 ~1700 语句/s、到达仅 ~74 条/s）。
+                    //    修法：burst 达上限先 {@code in.available()>0} 探测——无入站数据就跳过本轮
+                    //    读帧（零等待继续排水），有字节到店本轮立即读（CONFIG 不被排水饿死）；队列
+                    //    排空（burst<上限）才回长超时阻塞读。空闲轮询、CONFIG 到达即处理、心跳与
+                    //    看门狗的按真实流逝时间判据全部不变；协议字节面零变化。
+                    final boolean inboundReadable = burst < EVENT_BURST_MAX || in.available() > 0;
+                    if (inboundReadable) {
+                        try {
+                            final InboundFrame frame = readInboundFrame(in);
+                            if (frame.cmd == EventBus.CMD_CONFIG) {
+                                configSeen = true;
+                            }
+                            final String ack = handleInbound(frame.cmd, frame.payload);
+                            if (ack != null) {
+                                // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
+                                writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
+                                lastOutboundMs = System.currentTimeMillis();
+                            }
+                        } catch (java.net.SocketTimeoutException ignore) {
+                            // 无入站数据
                         }
-                        final String ack = handleInbound(frame.cmd, frame.payload);
-                        if (ack != null) {
-                            // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
-                            writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
-                            lastOutboundMs = System.currentTimeMillis();
-                        }
-                    } catch (java.net.SocketTimeoutException ignore) {
-                        // 无入站数据
                     }
                     // 3.5) T-07 看门狗：会话建立后 X ms 内从未收到任何 CONFIG → 主动停采（每连接一次）
                     //      用既有循环判，不新开线程；停采走 AgentState.setDisabled（顺带清队列，T-01b）
@@ -429,6 +455,11 @@ final class SenderLoop implements Runnable {
                     + ",\"catchAll\":" + catchAllState()
                     // T-AgentSilentAfter16s：自停归因（0=无 / 1=CONFIG 看门狗自停）。
                     + ",\"gate\":" + AgentState.gateCode()
+                    // T-SqlListCatchup 券 F2a：事件队列丢弃累计（单调计数、恒出现）——风暴期队列
+                    // 打满时 offer() 满即丢（非阻塞红线），丢了多少必须让 IDE 用户看得见。
+                    // 兼容口径同 gate/unreg：整数键、键序固定、无空格，旧版 IDE 的宽容扫描
+                    // （AgentAttachStats.parse 只认已知键）零行为变化。
+                    + ",\"dropped\":" + cn.song.mybatisplus.sqlvis.agent.transport.EventBus.droppedCount()
                     // T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界、逗号分隔、只类名）。
                     // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
                     // 不能靠缺键表达「本次没有未登记实现」。

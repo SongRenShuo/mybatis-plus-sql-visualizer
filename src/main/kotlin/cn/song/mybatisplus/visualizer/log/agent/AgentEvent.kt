@@ -37,6 +37,13 @@ data class AgentEvent(
     val threadName: String?,
     /** connect 时连接 URL（T-AgentDialectLoop；旧版 agent 无此键 → null 容错）。 */
     val url: String? = null,
+    /**
+     * T-SqlListCatchup 券 F2b：聚合计数——agent 侧事件队列满时同模板（同 sql）事件聚合为一条，
+     * 本字段是该条代表的执行次数（agent 心跳之外的事件 JSON `c` 键，仅 >1 时写出）。
+     * 旧版 agent 无此键 → 1（按单次执行计），协议双向兼容。
+     * 口径说明：「已收事件」计数（[AgentEventAdapter.markReceived]）按帧计 1，不受本字段影响。
+     */
+    val aggregatedCount: Int = 1,
 ) {
     companion object {
         /** 解析 EVENT 帧 body；结构不符返回 null（丢弃并计数，不断流）。 */
@@ -75,6 +82,9 @@ data class AgentEvent(
                 params = params,
                 threadName = o.get("th")?.takeIf { it.isJsonPrimitive }?.asString,
                 url = o.get("url")?.takeIf { it.isJsonPrimitive }?.asString,
+                // T-SqlListCatchup 券 F2b：聚合计数（旧版 agent 无此键按 1；畸形值回落 1）
+                aggregatedCount = o.get("c")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                    ?.asInt?.takeIf { it > 1 } ?: 1,
             )
         }.getOrNull()
 

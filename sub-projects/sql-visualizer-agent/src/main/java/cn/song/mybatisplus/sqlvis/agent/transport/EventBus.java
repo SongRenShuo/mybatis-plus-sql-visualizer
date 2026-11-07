@@ -46,10 +46,77 @@ public final class EventBus {
         sender.start();
     }
 
-    /** 采集线程入口：非阻塞入队，满则丢事件（计数）不阻塞业务线程。 */
+    /**
+     * 采集线程入口：非阻塞入队（红线：绝不阻塞宿主线程），满则丢事件（计数）不阻塞业务线程。
+     *
+     * <p>T-SqlListCatchup 券 F2b：队列满时的「降精度不丢信号」两步——
+     * ① **同模板聚合**：同模板（同 sql，PreparedStatement 占位符文本即模板）事件在队内只保留
+     * 最新一条并累加聚合计数（{@link SqlEvent#aggregatedCount}），「执行了 N 次」的事实经协议键
+     * {@code c} 带给 IDE，不再整段盲丢；
+     * ② **异模板逐旧**：无同模板候选时逐出**最旧**事件给新模板腾位（保最新弃最旧——最新事实
+     * 价值高于最旧），被逐出者计丢弃。两步任何竞争失败回落原语义：计数丢弃，绝不重试阻塞。
+     */
     public static void offer(SqlEvent event) {
-        if (event == null || !QUEUE.offer(event)) {
+        if (event == null) {
             DROPPED.incrementAndGet();
+            return;
+        }
+        if (QUEUE.offer(event)) {
+            return;
+        }
+        if (!tryAggregateOnFull(event) && !evictOldestAndOffer(event)) {
+            DROPPED.incrementAndGet();
+        }
+    }
+
+    /**
+     * 队列满时的同模板聚合（F2b 第①步）：在队内找一条同模板事件，移除后把它的聚合计数并入
+     * **最新**事件（即本次入队件，时间戳最新——保留最新不丢最新事实）再重投。非阻塞：全程只用
+     * {@code offer}/{@code remove}，任何竞争失败立即返回 false 交由逐旧步/丢弃计数兜底。
+     *
+     * <p>单次 offer 只折叠一对（队列内可能还有多条同模板存量——风暴期同模板持续到店会随
+     * 后续 offer 逐次继续折叠收敛）；迭代为弱一致性快照，与消费线程并发安全（无 CME 面）。
+     *
+     * @return true = 已聚合入队（本次未丢事件）；false = 无同模板候选或竞争失败
+     */
+    private static boolean tryAggregateOnFull(SqlEvent event) {
+        try {
+            final String template = event.sql;
+            if (template == null) {
+                return false;
+            }
+            for (SqlEvent queued : QUEUE) {
+                if (queued != null && template.equals(queued.sql) && QUEUE.remove(queued)) {
+                    event.aggregatedCount = queued.aggregatedCount + 1;
+                    return QUEUE.offer(event);
+                }
+            }
+        } catch (Throwable t) {
+            // 采集线程红线：聚合路径任何异常不外抛（回落逐旧/丢弃计数，不影响宿主）
+        }
+        return false;
+    }
+
+    /**
+     * 队列满且无同模板候选时的逐旧腾位（F2b 第②步）：逐出**最旧**事件（队头）给新模板让位，
+     * 被逐出者计丢弃（DROPPED 语义不变 = 未能完好到达 IDE 的事件数）。非阻塞：poll/offer 竞争
+     * 失败立即重试一轮（poll 到空说明消费线程刚排空，下一轮 offer 必成功），任何异常回落丢弃。
+     *
+     * @return true = 新事件已入队（最旧者被逐出并计数）；false = 异常兜底（调用方按丢弃计数）
+     */
+    private static boolean evictOldestAndOffer(SqlEvent event) {
+        try {
+            while (true) {
+                if (QUEUE.offer(event)) {
+                    return true;
+                }
+                final SqlEvent oldest = QUEUE.poll();
+                if (oldest != null) {
+                    DROPPED.incrementAndGet();
+                }
+            }
+        } catch (Throwable t) {
+            return false;
         }
     }
 

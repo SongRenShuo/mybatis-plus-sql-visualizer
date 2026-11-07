@@ -65,6 +65,29 @@ class AgentEventAdapterTest {
         assertNull(AgentEvent.parse("""{"sql":"  "}"""))
     }
 
+    // ---------- T-SqlListCatchup 券 F2b：事件聚合计数（协议双向兼容） ----------
+
+    @Test
+    fun 事件解析_聚合计数_c键大于1时解析() {
+        // agent 队列满聚合形态：c 键仅 >1 时写出（Jsons.writeEvent 契约）
+        val e = AgentEvent.parse("""{"sql":"INSERT INTO t VALUES (?)","ts":1,"dn":5,"c":7}""")!!
+        assertEquals("聚合代表条带出累计执行次数", 7, e.aggregatedCount)
+    }
+
+    @Test
+    fun 事件解析_聚合计数_旧版agent无c键按1计() {
+        val e = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1}""")!!
+        assertEquals("旧版事件无 c 键 → 按 1 计（协议向后兼容）", 1, e.aggregatedCount)
+    }
+
+    @Test
+    fun 事件解析_聚合计数_畸形值回落1() {
+        // c<=1 / 非数值：按「无聚合」处理，不抛错
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":1}""")!!.aggregatedCount)
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":-3}""")!!.aggregatedCount)
+        assertEquals(1, AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"c":"x"}""")!!.aggregatedCount)
+    }
+
     @Test
     fun 事件解析_候选帧_T_AgentSourceJump() {
         val body = """{"sql":"SELECT 1","ts":1,"dn":1,"sf":"com/github/pagehelper/PageInterceptor.java","sl":132,"cands":[["com/example/service/UserServiceImpl.java",36],["com/example/controller/UserController.java",48]]}"""
