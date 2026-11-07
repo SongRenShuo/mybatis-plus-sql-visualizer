@@ -33,6 +33,18 @@ public final class PreviewDialectResolver {
 
     private PreviewDialectResolver() {}
 
+    /**
+     * 角标头段显示名 → 注册方言名（只登记<b>显示名与注册名不同</b>的已知同义头，键小写）。
+     *
+     * <p>角标由 {@code cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects} 产出，是事实展示名；
+     * 渲染方言必须是 {@link DialectRegistry} 命名空间里的名字。两者不同名的产品在这里显式桥接——
+     * 未登记的头仍走 {@link #knownDialect}，未知→null（不猜近似方言）。</p>
+     */
+    private static final java.util.Map<String, String> BADGE_HEAD_ALIASES = java.util.Map.of(
+            // T-IbatisPanwei（券 F，D-1）：磐维（Oracle 兼容模式）角标保留产品名，方言按 Oracle 渲染。
+            "panwei（磐维）", "Oracle"
+    );
+
     /** 归一化到注册方言名；未知/空 → null（绝不回落到 MySQL）。 */
     @Nullable
     public static String knownDialect(@Nullable String name) {
@@ -52,7 +64,8 @@ public final class PreviewDialectResolver {
      *
      * <p>兜底用途：旧条目没有 pd 载荷里的 {@code dl} 键，但角标随 {@code -- … | db: …} 头持久化过。
      * 角标里的显示名与注册名在 MySQL/PostgreSQL/Oracle/SQL Server/H2/SQLite/MariaDB/DM/KingBase/
-     * OceanBase/openGauss 上同名；{@code HSQL}/{@code GBASE} 无注册方言 → null（不猜近似方言）。</p>
+     * OceanBase/openGauss 上同名；显示名与注册名不同名的已知产品走 {@link #BADGE_HEAD_ALIASES}
+     * （如 {@code Panwei（磐维）} → Oracle）；{@code HSQL}/{@code GBASE} 等无注册方言 → null（不猜近似方言）。</p>
      */
     @Nullable
     public static String dialectFromBadge(@Nullable String badge) {
@@ -60,6 +73,10 @@ public final class PreviewDialectResolver {
         int sep = badge.indexOf('·');
         String head = (sep >= 0 ? badge.substring(0, sep) : badge).trim();
         if (head.isEmpty()) return null;
+        String alias = BADGE_HEAD_ALIASES.get(head.toLowerCase(Locale.ROOT));
+        if (alias != null) {
+            return knownDialect(alias);
+        }
         return knownDialect(head);
     }
 
