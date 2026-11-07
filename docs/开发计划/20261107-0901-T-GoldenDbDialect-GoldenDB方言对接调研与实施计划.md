@@ -142,7 +142,7 @@ private static final String JDBC_MYSQL_URL_PREFIX        = "jdbc:mysql";
 | `com.goldendb.jdbc.CallableStatement` | `extends PreparedStatement` | `execute()`、`executeQuery()`、`executeUpdate()`、`executeBatch()`、`executeLargeUpdate()`、`executeLargeBatch()` | 自有族齐全，需单列 |
 | `com.goldendb.jdbc.ConnectionImpl` | — | `prepareStatement(String)` ×6 重载、`prepareCall(String)` ×4 重载、`getURL()` **public** | prepare 面 + URL 反射兜底可用 |
 
-**ServerPreparedStatement 的注意点（实测）**：它继承 `PreparedStatement` 的 execute 族，自有方法里只有 `addBatch()` 能命中 `ADD_BATCH` 形态。所以登记它是**安全的**（`ADD_BATCH` 会命中，字节层用例的「必须 changed」断言不会假绿），但**它的 execute 覆盖其实来自父类**——写进计划时必须说明这一点，否则后人会以为「登记了 SPS 就等于覆盖了 SPS 的执行路径」。
+**ServerPreparedStatement 的注意点（实测）**：它继承 `PreparedStatement` 的 execute 族，自有方法只有 `addBatch()`、`executeBatchSerially(int)`、`executeInternal(...)`。~~自有 addBatch() 能命中 ADD_BATCH 形态~~（**券 B 字节层实测证伪，原表述有误**：SPS 自有 `addBatch()` 是**无参**形态，`Kind.ADD_BATCH` 只认 `addBatch(String)`——该形态在父类 PreparedStatement 声明，SPS 对 ADD_BATCH 与 EXEC/BATCH 全部零命中，full-face changed 实际来自 PARAM 形态 setter 族；无参 addBatch 不采集与 MySQL 5.1 既有口径一致，PS 批 SQL 文本走 BATCH 形态的 preparedSql，无覆盖缺口）。所以登记它仍是**安全的**（full-face changed 非零、过 JVM 校验），但**它的 execute 覆盖其实来自父类**——写进计划时必须说明这一点，否则后人会以为「登记了 SPS 就等于覆盖了 SPS 的执行路径」。逐字节读数见 §7.2。
 
 `MySQL` 5.1 分支的既有登记（`WeaveSpecs.java:57-59`）同时列了 `com.mysql.jdbc.StatementImpl` / `PreparedStatement` / `ServerPreparedStatement` 三个，GoldenDB 照抄即可。
 
@@ -639,7 +639,67 @@ object GoldenDbDialect : Dialect {
 
 ### 7.2 券 B
 
-（待填）
+**已实施**（分支 `t-goldendb-capture`，acc522cf 捕获面 + bb987110 G9；jar 夹具
+`database-lab/vendor/drivers/gdb_mysql-connector-java-oracle-5.1.46.99.jar` 在位）。
+
+**判据逐条**：
+
+1. ✓ 字节层用例不 skip：`StatementWeaverVendorCoverageTest` **17 ran / 0 skipped / 0 failed**；
+   五类（StatementImpl / PreparedStatement / ServerPreparedStatement / CallableStatement /
+   ConnectionImpl）全部 changed 且过 JVM 链接期校验（`Class.forName(dotted, true, loader)`）。
+2. ✓ `DriverRegistry.isWeavable("com.goldendb.jdbc.NonRegisteringDriver")` 为 true
+   （`GoldenDB连接面_NonRegisteringDriver必须登记且Driver按名可查`）。
+3. ✓ 反向验证一（**红**）：摘掉 `NonRegisteringDriver` 只留 `Driver` → `GoldenDB连接面…`
+   **1 failed / 17 ran**，失败信息即「只登记 Driver 是零命中」；恢复后全绿。说明：计划原表述
+   「字节层用例对 Driver 的 changed 断言必红」落成了更精确的形态——字节层 ④ 段断言
+   `Driver` 织入**必须零命中**（ConnectWeaver.weave 按签名织入，Driver 自身不声明
+   connect(String,Properties)，字节级钉死）；登记摘除的红由谓词用例出。
+4. ✓ 反向验证二（**红**）：摘掉 `com.goldendb.jdbc.ConnectionImpl` prepare 面 →
+   **3 failed / 17 ran**（GoldenDB 字节层 / prepare 面谓词 / 登记名单单一真相）；恢复后全绿。
+5. ✓ `VENDOR_NOT_COVERED` 未加任何豁免（`com.goldendb.` 由 SPECS 三面覆盖，厂商对齐守卫绿）。
+
+**字节层用例五类织入明细**（jar=5.1.46.99，`WeaveSpecs.specOf` full-face）：
+
+| 类 | changed | JVM 校验 | 备注 |
+|---|---|---|---|
+| StatementImpl | ✓ | ✓ | 自有 execute 全族 |
+| PreparedStatement | ✓ | ✓ | 自有无参 execute 族 + addBatch(String) |
+| ServerPreparedStatement | ✓ | ✓ | changed 来自 PARAM setter 族（见下） |
+| CallableStatement | ✓ | ✓ | 自有 execute 族齐全 |
+| ConnectionImpl | ✓ | ✓ | prepare 面 |
+
+**计划前提被字节层实测证伪一处（重要）**：§1.1.7 与判据 ④ 原写「SPS 自有 addBatch()
+命中 ADD_BATCH」——实测 SPS 自有 `addBatch()` 是**无参**形态，`Kind.ADD_BATCH` 只认
+`addBatch(String)`（该形态在父类 PreparedStatement 声明），故 SPS 对 ADD_BATCH **零命中**、
+对 EXEC/BATCH 也零命中（execute 覆盖确来自父类），full-face changed 实际来自 PARAM 形态
+setter 族（setArray/setAsciiStream/…）。专项断言已按实测口径改写为四段谱系钉死
+（SPS EXEC 零命中 / SPS ADD_BATCH 零命中 / 父类 PS EXEC_CTX 命中 / NRD connect 命中而
+Driver 零命中）；无参 addBatch 不采集与 MySQL 5.1 既有口径一致（PS 批 SQL 文本走 BATCH
+形态的 preparedSql，无覆盖缺口）。
+
+**实施中的两处环境坑（已修并留档）**：
+
+- `VerificationLoader` 补 `getResource`/`getResourceAsStream` 覆写：GoldenDB 类 `<clinit>`
+  触 `ResourceBundle.getBundle("com.goldendb.jdbc.LocalizedErrorMessages")`，bundle 查找用
+  被织类自身 loader——不覆写时默认委托父 loader（测试 classpath）查不到 jar 内 properties，
+  `Class.forName(…, true, loader)` 抛 `ExceptionInInitializerError`（磐维没踩到因其语句类
+  初始化不触 bundle）。
+- GoldenDB 五类进 `BYTE_VERIFIABLE_EXCLUDES` 而**非**计划所写的 `JAR_OPTIONAL_BYTE_LAYER`：
+  MariaDB/SQLite 的 jar 已在 agent 子项目 testImplementation（T-CaptureCoverage 收口固化），
+  那 7 类靠该表做「资源在位即硬断言」的升级判据，混入永远缺 classpath 的 GoldenDB 类会把
+  MariaDB/SQLite 字节层用例整条误降级为 skip——同磐维在档的同一坑。
+
+**G9（与捕获面同批）**：计划 §2.6 列了 3 处落点，`LocatorSkipPrefixSyncTest` 实测锁 **4 份
+副本**，全部同步 `com.goldendb.`：agent `StackLocator.java#FRAME_SKIP_PREFIXES`、IDE
+`CallerSourceLocator.kt#isFrameworkFrame`、注入模板 `SourceInterceptorTemplates.kt`
+（真正生效的那份）、文档示例 `docs/instrumentation/SqlSourceInterceptor.kt`；守卫两处锚点
+清单同步加 `com.goldendb.`（新厂商不再只靠差集判定）。读数：6 个相关测试类
+**60 ran / 0 skipped / 0 failed**（LocatorSkipPrefixSyncTest 6、CallerSourceLocatorTest 5、
+SourceInterceptorTemplatesTest 6、StackDigestFramesTest 22、MyBatisNativeWiringTest 9、
+BannedApiScanRuleTest 12）。
+
+**未宣称**：批量事件可采（P-7 未验证）——本券只做登记与字节层安全证明，`executeZteBatch`
+批量路径待真机。
 
 ### 7.3 券 C
 
