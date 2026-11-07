@@ -21,6 +21,9 @@ import java.util.Objects;
  * @param paramHints  与 paramSources 并行的回填引号提示（T-M23-02，按列类型 ParamQuote）
  * @param batchModel  批量可选参数模型（T-M23-04）：INSERT/UPDATE/UPSERT 的列级勾选结构，
  *                   驱动面板勾选重建 SQL；SELECT/DELETE 等无列级选择的方法为 null
+ * @param warning     T-WriteFamily（R4）：无 WHERE 条件的高危写操作警示（{@code delete(null)} /
+ *                   {@code update(entity, null)} / {@code remove(null)}），透传到
+ *                   {@code cn.song.mybatisplus.visualizer.model.PreviewResult}；null 表示无警示
  */
 public final class BatchPreview {
     private final String methodName;
@@ -30,9 +33,11 @@ public final class BatchPreview {
     private final List<String> paramSources;
     private final List<ParamHint> paramHints;
     private final BatchModel batchModel;
+    private final String warning;
 
     public BatchPreview(String methodName, String tableName, String sql, String paramGroups,
-                         List<String> paramSources, List<ParamHint> paramHints, BatchModel batchModel) {
+                        List<String> paramSources, List<ParamHint> paramHints, BatchModel batchModel,
+                        String warning) {
         this.methodName = methodName;
         this.tableName = tableName;
         this.sql = sql;
@@ -40,6 +45,12 @@ public final class BatchPreview {
         this.paramSources = paramSources;
         this.paramHints = paramHints;
         this.batchModel = batchModel;
+        this.warning = warning;
+    }
+
+    public BatchPreview(String methodName, String tableName, String sql, String paramGroups,
+                        List<String> paramSources, List<ParamHint> paramHints, BatchModel batchModel) {
+        this(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel, null);
     }
 
     public BatchPreview(String methodName, String tableName, String sql, String paramGroups,
@@ -88,13 +99,18 @@ public final class BatchPreview {
         return batchModel;
     }
 
+    /** T-WriteFamily（R4）：无 WHERE 条件的高危写操作警示（null = 无警示）。 */
+    public String getWarning() {
+        return warning;
+    }
+
     public BatchPreview copy(String methodName, String tableName, String sql, String paramGroups,
                              List<String> paramSources, List<ParamHint> paramHints, BatchModel batchModel) {
-        return new BatchPreview(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel);
+        return new BatchPreview(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel, warning);
     }
 
     public BatchPreview copy(String paramGroups) {
-        return new BatchPreview(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel);
+        return new BatchPreview(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel, warning);
     }
 
     @Override
@@ -112,18 +128,19 @@ public final class BatchPreview {
                 && Objects.equals(paramGroups, that.paramGroups)
                 && Objects.equals(paramSources, that.paramSources)
                 && Objects.equals(paramHints, that.paramHints)
-                && Objects.equals(batchModel, that.batchModel);
+                && Objects.equals(batchModel, that.batchModel)
+                && Objects.equals(warning, that.warning);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel);
+        return Objects.hash(methodName, tableName, sql, paramGroups, paramSources, paramHints, batchModel, warning);
     }
 
     @Override
     public String toString() {
         return "BatchPreview(methodName=" + methodName + ", tableName=" + tableName + ", sql=" + sql
                 + ", paramGroups=" + paramGroups + ", paramSources=" + paramSources + ", paramHints=" + paramHints
-                + ", batchModel=" + batchModel + ")";
+                + ", batchModel=" + batchModel + ", warning=" + warning + ")";
     }
 }
