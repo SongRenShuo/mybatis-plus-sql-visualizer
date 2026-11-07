@@ -46,7 +46,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p><b>未登记实现取证（券 D）。</b>接口命中但不在白名单的类名按首次发现顺序记入
  * {@link CaptureBudget#noteUnregisteredDriver(String)}（有界 8 个），心跳带出给 IDE——
- * 「下一个未知驱动是谁」不再只能靠人工猜。
+ * 「下一个未知驱动是谁」不再只能靠人工猜。券 G1：已知连接池包装族
+ * （{@link #POOL_WRAPPER_PREFIXES}）是包装层不是驱动，从该曝光排除；织入面与采集语义零变化。
  *
  * <p><b>零 ASM 依赖</b>：本类在 premain 路径被触达（记录候选），任何对 ASM 的静态引用都会把
  * 「ASM 不可见」的第三方 agent 现场变成宿主启动失败（T-JRebelPremainCrash）。故这里只做反射与
@@ -84,6 +85,49 @@ final class CatchAllMatcher {
      */
     private static final String[] EXCLUDED_PREFIXES = {
             "java.", "javax.", "jdk.", "sun.", "com.sun.", "org.w3c.", "org.xml."};
+
+    /**
+     * 已知连接池包装族前缀（T-SqlListCatchup 券 G1）：这些前缀的类**是包装层不是驱动**——
+     * 池代理几乎人人用，把它们记进「未登记 JDBC 实现」是诊断噪音（真机 2026-11-07 join-demo
+     * 实测 Hikari 三类常驻该行）。故本表前缀的类从「未登记」曝光排除（
+     * {@link #evaluate} 不再调 {@code noteUnregisteredDriver}）。
+     *
+     * <p><b>织入面不动</b>：池包装类照旧走兜底匹配与 retransform（header 判定 KDoc 早已把
+     * Hikari 列为合法兜底目标）；一次执行的「代理外层 + 驱动内层」双织入由
+     * {@code NestGate}（嵌套只报最内层）与 {@code StatementRegistry}（包装语句的内层实体
+     * 一并登记，T-OracleWrapperRegistry 先例）兜住，采集语义零变化——本表**只**管诊断曝光面。
+     *
+     * <p>前缀级判定（点分名 {@code startsWith}）：族内新包（如 Hikari 的 {@code pool.}
+     * 生成物）天然整族覆盖。形态核对（常识 + 仓内既有 javap 记录）：HikariCP 生成物全在
+     * {@code com.zaxxer.hikari.pool.}（{@code HikariProxyPreparedStatement}/
+     * {@code ProxyStatement}/{@code ProxyConnection}）；c3p0 为
+     * {@code com.mchange.v2.c3p0.impl.NewProxy*}（前缀覆盖 impl 子包）；DBCP 1.x/2.x 为
+     * {@code org.apache.commons.dbcp(.2).Delegating/Poolable} 系列；Tomcat-JDBC 为
+     * {@code org.apache.tomcat.jdbc.pool.*}（其语句代理多为 JDK 动态代理，已被
+     * {@link #cheapExcluded} 排除，此表兜住静态包装）；Druid 为
+     * {@code com.alibaba.druid.pool.DruidPooled*}。
+     */
+    private static final String[] POOL_WRAPPER_PREFIXES = {
+            "com.zaxxer.hikari.pool.",
+            "com.mchange.v2.c3p0.",
+            "org.apache.commons.dbcp.",
+            "org.apache.commons.dbcp2.",
+            "org.apache.tomcat.jdbc.pool.",
+            "com.alibaba.druid.pool.",
+    };
+
+    /** 类名是否落在已知连接池包装族（券 G1：未登记曝光排除用；点分或斜杠名皆可——只看前缀）。 */
+    static boolean isKnownPoolWrapper(String dotted) {
+        if (dotted == null) {
+            return false;
+        }
+        for (String p : POOL_WRAPPER_PREFIXES) {
+            if (dotted.startsWith(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private CatchAllMatcher() {
     }
@@ -485,8 +529,11 @@ final class CatchAllMatcher {
             if (spec == null) {
                 return;
             }
-            // 券 D：接口命中但不在白名单——记下类名（有界），心跳带出给 IDE
-            CaptureBudget.noteUnregisteredDriver(name);
+            // 券 D：接口命中但不在白名单——记下类名（有界），心跳带出给 IDE。
+            // 券 G1：已知连接池包装族是包装层不是驱动，从「未登记」曝光排除（织入面不动）。
+            if (!isKnownPoolWrapper(name)) {
+                CaptureBudget.noteUnregisteredDriver(name);
+            }
             // 周期补挂去重：同一 Class 只处理一次（失败也不重试——失败形态是稳定的）
             if (!PROCESSED.add(c)) {
                 return;

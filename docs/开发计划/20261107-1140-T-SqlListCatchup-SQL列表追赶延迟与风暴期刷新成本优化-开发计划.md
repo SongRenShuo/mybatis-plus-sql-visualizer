@@ -255,3 +255,36 @@
 **工程记录**：构建期并行登记 `sqllist-f`（沙盒 `sqllist-f-sandbox` 临时隔离已用后还原，未入库）；F2b 落地后 IDE 侧首跑 24 红＝`AgentEvent` 构造签名变更后 Kotlin 增量编译残留旧测试字节码（NoSuchMethodError），删除 `build/classes/*/test` 强制重编后归零——非真实回归，**改 data class 构造签名后定向读数必须核对是否重编**。
 
 **not run**：全量门禁 testShards 与 convention 守卫（券纪律，收口轮统一；BundlePlaceholderArity/GiantFileBudget 等由收口连坐）；join-demo 压测复测（主控统一条款——F2a 上线后状态栏可直接观察 dropped 读数，F2b 聚合效果看「已收事件」与 dropped 差值）；真机 GUI 走查（F1 两行并存的消失、F2a「已丢弃 N 条」观感）待用户；面板级聚合计数消费（见 F2b 已知边界）。
+
+### 券 G：真机走查三件（G1 池代理误报修复 / G2 重放守卫大额丢弃核验 / G3 桥让位成本量化）（2026-11-07）
+
+- 分支：`t-sqllist-catchup-g`（工作树 `.worktrees/sqllist-catchup-g`，基线 = 集成 tip `df92576b`），提交三笔：`886a0d33`（G1）、`cc2d3606`（G2）、G3 薄交付零实码（读数见下，未入库临时账单测试已删）。
+
+#### G1：Hikari 连接池代理被标「未登记 JDBC 实现」（误报，已修）
+
+- 定性：池代理是包装层不是驱动（Hikari 几乎人人用，真机 2026-11-07 第三/四轮压测该诊断行常驻三类：`HikariProxyPreparedStatement`/`ProxyStatement`/`ProxyConnection`）。「未登记」曝光面单点在 agent 侧——`CatchAllMatcher.evaluate` 接口命中且不在驱动白名单时调 `CaptureBudget.noteUnregisteredDriver`（唯一调用点，全仓 grep 实证），IDE 侧（`AgentAttachStats`→`CaptureDiagnostics`→`CaptureStatusBar`）只渲染快照，**零改动**。
+- 修法（`886a0d33`）：`CatchAllMatcher` 新增 `POOL_WRAPPER_PREFIXES` 前缀表（六前缀：`com.zaxxer.hikari.pool.`、`com.mchange.v2.c3p0.`、`org.apache.commons.dbcp.`、`org.apache.commons.dbcp2.`、`org.apache.tomcat.jdbc.pool.`、`com.alibaba.druid.pool.`）+ `isKnownPoolWrapper`（前缀级判定，族内新包整族覆盖——仓内既有「前缀级守卫挡得住整族静默」教训的正面用法）；evaluate 对命中前缀的类跳过 `noteUnregisteredDriver`。
+- **织入面零变化（捕获路径核验结论）**：池包装类照旧兜底匹配 + retransform；「代理外层 + 驱动内层」双织入的解包装已有先例兜住——`StatementRegistry.register` 对包装语句把内层实体语句一并登记（T-OracleWrapperRegistry，`StatementRegistry.java:155-180` `delegateStatementOf`）+ `NestGate` 嵌套只报最内层（`SqlHookCallbacks.java:153` 注释自证「Hikari/MyBatis 包装层形态」在内）——**无需补解包装**。Tomcat-JDBC 的语句代理多为 JDK 动态代理，已被 `cheapExcluded` 的 `Proxy.isProxyClass` 排除，前缀表兜住其余静态包装。
+- 测试 2 例（`CatchAllMatcherTest`，真 Hikari jar 隔离 loader 夹具沿用）：attach 级（三类不报、真驱动仍报、接受表仍登记、三类各织一次）+ 前缀表级（五族具名代表命中、真驱动/同名字类/null 不误吞）。
+- **反向验证（S2）**：摘除 `com.zaxxer.hikari.pool.` 前缀重跑**恰 2 红**（attach 级 + 前缀级），恢复后全绿。
+- 定向读数：`CatchAllMatcherTest` 14 + `CaptureBudgetTest` 10 + `HeartbeatDiagnosticsTest` 6 = **3 类 30 例 0 failures 0 errors 0 skipped**（`--tests` 定向 + in-process，XML 判据数核对）。
+
+#### G2：重放守卫大额丢弃核验（量化定责 → 发现真实丢数据缺陷并最小修复）
+
+- **分流结论**：①真重放（rehighlight 全文档重跑）被守卫按设计丢弃＝无害（历史行已入库过）；②但发现**真实丢数据缺陷**：`console.clear()` 后流式新行会被判 Replay 持续丢弃。
+- 缺陷机制（平台实证，243 sources `ConsoleViewImpl.kt`）：`clear()` → `doClear()` 是**同一文档实例** `deleteString(0, textLength)`（:698，经 CLEAR FlushRunnable :1438）——偏移从头重计、stamp 变、桥的反射句柄持续有效。重印首行必然「等于行 0」+ 行偏移 ≤ 陈旧水位 → 旧判据「stamp 变 + 行=行0」判 Replay，且 `lastDocStamp` 已同步使其后所有新行走「stamp 未变 → Replay」分支——**丢到新文档长度追平旧水位为止**。风暴期大文档（真机 55 万行量级）clear 一次＝控制台通道静默分钟级，与真机「丢弃计数只涨不产出」形态吻合。`replayGuard.reset()` 全仓无调用点（grep 实证），守卫此前只靠 Reset 判定自愈，而行 0 比对恰是该形态的盲区。
+- EP 归属：EP 接管态下桥在守卫之前短路（`epActiveShortCircuitCount`），重放计数增长说明丢弃发生在 EP 未接管窗口；138,243 的量级与「单次 rehighlight 的全文档行数」或「clear 后重印累积」两种机制都自洽，缺陷本身独立于 EP。
+- 最小修复（`cc2d3606`，不动四态设计、只修判据）：`decide` 增加惰性 `docLengthProvider`（仅 stamp 变分支求值——流式/纯重放热路径零调用）；**文档总长度 < 水位 = 文档被缩小、水位陈旧** → 先于行 0 比对核销水位按 Reset 处理。长度不可得（反射桩缺方法）回退旧行为。桥侧复用 `attachReplayGuard` 已解析的 `getCharsSequence` 句柄取 `.length`（零新反射），`BridgeLineContext.docLengthReader` 接线。
+- 测试：纯逻辑 4 例（clear 后首行/后续行、文档未缩水混合态维持 Replay、长度不可得回退）+ `ReplayGuardLine0ReadTest` 真实 readers 驱动 clear→重印 1 例（混合态夹具改长文档保原语义钉死——旧夹具 17 字符 < 合成水位 100 会落进新缩水分支）+ **桥级复现实验** `ReplayGuardStormVerdictTest` 2 例（真实 filter 代理链路：真重放丢弃不重复产出 / clear 后重印恢复产出）。
+- **反向验证（S2）**：摘除缩水分支重跑**恰 4 红**（纯逻辑 2 + 真实 readers 1 + 桥级 1），非缩水形态与真重放用例保持绿；恢复后全绿。
+- 定向读数：`ConsoleReplayGuardTest` 11 + `ReplayGuardLine0ReadTest` 7 + `ReplayGuardStormVerdictTest` 2 = **3 类 20 例 0 failures 0 errors 0 skipped**；桥族回归 5 类 **37 例 0 红**（ConsoleSettleFlush 6 / EpBridgeSinglePath 7 / Marker 13 / Perf 10 / Bridge 1）。
+
+#### G3：控制台停摆量化 + 桥让位升级（探针先行 → 账单不显著，薄交付不动刀）
+
+- **前提订正**：派活背景「filter 逐行调用占 EDT 预算」与线程模型不符——`handleConsoleLine` 在**控制台输出线程**执行（桥 KDoc `SqlLogConsoleBridge.kt` + 券 C 证据链），EDT 只承担 `flushSettledEntries` 冲刷与面板刷新（券 A/B/E 域）。「占 EDT 预算 >10% 才动刀」的判据在本链路上不可成立（成本根本不落 EDT）。
+- **账单**（临时基准测试，未入库，filter 代理真实链路 + JIT 预热，200k 行/态，`LogBridge.handleLine` 探针读数 + 墙钟直测）：全解析噪音行 ~9.0µs/行；EP 短路（agent 健康期常态）~6.1µs/行（含测试 JVM debug 日志分支放大的成分——该路径有 `LOG.isDebugEnabled` 包裹的逐行 debug 调用；守卫丢弃态同前缀路径实测 ~0.35µs/行，agent 健康期真实成本量级以此为下界）；守卫丢弃（重放风暴）~0.35µs/行。
+- **预算占比**：真机风暴 ~60 SQL/s × 8-10 行/SQL ≈ 500-600 行/s → EP 短路态成本 ≈ 0.2~3.6ms/s ≈ **单核 0.02%~0.36%**（下界/上界）；即便 10 倍风暴（6k 行/s）≤ 3.6%。判据「>10%」远不达标——**成本不显著，薄交付：登记读数后不动**。
+- **注销/挂回方案的平台边界登记（若未来要动刀，先过这三关）**：①243 起 `ConsoleViewImpl.clearMessageFilters()`（:777）移除**全部** message filter（EP 经 `consoleFilterProvider` 挂的 filter 同池）——无单 filter 移除 API（券 C 已取证 2026.2 无 `removeMessageFilter`），注销桥 filter 必连坐 EP 通道，挂回要走完整 attach 周期；②注销期 `consoleLinesSeen`（面板「已扫描 N 行 / 产出 0 条」的诊断输入）与 `epActiveShortCircuitCount` 冻结，诊断叙事失真；③注销期重放守卫水位冻结——正是 G2 修掉的陈旧水位缺陷族的制造机。`CaptureActivityFallback` 滞回状态机本身可用（`onGateChanged`/`onAgentEvent`/`onConsoleLine`，测试缝齐全），但收益面（≤0.4% 单核）不抵上述三险。
+- 「文档长度 vs 桥已见行数」落差读数：需真控制台（headless 桩无平台 flush 管线），本轮未取；若未来动刀，取数路径 = `attachReplayGuard` 已持 doc 句柄 + `scanAll` 每拍 recordGauge（复用券 E 设施）。
+- 测试：探针接线用例已存在并反向验证过（券 E：`ConsoleSettleFlushTest` 探针样例落环断言 + 摘 key 恰红），本轮零新增生产代码 → 无新增测试面；桥族回归 37 例全绿（见 G2 读数）。
+- not run：真机侧账单复核（本机 headless 读数为代理读数，真机控制台输出线程竞争形态未测——量级结论 0.4% 单核对真机放大不敏感）；join-demo 压测复测（主控条款）。

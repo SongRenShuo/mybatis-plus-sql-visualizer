@@ -17,7 +17,8 @@ class ConsoleReplayGuardTest {
         docStamp: Long = 1L,
         lineText: String = "line",
         line0Text: String? = null,
-    ): Decision = guard.decide(endOffset, docStamp, lineText) { line0Text }
+        docLength: Int? = null,
+    ): Decision = guard.decide(endOffset, docStamp, lineText, { line0Text }, docLength?.let { { it } })
 
     @Test
     fun `流式递增逐行 Process 且水位前移`() {
@@ -75,6 +76,55 @@ class ConsoleReplayGuardTest {
         assertEquals(Decision.Process, decide(g, endOffset = 3, docStamp = Long.MIN_VALUE, lineText = "a"))
         // 后续正常递增
         assertEquals(Decision.Process, decide(g, endOffset = 5, docStamp = Long.MIN_VALUE, lineText = "ab"))
+    }
+
+    // ---------- T-SqlListCatchup 券 G2：clear/截断后的陈旧水位核销 ----------
+
+    /**
+     * clear 后重印：首个新行必然「等于行 0」（新文档的第一行就是它自己），旧判据把它连同
+     * 后续全部新行判成 Replay 丢到旧水位之外——控制台通道静默到新文档长度追平旧水位为止。
+     * 券 G2 修后：文档长度掉到水位之下 → 核销陈旧水位（Reset），首行按流式处理。
+     *
+     * 反向验证（S2）：摘掉 decide 的文档缩水分支重跑，本用例与「clear后重印_后续新行」必红。
+     */
+    @Test
+    fun `clear后重印_首行等于行0_判Reset不再误判Replay`() {
+        val g = ConsoleReplayGuard()
+        // 风暴期水位已推到 100（旧文档很大）
+        decide(g, endOffset = 100, lineText = "old-tail", docLength = 100)
+        // console.clear()（stamp 变、文档只剩刚重印的首行，长度 8 < 旧水位 100）
+        val d = decide(g, endOffset = 8, docStamp = 2L, lineText = "new-line", line0Text = "new-line", docLength = 8)
+        assertEquals("clear 后首个重印行不得判 Replay（丢数据缺陷）", Decision.Reset, d)
+        assertEquals("陈旧水位核销为当前行尾", 8, g.watermark)
+    }
+
+    @Test
+    fun `clear后重印_后续新行单调Process`() {
+        val g = ConsoleReplayGuard()
+        decide(g, endOffset = 100, lineText = "old-tail", docLength = 100)
+        assertEquals(Decision.Reset, decide(g, endOffset = 8, docStamp = 2L, lineText = "new-line", line0Text = "new-line", docLength = 8))
+        // 后续行：水位已被核销，endOffset 单调递增 → 正常流式
+        assertEquals(Decision.Process, decide(g, endOffset = 20, docStamp = 2L, lineText = "next", docLength = 20))
+        assertEquals(20, g.watermark)
+    }
+
+    @Test
+    fun `文档未缩水_混合态维持Replay语义`() {
+        // 券 G2 不得回破「重放叠加新增混合态」既有语义：文档长度 ≥ 水位时行0比对照旧
+        val g = ConsoleReplayGuard()
+        decide(g, endOffset = 100, lineText = "X", docLength = 100)
+        // stamp 变但文档仍比水位长（非 clear/截断形态）→ 首行一致的行照旧判 Replay
+        assertEquals(Decision.Replay, decide(g, endOffset = 10, docStamp = 2L, lineText = "X", line0Text = "X", docLength = 200))
+        assertEquals(100, g.watermark)
+    }
+
+    @Test
+    fun `文档长度不可得_回退旧行为判Replay`() {
+        // docLengthProvider 缺省（null）= 守卫回退旧行为——桥侧反射不可得的降级口径不受影响
+        val g = ConsoleReplayGuard()
+        decide(g, endOffset = 100, lineText = "old")
+        assertEquals(Decision.Replay, decide(g, endOffset = 10, docStamp = 2L, lineText = "X", line0Text = "X"))
+        assertEquals(100, g.watermark)
     }
 
     @Test
