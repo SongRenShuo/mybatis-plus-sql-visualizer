@@ -28,6 +28,13 @@ import java.util.concurrent.TimeUnit;
  * （workspace.xml 持久映射在 / 本进程已设过）直接跳过，零断言零 EDT 占用；仅项目首见
  * 经 invokeLater 派发 {@link #setMySqlOnEdt} 并 CountDownLatch 有界等待（BGT 等 EDT，EDT 永不
  * 反向阻塞——无互锁面）。慢操作（refresh/findFile）归 BGT、映射写归 EDT，两侧 SEVERE 同时消除。
+ *
+ * <p>T-ThreadFix C（2026-11-04 真机）：派发模态必须是 <b>{@code ModalityState.nonModal()}</b>。{@code setMapping}
+ * 是模型写，平台会在其中 {@code reparseFiles} 并经 {@code LanguageSubstitutors.requestReparsing} 再投一拍写动作；
+ * 从 BGT 用<b>省略模态</b>的 {@code invokeLater} 派发时，runnable 在创建那一刻 {@code myWritingAllowed=false}，
+ * 整条写动作链因此无写资格 → {@code SEVERE TransactionGuardImpl Write-unsafe context}（真机栈：
+ * {@code PsiModificationTrackerImpl.fireEvent → FileManagerImpl.forceReload → reparseFiles}）。nonModal
+ * 是平台构造期唯一登记为 write-safe 的模态，嵌套那一拍随之继承写资格。</p>
  */
 public final class DialectPreMapping {
 
@@ -195,13 +202,23 @@ public final class DialectPreMapping {
         }
         CountDownLatch done = new CountDownLatch(1);
         final boolean[] cleared = {false};
+        // T-ThreadFix C：**必须 nonModal（write-safe）投递**——setMapping 是模型写：平台内部
+        // PerFileMappingsBase.handleMappingChange 会 reparseFiles（写动作）并经
+        // LanguageSubstitutors.requestReparsing 再投一拍写动作。BGT 上省略模态的 invokeLater
+        // 记录的是「创建时 myWritingAllowed=false」，于是整条写动作链没有写资格：
+        // SEVERE - TransactionGuardImpl - Write-unsafe context!
+        //   at PsiModificationTrackerImpl.fireEvent → FileManagerImpl.forceReload
+        //        → PsiVFSListener.propertyChanged → FileContentUtilCore.reparseFiles
+        //        → LanguageSubstitutors.requestReparsing$0
+        // nonModal 是平台构造期唯一登记为 write-safe 的模态，嵌套的 requestReparsing 拍也随之
+        // 继承写资格。代价：模态弹窗存续期映射延后，waitMs 预算内未落地即跳过（既有降级路径）。
         ApplicationManager.getApplication().invokeLater(() -> {
             try {
                 cleared[0] = clearMappingOnEdt(project, vf);
             } finally {
                 done.countDown();
             }
-        });
+        }, com.intellij.openapi.application.ModalityState.nonModal());
         boolean signaled;
         try {
             signaled = done.await(waitMs, TimeUnit.MILLISECONDS);
@@ -345,6 +362,8 @@ public final class DialectPreMapping {
         }
         CountDownLatch done = new CountDownLatch(1);
         final boolean[] mapped = {false};
+        // T-ThreadFix C：write-safe 投递（同 clearMapping 的说明）——setMapping 触发平台重解析写动作，
+        // 省略模态（默认模态在 BGT 创建即 write-unsafe）会让整条写动作链打 TransactionGuard SEVERE。
         ApplicationManager.getApplication().invokeLater(() -> {
             try {
                 mapped[0] = targetLanguage != null
@@ -353,7 +372,7 @@ public final class DialectPreMapping {
             } finally {
                 done.countDown();
             }
-        });
+        }, com.intellij.openapi.application.ModalityState.nonModal());
         boolean signaled = false;
         try {
             signaled = done.await(waitMs, TimeUnit.MILLISECONDS);
