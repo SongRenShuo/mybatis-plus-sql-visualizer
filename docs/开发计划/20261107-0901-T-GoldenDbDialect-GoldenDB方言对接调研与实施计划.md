@@ -801,7 +801,7 @@ BannedApiScanRuleTest 12）。
 
 | P | 状态 | 读数/结论 |
 |---|---|---|
-| P-1 真机实例 | **未验证** | 测试服务器 12 容器中无 GoldenDB；PDF 与资产无镜像信息 |
+| P-1 真机实例 | **已证实不可部署（2026-11-07 六源取证）** | T-GoldenDbDeploy 按 db-env-provisioning skill 矩阵六源实测全零命中：Docker Hub `query=goldendb` count=0 且 5 个假设仓库名 tags 全 404（对照 opengauss=111 证接口正常）、quay 空、ghcr/ACR/SWR 未取到、GitHub/Gitee 仅适配工具无数据库本体（jzload 的 DB.rar 来源不明且为无 CN/MDS/GTM 的单组件，不可用）；官网安装介质需金篆社区注册申请（未授权不代办）。即便拿到安装包，单机最小内存 ≈12GB（CSDN install_fast.ini 实战读数）vs 靶机可用预算 1.67GB（available 2789×60%，12 存量容器不可动）——差一个数量级。**引擎行为类验证（§5.2/P-2/P-5/P-9/保留字扫描）维持未验证**；真机唯一路线=商务渠道索取镜像 tar 或授权安装包+腾量/换靶机。部署零残留（无容器/卷/文件）。 |
 | P-2 `oracleMode` | **部分实测**（默认 true 已由字节码确认）；语义**未验证** | 待真机对照实验；GoldenDbDialect KDoc 已写明「驱动参数不参与推断」 |
 | P-3 保留字来源 | **销案（券 A）** | 三表并集 385−STORAGECLUSTER=**384 词**落表（`GOLDENDB_RESERVED`）；机械抽取与落表逐词对照 missing=0/extra=0；`_GDB_CN` 剔除；与 MYSQL_RESERVED 差集 147 词非空 |
 | P-4 upsert/分页 | **文档级实测**（p66/p73 逐字）；引擎**未验证** | 待真机 |
