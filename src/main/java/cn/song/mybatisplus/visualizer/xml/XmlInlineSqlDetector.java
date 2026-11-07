@@ -75,8 +75,15 @@ public final class XmlInlineSqlDetector {
         if (MAPPER_STATEMENT_TAGS.contains(name) && "mapper".equals(parentName)) return true;
         // hbm 命名查询（HbmNamedQueryGutterLineMarkerProvider：query/sql-query 且父标签 hibernate-mapping）
         if (HBM_QUERY_TAGS.contains(name) && "hibernate-mapping".equals(parentName)) return true;
-        // pages 的 SQL 载体（PagesXmlGutterLineMarkerProvider 图标锚在 maintainPage 上）
-        if ("datasource".equals(name) && "maintainPage".equals(parentName)) return true;
+        // pages 的 SQL 载体（PagesXmlGutterLineMarkerProvider 图标锚在页面标签上）。
+        // T-PagesHql：页面标签名不固定（maintainPage / listPage / …），统一按「<pages> 的直接子级」
+        // 判定；`<maintainPage>` 兼容旧形态（历史文件可能不在 <pages> 下）。
+        if ("datasource".equals(name)
+                && ("maintainPage".equals(parentName)
+                    || (parentTag != null && parentTag.getParentTag() != null
+                        && "pages".equals(parentTag.getParentTag().getName())))) {
+            return true;
+        }
         return false;
     }
 
