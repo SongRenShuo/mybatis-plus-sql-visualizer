@@ -324,7 +324,7 @@ public final class SqlGenerator {
                         if (set.getColumn() != null) {
                             return renderQualified(set.getColumn(), dialect) + " = " + renderValue(
                                     set.getValue() != null ? set.getValue() : new SqlValue.Placeholder("?"),
-                                    paramSink, hintSink, quoteHint(statement.getTable(), set.getColumn()));
+                                    paramSink, hintSink, paramHint(statement.getTable(), set.getColumn()));
                         }
                         return "";
                     }).collect(Collectors.joining(", ")));
@@ -544,7 +544,7 @@ public final class SqlGenerator {
     ) {
         if (condition instanceof Condition.Simple s) {
             return renderQualified(s.getColumn(), dialect) + " " + s.getOp() + " " + renderValue(
-                    s.getValue(), paramSink, hintSink, quoteHint(table, s.getColumn()));
+                    s.getValue(), paramSink, hintSink, paramHint(table, s.getColumn()));
         }
         if (condition instanceof Condition.Unary u) {
             return renderQualified(u.getColumn(), dialect) + " " + u.getOp();
@@ -552,13 +552,15 @@ public final class SqlGenerator {
         if (condition instanceof Condition.In in) {
             String op = in.isNegated() ? "NOT IN" : "IN";
             // M19.6（用户实测）：IN 列表占位符标记 inList 提示——面板回填按逗号分割多值、每个值独立引号
+            // T-DateLiteralBackfill：提示改走 paramHint 工厂（temporal 一并带出），copy(inList=true) 保留其余字段
+            ParamHint inColumnHint = paramHint(table, in.getColumn());
             String values = in.getValues().stream().map(value -> {
                 if (value instanceof SqlValue.Placeholder p) {
                     if (paramSink != null) {
                         paramSink.add(p.getSource());
                     }
                     if (hintSink != null) {
-                        hintSink.add(new ParamHint(quoteHint(table, in.getColumn()), null, true));
+                        hintSink.add(inColumnHint.copy(inColumnHint.getQuote(), inColumnHint.getLikePosition(), true));
                     }
                     return "?";
                 }
@@ -569,8 +571,8 @@ public final class SqlGenerator {
         if (condition instanceof Condition.Between b) {
             String op = b.isNegated() ? "NOT BETWEEN" : "BETWEEN";
             return renderQualified(b.getColumn(), dialect) + " " + op + " "
-                    + renderValue(b.getLo(), paramSink, hintSink, quoteHint(table, b.getColumn())) + " AND "
-                    + renderValue(b.getHi(), paramSink, hintSink, quoteHint(table, b.getColumn()));
+                    + renderValue(b.getLo(), paramSink, hintSink, paramHint(table, b.getColumn())) + " AND "
+                    + renderValue(b.getHi(), paramSink, hintSink, paramHint(table, b.getColumn()));
         }
         if (condition instanceof Condition.Like l) {
             String op = l.isNegated() ? "NOT LIKE" : "LIKE";
@@ -660,7 +662,7 @@ public final class SqlGenerator {
     /**
      * 渲染参数值：字面量原样输出；占位符输出 {@code ?} 并收集来源与回填提示（M13）。
      */
-    private static String renderValue(SqlValue value, List<String> paramSink, List<ParamHint> hintSink, Boolean quote) {
+    private static String renderValue(SqlValue value, List<String> paramSink, List<ParamHint> hintSink, ParamHint hint) {
         if (value instanceof SqlValue.Literal l) {
             return l.getRaw();
         }
@@ -669,7 +671,7 @@ public final class SqlGenerator {
                 paramSink.add(p.getSource());
             }
             if (hintSink != null) {
-                hintSink.add(new ParamHint(quote));
+                hintSink.add(hint != null ? hint : new ParamHint());
             }
             return "?";
         }
@@ -717,20 +719,21 @@ public final class SqlGenerator {
     }
 
     /**
-     * 列值引号提示（M13，T-M23-03 修正）：按实体字段类型判定——
-     * **除确定的数值类型（int/long 等）外，其他类型默认带引号**（用户确认：LocalDateTime/Date/Boolean
-     * 等非数值类型原实现一律不加引号，回填后 SQL 无效）；列或类型未知返回 null（面板走原数字启发式）。
+     * 列值回填提示（M13，T-M23-03 修正；T-DateLiteralBackfill 补日期族）：
+     * 引号按实体字段类型判定（<b>除确定的数值类型外默认带引号</b>），日期族额外带 {@code temporal}
+     * 让面板/复制链产出 ANSI 类型字面量。列或类型未知返回 {@code quote=null}（面板走数字启发式）。
      * 判定逻辑见 {@link ParamQuote}（批量模板路径共用，T-M23-02）。
      */
-    private static Boolean quoteHint(TableInfo table, ColumnRef column) {
-        if (table == null) {
-            return null;
-        }
-        for (ColumnInfo it : table.getColumns()) {
-            if (it.getColumnName().equals(column.getColumnName())) {
-                return ParamQuote.decide(it.getFieldType());
+    private static ParamHint paramHint(TableInfo table, ColumnRef column) {
+        String type = null;
+        if (table != null) {
+            for (ColumnInfo it : table.getColumns()) {
+                if (it.getColumnName().equals(column.getColumnName())) {
+                    type = it.getFieldType();
+                    break;
+                }
             }
         }
-        return null;
+        return ParamQuote.hint(type);
     }
 }
