@@ -110,9 +110,12 @@ object LogPerfProbe {
 
     /**
      * 券D：取按名分布读数（count / mean / p50 / p90 / max）。
-     * 压测复测读数出口——复测前 [resetSamples] 划窗口，结束后本函数取数（无样本返回 null）。
+     * 压测复测读数出口——复测前 [resetSamples] 划窗口，结束后本函数取数；
+     * 无样本（未采样过或 reset 后）返回 null。
      */
-    internal fun sampleStats(name: String): SampleStats? = rings[name]?.let { synchronized(it) { it.stats() } }
+    internal fun sampleStats(name: String): SampleStats? = rings[name]?.let {
+        synchronized(it) { if (it.count == 0L) null else it.stats() }
+    }
 
     /** 券D：清空全部采样（压测复测划窗口用；生产常态勿调）。 */
     internal fun resetSamples() {

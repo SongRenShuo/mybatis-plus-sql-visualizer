@@ -322,6 +322,15 @@ class SqlLogPanel(
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     internal var lastRendered: List<LogSqlEntry> = emptyList()
 
+    /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
+     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     * **声明于 init 前**：init 块内首次 refreshList 即经 syncDiagnostics 读它（构造期序坑，同上注）。
+     */
+    private val catchUpBadgeState = CatchUpBadgeState()
+
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
     // T-RecentExecMenu O-119：送页签通道回调的**稳定引用**（init 注册 / dispose 同一性注销用）——
@@ -1676,14 +1685,6 @@ class SqlLogPanel(
             diagnosticsTimer = null
         }
     }
-
-    /**
-     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
-     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
-     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
-     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
-     */
-    private val catchUpBadgeState = CatchUpBadgeState()
 
     /**
      * R53：双通道捕获状态栏刷新（EDT，挂在诊断定时器上 2s 无锁轮询）。
