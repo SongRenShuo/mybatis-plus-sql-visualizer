@@ -717,6 +717,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.log.maxCount"), msg("settings.log.maxCount.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.timePrefix"), msg("settings.log.timePrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.slowQueryThreshold"), msg("settings.log.slowQueryThreshold.tip"), "settings.section.sqlLog", l));
+        // T-LogMethodName：新开关必须登记（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
+        fields.add(new SearchableField(msg("settings.log.showMethod"), msg("settings.log.showMethod.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.hibernate.enabled"), msg("settings.log.hibernate.enabled.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.hibernate.sqlPrefix"), msg("settings.log.hibernate.sqlPrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.hibernate.paramPrefix"), msg("settings.log.hibernate.paramPrefix.tip"), "settings.section.sqlLog", l));
@@ -743,6 +745,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.mapperNavYield"), msg("settings.mapperNavYield.tip"), "settings.section.ui", u));
         // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
         fields.add(new SearchableField(msg("settings.xmlInlineSql"), msg("settings.xmlInlineSql.tip"), "settings.section.ui", u));
+        // T-PagesHql：maintainPage <datasource> 源语言档（界面节）
+        fields.add(new SearchableField(msg("settings.pagesSource"), msg("settings.pagesSource.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.language"), "", "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut"), msg("settings.shortcut.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut.sqlToJava"), "", "settings.section.ui", u));
