@@ -633,9 +633,46 @@ object GoldenDbDialect : Dialect {
 
 （留空，实施时回填）
 
-### 7.1 券 A
+### 7.1 券 A（2026-11-07 实施完成，分支 `t-goldendb-mapping`）
 
-（待填）
+**提交清单**（工作树 goldendb-a）：
+
+| 提交 | 内容 |
+|---|---|
+| `7c5788fb` | GOLDENDB_RESERVED 384 词（P-3 落表） |
+| `7630fd0a` | GoldenDbDialect 第 15 方言 + 映射四件（DialectInference/JdbcUrlDialects/McpDialectDetector/ExecDialectRouting）+ ExplainSupport 诚实条目 + 自注册四件套（GoldenDbSqlDialect/GoldenDbParserDefinition/database-optional.xml 第五对） |
+| `1df31438` | DialectGoldenDbTest 11 例 + 受影响守卫同步 5 处 |
+| `82385278` | GaussDbDialectRegistrationWiringTest sql.dialect 计数 4→5 留痕 |
+| `e2051bca` | 两红收口（XML 注释字面量被计数正则误计、loadbalance 角标断言按实现真值订正） |
+
+**判据逐条读数**（计划 §三 券 A 判据 1-6，`DialectGoldenDbTest` 11 例全绿）：
+
+1. ✓ `DialectRegistry.byName("GoldenDB") === GoldenDbDialect`（assertSame）；注册表 14→15；`byName("Goldendb")`/`byName("golden")`/null 仍回落 MySQL（逐字口径不被稀释）。
+2. ✓ `jdbc:goldendb://h:3306/db` → "GoldenDB"；`jdbc:goldendb:loadbalance://h1:3307,h2:3308/db` → "GoldenDB"（子协议取首个冒号前段）；`jdbc:mysql://` 仍 → "MySQL"（不误伤）；大小写不敏感（`JDBC:GoldenDB://`）。
+3. ✓ `displayName == "GoldenDB"`；`badgeName == "GoldenDB · wmm@10.0.0.7:3306"`（db@host:port）。**订正一处**：loadbalance 形态 badgeName 只出方言名——R32 通用 authority 解析器不认「带前缀 authority 形态」（`://` 前还有 loadbalance 段，targetOf null），既有边界非本轮缺口，测试按实现真值断言并登记。
+4. ✓ `guessFromUrl("jdbc:goldendb://…") == "GoldenDB"`（jdbc:mysql 前缀不误命中）；`normalize("GoldenDB") == "GoldenDB"`；**P-6 确证后 `normalize("金篆") == "GoldenDB"`**；`normalize("中兴") == null`（PDF 0 命中不收）。
+5. ✓ `GOLDENDB_RESERVED.size == 384`（≥50）；含 `storagedb`/`chgdiskey`/`gdb_nolock`/`rownum`/`varchar2`/`autonomous_transaction`/`samedb` + MySQL 共有 `limit`/`order`/`table`/`select`；与 `MYSQL_RESERVED` 差集 **147 词**非空（照抄 MySQL 8.0 词表即漏包的实据）。
+6. ✓ 反向验证见下。
+
+**定向测试计数**：18 个测试类 **218 例，failed=1 / errors=0 / skipped=0**（唯一红＝`PluginXmlStructureGuardTest.描述声明与代码对账`，见下「写集外 known-red」）。`DialectGoldenDbTest` 11/11 绿；`GaussDbDialectRegistrationWiringTest` 6/6 绿（sql.dialect 计数恰 5）；`SqlDialectParserDefinitionPairingGuardTest` 绿（第五对成对）；`DialectExplainTest` 全量覆盖守卫绿（GoldenDB 显式 template=null 条目）；`DialectDocTableGuardTest` 在工作树里显式绿跳（文档站兄弟目录不在场）。
+
+**反向验证两处（判据 6，红+绿两次读数）**：
+
+- **摘 `DialectRegistry.dialects` 的 `GoldenDbDialect`** → `注册表_byName严格等价` **红**（`AssertionError at DialectGoldenDbTest.kt:33`，1 completed 1 failed）→ 还原后绿（assertSame 命中本体）。探针零残留（`grep REV-PROBE` 0 命中，`git diff` 干净）。
+- **摘 `UrlSubprotocolDialects` 的 `goldendb` 键** → `URL映射_两条子协议` **红**（`AssertionError at DialectGoldenDbTest.kt:45`）→ 还原后绿（两条 URL 均命中 "GoldenDB"）。
+
+**P-3 落表读数**：CN MySQL 表 355 词 / CN Oracle 表 352 词（多 `bulk`/`constant`/`database`/`datafiles` 4 词）/ DN 表 219 词（多 26 词：`cascade`/`cube`/`cume_dist`/`first_value`/`lag`/`lead`/`nth_value`/`ntile`/`percent_rank`/`row`/`row_number`/`virtual` 等 MySQL 8.0 窗口函数与词法词）；三表并集 385 − `STORAGECLUSTER`（两词关键短语，见 KDoc 噪声记录）= **384 词**；机械抽取并集与 Kotlin 落表集合**逐词对照 missing=0 / extra=0**（pymupdf 复核脚本，非肉眼）。噪声清理：`_GDB_CN` 剔除、断行缝合改「节/页边界补分隔符」修法（首版 join 无分隔符会把跨节 token 黏连）。
+
+**P-9 处理**：p323-325 原文只有语法（`EXPLAIN [DB|PROXY|explain_format] explainable_stmt [STORAGEDB]`）与选项（`FORMAT = JSON | FORMAT = Oracle`），**5 个示例语句均未给返回结果**——TABLE 行式 / TEXT 树式定不了档，照 OceanBase 教训（T-OBExplainFormat）不猜档。落 `ExplainSupport.Entry("GoldenDB", template=null, outputFormat=null, evidence=p323-325 摘录)`：能力矩阵 EXPLAIN 行如实 false，且满足 `DialectExplainTest`「支持表覆盖注册表全量」守卫（该守卫强制 entries.size == dialects.size，「完全不登记」会撞红——null 条目与「不接入」在矩阵上等价）。
+
+**P-8 取证**：`.intellijPlatform/localPlatformArtifacts/IU-262.9437.185` 全量 **345 个 xml** `grep -ril golden` **零命中**；正对照 mysql/greenplum 同接口命中（L14：0 是真 0）→ 平台 262 无 GoldenDB → 按计划做自注册四件套（第五对成对落位）。
+
+**写集外 known-red 2 处（本券不修，交收口/券 D）**：
+
+1. `PluginXmlStructureGuardTest.描述声明与代码对账`：`plugin.xml` 描述（第 49/65 行）声明「14 种数据库方言 / 14 database dialects」，代码实际 15——**plugin.xml 不在券 A 写集**，修法=两处数字 14→15，一行改动，收口阶段统一落。
+2. `DialectDocTableGuardTest`：文档站（兄弟仓 `mybatis-plus-sql-visualizer-docs`）的 wrapper-preview 分页表与 batch-operation UPSERT 表须补 GoldenDB 行（实现族=MySQL 分页形态 / ON DUPLICATE KEY UPDATE；goldendb 归一化键已由注册表自动进入 missing 集合）。本工作树无文档站兄弟目录（显式绿跳）；**主仓跑全量时会红**，券 D/文档车道同批补表。
+
+**not run 条款**：未跑全量（禁）；未跑 buildPlugin/verifyGate（EP 登记属大改动，构建校验留给集成阶段统一决定——本券已标注）；真机档位为空（P-1 未验证），矩阵 EXPLAIN/渲染套件真机验证全部留待 P-1 销案后。
 
 ### 7.2 券 B
 
@@ -654,12 +691,12 @@ object GoldenDbDialect : Dialect {
 | P | 状态 | 读数/结论 |
 |---|---|---|
 | P-1 真机实例 | **未验证** | 测试服务器 12 容器中无 GoldenDB；PDF 与资产无镜像信息 |
-| P-2 `oracleMode` | **部分实测**（默认 true 已由字节码确认）；语义**未验证** | 待真机对照实验 |
-| P-3 保留字来源 | **实测抽取**（三表 368/367/227 词，含断词噪声）；**落表未做** | 待逐词人工核对 |
+| P-2 `oracleMode` | **部分实测**（默认 true 已由字节码确认）；语义**未验证** | 待真机对照实验；GoldenDbDialect KDoc 已写明「驱动参数不参与推断」 |
+| P-3 保留字来源 | **销案（券 A）** | 三表并集 385−STORAGECLUSTER=**384 词**落表（`GOLDENDB_RESERVED`）；机械抽取与落表逐词对照 missing=0/extra=0；`_GDB_CN` 剔除；与 MYSQL_RESERVED 差集 147 词非空 |
 | P-4 upsert/分页 | **文档级实测**（p66/p73 逐字）；引擎**未验证** | 待真机 |
 | P-5 DELETE LIMIT | **文档级销案**（p274 文法含 `[ORDER BY][LIMIT]`、p276 可执行示例）；真机**未验证** | 券 A 取 `true`，真机复核「真删 1 行」 |
-| P-6 中文名 | **未取证** | 只加 `goldendb` 别名 |
+| P-6 中文名 | **销案（券 A）** | 「金篆」确证：p1 法律声明「金篆信科有限责任公司」全文 9 处 → MCP 别名加 `金篆`；「中兴」0 命中不加 |
 | P-7 驱动代理层 | **部分实测**（发现 `executeZteBatch` 等自研方法）；主路径**未验证** | 待真机 |
-| P-8 平台方言 | **未复核** | 待 grep `.intellijPlatform` |
-| P-9 EXPLAIN 档位 | **未取证** | 不登记 |
+| P-8 平台方言 | **销案（券 A）** | IU-262.9437.185 全量 345 xml `grep -il golden` 零命中（正对照 mysql/greenplum 命中）→ 平台无 → 自注册四件套落位（第五对成对，守卫绿） |
+| P-9 EXPLAIN 档位 | **销案（券 A）——诚实不接入** | p323-325 原文只有语法与 FORMAT=JSON/Oracle 选项、无任何输出形态示例 → `ExplainSupport` 落 template=null 条目（矩阵 EXPLAIN=false），真机读数到位后按档登记 |
 | P-10 架构文档副本 | **未核对** | 券 D 开工时 grep |
