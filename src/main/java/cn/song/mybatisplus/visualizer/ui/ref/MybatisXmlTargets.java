@@ -119,8 +119,11 @@ public final class MybatisXmlTargets {
         return matched;
     }
 
-    /** MyBatis 四类语句标签（{@code <mapper>} 直接子级；与 {@code XmlSqlGutterLineMarkerProvider} 同集合）。 */
-    static final Set<String> STATEMENT_TAGS = Set.of("select", "insert", "update", "delete");
+    /**
+     * MyBatis 四类语句标签（{@code <mapper>} 直接子级；与 {@code XmlSqlGutterLineMarkerProvider} 同集合）。
+     * master 侧为 companion 公共 val（跨包引用），Java 承载对齐 public。
+     */
+    public static final Set<String> STATEMENT_TAGS = Set.of("select", "insert", "update", "delete");
 
     /**
      * 解析 {@code ns.id} / 同文件 {@code id} 形态的标识引用 → 目标 {@code id} 属性值元素。
