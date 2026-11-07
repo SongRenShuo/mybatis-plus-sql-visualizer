@@ -446,9 +446,11 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
                 // 本链全量重建（onConsole 回调会重嵌新控制台）。
                 dropSharedConsole()
                 clearPrepared()
-            } else if (bindAction.action == ExecFileBinding.Action.REALIGN) {
+            } else if (bindAction.action == ExecFileBinding.Action.REALIGN && !realign.mapped) {
                 // T-ConsoleBind263 P1-5：写没落地 → 本链紧接着的 runner 枚举仍会被平台 forced 关联
                 // 短路成被钉住的源；在这里就地说明「实际目标 ≠ 请求目标」，别让用户以为换成功了。
+                // 只在**关联没写进去**时提示：仅 detach 失败（mapped=true）时关联已指向目标，
+                // 说「绑定仍指向别的源」是假话——那种情况由 realignExecBind 的日志交代。
                 LOG.warn(
                     "[T-ConsoleBind] realign NOT applied: strategy=${realign.strategy?.id ?: "none"}, " +
                         "expected=${realign.expectedId}, observed=${realign.observedId}, failure=${realign.failure}",
