@@ -288,3 +288,43 @@
 - 「文档长度 vs 桥已见行数」落差读数：需真控制台（headless 桩无平台 flush 管线），本轮未取；若未来动刀，取数路径 = `attachReplayGuard` 已持 doc 句柄 + `scanAll` 每拍 recordGauge（复用券 E 设施）。
 - 测试：探针接线用例已存在并反向验证过（券 E：`ConsoleSettleFlushTest` 探针样例落环断言 + 摘 key 恰红），本轮零新增生产代码 → 无新增测试面；桥族回归 37 例全绿（见 G2 读数）。
 - not run：真机侧账单复核（本机 headless 读数为代理读数，真机控制台输出线程竞争形态未测——量级结论 0.4% 单核对真机放大不敏感）；join-demo 压测复测（主控条款）。
+
+### 券 H：SenderLoop 排水读超时税（2026-11-07）
+
+- 分支：`t-sqllist-catchup-h`（工作树 `.worktrees/sqllist-catchup-h`，基线 = 集成 tip `207a03f5`），提交：`0d50931d`（修复 + 复现测试 + 反向，一笔含反向）。
+- 写集：`sub-projects/sql-visualizer-agent/.../transport/SenderLoop.java`（主循环步骤 3 + 常量 + KDoc）+ 新增测试 `SenderLoopDrainRateTest.java`（4 例）。
+
+**缺陷证据链**（主控真机六轮压测定位 + 本轮代码行号复核）：
+
+- `SenderLoop.java` 主循环步骤 1 尽出事件 `while (burst < 64 && pollEvent(slot, 0))` 每轮最多 64 条（原 ：285 行）；步骤 3 读入站帧是**带 SO_TIMEOUT 的阻塞读**（`socket.setSoTimeout(configReadTimeoutMs(...))`，默认心跳间隔下钳到 1s，原 ：254/:306 行，:299 上方注释自证「读超时（默认 1s）」）。
+- agent→IDE 方向平时**无入站流量**（CONFIG 仅会话初期一次，之后静默是常态）→ 每排满 64 条干等一个读超时 → 排水天花板 ≈64 条/秒。真机读数吻合：风暴生产 ~1700 语句/s、到达仅 ~74 条/s；队列（2048，F2b 聚合后）持续满 → 溢出丢弃（第三轮 1,402 条）→ 静默后尾巴按 64/s 慢排（用户反复报「已收事件还在涨」）。
+- 原 ：289-293 注释「反过来把读帧提到尽出之前，会让每次事件投递都多等一个读超时」——作者只优化了**首批 64 条**不等待，持续突发下**每一批都交税**未覆盖（本券闭合）。
+
+**修法**（外科手术，不重构）：burst 达尽出上限（新常量 `EVENT_BURST_MAX=64`）＝「队列很可能仍非空」——该形态的入站读改按 `in.available()>0` 探测：无入站数据**跳过本轮读帧**（零等待继续排水），有字节到店本轮立即读（CONFIG 不被排水饿死）；队列排空（burst<上限）才回长超时阻塞读。选择探测而非改短 SO_TIMEOUT：零系统调用成本、不动 socket 状态、`readInboundFrame` 的「完全无数据 vs 半截帧」鉴别逻辑原样保留。心跳判据（按真实流逝时间、睡眠不跨心跳时刻）、T-07 看门狗判据、停采短路、F2b 聚合语义、协议字节面**全部未触**。
+
+**排水速率前后对比**（复现测试读数，桩税 100ms＝真机 SO_TIMEOUT 1s 的 1/10 缩放，判据不赌墙钟——读超时税做成可数事件、采样点钉在第 512 条 EVENT 帧写出的同步点）：
+
+| 形态 | 第 512 条帧写出时读超时税 | 排水 512 条耗时 | 真机换算 |
+|---|---|---|---|
+| 修复前（红跑即摘分支实跑） | 7（每排 64 条付一税） | 726ms | ≈61 条/秒（与真机 ~64-74 条/s 吻合） |
+| 修复后 | 0 | 31ms | ≈23 倍提速（上限转为帧写速率/队列供给，量级覆盖风暴生产 1700 条/s） |
+
+**测试**（`SenderLoopDrainRateTest`，桩 Socket 走既有 `SocketDialer` 注入缝 + 桩流替换，4 例）：
+
+1. 主判据（先红后绿）：队列持续非空 + 入站静默 → 排水期间读超时税=0；且 512 条全数按序投出、拨号计数=1（probe 不得把会话搞断）；
+2. 静默期回归（约束 2 前半）：队列空时 CONFIG 仍走长超时阻塞路径即时处理（ACK 跨侧字面契约、状态生效）；
+3. 风暴期 CONFIG 到达即被处理（probe 路径 available()>0 立即转入阻塞读）且 500ms 短看门狗不误触发（configSeen 已置位）；
+4. 持续风暴从未收到 CONFIG → 看门狗仍按窗口触发停采（probe 跳读不绕过看门狗判据，停采前已有事件投出）。
+
+**反向验证（S2）**：红跑＝摘除修复分支的实跑（`expected:<0> but was:<7>`，判据恰对准缺陷站点）；其余 3 例为守卫/回归语义（修复前后同绿，钳住的是「probe 不得改变空闲/看门狗/CONFIG 语义」）。
+
+**测试夹具自身缺陷一并记录**：首轮 stop() 只 interrupt——退避睡眠缝是记录器（不真睡），中断→异常→退避→记录器立即返回→**立刻重连**成僵尸连接；先行用例的僵尸在后续用例的看门狗窗口内（拨号时读当前属性）触发 `setDisabledByWatchdog` 全局停采，风暴用例假红在 384/512。修法：停止＝stopped 标志 + 拨号缝拒绝 + 退避缝抛 InterruptedException（run() 捕获即 return），线程确定性退出（`join` 后断言 `!isAlive`）。
+
+**三条约束守卫证明**：
+- 心跳节拍：判据 `System.currentTimeMillis() - lastOutboundMs` 未触；probe 只改「本轮是否读帧」，心跳检查每轮照跑；`HeartbeatRhythmTest`（真 socket、累加计时形态必红）回归绿；
+- CONFIG 看门狗（T-07）语义：`configSeen`/`watchdogFired` 判据未触；守卫用例 3/4 钉「风暴期到达即处理 + 从未收到仍触发」双面；
+- `AgentProtocolSyncTest` 三约束：CMD 常量两侧同值 / 入站帧形态唯一性（`len<<8` 与 `cmd=readUnsignedByte` 各恰一处，probe 未新增同形语句）/ 心跳窗口 ≥3×间隔——IDE 侧实跑 4 例全绿（BUILD SUCCESSFUL，XML 判据数核对）。
+
+**定向读数**：`SenderLoopDrainRateTest` 4 例 0 failures（红→绿两轮读数见上表）；`:sql-visualizer-agent:test` 全量 **49 类 276 例 0 failures 0 errors 1 skipped**（skip 为既有预置条件用例，与本券无关；基线 270 例 + 本券 4 例 + 桩类计数口径差 2）。
+
+**not run**：真机压测复测（排水速率的真机端到端读数——需新 agent jar 注入宿主，归主控统一复测条款；本券速率对比以桩缩放换算交付）；IDE 侧全量门禁与 convention 守卫（券纪律，收口轮统一）；CHANGELOG 回填（主控合流补账）。
