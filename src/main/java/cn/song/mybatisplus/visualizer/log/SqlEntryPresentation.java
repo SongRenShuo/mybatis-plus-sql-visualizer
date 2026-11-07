@@ -34,7 +34,8 @@ public final class SqlEntryPresentation {
                 state.getLogTimestampFormat(),
                 state.getLogTimestampSource(),
                 state.getDataSourceBadgeDetail(),
-                state.getSlowQueryThresholdMs());
+                state.getSlowQueryThresholdMs(),
+                state.getShowMethodInLogList());
     }
 
     /**
@@ -53,6 +54,10 @@ public final class SqlEntryPresentation {
      * </ul>
      *
      * <p>{@code (影响行数)} 只在 DML 上有值；SELECT 不显示（不补空占位——那会让每行多出一段空白）。</p>
+     *
+     * <p>T-LogMethodName：来源段之后可再跟一段 {@code [类名#方法名]}（{@code showMethodInLogList} 门控，默认关）。
+     * 两段并排、各自独立——控制台通道的方法名属于 mapper 接口，与来源文件不是同一个类，
+     * 拼进同一片段会造出不存在的成员（详见 {@code SqlLogPanelKt.mapperStatementLabel} 与开发计划 §3.3）。</p>
      *
      * <p>券01（T-PerfSweep27-01）拆段：本函数保持原签名与输出序列（存量测试零改动），
      * 内部改为 {@link #headerStaticFragments} + {@link #headerBadgeFragments} +
@@ -111,10 +116,16 @@ public final class SqlEntryPresentation {
         return result;
     }
 
-    /** 来源段（券01 可缓存部分）：`[文件.java:行号]`，无源码位置为空列表。恒非选中态。 */
+    /**
+     * 来源段（券01 可缓存部分）：{@code [文件.java:行号]}，无源码位置为空列表。恒非选中态。
+     * T-LogMethodName：开关打开时在其后追加 {@code [类名#方法名]}（同用 {@link HeaderStaticCacheKey}，
+     * 开关切换即整段重算）。
+     */
     public static List<SqlTextFragment> headerSourceFragments(LogSqlEntry entry) {
-        kotlin.Pair<String, SimpleTextAttributes> source = SqlLogPanelKt.formatSourceFragment(entry, false);
-        return source != null ? List.of(new SqlTextFragment(source.getFirst(), source.getSecond())) : List.of();
+        List<SqlTextFragment> result = new ArrayList<>(2);
+        add(result, SqlLogPanelKt.formatSourceFragment(entry, false));
+        add(result, SqlLogPanelKt.formatMethodFragment(entry, false));
+        return result;
     }
 
     /**
@@ -171,6 +182,8 @@ public final class SqlEntryPresentation {
         }
         add(result, SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, selected));
         add(result, SqlLogPanelKt.formatSourceFragment(entry, selected));
+        // T-LogMethodName：与渲染器同一组合口径（来源在前、方法名在后），两处不得漂移
+        add(result, SqlLogPanelKt.formatMethodFragment(entry, selected));
         return result;
     }
 
