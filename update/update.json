@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.7-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.7-beta.2/mybatis-plus-sql-visualizer-2026.11.7-beta.2.zip",
-  "changeNotes": "运行期拼接的 SQL 支持自己填值，填完即可执行，预览与复制导出一致\n被括号包住的三元表达式能被正确识别，不再整段退化成普通运行时值\n注释里的问号不再被当成 JDBC 参数，参数行不再多出幻影占位\n可选片段填值不再重复静态前缀，也不会留下悬空的条件片段\n循环内的降级占位会显示循环体追加内容的摘要，而不是只说会重复\n新增开发者模式，构建号连点 7 次可检测预览版更新，不影响正式检查\n更新包尚未发布时不再抛出网络错误，改为友好提示并给发布页链接\n更新被拒时日志给出确定原因，2024.3 需重启、2025.3 免重启\n好用的话，欢迎到 Marketplace 页评分留言",
+  "version": "2026.11.8-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8-beta.1/mybatis-plus-sql-visualizer-2026.11.8-beta.1.zip",
+  "changeNotes": "日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-07",
   "sinceBuild": "243"
 }
