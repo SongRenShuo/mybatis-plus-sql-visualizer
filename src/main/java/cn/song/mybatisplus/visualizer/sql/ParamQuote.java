@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.sql;
 
+import cn.song.mybatisplus.visualizer.model.LikePosition;
+
 import java.util.Set;
 
 /**
@@ -43,5 +45,31 @@ public final class ParamQuote {
         int dot = fieldType.lastIndexOf('.');
         String simple = dot >= 0 ? fieldType.substring(dot + 1) : fieldType;
         return NUMERIC_TYPES.contains(simple) ? Boolean.FALSE : Boolean.TRUE;
+    }
+
+    /**
+     * 字段类型是否日期族（T-DateLiteralBackfill）：与 {@link SqlDateLiteral#isTemporalType} 同一张类型表，
+     * 供各模型链构造 {@code ParamHint.temporal}。
+     */
+    public static boolean isTemporal(String fieldType) {
+        return SqlDateLiteral.isTemporalType(fieldType);
+    }
+
+    /**
+     * 构造回填提示（引号 + 日期族标记一次算出）：各模型链的 {@code ParamHint(quote = ParamQuote.decide(...))}
+     * 统一改走本工厂，避免「引号带了、temporal 漏了」的口径分叉。
+     */
+    public static ParamHint hint(String fieldType, LikePosition likePosition, boolean inList) {
+        return new ParamHint(decide(fieldType), likePosition, inList, isTemporal(fieldType));
+    }
+
+    /** Kotlin 默认参数（inList=false）等价重载。 */
+    public static ParamHint hint(String fieldType, LikePosition likePosition) {
+        return hint(fieldType, likePosition, false);
+    }
+
+    /** Kotlin 默认参数（likePosition=null, inList=false）等价重载。 */
+    public static ParamHint hint(String fieldType) {
+        return hint(fieldType, null, false);
     }
 }
