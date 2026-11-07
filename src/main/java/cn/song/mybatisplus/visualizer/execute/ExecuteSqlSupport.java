@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.execute;
 
+import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter;
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot;
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
@@ -9,6 +12,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 执行 SQL 支持（M17）：SQL 预览面板「执行 SQL」按钮的 core 入口。
@@ -77,6 +82,56 @@ public final class ExecuteSqlSupport {
             // T-Perf-01：反射加载失败静默降级（LOG.warn 记录详情，不弹模态框——调用方 onError 已在面板内显示错误）
             LOG.warn("[M36] launcher execute reflection FAILED: " + error.getMessage(), error);
         }
+    }
+
+    /**
+     * T-RuntimeSlotFill 券 B：把运行期占位填进待执行文本（执行前的<b>唯一</b>回填口）。
+     *
+     * <p>执行链与复制/分享/导出链共用 {@link ExecutableSqlFormatter}，保证「预览里看到的」与
+     * 「真正执行的」是同一份文本。占位为空时逐字节原样返回。</p>
+     *
+     * @param sql        当前编辑器 SQL（参数已回填、含运行期占位注释）
+     * @param slots      运行期占位表
+     * @param slotValues 占位值（空表 = 占位原样保留，执行会失败——这是既有的「不替你猜」口径）
+     * @param dialectName 当前方言名（布尔字面量判定）
+     */
+    public static String renderForExecution(
+            @NotNull String sql,
+            @NotNull List<RuntimeSlot> slots,
+            @NotNull RuntimeSlotValues slotValues,
+            @Nullable String dialectName) {
+        // Kotlin 具名实参 + 默认参（hints/namedHints 缺省空表）→ 位置实参全参形态
+        return ExecutableSqlFormatter.format(sql, List.of(), Map.of(), List.of(), slots, slotValues, Map.of(), dialectName);
+    }
+
+    /** Kotlin 默认参等价重载：slots/slotValues/dialectName 缺省。 */
+    public static String renderForExecution(@NotNull String sql) {
+        return renderForExecution(sql, List.of(), RuntimeSlotValues.EMPTY, null);
+    }
+
+    /**
+     * 带运行期占位的执行入口：先回填占位，其余与 {@link #execute} 完全一致。
+     *
+     * <p>单独开一个名字而不是给 {@link #execute} 加重载——既有调用点（面板、测试）签名不变，
+     * 也就不会出现重载解析歧义。</p>
+     */
+    public static void executeWithRuntimeSlots(
+            @NotNull Project project,
+            @NotNull String sql,
+            @NotNull List<RuntimeSlot> slots,
+            @NotNull RuntimeSlotValues slotValues,
+            @Nullable String dialectName,
+            @Nullable Runnable onClosePanel) {
+        execute(project, renderForExecution(sql, slots, slotValues, dialectName), onClosePanel);
+    }
+
+    /** Kotlin 默认参等价重载：dialectName/onClosePanel 缺省。 */
+    public static void executeWithRuntimeSlots(
+            @NotNull Project project,
+            @NotNull String sql,
+            @NotNull List<RuntimeSlot> slots,
+            @NotNull RuntimeSlotValues slotValues) {
+        executeWithRuntimeSlots(project, sql, slots, slotValues, null, null);
     }
 
     /**
