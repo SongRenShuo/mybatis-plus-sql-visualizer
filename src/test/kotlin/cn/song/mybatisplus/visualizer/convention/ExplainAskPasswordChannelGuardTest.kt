@@ -337,6 +337,12 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // 准备链此刻尚无已 attach 会话 → NoSuchMethodException 被吞成空列表 → runners=0 →
         // 「没有与该 SQL 方言匹配的已配置数据源」红条。纪律：准备链枚举一律走 attach 版
         // （此前一直正常、能弹原生列表的形态）；即便将来启用 switch 版，**失败必须回退 attach**。
+        //（车道5 判读收口：sourceOf 按「execute/DataSourceSelector」子串模糊匹配，拼接 Selector/
+        //  SelectorResults/SelectorRunners 多文件——switch 版实现随 8f4492d5 合并落在
+        //  DataSourceSelectorRunners.kt（四参反射 Class.forName(SESSION_CLASS) + 反射失败
+        //  `?: return attach()` 回退均在场），且 insight 侧 eaf020c2 已把「switched 空集回退」
+        //  等价改写为 `if (switched.isEmpty()) attach()`。守卫原字面 `switched.ifEmpty { attach() }`
+        //  前提过期致红，本断言接受两种等价回退写法——纪律语义不变。）
         assertTrue(
             "准备链枚举须直接走 attach 版（W8-hotfix）",
             results.contains("getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)"),
@@ -344,7 +350,8 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         assertTrue(
             "枚举实现须保留 getSwitchDataSourceRunners 的真实四参签名并失败回退 attach（W8-hotfix）",
             selector.contains("Class.forName(SESSION_CLASS)") &&
-                selector.contains("switched.ifEmpty { attach() }"),
+                (selector.contains("switched.ifEmpty { attach() }") ||
+                    selector.contains("if (switched.isEmpty()) attach()")),
         )
     }
 

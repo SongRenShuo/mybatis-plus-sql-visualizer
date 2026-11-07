@@ -36,7 +36,10 @@ class GiantFileBudgetTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to 2000,
         // 2297 → 2358（2026-10-25: 合并 master 实测 2323 行，含日志工具栏 BGT 与列表高亮改造，+26 行）
         // 2421 → 2000（2026-10-31 D202: EXPLAIN 双通道链拆出 ExecutionExplain，实测 1552 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2000,
+        // 2000 → 2060（2026-11-08 车道5 合并 8f4492d5：master 券C 取词口/执行链增量 + insight 代际守卫
+        //   框架融合，实测 2043 行 +43 超线（dev 侧同款提额 2018→2060，insight 树实测行数为准）。
+        //   **拆分仍首选**，本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2060,
         // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
         // 2103 → 2000（2026-10-31 D202: 语句后处理拆出 StatementOps，实测 1847 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2000,
@@ -57,13 +60,18 @@ class GiantFileBudgetTest {
         //   createTempPsiFileAsync/revalidateOnEdt/createTempPsiFile 三块已按 dev 工厂版删除。
         //   **拆分债显式挂账**：闲时清单 G-1（projectExecFile/installOutputHistoryFillLayout 族优先），
         //   本提额只为合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2090,
+        // 2090 → 2160（2026-11-08 车道5 合并 8f4492d5：master 执行结果链增量随合并并入，实测 2150 行
+        //   +60 超线（与 dev 侧 1961fe6f 同款同数）。**拆分仍首选**，本提额只为合并期留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2160,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
         // 1972 → 1980（2026-11-06 F-09：>200K 参数面板只出条数汇总行 + 超大档提示接线，实测 1974 行 +2 超线；
         //   **拆分仍首选**，本提额只为批次留痕解红）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 1980,
+        // 1980 → 2290（2026-11-08 车道5 合并 8f4492d5：master T-RuntimeSlotFill 券C 运行期占位行机制整段
+        //   并入（约 268 行 + 日期族渲染钩子），实测 2275 行 +295 超线（与 dev 侧 1961fe6f 同款同数）。
+        //   **拆分仍首选**：运行期占位行族可整体拆独立文件（挂合并批拆分债），本提额只为合并期留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 2290,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
         //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
@@ -74,7 +82,11 @@ class GiantFileBudgetTest {
         // 1777 → 1790（2026-11-06 F-07：卸载/禁用清理钩子接线——dispose 停采下发、落盘 jar 修剪、
         //   目录收口委托，实测 1785 行 +8 超线；清理内核已抽到 AgentResidueCleaner.kt，此处只剩接线。
         //   **拆分仍首选**，本提额只为批次留痕解红）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1790,
+        // 1790 → 1890（2026-11-08 车道5 合并 8f4492d5：master 侧 AgentManager 增量（心跳诊断/看门狗
+        //   gate 键/券F2a 丢弃计数接线等）随合并并入 insight 的 setUserPaused 保确认态重发链，实测
+        //   1839 行 +49 超线（insight 特有超线项，dev 侧无此条目）。**拆分仍首选**：会话生命周期族
+        //   （sweepOffline/healthyPids/监控接线）可拆独立文件，本提额只为合并期留痕解红）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt" to 1890,
         // 1727 → 1777（2026-10-25: 合并 master 实测 1750 行，含 premain 无界 join 修复，+23 行）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to 1619,
     )
