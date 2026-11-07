@@ -5,7 +5,7 @@
 测试 demo 仍是独立仓库，插件仓库不复制它的源码：
 
 - 仓库：<https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo>（MIT）
-- 本插件版本对应的快照：见 [`demo-revision.txt`](demo-revision.txt)（当前 `74cc257`，2026-10-16）
+- 本插件版本对应的快照：见 [`demo-revision.txt`](demo-revision.txt)（当前 `fcb1faf`，2026-11-07——GoldenDB 方言 demo 用例与连接 profile 随 T-GoldenDbDemoCases 进快照；`db/*.sql` 仍为 `74cc257` 期数据转储，GoldenDB 用例走端点连接不经本地转储）
 - 默认位置：插件仓库的**兄弟目录** `../mybatis-plus-sql-visualizer-demo`（与 `buildSrc`、测试类的默认约定一致）
 
 ## 先看结论：哪些测试需要什么
