@@ -27,7 +27,9 @@ run-name: 推送测试 · ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   push:
-    branches: [master]
+    # T-CiBranchFanout（2026-11-08 车道 1）：dev 分支推送也跑全量推送测试（闲时任务 offpeak-6a4afce2）。
+    # workflow 文件取自被推分支自身的树，dev 上的这份副本与本列表共同生效；master 那份仍是 [master]。
+    branches: [master, dev]
 
 concurrency:
   group: plugin-ci-push-${{ github.ref_name }}
@@ -35,12 +37,74 @@ concurrency:
 
 permissions:
   contents: read
+  # T-CiNightlyNudge（2026-11-06）：夜间轮的兜底派发要调 Actions API
+  actions: write
 
 jobs:
+  # T-CiNightlyNudge（2026-11-06 实测背景）：GitHub 的 `schedule` 是 best-effort——
+  # 2026-11-05 的 `0 18 * * *`（北京 02:00）到 20:14Z 仍未触发，晚了 2 小时 14 分，
+  # 期间 githubstatus 全绿、default_branch=master、workflow state=active、仓库无归档，
+  # 历史上 9 轮夜间全是 workflow_dispatch（cron 从上线起一次没跑过）。
+  # 结论：不能把「每晚自动」押在 GitHub 定时器上。这里加一道自愈：**本轮 cron 周期内还没有
+  # 夜间轮就派发一次**（周期起点＝最近一次应触发的 18:00Z，不是 UTC 日历日）。
+  # 判据与夜间自身的 changes 闸门同源——夜间只在「前 24 小时有代码提交」时真跑，而这条 job 只在
+  # push 到 master 时执行，所以「有 push 的那天」正好是夜间该跑的那天。
+  # 幂等：先查本轮周期内是否已有 nightly 轮（任何 event），有就跳过，避免和迟到的 schedule 撞成两轮。
+  # ⚠️首版按「UTC 日历日」判，被白天手动跑的那轮（run#9，14:11Z）吃掉了——job 绿了却什么都没派发。
+  nightly-nudge:
+    # T-CiBranchFanout（2026-11-08 车道 1）：夜间兜底是 master 专属语义（夜间轮只跑默认分支），
+    # 本 workflow 扩到 dev 后，非 master 推送一律不派发夜间轮，保持上方「只在 push 到 master 时执行」的口径。
+    if: github.ref_name == 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 本轮 cron 周期内没有夜间轮就派发一次
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # 兜底动作本身不该把推送轮打红。
+          # ⚠️GitHub 对 `run:` 的包装是 `bash -e {0}`（日志里可见 shell: /usr/bin/bash -e {0}），
+          # 所以**不能用 pipefail，也不能让管道里任何一段返回非零**——run#1 就是 grep 没匹配到
+          # （本轮 0 轮夜间轮＝正常情况）退出 1，被 -e 直接中止，step 报「Process completed with exit code 1」。
+          set -u
+          # 判据＝**本轮 cron 周期**，不是「日历日」：cron 是 18:00Z，所以「最近一次应触发时刻」
+          # 是今天的 18:00Z；若现在还没到 18:00Z，则是昨天的 18:00Z。这之后有过夜间轮就不派发。
+          # 2026-11-06 首次落地的坑：按「UTC 日历日」判，白天手动跑的那轮（run#9，14:11Z）把
+          # 兜底吃掉了——job 绿了却什么都没派发。按 cron 周期判才符合「每晚一轮」的意图。
+          now=$(date -u +%s)
+          due=$(date -u -d "today 18:00" +%s)
+          if [ "$now" -lt "$due" ]; then due=$(date -u -d "yesterday 18:00" +%s); fi
+          due_iso=$(date -u -d "@$due" +%Y-%m-%dT%H:%M:%SZ)
+          echo "本轮 cron 应触发时刻：$due_iso"
+          # grep -c 在 0 命中时退出码为 1（正常路径！），用 || true 保住 stdout 的 "0"
+          count=$(gh run list --repo "$REPO" --workflow nightly-full.yml --limit 20 \
+            --created ">=$due_iso" --json databaseId 2>/dev/null | grep -c '"databaseId"' || true)
+          count=$(printf '%s' "$count" | tr -d ' ')
+          if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+            echo '::warning::查询本轮夜间轮失败（gh 调用异常），本轮跳过兜底派发'
+            exit 0
+          fi
+          echo "本轮周期内已有夜间轮 $count 个"
+          if [ "$count" -gt 0 ]; then
+            echo '::notice::本轮周期已有夜间轮，跳过兜底派发'
+            exit 0
+          fi
+          if gh workflow run nightly-full.yml --repo "$REPO" 2>/dev/null; then
+            echo '::notice::已兜底派发夜间全量（GitHub schedule 未在应触发时刻出现）'
+          else
+            echo '::warning::兜底派发失败（workflow 不在默认分支或 API 拒绝），夜间仍依赖 schedule'
+          fi
+
   test:
     strategy:
       fail-fast: false
       matrix:
+        # T-CiShard6 A/B 结论（2026-11-05 晚 run#23 实测）：**6 片不合算，退回 5 片**。
+        # 6 片的分片步骤 455~492s，5 片基线 433~495s——没有变化；而每条腿都要重新编译
+        # （约 2.4 分钟固定成本）与恢复缓存（89~219s），多一条腿只多烧 runner 时间不小墙钟。
+        # 墙钟上 test(5) 反而 11.8 分钟（5 片基线 10.2~10.5）。结论与 T-TestPerf5 当年 6 片回劣同向。
+        # 想再试先读 dev-support/test-shard-weights.tsv 的实际分布，别按「除以片数」推。
         shard: ['1', '2', '3', '4', '5']
     runs-on: windows-latest
     timeout-minutes: 40
@@ -115,7 +179,14 @@ jobs:
   # 漏了这条 job 就是「4000+ 例在 CI 上没人跑」且总数看起来只少一点。
   # 与分片同口径：同样准备 demo、同样 run-gradle-retry 包装、同样失败诊断输出；
   # -PtestShardExcludeClasses 照传——testFast 与分片同源尊重该清单（被排除的纯逻辑类不能从这条腿溜回来）。
+  # T-CiFastSplit（2026-11-05 晚）：再拆两片。run#21/#22 实测这条腿 601s 是整轮关键路径（分片
+  # 433~495s），拆开后每片约 300s，墙钟回到由分片决定。切分按入库权重画像做 LPT 装箱
+  # （buildSrc 的 fastBucketSliceCount/fastBucketSlice），两片并集=整桶，配置期 require 兜底。
   fast:
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: ['1', '2']
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -155,11 +226,12 @@ jobs:
       - name: 准备测试 demo
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
 
-      - name: 纯逻辑快桶
+      - name: 纯逻辑快桶 ${{ matrix.slice }}/2
         timeout-minutes: 30
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":testFast -PgifRecord=false --console=plain
+          -PfastBucketSliceCount=2 -PfastBucketSlice=${{ matrix.slice }}
           -PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
 
       - name: 失败诊断输出（断言消息打到任务日志）
