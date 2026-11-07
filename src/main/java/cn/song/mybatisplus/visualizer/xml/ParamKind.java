@@ -33,8 +33,11 @@ public enum ParamKind {
      * 派生引号视图（T-PT-01）：NUMBER 裸渲染、其余恒引号——与升级前
      * {@code cn.song.mybatisplus.visualizer.sql.ParamQuote.decide} 的布尔通道逐值等价。
      *
-     * <p>显式定案：TEMPORAL 走引号档（日期字面量在 SQL 中须引号包裹），不做日期特判——
-     * 升级前 {@code LocalDate} 即落引号档，本次只把该行为从「未命中数值集」升格为显式规则。</p>
+     * <p>TEMPORAL 的<b>最终字面量</b>由 T-DateLiteralBackfill 定案：不再只包引号，而是由
+     * {@code cn.song.mybatisplus.visualizer.sql.SqlDateLiteral} 产出 ANSI 类型字面量
+     * （{@code DATE '…'} / {@code TIMESTAMP '…'}；形态不匹配才回落引号）。{@link #isQuoteRequired()}
+     * 仍是 TEMPORAL 的<b>回退</b>口径（{@code ParamHint.quote}），temporal 标记单独走
+     * {@code ParamHint.temporal}。</p>
      */
     public boolean isQuoteRequired() {
         return this != NUMBER;
