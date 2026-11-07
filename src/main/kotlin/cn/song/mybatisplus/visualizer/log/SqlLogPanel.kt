@@ -1678,6 +1678,14 @@ class SqlLogPanel(
     }
 
     /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
+     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     */
+    private val catchUpBadgeState = CatchUpBadgeState()
+
+    /**
      * R53：双通道捕获状态栏刷新（EDT，挂在诊断定时器上 2s 无锁轮询）。
      * 文案由纯函数 [captureStatusLineText] 产出（V80①：取数全为只读内存态）；
      * 非捕捉态整条面板隐藏（只清文案会留下分隔符与空白高度）。
@@ -1700,10 +1708,15 @@ class SqlLogPanel(
                         // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
                         unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
                             .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
+                        // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
+                        catchUpBehind = catchUpBadgeState
+                            .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),
                     ),
                 )
             }.getOrNull()
         } else {
+            // 非捕捉态：追赶节流复位（下次捕捉从干净态起算）
+            catchUpBadgeState.reset()
             null
         }
         if (texts == null) {
@@ -1865,6 +1878,16 @@ class SqlLogPanel(
         // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
         // 量不再随 logMaxCount 线性放大。
         if (!flushRebuildChainSync()) return
+        // T-SqlListCatchup 券D：全拍耗时打点（补链之后 → diff 收尾，即「真正做事的一拍」完整耗时）。
+        // 挂在补链之外：补完让路的空拍（return false）不算刷新拍，不污染分布。分位读数走
+        // LogPerfProbe.sampleStats("LogPanel.refreshList")，≥100ms 的拍另有阈值 INFO（既有呈现）。
+        LogPerfProbe.measure("LogPanel.refreshList", { "visible=${listModel.size()}" }) {
+            refreshListBeat(gen)
+        }
+    }
+
+    /** 券D 拆出：refreshList 的实际刷新拍体（[refreshList] 负责补链门 + 全拍打点，本函数做事）。 */
+    private fun refreshListBeat(gen: Long) {
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }

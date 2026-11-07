@@ -24,9 +24,10 @@ class CaptureStatusBarTest {
         agentPaused: Boolean = false,
         agentEventsReceived: Long = 3L,
         unregistered: List<String> = emptyList(),
+        catchUpBehind: Int = 0,
     ) = CaptureStatusLine(
         capturing, consolesAttached, linesSeen, agentStatus, agentLivePids, agentPaused, agentEventsReceived,
-        unregistered,
+        unregistered, catchUpBehind,
     )
 
     @Test
@@ -106,5 +107,76 @@ class CaptureStatusBarTest {
             line(agentStatus = null, unregistered = listOf("a.b.C")),
         )!!
         assertEquals("增强未开启时无 attach 事实可报", "增强：未开启", agent)
+    }
+
+    // ---------- T-SqlListCatchup 券 D：追赶读数落状态栏 ----------
+
+    /**
+     * 券 D 守卫：落后数 >0 时控制台段必须带出「追赶中：落后 N 条」。
+     * 反向验证：摘掉 [captureStatusLineText] 里的 catchUpBehind 拼接，本用例必须红。
+     */
+    @Test
+    fun test追赶读数大于零时挂控制台段尾() {
+        val (console, _) = captureStatusLineText(line(catchUpBehind = 37))!!
+        assertTrue("必须明示追赶中：$console", console.contains("追赶中"))
+        assertTrue("必须带出落后条数 37：$console", console.contains("37"))
+        assertTrue("必须保留既有控制台叙事：$console", console.contains("控制台"))
+    }
+
+    @Test
+    fun test追赶读数为零时不挂段() {
+        val (console, _) = captureStatusLineText(line(catchUpBehind = 0))!!
+        assertFalse("追平态不得出现追赶读数：$console", console.contains("追赶中"))
+    }
+
+    @Test
+    fun test默认无追赶读数_既有文案不变() {
+        val (console, _) = captureStatusLineText(line())!!
+        assertFalse("默认构造（catchUpBehind=0）不得出现追赶读数：$console", console.contains("追赶中"))
+    }
+
+    // ---------- T-SqlListCatchup 券 D：追赶徽章一拍节流状态机（防闪烁） ----------
+
+    private fun beats(vararg behinds: Int): List<Int> {
+        val st = CatchUpBadgeState()
+        return behinds.map { st.onNextBeat(it) }
+    }
+
+    @Test
+    fun test节流_升起立即显示() {
+        assertEquals("落后 >0 第一拍立即显示（升起不等拍）", listOf(5), beats(5))
+    }
+
+    @Test
+    fun test节流_追平持有一拍后消失() {
+        // 5 → 0 → 0：第一拍显示 5；归零第一拍持有 5（=0 持续一拍）；归零第二拍消失
+        assertEquals(listOf(5, 5, 0), beats(5, 0, 0))
+    }
+
+    @Test
+    fun test节流_短暂归零又升起不闪烁() {
+        // 5 → 0 → 7：持有拍吸收归零抖动，续显新数——全程无 0（不熄灭）
+        assertEquals(listOf(5, 5, 7), beats(5, 0, 7))
+    }
+
+    @Test
+    fun test节流_持续落后每拍透传最新读数() {
+        assertEquals("风暴期每拍显示当下落后数", listOf(3, 12, 9, 1), beats(3, 12, 9, 1))
+    }
+
+    @Test
+    fun test节流_从零起步的孤立抖动不升起() {
+        // 从未显示过：孤立一个 0 前后无落后 → 恒隐藏（持有语义只在「已显示」后生效）
+        assertEquals(listOf(0, 0, 0), beats(0, 0, 0))
+    }
+
+    @Test
+    fun test节流_reset后从干净态起算() {
+        val st = CatchUpBadgeState()
+        assertEquals(5, st.onNextBeat(5))
+        st.reset()
+        // reset 后第一拍归零不再持有（lastShown 已清）——非捕捉态复位语义
+        assertEquals("reset 后归零拍不持有旧读数", 0, st.onNextBeat(0))
+        assertEquals("reset 后再升起立即显示", 8, st.onNextBeat(8))
     }
 }

@@ -156,6 +156,52 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-SqlListCatchup 券 D：追赶读数接线守卫——buffer 节流窗积压（pendingNotifyCount>0）经
+     * [SqlLogPanel.syncCaptureStatusBar] 驱动「追赶中：落后 N 条」上控制台段；追平（clear 复位
+     * pending=0）持有一拍后消失。不新开轮询：驱动拍与状态栏既有刷新拍同源（R53 的 2s 诊断定时器
+     * + refreshList→syncDiagnostics 链）。
+     */
+    fun testTSqlListCatchupD_追赶读数出现与追平消失() {
+        manager.setCapturingForTest(true)
+        manager.entries.paused = false
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val (console, _) = panel.statusBarLabelsForTest()
+            // 基线：无积压不出现
+            panel.syncStatusBarForTest()
+            assertFalse("无积压不得出现追赶读数：${console!!.text}", console.text.contains("追赶中"))
+
+            // 快速灌 3 条：首条即时通知清零，后两条落节流窗（200ms 窗内）→ pendingNotifyCount>0
+            repeat(3) { i ->
+                manager.entries.addEntry(
+                    LogSqlEntry(
+                        rawSql = "SELECT $i FROM catchup_t",
+                        restoredSql = "SELECT $i FROM catchup_t",
+                        params = emptyList(),
+                        timestamp = i.toLong() + 1,
+                    ),
+                )
+            }
+            waitForEdt()
+            panel.syncStatusBarForTest()
+            assertTrue(
+                "节流积压期追赶读数应出现：${console.text}",
+                console.text.contains("追赶中"),
+            )
+
+            // 追平：clear 复位 pending=0（buffer 侧悬挂余量作废）→ 持有拍后消失
+            manager.entries.clear()
+            waitForEdt()
+            panel.syncStatusBarForTest()
+            panel.syncStatusBarForTest()
+            assertFalse("追平后追赶读数应消失：${console.text}", console.text.contains("追赶中"))
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test注入耗时信息_排序方式选择器保持可见() {
         val panel = SqlLogPanel(project, manager)
         try {
