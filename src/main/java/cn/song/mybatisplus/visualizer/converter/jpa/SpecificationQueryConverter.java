@@ -707,7 +707,9 @@ public final class SpecificationQueryConverter {
         if (args.length < 2) return rawCondition(call);
         ColumnRef column = columnRef(args[0], lc);
         if (column == null) return rawCondition(call);
-        SqlValue value = evaluateValue(args[1], lc, ParamQuote.decide(fieldTypeOf(args[0], lc)));
+        String fieldType = fieldTypeOf(args[0], lc);
+        SqlValue value = evaluateValue(args[1], lc, ParamQuote.decide(fieldType),
+                ParamQuote.isTemporal(fieldType));
         return new Condition.Simple(column, op, value, null);
     }
 
@@ -757,7 +759,10 @@ public final class SpecificationQueryConverter {
         if (args.length < 3) return rawCondition(call);
         ColumnRef column = columnRef(args[0], lc);
         if (column == null) return rawCondition(call);
-        return new Condition.Between(column, false, evaluateValue(args[1], lc), evaluateValue(args[2], lc), null);
+        boolean temporal = ParamQuote.isTemporal(fieldTypeOf(args[0], lc));
+        return new Condition.Between(column, false,
+                evaluateValue(args[1], lc, null, temporal),
+                evaluateValue(args[2], lc, null, temporal), null);
     }
 
     /** cb.in(root.get("x"), v1, v2) / cb.in(x).value(v).value(v)。 */
@@ -837,12 +842,17 @@ public final class SpecificationQueryConverter {
         return new ColumnRef(columnName);
     }
 
-    /** 值表达式求值：字面量/可追踪变量内联；运行时值 `?` 占位 + 参数行登记。 */
+    /** 值表达式求值：字面量/可追踪变量内联；运行时值 {@code ?} 占位 + 参数行登记。 */
     private static SqlValue evaluateValue(PsiExpression expr, LambdaContext lc) {
         return evaluateValue(expr, lc, null);
     }
 
     private static SqlValue evaluateValue(PsiExpression expr, LambdaContext lc, Boolean quoteHint) {
+        return evaluateValue(expr, lc, quoteHint, false);
+    }
+
+    private static SqlValue evaluateValue(PsiExpression expr, LambdaContext lc, Boolean quoteHint,
+                                          boolean temporal) {
         if (expr == null) return new SqlValue.Placeholder("?");
         SqlValue value = lc.ctx.resolveVariables
                 ? ExpressionEvaluator.evaluate(expr)
@@ -851,7 +861,7 @@ public final class SpecificationQueryConverter {
         if (value instanceof SqlValue.Placeholder) {
             String text = expr.getText();
             String source = text != null && !text.isBlank() ? text : "?";
-            lc.ctx.addParam(source, new ParamHint(quoteHint));
+            lc.ctx.addParam(source, new ParamHint(quoteHint, null, false, temporal));
             return new SqlValue.Placeholder(source);
         }
         return value;
