@@ -89,12 +89,10 @@ public final class ChooseDataSourceTakeover {
             this.original = original;
             // 工具栏按钮在**构建时**读模板呈现：
             //  - `setPerformGroup(true)` 是平台把「组」渲染成「图标+文案」按钮的开关（原生 update 里也设它）；
-            //  - `setPopup(false)`：弹层由本类 `actionPerformed` 自己弹，不需要平台把它当 popup 组
-            //    （popup 组在工具栏里被渲染成「图标+箭头」，文案永远不显示——真机 2026-11-02 现象：
-            //    只有图标、悬停才有名字）。
             // master 侧 runCatching 降级：呈现兜底失败不阻断接管（结构性决策，勿当缺陷加日志/重抛）。
+            // 2026-11-03 回退：`isPopup = false` 会让平台按「普通动作」渲染，实测把控制台 header
+            // 的工具栏搞坏（连工具栏都不显示）。恢复 popup 组（图标+箭头），文案问题另解。
             try {
-                setPopup(false);
                 getTemplatePresentation().setPerformGroup(true);
                 getTemplatePresentation().setText(original.getTemplateText() != null ? original.getTemplateText() : "", false);
                 Icon icon = original.getTemplatePresentation().getIcon();
@@ -103,6 +101,62 @@ public final class ChooseDataSourceTakeover {
                 }
             } catch (Throwable ignored) {
             }
+        }
+
+        /**
+         * T-NativeSwitchTakeover：工具栏「图标 + 数据源名」的开关。
+         *
+         * <p>平台在 {@code AnAction.createTemplatePresentation()} 里按本方法写 {@code SHOW_TEXT_IN_TOOLBAR}
+         * 客户端属性，{@code ActionToolbarImpl.createToolbarButton()} 再据此选
+         * {@code ActionButtonWithText} 还是 {@code ActionButton}（243 平台 {@code app-client.jar} 字节码实证）。
+         * 原生 {@code ChooseDataSourceAction.displayTextInToolbar()} 返回 <b>true</b>（javap 实证），
+         * 接管组默认继承 {@code AnAction} 的 false → 工具栏退化成纯图标、文案只进 tooltip
+         * （真机 2026-11-03 现象）。</p>
+         *
+         * <p><b>不能用 {@code isPopup=false} 换文案</b>：非 popup 组在工具栏里会把子项摊平成一行按钮，
+         * 实测把控制台 header 整条工具栏挤没（{@code 31d6db38} 已回退）。文案的正确开关只有本方法。</p>
+         *
+         * <p>覆写里不读 {@code original}：本方法在 {@code AnAction} 构造期（{@code createTemplatePresentation}）就会被调用，
+         * 此时构造参数属性可能尚未赋值——恒 true 与原生返回值一致，且无初始化顺序风险。</p>
+         */
+        @Override
+        public boolean displayTextInToolbar() {
+            return true;
+        }
+
+        /** 与 {@link #displayTextInToolbar} 同源：原生未覆写（默认 false），此处保持默认。 */
+        @Override
+        public boolean useSmallerFontForTextInToolbar() {
+            return false;
+        }
+
+        /**
+         * T-ThreadFix A：<b>update 必须在 BGT 执行</b>——本组把呈现权委托给原生
+         * {@code ChooseDataSourceAction.update}，而它内部走 {@code getClientPsiFile(e)} 读 {@code PSI_FILE}。
+         *
+         * <p>缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」）：{@code embedConsole} 把控制台组件挂进
+         * 可见层级 → 原生 header 的工具栏立刻刷新 → 本组 update 在 EDT 被调用 → 原生 update 读 PSI：</p>
+         * <pre>
+         * SEVERE - PreCachedDataContext - 'psi.File' is requested on EDT by
+         *   ChooseDataSourceTakeoverGroup#presentation@EditorToolbar
+         *   at ChooseDataSourceAction.getClientPsiFile → getContext → update
+         * </pre>
+         * <p>同一条链还叠 9 条 {@code SlowOperations}（{@code PsiManager.findFile} → {@code FileManagerImpl.findDirectory}
+         * → {@code ProjectFileIndexImpl.isUnderIgnored} → {@code WorkspaceFileIndexDataImpl.ensureIsUpToDate}）。</p>
+         *
+         * <p>为什么必须<b>显式</b>声明：{@code AnAction.getActionUpdateThread()} 默认实现是「实现
+         * {@code UpdateInBackground} 且为 true → BGT；{@code ActionClassMetaData.isDefaultUpdate} 为 true → BGT；
+         * 否则 EDT」，而 {@code isDefaultUpdate} 判的是「重写 {@code update()} 的类是不是 {@code AnAction} 本身」——
+         * 本类覆写了 {@code update()} 与 {@code displayTextInToolbar()}，默认落 EDT。<b>原生
+         * {@code ChooseDataSourceAction} 自己 javap 实证返回 {@code ActionUpdateThread.BGT}</b>，即它的 update 本就
+         * 按 BGT 设计（PSI 读走平台预缓存 DataContext），本包装组跟随即可。</p>
+         *
+         * <p>约束：update 体内只允许「读状态 + 写 {@code e.presentation}/模板 Presentation」，不得触碰
+         * Swing 组件、文档或 EDT-only API。</p>
+         */
+        @Override
+        public com.intellij.openapi.actionSystem.ActionUpdateThread getActionUpdateThread() {
+            return com.intellij.openapi.actionSystem.ActionUpdateThread.BGT;
         }
 
         /**
@@ -230,6 +284,14 @@ public final class ChooseDataSourceTakeover {
 
         /** 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。 */
         @Override
+        /**
+         * 展示形态（图标/文案/可用性）交给原生动作，并把结果镜像进模板（工具栏按钮读模板）。
+         *
+         * <p>T-ThreadFix A：本方法现在<b>跑在 BGT</b>（见 {@link #getActionUpdateThread}）。因此体内只做
+         * {@code Presentation} 层面的读写：{@code original.update(e)} 的 PSI 读取走平台预缓存 DataContext（原生
+         * 动作自己就声明 BGT），{@code templatePresentation} 也是普通 Presentation 对象、不是 Swing 组件。
+         * <b>不得</b>在这里加 {@code SwingUtilities} / 文档 / {@code Invoker} 之类 EDT-only 调用。</p>
+         */
         public void update(@NotNull AnActionEvent e) {
             original.update(e);
             if (updateProbed.compareAndSet(false, true)) {
