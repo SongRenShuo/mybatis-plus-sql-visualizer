@@ -230,7 +230,8 @@ public final class QueryByExampleConverter {
                     break;
             }
             SqlValue value = evaluateValue(field.valueExpr, ctx,
-                    ParamQuote.decide(columnInfo != null ? columnInfo.getFieldType() : null), likePosition);
+                    ParamQuote.decide(columnInfo != null ? columnInfo.getFieldType() : null), likePosition,
+                    ParamQuote.isTemporal(columnInfo != null ? columnInfo.getFieldType() : null));
             conditions.add(buildFieldCondition(column, value, stringMatcher, matcher.ignoreCase));
         }
 
@@ -718,6 +719,11 @@ public final class QueryByExampleConverter {
 
     private static SqlValue evaluateValue(PsiExpression expr, Ctx ctx, Boolean quoteHint,
                                           LikePosition likePosition) {
+        return evaluateValue(expr, ctx, quoteHint, likePosition, false);
+    }
+
+    private static SqlValue evaluateValue(PsiExpression expr, Ctx ctx, Boolean quoteHint,
+                                          LikePosition likePosition, boolean temporal) {
         SqlValue value = ctx.resolveVariables
                 ? ExpressionEvaluator.evaluate(expr)
                 : new SqlValue.Placeholder(expr.getText());
@@ -725,7 +731,7 @@ public final class QueryByExampleConverter {
         String text = expr.getText();
         String source = text != null && !text.isBlank() ? text : "?";
         ctx.paramSources.add(source);
-        ctx.paramHints.add(new ParamHint(quoteHint, likePosition));
+        ctx.paramHints.add(new ParamHint(quoteHint, likePosition, false, temporal));
         return new SqlValue.Placeholder(source);
     }
 
