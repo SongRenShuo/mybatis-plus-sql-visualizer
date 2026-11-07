@@ -74,4 +74,32 @@ class LogPerfProbeSampleTest {
         )
         assertEquals("百万次空转后 count 应精确", n.toLong(), probe.sampleStats(name)!!.count)
     }
+
+    // ---------- T-SqlListCatchup 券E：recordGauge（非耗时型读数共用分布设施） ----------
+
+    /** 独占 gauge 名（与 measure 名分键，避免互相污染分布）。 */
+    private val gaugeName = "TestGauge.${System.nanoTime()}"
+
+    @Test
+    fun testrecordGauge_值按原值入环_count精确() {
+        probe.resetSamples()
+        probe.recordGauge(gaugeName, 3L)
+        probe.recordGauge(gaugeName, 7L)
+        val stats = probe.sampleStats(gaugeName)
+        assertNotNull("gauge 采样后应有读数", stats)
+        assertEquals("两次记录 → count=2", 2L, stats!!.count)
+        assertEquals("gauge 值按原值入环（单位由调用方定义，不做 ms 换算）", 5.0, stats.meanMs, 1e-9)
+        assertEquals("max 取原值", 7.0, stats.maxMs, 1e-9)
+    }
+
+    @Test
+    fun testrecordGauge_与measure同设施_reset划窗口生效() {
+        probe.resetSamples()
+        probe.recordGauge(gaugeName, 1L)
+        probe.measure(name) { }
+        assertNotNull(probe.sampleStats(gaugeName))
+        probe.resetSamples()
+        assertNull("resetSamples 后 gauge 读数应清空", probe.sampleStats(gaugeName))
+        assertNull("resetSamples 后 measure 读数应清空", probe.sampleStats(name))
+    }
 }

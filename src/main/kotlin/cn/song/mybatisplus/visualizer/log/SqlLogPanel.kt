@@ -110,8 +110,10 @@ import javax.swing.event.DocumentListener
  * - `currentDedupeCounts` ≡ buffer.dedupeCountsSnapshot()——buffer 侧丢弃计数的全部变更源
  *   （recordDedupeDrop / 整体清零 / 键上限溢出）要么登记变更键、要么置全量重建标记；
  * - `currentTemplateCounts` ≡ structureKeyCounts(snapshot)——presence 只覆盖「去重开启 + 可去重」
- *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / 淘汰扫出键域 / ShardingSphere 条目）一律由
- *   buffer 置全量重建标记，增量路径只消费口径内键。
+ *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / ShardingSphere 条目）一律由 buffer 置
+ *   全量重建标记，增量路径只消费口径内键。淘汰扫出键域（presence 归零摘键）**不在此列**——
+ *   券E 起按变更键净差增量核销（确定性减账，被淘汰键随变更键集出域，见
+ *   SqlLogEntryBuffer.countFullRebuildPending KDoc）。
  *
  * 线程模型：面板 EDT 单线程消费（与 refreshList 同线程），内部状态无并发面。
  */
@@ -304,8 +306,9 @@ class SqlLogPanel(
 
     /**
      * 券B：计数累积器——dedupeCounts/templateCounts 不再每拍全量重算，改为按 buffer 的变更键
-     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 淘汰扫出键域 / 键上限溢出等）由 buffer
-     * 置位，drain 到后回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 键上限溢出等）由 buffer 置位，drain 到后
+     * 回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
      */
     private val countAccumulator = CountSnapshotAccumulator(
         dropCountsSnapshot = { manager.entries.dedupeCountsSnapshot() },
@@ -1891,70 +1894,96 @@ class SqlLogPanel(
         }
     }
 
-    /** 券D 拆出：refreshList 的实际刷新拍体（[refreshList] 负责补链门 + 全拍打点，本函数做事）。 */
+    /**
+     * 券D 拆出：refreshList 的实际刷新拍体（[refreshList] 负责补链门 + 全拍打点，本函数做事）。
+     *
+     * T-SqlListCatchup 券E（2026-11-07）：拍体**拆拍探针**——按现有结构把一拍拆成
+     * `.snapshot`（快照物化，券D 既有 key）/ `.diagnostics`（诊断行与状态栏同步）/ `.counts`
+     * （券B 增量计数段）/ `.filters`（过滤链 + 排序 + 进度条基准）/ `.diffModel`（差分应用与
+     * 模型写）五段，各包 measure 入券D 分布采样；全拍 `LogPanel.refreshList` 与旧
+     * `.snapshot` key 不动。拆拍目的是拿**分项账单**定位 102~232ms 单拍的重段（真机压测
+     * 2026-11-07），只对账单显示真正重的段动手。拍尾的聚焦隐藏提示与慢查计数（条数级常数
+     * 成本，与模型写无关）不打点——全拍与各段之差即这段余量。
+     */
     private fun refreshListBeat(gen: Long) {
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }
         // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
-        syncDiagnostics()
+        // 券E：诊断同步含 AgentManager/屏蔽规则取数（每个刷新拍都跑），单独打点以便与计数段划清。
+        LogPerfProbe.measure("LogPanel.refreshList.diagnostics") {
+            syncDiagnostics()
+        }
 
         // 券B（T-SqlListCatchup）：徽章计数增量更新（变更键对账，兜底事件回退全量）——代替旧的
         // 每拍 dedupeCountsSnapshot() + structureKeyCounts(snapshot) 两份全量 O(N) 重算；
         // 徽章聚合口径不变（**全量条目**，不随当前过滤/搜索波动）。
-        refreshCountMaps(snapshot)
+        // 券E：增量计数段单独打点（全量回退是否每拍发生、值多少钱，账单说了算）。
+        LogPerfProbe.measure("LogPanel.refreshList.counts") {
+            refreshCountMaps(snapshot)
+        }
 
-        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
-        val filtered = filterByFocus(
-            filterByType(
-                applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
-            ),
-            activeFocus,
-        )
-        // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
-        val focused = filterByFocusTabs(filtered, focusTabs)
-        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
-        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
-        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
-        val newVisible = applySort(searched)
-        val evicted = manager.entries.drainEvictedCount()
+        var focusHiddenDelta = 0
+        val newVisible = LogPerfProbe.measure("LogPanel.refreshList.filters", { "in=${snapshot.size}" }) {
+            // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
+            val filtered = filterByFocus(
+                filterByType(
+                    applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
+                ),
+                activeFocus,
+            )
+            // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
+            val focused = filterByFocusTabs(filtered, focusTabs)
+            focusHiddenDelta = filtered.size - focused.size
+            // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+            // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+            val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
+            val sorted = applySort(searched)
 
-        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
-        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
-        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
-        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
-        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
+            // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+            // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+            // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+            // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+            entryCellRenderer.maxDurationMs = maxDurationOf(sorted)
+            sorted
+        }
 
-        val modelSizeBefore = listModel.size()
-        val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
-        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
-        withProgrammaticScroll {
-            if (!applyIncremental(newVisible, evicted)) {
-                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
-                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
-                pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
-                applyFullRebuild(newVisible, gen)
-                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
-                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
-                pendingScrollAnchor?.let { anchor ->
-                    if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
+        LogPerfProbe.measure("LogPanel.refreshList.diffModel", { "model=${listModel.size()}" }) {
+            val evicted = manager.entries.drainEvictedCount()
+            val modelSizeBefore = listModel.size()
+            val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
+            // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
+            withProgrammaticScroll {
+                if (!applyIncremental(newVisible, evicted)) {
+                    // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
+                    // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
+                    pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
+                    applyFullRebuild(newVisible, gen)
+                    // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
+                    // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
+                    pendingScrollAnchor?.let { anchor ->
+                        if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
+                    }
                 }
             }
-        }
-        val tailAdvancedAtCapacity = evicted > 0 &&
-            (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
-        // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
-        if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
-            scrollToBottom(resume = false)
+            val tailAdvancedAtCapacity = evicted > 0 &&
+                (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
+            // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
+            // 券E 账单注：本拍滚动（ensureIndexIsVisible → BasicListUI 变高布局 O(N) 全扫）曾是
+            // 单拍 102~232ms 的最大单一成分——渲染器条目级 preferred size 缓存（RailCellRendererBase
+            // 券E 段）把它从 ~30ms 压到 <10ms（headless 账单，2026-11-07）。
+            if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
+                scrollToBottom(resume = false)
+            }
         }
 
-        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
+        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused；券E 拆拍后由
+        // filters 段透出 focusHiddenDelta，本处只做 Swing 标签写）
         if (focusTabs.isEmpty()) {
             focusHiddenLabel.isVisible = false
         } else {
-            val hidden = filtered.size - focused.size
-            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", hidden.toString())
-            focusHiddenLabel.isVisible = hidden > 0
+            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", focusHiddenDelta.toString())
+            focusHiddenLabel.isVisible = focusHiddenDelta > 0
         }
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）

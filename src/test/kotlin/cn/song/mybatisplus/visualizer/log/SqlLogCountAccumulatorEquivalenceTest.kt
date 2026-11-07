@@ -114,9 +114,46 @@ class SqlLogCountAccumulatorEquivalenceTest {
         evictedKeys.forEach { assertEquals(0, buffer.dedupePresenceForKey(it)) }
     }
 
+    /**
+     * 券E（T-SqlListCatchup）：淘汰扫出键域升级为增量核销后的**定向等价性**——真机实态
+     * 「buffer 恒满 + 异键风暴」（2026-11-07 主控情报：用户压测时 SQL 去重关闭；每条 SQL
+     * 参数还原后指纹各异，每拍都有键被淘汰扫出 presence 键域）。
+     *
+     * 双判据：①恒满淘汰的随机序列下增量累积与每拍全量重算**逐键逐值相等**（tickAndAssert）；
+     * ②**增量路径必须真被走到**——基线锚定后全程不得出现全量重建标记（此前该形态每拍置
+     * 全量标记走整表回退；若断言缺失，用例会在全量回退口径下平凡通过，等价性变成空绿）。
+     * 反向验证：恢复 buffer 侧扫出键域的 `countFullRebuildPending.set(true)`，本用例必红。
+     */
     @Test
-    fun `双阈值节流窗内同键多次增减折叠为一次净差且无悬挂余量`() {
-        val buffer = SqlLogEntryBuffer(maxEntries = 4)
+    fun `异键风暴_buffer恒满键持续进出_增量核销与全量重算逐键相等且不走全量`() {
+        val seeds = listOf(7L, 99L)
+        for (seed in seeds) {
+            val rng = Random(seed)
+            val buffer = SqlLogEntryBuffer(maxEntries = 5)
+            val acc = newAcc(buffer)
+            var clock = 0L
+            var pendingOps = 0
+            var baselineDone = false
+            repeat(300) { op ->
+                clock += 1
+                // 恒异键：每条 SQL 指纹各异（对齐真机异键风暴形态——键只进不出域，淘汰持续摘键）
+                buffer.addEntry(entryAt("SELECT * FROM t_$clock WHERE id = $clock", clock))
+                if (++pendingOps >= 1 + rng.nextInt(3)) {
+                    pendingOps = 0
+                    val (changed, full) = tickAndAssert(buffer, acc, "seed=$seed op#$op")
+                    if (baselineDone) {
+                        assertFalse("seed=$seed op#$op 扫出键域必须走增量（不得置全量标记）", full)
+                        assertTrue("seed=$seed op#$op 每拍都有键进出，变更键集应非空", changed.isNotEmpty())
+                    }
+                    baselineDone = true
+                }
+            }
+            tickAndAssert(buffer, acc, "seed=$seed final") // 收尾对账，防悬挂余量
+        }
+    }
+
+    @Test
+    fun `双阈值节流窗内同键多次增减折叠为一次净差且无悬挂余量`() {        val buffer = SqlLogEntryBuffer(maxEntries = 4)
         buffer.dedupeWindowMs = 0
         val acc = newAcc(buffer)
         val aKey = entryAt("SELECT A", 0L).dedupeKey

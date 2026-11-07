@@ -10,9 +10,9 @@ import org.junit.Test
  * T-SqlListCatchup 券B：计数变更键增量出口守卫（buffer 侧）。
  *
  * 每个用例对应一个增量出口维护面：入队登记 / ⨉N 丢弃登记 / 头部淘汰登记（含被淘汰键必须在
- * drain 集合内）/ 键扫出键域置全量标记 / 双阈值节流窗内同键反复变化只记键不记次数 /
- * clear / dedupeEnabled 翻转 / 接管沿重建 / dedupeExisting 裁剪 / 键上限溢出各自置全量标记。
- * 任一维护面漏账，对应用例必红（反向验证：摘掉对应 markCountKeyLocked / set(true) 行必红）。
+ * drain 集合内）/ 键扫出键域走增量核销不置全量（券E 升级）/ 双阈值节流窗内同键反复变化只记键
+ * 不记次数 / clear / dedupeEnabled 翻转 / 接管沿重建 / dedupeExisting 裁剪 / 键上限溢出各自置
+ * 全量标记。任一维护面漏账，对应用例必红（反向验证：摘掉对应 markCountKeyLocked / set(true) 行必红）。
  */
 class SqlLogEntryBufferChangedKeysTest {
 
@@ -64,7 +64,7 @@ class SqlLogEntryBufferChangedKeysTest {
     }
 
     @Test
-    fun `淘汰登记被淘汰键_唯一键扫出键域置全量标记`() {
+    fun `淘汰登记被淘汰键_唯一键扫出键域走增量不置全量`() {
         val b = SqlLogEntryBuffer(maxEntries = 2)
         b.dedupeWindowMs = 0 // 同键也能反复入队（窗口判定 0<0 恒假）
         val aKey = entryAt("SELECT A", 0L).dedupeKey
@@ -75,7 +75,8 @@ class SqlLogEntryBufferChangedKeysTest {
         b.addEntry(entryAt("SELECT C", 2L)) // 挤出 SELECT A
         val keys = b.drainChangedKeys()
         assertTrue("drain 集合包含被淘汰键", keys.contains(aKey))
-        assertTrue("唯一键被挤出键域（presence 摘键）→ 全量重建标记", b.drainCountRebuildFlag())
+        // 券E：扫出键域升级为增量核销（确定性减账）——不再置全量标记（异键风暴下此前每拍整表回退）
+        assertFalse("扫出键域应走变更键净差增量（不置全量标记）", b.drainCountRebuildFlag())
     }
 
     @Test
