@@ -8,6 +8,7 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.util.ui.JBUI;
+import org.jetbrains.annotations.Nullable;
 
 import javax.swing.JButton;
 import javax.swing.SwingConstants;
@@ -347,6 +348,16 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         return state.name();
     }
 
+    /**
+     * UI-004：是否处于「纯信息态」——只有信息行，没有执行结果、没有执行错误。
+     *
+     * <p>方言提示（showStatus/showStatusWithActions 写的 infoLabel）可以在这个态下被安全替换/清除；
+     * 一旦是 SUCCESS/ERROR 就绝不能碰（否则刷新会把真实执行错误抹掉）。</p>
+     */
+    public boolean isInfoOnlyState() {
+        return state == State.EMPTY;
+    }
+
     /** T-DialectGatePass：状态行文本（测试断言放行提示用，showStatus/showError 均写 infoLabel）。 */
     public String infoTextForTest() {
         return infoLabel.getText();
@@ -379,6 +390,11 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
      *
      * <p>动作形态与错误态完全一致（{@link #showErrorWithActions}）：透明按钮 + {@code Link.activeForeground}，
      * 渲染即蓝字。</p>
+     *
+     * @param tooltip 悬停完整说明；null = 与可见行相同。可见行受面板宽度省略时，折叠掉的
+     *                「其余 N 个源」等细节仍可从悬停读到。
+     * @param warning true = 橘色警示态（{@code WarningForeground}）——用于「缺配置、需用户处理」
+     *                但并非执行失败的信息；默认 false 保持既有灰色信息态。
      */
     public void showStatusWithActions(
             String message,
@@ -388,6 +404,21 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
             String settingsLabel,
             String settingsTooltip,
             Runnable settings) {
+        showStatusWithActions(message, fixLabel, fixTooltip, fix, settingsLabel, settingsTooltip, settings,
+                null, false);
+    }
+
+    /** 全参形态（UI-049：悬停详文 + 警示态）。 */
+    public void showStatusWithActions(
+            String message,
+            String fixLabel,
+            String fixTooltip,
+            Runnable fix,
+            String settingsLabel,
+            String settingsTooltip,
+            Runnable settings,
+            @Nullable String tooltip,
+            boolean warning) {
         state = State.EMPTY;
         currentError = null;
         errorCopyButton.setVisible(false);
@@ -399,8 +430,10 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         setLoadingIconVisible(false);
         String esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
         infoLabel.setText("<html>" + esc + "</html>");
-        infoLabel.setToolTipText(message);
-        infoLabel.setForeground(JBColor.namedColor("Label.infoForeground", JBColor.GRAY));
+        infoLabel.setToolTipText(tooltip != null ? tooltip : message);
+        infoLabel.setForeground(warning
+                ? JBColor.namedColor("WarningForeground", JBColor.ORANGE)
+                : JBColor.namedColor("Label.infoForeground", JBColor.GRAY));
         showContent();
         revalidate();
         repaint();
