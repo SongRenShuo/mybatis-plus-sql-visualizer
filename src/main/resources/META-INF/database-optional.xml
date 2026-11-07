@@ -40,6 +40,13 @@
                      implementationClass="cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect"/>
         <sql.dialect dbms="UNKNOWN" order="last"
                      implementationClass="cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect"/>
+        <!-- T-GoldenDbDialect（券 A / P-8）：同一缺口的第五个实例——262 平台方言注册表无
+             GoldenDB（.intellijPlatform/localPlatformArtifacts/IU-262.9437.185 全量 345 个
+             bundledModule/bundledPlugin xml grep golden 零命中，正对照 mysql/greenplum 命中，
+             2026-11-07）。注册后语言 id `GoldenDB` 进入平台可用清单，ExecDialectRouting 的
+             GoldenDB 候选链首项即命中。最小实现同样是 Generic 样板。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect"/>
 
         <!-- T-PreviewPsiDialect：上面四个自注册方言的 ParserDefinition——**必须成对存在**。
 
@@ -61,6 +68,12 @@
                                implementationClass="cn.song.mybatisplus.visualizer.sql.HighGoParserDefinition"/>
         <lang.parserDefinition language="Vastbase"
                                implementationClass="cn.song.mybatisplus.visualizer.sql.VastbaseParserDefinition"/>
+        <!-- T-GoldenDbDialect（券 A）：第五对的后一半——必须与 <sql.dialect> 成对存在
+             （缺了这半：SqlParserDefinitionBase.createFile 强转 SqlLanguageDialect 抛
+             ClassCastException → PsiManager.findFile 返回 null → 预览预热降级，见上注）。
+             守卫 SqlDialectParserDefinitionPairingGuardTest 已同步登记。 -->
+        <lang.parserDefinition language="GoldenDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.GoldenDbParserDefinition"/>
     </extensions>
 
     <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu

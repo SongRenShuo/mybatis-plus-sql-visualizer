@@ -29,6 +29,10 @@ object McpDialectDetector {
         "jdbc:highgo" to "HighGo",
         "jdbc:vastbase" to "Vastbase",
         "jdbc:dws" to "Vastbase",
+        // T-GoldenDbDialect（券 A）：中兴 GoldenDB 官方驱动 `jdbc:goldendb://`（p9 文档级 +
+        // 驱动字节码 URL_PREFIX 常量双证）。次序安全：`jdbc:goldendb` 与首位的 `jdbc:mysql`
+        // 前缀互不包含（前缀匹配 startsWith/contains），不会被误命中。
+        "jdbc:goldendb" to "GoldenDB",
     )
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -66,6 +70,11 @@ object McpDialectDetector {
         "翰高" to "HighGo",
         "vastbase" to "Vastbase",
         "海量" to "Vastbase",
+        // T-GoldenDbDialect（券 A，P-6 销案）：中兴 GoldenDB 别名。中文「金篆」已确证——
+        // 官方《开发支持 V6.1.03.10》p1 法律声明「金篆信科有限责任公司」（全文 9 处）即
+        // GoldenDB 厂商主体；「中兴」全文 0 命中，不加（加错别名不会误判，但无证据不收）。
+        "goldendb" to "GoldenDB",
+        "金篆" to "GoldenDB",
     )
 
     /** agent 显式方言名归一化（精确别名匹配；不可识别返回 null）。 */
