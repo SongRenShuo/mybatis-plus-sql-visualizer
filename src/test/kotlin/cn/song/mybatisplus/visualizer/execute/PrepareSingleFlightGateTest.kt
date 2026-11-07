@@ -115,8 +115,10 @@ class PrepareSingleFlightGateTest {
     private class RequestProbe {
         val outcomes = mutableListOf<ExecutionSubmission>()
         val errors = mutableListOf<String>()
+        // 177 轮 A2：QueuedExecuteIntent 增第 9 参 onDialectMismatchHint（UI-049）——位置实参补尾 null；
+        // 波次 B 移植 master 版测试时以 master 原文为准。
         val request = QueuedExecuteIntent(null, null, { errors += it }, null, false, null, null,
-            { outcomes += it })
+            { outcomes += it }, null)
     }
 
     @Test

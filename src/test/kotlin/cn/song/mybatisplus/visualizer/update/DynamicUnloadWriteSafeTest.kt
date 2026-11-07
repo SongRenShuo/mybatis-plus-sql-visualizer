@@ -91,9 +91,13 @@ class DynamicUnloadWriteSafeTest : BasePlatformTestCase() {
             body.run()
         }
         // k2j 适配：PlatformApi 为 Java 类，具名实参改位置实参
+        // 177 轮 A3：预检入口换能力族（T-DynUpdate263），第 2 参 UnloadGate 包 LEGACY+哑方法（同 master 89-96 行语义）
         val api = DynamicInstallSupport.PlatformApi(
             Any(),
-            dummyMethod(),
+            DynamicInstallSupport.UnloadGate(
+                DynamicInstallSupport.UnloadGateFamily.LEGACY,
+                dummyMethod(),
+            ),
             dummyMethod(),
             null,
             dummyMethod(),
