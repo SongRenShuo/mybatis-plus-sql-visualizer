@@ -25,9 +25,10 @@ class CaptureStatusBarTest {
         agentEventsReceived: Long = 3L,
         unregistered: List<String> = emptyList(),
         catchUpBehind: Int = 0,
+        agentDropped: Long = 0L,
     ) = CaptureStatusLine(
         capturing, consolesAttached, linesSeen, agentStatus, agentLivePids, agentPaused, agentEventsReceived,
-        unregistered, catchUpBehind,
+        unregistered, catchUpBehind, agentDropped,
     )
 
     @Test
@@ -107,6 +108,34 @@ class CaptureStatusBarTest {
             line(agentStatus = null, unregistered = listOf("a.b.C")),
         )!!
         assertEquals("增强未开启时无 attach 事实可报", "增强：未开启", agent)
+    }
+
+    // ---------- T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计落状态栏 ----------
+
+    /**
+     * F2a 守卫：丢弃累计 >0 时增强段必须带出「已丢弃 N 条」且保留既有叙事。
+     * 真机背景：第三轮压测「已收事件 2,227 条」在控制台停输出后仍缓慢上涨（≈队列容量+排空尾量），
+     * 丢弃本身非阻塞是对的，但「丢了多少」必须用户可见。
+     * 反向验证：摘掉 [captureStatusLineText] 里的 agentDropped 拼接，本用例必须红。
+     */
+    @Test
+    fun test丢弃累计大于零时挂增强段尾() {
+        val (_, agent) = captureStatusLineText(line(agentDropped = 138L))!!
+        assertTrue("必须明示丢弃：$agent", agent.contains("已丢弃"))
+        assertTrue("必须带出丢弃条数 138：$agent", agent.contains("138"))
+        assertTrue("必须保留既有增强叙事（已挂载/已收事件）：$agent", agent.contains("已收事件"))
+    }
+
+    @Test
+    fun test丢弃为零时不挂段() {
+        val (_, agent) = captureStatusLineText(line(agentDropped = 0L))!!
+        assertFalse("零丢弃不得出现丢弃段：$agent", agent.contains("已丢弃"))
+    }
+
+    @Test
+    fun test增强未开启时不挂丢弃段() {
+        val (_, agent) = captureStatusLineText(line(agentStatus = null, agentDropped = 5L))!!
+        assertEquals("增强未开启无 attach 事实可报", "增强：未开启", agent)
     }
 
     // ---------- T-SqlListCatchup 券 D：追赶读数落状态栏 ----------
