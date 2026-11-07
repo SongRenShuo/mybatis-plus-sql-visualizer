@@ -190,6 +190,9 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
             boolean cellHasFocus
     ) {
         LogSqlEntry entry = value instanceof LogSqlEntry ? (LogSqlEntry) value : null;
+        // 券E：本拍绑定开始时先解除尺寸缓存锚——bind 内部（片段裁剪等）若有读 preferredSize
+        // 的链路，不能命中「上一次绑定的条目」的陈旧缓存。
+        boundEntryForSize = null;
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
         Color tint = entry != null ? SqlListTypeColor.colorOf(entry.statementType()) : null;
@@ -234,7 +237,70 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
             }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
+        // 券E：bind 完成后重锚尺寸缓存（条目 + 尺寸输入代戳；bind 链内部读 preferredSize 已被
+        // 开头的解锚挡住，不会命中旧条目）。
+        boundEntryForSize = entry;
+        sizeStamp = entry == null ? -1L : sizeStampOf(list, mode, isSelected);
         return this;
+    }
+
+    // ---------- T-SqlListCatchup 券E：条目级 preferred size 缓存 ----------
+    //
+    // 缓解的实测站点（券E 账单，2026-11-07）：可变行高模式（KEYWORD_WRAP/FORMATTED）下，每次
+    // 模型变更后的首次 list.getCellBounds/ensureIndexIsVisible 触发 BasicListUI
+    // updateLayoutState **O(N) 逐格全扫**——对每格调 getListCellRendererComponent +
+    // getPreferredSize()（BorderLayout 递归布局 + SimpleColoredComponent 片段排版）。
+    // headless 实测 200 条一次全扫 27~31ms，而风暴期每拍都有模型变更（HeadEvictAppend），
+    // scrollToBottom 的 ensureIndexIsVisible 每拍必付一次——即券E 账单里 diffModel 段
+    // 14~30ms 的主成分。SINGLE_LINE 固定行高走 O(1) 快路径，不经过本缓存。
+    //
+    // 正确性口径：**只缓存高度语义下的输入**。行高由「条目内容（不可变实例）+ SQL 区宽 +
+    // 显示模式（border/折行）+ 字体」决定；⨉N/×N 徽章只改头部行单行内的文本（超宽被截断，
+    // 不折行）、选中态只改文字属性（颜色），都不改行高——故不进代戳（徽章 map 每拍换实例，
+    // 进代戳会每拍清缓存，等于没有缓存）。宽度变化（面板 resize）、模式切换、字体变化由
+    // 代戳整缓存作废兜住。
+
+    /** 最近一次 bind 的条目（缓存键；null=bind 内部或非条目绑定，getPreferredSize 走直算）。 */
+    private LogSqlEntry boundEntryForSize = null;
+
+    /** 最近一次 bind 的尺寸输入代戳（与 lastSizeCacheStamp 不等即整缓存作废）。 */
+    private long sizeStamp = -1L;
+
+    /** 已生效缓存所对应的代戳。 */
+    private long lastSizeCacheStamp = -1L;
+
+    /** 条目 → preferred size（EDT 单线程渲染，IdentityHashMap 按条目身份键控；按条目上限封顶）。 */
+    private final java.util.IdentityHashMap<LogSqlEntry, Dimension> sizeCache = new java.util.IdentityHashMap<>();
+
+    private long sizeStampOf(JList<?> list, SqlListDisplayMode mode, boolean selected) {
+        long modeSel = mode.ordinal() * 10_000L + (selected ? 5_000L : 0L);
+        Font font = list == null ? null : list.getFont();
+        if (font == null) {
+            return modeSel;
+        }
+        return sqlAreaWidth(list, this) * 10_000_000L + modeSel + font.getSize() * 7L + font.getFamily().hashCode() * 13L;
+    }
+
+    @Override
+    public Dimension getPreferredSize() {
+        LogSqlEntry entry = boundEntryForSize;
+        if (entry == null) {
+            return super.getPreferredSize();
+        }
+        if (sizeStamp != lastSizeCacheStamp) {
+            sizeCache.clear();
+            lastSizeCacheStamp = sizeStamp;
+        }
+        Dimension cached = sizeCache.get(entry);
+        if (cached != null) {
+            return new Dimension(cached.width, cached.height);
+        }
+        Dimension computed = super.getPreferredSize();
+        if (sizeCache.size() >= SIZE_CACHE_MAX) {
+            sizeCache.clear();
+        }
+        sizeCache.put(entry, new Dimension(computed.width, computed.height));
+        return new Dimension(computed.width, computed.height);
     }
 
     /** 去重计数快照（仅日志页有去重；历史页恒空）。 */
@@ -379,6 +445,9 @@ public abstract class RailCellRendererBase extends JPanel implements ListCellRen
     /** 条目分隔线——比 {@code JBColor.border()} 略强，深色主题下才可见。 */
     public static final Color ROW_DIVIDER =
             JBColor.namedColor("mpvs.log.rowDivider", new JBColor(0xC8C8C8, 0x4A4D52));
+
+    /** 券E：条目 preferred size 缓存上限（默认缓冲 200 的 5 倍；超限整体清空，有界性兜底）。 */
+    public static final int SIZE_CACHE_MAX = 1_024;
 
     /** 按留白高度构造条目 Border（预建实例，不在渲染热路径调用）。 */
     public static Border borderFor(int verticalPadding) {
