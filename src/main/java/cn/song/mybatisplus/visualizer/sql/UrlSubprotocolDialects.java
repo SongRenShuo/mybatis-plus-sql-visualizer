@@ -1,6 +1,7 @@
 // T-SyncK2JMaster309 自 master sql/DialectInference.kt 移植
 // T-SyncK2JMaster187 c07b8e3 增量：T-DialectXcFamily（O-63）补 oceanbase/opengauss/gaussdb 三前缀
 // （openGauss 一 object 两前缀，D2=A 定案）
+// T-SyncK2JMaster177 95e107b 增量：T-IbatisPanwei（券 F）panwei/panweidb + T-GoldenDbDialect（券 A）goldendb
 package cn.song.mybatisplus.visualizer.sql;
 
 import org.jetbrains.annotations.NotNull;
@@ -50,7 +51,27 @@ public final class UrlSubprotocolDialects {
             // 是原版 pgjdbc，按 PostgreSQL 处理不纠正（调研报告 §5.2 字节码实证）。
             Map.entry("highgo", "HighGo"),
             Map.entry("vastbase", "Vastbase"),
-            Map.entry("dws", "Vastbase")
+            Map.entry("dws", "Vastbase"),
+            // T-IbatisPanwei（券 F）：磐维（中国移动）驱动 org.panweidb.Driver，V1 1.0.0 与 V2 2.0.0
+            // 都是整包重命名、URL 前缀同为 jdbc:panweidb:。
+            //
+            // 方言依据是建库参数 DBCOMPATIBILITY，不是 JDBC 的 db_compatibility（2026-11-06 订正，
+            // 依据《磐维数据库 V2.0.0 开发者指南》表 1-1~1-5）：数据库 SQL 兼容模式有 Oracle(A, 默认) /
+            // MySQL(B) / TD(C) / SQL Server / PostgreSQL 五种，A 模式是出厂默认；而 JDBC 连接参数
+            // db_compatibility（默认值 postgresql）只控制 ResultSetMetaData 返回列名的大小写，
+            // 不表示 SQL 兼容模式——拿它推方言会让「Oracle 模式的库 + 为了小写列名设 postgresql」被
+            // 误判成 openGauss。故此处恒映射 Oracle，PG/MySQL 模式的库由用户在面板手动改选。
+            // 值必须是 OracleDialect.name 原文（"Oracle"），拼错即 byName 静默回落 MySQL。
+            Map.entry("panwei", "Oracle"),
+            Map.entry("panweidb", "Oracle"),
+            // T-GoldenDbDialect（券 A）：中兴 GoldenDB 官方驱动 gdb_mysql-connector-java-oracle
+            // （MySQL Connector/J 5.1 整包重命名，manifest 实测）URL 前缀 jdbc:goldendb://
+            // （p9/p11/p37 文档级 + NonRegisteringDriver URL_PREFIX 字节码常量双证）。值必须
+            // 逐字等于 GoldenDbDialect.name（"GoldenDB"），拼错即 byName 静默回落 MySQL。
+            // 注：驱动默认配置下 jdbc:mysql:// 开头的 URL 也走 GoldenDB 驱动
+            // （useGoldendbDriver 默认 true，字节码实测），但 URL 本身不携带 GoldenDB 身份，
+            // 仍按 MySQL 推断（渲染形态恰逐项相同，见 GoldenDbDialect KDoc）——不据此劫持。
+            Map.entry("goldendb", "GoldenDB")
     ));
 
     /**
