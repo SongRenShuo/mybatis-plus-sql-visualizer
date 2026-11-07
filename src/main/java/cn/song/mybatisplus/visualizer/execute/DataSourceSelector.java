@@ -762,9 +762,30 @@ public final class DataSourceSelector {
             boolean forceChoose,
             @Nullable String preferredRunnerName,
             boolean forceChoosePopup) {
+        prepareConsole(project, sql, onConsole, onEditor, onError, callback, dialectGateRequest, onDialectGate,
+                forceChoose, preferredRunnerName, forceChoosePopup, null);
+    }
+
+    /**
+     * UI-049 全参形态：空 Runner「方言不匹配」态结构化提示（面板据此出「下一步」+ 可点入口）。
+     * 提供时不再投递 {@code onError} 长红字；null = 既有行为。
+     */
+    public static void prepareConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            boolean forceChoose,
+            @Nullable String preferredRunnerName,
+            boolean forceChoosePopup,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint) {
         DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback,
-                null, false, dialectGateRequest, onDialectGate, null, forceChoose,
-                preferredRunnerName, forceChoosePopup);
+                null, false, dialectGateRequest, onDialectGate, null, null, forceChoose,
+                preferredRunnerName, forceChoosePopup, onDialectMismatchHint);
     }
 
     /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
@@ -806,6 +827,21 @@ public final class DataSourceSelector {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        return executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec, dialectGateRequest,
+                onDialectGate, onSubmission, null);
+    }
+
+    /** 全参 + 中性信息通道（T8）：工具语句成功完成时面板 showStatus，不走红条错误通道。 */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo) {
         Object console = preparedConsole;
         Editor editor = preparedEditor;
         Object scriptModel = preparedScriptModel;
@@ -815,7 +851,7 @@ public final class DataSourceSelector {
                 onResultsReady, onError, onErrorRich, wholeScriptExec,
                 dialectGateRequest != null ? dialectGateRequest : preparedDialectGateRequest,
                 onDialectGate != null ? onDialectGate : preparedDialectGateCallback,
-                onSubmission);
+                onSubmission, onInfo);
         // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true;
     }
@@ -859,8 +895,34 @@ public final class DataSourceSelector {
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             boolean forceChoose) {
+        selectAndExecute(project, sql, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
+                dialectGateRequest, onDialectGate, onSubmission, forceChoose, null, null);
+    }
+
+    /**
+     * UI-049 / T8 全参形态。
+     *
+     * @param onDialectMismatchHint 空 Runner「方言不匹配」态结构化提示（与 {@code onError} 互斥）。
+     * @param onInfo                中性信息回调（工具语句成功完成时面板 showStatus，不走红条错误通道）。
+     */
+    public static void selectAndExecute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint,
+            @Nullable Consumer<String> onInfo) {
         DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback,
-                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose);
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, onInfo, forceChoose,
+                null, false, onDialectMismatchHint);
     }
 
     /** M36.5.5：释放共享控制台缓存。 */
@@ -1187,6 +1249,41 @@ public final class DataSourceSelector {
         return CONSOLE_STATUS_WORDS.matcher(n).find();
     }
 
+    /**
+     * T8（T-TestGapSpeed）：工具语句 / 更新类语句<b>成功完成</b>的证据——40 拍窗口到期且无错误
+     * 判据、无残余时，若新增输出里有完成态回显（{@code N row(s) affected} / {@code completed in …} /
+     * {@code Query OK} 等），说明语句已正常执行完（这类语句 DBN 不建结果 Tab，完成回显写在 Output，
+     * pitfall-console-error-signature-coverage 实证）——不得落 {@code execute.timeout.hint} 把成功
+     * 说成超时。
+     *
+     * <p>判据取 {@link #CONSOLE_STATUS_LINES} / {@link #CONSOLE_STATUS_WORDS} 的<b>完成语义子集</b>：进度词
+     * （{@code executing} / {@code fetching} / {@code connected}）不算完成——长查询挂死时 Output 只写这些，
+     * 仍落既有超时提示不误报（宁少勿错：漏报退化 = 现状，误报 = 把挂死说成完成）。
+     * 只做行级形态判断，不碰真机不可得的 DBN 内部态。</p>
+     */
+    public static boolean hasConsoleCompletionEvidence(@Nullable Object console) {
+        final String text;
+        try {
+            text = newConsoleText(console);
+        } catch (Exception e) {
+            return false;
+        }
+        if (text == null) return false;
+        for (String rawLine : text.split("\n", -1)) {
+            String n = stripTimestamp(rawLine.trim()).toLowerCase();
+            for (String evidence : COMPLETION_EVIDENCE_LINES) {
+                if (n.contains(evidence)) return true;
+            }
+            if (CONSOLE_STATUS_WORDS.matcher(n).find()) return true;
+        }
+        return false;
+    }
+
+    /** T8：完成态词表（{@link #CONSOLE_STATUS_LINES} 的完成语义子集，判据注释见 {@link #hasConsoleCompletionEvidence}）。 */
+    private static final List<String> COMPLETION_EVIDENCE_LINES = List.of(
+            "completed in", "query ok", "affected", "fetched", "took ", "elapsed"
+    );
+
     /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
     public static boolean isSqlLine(String line) {
         String lower = line.trim().toLowerCase();
@@ -1200,19 +1297,26 @@ public final class DataSourceSelector {
     }
 
     /** M36.5.62：清空 console 历史文档。 */
-    public static void clearConsoleHistory(Object console, Logger LOG) {
+    public static void clearConsoleHistory(@Nullable Project project, Object console, Logger LOG) {
         if (console == null) return;
         try {
             Object consoleView = console.getClass().getMethod("getConsoleView").invoke(console);
             if (consoleView == null) return;
             Object historyViewer = consoleView.getClass().getMethod("getHistoryViewer").invoke(consoleView);
             if (historyViewer == null) return;
-            Object doc = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
-            if (doc == null) return;
-            doc.getClass().getMethod("setText", String.class).invoke(doc, "");
+            // 用平台 Document 类型直接调用，不再反射 setText：262 上反射 invoke 抛的
+            // InvocationTargetException 会把真因（写环境断言）裹成方法签名，日志里看不见原因；
+            // 同时 setText 必须落在写命令内（262 DocumentImpl 的写环境断言），故包 WriteCommandAction。
+            Object docObj = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
+            if (!(docObj instanceof Document)) return;
+            Document doc = (Document) docObj;
+            WriteCommandAction.runWriteCommandAction(project, () -> doc.setText(""));
             LOG.info("[M36] console history cleared (preview switch)");
         } catch (Throwable e) {
-            LOG.warn("[M36] clear console history FAILED: " + e.getMessage());
+            Throwable cause = e.getCause();
+            LOG.warn("[M36] clear console history FAILED: " + e.getClass().getSimpleName() + " / cause="
+                    + (cause != null ? cause.getClass().getSimpleName() : null) + ": "
+                    + (cause != null && cause.getMessage() != null ? cause.getMessage() : e.getMessage()));
         }
     }
 
@@ -1470,6 +1574,17 @@ public final class DataSourceSelector {
         Object ui = sharedUi != null ? sharedUi : preparedUi;
         if (ui == null) return false;
         return resultAreaHasContent(ui);
+    }
+
+    /** 2026-11-03 真机取证：结果区内容页签名（判定「折叠为什么没生效」时看它被谁喂成非空）。 */
+    public static List<String> currentResultContentNames() {
+        Object ui = sharedUi != null ? sharedUi : preparedUi;
+        if (ui == null) return List.of();
+        try {
+            return resultContents(ui).stream().map(Content::getDisplayName).collect(java.util.stream.Collectors.toList());
+        } catch (Throwable ignored) {
+            return List.of();
+        }
     }
 
     private static boolean isOutputContent(Content c) {
