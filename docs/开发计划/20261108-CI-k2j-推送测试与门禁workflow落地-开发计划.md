@@ -43,3 +43,7 @@
 - 本地编译门禁：`classes testClasses` BUILD SUCCESSFUL in 2m 10s（COMPILE_EXIT=0）。
 - 提交 `1b3d1833`（12 files changed, 1746 insertions）；push-all.ps1 -Branch feature/kotlin-to-java 双仓推送成功（令牌通路）。
 - CI 轮询：后台 ci-watch.py（branch=feature/kotlin-to-java，sha=1b3d1833），结论待出后回填；gate 派发留阶段 3。
+- **CI 结论（run 42403879922，failure）**：四项配置判据全过——test×5+fast×2 matrix 展开、demo 准备（带入的 setup-test-env.ps1）与 run-gradle-retry 包装在 4/5 片全绿中实证可用、nightly-nudge 按设计 skipped。**这是 k2j 分支史上第一次全量 CI**，测出 21 例潜藏红（11-03 本地门禁 7996/0/0 绿过，属 CI 环境差异/端口滞后）：
+  - fast 腿 ParamHistoryCacheTest 19 例（F49/F50/R22_T04 参数历史缓存族，两片重复同集——fastBucketSliceCount 在 k2j 无切分支持，两片各跑全桶）；
+  - test(3) ExecutionDialectGateTest 2 例（执行入口普查 uncovered 非空、UI020 回执装配普查）。
+  - 处置：留 T-SyncK2JMaster177 波次 B 测试移植刷新后复验（master 侧同名族在 95e107b1 是绿的）；本轮不单独修。
