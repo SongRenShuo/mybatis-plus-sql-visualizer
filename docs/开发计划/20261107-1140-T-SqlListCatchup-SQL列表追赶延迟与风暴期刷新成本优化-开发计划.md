@@ -332,8 +332,8 @@
 
 ### 战役终态（主控，2026-11-07 晚）
 
-- **合入 master**：（基线 v2026.11.8 正式版  之上；CHANGELOG 冲突按「[Unreleased] 在上 + [2026.11.8] 在下」双段保留）。九券 A/B/C/D/B2/E/F1/F2/G1/G2/G3/H 全部落账，CHANGELOG [Unreleased] 共九条。
+- **合入 master**：`80512ec7`（基线 v2026.11.8 正式版 `659a44cc` 之上；CHANGELOG 冲突按「[Unreleased] 在上 + [2026.11.8] 在下」双段保留）。九券 A/B/C/D/B2/E/F1/F2/G1/G2/G3/H 全部落账，CHANGELOG [Unreleased] 共九条。
 - **真机验收收官（第七轮，去重关闭 + 券 H 构建）**：已收事件 158,015 条（上轮 11,136，14 倍——券 H 排水天花板移除后到达量跟随生产与采集预算）、已丢弃 110 条（上轮 1,402，降 13 倍）、静默后**秒停**（用户确认）；慢拍 0、徽章 0 触发、插件 SEVERE 0；101,586 请求风暴两相位 0 失败。「没跟上」从现象到根因闭环。
 - **全量门禁**：按用户令交 CI（本地 testShards 启动后停止），门禁读数以 CI 轮为准。
-- **清理**：五棵工作树（集成+e/f/g/h）与五条分支（t-sqllist-catchup 及子券）全部删除，删前逐条  复验已含 master。
-- **经验沉淀**： + LESSONS L21（data class 签名跨工作树伪红，Seen 2×）/ L22（后台 tail 吞失败正文）/ L23（prepareSandbox mmap 锁＝沙盒占用）。
+- **清理**：五棵工作树（集成+e/f/g/h）与五条分支（t-sqllist-catchup 及子券）全部删除，删前逐条 `git merge-base --is-ancestor` 复验已含 master。
+- **经验沉淀**：`docs/经验总结/20261107-2230-T-SqlListCatchup-SQL列表追赶九券战役经验总结.md` + LESSONS L21（data class 签名跨工作树伪红，Seen 2×）/ L22（后台 tail 吞失败正文）/ L23（prepareSandbox mmap 锁＝沙盒占用）。
