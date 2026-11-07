@@ -84,6 +84,9 @@ public final class CallerSourceLocator {
             cn.startsWith("cn.song.mybatisplus.visualizer.") || cn.startsWith("cn.song.mybatisplus.sqlvis.") ||
             // 驱动家族
             cn.startsWith("com.mysql.") || cn.startsWith("org.mariadb.") || cn.startsWith("org.postgresql.") ||
+            // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）；
+            // 不收会把驱动栈帧当业务帧，调用点定位跳进驱动内部
+            cn.startsWith("com.goldendb.") ||
             cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
             cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
             cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||
