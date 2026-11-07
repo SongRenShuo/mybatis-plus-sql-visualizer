@@ -31,7 +31,9 @@ public record QueuedExecuteIntent(
         /** 方言闸判定回调；null = 不通知。 */
         @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
         /** 提交回执出口（终态一次性）。 */
-        @Nullable Consumer<ExecutionSubmission> submissionSink
+        @Nullable Consumer<ExecutionSubmission> submissionSink,
+        /** UI-049：方言不匹配态结构化提示（排队意图自身的面板可据此出「下一步」，而不是红字）。 */
+        @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint
 ) {
 
     /**
@@ -41,13 +43,13 @@ public record QueuedExecuteIntent(
     private static final Map<QueuedExecuteIntent, AtomicBoolean> COMPLETED_BY_INTENT =
             Collections.synchronizedMap(new IdentityHashMap<>());
 
-    /** 便捷构造：方言闸/提交回执缺省（Kotlin 默认参数）。 */
+    /** 便捷构造：方言闸/提交回执/方言不匹配提示缺省（Kotlin 默认参数）。 */
     public QueuedExecuteIntent(@Nullable Consumer<JComponent> onConsole,
                                @Nullable Consumer<Editor> onEditor,
                                @Nullable Consumer<String> onError,
                                @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
                                boolean wholeScriptExec) {
-        this(onConsole, onEditor, onError, onErrorRich, wholeScriptExec, null, null, null);
+        this(onConsole, onEditor, onError, onErrorRich, wholeScriptExec, null, null, null, null);
     }
 
     private AtomicBoolean completedFlag() {
