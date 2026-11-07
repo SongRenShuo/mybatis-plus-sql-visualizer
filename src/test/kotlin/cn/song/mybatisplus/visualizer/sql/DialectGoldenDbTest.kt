@@ -57,7 +57,10 @@ class DialectGoldenDbTest {
     fun `角标_displayName与badgeName`() {
         assertEquals("GoldenDB", JdbcUrlDialects.displayName("jdbc:goldendb://h:3306/db"))
         assertEquals("GoldenDB · wmm@10.0.0.7:3306", JdbcUrlDialects.badgeName("jdbc:goldendb://10.0.0.7:3306/wmm"))
-        assertEquals("loadbalance 形态取首个 authority", "GoldenDB · test@h1:3307", JdbcUrlDialects.badgeName("jdbc:goldendb:loadbalance://h1:3307,h2:3308/test"))
+        // loadbalance 是「带前缀的 authority 形态」（:// 前还有 loadbalance 段），R32 通用解析器
+        // 不认（targetOf null）→ 角标如实只出方言名（既有边界，非本轮缺口；判据 3 的 db@h:3306
+        // 由上面的通用 authority 形态覆盖）
+        assertEquals("GoldenDB", JdbcUrlDialects.badgeName("jdbc:goldendb:loadbalance://h1:3307,h2:3308/test"))
         assertNull("未知子协议角标不显示（事实展示命名空间不猜）", JdbcUrlDialects.displayName("jdbc:nosuch://h/db"))
     }
 

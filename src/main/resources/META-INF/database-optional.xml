@@ -68,7 +68,7 @@
                                implementationClass="cn.song.mybatisplus.visualizer.sql.HighGoParserDefinition"/>
         <lang.parserDefinition language="Vastbase"
                                implementationClass="cn.song.mybatisplus.visualizer.sql.VastbaseParserDefinition"/>
-        <!-- T-GoldenDbDialect（券 A）：第五对的后一半——必须与 <sql.dialect> 成对存在
+        <!-- T-GoldenDbDialect（券 A）：第五对的后一半——必须与 sql.dialect 注册成对存在
              （缺了这半：SqlParserDefinitionBase.createFile 强转 SqlLanguageDialect 抛
              ClassCastException → PsiManager.findFile 返回 null → 预览预热降级，见上注）。
              守卫 SqlDialectParserDefinitionPairingGuardTest 已同步登记。 -->
