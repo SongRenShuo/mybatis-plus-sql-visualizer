@@ -197,6 +197,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **反例**：拿 `System.currentTimeMillis()` 差值当判据、把一次性预热成本算进第一段；或为了「稳」把比例阈值一降再降（降到 1.1 时「完全不增长」也能过，判据失效）。
 **Seen 1× (2026-11-07)**
 
+### L19 夹具钉定值必须指向「CI 克隆的那个远端」可达的提交
+
+**证据**：`c2358cb6` 把 `dev-support/test-demo/demo-revision.txt` 从 `74cc257` 改成 `fcb1faf`，而 `fcb1faf` 只是 `.worktrees/mybatis-plus-sql-visualizer-demo` 那个 demo 克隆里的本地合并提交——Gitee 与 GitHub 两侧 demo 仓都没有它。push-test run 42351712089 的 7 条测试腿（`fast (1)`/`fast (2)`/`test (1)`~`test (5)`）全部红在「准备测试 demo」步，日志 `error: pathspec 'fcb1faf' did not match any file(s) known to git` → `[test-demo] ERROR: git checkout fcb1faf failed`，一条断言都没跑到；同轮 `build` 与 `verify 243/253` 是绿的，说明红与代码无关。此后 gate run 42352333430 复现同一红。
+**正例**：钉定值只在「已 push 到 CI 克隆的那个远端」时才成立。改钉定值前先跑两条只读判据——`git -C <demo> ls-remote origin master` 取远端 head、`git merge-base --is-ancestor <新钉> <远端head>` 判可达；两条都过再提交。本次处置：把该提交合入 demo master（`be5b727`）后双推（Gitee `99f0cb3..be5b727` / GitHub `7ded665..be5b727`），`fcb1faf` 成为 master 祖先，钉定值一字不改即全绿（gate run 42353060693 15 job 全 success）。注意那份克隆比远端还旧（连 `99f0cb3` 都没有），直接 `git push master` 是非快进，必须先 fetch + merge。
+**反例**：在某个工作树的兄弟目录里做完夹具改动就提交钉定值，不确认那份克隆的远端有没有这条提交；或凭「本地能跑」判断 CI 也能跑——本地能跑恰恰因为对象就躺在本机那个克隆里，与远端无关。
+**Seen 1× (2026-11-07)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
