@@ -110,8 +110,10 @@ import javax.swing.event.DocumentListener
  * - `currentDedupeCounts` ≡ buffer.dedupeCountsSnapshot()——buffer 侧丢弃计数的全部变更源
  *   （recordDedupeDrop / 整体清零 / 键上限溢出）要么登记变更键、要么置全量重建标记；
  * - `currentTemplateCounts` ≡ structureKeyCounts(snapshot)——presence 只覆盖「去重开启 + 可去重」
- *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / 淘汰扫出键域 / ShardingSphere 条目）一律由
- *   buffer 置全量重建标记，增量路径只消费口径内键。
+ *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / ShardingSphere 条目）一律由 buffer 置
+ *   全量重建标记，增量路径只消费口径内键。淘汰扫出键域（presence 归零摘键）**不在此列**——
+ *   券E 起按变更键净差增量核销（确定性减账，被淘汰键随变更键集出域，见
+ *   SqlLogEntryBuffer.countFullRebuildPending KDoc）。
  *
  * 线程模型：面板 EDT 单线程消费（与 refreshList 同线程），内部状态无并发面。
  */
@@ -304,8 +306,9 @@ class SqlLogPanel(
 
     /**
      * 券B：计数累积器——dedupeCounts/templateCounts 不再每拍全量重算，改为按 buffer 的变更键
-     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 淘汰扫出键域 / 键上限溢出等）由 buffer
-     * 置位，drain 到后回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 键上限溢出等）由 buffer 置位，drain 到后
+     * 回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
      */
     private val countAccumulator = CountSnapshotAccumulator(
         dropCountsSnapshot = { manager.entries.dedupeCountsSnapshot() },
@@ -1966,6 +1969,9 @@ class SqlLogPanel(
             val tailAdvancedAtCapacity = evicted > 0 &&
                 (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
             // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
+            // 券E 账单注：本拍滚动（ensureIndexIsVisible → BasicListUI 变高布局 O(N) 全扫）曾是
+            // 单拍 102~232ms 的最大单一成分——渲染器条目级 preferred size 缓存（RailCellRendererBase
+            // 券E 段）把它从 ~30ms 压到 <10ms（headless 账单，2026-11-07）。
             if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
                 scrollToBottom(resume = false)
             }

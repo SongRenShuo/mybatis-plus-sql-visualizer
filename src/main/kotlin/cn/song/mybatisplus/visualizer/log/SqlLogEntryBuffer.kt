@@ -64,9 +64,11 @@ class SqlLogEntryBuffer(
      * - [rebuildDedupeIndexAfterHandoff]：接管沿索引按 grace 截断只留新鲜键而条目仍留队，
      *   索引键域与 presence 口径分叉，按键取 structureKey 的出口可能失配；
      * - [clear]：全清事件，累积 map 必须与 buffer 双双清零；
-     * - 淘汰把键**扫出键域**（presence 计数归零摘键）：扫键是 F83 短路与 P6 索引重指的历史缺陷
-     *   高发点（dedupeIndex 重建 bug 家族），键域收缩时回退全量一次，把增量基线重新锚定，
-     *   成本 O(N)（N≤200，且该拍本就有 snapshot 全量），正确性换极低代价；
+     *   ~~淘汰把键扫出键域（presence 计数归零摘键）~~——**券E 升级为增量**：淘汰是确定性核销
+     *   （presence 减一、归零摘键），被淘汰键已随 [markCountKeyLocked] 进变更键集，面板按
+     *   presence 当下值与镜像求净差即可正确扣账（structureKey 从键域内期缓存取，键出域时
+     *   缓存仍在），无需回退全量。等价性证据见 SqlLogCountAccumulatorEquivalenceTest 的
+     *   「恒满异键风暴」场景（buffer 恒满、键持续进出的随机序列逐键逐值相等）；
      * - 去重关闭期间的入队/淘汰与不可去重条目（ShardingSphere）变更：presence 口径外，
      *   增量键集无法表达；
      * - [dedupeCounts] 键上限溢出（静默淘汰最旧键）：键集无法表达「哪个键被逐出」。
@@ -534,12 +536,12 @@ class SqlLogEntryBuffer(
                                 if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
                                 // 券B：在队计数 -1，登记被淘汰键（面板等价性用例断言 drain 集合包含被淘汰键）。
                                 markCountKeyLocked(k)
-                                if (remaining <= 0) {
-                                    // 券B：键被扫出键域（presence 摘键）——扫键是 F83 短路与 P6 索引重指的
-                                    // 历史缺陷高发点，回退全量重算一次把增量基线重新锚定（成本 O(N)，
-                                    // N≤200，且该拍本就有 snapshot 全量；同键反复入队出队不扫键，走增量）。
-                                    countFullRebuildPending.set(true)
-                                }
+                                // 券E：键被扫出键域（presence 摘键）**不再回退全量**——淘汰是确定性核销
+                                // （presence 减一、归零摘键，被淘汰键已在变更键集内），面板按净差即可正确
+                                // 扣账（structureKey 从键域内期缓存取）；此前「扫键是历史缺陷高发点 → 回退
+                                // 全量锚定」的保守口径在 buffer 恒满 + 异键风暴下每拍触发整表重算
+                                // （券E 账单与真机 102~232ms 单拍的共同背景），等价性由恒满淘汰序列
+                                // 随机对账用例钉住（SqlLogCountAccumulatorEquivalenceTest）。
                             } else {
                                 // 券B：不可去重条目淘汰不在 presence 口径内——面板回退全量。
                                 countFullRebuildPending.set(true)
@@ -843,10 +845,10 @@ class SqlLogEntryBuffer(
                 if (canDedupe(entry)) {
                     val remaining = (dedupeKeyPresence[k] ?: 0) - 1
                     if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
-                    // 券B：登记变更键供面板按 presence 净差增量；键被扫出键域（计数归零摘键）时
-                    // 回退全量重算一次（扫键=键域收缩，与淘汰路径同一兜底口径）。
+                    // 券B：登记变更键供面板按 presence 净差增量。
+                    // 券E：键被扫出键域不再回退全量——与淘汰路径同一机制（确定性核销：presence 减一、
+                    // 归零摘键，被淘汰键随变更键集出域），见 addEntry 淘汰循环内的券E注释。
                     markCountKeyLocked(k)
-                    if (remaining <= 0) countFullRebuildPending.set(true)
                 } else {
                     // 券B：不可去重条目不在 presence 口径内——面板回退全量。
                     countFullRebuildPending.set(true)
