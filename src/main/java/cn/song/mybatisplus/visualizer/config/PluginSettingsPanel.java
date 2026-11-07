@@ -322,6 +322,52 @@ public class PluginSettingsPanel implements Disposable {
         return null;
     }
 
+    /** T-PagesHql：maintainPage {@code <datasource>} 源语言档（自动 / 仅 SQL / 仅 HQL）。 */
+    public static final class PagesSourceOption {
+
+        final String value;
+        final String label;
+
+        PagesSourceOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof PagesSourceOption)) return false;
+            return Objects.equals(value, ((PagesSourceOption) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(value);
+        }
+    }
+
+    /** T-PagesHql：maintainPage {@code <datasource>} 源语言选项（自动 / 仅 SQL / 仅 HQL）。 */
+    public static PagesSourceOption[] pagesSourceOptions() {
+        return new PagesSourceOption[]{
+            new PagesSourceOption(PluginSettings.PAGES_SOURCE_AUTO, MpSqlVisualizerBundle.message("settings.pagesSource.auto")),
+            new PagesSourceOption(PluginSettings.PAGES_SOURCE_SQL, MpSqlVisualizerBundle.message("settings.pagesSource.sql")),
+            new PagesSourceOption(PluginSettings.PAGES_SOURCE_HQL, MpSqlVisualizerBundle.message("settings.pagesSource.hql")),
+        };
+    }
+
+    /** value 匹配选项（形态对齐 {@link #embeddedNamingOptionByValue}）。 */
+    public static PagesSourceOption pagesSourceOptionByValue(String value) {
+        for (PagesSourceOption option : pagesSourceOptions()) {
+            if (Objects.equals(option.value, value)) return option;
+        }
+        return null;
+    }
+
     /**
      * T-CrudColor：CRUD 颜色标记形态下拉项（值 + 当前语言下的显示文案）。
      * 与 {@link LanguageOption} 同理必须按 value 判等（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
@@ -432,6 +478,14 @@ public class PluginSettingsPanel implements Disposable {
         return selected instanceof CrudColorStyleOption
             ? ((CrudColorStyleOption) selected).value
             : PluginSettings.CRUD_COLOR_STYLE_BAR;
+    }
+
+    /** T-PagesHql：当前源语言档下拉选中值（空选返回 null——isModified/apply 各自兜默认）。 */
+    private String selectedPagesSourceValue() {
+        Object selected = pagesSourceCombo.getSelectedItem();
+        return selected instanceof PagesSourceOption
+            ? ((PagesSourceOption) selected).value
+            : null;
     }
 
     /** 当前下拉选中的显示模式值（空选兜默认——与 PluginSettings.sqlListDisplayMode 的兜底一致）。 */
@@ -882,6 +936,9 @@ public class PluginSettingsPanel implements Disposable {
     /** 嵌入列命名约定下拉（T-EmbeddedColPrefix：AUTO/NONE/COMPONENT_PATH）。 */
     public final JComboBox<EmbeddedNamingOption> embeddedNamingCombo = new JComboBox<>();
 
+    /** maintainPage {@code <datasource>} 源语言档（T-PagesHql：AUTO/SQL/HQL）。 */
+    public final JComboBox<PagesSourceOption> pagesSourceCombo = new JComboBox<>();
+
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     public final JBCheckBox manualEntityCheck = new JBCheckBox();
 
@@ -938,6 +995,9 @@ public class PluginSettingsPanel implements Disposable {
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
     public final JBCheckBox autoInjectInterceptorCheck = new JBCheckBox();
     public final JBCheckBox logShowDurationCheck = new JBCheckBox();
+
+    // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+    public final JBCheckBox logShowMethodCheck = new JBCheckBox();
 
     // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
     public final JBCheckBox dataSourceBadgeDetailCheck = new JBCheckBox();
@@ -1623,6 +1683,7 @@ public class PluginSettingsPanel implements Disposable {
             || !logTimePrefixField.getText().trim().equals(s.getLogTimePrefix())
             || !Objects.equals(parseLongOrNull(slowQueryThresholdField.getText().trim()), s.getSlowQueryThresholdMs())
             || logShowDurationCheck.isSelected() != s.getShowDurationInLogList()
+            || logShowMethodCheck.isSelected() != s.getShowMethodInLogList()
             || dataSourceBadgeDetailCheck.isSelected() != s.getDataSourceBadgeDetail()
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected() != s.getEnhancedCaptureEnabled()
@@ -1665,6 +1726,9 @@ public class PluginSettingsPanel implements Disposable {
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected() != s.getMapperNavYieldToCodeHelper()
             || xmlInlineSqlCheck.isSelected() != s.getXmlInlineSqlEnabled()
+            // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
+            || selectedPagesSourceValue() != null && !selectedPagesSourceValue().equals(s.getPagesXmlSourceMode())
+            || selectedPagesSourceValue() == null && s.getPagesXmlSourceMode() != null
             || xmlSynHiCheck.isSelected() != s.getXmlSynHiEnabled()
             || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
@@ -1779,6 +1843,7 @@ public class PluginSettingsPanel implements Disposable {
             Long slowQuery = parseLongOrNull(slowQueryThresholdField.getText().trim());
             s.setSlowQueryThresholdMs(slowQuery != null ? slowQuery : PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS);
             s.setShowDurationInLogList(logShowDurationCheck.isSelected());
+            s.setShowMethodInLogList(logShowMethodCheck.isSelected());
             s.setDataSourceBadgeDetail(dataSourceBadgeDetailCheck.isSelected());
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.setEnhancedCaptureEnabled(enhancedCaptureCheck.isSelected());
@@ -1848,6 +1913,10 @@ public class PluginSettingsPanel implements Disposable {
             s.setGutterGroupOther(gutterGroupOtherCheck.isSelected());
             s.setMapperNavYieldToCodeHelper(mapperNavYieldCheck.isSelected());
             s.setXmlInlineSqlEnabled(xmlInlineSqlCheck.isSelected());
+            // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
+            s.setPagesXmlSourceMode(selectedPagesSourceValue() != null
+                    ? selectedPagesSourceValue()
+                    : PluginSettings.PAGES_SOURCE_AUTO);
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.setXmlSynHiEnabled(xmlSynHiCheck.isSelected());
             s.setJoinDiagramNative(joinDiagramNativeCheck.isSelected());
@@ -1965,6 +2034,11 @@ public class PluginSettingsPanel implements Disposable {
             gutterGroupOtherCheck.setSelected(s.getGutterGroupOther());
             mapperNavYieldCheck.setSelected(s.getMapperNavYieldToCodeHelper());
             xmlInlineSqlCheck.setSelected(s.getXmlInlineSqlEnabled());
+            // T-PagesHql：maintainPage 源语言档回填
+            {
+                PagesSourceOption match = pagesSourceOptionByValue(s.getPagesXmlSourceMode());
+                pagesSourceCombo.setSelectedItem(match != null ? match : pagesSourceOptions()[0]);
+            }
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.setSelected(s.getXmlSynHiEnabled());
             joinDiagramNativeCheck.setSelected(s.getJoinDiagramNative());
@@ -2007,6 +2081,7 @@ public class PluginSettingsPanel implements Disposable {
             logTimePrefixField.setText(s.getLogTimePrefix());
             slowQueryThresholdField.setText(String.valueOf(s.getSlowQueryThresholdMs()));
             logShowDurationCheck.setSelected(s.getShowDurationInLogList());
+            logShowMethodCheck.setSelected(s.getShowMethodInLogList());
             dataSourceBadgeDetailCheck.setSelected(s.getDataSourceBadgeDetail());
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.setSelected(s.getEnhancedCaptureEnabled());
