@@ -10,6 +10,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
+import com.intellij.util.Alarm
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -555,6 +556,9 @@ class SqlLogManager(private val project: Project) : Disposable {
     fun removeUiListener(listener: () -> Unit) {
         uiListeners -= listener
         if (uiListeners.isEmpty()) {
+            // 券A：最后一个订阅者退订即取消挂起的补刷拍（面板销毁链；无订阅者时 Alarm 触发只会空转）
+            uiCatchUpAlarm.cancelAllRequests()
+            catchUpScheduled = false
             buffer.removeListener(uiNotifyListener)
             buffer.onDedupeCountsChanged = null
             buffer.onContentNotifySuppressed = null
@@ -572,18 +576,71 @@ class SqlLogManager(private val project: Project) : Disposable {
      * T-Perf-03：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
      * 「置脏 + 单个幂等 flush」：首个变更投递一个 invokeLater（pending 置位），后续变更
      * 在 flush 执行前只置脏不重复投递；flush 读的是当下缓冲快照，不丢任何条目。
-     * 持续灌入期间刷新频率被 EDT 吞吐自然合并（风暴期数百条 SQL = 数十次轻量刷新）。
+     *
+     * T-SqlListCatchup 券A：时间窗下限——T-Perf-03 的在途合拍只压「上一拍没跑完」的形态，
+     * EDT 一空立刻刷下一拍，风暴期（EDT 快、通知密）退化为每秒几十拍高频小刷新
+     * （前提探针实测：5 条通知各成一拍）。追加 [MIN_FLUSH_INTERVAL_MS] 窗口：距上次
+     * flush 完成不足窗口时不再立即刷，挂 [uiCatchUpAlarm] 在剩余延迟后补刷一拍——
+     * 无通知时零开销（Alarm 单发，非常驻 Timer），风暴期拍距自然收敛到窗口值。
+     * **窗口外（含首条/从未刷过）仍立即刷**——保住「单条 SQL 秒显」的日常体验，只压合并拍。
      */
     @Volatile
-    private var uiFlushPending = false
+    internal var uiFlushPending = false
+        private set
+
+    /** 券A 测试缝：直置在途标志（模拟「invokeLater 已排队、EDT 尚未执行」的竞态窗，Alarm 竞态用例用）。 */
+    internal fun setUiFlushPendingForTest(value: Boolean) {
+        uiFlushPending = value
+    }
+
+    /** 券A：上次 flush 完成时刻（[System.nanoTime]；0L = 从未刷过的哨兵——视为窗口外立即刷）。internal 测试缝。 */
+    @Volatile
+    internal var lastFlushAtNanos = 0L
+
+    /** 券A：补刷拍已挂标志——窗口内后续通知不重复挂（Alarm 单飞）。notifyUi 可从 BGT 调、动作在池化线程清零，volatile 兜并发。 */
+    @Volatile
+    private var catchUpScheduled = false
+
+    /** 券A：补刷 Alarm。parent 挂本服务（Disposable）——项目关闭随 Disposer 树注销并取消在途请求，无孤儿 Alarm 泄漏。
+     * POOLED_THREAD：243 平台 SWING_THREAD 已废弃（反编译实证，Deprecation "Use POOLED_THREAD instead"）；
+     * 动作只碰 volatile 标志 + invokeLater（任意线程安全），无需 EDT 直跑。 */
+    private val uiCatchUpAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
+
+    /** 券A 测试缝：补刷调度器（默认真 Alarm；测试注入记录器手动触发，钉住调度值而非墙钟——L18 口径）。 */
+    @Volatile
+    internal var catchUpScheduler: (delayMs: Long, action: () -> Unit) -> Unit =
+        { delayMs, action -> uiCatchUpAlarm.addRequest(action, delayMs) }
 
     private fun notifyUi() {
         if (uiListeners.isEmpty()) return
         if (uiFlushPending) return // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖
+        // 券A：时间窗判定。窗口内不立即刷，挂一个补刷拍在剩余延迟后补（已在挂则复用该拍）。
+        val last = lastFlushAtNanos
+        if (last != 0L) {
+            val elapsedNanos = System.nanoTime() - last
+            if (elapsedNanos < MIN_FLUSH_INTERVAL_NANOS) {
+                if (!catchUpScheduled) {
+                    catchUpScheduled = true
+                    val remainingMs = (MIN_FLUSH_INTERVAL_NANOS - elapsedNanos) / 1_000_000L
+                    catchUpScheduler(remainingMs.coerceAtLeast(1)) {
+                        catchUpScheduled = false
+                        // Alarm 到点时已有更新在途——跳过，不重复刷；订阅者已退订（detach 链）同样跳过
+                        if (!uiFlushPending && uiListeners.isNotEmpty()) startFlush()
+                    }
+                }
+                return
+            }
+        }
+        startFlush()
+    }
+
+    /** 券A：发起一拍 flush（invokeLater 到 EDT；完成时刻记入 [lastFlushAtNanos] 开新窗口）。 */
+    private fun startFlush() {
         uiFlushPending = true
         ApplicationManager.getApplication().invokeLater {
             uiFlushPending = false
             uiListeners.forEach { it() }
+            lastFlushAtNanos = System.nanoTime()
         }
     }
 
@@ -604,6 +661,10 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 面板销毁/项目关闭时移除挂载（capturing 同步重置——状态机闭环）。 */
     override fun dispose() {
+        // 券A：项目关闭路径清掉挂起的补刷拍（Alarm 亦以本服务为 parentDisposable 挂 Disposer 树，
+        // 此处显式取消是双保险——先断请求再走树销毁，杜绝销毁竞态下动作再入队）
+        uiCatchUpAlarm.cancelAllRequests()
+        catchUpScheduled = false
         userArmed = false
         isWaitingForConsole = false
         capturing = false
@@ -645,6 +706,19 @@ class SqlLogManager(private val project: Project) : Disposable {
 
         /** M37.3：自动展开防抖窗口（ms）——多条 SQL 连续到达时只展开一次。 */
         internal const val AUTO_SHOW_DEBOUNCE_MS = 60_000L
+
+        /**
+         * T-SqlListCatchup 券A：UI 刷新时间窗下限（ms）。
+         *
+         * 为什么 150ms：计划 §四定例——人眼对列表滚动/追尾无感知差异的下限附近，
+         * 再大伤「单条 SQL 秒显」体感，再小压不住风暴期高频小拍（探针实证 5 通知 5 拍）。
+         * 风暴期（~60 SQL/s）拍距收敛到 150ms ≈ 每秒 6~7 拍上限，EDT 占用显著下降；
+         * 日常低流量（两条间隔 > 150ms）完全不受影响。
+         */
+        internal const val MIN_FLUSH_INTERVAL_MS = 150L
+
+        /** [MIN_FLUSH_INTERVAL_MS] 的纳秒口径（notifyUi 热路径与 [System.nanoTime] 同单位比较）。 */
+        private const val MIN_FLUSH_INTERVAL_NANOS = MIN_FLUSH_INTERVAL_MS * 1_000_000L
 
         /** M37.3：自动展开决策（纯函数，测试缝）——设置开启、未被用户关闭抑制、且距上次展开超过防抖窗口。 */
         internal fun shouldAutoShow(enabled: Boolean, elapsedMs: Long, suppressedByUserClose: Boolean): Boolean =
