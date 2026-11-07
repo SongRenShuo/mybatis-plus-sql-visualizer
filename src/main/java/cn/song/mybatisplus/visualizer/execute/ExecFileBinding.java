@@ -1,11 +1,20 @@
 package cn.song.mybatisplus.visualizer.execute;
 
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
@@ -50,6 +59,14 @@ import java.util.function.Function;
  * T-ConsoleDbContext 探测、ModuleDataSourceBindingStore 学习绑定同一空间）。
  * 隔离约定同 {@link ExecConsoleContext}：仅 Database 插件链内调用，Community 下
  * {@code Class.forName} 失败 → runCatching 全部退化为「不动作」，绝不影响主链。</p>
+ *
+ * <p><b>T-ConsoleBind263（2026-11-07）</b>：IDE 2026.3（IU-263.7307.200）移除了
+ * {@code DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource)}——上面第 1 层修法里
+ * 的写关联那一步因此恒抛 {@code NoSuchMethodException}，「清 pin」只剩 detach、per-file 关联没被清，
+ * 平台 forced 关联把 runner 枚举继续短路成单源（换源弹窗只剩当前源；工具栏点选 {@code mpj_demo}
+ * 静默落到被钉住的 Oracle 源）。写入口改为<b>多版本策略链</b> S1→S2→S3→S4（{@link #selectMappingStrategies}）：
+ * 263 走 S1 {@code setMappingWithWriteAction}，而它<b>是异步协程</b>（见 {@link MappingStrategy} KDoc），
+ * 所以要写后回读（{@link #probePerFileMappingId}）并以 S3 {@code setMapping(VirtualFile, String)} 同步兜底。</p>
  */
 final class ExecFileBinding {
 
@@ -57,6 +74,12 @@ final class ExecFileBinding {
 
     /** per-file 关联实现类（262 平台 jar 实证：{@code com.intellij.database.dataSource.DataSourcePerFileMappingsImpl}）。 */
     private static final String PER_FILE_MAPPINGS_CLASS = "com.intellij.database.dataSource.DataSourcePerFileMappingsImpl";
+
+    /** per-file 关联接口类（263 起 {@code setMappingWithWriteAction} 声明在接口上；两边都探，防形态差异）。 */
+    private static final String PER_FILE_MAPPINGS_API_CLASS = "com.intellij.database.console.DataSourcePerFileMappings";
+
+    /** 数据源类（反射参数类型必须来自同一 classloader，不能用编译期引用）。 */
+    private static final String LOCAL_DS_CLASS = "com.intellij.database.dataSource.LocalDataSource";
 
     private ExecFileBinding() {
     }
@@ -105,7 +128,7 @@ final class ExecFileBinding {
     /**
      * exec 文件 pin 的处置判定（纯函数）。
      *
-     * @param forceChooserPopup 用户显式要求弹出选择器（forceChoose ∥ forceChoosePopup）——
+     * @param forceChooserPopup 用户显式要求弹出选择器（forceChooser ∥ forceChoosePopup）——
      *        此时 pin 存在会把枚举短路成单源，必须清除才能恢复「列全部源」的弹窗语义
      * @param intendedDsId      本次预览的绑定目标身份（null = 无可信目标：无记忆/学习与记忆冲突/同名歧义——不猜）
      */
@@ -275,36 +298,250 @@ final class ExecFileBinding {
                     + t.getClass().getSimpleName() + ": " + t.getMessage());
             consoleId = null;
         }
-        String mappingId;
-        try {
-            Class<?> impl = Class.forName(PER_FILE_MAPPINGS_CLASS);
-            Object ds = impl.getMethod("getDataSourcePerFileMapping", Project.class, VirtualFile.class)
-                    .invoke(null, project, vf);
-            mappingId = ds != null ? DataSourceSettings.getUniqueId(ds) : null;
-        } catch (Throwable t) {
-            LOG.info("[T-ConsoleBind] probe per-file mapping FAILED (treat as unmapped): "
-                    + t.getClass().getSimpleName() + ": " + t.getMessage());
-            mappingId = null;
-        }
+        String mappingId = probePerFileMappingId(project, vf);
         return new ExecBindProbe(consoleId, mappingId);
     }
 
+    // ------------------------------------------------------------------
+    // T-ConsoleBind263（2026-11-07）：per-file 关联写入的多版本策略链
+    // ------------------------------------------------------------------
+    //
+    // **缺陷**：IDE 2026.3（IU-263.7307.200）移除了
+    // DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource)，旧反射恒抛
+    // NoSuchMethodException → pin 清不掉 → 平台 forced 关联继续短路 runner 枚举，换源弹窗
+    // 只剩当前源、工具栏点选静默落到被钉住的源（现场日志 idea.1.log:27899-28040）。
+    //
+    // **263 字节码实证（本单取证，intellij.database.core.impl.ex.jar）**：
+    //  - setMapping(VirtualFile, String)：DbVFSUtils.isConsoleFile(vf) 时恒清（setMapping(vf, null)），
+    //    否则写 id 并在 value != null 时广播 OnMappingsChangedListener；
+    //  - setMappingWithWriteAction(vf, ds, callback)：**异步**——BuildersKt.launch(coroutineScope,
+    //    Dispatchers.getEDT(), ...) → 协程体 edtWriteAction { setMapping(vf, ds?.uniqueId) } → callback。
+    //    故「调用后立刻回读」在 EDT 上必然读到旧值（§八 V1 前提被推翻）→ 必须由同步策略兜底；
+    //  - 静态 setDataSourcePerFileMapping(project, vf, ds)：getInstance(project).setMapping(vf,
+    //    ds.getUniqueId())，**ds 非空无判空** → 只能写、不能清（CLEAR 严禁走它）。
+    //  - 静态 getDataSourcePerFileMapping(project, vf)：getMapping(vf) →
+    //    DataSourceStorage.getDataSourceById(id)，是本单「写后回读」的判据来源。
+
     /**
-     * 对齐 exec 文件的 forced 关联：detach 挂载控制台（若在）+ 重写 per-file 关联。
-     * {@code intendedDs} 为 null = 清除关联（CLEAR：让选择器恢复全源列表；detach 仍必须做——
-     * 挂载控制台 provider 同样会短路枚举）。返回是否两步都成功（调用方据此决定是否作废
-     * 共享/已备控制台缓存——被 detach 的可能正是内嵌在预览面板里的那个控制台）。
-     *
-     * <p>平台 API 出处（262 javap 实证，均 public）：</p>
-     * <ul>
-     *  <li>{@code JdbcConsoleProvider.detachConsole(Project, VirtualFile)}：getConsole → Disposer.dispose
-     *      → removeConsoleToolbar → updatePresentation；</li>
-     *  <li>{@code DataSourcePerFileMappingsImpl.setMapping(VirtualFile, LocalDataSource?)}：委托
-     *      {@code PerFileMappingsBase.setMapping}（null 值走 {@code Map.remove} 清除，字节码实证），
-     *      并广播 {@code OnMappingsChangedListener}。</li>
-     * </ul>
+     * per-file 关联写入策略（按「新 → 旧 → 只写」顺序探测，见 {@link #selectMappingStrategies}）。
      */
-    static boolean realignExecBind(Project project, VirtualFile vf, @Nullable Object intendedDs) {
+    enum MappingStrategy {
+        /** 263+：{@code setMappingWithWriteAction(VirtualFile, LocalDataSource?, Runnable?)}（平台自派写动作，异步）。 */
+        WRITE_ACTION("S1_setMappingWithWriteAction", false),
+
+        /** ≤262：{@code setMapping(VirtualFile, LocalDataSource)}（263 已移除）。 */
+        LEGACY_DS("S2_setMapping(VirtualFile,LocalDataSource)", false),
+
+        /** 兜底同步写：{@code setMapping(VirtualFile, String)}（null = 清除；263 字节码语义已实证）。 */
+        STRING_ID("S3_setMapping(VirtualFile,String)", false),
+
+        /** 最后兜底：静态 {@code setDataSourcePerFileMapping(project, vf, ds)}，只能写。 */
+        STATIC_WRITE_ONLY("S4_setDataSourcePerFileMapping", true);
+
+        /** 策略标识（日志/契约测试锚点）。 */
+        final String id;
+
+        /** 只能写、不能清（{@code ds=null} 会 NPE 或静默失败）——CLEAR 必须排除。 */
+        final boolean writeOnly;
+
+        MappingStrategy(String id, boolean writeOnly) {
+            this.id = id;
+            this.writeOnly = writeOnly;
+        }
+
+        public String id() {
+            return id;
+        }
+
+        public boolean writeOnly() {
+            return writeOnly;
+        }
+    }
+
+    /**
+     * 纯函数：给定平台可用策略集合与本次语义（清/写），返回<b>实际尝试顺序</b> S1→S2→S3→S4。
+     *
+     * <p>CLEAR（{@code clearing}=true，{@code intendedDs == null}）必须剔除只能写的 S4——那是 263 的
+     * {@code setDataSourcePerFileMapping}：字节码里直接 {@code ds.getUniqueId()} 无判空，传 null 必 NPE。
+     * 可用集合按探测结果传入，顺序<b>不随传入顺序变化</b>（表驱动单测钉死）。</p>
+     */
+    static List<MappingStrategy> selectMappingStrategies(
+            Collection<MappingStrategy> available,
+            boolean clearing) {
+        List<MappingStrategy> ordered = new ArrayList<>();
+        for (MappingStrategy candidate : MappingStrategy.values()) {
+            if (available.contains(candidate) && !(clearing && candidate.writeOnly)) {
+                ordered.add(candidate);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * 一次对齐的结果（策略名 + 是否落地 + 回读到的身份）——日志与上层判定共用，
+     * 取代旧实现的单一布尔（旧日志分不清「清了」与「写了」，本次事故正是因此只剩一条 WARN）。
+     *
+     * @param detached  {@code JdbcConsoleProvider.detachConsole} 是否成功
+     * @param mapped    per-file 关联是否写到位（{@code verified}=false 时为「调用未抛异常」）
+     * @param strategy  实际生效的策略（未生效为 null）
+     * @param expectedId 期望的关联身份（null = 清除）
+     * @param observedId 回读到的关联身份（探测不可用为 null）
+     * @param verified  回读是否可用并与期望一致（无回读能力时为 false，不代表失败）
+     * @param failure   最后一次失败的归因串（{@code <异常类型>: <首行消息>}，或 {@code READBACK_MISMATCH ...}；成功为 null）
+     */
+    record RealignReport(
+            boolean detached,
+            boolean mapped,
+            @Nullable MappingStrategy strategy,
+            @Nullable String expectedId,
+            @Nullable String observedId,
+            boolean verified,
+            @Nullable String failure
+    ) {
+        /** 两步都到位（调用方据此决定是否作废共享/已备控制台缓存）。 */
+        boolean applied() {
+            return detached && mapped;
+        }
+    }
+
+    /**
+     * 平台可用的写入策略（按固定顺序；探测结果进程内一次性缓存）。
+     *
+     * <p>缓存只服务于生产路径（每次换源都探一遍纯属浪费）；{@link #detectMappingStrategies} 是无缓存的
+     * 纯探测，供契约测试注入自己的类来源——测试要的正是「换一版平台形态，探测会不会跟着变」。</p>
+     */
+    static List<MappingStrategy> availableMappingStrategies() {
+        List<MappingStrategy> cached = probedStrategies;
+        if (cached != null) return cached;
+        synchronized (ExecFileBinding.class) {
+            cached = probedStrategies;
+            if (cached != null) return cached;
+            List<MappingStrategy> available = detectMappingStrategies(ExecFileBinding::cachedClass);
+            probedStrategies = available;
+            // T-ConsoleBind263 §4.3：契约探针**首次换源时**打一行（D2 定案：不放启动——社区版/无
+            // Database 插件场景不该多付一次类加载）。IDE 大版本再次移除入口时，这一行就是读数。
+            LOG.info("[T-ConsoleBind] platform mapping contract: preferred="
+                    + (available.isEmpty() ? "UNAVAILABLE" : available.get(0).id()) + ", available=" + available);
+            return available;
+        }
+    }
+
+    /**
+     * 一条策略的<b>签名契约</b>：探测时会去哪些类上找哪个方法、参数类型是什么。
+     *
+     * <p>抽成数据是为了让契约测试能拿它去核对<b>真实平台 jar 的 class 文件</b>——263 的 class 是
+     * Java 25 字节码（major 69），而测试 JVM 是 17，{@code Class.forName} 必然 {@code UnsupportedClassVersionError}，
+     * 所以「真实 jar 校验」只能读字节不改类加载。两边共用这一份 spec，才不会出现「测试验的签名
+     * 与生产查的签名不是同一组」。</p>
+     *
+     * @param owners 允许声明该方法的类（S1 在 263 实现类覆写、接口也声明——任一侧命中即可）
+     * @param paramTypes 参数类型的<b>全限定名</b>（{@code VirtualFile} 等平台核心类型照常走类解析，
+     *   {@code LocalDataSource} 来自 Database 插件、缺失时整条策略缺席）
+     */
+    record MappingSpec(
+            MappingStrategy strategy,
+            List<String> owners,
+            String methodName,
+            List<String> paramTypes
+    ) {
+    }
+
+    /** 平台核心类型（恒在）；Database 侧类型见 {@link #LOCAL_DS_CLASS}。 */
+    private static final String VIRTUAL_FILE_CLASS = "com.intellij.openapi.vfs.VirtualFile";
+    private static final String PROJECT_CLASS = "com.intellij.openapi.project.Project";
+    private static final String RUNNABLE_CLASS = "java.lang.Runnable";
+    private static final String STRING_CLASS = "java.lang.String";
+
+    /** 探测契约（顺序即策略优先级 S1→S4，见 {@link #selectMappingStrategies}）。 */
+    static final List<MappingSpec> MAPPING_SPECS = List.of(
+            new MappingSpec(
+                    MappingStrategy.WRITE_ACTION,
+                    List.of(PER_FILE_MAPPINGS_CLASS, PER_FILE_MAPPINGS_API_CLASS),
+                    "setMappingWithWriteAction",
+                    List.of(VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS, RUNNABLE_CLASS)),
+            new MappingSpec(
+                    MappingStrategy.LEGACY_DS,
+                    List.of(PER_FILE_MAPPINGS_CLASS),
+                    "setMapping",
+                    List.of(VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS)),
+            new MappingSpec(
+                    MappingStrategy.STRING_ID,
+                    List.of(PER_FILE_MAPPINGS_CLASS),
+                    "setMapping",
+                    List.of(VIRTUAL_FILE_CLASS, STRING_CLASS)),
+            new MappingSpec(
+                    MappingStrategy.STATIC_WRITE_ONLY,
+                    List.of(PER_FILE_MAPPINGS_CLASS),
+                    "setDataSourcePerFileMapping",
+                    List.of(PROJECT_CLASS, VIRTUAL_FILE_CLASS, LOCAL_DS_CLASS))
+    );
+
+    /**
+     * 无缓存探测：给定「类名 → Class」的来源，返回该平台上可用的写入策略集合（顺序恒 S1→S4）。
+     *
+     * <p><b>为什么要注入</b>：契约测试得能喂两种形态——合成夹具（钉住反射签名，防我们自己写错方法名）
+     * 与真实平台 jar（见 {@link #MAPPING_SPECS} 的说明：263 只能读字节）。生产调用一律走
+     * {@link #availableMappingStrategies} 的缓存版本。</p>
+     *
+     * <p>解析不到某个类（社区版 / 无 Database 插件）时对应策略直接缺席——不猜测、不兜底成「都有」。</p>
+     */
+    static List<MappingStrategy> detectMappingStrategies(Function<String, Class<?>> resolve) {
+        HashMap<String, Class<?>> resolved = new HashMap<>(8);
+        java.util.function.Function<String, Class<?>> classOf = fqcn -> {
+            // Kotlin getOrPut(null) 语义：null 不落缓存，重复解析缺类（可接受——只发生在测试注入）
+            if (!resolved.containsKey(fqcn)) resolved.put(fqcn, resolve.apply(fqcn));
+            return resolved.get(fqcn);
+        };
+
+        List<MappingStrategy> available = new ArrayList<>(MappingStrategy.values().length);
+        for (MappingSpec spec : MAPPING_SPECS) {
+            // 任一参数类型解析不到 → 这条策略无法被反射命中（宁可缺席，也不猜「大概有」）。
+            Class<?>[] paramClasses = new Class[spec.paramTypes().size()];
+            boolean allResolved = true;
+            for (int i = 0; i < spec.paramTypes().size(); i++) {
+                Class<?> pc = classOf.apply(spec.paramTypes().get(i));
+                if (pc == null) {
+                    allResolved = false;
+                    break;
+                }
+                paramClasses[i] = pc;
+            }
+            if (!allResolved) continue;
+            boolean hit = false;
+            for (String owner : spec.owners()) {
+                Class<?> clazz = classOf.apply(owner);
+                if (clazz == null) continue;
+                try {
+                    clazz.getMethod(spec.methodName(), paramClasses);
+                    hit = true;
+                    break;
+                } catch (Throwable ignored) {
+                    // 该 owner 上无此签名，试下一个
+                }
+            }
+            if (hit) available.add(spec.strategy());
+        }
+        return available;
+    }
+
+    /** T-ConsoleBind263 §4.3：契约探针——首选策略名；平台无任何入口时 null（调用方只记日志）。 */
+    @Nullable
+    static String availableMappingStrategy() {
+        List<MappingStrategy> available = availableMappingStrategies();
+        return available.isEmpty() ? null : available.get(0).id();
+    }
+
+    /**
+     * 对齐 exec 文件的 forced 关联：detach 挂载控制台（若在）+ 按 {@link #selectMappingStrategies} 的
+     * 顺序重写 per-file 关联，每一步都用 {@link #probePerFileMappingId} 回读验证。
+     *
+     * <p>{@code intendedDs} 为 null = 清除关联（CLEAR：让选择器恢复全源列表；detach 仍必须做——
+     * 挂载控制台 provider 同样会短路枚举）。</p>
+     *
+     * <p>为什么必须回读：263 的 S1 是异步协程（字节码实证），调用返回时写还没落地；只信「没抛异常」
+     * 会把「看着成功、其实没写」再次放行——本次事故的用户体感正是「什么都没发生」。</p>
+     */
+    static RealignReport realignExecBind(Project project, VirtualFile vf, @Nullable Object intendedDs) {
         boolean detached;
         try {
             Class<?> provider = Class.forName(DataSourceSelector.CONSOLE_PROVIDER_CLASS);
@@ -315,20 +552,277 @@ final class ExecFileBinding {
             LOG.warn("[T-ConsoleBind] detachConsole FAILED: " + t.getClass().getSimpleName() + ": " + t.getMessage());
             detached = false;
         }
-        boolean remapped;
-        try {
-            Class<?> impl = Class.forName(PER_FILE_MAPPINGS_CLASS);
-            Object instance = impl.getMethod("getInstance", Project.class).invoke(null, project);
-            impl.getMethod("setMapping", VirtualFile.class,
-                            Class.forName("com.intellij.database.dataSource.LocalDataSource"))
-                    .invoke(instance, vf, intendedDs);
-            remapped = true;
-        } catch (Throwable t) {
-            LOG.warn("[T-ConsoleBind] setMapping FAILED: " + t.getClass().getSimpleName() + ": " + t.getMessage());
-            remapped = false;
+
+        String expectedId = null;
+        if (intendedDs != null) {
+            try {
+                expectedId = DataSourceSettings.getUniqueId(intendedDs);
+            } catch (Throwable t) {
+                expectedId = null;
+            }
         }
-        LOG.info("[T-ConsoleBind] exec file pin realigned (detach=" + detached + ", remap=" + remapped
-                + ", target=" + (intendedDs != null ? intendedDs.getClass().getSimpleName() : "null") + ")");
-        return detached && remapped;
+        boolean clearing = intendedDs == null;
+        List<MappingStrategy> available = availableMappingStrategies();
+        List<MappingStrategy> candidates = selectMappingStrategies(available, clearing);
+        boolean readbackAvailable = cachedMethod(
+                cachedClass(PER_FILE_MAPPINGS_CLASS),
+                "getDataSourcePerFileMapping",
+                Project.class, VirtualFile.class) != null;
+        String observedId = probePerFileMappingId(project, vf);
+        MappingStrategy strategy = null;
+        boolean verified = false;
+        String failure = null;
+
+        if (candidates.isEmpty()) {
+            // P0-3：失败必须可 grep——写明「无可用策略 + 本次语义」，不带异常（本机就是没有入口）。
+            failure = "NO_STRATEGY_AVAILABLE(clearing=" + clearing + ")";
+            LOG.warn("[T-ConsoleBind] setMapping UNAVAILABLE strategy=none reason=" + failure
+                    + " available=" + available + " expected=" + expectedId);
+        } else {
+            for (MappingStrategy candidate : candidates) {
+                boolean invokedOk;
+                try {
+                    invokeMappingStrategy(project, vf, intendedDs, candidate);
+                    invokedOk = true;
+                } catch (Throwable t) {
+                    invokedOk = false;
+                    failure = describeFailure(t);
+                    LOG.warn("[T-ConsoleBind] setMapping FAILED strategy=" + candidate.id() + " reason=" + failure);
+                    continue;
+                }
+                if (!readbackAvailable) {
+                    // 平台连回读 API 都没有（社区版/极旧平台）：只能认「调用未抛」。
+                    strategy = candidate;
+                    verified = false;
+                    failure = null;
+                    LOG.info("[T-ConsoleBind] setMapping applied strategy=" + candidate.id() + " (readback unavailable)");
+                    break;
+                }
+                observedId = probePerFileMappingId(project, vf);
+                if (observedId != null && observedId.equals(expectedId)) {
+                    strategy = candidate;
+                    verified = true;
+                    failure = null;
+                    LOG.info("[T-ConsoleBind] setMapping applied strategy=" + candidate.id() + " observed=" + observedId);
+                    break;
+                }
+                // S1 在 263 上必然走到这里（异步）：下一候选就是同步兜底，属预期路径，记 INFO 不刷 WARN。
+                failure = "READBACK_MISMATCH expected=" + expectedId + " observed=" + observedId;
+                LOG.info("[T-ConsoleBind] setMapping not applied yet strategy=" + candidate.id() + " reason=" + failure);
+            }
+        }
+
+        boolean mapped = strategy != null;
+        if (!mapped && !candidates.isEmpty()) {
+            LOG.warn("[T-ConsoleBind] setMapping EXHAUSTED strategy=none reason=" + (failure != null ? failure : "unknown")
+                    + " available=" + available + " expected=" + expectedId + " observed=" + observedId);
+        }
+        LOG.info("[T-ConsoleBind] exec file pin realigned: detach=" + detached + ", mapped=" + mapped
+                + ", strategy=" + (strategy != null ? strategy.id() : "none")
+                + ", expected=" + expectedId + ", observed=" + observedId + ", verified=" + verified);
+        return new RealignReport(detached, mapped, strategy, expectedId, observedId, verified, failure);
+    }
+
+    /**
+     * 按策略实际写一次（不验证）。S3/S4 走 {@code PerFileMappingsBase.setMapping}，与平台自己的
+     * {@code edtWriteAction} 同形——EDT 上必须包写命令，否则 {@code handleMappingChange → reparseFiles}
+     * 会以 {@code Write-unsafe context} 收场（DialectPreMapping 同类实证）。
+     */
+    private static void invokeMappingStrategy(
+            Project project,
+            VirtualFile vf,
+            @Nullable Object intendedDs,
+            MappingStrategy strategy) throws Exception {
+        switch (strategy) {
+            case WRITE_ACTION -> {
+                Object instance = mappingInstance(project);
+                if (instance == null) {
+                    throw new IllegalStateException("DataSourcePerFileMappings.getInstance(project) = null");
+                }
+                Method method = cachedMethod(
+                        instance.getClass(), "setMappingWithWriteAction",
+                        VirtualFile.class, cachedClass(LOCAL_DS_CLASS), Runnable.class);
+                if (method == null) {
+                    throw new NoSuchMethodException(instance.getClass().getName() + ".setMappingWithWriteAction");
+                }
+                method.invoke(instance, vf, intendedDs, null);
+            }
+            case LEGACY_DS -> {
+                Object instance = mappingInstance(project);
+                if (instance == null) {
+                    throw new IllegalStateException("DataSourcePerFileMappings.getInstance(project) = null");
+                }
+                Method method = cachedMethod(
+                        instance.getClass(), "setMapping",
+                        VirtualFile.class, cachedClass(LOCAL_DS_CLASS));
+                if (method == null) {
+                    throw new NoSuchMethodException(instance.getClass().getName() + ".setMapping(VirtualFile,LocalDataSource)");
+                }
+                method.invoke(instance, vf, intendedDs);
+            }
+            case STRING_ID -> {
+                Object instance = mappingInstance(project);
+                if (instance == null) {
+                    throw new IllegalStateException("DataSourcePerFileMappings.getInstance(project) = null");
+                }
+                String uniqueId = intendedDs != null
+                        ? tryGetUniqueId(intendedDs) : null;
+                Method method = cachedMethod(
+                        instance.getClass(), "setMapping", VirtualFile.class, String.class);
+                if (method == null) {
+                    throw new NoSuchMethodException(instance.getClass().getName() + ".setMapping(VirtualFile,String)");
+                }
+                Method m = method;
+                inWriteCommand(project, () -> {
+                    try {
+                        m.invoke(instance, vf, uniqueId);
+                    } catch (Exception e) {
+                        throw sneakyThrow(e);
+                    }
+                });
+            }
+            case STATIC_WRITE_ONLY -> {
+                // 选择规则已排除 CLEAR；这里再守一道（配置错误不得变成 NPE）。
+                if (intendedDs == null) {
+                    throw new IllegalArgumentException("STATIC_WRITE_ONLY 不能用于 CLEAR（平台内部直接取 ds.uniqueId）");
+                }
+                Class<?> impl = cachedClass(PER_FILE_MAPPINGS_CLASS);
+                if (impl == null) {
+                    throw new ClassNotFoundException(PER_FILE_MAPPINGS_CLASS);
+                }
+                Method method = cachedMethod(
+                        impl, "setDataSourcePerFileMapping",
+                        Project.class, VirtualFile.class, cachedClass(LOCAL_DS_CLASS));
+                if (method == null) {
+                    throw new NoSuchMethodException(PER_FILE_MAPPINGS_CLASS + ".setDataSourcePerFileMapping");
+                }
+                Method m = method;
+                Object ds = intendedDs;
+                inWriteCommand(project, () -> {
+                    try {
+                        m.invoke(null, project, vf, ds);
+                    } catch (Exception e) {
+                        throw sneakyThrow(e);
+                    }
+                });
+            }
+        }
+    }
+
+    @Nullable
+    private static String tryGetUniqueId(Object ds) {
+        try {
+            return DataSourceSettings.getUniqueId(ds);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 模型写：EDT 上包写命令；已是写上下文或不在 EDT（平台会自己拒绝）则原样调用。 */
+    private static void inWriteCommand(Project project, Runnable block) {
+        ApplicationManager app = ApplicationManager.getApplication();
+        if (app == null || app.isWriteAccessAllowed() || !app.isDispatchThread()) {
+            block.run();
+            return;
+        }
+        // 显式构造 Runnable：runWriteCommandAction 另有 (Project, Computable) 重载，
+        // Kotlin 侧直接传 lambda 会撞 SAM 歧义（编译期实测）——Java 无此歧义，保持显式形态。
+        WriteCommandAction.runWriteCommandAction(project, block);
+    }
+
+    @Nullable
+    private static Object mappingInstance(Project project) {
+        try {
+            Class<?> impl = cachedClass(PER_FILE_MAPPINGS_CLASS);
+            if (impl == null) return null;
+            Method getInstance = cachedMethod(impl, "getInstance", Project.class);
+            return getInstance != null ? getInstance.invoke(null, project) : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 回读 per-file 关联的身份（{@code DataSourcePerFileMappingsImpl.getDataSourcePerFileMapping}）。
+     * 探测不可用/异常 → null（调用方用 {@link RealignReport#verified} 区分「没写」与「读不到」）。
+     */
+    @Nullable
+    private static String probePerFileMappingId(Project project, VirtualFile vf) {
+        try {
+            Class<?> impl = cachedClass(PER_FILE_MAPPINGS_CLASS);
+            if (impl == null) return null;
+            Method method = cachedMethod(impl, "getDataSourcePerFileMapping", Project.class, VirtualFile.class);
+            if (method == null) return null;
+            Object ds = method.invoke(null, project, vf);
+            return ds != null ? DataSourceSettings.getUniqueId(ds) : null;
+        } catch (Throwable t) {
+            LOG.info("[T-ConsoleBind] probe per-file mapping FAILED (treat as unmapped): "
+                    + t.getClass().getSimpleName() + ": " + t.getMessage());
+            return null;
+        }
+    }
+
+    /** P0-3：失败归因串（异常类型 + 首行消息），保证 {@code grep strategy=S} 能一次捞到。 */
+    private static String describeFailure(@Nullable Throwable error) {
+        Throwable cause = error instanceof java.lang.reflect.InvocationTargetException && ((java.lang.reflect.InvocationTargetException) error).getTargetException() != null
+                ? ((java.lang.reflect.InvocationTargetException) error).getTargetException()
+                : error;
+        String name = cause != null ? cause.getClass().getSimpleName() : "UnknownError";
+        String message = "";
+        if (cause != null && cause.getMessage() != null) {
+            String firstLine = cause.getMessage().split("\n", 2)[0];
+            message = firstLine.length() > 200 ? firstLine.substring(0, 200) : firstLine;
+        }
+        return (name + ": " + message).trim();
+    }
+
+    /** Runnable 不能抛受检异常——sneaky 透传保持 describeFailure 看到原始反射异常（与 Kotlin 直抛同语义）。 */
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
+        throw (E) t;
+    }
+
+    // ---------- 反射 Class/Method 记忆化（沿用 DataSourceSettings 的 F68a 范式） ----------
+    //
+    // 换源是用户动作、频次低，但每次都会走 settle 链；负缓存用 Optional（CHM 禁 null），
+    // 键含类名 + 方法签名防跨类/跨重载撞键。
+
+    @Nullable
+    private static volatile List<MappingStrategy> probedStrategies = null;
+
+    private static final ConcurrentHashMap<String, Optional<Class<?>>> CLASS_CACHE = new ConcurrentHashMap<>();
+
+    private static final ConcurrentHashMap<String, Optional<Method>> METHOD_CACHE = new ConcurrentHashMap<>();
+
+    @Nullable
+    private static Class<?> cachedClass(String fqcn) {
+        return CLASS_CACHE.computeIfAbsent(fqcn, k -> {
+            try {
+                return Optional.of(Class.forName(k));
+            } catch (Throwable t) {
+                return Optional.empty();
+            }
+        }).orElse(null);
+    }
+
+    @Nullable
+    private static Method cachedMethod(@Nullable Class<?> clazz, String name, Class<?>... paramTypes) {
+        if (clazz == null) return null;
+        for (Class<?> t : paramTypes) {
+            if (t == null) return null;
+        }
+        StringBuilder key = new StringBuilder(clazz.getName()).append('#').append(name).append('(');
+        for (int i = 0; i < paramTypes.length; i++) {
+            if (i > 0) key.append(',');
+            key.append(paramTypes[i].getName());
+        }
+        key.append(')');
+        return METHOD_CACHE.computeIfAbsent(key.toString(), k -> {
+            try {
+                return Optional.of(clazz.getMethod(name, paramTypes));
+            } catch (Throwable t) {
+                return Optional.empty();
+            }
+        }).orElse(null);
     }
 }
