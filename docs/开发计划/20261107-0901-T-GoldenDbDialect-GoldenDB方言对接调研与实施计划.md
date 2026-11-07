@@ -651,6 +651,16 @@ object GoldenDbDialect : Dialect {
 
 **not run 条款**：全量 testShards 未跑（派活禁令，交收口）；真机档位空（P-1），渲染套件/矩阵引擎级验证留待真机。
 
+### 7.0.1 全量门禁收口（2026-11-07，只读收口代理 @62010c10 + 主控修复）
+
+**门禁读数（被测态 62010c10，工作树全程 clean）**：主仓 **8900 tests / 1 failed / 0 errors / 14 skipped**（testShard1-5 = 816/881/784/956/889 + testFast 4511 + testExternal 32 + tail 31，BUILD FAILED in 11m36s）；agent 子项目 `:sql-visualizer-agent:test` **265 / 0 / 0 / 1**（分片内含腿 + 单独跑各一次均绿）。15 条 skipped 全部为带明示原因的设计性跳过（Docker 方言腿 6 条未开 `-PmpvDockerTests=true`、外部矩阵 1 条无 `.local`、McpGateFilter261 字节码产物缺失 4 条、ExecWholeScriptOption Database 不在 classpath 2 条、AcpSignature 探针停用 1 条、agent DM 实例未指 1 条）。
+
+**唯一红（判定为本战役引入，高置信）**：`CrudSqlGeneratorTest.nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource`（:522）——期望清单 `[MySQL, SQL Server, SQLite, MariaDB, DM（达梦）, OceanBase]` 未收录 `GoldenDB`；实际值多出的恰为本役注册的第 15 方言。语义核对：`GoldenDbDialect` 未覆写 `identifierFolding`，继承接口默认 **NONE 族**（MySQL 形态、反引号标识符不折叠，与 OceanBase 同为模式推定档）——**修法 = 守卫清单补名**（`057e6982`，src/test 单点，方言实现零改动）。定向复跑本类 BUILD SUCCESSFUL（38s）。
+
+**环境事项（非代码）**：首轮 `verifyDemoFixture` 因 demo 夹具工作树 `.worktrees/mybatis-plus-sql-visualizer-demo` 不存在而连坐 5 片——按门禁自带恢复命令跑 `dev-support/test-demo/setup-test-env.ps1 -SkipDb` 克隆钉定版本 `74cc257` 的 demo 夹具后第二轮分片正常（本机无 mysql 客户端，DB init 按脚本设计跳过）。Docker Desktop 引擎由主控经用户授权启动（2026-11-07 起新纪律：不再自行启动本地 Docker，见 AGENTS.md 预检条款改窄），跑后关闭恢复原状。
+
+**修复后状态**：门禁结论 FAIL→已收口（唯一红为 src/test 守卫清单补名，非 src/main 改动，按收口纪律不触发全量复跑；定向绿为本类权威读数）。
+
 ### 7.1 券 A（2026-11-07 实施完成，分支 `t-goldendb-mapping`）
 
 **提交清单**（工作树 goldendb-a）：
