@@ -186,3 +186,31 @@
 - **定向收口读数（集成 tip，`--tests` 指定十类 + `-Pkotlin.compiler.execution.strategy=in-process`，XML 判据数核对）**：10 类 **101 例 0 failures 0 errors 0 skipped**——A 面（FlushWindow 7 / Behavior 35 / AutoShow 9）+ 桥三类（Bridge 1 / Perf 10 / Marker 13）+ 守卫（BundlePlaceholderArity 4 / GuardSelfTestCoverageMetaGuard 8 / BannedApiScanRule 12 / SqlLogManagerLookupGuard 2）。连同 B2 在集成基线跑过的 8 类 143 例，定向面合计 **244 例全绿**。
 - 券 C 证伪的连带处置：D 的桥接缝/桥打点已取消（无死接缝）；A×B 测试语义交互（时间窗改变「通知立即刷」假设）由 B2 在集成侧发现并修（测试侧注入同步 catchUpScheduler，生产零返工）。
 - **not run**：全量门禁 testShards（含平台 UI 测试，L13 口径——用户本轮指令「只做代码收口」）；verifyGate/buildPlugin（非大改动判据）；join-demo 压测前后对比读数（需新插件包装进 IDE，用户改约）；真机 GUI 走查（用户）。合入 master 待用户点名。
+
+### 券 E：refreshList 拆拍瘦身 + 桥侧行处理探针（2026-11-07）
+
+- 分支：`t-sqllist-catchup-e`（工作树 `.worktrees/sqllist-catchup-e`，基线 = 集成 tip `6859384d`），提交：`9d760fa0`（探针，一次到位）、`c1764eaa`（瘦身：渲染器条目级 preferred size 缓存）、`4703ed64`（淘汰扫出键域兜底升级为增量核销；含等价性用例与反向验证）。
+- 写集：`SqlLogPanel.kt`、`LogPerfProbe.kt`、`SqlLogEntryBuffer.kt`、`SqlLogConsoleBridge.kt`、`RailCellRendererBase.kt`（账单显示重段在渲染器——超出原写集的第四文件，主控知情路径：账单定位后按「只动真正重的段」落刀；历史页二级列表与日志页共用该基类，一并受益）+ 测试五处。
+
+**拆拍账单**（headless 本地模拟「visible=200、buffer 恒满、异键风暴、去重关闭=用户真机实态」，临时测试未入库，分波 30 条/波停 170ms 越过券A 时间窗逼出真拍距；拍数 12~15 拍/段）：
+
+| 段 | key | 瘦身前 mean | 瘦身后 mean |
+|---|---|---|---|
+| 全拍 | `LogPanel.refreshList` | 16.0~33.3ms（三账单） | 7.7~9.4ms |
+| 快照 | `.snapshot` | ~0ms | ~0ms |
+| 诊断同步 | `.diagnostics` | 0.9~1.2ms | 0.6~0.8ms |
+| 增量计数（含每拍全量回退） | `.counts` | 0.6~1.4ms | 0.4~0.6ms |
+| 过滤链+排序 | `.filters` | 0.1ms | 0.1ms |
+| 差分+模型+贴底滚动 | `.diffModel` | 14.4~30.7ms | 6.6~7.9ms |
+
+**两个假设被账单证伪，真刀落点**：①主控主攻假设「每拍全量回退计数是最大头」——证伪：counts 段（去重关闭期每拍置全量标记形态）实测仅 0.6~1.4ms（N≤200 的便宜一遍扫），增量化的收益在此量级；②diffModel 段钻取：大头是**尾部贴底滚动** `scrollToBottom` → `ensureIndexIsVisible` → BasicListUI 变高布局 **O(N) 逐格全扫**（默认 KEYWORD_WRAP 可变行高模式；对照实验：模型变更后首次 `getCellBounds` 27~31ms、温态 0.05ms，每拍都有模型变更 → 每拍必付）。真机 102~232ms 同型且更贵（真机渲染更贵）。
+
+**瘦身刀（c1764eaa）**：`RailCellRendererBase` 条目级 preferred size 缓存——IdentityHashMap 按条目身份键控（LogSqlEntry 不可变），代戳（SQL 区宽/显示模式/选中态/字体）任一变化整缓存作废，上限 1024；bind 链先解锚再重锚防陈旧命中。行高口径钉死：⨉N/×N 徽章与选中态只改文字不改行高（徽章 map 每拍换实例，不进代戳）。效果：同款账单全拍 p50 22~33ms → 7~9ms（单拍 <30ms 目标达成）；实验读数「模型变更后首 bounds」27~31ms → 8.7ms（1 新条目）/20ms（30 新条目）。
+
+**淘汰增量化（4703ed64）**：主控必做指令按计划执行——扫出键域是确定性核销（presence 减一、归零摘键、被淘汰键随变更键集出域），面板净差对账即可，addEntry 淘汰循环与 removeEntry 单键删除两处不再置全量标记；其余五类兜底点（开关翻转/接管沿重建/clear/去重关闭或不可去重条目/键上限溢出）逐字不动。等价性证据：`SqlLogCountAccumulatorEquivalenceTest` 新增「异键风暴」场景（2 种子 × 300 恒异键 add、buffer 恒满 5、键持续进出、1~3 拍合并 drain）增量与全量逐键逐值相等，且**基线锚定后全程断言不置全量标记**（防全量回退口径下平凡通过——空绿防线）；反向验证（S2）：恢复 buffer 侧置位重跑恰 2 红（等价性「不走全量」+ ChangedKeys 扫出键域），恢复后全绿。
+
+**桥侧探针**（9d760fa0）：`LogBridge.handleLine`（逐行整方法耗时，风暴期数万行/秒的每行成本盲区补上）；`LogBridge.settledBacklog`（flushSettledEntries 每拍入队前待产出条数 gauge，含 0 每拍记录）；`LogPerfProbe.recordGauge` 补非耗时读数共用券D 分布设施（值 ×1e6 入环使 stats 原值回显）。真机压测复测取数路径与券D 同款：`resetSamples()` 划窗口 → 复测 → `sampleStats(...)` 逐 key 取账单。
+
+**定向测试读数**（`--tests` 定向 + `-Pkotlin.compiler.execution.strategy=in-process`，XML 判据数核对）：12 类 **163 例 0 failures 0 errors 0 skipped**（BufferTest 60 / DedupeIndexTest 18 / ChangedKeysTest 8 / EquivalenceTest 6（新增 1）/ PendingNotifyFlush 4 / PanelDedupeToggle 8 / PanelLayout 23 / Probe 6 / 桥 4 类 30）+ 渲染器共用基类连坐面 5 类 **115 例全绿**（HistoryCellRenderer 30 / PanelRendererUi 53 / RailPerf 17 / ListParamRenderer 10 / HistoryScrollToEnd 5）。探针接线反向验证（9d760fa0）：断开三处探针 key 重跑恰 2 红（面板 diffModel 段 / 桥 handleLine），恢复全绿。
+
+**not run**：真机 GUI 走查（面板卡顿体感/贴底滚动观感）待用户；join-demo 压测复测前后对比（需新插件包装进 IDE，主控统一复测条款——探针与分布采样已就位，`sampleStats` 逐 key 可取）；全量门禁 testShards 与 convention 守卫（券纪律，收口轮统一）；暂缓：diffModel 段余量 ~7ms 的下一层（逐格 bind/片段裁剪成本）有账单可查但已达标未动。
