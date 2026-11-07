@@ -145,9 +145,10 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L13 改设置页/面板布局后 testFast 绿不算绿——平台 UI 测试只在全量 `testShards` 跑到
 
-**证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）。
+**证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）；**2026-11-07 T-SqlListCatchup 合 master `a0cc268e` 后 CI 三轮红 8 例**——券 A 给 `notifyUi` 加了 150ms 刷新窗（通知转 Alarm 延迟补刷），`SqlLogTailFollowTest`×5 / `SqlLogPanelFilterTest`×1 / `SqlListV179HeadlessTest`×1 断言的「动作后列表已同步刷新」全部失效（headless 泵不到未到点的 Alarm），另 `ReplayGuardStormVerdictTest` 未登记进元守卫。本战役六轮定向 + 244 例集成收口全绿，**一个都没抓到**，全靠 CI 全量。
 **正例**：动设置页 section 控件/面板布局/增删 JComboBox 等控件的提交，报告里写明「平台 UI 测试面，全量未跑＝not run 待收口」；**反例**：testFast 快桶绿就宣称设置页改动收口。
-**Seen 2× (2026-10-25, 2026-10-26)**
+**追加口径（2026-11-07）**：**引入「延迟/异步化」机制的改动与改布局同价**——任何把同步刷新改成延迟补刷（时间窗、节流、Alarm、invokeLater 链）的提交，都会让既有 UI 测试里的「动作后立即断言」失效；此类改动的定向面必须显式列出受影响的面板测试类（`SqlLogTailFollow*`/`SqlLogPanel*`/`SqlListV179*` 等）并逐个跑到，或直接以 CI 全量轮为准再收口。修复口径＝测试侧注入同步调度器（`manager.catchUpScheduler = { _, action -> action() }`，机制本身由专项用例覆盖），不要为了让测试变绿去放宽生产窗口。
+**Seen 3× (2026-10-25, 2026-10-26, 2026-11-07)**
 
 ### L12 守卫的口径要以生产代码的实际契约为准，不能按「更严格更好」想象
 

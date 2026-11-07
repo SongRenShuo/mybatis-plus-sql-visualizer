@@ -13,6 +13,15 @@ import javax.swing.JList
 
 /** O-146/V179：只锁模型、滚动语义和渲染片段；不代替 Light/极窄栏真机视觉验收。 */
 class SqlListV179HeadlessTest : BasePlatformTestCase() {
+
+    /**
+     * T-SqlListCatchup 券 A：notifyUi 的 150ms 刷新窗在 headless 下泵不到 Alarm（到点触发依赖真实
+     * 时钟），而本类断言的是「动作之后列表已同步刷新」。注入同步调度器恢复「通知即刷」语义——
+     * 窗口机制本身由 SqlLogManagerFlushWindowTest 覆盖，这里只测面板行为。
+     */
+    private fun newManager(): SqlLogManager =
+        SqlLogManager(project).also { it.catchUpScheduler = { _, action -> action() } }
+
     private lateinit var manager: SqlLogManager
     private var savedMode = ""
     private var savedMask = false
@@ -30,7 +39,7 @@ class SqlListV179HeadlessTest : BasePlatformTestCase() {
         s.displayMaskEnabled = false
         s.crudColorStyle = SqlListTypeColor.STYLE_BAR
         s.slowQueryThresholdMs = 1000
-        manager = SqlLogManager(project)
+        manager = newManager()
         manager.entries.dedupeEnabled = false
     }
 
