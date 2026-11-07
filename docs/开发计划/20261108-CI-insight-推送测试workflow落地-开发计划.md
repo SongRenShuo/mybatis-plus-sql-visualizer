@@ -34,4 +34,8 @@
 
 ## 实施记录
 
-（待补）
+- 工作树写权限实测通过（Read/Write/Edit 均可用），无需降级方案。
+- 步骤 1-2 完成：run-gradle-retry.ps1 与 push-test.yml 按基线 95e107b1 带入，branches 写 [t-sql-insight]，nightly-nudge 加 master 专属 if；YAML 校验通过。
+- 本地编译门禁：`classes testClasses` BUILD SUCCESSFUL in 4m 22s（COMPILE_EXIT=0）。
+- 提交 `04b6c05d`（push-test.yml + run-gradle-retry.ps1 + 本计划文件）；push-all.ps1 -Branch t-sql-insight 双仓推送成功（GitHub 走直连回落，令牌通路）。
+- CI 轮询：后台 ci-watch.py（branch=t-sql-insight，sha=04b6c05d），结论待出后回填。
