@@ -1,7 +1,7 @@
 # T-GoldenDbDialect：中兴 GoldenDB 方言对接调研与实施计划（2026-11-07）
 
 - 立项：2026-11-07 09:01
-- 状态：**调研完成，待拍板**（本册只做调研与立项，未动 `src/main`）
+- 状态：**实施完成（券 A/B/C/D 全落，2026-11-07）**——映射与捕获已接入、文档级验证全绿；真机档位空（P-1 未验证），引擎级验证待真机。实施记录见 §七
 - 目标分支：`master`
 - 输入资产（用户 2026-11-07 提供）：
   - `gdb_mysql-connector-java-oracle-5.1.46.99(1).jar`（1,129,905 B）
@@ -631,7 +631,25 @@ object GoldenDbDialect : Dialect {
 
 ## 七、实施记录
 
-（留空，实施时回填）
+### 7.0 集成（波次 2，2026-11-07，工作树 `goldendb-int`，分支 `t-goldendb-integration`）
+
+**合流**：基线 d8fa12f9 上依次 `git merge t-goldendb-mapping`（→381c2550，18 files）与 `git merge t-goldendb-capture`（merge 提交 5b734e47，10 files）——**零冲突**（计划册 §7.1/§7.2 不同小节自动并，回读双方内容均在场）。
+
+**提交清单**：
+
+| 提交 | 内容 |
+|---|---|
+| `e9a0fceb` | plugin.xml 描述方言数 14→15（中英两处）——§7.1 known-red #1 收口，`PluginXmlStructureGuardTest.描述声明与代码对账` 转绿 |
+| `2e8f828c` | 券 C（DialectVerifySupport 注释 + matrix.example.properties，读数见 §7.3） |
+| 本笔 | 券 D：CHANGELOG `[Unreleased]` 两条 + 架构文档 01 篇计数与包清单 + 本册 §7 汇总回填 |
+
+**合流守卫读数（合并复核口径，重跑非采信子代理自报）**：主仓 15 个测试类 **114 例 / 0 failed / 0 errors / 1 skipped**——skip 恰 1 = `DialectExternalMatrixVerificationTest`（`.local` 矩阵不在场，显式 skip，既有形态）。含 `PluginXmlStructureGuardTest` 23/0、`SqlDialectParserDefinitionPairingGuardTest` 2/0、`DialectExplainTest` 26/0、`DialectGoldenDbTest` 11/0、`GaussDbDialectRegistrationWiringTest` 6/0、`DmDialectRegistrationWiringTest` 3/0、`DialectInferFallbackGuardTest` 4/0、`DynamicEpComplianceGuardTest` 3/0、`GuardSelfTestCoverageMetaGuardTest` 8/0、`BundlePlaceholderArityTest` 4/0、`BundleParityGuardTest` 5/0、`LocatorSkipPrefixSyncTest` 6/0、`DialectVerifySupportUpsertModeTest` 3/0、`DialectDocTableGuardTest` 9/0；agent 侧 `StatementWeaverVendorCoverageTest` **17 ran / 0 skipped / 0 failed**。巨文件/预算类守卫 grep 复核：仓内无 GiantFileBudget 类守卫（既有预算守卫仅 McpRowBudget/CaptureBudget，与本轮新文件无关）；新文件 `GoldenDbSqlDialect.kt`/`DialectGoldenDbTest.kt` 等已被上述登记类与元守卫覆盖。
+
+**§7.1 known-red 两处销案**：#1 plugin.xml 见 `e9a0fceb`（本笔前）；#2 文档站 wrapper-preview 分页表与 batch-operation UPSERT 表 GoldenDB 行已由主控确认落在文档站 dev 工作树提交 `8b9e860`（`MPV_DOCS_ROOT=F:/…/mybatis-plus-sql-visualizer-docs-dev` 跑 `DialectDocTableGuardTest` **9 ran / 0 failed**，中英四表对账绿，见 §7.3）。文档站 master 与正式环境同步由文档车道收口。
+
+**构建校验**：`verifyPlugin` 全过（IU-243.28141.41 / IU-253.33514.17 / IU-263.7307.200 三版报告落 `build/reports/pluginVerifier/`，BUILD SUCCESSFUL 3m6s；Override-only `ActionGroup.getChildren` 与 Experimental API 提示为既有噪音，非本轮引入——Dynamic Plugin Eligibility 判「可免重启启停」）。`DialectDocTableGuardTest` 按 §7.1 的跨仓对齐坑用 `MPV_DOCS_ROOT` 指向文档站 dev 工作树跑（其自述：守卫读磁盘兄弟目录，所有工作树共用，必须文档站与插件同分支同口径）。
+
+**not run 条款**：全量 testShards 未跑（派活禁令，交收口）；真机档位空（P-1），渲染套件/矩阵引擎级验证留待真机。
 
 ### 7.1 券 A（2026-11-07 实施完成，分支 `t-goldendb-mapping`）
 
@@ -738,13 +756,36 @@ BannedApiScanRuleTest 12）。
 **未宣称**：批量事件可采（P-7 未验证）——本券只做登记与字节层安全证明，`executeZteBatch`
 批量路径待真机。
 
-### 7.3 券 C
+### 7.3 券 C（2026-11-07 实施完成，集成波次 `2e8f828c`）
 
-（待填）
+**改动**：
 
-### 7.4 券 D
+1. `DialectVerifySupport.kt` 类注释登记：**不加 H2 配对**（H2 无 GoldenDB 兼容模式），GoldenDB 渲染形态与 MySQL 逐项相同（分页 LIMIT / 反引号 / ON DUPLICATE KEY UPDATE），故 `MODE=MySQL` 配对读数只作**形态级对照证据**、非 GoldenDB 引擎证据——引擎级只能走 `dialectExternalVerify` 真机矩阵。
+2. `matrix.example.properties`：方言清单注释补 `GoldenDB（中兴）`；末尾加注释示例条目 `# goldendb.dialect = GoldenDB` / `# goldendb.url = jdbc:goldendb://host:port/db`（不含凭据，并注明 GoldenDB 驱动不在测试 classpath，真机跑前需先布驱动）。
+3. `DialectCapabilities.kt` **不改**（真值推导），按计划原文。
 
-（待填）
+**判据读数**：
+
+- 判据 1（`DialectCapabilities.matrix(GoldenDbDialect)` 四行产出）：由券 A 预先落位的 `DialectGoldenDbTest.能力矩阵_四行产出与真值`（:140）覆盖——UPSERT=true（p66 原生形态）、IDENTITY_WRAP=false、DELETE_LIMIT=true、EXPLAIN=false（P-9 template=null）；合流守卫批 11/11 绿。
+- 判据 2（矩阵模板含 GoldenDB）：`matrix.example.properties:19` 在场；写错名判红底线由 `DialectExternalMatrixVerificationTest` 既有用例承担。
+- 反向验证（判据 3，S2 成对读数）：`renderUpsert` 临时改返回 null（探针注释 REV-PROBE-C）→ `DialectGoldenDbTest` **2 红**（`渲染形态_分页与upsert断言` :118 / `能力矩阵_四行产出与真值` :144，即 UPSERT 行翻 false 被真值断言逮住）＋ `DialectDocTableGuardTest` **2 红**（文档站 UPSERT 形态对账 :388 中英——文档站写 MySQL 形态而探针下代码无原生 upsert，对账守卫也逮住）；还原后 `DialectGoldenDbTest` **11/0**、`DialectDocTableGuardTest` **9/0** 全绿。探针零残留（grep REV-PROBE-C = 0）。
+
+**DialectDocTableGuardTest 双跑读数**（跨仓守卫，主控指定 `MPV_DOCS_ROOT` 指向文档站 dev 工作树）：`MPV_DOCS_ROOT=…-docs-dev` 跑 **9 ran / 0 failed / 0 skipped**——文档站 dev（`8b9e860`，GoldenDB 四表补行）与插件 15 方言同口径。
+
+### 7.4 券 D（2026-11-07 落账，集成波次）
+
+**落账清单（文件 → 内容 → hash）**：
+
+| 文件 | 内容 | hash |
+|---|---|---|
+| `CHANGELOG.md` `[Unreleased]` 新增两条 | ①新增中兴 GoldenDB 方言（第 15 方言，**文档级，未经真机引擎验证**——措辞按 §6.1 分档，未写「已支持/可用/兼容」；形态依据 p66/p73/p320，384 词，EXPLAIN 行如实 false）→ 券 A hash 7c5788fb/7630fd0a/e2051bca；②增强捕获支持 GoldenDB 驱动（三面登记 + NonRegisteringDriver 关键坑 + G9 前缀）→ 券 B hash acc522cf/bb987110 | 券 A/B hash 为源提交，落账载体=本笔 |
+| `docs/架构设计/01-项目架构总览.md:14` | 方言计数副本 14→15（P-10 命中点） | 本笔 |
+| `docs/架构设计/01-项目架构总览.md:258` | `sql` 包清单补 `goldendb/`（GoldenDbSqlDialect 第五对，T-GoldenDbDialect） | 本笔 |
+| 本册 §7.0/§7.3/§7.4/§7.5 | 集成记录 + 券 C 读数 + 落账清单 + 销案表更新 | 本笔 |
+
+**P-10 核对读数**：`grep -rn Vastbase docs/架构设计/` 命中**仅 1 处**＝`测试服务器备份与恢复体系-说明文档.md:104`（测试服务器 Vastbase A/B 实例的 gs_dump 细节，**非方言清单**，不改）；方言清单类副本实际以计数形态存在于 `01-项目架构总览.md:14`（已同步 15）与包清单 `:258`（已补 goldendb/）。`02-核心流程详解.md` §2.4 推断链叙述与 `03-开发与测试指南.md` 新增方言步骤为**过程性文档**（不含逐方言清单，步骤 10 已写明 plugin.xml 计数守卫口径），本轮不改。
+
+**`docs/LESSONS.md` 不动**：本轮零新坑——§7.1 的 XML 注释字面量误计、§7.2 的 SPS 无参 addBatch 与 `BYTE_VERIFIABLE_EXCLUDES` vs `JAR_OPTIONAL_BYTE_LAYER`、P-9 强制 null 条目三类素材均已作为**对应守卫/用例的正例**落在计划册与本册各节（有守卫钉住的可执行规则不需要账本记新条目），且无 hash 级复发证据，不硬凑。
 
 ### 7.5 待验证前提销案表
 
@@ -759,4 +800,4 @@ BannedApiScanRuleTest 12）。
 | P-7 驱动代理层 | **部分实测**（发现 `executeZteBatch` 等自研方法）；主路径**未验证** | 待真机 |
 | P-8 平台方言 | **销案（券 A）** | IU-262.9437.185 全量 345 xml `grep -il golden` 零命中（正对照 mysql/greenplum 命中）→ 平台无 → 自注册四件套落位（第五对成对，守卫绿） |
 | P-9 EXPLAIN 档位 | **销案（券 A）——诚实不接入** | p323-325 原文只有语法与 FORMAT=JSON/Oracle 选项、无任何输出形态示例 → `ExplainSupport` 落 template=null 条目（矩阵 EXPLAIN=false），真机读数到位后按档登记 |
-| P-10 架构文档副本 | **未核对** | 券 D 开工时 grep |
+| P-10 架构文档副本 | **销案（券 D）** | `grep Vastbase docs/架构设计/` 命中 1 处＝测试服务器备份文档（非方言清单，不改）；计数副本在 `01-项目架构总览.md:14`（14→15 已改）＋包清单 `:258` 补 `goldendb/`；02/03 篇为过程性文档无逐方言清单 |

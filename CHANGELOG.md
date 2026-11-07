@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+- **新增中兴 GoldenDB 方言（第 15 方言，文档级，未经真机引擎验证；T-GoldenDbDialect 券 A，7c5788fb / 7630fd0a / e2051bca）**：渲染形态依据《GoldenDB 开发支持 V6.1.03.10》p66/p73/p320——分页 `LIMIT [offset,] count`（0 起算）、反引号标识符、upsert `ON DUPLICATE KEY UPDATE`、`DELETE ... LIMIT` 文法级支持（p274/p276）；保留字词表按 PDF p351-355 三表并集落 384 词（含 `storagedb`/`chgdiskey`/`gdb_nolock` 等 GoldenDB 自有词与 `rownum`/`varchar2` 等 Oracle 兼容词，与 MySQL 词表差 147 词）。连接面已接全：`jdbc:goldendb://`（含 loadbalance 形态）URL→方言、列表角标显示 `GoldenDB`、MCP 识别（含中文名「金篆」归一）、执行目标路由。能力矩阵如实显示：EXPLAIN 行 false（PDF 有专章但输出格式未逐字取证，不登记模板）、UPSERT true、DELETE LIMIT true
+- **增强捕获支持 GoldenDB 驱动（T-GoldenDbDialect 券 B，acc522cf / bb987110）**：`gdb_mysql-connector-java-oracle-5.1.46.99.jar` 按 jar 真实字节登记三面——连接面 `com.goldendb.jdbc.NonRegisteringDriver`（`Driver` 自身不声明 `connect`，只登记 `Driver` 会零命中）+ `Driver`、语句面 `StatementImpl` / `PreparedStatement` / `ServerPreparedStatement` / `CallableStatement`、prepare 面 `ConnectionImpl`（四个语句类均通过「织入 → 隔离 loader 定义 → JVM 校验」字节层用例）；日志来源定位的框架帧跳过前缀同步补 `com.goldendb.`，来源位置不再指进驱动内部
+
 ### Fixed
 - **运行期占位回填的两处错位：三元注释里的 `?` 被当成 JDBC 占位符、可选 if 片段填值重复或被拒（T-RuntimeSlotOptionalFill，用户沙盒验收）**：`listByTernaryBranch` 面板多出一个 `#param1`、填了不生效——JDBC 字符串预览用朴素 `count('?')` 数占位符，把三元占位注释里的 Java 问号也算成了 JDBC 占位符；现改用 string-aware 位点扫描（注释/字符串里的 `?` 不计），参数行只保留真实 `?`。`listByOptionalIf` 填 `keyword` 时占位留在字符串里不被替换、填 `minAmount` 时出现 `AND amount >=` 悬空行 + `AND amount >= 111` 重复行——可选 if 片段的 slot 原本只覆盖值位置、模板却覆盖整段片段；现改为「整段一个 slot」（token 与模板同覆盖整段），填值/取消包含/留空三条路径一致；一个片段含多个运行期值时回退为值位置模式并提示限制
 
