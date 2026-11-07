@@ -18,6 +18,7 @@ import java.sql.Statement
 import java.time.LocalDateTime
 import java.util.Properties
 import java.util.concurrent.Callable
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -74,6 +75,15 @@ class DialectExternalMatrixVerificationTest {
         /** 实例并发覆盖入口（优先于矩阵全局 `maxConcurrency`，便于一次性复跑与反向验证）。 */
         const val MAX_CONCURRENCY_PROPERTY = "mpvs.external.maxConcurrency"
 
+        /**
+         * 词级并行覆盖入口（T-DialectSweepSpeed2，2026-11-07）。
+         *
+         * 本属性与矩阵全局 `wordWorkers` 都是**上限**，每实例再与词数取 min；默认
+         * [DialectVerifySupport.DEFAULT_WORD_WORKERS]。置 1 = 关掉词级并行（反向验证用），
+         * 行为回到「单连接串行扫」。
+         */
+        const val WORD_WORKERS_PROPERTY = "mpvs.external.wordWorkers"
+
         /** 并发工作线程名前缀（与看门狗的 `mpv-matrix-<key>` 区分，报告取证用）。 */
         const val RUNNER_THREAD_PREFIX = "mpv-matrix-runner-"
 
@@ -94,6 +104,8 @@ class DialectExternalMatrixVerificationTest {
                 val password: String?,
                 val budgetSeconds: Long,
                 val skipWords: Set<String>,
+                /** 词级并行度上限（每实例再与词数取 min；1 = 关闭）。 */
+                val wordWorkers: Int,
             ) : InstancePlan
 
             data class Reject(
@@ -141,6 +153,8 @@ class DialectExternalMatrixVerificationTest {
         // T-DialectSweepSpeed（2026-11-06）：实例并发执行。墙钟 ≈ max(单实例) 而不是 Σ，
         // 但**结局清单按 instances 声明下标回填**——顺序对不上时 summary 就不可与上一轮逐行比对。
         val (concurrency, concurrencyNote) = resolveConcurrency(props, keys.size)
+        // T-DialectSweepSpeed2（2026-11-07）：实例内再按词并行；口径同上（上限 + 每实例与词数取 min）。
+        val (wordWorkers, wordWorkersNote) = resolveWordWorkers(props)
         val outcomes = runPlans(keys.map { planOf(props, it) }, concurrency)
         keys.indices.forEach { index -> summary.record(outcomes[index].first, outcomes[index].second) }
 
@@ -151,10 +165,13 @@ class DialectExternalMatrixVerificationTest {
             appendLine("矩阵：${file.absolutePath}")
             appendLine()
             appendLine("实例并发：$concurrencyNote")
+            appendLine("词级并行：$wordWorkersNote")
             appendLine("实例级预算（超时看门狗）：默认 ${globalBudget.seconds}s（${globalBudget.source}）")
             budgetNotes.forEach { appendLine("- $it") }
             appendLine()
             appendLine("批处理：每个实例明细行带 `batch=on` / `batch=off(<引擎原话>)` / `batch=degraded(<原因>)`")
+            appendLine("覆盖口径：每词执行「插件渲染的 SELECT / INSERT(带参) / UPDATE / UPSERT(带参)」；" +
+                "字面量 INSERT 是夹具种子（并入批处理，不是渲染验证项），INSERT 渲染由 runTcSuite 覆盖")
             appendLine()
             appendLine(summary.countsLine())
             appendLine()
@@ -256,6 +273,7 @@ class DialectExternalMatrixVerificationTest {
             password = password,
             budgetSeconds = budget.seconds,
             skipWords = skipWords,
+            wordWorkers = resolveWordWorkers(props).first,
         )
     }
 
@@ -331,7 +349,22 @@ class DialectExternalMatrixVerificationTest {
                         "——空扫即空绿，不能当证据",
                     swept.size >= MIN_RESERVED_WORDS,
                 )
-                val sweepFailures = DialectVerifySupport.sweepReservedWords(c, plan.spec, swept, notes)
+                // 词级并行：每 worker 一条独立连接（同一实例、同一 URL）；都经句柄发布，
+                // 让超时处置（cancel → close）覆盖到并行连接，而不是只认套件那条。
+                val sweepFailures = DialectVerifySupport.sweepReservedWords(
+                    c,
+                    plan.spec,
+                    swept,
+                    notes,
+                    plan.wordWorkers,
+                ) {
+                    val workerRaw = if (plan.user.isNullOrBlank()) {
+                        DriverManager.getConnection(plan.url)
+                    } else {
+                        DriverManager.getConnection(plan.url, plan.user, plan.password)
+                    }
+                    handle.publish(workerRaw)
+                }
                 assertTrue(
                     "${plan.key}（$dialectLabel）保留字扫描失败 ${sweepFailures.size}/${swept.size} 个词:\n" +
                         sweepFailures.joinToString("\n"),
@@ -356,6 +389,25 @@ class DialectExternalMatrixVerificationTest {
         }
         val effective = minOf(configured, maxOf(1, instanceCount))
         return effective to "$source=$configured；实例 $instanceCount 个 → 并发度 min(上限, 实例数) = $effective"
+    }
+
+    /**
+     * 词级并行度解析（T-DialectSweepSpeed2）：上限 = 系统属性 `-Dmpvs.external.wordWorkers` → 矩阵全局
+     * `wordWorkers` → 默认 [DialectVerifySupport.DEFAULT_WORD_WORKERS]。
+     *
+     * 返回的是**上限**，每实例再与自己的词数取 min（见 `DialectVerifySupport.sweepReservedWords`）——
+     * 词数少于上限时不空转线程。置 1 即关闭词级并行（反向验证口径）。
+     */
+    private fun resolveWordWorkers(props: Properties): Pair<Int, String> {
+        val bySystem = System.getProperty(WORD_WORKERS_PROPERTY)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+        val byMatrix = props.getProperty("wordWorkers")?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+        val configured = bySystem ?: byMatrix ?: DialectVerifySupport.DEFAULT_WORD_WORKERS
+        val source = when {
+            bySystem != null -> "系统属性 -D$WORD_WORKERS_PROPERTY"
+            byMatrix != null -> "矩阵全局 wordWorkers"
+            else -> "默认"
+        }
+        return configured to "$source=$configured（每实例取 min(该值, 词数)；1 = 关闭）"
     }
 
     /**
@@ -389,15 +441,15 @@ class DialectExternalMatrixVerificationTest {
      * 装了个看门狗就把真机读数弄坏。
      */
     private class InstanceJdbcHandle {
-        @Volatile
-        private var connection: Connection? = null
+        /** 已发布的连接（T-DialectSweepSpeed2：词级并行后不止一条，故用并发列表）。 */
+        private val connections = CopyOnWriteArrayList<Connection>()
 
-        @Volatile
-        private var currentStatement: Statement? = null
+        /** 在途语句（每 worker 一条，可能同时有多条）。 */
+        private val activeStatements = CopyOnWriteArrayList<Statement>()
 
         /** 发布连接（另一线程可读）并返回给套件使用的代理连接。 */
         fun publish(raw: Connection): Connection {
-            connection = raw
+            connections += raw
             return try {
                 val interfaces = publicInterfacesOf(raw.javaClass)
                 Proxy.newProxyInstance(InstanceJdbcHandle::class.java.classLoader, interfaces) { _, method, args ->
@@ -410,16 +462,28 @@ class DialectExternalMatrixVerificationTest {
         }
 
         /**
-         * 处置第 1 步：取消正在执行的语句。
+         * 处置第 1 步：取消正在执行的语句（可能有多条：词级并行下每 worker 一条）。
          *
          * 超时点没有在执行的语句时**显式抛错**而不是静默成功——报告里的 `statement.cancel✗(…)` 与
          * `statement.cancel✓` 因此能区分「这一步真的做了」与「这一步没有对象可做」，
          * 免得把无操作读成「cancel 已经试过且有效」。
          */
         fun cancelCurrentStatement() {
-            val statement = currentStatement
-                ?: throw IllegalStateException("超时点无正在执行的语句（超时落在语句间隙）")
-            statement.cancel()
+            val snapshot = activeStatements.toList()
+            if (snapshot.isEmpty()) {
+                throw IllegalStateException("超时点无正在执行的语句（超时落在语句间隙）")
+            }
+            var cancelled = 0
+            var firstError: Throwable? = null
+            snapshot.forEach { statement ->
+                try {
+                    statement.cancel()
+                    cancelled++
+                } catch (t: Throwable) {
+                    if (firstError == null) firstError = t
+                }
+            }
+            if (cancelled == 0) throw firstError ?: IllegalStateException("所有在途语句取消失败")
         }
 
         /**
@@ -428,18 +492,30 @@ class DialectExternalMatrixVerificationTest {
          * 超时点尚未建立连接（例如挂在登录握手里）时显式抛错，理由同 [cancelCurrentStatement]。
          */
         fun closeConnection() {
-            val connection = this.connection
-                ?: throw IllegalStateException("超时点尚未建立连接（挂在登录握手里，由 loginTimeout 兜）")
-            connection.close()
+            val snapshot = connections.toList()
+            if (snapshot.isEmpty()) {
+                throw IllegalStateException("超时点尚未建立连接（挂在登录握手里，由 loginTimeout 兜）")
+            }
+            var closed = 0
+            var firstError: Throwable? = null
+            snapshot.forEach { connection ->
+                try {
+                    connection.close()
+                    closed++
+                } catch (t: Throwable) {
+                    if (firstError == null) firstError = t
+                }
+            }
+            if (closed == 0) throw firstError ?: IllegalStateException("所有连接关闭失败")
         }
 
         private fun track(statement: Statement): Statement {
-            currentStatement = statement
+            activeStatements += statement
             return try {
                 val interfaces = publicInterfacesOf(statement.javaClass)
                 Proxy.newProxyInstance(InstanceJdbcHandle::class.java.classLoader, interfaces) { _, method, args ->
-                    if (method.name == "close" && args.isNullOrEmpty() && currentStatement === statement) {
-                        currentStatement = null
+                    if (method.name == "close" && args.isNullOrEmpty()) {
+                        activeStatements.remove(statement)
                     }
                     invoke(statement, method, args)
                 } as Statement

@@ -557,6 +557,8 @@ tasks.register<Test>("dialectExternalVerify") {
     listOf(
         "mpvs.external.instanceTimeout",
         "mpvs.external.maxConcurrency",
+        // T-DialectSweepSpeed2（2026-11-07）：单实例内词级并行度上限（1 = 关闭，反向验证用）
+        "mpvs.external.wordWorkers",
         "mpvs.docker.tests.enabled",
         "mpvs.dialect.name",
         "mpvs.dialect.jdbcUrl",
