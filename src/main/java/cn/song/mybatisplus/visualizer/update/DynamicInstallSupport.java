@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.update;
 
 import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationInfo;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.TransactionGuard;
@@ -28,13 +29,23 @@ import kotlin.jvm.functions.Function2;
  * 任一步不满足或失败都回退 [PlatformPluginInstaller.installRestartScript] 启动脚本路径
  * （重启生效，M28 原行为），全程无中间死态。
  *
- * <p>平台 API 全走反射探测（F0 javap 243 + 反编译 262 双端实证，签名与语义一致）：
+ * <p>平台 API 全走反射探测（243/262/263 三版 jar 实测，签名与语义已对齐；263 的入口替换见 T-DynUpdate263）：
  * <ul>
  * <li>{@code PluginDescriptorLoader.loadDescriptorFromArtifact(Path, BuildNumber)}：从发行 zip 读新版描述（两平台 public）；</li>
- * <li>{@code DynamicPlugins.allowLoadUnloadWithoutRestart(descriptor)}：卸载可行性预检——EP dynamic 属性
- * （本插件注册的 EP 全部落在平台声明 {@code dynamic="true"} 的点位上，当前 57 个注册 0 违规；
- * 由 {@code DynamicEpComplianceGuardTest} 守卫，新增 EP 若落在非 dynamic 点位即红）、
- * {@code ide.dynamicPluginVetoer}、依赖插件图（两平台 public）；</li>
+ * <li>卸载可行性预检按<b>能力族</b>解析（T-DynUpdate263），<b>旧入口优先</b>（243/262 与改动前逐字同路径）：
+ *   {@code allowLoadUnloadWithoutRestart(descriptor): Boolean}（243/262）→ 缺失时用
+ *   {@code validateCanUnloadWithoutRestart(descriptor): String?}（非空=不可卸载原因）或
+ *   {@code checkCanUnloadWithoutRestart(descriptor): Boolean}（262/263）。243 的 check 同名但返回
+ *   <b>String</b>，故解析必须连返回类型一起判，见 {@link #resolveUnloadGate}。预检同时覆盖
+ *   {@code ide.dynamicPluginVetoer} 与依赖插件图；
+ *
+ *   <p>⚠️ <b>EP dynamic 属性本身会挡住热卸载（2026-11-06 实证）</b>：本插件在
+ *   {@code META-INF/database-optional.xml} 里为四个自注册方言（DM / GaussDB / HighGo / Vastbase）
+ *   扩展了 {@code com.intellij.sql.dialect}，该 EP 在 <b>243 上非动态</b>（253/263 起平台才标
+ *   {@code dynamic="true"}）。于是 243 上平台必然拒绝卸载本插件：日志里 {@code DynamicPlugins} 会写
+ *   {@code is not unload-safe because of extension to non-dynamic EP …}，更新只能走「重启生效」。
+ *   事实表、取证方法与平台版本分界见 PlatformEpDynamism；本仓描述文件的静态守卫见
+ *   {@code DynamicEpComplianceGuardTest}。</p></li>
  * <li>{@code DynamicPlugins.unloadPlugin(descriptor)}：运行期卸载旧版（两平台 public，内部走 EDT write action）；</li>
  * <li>{@code PluginInstaller.installAndLoadDynamicPlugin(Path, JComponent?, descriptor)}：解包 + 动态装载新版
  * （两平台 public；双端反编译实证 descriptor 参数仅用于进度标题/日志/fireState，解包布局由 zip
@@ -87,7 +98,7 @@ public final class DynamicInstallSupport {
         PluginUpdateRunner.InstallResult.Failed guard = PlatformPluginInstaller.devGuardOrFailure();
         if (guard != null) return guard;
 
-        // 3. 平台能力探测：五个反射入口任一缺失（未来版本签名漂移/裁剪发行版）即回退
+        // 3. 平台能力探测：任一入口缺失（未来版本签名漂移/裁剪发行版）即回退；缺失项全量进日志
         PlatformApi api = PlatformApis.probe();
         if (api == null) {
             return fallbackToRestartScript(zip, "platform dynamic-install APIs unavailable");
@@ -100,9 +111,10 @@ public final class DynamicInstallSupport {
         }
 
         // 5. 卸载可行性预检：本插件注册的 EP 全部落在平台 dynamic 点位（DynamicEpComplianceGuardTest 守卫），
-        //    此处主要防 vetoer/依赖图否决
-        if (!api.allowLoadUnload(current)) {
-            return fallbackToRestartScript(zip, "dynamic unload rejected by platform (vetoer/EP/dependency)");
+        //    此处主要防 vetoer/依赖图否决；Validate 族会给出平台原话，直接进日志（T-DynUpdate263）
+        GateDecision gate = api.evaluateUnloadGate(current);
+        if (!gate.allowed()) {
+            return fallbackToRestartScript(zip, describeUnloadRefusal(api.unloadGateFamily(), gate.reason()));
         }
 
         // 6. 新版描述（仅作 installAndLoadDynamicPlugin 的日志/状态广播参数，见类 KDoc）
@@ -125,6 +137,47 @@ public final class DynamicInstallSupport {
     private static PluginUpdateRunner.InstallResult fallbackToRestartScript(Path zip, String reason) {
         LOG.info("dynamic install not applicable — falling back to restart script: " + reason);
         return PlatformPluginInstaller.installRestartScript(zip);
+    }
+
+    /**
+     * 把「平台拒绝卸载」翻译成<b>可查</b>原因。
+     *
+     * <p>VALIDATE 族会带平台原话，直接采用；ALLOW/CHECK 族只返回 boolean、平台不给原因字符串——
+     * 这时用 PlatformEpDynamism 的确定事实补位（非动态 EP + 平台版本分界），再不命中才回落
+     * 「平台未给原因 + idea.log 指路」。<b>不再写「platform gave no reason」了事</b>：2026-11-06 真机里
+     * 平台上一行就写了确切 EP（{@code is not unload-safe because of extension to non-dynamic EP …}），
+     * 我们却把它丢了，定位多绕了一轮。</p>
+     */
+    static String describeUnloadRefusal(String family, String platformReason) {
+        String explicit = platformReason != null && !platformReason.isBlank() ? platformReason : null;
+        String known = platformEpDynamismExplanation();
+        String head = "dynamic unload rejected by platform (family=" + family + ")";
+        if (explicit != null) {
+            return head + ": " + explicit + (known != null ? "；另：" + known : "");
+        }
+        if (known != null) {
+            return head + ": 平台未返回原因，已定位到确定原因——" + known
+                + "（平台在同一次 idea.log 里会打 `is not unload-safe because of extension to non-dynamic EP …`）";
+        }
+        return head + ": 平台未返回原因；在 idea.log 里 grep `is not unload-safe` 可拿到确切项"
+            + "（本插件声明的 EP 与平台版本分界见 PlatformEpDynamism）";
+    }
+
+    /**
+     * k2j 翻译注：master 侧此处直呼 {@code PlatformEpDynamism.refusalExplanation(baselineVersion)}
+     * （同包新件）。该件不在本波次写集——先以反射探达，落位后本调用自动生效；未落位期间按
+     * 「无确定事实」回落 idea.log 指引分支（master 的 runCatching 兜 null 同语义）。
+     */
+    private static String platformEpDynamismExplanation() {
+        try {
+            Class<?> cls = Class.forName("cn.song.mybatisplus.visualizer.update.PlatformEpDynamism");
+            java.lang.reflect.Method m = cls.getMethod("refusalExplanation", int.class);
+            Object result = m.invoke(null,
+                com.intellij.openapi.application.ApplicationInfo.getInstance().getBuild().getBaselineVersion());
+            return result instanceof String s ? s : null;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -238,11 +291,12 @@ public final class DynamicInstallSupport {
     // 平台反射门面（F0 实证的五入口；探测一次缓存，缺失整体降级）
     // ------------------------------------------------------------------
 
-    /** 五入口齐备才可用；任一缺失 = 平台签名漂移/裁剪发行版 → 整体回退脚本路径。 */
+    /** 入口齐备才可用（卸载预检按能力族，三族任一即可）；任一缺失 = 平台签名漂移/裁剪发行版 → 整体回退脚本路径。 */
     static final class PlatformApi {
 
         private final Object dynamicPlugins;
-        private final Method allowLoadUnloadMethod;
+        /** 卸载可行性预检入口（能力族，T-DynUpdate263）。 */
+        private final UnloadGate unloadGate;
         private final Method unloadPluginMethod;
         /** 双参 unloadPlugin 形态时的默认 UnloadPluginOptions 实例（单参形态为 null）。 */
         private final Object unloadPluginOptions;
@@ -252,7 +306,7 @@ public final class DynamicInstallSupport {
 
         PlatformApi(
             Object dynamicPlugins,
-            Method allowLoadUnloadMethod,
+            UnloadGate unloadGate,
             Method unloadPluginMethod,
             Object unloadPluginOptions,
             Method installAndLoadMethod,
@@ -260,7 +314,7 @@ public final class DynamicInstallSupport {
             Method findPluginMethod
         ) {
             this.dynamicPlugins = dynamicPlugins;
-            this.allowLoadUnloadMethod = allowLoadUnloadMethod;
+            this.unloadGate = unloadGate;
             this.unloadPluginMethod = unloadPluginMethod;
             this.unloadPluginOptions = unloadPluginOptions;
             this.installAndLoadMethod = installAndLoadMethod;
@@ -268,30 +322,30 @@ public final class DynamicInstallSupport {
             this.findPluginMethod = findPluginMethod;
         }
 
+        /** 命中的预检能力族（validate/check/legacy），供日志取证。 */
+        String unloadGateFamily() {
+            return unloadGate.family().id();
+        }
+
         /** 当前已装插件描述（未安装/描述缺失返回 null）。 */
         Object findPlugin(String pluginId) {
             try {
-                return invoke(findPluginMethod, null, PluginId.getId(pluginId));
+                return invokePlatform(findPluginMethod, null, PluginId.getId(pluginId));
             } catch (Throwable t) {
                 LOG.warn("findPlugin reflective call failed: " + t.getMessage());
                 return null;
             }
         }
 
-        /** 卸载可行性预检（平台否决返回 false）。 */
-        boolean allowLoadUnload(Object currentDescriptor) {
-            try {
-                return (Boolean) invoke(allowLoadUnloadMethod, dynamicPlugins, currentDescriptor);
-            } catch (Throwable t) {
-                LOG.warn("allowLoadUnloadWithoutRestart reflective call failed: " + t.getMessage());
-                return false;
-            }
+        /** 卸载可行性预检；{@link GateDecision#reason()} 是平台原话（Validate 族才有，其余族为 null）。 */
+        GateDecision evaluateUnloadGate(Object currentDescriptor) {
+            return unloadGate.evaluate(dynamicPlugins, currentDescriptor);
         }
 
         /** 从发行 zip 读新版描述（失败返回 null——不阻断流程，装载仍可进行）。 */
         Object loadDescriptorFromArtifact(Path zip) {
             try {
-                return invoke(loadFromArtifactMethod, null, zip, null);
+                return invokePlatform(loadFromArtifactMethod, null, zip, null);
             } catch (Throwable t) {
                 LOG.warn("loadDescriptorFromArtifact reflective call failed: " + t.getMessage());
                 return null;
@@ -321,7 +375,7 @@ public final class DynamicInstallSupport {
                     Object[] args = unloadPluginOptions != null
                         ? new Object[]{currentDescriptor, unloadPluginOptions}
                         : new Object[]{currentDescriptor};
-                    unloaded[0] = (Boolean) invoke(unloadPluginMethod, dynamicPlugins, args);
+                    unloaded[0] = (Boolean) invokePlatform(unloadPluginMethod, dynamicPlugins, args);
                 } catch (Throwable t) {
                     LOG.warn("unloadPlugin reflective call failed: " + t.getMessage());
                     unloaded[0] = false;
@@ -329,7 +383,7 @@ public final class DynamicInstallSupport {
                 LOG.info("dynamic update: old version unloaded=" + unloaded[0]);
                 if (unloaded[0] && newDescriptor != null) {
                     try {
-                        installed[0] = (Boolean) invoke(installAndLoadMethod, null, zip, null, newDescriptor);
+                        installed[0] = (Boolean) invokePlatform(installAndLoadMethod, null, zip, null, newDescriptor);
                     } catch (Throwable t) {
                         LOG.warn("installAndLoadDynamicPlugin reflective call failed: " + t.getMessage());
                         installed[0] = false;
@@ -338,14 +392,6 @@ public final class DynamicInstallSupport {
                 }
             });
             return new UnloadInstallResult(unloaded[0], installed[0]);
-        }
-
-        /** 静态/实例双形态统一调用：静态方法 null receiver，实例方法传对象单例。 */
-        private static Object invoke(Method method, Object receiver, Object... args) throws Exception {
-            if (Modifier.isStatic(method.getModifiers())) {
-                return method.invoke(null, args);
-            }
-            return method.invoke(receiver, args);
         }
     }
 
@@ -421,7 +467,7 @@ public final class DynamicInstallSupport {
         private static volatile PlatformApi cached;
         private static volatile boolean probed = false;
 
-        /** 探测五入口（首次后缓存）；任一缺失返回 null。 */
+        /** 探测入口（首次后缓存）；任一缺失返回 null——缺失项全量列进日志（T-DynUpdate263）。 */
         static PlatformApi probe() {
             if (probed) return cached;
             synchronized (PlatformApis.class) {
@@ -431,6 +477,9 @@ public final class DynamicInstallSupport {
                     } catch (Throwable t) {
                         LOG.info("dynamic-install platform APIs unavailable: " + t.getMessage());
                         cached = null;
+                    }
+                    if (cached != null) {
+                        LOG.info("dynamic-install api family=" + cached.unloadGateFamily());
                     }
                     probed = true;
                 }
@@ -447,50 +496,70 @@ public final class DynamicInstallSupport {
             Class<?> descriptorLoaderClass = Class.forName("com.intellij.ide.plugins.PluginDescriptorLoader", true, loader);
             Class<?> coreClass = Class.forName("com.intellij.ide.plugins.PluginManagerCore", true, loader);
 
+            // 缺失项累计后一次性报：原先首个缺失即抛，用户日志里只看到一个名字（263 漂移时就只报了旧入口）
+            java.util.List<String> missing = new java.util.ArrayList<>();
+
             // unloadPlugin 首参类型跨版本漂移：243=IdeaPluginDescriptorImpl、262=其子类
             // PluginMainDescriptor（262 反编译实证）——精确匹配会探测失败回退重启（实测）。
             // 弹性匹配：首参与描述类互为可赋值即可，优先最少参数；双参形态构造 options 无参实例。
             Method unload = resolveMethodByFirstParam(dpClass, "unloadPlugin", descriptorClass);
             if (unload == null) {
-                throw new IllegalStateException("unloadPlugin(<descriptor>) not found on " + dpClass.getName());
+                missing.add("unloadPlugin(<descriptor>)");
+            } else {
+                unload.setAccessible(true);
             }
             Object unloadOptions = null;
-            if (unload.getParameterTypes().length >= 2) {
+            if (unload != null && unload.getParameterTypes().length >= 2) {
                 try {
                     java.lang.reflect.Constructor<?> ctor = unload.getParameterTypes()[1].getDeclaredConstructor();
                     ctor.setAccessible(true);
                     unloadOptions = ctor.newInstance();
                 } catch (Throwable t) {
-                    throw new IllegalStateException("unloadPlugin options no-arg constructor unavailable: " + t.getMessage());
+                    missing.add("unloadPlugin options no-arg ctor (" + t.getMessage() + ")");
+                    unloadOptions = null;
                 }
             }
 
-            // allowLoadUnload 与 unloadPlugin 同样存在首参漂移风险（262 实证），一并弹性匹配；
-            // 最少参数优先自动命中 1 参重载（262/243 均为 1/2/3 参并存）
-            Method allowLoadUnload = resolveMethodByFirstParam(dpClass, "allowLoadUnloadWithoutRestart", descriptorClass);
-            if (allowLoadUnload == null) {
-                throw new IllegalStateException("allowLoadUnloadWithoutRestart(<descriptor>) not found on " + dpClass.getName());
+            // 卸载预检能力族（T-DynUpdate263）：263 移除 allowLoadUnloadWithoutRestart，
+            // 262/263 改用 validate/check——三族全缺才判平台失去动态卸载能力
+            UnloadGate unloadGate = resolveUnloadGate(dpClass, descriptorClass);
+            if (unloadGate == null) {
+                missing.add("unload gate (validateCanUnloadWithoutRestart|checkCanUnloadWithoutRestart|"
+                    + "allowLoadUnloadWithoutRestart)");
             }
-            allowLoadUnload.setAccessible(true);
+
+            Method installAndLoad = exactMethodOrNull(installerClass, "installAndLoadDynamicPlugin",
+                Path.class, JComponent.class, descriptorClass);
+            if (installAndLoad == null) {
+                missing.add("installAndLoadDynamicPlugin(" + simpleNames(new Class<?>[]{Path.class, JComponent.class, descriptorClass}) + ")");
+            }
+            Method loadFromArtifact = exactMethodOrNull(descriptorLoaderClass, "loadDescriptorFromArtifact",
+                Path.class, BuildNumber.class);
+            if (loadFromArtifact == null) {
+                missing.add("loadDescriptorFromArtifact(" + simpleNames(new Class<?>[]{Path.class, BuildNumber.class}) + ")");
+            }
+            Method findPlugin = exactMethodOrNull(coreClass, "findPlugin", PluginId.class);
+            if (findPlugin == null) {
+                missing.add("findPlugin(" + simpleNames(new Class<?>[]{PluginId.class}) + ")");
+            }
+
+            if (!missing.isEmpty()) {
+                throw new IllegalStateException("missing platform entries: " + String.join(", ", missing));
+            }
 
             return new PlatformApi(
                 dynamicPlugins,
-                allowLoadUnload,
-                setAccessible(unload),
+                unloadGate,
+                unload,
                 unloadOptions,
-                exactMethod(installerClass, "installAndLoadDynamicPlugin", Path.class, JComponent.class, descriptorClass),
-                exactMethod(descriptorLoaderClass, "loadDescriptorFromArtifact", Path.class, BuildNumber.class),
-                exactMethod(coreClass, "findPlugin", PluginId.class)
+                installAndLoad,
+                loadFromArtifact,
+                findPlugin
             );
         }
 
-        private static Method setAccessible(Method m) {
-            m.setAccessible(true);
-            return m;
-        }
-
-        /** 精确签名解析（Kotlin 本地 method() 助手等价）：静态优先，命中即 setAccessible，缺失抛错。 */
-        private static Method exactMethod(Class<?> clazz, String name, Class<?>... params) {
+        /** 精确签名解析（exactMethod 的缺失可累计形态）：命中即 setAccessible，缺失返回 null（登记调用方负责）。 */
+        private static Method exactMethodOrNull(Class<?> clazz, String name, Class<?>... params) {
             Method best = null;
             for (Method m : clazz.getMethods()) {
                 if (!m.getName().equals(name) || !java.util.Arrays.equals(m.getParameterTypes(), params)) continue;
@@ -499,10 +568,9 @@ public final class DynamicInstallSupport {
                     best = m;
                 }
             }
-            if (best == null) {
-                throw new IllegalStateException(name + "(" + simpleNames(params) + ") not found on " + clazz.getName());
+            if (best != null) {
+                best.setAccessible(true);
             }
-            best.setAccessible(true);
             return best;
         }
 
@@ -534,5 +602,130 @@ public final class DynamicInstallSupport {
             }
         }
         return best;
+    }
+
+    // ------------------------------------------------------------------
+    // 卸载预检能力族（T-DynUpdate263：263 移除了 allowLoadUnloadWithoutRestart）
+    // ------------------------------------------------------------------
+
+    /** 卸载预检能力族；id 直接进日志，便于跨版本排查命中的是哪一条。 */
+    enum UnloadGateFamily {
+        /**
+         * 返回 String：null/空白=可卸载，非空=不可卸载原因。
+         * 263 是 {@code validateCanUnloadWithoutRestart}；243 的 {@code checkCanUnloadWithoutRestart} 同名但同样返回 String。
+         */
+        VALIDATE("validate"),
+
+        /** 返回 boolean 的 {@code checkCanUnloadWithoutRestart}（262/263）。 */
+        CHECK("check"),
+
+        /** 返回 boolean 的旧入口 {@code allowLoadUnloadWithoutRestart}（243/262）。 */
+        LEGACY("legacy");
+
+        private final String id;
+
+        UnloadGateFamily(String id) {
+            this.id = id;
+        }
+
+        public String id() {
+            return id;
+        }
+    }
+
+    /** 预检结论：reason 是平台原话，仅 Validate 族有（其余族平台只给布尔）。 */
+    static final class GateDecision {
+        private final boolean allowed;
+        private final String reason;
+
+        GateDecision(boolean allowed, String reason) {
+            this.allowed = allowed;
+            this.reason = reason;
+        }
+
+        public boolean allowed() {
+            return allowed;
+        }
+
+        public String reason() {
+            return reason;
+        }
+
+        @Override
+        public String toString() {
+            return allowed ? "allowed" : "rejected(" + (reason != null ? reason : "no reason") + ")";
+        }
+    }
+
+    /** 卸载预检入口：族 + 已解析方法；evaluate 把三族语义收敛成同一个结论。 */
+    static final class UnloadGate {
+        private final UnloadGateFamily family;
+        private final Method method;
+
+        UnloadGate(UnloadGateFamily family, Method method) {
+            this.family = family;
+            this.method = method;
+        }
+
+        public UnloadGateFamily family() {
+            return family;
+        }
+
+        GateDecision evaluate(Object receiver, Object descriptor) {
+            try {
+                Object raw = invokePlatform(method, receiver, descriptor);
+                if (family == UnloadGateFamily.VALIDATE) {
+                    String reason = raw instanceof String s ? s : null;
+                    return new GateDecision(reason == null || reason.isBlank(), reason);
+                }
+                return new GateDecision(raw instanceof Boolean b && b, null);
+            } catch (Throwable t) {
+                return new GateDecision(false, "reflective call failed: " + t.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 解析卸载预检入口（纯函数，单测直覆盖）：按「方法名 + 返回类型」绑能力族，
+     * 优先级 <b>Legacy &gt; Validate &gt; Check</b>。
+     *
+     * <p>为什么旧入口优先：243/262 上必须与本次改动前<b>逐字同一条路径</b>——
+     * 243 的 {@code allowLoadUnloadWithoutRestart} 源码就是 {@code checkCanUnloadWithoutRestart(...) == null}
+     * 的布尔包装；262 的旧入口走 {@code validateDynamicReconfigurationPossible(newState)}（整组重配置预演），
+     * 与单插件的 {@code validateCanUnloadWithoutRestart}（{@code pretendDisabled} 单点校验）不是同一套判定。
+     * 老版本维持旧入口，只有 263（旧入口已删除）才落到新族，行为差异被限制在「原本就不工作」的那一版。</p>
+     *
+     * <p>为什么必须看返回类型：243 的 {@code checkCanUnloadWithoutRestart(<descriptor>)} 返回 <b>String</b>
+     * （不可卸载原因，null=可卸载），262/263 同名方法返回 boolean。只按名字匹配会把 243 的原因串
+     * 当布尔用（ClassCastException → 一律判不可卸载 → 永远回退重启）。</p>
+     */
+    static UnloadGate resolveUnloadGate(Class<?> clazz, Class<?> descriptorClass) {
+        Method validate = resolveMethodByFirstParam(clazz, "validateCanUnloadWithoutRestart", descriptorClass);
+        if (validate != null && validate.getReturnType() != String.class) validate = null;
+        Method checkAsReason = resolveMethodByFirstParam(clazz, "checkCanUnloadWithoutRestart", descriptorClass);
+        if (checkAsReason != null && checkAsReason.getReturnType() != String.class) checkAsReason = null;
+        Method checkAsBoolean = resolveMethodByFirstParam(clazz, "checkCanUnloadWithoutRestart", descriptorClass);
+        if (checkAsBoolean != null && checkAsBoolean.getReturnType() != boolean.class) checkAsBoolean = null;
+        Method legacy = resolveMethodByFirstParam(clazz, "allowLoadUnloadWithoutRestart", descriptorClass);
+        if (legacy != null && legacy.getReturnType() != boolean.class) legacy = null;
+
+        if (legacy != null) return gate(UnloadGateFamily.LEGACY, legacy);
+        if (validate != null) return gate(UnloadGateFamily.VALIDATE, validate);
+        if (checkAsReason != null) return gate(UnloadGateFamily.VALIDATE, checkAsReason);
+        if (checkAsBoolean != null) return gate(UnloadGateFamily.CHECK, checkAsBoolean);
+        return null;
+    }
+
+    private static UnloadGate gate(UnloadGateFamily family, Method method) {
+        method.setAccessible(true);
+        return new UnloadGate(family, method);
+    }
+
+    /** 反射调用统一入口：静态方法 null receiver，实例方法传对象单例。 */
+    static Object invokePlatform(Method method, Object receiver, Object... args) throws Exception {
+        if (Modifier.isStatic(method.getModifiers())) {
+            return method.invoke(null, args);
+        }
+        return method.invoke(receiver, args);
     }
 }
