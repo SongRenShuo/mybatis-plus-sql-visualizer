@@ -110,10 +110,10 @@ class CopyExecutableSqlAction(private val project: Project?) {
             )
         }
 
-        /** 统计被替换的 `?` 数量（原始 SQL 中 `?` 数 - 结果中 `?` 数）。 */
+        /** 统计被替换的 `?` 数量（原始 SQL 中真实占位数 - 结果中真实占位数；注释/字符串里的 `?` 不计）。 */
         private fun countReplaced(original: String, result: String): Int {
-            val originalCount = original.count { it == '?' }
-            val resultCount = result.count { it == '?' }
+            val originalCount = placeholderPositions(original).size
+            val resultCount = placeholderPositions(result).size
             return (originalCount - resultCount).coerceAtLeast(0)
         }
     }

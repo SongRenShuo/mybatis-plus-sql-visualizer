@@ -73,6 +73,7 @@ import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
@@ -749,10 +750,10 @@ class SqlPreviewService(internal val project: Project) {
     /**
      * T-JpaParamOrder F3：全部 `?` 均来自命名参数替换时返回名序（供按名回填），否则 null
      * 维持按序回填。位置参数混入时名序数量与 `?` 不齐，按名会把无名的 `?` 配空值——
-     * 保守回退既有语义。`?` 计数用朴素 count（判定用途，非替换位点）。
+     * 保守回退既有语义。`?` 计数用 string-aware 位点（注释/字符串里的 `?` 不计，T-RuntimeSlotOptionalFill）。
      */
     internal fun usableNamedPlaceholderSources(sql: String, namedParamNames: List<String>): List<String>? =
-        namedParamNames.takeIf { it.isNotEmpty() && it.size == sql.count { ch -> ch == '?' } }
+        namedParamNames.takeIf { it.isNotEmpty() && it.size == placeholderPositions(sql).size }
 
     // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
     private val NUMERIC_LITERAL = Regex("-?\\d+(\\.\\d+)?[LlFfDd]?")
@@ -1369,12 +1370,6 @@ class SqlPreviewService(internal val project: Project) {
         is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！" else null
         is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
         else -> null
-    }
-
-    /** 从 SQL 字符串提取 `?` 占位符参数名（简化：param1, param2, ...）。 */
-    private fun extractPlaceholders(sql: String): List<String> {
-        val count = sql.count { it == '?' }
-        return (1..count).map { "param$it" }
     }
 
     /**

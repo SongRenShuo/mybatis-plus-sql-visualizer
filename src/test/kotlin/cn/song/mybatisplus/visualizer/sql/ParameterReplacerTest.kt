@@ -512,6 +512,32 @@ class ParameterReplacerTest {
         assertEquals("SELECT id FROM t WHERE deleted = 0 ORDER BY id DESC", result.sql)
     }
 
+    @Test
+    fun `运行期占位_OPTIONAL_无模板_值位置就地填且字符串内只转义`() {
+        // T-RuntimeSlotOptionalFill R2 的多值回退形态：token 只是值的位置（template=null），
+        // 静态前缀/后缀在 token 外——必须就地填值，不能展开整段片段（否则重复静态前缀）。
+        val target = slot(
+            "rt1",
+            SlotKind.OPTIONAL,
+            "keyword",
+            template = null,
+            hint = ParamHint(quote = true),
+        )
+        val sql = "SELECT id FROM t WHERE name LIKE '%${target.token}%' ORDER BY id"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.string("A01")))
+
+        assertEquals("SELECT id FROM t WHERE name LIKE '%A01%' ORDER BY id", result.sql)
+        assertFalse("不应残留占位注释", result.sql.contains("运行时值"))
+
+        // 取消包含：值位置形态只移除当前值 token，静态前后缀保留——必须给提示，不静默
+        val excluded = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.excluded()))
+        assertFalse("值 token 应被移除", excluded.sql.contains("运行时值"))
+        assertTrue(
+            "多值回退形态取消包含必须提示静态片段保留: ${excluded.warnings}",
+            excluded.warnings.any { it.message.contains("静态片段会保留") },
+        )
+    }
+
     // ---- 顺序 / 安全 / 留空 -------------------------------------------
 
     @Test

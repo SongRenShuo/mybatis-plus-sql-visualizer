@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
@@ -84,8 +85,10 @@ object JdbcTemplateSqlPreviewService {
         val namedSources = namedParams.map { it.name }
         val namedHints = namedParams.associate { it.name to NamedParamParser.quoteHint(it) }
 
-        // `?` 占位符来源（按出现顺序，`?` 数量）
-        val placeholderCount = sqlText.count { it == '?' }
+        // `?` 占位符来源（按出现顺序，`?` 数量）——用 string-aware 位点扫描：块注释里的
+        // 三元问号（`/* 运行时值: status == null ? … */`）与字符串字面量里的 `?` 都不是 JDBC 占位符。
+        // 朴素 count 会造出没有落点的 `#param1`（T-RuntimeSlotOptionalFill）。
+        val placeholderCount = placeholderPositions(sqlText).size
         val placeholderSources = if (placeholderCount > 0) {
             (1..placeholderCount).map { "param$it" }
         } else {

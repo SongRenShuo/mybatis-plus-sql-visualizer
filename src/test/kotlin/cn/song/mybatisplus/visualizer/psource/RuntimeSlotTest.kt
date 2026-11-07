@@ -2,8 +2,11 @@ package cn.song.mybatisplus.visualizer.psource
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
 import cn.song.mybatisplus.visualizer.sql.SlotKind
+import cn.song.mybatisplus.visualizer.sql.SlotValue
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethodCallExpression
@@ -154,6 +157,13 @@ class RuntimeSlotTest : BasePlatformTestCase() {
 
         // keyword 落在单引号内
         assertEquals(ParamHint(quote = true), slots[1].hint)
+
+        // T-RuntimeSlotOptionalFill R1：三元占位注释里的 `?`（Java 三元问号）不是 JDBC 占位符，
+        // 不得造出没有落点的 `#param1`。
+        assertFalse(
+            "三元注释里的 ? 不应算 JDBC 占位符: ${result.unresolvedParams}",
+            result.unresolvedParams.any { it == "param1" },
+        )
     }
 
     // ------------------------------------------------------------------
@@ -192,9 +202,74 @@ class RuntimeSlotTest : BasePlatformTestCase() {
         assertEquals("AND amount >= %s ", slots[1].template)
         assertEquals(ParamHint(quote = true), slots[0].hint)
 
-        // 说明性注释（条件追加，可能不出现）不是可填值对象 → 不带 id、不进 slot
-        assertEquals("说明性注释不应带 id", 0, Regex("可能不出现 · rt").findAll(result.sql).count())
-        assertTrue("说明性注释仍在场", result.sql.contains("/* 运行时值: 条件追加，可能不出现 */"))
+        // T-RuntimeSlotOptionalFill R2：说明注释并入整段 slot 文案（不再单独发一条无 id 注释），
+        // 因此「条件追加，可能不出现」现在**应该**带 id——它就是整段片段的占位。
+        assertTrue(
+            "说明性文案应并入 slot 注释并带 id: ${result.sql}",
+            result.sql.contains("条件追加，可能不出现（keyword） · rt1"),
+        )
+        assertTrue(
+            "第二个片段同样并入 slot: ${result.sql}",
+            result.sql.contains("条件追加，可能不出现（minAmount） · rt2"),
+        )
+        assertEquals("不再有单独的无 id 说明注释", 0, Regex("/\\* 运行时值: 条件追加，可能不出现 \\*/").findAll(result.sql).count())
+    }
+
+    /**
+     * T-RuntimeSlotOptionalFill：可选片段的端到端回填——拼接器产出「整段一个 slot」，
+     * 回填引擎按整段模板展开。旧实现（静态片段在 token 外）在这里会重复静态前缀 / 拒绝字符串内 token。
+     */
+    fun testOptionalIf_fillAndExclude_endToEnd() {
+        myFixture.configureByText("Demo.java", """
+            import org.springframework.jdbc.core.JdbcTemplate;
+            public class Demo {
+                public java.util.List<java.util.Map<String, Object>> listByOptionalIf(
+                        JdbcTemplate jdbcTemplate, String keyword, Integer minAmount) {
+                    StringBuilder sql = new StringBuilder();
+                    sql.append("SELECT id, order_no, amount FROM t_order WHERE deleted = 0 ");
+                    if (keyword != null && !keyword.isEmpty()) {
+                        sql.append("AND order_no LIKE '%").append(keyword).append("%' ");
+                    }
+                    if (minAmount != null) {
+                        sql.append("AND amount >= ").append(minAmount).append(" ");
+                    }
+                    sql.append("ORDER BY id DESC");
+                    return jdbcTemplate.queryForList(sql.toString());
+                }
+            }
+        """.trimIndent())
+        val result = previewOf(findCall("queryForList")!!)!!
+        val slots = result.runtimeSlots
+        assertEquals("两个 OPTIONAL slot", 2, slots.size)
+
+        // 填值：keyword 在模板引号内（不补外层引号、不重复静态前缀），minAmount 裸数字
+        val filled = ParameterReplacer.replaceRuntimeSlots(
+            result.sql,
+            slots,
+            RuntimeSlotValues.of(
+                "rt1" to SlotValue.string("111"),
+                "rt2" to SlotValue.number("111"),
+            ),
+        )
+        val compactFilled = filled.sql.replace(Regex("\\s+"), " ").trim()
+        assertTrue("keyword 应填进引号内: $compactFilled", compactFilled.contains("AND order_no LIKE '%111%'"))
+        assertTrue("minAmount 应就地填值: $compactFilled", compactFilled.contains("AND amount >= 111"))
+        assertFalse("不得重复静态前缀: $compactFilled", compactFilled.contains("AND amount >= AND amount >="))
+        assertFalse("不得残留占位: $compactFilled", compactFilled.contains("运行时值"))
+
+        // 取消包含：整段片段消失，ORDER BY 仍在
+        val excluded = ParameterReplacer.replaceRuntimeSlots(
+            result.sql,
+            slots,
+            RuntimeSlotValues.of(
+                "rt1" to SlotValue.excluded(),
+                "rt2" to SlotValue.excluded(),
+            ),
+        )
+        val compactExcluded = excluded.sql.replace(Regex("\\s+"), " ").trim()
+        assertFalse("取消后 LIKE 片段应消失: $compactExcluded", compactExcluded.contains("order_no LIKE"))
+        assertFalse("取消后 amount 片段应消失: $compactExcluded", compactExcluded.contains("amount >="))
+        assertTrue("ORDER BY 应保留: $compactExcluded", compactExcluded.contains("ORDER BY id DESC"))
     }
 
     // ------------------------------------------------------------------
@@ -290,10 +365,12 @@ class RuntimeSlotTest : BasePlatformTestCase() {
             }
         """.trimIndent())
         val result = previewOf(findCall("queryForList")!!)!!
+        // T-RuntimeSlotOptionalFill R2：可选片段改为「整段一个 slot」——静态片段进 slot 文案，
+        // 未填值时产物只保留两条整段占位（不再有「静态前缀 + 值占位」的混合形态）。
         val baseline = "SELECT id, order_no, amount FROM t_order WHERE deleted = 0 " +
-            "/* 运行时值: 条件追加，可能不出现 */AND order_no LIKE '%/* 运行时值: keyword */%' " +
-            "/* 运行时值: 条件追加，可能不出现 */AND amount >= /* 运行时值: minAmount */ ORDER BY id DESC;"
-        assertEquals("留空时除 ` · rtN` 外应逐字一致", baseline, stripSlotIds(result.compactSql))
+            "/* 运行时值: 条件追加，可能不出现（keyword） */ " +
+            "/* 运行时值: 条件追加，可能不出现（minAmount） */ ORDER BY id DESC;"
+        assertEquals("留空时除 ` · rtN` 外应逐字一致", baseline, stripSlotIds(compact(result)))
         // 留空 = 保留占位（D-5），不是 NULL
         assertFalse("留空不应落成 NULL", result.compactSql.contains("= NULL"))
     }

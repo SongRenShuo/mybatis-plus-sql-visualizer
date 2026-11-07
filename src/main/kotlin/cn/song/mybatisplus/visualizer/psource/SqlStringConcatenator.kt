@@ -144,15 +144,6 @@ object SqlStringConcatenator {
     private class SlotSession {
         /** 待分配 id 的占位草稿，入表顺序 = 产物中的出现顺序。 */
         val drafts = mutableListOf<DraftSlot>()
-
-        /**
-         * 可选片段上下文：在 `if` / `switch` / 三元 / 回调分支内产出的占位，
-         * kind 记 [SlotKind.OPTIONAL]（用户决定「这段在不在」），而不是单值的 [SlotKind.VALUE]。
-         */
-        var flowKind: SlotKind? = null
-
-        /** 可选片段整段的展开模板（该分支内所有 append 拼成的形态），供 [slotPlaceholder] 取用。 */
-        var flowTemplate: String? = null
     }
 
     /**
@@ -246,10 +237,9 @@ object SqlStringConcatenator {
      * （[finalizeSlots]），因此「不填任何值」时的 SQL 与既有行为只在 ` · rtN` 这一处不同。
      *
      * @param rawComment  进注释的摘要原文（本方法内清洗）
-     * @param kind        显式类别；null = 按上下文——落在可选片段分支内记 [SlotKind.OPTIONAL]，
-     *                    其余记 [SlotKind.VALUE]
+     * @param kind        显式类别；null = 单值 [SlotKind.VALUE]（可选片段/循环/三元由调用方显式传）
      * @param expression  面板显示的表达式摘要；默认与 [rawComment] 相同
-     * @param template    显式模板；null = 取上下文模板（可选片段分支的整段形态），再没有就是 null
+     * @param template    显式模板；null = 展开形态未知（不猜）
      */
     private fun slotPlaceholder(
         rawComment: String,
@@ -263,9 +253,9 @@ object SqlStringConcatenator {
         session?.drafts?.add(
             DraftSlot(
                 baseComment = baseComment,
-                kind = kind ?: session.flowKind ?: SlotKind.VALUE,
+                kind = kind ?: SlotKind.VALUE,
                 expression = sanitizePlaceholderText(expression),
-                template = template ?: session.flowTemplate,
+                template = template,
             )
         )
         return baseComment
@@ -308,7 +298,7 @@ object SqlStringConcatenator {
                 kind = draft.kind,
                 expression = draft.expression,
                 template = draft.template,
-                hint = inferHint(text, at),
+                hint = inferHint(text, at, draft.template),
                 token = token,
             )
         }
@@ -327,13 +317,21 @@ object SqlStringConcatenator {
      * 从产物文本推断该占位的回填语义（D-4 的上下文推导，保守优先）。
      *
      *  - 占位落在单引号字符串内部（[at] 之前单引号个数为奇数）→ `quote=true`；
+     *  - 整段 slot 的 token 在字符串外、但模板里的值位落在引号内（`'%<value>%'`）→ `quote=true`
+     *    （T-RuntimeSlotOptionalFill：R2 的整段 slot 需要按模板判断，而不是按 token 位置）；
      *  - 落在 `IN (...)` 的括号里（向前找到最近未闭合的 `(`，其前的词是 `IN`）→ `inList=true`；
      *  - 其余留空（`quote` / `likePosition` / `inList` 全默认），交给面板启发式。
      *
      * 都是文本启发式：向前扫描时**不**跳过引号内内容，落在字符串内部的占位已由第一条分流
      * （不参与 IN 判定），因此不会把 `'('` 里的括号当真。
      */
-    private fun inferHint(text: String, at: Int): ParamHint {
+    private fun inferHint(text: String, at: Int, template: String? = null): ParamHint {
+        if (template != null) {
+            val markAt = template.indexOf(RuntimeSlot.VALUE_MARK)
+            if (markAt >= 0 && template.take(markAt).count { it == '\'' } % 2 == 1) {
+                return ParamHint(quote = true)
+            }
+        }
         val quoteCount = text.take(at).count { it == '\'' }
         if (quoteCount % 2 == 1) return ParamHint(quote = true)
         return if (insideInList(text, at)) ParamHint(inList = true) else ParamHint()
@@ -637,7 +635,8 @@ object SqlStringConcatenator {
         val results = mutableListOf<ConcatenationResult>()
         // R3：同一控制流上下文（同一个循环 / if / switch / lambda）只降级或只标注一次，避免同一片段刷三条注释
         val degradedContexts = mutableSetOf<PsiElement>()
-        val notedContexts = mutableSetOf<PsiElement>()
+        // R2：OPTIONAL 上下文按「整段一个 slot」产出，同一上下文只处理一次
+        val emittedOptionalContexts = mutableSetOf<PsiElement>()
 
         for (call in appendCalls) {
             val args = call.argumentList.expressions
@@ -678,21 +677,54 @@ object SqlStringConcatenator {
                     results += ConcatenationResult(sql = dynamicPlaceholder(PAIRED_APPEND_LABEL), complete = false)
                 }
                 AppendFlow.OPTIONAL -> {
-                    // 券 A：可选片段内的占位归 OPTIONAL（用户勾「这段在不在」），
-                    // 展开形态取该分支内全部 append 拼成的整段模板（一次算好，两处使用）
-                    val fragmentTemplate = repetitionTemplate(contextArguments(appendCalls, variable, anchor))
-                    val r = withOptionalContext(fragmentTemplate) { concat(argExpr) }
-                        ?: ConcatenationResult(
-                            sql = withOptionalContext(fragmentTemplate) { slotPlaceholder(argExpr.text) },
+                    // R2（T-RuntimeSlotOptionalFill）：可选片段按「整段一个 slot」产出——token 覆盖整段片段、
+                    // template 也是整段片段，填值/取消/留空三条路径才一致。旧形态是「静态片段在 token 外 +
+                    // 值位置一个 token」，template 却是整段：填值会重复静态前缀，落在字符串内的 token 会被
+                    // 回填引擎直接拒绝，取消包含又会残留静态前后缀（见计划 §3）。
+                    if (anchor != null && !emittedOptionalContexts.add(anchor)) continue
+                    val contextCalls = if (anchor == null) listOf(call) else contextCalls(appendCalls, variable, anchor)
+                    val contextArgs = contextCalls.mapNotNull { it.argumentList.expressions.firstOrNull() }
+                    val fragmentTemplate = repetitionTemplate(contextArgs)
+                    val marks = templateMarkCount(fragmentTemplate)
+                    val note = position.note.orEmpty()
+                    if (fragmentTemplate != null && marks == 1) {
+                        // 单值片段：整段一个 slot（说明注释并入 slot 文案，不再单独发）
+                        val runtimeArg = contextArgs.firstOrNull {
+                            shapeTemplate(it)?.contains(RuntimeSlot.VALUE_MARK) != false
+                        } ?: argExpr
+                        val expression = summarizeExpression(runtimeArg) ?: runtimeArg.text
+                        results += ConcatenationResult(
+                            // 前置空格：整段 slot 是一条注释，和相邻片段之间留出可读间隔
+                            // （模板自身的尾随空格在未填值时不在产物里）
+                            sql = " " + slotPlaceholder(
+                                rawComment = optionalSlotLabel(note) + "（" + expression + "）",
+                                kind = SlotKind.OPTIONAL,
+                                expression = expression,
+                                template = fragmentTemplate,
+                            ),
                             complete = false,
                         )
-                    val note = position.note.orEmpty()
-                    val emitNote = note.isNotEmpty() && (anchor == null || notedContexts.add(anchor))
-                    results += if (emitNote) {
-                        ConcatenationResult(sql = note + r.sql, complete = false)
                     } else {
-                        // 非直线形态即便片段可聚合，也必须标 complete=false（位置不确定）
-                        if (r.complete) ConcatenationResult(sql = r.sql, complete = false) else r
+                        // 0 个 mark（全静态）/ 多个 mark（多值片段）/ 模板未知：逐 append 输出。
+                        // 运行期值走「值位置 slot」（template=null，不展开整段）——多值片段暂不支持整段开关，
+                        // 取消包含只移除当前值 token，静态前后缀保留（回填引擎给提示，已知限制 D-2）。
+                        if (note.isNotEmpty()) results += ConcatenationResult(sql = note, complete = false)
+                        for (contextCall in contextCalls) {
+                            val contextArg = contextCall.argumentList.expressions.firstOrNull() ?: continue
+                            val r = concat(contextArg)
+                            results += if (r != null) {
+                                if (r.complete) r.copy(complete = false) else r
+                            } else {
+                                ConcatenationResult(
+                                    sql = slotPlaceholder(
+                                        contextArg.text,
+                                        kind = SlotKind.OPTIONAL,
+                                        template = null,
+                                    ),
+                                    complete = false,
+                                )
+                            }
+                        }
                     }
                 }
                 AppendFlow.STRAIGHT -> {
@@ -837,9 +869,48 @@ object SqlStringConcatenator {
         anchor: PsiElement?,
     ): List<PsiExpression> {
         if (anchor == null) return emptyList()
-        return appendCalls
-            .filter { analyzeAppendPosition(it, variable).anchor === anchor }
+        return contextCalls(appendCalls, variable, anchor)
             .mapNotNull { it.argumentList.expressions.firstOrNull() }
+    }
+
+    /**
+     * 收集同一控制流上下文内全部 `append` 调用（按源码顺序）。
+     *
+     * 与 [contextArguments] 同源；R2 的「多值片段回退」需要按调用逐个处理（既要实参也要调用本身）。
+     */
+    private fun contextCalls(
+        appendCalls: List<PsiMethodCallExpression>,
+        variable: PsiVariable,
+        anchor: PsiElement?,
+    ): List<PsiMethodCallExpression> {
+        if (anchor == null) return emptyList()
+        return appendCalls.filter { analyzeAppendPosition(it, variable).anchor === anchor }
+    }
+
+    /** 模板里 [RuntimeSlot.VALUE_MARK] 的个数（不重叠计数；null 模板按 0 算）。 */
+    private fun templateMarkCount(template: String?): Int {
+        if (template == null) return 0
+        val mark = RuntimeSlot.VALUE_MARK
+        var count = 0
+        var from = 0
+        while (true) {
+            val at = template.indexOf(mark, from)
+            if (at < 0) return count
+            count++
+            from = at + mark.length
+        }
+    }
+
+    /**
+     * 可选片段整段 slot 的文案标签：把「运行时值: 条件追加，可能不出现」这类说明注释
+     * 剥成纯文本（`条件追加，可能不出现`），拼成 `条件追加，可能不出现（keyword）`。
+     */
+    private fun optionalSlotLabel(note: String): String {
+        val raw = note
+            .removePrefix("/* 运行时值: ")
+            .removeSuffix(" */")
+            .trim()
+        return raw.ifEmpty { "条件追加" }
     }
 
     /**
@@ -917,27 +988,6 @@ object SqlStringConcatenator {
     // ------------------------------------------------------------------
     // T-RuntimeSlotFill 券 A — 展开形态模板（只报事实，不猜）
     // ------------------------------------------------------------------
-
-    /**
-     * 在「可选片段」上下文内执行一段聚合：期间产出的占位归 [SlotKind.OPTIONAL]，
-     * 展开形态取该分支的整段模板。
-     *
-     * 用会话字段而不是逐层传参：占位是在 [concat] 递归深处造的，把「当前在哪个控制流里」
-     * 沿七八个私有函数签下去会把签名撑开；会话本来就是一次聚合的上下文，天然合适。
-     */
-    private fun <T> withOptionalContext(template: String?, block: () -> T): T {
-        val session = slotSession.get() ?: return block()
-        val previousKind = session.flowKind
-        val previousTemplate = session.flowTemplate
-        session.flowKind = SlotKind.OPTIONAL
-        session.flowTemplate = template
-        return try {
-            block()
-        } finally {
-            session.flowKind = previousKind
-            session.flowTemplate = previousTemplate
-        }
-    }
 
     /**
      * 控制流上下文的「一次重复」展开模板（P-3 / D-2）。

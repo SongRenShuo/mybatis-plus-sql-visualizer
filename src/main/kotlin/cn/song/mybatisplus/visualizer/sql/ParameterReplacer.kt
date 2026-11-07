@@ -546,11 +546,24 @@ object ParameterReplacer {
         inQuoted: Boolean,
         context: RenderContext,
     ): Filled {
+        val template = slot.firstTemplate
         if (!value.include) {
-            val notice = if (value.text.isNotBlank()) "已取消「包含这段」，填的值被忽略" else null
+            val notice = when {
+                // 多值片段回退形态（template=null）：token 只是值的位置，取消包含只删当前值
+                template == null -> "该片段含多个运行期值，取消「包含这段」只移除当前值，静态片段会保留"
+                value.text.isNotBlank() -> "已取消「包含这段」，填的值被忽略"
+                else -> null
+            }
             return Filled("", notice = notice)
         }
-        val template = slot.firstTemplate ?: return Filled(null, "片段展开形态未知（源码里没取到模板）")
+        if (template == null) {
+            // 值位置模式（T-RuntimeSlotOptionalFill R2 的多值回退）：token 只是值的位置，
+            // 就地填值、不展开整段片段——整段模板会把 token 外的静态前缀重复一遍。
+            if (value.text.isBlank() && value.type != ValueType.NULL) {
+                return Filled(null, "选了值类型但没有填值，已保留占位原文")
+            }
+            return literal(value.text, value.type, slot.hint.quote, inQuoted, context)
+        }
         if (inQuoted) return Filled(null, "占位落在字符串字面量内，片段无法直接填入")
         if (countMarks(template) == 0) return Filled(template)
         return fillTemplate(template, value.text, value.type, context, "片段值")
