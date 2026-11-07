@@ -183,6 +183,6 @@
 ### 集成收口（主控，2026-11-07，分支 t-sqllist-catchup）
 
 - 合流顺序：券A（526ed2df）→ 券B（b066e9ab，计划文档 §九冲突手工双保留）→ 券C 证伪结案（fe516540，同款冲突双保留）→ 券D（0596a476，同款冲突双保留）→ 小券B2（无冲突）→ CHANGELOG 回填（7fe6fc09）。
-- **定向收口读数（集成 tip， 十类 + in-process，XML 判据数核对）**：10 类 **101 例 0 failures 0 errors 0 skipped**——A 面（FlushWindow 7 / Behavior 35 / AutoShow 9）+ 桥三类（Bridge 1 / Perf 10 / Marker 13）+ 守卫（BundlePlaceholderArity 4 / GuardSelfTestCoverageMetaGuard 8 / BannedApiScanRule 12 / SqlLogManagerLookupGuard 2）。连同 B2 在集成基线跑过的 8 类 143 例，定向面合计 **244 例全绿**。
+- **定向收口读数（集成 tip，`--tests` 指定十类 + `-Pkotlin.compiler.execution.strategy=in-process`，XML 判据数核对）**：10 类 **101 例 0 failures 0 errors 0 skipped**——A 面（FlushWindow 7 / Behavior 35 / AutoShow 9）+ 桥三类（Bridge 1 / Perf 10 / Marker 13）+ 守卫（BundlePlaceholderArity 4 / GuardSelfTestCoverageMetaGuard 8 / BannedApiScanRule 12 / SqlLogManagerLookupGuard 2）。连同 B2 在集成基线跑过的 8 类 143 例，定向面合计 **244 例全绿**。
 - 券 C 证伪的连带处置：D 的桥接缝/桥打点已取消（无死接缝）；A×B 测试语义交互（时间窗改变「通知立即刷」假设）由 B2 在集成侧发现并修（测试侧注入同步 catchUpScheduler，生产零返工）。
 - **not run**：全量门禁 testShards（含平台 UI 测试，L13 口径——用户本轮指令「只做代码收口」）；verifyGate/buildPlugin（非大改动判据）；join-demo 压测前后对比读数（需新插件包装进 IDE，用户改约）；真机 GUI 走查（用户）。合入 master 待用户点名。
