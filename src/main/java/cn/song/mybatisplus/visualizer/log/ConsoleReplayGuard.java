@@ -25,6 +25,11 @@ package cn.song.mybatisplus.visualizer.log;
  * <tr><td>endOffset ≤ watermark 且 stamp 变、行文本 ≠ 行 0 文本</td><td>Reset</td><td>控制台重置，watermark 归位后处理</td></tr>
  * <tr><td>endOffset ≤ watermark 且 stamp 变、行文本 = 行 0 文本</td><td>Replay</td><td>重放叠加新增混合态，判重放丢弃</td></tr>
  * </table>
+ *
+ * <p>券 G2（2026-11-07）追加重置形态：{@code endOffset ≤ watermark} 且 stamp 变且<b>文档总长度 &lt; watermark</b>
+ * → Reset（文档被 clear/截断缩小，watermark 已陈旧；行 0 比对在该形态下必误判——clear 后首个
+ * 重印行必然等于行 0，旧判据把它判成 Replay 并把后续新行一起丢到水位之外）。文档长度不可得
+ * （提供者缺省）时回退旧行为，桥侧不可得＝守卫降级停用的既有口径不受影响。</p>
  */
 public final class ConsoleReplayGuard {
 
@@ -57,6 +62,16 @@ public final class ConsoleReplayGuard {
      */
     public Decision decide(int endOffset, long docStamp, String lineText,
                            java.util.function.Supplier<String> line0TextProvider) {
+        return decide(endOffset, docStamp, lineText, line0TextProvider, null);
+    }
+
+    /**
+     * @param docLengthProvider 当前文档总长度提供者（惰性：仅 stamp 变分支才求值；null 或不可得 =
+     *   按缺省处理，守卫回退旧行为——T-SqlListCatchup 券 G2）。
+     */
+    public Decision decide(int endOffset, long docStamp, String lineText,
+                           java.util.function.Supplier<String> line0TextProvider,
+                           java.util.function.Supplier<Integer> docLengthProvider) {
         if (endOffset > watermark) {
             watermark = endOffset;
             lastDocStamp = docStamp;
@@ -67,7 +82,20 @@ public final class ConsoleReplayGuard {
             // 纯重放：endOffset 回落且文档未变
             return Decision.Replay;
         }
-        // stamp 变了：控制台可能被 clear/截断。用首行文本比对区分「重置」与「重放叠加新增的混合态」。
+        // stamp 变了：控制台可能被 clear/截断。
+        // 券 G2：文档总长度掉到水位之下 = 文档已被缩小（ConsoleViewImpl.doClear 的
+        // deleteString(0, textLength) 平台实证：同一文档实例清空，偏移从头重计）——水位对
+        // 新文档是**陈旧值**，此形态下首行文本比对必误判（clear 后首个重印行必然「等于行 0」，
+        // 旧判据把它连同其后的全部新行判成 Replay 丢到水位之外＝静默丢数据）。故先于文本
+        // 比对核销水位，按 Reset 处理。
+        Integer provided = docLengthProvider != null ? docLengthProvider.get() : null;
+        int docLength = provided != null ? provided : Integer.MIN_VALUE;
+        if (docLength != Integer.MIN_VALUE && docLength < watermark) {
+            watermark = endOffset;
+            lastDocStamp = docStamp;
+            return Decision.Reset;
+        }
+        // 文档未缩水：用首行文本比对区分「重置」与「重放叠加新增的混合态」。
         lastDocStamp = docStamp;
         String line0Text = line0TextProvider != null ? line0TextProvider.get() : null;
         if (line0Text == null || !lineText.equals(line0Text)) {
