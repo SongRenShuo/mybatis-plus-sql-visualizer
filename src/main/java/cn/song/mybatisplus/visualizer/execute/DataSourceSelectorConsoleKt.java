@@ -112,7 +112,7 @@ public final class DataSourceSelectorConsoleKt {
             boolean wholeScriptExec,
             boolean ownsPrepareGate) {
         prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
-                document, editor, onErrorRich, wholeScriptExec, null, null, null, null, () -> true);
+                document, editor, onErrorRich, wholeScriptExec, null, null, null, null, () -> true, null);
     }
 
     public static void prepareAfterEditorResolved(
@@ -131,7 +131,8 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
-            @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
+            @NotNull java.util.function.Supplier<Boolean> isPrepareActive,
+            @Nullable Consumer<String> onInfo) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
         // 就是 60s 内执行/换源全部只排队。abort 按 owner 幂等，PASS_THROUGH 链（owner=null）恒 no-op。
@@ -280,6 +281,19 @@ public final class DataSourceSelectorConsoleKt {
                     // ignore
                 }
             }
+            // T-PreviewResultIsolation（2026-11-03 真机）：预览路径先清掉**上一轮的结果页签与历史回显**。
+            //
+            // 现场：DBN 对同一个 exec 文件复用同一个 ContentManagerImpl$MyNonOpaquePanel——两次预览
+            // 的 resultComponent 同为 id=839493854、且首次取到时就带 889x248 的已布局尺寸；新建
+            // JdbcConsole 时旧的 Result 1 页签原样留着。用户侧两条症状：
+            //   ①「还没执行 SQL 就已经出现结果栏」（折叠判据 resultAreaHasContent 被旧页签喂成 true）；
+            //   ②「预览 A 后再预览 B，结果栏还是 A 的」。
+            // 复用路径（reuseSharedConsole）本来就有这两步清场，**新建控制台路径一直缺**。
+            // 执行路径（executeNow）不清：结果马上就到，清空只会让 DBN 回显断链（同 clearConsoleHistory KDoc）。
+            if (!executeNow) {
+                DataSourceSelector.clearResultContents(ui, LOG);
+                DataSourceSelector.clearConsoleHistory(project, console, LOG);
+            }
 
             JComponent editorComponentRaw = editor.getComponent();
             if (editorComponentRaw == null) {
@@ -426,9 +440,12 @@ public final class DataSourceSelectorConsoleKt {
                     boolean collapse = ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent(ui));
                     if (collapse) {
                         ApplicationManager.getApplication().invokeLater(() -> {
-                            ((JSplitPane) compX).setDividerLocation(1.0);
-                            ((JSplitPane) compX).revalidate();
-                            ((JSplitPane) compX).repaint();
+                            // T-PreviewBottomCollapse：折叠连最小高度一起管（只推 divider 会被 160px 兜底钳住）。
+                            // 高度未就绪时**不要**设——setDividerLocation(1.0) 在 h=0 上算出的 0 会让
+                            // 之后的布局把新增高度全给底部（真机「结果栏越拉越大」）。等面板侧首触布局再折。
+                            if (compX.getHeight() > 0) {
+                                DataSourceSelectorResultsKt.applyConsoleBottomCollapse((JSplitPane) compX, true, "prepare-preview");
+                            }
                         }, ModalityState.any());
                     }
                 }
@@ -466,7 +483,8 @@ public final class DataSourceSelectorConsoleKt {
                         project, console, editor, effectiveScriptModel, execOption, ui,
                         effectiveOnConsole, effectiveOnError, effectiveOnErrorRich, wholeScriptExecEffective,
                         effectiveGateRequest, effectiveOnDialectGate,
-                        PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission));
+                        PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission),
+                        onInfo);
                 if (queuedIntent != null) queuedExecuted = true;
             }
         } catch (Throwable e) {
@@ -538,6 +556,26 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        executeOnConsole(project, console, editor, scriptModel, execOption, ui, onResultsReady, onError,
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, null);
+    }
+
+    /** 全参 + 中性信息通道（T8）：穿层见 startResultTabRetry 注释。 */
+    public static void executeOnConsole(
+            @NotNull Project project,
+            Object console,
+            @NotNull Editor editor,
+            Object scriptModel,
+            Object execOption,
+            Object ui,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // O-145 W7：真实提交总口再次从 JdbcConsole 取实际数据源；必须早于任何文档改写、失效、
         // submitTransactionLater/executeQueries。准备后用户切换原生控制台数据源时，session 时判定已过期，
@@ -778,7 +816,7 @@ public final class DataSourceSelectorConsoleKt {
                                                     LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole");
                                                     doRunMethodRef[0].invoke(null, console, info);
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)");
-                                                    DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission);
+                                                    DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission, onInfo);
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
                                                     final Throwable fCause = cause;
@@ -845,7 +883,7 @@ public final class DataSourceSelectorConsoleKt {
                     if (submittedRef[0]) {
                         // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                         // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
-                        DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission);
+                        DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission, onInfo);
                     }
                 });
             });
@@ -1087,6 +1125,81 @@ public final class DataSourceSelectorConsoleKt {
     }
 
 
+    /**
+     * T-ThreadFix B：控制台就绪后、{@link #prepareAfterEditorResolved}（EDT）之前的 <b>PSI 预暖 + EDT 续接</b>。
+     *
+     * <p>缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」共 9 条）：</p>
+     * <pre>
+     * SEVERE - SlowOperations
+     *   at FileManagerImpl.findDirectory → ProjectFileIndexImpl.isUnderIgnored
+     *        → WorkspaceFileIndexDataImpl.ensureIsUpToDate
+     *   at PsiUtilCore.getPsiFile → JdbcConsole.getFile → JdbcConsole.updateScriptModel
+     *   at JdbcConsole.getScriptModel
+     *   at DataSourceSelectorConsoleKt.prepareAfterEditorResolved(DataSourceSelectorConsole.kt:78)
+     * </pre>
+     * <p>{@code console.getScriptModel()} 内部 {@code PsiUtilCore.getPsiFile(project, console.getVirtualFile())} 会
+     * <b>首次实例化</b>该 vf 的 {@code PsiFile}，而 {@code AbstractFileViewProvider.shouldCreatePsi} 每次都走
+     * {@code PsiManager.findDirectory} → {@code ProjectFileIndex.isUnderIgnored} → WorkspaceFileIndex 的
+     * {@code ensureIsUpToDate}——平台把它归为慢操作，<b>EDT 上调用即 SEVERE</b>。</p>
+     *
+     * <p>为什么不能靠缓存：exec 临时文件的 PSI 在 {@code createTempPsiFile}（BGT）里刚建好，但
+     * {@code mapDialectBeforePsi} 的 {@code setMapping} 会触发 {@code LanguageSubstitutors.requestReparsing} →
+     * {@code FileManagerImpl.forceReload}，把这份 PSI 作废（同一轮日志的 write-unsafe 栈里可见这条
+     * forceReload）。所以「EDT 上 findFile 必命中缓存」不成立。</p>
+     *
+     * <p>形态：<b>BGT 上先建好 PSI（慢操作合法线程）→ {@code invokeLater(nonModal)} 回 EDT 续接</b>
+     * （与 {@code createTempPsiFileAsync} 同款三段式；续接链会写控制台文档，故必须 write-safe 投递，
+     * 不能用 {@code ModalityState.any()}）。非 EDT 调用方就地预暖后就地续接（保持原同步语义）。</p>
+     *
+     * <p>预热只是<b>把慢操作挪到合法线程</b>，不改变准备链的任何语义：预热失败/拿不到 PSI 时
+     * {@code getScriptModel} 照旧自己建 PSI（最差等价改前，只是又会慢一次）。</p>
+     *
+     * @param console attachConsole 产出的原生控制台（反射取 {@code getVirtualFile}；取不到只预热 {@code vf}）
+     */
+    public static void warmConsolePsiThen(
+            @NotNull Project project,
+            @NotNull VirtualFile vf,
+            @Nullable Object console,
+            @NotNull Runnable onReady) {
+        VirtualFile consoleVf = null;
+        try {
+            Object cv = console != null ? console.getClass().getMethod("getVirtualFile").invoke(console) : null;
+            consoleVf = cv instanceof VirtualFile ? (VirtualFile) cv : null;
+        } catch (Throwable ignored) {
+            // runCatching.getOrNull 语义
+        }
+        List<VirtualFile> targets = consoleVf != null && !consoleVf.equals(vf)
+                ? List.of(vf, consoleVf) : List.of(vf);
+        Runnable warm = () -> {
+            try {
+                // T-M52：ReadAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                ReadAction.compute((com.intellij.openapi.util.ThrowableComputable<Void, Throwable>) () -> {
+                    for (VirtualFile target : targets) {
+                        try {
+                            PsiManager.getInstance(project).findFile(target);
+                        } catch (Throwable ignored) {
+                            // 单目标预热失败不阻断其余目标
+                        }
+                    }
+                    return null;
+                });
+            } catch (Throwable ignored) {
+                // 预热失败不阻断：getScriptModel 照旧自己建 PSI（最差等价改前）
+            }
+        };
+        ApplicationManager app = ApplicationManager.getApplication();
+        if (!app.isDispatchThread()) {
+            warm.run();
+            onReady.run();
+            return;
+        }
+        app.executeOnPooledThread(() -> {
+            warm.run();
+            // write-safe: 续接链含控制台文档写（writeVfTextViaDocument）——any() 恒 write-unsafe
+            app.invokeLater(onReady, ModalityState.nonModal());
+        });
+    }
+
     /** 准备链续接（consumer 回调内调用）。 */
     public static void prepareInConsole(
             @NotNull Project project,
@@ -1101,7 +1214,7 @@ public final class DataSourceSelectorConsoleKt {
             boolean wholeScriptExec,
             boolean ownsPrepareGate) {
         prepareInConsole(project, session, vf, executeAfterPrepare, dataSourceName, onConsole, onEditor, onError,
-                onErrorRich, wholeScriptExec, null, null, null, null, () -> true);
+                onErrorRich, wholeScriptExec, null, null, null, null, () -> true, null);
     }
 
     public static void prepareInConsole(
@@ -1119,7 +1232,8 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
-            @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
+            @NotNull java.util.function.Supplier<Boolean> isPrepareActive,
+            @Nullable Consumer<String> onInfo) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // T-DialectGatePassDeadChain：早退必须结算单飞门（chooseAndPrepare 同款注释）——门悬挂一次
         // 就是 60s 内执行/换源全部只排队。abort 按 owner 幂等，PASS_THROUGH 链（owner=null）恒 no-op。
@@ -1127,6 +1241,36 @@ public final class DataSourceSelectorConsoleKt {
             DataSourceSelector.abortPrepareGate(prepareOwner, MpSqlVisualizerBundle.message("execute.prepare.superseded"), LOG);
             return;
         }
+        // T-ThreadFix B：准备链失败收口抽成局部函数——同步分支的续接已改为异步（先 BGT 预暖控制台 PSI、
+        // 再 write-safe 回 EDT），续接里的异常不再能冒泡到下方 catch，必须由续接
+        // 自己走**同一套**收口（否则门悬挂 60s、面板恒「执行中」）。
+        java.util.function.Consumer<Throwable> handlePrepareFailure = e -> {
+            NativeConsoleViewLifetime.unwrapAndRethrowCritical(e);
+            LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+            // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
+            Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
+            // 解包后判 fatal 并透传给调用方捕获边界；非 fatal 路径行为不变。
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
+            // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
+            // 特判，见 prepareAfterEditorResolved onFailure）
+            String failureMsg;
+            if (cause instanceof com.intellij.util.IncorrectOperationException
+                    && cause.getMessage() != null && cause.getMessage().contains("already been disposed")) {
+                LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: "
+                        + cause.getMessage().substring(0, Math.min(120, cause.getMessage().length())));
+                clearPrepared();
+                dropSharedConsole();
+                failureMsg = MpSqlVisualizerBundle.message("execute.console.disposed");
+            } else {
+                failureMsg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+            }
+            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
+            if (onError != null) onError.accept(failureMsg);
+            // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
+            // 排队执行意图回落错误回调
+            DataSourceSelector.abortPrepareGate(prepareOwner, failureMsg, LOG);
+        };
         try {
             Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
             Class<?> sessionClass = Class.forName(SESSION_CLASS);
@@ -1215,9 +1359,19 @@ public final class DataSourceSelectorConsoleKt {
                 Editor ed = editor;
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 if (onEditor != null) onEditor.accept(ed);
-                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                        onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, prepareOwner,
-                        dialectGateRequest, onDialectGate, onSubmission, isPrepareActive);
+                // T-ThreadFix B：先 BGT 预暖控制台 vf 的 PSI，再回 EDT 续接——
+                // prepareAfterEditorResolved 第一件事就是 console.getScriptModel()（内部
+                // PsiUtilCore.getPsiFile → findDirectory），PSI 未建即 EDT 慢操作。
+                // 续接已是异步：失败收口必须显式走 handlePrepareFailure（同外层 catch 口径）。
+                warmConsolePsiThen(project, vf, console, () -> {
+                    try {
+                        prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
+                                onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, prepareOwner,
+                                dialectGateRequest, onDialectGate, onSubmission, isPrepareActive, onInfo);
+                    } catch (Throwable e) {
+                        handlePrepareFailure.accept(e);
+                    }
+                });
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     Editor editor = null;
@@ -1241,27 +1395,30 @@ public final class DataSourceSelectorConsoleKt {
                         LOG.info("[M36] editor=" + resolved + " (async wait)");
                         if (resolved != null) {
                             if (onEditor != null) onEditor.accept(resolved);
-                            try {
-                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                                        onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec,
-                                        prepareOwner, dialectGateRequest, onDialectGate, onSubmission, isPrepareActive);
-                            } catch (Throwable e) {
-                                NativeConsoleViewLifetime.unwrapAndRethrowCritical(e);
-                                LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
-                                        + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
-                                Throwable cause = (e instanceof InvocationTargetException)
-                                        ? ((InvocationTargetException) e).getTargetException() : e;
-                                // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，
-                                // 只判外层会漏判目标方法抛出的 fatal——解包后判 fatal 并透传给平台
-                                // EDT 处理器记录现场；非 fatal 路径行为不变。
-                                if (FatalErrors.isFatal(cause)) throw (Error) cause;
-                                if (onError != null) {
-                                    onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                            // T-ThreadFix B：同同步分支——先 BGT 预暖控制台 PSI 再回 EDT 续接。
+                            warmConsolePsiThen(project, vf, console, () -> {
+                                try {
+                                    prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
+                                            onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec,
+                                            prepareOwner, dialectGateRequest, onDialectGate, onSubmission, isPrepareActive, onInfo);
+                                } catch (Throwable e) {
+                                    NativeConsoleViewLifetime.unwrapAndRethrowCritical(e);
+                                    LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
+                                            + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+                                    Throwable cause = (e instanceof InvocationTargetException)
+                                            ? ((InvocationTargetException) e).getTargetException() : e;
+                                    // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，
+                                    // 只判外层会漏判目标方法抛出的 fatal——解包后判 fatal 并透传给平台
+                                    // EDT 处理器记录现场；非 fatal 路径行为不变。
+                                    if (FatalErrors.isFatal(cause)) throw (Error) cause;
+                                    if (onError != null) {
+                                        onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                                    }
+                                    // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
+                                    // 门持有链复位 + 排队执行意图回落错误回调
+                                    DataSourceSelector.abortPrepareGate(prepareOwner, cause.getMessage() != null ? cause.getMessage() : cause.toString(), LOG);
                                 }
-                                // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
-                                // 门持有链复位 + 排队执行意图回落错误回调
-                                DataSourceSelector.abortPrepareGate(prepareOwner, cause.getMessage() != null ? cause.getMessage() : cause.toString(), LOG);
-                            }
+                            });
                         } else {
                             // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
                             // 仍取不到编辑器时，本函数就此静默结束：调用方既无 onError 也无 callback，
@@ -1276,30 +1433,7 @@ public final class DataSourceSelectorConsoleKt {
                 });
             }
         } catch (Throwable e) {
-            LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
-            // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
-            Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
-            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
-            // 解包后判 fatal 并透传给调用方捕获边界；非 fatal 路径行为不变。
-            if (FatalErrors.isFatal(cause)) throw (Error) cause;
-            // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
-            // 特判，见 prepareAfterEditorResolved onFailure）
-            String failureMsg;
-            if (cause instanceof com.intellij.util.IncorrectOperationException
-                    && cause.getMessage() != null && cause.getMessage().contains("already been disposed")) {
-                LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: "
-                        + cause.getMessage().substring(0, Math.min(120, cause.getMessage().length())));
-                clearPrepared();
-                dropSharedConsole();
-                failureMsg = MpSqlVisualizerBundle.message("execute.console.disposed");
-            } else {
-                failureMsg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-            }
-            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
-            if (onError != null) onError.accept(failureMsg);
-            // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
-            // 排队执行意图回落错误回调
-            DataSourceSelector.abortPrepareGate(prepareOwner, failureMsg, LOG);
+            handlePrepareFailure.accept(e);
         }
     }
 
