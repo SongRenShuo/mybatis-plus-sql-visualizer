@@ -1695,6 +1695,10 @@ class SqlLogPanel(
         val label = statusConsoleLabel ?: return
         val texts = if (manager.capturing) {
             runCatching {
+                // T-SqlListCatchup 券B2：2s 诊断拍过期冲洗——悬挂的节流余量（风暴末尾末批变更不足
+                // 批量阈值、之后无新条目再触发）最迟 2s 补一次通知上屏，列表与追赶徽章不再滞留
+                // 「落后 N 条」。flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有生产线程同路径安全。
+                if (manager.entries.hasStalePendingNotify()) manager.entries.flushPendingNotify()
                 val am = AgentManager.getInstance(project)
                 captureStatusLineText(
                     CaptureStatusLine(

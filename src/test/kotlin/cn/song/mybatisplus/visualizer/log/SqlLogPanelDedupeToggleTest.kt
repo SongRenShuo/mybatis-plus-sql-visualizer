@@ -19,6 +19,10 @@ class SqlLogPanelDedupeToggleTest : BasePlatformTestCase() {
         super.setUp()
         manager = SqlLogManager(project)
         manager.entries.dedupeEnabled = false // 模拟用户初始未勾选「移除重复的sql」
+        // 券A 时间窗适配（照 SqlLogManagerFlushWindowTest 的「不赌墙钟时序」口径）：窗口内通知
+        // 挂 uiCatchUpAlarm 补刷（~150ms 墙钟），headless 的 dispatchAllInvocationEvents 泵不到
+        // 未到点的 Alarm——注入同步补刷器，通知即拍落 EDT 队列，waitForEdt 必然泵到。
+        manager.catchUpScheduler = { _, action -> action() }
     }
 
     override fun tearDown() {

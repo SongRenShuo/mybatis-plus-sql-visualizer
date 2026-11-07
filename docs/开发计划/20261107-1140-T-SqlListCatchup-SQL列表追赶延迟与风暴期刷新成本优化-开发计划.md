@@ -169,3 +169,13 @@
 - 反向验证（S2）：临时摘除三处修复分支重跑——追赶读数拼接 1 红（`test追赶读数大于零时挂控制台段尾`）、pendingNotifyCount 接线 1 红（面板接线用例）、全拍打点 1 红（探针接线守卫），**恰 3 红**；其余用例（=0 不挂、节流状态机、既有 20 例）语义在旧机制下同样成立保持绿；恢复分支后 43 例全绿。
 - not run：join-demo 压测复测前后对比读数（§七.2，探针已备好、由主控统一复测）；真机 GUI 走查（追赶徽章观感）待用户；全量门禁与 convention 守卫（§七.3）按券序由收口轮统一跑。
 
+
+### 小券 B2：悬挂节流余量过期冲洗（2026-11-07）
+
+- 分支：`t-sqllist-catchup-b2`（自集成 tip `0596a476` 新建），提交：`47f762ef`（生产：buffer 过期冲洗 + 面板诊断拍接线；含测试与附带修正）。
+- 缺陷（券 D 登记的边界）：`pendingContentNotify` 只在通知触发或 `clear()` 归零——风暴末尾末批变更不足批 20 且落在 200ms 窗内，之后无新条目则再无触发源，悬挂的 UI 不刷新与「落后 N 条」徽章滞留正好命中风暴结束后的静默期。
+- 修法：buffer 侧 `hasStalePendingNotify()`（pending>0 且距上次通知超窗的悬挂态判定）+ `flushPendingNotify()`（补上本应发生的那次通知：归零+刷新时间戳+触发 listeners；pending=0 no-op；与并发生产者竞争最坏是各发一次幂等通知，不丢变更）；时间注入缝 `nowNanosForTest`（节流时间戳与悬挂判定统一走 `nowNanos()`，照券 B「别赌墙钟」口径）。面板 `syncCaptureStatusBar`（2s 诊断拍，EDT）捕捉态先探询后冲洗——悬挂变更最迟 2s 上屏；flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有桥/agent 生产线程同路径安全。
+- 测试：`SqlLogEntryBufferPendingNotifyFlushTest` 新增 4 例（悬挂态构造 hasStale=false / 时间推过窗 flush 归零且 listener 恰 1 次 / pending=0 no-op / flush 后窗内抑制不重·超窗即时补发不丢 / clear 复位后不误冲洗）+ `SqlLogPanelLayoutTest` 接线守卫 1 例（诊断拍冲洗后 pending 归零且悬挂条目上屏；摘除冲洗分支必红）。
+- 定向读数：8 类 **143 例 0 红**（新增 5 例 + `BufferTest` 60 / `DedupeIndexTest` 18 回归 + 券 B 面板等价 2 类 13 例 + 券 D `CaptureStatusBarTest` 18 / `SqlLogPanelLayoutTest` 22 回归；`--tests` 定向 + in-process）。
+- 附带修正（非缺陷，根因在券 A 交互）：`SqlLogPanelDedupeToggleTest` setUp 注入同步 `catchUpScheduler`（照 `SqlLogManagerFlushWindowTest`「不赌墙钟时序」口径）——券 A 150ms 时间窗把窗口内通知挂 `uiCatchUpAlarm` 补刷，headless `dispatchAllInvocationEvents` 泵不到未到点的 Alarm，券 B 面板接线用例原依赖「通知立即刷」语义在集成后失真（增量拍断言读到基线态、首拍报 {A:1} vs {}）。生产代码零返工。
+- not run：全量门禁（纪律）；真机 GUI 走查（徽章观感）待用户。
