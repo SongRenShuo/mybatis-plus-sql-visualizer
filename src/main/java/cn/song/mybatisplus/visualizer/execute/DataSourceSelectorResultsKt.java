@@ -103,6 +103,22 @@ public final class DataSourceSelectorResultsKt {
             boolean demotedOverride,
             @Nullable String sqlText,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        startResultTabRetry(project, ui, onError, preExistingNames, generation, dsName, demotedOverride, sqlText,
+                onErrorRich, null);
+    }
+
+    /** 全参 + 中性信息通道（T8）：onInfo 提供时完成态提示走 showStatus 灰字而非红条错误通道。 */
+    public static void startResultTabRetry(
+            @NotNull Project project,
+            Object ui,
+            @Nullable Consumer<String> onError,
+            Set<String> preExistingNames,
+            int generation,
+            String dsName,
+            boolean demotedOverride,
+            @Nullable String sqlText,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            @Nullable Consumer<String> onInfo) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         final javax.swing.Timer[] timerHolder = {null};
         final int[] attempts = {0};
@@ -180,25 +196,43 @@ public final class DataSourceSelectorResultsKt {
                     // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
                     // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
                     // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
+                    // T8：无错误、无残余时再看完成证据——use/DML 这类无结果 Tab 的语句成功时
+                    // 完成回显就写在 Output，走中性 showStatus 而不是超时提示（onInfo 缺席的
+                    // 调用方保持既有行为不动）。
+                    boolean completed = false;
+                    if (realError == null && residue == null) {
+                        completed = DataSourceSelector.hasConsoleCompletionEvidence(
+                                sharedConsole != null ? sharedConsole : preparedConsole);
+                    }
                     if (realError == null && !executionHintReported) {
                         executionHintReported = true;
                         String message;
                         if (residue != null) {
                             // 如实标注：这是控制台新增输出，**不是**已识别的错误形态（不猜原因）
                             message = MpSqlVisualizerBundle.message("execute.error.unknownShape") + "\n" + residue;
+                        } else if (completed && onInfo != null) {
+                            message = MpSqlVisualizerBundle.message("execute.toolStatementDone");
+                        } else if (dumb) {
+                            message = MpSqlVisualizerBundle.message("execute.indexing.hint");
+                        } else if (demotedOverride) {
+                            message = MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "");
                         } else {
-                            message = dumb
-                                    ? MpSqlVisualizerBundle.message("execute.indexing.hint")
-                                    : (demotedOverride
-                                            ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
-                                            : MpSqlVisualizerBundle.message("execute.timeout.hint"));
+                            message = MpSqlVisualizerBundle.message("execute.timeout.hint");
                         }
                         LOG.info("[M36] result tab not appeared, no console error (dumb=" + dumb + ", "
-                                + "demoted=" + demotedOverride + ", residue=" + (residue != null) + ") - hint via 40-tick window");
+                                + "demoted=" + demotedOverride + ", residue=" + (residue != null)
+                                + ", completed=" + completed + ") - hint via 40-tick window");
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
+                        // T8：完成态走中性通道（showStatus 灰字），不进红条错误通道——把成功
+                        // 说成失败与 T-CEC-03 的「错向归因」同性质。onInfo 缺席时维持旧路径。
+                        final boolean deliverToInfo = completed && onInfo != null;
                         final String fHint = message;
                         ApplicationManager.getApplication().invokeLater(() -> {
-                            if (onError != null) onError.accept(fHint);
+                            if (deliverToInfo) {
+                                if (onInfo != null) onInfo.accept(fHint);
+                            } else if (onError != null) {
+                                onError.accept(fHint);
+                            }
                         }, ModalityState.any());
                     } else if (realError != null) {
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
@@ -238,6 +272,23 @@ public final class DataSourceSelectorResultsKt {
         return !executeAfterPrepare && !forceChoose;
     }
 
+    /**
+     * T-ConsoleBind263 P0-2：显式指定的数据源在<b>可选 runner 集合里完全不存在</b>时必须阻断。
+     *
+     * <p>2026-11-07 现场：工具栏挑 {@code mpj_demo@localhost}，runner 集合只有被平台 forced 关联钉住的
+     * Oracle 源（{@code runners=1}）→ 旧链落到「single runner, run directly」，<b>静默把会话建在 Oracle 上</b>，
+     * 用户以为换成了 MySQL。错库代价远高于「让用户重试」：找不到就阻断并给可行动文案。</p>
+     *
+     * <p>同名多条不在此列（那是歧义，交弹窗让用户亲手挑，不算静默错源）；空白名也不在此列
+     * （取不到名字不是「用户点了某个源」，按旧行为回落弹窗）；<b>空集合</b>也不在此列——那由
+     * {@code runners.isEmpty()} 分支做方言/平台归因（跳过它会把可行动文案换成一句「找不到源」）。</p>
+     */
+    static boolean blocksPreferredRunnerMiss(@Nullable String preferredRunnerName, List<String> runnerNames) {
+        return preferredRunnerName != null && !preferredRunnerName.isBlank()
+                && !runnerNames.isEmpty()
+                && runnerNames.stream().noneMatch(it -> it.equals(preferredRunnerName));
+    }
+
     public static void chooseAndPrepare(
             @NotNull Project project,
             @NotNull String sql,
@@ -267,19 +318,25 @@ public final class DataSourceSelectorResultsKt {
             @Nullable Consumer<ExecutionSubmission> onSubmission,
             boolean forceChoose) {
         chooseAndPrepare(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
-                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose, null, false);
+                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, null, forceChoose, null, false, null);
     }
 
     /**
-     * T-ExplainFailUx W4 / T-ExplainSwitchNative W6 扩展形态。
+     * T-ExplainFailUx W4 / T-ExplainSwitchNative W6 / UI-049 / T8 全参形态。
      *
-     * @param preferredRunnerName T-ExplainFailUx W4（2026-10-24 用户实测「为什么我需要选两次数据源」）：
-     *                            <b>用户已显式指定数据源名</b>——按名在 runner 枚举里唯一命中就直接建链，
-     *                            <b>不再弹平台选择器</b>（此前预览的数据源下拉调 {@code prepareConsole(forceChoose=true)}，
-     *                            而 forceChoose 的语义恰是「强制弹窗」，于是用户在自己的下拉里选一次、
-     *                            平台选择器又让他选第二次）。语义边界：只跳过「选择」这一步，不跳过方言闸
-     *                            （闸门在 sessionConsumer 内照旧执行）；名字未命中/同名歧义 → 回落既有弹窗（不猜）。
-     * @param forceChoosePopup    T-ExplainSwitchNative W6：必须弹选择器（跳过 {@code shouldBeChosenIfAlone} 直选分支）。
+     * @param onInfo               T8：中性信息回调（工具语句成功完成时面板 showStatus；穿层见 startResultTabRetry 注释）。
+     * @param preferredRunnerName  T-ExplainFailUx W4（2026-10-24 用户实测「为什么我需要选两次数据源」）：
+     *                             <b>用户已显式指定数据源名</b>——按名在 runner 枚举里唯一命中就直接建链，
+     *                             <b>不再弹平台选择器</b>（此前预览的数据源下拉调 {@code prepareConsole(forceChoose=true)}，
+     *                             而 forceChoose 的语义恰是「强制弹窗」，于是用户在自己的下拉里选一次、
+     *                             平台选择器又让他选第二次）。语义边界：只跳过「选择」这一步，不跳过方言闸
+     *                             （闸门在 sessionConsumer 内照旧执行）；名字未命中/同名歧义 → 回落既有弹窗（不猜）。
+     * @param forceChoosePopup     T-ExplainSwitchNative W6：必须弹选择器（跳过 {@code shouldBeChosenIfAlone} 直选分支）。
+     * @param onDialectMismatchHint UI-049：空 Runner「方言不匹配」态的结构化提示通道。与 {@code onError}
+     *                             <b>互斥</b>（同 {@code deliverError} 的富/旧通道纪律）：提供本回调时不再投递旧的长文案，
+     *                             由面板渲染成「下一步」信息/警示态 + 可点入口；null = 保持既有文案（控制台、MCP、回滚弹窗等
+     *                             未接入方零回归）。只在「平台正常返回零个 Runner 且项目有在册数据源」这一态触发；无源/平台调用失败（归因由
+     *                             {@code emptyRunnersReason} 判定）绝不走本通道。
      */
     public static void chooseAndPrepare(
             @NotNull Project project,
@@ -294,9 +351,11 @@ public final class DataSourceSelectorResultsKt {
             @Nullable ExecutionDialectGate.Request dialectGateRequest,
             @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
             @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo,
             boolean forceChoose,
             @Nullable String preferredRunnerName,
-            boolean forceChoosePopup) {
+            boolean forceChoosePopup,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort");
@@ -313,7 +372,7 @@ public final class DataSourceSelectorResultsKt {
         // 落地，复用必不命中，单飞是唯一闸门。
         // 预览也持有身份，超时后旧 session 回调不能消费下一链的队列。
         QueuedExecuteIntent queuedIntent = new QueuedExecuteIntent(onConsole, onEditor, onError, onErrorRich,
-                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission);
+                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, onDialectMismatchHint);
         Consumer<ExecutionSubmission> submission = queuedIntent.onSubmission();
         PrepareGateDecision gateDecision = prepareGate.tryEnter(executeAfterPrepare, queuedIntent);
         if (gateDecision == PrepareGateDecision.QUEUE_ONLY) {
@@ -385,13 +444,65 @@ public final class DataSourceSelectorResultsKt {
         }
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
-        TempPsiFile temp = createTempPsiFile(project, submitSql,
-                dialectGateRequest != null ? dialectGateRequest.renderedDialectName() : null);
+        // T-ExecSlowOps-BP（2026-11-04 回 port dev ba314f42）：本段含 VFS refresh 与
+        // PsiManager.findFile 两个平台慢操作（243/262「Slow operations are prohibited on EDT」
+        // 断言实证，栈见 createTempPsiFileAsync KDoc）——**EDT 上只做派发**，结果经
+        // invokeLater(nonModal) 回到 EDT 续接准备链（弹窗/内嵌控制台/结果面板仍全部在 EDT）。
+        // 契约影响：本函数的后续全链已迁入 continuePrepareAfterTempFile，由 onReady 驱动。
+        createTempPsiFileAsync(project, submitSql,
+                dialectGateRequest != null ? dialectGateRequest.renderedDialectName() : null,
+                temp -> continuePrepareAfterTempFile(
+                        project, temp, sql, submitSql, executeAfterPrepare,
+                        onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
+                        dialectGateRequest, onDialectGate, submission, onInfo,
+                        forceChoose, forceChoosePopup, preferredRunnerName,
+                        intendedDs, intendedDsId, prepareOwner, queuedIntent, onDialectMismatchHint));
+    }
+
+    /**
+     * T-ExecSlowOps-BP：{@code chooseAndPrepare} 的<b>后半链</b>——临时文件就绪（异步回调形态）之后的
+     * 数据源绑定对齐 / Runner 枚举 / last-used 静默命中 / 选择器弹窗 / 建链执行。
+     *
+     * <p>为什么单独成函数：{@code createTempPsiFile} 的慢段必须离开 EDT（见 {@link #createTempPsiFileAsync}），
+     * 续接只能写在回调里；而回调体内原先的 {@code return@chooseAndPrepare}（S2-12 绑定回落与重映射重试
+     * 两处）在 lambda 里不成立，故整段逐字搬出。<b>本函数必须在 EDT 上执行</b>（弹窗/内嵌控制台/
+     * 结果组件全是 UI 动作）——异步入口保证经 {@code invokeLater} 回到 EDT。</p>
+     *
+     * @param temp         createTempPsiFileAsync 的产物；null = 建链失败（阶段原因在 {@code lastTempFileFailure}）
+     * @param sql          面板/调用方原文（重映射重试按原文重入 {@code chooseAndPrepare}，与 submitSql 不同）
+     * @param prepareOwner 门持有链的排队意图（null = PASS_THROUGH 预览链，不持有单飞门）
+     * @param queuedIntent 本链的排队意图（isPrepareActive 判定与弹窗回调消费用）
+     */
+    public static void continuePrepareAfterTempFile(
+            @NotNull Project project,
+            @Nullable DataSourceSelector.TempPsiFile temp,
+            @NotNull String sql,
+            @NotNull String submitSql,
+            boolean executeAfterPrepare,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @NotNull Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo,
+            boolean forceChoose,
+            boolean forceChoosePopup,
+            @Nullable String preferredRunnerName,
+            @Nullable Object intendedDs,
+            @Nullable String intendedDsId,
+            @Nullable QueuedExecuteIntent prepareOwner,
+            @NotNull QueuedExecuteIntent queuedIntent,
+            @Nullable Consumer<DialectMismatchHint> onDialectMismatchHint) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (temp == null) {
             // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
             // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
             LOG.warn("[M36] createTempPsiFile failed (reason=" + lastTempFileFailure + "), abort");
-            PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, submission, onError, null,
+            PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null,
                     MpSqlVisualizerBundle.message("execute.tempFile.failed",
                             lastTempFileFailure != null ? lastTempFileFailure : "unknown"));
             if (callback != null) callback.accept(false);
@@ -414,12 +525,56 @@ public final class DataSourceSelectorResultsKt {
                 LOG.info("[T-ConsoleBind] exec file pin=" + bindProbe.pinnedDsId()
                         + ", intended=" + (bindAction.intendedDsId() != null ? bindAction.intendedDsId() : "(clear)")
                         + " → " + bindAction.action());
-                if (ExecFileBinding.realignExecBind(project, vf,
-                        bindAction.action() == ExecFileBinding.Action.REALIGN ? intendedDs : null)) {
+                ExecFileBinding.RealignReport realign = ExecFileBinding.realignExecBind(
+                        project, vf,
+                        bindAction.action() == ExecFileBinding.Action.REALIGN ? intendedDs : null);
+                if (realign.applied()) {
                     // 被 detach 的可能正是共享/已备控制台（内嵌在预览面板里）——缓存作废，
                     // 本链全量重建（onConsole 回调会重嵌新控制台）。
                     dropSharedConsole();
                     clearPrepared();
+                } else if (bindAction.action() == ExecFileBinding.Action.REALIGN && !realign.mapped()) {
+                    // T-ConsoleBind263 P1-5：写没落地 → 本链紧接着的 runner 枚举仍会被平台 forced 关联
+                    // 短路成被钉住的源；在这里就地说明「实际目标 ≠ 请求目标」，别让用户以为换成功了。
+                    // 只在**关联没写进去**时提示：仅 detach 失败（mapped=true）时关联已指向目标，
+                    // 说「绑定仍指向别的源」是假话——那种情况由 realignExecBind 的日志交代。
+                    LOG.warn("[T-ConsoleBind] realign NOT applied: strategy="
+                            + (realign.strategy() != null ? realign.strategy().id() : "none")
+                            + ", expected=" + realign.expectedId() + ", observed=" + realign.observedId()
+                            + ", failure=" + realign.failure());
+                    String expectedName = null;
+                    if (bindAction.intendedDsId() != null) {
+                        try {
+                            Object expectedDs = DataSourceSettings.getDataSourceById(project, bindAction.intendedDsId());
+                            expectedName = expectedDs != null ? DataSourceSettings.getName(expectedDs) : null;
+                        } catch (Throwable ignored) {
+                            expectedName = null;
+                        }
+                    }
+                    if (expectedName == null) {
+                        expectedName = bindAction.intendedDsId() != null ? bindAction.intendedDsId() : "";
+                    }
+                    String observedName = null;
+                    if (realign.observedId() != null) {
+                        try {
+                            Object observedDs = DataSourceSettings.getDataSourceById(project, realign.observedId());
+                            observedName = observedDs != null ? DataSourceSettings.getName(observedDs) : null;
+                        } catch (Throwable ignored) {
+                            observedName = null;
+                        }
+                    }
+                    if (observedName == null) {
+                        observedName = realign.observedId() != null ? realign.observedId() : "";
+                    }
+                    Consumer<String> realignSink = onError != null ? onError : onInfo;
+                    if (realignSink != null) {
+                        realignSink.accept(MpSqlVisualizerBundle.message(
+                                "execute.datasource.realignNotApplied",
+                                expectedName,
+                                observedName.isBlank()
+                                        ? MpSqlVisualizerBundle.message("execute.datasource.realignObservedNone")
+                                        : observedName));
+                    }
                 }
             }
         }
@@ -427,10 +582,10 @@ public final class DataSourceSelectorResultsKt {
         final String[] chosenRunnerName = {null};
         java.util.function.Supplier<Boolean> isPrepareActive = () ->
                 !queuedIntent.isCompleted()
-                        && (!ownsGate || prepareGate.isOwner(queuedIntent));
+                        && (prepareOwner == null || prepareGate.isOwner(queuedIntent));
         final Consumer<String> runnerError = message -> {
             if (isPrepareActive.get()) {
-                PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, submission, onError,
+                PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError,
                         null, message);
             }
         };
@@ -448,7 +603,7 @@ public final class DataSourceSelectorResultsKt {
                     + ", execute=" + executeAfterPrepare);
             boolean allowed = prepareGate.duringInteraction(prepareOwner, () ->
                     DataSourceSelector.allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate,
-                            onError, submission));
+                            onError, onSubmission));
             if (!allowed) {
                 DataSourceSelector.abortPrepareGate(prepareOwner,
                         dialectGateRequest != null
@@ -469,8 +624,17 @@ public final class DataSourceSelectorResultsKt {
             }
             DataSourceSelectorConsoleKt.prepareInConsole(project, session, vf, executeAfterPrepare,
                     chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
-                    prepareOwner, dialectGateRequest, onDialectGate, submission, isPrepareActive);
+                    prepareOwner, dialectGateRequest, onDialectGate, onSubmission, isPrepareActive, onInfo);
         };
+
+        // T-ExecSlowOps-BP：**迟到的续接守卫**——临时文件构建已改为异步（池线程 → invokeLater），
+        // 窗口内门可能已被 60s 逃生/用户取消终结，或本链已不是 owner。此时继续枚举 Runner/弹选择器
+        // 会在新链上建第二条会话/控制台（T-FirstExecResultInvisible F1 的单飞纪律）。原生同步链没有
+        // 这个窗口，是异步化引入的新竞态面，必须在这里收口。
+        if (!isPrepareActive.get()) {
+            LOG.info("[M36][T-ExecSlowOps-BP] temp file ready but prepare chain no longer active — abandoned");
+            return;
+        }
 
         // T-Exec262ReadLock A：改用详情版枚举——runners 为空时区分「平台调用抛异常」与「正常零可用源」
         //（见下方 PLATFORM_CALL_FAILED 分支；归因函数 emptyRunnersReason 为纯函数，测试直测）。
@@ -524,7 +688,30 @@ public final class DataSourceSelectorResultsKt {
             }
         }
 
-        if (preferredRunnerName != null
+        if (blocksPreferredRunnerMiss(preferredRunnerName,
+                runners.stream().map(DataSourceSelector::getRunnerName).collect(java.util.stream.Collectors.toList()))) {
+            // T-ConsoleBind263 P0-2（2026-11-07 用户实测「点了 mpj_demo 却跑到 Oracle」）：**偏好名在
+            // runner 集合里完全不存在**时必须阻断，绝不能掉进下面任何一个分支——
+            //  - 「单 runner 直跑」会拿被平台 forced 关联钉住的 A 源静默建链（现场正是这个形态：
+            //    偏好=mpj_demo@localhost、runner 集合只有 FREEPDB1 的 Oracle 源）；
+            //  - 「弹窗」也会用错集合，用户选完仍旧是 A 源。
+            // 只有「同名多条」这种歧义仍走弹窗（让用户亲手挑，不算静默错源）。
+            // 判据口径：runner 显示名 = DbDataSource.getName() = 数据源显示名（263 字节码实证，
+            // createDataSourceRunner 走 getName()），与偏好名同源，故字符串比对成立。
+            LOG.warn("[M36] preferred runner NOT FOUND: '" + preferredRunnerName + "', runners=" + runners.size()
+                    + " [" + runners.stream().map(DataSourceSelector::getRunnerName)
+                            .collect(java.util.stream.Collectors.joining(", "))
+                    + "] — blocked (refuse to run on pinned source)");
+            Consumer<String> missSink = onError != null ? onError : onInfo;
+            if (missSink != null) {
+                missSink.accept(MpSqlVisualizerBundle.message("execute.datasource.preferredNotFound",
+                        preferredRunnerName != null ? preferredRunnerName : ""));
+            }
+            // 收尾口径同 runners.isEmpty()：链就此终结，单飞门必须结算（否则下一次执行排队到超时）。
+            onSubmission.accept(ExecutionSubmission.BLOCKED);
+            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, null);
+            if (callback != null) callback.accept(false);
+        } else if (preferredRunnerName != null
                 && runners.stream().filter(r -> getRunnerName(r).equals(preferredRunnerName)).count() == 1) {
             // T-ExplainFailUx W4：用户已在下拉里显式指定源名 → 按名唯一命中直接建链，不再弹选择器
             //（一次选择即生效；名字未命中/歧义回落弹窗，不猜）。
@@ -573,10 +760,14 @@ public final class DataSourceSelectorResultsKt {
                 }
                 LOG.info("[M36] runners empty → remapped exec file to target dialect, retry runners=" + retry.size());
                 if (!retry.isEmpty()) {
-                    // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）
+                    // 用重映射后的 runner 集重新进入同一分派逻辑（递归一次，runner 非空不会再回到本分支）。
+                    // T-ExecSlowOps-BP：本函数已从 chooseAndPrepare 拆出，原「标签返回」改普通递归调用 + return
+                    //（递归结果同为 Unit）。
+                    // 合并说明（T-TestGapSpeed × UI-049）：onInfo（T8）插在 onSubmission 与 forceChoose
+                    // 之间后，尾部位置传参会错位——此处保持全参位置形态（与具名传参等价）。
                     chooseAndPrepare(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
-                            onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, submission,
-                            forceChoose, preferredRunnerName, forceChoosePopup);
+                            onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, onInfo,
+                            forceChoose, preferredRunnerName, forceChoosePopup, onDialectMismatchHint);
                     return;
                 }
             }
@@ -616,15 +807,32 @@ public final class DataSourceSelectorResultsKt {
                     if (names.length() > 0) names.append(", ");
                     names.append(DataSourceSettings.getName(ds));
                 }
-                if (onError != null) {
+                // UI-049：结构化提示与旧文案**互斥**。面板侧用 URL 子协议挑出「看起来是目标方言」
+                // 的源（unique/multiple/none 三种点名口径），渲染成「下一步」+ 可点入口；没有接入
+                // 新通道的调用方（控制台/MCP/回滚弹窗）保持原文案，归因与既有读法零变化。
+                if (onDialectMismatchHint != null) {
+                    try {
+                        onDialectMismatchHint.accept(
+                                DialectMismatchHintKt.buildDialectMismatchHint(dialectDisplay, registered));
+                    } catch (Throwable e) {
+                        // 呈现层异常不得打断准备链的收尾（onSubmission/单飞门 abort 在下方）——
+                        // 退化回旧文案，至少用户仍能看到原因。
+                        LOG.warn("[UI-049] dialect mismatch hint sink FAILED: " + e.getClass().getSimpleName()
+                                + ": " + e.getMessage());
+                        if (onError != null) {
+                            onError.accept(MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch",
+                                    dialectDisplay, names.toString()));
+                        }
+                    }
+                } else if (onError != null) {
                     onError.accept(MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch",
                             dialectDisplay, names.toString()));
                 }
             }
             // M36.3：无数据源时通知 UI 从「执行中」恢复
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-            submission.accept(ExecutionSubmission.BLOCKED);
-            if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, null);
+            onSubmission.accept(ExecutionSubmission.BLOCKED);
+            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, null);
             if (callback != null) callback.accept(false);
         } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0)) && !forceChoosePopup) {
             LOG.info("[M36] single runner, run directly");
@@ -633,6 +841,22 @@ public final class DataSourceSelectorResultsKt {
                     dialectGateRequest != null ? dialectGateRequest.moduleKey() : null);
             if (callback != null) callback.accept(true);
         } else {
+            // UI-003（2026-11-04 真机）：**预览默认准备不再弹「选择数据源」模态列表**。
+            // 现场：打开 XML 预览即弹 7 源列表、面板右上仍是「未绑定数据源」——与本函数
+            // T-DsCover 注释声明的意图（「预览默认准备静默」）相反。判据收口在 PreviewPreparePick。
+            //
+            // master 侧只实施 A 方案（dev 的「学习绑定静默选源」依赖 ExecBindFallback，master 无
+            // 该文件）：走到本分支的预览准备必然是「多源且无记忆」——last-used 静默命中与单源
+            // 直选已在本分支之前各自建链（allowsSilentLastUsed / shouldBeChosenIfAlone）。
+            if (!PreviewPreparePick.shouldPopup(executeAfterPrepare, forceChoose, forceChoosePopup)) {
+                LOG.info("[UI-003] preview prepare: no unique target among " + runners.size()
+                        + " runners — stay unbound, wait for explicit execute");
+                // 不弹窗、不建链、不投递 onError（面板保持「未绑定」灰字）。
+                // 单飞门**必须结算**：不结算会让下一次执行排队到 60s 超时（门持有链不复位）。
+                if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner);
+                if (callback != null) callback.accept(false);
+                return;
+            }
             LOG.info("[M36] show popup with " + runners.size() + " runners");
             prepareGate.beginInteraction(prepareOwner);
             showRunnerPopup(project, runners, runner -> {
@@ -651,8 +875,8 @@ public final class DataSourceSelectorResultsKt {
                 if (callback != null) callback.accept(runner != null);
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
                 if (runner == null) {
-                    if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED, null);
-                    submission.accept(ExecutionSubmission.CANCELLED);
+                    if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED, null);
+                    onSubmission.accept(ExecutionSubmission.CANCELLED);
                 }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
                 if (runner != null) runRunner(project, runner, false, runnerError,
@@ -803,7 +1027,7 @@ public final class DataSourceSelectorResultsKt {
         }
         if (!executeAfterPrepare) {
             clearResultContents(sharedUi, LOG);
-            clearConsoleHistory(console, LOG);
+            DataSourceSelector.clearConsoleHistory(project, console, LOG);
         }
         JComponent liveResult = null;
         try {
@@ -851,9 +1075,11 @@ public final class DataSourceSelectorResultsKt {
                 boolean collapse = ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent(sharedUi));
                 if (collapse) {
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        ((JSplitPane) fullX).setDividerLocation(1.0);
-                        ((JSplitPane) fullX).revalidate();
-                        ((JSplitPane) fullX).repaint();
+                        // T-PreviewBottomCollapse：折叠连最小高度一起管；高度未就绪不设（h=0 上算出的
+                        // divider=0 会让后续布局把新增高度全给底部）
+                        if (fullX.getHeight() > 0) {
+                            applyConsoleBottomCollapse((JSplitPane) fullX, true, "reuse-preview");
+                        }
                     }, ModalityState.any());
                 }
             }
@@ -1219,6 +1445,24 @@ public final class DataSourceSelectorResultsKt {
             @Nullable String sqlText,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride, sqlText,
+                onErrorRich, onSubmission, null);
+    }
+
+    /** 全参 + 中性信息通道（T8）：穿层至 startResultTabRetry 的完成证据分流。 */
+    public static void afterSubmitted(
+            @NotNull Project project,
+            Object ui,
+            Object console,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            Logger LOG,
+            String dsName,
+            boolean demotedOverride,
+            @Nullable String sqlText,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable Consumer<String> onInfo) {
         if (onSubmission != null) onSubmission.accept(ExecutionSubmission.SUBMITTED);
         swapGeneration++;
         // write-safe: UI-only（纯 Swing/只读，无文档写）
@@ -1310,7 +1554,8 @@ public final class DataSourceSelectorResultsKt {
             }
             if (ui != null) {
                 Set<String> names = preExistingNames;
-                startResultTabRetry(project, ui, onError, names, swapGeneration, dsName, demotedOverride, sqlText, onErrorRich);
+                startResultTabRetry(project, ui, onError, names, swapGeneration, dsName, demotedOverride, sqlText,
+                        onErrorRich, onInfo);
             }
         }, ModalityState.any());
     }
@@ -1573,6 +1818,110 @@ public final class DataSourceSelectorResultsKt {
 
 
     /**
+     * T-ExecSlowOps-BP：<b>EDT 入口</b>——把 {@link #createTempPsiFile} 的慢段整体挪出 EDT。
+     *
+     * <p>缺陷实证（2026-11-04 真机 master 包 {@code v2026.11.4-beta.1}，{@code idea.log} 一轮 36 条）：</p>
+     * <pre>
+     * SqlPreviewDialog.&lt;init&gt; → showResult → prepareDefaultConsole
+     *   → SqlExecutor.prepareConsole → DataSourceSelector.prepareConsole
+     *     → chooseAndPrepare → createTempPsiFile
+     *       → ReadAction.compute { PsiManager.getInstance(project).findFile(vf) }
+     *         → FileManagerImpl.findDirectory → ProjectFileIndexImpl.isUnderIgnored
+     *           → WorkspaceFileIndexDataImpl.ensureIsUpToDate     ← 慢操作
+     * </pre>
+     * <p>{@code ReadAction.compute} 只保证读语义、<b>不改变线程</b>——PSI 首次实例化照跑在 EDT 上，平台
+     * {@code SlowOperations} 断言必然 SEVERE。冷路径（缓存未命中）三路皆可达：执行 SQL / 执行计划 /
+     * 回滚快照都走 {@code prepareConsole → chooseAndPrepare → createTempPsiFile}。</p>
+     *
+     * <p><b>线程契约</b>：</p>
+     * <ul>
+     *   <li><b>EDT 调用</b>（生产唯一形态）：立刻返回，慢段在池线程执行，结果经<b>write-safe 投递</b>回到 EDT
+     *       交给 {@code onReady}——续接链里的弹窗/内嵌控制台/结果面板动作因此仍全部在 EDT；</li>
+     *   <li>非 EDT 调用（防御分支，生产不可达）：慢段在调用线程就地跑（BGT 上合法），<b>回调同样经
+     *       write-safe 投递回 EDT</b>——续接链是 UI + 文档写，不能由后台线程承接。</li>
+     * </ul>
+     *
+     * <p><b>写安全</b>：投递模态必须是 {@code ModalityState.nonModal()}，<b>不能用 {@code any()}</b>。
+     * {@code TransactionGuardImpl} 构造期只把 {@code nonModal} 登记为 write-safe；{@code any()} 排出的回调不套
+     * {@code runWithWritingAllowed}，而续接链 {@code continuePrepareAfterTempFile} 内含文档写（共享控制台
+     * {@code editor.document.setText}、控制台文档 {@code setText} + {@code PsiDocumentManager.commitDocument}），
+     * 于是每次执行都紧跟一条 {@code SEVERE TransactionGuardImpl … Write-unsafe context}
+     * （dev 2026-11-01 真机三连实证；仓内定案见 {@code ExecWriteSafeDispatchGuardTest}）。</p>
+     *
+     * <p>契约影响：本函数<b>异步</b>——调用方不得在调用返回后立即使用临时文件，必须写在 {@code onReady} 里
+     * （{@code chooseAndPrepare} 的后续全链已按此迁入 {@link #continuePrepareAfterTempFile}）。</p>
+     *
+     * @param onReady 结果回调；null = 建链失败（阶段原因在 {@code lastTempFileFailure}）。EDT 调用时
+     *   回调保证在 EDT 上、且处于 write-safe 上下文（可写文档）。
+     */
+    public static void createTempPsiFileAsync(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable String renderedDialectName,
+            @NotNull Consumer<DataSourceSelector.TempPsiFile> onReady) {
+        ApplicationManager app = ApplicationManager.getApplication();
+        if (!app.isDispatchThread()) {
+            // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
+            // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
+            DataSourceSelector.TempPsiFile pair = createTempPsiFile(project, sql, renderedDialectName);
+            app.invokeLater(() -> onReady.accept(revalidateOnEdt(project, pair)), ModalityState.nonModal());
+            return;
+        }
+        app.executeOnPooledThread(() -> {
+            DataSourceSelector.TempPsiFile pair = createTempPsiFile(project, sql, renderedDialectName);
+            app.invokeLater(() -> onReady.accept(revalidateOnEdt(project, pair)), ModalityState.nonModal());
+        });
+    }
+
+    /**
+     * T-ExecPsiInvalid：异步窗口内的 <b>PSI 失效兜底</b>。
+     *
+     * <p>缺陷形态：{@code createTempPsiFile} 在池线程 {@code findFile} 拿到的 {@code PsiFile} 到 EDT 回调消费之间有一个
+     * 空窗。空窗里只要该文件内容发生一次变化（doc 驱动的三方同步落盘、防抖自动落盘、用户/其他写方
+     * 覆盖 {@code mpsql-exec.sql}），平台就会丢掉旧 PSI——{@code vf.isValid} 仍为 true（<b>只有内容变了</b>），
+     * 而 {@code psi.text} 硬抛 {@code PsiInvalidElementAccessException}。旧同步实现把整段压在 EDT 上，EDT 被
+     * 占住时排队的内容变化落不下来，所以该窗口一直没暴露；改异步后它成了真窗口（dev 全量门禁实证）。</p>
+     *
+     * <p>兜底口径：<b>只有 PSI 失效才重解析</b>（有效即原样返回，热路径零额外开销）；重解析仍失败则
+     * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。</p>
+     *
+     * <p>线程契约（UI-002）：本函数在 <b>EDT</b>（write-safe 投递内）执行，但 {@code psi.isValid} / {@code findFile}
+     * 都是 PSI API，<b>读权限一律显式取</b>——不依赖 EDT 隐式读权限（新线程模型下
+     * {@code Application.isReadAccessAllowed()} 只看本线程读许可；{@code TransactionGuard} 的 write-safe 只放开
+     * 文档写、不放读）。后台误调本函数也不会打平台读锁断言。</p>
+     */
+    @Nullable
+    public static DataSourceSelector.TempPsiFile revalidateOnEdt(
+            @NotNull Project project,
+            @Nullable DataSourceSelector.TempPsiFile pair) {
+        if (pair == null) return null;
+        VirtualFile vf = pair.vf;
+        PsiFile psi = pair.psi;
+        boolean stillValid;
+        try {
+            stillValid = Boolean.TRUE.equals(ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) psi::isValid));
+        } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw e;
+            stillValid = false;
+        }
+        if (stillValid) return pair;
+        // 重解析 + 有效性判定同一次读锁内完成——判出的 fresh 出了锁再判 isValid 会多一次读权限要求
+        //（且中间仍有失效窗口），合并后只读一次平台状态。
+        PsiFile fresh;
+        try {
+            fresh = ReadAction.compute((com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () -> {
+                PsiFile found = PsiManager.getInstance(project).findFile(vf);
+                return found != null && found.isValid() ? found : null;
+            });
+        } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw e;
+            fresh = null;
+        }
+        return fresh != null ? new DataSourceSelector.TempPsiFile(vf, fresh) : null;
+    }
+
+    /**
      * 创建临时 .sql 文件。
      *
      * <p>T-ExecCopyFix：失败可见化——原实现整段 runCatching{}.getOrNull() 吞异常零日志，
@@ -1600,6 +1949,9 @@ public final class DataSourceSelectorResultsKt {
 
     public static TempPsiFile createTempPsiFile(Project project, String sql, @Nullable String renderedDialectName) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-ExecSlowOps-BP：**慢段本体，只允许后台线程调用**（EDT 调用会撞平台
+        // "Slow operations are prohibited on EDT"）。EDT 侧唯一入口是 createTempPsiFileAsync，
+        // 由它派发到池线程；prewarmExecTempFileInner 走同款 BGT 裸调形态。
         // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare 错误文案）
         lastTempFileFailure = null;
         final File ioFile;
@@ -1640,11 +1992,21 @@ public final class DataSourceSelectorResultsKt {
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 Javadoc）；
         // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
         // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
+        // T-ExecSlowOps-BP：**线程分流**——本函数现由 createTempPsiFileAsync 在池线程调用，
+        // BGT 上包 WIRA × 同步 refresh 会自锁（T-PrewarmWilDeadlock：持写意向锁等 RefreshSession
+        // 推进，而会话推进需 WIL/EDT，2026.2 真机 threadDump 全 IDE not responding 实证），故 BGT
+        // **裸调**；EDT 分支（本券后生产不可达，仅防御）保留 WIRA——262 平台 EDT + plain ReadAction
+        // 内同步 refresh 硬抛 write thread only（F2b 修复本体）。守卫：
+        // SyncRefreshWriteIntentGuardTest 规则二/规则三 + ExecTempFileEdtGuardTest。
         VirtualFile vf;
         try {
-            vf = WriteIntentReadAction.compute(
-                    (com.intellij.openapi.util.Computable<VirtualFile>) () ->
-                            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
+            if (ApplicationManager.getApplication().isDispatchThread()) {
+                vf = WriteIntentReadAction.compute(
+                        (com.intellij.openapi.util.Computable<VirtualFile>) () ->
+                                LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
+            } else {
+                vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
+            }
         } catch (Throwable e) {
             if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("refreshVfs", e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -1887,9 +2249,20 @@ public final class DataSourceSelectorResultsKt {
             public void componentResized(ComponentEvent e) {
                 if (sp.getHeight() < 200) return;
                 sp.removeComponentListener(this);
+                // T-PreviewBottomCollapse：预览折叠态已由面板侧定好落点，这里不得再无条件弹回 0.6
+                if (Boolean.TRUE.equals(sp.getClientProperty(BOTTOM_COLLAPSED_MARK))) {
+                    Logger.getInstance(DataSourceSelector.class).info(
+                            "[M36][Collapse] buildSplit-firstResize skipped (collapsed) h=" + sp.getHeight()
+                                    + " divider=" + sp.getDividerLocation());
+                    return;
+                }
                 sp.setDividerLocation(0.6);
                 sp.revalidate();
                 sp.repaint();
+                // 2026-11-03 取证：本监听是「无条件 0.6」，若它排在面板折叠之后执行就会把折叠弹开
+                Logger.getInstance(DataSourceSelector.class).info(
+                        "[M36][Collapse] buildSplit-firstResize → 0.6 (unconditional) h=" + sp.getHeight()
+                                + " divider=" + sp.getDividerLocation());
             }
         });
         return sp;
@@ -2079,12 +2452,21 @@ public final class DataSourceSelectorResultsKt {
         Container parent = candidate.getParent();
         if (parent != null && parent != sp) parent.remove(candidate);
         sp.setBottomComponent(candidate);
-        Dimension min = candidate.getMinimumSize();
-        candidate.setMinimumSize(new Dimension(min != null ? min.width : 400, 160));
+        boolean collapsed = Boolean.TRUE.equals(sp.getClientProperty(BOTTOM_COLLAPSED_MARK));
+        // T-PreviewBottomCollapse：预览折叠态下回收**不得**把 160px 兜底写回去——否则 DBN 每次把
+        // 结果组件抢走、守卫抢回的这 2.5 秒后，divider 立刻被钳回 ~0.68，折叠白做（真机 2026-11-03
+        // 日志实证：collapse=true divider=304→508 之后紧跟 result reclaim guard: bottom re-mounted）。
+        if (collapsed) {
+            candidate.setMinimumSize(new Dimension(0, 0));
+            sp.setDividerLocation(1.0);
+        } else {
+            Dimension min = candidate.getMinimumSize();
+            candidate.setMinimumSize(new Dimension(min != null ? min.width : 400, 160));
+        }
         sp.revalidate();
         sp.repaint();
         log.info("[M36] result reclaim guard: bottom re-mounted (id=" + System.identityHashCode(candidate)
-                + ", n=" + state[0] + ")");
+                + ", n=" + state[0] + ", collapsed=" + collapsed + ")");
         return true;
     }
 
@@ -2121,14 +2503,83 @@ public final class DataSourceSelectorResultsKt {
     }
 
 
+    /**
+     * T-PreviewBottomCollapse：整控台 SplitPane 的「结果区折叠态」标记（客户端属性）。
+     * {@code true} = 底部已压到 0 高（预览态），{@link #realignDividerOnce} 的非 force 校正必须让路。
+     */
+    static final String BOTTOM_COLLAPSED_MARK = "mpsql.bottomCollapsed";
+
+    /** T-PreviewBottomCollapse：折叠态常驻 resize 监听（见 {@link #applyConsoleBottomCollapse}）。 */
+    private static final String BOTTOM_COLLAPSE_LISTENER = "mpsql.bottomCollapseListener";
+
+    /**
+     * T-PreviewBottomCollapse：折叠/展开结果区——<b>连最小高度与后续放大一起管</b>。
+     *
+     * <p>两个坑叠在一起（真机 2026-11-03 截图实证：bottom≈165px、divider≈0.67）：</p>
+     * <ol>
+     *  <li>{@code setDividerLocation(1.0)} 被子组件 {@code minimumSize} 钳制——结果区为「执行后不被压回
+     *      preferred 84px」设了 160px 兜底（M36.5.64），折叠必须同时把兜底让出来；</li>
+     *  <li>折叠往往发生在<b>对话框还没布局完</b>的那一拍（split 只有几十像素高），此后 split 长高时
+     *      divider 停在旧的<b>绝对</b>位置，新增高度全分给结果区——于是折叠又"长"回来了。
+     *      故折叠态挂常驻 resize 监听，每次放大重新贴底；展开时摘掉。</li>
+     * </ol>
+     */
+    public static void applyConsoleBottomCollapse(JSplitPane sp, boolean collapse, String tag) {
+        JComponent bottom = (JComponent) sp.getBottomComponent();
+        Dimension minBefore = bottom != null ? bottom.getMinimumSize() : null;
+        int dividerBefore = sp.getDividerLocation();
+        if (bottom != null) {
+            if (collapse) {
+                bottom.setMinimumSize(new Dimension(0, 0));
+            } else {
+                Dimension min = bottom.getMinimumSize();
+                bottom.setMinimumSize(new Dimension(min != null ? min.width : 400, 160));
+            }
+        }
+        sp.putClientProperty(BOTTOM_COLLAPSED_MARK, collapse);
+        sp.setResizeWeight(collapse ? 1.0 : 0.6);
+        Object existingObj = sp.getClientProperty(BOTTOM_COLLAPSE_LISTENER);
+        ComponentAdapter existing = existingObj instanceof ComponentAdapter ? (ComponentAdapter) existingObj : null;
+        if (collapse) {
+            if (existing == null) {
+                ComponentAdapter listener = new ComponentAdapter() {
+                    @Override
+                    public void componentResized(ComponentEvent e) {
+                        if (!Boolean.TRUE.equals(sp.getClientProperty(BOTTOM_COLLAPSED_MARK))) return;
+                        sp.setDividerLocation(1.0);
+                    }
+                };
+                sp.addComponentListener(listener);
+                sp.putClientProperty(BOTTOM_COLLAPSE_LISTENER, listener);
+            }
+        } else if (existing != null) {
+            sp.removeComponentListener(existing);
+            sp.putClientProperty(BOTTOM_COLLAPSE_LISTENER, null);
+        }
+        sp.setDividerLocation(collapse ? 1.0 : 0.6);
+        sp.revalidate();
+        sp.repaint();
+        Logger.getInstance(DataSourceSelector.class).info(
+                "[M36][Collapse] " + tag + " collapse=" + collapse + " h=" + sp.getHeight()
+                        + " divider=" + dividerBefore + "→" + sp.getDividerLocation()
+                        + " bottomMin=" + minBefore + "→" + (bottom != null ? bottom.getMinimumSize() : null));
+    }
+
     public static void realignDividerOnce(JSplitPane sp, boolean force) {
-        if (sp.getHeight() < 100) return;
+        if (sp.getHeight() < 100) return;   // 布局初无尺寸，等下次
+        // T-PreviewBottomCollapse：预览态（底部已折叠）不做自动展开校正——否则任何一次 resize
+        // 都会把 topH > total*0.68 判成「结果区塌缩」再拉回 0.6，折叠态被自己弹开。
+        if (!force && Boolean.TRUE.equals(sp.getClientProperty(BOTTOM_COLLAPSED_MARK))) return;
+        // force = 执行换入：折叠态作废（底部即将显示结果）
+        if (force) sp.putClientProperty(BOTTOM_COLLAPSED_MARK, false);
         int topH = sp.getTopComponent() != null ? sp.getTopComponent().getHeight() : 0;
         int total = sp.getHeight();
         Logger log = Logger.getInstance(DataSourceSelector.class);
         boolean tooAuto = force || topH < total * 0.35 || topH > total * 0.68;
         if (tooAuto) {
             log.debug("[M36] divider realign(force=" + force + "): topH=" + topH + " total=" + total + " → 0.6");
+            // 展开态：resizeWeight 一并复位（折叠期被置 1.0，否则后续放大不会分给结果区）
+            sp.setResizeWeight(0.6);
             sp.setDividerLocation(0.6);
             sp.revalidate();
             sp.repaint();
