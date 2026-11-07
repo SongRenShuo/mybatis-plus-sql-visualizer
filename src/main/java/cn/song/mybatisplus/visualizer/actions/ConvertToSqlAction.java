@@ -615,28 +615,38 @@ public final class ConvertToSqlAction extends AnAction {
         PsiElement element = file.findElementAt(editor.getCaretModel().getOffset());
         XmlTag tag = element != null ? PsiTreeUtil.getParentOfType(element, XmlTag.class) : null;
         XmlTag statement = tag;
-        while (statement != null && !"maintainPage".equals(statement.getName())) {
+        // 页面标签名不固定：上爬到「直接父级是 <pages> 且自身是 SQL 载体」的标签
+        while (statement != null
+                && !(statement.getParentTag() != null && "pages".equals(statement.getParentTag().getName())
+                && PagesXmlGutterLineMarkerProvider.isPageStatementTag(statement))) {
             statement = statement.getParentTag();
         }
         if (statement != null) {
             previewPages(project, file, statement);
             return;
         }
-        // 光标不在 maintainPage 内 → 全部候选
+        // 光标不在页面语句内 → 全部候选
         // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（同 mapper 语句分支）
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
-                    List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
-                            .filter(it -> "maintainPage".equals(it.getName()))
-                            .collect(Collectors.toList());
+                    XmlTag root = file.getRootTag();
+                    List<XmlTag> statements = new ArrayList<>();
+                    if (root != null) {
+                        for (PsiElement child : root.getChildren()) {
+                            if (child instanceof XmlTag
+                                    && PagesXmlGutterLineMarkerProvider.isPageStatementTag((XmlTag) child)) {
+                                statements.add((XmlTag) child);
+                            }
+                        }
+                    }
                     List<SqlSelectionDialog.Row> rows = statements.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
                         return SqlSelectionDialog.Row.of(
-                                (id != null ? id : "") + "（第 " + line + " 行）", text);
+                                (id != null ? id : t.getName()) + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList());
                     return Pair.create(statements, rows);
                 });
@@ -701,10 +711,19 @@ public final class ConvertToSqlAction extends AnAction {
         });
     }
 
-    /** 预览单个 maintainPage。 */
+    /** 预览单个 maintainPage（后台转换，EDT 渲染）。 */
     private void previewPages(Project project, XmlFile file, XmlTag tag) {
         SqlPreviewService.previewAsync(project,
-                () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project),
+                () -> {
+                    // T-PagesHql：传 PSI 宿主锚点，HQL 转换按该 XML 所属模块收窄实体检索范围；
+                    // id 缺省时用标签名（解析器同口径回落）
+                    String id = tag.getAttributeValue("id");
+                    return PagesXmlPreviewService.INSTANCE.preview(
+                            file.getText(),
+                            id != null ? id : tag.getName(),
+                            project,
+                            tag);
+                },
                 (PreviewResult result) -> { SqlPreviewService.showResult(project, result, null); return Unit.INSTANCE; });
     }
 
