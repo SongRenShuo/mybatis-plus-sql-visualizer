@@ -50,6 +50,11 @@ public class ReplayExportDialog extends DialogWrapper {
         init();
     }
 
+    /** 程序化关闭（同 {@code SqlPreviewDialog.doDispose} / {@code RollbackSqlDialog.doDispose} 惯例；测试 tearDown 用）。 */
+    public void doDispose() {
+        dispose();
+    }
+
     /** 生效的事务包裹意愿（禁用态恒 false，双保险）。 */
     public boolean isWrapTransaction() {
         return transactionBegin != null && wrapCheck.isSelected();
