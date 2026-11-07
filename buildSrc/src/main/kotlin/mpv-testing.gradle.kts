@@ -184,6 +184,15 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-DockerGateOffload（2026-11-07）：五容器用例的外指端点解析入口。默认与 dialectExternalVerify
+    // 共用同一份矩阵文件（.local/dialect-external-matrix.properties，凭据只在 .local 不进仓），
+    // -PdialectExternalMatrix=<路径> 可覆盖。文件/条目缺失时该用例回落容器路径（容器路径无 Docker
+    // 仍显式跳过）；日常门禁（-PmpvDockerTests 缺省）外指腿同样被上面的开关拦住，零网络触达。
+    systemProperty(
+        "mpvs.dockerext.matrix",
+        providers.gradleProperty("dialectExternalMatrix")
+            .getOrElse(layout.projectDirectory.file(".local/dialect-external-matrix.properties").asFile.absolutePath),
+    )
     // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
     //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
     // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
