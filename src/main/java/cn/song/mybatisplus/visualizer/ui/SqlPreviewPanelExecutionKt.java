@@ -126,8 +126,9 @@ public final class SqlPreviewPanelExecutionKt {
      * 脱敏同 R60 口径（{@code displayMaskEnabled}，投影级）：开启时脚本字面量打码并在注释头标 {@code masked}。</p>
      */
     public static void exportReplayScript(@NotNull SqlPreviewPanel p) {
-        String sql = previewSqlForReadonly(p);
-        if (sql == null || sql.isBlank()) return;
+        // T-RuntimeSlotFill 券 C：导出回放与预览/复制/执行共用同一份运行期占位值
+        String sql = previewSqlForExport(p);
+        if (sql == null) return;
         cn.song.mybatisplus.visualizer.sql.Dialect dialect =
                 p.current != null && p.current.getEffectiveDialect() != null
                         ? p.current.getEffectiveDialect()
@@ -555,21 +556,34 @@ public final class SqlPreviewPanelExecutionKt {
         boolean canRerender = result != null && result.getXmlModel() == null
                 && result.getPaginationLimitLine() == null
                 && (result.getPreviewModel() != null || result.getBatchModel() != null);
+        // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
+        // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
+        // {@code effectiveDialect} 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
+        // renderedDialect 未赋值的链）。T-DialectInferFix 起，showResult 会先用统一决策链
+        // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
+        // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
+        // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
+        // UI-004（2026-11-04 真机）：不能无条件优先 result.effectiveDialect——它是预览生成时
+        // 固化的快照，XML 载体无法经 rerenderForExecutionTarget 重写，会与顶部（currentDialectDecision，
+        // 随绑定/刷新重算）分裂成「顶部 MySQL、底部 PostgreSQL」。方言无关载体（XML 原文/纯文本）
+        // 取最新决策，模型/批量/分页载体仍取渲染事实——判据与理由见 DialectGateRenderDialect。
+        String resolvedGateDialect = DialectGateRenderDialect.resolve(
+                result != null && result.getEffectiveDialect() != null
+                        ? result.getEffectiveDialect().getName() : null,
+                p.currentDialectDecision != null ? p.currentDialectDecision.dialectName() : null,
+                DialectGateRenderDialect.isDialectNeutralCarrier(
+                        result != null && result.getPreviewModel() != null,
+                        result != null && result.getBatchModel() != null,
+                        result != null && result.getPaginationLimitLine() != null));
+        String renderedDialectName = resolvedGateDialect != null
+                ? resolvedGateDialect
+                : p.currentDialectDecision != null
+                        && p.currentDialectDecision.compatibilityFallbackName() != null
+                        ? p.currentDialectDecision.compatibilityFallbackName()
+                        : MySqlDialect.INSTANCE.getName();
         return new ExecutionDialectGate.Request(
                 p.executionDialectRenderMode,
-                // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
-                // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
-                // {@code effectiveDialect} 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
-                // renderedDialect 未赋值的链）。T-DialectInferFix 起，showResult 会先用统一决策链
-                // （运行期条目方言 → 数据源 → 项目配置/驱动依赖 → SQL 语法特征 → IDEA 方言设置）
-                // 把结果补齐，null 只剩「渲染器兜底」这一种形态——仍按渲染器默认口径（MySQL）报出，
-                // 避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
-                result != null && result.getEffectiveDialect() != null
-                        ? result.getEffectiveDialect().getName()
-                        : p.currentDialectDecision != null
-                                && p.currentDialectDecision.compatibilityFallbackName() != null
-                                ? p.currentDialectDecision.compatibilityFallbackName()
-                                : MySqlDialect.INSTANCE.getName(),
+                renderedDialectName,
                 intent,
                 canRerender,
                 untouched,
@@ -584,7 +598,9 @@ public final class SqlPreviewPanelExecutionKt {
             case AUTO_RERENDER_REQUIRED -> {
                 String target = verdict.targetDialectName();
                 if (target != null && rerenderForExecutionTarget(p, target)) {
-                    p.resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict));
+                    String message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict);
+                    p.lastDialectGateMessage = message;
+                    p.resultPanel.showStatus(message);
                 } else {
                     showDialectGateError(p, new ExecutionDialectGate.Verdict(
                             ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
@@ -602,6 +618,9 @@ public final class SqlPreviewPanelExecutionKt {
             // 只留一条提示（若执行随后真报错，真实错误仍会覆盖这条状态，时序上真实错误晚于本拍）。
             case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> {
                 String message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict);
+                // UI-004：记下「底部当前显示的是方言提示」——刷新链据此判断能否安全替换/清空
+                //（绝不动执行结果与真实执行错误）。
+                p.lastDialectGateMessage = message;
                 // T-DialectGatePassDeadChain（2026-11-02 用户实测「点切换数据源 没有看到在哪点」）：
                 // 放行态同样要给出口——文案本身就写着「可点「切换数据源」」，而 showStatus 第一行的
                 // clearErrorActions() 会把两个链接清掉。改用 showStatusWithActions：信息态底色不变，
@@ -743,6 +762,7 @@ public final class SqlPreviewPanelExecutionKt {
                     embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW);
                     // 换源成功即清掉旧状态行：方言提示按新目标重新判定（MATCH 时不再提示）
                     p.resultPanel.showEmpty();
+                    p.lastDialectGateMessage = null;
                 },
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
                 errorMsg -> p.resultPanel.showError(errorMsg),
@@ -752,7 +772,9 @@ public final class SqlPreviewPanelExecutionKt {
                 true,
                 // 指定了目标源（原生工具栏点选）→ 不弹列表，选谁就是谁；无目标（状态行/更多菜单）→ 必弹列表，单源也弹。
                 preferredRunnerName,
-                preferredRunnerName == null);
+                preferredRunnerName == null,
+                // UI-049：换源失败若仍是「方言不匹配」，给同一套「下一步」提示（不再落回红字）。
+                hint -> showDialectMismatchHint(p, hint));
     }
 
     /**
@@ -761,6 +783,187 @@ public final class SqlPreviewPanelExecutionKt {
      */
     public static void switchDataSourceTo(@NotNull SqlPreviewPanel p, @NotNull String dataSourceName) {
         switchDataSourceInPlace(p, dataSourceName);
+    }
+
+    /**
+     * UI-049（2026-11-04 用户真机「用户看到错误会不知道怎么处理」）：空 Runner「方言不匹配」态的
+     * 面板内呈现——<b>不是执行失败，是缺配置</b>。
+     *
+     * <p>与旧红字的三处差别：</p>
+     * <ol>
+     *  <li>走 {@code SqlResultPanel.showStatusWithActions} 信息/警示态，不写「执行失败：」前缀，
+     *      不挂复制错误按钮；</li>
+     *  <li>可见行是一句「下一步」，悬停详文里点名 URL 推断出的源、折叠其余源，并明说与右上角
+     *      「未绑定数据源」是同一状态；</li>
+     *  <li>右侧挂两个可点入口：打开目标数据源属性（{@link #openDataSourceProperties}，属性页底部即
+     *      Dialect 下拉框）、切换数据源（沿用既有平台原生列表入口）。</li>
+     * </ol>
+     *
+     * <p>用 invokeLater：与 {@code showDialectGateError} 同款，让本次准备链的其它收尾
+     * （{@code onSubmission(BLOCKED)}、单飞门 abort）先落地，避免同栈后续状态覆盖本行；
+     * 面板已关闭则直接放弃。</p>
+     */
+    public static void showDialectMismatchHint(@NotNull SqlPreviewPanel p,
+                                               @NotNull cn.song.mybatisplus.visualizer.execute.DialectMismatchHint hint) {
+        Project proj = p.project;
+        if (proj == null) return;
+        String message = cn.song.mybatisplus.visualizer.execute.DialectMismatchHintKt.statusMessage(hint);
+        String detail = cn.song.mybatisplus.visualizer.execute.DialectMismatchHintKt.detailMessage(hint);
+        // 唯一推断源 → 属性对话框直接定位它；多个/没有 → 打开列表（首个源高亮）由用户自己选，
+        // 不替用户猜。文案在悬停里已点名全部推断源。
+        cn.song.mybatisplus.visualizer.execute.RegisteredJdbcSource target = null;
+        if (!hint.likely().isEmpty()) target = hint.likely().get(0);
+        final cn.song.mybatisplus.visualizer.execute.RegisteredJdbcSource targetF = target;
+        // write-safe: 回调只改结果面板状态行（Swing 组件 + tooltip），不触碰任何文档。
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (p.previewDisposed) return;
+            // 本行不是方言闸门提示；清掉旧标记，防止刷新链按旧闸门结论改写它。
+            p.lastDialectGateMessage = null;
+            String fixTooltip = targetF != null
+                    ? MpSqlVisualizerBundle.message(
+                            "execute.datasource.dialectMismatch.action.openProperties.tip",
+                            targetF.name(), hint.dialectDisplay())
+                    : MpSqlVisualizerBundle.message(
+                            "execute.datasource.dialectMismatch.action.openProperties.tip.any",
+                            hint.dialectDisplay());
+            try {
+                p.resultPanel.showStatusWithActions(
+                        message,
+                        MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch.action.openProperties"),
+                        fixTooltip,
+                        () -> openDataSourceProperties(proj, targetF != null ? targetF.handle() : null),
+                        MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                        MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                        () -> switchDataSourceInPlace(p),
+                        detail,
+                        true);
+            } catch (Throwable e) {
+                Logger.getInstance(SqlPreviewPanel.class)
+                        .warn("[UI-049] dialect mismatch status render FAILED: " + e.getClass().getSimpleName()
+                                + ": " + e.getMessage());
+                // 渲染失败也不能静默：退回纯信息行（无动作），至少让用户看到「下一步」。
+                p.resultPanel.showStatus(message);
+            }
+        });
+    }
+
+    /**
+     * UI-049：打开平台「Data Sources and Drivers」并定位到 dataSource（LocalDataSource 句柄）。
+     *
+     * <p>平台查证（javap 2024.3.7.1 / 2026.2.3 双版本实证）：平台自己的右键「Properties」动作
+     * {@code DatabaseView.PropertiesAction} → {@code ManageDataSourcesAction.actionPerformed} 调的就是
+     * {@code DataSourceManagerDialog.showDialog(Project, Object, DatabaseCredentials)}；选中项即第二个参数。
+     * 打开后 SQL 数据源属性页的 {@code getCommonBar()}（{@code DataSourceConfigurable} 的 dialect 组件）
+     * 渲染在属性面板底部，标签为 {@code Dialect:}——这就是用户要改的地方，不需要再定位 Tab。</p>
+     *
+     * <p>走反射而非直接引用：本文件在 Community 也会加载，{@code com.intellij.database.*} 类不在场时
+     * 直接符号引用有 NoClassDefFoundError 风险（项目既有约定见 {@code DataSourceSettings}/
+     * {@code ExecDialectRouting}）；该动作只在 Ultimate 的「方言不匹配」提示里可达。</p>
+     *
+     * @return true = 对话框已打开；false = 平台调用失败，已回退打开 Database 工具窗口
+     */
+    public static boolean openDataSourceProperties(@NotNull Project proj, @Nullable Object dataSource) {
+        try {
+            Class<?> dialogClass = Class.forName("com.intellij.database.view.ui.DataSourceManagerDialog");
+            java.lang.reflect.Method showDialog = dialogClass.getMethod(
+                    "showDialog",
+                    Project.class,
+                    Object.class,
+                    Class.forName("com.intellij.database.access.DatabaseCredentials"));
+            // 平台的选中项是 DbDataSource（侧栏 SidePanelItem 的 key 是 DbDataSourceImpl，identity map）；
+            // 我们手里是 DataSourceStorage 的 LocalDataSource——先按 uniqueId/名字换成 DbDataSource，
+            // 换不到就传 null（打开列表由用户选），绝不把 LocalDataSource 直接塞进去（navigateTo 找不到）。
+            Object selection = resolveDbDataSourceSelection(proj, dataSource);
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .info("[UI-049] open data source properties: selection="
+                            + (selection != null ? selection.getClass().getSimpleName() : "(none)"));
+            showDialog.invoke(null, proj, selection, null);
+            return true;
+        } catch (Throwable e) {
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .warn("[UI-049] open data source properties FAILED: " + e.getClass().getSimpleName()
+                            + ": " + e.getMessage());
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj);
+            return false;
+        }
+    }
+
+    /**
+     * UI-049：把 {@code DataSourceStorage} 的 {@code LocalDataSource} 换成平台 {@code DbDataSource}
+     * （对话框选中项口径）。
+     *
+     * <p>依据（javap 2024.3.7.1）：{@code DataSourcesSideTab.createItem(DbDataSource)} 用
+     * {@code DbDataSourceImpl} 作 {@code SidePanelItem} 的 key，{@code DatabaseConfigSideTab.getSidePanelItem}
+     * 是 identity map 查找；{@code AbstractDataSourceConfigurable.isTempTarget} 也只认 {@code DasDataSource}
+     * ——LocalDataSource 直接传进 {@code showDialog} 定位不到（还可能让 navigateTo 拿到空 Place）。
+     * {@code DbDataSource.getDelegate()} 正是 LocalDataSource，按 uniqueId/名字匹配即可。</p>
+     *
+     * <p>全部反射：Community/无 Database 插件下返回 null，不触发类加载。</p>
+     */
+    @Nullable
+    private static Object resolveDbDataSourceSelection(@NotNull Project proj, @Nullable Object local) {
+        if (local == null) return null;
+        Class<?> localClass;
+        try {
+            localClass = Class.forName("com.intellij.database.dataSource.LocalDataSource");
+        } catch (Throwable t) {
+            return null;
+        }
+        String localId = invokeString(localClass, "getUniqueId", local);
+        String localName = invokeString(localClass, "getName", local);
+        try {
+            Class<?> facadeClass = Class.forName("com.intellij.database.psi.DbPsiFacade");
+            Object facade = facadeClass.getMethod("getInstance", Project.class).invoke(null, proj);
+            Object allRaw = facadeClass.getMethod("getDataSources").invoke(facade);
+            if (!(allRaw instanceof List)) return null;
+            List<?> all = (List<?>) allRaw;
+            Object byId = null;
+            if (localId != null && !localId.isBlank()) {
+                for (Object db : all) {
+                    Object raw = dbDelegate(db);
+                    if (raw != null && localId.equals(uniqueIdOf(raw))) {
+                        byId = db;
+                        break;
+                    }
+                }
+            }
+            if (byId != null) return byId;
+            if (localName == null || localName.isBlank()) return null;
+            for (Object db : all) {
+                if (localName.equals(invokeString(db != null ? db.getClass() : null, "getName", db))) {
+                    return db;
+                }
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static Object dbDelegate(@Nullable Object db) {
+        if (db == null) return null;
+        try {
+            return db.getClass().getMethod("getDelegate").invoke(db);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static String uniqueIdOf(@NotNull Object raw) {
+        return invokeString(raw.getClass(), "getUniqueId", raw);
+    }
+
+    @Nullable
+    private static String invokeString(@Nullable Class<?> clazz, @Nullable String method, @Nullable Object target) {
+        if (clazz == null || method == null || target == null) return null;
+        try {
+            Object result = clazz.getMethod(method).invoke(target);
+            return result instanceof String ? (String) result : null;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
@@ -964,7 +1167,8 @@ public final class SqlPreviewPanelExecutionKt {
                             errorMsg -> p.resultPanel.showError(errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             wholeScriptExec,
-                            dialectGateRequest, null, receipt, false);
+                            dialectGateRequest, null, receipt, false,
+                            hint -> showDialectMismatchHint(p, hint), null);
                     return;
                 }
             }
@@ -993,7 +1197,8 @@ public final class SqlPreviewPanelExecutionKt {
                 errorMsg -> p.resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(p, info),
                 wholeScriptExec,
-                dialectGateRequest, null, receipt, false);
+                dialectGateRequest, null, receipt, false,
+                hint -> showDialectMismatchHint(p, hint), null);
     }
 
     /**
@@ -1079,6 +1284,22 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
     /**
+     * T-RuntimeSlotFill 券 C：<b>导出类动作</b>的取词口——预览快照 + 运行期占位回填。
+     *
+     * <p>与 {@link #previewSqlForReadonly} 的分工：后者回答「当前预览是哪条 SQL」（编辑器/执行视图判据不变），
+     * 本函数在其上按面板同一份 {@code SqlPreviewPanel.slotValues} 把运行期占位填掉。编辑器文本已由预览
+     * 渲染填过时是无操作；文本仍是占位形态（用户手改回、控制台漂移）时补填，避免导出物带注释。
+     * 占位值全为空 = 逐字节原样（D-5）。</p>
+     */
+    @Nullable
+    public static String previewSqlForExport(@NotNull SqlPreviewPanel p) {
+        String readonly = previewSqlForReadonly(p);
+        if (readonly == null) return null;
+        String filled = SqlPreviewPanelSqlViewKt.fillRuntimeSlots(p, readonly);
+        return filled.isBlank() ? null : filled;
+    }
+
+    /**
      * T-InjectionGate T-IG-02：{@code ${}} 原文拼接段的执行确认闸门（{@link #executeSql}/{@link #explainSql} 共用）。
      *
      * <p>判定信号取自 {@link PreviewResult#isHasDollarRawSegments()}（解析期 {@code ${}} token 收集的渲染期事实，
@@ -1157,17 +1378,21 @@ public final class SqlPreviewPanelExecutionKt {
         Project proj = p.project;
         if (proj == null) return;
         // M36.4：优先取原生编辑器文档，兜底自研编辑器
-        String sql;
+        String rawSql;
         if (p.nativeEditorDoc != null && !p.nativeEditorDoc.getText().isBlank()) {
-            sql = p.nativeEditorDoc.getText();
+            rawSql = p.nativeEditorDoc.getText();
         } else if (p.editor != null && !p.editor.getDocument().getText().isBlank()) {
-            sql = p.editor.getDocument().getText();
+            rawSql = p.editor.getDocument().getText();
         } else {
             Logger.getInstance(SqlPreviewPanel.class)
                     .warn("[M36] executeSql aborted: no SQL text (nativeDoc=" + (p.nativeEditorDoc != null)
                             + ", editor=" + (p.editor != null) + ")");
             return;
         }
+        // T-RuntimeSlotFill 券 C：执行前把运行期占位填掉——与预览/复制/导出同一份占位值。
+        // 编辑器文本已由预览渲染填过时这里无操作（token 已不在）；用户手改回占位时补填，
+        // 避免把块注释原样送进数据库。留空（未填值）= 逐字节原样，沿用既有「不替你猜」口径。
+        String sql = SqlPreviewPanelSqlViewKt.fillRuntimeSlots(p, rawSql);
         Logger.getInstance(SqlPreviewPanel.class)
                 .info("[M36] executeSql: len=" + sql.length() + ", prepared=" + SqlExecutor.isPrepared());
 
@@ -1221,16 +1446,20 @@ public final class SqlPreviewPanelExecutionKt {
                             dialectGateRequest,
                             verdict -> onExecutionDialectGate(p, verdict),
                             null,
-                            false);
+                            false,
+                            hint -> showDialectMismatchHint(p, hint),
+                            infoMsg -> p.resultPanel.showStatus(infoMsg));
                     return;
                 }
             }
             // 执行前同步当前 SQL（用户可能改过参数/手动编辑）
+            // T-RuntimeSlotFill 券 C：只把**编辑器原文**与文档对账——执行用的已回填文本不回写编辑器，
+            // 否则占位值会污染预览文本（下一次渲染又按 result 重算，视觉上会「闪一下」）
             com.intellij.openapi.editor.Document doc = p.nativeEditorDoc;
             if (doc != null) {
-                if (!doc.getText().equals(sql)) {
+                if (!doc.getText().equals(rawSql)) {
                     final com.intellij.openapi.editor.Document docF = doc;
-                    WriteCommandAction.runWriteCommandAction(proj, () -> docF.setText(sql));
+                    WriteCommandAction.runWriteCommandAction(proj, () -> docF.setText(rawSql));
                 }
             }
             boolean executed = SqlExecutor.executePrepared(
@@ -1242,7 +1471,8 @@ public final class SqlPreviewPanelExecutionKt {
                     false,
                     dialectGateRequest,
                     verdict -> onExecutionDialectGate(p, verdict),
-                    null);
+                    null,
+                    infoMsg -> p.resultPanel.showStatus(infoMsg));
             if (executed) return;
         }
         SqlExecutor.execute(
@@ -1256,7 +1486,9 @@ public final class SqlPreviewPanelExecutionKt {
                 dialectGateRequest,
                 verdict -> onExecutionDialectGate(p, verdict),
                 null,
-                forceChoose);
+                forceChoose,
+                hint -> showDialectMismatchHint(p, hint),
+                infoMsg -> p.resultPanel.showStatus(infoMsg));
     }
 
     /**
@@ -1479,6 +1711,19 @@ public final class SqlPreviewPanelExecutionKt {
         final AtomicBoolean prewarmDone = new AtomicBoolean(false);
         final Runnable continueChain = () -> {
             if (prewarmDone.compareAndSet(false, true)) {
+                // T-ThreadFix C：**必须 write-safe 投递（nonModal），不得用 any()**。
+                //
+                // 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」3 条）：
+                // SEVERE - TransactionGuardImpl - Write-unsafe context!
+                //   at DataSourceSelectorResultsKt.reuseSharedConsole(...)
+                //        [WriteCommandAction { editor.document.setText(sql) }]
+                //   at ... DataSourceSelectorConsoleKt.executeOnConsole(...)
+                //        [WriteAction { writeVfTextViaDocument(...) }]
+                //   at SqlExecutor.execute → chooseAndPrepare
+                // `ModalityState.any()` 恒 write-unsafe（平台构造期只把 nonModal 登记为 write-safe），
+                // 于是整条执行链（复用控制台的 document.setText、执行前的 vf 文档同步）都在
+                // 无写资格的上下文里改模型。改成 nonModal 后，续接链整体获得写资格——这条链本来就是
+                // 「用户点了执行计划」的后续，模态弹窗存续期延后到弹窗关闭正是平台要求的语义。
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (Disposer.isDisposed(p) || proj.isDisposed()) return;
                     p.resultPanel.showLoading("");
@@ -1492,7 +1737,7 @@ public final class SqlPreviewPanelExecutionKt {
                             dialectGateRequest,
                             verdict -> onExecutionDialectGate(p, verdict),
                             null, false);
-                }, ModalityState.any());
+                }, ModalityState.nonModal());
             }
         };
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
@@ -1509,7 +1754,10 @@ public final class SqlPreviewPanelExecutionKt {
                                 + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
             // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
-            ApplicationManager.getApplication().invokeLater(continueChain::run, ModalityState.any());
+            // T-ThreadFix C：write-safe 模态（同 continueChain 内的说明）——这里的 runnable 虽只
+            // 转投一拍，但它是执行链的投递入口，保持 nonModal 口径避免「入口先 any() 再内层 nonModal」
+            // 的双口径。
+            ApplicationManager.getApplication().invokeLater(continueChain::run, ModalityState.nonModal());
         });
     }
 
@@ -2130,7 +2378,9 @@ public final class SqlPreviewPanelExecutionKt {
                 consoleEditor.getDocument().getText());
         if (p.editor != null) {
             SqlPreviewPanelEditorLifecycleKt.releaseEditor(p);
-            p.editorHolder.removeAll();
+            // T-PreviewConsoleOwnership：只清「插件自建编辑器」这一层。原生控制台在位时显示槽属于
+            // consoleHost（紧随其后的 embedConsole 才负责换装），此处清空会先摘掉正在显示的控制台。
+            if (p.embeddedConsole == null) p.editorHolder.removeAll();
         }
         // UI025：控制台编辑器的 ExternalAnnotator 需要「文档 → 已备控制台目标」身份，而
         // preparedEditor 在本回调返回后才由 prepareAfterEditorResolved 赋值。下一拍重启一次 daemon，
@@ -2192,6 +2442,10 @@ public final class SqlPreviewPanelExecutionKt {
                         + ", sqlLen=" + (sql != null ? sql.length() : -1)
                         + ", dbAvailable=" + cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable());
         if (sql == null) return;
+        ExecutionDialectGate.Request gateRequest = executionDialectGateRequest(p,
+                SqlTypeClassifier.isQuery(sql)
+                        ? ExecutionDialectGate.Intent.QUERY
+                        : ExecutionDialectGate.Intent.DML);
         SqlExecutor.prepareConsole(
                 proj, sql,
                 consoleComponent -> {
@@ -2223,9 +2477,14 @@ public final class SqlPreviewPanelExecutionKt {
                     }, ModalityState.nonModal());
                 },
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
+                // 其余准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
                 null,
-                null);
+                null,
+                gateRequest,
+                verdict -> onExecutionDialectGate(p, verdict),
+                false,
+                // UI-049：但「方言不匹配」不再静默——预览打开即给「下一步」+ 可点入口（不改归因，只改呈现）。
+                hint -> showDialectMismatchHint(p, hint));
     }
 
     /**
@@ -2236,6 +2495,46 @@ public final class SqlPreviewPanelExecutionKt {
      */
     public static void embedConsole(@NotNull SqlPreviewPanel p, @NotNull JComponent consoleComponent) {
         embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE);
+    }
+
+    /**
+     * T-ResultReclaimGuard 第二层：确保持久整控台 split 的<b>下半区</b>挂着结果组件。
+     *
+     * <p>平台（DBN）新建结果页签时会把同一结果组件重挂回 {@code ServiceViewComponentWrapper}，
+     * {@code JSplitPane.remove()} 会把 rightComponent 置 null——预览面板下半区因此空白，结果只在
+     * IDEA 控制台可见。本函数在每次 embedConsole 后补挂，两条路径（同实例早退 / 整块重挂）都调。</p>
+     *
+     * <p>组件来源三级回落：{@code preparedResultComponent} → {@code preparedUi.getComponent()} →
+     * 放弃并告警（不猜、不新建，避免把别的容器顶上去）。</p>
+     */
+    private static void ensureResultBottomMounted(@NotNull SqlPreviewPanel p, @NotNull JSplitPane sp) {
+        if (sp.getBottomComponent() != null) return;
+        Logger log = Logger.getInstance(SqlPreviewPanel.class);
+        JComponent result = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.preparedResultComponent;
+        if (result == null) {
+            try {
+                Object ui = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.preparedUi;
+                Object component = ui != null ? ui.getClass().getMethod("getComponent").invoke(ui) : null;
+                if (component instanceof JComponent) result = (JComponent) component;
+            } catch (Throwable t) {
+                result = null;
+            }
+        }
+        if (result == null || result == sp.getTopComponent()) {
+            log.warn("[M36] result bottom MISSING but no component to re-mount "
+                    + "(preparedResultComponent=" + (cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                            .preparedResultComponent != null)
+                    + ", preparedUi=" + (cn.song.mybatisplus.visualizer.execute.DataSourceSelector.preparedUi != null)
+                    + ")");
+            return;
+        }
+        if (result.getParent() != null && result.getParent() != sp) {
+            result.getParent().remove(result);
+        }
+        sp.setBottomComponent(result);
+        sp.revalidate();
+        sp.repaint();
+        log.info("[M36] result bottom re-mounted on embed (was stolen): id=" + System.identityHashCode(result));
     }
 
     /**
@@ -2272,7 +2571,17 @@ public final class SqlPreviewPanelExecutionKt {
                                 + ": " + e.getMessage());
             }
         }, ModalityState.any());
-        if (consoleComponent == p.embeddedConsole) {
+        // 2026-11-03 真机：同一实例被平台摘走后（parent 变成 ServiceViewComponentWrapper），
+        // 旧实现只看 consoleComponent == embeddedConsole 就早退，于是永远不再挂回面板
+        // ——日志签名 [A49] submit diag: ... viewShowing=false + 面板里既没有工具栏也没有结果。
+        // 早退必须同时要求「仍挂在我们的 consoleHost 里」；否则落到下面的重挂路径。
+        // T-PreviewConsoleOwnership：console.parent === consoleHost 只证明「组件在宿主里」，
+        // 证明不了「宿主还在面板里」。真机 2026-11-03 09:42 实证：预览编辑器装配（降级/迟到换装）
+        // 把 consoleHost 整块挤下 editorHolder 后，本判据仍为 true，于是同实例早退、面板永远只剩
+        // 插件自建编辑器（无原生工具栏、无结果区）。宿主被摘下必须落到下面的重挂路径。
+        boolean stillMounted = consoleComponent.getParent() == p.consoleHost
+                && p.editorHolder.isAncestorOf(p.consoleHost);
+        if (consoleComponent == p.embeddedConsole && stillMounted) {
             // P3a：执行视图头部随 embedMode 幂等换装（EXECUTE 补挂 / PREVIEW 摘除）。
             if (embedMode == ConsoleEmbedMode.EXECUTE && p.executeViewHeader == null) {
                 JComponent header = buildExecuteViewHeader(p);
@@ -2285,14 +2594,36 @@ public final class SqlPreviewPanelExecutionKt {
             // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
             // loading 态。M36.5.49：用 showIdle() 而非 showEmpty()——只清 loading/成功态，**保留错误态**。
             p.resultPanel.showIdle();
-            // M36.5.77：execute 路径（embedMode=EXECUTE）即使同实例也要确保 divider 展开
+            // T-ResultReclaimGuard 第二层（2026-11-03 真机「IDEA 控制台有结果、预览面板空白」）：
+            // split 本体还在 consoleHost 里，但**下半区**被平台抽空——DBN 把结果组件重挂回
+            // ServiceViewComponentWrapper，JSplitPane.remove() 会把 rightComponent 置 null。
+            // 同实例早退前必须补挂，否则复用已备控制台的路径（日志无 attachConsole、无新 split）
+            // 永远不会恢复下半区。
+            if (consoleComponent instanceof JSplitPane
+                    && ((JSplitPane) consoleComponent).getBottomComponent() == null) {
+                ensureResultBottomMounted(p, (JSplitPane) consoleComponent);
+            }
+            // M36.5.77：execute 路径（embedMode=EXECUTE）即使同实例也要确保 divider 展开——
+            // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。F3 归口：PREVIEW 不触碰
+            //（DS 侧折叠点带内容守卫，面板侧不叠加判断避免两侧漂移）。
+            // T-PreviewBottomCollapse：同实例的 PREVIEW 回调（results refreshed 等）也把折叠态补一次——
+            // 首触折叠可能落在 split 还没真实高度的那一拍，之后放大就没人再折（真机 2026-11-03）。
+            if (embedMode == ConsoleEmbedMode.PREVIEW && consoleComponent instanceof JSplitPane) {
+                boolean collapsePreview = embedMode.shouldCollapseDivider(
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.currentResultAreaHasContent());
+                if (collapsePreview) {
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
+                            .applyConsoleBottomCollapse((JSplitPane) consoleComponent, true, "embed-sameInstance");
+                }
+            }
             if (embedMode == ConsoleEmbedMode.EXECUTE && consoleComponent instanceof JSplitPane) {
                 final JSplitPane sp = (JSplitPane) consoleComponent;
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (sp.getHeight() > 0) {
-                        sp.setDividerLocation(0.6);
-                        sp.revalidate();
+                        // T-PreviewBottomCollapse：展开时恢复结果区最小高度兜底（折叠态把它清零了）
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
+                                .applyConsoleBottomCollapse(sp, false, "embed-execute");
                     }
                 }, ModalityState.any());
             }
@@ -2311,6 +2642,10 @@ public final class SqlPreviewPanelExecutionKt {
         p.editorHolder.add(p.consoleHost, BorderLayout.CENTER);
         p.consoleHost.removeAll();
         p.consoleHost.add(consoleComponent, BorderLayout.CENTER);
+        // 整块重挂路径同样要补下半区（平台抽走结果组件后，split 的 rightComponent 为 null）。
+        if (consoleComponent instanceof JSplitPane) {
+            ensureResultBottomMounted(p, (JSplitPane) consoleComponent);
+        }
         if (embedMode == ConsoleEmbedMode.EXECUTE) {
             // P3a：执行结果视图明确标识 + 显式「返回预览」，避免用户只能靠「刷新」逃回编辑态。
             JComponent header = buildExecuteViewHeader(p);
@@ -2330,9 +2665,14 @@ public final class SqlPreviewPanelExecutionKt {
                     // PREVIEW 仅结果区无内容才折叠（竞态窗口内已有结果不吞）。
                     boolean collapse = embedMode.shouldCollapseDivider(
                             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.currentResultAreaHasContent());
-                    sp.setDividerLocation(collapse ? 1.0 : 0.6);
-                    sp.revalidate();
-                    sp.repaint();
+                    Logger.getInstance(SqlPreviewPanel.class).info(
+                            "[M36][Collapse] embed-invokeLater decide: mode=" + embedMode + " collapse=" + collapse
+                                    + " names=" + cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                                            .currentResultContentNames());
+                    // T-PreviewBottomCollapse：折叠/展开都走同一口（折叠要放开 160px 最小高度兜底，
+                    // 否则 divider=1.0 被钳成 0.67，结果栏仍白占下半屏）
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
+                            .applyConsoleBottomCollapse(sp, collapse, "embed-invokeLater");
                 }
                 // M36.5.75：预览路径也安装 Output 控制台填充布局（幂等）
                 cn.song.mybatisplus.visualizer.execute.DataSourceSelector
@@ -2346,7 +2686,13 @@ public final class SqlPreviewPanelExecutionKt {
                     // T-FirstExecResultInvisible F3：同上归口 embedMode（触发时重探内容）
                     boolean collapse = embedMode.shouldCollapseDivider(
                             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.currentResultAreaHasContent());
-                    sp.setDividerLocation(collapse ? 1.0 : 0.6);
+                    Logger.getInstance(SqlPreviewPanel.class).info(
+                            "[M36][Collapse] embed-firstResize decide: mode=" + embedMode + " collapse=" + collapse
+                                    + " names=" + cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                                            .currentResultContentNames());
+                    // T-PreviewBottomCollapse：同上——首触布局也要连最小高度一起管
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
+                            .applyConsoleBottomCollapse(sp, collapse, "embed-firstResize");
                     sp.removeComponentListener(this);
                 }
             });
@@ -2369,14 +2715,48 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
     /**
-     * T-RefreshDbSteal F4：所有权判定——本面板记录的控制台实例是否仍在自己的 consoleHost 树内。
+     * T-RefreshDbSteal F4：所有权判定——本面板记录的控制台实例是否仍在自己的 consoleHost 树内，
+     * <b>且该宿主仍挂在面板的显示槽 editorHolder 上</b>。
      * false = 控制台已被其他面板收养/或 DBN 释放后未重挂成功，此时任何"写入 nativeEditorDoc /
      * executePrepared"都是打在别人的控制台上（三症状公共前置条件）。
+     *
+     * <p>T-PreviewConsoleOwnership（2026-11-03 真机）：旧实现只查 {@code consoleHost.isAncestorOf(console)}，
+     * 宿主自身被挤出 editorHolder 时仍报 true——预览编辑器装配把整块控制台挤下显示链后，
+     * 面板显示的是插件自建编辑器，所有"已挂载"判断却继续为真，控制台永不回挂。</p>
      */
     public static boolean consoleAttachedToMe(@NotNull SqlPreviewPanel p) {
         JComponent console = p.embeddedConsole;
         if (console == null) return false;
-        return console.getParent() != null && p.consoleHost.isAncestorOf(console);
+        return console.getParent() != null && p.consoleHost.isAncestorOf(console)
+                && p.editorHolder.isAncestorOf(p.consoleHost);
+    }
+
+    /**
+     * T-PreviewConsoleOwnership：<b>editorHolder 的唯一装配口</b>。
+     *
+     * <p>{@code editorHolder} 是「预览编辑器」与「原生控制台」共用的唯一显示槽：原生控制台在位时
+     * （embeddedConsole 非空）显示主体就是 {@code consoleHost}，预览编辑器只作文档/状态载体
+     * （参数回填、格式化、折叠都写它的文档），<b>不得</b>把控制台挤下显示链。</p>
+     *
+     * <p>真机因果链（IDEA 2026.2.4 / v2026.11.2，idea.log 09:42 三行）：
+     * {@code embedConsole ... PREVIEW} → {@code in-memory PSI preview document created} →
+     * {@code late prewarm product consumed: editor upgraded}——冷启预热超预算时，降级装配与迟到换装
+     * 都晚于控制台嵌入，各自 removeAll() 后挂自己的编辑器，面板从此只剩带行号的插件编辑器
+     * （原生工具栏与结果区全消失），而控制台组件本身仍完整地躺在 consoleHost 里，谁都不会修回来。</p>
+     */
+    public static void mountEditorHolderContent(@NotNull SqlPreviewPanel p, @NotNull JComponent child) {
+        p.editorHolder.removeAll();
+        boolean keepConsole = p.embeddedConsole != null;
+        p.editorHolder.add(keepConsole ? p.consoleHost : child, BorderLayout.CENTER);
+        if (keepConsole) {
+            // 真机判读锚点：出现本行说明「装配想抢显示槽、被控制台归属挡下」——旧实现在此处静默换装，
+            // 面板随后只剩自建编辑器（无原生工具栏/无结果区）。
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .info("[M36] editor assembly kept native console mounted (console="
+                            + System.identityHashCode(p.embeddedConsole) + ")");
+        }
+        p.editorHolder.revalidate();
+        p.editorHolder.repaint();
     }
 
     /**
@@ -2466,6 +2846,12 @@ public final class SqlPreviewPanelExecutionKt {
         if (component != p.embeddedConsole || component.getParent() == p.consoleHost) return false;
         p.consoleHost.removeAll();
         p.consoleHost.add(component, BorderLayout.CENTER);
+        // T-PreviewConsoleOwnership：宿主本身也可能已被挤出显示槽（预览编辑器装配曾把它顶掉），
+        // 重挂时一并复位，否则「组件回到 host、host 不在面板」仍是不可见状态。
+        if (p.consoleHost.getParent() != p.editorHolder) {
+            p.editorHolder.removeAll();
+            p.editorHolder.add(p.consoleHost, BorderLayout.CENTER);
+        }
         p.consoleHost.revalidate();
         p.consoleHost.repaint();
         return true;

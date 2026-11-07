@@ -104,8 +104,11 @@ final class DialectMismatchHintKt {
      * 状态行可见文案（一句话，过长由 JLabel 省略、悬停看 {@link #detailMessage}）。
      *
      * <p>标题写「下一步」而不是「执行失败」：这是缺配置，不是插件坏掉。</p>
+     *
+     * <p>master 侧为 Kotlin 顶层 internal fun（字节码 public，ui 包可直呼）；Java 承载对齐 public
+     * ——A4c 波次 SqlPreviewPanelExecution 的 showDialectMismatchHint 跨包调用（写集外最小可见性补齐）。</p>
      */
-    static String statusMessage(@NotNull DialectMismatchHint hint) {
+    public static String statusMessage(@NotNull DialectMismatchHint hint) {
         // 先取值再判空：uniqueLikely 是自定义访问器，无智能转换可依赖。
         RegisteredJdbcSource unique = hint.uniqueLikely();
         if (unique != null) {
@@ -125,8 +128,9 @@ final class DialectMismatchHintKt {
 
     /**
      * 悬停详文：解释归因（缺配置）、点名推断源、折叠其余源，并说明属性页底部 Dialect 下拉的位置。
+     * 可见性对齐 master internal（字节码 public），见 {@link #statusMessage} 注。
      */
-    static String detailMessage(@NotNull DialectMismatchHint hint) {
+    public static String detailMessage(@NotNull DialectMismatchHint hint) {
         RegisteredJdbcSource unique = hint.uniqueLikely();
         if (unique != null) {
             return MpSqlVisualizerBundle.message(
