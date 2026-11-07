@@ -2,7 +2,7 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.7-beta.1] - 2026-11-07
 
 ### Added
 - **运行期拼接的 SQL 现在可以自己填值，填完就是可执行 SQL（T-RuntimeSlotFill，745cfe3c / 15de3ede / 36dc8da3）**：上一版把运行期片段收口成 `/* 运行时值: … */` 注释占位（括号与引号不再被吃掉），但用户没法把它变成能跑的语句。现在参数区为**每个占位建一行**，按语义给不同控件——单值（可选字符串/数字/布尔/NULL 类型）、循环（填一组值，按你代码里的模板展开成 `(id='1' or id='2' or id='3' )`）、三元（选真/假分支）、可选片段（勾「包含这段」）。填值后**预览 / 复制可执行 SQL / 导出回放脚本 / 直接执行四条链路取的是同一份文本**，不再出现「预览填了、复制出来还是注释」；值按字面量渲染（`O'Brien` → `'O''Brien'`），循环/命名参数/`?` 混用时用一次扫描 + 区间记账，避免值里的 `:nm` 被二次当参数。**留空即原样**（与上一版逐字节一致），所以不填不影响任何既有行为。顺带修掉一个旧缺陷：**被括号包住的三元此前不被识别为三元**，整段会退化成普通运行时值——`listByTernaryBranch` 那种 `(status == null ? "" : " AND status = " + status)` 写法以前拿不到「两支」信息
@@ -13,7 +13,15 @@
 
 ### Fixed
 - **下载更新包遇到 404/410 不再甩出一串 HTTP 异常，改为「该更新包还没有发布」并给发布页链接（T-DevUpdateChannel，cda8f3e5）**：清单里的 `downloadUrl` 常指向尚未建仓的 Release 附件（预览清单最常撞上），旧口径把 `HttpStatusException` 原文塞进「更新失败：{0}」，看着像插件坏了。现在 404/410 单独判为「未发布」——设置页写「该更新包还没有发布（HTTP 404），请稍后重试，或到发布页手动下载」并露出既有发布页兜底链接，日志只记一行带 URL 与状态码的 info；启动通道给同文案的 WARNING 通知。网络不通、非法 zip、安装失败等其余失败仍是普通「更新失败」，不扩散
-- **更新被平台拒绝时日志给出确定原因，不再只说「平台没给原因」（T-HotSwapUnloadSafety）**：旧版探测入口（`allowLoadUnloadWithoutRestart` / `checkCanUnloadWithoutRestart`）只返回真假，插件在拒绝时统一写一句「platform gave no reason」，而平台其实在同一份 `idea.log` 上一行就点名了确切项。现在按「非动态 EP 事实表」补位，日志直接写出「本插件扩展了 `com.intellij.sql.dialect`，平台自 baseline 253 起才把它标为动态，当前 243」并说明后果是重启生效。同时确认一条**平台边界**（已写进已知边界）：243（2024.3.x）上 `com.intellij.sql.dialect` 是非动态 EP，扩展它的插件不可被动态卸载，因此**更新只能重启生效**；253 / 262 / 263 上该 EP 已是 `dynamic="true"`，免重启热替换可用
+- **更新被平台拒绝时日志给出确定原因，不再只说「平台没给原因」（T-HotSwapUnloadSafety，eff3bbd7）**：旧版探测入口（`allowLoadUnloadWithoutRestart` / `checkCanUnloadWithoutRestart`）只返回真假，插件在拒绝时统一写一句「platform gave no reason」，而平台其实在同一份 `idea.log` 上一行就点名了确切项。现在按「非动态 EP 事实表」补位，日志直接写出「本插件扩展了 `com.intellij.sql.dialect`，平台自 baseline 253 起才把它标为动态，当前 243」并说明后果是重启生效。同时确认一条**平台边界**（已写进已知边界）：243（2024.3.x）上 `com.intellij.sql.dialect` 是非动态 EP，扩展它的插件不可被动态卸载，因此**更新只能重启生效**；253 / 262 / 263 上该 EP 已是 `dynamic="true"`，免重启热替换可用
+
+### Internal
+- **真机方言矩阵耗时压缩（T-DialectSweepSpeed，fa0a63a3 / 4997b52d）**：实例级并发（默认 `min(实例数, 4)`）+ 逐词往返由 8 降到 7/4，CI 方言腿 43.5 → 21.6 分钟（4/4 PASS）；CI 步骤预算口径由「各实例相加」改为 `max(实例预算) + 冷启动`，四实例子集 60/70 分钟
+- **方言矩阵实例级超时看门狗（T-MatrixInstanceTimeout，59b67fc5 / b4839307）**：四桶结局 PASS / SKIP / TIMEOUT / FAIL，单实例挂死不再拖垮整轮，超时与崩溃可区分（真机 1s / 15s 双档实证）
+- **测试服务器容器内存治理（T-LabMemTrim，71473007）**：容器内存上限 41 → 19.25GiB + 4G swap，DB 内部参数同步收缩；结论落 skill / 经验 / LESSONS
+- **守卫与 CI 快腿收口（9473a038 / f2d865b7 / 4997b52d）**：新守卫登记进元守卫；BOOLEAN 无产出点与回放导出守卫空判两处红点；`dialectExternalVerify` 的顺序断言挪到写 summary 之后、drain 不再吞异常
+- **退避时序判据改用调度值 + `-Dmpvs.*` 不再被配置缓存冻结（c35135cb）**：`SenderLoop` 加 `BackoffSleeper` 注入缝，测试断言调度序列而非墙钟；`dialectExternalVerify` 改为逐键 `providers.systemProperty`（配置缓存输入），`-Dmpvs.external.maxConcurrency` 等参数不再在缓存命中时被静默忽略
+- **本地清单服务器按 UTF-8 读 update.json（629dcba8）**：dev-support 本地预览清单服务不再按平台默认字符集解码
 
 ## [2026.11.6-beta.2] - 2026-11-06
 
