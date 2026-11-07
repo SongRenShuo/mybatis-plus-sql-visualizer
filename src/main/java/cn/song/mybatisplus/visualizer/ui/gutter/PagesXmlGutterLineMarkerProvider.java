@@ -11,7 +11,6 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.psi.xml.XmlToken;
@@ -40,15 +39,16 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
     @Override
     @Nullable
     public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
-        // LineMarker 必须注册在 leaf 元素：只接受 maintainPage 标签的 name token（O(1) 判定，零 resolve）
+        // LineMarker 必须注册在 leaf 元素：只接受页面标签的 name token（O(1) 判定，零 resolve）
         if (!(element instanceof XmlToken)) return null;
         XmlToken token = (XmlToken) element;
         if (token.getTokenType() != XmlTokenType.XML_NAME) return null;
         XmlTag tag = token.getParent() instanceof XmlTag ? (XmlTag) token.getParent() : null;
         if (tag == null) return null;
-        // maintainPage 标签 + 直接父级是 <pages>（避免非 pages XML 误显）
-        if (!"maintainPage".equals(tag.getName())) return null;
+        // 页面标签名不固定（maintainPage / listPage / queryPage …）：只要求「直接父级是 <pages>」
+        // 且「自身是 SQL 载体」（带 <datasource> 子元素，或历史无 datasource 的 maintainPage）
         if (tag.getParentTag() == null || !"pages".equals(tag.getParentTag().getName())) return null;
+        if (!isPageStatementTag(tag)) return null;
         // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
         // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
         PluginSettings.State gutterState;
@@ -81,8 +81,11 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
+            // T-PagesHql：id 缺省时用标签名（解析器同口径回落）；传 PSI 宿主锚点（tag），
+            // HQL 转换按该 XML 所属模块收窄实体检索范围
+            String id = tag.getAttributeValue("id") != null ? tag.getAttributeValue("id") : tag.getName();
             SqlPreviewService.previewAsync(project,
-                    () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project),
+                    () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), id, project, tag),
                     result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
@@ -91,26 +94,37 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
             IconLoader.getIcon("/icons/sqlGutter.svg", PagesXmlGutterLineMarkerProvider.class);
 
     /**
-     * 选择区内 maintainPage 候选（tag 起始 offset 在选区范围内，按 offset 排序）——
+     * 选择区内页面语句候选（tag 起始 offset 在选区范围内，按 offset 排序）——
      * ConvertToSqlAction 选择区候选交互复用（与 Java/mapper 选择区候选语义一致）；
      * 纯 PSI 遍历零 resolve。
      *
      * @param file  待扫描的 XML 文件
      * @param start 选区起始 offset（含）
      * @param end   选区结束 offset（不含）
-     * @return 命中的 maintainPage 标签列表（按起始 offset 升序）
+     * @return 命中的页面语句标签列表（按起始 offset 升序）
      */
     public static List<XmlTag> statementsInRange(XmlFile file, int start, int end) {
-        List<XmlTag> all = new ArrayList<>(PsiTreeUtil.collectElementsOfType(file, XmlTag.class));
+        XmlTag root = file.getRootTag();
+        if (root == null || !"pages".equals(root.getName())) return List.of();
         List<XmlTag> result = new ArrayList<>();
-        for (XmlTag it : all) {
-            if ("maintainPage".equals(it.getName())
-                    && it.getTextRange().getStartOffset() >= start
-                    && it.getTextRange().getStartOffset() < end) {
+        for (PsiElement child : root.getChildren()) {
+            if (!(child instanceof XmlTag)) continue;
+            XmlTag it = (XmlTag) child;
+            if (it.getTextRange().getStartOffset() >= start
+                    && it.getTextRange().getStartOffset() < end
+                    && isPageStatementTag(it)) {
                 result.add(it);
             }
         }
         result.sort(Comparator.comparingInt(t -> t.getTextRange().getStartOffset()));
         return result;
+    }
+
+    /**
+     * 页面语句判定（与 {@code cn.song.mybatisplus.visualizer.xml.PagesXmlParser} 同口径）：
+     * 带 {@code <datasource>} 子元素，或历史兼容的 {@code <maintainPage/>}（无 datasource）。
+     */
+    public static boolean isPageStatementTag(XmlTag tag) {
+        return "maintainPage".equals(tag.getName()) || tag.findFirstSubTag("datasource") != null;
     }
 }
