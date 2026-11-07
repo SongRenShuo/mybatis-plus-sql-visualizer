@@ -181,10 +181,12 @@ public final class WrapperLocator {
      * （{@code getById}/{@code save}/{@code removeById}/{@code selectAll} 等，注册表
      * {@link BatchOperationConverter} 批量方法名；用户实测：选择区含 {@code bannerService.getById(id)}
      * 时也应进多 SQL 选择列表）。供选择区扫描与 ConvertToSqlAction 复用（原 Kotlin internal）。
+     * T-WriteFamily（R4）：写族新增的 {@code delete}/{@code update}/{@code remove} 措辞与链工厂/终结点撞名，
+     * 须叠加「空 Wrapper 精确形态 + MP receiver」门（{@link BatchOperationConverter#isBatchOperationCall}），
+     * 否则 {@code redisTemplate.delete(null)} / {@code list.remove(0)} 会进候选列表。
      */
     public static boolean isSqlCandidate(PsiMethodCallExpression call) {
-        return isChainHeadCall(call)
-            || BatchOperationConverter.getBatchOperationMethodNames().contains(call.getMethodExpression().getReferenceName());
+        return isChainHeadCall(call) || BatchOperationConverter.isBatchOperationCall(call);
     }
 
     /**
