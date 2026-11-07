@@ -27,6 +27,7 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
@@ -90,6 +91,36 @@ public final class MybatisXmlTargets {
         }
         return null;
     }
+
+    /**
+     * T-MapperNavShortcut：按 namespace + 语句 id 定位<b>语句标签本身</b>（返回全部同名标签，
+     * 含 {@code databaseId} 多方言变体）。
+     *
+     * <p>与 {@link #findIdAttributeInFile} 的分工：那条服务 XML 内部引用（返回 {@code id} 属性值元素，Ctrl+B
+     * 落在值上）；这条服务 Java → XML 导航（返回标签，落点由调用方决定）。</p>
+     *
+     * <p>文件定位复用 {@link #findMapperFileByNamespace}（单槽 namespace memo + 清单 TTL 缓存），
+     * 不新建缓存、不引监听器。语句标签限定 {@code <mapper>} 直接子级（{@code subTags}），与
+     * {@code log/MapperXmlLocator} 同口径。</p>
+     */
+    public static List<XmlTag> resolveStatementTags(@Nullable Project project, @Nullable String namespace, String id) {
+        String name = id.trim();
+        if (project == null || namespace == null || namespace.isEmpty() || name.isEmpty()) return List.of();
+        XmlFile file = findMapperFileByNamespace(project, namespace);
+        if (file == null) return List.of();
+        XmlTag root = file.getRootTag();
+        if (root == null) return List.of();
+        List<XmlTag> matched = new ArrayList<>();
+        for (XmlTag sub : root.getSubTags()) {
+            if (STATEMENT_TAGS.contains(sub.getName()) && name.equals(sub.getAttributeValue("id"))) {
+                matched.add(sub);
+            }
+        }
+        return matched;
+    }
+
+    /** MyBatis 四类语句标签（{@code <mapper>} 直接子级；与 {@code XmlSqlGutterLineMarkerProvider} 同集合）。 */
+    static final Set<String> STATEMENT_TAGS = Set.of("select", "insert", "update", "delete");
 
     /**
      * 解析 {@code ns.id} / 同文件 {@code id} 形态的标识引用 → 目标 {@code id} 属性值元素。
