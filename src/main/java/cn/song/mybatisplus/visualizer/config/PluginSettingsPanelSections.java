@@ -3,6 +3,7 @@
 // 方法体逐字符搬运，被触及的私有成员已按需放宽为 public（Kotlin internal → Java public）。
 package cn.song.mybatisplus.visualizer.config;
 
+import cn.song.mybatisplus.visualizer.update.DevUpdateMode;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo;
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager;
@@ -246,6 +247,10 @@ public final class PluginSettingsPanelSections {
                 self.logShowDurationCheck.setText(MpSqlVisualizerBundle.message("settings.log.showDuration"));
                 self.logShowDurationCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.showDuration.tip"));
                 addRow(p, g, "", self.logShowDurationCheck);
+                // T-LogMethodName：来源位置后显示「类名#方法名」（默认关）
+                self.logShowMethodCheck.setText(MpSqlVisualizerBundle.message("settings.log.showMethod"));
+                self.logShowMethodCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.showMethod.tip"));
+                addRow(p, g, "", self.logShowMethodCheck);
                 // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
                 self.dataSourceBadgeDetailCheck.setText(MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail"));
                 self.dataSourceBadgeDetailCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail.tip"));
@@ -437,6 +442,10 @@ public final class PluginSettingsPanelSections {
                 self.xmlInlineSqlCheck.setText(MpSqlVisualizerBundle.message("settings.xmlInlineSql"));
                 self.xmlInlineSqlCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip"));
                 addRow(p, g, "", self.xmlInlineSqlCheck);
+                // T-PagesHql：maintainPage <datasource> 源语言档（自动 / 仅 SQL / 仅 HQL）
+                self.pagesSourceCombo.setModel(new javax.swing.DefaultComboBoxModel<>(self.pagesSourceOptions()));
+                self.pagesSourceCombo.setToolTipText(MpSqlVisualizerBundle.message("settings.pagesSource.tip"));
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), self.pagesSourceCombo);
                 // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
                 addRow(p, g, "", self.xmlSynHiCheck);
                 self.joinDiagramNativeCheck.setText(MpSqlVisualizerBundle.message("settings.joinDiagramNative"));
@@ -495,9 +504,22 @@ public final class PluginSettingsPanelSections {
                 g.anchor = GridBagConstraints.WEST;
 
                 JPanel buildPanel = new JPanel(new BorderLayout(8, 0));
+                // T-DevUpdateChannel：构建号就是开发者模式的解锁入口（D-3：只挂这一个标签）。
+                // 连点阈值/窗口在 DevUpdateMode（纯逻辑单测覆盖），这里只做「喂点击 + 解锁后刷新」。
                 JBLabel buildLabel = new JBLabel();
                 buildLabel.setText(PluginBuildInfo.displayText());
                 buildLabel.setToolTipText(MpSqlVisualizerBundle.message("settings.buildNumber.tip"));
+                buildLabel.addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override
+                    public void mouseClicked(java.awt.event.MouseEvent e) {
+                        if (DevUpdateMode.isEnabled()) return;
+                        if (DevUpdateMode.registerClick()) {
+                            // D-4：不弹窗，只改 tooltip + 让开发版按钮现身
+                            buildLabel.setToolTipText(MpSqlVisualizerBundle.message("settings.update.devMode.tip"));
+                            self.updateSection.refreshDevModeVisibility();
+                        }
+                    }
+                });
                 buildPanel.add(buildLabel, BorderLayout.CENTER);
                 JButton copyButton = new JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy"));
                 copyButton.setEnabled(PluginBuildInfo.mpvBuild() != null);
