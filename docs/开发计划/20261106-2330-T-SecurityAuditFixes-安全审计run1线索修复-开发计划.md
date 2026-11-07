@@ -31,6 +31,44 @@
 
 **遗留 followups**（登记于审计账本与车道报告，未阻塞收官）：共享骨架出口脱敏、BoundedRegex 步数级预算统一、审计清单外两处 escapeHtml 收敛、项目级设置 UI 内联校验反馈、所有者 runIde 端到端核对（T-SAF-02/03/04）、manifest 并列 sha256（D6）。
 
+### 附：遗留 followups 详解（2026-11-07 补记）
+
+以下内容为各车道实施报告与父会话收口时的原始 followups（此前未持久化，本段补记）；每条含现状/风险/建议口径。均非漏洞、不阻塞收官。
+
+**1. MCP 出口脱敏收进共享骨架**（源自 T-SAF-07）
+- 现状：`mcpMaskEnabled` 脱敏由各工具自行调用 `DisplayMasker.maskDisplay`（renderLogs 与 historySearch 各自一处）；共享输出骨架 `McpToolsetSupport.audit` 原样透传。
+- 风险：将来新增携带还原 SQL 的 MCP 工具若忘调脱敏，会重演「一条通道脱敏、另一条明文」的分歧。
+- 建议：脱敏下沉到共享骨架统一出口，新工具默认被覆盖。
+
+**2. BoundedRegex 步数级预算统一**（源自 T-SAF-24 + T-SAF-25）
+- 现状：两套正则求值预算并存——`util/BoundedRegex.kt`（字符读计数，200k 上限，引擎步数紧上界）与 HistorySearchService 内联时间预算（单条目 50ms 记 miss、整查 2s 失败，弱点是超时窗口内线程仍被占）。
+- 建议：统一到 BoundedRegex 计数式实现，两处及未来调用点走同一机制。
+
+**3. 审计清单外两处 escapeHtml 收敛**（车道 C 实施时发现）
+- 现状：收敛覆盖审计点名的六处变体 + HtmlReportFormatter；清单外还有 `ui/diagram/DiagramRenderer.kt:792`、`share/format/DiagnosticReportFormatter.kt:261` 两处同类逐点实现（未被判定为漏洞，仅未归共享工具）。
+- 建议：一并收敛到 `util/HtmlEscape.kt`，防漂移。
+
+**4. 项目级设置 UI 内联校验反馈**（源自 T-SAF-08）
+- 现状：非法 SQL 位形设置值在导入路径被整体拒绝、项目级读取路径 warn 后回退全局；但设置页 UI（PluginSettingsPanel*.kt）手输非法值时无内联提示，仅 idea.log 一条 warn——用户以为生效、实际被静默回退。
+- 建议：设置面板对相关字段加即时校验反馈（红字/禁用保存）。
+
+**5. 所有者 runIde 端到端核对**（T-SAF-02/03/04 的部署面，回归测试打在接缝层）
+- T-SAF-02：开增强捕获跑应用，确认 agent 经令牌认证正常建立会话（合法捕获链路未被令牌误伤）。
+- T-SAF-03：对真实数据源跑 sqlv_explain，确认 `setReadOnly(true)` 在平台 243/262 的 RemoteConnection 反射链上真的生效（接缝缺失/失败时应见结构化拒绝而非静默放行）。
+- T-SAF-04：内嵌预览面板原生 ▶/Ctrl+Enter 应已置灰，插件按钮链照常工作。
+- 另：T-SAF-06 插件侧已先行拒绝恶意条目名，平台解压器行为的取证仍可在 runIde 做一次；T-SAF-05 端到端更新流（UpdateFlowHeavyTest 模式）可顺手验。
+
+**6. manifest 并列 sha256（决策 D6，本次未实施）**
+- 更新链的最后一层纵深：发布侧（gitee-release.py / writeUpdateManifest）把产物 sha256 与 downloadUrl 一起写进 `update/update.json`，消费侧（PluginUpdateRunner）安装前比对。未做原因：`update/update.json` 按 AGENTS.md 仅用户本人可改、涉及发布流水线，需用户参与。
+
+**7. T-SAF-11 定案测试实测**（合并验证已跑，此处登记口径）：JSqlParser 5.3 对 CTE/派生表内 INTO 的解析形态由定案测试实测定案；解析失败形态守卫已 fail-closed，无行为缺口。
+
+**已知口径（非改进项）**：
+- T-SAF-02 发行批同步：旧 agent+新插件组合 HELLO 无令牌会被拒绝（协议 break 有意为之，随制品同版本分发）；`update/update.json` 仅用户本人可改。
+- T-SAF-12：纯 token-less 流首条错配信息论不可判定，自学校信号自第二条参数行起生效；彻底消除需上游（控制台桥）提供行级线程上下文，另行立项。
+- T-SAF-13：Windows 符号链接回归测试在无特权机器 skip，CI 应在可建符号链接的 runner 上跑真覆盖。
+- BoundedRegex 超预算 warn 为 once-per-JVM 全局；per-pattern attribution 有助诊断（未来增强）。
+
 ---
 
 ## 一、线索总账与批次映射（25 条）
