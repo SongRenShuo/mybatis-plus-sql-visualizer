@@ -24,7 +24,8 @@ public final class DialectRegistry {
             OpenGaussDialect.INSTANCE,
             GaussDbDialect.INSTANCE,
             HighGoDialect.INSTANCE,
-            VastbaseDialect.INSTANCE);
+            VastbaseDialect.INSTANCE,
+            GoldenDbDialect.INSTANCE);
 
     private DialectRegistry() {}
 
