@@ -212,6 +212,26 @@ public final class PreviewResult {
     }
 
     /**
+     * K2J 互操作（T-RuntimeSlotFill 券 A）：JdbcTemplate 链路形态——21 参历史序 + runtimeSlots
+     * 尾参（对应 master 具名实参 {@code runtimeSlots = collectRuntimeSlots(call)}；sourceLanguage/
+     * originalSql/degradations 取默认）。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, List<RuntimeSlot> runtimeSlots) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, null, null, false, null, null, List.of(), Set.of(),
+                null, null, null, null, null, "", null,
+                SourceLanguage.SQL, null, List.of(), runtimeSlots);
+    }
+
+    /**
      * K2J 互操作：master 侧 {@code placeholderParamNames}/{@code duplicateParamNames} 为带默认值的
      * 后置字段（Kotlin 默认参），历史 23 参构造形态在 Kotlin 调用方（测试树位置实参）天然合法——
      * Java 侧保留同形重载，新两参取默认空值（与 25 参规范构造器同为 {@code null} 归一语义）。
