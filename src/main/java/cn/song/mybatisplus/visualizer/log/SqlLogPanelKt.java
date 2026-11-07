@@ -750,4 +750,64 @@ public final class SqlLogPanelKt {
         return new kotlin.Pair<>("[" + source + "] ",
                 isSelected ? SimpleTextAttributes.REGULAR_ATTRIBUTES : LIST_META_GRAY);
     }
+
+    /**
+     * T-LogMethodName：{@code mapperStatement} → 「类名#方法名」显示串。纯字符串操作，无正则、无 PSI、无服务查找。
+     *
+     * <p>两条通道的字段语义本来就不同（见 {@code LogSqlEntry.mapperStatement} 的 KDoc）：
+     * <ul>
+     * <li>控制台桥：MyBatis 语句 id {@code com.example.mapper.UserMapper.selectById}——<b>mapper 接口</b>，不是调用点；</li>
+     * <li>增强捕获：调用栈业务帧 {@code DeviceInfoServiceImpl#joinRightAlias}——与 {@code LogSqlEntry.sourceFile} 同一帧。</li>
+     * </ul></p>
+     *
+     * <p>所以本函数只做「取简单类名 + 方法名」，不与来源文件比对：列表里两段并排显示，
+     * 硬拼成一段会造出不存在的成员（{@code UserServiceImpl#selectById}）。场景清单见
+     * {@code docs/开发计划/20261105-1254-T-LogMethodName-SQL列表来源后显示类名与方法名-开发计划.md} §3.3。</p>
+     *
+     * <p>不可解析一律返回 null——宁可不显示，不显示错的：null / 空白 / 无 {@code .} 也无 {@code #} /
+     * 类名段为空 / 方法段为空。内部类原样保留 {@code $}（{@code Outer$Inner.selectById} → {@code Outer$Inner#selectById}）。</p>
+     */
+    public static String mapperStatementLabel(String mapperStatement) {
+        String raw = mapperStatement == null ? "" : mapperStatement.trim();
+        if (raw.isEmpty()) return null;
+        // agent 形态优先：'#' 右侧是方法名，左侧可能是简单类名也可能带包名（混写兜底）
+        int hash = raw.lastIndexOf('#');
+        if (hash >= 0) {
+            String cls = substringAfterLastDot(raw.substring(0, hash)).trim();
+            String method = raw.substring(hash + 1).trim();
+            return cls.isEmpty() || method.isEmpty() ? null : cls + "#" + method;
+        }
+        // 桥通道形态：最后一段是方法名，倒数第二段是简单类名
+        int dot = raw.lastIndexOf('.');
+        if (dot <= 0 || dot == raw.length() - 1) return null;
+        String cls = substringAfterLastDot(raw.substring(0, dot)).trim();
+        String method = raw.substring(dot + 1).trim();
+        return cls.isEmpty() || method.isEmpty() ? null : cls + "#" + method;
+    }
+
+    /** Kotlin {@code String.substringAfterLast('.')} 等价（无分隔符返回全串）。 */
+    private static String substringAfterLastDot(String s) {
+        int idx = s.lastIndexOf('.');
+        return idx < 0 ? s : s.substring(idx + 1);
+    }
+
+    /**
+     * T-LogMethodName：来源位置之后的「类名#方法名」片段（{@code showMethodInLogList} 门控，默认关）。
+     *
+     * <p>与 {@link #formatSourceFragment} 并排产出（来源段在前、本段在后），属性完全对齐来源片段；
+     * 选中态由 {@code bindHeaderLine} 的 {@code selectedAttributes} 统一覆盖，片段层只给非选中态。
+     * 没有方法名（Hibernate / JdbcTemplate / ShardingSphere / MP 分页计数 / 旧日志）返回 null，
+     * 不占位、不改动既有形态。</p>
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatMethodFragment(LogSqlEntry entry, boolean isSelected) {
+        if (!cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState().getShowMethodInLogList()) {
+            return null;
+        }
+        String label = mapperStatementLabel(entry.mapperStatement());
+        if (label == null) {
+            return null;
+        }
+        return new kotlin.Pair<>("[" + label + "] ",
+                isSelected ? SimpleTextAttributes.REGULAR_ATTRIBUTES : LIST_META_GRAY);
+    }
 }
