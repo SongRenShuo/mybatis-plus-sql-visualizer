@@ -7,6 +7,8 @@
 数据从捕获到上屏分三段，各段的节流点：
 
 1. **摄取段（控制台桥）**：`SqlLogConsoleBridge.kt` 轮询制——`pollTimer` 起步 `FAST_POLL_INTERVAL_MS=500ms`，指数退避 ×2 至 `POLL_INTERVAL_MS=2000ms` 常驻（:690-697）。每拍 `scanAll()` 读控制台文本 → `handleConsoleLine` 做 Preparing/Parameters 配对 → SQL 还原。风暴期解析吞吐低于生产速率即积压，请求停止后队列仍有余量——这是「结束后还在追」的机制源头。agent 通道（`SenderLoop.java`）事件即时 flush，**不是**瓶颈。
+
+   > **【20261107 证伪订正】**上段桥机制描述有误：解析**不在轮询拍里**——`handleConsoleLine` 由平台 `applyFilter(line, entireLength)` 逐行驱动（`LogFilterProxyHandler.kt:23-27` → `SqlLogConsoleBridge.kt:356`），每行在控制台输出线程同步完成解析（线程模型 KDoc 自证 `SqlLogConsoleBridge.kt:388-390`）；`scanAll()` 不读控制台文本、无扫描位、无逐行循环（`SqlLogConsoleBridge.kt:222-264`），git 全历史自 T-M31-03（`ce816772`）起即 filter 逐行制。残余追赶的真实归因：EDT 刷新队列（券 A/B 域）+ 平台 ConsoleViewImpl 文本 flush（filter 上游，桥不可达）；桥侧尾巴有界（≤2s 静默桶轮询拍，非滚动积压）。证据链与处置见 §九。原文保留不改动，供追溯。
 2. **缓冲段**：`SqlLogEntryBuffer.kt` 内容通知双阈值节流（:864-876）——`CONTENT_NOTIFY_BATCH=20` 条或 `CONTENT_NOTIFY_INTERVAL_NANOS=200ms`，原子量无 Timer，这段已合理。
 3. **刷新段**：`SqlLogManager.notifyUi()`（:580-588）——`uiFlushPending` 合拍只跳过「在途那一拍」，EDT 一空立刻刷下一拍，**无时间窗下限**。风暴期每条 SQL 执行都改计数 → 每秒几十拍高频小刷新，每拍 `SqlLogPanel.refreshList()`（:1729 起）全量做：`snapshot()` 物化 + `dedupeCountsSnapshot()` + `structureKeyCounts()` O(N) 全量计数 + 过滤链 + diff + JList 重绘。单拍不贵（`maxEntries=200` 封顶），但每拍重复劳动 × 每秒几十拍 = EDT 被面板刷帧吃掉，IDE 全局体感变卡。
 
@@ -38,6 +40,8 @@
 - 兜底：设置开关翻动 / clear / 去重开关翻转等已知的「索引重建」事件点全量重建一次（对齐 P6 的 rebuildDedupeIndexAfterHandoff 口径）。
 
 ### 3.3 券 C：控制台桥风暴感知轮询与解析预算（`SqlLogConsoleBridge.kt`）
+
+> **【20261107 证伪订正】本券已证伪结案（未实码）**——本节字面机制（扫描位行距、2000 行/拍预算）无锚点：桥解析是平台 filter 逐行制（控制台输出线程），`scanAll` 无文本解析路径，「本拍解析 N 行剩 M 行」这个量不存在；强行落码须在 `scanAll` 新造文本解析路径，与 filter 逐行路径双路重复产出，违反 §二非目标。证据链、三个可选处置与采纳结论见 §九「券 C：证伪结案」。原文保留不改动，供追溯。
 
 - 轮询节奏：`scanAll()` 单拍仍解析不完（上次扫描位后新增行数超阈值）时**不退避**——保持快速拍或直接跟拍连续 `scanAll()`，直至追平才恢复指数退避（现状是无论积压多少都机械 ×2 到 2000ms，风暴中越积越多）。
 - 解析预算：单拍解析行数/时长封顶（预算常量），超预算的剩余行留到下一拍——保证单拍不长时间霸占调用线程。
@@ -93,4 +97,28 @@
 
 ## 九、实施记录
 
-（实施中回填）
+### 券 C：证伪结案（未实码）（t-sqllist-catchup-c，2026-11-07）
+
+**结论：前提 §五.1 前半被代码证据证伪，券 C 字面机制未实施**（派活条款「若发现积压另有去向，如实报告——那会推翻券 C 的必要性」分支命中；主控采纳处置①）。
+
+**证据链**（均带 文件:行，分支 t-sqllist-catchup-c 基线 b2ccd4f9）：
+
+1. **解析不在轮询拍里**。`handleConsoleLine` 由平台 `applyFilter(line, entireLength)` 逐行驱动（`LogFilterProxyHandler.kt:23-27` → `SqlLogConsoleBridge.kt:356`），每行在**控制台输出线程**同步完成解析——桥内 KDoc 自证线程模型（`SqlLogConsoleBridge.kt:388-390`：「本方法在控制台输出线程执行，而轮询侧 flushSettledEntries 在 EDT 冲刷」）。
+2. **`scanAll()` 全程不读控制台文本、无扫描位、无逐行循环**（`SqlLogConsoleBridge.kt:222-264`），只做三件事：幂等挂 filter（缓存短路）、jdbc/sharding 静默桶冲刷、主控制台出现/移除检测。git 全历史确认 `scanAll` 自 T-M31-03（`ce816772`）起从未有文本解析路径——计划 §一「每拍 scanAll() 读控制台文本」为误读。
+3. 因此券 C 的「上次扫描位→文档末尾行距」「2000 行/拍预算」没有锚点：桥不存在「本拍解析 N 行、剩 M 行」这个量。强行落码须在 `scanAll` 新造文本解析路径，与 filter 逐行路径**双路重复产出**（条目翻倍），违反计划非目标「不改捕获语义」。
+4. **scanAll 线程归属**：EDT（javax.swing.Timer 回调固定在事件分发线程）。但 scanAll 无行解析，2000 行预算的 EDT 顾虑随之失效；若按字面实施则解析必落 EDT，§四 20ms 时长保险丝确实必要——又一重不应实施的理由。
+5. **积压真实去向**：①EDT 刷新队列——每条 SQL 通知一拍 `refreshList`（O(N) 全量计数），风暴期 EDT 吃不下即无界积压（券 A/B 域）；②平台 ConsoleViewImpl 文本→文档 flush 延迟（filter 上游，桥管不着）；③桥侧尾巴有界——风暴中 jdbc/sharding 条目逐行即闭合（`processConsoleLine` 喂行后即时 `flushSettled`，SqlLogConsoleBridge.kt:1165-1166），风暴结束后仅静默桶等 2s 轮询拍，尾巴 ≤2s，非滚动积压。
+
+**可选处置与采纳**：
+
+| 处置 | 内容 | 结论 |
+|---|---|---|
+| ①取消 C 实码 | 证伪记录回填 §九 + §一/§三.3.3 订正标注 + 桥定向回归零改动确认 | **采纳（主控 2026-11-07）** |
+| ②C 缩水为 pending 量暴露 | 暴露 jdbc/sharding pending 条目数——该量有界且风暴中≈0，喂 D 状态栏会误导 | 不采纳 |
+| ③按字面实施 | 与 filter 路径双路重复产出，违反非目标 | 不采纳 |
+
+**连带影响**：券 D 规格中「桥通道未解析行数」是同一误读的衍生物，建议 D 改口径用 buffer 真实量（如 `pendingNotifyCount`）。
+
+**定向回归读数**（零改动确认，2026-11-07，`-Pkotlin.compiler.execution.strategy=in-process`）：三类 24 例全绿零跳过——`SqlLogConsoleBridgeTest` 1 例 / `SqlLogConsoleBridgePerfTest` 10 例 / `SqlLogConsoleBridgeMarkerTest` 13 例，XML 判据数逐类核对（skipped=0, failures=0, errors=0），BUILD SUCCESSFUL。
+
+**未跑**：join-demo 压测复测（归主控复测条款）。
