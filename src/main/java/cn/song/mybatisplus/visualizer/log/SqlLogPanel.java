@@ -107,7 +107,7 @@ import java.util.stream.Collectors;
  * - 类型筛选：工具栏行「SQL类型」多选按钮（弹窗勾选，替代原两行按钮组）
  * - 高频折叠：整体移除（识别重复 SQL 的价值由去重 ⨉N 徽章承接）
  * - 去重徽章：开启「移除重复的sql」后被丢弃的 SQL 在条目旁累加显示 ⨉N
- * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收起）
+ * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收口）
  */
 public class SqlLogPanel extends JPanel implements Disposable {
 
@@ -380,11 +380,31 @@ public class SqlLogPanel extends JPanel implements Disposable {
      */
     private volatile SqlLogPanelKt.FocusFilter activeFocus = null;
 
-    /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
+    /**
+     * 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。
+     * T-SqlListCatchup 券B 起：指向 {@link #countAccumulator} 的累积 map，按变更键增量更新而非每拍全量重算。
+     */
     private Map<String, Integer> dedupeCounts = Map.of();
 
-    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
+    /**
+     * O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。
+     * T-SqlListCatchup 券B 起：指向 {@link #countAccumulator} 的累积 map，按变更键增量更新而非每拍全量重算。
+     */
     private Map<String, Integer> templateCounts = Map.of();
+
+    // ---------- T-SqlListCatchup 券B：计数快照增量累积 ----------
+
+    /**
+     * 券B：计数累积器——dedupeCounts/templateCounts 不再每拍全量重算，改为按 buffer 的变更键
+     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 键上限溢出等）由 buffer 置位，drain 到后
+     * 回退全量重算一次。等价性口径见 {@link CountSnapshotAccumulator} KDoc。
+     * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
+     */
+    private final CountSnapshotAccumulator countAccumulator = new CountSnapshotAccumulator(
+            () -> manager.getEntries().dedupeCountsSnapshot(),
+            key -> manager.getEntries().dedupeCountForKey(key),
+            key -> manager.getEntries().dedupePresenceForKey(key),
+            key -> manager.getEntries().structureKeyForKey(key));
 
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
@@ -393,6 +413,25 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     public List<LogSqlEntry> lastRendered = List.of();
+
+    /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（{@link CaptureStatusBar.CatchUpBadgeState} 防闪烁）。
+     * 数据源 {@code SqlLogEntryBuffer.pendingNotifyCount()}（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——{@code syncCaptureStatusBar()} 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     * <b>声明于 init 前</b>：init 块内首次 refreshList 即经 syncDiagnostics 读它（构造期序坑，同上注）。
+     */
+    private final CaptureStatusBar.CatchUpBadgeState catchUpBadgeState = new CaptureStatusBar.CatchUpBadgeState();
+
+    /** 券B（T-SqlListCatchup）：面板侧 ⨉N 徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    Map<String, Integer> dedupeCountsForTest() {
+        return dedupeCounts;
+    }
+
+    /** 券B（T-SqlListCatchup）：面板侧「×N 同结构」徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    Map<String, Integer> templateCountsForTest() {
+        return templateCounts;
+    }
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
@@ -1537,8 +1576,16 @@ public class SqlLogPanel extends JPanel implements Disposable {
         CaptureStatusBar.Pair texts = null;
         if (manager.isCapturing()) {
             try {
+                // T-SqlListCatchup 券B2：2s 诊断拍过期冲洗——悬挂的节流余量（风暴末尾末批变更不足
+                // 批量阈值、之后无新条目再触发）最迟 2s 补一次通知上屏，列表与追赶徽章不再滞留
+                // 「落后 N 条」。flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有生产线程同路径安全。
+                if (manager.getEntries().hasStalePendingNotify()) {
+                    manager.getEntries().flushPendingNotify();
+                }
                 cn.song.mybatisplus.visualizer.log.agent.AgentManager am =
                         cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project);
+                cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats attachStats =
+                        cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest();
                 texts = CaptureStatusBar.captureStatusLineText(new CaptureStatusBar.CaptureStatusLine(
                         true,
                         manager.getConsoleBridge().attachedConsoles.size(),
@@ -1546,10 +1593,21 @@ public class SqlLogPanel extends JPanel implements Disposable {
                         am.statusSummary(),
                         am.healthyPids(),
                         am.isUserPaused(),
-                        cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents()));
+                        cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                        // T-IbatisPanwei 券 D：未登记驱动具名事实（有界、只类名）——空态诊断行在
+                        // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
+                        attachStats != null ? attachStats.unregisteredImplementations() : List.of(),
+                        // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
+                        catchUpBadgeState.onNextBeat(manager.getEntries().pendingNotifyCount()),
+                        // T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计（心跳 dropped 键，>0 挂尾）——
+                        // 风暴期队列溢出丢弃从此在用户视角可见，不再只有 agent 进程内计数
+                        attachStats != null ? attachStats.dropped() : 0L));
             } catch (Throwable ignored) {
                 texts = null; // runCatching().getOrNull() 等价
             }
+        } else {
+            // 非捕捉态：追赶节流复位（下次捕捉从干净态起算）
+            catchUpBadgeState.reset();
         }
         if (texts == null) {
             label.setText("");
@@ -1793,78 +1851,137 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // F80：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
         // 量不再随 logMaxCount 线性放大。
         if (!flushRebuildChainSync()) return;
+        // T-SqlListCatchup 券D：全拍耗时打点（补链之后 → diff 收尾，即「真正做事的一拍」完整耗时）。
+        // 挂在补链之外：补完让路的空拍（return false）不算刷新拍，不污染分布。分位读数走
+        // LogPerfProbe.sampleStats("LogPanel.refreshList")，≥100ms 的拍另有阈值 INFO（既有呈现）。
+        final long generation = gen;
+        LogPerfProbe.measure("LogPanel.refreshList",
+                () -> "visible=" + listModel.size(),
+                () -> {
+                    refreshListBeat(generation);
+                    return null;
+                });
+    }
+
+    /**
+     * 券B（T-SqlListCatchup）：徽章计数更新（⨉N 去重丢弃 + ×N 同模板）——增量对账路径，
+     * 状态见 {@link #countAccumulator}。消费顺序：先 drain 变更键、后 drain 全量标记——标记若落在
+     * 两次 drain 之间则本拍即走全量，不产生一拍陈旧窗口。
+     */
+    private void refreshCountMaps(List<LogSqlEntry> snapshot) {
+        java.util.Set<String> changedKeys = manager.getEntries().drainChangedKeys();
+        boolean fullRebuild = manager.getEntries().drainCountRebuildFlag();
+        countAccumulator.apply(snapshot, fullRebuild, changedKeys);
+        dedupeCounts = countAccumulator.getCurrentDedupeCounts();
+        entryCellRenderer.dedupeCounts = dedupeCounts;
+        templateCounts = countAccumulator.getCurrentTemplateCounts();
+        entryCellRenderer.templateCounts = templateCounts;
+    }
+
+    /**
+     * 券D 拆出：refreshList 的实际刷新拍体（{@link #refreshList()} 负责补链门 + 全拍打点，本函数做事）。
+     *
+     * <p>T-SqlListCatchup 券E（2026-11-07）：拍体<b>拆拍探针</b>——按现有结构把一拍拆成
+     * {@code .snapshot}（快照物化，券D 既有 key）/ {@code .diagnostics}（诊断行与状态栏同步）/ {@code .counts}
+     * （券B 增量计数段）/ {@code .filters}（过滤链 + 排序 + 进度条基准）/ {@code .diffModel}（差分应用与
+     * 模型写）五段，各包 measure 入券D 分布采样；全拍 {@code LogPanel.refreshList} 与旧
+     * {@code .snapshot} key 不动。拆拍目的是拿<b>分项账单</b>定位 102~232ms 单拍的重段（真机压测
+     * 2026-11-07），只对账单显示真正重的段动手。拍尾的聚焦隐藏提示与慢查计数（条数级常数
+     * 成本，与模型写无关）不打点——全拍与各段之差即这段余量。</p>
+     */
+    private void refreshListBeat(long gen) {
         List<LogSqlEntry> snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot",
                 () -> "size=" + manager.getEntries().size(),
                 () -> manager.getEntries().snapshot());
         // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
-        syncDiagnostics();
-
-        // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
-        dedupeCounts = manager.getEntries().dedupeCountsSnapshot();
-        entryCellRenderer.dedupeCounts = dedupeCounts;
-
-        // O-90：同模板计数快照（**全量条目**聚合——徽章计数不随当前过滤/搜索波动；
-        // snapshot 本就为过滤链物化，structureKey 惰性缓存后单遍 O(N)）
-        templateCounts = LogSqlModelsKt.structureKeyCounts(snapshot);
-        entryCellRenderer.templateCounts = templateCounts;
-
-        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
-        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(
-                SqlLogPanelKt.filterByType(
-                        SqlLogPanelKt.filterBySuppress(snapshot, manager.getEntries().getSuppressKeys()),
-                        activeFilter),
-                activeFocus);
-        // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
-        List<LogSqlEntry> focused = FocusTab.filterByFocusTabs(filtered, focusTabs);
-        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
-        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
-        List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(
-                focused, searchText, logMatchCase(), logRegex(), regexMemo);
-        List<LogSqlEntry> newVisible = applySort(searched);
-        int evicted = manager.getEntries().drainEvictedCount();
-
-        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
-        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
-        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
-        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
-        entryCellRenderer.maxDurationMs = LogEntryRailKt.maxDurationOf(newVisible);
-
-        int modelSizeBefore = listModel.size();
-        long visibleTailSequenceBefore = lastRendered.isEmpty() ? 0L : lastRendered.get(lastRendered.size() - 1).sequenceNumber();
-        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
-        withProgrammaticScroll(() -> {
-            if (!applyIncremental(newVisible, evicted)) {
-                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
-                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
-                pendingScrollAnchor = tailFollow.getShouldFollow() ? null : captureTopAnchor();
-                applyFullRebuild(newVisible, gen);
-                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
-                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
-                if (pendingScrollAnchor != null) {
-                    ScrollAnchor anchor = pendingScrollAnchor;
-                    if (restoreAnchor(anchor) || rebuildRemaining == null) {
-                        pendingScrollAnchor = null;
-                    }
-                }
-            }
+        // 券E：诊断同步含 AgentManager/屏蔽规则取数（每个刷新拍都跑），单独打点以便与计数段划清。
+        LogPerfProbe.measure("LogPanel.refreshList.diagnostics", () -> {
+            syncDiagnostics();
+            return null;
         });
-        boolean tailAdvancedAtCapacity = evicted > 0
-                && (!newVisible.isEmpty()
-                    && newVisible.get(newVisible.size() - 1).sequenceNumber() > visibleTailSequenceBefore);
-        // T-SqlLogPerf + O-148：尾部跟随——仅当列表真的长高（新条目追加）才贴底；
-        // 搜索/过滤收窄不打扰浏览位置。缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；
-        // 只随确有新可见条目时贴底。
-        if (tailFollow.getShouldFollow() && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
-            list.ensureIndexIsVisible(listModel.size() - 1);
-        }
 
-        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
+        // 券B（T-SqlListCatchup）：徽章计数增量更新（变更键对账，兜底事件回退全量）——代替旧的
+        // 每拍 dedupeCountsSnapshot() + structureKeyCounts(snapshot) 两份全量 O(N) 重算；
+        // 徽章聚合口径不变（**全量条目**，不随当前过滤/搜索波动）。
+        // 券E：增量计数段单独打点（全量回退是否每拍发生、值多少钱，账单说了算）。
+        LogPerfProbe.measure("LogPanel.refreshList.counts", () -> {
+            refreshCountMaps(snapshot);
+            return null;
+        });
+
+        int[] focusHiddenDelta = {0};
+        List<LogSqlEntry> newVisible = LogPerfProbe.measure("LogPanel.refreshList.filters",
+                () -> "in=" + snapshot.size(),
+                () -> {
+                    // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
+                    List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(
+                            SqlLogPanelKt.filterByType(
+                                    SqlLogPanelKt.filterBySuppress(snapshot, manager.getEntries().getSuppressKeys()),
+                                    activeFilter),
+                            activeFocus);
+                    // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
+                    List<LogSqlEntry> focused = FocusTab.filterByFocusTabs(filtered, focusTabs);
+                    focusHiddenDelta[0] = filtered.size() - focused.size();
+                    // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+                    // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+                    List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(
+                            focused, searchText, logMatchCase(), logRegex(), regexMemo);
+                    List<LogSqlEntry> sorted = applySort(searched);
+
+                    // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+                    // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+                    // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+                    // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+                    entryCellRenderer.maxDurationMs = LogEntryRailKt.maxDurationOf(sorted);
+                    return sorted;
+                });
+
+        LogPerfProbe.measure("LogPanel.refreshList.diffModel",
+                () -> "model=" + listModel.size(),
+                () -> {
+                    int evicted = manager.getEntries().drainEvictedCount();
+                    int modelSizeBefore = listModel.size();
+                    long visibleTailSequenceBefore = lastRendered.isEmpty() ? 0L
+                            : lastRendered.get(lastRendered.size() - 1).sequenceNumber();
+                    // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
+                    withProgrammaticScroll(() -> {
+                        if (!applyIncremental(newVisible, evicted)) {
+                            // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
+                            // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
+                            pendingScrollAnchor = tailFollow.getShouldFollow() ? null : captureTopAnchor();
+                            applyFullRebuild(newVisible, gen);
+                            // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
+                            // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
+                            if (pendingScrollAnchor != null) {
+                                ScrollAnchor anchor = pendingScrollAnchor;
+                                if (restoreAnchor(anchor) || rebuildRemaining == null) {
+                                    pendingScrollAnchor = null;
+                                }
+                            }
+                        }
+                    });
+                    boolean tailAdvancedAtCapacity = evicted > 0
+                            && (!newVisible.isEmpty()
+                                && newVisible.get(newVisible.size() - 1).sequenceNumber() > visibleTailSequenceBefore);
+                    // T-SqlLogPerf + O-148：尾部跟随——仅当列表真的长高（新条目追加）才贴底；
+                    // 搜索/过滤收窄不打扰浏览位置。缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；
+                    // 只随确有新可见条目时贴底。
+                    // 券E 账单注：本拍滚动（ensureIndexIsVisible → BasicListUI 变高布局 O(N) 全扫）曾是
+                    // 单拍 102~232ms 的最大单一成分——渲染器条目级 preferred size 缓存（RailCellRendererBase
+                    // 券E 段）把它从 ~30ms 压到 <10ms（headless 账单，2026-11-07）。
+                    if (tailFollow.getShouldFollow() && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
+                        list.ensureIndexIsVisible(listModel.size() - 1);
+                    }
+                    return null;
+                });
+
+        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused；券E 拆拍后由
+        // filters 段透出 focusHiddenDelta，本处只做 Swing 标签写）
         if (focusTabs.isEmpty()) {
             focusHiddenLabel.setVisible(false);
         } else {
-            int hidden = filtered.size() - focused.size();
-            focusHiddenLabel.setText(MpSqlVisualizerBundle.message("log.focus.hidden", String.valueOf(hidden)));
-            focusHiddenLabel.setVisible(hidden > 0);
+            focusHiddenLabel.setText(MpSqlVisualizerBundle.message("log.focus.hidden", String.valueOf(focusHiddenDelta[0])));
+            focusHiddenLabel.setVisible(focusHiddenDelta[0] > 0);
         }
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）
