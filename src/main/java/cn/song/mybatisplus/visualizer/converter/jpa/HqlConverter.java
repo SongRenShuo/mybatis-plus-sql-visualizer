@@ -81,12 +81,16 @@ public final class HqlConverter {
      * @param placeholderParamNames T-JpaParamOrder F3：HQL 命名参数名序（首现序，与替换后
      *         SQL 中 {@code ?} 一一对应）；位置参数 {@code ?N} 不在内。调用方据此做按名回填——
      *         仅当 SQL 全部 {@code ?} 均来自命名参数时可用（位置参数混入时数量不齐）。
+     * @param degradations T-PagesHql：转换降级清单（关联路径需 JOIN / 推断 ON 条件 /
+     *         实体不可解析 / 高级构造透传等）。空表 = 无降级。pages 链把它并入 warning 展示；
+     *         其它调用方可忽略（默认空，零行为变化）。
      */
     public static final class Result {
     private final @NotNull String sql;
     private final @NotNull SqlStatement statement;
     private final @NotNull Set<String> inClauseParams;
     private final @NotNull List<String> placeholderParamNames;
+    private final @NotNull List<String> degradations;
 
     public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams) {
         this(sql, statement, inClauseParams, List.of());
@@ -94,10 +98,16 @@ public final class HqlConverter {
 
     public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams,
                   @NotNull List<String> placeholderParamNames) {
+        this(sql, statement, inClauseParams, placeholderParamNames, List.of());
+    }
+
+    public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams,
+                  @NotNull List<String> placeholderParamNames, @NotNull List<String> degradations) {
         this.sql = sql;
         this.statement = statement;
         this.inClauseParams = inClauseParams;
         this.placeholderParamNames = placeholderParamNames;
+        this.degradations = degradations;
     }
 
     public @NotNull String getSql() { return sql; }
@@ -108,23 +118,25 @@ public final class HqlConverter {
     public @NotNull Set<String> inClauseParams() { return inClauseParams; }
     public @NotNull List<String> getPlaceholderParamNames() { return placeholderParamNames; }
     public @NotNull List<String> placeholderParamNames() { return placeholderParamNames; }
+    public @NotNull List<String> getDegradations() { return degradations; }
+    public @NotNull List<String> degradations() { return degradations; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof Result)) return false;
         Result that = (Result) o;
-        return java.util.Objects.equals(this.sql, that.sql) && java.util.Objects.equals(this.statement, that.statement) && java.util.Objects.equals(this.inClauseParams, that.inClauseParams) && java.util.Objects.equals(this.placeholderParamNames, that.placeholderParamNames);
+        return java.util.Objects.equals(this.sql, that.sql) && java.util.Objects.equals(this.statement, that.statement) && java.util.Objects.equals(this.inClauseParams, that.inClauseParams) && java.util.Objects.equals(this.placeholderParamNames, that.placeholderParamNames) && java.util.Objects.equals(this.degradations, that.degradations);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(sql, statement, inClauseParams, placeholderParamNames);
+        return java.util.Objects.hash(sql, statement, inClauseParams, placeholderParamNames, degradations);
     }
 
     @Override
     public String toString() {
-        return "Result[" + "sql=" + sql + ", " + "statement=" + statement + ", " + "inClauseParams=" + inClauseParams + ", " + "placeholderParamNames=" + placeholderParamNames + "]";
+        return "Result[" + "sql=" + sql + ", " + "statement=" + statement + ", " + "inClauseParams=" + inClauseParams + ", " + "placeholderParamNames=" + placeholderParamNames + ", " + "degradations=" + degradations + "]";
     }
 }
 
@@ -290,7 +302,8 @@ public final class HqlConverter {
                     sql,
                     new DeleteStatement(table, parsedDelete != null ? parsedDelete.getConditions() : List.of()),
                     inClauseParams,
-                    placeholderParamNames);
+                    placeholderParamNames,
+                    degradationsOf(sql, null));
         }
 
         // 10.5 检测 UPDATE HQL → UpdateStatement（J2）
@@ -302,7 +315,8 @@ public final class HqlConverter {
                         new UpdateStatement(table, parsed.getSets(), parsed.getConditions(),
                                 null, parsed.getTableAlias(), List.of()),
                         inClauseParams,
-                        placeholderParamNames);
+                        placeholderParamNames,
+                        degradationsOf(sql, null));
             }
             // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
         }
@@ -331,7 +345,61 @@ public final class HqlConverter {
                         null,
                         null),
                 inClauseParams,
-                placeholderParamNames);
+                placeholderParamNames,
+                degradationsOf(sql, statementComment));
+    }
+
+    /**
+     * T-PagesHql：从转换产物里收集降级说明。
+     *
+     * <p>转换器的降级信息以 SQL 注释/语句 comment 形式落地（「关联字段，需 JOIN …」等注释），
+     * 这里按已知文案标记归一成人话清单——不改写任何转换行为，只让调用方能把「产物不可直接执行
+     * 的原因」展示到面板上（用户不看 SQL 注释就不知道）。
+     */
+    private static List<String> degradationsOf(@NotNull String sql, @org.jetbrains.annotations.Nullable String statementComment) {
+        LinkedHashSet<String> notes = new LinkedHashSet<>();
+        if (statementComment != null && !statementComment.isBlank()) {
+            String mapped = null;
+            for (kotlin.Pair<String, String> marker : Degradations.DEGRADATION_MARKERS) {
+                if (statementComment.contains(marker.getFirst())) {
+                    mapped = marker.getSecond();
+                    break;
+                }
+            }
+            if (mapped != null) {
+                notes.add(mapped);
+            } else {
+                // Kotlin removeSurrounding("/* ", " */")：首尾匹配才剥，否则原文；take(120) 截断
+                String stripped = statementComment;
+                if (stripped.startsWith("/* ") && stripped.endsWith(" */")) {
+                    stripped = stripped.substring(3, stripped.length() - 3);
+                }
+                notes.add(stripped.substring(0, Math.min(120, stripped.length())));
+            }
+        }
+        for (kotlin.Pair<String, String> marker : Degradations.DEGRADATION_MARKERS) {
+            if (sql.contains(marker.getFirst())) {
+                notes.add(marker.getSecond());
+            }
+        }
+        return List.copyOf(notes);
+    }
+
+    /** Kotlin private object Degradations 等价。 */
+    private static final class Degradations {
+        /** 标记 → 展示文案（顺序即输出顺序，保证产物稳定可断言）。 */
+        static final List<kotlin.Pair<String, String>> DEGRADATION_MARKERS = List.of(
+                new kotlin.Pair<>("关联字段，需 JOIN", "关联字段路径需 JOIN（已保留原文）"),
+                new kotlin.Pair<>("推断的ON条件，请验证", "JOIN ON 条件为推断值，需人工验证"),
+                new kotlin.Pair<>("实体不可解析", "存在无法解析的实体（列清单未展开）"),
+                new kotlin.Pair<>("ON 条件中的", "ON 条件含未映射限定符"),
+                new kotlin.Pair<>("HQL 高级特性", "HQL 高级特性（CTE/UNION/INSERT-SELECT）仅透传"),
+                new kotlin.Pair<>("@Inheritance(", "继承策略与单表列口径不一致"),
+                new kotlin.Pair<>("MEMBER OF", "MEMBER OF 未转成 SQL"),
+                new kotlin.Pair<>("副表", "副表列元数据缺失，已按别名.* 降级"));
+
+        private Degradations() {
+        }
     }
 
     // ------------------------------------------------------------------
