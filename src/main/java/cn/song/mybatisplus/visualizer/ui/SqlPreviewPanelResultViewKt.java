@@ -215,6 +215,8 @@ public final class SqlPreviewPanelResultViewKt {
         PreviewResult result = cn.song.mybatisplus.visualizer.sql.PreviewDialectResolver
                 .withResolvedDialect(input, p.project);
         p.current = result;
+        // UI-004：新预览的结果区是干净的，旧方言提示不跨预览残留。
+        p.lastDialectGateMessage = null;
         // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
         p.executionDialectRenderMode = p.project != null
                 ? (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(p.project)
@@ -241,6 +243,10 @@ public final class SqlPreviewPanelResultViewKt {
         for (ConditionView view : conditionViews) {
             if (view.getValueSource() != null) p.paramValues.putIfAbsent(view.getValueSource(), "");
         }
+        // T-RuntimeSlotFill 券 C：运行期占位值随新预览整表清空（D-6：不跨预览持久化）——
+        // 旧占位 id 的值若残留，新预览里同 id 的占位会被「莫名其妙地填上」。
+        p.slotValues.clear();
+        p.slotRenderWarnings = List.of();
         // 动态条件启用集合初始化（M13：复选框纯手动）——仅按 defaultEnabled，值空不联动勾选态
         p.enabledIds.clear();
         for (ConditionView view : conditionViews) {
@@ -297,6 +303,8 @@ public final class SqlPreviewPanelResultViewKt {
         updateDiagramTab(p, result);
         // F-45：更新列信息标签页（仅 <pages> 预览时显示）
         updateColumnInfoTab(p, result);
+        // T-PagesHql：HQL 转换前的原文标签页（仅转换过的预览显示）
+        updateOriginalSqlTab(p, result);
         // O-4：缓存当前 SQL 供下次 Compare
         p.previousSql = p.editor != null ? p.editor.getDocument().getText() : null;
         // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
@@ -626,6 +634,68 @@ public final class SqlPreviewPanelResultViewKt {
     }
 
     /**
+     * T-PagesHql：根据当前预览结果更新「原文」标签页。
+     *
+     * <p>仅当 {@code PreviewResult.originalSql} 非空（HQL/JPQL 被转换过）时显示；连续预览不同语句时
+     * 替换内容，非 HQL 预览则移除页签并恢复纯 SQL 视图。原文只读、等宽字体、不参与编辑/执行。</p>
+     */
+    public static void updateOriginalSqlTab(@NotNull SqlPreviewPanel p, PreviewResult result) {
+        String original = result.getOriginalSql();
+        if (original == null || original.isBlank()) {
+            removeOriginalSqlTab(p);
+            return;
+        }
+        ensureTabbedContent(p, false);
+        JTabbedPane tabPane = p.contentTabPane;
+        if (tabPane == null) return;
+        JComponent panel = buildOriginalSqlPanel(original);
+        Integer existing = null;
+        for (int i = 0; i < tabPane.getTabCount(); i++) {
+            if (SqlPreviewPanel.ORIGINAL_SQL_TAB_TITLE.equals(tabPane.getTitleAt(i))) {
+                existing = i;
+                break;
+            }
+        }
+        if (existing == null) {
+            tabPane.addTab(SqlPreviewPanel.ORIGINAL_SQL_TAB_TITLE, panel);
+        } else {
+            tabPane.setComponentAt(existing, panel);
+        }
+    }
+
+    /** 构建原文只读面板（等宽字体 + 不折行，便于与转换后 SQL 逐行对照）。 */
+    public static JComponent buildOriginalSqlPanel(String text) {
+        javax.swing.JTextArea area = new javax.swing.JTextArea(text);
+        area.setEditable(false);
+        area.setLineWrap(false);
+        area.setFont(com.intellij.openapi.editor.colors.EditorColorsManager.getInstance()
+                .getGlobalScheme().getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN));
+        area.setBorder(com.intellij.util.ui.JBUI.Borders.empty(6));
+        area.setCaretPosition(0);
+        return new JBScrollPane(area);
+    }
+
+    /** 移除原文标签页（只剩 SQL 时恢复纯 SQL 视图）。 */
+    public static void removeOriginalSqlTab(@NotNull SqlPreviewPanel p) {
+        JTabbedPane tabPane = p.contentTabPane;
+        if (tabPane == null) return;
+        for (int i = tabPane.getTabCount() - 1; i >= 0; i--) {
+            if (SqlPreviewPanel.ORIGINAL_SQL_TAB_TITLE.equals(tabPane.getTitleAt(i))) {
+                tabPane.removeTabAt(i);
+                break;
+            }
+        }
+        if (tabPane.getTabCount() == 1) {
+            Component sqlContent = tabPane.getComponentAt(0);
+            p.remove(tabPane);
+            p.add(sqlContent, BorderLayout.CENTER);
+            p.contentTabPane = null;
+            p.revalidate();
+            p.repaint();
+        }
+    }
+
+    /**
      * 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。
      * M34 回归修复：原生 SQL 高亮迁移后 Editor/PSI 对象在预览切换间复用（文档不变），
      * 三级回退的 Document→Context 映射需随上下文刷新同步更新，否则落入旧预览的过期表/列。
@@ -637,6 +707,10 @@ public final class SqlPreviewPanelResultViewKt {
         }
         if (result.getTableName() != null) {
             metaParts.add(MpSqlVisualizerBundle.message("panel.meta.table") + ": " + result.getTableName());
+        }
+        // T-PagesHql：源语言非 SQL 时明示「已转换」（用户投诉的一半是「不知道插件做了什么」）
+        if (result.getSourceLanguage() != cn.song.mybatisplus.visualizer.model.SourceLanguage.SQL) {
+            metaParts.add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.getSourceLanguage().name()));
         }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         if (result.getXmlModel() != null) {
