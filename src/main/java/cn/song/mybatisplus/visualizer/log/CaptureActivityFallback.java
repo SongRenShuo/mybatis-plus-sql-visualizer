@@ -53,6 +53,18 @@ public final class CaptureActivityFallback {
     private static final Object LOCK = new Object();
     private static long pausedSinceMs = 0L;
     private static long lastAgentEventMs = 0L;
+
+    /**
+     * T-CaptureGateStability P2（2026-11-05 真机实测）：本纪元内是否**收到过** agent 事件。
+     *
+     * <p>回落机制要防的是「白名单漏驱动 → agent 从头到尾零事件 → 双通道全哑」，与「用户手点间隔长」
+     * 是两回事。原判据只有「静默 ≥10s + 控制台有 SQL」，于是正常操作间隔超过 10 秒就解封一次，
+     * 解封瞬间的 SQL 由控制台捕获、产出一条无耗时/无位置的条目（实测每次间隔调用都发生）。</p>
+     *
+     * <p>收到过任何一条事件即证明织入器在工作，此后不再允许回落；真断线由 {@code online=false} 那条路径
+     * 恢复桥，不会双哑。纪元切换（闸门置假）时清零，下一次接管重新起算。</p>
+     */
+    private static boolean everReceivedAgentEvent = false;
     private static long lastConsoleSqlMs = 0L;
 
     private static volatile boolean active = false;
@@ -145,6 +157,7 @@ public final class CaptureActivityFallback {
             boolean wasActive;
             synchronized (LOCK) {
                 lastAgentEventMs = now;
+                everReceivedAgentEvent = true; // P2：收到过即证明织入在工作，此后不再回落
                 wasActive = active;
                 if (wasActive) {
                     active = false;
@@ -212,6 +225,8 @@ public final class CaptureActivityFallback {
 
     /** 解封判据（须在 LOCK 内调用）：静默 ≥ 阈值 且 窗口内控制台实证有 SQL 行。 */
     private static boolean engageConditionMet(long now, boolean sqlSeen, long threshold) {
+        // P2：本纪元收到过任何 agent 事件 → 织入器在工作，静默只是「没人操作」，不回落。
+        if (everReceivedAgentEvent) return false;
         long silenceStart = Math.max(pausedSinceMs, lastAgentEventMs);
         boolean silentLongEnough = now - silenceStart >= threshold;
         boolean consoleHasSql = sqlSeen || (lastConsoleSqlMs > 0L && now - lastConsoleSqlMs <= threshold);
@@ -230,6 +245,7 @@ public final class CaptureActivityFallback {
         pausedSinceMs = 0L;
         lastAgentEventMs = 0L;
         lastConsoleSqlMs = 0L;
+        everReceivedAgentEvent = false; // P2：新一次接管从零起算，不继承上一纪元的「收到过」
     }
 
     /** 测试收尾：状态 + 注入点 + 计数全部复位（master internal——测试同包可达）。 */

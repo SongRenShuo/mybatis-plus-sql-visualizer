@@ -48,6 +48,14 @@ final class BridgeLineContext {
     Supplier<String> line0Reader;
 
     /**
+     * 控制台文档总长度读取函数（券 G2 重置判定用；editor/文档不可得时为 null）。
+     *
+     * <p>只在守卫 stamp 变分支惰性求值（流式/纯重放热路径零反射调用）；复用 attachReplayGuard
+     * 已解析的 {@code getCharsSequence} 句柄取 {@code .length()}——免拷贝视图的长度读，无全文档扫描成本。</p>
+     */
+    java.util.function.Supplier<Integer> docLengthReader;
+
+    /**
      * 重放丢弃行累计计数（T-RA-03：面板链路诊断行经 {@link SqlLogConsoleBridge#getReplayDropCount()} 读取）。
      *
      * <p>AtomicLong 而非普通 long：自增在控制台出线程（filter 回调），读取在 EDT（诊断定时器），

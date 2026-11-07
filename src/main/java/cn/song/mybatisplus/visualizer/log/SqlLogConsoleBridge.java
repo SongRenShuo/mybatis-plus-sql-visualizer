@@ -515,6 +515,18 @@ public class SqlLogConsoleBridge {
      * 在 EDT 冲刷同一套解析器状态 → 以 ctx 为锁互斥（同线程重入无副作用；无 Swing 调用，不构成 EDT 死锁面）。
      */
     private void handleConsoleLine(Object console, long generation, String line, int endOffset) {
+        // T-SqlListCatchup 券E：逐行处理探针——整方法入环采样（守卫短路行也计：平台 filter 链为
+        // 每一行支付的**总**成本才是控制台输出线程的账单；风暴期每条 SQL 约 8-10 行噪音行，
+        // 行速率数万/秒，每行成本此前无读数）。环形采样走券D 分布设施；阈值 INFO 沿用
+        // LogPerfProbe 既有模式（≥100ms 单行才留痕，常态零输出）。
+        LogPerfProbe.measure("LogBridge.handleLine", () -> "chars=" + line.length(), () -> {
+            handleConsoleLineBody(console, generation, line, endOffset);
+            return null;
+        });
+    }
+
+    /** 券E 拆出：handleConsoleLine 的实际处理体（外壳负责逐行打点）。 */
+    private void handleConsoleLineBody(Object console, long generation, String line, int endOffset) {
         BridgeLineContext context = consoleContexts.get(console);
         if (context == null) {
             return;
@@ -551,7 +563,10 @@ public class SqlLogConsoleBridge {
                         line,
                         // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
                         // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
-                        context.line0Reader) == ConsoleReplayGuard.Decision.Replay) {
+                        context.line0Reader,
+                        // 券 G2：文档长度提供者惰性传递——只有 stamp 变分支才求值（clear/截断
+                        // 后的陈旧水位核销判据，见 ConsoleReplayGuard.decide KDoc）
+                        context.docLengthReader) == ConsoleReplayGuard.Decision.Replay) {
                     context.replayDropCount.incrementAndGet();
                 } else {
                     emitEntries(SqlLogConsoleBridgeKt.processConsoleLine(
@@ -588,6 +603,11 @@ public class SqlLogConsoleBridge {
     /** {@link #flushSettledEntries()} 的显式时间形态（默认实参 nowMs = 当前时刻的等价重载）。 */
     public int flushSettledEntries(long nowMs) {
         int produced = 0;
+        int skipped = 0;
+        // T-SqlListCatchup 券E：本拍入队前的待产出条目数 gauge（takeEntries 取出的即冲刷侧
+        // 真实积压——parsers 无 peek 出口，取出计数与「入队前」同刻）。每拍记录一次（含 0，
+        // 拍距即采样间隔）；环形分布走券D 设施，量纲为「条」（见 recordGauge KDoc）。
+        long beatBacklog = 0L;
         List<BridgeLineContext> snapshot;
         synchronized (consoleContexts) {
             snapshot = new java.util.ArrayList<>(consoleContexts.values());
@@ -595,21 +615,41 @@ public class SqlLogConsoleBridge {
         for (BridgeLineContext ctx : snapshot) {
             synchronized (ctx) {
                 ctx.jdbcParser.flushSettled(nowMs);
-                for (LogSqlEntry entry : ctx.jdbcParser.takeEntries()) {
-                    if (buffer.addEntry(entry)) {
+                java.util.List<LogSqlEntry> jdbcTaken = ctx.jdbcParser.takeEntries();
+                beatBacklog += jdbcTaken.size();
+                for (LogSqlEntry entry : jdbcTaken) {
+                    // T-CrossChannelDedupe §4.5：循环内复查闸门——外层判据只覆盖调用时刻，EDT 冲刷与
+                    // agent 接管沿之间仍有窗口；已封停就丢弃本拍冲刷条目（接管后由 agent 通道产出）。
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++;
+                        continue;
+                    }
+                    // T-CrossChannelDedupe §4.5：与 emitEntries 同款打通道标记——此前静默冲刷条目在
+                    // 归因诊断里显示「通道=UNKNOWN」，干扰现场裁决。
+                    if (buffer.addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE))) {
                         produced++;
                     }
                 }
                 // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
                 if (ctx.shardingEnabled) {
                     ctx.shardingParser.flushSettled(nowMs);
-                    for (LogSqlEntry entry : ctx.shardingParser.takeEntries()) {
-                        if (buffer.addEntry(entry)) {
+                    java.util.List<LogSqlEntry> shardingTaken = ctx.shardingParser.takeEntries();
+                    beatBacklog += shardingTaken.size();
+                    for (LogSqlEntry entry : shardingTaken) {
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++;
+                            continue;
+                        }
+                        if (buffer.addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE))) {
                             produced++;
                         }
                     }
                 }
             }
+        }
+        LogPerfProbe.recordGauge("LogBridge.settledBacklog", beatBacklog);
+        if (skipped > 0) {
+            LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 " + skipped + " 条（由 agent 通道产出）");
         }
         if (produced > 0) {
             LOG.info("flushSettledEntries: 静默冲刷待闭合条目 " + produced + " 条（语句行之后同线程再无后继行——"
@@ -686,6 +726,17 @@ public class SqlLogConsoleBridge {
                     return cachedLine0[0];
                 } catch (Throwable t) {
                     return null;
+                }
+            };
+            // 券 G2：文档长度读（clear/截断的陈旧水位核销判据）——复用同一 getCharsSequence
+            // 免拷贝视图取 .length()，无新反射句柄；不可得（反射桩缺该方法）时 MIN_VALUE = 守卫回退旧行为。
+            ctx.docLengthReader = () -> {
+                try {
+                    Object charsObj = getCharsSequence.invoke(doc);
+                    CharSequence chars = charsObj instanceof CharSequence cs ? cs : null;
+                    return chars != null ? chars.length() : Integer.MIN_VALUE;
+                } catch (Throwable t) {
+                    return Integer.MIN_VALUE;
                 }
             };
         } catch (Throwable t) {
