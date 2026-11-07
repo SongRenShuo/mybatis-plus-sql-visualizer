@@ -55,7 +55,10 @@ public final class AgentEventAdapter {
         for (Triple<Integer, String, String> p : sorted) {
             params.add(new LogSqlParam(p.getSecond(), p.getThird()));
         }
-        String restored = restore(event.sql(), params);
+        // T-DateLiteralBackfill：还原期就按目标方言门禁日期族字面量（SQL Server/SQLite 回落引号），
+        // 与列表显示 / 复制 / 去重键同口径——不能等面板再修。
+        String dialectName = cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(event.url());
+        String restored = restore(event.sql(), params, dialectName);
         return new LogSqlEntry(
             event.sql(),
             restored,
@@ -87,7 +90,7 @@ public final class AgentEventAdapter {
             // T-DialectInferFix：同一条 URL 另存**注册方言名**（渲染命名空间）——日志/历史双击预览
             // 用它当 EXACT 方言证据；与角标显示名分开，避免 HSQL/GBASE 这类无注册方言的名字被
             // byName 静默回落 MySQL。
-            cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(event.url()),
+            dialectName,
             // R10 T-ShardingSphereCompat：agent 通道无 Actual SQL 附注，null
             null,
             // 通道归因打标——agent 事件适配产物恒为 AGENT
@@ -99,6 +102,14 @@ public final class AgentEventAdapter {
      * 占位符数 != 参数数 → 原样返回（防错位误替换）；跳过引号字面量内的 {@code ?}。
      */
     public static String restore(String sql, List<LogSqlParam> params) {
+        return restore(sql, params, null);
+    }
+
+    /**
+     * T-DateLiteralBackfill：日期族类型标注改由 SqlDateLiteral.renderFor 产出 ANSI 类型字面量
+     * （与 LogSqlRestorer 同口径）；dialectName 用于 SQL Server/SQLite 门禁。
+     */
+    public static String restore(String sql, List<LogSqlParam> params, String dialectName) {
         if (params.isEmpty()) {
             return sql;
         }
@@ -134,7 +145,7 @@ public final class AgentEventAdapter {
             }
             if (c == '?') {
                 if (pi < params.size()) {
-                    out.append(renderParam(params.get(pi)));
+                    out.append(renderParam(params.get(pi), dialectName));
                     pi++;
                 } else {
                     out.append(c);
@@ -174,14 +185,20 @@ public final class AgentEventAdapter {
         return n;
     }
 
-    private static String renderParam(LogSqlParam p) {
-        if (p.value() == null) {
+    private static String renderParam(LogSqlParam p, String dialectName) {
+        String value = p.value();
+        if (value == null) {
             return "NULL";
         }
-        if (isNumericLike(p.value()) && isNumericType(p.type())) {
-            return p.value();
+        // T-DateLiteralBackfill：日期族先产 ANSI 类型字面量（形态不匹配返回 null → 继续走既有分支）
+        String dateLiteral = cn.song.mybatisplus.visualizer.sql.SqlDateLiteral.renderFor(value, p.type(), dialectName);
+        if (dateLiteral != null) {
+            return dateLiteral;
         }
-        return "'" + p.value().replace("'", "''") + "'";
+        if (isNumericLike(value) && isNumericType(p.type())) {
+            return value;
+        }
+        return "'" + value.replace("'", "''") + "'";
     }
 
     /** T-PS4-04：正则提常量（每参数两处现场编译 → 类级单例；T-PerfSweep F2 惯例）。 */
