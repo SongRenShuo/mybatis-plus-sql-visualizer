@@ -16,7 +16,8 @@ import org.junit.Test
  * 立项现场：同一条 `INSERT INTO sys_operation_log` 在面板出现两行——一行 `8ms [SQL Server] (1 rows)
  * [Opera…]`（agent 通道），一行耗时/库标/行数/位置全 `—`（控制台通道）。两条同秒、同参数，只是
  * `dedupeKey`（参数还原后的 SQL 指纹）不相等：两套还原器在布尔参数、日期族、块注释内 `?`、参数个数
- * 守卫、全限定类型名上口径分叉。
+ * 守卫、全限定类型名上口径分叉。日期族口径已由 T-DateLiteralBackfill 收敛（两侧同产 ANSI 类型字面量），
+ * 本文件保留其余分叉的兜底守卫。
  *
  * 本文件每个用例都走**真实链路**（不手写 restoredSql 自证——`AgentEventAdapterTest` 的自证用例正是
  * 当年漏掉跨通道失配的原因）：
@@ -81,6 +82,7 @@ class CrossChannelDedupeTest {
         updateCount: Long? = 1L,
         sourceFile: String? = "src/main/java/com/example/UserService.java",
         sourceLine: Int = 42,
+        url: String = "jdbc:sqlserver://localhost:1433;databaseName=demo",
     ): LogSqlEntry = AgentEventAdapter.toEntry(
         AgentEvent(
             sql = sql,
@@ -94,7 +96,7 @@ class CrossChannelDedupeTest {
             requestTag = null,
             params = params,
             threadName = "main",
-            url = "jdbc:sqlserver://localhost:1433;databaseName=demo",
+            url = url,
         ),
     )
 
@@ -145,7 +147,8 @@ class CrossChannelDedupeTest {
     @Test
     fun `日期参数_跨通道折叠为一行并取agent字段`() {
         val sql = "INSERT INTO sys_operation_log (create_time) VALUES (?)"
-        // 控制台还原 ANSI 字面量 TIMESTAMP '…'；agent 无日期族规则 → '…' 引号串
+        // T-DateLiteralBackfill：控制台产 ANSI 字面量；agent 侧本夹具是 SQL Server（门禁回落引号），
+        // 分叉由兜底键折叠——Oracle/PG 等方言的同口径断言见下一用例
         val (buffer, _) = runConsoleThenAgent(
             sql = sql,
             consoleParams = "2026-11-05 11:37:20.0(Timestamp)",
@@ -155,9 +158,9 @@ class CrossChannelDedupeTest {
     }
 
     @Test
-    fun `LocalDateTime参数_ISO的T未归一_跨通道折叠为一行`() {
+    fun `LocalDateTime参数_SQLServer门禁回落引号_跨通道折叠为一行`() {
         val sql = "INSERT INTO sys_operation_log (create_time) VALUES (?)"
-        // 控制台 normalizeTs 把 ISO 的 'T' 归一为空格并产出 ANSI 字面量；agent 只加引号，'T' 原样保留
+        // 控制台 normalizeTs 把 ISO 的 'T' 归一为空格并产出 ANSI 字面量；agent 侧 SQL Server 门禁回落引号
         val (buffer, _) = runConsoleThenAgent(
             sql = sql,
             consoleParams = "2026-11-05T11:37:20(LocalDateTime)",
@@ -166,11 +169,30 @@ class CrossChannelDedupeTest {
         assertFoldedToAgentFacts(buffer, "LocalDateTime")
     }
 
+    @Test
+    fun `Oracle方言_日期族两侧同键`() {
+        // T-DateLiteralBackfill：Oracle 不走门禁，agent 还原与 LogSqlRestorer 同产 ANSI 字面量，
+        // 两侧 dedupeKey 直接相等（不再依赖兜底键）
+        val sql = "INSERT INTO sys_operation_log (create_time) VALUES (?)"
+        val console = consoleEntries(
+            "==>  Preparing: $sql",
+            "==> Parameters: 2026-11-05 11:37:20.0(Timestamp)",
+        ).single()
+        val agent = agentEntry(
+            sql,
+            listOf(Triple(1, "2026-11-05 11:37:20.0", "Timestamp")),
+            url = "jdbc:oracle:thin:@localhost:1521/FREEPDB1",
+        )
+        assertTrue("两侧都是 ANSI 字面量", agent.restoredSql.contains("TIMESTAMP '2026-11-05 11:37:20.0'"))
+        assertEquals("两侧 dedupeKey 同键", console.dedupeKey, agent.dedupeKey)
+    }
+
     /**
      * **贴近现场的 12 参数 INSERT**（复现代理实测形态，2026-11-05）：`sys_operation_log` 一次插入，
      * 两侧 rawSql 完全一致，还原后**只有第 10、11 个参数不同**——`setBoolean` 控制台 `true` / agent
-     * `'true'`，`setTimestamp` 控制台 `TIMESTAMP '…'` / agent `'…'`。也就是说「表里有一条 bit 或
-     * datetime 列」就必然分叉，与 @Async、SQL Server 方言无关。
+     * `'true'`，`setTimestamp` 控制台 `TIMESTAMP '…'` / agent `'…'`（本夹具 URL 是 SQL Server，
+     * T-DateLiteralBackfill 的方言门禁让 agent 回落引号；控制台侧无门禁是 P2 既有缺口）。
+     * 也就是说「表里有一条 bit 或 datetime 列」就必然分叉，与 @Async 无关。
      *
      * 本用例先把两处分叉钉成断言（防日后还原器口径收敛后此用例变成空转），再断言兜底折成一行。
      */
@@ -202,7 +224,7 @@ class CrossChannelDedupeTest {
         assertEquals("两侧 rawSql 必须一致", console.rawSql, agent.rawSql)
         assertTrue("控制台布尔直出", console.restoredSql.contains("true, TIMESTAMP"))
         assertTrue("控制台日期族 ANSI 字面量", console.restoredSql.contains("TIMESTAMP '2026-11-05 11:37:20.0'"))
-        assertTrue("agent 布尔加引号", agent.restoredSql.contains("'true', '2026-11-05 11:37:20.0'"))
+        assertTrue("agent 布尔加引号（SQL Server 门禁：日期族回落引号）", agent.restoredSql.contains("'true', '2026-11-05 11:37:20.0'"))
         assertNotEquals("两侧 dedupeKey 分叉", console.dedupeKey, agent.dedupeKey)
 
         buffer.addEntry(console)

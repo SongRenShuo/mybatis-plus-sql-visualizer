@@ -177,6 +177,40 @@ class AgentEventAdapterTest {
     }
 
     @Test
+    fun 日期族参数还原为ANSI字面量() {
+        // T-DateLiteralBackfill：agent 还原链与 LogSqlRestorer 同口径（ISO T 归一 + ANSI 包装）
+        val restored = AgentEventAdapter.restore(
+            "UPDATE t SET update_time = ? WHERE id = ?",
+            listOf(LogSqlParam("2026-11-07T13:20:14.417", "LocalDateTime"), LogSqlParam("1", "Long")),
+        )
+        assertEquals(
+            "UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417' WHERE id = 1",
+            restored,
+        )
+    }
+
+    @Test
+    fun SQLServer方言_日期族回落引号() {
+        // T-SQL 不支持 ANSI 类型字面量；SQL Server 的 ISO 8601 引号串本来就能隐式转换
+        val restored = AgentEventAdapter.restore(
+            "UPDATE t SET update_time = ?",
+            listOf(LogSqlParam("2026-11-07T13:20:14.417", "LocalDateTime")),
+            dialectName = "SQL Server",
+        )
+        assertEquals("UPDATE t SET update_time = '2026-11-07T13:20:14.417'", restored)
+    }
+
+    @Test
+    fun 字符串日期形值_仍加引号() {
+        // 无日期族类型标注 → 不能启发式包装（字符串列语义）
+        val restored = AgentEventAdapter.restore(
+            "SELECT * FROM t WHERE code = ?",
+            listOf(LogSqlParam("2026-11-07", "String")),
+        )
+        assertEquals("SELECT * FROM t WHERE code = '2026-11-07'", restored)
+    }
+
+    @Test
     fun dedupeKey与桥通道一致_同一SQL同指纹() {
         // 口径：dedupeKey 只管面板去重（两侧**手写同一 restoredSql** 时同指纹）。
         // 注意本用例不是「跨通道集成」守卫——它不经过控制台解析链，故过去的失配（布尔参数渲染、

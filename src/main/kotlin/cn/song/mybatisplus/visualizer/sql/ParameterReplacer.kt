@@ -71,6 +71,7 @@ object ParameterReplacer {
      * @param paramValues 参数值映射（source → 用户输入值）
      * @param hints      与 [sources] 并行的回填提示（引号规则）；缺失走启发式
      * @param protectedSpans 不回填的区间（运行期占位已占用的文本范围）
+     * @param dialectName 当前方言名（日期族 ANSI 字面量门禁；null=未知，按支持处理）
      * @return 替换后的可执行 SQL
      */
     fun buildExecutableSql(
@@ -79,6 +80,7 @@ object ParameterReplacer {
         paramValues: Map<String, String>,
         hints: List<ParamHint> = emptyList(),
         protectedSpans: List<IntRange> = emptyList(),
+        dialectName: String? = null,
     ): String {
         if (sources.isEmpty()) return sql
         val allPositions = placeholderPositions(sql)
@@ -96,7 +98,7 @@ object ParameterReplacer {
             sb.append(sql, prev, pos)
             val source = sources.getOrNull(paramIndex)
             val value = source?.let { paramValues[it] }
-            sb.append(renderValue(value, hints.getOrNull(paramIndex)))
+            sb.append(renderValue(value, hints.getOrNull(paramIndex), dialectName))
             paramIndex++
             prev = pos + 1
         }
@@ -105,11 +107,15 @@ object ParameterReplacer {
     }
 
     /**
-     * 单值渲染：按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。
-     * 空值/空白 → 返回 `?`（保留占位符）。
+     * 单值渲染：日期族（[ParamHint.temporal]）先试 ANSI 类型字面量；否则按 [ParamHint.quote]
+     * 决定引号规则；值中单引号转义为 `''`。空值/空白 → 返回 `?`（保留占位符）。
      */
-    private fun renderValue(value: String?, hint: ParamHint?): String {
+    private fun renderValue(value: String?, hint: ParamHint?, dialectName: String? = null): String {
         if (value.isNullOrBlank()) return "?"
+        // LIKE 是字符串语义，优先于日期族（面板 renderParamValue 已先行分流；此处防御直接调用）
+        if (hint?.temporal == true && hint.likePosition == null) {
+            SqlDateLiteral.renderByShape(value, dialectName)?.let { return it }
+        }
         val escaped = value.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"
@@ -141,6 +147,7 @@ object ParameterReplacer {
      * @param paramValues 参数值映射（source → 用户输入值）；source 即命名参数名
      * @param hints       参数名 → 引号提示；缺失走启发式（数值裸 / 字符串引号）
      * @param protectedSpans T-RuntimeSlotFill 券 B：不回填的区间（运行期占位已占用的文本范围）
+     * @param dialectName 当前方言名（日期族 ANSI 字面量门禁；null=未知，按支持处理）
      * @return 替换后的 SQL
      */
     fun replaceNamedParams(
@@ -148,6 +155,7 @@ object ParameterReplacer {
         paramValues: Map<String, String>,
         hints: Map<String, ParamHint>,
         protectedSpans: List<IntRange> = emptyList(),
+        dialectName: String? = null,
     ): String {
         if (paramValues.isEmpty() || hints.isEmpty()) return sql
         if (protectedSpans.isEmpty()) {
@@ -157,7 +165,7 @@ object ParameterReplacer {
                 if (value.isNullOrBlank()) {
                     m.value // 空值 → 原样保留 `:name`
                 } else {
-                    renderNamedValue(value, hints[name])
+                    renderNamedValue(value, hints[name], dialectName)
                 }
             }
         }
@@ -169,15 +177,21 @@ object ParameterReplacer {
             val name = matcher.group(1)
             val value = paramValues[name]
             if (value.isNullOrBlank()) continue
-            sb.append(sql, prev, matcher.start()).append(renderNamedValue(value, hints[name]))
+            sb.append(sql, prev, matcher.start()).append(renderNamedValue(value, hints[name], dialectName))
             prev = matcher.end()
         }
         sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 
-    /** 命名参数单值渲染：按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。 */
-    private fun renderNamedValue(value: String, hint: ParamHint?): String {
+    /**
+     * 命名参数单值渲染：日期族（[ParamHint.temporal]）先试 ANSI 类型字面量；否则按
+     * [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。
+     */
+    private fun renderNamedValue(value: String, hint: ParamHint?, dialectName: String? = null): String {
+        if (hint?.temporal == true && hint.likePosition == null) {
+            SqlDateLiteral.renderByShape(value, dialectName)?.let { return it }
+        }
         val escaped = value.replace("'", "''")
         return when {
             hint?.quote == true -> "'$escaped'"
@@ -333,7 +347,7 @@ object ParameterReplacer {
     ): RuntimeSlotRender {
         val hasNamed = namedHints.isNotEmpty() && paramValues.isNotEmpty()
         if (slots.isEmpty() && !hasNamed) {
-            return RuntimeSlotRender(buildExecutableSql(sql, sources, paramValues, hints))
+            return RuntimeSlotRender(buildExecutableSql(sql, sources, paramValues, hints, dialectName = dialectName))
         }
         val context = RenderContext(dialectName)
         val warnings = mutableListOf<SlotWarning>()
@@ -394,7 +408,7 @@ object ParameterReplacer {
                 }
                 c == '?' -> {
                     val source = sources.getOrNull(paramIndex)
-                    val rendered = renderValue(source?.let { paramValues[it] }, hints.getOrNull(paramIndex))
+                    val rendered = renderValue(source?.let { paramValues[it] }, hints.getOrNull(paramIndex), context.dialectName)
                     paramIndex++
                     out.append(rendered)
                     i++
@@ -406,7 +420,7 @@ object ParameterReplacer {
                         if (value.isNullOrBlank()) {
                             out.append(sql, i, namedMatcher.end())
                         } else {
-                            out.append(renderNamedValue(value, namedHints[namedMatcher.group(1)]))
+                            out.append(renderNamedValue(value, namedHints[namedMatcher.group(1)], context.dialectName))
                         }
                         i = namedMatcher.end()
                     } else {

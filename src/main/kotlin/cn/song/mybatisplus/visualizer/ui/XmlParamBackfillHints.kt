@@ -34,9 +34,15 @@ internal fun xmlBackfillHints(
         ParamHint(
             quote = info.elementKind?.quoteRequired ?: xml.quoteFor(source) ?: true,
             inList = true,
+            // T-DateLiteralBackfill：List<LocalDate>/List<LocalDateTime> 的每个元素产 ANSI 字面量
+            temporal = info.elementKind == ParamKind.TEMPORAL,
         )
     } else {
-        ParamHint(quote = xml.quoteFor(source) ?: true, inList = index in shapeInListIndices)
+        ParamHint(
+            quote = xml.quoteFor(source) ?: true,
+            inList = index in shapeInListIndices,
+            temporal = info?.kind == ParamKind.TEMPORAL,
+        )
     }
 }
 

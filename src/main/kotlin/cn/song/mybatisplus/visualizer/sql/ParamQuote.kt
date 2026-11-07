@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.sql
 
+import cn.song.mybatisplus.visualizer.model.LikePosition
+
 /**
  * 参数回填引号判定（M23，T-M23-03）：按实体字段类型决定回填值时是否加引号。
  *
@@ -34,4 +36,25 @@ object ParamQuote {
         val simple = fieldType.substringAfterLast('.')
         return if (simple in NUMERIC_TYPES) false else true
     }
+
+    /**
+     * 字段类型是否日期族（T-DateLiteralBackfill）：与 [SqlDateLiteral.isTemporalType] 同一张类型表，
+     * 供各模型链构造 [ParamHint.temporal]。
+     */
+    fun isTemporal(fieldType: String?): Boolean = SqlDateLiteral.isTemporalType(fieldType)
+
+    /**
+     * 构造回填提示（引号 + 日期族标记一次算出）：各模型链的 `ParamHint(quote = ParamQuote.decide(...))`
+     * 统一改走本工厂，避免「引号带了、temporal 漏了」的口径分叉。
+     */
+    fun hint(
+        fieldType: String?,
+        likePosition: LikePosition? = null,
+        inList: Boolean = false,
+    ): ParamHint = ParamHint(
+        quote = decide(fieldType),
+        likePosition = likePosition,
+        inList = inList,
+        temporal = isTemporal(fieldType),
+    )
 }

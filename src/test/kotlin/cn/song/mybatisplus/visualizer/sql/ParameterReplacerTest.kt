@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.sql
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
@@ -635,5 +636,56 @@ class ParameterReplacerTest {
         assertEquals("SELECT * FROM t WHERE (9) = (9)", result.sql)
         assertEquals(listOf("rt1"), result.appliedSlotIds)
         assertTrue("应记下两段替换区间", result.protectedSpans.isNotEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-DateLiteralBackfill：日期族 ANSI 字面量
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `buildExecutableSql_日期族参数产出ANSI字面量`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "UPDATE t SET update_time = ? WHERE id = ?",
+            sources = listOf("updateTime", "id"),
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417", "id" to "1"),
+            hints = listOf(ParamHint(quote = true, temporal = true), ParamHint(quote = false)),
+        )
+        assertEquals(
+            "UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417' WHERE id = 1",
+            result,
+        )
+    }
+
+    @Test
+    fun `buildExecutableSql_SQLServer日期族回落引号`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "UPDATE t SET update_time = ?",
+            sources = listOf("updateTime"),
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417"),
+            hints = listOf(ParamHint(quote = true, temporal = true)),
+            dialectName = "SQL Server",
+        )
+        assertEquals("UPDATE t SET update_time = '2026-11-07T13:20:14.417'", result)
+    }
+
+    @Test
+    fun `命名参数_日期族产出ANSI字面量`() {
+        val result = ParameterReplacer.replaceNamedParams(
+            sql = "UPDATE t SET update_time = :updateTime",
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417"),
+            hints = mapOf("updateTime" to ParamHint(quote = true, temporal = true)),
+        )
+        assertEquals("UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417'", result)
+    }
+
+    @Test
+    fun `日期族_LIKE优先_仍按字符串引号`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "SELECT * FROM t WHERE name LIKE ?",
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "2026-11-07"),
+            hints = listOf(ParamHint(quote = true, temporal = true, likePosition = LikePosition.ANYWHERE)),
+        )
+        assertEquals("SELECT * FROM t WHERE name LIKE '2026-11-07'", result)
     }
 }

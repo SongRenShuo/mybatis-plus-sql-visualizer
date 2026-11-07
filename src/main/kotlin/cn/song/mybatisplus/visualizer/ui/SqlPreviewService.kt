@@ -1340,24 +1340,40 @@ class SqlPreviewService(internal val project: Project) {
     internal fun isNumericParam(method: PsiMethod?, paramName: String): Boolean {
         if (method == null) return false
         val param = method.parameterList.parameters.firstOrNull { it.name == paramName } ?: return false
-        val type = param.type
-        // 提取集合/数组元素类型
-        val elementType = when {
-            type is com.intellij.psi.PsiClassType -> {
-                val className = type.canonicalText
-                // 常见集合类型：Collection<X>, List<X>, Set<X>
-                val match = GENERIC_COLLECTION_TYPE.find(className)
-                if (match != null) match.groupValues[1] else className
-            }
-            type is com.intellij.psi.PsiArrayType -> type.componentType.canonicalText
-            else -> type.canonicalText
+        return NUMERIC_TYPES.any { paramElementTypeText(param.type).endsWith(it) }
+    }
+
+    /**
+     * T-DateLiteralBackfill：方法参数是否日期/时间族（含集合/数组元素类型）——JPA 预览的参数行
+     * 据此产出 ANSI 类型字面量（`LocalDateTime`/`Timestamp`/`Date` 等）。
+     */
+    internal fun isTemporalParam(method: PsiMethod?, paramName: String): Boolean {
+        if (method == null) return false
+        val param = method.parameterList.parameters.firstOrNull { it.name == paramName } ?: return false
+        return TEMPORAL_TYPES.any { paramElementTypeText(param.type).endsWith(it) }
+    }
+
+    /** 提取集合/数组元素类型文本（`List<LocalDateTime>` → `LocalDateTime`）；非集合取自身类型。 */
+    private fun paramElementTypeText(type: com.intellij.psi.PsiType): String = when {
+        type is com.intellij.psi.PsiClassType -> {
+            val className = type.canonicalText
+            // 常见集合类型：Collection<X>, List<X>, Set<X>
+            val match = GENERIC_COLLECTION_TYPE.find(className)
+            if (match != null) match.groupValues[1] else className
         }
-        return NUMERIC_TYPES.any { elementType.endsWith(it) }
+        type is com.intellij.psi.PsiArrayType -> type.componentType.canonicalText
+        else -> type.canonicalText
     }
 
     private val NUMERIC_TYPES = setOf(
         "Integer", "int", "Long", "long", "Short", "short", "Byte", "byte",
         "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number",
+    )
+
+    /** 日期/时间族类型简单名（与 [cn.song.mybatisplus.visualizer.sql.SqlDateLiteral] 同一口径）。 */
+    private val TEMPORAL_TYPES = setOf(
+        "LocalDate", "LocalDateTime", "LocalTime",
+        "Timestamp", "Date", "OffsetDateTime", "ZonedDateTime", "Instant",
     )
 
     /**

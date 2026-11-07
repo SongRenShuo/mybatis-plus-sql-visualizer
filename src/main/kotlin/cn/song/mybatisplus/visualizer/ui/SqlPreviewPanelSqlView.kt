@@ -158,7 +158,12 @@ internal fun SqlPreviewPanel.buildCompletionContext(): SqlCompletionContext = Sq
 internal fun SqlPreviewPanel.applyNamedParams(sql: String): String {
     val result = current ?: return sql
     if (result.namedParamHints.isEmpty()) return sql
-    return ParameterReplacer.replaceNamedParams(sql, paramValues, result.namedParamHints)
+    return ParameterReplacer.replaceNamedParams(
+        sql,
+        paramValues,
+        result.namedParamHints,
+        dialectName = result.effectiveDialect?.name,
+    )
 }
 
 /**

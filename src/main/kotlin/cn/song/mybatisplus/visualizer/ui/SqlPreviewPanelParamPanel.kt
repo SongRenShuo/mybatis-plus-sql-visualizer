@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.SqlDateLiteral
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
 import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
 import cn.song.mybatisplus.visualizer.sql.SlotKind
@@ -1955,6 +1956,11 @@ internal fun SqlPreviewPanel.hasSignatureTypeInfo(source: String?): Boolean =
 /** 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。 */
 
 internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?): String {
+    // T-DateLiteralBackfill：日期族优先走 ANSI 类型字面量（Oracle/达梦等裸引号隐式转换恒败），
+    // 形态不匹配或方言不支持时回落既有引号渲染。LIKE 已在 renderParamValue 先行分流，不进本函数。
+    if (hint?.temporal == true && hint.likePosition == null) {
+        SqlDateLiteral.renderByShape(raw, current?.effectiveDialect?.name)?.let { return it }
+    }
     val escaped = raw.replace("'", "''")
     return when {
         hint?.quote == true -> "'$escaped'"

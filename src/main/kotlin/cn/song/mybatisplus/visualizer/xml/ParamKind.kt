@@ -32,8 +32,10 @@ enum class ParamKind {
      * 派生引号视图（T-PT-01）：NUMBER 裸渲染、其余恒引号——与升级前
      * [cn.song.mybatisplus.visualizer.sql.ParamQuote.decide] 的布尔通道逐值等价。
      *
-     * 显式定案：TEMPORAL 走引号档（日期字面量在 SQL 中须引号包裹），不做日期特判——
-     * 升级前 `LocalDate` 即落引号档，本次只把该行为从「未命中数值集」升格为显式规则。
+     * TEMPORAL 的**最终字面量**由 T-DateLiteralBackfill 定案：不再只包引号，而是由
+     * [cn.song.mybatisplus.visualizer.sql.SqlDateLiteral] 产出 ANSI 类型字面量
+     * （`DATE '…'` / `TIMESTAMP '…'`；形态不匹配才回落引号）。[quoteRequired] 仍是 TEMPORAL 的
+     * **回退**口径（`ParamHint.quote`），temporal 标记单独走 `ParamHint.temporal`。
      */
     val quoteRequired: Boolean get() = this != NUMBER
 }

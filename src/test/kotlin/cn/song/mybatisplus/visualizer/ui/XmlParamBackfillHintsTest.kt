@@ -92,4 +92,30 @@ class XmlParamBackfillHintsTest {
         val hints = xmlBackfillHints(m, listOf("__frch_st_0"), emptySet())
         assertFalse(hints[0].inList)
     }
+
+    // ------------------------------------------------------------------
+    // T-DateLiteralBackfill：日期族 temporal 标记
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `日期族签名参数带temporal`() {
+        val m = model(mapOf("startDate" to ParamTypeInfo(ParamKind.TEMPORAL)))
+        val hints = xmlBackfillHints(m, listOf("startDate"), emptySet())
+        assertTrue("TEMPORAL 参数应带 temporal", hints[0].temporal)
+        assertTrue("TEMPORAL 仍走引号兜底", hints[0].quote == true)
+    }
+
+    @Test
+    fun `日期族集合元素带temporal`() {
+        val m = model(mapOf("taskTypeList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.TEMPORAL)))
+        val hints = xmlBackfillHints(m, listOf("taskTypeList"), emptySet())
+        assertTrue(hints[0].inList)
+        assertTrue("List<LocalDate> 元素应带 temporal", hints[0].temporal)
+    }
+
+    @Test
+    fun `非日期族参数不带temporal`() {
+        val m = model(mapOf("taskTypeList" to ParamTypeInfo(ParamKind.TEXT)))
+        assertFalse(xmlBackfillHints(m, listOf("taskTypeList"), emptySet())[0].temporal)
+    }
 }

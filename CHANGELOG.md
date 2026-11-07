@@ -2,6 +2,11 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Fixed
+- **日期时间参数回填改用 ANSI 类型字面量，Oracle 预览执行不再报 ORA-01843 / ORA-01861（T-DateLiteralBackfill）**：捕获到的 `LocalDateTime` 值按 `toString()` 是 ISO `T` 形态（`2026-11-07T13:20:14.417`），预览参数行此前只把它包成单引号串，Oracle 对 TIMESTAMP 列的隐式转换按 `NLS_TIMESTAMP_FORMAT` 解析，`T` 分隔符不被接受 → 执行报 ORA-01843；把 `T` 换成空格同样不够（`'2024-01-01 10:00:00.0'` 在 Oracle 11g/23 实测 ORA-01861）。现在日期族参数统一由 `SqlDateLiteral` 产出 ANSI 类型字面量——纯日期 `DATE '…'`、时间戳 `TIMESTAMP '…'`（ISO `T` 归一为空格、缺秒补 `:00`），覆盖面板参数行、复制可执行 SQL、导出/分享、增强捕获列表与 MP/批量/JPA/XML 模型链。形态不匹配或类型未知时仍回落原引号渲染，不会产生非法字面量。SQL Server / SQLite 因 T-SQL 与 SQLite 不支持 ANSI 类型字面量，按方言门禁维持引号形态（SQL Server 的 ISO 8601 引号串本来就能隐式转换）。R3 当时挂起的面板参数行路径（决策点 D1）由此定案为同步 ANSI 化。
+
 ## [2026.11.7] - 2026-11-07
 
 > 范围＝v2026.11.4 发行包之后的全部用户可见增量。本段由四个内测版（11.6-beta.1 / beta.2、11.7-beta.1 / beta.2）按能力面合并去重：自研框架页面 HQL 识别、Mapper 原生快捷键、空 Wrapper 与 JPA 预览锚点、磐维 PanWeiDB 方言与增强捕获、运行期 SQL 可填值五块新能力；跨通道去重、iBatis 参数、2026.3 热替换、运行期占位回填等修复；以及方言矩阵与 CI 的内部项。

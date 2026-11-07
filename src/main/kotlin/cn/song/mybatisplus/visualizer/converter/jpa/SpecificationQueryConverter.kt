@@ -532,7 +532,8 @@ object SpecificationQueryConverter {
         val args = call.argumentList.expressions
         if (args.size < 2) return rawCondition(call)
         val column = columnRef(args[0], lc) ?: return rawCondition(call)
-        val value = evaluateValue(args[1], lc, ParamQuote.decide(fieldTypeOf(args[0], lc)))
+        val fieldType = fieldTypeOf(args[0], lc)
+        val value = evaluateValue(args[1], lc, ParamQuote.decide(fieldType), temporal = ParamQuote.isTemporal(fieldType))
         return Condition.Simple(column, op, value)
     }
 
@@ -571,7 +572,13 @@ object SpecificationQueryConverter {
         val args = call.argumentList.expressions
         if (args.size < 3) return rawCondition(call)
         val column = columnRef(args[0], lc) ?: return rawCondition(call)
-        return Condition.Between(column, false, evaluateValue(args[1], lc), evaluateValue(args[2], lc))
+        val temporal = ParamQuote.isTemporal(fieldTypeOf(args[0], lc))
+        return Condition.Between(
+            column,
+            false,
+            evaluateValue(args[1], lc, temporal = temporal),
+            evaluateValue(args[2], lc, temporal = temporal),
+        )
     }
 
     /** cb.in(root.get("x"), v1, v2) / cb.in(x).value(v).value(v)。 */
@@ -631,7 +638,12 @@ object SpecificationQueryConverter {
     }
 
     /** 值表达式求值：字面量/可追踪变量内联；运行时值 `?` 占位 + 参数行登记。 */
-    private fun evaluateValue(expr: PsiExpression?, lc: LambdaContext, quoteHint: Boolean? = null): SqlValue {
+    private fun evaluateValue(
+        expr: PsiExpression?,
+        lc: LambdaContext,
+        quoteHint: Boolean? = null,
+        temporal: Boolean = false,
+    ): SqlValue {
         if (expr == null) return SqlValue.Placeholder("?")
         val value = if (lc.ctx.resolveVariables) {
             ExpressionEvaluator.evaluate(expr)
@@ -642,7 +654,7 @@ object SpecificationQueryConverter {
             is SqlValue.Literal -> value
             is SqlValue.Placeholder -> {
                 val source = expr.text.ifBlank { "?" }
-                lc.ctx.addParam(source, ParamHint(quote = quoteHint))
+                lc.ctx.addParam(source, ParamHint(quote = quoteHint, temporal = temporal))
                 SqlValue.Placeholder(source)
             }
         }
