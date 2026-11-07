@@ -2,7 +2,7 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.8-beta.1] - 2026-11-07
 
 ### Fixed
 - **日期时间参数回填改用 ANSI 类型字面量，Oracle 预览执行不再报 ORA-01843 / ORA-01861（T-DateLiteralBackfill）**：捕获到的 `LocalDateTime` 值按 `toString()` 是 ISO `T` 形态（`2026-11-07T13:20:14.417`），预览参数行此前只把它包成单引号串，Oracle 对 TIMESTAMP 列的隐式转换按 `NLS_TIMESTAMP_FORMAT` 解析，`T` 分隔符不被接受 → 执行报 ORA-01843；把 `T` 换成空格同样不够（`'2024-01-01 10:00:00.0'` 在 Oracle 11g/23 实测 ORA-01861）。现在日期族参数统一由 `SqlDateLiteral` 产出 ANSI 类型字面量——纯日期 `DATE '…'`、时间戳 `TIMESTAMP '…'`（ISO `T` 归一为空格、缺秒补 `:00`），覆盖面板参数行、复制可执行 SQL、导出/分享、增强捕获列表与 MP/批量/JPA/XML 模型链。形态不匹配或类型未知时仍回落原引号渲染，不会产生非法字面量。SQL Server / SQLite 因 T-SQL 与 SQLite 不支持 ANSI 类型字面量，按方言门禁维持引号形态（SQL Server 的 ISO 8601 引号串本来就能隐式转换）。R3 当时挂起的面板参数行路径（决策点 D1）由此定案为同步 ANSI 化。

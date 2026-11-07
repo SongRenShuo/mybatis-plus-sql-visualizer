@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.7",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.7/mybatis-plus-sql-visualizer-2026.11.7.zip",
-  "changeNotes": "自研框架页面的数据源自动识别 HQL 并转成可执行 SQL\nMapper 接口与 XML 语句支持 Ctrl+B 双向跳转\n空 Wrapper 与 JPA 的删除、更新调用也有预览图标\n新增磐维 PanWeiDB 的增强捕获与方言支持，未登记驱动会点名\n运行期拼接的 SQL 支持自己填值，填完即可执行\n新增开发者模式，构建号连点 7 次可检测预览版更新\n日志列表可选显示「类名#方法名」，默认关闭\n同一次执行的 SQL 不再在日志列表留两条，耗时与位置齐了\n运行期拼接的 SQL 预览不再吃掉括号与引号\niBatis 参数不再带方括号，INSERT 不再整片 NULL\n2026.3 上更新插件恢复免重启热替换\n增强捕获被保守策略停采时会说清原因，不再静默\n括号三元能被识别，注释里的问号不再算 JDBC 参数\n可选片段填值不再重复前缀，也不会留下悬空条件\n更新包未发布时给友好提示，被拒时日志给确定原因\n工具语句与更新语句成功完成不再误报超时\n循环内的降级占位会显示循环体追加内容的摘要\n好用的话，欢迎到 Marketplace 页评分留言",
+  "version": "2026.11.8-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8-beta.1/mybatis-plus-sql-visualizer-2026.11.8-beta.1.zip",
+  "changeNotes": "日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-07",
   "sinceBuild": "243"
 }
