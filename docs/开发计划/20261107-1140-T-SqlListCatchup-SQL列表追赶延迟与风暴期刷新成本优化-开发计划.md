@@ -337,3 +337,38 @@
 - **全量门禁**：按用户令交 CI（本地 testShards 启动后停止），门禁读数以 CI 轮为准。
 - **清理**：五棵工作树（集成+e/f/g/h）与五条分支（t-sqllist-catchup 及子券）全部删除，删前逐条 `git merge-base --is-ancestor` 复验已含 master。
 - **经验沉淀**：`docs/经验总结/20261107-2230-T-SqlListCatchup-SQL列表追赶九券战役经验总结.md` + LESSONS L21（data class 签名跨工作树伪红，Seen 2×）/ L22（后台 tail 吞失败正文）/ L23（prepareSandbox mmap 锁＝沙盒占用）。
+
+### 券 I：溢出聚合账本——被逐事件计数保全（2026-11-07，追加券）
+
+- 分支：`t-sqllist-catchup-i`（工作树 `.worktrees/sqllist-catchup-i`，基线 = master `7cf2b1d3`），提交：`27ec0173`（修复 + 复现 + 反向，一笔）。
+- 写集：`sub-projects/sql-visualizer-agent/.../transport/EventBus.java`（账本 + 入账/出账/清空 + KDoc）、`SenderLoop.java`（主循环步骤 1.5 出账接线 + KDoc）、`EventBusAggregateTest`（②用例按新语义更新）、新增 `EventBusOverflowLedgerTest`（5 例）。
+
+**缺口**：券 F2b 的异模板逐旧路径对被逐事件直接 `DROPPED++`——「执行了 N 次」随计数整体丢失。券 H 把排水提速 23 倍后队列很少满，但尖峰仍会溢出（第七轮真机 110 条丢弃），而每一条被逐事件本来都可以只降精度不丢信号。
+
+**机制**（协议零改动，复用 `SqlEvent.aggregatedCount` 与 JSON 键 `c`）：
+
+1. **账本结构**：`ConcurrentHashMap<String, AtomicLong>`（键 = 模板 sql，值 = 该模板被逐且未发出的累计次数），键数封顶 `OVERFLOW_MAP_CAPACITY = 512`。内存上界 ≈512 × 模板串长度（典型 SQL 模板 <2KB）< 1MB。
+2. **入账点**：`evictOldestAndOffer` 逐出最旧者后走 `recordEvicted`——把被逐者的 `aggregatedCount`（≥1，含队内聚合代表自身）按模板累加；同模板键**永远合并**（无论账本是否满），新键仅在账本未满时创建，满则计真丢失。**宿主线程红线**：全程只有 `ConcurrentHashMap.compute`（分段锁、纳秒级、无 sleep/无显式锁等待），任何异常回落 `DROPPED` 计数。
+3. **出账点**：`SenderLoop` 主循环步骤 1.5——每轮排空队列后 `EventBus.drainOverflow` 把账本条目转成聚合事件**直接写帧**（不走队列，不再受 2048 容量约束）。时间戳取**出账时刻**（不记首入时刻：省每键第二份状态，风暴期溢出事件的时间精度降级到「出账批次」可接受，换宿主入账路径最简）。竞争安全：先按键 `compute` 置 null 原子摘除（与入账同键串行，无丢失更新）再写帧；写帧 IOException = 连接死 → 条目回账（`restoreCount` 无条件并入）后上抛走重连，重连后下轮重试——「发出成功才离开账本」以「失败必回账」等价达成。编码缺陷该帧按帧计真丢失并继续（不让毒条目卡死出账循环）。账本空时零分配直接返回（空闲热路径每轮都调）。
+4. **语义口径**：`DROPPED` 收窄为「连计数都未能保全的真丢失」＝①账本满收不下新模板 ②入/出账异常兜底；心跳键 `dropped` 与 IDE 状态栏「已丢弃 N 条」链路不变，KDoc 写明读数含义（>0 = 已超出「聚合 + 账本」两级保全容量，属强告警；=0 不再意味着「队列从未满过」）。
+5. **停采清空**：`clearQueued()` 同步清账本，账本代表的执行次数并入 `CLEARED` 计数（停采后不补投语义不回破）。
+6. **队列容量 2048 不动**：加大只会放大 `tryAggregateOnFull` 在宿主采集线程上的 O(n) 线性扫描成本（成本注释写进 KDoc）。
+
+**设计取舍（账本淘汰策略二选一定案：不再收新键）**：不选「随机逐一键给新键让位」的近似 LRU——让位要在宿主线程做驱逐决策，且可能把热模板换成冷模板；省下的几个冷模板计数抵不上复杂度与误逐风险，且 512 键的内存上界 <1MB，宁可少量真丢失也不加宿主成本。
+
+**测试**（`EventBusOverflowLedgerTest` 5 例 + `EventBusAggregateTest` ②更新）：
+
+1. 主判据（先红后绿）：队列灌满 + 520 条异模板溢出 → 账本保全 512 个模板的计数、`DROPPED` 只剩账本满的 8 条真丢失；出账 512 帧后账本清空、容量即刻回收（再溢出 4 条重新入账）；
+2. 同模板优先级 + 聚合计数继承：整队同一模板（每条 `aggregatedCount=3`）+ 10 条异模板逐出 → 账本**只 1 个键**、次数 30（按 N 次入账不按 1 次），出账 1 帧且协议键 `c:30`；
+3. 账本满反向：超限新模板计真丢失（语义收窄的正确性），已存在键照常合并；
+4. 红线静态断言：读生产源码，`offer`→`droppedCount` 区间（含逐旧/入账/出账全部路径）无 `Thread.sleep`/`.wait(`/`.join(`/`synchronized`/`park(`/`ReentrantLock`/`Semaphore`/`.acquire(`/`.await(`；
+5. 停采清空：`clearQueued` 后账本清零、代表次数并入 `CLEARED`、无残余可出账；
+6. `SenderLoop` 集成：队头放 `aggregatedCount=7` 的聚合代表 + 2047 条异模板（队列满）+ 600 条异模板溢出 → 发送循环排空队列后账本 512 条全部发出：代表帧带 `c:7`、被逐异模板各恰一帧、账本满后未保全的 88 条确实不出现、事件帧总数 = 2048 + 512。
+
+**反向验证（S2，两次）**：
+- 摘「入账」分支（`recordEvicted(oldest)` 改回 `DROPPED.incrementAndGet()`）重跑**恰 5 红**：主判据 `expected:<74> but was:<586>`（修复前 520 条全丢）、同模板 `596 vs 606`、集成 `694 vs 1206`、`EventBusAggregateTest` ②、clearQueued 用例；守卫用例（未满不聚合、offer 非阻塞、聚合后 clearQueued 语义、红线静态）保持绿。恢复后全绿。
+- 摘「出账接线」（`SenderLoop` 步骤 1.5 改 `overflowFlushed = 0`）重跑**恰 1 红**（集成用例），证明出账接线被钉住。
+
+**定向读数**：`EventBusOverflowLedgerTest` 5 + `EventBusAggregateTest` 5 + `SenderLoopDrainRateTest` 4 + `HeartbeatDiagnosticsTest` 6 = **4 类 20 例 0 failures 0 errors 0 skipped**；`:sql-visualizer-agent:test` 全量 **50 类 281 例 0 failures 0 errors 1 skipped**（基线 49 类 276 例 + 本券 5 例；skip 为既有预置条件用例，与本券无关）。
+
+**not run**：真机压测复测（新 agent jar 注入宿主后的 dropped 读数与「已收事件」差值——归主控统一复测条款；本券保全能力以合成溢出场景交付）；IDE 侧门禁与 convention 守卫（券纪律，收口轮统一）；CHANGELOG 回填（主控合流补账）；面板级聚合计数消费（仍为 F2b 已知边界）。
