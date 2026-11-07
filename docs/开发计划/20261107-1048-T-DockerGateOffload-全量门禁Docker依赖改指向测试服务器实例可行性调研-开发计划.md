@@ -1,7 +1,7 @@
 # T-DockerGateOffload：全量门禁 Docker 依赖改指向测试服务器实例——可行性调研（2026-11-07）
 
 - 立项：2026-11-07 10:48
-- 状态：**调研完成，待用户拍板**（本文档只调研不实施；未动任何生产代码）
+- 状态：**已拍板并实施**（用户定「方案一：容器用例外指收编进矩阵通道 + 方案三收尾：预检条款改窄」组合；实施记录见 §十一）
 - 目标分支：`master`（如立项实施）
 - 来源：2026-11-07 用户明令「不许自行启动本地 Docker Desktop，Docker 类需求优先用测试服务器已有实例」；当日全量门禁预检 `timeout 10 docker info` 发现本地引擎未启动即止步，用户令调研「全量门禁里依赖 Docker 的测试改指向测试服务器实例」的可行性
 - 取证口径：全部只读（未跑 gradle、未跑 docker 命令、未连测试服务器）；服务器侧现状只来自仓内文档与既往经验记录，拿不准的列「待上服务器核实」
@@ -125,3 +125,53 @@
 | 实测（文件:行 / run 号） | §二 清单全部 grep 读数；§三 匹配表实例端点（.local 文档 + 现行矩阵文件）；§四 CI 跨洋读数（nightly run 42315646150 / 2026-11-05 run#9）；半活态三态（pitfall 文档 2026-09-23 实测）；§五 代码级表名/清理逻辑 |
 | 文档推断 | 服务器 dockerd 未暴露 TCP（P-2，未连服务器）；方案二各项次生代价；MariaDB 版本差影响面 |
 | 未验证 | P-1 的现行轮次 XML 读数；P-3/P-4 的对照实验；方案一实施后的端到端读数（本调研未实施） |
+
+## 十一、实施记录（2026-11-07，方案一 + 方案三收尾）
+
+用户拍板组合「方案一（容器用例外指收编进矩阵通道）+ 方案三收尾（预检条款改窄）」。分支 `t-docker-gate-offload`（基线 master `31e3c66d`）；提交 `a7c924e2`（测试类 + gradle 注入）＋ 文档笔（本节、MEMORY、经验总结 R4、LESSONS L19）。
+
+### 11.1 前提核实结果（P-1~P-5 逐条）
+
+| 前提 | 结论 | 证据 |
+|---|---|---|
+| P-1 | **成立**。类落 fastBucket：源码零 `com.intellij` 引用（`mpv-testing.gradle.kts:399-402` 划桶规则）、分片显式剔除 fastBucket 类（`mpv-testing.gradle.kts:765`）、`shardExcludeClassNames` 缺省为空（:385-387）；默认路径 XML：`tests=6 skipped=6 failures=0 errors=0`，类耗时 **0.014s** | 本工作树定向跑 `build/test-results/test/TEST-...DialectDockerVerificationTest.xml`（2026-11-07）。注：全量轮未跑（本任务禁全量），以定向 XML + 静态分桶证据采信；全量轮 XML 读数留待下次收口顺带核对 |
+| P-2 | **不适用**——方案二未实施，未连服务器（派活边界禁 SSH），dockerd TCP 暴露问题继续挂「待上服务器核实」 | — |
+| P-3 | **实测通过**：MariaDB 10.11.11（`103.36.220.245:23306/xc3_test`，矩阵条目 `mariadb`）承载容器 11.2 用例的同套读数——runTcSuite + 全量保留字扫描全绿（单腿 469.6s）→ 按等价读数采信，登记「MariaDB 11.x 新语法面无真机对位，等价性以套件通过为界」 | 五实例绿跑 XML（11.3 表） |
+| P-4 | **未实验，按派活边界只登记**：共享实例固定表名互删债入 LESSONS L19（Seen 1×），根治方案「运行唯一 schema/表前缀」挂账待复发或外指面再扩大时立项 | `docs/LESSONS.md` L19 |
+| P-5 | **成立**：用户级 AGENTS.md 第 19 行已由主控改为「Docker 腿默认关且在 testFast 桶不进分片；仅显式跑 Docker 测试腿时才需 `timeout 10 docker info` 预检；禁自行拉起本地 Docker Desktop」（本任务未碰该文件）；仓内两处同批改窄（11.5） | 用户级 AGENTS.md:19（只读对齐）、本仓 git diff |
+
+### 11.2 方案一改动面
+
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/sql/verify/DialectDockerVerificationTest.kt`
+  - :62-77（EXTERNAL_MATRIX_PROPERTY / DEFAULT_EXTERNAL_MATRIX_PATH / DEFAULT_ENGINE_MATRIX_KEYS / 登录超时常量）：五引擎 → 矩阵 key 默认映射 mysql→mysql84、postgresql→pg16、mariadb→mariadb、sqlserver→sqlserver2022、oracle→oracle23，同文件写 `dockerext.<engine> = <key>` 可逐引擎改指（key 指到不存在条目＝该腿回落容器）；
+  - :107-125（resolveExternalEndpoint / channelFor）：读矩阵文件解析外指端点，文件缺失/条目缺 url 或方言名 → null（回落容器），只读文件不连库；
+  - :129-134（assumeRealEngineTestsEnabled）：总开关前置——`mpvs.docker.tests.enabled` 非 true 时六例全跳（外指腿零网络触达、容器腿零 daemon 触达）；
+  - :158-195（runExternalLeg）：外指腿——方言名逐字核对防静默回退 MySQL、`upsertModeOf` 推导 upsert 策略、登录超时 20s、**连不上判红不跳过**、stdout 留 channel=key=url 取证行；
+  - :196-345：五用例改「外指优先、容器兜底」双通道，容器路径原样保留为私有方法（runMysqlContainerLeg 等），仍受 assumeDockerAvailable 守卫。
+- `buildSrc/src/main/kotlin/mpv-testing.gradle.kts` :187-196：向全部 Test 任务注入 `mpvs.dockerext.matrix`（默认 `layout.projectDirectory/.local/dialect-external-matrix.properties`，`-PdialectExternalMatrix=<路径>` 覆盖；providers 配置期求值，与配置缓存兼容）。
+- `dialectExternalVerify`、发版门禁口径、CI workflow：**零改动**（2026-10-31 定例不变）。
+
+### 11.3 容器路径取舍 + 反向验证红绿读数
+
+**取舍：保留容器路径作兜底（外指优先）**——调研册方案一写「外部端点优先、无容器回退」分支，未写死是否移除容器；按保守项保留。理由：无矩阵文件的环境（其他开发者机器、离线场景）仍可用原容器路径手工验证，路径语义零退化；外指优先则兑现「本地不依赖 Docker Desktop」。
+
+| 场景 | 命令要点 | 读数（JUnit XML） |
+|---|---|---|
+| 默认门禁（P-1 动态） | 无 `-PmpvDockerTests` | `tests=6 skipped=6 failures=0 errors=0`，类耗时 0.014s——零网络零 daemon |
+| 外指端点不可达 → 必红 | 探针矩阵（工作树 `.local/docker-offload-probe.properties`，跑后已删）`dockerext.mysql=mysql_probe` 指向 `127.0.0.1:1` + `-PmpvDockerTests=true` | `tests=6 failures=1 skipped=5`：真实MySQL80 **FAIL** `CommunicationsException: Communications link failure`（0.341s 快败，判红不静默跳过）；其余四腿 SKIP「Docker 不可用，跳过…」（无条目回落容器、无 daemon 显式跳过，**非假绿**）；第 6 例 SKIP「未提供 -Dmpvs.dialect.jdbcUrl」——同轮钉住全部三条路径 |
+| 五实例绿跑（验收 2） | `-PmpvDockerTests=true -PdialectExternalMatrix=<主仓 .local 矩阵>` | `tests=6 failures=0 errors=0 skipped=1`（第 6 例按设计跳过）；分腿耗时：MySQL84（8.4.6）51.5s / PG16（16.14）6.0s / MariaDB（10.11.11）469.6s / SQLServer2022（CU27-GDR）310.1s / Oracle23（Free 23）25.9s，墙钟 14m39s（串行单 JVM，词级扫走默认串行） |
+
+时间预算口径（验收 3）：五腿串行 ≈ 15min，远低于方言矩阵全量（14 实例）本机读数；MariaDB 腿 469.6s 侧证矩阵 `mariadb.timeoutSeconds=600` 余量合理，无新预算裸奔。
+
+### 11.4 方案三收尾（措辞同步清单）
+
+- `docs/MEMORY.md:30`：「跑全量前先 `timeout 10 docker info` 验 daemon 活性」→「Docker 测试腿默认关（`-PmpvDockerTests=true` 才启用）且在 testFast 桶、不进五片分片（20261107 T-DockerGateOffload 定例）；仅显式跑 Docker 测试腿时才需预检；引擎未启动禁自行拉起本地 Docker Desktop」——与用户级 AGENTS.md 逐字同口径。
+- `docs/经验总结/20260923-1055-*.md` R4 行：同向改窄，注明取代旧「跑全量前必验」口径与开关前置依据。
+- pitfall 文档（`pitfall-docker-guard-hangs-indefinitely.md`）中 DockerComposeLabConsistencyTest 的误排更正：该文档属 memory-archive 历史存档，历史记录不改写原貌，勘误落在本节——O-72 清单把 DockerComposeLabConsistencyTest 排进 Docker 依赖类是多余的（它零 DockerClientFactory/零容器操作，见调研册 §二）。
+
+### 11.5 债务与 not-run
+
+- **共享实例互删债**（§五-3）：LESSONS L19 登记，运行唯一前缀未实施（派活边界「只登记不重构」）。
+- CHANGELOG `[Unreleased]`：**不回填**——本改动面为测试内部与构建脚本，非 `src/main` 用户可感改动；真机读数面由 dialectExternalVerify 承担的定例不变。
+- not-run：全量 `testShards`/`testFast` 整腿未跑（派活明令禁全量）；`dialectExternalVerify` 未跑（非本券对象）；CI workflow 未改未跑；方案二（DOCKER_HOST）未实施未核实。
+- 探针文件 `.local/docker-offload-probe.properties` 验证后已删。
