@@ -93,4 +93,25 @@
 
 ## 九、实施记录
 
-（实施中回填）
+### 券A：notifyUi 刷新时间窗下限（2026-11-07，分支 `t-sqllist-catchup-a`）
+
+**改动**：`7be82118` feat(log): T-SqlListCatchup 券A——notifyUi 刷新时间窗下限（150ms Alarm 补刷）。写集 `SqlLogManager.kt`（+76/-2）+ 新增测试 `SqlLogManagerFlushWindowTest.kt`（156 行）。机制：flush 完成时刻记 `lastFlushAtNanos`（0L=哨兵）；窗口内通知挂 `Alarm(POOLED_THREAD, this)` 补刷拍（已在挂则复用；到点时在途/已退订跳过）；窗口外含首条仍立即刷；`removeUiListener` 退订与 `dispose` 均 `cancelAllRequests` + Alarm 以服务为 parentDisposable 挂 Disposer 树。测试缝：`catchUpScheduler` 注入（SenderLoop BackoffSleeper 同款，断言调度值不赌墙钟——L18）、`lastFlushAtNanos` / `setUiFlushPendingForTest`。
+
+**平台取证**：2024.3.7.1（243）`Alarm.ThreadToUse` 反编译实证无 `EDT` 值，仅 `SWING_THREAD`（已 @Deprecated，指 POOLED_THREAD）/`SHARED_THREAD`/`POOLED_THREAD`——选 POOLED_THREAD（动作只碰 volatile 标志 + invokeLater，任意线程安全；PreviewSchemaHighlighter 同款先例）。
+
+**前提证伪结论（§五）**：
+
+1. **§五.2 成立**。临时探针（未入库）对旧代码实测：`addUiListener` 计数 + 5 条 `addEntry`（逐条泵 EDT）→ **5 条通知 5 拍**，证实「在途合拍」无时间窗下限、EDT 一空立刻刷下一拍。
+2. **§五.4 基本成立（代码读数，登记两点）**：`diffVisible` 以条目实例同一性 `===` 判差（`LogEntryFiltering.kt:402-448`）；⨉N 计数存侧表（`dedupeCounts`/`templateCounts`，`SqlLogPanel.kt:1744-1750` 每拍全量重算——O(N) 部分归券 B），纯计数变化 → `VisibleDiff.Same` → 零 model 写、不重建。两点登记：①计数侧的 Same 路径**无显式 `list.repaint()`**（「只重绘」并非字面实现，徽章新鲜度依赖 Swing 正常绘制循环/同屏其它变化），归券 B 关注；②融合升级形态（O-147 W1 补空字段，`mergeDuplicateEntry` + `replaceEntryLocked`）会**换实例**——同位身份断、中段离散变化走 `FullRebuild` 整表重建，但那是内容真变化，不算对本前提的反例。两处均不越写集去修。
+
+**定向测试读数**（本机 2024.3.7.1 沙盒，`-Pkotlin.compiler.execution.strategy=in-process`，JUnit XML 判据数核对）：
+
+| 类 | 例数 | 结果 |
+|---|---|---|
+| `SqlLogManagerFlushWindowTest`（新增） | 7 | 0 failures 0 skipped |
+| `SqlLogManagerBehaviorTest`（回归） | 35 | 0 failures 0 skipped |
+| `SqlLogManagerAutoShowTest`（回归） | 9 | 0 failures 0 skipped |
+
+**反向验证（S2）**：摘除 notifyUi 时间窗分支重跑 → 窗口机制 5 例（test03 合拍 / test04 多波次 / test05 在途竞态 / test06 dispose / test07 removeUiListener）**全红**，窗口外语义 2 例（test01/test02）保持绿（语义在旧机制下同样成立）；恢复分支后 7 例全绿。
+
+**not run**：join-demo 压测复测读数（§七.2 前后对比）待券 D 探针落位后统一复测；真机 GUI 卡顿体感待用户走查；CHANGELOG 回填未做（写集限本券两文件，合流收口时由主控统一补账）。
