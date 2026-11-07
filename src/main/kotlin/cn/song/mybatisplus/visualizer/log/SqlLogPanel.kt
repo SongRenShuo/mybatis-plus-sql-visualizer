@@ -322,6 +322,15 @@ class SqlLogPanel(
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     internal var lastRendered: List<LogSqlEntry> = emptyList()
 
+    /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
+     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     * **声明于 init 前**：init 块内首次 refreshList 即经 syncDiagnostics 读它（构造期序坑，同上注）。
+     */
+    private val catchUpBadgeState = CatchUpBadgeState()
+
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
     // T-RecentExecMenu O-119：送页签通道回调的**稳定引用**（init 注册 / dispose 同一性注销用）——
@@ -1700,10 +1709,15 @@ class SqlLogPanel(
                         // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
                         unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
                             .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
+                        // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
+                        catchUpBehind = catchUpBadgeState
+                            .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),
                     ),
                 )
             }.getOrNull()
         } else {
+            // 非捕捉态：追赶节流复位（下次捕捉从干净态起算）
+            catchUpBadgeState.reset()
             null
         }
         if (texts == null) {
@@ -1865,6 +1879,16 @@ class SqlLogPanel(
         // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
         // 量不再随 logMaxCount 线性放大。
         if (!flushRebuildChainSync()) return
+        // T-SqlListCatchup 券D：全拍耗时打点（补链之后 → diff 收尾，即「真正做事的一拍」完整耗时）。
+        // 挂在补链之外：补完让路的空拍（return false）不算刷新拍，不污染分布。分位读数走
+        // LogPerfProbe.sampleStats("LogPanel.refreshList")，≥100ms 的拍另有阈值 INFO（既有呈现）。
+        LogPerfProbe.measure("LogPanel.refreshList", { "visible=${listModel.size()}" }) {
+            refreshListBeat(gen)
+        }
+    }
+
+    /** 券D 拆出：refreshList 的实际刷新拍体（[refreshList] 负责补链门 + 全拍打点，本函数做事）。 */
+    private fun refreshListBeat(gen: Long) {
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }
