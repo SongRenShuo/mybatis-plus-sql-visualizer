@@ -70,13 +70,32 @@
 
 `User.xml` 的 `selectByIterate` 用 `<iterate property="ids">`。`params == null` 时引擎语义是**硬失败**（`SqlMapException: ParameterObject or property was not a Collection…`），我方降级成语句级 `IbatisRenderException` + 告警。用户看到的是一个没有参数的报错式结果，而非「需要先给 ids 才能展开」。
 
-### G5（需在你机器上一步排除）`ibatis2-demo` 可能没被导入为模块
+### G5（**已排除**，2026-11-09 用户确认「只是没有跳转图标」）`ibatis2-demo` 未导入为模块
 
-- `mybatis-plus-sql-visualizer-demo/.idea/misc.xml` 的 `MavenProjectsManager.originalFiles` 只列了 5 个 pom（`pom.xml`、`mpsv-walk-proj`、`native-mybatis-demo`、`agent-premain-hostile-loader-repro`、`jdk21-premain-crash-demo`），**没有** `ibatis2-demo/pom.xml`；
-- `.idea/modules.xml` 只登记了 `mybatis-plus-demo` 一个模块（外部存储模式下短属正常，但两者叠加可疑）；
-- 该模块是 2026-11-09 下午才加进父 pom 的，**项目大概率没重新导入**。
+用户确认**预览图标存在**，说明该文件在 content root 内、provider 正常工作，项目模型干扰不成立。G5 可从根因里划掉，仅在排查同类「全无图标」时留作参考。
 
-若 `ibatis2-demo` 目录不在任何 content root 内，平台的 gutter/引用等能力会整体受限——这一条**可能同时解释「两个都没有」**，所以必须先排除。**注意：即使它成立，G1~G4 仍然是真缺口**，因为 G1/G3 有代码级证据（无参渲染、参数名错位），与项目模型无关。
+> 原始怀疑依据（保留备查）：`.idea/misc.xml` 的 `MavenProjectsManager.originalFiles` 只列 5 个 pom、无 `ibatis2-demo/pom.xml`；`.idea/modules.xml` 只登记一个模块。若目录不在 content root 内，平台 gutter 能力会整体受限。
+
+### G6（截图新增，真缺陷）降级路径把标签子树**整段丢弃**，且告警文案与行为不符
+
+`xml/ibatis/SqlMapSqlRenderer.kt:63-67`：
+
+```kotlin
+val body = runCatching { renderBody(statement, params, mapped, warn) }
+    .getOrElse { error ->
+        warn("渲染降级（按原文保留 # 直替，参数名不可知）：${error.message}")
+        statement.body.filterIsInstance<IbatisTextNode>().joinToString("") { it.text }
+    }
+```
+
+任一节点渲染抛错时，回退只拼接**顶层文本节点**：
+
+- `<include>` 在解析期已内联成文本 → 展开正确（截图里 `ID, USER_NAME, EMAIL, AGE, STATUS` 是对的）；
+- `<dynamic>` / `<iterate>` 是**标签节点**，被整体丢弃 → 截图里 `WHERE ( ... )` 整段消失；
+- 因此告警里的「按原文保留 `#` 直替」**与事实不符**：既没有保留 `#`，也没有保留标签内容；「参数名不可知」也不准（`ids` 是知道的，缺的是值）；
+- 面板同时显示「无未解析参数」与「参数名不可知」，**自相矛盾**。
+
+这违反本仓既有的「降级可用 + 失败可见」口径：半截 SQL 看起来像一条合法语句，用户无法从 SQL 本身看出丢了半句。正确形态应是**可见的失败**（明确标注哪一段没渲染、为什么），而不是静默产出半截 SQL 再配一句不准确的说明。
 
 ---
 
@@ -108,25 +127,35 @@
 
 `SqlMapSqlRenderer.renderStatic` 的 `declared != null` 分支：把 `parameterMap` 的映射按**位置**对齐到语句体里手写 `?` 的个数（取前 N 个），而不是把全部映射塞进 `paramNames` 导致数量不符回落 `param1..N`。对齐不上时保留告警。
 
-### 券 D（P2）无参降级的可读文案
+### 券 D（P0，升级：原为 P2 文案）降级必须**失败可见**，且文案必须与行为一致（解 G6）
 
-`<iterate>` 在 `params == null`（或属性非集合）时，告警改成「该语句含 `<iterate property="ids">`，需先提供值列表才能展开」，并在预览面板给出可点的「填值」入口（接券 A 的输入面）。
+三件事，同批：
 
-### 券 E（P0，先做，零代码）排除 G5 干扰
+1. **不再静默产出半截 SQL**：`renderBody` 抛错时，把**已渲染部分**与**未渲染的节点**都标出来——面板上明确显示「`<dynamic>` 段（第 N 行起）未渲染：`iterate` 的 `property='ids'` 取值不是集合」，而不是给一条看着合法的完整语句。
+2. **文案按失败形态分档**（现在是恒定拼一句「按原文保留 `#` 直替，参数名不可知」，与实际三种情况都不符）：
+   - 无参基线导致条件不成立 →「该语句含动态条件，需提供参数才能展开」（不是错误，是初始态）；
+   - `iterate` 取值非集合 →「`ids` 需要值列表」；
+   - 真正的解析/配置错 →「按原文保留」。
+3. **面板一致性**：左侧「无未解析参数」与顶部「参数名不可知」不得同时出现；`<iterate>` 场景下左侧应显示**该语句需要的参数名**（`ids`），只是值为空。
 
-在你的机器上：Maven 面板 → Reload All Maven Projects（让 `ibatis2-demo` 成为模块）/ 或确认该目录在 Project Structure 的 content root 内，然后重开 `User.xml` 看图标。**这一步只为排除变量，不改变 G1~G4 的结论。**
+附：`<iterate>` 在 `params` 为 null 时直接抛异常是否合理，也要一并定——引擎确实抛，但预览应把它降级成「待填值」而不是「渲染失败」。
+
+### 券 E（**已关闭**，原为零代码排查）排除 G5 干扰
+
+用户 2026-11-09 确认预览图标存在于该文件，等于证明文件在 content root、gutter provider 正常工作 ⇒ G5 不成立，本券销案，不再执行。保留记录仅为同类「全无图标」问题提供排查入口（项目模型/模块导入）。
 
 ---
 
 ## 四、待验证前提
 
-| # | 前提 | 怎么验 |
+| # | 前提 | 状态 |
 |---|---|---|
-| P-1 | G5 是否成立（`ibatis2-demo` 不在 content root ⇒ 图标整体受限） | 补券 E 后看图标是否出现；或看 Project 视图里 `ibatis2-demo` 是否带模块图标 |
-| P-2 | 「左侧没有跳转图标」是否**只**指跳转箭头，还是连**预览图标**也没有 | 用户确认一句即可区分（这条决定有没有第三个根因） |
-| P-3 | 用户期望的参数交互粒度：只要条件勾选，还是要能填具体值并看到 SQL 变化 | 券 A 的形态取舍（勾选 vs 填值）依赖此 |
-| P-4 | `selectByIterate` 在真机上现在显示的是什么（报错文案 / 空 SQL / 原始 `#ids[]#`） | 用户截图或描述；决定券 D 的必要性 |
+| P-1 | G5（模块未导入导致整体无图标） | **已排除**（2026-11-09 用户确认只有跳转图标缺失，预览图标正常 ⇒ 文件在 content root、provider 工作正常） |
+| P-2 | 「左侧没有跳转图标」是否只指跳转箭头 | **已答：只是没有跳转图标** ⇒ 不存在「连预览图标都没有」的第三根因，G5 关闭 |
+| P-3 | 参数交互粒度 | **已答：要「能填具体值」**（不是只要勾选）⇒ D-1 取后者 |
+| P-4 | `selectByIterate` 真机显示 | **已答（截图）**：降级成 `SELECT ID, … FROM T_USER`（`<dynamic>` 整段丢失）+「渲染降级（按原文保留 # 直替，参数名不可知）」⇒ 新增 G6 |
 | P-5 | 真实项目（`cyzc-platform`）里是否也有 iBatis 文件 | 本轮 grep `<sqlMap` 命中 0；若无，则只有 demo 可测 |
+| P-6（新增，**待答**） | 「字段名和表名也不对」具体指什么 | 截图里 SQL 的标识符与 `User.xml` 逐字一致（`ID / USER_NAME / EMAIL / AGE / STATUS`、`FROM T_USER`），故「不对」不在 SQL 文本层。需用户指出是：① 与预期**正确版本**不同（请给对照）；② 编辑区**高亮/补全/表列提示**不对；③ 预览面板某处的**表名/列名展示**不对 |
 
 ---
 
@@ -156,7 +185,7 @@
 
 | # | 决策 | 推荐 | 理由 |
 |---|---|---|---|
-| D-1 | 券 A 的交互粒度 | **条件勾选 + 关键比较值可填**（不做全字段表单） | 勾选解决「看不看得见」；比较值可填解决「能不能验证」。全字段表单成本高且与「预览」定位不符 |
+| D-1 | 券 A 的交互粒度 | **条件勾选 + 值可填**（用户 2026-11-09 明确要「后者」） | 勾选解决「看不看得见」，填值解决「能不能验证」；两者都要 |
 | D-2 | 券 B 的图标形态 | **完全复用 MyBatis 那对图标与让位门** | 同一产品内一致优先（既有反馈口径：新增 UI 交互照抄既有同类实现） |
 | D-3 | 是否先做券 E（零代码排查） | **先做** | 若 G5 成立，能立刻把「两个都没有」收窄一半，避免白改 |
 | D-4 | 目标分支 | **master 起步**（同前序） | 与上一批一致，减少分支拓扑 |
