@@ -105,4 +105,16 @@
 XML 报告（build/test-results/testShardN/TEST-*.xml）里有完整断言原文。顺序/并发相关的红只有整片能复现。
 ⚠️`--tests` 的 FQCN 写错时若同时给了别的有效 pattern，会被**静默跳过**（本轮 SqlDialectParserDefinitionPairingGuardTest 因此漏跑两轮，真实包名是 `...convention.` 不是 `...sql.`）——跑完必须核对 XML 里确有该类。
 
+## 收官（2026-11-09）
+
+- **最后两例行为红修复**（`659027e6`）：SqlListV179HeadlessTest 走 newManager() 注入同步调度器（券 A 刷新窗，master 同款）；SqlPreviewPanelDynamicBatchTest 更名+断言改 ANSI 字面量 `TIMESTAMP '...'`（T-DateLiteralBackfill，master 同款）。两类 23 例 0 败。
+- **波次 C docs**（`95b30fb1`）：直取 143 件（A 122 + AGENTS.md 新增 + theirs-only M 13，k2j 零碰撞、group-qr.jpg 同 blob）+ 真三方合并 3 册（git merge-file，base=锚点 blob）：变更记录零冲突；索引/开发计划.md 回插 14 行 T-SyncK2J 专属行、剔 3 行 master 已归档项（BranchHygiene×2/PreviewDocPersistLock）；索引/索引变更记录.md 回插 4 行台账按日期降序落位。对账：docs 面残余 39 件全 k2j 专属、直取清单零泄漏。
+- **CI 全绿**：run 42601368873 @ `95b30fb1` **七腿全 success（fast×2 + test×5；nudge 按设计 skipped）——k2j 分支史上首次全量 CI 绿**。此前 7 腿全红 23 类起步，R1~R9 九轮收敛归零。
+- **锚点推进**（`f1550bba`）：`.port-sync` synced_master 102795a0→**95e107b1**，note 重写为本轮全记录；台账双行落位（索引 177 行置顶 + 变更记录 2026-11-08 行）。
+- **gate 派发验证**（三次，最终全绿）：
+  - 第一次（run 42605483552，`ref=master -f branch=feature/kotlin-to-java`）：**build ✅ + test×6 全绿 ✅**（buildPlugin 与全量测试面在本分支成立），但 verify×3/marketplace×3/gate ❌——**任务书前提证伪**：`workflow_dispatch` 的 job 定义（matrix、任务名）永远取自 **dispatch ref 的 workflow 文件**（master 版＝263 矩阵 + verifyMarketplaceVerdict 分 tag 任务），`branch` 输入只改各 job 的 checkout。→ 车道 3 在分支上维护的专属门禁文件（243/253/262 + 单 marketplace 腿）**是必需品而非冗余**，gate 必须以 `ref=feature/kotlin-to-java` 派发。
+  - 第二次（run 42609836389，`ref=feature/kotlin-to-java`）：矩阵已对（verify 243/253/262 + 单 marketplace 腿），**build ✅ + test×7 全绿 ✅**，但 verifyplugin/verify×3/marketplace ❌——根因单一＝`OVERRIDE_ONLY_API_USAGES`（`ChooseDataSourceTakeoverGroup.delegateChildren` 调 `ActionGroup.getChildren(e)`，本轮 A2 带入的既有形态）进了 verifyPlugin 失败集；marketplace/verify 腿死于各自前置的 `:verifyPlugin` 预热步。**buildSrc 选择性移植漏项**：master 在 T-CiMatrix 已移出该等级，补三 hunk（failureLevel、mustRunAfter(buildPlugin)、verifyMarketplace verifyOnly 语义，`c207cee2`）；豁免清单与 marketplace 基线两侧同 blob（a1e0f4dd/2c034a7f）。
+  - 第三次（**run 42613122038，全绿** ✅）：build + test×7 + verifyplugin + verify×3（243/253/262）+ marketplace + gate 聚合全 success（publish 按设计 skipped）。**车道 3 门禁适配验证完成**——k2j 分支自此具备与 master 同构的推送测试 + 全量门禁双通道。
+- 文档站兄弟仓缺 goldendb 行（DialectDocTableGuard ×4，本地独有红）——属 `mybatis-plus-sql-visualizer-docs` 仓自己的改动，需单独授权，本仓不代办。
+
 **本轮两条硬教训**：① 本地 `testClasses` 的 UP-TO-DATE 会掩盖 CI 从头编译红，API 面改动必须 `compileTestKotlin --rerun-tasks`；② `.gitattributes` 是 `eol=crlf`，CI 检出 CRLF、本地常为 LF——内嵌 `\n` 的多行源码锚点必然「本地绿 / CI 红」，判据是 CI 报 `missing source marker`。
