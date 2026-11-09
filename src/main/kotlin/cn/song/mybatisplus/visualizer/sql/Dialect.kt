@@ -371,6 +371,17 @@ private fun renderPgStyleLimit(limit: LimitClause): String {
     return "LIMIT ${renderLimitValue(limit.count)}$offsetPart"
 }
 
+/**
+ * 共享渲染辅助：Oracle 形态 `OFFSET n ROWS FETCH NEXT m ROWS ONLY`（无 offset 时 `FETCH FIRST`）。
+ * 供 Oracle / PolarDB（Oracle 兼容版）/ 神通 Oscar / 崖山 YashanDB 复用（T-DomesticDialects
+ * 自 OracleDialect 内联体抽取，产物逐字节不变）。
+ */
+private fun renderOracleStyleLimit(limit: LimitClause): String = if (limit.offset != null) {
+    "OFFSET ${renderLimitValue(limit.offset)} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
+} else {
+    "FETCH FIRST ${renderLimitValue(limit.count)} ROWS ONLY"
+}
+
 /** T-M29-03：分页子句数值渲染——字面量原样、运行时值 `?`（service.page 的 pageNum/pageSize 变量）。 */
 private fun renderLimitValue(value: SqlValue): String = when (value) {
     is SqlValue.Literal -> value.raw
@@ -499,11 +510,7 @@ object OracleDialect : Dialect {
      */
     override val transactionBegin: String? = null
 
-    override fun renderLimit(limit: LimitClause): String = if (limit.offset != null) {
-        "OFFSET ${renderLimitValue(limit.offset)} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
-    } else {
-        "FETCH FIRST ${renderLimitValue(limit.count)} ROWS ONLY"
-    }
+    override fun renderLimit(limit: LimitClause): String = renderOracleStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
@@ -1254,6 +1261,351 @@ object GoldenDbDialect : Dialect {
 }
 
 /**
+ * TiDB 方言（T-DomesticDialects 券 A）：第 16 个方言。PingCAP，MySQL 8.0 协议完全兼容。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级 + 族推定**：TiDB 官方（docs.pingcap.com）声明与 MySQL 8.0 兼容（数据库本体
+ * Apache-2.0）；**无专用 JDBC 驱动**（直接用 MySQL Connector/J，URL 恒 `jdbc:mysql://`）。
+ * 无真机——全部形态按「MySQL 兼容」族推定，真机到位后逐项升档（照 GoldenDB 文档级先例）。
+ *
+ * ## 逐项依据
+ *
+ *  - 分页/引用/事务/upsert/DELETE LIMIT 全按 MySQL 形态（官方兼容声明 + `EXPLAIN [ANALYZE]`
+ *    /`EXPLAIN FORMAT` 均为 MySQL 8 风格佐证）；
+ *  - **URL 不劫持**：TiDB 无自有子协议，`jdbc:mysql://` 恒映射 MySQL（GoldenDB KDoc 同款先例
+ *    ——URL 不携带产品身份就不据此推断）。方言靠设置页手动选择 + MCP 别名识别；
+ *  - EXPLAIN：`EXPLAIN {sql}`（TABLE，官方文档级）；`EXPLAIN ANALYZE` 是**真执行**，插件
+ *    不使用（估算形态已满足执行计划展示，避免写操作风险）；
+ *  - 保留字 [TIDB_RESERVED]：MySQL 8.0 族底（自有新增词待官方《关键词》页取证后并集扩表）。
+ */
+object TiDbDialect : Dialect {
+    override val name: String = "TiDB"
+
+    override val transactionBegin: String = "START TRANSACTION"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override val supportsDeleteLimit: Boolean = true
+
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val identifierQuotes: Set<Char> = setOf('`')
+
+    override val reservedWords: Set<String> = TIDB_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * PolarDB-X 方言（T-DomesticDialects 券 B）：第 17 个方言。阿里云（原 DRDS），MySQL 协议兼容。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级 + 族推定**：doc.polardbx.com 官方连接指南明写 MySQL 协议直连（默认 3306）；
+ * 专用驱动 `polardbx-connector-java`（Connector/J 扩展）URL `jdbc:polardbx:`。无真机。
+ *
+ * 逐项同 [TiDbDialect]（MySQL 形态全家桶）；保留字 [POLARDBX_RESERVED] MySQL 族底。
+ */
+object PolarDbXDialect : Dialect {
+    override val name: String = "PolarDB-X"
+
+    override val transactionBegin: String = "START TRANSACTION"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override val supportsDeleteLimit: Boolean = true
+
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val identifierQuotes: Set<Char> = setOf('`')
+
+    override val reservedWords: Set<String> = POLARDBX_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * PolarDB（Oracle 兼容版）方言（T-DomesticDialects 券 C）：第 18 个方言。阿里云，
+ * 面向 Oracle 迁移场景（MP `DbType.POLARDB` → OracleDialect 同族映射佐证）。
+ *
+ * ## 证据级别
+ *
+ * **族推定**：官方 JDBC 文档（help.aliyun.com《JDBC O 2.0》）实锤 URL `jdbc:polardb://` 与
+ * `jdbc:polardb2://`（2.0 版驱动基于 pgJDBC 改造，Apache-2.0，Central 可得）；**SQL 兼容语法
+ * 按 Oracle 族渲染**（MP 同族映射 + 官方「高度兼容 Oracle」声明）。无真机。
+ *
+ * ## 边界
+ *
+ *  - 事务 `BEGIN` 判 null（Oracle 同形保守——`BEGIN` 是 PL/SQL 块起始，DM 同款先例）；
+ *  - upsert 无原生简洁形态（MERGE INTO 族）→ 默认降级纯 INSERT；
+ *  - 折叠族 UPPER（Oracle 族底，族推定；「含小写字母即加引号」目录规则在真实 LOWER 折叠
+ *    引擎上也安全——多引号幂等）；
+ *  - 驱动类名 `com.aliyun.polardb.*` 登记增强捕获（官方驱动包名，文档级）。
+ */
+object PolarDbDialect : Dialect {
+    override val name: String = "PolarDB"
+
+    override val transactionBegin: String? = null
+
+    override fun renderLimit(limit: LimitClause): String = renderOracleStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.UPPER
+
+    override val reservedWords: Set<String> = POLARDB_RESERVED
+}
+
+/**
+ * GBase 8a 方言（T-DomesticDialects 券 D）：第 19 个方言。南大通用，MySQL 血统分析型集群
+ * （兼容 MySQL 5.7 语法，MP `DbType.GBASE` 同族映射佐证）。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级 + 族推定**：gbase.cn 官方社区 JDBC 接入文实锤 URL `jdbc:gbase://`（默认
+ * 5258）、驱动类 `com.gbase.jdbc.Driver`；EXPLAIN 官方文档明写**仅支持 SELECT**（gbase.cn
+ * news/4131）。无真机。
+ *
+ * ## 边界
+ *
+ *  - EXPLAIN 仅 SELECT 由 [ExplainGate] 首关键字白名单保证（该门本就只对完整 SELECT 生成
+ *    EXPLAIN——GBase 8a 的「仅 SELECT」约束与门现状自然对齐，无需方言侧特判）；
+ *  - **`gbase` 子协议歧义**：8a 与 8s 共用 `jdbc:gbase:`（8s 是 Informix 血统、驱动同前缀），
+ *    推断按 8a 处理并在 KDoc 注明；8s 用户在设置页手动切方言（无证据不做端口嗅探）；
+ *  - 事务 `BEGIN` 取 MySQL 形态 `START TRANSACTION`（5.7 兼容声明推定）；
+ *  - 保留字 [GBASE8A_RESERVED] MySQL 族底。
+ */
+object GBase8aDialect : Dialect {
+    override val name: String = "GBase 8a"
+
+    override val transactionBegin: String = "START TRANSACTION"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    /** 保守判 false：分析型集群无 DELETE LIMIT 文法证据（宁可少包，不产出语法错误 SQL）。 */
+    override val supportsDeleteLimit: Boolean = false
+
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val identifierQuotes: Set<Char> = setOf('`')
+
+    override val reservedWords: Set<String> = GBASE8A_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * GBase 8c 方言（T-DomesticDialects 券 D）：第 20 个方言。南大通用，openGauss 同源内核
+ * （MP `DbType.GBASE_8C` 同族映射佐证）。
+ *
+ * ## 证据级别
+ *
+ * **族推定**：官方产品文档明写 8c 基于 openGauss/GaussDB 内核；**upsert 形态照 openGauss
+ * 真机实证取 MySQL 形态**（openGauss 5.0.0 实测 `ON DUPLICATE KEY UPDATE` 可用、PG 的
+ * `ON CONFLICT` 语法错误——「PG 内核=ON CONFLICT」的族推定在 openGauss 家族不成立，
+ * [OpenGaussDialect]/[VastbaseDialect] 同款教训）。URL `jdbc:gbase8c:`（驱动前缀推定，
+ * 驱动不上 Central、用户自备）。无真机。
+ *
+ * 分页/引号/折叠按 PG 族；保留字 [GBASE8C_RESERVED] PG 族底（官方关键字表待取证后与
+ * [OPENGAUSS_RESERVED] 取并集——照瀚高「双向差集」先例）。
+ */
+object GBase8cDialect : Dialect {
+    override val name: String = "GBase 8c"
+
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    override val reservedWords: Set<String> = GBASE8C_RESERVED
+
+    /** openGauss 同源：MySQL 形态 `ON DUPLICATE KEY UPDATE`（真机实证形态，见 KDoc）。 */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * 神通 Oscar 方言（T-DomesticDialects 券 E）：第 21 个方言。神舟通用，Oracle 血统
+ * （MP `DbType.OSCAR` → OracleDialect 同族映射佐证）。
+ *
+ * ## 证据级别
+ *
+ * **族推定**：驱动类 `com.oscar.Driver`（oscarJDBC.jar，**不在 Maven Central**，用户从安装
+ * 目录手动加载）、URL `jdbc:oscar://`（默认 2003，DBeaver 社区实践 + 官网）。无真机——
+ * SQL 形态全按 Oracle 族渲染（MP 同族映射）。
+ *
+ * 逐项同 [PolarDbDialect]（事务 null / Oracle 分页 / 双引号 / UPPER 族 / 无 upsert）；
+ * 保留字 [OSCAR_RESERVED] Oracle 族底。
+ */
+object OscarDialect : Dialect {
+    override val name: String = "Oscar（神通）"
+
+    override val transactionBegin: String? = null
+
+    override fun renderLimit(limit: LimitClause): String = renderOracleStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.UPPER
+
+    override val reservedWords: Set<String> = OSCAR_RESERVED
+}
+
+/**
+ * 优炫 UXDB 方言（T-DomesticDialects 券 E）：第 22 个方言。优炫软件，基于 PostgreSQL
+ * （官方文档 + MP `DbType.UXDB` → PostgreDialect 同族映射双证）。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级（连接面）+ 族推定（SQL 形态）**：uxdb.net.cn 官方《JDBC》章实锤 Type 4 纯
+ * Java 驱动、URL `jdbc:uxdb://`（默认 5432）；驱动**不在 Maven Central**，用户手动加载或
+ * 直接用 pgJDBC。无真机——SQL 形态全按 PG 族渲染（分页/双引号/LOWER/`ON CONFLICT`）。
+ * 保留字 [UXDB_RESERVED] PG 族底。
+ */
+object UxDbDialect : Dialect {
+    override val name: String = "UXDB（优炫）"
+
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    override val reservedWords: Set<String> = UXDB_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
+}
+
+/**
+ * AntDB 方言（T-DomesticDialects 券 F）：第 23 个方言。亚信科技，PG/Oracle 双引擎（会话级切换）。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级（连接面）+ 族推定（SQL 形态）**：AntDB 用户手册（adbsql.github.io）实锤
+ * PG 引擎可用标准 pgJDBC、专有驱动 URL `jdbc:antdb://`。无真机。
+ *
+ * ## 边界
+ *
+ * 渲染按 **PG 模式**（双引擎里 PG 是社区文档主推形态；Oracle 模式用户在设置页手动切
+ * `Oracle` 方言——模式信息不在 URL 里可判，照磐维/瀚高「不做模式感知」先例）。保留字
+ * [ANTDB_RESERVED] PG 族底。
+ */
+object AntDbDialect : Dialect {
+    override val name: String = "AntDB"
+
+    override val transactionBegin: String = "BEGIN"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    override val reservedWords: Set<String> = ANTDB_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
+}
+
+/**
+ * 虚谷 XuGu 方言（T-DomesticDialects 券 G）：第 24 个方言。虚谷伟业，混合自有语法。
+ *
+ * ## 证据级别
+ *
+ * **官方文档级（连接面 + EXPLAIN）+ 保守推定（其余）**：docs.xugudb.com 官方实锤驱动类
+ * `com.xuguedata.jdbc.XuguDriver`、URL `jdbc:xugu://`（默认 5138）、`EXPLAIN {查询}` 语句
+ * 在册；驱动 Maven Central 有坐标（`com.xugudb:xugu-jdbc`）但 **License Proprietary**
+ * （不可随插件分发）。无真机。
+ *
+ * ## 逐项口径（全带「待真机校验」标注）
+ *
+ *  - 分页：官方文档以 MySQL 风格 `LIMIT` 为主 → [renderMySqlStyleLimit]；
+ *  - 引号：双引号（主流非 MySQL 形态的保守选择；官方标识符规则未逐字取证）；
+ *  - 折叠族 NONE（保守默认，不猜折叠方向）；
+ *  - upsert / DELETE LIMIT / 事务：无证据 → 全部保守判无（null/false）；
+ *  - 保留字 [XUGU_RESERVED] MySQL 族底（分页渲染同向；「宁可多包」口径）。
+ */
+object XuGuDialect : Dialect {
+    override val name: String = "XuGu（虚谷）"
+
+    override val transactionBegin: String? = null
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val reservedWords: Set<String> = XUGU_RESERVED
+}
+
+/**
+ * 崖山 YashanDB 方言（T-DomesticDialects 券 F）：第 25 个方言。深圳计算科学研究院，
+ * Oracle 兼容（MP `DbType.YASDB` 同族映射佐证）。
+ *
+ * ## 证据级别
+ *
+ * **族推定**：官方驱动 yashandb-jdbc（官网下载，不上 Central）、URL `jdbc:yasdb://`；
+ * SQL 形态按 Oracle 族渲染（MP 同族映射）。无真机。
+ *
+ * 逐项同 [OscarDialect]（事务 null / Oracle 分页 / 双引号 / UPPER 族 / 无 upsert）；
+ * 保留字 [YASDB_RESERVED] Oracle 族底。
+ */
+object YashanDbDialect : Dialect {
+    override val name: String = "YashanDB（崖山）"
+
+    override val transactionBegin: String? = null
+
+    override fun renderLimit(limit: LimitClause): String = renderOracleStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
+
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.UPPER
+
+    override val reservedWords: Set<String> = YASDB_RESERVED
+}
+
+/**
  * 方言注册表：按名称获取方言，未知名称回退 MySQL。
  */
 object DialectRegistry {
@@ -1275,6 +1627,18 @@ object DialectRegistry {
         HighGoDialect,
         VastbaseDialect,
         GoldenDbDialect,
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批（15 → 25）。证据档位与逐项依据
+        // 见各方言 KDoc 与 docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md。
+        TiDbDialect,
+        PolarDbXDialect,
+        PolarDbDialect,
+        GBase8aDialect,
+        GBase8cDialect,
+        OscarDialect,
+        UxDbDialect,
+        AntDbDialect,
+        XuGuDialect,
+        YashanDbDialect,
     )
 
     /**
