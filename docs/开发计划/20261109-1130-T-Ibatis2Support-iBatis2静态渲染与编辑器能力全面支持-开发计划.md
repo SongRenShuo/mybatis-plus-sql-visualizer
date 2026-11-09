@@ -1,7 +1,7 @@
 # T-Ibatis2Support：iBatis 2.x 静态渲染与编辑器能力全面支持（2026-11-09）
 
 - 立项：2026-11-09 11:30
-- 状态：**实施中（2026-11-09 用户授权开工，master 线三路并行）**——决策点已全部拍板（§七之二），第一波车道见 §8.2
+- 状态：**实施中（2026-11-09，master 线；第一波 + 第二波已合入并定向复跑全绿，跳转券 F 收尾中）**——决策点已全部拍板（§七之二），实际派工与权威读数见 §8.2 / §8.3
 - 目标分支：待定（改 `plugin.xml` EP、新增注入面与设置项，属大改动，倾向 dev 线先行，见 §七 D-1）
 - 基线：master `b3b5c556`
 - 来源：
@@ -696,16 +696,52 @@ else                                mapping = newParseMapping(token, parameterCl
 
 派活硬约束（三路一致，抄自 `docs/开发流程-派活与验收清单.md`）：独立工作树 + 扁平分支名｜只跑本任务最相关定向（`./gradlew test --tests "<FQCN>"`；**`testFast` 自带固定类清单，叠加 `--tests` 必失败**）｜**不跑全量 / 不跑构建校验 / 不 `clean`**｜跑 gradle 前 `parallel_tasks.py check` → `register --name <车道名> --sandbox <工作树绝对路径>` → 跑完 `done --name <车道名>`（**禁裸 `done`**）｜每完成一件可提交的立即提交、`git add` 具体文件（**禁 `git add -A`**）、消息写文件后 `git commit -F`（**消息禁反引号**）｜报告须给改动文件 / 提交哈希 / 定向读数（类数·tests·失败·错误·skip）/ 反向验证读数 / 未完成项；**没跑过的读数不许写「全绿」**｜不 push、不合流、不建 tag、不动 `update/update.json`、不碰他人工作树｜**不改本计划册与 `CHANGELOG.md`**（主控合并后统一回填）。
 
-**第二波（待第一波合并后派）**
+**第二波（2026-11-09，实际派工与结果）**
 
-| 车道 | 券 | 依赖 | 说明 |
+| 车道 | 分支 / 工作树 | 券 | 结果 |
 |---|---|---|---|
-| L4 | 券 C 保真对照集扩充 | L2 | 若 L2 已同批落地保真测试则本券与 L2 合并销案 |
-| L5 | 券 A 接线（识别器落 gutter + 让位 + provider + 设置 + i18n + GutterGroups） | L2/L3 | **让位与接管必须同批**，否则 iBatis 文件图标全消失 |
-| L6 | 券 D（注入/着色/折叠/补全）+ 券 E（DTD 内置与登记） | L5 | 根标签判定 8 处按 §2.3 表逐个放宽，**必须带「iBatis 文件才放宽」的二次判定** |
+| L4 | `t-ibatis-wire` / `.worktrees/ibatis-wire` | 券 A 接线（让位 + 接管 + 设置 + i18n + 触发面） | `0fa46b44` + `eb49dd14`；22 类 197 例 0 失败；两条反证各 2 红；含**热路径零查询守卫**（源码扫描 + 自证样本） |
+| L5 | `t-ibatis-inject` / `.worktrees/ibatis-inject` | 券 D（注入/着色/折叠/补全） | `e8553325`→`3ac7dacf` 五笔；既有 51 类 **485 例逐位不变** + 新增 3 类 35 例；两条反证（8 红 / 4 红） |
+| L6 | `t-ibatis-dtd` / `.worktrees/ibatis-dtd` | 券 E（两份 DTD 离线内置与 8 条标识登记） | `56d2ba18` / `ce3ab462` / `01eb8ed5`；8 条 url 全部解析到随包 jar 内 DTD；反证 3 例 1 红 2 绿；发行包 +9.0 KiB |
+| L7 | demo 仓（独立 git） | demo 语料模块 | demo `94b6285a`：`ibatis2-demo` 17 条语句 20 次渲染全通（`buildSqlMapClient` 成功＝语料语法合法）；Maven 三验（模块编译 / 根 reactor / 离线复编）全 SUCCESS |
 
-**第三波（可延后）**：券 F（跳转 + 全局 id 表）、券 G（`parameterClass`/`parameterMap` 类型映射）、券 I（文档与触发面三登记）。
+**第三波（2026-11-09）**
 
-**收口约定**：各车道自提交、不推送、不合流、不建 tag；主控在 master 上按「保留双方」合并冲突，合并后**只跑定向**复跑，全量与门禁交 CI；合并完成清理本批的三个分支与工作树（`git worktree remove` + `git branch -d`；删分支前先验 tip 可达性，见 `pitfall-branch-delete-orphans-unmerged-tip`）。
+| 车道 | 分支 / 工作树 | 券 | 状态 |
+|---|---|---|---|
+| L8 | `t-ibatis-nav` / `.worktrees/ibatis-nav` | 券 F（XML 内部 id 引用 + Java DAO → XML） | 实施中 |
+| — | — | 券 G（`parameterClass`/`parameterMap` 类型映射）、券 I（文档登记） | 待办（券 I 随本册回填部分完成） |
+
+### 8.3 实施结果（主控合并与权威复跑）
+
+**合并顺序**：L2 → L1 → L3（第一波）→ 主控修 `EnumReachabilityGuardTest` → L4 → L6 → L5（第二波）。冲突均在 `dev-support/reverse-probes/README.md`（多路同时追加登记行），一律按「保留双方」并集解，解完全文回读校验（无残留标记、行数对上）。
+
+| 提交 | 内容 |
+|---|---|
+| `3080cad3` | 第一波三路合并（券 0 / 券 B / 券 A 识别器 + 券 H） |
+| `d593e253` | 合并后曝出的守卫真失败修复：`IbatisStatementKind` / `IbatisTagKind` 的产出点由 `entries.firstOrNull` 改为显式全量表（守卫只统计 `EnumName.CONST` 限定形态，隐式查表产出对它不可见） |
+| `f6209b02` | L4 接线 + L6 DTD（含 `plugin.xml` 尾部标准资源块） |
+| `1c1c07ae` | L5 注入 |
+| `c587e911` | 让位侧效应修复：Alt+Shift+Q 在 sqlMap 文件补回 iBatis 候选（三路来源收敛成单一判据 `isXmlStatementCandidate`）+ L21 升版 |
+
+**合并态定向复跑（权威读数，非各支自报之和）**
+
+| 轮次 | 覆盖 | 读数 |
+|---|---|---|
+| 第一轮（未清产物） | `xml.*` `log.*` `convention.*` `psi.jpa.*` `*Pages*` `*XmlInlineSql*` `i18n.*` `ui.gutter.*` | 299 类 2981 例 **202 红**——全部是合成构造器 `NoSuchMethodError`（`HibernateLogParserTest` 56/56 全红，而该合并无人碰过 Hibernate） |
+| 第二轮（`rm -rf build/classes` 后） | 同上 + `log.agent.*` + 守卫 | **186 类 2041 例 0 失败 0 错误 0 skip**，BUILD SUCCESSFUL |
+| 第三轮（清产物） | `actions.ConvertToSqlActionTest` `ui.IbatisXmlPreviewServiceTest` `ui.gutter.*` `xml.*` `config.*` | **93 类 806 例 0 失败 0 错误 0 skip**，BUILD SUCCESSFUL |
+
+口径：`--tests` 多 pattern 是并集且未命中会被静默忽略，因此每轮都按 `build/test-results/test/*.xml` 的**类数**核对命中，不看 `BUILD SUCCESSFUL`。退出码写进日志文件后读取（不在管道尾取 `$?`，L22）。
+
+**实施期新发现（已入册）**
+
+1. **`L21` 升为 Seen 4×**：最高频触发源是 `config/PluginSettings.State` 加字段（任何加字段的提交都会让全仓引用旧构造器 / `copy$default` 的测试类失效）。判据＝某类整类全红且报错为 `<init>` / `copy$default` 的 `NoSuchMethodError` → 先清产物。
+2. **`<sql>` 片段必须声明在引用它的语句之前**（demo 实测，iBatis 配置期按文档顺序内联，片段放后面 `buildSqlMapClient` 直接抛）。本仓渲染器是「先收全表再展开」，**支持前向引用**——比引擎宽容但**当前不给告警**，已登记为后续项（缺省方向安全，但要补 warning 让不可运行的文件可见）。
+3. **iBatis 属性值不注入**（L5 判定）：属性名与 MyBatis 大面积重叠，注入会改变 `<mapper>` 既有行为；且 iBatis 无表达式语言。结论写进 `XmlSynHiGate.allowAttributeValue` 的 KDoc 防回退。
+4. **平台 EP 属性名是 `path` 不是 `resourcePath`**（`javap -v` 显示 `resourcePath` 字段带 `@Attribute("path")`），本册任务书原写法有误，已由 L6 订正。
+5. **`dynamic="true"` 的适用面订正**：它是 `<extensionPoint>` **声明**属性，扩展**注册**元素不承载它；真正的判据是「注册落在平台 dynamic 点位」。本册 §6.9 原表述过宽，以本条为准。
+
+**收口约定**：各车道自提交、不推送、不合流；主控在 master 上按「保留双方」合并冲突，合并后**只跑定向**复跑，全量与门禁交 CI；合并完成清理本批分支与工作树（`git worktree remove` + `git branch -d`；删分支前先验 tip 可达性，见 `pitfall-branch-delete-orphans-unmerged-tip`）。
 
 
