@@ -270,5 +270,17 @@ if (!isKnownPoolWrapper(name) && !isWhitelistFamily(c, name, whitelistAncestors)
 
 ### 11.4 not run
 
-IDE 侧全量 testShards 与 convention/门禁（`verifyGate`/`verifyPlugin` 等）——按券纪律交收口轮；本券只动 agent 子项目，无平台 API/EP/依赖版本变更，未触大改动判据。真机 GUI 观感（诊断行消失）待用户验收。
+IDE 侧全量 testShards 与 convention/门禁（`verifyGate`/`verifyPlugin` 等）本机未跑——按券纪律交收口轮；本券只动 agent 子项目，无平台 API/EP/依赖版本变更，未触大改动判据。真机 GUI 观感（诊断行消失）待用户验收。
+
+### 11.5 CI 读数（2026-11-09 推送轮）
+
+双仓推送完成（Gitee 主仓 + GitHub 镜像，走 `push-all.ps1` 令牌通路，无 GCM 弹窗），GitHub Actions `推送测试 · master` run **42587364463**（head `c4fde445`）**completed / success**，8 个 job 全绿：
+
+| job | 结论 |
+|---|---|
+| `fast (1)` / `fast (2)` | success |
+| `test (1)` ~ `test (5)` | success（分片全量在 CI Linux runner 上跑过） |
+| `nightly-nudge` | success |
+
+即 §11.4 的「本机未跑分片全量」已由 CI 补齐；本机读数仍只有 agent 模块 286 例那一档。门禁类任务（`build-plugin.yml` 的 gate）本轮未触发（该工作流是 `workflow_dispatch`）。
 
