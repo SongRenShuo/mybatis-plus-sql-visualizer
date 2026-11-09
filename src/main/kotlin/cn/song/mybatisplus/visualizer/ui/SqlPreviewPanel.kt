@@ -653,6 +653,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var xmlErrors = listOf<String>()
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     internal var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
+    // T-Ibatis2Gap 券 A：iBatis 迭代值状态（集合属性名 → 逗号/换行分隔原文）——
+    // 与 xmlForEachValues 同形态：输入框即时写状态，renderSql 帧内统一装配（write-unsafe 重投递也不丢）
+    internal val ibatisIterateValues = mutableMapOf<String, String>()
+    // 券 A：iBatis 重渲染告警（renderSql 每轮刷新；updateMeta 并入 currentWarning 与横幅）
+    internal var ibatisRenderWarnings = listOf<String>()
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     internal var errorCopyButton: JButton? = null
     internal var currentWarning: String? = null

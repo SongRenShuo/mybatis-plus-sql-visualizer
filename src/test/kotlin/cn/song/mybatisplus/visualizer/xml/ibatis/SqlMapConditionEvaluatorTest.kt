@@ -126,6 +126,53 @@ class SqlMapConditionEvaluatorTest {
         assertTrue(warnings.any { it.contains("compareProperty") })
     }
 
+    // ------------------------------------------------------------------
+    // T-Ibatis2Gap 券 A：数值比较增强（Map 参数下两侧都是 String，引擎走字典序会误判）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `数值比较增强_两侧可解析为数值时按数值比较`() {
+        // 本券要修的形态：`"9" vs "18"` 字典序会判 9 > 18（误）；数值比较必须 9 < 18
+        assertTrue("9 < 18（字典序会误判 9 > 18）", evaluator.compareValues(String::class.java, "9", "18") < 0)
+        assertEquals(0L, evaluator.compareValues(String::class.java, "18", "18"))
+        assertTrue(evaluator.compareValues(String::class.java, "20", "18") > 0)
+        // 负数与小数同口径
+        assertTrue(evaluator.compareValues(String::class.java, "-2", "-1") < 0)
+        assertTrue(evaluator.compareValues(String::class.java, "1.5", "1.05") > 0)
+        // 与 Integer 声明类型路径同结果（超集增强不得改变既有正确路径）
+        assertTrue(evaluator.compareValues(Integer::class.java, 9, "18") < 0)
+        // 小数走 Double 声明类型的既有换算路径
+        assertTrue(evaluator.compareValues(java.lang.Double::class.java, 2.0, "1.5") > 0)
+        // Integer 声明类型比 "1.5"：引擎换算失败（NumberFormatException）→ 既有口径 NOT_COMPARABLE
+        assertEquals(SqlMapConditionEvaluator.NOT_COMPARABLE, evaluator.compareValues(Integer::class.java, 2, "1.5"))
+    }
+
+    @Test
+    fun `数值比较增强_非数值路径维持既有行为`() {
+        // Date 字面量不可解析为数值 → 走既有转换路径（照旧可比）
+        assertTrue(evaluator.compareValues(Date::class.java, Date(0), "1970/01/01 08:00:01") != 0L)
+        // 布尔走既有路径
+        assertTrue(evaluator.compareValues(java.lang.Boolean::class.java, true, "false") > 0)
+        // 纯字符串不可解析为数值 → 维持字典序
+        assertTrue(evaluator.compareValues(String::class.java, "abc", "abd") < 0)
+        assertTrue(evaluator.compareValues(String::class.java, "abc", "abc") == 0L)
+        // 任一侧非数值 → 既有路径（本例换算失败 → NOT_COMPARABLE）
+        assertEquals(SqlMapConditionEvaluator.NOT_COMPARABLE, evaluator.compareValues(Integer::class.java, 5, "N/A"))
+    }
+
+    @Test
+    fun `数值比较增强_条件族端到端_isGreaterThan在Map参数下不再字典序误判`() {
+        val ctx = IbatisTagContext()
+        val tag = tag(IbatisTagKind.IS_GREATER_THAN, "age", null, "18")
+        // Map 参数（预览交互装配的形态：值一律 String）
+        assertFalse("age=9 不满足 >18（字典序会误判成立）", condition(IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "9")))
+        assertTrue("age=20 满足 >18", condition(IbatisTagKind.IS_GREATER_THAN, ctx, tag, mapOf("age" to "20")))
+        // 小数值在 isLessThan 下同样按数值判（既有字典序会误判 "20" < "18" 不成立）
+        val less = tag(IbatisTagKind.IS_LESS_THAN, "age", null, "18")
+        assertTrue(condition(IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "9")))
+        assertFalse(condition(IbatisTagKind.IS_LESS_THAN, ctx, less, mapOf("age" to "20")))
+    }
+
     private fun condition(kind: IbatisTagKind, ctx: IbatisTagContext, tag: IbatisTagNode, params: Any?): Boolean =
         evaluator.isCondition(kind, ctx, tag, params)
 
