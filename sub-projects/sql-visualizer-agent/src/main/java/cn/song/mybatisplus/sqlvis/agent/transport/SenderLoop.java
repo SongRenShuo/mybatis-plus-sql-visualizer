@@ -36,6 +36,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * AgentState.disabled 永远停在 fail-open 初值。畸形长度现在**抛异常走重连**并 WARN 记长度与首字节。
  * T-02：CONFIG 应用成功回一帧 {@link EventBus#CMD_CONFIG_ACK}（「生效」不再靠推断）。
  * T-07：会话建立后 X 毫秒内从未收到任何 CONFIG → 主动停采 + 一次性 WARN（每连接一次，不新开线程）。
+ *
+ * T-SqlListCatchup 券 H：突发排水免交「读超时税」——burst 达尽出上限（[EVENT_BURST_MAX]）的轮次
+ * 改按 {@code in.available()>0} 探测入站数据，无数据跳过读帧（此前每排 64 条干等一个 SO_TIMEOUT，
+ * 默认 1s → 持续风暴下投递速率被钉死在 ~64 条/秒）；队列排空才回长超时阻塞读。心跳/看门狗按
+ * 真实流逝时间判据与 CONFIG 到达即处理语义均不变，协议字节面零变化。
+ *
+ * T-SqlListCatchup 券 I：溢出账本出账（主循环步骤 1.5）——每轮排空队列后把
+ * {@link EventBus} 溢出账本（队列满时被逐事件的「模板 → 累计次数」，键数封顶 512）转成
+ * 聚合事件直接写帧，被逐事件的「执行了 N 次」不再随丢弃计数整段丢失；写帧失败回账重连后
+ * 重试，停采下降沿账本随队列一并清空入 CLEARED（停采后不补投语义不回破）。
  */
 final class SenderLoop implements Runnable {
 
@@ -72,6 +82,13 @@ final class SenderLoop implements Runnable {
 
     /** 空转轮询节奏（决定事件轮询响应性）：每轮最多睡这么久，且不得跨过下一次心跳时刻。 */
     private static final long POLL_IDLE_MS = 200L;
+
+    /**
+     * 单轮事件尽出上限（§4.3 防饿死心跳）。
+     * T-SqlListCatchup 券 H：本值同时是读超时税的判据锚点——burst 达上限即「队列很可能仍非空」，
+     * 该形态下的入站读改走 {@code available()>0} 探测（见主循环步骤 3）。
+     */
+    private static final int EVENT_BURST_MAX = 64;
 
     /** 入站 CONFIG 读超时上限（§4.3 轮询式短超时；默认心跳间隔下即 1s，行为与修复前一致）。 */
     private static final int CONFIG_READ_TIMEOUT_MAX_MS = 1000;
@@ -121,6 +138,9 @@ final class SenderLoop implements Runnable {
     /** 通道令牌（T-SAF-02）：HELLO 帧回带；null = 旧 IDE 未下发（HELLO 不带 token 键，行为不变）。 */
     private final String channelToken;
 
+    /** 退避睡眠缝（生产 = Thread::sleep；测试注入记录器）。 */
+    private final BackoffSleeper backoffSleeper;
+
     SenderLoop(int serverPort) {
         this(serverPort, null);
     }
@@ -128,7 +148,7 @@ final class SenderLoop implements Runnable {
     /** T-SAF-02：带通道令牌构造（生产路径：EventBus.start(port, token) 下发）。 */
     SenderLoop(int serverPort, String channelToken) {
         this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS,
-                DEFAULT_DIAL, channelToken);
+                DEFAULT_DIAL, Thread::sleep, channelToken);
     }
 
     /**
@@ -136,7 +156,8 @@ final class SenderLoop implements Runnable {
      * 退避节奏是秒级，靠系统属性压时间会给生产侧多出一个可配置面，故改为构造器注入。
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops) {
-        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, DEFAULT_DIAL, null);
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, DEFAULT_DIAL,
+                Thread::sleep, null);
     }
 
     /**
@@ -145,24 +166,54 @@ final class SenderLoop implements Runnable {
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
             SocketDialer dialer) {
-        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer, null);
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer,
+                Thread::sleep, null);
     }
 
-    /** 全参构造器（T-SAF-02 追加令牌；既有测试缝构造器全部委托到此）。 */
+    /**
+     * 退避睡眠注入构造器（时序加固，同包测试缝）：**只**包住退避那一处 sleep，
+     * 空转轮询节奏仍走真实 {@link Thread#sleep}。
+     *
+     * 为什么需要：退避用例过去用「相邻两次 accept 的墙钟间隔之比」断言增长
+     * （{@code gap2 * 2 >= gap1 * 3}）。CI 2 核 runner 上第一轮连接要付类加载/JIT 的一次性成本，
+     * gap1 被抬到 235ms（设计值 150）、gap2 只有 306ms（设计值 300），比值 1.3 小于 1.5 →
+     * 稳定假红（2026-11-06 nightly run 42230813933 实证：重跑即绿）。改为注入记录器直接断言
+     * **调度值序列**，与墙钟彻底解耦。
+     */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
+            SocketDialer dialer, BackoffSleeper backoffSleeper) {
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer,
+                backoffSleeper, null);
+    }
+
+    /** 令牌注入构造器（T-SAF-02，同包测试缝）：拨号与睡眠取生产缺省。 */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
             SocketDialer dialer, String channelToken) {
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, dialer,
+                Thread::sleep, channelToken);
+    }
+
+    /** 全参构造器（T-SAF-02 令牌 + 时序加固睡眠缝；既有测试缝构造器全部委托到此）。 */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
+            SocketDialer dialer, BackoffSleeper backoffSleeper, String channelToken) {
         this.serverPort = serverPort;
         this.backoffInitialMs = backoffInitialMs;
         this.backoffMaxMs = backoffMaxMs;
         this.backoffResetAfterMs = backoffResetAfterMs;
         this.maxFastDrops = maxFastDrops;
         this.dialer = dialer;
+        this.backoffSleeper = backoffSleeper;
         this.channelToken = channelToken;
     }
 
     /** 拨号函数缝：与被替换的 {@code new Socket(host, port)} 逐字同形（生产缺省实现）。 */
     interface SocketDialer {
         Socket dial(String host, int port) throws IOException;
+    }
+
+    /** 退避睡眠缝：生产缺省 {@link Thread#sleep}；测试注入记录器（可同时决定是否真睡）。 */
+    interface BackoffSleeper {
+        void sleep(long ms) throws InterruptedException;
     }
 
     /** 默认拨号：真拨号（与 T-PS7-02 改造前同一行代码，零行为变化）。 */
@@ -271,9 +322,12 @@ final class SenderLoop implements Runnable {
                     //    仍可能先写出 ≤64 条存量事件。这些事件发生在用户点停之前，语义上合法；且 IDE 侧
                     //    入队闸门（T-03，capturing=false 丢弃）会兜住，用户可见结果正确。反过来把读帧提到
                     //    尽出之前，会让每次事件投递都多等一个读超时（默认 1s），得不偿失。
+                    //    T-SqlListCatchup 券 H：持续突发下「每一批都交一个读超时税」的形态由步骤 3 的
+                    //    probe 免除（burst 达上限且无入站数据时跳过读帧）；本边界（停采帧当轮可能先出
+                    //    ≤64 条存量）不受影响，仍成立。
                     int burst = 0;
                     if (!AgentState.isDisabled()) {
-                        while (burst < 64 && EventBus.pollEvent(slot, 0)) {
+                        while (burst < EVENT_BURST_MAX && EventBus.pollEvent(slot, 0)) {
                             try {
                                 writeFrame(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
                                 burst++;
@@ -284,6 +338,21 @@ final class SenderLoop implements Runnable {
                                 // 编码失败：丢弃该事件继续（EventBus.droppedCount 可观测）
                             }
                         }
+                        // 1.5) T-SqlListCatchup 券 I：溢出账本出账——队列排空后把「被逐事件」的
+                        //      模板计数转成聚合事件**直接写帧**（不走队列，不再受 2048 容量约束；
+                        //      协议零改动，聚合计数经既有键 c 带出）。写帧 IOException = 连接死，
+                        //      条目已回账（restoreCount）后上抛走重连，重连后下轮重试——
+                        //      「发出成功才离开账本」以「失败必回账」等价达成；编码缺陷该帧按帧
+                        //      语义计真丢失（DROPPED）并继续。账本有界 512 模板键，单轮出账
+                        //      ≤512 帧（毫秒级），不构成排水长尾；burst 累加出账帧数，使本轮
+                        //      入站读走 probe 路径（与大量出站工作的既有判据一致）。
+                        final int overflowFlushed =
+                                EventBus.drainOverflow(agg -> writeFrame(out, EventBus.CMD_EVENT,
+                                        EventBus.encodeEvent(agg)));
+                        if (overflowFlushed > 0) {
+                            burst += overflowFlushed;
+                            lastOutboundMs = System.currentTimeMillis();
+                        }
                     }
                     // 2) 心跳：按真实流逝时间判（每轮都执行，不被 burst 分支包住——事件突发期间也按节奏发）
                     if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
@@ -291,19 +360,30 @@ final class SenderLoop implements Runnable {
                         lastOutboundMs = System.currentTimeMillis();
                     }
                     // 3) 入站帧（非阻塞轮询：超时=无数据）——[len][cmd][body]，畸形帧抛异常走重连
-                    try {
-                        final InboundFrame frame = readInboundFrame(in);
-                        if (frame.cmd == EventBus.CMD_CONFIG) {
-                            configSeen = true;
+                    //    T-SqlListCatchup 券 H（排水读超时税）：burst 达上限（=队列很可能仍非空）时，
+                    //    若照旧做带 SO_TIMEOUT 的阻塞读，每排 64 条就要干等一个读超时（默认 1s）——
+                    //    agent→IDE 方向平时无入站流量（CONFIG 仅会话初期一次），持续风暴下投递速率
+                    //    被钉死在 ~64 条/秒（真机六轮压测：风暴生产 ~1700 语句/s、到达仅 ~74 条/s）。
+                    //    修法：burst 达上限先 {@code in.available()>0} 探测——无入站数据就跳过本轮
+                    //    读帧（零等待继续排水），有字节到店本轮立即读（CONFIG 不被排水饿死）；队列
+                    //    排空（burst<上限）才回长超时阻塞读。空闲轮询、CONFIG 到达即处理、心跳与
+                    //    看门狗的按真实流逝时间判据全部不变；协议字节面零变化。
+                    final boolean inboundReadable = burst < EVENT_BURST_MAX || in.available() > 0;
+                    if (inboundReadable) {
+                        try {
+                            final InboundFrame frame = readInboundFrame(in);
+                            if (frame.cmd == EventBus.CMD_CONFIG) {
+                                configSeen = true;
+                            }
+                            final String ack = handleInbound(frame.cmd, frame.payload);
+                            if (ack != null) {
+                                // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
+                                writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
+                                lastOutboundMs = System.currentTimeMillis();
+                            }
+                        } catch (java.net.SocketTimeoutException ignore) {
+                            // 无入站数据
                         }
-                        final String ack = handleInbound(frame.cmd, frame.payload);
-                        if (ack != null) {
-                            // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
-                            writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
-                            lastOutboundMs = System.currentTimeMillis();
-                        }
-                    } catch (java.net.SocketTimeoutException ignore) {
-                        // 无入站数据
                     }
                     // 3.5) T-07 看门狗：会话建立后 X ms 内从未收到任何 CONFIG → 主动停采（每连接一次）
                     //      用既有循环判，不新开线程；停采走 AgentState.setDisabled（顺带清队列，T-01b）
@@ -359,7 +439,8 @@ final class SenderLoop implements Runnable {
                     fastDrops = 0;
                 }
                 try {
-                    Thread.sleep(backoffMs);
+                    // 退避睡眠走注入缝（测试据此断言调度值序列，不靠墙钟间隔比值）
+                    backoffSleeper.sleep(backoffMs);
                 } catch (InterruptedException ie) {
                     return;
                 }
@@ -438,6 +519,13 @@ final class SenderLoop implements Runnable {
                     + ",\"catchAll\":" + catchAllState()
                     // T-AgentSilentAfter16s：自停归因（0=无 / 1=CONFIG 看门狗自停）。
                     + ",\"gate\":" + AgentState.gateCode()
+                    // T-SqlListCatchup 券 F2a：事件队列丢弃累计（单调计数、恒出现）——风暴期队列
+                    // 打满时 offer() 满即丢（非阻塞红线），丢了多少必须让 IDE 用户看得见。
+                    // T-SqlListCatchup 券 I 语义收窄：读数 = 「连溢出账本都未能保全的真丢失」
+                    // （账本满收不下新模板 / 入出账异常兜底），被逐事件已先经账本补发聚合事件。
+                    // 兼容口径同 gate/unreg：整数键、键序固定、无空格，旧版 IDE 的宽容扫描
+                    // （AgentAttachStats.parse 只认已知键）零行为变化。
+                    + ",\"dropped\":" + cn.song.mybatisplus.sqlvis.agent.transport.EventBus.droppedCount()
                     // T-IbatisPanwei 券 D：接口命中但不在驱动白名单的类名（有界、逗号分隔、只类名）。
                     // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
                     // 不能靠缺键表达「本次没有未登记实现」。

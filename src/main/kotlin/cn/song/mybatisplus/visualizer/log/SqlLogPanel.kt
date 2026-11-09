@@ -96,13 +96,109 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
 /**
+ * T-SqlListCatchup 券B：面板计数快照的**增量累积器**（纯逻辑，无平台依赖，可纯 JUnit 做口径等价性验证）。
+ *
+ * 维护两张累积 map——⨉N 去重丢弃徽章计数（键 = dedupeKey）与「×N 同结构」徽章计数（键 = structureKey），
+ * 代替旧实现「每拍 dedupeCountsSnapshot() + structureKeyCounts(snapshot) 两份全量 O(N) 重算」：
+ * 全量只在 [apply] 收到 `fullRebuild`（buffer 侧兜底事件置位，见
+ * [SqlLogEntryBuffer.drainCountRebuildFlag]）或本累积器尚无基线（首拍）时执行；其余拍按 drain 到的
+ * 变更键（[SqlLogEntryBuffer.drainChangedKeys]）做**状态对账式**增量——每个变更键用 buffer 的当下
+ * 在队计数（presence）与镜像的上次已应用值求净差，节流窗内同键的多次增减折叠为一次净变化、
+ * 无悬挂余量；「structureKey 未变的条目计数沿用」即由此成立（未 drain 到的键不动对应条目）。
+ *
+ * 等价性口径（本类正确性的命门，随机操作序列测试钉住）：
+ * - `currentDedupeCounts` ≡ buffer.dedupeCountsSnapshot()——buffer 侧丢弃计数的全部变更源
+ *   （recordDedupeDrop / 整体清零 / 键上限溢出）要么登记变更键、要么置全量重建标记；
+ * - `currentTemplateCounts` ≡ structureKeyCounts(snapshot)——presence 只覆盖「去重开启 + 可去重」
+ *   条目，口径外变更（开关翻转 / 接管沿重建 / clear / ShardingSphere 条目）一律由 buffer 置
+ *   全量重建标记，增量路径只消费口径内键。淘汰扫出键域（presence 归零摘键）**不在此列**——
+ *   券E 起按变更键净差增量核销（确定性减账，被淘汰键随变更键集出域，见
+ *   SqlLogEntryBuffer.countFullRebuildPending KDoc）。
+ *
+ * 线程模型：面板 EDT 单线程消费（与 refreshList 同线程），内部状态无并发面。
+ */
+internal class CountSnapshotAccumulator(
+    /** buffer 丢弃计数快照（全量重建基线）。 */
+    private val dropCountsSnapshot: () -> Map<String, Int>,
+    /** 按键读 ⨉N 丢弃计数（增量重读）。 */
+    private val dropCountForKey: (String) -> Int,
+    /** 按键读在队计数（buffer dedupeKeyPresence 消费出口）。 */
+    private val presenceForKey: (String) -> Int,
+    /** 按键取保留实例 structureKey（buffer dedupeIndex O(1)；键不在索引时为 null）。 */
+    private val structureKeyForKey: (String) -> String?,
+) {
+    private var dedupeCounts: MutableMap<String, Int>? = null
+    private var templateCounts: MutableMap<String, Int>? = null
+
+    /** 上次已应用的在队计数镜像（增量净差的基准；键随淘汰出域，有界性随现存键域封顶）。 */
+    private val presenceMirror = HashMap<String, Int>()
+
+    /** dedupeKey → structureKey（structureKey 惰性首算昂贵，键在队期间只算一次）。 */
+    private val keyToStructure = HashMap<String, String>()
+
+    /** 当前 ⨉N 徽章计数（无基线时为空 map）。 */
+    val currentDedupeCounts: Map<String, Int> get() = dedupeCounts ?: emptyMap()
+
+    /** 当前「×N 同结构」徽章计数（无基线时为空 map）。 */
+    val currentTemplateCounts: Map<String, Int> get() = templateCounts ?: emptyMap()
+
+    /**
+     * 应用一拍：[fullRebuild]（buffer 兜底事件）或本累积器无基线时全量重建并重铸镜像；
+     * 否则按 [changedKeys] 逐键对账。消费顺序约定：调用方**先 drain 变更键、后 drain 全量标记**
+     * ——标记若落在两次 drain 之间则本拍即走全量，不产生一拍陈旧窗口。
+     */
+    fun apply(snapshot: List<LogSqlEntry>, fullRebuild: Boolean, changedKeys: Set<String>) {
+        if (fullRebuild || dedupeCounts == null || templateCounts == null) {
+            // 全量重建：两张累积 map 与镜像一并按当下快照重新锚定（兜底事件点全部由 buffer 置位，
+            // 每个事件点为什么必须全量见 SqlLogEntryBuffer.countFullRebuildPending KDoc 与各置位处注释）。
+            dedupeCounts = dropCountsSnapshot().toMutableMap()
+            templateCounts = structureKeyCounts(snapshot).toMutableMap()
+            presenceMirror.clear()
+            keyToStructure.clear()
+            for (e in snapshot) {
+                keyToStructure[e.dedupeKey] = e.structureKey
+                presenceMirror[e.dedupeKey] = (presenceMirror[e.dedupeKey] ?: 0) + 1
+            }
+            return
+        }
+        if (changedKeys.isEmpty()) return
+        val dc = dedupeCounts!!
+        val tc = templateCounts!!
+        for (key in changedKeys) {
+            // ⨉N 徽章：buffer 丢弃计数按变更键重读即对齐（唯一变更源是 recordDedupeDrop，逐键 +1）。
+            val dropCount = dropCountForKey(key)
+            if (dropCount > 0) dc[key] = dropCount else dc.remove(key)
+            // 「×N 同结构」：在队计数净差 → structureKey 计数增减（同 dedupeKey 的条目 structureKey
+            // 恒同——两者都是 restoredSql 的确定性指纹，前者仅多一层字面量参数化）。
+            val newPresence = presenceForKey(key)
+            val oldPresence = presenceMirror[key] ?: 0
+            if (newPresence != oldPresence) {
+                val structure = keyToStructure[key]
+                    ?: structureKeyForKey(key)?.also { keyToStructure[key] = it }
+                if (structure != null) {
+                    val merged = (tc[structure] ?: 0) + (newPresence - oldPresence)
+                    if (merged > 0) tc[structure] = merged else tc.remove(structure)
+                }
+                if (newPresence > 0) {
+                    presenceMirror[key] = newPresence
+                } else {
+                    // 键出队即出镜像域——镜像/映射有界性随现存键域封顶（presence 同口径）。
+                    presenceMirror.remove(key)
+                    keyToStructure.remove(key)
+                }
+            }
+        }
+    }
+}
+
+/**
  * 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。
  *
  * 筛选项精简改造（2026-08-27）：
  * - 类型筛选：工具栏行「SQL类型」多选按钮（弹窗勾选，替代原两行按钮组）
  * - 高频折叠：整体移除（识别重复 SQL 的价值由去重 ⨉N 徽章承接）
  * - 去重徽章：开启「移除重复的sql」后被丢弃的 SQL 在条目旁累加显示 ⨉N
- * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收起）
+ * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收口）
  */
 class SqlLogPanel(
     internal val project: Project,
@@ -198,11 +294,28 @@ class SqlLogPanel(
     @Volatile
     private var activeFocus: FocusFilter? = null
 
-    /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
+    /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。
+     *  T-SqlListCatchup 券B 起：指向 [countAccumulator] 的累积 map，按变更键增量更新而非每拍全量重算。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
 
-    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
+    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。
+     *  T-SqlListCatchup 券B 起：指向 [countAccumulator] 的累积 map，按变更键增量更新而非每拍全量重算。 */
     private var templateCounts: Map<String, Int> = emptyMap()
+
+    // ---------- T-SqlListCatchup 券B：计数快照增量累积 ----------
+
+    /**
+     * 券B：计数累积器——dedupeCounts/templateCounts 不再每拍全量重算，改为按 buffer 的变更键
+     * 增量对账；兜底事件（开关翻转 / 接管沿重建 / clear / 键上限溢出等）由 buffer 置位，drain 到后
+     * 回退全量重算一次。等价性口径见 [CountSnapshotAccumulator] KDoc。
+     * 券E：淘汰扫出键域升级为增量核销（确定性减账，不再置全量标记）。
+     */
+    private val countAccumulator = CountSnapshotAccumulator(
+        dropCountsSnapshot = { manager.entries.dedupeCountsSnapshot() },
+        dropCountForKey = { manager.entries.dedupeCountForKey(it) },
+        presenceForKey = { manager.entries.dedupePresenceForKey(it) },
+        structureKeyForKey = { manager.entries.structureKeyForKey(it) },
+    )
 
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
@@ -211,6 +324,15 @@ class SqlLogPanel(
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     internal var lastRendered: List<LogSqlEntry> = emptyList()
+
+    /**
+     * T-SqlListCatchup 券D：追赶徽章一拍节流（[CatchUpBadgeState] 防闪烁）。
+     * 数据源 [SqlLogEntryBuffer.pendingNotifyCount]（buffer 未消费内容通知计数，只读不消费）；
+     * 驱动拍与状态栏刷新拍同源——[syncCaptureStatusBar] 每次调用为一拍（2s 诊断定时器 +
+     * refreshList→syncDiagnostics 链，风暴期拍距随刷新收敛，不新开第二条轮询）。
+     * **声明于 init 前**：init 块内首次 refreshList 即经 syncDiagnostics 读它（构造期序坑，同上注）。
+     */
+    private val catchUpBadgeState = CatchUpBadgeState()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
@@ -463,6 +585,12 @@ class SqlLogPanel(
     /** 当前列表模型条目 restoredSql 列表（测试断言）。 */
     internal val visibleEntries: List<String>
         get() = (0 until listModel.size()).map { listModel.getElementAt(it).restoredSql }
+
+    /** 券B（T-SqlListCatchup）：面板侧 ⨉N 徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    internal val dedupeCountsForTest: Map<String, Int> get() = dedupeCounts
+
+    /** 券B（T-SqlListCatchup）：面板侧「×N 同结构」徽章累积 map（测试断言与全量口径比对；生产零消费）。 */
+    internal val templateCountsForTest: Map<String, Int> get() = templateCounts
 
     /** 当前激活的类型过滤集合（测试断言）。 */
     internal val currentFilter: Set<StatementType> get() = activeFilter.toSet()
@@ -1570,6 +1698,10 @@ class SqlLogPanel(
         val label = statusConsoleLabel ?: return
         val texts = if (manager.capturing) {
             runCatching {
+                // T-SqlListCatchup 券B2：2s 诊断拍过期冲洗——悬挂的节流余量（风暴末尾末批变更不足
+                // 批量阈值、之后无新条目再触发）最迟 2s 补一次通知上屏，列表与追赶徽章不再滞留
+                // 「落后 N 条」。flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有生产线程同路径安全。
+                if (manager.entries.hasStalePendingNotify()) manager.entries.flushPendingNotify()
                 val am = AgentManager.getInstance(project)
                 captureStatusLineText(
                     CaptureStatusLine(
@@ -1584,10 +1716,19 @@ class SqlLogPanel(
                         // 「控制台有产出」时不显示，这条事实只能靠常驻状态栏被看见
                         unregisteredImplementations = cn.song.mybatisplus.visualizer.log.agent
                             .AgentAttachReport.latest()?.unregisteredImplementations ?: emptyList(),
+                        // T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计（心跳 dropped 键，>0 挂尾）——
+                        // 风暴期队列溢出丢弃从此在用户视角可见，不再只有 agent 进程内计数
+                        agentDropped = cn.song.mybatisplus.visualizer.log.agent
+                            .AgentAttachReport.latest()?.dropped ?: 0L,
+                        // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
+                        catchUpBehind = catchUpBadgeState
+                            .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),
                     ),
                 )
             }.getOrNull()
         } else {
+            // 非捕捉态：追赶节流复位（下次捕捉从干净态起算）
+            catchUpBadgeState.reset()
             null
         }
         if (texts == null) {
@@ -1726,6 +1867,21 @@ class SqlLogPanel(
      * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
      * 原「清缓存/选择性失效」机制一并移除。
      */
+    /**
+     * 券B（T-SqlListCatchup）：徽章计数更新（⨉N 去重丢弃 + ×N 同模板）——增量对账路径，
+     * 状态见 [countAccumulator]。消费顺序：先 drain 变更键、后 drain 全量标记——标记若落在
+     * 两次 drain 之间则本拍即走全量，不产生一拍陈旧窗口。
+     */
+    private fun refreshCountMaps(snapshot: List<LogSqlEntry>) {
+        val changedKeys = manager.entries.drainChangedKeys()
+        val fullRebuild = manager.entries.drainCountRebuildFlag()
+        countAccumulator.apply(snapshot, fullRebuild, changedKeys)
+        dedupeCounts = countAccumulator.currentDedupeCounts
+        entryCellRenderer.dedupeCounts = dedupeCounts
+        templateCounts = countAccumulator.currentTemplateCounts
+        entryCellRenderer.templateCounts = templateCounts
+    }
+
     private fun refreshList() {
         val gen = ++refreshGeneration
         // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
@@ -1734,72 +1890,104 @@ class SqlLogPanel(
         // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
         // 量不再随 logMaxCount 线性放大。
         if (!flushRebuildChainSync()) return
+        // T-SqlListCatchup 券D：全拍耗时打点（补链之后 → diff 收尾，即「真正做事的一拍」完整耗时）。
+        // 挂在补链之外：补完让路的空拍（return false）不算刷新拍，不污染分布。分位读数走
+        // LogPerfProbe.sampleStats("LogPanel.refreshList")，≥100ms 的拍另有阈值 INFO（既有呈现）。
+        LogPerfProbe.measure("LogPanel.refreshList", { "visible=${listModel.size()}" }) {
+            refreshListBeat(gen)
+        }
+    }
+
+    /**
+     * 券D 拆出：refreshList 的实际刷新拍体（[refreshList] 负责补链门 + 全拍打点，本函数做事）。
+     *
+     * T-SqlListCatchup 券E（2026-11-07）：拍体**拆拍探针**——按现有结构把一拍拆成
+     * `.snapshot`（快照物化，券D 既有 key）/ `.diagnostics`（诊断行与状态栏同步）/ `.counts`
+     * （券B 增量计数段）/ `.filters`（过滤链 + 排序 + 进度条基准）/ `.diffModel`（差分应用与
+     * 模型写）五段，各包 measure 入券D 分布采样；全拍 `LogPanel.refreshList` 与旧
+     * `.snapshot` key 不动。拆拍目的是拿**分项账单**定位 102~232ms 单拍的重段（真机压测
+     * 2026-11-07），只对账单显示真正重的段动手。拍尾的聚焦隐藏提示与慢查计数（条数级常数
+     * 成本，与模型写无关）不打点——全拍与各段之差即这段余量。
+     */
+    private fun refreshListBeat(gen: Long) {
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }
         // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
-        syncDiagnostics()
+        // 券E：诊断同步含 AgentManager/屏蔽规则取数（每个刷新拍都跑），单独打点以便与计数段划清。
+        LogPerfProbe.measure("LogPanel.refreshList.diagnostics") {
+            syncDiagnostics()
+        }
 
-        // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
-        dedupeCounts = manager.entries.dedupeCountsSnapshot()
-        entryCellRenderer.dedupeCounts = dedupeCounts
+        // 券B（T-SqlListCatchup）：徽章计数增量更新（变更键对账，兜底事件回退全量）——代替旧的
+        // 每拍 dedupeCountsSnapshot() + structureKeyCounts(snapshot) 两份全量 O(N) 重算；
+        // 徽章聚合口径不变（**全量条目**，不随当前过滤/搜索波动）。
+        // 券E：增量计数段单独打点（全量回退是否每拍发生、值多少钱，账单说了算）。
+        LogPerfProbe.measure("LogPanel.refreshList.counts") {
+            refreshCountMaps(snapshot)
+        }
 
-        // O-90：同模板计数快照（**全量条目**聚合——徽章计数不随当前过滤/搜索波动；
-        // snapshot 本就为过滤链物化，structureKey 惰性缓存后单遍 O(N)）
-        templateCounts = structureKeyCounts(snapshot)
-        entryCellRenderer.templateCounts = templateCounts
+        var focusHiddenDelta = 0
+        val newVisible = LogPerfProbe.measure("LogPanel.refreshList.filters", { "in=${snapshot.size}" }) {
+            // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
+            val filtered = filterByFocus(
+                filterByType(
+                    applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
+                ),
+                activeFocus,
+            )
+            // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
+            val focused = filterByFocusTabs(filtered, focusTabs)
+            focusHiddenDelta = filtered.size - focused.size
+            // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+            // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+            val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
+            val sorted = applySort(searched)
 
-        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
-        val filtered = filterByFocus(
-            filterByType(
-                applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
-            ),
-            activeFocus,
-        )
-        // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
-        val focused = filterByFocusTabs(filtered, focusTabs)
-        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
-        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
-        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
-        val newVisible = applySort(searched)
-        val evicted = manager.entries.drainEvictedCount()
+            // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
+            // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
+            // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
+            // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
+            entryCellRenderer.maxDurationMs = maxDurationOf(sorted)
+            sorted
+        }
 
-        // T-LogListRail：进度条归一基准取**当前可见条目**的最大耗时（不随全量缓冲波动，
-        // 与过滤/排序结果一致；无耗时条目返回 null → 所有条画空槽）。
-        // 用单遍遍历而非 mapNotNull{}.maxOrNull()：后者会为几千~几万条分配一个临时列表，
-        // 而本行每次刷新都跑（流式灌入下每秒多次），是纯 GC 压力。
-        entryCellRenderer.maxDurationMs = maxDurationOf(newVisible)
-
-        val modelSizeBefore = listModel.size()
-        val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
-        // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
-        withProgrammaticScroll {
-            if (!applyIncremental(newVisible, evicted)) {
-                // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
-                // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
-                pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
-                applyFullRebuild(newVisible, gen)
-                // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
-                // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
-                pendingScrollAnchor?.let { anchor ->
-                    if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
+        LogPerfProbe.measure("LogPanel.refreshList.diffModel", { "model=${listModel.size()}" }) {
+            val evicted = manager.entries.drainEvictedCount()
+            val modelSizeBefore = listModel.size()
+            val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
+            // 模型变更（含紧随其后的锚点复原）整体处于程序性滚动窗口内：期间的调整事件不代表用户手势。
+            withProgrammaticScroll {
+                if (!applyIncremental(newVisible, evicted)) {
+                    // T-LogListAnchor 券02：全量重建会 clear 模型、视口回顶。暂停态先记住顶部条目身份，
+                    // 等它被写进模型（可能落在后续批次）再复原阅读位置；跟随态不需要（重建后本就贴底）。
+                    pendingScrollAnchor = if (tailFollow.shouldFollow) null else captureTopAnchor()
+                    applyFullRebuild(newVisible, gen)
+                    // 首屏批次是同步写完的：锚点条目若在其中立即复原；落在后续批次则交给
+                    // appendRebuildChunk 逐拍重试（链已排空仍没找到 = 条目已被淘汰/过滤掉，放弃）。
+                    pendingScrollAnchor?.let { anchor ->
+                        if (restoreAnchor(anchor) || rebuildRemaining == null) pendingScrollAnchor = null
+                    }
                 }
             }
-        }
-        val tailAdvancedAtCapacity = evicted > 0 &&
-            (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
-        // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
-        if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
-            scrollToBottom(resume = false)
+            val tailAdvancedAtCapacity = evicted > 0 &&
+                (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
+            // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
+            // 券E 账单注：本拍滚动（ensureIndexIsVisible → BasicListUI 变高布局 O(N) 全扫）曾是
+            // 单拍 102~232ms 的最大单一成分——渲染器条目级 preferred size 缓存（RailCellRendererBase
+            // 券E 段）把它从 ~30ms 压到 <10ms（headless 账单，2026-11-07）。
+            if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
+                scrollToBottom(resume = false)
+            }
         }
 
-        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
+        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused；券E 拆拍后由
+        // filters 段透出 focusHiddenDelta，本处只做 Swing 标签写）
         if (focusTabs.isEmpty()) {
             focusHiddenLabel.isVisible = false
         } else {
-            val hidden = filtered.size - focused.size
-            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", hidden.toString())
-            focusHiddenLabel.isVisible = hidden > 0
+            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", focusHiddenDelta.toString())
+            focusHiddenLabel.isVisible = focusHiddenDelta > 0
         }
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）

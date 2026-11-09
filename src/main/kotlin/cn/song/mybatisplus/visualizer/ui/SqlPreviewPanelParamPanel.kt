@@ -7,7 +7,15 @@ import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.SqlDateLiteral
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
+import cn.song.mybatisplus.visualizer.sql.SlotKind
+import cn.song.mybatisplus.visualizer.sql.SlotValue
+import cn.song.mybatisplus.visualizer.sql.SlotWarning
+import cn.song.mybatisplus.visualizer.sql.ValueType
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.HtmlEscape
@@ -138,6 +146,9 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     paramPanel.removeAll()
     paramFields.clear()
     paramWarnLabels.clear()
+    // T-RuntimeSlotFill 券 C：占位行随本轮重建清场（控件引用不能跨预览复用）
+    runtimeSlotRows.clear()
+    runtimeSlotWarningLabel = null
     conditionCheckBoxes.clear()
         conditionOutcomeLabels.clear()
     xmlConditionOutcomeLabels.clear()
@@ -179,7 +190,9 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         })
     }
 
-    if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
+    if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls &&
+        result.runtimeSlots.isEmpty()
+    ) {
         // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
         paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
             border = JBUI.Borders.empty(6, 8)
@@ -306,6 +319,23 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 border = JBUI.Borders.empty(0, 8, 2, 8)
             },
         )
+    }
+    // T-RuntimeSlotFill 券 C：运行期占位（拼接片段的运行时值）——每个占位一行，控件按 kind。
+    // 只在 [PreviewResult.runtimeSlots] 非空时出现；无占位时参数区与改动前逐字节相同（零变化）。
+    if (result.runtimeSlots.isNotEmpty()) {
+        paramPanel.add(runtimeSlotSectionHeader())
+        result.runtimeSlots.forEachIndexed { index, slot ->
+            paramPanel.add(buildRuntimeSlotRow(slot, index + 1))
+        }
+        // 券 B 的拒绝/风险必须可见（%s 计数不符 / 展开形态未知 / 方言不支持布尔 等）
+        runtimeSlotWarningLabel = JBLabel().apply {
+            name = RUNTIME_SLOT_WARNING_NAME
+            foreground = PARAM_WARN_FOREGROUND
+            isVisible = false
+            border = JBUI.Borders.empty(0, 8, 4, 8)
+        }
+        paramPanel.add(runtimeSlotWarningLabel!!)
+        refreshRuntimeSlotWarningLabel()
     }
     paramPanel.revalidate()
     paramPanel.repaint()
@@ -1926,6 +1956,11 @@ internal fun SqlPreviewPanel.hasSignatureTypeInfo(source: String?): Boolean =
 /** 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。 */
 
 internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?): String {
+    // T-DateLiteralBackfill：日期族优先走 ANSI 类型字面量（Oracle/达梦等裸引号隐式转换恒败），
+    // 形态不匹配或方言不支持时回落既有引号渲染。LIKE 已在 renderParamValue 先行分流，不进本函数。
+    if (hint?.temporal == true && hint.likePosition == null) {
+        SqlDateLiteral.renderByShape(raw, current?.effectiveDialect?.name)?.let { return it }
+    }
     val escaped = raw.replace("'", "''")
     return when {
         hint?.quote == true -> "'$escaped'"
@@ -1940,3 +1975,268 @@ internal fun SqlPreviewPanel.renderSingleValue(raw: String, hint: ParamHint?): S
 // ------------------------------------------------------------------
 // 元信息
 // ------------------------------------------------------------------
+
+// ------------------------------------------------------------------
+// T-RuntimeSlotFill 券 C：运行期占位行（一个占位一行，控件按 SlotKind）
+// ------------------------------------------------------------------
+
+/** 参数区「运行时值」分区标题的组件名（测试锚点）。 */
+internal const val RUNTIME_SLOT_SECTION_NAME = "runtimeSlotSection"
+
+/** 占位诊断行（[SqlPreviewPanel.slotRenderWarnings] 的展示位）组件名（测试锚点）。 */
+internal const val RUNTIME_SLOT_WARNING_NAME = "runtimeSlotWarning"
+
+/** 占位行标签列宽（`运行时值 #n · 表达式摘要`，超宽中段省略 + tooltip 全名）。 */
+private const val RUNTIME_SLOT_LABEL_WIDTH = 220
+
+/**
+ * 一个运行期占位行的控件组。
+ *
+ * 按 [kind] 只有对应控件非 null（VALUE → [typeCombo]；LOOP → [previewLabel]；
+ * TERNARY → [branchCombo]；OPTIONAL → [includeBox]）；[field] 四类都有。
+ * 面板与测试都经 [SqlPreviewPanel.runtimeSlotRows] 取它——kind ↔ 控件类型的对应关系可断言。
+ */
+internal data class RuntimeSlotRowControls(
+    val kind: SlotKind,
+    val field: JBTextField,
+    val typeCombo: JComboBox<ValueType>? = null,
+    val branchCombo: JComboBox<String>? = null,
+    val includeBox: JCheckBox? = null,
+    val previewLabel: JBLabel? = null,
+)
+
+/** 占位分区标题（「运行时值」）。 */
+internal fun SqlPreviewPanel.runtimeSlotSectionHeader(): JBPanel<JBPanel<*>> =
+    sectionHeaderRow(MpSqlVisualizerBundle.message("panel.slot.section")).apply {
+        name = RUNTIME_SLOT_SECTION_NAME
+    }
+
+/** 占位行标签：`运行时值 #<n> · <表达式摘要>`（摘要已由券 A 清洗成安全文本）。 */
+internal fun runtimeSlotRowLabel(slot: RuntimeSlot, index: Int): String =
+    MpSqlVisualizerBundle.message("panel.slot.label", index, slot.expression)
+
+/** 类型下拉的显示名（[ValueType] → 本地化文案）。 */
+internal fun slotTypeText(type: ValueType): String = MpSqlVisualizerBundle.message(
+    when (type) {
+        ValueType.AUTO -> "panel.slot.type.auto"
+        ValueType.STRING -> "panel.slot.type.string"
+        ValueType.NUMBER -> "panel.slot.type.number"
+        ValueType.BOOLEAN -> "panel.slot.type.boolean"
+        ValueType.NULL -> "panel.slot.type.sqlNull"
+        ValueType.LIST -> "panel.slot.type.list"
+    },
+)
+
+/** 占位输入框的空态提示（按 kind 给一句「该填什么」）。 */
+internal fun slotEmptyText(slot: RuntimeSlot): String = MpSqlVisualizerBundle.message(
+    when (slot.kind) {
+        SlotKind.VALUE -> "panel.slot.emptyText.value"
+        SlotKind.LOOP -> "panel.slot.emptyText.loop"
+        SlotKind.TERNARY -> "panel.slot.emptyText.ternary"
+        SlotKind.OPTIONAL -> "panel.slot.emptyText.optional"
+    },
+)
+
+/** 三元分支预览文本（模板取不到时如实说「未知」，不编造）。 */
+internal fun slotBranchPreview(slot: RuntimeSlot, branch: Int): String {
+    val template = if (branch == 0) slot.firstTemplate else slot.restTemplate
+    return template?.trim()?.takeIf { it.isNotEmpty() }
+        ?: MpSqlVisualizerBundle.message("panel.slot.template.unknown")
+}
+
+/**
+ * 建一个运行期占位行。
+ *
+ * 控件按 [RuntimeSlot.kind]：
+ *  - VALUE：类型下拉 + 文本框；
+ *  - LOOP：文本框 + 右侧灰字展开预览（前 3 项，走真实回填引擎算，不另写一套拼接）；
+ *  - TERNARY：分支下拉（两支模板预览）+ 文本框；
+ *  - OPTIONAL：「包含这段」复选框 + 文本框。
+ *
+ * 任何控件变更都只更新本占位那一项（其余字段保留），再走既有防抖渲染链 [scheduleRender]。
+ */
+internal fun SqlPreviewPanel.buildRuntimeSlotRow(slot: RuntimeSlot, index: Int): JBPanel<JBPanel<*>> {
+    val stored = slotValues[slot.id]
+    val field = JBTextField(16).apply {
+        text = stored?.text ?: ""
+        emptyText.text = slotEmptyText(slot)
+        if (text.isNotEmpty()) caretPosition = 0
+        toolTipText = MpSqlVisualizerBundle.message("panel.slot.value.tooltip")
+    }
+    var typeCombo: JComboBox<ValueType>? = null
+    var branchCombo: JComboBox<String>? = null
+    var includeBox: JCheckBox? = null
+    var previewLabel: JBLabel? = null
+
+    /** 控件 → 值：只覆盖本控件负责的字段，未变的字段沿用当前值（含「未动作」）。 */
+    fun pushValue() {
+        val previous = slotValues[slot.id] ?: SlotValue.UNSET
+        val combo = branchCombo
+        val box = includeBox
+        val selectedType = (typeCombo?.selectedItem as? ValueType) ?: previous.type
+        // 选「布尔」时走 SlotValue.bool（归一化 true/false 并带上 BOOLEAN 类型）；
+        // 其余类型沿用 copy 语义——只覆盖本控件负责的字段，未动作的字段保持不变
+        val base = if (selectedType == ValueType.BOOLEAN) {
+            SlotValue.bool(field.text)
+        } else {
+            previous.copy(type = selectedType, text = field.text)
+        }
+        val next = base.copy(
+            // 三元：下拉明确选了「未选」时 branch 必须回到 null（不能沿用上一次的分支）
+            branch = if (combo != null) runtimeSlotBranchOf(combo.selectedIndex) else previous.branch,
+            include = if (box != null) box.isSelected else previous.include,
+        )
+        slotValues[slot.id] = next
+        previewLabel?.let { updateRuntimeSlotPreviewLabel(slot, it, next) }
+        scheduleRender { renderSql() }
+    }
+
+    when (slot.kind) {
+        SlotKind.VALUE -> {
+            typeCombo = JComboBox(ValueType.values()).apply {
+                renderer = SimpleListCellRenderer.create<ValueType> { label, value, _ ->
+                    label.text = slotTypeText(value ?: ValueType.AUTO)
+                }
+                selectedItem = stored?.type ?: ValueType.AUTO
+                toolTipText = MpSqlVisualizerBundle.message("panel.slot.type.tooltip")
+                addActionListener { pushValue() }
+            }
+        }
+        SlotKind.LOOP -> {
+            previewLabel = JBLabel().apply {
+                name = "runtimeSlotPreview_${slot.id}"
+                foreground = JBColor.GRAY
+                toolTipText = MpSqlVisualizerBundle.message("panel.slot.loop.tooltip")
+                isVisible = false
+            }
+        }
+        SlotKind.TERNARY -> {
+            branchCombo = JComboBox(
+                arrayOf(
+                    MpSqlVisualizerBundle.message("panel.slot.ternary.none"),
+                    MpSqlVisualizerBundle.message("panel.slot.ternary.branch0", slotBranchPreview(slot, 0)),
+                    MpSqlVisualizerBundle.message("panel.slot.ternary.branch1", slotBranchPreview(slot, 1)),
+                ),
+            ).apply {
+                selectedIndex = when (stored?.branch) {
+                    0 -> 1
+                    1 -> 2
+                    else -> 0
+                }
+                toolTipText = MpSqlVisualizerBundle.message("panel.slot.ternary.tooltip")
+                addActionListener { pushValue() }
+            }
+        }
+        SlotKind.OPTIONAL -> {
+            includeBox = JCheckBox(MpSqlVisualizerBundle.message("panel.slot.include")).apply {
+                isSelected = stored?.include ?: true
+                toolTipText = MpSqlVisualizerBundle.message("panel.slot.optional.tooltip")
+                addActionListener { pushValue() }
+            }
+        }
+    }
+
+    field.document.addDocumentListener(object : DocumentListener {
+        override fun insertUpdate(e: DocumentEvent?) = pushValue()
+        override fun removeUpdate(e: DocumentEvent?) = pushValue()
+        override fun changedUpdate(e: DocumentEvent?) = pushValue()
+    })
+
+    runtimeSlotRows[slot.id] = RuntimeSlotRowControls(
+        kind = slot.kind,
+        field = field,
+        typeCombo = typeCombo,
+        branchCombo = branchCombo,
+        includeBox = includeBox,
+        previewLabel = previewLabel,
+    )
+    previewLabel?.let { updateRuntimeSlotPreviewLabel(slot, it, slotValues[slot.id] ?: SlotValue.UNSET) }
+
+    return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
+        name = "runtimeSlotRow_${slot.id}"
+        add(columnLabel(runtimeSlotRowLabel(slot, index), RUNTIME_SLOT_LABEL_WIDTH))
+        when (slot.kind) {
+            SlotKind.VALUE -> {
+                add(typeCombo)
+                add(field)
+            }
+            SlotKind.LOOP -> {
+                add(field)
+                add(previewLabel)
+            }
+            SlotKind.TERNARY -> {
+                add(branchCombo)
+                add(field)
+            }
+            SlotKind.OPTIONAL -> {
+                add(includeBox)
+                add(field)
+            }
+        }
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+    }
+}
+
+/** 分支下拉下标 → [SlotValue.branch]（0 = 未选，1 = 真分支，2 = 假分支）。 */
+internal fun runtimeSlotBranchOf(selectedIndex: Int): Int? = when (selectedIndex) {
+    1 -> 0
+    2 -> 1
+    else -> null
+}
+
+/**
+ * LOOP 行的展开预览：只取前 3 项喂**真实回填引擎**（[ParameterReplacer.replaceRuntimeSlots]），
+ * 渲染成什么就显示什么——不另写一套拼接逻辑，避免「预览与产物两套口径」。
+ * 无值 / 展开形态未知 / 引擎拒绝时返回 null（标签隐藏）。
+ */
+internal fun SqlPreviewPanel.slotLoopPreview(slot: RuntimeSlot, value: SlotValue): String? {
+    val items = RuntimeSlotValues.splitList(value.text)
+    if (items.isEmpty()) return null
+    val head = items.take(3)
+    val render = ParameterReplacer.replaceRuntimeSlots(
+        sql = slot.token,
+        slots = listOf(slot),
+        values = RuntimeSlotValues.of(slot.id to value.copy(text = head.joinToString("\n"))),
+        dialectName = current?.effectiveDialect?.name,
+    )
+    val text = render.sql.trim()
+    if (text.isEmpty() || text == slot.token) return null
+    return if (items.size > head.size) "$text …" else text
+}
+
+/** 刷新 LOOP 行的展开预览标签。 */
+internal fun SqlPreviewPanel.updateRuntimeSlotPreviewLabel(slot: RuntimeSlot, label: JBLabel, value: SlotValue) {
+    val preview = slotLoopPreview(slot, value)
+    label.text = preview ?: ""
+    label.isVisible = preview != null
+}
+
+/**
+ * 把本轮渲染的占位诊断写进面板并刷新展示位。
+ *
+ * 券 B 的拒绝（模板 `%s` 个数不符 / 展开形态未知 / 方言无布尔字面量 等）必须在界面上可见，
+ * 否则用户只看到「填了没生效」。诊断只展示，不阻断渲染（未填进去的占位按 D-5 原样保留）。
+ */
+internal fun SqlPreviewPanel.publishRuntimeSlotWarnings(warnings: List<SlotWarning>) {
+    slotRenderWarnings = warnings
+    refreshRuntimeSlotWarningLabel()
+}
+
+/** 刷新占位诊断行：首条内联 + 条数，完整清单进 tooltip。 */
+internal fun SqlPreviewPanel.refreshRuntimeSlotWarningLabel() {
+    val label = runtimeSlotWarningLabel ?: return
+    val warnings = slotRenderWarnings
+    if (warnings.isEmpty()) {
+        label.text = ""
+        label.toolTipText = null
+        label.isVisible = false
+        return
+    }
+    label.text = MpSqlVisualizerBundle.message(
+        "panel.slot.warning.summary",
+        warnings.first().toString(),
+        warnings.size,
+    )
+    label.toolTipText = warnings.joinToString("\n") { it.toString() }
+    label.isVisible = true
+}

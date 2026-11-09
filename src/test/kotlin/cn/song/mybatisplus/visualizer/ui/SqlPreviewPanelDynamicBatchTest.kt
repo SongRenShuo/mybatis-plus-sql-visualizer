@@ -384,9 +384,9 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testDynamicConditionDateTimeColumnValueQuoted() {
-        // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号——
-        // LocalDateTime 列回填 `2024-01-01 00:00:00` → `use_time = '2024-01-01 00:00:00'`（原实现无引号，SQL 无效）
+    fun testDynamicConditionDateTimeColumnValueTemporalLiteral() {
+        // T-M23-03：LocalDateTime 列回填不再是无引号；T-DateLiteralBackfill：进一步改为 ANSI 类型字面量
+        // （`'2024-01-01 00:00:00'` 在 Oracle 隐式转换恒败 ORA-01861）
         val statement = SelectStatement(
             table = tableInfo().copy(
                 columns = tableInfo().columns + ColumnInfo("useTime", "use_time", fieldType = "java.time.LocalDateTime"),
@@ -416,7 +416,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
             ),
         )
         panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
-        assertTrue(panel.editorForTest()!!.document.text.contains("use_time = '2024-01-01 00:00:00'"))
+        assertTrue(panel.editorForTest()!!.document.text.contains("use_time = TIMESTAMP '2024-01-01 00:00:00'"))
         panel.clear()
     }
 

@@ -1064,6 +1064,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test；attach(:65) 为夹具",
             ),
             GuardEntry(
+                "log/ReplayGuardStormVerdictTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；newArmedFilter/stmt/feedStream/feedReplay/settle 均为夹具，无 Boolean 判定函数",
+            ),
+            GuardEntry(
                 "log/SqlLogAutoSaverPruneGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；tempDir/makeFile/namesOf/entryOf 为夹具",

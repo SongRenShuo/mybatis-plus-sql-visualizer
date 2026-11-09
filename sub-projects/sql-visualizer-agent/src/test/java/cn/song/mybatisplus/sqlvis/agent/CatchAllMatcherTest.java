@@ -251,6 +251,69 @@ public class CatchAllMatcherTest {
                 "org.h2.jdbc.JdbcStatement"));
     }
 
+    // ---------- T-SqlListCatchup 券 G1：已知连接池包装族从「未登记」曝光排除 ----------
+
+    /**
+     * 池包装类是包装层不是驱动：从「未登记 JDBC 实现」曝光排除，织入面零变化。
+     *
+     * <p>真机形态（2026-11-07 join-demo，修复前）：Hikari 三类
+     * （{@code HikariProxyPreparedStatement}/{@code ProxyStatement}/{@code ProxyConnection}）
+     * 常驻诊断行「发现未登记 JDBC 实现：…」。修复后：该行不再出现池包装类；同时池包装类
+     * **照旧兜底匹配并织入**（真机记忆里「解一层包装登记内层」的先例＝
+     * StatementRegistry 内层登记 + NestGate 嵌套去重，采集语义不动）。
+     *
+     * <p>反向验证（S2）：从 {@link CatchAllMatcher} 的池包装前缀表里删掉
+     * {@code com.zaxxer.hikari.pool.} 重跑，本用例必红（Hikari 类重新混进未登记快照）。
+     */
+    @Test
+    public void 池包装类_不报未登记但仍织入() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> hikariPs = Class.forName(HIKARI_PS, false, hikariLoader());
+        final Class<?> hikariConn = Class.forName(HIKARI_CONN, false, hikariLoader());
+
+        CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{candidate, hikariPs, hikariConn}), false);
+
+        assertTrue("真实未知驱动仍必须报（池排除不得误伤取证路径）："
+                        + CaptureBudget.unregisteredDrivers(),
+                CaptureBudget.unregisteredDrivers().contains(STATEMENT_CANDIDATE));
+        assertFalse("Hikari PS 生成物不得再报未登记（券 G1）：", CaptureBudget.unregisteredDrivers().contains(HIKARI_PS));
+        assertFalse("Hikari Connection 生成物不得再报未登记（券 G1）：",
+                CaptureBudget.unregisteredDrivers().contains(HIKARI_CONN));
+        assertTrue("池包装类织入面零变化：仍须登记接受表（transformer 走同一织入通道）",
+                CatchAllMatcher.acceptedSpecs().containsKey(HIKARI_PS)
+                        && CatchAllMatcher.acceptedSpecs().containsKey(HIKARI_CONN));
+        assertEquals("三类各织一次（真驱动 1 + 池包装 2）：" + retransformed, 3, retransformed.size());
+    }
+
+    /**
+     * 前缀表覆盖五族已知池包装且不放行真驱动类名。
+     *
+     * <p>形态核对口径见 {@link CatchAllMatcher} POOL_WRAPPER_PREFIXES KDoc（真机 jar 仅有
+     * Hikari，其余四族按字节/常识形态列具名代表；前缀级判定整族覆盖）。
+     */
+    @Test
+    public void 池包装前缀表_已知族命中且不放行真驱动() {
+        assertTrue("Hikari 生成物（真机三类之一）",
+                CatchAllMatcher.isKnownPoolWrapper("com.zaxxer.hikari.pool.ProxyStatement"));
+        assertTrue("c3p0 NewProxy*（impl 子包被前缀覆盖）",
+                CatchAllMatcher.isKnownPoolWrapper("com.mchange.v2.c3p0.impl.NewProxyPreparedStatement"));
+        assertTrue("DBCP 2.x Delegating*/Poolable*",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.commons.dbcp2.PoolablePreparedStatement"));
+        assertTrue("DBCP 1.x（遗留应用仍在用）",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.commons.dbcp.PoolableConnection"));
+        assertTrue("Tomcat-JDBC 静态包装（其语句代理多为 JDK 动态代理，另被代理排除兜住）",
+                CatchAllMatcher.isKnownPoolWrapper("org.apache.tomcat.jdbc.pool.ProxyConnection"));
+        assertTrue("Druid DruidPooled*",
+                CatchAllMatcher.isKnownPoolWrapper("com.alibaba.druid.pool.DruidPooledPreparedStatement"));
+
+        assertFalse("真驱动类名不得被误吞（国产驱动取证面）",
+                CatchAllMatcher.isKnownPoolWrapper("org.panweidb.jdbc.PgPreparedStatement"));
+        assertFalse("仓内夹具驱动不得被误吞", CatchAllMatcher.isKnownPoolWrapper(STATEMENT_CANDIDATE));
+        assertFalse("非池包前缀的同名字类不得被误吞",
+                CatchAllMatcher.isKnownPoolWrapper("cn.example.pool.HikariProxyPreparedStatement"));
+        assertFalse("null 安全", CatchAllMatcher.isKnownPoolWrapper(null));
+    }
+
     // ---------- T-IbatisPanwei 券 E：扫描预算只对候选类计数 ----------
 
     /**

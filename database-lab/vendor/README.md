@@ -24,8 +24,13 @@
 | `drivers/panweidb-jdbc-2.0.0.jar` | 890,254 B | `ed4e0dcade650c5d1760bc37ad76218155f5159a5171af780d6567bb1b95fb5d` | 磐维 V2 驱动（用户从墨天轮下载，2023-12-28 构建；类形与 V1 一致） |
 | `docs/磐维数据库（PanWeiDB）V2.0-S3.0.0_Beta应用程序开发指南.pdf` | 3,288,977 B | `9b79be7e7fe265312f064a0c21998808b2ca52272e0a2411855af52556fba698` | open.10086.cn 官方文档 |
 | `docs/磐维数据库_V2.0.0 开发者指南.pdf` | 8,301,620 B | `0b08de3ea5575cfdef2226f14e6a7538f96c72e1c6f21b91baa1d6ab129d49aa` | 用户提供；1955 页，表 1-1~1-5 是方言兼容模式的权威依据 |
+| `drivers/gdb_mysql-connector-java-oracle-5.1.46.99.jar` | 1,129,905 B | `ccf2f4cbce0dc4978a38683fe059b8dfb736347111301d5a0d51a67d236d7a2f` | 中兴 GoldenDB 自研 JDBC 驱动（用户提供，2026-11-07）。**原始文件名** `gdb_mysql-connector-java-oracle-5.1.46.99(1).jar`，末尾 `(1)` 是浏览器下载重名后缀，入库时已去掉。Manifest：`Implementation-Version 5.1.46.99`、`Bundle-Version 5.1.46.99_2025-0619-0817`、`Bundle-SymbolicName com.goldendb.jdbc`、`Built-By root`、`Created-By 1.8.0_281`；`META-INF/serial.txt` 记 gerrit `JZ_GoldenDB/Driver/JDBC`、分支 `ZXCLOUD-GoldenDB-connector-java-0.0.1-oracle`、rev `6a1c68f`、buildnum 907 |
+| `docs/GoldenDB开发支持.pdf` | 3,329,496 B | `3e3df8b988351e235079b612b1321d9033412885078733e0128783bb25b4aab7` | 用户提供；379 页，封面「ZXCLOUD GoldenDB 数据库 / GoldenDB产品手册_开发支持 / **产品版本 V6.1.03.10**」。本仓引用的页码按此文件（清单见 `docs/开发计划/20261107-*-T-GoldenDbDialect-*` §一） |
 
-消费方：`sub-projects/sql-visualizer-agent` 的 `StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验`——自动遍历 `drivers/panweidb-jdbc-*.jar`，**每一代都验**（V1/V2 同轮）。
+消费方：
+
+- `sub-projects/sql-visualizer-agent` 的 `StatementWeaverVendorCoverageTest.磐维字节层_驱动jar在位时必须真实织入且过校验`——自动遍历 `drivers/panweidb-jdbc-*.jar`，**每一代都验**（V1/V2 同轮）。
+- GoldenDB 驱动**暂无消费方**：`com.goldendb.*` 三面尚未登记进 `DriverRegistry` / `WeaveSpecs`（立项见 `docs/开发计划/20261107-*-T-GoldenDbDialect-*`）。登记后由同一条「字节层_驱动jar在位时必须真实织入且过校验」用例按 `drivers/gdb_mysql-connector-java-*.jar` 自动遍历。
 
 ## 约定
 

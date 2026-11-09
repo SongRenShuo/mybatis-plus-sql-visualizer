@@ -144,11 +144,13 @@ class ReplayGuardLine0ReadTest {
 
     @Test
     fun `混合态判定经真实line0Reader_与纯逻辑守卫测试同断言`() {
-        val (ref, ctx) = attach("X\nrest of history")
+        // 券 G2：文档须比合成水位长（历史夹具 17 字符 < 水位 100 会落进新的「文档缩水」
+        // 重置分支）——本用例钉住「文档未缩水时混合态照旧判 Replay」的既有语义。
+        val (ref, ctx) = attach("X\n" + "z".repeat(120))
         val guard = ctx.replayGuard
         // 流式推进
         assertEquals(Decision.Process, guard.decide(100, 1L, "X", ctx.line0Reader))
-        // 重放叠加新增混合态：stamp 变 + 行文本 == 首行 → Replay（历史断言逐字复刻）
+        // 重放叠加新增混合态：stamp 变 + 行文本 == 首行（文档未缩水）→ Replay（历史断言逐字复刻）
         ref.stamp = 2L
         assertEquals(Decision.Replay, guard.decide(10, 2L, "X", ctx.line0Reader))
         assertEquals("混合态判 Replay 水位不动", 100, guard.watermark)
@@ -156,5 +158,40 @@ class ReplayGuardLine0ReadTest {
         ref.stamp = 3L
         assertEquals(Decision.Reset, guard.decide(5, 3L, "fresh", ctx.line0Reader))
         assertEquals(5, guard.watermark)
+    }
+
+    // ---------- T-SqlListCatchup 券 G2：clear 后经真实 readers 的重印分流 ----------
+
+    /**
+     * 真实反射 readers（stamp/行0/文档长度）驱动 clear→重印序列：首行不再误判 Replay。
+     *
+     * 平台实证（243 sources，ConsoleViewImpl.doClear）：`document.deleteString(0, textLength)`
+     * 清空**同一文档实例**——偏移从头重计、stamp 变、reflection 句柄持续有效。旧判据把重印首行
+     * （必然等于行 0）判成 Replay，后续新行因水位已陈旧、stamp 已同步也判 Replay——丢到新文档
+     * 长度追平旧水位为止（大文档风暴后一次 clear = 控制台通道静默数分钟级）。
+     *
+     * 反向验证（S2）：摘掉守卫 decide 的文档缩水分支重跑，本用例必红。
+     */
+    @Test
+    fun `clear后重印经真实readers_首行与后续行均Process`() {
+        val (ref, ctx) = attach("X\n" + "z".repeat(200))
+        val guard = ctx.replayGuard
+        // 流式推进（水位=文档尾 202）
+        assertEquals(Decision.Process, guard.decide(202, 1L, "tail", ctx.line0Reader, ctx.docLengthReader))
+        // console.clear()：同一文档清空（stamp 变），随后重印第一行
+        ref.stamp = 2L
+        ref.text = "fresh-first-line\n"
+        assertEquals(
+            "clear 后首个重印行不得判 Replay（等于行 0 的形态由文档缩水分支核销水位）",
+            Decision.Reset,
+            guard.decide(16, 2L, "fresh-first-line", ctx.line0Reader, ctx.docLengthReader),
+        )
+        assertEquals("陈旧水位核销为当前行尾", 16, guard.watermark)
+        // 后续重印行：水位已核销，单调 Process（旧判据下这些行全部判 Replay 丢弃）
+        assertEquals(
+            Decision.Process,
+            guard.decide(40, 2L, "next-line", ctx.line0Reader, ctx.docLengthReader),
+        )
+        assertEquals(40, guard.watermark)
     }
 }

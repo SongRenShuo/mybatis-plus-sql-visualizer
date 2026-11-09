@@ -3,11 +3,14 @@ package cn.song.mybatisplus.visualizer.sql
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -244,5 +247,445 @@ class ParameterReplacerTest {
         val single = SqlGenerator.generate(statement, compact = true)
         // 去掉空白后应一致
         assertEquals(multi.replace(Regex("\\s+"), " ").trim(), single)
+    }
+
+    // ------------------------------------------------------------------
+    // T-RuntimeSlotFill 券 B：运行期占位回填
+    // ------------------------------------------------------------------
+
+    /** 造一个占位：token 与券 A 产物同形（`运行时值: <摘要> · <id>` 包在块注释里）。 */
+    private fun slot(
+        id: String,
+        kind: SlotKind,
+        expression: String = "expr",
+        template: String? = null,
+        hint: ParamHint = ParamHint(),
+    ) = RuntimeSlot(
+        id = id,
+        kind = kind,
+        expression = expression,
+        template = template,
+        hint = hint,
+        token = "/* 运行时值: $expression · $id */",
+    )
+
+    private fun render(
+        sql: String,
+        slots: List<RuntimeSlot>,
+        values: RuntimeSlotValues,
+        dialectName: String? = null,
+    ) = ParameterReplacer.replaceRuntimeSlots(sql, slots, values, dialectName)
+
+    // ---- VALUE -------------------------------------------------------
+
+    @Test
+    fun `运行期占位_VALUE_落在引号内只转义不重复加引号`() {
+        val target = slot("rt2", SlotKind.VALUE, "startTime", hint = ParamHint(quote = true))
+        val sql = "SELECT id FROM t WHERE create_time >= '${target.token}'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt2" to SlotValue.text("2026-01-01 00:00:00")))
+
+        assertEquals(
+            "SELECT id FROM t WHERE create_time >= '2026-01-01 00:00:00'",
+            result.sql,
+        )
+        assertEquals("占位应在账上", listOf("rt2"), result.appliedSlotIds)
+        assertFalse("不应残留占位注释", result.sql.contains("运行时值"))
+    }
+
+    @Test
+    fun `运行期占位_VALUE_单引号转义`() {
+        val target = slot("rt1", SlotKind.VALUE, "name", hint = ParamHint(quote = true))
+        val sql = "SELECT id FROM t WHERE name = '${target.token}'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("O'Brien")))
+        assertEquals("SELECT id FROM t WHERE name = 'O''Brien'", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_VALUE_注入串仍是一个字符串字面量`() {
+        val target = slot("rt1", SlotKind.VALUE, "name", hint = ParamHint(quote = true))
+        val sql = "SELECT id FROM t WHERE name = '${target.token}'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("1' OR '1'='1")))
+        assertEquals("SELECT id FROM t WHERE name = '1'' OR ''1''=''1'", result.sql)
+        // 第二个条件没有被造出来：引号全部成对（转义后）
+        assertEquals("内部条件分隔符应被转义成字面量", 1, result.sql.split(" OR ").size - 1)
+    }
+
+    @Test
+    fun `运行期占位_VALUE_中文与无 hint 时的数值启发式`() {
+        val zh = slot("rt1", SlotKind.VALUE, "keyword")
+        val num = slot("rt2", SlotKind.VALUE, "id")
+        val sql = "SELECT id FROM t WHERE name = '${zh.token}' AND id = ${num.token}"
+        val result = render(
+            sql,
+            listOf(zh, num),
+            RuntimeSlotValues.of(
+                "rt1" to SlotValue.text("张三"),
+                "rt2" to SlotValue.text("1001"),
+            ),
+        )
+        assertEquals("SELECT id FROM t WHERE name = '张三' AND id = 1001", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_VALUE_NULL_裸出并提示判空写法`() {
+        val target = slot("rt1", SlotKind.VALUE, "x")
+        val sql = "SELECT id FROM t WHERE x = ${target.token}"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.sqlNull()))
+        assertEquals("SELECT id FROM t WHERE x = NULL", result.sql)
+        assertTrue(
+            "应提示 = NULL 恒不成立: ${result.warnings.map { it.message }}",
+            result.warnings.any { it.message.contains("IS NULL") },
+        )
+    }
+
+    @Test
+    fun `运行期占位_VALUE_选了数字但输入非数字_按字符串渲染并提示`() {
+        val target = slot("rt1", SlotKind.VALUE, "amount")
+        val sql = "SELECT id FROM t WHERE amount > ${target.token}"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.number("12abc")))
+        assertEquals("SELECT id FROM t WHERE amount > '12abc'", result.sql)
+        assertTrue(
+            "应提示已按字符串处理: ${result.warnings.map { it.message }}",
+            result.warnings.any { it.message.contains("非数字") || it.message.contains("字符串") },
+        )
+    }
+
+    @Test
+    fun `运行期占位_VALUE_布尔按方言_Oracle拒绝并提示改1或0`() {
+        val target = slot("rt1", SlotKind.VALUE, "flag")
+        val sql = "SELECT id FROM t WHERE flag = ${target.token}"
+        val values = RuntimeSlotValues.of("rt1" to SlotValue.text("true", ValueType.BOOLEAN))
+
+        val mysql = render(sql, listOf(target), values, "MySQL")
+        assertEquals("SELECT id FROM t WHERE flag = TRUE", mysql.sql)
+
+        val oracle = render(sql, listOf(target), values, "Oracle")
+        assertEquals("Oracle 无布尔字面量 → 拒绝展开，占位原样保留", sql, oracle.sql)
+        assertTrue(
+            "应提示改成 1/0: ${oracle.warnings.map { it.message }}",
+            oracle.warnings.any { it.message.contains("1/0") },
+        )
+    }
+
+    // ---- LOOP --------------------------------------------------------
+
+    @Test
+    fun `运行期占位_LOOP_首项其余两支展开`() {
+        val target = slot(
+            "rt1",
+            SlotKind.LOOP,
+            "循环内追加",
+            template = RuntimeSlot.joinBranches(listOf("id='%s' ", "or id='%s' ")),
+        )
+        val sql = "SELECT id FROM t WHERE (${target.token}) and x = 1"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("1, 2\n3")))
+
+        assertEquals("SELECT id FROM t WHERE (id='1' or id='2' or id='3' ) and x = 1", result.sql)
+        assertEquals(listOf("rt1"), result.appliedSlotIds)
+    }
+
+    @Test
+    fun `运行期占位_LOOP_值里带引号在模板引号内转义`() {
+        val target = slot(
+            "rt1",
+            SlotKind.LOOP,
+            "循环内追加",
+            template = RuntimeSlot.joinBranches(listOf("name='%s' ", "or name='%s' ")),
+        )
+        val sql = "SELECT id FROM t WHERE (${target.token})"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("张三, O'Brien")))
+
+        assertEquals("SELECT id FROM t WHERE (name='张三' or name='O''Brien' )", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_LOOP_模板里出现多个标记_拒绝展开并提示`() {
+        // 券 A 报告第①条坑：源码自带 %s（LIKE '%s%'）会让标记计数虚高
+        val target = slot(
+            "rt1",
+            SlotKind.LOOP,
+            "循环内追加",
+            template = RuntimeSlot.joinBranches(listOf("v LIKE '%s%s%' ")),
+        )
+        val sql = "SELECT id FROM t WHERE (${target.token})"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("1,2")))
+
+        assertEquals("计数不符必须拒绝展开（占位原样保留）", sql, result.sql)
+        assertEquals("不算已回填", emptyList<String>(), result.appliedSlotIds)
+        assertTrue(
+            "应说明为什么拒绝: ${result.warnings.map { it.message }}",
+            result.warnings.any { it.message.contains("拒绝展开") && it.message.contains("不符") },
+        )
+    }
+
+    @Test
+    fun `运行期占位_LOOP_形态未知但落在IN列表_按逗号连接`() {
+        val target = slot("rt1", SlotKind.LOOP, "ids", hint = ParamHint(inList = true))
+        val sql = "SELECT id FROM t WHERE id IN (${target.token})"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("1,2,3")))
+        assertEquals("SELECT id FROM t WHERE id IN (1, 2, 3)", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_LOOP_形态未知且不在IN列表_拒绝猜形态`() {
+        val target = slot("rt1", SlotKind.LOOP, "ids")
+        val sql = "SELECT id FROM t WHERE x = ${target.token}"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("1,2")))
+        assertEquals(sql, result.sql)
+        assertTrue(result.warnings.any { it.message.contains("展开形态未知") })
+    }
+
+    // ---- TERNARY -----------------------------------------------------
+
+    @Test
+    fun `运行期占位_TERNARY_空支选真分支_片段整段消失`() {
+        val target = slot(
+            "rt1",
+            SlotKind.TERNARY,
+            "(status == null ? 空 : 追加)",
+            template = RuntimeSlot.joinBranches(listOf("", " AND status = %s")),
+        )
+        val sql = "SELECT id FROM t WHERE 1 = 1 ${target.token} AND order_no LIKE 'x'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.branch(0)))
+
+        assertEquals("SELECT id FROM t WHERE 1 = 1 AND order_no LIKE 'x'", result.sql)
+        assertFalse("不应残留占位", result.sql.contains("运行时值"))
+    }
+
+    @Test
+    fun `运行期占位_TERNARY_选假分支_按值填模板`() {
+        val target = slot(
+            "rt1",
+            SlotKind.TERNARY,
+            "(status == null ? 空 : 追加)",
+            template = RuntimeSlot.joinBranches(listOf("", " AND status = %s")),
+        )
+        val sql = "SELECT id FROM t WHERE 1 = 1 ${target.token} AND order_no LIKE 'x'"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.branch(1, "1")))
+
+        assertTrue("应出现 AND status = 1: ${result.sql}", result.sql.contains("AND status = 1"))
+        assertTrue("ORDER BY 之前的其余条件应保留", result.sql.contains("AND order_no LIKE 'x'"))
+        assertFalse("不应残留占位", result.sql.contains("运行时值"))
+    }
+
+    @Test
+    fun `运行期占位_TERNARY_没选分支_原样保留并提示`() {
+        val target = slot(
+            "rt1",
+            SlotKind.TERNARY,
+            "三元",
+            template = RuntimeSlot.joinBranches(listOf("A", "B")),
+        )
+        val sql = "SELECT id FROM t WHERE ${target.token}"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("x")))
+        assertEquals(sql, result.sql)
+        assertTrue(result.warnings.any { it.message.contains("没选分支") })
+    }
+
+    // ---- OPTIONAL ----------------------------------------------------
+
+    @Test
+    fun `运行期占位_OPTIONAL_包含_按模板填值`() {
+        val target = slot(
+            "rt1",
+            SlotKind.OPTIONAL,
+            "条件追加",
+            template = RuntimeSlot.joinBranches(listOf("AND order_no LIKE '%%s%' ")),
+            hint = ParamHint(quote = true),
+        )
+        val sql = "SELECT id FROM t WHERE deleted = 0 ${target.token}ORDER BY id DESC"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("abc")))
+
+        assertEquals("SELECT id FROM t WHERE deleted = 0 AND order_no LIKE '%abc%' ORDER BY id DESC", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_OPTIONAL_不包含_整段删除且空白收敛`() {
+        val target = slot(
+            "rt1",
+            SlotKind.OPTIONAL,
+            "条件追加",
+            template = RuntimeSlot.joinBranches(listOf("AND amount >= %s ")),
+        )
+        val sql = "SELECT id FROM t WHERE deleted = 0 ${target.token}  ORDER BY id DESC"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.excluded()))
+
+        assertEquals("SELECT id FROM t WHERE deleted = 0 ORDER BY id DESC", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_OPTIONAL_无模板_值位置就地填且字符串内只转义`() {
+        // T-RuntimeSlotOptionalFill R2 的多值回退形态：token 只是值的位置（template=null），
+        // 静态前缀/后缀在 token 外——必须就地填值，不能展开整段片段（否则重复静态前缀）。
+        val target = slot(
+            "rt1",
+            SlotKind.OPTIONAL,
+            "keyword",
+            template = null,
+            hint = ParamHint(quote = true),
+        )
+        val sql = "SELECT id FROM t WHERE name LIKE '%${target.token}%' ORDER BY id"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.string("A01")))
+
+        assertEquals("SELECT id FROM t WHERE name LIKE '%A01%' ORDER BY id", result.sql)
+        assertFalse("不应残留占位注释", result.sql.contains("运行时值"))
+
+        // 取消包含：值位置形态只移除当前值 token，静态前后缀保留——必须给提示，不静默
+        val excluded = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.excluded()))
+        assertFalse("值 token 应被移除", excluded.sql.contains("运行时值"))
+        assertTrue(
+            "多值回退形态取消包含必须提示静态片段保留: ${excluded.warnings}",
+            excluded.warnings.any { it.message.contains("静态片段会保留") },
+        )
+    }
+
+    // ---- 顺序 / 安全 / 留空 -------------------------------------------
+
+    @Test
+    fun `运行期占位_留空逐字一致_且与改前替换口径相同`() {
+        val target = slot("rt1", SlotKind.VALUE, "a")
+        val sql = "SELECT * FROM t WHERE a = ${target.token} AND b = ? AND c = 'x'"
+        val sources = listOf("b")
+        val paramValues = mapOf("b" to "7")
+        val hints = listOf(ParamHint(quote = false))
+
+        val legacy = ParameterReplacer.buildExecutableSql(sql, sources, paramValues, hints)
+        val unifiedEmpty = ParameterReplacer.buildExecutableSqlWithSlots(
+            sql = sql,
+            slots = listOf(target),
+            slotValues = RuntimeSlotValues.EMPTY,
+            sources = sources,
+            paramValues = paramValues,
+            hints = hints,
+        )
+        assertEquals("空值表与改前逐字节一致", legacy, unifiedEmpty.sql)
+        assertEquals("空值表不算回填", emptyList<String>(), unifiedEmpty.appliedSlotIds)
+
+        val unset = ParameterReplacer.buildExecutableSqlWithSlots(
+            sql = sql,
+            slots = listOf(target),
+            slotValues = RuntimeSlotValues.of("rt1" to SlotValue.UNSET),
+            sources = sources,
+            paramValues = paramValues,
+            hints = hints,
+        )
+        assertEquals("登记了但未动作，同样逐字节一致", legacy, unset.sql)
+
+        val onlySlots = ParameterReplacer.replaceRuntimeSlots(sql, listOf(target), RuntimeSlotValues.EMPTY)
+        assertEquals("只做占位替换时空表也逐字一致", sql, onlySlots.sql)
+        assertFalse("不应出现 NULL", onlySlots.sql.contains("NULL"))
+    }
+
+    @Test
+    fun `运行期占位_与问号命名参数混用_三样都正确且互不二次替换`() {
+        val loop = slot("rt1", SlotKind.LOOP, "ids", hint = ParamHint(inList = true))
+        val note = slot("rt2", SlotKind.VALUE, "note", hint = ParamHint(quote = true))
+        val sql = "SELECT * FROM t WHERE id IN (${loop.token}) AND name = :nm " +
+            "AND age = ? AND note = '${note.token}'"
+        val values = RuntimeSlotValues.of(
+            "rt1" to SlotValue.text("1,2"),
+            "rt2" to SlotValue.text("a?b :nm"),
+        )
+        val result = ParameterReplacer.buildExecutableSqlWithSlots(
+            sql = sql,
+            slots = listOf(loop, note),
+            slotValues = values,
+            sources = listOf("age"),
+            paramValues = mapOf("nm" to "O'Brien", "age" to "18"),
+            hints = listOf(ParamHint(quote = false)),
+            namedHints = mapOf("nm" to ParamHint(quote = true)),
+        )
+        assertEquals(
+            "SELECT * FROM t WHERE id IN (1, 2) AND name = 'O''Brien' AND age = 18 AND note = 'a?b :nm'",
+            result.sql,
+        )
+        assertFalse("不应残留占位", result.sql.contains("运行时值"))
+        assertTrue("值里的 ? 不应被当占位二次填", result.sql.contains("'a?b :nm'"))
+        assertTrue("真正的 ? 应被真实回填", result.sql.contains("age = 18"))
+        assertFalse("不应残留待填的 age = ?", result.sql.contains("age = ?"))
+    }
+
+    @Test
+    fun `运行期占位_未回填时占位注释里的冒号不被命名参数误伤`() {
+        val target = slot("rt1", SlotKind.VALUE, "k == 0 ? x : y")
+        val sql = "SELECT * FROM t WHERE a = ${target.token} AND b = :y"
+        val result = ParameterReplacer.buildExecutableSqlWithSlots(
+            sql = sql,
+            slots = listOf(target),
+            slotValues = RuntimeSlotValues.EMPTY,
+            paramValues = mapOf("y" to "V"),
+            namedHints = mapOf("y" to ParamHint(quote = true)),
+        )
+        assertEquals("SELECT * FROM t WHERE a = ${target.token} AND b = 'V'", result.sql)
+    }
+
+    @Test
+    fun `运行期占位_找不到占位_提示且不改文本`() {
+        val target = slot("rt9", SlotKind.VALUE, "x")
+        val sql = "SELECT id FROM t"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt9" to SlotValue.text("1")))
+        assertEquals(sql, result.sql)
+        assertTrue(result.warnings.any { it.message.contains("找不到") })
+    }
+
+    @Test
+    fun `运行期占位_同一占位出现两次_两处都填且区间不重叠`() {
+        val target = slot("rt1", SlotKind.VALUE, "x")
+        val sql = "SELECT * FROM t WHERE (${target.token}) = (${target.token})"
+        val result = render(sql, listOf(target), RuntimeSlotValues.of("rt1" to SlotValue.text("9")))
+        assertEquals("SELECT * FROM t WHERE (9) = (9)", result.sql)
+        assertEquals(listOf("rt1"), result.appliedSlotIds)
+        assertTrue("应记下两段替换区间", result.protectedSpans.isNotEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-DateLiteralBackfill：日期族 ANSI 字面量
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `buildExecutableSql_日期族参数产出ANSI字面量`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "UPDATE t SET update_time = ? WHERE id = ?",
+            sources = listOf("updateTime", "id"),
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417", "id" to "1"),
+            hints = listOf(ParamHint(quote = true, temporal = true), ParamHint(quote = false)),
+        )
+        assertEquals(
+            "UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417' WHERE id = 1",
+            result,
+        )
+    }
+
+    @Test
+    fun `buildExecutableSql_SQLServer日期族回落引号`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "UPDATE t SET update_time = ?",
+            sources = listOf("updateTime"),
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417"),
+            hints = listOf(ParamHint(quote = true, temporal = true)),
+            dialectName = "SQL Server",
+        )
+        assertEquals("UPDATE t SET update_time = '2026-11-07T13:20:14.417'", result)
+    }
+
+    @Test
+    fun `命名参数_日期族产出ANSI字面量`() {
+        val result = ParameterReplacer.replaceNamedParams(
+            sql = "UPDATE t SET update_time = :updateTime",
+            paramValues = mapOf("updateTime" to "2026-11-07T13:20:14.417"),
+            hints = mapOf("updateTime" to ParamHint(quote = true, temporal = true)),
+        )
+        assertEquals("UPDATE t SET update_time = TIMESTAMP '2026-11-07 13:20:14.417'", result)
+    }
+
+    @Test
+    fun `日期族_LIKE优先_仍按字符串引号`() {
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = "SELECT * FROM t WHERE name LIKE ?",
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "2026-11-07"),
+            hints = listOf(ParamHint(quote = true, temporal = true, likePosition = LikePosition.ANYWHERE)),
+        )
+        assertEquals("SELECT * FROM t WHERE name LIKE '2026-11-07'", result)
     }
 }

@@ -184,6 +184,15 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-DockerGateOffload（2026-11-07）：五容器用例的外指端点解析入口。默认与 dialectExternalVerify
+    // 共用同一份矩阵文件（.local/dialect-external-matrix.properties，凭据只在 .local 不进仓），
+    // -PdialectExternalMatrix=<路径> 可覆盖。文件/条目缺失时该用例回落容器路径（容器路径无 Docker
+    // 仍显式跳过）；日常门禁（-PmpvDockerTests 缺省）外指腿同样被上面的开关拦住，零网络触达。
+    systemProperty(
+        "mpvs.dockerext.matrix",
+        providers.gradleProperty("dialectExternalMatrix")
+            .getOrElse(layout.projectDirectory.file(".local/dialect-external-matrix.properties").asFile.absolutePath),
+    )
     // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
     //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
     // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
@@ -549,12 +558,29 @@ tasks.register<Test>("dialectExternalVerify") {
     // 每轮真跑：实例侧数据会被套件自行清理，但任务本身无源码变更时会被判 UP-TO-DATE，
     // 读旧 XML 等于拿上一轮读数冒充本轮（与 testExternal 同款理由）
     outputs.upToDateWhen { false }
-    // 与 tasks.test 同口径：-Dmpvs.* 透传到测试 JVM。
-    // 券 A 实测（T-MatrixInstanceTimeout，2026-11-06）：不带这段时 `-Dmpvs.external.instanceTimeout`
-    // 被静默忽略——实例预算只认矩阵条目的 `timeoutSeconds`，而计划册/模板把它列为系统属性通道，
-    // 属「文档写了但没接线」。扫描放两条显式 systemProperty 之前：矩阵/摘要路径仍由构建配置定。
-    System.getProperties().forEach { (k, v) ->
-        if (k is String && k.startsWith("mpvs.") && v is String) systemProperty(k, v)
+    // -Dmpvs.* 透传到测试 JVM。**逐键用 providers.systemProperty**（configuration-cache 的输入），
+    // 不用 System.getProperties() 全量扫描：后者在配置缓存命中时配置期根本不重跑 → 换了 -D 也被
+    // 静默沿用旧值（2026-11-06 实证：`-Dmpvs.external.maxConcurrency=1` 首次被忽略，summary 仍写
+    // 「默认=4」，须加 --no-configuration-cache 才生效）。
+    // 只列「测试侧真正读的」键（`grep -rhoE '"mpvs\.[a-zA-Z.]+"' src/test` 对账）；新增键请同步。
+    listOf(
+        "mpvs.external.instanceTimeout",
+        "mpvs.external.maxConcurrency",
+        // T-DialectSweepSpeed2（2026-11-07）：单实例内词级并行度上限（1 = 关闭，反向验证用）
+        "mpvs.external.wordWorkers",
+        "mpvs.docker.tests.enabled",
+        "mpvs.dialect.name",
+        "mpvs.dialect.jdbcUrl",
+        "mpvs.dialect.user",
+        "mpvs.dialect.password",
+        "mpvs.dialect.multiRowValues",
+        "mpvs.dm.url",
+        "mpvs.dm.user",
+        "mpvs.dm.password",
+        "mpvs.dump.dir",
+        "mpvs.preview.splitter",
+    ).forEach { key ->
+        providers.systemProperty(key).orNull?.takeIf { it.isNotBlank() }?.let { systemProperty(key, it) }
     }
     systemProperty("mpvs.external.matrix", dialectExternalMatrixPath)
     systemProperty(

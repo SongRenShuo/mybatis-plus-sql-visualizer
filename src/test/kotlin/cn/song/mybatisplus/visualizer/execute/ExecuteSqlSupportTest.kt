@@ -1,6 +1,13 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
+import cn.song.mybatisplus.visualizer.sql.SlotKind
+import cn.song.mybatisplus.visualizer.sql.SlotValue
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
@@ -29,5 +36,45 @@ class ExecuteSqlSupportTest : BasePlatformTestCase() {
         // 面板层已过滤空白 SQL；支持层对任意文本都不抛异常
         ExecuteSqlSupport.execute(project, "")
         assertTrue(true)
+    }
+
+    // ------------------------------------------------------------------
+    // T-RuntimeSlotFill 券 B：执行链的占位回填
+    // ------------------------------------------------------------------
+
+    fun testRenderForExecutionFillsRuntimeSlotsAndMatchesExecutableEntry() {
+        val slot = RuntimeSlot(
+            id = "rt2",
+            kind = SlotKind.VALUE,
+            expression = "startTime",
+            template = null,
+            hint = ParamHint(quote = true),
+            token = "/* 运行时值: startTime · rt2 */",
+        )
+        val sql = "SELECT id FROM t_order WHERE create_time >= '${slot.token}'"
+        val values = RuntimeSlotValues.of("rt2" to SlotValue.text("2026-01-01"))
+
+        val rendered = ExecuteSqlSupport.renderForExecution(sql, listOf(slot), values, "MySQL")
+        assertEquals("SELECT id FROM t_order WHERE create_time >= '2026-01-01'", rendered)
+        assertFalse("执行文本不应残留占位注释", rendered.contains("运行时值"))
+        // 执行链与复制/分享/导出共用同一入口：文本必须逐字一致
+        assertEquals(
+            "执行链文本必须与可执行 SQL 唯一入口一致",
+            ExecutableSqlFormatter.format(
+                sql = sql,
+                sources = emptyList(),
+                paramValues = emptyMap(),
+                slots = listOf(slot),
+                slotValues = values,
+                dialectName = "MySQL",
+            ),
+            rendered,
+        )
+    }
+
+    fun testRenderForExecutionWithoutSlotsIsIdentity() {
+        // 无占位时逐字原样（既有执行链零变化）
+        val sql = "SELECT id\n  FROM t_order WHERE create_time >= '2026-01-01'"
+        assertEquals(sql, ExecuteSqlSupport.renderForExecution(sql))
     }
 }

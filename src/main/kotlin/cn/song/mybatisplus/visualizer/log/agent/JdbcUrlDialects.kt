@@ -44,6 +44,10 @@ internal object JdbcUrlDialects {
         // 键不冲突。角标只如实展示产品名，不暗示渲染方言（那条映射在 UrlSubprotocolDialects）。
         "panwei" to "Panwei（磐维）",
         "panweidb" to "Panwei（磐维）",
+        // T-GoldenDbDialect（券 A）：中兴 GoldenDB 官方驱动 URL 前缀 `jdbc:goldendb://`
+        //（p9/p11/p37 文档级 + 驱动字节码 URL_PREFIX 常量双证）。角标是事实展示命名空间，
+        // 显示名即产品名（与渲染方言的注册名同为 "GoldenDB"，但两者映射独立维护）。
+        "goldendb" to "GoldenDB",
     )
 
     /**

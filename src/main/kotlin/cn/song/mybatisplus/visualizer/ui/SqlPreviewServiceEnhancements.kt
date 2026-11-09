@@ -279,8 +279,9 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         backfillSources.map { name ->
             val inList = name in inClauseParams
             val isNumeric = isNumericParam(method, name)
-            // 数值类型不加引号，其他类型（String/Date 等）加引号
-            ParamHint(quote = !isNumeric, inList = inList)
+            // 数值类型不加引号，其他类型（String/Date 等）加引号；
+            // T-DateLiteralBackfill：日期族额外置 temporal，回填时产 ANSI 类型字面量
+            ParamHint(quote = !isNumeric, inList = inList, temporal = isTemporalParam(method, name))
         }
     } else emptyList()
     return PreviewResult(

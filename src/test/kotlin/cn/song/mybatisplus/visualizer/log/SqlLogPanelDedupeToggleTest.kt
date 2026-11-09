@@ -19,6 +19,10 @@ class SqlLogPanelDedupeToggleTest : BasePlatformTestCase() {
         super.setUp()
         manager = SqlLogManager(project)
         manager.entries.dedupeEnabled = false // 模拟用户初始未勾选「移除重复的sql」
+        // 券A 时间窗适配（照 SqlLogManagerFlushWindowTest 的「不赌墙钟时序」口径）：窗口内通知
+        // 挂 uiCatchUpAlarm 补刷（~150ms 墙钟），headless 的 dispatchAllInvocationEvents 泵不到
+        // 未到点的 Alarm——注入同步补刷器，通知即拍落 EDT 队列，waitForEdt 必然泵到。
+        manager.catchUpScheduler = { _, action -> action() }
     }
 
     override fun tearDown() {
@@ -166,6 +170,51 @@ class SqlLogPanelDedupeToggleTest : BasePlatformTestCase() {
             assertEquals("勾选后裁剪为 1 条", 1, panel.visibleEntryCount)
             assertEquals(base, panel.visibleEntries[0])
             assertEquals("徽章计数 1", 1, manager.entries.dedupeCount(base))
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    // ---------- T-SqlListCatchup 券B：面板徽章累积 map 与全量口径等价（接线面） ----------
+
+    fun test券B_面板徽章累积与全量口径等价_增量拍沿用() {
+        // 券B：面板 dedupeCounts/templateCounts 改增量累积——接线面等价性：
+        // 首拍全量基线 → 增量拍（重复丢弃 + 新条目）后仍与全量口径逐键逐值相等
+        manager.entries.dedupeEnabled = true
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val sqlA = "SELECT * FROM user WHERE id = 1"
+            val sqlB = "UPDATE orders SET status = 'PAID' WHERE id = 9"
+            manager.entries.addEntry(entry(sqlA, 0L))
+            waitForEdt()
+            assertEquals("首拍基线与全量口径一致", manager.entries.dedupeCountsSnapshot(), panel.dedupeCountsForTest)
+
+            // 增量拍：同键重复（⨉N +1）+ 异键新条目（同结构计数 +1）
+            manager.entries.addEntry(entry(sqlA, 100L))
+            manager.entries.addEntry(entry(sqlB, 200L))
+            waitForEdt()
+            assertEquals("增量拍 ⨉N 与全量口径一致", manager.entries.dedupeCountsSnapshot(), panel.dedupeCountsForTest)
+            assertEquals("增量拍同结构徽章与全量重算一致", structureKeyCounts(manager.entries.snapshot()), panel.templateCountsForTest)
+            assertEquals("首条结构计数 1", 1, panel.templateCountsForTest[entry(sqlA, 0L).structureKey])
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test券B_淘汰后徽章累积与全量口径一致() {
+        manager.entries.dedupeEnabled = true
+        manager.entries.dedupeWindowMs = 0
+        manager.entries.maxEntries = 3
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val sqls = (1..5).map { "SELECT * FROM t WHERE id = $it" }
+            sqls.forEachIndexed { i, sql -> manager.entries.addEntry(entry(sql, i.toLong())) }
+            waitForEdt()
+            assertEquals("淘汰后列表剩 3 条", 3, panel.visibleEntryCount)
+            assertEquals("淘汰后 ⨉N 累积与全量口径一致", manager.entries.dedupeCountsSnapshot(), panel.dedupeCountsForTest)
+            assertEquals("淘汰后同结构徽章与全量重算一致", structureKeyCounts(manager.entries.snapshot()), panel.templateCountsForTest)
+            // 5 条同形状 SQL（字面量参数化后同结构）：队内余 3 条 → 该结构计数 3
+            assertEquals(3, panel.templateCountsForTest[entry(sqls[4], 0L).structureKey])
         } finally {
             panel.dispose()
         }

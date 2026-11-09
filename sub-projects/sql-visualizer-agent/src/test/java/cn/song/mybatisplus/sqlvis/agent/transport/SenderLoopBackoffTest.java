@@ -140,10 +140,16 @@ public class SenderLoopBackoffTest {
         AgentState.resetPortAbandonedForTest();
         final PrintStream originalErr = System.err;
         final ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        // 退避调度记录器（时序加固 2026-11-07）：只记录「被请求睡多久」，不真睡——
+        // 断言调度值序列而非墙钟间隔。过去用 gap2*2 >= gap1*3 比墙钟，2 核 runner 上第一轮
+        // 连接付类加载/JIT 一次性成本会把 gap1 抬高（实测 235ms vs 设计 150ms）、gap2 正常
+        // （306ms vs 设计 300ms），比值 1.3 < 1.5 → 稳定假红（nightly run 42230813933）。
+        final List<Long> backoffSchedule = new ArrayList<>();
         try (ClosingServer server = new ClosingServer(0L)) {
             System.setErr(new PrintStream(captured, true, "UTF-8"));
             final Thread loop = new Thread(
-                    new SenderLoop(server.port(), INITIAL_MS, MAX_MS, RESET_AFTER_MS, MAX_FAST_DROPS),
+                    new SenderLoop(server.port(), INITIAL_MS, MAX_MS, RESET_AFTER_MS, MAX_FAST_DROPS,
+                            (host, port) -> new Socket(host, port), backoffSchedule::add),
                     "senderloop-backoff");
             loop.setDaemon(true);
             loop.start();
@@ -158,13 +164,11 @@ public class SenderLoopBackoffTest {
                     MAX_FAST_DROPS, stamps.size());
             assertTrue("放弃前应至少观察到 3 次 accept，实际 " + afterWait, afterWait >= MAX_FAST_DROPS);
 
-            final long gap1 = stamps.get(1) - stamps.get(0);
-            final long gap2 = stamps.get(2) - stamps.get(1);
-            // 复位点后移前：两段间隔都≈初始退避（恒定）；后移后第二段应≈2 倍初始退避
-            assertTrue(
-                    "退避必须在「连上即被关」下增长（第 1 段 " + gap1 + "ms，第 2 段 " + gap2 + "ms）——" +
-                            "退回「连上即复位」形态时两段相等，本断言即先红后绿判据",
-                    gap2 * 2L >= gap1 * 3L);
+            // 复位点后移前：每轮都睡初始退避（恒定）；后移后应逐轮翻倍。
+            // 第 3 次快速断开达上限即放弃，不再睡 → 恰好两段：150、300。
+            assertEquals(
+                    "退避必须按调度值增长（150 → 300），与墙钟无关；退回「连上即复位」形态时序列会变成 [150, 150]",
+                    Arrays.asList(INITIAL_MS, INITIAL_MS * 2), backoffSchedule);
 
             // 复核 minor㉚：放弃必须是**可观测**的（此前只有一行散文式 stderr，无稳定签名、无记账，
             // 且通道已死 → 排障只能靠「面板没条目」反推）。两处断言：稳定签名行恰好一条 + 本进程记账。
@@ -182,6 +186,34 @@ public class SenderLoopBackoffTest {
             loop.interrupt();
         } finally {
             System.setErr(originalErr);
+        }
+    }
+
+    @Test
+    public void 退避达上限后保持上限不再增长() throws Exception {
+        AgentState.resetPortAbandonedForTest();
+        final PrintStream originalErr = System.err;
+        final ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        final List<Long> schedule = new ArrayList<>();
+        try (ClosingServer server = new ClosingServer(0L)) {
+            System.setErr(new PrintStream(captured, true, "UTF-8"));
+            // 上限放到 5 次快速断开，才能观察到「翻倍到顶后不再增长」的完整序列
+            final Thread loop = new Thread(
+                    new SenderLoop(server.port(), INITIAL_MS, MAX_MS, RESET_AFTER_MS, 5,
+                            (host, port) -> new Socket(host, port), schedule::add),
+                    "senderloop-backoff-cap");
+            loop.setDaemon(true);
+            loop.start();
+
+            awaitAccepts(server, 5, 10_000L);
+            Thread.sleep(500L);
+            assertEquals(
+                    "退避序列必须 150 → 300 → 600（封顶）→ 600，不得越过 MAX_MS",
+                    Arrays.asList(INITIAL_MS, INITIAL_MS * 2, MAX_MS, MAX_MS), schedule);
+            loop.interrupt();
+        } finally {
+            System.setErr(originalErr);
+            AgentState.resetPortAbandonedForTest();
         }
     }
 

@@ -156,6 +156,163 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-SqlListCatchup 券 D：追赶读数接线守卫——buffer 节流窗积压（pendingNotifyCount>0）经
+     * [SqlLogPanel.syncCaptureStatusBar] 驱动「追赶中：落后 N 条」上控制台段；追平（clear 复位
+     * pending=0）持有一拍后消失。不新开轮询：驱动拍与状态栏既有刷新拍同源（R53 的 2s 诊断定时器
+     * + refreshList→syncDiagnostics 链）。
+     */
+    fun testTSqlListCatchupD_追赶读数出现与追平消失() {
+        manager.setCapturingForTest(true)
+        manager.entries.paused = false
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val (console, _) = panel.statusBarLabelsForTest()
+            // 基线：无积压不出现
+            panel.syncStatusBarForTest()
+            assertFalse("无积压不得出现追赶读数：${console!!.text}", console.text.contains("追赶中"))
+
+            // 快速灌 3 条：首条即时通知清零，后两条落节流窗（200ms 窗内）→ pendingNotifyCount>0
+            repeat(3) { i ->
+                manager.entries.addEntry(
+                    LogSqlEntry(
+                        rawSql = "SELECT $i FROM catchup_t",
+                        restoredSql = "SELECT $i FROM catchup_t",
+                        params = emptyList(),
+                        timestamp = i.toLong() + 1,
+                    ),
+                )
+            }
+            waitForEdt()
+            panel.syncStatusBarForTest()
+            assertTrue(
+                "节流积压期追赶读数应出现：${console.text}",
+                console.text.contains("追赶中"),
+            )
+
+            // 追平：clear 复位 pending=0（buffer 侧悬挂余量作废）→ 持有拍后消失
+            manager.entries.clear()
+            waitForEdt()
+            panel.syncStatusBarForTest()
+            panel.syncStatusBarForTest()
+            assertFalse("追平后追赶读数应消失：${console.text}", console.text.contains("追赶中"))
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-SqlListCatchup 券B2：诊断拍过期冲洗接线守卫——悬挂节流余量（末批不足批量阈值、时间推过
+     * 200ms 窗且无后续触发源）在 [SqlLogPanel.syncCaptureStatusBar] 诊断拍被冲洗：pending 归零、
+     * 悬挂条目经 notifyUi 合拍链上屏。反向验证：摘掉 syncCaptureStatusBar 里的
+     * hasStalePendingNotify/flushPendingNotify 分支，本用例必红（pending 滞留 + 列表缺悬挂条目）。
+     */
+    fun testTSqlListCatchupB2_诊断拍冲洗悬挂节流余量() {
+        manager.setCapturingForTest(true)
+        manager.entries.paused = false
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val baseNanos = 1_000_000_000L
+            // 首条即时通知；随后 2 条窗内（+50ms）抑制 → 悬挂候选 pending=2（<批量阈值 20）
+            manager.entries.nowNanosForTest = baseNanos
+            manager.entries.addEntry(LogSqlEntry("SELECT 1 FROM stale_t", "SELECT 1 FROM stale_t", emptyList(), 1L))
+            manager.entries.nowNanosForTest = baseNanos + 50_000_000L
+            repeat(2) { i ->
+                manager.entries.addEntry(
+                    LogSqlEntry(
+                        "SELECT ${i + 2} FROM stale_t",
+                        "SELECT ${i + 2} FROM stale_t",
+                        emptyList(),
+                        (i + 2).toLong(),
+                    ),
+                )
+            }
+            assertEquals(2, manager.entries.pendingNotifyCount())
+            // 时间推过窗口 → 悬挂态成立，此后无新条目（无触发源）
+            manager.entries.nowNanosForTest = baseNanos + 250_000_000L
+            assertTrue(manager.entries.hasStalePendingNotify())
+
+            // 诊断拍（syncStatusBarForTest 直驱 syncCaptureStatusBar）：冲洗悬挂余量
+            panel.syncStatusBarForTest()
+            assertEquals("诊断拍冲洗悬挂节流余量", 0, manager.entries.pendingNotifyCount())
+            waitForEdt()
+            assertEquals("悬挂条目经冲洗通知上屏", 3, panel.visibleEntryCount)
+        } finally {
+            manager.entries.nowNanosForTest = null
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-SqlListCatchup 券 D：refreshList 全拍探针接线守卫——每次刷新拍必落一枚样本到
+     * `LogPanel.refreshList` 分布（计划 §七.1「探针读数非空」）。反向验证：摘掉 refreshList
+     * 的 LogPerf.measure 包裹，本用例必须红。
+     */
+    fun testTSqlListCatchupD_refreshList全拍探针读数非空() {
+        LogPerfProbe.resetSamples()
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            manager.entries.addEntry(
+                LogSqlEntry(
+                    rawSql = "SELECT 1 FROM probe_t",
+                    restoredSql = "SELECT 1 FROM probe_t",
+                    params = emptyList(),
+                    timestamp = 1L,
+                ),
+            )
+            waitForEdt()
+            val stats = LogPerfProbe.sampleStats("LogPanel.refreshList")
+            assertNotNull("刷新拍后全拍探针应有读数（key=LogPanel.refreshList）", stats)
+            assertTrue("读数 count 应 ≥1：$stats", stats!!.count >= 1)
+        } finally {
+            LogPerfProbe.resetSamples()
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-SqlListCatchup 券 E：refreshList 拆拍探针接线守卫——每个刷新拍必须给五段（snapshot /
+     * diagnostics / counts / filters / diffModel）各落一枚样本（券 E 分项账单的数据源）。
+     * 反向验证：摘掉任一段的 LogPerfProbe.measure 包裹，本用例对应该 key 必红。
+     */
+    fun testTSqlListCatchupE_refreshList拆拍探针五段读数非空() {
+        LogPerfProbe.resetSamples()
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            manager.entries.addEntry(
+                LogSqlEntry(
+                    rawSql = "SELECT 1 FROM probe_e_t",
+                    restoredSql = "SELECT 1 FROM probe_e_t",
+                    params = emptyList(),
+                    timestamp = 1L,
+                ),
+            )
+            waitForEdt()
+            for (key in listOf(
+                "LogPanel.refreshList.snapshot",
+                "LogPanel.refreshList.diagnostics",
+                "LogPanel.refreshList.counts",
+                "LogPanel.refreshList.filters",
+                "LogPanel.refreshList.diffModel",
+            )) {
+                val stats = LogPerfProbe.sampleStats(key)
+                assertNotNull("拆拍段 $key 应有读数（每拍必打点）", stats)
+                assertTrue("拆拍段 $key count 应 ≥1：$stats", stats!!.count >= 1)
+            }
+        } finally {
+            LogPerfProbe.resetSamples()
+            panel.dispose()
+        }
+    }
+
     fun test注入耗时信息_排序方式选择器保持可见() {
         val panel = SqlLogPanel(project, manager)
         try {

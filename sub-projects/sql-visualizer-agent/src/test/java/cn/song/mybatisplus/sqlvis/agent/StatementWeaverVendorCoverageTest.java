@@ -117,6 +117,18 @@ public class StatementWeaverVendorCoverageTest {
             "org.panweidb.jdbc.PgStatement",
             "org.panweidb.jdbc.PgPreparedStatement",
             "org.panweidb.jdbc.PgCallableStatement",
+            // GoldenDB（T-GoldenDbDialect 券 B，gdb_mysql-connector-java-oracle-5.1.46.99.jar）：
+            // MySQL Connector/J 5.1 的整包重命名分叉（jar 内 com/mysql 条目为 0），组形态照
+            // com.mysql.jdbc.* 逐名对应（计划 §1.1.7 javap 实测）。CallableStatement 自有 execute
+            // 族齐全必须单列；ServerPreparedStatement 自有 execute 族为空（execute 覆盖来自父类
+            // PreparedStatement；自有 addBatch() 是无参形态、不命中任何 Kind，full-face changed 来自
+            // PARAM setter 族），登记安全但勿误读「登记=本类覆盖」，
+            // 详见 WeaveSpecs 注释与 {@link #GoldenDB字节层_驱动jar在位时必须真实织入且过校验()}。
+            // jar 不在测试 classpath → 进 BYTE_VERIFIABLE_EXCLUDES，字节层由 GoldenDB 专项用例出具。
+            "com.goldendb.jdbc.StatementImpl",
+            "com.goldendb.jdbc.PreparedStatement",
+            "com.goldendb.jdbc.ServerPreparedStatement",
+            "com.goldendb.jdbc.CallableStatement",
     };
 
     /**
@@ -162,6 +174,9 @@ public class StatementWeaverVendorCoverageTest {
             "com.oceanbase.jdbc.OceanBaseConnection",
             // 磐维 PanweiDB（T-IbatisPanwei 券 C）：prepare 面单列，getURL() javap 实测 public
             "org.panweidb.jdbc.PgConnection",
+            // GoldenDB（T-GoldenDbDialect 券 B）：prepare 面单列；ConnectionImpl 自有
+            // prepareStatement ×6 + prepareCall ×4（javap 实测），getURL() public
+            "com.goldendb.jdbc.ConnectionImpl",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -182,6 +197,17 @@ public class StatementWeaverVendorCoverageTest {
             "org.panweidb.jdbc.PgPreparedStatement",
             "org.panweidb.jdbc.PgCallableStatement",
             "org.panweidb.jdbc.PgConnection",
+            // GoldenDB（T-GoldenDbDialect 券 B）：驱动 jar 不入库、不在测试 classpath，批量字节层
+            // 跳过；字节层由 GoldenDB 专项用例（-Dgoldendb.jar / GOLDENDB_JAR）出具。
+            // 注意与磐维同一条铁律：**不要**放进 JAR_OPTIONAL_BYTE_LAYER——MariaDB/SQLite 的 jar
+            // 已在 agent 子项目 testImplementation（T-CaptureCoverage 收口固化），那 7 类靠该表做
+            // 「资源在位即硬断言」的升级判据，混入永远缺 jar 的 GoldenDB 类会把 MariaDB/SQLite
+            // 字节层用例整条误降级为 skip。
+            "com.goldendb.jdbc.StatementImpl",
+            "com.goldendb.jdbc.PreparedStatement",
+            "com.goldendb.jdbc.ServerPreparedStatement",
+            "com.goldendb.jdbc.CallableStatement",
+            "com.goldendb.jdbc.ConnectionImpl",
     };
 
     // ---------- 谓词层 ----------
@@ -604,6 +630,160 @@ public class StatementWeaverVendorCoverageTest {
         return out;
     }
 
+    // ---------- GoldenDB（T-GoldenDbDialect 券 B）字节层 ----------
+
+    /**
+     * GoldenDB 连接面谓词直证（环境无关）：{@code NonRegisteringDriver} **必须**登记——
+     * {@code com.goldendb.jdbc.Driver} 自身只声明构造器与 static{}，connect(String, Properties)
+     * 声明在父类 {@code NonRegisteringDriver}（计划 §1.1.4 javap 实测），而 ConnectWeaver 只遍历
+     * 本类 methods——只登记 Driver 会零命中。Driver 本身仍登记（零命中，只为按名可查）。
+     */
+    @Test
+    public void GoldenDB连接面_NonRegisteringDriver必须登记且Driver按名可查() {
+        assertTrue("com.goldendb.jdbc.NonRegisteringDriver 必须命中连接面（isWeavable）——"
+                        + "connect(String,Properties) 声明在它身上，只登记 Driver 是零命中",
+                DriverRegistry.isWeavable("com.goldendb.jdbc.NonRegisteringDriver"));
+        assertTrue("com.goldendb.jdbc.Driver 应命中连接面（按名可查的直觉一致性）",
+                DriverRegistry.isWeavable("com.goldendb.jdbc.Driver"));
+    }
+
+    /**
+     * GoldenDB 字节层：驱动 jar 不入库、不在测试 classpath。查找顺序＝{@code -Dgoldendb.jar=<path>} /
+     * 环境变量 {@code GOLDENDB_JAR}（单 jar 覆盖），否则自动遍历仓库夹具
+     * `database-lab/vendor/drivers/gdb_mysql-connector-java-*.jar`；都没有时显式 skip（不静默通过）。
+     *
+     * <p>jar 内是整包重命名（`com/mysql` 条目 0、`com/goldendb` 391，计划 §1.1.3/§1.1.4），父类与
+     * 接口同样只在 jar 里，故用 jar 支撑的 URLClassLoader 作资源回退——与磐维专项用例同一套
+     * 「织入 → 隔离子 loader 定义 → 初始化过 JVM 校验」。
+     *
+     * <p><b>GoldenDB 专属断言</b>：{@code ServerPreparedStatement} 自有 execute 族为空（javap 实测，
+     * 计划 §1.1.7——execute 覆盖来自父类 PreparedStatement），用单形态面把这一点钉死：
+     * 仅放行 ADD_BATCH 必须命中（自有 addBatch()），仅放行 EXEC/BATCH 族必须**零命中**——防止
+     * 「登记了 SPS 就等于覆盖了 SPS 的执行路径」被误读。
+     */
+    @Test
+    public void GoldenDB字节层_驱动jar在位时必须真实织入且过校验() throws Exception {
+        final java.util.List<java.io.File> jars = goldendbJars();
+        org.junit.Assume.assumeTrue(
+                "未提供 -Dgoldendb.jar / GOLDENDB_JAR，且 database-lab/vendor/drivers 下无 "
+                        + "gdb_mysql-connector-java-*.jar，GoldenDB 字节层跳过（谓词层已覆盖）",
+                !jars.isEmpty());
+        final String[] classes = {
+                "com.goldendb.jdbc.StatementImpl",
+                "com.goldendb.jdbc.PreparedStatement",
+                "com.goldendb.jdbc.ServerPreparedStatement",
+                "com.goldendb.jdbc.CallableStatement",
+                "com.goldendb.jdbc.ConnectionImpl",
+        };
+        for (java.io.File jar : jars) {
+            final String label = jar.getName() + ": ";
+            try (java.net.URLClassLoader jarLoader = new java.net.URLClassLoader(
+                    new java.net.URL[]{jar.toURI().toURL()},
+                    StatementWeaverVendorCoverageTest.class.getClassLoader())) {
+                for (String dotted : classes) {
+                    final byte[] original = readJarEntry(jar, dotted.replace('.', '/') + ".class");
+                    final StatementWeaver.Kind[] face = StatementWeaver.specOf(dotted);
+                    assertNotNull(label + dotted + " 未登记进 SPECS", face);
+                    final byte[] woven = StatementWeaver.weaveSpec(face, jarLoader, original);
+                    assertFalse(label + dotted + " 必须被真实织入（changed）——登记了却零命中即假覆盖",
+                            Arrays.equals(original, woven));
+                    final VerificationLoader loader = new VerificationLoader(
+                            dotted, woven, vendorPrefix(dotted), jarLoader);
+                    loader.loadClass(dotted);
+                    assertNotNull(label + dotted + " 织入产物必须通过 JVM 校验（jar 资源回退 + 初始化）",
+                            Class.forName(dotted, true, loader));
+                }
+                // GoldenDB 专属（字节层实测修订，计划 §1.1.7 原表述「自有 addBatch() 命中 ADD_BATCH」
+                // 被本用例证伪）：ServerPreparedStatement 自有 addBatch() 是**无参**形态，而 Kind.ADD_BATCH
+                // 只认 addBatch(String)（该形态在父类 PreparedStatement 声明）——故 SPS 的 full-face
+                // changed 实际来自 PARAM 形态 setter 族（setArray/setAsciiStream/…，javap 逐条在档），
+                // execute 族覆盖来自父类。三段单形态断言把这条谱系钉死，防「父类覆盖」被误读成「本类覆盖」。
+                final String sps = "com.goldendb.jdbc.ServerPreparedStatement";
+                final byte[] spsOriginal = readJarEntry(jar, sps.replace('.', '/') + ".class");
+                // ① EXEC/BATCH 族单放行必须零命中——execute 覆盖来自父类，本类不声明
+                final byte[] execOnly = StatementWeaver.weaveSpec(
+                        new StatementWeaver.Kind[]{StatementWeaver.Kind.EXEC_PARAM,
+                                StatementWeaver.Kind.EXEC_CTX, StatementWeaver.Kind.BATCH},
+                        jarLoader, spsOriginal);
+                assertTrue(label + sps + " 自有 execute 族必须为空（execute 覆盖来自父类 "
+                        + "PreparedStatement；本类命中 EXEC/BATCH 说明 javap 口径失效，需复核）",
+                        Arrays.equals(spsOriginal, execOnly));
+                // ② ADD_BATCH 单放行必须零命中——自有 addBatch() 是无参形态，ADD_BATCH 只认
+                // addBatch(String)（在父类）；无参 addBatch 不在采集形态内与 MySQL 5.1 既有口径一致
+                final byte[] addBatchOnly = StatementWeaver.weaveSpec(
+                        new StatementWeaver.Kind[]{StatementWeaver.Kind.ADD_BATCH},
+                        jarLoader, spsOriginal);
+                assertTrue(label + sps + " 自有 addBatch() 是无参形态，不得命中 ADD_BATCH（"
+                        + "ADD_BATCH 只认 addBatch(String)；若命中说明匹配口径变了，需复核）",
+                        Arrays.equals(spsOriginal, addBatchOnly));
+                // ③ 父类 PreparedStatement 用 EXEC_CTX 单放行必须命中（自有无参 execute 族在档）——
+                // 证明「覆盖来自父类」是真的有覆盖，不是两头都空
+                final String ps = "com.goldendb.jdbc.PreparedStatement";
+                final byte[] psOriginal = readJarEntry(jar, ps.replace('.', '/') + ".class");
+                final byte[] psExecCtxOnly = StatementWeaver.weaveSpec(
+                        new StatementWeaver.Kind[]{StatementWeaver.Kind.EXEC_CTX},
+                        jarLoader, psOriginal);
+                assertFalse(label + ps + " 自有无参 execute 族必须命中 EXEC_CTX（SPS 的 execute 覆盖"
+                        + "经继承落到这里）", Arrays.equals(psOriginal, psExecCtxOnly));
+                // ④ 连接面直证（ConnectWeaver.weave 按签名织入、不查名单）：NonRegisteringDriver
+                // 必须命中 connect(String,Properties) 出口；Driver 自身不声明该方法（§1.1.4），织入
+                // 必须零命中——把「只登记 Driver 会零命中」这条实测事实钉在字节上
+                final byte[] nrdOriginal = readJarEntry(jar,
+                        "com/goldendb/jdbc/NonRegisteringDriver.class");
+                final byte[] nrdWoven = ConnectWeaver.weave(jarLoader, nrdOriginal);
+                assertFalse(label + "com.goldendb.jdbc.NonRegisteringDriver 的 connect 出口必须被"
+                        + " ConnectWeaver 命中（连接面的唯一有效载体）",
+                        Arrays.equals(nrdOriginal, nrdWoven));
+                final byte[] drvOriginal = readJarEntry(jar, "com/goldendb/jdbc/Driver.class");
+                final byte[] drvWoven = ConnectWeaver.weave(jarLoader, drvOriginal);
+                assertTrue(label + "com.goldendb.jdbc.Driver 自身不声明 connect(String,Properties)"
+                        + "（该方法在父类 NonRegisteringDriver），织入必须零命中——若命中说明驱动谱系"
+                        + "变了，DriverRegistry 的「必须登记 NonRegisteringDriver」结论需重新论证",
+                        Arrays.equals(drvOriginal, drvWoven));
+            }
+        }
+    }
+
+    private static java.util.List<java.io.File> goldendbJars() {
+        final java.util.List<java.io.File> out = new java.util.ArrayList<java.io.File>();
+        String p = System.getProperty("goldendb.jar");
+        if (p == null || p.isEmpty()) {
+            p = System.getenv("GOLDENDB_JAR");
+        }
+        if (p != null && !p.isEmpty()) {
+            final java.io.File f = new java.io.File(p);
+            if (f.isFile()) {
+                out.add(f);
+            }
+            return out;
+        }
+        // 缺省回落仓库夹具 database-lab/vendor/drivers/gdb_mysql-connector-java-*.jar。
+        // 从 user.dir 逐级向上找：agent 子项目测试的 cwd 是子项目目录，往上两级才是仓库根。
+        java.io.File dir = new java.io.File(System.getProperty("user.dir", ".")).getAbsoluteFile();
+        for (int i = 0; i < 8 && dir != null; i++) {
+            final java.io.File drivers = new java.io.File(
+                    new java.io.File(new java.io.File(dir, "database-lab"), "vendor"), "drivers");
+            if (drivers.isDirectory()) {
+                final java.io.File[] jars = drivers.listFiles(
+                        new java.io.FilenameFilter() {
+                            @Override
+                            public boolean accept(java.io.File d, String n) {
+                                return n.startsWith("gdb_mysql-connector-java-") && n.endsWith(".jar");
+                            }
+                        });
+                if (jars != null) {
+                    java.util.Arrays.sort(jars);
+                    for (java.io.File j : jars) {
+                        out.add(j);
+                    }
+                }
+                return out;
+            }
+            dir = dir.getParentFile();
+        }
+        return out;
+    }
+
     private static byte[] readJarEntry(java.io.File jar, String entry) throws Exception {
         try (java.util.jar.JarFile jf = new java.util.jar.JarFile(jar)) {
             final java.util.jar.JarEntry e = jf.getJarEntry(entry);
@@ -757,6 +937,26 @@ public class StatementWeaverVendorCoverageTest {
                 throw new ClassNotFoundException(name);
             }
             return defineClass(name, b, 0, b.length);
+        }
+
+        /**
+         * 资源查找先走 resourceLoader（GoldenDB 实测踩出，T-GoldenDbDialect 券 B）：驱动类初始化
+         * 会在 {@code <clinit>} 里 {@code ResourceBundle.getBundle("…LocalizedErrorMessages")}，
+         * bundle 查找用的是**被织类自己的 loader**——不覆写时默认委托父 loader（测试 classpath），
+         * jar 里的 properties 永远查不到，{@code Class.forName(…, true, loader)} 直接
+         * {@code ExceptionInInitializerError}。磐维当时没踩到是因为其语句类初始化不触 bundle。
+         * 对 classpath 族无行为变化（resourceLoader 本就是测试 classloader）。
+         */
+        @Override
+        public java.net.URL getResource(String name) {
+            final java.net.URL u = resourceLoader.getResource(name);
+            return u != null ? u : super.getResource(name);
+        }
+
+        @Override
+        public java.io.InputStream getResourceAsStream(String name) {
+            final java.io.InputStream in = resourceLoader.getResourceAsStream(name);
+            return in != null ? in : super.getResourceAsStream(name);
         }
     }
 

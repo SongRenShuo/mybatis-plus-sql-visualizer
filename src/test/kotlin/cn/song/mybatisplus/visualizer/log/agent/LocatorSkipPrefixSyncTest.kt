@@ -151,6 +151,8 @@ class LocatorSkipPrefixSyncTest {
         // R1b 补齐锚点：驱动族 / 连接池 / AOP / 数据层插件族 + agent 自身包，逐族点名（防「两侧同时回退」的假绿）
         for (p in listOf(
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.", "org.sqlite.",
+            // GoldenDB（T-GoldenDbDialect 券 B）：MySQL 5.1 整包重命名分叉，注入物也必须认得
+            "com.goldendb.",
             "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.", "com.gbasedbt.", "com.kingbase8.",
             "com.huawei.", "org.opengauss.",
             "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
@@ -205,6 +207,8 @@ class LocatorSkipPrefixSyncTest {
             // 驱动家族
             "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
             "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
+            // GoldenDB（T-GoldenDbDialect 券 B）：MySQL 5.1 整包重命名分叉，两侧都必须在
+            "com.goldendb.",
             "com.gbasedbt.", "com.kingbase8.", "com.huawei.", "org.opengauss.",
             // 连接池
             "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",

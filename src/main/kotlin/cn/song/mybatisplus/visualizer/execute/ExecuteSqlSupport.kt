@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
+import cn.song.mybatisplus.visualizer.sql.RuntimeSlotValues
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
@@ -41,6 +44,50 @@ object ExecuteSqlSupport {
         Class.forName(DATABASE_MARKER_CLASS)
         true
     }.getOrDefault(false)
+
+    /**
+     * T-RuntimeSlotFill 券 B：把运行期占位填进待执行文本（执行前的**唯一**回填口）。
+     *
+     * 执行链与复制/分享/导出链共用 [ExecutableSqlFormatter]，保证「预览里看到的」与
+     * 「真正执行的」是同一份文本。占位为空时逐字节原样返回。
+     *
+     * @param sql      当前编辑器 SQL（参数已回填、含运行期占位注释）
+     * @param slots    运行期占位表
+     * @param slotValues 占位值（空表 = 占位原样保留，执行会失败——这是既有的「不替你猜」口径）
+     * @param dialectName 当前方言名（布尔字面量判定）
+     */
+    @JvmStatic
+    fun renderForExecution(
+        sql: String,
+        slots: List<RuntimeSlot> = emptyList(),
+        slotValues: RuntimeSlotValues = RuntimeSlotValues.EMPTY,
+        dialectName: String? = null,
+    ): String = ExecutableSqlFormatter.format(
+        sql = sql,
+        sources = emptyList(),
+        paramValues = emptyMap(),
+        slots = slots,
+        slotValues = slotValues,
+        dialectName = dialectName,
+    )
+
+    /**
+     * 带运行期占位的执行入口：先回填占位，其余与 [execute] 完全一致。
+     *
+     * 单独开一个名字而不是给 [execute] 加重载——既有调用点（面板、测试）签名不变，
+     * 也就不会出现重载解析歧义。
+     */
+    @JvmStatic
+    fun executeWithRuntimeSlots(
+        project: Project,
+        sql: String,
+        slots: List<RuntimeSlot>,
+        slotValues: RuntimeSlotValues,
+        dialectName: String? = null,
+        onClosePanel: (() -> Unit)? = null,
+    ) {
+        execute(project, renderForExecution(sql, slots, slotValues, dialectName), onClosePanel)
+    }
 
     /**
      * 执行入口：不可用 → 提示升级 Ultimate；可用 → 反射调用 launcher。
