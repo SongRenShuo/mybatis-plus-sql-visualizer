@@ -286,12 +286,12 @@ class MyBatisLogParser(
         val pending = ibatisPending[id] ?: return
         val params = pending.params ?: return // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
         ibatisPending.remove(id)
-        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)))
+        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)), SqlSource.IBATIS)
     }
 
     /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
     private fun emitIbatis(pending: IbatisPending): LogSqlEntry =
-        emitEntry(pending.sql, pending.logLine, pending.params ?: emptyList())
+        emitEntry(pending.sql, pending.logLine, pending.params ?: emptyList(), SqlSource.IBATIS)
 
     /** 冲刷全部 iBatis 挂起态（按插入序），返回首个产出条目（保持 closePending 返回语义）。 */
     private fun flushIbatis(): LogSqlEntry? {
@@ -306,13 +306,24 @@ class MyBatisLogParser(
         return first
     }
 
-    /** 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份）。 */
-    private fun emitEntry(sql: String, logLine: String?, params: List<LogSqlParam>): LogSqlEntry {
+    /**
+     * 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份）。
+     *
+     * [source] 由产出方显式指出：[SqlSource.MYBATIS] = 默认的 `Preparing:`/`Parameters:` 口径，
+     * [SqlSource.IBATIS] = `{pstm-N}` 三行组（iBatis 2.x）。**两条链路共用本方法**，所以来源标记
+     * 不能在这里按「解析器是谁」推断，必须由调用方传入（同一个 MyBatisLogParser 实例同时吃两种日志）。
+     */
+    private fun emitEntry(
+        sql: String,
+        logLine: String?,
+        params: List<LogSqlParam>,
+        source: SqlSource = SqlSource.MYBATIS,
+    ): LogSqlEntry {
         val entry = LogSqlEntry(
             rawSql = sql,
             restoredSql = restorer.restore(sql, params),
             params = params,
-            source = SqlSource.MYBATIS,
+            source = source,
             logTimestamp = logLine?.let { LogTimestampParser.parse(it) },
         )
         entries += entry
