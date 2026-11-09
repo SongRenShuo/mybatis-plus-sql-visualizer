@@ -16,9 +16,12 @@ import java.io.File
  *
  * ## 判定面
  *
- * 两个被扫的函数体（剥注释后）：
+ * 被扫的函数体（剥注释后）：
  * - [IbatisXmlGutterLineMarkerProvider] 的 `getLineMarkerInfo`（平台热路径本体）；
- * - 同文件 `isStatementAnchor`（热路径唯一的判定助手，且被通用兜底检测器复用）。
+ * - 同文件 `isStatementAnchor`（热路径唯一的判定助手，且被通用兜底检测器复用）；
+ * - T-Ibatis2Gap 券 B 扩面（计划册 §六.3）：`IbatisXmlToJavaLineMarkerProvider` /
+ *   `IbatisJavaToXmlLineMarkerProvider` 两个跳转 provider 的 `collectSlowLineMarkers` +
+ *   `createMarker`（daemon 每趟判定路径；点击期的目标解析不在此面）。
  *
  * 禁止 token 分三类（任一命中即红）：
  * 1. **classpath / 索引查询**：`IbatisXmlRecognizer` / `sqlMapClientOnClasspath` / `JavaPsiFacade` /
@@ -36,6 +39,24 @@ class IbatisGutterHotPathTest {
     private val detectorRelativePath =
         "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt"
 
+    /**
+     * T-Ibatis2Gap 券 B 扩面：两个跳转 provider 的扫描面。
+     *
+     * 只扫**函数体**（`collectSlowLineMarkers` 慢趟门控 + `createMarker` 锚定判定），不做整文件扫描——
+     * 这两个文件里合法存在点击期目标解析（`IbatisJavaCallSites` 的词索引），整文件扫描会对着
+     * 点击路径误报。daemon 每趟真正跑的判定路径就是被扫的这两个函数。
+     */
+    private val navProviderRelativePaths = listOf(
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt",
+    )
+
+    /** 券 B 两个跳转 provider 被扫的 daemon 判定函数（慢趟门控 + 锚定判定）。 */
+    private val navProviderScanMarkers = listOf(
+        "override fun collectSlowLineMarkers",
+        "private fun createMarker",
+    )
+
     /** 禁止 token（正则片段；判定前先剥注释，故 KDoc 里点名这些 API 不会误报）。 */
     private val forbiddenPatterns: List<Pair<String, String>> = listOf(
         "classpath/索引查询" to "IbatisXmlRecognizer",
@@ -45,7 +66,10 @@ class IbatisGutterHotPathTest {
         "classpath/索引查询" to "GlobalSearchScope",
         "classpath/索引查询" to "SearchScope",
         "引用解析" to "\\.resolve\\s*\\(",
-        "引用解析" to "PsiReference",
+        // T-Ibatis2Gap 券 B：`PsiReferenceExpression` 的 **类型检查**（`as?` 结构判定）是慢趟门控的
+        // 合法 O(1) 形态（Java→XML 跳转 provider 用它锚调用行）；被禁的是「引用解析」本身
+        // （拿 PsiReference / .resolve 取目标），故用负向先行排除类型名，不放过真解析形态
+        "引用解析" to "PsiReference(?!Expression)",
         "引用解析" to "\\breferences\\b",
         "引用解析" to "findUsages",
         "全文件遍历" to "PsiTreeUtil",
@@ -75,6 +99,61 @@ class IbatisGutterHotPathTest {
         val body = extractBracedBody(stripComments(source), "fun isClaimedByKnownStructure")
             ?: error("无法提取 isClaimedByKnownStructure 函数体（签名形态漂移？）——扫描面失效按红处理")
         assertNoForbidden("isClaimedByKnownStructure", body)
+    }
+
+    /**
+     * T-Ibatis2Gap 券 B 扩面（计划册 §六.3：新 provider 上线守卫必须同步扩面）：两个跳转
+     * provider 的慢趟门控与锚定判定同样零 resolve / 零索引查询 / 零全文件遍历。项目级目标解析
+     * 只许发生在点击 handler（[IbatisJavaCallSites] 词索引 / `IbatisXmlStatementTargets` 缓存），
+     * daemon 每趟跑的判定函数不得出现这些形态。
+     */
+    @Test
+    fun `券B两个跳转provider_慢趟门控与锚定判定零resolve零索引查询`() {
+        for (rel in navProviderRelativePaths) {
+            val source = stripComments(readMain(rel))
+            for (marker in navProviderScanMarkers) {
+                val body = extractBracedBody(source, marker)
+                    ?: error("无法提取 $rel 的 $marker 方法体（签名形态漂移？）——扫描面失效按红处理")
+                assertNoForbidden("$rel#$marker", body)
+            }
+        }
+    }
+
+    /**
+     * 券 B 扩面自证：判定器必须看得见「跳转 provider 慢趟里塞进项目级搜索」的真实违规形态
+     * （合成 collectSlowLineMarkers 样本含词索引调用必须被抓出），干净门控样本必须放行。
+     */
+    @Test
+    fun `自证_券B慢趟判定_含项目级搜索样本必抓_干净样本放行`() {
+        val dirty = """
+            override fun collectSlowLineMarkers(
+                elements: MutableList<out PsiElement>,
+                result: MutableCollection<in LineMarkerInfo<*>>,
+            ) {
+                val scope = GlobalSearchScope.projectScope(element.project)
+                return null
+            }
+        """.trimIndent()
+        assertTrue(
+            "判定器必须看得见慢趟里的项目级搜索（否则扩面守卫是空绿）",
+            forbiddenHitsIn(dirty).isNotEmpty(),
+        )
+        val clean = """
+            override fun collectSlowLineMarkers(
+                elements: MutableList<out PsiElement>,
+                result: MutableCollection<in LineMarkerInfo<*>>,
+            ) {
+                val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+                if (gutterState != null && !gutterState.showGutterIcon) return
+                if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+                elements.mapNotNullTo(result, ::createMarker)
+            }
+        """.trimIndent()
+        assertEquals(
+            "干净门控形态不得被误报：${forbiddenHitsIn(clean)}",
+            emptyList<String>(),
+            forbiddenHitsIn(clean),
+        )
     }
 
     /** 整个 provider 文件（剥注释）都不得出现 classpath 探针：判定之外的地方同样不允许引入慢路径。 */

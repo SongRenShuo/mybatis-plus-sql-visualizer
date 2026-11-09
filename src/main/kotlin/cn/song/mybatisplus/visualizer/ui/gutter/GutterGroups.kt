@@ -31,6 +31,9 @@ object GutterGroups {
         "IbatisXmlGutterLineMarkerProvider" to "mapperXml",
         "MapperXmlToJavaLineMarkerProvider" to "mapperXml",
         "MapperJavaToXmlLineMarkerProvider" to "mapperXml",
+        // T-Ibatis2Gap 券 B：iBatis <sqlMap> 双向跳转（预览图标同组先例拍板 D-8，语义同源）
+        "IbatisXmlToJavaLineMarkerProvider" to "mapperXml",
+        "IbatisJavaToXmlLineMarkerProvider" to "mapperXml",
         "AnnotationSqlGutterLineMarkerProvider" to "annotation",
         "NamedQueryGutterLineMarkerProvider" to "annotation",
         "JpaGutterLineMarkerProvider" to "jpaHql",
