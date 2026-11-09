@@ -112,17 +112,10 @@ class IbatisDaoStatementGotoDeclarationHandler : GotoDeclarationHandler {
         const val MAX_UP = 6
 
         /**
-         * `SqlMapExecutor` 里吃 statementId 的入口方法（jar `javap` 实测清单，见类注释）。
+         * `SqlMapExecutor` 里吃 statementId 的入口方法——单一事实源在
+         * [IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS]（券 B 起跳转图标对与本 handler 共用；
+         * 此前本类持有私有副本，清单漂移时会出现「Ctrl+B 认得、箭头不认得」的分裂形态）。
          */
-        val STATEMENT_ENTRY_METHODS: Set<String> = setOf(
-            "insert",
-            "update",
-            "delete",
-            "queryForObject",
-            "queryForList",
-            "queryWithRowHandler",
-            "queryForPaginatedList",
-            "queryForMap",
-        )
+        val STATEMENT_ENTRY_METHODS: Set<String> = IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS
     }
 }
