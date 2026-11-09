@@ -1,0 +1,12 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/psi/jpa/EntityAliasSweep.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/psi/jpa/EntityAliasSweep.kt
+index 9bf48c64..2487218d 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/psi/jpa/EntityAliasSweep.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/psi/jpa/EntityAliasSweep.kt
+@@ -102,6 +102,7 @@ internal object EntityAliasSweep {
+         return try {
+             val direct = EntityClassResolver.resolveByName(project, name, context)
+             if (direct.psiClass != null || direct.candidates.isNotEmpty()) return direct
++            return resolve(project, name, context) // REVERSE-PROBE 券0：恢复同步别名全扫（反证锚，仅补丁用）
+             val stamp = PsiModificationTracker.getInstance(project).modificationCount
+             val roots = ProjectRootModificationTracker.getInstance(project).modificationCount
+             val existing = project.getUserData(CACHE_KEY) ?: return unresolved()
