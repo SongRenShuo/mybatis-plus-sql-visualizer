@@ -747,6 +747,17 @@ else                                mapping = newParseMapping(token, parameterCl
 4. **平台 EP 属性名是 `path` 不是 `resourcePath`**（`javap -v` 显示 `resourcePath` 字段带 `@Attribute("path")`），本册任务书原写法有误，已由 L6 订正。
 5. **`dynamic="true"` 的适用面订正**：它是 `<extensionPoint>` **声明**属性，扩展**注册**元素不承载它；真正的判据是「注册落在平台 dynamic 点位」。本册 §6.9 原表述过宽，以本条为准。
 
+**CI 验证（2026-11-09，推送后；用户指令「全量测试和门禁交 CI」）**
+
+| 轮次 | run / sha | 覆盖 | 结论 |
+|---|---|---|---|
+| 推送轮 `push-test.yml` | `42576014733` @ `e6f5ccc9` | 5 片分片 + 2 片快桶 + 夜间兜底派发 | **7/7 job success**（约 7 分钟） |
+| 夜间全量 `nightly-full.yml` | `42577638712` @ `e6f5ccc9`（人工 `workflow_dispatch`，因 nudge 判定本轮周期已有夜间轮而跳过派发） | build / verifyPlugin / marketplace×3（243+253+263）/ 分片 / 快桶 / **extras（`testExternal` + agent）/ 方言矩阵 / DB 集成 / e2e** | **17/17 job success**；`extras` BUILD SUCCESSFUL 3m50s、30 task executed |
+
+**覆盖可证（非只看绿灯）**：`buildSrc` 的配置期硬断言 `require(uncovered.isEmpty())` 要求每个测试类都落在真实执行面。CI 打印的桶读数是 `all=872 / shardBucket=460(planned=460，推送轮含 1 类排除) / fastBucket=398 / external=6`，夜间轮为 `shardBucket=461 / exclude=0`。本次新增 18 个测试类，与 `all` 的增量一致；`extras` 日志里 `NoSuchMethodError` 与 `FAILED` 命中数均为 0。
+
+**推送通道**：`dev-support/push-all.ps1 -Branch master`，Gitee 与 GitHub 双端成功；GitHub 段日志为 `x-access-token:***@…`（令牌通路，无 GCM 弹窗），代理探测不通时回落直连。
+
 **收口约定**：各车道自提交、不推送、不合流；主控在 master 上按「保留双方」合并冲突，合并后**只跑定向**复跑，全量与门禁交 CI；合并完成清理本批分支与工作树（`git worktree remove` + `git branch -d`；删分支前先验 tip 可达性，见 `pitfall-branch-delete-orphans-unmerged-tip`）。
 
 
