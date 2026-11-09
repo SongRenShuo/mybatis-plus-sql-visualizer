@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.8",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8/mybatis-plus-sql-visualizer-2026.11.8.zip",
-  "changeNotes": "2026.3 上切换数据源不再只剩当前一个源，也不会静默跑到旧库\n选了平台不提供的数据源会直接阻断并说明原因，不再悄悄换源执行\n日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-07",
+  "version": "2026.11.9-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.9-beta.1/mybatis-plus-sql-visualizer-2026.11.9-beta.1.zip",
+  "changeNotes": "iBatis 2.x 的 sqlMap 支持预览、着色、折叠与跳转，含 dynamic 标签的语句也有图标\niBatis 的 DTD 随插件内置，编辑器不再报「无法解析 DTD」\n新增中兴 GoldenDB 方言（第 15 种），连接、角标与增强捕获已接全\n高并发抓取时 SQL 列表刷新不再卡顿，状态栏显示还剩多少条没上屏\n控制台清屏后不再静默丢新行，几秒内自动恢复\n捕获高峰期被挤出的事件会汇总上报，不再无声消失\nPostgreSQL 执行预览 SQL 不再只发出 TIMESTAMP 一个词\nHikari、Oracle 连接类不再被当成「未登记 JDBC 实现」反复提示\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-09",
   "sinceBuild": "243"
 }

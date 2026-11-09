@@ -2,7 +2,9 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.11.9-beta.1] - 2026-11-09
+
+> 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量：**iBatis 2.x 静态渲染与编辑器能力全面支持**（券 0/A/B/D/E/F/H）、**中兴 GoldenDB 第 15 方言**（券 A/B）、**SQL 列表追赶延迟与风暴期刷新成本优化**（券 A/B/B2/D/E/F/G/H/I），以及两条真机缺陷修复（PostgreSQL 单语句预览只发出 `TIMESTAMP` 一个词、Oracle 连接继承链被误报「未登记 JDBC 实现」）。
 
 ### Added
 - **iBatis 的 SQL 跳转（T-Ibatis2Support 券 F，e744b9d6 / 75b84d7a）**：两条链路。① **XML 内部 id 引用**——`<include refid>` → 同文件 `<sql id>`（找不到再按 `namespace + "." + id` 回退，且 refid 已含点时不再加前缀，与 iBatis 的 `applyNamespace` 语义一致）；`resultMap=` / `parameterMap=` / `<resultMap extends=>` → 同名定义。② **Java DAO → XML 语句**——`SqlMapExecutor` 的 statementId 入口（`queryForObject` / `queryForList` / `queryForMap` / `queryWithRowHandler` / `queryForPaginatedList` / `insert` / `update` / `delete`）的首个字符串实参 → 对应 `<select|insert|update|delete|statement|procedure>` 的 `id` 属性。全部是 **soft 引用**：目标不存在时零报红，不注册任何校验器形态（沿用「不做检查器」的既有红线）。**本期不做**：跨文件 id 清单（需解析 `sqlMapConfig` 的 `<sqlMap resource>`）、XML → Java 反查、`<selectKey>` 隐式 id（`<insertId>-SelectKey`）、Kotlin DAO 调用形态。识别口径是**语法级**（方法名 + 首参是字符串字面量，不做接收者类型解析），因此若工程里另有非 iBatis 的同名方法、且项目内恰有同名 sqlMap 语句，可能出现一次跳转；无目标时不产生任何效果
@@ -33,6 +35,11 @@
 ### Changed
 - **SQL 日志列表风暴期刷新大幅降频（T-SqlListCatchup 券 A，7be82118）**：高并发抓取时每条 SQL 执行都会触发列表刷新，旧机制只在「上一拍在途」时合并，EDT 一空就刷下一拍——压测实测风暴期退化成每秒几十拍高频小刷新，每拍都全量重算计数。现在刷新加 150ms 时间窗下限：窗口内通知挂 Alarm 补刷一拍合并呈现，窗口外（含风暴后的第一条）仍立即刷，单条 SQL 秒显的日常体验不变。面板销毁/退订路径同步清理定时器，无泄漏
 - **列表 ⨉N 计数与同模板计数从每拍全量重算改为增量维护（T-SqlListCatchup 券 B，5a32e33d / 3440f739）**：去重计数、同结构计数此前每次刷新都从全量条目重算一遍；现由缓冲区推送「本拍变更了哪些键」，面板只按变更键增量对账，并保留六类兜底点（去重开关翻转、索引重建、清空、条目淘汰、去重关闭期变更、键上限溢出）自动回退全量，等价性由随机操作序列（3 种子 × 600 操作）与全量重算逐键对账用例钉住
+
+### Internal
+- **依赖本地容器的测试用例改走外指通道（T-DockerGateOffload，a7c924e2 / 95e107b1）**：五个容器用例改为「外指实例优先、容器兜底」，本机没有 Docker 时不再整类跳过；Docker 预检条款同步收窄为只在显式跑容器腿时生效
+- **GoldenDB 驱动长效注入测试 classpath（8fa413d9）**：`gdb_mysql-connector-java-oracle-5.1.46.99.jar` 按磐维口径进测试 classpath，字节层用例不再每次手挂
+- **iBatis 2.x 渲染保真以官方 2.3.4.726 引擎做黄金对照（券 B，29a4a4be）**：20 种语句形态不连库直取真值逐字节比对，包含 `prepend` 逐字拼接不补空格这类反直觉行为
 
 ## [2026.11.8] - 2026-11-07
 
