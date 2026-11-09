@@ -60,7 +60,22 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## 4. 运行期平台依赖（不随包分发）
+## 4. iBATIS 2 SQL Map DTD（Apache License 2.0）
+
+- 位置：`src/main/resources/dtd/ibatis/sql-map-2.dtd`（25,464 B）、
+  `src/main/resources/dtd/ibatis/sql-map-config-2.dtd`（11,403 B），随插件 jar 根分发
+- sha256：`sql-map-2.dtd` = `bb8b53f0a6f3a6b015eeb3f3fe69f10b15023d5c33a1ff583b3fe77bc030e09e`；
+  `sql-map-config-2.dtd` = `45f03ebb8811027a2f474a4ed0e98fffa4e5a8fdcd9596d09ae5f48b7a2a008d`
+- 版权：Copyright 2004 Clinton Begin
+- 来源：iBATIS 2.3.4.726（`ibatis-sqlmap-2.3.4.726.jar`）内
+  `com/ibatis/sqlmap/engine/builder/xml/` 的原始副本，未修改；文件头保留原始版权与许可声明
+- 许可：Apache License 2.0（<https://www.apache.org/licenses/LICENSE-2.0>）
+- 说明：以 jar 内副本为准——网站版 `sql-map-config-2.dtd` 的根声明是 `sqlMap*`，
+  jar 内是 `sqlMap+`（运行期 `SqlMapClasspathEntityResolver` 用的也是 jar 内副本）。
+  插件经 `plugin.xml` 的 `<standardResource>` 把 iBatis 的 8 个 DOCTYPE 标识
+  （4 个 systemId + 4 个 publicId）映射到这两份副本，使 iBatis 2 的 XML 在离线状态下可校验。
+
+## 5. 运行期平台依赖（不随包分发）
 
 - IntelliJ Platform / IntelliJ IDEA：由宿主 IDE 提供，不在插件 zip 内。
 

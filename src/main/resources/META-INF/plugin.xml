@@ -566,4 +566,43 @@
             <add-to-group group-id="HelpMenu" anchor="last"/>
         </action>
     </actions>
+
+    <!-- T-Ibatis2Support 券 E：iBATIS 2 SQL Map DTD 的离线映射（2026-11-09）。
+
+         平台解析 DOCTYPE 外链时按 systemId（必要时再按 publicId）查 ExternalResourceManager；
+         iBatis 的四个外链域里 www.ibatis.com 早已失效、ibatis.apache.org 也可能不通，未映射时
+         整篇报「无法解析（引用的）DTD」并级联满屏「必须声明元素类型」。运行期的
+         com.ibatis.sqlmap.engine.builder.xml.SqlMapClasspathEntityResolver 同样把这 8 个标识
+         映射到 jar 内副本、从不联网（javap -p -c 常量池实证），故这里补齐同一组映射。
+
+         两处事实按平台源码钉死，改动前先复核：
+          ① EP 声明 = XmlPlugin.xml 的 extensionPoint name="standardResource"（beanClass
+             com.intellij.javaee.StandardResourceEP，EP 全名 com.intellij.standardResource，
+             243/262 均为 dynamic="true"）；
+          ② 属性名是 path 而非 resourcePath——StandardResourceEP.resourcePath 字段带
+             @Attribute("path") + @RequiredElement（javap -v 注解实证）；path 走
+             PluginDescriptor.getPluginClassLoader().getResource(...)，不带前导斜杠
+             （同份描述里 properties / testng 两个内置插件即此写法）。
+
+         资产 = ibatis-sqlmap-2.3.4.726.jar 内 com/ibatis/sqlmap/engine/builder/xml/ 的原始副本
+         （sha256 见 THIRD-PARTY-NOTICES.md 第 4 节；网站版 sql-map-config-2.dtd 是 sqlMap*，
+         jar 内是 sqlMap+，必须用后者）。 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <standardResource url="http://ibatis.apache.org/dtd/sql-map-2.dtd"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="http://www.ibatis.com/dtd/sql-map-2.dtd"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="-//iBATIS.com//DTD SQL Map 2.0//EN"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="-//ibatis.apache.org//DTD SQL Map 2.0//EN"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="http://ibatis.apache.org/dtd/sql-map-config-2.dtd"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="http://www.ibatis.com/dtd/sql-map-config-2.dtd"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="-//iBATIS.com//DTD SQL Map Config 2.0//EN"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="-//ibatis.apache.org//DTD SQL Map Config 2.0//EN"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+    </extensions>
 </idea-plugin>
