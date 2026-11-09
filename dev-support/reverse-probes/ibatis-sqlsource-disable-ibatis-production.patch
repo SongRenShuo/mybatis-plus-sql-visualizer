@@ -1,0 +1,19 @@
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/log/MyBatisLogParser.kt
+@@ -286,12 +286,14 @@ class MyBatisLogParser(
+         val pending = ibatisPending[id] ?: return
+         val params = pending.params ?: return // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
+         ibatisPending.remove(id)
+-        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)), SqlSource.IBATIS)
++        // REVERSE-PROBE（T-Ibatis2Support 券 H）：iBatis 产出点禁用（两个闭合点都退回 MYBATIS）——
++        // 反证锚 = IbatisSqlSourceTest 的来源断言 + convention.EnumReachabilityGuardTest 可达性守卫
++        emitEntry(pending.sql, pending.logLine, applyIbatisTypes(params, parseIbatisTypes(text)), SqlSource.MYBATIS)
+     }
+ 
+     /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
+     private fun emitIbatis(pending: IbatisPending): LogSqlEntry =
+-        emitEntry(pending.sql, pending.logLine, pending.params ?: emptyList(), SqlSource.IBATIS)
++        emitEntry(pending.sql, pending.logLine, pending.params ?: emptyList(), SqlSource.MYBATIS)
+ 
+     /** 冲刷全部 iBatis 挂起态（按插入序），返回首个产出条目（保持 closePending 返回语义）。 */
+     private fun flushIbatis(): LogSqlEntry? {

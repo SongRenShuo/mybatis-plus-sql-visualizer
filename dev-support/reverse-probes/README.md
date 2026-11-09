@@ -13,3 +13,5 @@
 | 补丁 | 机制 | 锚定测试 | 校验记录 |
 |---|---|---|---|
 | `7be82118-disable-flush-window.patch` | notifyUi 150ms 刷新时间窗（券 A） | `SqlLogManagerFlushWindowTest` | 2026-11-07：7 例 5 红 2 绿，与该券人工反证分布逐位一致 |
+| `ibatis-recognizer-disable-doctype-signal.patch` | iBatis 识别器三选二的 DOCTYPE 信号（T-Ibatis2Support 券 A 第 1 条） | `IbatisXmlRecognizerTest,IbatisXmlRecognizerPsiTest` | 2026-11-09：19 例 8 红 0 错（纯逻辑 6 + PSI 取证 2），exit 0 |
+| `ibatis-sqlsource-disable-ibatis-production.patch` | `SqlSource.IBATIS` 产出点（T-Ibatis2Support 券 H：`{pstm-N}` 两个闭合点同时退回 MYBATIS） | `IbatisSqlSourceTest,EnumReachabilityGuardTest` | 2026-11-09：11 例 3 红 0 错（来源断言 2 + 枚举可达性守卫 1），exit 0 |
