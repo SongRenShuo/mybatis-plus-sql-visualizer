@@ -1,0 +1,15 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt
+index f7192cdb..19f4c8c1 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/XmlInlineSqlDetector.kt
+@@ -65,7 +65,9 @@ object XmlInlineSqlDetector {
+         // 严禁调 IbatisXmlRecognizer 或任何 resolve / 索引查询。判据**直接调用接管方的同一函数**
+         // （而不是在本地复写一遍条件），否则会出现「让位了但没人接管」的图标空洞或
+         // 「两边都认领」的双图标。
+-        if (cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
++        // REVERSE-PROBE（T-Ibatis2Support 券 A 让位面）：禁用 iBatis 让位分支——反证锚 =
++        // IbatisXmlGutterLineMarkerProviderTest 的 assertExactlyOneClaims（同一元素双通道认领）。
++        if (false && cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
+             return true
+         }
+         return false

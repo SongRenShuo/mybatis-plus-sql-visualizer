@@ -214,9 +214,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
             // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47。
             // T-LogMethodName：来源位置后显示「类名#方法名」开关（logShowMethodCheck）+1 后为 48。
+            // T-Ibatis2Support 券 A：iBatis 2.x sqlMap 语句预览开关（ibatisXmlCheck，界面节）+1 后为 49。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 48", 48, texts.size)
+            assertEquals("复选框总数应为 49", 49, texts.size)
         } finally {
             settings.state.language = old
         }
