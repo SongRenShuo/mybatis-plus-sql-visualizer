@@ -4,6 +4,7 @@ import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +49,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link CaptureBudget#noteUnregisteredDriver(String)}（有界 8 个），心跳带出给 IDE——
  * 「下一个未知驱动是谁」不再只能靠人工猜。券 G1：已知连接池包装族
  * （{@link #POOL_WRAPPER_PREFIXES}）是包装层不是驱动，从该曝光排除；织入面与采集语义零变化。
+ * T-CatchAllFamilyFilter：与白名单类**同族**的类（{@link #isWhitelistFamily}——白名单类的祖先
+ * 或子孙）同样不是「未登记驱动」，一并排除曝光（Oracle 连接继承链真机 8 条里占 3 条）；织入面同样零变化。
  *
  * <p><b>零 ASM 依赖</b>：本类在 premain 路径被触达（记录候选），任何对 ASM 的静态引用都会把
  * 「ASM 不可见」的第三方 agent 现场变成宿主启动失败（T-JRebelPremainCrash）。故这里只做反射与
@@ -130,6 +133,72 @@ final class CatchAllMatcher {
     }
 
     private CatchAllMatcher() {
+    }
+
+    /**
+     * T-CatchAllFamilyFilter：收集**已加载的白名单类**的祖先名（本轮快照）。
+     *
+     * <p>只做名字收集：{@code getSuperclass()} 不触发类初始化，也不加载新类（祖先必然已随子类加载）。
+     * 单类异常一律吞掉——判定失败等于「这个类不参与同族排除」，绝不影响整轮扫描。
+     *
+     * <p>规模有界：白名单类约 40 个 × 链深 ≤6，集合上限数百项；预扫只多一遍名字遍历
+     * （2 万类约 1~2ms），与券 E 的排序预扫同量级。
+     */
+    private static Set<String> collectWhitelistAncestors(Class<?>[] loaded) {
+        final Set<String> out = new HashSet<String>();
+        for (Class<?> c : loaded) {
+            try {
+                final String n = nameOf(c);
+                if (n == null || !isWhitelisted(n)) {
+                    continue;
+                }
+                for (Class<?> s = c.getSuperclass(); s != null; s = s.getSuperclass()) {
+                    final String sn = nameOf(s);
+                    if (sn == null) {
+                        break;
+                    }
+                    out.add(sn);
+                }
+            } catch (Throwable ignore) {
+                // 单类解析失败：该类不参与同族排除
+            }
+        }
+        return out;
+    }
+
+    /**
+     * T-CatchAllFamilyFilter：候选是否与白名单类**同族**（同一条继承链上的基类或子类）。
+     *
+     * <p>两个方向：
+     * <ul>
+     *   <li><b>祖先方向</b>——候选名在 {@code whitelistAncestors} 里：候选是某个白名单类的父类/包装器
+     *       （Oracle 的 {@code OracleConnectionWrapper} / {@code OracleConnection} /
+     *       {@code GeneratedPhysicalConnection} 都是 {@code PhysicalConnection} 的祖先）；</li>
+     *   <li><b>子孙方向</b>——候选自己的父类链上出现白名单类名：候选是白名单类的具体实现子类
+     *       （如 {@code T4CConnection extends PhysicalConnection}）。</li>
+     * </ul>
+     *
+     * <p>语义：同族 ⇒ 该厂商已被登记 ⇒ 不是「未登记驱动」。织入面不受影响——候选照旧进
+     * {@code ACCEPTED} 并 retransform，本判定**只**管诊断曝光面（与券 G1 同一条口径）。
+     */
+    static boolean isWhitelistFamily(Class<?> c, String name, Set<String> whitelistAncestors) {
+        if (whitelistAncestors != null && whitelistAncestors.contains(name)) {
+            return true;
+        }
+        try {
+            for (Class<?> s = c.getSuperclass(); s != null; s = s.getSuperclass()) {
+                final String sn = nameOf(s);
+                if (sn == null) {
+                    return false;
+                }
+                if (isWhitelisted(sn)) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignore) {
+            return false;
+        }
+        return false;
     }
 
     // ---------- 判定（反射 / header 两形态） ----------
@@ -445,6 +514,13 @@ final class CatchAllMatcher {
             return;
         }
         final PassStats stats = new PassStats(CaptureBudget.scanLimit());
+        // T-CatchAllFamilyFilter：白名单类的祖先名快照（本轮建一次，只读）。
+        // 用途＝把「驱动内部的基类/包装器」从「未登记 JDBC 实现」曝光里排除：Oracle 的
+        // OracleConnectionWrapper → OracleConnection → GeneratedPhysicalConnection →
+        // PhysicalConnection 是一条继承链，白名单只登记真正声明 prepare 的 PhysicalConnection，
+        // 其余三类因 isAssignableFrom 继承可见而命中兜底、被当成未知驱动记账（真机 2026-11-09
+        // 现场 8 条里占 3 条，把上限 8 的取证位挤掉）。织入面不受影响。
+        final Set<String> whitelistAncestors = collectWhitelistAncestors(loaded);
         // 名字快筛只在**可能截断**时才做：loaded.length <= limit 时单轮就扫得完，排序没有收益，
         // 白付一遍名字扫描（实测 20k 类约 4~5ms/轮，见券 E 实测）。这一条让中小应用的成本
         // 与修复前持平，大应用才为「候选不被数组顺序挤掉」付那一遍钱。
@@ -466,7 +542,7 @@ final class CatchAllMatcher {
                     continue;
                 }
                 hinted.add(c);
-                evaluate(inst, c, name, stats);
+                evaluate(inst, c, name, stats, whitelistAncestors);
             }
         }
         // 第二轮（或唯一一轮）：其余类，与修复前同等尽力而为
@@ -481,7 +557,7 @@ final class CatchAllMatcher {
             if (name == null) {
                 continue;
             }
-            evaluate(inst, c, name, stats);
+            evaluate(inst, c, name, stats, whitelistAncestors);
         }
         CaptureBudget.diag(phase + ": matched=" + stats.matched + " wove=" + stats.wove
                 + " (whitelist=" + stats.whitelist + " interface=" + stats.matched + ")"
@@ -507,7 +583,8 @@ final class CatchAllMatcher {
      * <p>预算检查放在**做完零成本排除之后**：被排除的类既不做接口判定也不占
      * {@code catchAllScanLimit}，这正是券 E 要的语义。
      */
-    private static void evaluate(Instrumentation inst, Class<?> c, String name, PassStats stats) {
+    private static void evaluate(Instrumentation inst, Class<?> c, String name, PassStats stats,
+            Set<String> whitelistAncestors) {
         try {
             if (isWhitelisted(name)) {
                 stats.whitelist++;
@@ -531,7 +608,9 @@ final class CatchAllMatcher {
             }
             // 券 D：接口命中但不在白名单——记下类名（有界），心跳带出给 IDE。
             // 券 G1：已知连接池包装族是包装层不是驱动，从「未登记」曝光排除（织入面不动）。
-            if (!isKnownPoolWrapper(name)) {
+            // T-CatchAllFamilyFilter：白名单类的祖先/子孙是同族层（Oracle 连接继承链），
+            // 同样不是「未登记驱动」——排除，织入面不动。
+            if (!isKnownPoolWrapper(name) && !isWhitelistFamily(c, name, whitelistAncestors)) {
                 CaptureBudget.noteUnregisteredDriver(name);
             }
             // 周期补挂去重：同一 Class 只处理一次（失败也不重试——失败形态是稳定的）
