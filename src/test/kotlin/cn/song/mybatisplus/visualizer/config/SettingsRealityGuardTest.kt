@@ -248,6 +248,9 @@ class SettingsRealityGuardTest {
         val alias = mapOf(
             "crudColorStyleCombo" to listOf("selectedCrudColorStyle()", "crudColorStyleCombo"),
             "logDisplayModeCombo" to listOf("selectedListDisplayMode()", "logDisplayModeCombo"),
+            // T-PagesHql（177 轮 A3 落地）：apply 经 selectedPagesSourceValue() helper 读值并写回
+            // pagesXmlSourceMode；reset 直现 setSelectedItem。登记而非泛化匹配，与上面两条同款。
+            "pagesSourceCombo" to listOf("selectedPagesSourceValue()", "pagesSourceCombo"),
         )
         // T-TS-06：词边界判定（原为子串 `f in body`）——`logAutoSavePathField` 这类字段名是
         // `xxxLogAutoSavePathField` 的子串，控件真没进 apply/reset 也能被子串兜住（同断言一的后门）。

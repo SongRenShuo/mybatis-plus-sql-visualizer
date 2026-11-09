@@ -616,7 +616,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // T-SyncK2JMaster90：预热预算 ExecutionException 拆包新增 1 处透传判定，1→2。
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
+        // T-SyncK2JMaster177（2026-11-08）重登 15→17：A2 波次把 master 的
+        // createTempPsiFileAsync / revalidateOnEdt 两个 `runCatching` 落成 catch(Throwable)+fatal 透传
+        // （主控编译收口改为 sneakyThrow 透传，判定点仍是 FatalErrors.isFatal 两处），守卫实测 17。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 17,
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
@@ -644,8 +647,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // try/catch(Throwable)，各文件站点数普遍膨胀（15/11/15/18…），按守卫口径（maskNonCode 后
         // `catch (Throwable …)` 无判定站点数）2026-10-11 实测重登记；豁免语义逐条沿用 master 同名文件。
         // 15 处：平台可选能力探测 + 反射候选遍历——失败即回落轮询兜底 / 返回 null / 视为存活。
+        // 15→16（T-SyncK2JMaster177，2026-11-08 守卫实测）：A3 波次把 master 的 §4.5 冲刷复查闸门
+        // 与 docLengthReader 落成新增 try/catch(Throwable) 降级站点（无 fatal 判定，属平台能力探测族）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.java" to
-            CatchExemption(15, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
+            CatchExemption(16, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
         // 11 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
         "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.java" to
             CatchExemption(11, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
@@ -846,12 +851,15 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            529,
+            // T-SyncK2JMaster177（2026-11-08 守卫实测）：529 → 559 / 957 → 998。生产面 112 件全量同步
+            // 把 master 侧各批 runCatching 落成 try/catch(Throwable)，新增降级站点 41 处（其中 11 处带
+            // fatal 判定入落地集/豁免表，其余 30 处为未判定降级站点）。
+            559,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            957,
+            998,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含

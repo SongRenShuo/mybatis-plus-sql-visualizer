@@ -1318,7 +1318,10 @@ class BannedApiSourceScanTest {
         // `runCatching`+fatal 透传落成 `catch (Throwable)` + `throw (Error) t`，实测口径计数 2。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
+        // 15→17（T-SyncK2JMaster177，2026-11-08 守卫实测）：A2 波次把 master 的
+        // createTempPsiFileAsync / revalidateOnEdt 两个 runCatching 落成 catch(Throwable)+fatal 透传
+        // （主控收口改 sneakyThrow），本文件判定点 +2。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 17,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
         // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
         // T-EnhancedCaptureDefaultOn（2026-10-19）：consent 机器整段摘除（确认弹窗/预热确认/复用授权
@@ -1430,7 +1433,11 @@ class BannedApiSourceScanTest {
     // 守卫实测 957 站点）。新增站点均为降级/探测/兜底语义（接管组呈现兜底/resolveFile/
     // getChildren 名与图标/actionPerformed 弹层/host 装卸等），无 fatal 透传新增；
     // 落地集 [fatalPassthroughGuardedFiles] 各文件判定计数本轮守卫实测无漂移，不新增登记。
-    private val fatalCatchSiteTotalBaseline = 957
+    // T-SyncK2JMaster177（2026-11-08 守卫实测重登）：957 → 998。生产面 112 件全量同步把 master 侧
+    // 各批 `runCatching` 落成 try/catch(Throwable)（A1 sql 族 / A2 execute+ui 族 / A3 log+config+update 族 /
+    // A4c 面板族），新增站点集中在方言路由、预览装配链、日志追赶链与内测渠道状态机；实测口径 833 个
+    // .java 文件 998 站点。守卫原读数 expected:<957> but was:<998>。
+    private val fatalCatchSiteTotalBaseline = 998
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
@@ -1832,7 +1839,7 @@ class BannedApiSourceScanTest {
     private val psiCaptureExemptions: Map<String, PsiCaptureExemption> = mapOf(
         "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.java" to
             PsiCaptureExemption(
-                3,
+                2,
                 "文件级捕获 + 块内重取 PSI（XmlTag 候选/行号，T-M29.6 / T-Perf-14；O-72 内嵌 SQL 载体候选 +1），非元素级快照；计划未含本文件",
             ),
     )

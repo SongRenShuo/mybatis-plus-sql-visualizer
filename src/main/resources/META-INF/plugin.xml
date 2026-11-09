@@ -32,7 +32,7 @@
             会盖掉 <img> 的 width 属性，图片改按所在单元格宽度撑满——两个 <td> 不写 width 时列宽由下方
             说明文字长度决定（auto table layout），两张码就会一大一小（2026-11-03 按线上同款样式本地复现：
             526px vs 368px，比例与线上截图 1.43 一致）。写死 width 后两侧恒等宽。
-            平台白名单佐证：线上描述里 <td> 的 align 被剥掉、<img> 的 width 保留，与 jsoup
+            平台白名单佐证：本插件线上描述里 <td> 的 align 被剥掉、<img> 的 width 保留，与 jsoup
             Safelist.relaxed（td/img 均含 width，td 无 align）一致，故 td 的 width 可用；
          ⑦ 交流群码引 .jpg 而非 .png：站点上的 group-qr.png 文件内容实为 JPEG（magic FF D8 FF E0），
             按扩展名却返回 image/png，与内容不符，配合 nosniff 在部分客户端会被拒渲染。站点已补一份
@@ -46,8 +46,8 @@
         <h3>中文</h3>
         <ul>
             <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS；Java Wrapper 完整预览，Kotlin Wrapper 当前可识别链路但无法可靠推断实体时会明确提示、不生成猜测 SQL；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
-            <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；14 种数据库方言自动格式化</li>
-            <li><b>运行期捕获（默认开启）</b>：向运行中的应用挂载轻量 agent 直接采集真实执行——不依赖日志格式，附目标库、毫秒级耗时、影响行数与执行报错；慢查询标红并给出静态性能建议，真实源码位置一键跳回、调用栈悬停弹层可逐帧跳转。控制台日志（MyBatis / Hibernate / JdbcTemplate 三族）作为不改工程的回落通道，按线程分桶、去重过滤、着色标记；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
+            <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；15 种数据库方言自动格式化</li>
+            <li><b>运行期捕获（默认开启）</b>：向运行中的应用挂载轻量 agent 直接采集真实执行——不依赖日志格式，附目标库、毫秒级耗时、影响行数与执行报错；慢查询标红并给出静态性能建议，真实源码位置一键跳回、调用栈悬停弹层可逐帧跳转。控制台日志（MyBatis / iBatis 2.x / Hibernate / JdbcTemplate 四族）作为不改工程的回落通道，按线程分桶、去重过滤、着色标记；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
             <li><b>生成与转换 · SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE（SQL Server / 达梦自增列自动包装）；UPDATE / DELETE 支持快照回填恢复</li>
@@ -62,7 +62,7 @@
         <h3>English</h3>
         <ul>
             <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS. Java Wrapper preview is fully supported; Kotlin Wrapper chains are recognized, but when entity metadata cannot be inferred reliably the plugin explains the limitation instead of generating guessed SQL. Completion covers table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
-            <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; formatting for 14 database dialects</li>
+            <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; formatting for 15 database dialects</li>
             <li><b>Runtime capture (on by default)</b>: an agent attached to the running app collects every statement directly &mdash; no log format required, with target database, exact duration, affected rows and execution errors; slow queries are marked red with static performance advice, source locations come from the real call stack for one-click jump-back, and a call-stack popup navigates frame by frame. Console logs (MyBatis / Hibernate / JdbcTemplate) remain as the no-code-change fallback, bucketed by thread, de-duplicated and color-marked; one-click suppression for keep-alive noise; history archiving</li>
             <li><b>Generate &middot; SQL to Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD and joins)</li>
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
@@ -245,6 +245,15 @@
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperXmlToJavaLineMarkerProvider"/>
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.MapperJavaToXmlLineMarkerProvider"/>
+        <!-- T-MapperNavShortcut：Mapper 双向跳转接入平台原生快捷键——Ctrl+B / Ctrl+Click
+             （GotoDeclaration）与 Ctrl+Alt+Home（GotoRelated）。
+             **不得在本段加 <keyboard-shortcut> / <mouse-shortcut>**：键位归平台 action 所有，
+             用户改 Keymap 后自动跟随；插件侧不留第二份键位配置（测试有断言钉住）。
+             handler 优先于 reference 且返回 null 即回落原生，故非 Mapper 位置行为零变化。 -->
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationGotoDeclarationHandler"/>
+        <gotoRelatedProvider
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.MapperNavigationGotoRelatedProvider"/>
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
