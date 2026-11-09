@@ -551,7 +551,9 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
         val hql = info!!.hql
         assertTrue("应含 FROM 段: $hql", hql.contains("FROM WmsLocation"))
         assertFalse("含运行时值应判为非静态", info.isLiteralHql)
-        assertTrue("运行时值应留占位标记: $hql", hql.contains("/*运行时值*/"))
+        // 178 轮：R1 自洽占位注释（T-RuntimeSlotFill）把标记从 `/*运行时值*/` 扩成
+        // `/* 运行时值: <表达式> · rtN */`——判据放宽为「含运行时值标记」。
+        assertTrue("运行时值应留占位标记: $hql", hql.contains("运行时值"))
     }
 
     fun testHqlBufConcat_viaStringVariable() {

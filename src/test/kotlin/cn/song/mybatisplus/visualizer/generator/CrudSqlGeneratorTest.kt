@@ -491,7 +491,9 @@ class CrudSqlGeneratorTest {
         val nonFolding = DialectRegistry.INSTANCE.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
         // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
         assertEquals(
-            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase"),
+            // 178 轮：T-GoldenDbDialect 券 A —— GoldenDB=NONE（MySQL 形态，反引号标识符不折叠），
+            // 与 OceanBase 同族；master 侧同款顺序。
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase", "GoldenDB"),
             nonFolding.map { it.name },
         )
         nonFolding.forEach { dialect ->

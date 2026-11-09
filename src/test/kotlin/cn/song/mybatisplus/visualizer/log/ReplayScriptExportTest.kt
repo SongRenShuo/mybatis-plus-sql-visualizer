@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DmDialect
 import cn.song.mybatisplus.visualizer.sql.GaussDbDialect
+import cn.song.mybatisplus.visualizer.sql.GoldenDbDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.HighGoDialect
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
@@ -133,6 +134,8 @@ class ReplayScriptExportTest {
             MySqlDialect.INSTANCE.name to "START TRANSACTION",
             MariaDbDialect.INSTANCE.name to "START TRANSACTION",
             OceanBaseDialect.INSTANCE.name to "START TRANSACTION",
+            // T-GoldenDbDialect（178 轮随生产面同步）：GoldenDB 为 MySQL 血统，显式事务同 START TRANSACTION
+            GoldenDbDialect.INSTANCE.name to "START TRANSACTION",
             PostgreSQLDialect.INSTANCE.name to "BEGIN",
             KingBaseDialect.INSTANCE.name to "BEGIN",
             OpenGaussDialect.INSTANCE.name to "BEGIN",

@@ -295,9 +295,13 @@ class ExplainPanelWiringGuardTest {
         )
         for (marker in readonlyActions) {
             val body = functionBody(source, marker)
+            // T-RuntimeSlotFill 券 C（178 轮随生产面同步）：回放导出改走 previewSqlForExport()——
+            // 它在 previewSqlForReadonly() 之上再填一次运行期占位（不填则导出物留 `/* 运行时值 … */`）。
+            // 判据放宽为「必须走快照链」：直接调快照，或调其封装 previewSqlForExport。
             assertTrue(
-                "$marker 必须走 previewSqlForReadonly()（执行视图下才拿得到预览 SQL）",
-                body.contains("previewSqlForReadonly(p)"),
+                "$marker 必须走 previewSqlForReadonly(p) 或其封装 previewSqlForExport(p)" +
+                    "（执行视图下才拿得到预览 SQL；回放导出还要把运行期占位填掉）",
+                body.contains("previewSqlForReadonly(p)") || body.contains("previewSqlForExport(p)"),
             )
             assertFalse(
                 "$marker 不得裸读 currentEditorSql()（执行视图下会漂移成 EXPLAIN 语句）",
