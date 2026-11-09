@@ -128,6 +128,13 @@ class SqlSourceInterceptor(
             cn.startsWith("com.oceanbase.") ||
             // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）
             cn.startsWith("com.goldendb.") ||
+            // T-DomesticDialects（2026-11-09）：国产第三批有专用驱动包名的 5 家（与 IDE/模板/agent
+            // 三份副本同步——LocatorSkipPrefixSyncTest 守卫）。证据档位见各方言 KDoc 与调研报告。
+            cn.startsWith("com.gbase.") ||
+            cn.startsWith("com.aliyun.polardb.") ||
+            cn.startsWith("com.oscar.") ||
+            cn.startsWith("com.xuguedata.") ||
+            cn.startsWith("com.yashandb.") ||
             // 华为 GaussDB 商用 / openGauss 品牌（同挂 com.huawei.）与社区 openGauss 2.x/3.x
             cn.startsWith("com.huawei.") || cn.startsWith("org.opengauss.") ||
             // 连接池 / ORM / Spring 数据层

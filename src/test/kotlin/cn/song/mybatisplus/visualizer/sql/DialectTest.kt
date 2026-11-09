@@ -90,6 +90,9 @@ class DialectTest {
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
                 "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
                 "HighGo", "Vastbase", "GoldenDB",
+                // T-DomesticDialects（2026-11-09）：国产/信创第三批（15 → 25）
+                "TiDB", "PolarDB-X", "PolarDB", "GBase 8a", "GBase 8c", "Oscar（神通）",
+                "UXDB（优炫）", "AntDB", "XuGu（虚谷）", "YashanDB（崖山）",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -145,12 +148,14 @@ class DialectTest {
         assertEquals(IdentifierFolding.LOWER, HighGoDialect.identifierFolding)
         assertEquals(IdentifierFolding.LOWER, VastbaseDialect.identifierFolding)
         // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
+        // T-DomesticDialects（2026-11-09）：PolarDB / Oscar / YashanDB=UPPER（Oracle 族底推定）、
+        // GBase 8c / UXDB / AntDB=LOWER（PG 族底推定）——族归属见各方言 KDoc 证据档
         assertEquals(
-            listOf("Oracle", "H2"),
+            listOf("Oracle", "H2", "PolarDB", "Oscar（神通）", "YashanDB（崖山）"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
-            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB", "HighGo", "Vastbase"),
+            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss", "GaussDB", "HighGo", "Vastbase", "GBase 8c", "UXDB（优炫）", "AntDB"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
         )
     }

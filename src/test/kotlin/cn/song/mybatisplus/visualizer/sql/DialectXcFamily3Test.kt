@@ -50,9 +50,15 @@ class DialectXcFamily3Test {
     fun `注册表身份_末两位HighGo与Vastbase_摘掉注册即红`() {
         assertSame(HighGoDialect, DialectRegistry.byName("HighGo"))
         assertSame(VastbaseDialect, DialectRegistry.byName("Vastbase"))
-        // T-GoldenDbDialect（券 A）：第 15 个方言追加在注册表末位，HighGo/Vastbase 从末两位变末三位
-        assertEquals(15, DialectRegistry.dialects.size)
-        assertEquals(listOf("HighGo", "Vastbase", "GoldenDB"), DialectRegistry.dialects.takeLast(3).map { it.name })
+        // T-GoldenDbDialect（券 A）：第 15 个方言追加在注册表末位，HighGo/Vastbase 从末两位变末三位；
+        // T-DomesticDialects（2026-11-09）：第三批 10 方言继续追加在末位，15 → 25
+        assertEquals(25, DialectRegistry.dialects.size)
+        assertEquals(listOf("HighGo", "Vastbase", "GoldenDB"), DialectRegistry.dialects.dropLast(10).takeLast(3).map { it.name })
+        assertEquals(
+            "第三批 10 方言按计划顺序收在注册表末十位",
+            listOf("TiDB", "PolarDB-X", "PolarDB", "GBase 8a", "GBase 8c", "Oscar（神通）", "UXDB（优炫）", "AntDB", "XuGu（虚谷）", "YashanDB（崖山）"),
+            DialectRegistry.dialects.takeLast(10).map { it.name },
+        )
         // 未知名/空值回退 MySQL（既有口径不被新方言稀释）
         assertSame(MySqlDialect, DialectRegistry.byName("NoSuchDbms"))
         assertSame(MySqlDialect, DialectRegistry.byName(null))

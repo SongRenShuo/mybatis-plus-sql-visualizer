@@ -3,6 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DmDialect
+import cn.song.mybatisplus.visualizer.sql.AntDbDialect
+import cn.song.mybatisplus.visualizer.sql.GBase8aDialect
+import cn.song.mybatisplus.visualizer.sql.GBase8cDialect
 import cn.song.mybatisplus.visualizer.sql.GaussDbDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.HighGoDialect
@@ -12,10 +15,17 @@ import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.OceanBaseDialect
 import cn.song.mybatisplus.visualizer.sql.OpenGaussDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
+import cn.song.mybatisplus.visualizer.sql.OscarDialect
+import cn.song.mybatisplus.visualizer.sql.PolarDbDialect
+import cn.song.mybatisplus.visualizer.sql.PolarDbXDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.SqliteDialect
+import cn.song.mybatisplus.visualizer.sql.TiDbDialect
+import cn.song.mybatisplus.visualizer.sql.UxDbDialect
 import cn.song.mybatisplus.visualizer.sql.VastbaseDialect
+import cn.song.mybatisplus.visualizer.sql.XuGuDialect
+import cn.song.mybatisplus.visualizer.sql.YashanDbDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -118,7 +128,9 @@ class ReplayScriptExportTest {
 
     /**
      * V46 证伪①的边界清单固化（黄金表）：全部注册方言的显式事务开始语句取值。
-     * 判无（null）恰 Oracle 与 DM——改动本表即为一次口径变更，须先更新接口 KDoc 的证据档。
+     * 判无（null）：Oracle / DM / PolarDB / Oscar / XuGu / YashanDB（T-DomesticDialects 新增
+     * 方言按 Oracle 族/无证据保守判 null，见各方言 KDoc 证据档）——改动本表即为一次口径变更，
+     * 须先更新接口 KDoc 的证据档。
      */
     @Test
     fun `事务语句边界_全方言黄金表`() {
@@ -128,6 +140,14 @@ class ReplayScriptExportTest {
             OceanBaseDialect.name to "START TRANSACTION",
             // T-GoldenDbDialect（券 A）：p83 事务控制语句专章（文档级），与 MySQL 同形
             "GoldenDB" to "START TRANSACTION",
+            // T-DomesticDialects（2026-11-09）：MySQL 族三方言与 MySQL 同形；GBase 8c / UXDB /
+            // AntDB 按 PG/openGauss 族底推定（各 KDoc 证据档）
+            TiDbDialect.name to "START TRANSACTION",
+            PolarDbXDialect.name to "START TRANSACTION",
+            GBase8aDialect.name to "START TRANSACTION",
+            GBase8cDialect.name to "BEGIN",
+            UxDbDialect.name to "BEGIN",
+            AntDbDialect.name to "BEGIN",
             PostgreSQLDialect.name to "BEGIN",
             KingBaseDialect.name to "BEGIN",
             OpenGaussDialect.name to "BEGIN",
@@ -139,13 +159,17 @@ class ReplayScriptExportTest {
             SqlServerDialect.name to "BEGIN TRANSACTION",
             OracleDialect.name to null,
             DmDialect.name to null,
+            PolarDbDialect.name to null,
+            OscarDialect.name to null,
+            XuGuDialect.name to null,
+            YashanDbDialect.name to null,
         )
         val actual = DialectRegistry.dialects.associate { it.name to it.transactionBegin }
         assertEquals("注册方言集合应与黄金表逐名对齐", expected.keys, actual.keys)
         assertEquals("逐方言显式事务开始语句取值", expected, actual)
         assertEquals(
-            "判无（无显式事务开始语句）的方言应恰为 Oracle 与 DM",
-            setOf(OracleDialect.name, DmDialect.name),
+            "判无（无显式事务开始语句）的方言应恰为 Oracle / DM / PolarDB / Oscar / XuGu / YashanDB",
+            setOf(OracleDialect.name, DmDialect.name, PolarDbDialect.name, OscarDialect.name, XuGuDialect.name, YashanDbDialect.name),
             actual.filterValues { it == null }.keys,
         )
     }

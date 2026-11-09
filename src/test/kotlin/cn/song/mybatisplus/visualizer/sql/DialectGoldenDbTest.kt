@@ -31,7 +31,8 @@ class DialectGoldenDbTest {
     @Test
     fun `注册表_byName严格等价`() {
         assertSame("byName 必须命中 GoldenDbDialect 本体（不是回落 MySQL）", GoldenDbDialect, DialectRegistry.byName("GoldenDB"))
-        assertEquals("注册表 14→15", 15, DialectRegistry.dialects.size)
+        // T-DomesticDialects（2026-11-09）：第三批 10 方言追加，15 → 25（GoldenDB 从末位变第 15 位）
+        assertEquals("注册表 14→15→25", 25, DialectRegistry.dialects.size)
         // 未知名回退 MySQL 的既有口径不被新方言稀释
         assertSame(MySqlDialect, DialectRegistry.byName("Goldendb"))
         assertSame(MySqlDialect, DialectRegistry.byName("golden"))
