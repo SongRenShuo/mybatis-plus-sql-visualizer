@@ -1,7 +1,7 @@
 # T-Ibatis2Support：iBatis 2.x 静态渲染与编辑器能力全面支持（2026-11-09）
 
 - 立项：2026-11-09 11:30
-- 状态：**实施中（2026-11-09，master 线；第一波 + 第二波已合入并定向复跑全绿，跳转券 F 收尾中）**——决策点已全部拍板（§七之二），实际派工与权威读数见 §8.2 / §8.3
+- 状态：**实施完成（2026-11-09，master 线；券 0 / A / B / D / E / F / H 全部落地，最终合并态定向 397 类 3906 例 0 失败）**——决策点已全部拍板（§七之二），实际派工与权威读数见 §8.2 / §8.3；**剩余券 G（类型映射）与真机 GUI 验收（交用户）**；全量与门禁交 CI
 - 目标分支：待定（改 `plugin.xml` EP、新增注入面与设置项，属大改动，倾向 dev 线先行，见 §七 D-1）
 - 基线：master `b3b5c556`
 - 来源：
@@ -608,7 +608,10 @@ else                                mapping = newParseMapping(token, parameterCl
 4. 打开含 `<dynamic prepend="WHERE">` 的语句：渲染结果应保留 `WHERE` 且**只出现一次**（prepend 消费正确）；且不出现 `ANDX` 这类粘连以外的额外美化——**逐字对照 iBatis 实际下发 SQL**。
 5. sqlMap 文件里不应再出现「无法解析 DTD」与满屏「必须声明元素类型」（券 E 生效判据）。
 6. iBatis 语句**不应**被当作 HQL 尝试转换（不应出现「已按 HQL 转换」标记）。
-7. 失败时把 `idea.log` 里 `[T-PreviewFast]`/`[M36]` 行与 `PreviewDegradationReason` 值回传。
+7. **跳转（券 F）**：在 `<include refid="cols"/>` 上 Ctrl+B / Ctrl+Click，应落到同文件 `<sql id="cols">`；在 `resultMap="userResult"` / `parameterMap="userParamMap"` 的属性值上同样应跳；`<resultMap extends="base">` 亦然。
+8. **跳转（券 F）从 Java 侧**：在 DAO 里 `sqlMapClient.queryForObject("user.selectById", id)` 的语句 id 字符串上 Ctrl+B，应落到 XML 里 `<select id="selectById">` 的 `id` 属性值。**负例**：同一形态但项目里没有对应 sqlMap 语句时，按下应**无跳转、也不报红**。
+9. **快捷键（券 A 收尾）**：在 sqlMap 文件里按 Alt+Shift+Q，候选列表应能列出该文件的 iBatis 语句（此前为空）。
+10. 失败时把 `idea.log` 里 `[T-PreviewFast]`/`[M36]` 行与 `PreviewDegradationReason` 值回传。
 
 ### 5.5 not run 条款
 
@@ -709,8 +712,8 @@ else                                mapping = newParseMapping(token, parameterCl
 
 | 车道 | 分支 / 工作树 | 券 | 状态 |
 |---|---|---|---|
-| L8 | `t-ibatis-nav` / `.worktrees/ibatis-nav` | 券 F（XML 内部 id 引用 + Java DAO → XML） | 实施中 |
-| — | — | 券 G（`parameterClass`/`parameterMap` 类型映射）、券 I（文档登记） | 待办（券 I 随本册回填部分完成） |
+| L8 | `t-ibatis-nav` / `.worktrees/ibatis-nav` | 券 F（XML 内部 id 引用 + Java DAO → XML） | `e744b9d6`（F-1）+ `75b84d7a`（F-2）+ `049d523c`（反证补丁）；既有 41 例两次复跑逐位不变，F-1 14 例 / F-2 15 例全绿；两条反证 5 红 / 6 红；热路径 `indexScanCount==0` 有断言钉住 |
+| — | — | 券 G（`parameterClass`/`parameterMap` 类型映射）、券 I（文档登记） | 券 G 待办；券 I 随本册回填完成 |
 
 ### 8.3 实施结果（主控合并与权威复跑）
 
@@ -723,6 +726,7 @@ else                                mapping = newParseMapping(token, parameterCl
 | `f6209b02` | L4 接线 + L6 DTD（含 `plugin.xml` 尾部标准资源块） |
 | `1c1c07ae` | L5 注入 |
 | `c587e911` | 让位侧效应修复：Alt+Shift+Q 在 sqlMap 文件补回 iBatis 候选（三路来源收敛成单一判据 `isXmlStatementCandidate`）+ L21 升版 |
+| `80e26053` | L8 券 F（SQL 跳转）；两处尾部追加块冲突按「保留双方」解（`plugin.xml` 两个 `<extensions>` 各自闭合、`reverse-probes/README.md` 并集；解完用 python 复核配平与冲突标记归零） |
 
 **合并态定向复跑（权威读数，非各支自报之和）**
 
@@ -731,6 +735,7 @@ else                                mapping = newParseMapping(token, parameterCl
 | 第一轮（未清产物） | `xml.*` `log.*` `convention.*` `psi.jpa.*` `*Pages*` `*XmlInlineSql*` `i18n.*` `ui.gutter.*` | 299 类 2981 例 **202 红**——全部是合成构造器 `NoSuchMethodError`（`HibernateLogParserTest` 56/56 全红，而该合并无人碰过 Hibernate） |
 | 第二轮（`rm -rf build/classes` 后） | 同上 + `log.agent.*` + 守卫 | **186 类 2041 例 0 失败 0 错误 0 skip**，BUILD SUCCESSFUL |
 | 第三轮（清产物） | `actions.ConvertToSqlActionTest` `ui.IbatisXmlPreviewServiceTest` `ui.gutter.*` `xml.*` `config.*` | **93 类 806 例 0 失败 0 错误 0 skip**，BUILD SUCCESSFUL |
+| **第四轮（最终，券 F 合入后，清产物）** | `xml.*` `log.*` `log.agent.*` `convention.*` `config.*` `psi.jpa.*` `ui.gutter.*` `ui.inject.*` `ui.highlight.*` `ui.ref.*` `ui.nav.*` `actions.*` `i18n.*` `*Pages*` `*XmlInlineSql*` `*Ibatis*` | **397 类 3906 例 0 失败 0 错误 0 skip**，BUILD SUCCESSFUL（8m39s）；关键类抽查：跳转 14/15、`ConvertToSqlActionTest` 7、`IbatisDtdOfflineMappingTest` 3、`SqlMapFidelityTest` 3、`EnumReachabilityGuardTest` 3、`MapperNavigationGotoDeclarationHandlerTest` 16（MyBatis 零回归）|
 
 口径：`--tests` 多 pattern 是并集且未命中会被静默忽略，因此每轮都按 `build/test-results/test/*.xml` 的**类数**核对命中，不看 `BUILD SUCCESSFUL`。退出码写进日志文件后读取（不在管道尾取 `$?`，L22）。
 
