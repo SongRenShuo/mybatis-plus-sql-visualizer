@@ -2,6 +2,18 @@
 
 # SQL Visualizer Changelog
 
+## [2026.11.10-beta.1] - 2026-11-10
+
+> 范围＝v2026.11.9-beta.1 发行包之后的全部用户可见增量：**iBatis 交互补全**（语句行与 DAO 调用行双向跳转箭头、预览参数可填值、parameterMap 真实参数名、降级可见性分档）。
+
+### Added
+- **iBatis 的 sqlMap 语句行与 Java DAO 调用行双向跳转箭头（T-Ibatis2Gap 券 B，d04033aa / 896a1b4d）**：此前 iBatis 文件只有预览图标、跳转只能 Ctrl+B / Ctrl+Click；现与 MyBatis mapper 文件同款的双向箭头——语句行箭头落到 Java DAO 的调用实参，调用行箭头落到 XML 语句的 `id` 属性。且与 MyBatisCodeHelperPro 的让位门解耦：竞品没有 iBatis 能力、不存在图标冲突，竞品在位时箭头照常显示（有竞品在位用例与反向验证钉住）
+- **iBatis 预览参数可交互（T-Ibatis2Gap 券 A，92c515ec / 367561f3）**：此前预览固定按无参基线渲染，`<dynamic>` 条件全部不成立、参数面板为空。现按语句生成参数行与条件行：动态条件按行勾选、值可填、`<iterate>` 填值列表——SQL 随填值变化；数值按数值比较（修掉 `"9" > "18"` 的字典序误判）；`$x$` 直替仍走既有注入确认闸门
+
+### Fixed
+- **iBatis parameterMap 语句参数名按位对齐（T-Ibatis2Gap 券 C，f2ae5fbb）**：声明了 `<parameterMap>` 且体内手写 `?` 的语句，此前因「名字数 ≠ 占位符数」回落成 `param1..N`；现按位置取前 N 个声明映射，显示真实属性名（如 username / email / age），未消费的声明单独提示
+- **iBatis 预览降级可见性与横幅如实（T-Ibatis2Gap 券 D + UI-001，f2ae5fbb / 367561f3）**：某段无法渲染时明确标注哪个标签、什么原因（如 `<iterate>` 取值不是集合）——此前静默产出半截 SQL，还配一句与事实不符的「按原文保留 # 直替」；横幅跟随重渲染结果——填值展开后自动消失、清空后以信息级回归；信息性说明（ℹ 说明）与失败（⚠ 预览未完整还原）分档，不再与「无未解析参数」自相矛盾
+
 ## [2026.11.9-beta.1] - 2026-11-09
 
 > 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量：**iBatis 2.x 静态渲染与编辑器能力全面支持**（券 0/A/B/D/E/F/H）、**中兴 GoldenDB 第 15 方言**（券 A/B）、**SQL 列表追赶延迟与风暴期刷新成本优化**（券 A/B/B2/D/E/F/G/H/I），以及两条真机缺陷修复（PostgreSQL 单语句预览只发出 `TIMESTAMP` 一个词、Oracle 连接继承链被误报「未登记 JDBC 实现」）。
