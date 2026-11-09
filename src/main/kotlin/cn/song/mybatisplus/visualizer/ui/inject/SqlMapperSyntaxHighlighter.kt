@@ -64,6 +64,9 @@ class SqlMapperSyntaxHighlighter : SyntaxHighlighterBase() {
         SqlMapperTT.PARAM_HASH -> PARAM_HASH_KEYS
         SqlMapperTT.PARAM_DOLLAR -> PARAM_DOLLAR_KEYS
         SqlMapperTT.STATIC_REF -> STATIC_REF_KEYS
+        // 券 D：iBatis 转义字面量 `##`/`$$` **有意不配色**——语义就是「字面 `#`/`$`」，
+        // 渲染为普通文本才是正确观感（给它任一颜色都会读成「某种占位符」）。
+        SqlMapperTT.IBATIS_ESCAPE -> EMPTY_KEYS
         else -> EMPTY_KEYS
     }
 
