@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import cn.song.mybatisplus.visualizer.execute.shouldExecWholeScript
 import cn.song.mybatisplus.visualizer.execute.DialectMismatchHint
 import cn.song.mybatisplus.visualizer.execute.detailMessage
 import cn.song.mybatisplus.visualizer.execute.statusMessage
@@ -433,9 +434,13 @@ internal fun SqlPreviewPanel.executeAdhocSql(
     val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
     // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
     // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
-    // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
-    // （回滚弹窗「执行回滚/执行快照查询」），executeSql 的用户编辑器执行链不接旗标。
-    val wholeScriptExec = cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql)
+    // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。
+    // T-DateLiteralBackfill R10：单语句产物同样整批提交（绕开光标/选区把类型字面量片段
+    // 当独立语句提交的 PG 回归）；executeSql 的用户编辑器执行链同口径（见 shouldExecWholeScript）。
+    val wholeScriptExec = shouldExecWholeScript(
+        sql,
+        requested = cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql),
+    )
     // R46：执行前 Schema 校验（只读已预热元数据缓存——未绑定数据源/未预热自动跳过不阻塞）
     val schemaIssues = when (
         val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, sql)
@@ -1157,6 +1162,9 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
     }
     // 1. SQL 类型分类 → 非查询语句二次确认
     val isQuery = SqlTypeClassifier.isQuery(sql)
+    // T-DateLiteralBackfill R10：单语句预览整批提交——绕开 DBN「光标所在语句/选区」把
+    // `TIMESTAMP '…'` 折行片段当独立语句提交的 PG 回归（见 shouldExecWholeScript KDoc）
+    val wholeScript = shouldExecWholeScript(sql)
     if (!isQuery) {
         val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
         val confirm = Messages.showYesNoDialog(
@@ -1220,6 +1228,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
                     onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
                     onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
+                    wholeScriptExec = wholeScript,
                 )
                 return
             }
@@ -1243,6 +1252,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             dialectGateRequest = dialectGateRequest,
             onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
             onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
+            wholeScriptExec = wholeScript,
         )
         if (executed) return
     }
@@ -1260,6 +1270,7 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         onInfo = { infoMsg -> resultPanel.showStatus(infoMsg) },
         forceChoose = forceChoose,
         onDialectMismatchHint = { hint -> showDialectMismatchHint(hint) },
+        wholeScriptExec = wholeScript,
     )
 }
 
@@ -1524,6 +1535,9 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                    // T-DateLiteralBackfill R10：EXPLAIN 包装产物是单语句，整批提交绕开
+                    // 「光标所在语句/选区」把类型字面量片段当独立语句提交的回归
+                    wholeScriptExec = shouldExecWholeScript(explainSql, requested = true),
                 )
             }, com.intellij.openapi.application.ModalityState.nonModal())
         }
