@@ -395,10 +395,10 @@ object XmlSynHiGate {
     }
 
     /**
-     * 语句宿主的**根标签名**判定（`§2.3` 表里其余 5 处根判定共用的廉价判据，O(1)）：
-     * MyBatis `mapper` 或 iBatis `sqlMap`。与 [inMapperFile] 同一口径的「文件级」入口。
-     *
-     * 用于折叠 / 反缩进 / 变更局部性 / 模板上下文 / 补全的根守卫——这些判定只看文件根名，
+     * 语句宿主的**根标签名**判定（O(1)，廉价）：MyBatis `mapper` 或 iBatis `sqlMap`。
+     * 与 [inMapperFile] 同一口径的「文件级」入口，供 §2.3 表里除 `inMapperFile` 之外的根判定共用。
+     * 现用方：折叠 / 反缩进 / 变更局部性 / 模板上下文（四个文件的文件级判定）与补全的 iBatis 分支——
+     * 这些判定只看文件根名，
      * 不走祖先链（它们的作用对象本身就是语句标签/文本）。
      */
     fun isStatementHostRootName(rootTagName: String?): Boolean =
