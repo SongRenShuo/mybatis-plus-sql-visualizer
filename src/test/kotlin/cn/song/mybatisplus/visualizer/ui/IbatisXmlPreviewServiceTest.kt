@@ -403,18 +403,39 @@ class IbatisXmlPreviewServiceTest {
 
     @Test
     fun `UI-001_参数数量不符仍为失败档`() {
+        // 券 C（L2）按位对齐落地后的口径：parameterMap 声明数 ≥ 位点数时按位取前 N 个（数量相符，
+        // 引擎行为说明=信息级）；**位点数 > 声明数**才是真错配（名字不够 → paramN 兜底，失败档）。
+        // 本用例基线期写的是「声明 2 / 位点 1」，对齐后变成数量相符（信息级），CI 上红——
+        // 不是产品缺陷，是夹具没跟着语义走；改成真错配形态（声明 1 / 位点 2）保住原判别意图。
         val xml = """
             <sqlMap>
                 <parameterMap id="pmMis" class="java.util.Map">
                     <parameter property="a" jdbcType="VARCHAR"/>
-                    <parameter property="b" jdbcType="VARCHAR"/>
                 </parameterMap>
-                <statement id="stMis" parameterMap="pmMis">UPDATE T SET A = ? WHERE ID = 1</statement>
+                <statement id="stMis" parameterMap="pmMis">UPDATE T SET A = ? AND B = ? WHERE ID = 1</statement>
             </sqlMap>
         """.trimIndent()
         val result = preview(xml, "stMis", "statement")
         assertNotNull(result.warning)
         assertFalse("数量不符 = 真错配（paramN 兜底），保持失败档", result.informationalWarning)
+    }
+
+    @Test
+    fun `UI-001_声明多于位点时按位对齐为信息级`() {
+        // 券 C 的正面口径：声明 2 / 位点 1 → 取前 1 个（参数名真实），剩余进 unusedDeclaredParams，
+        // 引擎行为说明 = 信息级（不再是数量不符的失败档）。
+        val xml = """
+            <sqlMap>
+                <parameterMap id="pmExtra" class="java.util.Map">
+                    <parameter property="a" jdbcType="VARCHAR"/>
+                    <parameter property="b" jdbcType="VARCHAR"/>
+                </parameterMap>
+                <statement id="stExtra" parameterMap="pmExtra">UPDATE T SET A = ? WHERE ID = 1</statement>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "stExtra", "statement")
+        assertNotNull(result.warning)
+        assertTrue("声明多于位点 = 按位对齐 + 引擎行为说明，信息级", result.informationalWarning)
     }
 
     @Test
