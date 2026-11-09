@@ -213,6 +213,34 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         }
     }
 
+    /**
+     * T-EmbeddedConsoleExecRestore 券 B：面板内 Ctrl+Enter 执行（走插件全门禁链）。
+     *
+     * 为什么不恢复原生 ▶：T-SAF-04（D1=A，`10e26eeba`）刻意移除了 `CommonDataKeys.EDITOR` 与
+     * `SessionClientHolder.CLIENT_KEY`，平台原生执行动作因此恒禁用——那是审计确认的
+     * 「低信任文本绕过插件确认链」缺口（同一控制台上两个视觉相邻的执行功能守卫集不同），
+     * 不恢复、也不加「跳过确认链」开关（用户 2026-11-09 定案）。
+     *
+     * 但用户丢的是 Ctrl+Enter 这个肌肉记忆，而 [executeSql] 第一步读的正是
+     * `nativeEditorDoc.text`（控制台当前文档，含用户手改），与原生入口执行的是**同一份文本**，
+     * 差别只在门禁链（`SqlTypeClassifier` DML 确认 / `${}` 原文确认 / 未知参数确认 /
+     * `ExecutionDialectGate` / `SchemaValidationGate`）。故把键接到同一入口——**不新增执行路径**。
+     *
+     * 注册形态照抄 [reformatAction]：组件级 custom shortcut 命中即消费按键，不与 IDE 全局键位
+     * 双触发（同一机制的既有实证见 T-M26.6 的 Reformat Code 遮蔽）。
+     */
+    internal val executeShortcutAction = object : AnAction() {
+        override fun actionPerformed(e: AnActionEvent) {
+            // 测试缝：证明按键确实落到本动作（而不是平台原生执行链或什么都没发生）
+            executeShortcutInvocations++
+            if (previewDisposed) return
+            executeSql()
+        }
+    }
+
+    /** T-EmbeddedConsoleExecRestore 券 C1 测试缝：执行快捷键被触发的次数（只读断言用）。 */
+    internal var executeShortcutInvocations: Int = 0
+
     // 左：动态条件复选框 + 参数值输入区
     internal val paramPanel = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -836,6 +864,14 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // 不与 IDE 全局 Reformat Code 双触发（预览语言无 formatter，全局动作本不可用）
         reformatAction.registerCustomShortcutSet(
             CustomShortcutSet(*reformatShortcuts()),
+            this,
+        )
+
+        // T-EmbeddedConsoleExecRestore 券 B：Ctrl+Enter 执行（mac 兼容 meta+Enter）——
+        // 与「执行 SQL」按钮同一入口（[executeSql]），门禁链一致，见 [executeShortcutAction] KDoc。
+        // 与上面的格式化同一注册机制：面板整体挂载，焦点在控制台编辑器/预览编辑器/参数框均生效。
+        executeShortcutAction.registerCustomShortcutSet(
+            CustomShortcutSet(*executeShortcuts()),
             this,
         )
 

@@ -486,6 +486,23 @@ internal fun SqlPreviewPanel.reformatShortcuts(): Array<Shortcut> {
     )
 }
 
+/**
+ * T-EmbeddedConsoleExecRestore 券 B：执行快捷键集——`Ctrl+Enter`（macOS 兼容 `Meta+Enter`）。
+ *
+ * 与 [reformatShortcuts] 不同，这里**不读 keymap**：平台 DB 控制台执行动作的 action id 未取证
+ * （本地 IDE 版本与构建基准不同，jar 内未定位到执行动作类），按 id 取会静默拿不到。
+ * 硬编码的代价是用户改了键位后不跟随，属已知边界（见开发计划 §三 B3）；
+ * 后续若取证到 action id，改成「keymap 优先 + 常量兜底」即可，调用方零改动。
+ *
+ * 键位语义：执行入口本身（[SqlPreviewPanel.executeSql]）不变，本快捷键只是同一入口的触发方式，
+ * 因此不构成第二条执行路径（门禁链仍只有一条）。
+ */
+internal fun executeShortcuts(): Array<Shortcut> = arrayOf(
+    KeyboardShortcut(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK), null),
+    // macOS 习惯键（Windows/Linux 上 Meta+Enter 无既有占用；冲突时由 custom shortcut 优先消费）
+    KeyboardShortcut(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.META_DOWN_MASK), null),
+)
+
 /** 压缩 / 多行切换。T-PreviewDisplayMode：不改显示模式——切回多行时既有模式（如竖排）恢复。 */
 
 internal fun SqlPreviewPanel.toggleCompact(): Boolean {

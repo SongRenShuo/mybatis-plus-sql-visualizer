@@ -35,6 +35,21 @@ class SqlPreviewDialog(
      * `createActions()`，声明在后则该字段此刻仍为 null，动作数组里出现空位、按钮不渲染
      * （UI-042：用户侧表现为「复制 SQL 并关闭」按钮整个不见）。
      */
+    /**
+     * T-EmbeddedConsoleExecRestore 券 A1：执行按钮提升为字段——[createJButtonForAction] 按
+     * 动作身份给它挂 tooltip（「Ctrl+Enter 同效 / 内嵌控制台原生 ▶ 已停用」）。
+     *
+     * 声明位置与 [copyAndCloseAction] 同理：`init()` 构造期即调 `createActions()`，
+     * 声明在后会让动作数组出现空位。
+     */
+    private val executeAction = object : DialogWrapperAction(
+        MpSqlVisualizerBundle.message("panel.executeSql"),
+    ) {
+        override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+            panel.executeSql()
+        }
+    }
+
     private val copyAndCloseAction = object : DialogWrapperAction(
         MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
     ) {
@@ -88,11 +103,9 @@ class SqlPreviewDialog(
 
     override fun createActions(): Array<Action> = arrayOf(
         // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
-        object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
-            override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
-                panel.executeSql()
-            }
-        },
+        // T-EmbeddedConsoleExecRestore 券 A1：动作提升为字段（executeAction），tooltip 在
+        // createJButtonForAction 里按身份挂——用户点不到内嵌控制台 ▶ 时，这里是唯一会主动悬停的地方
+        executeAction,
         // 复制 SQL（F-08，提示由面板统一处理）
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {
             override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
@@ -104,10 +117,16 @@ class SqlPreviewDialog(
         cancelAction,
     ).also { actionsAtConstructionForTest = actionsAtConstructionForTest ?: it }
 
-    /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；其余按钮保持平台默认。 */
+    /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；执行按钮挂 tooltip；其余按钮保持平台默认。 */
     override fun createJButtonForAction(action: Action): javax.swing.JButton {
         val button = super.createJButtonForAction(action)
         if (action === copyAndCloseAction) applyPrimaryButtonStyle(button)
+        // T-EmbeddedConsoleExecRestore 券 A1：执行入口的说明落在按钮 tooltip 上——内嵌控制台的
+        // 原生 ▶ 已按 T-SAF-04 停用（低信任文本不得绕过插件确认链），用户唯一会主动悬停的地方
+        // 就是这个仍在工作的执行按钮，把「Ctrl+Enter 同效」和「▶ 为什么灰」写在这里。
+        if (action === executeAction) {
+            button.toolTipText = MpSqlVisualizerBundle.message("panel.executeSql.tooltip")
+        }
         return button
     }
 
