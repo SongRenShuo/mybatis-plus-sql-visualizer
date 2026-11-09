@@ -27,7 +27,7 @@ maintenance-note: >-
 > - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`（沙盒随 build 目录一并完全隔离）
 > - **`expected_end` 不是活性信号，判活要查进程**（2026-09-20 实证）：`T-GifRec-MCP` 登记 `expected_end=02:19`，到 15:50 仍在跑——`check` 只报「存在活跃任务」不报真死假死。要判某条登记是否已成残留，查进程命令行而非时钟：`powershell Get-CimInstance Win32_Process -Filter "Name='java.exe'"` 找 `idea-sandbox`/`-javaagent:…\build\MPSV-…`/对方 checkout 的 `gradlew`。
 > - **录制会话活跃时禁开新 runIde 沙盒**：新 IDE 窗口会抢前台，录制脚本的坐标点击与窗口 Z 序都会被打偏（录制管线本身要求「录制中系统空闲时优先」）——真机走查要么等对方注销，要么用独立沙盒且不抢焦点（难以保证，实际按前者）。
-> - **构建并发资源定例（2026-09-23 双树对照实测，T-BuildConcurrency O-65）**：构建并发上限 **2 路**——瓶颈是内存提交量不是 CPU（双路 Commit 峰值 66.9/上限 74.7 GB、free 最低 2.8 GB；单路 CPU 均值仅 49.8%，双路加速比 1.52）。日常验证走 `testFast`（可双路，94~155s），全量 `testShards` 只在单路收口跑；**禁止降片（`-PtestShardCount` 调小）换并行或提速**（双路 2 片实测慢一倍且 free 跌到 0.3 GB）。跑全量前先 `timeout 10 docker info` 验 daemon 活性（引擎半活态 `DialectDockerVerificationTest` 会无限挂起且不产失败读数）。`~/.gradle` 实体已迁 `F:\gradle-home`（`C:\Users\USER\.gradle` 为 junction），拆联接只用 `rmdir`/`Remove-Item`、**禁 Git Bash `rm -rf`**。详版＝`docs/经验总结/20260923-1055-多工作树并行构建资源实测与定例-经验总结.md`
+> - **构建并发资源定例（2026-09-23 双树对照实测，T-BuildConcurrency O-65）**：构建并发上限 **2 路**——瓶颈是内存提交量不是 CPU（双路 Commit 峰值 66.9/上限 74.7 GB、free 最低 2.8 GB；单路 CPU 均值仅 49.8%，双路加速比 1.52）。日常验证走 `testFast`（可双路，94~155s），全量 `testShards` 只在单路收口跑；**禁止降片（`-PtestShardCount` 调小）换并行或提速**（双路 2 片实测慢一倍且 free 跌到 0.3 GB）。Docker 测试腿默认关（`-PmpvDockerTests=true` 才启用）且在 testFast 桶、不进五片分片（20261107 T-DockerGateOffload 定例：日常门禁与本地 Docker 解耦），**仅显式跑 Docker 测试腿时才需 `timeout 10 docker info` 预检**（引擎半活态 Docker 测试类无限挂起）；引擎未启动**禁自行拉起本地 Docker Desktop**（20261107 用户令：测试服务器已有环境，停下上报等处置）。`~/.gradle` 实体已迁 `F:\gradle-home`（`C:\Users\USER\.gradle` 为 junction），拆联接只用 `rmdir`/`Remove-Item`、**禁 Git Bash `rm -rf`**。详版＝`docs/经验总结/20260923-1055-多工作树并行构建资源实测与定例-经验总结.md`
 > - **env 车道禁合回（T-BranchHygiene3 O-62 登记）**：`origin/env/cloud`、`origin/env/no-proxy` 为构建环境车道（本机构建环境调参专用），**禁合回 master/dev**，本地无需建分支，治理波次不必清理
 > - **`testDatabase` 门禁 10 绿的含义（T-BranchHygiene3 O-62 落档，销 t-testdb-driver 裁决）**：该任务只覆盖 DB 集成小集合（5 类 10 例＝驱动管线 `DbDriverPipelineTest` 硬断言 + DBN 四个集成类）；2026-09-18 驱动管线打通后四类首次真跑暴露 7 项断言失败，判定为测试侧平台行为假设（沙盒缺真实 IDE 项目/窗口/VFS 夹具）非产品缺陷，经 T-Fix-TestDb（`627fd13` 稳定工程目录）真实转绿——**非 skip/豁免掩盖**；HeavyNative B 路径（`LocalDataSource.getModel()` 是否带内省结果）本环境 `roots=0` 无法真跑，在真机走查清单在册。详见 `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md`
 > - **构建并发闸门（2026-09-24 起，T-BuildConcurrency O-65 C 项）**：任何会话跑 gradle 前过机器级闸门——`powershell -NoProfile -ExecutionPolicy Bypass -File dev-support\gradle-gate.ps1 -Command "<gradle 命令>"`。最多 2 路并行（32 GB 内存约束，加路先加内存），第 3 路自动排队（超时默认 3600 s），持有者异常退出后锁由下一路自动接管。**禁降片**：不许用 `-PtestShardCount` 调小换并行（实测证伪）
@@ -76,17 +76,20 @@ maintenance-note: >-
 
 | 文档 | 用途 |
 |------|------|
-| [20261029-0344-IDEA性能影响-性能分析.md](./性能分析/20261029-0344-IDEA性能影响-性能分析.md) | 最新一期：IDEA 性能影响分析（基线 69d37526）。唯一高风险＝MapperJavaToXml 跳转标记（无门控/无 memo/命中不早退/5s 全扫落 daemon）；上轮 4 可修点随 T-PerfSweep27 销账；agent 织入面缩小；配套收口计划 T-PerfSweep28 五券 |
+| [20261104-0401-IDEA性能影响-性能分析.md](./性能分析/20261104-0401-IDEA性能影响-性能分析.md) | 最新一期（第七期）：IDEA 性能影响分析。**基线首次移至 dev `1bf55efa`**（在役日更形态，距上期 428 笔 +15544/−3477 为系列最大增量）。主结论：IDE 全局面第四次维持无体感影响，但「新增常驻 0」破例——S2 状态栏 widget 默认启用每项目 2s 轮询（P2）；P1＝预览首开五项账本四项坐实（重复写 exec 文件/DumbMode 吞 IndexNotReady/预热预算 500ms vs 实测 3016ms/一次打开装配两次）；DumbMode 防护面 5 处（空表缓存 5s 单槽比直抛更隐蔽，主控亲验修正子代理初判）。配套收口计划 T-PerfSweep30 五券——**2026-11-04 已实施并合 dev `25cb1eec`**（全量 9015/0/0/17；widget tick 实测 4.61µs 判登记不动；01d 预算调参等 T0 重采样） |
+| [20261030-0331-IDEA性能影响-性能分析.md](./性能分析/20261030-0331-IDEA性能影响-性能分析.md) | 第六期：IDEA 性能影响分析（基线 master 1ecc0f87）。系列首次高级别发现清零：T-PerfSweep28 五券在位、3 处无上限缓存清零、53 笔增量全健康、新增线程/监听/Timer/常驻 0；唯一新发现 P3＝R29-1 多行模式取源惰性化（随 T-PerfSweep29 销账）。**20261104 补登：本行原漏登索引** |
+| [20261029-0344-IDEA性能影响-性能分析.md](./性能分析/20261029-0344-IDEA性能影响-性能分析.md) | 第五期：IDEA 性能影响分析（基线 69d37526）。唯一高风险＝MapperJavaToXml 跳转标记（无门控/无 memo/命中不早退/5s 全扫落 daemon）；上轮 4 可修点随 T-PerfSweep27 销账；agent 织入面缩小；配套收口计划 T-PerfSweep28 五券 |
 | [20261027-0821-IDEA性能影响-性能分析.md](./性能分析/20261027-0821-IDEA性能影响-性能分析.md) | IDEA 性能影响分析（详见文内风险分级与建议） |
 | [20260910-0345-IDEA性能影响-性能分析.md](./性能分析/20260910-0345-IDEA性能影响-性能分析.md) | 复查版：上一版 P1/P2 兑现复核 + M54 红线治理 24 任务全景 + 三处新热点（重放守卫逐行 getText、CriteriaQuery gutter resolve、Regex 17→42） |
 | [20260902-0054-IDEA性能影响-性能分析.md](./性能分析/20260902-0054-IDEA性能影响-性能分析.md) | 首版：结论=默认配置零常驻开销，唯一持续开销在日志捕捉链路（armed 态 100ms EDT 轮询 + 逐行 Filter 解析），P1~P3 分级 + 4 条优化建议 |
 
 ## 经验总结（docs/经验总结/）
 
-> 跨任务可复用的工程实践沉淀（脚本管线、平台踩坑、录制/迁移等）。目录内共 31 篇（2026-10-27 `ls` 实测），按时间倒序只列代表作；全量清单直接 `ls docs/经验总结/`。
+> 跨任务可复用的工程实践沉淀（脚本管线、平台踩坑、录制/迁移等）。目录内共 39 篇（2026-11-03 `ls` 实测），按时间倒序只列代表作；全量清单直接 `ls docs/经验总结/`。
 
 | 文档 | 用途 |
 |------|------|
+| [20261103-1140-预览面板原生控制台嵌入五层真因与三轮误判复盘-经验总结.md](./经验总结/20261103-1140-预览面板原生控制台嵌入五层真因与三轮误判复盘-经验总结.md) | **预览面板原生控制台嵌入（用户真机报障，重点）**：五层真因——①`editorHolder` 单槽位被降级装配/迟到换装挤出显示链（两个归属判据只看组件与宿主关系，宿主被摘下仍恒真）②DBN 对同一 exec 文件复用结果面板、新建控制台路径未清场 ③接管组未覆写 `displayTextInToolbar()` ④结果区 160px `minimumSize` 钳住折叠 ⑤回收守卫无条件写回 160px + split 放大后 divider 停在旧绝对位置。含三轮误判复盘、排查顺序与可复用坑清单 |
 | [20261026-1310-Embedded报障JAR形态三版本对账与四层测试缺口复盘-经验总结.md](./经验总结/20261026-1310-Embedded报障JAR形态三版本对账与四层测试缺口复盘-经验总结.md) | **@Embedded 报障（JAR 形态）**：宿主级联修复 + 四层测试缺口复盘（判定层/锚点形态/桶位错位/**锚点不一致**）+ 取证手法（exec 与对话框共用 result.sql 互证、gutter 栈帧考古、来源标签诊断日志前置、三版本 worktree 对账） |
 | [20261024-1914-执行计划取源换源十二轮拉锯与平台关联副作用-经验总结.md](./经验总结/20261024-1914-执行计划取源换源十二轮拉锯与平台关联副作用-经验总结.md) | **执行计划取源/换源十二轮拉锯**：根因是平台「选中即关联」无公开清除 API ⇒ 插件自建换源 UI 必然失败，W12 定案交还原生 `Data Sources` 菜单。六条硬纪律（javap 核签名 / runCatching 伪装 / 反向探针须真删符号 / 提交态编译 / 沙盒合成输入不可靠 / 失败先分型） |
 | [20261025-0830-录制沙盒许可失效新真因idea.key缺失-经验总结.md](./经验总结/20261025-0830-录制沙盒许可失效新真因idea.key缺失-经验总结.md) | **许可失效真因（推翻旧归因）**：agent 加载 ≠ 许可生效，真因是沙盒 `config/idea.key` 缺失；判定双证 + IPGP 2.x 只读平台 vmoptions + 三个假线索 |
@@ -104,8 +107,8 @@ maintenance-note: >-
 
 ## 开发计划（docs/开发计划/）
 
-> **完整清单见 [索引/开发计划.md](./索引/开发计划.md)**（2026-10-10 T-DocIndexSlim 起独立维护，含状态列与时间倒序）。本节只列近期与常查项。
-> 目录内共 **610 篇** .md（2026-10-28 `ls` 实测）。新增计划请登记到 `索引/开发计划.md`，不在此重复维护。
+> **活跃与近期清单见 [索引/开发计划.md](./索引/开发计划.md)**（2026-10-10 T-DocIndexSlim 起独立维护，含状态列与时间倒序；**2026-11-07 状态拆分**——已完结条目移入 [索引/开发计划-已归档.md](./索引/开发计划-已归档.md) 591 条，主索引只留活跃/待拍板/冻结与近期）。本节只列近期与常查项。
+> 目录内共 **676 篇** .md（2026-11-07 `ls` 实测）。新增计划请登记到 `索引/开发计划.md`，不在此重复维护。
 
 | 文档 | 用途 |
 |------|------|
@@ -118,15 +121,16 @@ maintenance-note: >-
 
 ## 调研报告（docs/调研报告/）
 
-> 竞品分析、可行性分析、技术验证等。目录内共 **99 篇**（2026-10-29 实测，含原 `docs/调研/` 并入的 GUI 自动化选型主报告与三份子报告），其中 73 篇属三个轮次系列——**系列只登记最新一期 + 范围**，需要历史期次直接 `ls docs/调研报告/ | grep <系列名>`。
+> 竞品分析、可行性分析、技术验证等。目录内共 **100 篇**（2026-11-03 实测，含原 `docs/调研/` 并入的 GUI 自动化选型主报告与三份子报告），其中 73 篇属三个轮次系列——**系列只登记最新一期 + 范围**，需要历史期次直接 `ls docs/调研报告/ | grep <系列名>`。
 
 | 系列 / 文档 | 用途 |
 |------|------|
+| [20261103-1200-预览面板缺陷无GUI复现与验证手段-调研报告.md](./调研报告/20261103-1200-预览面板缺陷无GUI复现与验证手段-调研报告.md) | 回答「每轮验证都要用户重启 IDE 复现」的成本问题。反编译锁定平台重挂触发点：`DatabaseServiceViewContributor$BaseViewDescriptor.getContentComponent()` → `new ServiceViewComponentWrapper(view.getContent().getComponent())`，而 wrapper 构造器只有 `add(component,"Center")` → AWT 立即从我们 split 摘走。**实测证伪**「headless 平台真实触发」：descriptor `isValid()` 恒 false，`getContentComponent()` 返回 null（附探针输出与"挂在共享夹具上会连坐 5 例"的警示）。定三层手段：B 组件树不变式（秒级，夹具已改用平台真实类）+ C 自动化 runIde（助手自跑，覆盖时序与视觉）+ 用户只看最终一次 |
 | [20261029-2024-瀚高海量与人大金仓三方言支持-调研报告.md](./调研报告/20261029-2024-瀚高海量与人大金仓三方言支持-调研报告.md) | 瀚高 / 海量 / 人大金仓三方言支持三路交叉调研（三家官方文档 + 驱动 jar 反编译 + MP 3.5.17/3.5.18.1 + 本机 IDEA 262 制品 + 本仓源码审计 + **金仓 DBX 真机九探针**）。**基线 dev `9df5d55d`（12 方言）**。结论：金仓早已在册且六项核心形态真机全对（LOWER 493/493、`Conflict Resolution: UPDATE`、`FORMAT JSON` 单列 JSON、`DELETE…LIMIT` 报语法错误），缺口＝保留字缺 `enckey` / 增强捕获语句面未登记 / PG 协议版驱动被误判；瀚高 V9 = PG 14、海量 G100 = openGauss 6.0，形态可整体复用 PG，须单独取证三点：瀚高 150 保留字与 dev `PG_RESERVED`(86) **双向有差集**（多 65 词全是类型名/函数名，PG 多 1 词 `procedure`）→ 并集 151、Vastbase 同收两种 upsert 而同内核 openGauss 真机只认 MySQL 形态、瀚高默认 `dbmode=oracle`（`INTERCHANGE` 引号名大小写互换 + 空串存 NULL）。三族驱动均整体改名（`org/postgresql` 条目 0）→ 增强捕获不能靠 PG 名单覆盖；dev 已有华为 GaussDB 三族登记先例可照抄 |
 | [20261029-1215-GaussDB方言支持-调研报告.md](./调研报告/20261029-1215-GaussDB方言支持-调研报告.md) | GaussDB 方言支持三路交叉调研（官方文档 + MP 源码/jar + openGauss 5.0.0 真机 + 华为驱动 jar 反编译）。结论：GaussDB 已是 openGauss 别名、非零支持；形态不必分叉、身份必须分叉；并推翻三条既有结论（`LIMIT 1,2` 假绿探针、`supportsDeleteLimit` 依据失效、保留字用错 PG 基线缺 17 词含 `rownum`）。§七 另查增强捕获链：驱动类名白名单漏华为两族 → attach 零事件，且 openGauss 驱动谱系注释写反（2.x/3.x=`org.opengauss.*`） |
-| **竞品横向对比（29 篇，第三轮~第三十轮）** | 每轮含市场快照（下载量/评分/关键词位次）+ 竞品动向 + 功能建议 + 候选池编号（D/R/V/O 系）。**最新一期**：[20261026-0230-竞品横向对比与功能建议-第三十轮调研报告.md](./调研报告/20261026-0230-竞品横向对比与功能建议-第三十轮调研报告.md)（Marketplace 上架窗口 + 审计留痕缺口 + 分叉收敛） |
+| **竞品横向对比（系列，第三轮~第三十六轮）** | 每轮含市场快照（下载量/评分/关键词位次）+ 竞品动向 + 功能建议 + 候选池编号（D/R/V/O 系）。**最新一期**：[20261104-0820-竞品横向对比与功能建议-第三十六轮调研报告.md](./调研报告/20261104-0820-竞品横向对比与功能建议-第三十六轮调研报告.md)（V236 六项落定、当日上架成制度、MybatisToolPlus 取证降 P2；落地册占 D210/V237/O-160） |
 | **插件 IDEA 性能影响（24 篇，第十二轮~第二十六轮）** | 每轮给发现点台账（F 编号）+ 风险分级 + 修复落位。**最新一期**：[20261021-1613-插件IDEA性能影响深度分析-调研报告.md](./调研报告/20261021-1613-插件IDEA性能影响深度分析-调研报告.md)（F79 两刀修复 + F95~F110 十六条新增 + F83 维持挂账） |
-| **全分支功能全景审计（21 篇，第一轮~第二十一轮）** | 全分支资产/债务盘点 + 排期与功能池。**最新一期**：[20261029-0644-全分支功能全景审计与持续演进-第二十一轮调研报告.md](./调研报告/20261029-0644-全分支功能全景审计与持续演进-第二十一轮调研报告.md)（货架剪刀差终结、主矛盾转评价资产破零；合流三连 255 笔待拍板） |
+| **全分支功能全景审计（系列，第一轮~第二十七轮）** | 全分支资产/债务盘点 + 排期与功能池。**最新一期**：[20261104-0642-全分支功能全景审计与持续演进-第二十七轮调研报告.md](./调研报告/20261104-0642-全分支功能全景审计与持续演进-第二十七轮调研报告.md)（深查版：优劣势分级 + 六条新盲区〔agent 卸载残留/历史多项目混流/超大 SQL 无护栏等〕、新功能候选 13+5 项；新面孔＝t-testgap-speed T8 生产修复未合、fix-scan-bannedapi-edt 已含于 dev） |
 | [20260928-1219-Embedded注解识别-调研报告.md](./调研报告/20260928-1219-Embedded注解识别-调研报告.md) | @Embedded 注解三路交叉调研（官方文档/仓库/jar 反编译）与识别方案 |
 | [20260918-T-FidelityEval-高保真求值模式评估报告.md](./调研报告/20260918-T-FidelityEval-高保真求值模式评估报告.md) | 高保真求值模式评估（自研渲染器 vs 真 MyBatis 引擎） |
 | [20260919-T-FidelityEval-自研与真引擎已知差异清单.md](./调研报告/20260919-T-FidelityEval-自研与真引擎已知差异清单.md) | 自研渲染器与真引擎的已知差异清单（T-FidelityEval / T-TailSweep2 G1） |
@@ -171,10 +175,19 @@ maintenance-note: >-
 
 ## 发行说明（docs/发行说明/）
 
-> 版本记录与发行材料。目录内共 **48 个文件**（41 篇按期发行说明，2026-11-02 实测）；版本号规范见 [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md)（YYYY.M.D 一日一版）。近期版本逐条列出，历史版本按版本号检索。
+> 版本记录与发行材料。目录内共 **59 个文件**（52 篇按期发行说明，2026-11-07 实测）；版本号规范见 [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md)（YYYY.M.D 一日一版）。近期版本逐条列出，历史版本按版本号检索。
 
 | 文档 | 用途 |
 |------|------|
+| [20261107-1847-正式版-日期字面量与2026.3换源修复-发行说明.md](./发行说明/20261107-1847-正式版-日期字面量与2026.3换源修复-发行说明.md) | v2026.11.8 正式版（同日第二发，Gitee + GitHub 双通道，Marketplace 作者另传）：范围＝`v2026.11.7` 正式版之后，含内测 `2026.11.8-beta.1` 的累计内容，两条修复——①**日期族参数改 ANSI 类型字面量**（T-DateLiteralBackfill，`9779d173`；`DATE '…'` / `TIMESTAMP '…'`，修 Oracle ORA-01843/01861）；②**IDE 2026.3 换源退化**（T-ConsoleBind263，`bd4eff85` / `151573f2`；2026.3 移除 `setMapping(VirtualFile, LocalDataSource)` 致绑定清不掉→可选源被短路成单条、点选静默跑到旧库；改能力族探测写入口 + 回读核对 + 异步写动作同步兜底，并补「显式源不在可选集合时阻断」「绑定改不动时就地提示实际/请求目标」两道防护）。定向 211/0/0/0（日期）+ 40/39 执行/0/0/1 skipped（换源），反向共五处先红后绿；真机验收未执行（环境受限）；门禁 run 42365862246 15 job 全绿，Gitee 发行版 1283730 / GitHub Release 437524719（正式版，sha256 `2bf1b3cf…`，7,607,849 字节） |
+| [20261107-1511-内测-beta.1-日期字面量回填修复-发行说明.md](./发行说明/20261107-1511-内测-beta.1-日期字面量回填修复-发行说明.md) | v2026.11.8-beta.1 内测（v2026.11.7 正式版之后的补丁版，Gitee 抢先体验；11.7 正式版同日已发，按「同日再发并入次日」用 11.8 基号，否则 `-beta.3` 低于正式版发不出去）：**日期族参数改用 ANSI 类型字面量**（T-DateLiteralBackfill，`9779d173`）——`LocalDateTime` 按 `toString()` 是 ISO `T` 形态，包成单引号后 Oracle 对 TIMESTAMP 列按 `NLS_TIMESTAMP_FORMAT` 隐式转换、`T` 不被接受 → ORA-01843；换成空格同样不够（`'2024-01-01 10:00:00.0'` 在 11g/23 实测 ORA-01861）。现由共享 `SqlDateLiteral` 产出 `DATE '…'` / `TIMESTAMP '…'`（`T`→空格、缺秒补 `:00`），覆盖面板参数行 / 复制可执行 SQL / 导出分享 / 增强捕获列表 / MP·批量·JPA·XML 模型链；形态不匹配或类型未知回落引号，SQL Server 与 SQLite 按方言门禁维持引号。R3 挂起的面板路径 D1 由此定案同步 ANSI 化。定向 211/0/0/0 + 反向三处先红后绿；真机验收未执行（环境受限）；门禁 run 42353060693 15 job 全绿、Gitee 发行版 1283195 / GitHub Release 437433065（sha256 `5627d968…`，7,590,244 字节） |
+| [20261107-1040-正式版-磐维方言与运行期填值-发行说明.md](./发行说明/20261107-1040-正式版-磐维方言与运行期填值-发行说明.md) | v2026.11.7 正式版（四个内测版合并转正，Gitee + GitHub 双通道，Marketplace 作者另传）：**五块新能力**——自研框架页面 HQL 识别与转换（T-PagesHql）、Mapper↔XML 原生快捷键（T-MapperNavShortcut）、空 Wrapper 与 JPA 删除更新预览锚点（T-WriteFamily / T-JpaDeleteAnchor）、**磐维 PanWeiDB 方言与增强捕获**（T-IbatisPanwei——三面登记 V1/V2 同覆盖、`jdbc:panwei(DB):` 角标 + 恒 Oracle、未登记驱动点名、attach 补扫）、运行期 SQL 可填值（T-RuntimeSlotFill 四链路同文本）；另有开发者模式预览通道、日志「类名#方法名」。**修复**：跨通道去重、iBatis 参数、2026.3 热替换、运行期占位吃括号、可选片段回填错位、404 友好提示、热替换拒绝原因、捕获静默、工具语句误报超时。门禁沿用 run 42324880484（同代码状态，转正产物未重跑） |
+| [20261107-0945-内测-beta.2-可选片段回填修复-发行说明.md](./发行说明/20261107-0945-内测-beta.2-可选片段回填修复-发行说明.md) | v2026.11.7-beta.2 内测（同日第二个内测版，Gitee 抢先体验）：**运行期占位两处回填错位**（T-RuntimeSlotOptionalFill，`f8adf101` / `bd641efe`）——三元占位注释里的 Java `?` 不再被朴素 `count('?')` 当成 JDBC 占位符（治面板多出的 `#param1`；改 string-aware 位点扫描，复制可执行 SQL 与命名参数来源判定同口径）；可选 if 片段改「整段一个 slot」（治填 `keyword` 占位留在字符串里、填 `minAmount` 出现 `AND amount >=` 悬空 + 重复行、取消包含残留前后缀；多值片段回退值位置模式并提示）。**更新日志口径**：内测只保留一个 beta 块，本版 `changeNotes` 合并 beta.1 六条 + 本版两条，beta.1 单独块移除。定向 6 类 99/0/0/0 + 两条反向验证 |
+| [20261107-0842-内测-beta.1-运行期占位可填值-发行说明.md](./发行说明/20261107-0842-内测-beta.1-运行期占位可填值-发行说明.md) | v2026.11.7-beta.1 内测（Gitee 抢先体验）：**运行期拼接的 SQL 可填值**（T-RuntimeSlotFill 券 A/B/C——占位身份 `rtN` 与结构化模板、单遍扫描+区间记账的回填引擎、参数区「运行时值 #N · 类型」四类控件；预览/复制/导出回放/直接执行四链路同一份文本，留空逐字节一致；顺带修「括号包住的三元不被识别」）、**循环占位带模板摘要**（T-RuntimeConcat-Polish）、**开发者模式预览更新通道**（T-DevUpdateChannel——构建号连点 7 次读 `preview.update.json`）、**更新包 404/410 友好提示**（`InstallResult.NotPublished`）、**热替换被拒给确定原因**（T-HotSwapUnloadSafety——非动态 EP 事实表；243 只能重启、253/262/263 可热替换，probe 四平台取证） |
+| [20261106-1545-内测-beta.2-磐维与iBatis支持及2026.3热替换修复-发行说明.md](./发行说明/20261106-1545-内测-beta.2-磐维与iBatis支持及2026.3热替换修复-发行说明.md) | v2026.11.6-beta.2 内测（同日第二个内测版，Gitee 抢先体验）：**磐维 PanWeiDB 增强捕获**（T-IbatisPanwei 券 C——`org.panweidb.Driver` 三面登记，V1 1.0.0 / V2 2.0.0 类形一致同套覆盖，字节级织入+JVM 校验；角标「Panwei（磐维）」；方言恒 Oracle，依据是建库参数 `DBCOMPATIBILITY` 默认 A，JDBC 的 `db_compatibility` 只控列名大小写不参与推断）、**未登记 JDBC 驱动点名**（券 D——空态诊断行 + 常驻状态栏）、**attach 补扫 2 轮 + 扫描预算只计候选类**（券 E）、**iBatis 2.x 参数解析**（券 A/B——`{pstm-N}` 三行组、剥一层结构方括号、`Types:` 按 id 并入，治方括号入 SQL 与 INSERT 整片 NULL）、**2026.3 热替换修复**（T-DynUpdate263）、**运行期拼接 SQL 预览修复**（T-RuntimeConcat）、**空 Wrapper 与 JPA delete/update 预览图标**（T-WriteFamily / T-JpaDeleteAnchor）、**CONFIG 看门狗自停可见化**（T-AgentSilentAfter16s，心跳 `gate` + 告警行）；同日两版验收手册见 `docs/验收文档/20261106-内测beta.1与beta.2-功能验收文档.md` |
+| [20261106-0743-内测-beta.1-页面HQL识别与Mapper原生跳转-发行说明.md](./发行说明/20261106-0743-内测-beta.1-页面HQL识别与Mapper原生跳转-发行说明.md) | v2026.11.6-beta.1 内测（Gitee 抢先体验；2026.11.5 从未发行故跳号）：**自研框架页面数据源 HQL 识别与转换**（T-PagesHql——`<datasource>` 按 entityClass 与语句根标识符关系判定源语言，命中走 `previewHbmNamedQuery` 管道：实体→表名、属性路径→列名、`:name`/`?1`/`#{...}` 预处理成命名参数；泛化＝任意页面标签名 + `<dataValue>` 无 entityClass 载体；设置三档自动/仅SQL/仅HQL；「原文」页签 + 三种降级回退）、**Mapper 双向跳转接原生快捷键**（T-MapperNavShortcut——注册 `gotoDeclarationHandler`/`gotoRelatedProvider`，Ctrl+B 双向 + Ctrl+Alt+Home 关联符号，handler 优先于 reference、非 Mapper 位置零变化）、**跨通道重复条目折叠**（T-CrossChannelDedupe——crossKey 等价键 5s 窗折叠 + agent 副本融合升级 + 二进制签名归一 + 与「SQL 去重」开关解耦 + agent 四族 setObject 捕获面补齐）、**工具语句完成不再误报超时**（T8）、日志列表可选「类名#方法名」（T-LogMethodName，默认关）；门禁走 GitHub Actions mode=release，读数回填发行说明 |
+| [20261104-1452-内测-线程与预览方言修复-发行说明.md](./发行说明/20261104-1452-内测-线程与预览方言修复-发行说明.md) | v2026.11.4-beta.1 内测（Gitee 抢先体验）：**Oracle 增强捕获只剩 `select 1 from dual`、业务 SQL 一条不出**（T-OracleWrapperRegistry——Oracle thin 对外是包装器 `OraclePreparedStatementWrapper`，prepare 面登记挂包装器、`executeQuery()` 织入点在包内 `T4CPreparedStatement`，登记对象与执行对象错位；修法＝`registerWithDelegates` 反射解一层包装 + `NestGate` 改「真产出才置位」+ 同帧重复出口去重，失败语句 3 条→1 条）、**打开预览即弹数据源选择器**（T-PreviewPreparePick，只实施「不弹不建链」，多源无记忆保持未绑定）、**改方言并刷新后底部红条仍报旧方言**（T-DialectGateRenderDialect，方言无关载体取最新决策、刷新重算证据）、**三类线程违规**（T-ThreadFix A 接管组 `ActionUpdateThread.BGT` / B 控制台 PSI 后台预暖后 write-safe 回 EDT / C 执行入口与方言映射派发改 `nonModal`）；真机日志 SEVERE 归零待发行包复验 |
+| [20261103-1140-预览执行链修复与数据源下拉接管-发行说明.md](./发行说明/20261103-1140-预览执行链修复与数据源下拉接管-发行说明.md) | v2026.11.3 正式版（预览执行链整批修复 + 一项能力）：**执行 SQL 后预览面板下半区空白、连原生控制台工具栏都不出现**（五层叠加：`editorHolder` 单槽位被降级装配/迟到换装挤出显示链且归属判据恒真、DBN 复用结果面板致旧 Result 页签残留、接管组未覆写 `displayTextInToolbar`、160px 最小高度钳住折叠、回收守卫把 160px 写回；修法＝`mountEditorHolderContent` 单一装配口 + 清场 + 折叠标记）、**方言冲突放行把准备链静默卡死**（BLOCKED 先投把意图标完成 → `isPrepareActive` 假 → attachConsole 前早退）、**方言冲突渲染实例化设置树**（1.2s EDT 卡顿 + 面板转圈）、注解预览不预热、折叠结果栏回弹、agent 登记盲区降噪；新增**控制台工具栏数据源下拉接管（只换源不执行）**；预览打开每次省 1.7–2.0s（exec 写盘锁反转） |
 | [20261102-1100-262执行链读锁与分页COUNT误触修复-发行说明.md](./发行说明/20261102-1100-262执行链读锁与分页COUNT误触修复-发行说明.md) | v2026.11.2 正式版（修复版，三处）：**2026.2 预览窗「执行 SQL」报方言不匹配且无法执行**（EDT 读锁硬抛被 `runCatching` 吞成空列表 → runners 归零，误套方言不匹配文案；修法＝两处反射调用包 `WriteIntentReadAction.compute`，重载选 243/262 交集的 `compute(Computable)`，首版 `compute(ThrowableComputable)` 在 262 上 `NoSuchMethodError`）、**`last("limit N")` 非分页查询误产分页 COUNT**（闸改为 `chain.pageLimit != null`）、**预览文档落盘写在写命令外致 EDT 硬抛 `Access is allowed from write thread only`**（T-PreviewDocPersistLock，落盘移进写命令块；用例改判 `beforeAnyDocumentSaving` 栈帧，计划原 `writeIntent=false` 前提被证伪）；262 运行时真机实效未取到读数 |
 | [20261031-1512-十四方言转正与动态标签补全修复-发行说明.md](./发行说明/20261031-1512-十四方言转正与动态标签补全修复-发行说明.md) | v2026.10.31 正式版（beta.1/beta.2 转正，上架 Marketplace）：**方言 11→14**（GaussDB 独立身份 + 瀚高 153 词 + 海量 201 词 + 金仓三缺口）、**采集面方言无关化**（JDBC 接口匹配兜底 + 三道闸熔断 + 活性回落）、四方言预览恒降级修复（缺 `lang.parserDefinition`）、mapper XML 嵌套动态标签 `#`/`$` 补全修复、agent 控制台降噪 |
 | [20261030-1655-预览PSI方言修复与agent控制台降噪-发行说明.md](./发行说明/20261030-1655-预览PSI方言修复与agent控制台降噪-发行说明.md) | v2026.10.31-beta.2 内测：修 **GaussDB / 达梦 / 瀚高 / 海量四方言预览恒降级、表列补全不可用**（根因＝四种自注册方言只注册 `sql.dialect`、缺 `lang.parserDefinition`，平台回落基语言解析器后强转抛 CCE，真机一下午 9 次、3 次 SEVERE 点名本插件）；顺带修跨版本隐患（`SqlFileElementType` 在 253/262 已删，改核心 `IFileElementType`）；agent 控制台输出默认静默、只留真实降级与熔断（`logLevel=debug` 恢复明细）；Gitee id 1256540 |
@@ -194,8 +207,8 @@ maintenance-note: >-
 | [20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md](./发行说明/20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md) | v2026.10.6 正式版：@Embedded 三族识别补全、日志屏蔽、信创方言扩至 11 种、通用 XML 内嵌 SQL 识别 |
 | [20260923-1058-回滚链与增强捕获可靠性大修-发行说明.md](./发行说明/20260923-1058-回滚链与增强捕获可靠性大修-发行说明.md) | v2026.9.23 正式版：一键回滚 SQL、增强捕获三项根治、错误定位全链、MCP 十工具上线、方言智能推断、执行安全双闸门 |
 | [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md) | 版本号规范（YYYY.M.D 一日一版） |
-| [Gitee自动发行工作流-说明文档.md](./发行说明/Gitee自动发行工作流-说明文档.md) | **门禁→八处同步→发行提交→buildPlugin→标签→Gitee API 发行→回读校验全链路**；API 参数陷阱、脚本三模式、`inspect-plugin-zip.py`、tag 前移不删发行版 |
-| [T-ReleaseChecklist-发行检查清单.md](./发行说明/T-ReleaseChecklist-发行检查清单.md) | **发行检查清单**：发行链每步给动作/命令/判据，判据不满足不得勾选；发行上传维持人工 |
+| [Gitee自动发行工作流-说明文档.md](./发行说明/Gitee自动发行工作流-说明文档.md) | **门禁→八处同步→发行提交→buildPlugin→标签→Gitee API 发行→回读校验全链路**；API 参数陷阱、脚本三模式、`inspect-plugin-zip.py`、tag 前移不删发行版；**双通道正文分工**（GitHub=CI 生成速览+折叠历史，Gitee=发行说明全文，不对齐）与**改正文 PATCH 三字段**（漏 `prerelease` 会把内测版改成正式版） |
+| [T-ReleaseChecklist-发行检查清单.md](./发行说明/T-ReleaseChecklist-发行检查清单.md) | **发行检查清单**：发行链每步给动作/命令/判据，判据不满足不得勾选；发行上传维持人工；含 RC-P4b 双通道正文分工与 RC-R2c 发行后补正文 |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | 首次发布 Marketplace 全流程（双仓订正：源码链接填 GitHub 镜像、日常同步走 `push-all.ps1`）；含内测包用户升级路径 |
 | [marketplace-custom-page.md](./发行说明/marketplace-custom-page.md) | Marketplace 自定义页 Markdown 版（整页复制到市场 Documentation 编辑器） |
 | [20260923-marketplace-审核回复稿.md](./发行说明/20260923-marketplace-审核回复稿.md) | Marketplace 审核邮件回复稿 v2（internal API usage & compatibility） |
@@ -253,7 +266,7 @@ maintenance-note: >-
 | 真实项目语法形态 / 模式编号 P/Q/U/X / 测试语料 | `需求文档/MPJ用法收集与兼容性测试清单.md` |
 | 功能需求定义（F-01~F-20） | `需求文档/20260812-1058-...-需求文档.md` |
 | 代码怎么组织 / 链路怎么走 / 怎么扩展 | `架构设计/01-项目架构总览.md` → `02-核心流程详解.md` → `03-开发与测试指南.md` |
-| 任务编号 T-xx / 里程碑排期 / 实现思路 | `索引/开发计划.md`（全量，610 篇） |
+| 任务编号 T-xx / 里程碑排期 / 实现思路 | `索引/开发计划.md`（活跃与近期 80 条）+ `索引/开发计划-已归档.md`（已完结 591 条） |
 | 版本记录 / 版本号规范 / 发行流程 | `发行说明/` + `发行说明/Gitee自动发行工作流-说明文档.md` |
 | 弹窗/通知触点盘点 / 新弹窗能否弹 / 准入检查 | `规范/设计规范-弹窗克制红线.md` |
 | 文档命名 / 格式规范 | `规范/文档命名规范-说明文档.md` |

@@ -35,9 +35,19 @@
 
 ## 二、准备段（门禁与元数据）
 
-- [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/262 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+- [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/263 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
+- [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
+  - 背景：CI 的 `verify` / `marketplace` 六条腿不再靠跑 `:verifyPlugin` 顺带获得 verifier-cli，而是按 `dev-support/verifier-cli-version.txt` 里的版本从 Maven Central 直取后播种进 gradle 缓存（拆腿提速的前提）。版本号本身由 IPGP 内部决定，我们只能钉。
+  - **风险形态**：IPGP 升级（改 `settings.gradle.kts:36` 的 `org.jetbrains.intellij.platform.settings` 版本）后若不同步改钉子，CI 会**继续用旧版 verifier 跑判定且不报错**——门禁绿不代表按新版口径验过。
+  - 操作（改 IPGP 版本后立刻做，别等发版）：
+    1. `./gradlew :verifyPlugin -PgifRecord=false` 跑一次（让新版 verifier-cli 落进 gradle 缓存）；
+    2. 查缓存里的实际版本：`ls ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/*/*/verifier-cli-*-all.jar`（Windows 上 gradle home 可能是 junction，按 `GRADLE_USER_HOME` 解析）；
+    3. 把版本号写进 `dev-support/verifier-cli-version.txt`（文件只有版本号一行）；
+    4. `./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"` 必须绿；
+    5. 提交时在信息里写明「IPGP x.y.z → verifier-cli a.b.c」。
+  - 判据：`VerifierCliVersionGuardTest` 绿（本机缓存里存在与钉子不同版本的 jar 时它会红并点名两边版本）。注意该守卫只在本机跑过 `:verifyPlugin`（缓存有 jar）时生效，CI 上因缓存不同会 skip——**它不是 CI 防线，是本地防线**。
 - [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
 
@@ -52,8 +62,101 @@
 | 7 | `marketplace-custom-page.html` | 功能矩阵行 + 「为什么选它」按能力类别判定 |
 | 8 | `docs/MEMORY.md` + `docs/变更记录.md` | 发行说明索引最新在上，总册按日期倒序补齐 |
 
+  **RC-P4b 双通道正文分工（2026-11-06 定例，不是漂移）**：GitHub 与 Gitee 的发行版正文**本来就不一样，不要对齐**。
+  - GitHub 正文由 CI 自动生成：`## 本版变更`（取 changeNotes 的本版块）+ 元信息（附件名 / 标签与提交号 / 完整发行说明链接 / 全部发行版本 / Gitee 同版链接 / 构建记录）+ 反馈与二维码 + `<details>` 折叠的全部历史变更。
+  - Gitee 正文用**发行说明全文**（`--notes` 传入）：新增 / 修复 / 改进 / 测试 / 已知边界 / 兼容性 / 安装 / 文档 / 反馈。
+  - 为什么分工：Gitee 是 `update.json` 指向的自更新通道与国内用户主入口，内测用户要看的是「怎么装、兼容哪些 IDE、这版有哪些已知边界」；GitHub 是技术读者与归档，要的是速览、提交号、构建记录、可折叠历史。GitHub 正文里已挂「完整发行说明」链接，两边是「摘要 + 入口」与「全文」的关系，信息不割裂。
+  - 代价对照（决定过、不再重议）：Gitee 改速览会丢安装与已知边界；GitHub 改全文要动 CI 模板且丢折叠历史与构建记录，收益与风险不成比例。
+  - **发行说明尾部须带一行构建记录链接**（`构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`）——Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者也能核验「这版跑了哪一轮门禁」。
+
 - [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
+- [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
+- [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
+  - **默认**＝本地 `./gradlew releaseGate`（约 51 分钟，6C12T 实测）。
+  - **零代码改动转正**＝走 RC-P1c 复用，约 10 分钟。
+  - **仅在需要离开机器 / 要干净环境排除本机缓存假绿时**才走 GitHub Actions：`build-plugin.yml` 手动 dispatch、`mode=gate`。2026-11-05 读数演进：run#5 九 job 全绿 35.0 分钟 → run#7 27.8 → run#9/#10 19.4 → run#12 18.4 → **run#19/#20 十四 job 全绿 13.4 / 14.5 分钟**（build 6.3~6.6 + verifyplugin 5.0~5.1 + verify×3 并行 3.9~4.3 + marketplace×3 并行 5.4~7.7 + test×5 并行 8.2~10.7，test 与 build 同起跑；墙钟由 marketplace(263) 这条腿决定）。CI 比本地快的原因是全面并行，但它仍要恢复约 9.6GB 的 Gradle 缓存并从头编译，**所以 CI 不作为默认路径**。⚠️动 `buildSrc` 的提交会让缓存 key 换新，该轮 build 的缓存保存要整份重存（实测 +7 分钟，run#13）。
+  - **推送自动跑全量测试**（2026-11-05 起）：push 到 master 自动触发 `push-test.yml`——5 片并行 + 2 条纯逻辑快桶腿（`testFast` 按入库权重画像 LPT 切两片，2026-11-05 晚实测 601s → 471s），不带 build/兼容验证，约 11~13 分钟出结论；并发组按分支且 `cancel-in-progress: true`（连推多次只跑最后一轮）。**分工**：推送管测试，发版前的 `mode=gate` 管 build + verify×3 + marketplace×3 + verifyplugin；测试部分与推送那轮同口径，可用 RC-P1c 的「零代码改动复用」判据省掉。
+  - **夜间全量**（2026-11-05 起）：`nightly-full.yml` 每晚 02:00（北京时间）跑分片轮次不覆盖的那批——5 片全量 + 2 条快桶腿 + `testExternal`（签名护栏）+ `:sql-visualizer-agent:test` + `testDatabase`（8 个 testDb*，含连通性冒烟 `testDbJdbcSmoke`）+ `dialectExternalVerify` + `e2eFakeIde`（真机端到端）+ **`build` → `verifyPlugin` → `verifyMarketplaceVerdict243/253/263`**（2026-11-05 晚起补齐；这三面原先只有手动门禁才有读数）。
+    - ⚠️`verifyMarketplace<tag>` 要求对应的 IDE **已在 gradle transforms 里解包**（`ideDir()` 是硬校验）；243/253 靠历史遗留的缓存能过，**263 是后加目标、从没被解包过**，首跑 70 秒就红。已在两条 workflow 的 marketplace 腿前各加一步「确认验证目标 IDE 已解包（缺则先跑该目标的 `:verifyPlugin -PverifyIdes=<tag> -x buildPlugin`）」。夜间**不跑** `testShardTail`——那两例是计时断言，CI 上 2 核 + 抖动必假红，仍由本地 `releaseGate` 覆盖。**只在前 24 小时有代码提交时跑**（`changes` job 用 `git log --since` 扫 src/buildSrc/sub-projects/gradle 脚本），纯文档日不烧 runner。
+    - **为什么还要「兜底派发」**：GitHub 的 `schedule` 是 best-effort——2026-11-05 的 `0 18 * * *`（北京 02:00）到 20:14Z 仍未触发（晚 2 小时 14 分），期间 githubstatus 全绿、`default_branch=master`、workflow `state=active`，且历史上 9 轮夜间全是 `workflow_dispatch`。所以 `push-test.yml` 加了一条 `nightly-nudge`：**当天还没有夜间轮就派发一次**（幂等，先查当天有没有轮；查询异常只告警不算红）。判据与夜间的 `changes` 闸门同源——有 push 的那天正是夜间该跑的那天。
+    - 需在仓库 Secrets 配三个才会启用 DB / e2e 两条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：`MPV_DB_URL` / `MPV_DB_USER` / `MPV_DB_PASSWORD`——指向测试服务器上的 MySQL（2026-11-05 部署：`103.36.220.245:25900`，库 `mpj_demo`；URL 必须带 `sessionVariables=sql_mode=ANSI_QUOTES`，与 demo 数据源同口径）。`dialectExternalVerify` 另需 `DIALECT_MATRIX_PROPERTIES`（`.local/dialect-external-matrix.properties` 全文）。
+    - 连接覆盖机制：`-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword`（DB 集成）与 `-Pe2eDbUrl/-Pe2eDbUser/-Pe2eDbPassword`（e2e，映射成 Spring 的 `SPRING_DATASOURCE_*`）。不传时回落到「demo 的 dataSources.xml + root/root」，本机行为不变。
+    - 已知坑：`mysql:8.0` 官方 tag 是 Oracle Linux 9 基底，在无 x86-64-v2 的虚机上会 `Fatal glibc error`，须用 `mysql:8.0-debian`；容器内 `LANG` 为空会让 mysql 客户端按 latin1 灌数据导致中文双编码，init 脚本首行须 `SET NAMES utf8mb4`。
+    - **`dialectExternalVerify` 在 CI 上只跑代表实例子集**（2026-11-06 起 ＝ `mysql84` + `pg16` + `panwei_a` +
+      `gaussdb_kernel503`，可用 `CI_DIALECT_KEYS` 覆盖，**顺序＝挑选顺序、预算吃紧从尾部砍**）：
+      全量 12 实例在 2 核 runner 上跑 91 分钟仍未完（2026-11-05 run#6 实证），根因是跨洋 RTT × 每实例
+      上千次建表/查询；本地同一套矩阵 5~10 分钟。**全量矩阵以本地 `releaseGate` 为准**，CI 只留冒烟信号。
+      - 2026-11-06 扩子集的原因：磐维 PanWeiDB 是 2026.11.6 的主打方言（A 模式 Oracle 兼容 / B 模式 MySQL
+        兼容，用户真实形态是 `jdbc:panweidb:`）；原先进程只跑 `mysql84`+`pg16`，CI 冒烟对磐维与 GaussDB
+        内核 503 零覆盖，所以本版把这两族拉进冒烟子集。
+      - 预算：步骤 `timeout-minutes` 按 **max(每实例预算) + 8min 冷启动与收尾** 算（每实例预算＝矩阵条目
+        `timeoutSeconds` → `-Dmpvs.external.instanceTimeout` → 默认 300s）。**2026-11-06 起口径由 Σ 改成 max**：
+        `dialectExternalVerify` 改为同 JVM 内按实例并发（默认 `min(实例数, 4)`，可用
+        `-Dmpvs.external.maxConcurrency` 或矩阵全局 `maxConcurrency` 覆盖），墙钟不再等于「各实例相加」。
+        最坏情况是**最贵那个实例挂满自己的预算**（看门狗判它 TIMEOUT、其余实例照常收口），故
+        步骤必须 ≥ max(预算)，否则「实例级超时按设计判红」会退化成 CI 掐断进程（没有 summary 工件、
+        也分不清超时与崩溃）。
+        - **2026-11-07（T-DialectSweepSpeed2）按新读数重算**：单实例内再加**词级并行**（默认
+          `min(4, 词数)`，可用 `-Dmpvs.external.wordWorkers` 或矩阵全局 `wordWorkers` 覆盖，1 = 关闭），
+          并把夹具种子 INSERT 并入批处理 ⇒ 逐词往返统一压到 3。CI 投影（按往返数折算，
+          897/477/204/92s 为 run 42315646150 实测）：mysql84 `897×3/7÷4 ≈ 96s`、gaussdb `477÷4 ≈ 120s`、
+          panwei_a `204÷4 ≈ 51s`、pg16 `92÷4 ≈ 23s` ⇒ 墙钟 ≈ max ≈ **2min**，全腿 ≈ 冷启动 6min +
+          实例启动 1min + 2min ≈ **9min**（目标 10~12min）。
+          预算按**悲观口径**（假设词并行在 CI 一点不省）取：mysql84 `385s→900s`、gaussdb `477s→900s`、
+          panwei_a `204s→600s`、pg16 `92s→300s` ⇒ max = 900s = 15min → 步骤 = 15 + 8 = 23 → **25min**，
+          job = 步骤 + 收尾/工件上传 → **35min**（旧值 60min / 70min）。
+          ⚠️ **前提是 secret 里的实例预算已按上表下调为 ≤900s**；若仍是旧值（1800/600/1200/**3000**），
+          max 仍是 50min，25min 的步骤会在实例真挂住时被 CI 掐断——**先同步 secret 再依赖该值**，
+          未同步前临时改回 70/60。
+          ⚠️ MySQL 族 URL 必须带 `allowMultiQueries=true`（否则 `batch=off`、逐词 7 个往返，
+          mysql84 退回 ~900s 量级；探测结论会写进 summary 明细行的 `batch=on/off(<引擎原话>)`）。
+        - 本机实测（2026-11-07，四实例子集，实例并发 4）：mysql84 **87.2s → 20.3s**（批处理 1.4× ×
+          词并行 3.2×）、pg16 7.1s → 3.7s、panwei_a 23.6s → 23.3s、gaussdb 75.9s → 78.8s。
+          PG 族在本机无收益是**测试机 2 核饱和**（gaussdb/panwei 容器同机），不是并行失效；
+          CI 的收益机制是跨洋 RTT（200ms × 3 往返 × 4 路并行），与本机服务端饱和无关。
+        ⚠️只有「并发度 ≥ 实例数」时才是 max；压小并发度后算式回到 `ceil(实例数 / 并发度) × max(预算)`。
+        **`panwei_b` 已从子集剔除**：262 个保留字、CI 投影 ≈30min，是最贵的一条，且与 mysql84 同属 MySQL
+        协议/词表族；磐维的价值在 Oracle 兼容面，已由 `panwei_a` 覆盖。再吃紧的砍序：`gaussdb_kernel503` → `panwei_a`。
+        **改子集、改矩阵里的实例预算、改并发度或改词级并行度都要按同一算式重算**，算式落在 workflow 的
+        `dialect` job 头部注释。
+      - 触发与复验：nightly 是 `schedule` + `workflow_dispatch` 双触发，可手工
+        `gh workflow run nightly-full.yml`（换分支加 `--ref <branch>`）；判据＝该 run 的 `dialect` job 里
+        「方言矩阵已落盘（子集 …）」行 + 工件 `dialect-verify-summary`（`summary.md` 的「通过/跳过/超时/失败」行）。
+        **未跑通前不得写「CI 已覆盖」**。
+      - ⚠️ 两个前置都藏在 secret／本机文件里（助手看不到，只能靠一次真实 dispatch 实证）：
+        ① secret `DIALECT_MATRIX_PROPERTIES` 必须是**含 `panwei_a`/`panwei_b`/`gaussdb_kernel503` 条目**的
+           版本。本机 `.local/dialect-external-matrix.properties` 已含这三条（磐维 A 还带 `skipWords=rowid`
+           + `skipReason`，摘录步按 key 原文带过来，所以 CI 不会因 rowid 假红）；但 2026-11-05 run#9 日志里
+           「原矩阵 **13** 个实例」＝当时 secret 的 key 数，而本机文件今天已是 **15** 个 key —— 多出的两条正是
+           磐维，**secret 大概仍是 11-05 那版**。若没同步，落盘步会对缺 key **硬抛**（整条腿红，不是静默少跑）。
+        ② 矩阵必须给**每个**实例显式写 `timeoutSeconds`：券 A 的默认 300s **小于** mysql84 改前实测 897s，
+           不写就会把本来会通过的实例判成 TIMEOUT。当前取值（本机文件）：mysql84 1800 / pg16 600 /
+           panwei_a 1200 / gaussdb_kernel503 3000 / panwei_b 2400（本地用）/ 其余 600。
+           **2026-11-07 起 CI 子集建议下调为** mysql84 900 / pg16 300 / panwei_a 600 / gaussdb_kernel503 900
+           （理由与算式见上一条；本地全量矩阵可维持旧值，本地不受 CI 步骤时限约束）。
+        ③ MySQL 族 URL 必须带 `allowMultiQueries=true`（T-DialectSweepSpeed2）：漏写只损失性能不判红，
+           summary 明细行会写 `batch=off(引擎拒绝多语句：...)`，据此核对是否生效。
+      - ✅ 口径缺口已补（2026-11-06）：本机矩阵的 `instances` 行原先**没有** `panwei_a`/`panwei_b`（条目在
+        文件里、但不在 `instances` 列表），等于本地 `releaseGate` 不跑磐维。现已把两个 key 加进 `instances`，
+        本地与 CI 双向覆盖；同一批还按券 A 的实测把每个实例的 `timeoutSeconds` 补齐。
+    - `e2eFakeIde` 在 CI 的额外前置：JDK8（`setup-java` 装完记录路径再恢复 JDK17）、Maven 联网（`-Pe2eMavenOffline=0`，首次冷仓库）、demo 克隆（Gitee 失败回落 GitHub 镜像）。
+  - 并发纪律（2026-11-05 改）：`build-plugin.yml` 的 gate 与 release/publish **分组不同**——gate 组可被新提交取消，release/publish 组永不取消（发行不能被打断、也不允许两次发行并发覆盖同一 Release 资产）。
+  - CI 通道的四个已知前置（都已在 workflow 内解决，勿再踩）：
+    ① **任何需要 verifier-cli 的独立 job 都要自己拿到 jar**——`verifyGate` / `verifyMarketplace` 是 verifier-cli 直驱任务，配置期就要从 gradle 缓存里找 jar。现由各腿按 `dev-support/verifier-cli-version.txt`（当前 `1.411`）从 Maven Central 直取后播种；IPGP 升级 verifier 时必须同步改钉子，`VerifierCliVersionGuardTest` 会在本机全量测试里红。
+    ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。
+    ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
+    ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
+  - **换验证目标 IDE 版本当天的坑**（2026-11-05 2026.2.4→2026.3 实测）：IPGP 读的是**项目内缓存的**
+    product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore）。若该缓存是在新版
+    发布前抓的，跑 `:verifyPlugin` 会报 `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，
+    而官方下载链接其实已存在（`download.jetbrains.com/idea/idea-2026.3.win.zip`）。
+    处置：`rm -rf .intellijPlatform/productReleases` 后重跑，IPGP 会重新拉取清单。
+    CI 不受影响（每次都是干净 workspace，无缓存）。
+  - **不要**为了跳过重编译把项目级 `.gradle` 塞进工件：收益约 2 分钟，而它把构建状态交给跨 job 的文件搬运，多一层不可控（run#8 试过、已撤回）。
+  - 已知 flake 与处置（都属「用固定时间当同步」）：
+    ① 分片/兼容腿偶发 `ClosedFileSystemException`（被报成 `Could not find bundled plugin with ID: 'com.intellij.database'`），约 4/25 片。**原地重跑无效**（Gradle daemon 复用，关闭状态留在 daemon 里），九处 Gradle 调用统一走 `dev-support/ci/run-gradle-retry.ps1`（先 `--stop` 再重跑）。看到 `::warning::命中 Gradle zip 文件系统竞态` 说明命中过该竞态、已自动重跑，不是测试失败。
+    ② 异步生效点的断言一律用有界等待（`SqlLogAutoSaverPruneGuardTest` 的裁剪、`DiagramPanelTest` 的加载态），不要写 `Thread.sleep(N)` + 立即断言。
 
 ## 三、双通道发布段
 
@@ -67,6 +170,12 @@
   - **本机发布**（本机 buildPlugin 出的 zip）：网页创建发行版，标签同名，附同名 zip，正文用发行说明全文。
     判据：Release 页可见附件且文件名含正确版本号。两条路完成后都可
     `python dev-support/gitee-release.py --version {版本号} --verify-only` 复查。
+  - **RC-R2c 发行后补正文**（2026-11-06 定例）：正文要补内容（测试读数、构建记录行、错别字）时用
+    `PATCH /releases/{id}` 原地改，**不要 `--replace`**（删了重建会重传附件、可能踩 CDN 缓存）。
+    PATCH 是整体覆盖语义，`tag_name` / `name` / `prerelease` 三个字段必须一并传——
+    漏 `prerelease` 会静默把内测版改成正式版（2026-11-06 实证）。改完回读必须查
+    `prerelease` + 正文尾段 + 附件名，不能只看 HTTP 200。操作细节见
+    `Gitee自动发行工作流-说明文档.md` §三.6。
 - [ ] RC-R2b GitHub Release 镜像（仅**本机发布**场景需要；CI 发布已在 Actions 里完成）：
   `python dev-support/mirror-releases-to-github.py --tag {版本号}`（幂等，可反复跑；已存在则只补附件）。
   判据：`--verify-only` 通过、GitHub Releases 页出现同版本且附件 size 与本地 zip 一致。

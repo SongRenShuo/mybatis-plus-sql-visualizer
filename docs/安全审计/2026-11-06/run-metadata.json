@@ -1,0 +1,44 @@
+{
+  "run_id": "mybatis-plus-sql-visualizer-run-1",
+  "repo": "mybatis-plus-sql-visualizer",
+  "target": "E:\\code\\Java\\Gitee\\SongRenShuo\\mybatis-plus-sql-visualizer",
+  "source_ref": {
+    "commit": "30312d461e3fc54d5be553662dc3beb516bfa4e8",
+    "worktree_dirty": true,
+    "dirty_note": "仅新增未跟踪内容：.agents/skills/security-audit/（审计 skill 本体）。未修改任何目标源码。"
+  },
+  "profile": "standard",
+  "scope_paths": [
+    "."
+  ],
+  "budget": null,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "prior_runs": [],
+  "companion_files": [
+    "AI-AND-LLM.md",
+    "DESKTOP-MOBILE-AND-LOCAL-IPC.md",
+    "PROTOCOLS-RPC-AND-MESSAGING.md",
+    "SUPPLY-CHAIN-AND-RELEASE.md",
+    "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md"
+  ],
+  "shared_file_owners": {
+    "run-metadata.json": "parent",
+    "architecture.md": "parent",
+    "coverage-ledger.json": "parent",
+    "findings.json": "parent",
+    "REPORT.md": "parent",
+    "FINDINGS-DETAIL.md": "parent",
+    "NEEDS-VALIDATION.md": "parent"
+  },
+  "run_status": "complete",
+  "execution_notes": "Windows 主机无法强制执行 OS 沙箱；按 SKILL.md 执行安全规则，本次仅做源码审查。validate-*.cjs 通过运行本地副本执行，附文档化的 Windows lstat 回退（tools/ 目录）；skill 原件未改动。",
+  "wave2_units_added_by_critic": 2,
+  "agents_spent": {
+    "reconnaissance": 4,
+    "hunters": 14,
+    "critics": 2,
+    "phase3_verifiers": 7
+  },
+  "phase4": "findings.json：25 条 needs_validation 记录；两个验证器均 PASS",
+  "phase5": "25/25 记录经独立复核（23 条 verified，2 处非实质性引用/行号修正已应用并复验）"
+}

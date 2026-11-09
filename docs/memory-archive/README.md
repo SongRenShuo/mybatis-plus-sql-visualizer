@@ -3,14 +3,14 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（116 个通用文件）
-> **项目记忆**：保留 155 个内容文件 + MEMORY.md 索引（第三十一次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（126 个通用文件）
+> **项目记忆**：保留 271 个内容文件 + MEMORY.md 索引（第三十二次精简后）
 
 ---
 
-## 已修复 Bug（178 个）
+## 已修复 Bug（256 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -280,7 +280,44 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（81 个）
+| [project-runtime-concat-delete-anchor-20261106.md](bug-fixes/project-runtime-concat-delete-anchor-20261106.md) | T-RuntimeConcatAndDeleteNull + T-JpaDeleteAnchor 实施战役（20261106 已合 master 并随 beta.2 发行）——运行期拼接 SQL 出现 Java 源码与悬空 `*/`、JPA delete 锚点、MP 空 Wrapper 写操作；三路并发先合 t-runtime-write-integration；尾节含 T-RuntimeSlotFill 立项设计（身份内嵌注释 `·rtN`/结构化模板/区间记账），实施档见项目记忆 project-runtime-slot-fill-20261107 |
+| [project-runtime-slot-fill-20261106.md](bug-fixes/project-runtime-slot-fill-20261106.md) | T-RuntimeSlotFill 立项档（20261106）——运行期占位可填值设计草案（四类 slot/`replaceRuntimeSlots` 先槽后参/**留空＝保留占位**）；实施与交付档在项目记忆 project-runtime-slot-fill-20261107，本档为立项阶段设计记录 |
+| [project-dev-update-channel-20261106.md](bug-fixes/project-dev-update-channel-20261106.md) | T-DevUpdateChannel 已合 master `84829511`（20261106，用户真机走查通过）——连点构建号 7 次/2s 解锁「检测更新（开发版）」读 preview.update.json；**下载 404 必须友好提示（InstallResult.NotPublished）**；解锁态须在 updateTexts/rebuild 里恢复 |
+| [project-ibatis-panwei-20261106.md](bug-fixes/project-ibatis-panwei-20261106.md) | T-IbatisPanwei 已收口 master（20261106，进 beta.2）——iBatis V1 1.0.0 与 V2 2.0.0 类形一致字节层双代；方言恒 Oracle；真机 GaussDB 503.1.0 与真磐维 3.4.0 四窗口各 12/0 ALL-PASS；16s 静默结案＝CONFIG 看门狗 |
+| [project-release-20261107-beta1.md](bug-fixes/project-release-20261107-beta1.md) | v2026.11.7 发行链三连发（20261107，均已发行）——beta.1 `9f7be229`（Gitee 1282011）/ beta.2 `0d0f22d0`（publish 复用门禁产物）/ 正式版 `c3d25918`（Gitee 1282197 + GitHub 437269094）；正式版按用户令跳过重跑门禁并如实登记 |
+| [project-release-20261106-beta2.md](bug-fixes/project-release-20261106-beta2.md) | v2026.11.6-beta.2 发行准备（20261106）——版本/八处同步/zip 自检 PASS（首轮被自检抓到 changeNotes 全角冒号）；CI gate 走 workflow_dispatch mode=gate |
+| [project-log-method-name-20261105.md](bug-fixes/project-log-method-name-20261105.md) | T-LogMethodName 已合 master `d9fe476e`（20261105）——SQL 列表来源后并排显示 `[File.java:41] [Class#method]`；来源类≠方法类场景表（MP IService/AOP/自有封装/异步/Kotlin FooKt）；缓存键加维度+计数 47→48 |
+| [project-env-check-auto-diagnosis-proposal.md](bug-fixes/project-env-check-auto-diagnosis-proposal.md) | 环境体检自动诊断已实施（`ed5cf853`/`360b37b5`/`0a3d3ade`）——档1三段式+档2日志匹配 10 条规则；体检单不落盘（LightVirtualFile 内存页签）；隐私铁律＝报告只含规则 id/结论/次数不写日志原文 |
+| [project-dialect-sweep-speed-20261106.md](bug-fixes/project-dialect-sweep-speed-20261106.md) | T-DialectSweepSpeed 已收尾（`f046da1b` 回填读数，`4997b52d` 收尾）——真机矩阵 dialect 腿 43.5min 压缩：实例并行（墙钟 Σ→max）+去预备 DROP+PG 族多语句批处理；用户明确不抽样、不做批量建表 |
+| [project-exec262-readlock-and-count-gate.md](bug-fixes/project-exec262-readlock-and-count-gate.md) | T-Exec262ReadLock 已修并随 v2026.11.2 发行（`eaf020c2`/`3ac007d7`）——262 EDT 反射调 DatabaseRunners 被 read-access 硬抛致 runners=0 误报方言不匹配；`paginationCountSql` 缺 `chain.pageLimit != null` 闸致 last(limit) 附赠 COUNT |
+| [project-preview-doc-persist-lock.md](bug-fixes/project-preview-doc-persist-lock.md) | T-PreviewDocPersistLock 已修（`91b7f175`）——预览渲染 `saveDocument` 移进写命令块；**平台测试框架全程持写意图致既有用例空绿**，回归用例须 `runInEdtAndWait(writeIntent=false)` |
+| [project-perf-analysis-round7.md](bug-fixes/project-perf-analysis-round7.md) | 第七期性能深查与 T-PerfSweep30 已实施合 dev `25cb1eec`（20261104）——全量 9015/0/0/17；widget tick 4.61µs 判登记不动；三处真陷阱（RED-PROBE 残留被错判据掩盖/01b 判据恒 false/cache-only 收益口径错） |
+| [project-openget-multiclient.md](bug-fixes/project-openget-multiclient.md) | openget「码上拿」四端产品五批收官（20261102）——终态 249 测试·PMD 0·e2e 52-0-5·契约 v2.6；含 11 条跨轮次坑（迁移号预分配/surefire 多类用逗号/heredoc 吞反斜杠等）；领域陷阱已拆独立 pitfall 档保留 |
+| [project-round2-gate-timing-and-handover.md](bug-fixes/project-round2-gate-timing-and-handover.md) | 门禁四轮收口+真机三批全闭环（20261101~11-02）——dev `e6725876` 8909/0/0/12；批 A 三族 attach 走 IDE Run 注入 agent；批 B 1 PG+1 Redis 推断 PostgreSQL 未回落；MCP261 在 2026.1.5.1 上 initialize 202/11 工具实跑 |
+| [release-gate-timing-floor.md](bug-fixes/release-gate-timing-floor.md) | T-ReleasePerf11 门禁压缩第六期已合 master `102795a0`（20261103）——market 三目标并行 789→606s（−23%）；旧 648s 地板声明作废；工作树产物已抢救落 master build/ |
+| [project-docs-site-demo-refresh.md](bug-fixes/project-docs-site-demo-refresh.md) | T-DocsRefresh1023 文档站演示动图重录——17 张动图+15 项正文，原「待补录 9 项」2026-11-02 实测全部闭环并上线（6 GIF+S01/S03/S04，S02 无需重拍） |
+| [project-doc-conventions.md](bug-fixes/project-doc-conventions.md) | docs 结构整理已执行完毕（20261031）——`规范/` 收约定类、调研+验收报告两处合流、`code-standards.md` 改名并同步 10 处引用；根级只留 LESSONS/MEMORY/变更记录；命名规范补 `-说明文档.md` 第四后缀+存量豁免 |
+| [project-s2-new-capabilities.md](bug-fixes/project-s2-new-capabilities.md) | S2 新能力批四券全完成并推双仓 `faf49ce8`（20261101）——NEW-26 Inspection 五规则（**`<localInspection language="any">` 会被静默跳过，必须写空串**）/NEW-21 信创体检 14 方言 1.4ms/NEW-23 check_sql 加 chain 参数/首用即生效（P-7/P-8 平台 EP 源码取证） |
+| [project-panorama-round23.md](bug-fixes/project-panorama-round23.md) | 第二十三轮全分支功能全景审计（20261031 `2fc608c9` 已推送）——合流债重算 247 笔（magpie 33/insight 214，「已合并」系方向误读亲测证伪）；真实留底债只剩 dev 18+t-loganchor-viewport |
+| [project-panorama-round26.md](bug-fixes/project-panorama-round26.md) | 第二十六轮全景盘点（20261103 立项停等拍板）——dev 合并提交欠推 1 笔、insight→dev 预演翻转为 4 文件冲突（拓扑每步变化后预演必须重跑）、巨文件债清偿点在 dev→master |
+| [project-panorama-round27.md](bug-fixes/project-panorama-round27.md) | 第二十七轮深查版全景+竞品三十六轮（20261106）——15 项新功能全授权→F-01~F-15 三组并发实施（已全部合入 dev `d0b45a97`，战役档见下行）；S1-7 master→dev 已执行；C6+D4 冻结 |
+| [project-dev-batch-20261031.md](bug-fixes/project-dev-batch-20261031.md) | 20261031 全景盘点全量实施批（G1~G5+D1/D2+P2/P3）全部落 dev 未合 master——fr45+magpie 合流、巨文件五件终于全拆（2485→1828 等）、NEW-15 方言矩阵页；修三真问题＝plugin.xml 冲突标记误提交（`git add -A` 吞标记）/TraceDocExport 脱敏档位/Kotlin 增量编译假红 |
+| [project-dev-vs-master-262-acceptance-20261104.md](bug-fixes/project-dev-vs-master-262-acceptance-20261104.md) | dev vs master 262 沙盒增量验收收官（20261104）——19 域矩阵；UI-001~005 全修；复验抓三类线程缺陷真机归零；回 port 5 笔合入 master `12d15f37`；UI-009＝漏搬 T-ExecSlowOps（教训：按某轮日志归纳的清单会漏该轮没触发的路径） |
+| [project-preview-console-ownership.md](bug-fixes/project-preview-console-ownership.md) | T-PreviewConsoleOwnership 收官（20261103 真机验证并合并 `88427dc5`）——预览面板原生控制台嵌入五层真因权威复盘；权威文档＝仓库 docs/经验总结/20261103-1140-预览面板原生控制台嵌入五层真因与三轮误判复盘-经验总结.md |
+| [project-idle-queue-f15-20261106.md](bug-fixes/project-idle-queue-f15-20261106.md) | F-01~F-15 新功能实施战役（20261106 三组并发，**20261107 十五项全合入 dev `d0b45a97`**）——组1 TypedLiteralRenderer（ORA-01722）+Inspection 三规则全 enabledByDefault=false；组2 历史项目维度/一键重跑/随项目启动/agent 残留清理（刻意不订阅 DynamicPluginListener）；组3 F-06 三小件+F-09 护栏+F-10 菜单化+F-11 最小件；dev 合回 master 待用户点名（见 project-pending-plans） |
+| [project-panorama-round21.md](bug-fixes/project-panorama-round21.md) | 第二十一轮全分支功能全景审计（20261029 `8212fb80`）——剪刀差终结、主矛盾转评价资产破零 |
+| [project-panorama-round22.md](bug-fixes/project-panorama-round22.md) | 第二十二轮全景审计（20261030 已落档）——dev 反转为最大新增资产（14 方言态+38 待用户拍板合回） |
+| [project-release-20261029.md](bug-fixes/project-release-20261029.md) | v2026.10.29 发行（已发行） |
+| [project-matrix-instance-timeout-20261106.md](bug-fixes/project-matrix-instance-timeout-20261106.md) | T-MatrixInstanceTimeout 已合 master（20261106）——dialectExternalVerify 实例级看门狗（四桶 PASS/SKIP/TIMEOUT/FAIL、预算优先级 timeoutSeconds>-D>300s、daemon 线程）+CI 方言腿扩 4 实例；含 secret 无 gh CLI 的写入法 |
+| [project-competitive-round33.md](bug-fixes/project-competitive-round33.md) | 竞品横向对比第三十三轮（20261030 `4eda4b58`）——窗口两连发当日过审、脉冲三连升 33.1/天 |
+| [project-magpie-research-gems.md](bug-fixes/project-magpie-research-gems.md) | magpie 调研+T-MagpieGems 七项全实施（20261024，t-magpie-gems 15 笔）——20261107 实测分支已不存在，合并债以第二十三轮审计账（master..magpie=33）为准；教训见 [[pitfall-branch-delete-orphans-unmerged-tip]] |
+| [project-doc-index-backfill.md](bug-fixes/project-doc-index-backfill.md) | docs/索引/开发计划.md 缺口对账与回填实操（D195/V220 判据=缺口归零）——缺口=目录 md 数−索引行数、反向孤儿须为 0、按时间倒序插锚点行；对账工具用 grep -F 而非 comm |
+| [project-dialect-gate-not-blocking.md](bug-fixes/project-dialect-gate-not-blocking.md) | 用户定案「方言不能影响最终执行」旧档——闸门冲突改提示+放行三处修复（`8619a3af`/`e7a27700`）；被在役档 project-dialect-gate-release-on-conflict 与 T-DialectGatePassDeadChain 修复（20261102）取代 |
+| [project-sql-insight-campaign.md](bug-fixes/project-sql-insight-campaign.md) | T-SqlInsight 专题终态+20261024 回流前置合并（五轮 75 笔全并入，差量 0/186）——31 工作包全实现；含「master 合并期间持续前进」与 master 侧潜伏红灯两条教训 |
+| [project-mapper-nav-shortcut-20261105.md](bug-fixes/project-mapper-nav-shortcut-20261105.md) | T-MapperNavShortcut 立项档（20261105）——Mapper↔XML 跳转接入原生快捷键（单个双向 GotoDeclarationHandler+复用 MybatisXmlTargets 清单缓存）；未拍板，D-1~D-3 已移交 project-pending-plans |
+| [project-pages-hql-20261105.md](bug-fixes/project-pages-hql-20261105.md) | T-PagesHql 立项档（20261105）——maintainPage 的 datasource 识别 HQL（判据=根标识符 vs entityClass，`orderMaintain` 反例证 entityClass 非充分条件）；未拍板，D-1~D-6 已移交 project-pending-plans |
+
+## 已解决踩坑（100 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -353,6 +390,22 @@
 | [pitfall-f42-join-diagram-render.md](pitfalls/pitfall-f42-join-diagram-render.md) | JOIN 图"渲染中/错误图"终极修复（F-42）——PlantUML 8059 硬依赖 Graphviz + 模态弹窗阻塞 invokeLater + hidden 标签页，三层根因（82797a0） |
 | [pitfall-dbn-output-console-layout-collapse.md](pitfalls/pitfall-dbn-output-console-layout-collapse.md) | DBN Output 控制台 44px 塌缩（M36.5.60→76）——平台 EditorMergedHorizontalScrollBarLayout"输入编辑器优先"策略；setSize 对抗布局必败、布局替换正解、同名类组件搜索错目标（7294d38/bc9963b） |
 
+| [pitfall-gutter-anchor-method-name-collision.md](pitfalls/pitfall-gutter-anchor-method-name-collision.md) | 方法名级 gutter 锚点与 Wrapper 链撞名的重复图标防线——delete/update/remove 同时是工厂名/链终结点/消费名；空 Wrapper 精确形态+hasWrapperArgument 让位+整文件锚点集合断言（collectedAnchors） |
+| [pitfall-runtime-placeholder-must-be-one-comment.md](pitfalls/pitfall-runtime-placeholder-must-be-one-comment.md) | 运行时占位必须是单条合法注释——`/*运行时值*/`+源码+`*/` 让源码变活 SQL、引号带偏词法器致括号丢失；`--` 内联吃掉后续 SQL；正解 `/* 运行时值: ... */`；含判断用户截图对应版本的 tag 祖先先验 |
+| [pitfall-panwei-db-compatibility-two-params.md](pitfalls/pitfall-panwei-db-compatibility-two-params.md) | 磐维两个同名参数：DBCOMPATIBILITY（建库，默认 Oracle）vs db_compatibility（JDBC，默认 postgresql，只管列名大小写）——按后者切方言会把「Oracle 模式+要小写列名」误判成 openGauss；磐维不是第 15 个方言（复用 OracleDialect） |
+| [pitfall-ibatis-log-format-vs-mybatis-param-parser.md](pitfalls/pitfall-ibatis-log-format-vs-mybatis-param-parser.md) | iBatis 日志形态≠MyBatis 参数语法——`Parameters:[...]/Types:[...]` 正则只认 `值(类型)` 致单值整段括号进 SQL、含 null 多值错位填 NULL；**剥括号必须同批接 Types**、只剥一层结构括号（守卫 11/0/0/0，全剥探针恰 1 红） |
+| [pitfall-dialect-status-row-stale-after-dialect-change.md](pitfalls/pitfall-dialect-status-row-stale-after-dialect-change.md) | 改 IDEA 方言+刷新后底部仍报旧渲染方言（UI-004 已修）——顶部读 `currentDialectDecision`、底部读 `result.effectiveDialect`（固化），且「刷新」只重渲染文本；修法=方言无关载体取最新决策+刷新在池线程重算证据 |
+| [pitfall-unbounded-collect-leaves-ui-in-progress.md](pitfalls/pitfall-unbounded-collect-leaves-ui-in-progress.md) | 环境体检永久停在「体检中」（UI-005，真因=模态态非卡死）——入口在模态 Settings 内、BGT 回 EDT 用隐式 defaultModalityState 落 NON_MODAL→回调不执行；**关掉设置页会突然恢复**即判此因 |
+| [pitfall-editorholder-single-slot-console-eviction.md](pitfalls/pitfall-editorholder-single-slot-console-eviction.md) | editorHolder 单槽位——预览编辑器装配把已嵌入控制台整块挤出显示链（冷启降级装配/迟到换装晚于 embedConsole），两个归属判据恒真、永不回挂；已修（单装配口+`editorHolder.isAncestorOf(consoleHost)`）；含日更 jar 覆盖流程 |
+| [pitfall-dbn-reuses-content-panel-across-consoles.md](pitfalls/pitfall-dbn-reuses-content-panel-across-consoles.md) | DBN 对同一 exec 文件复用同一结果面板——预览路径须 `clearResultContents`+`clearConsoleHistory`（复用路径早有、新建控制台路径缺）；`clearConsoleHistory` 裸反射 setText 在 262 必抛、须包 WriteCommandAction；清场对了栏还在＝divider 钳制 |
+| [pitfall-jsplitpane-divider-clamped-by-minimum.md](pitfalls/pitfall-jsplitpane-divider-clamped-by-minimum.md) | JSplitPane 折叠结果区三段坑——divider 被子组件 minimumSize 钳住留 ~165px；折叠要连 minimumSize 一起清+打 `BOTTOM_COLLAPSED_MARK`；**最终真凶是回收守卫把 160px 写回去**（折叠 2.5s 后弹回）；同 split 多监听按注册顺序后者赢 |
+| [pitfall-preview-prepare-console-silent-skip.md](pitfalls/pitfall-preview-prepare-console-silent-skip.md) | 预览打开时控制台不预热的两条静默提前返回——`editor` 尚未建好/Database 不可用都静默 return→「未绑定数据源」等点执行才挂上；修法=SQL 源三级回落（原生文档→回退编辑器→current.sql）+锚点日志 `editor=/sqlLen=/dbAvailable=`（20261102 `96d854fd`） |
+| [pitfall-ci-powershell-in-workflow-needs-local-dryrun.md](pitfalls/pitfall-ci-powershell-in-workflow-needs-local-dryrun.md) | workflow 里的 PowerShell 片段必须本地预演——两处语法坑各吃一轮 CI（非法 `-join`/数组字面量把一行拆成两元素）；JDBC URL 的 `&` 穿过 `gradlew.bat` 被 cmd 吃掉→改文件注入 |
+| [pitfall-ipgp-product-releases-cache-stale.md](pitfalls/pitfall-ipgp-product-releases-cache-stale.md) | IPGP 读项目内缓存的 product-releases 清单——新版 IDE 当天报「解析不到下载地址」而官网有→删 `.intellijPlatform/productReleases` 重跑；版本串两段式、目录名等下载后实测 |
+| [pitfall-gradle-zipfs-race-retry-state-reset.md](pitfalls/pitfall-gradle-zipfs-race-retry-state-reset.md) | gradle zip-FS 竞态的抢救顺序——**五条重跑/清缓存路线实测全灭**；真因=配置缓存插桩路径上的确定性失败，只能换执行路径（`--no-configuration-cache`→再关 VFS 监听） |
+| [pitfall-probe-ime-and-widget-coords-262.md](pitfalls/pitfall-probe-ime-and-widget-coords-262.md) | 262 探针四坑——IME 吞 ASCII（打字一律剪贴板粘贴）、widget y=1017 坐标当帧量、弹层认键盘（Down+Enter）、设置滚动债 |
+| [pitfall-agent-config-watchdog-15s-silence.md](pitfalls/pitfall-agent-config-watchdog-15s-silence.md) | 增强捕获「约 15~16s 后静默」=T-07 CONFIG 看门狗（`SenderLoop.DEFAULT_CONFIG_WATCHDOG_MS=15s`），不是采集缺陷——探针必须先发 CONFIG 并等 ACK，否则测到的是自停；已做可见化（心跳 `gate`:0|1+告警行） |
+
 ## 方法论（1 个）
 
 | 文件 | 内容摘要 |
@@ -403,11 +456,15 @@
 
 ---
 
+**第三十二次精简升级（2026-11-07，51 个归档 + 孤儿补册 + 索引重建）**：归档判定全部先 git 实测——`origin/master..master` 为空（beta.1 发行提交已推 Gitee）、tag `2026.11.8-beta.1` 在位、F-01~F-15 全合 dev（`d0b45a97`）、T-Exec262ReadLock 已随 v2026.11.2 发行（`eaf020c2`）、T-PreviewDocPersistLock 已修（`91b7f175`）、T-DialectSweepSpeed 已收尾（`f046da1b`）、runtime B 线尾注自记「三券全合进 master」。归 **bug-fixes 36 个**：已交付战役/修复 14（runtime-concat-delete-anchor-20261106、runtime-slot-fill-20261106 立项档、dev-update-channel-20261106、ibatis-panwei-20261106、log-method-name-20261105、env-check-auto-diagnosis、dialect-sweep-speed-20261106、exec262-readlock、preview-doc-persist-lock、perf-analysis-round7、matrix-instance-timeout、doc-index-backfill、sql-insight-campaign、s2-new-capabilities）+ 发行链 4（release-20261107-beta1、release-20261106-beta2、release-20261029、release-gate-timing-floor）+ 历史轮次 9（panorama-round21/22/23/26/27、competitive-round33、magpie-research-gems、openget-multiclient、dev-batch-20261031）+ 验收与待拍板档 9（round2-gate-timing、dev-vs-master-262-acceptance、preview-console-ownership、idle-queue-f15-20261106、docs-site-demo-refresh、doc-conventions、mapper-nav-shortcut、pages-hql、dialect-gate-not-blocking）。归 **pitfalls 15 个**（gutter-anchor-collision、runtime-placeholder-one-comment、panwei-two-params、ibatis-log-format、dialect-status-row、unbounded-collect、editorholder-single-slot、dbn-reuses-panel、jsplitpane-divider、preview-prepare-silent-skip、ci-powershell-dryrun、ipgp-product-releases、gradle-zipfs、probe-ime-262、agent-config-watchdog）。同轮：MEMORY.md 索引 304→236 行（孤儿 5 文件补册——pending-plans/w1-n24/junit3-migration/dbx-test-databases/pitfall-junit3；feedback 类行从「进行中」搬家到「反馈与协作」节；catchup/beta.1/goldendb 等在途行按 git 实测刷新）；pitfall-gitee-repo-create-visibility-quirks 复制 global 留底（项目行保留，coolrequest-vip 渠道任务在役依赖）；复核撤出 4 个误归档副本（beta.1 发行在途、gitee-quirks 在役、preview-open-pops 待拍板、dbx-password 现状警告、test-server-port 在役约定——共 5 项核对后不入档）。
+
+---
+
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 156（含 MEMORY.md） |
-| 全局记忆 global/ | 116 |
-| 归档 archive/ | 307（bug-fixes 219 + pitfalls 85 + methodology 1 + user-context 1 + README） |
-| **合计** | **579** |
+| 项目 memory（保留） | 272（含 MEMORY.md） |
+| 全局记忆 global/ | 126 |
+| 归档 archive/ | 359（bug-fixes 256 + pitfalls 100 + methodology 1 + user-context 1 + README） |
+| **合计** | **757** |
