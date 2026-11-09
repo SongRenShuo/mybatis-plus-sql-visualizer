@@ -398,6 +398,66 @@ val fastBucketClasses: List<String> = testFileEntries
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
     ) }
 
+// T-SyncK2JMaster177（2026-11-08，随 master 95e107b1 选择性移植）：
+// ① `-PtestShardExcludeClasses` 的单一解析点。历史上只有分片计划吃它（testIde 块内）；
+//    T-JUnit5Eval 方案 2 把纯逻辑类从分片摘到 testFast 后，快桶也必须同源尊重同一份清单——
+//    否则 CI 上被排除的类会改由快桶腿在无本机 JDK8/agent 池的 runner 上跑，把「排除」变成
+//    「换个地方红」（k2j 实测：O147RealAgentAcceptanceTest 曾因此整族红）。
+// ② 快桶切片 `-PfastBucketSliceCount=N`（默认 1=整桶，既有语义零变化）+ `-PfastBucketSlice=i`。
+//    切法按 dev-support/test-shard-weights.tsv 的入库画像做 LPT 装箱（权重降序、同权按类名升序、
+//    装当前最轻片），零画像类取已知权重中位数——与分片均衡器同口径，同输入必得同分区。
+//    覆盖面红线：各片并集恒等于 fastBucketClasses − shardExcludeClassNames（配置期 require 兜底）。
+val shardExcludeClassNames: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
+    ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
+
+val fastBucketSliceCount: Int = providers.gradleProperty("fastBucketSliceCount").orNull
+    ?.toIntOrNull()?.coerceIn(1, 4) ?: 1
+val fastBucketSliceIndex: Int = providers.gradleProperty("fastBucketSlice").orNull
+    ?.toIntOrNull()?.coerceIn(1, fastBucketSliceCount) ?: 1
+val fastBucketExecutableClasses: List<String> =
+    fastBucketClasses.filter { it !in shardExcludeClassNames }
+val fastBucketSlices: List<List<String>> = run {
+    if (fastBucketSliceCount < 2) listOf(fastBucketExecutableClasses) else {
+        val profileFile = file("dev-support/test-shard-weights.tsv")
+        val profile: Map<String, Double> = if (!profileFile.isFile) emptyMap() else runCatching {
+            profileFile.readLines().mapNotNull { line ->
+                if (line.isEmpty() || line.startsWith("#")) return@mapNotNull null
+                val tab = line.indexOf('\t')
+                if (tab <= 0) return@mapNotNull null
+                val seconds = line.substring(tab + 1).trim().toDoubleOrNull() ?: return@mapNotNull null
+                if (seconds <= 0.0) return@mapNotNull null
+                line.substring(0, tab).trim() to seconds
+            }.toMap()
+        }.getOrDefault(emptyMap())
+        val known = profile.values.sorted()
+        val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+        fun weightOf(cls: String): Double = profile[cls] ?: median
+        val buckets = List(fastBucketSliceCount) { mutableListOf<String>() }
+        val loads = DoubleArray(fastBucketSliceCount)
+        fastBucketExecutableClasses
+            .sortedWith(compareByDescending<String> { weightOf(it) }.thenBy { it })
+            .forEach { cls ->
+                val target = loads.indices.minByOrNull { loads[it] }!!
+                buckets[target] += cls
+                loads[target] += weightOf(cls)
+            }
+        require(
+            buckets.flatten().toSet() == fastBucketExecutableClasses.toSet() &&
+                buckets.sumOf { it.size } == fastBucketExecutableClasses.size,
+        ) {
+            "快桶切片丢类：并集 ${buckets.flatten().size} 类 ≠ 全集 ${fastBucketExecutableClasses.size} 类"
+        }
+        buckets.forEachIndexed { i, list ->
+            logger.lifecycle(
+                "testFast slice %d/%d: %d 类, 画像权重和 %.1fs".format(
+                    i + 1, fastBucketSliceCount, list.size, loads[i],
+                ),
+            )
+        }
+        buckets
+    }
+}
+
 // T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
 // 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
 // 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
@@ -523,7 +583,16 @@ tasks.register<Test>("testFast") {
             !it.name.startsWith("mybatis-plus-sql-visualizer-")
         }
     filter {
-        fastBucketClasses.forEach { includeTestsMatching(it) }
+        // T-SyncK2JMaster177：切片模式按 -PfastBucketSlice 取本片类集（默认整桶）；排除清单同源生效。
+        fastBucketSlices[fastBucketSliceIndex - 1].forEach { includeTestsMatching(it) }
+    }
+    doFirst {
+        logger.lifecycle(
+            "testFast: slice %d/%d, %d 类（排除清单 %d 类）".format(
+                fastBucketSliceIndex, fastBucketSliceCount,
+                fastBucketSlices[fastBucketSliceIndex - 1].size, shardExcludeClassNames.size,
+            ),
+        )
     }
     maxParallelForks = 1
 }

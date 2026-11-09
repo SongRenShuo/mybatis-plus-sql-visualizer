@@ -33,6 +33,12 @@ intellijPlatform {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
                 }
+                // T-CiMatrix（2026-11-04，177 轮随 master 选择性移植）：单版本选择——CI matrix 三 job
+                // 并行各验一个目标。**k2j 目标集是 243/253/262**（master 的 263 不在本分支，
+                // 见 mpv-verification 顶部目标集说明），故此处按本分支形态提供 262 而非 263。
+                "243" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                "253" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+                "262" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
                 else -> {
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                     create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
@@ -214,6 +220,10 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
         val targets = when (verifyIdes) {
             "smoke" -> listOf(ide243)
             "minimal" -> listOf(ide243, ideDir("idea-2026.2.3-win"))
+            // T-CiMatrix：CI matrix 每腿单目标（k2j 目标集 243/253/262）
+            "243" -> listOf(ide243)
+            "253" -> listOf(ideDir("idea-2025.3.5-win"))
+            "262" -> listOf(ideDir("idea-2026.2.3-win"))
             else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.3-win"))
         }
         buildList {
