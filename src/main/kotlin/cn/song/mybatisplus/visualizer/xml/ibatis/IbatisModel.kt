@@ -31,7 +31,24 @@ enum class IbatisStatementKind(val tagName: String) {
     PROCEDURE("procedure");
 
     companion object {
-        fun byTagName(name: String): IbatisStatementKind? = entries.firstOrNull { it.tagName == name }
+        /**
+         * 全量常量表（顺序 = `sql-map-2.dtd` 声明顺序），也是 [byTagName] 的**唯一查表源**。
+         *
+         * 逐项写成限定形态 `IbatisStatementKind.X` 是 `convention/EnumReachabilityGuardTest` 的硬要求：
+         * 该守卫只统计 `EnumName.CONST` 限定形态的引用，`entries.firstOrNull { … }` 这类隐式产出对它
+         * 不可见，会被判「死分支 / 死常量」。本枚举的产出是真实存在的（查表即产出），故显式列出——
+         * **不要退回 `entries` 形态**，否则门禁红。
+         */
+        private val ALL: List<IbatisStatementKind> = listOf(
+            IbatisStatementKind.SELECT,
+            IbatisStatementKind.INSERT,
+            IbatisStatementKind.UPDATE,
+            IbatisStatementKind.DELETE,
+            IbatisStatementKind.STATEMENT,
+            IbatisStatementKind.PROCEDURE,
+        )
+
+        fun byTagName(name: String): IbatisStatementKind? = ALL.firstOrNull { it.tagName == name }
     }
 }
 
@@ -60,7 +77,34 @@ enum class IbatisTagKind(val tagName: String) {
     IS_PROPERTY_AVAILABLE("isPropertyAvailable");
 
     companion object {
-        fun byTagName(name: String): IbatisTagKind? = entries.firstOrNull { it.tagName == name }
+        /**
+         * 全量常量表（顺序 = 引擎 `SqlTagHandlerFactory` 的 16 个注册项顺序），也是 [byTagName]
+         * 的**唯一查表源**。
+         *
+         * 逐项写成限定形态 `IbatisTagKind.X` 的原因同 [IbatisStatementKind.ALL]：守卫
+         * `convention/EnumReachabilityGuardTest` 只统计限定形态引用，隐式查表产出对它不可见。
+         * **不要退回 `entries` 形态**。
+         */
+        private val ALL: List<IbatisTagKind> = listOf(
+            IbatisTagKind.DYNAMIC,
+            IbatisTagKind.ITERATE,
+            IbatisTagKind.IS_EMPTY,
+            IbatisTagKind.IS_EQUAL,
+            IbatisTagKind.IS_GREATER_EQUAL,
+            IbatisTagKind.IS_GREATER_THAN,
+            IbatisTagKind.IS_LESS_EQUAL,
+            IbatisTagKind.IS_LESS_THAN,
+            IbatisTagKind.IS_NOT_EMPTY,
+            IbatisTagKind.IS_NOT_EQUAL,
+            IbatisTagKind.IS_NOT_NULL,
+            IbatisTagKind.IS_NOT_PARAMETER_PRESENT,
+            IbatisTagKind.IS_NOT_PROPERTY_AVAILABLE,
+            IbatisTagKind.IS_NULL,
+            IbatisTagKind.IS_PARAMETER_PRESENT,
+            IbatisTagKind.IS_PROPERTY_AVAILABLE,
+        )
+
+        fun byTagName(name: String): IbatisTagKind? = ALL.firstOrNull { it.tagName == name }
     }
 }
 
