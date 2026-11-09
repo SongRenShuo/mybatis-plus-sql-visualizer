@@ -1,0 +1,16 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+index a312f772..b041b85e 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+@@ -159,7 +159,10 @@ internal object IbatisJavaCallSites {
+         if (sid.isEmpty()) return null
+         val word = sid.substringAfterLast('.')
+         if (word.isEmpty() || !word.all { Character.isJavaIdentifierPart(it) }) return null
+-        if (DumbService.isDumb(project)) return null
++        // REVERSE-PROBE（T-Ibatis2Gap 券 B）：点击期调用点词索引禁用——机制 =「statementId →
++        // 项目内 SqlMapExecutor 调用首参字面量」；反证锚 = testXml语句行出箭头_点击落到Java调用字面量
++        // （箭头仍在但点击不落位）。
++        if (true || DumbService.isDumb(project)) return null
+         var first: PsiLiteralExpression? = null
+         // TextOccurenceProcessor.execute(element, offsetInElement)：element = 词命中的宿主元素
+         // （多为字面量本身或其内部 leaf），手工上爬找宿主字面量
