@@ -74,6 +74,57 @@
              守卫 SqlDialectParserDefinitionPairingGuardTest 已同步登记。 -->
         <lang.parserDefinition language="GoldenDB"
                                implementationClass="cn.song.mybatisplus.visualizer.sql.GoldenDbParserDefinition"/>
+
+        <!-- T-DomesticDialects（2026-11-09）：国产/信创第三批 10 对（15 → 25 方言）。
+             实现类在 sql/domestic/DomesticSqlDialects.kt（单文件聚合，GoldenDbSqlDialect 样板：
+             TokensHelper 委托 Sql92、Dbms.UNKNOWN、不开错误高亮）；方言渲染对象与逐项证据见
+             Dialect.kt 各 object KDoc 与 docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md。
+             注意平台语言 id 不带中文后缀（渲染方言名 `Oscar（神通）` ↔ 平台 id `Oscar`），
+             ExecDialectRouting 候选链首项即各 id。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.TiDbSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.PolarDbXSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.PolarDbSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.GBase8aSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.GBase8cSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.OscarSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.UxDbSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.AntDbSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.XuGuSqlDialect"/>
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.domestic.YashanDbSqlDialect"/>
+
+        <!-- T-DomesticDialects（2026-11-09）：上面 10 对的后一半——必须与 sql.dialect 成对存在
+             （缺一半的后果见上方 T-PreviewPsiDialect 注）。守卫
+             SqlDialectParserDefinitionPairingGuardTest 静态校验成对关系。 -->
+        <lang.parserDefinition language="TiDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.TiDbParserDefinition"/>
+        <lang.parserDefinition language="PolarDB-X"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.PolarDbXParserDefinition"/>
+        <lang.parserDefinition language="PolarDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.PolarDbParserDefinition"/>
+        <lang.parserDefinition language="GBase 8a"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.GBase8aParserDefinition"/>
+        <lang.parserDefinition language="GBase 8c"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.GBase8cParserDefinition"/>
+        <lang.parserDefinition language="Oscar"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.OscarParserDefinition"/>
+        <lang.parserDefinition language="UXDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.UxDbParserDefinition"/>
+        <lang.parserDefinition language="AntDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.AntDbParserDefinition"/>
+        <lang.parserDefinition language="XuGu"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.XuGuParserDefinition"/>
+        <lang.parserDefinition language="YashanDB"
+                               implementationClass="cn.song.mybatisplus.visualizer.sql.YashanDbParserDefinition"/>
     </extensions>
 
     <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu

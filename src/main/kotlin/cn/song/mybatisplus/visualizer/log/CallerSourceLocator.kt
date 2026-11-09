@@ -78,6 +78,14 @@ object CallerSourceLocator {
             // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）；
             // 不收会把驱动栈帧当业务帧，调用点定位跳进驱动内部
             cn.startsWith("com.goldendb.") ||
+            // T-DomesticDialects（2026-11-09）：国产第三批有专用驱动包名的 5 家（8s 的
+            // com.gbasedbt. 已在上方；TiDB/PolarDB-X 走 MySQL 驱动无需登记；AntDB/UXDB
+            // 专有驱动包名未取证不猜）。证据档位见各方言 KDoc 与调研报告 §3.2。
+            cn.startsWith("com.gbase.") ||
+            cn.startsWith("com.aliyun.polardb.") ||
+            cn.startsWith("com.oscar.") ||
+            cn.startsWith("com.xuguedata.") ||
+            cn.startsWith("com.yashandb.") ||
             cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
             cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
             cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||

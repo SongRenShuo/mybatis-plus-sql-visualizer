@@ -59,6 +59,20 @@ internal object UrlSubprotocolDialects {
         // （useGoldendbDriver 默认 true，字节码实测），但 URL 本身不携带 GoldenDB 身份，
         // 仍按 MySQL 推断（渲染形态恰逐项相同，见 GoldenDbDialect KDoc）——不据此劫持。
         "goldendb" to "GoldenDB",
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批（15 → 25）。证据档位见各方言 KDoc
+        // 与 docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md §3.2。
+        // TiDB / PolarDB-X 的 MySQL 版走 jdbc:mysql:（无自有身份，不劫持——GoldenDB 先例），
+        // 不在本表登记；其余各方言取自有子协议。值必须逐字等于方言 name，拼错即 byName 静默回落 MySQL。
+        "polardbx" to "PolarDB-X",
+        "polardb" to "PolarDB",
+        "polardb2" to "PolarDB",
+        "gbase" to "GBase 8a",
+        "gbase8c" to "GBase 8c",
+        "oscar" to "Oscar（神通）",
+        "uxdb" to "UXDB（优炫）",
+        "antdb" to "AntDB",
+        "xugu" to "XuGu（虚谷）",
+        "yasdb" to "YashanDB（崖山）",
     )
 
     /**

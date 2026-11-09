@@ -37,6 +37,19 @@ class SqlDialectParserDefinitionPairingGuardTest {
         // T-GoldenDbDialect（券 A / P-8）：第五对——262 平台无 GoldenDB 方言（IU-262.9437.185
         // 全量 xml grep golden 零命中，正对照 mysql/greenplum 命中），自注册成对落位。
         "cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect" to "GoldenDB",
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批 10 对（实现类单文件聚合在
+        // sql/domestic/DomesticSqlDialects.kt，GoldenDbSqlDialect 样板）。注意平台语言 id 不带
+        // 中文后缀（渲染方言名 `Oscar（神通）` ↔ 平台 id `Oscar`）。
+        "cn.song.mybatisplus.visualizer.sql.domestic.TiDbSqlDialect" to "TiDB",
+        "cn.song.mybatisplus.visualizer.sql.domestic.PolarDbXSqlDialect" to "PolarDB-X",
+        "cn.song.mybatisplus.visualizer.sql.domestic.PolarDbSqlDialect" to "PolarDB",
+        "cn.song.mybatisplus.visualizer.sql.domestic.GBase8aSqlDialect" to "GBase 8a",
+        "cn.song.mybatisplus.visualizer.sql.domestic.GBase8cSqlDialect" to "GBase 8c",
+        "cn.song.mybatisplus.visualizer.sql.domestic.OscarSqlDialect" to "Oscar",
+        "cn.song.mybatisplus.visualizer.sql.domestic.UxDbSqlDialect" to "UXDB",
+        "cn.song.mybatisplus.visualizer.sql.domestic.AntDbSqlDialect" to "AntDB",
+        "cn.song.mybatisplus.visualizer.sql.domestic.XuGuSqlDialect" to "XuGu",
+        "cn.song.mybatisplus.visualizer.sql.domestic.YashanDbSqlDialect" to "YashanDB",
     )
 
     private fun descriptor(): String =

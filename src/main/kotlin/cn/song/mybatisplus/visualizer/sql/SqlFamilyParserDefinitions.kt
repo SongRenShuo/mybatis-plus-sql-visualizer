@@ -1,6 +1,16 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.AntDbSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.GBase8aSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.GBase8cSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.OscarSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.PolarDbSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.PolarDbXSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.TiDbSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.UxDbSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.XuGuSqlDialect
+import cn.song.mybatisplus.visualizer.sql.domestic.YashanDbSqlDialect
 import cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect
 import cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect
 import cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect
@@ -90,6 +100,44 @@ class VastbaseParserDefinition : MpvSqlFamilyParserDefinition(VastbaseSqlDialect
 
 /** GoldenDB（语言 id `GoldenDB`，T-GoldenDbDialect 券 A——与上面四个自注册方言同款成对注册）。 */
 class GoldenDbParserDefinition : MpvSqlFamilyParserDefinition(GoldenDbSqlDialect.INSTANCE, "MPV_GOLDENDB_SQL_FILE")
+
+// ---------------------------------------------------------------------------
+// T-DomesticDialects（2026-11-09）：国产/信创第三批 10 对的后一半——必须与 database-optional.xml
+// 的 sql.dialect 注册成对存在（缺了这半：SqlParserDefinitionBase.createFile 强转
+// SqlLanguageDialect 抛 ClassCastException → PsiManager.findFile 返回 null → 预览预热降级，
+// 见上文注）。守卫 SqlDialectParserDefinitionPairingGuardTest 静态校验成对关系。
+// 平台方言类在 sql/domestic/DomesticSqlDialects.kt（单文件聚合，GoldenDbSqlDialect 样板）。
+// ---------------------------------------------------------------------------
+
+/** TiDB（语言 id `TiDB`）。 */
+class TiDbParserDefinition : MpvSqlFamilyParserDefinition(TiDbSqlDialect.INSTANCE, "MPV_TIDB_SQL_FILE")
+
+/** PolarDB-X（语言 id `PolarDB-X`）。 */
+class PolarDbXParserDefinition : MpvSqlFamilyParserDefinition(PolarDbXSqlDialect.INSTANCE, "MPV_POLARDBX_SQL_FILE")
+
+/** PolarDB Oracle 兼容版（语言 id `PolarDB`）。 */
+class PolarDbParserDefinition : MpvSqlFamilyParserDefinition(PolarDbSqlDialect.INSTANCE, "MPV_POLARDB_SQL_FILE")
+
+/** GBase 8a（语言 id `GBase 8a`）。 */
+class GBase8aParserDefinition : MpvSqlFamilyParserDefinition(GBase8aSqlDialect.INSTANCE, "MPV_GBASE8A_SQL_FILE")
+
+/** GBase 8c（语言 id `GBase 8c`）。 */
+class GBase8cParserDefinition : MpvSqlFamilyParserDefinition(GBase8cSqlDialect.INSTANCE, "MPV_GBASE8C_SQL_FILE")
+
+/** 神通 Oscar（语言 id `Oscar`）。 */
+class OscarParserDefinition : MpvSqlFamilyParserDefinition(OscarSqlDialect.INSTANCE, "MPV_OSCAR_SQL_FILE")
+
+/** 优炫 UXDB（语言 id `UXDB`）。 */
+class UxDbParserDefinition : MpvSqlFamilyParserDefinition(UxDbSqlDialect.INSTANCE, "MPV_UXDB_SQL_FILE")
+
+/** AntDB（语言 id `AntDB`）。 */
+class AntDbParserDefinition : MpvSqlFamilyParserDefinition(AntDbSqlDialect.INSTANCE, "MPV_ANTDB_SQL_FILE")
+
+/** 虚谷 XuGu（语言 id `XuGu`）。 */
+class XuGuParserDefinition : MpvSqlFamilyParserDefinition(XuGuSqlDialect.INSTANCE, "MPV_XUGU_SQL_FILE")
+
+/** 崖山 YashanDB（语言 id `YashanDB`）。 */
+class YashanDbParserDefinition : MpvSqlFamilyParserDefinition(YashanDbSqlDialect.INSTANCE, "MPV_YASHANDB_SQL_FILE")
 
 /**
  * 绑定本方言语言的 `IFileElementType`——**用核心 `IElementType(String, Language)` 直接实现**
