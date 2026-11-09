@@ -29,6 +29,12 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     protected void setUp() throws Exception {
         super.setUp();
         manager = new SqlLogManager(getProject());
+        // T-SqlListCatchup 券 A（177 轮随生产面同步带入）：notifyUi 的 150ms 刷新窗在 headless 下
+        // 泵不到 Alarm——本类断言「注册规则后心跳行立即消失」，须注入同步调度器恢复「通知即刷」。
+        manager.setCatchUpSchedulerForTest((delayMs, action) -> {
+            action.invoke();
+            return kotlin.Unit.INSTANCE;
+        });
         // 管线测试需要重复 SQL 场景，关闭去重避免相同 SQL 被丢弃
         manager.getEntries().setDedupeEnabled(false);
     }

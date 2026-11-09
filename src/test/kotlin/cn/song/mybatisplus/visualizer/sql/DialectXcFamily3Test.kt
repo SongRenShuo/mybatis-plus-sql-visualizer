@@ -56,8 +56,10 @@ class DialectXcFamily3Test {
     fun `注册表身份_末两位HighGo与Vastbase_摘掉注册即红`() {
         assertSame(HighGoDialect.INSTANCE, DialectRegistry.INSTANCE.byName("HighGo"))
         assertSame(VastbaseDialect.INSTANCE, DialectRegistry.INSTANCE.byName("Vastbase"))
-        assertEquals(14, DialectRegistry.INSTANCE.dialects.size)
-        assertEquals(listOf("HighGo", "Vastbase"), DialectRegistry.INSTANCE.dialects.takeLast(2).map { it.name })
+        // T-SyncK2JMaster177（178 轮）：GoldenDB 为第 15 方言（T-GoldenDbDialect 券 A），
+        // 末两位仍是 HighGo/Vastbase（GoldenDB 注册在其后由 GoldenDbDialect 常量顺序决定，见下断言）
+        assertEquals(15, DialectRegistry.INSTANCE.dialects.size)
+        assertEquals(listOf("HighGo", "Vastbase"), DialectRegistry.INSTANCE.dialects.dropLast(1).takeLast(2).map { it.name })
         // 未知名/空值回退 MySQL（既有口径不被新方言稀释）
         assertSame(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.byName("NoSuchDbms"))
         assertSame(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.byName(null))
