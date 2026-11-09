@@ -23,7 +23,7 @@ import com.intellij.psi.xml.XmlTag
  * （`select#findById`）——长 mapper 里折叠后一眼能认出是哪个语句，这是平台给不了的。
  *
  * 作用面刻意收窄到最小，避免与平台抢 fold 区：
- *  - 只在**根标签为 `mapper`** 的文件里生效；
+ *  - 只在**语句宿主根**的文件里生效（MyBatis `mapper` / iBatis `sqlMap`——T-Ibatis2Support 券 D 放宽）；
  *  - 只对**语句标签**（select/insert/update/delete）与带 `id` 的 `<sql>` 建区；
  *  - 只对**跨多行**的标签建区（单行标签折叠无视觉意义，且更易与平台区重叠）；
  *  - 不自带默认折叠（`isCollapsedByDefault = false`，与平台「不自动折叠 XML 标签」一致）；
@@ -45,7 +45,10 @@ class SqlMapperFoldingBuilder : FoldingBuilderEx() {
         // 全量区由 daemon 补齐——省掉一次全 PSI 子树遍历。
         if (quick) return FoldingDescriptor.EMPTY
         val file = root.containingFile as? XmlFile ?: return FoldingDescriptor.EMPTY
-        if (file.rootTag?.name != "mapper") return FoldingDescriptor.EMPTY
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（廉价二次判定＝根名恰为 sqlMap，
+        // 见 XmlSynHiGate.isStatementHostRootName / inMapperFile 的放宽说明）。
+        // MyBatis `mapper` 文件判定逐字节不变（`mapper` 根名分支原样保留）。
+        if (!XmlSynHiGate.isStatementHostRootName(file.rootTag?.name)) return FoldingDescriptor.EMPTY
         // T-PerfSweep26 F95：体量熔断——超万行级 mapper 不做子树遍历（与注入族 XmlSynHiGate 同阈值同防线）。
         if (document.textLength > XmlSynHiGate.MAX_TEXT_LENGTH) return FoldingDescriptor.EMPTY
         val out = mutableListOf<FoldingDescriptor>()

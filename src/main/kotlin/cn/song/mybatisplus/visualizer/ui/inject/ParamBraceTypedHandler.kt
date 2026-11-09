@@ -94,6 +94,12 @@ class ParamBraceTypedHandler : TypedHandlerDelegate() {
      * 修 20260928 的 A（标记区误接管）时引入 B（正文误放行）。
      */
     private fun inStatementText(tag: XmlTag, offset: Int): Boolean {
+        // T-Ibatis2Support 券 D：`inMapperFile` 已放宽到 iBatis `sqlMap`，但本类**补的是 `{}`**
+        // ——那是 MyBatis `#{}`/`${}` 语法，iBatis 用 `#name#`/`$name$`。在 iBatis 文件里敲 `#`
+        // 自动补 `{}` 会**把错误语法写进文档**（不是「少一个能力」而是「多一个错误行为」），
+        // 故此处显式排除 iBatis 根：放宽只作用于「被动能力」（着色/折叠/补全/脏区），
+        // 主动改写文档的便利功能一律保持 MyBatis 专属。MyBatis 路径判定逐字节不变。
+        if (XmlSynHiGate.isIbatisSqlMapRoot(tag)) return false
         if (!XmlSynHiGate.inMapperFile(tag)) return false
         val statement = generateSequence(tag) { it.parentTag }
             .take(64)
