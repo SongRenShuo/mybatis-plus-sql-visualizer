@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml.ibatis
 
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 
 /**
@@ -202,6 +203,9 @@ class SqlMapSqlRenderer {
                     else -> Unit
                 }
             } catch (e: Throwable) {
+                // 禁用 API 守卫口径（BannedApiScanRuleTest）：fatal 一律立即透传，不落「未渲染节点」事实——
+                // OOM/栈溢出不是某个标签渲染失败，把它记成渲染事实既误导又可能二次OOM。
+                if (FatalErrors.isFatal(e)) throw e
                 unrendered.add(
                     IbatisUnrenderedNode(
                         tagName = (child as? IbatisTagNode)?.kind?.tagName,
