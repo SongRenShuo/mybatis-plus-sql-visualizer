@@ -20,6 +20,8 @@ import com.intellij.psi.xml.XmlTag
  * - 源语言判定（T-PagesHql 泛化）：`type` ∈ {hql, jpql}（就近祖先优先）为显式 HQL；
  *   无 `type` 时按 [PagesSourceLanguageDetector] 自动推断（载体标签可带 `entityClass` 属性，
  *   也可完全不带——靠「根标识符能解析为持久化实体」反查，如 `<dataValue>`）；
+ *   券 0 起该探针为**零扫描**形态（直查 + 只读别名缓存，见 [PagesEntityProbeResolver]），
+ *   弹窗不再等全项目别名反查；结论与改动前逐值一致（反查触顶本来就按未解析返回）；
  * - 判为 HQL → 复用 hbm 命名查询管道（[SqlPreviewService.previewHbmNamedQuery]，
  *   name 传空即走 FROM 子句实体提取）；**管道异常 / 实体不可解析 → 回退原文直显 + warning，
  *   不抛错**（验收底线：至少展示原文）；
@@ -54,7 +56,10 @@ object XmlInlineSqlPreviewService {
             entityClassName = tag.getAttributeValue("entityClass"),
             declaredType = declaredType,
             rootIdentifierOf = HqlEntityNameExtractor::extract,
-            probeEntity = { name -> PagesEntityProbeResolver.probe(project, name, tag) },
+            // 券 0（T-Ibatis2SlowFix）：同步路径只走零扫描探针（直查 + 只读别名缓存）。
+            // 全项目短名扫描形态的 `@Entity(name)` 反查会让弹窗等约 1s（历史同形态 70s 冻结 EDT），
+            // 而本链的根标识符多是物理表名、扫描必然打空——见 PagesEntityProbeResolver 类注释。
+            probeEntity = { name -> PagesEntityProbeResolver.probeCheap(project, name, tag) },
         )
         if (detection.language != PagesSourceLanguage.HQL) {
             return plainResult(sql)
