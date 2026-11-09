@@ -242,7 +242,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // k2j 面板暂缺 R90「Retain raw EXPLAIN plans」原始计划保留授权开关（master 侧为 46），
             // R90 保留开关已随 T-SyncK2JMaster496 落位面板行（master 侧同数）。
             // T-MapperNavCoexistYield：与 MyBatisCodeHelperPro 共存时让出 Mapper 跳转图标开关（mapperNavYieldCheck）+1 后为 47。
-            assertEquals("复选框总数应为 47", 47, texts.size)
+            // T-SyncK2JMaster177（178 轮实测）：A3 波次随生产面带入「日志列表显示方法名」开关
+            // （logShowMethodCheck，settings.log.showMethod）+1 → 48。
+            assertEquals("复选框总数应为 48", 48, texts.size)
         } finally {
             settings.state.language = old
         }

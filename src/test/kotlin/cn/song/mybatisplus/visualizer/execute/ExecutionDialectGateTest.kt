@@ -344,9 +344,10 @@ class ExecutionDialectGateTest {
         assertEquals(1, logBody.countOccurrences("ExecutionDialectGate.rawSqlRequest"))
         assertEquals(1, logBody.countOccurrences("dialectGateRequest, null,"))
 
+        // 起锚改单行（原多行锚内嵌 \n，CI 检出为 CRLF 时必然失配——2026-11-09 实测本地 LF 绿、CI 红）
         val adhocBody = sourceSlice(
             preview,
-            "public static void executeAdhocSql(\n            @NotNull SqlPreviewPanel p,\n            @NotNull String sql,\n            boolean dmlConfirmed,\n            @Nullable cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry rollbackOfEntry,\n            @Nullable Consumer<ExecutionSubmission> onSubmission) {",
+            "public static void executeAdhocSql(",
             "public static void executeSql(@NotNull SqlPreviewPanel p) {",
         )
         assertEquals(2, adhocBody.countOccurrences("SqlExecutor.execute("))
@@ -361,8 +362,9 @@ class ExecutionDialectGateTest {
     fun testUI020RollbackReceiptIsWiredThroughBothFullPathsAndPreparedFacade() {
         val root = repoRoot()
         val preview = File(root, "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java").readText()
+        // 起锚改单行（原多行锚内嵌 \n，CI 检出为 CRLF 时必然失配——2026-11-09 实测本地 LF 绿、CI 红）
         val adhoc = sourceSlice(preview,
-            "public static void executeAdhocSql(\n            @NotNull SqlPreviewPanel p,\n            @NotNull String sql,\n            boolean dmlConfirmed,\n            @Nullable cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry rollbackOfEntry,\n            @Nullable Consumer<ExecutionSubmission> onSubmission) {",
+            "public static void executeAdhocSql(",
             "public static void executeSql(@NotNull SqlPreviewPanel p) {")
         // k2j 互操作：master 的 `onSubmission = receipt`×3 在 Java 侧为位置实参 receipt——
         // 改数 receipt 作为实参传入执行调用的次数（两全链 + 一 prepared，同一事实）。
