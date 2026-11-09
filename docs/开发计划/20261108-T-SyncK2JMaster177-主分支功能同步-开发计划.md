@@ -83,3 +83,25 @@
 - **波次 B 第一批**（`42401459`）：DialectTest 补 GoldenDB；SqlLogTailFollowTest 13 处构造走 newManager() 注入同步 catchUpScheduler（SqlLogManager 补同包 setCatchUpSchedulerForTest——master 侧是 Kotlin var）；PrepareSingleFlightGate 取消路径判据改 prepareOwner != null；PagesXmlPreviewServiceTest 补 `datasource type="sql"` 与 HQL 三断言；ExecutionDialectGate 两处普查止锚重锚。五类 98 例 0 败。
 - **波次 C·buildSrc**（`c949106b`）：mpv-testing 移植 `-PtestShardExcludeClasses` 单一解析点 + `-PfastBucketSliceCount/-PfastBucketSlice` LPT 切片（并集 require 兜底）；mpv-verification 补单目标 243/253/262（**保持 k2j 目标集，不跟 master 263**）；带入 `dev-support/test-shard-weights.tsv`（822 行画像，此前缺失致切片退化均分）。验证：切片 164/168 类、权重和 118.6s/118.6s。
 - **仍待办**：ParamHistoryCacheTest 19 例既有潜藏红（同步前即有，待定性）；docs 直取与两册三方合并；`.port-sync` 锚点推进（B/C 全完才推进）；lane-3 gate 模式派发验证。
+
+### 178 轮续（CI 红面逐轮收敛，2026-11-09）
+
+| 轮次 | 提交 | 红类数 | 关键动作 |
+|---|---|---|---|
+| 起点 | `4e9c78eb` | 23 类 | 编译通过但测试面全红 |
+| R1 | `32178193` | — | 资源面（GoldenDB EP / bundle 1374 / 前缀表 / 示例模板）+ 守卫基线按实测重登（BannedApi 998/559、ResultsKt 17、SqlLogConsoleBridge 16、ConvertToSql 2） |
+| R2 | `42401459` | 14 类 | DialectTest 15、SqlLogTailFollow 刷新窗注入（+SqlLogManager 测试缝）、PrepareSingleFlight 判据、PagesXml 三断言、ExecutionDialect 止锚 |
+| R3 | `c949106b` | — | buildSrc：快桶切片 + 单目标 verifyIdes + 权重画像 → **fast 腿 1878+2194（原各 4072）** |
+| R4 | `a5a65781` | 11 类 | **CRLF 敏感锚点**（多行 `\n` 锚在 CI 必红）改单行 + 设置项 47→48 |
+| R5 | `9ad5e33c` | 10 类 | DialectXcFamily 15 方言 + SqlLogPanelFilter 刷新窗注入 |
+| R6 | `65c81b72` | 10 类 | **ParamHistoryCache 19 例 NPE 根因＝端口把 `app != null && !isUnitTestMode` 写成 `app == null \|\| !isUnitTestMode()`（语义反转）**；另删 testFast 的 doFirst（破坏配置缓存） |
+| R7 | `ee2736b8` | 待读数 | ExecDialectRouting 锚点预算 3400→6000（实测间隔 4199） |
+| R8 | `cbbf8a40`+`d320f8e2` | 待读数 | **整片复现法**（本地 testShard1-4 带 CI 同款排除参数）拿到全部真实断言：方言黄金表/非折叠族/原生 upsert 族各补 GoldenDB、ExplainPanelWiring 判据放宽为「走快照链」、CustomDaoHql 占位判据放宽、GaussDbWiring 4→5 |
+
+**剩余 3 类行为红（CI 红 / 隔离跑绿）**：SqlCaptureGateSniffTest（嗅探态仍产出条目）、SqlListV179HeadlessTest、SqlPreviewPanelDynamicBatchTest。**本地独有**：DialectDocTableGuard ×4——文档站在独立兄弟仓 `mybatis-plus-sql-visualizer-docs`，缺 goldendb 行（CI 无该仓故不计；属该仓自己的改动，需单独授权）。
+
+**整片复现法（本轮新增作业法）**：CI 只给「类名 + 行号」，隔离跑又不复现时，本地按 CI 同款参数跑整片——
+`./gradlew testShardN -PgifRecord=false -PtestShardExcludeClasses=<CI 同款> -PagentTestExclude=<CI 同款>`，
+XML 报告里有完整断言原文。顺序/并发相关的红只有整片能复现。
+
+**本轮两条硬教训**：① 本地 `testClasses` 的 UP-TO-DATE 会掩盖 CI 从头编译红，API 面改动必须 `compileTestKotlin --rerun-tasks`；② `.gitattributes` 是 `eol=crlf`，CI 检出 CRLF、本地常为 LF——内嵌 `\n` 的多行源码锚点必然「本地绿 / CI 红」，判据是 CI 报 `missing source marker`。
