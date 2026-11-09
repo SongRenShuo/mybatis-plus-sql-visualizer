@@ -361,4 +361,66 @@ class IbatisXmlPreviewServiceTest {
         val fresh = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(params = mapOf("b" to "X")))
         assertEquals("静态路径渲染结果与基线一致（值只影响回填）", result.sql, fresh.sql)
     }
+
+    // ------------------------------------------------------------------
+    // UI-001：告警分档（信息级说明不冒充渲染失败）+ rerender 结果整体替换横幅事实源
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `UI-001_iterate供值后重渲染无告警`() {
+        val result = preview(conditionXml, "selectByIterate")
+        val fresh = rerender(
+            result,
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(collections = mapOf("ids" to listOf("X1", "X2", "X3"))),
+        )
+        assertNull("供值后 SQL 完整，告警必须为空（面板横幅据此恢复即隐藏）", fresh.warning)
+        assertFalse(fresh.informationalWarning)
+    }
+
+    @Test
+    fun `UI-001_iterate基线降级为信息级待填值提示`() {
+        val result = preview(conditionXml, "selectByIterate")
+        assertNotNull("基线告警仍在（不得吞掉）", result.warning)
+        assertTrue("iterate 未供值 = 待填值提示，不是渲染失败", result.informationalWarning)
+        val baseline = rerender(result, cn.song.mybatisplus.visualizer.model.PreviewRerenderInput())
+        assertTrue("面板初始态同一语义", baseline.informationalWarning)
+    }
+
+    @Test
+    fun `UI-001_parameterMap引擎行为说明为信息级`() {
+        val xml = """
+            <sqlMap>
+                <parameterMap id="pmUi" class="java.util.Map">
+                    <parameter property="orgId" jdbcType="VARCHAR"/>
+                </parameterMap>
+                <statement id="stUi" parameterMap="pmUi">UPDATE T SET A = #orgId# WHERE ID = ?</statement>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "stUi", "statement")
+        assertNotNull("引擎行为说明仍在（不得吞掉）", result.warning)
+        assertTrue("parameterMap 说明 = 信息级（附带同族：横幅不得以「未完整还原」开头）", result.informationalWarning)
+    }
+
+    @Test
+    fun `UI-001_参数数量不符仍为失败档`() {
+        val xml = """
+            <sqlMap>
+                <parameterMap id="pmMis" class="java.util.Map">
+                    <parameter property="a" jdbcType="VARCHAR"/>
+                    <parameter property="b" jdbcType="VARCHAR"/>
+                </parameterMap>
+                <statement id="stMis" parameterMap="pmMis">UPDATE T SET A = ? WHERE ID = 1</statement>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "stMis", "statement")
+        assertNotNull(result.warning)
+        assertFalse("数量不符 = 真错配（paramN 兜底），保持失败档", result.informationalWarning)
+    }
+
+    @Test
+    fun `UI-001_渲染配置告警保持失败档`() {
+        val result = preview("<sqlMap><select id=\"s\">SELECT A FROM T WHERE B = #b</select></sqlMap>", "s")
+        assertNotNull("未闭合 # 是配置告警，不得吞掉", result.warning)
+        assertFalse("渲染配置告警不是信息级说明", result.informationalWarning)
+    }
 }

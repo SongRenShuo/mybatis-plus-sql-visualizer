@@ -1,0 +1,13 @@
+# -*- 反证补丁：摘掉「横幅跟随重渲染结果」（恢复旧合并：基线告警永残留）——UI-001 复现 -*-
+# 期望：DegradationBannerTest 的 iBatis 供值清横幅用例变红（currentWarning 仍持基线降级告警）
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt
+@@ -653,6 +653,7 @@
+     currentWarningIsNote = if (result.rerender != null) ibatisRenderWarningIsNote else result.informationalWarning
+     currentWarning = if (result.rerender != null) {
+-        mergePreviewWarnings(null, ibatisRenderWarnings)
++        // [REVERSE-PROBE] 摘掉「横幅跟随新结果」：基线告警并入 → 供值后横幅残留（UI-001 复现）
++        mergePreviewWarnings(result.warning, ibatisRenderWarnings)
+     } else {
+         mergePreviewWarnings(
+             result.warning,
