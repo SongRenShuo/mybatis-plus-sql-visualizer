@@ -586,14 +586,8 @@ tasks.register<Test>("testFast") {
         // T-SyncK2JMaster177：切片模式按 -PfastBucketSlice 取本片类集（默认整桶）；排除清单同源生效。
         fastBucketSlices[fastBucketSliceIndex - 1].forEach { includeTestsMatching(it) }
     }
-    doFirst {
-        logger.lifecycle(
-            "testFast: slice %d/%d, %d 类（排除清单 %d 类）".format(
-                fastBucketSliceIndex, fastBucketSliceCount,
-                fastBucketSlices[fastBucketSliceIndex - 1].size, shardExcludeClassNames.size,
-            ),
-        )
-    }
+    // 切片读数已在配置期（fastBucketSlices 的 run 块）打日志——此处不加 doFirst：
+    // 执行期闭包捕获脚本顶层对象会破坏配置缓存序列化（Gradle 9.7 实测 BUILD FAILED）。
     maxParallelForks = 1
 }
 

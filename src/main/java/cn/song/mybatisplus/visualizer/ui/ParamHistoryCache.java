@@ -138,7 +138,11 @@ public class ParamHistoryCache {
             if (stateFailure != null) {
                 com.intellij.openapi.application.Application app =
                         com.intellij.openapi.application.ApplicationManager.getApplication();
-                if (app == null || !app.isUnitTestMode()) {
+                // master 原文：`if (app != null && !app.isUnitTestMode) stateWrite.getOrThrow()`
+                // ——**app == null（headless/纯 JUnit）时不得抛**，静默降级到 fallbackStorage。
+                // 端口曾写成 `app == null || !isUnitTestMode()`（语义反转），导致 ParamHistoryCacheTest
+                // 19 例在无 Application 的 JVM 里全部 NPE（2026-11-09 178 轮实测定位）。
+                if (app != null && !app.isUnitTestMode()) {
                     if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(stateFailure)) {
                         throw (Error) stateFailure;
                     }
