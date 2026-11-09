@@ -26,6 +26,9 @@ object GutterGroups {
         "XmlSqlGutterLineMarkerProvider" to "mapperXml",
         "PagesXmlGutterLineMarkerProvider" to "mapperXml",
         "HbmNamedQueryGutterLineMarkerProvider" to "mapperXml",
+        // T-Ibatis2Support 券 A（拍板 D-8）：iBatis <sqlMap> 语句归 mapperXml 组
+        // （语义最接近：都是「XML 里的 SQL 语句」；新增独立组会多一个设置开关与 i18n 面）
+        "IbatisXmlGutterLineMarkerProvider" to "mapperXml",
         "MapperXmlToJavaLineMarkerProvider" to "mapperXml",
         "MapperJavaToXmlLineMarkerProvider" to "mapperXml",
         "AnnotationSqlGutterLineMarkerProvider" to "annotation",
