@@ -27,6 +27,11 @@ import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.ParamKind
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisConditionRow
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisDollarRow
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisIterateRow
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisPlaceholderRow
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
@@ -191,7 +196,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     }
 
     if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls &&
-        result.runtimeSlots.isEmpty()
+        result.runtimeSlots.isEmpty() && result.ibatisParamModel?.hasControls != true
     ) {
         // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
         paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
@@ -287,6 +292,52 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         if (ordinarySources.isNotEmpty()) {
             if (hasControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
             ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
+        }
+        paramPanel.revalidate()
+        paramPanel.repaint()
+        return
+    }
+
+    // T-Ibatis2Gap 券 A：iBatis 预览左栏——条件开关行（勾选 = Map 放 key）+ iterate 值列表行 +
+    // 占位符/$ 直替值行。行清单来自 [IbatisParamModel]（基线 SQL 里没有 `?` 也照建——这正是
+    // 「参数没识别」的正解：让用户看见语句需要哪些参数、能填值）；勾选/输入变更走 renderSql
+    // 的 rerender 回调分支模型级重渲染。
+    val ibatisModel = result.ibatisParamModel
+    if (ibatisModel != null) {
+        if (!ibatisModel.hasControls && result.unresolvedParams.isEmpty()) {
+            paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
+                border = JBUI.Borders.empty(6, 8)
+            })
+            paramPanel.revalidate()
+            paramPanel.repaint()
+            return
+        }
+        val labelTexts = ibatisModel.placeholderRows.map { "#${it.name}" } +
+            ibatisModel.dollarRows.map { "$${it.name}\$" } +
+            ibatisModel.iterateRows.map { "iterate: ${it.property}" } +
+            ibatisModel.conditionRows.map { ibatisModel.labelOf(it) }
+        val labelWidth = labelColumnWidth(labelTexts)
+        val hasIbatisControls = ibatisModel.hasControls
+        if (ibatisModel.conditionRows.isNotEmpty()) {
+            paramPanel.add(conditionSectionHeader())
+            ibatisModel.conditionRows.forEach { paramPanel.add(buildIbatisConditionRow(it, ibatisModel)) }
+        }
+        if (ibatisModel.iterateRows.isNotEmpty()) {
+            paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.ibatis.iterate.section")))
+            ibatisModel.iterateRows.forEach { paramPanel.add(buildIbatisIterateRow(it)) }
+        }
+        val coveredSources = ibatisModel.placeholderRows.map { it.name }.toSet() +
+            ibatisModel.dollarRows.map { it.name }.toSet()
+        if (ibatisModel.placeholderRows.isNotEmpty() || ibatisModel.dollarRows.isNotEmpty()) {
+            if (hasIbatisControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
+            ibatisModel.placeholderRows.forEach { paramPanel.add(buildIbatisPlaceholderRow(it, labelWidth)) }
+            ibatisModel.dollarRows.forEach { paramPanel.add(buildIbatisDollarRow(it, labelWidth)) }
+        }
+        // 手写 `?` 且无 parameterMap：参数名按 paramN 兜底（与既有口径一致），补普通参数行
+        val fallbackSources = result.unresolvedParams.distinct().filter { it !in coveredSources }
+        if (fallbackSources.isNotEmpty()) {
+            if (hasIbatisControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
+            fallbackSources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
         }
         paramPanel.revalidate()
         paramPanel.repaint()
@@ -1248,6 +1299,149 @@ internal fun SqlPreviewPanel.buildParamRow(source: String, labelWidth: Int): JBP
         add(field)
         add(warnLabel)
         border = JBUI.Borders.empty(0, 8, 2, 8)
+    }
+}
+
+// ------------------------------------------------------------------
+// T-Ibatis2Gap 券 A：iBatis 预览左栏行构造器（条件开关 / iterate 值列表 / 占位符与 $ 直替值）
+// ------------------------------------------------------------------
+
+/**
+ * iBatis 条件开关行：复选框（label = `isNotNull: id` / `isEqual: status == "1"` 形态摘要，
+ * id 进 [enabledIds]）+ 值输入框（property 未被占位符行覆盖时在此给值，否则与 `#prop#` 行共享
+ * paramValues 同键）。isNotEmpty/isEmpty 行尾标注「空值 ⇒ 条件不成立」的引擎语义——
+ * 避免用户以为「勾了没生效是坏了」。
+ */
+internal fun SqlPreviewPanel.buildIbatisConditionRow(row: IbatisConditionRow, model: IbatisParamModel): JBPanel<JBPanel<*>> {
+    val rawLabel = model.labelOf(row)
+    val displayLabel = checkBoxText(rawLabel)
+    val checkBox = JCheckBox(displayLabel, row.id in enabledIds).apply {
+        toolTipText = if (displayLabel != rawLabel) rawLabel else rawLabel
+        putClientProperty(PROP_TOGGLE_ID, row.id) // R22 T-02：快照枚举/召回同步的 id 锚点（与 XML 条件行同形态）
+        addActionListener {
+            if (isSelected) enabledIds.add(row.id) else enabledIds.remove(row.id)
+            renderSql()
+        }
+    }
+    conditionCheckBoxes += checkBox
+    return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+        add(checkBox)
+        row.property?.let { prop ->
+            val coveredByPlaceholder = model.placeholderRows.any { it.name == prop }
+            if (!coveredByPlaceholder) add(ibatisValueField(prop))
+        }
+        if (row.kindTagName == "isNotEmpty" || row.kindTagName == "isEmpty") {
+            add(
+                JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.note")).apply {
+                    foreground = UIUtil.getContextHelpForeground()
+                    toolTipText = MpSqlVisualizerBundle.message("panel.ibatis.condition.emptyString.tooltip")
+                },
+            )
+        }
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+    }
+}
+
+/** iBatis 迭代行：`iterate: ids` 标签 + 值列表输入（逗号/换行分隔）——留空 = 该段不展开（引擎降级，现状一致）。 */
+internal fun SqlPreviewPanel.buildIbatisIterateRow(row: IbatisIterateRow): JBPanel<JBPanel<*>> {
+    val labelText = "iterate: ${row.property}"
+    val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+    panel.add(columnLabel(labelText, labelColumnWidth(listOf(labelText))).apply {
+        border = JBUI.Borders.empty(0, 8, 0, 0)
+    })
+    val field = JBTextField(16).apply {
+        // 召回先于参数区重建；注册监听前回填权威值（与 xmlForEachValues 同口径）
+        text = ibatisIterateValues[row.property].orEmpty()
+        toolTipText = MpSqlVisualizerBundle.message("panel.ibatis.iterate.tooltip")
+        putClientProperty(PROP_FIELD_SOURCE, row.property)
+        document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onIbatisIterateValuesChanged(row, this@apply.text)
+            override fun removeUpdate(e: DocumentEvent?) = onIbatisIterateValuesChanged(row, this@apply.text)
+            override fun changedUpdate(e: DocumentEvent?) = onIbatisIterateValuesChanged(row, this@apply.text)
+        })
+    }
+    panel.add(field)
+    paramFields += field
+    panel.border = JBUI.Borders.empty(0, 8, 2, 8)
+    return panel
+}
+
+/** iterate 值变更：即时写状态，渲染走防抖（T-Perf-04 同口径；值装配收进 renderSql 帧）。 */
+internal fun SqlPreviewPanel.onIbatisIterateValuesChanged(row: IbatisIterateRow, text: String) {
+    ibatisIterateValues[row.property] = text
+    scheduleRender { renderSql() }
+}
+
+/** iBatis 占位符行：`#name` 标签 + jdbcType 类型提示（emptyText/tooltip）+ 值输入框。 */
+internal fun SqlPreviewPanel.buildIbatisPlaceholderRow(row: IbatisPlaceholderRow, labelWidth: Int): JBPanel<JBPanel<*>> {
+    val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+    panel.add(paramLabel(row.name, labelWidth))
+    val field = JBTextField(16).apply {
+        text = paramValues[row.name] ?: ""
+        putClientProperty(PROP_FIELD_SOURCE, row.name)
+        emptyText.text = ibatisEmptyTextHint(row.jdbcType)
+        toolTipText = if (row.jdbcType != null) "#${row.name}:${row.jdbcType}" else "#${row.name}"
+        if (text.isNotEmpty()) caretPosition = 0
+        document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+            override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+            override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+        })
+    }
+    paramFields += field
+    panel.add(field)
+    panel.border = JBUI.Borders.empty(0, 8, 2, 8)
+    return panel
+}
+
+/** `$x$` 直替行：`$name$` 标签 + 值输入框 + 行尾注入面标注（接既有 `${}` 确认闸门，不新开无闸门路径）。 */
+internal fun SqlPreviewPanel.buildIbatisDollarRow(row: IbatisDollarRow, labelWidth: Int): JBPanel<JBPanel<*>> {
+    val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+    panel.add(columnLabel("$${row.name}\$", labelWidth).apply {
+        border = JBUI.Borders.empty(0, 8, 0, 0)
+    })
+    val field = JBTextField(16).apply {
+        text = paramValues[row.name] ?: ""
+        putClientProperty(PROP_FIELD_SOURCE, row.name)
+        toolTipText = MpSqlVisualizerBundle.message("panel.ibatis.dollar.tooltip")
+        document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+            override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+            override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(row.name, this@apply)
+        })
+    }
+    paramFields += field
+    panel.add(field)
+    panel.add(
+        JBLabel(MpSqlVisualizerBundle.message("panel.ibatis.dollar.note")).apply {
+            foreground = PARAM_WARN_FOREGROUND
+        },
+    )
+    panel.border = JBUI.Borders.empty(0, 8, 2, 8)
+    return panel
+}
+
+/** 条件行内联值输入框（property 未被占位符行覆盖时用；与普通参数共享 paramValues 同键）。 */
+internal fun SqlPreviewPanel.ibatisValueField(source: String): JBTextField =
+    JBTextField(12).apply {
+        text = paramValues[source] ?: ""
+        putClientProperty(PROP_FIELD_SOURCE, source)
+        document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+            override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+            override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+        })
+    }.also { paramFields += it }
+
+/** jdbcType → 输入框占位提示（复用既有键；不认识的类型给空提示，不做猜测）。 */
+private fun ibatisEmptyTextHint(jdbcType: String?): String {
+    val numeric = setOf("INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "NUMERIC", "FLOAT", "REAL", "DOUBLE")
+    val temporal = setOf("DATE", "TIME", "TIMESTAMP", "DATETIME")
+    val upper = jdbcType?.uppercase().orEmpty()
+    return when {
+        upper in numeric -> MpSqlVisualizerBundle.message("panel.param.emptyText.number")
+        upper in temporal -> MpSqlVisualizerBundle.message("panel.param.emptyText.temporal")
+        else -> ""
     }
 }
 

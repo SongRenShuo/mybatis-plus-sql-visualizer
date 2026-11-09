@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModelBuilder
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParseException
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisRenderResult
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisSqlMap
@@ -71,7 +74,24 @@ object IbatisXmlPreviewService {
             // 渲染器本身把语句级问题降级为 warning（不抛穿）；能到这里是意外形态，仍不打断预览
             return emptyResult(e.message ?: MpSqlVisualizerBundle.message("ibatis.preview.renderFailed.warning"))
         }
-        return toPreviewResult(rendered)
+        // T-Ibatis2Gap 券 A：把「无参基线」从唯一输出变成初始态——行清单 + 重渲染回调随结果进面板。
+        // 回调闭包复用同一 statement（纯数据，无 PSI/引擎引用），面板每次交互重新装配 Map 并渲染。
+        val paramModel = IbatisParamModelBuilder.build(statement)
+        return toPreviewResult(rendered, statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty()).copy(
+            ibatisParamModel = paramModel,
+            rerender = { input -> rerender(statement, paramModel, input) },
+        )
+    }
+
+    /** 面板状态 → Map 装配 → 既有渲染器（渲染器零改动；空装配回退 null = 无参基线，与现状一致）。 */
+    private fun rerender(statement: IbatisStatement, paramModel: IbatisParamModel, input: PreviewRerenderInput): PreviewResult {
+        val params = IbatisParamModelBuilder.assembleParams(paramModel, input)
+        val rendered = try {
+            SqlMapSqlRenderer().render(statement, params)
+        } catch (e: RuntimeException) {
+            return emptyResult(e.message ?: MpSqlVisualizerBundle.message("ibatis.preview.renderFailed.warning"))
+        }
+        return toPreviewResult(rendered, statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty())
     }
 
     // ------------------------------------------------------------------
@@ -97,7 +117,7 @@ object IbatisXmlPreviewService {
     // 产物转换（IbatisRenderResult → PreviewResult）
     // ------------------------------------------------------------------
 
-    private fun toPreviewResult(rendered: IbatisRenderResult): PreviewResult {
+    private fun toPreviewResult(rendered: IbatisRenderResult, statementHasRawSubstitutionSites: Boolean = false): PreviewResult {
         val sql = rendered.sql
         val placeholders = placeholderPositions(sql).size
         val names = rendered.paramNames
@@ -138,8 +158,12 @@ object IbatisXmlPreviewService {
             // 安全面（计划册 §六.4「不得新开无闸门路径」）：
             // ① `$x$` **站点存在**即置闸——即使无参基线下取值为 null 被引擎静默丢弃（预览 SQL 里看不到
             //    那段文本），运行期它仍是原文直拼面，预览必须走既有 `${}` 确认通道而不是伪装成安全 SQL；
+            //    T-Ibatis2Gap 券 A 补强：站点在**条件子树内**时无参基线连那段都渲染不出来（条件整段
+            //    跳过），dollarRawCount=0 会漏闸——行清单里的 `$` 站点（statementHasRawSubstitutionSites）
+            //    一并置闸，否则「勾上 isNotEmpty 填值后执行」绕过注入确认；
             // ② 未替换的 `${prop}`（引擎按全局属性替换、本链保留原文）在 SQL 文本里就是 `${}` 原文段。
-            hasDollarRawSegments = rendered.dollarRawCount > 0 || sql.contains("\${"),
+            hasDollarRawSegments =
+                rendered.dollarRawCount > 0 || statementHasRawSubstitutionSites || sql.contains("\${"),
         )
     }
 

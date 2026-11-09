@@ -221,6 +221,18 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
             if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
         }
     }
+    // T-Ibatis2Gap 券 A：iBatis 交互态初始化——参数行/条件值输入按行清单播种（基线 SQL 里没有
+    // `?` 也必须建行建输入框，这正是「参数没识别」的正解）；compareValue 预填条件值输入
+    // （勾上 isEqual 即按比较值参与 WHERE）；iterate 列表与重渲染告警随新预览清场。
+    result.ibatisParamModel?.let { ibatisModel ->
+        ibatisModel.placeholderRows.forEach { paramValues.putIfAbsent(it.name, "") }
+        ibatisModel.conditionRows.forEach { row ->
+            row.property?.let { paramValues.putIfAbsent(it, row.compareValue ?: "") }
+        }
+        ibatisModel.dollarRows.forEach { paramValues.putIfAbsent(it.name, "") }
+        ibatisIterateValues.clear()
+        ibatisRenderWarnings = emptyList()
+    }
     // P-05：历史召回（在 initialParamValues 之后，用户输入之前）
     recallFromHistory()
     // 模型级重生成路径：初始压缩/多行与格式化设置对齐（旧文本路径保持默认多行）
@@ -634,7 +646,12 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             xml.parameterType?.let { add("parameterType: $it") }
         }
     }.joinToString("   ")
-    currentWarning = mergePreviewWarnings(result.warning, if (result.xmlModel != null) xmlErrors else emptyList())
+    currentWarning = mergePreviewWarnings(
+        result.warning,
+        if (result.xmlModel != null) xmlErrors
+        else if (result.rerender != null) ibatisRenderWarnings // T-Ibatis2Gap 券 A：iBatis 重渲染告警并入
+        else emptyList(),
+    )
     val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。

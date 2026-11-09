@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.RuntimeSlot
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel
 
 /**
  * 预览结果（M3-01 整合层产物）：一次 Wrapper 转换的完整展示数据。
@@ -172,6 +173,33 @@ data class PreviewResult(
      * 默认空表，既有构造点零影响（向后兼容）。
      */
     val runtimeSlots: List<RuntimeSlot> = emptyList(),
+    /**
+     * T-Ibatis2Gap 券 A：iBatis 语句的参数/条件行清单（[cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModelBuilder]
+     * 产物）。面板据此建条件开关行 / 参数值行 / iterate 值列表行 / `$x$` 风险行。
+     * null = 非 iBatis 预览（MyBatis/Wrapper/JPA 链零感知）。
+     */
+    val ibatisParamModel: IbatisParamModel? = null,
+    /**
+     * T-Ibatis2Gap 券 A：模型级重渲染回调（渲染接缝选型 A——面板参数/勾选变化时调用它拿新结果，
+     * 不把 `xmlModel` 抽成接口）。闭包由 `ui/IbatisXmlPreviewService` 用**同一 statement** 创建，
+     * 装配 Map 后走既有 `SqlMapSqlRenderer.render(statement, params)`——渲染器与 MyBatis 链零改动。
+     * null = 无模型级重渲染能力（既有构造点零影响）。
+     */
+    val rerender: ((PreviewRerenderInput) -> PreviewResult)? = null,
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }
+
+/**
+ * T-Ibatis2Gap 券 A：模型级重渲染的面板状态输入（渲染接缝 A 的回调实参）。
+ *
+ * 券 A 原案是 `((Map<String, String>) -> PreviewResult)?`；实现时条件勾选（iBatis 的开关 = Map 里
+ * 放不放 key）与 iterate 值列表没法折进一个 `Map<String, String>`，故泛化为三段输入——仍是
+ * model 层的**通用**纯数据（不依赖 ibatis/面板类型），`params` 键 = 参数名（含条件值输入），
+ * `enabledConditionIds` 键 = 条件行 id，`collections` 键 = 集合属性名。默认值齐备，非 iBatis 链不构造。
+ */
+data class PreviewRerenderInput(
+    val params: Map<String, String> = emptyMap(),
+    val enabledConditionIds: Set<String> = emptySet(),
+    val collections: Map<String, List<String>> = emptyMap(),
+)
