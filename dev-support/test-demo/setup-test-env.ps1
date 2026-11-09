@@ -52,7 +52,20 @@ function Fail([string]$Message) {
 $scriptDir = $PSScriptRoot
 $devSupportDir = Split-Path -Parent $scriptDir
 $repoRoot = Split-Path -Parent $devSupportDir
-$demoRepoUrl = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo.git"
+
+# Demo repository is mirrored on both hosts (same history, same pinned revision).
+# Pick the primary by environment: a GitHub Actions runner reaches GitHub natively,
+# while a China-based developer machine reaches Gitee faster. The other host is the
+# fallback and is only tried when the primary fails.
+$giteeDemoUrl = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo.git"
+$githubDemoUrl = "https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo.git"
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    $demoRepoUrl = $githubDemoUrl
+    $demoFallbackUrl = $giteeDemoUrl
+} else {
+    $demoRepoUrl = $giteeDemoUrl
+    $demoFallbackUrl = $githubDemoUrl
+}
 
 if ([string]::IsNullOrWhiteSpace($DemoDir)) {
     $DemoDir = Join-Path (Split-Path -Parent $repoRoot) "mybatis-plus-sql-visualizer-demo"
@@ -73,18 +86,18 @@ if (-not (Test-Path $DemoDir)) {
         Fail "demo directory is missing. Run without -CheckOnly, or set -DemoDir/`$env:MPSV_DEMO_ROOT."
     }
     Write-Step "cloning demo repository..."
+    Write-Step "source     : $demoRepoUrl"
     & git clone $demoRepoUrl $DemoDir
     if ($LASTEXITCODE -ne 0) {
-        # Gitee DNS/network flakes on CI runners are a known transient form (2026-11-09 push-test
-        # shard 3: "Could not resolve host: gitee.com"). Fall back to the GitHub mirror, which
-        # carries the same history and the pinned revision.
-        $mirrorUrl = "https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo.git"
-        Write-Step "primary clone failed; retry with mirror: $mirrorUrl"
+        # Cross-border DNS/network flakes are a known transient form (2026-11-09 push-test shard 3:
+        # "Could not resolve host: gitee.com"). Retry once against the other host, which carries
+        # the same history and the pinned revision.
+        Write-Step "primary clone failed; retry with fallback: $demoFallbackUrl"
         if (Test-Path -LiteralPath $DemoDir) {
             Remove-Item -LiteralPath $DemoDir -Recurse -Force -ErrorAction SilentlyContinue
         }
-        & git clone $mirrorUrl $DemoDir
-        if ($LASTEXITCODE -ne 0) { Fail "git clone failed: $demoRepoUrl (mirror also failed: $mirrorUrl)" }
+        & git clone $demoFallbackUrl $DemoDir
+        if ($LASTEXITCODE -ne 0) { Fail "git clone failed: $demoRepoUrl (fallback also failed: $demoFallbackUrl)" }
     }
     & git -C $DemoDir checkout $Revision
     if ($LASTEXITCODE -ne 0) { Fail "git checkout $Revision failed in $DemoDir" }

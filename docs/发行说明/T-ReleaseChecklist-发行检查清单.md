@@ -160,6 +160,7 @@
     ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。
     ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
     ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
+    ⑤ **双仓镜像资源在 CI 上优先用 GitHub 源**（2026-11-09 实证）：demo 仓双仓同源同提交，`setup-test-env.ps1` 现按环境选主备——`GITHUB_ACTIONS=true` 时主源 GitHub、回落 Gitee；本地反之。起因是 push-test run `42598802895` 的 `test (3)` 红在 `Could not resolve host: gitee.com`（一个用例都没跑，同轮其余 7 腿正常），跨洋解析抖动会把整条分片腿打红。
   - **换验证目标 IDE 版本当天的坑**（2026-11-05 2026.2.4→2026.3 实测）：IPGP 读的是**项目内缓存的**
     product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore）。若该缓存是在新版
     发布前抓的，跑 `:verifyPlugin` 会报 `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，
