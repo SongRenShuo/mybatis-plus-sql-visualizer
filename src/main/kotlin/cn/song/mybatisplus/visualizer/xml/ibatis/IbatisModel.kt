@@ -310,6 +310,21 @@ data class IbatisRenderResult(
     val dollarRenderedValues: List<String>,
     val usedStatementIds: List<String>,
     val usedSqlFragmentIds: List<String>,
+    /**
+     * 券 D（T-Ibatis2Gap）：本次渲染是否走了降级回退（`renderBody` 抛错后仅按顶层文本节点拼装）。
+     * 默认 false——既有构造点零影响；UI 侧据此区分「正常渲染」与「半截 SQL」，不再静默。
+     */
+    val degraded: Boolean = false,
+    /**
+     * 券 D：降级时未渲染的顶层节点事实（失败节点 + 失败原因分类 + 涉及的 property）。
+     * 非降级恒空。位置口径与「拿不到行号」的说明见 [IbatisUnrenderedNode]。
+     */
+    val unrenderedNodes: List<IbatisUnrenderedNode> = emptyList(),
+    /**
+     * 券 C：`parameterMap` 声明了、但语句体参数位点（手写 `?` / 内联 `#x#` 对）没消费到的映射
+     * ——供 UI 提示「声明了但未消费」。按位取前 N 之后的剩余，声明数 ≤ 位点数时恒空。
+     */
+    val unusedDeclaredParams: List<IbatisParamMapping> = emptyList(),
 ) {
 
     /** 是否含 `$` 直替段（注入闸门判据，等价于既有 `PreviewResult.hasDollarRawSegments` 语义）。 */
