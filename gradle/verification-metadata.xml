@@ -3,6 +3,31 @@
    <configuration>
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
+      <!-- T-SAF-14 补丁（T-DepVerifySources）：sources / javadoc 属**辅助构件**——
+           不进编译类路径、不进运行时，只供 IDE 导航挂源码用。而本清单由 CLI 构建生成，
+           那次构建不会解析它们，于是 IDE 侧 tooling API（LegacyAuxiliaryArtifactResolver）
+           一旦挂源码就撞「One artifact failed verification」（2026-11-09 实测：
+           jsqlparser-5.3-sources.jar）。逐个补 checksum 是打地鼠（每个依赖首次挂源码都会红），
+           故按文件模式整体信任这两类；二进制构件（jar/pom/metadata）的严格校验不受影响。 -->
+      <trusted-artifacts>
+         <trust file=".*-sources\.jar" regex="true"/>
+         <trust file=".*-javadoc\.jar" regex="true"/>
+         <!-- IntelliJ 平台 distro 的 POM：清单里 `com.jetbrains.intellij.idea` 一条都没有——
+              CLI 生成时平台 distro 从未走校验路径解析，IDE 侧（tooling API）却要读它的 POM。
+              且 IDE 解析的平台版本随**本机 IDE 版本**变化（263 用户命中 263.7307.245-EAP-CANDIDATE，
+              243 用户命中 243.28141.41），逐版本写死 checksum 等于让构建依赖「谁在哪个 IDE 里同步」。
+              POM 是构件元数据、不含代码，故按 group 信任 .pom；该 group 的二进制构件不受影响。 -->
+         <trust group="com.jetbrains.intellij.idea" file=".*\.pom" regex="true"/>
+         <!-- Gradle 发行版自身的附属物（IDE 脚本模型会解析，CLI 不会）：`gradle:gradle:<ver>` 的
+              源码包、`org.apache.groovy` / `org.codehaus.groovy` 的变体元数据与 jar，全部来自**本机
+              Gradle 发行版**（Gradle custom / Gradle distributions / Gradle Libs 仓库）。发行版本身
+              已由 gradle-wrapper.properties 的 distributionSha256Sum 钉死（T-SAF-15），再按 Maven 侧
+              checksum 校验没有可信来源可言；插件运行时也不依赖 Groovy。故整组放行这三类，
+              其余第三方构件（含 org.jetbrains.kotlin）一律照旧严格校验。 -->
+         <trust group="gradle"/>
+         <trust group="org.apache.groovy"/>
+         <trust group="org.codehaus.groovy"/>
+      </trusted-artifacts>
    </configuration>
    <components>
       <component group="bundledModule" name="intellij-platform-test-runtime" version="IU-243.28141.41">

@@ -242,6 +242,17 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：跑外指腿前确认该实例当前无其他套件轮次（本地其他车道/夜间 CI 时刻表错峰）；**反例**：两轮套件同时打同一实例，A 轮种子表被 B 轮开头 DROP，读数红且难归因。
 **Seen 1× (2026-11-07)**——本轮只登记不重构；根治方案（运行唯一 schema/表前缀）在计划册实施记录挂账，待复发或外指面再扩大时立项。
 
+### L25 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
+
+**规则**：`gradle/verification-metadata.xml` 由 `--write-verification-metadata` 生成，**只记录那次构建真正解析过的构件**。IDE 的 Gradle 导入/脚本模型会额外解析三类清单外的东西：①**辅助构件**（`-sources.jar` / `-javadoc.jar`，挂源码导航）；②**平台 distro 的 POM**（`com.jetbrains.intellij.idea:ideaIU:<本机 IDE 版本>`）；③**Gradle 发行版自身的附属物**（`gradle:gradle:<ver>` 的 `-src.zip`、`org.apache.groovy` 的 `.module`——来自 Gradle custom / Gradle distributions / Gradle Libs 仓库）。三类都不在生成时的解析图里 → IDE 一同步就 `Dependency verification failed`，而 `./gradlew` 全绿。故开严格校验时必须同批写 `trusted-artifacts`：按文件模式信任 `.*-sources\.jar` / `.*-javadoc\.jar`；按 group 信任 `com.jetbrains.intellij.idea` 的 `.*\.pom`（**不能**逐版本写死——平台版本随每个开发者本机 IDE 变化）；整组放行 `gradle` / `org.apache.groovy` / `org.codehaus.groovy`（Gradle 发行版已由 `distributionSha256Sum` 钉死，Maven 侧 checksum 无可信来源）。
+
+**证据**：T-SAF-14（`b51f664a`，2026-11-06）引入严格校验后，2026-11-09 用户在 IDE 里连续撞三次：①`jsqlparser-5.3-sources.jar`；②`ideaIU-243.28141.41.pom` / `ideaIU-2024.3.7.1.pom` / `ideaIU-263.7307.245-EAP-CANDIDATE.pom`（第三个版本＝该开发者本机 IDE 版本，来自 IntelliJ Repository (Snapshots)）；③`gradle-9.7.0-src.zip`（Gradle custom / Gradle distributions）与 `groovy-4.0.32.module`（Gradle Libs）。修复前清单里 `-sources.jar` / `-javadoc.jar` / `com.jetbrains.intellij.idea` / `gradle` / `org.apache.groovy` 条目数**全为 0**。探针复现与验证：解析 `jsqlparser:5.3@sources`、`ideaIU:243.28141.41@pom`，修复前都红、修复后都绿（`PROBE_RESOLVED` / `POM_PROBE_RESOLVED`）；同一轮探针里 `commons-math3` / `jmh-core` / `jopt-simple` 等**二进制**构件仍照旧失败——严格性只对上述三类开口。**证据边界**：③（`-src.zip` / `.module`）只在 IDE 脚本模型路径上出现，CLI 侧无可复现入口，故该条以用户同步读数为准，未取本地探针读数。
+
+**正例**：开严格校验的同一提交里就写全三类 `trusted-artifacts`；改完必须用「CLI + IDE 双读数」验收，不能只看 `./gradlew` 绿。
+**反例**：只跑 CLI 就宣布「严格校验生效」；或遇到 IDE 报红时把整个 `verify-metadata` 关掉/删清单——那会把二进制构件的字节级保护一并撤掉；或按版本逐个补平台 POM checksum——下一个人换 IDE 版本立刻再红。
+
+**Seen 1× (2026-11-09)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
