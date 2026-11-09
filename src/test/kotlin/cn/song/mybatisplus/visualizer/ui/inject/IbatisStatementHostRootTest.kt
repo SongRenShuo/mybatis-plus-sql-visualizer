@@ -33,8 +33,12 @@ import com.intellij.openapi.util.TextRange
  *
  * 反向验证（券 D ①）：摘掉 [XmlSynHiGate.inMapperFile] 的 `sqlMap` 放宽 → 本类 iBatis 用例必红
  * （注入不放行 / 折叠零区 / 脏区为 null / 上下文为假）。
+ *
+ * **命名口径**：本类刻意**不**以 `Guard` 收尾——它验的是能力放宽的正向行为与边界，不是「扫描判定
+ * 内核 + 自证语料」形状的守卫；而 `convention/GuardSelfTestCoverageMetaGuardTest` 的文件名闭包会把
+ * 任何文件名含 `Guard` 的测试类当成必须登记进 `GUARD_CLASSES` 的守卫（未登记即红）。
  */
-class IbatisStatementHostGuardTest : BasePlatformTestCase() {
+class IbatisStatementHostRootTest : BasePlatformTestCase() {
 
     // ------------------------------------------------------------------
     // fixture
