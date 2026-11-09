@@ -562,15 +562,18 @@
         </action>
     </actions>
 
-    <!-- T-Ibatis2Support 券 F（车道 L8）：iBatis 2.x <sqlMap> 的跳转注册。
+    <!-- T-Ibatis2Support 券 F（车道 L8）：iBatis 2.x <sqlMap> 的两条跳转注册。
          **本块为文件尾部追加块，归属 iBatis 跳转，勿并入上方 MyBatis 注册段**（L4 车道正在改中段的
          codeInsight.lineMarkerProvider 区域；同文件只追加、不重排）。
-         psi.referenceContributor：XML 内部 id 引用（include@refid / resultMap= / parameterMap= /
-         resultMap@extends），所有引用均为 soft——无目标零报红，不注册任何校验器形态；
-         门控只做 O(1) 根标签名（sqlMap）判定，不在热路径调用识别器/做全项目扫描。
+         ① psi.referenceContributor：XML 内部 id 引用（include@refid / resultMap= / parameterMap= /
+            resultMap@extends），所有引用均为 soft——无目标零报红，不注册任何校验器形态；
+         ② gotoDeclarationHandler：Java DAO 的 SqlMapExecutor 调用（queryForObject 等）→ XML 语句 id。
+         两条都只做 O(1) 根标签名（sqlMap）门控，不在热路径调用识别器/做全项目扫描。
          键位归属平台 action（Ctrl+B / Ctrl+Click），本段同样不得出现 keyboard-shortcut/mouse-shortcut。 -->
     <extensions defaultExtensionNs="com.intellij">
         <psi.referenceContributor language="XML"
                                   implementation="cn.song.mybatisplus.visualizer.ui.ref.IbatisXmlIdReferenceContributor"/>
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.IbatisDaoStatementGotoDeclarationHandler"/>
     </extensions>
 </idea-plugin>
