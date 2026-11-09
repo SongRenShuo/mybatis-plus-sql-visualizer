@@ -102,6 +102,7 @@
 
 **整片复现法（本轮新增作业法）**：CI 只给「类名 + 行号」，隔离跑又不复现时，本地按 CI 同款参数跑整片——
 `./gradlew testShardN -PgifRecord=false -PtestShardExcludeClasses=<CI 同款> -PagentTestExclude=<CI 同款>`，
-XML 报告里有完整断言原文。顺序/并发相关的红只有整片能复现。
+XML 报告（build/test-results/testShardN/TEST-*.xml）里有完整断言原文。顺序/并发相关的红只有整片能复现。
+⚠️`--tests` 的 FQCN 写错时若同时给了别的有效 pattern，会被**静默跳过**（本轮 SqlDialectParserDefinitionPairingGuardTest 因此漏跑两轮，真实包名是 `...convention.` 不是 `...sql.`）——跑完必须核对 XML 里确有该类。
 
 **本轮两条硬教训**：① 本地 `testClasses` 的 UP-TO-DATE 会掩盖 CI 从头编译红，API 面改动必须 `compileTestKotlin --rerun-tasks`；② `.gitattributes` 是 `eol=crlf`，CI 检出 CRLF、本地常为 LF——内嵌 `\n` 的多行源码锚点必然「本地绿 / CI 红」，判据是 CI 报 `missing source marker`。
