@@ -74,7 +74,18 @@ if (-not (Test-Path $DemoDir)) {
     }
     Write-Step "cloning demo repository..."
     & git clone $demoRepoUrl $DemoDir
-    if ($LASTEXITCODE -ne 0) { Fail "git clone failed: $demoRepoUrl" }
+    if ($LASTEXITCODE -ne 0) {
+        # Gitee DNS/network flakes on CI runners are a known transient form (2026-11-09 push-test
+        # shard 3: "Could not resolve host: gitee.com"). Fall back to the GitHub mirror, which
+        # carries the same history and the pinned revision.
+        $mirrorUrl = "https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo.git"
+        Write-Step "primary clone failed; retry with mirror: $mirrorUrl"
+        if (Test-Path -LiteralPath $DemoDir) {
+            Remove-Item -LiteralPath $DemoDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        & git clone $mirrorUrl $DemoDir
+        if ($LASTEXITCODE -ne 0) { Fail "git clone failed: $demoRepoUrl (mirror also failed: $mirrorUrl)" }
+    }
     & git -C $DemoDir checkout $Revision
     if ($LASTEXITCODE -ne 0) { Fail "git checkout $Revision failed in $DemoDir" }
 } else {
