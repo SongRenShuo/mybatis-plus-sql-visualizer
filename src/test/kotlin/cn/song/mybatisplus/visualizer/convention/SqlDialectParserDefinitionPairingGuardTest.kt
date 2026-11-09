@@ -38,6 +38,8 @@ class SqlDialectParserDefinitionPairingGuardTest {
         "cn.song.mybatisplus.visualizer.sql.gaussdb.GaussDbSqlDialect" to "GaussDB",
         "cn.song.mybatisplus.visualizer.sql.highgo.HighGoSqlDialect" to "HighGo",
         "cn.song.mybatisplus.visualizer.sql.vastbase.VastbaseSqlDialect" to "Vastbase",
+        // T-GoldenDbDialect（178 轮随生产面同步）：第五个自注册方言，语言 id = GoldenDB
+        "cn.song.mybatisplus.visualizer.sql.goldendb.GoldenDbSqlDialect" to "GoldenDB",
     )
 
     private fun descriptor(): String =
