@@ -58,6 +58,8 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             MapperXmlLocator.clearFileListCacheForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
+            // 竞品探针是 object 级全局缝（MapperNavCoexistGateTest 同口径）：用完必须复位
+            MyBatisCompetitorGate.resetForTest()
         } finally {
             super.tearDown()
         }
@@ -277,6 +279,58 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
     // 3. 互斥与共存
     // ------------------------------------------------------------------
+
+    /**
+     * T-Ibatis2Gap 收尾反证锚：竞品 MyBatisCodeHelperPro **没有 iBatis 能力**（发行包解包扫描
+     * iBatis 命中 0），sqlMap / SqlMapExecutor 调用行不存在图标冲突——竞品在位时 iBatis 两个箭头
+     * **必须照常产出**（不读 `mapperNavYieldToCodeHelper`）；MyBatis 那对让位行为不变（对照半边
+     * 证明让位门本身在起作用、夹具没坏）。把「不让位」改回「让位」必恰本条变红（补丁见
+     * `dev-support/reverse-probes/ibatis-navicon-restore-ibatis-yield-gate.patch`）。
+     */
+    fun test竞品在位_iBatis箭头仍产出_MyBatis对照仍让位() {
+        // 竞品在位造法照 MapperNavCoexistGateTest：注入 probe（纯测试缝，零反射、零插件依赖）
+        MyBatisCompetitorGate.resetForTest()
+        MyBatisCompetitorGate.probe = { true }
+        val dao = addDao()
+        val sqlMap = addSqlMap()
+        val iface = myFixture.addFileToProject(
+            "com/demo/UserMapper.java",
+            "package com.demo;\npublic interface UserMapper { int selectById(); }",
+        )
+        val mapper = myFixture.addFileToProject(
+            "mapper/UserMapper.xml",
+            "<mapper namespace=\"com.demo.UserMapper\"><select id=\"selectById\">SELECT 1</select></mapper>",
+        )
+        // iBatis 对：竞品在位照常产出（让位只会藏掉竞品根本不画的箭头）
+        assertEquals(
+            "竞品在位时 iBatis XML→Java 箭头必须仍产出（CodeHelperPro 无 iBatis 能力，无图标冲突）",
+            true,
+            markerStatementIds(xmlToJava, sqlMap).contains("selectById"),
+        )
+        assertEquals(
+            "竞品在位时 iBatis Java→XML 箭头必须仍产出",
+            true,
+            markers(javaToXml, dao).map { it.element!!.textRange.startOffset }
+                .contains(firstArgCallName(dao, "queryForObject", "user.selectById")!!.textRange.startOffset),
+        )
+        // 对照半边：MyBatis 那对在竞品在位时仍让位（行为零变化，不是夹具坏了）
+        assertEmpty(markers(mybatisXmlToJava, mapper))
+        assertEmpty(markers(mybatisJavaToXml, iface))
+
+        // 对照：竞品不在位时 MyBatis 那对恢复产出——证明让位门本身在起作用
+        MyBatisCompetitorGate.resetForTest()
+        MyBatisCompetitorGate.probe = { false }
+        assertEquals(
+            "竞品不在位时 MyBatis XML→Java 应恢复产出（让位门对照基线）",
+            1,
+            markers(mybatisXmlToJava, mapper).size,
+        )
+        assertEquals(
+            "竞品不在位时 MyBatis Java→XML 应恢复产出（让位门对照基线）",
+            1,
+            markers(mybatisJavaToXml, iface).size,
+        )
+    }
 
     fun test同一xml语句行MyBatis与iBatis各归各() {
         addDao()

@@ -44,17 +44,19 @@ import java.awt.event.MouseEvent
  * 与 MyBatis 侧的分工：`MapperXmlToJavaLineMarkerProvider` 只认根标签 `mapper`（`isMapperFile`
  * 门控），本 provider 只认 `sqlMap`——两套根标签天然互斥，同一行不会双箭头（用例钉住）。
  *
- * ## 让位门（D-2 拍板：完全复用 MyBatis 那对的门形）
+ * ## 让位门（T-Ibatis2Gap 收尾：与 MyBatis 那对**刻意解耦**，不让位）
  *
- * 竞品在位（MyBatisCodeHelperPro）且用户未关闭让位时本 provider 不产出——与 MyBatis 侧共用
- * `mapperNavYieldToCodeHelper` 同一开关与 [MyBatisCompetitorGate] 同一探测，口径逐位一致。
+ * 竞品 MyBatisCodeHelperPro **没有 iBatis 能力**（其发行包解包扫描 iBatis 命中为 0），sqlMap
+ * 文件与 `SqlMapExecutor` 调用行上不存在图标冲突——竞品在位时本 provider **照常产出箭头**，
+ * 不读 `mapperNavYieldToCodeHelper`、不走 [MyBatisCompetitorGate]。共用让位门只会把竞品根本
+ * 不画的 iBatis 箭头白白藏掉（本插件典型用户 IDE 里就装着 CodeHelperPro，等于功能白做）。
+ * 反向锚：`IbatisNavigationLineMarkerProvidersTest` 的「竞品在位」用例——恢复让位必恰它变红；
+ * MyBatis 那对（[MapperXmlToJavaLineMarkerProvider]）的让位行为不变，由其自身守卫与对照用例钉住。
  *
  * ## 预览图标共存
  *
  * iBatis 语句行同时有券 A 的预览图标（[IbatisXmlGutterLineMarkerProvider]，快路径锚）与本
  * provider 的跳转箭头（慢趟锚）——两者**共存是预期**（MyBatis 文件同样预览 + 跳转并存）。
- *
- * 提示文案暂复用 `gutter.mapperStatement.*`（iBatis 专属文案键待主控补入 bundle，见实施报告）。
  */
 class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
 
@@ -70,14 +72,8 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        if (gutterState != null &&
-            MyBatisCompetitorGate.shouldYield(
-                gutterState.mapperNavYieldToCodeHelper,
-                MyBatisCompetitorGate.isPeerPluginActive(),
-            )
-        ) {
-            return
-        }
+        // T-Ibatis2Gap 收尾：竞品无 iBatis 能力、无图标冲突，刻意不让位（理由见类 KDoc；
+        // 恢复让位的反证锚 = IbatisNavigationLineMarkerProvidersTest 的竞品在位用例）
         elements.mapNotNullTo(result, ::createMarker)
     }
 
@@ -93,10 +89,10 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
         val statementId = tag.getAttributeValue("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return LineMarkerInfo(
             element, element.textRange, MpvsIcons.MapperStatement,
-            { MpSqlVisualizerBundle.message("gutter.mapperStatement.tooltip") },
+            { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.tooltip") },
             IbatisToJavaNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.mapperStatement.accessible.name") },
+            { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.accessible.name") },
         )
     }
 
@@ -137,22 +133,6 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
  */
 internal object IbatisJavaCallSites {
 
-    /**
-     * `SqlMapExecutor` 里吃 statementId 的入口方法（与 L8 handler 同一清单；该方法集在
-     * `ui/nav` 内是 private companion，本对象跨包只读复用受限，故按清单原文重述——
-     * 单一事实源迁入 `ui/nav` 公开面记入实施报告待办）。
-     */
-    internal val STATEMENT_ENTRY_METHODS: Set<String> = setOf(
-        "insert",
-        "update",
-        "delete",
-        "queryForObject",
-        "queryForList",
-        "queryWithRowHandler",
-        "queryForPaginatedList",
-        "queryForMap",
-    )
-
     /** 首个命中字面量（`ns.id` / 裸 `id` / 任意 namespace 前缀的 `.id` 尾缀形态）。 */
     fun findFirstCallLiteral(project: Project, namespace: String?, statementId: String): PsiLiteralExpression? {
         val sid = statementId.trim()
@@ -176,7 +156,7 @@ internal object IbatisJavaCallSites {
             literal = literal ?: return@TextOccurenceProcessor true
             if (!matches(literal, namespace, sid)) return@TextOccurenceProcessor true
             val call = PsiTreeUtil.getParentOfType(literal, PsiMethodCallExpression::class.java) ?: return@TextOccurenceProcessor true
-            if (call.methodExpression.referenceName !in STATEMENT_ENTRY_METHODS) return@TextOccurenceProcessor true
+            if (call.methodExpression.referenceName !in IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS) return@TextOccurenceProcessor true
             if (call.argumentList?.expressions?.firstOrNull() !== literal) return@TextOccurenceProcessor true
             first = literal
             false

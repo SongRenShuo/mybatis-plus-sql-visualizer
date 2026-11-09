@@ -28,8 +28,9 @@ import java.awt.event.MouseEvent
  *
  * 锚 = 调用表达式的**方法名 identifier**（`queryForObject` / `insert` / … 的名字 leaf）。
  * 门控 **O(1) 语法级**，判定口径照 L8 handler（`ui/nav/IbatisDaoStatementGotoDeclarationHandler`）：
- * 方法名 ∈ [IbatisJavaCallSites.STATEMENT_ENTRY_METHODS]（`javap` 实测清单）且**首参是 String
- * 字面量**——不做接收者类型解析（真实工程 `SqlMapClient` 常经 Spring 代理注入、类型不可解析）。
+ * 方法名 ∈ [IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS]（`javap` 实测清单的单一事实源）
+ * 且**首参是 String 字面量**——不做接收者类型解析（真实工程 `SqlMapClient` 常经 Spring 代理
+ * 注入、类型不可解析）。
  *
  * 目标存在性在慢趟收口：[IbatisXmlStatementTargets.resolveStatementAnchors]（`ns.id` /
  * 裸 id，TTL + 结果级 memo 缓存）为空即不出图标——普通 Java 类上的同名调用因此零影响
@@ -45,7 +46,14 @@ import java.awt.event.MouseEvent
  * 门控）；本 provider 锚**调用行**——两种锚形态天然不相交；xml 侧再由根标签 `sqlMap` vs
  * `mapper` 互斥。两套互不重复注册同一锚点（用例钉住）。
  *
- * 提示文案暂复用 `gutter.mapperMethod.*`（iBatis 专属文案键待主控补入 bundle，见实施报告）。
+ * ## 让位门（T-Ibatis2Gap 收尾：与 MyBatis 那对**刻意解耦**，不让位）
+ *
+ * 竞品 MyBatisCodeHelperPro **没有 iBatis 能力**（其发行包解包扫描 iBatis 命中为 0），`SqlMapExecutor`
+ * 调用行上不存在图标冲突——竞品在位时本 provider **照常产出箭头**，不读
+ * `mapperNavYieldToCodeHelper`、不走 [MyBatisCompetitorGate]。共用让位门只会把竞品根本不画的
+ * iBatis 箭头白白藏掉（本插件典型用户 IDE 里就装着 CodeHelperPro，等于功能白做）。
+ * 反向锚：`IbatisNavigationLineMarkerProvidersTest` 的「竞品在位」用例——恢复让位必恰它变红；
+ * MyBatis 那对的让位行为不变，由其自身守卫与对照用例钉住。
  */
 class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
 
@@ -61,14 +69,8 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
-        if (gutterState != null &&
-            MyBatisCompetitorGate.shouldYield(
-                gutterState.mapperNavYieldToCodeHelper,
-                MyBatisCompetitorGate.isPeerPluginActive(),
-            )
-        ) {
-            return
-        }
+        // T-Ibatis2Gap 收尾：竞品无 iBatis 能力、无图标冲突，刻意不让位（理由见类 KDoc；
+        // 恢复让位的反证锚 = IbatisNavigationLineMarkerProvidersTest 的竞品在位用例）
         elements.mapNotNullTo(result, ::createMarker)
     }
 
@@ -77,7 +79,7 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val ref = element.parent as? PsiReferenceExpression ?: return null
         if (ref.referenceNameElement !== element) return null
         val call = ref.parent as? PsiMethodCallExpression ?: return null
-        if (call.methodExpression.referenceName !in IbatisJavaCallSites.STATEMENT_ENTRY_METHODS) return null
+        if (call.methodExpression.referenceName !in IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS) return null
         val first = call.argumentList?.expressions?.firstOrNull() as? PsiLiteralExpression ?: return null
         val statementId = (first.value as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val project = element.project
@@ -86,10 +88,10 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         if (anchors.isEmpty()) return null
         return LineMarkerInfo(
             element, element.textRange, MpvsIcons.MapperMethod,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip") },
+            { MpSqlVisualizerBundle.message("gutter.ibatisCallNav.tooltip") },
             IbatisToXmlNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
+            { MpSqlVisualizerBundle.message("gutter.ibatisCallNav.accessible.name") },
         )
     }
 
@@ -114,7 +116,7 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
             val ref = elt.parent as? PsiReferenceExpression ?: return
             val call = ref.parent as? PsiMethodCallExpression ?: return
-            if (call.methodExpression.referenceName !in IbatisJavaCallSites.STATEMENT_ENTRY_METHODS) return
+            if (call.methodExpression.referenceName !in IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS) return
             val first = call.argumentList?.expressions?.firstOrNull() as? PsiLiteralExpression ?: return
             val statementId = (first.value as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return
             val project = elt.project

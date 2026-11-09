@@ -622,7 +622,9 @@
 
         <!-- T-Ibatis2Gap 券 B（车道 L1）：iBatis <sqlMap> 语句与 Java SqlMapExecutor 调用点的
              双向跳转图标（观感对齐 MyBatis 的 MapperXmlToJava/JavaToXml 那对：图标复用
-             MpvsIcons.MapperStatement / MapperMethod，组归 mapperXml，让位门同款）。
+             MpvsIcons.MapperStatement / MapperMethod，组归 mapperXml）。
+             让位门与 MyBatis 那对刻意解耦：CodeHelperPro 无 iBatis 能力、无图标冲突，
+             竞品在位时 iBatis 箭头照常显示（理由与反证锚见两 provider 的类 KDoc）。
              门控全部 O(1) 语法级（根标签 sqlMap + 标签名表 + 首参字面量）；项目级目标解析只在
              点击/慢趟（XML→Java 在点击时走词索引，Java→XML 在慢趟走 IbatisXmlStatementTargets 缓存）。
              本块仍为文件尾部追加块，勿并入上方 MyBatis 注册段。 -->

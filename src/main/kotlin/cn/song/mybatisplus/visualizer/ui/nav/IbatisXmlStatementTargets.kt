@@ -57,6 +57,28 @@ internal object IbatisXmlStatementTargets {
     /** 根标签名 == `sqlMap`（热路径唯一门控；O(1)，零索引、零识别器调用）。 */
     fun isSqlMapFile(file: PsiFile?): Boolean = (file as? XmlFile)?.rootTag?.name == SQL_MAP_ROOT_TAG
 
+    /**
+     * `com.ibatis.sqlmap.client.SqlMapExecutor` 里吃 statementId 的入口方法（jar
+     * `org.apache.ibatis:ibatis-sqlmap:2.3.4.726` 的 `javap` 实测清单，见
+     * `IbatisDaoStatementGotoDeclarationHandler` 类注释：全部重载的 statementId 都在第一参数位；
+     * `startBatch`/`executeBatch` 族不吃 statementId 故不在表内）。
+     *
+     * T-Ibatis2Gap 券 B 收尾：迁入本对象作**单一事实源**——券 B 的 gutter 跳转
+     * （`ui/gutter/IbatisJavaToXmlLineMarkerProvider` 与 `IbatisJavaCallSites`）与 L8 的
+     * goto handler 共用同一批入口判定。注意：L8 handler 内部仍是 private 副本，待主控
+     * 合并后统一改引（本分支不动 L8 文件）。
+     */
+    val STATEMENT_ENTRY_METHODS: Set<String> = setOf(
+        "insert",
+        "update",
+        "delete",
+        "queryForObject",
+        "queryForList",
+        "queryWithRowHandler",
+        "queryForPaginatedList",
+        "queryForMap",
+    )
+
     /** 根 `<sqlMap>` 的 namespace（DTD 里 `#IMPLIED`，可为 null / 空串）。 */
     fun rootNamespace(file: PsiFile?): String? =
         (file as? XmlFile)?.rootTag?.getAttributeValue("namespace")?.trim()?.takeIf { it.isNotEmpty() }
