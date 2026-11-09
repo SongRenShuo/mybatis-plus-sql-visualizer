@@ -1,7 +1,7 @@
 {
   "version": "2026.11.10-beta.1",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10-beta.1/mybatis-plus-sql-visualizer-2026.11.10-beta.1.zip",
-  "changeNotes": "iBatis 的 sqlMap 语句行与 Java DAO 调用行支持双向跳转箭头，装了 MyBatisCodeHelperPro 也不受影响\niBatis 预览参数可填值：动态条件按行勾选、iterate 可填值列表，SQL 随填值变化\niBatis parameterMap 语句显示真实参数名，不再是 param1..N\niBatis 预览降级改为明确标注未渲染段落，信息性说明与失败分档显示\n好用的话，欢迎到 Marketplace 页评分留言",
+  "changeNotes": "iBatis 的 sqlMap 语句行与 Java DAO 调用行支持双向跳转箭头，装了 MyBatisCodeHelperPro 也不受影响\niBatis 预览参数可填值——动态条件按行勾选、iterate 可填值列表，SQL 随填值变化\niBatis parameterMap 语句显示真实参数名，不再是 param1..N\niBatis 预览降级改为明确标注未渲染段落，信息性说明与失败分档显示\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }
