@@ -1,7 +1,7 @@
 # T-Ibatis2Support：iBatis 2.x 静态渲染与编辑器能力全面支持（2026-11-09）
 
 - 立项：2026-11-09 11:30
-- 状态：**待拍板（调研完成，未动 `src/main`）**——四路子代理调研齐备，§一~§八 全部成文；关键结论经主控抽查复核（§一 抽查 4 处吻合、§二/§券 0 主控独立复核 3 处吻合、竞品零覆盖由主控独立解包复扫确认）
+- 状态：**实施中（2026-11-09 用户授权开工，master 线三路并行）**——决策点已全部拍板（§七之二），第一波车道见 §8.2
 - 目标分支：待定（改 `plugin.xml` EP、新增注入面与设置项，属大改动，倾向 dev 线先行，见 §七 D-1）
 - 基线：master `b3b5c556`
 - 来源：
@@ -656,21 +656,56 @@ else                                mapping = newParseMapping(token, parameterCl
 
 ---
 
+## 七之二、拍板记录（2026-11-09，用户指令）
+
+用户 2026-11-09 指令：「点名的也根据你推荐来，本次从主分支开始实施，使用多个子智能体后台并行开发提高效率，如有冲突，使用单独的工作树和分支，最后由主控来进行合并，合并后清理无用的分支和工作树，只跑定向测试全量测试和门禁交给 ci」。
+
+据此**冻结**全部决策点（下表「拍板值」列为施工依据，实施者不得自行变更）：
+
+| # | 决策 | 拍板值 | 备注 |
+|---|---|---|---|
+| D-1 | 目标分支 | **master 起步**（用户指令，**覆盖**原推荐的 dev 先行） | 分支与工作树见 §8.2；巨文件预算守卫在 dev 才有，master 无此约束（合回 dev 时需复核） |
+| D-2 | `SqlSource.IBATIS` | **新增** | 兑现 T-IbatisPanwei §八 D-3 欠账 |
+| D-3 | 券 0 修法 | **0-3（探针移出关键路径）为主 + 可取消化 + 在证明不误伤前提下降低扫描预算**；**明令禁止**「按名字形态一刀切跳过」（`EntityAliasSweep` 的设计输入本就是表名） | 施工者须先厘清 `PagesSourceLanguage.detect` 第 4 步语义再动手 |
+| D-4 | 券 0 是否拆独立任务 | **拆**（本批 L1 独立车道） | 影响面大于 iBatis 用户，先止血 |
+| D-5 | DTD 内置 | **内置**（jar 内权威副本，Apache-2.0，须登记 `THIRD-PARTY-NOTICES.md`） | 「以 jar 内为准」：网站版 `sql-map-config-2.dtd` 是 `sqlMap*`、jar 内是 `sqlMap+` |
+| D-6 | 版本支持范围 | **只按 2.3.x 建模**；未知标签降级为「原文 + 警告」不抛异常 | |
+| D-7 | `<statement>` 手写 `?` | `param1..N` 兜底 + UI 明示「参数名不可知」 | 与通用兜底通道同口径 |
+| D-8 | iBatis provider 归组 | **`mapperXml` 组** | 不新增 gutter 组 |
+| D-9 | 新件包路径 | **新建子包 `xml/ibatis/`**（不往 `xml/` 扁平塞） | 解析+渲染+模型约 8 件，扁平会显著抬高 `xml/` 密度 |
+| D-10 | ORM 矩阵编号前缀 | **`IB`**（已 grep 查重：现有 BS/DS/DV/EQ/FM/JM/JO/QD/SD/XB，`IB` 未占用） | |
+| D-11 | 是否与 T-PerfSweep30 券01a 合并投放 | **不做**（该优化只在 dev，本次 master 线不跨任务合并）；**登记为关联项** | master 上「控制台准备 + 预热」那条链（§券 0 瓶颈 2/3）仍存在 |
+
+---
+
 ## 八、实施分工与实施记录
 
-### 8.1 建议车道划分（写集互斥，最多 3 路并行）
+### 8.1 车道划分原则
 
-| 车道 | 券 | 写集 | 依赖 |
-|---|---|---|---|
-| L1 | 券 0（慢路径止血） | `psi/jpa/EntityAliasSweep.kt` + `PagesEntityProbeResolver.kt` / `PagesSourceLanguage.kt` + 其测试 | 无（可立即开工） |
-| L2 | 券 A（识别 + 让位 + 接管最小面） | 新识别器 + `xml/XmlInlineSqlDetector.kt` + 新 gutter provider + `plugin.xml` + `GutterGroups.kt` + `PluginSettings.kt` + bundle | 无（可与 L1 并行） |
-| L3 | 券 B + C（parser/model/renderer + golden oracle） | 新 `xml/ibatis/*` + `ui/SqlMapPreviewService` + `model/PreviewResult.kt`（抽接口）+ 测试面依赖 | 券 A 的识别器签名先冻结（防在途互读） |
-| L4 | 券 D/E（注入/着色/折叠/DTD） | `ui/inject/*` + `plugin.xml` DTD 资源 + `THIRD-PARTY-NOTICES.md` | 券 A/B 落位后 |
-| L5 | 券 F/G/H/I（跳转/类型/枚举/文档） | `ui/ref/*` + `log/*` + 文档 | 视拍板结果 |
-
-**派活硬约束（抄自 `docs/开发流程-派活与验收清单.md`）**：独立工作树 + 扁平分支名；只跑本任务最相关定向（`--tests`），**不跑全量、不跑构建校验、不 `clean`**；跑 gradle 前过 `parallel_tasks.py check` → `register` →`done --name`（禁裸 `done`）；每完成一件可提交的立即提交；`git commit -F` 写文件（消息禁反引号）；报告须给改动文件 / 提交哈希 / 定向读数（N/失败/错误/skip）/ 反向验证读数 / 未完成项；**没跑过的读数不许写「全绿」**；不 push、不合流、不建 tag、不动 `update/update.json`；计划回写只写自己工作树里的副本。
+写集按**文件级**互斥（同目录不同文件不算冲突；git 合并只对同文件同区域敏感）。共享文件（`messages/*.properties`、`plugin.xml`）的处理口径：**只追加、不重排**，合并冲突由主控按「保留双方」解。
 
 ### 8.2 实施记录
 
-> 待用户拍板 §七 决策点后填写。开工前请先确认：D-1（分支）、D-3/D-4（券 0 修法与是否拆分）、D-9/D-10（命名与编号）。
+**第一波（2026-11-09，三路并行，基线 master `054af3f8`）**
+
+| 车道 | 分支 / 工作树 | 券 | 写集 | 状态 |
+|---|---|---|---|---|
+| L1 | `t-ibatis-slowfix` / `.worktrees/ibatis-slowfix` | 券 0（慢路径止血） | `psi/jpa/EntityAliasSweep.kt`、`ui/PagesEntityProbeResolver.kt`、`xml/PagesSourceLanguage.kt`、`ui/XmlInlineSqlPreviewService.kt`、`ui/SqlPreviewService.kt`（探针时序）+ 测试 | 实施中 |
+| L2 | `t-ibatis-core` / `.worktrees/ibatis-core` | 券 B（解析/模型/渲染）+ 保真对照骨架 | 新建 `xml/ibatis/**` + 新建 `test/.../xml/ibatis/**` + `build.gradle.kts`（仅加一行测试面依赖） | 实施中 |
+| L3 | `t-ibatis-recognize` / `.worktrees/ibatis-recognize` | 券 A 识别器 + 券 H（`SqlSource.IBATIS`） | 新建 `xml/ibatis/IbatisXmlRecognizer.kt`、`log/LogSqlModels.kt`、`log/MyBatisLogParser.kt`、`log/LogEntryPreviewRecognizer.kt`、`log/SqlEntryPresentation.kt`、两个 bundle + 测试 | 实施中 |
+
+派活硬约束（三路一致，抄自 `docs/开发流程-派活与验收清单.md`）：独立工作树 + 扁平分支名｜只跑本任务最相关定向（`./gradlew test --tests "<FQCN>"`；**`testFast` 自带固定类清单，叠加 `--tests` 必失败**）｜**不跑全量 / 不跑构建校验 / 不 `clean`**｜跑 gradle 前 `parallel_tasks.py check` → `register --name <车道名> --sandbox <工作树绝对路径>` → 跑完 `done --name <车道名>`（**禁裸 `done`**）｜每完成一件可提交的立即提交、`git add` 具体文件（**禁 `git add -A`**）、消息写文件后 `git commit -F`（**消息禁反引号**）｜报告须给改动文件 / 提交哈希 / 定向读数（类数·tests·失败·错误·skip）/ 反向验证读数 / 未完成项；**没跑过的读数不许写「全绿」**｜不 push、不合流、不建 tag、不动 `update/update.json`、不碰他人工作树｜**不改本计划册与 `CHANGELOG.md`**（主控合并后统一回填）。
+
+**第二波（待第一波合并后派）**
+
+| 车道 | 券 | 依赖 | 说明 |
+|---|---|---|---|
+| L4 | 券 C 保真对照集扩充 | L2 | 若 L2 已同批落地保真测试则本券与 L2 合并销案 |
+| L5 | 券 A 接线（识别器落 gutter + 让位 + provider + 设置 + i18n + GutterGroups） | L2/L3 | **让位与接管必须同批**，否则 iBatis 文件图标全消失 |
+| L6 | 券 D（注入/着色/折叠/补全）+ 券 E（DTD 内置与登记） | L5 | 根标签判定 8 处按 §2.3 表逐个放宽，**必须带「iBatis 文件才放宽」的二次判定** |
+
+**第三波（可延后）**：券 F（跳转 + 全局 id 表）、券 G（`parameterClass`/`parameterMap` 类型映射）、券 I（文档与触发面三登记）。
+
+**收口约定**：各车道自提交、不推送、不合流、不建 tag；主控在 master 上按「保留双方」合并冲突，合并后**只跑定向**复跑，全量与门禁交 CI；合并完成清理本批的三个分支与工作树（`git worktree remove` + `git branch -d`；删分支前先验 tip 可达性，见 `pitfall-branch-delete-orphans-unmerged-tip`）。
+
 
