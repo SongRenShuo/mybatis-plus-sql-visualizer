@@ -74,3 +74,12 @@
 - 波次 A4c 完成（24 件 / 24 笔 + 随件补登 bundle 24 键与 STATEMENT_TAGS 可见性）：generator temporal 族、actions pages 上爬、converter temporal 全链、psi T-WriteFamily R4 三重门、PlatformEpDynamism 新件（refusalExplanation(int) 静态签名逐字）、ui 面板族 9 件（券 C 运行期占位行、UI-049 反射提示、T-PreviewConsoleOwnership 复用回收、T-PreviewBottomCollapse）。**生产面（src/main 112 件增量）至此全量收官**。
 - 主控中央编译收口五轮（`354a2426`，114→16→14→10→6→1→0）：嵌套类 import、类可见性、39 参构造 threadName 槽位、sneakyThrow 透传 ×2、终态副本 ×4（intendedDsId + 三处 *DiagKey）、countAccumulator 构造器赋值序、UpdateSectionTest 补 url 形参。终态读数：**classes testClasses BUILD SUCCESSFUL in 10s / COMPILE_EXIT=0**——旧测试面靠委托重载纪律几乎零适配（仅 1 处）。
 - 推送 `354a2426`（A2 24+A3 32+A4b 15+A4a 15+A4c 24+修复 1+docs 6 ≈ 117 笔），CI 待读数。**波次 B（测试 166 件）/波次 C（资源 union/两册三方合并/.port-sync 锚点推进）未做——留 178 轮续跑**；锚点维持 102795a0 不动（B/C 未完不推进）。
+
+## 实施记录（178 轮：CI 红面收敛与资源面收口，2026-11-09）
+
+- **入口读数**：run 42416634577 @ `4e9c78eb` 七腿全红，但已过编译——红面为 23 个测试类（fast 腿各 31 红、分片 2~10 红）。**关键教训**：本地 `classes testClasses` 绿是 UP-TO-DATE 增量态假绿（`compileTestKotlin` 被跳过），CI 从头编译才暴露 20 错；已改为 `compileTestKotlin --rerun-tasks` 验真并记入端口记忆坑 39。
+- **测试编译收口**（`4e9c78eb`）：PrepareSingleFlightGateTest 补 QueuedExecuteIntent 第 9 参 onDialectMismatchHint（19 错全为该构造不匹配级联）、DynamicUnloadWriteSafeTest 的 PlatformApi 第 2 参改 UnloadGate(LEGACY, 哑方法)。
+- **资源面与守卫基线**（`32178193`）：plugin.xml / database-optional.xml / bundle 双册自 master 整取（k2j 零专属键，键集 1374/1374）——GoldenDB 第五对 EP、MapperNavigation 两 EP、描述方言数 15；LocatorSkipPrefix 两处前缀表与 docs 示例模板补 `com.goldendb.`；SettingsRealityGuard 登记 pagesSourceCombo 别名；BannedApi 基线按守卫实测重登（ResultsKt 15→17、SqlLogConsoleBridge 15→16、ConvertToSqlAction 3→2、全量 957→998、未判定 529→559）。七类守卫 81 例 0 败。
+- **波次 B 第一批**（`42401459`）：DialectTest 补 GoldenDB；SqlLogTailFollowTest 13 处构造走 newManager() 注入同步 catchUpScheduler（SqlLogManager 补同包 setCatchUpSchedulerForTest——master 侧是 Kotlin var）；PrepareSingleFlightGate 取消路径判据改 prepareOwner != null；PagesXmlPreviewServiceTest 补 `datasource type="sql"` 与 HQL 三断言；ExecutionDialectGate 两处普查止锚重锚。五类 98 例 0 败。
+- **波次 C·buildSrc**（`c949106b`）：mpv-testing 移植 `-PtestShardExcludeClasses` 单一解析点 + `-PfastBucketSliceCount/-PfastBucketSlice` LPT 切片（并集 require 兜底）；mpv-verification 补单目标 243/253/262（**保持 k2j 目标集，不跟 master 263**）；带入 `dev-support/test-shard-weights.tsv`（822 行画像，此前缺失致切片退化均分）。验证：切片 164/168 类、权重和 118.6s/118.6s。
+- **仍待办**：ParamHistoryCacheTest 19 例既有潜藏红（同步前即有，待定性）；docs 直取与两册三方合并；`.port-sync` 锚点推进（B/C 全完才推进）；lane-3 gate 模式派发验证。
