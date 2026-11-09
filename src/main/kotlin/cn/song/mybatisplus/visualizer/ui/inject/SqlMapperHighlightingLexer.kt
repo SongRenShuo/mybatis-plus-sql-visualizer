@@ -31,6 +31,22 @@ import com.intellij.psi.tree.IElementType
  * 未闭合 `#{`/`${` 照旧扫到缓冲末尾：**不产 error token**（红线：注入着色不做校验器）；
  * 闭合 `}` 的缺失只体现为「后续内容留在子状态里」，不报错。
  *
+ * ## 券 D：iBatis 定界符（T-Ibatis2Support 券 D，**新增第三类**——单趟、无子状态）
+ *
+ * | 形态 | token |
+ * |---|---|
+ * | `#name#` / `#name:TYPE#` / `#name:TYPE:nullValue#`（两段式第二段恒为 jdbcType） | 整段一个 [SqlMapperTT.PARAM_HASH] |
+ * | `$name$` | 整段一个 [SqlMapperTT.PARAM_DOLLAR] |
+ * | `##` / `$$`（iBatis 转义字面量，产出字面 `#`/`$`） | [SqlMapperTT.IBATIS_ESCAPE]（无色＝普通文本） |
+ * | 落单 `#`/`$`（未闭合或形态非法） | 单字符 [SqlMapperTT.OPERATOR]（与放宽前一致） |
+ *
+ * **判定以配对闭合为准**：先在**有界窗口**（[IBATIS_PARAM_MAX_LENGTH]）内找配对的闭合定界符，
+ * 找到且内容形态合法才出参数 token；找不到/非法则退回单字符运算符，**绝不**吞掉后续文本。
+ * 细则与被否掉的「进子状态」形态见 [scanIbatisDelimiter]/[findIbatisParamClose] 的 KDoc。
+ *
+ * 与 MyBatis 分支的关系：`#{`/`${`（2 字符定界符）优先级更高，排在 iBatis 分支**之前**，
+ * `#{…}`/`${…}` 的既有语义逐字节不变。
+ *
  * ## 零分配与 O(n) 取向（T-PerfSweep16 F46 风格延续）
  *
  * 全程只读 [buffer] 索引，不做 `subSequence().toString()`：关键字判定用
@@ -144,6 +160,10 @@ class SqlMapperHighlightingLexer : LexerBase(), RestartableLexer {
                     pendingState = STATE_OGNL_BASE
                 }
             }
+            // T-Ibatis2Support 券 D：iBatis 定界符（`#name#` / `$name$` / `##` / `$$`）。
+            // 必须排在 `#{`/`${` 分支之后——MyBatis 形态优先级更高（`#{` 是 2 字符定界符，
+            // 不被 iBatis 的单字符配对逻辑抢走）。
+            c == '#' || c == '$' -> scanIbatisDelimiter(c)
             c.isDigit() -> scanNumber()
             isWordStart(c) -> scanWord()
             c.isWhitespace() -> scanWhitespace()
@@ -225,6 +245,79 @@ class SqlMapperHighlightingLexer : LexerBase(), RestartableLexer {
         tokenEnd = tokenStart + 1
         tokenType = SqlMapperTT.OPERATOR
     }
+
+    // ------------------------------------------------------------------
+    // iBatis 定界符（T-Ibatis2Support 券 D）
+    // ------------------------------------------------------------------
+
+    /**
+     * iBatis 参数/转义定界符（`#name#` / `#name:TYPE#` / `#name:TYPE:nullValue#` / `$name$` /
+     * 转义 `##` / `$$`）。**只在 SQL 顶层**被调用（`#{`/`${` 那两条分支在前，字符串/注释在更前）。
+     *
+     * ## 为什么「先向前找配对、再决定出不出参数 token」（而不是进子状态）
+     *
+     * 子状态形态（遇 `#` 进子状态、遇闭合 `#` 退出）在**未闭合**时会把缓冲剩余全文都吞进该状态
+     * ——正是券 D 明令禁止的形态（落单 `#` / 半截注释会让后续整段 SQL 无色；平台增量重扫也
+     * 无法自洽）。故本实现**先向前找配对**：
+     *  - 找到且内容形态合法 → **整段（含两侧定界符）出一个 token**（`#…#` → [SqlMapperTT.PARAM_HASH]、
+     *    `$…$` → [SqlMapperTT.PARAM_DOLLAR]），token 边界**就是**配对边界（配对闭合为准）；
+     *  - 找不到 / 形态非法 → 退回单字符 [SqlMapperTT.OPERATOR]（与放宽前「落单 `#` 按运算符」一致），
+     *    且**绝不**跨过该字符继续吞后续文本。
+     *
+     * 「形态合法」（见 [findIbatisParamClose]，全 O(1) 字符判定，长度有上限）：
+     *  - 内容非空、首字符是词起始（字母 / `_`）——属性名或属性路径（`#{` 不走这里）；
+     *  - 内容仅含词字符 / `.` / `[` / `]` / `:`（覆盖 `x.y`、`ids[]`、`list[].name`、`x:VARCHAR`、
+     *    `x:VARCHAR:nullValue`；空白与换行天然不合法 ⇒ 不跨行配对）；
+     *  - 配对上限 [IBATIS_PARAM_MAX_LENGTH] 字符内。
+     *
+     * ## `##` / `$$` 转义字面量
+     *
+     * 相邻同符即 iBatis 的转义（产出字面 `#` / `$`）：出 [SqlMapperTT.IBATIS_ESCAPE]（不映射颜色＝
+     * 普通文本）并**消费两个字符**。这一步同时挡掉「第二个 `#` 被当参数起始」的错配——例如
+     * `##foo#` 必须读作「转义 `#` + `foo#`」，**不得**读作「空参数 + `#foo#` 参数」。
+     * 没有本分支时 `##` 会落到两次单字符 [SqlMapperTT.OPERATOR]，`##foo#` 还会错配出一个参数；
+     * 本分支即券 D 反向验证 ② 的被摘对象（摘掉 → 字面量用例必红）。
+     */
+    private fun scanIbatisDelimiter(c: Char) {
+        // 转义字面量 `##` / `$$`：整体一个无色文本 token（消费两字符，防第二个定界符被当起始）
+        if (tokenStart + 1 < endOffset && buffer[tokenStart + 1] == c) {
+            tokenEnd = tokenStart + 2
+            tokenType = SqlMapperTT.IBATIS_ESCAPE
+            return
+        }
+        val close = findIbatisParamClose(c)
+        if (close < 0) {
+            // 未闭合 / 形态不合法：不认参数，退回单字符运算符（不吞后续文本）
+            tokenEnd = tokenStart + 1
+            tokenType = SqlMapperTT.OPERATOR
+            return
+        }
+        tokenEnd = close + 1
+        tokenType = if (c == '#') SqlMapperTT.PARAM_HASH else SqlMapperTT.PARAM_DOLLAR
+    }
+
+    /**
+     * 找配对的闭合定界符下标（`#` 配 `#`、`$` 配 `$`）；内容空 / 形态不合法 / 超上限 → -1。
+     * 零分配（只做索引推进与字符判定，不建子串）。
+     */
+    private fun findIbatisParamClose(open: Char): Int {
+        val contentStart = tokenStart + 1
+        if (contentStart >= endOffset) return -1
+        if (!isWordStart(buffer[contentStart])) return -1
+        val limit = minOf(endOffset, tokenStart + IBATIS_PARAM_MAX_LENGTH)
+        var i = contentStart
+        while (i < limit) {
+            val ch = buffer[i]
+            if (ch == open) return i
+            if (!isIbatisParamContentChar(ch)) return -1
+            i++
+        }
+        return -1
+    }
+
+    /** iBatis 参数内容允许字符：词字符 / `.`（属性链）/ `[]`（iterate 下标）/ `:`（段分隔，如 jdbcType）。 */
+    private fun isIbatisParamContentChar(c: Char): Boolean =
+        isWordPart(c) || c == '.' || c == '[' || c == ']' || c == ':'
 
     // ------------------------------------------------------------------
     // 共用扫描
@@ -387,5 +480,11 @@ class SqlMapperHighlightingLexer : LexerBase(), RestartableLexer {
         private const val FALSE_WORD = "false"
         private const val LEN_TRUE = 4
         private const val LEN_FALSE = 5
+
+        /**
+         * iBatis 参数 token 的最大长度（含两侧定界符）。超限即判「不是参数占位」——防止在正文里
+         * 找配对 `#` 时跨过大段 SQL 误配（iBatis 属性路径远短于此；也让向前找配对的开销有硬上限）。
+         */
+        private const val IBATIS_PARAM_MAX_LENGTH = 256
     }
 }
