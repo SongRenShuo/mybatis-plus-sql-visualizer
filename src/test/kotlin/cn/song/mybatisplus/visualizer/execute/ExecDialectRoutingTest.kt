@@ -342,7 +342,9 @@ class ExecDialectRoutingTest {
         )
         assertTrue(
             "冷路径 createTempPsiFile 未接方言映射（mapDialectBeforePsi 缺失）",
-            Regex("""createTempPsiFile\(Project project, String sql, @Nullable String renderedDialectName\)[\s\S]{0,3400}mapDialectBeforePsi\(project, vf, LOG, renderedDialectName\)""").containsMatchIn(results),
+            // 178 轮：签名锚到 mapDialectBeforePsi 的实际间隔 4199 字符（原预算 3400 已不足，
+            // CRLF 检出再多约 75 字符）——放宽到 6000，语义不变（仍要求同一函数体内接线）。
+            Regex("""createTempPsiFile\(Project project, String sql, @Nullable String renderedDialectName\)[\s\S]{0,6000}mapDialectBeforePsi\(project, vf, LOG, renderedDialectName\)""").containsMatchIn(results),
         )
         val prewarmBody = results.substringAfter("public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG,")
             .substringBefore("public static JComponent buildConsoleSplitPane(")
