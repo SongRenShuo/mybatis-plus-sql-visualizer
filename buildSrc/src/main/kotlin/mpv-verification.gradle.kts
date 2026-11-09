@@ -57,7 +57,7 @@ intellijPlatform {
         //      pluginLinePattern = ^Plugin .*? against (\S+): 正则抓问题行，**从不读 -ignored-problems
         //      命中的信息**——CLI 已豁免的问题在控制台仍逐行打印，于是被重新计数判失败。
         //      这正是 dev 分支实测「同输入一次过一次挂」的机制（三轮实证）。
-        // 保留除下列四类外的全部等级。T-CiRelease（20261024 CI 实证更新）：除 COMPATIBILITY_PROBLEMS
+        // 保留除下列五类外的全部等级。T-CiRelease（20261024 CI 实证更新）：除 COMPATIBILITY_PROBLEMS
         // （判定缺陷见上②，交 verifyGate）外，MISSING_DEPENDENCIES / DEPRECATED_API_USAGES /
         // EXPERIMENTAL_API_USAGES 一并移出失败集——GitHub Actions 发行流水线首次运行本任务即以此
         // 三类失败（三目标 verdict 均 Compatible）：① 离线模式下两个可选依赖（com.intellij.mcpServer /
@@ -65,11 +65,19 @@ intellijPlatform {
         // 口径）；② 基线 243 兼容策略下 deprecated 40~123 处、experimental 96~98 处为长期存量（与编译
         // 告警同源），非发版阻断项。「其余等级均 0 命中」的 2026-09-15 前提已不成立；权威门禁仍是
         // verifyGate（退出码）+ verifyMarketplace（基线比对），报告仍生成、问题仍可见。
+        // T-CiMatrix（2026-11-04 master 实证；178 轮随选择性移植补齐）：`OVERRIDE_ONLY_API_USAGES`
+        // 一并移出失败集。CI 的 build 步骤是 `:buildPlugin :verifyPlugin`，而本地 releaseGate 只跑
+        // verifyGate（带 -ignored-problems 豁免），于是这个等级只在 CI 暴露——首跑即以此失败
+        // （k2j 侧 gate run 42609836389 同款复现）。当前唯一命中是
+        // `ChooseDataSourceTakeoverGroup.delegateChildren` 调用 `ActionGroup.getChildren(e)` 做委托
+        // （override-only 方法被 invoke），属既有代码形态、不阻断兼容；报告仍逐行列出，人工从
+        // `override-only-usages.txt` 与 verdict 里的 "N override-only API usage violation" 可查。
         failureLevel = FailureLevel.entries - setOf(
             FailureLevel.COMPATIBILITY_PROBLEMS,
             FailureLevel.MISSING_DEPENDENCIES,
             FailureLevel.DEPRECATED_API_USAGES,
             FailureLevel.EXPERIMENTAL_API_USAGES,
+            FailureLevel.OVERRIDE_ONLY_API_USAGES,
         )
     }
 }
@@ -338,6 +346,11 @@ fun registerMarketTarget(name: String, ideName: String, tag: String) {
     tasks.register<JavaExec>(name) {
         group = "verification"
         description = "Marketplace 同口径兼容校验（单目标 $tag，在线 + 无豁免）；verifyMarketplace 三目标并行化的子任务"
+        // T-ReleasePerf11 券01 补丁（20261103 发版实测，178 轮随选择性移植补齐）：聚合任务的
+        // dependsOn(buildPlugin, 三子任务) 只保证「都执行」不保证先后，版本号变更后 build/distributions
+        // 里没有新版本 zip 时，三子任务会在 buildPlugin 出包前撞上 doFirst 的「发行包不存在」硬失败。
+        // mustRunAfter 钉死 buildPlugin → 三子任务；三子任务之间仍并行。
+        mustRunAfter("buildPlugin")
         mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
         jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
         jvmArgs(verifierProxyJvmArgs)
@@ -389,7 +402,13 @@ mpMarketTargets.forEach { (ideName, tag) ->
 val verifyMarketplace = tasks.register("verifyMarketplace") {
     group = "verification"
     description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑。T-ReleasePerf11 起为三目标并行聚合（子任务 verifyMarketplace243/253/262，verdict 判定在此统一执行）"
-    dependsOn("buildPlugin", "verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    // T-ReleasePerf11 券01 补丁（20261103，178 轮随选择性移植补齐）：与 verifyGate 的 verifyOnly
+    // 语义对齐——重验已存在发行包时不再重打包（Jar 带 MPV-Build 时间戳恒重跑，重打包会让
+    // 「已验证的字节」与「最终上传的字节」不是同一份）。
+    dependsOn("verifyMarketplace243", "verifyMarketplace253", "verifyMarketplace262")
+    if (!verifyOnly) {
+        dependsOn("buildPlugin")
+    }
     // baseline verdict 判定需要的路径面（配置期捕获，CC 可序列化）。
     val reportsDirs = mpMarketTargets.map { (_, tag) ->
         layout.buildDirectory.dir("reports/pluginVerifierMarketplace-$tag").get().asFile
