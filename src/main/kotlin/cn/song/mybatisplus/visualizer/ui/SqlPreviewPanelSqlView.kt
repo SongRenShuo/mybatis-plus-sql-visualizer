@@ -266,6 +266,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
                 return
             }
             ibatisRenderWarnings = fresh.warning?.let { listOf(it) } ?: emptyList()
+            // UI-001：分档随本轮结果整体替换（信息级说明走 ℹ 前缀，不冒充失败）
+            ibatisRenderWarningIsNote = fresh.informationalWarning
             // iterate 值播种：渲染器按列表长度产出 `ids[0..n-1]` 参数名——按当前值序回填（与
             // xml 的 syncForEachItemValues 同语义：状态 → 渲染单向流动，不留旧键）
             result.ibatisParamModel?.iterateRows?.forEach { row ->
@@ -691,7 +693,9 @@ internal fun SqlPreviewPanel.clear() {
     // T-Ibatis2Gap 券 A：iBatis 交互态随清空复位（不跨预览残留）
     ibatisIterateValues.clear()
     ibatisRenderWarnings = emptyList()
+    ibatisRenderWarningIsNote = false
     currentWarning = null
+    currentWarningIsNote = false
     errorCopyButton?.isVisible = false
     toggleSelectButton = null
     batchToggleSelectButton = null

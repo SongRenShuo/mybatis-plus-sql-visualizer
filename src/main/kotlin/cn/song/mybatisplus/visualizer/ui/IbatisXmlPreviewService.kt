@@ -35,7 +35,9 @@ import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapSqlRenderer
  *    同样计入——它在 SQL 文本里就是 `${}` 原文拼接段；
  * 3. **渲染告警落到面板可见区**：复用既有 `warning` 载体（面板 `currentWarning` → 降级横幅 +
  *    错误复制按钮），不新造 UI 形态。告警取自渲染器的降级清单（未知标签 / 声明 parameterMap
- *    导致 `#` 未转 `?` / `${...}` 未支持 / `#` 格式错 等）。
+ *    导致 `#` 未转 `?` / `${...}` 未支持 / `#` 格式错 等）。UI-001 起告警分档：parameterMap 的
+ *    「引擎行为」说明与 iterate 未供值的「待填值」提示标 `informationalWarning`，面板用 `ℹ`
+ *    信息级前缀呈现，不再统一冒充「⚠ 预览未完整还原」。
  *
  * ## 参数名口径（拍板 D-7）
  *
@@ -77,7 +79,12 @@ object IbatisXmlPreviewService {
         // T-Ibatis2Gap 券 A：把「无参基线」从唯一输出变成初始态——行清单 + 重渲染回调随结果进面板。
         // 回调闭包复用同一 statement（纯数据，无 PSI/引擎引用），面板每次交互重新装配 Map 并渲染。
         val paramModel = IbatisParamModelBuilder.build(statement)
-        return toPreviewResult(rendered, statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty()).copy(
+        return toPreviewResult(
+            rendered,
+            statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty(),
+            // 无参基线：iterate 行全部未供值（待填值态）
+            iteratePending = paramModel.iterateRows.isNotEmpty(),
+        ).copy(
             ibatisParamModel = paramModel,
             rerender = { input -> rerender(statement, paramModel, input) },
         )
@@ -91,7 +98,11 @@ object IbatisXmlPreviewService {
         } catch (e: RuntimeException) {
             return emptyResult(e.message ?: MpSqlVisualizerBundle.message("ibatis.preview.renderFailed.warning"))
         }
-        return toPreviewResult(rendered, statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty())
+        return toPreviewResult(
+            rendered,
+            statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty(),
+            iteratePending = paramModel.iterateRows.any { input.collections[it.property].orEmpty().isEmpty() },
+        )
     }
 
     // ------------------------------------------------------------------
@@ -117,7 +128,11 @@ object IbatisXmlPreviewService {
     // 产物转换（IbatisRenderResult → PreviewResult）
     // ------------------------------------------------------------------
 
-    private fun toPreviewResult(rendered: IbatisRenderResult, statementHasRawSubstitutionSites: Boolean = false): PreviewResult {
+    private fun toPreviewResult(
+        rendered: IbatisRenderResult,
+        statementHasRawSubstitutionSites: Boolean = false,
+        iteratePending: Boolean = false,
+    ): PreviewResult {
         val sql = rendered.sql
         val placeholders = placeholderPositions(sql).size
         val names = rendered.paramNames
@@ -127,23 +142,31 @@ object IbatisXmlPreviewService {
             else -> (1..placeholders).map { "param$it" }
         }
 
+        // UI-001：告警分档——「待填值」降级与「引擎行为说明」是信息级说明，不得包装成渲染失败。
+        // 判据按来源自证，不猜文案全量：解析器对 parameterMap 自标「（引擎行为）」；iterate 未供值
+        // 的降级 = 行清单里该行就在、填值即补齐（券 D 落地结构化 degraded/unrenderedNodes 字段后
+        // 可换用结构化判据，本判据与其不冲突）。
+        var allInformational = rendered.warnings.all { isInformationalWarning(it, iteratePending) }
+
         val warnings = ArrayList(rendered.warnings)
         if (placeholders > 0 && names.size != placeholders) {
-            warnings.add(
-                if (names.isEmpty()) {
-                    // 手写 `?` 的 `<statement>` / `#` 未转 `?` 的配置错配：参数名不可知
-                    MpSqlVisualizerBundle.message("ibatis.preview.paramNamesUnavailable.warning")
-                } else {
+            if (names.isEmpty()) {
+                // 手写 `?` 的 `<statement>` / `#` 未转 `?` 的配置错配：参数名不可知——引擎行为说明（信息级）
+                warnings.add(MpSqlVisualizerBundle.message("ibatis.preview.paramNamesUnavailable.warning"))
+            } else {
+                warnings.add(
                     MpSqlVisualizerBundle.message(
                         "ibatis.preview.paramCountMismatch.warning",
                         names.size,
                         placeholders,
-                    )
-                },
-            )
+                    ),
+                )
+                // 数量不符是真错配（paramN 兜底），保持失败档
+                allInformational = false
+            }
         }
         if (placeholders == 0 && names.isNotEmpty()) {
-            // <parameterMap> 声明了参数、体内却是手写 ? 或 # 未转 ? ——参数行留空但要明说原因
+            // <parameterMap> 声明了参数、体内却是手写 ? 或 # 未转 ? ——参数行留空但要明说原因（信息级）
             warnings.add(MpSqlVisualizerBundle.message("ibatis.preview.paramNamesUnavailable.warning"))
         }
 
@@ -164,7 +187,15 @@ object IbatisXmlPreviewService {
             // ② 未替换的 `${prop}`（引擎按全局属性替换、本链保留原文）在 SQL 文本里就是 `${}` 原文段。
             hasDollarRawSegments =
                 rendered.dollarRawCount > 0 || statementHasRawSubstitutionSites || sql.contains("\${"),
+            informationalWarning = warnings.isNotEmpty() && allInformational,
         )
+    }
+
+    /** UI-001：信息性告警判据（按产出点自带标记，见 [toPreviewResult] 内注释）。 */
+    private fun isInformationalWarning(warning: String, iteratePending: Boolean): Boolean = when {
+        warning.contains("（引擎行为）") -> true
+        iteratePending && warning.contains(DEGRADE_MARK) && warning.contains("iterate") -> true
+        else -> false
     }
 
     /** 告警清单压成一行（面板 meta 单行渲染；超长截断，完整信息在 SQL 注释与日志里）。 */
@@ -186,4 +217,7 @@ object IbatisXmlPreviewService {
     )
 
     private const val MAX_WARNING_CHARS = 300
+
+    /** 渲染器降级告警的固定措辞（渲染器 catch 点 `渲染降级（按原文保留 # 直替…）`）。 */
+    private const val DEGRADE_MARK = "渲染降级"
 }

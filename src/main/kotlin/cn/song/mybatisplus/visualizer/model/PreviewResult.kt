@@ -86,6 +86,14 @@ data class PreviewResult(
      */
     val hasDollarRawSegments: Boolean = false,
     /**
+     * UI-001：[warning] 是否为**信息性说明**（非渲染失败）。
+     *
+     * true 时面板横幅/元信息行用 `ℹ` 信息级前缀（`panel.banner.renderNote`），不再冒充
+     * 「⚠ 预览未完整还原」。判据由产出链自证（iBatis 链：parameterMap 的「（引擎行为）」说明、
+     * iterate 未供值的「待填值」降级提示）；其余链路默认 false，横幅语义零变化。
+     */
+    val informationalWarning: Boolean = false,
+    /**
      * R12 T-PaginationSim：分页 COUNT 包裹 SQL（D1=A 预览附第二条语句，面板在主 SQL 后并列渲染；
      * D2=A 基础形态 `SELECT COUNT(*) FROM (原SQL) TOTAL`，MP 3.5.17 反编译逐字节形态）。
      * null = 无分页 COUNT（未分页 / count·exists 消费 / searchCount=false / 开关关闭）。
