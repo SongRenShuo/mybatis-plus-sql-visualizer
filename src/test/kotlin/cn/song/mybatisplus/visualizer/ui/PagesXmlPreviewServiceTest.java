@@ -20,7 +20,7 @@ public class PagesXmlPreviewServiceTest {
     <pages>
         <maintainPage id="maintainLangLibPage" title="maintainLangLibPage"
                       autoQuery="true" entityClass="com.vtradex.forest.model.lang.TfLangLib">
-            <datasource><![CDATA[
+            <datasource type="sql"><![CDATA[
             SELECT
                 t.id,
                 a.name,
@@ -113,12 +113,13 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 无maintainPage_空结果加warning() throws Exception {
+    public void 无页面语句_空结果加warning() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview("<pages></pages>", null);
         assertEquals("", result.getSql());
         assertNotNull(result.getWarning());
-        assertTrue(result.getWarning() != null && result.getWarning().contains("maintainPage"));
+        // T-PagesHql（177 轮随生产面同步）：页面标签名不固定，提示按「带 datasource 的页面语句」表述
+        assertTrue(result.getWarning() != null && result.getWarning().contains("页面语句"));
     }
 
     @Test
@@ -185,7 +186,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void HQL内容_直接展示无参数() throws Exception {
+    public void HQL内容_无工程时识别为HQL并回退原文() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="hqlPage" title="HQL" autoQuery="true"
@@ -202,9 +203,13 @@ public class PagesXmlPreviewServiceTest {
                 PagesXmlPreviewService.INSTANCE.preview(xml, "hqlPage");
         assertTrue(result.getSql().contains("User"));
         assertTrue(result.getSql().contains("order by"));
-        // HQL 无占位符 → 参数列表为空
+        // T-PagesHql（177 轮随生产面同步）：entityClass 简单名 User == 根标识符 User → 识别为 HQL；
+        // 无工程索引时不能转换，回退原文并给出原因（不再把 HQL 当原生 SQL 静默直显）
         assertEquals(List.of(), result.getUnresolvedParams());
         assertNull(result.getParamTable());
+        assertEquals(cn.song.mybatisplus.visualizer.model.SourceLanguage.HQL, result.getSourceLanguage());
+        assertEquals(result.getSql(), result.getOriginalSql());
+        assertNotNull(result.getWarning());
     }
 
     @Test

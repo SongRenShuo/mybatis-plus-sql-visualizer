@@ -287,8 +287,10 @@ class ExecutionDialectGateTest {
         // k2j 互操作：Kotlin 命名实参 `onSubmission = onSubmission` 在 Java 侧为位置实参——
         // 改钉 afterSubmitted 调用携带 onSubmission 形参（同一 threading 事实）。
         assertTrue(console.contains("selectPrepareSubmission(queuedIntent, onSubmission)"))
+        // 177 轮 A2：afterSubmitted 尾部新增 onInfo 形参（master 的 §4.5 冲刷复查闸门穿层），
+        // 原止锚 `endsWith("onSubmission);")` 失效——改钉「调用携带 onSubmission 实参」这同一事实。
         assertEquals("native 与 fallback 均从既有 afterSubmitted 转发回执", 2,
-            console.lineSequence().count { it.contains("afterSubmitted(project") && it.trimEnd().endsWith("onSubmission);") })
+            console.lineSequence().count { it.contains("afterSubmitted(project") && it.contains("onSubmission,") })
         // k2j 互操作：方法名 executeSql→executeStatement、`onSubmission = ::showSubmission`→`this::showSubmission`。
         val entry = sourceSlice(runner, "private void executeStatement(String sql)", "private void showSubmission(")
         assertFalse("发起执行不能预报成功", entry.contains("logToSql.execute.submitted"))
@@ -364,7 +366,9 @@ class ExecutionDialectGateTest {
             "public static void executeSql(@NotNull SqlPreviewPanel p) {")
         // k2j 互操作：master 的 `onSubmission = receipt`×3 在 Java 侧为位置实参 receipt——
         // 改数 receipt 作为实参传入执行调用的次数（两全链 + 一 prepared，同一事实）。
-        assertEquals("两个全链落点和一个prepared落点必须均接回执", 3, adhoc.countOccurrences("receipt, false)") + adhoc.countOccurrences("null, receipt)"))
+        // 177 轮 A4c：executeAdhocSql 的调用形态随生产面同步变化（两处 `… null, receipt, false,` +
+        // 一处 `… null, receipt);`），原两个止锚串都不再命中——统一按「以 null, receipt 传参」计数。
+        assertEquals("两个全链落点和一个prepared落点必须均接回执", 3, adhoc.countOccurrences("null, receipt"))
         val executor = File(root, "src/main/java/cn/song/mybatisplus/visualizer/execute/SqlExecutor.java").readText()
         // k2j 互操作：master 的切片止锚（/** 控制台是否已就绪）在 Java 侧位于最后一个
         // executePrepared 重载之后——prepareConsole 在文件更早处，不能当止锚。

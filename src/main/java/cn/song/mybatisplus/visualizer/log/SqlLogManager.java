@@ -656,6 +656,16 @@ public final class SqlLogManager implements Disposable {
             return kotlin.Unit.INSTANCE;
         };
 
+    /**
+     * 测试缝访问器（177 轮随生产面同步补）：master 侧该字段是 Kotlin {@code var}（Kotlin 测试可直赋），
+     * Java 承载形态为私有 volatile 字段——补同包可见 setter 供 Kotlin 测试注入同步调度器
+     * （{@code manager.catchUpScheduler = { _, action -> action() }} 在 Java 端口需走此入口）。
+     */
+    void setCatchUpSchedulerForTest(
+            kotlin.jvm.functions.Function2<Long, kotlin.jvm.functions.Function0<kotlin.Unit>, kotlin.Unit> scheduler) {
+        this.catchUpScheduler = scheduler;
+    }
+
     private void notifyUi() {
         if (uiListeners.isEmpty()) return;
         if (uiFlushPending) return; // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖

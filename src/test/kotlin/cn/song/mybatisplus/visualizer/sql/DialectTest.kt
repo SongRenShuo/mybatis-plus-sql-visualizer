@@ -89,7 +89,7 @@ class DialectTest {
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
                 "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss", "GaussDB",
-                "HighGo", "Vastbase",
+                "HighGo", "Vastbase", "GoldenDB",
             ),
             DialectRegistry.INSTANCE.dialects.map { it.name },
         )
