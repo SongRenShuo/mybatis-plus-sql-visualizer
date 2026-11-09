@@ -2,6 +2,13 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+- **新增 10 个国产/信创数据库方言（第 16~25 方言，官方文档级 + 族推定，未经真机引擎验证；T-DomesticDialects，8735a6a69 / 5ab49ed6b / 692bebc74）**：TiDB、PolarDB-X、PolarDB（Oracle 兼容版）、GBase 8a、GBase 8c、神通 Oscar、优炫 UXDB、AntDB、虚谷 XuGu、崖山 YashanDB——设置页可选、按各自兼容族渲染（MySQL/PG/Oracle 形态分页与引用、UPSERT 按 openGauss 真机实证形态等，逐项证据档见方言 KDoc）。连接面全链接通：`jdbc:polardb(b2|x):` / `jdbc:gbase(8c):` / `jdbc:oscar:` / `jdbc:uxdb:` / `jdbc:antdb:` / `jdbc:xugu:` / `jdbc:yasdb:` URL→方言、列表角标显示、MCP 识别（含「神通/优炫/虚谷/崖山」中文别名）、执行目标路由、IDEA SQL Dialects 语言注册（Generic 样板成对注册）；TiDB/PolarDB-X 走 `jdbc:mysql:` 不劫持（GoldenDB 先例）。能力矩阵如实显示：EXPLAIN 接入 8 家（TiDB/PolarDB-X 文档级 TABLE 档，其余保守 TEXT 档）、神通/崖山无输出形态证据不接入（P-9）；保留字按族底表复用（「宁可多包」，待真机校验）
+- **增强捕获驱动面扩容（T-DomesticDialects，5ab49ed6b）**：有专用驱动包名的 5 家（GBase `com.gbase.*`、PolarDB `com.aliyun.polardb.*`、神通 `com.oscar.*`、虚谷 `com.xuguedata.*`、崖山 `com.yashandb.*`）登记进框架帧跳过前缀（agent/IDE/注入模板/文档示例四副本同步），来源定位不再指进驱动内部
+- **国产数据库方言支持全景调研（T-DomesticDialects，f3ae7f5fc）**：`docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md`（四大兼容阵营 + 逐库驱动/EXPLAIN/License 取证 + D1~D4 定案）与 `docs/开发计划/20261109-2345-国产信创数据库方言扩展-开发计划.md`（11 触点标准接入清单 + 券分解 + 验收判据）
+
 ## [2026.11.9-beta.1] - 2026-11-09
 
 > 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量：**iBatis 2.x 静态渲染与编辑器能力全面支持**（券 0/A/B/D/E/F/H）、**中兴 GoldenDB 第 15 方言**（券 A/B）、**SQL 列表追赶延迟与风暴期刷新成本优化**（券 A/B/B2/D/E/F/G/H/I），以及两条真机缺陷修复（PostgreSQL 单语句预览只发出 `TIMESTAMP` 一个词、Oracle 连接继承链被误报「未登记 JDBC 实现」）。
