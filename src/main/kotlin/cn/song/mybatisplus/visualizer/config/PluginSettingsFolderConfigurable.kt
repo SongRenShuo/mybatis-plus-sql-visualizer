@@ -627,6 +627,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
             fields.add(SearchableField(b.message("settings.xmlInlineSql"), b.message("settings.xmlInlineSql.tip"), "settings.section.ui", u))
+            // T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览开关（界面节）
+            fields.add(SearchableField(b.message("settings.ibatisXml"), b.message("settings.ibatisXml.tip"), "settings.section.ui", u))
             // T-PagesHql：maintainPage `<datasource>` 源语言档（界面节）
             fields.add(SearchableField(b.message("settings.pagesSource"), b.message("settings.pagesSource.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))

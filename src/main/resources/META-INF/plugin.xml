@@ -263,6 +263,11 @@
         <!-- O-72 T-XmlInlineSql 通用内嵌 SQL 预览：叶子标签文本首词命中 SQL 关键字即认领（内容判定，不限根元素/标签名；mapper/pages/hbm 之后兜底） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider"/>
+        <!-- T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览（O(1) 标签名 + 父标签判定，含 <dynamic> 子标签的语句同样出图标；
+             通用兜底通道由 XmlInlineSqlDetector.isClaimedByKnownStructure 让位，两者同批落地防双图标）。
+             注册的 codeInsight.lineMarkerProvider 是平台 dynamic 点位，热更新不受影响（守卫 PluginXmlExtensionPointResolutionTest）。 -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
