@@ -1,34 +1,13 @@
-<h2>v2026.11.10-beta.3</h2>
+<h2>v2026.11.10</h2>
 <ul>
-    <li>iBatis 的 sqlMap 语句 id 上 Ctrl+B 与 Ctrl+Click 现在能跳回 DAO 调用点，双向都通了</li>
-    <li>iBatis 的 DAO 调用行与方法定义行都不再多出一枚点开没有 SQL 的预览图标</li>
-    <li>带 jdbcType 的占位符按类型回填，VARCHAR 加引号，数值不加，时间走标准字面量</li>
-    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
-</ul>
-<h2>v2026.11.10-beta.2</h2>
-<ul>
-    <li>iBatis 的 insert 预览会把 selectKey 子语句一并展示，pre 与 post 的时序在块注释里标明</li>
-    <li>预览里的 #x# 与 #{} / ${} 占位符在格式化、关键字换行、竖向排列下不再被拆散</li>
-    <li>勾选条件并填值后若重渲染失败，面板直接显示失败原因，不再静默停在旧 SQL</li>
-    <li>iBatis 的信息性说明与真正的失败分档显示，不再混在同一行</li>
-</ul>
-<h2>v2026.11.10-beta.1</h2>
-<ul>
-    <li>iBatis 的 sqlMap 语句行与 Java DAO 调用行支持双向跳转箭头，装了 MyBatisCodeHelperPro 也不受影响</li>
-    <li>iBatis 预览参数可填值——动态条件按行勾选、iterate 可填值列表，SQL 随填值变化</li>
-    <li>iBatis parameterMap 语句显示真实参数名，不再是 param1..N</li>
-    <li>iBatis 预览降级改为明确标注未渲染段落，信息性说明与失败分档显示</li>
-</ul>
-<h2>v2026.11.9-beta.1</h2>
-<ul>
-    <li>iBatis 2.x 的 sqlMap 支持预览、着色、折叠与跳转，含 dynamic 标签的语句也有图标</li>
-    <li>iBatis 的 DTD 随插件内置，编辑器不再报「无法解析 DTD」</li>
+    <li>iBatis 2.x 全面支持，sqlMap 的预览、着色、折叠、补全与双向跳转都到位，DTD 随插件内置、离线可用</li>
+    <li>iBatis 预览参数可填值，动态条件按行勾选、iterate 可填值列表，SQL 随填值变化</li>
+    <li>iBatis 语句 id 与 DAO 调用点之间的 Ctrl+B 与 Ctrl+Click 双向都通，装了别的跳转插件也不受影响</li>
     <li>新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种</li>
-    <li>高并发抓取时 SQL 列表刷新不再卡顿，状态栏显示还剩多少条没上屏</li>
-    <li>控制台清屏后不再静默丢新行，几秒内自动恢复</li>
-    <li>捕获高峰期被挤出的事件会汇总上报，不再无声消失</li>
-    <li>PostgreSQL 执行预览 SQL 不再只发出 TIMESTAMP 一个词</li>
-    <li>Hikari、Oracle 连接类不再被当成「未登记 JDBC 实现」反复提示</li>
+    <li>SQL 列表追赶与风暴期刷新优化，高并发抓取不再卡顿，控制台清屏后自动恢复</li>
+    <li>日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843</li>
+    <li>2026.3 上切换数据源不再只剩当前一个源，也不会静默跑到旧库</li>
+    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.11.8</h2>
 <ul>
