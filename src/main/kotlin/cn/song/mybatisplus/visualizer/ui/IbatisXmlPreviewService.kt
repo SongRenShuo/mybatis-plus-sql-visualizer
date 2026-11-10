@@ -196,11 +196,24 @@ object IbatisXmlPreviewService {
     }
 
     /**
-     * 多语句组装：pre 的 selectKey 块在前、主语句居中、post 在后；块间空行 + 注释分隔。
+     * 多语句组装：**主语句恒在最前**，selectKey 块紧随其后，块间空行 + 注释分隔。
      *
-     * 形态说明（计划建议形态）：本仓 MyBatis 链的多语句展示走独立字段（`countSql`/`fillClauses`
-     * 由面板并列渲染），**没有文本级多语句先例可抄**——iBatis 链不动面板，故用注释标注 +
-     * 分号的纯文本形态，并在报告登记这一选型。
+     * ## 为什么主语句必须在最前（安全面，不许按引擎时序排）
+     *
+     * 预览产出的 `sql` 会流进执行链，而执行链**只认首条语句**：
+     * - `execute/SqlTypeClassifier.getFirstKeyword` = `splitStatements(sql).firstOrNull()`，
+     *   类型判定（QUERY/DML/DDL）据此决定是否放行只读路径；
+     * - `execute/ExecutionScriptScope.shouldExecWholeScript` 在语句数 > 1 时返回 false，
+     *   「执行 SQL」退化为「当前游标所在语句」。
+     *
+     * 若按引擎时序把 `type=pre` 的 selectKey 拼在最前，`insertUser` 预览的首条语句就是
+     * `SELECT SEQ_USER_ID.NEXTVAL FROM DUAL` ⇒ 类型判成 QUERY（只读）⇒ **写操作被写安全闸
+     * 当只读放过**，且用户点「执行 SQL」先跑的是序列查询而不是 INSERT。故物理顺序固定为
+     * 主语句 → selectKey 块，真实时序只由块注释标明（`type=pre` + 「在主语句之前执行」）。
+     *
+     * ## 形态说明
+     * 本仓 MyBatis 链的多语句展示走独立字段（`countSql`/`fillClauses` 由面板并列渲染），
+     * **没有文本级多语句先例可抄**——iBatis 链不动面板，故用注释标注 + 分号的纯文本形态。
      */
     private fun assembleMultiStatementSql(
         main: IbatisRenderResult,
@@ -210,23 +223,39 @@ object IbatisXmlPreviewService {
         val blocks = ArrayList<String>()
         fun appendBlock(comment: String, result: IbatisRenderResult) {
             val sql = result.sql.trim()
-            blocks.add(if (sql.isEmpty()) comment else comment + "\n" + sql + ";")
+            blocks.add(
+                when {
+                    sql.isEmpty() -> comment
+                    comment.isEmpty() -> sql + ";"
+                    else -> comment + "\n" + sql + ";"
+                },
+            )
         }
-        selectKeyRenders.filter { !it.first.runAfterSql }.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
-        appendBlock("-- [${main.usedStatementIds.firstOrNull().orEmpty()}]", main)
-        selectKeyRenders.filter { it.first.runAfterSql }.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
+        // 主语句恒在最前，且**不加块注释**——首字符必须是语句关键字本身：执行链按首条语句判类型
+        // （见 KDoc），且用户复制出去的第一段就该是可直接执行的主语句，不能被 `--` 注释行打头。
+        appendBlock("", main)
+        selectKeyRenders.forEach { (sk, r) -> appendBlock(selectKeyComment(sk), r) }
         return blocks.joinToString(separator = "\n\n")
     }
 
-    /** selectKey 块注释：`type` 按 [IbatisSelectKey.runAfterSql]（引擎的显式 type + 位置推断合并口径）。 */
+    /**
+     * selectKey 块注释：`type` 按 [IbatisSelectKey.runAfterSql]（引擎的显式 type + 位置推断合并口径），
+     * 并**用文字标明真实执行时机**——物理上它排在主语句之后（执行链安全面要求），时序不能靠位置读。
+     */
     private fun selectKeyComment(selectKey: IbatisSelectKey): String {
         val type = if (selectKey.runAfterSql) "post" else "pre"
+        val timing = MpSqlVisualizerBundle.message(
+            if (selectKey.runAfterSql) "ibatis.preview.selectKey.timing.post" else "ibatis.preview.selectKey.timing.pre",
+        )
         val keyProperty = selectKey.attributes["keyProperty"]
-        return if (keyProperty.isNullOrBlank()) "-- [selectKey type=$type]"
-        else "-- [selectKey type=$type → $keyProperty]"
+        return if (keyProperty.isNullOrBlank()) {
+            MpSqlVisualizerBundle.message("ibatis.preview.selectKey.blockCommentNoKey", type, timing)
+        } else {
+            MpSqlVisualizerBundle.message("ibatis.preview.selectKey.blockComment", type, keyProperty, timing)
+        }
     }
 
-    /** 多语句的紧凑形态（与 [assembleMultiStatementSql] 同序，分号收尾）。 */
+    /** 多语句的紧凑形态（与 [assembleMultiStatementSql] 同序：主语句在前，分号收尾）。 */
     private fun assembleMultiStatementCompact(
         main: IbatisRenderResult,
         selectKeyRenders: List<Pair<IbatisSelectKey, IbatisRenderResult>>,
@@ -236,9 +265,8 @@ object IbatisXmlPreviewService {
             val compact = result.compactSql.trim()
             if (compact.isNotEmpty()) parts.add(compact + ";")
         }
-        selectKeyRenders.filter { !it.first.runAfterSql }.forEach { appendPart(it.second) }
         appendPart(main)
-        selectKeyRenders.filter { it.first.runAfterSql }.forEach { appendPart(it.second) }
+        selectKeyRenders.forEach { appendPart(it.second) }
         return parts.joinToString(separator = " ")
     }
 
@@ -276,8 +304,9 @@ object IbatisXmlPreviewService {
         val sql = assembledSql ?: rendered.sql
         val compactSql = if (assembledSql != null) assembleMultiStatementCompact(rendered, selectKeyRenders) else rendered.compactSql
         val placeholders = placeholderPositions(sql).size
-        val (preKeys, postKeys) = selectKeyRenders.partition { !it.first.runAfterSql }
-        val names = preKeys.flatMap { it.second.paramNames } + rendered.paramNames + postKeys.flatMap { it.second.paramNames }
+        // 参数名序 = SQL 文本里 `?` 的出现序（主语句块在前，selectKey 块按声明序在其后）——
+        // 与拼装顺序严格同源，否则位点错位会让参数名贴到别的占位符上。
+        val names = rendered.paramNames + selectKeyRenders.flatMap { it.second.paramNames }
         val unresolved = when {
             placeholders == 0 -> emptyList()
             names.size == placeholders -> names

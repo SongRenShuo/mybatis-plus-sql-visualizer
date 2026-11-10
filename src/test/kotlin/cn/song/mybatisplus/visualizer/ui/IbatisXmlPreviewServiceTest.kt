@@ -469,15 +469,52 @@ class IbatisXmlPreviewServiceTest {
             result.sql.contains("SELECT SEQ_USER_ID.NEXTVAL FROM DUAL;"),
         )
         assertTrue(
-            "pre 块须在主语句之前：${result.sql}",
-            result.sql.indexOf("SEQ_USER_ID") < result.sql.indexOf("INSERT INTO T_USER"),
+            "pre 块物理上排在主语句之后（执行链安全面要求），时序由注释说明：${result.sql}",
+            result.sql.indexOf("SEQ_USER_ID") > result.sql.indexOf("INSERT INTO T_USER"),
         )
-        assertTrue("块注释标注 type 与 keyProperty：${result.sql}", result.sql.contains("-- [selectKey type=pre → id]"))
-        assertTrue("主语句块标注语句 id：${result.sql}", result.sql.contains("-- [insertUser]"))
+        assertTrue(
+            "块注释标注 type / keyProperty / 真实执行时机：${result.sql}",
+            result.sql.contains("-- [selectKey type=pre → id") &&
+                result.sql.contains(previewTimingBeforeMain()),
+        )
     }
 
+    /**
+     * 钉死用例（安全面）：预览 `sql` 的首条语句必须是主语句。
+     *
+     * 执行链 `SqlTypeClassifier.getFirstKeyword` 取 `splitStatements(sql)` 的第一条，
+     * 主语句必须在最前，否则写操作被误判只读——`insertUser` 的 pre selectKey 排在最前时，
+     * 首条是 `SELECT SEQ_USER_ID.NEXTVAL FROM DUAL`，类型判 QUERY（只读），写安全闸不介入，
+     * 且「执行 SQL」只跑 selectKey 那条。反向验证：把组装顺序改回「pre 在前」本用例必红。
+     */
     @Test
-    fun `修复一_selectKey_post在主语句之后展示`() {
+    fun `修复一_主语句恒在最前_首条语句是INSERT不是SELECT`() {
+        val result = preview(insertSelectKeyPre, "insertUser", "insert")
+        val head = result.sql.trimStart()
+        assertTrue(
+            "执行链取首条语句判类型：首条必须是 INSERT（写操作不得被判只读），实际开头：${head.take(80)}",
+            head.startsWith("INSERT"),
+        )
+        assertFalse("首条语句不得是 selectKey 的 SELECT：${head.take(80)}", head.startsWith("SELECT"))
+        assertTrue(
+            "首字符必须是语句关键字（主语句块不得被 `--` 注释行打头）：${head.take(60)}",
+            !head.startsWith("--"),
+        )
+    }
+
+    /** 主语句之前的执行时机文案（中英双份，走 bundle 断言，不硬编码单 locale）。 */
+    private fun previewTimingBeforeMain(): String =
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+            "ibatis.preview.selectKey.timing.pre",
+        )
+
+    private fun previewTimingAfterMain(): String =
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+            "ibatis.preview.selectKey.timing.post",
+        )
+
+    @Test
+    fun `修复一_selectKey_post块在主语句之后展示`() {
         val xml = """
             <sqlMap>
                 <insert id="insertPost" parameterClass="User">
@@ -493,7 +530,10 @@ class IbatisXmlPreviewServiceTest {
             "post 块须在主语句之后：${result.sql}",
             result.sql.indexOf("SEQ_USER_ID") > result.sql.indexOf("INSERT INTO T_USER"),
         )
-        assertTrue(result.sql.contains("-- [selectKey type=post → id]"))
+        assertTrue(
+            "块注释标注 type=post 与执行时机：${result.sql}",
+            result.sql.contains("-- [selectKey type=post → id") && result.sql.contains(previewTimingAfterMain()),
+        )
     }
 
     @Test
@@ -508,8 +548,8 @@ class IbatisXmlPreviewServiceTest {
         """.trimIndent()
         val result = preview(xml, "inferPre", "insert")
         assertTrue(
-            "selectKey 在正文前 ⇒ 引擎按位置推断为 pre：${result.sql}",
-            result.sql.indexOf("SEQ_USER_ID") < result.sql.indexOf("INSERT INTO T_USER"),
+            "selectKey 在正文前 ⇒ 引擎按位置推断为 pre（注释标「在主语句之前执行」）：${result.sql}",
+            result.sql.contains("-- [selectKey type=pre") && result.sql.contains(previewTimingBeforeMain()),
         )
     }
 
@@ -526,7 +566,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(xml, "inferPost", "insert")
         assertTrue(
             "selectKey 在正文后 ⇒ 引擎按位置推断为 post：${result.sql}",
-            result.sql.indexOf("SEQ_USER_ID") > result.sql.indexOf("INSERT INTO T_USER"),
+            result.sql.contains("-- [selectKey type=post") && result.sql.contains(previewTimingAfterMain()),
         )
     }
 
@@ -546,8 +586,8 @@ class IbatisXmlPreviewServiceTest {
             result.sql.contains("SELECT ? FROM DUAL;"),
         )
         assertEquals(
-            "参数名序按 pre 前 / 主语句 / post 后对齐 `?` 位点（不得回落 paramN）",
-            listOf("seqName", "id"),
+            "参数名序按 SQL 文本 `?` 出现序（主语句块在前，selectKey 块在后），不得回落 paramN",
+            listOf("id", "seqName"),
             result.unresolvedParams,
         )
         assertNull("位点与参数名相符，不应出现数量不符告警", result.warning)
@@ -577,7 +617,7 @@ class IbatisXmlPreviewServiceTest {
             cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(params = mapOf("id" to "1", "username" to "a")),
         )
         assertTrue("重渲染同样带 selectKey 块：${fresh.sql}", fresh.sql.contains("SEQ_USER_ID"))
-        assertTrue(fresh.sql.contains("-- [selectKey type=pre → id]"))
+        assertTrue(fresh.sql.contains("-- [selectKey type=pre → id"))
     }
 
     // ------------------------------------------------------------------
