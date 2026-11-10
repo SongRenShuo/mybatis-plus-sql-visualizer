@@ -1,7 +1,7 @@
 # T-Ibatis2Gap：iBatis 预览参数不可交互与无跳转图标（2026-11-09 真机反馈）
 
 - 立项：2026-11-09 22:52
-- 状态：**分析完成，待拍板**（未动 `src/main`）
+- 状态：**实施完成并已发布（2026-11-10，master；券 A/B/C/D 全落地 + 沙盒 GUI 验收通过 + 随 `v2026.11.10-beta.1` 内测发布）**——发布 run `42693049970`（mode=release）17/17 全绿，GitHub Release 与 Gitee 发行版 1292357 落位，实施记录见 §八
 - 来源：用户 2026-11-09 在日常 IDEA 2026.3 上测 `mybatis-plus-sql-visualizer-demo/ibatis2-demo/src/main/resources/sqlmap/User.xml`，反馈「还是没有完整支持：一些参数没有正常识别到，左侧也没有跳转图标」
 - 前序：`20261109-1130-T-Ibatis2Support-…-开发计划.md`（券 0/A/B/D/E/F/H 已合入 master 并过 CI）
 
@@ -193,14 +193,46 @@ val body = runCatching { renderBody(statement, params, mapped, warn) }
 
 ---
 
-## 八、建议分工（待拍板后派）
+## 八、实施记录（2026-11-10，三车道并行 + 沙盒验收 + 随内测版发布）
 
-| 车道 | 券 | 写集（互斥） |
+用户拍板：按推荐执行全部券、master 起步、三车道并行（独立工作树/分支）、主控合并清理、只跑定向、沙盒用 `ide-ui-acceptance` skill 验收修到全绿、全量交 CI、发内测版（已授权）。
+
+### 8.1 实施与验证
+
+| 车道 | 分支 / 提交 | 内容与读数 |
 |---|---|---|
-| L1 | 券 E 排查 + P-2/P-4 取证 | 零代码（用户侧操作 + 读数回传） |
-| L2 | 券 C（parameterMap 参数名按位对齐） | `xml/ibatis/SqlMapSqlRenderer.kt` + 其测试 |
-| L3 | 券 B（两个 gutter provider + plugin.xml 尾部追加） | 新建 `ui/gutter/Ibatis*LineMarkerProvider.kt` + `plugin.xml` + 测试 |
-| L4 | 券 A（条件行模型 + 参数输入 + `xmlModel` 接口抽象） | `xml/ibatis/**` 模型侧 + `model/PreviewResult.kt` + `ui/SqlPreviewPanelParamPanel.kt` + `ui/IbatisXmlPreviewService.kt` |
-| L5 | 券 D（降级文案与填值入口） | 依赖 L4 |
+| L2 | `t-ibatis-paramalign` / `f2ae5fbb`+`21a00086` | 券 C 按位对齐（string-aware 位点计数，`unusedDeclaredParams` 透出）+ 券 D 降级结构化（`degraded`/`unrenderedNodes`/`IbatisRenderFailureKind`，文案分档）；93 例 0 失败，保真 20/20 不动；反证 2 条 |
+| L1 | `t-ibatis-navicon` / `d04033aa`+`896a1b4d` | 券 B 双向跳转箭头（点击期词索引解析，热路径零查询；热路径守卫扩面 7→9 例）；基线 133 例→152 例 0 失败；反证 3 条。**收尾**（主控发现的缺陷）：让位门与 MyBatisCodeHelperPro **解耦**（竞品无 iBatis 能力，共用让位门会让典型用户看不到箭头；用户环境两者同装）+ 竞品在位用例 + 反证（恢复让位恰 1 红）+ 独立 i18n 键 + 入口方法集单一事实源 |
+| L3 | `t-ibatis-paraminput` / `92c515ec`+`367561f3` | 券 A 参数行/条件行模型（`IbatisParamModel`）+ Map 装配（勾选=放 key）+ 数值比较修正 + `PreviewResult.rerender` 回调接缝（`PreviewRerenderInput`，MyBatis 链零感知）+ 面板呈现；批 1~5 约 1380 例全绿；反证 2 条。实现期自查修掉两个真缺口：条件取消后同名占位符仍进 Map、`$` 站点在条件子树内漏闸 |
+
+### 8.2 合并与合并态定向
+
+三路全合入（`00fd57d4` / `84efd117`）；冲突均在 `reverse-probes/README.md` 与两份 bundle（追加型，并集解）。合并态定向 435 类 4461 例——唯一红＝守卫 `BannedApiScanRuleTest` 抓 L2 新增 `catch(Throwable)` 未判 fatal（`b3958e35` 修复后守卫 12/12 + iBatis 全套 + 保真 20/20 复绿）。L3 明示的「合流后需重跑」联动在 CI 上二次兑现（见 8.4）。
+
+### 8.3 沙盒 GUI 验收（`ide-ui-acceptance` skill，51+若干证据帧）
+
+- **首轮六项**：A1 XML 行预览+跳转箭头并存且点击落位 ✅、A2 Java 反向箭头 ✅、A3 四条件勾选+填值 SQL 随值变 ✅、A4 iterate 三段 OR 展开（不再半截）✅、A5 真实参数名 ✅、A6 降级可见 部分（**UI-001**：供值后横幅仍称「未完整渲染」且刷新不消失）。
+- **UI-001 根因**：`updateMeta` 把基线结果的告警又并回来——修复＝rerender 链以本轮 fresh 结果为唯一事实源；另加 `informationalWarning` 分档（ℹ 说明 vs ⚠ 未完整还原；parameterMap 的引擎行为说明不再冒充失败）。
+- **复验**：R1 三态（基线 ℹ 提示 → 供值消失 → 清空回归 → 刷新不漂移）/ R2 ℹ 前缀 / R3 无横幅——三条全过，零新缺陷，UI-001 闭环。
+
+### 8.4 CI 与发布（两次事故 + 恢复，均按既有 runbook）
+
+| 轮次 | sha | 结果 |
+|---|---|---|
+| 推送轮 push-test | `e6f5ccc9`（前批） | 7/7 |
+| 门禁第 1 轮 | `52f84f95` | 红在快桶腿：`IbatisXmlPreviewServiceTest` 数量不符夹具是**按位对齐前**的旧语义（L3 预警过的合流联动，本地基线绿/CI 红的根因）→ 夹具改真错配形态（声明 1/位点 2）+ 补按位对齐信息级正例（`7d640980`，31/0） |
+| 门禁第 2 轮 | `7d640980` | 15/15 全绿 |
+| 发布第 1 轮 | `7d640980` | 17/17（含 publish），但 `inspect-plugin-zip.py` 对 Release 正文 FAIL——本版块含全角**冒号**（L25 第 2 例：beta.1 是括号；守卫测试绿 ≠ 检查器过，检查器需先有 zip）→ 文案修正（`44ab2393`）+ 本地 buildPlugin+检查器 PASS |
+| 门禁第 3 轮 | `44ab2393` | 15/15 全绿 |
+| 发布第 2 轮 | `44ab2393` | 17/17（含 publish） |
+
+**发布落位**：tag `2026.11.10-beta.1` 经两次前移最终指向 `44ab2393`（双仓 ls-remote 回读一致）；GitHub Release 439581247（prerelease，附件 7,852,093 字节）；期间发现 GitHub `/releases/tags/{tag}` 对**强移后的 tag** 恒 404（`/releases` 列表在、PATCH 重关联无效）→ 删 release 对象 + `mode=publish` 重建（run `42696477178`）后 by-tag 恢复 200；在售 zip 复检 PASS；Gitee 发行版 **1292357**（`gitee-release.py --from-github --yes`，sha256 `8185814a65e5e4fe…` 校验 OK，`--verify-only --prerelease` [3/3] Verified，downloadUrl 与 `preview.update.json` 逐字一致）；`update/update.json` 未动（待用户本人提升）。
+
+### 8.5 遗留与责任项
+
+- **北京测试服务器（103.36.220.245）整机离线**：9 实例端口 + SSH + ping 全不通（对照机 114.66.55.245 全通），导致夜间轮 `dialect`（矩阵 9 实例连接秒失败，65s 即终）与 `e2e`（demo 应用 120s 未就绪，库指向 CI 本机、与北京无关，属可重试抖动）两腿红。**服务器需用户到供应商控制台处置**；恢复后重跑夜间轮即可闭合。
+- `feature/kotlin-to-java` 当日多轮 CI 红，属 k2j 车道事项，未动。
+- 券 G（`parameterClass`/`parameterMap` 完整类型映射）、`<sqlMapConfig>` 全局 id 表、跨文件 `<include>`——维持待办。
+- 快桶腿在 CI 上单独跑 `IbatisXmlPreviewServiceTest` 曾红（本地绿）：分桶 JVM 共享状态或 locale 差异的排查入口已留（本册 8.4 第 1 行），后续同类问题先查这里。
 
 派活纪律沿用前序：独立工作树 + 扁平分支名、只跑定向、`parallel_tasks.py` 登记、禁 `git add -A`、不 push 不合流、报告须给读数与反向验证。
