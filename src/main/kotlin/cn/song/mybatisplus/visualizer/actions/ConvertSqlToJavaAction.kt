@@ -113,12 +113,23 @@ class ConvertSqlToJavaAction : AnAction() {
         val parseResults = SqlToJavaConverter.parseBatch(statements)
         // 2. 后台单次 ReadAction 实体查找（所有语句共享）
         ApplicationManager.getApplication().executeOnPooledThread {
-            val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
-                SqlToJavaConverter.findCandidatesBatch(project, parseResults)
+            // T-HiddenBugPerfScan 券 E：批量路径补兜底——原裸跑 ReadAction.compute，PCE/PSI 失效等
+            // 异常直接终止池任务，invokeLater 永不投递 → 多语句 Alt+Shift+J 静默无反应（对照
+            // 单语句路径有 try/catch 兜底）。取消协议原样上抛（XmlSynHiGate 同款契约）；
+            // 其余失败 WARN 留痕 + EDT 给用户可见反馈。
+            val payload = runBatchLookupGuarded {
+                ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
+                    SqlToJavaConverter.findCandidatesBatch(project, parseResults)
+                }
             }
             // 3. EDT 生成 + 拼接 + 弹窗（T-Perf-21：主路径补 disposed 守卫——后台查找期间项目可能已关闭）
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
+                if (payload == null) {
+                    (batchLookupFailureSinkForTest ?: ::notifyBatchLookupFailed)(project)
+                    return@invokeLater
+                }
+                val (mainCandidates, subCandidates) = payload
                 val format = reverseFormat()
                 val code = SqlToJavaConverter.generateBatchCode(
                     parseResults,
@@ -130,6 +141,18 @@ class ConvertSqlToJavaAction : AnAction() {
                 JavaCodePreviewDialog(project, code).show()
             }
         }
+    }
+
+    /** 批量实体查找失败的 EDT 用户可见反馈（券 E：原失败路径零弹窗零通知零日志）。 */
+    private fun notifyBatchLookupFailed(project: Project) {
+        com.intellij.notification.NotificationGroupManager.getInstance()
+            .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+            .createNotification(
+                MpSqlVisualizerBundle.message("reverse.error.title"),
+                MpSqlVisualizerBundle.message("reverse.error.batchLookup"),
+                NotificationType.WARNING,
+            )
+            .notify(project)
     }
 
     /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
@@ -145,6 +168,7 @@ class ConvertSqlToJavaAction : AnAction() {
     private fun reverseLogicDeleteValue(project: Project): String = runCatching {
         ProjectPluginSettings.getInstance(project).effectiveLogicDeleteValue()
     }.getOrNull()?.takeIf { it.isNotBlank() } ?: SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE
+
 
     /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
     private fun manualEntitySelectionEnabled(): Boolean = runCatching {
@@ -303,3 +327,20 @@ class ConvertSqlToJavaAction : AnAction() {
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
     }
 }
+
+/**
+ * T-HiddenBugPerfScan 券 E：批量实体查找守卫——取消协议（PCE/Cancellation）原样上抛，
+ * 其余 Throwable WARN 留痕并返回 null（调用方在 EDT 给用户可见反馈，不再静默无反应）。
+ * 顶层函数便于纯 JUnit 直测守卫语义。
+ */
+internal fun <T> runBatchLookupGuarded(lookup: () -> T): T? = try {
+    lookup()
+} catch (t: Throwable) {
+    if (t is com.intellij.openapi.progress.ProcessCanceledException || t is java.util.concurrent.CancellationException) throw t
+    com.intellij.openapi.diagnostic.Logger.getInstance(ConvertSqlToJavaAction::class.java)
+        .warn("convertBatch: 实体查找失败", t)
+    null
+}
+
+/** 测试缝：批量实体查找失败的 EDT 反馈（断言收到反馈而非静默；headless 不弹真通知）。 */
+internal var batchLookupFailureSinkForTest: ((Project) -> Unit)? = null
