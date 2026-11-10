@@ -913,6 +913,74 @@ Boolean.valueOf(result)/null`），**没有任何异常处理器、`Exception ta
 - 影响面提示：`ADD_BATCH/CLEAR_BATCH/PREPARE`（非 timed）同样只在显式返回前插桩，异常时少记一次登记/
   清账，但不触碰 NestGate 深度，**不造成语句整类丢失**；本修法只针对 timed 面。
 
+##### 11.8.5.1 修复实施（2026-11-10，提交 `0fc3836c`）
+
+**改法**（`StatementWeaver.java`，只动 timed 面 `EXEC_PARAM/EXEC_CTX/BATCH`；NestGate、
+`SqlHookCallbacks` 签名、三张非 timed 面**未动**）：
+
+- 方法体整体包 catch-all handler：`TryCatchBlockNode(原始方法体首条指令, 方法尾自建 label, handler)`；
+  try 起点在 head 之后（head 内 token 未赋值，不应进 try 范围）；handler 内
+  `ASTORE retSlot` → 调 `onExecuteExit`（stmt/sql/op/token 读入口自有槽，result 传 null，
+  failure 读 retSlot）→ `ALOAD retSlot` → `ATHROW`；
+- 「压 onExecuteExit 实参」抽成 `appendOnExecuteExit`，正常出口与 handler **共用同一份**；
+- handler 帧用 **F_NEW** 编码：本类读类用 `EXPAND_FRAMES`，原方法帧经 `patchFrames` 后都以 F_NEW
+  交给 MethodWriter；若 handler 用 `F_FULL` 会落到另一条只维护 `previousFrameOffset` 的编码路径，
+  而该字段在 F_NEW 路径下从不更新——实测 handler 实际在偏移 73、帧被写成 124，JVM 报
+  `VerifyError: StackMapTable error: bad offset`。帧 locals 只声明出口读取的槽
+  （token LONG / this / 可选 sql），其余 TOP（不依赖形参是否被重新赋值）；
+- 顺序固定为「先 `patchFrames`、再追加 handler 帧」——反过来会让 `patchFrames` 给 handler 帧二次补槽；
+- timed 面的显式返回并入 `RETURN`（void 形态完整性；生产登记表没有 void 的 execute 族方法，
+  对真实类零行为变化）。
+
+**四类守卫用例读数**（`StatementWeaverExceptionExitTest` 新增 6 例；全量定向命令
+`:sql-visualizer-agent:test --tests "…StatementWeaver*" --tests "…StatementWeaveEndToEndTest"
+--tests "…NestGateTest"`）：
+
+| 类 | tests / failures / errors |
+|---|---|
+| `StatementWeaverExceptionExitTest`（新） | 6 / 0 / 0 |
+| `StatementWeaverVendorCoverageTest` | 17 / 0 / 0 |
+| `StatementWeaverFramePatchVerifyTest` | 3 / 0 / 0 |
+| `StatementWeaveEndToEndTest` | 13 / 0 / 0 |
+| `NestGateTest` | 6 / 0 / 0 |
+
+- **行为**：夹具方法「委托给会抛的方法、自身无 try/catch」——int/boolean/ResultSet/void 四种返回各一例，
+  抛出后必须产 1 条 error 事件，随后同线程两帧都照常产出，`nestMaxDepth=1`、`nestStale=0`；
+- **字节级**：磐维 V1/V2（`panweidb-jdbc-1.0.0/2.0.0.jar`）+ 金仓 `KbStatement` + 达梦 `DmdbStatement`
+  + `org.postgresql.jdbc.PgStatement`——每个 timed 方法 `enter=1`、`exit=原显式返回数+1`、
+  catch-all handler 数 = 原值+1、handler 后紧跟帧；
+- **返回形态**：int/boolean/ResultSet/void 四种形态真织入 + 运行（含异常路径，见行为用例）；
+- **帧**：handler 帧存在性由字节级例钉住；`StatementWeaverFramePatchVerifyTest` 的合成漏网形态
+  与全部厂商类的 define+initialize 都通过——**没有任何厂商 jar 触发 VerifyError**。
+
+**反向验证**（临时注掉 `appendCatchAllExitHandler` 调用）：`StatementWeaverExceptionExitTest`
+**6 例中 5 红**——四个行为例统一报「异常出口必须产一条 error 事件（修复前此处为零，且 depth 残留）」，
+字节级例报 `PgStatement#executeQuery(String) 显式返回点必须仍有出口… expected:<3> but was:<2>`；
+恢复调用后复绿（上表读数）。
+
+**真机两档读数**（香港磐维 A 模式，`155.103.159.54:26201`；载荷 `tmp/repro/PanweiNestLeakFrameProbe`
+＝两条**确定性失败**的 `DROP`（间隔 8s）→ 正常 `SELECT COUNT(*) FROM pg_settings`；脚本
+`tmp/repro/run-leakframe.sh`）：
+
+门禁开（默认，修复后）：
+
+```
+EVENT #1 SELECT（驱动连接期）  EVENT #2 SET  EVENT #3 SELECT
+EVENT #4 kind=DROP   u=null sql=DROP TABLE T_LEAK_FRAME_ABSENT     ← 失败语句的 error 事件（修前零）
+EVENT #5 kind=DROP   u=null sql=DROP TABLE T_LEAK_FRAME_ABSENT     ← 同上
+EVENT #6 kind=SELECT u=null sql=SELECT COUNT(*) FROM pg_settings   ← 失败之后的正常语句照常产出
+HEARTBEAT {... "nestSuppressed":0,"nestStale":0,"nestMaxDepth":1,"unresolved":0}
+```
+
+修前同一载荷（§11.8.5 第 5 条）：events 只有 #1-#4（两条 DROP 零事件）、`nestStale=2`、
+`nestMaxDepth=3`；修后 `nestStale=0`、`nestMaxDepth=1`，且**不再出现陈旧链 dump**。
+
+对照 `-Dsqlvis.agent.nestGate=false`：同样 6 条事件，`nestStale=0 / nestMaxDepth=0`（观测点随门禁同关）。
+
+另跑全量 observe 载荷（连接 → DROP → CREATE → 两条 INSERT → SELECT → COUNT → DELETE）门禁开：
+**10 条事件全出**（含 DROP/CREATE/两条 INSERT），三拍心跳 `nestSuppressed=0 / nestStale=0 /
+nestMaxDepth=1`——原用户场景「前几条有、之后整类消失」不再出现。
+
 #### 11.8.6 not run
 
 - 全量门禁 `testShards` 与 `verifyGate` / `verifyPlugin`（按纪律交收口代理）；
