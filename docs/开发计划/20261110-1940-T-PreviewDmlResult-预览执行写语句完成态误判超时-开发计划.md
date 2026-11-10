@@ -68,6 +68,7 @@ history 文档）；`Completed` 词表、错误提取、基线截断语义、结
 
 ## 七、实施记录
 
+- 实施提交：`67a574ab`（fix(preview): 预览执行写语句成功被误报「等待结果超时」），CHANGELOG `[Unreleased]` 已随本笔回填。
 - `execute/DataSourceSelector.kt`：新增 `DataSourceSelector.isWriteStatement(sqlText)`（基于 `SqlTypeClassifier.getFirstKeyword`
   的 DML/DDL 子集）+ 私有词表 `WRITE_STATEMENT_KEYWORDS`。纯函数、无平台依赖。
 - `execute/DataSourceSelectorResults.kt`：8s 监控的 `if/else` 改 `when`，新增「写语句 + 连接已就绪 + 无新页签」支，
