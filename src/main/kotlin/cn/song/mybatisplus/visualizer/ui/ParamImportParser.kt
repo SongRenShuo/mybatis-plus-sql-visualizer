@@ -28,7 +28,11 @@ object ParamImportParser {
         if (text.isBlank()) return emptyMap()
         return when {
             text.trimStart().startsWith("{") || text.trimStart().startsWith("[") -> parseJson(text)
-            text.contains("\n") && text.lineSequence().first().contains(",") -> parseCsv(text)
+            // T-HiddenBugPerfScan 券 I②：CSV 分流前守卫——多行 key=value 的首行值含逗号
+            // （`a=1,2\nb=3`）曾被误分流进 parseCsv，键值全错位且无提示；首行有 `=` 即
+            // key=value 形态（CSV 首行是 header，不含 `=`）
+            text.contains("\n") && text.lineSequence().first().contains(",") &&
+                !text.lineSequence().first().contains("=") -> parseCsv(text)
             else -> parseKeyValue(text)
         }
     }
@@ -88,7 +92,10 @@ object ParamImportParser {
                 }
                 trimmed[i] == '{' || trimmed[i] == '[' -> {
                     // 嵌套对象 / 数组 → 跳过该 key（不递归展平）
-                    skipValue(trimmed, i)
+                    // T-HiddenBugPerfScan 券 I①：返回值必须接回 i——曾丢弃返回值不推进，
+                    // 外层 while 停在 '{' 处被「非引号即返回」分支截断，嵌套 key 之后的
+                    // 全部顶层键静默丢失（Postman/Insomnia 嵌套导出粘贴即 0 匹配）。
+                    i = skipValue(trimmed, i)
                 }
                 else -> {
                     // 数字 / true / false → 取到分隔符或结束
