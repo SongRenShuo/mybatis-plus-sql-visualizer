@@ -218,10 +218,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-SettingsConverge：六组 gutter 分组开关合并为一个多选控件（6 个勾选框移入浮层、不进面板主树）-6 → 40（实跑核对）。
             // T-LogMethodName（S1-7 并入 master）：来源位置后显示「类名#方法名」开关（logShowMethodCheck）+1 → 41。
             // F-03（t-idle-f2）：项目打开时自动打开日志窗口开关（logToolWindowAutoShowCheck）+1 → 42。
-            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（csvExportNoBomCheck）+1 → 43（合并态实跑核对）
+            // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（csvExportNoBomCheck）+1 → 43。
+            // T-Ibatis2Support 券 A（master 并入）：iBatis 2.x sqlMap 语句预览开关（ibatisXmlCheck，界面节）+1 → 44（合并态实跑核对）。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 43", 43, texts.size)
+            assertEquals("复选框总数应为 44", 44, texts.size)
         } finally {
             settings.state.language = old
         }

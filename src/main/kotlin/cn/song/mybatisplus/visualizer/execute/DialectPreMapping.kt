@@ -132,7 +132,16 @@ internal object DialectPreMapping {
     internal fun clearMapping(project: Project, vf: VirtualFile, waitMs: Long = EDT_SET_MAPPING_WAIT_MS): Boolean {
         val clearOnEdt = {
             runCatching {
-                val mappings = instanceOf(project) ?: return@runCatching false
+                // T-ExecPsiGate：反射面整体不可用时要留痕——原实现静默返回 false，
+                // 上游（exec 清映射自愈 / preview 继承路径）只看得到「没清掉」这一个事实。
+                val mappings = instanceOf(project)
+                if (mappings == null) {
+                    LOG.warn(
+                        "[M36] dialect clearMapping skipped: SqlDialectMappings unavailable " +
+                            "(reflection surface missing, Database plugin not loaded?)",
+                    )
+                    return@runCatching false
+                }
                 mappings.javaClass.getMethod(
                     "setMapping", VirtualFile::class.java, Any::class.java,
                 ).invoke(mappings, vf, null)
@@ -177,7 +186,12 @@ internal object DialectPreMapping {
             return false
         }
         return runCatching {
-            val mappings = instanceOf(project) ?: return false
+            // T-ExecPsiGate：同上——反射面缺失必须留痕，否则「映射没写成」在日志里完全没有原因。
+            val mappings = instanceOf(project)
+            if (mappings == null) {
+                LOG.warn("[M36] setMySqlOnEdt skipped: SqlDialectMappings unavailable (reflection surface missing)")
+                return false
+            }
             val mysql = findMySql(mappings) ?: run {
                 LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)")
                 return false
@@ -204,7 +218,12 @@ internal object DialectPreMapping {
             return false
         }
         return runCatching {
-            val mappings = instanceOf(project) ?: return false
+            // T-ExecPsiGate：反射面缺失留痕（见 setMySqlOnEdt 同款说明）。
+            val mappings = instanceOf(project)
+            if (mappings == null) {
+                LOG.warn("[M36] setLanguageOnEdt skipped: SqlDialectMappings unavailable (reflection surface missing)")
+                return false
+            }
             mappings.javaClass.getMethod(
                 "setMapping",
                 VirtualFile::class.java,
@@ -251,6 +270,12 @@ internal object DialectPreMapping {
         val configured = runCatching {
             ReadAction.compute<String?, Throwable> { configuredLanguageId(project, vf) }
         }.getOrNull()
+        // T-ExecPsiGate：探测失败（null）是「保守不跳过、照写一次」的合法分支，但原实现完全静默——
+        // 于是「探测面坏了」与「确实没配过映射」在日志里长得一模一样。稳态命中时不打（避免噪音），
+        // 只在真的要写映射前记一行。
+        if (configured == null && !inProcessMapped) {
+            LOG.info("[M36] dialect mapping probe unavailable for ${vf.name} — attempting EDT write anyway")
+        }
         val configuredMatches = when {
             configured == null -> null
             targetId == null -> configured.equals(ExecDialectRouting.MYSQL_LANGUAGE_ID, ignoreCase = true)

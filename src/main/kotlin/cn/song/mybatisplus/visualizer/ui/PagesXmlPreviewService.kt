@@ -112,9 +112,15 @@ object PagesXmlPreviewService {
         PluginSettings.getInstance().state.pagesXmlSourceMode
     }.getOrDefault(PluginSettings.PAGES_SOURCE_AUTO)
 
-    /** 实体探针：名字 → (实体名, 表名)；解析不到返回 null（与通用 XML 链共用同一实现）。 */
+    /**
+     * 实体探针：名字 → (实体名, 表名)；解析不到返回 null（与通用 XML 链共用同一实现）。
+     *
+     * 券 0（T-Ibatis2SlowFix）：走**零扫描**形态——本链是同步预览热路径，`<datasource>` 的根标识符
+     * 常是物理表名，全项目别名反查必然打空却要先付整段预算（弹窗等约 1s）。判定结果与改动前一致：
+     * 反查触顶本就按未解析返回，而 `entityClass` 在场的常规形态由直查覆盖（见 [PagesEntityProbeResolver]）。
+     */
     private fun resolveProbe(project: Project, name: String, context: PsiElement?): PagesEntityProbe? =
-        PagesEntityProbeResolver.probe(project, name, context)
+        PagesEntityProbeResolver.probeCheap(project, name, context)
 
     // ------------------------------------------------------------------
     // T-PagesHql：HQL 转换（复用既有管道）

@@ -76,6 +76,29 @@ class StringSqlMethodGutterLineMarkerProviderTest : BasePlatformTestCase() {
         assertTrue("方法体内存在字符串 SQL 调用时方法定义名应为锚点", info != null)
     }
 
+    fun testGetLineMarkerInfo_方法体内只有iBatis语句id调用_不标() {
+        // T-IbatisFix4 缺陷二（用户 2026.3 真机）：`UserDaoImpl` 每个 DAO 方法体内是
+        // `client.queryForList("User.selectAll")`——iBatis 入口名与本 provider 的白名单重叠，
+        // 方法定义行会亮一枚「预览」图标，点开却没有任何 SQL（statementId 不是 SQL）。
+        // iBatis 通道优先，本 provider 在方法定义行同样让位。
+        val file = javaFile(
+            """
+            public class UserDaoImpl {
+                private Object client;
+                public java.util.List selectAll() { return client.queryForList("User.selectAll"); }
+                public java.util.List selectById(int id) { return client.queryForObject("User.selectById", id); }
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("selectAll", "selectById")) {
+            val method = methodByName(file, name)
+            assertNull(
+                "iBatis 调用（$name）不得在方法定义行出预览图标——点开没有 SQL",
+                StringSqlMethodGutterLineMarkerProvider().getLineMarkerInfo(method.nameIdentifier!!),
+            )
+        }
+    }
+
     fun testGetLineMarkerInfo_方法体内含JdbcTemplate调用_命中() {
         val file = javaFile(
             """

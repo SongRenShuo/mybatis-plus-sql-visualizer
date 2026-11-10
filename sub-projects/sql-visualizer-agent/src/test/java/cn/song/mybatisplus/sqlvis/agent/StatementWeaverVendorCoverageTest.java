@@ -129,6 +129,24 @@ public class StatementWeaverVendorCoverageTest {
             "com.goldendb.jdbc.PreparedStatement",
             "com.goldendb.jdbc.ServerPreparedStatement",
             "com.goldendb.jdbc.CallableStatement",
+            // T-PanweiInsertCapture（2026-11-10）方言横向审计补齐：这批类此前**未登记**，
+            // 各自对应一类「那类语句零事件」的窄缺口（证据见 WeaveSpecs 同批注释）：
+            //  - pg 家族 PgCallableStatement ×7：函数模式 executeUpdate 走 executeWithFlags 分支漏采；
+            //  - MySQL 5.1 CallableStatement：与 GoldenDB 组对称补登（本机无 5.1 jar，字节层排除）；
+            //  - 华为两族 MPreparedStatement：兼容模式 addBatch(String) 覆盖父类不回调，批文本漏记；
+            //  - 海量/openGauss 读写分离包装语句：独立实现类，父类织入完全不覆盖。
+            "org.postgresql.jdbc.PgCallableStatement",
+            "org.opengauss.jdbc.PgCallableStatement",
+            "com.huawei.gaussdb.jdbc.jdbc.PgCallableStatement",
+            "com.huawei.opengauss.jdbc.jdbc.PgCallableStatement",
+            "com.highgo.jdbc.jdbc.PgCallableStatement",
+            "cn.com.vastbase.jdbc.PgCallableStatement",
+            "com.kingbase8.jdbc.KbCallableStatement",
+            "com.mysql.jdbc.CallableStatement",
+            "com.huawei.gaussdb.jdbc.jdbc.MPreparedStatement",
+            "com.huawei.opengauss.jdbc.jdbc.MPreparedStatement",
+            "cn.com.vastbase.jdbc.ReadWriteSplittingPgPreparedStatement",
+            "org.opengauss.jdbc.ReadWriteSplittingPgPreparedStatement",
     };
 
     /**
@@ -177,6 +195,12 @@ public class StatementWeaverVendorCoverageTest {
             // GoldenDB（T-GoldenDbDialect 券 B）：prepare 面单列；ConnectionImpl 自有
             // prepareStatement ×6 + prepareCall ×4（javap 实测），getURL() public
             "com.goldendb.jdbc.ConnectionImpl",
+            // T-PanweiInsertCapture（2026-11-10）：读写分离连接（海量 / openGauss 6.0）此前只登记
+            // 普通 PgConnection，读写分离模式下整条连接的 PS 都进不了登记表；SQLite 四参 prepare
+            // 重载实现类是 JDBC4Connection（父类该重载是 abstract、织入跳过）。
+            "cn.com.vastbase.readwritesplitting.ReadWriteSplittingPgConnection",
+            "org.opengauss.readwritesplitting.ReadWriteSplittingPgConnection",
+            "org.sqlite.jdbc4.JDBC4Connection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -208,6 +232,12 @@ public class StatementWeaverVendorCoverageTest {
             "com.goldendb.jdbc.ServerPreparedStatement",
             "com.goldendb.jdbc.CallableStatement",
             "com.goldendb.jdbc.ConnectionImpl",
+            // T-PanweiInsertCapture（2026-11-10）：MySQL 5.1 谱系 jar 本机不可得（环境受限），
+            // 只做谓词层；读写分离两族在 agent test classpath 的 openGauss 3.0.0 里没有该类
+            // （RW 面是 6.0.0-og 才加的），故批量字节层同样跳过——登记本身仍由谓词层与本表漂移守卫锁定。
+            "com.mysql.jdbc.CallableStatement",
+            "org.opengauss.jdbc.ReadWriteSplittingPgPreparedStatement",
+            "org.opengauss.readwritesplitting.ReadWriteSplittingPgConnection",
     };
 
     // ---------- 谓词层 ----------

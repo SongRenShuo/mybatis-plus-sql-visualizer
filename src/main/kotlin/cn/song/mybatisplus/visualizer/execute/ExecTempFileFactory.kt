@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.sql.canCreateSqlPsiFor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -243,16 +244,119 @@ internal fun DataSourceSelector.createTempPsiFile(
     // [PSI] 段（本券修复本体）：ReadAction 不改变线程——本段必须已在 BGT 上，否则即
     // 2026-11-01 真机的 SEVERE SlowOperations
     val psi = try {
-        ReadAction.compute<PsiFile?, Throwable> {
-            PsiManager.getInstance(project).findFile(vf)
-        }
+        findExecPsi(project, vf)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
-    } ?: return fail("findPsi", "PsiManager.findFile null (${vf.name})")
+    } ?: (try {
+        // T-ExecPsiGate F2：PSI 取不到时自愈——先看 vf 是否失效（重定位），再清映射重建。
+        // 两支都不成立时下面带五元组诊断收口。
+        healExecPsi(project, vf, LOG, ioFile)
+    } catch (e: Throwable) {
+        if (FatalErrors.isFatal(e)) throw e
+        null
+    }) ?: return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf))
+    // 自愈可能换了一个新 vf（vf 失效重定位），缓存与后续 attach 必须用同一个
+    val effectiveVf = runCatching { psi.virtualFile }.getOrNull() ?: vf
     // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
-    markCachedTempPsiFile(project, vf, psi)
-    return vf to psi
+    markCachedTempPsiFile(project, effectiveVf, psi)
+    return effectiveVf to psi
+}
+
+/**
+ * T-ExecPsiGate：`PsiManager.findFile` 的单点封装（read action 内取，调用方负责线程）。
+ *
+ * 抽成函数只为让自愈链与诊断共用同一份取法，语义与既有 `ReadAction.compute { findFile(vf) }` 逐字一致。
+ */
+internal fun findExecPsi(project: Project, vf: VirtualFile): PsiFile? =
+    ReadAction.compute<PsiFile?, Throwable> {
+        PsiManager.getInstance(project).findFile(vf)
+    }
+
+/**
+ * T-ExecPsiGate：PSI 建不出来时的**自愈**（exec 链）。
+ *
+ * 两支，顺序固定：
+ *
+ *  1. **vf 失效重定位**（R2/R3 实测后升为主修）：exec 文件本身在盘上，只是手里的 vf 条目已失效
+ *     ——watcher 与 refresh 抢跑、外部替换文件、网络盘/同步盘都是这个形态。此时平台 `findFile`
+ *     只会返回 null（`FileManagerImpl` 的 vf 失效分支），清映射救不了它。重新 `refresh` 定位
+ *     一次拿到新 vf 再建 PSI 即可。
+ *  2. **清方言映射重建**：映射指向的语言在本机建不出 SQL PSI（自注册方言 parserDefinition
+ *     未生效 / 平台缺该方言 / 历史坏映射）。清掉映射让平台回落默认语言，preview 链在同一
+ *     状态下一直工作正常。
+ *
+ * 两支都不成立时返回 null，由调用方带五元组诊断报错。返回的 PSI 若挂在**新** vf 上，调用方必须
+ * 用 `psi.virtualFile` 取回那个 vf（缓存与后续 attach 必须用同一个）。
+ */
+internal fun DataSourceSelector.healExecPsi(
+    project: Project,
+    vf: VirtualFile,
+    LOG: Logger,
+    ioFile: java.io.File? = null,
+): PsiFile? {
+    // 支 1：vf 失效 → 重新定位
+    if (!runCatching { vf.isValid }.getOrDefault(false)) {
+        if (ioFile == null) {
+            LOG.warn("[M36][T-ExecPsiGate] exec vf invalid and no ioFile for re-locate: ${vf.name}")
+            return null
+        }
+        val refound = runCatching {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+        }.getOrNull()
+        val psi = refound?.let { runCatching { findExecPsi(project, it) }.getOrNull() }
+        if (psi != null) {
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec vf was INVALID — re-located by refresh and rebuilt PSI: ${refound!!.path}",
+            )
+            return psi
+        }
+        LOG.warn(
+            "[M36][T-ExecPsiGate] exec vf invalid and re-locate FAILED (exists=${ioFile.exists()}): ${ioFile.path}",
+        )
+        return null
+    }
+    // 支 2：vf 有效但 PSI 建不出来 → 清映射重建
+    val before = runCatching {
+        ReadAction.compute<String?, Throwable> { DialectPreMapping.configuredLanguageId(project, vf) }
+    }.getOrNull()
+    val cleared = runCatching { DialectPreMapping.clearMapping(project, vf) }.getOrDefault(false)
+    val healed = runCatching { findExecPsi(project, vf) }.getOrNull()
+    if (healed != null) {
+        LOG.warn(
+            "[M36][T-ExecPsiGate] exec PSI rebuilt after clearing dialect mapping " +
+                "(was=$before, cleared=$cleared): ${vf.name}",
+        )
+    } else {
+        LOG.warn(
+            "[M36][T-ExecPsiGate] exec PSI still null after clearing dialect mapping " +
+                "(was=$before, cleared=$cleared): ${vf.name}",
+        )
+    }
+    return healed
+}
+
+/**
+ * T-ExecPsiGate：`findFile` 失败的**五元组诊断**（进用户可见失败文案的 {0}）。
+ *
+ * 平台 `FileManagerImpl.findFile` 只有三条 null 分支（目录 / vf 无效 / PSI 创建被拒），三条
+ * 在用户侧的表现完全相同（都只是 null）。原文案只带文件名，真机日志与用户反馈都无法区分——
+ * 2026-11-10 的 Mac / UOS 报障就卡在这里。五项一次给全：vf 有效性、是否目录、文件类型、
+ * 当前生效映射到的语言、该语言能否建 SQL PSI（附绝对路径便于回传）。
+ */
+internal fun execPsiDiagnostics(project: Project, vf: VirtualFile): String {
+    val mappedId = runCatching {
+        ReadAction.compute<String?, Throwable> { DialectPreMapping.configuredLanguageId(project, vf) }
+    }.getOrNull()
+    val canPsi = runCatching {
+        canCreateSqlPsiFor(mappedId?.let { DialectPreMapping.languageById(project, it) })
+    }.getOrDefault(false)
+    val vfValid = runCatching { vf.isValid }.getOrDefault(false)
+    val isDir = runCatching { vf.isDirectory }.getOrDefault(false)
+    val fileTypeName = runCatching { vf.fileType.name }.getOrDefault("?")
+    val path = runCatching { vf.path }.getOrDefault("?")
+    return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
+        "mappedLang=$mappedId, canPsi=$canPsi, path=$path"
 }
 
 /**
@@ -393,18 +497,20 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // O-145 W7：预览提供了渲染方言时 exec PSI 同步该事实；旧调用仍走 O-136 数据源路由。
     mapDialectBeforePsi(project, vf, LOG, renderedDialectName)
     val psi = try {
-        ReadAction.compute<PsiFile?, Throwable> {
-            PsiManager.getInstance(project).findFile(vf)
-        }
+        findExecPsi(project, vf)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         LOG.warn("[M36] exec prewarm findPsi failed: ${e.javaClass.simpleName}: ${e.message}")
         return
-    } ?: run {
-        LOG.warn("[M36] exec prewarm: findFile null (${vf.name})")
+    } ?: (runCatching {
+        // T-ExecPsiGate：预热链与冷路径同款自愈（vf 失效重定位 / 清映射重建）。这里只为把缓存
+        // 填上——自愈失败不阻断，冷路径自己还有一次机会。
+        healExecPsi(project, vf, LOG, ioFile)
+    }.getOrNull()) ?: run {
+        LOG.warn("[M36][T-ExecPsiGate] exec prewarm: findFile null — ${execPsiDiagnostics(project, vf)}")
         return
     }
     if (project.isDisposed) return
-    markCachedTempPsiFile(project, vf, psi)
+    markCachedTempPsiFile(project, runCatching { psi.virtualFile }.getOrNull() ?: vf, psi)
     LOG.info("[M36] exec prewarm DONE (cache filled off EDT): ${vf.name}")
 }

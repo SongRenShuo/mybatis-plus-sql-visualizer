@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.SourceLanguage
+import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
@@ -122,5 +123,27 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals("根名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
         assertNull(result.originalSql)
         assertEquals("SELECT * FROM t_order", result.sql)
+    }
+
+    // ------------------------------------------------------------------
+    // 券 0（T-Ibatis2SlowFix）：同步预览不得付「@Entity(name) 反查」全扫代价
+    // ------------------------------------------------------------------
+
+    /**
+     * 根标识符是**物理表名**、无 `entityClass` 的通用 XML 内嵌 SQL（iBatis `<select>` 同形态）：
+     * 同步结论仍是保守 SQL（与改动前一致），但**不得**在关键路径上触发
+     * [EntityAliasSweep] 的整段短名扫描——改动前此处扫描计数为 1（与 20261008 真机冻结事故
+     * 同一形态：弹窗被探针阻塞，单次约 1s、事故实测 70s），改动后必须为 0。
+     *
+     * 夹具里加一个 `@Entity(name="Shared")` 的实体类：证明索引里**确有实体**（扫描本来会真的跑起来，
+     * 不是「工程太干净扫不到」的空绿）。
+     */
+    fun test物理表名根_同步预览不触发别名全扫() {
+        myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
+        xmlFile("<root><dataValue><![CDATA[SELECT o.id FROM t_order o WHERE o.id = ?]]></dataValue></root>")
+        EntityAliasSweep.resetScanCountForTest()
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("dataValue"))
+        assertEquals("物理表名不可解析为实体 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
+        assertEquals("同步预览不得触发别名反查全扫", 0, EntityAliasSweep.scanCountForTest())
     }
 }

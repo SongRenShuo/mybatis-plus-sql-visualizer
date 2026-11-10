@@ -98,8 +98,14 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
         if (!body.text.contains('"')) return false
         bodyScanCount.incrementAndGet()
         return PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java).any { call ->
-            JdbcTemplateMethodDetector.isStringSqlMethodCandidate(call.methodExpression.referenceName) &&
-                PreviewReceiverResolver.hasStringLikeArg(call) &&
+            val methodName = call.methodExpression.referenceName ?: return@any false
+            if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(methodName)) return@any false
+            // T-IbatisFix4 缺陷二：iBatis 优先、方法定义行也让位。`UserDaoImpl` 每个 DAO 方法体内
+            // 都是 `client.queryForList("User.selectAll")`——iBatis 入口名与本 provider 的白名单重叠，
+            // 方法定义行会亮一枚「预览」图标，点开却没有任何 SQL（statementId 不是 SQL）。
+            // 判据与调用行那份让位门（[IbatisCallYieldGate]）同一个函数：纯语法 O(1)。
+            if (IbatisCallYieldGate.isIbatisStatementIdCall(call, methodName)) return@any false
+            PreviewReceiverResolver.hasStringLikeArg(call) &&
                 when (PreviewReceiverResolver.classify(call)) {
                     PreviewReceiverResolver.Family.CUSTOM_DAO,
                     PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE,

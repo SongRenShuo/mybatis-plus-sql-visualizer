@@ -672,9 +672,19 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var xmlErrors = listOf<String>()
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     internal var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
+    // T-Ibatis2Gap 券 A：iBatis 迭代值状态（集合属性名 → 逗号/换行分隔原文）——
+    // 与 xmlForEachValues 同形态：输入框即时写状态，renderSql 帧内统一装配（write-unsafe 重投递也不丢）
+    internal val ibatisIterateValues = mutableMapOf<String, String>()
+    // 券 A：iBatis 重渲染告警（renderSql 每轮刷新）；UI-001 起它是 rerender 链横幅的**唯一事实源**
+    // （基线结果告警不再并入——供值后 fresh 无告警 ⇒ 横幅恢复即隐藏）
+    internal var ibatisRenderWarnings = listOf<String>()
+    // UI-001：最近一轮重渲染告警是否信息级（fresh.informationalWarning 透传）
+    internal var ibatisRenderWarningIsNote = false
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     internal var errorCopyButton: JButton? = null
     internal var currentWarning: String? = null
+    // UI-001：当前告警是否信息级（横幅/元信息行前缀分档用；false = 失败档 ⚠）
+    internal var currentWarningIsNote = false
 
     /**
      * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。

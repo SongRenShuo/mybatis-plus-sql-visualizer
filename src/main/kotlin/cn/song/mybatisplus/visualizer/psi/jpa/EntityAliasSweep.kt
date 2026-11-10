@@ -27,6 +27,10 @@ import java.util.concurrent.ConcurrentHashMap
  * 本对象把该扫描收口为「有上限 + 可取消 + 命中即止」，并把判定逻辑与 PSI 取数解耦，便于用纯用例
  * 钉住「超限即停」这条判别行为（守卫类改动须可反向验证）。
  *
+ * 两条入口（券 0 T-Ibatis2SlowFix 起）：[resolve] ＝完整反查（含扫描，供非同步关键路径的调用方）；
+ * [resolveCachedOnly] ＝**零扫描**版本（直查 + 只读缓存），同步预览热路径专用——XML 内嵌 SQL 的
+ * 根标识符多为物理表名，扫描必然打空却要先付整段预算（20261008 冻结事故同形态）。
+ *
  * 上限口径：正常工程的类短名数远小于上限，只有病态/超大工程或误判输入才会触顶；触顶按**未命中**
  * 降级并回调记账。**触顶不是「确认不存在」**——调用方据此**不写负缓存**（见
  * [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 的调用点），避免大工程里的合法别名被
@@ -74,6 +78,42 @@ internal object EntityAliasSweep {
             cache.entries[key] = scan.candidates.map { SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it) }
             if (!scan.complete) return unresolved()
             EntityClassResolver.resolveWithAliasCandidates(project, name, context, scan.candidates)
+        } catch (_: IndexNotReadyException) {
+            unresolved()
+        }
+    }
+
+    /**
+     * 券 0（T-Ibatis2SlowFix）：**零扫描**的别名反查——判据与 [resolve] 相同，但不启动扫描。
+     *
+     * 同步预览热路径（XML 链的源语言实体探针）专用：直查命中即返回；直查未命中时**只读**
+     * [LookupCache]（由 [resolve] 或后台预热写入），缓存缺失 / 版本失效 / 指针失效一律按未解析返回。
+     *
+     * 为什么必须把扫描移出这条路径：XML 内嵌 SQL 的根标识符多是**物理表名**（`t_order`），
+     * 别名反查打不到任何 `@Entity(name=...)`，必然扫完整段预算——这正是 20261008 真机冻结事故的
+     * 形态（同族输入 `from t_order` 实测 70 秒；现行上限下单次约 1s，且弹窗要等它回来才出）。
+     * **结论不变**：`resolve` 触顶（未扫完）本来就按未解析返回，本方法与之逐值等价，只是不付代价。
+     *
+     * 完整反查仍在 [resolve]（转换链 / 实体作用域等非同步关键路径的调用方使用）；缓存被预热后
+     * （例如后续接上延迟反查）本方法即能命中，故这里保留缓存直读而不写死「永不反查」。
+     */
+    fun resolveCachedOnly(project: Project, name: String, context: PsiElement? = null): EntityClassResolver.Resolution {
+        if (name.isBlank() || DumbService.isDumb(project)) return unresolved()
+        return try {
+            val direct = EntityClassResolver.resolveByName(project, name, context)
+            if (direct.psiClass != null || direct.candidates.isNotEmpty()) return direct
+            val stamp = PsiModificationTracker.getInstance(project).modificationCount
+            val roots = ProjectRootModificationTracker.getInstance(project).modificationCount
+            val existing = project.getUserData(CACHE_KEY) ?: return unresolved()
+            if (existing.psiStamp != stamp || existing.rootStamp != roots) return unresolved()
+            val cached = existing.entries[LookupKey(name, EntityClassResolver.searchScope(project, context))]
+                ?: return unresolved()
+            // 空候选＝上一趟触顶的结论（触顶本就按未解析），等价于直查未命中后的默认结果
+            if (cached.isEmpty()) return unresolved()
+            val classes = cached.mapNotNull { it.element }
+            // 指针失效（PSI 改过）＝缓存不可信：按未解析返回；清理留给 [resolve]，本方法保持只读
+            if (classes.size != cached.size) return unresolved()
+            EntityClassResolver.resolveWithAliasCandidates(project, name, context, classes)
         } catch (_: IndexNotReadyException) {
             unresolved()
         }

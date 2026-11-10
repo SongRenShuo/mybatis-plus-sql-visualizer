@@ -45,6 +45,15 @@ public class CatchAllMatcherTest {
     private static final String HIKARI_PS = "com.zaxxer.hikari.pool.HikariProxyPreparedStatement";
     private static final String HIKARI_CONN = "com.zaxxer.hikari.pool.HikariProxyConnection";
 
+    // T-CatchAllFamilyFilter：Oracle 连接继承链（ojdbc11 23.3 真实字节，agent testImplementation 既有夹具）。
+    // 链形：OracleConnectionWrapper → OracleConnection → GeneratedPhysicalConnection → PhysicalConnection
+    //      → T4CConnection；白名单只登记真正声明 prepare 的 PhysicalConnection。
+    private static final String ORACLE_CONN_BASE = "oracle.jdbc.driver.PhysicalConnection";
+    private static final String ORACLE_WRAPPER = "oracle.jdbc.OracleConnectionWrapper";
+    private static final String ORACLE_CONN = "oracle.jdbc.driver.OracleConnection";
+    private static final String ORACLE_GEN_PHYS = "oracle.jdbc.driver.GeneratedPhysicalConnection";
+    private static final String ORACLE_T4C = "oracle.jdbc.driver.T4CConnection";
+
     private final List<String> retransformed = new ArrayList<String>();
 
     @Before
@@ -314,6 +323,83 @@ public class CatchAllMatcherTest {
         assertFalse("null 安全", CatchAllMatcher.isKnownPoolWrapper(null));
     }
 
+    // ---------- T-CatchAllFamilyFilter：白名单同族继承链从「未登记」曝光排除 ----------
+
+    /**
+     * 祖先方向：Oracle 连接链上的基类/包装器不是驱动，从「未登记」曝光排除，织入面零变化。
+     *
+     * <p>真机形态（2026-11-09，v2026.11.8 + ojdbc + Hikari）：8 条「未登记 JDBC 实现」里
+     * 3 条是 {@code OracleConnectionWrapper} / {@code OracleConnection} /
+     * {@code GeneratedPhysicalConnection}，把上限 8 的取证位占掉。修复后该行不再出现它们，
+     * 但它们**照旧兜底匹配并织入**（曝光面与织入面解耦，与券 G1 同口径）。
+     *
+     * <p>反向验证（S2）：把 {@code evaluate} 里的 {@code isWhitelistFamily} 判定摘掉，本用例必红。
+     */
+    @Test
+    public void 同族祖先类_不报未登记但仍织入() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> base = oracleClass(ORACLE_CONN_BASE);
+        final Class<?> wrapper = oracleClass(ORACLE_WRAPPER);
+        final Class<?> conn = oracleClass(ORACLE_CONN);
+        final Class<?> genPhys = oracleClass(ORACLE_GEN_PHYS);
+
+        CatchAllMatcher.afterInstall(
+                stubInstrumentation(new Class<?>[]{candidate, wrapper, conn, genPhys, base}), false);
+
+        assertTrue("真未知驱动仍必须报（同族排除不得误伤取证路径）："
+                        + CaptureBudget.unregisteredDrivers(),
+                CaptureBudget.unregisteredDrivers().contains(STATEMENT_CANDIDATE));
+        for (String n : new String[]{ORACLE_WRAPPER, ORACLE_CONN, ORACLE_GEN_PHYS}) {
+            assertFalse(n + " 是白名单类 " + ORACLE_CONN_BASE + " 的祖先，不得报未登记（T-CatchAllFamilyFilter）",
+                    CaptureBudget.unregisteredDrivers().contains(n));
+        }
+        assertEquals("同族排除只动曝光面：四类照旧各织一次（真驱动 1 + Oracle 链 3）：" + retransformed,
+                4, retransformed.size());
+        assertTrue("接受表登记不变（transformer 走同一织入通道）",
+                CatchAllMatcher.acceptedSpecs().containsKey(ORACLE_WRAPPER)
+                        && CatchAllMatcher.acceptedSpecs().containsKey(ORACLE_GEN_PHYS));
+    }
+
+    /**
+     * 子孙方向：白名单类的具体子类同样属同族，不报未登记（真机形态 T4CConnection）。
+     *
+     * <p>反向验证（S2）：摘掉 {@code isWhitelistFamily} 的「父类链上出现白名单名」分支，本用例必红。
+     */
+    @Test
+    public void 白名单子类_不报未登记() throws Exception {
+        final Class<?> candidate = Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader());
+        final Class<?> base = oracleClass(ORACLE_CONN_BASE);
+        final Class<?> t4c = oracleClass(ORACLE_T4C);
+
+        CatchAllMatcher.afterInstall(stubInstrumentation(new Class<?>[]{candidate, t4c, base}), false);
+
+        assertTrue("真未知驱动仍必须报：" + CaptureBudget.unregisteredDrivers(),
+                CaptureBudget.unregisteredDrivers().contains(STATEMENT_CANDIDATE));
+        assertFalse(ORACLE_T4C + " 继承白名单 " + ORACLE_CONN_BASE + "，属同族，不得报未登记",
+                CaptureBudget.unregisteredDrivers().contains(ORACLE_T4C));
+        assertEquals("织入面不变：真驱动 + 子类各织一次：" + retransformed, 2, retransformed.size());
+    }
+
+    /**
+     * 同族判定本体三态：祖先命中 / 子孙命中 / 无关类不放行。
+     *
+     * <p>祖先集由 {@code runPass} 预扫白名单类得到，这里直接用字符串集合模拟，避免依赖扫描顺序。
+     */
+    @Test
+    public void 同族判定_祖先与子孙命中且不放行无关类() throws Exception {
+        final java.util.Set<String> ancestors = java.util.Collections.singleton(ORACLE_WRAPPER);
+
+        assertTrue("祖先方向：候选名在祖先集里",
+                CatchAllMatcher.isWhitelistFamily(oracleClass(ORACLE_WRAPPER), ORACLE_WRAPPER, ancestors));
+        assertTrue("子孙方向：候选父类链上有白名单类（PhysicalConnection）",
+                CatchAllMatcher.isWhitelistFamily(oracleClass(ORACLE_T4C), ORACLE_T4C,
+                        java.util.Collections.<String>emptySet()));
+        assertFalse("无关类不得放行（真驱动取证面）",
+                CatchAllMatcher.isWhitelistFamily(
+                        Class.forName(STATEMENT_CANDIDATE, false, getClass().getClassLoader()),
+                        STATEMENT_CANDIDATE, java.util.Collections.<String>emptySet()));
+    }
+
     // ---------- T-IbatisPanwei 券 E：扫描预算只对候选类计数 ----------
 
     /**
@@ -429,6 +515,15 @@ public class CatchAllMatcherTest {
             }
         }
         return null;
+    }
+
+    /** Oracle 驱动类按测试 classpath 取（不初始化；ojdbc11 是 agent 既有 testImplementation 夹具）。 */
+    private static Class<?> oracleClass(String name) throws Exception {
+        try {
+            return Class.forName(name, false, CatchAllMatcherTest.class.getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new AssertionError("测试 classpath 缺 ojdbc11（同族判定夹具前置）：" + name, e);
+        }
     }
 
     /** H2 类按隔离 loader 取（不污染系统 loader——ZeroLoadClassWriterWeaveTest 的前置条件）。 */

@@ -19,6 +19,8 @@ import cn.song.mybatisplus.visualizer.ui.XmlInlineSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
+import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider
@@ -479,7 +481,15 @@ class ConvertToSqlAction : AnAction() {
                     val inlineTags = if (XmlInlineSqlDetector.detectionEnabled()) {
                         XmlInlineSqlGutterLineMarkerProvider.carriersInRange(file, selStart, selEnd)
                     } else emptyList()
-                    val tags = (mapperTags + inlineTags).sortedBy { it.textRange.startOffset }
+                    // 券 A 收尾：iBatis 语句候选（根 <sqlMap> 的直接子级，O(子级数)；兜底已让位须在此补回）
+                    val ibatisTags = file.rootTag
+                        ?.takeIf { it.name == IbatisXmlGutterLineMarkerProvider.SQL_MAP_TAG }
+                        ?.children?.filterIsInstance<XmlTag>()
+                        ?.filter {
+                            IbatisXmlGutterLineMarkerProvider.isStatementAnchor(it) &&
+                                it.textRange.startOffset in selStart..selEnd
+                        } ?: emptyList()
+                    val tags = (mapperTags + inlineTags + ibatisTags).sortedBy { it.textRange.startOffset }
                     tags to tags.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
@@ -519,9 +529,7 @@ class ConvertToSqlAction : AnAction() {
         val element = file.findElementAt(editor.caretModel.offset)
         val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
         var statement = tag
-        while (statement != null && statement.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS &&
-            !(XmlInlineSqlDetector.detectionEnabled() && XmlInlineSqlDetector.isSqlCarrierTag(statement))
-        ) {
+        while (statement != null && !isXmlStatementCandidate(statement)) {
             statement = statement.parentTag
         }
         if (statement != null) {
@@ -535,10 +543,7 @@ class ConvertToSqlAction : AnAction() {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-                        .filter {
-                            it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS ||
-                                (XmlInlineSqlDetector.detectionEnabled() && XmlInlineSqlDetector.isSqlCarrierTag(it))
-                        }
+                        .filter { isXmlStatementCandidate(it) }
                     val displayTexts = statements.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
@@ -573,6 +578,16 @@ class ConvertToSqlAction : AnAction() {
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
     private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int? = null) {
+        // T-Ibatis2Support 券 A 收尾：iBatis 语句走独立预览链——它没有 namespace / Mapper 接口 /
+        // 实体注解，进 mapper 链只会拿到空上下文；且兜底通道已让位，不补这条就一个入口都没有。
+        if (IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
+            SqlPreviewService.previewAsync(project, {
+                IbatisXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), tag.name)
+            }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return
+        }
         if (XmlInlineSqlDetector.isSqlCarrierTag(tag)) {
             SqlPreviewService.previewAsync(project, {
                 XmlInlineSqlPreviewService.preview(project, tag)
@@ -764,6 +779,22 @@ class ConvertToSqlAction : AnAction() {
         /** 插件动作 ID（plugin.xml 中注册）。 */
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.ConvertToSql"
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        /**
+         * T-Ibatis2Support 券 A 收尾：XML 侧「这算一条可预览的语句吗」的**单一判据**。
+         *
+         * 三路来源：MyBatis mapper 语句 / 通用内嵌 SQL 载体 / iBatis `<sqlMap>` 语句。
+         *
+         * 第三条是必须的：通用兜底通道已对 iBatis 语句**让位**（防与专用 provider 双图标），
+         * 若不在这里补回，Alt+Shift+Q 在 sqlMap 文件里会一条语句都列不出来——gutter 图标正常、
+         * 快捷键却空候选，属最难自证的半可用态。
+         *
+         * 三处消费点共用本判据（光标上爬 / 全文件候选 / 选区候选），避免三份条件漂移。
+         */
+        internal fun isXmlStatementCandidate(tag: com.intellij.psi.xml.XmlTag): Boolean =
+            tag.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS ||
+                (XmlInlineSqlDetector.detectionEnabled() && XmlInlineSqlDetector.isSqlCarrierTag(tag)) ||
+                IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)
 
         @Volatile
         internal var kotlinWrapperUnavailableNoticeForTest: ((Notification) -> Unit)? = null

@@ -519,6 +519,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
     internal val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
 
+    /** iBatis 2.x `<sqlMap>` 语句预览开关（T-Ibatis2Support 券 A，默认开）。 */
+    internal val ibatisXmlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.ibatisXml"))
+
     /** mapper XML 语法高亮注入开关（T-XmlSynHi D4=T-PerfSweep16 F46 补 UI）：State.xmlSynHiEnabled 字段原有，此前无面板入口。 */
     internal val xmlSynHiCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlSynHi"))
 
@@ -1374,6 +1377,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-MapperNavCoexistYield：让位开关漏挂 isModified 会让勾选后 Apply 不启用（假开关回潮）
             || mapperNavYieldCheck.isSelected != s.mapperNavYieldToCodeHelper
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
+            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关（漏挂 isModified → 勾选后 Apply 不启用）
+            || ibatisXmlCheck.isSelected != s.ibatisXmlEnabled
             // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
             || (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value != s.pagesXmlSourceMode
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
@@ -1526,6 +1531,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             GutterGroupSwitches.applyTo(s, gutterGroupMultiSelect.selectedFlags())
             s.mapperNavYieldToCodeHelper = mapperNavYieldCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
+            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关写回（随 UI 分区，读写判定同归属）
+            s.ibatisXmlEnabled = ibatisXmlCheck.isSelected
             // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
             s.pagesXmlSourceMode = (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value
                 ?: PluginSettings.PAGES_SOURCE_AUTO
@@ -1639,6 +1646,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterGroupMultiSelect.setFlags(GutterGroupSwitches.flagsFrom(s))
             mapperNavYieldCheck.isSelected = s.mapperNavYieldToCodeHelper
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
+            // T-Ibatis2Support 券 A：iBatis sqlMap 预览开关回填
+            ibatisXmlCheck.isSelected = s.ibatisXmlEnabled
             // T-PagesHql：maintainPage 源语言档回填
             pagesSourceCombo.selectedItem = pagesSourceOptions().firstOrNull { it.value == s.pagesXmlSourceMode }
                 ?: pagesSourceOptions().first()

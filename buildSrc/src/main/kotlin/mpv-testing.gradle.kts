@@ -235,6 +235,9 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     // T-GaussDbDialect 券 06：平台 SQL 方言注册的运行期可见性（SqlDialectMappings 候选列表）——
     // 默认 test 桶 classpath 无 Database 插件，只能在 DB 集成通道断言；无需真实库连接
     "testDbPlatformDialect" to "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
+    // T-ExecPsiGate：exec 链「可建 PSI 门」与「清映射自愈」——要真实 SqlDialectMappings 与
+    // SQL 方言 Language 对象（默认 test 桶剥掉 database/intellij.sql jar 后断言只会退化成空绿）
+    "testDbExecPsiGate" to "cn.song.mybatisplus.visualizer.execute.ExecPsiGateTest",
     // T-CiNightly（2026-11-05）：连通性冒烟从默认 test 桶挪进 DB 集成通道。它要真实 MySQL，
     // 而分片/默认 test 在 CI 上是排除它的（-PtestShardExcludeClasses），等于长期没人跑；
     // 挂进 testDatabase 后，夜间那条 DB 腿会自动带上它。纯 JDBC 断言，不需要平台沙盒。
@@ -742,6 +745,10 @@ intellijPlatformTesting {
             // 仍把它捞进 testShardN，而分片沙盒无 database jar，两用例必红（「沙盒未安装
             // com.intellij.database」）。本清单才是分片侧的唯一排除口径。
             "cn.song.mybatisplus.visualizer.database.PlatformSqlDialectRegistrationTest",
+            // T-ExecPsiGate：exec 链可建 PSI 门 + 清映射自愈（SqlDialectMappings / 方言 Language
+            // 都要 Database 插件；默认 test 桶与分片沙盒都剥了 database jar，只能在 DB 通道跑）。
+            // 本清单是分片侧唯一排除口径——漏登会让它被捞进 testShardN 并在那里必红。
+            "cn.song.mybatisplus.visualizer.execute.ExecPsiGateTest",
         )
         // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
         // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿

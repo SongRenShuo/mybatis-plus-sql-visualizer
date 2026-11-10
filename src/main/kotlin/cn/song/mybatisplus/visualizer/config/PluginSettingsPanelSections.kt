@@ -714,6 +714,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                 toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
             })
+            // T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览开关（默认开）
+            addRow(p, g, "", ibatisXmlCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.ibatisXml")
+                toolTipText = MpSqlVisualizerBundle.message("settings.ibatisXml.tip")
+            })
             // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
                 model = DefaultComboBoxModel(pagesSourceOptions())
