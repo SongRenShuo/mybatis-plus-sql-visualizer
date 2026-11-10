@@ -507,6 +507,32 @@ open class SqlLogConsoleBridge(
                         if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
                     }
                 }
+                // T-ConsoleFlushAlign：MyBatis / Hibernate 同款静默兜底——正常参数化语句虽在参数行到达
+                // 即闭合，但无参语句（MyBatis 不打 Parameters 行）、TRACE 关闭的 Hibernate 末条语句与
+                // 日志截断尾（「Preparing:/SQL 行已见、参数行未达」）仍要等同线程后继行才闭合，
+                // 应用安静后同样滞留（Hibernate 受喂行开关门控，与 processConsoleLine 同口径）。
+                ctx.myBatisParser.flushSettled(nowMs)
+                val myBatisTaken = ctx.myBatisParser.takeEntries()
+                beatBacklog += myBatisTaken.size
+                for (entry in myBatisTaken) {
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++
+                        continue
+                    }
+                    if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
+                }
+                if (ctx.hibernateEnabled) {
+                    ctx.hibernateParser.flushSettled(nowMs)
+                    val hibernateTaken = ctx.hibernateParser.takeEntries()
+                    beatBacklog += hibernateTaken.size
+                    for (entry in hibernateTaken) {
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++
+                            continue
+                        }
+                        if (buffer.addEntry(entry.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE))) produced++
+                    }
+                }
             }
         }
         LogPerfProbe.recordGauge("LogBridge.settledBacklog", beatBacklog)
@@ -519,7 +545,8 @@ open class SqlLogConsoleBridge(
         if (produced > 0) {
             LOG.info(
                 "flushSettledEntries: 静默冲刷待闭合条目 $produced 条（语句行之后同线程再无后继行——" +
-                    "JdbcTemplate 无 TRACE 参数行 / 线程按请求新建；阈值 ${JdbcTemplateLogParser.DEFAULT_SETTLE_MS}ms）",
+                    "JdbcTemplate 无 TRACE 参数行 / MyBatis 无参语句与截断尾 / Hibernate TRACE 关闭的末条语句；" +
+                    "阈值 ${JdbcTemplateLogParser.DEFAULT_SETTLE_MS}ms）",
             )
         }
         return produced
@@ -1232,8 +1259,13 @@ internal fun processConsoleLine(
     // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
     // 那些语句永无同线程后继行）。冲刷出的条目与本次喂行产出的条目由下方同一次 takeEntries() 一并交出。
     // R10：ShardingSphere 解析器同款接入（其条目只在下一条 Logic 行闭合，静默冲刷是低频访问的兜底）。
+    // T-ConsoleFlushAlign：MyBatis / Hibernate 同款接入——无参语句（MyBatis 不打 Parameters 行）、
+    // TRACE 关闭的 Hibernate 末条语句与日志截断尾（「Preparing:/SQL 行已见、参数行未达」窗口）
+    // 仍要等同线程后继行才闭合，实时链路从不调 closePending，靠这一拍兜底。
     ctx.jdbcParser.flushSettled()
     if (ctx.shardingEnabled) ctx.shardingParser.flushSettled()
+    ctx.myBatisParser.flushSettled()
+    if (ctx.hibernateEnabled) ctx.hibernateParser.flushSettled()
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
         ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     if (taken.isEmpty()) return emptyList()
