@@ -2,6 +2,14 @@
 
 # SQL Visualizer Changelog
 
+## [2026.11.10-beta.3] - 2026-11-10
+
+> 范围＝v2026.11.10-beta.2 之后的用户可见增量：iBatis 两条真机缺陷修复（DAO 行多余预览图标、jdbcType 未驱动回填引号）。
+
+### Fixed
+- **iBatis DAO 调用行多出一个 SQL 预览图标（T-IbatisFix3）**：`return client.queryForObject("User.selectById", id);` 这类行上出现两枚图标。根因是 `JdbcTemplateMethodDetector` 的方法名白名单（`queryForObject` / `queryForList` / `queryForMap` / `update` / `delete`）与 iBatis `SqlMapExecutor` 的入口名完全重叠，而它只判方法名、不判接收者类型，于是同一次调用被两条 gutter 通道同时认领；更本质的是**语义错位**——该图标点开是把首个字符串实参当 SQL 预览，而这里是语句 id 不是 SQL。现按家族排除制让位：iBatis 的语句 id 调用行**只保留跳转箭头、零预览图标**，普通 JdbcTemplate 调用不受影响（有对照用例钉住）
+- **`#x:jdbcType#` 填值后没有引号（T-IbatisFix3）**：`WHERE EMAIL = #email:VARCHAR:0#` 填 `11212` 预览出 `= 11212`。服务层此前从未构造 `paramHints`，面板按「纯数字 → 裸渲染」启发式走。现按 jdbcType 映射到既有 `ParamKind` 六类：字符串族恒引号、数值族不引号、时间族先试 ANSI 类型字面量再回落引号；**映射不到的类型不产出提示**（维持既有启发式，行为与修复前逐字节一致，宁缺勿错）
+
 ## [2026.11.10-beta.2] - 2026-11-10
 
 > 范围＝v2026.11.10-beta.1 发行包之后的全部用户可见增量：**iBatis 预览四项真机缺陷修复**（selectKey 子语句展示、占位符格式化保真、重渲染失败可见、信息级告警分档）。沿用 11.10 内测线取 `-beta.2`（内测通道允许 `-beta.N` 后缀，`beta.2 > beta.1` 可被更新检查识别）。

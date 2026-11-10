@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.10-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10-beta.2/mybatis-plus-sql-visualizer-2026.11.10-beta.2.zip",
-  "changeNotes": "iBatis 的 insert 预览会把 selectKey 子语句一并展示，pre 与 post 的时序在块注释里标明\n预览里的 #x# 与 #{} / ${} 占位符在格式化、关键字换行、竖向排列下不再被拆散\n勾选条件并填值后若重渲染失败，面板直接显示失败原因，不再静默停在旧 SQL\niBatis 的信息性说明与真正的失败分档显示，不再混在同一行\n好用的话，欢迎到 Marketplace 页评分留言",
+  "version": "2026.11.10-beta.3",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10-beta.3/mybatis-plus-sql-visualizer-2026.11.10-beta.3.zip",
+  "changeNotes": "iBatis 的 DAO 调用行只保留跳转箭头，不再多出一个 SQL 预览图标\n带 jdbcType 的占位符按类型回填——VARCHAR 加引号，数值不加，时间走标准字面量\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }
