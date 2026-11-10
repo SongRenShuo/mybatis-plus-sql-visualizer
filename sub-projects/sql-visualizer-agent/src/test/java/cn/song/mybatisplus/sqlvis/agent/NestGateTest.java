@@ -179,7 +179,7 @@ public class NestGateTest {
      * 注入（NestGate 包内可见，跨包测试走这一条转发）；阈值显式设 5000ms，不依赖系统属性。
      */
     @Test
-    public void 陈旧嵌套_超阈值计数且语义不变() throws Exception {
+    public void 陈旧嵌套_未达连续次数不计_长事务合法嵌套不误报() throws Exception {
         final Object outer = newInstance("FakeVendorFixtures$VendorPs");
         final Object inner = newInstance("FakeVendorFixtures$VendorPs");
         StatementRegistry.register(outer, "SELECT outer", "jdbc:nest://db");
@@ -199,19 +199,20 @@ public class NestGateTest {
                 .onStatementEnter(outer);
         assertTrue("链首帧 token 非 0", tokenOuter != 0L);
 
-        // 时钟拨过阈值（+6s > 5s）后再 enter = 陈旧嵌套
+        // 时钟拨过阈值（+6s > 5s）后再 enter：这是一条「跑很久的语句里再执行一条」的合法嵌套，
+        // 只进 1 次、远未达连续 3 次门槛 → 不得计数（2026-11-10 收口：单次超阈值不足定性）。
         clock.addAndGet(6_000_000_000L);
         final long tokenInner = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
                 .onStatementEnter(inner);
         assertTrue("嵌套帧 token 非 0", tokenInner != 0L);
-        assertEquals("链龄超阈值的嵌套进入必须计一次陈旧",
-                staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+        assertEquals("单次超阈值嵌套不得计为陈旧（避免长事务误报）",
+                staleBefore, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
 
         // 语义不变：内层产出、外层被抑制，全链仍只 1 条事件
         cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
                 .onExecuteExit(inner, null, "executeUpdate", tokenInner, null, null);
         final SqlEvent event = queue().poll();
-        assertNotNull("陈旧链下内层仍必须产出（观测不改放行语义）", event);
+        assertNotNull("长链下内层仍必须产出（观测不改放行语义）", event);
         assertEquals("SELECT inner", event.sql);
         cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
                 .onExecuteExit(outer, null, "executeUpdate", tokenOuter, null, null);
@@ -219,6 +220,43 @@ public class NestGateTest {
         assertEquals("外层帧仍按原语义计 nestSuppressed",
                 suppressedBefore + 1,
                 cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestSuppressedCount());
+    }
+
+    /**
+     * 泄漏形态**才**计数：同一链上连续 3 次「超阈值仍进入」→ {@code nestStale} 恰好 +1；
+     * 之后同一链继续进入**不再重复计**（泄漏期不刷读数）。
+     *
+     * <p>判据差别即本轮收口的目的：合法长语句内部的嵌套是个位数且随后闭合；真泄漏的链一直不闭合，
+     * 每条语句都以嵌套进入出现，连续次数持续累积。
+     */
+    @Test
+    public void 连续陈旧三次_计一次且同一链不重复计() throws Exception {
+        final java.util.concurrent.atomic.AtomicLong clock =
+                new java.util.concurrent.atomic.AtomicLong(1_000_000_000L);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setNestClockForTest(clock::get);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setNestStaleMsForTest(5_000L);
+        final long staleBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount();
+
+        final Object first = newInstance("FakeVendorFixtures$VendorPs");
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(first); // 链首
+        clock.addAndGet(6_000_000_000L);
+
+        // 第 1、2 次超阈值进入：未达门槛
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        assertEquals("未达连续 3 次不得计数",
+                staleBefore, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+
+        // 第 3 次：达门槛，计一次
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        assertEquals("连续第 3 次超阈值进入必须计一次陈旧",
+                staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+
+        // 第 4、5 次：同一链不再重复计（泄漏期读数不刷）
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        assertEquals("同一链只计一次",
+                staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
     }
 
     /** 外层夹具：executeUpdate 转发给内层（池包装/日志代理的等价形态）。 */

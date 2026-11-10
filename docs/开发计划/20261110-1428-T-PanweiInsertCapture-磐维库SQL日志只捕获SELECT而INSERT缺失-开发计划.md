@@ -981,7 +981,23 @@ HEARTBEAT {... "nestSuppressed":0,"nestStale":0,"nestMaxDepth":1,"unresolved":0}
 **10 条事件全出**（含 DROP/CREATE/两条 INSERT），三拍心跳 `nestSuppressed=0 / nestStale=0 /
 nestMaxDepth=1`——原用户场景「前几条有、之后整类消失」不再出现。
 
-#### 11.8.6 not run
+#### 11.8.6 陈旧判据收口（2026-11-10，不改语义、不发版）
+
+观测上线后暴露出一个精度问题：判据是「链龄 > 5s 仍进入即计一次」，一条跑几十秒的语句内部再执行语句
+（存储过程、批量里逐批刷新）会被误报成泄漏。收口为**双门槛 + 同链只计一次**：
+
+- 阈值 `sqlvis.agent.nestStaleMs` 默认 **5s → 30s**；
+- 新增连续进入门槛 `sqlvis.agent.nestStaleStreak` 默认 **3**：同一链上超阈值仍进入的次数要连续达到 3 次才计数，
+  且同一链只计一次（泄漏期不刷读数）；链首（`depth 0→1`）与「未超阈值的进入」都会把连续计数清零。
+
+判据成立的依据：合法长语句内部的嵌套是个位数且随后闭合（depth 归零即清零）；真泄漏的链一直不闭合，
+该线程此后每条语句都以嵌套进入出现，连续次数持续累积。**抑制语义一行未改**。
+
+读数：`NestGateTest` 6 例全绿，其中新增两例——`陈旧嵌套_未达连续次数不计_长事务合法嵌套不误报`（单次超阈值
+不计数）与 `连续陈旧三次_计一次且同一链不重复计`（第 3 次 +1、第 4/5 次不再涨）；`StatementWeaverExceptionExitTest`
+6 例同时复跑保绿。按用户口径**本轮不发版**，改动留在 `[Unreleased]`。
+
+#### 11.8.7 not run
 
 - 全量门禁 `testShards` 与 `verifyGate` / `verifyPlugin`（按纪律交收口代理）；
 - runIde 沙盒验收（本轮无面板布局/控件改动，状态栏文案由 `CaptureStatusBarTest` 覆盖）；

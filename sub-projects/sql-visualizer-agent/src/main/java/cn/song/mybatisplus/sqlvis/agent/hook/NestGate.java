@@ -45,8 +45,20 @@ final class NestGate {
      */
     static final String STALE_MS_PROP = "sqlvis.agent.nestStaleMs";
 
-    /** 陈旧阈值默认值（毫秒）。 */
-    static final long DEFAULT_STALE_MS = 5_000L;
+    /** 陈旧阈值默认值（毫秒）。2026-11-10 收口：5s → 30s，避开长耗时语句的合法嵌套。 */
+    static final long DEFAULT_STALE_MS = 30_000L;
+
+    /**
+     * 判定陈旧所需的**连续进入次数**（默认 3，系统属性 {@code sqlvis.agent.nestStaleStreak}）。
+     *
+     * <p>为什么不是「超阈值就算一次」：一条跑几十秒的语句内部再执行语句（存储过程、批量里逐批刷新）
+     * 是**合法嵌套**，单次超阈值不足以定性。真正的泄漏形态是「链一直不闭合」——该线程此后每条语句
+     * 都以「嵌套进入」的姿态出现，连续次数会持续累积；而合法长语句内部的嵌套次数是个位数且必然
+     * 随后闭合（depth 归零即清零）。
+     */
+    static final String STALE_STREAK_PROP = "sqlvis.agent.nestStaleStreak";
+
+    private static final int DEFAULT_STALE_STREAK = 3;
 
     /** 一次性取证 dump 的栈帧数上限（只在这一条路径抓栈，不在每条语句上抓）。 */
     static final int STALE_DUMP_FRAMES = 12;
@@ -95,6 +107,9 @@ final class NestGate {
     /** 陈旧阈值（纳秒；系统属性可覆盖，非法值回落默认）。 */
     private static volatile long staleNanos = resolveStaleNanos();
 
+    /** 连续陈旧进入次数门槛（系统属性可覆盖，非法值回落默认）。 */
+    private static volatile int staleStreak = resolveStaleStreak();
+
     /** 每线程嵌套态：depth = 当前已织 execute 帧数；innerEmitted = 本链已有内层产过事件。 */
     private static final class State {
         int depth;
@@ -109,6 +124,10 @@ final class NestGate {
         long chainStartNanos;
         /** T-NestGateObserve：本链号（单调；dump 行用它配对）。 */
         long chainId;
+        /** T-NestGateObserve：本链内「超阈值仍进入」的连续次数（链首重置）。 */
+        int staleStreak;
+        /** T-NestGateObserve：本链是否已计过一次陈旧（同一链只计一次，避免泄漏期刷计数）。 */
+        boolean staleCounted;
     }
 
     private static final ThreadLocal<State> STATE = new ThreadLocal<State>() {
@@ -138,6 +157,9 @@ final class NestGate {
                 // 与入口 token 的取值同量级；嵌套帧与出口路径**不**再读时钟。
                 s.chainStartNanos = nowNanos();
                 s.chainId = CHAIN_IDS.incrementAndGet();
+                // 新链：陈旧连续计数与「已计过」标记一并清零（同一链只计一次陈旧）
+                s.staleStreak = 0;
+                s.staleCounted = false;
             } else {
                 // 疑似嵌套：这里是唯一的第二个时钟读取点，也是陈旧判定唯一发生地。
                 // 纯计数（NEST_STALE / MAX_DEPTH / 一次性 dump），**不**参与下面 depth 的流转。
@@ -153,20 +175,30 @@ final class NestGate {
     /**
      * T-NestGateObserve：嵌套进入时的**纯观测**（不改 depth / innerEmitted / 返回值）。
      *
-     * <p>判定：链首距今 &gt; {@link #STALE_MS_PROP}（默认 5000ms）即计数一次陈旧嵌套。陈旧本身
-     * 不产生任何行为变化——抑制语义仍由既有 depth/innerEmitted 决定（本轮只观测，见计划 §11.7b：
-     * 上一轮在此改语义导致 10 例转红、整案回退）。
+     * <p>判定（2026-11-10 收口）：链首距今 &gt; {@link #STALE_MS_PROP}（默认 **30s**）**且**本链的
+     * 连续陈旧进入次数达到 {@link #STALE_STREAK_PROP}（默认 **3**）才计一次陈旧，同一链只计一次。
+     * 单次超阈值不足以定性——一条跑几十秒的语句内部再执行语句是合法嵌套；真泄漏的形态是
+     * 「链一直不闭合」，该线程此后每条语句都以嵌套进入出现，连续次数持续累积。
+     * 陈旧本身不产生任何行为变化：抑制语义仍由 depth/innerEmitted 决定（本轮只观测，见计划 §11.7b）。
      */
     private static void noteNestedEnter(State s) {
+        if (s.staleCounted) {
+            return; // 同一链已计过一次，不再重复计（泄漏期不刷读数）
+        }
         final long start = s.chainStartNanos;
         if (start == 0L) {
             return; // 未记起点（异常路径/旧 State）：无法判龄，不计
         }
         final long ageNanos = nowNanos() - start;
-        final long threshold = staleNanos;
-        if (ageNanos <= threshold) {
-            return; // 正常嵌套（一次 execute 的时长）
+        if (ageNanos <= staleNanos) {
+            s.staleStreak = 0; // 未超阈值：链仍「年轻」，连续计数清零
+            return;
         }
+        s.staleStreak++;
+        if (s.staleStreak < staleStreak) {
+            return; // 未达连续次数门槛（可能是合法长语句内部的少量嵌套）
+        }
+        s.staleCounted = true;
         NEST_STALE.incrementAndGet();
         // 取证 dump：只在 debug 档、只第一次——不打 SQL 原文，不刷屏。
         if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.isVerboseLogging()
@@ -298,6 +330,7 @@ final class NestGate {
         STALE_DUMPED.set(false);
         clockOverride = null;
         staleNanos = resolveStaleNanos();
+        staleStreak = resolveStaleStreak();
     }
 
     static void setEnabledForTest(boolean value) {
@@ -339,6 +372,22 @@ final class NestGate {
             // 非法值按默认
         }
         return DEFAULT_STALE_MS * 1_000_000L;
+    }
+
+    /** 连续陈旧进入门槛：系统属性优先，非法/小于 1 回落默认。 */
+    private static int resolveStaleStreak() {
+        try {
+            final String raw = System.getProperty(STALE_STREAK_PROP);
+            if (raw != null) {
+                final int v = Integer.parseInt(raw.trim());
+                if (v >= 1) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignore) {
+            // 非法值按默认
+        }
+        return DEFAULT_STALE_STREAK;
     }
 
     private static boolean resolveEnabled() {
