@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.8-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8-beta.1/mybatis-plus-sql-visualizer-2026.11.8-beta.1.zip",
-  "changeNotes": "日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-07",
+  "version": "2026.11.10-beta.3",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10-beta.3/mybatis-plus-sql-visualizer-2026.11.10-beta.3.zip",
+  "changeNotes": "iBatis 的 sqlMap 语句 id 上 Ctrl+B 与 Ctrl+Click 现在能跳回 DAO 调用点，双向都通了\niBatis 的 DAO 调用行与方法定义行都不再多出一枚点开没有 SQL 的预览图标\n带 jdbcType 的占位符按类型回填，VARCHAR 加引号，数值不加，时间走标准字面量\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }
