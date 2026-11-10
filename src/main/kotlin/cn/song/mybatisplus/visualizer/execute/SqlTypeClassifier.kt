@@ -143,7 +143,11 @@ object SqlTypeClassifier {
                     sb.append(' ')
                     i++
                     while (i < sql.length) {
-                        if (sql[i] == '\'') {
+                        if (sql[i] == '\\') {
+                            // T-HiddenBugPerfScan 券 O：反斜杠转义对成对消费（MySQL 口径——\' 使字符串继续、\\ 为字面反斜杠）。曾把 \' 当字符串结束，掩码错位可令 INTO OUTFILE 等写证据从掩码文本里消失、只读证明 fail-open（确认闸旁路，方向危险）；成对消费使 \\'（双反斜杠+引号）仍正确闭合。
+                            sb.append("  ")
+                            i += 2
+                        } else if (sql[i] == '\'') {
                             if (i + 1 < sql.length && sql[i + 1] == '\'') {
                                 // '' 转义：字面量内引号
                                 sb.append("  ")
