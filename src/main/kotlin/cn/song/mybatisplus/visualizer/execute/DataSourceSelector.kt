@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.sql.canCreateSqlPsiFor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
@@ -2153,6 +2154,63 @@ object DataSourceSelector {
         }
         val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
             ?: if (renderedDialectName == null) ExecDialectRouting.MYSQL_LANGUAGE_ID else ExecDialectRouting.GENERIC_LANGUAGE_ID
+        applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, renderedDialectName, targetDs)
+    }
+
+    /**
+     * T-ExecPsiGate：exec 侧方言映射的三态结果（供日志与测试判别，生产链只看「有没有映射上」）。
+     */
+    internal enum class ExecMappingOutcome {
+        /** 映射已就位（写成功，或读探测确认本就等于目标方言）。 */
+        APPLIED,
+
+        /** 目标语言建不出 SQL PSI，闸门拦下：未写映射，并尝试清掉了历史映射。 */
+        SKIPPED_NO_PSI,
+
+        /** 闸门放行但映射没落地（EDT 超时 / 反射面不可用 / setMapping 抛错）。 */
+        NOT_APPLIED,
+    }
+
+    /**
+     * T-ExecPsiGate：**可建 PSI 门** + 映射落地（exec 链）。
+     *
+     * 缺陷形态（2026-11-10 用户报障，Mac / UOS）：`mapDialectBeforePsi` 解析出目标方言后**无条件**
+     * 写映射，而 `PsiManager.findFile` 的 PSI 语言正是由这份映射经 `LanguageSubstitutors` 决定的
+     * （243 平台 `LanguageUtil.getLanguageForPsi` 源码）。目标语言在本机建不出 SQL PSI 时——
+     * 自注册方言的 `<lang.parserDefinition>` 未生效、平台缺该方言、或历史版本在
+     * `.idea/workspace.xml` 里留下的坏映射——`findFile` 只会返回 null（平台侧没有异常可抓），
+     * 用户看到的就是笼统的「创建临时 SQL 文件失败：findPsi」。
+     *
+     * preview 链从一开始就有这道门（`ui/SqlPreviewPanelEditorLifecycle.kt` 里的
+     * `canCreateSqlPsiFor` 判定后「跳过映射、保平台默认」），exec 链一直缺——所以同一台机器上
+     * 预览正常、点执行必死。
+     *
+     * 处置：建不出 PSI 就**不写映射**，并**清掉已有映射**（只「不写」不够：上一版写进
+     * workspace.xml 的坏值仍会生效），让 PSI 按平台默认语言建出来。清失败不影响后续
+     * `findFile`（取不到 PSI 时 `createTempPsiFile` 还有一次自愈重试）。
+     */
+    internal fun applyExecDialectMapping(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+        targetLanguage: Any?,
+        targetId: String,
+        renderedDialectName: String? = null,
+        targetDs: Any? = null,
+    ): ExecMappingOutcome {
+        // targetLanguage == null 时没有可判定的语言（historical 行为 = MySQL 语义），闸门无从判起，
+        // 保持既有链路（ensureMapped 内部按 MySQL 处理）。
+        if (targetLanguage != null && !canCreateSqlPsiFor(targetLanguage)) {
+            val cleared = runCatching { DialectPreMapping.clearMapping(project, vf) }.getOrDefault(false)
+            dialectMappedVf = null
+            dialectMappedLanguageId = null
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec dialect mapping SKIPPED for ${vf.name}: language '${targetId}' " +
+                    "cannot build SQL PSI (rendered=$renderedDialectName), historical mapping cleared=$cleared; " +
+                    "keep platform default dialect",
+            )
+            return ExecMappingOutcome.SKIPPED_NO_PSI
+        }
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
         // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
@@ -2161,7 +2219,15 @@ object DataSourceSelector {
             dialectMappedVf = vf
             dialectMappedLanguageId = targetId
             LOG.info("[M36] dialect pre-mapped to $targetId for ${vf.name} (O-136 ds-dialect routing, ds=${targetDs?.javaClass?.simpleName})")
+            return ExecMappingOutcome.APPLIED
         }
+        // T-ExecPsiGate：映射没落地也要留痕——原实现只有 if 没有 else，映射失败零日志，
+        // 用户侧只能看到下游的 findPsi 报错，真因完全不可归因。
+        LOG.warn(
+            "[M36][T-ExecPsiGate] exec dialect mapping NOT applied for ${vf.name}: target=$targetId, " +
+                "rendered=$renderedDialectName, mappedLang=${runCatching { DialectPreMapping.configuredLanguageId(project, vf) }.getOrNull()}",
+        )
+        return ExecMappingOutcome.NOT_APPLIED
     }
 
     /** 打开 Database 工具窗口（无配置数据源时引导用户，仅显式执行路径调用；预览路径静默）。 */
