@@ -269,6 +269,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：先单版本探针——改 1 个发行版 → 拉页面 HTML 数 `user-mention` 确认机制，再批量。**反例**：第一版按「HTML 实体应该能挡住」直接选 `&#64;`，改完 2026.11.10 页面毫无变化，还先怀疑成页面缓存；真因是解实体之后才做提及识别，若当时直接批量就是 30 个白改。
 **Seen 1× (2026-11-10)**——用户报障「Contributors 每次多两个我不认识的」，同轮内先踩 `&#64;` 再说清。
 
+### L28 织入型 enter/exit 配对不能只挂「方法体里显式出现的返回点」——被调方异常逃逸时没有出口点
+
+**规则**：给方法体插 enter/exit 钩子做配对计数（嵌套门、计时、事务边界都属这类）时，只在 `IRETURN/LRETURN/ARETURN/ATHROW` 前插 exit 是不够的：**异常从被调方法抛出、而本方法体没有 try/catch/finally 时，字节层只有一条正常返回指令、一个 `athrow` 都没有**，出口钩子无处可插 → enter 计入、exit 永不执行，深度/计数永久偏 1。判据必须是「异常穿过本方法时也走出口」——把方法体包一层 catch-all handler（`TryCatchBlockNode` → 调同一出口 → `athrow`），并用「夹具方法自身无 try/catch、委托调用抛异常，抛完后同线程下一帧仍产出」的用例钉住；反向验证摘掉 handler 必须变红。
+**证据**：T-NestGateObserve 离线定案（计划 §11.8.5，2026-11-10）：`StatementWeaver.weaveMethod` 的 `isTimedExit` 只认显式返回点；磐维 A 模式 `org.panweidb.jdbc.PgStatement.execute(String)Z` 原始字节只有 `invokevirtual executeWithFlags` + `ireturn`（无 handler、无 athrow），失败 DROP 的 `SQLException` 逃逸时出口不存在 → 该线程 depth 永久 +1，后续整类语句被当成外层抑制，而 `nestSuppressed` 为 0（被抑制的是最外层自己）。织入产物逐方法计数：enter=1、exit=显式返回数（`execute` 1/1、`executeQuery(String)` 1/2），排除「双重入口」；真机对照：两次失败 DROP 泄漏（`nestStale=2/nestMaxDepth=3`），两次成功 SELECT 不泄漏（`nestStale=0/nestMaxDepth=1`）。
+**正例**：先做「织后字节 enter/exit/返回点逐方法计数」再下结论，并用成功/失败两条载荷做对照；**反例**：拿「exit 数 == 显式返回指令数」当健康判据收工——它天然看不见隐式异常出口（本轮首版就是这么把「成功路径也泄漏」写错的）。
+**Seen 1× (2026-11-10)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
