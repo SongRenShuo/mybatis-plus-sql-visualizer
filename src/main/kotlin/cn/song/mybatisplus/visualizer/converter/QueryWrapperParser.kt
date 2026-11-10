@@ -576,8 +576,12 @@ class QueryWrapperParser(
     /** ORDER BY 项列表；支持 `orderByAsc("alias", Entity::getX)` 字符串别名前缀（清单 P11）。 */
     private fun orderItems(call: WrapperCall, asc: Boolean): List<OrderByItem> {
         val first = call.args.getOrNull(0)
-        // 形式一：orderByAsc("alias", Entity::getX) —— 第一参为表别名
-        if (first is WrapperArg.ValueArg && call.args.size >= 2) {
+        // 形式一：orderByAsc("alias", Entity::getX) —— 第一参为表别名。
+        // T-HiddenBugPerfScan 券 N：别名分支加「第二参是 ColumnArg」判据——字符串版多列
+        // orderByAsc("a","b") 的实参全为 ValueArg，曾把首参误判为别名且别名分支只收
+        // ColumnArg → 字符串列全被 mapNotNull 过滤，ORDER BY 整体静默消失（单列形态
+        // size==1 恰好走 fallback 掩盖了缺陷）。别名后跟 lambda 列才成立。
+        if (first is WrapperArg.ValueArg && call.args.size >= 2 && call.args[1] is WrapperArg.ColumnArg) {
             val alias = (first.value as? SqlValue.Literal)?.unquoted
             if (!alias.isNullOrEmpty()) {
                 return call.args.drop(1)
