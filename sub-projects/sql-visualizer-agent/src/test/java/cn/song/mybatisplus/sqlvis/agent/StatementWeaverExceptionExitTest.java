@@ -54,6 +54,12 @@ import static org.junit.Assert.fail;
  *   <li><b>返回形态</b>：int / boolean / ResultSet / void 四种返回各一例真织入 + 运行（含异常路径）；</li>
  *   <li><b>帧</b>：handler 帧只声明出口实际读取的槽（token/this/sql），其余 TOP——且不得被
  *       {@code patchFrames} 二次追加（否则跨类校验期 VerifyError）。</li>
+ *   <li><b>t-sql-insight 合并裁决（2026-11-11 dev 并入）</b>：出口插桩只认**真正的返回点**
+ *       （IRETURN/LRETURN/FRETURN/DRETURN/ARETURN/RETURN）；原始 {@code athrow} 指令**不插出口**
+ *       ——它可能被驱动方法体内部的 handler 捕获（随后正常返回），插了会对「内部 catch 后成功」
+ *       产假失败事件（{@code SqlInsightWeaveProbeTest#internallyCaughtThrowMustNotReportAnExecutionError}
+ *       钉住）。真正逃逸的异常由方法边界的 catch-all handler 兜住并回调一次（handler 帧常驻，
+ *       enter/exit 恒 1:1，本类 1)~3) 的行为断言不变）。</li>
  * </ol>
  */
 public class StatementWeaverExceptionExitTest {
@@ -89,6 +95,9 @@ public class StatementWeaverExceptionExitTest {
         SqlHookCallbacks.resetNestGateForTest();
         savedDisabled = AgentState.isDisabled();
         AgentState.setDisabled(false);
+        // 门在本分支默认关（嵌套语义裁决见 NestGate 类 KDoc）——本类守卫的是「门开启时」的
+        // 出口配对能力（深度计数/泄漏判据全走 NestGate），故显式开闸跑（同 NestGateTest 先例）。
+        nestGateEnabled(true);
         dir = Files.createTempDirectory("sqlvis-exit-").toFile();
         writeWoven(FIXTURE, FIXTURE_FACE);
         writeWoven(NORMAL_PREFIX + "$VendorPs", PS_FACE);
@@ -101,10 +110,23 @@ public class StatementWeaverExceptionExitTest {
         StatementRegistry.clearForTest();
         SqlHookCallbacks.resetNestGateForTest();
         try {
+            nestGateEnabled(false);
+        } catch (Exception ignore) {
+            // 复位失败不推翻用例结论（静态字段随下个用例 setUp 显式重设）
+        }
+        try {
             queue().clear();
         } catch (Exception ignore) {
             // 队列反射失败不影响用例结论
         }
+    }
+
+    /** NestGate 在 hook 包且 package-private，走反射桥（同 NestGateTest 先例）。 */
+    private static void nestGateEnabled(boolean value) throws Exception {
+        final Class<?> gate = Class.forName("cn.song.mybatisplus.sqlvis.agent.hook.NestGate");
+        final java.lang.reflect.Method set = gate.getDeclaredMethod("setEnabledForTest", boolean.class);
+        set.setAccessible(true);
+        set.invoke(null, value);
     }
 
     // ---------- 1) 行为：异常出口不得泄漏深度（返回形态逐例） ----------
@@ -317,7 +339,8 @@ public class StatementWeaverExceptionExitTest {
             final String label = dotted + "#" + e.getKey();
             assertEquals(label + " 原字节不应已有钩子", 0, b.enter + b.exit);
             assertEquals(label + " enter 必须恰好 1", 1, a.enter);
-            assertEquals(label + " 显式返回点必须仍有出口，handler 另加 1 次：" + e.getKey(),
+            assertEquals(label + " 显式返回点必须仍有出口，handler 另加 1 次（原始 athrow 不插出口："
+                            + "可能被驱动内部 catch——逃逸异常由 handler 兜住回调，见类 KDoc 5)）：" + e.getKey(),
                     b.returns + 1, a.exit);
             assertEquals(label + " 必须恰好新增 1 个 catch-all handler",
                     b.catchAllHandlers + 1, a.catchAllHandlers);
@@ -381,8 +404,13 @@ public class StatementWeaverExceptionExitTest {
                             case Opcodes.DRETURN:
                             case Opcodes.ARETURN:
                             case Opcodes.RETURN:
-                            case Opcodes.ATHROW:
                                 c.returns++;
+                                break;
+                            case Opcodes.ATHROW:
+                                // t-sql-insight 合并裁决：原始 athrow 不再插出口（可能被驱动内部
+                                // catch，插了会对「内部 catch 后成功返回」产假失败事件）——单独计数，
+                                // 出口判据只认真正的返回点（见 assertTimedMethodInvariants）。
+                                c.athrowCount++;
                                 break;
                             default:
                                 break;
@@ -422,6 +450,7 @@ public class StatementWeaverExceptionExitTest {
         int enter;
         int exit;
         int returns;
+        int athrowCount;
         int catchAllHandlers;
         boolean handlerFollowedByFrame;
     }

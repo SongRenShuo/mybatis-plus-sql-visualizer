@@ -332,13 +332,11 @@ public final class StatementWeaver implements Opcodes {
         final int sqlSlot = (kind == Kind.EXEC_PARAM) ? thisSlot + 1 : -1; // 引用（String，首参）
         final int retSlot = (sqlSlot >= 0 ? sqlSlot : thisSlot) + 1;       // 出口暂存 2 槽
         int inserted = 0;
-        // T-NestGateFix（2026-11-10）：timed 面的异常出口。try 范围从**原始方法体第一条指令**开始
-        // （head 之后）——head 里唯一的可抛指令 onStatementEnter 自身全吞、LSTORE 不可抛，且在
-        // head 内 token 尚未赋值，若把 head 也包进 try，handler 帧声称的 token 槽在该点会是 top。
-        // try 的 end 在方法末尾自建 label（AbstractInsnNode 列表尾不是 label），handler 追加在其后，
-        // 不会被自身 try 范围包住。
-        final AbstractInsnNode originalFirst = mn.instructions.getFirst();
-        final LabelNode tryStart = new LabelNode();
+        // Only escaping exceptions are execution failures. Original ATHROW instructions may be
+        // caught inside the driver; implicit throws have no ATHROW in this method at all.
+        final org.objectweb.asm.tree.LabelNode bodyStart = new org.objectweb.asm.tree.LabelNode();
+        final InsnNode escapingThrow = new InsnNode(ATHROW);
+
         if (timed) {
             final InsnList head = new InsnList();
             head.add(new VarInsnNode(ALOAD, 0));
@@ -350,8 +348,22 @@ public final class StatementWeaver implements Opcodes {
                 head.add(new VarInsnNode(ALOAD, 1));
                 head.add(new VarInsnNode(ASTORE, sqlSlot));
             }
-            mn.instructions.insertBefore(originalFirst, tryStart);
-            mn.instructions.insertBefore(tryStart, head);
+            head.add(bodyStart);
+            mn.instructions.insertBefore(mn.instructions.getFirst(), head);
+            final org.objectweb.asm.tree.LabelNode bodyEnd = new org.objectweb.asm.tree.LabelNode();
+            final org.objectweb.asm.tree.LabelNode handler = new org.objectweb.asm.tree.LabelNode();
+            mn.instructions.add(bodyEnd);
+            mn.instructions.add(handler);
+            // No COMPUTE_FRAMES / class loading: original locals can have any value here.
+            // Only our immutable entry slots survive; patchFrames appends their exact types.
+            Object[] originalLocals = new Object[tokenSlot];
+            java.util.Arrays.fill(originalLocals, TOP);
+            mn.instructions.add(new FrameNode(F_NEW, tokenSlot, originalLocals,
+                    1, new Object[]{"java/lang/Throwable"}));
+            mn.instructions.add(escapingThrow);
+            // Append last so existing driver handlers retain priority.
+            mn.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                    bodyStart, bodyEnd, handler, "java/lang/Throwable"));
         }
 
         AbstractInsnNode insn = mn.instructions.getFirst();
@@ -381,7 +393,8 @@ public final class StatementWeaver implements Opcodes {
                 l.add(new VarInsnNode(ALOAD, retSlot));
                 mn.instructions.insertBefore(insn, l);
                 inserted++;
-            } else if (timed && isTimedExit(op) && op != ATHROW) {
+            } else if (timed && isTimedExit(op) && (op != ATHROW || insn == escapingThrow)) {
+                final boolean throwing = op == ATHROW;
                 final InsnList l = new InsnList();
                 // 1) 返回值/异常先存槽（RETURN 无返回值，不存不恢复）
                 if (op == IRETURN) {
@@ -410,11 +423,10 @@ public final class StatementWeaver implements Opcodes {
             // 槽布局在方法顶部已算好；此处按新布局重算 maxLocals（token 2 + this 1 + sql 0/1 + 暂存 2）
             mn.maxLocals = retSlot + 2;
             if (timed) {
-                // 必须先补原帧、再追加 handler 帧：patchFrames 会给**每个** FrameNode 追加
-                // token/this/sql 槽位，若 handler 帧先存在就会被二次追加（跨类校验期 VerifyError）。
+                // insight 修法：escapingThrow（timed 块内无条件追加）保证 inserted>=1，故这里只补
+                // 原.frame——patchFrames 给每个 FrameNode 追加 token/this/sql 槽，handler 的
+                // FrameNode 也被同规则补齐（handler 点 token/this/sql 自有槽均已赋值，声明成立）。
                 patchFrames(mn, tokenSlot, thisSlot, sqlSlot, ownerInternal);
-                appendCatchAllExitHandler(mn, kind, tryStart, tokenSlot, thisSlot, sqlSlot, retSlot,
-                        ownerInternal);
             }
             return true;
         }
@@ -471,75 +483,6 @@ public final class StatementWeaver implements Opcodes {
             l.add(new InsnNode(ACONST_NULL)); // failure
         }
         l.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onExecuteExit", EXIT_SIG, false));
-    }
-
-    /**
-     * T-NestGateFix（2026-11-10）：timed 面的 **catch-all 异常出口**——方法体抛出的任何 Throwable
-     * （含从被调方法逃逸、本方法体没有显式 athrow 的形态）都先走一次 {@code onExecuteExit}，
-     * 再原样重抛。动因见计划 §11.8.5：只对方法体内显式 return/athrow 插桩时，异常逃逸路径没有
-     * 出口点，`NestGate.enter` 计入而 `exit` 不执行 → 该线程 depth 永久 +1，后续整类语句被当成
-     * 外层抑制（磐维 A 模式 `PgStatement.execute` 真机实证）。
-     *
-     * <p><b>帧</b>：handler 处补 F_NEW 帧（与 EXPAND_FRAMES 读入的原方法帧同一编码路径），locals
-     * 只声明出口实际读取的三个槽（token LONG / this / 可选 sql），其余槽一律 TOP——TOP 对任何实参
-     * 类型都可接受，避免依赖原方法参数是否被重新赋值。本帧在 {@link #patchFrames} **之后**追加，
-     * 故不会被二次补槽。
-     *
-     * <p><b>双出口去重</b>：显式 athrow 前已有出口；异常再进 handler 会二次调用
-     * {@code NestGate.exit}，其 {@code lastExitToken} 去重使其成为 no-op（同帧双 ATHROW 的原设计）。
-     */
-    private static void appendCatchAllExitHandler(MethodNode mn, Kind kind, LabelNode tryStart,
-                                                  int tokenSlot, int thisSlot, int sqlSlot,
-                                                  int retSlot, String ownerInternal) {
-        final LabelNode tryEnd = new LabelNode();
-        final LabelNode handler = new LabelNode();
-        mn.instructions.add(tryEnd);
-        mn.instructions.add(handler);
-        final Object[] frameLocals = handlerFrameLocals(ownerInternal, tokenSlot, thisSlot, sqlSlot);
-        // 必须用 F_NEW：本织入器读类时用 EXPAND_FRAMES，原方法帧（经 patchFrames 处理后）都以
-        // F_NEW 交给 MethodWriter；F_NEW 走 visitFrameEnd 路径（previousFrame 数组维护偏移）。
-        // 若这里用 F_FULL 这类压缩帧类型，会落到另一条只维护 previousFrameOffset 字段的路径——
-        // 该字段在 F_NEW 路径下从不更新，混用会算错 offset_delta（实测：handler 实际在 73，
-        // 编出来的帧落在 124，JVM 报 VerifyError: StackMapTable error: bad offset）。
-        mn.instructions.add(new FrameNode(Opcodes.F_NEW,
-                frameLocals.length, frameLocals, 1, new Object[]{"java/lang/Throwable"}));
-        final InsnList l = new InsnList();
-        l.add(new VarInsnNode(ASTORE, retSlot)); // 取出异常
-        appendOnExecuteExit(l, kind, mn, thisSlot, sqlSlot, tokenSlot, retSlot, ATHROW);
-        l.add(new VarInsnNode(ALOAD, retSlot));
-        l.add(new InsnNode(ATHROW)); // 原样重抛（语义不变）
-        mn.instructions.add(l);
-        if (mn.tryCatchBlocks == null) {
-            mn.tryCatchBlocks = new ArrayList<TryCatchBlockNode>();
-        }
-        mn.tryCatchBlocks.add(new TryCatchBlockNode(tryStart, tryEnd, handler, null));
-    }
-
-    /**
-     * handler 帧的 locals（ASM API 形态：long 占 1 个元素、TOP 占 1 槽）。
-     *
-     * <p>只声明出口实际读取的槽：0..tokenSlot-1 全部 TOP（含 this 与形参——handler 不读它们，
-     * TOP 对任何实际类型都可接受），tokenSlot 为 LONG（head 已赋值且此后不被覆盖），
-     * thisSlot 为定义类，sqlSlot（仅 EXEC_PARAM）为 String。
-     */
-    private static Object[] handlerFrameLocals(String ownerInternal, int tokenSlot, int thisSlot,
-                                               int sqlSlot) {
-        final List<Object> locals = new ArrayList<Object>();
-        for (int slot = 0; slot < tokenSlot; slot++) {
-            locals.add(Opcodes.TOP);
-        }
-        locals.add(Opcodes.LONG);
-        for (int slot = tokenSlot + 2; slot < thisSlot; slot++) {
-            locals.add(Opcodes.TOP);
-        }
-        locals.add(ownerInternal);
-        if (sqlSlot >= 0) {
-            for (int slot = thisSlot + 1; slot < sqlSlot; slot++) {
-                locals.add(Opcodes.TOP);
-            }
-            locals.add("java/lang/String");
-        }
-        return locals.toArray();
     }
 
     /**
