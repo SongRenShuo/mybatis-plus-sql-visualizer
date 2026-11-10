@@ -15,6 +15,7 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
@@ -197,19 +198,135 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         )
     }
 
+    // ======================== 并发外部写守卫 ========================
+
+    /**
+     * 插件之外还有写方（同步盘 / 其他进程 / 另一个窗口）时，「绕过 VFS 的外部写 + 并发 refresh」
+     * 会不会把 exec 文件的 vf 打成失效，从而在 `findFile` 上表现为 null（用户 Mac/UOS 报的那一形态）。
+     *
+     * **实测读数（2026-11-10，Windows / 本地盘）**：外部写 344 次 + 每次并发 `refreshAndFindFileByIoFile`，
+     * 主线程 369 次 `findFile` → `null=0 ex=0`，vf 全程有效。平台对「内容被外部改掉」是自愈的
+     * （内容更新、vf 有效、PSI 重建），所以这条分支在本地盘上**打不出来**。
+     *
+     * 判据不是「必须为 null」（那样会随机器时序时红时绿），而是**诊断必须能归型**：
+     * 只要观测到 null，`execPsiDiagnostics` 就必须报 `vfValid=false`。若出现
+     * `null 且 vfValid=true`，说明还有第三条 null 来源（既不是 vf 失效，也不是映射坏），
+     * 本用例会先红——这正是 Unix watcher / 网络盘 / 同步盘环境上最想知道的那件事。
+     */
+    fun testConcurrentExternalWriteNeverYieldsUndiagnosedNull() {
+        val base = project.basePath ?: error("project.basePath null")
+        val dir = File(base, ".idea/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec")
+        assertTrue("exec 目录应可创建", dir.exists() || dir.mkdirs())
+        // 生产同款固定文件名：这条探针要的是真实路径的 VFS 行为，不做用例隔离改名
+        val f = File(dir, "mpsql-exec.sql")
+        f.writeText("select 1")
+        val vf = WriteIntentReadAction.compute<VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
+        }
+        assertNotNull("前置：exec 文件应 VFS 可见", vf)
+
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val writer = Thread {
+            var i = 0
+            while (!stop.get()) {
+                runCatching { f.writeText("select ${i++}") }
+                writes.incrementAndGet()
+                runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f) }
+                Thread.sleep(1L)
+            }
+        }
+        writer.isDaemon = true
+        writer.start()
+
+        var ok = 0
+        var nulls = 0
+        var exceptions = 0
+        var nullWithValidVf = 0
+        val deadline = System.currentTimeMillis() + 1200L
+        try {
+            while (System.currentTimeMillis() < deadline) {
+                val attempt = runCatching { findExecPsi(project, vf) }
+                if (attempt.isFailure) {
+                    exceptions++
+                } else if (attempt.getOrNull() == null) {
+                    nulls++
+                    val diag = execPsiDiagnostics(project, vf)
+                    if (!diag.contains("vfValid=false")) {
+                        nullWithValidVf++
+                        println("[RACE] null 但 vf 仍有效（第三条来源？）: $diag")
+                    }
+                } else {
+                    ok++
+                }
+                UIUtil.dispatchAllInvocationEvents()
+                Thread.sleep(2L)
+            }
+        } finally {
+            stop.set(true)
+            writer.join(2000L)
+        }
+        println("[RACE] round=windows ok=$ok null=$nulls ex=$exceptions nullWithValidVf=$nullWithValidVf externalWrites=${writes.get()}")
+
+        assertEquals(
+            "并发外部写期间若出现『null 但 vf 有效』，说明 findFile 还有第三个 null 来源（不是 vf 失效，\n" +
+                "也不是映射坏），必须先查清才能收口。计数：ok=$ok null=$nulls ex=$exceptions",
+            0,
+            nullWithValidVf,
+        )
+    }
+
+    // ======================== 坏映射下重复取 PSI 守卫 ========================
+
+    /**
+     * 坏映射（映射到非 `SqlLanguageDialect` 的语言）下，`findFile` **每次都是 CCE，不会退化成 null**。
+     *
+     * **实测读数（2026-11-10，Windows / 243 平台测试沙盒）**：连取 5 次全部
+     * `THROW:ClassCastException`（`[CCE] sequence=[THROW:ClassCastException ×5]`）。
+     *
+     * 这条否掉了一个本来很有说服力的假说：「预热链先撞 CCE（只 warn，用户看不到）→ 冷路径再取
+     * 一次时平台把该文件的 provider 记成失败态 → 返回 null」。既然平台每次都重新抛，那用户文案
+     * 里的纯 null **不能**归到映射侧，只能是 vf 失效（`vfValid=false`）或第三条来源。
+     * 若将来某个平台版本开始在这条序列里返回 null，本用例先红——那时用户的文案就多了一种解释。
+     */
+    fun testRepeatedFindFileAfterMappingCceKeepsThrowing() {
+        val vf = writeExecFile("select 7")
+        assertTrue(
+            "前置：必须能把文件映射到建不出 PSI 的语言",
+            DialectPreMapping.setLanguageOnEdt(project, vf, NoParserForTest),
+        )
+        val seq = (1..5).map { i ->
+            val r = runCatching { findExecPsi(project, vf) }
+            val desc = when {
+                r.isFailure -> "THROW:${r.exceptionOrNull()!!.javaClass.simpleName}"
+                r.getOrNull() == null -> "NULL"
+                else -> "PSI:${r.getOrNull()!!.language.id}"
+            }
+            println("[CCE] attempt#$i -> $desc")
+            desc
+        }
+        println("[CCE] sequence=$seq")
+        assertTrue(
+            "坏映射下 findFile 必须恒抛（出现任何非 THROW 都说明平台行为变了，用户那条纯 null 就多一种来源）: $seq",
+            seq.all { it.startsWith("THROW") },
+        )
+    }
+
     // ======================== 诊断 ========================
 
     /**
-     * **另一条 null 分支的复现**：vf 失效（`FileManagerImpl.findFile` 的三条 null 分支之一）。
+     * **vf 失效分支**：用户那条纯 null 的两个来源之一（另一来源见 §testRepeatedFindFile… 的否证）。
      *
-     * 为什么要单独钉一例：用户报的 `findPsi: PsiManager.findFile null` 有两条可能来源——
-     * 映射指向的语言建不出 SQL PSI（§testHeal 那例，本单主修），或 **vf 在 refresh 之后被
-     * 失效**（本单实测复现的这一支）。两条来源在用户侧长得一模一样，只有五元组里的
-     * `vfValid` 能把它们分开；而本单的自愈（清映射）对 vf 失效**无效**，重定位是另一个子单
-     * （计划 §八 V3）。这条用例既把 null 分支复现出来，也钉住「诊断必须能区分」这件事。
+     * 生产形态：exec 文件在盘上、内容也刚写成功，但手里的 vf 条目已失效（watcher 与 refresh
+     * 抢跑 / 外部替换 / 网络盘、同步盘）。平台 `FileManagerImpl.findFile` 对失效 vf 只返回 null，
+     * 清方言映射救不了它——必须**重新 refresh 定位**取新 vf。
+     *
+     * 判据三段：①失效 vf 上 `findFile` 必须拿不到 PSI，且五元组报 `vfValid=false`（诊断区分力）；
+     * ②文件仍在盘上时，`healExecPsi` 必须重定位成功并返回 PSI；③返回的 PSI 必须挂在**新** vf 上
+     * （缓存与 attach 要用同一个，否则又是一次失效引用）。
      */
-    fun testFindFileNullFromInvalidVf() {
-        val vf = writeExecFile("select 5")
+    fun testHealRefindsVfWhenInvalid() {
+        val (ioFile, vf) = writeExecFileWithIo("select 5")
         assertNotNull("前置：正常状态 PSI 应可建", findExecPsi(project, vf))
 
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
@@ -225,11 +342,17 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         )
         val diag = execPsiDiagnostics(project, vf)
         println("[ExecPsiGate] invalid-vf diagnostics=$diag")
-        assertTrue("诊断必须报出 vfValid=false（这是区分两条 null 分支的唯一判据）: $diag", diag.contains("vfValid=false"))
-        assertNull(
-            "本单自愈只清映射，不负责 vf 重定位——这里必须仍为 null（V3 另立项的证据）",
-            DataSourceSelector.healExecPsi(project, vf, LOG),
-        )
+        assertTrue("诊断必须报出 vfValid=false（区分两条 null 分支的唯一判据）: $diag", diag.contains("vfValid=false"))
+
+        // 生产里文件一直在（写盘成功），只是 vf 条目失效——把内容写回盘上，vf 对象仍然失效
+        ioFile.writeText("select 5")
+
+        val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
+        assertNotNull("文件在盘上、vf 失效时必须靠重定位拿回 PSI（这正是用户那一形态的自愈面）", healed)
+        val healedVf = healed!!.virtualFile
+        assertNotNull("重定位后的 PSI 必须挂在具体 vf 上", healedVf)
+        assertNotSame("必须换到新 vf（沿用失效 vf 等于没修）", vf, healedVf)
+        assertTrue("重定位出来的 vf 必须有效", healedVf!!.isValid)
     }
 
     /** 失败文案的五元组：三项静态事实 + 映射语言 + 该语言能否建 PSI。 */
@@ -245,7 +368,10 @@ class ExecPsiGateTest : BasePlatformTestCase() {
     // ======================== 辅助 ========================
 
     /** 项目内 exec 文件（生产同款路径），落在 LocalFileSystem 上以便模拟真实 VFS 行为。 */
-    private fun writeExecFile(sql: String): VirtualFile {
+    private fun writeExecFile(sql: String): VirtualFile = writeExecFileWithIo(sql).second
+
+    /** 同上，同时返回磁盘 File（vf 失效重定位用例需要它来「把内容写回盘上」）。 */
+    private fun writeExecFileWithIo(sql: String): Pair<File, VirtualFile> {
         val base = project.basePath ?: error("project.basePath null")
         val dir = File(base, ".idea/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec")
         assertTrue("exec 目录应可创建", dir.exists() || dir.mkdirs())
@@ -258,7 +384,7 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
         }
         assertNotNull("exec 文件应 VFS 可见", vf)
-        return vf!!
+        return f to vf!!
     }
 
     /**

@@ -280,7 +280,7 @@ findPsi: null (name=mpsql-exec.sql, vfValid=true, dir=false, fileType=SQL,
 |---|---|---|---|
 | V1 | 用户机器的目标语言确实「拿得到但建不出 PSI」 | 让他们贴 `idea.log` 里 `dialect`/`M36` 段；或用 §6.3 的探针构建回传 | 转 V2 |
 | V2 | Mac/UOS 与 Windows 的差异来自 IDE 版本或 SQL 方言设置，而非平台契约 | 要 Build 号 + SQL Dialects 设置 | 若真是平台契约差异，需另立一单做三平台取证 |
-| V3 | 用户机器上 `vf.isValid()` 为 true（排除 `FileManagerImpl` 分支 B） | 探针五元组里的 `vfValid`；同时 grep `InvalidVirtualFileAccessException` | 若为 false，改走「VFS 失效自愈」子单（refresh 重试链） |
+| V3 | 用户机器上 `vf.isValid()` 为 true（排除 `FileManagerImpl` 分支 B） | 探针五元组里的 `vfValid` | **已升级为已实施**：R2/R3 实测后（本地能造出用户 null 形态的唯一路径就是 vf 失效）不再等真机读数，直接做成自愈支 1（`refreshAndFindFileByIoFile` 重定位 + 新 vf 建 PSI）；真机读数仍用于确认用户到底落在哪一支 |
 | V4 | `canCreateSqlPsiFor` 判 false ⟺ `findFile` 返回 null | 沙盒里用自定义无 parser 的 Language 造形态（§6.1 G2）**必须先在测试里把 null 复现出来** | **已实测修正（见 §12.3）**：false 时形态有两种——非 `SqlLanguageDialect` → 平台在 `SqlLanguageSubstitutor` 里直接抛 CCE；方言类但缺 parser definition → null。两者对调用方等价（拿不到可用 PSI），闸门一把挡住，判据不必换 |
 | V5 | `setMapping` 接受非 SQL 方言的 `Language`（构造 G2 前置态用） | 测试内实跑；不接受则给 `createTempPsiFile` 加 targetLanguage 注入缝 | 注入缝方案（纯测试面，不进生产语义） |
 | V6 | `clearMapping` 在该态下真的能把语言退回平台默认 | G2 断言 `configuredLanguageId(vf) !in {NoParserForTest}` 且 findFile 非空 | 若清不掉，改「显式映射到 GenericSQL」兜底 |
@@ -347,6 +347,10 @@ findPsi: null (name=mpsql-exec.sql, vfValid=true, dir=false, fileType=SQL,
 | null 分支本身 | **已复现**：`testFindFileNullFromInvalidVf` 用「refresh 后 vf 失效」把 `findFile` 打成 null，五元组报出 `vfValid=false`（区分力实证） |
 | 坏映射打断 PSI 的分支 | **已复现**：映射到非 `SqlLanguageDialect` 语言时 `findFile` 抛 CCE（栈见 §12.3） |
 | 因此 | 本单修的是「这一类失败机制」而不是「已证实的那一台机器的原因」。用户侧真正落在哪条分支，靠新版本的**五元组文案**一次判型（`vfValid` / `canPsi` 两项直接分开两条分支）；修复对 `canPsi=false` 与映射失败的路径立刻生效，对 `vfValid=false` 的路径只提供定位信息（V3 另立项） |
+| **R2 并发外部写探针（2026-11-10，Windows）** | `testConcurrentExternalWriteRaceProbe`：外部绕过 VFS 写 **344** 次 + 每次并发 `refreshAndFindFileByIoFile`，主线程同步 **369** 次 `findFile` → **null=0 / ex=0 / vf 全程有效**。结论：本地盘上「外部写 + 并发 refresh」**打不出 vf 失效**，平台对内容分叉是自愈的（内容更新、vf 有效、PSI 重建）⇒ 用户那条 null 更可能在**映射侧**（`canPsi=false`），或在 Unix watcher / 网络盘、同步盘这类 VFS 行为不同的环境（本机无 ≥16GB Linux 机器可验，`北京-16G` 已连不上、其余在役机仅 3GB 内存） |
+| R2 之后的落点 | 该探针已转为正式守卫：断言「**只要出现 null，五元组必须报 `vfValid=false`**」（不允许出现没有分支名的 null）。若将来在别的平台打出 `null 且 vfValid=true`，说明还有第三条来源，用例会先红 |
+| **R3 重复取 PSI 探针（2026-11-10）** | 坏映射下连取 5 次 → `[CCE] sequence=[THROW:ClassCastException ×5]`，**没有一次退化成 null**。否掉「预热先撞 CCE → 冷路径再取即 null」这条平台缓存假说 ⇒ 用户文案里的**纯 null 不能归到映射侧**，只能是 `vfValid=false`（vf 失效）或第三条来源 |
+| 批次结论（R2+R3） | 本地（Windows / 本地盘）能造出用户 null 形态的唯一路径是**显式让 vf 失效**；并发外部写与坏映射都造不出来。故用户的触发更可能在「VFS 行为不同的环境」（Unix watcher / 网络盘 / 同步盘）或「IDE 版本差异」，两者都需要真机五元组才能定案——本单不宣称已定位 |
 
 `RED PROBE` 标记已确认清零（`grep -c "RED PROBE"` = 0），工作树无残留探针。
 
@@ -369,11 +373,23 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
    definition，T-PreviewPsiDialect 真机两种都出过）。对调用方观测一致（拿不到可用 PSI），所以闸门与自愈
    都不需要按形态分叉；用户报的 null 形态仍以真机日志为最终判据（V1/V3 未关闭）。
 
-### 12.4 未做 / 留待
+### 12.4 R2/R3 实验与 V3 升格（2026-11-10，同一工作日第二轮）
 
-- **V3（vf 失效分支）未做自愈**：`healExecPsi` 只清映射、不做 `refreshAndFindFileByIoFile` 重定位。若真机五元组读出 `vfValid=false`，需另立子单做「vf 失效重定位」（返回新 vf，调用链要跟着换）。
+用户问「有没有复现用户的问题」→ 补两个实验，结论都不利于「随便试一下就能复现」：
+
+| 实验 | 做法 | 读数 | 结论 |
+|---|---|---|---|
+| R2 并发外部写 | 外部线程绕过 VFS 写 304~344 次 + 每次并发 `refreshAndFindFileByIoFile`，主线程同步 `findFile` | `ok=369/506 null=0 ex=0 nullWithValidVf=0`（三轮） | 本地盘上「外部写 + 并发 refresh」**打不出 vf 失效**，平台对内容分叉自愈 |
+| R3 坏映射重复取 | 坏映射下连取 5 次 `findFile` | `[THROW:ClassCastException ×5]` | 否掉「先 CCE 后 null」的平台缓存假说——纯 null **不能**归到映射侧 |
+
+两条合起来把「本地能造出用户 null 形态」的路径收窄到**只剩 vf 失效**，于是 V3 从「另立项」升为**本单自愈支 1**（`healExecPsi` 先判 `vf.isValid`，失效则 `refreshAndFindFileByIoFile` 重定位、用新 vf 建 PSI，调用方以 `psi.virtualFile` 取回那个 vf）。四条链路（冷路径 / 预热 / 缓存写点 / 后续 attach）都用同一个 vf。
+
+反向验证：临时把该分支条件改成 `false && …`（代码内标 `RED PROBE`）→ `10 tests completed, 1 failed`，`testHealRefindsVfWhenInvalid` 红在「文件在盘上、vf 失效时必须靠重定位拿回 PSI」；恢复后复跑全绿，`grep -c "RED PROBE"` = 0。
+
+### 12.5 未做 / 留待
+
 - **P2-1 未做**：263 上 `SqlDialectMappings.setMapping(VirtualFile, Any)` 的逐条字节码取证（T-ConsoleBind263 §十二 P2-6 已在册）。
-- **真机验收未做**：Mac / UOS 各一台，按 §6.3 判据；用户为内网环境，`idea.log` 只能靠 §S4 的五元组从失败弹窗文案里取。
+- **真机验收未做**：Mac / UOS 各一台，按 §6.3 判据；用户为内网环境，`idea.log` 只能靠 §S4 的五元组从失败弹窗文案里取。**Linux 侧本轮无法验**：`北京-16G` 连不上，其余在役机仅 3GB 内存（百度云 2 核 / 香港-4G 4 核，均无 Xvfb），跑不动平台测试沙盒，更别说 Linux IDE 沙盒。
 - 未跑全量门禁（按纪律由收口轮统一跑）；本次改动了 `buildSrc` 的测试桶登记，收口轮需确认分片 bucket 汇总行 `db=` 计数 +1。
 
 ---
