@@ -1,22 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Round-F (T-IbatisFix2) GUI acceptance probe.
+"""GUI 验收 CLI 驱动（提权跑；关停在前台抢窗口、防 CJK 输入、定帧取证三件事上）。
 
-Reuses the process conventions of previous rounds (elevated SendInput, English
-layout via WM_INPUTLANGCHANGEREQUEST, clipboard paste for CJK-proof typing,
-full-screen frames as default evidence).
+约定：提权 SendInput（沙盒 IDE 是提权进程，非提权输入被 UIPI 拦）、
+`WM_INPUTLANGCHANGEREQUEST` 切英文布局、剪贴板粘贴替代键入（免疫中文输入法）、
+全屏帧为默认证据形态。**坐标一律由命令行传入，文件内不写死坐标与 PID。**
 
-Usage:
+命令：
+  preflight              -- 找 IDE 窗口、置前台置顶、切英文布局、拍一帧
+  bring                  -- 只做置前台
+  shot <name>            -- 全屏帧 -> <shots>/<name>.png
+  zoom <name> <L> <T> <W> <H>  -- 区域帧
+  key <combo> [combo2 ...]     -- 按键/组合键（如 ctrl+shift+a、escape）
+  click <x> <y> [count]        -- 点击（默认 1 次）
+  ctrlclick <x> <y>            -- Ctrl+Click（跳声明）
+  copyref                      -- Ctrl+Alt+Shift+C（Copy Reference）后打印剪贴板
+  goto <frag> [downs]          -- Ctrl+Shift+N 打开文件，可选 Down xN 后 Enter
+  gotoline <line>              -- Ctrl+G 跳行号
+  pressn <key> <n>             -- 连按某键 n 次
+  scroll <amount> [x] [y]      -- 滚轮
+  gotob / gotolineb / rightb <args>  -- 上面几条的 Ctrl+B / 右键菜单变体
+  action <text>                -- Ctrl+Shift+A 找动作（插件自定义动作不在索引里，慎用）
+  paste <text> / esc <n>       -- 粘贴 / 连按 Esc
+  copy <x> <y>                 -- 点 SQL 区、全选、复制后打印剪贴板
+  clip                         -- 只打印剪贴板
+
+用法（示例）：
   python f1_gui.py preflight
-  python f1_gui.py shot <name>
-  python f1_gui.py zoom <name> <L> <T> <W> <H>
-  python f1_gui.py key <combo> [combo2 ...]
-  python f1_gui.py click <x> <y> [count]
-  python f1_gui.py open <line>
-  python f1_gui.py preview
-  python f1_gui.py copy                      # click SQL editor, Esc, Ctrl+C, print clipboard
-  python f1_gui.py clip                      # print clipboard only
+  python f1_gui.py goto User.xml 8
+  python f1_gui.py ctrlclick 123 456
+  python f1_gui.py clip
+
+取证目录：默认 `<repo>/build/MPSV-GUI-shots`，可用环境变量 `MPV_SHOTS` 覆盖为
+本轮的独立目录（每轮验收各用一个，避免跨轮帧混在一起）。窗口标题关键字可用
+`MPV_TITLE_HINT` 覆盖（默认指向 demo 工程窗口）。
 """
 import ctypes
+import os
 import sys
 import time
 from ctypes import wintypes
@@ -26,13 +45,14 @@ ctypes.windll.shcore.SetProcessDpiAwareness(2)
 import mss
 import pyautogui
 
-sys.path.insert(0, r"F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\record")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipread import read_clip  # noqa: E402
 
 pyautogui.FAILSAFE = False
 
-SHOTS = r"F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\build\MPSV-IbatisGap-UI243-shots"
-TITLE_HINT = "mybatis-plus-sql-visualizer-demo"
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SHOTS = os.environ.get("MPV_SHOTS", os.path.join(_REPO, "build", "MPSV-GUI-shots"))
+TITLE_HINT = os.environ.get("MPV_TITLE_HINT", "mybatis-plus-sql-visualizer-demo")
 
 u32 = ctypes.windll.user32
 k32 = ctypes.windll.kernel32
@@ -129,13 +149,16 @@ def bring_front():
     time.sleep(0.3)
     u32.ShowWindow(wintypes.HWND(hwnd), SW_MAXIMIZE)
     time.sleep(0.6)
-    # Alt press/release first (front-lock workaround), then SetForegroundWindow
     pyautogui.keyDown("alt")
     time.sleep(0.05)
     pyautogui.keyUp("alt")
     time.sleep(0.2)
     u32.SetForegroundWindow(wintypes.HWND(hwnd))
     time.sleep(0.3)
+    # A bare Alt press/release activates the window system menu (Alt+Space) on some
+    # apps; that menu then swallows every later keystroke. Close it defensively.
+    pyautogui.press("escape")
+    time.sleep(0.2)
     u32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
                                  ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
     u32.SetWindowPos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
@@ -165,6 +188,14 @@ def paste(text):
     time.sleep(1.0)
 
 
+def print_clip(tag="CLIP"):
+    text = read_clip(maxlen=20000)
+    print(tag + "_START")
+    print(text)
+    print(tag + "_END")
+    return text
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -174,7 +205,7 @@ def main():
     if cmd == "preflight":
         bring_front()
         switch_to_english()
-        shot("imgF-00-preflight")
+        shot("scene-00-preflight")
         return 0
 
     if cmd == "bring":
@@ -213,8 +244,32 @@ def main():
         print("click ->", (x, y), "x", count)
         return 0
 
-    if cmd == "open":
-        line = sys.argv[2]
+    if cmd == "ctrlclick":
+        bring_front()
+        x, y = int(sys.argv[2]), int(sys.argv[3])
+        pyautogui.moveTo(x, y)
+        time.sleep(0.5)
+        pyautogui.keyDown("ctrl")
+        time.sleep(0.2)
+        pyautogui.click(x, y)
+        time.sleep(0.8)
+        pyautogui.keyUp("ctrl")
+        time.sleep(2.5)
+        print("ctrlclick ->", (x, y))
+        return 0
+
+    if cmd == "copyref":
+        bring_front()
+        set_clipboard_text("__EMPTY__")
+        time.sleep(0.25)
+        pyautogui.hotkey("ctrl", "alt", "shift", "c")
+        time.sleep(1.2)
+        print_clip("COPYREF")
+        return 0
+
+    if cmd == "goto":
+        frag = sys.argv[2]
+        downs = int(sys.argv[3]) if len(sys.argv) > 3 else 0
         bring_front()
         switch_to_english()
         press("escape", 2)
@@ -222,34 +277,134 @@ def main():
         pyautogui.hotkey("ctrl", "shift", "n")
         time.sleep(2.0)
         switch_to_english()
-        paste("User.xml")
-        time.sleep(2.2)
-        shot("imgF-open-typed")
-        for _ in range(8):
-            pyautogui.press("up")
-            time.sleep(0.10)
+        paste(frag)
+        time.sleep(2.5)
+        shot("scene-goto-typed")
+        for _ in range(downs):
+            pyautogui.press("down")
+            time.sleep(0.12)
         time.sleep(0.4)
         press("return")
-        time.sleep(3.0)
-        shot("imgF-open-committed")
+        time.sleep(3.5)
+        shot("scene-goto-committed")
+        return 0
+
+    if cmd == "gotoline":
+        line = sys.argv[2]
+        bring_front()
         pyautogui.hotkey("ctrl", "g")
         time.sleep(1.2)
         paste(line)
         time.sleep(0.8)
         press("return")
-        time.sleep(2.0)
-        shot("imgF-open-at-line")
+        time.sleep(1.8)
+        shot("scene-gotoline")
         return 0
 
-    if cmd == "preview":
+    if cmd == "pressn":
+        # pressn <key> <n> : press a single key n times (caret column is preserved)
+        key = sys.argv[2]
+        n = int(sys.argv[3])
         bring_front()
-        pyautogui.hotkey("alt", "shift", "q")
-        time.sleep(4.0)
-        shot("imgF-preview-opened")
+        press(key, n)
+        time.sleep(0.5)
+        shot("scene-pressn")
+        print("pressn ->", key, n)
+        return 0
+
+    if cmd == "scroll":
+        # scroll <notches> : negative = down. Moves the pointer into the editor first.
+        n = int(sys.argv[2])
+        bring_front()
+        pyautogui.moveTo(800, 600)
+        time.sleep(0.3)
+        step = 3 if n > 0 else -3
+        for _ in range(abs(n)):
+            pyautogui.scroll(step)
+            time.sleep(0.05)
+        time.sleep(0.6)
+        print("scroll ->", n)
+        return 0
+
+    if cmd == "gotob":
+        # gotob <line> <col> : Ctrl+G "line:col" then Ctrl+B (goto declaration)
+        target = sys.argv[2] + ":" + sys.argv[3]
+        bring_front()
+        pyautogui.hotkey("ctrl", "g")
+        time.sleep(1.2)
+        paste(target)
+        time.sleep(0.8)
+        press("return")
+        time.sleep(1.8)
+        shot("scene-gotob-caret")
+        pyautogui.hotkey("ctrl", "b")
+        time.sleep(3.5)
+        shot("scene-gotob-goto")
+        print("gotob ->", target)
+        return 0
+
+    if cmd == "gotolineb":
+        # gotolineb <line> <col> : Ctrl+G line, Right x(col-1), then Ctrl+B
+        line, col = sys.argv[2], int(sys.argv[3])
+        bring_front()
+        pyautogui.hotkey("ctrl", "g")
+        time.sleep(1.3)
+        paste(line)
+        time.sleep(0.8)
+        press("return")
+        time.sleep(1.8)
+        shot("scene-gotolineb-caret1")
+        for _ in range(col - 1):
+            pyautogui.press("right")
+            time.sleep(0.08)
+        time.sleep(0.6)
+        shot("scene-gotolineb-caret2")
+        pyautogui.hotkey("ctrl", "b")
+        time.sleep(3.5)
+        shot("scene-gotolineb-goto")
+        print("gotolineb ->", line, col)
+        return 0
+
+    if cmd == "rightb":
+        # rightb <n> : press Right n times then Ctrl+B (goto declaration) -- atomic
+        n = int(sys.argv[2])
+        bring_front()
+        press("right", n)
+        time.sleep(0.8)
+        shot("scene-rightb-caret")
+        pyautogui.hotkey("ctrl", "b")
+        time.sleep(3.5)
+        shot("scene-rightb-goto")
+        print("rightb ->", n)
+        return 0
+
+    if cmd == "action":
+        # action <text> : Ctrl+Shift+A (Find Action), type, Enter
+        text = sys.argv[2]
+        bring_front()
+        pyautogui.hotkey("ctrl", "shift", "a")
+        time.sleep(1.6)
+        paste(text)
+        time.sleep(1.6)
+        shot("scene-action-typed")
+        press("return")
+        time.sleep(3.0)
+        shot("scene-action-done")
+        print("action ->", text)
+        return 0
+
+    if cmd == "paste":
+        bring_front()
+        paste(sys.argv[2])
+        return 0
+
+    if cmd == "esc":
+        bring_front()
+        press("escape", int(sys.argv[2]) if len(sys.argv) > 2 else 1)
         return 0
 
     if cmd == "copy":
-        # click the SQL editor, select-all, copy. No Esc (Esc closes the preview dialog).
+        bring_front()
         if len(sys.argv) >= 4:
             pyautogui.moveTo(int(sys.argv[2]), int(sys.argv[3]))
             time.sleep(0.2)
@@ -263,17 +418,11 @@ def main():
         time.sleep(0.5)
         pyautogui.hotkey("ctrl", "c")
         time.sleep(1.2)
-        text = read_clip(maxlen=8000)
-        print("CLIP_START")
-        print(text)
-        print("CLIP_END")
+        print_clip("COPY")
         return 0
 
     if cmd == "clip":
-        text = read_clip(maxlen=8000)
-        print("CLIP_START")
-        print(text)
-        print("CLIP_END")
+        print_clip("CLIP")
         return 0
 
     print("unknown cmd", cmd)
