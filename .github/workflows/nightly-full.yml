@@ -579,8 +579,38 @@ jobs:
         run: >-
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":dialectExternalVerify -PgifRecord=false --console=plain"
+      - name: 失败诊断输出（断言消息与 summary 打到任务日志）
+        # A-08（2026-11-10）：run 23/24 的 dialect 腿红在
+        # DialectExternalMatrixVerificationTest.kt:196（FAIL 桶断言），精简控制台只给
+        # 「java.lang.AssertionError at ...:196」，看不出是哪个实例、什么原因；而 summary.md
+        # 在断言之前就写好了（含 PASS/SKIP/TIMEOUT/FAIL 四桶明细），JUnit XML 的 failure
+        # message 里也有 joinToString 后的 FAIL 明细行。fast/tests/extras 早有这一步，
+        # dialect 漏了，导致这两轮红点不可归因。口径与 fast 腿一致，不下载工件即可定位。
+        if: failure()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $failMatches = [regex]::Matches($content, '<(?:failure|error) message="([^"]*)"', 'Singleline')
+            if ($failMatches.Count -gt 0) {
+              Write-Host "===== $($f.Name) ====="
+              foreach ($m in $failMatches) {
+                Write-Host ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
+                Write-Host '-----'
+              }
+            }
+          }
+          $summary = 'build/reports/dialectExternalVerify/summary.md'
+          if (Test-Path -LiteralPath $summary) {
+            Write-Host '===== 外部实例方言验证 summary.md ====='
+            Get-Content -LiteralPath $summary -Encoding UTF8 | ForEach-Object { Write-Host $_ }
+            Write-Host '-----'
+          }
       - name: 上传方言验证摘要
-        if: steps.matrix.outputs.ready == 'true'
+        # A-08（2026-11-10）：原条件只有 `steps.matrix.outputs.ready == 'true'`（隐含 success()），
+        # 测试一红整步就 skipped（run 23/24 实测 step#8 skipped），四桶明细工件随之丢失。
+        # 用 !cancelled() 让成功与失败都上传（取消运行不传），summary 在断言前已落盘，必有内容。
+        if: ${{ !cancelled() && steps.matrix.outputs.ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: dialect-verify-summary
