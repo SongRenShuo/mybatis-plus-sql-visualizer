@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.10",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10/mybatis-plus-sql-visualizer-2026.11.10.zip",
-  "changeNotes": "iBatis 2.x 全面支持，sqlMap 的预览、着色、折叠、补全与双向跳转都到位，DTD 随插件内置、离线可用\niBatis 预览参数可填值，动态条件按行勾选、iterate 可填值列表，SQL 随填值变化\niBatis 语句 id 与 DAO 调用点之间的 Ctrl+B 与 Ctrl+Click 双向都通，装了别的跳转插件也不受影响\n新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种\nSQL 列表追赶与风暴期刷新优化，高并发抓取不再卡顿，控制台清屏后自动恢复\n好用的话，欢迎到 Marketplace 页评分留言",
+  "version": "2026.11.11-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.11-beta.1/mybatis-plus-sql-visualizer-2026.11.11-beta.1.zip",
+  "changeNotes": "抓不到某类 SQL 时不再只有空白，状态栏会直接说明是让位丢弃、没产出，还是登记盲区\nMyBatis 的 STATEMENT 语句与 iBatis 的普通 Statement 语句，日志现在都能识别\niBatis 批处理不产生日志这件事会在面板上说清楚，不再像插件坏了\npg 家族存储过程、华为兼容模式批处理、读写分离连接的增强捕获补齐",
   "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }
