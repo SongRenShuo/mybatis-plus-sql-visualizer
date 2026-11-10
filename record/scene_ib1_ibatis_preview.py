@@ -229,10 +229,67 @@ def open_preview_from_gutter():
     raise RuntimeError('预览未弹出')
 
 
+def widen_splitter():
+    """参数列拉宽：窄栏下「全选/清除」按钮与值框被 viewport 裁掉（分栏比例不跨会话保留，
+    强杀 IDE 会丢上一次的宽度）。分隔条在窄栏时位于 region x≈455。"""
+    pyautogui.moveTo(740, 600)
+    time.sleep(0.3)
+    pyautogui.mouseDown()
+    time.sleep(0.15)
+    pyautogui.moveTo(855, 600, duration=0.25)
+    pyautogui.moveTo(975, 600, duration=0.25)
+    time.sleep(0.15)
+    pyautogui.mouseUp()
+    time.sleep(0.8)
+
+
+def locate_select_all(allow_widen=True):
+    """robot 组件树定位「全选」按钮中心（region 相对）。
+
+    分栏宽度随会话漂移（子代理实测另一会话在 screen (940,361)），写死必错；
+    按钮中心越出参数视口（>900 region）说明分栏回窄，先拉宽再重查。
+    robot 查不到时退回常量 SEL_ALL 并由 SQL 指纹断言兜底。
+    """
+    try:
+        import robot
+        for _ in range(2):
+            comps = robot.find_components("(//div[@text='全选'])")
+            if len(comps) == 1:
+                x, y = robot.component_screen_center("(//div[@text='全选'])")
+                rx, ry = x - REGION[0], y - REGION[1]
+                if rx > 900 and allow_widen:
+                    print('全选越出视口 (rx=%d)，拉宽分栏后重查' % rx)
+                    widen_splitter()
+                    continue
+                return (rx, ry)
+            print('robot 全选命中 %d 个' % len(comps))
+            if allow_widen:
+                widen_splitter()
+                continue
+            break
+    except Exception as e:
+        print('robot locate fail:', e)
+    return SEL_ALL
+
+
+def ensure_window_rect():
+    """窗口归位到标准构图并断言（坑 49）。"""
+    from ctypes import wintypes
+    u32 = ctypes.windll.user32
+    hwnd = sandbox_hwnd()
+    u32.MoveWindow(hwnd, 277, 25, 1370, 984, True)
+    time.sleep(2.0)
+    r = wintypes.RECT()
+    u32.GetWindowRect(hwnd, ctypes.byref(r))
+    got = (r.left, r.top, r.right, r.bottom)
+    assert got == (277, 25, 1647, 1009), '窗口归位失败: %s' % (got,)
+
+
 def prep_normalize_state():
     """只归一参数值与 username 值框（复选框改动会被「取消」回滚——2026-11-11 实测，
     条件勾选叙事放进 take 内用「全选」按钮完成）。"""
     open_preview_from_gutter()
+    widen_splitter()  # 窄栏下值框在视口外，先拉宽再清值
     # 填参数（age 用 19：isGreaterThan 语义 age > compareValue 18，填 18 会被引擎裁段）
     for pt, val in ((PARAM_ID, '1'), (PARAM_STATUS, '1'), (PARAM_AGE, '19')):
         pyautogui.click(*abs_pt(*pt))
@@ -266,6 +323,7 @@ def main():
 
     hwnd = sandbox_hwnd()
     assert ensure_foreground(hwnd, tries=6, click_xy=(700, 500), wait=0.7), 'IDE 未置前'
+    ensure_window_rect()
 
     close_existing_preview()
     open_file('ibatis2-demo/src/main/resources/sqlmap/User.xml', settle=2.5)
@@ -296,19 +354,33 @@ def main():
         time.sleep(0.6)
         base_fp = fingerprint(SQL_BOX)
 
-        # 2. 逐框勾选 → WHERE 逐段生长（全选按钮不触发实时重渲染，2026-11-11 实测）
-        fp_prev = base_fp
-        for name, cb in (('isNotNull:id', CB_ISNOTNULL),
-                         ('isEqual:status', (133, 468)),
-                         ('isGreaterThan:age', (133, 503))):
-            pyautogui.moveTo(abs_pt(*cb), duration=0.35)
-            time.sleep(0.25)
-            click_toggle_checked(cb, True)
-            fp_now = wait_sql_change(fp_prev)
-            assert diff_score(fp_prev, fp_now) > 3, '勾 %s 后 SQL 无变化' % name
-            fp_prev = fp_now
+        # 2. 点「全选」→ 四框齐勾，WHERE 三段齐现（e1cf3872 修复后实时重渲染）
+        sel_all = locate_select_all()
+        print('sel_all at:', sel_all)
+        pyautogui.moveTo(abs_pt(*sel_all), duration=0.4)
+        time.sleep(0.3)
+        pyautogui.click(*abs_pt(*sel_all))
+        fp_all = wait_sql_change(base_fp)
+        assert diff_score(base_fp, fp_all) > 3, \
+            '全选后 SQL 无变化（diff=%.1f，修复未生效？）' % diff_score(base_fp, fp_all)
+        img = grab_rgb()
+        bad = [c for c in CB_ROWS if not checked_blue(img, *c)]
+        assert not bad, '全选后仍有未勾条件框: %s' % bad
 
-        # 3. username 值框填 tom → LIKE '%tom%'
+        # 3. 取消勾 isNotNull: id → WHERE 少 AND ID = 1
+        pyautogui.moveTo(abs_pt(*CB_ISNOTNULL), duration=0.4)
+        time.sleep(0.3)
+        pyautogui.click(*abs_pt(*CB_ISNOTNULL))
+        fp_unchecked = wait_sql_change(fp_all)
+        assert diff_score(fp_all, fp_unchecked) > 3, '取消勾选后 SQL 无变化'
+
+        # 4. 勾回 → 段还原
+        pyautogui.click(*abs_pt(*CB_ISNOTNULL))
+        fp_rechecked = wait_sql_change(fp_unchecked)
+        assert diff_score(fp_unchecked, fp_rechecked) > 3, '勾回后 SQL 未还原'
+        fp_prev = fp_rechecked
+
+        # 5. username 值框填 tom → LIKE '%tom%'
         pyautogui.moveTo(abs_pt(*USERNAME_FIELD), duration=0.4)
         time.sleep(0.3)
         pyautogui.click(*abs_pt(*USERNAME_FIELD))
