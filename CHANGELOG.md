@@ -2,6 +2,14 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Fixed
+- **抓不到某类 SQL 时不再「零信息」（T-PanweiInsertCapture，e2b0b581）**：用户报障「磐维库上 SQL 日志只出 SELECT、INSERT 一条不见」，现场排查暴露的是四条**完全没有读数**的静默丢弃路径——现在它们都在 SQL 日志页签底部状态栏可见：①增强捕获接管期间被让位丢弃的**可解析 SQL 行**（此前控制台明明有、面板就是没有，两条通道都不留痕）；②agent 出口组装异常被自吞的次数；③嵌套门禁抑制的外层帧数；④登记盲区按 PS 实现类点名（并与盲区总次数配对显示）。配合既有的「已收事件 N / 未登记 JDBC 实现」，现场可以一眼分出「没产事件」「产了被丢」「让位吃了」三种形态
+- **两种真实存在的日志形态此前整条丢失（e2b0b581）**：MyBatis 的 `statementType="STATEMENT"` 走 `SimpleStatementHandler`，只打 `==>  Executing: <sql>`（无 `Preparing:`、无 `Parameters:`），旧解析器接不住；iBatis 2.x 的普通 `Statement`（`createStatement()`）打的是 `{stmt-N} Statement: <sql>`，标记前缀与关键字都与 PreparedStatement 那档不同，旧解析器当噪声丢掉。两者现在都能产出条目（后者来源标记为 IBATIS）。严格前缀模式（关掉「启用混合前缀」）仍按原契约只认用户配置的前缀，未识别的 SQL 形态行会计入解析诊断增量
+- **iBatis 批处理不再无声消失（e2b0b581）**：iBatis 2.x 的 `BaseLogProxy` 只记录 execute/executeUpdate/executeQuery，批处理（`executeBatch`）在框架层**一行日志都不产生**，控制台通道结构性看不到。现在「已识别到 iBatis 形态且增强捕获未开启」时，状态栏给出具名提示（开启增强捕获后由 agent 的批处理形态兜住）
+- **三方数据库增强捕获的同类登记缺口（e2b0b581，横向审计）**：按真实驱动 jar 逐个 javap 核对后补齐——pg 家族 `PgCallableStatement`（7 个包名，函数模式 `executeUpdate` 走 `executeWithFlags` 分支会漏采）、MySQL 5.1 `CallableStatement`、华为两族兼容模式 `MPreparedStatement`（`addBatch(String)` 覆盖父类不回调，批文本漏记）、海量/社区 openGauss 的读写分离包装语句与其连接类（读写分离模式下整条连接的语句进不了登记表）、SQLite 四参 `prepareStatement` 重载实现类、华为两族 connect 面驱动类
+
 ## [2026.11.10] - 2026-11-10
 
 > 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.9-beta.1` 与 `v2026.11.10-beta.1` ~ `beta.3` 四轮）：**iBatis 2.x 全面支持与交互补全**、**中兴 GoldenDB 第 15 方言**、**SQL 列表追赶与风暴期刷新优化**，以及两轮真机反馈驱动的 iBatis 缺陷修复。本节按能力面合并叙述并取代下方四轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 四篇内测说明：`20261109-1705` iBatis2 与 GoldenDB 与列表提速、`20261110-0300` iBatis 交互补全、`20261110-0930` 预览四项修复、`20261110-1140` 双向跳转与图标归位）。
