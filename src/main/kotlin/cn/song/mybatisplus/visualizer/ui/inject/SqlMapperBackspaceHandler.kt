@@ -12,8 +12,9 @@ import com.intellij.psi.PsiFile
  * `charDeleted` 阶段看到残留 `#` + `}` 再补删这两个字符 —— 相比在 `beforeCharDeleted` 里自行接管
  * 整段删除，这条路径**不改平台原有删除语义**（无 `{` 配对时零介入），回归面最小。
  *
- * 作用域：只在**注入片段或 mapper 宿主**内生效（注入形态下 `editor.document` 是 DocumentWindow，
- * 删除经窗口映射回宿主，无需另做坐标还原）。非 mapper 场景零介入。
+ * 作用域：只在**注入片段或语句宿主**内生效（MyBatis `mapper` / iBatis `sqlMap`，T-Ibatis2Support 券 D
+ * 放宽根守卫；iBatis 无 `{}` 占位故实际零介入——见 [isMapperContext]）。注入形态下 `editor.document`
+ * 是 DocumentWindow，删除经窗口映射回宿主，无需另做坐标还原。非语句宿主场景零介入。
  */
 class SqlMapperBackspaceHandler : BackspaceHandlerDelegate() {
 
@@ -41,10 +42,14 @@ class SqlMapperBackspaceHandler : BackspaceHandlerDelegate() {
         return true
     }
 
-    /** mapper 上下文判定：宿主 XmlFile（根 mapper）或本插件注入片段（语言 MpSqlMapper）。 */
+    /** 语句宿主上下文判定：宿主 XmlFile（根 `mapper` 或 iBatis `sqlMap`）或本插件注入片段（语言 MpSqlMapper）。 */
     private fun isMapperContext(file: PsiFile): Boolean {
         if (file.language == SqlMapperLanguage) return true
         val xmlFile = file as? com.intellij.psi.xml.XmlFile ?: return false
-        return xmlFile.rootTag?.name == "mapper"
+        // T-Ibatis2Support 券 D：根守卫放宽到 iBatis `sqlMap`（同一个廉价判据，见
+        // XmlSynHiGate.isStatementHostRootName）。**语义留存**：成对删的是 `#{}`/`${}` 的 `{}`，
+        // 那是 MyBatis 形态——iBatis 用 `#name#`、正文里不产 `{`，故放宽后在 iBatis 文件里
+        // 本条只在出现字面 `#}`/`$}` 时才触发（真实 iBatis 文档不会产出该形态，无实际介入）。
+        return XmlSynHiGate.isStatementHostRootName(xmlFile.rootTag?.name)
     }
 }

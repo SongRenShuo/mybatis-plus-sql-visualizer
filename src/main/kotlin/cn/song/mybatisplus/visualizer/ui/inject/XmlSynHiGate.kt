@@ -41,7 +41,8 @@ import java.util.concurrent.CancellationException
  * 故 Ultimate 真机上本门不触发——W1 的价值在 Community 版（社区轨注入器活跃）与任何未来第三方注入器。
  *
  * 守卫族（非让位，自身 O(1)）：
- *  - 根/祖先标签 mapper（与 STATEMENT_TAGS 消费口径一致）；
+ *  - 根/祖先标签属**语句宿主**（MyBatis `mapper` 或 iBatis `sqlMap`——T-Ibatis2Support 券 D 放宽，
+ *    见 [inMapperFile] 的二次判定与热路径约束）；
  *  - 文本长度熔断（超长文本不扫描——万行级 mapper 的输入卡顿防线，V2/§D6）。
  */
 object XmlSynHiGate {
@@ -320,14 +321,37 @@ object XmlSynHiGate {
 
     private fun xmlSynHiEnabled(): Boolean = xmlSynHiEnabledSnapshot
 
-    /** 语句文本守卫：祖先链含 mapper 标签 + 文本长度未超熔断。 */
+    /** 语句文本守卫：祖先链含语句宿主标签（`mapper` / iBatis `sqlMap`，见 [inMapperFile]）+ 文本长度未超熔断。 */
     fun allowStatementText(tag: XmlTag): Boolean {
         if (!inMapperFile(tag)) return false
         if (tag.textLength > MAX_TEXT_LENGTH) return false
         return true
     }
 
-    /** 属性值守卫：属性名 ∈ 注入白名单（test/value/collection/item/open/close/separator/prefix/overrides）+ 长度熔断。 */
+    /**
+     * 属性值守卫：属性名 ∈ 注入白名单 + 长度熔断。
+     *
+     * ## 白名单**有意不扩到 iBatis 属性**（T-Ibatis2Support 券 D 的决定，勿按「补齐」直觉回退）
+     *
+     * 券 D 曾拟把 iBatis 动态标签属性（`property`/`compareProperty`/`compareValue`/`prepend`/`refid`/
+     * `parameterClass`/`resultClass`/`jdbcType`/`javaType`/`mode`/`type`/`column`/`select`/…）并进本表。
+     * 实测否决，两条独立理由：
+     *
+     * 1. **本表只按属性名取值、不含文件上下文**——而 iBatis 属性名与 MyBatis 属性名大面积重叠
+     *    （`MyBatisXmlCompletionData.kt:52/146/151-152/157/170-188/189`：`javaType`/`jdbcType`/`mode`/
+     *    `numericScale`/`resultMap`/`refid`/`resultSetType`/`fetchSize`/`timeout`/`keyProperty`/
+     *    `property`/`column`/`select`/`type` 全是 MyBatis 侧在册属性）。并进来 = 在 MyBatis `<mapper>`
+     *    文件里**新增**这些属性值的注入（词法上色），直接违反券 D 的「绝不改变 MyBatis 路径行为」。
+     * 2. **iBatis 属性值的语义与本注入语言不匹配**：本注入语言 `MpSqlMapper` 的属性值通道是为
+     *    MyBatis 的 OGNL 表达式设计的（`SqlMapperInjector` D3 段 + `XmlSqlCompletionContributor.
+     *    addAttributeValueCompletions` 的 `test`/`value`/`collection` → OGNL 分流）。iBatis 属性值
+     *    是**属性名/字面量**（`property="orgName"`、`compareValue="1"`），没有表达式语言；给它接上
+     *    OGNL/MyBatis 符号源只会产出错误候选（且 `resolveXml` 走根 `namespace` 找 Mapper 接口，
+     *    iBatis 无 namespace ⇒ 上下文恒空）。
+     *
+     * 结论：**属性白名单一个 iBatis 属性都不加**，iBatis 只放宽 `inMapperFile`（语句文本注入）。
+     * 现表白名单是 MyBatis 原样（`open`/`close` 是 MyBatis `<foreach>`/`<trim>` 既有项，非本券新增）。
+     */
     fun allowAttributeValue(name: String, value: String): Boolean {
         if (value.length > 4096) return false
         return name in ATTRIBUTE_WHITELIST
@@ -338,14 +362,63 @@ object XmlSynHiGate {
         "open", "close", "separator", "prefix", "prefixOverrides", "suffixOverrides",
     )
 
-    /** 祖先链是否 mapper（含根标签首元素 name 含 mapper 的宽松口径——友商/自研 mapper 形态）。 */
+    /**
+     * 祖先链是否**语句宿主**文件（MyBatis `mapper` 或 iBatis `sqlMap`）。
+     *
+     * T-Ibatis2Support 券 D 放宽（原形态只认 `mapper`）：iBatis 的语句映射文件根元素是 `<sqlMap>`
+     * （`IbatisXmlRecognizer.IBATIS_ROOT_TAGS` 的语句映射侧；`<sqlMapConfig>` 是全局配置、不含语句，
+     * **不**在此列）。
+     *
+     * ## 二次判定（券 D 硬要求）
+     *
+     * 本放宽**自带**一条廉价二次判据：**根标签名恰为 `sqlMap`**（大小写不敏感，O(1) 字符串比较）。
+     * 它与 MyBatis 的 `mapper` 根名**不相交**，故对任何 MyBatis `<mapper>` 文件本函数的判定结果
+     * 与放宽前逐字节一致（`contains("mapper")` 宽松线原样保留）。
+     *
+     * **热路径约束（勿改）**：注入是**每文件/每元素级**调用，这里**不得**调
+     * `IbatisXmlRecognizer.sqlMapClientOnClasspath`（`JavaPsiFacade.findClass` 索引查询），也不得读
+     * DOCTYPE/文档 prolog——只用已到手的根标签名。更严的三选二识别（classpath + DOCTYPE）属
+     * gutter/预览接管链的口径（`IbatisXmlRecognizer.recognize(file)`），不属注入热路径。
+     *
+     * 放宽口径的误差面（如实登记）：一个**非 iBatis** 的 XML 若恰以 `<sqlMap>` 为根且含
+     * `select/insert/update/delete` 标签，其语句文本会获得本插件的 SQL 注入着色。该形态在真实
+     * 工程中不存在（`sqlMap` 根即 iBatis 语句映射文件的定义），且后果仅为「多着色」而非「改语义」。
+     */
     fun inMapperFile(tag: XmlTag): Boolean {
         var cur: XmlTag? = tag
         while (cur != null) {
             if (cur.name.equals("mapper", ignoreCase = true)) return true
             cur = cur.parentTag
         }
-        val root = tag.containingFile?.let { (it as? com.intellij.psi.xml.XmlFile)?.rootTag }
-        return root != null && root.name.contains("mapper", ignoreCase = true)
+        val root = rootTagOf(tag) ?: return false
+        return root.name.contains("mapper", ignoreCase = true) || isSqlMapRootName(root.name)
     }
+
+    /**
+     * 语句宿主的**根标签名**判定（O(1)，廉价）：MyBatis `mapper` 或 iBatis `sqlMap`。
+     * 与 [inMapperFile] 同一口径的「文件级」入口，供 §2.3 表里除 `inMapperFile` 之外的根判定共用。
+     * 现用方：折叠 / 反缩进 / 变更局部性 / 模板上下文（四个文件的文件级判定）与补全的 iBatis 分支——
+     * 这些判定只看文件根名，
+     * 不走祖先链（它们的作用对象本身就是语句标签/文本）。
+     */
+    fun isStatementHostRootName(rootTagName: String?): Boolean =
+        rootTagName == MYBATIS_MAPPER_ROOT_TAG || isSqlMapRootName(rootTagName)
+
+    /**
+     * **iBatis 语句映射文件**判定（根名 `sqlMap`）。供「MyBatis 形态能力」显式排除 iBatis 用——
+     * 例如 `ParamBraceTypedHandler` 敲 `#` 自动补 `{}`（`#{}` 是 MyBatis 语法；iBatis 用 `#name#`，
+     * 在 iBatis 文件里补 `{}` 是**写入错误语法**，必须排除）。
+     */
+    fun isIbatisSqlMapRoot(tag: XmlTag): Boolean = isSqlMapRootName(rootTagOf(tag)?.name)
+
+    /** iBatis 语句映射文件根元素名（`sqlMap`）。**不**含 `sqlMapConfig`（全局配置，无语句体）。 */
+    const val IBATIS_SQL_MAP_ROOT_TAG: String = "sqlMap"
+
+    private const val MYBATIS_MAPPER_ROOT_TAG: String = "mapper"
+
+    private fun isSqlMapRootName(name: String?): Boolean =
+        name != null && name.equals(IBATIS_SQL_MAP_ROOT_TAG, ignoreCase = true)
+
+    private fun rootTagOf(tag: XmlTag): XmlTag? =
+        tag.containingFile?.let { (it as? com.intellij.psi.xml.XmlFile)?.rootTag }
 }

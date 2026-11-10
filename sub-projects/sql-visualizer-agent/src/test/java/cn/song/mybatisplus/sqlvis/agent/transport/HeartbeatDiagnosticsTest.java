@@ -51,6 +51,15 @@ public class HeartbeatDiagnosticsTest {
         // 风暴期队列溢出丢弃必须让 IDE 用户看得见（状态栏「已丢弃 N 条」的取数面）。
         assertTrue("心跳必须恒带 dropped 键（零丢弃时为 0）：" + body,
                 body.contains("\"dropped\":"));
+        // T-PanweiInsertCapture F2/F3：三条此前完全无出口的静默路径读数 + 盲区类名（恒出现，
+        // 无则空串）——「同一秒 SELECT 有、INSERT 没有」的实例级/线程级证据只能从这里拿到。
+        for (String key : new String[]{"assembleFailures", "nestSuppressed", "unresolved",
+                "nestStale", "nestMaxDepth"}) {
+            assertTrue("心跳必须恒带 " + key + " 键（F2/F3 静默路径读数）：" + body,
+                    body.contains("\"" + key + "\":"));
+        }
+        assertTrue("心跳必须恒带 blind 键（无盲区时为空串）：" + body,
+                body.contains("\"blind\":\""));
     }
 
     /**

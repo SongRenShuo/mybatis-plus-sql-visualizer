@@ -263,6 +263,11 @@
         <!-- O-72 T-XmlInlineSql 通用内嵌 SQL 预览：叶子标签文本首词命中 SQL 关键字即认领（内容判定，不限根元素/标签名；mapper/pages/hbm 之后兜底） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider"/>
+        <!-- T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览（O(1) 标签名 + 父标签判定，含 <dynamic> 子标签的语句同样出图标；
+             通用兜底通道由 XmlInlineSqlDetector.isClaimedByKnownStructure 让位，两者同批落地防双图标）。
+             注册的 codeInsight.lineMarkerProvider 是平台 dynamic 点位，热更新不受影响（守卫 PluginXmlExtensionPointResolutionTest）。 -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
@@ -561,4 +566,76 @@
             <add-to-group group-id="HelpMenu" anchor="last"/>
         </action>
     </actions>
+
+    <!-- T-Ibatis2Support 券 E：iBATIS 2 SQL Map DTD 的离线映射（2026-11-09）。
+
+         平台解析 DOCTYPE 外链时按 systemId（必要时再按 publicId）查 ExternalResourceManager；
+         iBatis 的四个外链域里 www.ibatis.com 早已失效、ibatis.apache.org 也可能不通，未映射时
+         整篇报「无法解析（引用的）DTD」并级联满屏「必须声明元素类型」。运行期的
+         com.ibatis.sqlmap.engine.builder.xml.SqlMapClasspathEntityResolver 同样把这 8 个标识
+         映射到 jar 内副本、从不联网（javap -p -c 常量池实证），故这里补齐同一组映射。
+
+         两处事实按平台源码钉死，改动前先复核：
+          ① EP 声明 = XmlPlugin.xml 的 extensionPoint name="standardResource"（beanClass
+             com.intellij.javaee.StandardResourceEP，EP 全名 com.intellij.standardResource，
+             243/262 均为 dynamic="true"）；
+          ② 属性名是 path 而非 resourcePath——StandardResourceEP.resourcePath 字段带
+             @Attribute("path") + @RequiredElement（javap -v 注解实证）；path 走
+             PluginDescriptor.getPluginClassLoader().getResource(...)，不带前导斜杠
+             （同份描述里 properties / testng 两个内置插件即此写法）。
+
+         资产 = ibatis-sqlmap-2.3.4.726.jar 内 com/ibatis/sqlmap/engine/builder/xml/ 的原始副本
+         （sha256 见 THIRD-PARTY-NOTICES.md 第 4 节；网站版 sql-map-config-2.dtd 是 sqlMap*，
+         jar 内是 sqlMap+，必须用后者）。 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <standardResource url="http://ibatis.apache.org/dtd/sql-map-2.dtd"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="http://www.ibatis.com/dtd/sql-map-2.dtd"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="-//iBATIS.com//DTD SQL Map 2.0//EN"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="-//ibatis.apache.org//DTD SQL Map 2.0//EN"
+                          path="dtd/ibatis/sql-map-2.dtd"/>
+        <standardResource url="http://ibatis.apache.org/dtd/sql-map-config-2.dtd"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="http://www.ibatis.com/dtd/sql-map-config-2.dtd"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="-//iBATIS.com//DTD SQL Map Config 2.0//EN"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+        <standardResource url="-//ibatis.apache.org//DTD SQL Map Config 2.0//EN"
+                          path="dtd/ibatis/sql-map-config-2.dtd"/>
+    </extensions>
+
+    <!-- T-Ibatis2Support 券 F（车道 L8）：iBatis 2.x <sqlMap> 的两条跳转注册。
+         **本块为文件尾部追加块，归属 iBatis 跳转，勿并入上方 MyBatis 注册段**（L4 车道正在改中段的
+         codeInsight.lineMarkerProvider 区域；同文件只追加、不重排）。
+         ① psi.referenceContributor：XML 内部 id 引用（include@refid / resultMap= / parameterMap= /
+            resultMap@extends），所有引用均为 soft——无目标零报红，不注册任何校验器形态；
+         ② gotoDeclarationHandler：Java DAO 的 SqlMapExecutor 调用（queryForObject 等）→ XML 语句 id。
+         两条都只做 O(1) 根标签名（sqlMap）门控，不在热路径调用识别器/做全项目扫描。
+         键位归属平台 action（Ctrl+B / Ctrl+Click），本段同样不得出现 keyboard-shortcut/mouse-shortcut。 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <psi.referenceContributor language="XML"
+                                  implementation="cn.song.mybatisplus.visualizer.ui.ref.IbatisXmlIdReferenceContributor"/>
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.IbatisDaoStatementGotoDeclarationHandler"/>
+        <!-- T-IbatisFix4 缺陷一：补 XML → Java 的 Ctrl+B / Ctrl+Click（原只有 Java → XML 单向，
+             真机上「DAO 里能跳 XML、XML 里 Ctrl+Click 无反应」）。目标集走词索引找调用点首参字面量，
+             只在按键/悬停时执行；非 sqlMap 语句位置返回 null，原生跳转零变化。 -->
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementGotoDeclarationHandler"/>
+
+        <!-- T-Ibatis2Gap 券 B（车道 L1）：iBatis <sqlMap> 语句与 Java SqlMapExecutor 调用点的
+             双向跳转图标（观感对齐 MyBatis 的 MapperXmlToJava/JavaToXml 那对：图标复用
+             MpvsIcons.MapperStatement / MapperMethod，组归 mapperXml）。
+             让位门与 MyBatis 那对刻意解耦：CodeHelperPro 无 iBatis 能力、无图标冲突，
+             竞品在位时 iBatis 箭头照常显示（理由与反证锚见两 provider 的类 KDoc）。
+             门控全部 O(1) 语法级（根标签 sqlMap + 标签名表 + 首参字面量）；项目级目标解析只在
+             点击/慢趟（XML→Java 在点击时走词索引，Java→XML 在慢趟走 IbatisXmlStatementTargets 缓存）。
+             本块仍为文件尾部追加块，勿并入上方 MyBatis 注册段。 -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlToJavaLineMarkerProvider"/>
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.IbatisJavaToXmlLineMarkerProvider"/>
+    </extensions>
 </idea-plugin>

@@ -21,6 +21,10 @@ import com.intellij.psi.tree.IElementType
  *
  * [IDENTIFIER] / [OPERATOR] 的语义不变，只是高亮器不再把两者映射为空（W3 #6：表名/列名/运算符
  * 此前与普通文本同色）。
+ *
+ * T-Ibatis2Support 券 D —— iBatis 定界符：`#name#` / `#name:TYPE#` / `#name:TYPE:nullValue#` 复用
+ * [PARAM_HASH]、`$name$` 复用 [PARAM_DOLLAR]（「整段一个 token」，见 `SqlMapperHighlightingLexer`
+ * 的券 D 段）；`##` / `$$` 转义字面量新增 [IBATIS_ESCAPE]。
  */
 object SqlMapperTT {
     @JvmField val KEYWORD = IElementType("MPSQL_KEYWORD", SqlMapperLanguage)
@@ -58,6 +62,13 @@ object SqlMapperTT {
 
     /** W3：OGNL 静态引用 `@com.Foo@bar`（类引用 + 成员）整体一个 token。 */
     @JvmField val STATIC_REF = IElementType("MPSQL_STATIC_REF", SqlMapperLanguage)
+
+    /**
+     * T-Ibatis2Support 券 D：iBatis 转义字面量 `##` / `$$`（iBatis 规范：`##` 产出字面 `#`、
+     * `$$` 产出字面 `$`）。**按普通文本处理**——[SqlMapperSyntaxHighlighter] 对它返回空键表，
+     * 故渲染为无色的普通文本（这正是「不是参数占位」的可观测形态），也不进颜色设置页。
+     */
+    @JvmField val IBATIS_ESCAPE = IElementType("MPSQL_IBATIS_ESCAPE", SqlMapperLanguage)
 
     @JvmField val WHITE_SPACE = IElementType("MPSQL_WHITE_SPACE", SqlMapperLanguage)
 }

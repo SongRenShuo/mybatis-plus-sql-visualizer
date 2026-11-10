@@ -771,14 +771,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "读日志识别通道断言 capturedDialect 在场；另有用例以合成样本自证危险形态必红。" +
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空。",
             ),
-            // ---- changeNotes 评分引导句守卫（2026-10-30，用户二次指出） ----
+            // ---- changeNotes 守卫（2026-10-30 评分引导句；2026-11-10 补裸 @ 提及） ----
             GuardEntry(
                 "convention/ChangeNotesRatingLineGuardTest.kt",
                 emptyList(),
-                "changeNotes 评分引导句只留最新块守卫：判定内核内联于两个用例——数 gradle/plugin-change-notes.html " +
-                    "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；并断言该行落在第一个 <h2> 块内。" +
+                "changeNotes 守卫：判定内核内联于三个用例——数 gradle/plugin-change-notes.html " +
+                    "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；断言该行落在第一个 <h2> 块内；" +
+                    "并断言剥掉 <code>…</code> 后全文没有裸 @ 紧跟 ASCII 字母（GitHub 会解析成 @用户 提及，" +
+                    "发行版 Contributors 冒出无关账号，注解名须写成 <code>@Query</code>）。" +
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
-                    "灵敏度＝把该行复制到第二块必红、只留历史块必红，两向已实测。",
+                    "灵敏度＝把该行复制到第二块必红、只留历史块必红、把 <code>@X</code> 拆成裸 @X 必红，三向已实测。",
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(

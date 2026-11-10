@@ -70,6 +70,7 @@
 - [S5 工作树所有权与并发写隔离](规范/编码与验收标准-规范.md#s5)——接手掉线代理先审计工作树；并发车道禁同改 `src/main`；提交后 `git show --stat HEAD` 只许有自己的文件。
 - [S6 证据看产物，不看文档自述](规范/编码与验收标准-规范.md#s6)——影响面/用户受影响面以 tag 树、发行物、二进制、实测请求为准。
 - [S7 修 bug 必 grep 同型兄弟](规范/编码与验收标准-规范.md#s7)——一处缺陷的根因很少只长一个实例。
+- [S11 置顶 change-notes 新块同批删旧块评分引导句](规范/编码与验收标准-规范.md)——评分句全文只留 1 次、本版块禁全角标点，两条机器判据跑在 `git tag` 之前（2026-11-09 L25 升级）。
 
 ## 活跃规则
 
@@ -219,7 +220,9 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **证据**：券 F2b（`2521991a`）给 `AgentEvent` data class 加 `aggregatedCount` 字段。F 券自己工作树首跑 24 红全是 `NoSuchMethodError: AgentEvent.<init>`（删 `build/classes/*/test` 重编归零）；同日集成分支收口（merge `fc15e8da` 后）`CrossChannelDedupeTest` 17/18 红同一报错——该工作树从未跑过 F 的代码，陈旧 class 来自更早的编译产物；删 `build/classes` 重编后 217 例全绿。两次都在不同工作树复现，**生产代码零缺陷**。
 **正例**：改 data class / 构造函数签名后，凡「别的检出过红」或「跨工作树合并」的定向跑，先 `rm -rf build/classes` 再跑；或在报告里声明「已核对本次编译任务实际执行（gradle 输出 compileKotlin/compileTestKotlin 非 UP-TO-DATE）」。
 **反例**：看到 NoSuchMethodError 就去查「谁改了调用点」——调用点没错，是磁盘上的旧 class；或把这种红当真回归去回滚修复提交。
-**Seen 2× (2026-11-07)**
+**2026-11-09 补充（最高频触发源）**：`config/PluginSettings.State` 是最常被加字段的 data class，**任何给它加字段的提交都会让全仓引用旧构造器 / `copy$default` 的测试类失效**。当日两例：①第一波三路合并（`3080cad3`）后集成分支 **202 红**，全是合成构造器 `NoSuchMethodError`，其中 `HibernateLogParserTest` 56/56 全红（该合并无人碰过 Hibernate）——清产物后 186 类 2041 例全绿；②L4 给 `State` 加 `ibatisXmlEnabled` 后 `GutterGroupsTest` / `MapperNavigationGutterGateTest` 6 红（`State.<init>` / `copy$default`）。
+**判据**：某类**整类全红**且报错是 `<init>` 或 `copy$default` 的 `NoSuchMethodError` → 一律先 `rm -rf build/classes`，不要去查调用点。
+**Seen 4× (2026-11-07 ×2, 2026-11-09 ×2)**
 
 ### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉
 
@@ -242,7 +245,54 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：跑外指腿前确认该实例当前无其他套件轮次（本地其他车道/夜间 CI 时刻表错峰）；**反例**：两轮套件同时打同一实例，A 轮种子表被 B 轮开头 DROP，读数红且难归因。
 **Seen 1× (2026-11-07)**——本轮只登记不重构；根治方案（运行唯一 schema/表前缀）在计划册实施记录挂账，待复发或外指面再扩大时立项。
 
-### L25 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
+### L25 置顶 change-notes 新块时两件事同批做完并跑机器判据，且必须跑在打 tag 之前
+
+**规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（`dev-support/inspect-plugin-zip.py` 的同名断言）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
+**证据**：2026-11-09 发行 v2026.11.9-beta.1 两处同时踩——①本地先跑守卫，`ChangeNotesRatingLineGuardTest` 1 红（评分引导句出现 2 次，`v2026.11.8` 历史块那行没删），改后 29/0/0/0；②自检放在**发布之后**才跑，`inspect-plugin-zip.py` 报 FAIL（第 3 条「新增中兴 GoldenDB 方言（第 15 种）…」的全角括号），此时 GitHub Release `438955517` 与 Gitee 发行版 `1290785` 已是带病产物，只能 tag 前移（`65e03bae` → `f9c5b0c3`）+ 重发一轮。
+**正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`inspect-plugin-zip.py` 跑在 `git tag` 之前，红了改文案重提交，代价是几十秒。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
+**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角判据在 `inspect-plugin-zip.py` 里、需要先有 zip——正确顺序是 tag 前**本地 `buildPlugin` 一次 + 跑检查器**（几十秒），而不是只跑守卫测试。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
+
+### L26 用户报「多一个图标 / 点不跳」时按锚点矩阵逐格核，别只修截图指到的那一格
+
+**规则**：同一个能力在插件里通常有**多套锚点与多条入口**，要列矩阵逐格核——
+①预览图标至少两格：**调用行锚**（`JdbcTemplateSqlGutterLineMarkerProvider` 等，锚方法名 identifier）与**方法定义锚**（`StringSqlMethodGutterLineMarkerProvider`，锚方法签名、扫方法体）；XML 侧还有语句行锚。
+②跳转至少三格：gutter 图标点击、`GotoDeclarationHandler`（Ctrl+Click/Ctrl+B）、`PsiReference`；且**方向是两格**（Java→XML 与 XML→Java 各一个 handler，互不共享）。
+修完一处要把矩阵其余格逐个写成「现在谁认领 / 修后谁认领」，并在**每个格子**补真实入口用例。
+**证据**：2026-11-10 内测轮连续两次踩同一形态——`beta.3` 只让位了调用行，`UserDaoImpl` 的方法定义行（`StringSqlMethodGutterLineMarkerProvider` 扫方法体字符串 SQL 调用，iBatis 语句 id 命中白名单、接收者归类 UNKNOWN）照旧亮一枚点开没有 SQL 的图标；券 B 只接了 gutter 箭头点击与 Java→XML 的 GTD，XML→Java 的 GTD 从未实现（`psi.referenceContributor` 只造 `refid`/`resultMap`/`parameterMap` 的引用），于是用户第二次报「还是有」「反之不行」。两处修复见 `63853e5d`。
+**正例**：修前先列矩阵，修复按格落地；用例优先走**平台真实入口**（`GotoDeclarationAction.findAllTargetElements` + `GotoDeclarationOrUsageHandler2.testGTDUOutcome`，且必须在真 pooled thread 上跑——`Navigatable.navigationRequest` 有 BGT 断言，`ReadAction.nonBlocking().executeSynchronously()` 在 EDT 会内联），因为直调 handler 绿 ≠ 真实分派绿。**反例**：只跑被指出那个 provider 的单测就收工，下一轮真机再报一次同类。
+**Seen 1× (2026-11-10)**——一次内测轮内两种锚点形态各犯一次，按「同类两例」记账。
+
+### L27 发行版正文里的 `@注解名` 必须用 `<code>` 包裹，`&#64;` 与反引号都挡不住
+
+**规则**：`gradle/plugin-change-notes.html` 是发行版正文的源（CI 切块 → `gh release create --notes-file`），里面任何 `@` 紧跟字母的文本（Java 注解名 `@Query` / `@Embedded`，也包括「库名@host:port」这类角标文案）都会被 GitHub 解析成**用户提及**，发行版页面的 Contributors 于是列出与项目无关的账号。写法只有 `<code>@X</code>` 有效：`&#64;`（先解实体再识别提及）与反引号（裸 HTML 块内不跑 markdown 行内解析）**实测均无效**。判据＝`ChangeNotesRatingLineGuardTest#test注解名不得写成裸加号`（剥 `<code>…</code>` 后全文不得有裸 `@`+字母）；发布后还要拉页面数 `user-mention` 锚点复核，不能只改源码就收工。
+**证据**：`28b93e64`。`POST /markdown` 四形态同一样本对照：`&#64;Embedded` → 输出仍 `<a class="user-mention">`；反引号 → 原样保留反引号；零宽空格 → 有效但引入不可见字符；`<code>` → 无 user-mention。对账读数：2026.10.26 只显示 Embedded、2026.11.7 只显示 host（正文是「库名@host:port」）、2026.11.8 起显示 query and Embedded，三版与正文 `@` 词一一对应；三个账号（query＝Roger Que、Embedded、host）在仓内 5847 个提交里一个都查不到。已发布发行版 30 个正文按 PATCH 改写（改内容，不删重建），页面复核 Contributors 区块消失、`user-mention` 归零。
+**正例**：先单版本探针——改 1 个发行版 → 拉页面 HTML 数 `user-mention` 确认机制，再批量。**反例**：第一版按「HTML 实体应该能挡住」直接选 `&#64;`，改完 2026.11.10 页面毫无变化，还先怀疑成页面缓存；真因是解实体之后才做提及识别，若当时直接批量就是 30 个白改。
+**Seen 1× (2026-11-10)**——用户报障「Contributors 每次多两个我不认识的」，同轮内先踩 `&#64;` 再说清。
+
+### L28 发行前置是「门禁绿」，不是「`buildPlugin` 成功」——`inspect-plugin-zip` 只证明包内自洽，不证明平台兼容
+
+**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip` 查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
+**证据**：2026-11-10 发行 `2026.11.11-beta.1` 时，本地只跑了 `buildPlugin` + `inspect-plugin-zip` + `ChangeNotesRatingLineGuardTest` + `BundlePlaceholderArityTest` 就打了 tag、建了 Gitee/GitHub 发行版（Gitee 1293976 / GitHub 440141088）；用户当场追问「你发行应该通过 CI 吧」。事后补派 `mode=gate`（run `42788614860` @ `9d32d936`，与 tag `308f5f96` 在 `src/` 零差异）。同一轮的前一版 `2026.11.10` 正式版是按规矩走的：release run `42758016138` 17/17、`verifyplugin` 验的就是待下发 zip。
+**正例**：按 RC-P1d 走——本地 `releaseGate` 为默认路径，需要干净环境才走 CI；要省时间用 RC-P1c 的「零代码改动复用」判据（相对上次全绿提交在 `src/main`/`src/test` 零差异可沿用分片读数），**但 `verifyGate` 不适用复用**：版本号进 `plugin.xml`，jar 变了必须在新产物上重验。**反例**：把「构建成功 + zip 内省 + 文案守卫绿」当发行门禁（本轮即此形态），三条都绿也换不来一句「能装在 243/253/263 上」。
+**Seen 1× (2026-11-10)**——用户点名「应该通过 CI」，同轮补派门禁。
+### L29 织入型 enter/exit 配对不能只挂「方法体里显式出现的返回点」——被调方异常逃逸时没有出口点
+
+**规则**：给方法体插 enter/exit 钩子做配对计数（嵌套门、计时、事务边界都属这类）时，只在 `IRETURN/LRETURN/ARETURN/ATHROW` 前插 exit 是不够的：**异常从被调方法抛出、而本方法体没有 try/catch/finally 时，字节层只有一条正常返回指令、一个 `athrow` 都没有**，出口钩子无处可插 → enter 计入、exit 永不执行，深度/计数永久偏 1。判据必须是「异常穿过本方法时也走出口」——把方法体包一层 catch-all handler（`TryCatchBlockNode` → 调同一出口 → `athrow`），并用「夹具方法自身无 try/catch、委托调用抛异常，抛完后同线程下一帧仍产出」的用例钉住；反向验证摘掉 handler 必须变红。
+**证据**：T-NestGateObserve 离线定案（计划 §11.8.5，2026-11-10）：`StatementWeaver.weaveMethod` 的 `isTimedExit` 只认显式返回点；磐维 A 模式 `org.panweidb.jdbc.PgStatement.execute(String)Z` 原始字节只有 `invokevirtual executeWithFlags` + `ireturn`（无 handler、无 athrow），失败 DROP 的 `SQLException` 逃逸时出口不存在 → 该线程 depth 永久 +1，后续整类语句被当成外层抑制，而 `nestSuppressed` 为 0（被抑制的是最外层自己）。织入产物逐方法计数：enter=1、exit=显式返回数（`execute` 1/1、`executeQuery(String)` 1/2），排除「双重入口」；真机对照：两次失败 DROP 泄漏（`nestStale=2/nestMaxDepth=3`），两次成功 SELECT 不泄漏（`nestStale=0/nestMaxDepth=1`）。
+**正例**：先做「织后字节 enter/exit/返回点逐方法计数」再下结论，并用成功/失败两条载荷做对照；**反例**：拿「exit 数 == 显式返回指令数」当健康判据收工——它天然看不见隐式异常出口（本轮首版就是这么把「成功路径也泄漏」写错的）。
+**Seen 1× (2026-11-10)**
+
+### L30 发行方向固定为 CI → GitHub → Gitee；`--from-github` 是 Gitee 拿到门禁产物的唯一通路
+
+**规则**：发版的顺序是「CI 构建+门禁+发 GitHub（正文由 CI 模板生成，含提交号、构建记录、折叠历史）→ `gitee-release.py --from-github` 让 Gitee 取**同一份门禁产物**」。**禁止**「本地 `buildPlugin` → `gitee-release.py` 先发 Gitee → `mirror-releases-to-github.py` 镜像到 GitHub」——这条反路上有两个必然后果：①GitHub 的附件是**本地构建字节**，与门禁 job 产出并在平台上验过的那一份不是同一个文件；②GitHub 正文由镜像脚本拼装，**缺 CI 模板里的 `actions/runs` 链接、本版变更段与折叠历史**。判据：`GET /releases/tags/<tag>` 的 `assets[].size` 应等于门禁工件大小，`body` 里应含 `actions/runs/`。
+
+**证据**：2026-11-10 同一天两轮都走反了——`beta.1` 与 `beta.2` 都是本地构建后先发 Gitee（1293976 / 1294211）再镜像 GitHub（440141088 / 440204503）。用户当场纠正「应该是 GitHub 单到 Gitee 吧」。实测同一 tag 的两份包大小不同：本地 7,882,789 B vs 门禁产物 7,882,832 B（`MPV-Build` 时间戳导致必然不同哈希）。纠正路径：`mode=publish` 挂门禁 run（`run_id`）→ `gh release upload --clobber` 覆盖 GitHub 附件 + 按 CI 模板重生成正文（回读 `body_len=17584`、含 `actions/runs/` 与「本版变更」）→ Gitee `--from-github --replace`。中途还撞上 `--from-github` 的守卫：本地同名 zip 与 GitHub 内容不同会**硬失败**并要求先移走本地包（这与 [[pitfall-mpv-build-timestamp-vs-ci-zip-hash]] 同源）。
+
+**正例**：`mode=release` 一条命令做完「构建+门禁+发 GitHub」，再 `--from-github` 收 Gitee；离线自测/内测包另存，不混进 `build/distributions`。**反例**：先本地打包去发 Gitee，再用镜像脚本补 GitHub——两侧字节与正文的来源都不一致，且事后要再跑一轮 publish 才能纠正。
+
+**Seen 1× (2026-11-10)**——用户一句「应该是 GitHub 单到 Gitee 吧」点出方向错，同日两版都受影响。
+
+### L31 L25 依赖校验清单只覆盖 CLI 解析过的构件——IDE 侧会多解析三类，必须同批放行
 
 **规则**：`gradle/verification-metadata.xml` 由 `--write-verification-metadata` 生成，**只记录那次构建真正解析过的构件**。IDE 的 Gradle 导入/脚本模型会额外解析三类清单外的东西：①**辅助构件**（`-sources.jar` / `-javadoc.jar`，挂源码导航）；②**平台 distro 的 POM**（`com.jetbrains.intellij.idea:ideaIU:<本机 IDE 版本>`）；③**Gradle 发行版自身的附属物**（`gradle:gradle:<ver>` 的 `-src.zip`、`org.apache.groovy` 的 `.module`——来自 Gradle custom / Gradle distributions / Gradle Libs 仓库）。三类都不在生成时的解析图里 → IDE 一同步就 `Dependency verification failed`，而 `./gradlew` 全绿。故开严格校验时必须同批写 `trusted-artifacts`：按文件模式信任 `.*-sources\.jar` / `.*-javadoc\.jar`；按 group 信任 `com.jetbrains.intellij.idea` 的 `.*\.pom`（**不能**逐版本写死——平台版本随每个开发者本机 IDE 变化）；整组放行 `gradle` / `org.apache.groovy` / `org.codehaus.groovy`（Gradle 发行版已由 `distributionSha256Sum` 钉死，Maven 侧 checksum 无可信来源）。
 
@@ -259,3 +309,4 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 |---|---|---|
 | 2026-10-23 | S1~S7（建账时把本仓已多日复发的既有纪律直接按机制升级入册） | `规范/编码与验收标准-规范.md` |
 | 2026-10-24 | L3 改 State/守卫类必须跑 testFast 整桶（Seen 3×；当日证据 4bccd331 漏登→06fe3953 补登揭潜伏红灯） | 并入 `规范/编码与验收标准-规范.md` S3（建账时正文已在），账本活跃区改指针 |
+| 2026-11-09 | L25 changeNotes 新块机器判据（评分句只留最新块 3×、本版块禁全角标点 1×） | 评分句半边升级 `规范/编码与验收标准-规范.md` **S11**；全角标点半边留活跃区继续累计 |

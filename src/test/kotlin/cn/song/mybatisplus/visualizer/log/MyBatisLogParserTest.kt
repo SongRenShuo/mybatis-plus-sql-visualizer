@@ -438,4 +438,84 @@ class MyBatisLogParserTest {
             entries.size >= 100 - 64,
         )
     }
+
+    // ---------- T-PanweiInsertCapture F4：MyBatis SimpleStatementHandler 形态 ----------
+
+    @Test
+    fun `Executing 形态产出无参条目`() {
+        // 真机形态（mybatis-3.5.19 StatementLogger：`==>  Executing: <sql>`，无 Preparing/Parameters）
+        val entries = feedAll(
+            parser(),
+            "2026-11-10 14:05:33.918 DEBUG 9754 --- [ main] o.m.l.jdbc.StatementLogger : ==>  Executing: INSERT INTO t (a, b) VALUES (1, 2)",
+        )
+        assertEquals("Executing 行必须产出 1 条", 1, entries.size)
+        assertEquals("INSERT INTO t (a, b) VALUES (1, 2)", entries[0].restoredSql)
+        assertTrue("plain Statement 无绑定参数", entries[0].params.isEmpty())
+        assertEquals(SqlSource.MYBATIS, entries[0].source)
+    }
+
+    @Test
+    fun `Executing 与 Preparing 两形态各自独立产出`() {
+        // 同一 SQL 先 Executing 后 Preparing（互斥前提不成立时的边界）：解析器两条都产，
+        // 折叠交给 LogSqlEntryBuffer 既有同 SQL 去重（不新增第二套折叠逻辑）。
+        val entries = feedAll(
+            parser(),
+            "==>  Executing: INSERT INTO t (a) VALUES (1)",
+            "==>  Preparing: INSERT INTO t (a) VALUES (1)",
+            "==> Parameters: 1(Integer)",
+        )
+        assertEquals("两形态互不吞并，各产一条", 2, entries.size)
+        assertEquals("INSERT INTO t (a) VALUES (1)", entries[0].restoredSql)
+        assertEquals("INSERT INTO t (a) VALUES (1)", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `Executing 行终止上一条的续行`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT a",
+            "FROM t",
+            "==>  Executing: INSERT INTO t2 (a) VALUES (3)",
+        )
+        assertEquals(2, entries.size)
+        assertEquals("SELECT a\nFROM t", entries[0].restoredSql)
+        assertEquals("INSERT INTO t2 (a) VALUES (3)", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `严格模式下 Executing 行不识别但计入未识别计数`() {
+        LogParseDiag.reset()
+        try {
+            val before = LogParseDiag.unrecognizedSqlLine.get()
+            val p = MyBatisLogParser(mixedPrefix = false)
+            p.feed("==>  Executing: INSERT INTO t (a) VALUES (1)")
+            val entries = p.takeEntries()
+            assertEquals("strict 模式只认用户配置前缀，Executing 不产条目", 0, entries.size)
+            assertEquals(
+                "未识别 SQL 形态行必须留痕（F7）",
+                before + 1,
+                LogParseDiag.unrecognizedSqlLine.get(),
+            )
+        } finally {
+            LogParseDiag.reset()
+        }
+    }
+
+    @Test
+    fun `宽松模式下 Executing 行不计入未识别计数`() {
+        LogParseDiag.reset()
+        try {
+            val before = LogParseDiag.unrecognizedSqlLine.get()
+            val p = parser()
+            p.feed("==>  Executing: INSERT INTO t (a) VALUES (1)")
+            p.takeEntries()
+            assertEquals(
+                "宽松模式该行已被分支 0-5 消费，不得计入未识别",
+                before,
+                LogParseDiag.unrecognizedSqlLine.get(),
+            )
+        } finally {
+            LogParseDiag.reset()
+        }
+    }
 }

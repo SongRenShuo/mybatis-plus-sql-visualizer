@@ -137,6 +137,49 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 券 0（T-Ibatis2SlowFix）：同步热路径入口 resolveCachedOnly —— 零扫描
+    // ------------------------------------------------------------------
+
+    /**
+     * 零扫描入口在冷缓存下一律按未解析返回，且**不触发扫描**（改动前同步预览正是在这里付整段预算）。
+     *
+     * 两类输入一起钉：① 物理表名（XML 内嵌 SQL 的常态根标识符，扫描必然打空）；② 只以
+     * `@Entity(name=...)` 存在的别名（**代价所在**：零扫描入口打不到它，能力留在
+     * [EntityAliasSweep.resolve]，缓存被预热后本入口亦会命中）。
+     */
+    fun testCachedOnlyResolveNeverScans() {
+        myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
+        val context = myFixture.configureByText("Host.java", "class Host {}")
+        EntityAliasSweep.resetScanCountForTest()
+
+        assertNull(
+            "物理表名：零扫描入口按未解析返回",
+            EntityAliasSweep.resolveCachedOnly(project, "t_order", context).psiClass,
+        )
+        assertNull(
+            "只以 @Entity(name) 存在的别名：零扫描入口同样按未解析返回（能力留在 resolve）",
+            EntityAliasSweep.resolveCachedOnly(project, "Shared", context).psiClass,
+        )
+        assertEquals("零扫描入口恒不触发扫描", 0, EntityAliasSweep.scanCountForTest())
+    }
+
+    /**
+     * 零扫描入口保留**直查**能力：类短名/全限定名命中的实体照旧解析（HQL 根实体＝类名的常规写法），
+     * 且同样零扫描——即「移除的是别名全扫，不是实体解析」。
+     */
+    fun testCachedOnlyResolveKeepsDirectHitWithoutScan() {
+        val clazz = configureEntityClass("User.java", "User", null)
+        EntityAliasSweep.resetScanCountForTest()
+
+        assertEquals(
+            "直查命中的实体仍解析",
+            clazz,
+            EntityAliasSweep.resolveCachedOnly(project, "User", clazz).psiClass,
+        )
+        assertEquals("直查命中不扫描", 0, EntityAliasSweep.scanCountForTest())
+    }
+
     /**
      * 在测试夹具里造一个类；[alias] 非空时标注 `@Entity(name = alias)`。
      * 注解写全限定名：`JpaMetadataReader.findFlex` 有短名文本兜底，无需把 JPA 库挂上 classpath

@@ -291,4 +291,51 @@ class IbatisLogParseTest {
         assertEquals("a", entries[0].params[0].value)
         assertEquals("b", entries[0].params[1].value)
     }
+
+    // ---------- T-PanweiInsertCapture F5：plain Statement 形态 ----------
+
+    @Test
+    fun `stmt 标记的 Statement 行产出无参条目`() {
+        // 真机形态（iBatis 2.3.4 StatementLogProxy：`{stmt-N} Statement: <sql>`，
+        // 与 PreparedStatement 的 `{pstm-N} Executing Statement:` 标记与关键字都不同）
+        val entries = feedAll(
+            parser(),
+            listOf("${logPrefix}{stmt-100023} Statement: INSERT INTO bs_rwd_group_info_his (ORGID) VALUES ('003400')"),
+        )
+        assertEquals("plain Statement 行必须产出 1 条", 1, entries.size)
+        assertEquals(
+            "INSERT INTO bs_rwd_group_info_his (ORGID) VALUES ('003400')",
+            entries[0].restoredSql,
+        )
+        assertTrue("plain Statement 无绑定参数行", entries[0].params.isEmpty())
+        assertEquals(SqlSource.IBATIS, entries[0].source)
+    }
+
+    @Test
+    fun `stmt 标记的其它行只消费不产条目`() {
+        val entries = feedAll(
+            parser(),
+            listOf(
+                "${logPrefix}{stmt-100024} Closing statement",
+                "${logPrefix}{stmt-100024} Statement: select 1 from dual",
+            ),
+        )
+        assertEquals("Closing statement 不得产条目", 1, entries.size)
+        assertEquals("select 1 from dual", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `识别到 iBatis 形态时置位批处理提示标志`() {
+        LogParseDiag.reset()
+        try {
+            assertFalse("初始未置位", LogParseDiag.sawIbatisForm)
+            feedAll(
+                parser(),
+                listOf("${logPrefix}{pstm-100021} Executing Statement: select 1 from dual"),
+            )
+            assertTrue("消费 iBatis 标记行后必须置位（F6 触发条件）", LogParseDiag.sawIbatisForm)
+        } finally {
+            LogParseDiag.reset()
+        }
+    }
 }

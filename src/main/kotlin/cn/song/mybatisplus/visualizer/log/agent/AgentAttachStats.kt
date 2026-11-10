@@ -56,6 +56,41 @@ internal data class AgentAttachStats(
      * >0 挂段，两种「0」都不产生噪音。
      */
     val dropped: Long = 0L,
+    /**
+     * T-PanweiInsertCapture F3：登记盲区 PS 实现类名（agent 心跳 `blind` 键，逗号分隔、有界 8 个）。
+     *
+     * 与 [unregisteredImplementations] 不是一回事：`unreg` 是「类不在驱动白名单」，`blind` 是
+     * 「类在织入面内、但执行时登记表里查不到它的 SQL」。后者才是「同一秒 SELECT 能采到、INSERT
+     * 采不到」在实例级的最直接解释。空 = 旧 agent 未上报或确实无盲区。
+     */
+    val blindClasses: List<String> = emptyList(),
+    /**
+     * T-PanweiInsertCapture F2：`onExecuteExit` 外层 `catch (Throwable)` 吞掉的组装失败累计
+     * （agent 心跳 `assembleFailures` 键）。事件「组不出来」此前零出口，>0 即说明存在静默丢弃。
+     */
+    val assembleFailures: Long = 0L,
+    /**
+     * T-PanweiInsertCapture F2：被 `NestGate` 抑制的外层帧累计（心跳 `nestSuppressed` 键）。
+     * 正常嵌套（Hikari/MyBatis 包装层）会产生少量计数；**持续增长**才是线程残留态的信号。
+     */
+    val nestSuppressed: Long = 0L,
+    /**
+     * T-NestGateObserve：**陈旧嵌套**累计（心跳 `nestStale` 键）。
+     *
+     * 与 [nestSuppressed] 的差别是本轮立项的核心：后者只统计「被内层挤掉的外层帧」，而深度泄漏时
+     * 被抑制的是最外层自己（该路径不计）。>0 即说明某条线程存在一条活过阈值（默认 5s）的嵌套链，
+     * 也就是「深度未归零」的硬证据。
+     */
+    val nestStale: Long = 0L,
+    /**
+     * T-NestGateObserve：进程级最高嵌套深度（心跳 `nestMaxDepth` 键）。与 [nestStale] 配对读——
+     * 泄漏后深度持续攀升说明残留帧在累加，而不是一次性的单帧错位。
+     */
+    val nestMaxDepth: Long = 0L,
+    /**
+     * T-PanweiInsertCapture F3：登记盲区累计（心跳 `unresolved` 键），与 [blindClasses] 配对读。
+     */
+    val unresolvedBlind: Long = 0L,
 ) {
     /** 命中类数（`matched` 与 `weavable` 取大——心跳只带后者时的零命中判据）。 */
     val matchedTotal: Long get() = maxOf(matched, weavable)
@@ -72,7 +107,7 @@ internal data class AgentAttachStats(
     companion object {
         /** 单键匹配：`"matched":12`（允许冒号后空白；值域只认整数，防止把 JSON 字符串误读成数字）。 */
         private val KEY_VALUE = Regex(
-            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped)"\s*:\s*(-?\d{1,15})""",
+            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped|assembleFailures|nestSuppressed|nestStale|nestMaxDepth|unresolved)"\s*:\s*(-?\d{1,15})""",
         )
 
         /**
@@ -83,6 +118,12 @@ internal data class AgentAttachStats(
          * 这类无害写法（逐项 trim 后丢弃空项）。
          */
         private val UNREG_VALUE = Regex("\"unreg\"\\s*:\\s*\"([A-Za-z0-9_.$, ]*)\"")
+
+        /**
+         * T-PanweiInsertCapture F3：登记盲区类名（`"blind":"a.b.C,d.e.F"`）。
+         * 值域与 [UNREG_VALUE] 同款（只类名字符 + 逗号 + 空格）——脏串宁可不解析。
+         */
+        private val BLIND_VALUE = Regex("\"blind\"\\s*:\\s*\"([A-Za-z0-9_.$, ]*)\"")
 
         /** 未登记实现的上报上限（与 agent 侧 `CaptureBudget.MAX_UNREGISTERED` 同值；超出的丢弃）。 */
         const val MAX_UNREGISTERED = 8
@@ -114,12 +155,22 @@ internal data class AgentAttachStats(
                 catchAll = (values["catchAll"] ?: 0L).toInt(),
                 unregisteredImplementations = parseUnregistered(body),
                 dropped = values["dropped"] ?: 0L,
+                blindClasses = parseCsvNames(body, BLIND_VALUE),
+                assembleFailures = values["assembleFailures"] ?: 0L,
+                nestSuppressed = values["nestSuppressed"] ?: 0L,
+                nestStale = values["nestStale"] ?: 0L,
+                nestMaxDepth = values["nestMaxDepth"] ?: 0L,
+                unresolvedBlind = values["unresolved"] ?: 0L,
             )
         }
 
         /** `unreg` 值 → 类名列表（去空白、去空项、去重、截到 [MAX_UNREGISTERED]；无键=空列表）。 */
-        private fun parseUnregistered(body: String): List<String> {
-            val raw = UNREG_VALUE.find(body)?.groupValues?.get(1) ?: return emptyList()
+        private fun parseUnregistered(body: String): List<String> =
+            parseCsvNames(body, UNREG_VALUE)
+
+        /** 通用 CSV 类名解析（`"key":"a,b"` → 列表；值域非法/空/无键 → 空列表）。 */
+        private fun parseCsvNames(body: String, pattern: Regex): List<String> {
+            val raw = pattern.find(body)?.groupValues?.get(1) ?: return emptyList()
             if (raw.isEmpty()) return emptyList()
             return raw.split(',')
                 .map { it.trim() }

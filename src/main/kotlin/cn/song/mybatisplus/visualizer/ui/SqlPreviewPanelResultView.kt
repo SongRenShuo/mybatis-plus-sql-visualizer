@@ -222,6 +222,18 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
             if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
         }
     }
+    // T-Ibatis2Gap 券 A：iBatis 交互态初始化——参数行/条件值输入按行清单播种（基线 SQL 里没有
+    // `?` 也必须建行建输入框，这正是「参数没识别」的正解）；compareValue 预填条件值输入
+    // （勾上 isEqual 即按比较值参与 WHERE）；iterate 列表与重渲染告警随新预览清场。
+    result.ibatisParamModel?.let { ibatisModel ->
+        ibatisModel.placeholderRows.forEach { paramValues.putIfAbsent(it.name, "") }
+        ibatisModel.conditionRows.forEach { row ->
+            row.property?.let { paramValues.putIfAbsent(it, row.compareValue ?: "") }
+        }
+        ibatisModel.dollarRows.forEach { paramValues.putIfAbsent(it.name, "") }
+        ibatisIterateValues.clear()
+        ibatisRenderWarnings = emptyList()
+    }
     // P-05：历史召回（在 initialParamValues 之后，用户输入之前）
     recallFromHistory()
     // 模型级重生成路径：初始压缩/多行与格式化设置对齐（旧文本路径保持默认多行）
@@ -640,8 +652,21 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             xml.parameterType?.let { add("parameterType: ${HtmlEscape.escape(it)}") }
         }
     }.joinToString("   ")
-    currentWarning = mergePreviewWarnings(result.warning, if (result.xmlModel != null) xmlErrors else emptyList())
-    val warningLine = currentWarning?.let { "   ⚠ ${HtmlEscape.escape(it)}" } ?: ""
+    // UI-001：告警唯一事实源分档——MyBatis XML 链维持「基线告警 + 本轮 xmlErrors」合并；
+    // iBatis rerender 链以「本轮重渲染结果」为唯一事实源：基线无参渲染的降级告警在供值后
+    // 必须消失（架构口径「触发即显示、恢复即隐藏」），不做会话级残留——「刷新」重走 renderSql
+    // 同一分支，同样收敛。
+    currentWarningIsNote = if (result.rerender != null) ibatisRenderWarningIsNote else result.informationalWarning
+    currentWarning = if (result.rerender != null) {
+        mergePreviewWarnings(null, ibatisRenderWarnings)
+    } else {
+        mergePreviewWarnings(
+            result.warning,
+            if (result.xmlModel != null) xmlErrors else emptyList(),
+        )
+    }
+    // T-SAF-09/10：告警文本未转义即活 markup——ℹ/⚠ 前缀为包装非数据，数据段一律过 HtmlEscape
+    val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ ${HtmlEscape.escape(it)}" else "   ⚠ ${HtmlEscape.escape(it)}" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。
     // 文案组装抽为纯函数 [buildStackDigestInlineLine]（同文件顶层）——§3.3 验收项
@@ -676,9 +701,16 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
     // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
     if (currentWarning != null) {
+        // UI-001：前缀分档——真降级（半截 SQL / 配置错配）保留「⚠ 预览未完整还原」；
+        // 信息性说明（parameterMap 引擎行为、iterate 待填值）用「ℹ」信息级前缀，不冒充失败
+        val bannerText = if (currentWarningIsNote) {
+            MpSqlVisualizerBundle.message("panel.banner.renderNote", currentWarning ?: "")
+        } else {
+            MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: "")
+        }
         degradationBanner.show(
             DegradationBanner.Kind.RENDER_WARNING,
-            MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+            bannerText,
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)

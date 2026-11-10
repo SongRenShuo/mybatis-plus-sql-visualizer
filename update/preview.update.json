@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.8",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.8/mybatis-plus-sql-visualizer-2026.11.8.zip",
-  "changeNotes": "2026.3 上切换数据源不再只剩当前一个源，也不会静默跑到旧库\n选了平台不提供的数据源会直接阻断并说明原因，不再悄悄换源执行\n日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n面板、复制可执行 SQL、捕获列表与模型链的日期参数统一口径\nSQL Server 与 SQLite 维持引号形态，行为不变\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-07",
+  "version": "2026.11.11",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.11/mybatis-plus-sql-visualizer-2026.11.11.zip",
+  "changeNotes": "抓不到某类 SQL 时不再只有空白，状态栏会直接说明是让位丢弃、组装失败、门禁抑制还是登记盲区\n一条语句抛异常之后，同一线程后续的 SQL 不再整片消失，出错那条语句也会如实上榜并标记错误\nMyBatis 的 STATEMENT 语句与 iBatis 普通 Statement 语句的日志都能识别\niBatis 批处理不产生日志这件事会在面板上说清楚，不再像插件坏了\npg 家族存储过程、华为兼容模式批处理、读写分离连接等增强捕获登记缺口补齐\n状态栏新增「门禁陈旧」读数，长事务合法嵌套不再被误报\nMac 与 UOS 上点执行 SQL 恒报 findPsi 的问题已修\n预览执行写语句成功后不再被误报等待结果超时",
+  "publishDate": "2026-11-11",
   "sinceBuild": "243"
 }

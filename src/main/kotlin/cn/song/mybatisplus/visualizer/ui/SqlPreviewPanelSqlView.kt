@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
@@ -246,7 +247,39 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
     val model = result.previewModel
     val batch = result.batchModel
     val xml = result.xmlModel
+    val ibatisRerender = result.rerender
     when {
+        // T-Ibatis2Gap 券 A：iBatis 参数/条件可交互——面板状态（值/勾选/迭代列表）交给预览服务
+        // 闭包重渲染（渲染接缝 A：PreviewResult.rerender 回调，MyBatis 链零感知）。
+        ibatisRerender != null -> {
+            val input = PreviewRerenderInput(
+                params = paramValues.toMap(),
+                enabledConditionIds = enabledIds.toSet(),
+                collections = ibatisIterateValues.mapValues { (_, text) ->
+                    text.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+                },
+            )
+            val fresh = runCatching { ibatisRerender(input) }.getOrElse { e ->
+                ibatisRenderWarnings = listOf(e.message ?: e.javaClass.simpleName)
+                showSql(if (compactMode) result.compactSql else result.sql)
+                updateMeta(result)
+                return
+            }
+            ibatisRenderWarnings = fresh.warning?.let { listOf(it) } ?: emptyList()
+            // UI-001：分档随本轮结果整体替换（信息级说明走 ℹ 前缀，不冒充失败）
+            ibatisRenderWarningIsNote = fresh.informationalWarning
+            // iterate 值播种：渲染器按列表长度产出 `ids[0..n-1]` 参数名——按当前值序回填（与
+            // xml 的 syncForEachItemValues 同语义：状态 → 渲染单向流动，不留旧键）
+            result.ibatisParamModel?.iterateRows?.forEach { row ->
+                val values = input.collections[row.property].orEmpty()
+                values.forEachIndexed { i, v -> paramValues["${row.property}[$i]"] = v }
+            }
+            val base = if (compactMode) fresh.compactSql else fresh.sql
+            val sources = fresh.placeholderParamNames.ifEmpty { fresh.unresolvedParams }
+            showSql(backfillParamsBySource(base, sources, fresh.paramHints))
+            // 警示行与横幅随本轮刷新（iterate 留空等降级形态必须可见，不得静默）
+            updateMeta(result)
+        }
         // T-M24-04：XML 动态 SQL——渲染单源 XmlPreviewModel.renderSql(state)，勾选/次数/覆盖变更重渲染
         xml != null -> {
             val state = XmlPreviewState(
@@ -674,7 +707,12 @@ internal fun SqlPreviewPanel.clear() {
     xmlForEachNulls.clear()
     xmlErrors = emptyList()
     xmlDollarSubstitutions = 0
+    // T-Ibatis2Gap 券 A：iBatis 交互态随清空复位（不跨预览残留）
+    ibatisIterateValues.clear()
+    ibatisRenderWarnings = emptyList()
+    ibatisRenderWarningIsNote = false
     currentWarning = null
+    currentWarningIsNote = false
     errorCopyButton?.isVisible = false
     toggleSelectButton = null
     batchToggleSelectButton = null

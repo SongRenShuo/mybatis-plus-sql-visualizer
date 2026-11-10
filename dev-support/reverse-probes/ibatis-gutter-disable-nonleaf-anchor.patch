@@ -1,0 +1,16 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt
+index df4632a9..1e5a17b9 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlGutterLineMarkerProvider.kt
+@@ -113,7 +113,10 @@ class IbatisXmlGutterLineMarkerProvider : LineMarkerProvider {
+          * 本函数跑在 gutter 热路径（每到达一个 XML_NAME token）。
+          */
+         internal fun isStatementAnchor(tag: XmlTag): Boolean {
+-            return tag.name in STATEMENT_TAGS && tag.parentTag?.name == SQL_MAP_TAG
++            // REVERSE-PROBE（T-Ibatis2Support 券 A 接管面）：恢复「叶子标签」限制——反证锚 =
++            // IbatisXmlGutterLineMarkerProviderTest 的两条「含动态子标签也出图标」用例
++            // （叶子限制会让这类语句零图标，正是用户报障的另一半）。
++            return tag.name in STATEMENT_TAGS && tag.parentTag?.name == SQL_MAP_TAG && tag.subTags.isEmpty()
+         }
+ 
+         /**

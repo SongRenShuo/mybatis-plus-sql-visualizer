@@ -1,0 +1,14 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/SqlFormatter.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/SqlFormatter.kt
+index 15176fdd..b83395bc 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/SqlFormatter.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/SqlFormatter.kt
+@@ -1071,7 +1071,8 @@ object SqlFormatter {
+             if (type != TokenType.WHITE_SPACE) tokens += type to lexer.tokenText
+             lexer.advance()
+         }
+-        return mergeParamPlaceholders(tokens)
++        // REVERSE-PROBE: 摘除参数占位原子化（锚：SqlFormatterIbatisTokenTest 的 #x# / #{x} / ${x} 保真用例必红）
++        return tokens
+     }
+ 
+     // ------------------------------------------------------------------

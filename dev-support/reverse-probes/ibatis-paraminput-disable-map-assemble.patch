@@ -1,0 +1,16 @@
+# -*- 反证补丁：摘掉 iBatis Map 装配（装配结果恒弃、恒传 null）——条件勾选/填值语义整体失效 -*-
+# 设计说明：探针插在函数尾（return null 提前出口），不制造头部死代码——Kotlin 对死代码段
+# 禁用数据流智能转换，头部 return null 会让后续 isNullOrEmpty 智能转换失效而编译不过（首轮实测）。
+# 期望：IbatisParamModelTest 装配族 + IbatisXmlPreviewServiceTest 券A族 变红
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/IbatisParamModel.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/IbatisParamModel.kt
+@@ -187,5 +187,9 @@
+         }
+ 
++        if (true) {
++            // [REVERSE-PROBE 反向探针] 摘掉 Map 装配：装配结果恒弃，恒传 null（无参基线）——勾选 = 放 key 失效
++            return null
++        }
+         if (map.isEmpty()) {
+             // 空装配 = 无参基线（null，与现状逐字节一致）；唯一例外是 isParameterPresent 被勾选——
+             // 它判 params != null，传空 map 才成立（isNotParameterPresent 反之，null 天然成立）
