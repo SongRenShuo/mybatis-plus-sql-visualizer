@@ -250,7 +250,7 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（`dev-support/inspect-plugin-zip.py` 的同名断言）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
 **证据**：2026-11-09 发行 v2026.11.9-beta.1 两处同时踩——①本地先跑守卫，`ChangeNotesRatingLineGuardTest` 1 红（评分引导句出现 2 次，`v2026.11.8` 历史块那行没删），改后 29/0/0/0；②自检放在**发布之后**才跑，`inspect-plugin-zip.py` 报 FAIL（第 3 条「新增中兴 GoldenDB 方言（第 15 种）…」的全角括号），此时 GitHub Release `438955517` 与 Gitee 发行版 `1290785` 已是带病产物，只能 tag 前移（`65e03bae` → `f9c5b0c3`）+ 重发一轮。
 **正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`inspect-plugin-zip.py` 跑在 `git tag` 之前，红了改文案重提交，代价是几十秒。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
-**Seen 3× (2026-10-29, 2026-10-30, 2026-11-09)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 1×（2026-11-09），该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
+**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角判据在 `inspect-plugin-zip.py` 里、需要先有 zip——正确顺序是 tag 前**本地 `buildPlugin` 一次 + 跑检查器**（几十秒），而不是只跑守卫测试。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
 
 ## 升级记录
 
