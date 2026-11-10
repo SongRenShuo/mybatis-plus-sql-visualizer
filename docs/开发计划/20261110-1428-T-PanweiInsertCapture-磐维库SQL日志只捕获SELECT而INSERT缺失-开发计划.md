@@ -572,3 +572,27 @@ EVENT #6 kind=INSERT u=1  sql=INSERT INTO T_CAP_REPRO (ID, NAME) VALUES (3, 'stm
 **结论**：Oracle + 直连 JDBC 的形态下，「写语句丢失」**不能复现** —— 说明 capture 链对 INSERT 本身没有
 方法/语句类型层面的缺口。用户现场的差异只剩三处外部条件：**iBatis + 连接池的代理层次**、**该应用的实际线程**、
 **磐维驱动**（V3.0-S3.4.0，A 模式）。下一步判据：香港机磐维实例就位后，用同一载荷换成 `jdbc:panweidb:` 复跑。
+
+#### 11.6b 加测：Hikari + iBatis 式 JDK 代理（仍**未复现**）
+
+用户澄清「Oracle 模式」指的是**磐维的 Oracle 兼容模式**，不是真 Oracle。在等香港磐维实例期间，
+先把「iBatis + 连接池的代理层次」这一层用真 Oracle 排掉（`tmp/oracle-repro/OraclePooledRepro.java`）：
+
+- 连接走 `HikariDataSource`（最大池 2），PS 再套一层与 iBatis `PreparedStatementLogProxy` 同形的 JDK 动态代理
+  （`Proxy.newProxyInstance(cl, {PreparedStatement, CallableStatement}, handler)`）——即 agent 视角的三层
+  已织 execute 帧嵌套，正是 `NestGate` 的判定面；
+- 三条路径各跑一次：代理 `executeUpdate()`、代理 `execute()`（iBatis 写路径）、代理 `executeQuery()`。
+
+**读数（probe2.log 原文）**：
+
+```
+EVENT #3 kind=INSERT u=1    sql=INSERT INTO T_CAP_POOL (ID, NAME) VALUES (?, ?)   ← 代理.executeUpdate()
+EVENT #4 kind=INSERT u=null sql=INSERT INTO T_CAP_POOL (ID, NAME) VALUES (?, ?)   ← 代理.execute()（iBatis）
+EVENT #5 kind=SELECT u=null sql=SELECT NAME FROM T_CAP_POOL WHERE ID = ?          ← 代理.executeQuery()
+```
+
+`pooled rows = 2`（两条写入真落库），心跳里 `nestSuppressed=0 / assembleFailures=0`。
+
+**结论**：代理层次 + 连接池**也不是**丢失原因（三层嵌套下写语句照常产出，且门禁抑制计数为 0）。
+剩余差异面收敛到**磐维驱动（A 模式内核）本身**与**该应用特有的线程间/实例间形态**两处。
+香港磐维 A 模式实例就位后，用同一份 `OraclePooledRepro` 换 `jdbc:panweidb://` 复跑即可定案。
