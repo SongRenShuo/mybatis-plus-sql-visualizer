@@ -368,6 +368,37 @@ public final class SqlHookCallbacks {
         return NestGate.suppressedCount();
     }
 
+    /**
+     * T-NestGateObserve：**陈旧嵌套**累计（心跳 {@code nestStale} 键取值）。
+     *
+     * <p>与 {@link #nestSuppressedCount()} 的区别是诊断的关键：后者只统计「被内层挤掉的外层帧」，
+     * 深度泄漏时被抑制的是**最外层自己**，那条路径一条都不计（磐维真机现场 nestSuppressed=0 却整类
+     * 语句消失）。本计数只回答「这条线程有没有一条活过阈值的链」——有就是深度未归零。
+     */
+    public static long nestStaleCount() {
+        return NestGate.staleCount();
+    }
+
+    /** T-NestGateObserve：进程级最高嵌套深度（心跳 {@code nestMaxDepth} 键取值）。 */
+    public static int nestMaxDepth() {
+        return NestGate.maxDepth();
+    }
+
+    /** 仅测试用：复位 NestGate 的线程态与观测计数（跨包测试经此转发）。 */
+    public static void resetNestGateForTest() {
+        NestGate.resetForTest();
+    }
+
+    /** 仅测试用：注入 NestGate 时钟（{@code null} = 系统时钟）。 */
+    public static void setNestClockForTest(java.util.function.LongSupplier clock) {
+        NestGate.clockOverride = clock;
+    }
+
+    /** 仅测试用：陈旧嵌套阈值（毫秒）。 */
+    public static void setNestStaleMsForTest(long ms) {
+        NestGate.setStaleMsForTest(ms);
+    }
+
     /** 仅测试用：复位组装失败计数。 */
     public static void resetAssembleFailuresForTest() {
         ASSEMBLE_FAILURES.set(0L);

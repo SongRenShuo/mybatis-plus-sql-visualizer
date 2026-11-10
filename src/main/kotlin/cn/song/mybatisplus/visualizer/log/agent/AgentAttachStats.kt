@@ -75,6 +75,19 @@ internal data class AgentAttachStats(
      */
     val nestSuppressed: Long = 0L,
     /**
+     * T-NestGateObserve：**陈旧嵌套**累计（心跳 `nestStale` 键）。
+     *
+     * 与 [nestSuppressed] 的差别是本轮立项的核心：后者只统计「被内层挤掉的外层帧」，而深度泄漏时
+     * 被抑制的是最外层自己（该路径不计）。>0 即说明某条线程存在一条活过阈值（默认 5s）的嵌套链，
+     * 也就是「深度未归零」的硬证据。
+     */
+    val nestStale: Long = 0L,
+    /**
+     * T-NestGateObserve：进程级最高嵌套深度（心跳 `nestMaxDepth` 键）。与 [nestStale] 配对读——
+     * 泄漏后深度持续攀升说明残留帧在累加，而不是一次性的单帧错位。
+     */
+    val nestMaxDepth: Long = 0L,
+    /**
      * T-PanweiInsertCapture F3：登记盲区累计（心跳 `unresolved` 键），与 [blindClasses] 配对读。
      */
     val unresolvedBlind: Long = 0L,
@@ -94,7 +107,7 @@ internal data class AgentAttachStats(
     companion object {
         /** 单键匹配：`"matched":12`（允许冒号后空白；值域只认整数，防止把 JSON 字符串误读成数字）。 */
         private val KEY_VALUE = Regex(
-            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped|assembleFailures|nestSuppressed|unresolved)"\s*:\s*(-?\d{1,15})""",
+            """"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped|assembleFailures|nestSuppressed|nestStale|nestMaxDepth|unresolved)"\s*:\s*(-?\d{1,15})""",
         )
 
         /**
@@ -145,6 +158,8 @@ internal data class AgentAttachStats(
                 blindClasses = parseCsvNames(body, BLIND_VALUE),
                 assembleFailures = values["assembleFailures"] ?: 0L,
                 nestSuppressed = values["nestSuppressed"] ?: 0L,
+                nestStale = values["nestStale"] ?: 0L,
+                nestMaxDepth = values["nestMaxDepth"] ?: 0L,
                 unresolvedBlind = values["unresolved"] ?: 0L,
             )
         }

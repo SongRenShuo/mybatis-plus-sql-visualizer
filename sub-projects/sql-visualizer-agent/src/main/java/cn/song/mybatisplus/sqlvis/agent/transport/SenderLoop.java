@@ -495,6 +495,11 @@ final class SenderLoop implements Runnable {
                     // unresolved = 登记盲区累计（与 blind 的类名配对看）。
                     + ",\"assembleFailures\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.assembleFailures()
                     + ",\"nestSuppressed\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestSuppressedCount()
+                    // T-NestGateObserve：深度泄漏的**直接读数**——nestStale = 链龄超阈值的嵌套进入次数
+                    // （nestSuppressed 对「最外层自己被抑制」这一形态恒为 0）；nestMaxDepth = 进程级
+                    // 最高嵌套深度（泄漏后是否持续攀升）。整数键、键序固定、无空格、恒出现。
+                    + ",\"nestStale\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount()
+                    + ",\"nestMaxDepth\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestMaxDepth()
                     + ",\"unresolved\":"
                     + cn.song.mybatisplus.sqlvis.agent.hook.StatementRegistry.unresolvedCount()
                     + "}";

@@ -50,6 +50,9 @@ public class NestGateTest {
     public void setUp() throws Exception {
         StatementRegistry.clearForTest();
         queue().clear();
+        // T-NestGateObserve：观测计数与线程态逐用例复位（既有 4 例的读数不受影响，
+        // 新增用例依赖「陈旧计数从 0 起」；同时也清掉上一例可能的残留 depth）
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.resetNestGateForTest();
         savedDisabled = AgentState.isDisabled();
         AgentState.setDisabled(false);
         dir = Files.createTempDirectory("sqlvis-nestgate-").toFile();
@@ -62,6 +65,7 @@ public class NestGateTest {
     public void tearDown() {
         AgentState.setDisabled(savedDisabled);
         StatementRegistry.clearForTest();
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.resetNestGateForTest();
         try {
             queue().clear();
         } catch (Exception ignore) {
@@ -140,6 +144,81 @@ public class NestGateTest {
         final SqlEvent after = queue().poll();
         assertNotNull("嵌套链结束后单帧必须恢复产出", after);
         assertEquals("SELECT inner", after.sql);
+    }
+
+    // ---------- T-NestGateObserve：深度泄漏观测（纯观测，不改抑制语义） ----------
+
+    /**
+     * 正常嵌套**不误报**：外层+内层真嵌套（一次 execute 的时长）→ {@code nestStale} 保持 0，
+     * 事件仍只报最内层一条（语义与原行为一致）。
+     */
+    @Test
+    public void 正常嵌套_不误报陈旧且仍只报最内层() throws Exception {
+        final Object outer = newInstance("NestGateTest$OuterPs");
+        final Object inner = outer.getClass().getMethod("inner").invoke(outer);
+        StatementRegistry.register(outer, "SELECT outer", "jdbc:nest://db");
+        StatementRegistry.register(inner, "SELECT inner", "jdbc:nest://db");
+
+        final long staleBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount();
+
+        outer.getClass().getMethod("executeUpdate").invoke(outer);
+
+        final SqlEvent event = queue().poll();
+        assertNotNull("嵌套链仍必须恰好产出 1 条事件", event);
+        assertEquals("必须报最内层（驱动层）那条", "SELECT inner", event.sql);
+        assertNull("不得双报", queue().poll());
+        assertEquals("正常嵌套不得被计为陈旧（链存活远小于阈值）",
+                staleBefore, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+    }
+
+    /**
+     * 陈旧**可判**：进一帧不退出 + 时钟拨过阈值 + 再 enter → {@code nestStale} +1；同一链的产出
+     * 语义不变（仍只报最内层、外层照旧计 nestSuppressed）。
+     *
+     * <p>时钟经 {@link cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks#setNestClockForTest}
+     * 注入（NestGate 包内可见，跨包测试走这一条转发）；阈值显式设 5000ms，不依赖系统属性。
+     */
+    @Test
+    public void 陈旧嵌套_超阈值计数且语义不变() throws Exception {
+        final Object outer = newInstance("FakeVendorFixtures$VendorPs");
+        final Object inner = newInstance("FakeVendorFixtures$VendorPs");
+        StatementRegistry.register(outer, "SELECT outer", "jdbc:nest://db");
+        StatementRegistry.register(inner, "SELECT inner", "jdbc:nest://db");
+
+        final java.util.concurrent.atomic.AtomicLong clock =
+                new java.util.concurrent.atomic.AtomicLong(1_000_000_000L);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setNestClockForTest(clock::get);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.setNestStaleMsForTest(5_000L);
+
+        final long staleBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount();
+        final long suppressedBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .nestSuppressedCount();
+
+        // 链首：depth 0→1（记链龄起点）
+        final long tokenOuter = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(outer);
+        assertTrue("链首帧 token 非 0", tokenOuter != 0L);
+
+        // 时钟拨过阈值（+6s > 5s）后再 enter = 陈旧嵌套
+        clock.addAndGet(6_000_000_000L);
+        final long tokenInner = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(inner);
+        assertTrue("嵌套帧 token 非 0", tokenInner != 0L);
+        assertEquals("链龄超阈值的嵌套进入必须计一次陈旧",
+                staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+
+        // 语义不变：内层产出、外层被抑制，全链仍只 1 条事件
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(inner, null, "executeUpdate", tokenInner, null, null);
+        final SqlEvent event = queue().poll();
+        assertNotNull("陈旧链下内层仍必须产出（观测不改放行语义）", event);
+        assertEquals("SELECT inner", event.sql);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(outer, null, "executeUpdate", tokenOuter, null, null);
+        assertNull("外层仍不得双报", queue().poll());
+        assertEquals("外层帧仍按原语义计 nestSuppressed",
+                suppressedBefore + 1,
+                cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestSuppressedCount());
     }
 
     /** 外层夹具：executeUpdate 转发给内层（池包装/日志代理的等价形态）。 */
