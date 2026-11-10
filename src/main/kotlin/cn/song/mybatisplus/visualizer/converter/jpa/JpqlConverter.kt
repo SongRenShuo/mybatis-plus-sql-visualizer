@@ -99,13 +99,19 @@ object JpqlConverter {
         }
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
-        val inClauseParams = findInClauseParams(jpql)
+        // T-HiddenBugPerfScan 券 B（与 HqlConverter 同批）：命名/位置参数替换先掩码字面量，
+        // 防字面量内 `:word`（'HH:mm' 等）被全文正则换成 `?` 且计入参数表——产物污染 +
+        // 按位回填错位。与后续步骤的 JpaSqlLiteralMasking 同款两段式。
+        val (paramMaskedJpql, paramLiterals) = JpaSqlLiteralMasking.mask(jpql)
+        val inClauseParams = findInClauseParams(paramMaskedJpql)
 
         // 1. 替换命名参数 :param → ?
-        var sql = replaceNamedParameters(jpql)
+        var sql = replaceNamedParameters(paramMaskedJpql)
 
         // 2. 替换位置参数 ?1 → ?
         sql = replacePositionalParameters(sql)
+        // 还原字面量（后续步骤各自再做掩码周期，行为不变）
+        sql = JpaSqlLiteralMasking.unmask(sql, paramLiterals)
 
         // 2.5 处理 IN 子句：IN ? → IN (?)（集合参数应展开为多占位符）
         sql = handleInClause(sql)
