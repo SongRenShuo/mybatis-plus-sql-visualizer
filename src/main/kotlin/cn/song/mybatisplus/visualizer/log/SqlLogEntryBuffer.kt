@@ -733,18 +733,23 @@ class SqlLogEntryBuffer(
         synchronized(entries) {
             if (entries.size < 2) return@synchronized
             val keep = mutableListOf<LogSqlEntry>()
+            // T-HiddenBugPerfScan 券 T：判重用本地键集 O(1) 查表——曾对每条在队条目
+            // firstOrNull 线性扫 keep（n 条则 n²/2 次 dedupeKey 字符串比较），全程持有
+            // entries 监视器：万级缓冲点「移除重复的sql」冻结 EDT 并阻塞采集线程
+            // （T-Perf-12 登记过的互相卡形态）。语义不变：键集 = keep 中可判重条目的
+            // dedupeKey 集合，与 keep.firstOrNull 的存在性判定等价。
+            val keptKeys = HashSet<String>()
             for (entry in entries) {
                 // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效；
                 // T-LogRowNumber 追加：手动全量裁剪不比较时间窗口（见 KDoc），纯按指纹判重。
-                val duplicate = if (canDedupe(entry)) {
-                    keep.firstOrNull { canDedupe(it) && it.dedupeKey == entry.dedupeKey }
-                } else null
-                if (duplicate != null) {
-                    recordDedupeDrop(entry.dedupeKey)
-                    removed++
-                } else {
-                    keep += entry
+                if (canDedupe(entry)) {
+                    if (!keptKeys.add(entry.dedupeKey)) {
+                        recordDedupeDrop(entry.dedupeKey)
+                        removed++
+                        continue
+                    }
                 }
+                keep += entry
             }
             if (removed > 0) {
                 entries.clear()
