@@ -541,3 +541,34 @@ T-07 通道守卫：新增心跳键须同步 `AgentProtocolSyncTest` 的白名�
 - 真机 runIde 沙盒验收（本轮无 GUI 面改动，状态栏文本由单测覆盖）；
 - 全量门禁 `testShards` 与 `verifyGate`（按纪律交收口代理，本轮只跑定向与 agent 子项目全量）；
 - MySQL 5.1 `CallableStatement` 的字节层与行为验证（jar 不可得）。
+
+### 11.6 Oracle 真机复现实验（2026-11-10，**未复现**）
+
+用户令「用 DBX 的 Oracle 尝试复现」，遂用 DBX 在册的 **Oracle AI Database 26ai Free 23.26.2.0.0**
+（`114.66.55.245:20095/FREEPDB1`，凭据取自 `.local/dialect-external-matrix.release.properties` 的 `oracle23` 段）
+搭了一个最小真机级端到端：
+
+- 探针：`tmp/oracle-repro/Probe.java`（极简假 IDE——收 HELLO 即下发 `CONFIG disabled=false`，逐帧打印 EVENT，
+  心跳原样打印）；
+- 载荷：`tmp/oracle-repro/OracleRepro.java`（同一连接依次跑四条：`ps.executeUpdate()`（MyBatis 写路径）、
+  `ps.execute()`（**iBatis 写路径** —— `SqlExecutor` 对更新也调 execute）、`ps.executeQuery()`、plain
+  `Statement.executeUpdate()`）；
+- 运行：JDK 17 + `-javaagent:mps-sql-agent.jar=port=53991;logLevel=debug`。
+
+**读数（probe.log 原文）**：8 条事件全部到达，四条写入路径无一遗漏——
+
+```
+EVENT #3 kind=INSERT u=1  sql=INSERT INTO T_CAP_REPRO (ID, NAME) VALUES (?, ?)      ← ps.executeUpdate()
+EVENT #4 kind=INSERT u=null sql=INSERT INTO T_CAP_REPRO (ID, NAME) VALUES (?, ?)    ← ps.execute()（iBatis 路径）
+EVENT #5 kind=SELECT u=null sql=SELECT NAME FROM T_CAP_REPRO WHERE ID = ?           ← ps.executeQuery()
+EVENT #6 kind=INSERT u=1  sql=INSERT INTO T_CAP_REPRO (ID, NAME) VALUES (3, 'stmt-update')  ← plain Statement
+```
+
+应用侧回读 `rows in table = 3`（写入真落库，排除「语句没执行」）。
+
+**顺带验证了本轮 F2/F3 的端到端接线**：同一实验的心跳 body 里已带出
+`"blind":"","assembleFailures":0,"nestSuppressed":0,"unresolved":0` 四键（诊断读数在生产链路上是活的）。
+
+**结论**：Oracle + 直连 JDBC 的形态下，「写语句丢失」**不能复现** —— 说明 capture 链对 INSERT 本身没有
+方法/语句类型层面的缺口。用户现场的差异只剩三处外部条件：**iBatis + 连接池的代理层次**、**该应用的实际线程**、
+**磐维驱动**（V3.0-S3.4.0，A 模式）。下一步判据：香港机磐维实例就位后，用同一载荷换成 `jdbc:panweidb:` 复跑。
