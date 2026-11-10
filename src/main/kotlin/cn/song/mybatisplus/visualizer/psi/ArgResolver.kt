@@ -178,10 +178,21 @@ object ArgResolver {
             // 表达式体：w.eq(...).like(...)
             is PsiMethodCallExpression -> calls += collectCallChain(body)
 
-            // 代码块体：收集块内所有方法调用
+            // 代码块体：只收「属于本 lambda 的顶层语句链」——
+            // ① 跳过嵌套 lambda 体内的调用（`o.or(x -> x.eq(B))` 的 x.eq(B) 已由递归
+            //    resolveNestedLambda 进入 or 的嵌套链，再混入本层即渲染重复条件，
+            //    T-HiddenBugPerfScan 券 A；与 collectChainFromInitializer 同一防线，
+            //    判据是「最近外围 lambda 就是本 lambda」而非任意 lambda）；
+            // ② 只取链尾（parent 不是另一调用的 qualifier 引用）回溯整链——
+            //    `o.eq(A).like(B)` 的 eq 是链中段，整链由 collectCallChain 补齐，不重复计。
             else -> PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
+                .filter { call ->
+                    val owner = PsiTreeUtil.getParentOfType(call, PsiLambdaExpression::class.java)
+                    (owner == null || owner == lambda) &&
+                        !(call.parent is PsiReferenceExpression && call.parent.parent is PsiMethodCallExpression)
+                }
                 .sortedBy { it.textOffset }
-                .forEach { calls += it }
+                .forEach { tail -> calls += collectCallChain(tail) }
         }
 
         val wrapperCalls = calls
