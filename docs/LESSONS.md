@@ -282,6 +282,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：先做「织后字节 enter/exit/返回点逐方法计数」再下结论，并用成功/失败两条载荷做对照；**反例**：拿「exit 数 == 显式返回指令数」当健康判据收工——它天然看不见隐式异常出口（本轮首版就是这么把「成功路径也泄漏」写错的）。
 **Seen 1× (2026-11-10)**
 
+### L30 发行方向固定为 CI → GitHub → Gitee；`--from-github` 是 Gitee 拿到门禁产物的唯一通路
+
+**规则**：发版的顺序是「CI 构建+门禁+发 GitHub（正文由 CI 模板生成，含提交号、构建记录、折叠历史）→ `gitee-release.py --from-github` 让 Gitee 取**同一份门禁产物**」。**禁止**「本地 `buildPlugin` → `gitee-release.py` 先发 Gitee → `mirror-releases-to-github.py` 镜像到 GitHub」——这条反路上有两个必然后果：①GitHub 的附件是**本地构建字节**，与门禁 job 产出并在平台上验过的那一份不是同一个文件；②GitHub 正文由镜像脚本拼装，**缺 CI 模板里的 `actions/runs` 链接、本版变更段与折叠历史**。判据：`GET /releases/tags/<tag>` 的 `assets[].size` 应等于门禁工件大小，`body` 里应含 `actions/runs/`。
+
+**证据**：2026-11-10 同一天两轮都走反了——`beta.1` 与 `beta.2` 都是本地构建后先发 Gitee（1293976 / 1294211）再镜像 GitHub（440141088 / 440204503）。用户当场纠正「应该是 GitHub 单到 Gitee 吧」。实测同一 tag 的两份包大小不同：本地 7,882,789 B vs 门禁产物 7,882,832 B（`MPV-Build` 时间戳导致必然不同哈希）。纠正路径：`mode=publish` 挂门禁 run（`run_id`）→ `gh release upload --clobber` 覆盖 GitHub 附件 + 按 CI 模板重生成正文（回读 `body_len=17584`、含 `actions/runs/` 与「本版变更」）→ Gitee `--from-github --replace`。中途还撞上 `--from-github` 的守卫：本地同名 zip 与 GitHub 内容不同会**硬失败**并要求先移走本地包（这与 [[pitfall-mpv-build-timestamp-vs-ci-zip-hash]] 同源）。
+
+**正例**：`mode=release` 一条命令做完「构建+门禁+发 GitHub」，再 `--from-github` 收 Gitee；离线自测/内测包另存，不混进 `build/distributions`。**反例**：先本地打包去发 Gitee，再用镜像脚本补 GitHub——两侧字节与正文的来源都不一致，且事后要再跑一轮 publish 才能纠正。
+
+**Seen 1× (2026-11-10)**——用户一句「应该是 GitHub 单到 Gitee 吧」点出方向错，同日两版都受影响。
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
