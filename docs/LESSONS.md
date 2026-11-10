@@ -262,6 +262,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：修前先列矩阵，修复按格落地；用例优先走**平台真实入口**（`GotoDeclarationAction.findAllTargetElements` + `GotoDeclarationOrUsageHandler2.testGTDUOutcome`，且必须在真 pooled thread 上跑——`Navigatable.navigationRequest` 有 BGT 断言，`ReadAction.nonBlocking().executeSynchronously()` 在 EDT 会内联），因为直调 handler 绿 ≠ 真实分派绿。**反例**：只跑被指出那个 provider 的单测就收工，下一轮真机再报一次同类。
 **Seen 1× (2026-11-10)**——一次内测轮内两种锚点形态各犯一次，按「同类两例」记账。
 
+### L27 发行版正文里的 `@注解名` 必须用 `<code>` 包裹，`&#64;` 与反引号都挡不住
+
+**规则**：`gradle/plugin-change-notes.html` 是发行版正文的源（CI 切块 → `gh release create --notes-file`），里面任何 `@` 紧跟字母的文本（Java 注解名 `@Query` / `@Embedded`，也包括「库名@host:port」这类角标文案）都会被 GitHub 解析成**用户提及**，发行版页面的 Contributors 于是列出与项目无关的账号。写法只有 `<code>@X</code>` 有效：`&#64;`（先解实体再识别提及）与反引号（裸 HTML 块内不跑 markdown 行内解析）**实测均无效**。判据＝`ChangeNotesRatingLineGuardTest#test注解名不得写成裸加号`（剥 `<code>…</code>` 后全文不得有裸 `@`+字母）；发布后还要拉页面数 `user-mention` 锚点复核，不能只改源码就收工。
+**证据**：`28b93e64`。`POST /markdown` 四形态同一样本对照：`&#64;Embedded` → 输出仍 `<a class="user-mention">`；反引号 → 原样保留反引号；零宽空格 → 有效但引入不可见字符；`<code>` → 无 user-mention。对账读数：2026.10.26 只显示 Embedded、2026.11.7 只显示 host（正文是「库名@host:port」）、2026.11.8 起显示 query and Embedded，三版与正文 `@` 词一一对应；三个账号（query＝Roger Que、Embedded、host）在仓内 5847 个提交里一个都查不到。已发布发行版 30 个正文按 PATCH 改写（改内容，不删重建），页面复核 Contributors 区块消失、`user-mention` 归零。
+**正例**：先单版本探针——改 1 个发行版 → 拉页面 HTML 数 `user-mention` 确认机制，再批量。**反例**：第一版按「HTML 实体应该能挡住」直接选 `&#64;`，改完 2026.11.10 页面毫无变化，还先怀疑成页面缓存；真因是解实体之后才做提及识别，若当时直接批量就是 30 个白改。
+**Seen 1× (2026-11-10)**——用户报障「Contributors 每次多两个我不认识的」，同轮内先踩 `&#64;` 再说清。
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
