@@ -337,6 +337,16 @@ findPsi: null (name=mpsql-exec.sql, vfValid=true, dir=false, fileType=SQL,
 | 常规 | `<testsuite tests="7" skipped="0" failures="0" errors="0" time="6.032">` |
 | 反向（临时把闸门条件改成 `false && …`，代码内标 `RED PROBE`） | `7 tests completed, 1 failed`；`testGateSkipsMappingForNonPsiLanguage` → `AssertionFailedError: 目标语言建不出 PSI 时，闸门必须拒绝映射（APPLIED = 没拦住）expected:<SKIPPED_NO_PSI> but was:<APPLIED>` |
 | 恢复后复跑 | `<testsuite tests="7" skipped="0" failures="0" errors="0" time="5.767">` |
+| 并入 master 后（merge `0094738b`）+ 补第 8 例（vf 失效分支复现） | `<testsuite tests="8" skipped="0" failures="0" errors="0" time="27.537">`；同轮打印 `[ExecPsiGate] invalid-vf diagnostics=name=…, vfValid=false, dir=false, fileType=SQL, mappedLang=null, canPsi=false, path=…` |
+
+### 12.3.0 复现边界（用户问「有没有复现用户的问题」，如实记）
+
+| 项 | 结论 |
+|---|---|
+| 用户那一形态（Mac / UOS 上 `findPsi: PsiManager.findFile null`） | **未复现**。本机 Windows、用户的 Mac/UOS 项目与 IDE 版本都拿不到，且用户内网无 `idea.log`（用户 2026-11-10 明确） |
+| null 分支本身 | **已复现**：`testFindFileNullFromInvalidVf` 用「refresh 后 vf 失效」把 `findFile` 打成 null，五元组报出 `vfValid=false`（区分力实证） |
+| 坏映射打断 PSI 的分支 | **已复现**：映射到非 `SqlLanguageDialect` 语言时 `findFile` 抛 CCE（栈见 §12.3） |
+| 因此 | 本单修的是「这一类失败机制」而不是「已证实的那一台机器的原因」。用户侧真正落在哪条分支，靠新版本的**五元组文案**一次判型（`vfValid` / `canPsi` 两项直接分开两条分支）；修复对 `canPsi=false` 与映射失败的路径立刻生效，对 `vfValid=false` 的路径只提供定位信息（V3 另立项） |
 
 `RED PROBE` 标记已确认清零（`grep -c "RED PROBE"` = 0），工作树无残留探针。
 

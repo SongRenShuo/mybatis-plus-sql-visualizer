@@ -199,6 +199,39 @@ class ExecPsiGateTest : BasePlatformTestCase() {
 
     // ======================== 诊断 ========================
 
+    /**
+     * **另一条 null 分支的复现**：vf 失效（`FileManagerImpl.findFile` 的三条 null 分支之一）。
+     *
+     * 为什么要单独钉一例：用户报的 `findPsi: PsiManager.findFile null` 有两条可能来源——
+     * 映射指向的语言建不出 SQL PSI（§testHeal 那例，本单主修），或 **vf 在 refresh 之后被
+     * 失效**（本单实测复现的这一支）。两条来源在用户侧长得一模一样，只有五元组里的
+     * `vfValid` 能把它们分开；而本单的自愈（清映射）对 vf 失效**无效**，重定位是另一个子单
+     * （计划 §八 V3）。这条用例既把 null 分支复现出来，也钉住「诊断必须能区分」这件事。
+     */
+    fun testFindFileNullFromInvalidVf() {
+        val vf = writeExecFile("select 5")
+        assertNotNull("前置：正常状态 PSI 应可建", findExecPsi(project, vf))
+
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            vf.delete(this)
+        }
+        assertFalse("前置：删除后 vf 必须失效（否则本用例测的不是这条分支）", vf.isValid)
+
+        // 平台 `FileManagerImpl.findFile` 在 vf 失效时 `LOG.error(InvalidVirtualFileAccessException)`
+        // 后返回 null；单测模式下 LOG.error 可能抛断言，故「null 或抛」都算拿不到 PSI。
+        assertNull(
+            "vf 失效时必须拿不到 PSI（null 或平台断言均算）",
+            runCatching { findExecPsi(project, vf) }.getOrNull(),
+        )
+        val diag = execPsiDiagnostics(project, vf)
+        println("[ExecPsiGate] invalid-vf diagnostics=$diag")
+        assertTrue("诊断必须报出 vfValid=false（这是区分两条 null 分支的唯一判据）: $diag", diag.contains("vfValid=false"))
+        assertNull(
+            "本单自愈只清映射，不负责 vf 重定位——这里必须仍为 null（V3 另立项的证据）",
+            DataSourceSelector.healExecPsi(project, vf, LOG),
+        )
+    }
+
     /** 失败文案的五元组：三项静态事实 + 映射语言 + 该语言能否建 PSI。 */
     fun testDiagnosticsCarryFiveFields() {
         val vf = writeExecFile("select 4")
