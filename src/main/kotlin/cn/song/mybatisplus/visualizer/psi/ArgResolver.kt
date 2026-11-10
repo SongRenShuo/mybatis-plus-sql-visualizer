@@ -301,8 +301,17 @@ object ArgResolver {
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
-                methodName == SELECT_FUNC || methodName == APPLY_FUNC && index == 1 ->
+                // T-HiddenBugPerfScan 券 L：&& 优先于 ||——原式实为「selectFunc 任意位 ∪
+                // apply 第 2 位」。按 KDoc（第二参聚合函数）与姊妹分支 SELECT_SUB && index == 2
+                // 对齐：第 2 位走 resolveFuncLambda；selectFunc 第 3 位（别名位）走 asAlias
+                // （方法引用 → AliasArg）——原式把别名位也喂给 resolveFuncLambda，恒产 FuncArg，
+                // 解析端（QueryWrapperParser.parseSelectFunc）的别名位只认 AliasArg/ValueArg
+                // → PSI 链路上别名恒丢失；别名位直落 else 的 resolve 对方法引用产 ColumnArg，
+                // 同样进不了别名分支，故须显式 asAlias。
+                (methodName == SELECT_FUNC || methodName == APPLY_FUNC) && index == 1 ->
                     resolveFuncLambda(expr, table)
+                methodName == SELECT_FUNC && index == 2 ->
+                    resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 else -> resolve(expr, table, entityClass, resolveVariables = resolveVariables)
             }
         }
