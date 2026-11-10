@@ -72,14 +72,46 @@
 
 ## 三、测试读数（实施后回填）
 
-- 反向验证（先红）：禁用两解析器 flushSettled（方法体改为直接 return 0）→ 新用例中 settle 产出类必红，读数贴原文。
-- 恢复后转绿：定向 `./gradlew test --tests "cn.song.mybatisplus.visualizer.log.MyBatisHibernateSettleFlushTest"` + 既有相关类（MyBatisLogParserTest / HibernateLogParserTest / LogThreadRouterTest / ConsoleSettleFlushTest / IbatisLogParseTest / IbatisSqlSourceTest / DualParserIntegrationTest / ShardingSphereLogParserTest）。
+### 3.1 反向验证先红（禁用两解析器 flushSettled：方法体首行插 `if (true) return 0` RED-PROBE）
 
-| 阶段 | 命令 | 读数 |
-|---|---|---|
-| 先红 | 待回填 | 待回填 |
-| 后绿 | 待回填 | 待回填 |
+`./gradlew test --tests "cn.song.mybatisplus.visualizer.log.MyBatisHibernateSettleFlushTest"` → `10 tests completed, 8 failed`，XML 摘要 `tests="10" failures="8" errors="0"`，逐例原文：
 
-## 四、实施记录（回填位）
+```
+RED : testHibernate冲刷后真实参数行到达_不再重复闭合 -> junit.framework.AssertionFailedError: 静默冲刷交出 1 条（零参条目随 takeEntries 交出） expected:<1> but was:<0>
+RED : testHibernate桥轮询冲刷_应用安静后仍产出 -> junit.framework.AssertionFailedError: 静默冲刷交出 2 条 expected:<2> but was:<0>
+RED : testMyBatis桥轮询冲刷_应用安静后仍产出 -> junit.framework.AssertionFailedError: 静默冲刷交出 2 条 expected:<2> but was:<0>
+GREEN: testMyBatis参数行在阈值内到达_正常闭合_冲刷不重复
+RED : testHibernate参数行在阈值内到达_不被冲刷截断 -> junit.framework.AssertionFailedError: 冲刷闭合 1 条 expected:<1> but was:<0>
+RED : testMyBatis冲刷后真实参数行到达_不再重复闭合 -> junit.framework.AssertionFailedError: 静默冲刷交出 1 条 expected:<1> but was:<0>
+RED : testMyBatis逐行冲刷_两线程各一条无参语句_静默后都产出 -> junit.framework.AssertionFailedError: 两条各自独占线程的无参语句都被静默冲刷交出 expected:<2> but was:<0>
+RED : testMyBatis_iBatis参数组Types缺行_静默后按无类型产出 -> junit.framework.AssertionFailedError: 挂起组静默后产出 1 条 expected:<1> but was:<0>
+GREEN: testMyBatis_iBatis参数组Types在阈值内到达_不被冲刷截断
+RED : testHibernate逐行冲刷_两线程各一条语句_静默后都产出 -> junit.framework.AssertionFailedError: 两条各自独占线程的语句都被静默冲刷交出 expected:<2> but was:<0>
+```
 
-- 待回填。
+2 例恒绿为设计内（与 T-ConsolePendingFlush 的「同线程两条语句」用例同性质）：验的是既有即时闭合/类型并入语义不被冲刷改动破坏，本就不依赖冲刷路径。
+
+### 3.2 恢复后转绿（RED-PROBE 摘除）
+
+`./gradlew test --tests "cn.song.mybatisplus.visualizer.log.MyBatisHibernateSettleFlushTest"` → `BUILD SUCCESSFUL`，XML 摘要 `tests="10" failures="0" errors="0"`。
+
+### 3.3 既有相关类定向保绿
+
+14 类一并定向（`--tests` 逐类指定，禁全量）：**208 例 0 失败**——
+
+| 类 | 例数 | 类 | 例数 |
+|---|---|---|---|
+| MyBatisLogParserTest | 32 | DualParserIntegrationTest | 11 |
+| HibernateLogParserTest | 56 | ShardingSphereLogParserTest | 18 |
+| LogThreadRouterTest | 8 | HibernateLogParseConcurrencyTest | 6 |
+| ConsoleSettleFlushTest | 6 | HibernateLogParserDualCopyTest | 7 |
+| IbatisLogParseTest | 14 | EpBridgeSinglePathTest | 7 |
+| IbatisSqlSourceTest | 8 | CrossChannelDedupeTest | 19 |
+| AgentSniffDecoupleTest | 2 | AgentLogTimeParityTest | 14 |
+
+## 四、实施记录（回填）
+
+- `90602c40` 计划册；`48b6f04f` 实施与测试（MyBatisLogParser / HibernateLogParser / SqlLogConsoleBridge / MyBatisHibernateSettleFlushTest，4 文件 +430 行）；本条为读数回填提交。
+- 实施与计划一致，无偏差：iBatis 挂起组按 `IbatisPending.lastTouchMs` 逐组判静默（Executing/Parameters 行刷新），`Types:` 在阈值内到达的参数组经用例 5/6 双向钉住（冲刷不撕开 1ms 量级参数组）。
+- **环境事故与绕行（登记实情）**：06:04 起定向测试连续 3 次 `Could not determine the dependencies of task ':test'` —— 共享 gradle-home（`F:\gradle-home`）的 intellij 平台 transform 目录 `caches/9.7.0/transforms/cfd9113040487d86d63d9022472046cb` 的记账文件 `metadata.bin`/`results.bin` 被并发构建的缓存清理删走（06:05 目录 mtime 实证），输出目录又被**昨日 17:00 遗留、父进程已退出的孤儿 JPS ExternalJavacProcess 守护**（PID 18468/61304/81664，从该目录内 jbr 运行）锁住删不掉——每个解析该平台的构建都会走到「重执行 transform → 删旧目录 → Permission denied」死局。记账文件含内部哈希不可伪造，目录改名同被锁拒。按 kill 纪律（命令行不含本任务沙盒名禁杀）未动孤儿进程；**绕行**：建独立 gradle-home `F:\gradle-home-cf`（`caches/modules-2` 与 `wrapper` 为指向共享家的 junction，transforms 全新——平台重新解包一次后自愈），本任务全部后续读数经 `GRADLE_USER_HOME=F:/gradle-home-cf` 取得。该家保留给本工作树后续验证用，共享家修复（孤儿进程退出后由任一构建重执行 transform 重建记账，或运维清掉 `cfd911...` 整目录让下个构建重解包）后可 `rmdir` 两个 junction 再删目录回收。
+- build.gradle.kts 的 `sandboxContainer=consoleflush` 临时隔离行已按定例用后还原（本提交不含）。
