@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModelBuilder
+import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamTypeHints
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParseException
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisRenderResult
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisSelectKey
@@ -313,6 +314,18 @@ object IbatisXmlPreviewService {
             else -> (1..placeholders).map { "param$it" }
         }
 
+        // T-IbatisFix3 缺陷三：`#x:VARCHAR#` 的 jdbcType 必须传到面板的回填提示链——否则
+        // `WHERE EMAIL = #email:VARCHAR:0#` 填 11212 会按「纯数字」启发式裸渲染成 `= 11212`。
+        // 只在**位点与参数名数量相符**时装配（数量不符走 paramN 兜底，名字与 jdbcType 已无法对齐，
+        // 强行贴类型会把 A 列的类型挂到 B 位点上）；映射不到 jdbcType 的位点用默认 [ParamHint]
+        // （quote=null = 面板启发式，与修复前逐字节一致）。
+        val jdbcTypes = rendered.paramJdbcTypes + selectKeyRenders.flatMap { it.second.paramJdbcTypes }
+        val paramHints = if (names.size == placeholders && jdbcTypes.size == placeholders) {
+            IbatisParamTypeHints.hintsFor(jdbcTypes)
+        } else {
+            emptyList()
+        }
+
         // UI-001：告警分档——「待填值」降级与「引擎行为说明」是信息级说明，不得包装成渲染失败。
         // 判据按来源自证，不猜文案全量：解析器对 parameterMap 自标「（引擎行为）」；iterate 未供值
         // 的降级 = 行清单里该行就在、填值即补齐。
@@ -355,6 +368,8 @@ object IbatisXmlPreviewService {
             wrapperType = null,
             tableName = null,
             warning = joinWarnings(warningsForLine),
+            // T-IbatisFix3 缺陷三：jdbcType → ParamKind → 引号提示（与 unresolvedParams 并行）
+            paramHints = paramHints,
             // 安全面（计划册 §六.4「不得新开无闸门路径」）：
             // ① `$x$` **站点存在**即置闸——即使无参基线下取值为 null 被引擎静默丢弃（预览 SQL 里看不到
             //    那段文本），运行期它仍是原文直拼面，预览必须走既有 `${}` 确认通道而不是伪装成安全 SQL；

@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.xml.ibatis
 
 import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.xml.ParamKind
 
 /**
  * iBatis 预览的参数/条件行清单（T-Ibatis2Gap 券 A）：`IbatisStatement` → 面板可交互行 + Map 装配。
@@ -239,8 +241,7 @@ data class IbatisDollarRow(
  * 一条 iBatis 语句的参数/条件行清单（[IbatisParamModelBuilder.build] 产物）。
  *
  * 纯数据（无 PSI、无引擎引用），随 [cn.song.mybatisplus.visualizer.model.PreviewResult] 进面板。
- */
-data class IbatisParamModel(
+ */data class IbatisParamModel(
     val placeholderRows: List<IbatisPlaceholderRow>,
     val conditionRows: List<IbatisConditionRow>,
     val iterateRows: List<IbatisIterateRow>,
@@ -271,4 +272,78 @@ data class IbatisParamModel(
         IbatisTagKind.IS_LESS_EQUAL.tagName -> "<="
         else -> "cmp"
     }
+}
+
+/**
+ * T-IbatisFix3 缺陷三：`#x:jdbcType#` 的 **jdbcType → 参数类别 → 回填引号提示** 映射（纯函数）。
+ *
+ * ## 缺陷现场
+ *
+ * `#email:VARCHAR:0#` 填 `11212` 预览出 `WHERE EMAIL = 11212`——**没有引号**。原因是服务层
+ * （`ui/IbatisXmlPreviewService.toPreviewResult`）只把 `?` 位点数量/参数名交给面板，**从未构造
+ * `PreviewResult.paramHints`**：面板 `backfillParamsBySource` 拿不到提示时按 `NUMBER_REGEX` 启发式
+ * 判定，`11212` 是纯数字 → 裸渲染。jdbcType 明明写着 VARCHAR。
+ *
+ * ## 口径（沿用既有 `ParamKind` 六类契约，不新造类型系统）
+ *
+ * - `VARCHAR` / `CHAR` / `TEXT` / `CLOB` 族 → [ParamKind.TEXT]（恒引号）；
+ * - `INTEGER` / `NUMERIC` / `DECIMAL` / 浮点 / `BIT` → [ParamKind.NUMBER]（裸渲染）；
+ * - `DATE` / `TIME` / `TIMESTAMP` / `DATETIME` → [ParamKind.TEMPORAL]
+ *   （`ParamHint.quote=true` 为回退口径，`temporal=true` 让面板先试 ANSI 类型字面量
+ *   `DATE '…'`，形态不匹配再回落引号——与 MyBatis 链 T-DateLiteralBackfill 同口径）；
+ * - **映射不到 / jdbcType 缺省 → 不产出提示**（[ParamHint] 默认 `quote=null`）：面板维持既有
+ *   启发式，`#x#` 无类型参数的行为与修复前逐字节一致（宁缺勿错）。
+ *
+ * 大小写不敏感（iBatis DTD 里 jdbcType 由用户手写，`varchar` / `VARCHAR` 都真实存在）。
+ */
+object IbatisParamTypeHints {
+
+    /** 字符串族 jdbcType（JDBC 标准名 + 各库常见的 `TEXT` 方言名）。 */
+    private val TEXT_TYPES = setOf(
+        "CHAR", "VARCHAR", "LONGVARCHAR", "NCHAR", "NVARCHAR", "LONGNVARCHAR",
+        "CLOB", "NCLOB", "TEXT", "LONGTEXT", "MEDIUMTEXT", "TINYTEXT", "STRING", "UUID",
+    )
+
+    /** 数值族 jdbcType（含布尔位与各库的 `NUMBER` / `SERIAL` 形态）。 */
+    private val NUMBER_TYPES = setOf(
+        "TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "MEDIUMINT",
+        "FLOAT", "REAL", "DOUBLE", "NUMERIC", "DECIMAL", "NUMBER",
+        "BIT", "BOOLEAN", "SERIAL", "BIGSERIAL",
+    )
+
+    /** 日期时间族 jdbcType（`DATETIME` 是 MySQL 等方言名）。 */
+    private val TEMPORAL_TYPES = setOf(
+        "DATE", "TIME", "TIMESTAMP", "DATETIME", "TIMESTAMPTZ", "TIMETZ",
+    )
+
+    /** jdbcType → 类型类别；映射不到（含 null / 空串）返回 null = 不产出提示。 */
+    fun kindOf(jdbcType: String?): ParamKind? {
+        val type = jdbcType?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: return null
+        return when (type) {
+            in TEXT_TYPES -> ParamKind.TEXT
+            in NUMBER_TYPES -> ParamKind.NUMBER
+            in TEMPORAL_TYPES -> ParamKind.TEMPORAL
+            else -> null
+        }
+    }
+
+    /**
+     * jdbcType → 回填提示；映射不到返回 null（= 面板维持启发式，与修复前一致）。
+     *
+     * `quote` 取 [ParamKind.quoteRequired]（NUMBER 之外恒引号），`temporal` 单独标记时间族
+     * 以便面板先试 ANSI 字面量。
+     */
+    fun hintOf(jdbcType: String?): ParamHint? {
+        val kind = kindOf(jdbcType) ?: return null
+        return ParamHint(quote = kind.quoteRequired, temporal = kind == ParamKind.TEMPORAL)
+    }
+
+    /**
+     * 与 `paramNames` 同序的提示清单（jdbcTypes 短/长为 null 时按「无提示」补位）。
+     *
+     * 供 `IbatisXmlPreviewService.toPreviewResult` 一次装配；`quote=null` 的元素位面板按启发式处理，
+     * 所以清单长度必须与 SQL 里 `?` 的数量一致（调用方已保证）。
+     */
+    fun hintsFor(jdbcTypes: List<String?>): List<ParamHint> =
+        jdbcTypes.map { hintOf(it) ?: ParamHint() }
 }
