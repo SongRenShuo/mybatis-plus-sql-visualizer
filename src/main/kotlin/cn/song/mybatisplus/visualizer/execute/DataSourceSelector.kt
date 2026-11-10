@@ -815,6 +815,31 @@ object DataSourceSelector {
     )
 
     /**
+     * T-PreviewDmlResult（20261110 真机）：**结果页签结构上不会出现**的写语句识别。
+     *
+     * DBN 对 INSERT/UPDATE/DELETE/DDL 不建结果页签，影响行数只写在控制台 Output——40 拍窗口
+     * 必然到期；而 [hasConsoleCompletionEvidence] 读的是 history 文档（真机实证：该文档里只有
+     * `Connected` 与 SQL 回显，`1 row affected in 60 ms` 只进 Output 视图），于是成功被归成
+     * `execute.timeout.hint`。此判据让该形态直接走「已提交执行」通道。
+     *
+     * 只认 DML/DDL 首关键字：查询类语句没有结果页签属于异常（仍走超时/错误分支）；工具语句
+     * （SET/USE/BEGIN）不在此列，由完成态回显判据覆盖。
+     *
+     * @return true = 本条语句执行完也不会有结果页签
+     */
+    internal fun isWriteStatement(sqlText: String?): Boolean {
+        val text = sqlText?.trim().orEmpty()
+        if (text.isEmpty()) return false
+        val keyword = runCatching { SqlTypeClassifier.getFirstKeyword(text) }.getOrNull() ?: return false
+        return keyword in WRITE_STATEMENT_KEYWORDS
+    }
+
+    /** 无结果页签的写语句首关键字（与 [isWriteStatement] 配对，DML/DDL 子集）。 */
+    private val WRITE_STATEMENT_KEYWORDS = setOf(
+        "INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE",
+    )
+
+    /**
      * T-CEC：读取 console history 文档中**基线之后**的新增文本（读不到 / 无新增返 null）。
      *
      * T-PerfSweep2-01 的片段物化契约在此保持（ConsoleErrorExtractTest 逐条断言）：baseline<=0
