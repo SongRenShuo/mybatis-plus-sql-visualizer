@@ -330,11 +330,13 @@ object ComplexityScorer {
                 '(' -> depth++
                 ')' -> depth--
                 else -> {
-                    if (depth == 0 && whereClause.substring(i).startsWith("OR")) {
+                    // T-HiddenBugPerfScan 券 Q：substring(i) 每字符位整段复制 O(n²) → startsWith(fromIndex) 零分配；
+                    // 边界判定补 '_'（与 PerfRulesBatch1.hasTopLevelKeyword 对齐——my_or_col 里的 OR 曾被误计）
+                    if (depth == 0 && whereClause.startsWith("OR", i)) {
                         val before = whereClause.getOrNull(i - 1)
                         val after = whereClause.getOrNull(i + 2)
-                        if ((before == null || !before.isLetterOrDigit()) &&
-                            (after == null || !after.isLetterOrDigit())
+                        if ((before == null || !before.isLetterOrDigit() && before != '_') &&
+                            (after == null || !after.isLetterOrDigit() && after != '_')
                         ) {
                             count++
                         }
@@ -369,11 +371,13 @@ object ComplexityScorer {
                 '(' -> depth++
                 ')' -> depth--
                 else -> {
-                    if (depth == 0 && upperSql.substring(i).startsWith(keyword)) {
+                    // T-HiddenBugPerfScan 券 Q：substring(i) O(n²) → startsWith(fromIndex) 零分配；
+                    // 边界判定补 '_'（与 PerfRulesBatch1 同口径——标识符内嵌关键字不再误判词边界）
+                    if (depth == 0 && upperSql.startsWith(keyword, i)) {
                         val before = upperSql.getOrNull(i - 1)
                         val after = upperSql.getOrNull(i + keyword.length)
-                        if ((before == null || !before.isLetterOrDigit()) &&
-                            (after == null || !after.isLetterOrDigit())
+                        if ((before == null || !before.isLetterOrDigit() && before != '_') &&
+                            (after == null || !after.isLetterOrDigit() && after != '_')
                         ) {
                             return i
                         }
