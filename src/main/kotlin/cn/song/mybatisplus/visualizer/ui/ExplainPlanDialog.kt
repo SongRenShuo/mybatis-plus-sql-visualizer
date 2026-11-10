@@ -60,8 +60,29 @@ internal fun SqlPreviewPanel.showExplainDialog(dialog: ExplainPlanDialog) {
         return
     }
     // DialogWrapper 不实现 Disposable（243）；用 Disposable 包装关闭动作挂到面板树。
-    Disposer.register(this, com.intellij.openapi.Disposable { dialog.close(0) })
+    // T-HiddenBugPerfScan 券 H：面板树只挂一份**常驻**注册（懒挂一次，句柄存
+    // [SqlPreviewPanel.explainDialogRegistration]），动作=关闭 explainResultDialog 字段
+    // 指向的当前对话框——注册只捕获面板自身，对话框引用只走字段，换新即出局。
+    // 旧版每次执行都新挂一份并直接捕获对话框实例，闭掉的对话框被强引用到面板销毁，
+    // 反复执行 EXPLAIN 线性累积（工具窗形态面板长期存活）。
+    if (explainDialogRegistration == null) {
+        explainDialogRegistration = registerExplainDialogCloser(this) { explainResultDialog?.close(0) }
+    }
     dialog.show()
+}
+
+/**
+ * T-HiddenBugPerfScan 券 H：把「关闭当前对话框」动作挂到 [parent] 树。[current] 为
+ * 供应商形态（读当前对话框并关闭）——注册不捕获对话框实例，仅沿面板字段间接引用。
+ * 顶层函数便于纯 JUnit 直测「常驻一份 + 字段间接」语义。
+ */
+internal fun registerExplainDialogCloser(
+    parent: com.intellij.openapi.Disposable,
+    current: () -> Unit,
+): com.intellij.openapi.Disposable {
+    val node = com.intellij.openapi.Disposable { current() }
+    Disposer.register(parent, node)
+    return node
 }
 
 internal fun SqlPreviewPanel.showExplainDialog(view: JComponent) {
