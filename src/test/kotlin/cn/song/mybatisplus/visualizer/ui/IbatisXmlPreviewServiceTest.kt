@@ -462,7 +462,7 @@ class IbatisXmlPreviewServiceTest {
     """.trimIndent()
 
     @Test
-    fun `修复一_selectKey_pre在主语句之前展示`() {
+    fun `修复一_selectKey_pre块排在主语句之后但注释标明先执行`() {
         val result = preview(insertSelectKeyPre, "insertUser", "insert")
         assertTrue(
             "selectKey 子语句必须可见（探针 probe3：此前 sql 里完全没有 SEQ_USER_ID）：${result.sql}",
