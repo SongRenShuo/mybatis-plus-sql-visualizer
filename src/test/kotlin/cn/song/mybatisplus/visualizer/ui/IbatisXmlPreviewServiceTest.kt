@@ -444,4 +444,249 @@ class IbatisXmlPreviewServiceTest {
         assertNotNull("未闭合 # 是配置告警，不得吞掉", result.warning)
         assertFalse("渲染配置告警不是信息级说明", result.informationalWarning)
     }
+
+    // ------------------------------------------------------------------
+    // T-IbatisFix2 修复一：<selectKey> 子语句展示（2026-11-10 真机反馈 ③，探针 probe3 证实）
+    // ------------------------------------------------------------------
+
+    /** 对齐 demo `User.xml` 的 insertUser 形态（type=pre）。 */
+    private val insertSelectKeyPre = """
+        <sqlMap>
+            <insert id="insertUser" parameterClass="User">
+                <selectKey resultClass="java.lang.Integer" keyProperty="id" type="pre">
+                    SELECT SEQ_USER_ID.NEXTVAL FROM DUAL
+                </selectKey>
+                INSERT INTO T_USER (ID, USER_NAME) VALUES (#id#, #username#)
+            </insert>
+        </sqlMap>
+    """.trimIndent()
+
+    @Test
+    fun `修复一_selectKey_pre块排在主语句之后但注释标明先执行`() {
+        val result = preview(insertSelectKeyPre, "insertUser", "insert")
+        assertTrue(
+            "selectKey 子语句必须可见（探针 probe3：此前 sql 里完全没有 SEQ_USER_ID）：${result.sql}",
+            result.sql.contains("SELECT SEQ_USER_ID.NEXTVAL FROM DUAL;"),
+        )
+        assertTrue(
+            "pre 块物理上排在主语句之后（执行链安全面要求），时序由注释说明：${result.sql}",
+            result.sql.indexOf("SEQ_USER_ID") > result.sql.indexOf("INSERT INTO T_USER"),
+        )
+        assertTrue(
+            "块注释标注 type / keyProperty / 真实执行时机：${result.sql}",
+            result.sql.contains("-- [selectKey type=pre → id") &&
+                result.sql.contains(previewTimingBeforeMain()),
+        )
+    }
+
+    /**
+     * 钉死用例（安全面）：预览 `sql` 的首条语句必须是主语句。
+     *
+     * 执行链 `SqlTypeClassifier.getFirstKeyword` 取 `splitStatements(sql)` 的第一条，
+     * 主语句必须在最前，否则写操作被误判只读——`insertUser` 的 pre selectKey 排在最前时，
+     * 首条是 `SELECT SEQ_USER_ID.NEXTVAL FROM DUAL`，类型判 QUERY（只读），写安全闸不介入，
+     * 且「执行 SQL」只跑 selectKey 那条。反向验证：把组装顺序改回「pre 在前」本用例必红。
+     */
+    @Test
+    fun `修复一_主语句恒在最前_首条语句是INSERT不是SELECT`() {
+        val result = preview(insertSelectKeyPre, "insertUser", "insert")
+        val head = result.sql.trimStart()
+        assertTrue(
+            "执行链取首条语句判类型：首条必须是 INSERT（写操作不得被判只读），实际开头：${head.take(80)}",
+            head.startsWith("INSERT"),
+        )
+        assertFalse("首条语句不得是 selectKey 的 SELECT：${head.take(80)}", head.startsWith("SELECT"))
+        assertTrue(
+            "首字符必须是语句关键字（主语句块不得被 `--` 注释行打头）：${head.take(60)}",
+            !head.startsWith("--"),
+        )
+    }
+
+    /** 主语句之前的执行时机文案（中英双份，走 bundle 断言，不硬编码单 locale）。 */
+    private fun previewTimingBeforeMain(): String =
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+            "ibatis.preview.selectKey.timing.pre",
+        )
+
+    private fun previewTimingAfterMain(): String =
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+            "ibatis.preview.selectKey.timing.post",
+        )
+
+    @Test
+    fun `修复一_selectKey_post块在主语句之后展示`() {
+        val xml = """
+            <sqlMap>
+                <insert id="insertPost" parameterClass="User">
+                    INSERT INTO T_USER (ID) VALUES (#id#)
+                    <selectKey resultClass="java.lang.Integer" keyProperty="id" type="post">
+                        SELECT SEQ_USER_ID.NEXTVAL FROM DUAL
+                    </selectKey>
+                </insert>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "insertPost", "insert")
+        assertTrue(
+            "post 块须在主语句之后：${result.sql}",
+            result.sql.indexOf("SEQ_USER_ID") > result.sql.indexOf("INSERT INTO T_USER"),
+        )
+        assertTrue(
+            "块注释标注 type=post 与执行时机：${result.sql}",
+            result.sql.contains("-- [selectKey type=post → id") && result.sql.contains(previewTimingAfterMain()),
+        )
+    }
+
+    @Test
+    fun `修复一_未写type按位置推断_正文前为pre`() {
+        val xml = """
+            <sqlMap>
+                <insert id="inferPre">
+                    <selectKey keyProperty="id">SELECT SEQ_USER_ID.NEXTVAL FROM DUAL</selectKey>
+                    INSERT INTO T_USER (ID) VALUES (#id#)
+                </insert>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "inferPre", "insert")
+        assertTrue(
+            "selectKey 在正文前 ⇒ 引擎按位置推断为 pre（注释标「在主语句之前执行」）：${result.sql}",
+            result.sql.contains("-- [selectKey type=pre") && result.sql.contains(previewTimingBeforeMain()),
+        )
+    }
+
+    @Test
+    fun `修复一_未写type按位置推断_正文后为post`() {
+        val xml = """
+            <sqlMap>
+                <insert id="inferPost">
+                    INSERT INTO T_USER (ID) VALUES (#id#)
+                    <selectKey keyProperty="id">SELECT SEQ_USER_ID.NEXTVAL FROM DUAL</selectKey>
+                </insert>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "inferPost", "insert")
+        assertTrue(
+            "selectKey 在正文后 ⇒ 引擎按位置推断为 post：${result.sql}",
+            result.sql.contains("-- [selectKey type=post") && result.sql.contains(previewTimingAfterMain()),
+        )
+    }
+
+    @Test
+    fun `修复一_selectKey内井号转问号且参数名序对齐`() {
+        val xml = """
+            <sqlMap>
+                <insert id="withParam">
+                    <selectKey keyProperty="id">SELECT #seqName# FROM DUAL</selectKey>
+                    INSERT INTO T_USER (ID) VALUES (#id#)
+                </insert>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "withParam", "insert")
+        assertTrue(
+            "selectKey 内的 # 照常转 ?（它不在 parameterMap 语句里）：${result.sql}",
+            result.sql.contains("SELECT ? FROM DUAL;"),
+        )
+        assertEquals(
+            "参数名序按 SQL 文本 `?` 出现序（主语句块在前，selectKey 块在后），不得回落 paramN",
+            listOf("id", "seqName"),
+            result.unresolvedParams,
+        )
+        assertNull("位点与参数名相符，不应出现数量不符告警", result.warning)
+    }
+
+    @Test
+    fun `修复一_selectKey的keyProperty不进参数面板`() {
+        val result = preview(insertSelectKeyPre, "insertUser", "insert")
+        assertEquals(
+            "条件行/参数行仍以主语句为准（selectKey 的 keyProperty 回写不进参数面板）",
+            listOf("id", "username"),
+            result.ibatisParamModel!!.placeholderRows.map { it.name },
+        )
+    }
+
+    @Test
+    fun `修复一_无selectKey时SQL与基线逐字节一致`() {
+        val result = preview("<sqlMap><insert id=\"plain\">INSERT INTO T_USER (ID) VALUES (#id#)</insert></sqlMap>", "plain", "insert")
+        assertEquals("无 selectKey 不许多语句组装（零回归）", "INSERT INTO T_USER (ID) VALUES (?)", result.sql)
+    }
+
+    @Test
+    fun `修复一_重渲染保留selectKey块`() {
+        val result = preview(insertSelectKeyPre, "insertUser", "insert")
+        val fresh = rerender(
+            result,
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(params = mapOf("id" to "1", "username" to "a")),
+        )
+        assertTrue("重渲染同样带 selectKey 块：${fresh.sql}", fresh.sql.contains("SEQ_USER_ID"))
+        assertTrue(fresh.sql.contains("-- [selectKey type=pre → id"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-IbatisFix2 修复三：重渲染失败必须可见（用户 2026.3 独有，本地不可复现）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `修复三_重渲染失败返回可见失败结果而非旧结果`() {
+        val baseline = preview(conditionXml, "selectByCondition")
+        val failed = IbatisXmlPreviewService.rerenderFailedResult(baseline, IllegalStateException("boom-in-rerender"))
+        val warning = failed.warning ?: error("失败必须带可见告警")
+        assertTrue(
+            "告警须明确写「重渲染失败」+ 异常消息：$warning",
+            warning.contains("重渲染失败") && warning.contains("boom-in-rerender"),
+        )
+        assertFalse("失败档必须走 ⚠ 横幅，不得标成信息级（否则用户看不到）", failed.informationalWarning)
+        assertEquals("sql 保留基线降级文本（不是空结果、也不是静默旧值）", baseline.sql, failed.sql)
+        assertNotNull("回调保留：用户修正参数后可立即重试", failed.rerender)
+    }
+
+    @Test
+    fun `修复三_正常重渲染不产出失败档文案`() {
+        val result = preview(conditionXml, "selectByCondition")
+        val fresh = rerender(
+            result,
+            cn.song.mybatisplus.visualizer.model.PreviewRerenderInput(
+                params = mapOf("status" to "1"),
+                enabledConditionIds = setOf(condRow(result, "isEqual").id),
+            ),
+        )
+        assertTrue("正常路径不得误报失败档", fresh.warning?.contains("重渲染失败") != true)
+    }
+
+    // ------------------------------------------------------------------
+    // T-IbatisFix2 附带小修：信息级说明不混入 ⚠ 失败档合并行
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `附带小修_信息级说明不混入失败档合并行`() {
+        // 同一条语句同时产出「引擎行为」信息级说明与「数量不符」真失败——旧实现两段拼一行
+        val xml = """
+            <sqlMap>
+                <parameterMap id="pmMix" class="java.util.Map">
+                    <parameter property="a" jdbcType="VARCHAR"/>
+                </parameterMap>
+                <statement id="stMix" parameterMap="pmMix">UPDATE T SET A = ? AND B = ? WHERE ID = 1</statement>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "stMix", "statement")
+        val warning = result.warning ?: error("真失败必须可见")
+        assertTrue("真失败（数量不符）留在 ⚠ 行：$warning", warning.contains("占位符"))
+        assertFalse("信息级「引擎行为」说明不得混入失败档合并行：$warning", warning.contains("引擎行为"))
+        assertFalse("混合场景整体是失败档", result.informationalWarning)
+    }
+
+    @Test
+    fun `附带小修_纯信息级场景说明仍在且走信息档`() {
+        // 去重不得把信息级说明整段丢掉：无真失败时它仍要出现在 ℹ 行
+        val xml = """
+            <sqlMap>
+                <parameterMap id="pmOnly" class="java.util.Map">
+                    <parameter property="a" jdbcType="VARCHAR"/>
+                </parameterMap>
+                <statement id="stOnly" parameterMap="pmOnly">UPDATE T SET A = ? WHERE ID = 1</statement>
+            </sqlMap>
+        """.trimIndent()
+        val result = preview(xml, "stOnly", "statement")
+        val warning = result.warning ?: error("信息级说明不得吞掉")
+        assertTrue("信息级说明仍在：$warning", warning.contains("引擎行为"))
+        assertTrue(result.informationalWarning)
+    }
 }
