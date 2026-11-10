@@ -24,6 +24,10 @@ kingbase-jdbc = "9.0.1"
 dameng-jdbc = "8.1.3.140"
 opengauss-jdbc = "6.0.0-og"
 oceanbase-client = "2.4.19"
+# T-DomesticDialects（2026-11-11）：虚谷 XuGu 外部实例验证驱动（Central 全系版本都是
+# com.xugu.cloudjdbc.Driver；官方文档的 com.xuguedata.jdbc.XuguDriver 是厂商自有分发形态，
+# Central 上不存在——按 jar 实测登记）。仅测试 classpath，License Proprietary 不随插件分发。
+xugu-jdbc = "12.3.9"
 # T-DialectLabMatrix：方言 Lab 配方一致性守卫的 YAML 解析（仅测试 classpath）
 snakeyaml = "2.2"
 
@@ -52,6 +56,7 @@ kingbase-jdbc = { module = "cn.com.kingbase:kingbase8", version.ref = "kingbase-
 dameng-jdbc = { module = "com.dameng:DmJdbcDriver18", version.ref = "dameng-jdbc" }
 opengauss-jdbc = { module = "org.opengauss:opengauss-jdbc", version.ref = "opengauss-jdbc" }
 oceanbase-client = { module = "com.oceanbase:oceanbase-client", version.ref = "oceanbase-client" }
+xugu-jdbc = { module = "com.xugudb:xugu-jdbc", version.ref = "xugu-jdbc" }
 # T-DialectLabMatrix：DockerComposeLabConsistencyTest 解析 docker-compose-dialects.yml（钉版本/
 # 端口/必填 env/healthcheck 四硬约束 + database-lab 文档一致性），不起 Docker 即可校验配方
 snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }

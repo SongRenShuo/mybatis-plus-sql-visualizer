@@ -1265,7 +1265,9 @@ object GoldenDbDialect : Dialect {
  *
  * ## 证据级别
  *
- * **官方文档级 + 族推定**：TiDB 官方（docs.pingcap.com）声明与 MySQL 8.0 兼容（数据库本体
+ * **族级真引擎腿（2026-11-11）：渲染套件 + [MYSQL_RESERVED] 269 词扫描全绿（MySQL 8.4.6 真机；
+ * TiDB 本体无可用容器通道——这是 MySQL 协议**族级**读数，非 TiDB 引擎验证）。**
+ *
  * Apache-2.0）；**无专用 JDBC 驱动**（直接用 MySQL Connector/J，URL 恒 `jdbc:mysql://`）。
  * 无真机——全部形态按「MySQL 兼容」族推定，真机到位后逐项升档（照 GoldenDB 文档级先例）。
  *
@@ -1306,7 +1308,9 @@ object TiDbDialect : Dialect {
  *
  * ## 证据级别
  *
- * **官方文档级 + 族推定**：doc.polardbx.com 官方连接指南明写 MySQL 协议直连（默认 3306）；
+ * **族级真引擎腿（2026-11-11）：渲染套件 + 269 词扫描全绿（MySQL 8.4.6 真机；PolarDB-X 本体无
+ * 轻量容器通道——MySQL 协议族级读数，非 PolarDB-X 引擎验证）。**
+ *
  * 专用驱动 `polardbx-connector-java`（Connector/J 扩展）URL `jdbc:polardbx:`。无真机。
  *
  * 逐项同 [TiDbDialect]（MySQL 形态全家桶）；保留字 [POLARDBX_RESERVED] MySQL 族底。
@@ -1341,7 +1345,9 @@ object PolarDbXDialect : Dialect {
  *
  * **族推定**：官方 JDBC 文档（help.aliyun.com《JDBC O 2.0》）实锤 URL `jdbc:polardb://` 与
  * `jdbc:polardb2://`（2.0 版驱动基于 pgJDBC 改造，Apache-2.0，Central 可得）；**SQL 兼容语法
- * 按 Oracle 族渲染**（MP 同族映射 + 官方「高度兼容 Oracle」声明）。无真机。
+ * 按 Oracle 族渲染**（MP 同族映射 + 官方「高度兼容 Oracle」声明）。
+ * **族级真引擎腿（2026-11-11）：渲染套件 + [ORACLE_RESERVED] 扫描全绿（Oracle Free 23 真机——
+ * OFFSET/FETCH 分页与双引号族形态引擎级通过；PolarDB 本体无容器通道，族级读数）。**
  *
  * ## 边界
  *
@@ -1373,9 +1379,18 @@ object PolarDbDialect : Dialect {
  *
  * ## 证据级别
  *
- * **官方文档级 + 族推定**：gbase.cn 官方社区 JDBC 接入文实锤 URL `jdbc:gbase://`（默认
- * 5258）、驱动类 `com.gbase.jdbc.Driver`；EXPLAIN 官方文档明写**仅支持 SELECT**（gbase.cn
- * news/4131）。无真机。
+ * **真机引擎级（2026-11-11 端到端验证，GBase 8a 8.6.2.43-R7-free @114.66.55.245:20116）**：
+ * 插件渲染套件 + [MYSQL_RESERVED] 全量 269 词保留字扫描**全绿**（驱动用 MariaDB Connector/J
+ * 3.3.3——GBase 官方驱动无公开 Maven 坐标，MySQL Connector/J 8.x 握手被拒
+ * （CLIENT_PLUGIN_AUTH）、5.1.34 起查 `@@transaction_read_only` 亦失败，MariaDB 驱动对 5.1 血统
+ * 握手最宽容）。逐项真机读数：
+ *  - 分页：`LIMIT 1` / `LIMIT 1,1` / `LIMIT 1 OFFSET 1` 全可用（MySQL 语义）→ [renderMySqlStyleLimit]；
+ *  - EXPLAIN：`EXPLAIN SELECT` 返回 **MySQL 式表格行**（select_type/table/type/possible_keys/
+ *    key/rows/Extra）→ [ExplainSupport] 已按真机读数登记 TABLE 档；`EXPLAIN ANALYZE` /
+ *    `FORMAT JSON` / `EXPLAIN INSERT` 语法错误（「仅支持 SELECT」与官方文档一致）；
+ *  - DELETE…LIMIT：**语法错误**（`This version of GBase doesn't yet support 'ORDER BY, LIMIT and
+ *    IGNORE in DELETE syntax'`，精确复验 count 前后不变）→ 保守判 false 正确；
+ *  - 引号：反引号/双引号都可用（MySQL 血统）→ 反引号主口径。
  *
  * ## 边界
  *
@@ -1384,7 +1399,7 @@ object PolarDbDialect : Dialect {
  *  - **`gbase` 子协议歧义**：8a 与 8s 共用 `jdbc:gbase:`（8s 是 Informix 血统、驱动同前缀），
  *    推断按 8a 处理并在 KDoc 注明；8s 用户在设置页手动切方言（无证据不做端口嗅探）；
  *  - 事务 `BEGIN` 取 MySQL 形态 `START TRANSACTION`（5.7 兼容声明推定）；
- *  - 保留字 [GBASE8A_RESERVED] MySQL 族底。
+ *  - 保留字 [GBASE8A_RESERVED] MySQL 族底（真机 269 词扫描无冲突）。
  */
 object GBase8aDialect : Dialect {
     override val name: String = "GBase 8a"
@@ -1456,6 +1471,7 @@ object GBase8cDialect : Dialect {
  * **族推定**：驱动类 `com.oscar.Driver`（oscarJDBC.jar，**不在 Maven Central**，用户从安装
  * 目录手动加载）、URL `jdbc:oscar://`（默认 2003，DBeaver 社区实践 + 官网）。无真机——
  * SQL 形态全按 Oracle 族渲染（MP 同族映射）。
+ * **族级真引擎腿（2026-11-11）：渲染套件 + 扫描全绿（Oracle Free 23 真机，族级读数非 Oscar 引擎验证）。**
  *
  * 逐项同 [PolarDbDialect]（事务 null / Oracle 分页 / 双引号 / UPPER 族 / 无 upsert）；
  * 保留字 [OSCAR_RESERVED] Oracle 族底。
@@ -1484,7 +1500,9 @@ object OscarDialect : Dialect {
  *
  * **官方文档级（连接面）+ 族推定（SQL 形态）**：uxdb.net.cn 官方《JDBC》章实锤 Type 4 纯
  * Java 驱动、URL `jdbc:uxdb://`（默认 5432）；驱动**不在 Maven Central**，用户手动加载或
- * 直接用 pgJDBC。无真机——SQL 形态全按 PG 族渲染（分页/双引号/LOWER/`ON CONFLICT`）。
+ * 直接用 pgJDBC。
+ * **族级真引擎腿（2026-11-11）：渲染套件 + [PG_RESERVED] 扫描全绿（PostgreSQL 16.14 真机——
+ * PG 族形态含 `ON CONFLICT` 引擎级通过；UXDB 本体无容器通道，族级读数）。**
  * 保留字 [UXDB_RESERVED] PG 族底。
  */
 object UxDbDialect : Dialect {
@@ -1515,7 +1533,8 @@ object UxDbDialect : Dialect {
  * ## 证据级别
  *
  * **官方文档级（连接面）+ 族推定（SQL 形态）**：AntDB 用户手册（adbsql.github.io）实锤
- * PG 引擎可用标准 pgJDBC、专有驱动 URL `jdbc:antdb://`。无真机。
+ * PG 引擎可用标准 pgJDBC、专有驱动 URL `jdbc:antdb://`。
+ * **族级真引擎腿（2026-11-11）：渲染套件 + 扫描全绿（PostgreSQL 16.14 真机，族级读数非 AntDB 引擎验证）。**
  *
  * ## 边界
  *
@@ -1550,18 +1569,22 @@ object AntDbDialect : Dialect {
  *
  * ## 证据级别
  *
- * **官方文档级（连接面 + EXPLAIN）+ 保守推定（其余）**：docs.xugudb.com 官方实锤驱动类
- * `com.xuguedata.jdbc.XuguDriver`、URL `jdbc:xugu://`（默认 5138）、`EXPLAIN {查询}` 语句
- * 在册；驱动 Maven Central 有坐标（`com.xugudb:xugu-jdbc`）但 **License Proprietary**
- * （不可随插件分发）。无真机。
- *
- * ## 逐项口径（全带「待真机校验」标注）
- *
- *  - 分页：官方文档以 MySQL 风格 `LIMIT` 为主 → [renderMySqlStyleLimit]；
- *  - 引号：双引号（主流非 MySQL 形态的保守选择；官方标识符规则未逐字取证）；
- *  - 折叠族 NONE（保守默认，不猜折叠方向）；
- *  - upsert / DELETE LIMIT / 事务：无证据 → 全部保守判无（null/false）；
- *  - 保留字 [XUGU_RESERVED] MySQL 族底（分页渲染同向；「宁可多包」口径）。
+ * **真机引擎级（2026-11-11 端到端验证，XuguDB 12.10.13 @114.66.55.245:20111）+ 官方文档级（连接面）**：
+ * 插件渲染套件（建表/分页/保留字列引用/IN/聚合/UPDATE/INSERT/DELETE）+ [MYSQL_RESERVED] 全量
+ * 269 词保留字扫描（逐词建列/插入/查询/删表）**全绿**；驱动用 Maven Central `com.xugudb:xugu-jdbc`
+ * 12.3.9（**驱动类 `com.xugu.cloudjdbc.Driver`**，jar 字节码实测全库无 `com.xuguedata` 条目——官方
+ * 文档写的 `com.xuguedata.jdbc.XuguDriver` 是厂商自有分发形态，Central 上不存在；采集面两种包名
+ * 前缀都已登记）。逐项真机读数：
+ *  - 分页：`LIMIT 1` / `LIMIT 1,1` / `LIMIT 1 OFFSET 1` 三形态全可用（MySQL 语义，offset 0 起算）
+ *    → [renderMySqlStyleLimit]；`OFFSET n ROWS FETCH NEXT` 语法错误（E19132）；
+ *  - EXPLAIN：`EXPLAIN SELECT` 返回 `PLAN_PATH` 单列文本树（`1 SeqScan[(1 1) cost=0,...]`）→ TEXT 档
+ *    正确；`EXPLAIN ANALYZE` / `FORMAT JSON` 语法错误；
+ *  - DELETE…LIMIT：**语法错误**（E19132，精确复验 count 前后不变）——首次探针的 updateCount=-1 是
+ *    驱动误报，保守判 false 正确（L1「别信 runCatching 表面异常」同族教训）；
+ *  - 引号：双引号 `"order"` / `"table"` 建列与查询可用；反引号形式亦可执行（驱动/引擎宽容），
+ *    主口径保持双引号；
+ *  - upsert / 事务：无证据维持保守判无（null/false）。
+ * 保留字 [XUGU_RESERVED] MySQL 族底经真机 269 词扫描无冲突（「宁可多包」口径实证安全）。
  */
 object XuGuDialect : Dialect {
     override val name: String = "XuGu（虚谷）"
@@ -1584,7 +1607,8 @@ object XuGuDialect : Dialect {
  * ## 证据级别
  *
  * **族推定**：官方驱动 yashandb-jdbc（官网下载，不上 Central）、URL `jdbc:yasdb://`；
- * SQL 形态按 Oracle 族渲染（MP 同族映射）。无真机。
+ * SQL 形态按 Oracle 族渲染（MP 同族映射）。
+ * **族级真引擎腿（2026-11-11）：渲染套件 + 扫描全绿（Oracle Free 23 真机，族级读数非 YashanDB 引擎验证）。**
  *
  * 逐项同 [OscarDialect]（事务 null / Oracle 分页 / 双引号 / UPPER 族 / 无 upsert）；
  * 保留字 [YASDB_RESERVED] Oracle 族底。

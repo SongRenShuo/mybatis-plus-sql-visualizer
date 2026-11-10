@@ -133,6 +133,7 @@ class SqlSourceInterceptor(
             cn.startsWith("com.gbase.") ||
             cn.startsWith("com.aliyun.polardb.") ||
             cn.startsWith("com.oscar.") ||
+            cn.startsWith("com.xugu.") ||
             cn.startsWith("com.xuguedata.") ||
             cn.startsWith("com.yashandb.") ||
             // 华为 GaussDB 商用 / openGauss 品牌（同挂 com.huawei.）与社区 openGauss 2.x/3.x

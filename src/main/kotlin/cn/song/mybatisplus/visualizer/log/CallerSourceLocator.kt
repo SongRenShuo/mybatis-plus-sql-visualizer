@@ -84,7 +84,7 @@ object CallerSourceLocator {
             cn.startsWith("com.gbase.") ||
             cn.startsWith("com.aliyun.polardb.") ||
             cn.startsWith("com.oscar.") ||
-            cn.startsWith("com.xuguedata.") ||
+            cn.startsWith("com.xugu.") || cn.startsWith("com.xuguedata.") ||
             cn.startsWith("com.yashandb.") ||
             cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
             cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||

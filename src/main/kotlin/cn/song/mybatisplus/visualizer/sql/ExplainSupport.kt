@@ -204,8 +204,8 @@ object ExplainSupport {
         Entry(
             "GBase 8a",
             "EXPLAIN $SQL_PLACEHOLDER",
-            ExplainOutputFormat.TEXT,
-            "官方文档级（gbase.cn news/4131）：EXPLAIN 在册且仅支持 SELECT——与 ExplainGate 首关键字白名单（只对完整 SELECT 生成）自然对齐；输出形态未取证，档位保守取 TEXT。无真机",
+            ExplainOutputFormat.TABLE,
+            "真机引擎级实证（GBase 8a 8.6.2.43-R7-free @114.66.55.245:20116，2026-11-11）：EXPLAIN SELECT 返回 MySQL 式表格行（select_type/table/type/possible_keys/key/rows/Extra 七列）；EXPLAIN ANALYZE / FORMAT JSON / EXPLAIN INSERT 均语法错误（「仅支持 SELECT」与官方文档一致，ExplainGate SELECT 白名单自然对齐）；DELETE…LIMIT 语法错误（'This version of GBase doesn't yet support ORDER BY, LIMIT and IGNORE in DELETE syntax'）。档位由保守 TEXT 按真机读数升 TABLE",
         ),
         Entry(
             "GBase 8c",

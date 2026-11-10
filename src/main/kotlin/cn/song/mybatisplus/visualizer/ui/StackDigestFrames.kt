@@ -158,7 +158,7 @@ internal object StackDigestFrames {
             "com.goldendb.",
             // T-DomesticDialects（2026-11-09）：国产第三批有专用驱动包名的 5 家（与
             // CallerSourceLocator / SourceInterceptorTemplates 三表同步——LocatorSkipPrefixSyncTest 守卫）
-            "com.gbase.", "com.aliyun.polardb.", "com.oscar.", "com.xuguedata.", "com.yashandb.",
+            "com.gbase.", "com.aliyun.polardb.", "com.oscar.", "com.xugu.", "com.xuguedata.", "com.yashandb.",
             "org.apache.commons.dbcp2.", "com.ibm.db2.", "com.teradata.", "org.hibernate.",
             "com.baomidou.", "org.springframework.transaction.", "org.springframework.jdbc.",
         ).any { name.startsWith(it) }
