@@ -596,3 +596,51 @@ EVENT #5 kind=SELECT u=null sql=SELECT NAME FROM T_CAP_POOL WHERE ID = ?        
 **结论**：代理层次 + 连接池**也不是**丢失原因（三层嵌套下写语句照常产出，且门禁抑制计数为 0）。
 剩余差异面收敛到**磐维驱动（A 模式内核）本身**与**该应用特有的线程间/实例间形态**两处。
 香港磐维 A 模式实例就位后，用同一份 `OraclePooledRepro` 换 `jdbc:panweidb://` 复跑即可定案。
+
+#### 11.7 香港磐维 A 模式真机复现（2026-11-10，**已复现，定因 NestGate**）
+
+靶机：子智能体按 `db-env-provisioning` skill 在 `不大-香港-4G`（155.103.159.54）部署的
+`panweidb-hk-ora`（`V3.0-S3.4.0_B01`，`datcompatibility=A`，26201→17700，1.5G cap，五条验收全过）。
+驱动用仓库夹具 `database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar`。
+
+**第一步：现象复现（`tmp/oracle-repro/run3.sh`，Hikari + iBatis 式代理）**
+
+```
+EVENT #1..#6  驱动连接期内部语句（PgStatement 的 executeQuery/executeUpdate）
+EVENT #7      CREATE TABLE …                       ← 本应用 plain Statement
+               之后 ps.executeUpdate() / ps.execute() / ps.executeQuery() 全部无事件
+宿主 stderr   [SqlVisAgent] 织入通道登记盲区：无登记 PS 执行被跳过 psClass=org.panweidb.jdbc.OracleCmptPreparedStatement
+```
+
+**第二步：排除「登记真的没发生」（`run4.sh`，直连 + 反射查登记表）**
+
+```
+[probe] psClass=org.panweidb.jdbc.OracleCmptPreparedStatement
+[probe] after prepare(1arg) registry=sql=INSERT INTO T_REG_PROBE (ID, NAME) VALUES (?, ?) url=jdbc:panweidb://…
+[probe] after prepare(3arg) registry=sql=INSERT …（同上）
+[probe] after prepare(select) registry=sql=SELECT NAME FROM T_REG_PROBE WHERE ID = ?
+```
+
+⇒ **登记在册**（prepare 面织入正常、`UrlResolver` 正常），但执行侧仍无事件、且这次连「无登记」告警都没有
+⇒ 说明帧在**查登记表之前**就被挡下了 —— 即 `NestGate.exit(token)` 返回 false。
+
+**第三步：开关判别（`run5.sh`，同一载荷加 `-Dsqlvis.agent.nestGate=false`）**
+
+```
+EVENT #6 kind=INSERT u=1  sql=INSERT INTO T_REG_PROBE (ID, NAME) VALUES (?, ?)   ← 出现了
+EVENT #7 kind=INSERT u=1  sql=INSERT INTO T_REG_PROBE (ID, NAME) VALUES (?, ?)   ← 出现了
+EVENT #8 kind=SELECT u=null sql=SELECT NAME FROM T_REG_PROBE WHERE ID = ?        ← 出现了
+```
+
+**定因**：磐维 A 模式（`PreparedStatement` 实际实现类 `OracleCmptPreparedStatement`）下，`NestGate` 把
+**该线程后续全部语句**抑制掉了。`NestGate` 的判据是「同一线程嵌套只报最内层」，它依赖**深度最终归零**；
+一旦某帧的出口没配平，该线程就永久处于「内层已产出」态 —— 本次现场（连接创建期驱动内部语句之后）
+正是这个形态：前 5 条（plain Statement）正常产出，随后所有 PS 语句整类消失，且**两条静默路径的诊断
+计数在为 0**（`nestSuppressed` 只统计「被抑制的外层帧」，而这里被抑制的是最外层自己）。
+
+**这是 H2，且是本轮新增可见化没覆盖到的那种**：`nestSuppressed` 计的是 `mayEmit=false` 的外层帧；
+本次的抑制发生在 `depth` 已经被抬高、`innerEmitted` 残留为真的状态下，表现更像「深度泄漏」而不是「嵌套」。
+下一步（未实施）：给 `NestGate` 加**深度泄漏探针**（每线程 depth 与 `enter/exit` 配平计数，
+心跳带出 maxDepth / unbalanced 数），并在 `onStatementExit` 里对 `mayEmit=false` 且 `depth>0` 的形态
+另计 `suppressedOutermost` 一类；修法方向是让门禁**自愈**（长时间未归零即复位，或以「本线程上次出栈时刻」为界）。
+在修好之前，对磐维 A 模式的现场判据是现成的：`-Dsqlvis.agent.nestGate=false` 能立刻恢复采集。
