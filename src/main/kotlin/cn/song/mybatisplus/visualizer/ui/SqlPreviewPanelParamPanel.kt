@@ -975,13 +975,18 @@ internal fun SqlPreviewPanel.syncToggleSelectLabels() {
  * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
  * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
  * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
+ * T-IbatisSelectAll：iBatis 预览的条件行（id = `ibatis-cond-N`，[IbatisParamModel] 持有）
+ * 一并处理——此前只枚举 Wrapper/XML 两份 conditionViews，iBatis 链两份皆空 ⇒ 勾选态改了
+ * UI、[enabledIds] 一个没动，重渲染与基线逐字节相同（20261111 录制现场实测）。
  */
 
 internal fun SqlPreviewPanel.setAllConditions(enabled: Boolean) {
     val views = current?.previewModel?.conditionViews.orEmpty()
     val xmlViews = current?.xmlModel?.conditionViews.orEmpty()
+    val ibatisRows = current?.ibatisParamModel?.conditionRows.orEmpty()
     views.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
     xmlViews.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
+    ibatisRows.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
     conditionCheckBoxes.forEach { it.isSelected = enabled }
     renderSql()
 }
@@ -1062,13 +1067,27 @@ internal fun SqlPreviewPanel.clearConditionValues() {
     val ordinarySources = current?.unresolvedParams.orEmpty()
         .distinct()
         .filter { !it.startsWith("__frch_") }
-    (conditionSources + ordinarySources).forEach { source ->
+    // T-IbatisSelectAll：iBatis 链的参数输入同语义清空——条件行内联值（property 与占位符行共享
+    // paramValues 同键）+ 占位符/`$` 直替行。此前只枚举 previewModel.conditionViews 与
+    // unresolvedParams（iBatis 基线两者皆空），点清除毫无反应（20261111 录制现场一并核实）。
+    val ibatisModel = current?.ibatisParamModel
+    val ibatisSources = ibatisModel?.let { model ->
+        model.conditionRows.mapNotNull { it.property } +
+            model.placeholderRows.map { it.name } +
+            model.dollarRows.map { it.name }
+    }.orEmpty()
+    (conditionSources + ordinarySources + ibatisSources).forEach { source ->
         paramValues[source] = ""
         syncParamFieldText(source, "")
     }
     // foreach 权威值（可见字段文本）；监听链同步权威 map，权威 map 再显式清一遍兜底
     xmlForEachValueFields.forEach { it.second.text = "" }
     xmlForEachValues.clear()
+    // iBatis iterate 值（可见字段文本 + 权威 map）——与 foreach 同语义（留空 = 该段不展开）
+    ibatisModel?.iterateRows?.forEach { row ->
+        syncParamFieldText(row.property, "")
+    }
+    ibatisIterateValues.clear()
     renderSql()
     saveToHistory()
 }
