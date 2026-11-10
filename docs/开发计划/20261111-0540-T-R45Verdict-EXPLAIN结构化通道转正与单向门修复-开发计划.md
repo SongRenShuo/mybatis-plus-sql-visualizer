@@ -71,6 +71,29 @@
 - ③反向验证：摘除 OB 门（注释 `OB_PLAN_HEADER` 分派）→ OB 用例必须红（贴读数）→ 还原 → 绿（贴读数）；源码 grep `RED PROBE` 清零
 - 全程 `-Pkotlin.compiler.execution.strategy=in-process`；禁全量/禁 clean/禁 --stop
 
-## 六、实施记录（回填位）
+## 六、实施记录（回填）
 
-- （随实施回填：提交链、先红后绿读数、守卫计数前后值）
+> 2026-11-11 05:5x 回填（实施于本工作树，主仓副本只读）。
+
+### 提交链（`t-r45-verdict`，基点 master `b8e6ca6a`；不合回、不 push、不打 tag）
+
+| 提交 | 内容 |
+|---|---|
+| `ec2d225f` | docs(计划): 立项册（拍板/现状证据/改动清单/测试计划，即 §一~§五） |
+| `a504bd10` | R45 ①转正收口：`PluginSettings.kt` explainStructuredRender KDoc 追加拍板段＋设置页 label 双语去「实验特性/experimental」（3 文件，+9/-2） |
+| `9219ca61` | R45 ③OB ASCII 计划树规则：`ExplainIndexAdvisor` 门分派＋`adviseObPlanText`＋RULE_INVENTORY +1＋测试 +7 用例（2 文件，+183/-2） |
+| （本提交） | 本册 §六 实施记录回填 |
+
+### 测试读数（均 `-Pkotlin.compiler.execution.strategy=in-process`，定向，未跑全量）
+
+- **绿（合并轮）**：`ExplainIndexAdvisorTest` **32/0**（25→32，+7 OB 用例）＋`PluginSettingsPersistenceTest` **19/0**（复选框计数 49 断言＋双语文案断言在内）——BUILD SUCCESSFUL in 33s
+- **反向验证（③两读数）**：
+  - RED PROBE（`advisePlanText` 的 `OB_PLAN_HEADER` 门三行注释掉）→ `ExplainIndexAdvisorTest` **32 例 / 2 失败**，失败点名恰为 `testR45_OB全表扫超阈提示`（AssertionError `ExplainIndexAdvisorTest.kt:315`）与 `testR45_OB范围扫超阈_报估算不报缺索引`（`:332`）——BUILD FAILED in 2m 10s
+  - 还原后复跑 → 32/0＋19/0 绿；源码 grep `RED PROBE` **零命中**
+- **守卫计数**：前值 **49** ＝ 后值 **49**（②核实结论＝不重复加行，无新复选框；`PluginSettingsPersistenceTest.kt:220` 未动）
+
+### 与任务书/盘点册的差异说明（核实推翻项）
+
+- ②「设置页补开关行」前提不成立：开关行 2026-10-01（0df4a311）已在册（证据见 §二）——本轮未新增任何 UI 行，单向门修复实质早已闭环；已核实的现状证据与 0df4a311 时间线落册备查
+- ③ 的实现与 dev 支 `1d9f2770`（2026-10-31）同构（该支基座带未回流的 T-Fr45DmGuard，cherry-pick 必冲突，故手工移按）；OB 样本真机逐字读数出处＝`58b8b5f3` 提交正文（§四）
+
