@@ -362,8 +362,11 @@ public final class StatementWeaver implements Opcodes {
                     1, new Object[]{"java/lang/Throwable"}));
             mn.instructions.add(escapingThrow);
             // Append last so existing driver handlers retain priority.
+            // catch type 传 null（catch-all）：与 JVM 语义上等价于 Throwable（athrow 栈上只能是
+            // Throwable 的子类型），但 null 才是字节码层的 catch-all 形态——dev 侧守卫
+            // （StatementWeaverExceptionExitTest）按 type==null 计数 handler，两侧契约统一。
             mn.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                    bodyStart, bodyEnd, handler, "java/lang/Throwable"));
+                    bodyStart, bodyEnd, handler, null));
         }
 
         AbstractInsnNode insn = mn.instructions.getFirst();

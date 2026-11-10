@@ -261,25 +261,54 @@ public class NestGateTest {
         final long staleBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount();
 
         final Object first = newInstance("FakeVendorFixtures$VendorPs");
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(first); // 链首
+        final long tokenFirst = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(first); // 链首
         clock.addAndGet(6_000_000_000L);
 
         // 第 1、2 次超阈值进入：未达门槛
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        final Object nested1 = new Object();
+        final Object nested2 = new Object();
+        final long tokenNested1 = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(nested1);
+        final long tokenNested2 = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(nested2);
         assertEquals("未达连续 3 次不得计数",
                 staleBefore, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
 
         // 第 3 次：达门槛，计一次
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        final Object nested3 = new Object();
+        final long tokenNested3 = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(nested3);
         assertEquals("连续第 3 次超阈值进入必须计一次陈旧",
                 staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
 
         // 第 4、5 次：同一链不再重复计（泄漏期读数不刷）
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
-        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(new Object());
+        final Object nested4 = new Object();
+        final Object nested5 = new Object();
+        final long tokenNested4 = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(nested4);
+        final long tokenNested5 = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onStatementEnter(nested5);
         assertEquals("同一链只计一次",
                 staleBefore + 1, cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount());
+
+        // 收尾配平（t-sql-insight 合并适配）：本用例模拟「链不闭合」只到读数断言为止——
+        // 断言完成后逐帧 exit（后进先出），CaptureLedger 的在飞账本不得跨用例残留，
+        // 否则 insight 侧以 terminal=false 判读 STOP 快照的测试（SqlInsightQualityTest/
+        // SqlInsightControlFrameTest）被本用例的账本残留打红。未登记 stmt 走盲区 omitted，
+        // 不产事件，不影响上方 nestStale 断言。
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(nested5, null, "executeUpdate", tokenNested5, null, null);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(nested4, null, "executeUpdate", tokenNested4, null, null);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(nested3, null, "executeUpdate", tokenNested3, null, null);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(nested2, null, "executeUpdate", tokenNested2, null, null);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(nested1, null, "executeUpdate", tokenNested1, null, null);
+        cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .onExecuteExit(first, null, "executeUpdate", tokenFirst, null, null);
     }
 
     /** 外层夹具：executeUpdate 转发给内层（池包装/日志代理的等价形态）。 */

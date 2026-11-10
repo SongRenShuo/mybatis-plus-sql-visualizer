@@ -38,7 +38,8 @@ public class SqlInsightControlFrameTest {
             assertEquals(EventBus.CMD_CONFIG_ACK, read(in).cmd);
             Frame state = read(in);
             assertEquals(EventBus.CMD_CAPTURE_STATE, state.cmd);
-            assertTrue(state.body.contains("\"kind\":\"STOP\""));
+            assertTrue("kind=STOP 断言失败，实际 body=" + state.body,
+                    state.body.contains("\"kind\":\"STOP\""));
             assertTrue(state.body.contains("\"terminal\":true"));
             assertTrue(state.body.contains("NO_REQUEST_BOUNDARIES"));
             assertTrue(state.body.contains("NO_DELIVERY_ACK"));

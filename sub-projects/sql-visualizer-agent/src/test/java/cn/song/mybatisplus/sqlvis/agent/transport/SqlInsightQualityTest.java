@@ -85,10 +85,16 @@ public class SqlInsightQualityTest {
     }
 
     @Test public void queueOverflowCannotHideBehindContinuousSequenceOrFullQueue() {
+        // t-sql-insight 合并适配（dev T-SqlListCatchup 券 I）：满队列逐出的事件**先入溢出账本**
+        // （模板与次数保全，drainOverflow 排空后补发聚合事件），droppedCount 语义收窄为
+        // 「连账本都收不下的真丢失」。故灌 2049 条只应：队列满 2048 + 溢出账本 +1、dropped 不变——
+        // 「一次溢出即 dropped+1」是账本机制之前的旧契约。
         long dropped = count("queueDropped");
         for (int i = 0; i < 2049; i++) EventBus.offer(event());
-        assertEquals(dropped + 1, count("queueDropped"));
-        assertEquals(2048, EventBus.queuedCount());
+        assertEquals("第 2049 条不得计真丢失（同模板走 F2 聚合保全，异模板走券 I 溢出账本——"
+                        + "账本路径由 EventBusOverflowLedgerTest 守卫）",
+                dropped, count("queueDropped"));
+        assertEquals("队列应恰好满", 2048, EventBus.queuedCount());
         // Control state is available without inserting anything into the full queue.
         assertTrue(CaptureLedger.snapshot().contains("\"terminal\":false"));
     }
