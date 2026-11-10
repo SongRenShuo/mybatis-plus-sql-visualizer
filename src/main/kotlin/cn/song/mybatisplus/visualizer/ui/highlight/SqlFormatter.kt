@@ -1061,7 +1061,7 @@ object SqlFormatter {
         return parts
     }
 
-    /** 分词（剔除空白——含 XML 动态标签展开残留空行）。 */
+    /** 分词（剔除空白——含 XML 动态标签展开残留空行）＋ 参数占位原子段合并（见 [mergeParamPlaceholders]）。 */
     private fun lex(sql: String): List<Pair<IElementType, String>> {
         val lexer = SqlLexer()
         lexer.start(sql, 0, sql.length, 0)
@@ -1071,6 +1071,87 @@ object SqlFormatter {
             if (type != TokenType.WHITE_SPACE) tokens += type to lexer.tokenText
             lexer.advance()
         }
-        return tokens
+        return mergeParamPlaceholders(tokens)
     }
+
+    // ------------------------------------------------------------------
+    // T-IbatisFix2（2026-11-10 真机反馈 ④）：参数占位原子段
+    // ------------------------------------------------------------------
+
+    /**
+     * `#x#` / `#{x}` / `${x}` 参数占位是**原子段**——三条格式化路径（[format] / [formatClauseLine] /
+     * [formatVertical]）同源分词，一处合并三处生效。
+     *
+     * iBatis 的 `#username#`（含 `#x:TYPE:null#` 三段）与 MyBatis 的 `#{x}` / `${x}` 在 [SqlLexer]
+     * 下被拆成 `#` + 标识符 + `#`（`{`/`}` 各为运算符、`$` 是标识符首字符）多个 token，格式化时按
+     * 运算符空格规则拼出 `# username #` / `# { x }`（用户 2026.3 截图实证）——占位符必须整体保留：
+     * 内容原样拼接（不做大小写改写、不插空格），前后按既有 token 间距规则走。
+     *
+     * 合并判据（token 流上做，词法器不吐偏移）：
+     * - `#`（运算符）后随 `{`（运算符）→ MyBatis 花括号形态，合并到配对 `}`（嵌套计数）；
+     * - `$`（单字符标识符）后随 `{` → MyBatis `${}` 形态，同上；
+     * - `#`（运算符）→ 中间只含标识符/数字/`:` `[` `]`（iBatis 的 `#x:TYPE:null#` 与 `#ids[0]#`）
+     *   → 闭合 `#`：iBatis 内联参数；`##` 转义（空内容）同样合并、原样保留。
+     * 闭合/配对找不到时**整段不动**（未闭合残段按原 token 展示，与渲染器「未闭合」告警口径一致）。
+     * 合并产物标 [SqlTokenTypes.IDENTIFIER]——三条路径的「原文保留」分支（token 文本原样输出）。
+     */
+    private fun mergeParamPlaceholders(tokens: List<Pair<IElementType, String>>): List<Pair<IElementType, String>> {
+        if (tokens.none { (type, text) ->
+                (type == SqlTokenTypes.OPERATOR && text == "#") ||
+                    (text == "$" && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE))
+            }
+        ) {
+            return tokens
+        }
+        val out = ArrayList<Pair<IElementType, String>>(tokens.size)
+        var i = 0
+        while (i < tokens.size) {
+            val (type, text) = tokens[i]
+            val mergedEnd: Int? = when {
+                type == SqlTokenTypes.OPERATOR && text == "#" ->
+                    if (i + 1 < tokens.size && tokens[i + 1].second == "{") matchBraceClose(tokens, i + 1)
+                    else matchHashClose(tokens, i)
+                text == "$" && (type == SqlTokenTypes.IDENTIFIER || type == SqlTokenTypes.TABLE) &&
+                    i + 1 < tokens.size && tokens[i + 1].second == "{" -> matchBraceClose(tokens, i + 1)
+                else -> null
+            }
+            if (mergedEnd == null) {
+                out += tokens[i]
+                i++
+            } else {
+                out += SqlTokenTypes.IDENTIFIER to tokens.subList(i, mergedEnd + 1).joinToString(separator = "") { it.second }
+                i = mergedEnd + 1
+            }
+        }
+        return out
+    }
+
+    /** iBatis 内联参数闭合 `#` 定位（[openIdx] 是开 `#`；中间只许标识符/数字/`:` `[` `]`）。未闭合返回 null。 */
+    private fun matchHashClose(tokens: List<Pair<IElementType, String>>, openIdx: Int): Int? {
+        for (j in openIdx + 1 until tokens.size) {
+            val (type, text) = tokens[j]
+            if (type == SqlTokenTypes.OPERATOR && text == "#") return j
+            val innerOperator = type == SqlTokenTypes.OPERATOR && text in HASH_INNER_OPERATORS
+            if (type != SqlTokenTypes.IDENTIFIER && type != SqlTokenTypes.NUMBER && !innerOperator) return null
+        }
+        return null
+    }
+
+    /** MyBatis 花括号形态配对 `}` 定位（[openIdx] 是开 `{`；嵌套计数）。未闭合返回 null。 */
+    private fun matchBraceClose(tokens: List<Pair<IElementType, String>>, openIdx: Int): Int? {
+        var depth = 0
+        for (j in openIdx until tokens.size) {
+            val (type, text) = tokens[j]
+            if (type != SqlTokenTypes.OPERATOR) continue
+            if (text == "{") depth++
+            if (text == "}") {
+                depth--
+                if (depth == 0) return j
+            }
+        }
+        return null
+    }
+
+    /** iBatis `#x#` 内部允许出现的运算符（三段 `:`、iterate 下标 `[]`）。 */
+    private val HASH_INNER_OPERATORS = setOf(":", "[", "]")
 }
