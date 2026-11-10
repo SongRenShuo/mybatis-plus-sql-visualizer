@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.nav
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationAction
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationOrUsageHandler2
 import com.intellij.ide.highlighter.JavaFileType
+import com.intellij.ide.highlighter.XmlFileType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.psi.PsiElement
@@ -129,5 +130,44 @@ class IbatisGotoRealEntryTest : BasePlatformTestCase() {
             assertEquals("[$label] GTDU 应判 GTD（跳声明）", "GTD", outcome.toString())
             assertNotNull("[$label] Ctrl+Click 必须有数据（null = 平台认为该位置不可点）", ctrlMouse)
         }
+    }
+
+    /**
+     * T-IbatisFix4 缺陷一：**反向（XML 语句 `id` → Java DAO 调用点）**也必须走通平台真实分派。
+     *
+     * 真机现象：DAO 里 Ctrl+Click 能跳 XML，XML 里 Ctrl+Click 平台报「Cannot find declaration
+     * to go to」——因为当时 XML 侧只有 gutter 箭头，没有接 GTD 管线（`PsiReference` 那边只管
+     * refid/resultMap/parameterMap，语句自己的 `id` 没造引用）。
+     */
+    fun testXML语句id_Ctrl点击走平台真实链路能跳到DAO调用点() {
+        myFixture.addFileToProject(
+            "com/demo/UserDaoImpl.java",
+            """
+            package com.demo;
+            public class UserDaoImpl {
+                private Object client;
+                public Object byDotted(String p) { return client.queryForObject("user.selectById", p); }
+            }
+            """.trimIndent(),
+        )
+        val xml = myFixture.configureByText(
+            XmlFileType.INSTANCE,
+            """<sqlMap namespace="user"><select id="selectById">SELECT 1</select></sqlMap>""",
+        )
+        val idValue = PsiTreeUtil.findChildrenOfType(xml, XmlAttributeValue::class.java)
+            .first { it.value == "selectById" }
+        myFixture.editor.caretModel.moveToOffset(idValue.textOffset + 1)
+        val offset = myFixture.editor.caretModel.offset
+        val (all, outcome, ctrlMouse) = realEntryTriple(offset)
+
+        assertNotNull("findAllTargetElements 不得为空——XML 侧 Ctrl+Click 靠它取目标", all)
+        assertEquals("应恰 1 个目标（多目标会弹候选列表）", 1, all!!.size)
+        assertTrue(
+            "目标应是 DAO 调用的首参字面量，实际=${all[0].javaClass.simpleName}",
+            all[0] is PsiLiteralExpression,
+        )
+        assertEquals("DAO 文件命中", "UserDaoImpl.java", all[0].containingFile?.name)
+        assertEquals("GTDU 应判 GTD（跳声明）", "GTD", outcome.toString())
+        assertNotNull("Ctrl+Click 必须有数据（null = 平台认为该位置不可点）", ctrlMouse)
     }
 }

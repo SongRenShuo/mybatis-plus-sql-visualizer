@@ -134,13 +134,28 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
 internal object IbatisJavaCallSites {
 
     /** 首个命中字面量（`ns.id` / 裸 `id` / 任意 namespace 前缀的 `.id` 尾缀形态）。 */
-    fun findFirstCallLiteral(project: Project, namespace: String?, statementId: String): PsiLiteralExpression? {
+    fun findFirstCallLiteral(project: Project, namespace: String?, statementId: String): PsiLiteralExpression? =
+        findAllCallLiterals(project, namespace, statementId, 1).firstOrNull()
+
+    /**
+     * 全部命中字面量（T-IbatisFix4：XML 语句 `id` 的 Ctrl+Click 目标集）。
+     *
+     * 判定与 [findFirstCallLiteral] 完全同源（同一个词索引 + 同一套 [matches] 口径），差别只是
+     * 不提前收工。`limit` 防「一条语句几百个调用点」把 GTD 目标表撑爆——平台拿到多目标会弹
+     * 候选列表，超出上限的尾部调用点不列。
+     */
+    fun findAllCallLiterals(
+        project: Project,
+        namespace: String?,
+        statementId: String,
+        limit: Int,
+    ): List<PsiLiteralExpression> {
         val sid = statementId.trim()
-        if (sid.isEmpty()) return null
+        if (sid.isEmpty() || limit <= 0) return emptyList()
         val word = sid.substringAfterLast('.')
-        if (word.isEmpty() || !word.all { Character.isJavaIdentifierPart(it) }) return null
-        if (DumbService.isDumb(project)) return null
-        var first: PsiLiteralExpression? = null
+        if (word.isEmpty() || !word.all { Character.isJavaIdentifierPart(it) }) return emptyList()
+        if (DumbService.isDumb(project)) return emptyList()
+        val found = ArrayList<PsiLiteralExpression>(minOf(limit, 4))
         // TextOccurenceProcessor.execute(element, offsetInElement)：element = 词命中的宿主元素
         // （多为字面量本身或其内部 leaf），手工上爬找宿主字面量
         val processor = TextOccurenceProcessor { element, _ ->
@@ -153,13 +168,15 @@ internal object IbatisJavaCallSites {
                 }
                 cur = cur.parent
             }
-            literal = literal ?: return@TextOccurenceProcessor true
-            if (!matches(literal, namespace, sid)) return@TextOccurenceProcessor true
-            val call = PsiTreeUtil.getParentOfType(literal, PsiMethodCallExpression::class.java) ?: return@TextOccurenceProcessor true
+            val hit = literal ?: return@TextOccurenceProcessor true
+            if (!matches(hit, namespace, sid)) return@TextOccurenceProcessor true
+            val call = PsiTreeUtil.getParentOfType(hit, PsiMethodCallExpression::class.java) ?: return@TextOccurenceProcessor true
             if (call.methodExpression.referenceName !in IbatisXmlStatementTargets.STATEMENT_ENTRY_METHODS) return@TextOccurenceProcessor true
-            if (call.argumentList?.expressions?.firstOrNull() !== literal) return@TextOccurenceProcessor true
-            first = literal
-            false
+            if (call.argumentList?.expressions?.firstOrNull() !== hit) return@TextOccurenceProcessor true
+            // 同一字面量的多个词命中（字面量内含点号分段）只记一次
+            if (found.any { it === hit }) return@TextOccurenceProcessor true
+            found.add(hit)
+            found.size < limit
         }
         runCatching {
             PsiSearchHelper.getInstance(project).processElementsWithWord(
@@ -170,7 +187,7 @@ internal object IbatisJavaCallSites {
                 true,
             )
         }
-        return first
+        return found
     }
 
     /** 字面量值命中：裸 `id`、`ns.id`（本文件 namespace）、或任意前缀的尾段 `… . id`。 */

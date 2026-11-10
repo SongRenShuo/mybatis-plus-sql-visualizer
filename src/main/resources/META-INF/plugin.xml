@@ -619,6 +619,11 @@
                                   implementation="cn.song.mybatisplus.visualizer.ui.ref.IbatisXmlIdReferenceContributor"/>
         <gotoDeclarationHandler
                 implementation="cn.song.mybatisplus.visualizer.ui.nav.IbatisDaoStatementGotoDeclarationHandler"/>
+        <!-- T-IbatisFix4 缺陷一：补 XML → Java 的 Ctrl+B / Ctrl+Click（原只有 Java → XML 单向，
+             真机上「DAO 里能跳 XML、XML 里 Ctrl+Click 无反应」）。目标集走词索引找调用点首参字面量，
+             只在按键/悬停时执行；非 sqlMap 语句位置返回 null，原生跳转零变化。 -->
+        <gotoDeclarationHandler
+                implementation="cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementGotoDeclarationHandler"/>
 
         <!-- T-Ibatis2Gap 券 B（车道 L1）：iBatis <sqlMap> 语句与 Java SqlMapExecutor 调用点的
              双向跳转图标（观感对齐 MyBatis 的 MapperXmlToJava/JavaToXml 那对：图标复用

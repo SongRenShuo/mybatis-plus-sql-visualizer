@@ -46,10 +46,11 @@ import com.intellij.psi.util.PsiTreeUtil
  * （EDT 直读）本可直接读，但本类仍按仓内红线把 PSI 读取整体包进 [ReadAction.compute]
  * （EDT 内联执行，零额外成本）。任何异常按「本次不接管」处理：回落原生跳转，不弹提示、不写 ERROR。
  *
- * ## 覆盖边界（本期不做）
+ * ## 覆盖边界
  *
  * - Kotlin DAO 调用形态（`SqlMapClient` 的 Kotlin 侧调用）未覆盖：本期验收只要求 Java 侧；
- * - Java → XML 反查（XML 语句跳回 DAO 调用点）不做——代价高（需全项目 Java 调用点索引）；
+ * - 反方向（XML 语句 → Java 调用点）**已拆到** [IbatisXmlStatementGotoDeclarationHandler]
+ *   （T-IbatisFix4）：两个方向各占一个 `gotoDeclarationHandler`，互不干扰、互不抢认领；
  * - `<selectKey>` 生成的隐式 id（`<insertId>-SelectKey`）不做。
  */
 class IbatisDaoStatementGotoDeclarationHandler : GotoDeclarationHandler {
