@@ -1,7 +1,7 @@
 {
   "version": "2026.11.10",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10/mybatis-plus-sql-visualizer-2026.11.10.zip",
-  "changeNotes": "iBatis 2.x 全面支持，sqlMap 的预览、着色、折叠、补全与双向跳转都到位，DTD 随插件内置、离线可用\niBatis 预览参数可填值，动态条件按行勾选、iterate 可填值列表，SQL 随填值变化\niBatis 语句 id 与 DAO 调用点之间的 Ctrl+B 与 Ctrl+Click 双向都通，装了别的跳转插件也不受影响\n新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种\nSQL 列表追赶与风暴期刷新优化，高并发抓取不再卡顿，控制台清屏后自动恢复\n日期时间参数改用标准类型字面量，Oracle 预览执行不再报 ORA-01843\n2026.3 上切换数据源不再只剩当前一个源，也不会静默跑到旧库\n好用的话，欢迎到 Marketplace 页评分留言",
+  "changeNotes": "iBatis 2.x 全面支持，sqlMap 的预览、着色、折叠、补全与双向跳转都到位，DTD 随插件内置、离线可用\niBatis 预览参数可填值，动态条件按行勾选、iterate 可填值列表，SQL 随填值变化\niBatis 语句 id 与 DAO 调用点之间的 Ctrl+B 与 Ctrl+Click 双向都通，装了别的跳转插件也不受影响\n新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种\nSQL 列表追赶与风暴期刷新优化，高并发抓取不再卡顿，控制台清屏后自动恢复\n好用的话，欢迎到 Marketplace 页评分留言",
   "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }
