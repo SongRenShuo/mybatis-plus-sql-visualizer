@@ -209,6 +209,9 @@ class SqlLogManager(private val project: Project) : Disposable {
             SettingsChangeListener {
                 applySettings()
                 bridge.refreshConsoleContexts()
+                // T-HiddenBugPerfScan 券 C：EP 通道 ctx 与桥同拍刷新（快照固化回归——
+                // refreshConsoleContexts 只覆盖桥侧 consoleContexts，EP 主通道由此处补齐）
+                SqlConsoleBridgeFilterProvider.refreshEpContextsFromSettings()
                 // T-AutoShowSuppress：设置开关 false→true 重启用沿——用户显式重新表达诉求，解除会话抑制
                 val autoOpen = PluginSettings.getInstance().state.logAutoOpenOnCapture
                 if (autoOpen && !lastSeenAutoOpenOnCapture && autoShowSuppressedByUserClose) {
