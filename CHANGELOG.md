@@ -2,6 +2,16 @@
 
 # SQL Visualizer Changelog
 
+## [2026.11.10-beta.2] - 2026-11-10
+
+> 范围＝v2026.11.10-beta.1 发行包之后的全部用户可见增量：**iBatis 预览四项真机缺陷修复**（selectKey 子语句展示、占位符格式化保真、重渲染失败可见、信息级告警分档）。沿用 11.10 内测线取 `-beta.2`（内测通道允许 `-beta.N` 后缀，`beta.2 > beta.1` 可被更新检查识别）。
+
+### Fixed
+- **`<selectKey>` 子语句在预览里完全不可见（T-IbatisFix2，08f0aefe）**：`insertUser` 的 `SELECT SEQ_USER_ID.NEXTVAL FROM DUAL` 此前根本不出现在预览里——渲染器有 `renderSelectKey`（保真对照 4/4 通过），但服务层从未调用它。现按引擎语义组装：`type=pre` 与 `post` 的时序在块注释里标明（`-- [selectKey type=pre → id]`），selectKey 内的 `#x#` 照常转 `?` 并按 pre/主/post 顺序拼进参数名序。**主语句恒在最前**——执行链按首条语句判类型（`SqlTypeClassifier.getFirstKeyword`）与写安全闸（`ExecutionScriptScope`），把 selectKey 的 `SELECT` 放前面会让带上键的 INSERT 被误判成只读查询
+- **格式化把占位符拆散（T-IbatisFix2，35f0eae4）**：`# username #` 此前被格式化成三段——iBatis 的 `#x#`（含 `#x:TYPE:nullValue#` 三段形态）在格式化、关键字换行、竖向排列三条路径下都被当普通字符断开了。现统一把占位符当**原子段**保留（未闭合残段不合并）；MyBatis 的 `#{x}` / `${x}` 同病同修（此前同样会被拆成 `# { x }`）
+- **勾选填值后重渲染失败被静默吞掉（T-IbatisFix2，08f0aefe）**：2026.3 上部分用户勾选条件并填值后 SQL 始终停在无参基线——rerender 回调内抛出的异常被面板吞掉、保留旧结果，用户看不到任何原因。现整条回调捕获失败（`FatalErrors` 直传）后：面板显示失败档结果（「重渲染失败：<原因>」）并在 `idea.log` 记带堆栈的 warn，不再静默回落
+- **信息性说明混进红色失败行（T-IbatisFix2，08f0aefe）**：parameterMap 的「引擎行为」说明此前与「方言未验证」等真失败拼在同一行、下方 ℹ 行又重复一遍。现按档分开收集：混合时 ⚠ 行只留真失败，纯信息级整行走 ℹ（内容不丢）
+
 ## [2026.11.10-beta.1] - 2026-11-10
 
 > 范围＝v2026.11.9-beta.1 发行包之后的全部用户可见增量：**iBatis 交互补全**（语句行与 DAO 调用行双向跳转箭头、预览参数可填值、parameterMap 真实参数名、降级可见性分档）。
