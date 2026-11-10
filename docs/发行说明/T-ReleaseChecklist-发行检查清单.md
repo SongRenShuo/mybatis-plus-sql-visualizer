@@ -198,7 +198,7 @@
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。
-- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。
+- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。**上传成功 ≠ 公网已生效**：审核期内 `GET /api/plugins/33633/updates` 与插件页仍显示上一版（2026-11-10 实测：正式版已上传，端点仍是 2026.11.8），这是正常状态，别据此判「上传失败」；正式版的公网生效只认该端点出现新版本号。
 - [ ] RC-R7 回读断言：执行 §四，判据不满足不得勾选本清单任何「发布完成」项。
 
 ## 四、回读断言（T-RC-03，发布未完成的直接防线）

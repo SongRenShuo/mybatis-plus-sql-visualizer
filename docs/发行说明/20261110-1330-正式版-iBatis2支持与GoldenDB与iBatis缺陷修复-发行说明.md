@@ -55,6 +55,6 @@
 
 ## 升级方式
 
-- **Marketplace（Stable 通道）**：正式版已去 `-beta.N` 后缀，装内测版的用户会正常收到更新提示。
+- **Marketplace（Stable 通道）**：正式版已去 `-beta.N` 后缀，装内测版的用户会正常收到更新提示。作者已于 2026-11-10 上传；**上传后有一段时间的审核期，审核通过前公开页面与 `GET /api/plugins/33633/updates` 仍显示上一版（2026.11.8），这是正常状态、不是上传失败**。
 - **Gitee / GitHub**：发行页下载 zip 手动安装。
 - `update/update.json` 由用户本人从 `preview.update.json` 提升后生效（官方通道清单）。
