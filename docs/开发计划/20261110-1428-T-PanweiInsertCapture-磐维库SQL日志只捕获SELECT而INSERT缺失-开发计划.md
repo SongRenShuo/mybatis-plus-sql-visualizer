@@ -640,7 +640,27 @@ EVENT #8 kind=SELECT u=null sql=SELECT NAME FROM T_REG_PROBE WHERE ID = ?       
 
 **这是 H2，且是本轮新增可见化没覆盖到的那种**：`nestSuppressed` 计的是 `mayEmit=false` 的外层帧；
 本次的抑制发生在 `depth` 已经被抬高、`innerEmitted` 残留为真的状态下，表现更像「深度泄漏」而不是「嵌套」。
-下一步（未实施）：给 `NestGate` 加**深度泄漏探针**（每线程 depth 与 `enter/exit` 配平计数，
-心跳带出 maxDepth / unbalanced 数），并在 `onStatementExit` 里对 `mayEmit=false` 且 `depth>0` 的形态
-另计 `suppressedOutermost` 一类；修法方向是让门禁**自愈**（长时间未归零即复位，或以「本线程上次出栈时刻」为界）。
-在修好之前，对磐维 A 模式的现场判据是现成的：`-Dsqlvis.agent.nestGate=false` 能立刻恢复采集。
+
+#### 11.7b 自愈尝试：**试过，被测试当场否掉，已整案回退**
+
+实现思路（未保留）：`enter()` 在 `depth > 0` 时用「链首业务帧是否仍在栈上」判定泄漏——不在即复位整条链，
+计 `nestLeaks` 并进心跳/状态栏；真实嵌套时外层帧必然还在栈上，故不误治愈。
+
+**失败读数**：agent 子项目 287 例中 **10 红**（`NestGateTest` 2 + `StatementWeaveEndToEndTest` 8），
+症状一律是「本该产出的语句零事件」。根因是**锚帧选错**：`businessFrameKey()` 跳过 agent 包取第一个
+非 agent 帧，而 agent 子项目的测试夹具本身就在 `cn.song.mybatisplus.sqlvis.agent` 包下，
+取到的锚帧落到 JUnit/反射帧上——这类帧**永远在栈上**，于是「泄漏」判不出、「自愈」不触发，
+而我自己那条泄漏用例留下的 `depth=1` 又把后续用例连坐成整片抑制。
+
+**处置**：整案 `git checkout` 回退（NestGate / SqlHookCallbacks / SenderLoop / AgentAttachStats /
+CaptureStatusBar / SqlLogPanel / 两份 bundle / NestGateTest），回退后 agent 全量 **287 例
+1 红 1 skip**，那 1 红是 `SenderLoopBackoffTest` 的端口/时序 flake（单跑 **BUILD SUCCESSFUL** 复现不出），
+与本改动无关。
+
+**结论与下一步**：泄漏判据不能锚在「第一个非 agent 帧」上（测试/宿主形态会漂），可行的方向是
+①锚**最外层已织帧的调用方是否仍在「本链自己的栈深度区间」内**（记录链首的栈深，不是帧名）；
+②或让 `onStatementExit` 对「`mayEmit=false` 且 `depth` 回到 0」这一异常形态直接放行（保留 `nestSuppressed`
+之外的 `suppressedOutermost` 计数，先观测一轮再决定是否放行）。两条都要先补**跨测试包的锚点一致性用例**
+（夹具在 agent 包内、业务在包外两种形态各一例），否则仍会重演本次的假阳性。
+
+**现场可用判据（现状唯一手段）**：`-Dsqlvis.agent.nestGate=false`。
