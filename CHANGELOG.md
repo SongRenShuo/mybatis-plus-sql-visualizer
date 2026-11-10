@@ -9,44 +9,53 @@
 - **增强捕获驱动面扩容（T-DomesticDialects，5ab49ed6b）**：有专用驱动包名的 5 家（GBase `com.gbase.*`、PolarDB `com.aliyun.polardb.*`、神通 `com.oscar.*`、虚谷 `com.xuguedata.*`、崖山 `com.yashandb.*`）登记进框架帧跳过前缀（agent/IDE/注入模板/文档示例四副本同步），来源定位不再指进驱动内部
 - **国产数据库方言支持全景调研（T-DomesticDialects，f3ae7f5fc）**：`docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md`（四大兼容阵营 + 逐库驱动/EXPLAIN/License 取证 + D1~D4 定案）与 `docs/开发计划/20261109-2345-国产信创数据库方言扩展-开发计划.md`（11 触点标准接入清单 + 券分解 + 验收判据）
 
-## [2026.11.9-beta.1] - 2026-11-09
-
-> 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量：**iBatis 2.x 静态渲染与编辑器能力全面支持**（券 0/A/B/D/E/F/H）、**中兴 GoldenDB 第 15 方言**（券 A/B）、**SQL 列表追赶延迟与风暴期刷新成本优化**（券 A/B/B2/D/E/F/G/H/I），以及两条真机缺陷修复（PostgreSQL 单语句预览只发出 `TIMESTAMP` 一个词、Oracle 连接继承链被误报「未登记 JDBC 实现」）。
-
-### Added
-- **iBatis 的 SQL 跳转（T-Ibatis2Support 券 F，e744b9d6 / 75b84d7a）**：两条链路。① **XML 内部 id 引用**——`<include refid>` → 同文件 `<sql id>`（找不到再按 `namespace + "." + id` 回退，且 refid 已含点时不再加前缀，与 iBatis 的 `applyNamespace` 语义一致）；`resultMap=` / `parameterMap=` / `<resultMap extends=>` → 同名定义。② **Java DAO → XML 语句**——`SqlMapExecutor` 的 statementId 入口（`queryForObject` / `queryForList` / `queryForMap` / `queryWithRowHandler` / `queryForPaginatedList` / `insert` / `update` / `delete`）的首个字符串实参 → 对应 `<select|insert|update|delete|statement|procedure>` 的 `id` 属性。全部是 **soft 引用**：目标不存在时零报红，不注册任何校验器形态（沿用「不做检查器」的既有红线）。**本期不做**：跨文件 id 清单（需解析 `sqlMapConfig` 的 `<sqlMap resource>`）、XML → Java 反查、`<selectKey>` 隐式 id（`<insertId>-SelectKey`）、Kotlin DAO 调用形态。识别口径是**语法级**（方法名 + 首参是字符串字面量，不做接收者类型解析），因此若工程里另有非 iBatis 的同名方法、且项目内恰有同名 sqlMap 语句，可能出现一次跳转；无目标时不产生任何效果
-- **新增 iBatis 2.x 静态 SQL 预览（T-Ibatis2Support 券 A 接线 + 券 B 渲染核心，29a4a4be / 0fa46b44 / eb49dd14）**：`<sqlMap>` 文件里的 `select` / `insert` / `update` / `delete` / `statement` / `procedure` 左侧出现预览图标，点开得到带参数的 SQL。此前该文件只能靠「通用内嵌 SQL」兜底通道碰运气：叶子语句能出图标但 `#name#` 原样输出、参数面板显示「无参数」，含 `<dynamic>` / `<isNotNull>` 的语句则**一个图标都没有**。现在按 iBatis 2 语义独立渲染——`#p#` / `#p:jdbcType#` / `#p:jdbcType:nullValue#` / `#p,jdbcType=?` 四种占位形态、`$p$` 字符串直替、`##` 与 `$$` 转义、14 个 `<isXxx>` 条件标签、`<dynamic prepend>` 的 prepend 消费、`<iterate>` 的 `open`/`conjunction`/`close` 与 `#ids[]#` 下标、`<sql>/<include>`（配置期内联）、`<selectKey type="pre|post">`。渲染保真以 **iBatis 官方 2.3.4.726 引擎做黄金对照**（不连库直取真值，20 种形态逐字节一致），包括「`prepend` 逐字拼接不补空格」这类反直觉行为（真实输出会出现 `ANDORG_NAME` 这种粘连，我们原样复现、不做美化）。口径：iBatis 语句没有 namespace / Mapper 接口 / 实体注解，走独立预览链，不进 MyBatis 的实体解析
-- **iBatis 的 DTD 随插件内置，编辑器不再报「无法解析 DTD」与满屏「必须声明元素类型」（T-Ibatis2Support 券 E，56d2ba18 / ce3ab462）**：iBatis 配置期是从 classpath 读 DTD、不联网，但 IDE 会按 `DOCTYPE` 的外链去取——而 `www.ibatis.com` 域名早已失效。现在两份 DTD（`sql-map-2.dtd` / `sql-map-config-2.dtd`，取自 2.3.4.726 jar 内的权威副本；网站版在 `sql-map-config` 根声明上与之分叉，以 jar 内为准）随包分发，并把 iBatis 认的 8 条标识（4 条 systemId + 4 条 publicId）全部映射到随包副本，离线可用；发行包增量约 9 KiB
-- **iBatis XML 的语句文本获得注入着色、折叠与关键字补全（T-Ibatis2Support 券 D，e8553325 / ac918146）**：`#name#`、`#name:TYPE#`、`#name:TYPE:nullValue#`、`$name$` 四态按配对闭合识别（未闭合不吞后续文本），`##` / `$$` 判为字面量而非参数。**刻意不做** iBatis 属性值（`property` / `compareValue` / `refid` …）的注入，也不接 `#{}` / OGNL 补全——这些属性名与 MyBatis 高度重叠，强行注入会改变 `<mapper>` 文件的既有行为，且 iBatis 没有表达式语言，接了只会给错语义
-- **SQL 列表条目支持 iBatis 独立来源（T-Ibatis2Support 券 H，4ac11547）**：`{pstm-N}` 三行组形态的控制台条目此前与 MyBatis 条目共用 `MYBATIS` 来源，现拆出独立 `IBATIS` 来源（含中英文案），按来源展示/筛选可区分；旧历史条目里的 `MYBATIS` 值继续可读，不做迁移
-- **iBatis 文件识别器（T-Ibatis2Support 券 A，763885f6）**：按「根元素 `<sqlMap>` / DOCTYPE 的 8 条标识 / 工程 classpath 上的 `com.ibatis.sqlmap.client.SqlMapClient`」三选二判定，避免把 MyBatis 3 的 `<mapper>` 误判成 iBatis；无 DOCTYPE 的裸 `<sqlMap>`（iBatis 自己会因 DTD 校验失败而拒绝加载）与只命中单条信号的文件不判为 iBatis
-- **新增中兴 GoldenDB 方言（第 15 方言，文档级，未经真机引擎验证，MySQL 协议实例驱动级对照通过（非 GoldenDB 引擎验证）；T-GoldenDbDialect 券 A，7c5788fb / 7630fd0a / e2051bca）**：渲染形态依据《GoldenDB 开发支持 V6.1.03.10》p66/p73/p320——分页 `LIMIT [offset,] count`（0 起算）、反引号标识符、upsert `ON DUPLICATE KEY UPDATE`、`DELETE ... LIMIT` 文法级支持（p274/p276）；保留字词表按 PDF p351-355 三表并集落 384 词（含 `storagedb`/`chgdiskey`/`gdb_nolock` 等 GoldenDB 自有词与 `rownum`/`varchar2` 等 Oracle 兼容词，与 MySQL 词表差 147 词）。连接面已接全：`jdbc:goldendb://`（含 loadbalance 形态）URL→方言、列表角标显示 `GoldenDB`、MCP 识别（含中文名「金篆」归一）、执行目标路由。能力矩阵如实显示：EXPLAIN 行 false（PDF 有专章但输出格式未逐字取证，不登记模板）、UPSERT true、DELETE LIMIT true
-- **增强捕获支持 GoldenDB 驱动（T-GoldenDbDialect 券 B，acc522cf / bb987110）**：`gdb_mysql-connector-java-oracle-5.1.46.99.jar` 按 jar 真实字节登记三面——连接面 `com.goldendb.jdbc.NonRegisteringDriver`（`Driver` 自身不声明 `connect`，只登记 `Driver` 会零命中）+ `Driver`、语句面 `StatementImpl` / `PreparedStatement` / `ServerPreparedStatement` / `CallableStatement`、prepare 面 `ConnectionImpl`（四个语句类均通过「织入 → 隔离 loader 定义 → JVM 校验」字节层用例）；日志来源定位的框架帧跳过前缀同步补 `com.goldendb.`，来源位置不再指进驱动内部
-- **捕获状态栏新增「追赶中：落后 N 条」（T-SqlListCatchup 券 D，5bdefafc / d0c0c005 / 4766081c / 9a72c5e9）**：高并发抓取期间状态栏实时显示缓冲区尚未呈现的变更数，追平自动消失；归零防抖一拍，不闪烁。同批接入面板刷新逐拍耗时探针（环形 1024 样本，p50/p90/max 分布，空转开销约 0.2µs），后续性能调参有读数可依
-- **高并发抓取期 SQL 列表刷新卡顿大幅收敛（T-SqlListCatchup 券 E，9d760fa0 / c1764eaa / 4703ed64）**：拆拍探针定位真凶不在计数（增量计数仅 0.6~1.4ms）而在**贴底滚动触发 Swing 列表整表布局重扫**——每拍 27~31ms 重算全部行高，风暴期与刷新节流叠加把 EDT 占满、连带饿停控制台输出。现给列表渲染器加条目级 preferred size 缓存（按行身份键控、宽/模式/字体变化才作废），刷新单拍从实测 102~232ms 降到 7~9ms；同时「去重关闭 + 缓冲区恒满」场景下被挤出条目的 ⨉N 计数核销改为确定性增量（不再每拍全量回退），等价性由恒满异键风暴序列与全量重算逐键对账钉住
-
 ### Fixed
-- **PostgreSQL 等库执行预览 SQL 时只提交了 `TIMESTAMP` 一个词，报 42601（T-DateLiteralBackfill R10，用户真机）**：日期族改成 ANSI 类型字面量后，`AND 列 >= TIMESTAMP '…'` 这类长行被控制台折行，而 DBN 默认按「光标所在语句 / 选区」提交，光标正好落在以 `TIMESTAMP` 开头的折行片段上，于是把 `TIMESTAMP` 当独立语句发给库（PG 报 `syntax error at or near "TIMESTAMP"`，位置 1）；SQL 本身是合法的。现在**单语句预览整批提交**（`shouldExecWholeScript`：拆句数 ≤ 1 即整批）——单语句下「执行当前语句」与「整批执行」等价，整批提交绕开光标/选区变量；多语句预览（主 SQL + 分页 COUNT）与 SQL Server identity 包装产物维持原逻辑。执行计划（EXPLAIN）与回滚脚本执行同口径
-- **iBatis 文件点预览图标打开很慢（T-Ibatis2Support 券 0，04522885）**：慢的根因不在渲染，而在预览前的「源语言判定」——它拿 SQL 的 FROM 根标识符去反查实体类，而 iBatis 语句必然不带 `entityClass`、根标识符又是物理表名，于是每次都落到**全项目类短名的有界扫描**（上限 5000 个短名、跑在不可取消的读动作里，单次约 1 秒；该扫描此前有过 70 秒冻结 EDT 的事故记录）。现在两条 XML 预览链的同步判定只做「直查 + 只读别名缓存」，不再启动全项目扫描；判定函数本身零改动（`PagesSourceLanguage` 只补了注释），带 `entityClass` 的 pages 语句判定不变。**影响面大于 iBatis 用户**——凡是走通用兜底通道看纯 SQL 的文件都少付这笔钱。真机「秒开」观感待用户验收，本轮机器判据是「同步路径扫描次数归零」
-- **`<sqlMap>` 文件里 Alt+Shift+Q 空候选（T-Ibatis2Support 券 A 收尾，c587e911）**：兜底通道对 iBatis 语句让位（防与专用入口双图标）之后，快捷键的 XML 候选集只剩「MyBatis mapper 语句 + 兜底载体」两路，iBatis 语句两边都不在——gutter 图标正常、快捷键却列不出任何语句。现把三路来源收敛成单一判据并让三处消费点共用（光标上爬 / 全文件候选 / 选区候选），iBatis 的叶子语句、含 `<dynamic>` 的语句与 `<statement>` 都回到候选集
-- **运行期占位回填的两处错位：三元注释里的 `?` 被当成 JDBC 占位符、可选 if 片段填值重复或被拒（T-RuntimeSlotOptionalFill，用户沙盒验收）**：`listByTernaryBranch` 面板多出一个 `#param1`、填了不生效——JDBC 字符串预览用朴素 `count('?')` 数占位符，把三元占位注释里的 Java 问号也算成了 JDBC 占位符；现改用 string-aware 位点扫描（注释/字符串里的 `?` 不计），参数行只保留真实 `?`。`listByOptionalIf` 填 `keyword` 时占位留在字符串里不被替换、填 `minAmount` 时出现 `AND amount >=` 悬空行 + `AND amount >= 111` 重复行——可选 if 片段的 slot 原本只覆盖值位置、模板却覆盖整段片段；现改为「整段一个 slot」（token 与模板同覆盖整段），填值/取消包含/留空三条路径一致；一个片段含多个运行期值时回退为值位置模式并提示限制
-- **高并发抓取结束后，最后几条 SQL 可能要等下一次执行才上屏（T-SqlListCatchup 券 B2，47f762ef）**：风暴末尾不足一批（20 条）且落在通知节流窗内的变更，旧机制下不会再有任何触发点——缓冲区里有了、面板却不知道，追赶徽章也跟着滞留。现由面板诊断拍（2s）发现悬挂并补发通知，最迟 2 秒上屏
-- **去重开启时同一次执行出现两行：增强捕获一行 + 一行无耗时无角标的控制台行（T-SqlListCatchup 券 F1，f7c20f7b）**：跨通道折叠窗只有 5 秒且按墙钟惰性清除——控制台副本经平台冲刷延迟 >5s 才到时，agent 行的折叠键已被提前摘掉，两行并存。现折叠索引取消时间清除（键域仍随队列生命周期封顶），越窗到达的同源控制台行按 60s 兜底窗折回 agent 行（保耗时/角标全的字段、不计 ⨉N）；接管沿 grace 截断语义有守卫用例钉住不回破
-- **增强捕获的事件在高峰期被静默丢弃，用户无感知（T-SqlListCatchup 券 F2，bb5652ed / 2521991a）**：agent 侧事件队列容量 2048、满即丢且丢弃数不上报——高峰期大量语句信号无声消失。现丢弃数随心跳上报、状态栏增强段显示「已丢弃 N 条」（>0 才挂）；队列满时同语句模板聚合为最新一条并累加计数（协议向后兼容：聚合键仅 >1 时写出，旧版 IDE 忽略、新版读旧事件按 1 计），异模板才逐出最旧——信号降精度不丢失，发送侧保持非阻塞不碰宿主应用
-- **控制台清屏后 SQL 捕获静默数分钟（T-SqlListCatchup 券 G2，cc2d3606）**：平台的控制台清屏是同一文档实例原地删除——偏移从头重计，而重放守卫的水位还停在旧文档长度：清屏后的流式新行被持续误判为「重放」丢弃，直到新文档长度追平旧水位才恢复（控制台越大的工程静默越久）。现守卫先核对文档总长度，发现被缩小即核销陈旧水位按重置处理（长度不可得回退旧行为），四态判据设计不动
-- **Hikari 等 连接池代理被提示「未登记 JDBC 实现」（T-SqlListCatchup 券 G1，886a0d33）**：池包装类是代理层不是驱动，被兜底扫描当漏登记驱动曝光（Hikari 几乎人人用，提示常驻）。现按六前缀表（Hikari/c3p0/DBCP 1.x+2.x/Tomcat-JDBC/Druid）从曝光排除；捕获路径本就把包装语句解到内层真驱动语句登记（T-OracleWrapperRegistry 先例），织入面零变化
-- **Oracle 驱动的连接继承链被提示「未登记 JDBC 实现」（T-CatchAllFamilyFilter，4fdd7d5e）**：Oracle 把 `java.sql.Connection` 摊在五层继承链上（`OracleConnectionWrapper` → `OracleConnection` → `GeneratedPhysicalConnection` → `PhysicalConnection` → `T4CConnection`），白名单只登记真正声明 `prepareStatement`/`prepareCall` 的 `PhysicalConnection`，链上其余类因继承可见命中接口兜底后被当成「未登记驱动」记账——上报上限 8 条被这类包装层占满，真出现未知驱动时会被静默挤掉（用户现场 8 条里 3 条是它们）。现在与白名单类**同族**的类（白名单类的祖先，或白名单类出现在其父类链上）不再进该清单；织入与采集语义零变化——它们照旧兜底匹配、照旧被织入，只是不再占取证位
-- **高并发期捕获事件的投递速率被钉死在 ~64 条/秒（T-SqlListCatchup 券 H，0d50931d）**：agent 排水循环每轮最多排 64 条事件，随后读一次入站帧（带 1 秒超时的阻塞读）——而 agent→IDE 方向平时没有入站流量，等于每排 64 条干等 1 秒：风暴期队列持续灌满溢出丢弃，静默后尾巴按 64 条/秒慢慢排（表现为「已收事件一直在涨」）。现 burst 达上限时先 `available()` 探测入站数据，无数据零等待继续排水，队列排空才回长超时读——排水 512 条从 726ms 降到 31ms（≈23 倍），心跳节拍、CONFIG 看门狗、协议字节面三条语义有守卫用例钉住
-- **流量尖峰时被挤出的事件不再丢失「执行了多少次」（T-SqlListCatchup 券 I，27ec0173）**：事件队列（2048）满且没有同模板可合并时，此前直接逐出最旧事件并计入丢弃——被逐那条的「执行了 N 次」事实整体消失。现逐出时把模板与次数记入溢出账本（512 个模板封顶，内存 <1MB），发送线程排空队列后把账本转成聚合事件补发（协议不变，复用既有聚合计数字段）；真丢失收窄为「账本也满时的超限部分」，实测 520 种模板灌爆场景真丢失从 586 条降到 74 条。采集线程侧仍只做无锁计数，绝不阻塞宿主应用
+- **预览执行 INSERT/UPDATE/DELETE 成功却被报「等待结果超时」（T-PreviewDmlResult，67a574ab）**：数据库控制台对写语句**不建结果页签**，影响行数（`1 row affected in 60 ms`）只写进 Output 视图；插件原来的完成态判据只读 `historyViewer` 文档（真机实证该文档里只有 `Connected` 与 SQL 回显），于是 40 拍窗口到期后 `completed=false`，成功被归成「已提交执行，但等待结果超时」，用户面板里只剩原生 Output。现在按 DML/DDL 首关键字识别「结构上没有结果页签」的语句：提交后 8s、连接已就绪即给中性提示「已提交执行（更新/DDL 语句不产生结果页签），影响行数与耗时见下方控制台 Output」——措辞刻意不宣称「完成」，长事务仍在跑时不误导；40 拍判定侧同步不再把这类语句落超时归因。定向：`PreviewWriteStatementTest` 5 例（含反向验证：移除 `INSERT` 判据后 2 例转红）
 
 ### Changed
-- **SQL 日志列表风暴期刷新大幅降频（T-SqlListCatchup 券 A，7be82118）**：高并发抓取时每条 SQL 执行都会触发列表刷新，旧机制只在「上一拍在途」时合并，EDT 一空就刷下一拍——压测实测风暴期退化成每秒几十拍高频小刷新，每拍都全量重算计数。现在刷新加 150ms 时间窗下限：窗口内通知挂 Alarm 补刷一拍合并呈现，窗口外（含风暴后的第一条）仍立即刷，单条 SQL 秒显的日常体验不变。面板销毁/退订路径同步清理定时器，无泄漏
-- **列表 ⨉N 计数与同模板计数从每拍全量重算改为增量维护（T-SqlListCatchup 券 B，5a32e33d / 3440f739）**：去重计数、同结构计数此前每次刷新都从全量条目重算一遍；现由缓冲区推送「本拍变更了哪些键」，面板只按变更键增量对账，并保留六类兜底点（去重开关翻转、索引重建、清空、条目淘汰、去重关闭期变更、键上限溢出）自动回退全量，等价性由随机操作序列（3 种子 × 600 操作）与全量重算逐键对账用例钉住
+- **「门禁陈旧」读数的判据收口**：原判据是「链龄超 5s 仍进入即计一次」，会把「一条跑几十秒的语句内部再执行语句」这类**合法嵌套**误报成泄漏。现改为「链龄超 **30s** **且**同一链连续 **3** 次超阈值进入才计，同一链只计一次」——合法长语句内部的嵌套是个位数且随后闭合（depth 归零即清零），真泄漏的链一直不闭合、每条语句都以嵌套进入出现，连续次数持续累积。两个门槛可经 `sqlvis.agent.nestStaleMs` / `sqlvis.agent.nestStaleStreak` 覆盖；不改任何抑制语义。定向：`NestGateTest` 含新增「长事务合法嵌套不误报」与「连续三次只计一次、同链不重复计」两例
+
+## [2026.11.11-beta.2] - 2026-11-10
+
+> 内测（Gitee 抢先体验通道；Marketplace 不收内测包）。范围＝`2026.11.11-beta.1` 之后的用户可见增量：
+> **语句抛异常导致的「整类 SQL 消失」根治**与**门禁陈旧读数**。
+
+### Fixed
+- **「同一线程后续整类 SQL 突然不再上屏」现在有了确诊读数（T-NestGateObserve，8e85d397）**：增强捕获的嵌套门禁靠「深度最终归零」识别嵌套，磐维 A 模式驱动下会出现深度泄漏（某帧出口未配平），此后该线程每条语句都被当成外层静默抑制，而既有的「门禁抑制」计数对这种形态恒为 0。状态栏新增「门禁陈旧 N」（链龄超过阈值仍有新帧进入即计），debug 档另在宿主 stderr 打一次陈旧链摘要与调用栈（只一次、不含 SQL 原文），心跳带出 `nestStale` / `nestMaxDepth` 供现场判读。需要规避仍可用 `-Dsqlvis.agent.nestGate=false`
+- **「一条语句抛异常之后，该线程的 SQL 整类消失」已根治（T-NestGateFix，0fc3836c）**：根因在增强捕获的语句织入——原实现只在方法体里**显式出现**的返回点前插出口回调；语句执行抛异常、而异常是从被调方法逃逸时（方法体自身没有 try/catch），这条路径根本没有出口点：嵌套门禁的入口计数了、出口没执行，线程深度永久 +1，此后该线程每条语句都被当成外层静默抑制（现场形态正是「前几条正常，之后整类不上屏」，而门禁抑制计数恒为 0）。现在 timed 语句面（execute/executeQuery/executeUpdate/executeLargeUpdate/批处理）的方法体统一包一层 catch-all 出口：异常也走一次出口回调（因此失败语句本身会产一条带 errorText 的事件）再原样重抛，链深度立即归零。磐维 A 模式真机验证：失败 DROP 之后 INSERT/SELECT 照常产出，`nestStale` 0、`nestMaxDepth` 回到 1；金仓/达梦/PostgreSQL/磐维 V1·V2 等厂商类的织入产物全部通过 JVM 校验（无 VerifyError）
+
+## [2026.11.11-beta.1] - 2026-11-10
+
+> 内测（Gitee 抢先体验通道；Marketplace 不收内测包）。范围＝`2026.11.10` 正式版之后的用户可见增量：
+> **捕获静默路径可见化**、**两种日志形态补齐**、**方言登记面横向补齐**。本条目的四条 `Fixed` 即为本版全部内容。
+
+### Fixed
+- **抓不到某类 SQL 时不再「零信息」（T-PanweiInsertCapture，e2b0b581）**：用户报障「磐维库上 SQL 日志只出 SELECT、INSERT 一条不见」，现场排查暴露的是四条**完全没有读数**的静默丢弃路径——现在它们都在 SQL 日志页签底部状态栏可见：①增强捕获接管期间被让位丢弃的**可解析 SQL 行**（此前控制台明明有、面板就是没有，两条通道都不留痕）；②agent 出口组装异常被自吞的次数；③嵌套门禁抑制的外层帧数；④登记盲区按 PS 实现类点名（并与盲区总次数配对显示）。配合既有的「已收事件 N / 未登记 JDBC 实现」，现场可以一眼分出「没产事件」「产了被丢」「让位吃了」三种形态
+- **两种真实存在的日志形态此前整条丢失（e2b0b581）**：MyBatis 的 `statementType="STATEMENT"` 走 `SimpleStatementHandler`，只打 `==>  Executing: <sql>`（无 `Preparing:`、无 `Parameters:`），旧解析器接不住；iBatis 2.x 的普通 `Statement`（`createStatement()`）打的是 `{stmt-N} Statement: <sql>`，标记前缀与关键字都与 PreparedStatement 那档不同，旧解析器当噪声丢掉。两者现在都能产出条目（后者来源标记为 IBATIS）。严格前缀模式（关掉「启用混合前缀」）仍按原契约只认用户配置的前缀，未识别的 SQL 形态行会计入解析诊断增量
+- **iBatis 批处理不再无声消失（e2b0b581）**：iBatis 2.x 的 `BaseLogProxy` 只记录 execute/executeUpdate/executeQuery，批处理（`executeBatch`）在框架层**一行日志都不产生**，控制台通道结构性看不到。现在「已识别到 iBatis 形态且增强捕获未开启」时，状态栏给出具名提示（开启增强捕获后由 agent 的批处理形态兜住）
+- **三方数据库增强捕获的同类登记缺口（e2b0b581，横向审计）**：按真实驱动 jar 逐个 javap 核对后补齐——pg 家族 `PgCallableStatement`（7 个包名，函数模式 `executeUpdate` 走 `executeWithFlags` 分支会漏采）、MySQL 5.1 `CallableStatement`、华为两族兼容模式 `MPreparedStatement`（`addBatch(String)` 覆盖父类不回调，批文本漏记）、海量/社区 openGauss 的读写分离包装语句与其连接类（读写分离模式下整条连接的语句进不了登记表）、SQLite 四参 `prepareStatement` 重载实现类、华为两族 connect 面驱动类
+- **Mac / UOS 上点「执行 SQL」恒报「创建临时 SQL 文件失败：findPsi」（T-ExecPsiGate，87226496）**：执行用的临时 SQL 文件，其 PSI 语言由插件写的**文件级方言映射**决定。映射落到本机建不出 SQL PSI 的方言时（自注册方言的 parser definition 未生效、平台缺该方言、或历史版本留在 `workspace.xml` 里的坏映射），平台拿不到 PSI——非方言语言直接在方言替换器里抛 `ClassCastException`，方言类语言则让 `findFile` 返回 null；而 exec 链过去对映射失败**既没有闸门也没有日志**，用户只能看到笼统的 findPsi 报错。预览侧一直有「可建 PSI 门」（目标语言建不出 PSI 就跳过映射），exec 侧缺这一道，所以同一台机器预览正常、点执行必死。现在两条链共用同一道闸门：不建 PSI 就不写映射并清掉历史映射（退回平台默认），`findFile` 仍失败时再清映射重建一次；临时文件的 VFS 条目若已失效（同步盘 / 网络盘 / 外部替换的典型形态，平台对这种失效只返回 null），先重新定位取新条目再建 PSI，不再一次失败到底；失败文案改带 vf 有效性、文件类型、映射语言、该语言能否建 PSI 与绝对路径五项，映射没落地也一定有日志
+
+## [2026.11.10] - 2026-11-10
+
+> 范围＝v2026.11.8 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.9-beta.1` 与 `v2026.11.10-beta.1` ~ `beta.3` 四轮）：**iBatis 2.x 全面支持与交互补全**、**中兴 GoldenDB 第 15 方言**、**SQL 列表追赶与风暴期刷新优化**，以及两轮真机反馈驱动的 iBatis 缺陷修复。本节按能力面合并叙述并取代下方四轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 四篇内测说明：`20261109-1705` iBatis2 与 GoldenDB 与列表提速、`20261110-0300` iBatis 交互补全、`20261110-0930` 预览四项修复、`20261110-1140` 双向跳转与图标归位）。
+
+### Added
+- **iBatis 2.x 全面支持，含两条编辑期能力（T-Ibatis2Support + T-Ibatis2Gap，29a4a4be / e744b9d6 / 92c515ec / 367561f3 等）**：`<sqlMap>` 的语句预览（`#p#` 四态占位、14 个 `<isXxx>`、`<dynamic prepend>`、`<iterate>`、`<sql>/<include>`、`<selectKey>`，以官方 2.3.4.726 引擎做 20 形态逐字节黄金对照）、注入着色与折叠、关键字补全、DTD 随包内置（离线可用，包增约 9 KiB）、SQL 列表独立 `IBATIS` 来源。①**双向跳转**：XML 内部 id 引用（`include refid` / `resultMap` / `parameterMap` / `extends`）与「Java DAO ↔ XML 语句」双向软引用，Ctrl+B 与 Ctrl+Click 两个方向都通；让位门与 MyBatisCodeHelperPro **解耦**（竞品无 iBatis 能力，竞品在位时箭头照常显示）。②**预览参数可交互**：动态条件按行勾选、值可填、`<iterate>` 值列表，SQL 随填值变化；`parameterMap` 语句显示真实参数名（按位对齐，未消费声明单独透出）；降级改为结构化可见并分档（信息级 ℹ 与失败 ⚠ 分开）
+- **新增中兴 GoldenDB 方言（第 15 方言，T-GoldenDbDialect，7c5788fb / acc522cf）**：渲染形态依据《GoldenDB 开发支持 V6.1.03.10》——分页 `LIMIT [offset,] count`、反引号标识符、upsert `ON DUPLICATE KEY UPDATE`、`DELETE ... LIMIT`；保留字词表按官方 PDF 三表并集落 384 词。连接面接全（`jdbc:goldendb://` URL→方言、列表角标、MCP 归一、执行路由）；增强捕获按 jar 真实字节登记连接/语句/prepare 三面 + `com.goldendb.` 框架帧前缀。能力矩阵如实标注：**EXPLAIN 行 false（PDF 有专章但输出格式未逐字取证）**，UPSERT 与 DELETE LIMIT 为 true
+
+### Fixed
+- **iBatis 两轮真机反馈共六项（v2026.11.10-beta.2 / beta.3 段有逐条根因）**：`<selectKey>` 子语句不展示、占位符被格式化拆散、勾选填值后重渲染失败被静默吞掉、信息性说明混进红色失败行、DAO 调用行与方法定义行各多一枚点开没有 SQL 的预览图标、`#x:jdbcType#` 填值不带引号、XML 语句 `id` 上 Ctrl+Click 报「Cannot find declaration」（XML 侧从未接 GTD 管线）
+- **iBatis 文件点预览图标打开很慢（T-Ibatis2Support 券 0，04522885）**：慢在预览前的源语言判定——它拿 FROM 根标识符反查实体类，iBatis 语句必然落到全项目类短名的有界扫描（单次约 1 秒）。现两条 XML 预览链的同步判定只做直查 + 只读别名缓存，不再启动全项目扫描；影响面大于 iBatis 用户
+- **PostgreSQL 等库执行预览 SQL 只提交 `TIMESTAMP` 一个词报 42601（T-DateLiteralBackfill R10，用户真机）**：折行后光标落在以 `TIMESTAMP` 开头的片段上，DBN 按光标所在语句提交；现**单语句预览整批提交**，绕开光标与选区变量
+- **高并发抓取链路的四类静默故障与三处误报**：控制台清屏后捕获静默数分钟（重放守卫水位未随清屏重置）、高峰期事件被静默丢弃（丢弃数上报 + 同模板聚合）、投递速率被钉死在约 64 条/秒（排水免超时税，512 条 726ms→31ms）、风暴末尾最后几条要等下次执行才上屏（悬挂补刷）；Hikari 等连接池代理与 Oracle 驱动的连接继承链被误报「未登记 JDBC 实现」
+- **运行期占位回填两处错位（T-RuntimeSlotOptionalFill，用户沙盒验收）**：三元占位注释里的 Java 问号被当成 JDBC 占位符；可选 if 片段填值重复或被拒（改为整段一个 slot）
+
+### Changed
+- **SQL 列表风暴期刷新成本大幅下降（T-SqlListCatchup 券 A/B/E 等）**：刷新加 150ms 时间窗下限；⨉N 与同模板计数从每拍全量重算改增量维护（六类兜底点自动回退全量）；列表渲染器加条目级尺寸缓存，消除贴底滚动触发的整表布局重扫——刷新单拍从实测 102~232ms 降到 7~9ms；状态栏新增「追赶中：落后 N 条」
 
 ### Internal
-- **依赖本地容器的测试用例改走外指通道（T-DockerGateOffload，a7c924e2 / 95e107b1）**：五个容器用例改为「外指实例优先、容器兜底」，本机没有 Docker 时不再整类跳过；Docker 预检条款同步收窄为只在显式跑容器腿时生效
-- **GoldenDB 驱动长效注入测试 classpath（8fa413d9）**：`gdb_mysql-connector-java-oracle-5.1.46.99.jar` 按磐维口径进测试 classpath，字节层用例不再每次手挂
-- **iBatis 2.x 渲染保真以官方 2.3.4.726 引擎做黄金对照（券 B，29a4a4be）**：20 种语句形态不连库直取真值逐字节比对，包含 `prepend` 逐字拼接不补空格这类反直觉行为
+- 依赖本地容器的测试用例改走外指通道（T-DockerGateOffload）；GoldenDB 驱动长效注入测试 classpath；iBatis 2.x 渲染保真以官方引擎做黄金对照（20 种形态不连库直取真值逐字节比对）
 
 ## [2026.11.8] - 2026-11-07
 

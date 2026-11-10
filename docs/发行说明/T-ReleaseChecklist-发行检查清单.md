@@ -30,6 +30,8 @@
   2 条与 `update/preview.update.json` 的 `changeNotes` 逐字一致；红了改文案重提交，别往下走。
 - **为什么卡在建版之前**：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，发出去再发现只能 tag 前移 + 双通道重发。2026-11-09 实际发生——GitHub Release `438955517` / Gitee 发行版 `1290785` 带着全角括号文案上线，改文案后 tag 从 `65e03bae` 前移到 `f9c5b0c3` 并重跑门禁重发。
 - changeNotes / preview.update.json / CHANGELOG / 发行说明四处承担对外可见性；description 与市场页是纯能力陈列，不承担「最近更新」播报（2026-09-12 定案）。
+- **内测转正时删掉被正式版取代的内测块（2026-11-10 用户明确要求）**：正式版块一旦置顶，`gradle/plugin-change-notes.html` 里同批被吸收的 `<h2>v{版本}-beta.N</h2>` 块**不应继续存在**——用户口径「有正式版最新的了，beta 版本的就不应该存在了」；`CHANGELOG.md` 同批删掉对应的 `## [{版本}-beta.N]` 段（先例：`0692f222` 发 v2026.11.8 正式版时同时删了 `2026.11.8-beta.1` 两处）。**逐条细目靠 `docs/发行说明/` 的内测说明留档**，正式版块/段按能力面合并并在范围行指过去，别把内测块留在对外清单里。
+- **正式版的范围锚点＝上一个正式版的 tag，逐条核不重复（2026-11-10 用户指出重叠）**：`v2026.11.10` 的更新日志与 `v2026.11.8` 曾重叠两条（「日期族参数改用 ANSI 类型字面量」「2026.3 换源退化」——那两条是 11.8 的修复，却被写进了 11.10 的 changeNotes/发行说明/变更记录）。写 changeNotes、`CHANGELOG`、发行说明、`docs/变更记录.md` 四处之前，先 `git log {上一正式版tag}..HEAD --oneline` 拉清单，再对着上一版那四处的文案逐条比对；**只有本次提交范围内新修的才写进来**，同一任务族里的后续修复（如 `T-DateLiteralBackfill` 之后又修的「执行链只发 TIMESTAMP」）要写清是「后续修复」而不是重复上一版的条目。
 
 ### 1.2b 发布环境的审批口径（2026-11-09 改）
 
@@ -197,7 +199,7 @@
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。
-- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。
+- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。**上传成功 ≠ 公网已生效**：审核期内 `GET /api/plugins/33633/updates` 与插件页仍显示上一版（2026-11-10 实测：正式版已上传，端点仍是 2026.11.8），这是正常状态，别据此判「上传失败」；正式版的公网生效只认该端点出现新版本号。
 - [ ] RC-R7 回读断言：执行 §四，判据不满足不得勾选本清单任何「发布完成」项。
 
 ## 四、回读断言（T-RC-03，发布未完成的直接防线）

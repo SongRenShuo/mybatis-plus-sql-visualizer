@@ -1,0 +1,14 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+index e64e3cdf..ca04f0a9 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.kt
+@@ -316,7 +316,8 @@ object IbatisXmlPreviewService {
+             // <parameterMap> 声明了参数、体内却是手写 ? 或 # 未转 ? ——参数行留空但要明说原因（信息级）
+             noteWarnings.add(MpSqlVisualizerBundle.message("ibatis.preview.paramNamesUnavailable.warning"))
+         }
+-        val warningsForLine = if (failureWarnings.isEmpty()) noteWarnings else failureWarnings
++        // REVERSE-PROBE: 恢复「信息级说明与真失败合并成一行」的旧形态（锚：附带小修 两例必红其一）
++        val warningsForLine = failureWarnings + noteWarnings
+ 
+         return PreviewResult(
+             sql = sql,

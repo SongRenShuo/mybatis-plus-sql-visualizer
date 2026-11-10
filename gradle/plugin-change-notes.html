@@ -1,14 +1,24 @@
-<h2>v2026.11.9-beta.1</h2>
+<h2>v2026.11.11-beta.2</h2>
 <ul>
-    <li>iBatis 2.x 的 sqlMap 支持预览、着色、折叠与跳转，含 dynamic 标签的语句也有图标</li>
-    <li>iBatis 的 DTD 随插件内置，编辑器不再报「无法解析 DTD」</li>
-    <li>新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种</li>
-    <li>高并发抓取时 SQL 列表刷新不再卡顿，状态栏显示还剩多少条没上屏</li>
-    <li>控制台清屏后不再静默丢新行，几秒内自动恢复</li>
-    <li>捕获高峰期被挤出的事件会汇总上报，不再无声消失</li>
-    <li>PostgreSQL 执行预览 SQL 不再只发出 TIMESTAMP 一个词</li>
-    <li>Hikari、Oracle 连接类不再被当成「未登记 JDBC 实现」反复提示</li>
+    <li>一条语句抛异常之后，同一线程后续的 SQL 不再整片消失</li>
+    <li>出错的那条语句现在如实出现在列表里并标记错误，不再静默略过</li>
+    <li>状态栏新增「门禁陈旧」读数，嵌套门禁的异常状态可见</li>
     <li>好用的话，欢迎到 Marketplace 页评分留言</li>
+</ul>
+<h2>v2026.11.11-beta.1</h2>
+<ul>
+    <li>抓不到某类 SQL 时不再只有空白，状态栏会直接说明是让位丢弃、没产出，还是登记盲区</li>
+    <li>MyBatis 的 STATEMENT 语句与 iBatis 的普通 Statement 语句，日志现在都能识别</li>
+    <li>iBatis 批处理不产生日志这件事会在面板上说清楚，不再像插件坏了</li>
+    <li>pg 家族存储过程、华为兼容模式批处理、读写分离连接的增强捕获补齐</li>
+</ul>
+<h2>v2026.11.10</h2>
+<ul>
+    <li>iBatis 2.x 全面支持，sqlMap 的预览、着色、折叠、补全与双向跳转都到位，DTD 随插件内置、离线可用</li>
+    <li>iBatis 预览参数可填值，动态条件按行勾选、iterate 可填值列表，SQL 随填值变化</li>
+    <li>iBatis 语句 id 与 DAO 调用点之间的 Ctrl+B 与 Ctrl+Click 双向都通，装了别的跳转插件也不受影响</li>
+    <li>新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种</li>
+    <li>SQL 列表追赶与风暴期刷新优化，高并发抓取不再卡顿，控制台清屏后自动恢复</li>
 </ul>
 <h2>v2026.11.8</h2>
 <ul>
@@ -114,7 +124,7 @@
 </ul>
 <h2>v2026.10.26</h2>
 <ul>
-    <li>实体打包进 JAR/lib 模块且该模块无命名配置时，嵌入列前缀按查询宿主模块判定，@Embedded 不再丢前缀</li>
+    <li>实体打包进 JAR/lib 模块且该模块无命名配置时，嵌入列前缀按查询宿主模块判定，<code>@Embedded</code> 不再丢前缀</li>
     <li>嵌入列解析新增诊断日志，报障时可在 idea.log 按关键词定位判定链路</li>
 </ul>
 <h2>v2026.10.23</h2>
@@ -214,7 +224,7 @@
 </ul>
 <h2>v2026.10.6</h2>
 <ul>
-    <li>@Embedded 嵌入值对象识别补全，JPA 点路径覆写、Spring Data 形态与 prefix、MP 混合注解实体展平</li>
+    <li><code>@Embedded</code> 嵌入值对象识别补全，JPA 点路径覆写、Spring Data 形态与 prefix、MP 混合注解实体展平</li>
     <li>SQL 日志屏蔽，右键一键屏蔽保活心跳类 SQL，管理对话框支持结构匹配与拖拽缩放</li>
     <li>新增 OceanBase 与 openGauss 方言，方言扩至 11 种，执行计划与连接串推断同步支持</li>
     <li>通用 XML 内嵌 SQL 识别，自研框架自定义标签内的 SQL 与 HQL 可直接预览</li>
@@ -352,7 +362,7 @@
     <li>JOIN 图换用 IDEA 原生图框架</li>
     <li>JOIN 图渲染对齐 Database 原生显示图</li>
     <li>JOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线</li>
-    <li>非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览</li>
+    <li>非 Wrapper 预览快捷键贯通 + <code>@NamedQuery</code> 实体级预览</li>
     <li>SQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复</li>
     <li>SqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复</li>
 </ul>
@@ -371,7 +381,7 @@
     <li>JPA/Hibernate SQL 预览支持</li>
     <li>Hibernate/JPA SQL 日志捕获支持</li>
     <li>SQL→Java 反向子查询 JOIN 解析 + MConsumer 形态</li>
-    <li>JPA 分页修复（Pageable → LIMIT）+ @Query 路由优先</li>
+    <li>JPA 分页修复（Pageable → LIMIT）+ <code>@Query</code> 路由优先</li>
     <li>JPQL IN 子句三层修复 + 复制时剥离注释</li>
 </ul>
 <h2>v2026.8.20</h2>
@@ -412,7 +422,7 @@
     <li>三处图标统一优化 + 功能截图 5 张入库</li>
     <li>SQL→Java 右键预览高亮 + 快捷键可配置</li>
     <li>SQL→Java 调用形态按 MPJ 1.5.6 实证重写 + 性能修复</li>
-    <li>手动选择实体类 + AUTO 形态 @TableName 反查 + ? 占位符反向识别</li>
+    <li>手动选择实体类 + AUTO 形态 <code>@TableName</code> 反查 + ? 占位符反向识别</li>
 </ul>
 <h2>v2026.8.16</h2>
 <ul>

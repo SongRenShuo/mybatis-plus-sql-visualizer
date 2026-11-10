@@ -1703,6 +1703,9 @@ class SqlLogPanel(
                 // 「落后 N 条」。flushPendingNotify 走 notifyUi 合拍链，EDT 调用与既有生产线程同路径安全。
                 if (manager.entries.hasStalePendingNotify()) manager.entries.flushPendingNotify()
                 val am = AgentManager.getInstance(project)
+                // T-PanweiInsertCapture F2/F3：最近一次 agent 心跳上报（组装失败 / 门禁抑制 / 登记盲区），
+                // 留一个本地引用，避免状态栏每个字段各取一次原子读
+                val stats = cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest()
                 captureStatusLineText(
                     CaptureStatusLine(
                         capturing = true,
@@ -1723,6 +1726,20 @@ class SqlLogPanel(
                         // T-SqlListCatchup 券D：追赶读数（pendingNotifyCount 经一拍节流，>0 挂尾 =0 消失）
                         catchUpBehind = catchUpBadgeState
                             .onNextBeat(runCatching { manager.entries.pendingNotifyCount() }.getOrDefault(0)),
+                        // T-PanweiInsertCapture F1：让位期间被丢弃的可解析 SQL 行——「控制台明明有、
+                        // 面板就是没有」这类现场的唯一读数（此前两条通道都没有证据）
+                        suppressedSqlLines = manager.consoleBridge.suppressedSqlLines,
+                        // T-PanweiInsertCapture F2/F3：agent 侧三条静默路径的透出（组装失败 / 门禁抑制 /
+                        // 登记盲区）；旧版 agent 无这些键时恒 0，不挂段
+                        agentAssembleFailures = stats?.assembleFailures ?: 0L,
+                        agentNestSuppressed = stats?.nestSuppressed ?: 0L,
+                        // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数；正常嵌套恒 0）
+                        agentNestStale = stats?.nestStale ?: 0L,
+                        agentUnresolvedBlind = stats?.unresolvedBlind ?: 0L,
+                        agentBlindClasses = stats?.blindClasses ?: emptyList(),
+                        // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在「已识别到
+                        // iBatis 形态 且 增强捕获未开启」时提示（已开启时由 agent 侧的 BATCH 形态兜住）
+                        ibatisBatchHint = LogParseDiag.sawIbatisForm,
                     ),
                 )
             }.getOrNull()

@@ -127,12 +127,34 @@ internal class SqlMapConditionEvaluator(private val warn: (String) -> Unit = {})
             left = left.toString()
             right = right.toString()
         }
+        // T-Ibatis2Gap 券 A 的超集增强：Map 参数下取到的值是 String，而引擎按 `value1` 的声明类型
+        // （Map 值的运行时类 = String）换算后走**字典序**比较——`isGreaterThan("9", "18")` 会误判成立。
+        // 两侧都能解析为数值时改按 `BigDecimal.compareTo` 比较（兼容整数/小数/负数）；任一侧解析
+        // 失败（Date 字面量 / 布尔 / 非数字）→ 落回下方既有路径，既有非数值路径的结果零变化。
+        numericComparison(left, right)?.let { return it }
         return runCatching { (left as Comparable<Any?>).compareTo(right) }
             .getOrElse {
                 warn("比较失败（不可比）：${left.javaClass.name} vs ${right?.javaClass?.name}")
                 NOT_COMPARABLE
             }
             .toLong()
+    }
+
+    /**
+     * T-Ibatis2Gap 券 A：数值比较判定（null = 两侧不全是数值，走既有路径）。
+     *
+     * 判据是**两侧的字符串形态都能被 `BigDecimal` 解析**（先 trim，兼容整数/小数/负数/科学计数）；
+     * 引擎语义保真说明：真实引擎在「String 属性 vs compareValue」下确实走字典序（本链照抄过），
+     * 这是**预览交互层的有意超集**——Map 装配把用户输入一律放 String（`IbatisParamModelBuilder`），
+     * 不做数值增强则 `age=9` 勾 `isGreaterThan(18)` 会误判成立，产出与真实执行相反的 SQL。
+     * 保真对照集 `SqlMapFidelityTest` 的全部比较用例两侧同值或同为 Integer 类型，数值路径结果与
+     * 既有路径一致（20/20 读数不变，见券 A 报告）。
+     */
+    private fun numericComparison(left: Any, right: Any?): Long? {
+        if (right == null) return null
+        val leftNumber = runCatching { BigDecimal(left.toString().trim()) }.getOrNull() ?: return null
+        val rightNumber = runCatching { BigDecimal(right.toString().trim()) }.getOrNull() ?: return null
+        return leftNumber.compareTo(rightNumber).toLong()
     }
 
     /** 引擎 `ConditionalTagHandler.convertValue`（Date 掩码固定 `yyyy/MM/dd hh:mm:ss`）。 */

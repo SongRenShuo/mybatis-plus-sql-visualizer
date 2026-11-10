@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
+import cn.song.mybatisplus.visualizer.sql.canCreateSqlPsiFor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
@@ -498,35 +499,6 @@ internal fun SqlPreviewPanel.awaitPreviewPsiLanguage(
         if (System.nanoTime() >= deadline) return current
         Thread.sleep(10L)
     }
-}
-
-/**
- * T-PreviewPsiDialect：该语言能否建出 SQL PSI。
- *
- * 判据取自平台行为本身——`SqlParserDefinitionBase.createFile` 要求
- * `getFileNodeType().getLanguage()` 是 `SqlLanguageDialect`。所以直接查「当前生效的
- * ParserDefinition 的 file node type 绑定的语言是不是 SQL 方言」。平台内置方言
- * （MySQL / PostgreSQL / GenericSQL / SQL92）与补齐后的四个自注册方言都返回 true；
- * 只有回落到基语言 `SQL` 的实现返回 false。
- *
- * **刻意不静态引用 `com.intellij.sql.*`**：本文件属常驻加载面，DatabaseTools 是可选依赖，
- * 直接引用会让无 Database 插件的环境类加载失败。故按类名沿继承链判定。
- */
-internal fun canCreateSqlPsiFor(language: Any?): Boolean = runCatching {
-    val lang = language as? com.intellij.lang.Language ?: return false
-    val fileNodeLanguage = com.intellij.lang.LanguageParserDefinitions.INSTANCE
-        .forLanguage(lang).fileNodeType.language
-    isSqlLanguageDialectInstance(fileNodeLanguage)
-}.getOrDefault(false)
-
-/** 按类名沿父类链判断（`SqlLanguageDialect` 是抽象类，不是接口）。 */
-private fun isSqlLanguageDialectInstance(language: Any?): Boolean {
-    var c: Class<*>? = language?.javaClass
-    while (c != null) {
-        if (c.name == "com.intellij.sql.dialects.SqlLanguageDialect") return true
-        c = c.superclass
-    }
-    return false
 }
 
 /** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。 */

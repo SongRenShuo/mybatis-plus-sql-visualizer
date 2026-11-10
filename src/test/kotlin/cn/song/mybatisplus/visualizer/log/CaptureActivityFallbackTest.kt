@@ -58,6 +58,8 @@ class CaptureActivityFallbackTest {
     @After
     fun tearDown() {
         SqlCaptureGate.paused.set(false)
+        // T-PanweiInsertCapture F1：让位丢弃计数是进程级累计，用例间必须归零（否则「+1」判据漂移）
+        SqlCaptureGate.suppressedSqlLines.set(0L)
         CaptureActivityFallback.resetForTest()
         LogTimeCorrelator.clear()
         System.clearProperty(CaptureActivityFallback.ENABLED_PROP)
@@ -91,6 +93,37 @@ class CaptureActivityFallbackTest {
         assertEquals("解封后控制台桥应产出条目（双哑被打破）", 1, produced.size)
         assertTrue("解封态应为 true", CaptureActivityFallback.isActive())
         assertEquals("恰一次解封", 1L, CaptureActivityFallback.engagements.get())
+    }
+
+    /**
+     * T-PanweiInsertCapture F1：让位期间被丢弃的**可解析 SQL 行**必须计数。
+     *
+     * 真机形态（本次报障）：agent 只采到 SELECT（`everReceivedAgentEvent` 已置真），INSERT 那条
+     * 标准形态的控制台行留在控制台里；桥按让位语义丢弃——此前这条路径**零读数**，用户与支持方都
+     * 看不到「有 SQL 行被让位吃掉」。本用例钉三件事：按语句计一次（不是每个挂起行都计）、噪声行不计、
+     * 计数单调递增。
+     *
+     * 反向验证：摘掉 `processConsoleLine` 让位分支里的 `suppressedSqlLines.incrementAndGet()`，本用例必红。
+     */
+    @Test
+    fun `让位期间丢弃的可解析SQL行按语句计一次`() {
+        beginDoubleSilence()
+        val ctx = newCtx()
+        // 真机状态：本纪元已收到过 agent 事件（SELECT 已进面板）→ 回落永久否决
+        CaptureActivityFallback.onAgentEvent(now)
+        val before = SqlCaptureGate.suppressedSqlLines.get()
+
+        processConsoleLine(prep("INSERT INTO t (a) VALUES (?)"), ctx, null, {})
+        assertEquals("Preparing 行只挂起、不产条目 → 不计", before, SqlCaptureGate.suppressedSqlLines.get())
+        processConsoleLine(params("1(Integer)"), ctx, null, {})
+        assertEquals(
+            "Parameters 闭合出条目时计一次（按语句，不按行）",
+            before + 1,
+            SqlCaptureGate.suppressedSqlLines.get(),
+        )
+
+        processConsoleLine("2026-11-10 14:05:33 INFO 应用启动完成", ctx, null, {})
+        assertEquals("噪声行不得计入", before + 1, SqlCaptureGate.suppressedSqlLines.get())
     }
 
     /**

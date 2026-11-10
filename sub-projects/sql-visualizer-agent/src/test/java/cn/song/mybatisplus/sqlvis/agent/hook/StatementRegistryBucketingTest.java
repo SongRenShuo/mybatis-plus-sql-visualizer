@@ -121,4 +121,25 @@ public class StatementRegistryBucketingTest {
         done.await();
         assertEquals("并发锤击不得丢登记/串账/抛异常", false, failed.get());
     }
+
+    /**
+     * T-PanweiInsertCapture F3：盲区按 PS 实现类聚合（去重 + 有界）。
+     *
+     * <p>现场价值：真机「同一秒 SELECT 进面板、INSERT 不进」时，唯一的实例级解释是这条 PS 在
+     * 登记表里查不到；此前只有总数与 debug 级别的首条类名，无法判断「是哪一类语句对象」。
+     */
+    @Test
+    public void 盲区按类聚合_去重且有界() {
+        final Object first = new Object();
+        final Object second = new Object();
+        StatementRegistry.getOrCountUnresolved(first);
+        StatementRegistry.getOrCountUnresolved(second);
+
+        final List<String> names = StatementRegistry.blindClassNames();
+        assertEquals("同类多次盲区只记一个类名", 1, names.size());
+        assertEquals("类名必须是实际 PS 实现类", Object.class.getName(), names.get(0));
+        assertEquals("盲区累计按次数计", 2L, StatementRegistry.unresolvedCount());
+        assertEquals("上报上限与 unreg 同款（8）", 8, StatementRegistry.MAX_BLIND_CLASSES);
+        assertEquals("登记在册的语句不产生盲区", null, StatementRegistry.get(first));
+    }
 }

@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.9-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.9-beta.1/mybatis-plus-sql-visualizer-2026.11.9-beta.1.zip",
-  "changeNotes": "iBatis 2.x 的 sqlMap 支持预览、着色、折叠与跳转，含 dynamic 标签的语句也有图标\niBatis 的 DTD 随插件内置，编辑器不再报「无法解析 DTD」\n新增中兴 GoldenDB 方言，连接、角标与增强捕获已接全，方言总数达 15 种\n高并发抓取时 SQL 列表刷新不再卡顿，状态栏显示还剩多少条没上屏\n控制台清屏后不再静默丢新行，几秒内自动恢复\n捕获高峰期被挤出的事件会汇总上报，不再无声消失\nPostgreSQL 执行预览 SQL 不再只发出 TIMESTAMP 一个词\nHikari、Oracle 连接类不再被当成「未登记 JDBC 实现」反复提示\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-09",
+  "version": "2026.11.11-beta.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.11-beta.2/mybatis-plus-sql-visualizer-2026.11.11-beta.2.zip",
+  "changeNotes": "一条语句抛异常之后，同一线程后续的 SQL 不再整片消失\n出错的那条语句现在如实出现在列表里并标记错误，不再静默略过\n状态栏新增「门禁陈旧」读数，嵌套门禁的异常状态可见",
+  "publishDate": "2026-11-10",
   "sinceBuild": "243"
 }

@@ -1,0 +1,38 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+index 39045662..a3034df2 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+@@ -71,6 +71,14 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
+         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+         // T-Ibatis2Gap 收尾：竞品无 iBatis 能力、无图标冲突，刻意不让位（理由见类 KDoc；
+         // 恢复让位的反证锚 = IbatisNavigationLineMarkerProvidersTest 的竞品在位用例）
++        if (gutterState != null &&
++            MyBatisCompetitorGate.shouldYield(
++                gutterState.mapperNavYieldToCodeHelper,
++                MyBatisCompetitorGate.isPeerPluginActive(),
++            )
++        ) {
++            return
++        }
+         elements.mapNotNullTo(result, ::createMarker)
+     }
+ 
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+index 817f02fe..8eb6d9ef 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt
+@@ -74,6 +74,14 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
+         if (!GutterGroups.enabledFor(javaClass, gutterState)) return
+         // T-Ibatis2Gap 收尾：竞品无 iBatis 能力、无图标冲突，刻意不让位（理由见类 KDoc；
+         // 恢复让位的反证锚 = IbatisNavigationLineMarkerProvidersTest 的竞品在位用例）
++        if (gutterState != null &&
++            MyBatisCompetitorGate.shouldYield(
++                gutterState.mapperNavYieldToCodeHelper,
++                MyBatisCompetitorGate.isPeerPluginActive(),
++            )
++        ) {
++            return
++        }
+         elements.mapNotNullTo(result, ::createMarker)
+     }
+ 

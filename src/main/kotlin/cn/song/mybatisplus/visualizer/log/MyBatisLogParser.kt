@@ -127,6 +127,21 @@ class MyBatisLogParser(
         // 分支 0（券 A/B）：iBatis 2.x 标记行——命中即消费并返回，绝不落到下方用户配置前缀分支
         if (feedIbatis(bucket, line)) return
 
+        // 分支 0.5（T-PanweiInsertCapture F4）：MyBatis `SimpleStatementHandler` 形态
+        // `==>  Executing: <sql>`（mapper 上 statementType="STATEMENT"）。
+        // 该形态**没有** `Preparing:`、也没有 `Parameters:`（MyBatis 直接拼 SQL），故命中即整条产出，
+        // 不进 pending 态。只在 mixedPrefix（宽容匹配，默认）时生效——`mixedPrefix=false` 的契约是
+        // 「只认用户配置的行首前缀」，硬塞内建形态会破坏它（该形态下按未识别行计数，见分支 7）。
+        if (mixedPrefix) {
+            val execSql = extractAfterKeyword(line, EXECUTING_KEYWORD)
+            if (execSql != null && execSql.isNotEmpty()) {
+                flushIbatis()          // 与分支 1 同序：先闭合 iBatis 挂起参数组
+                closePending(bucket)   // 再闭合上一条未完成的 MyBatis 语句
+                emitEntry(execSql.take(maxParseLength), line, emptyList())
+                return
+            }
+        }
+
         // 分支 1：Preparing 行（有 SQL 同行）
         val sql = extractAfterKeyword(line, sqlPrefix)
         if (sql != null) {
@@ -217,23 +232,58 @@ class MyBatisLogParser(
         }
 
         // 分支 7：噪声行（与旧行为一致）
+        //
+        // T-PanweiInsertCapture F7：SQL 形态行落到这里 = **有日志但没被任何分支识别**——最典型的就是
+        // `mixedPrefix=false`（只认用户配置的行首前缀）时的 MyBatis `Executing:` 行。计数随增量诊断行
+        // 上报，让「某类语句整类不见」至少留下「有 N 行 SQL 没被识别」这一条证据。
+        //
+        // 只查 `Executing:` 一个关键字：`{pstm-`/`{conn-`/`{stmt-` 三种标记行在分支 0 已被无条件消费
+        // （feedIbatis 的 else 分支恒 return true），走不到这里；对它们再做 contains 是纯浪费。
+        if (line.contains(EXECUTING_KEYWORD)) {
+            LogParseDiag.unrecognizedSqlLine.incrementAndGet()
+        }
     }
 
-    // ---------- iBatis 2.x 标记行（券 A/B） ----------
+    // ---------- iBatis 2.x 标记行（券 A/B；T-PanweiInsertCapture F5 扩 `{stmt-N}`） ----------
 
     /**
-     * 处理带 `{pstm-N}` / `{conn-N}` 标记的行；返回 true 表示**本行已被消费**（调用方须立即返回）。
+     * 处理带 `{pstm-N}` / `{conn-N}` / `{stmt-N}` 标记的行；返回 true 表示**本行已被消费**（调用方须立即返回）。
      *
      * 廉价前置一次 `contains`：MyBatis/Hibernate 日志行在热路径上（每行每解析器调用）零正则开销。
+     *
+     * **T-PanweiInsertCapture F5**：`{stmt-N}` 是 iBatis `StatementLogProxy` 的标记（plain `Statement`，
+     * 由 `Connection.createStatement()` 产生），文案是 `Statement: <sql>`——与 PreparedStatement 的
+     * `{pstm-N} Executing Statement:` **标记前缀与关键字都不同**。此前只查 `{pstm-`/`{conn-`，
+     * 这类语句落到噪声档被静默丢弃（iBatis 源码 `StatementLogProxy.invoke` 实证）。
      */
     private fun feedIbatis(bucket: Bucket, line: String): Boolean {
-        if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)) return false
+        if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX) &&
+            !line.contains(STMT_MARKER_PREFIX)
+        ) {
+            return false
+        }
         val marker = IBATIS_MARKER.find(line) ?: return false
         val id = marker.groupValues[2]
+        val kind = marker.groupValues[1]
         val rest = line.substring(marker.range.last + 1).trim()
-        if (marker.groupValues[1] == CONN_KIND) {
+        // T-PanweiInsertCapture F6：本会话出现过 iBatis 形态 → 批处理不可见提示的触发条件之一
+        LogParseDiag.sawIbatisForm = true
+        if (kind == CONN_KIND) {
             // `{conn-N} Preparing Statement: <sql>`（及 conn 的其它行）只消费不产条目（D-2）
             if (rest.startsWith(IBATIS_PREPARING_STATEMENT)) flushIbatis()
+            return true
+        }
+        if (kind == STMT_KIND) {
+            // T-PanweiInsertCapture F5：`{stmt-N} Statement: <sql>`——plain Statement 的执行行。
+            // 它**没有** Parameters/Types 行（参数由调用方直接拼进 SQL），命中即整条产出。
+            if (rest.startsWith(IBATIS_STATEMENT)) {
+                closePending(bucket) // 与 onIbatisExecuting 同序：先闭合上一条未完成语句
+                val sql = rest.removePrefix(IBATIS_STATEMENT).trim()
+                if (sql.isNotEmpty()) {
+                    emitEntry(sql.take(maxParseLength), line, emptyList(), SqlSource.IBATIS)
+                }
+            }
+            // 其余带 stmt 标记的行（Closing statement 等）只消费不产条目
             return true
         }
         return when {
@@ -432,20 +482,41 @@ class MyBatisLogParser(
 
         // ---------- iBatis 2.x 标记（券 A/B） ----------
 
-        /** 廉价前置判据（两次 indexOf 即可挡掉 MyBatis/Hibernate 行，不跑正则）。 */
+        /** 廉价前置判据（三次 indexOf 即可挡掉 MyBatis/Hibernate 行，不跑正则）。 */
         private const val PSTM_MARKER_PREFIX = "{pstm-"
         private const val CONN_MARKER_PREFIX = "{conn-"
 
-        /** 标记种类分组值：`{conn-N}` 只消费不产条目，其余（pstm）走语句状态机。 */
+        /** T-PanweiInsertCapture F5：iBatis `StatementLogProxy` 的标记（plain `Statement`）。 */
+        private const val STMT_MARKER_PREFIX = "{stmt-"
+
+        /** 标记种类分组值：`{conn-N}` 只消费不产条目，`{stmt-N}` 走 plain Statement 分支，pstm 走三行组。 */
         private const val CONN_KIND = "conn"
+        private const val STMT_KIND = "stmt"
 
         private const val IBATIS_EXECUTING_STATEMENT = "Executing Statement:"
         private const val IBATIS_PREPARING_STATEMENT = "Preparing Statement:"
         private const val IBATIS_PARAMETERS = "Parameters:"
         private const val IBATIS_TYPES = "Types:"
 
-        /** iBatis JDBC 日志代理的实例计数器标记：`{pstm-100021}` / `{conn-100022}`。 */
-        private val IBATIS_MARKER = Regex("""\{(pstm|conn)-(\d+)\}""")
+        /**
+         * T-PanweiInsertCapture F5：iBatis plain `Statement` 的执行行关键字（`{stmt-N} Statement: <sql>`）。
+         * 与 [IBATIS_EXECUTING_STATEMENT] 的差别是**两个词都不同**（标记前缀 `stmt` + 关键字 `Statement:`），
+         * 源码依据 `StatementLogProxy.invoke`。
+         */
+        private const val IBATIS_STATEMENT = "Statement:"
+
+        /**
+         * T-PanweiInsertCapture F4：MyBatis `StatementLogger` 的固定文案（`SimpleStatementHandler`，
+         * 即 mapper 上 `statementType="STATEMENT"`）。`mybatis-3.5.19` 字节码实证：常量池
+         * `ldc // String  Executing:`，前缀 `==> ` 由 `BaseJdbcLogger` 拼出，故按关键字定位、不认前缀。
+         *
+         * 与 `Preparing:` 的关系：`MappedStatement` 的 `statementType` 二选一，同一次执行不会同时出现
+         * 两种行；万一出现，由 `LogSqlEntryBuffer` 既有同 SQL 去重折叠（⨉N），本解析器不另设折叠。
+         */
+        private const val EXECUTING_KEYWORD = "Executing:"
+
+        /** iBatis JDBC 日志代理的实例计数器标记：`{pstm-100021}` / `{conn-100022}` / `{stmt-100023}`。 */
+        private val IBATIS_MARKER = Regex("""\{(pstm|conn|stmt)-(\d+)\}""")
 
         /**
          * Hibernate 参数绑定行模式：`binding parameter [N] as [TYPE] - [VALUE]`

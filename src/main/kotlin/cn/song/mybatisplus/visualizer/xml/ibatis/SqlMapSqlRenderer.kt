@@ -1,5 +1,64 @@
 package cn.song.mybatisplus.visualizer.xml.ibatis
 
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
+import cn.song.mybatisplus.visualizer.util.FatalErrors
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+
+/**
+ * 渲染降级的失败原因分类（T-Ibatis2Gap 券 D）。
+ *
+ * **没有 UNKNOWN_TAG**：未知标签在解析期就被 [SqlMapScriptBuilder] 降级成文本节点收下
+ * （「原文保留 + 告警」），根本到不了渲染抛错点；给它留档位只会造出一个永远走不到的分支
+ * （`convention.EnumReachabilityGuardTest` 的零产出守卫会红）。
+ */
+enum class IbatisRenderFailureKind {
+    /** `<iterate>` 的 property 取值不是集合/数组/迭代器（引擎 `SqlMapException`；无参基线下这是「待填值」态，不是错误）。 */
+    ITERATE_NOT_COLLECTION,
+
+    /** 引擎同样硬失败的渲染期错误（如 iterate 迭代上下文缺失等内部不变量被破坏）。 */
+    RENDER_ERROR,
+
+    /** 其余意外异常（渲染器外部的解析/配置问题）。 */
+    PARSE_ERROR,
+}
+
+/**
+ * 券 D：降级时「哪个顶层节点之后开始未渲染」的结构化事实。
+ *
+ * 位置口径：解析器（DOM）没有保留原文行号/偏移，故只给**失败节点在 [IbatisStatement.body] 顶层
+ * 的位置（0 基）**——即「第 N 个顶层节点（含其后全部内容）未渲染」。渲染到此节点前已写入的
+ * 输出与既有回退拼装（顶层文本节点）口径一致。
+ */
+data class IbatisUnrenderedNode(
+    /** 失败的顶层标签名；顶层文本节点抛错时为 null（文本节点路径 token 解析只告警不抛，实践中不会出现）。 */
+    val tagName: String?,
+    /** 失败节点在 [IbatisStatement.body] 顶层的位置（0 基）。 */
+    val topNodeIndex: Int,
+    /** 失败原因分类（UI 分档显示：ITERATE_NOT_COLLECTION = 待填值，不是错误）。 */
+    val reason: IbatisRenderFailureKind,
+    /** 失败涉及的属性名（来自抛点：`<iterate property="ids">` 的 `ids`）——供 UI 提示「该语句需要此参数」。 */
+    val property: String? = null,
+    /** 引擎/渲染器的原始错误消息（可回溯）。 */
+    val message: String? = null,
+)
+
+/**
+ * 券 D：`<iterate>` 取值非集合的分类载体。
+ *
+ * 抛点在 [SqlMapSqlRenderer.startIterate]——那里已知标签与 property，包一层才能把
+ * 「取值不是集合」升级成可分类（ITERATE_NOT_COLLECTION）与可出分档文案的形态；
+ * 上层（`renderBody` 的顶层回退）据此填 [IbatisUnrenderedNode.reason] / [IbatisUnrenderedNode.property]。
+ *
+ * 直接继承 `RuntimeException` 而不是 `IbatisRenderException`：后者是 final 类，而本车道写集
+ * 约束 `IbatisModel.kt` 只许给 `IbatisRenderResult` 追加字段；分类走 [classifyFailure] 的
+ * `is` 判定型分支，不依赖类型层级。
+ */
+class IbatisIterateNotCollectionException(
+    /** `<iterate property="...">` 的 property 原值（可为 null——无 property 时取参数对象本身）。 */
+    val property: String?,
+    message: String,
+) : RuntimeException(message)
+
 /**
  * iBatis 2.x SQL 渲染器（T-Ibatis2Support 券 B 主体）。
  *
@@ -59,10 +118,18 @@ class SqlMapSqlRenderer {
         val warnings = ArrayList<String>(statement.warnings)
         val warn: (String) -> Unit = { warnings.add("语句 [${statement.id}]：$it") }
         val mapped = ArrayList<IbatisParamMapping>()
+        // 券 D：降级事实收集器——renderBody 抛错时由顶层节点循环填入，回退拼装本身不变
+        val unrendered = ArrayList<IbatisUnrenderedNode>()
+        // 券 C：parameterMap 声明了、但语句体参数位点没消费到的映射
+        val unusedDeclared = ArrayList<IbatisParamMapping>()
 
-        val body = runCatching { renderBody(statement, params, mapped, warn) }
+        var failureKind: IbatisRenderFailureKind? = null
+        val body = runCatching { renderBody(statement, params, mapped, warn, unrendered, unusedDeclared) }
             .getOrElse { error ->
-                warn("渲染降级（按原文保留 # 直替，参数名不可知）：${error.message}")
+                val kind = classifyFailure(error)
+                failureKind = kind
+                // 券 D：文案按失败形态分档——禁止再产出与事实不符的「按原文保留 # 直替」
+                warn(degradedWarning(kind, unrendered.firstOrNull(), error))
                 statement.body.filterIsInstance<IbatisTextNode>().joinToString(separator = "") { it.text }
             }
 
@@ -86,6 +153,9 @@ class SqlMapSqlRenderer {
             dollarRenderedValues = dollars.renderedValues,
             usedStatementIds = listOf(statement.id),
             usedSqlFragmentIds = statement.usedSqlFragmentIds,
+            degraded = failureKind != null,
+            unrenderedNodes = unrendered.toList(),
+            unusedDeclaredParams = unusedDeclared.toList(),
         )
     }
 
@@ -115,13 +185,39 @@ class SqlMapSqlRenderer {
         params: Any?,
         mapped: MutableList<IbatisParamMapping>,
         warn: (String) -> Unit,
+        unrendered: MutableList<IbatisUnrenderedNode>,
+        unusedDeclared: MutableList<IbatisParamMapping>,
     ): String {
-        if (!statement.isDynamic) return renderStatic(statement, mapped, warn)
+        if (!statement.isDynamic) return renderStatic(statement, mapped, warn, unusedDeclared)
         val ctx = IbatisTagContext()
         // 顶层片段写进本方法的缓冲（引擎里就是 SqlTagContext 自己的 StringWriter）；
         // 嵌套标签各自用独立缓冲，处理完 doEndFragment/doPrepend 后才条件性地写回父缓冲。
         val out = StringBuilder()
-        processBodyChildren(ctx, params, statement.body, out)
+        // 券 D：按顶层节点逐个求值——任一节点抛错时，把「失败的是哪个顶层节点、为什么」记成
+        // 结构化事实再原样上抛（回退拼装仍由 render() 的 getOrElse 负责，这里不改产出逻辑）。
+        for ((index, child) in statement.body.withIndex()) {
+            try {
+                when (child) {
+                    is IbatisTextNode -> appendText(ctx, child, out)
+                    is IbatisTagNode -> processTag(ctx, params, child, out)
+                    else -> Unit
+                }
+            } catch (e: Throwable) {
+                // 禁用 API 守卫口径（BannedApiScanRuleTest）：fatal 一律立即透传，不落「未渲染节点」事实——
+                // OOM/栈溢出不是某个标签渲染失败，把它记成渲染事实既误导又可能二次OOM。
+                if (FatalErrors.isFatal(e)) throw e
+                unrendered.add(
+                    IbatisUnrenderedNode(
+                        tagName = (child as? IbatisTagNode)?.kind?.tagName,
+                        topNodeIndex = index,
+                        reason = classifyFailure(e),
+                        property = (e as? IbatisIterateNotCollectionException)?.property,
+                        message = e.message,
+                    ),
+                )
+                throw e
+            }
+        }
         mapped.addAll(ctx.parameterMappings)
         ArrayList(ctx.warnings).forEach(warn)
         return out.toString()
@@ -132,6 +228,7 @@ class SqlMapSqlRenderer {
         statement: IbatisStatement,
         mapped: MutableList<IbatisParamMapping>,
         warn: (String) -> Unit,
+        unusedDeclared: MutableList<IbatisParamMapping>,
     ): String {
         val raw = statement.body
             .filterIsInstance<IbatisTextNode>()
@@ -139,8 +236,26 @@ class SqlMapSqlRenderer {
         val declared = statement.parameterMap
         if (declared != null) {
             // 引擎的 if (parameterMap == null) 守卫：原样保留 `#`，只做 \r\n 归一（制表符保留）
-            declared.parameters.forEach { parameter ->
+            //
+            // 券 C（参数名按位对齐）：这类语句体的绑定语义是**按位置**把 parameterMap 的映射依序
+            // 绑到语句体的参数位点（手写 `?`，或 `#x#` 原样保留形态下的内联参数对）上。故
+            // paramNames 只取**前 N 个**声明映射（N = string-aware 位点数），剩余映射不丢——
+            // 透出 unusedDeclaredParams 供 UI 提示「声明了但未消费」。位点数多于声明数时全部
+            // 声明都被消费（与保真对照 oracle 一致：oracle 返回全部声明映射）。
+            val siteCount = countParameterSites(raw)
+            declared.parameters.take(siteCount).forEach { parameter ->
                 mapped.add(
+                    IbatisParamMapping(
+                        propertyName = parameter.property,
+                        jdbcTypeName = parameter.jdbcType,
+                        nullValue = parameter.nullValue,
+                        javaTypeName = parameter.javaType,
+                        mode = parameter.mode,
+                    ),
+                )
+            }
+            declared.parameters.drop(siteCount).forEach { parameter ->
+                unusedDeclared.add(
                     IbatisParamMapping(
                         propertyName = parameter.property,
                         jdbcTypeName = parameter.jdbcType,
@@ -285,7 +400,12 @@ class SqlMapSqlRenderer {
         } else {
             collection = params
         }
-        val iterate = IbatisIterateContext(collection, tag, parentIterate)
+        val iterate = try {
+            IbatisIterateContext(collection, tag, parentIterate)
+        } catch (e: IbatisRenderException) {
+            // 抛点已知标签与 property——包成可分类异常（券 D：ITERATE_NOT_COLLECTION 分档 + property 透出）
+            throw IbatisIterateNotCollectionException(tag.property, e.message ?: "iterate 取值不是集合")
+        }
         iterate.property = prop ?: ""
         ctx.setAttribute(tag, iterate)
         ctx.pushIterateContext(iterate)
@@ -371,6 +491,74 @@ class SqlMapSqlRenderer {
         SqlMapConditionEvaluator { ctx.warnings.add(it) }
 
     // ------------------------------------------------------------------ 工具
+
+    /** 券 D：抛错 → 失败原因分类（枚举三个常量的唯一产出点，`EnumReachabilityGuardTest` 口径）。 */
+    private fun classifyFailure(error: Throwable): IbatisRenderFailureKind = when (error) {
+        is IbatisIterateNotCollectionException -> IbatisRenderFailureKind.ITERATE_NOT_COLLECTION
+        is IbatisRenderException -> IbatisRenderFailureKind.RENDER_ERROR
+        else -> IbatisRenderFailureKind.PARSE_ERROR
+    }
+
+    /** 券 D：按失败形态分档的降级告警文案（bundle 三键，中英双份；禁出现「按原文保留 # 直替」）。 */
+    private fun degradedWarning(
+        kind: IbatisRenderFailureKind,
+        firstUnrendered: IbatisUnrenderedNode?,
+        error: Throwable,
+    ): String = when (kind) {
+        IbatisRenderFailureKind.ITERATE_NOT_COLLECTION ->
+            MpSqlVisualizerBundle.message(
+                "ibatis.render.degrade.iterateNotCollection",
+                (error as? IbatisIterateNotCollectionException)?.property ?: "",
+            )
+        else -> {
+            val tag = firstUnrendered?.tagName
+            if (tag != null) {
+                MpSqlVisualizerBundle.message("ibatis.render.degrade.abortedAtTag", tag)
+            } else {
+                MpSqlVisualizerBundle.message("ibatis.render.degrade.abortedUnknown")
+            }
+        }
+    }
+
+    /**
+     * 券 C：语句体的参数位点数 = string-aware `?`（复用 `sql/PlaceholderPositions.kt` 的既有口径，
+     * 字符串/注释里的 `?` 不算）+ 内联 `#x#` 对数（`parameterMap` 守卫分支 `#` 原样保留，成对出现
+     * 即一个参数位点；`##` 转义字面量与字符串内的 `#` 不算）。
+     */
+    private fun countParameterSites(text: String): Int =
+        placeholderPositions(text).size + inlineHashPairCount(text)
+
+    /** 内联 `#x#` 参数对计数（string-aware；`##` 转义按两个字面量 `#` 跳过；未闭合残段不成对不计数）。 */
+    private fun inlineHashPairCount(text: String): Int {
+        var inString = false
+        var hashCount = 0
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (inString) {
+                if (c == '\'') {
+                    if (i + 1 < text.length && text[i + 1] == '\'') {
+                        i += 2
+                        continue
+                    }
+                    inString = false
+                }
+            } else {
+                when {
+                    c == '\'' -> inString = true
+                    c == '#' -> {
+                        if (i + 1 < text.length && text[i + 1] == '#') {
+                            i += 2
+                            continue
+                        }
+                        hashCount++
+                    }
+                }
+            }
+            i++
+        }
+        return hashCount / 2
+    }
 
     /** 引擎的 `bodyContent.toString().trim().length() > 0`——Java `trim()` 剔的是 `<= ' '`，非 `isWhitespace`。 */
     private fun hasContent(body: StringBuilder): Boolean =

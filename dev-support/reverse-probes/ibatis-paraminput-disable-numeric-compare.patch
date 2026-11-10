@@ -1,0 +1,12 @@
+# -*- 反证补丁：摘掉数值比较增强（恒走既有字典序路径）——"9" vs "18" 误判回归 -*-
+# 期望：SqlMapConditionEvaluatorTest 数值增强族 + IbatisXmlPreviewServiceTest age=9 用例 变红
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapConditionEvaluator.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapConditionEvaluator.kt
+@@ -151,5 +151,7 @@
+      * 既有路径一致（20/20 读数不变，见券 A 报告）。
+      */
+     private fun numericComparison(left: Any, right: Any?): Long? {
++        // [REVERSE-PROBE 反向探针] 摘掉数值比较增强：恒走既有路径——字典序误判回归
++        return null
+         if (right == null) return null
+         val leftNumber = runCatching { BigDecimal(left.toString().trim()) }.getOrNull() ?: return null
