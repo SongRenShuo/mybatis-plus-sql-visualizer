@@ -236,3 +236,23 @@ val body = runCatching { renderBody(statement, params, mapped, warn) }
 - 快桶腿在 CI 上单独跑 `IbatisXmlPreviewServiceTest` 曾红（本地绿）：分桶 JVM 共享状态或 locale 差异的排查入口已留（本册 8.4 第 1 行），后续同类问题先查这里。
 
 派活纪律沿用前序：独立工作树 + 扁平分支名、只跑定向、`parallel_tasks.py` 登记、禁 `git add -A`、不 push 不合流、报告须给读数与反向验证。
+
+### 8.6 后续真机轮（内测 beta.2 / beta.3 期间的六项报障，按「同一类能力有多个锚点」收口）
+
+用户在同一台 2026.3 上连报两轮共六项，逐轮定性与修复见下表。**共性**：用户看到的是「一个图标」「一次点击」，而插件对应能力在每个锚点/每条入口上各有一份实现——修完被截图指到的那一格，其余格子照旧。
+
+| 轮 | 报障 | 根因（代码级） | 修复 |
+|---|---|---|---|
+| beta.2 | `<selectKey>` 子语句不可见 | 渲染器有 `renderSelectKey`，服务层从未调用 | 按 pre/主/post 组装，**主语句恒在最前**（执行链按首条语句判类型与写安全闸） |
+| beta.2 | `# username #` 被格式化拆散 | 占位符未原子化（格式化/关键字换行/竖向三条路径） | `mergeParamPlaceholders` 三条路径统一原子段 |
+| beta.2 | 勾选填值后 SQL 不变 | rerender 回调异常被面板吞掉、保留旧结果 | 失败可见（面板显示「重渲染失败：…」+ `idea.log` 带栈 warn） |
+| beta.2 | 信息性说明混进红色失败行 | 基线告警与 fresh 结果合并 | 以 fresh 结果为唯一事实源 + `informationalWarning` 分档 |
+| beta.3 | DAO 调用行两枚图标 | `JdbcTemplateMethodDetector` 方法名白名单与 `SqlMapExecutor` 入口名完全重叠、不判接收者 | `IbatisCallYieldGate`（纯语法 O(1)）让位，iBatis 调用行只留箭头 |
+| beta.3 | `#email:VARCHAR:0#` 无引号 | 服务层从未构造 `paramHints`，面板走「纯数字→裸渲染」 | jdbcType → `ParamHint`（字符串族引号、数值不引、时间走 ANSI），映射不到不猜 |
+| T-IbatisFix4 | XML 里 Ctrl+Click 报 Cannot find declaration | **XML 侧从未接 GTD 管线**：只有 Java→XML 的 handler + XML 的 gutter 箭头；`psi.referenceContributor` 只造 `refid`/`resultMap`/`parameterMap`，语句自己的 `id` 没造引用 | 新增 `IbatisXmlStatementGotoDeclarationHandler`（`id` 值与起始标签名 token 双锚），目标集复用 `IbatisJavaCallSites.findAllCallLiterals`（多调用点弹候选） |
+| T-IbatisFix4 | `UserDaoImpl` 方法定义行仍有预览图标且点不开 | **不是 JdbcTemplate 通道**（上轮已让位），而是 `StringSqlMethodGutterLineMarkerProvider` 锚在方法定义名、扫方法体字符串 SQL 调用，iBatis 语句 id 命中白名单、接收者归类 UNKNOWN | 同一个 `IbatisCallYieldGate` 在方法定义锚点也生效；JdbcTemplate 方法体有正向对照用例 |
+
+**验证**：`IbatisGotoRealEntryTest` 双向用例（真 pooled thread 走 `GotoDeclarationAction.findAllTargetElements` + GTDU 判定）；定向 5 类 39 例 0/0/0；反向验证（同时摘掉两处修复）恰 2 例红、完整还原后回绿。
+
+**遗留**：`IbatisJavaCallSites` 的 `limit=20` 上限（一条语句被 20 个以上方法调用时候选列表只列前 20）；Kotlin DAO 调用形态未覆盖（两侧 handler 同口径）；`<selectKey>` 内 `#x#` 仍无输入行。
+

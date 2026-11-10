@@ -252,6 +252,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`inspect-plugin-zip.py` 跑在 `git tag` 之前，红了改文案重提交，代价是几十秒。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
 **Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角判据在 `inspect-plugin-zip.py` 里、需要先有 zip——正确顺序是 tag 前**本地 `buildPlugin` 一次 + 跑检查器**（几十秒），而不是只跑守卫测试。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
 
+### L26 用户报「多一个图标 / 点不跳」时按锚点矩阵逐格核，别只修截图指到的那一格
+
+**规则**：同一个能力在插件里通常有**多套锚点与多条入口**，要列矩阵逐格核——
+①预览图标至少两格：**调用行锚**（`JdbcTemplateSqlGutterLineMarkerProvider` 等，锚方法名 identifier）与**方法定义锚**（`StringSqlMethodGutterLineMarkerProvider`，锚方法签名、扫方法体）；XML 侧还有语句行锚。
+②跳转至少三格：gutter 图标点击、`GotoDeclarationHandler`（Ctrl+Click/Ctrl+B）、`PsiReference`；且**方向是两格**（Java→XML 与 XML→Java 各一个 handler，互不共享）。
+修完一处要把矩阵其余格逐个写成「现在谁认领 / 修后谁认领」，并在**每个格子**补真实入口用例。
+**证据**：2026-11-10 内测轮连续两次踩同一形态——`beta.3` 只让位了调用行，`UserDaoImpl` 的方法定义行（`StringSqlMethodGutterLineMarkerProvider` 扫方法体字符串 SQL 调用，iBatis 语句 id 命中白名单、接收者归类 UNKNOWN）照旧亮一枚点开没有 SQL 的图标；券 B 只接了 gutter 箭头点击与 Java→XML 的 GTD，XML→Java 的 GTD 从未实现（`psi.referenceContributor` 只造 `refid`/`resultMap`/`parameterMap` 的引用），于是用户第二次报「还是有」「反之不行」。两处修复见 `63853e5d`。
+**正例**：修前先列矩阵，修复按格落地；用例优先走**平台真实入口**（`GotoDeclarationAction.findAllTargetElements` + `GotoDeclarationOrUsageHandler2.testGTDUOutcome`，且必须在真 pooled thread 上跑——`Navigatable.navigationRequest` 有 BGT 断言，`ReadAction.nonBlocking().executeSynchronously()` 在 EDT 会内联），因为直调 handler 绿 ≠ 真实分派绿。**反例**：只跑被指出那个 provider 的单测就收工，下一轮真机再报一次同类。
+**Seen 1× (2026-11-10)**——一次内测轮内两种锚点形态各犯一次，按「同类两例」记账。
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
