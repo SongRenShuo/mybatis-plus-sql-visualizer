@@ -664,3 +664,136 @@ CaptureStatusBar / SqlLogPanel / 两份 bundle / NestGateTest），回退后 age
 （夹具在 agent 包内、业务在包外两种形态各一例），否则仍会重演本次的假阳性。
 
 **现场可用判据（现状唯一手段）**：`-Dsqlvis.agent.nestGate=false`。
+
+### 11.8 只观测轮：深度泄漏的可观测化与真机取证（2026-11-10，提交 `8e85d397`）
+
+**目标与红线**：§11.7 已把「磐维 A 模式下 NestGate 深度泄漏」作为事实定死，但泄漏发生在哪一帧没有证据；
+§11.7b 证明在这里顺手改语义会被 10 例测试当场否掉。本轮**只加观测**：不改 `depth`/`innerEmitted` 的
+流转、不改任何返回值、异常全吞、正常语句不抓栈。真机数据见下，泄漏帧已定位到驱动类与方法。
+
+#### 11.8.1 改了什么
+
+| 项 | 落点 | 语义影响 |
+|---|---|---|
+| 链龄 | `NestGate.State.chainStartNanos` + `chainId`，只在 `depth 0→1` 记一次 `nanoTime`（普通语句每帧一次，与入口 token 同量级） | 无 |
+| 陈旧嵌套计数 | `NestGate.NEST_STALE`：`enter()` 在 `depth > 0` 时若 `now - chainStartNanos > sqlvis.agent.nestStaleMs`（默认 5000ms）则 +1 | 无（纯计数，抑制仍由 depth/innerEmitted 决定） |
+| 最高深度 | `NestGate.MAX_DEPTH`（`AtomicInteger` 取大）——判「泄漏后深度是否持续攀升」 | 无 |
+| 一次性取证 dump | 首次判陈旧且 `CaptureBudget.isVerboseLogging()`：一行摘要 + 当前栈前 12 帧，`AtomicBoolean` 只打一次，不含 SQL 原文 | 无 |
+| 接线 | `SqlHookCallbacks.nestStaleCount()/nestMaxDepth()`；心跳 `nestStale`/`nestMaxDepth`（键序固定、无空格、恒出现）；`AgentAttachStats` 字段 + 正则键；状态栏「门禁陈旧 N」（>0 才挂）；zh/en 两份 bundle 成对加键（2 占位） | 无 |
+| 测试缝 | `NestGate.clockOverride`（package-private `LongSupplier`）经 `SqlHookCallbacks.setNestClockForTest/…MsForTest/resetNestGateForTest` 转发 | 仅测试 |
+
+#### 11.8.2 定向读数（只跑定向，未跑全量）
+
+| 面 | 命令 | 读数 |
+|---|---|---|
+| agent | `:sql-visualizer-agent:test --tests "…NestGateTest" --tests "…StatementWeaveEndToEndTest"` | `NestGateTest` **6/0/0/0**（4 旧 + 2 新：`正常嵌套_不误报陈旧且仍只报最内层`、`陈旧嵌套_超阈值计数且语义不变`）、`StatementWeaveEndToEndTest` **13/0/0/0** |
+| 根项目 | `test --tests "…CaptureStatusBarTest" --tests "…BundlePlaceholderArityTest"` | `CaptureStatusBarTest` **29/0/0/0**（新增「门禁陈旧 >0 才挂」）、`BundlePlaceholderArityTest` **4/0/0/0** |
+
+新用例同时钉住两件事：正常嵌套（一次 execute 的时长）`nestStale` 恒 0；用时钟缝把链龄拨过阈值后
+`nestStale` +1，且事件条数与原行为完全一致（嵌套仍只报最内层一条、外层仍计 `nestSuppressed`）。
+
+#### 11.8.3 真机两档读数（香港 `panweidb` A 模式，`155.103.159.54:26201`）
+
+载荷 `tmp/repro/PanweiObserveProbe.java` + 假 IDE 探针 `tmp/repro/Probe.java`，脚本
+`tmp/repro/run-observe.sh`（`GATE=on` / `GATE=off`，端口 53996），agent jar 为本工作树
+`./gradlew :sql-visualizer-agent:agentFatJar` 产物，驱动 `database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar`。
+载荷顺序＝连接 → `DROP` + `CREATE`（plain Statement）→ **8s**（越过陈旧阈值）→ `INSERT`（`executeUpdate`）→
+`INSERT`（`execute`，iBatis 写路径）→ `SELECT`（`executeQuery`）→ `SELECT COUNT(*)` → **25s 心跳观察窗**。
+
+**默认档（门禁开）** —— 事件列表：
+
+```
+EVENT #1 kind=SELECT u=null sql=select name, setting from pg_settings where name in ('connection_info')
+EVENT #2 kind=SET u=0 sql=set connection_info = '{"driver_name":"JDBC","driver_version":"@GSVERSION@"}'
+EVENT #3 kind=SELECT u=null sql=select count(*) from pg_settings where name = 'support_batch_bind' and setting = 'on';
+EVENT #4 kind=CREATE u=0 sql=CREATE TABLE T_OBS_PROBE (ID NUMBER, NAME VARCHAR2(40))
+（此后 ps.executeUpdate / ps.execute / ps.executeQuery / SELECT COUNT(*) 全部零事件）
+```
+
+心跳原文（连接瞬间那拍全 0；泄漏后的三拍）：
+
+```
+HEARTBEAT {"weavable":1,...,"assembleFailures":0,"nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+```
+
+dump 原文（宿主 stderr，debug 档，只此一次）：
+
+```
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8644 depth=2 thresholdMs=5000
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.dumpStaleChain(NestGate.java:191)
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.noteNestedEnter(NestGate.java:174)
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.enter(NestGate.java:144)
+  at cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(SqlHookCallbacks.java:129)
+  at org.panweidb.jdbc.PgPreparedStatement.executeUpdate(PgPreparedStatement.java)
+  at PanweiObserveProbe.main(PanweiObserveProbe.java:44)
+```
+
+**关档（`-Dsqlvis.agent.nestGate=false`）** —— 同一载荷、同一实例：
+
+```
+EVENT #1..3 同上前三条
+EVENT #4 kind=DROP   u=0 sql=DROP TABLE T_OBS_PROBE
+EVENT #5 kind=CREATE u=0 sql=CREATE TABLE T_OBS_PROBE (ID NUMBER, NAME VARCHAR2(40))
+EVENT #6 kind=INSERT u=1 sql=INSERT INTO T_OBS_PROBE (ID, NAME) VALUES (?, ?)
+EVENT #7 kind=INSERT u=1 sql=INSERT INTO T_OBS_PROBE (ID, NAME) VALUES (?, ?)
+EVENT #8 kind=SELECT u=null sql=SELECT NAME FROM T_OBS_PROBE WHERE ID = ?
+EVENT #9 kind=SELECT u=null sql=SELECT COUNT(*) FROM T_OBS_PROBE
+EVENT #10 kind=DELETE u=2 sql=DELETE FROM T_OBS_PROBE
+HEARTBEAT {... "nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}   （三拍一致）
+```
+
+**判读**：门禁开时 PS 面与 plain Statement 面在泄漏线程上整类消失，而 `nestSuppressed=0`（首拍）证明
+§11.7 的诊断口径——被抑制的是最外层自己；泄漏后 `nestStale` / `nestMaxDepth` 明显非零。
+关档后事件全出、`nestStale` 不再增长。**关档时 `nestMaxDepth` 也恒 0 属预期**：观测点与门禁共用
+`enabled` 短路（enter 直接返回），不是观测缺失。
+
+#### 11.8.4 泄漏帧定位（本轮最有价值的结论）：`org.panweidb.jdbc.PgStatement.execute`
+
+上面的 dump 只给出「触发陈旧判定的那次嵌套进入」（PS 面），要回答「哪一帧没配平」，用
+`tmp/repro/PanweiNestLeakFrameProbe.java` 做了两档对照（`MODE=fail` / `MODE=ok`，脚本 `run-leakframe.sh`，
+端口 53997）：同一 `createStatement()` 先打一条语句、睡 8s、再打一条——若第一条的出口没配平，第二条
+就是 depth=1 上的嵌套进入，dump 会打出**这条 plain Statement 的实现类**。
+
+`MODE=fail`（第一条 `DROP` 打不存在的表，确定性抛错）：
+
+```
+[probe +2924ms] drop1 failed: ERROR: table "t_leak_frame_absent" does not exist
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8163 depth=2 thresholdMs=5000
+  ...
+  at org.panweidb.jdbc.PgStatement.execute(PgStatement.java)
+  at PanweiNestLeakFrameProbe.main(PanweiNestLeakFrameProbe.java:49)
+HEARTBEAT {... "nestSuppressed":0,"nestStale":2,"nestMaxDepth":3,...}
+```
+
+`MODE=ok`（`CREATE` 成功，8s 后 `DROP` 成功）：
+
+```
+[probe +2819ms] create ok
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8170 depth=2 thresholdMs=5000
+  ...
+  at org.panweidb.jdbc.PgStatement.execute(PgStatement.java)
+  at PanweiNestLeakFrameProbe.main(PanweiNestLeakFrameProbe.java:39)
+HEARTBEAT {... "nestSuppressed":2,"nestStale":2,"nestMaxDepth":2,...}
+```
+
+**结论**：泄漏帧落在 **plain `Statement` 面（`org.panweidb.jdbc.PgStatement.execute`）**，与该次调用
+成功或失败**无关**（成功 DDL 与失败 DROP 都能复现；主观测档的 chainId=4 起点 +2668ms 正对 `DROP` 的
+执行时刻）。此后该线程的所有语句（含 PS 面）都在这条链上被当成外层：一旦链内某帧真的产出事件
+（主观测档的 `CREATE`），`innerEmitted` 置位，后续整类语句消失——与 §11.7 的现场形态完全一致。
+
+**仍未证的部分（如实登记）**：dump 只能证明「这条 `execute` 帧的链没有归零」，还不能区分
+「多一次入口（同一方法被织两遍，两个 enter 的 token 被出口去重吞掉一个）」与「少一次出口（某条
+return/athrow 未被织入）」——两者在当前观测面上同形。下一步的取证路径：把 `PgStatement` 的原字节与
+运行时织入后的字节做离线对比（数 `onStatementEnter` / `onExecuteExit` 的调用点数）、或用
+`-javaagent` 之外的 `retransform` 单类工具取织入后字节 javap。**本轮按红线不做任何自愈/放行**，
+`-Dsqlvis.agent.nestGate=false` 仍是唯一现场规避手段。
+
+#### 11.8.5 not run
+
+- 全量门禁 `testShards` 与 `verifyGate` / `verifyPlugin`（按纪律交收口代理）；
+- runIde 沙盒验收（本轮无面板布局/控件改动，状态栏文案由 `CaptureStatusBarTest` 覆盖）；
+- 「多入口 vs 缺出口」的字节层归因（见 §11.8.4 末尾，已给取证路径，未在本轮执行）；
+- 其他数据库（Oracle/PostgreSQL/MySQL 等）的同类观测复跑——本轮只打磐维 A 模式实例。
