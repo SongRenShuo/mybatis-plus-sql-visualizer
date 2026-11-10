@@ -1,0 +1,39 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlSqlCompletionContributor.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlSqlCompletionContributor.kt
+index dc471323..230f379b 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlSqlCompletionContributor.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlSqlCompletionContributor.kt
+@@ -91,7 +91,8 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
+                     // 见下方 isIbatis 段的语义边界说明）
+                     val enclosingTag = findEnclosingStatementTag(position) ?: return
+                     val rootName = rootTag(enclosingTag).name
+-                    val isIbatis = rootName.equals(XmlSynHiGate.IBATIS_SQL_MAP_ROOT_TAG, ignoreCase = true)
++                    // REVERSE-PROBE ①: 摘掉 iBatis 根放宽（反证锚：XmlSqlCompletionIbatisRootTest 必红）
++                    val isIbatis = false && rootName.equals(XmlSynHiGate.IBATIS_SQL_MAP_ROOT_TAG, ignoreCase = true)
+                     if (rootName != "mapper" && !isIbatis) return
+ 
+                     val prefix = result.prefixMatcher
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/XmlSynHiGate.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/XmlSynHiGate.kt
+index c3dea1e3..8ae70975 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/XmlSynHiGate.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/XmlSynHiGate.kt
+@@ -391,7 +391,9 @@ object XmlSynHiGate {
+             cur = cur.parentTag
+         }
+         val root = rootTagOf(tag) ?: return false
+-        return root.name.contains("mapper", ignoreCase = true) || isSqlMapRootName(root.name)
++        // REVERSE-PROBE ①: 摘掉 iBatis sqlMap 根放宽（反证锚：IbatisStatementHostGuardTest 注入/折叠/
++        // 脏区/模板用例必红）
++        return root.name.contains("mapper", ignoreCase = true) || (false && isSqlMapRootName(root.name))
+     }
+ 
+     /**
+@@ -402,7 +404,8 @@ object XmlSynHiGate {
+      * 不走祖先链（它们的作用对象本身就是语句标签/文本）。
+      */
+     fun isStatementHostRootName(rootTagName: String?): Boolean =
+-        rootTagName == MYBATIS_MAPPER_ROOT_TAG || isSqlMapRootName(rootTagName)
++        // REVERSE-PROBE ①: 摘掉 sqlMap 分支（折叠/脏区/模板上下文的锚定面）
++        rootTagName == MYBATIS_MAPPER_ROOT_TAG || (false && isSqlMapRootName(rootTagName))
+ 
+     /**
+      * **iBatis 语句映射文件**判定（根名 `sqlMap`）。供「MyBatis 形态能力」显式排除 iBatis 用——

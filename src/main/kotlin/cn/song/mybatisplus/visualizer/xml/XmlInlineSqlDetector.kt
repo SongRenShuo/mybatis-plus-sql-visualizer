@@ -14,7 +14,9 @@ import java.util.Locale
  *
  * - 认领条件（[isSqlCarrierTag]）：无子标签 + 首段非空文本的前缀词 ∈ [SQL_KEYWORDS]；
  * - 排除既有认领（[isClaimedByKnownStructure]）：mapper 语句 / hbm 命名查询 /
- *   pages 的 `<datasource>`（图标在 maintainPage 上）——防止既有文件双图标；
+ *   pages 的 `<datasource>`（图标在 maintainPage 上）/ iBatis `<sqlMap>` 语句
+ *   （T-Ibatis2Support 券 A：由 [cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider]
+ *   接管，本通道让位）——防止既有文件双图标；
  * - HQL 判别（[queryTypeOf]）：自身或祖先标签的 `type` 属性 ∈ {hql, jpql}
  *   （就近优先），仅预览链（后台线程）调用，不进 gutter 快速路径。
  *
@@ -40,7 +42,7 @@ object XmlInlineSqlDetector {
         return firstWord in SQL_KEYWORDS
     }
 
-    /** 该标签是否已被 mapper / hbm / pages 三套既有白名单认领（通用检测必须让位，防双图标）。 */
+    /** 该标签是否已被 mapper / hbm / pages / iBatis 四套既有白名单认领（通用检测必须让位，防双图标）。 */
     fun isClaimedByKnownStructure(tag: XmlTag): Boolean {
         val name = tag.name
         val parentName = tag.parentTag?.name
@@ -54,6 +56,16 @@ object XmlInlineSqlDetector {
         if (name == "datasource" &&
             (parentName == "maintainPage" || tag.parentTag?.parentTag?.name == "pages")
         ) {
+            return true
+        }
+        // iBatis 语句（T-Ibatis2Support 券 A）：<sqlMap> 直接子级的语句标签由
+        // IbatisXmlGutterLineMarkerProvider 接管（新的预览入口，见计划册 §券 A）。
+        //
+        // **性能红线**：本判定跑在 gutter 热路径，只许 O(1) 结构比较（标签名 + 父标签名），
+        // 严禁调 IbatisXmlRecognizer 或任何 resolve / 索引查询。判据**直接调用接管方的同一函数**
+        // （而不是在本地复写一遍条件），否则会出现「让位了但没人接管」的图标空洞或
+        // 「两边都认领」的双图标。
+        if (cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
             return true
         }
         return false

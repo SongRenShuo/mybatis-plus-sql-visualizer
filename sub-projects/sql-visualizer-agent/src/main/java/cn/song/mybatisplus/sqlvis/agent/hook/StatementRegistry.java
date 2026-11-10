@@ -251,6 +251,9 @@ public final class StatementRegistry {
         final Ctx ctx = get(statement);
         if (ctx == null) {
             final long n = UNRESOLVED.incrementAndGet();
+            // T-PanweiInsertCapture F3：盲区按 PS 实现类聚合（有界、只类名）——「哪个类一直取不到
+            // SQL」是 H1 假说的唯一直接证据；此前只有总数与 debug 级别的首条类名，现场无法判类。
+            noteBlindClass(statement == null ? "null" : statement.getClass().getName());
             // 单条盲区＝诊断（attach 前 prepare 的 PS 是常态）：默认静默，logLevel=debug 打一次。
             if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.isVerboseLogging()
                     && UNRESOLVED_WARNED_ONCE.compareAndSet(false, true)) {
@@ -317,6 +320,34 @@ public final class StatementRegistry {
         return EVICTED.get();
     }
 
+    // ---------- T-PanweiInsertCapture F3：盲区具名事实 ----------
+
+    /** 盲区类名上报上限（与心跳 {@code unreg} 同款有界口径）。 */
+    public static final int MAX_BLIND_CLASSES = 8;
+
+    /** 盲区 PS 实现类名（插入序、去重、有界；只类名，不含 SQL/参数）。 */
+    private static final java.util.LinkedHashSet<String> BLIND_CLASSES =
+            new java.util.LinkedHashSet<String>();
+
+    /** 记一个盲区类名（超上限丢弃——保内存不保取证，与 unreg 同取向）。 */
+    private static void noteBlindClass(String className) {
+        if (className == null || className.isEmpty()) {
+            return;
+        }
+        synchronized (BLIND_CLASSES) {
+            if (BLIND_CLASSES.size() < MAX_BLIND_CLASSES) {
+                BLIND_CLASSES.add(className);
+            }
+        }
+    }
+
+    /** 盲区类名快照（心跳 {@code blind} 键取值；只读副本）。 */
+    public static java.util.List<String> blindClassNames() {
+        synchronized (BLIND_CLASSES) {
+            return new java.util.ArrayList<String>(BLIND_CLASSES);
+        }
+    }
+
     /** statement 面 clearBatch 出口：清批串（有登记才清——清账不建账，无登记即无事可清）。 */
     public static void clearBatchOf(Object statement) {
         if (statement == null) {
@@ -363,5 +394,8 @@ public final class StatementRegistry {
         UNRESOLVED.set(0L);
         UNRESOLVED_WARNED_ONCE.set(false);
         EVICTED.set(0L);
+        synchronized (BLIND_CLASSES) {
+            BLIND_CLASSES.clear();
+        }
     }
 }

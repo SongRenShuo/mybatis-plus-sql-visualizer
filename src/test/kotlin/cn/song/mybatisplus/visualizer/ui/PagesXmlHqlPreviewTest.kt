@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SourceLanguage
+import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlTag
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -130,5 +131,75 @@ class PagesXmlHqlPreviewTest : BasePlatformTestCase() {
         assertTrue(result.sql.contains("t_order"))
         assertEquals(listOf("param1"), result.unresolvedParams)
         assertNull(result.warning)
+    }
+
+    // ------------------------------------------------------------------
+    // 券 0（T-Ibatis2SlowFix）：pages 链判据不回归 + 同步判定不得付别名全扫代价
+    // ------------------------------------------------------------------
+
+    /**
+     * 判据不回归：带 `entityClass` 的页面语句在「根标识符 == 该实体的 `@Entity(name)` 别名」时仍判 HQL。
+     *
+     * 这条同时钉住零扫描探针的能力边界——别名**不是**靠全项目反查拿到的，而是靠 `entityClass`
+     * 直查该实体类、读出它声明的 `@Entity(name=...)`（JPA 语义下 `FROM <别名>` 与 `FROM <类名>` 等价）。
+     * 转换腿仍走既有 `EntityAliasSweep.resolve`（本券未动），故这里只断言判定结论。
+     */
+    fun testEntityClassWithEntityNameAliasRoot_stillHql() {
+        myFixture.addFileToProject(
+            "demo/BaseLocation.java",
+            """
+            package demo;
+
+            @jakarta.persistence.Entity(name = "LocationRoot")
+            @jakarta.persistence.Table(name = "base_location")
+            class BaseLocation {
+                @jakarta.persistence.Id
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val xml = """
+            <pages>
+                <maintainPage id="locPage" title="Loc" autoQuery="true" entityClass="demo.BaseLocation">
+                    <datasource><![CDATA[
+                    select l.id from LocationRoot l where l.id = :id
+                    ]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+
+        val result = preview(xml, "locPage")
+
+        assertEquals("别名根 + entityClass 直查 → 仍判 HQL", SourceLanguage.HQL, result.sourceLanguage)
+        assertNotNull("应保留转换前原文", result.originalSql)
+    }
+
+    /**
+     * 慢路径止血：`<pages>` 链的同步判定不得触发别名全扫。
+     *
+     * 形态＝`entityClass` 解析不到（第 2/3 步探针）＋ 根标识符是物理表名（第 4 步探针）——改动前
+     * 两处探针各触发一次全项目短名扫描（`<pages>` 文件在用户工程里同样常见），改动后必须 0 次，
+     * 且结论保持保守 SQL。
+     */
+    fun testUnresolvableEntityClassAndTableRoot_noAliasSweep() {
+        addEntities()
+        val xml = """
+            <pages>
+                <maintainPage id="ghostSqlPage" title="Ghost SQL" autoQuery="true"
+                              entityClass="com.missing.Ghost">
+                    <datasource><![CDATA[
+                    SELECT o.id, o.order_no FROM t_order o WHERE o.order_no = ?
+                    ]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+
+        EntityAliasSweep.resetScanCountForTest()
+        val result = preview(xml, "ghostSqlPage")
+
+        assertEquals("根标识符是物理表名 → 保持 SQL", SourceLanguage.SQL, result.sourceLanguage)
+        assertNull(result.originalSql)
+        assertEquals(listOf("param1"), result.unresolvedParams)
+        assertEquals("同步判定不得触发别名反查全扫", 0, EntityAliasSweep.scanCountForTest())
     }
 }

@@ -23,8 +23,23 @@
 ### 1.2 changeNotes 格式红线
 
 - `gradle/plugin-change-notes.html` 新增 `<h2>v{版本}</h2>` 块置顶：只主标题、无括号、无冒号副题。
-- 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语）。
+- 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言」，无激励、无模板评语）。
+- **两条机器判据必须跑在 `git tag` 之前**（2026-11-09 教训，见 `docs/LESSONS.md` L25）：
+  1. **新块置顶的同时删掉上一块那行评分引导句**——`./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.ChangeNotesRatingLineGuardTest"` 必须绿（全文只允许出现 1 次）。该守卫已三次抓到（2026-10-29 / 10-30 / 11-09）。
+  2. **本版块内禁全角 `（ ） ：`**——`python dev-support/inspect-plugin-zip.py --version {版本}` 的「本版块扫『（ ） ：』零命中」项必须 OK。
+  2 条与 `update/preview.update.json` 的 `changeNotes` 逐字一致；红了改文案重提交，别往下走。
+- **为什么卡在建版之前**：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，发出去再发现只能 tag 前移 + 双通道重发。2026-11-09 实际发生——GitHub Release `438955517` / Gitee 发行版 `1290785` 带着全角括号文案上线，改文案后 tag 从 `65e03bae` 前移到 `f9c5b0c3` 并重跑门禁重发。
 - changeNotes / preview.update.json / CHANGELOG / 发行说明四处承担对外可见性；description 与市场页是纯能力陈列，不承担「最近更新」播报（2026-09-12 定案）。
+- **内测转正时删掉被正式版取代的内测块（2026-11-10 用户明确要求）**：正式版块一旦置顶，`gradle/plugin-change-notes.html` 里同批被吸收的 `<h2>v{版本}-beta.N</h2>` 块**不应继续存在**——用户口径「有正式版最新的了，beta 版本的就不应该存在了」；`CHANGELOG.md` 同批删掉对应的 `## [{版本}-beta.N]` 段（先例：`0692f222` 发 v2026.11.8 正式版时同时删了 `2026.11.8-beta.1` 两处）。**逐条细目靠 `docs/发行说明/` 的内测说明留档**，正式版块/段按能力面合并并在范围行指过去，别把内测块留在对外清单里。
+- **正式版的范围锚点＝上一个正式版的 tag，逐条核不重复（2026-11-10 用户指出重叠）**：`v2026.11.10` 的更新日志与 `v2026.11.8` 曾重叠两条（「日期族参数改用 ANSI 类型字面量」「2026.3 换源退化」——那两条是 11.8 的修复，却被写进了 11.10 的 changeNotes/发行说明/变更记录）。写 changeNotes、`CHANGELOG`、发行说明、`docs/变更记录.md` 四处之前，先 `git log {上一正式版tag}..HEAD --oneline` 拉清单，再对着上一版那四处的文案逐条比对；**只有本次提交范围内新修的才写进来**，同一任务族里的后续修复（如 `T-DateLiteralBackfill` 之后又修的「执行链只发 TIMESTAMP」）要写清是「后续修复」而不是重复上一版的条目。
+
+### 1.2b 发布环境的审批口径（2026-11-09 改）
+
+- GitHub 仓库 Settings → Environments → `release`：**Required reviewers 已清空**（发布自动通过），**Deployment branches 只允许 `master`**。
+- 语义：`mode=gate` 的 publish job 条件不成立、永不启动，所以「只想跑全量门禁」选 `gate` 不会发布；`release` / `publish` 只有从 `master` 发起才会被环境放行，别的分支派发直接被环境拒。
+- 改的理由：审批人与派发方是同一账号（令牌能派发就能自助批准），审批不构成独立复核，只会在无人值守时静默等待——2026-11-09 实测发布 job 在 `waiting` 停了 12 分钟。
+- 回读断言：`GET /repos/{owner}/{repo}/environments/release`——`protection_rules` 只剩 `branch_policy`，`deployment_branch_policy.custom_branch_policies=true`，`deployment-branch-policies` 白名单含 `master`。
+- 若将来有协作者、或要求「发了什么必须经第二人过目」，再把 reviewer 加回来；那时它才是真审批。
 
 ### 1.3 Z-36 发行身份纪律（zMyBatis 精华吸收条）
 
@@ -48,7 +63,7 @@
     4. `./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"` 必须绿；
     5. 提交时在信息里写明「IPGP x.y.z → verifier-cli a.b.c」。
   - 判据：`VerifierCliVersionGuardTest` 绿（本机缓存里存在与钉子不同版本的 jar 时它会红并点名两边版本）。注意该守卫只在本机跑过 `:verifyPlugin`（缓存有 jar）时生效，CI 上因缓存不同会 skip——**它不是 CI 防线，是本地防线**。
-- [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线。
+- [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线；**同批删掉上一块的评分引导句**，并跑 `ChangeNotesRatingLineGuardTest`（全文 1 次）与 `inspect-plugin-zip.py` 的全角标点判据——两条绿了才允许继续。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
 
 | # | 文件 | 内容 |
@@ -69,7 +84,7 @@
   - 代价对照（决定过、不再重议）：Gitee 改速览会丢安装与已知边界；GitHub 改全文要动 CI 模板且丢折叠历史与构建记录，收益与风险不成比例。
   - **发行说明尾部须带一行构建记录链接**（`构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`）——Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者也能核验「这版跑了哪一轮门禁」。
 
-- [ ] RC-P5 产物核对：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。
+- [ ] RC-P5 产物核对（**必须在建发行版之前跑**，2026-11-09 教训）：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。等价一键判据：`python dev-support/inspect-plugin-zip.py --version {版本}`（内层 jar 名 / `plugin.xml <version>` / `MANIFEST Version` / change-notes 首块与全角标点四项全 OK，退出码 0）。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
 - [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
 - [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
@@ -147,6 +162,7 @@
     ② `上传编译产物` 必须 `if: !cancelled()`（否则上游失败会连坐下游 job）。
     ③ 依赖 `CaptureActivityFallback` 10s 阈值的测试必须 `@Before` 注入 `enabledOverride=false`（2 核 runner 会跑过阈值导致稳定假红，本地 6 核看不到）。
     ④ 聚合门禁 `gate` 把 `skipped` 判红——被 skip 的 job 不会让整轮运行变红，等于「没验也过」；`publish` 的 release 判定只看 `gate`。
+    ⑤ **双仓镜像资源在 CI 上优先用 GitHub 源**（2026-11-09 实证）：demo 仓双仓同源同提交，`setup-test-env.ps1` 现按环境选主备——`GITHUB_ACTIONS=true` 时主源 GitHub、回落 Gitee；本地反之。起因是 push-test run `42598802895` 的 `test (3)` 红在 `Could not resolve host: gitee.com`（一个用例都没跑，同轮其余 7 腿正常），跨洋解析抖动会把整条分片腿打红。
   - **换验证目标 IDE 版本当天的坑**（2026-11-05 2026.2.4→2026.3 实测）：IPGP 读的是**项目内缓存的**
     product-releases 清单（`.intellijPlatform/productReleases/<hash>.json`，已 gitignore）。若该缓存是在新版
     发布前抓的，跑 `:verifyPlugin` 会报 `Couldn't resolve IntellijIdea download URL for version: '2026.3'`，
@@ -183,7 +199,7 @@
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。
-- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。
+- [ ] RC-R6 后台审核状态确认：作者后台（https://plugins.jetbrains.com/author/me）→ My Plugins → 版本列表，核对 Pending 版本号与内容；预期内等放行，误传则后台撤回（撤回不可逆，处置前截图留档）。判据：Pending 清零或结论留档。**上传成功 ≠ 公网已生效**：审核期内 `GET /api/plugins/33633/updates` 与插件页仍显示上一版（2026-11-10 实测：正式版已上传，端点仍是 2026.11.8），这是正常状态，别据此判「上传失败」；正式版的公网生效只认该端点出现新版本号。
 - [ ] RC-R7 回读断言：执行 §四，判据不满足不得勾选本清单任何「发布完成」项。
 
 ## 四、回读断言（T-RC-03，发布未完成的直接防线）

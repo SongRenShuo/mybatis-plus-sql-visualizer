@@ -563,6 +563,22 @@ final class SenderLoop implements Runnable {
                     // 恒出现（无则空串）——IDE 侧按「键在但值为空」与「旧版 agent 无此键」区分，
                     // 不能靠缺键表达「本次没有未登记实现」。
                     + ",\"unreg\":\"" + unregisteredDriversCsv() + "\""
+                    // T-PanweiInsertCapture F3：登记盲区具名事实——「哪个 PS 实现类一直取不到 SQL」
+                    // （有界 8、逗号分隔、恒出现，无则空串）。与 unreg 同款宽容扫描口径。
+                    + ",\"blind\":\"" + blindClassesCsv() + "\""
+                    // T-PanweiInsertCapture F2/F3：三条此前完全无出口的静默丢弃读数。
+                    // assembleFailures = onExecuteExit 外层 catch 吞掉的次数（事件组不出来）；
+                    // nestSuppressed = NestGate 抑制的外层帧数（线程残留态的直接证据）；
+                    // unresolved = 登记盲区累计（与 blind 的类名配对看）。
+                    + ",\"assembleFailures\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.assembleFailures()
+                    + ",\"nestSuppressed\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestSuppressedCount()
+                    // T-NestGateObserve：深度泄漏的**直接读数**——nestStale = 链龄超阈值的嵌套进入次数
+                    // （nestSuppressed 对「最外层自己被抑制」这一形态恒为 0）；nestMaxDepth = 进程级
+                    // 最高嵌套深度（泄漏后是否持续攀升）。整数键、键序固定、无空格、恒出现。
+                    + ",\"nestStale\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestStaleCount()
+                    + ",\"nestMaxDepth\":" + cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestMaxDepth()
+                    + ",\"unresolved\":"
+                    + cn.song.mybatisplus.sqlvis.agent.hook.StatementRegistry.unresolvedCount()
                     + "}";
         } catch (Throwable t) {
             return "{}";
@@ -593,8 +609,34 @@ final class SenderLoop implements Runnable {
         }
     }
 
-    private static void appendJsonEscaped(StringBuilder sb, String raw) {
-        if (raw == null) {
+    /**
+     * T-PanweiInsertCapture F3：登记盲区类名（逗号分隔；无则空串）。
+     *
+     * <p>口径与 {@link #unregisteredDriversCsv()} 一致：有界（agent 侧已截到 8 个）、只类名、
+     * 逐项 JSON 最小转义。它回答的是「哪一类语句对象一直取不到 SQL」——与 {@code unreg}
+     * （不在驱动白名单的类）不是同一件事：{@code unreg} 是**没登记**，本键是**登记表里查不到**。
+     */
+    static String blindClassesCsv() {
+        try {
+            final java.util.List<String> names =
+                    cn.song.mybatisplus.sqlvis.agent.hook.StatementRegistry.blindClassNames();
+            if (names == null || names.isEmpty()) {
+                return "";
+            }
+            final StringBuilder sb = new StringBuilder(160);
+            for (int i = 0; i < names.size(); i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                appendJsonEscaped(sb, names.get(i));
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static void appendJsonEscaped(StringBuilder sb, String raw) {        if (raw == null) {
             return;
         }
         for (int i = 0; i < raw.length(); i++) {

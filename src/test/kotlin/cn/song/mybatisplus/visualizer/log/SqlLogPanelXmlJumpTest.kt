@@ -22,7 +22,10 @@ class SqlLogPanelXmlJumpTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        manager = SqlLogManager(project)
+        // T-SqlListCatchup 券A（随 20261108 合并进 dev）：notifyUi 的 150ms 刷新窗在 CI 慢机上
+        // 让「喂条目→断言列表已含」竞态红（本地快机偶尔绿）——注入同步调度器对齐 master 侧
+        // SqlLogTailFollowTest 等的修复口径（机制本身由 SqlLogManagerFlushWindowTest 覆盖）。
+        manager = SqlLogManager(project).also { it.catchUpScheduler = { _, action -> action() } }
         manager.entries.dedupeEnabled = false
     }
 

@@ -91,6 +91,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var xmlInlineSqlEnabled: Boolean = true,
 
         /**
+         * iBatis 2.x `<sqlMap>` 语句预览开关（T-Ibatis2Support 券 A，默认开）：
+         * `<sqlMap>` 直接子级的语句标签（select/insert/update/delete/statement/procedure）行显示
+         * 预览图标，含 `<dynamic>` / `<isNotNull>` 子标签的语句同样出图标；点击走
+         * [cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService]（原生 SQL 直显 + `#name#`
+         * 参数识别），不经通用兜底通道的实体探针。
+         *
+         * 关闭后本 provider 零产出；对应标签同时**不再被通用兜底通道认领**
+         * （`XmlInlineSqlDetector.isClaimedByKnownStructure` 的让位是无条件的结构判定）——
+         * 即该类语句整体零图标，与「mapper 组开关关闭」同款语义。
+         */
+        var ibatisXmlEnabled: Boolean = true,
+
+        /**
          * T-PagesHql（默认 [PAGES_SOURCE_AUTO]）：maintainPage `<datasource>` 的源语言判定档。
          *
          * - [PAGES_SOURCE_AUTO]：按 `type` 属性 / 根标识符与 entityClass 的关系自动推断（默认 SQL 保守）；

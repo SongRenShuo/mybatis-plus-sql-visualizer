@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import cn.song.mybatisplus.visualizer.execute.shouldExecWholeScript
 import cn.song.mybatisplus.visualizer.execute.installOutputHistoryFillLayout
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ExplainGate
@@ -221,6 +222,9 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                    // T-DateLiteralBackfill R10：EXPLAIN 包装产物是单语句，整批提交绕开
+                    // 「光标所在语句/选区」把类型字面量片段当独立语句提交的回归
+                    wholeScriptExec = shouldExecWholeScript(explainSql, requested = true),
                 )
             }, com.intellij.openapi.application.ModalityState.nonModal())
         }

@@ -6,6 +6,20 @@ package cn.song.mybatisplus.visualizer.log
 enum class SqlSource {
     /** MyBatis-Plus 控制台日志（`Preparing:` / `Parameters:` 格式）。 */
     MYBATIS,
+    /**
+     * iBatis 2.x 控制台日志（T-Ibatis2Support 券 H）：`{pstm-N}` / `{conn-N}` 标记的**三行组**——
+     * `{pstm-N} Executing Statement:`（SQL）+ `{pstm-N} Parameters:`（`[v1, null, v2]` 列表形态）+
+     * `{pstm-N} Types:`（逐位置 JDBC 类型），产出点见 [MyBatisLogParser] 的 iBatis 分支。
+     *
+     * 与 [MYBATIS] 的分工：两者同为「MyBatis 家族控制台日志」，但 iBatis 2.x 是**独立框架**
+     * （`com.ibatis.*` 命名空间，`#name#` 占位符，非 MyBatis 3 的 `#{}`），日志形态与参数行格式
+     * 都不同——2026-11-06 T-IbatisPanwei 为控扩散面曾复用本枚举的 MYBATIS 值（决策 D-3），
+     * 本值即为该欠账的兑现（用户需要按来源区分/筛选）。
+     *
+     * **不落盘**（与 MYBATIS 同口径）：[SqlLogParamCodec] 只对 MCP / SHARDINGSPHERE 写 `s` 键，
+     * 历史读回一律 UNKNOWN（见 [cn.song.mybatisplus.visualizer.mcp.HistorySearchService] 的来源维度说明）。
+     */
+    IBATIS,
     /** Hibernate/JPA 控制台日志（`Hibernate:` / `binding parameter` 格式）。 */
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
@@ -86,7 +100,7 @@ data class LogSqlEntry(
      * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。
      */
     val summary: String = summarizeSql(restoredSql),
-    /** 条目来源（MyBatis / Hibernate / 未知）。 */
+    /** 条目来源（MyBatis / iBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
     /**
      * 执行耗时（毫秒）；null 表示未解析到耗时信息。

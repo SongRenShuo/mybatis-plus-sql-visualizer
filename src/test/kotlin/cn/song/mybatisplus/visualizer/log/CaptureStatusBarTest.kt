@@ -26,9 +26,17 @@ class CaptureStatusBarTest {
         unregistered: List<String> = emptyList(),
         catchUpBehind: Int = 0,
         agentDropped: Long = 0L,
+        suppressedSqlLines: Long = 0L,
+        agentAssembleFailures: Long = 0L,
+        agentNestSuppressed: Long = 0L,
+        agentNestStale: Long = 0L,
+        agentUnresolvedBlind: Long = 0L,
+        agentBlindClasses: List<String> = emptyList(),
+        ibatisBatchHint: Boolean = false,
     ) = CaptureStatusLine(
         capturing, consolesAttached, linesSeen, agentStatus, agentLivePids, agentPaused, agentEventsReceived,
-        unregistered, catchUpBehind, agentDropped,
+        unregistered, catchUpBehind, agentDropped, suppressedSqlLines, agentAssembleFailures,
+        agentNestSuppressed, agentNestStale, agentUnresolvedBlind, agentBlindClasses, ibatisBatchHint,
     )
 
     @Test
@@ -108,6 +116,91 @@ class CaptureStatusBarTest {
             line(agentStatus = null, unregistered = listOf("a.b.C")),
         )!!
         assertEquals("增强未开启时无 attach 事实可报", "增强：未开启", agent)
+    }
+
+    // ---------- T-PanweiInsertCapture F1/F2/F3/F6：四条新增读数 ----------
+
+    @Test
+    fun test让位丢弃SQL行_大于零才挂控制台段() {
+        val (console, _) = captureStatusLineText(line(suppressedSqlLines = 7L))!!
+        // 反向验证：摘掉 captureStatusLineText 里的 suppressedSqlLines 拼接，本断言必红
+        assertTrue("让位丢弃可解析 SQL 行必须可见：$console", console.contains("让位丢弃 SQL 行 7"))
+
+        val (quiet, _) = captureStatusLineText(line())!!
+        assertFalse("零值不添噪：$quiet", quiet.contains("让位丢弃"))
+    }
+
+    @Test
+    fun test组装失败计数_大于零才挂增强段() {
+        val (_, agent) = captureStatusLineText(line(agentAssembleFailures = 3L))!!
+        assertTrue("组装失败计数必须可见：$agent", agent.contains("组装失败 3"))
+
+        val (_, quiet) = captureStatusLineText(line())!!
+        assertFalse("零值不添噪：$quiet", quiet.contains("组装失败"))
+    }
+
+    @Test
+    fun test门禁抑制计数_大于零才挂增强段() {
+        val (_, agent) = captureStatusLineText(line(agentNestSuppressed = 12L))!!
+        assertTrue("门禁抑制计数必须可见：$agent", agent.contains("门禁抑制 12"))
+    }
+
+    /**
+     * T-NestGateObserve：陈旧嵌套段（深度泄漏的确诊读数）——>0 才挂，0 不添噪。
+     * 反向验证：摘掉 captureStatusLineText 里的 agentNestStale 拼接，本用例必红。
+     */
+    @Test
+    fun test门禁陈旧计数_大于零才挂增强段() {
+        val (_, agent) = captureStatusLineText(line(agentNestStale = 5L))!!
+        assertTrue("陈旧嵌套计数必须可见：$agent", agent.contains("门禁陈旧 5"))
+
+        val (_, quiet) = captureStatusLineText(line())!!
+        assertFalse("正常嵌套（陈旧为 0）不添噪：$quiet", quiet.contains("门禁陈旧"))
+    }
+
+    @Test
+    fun test登记盲区_带类名后缀() {
+        val (_, agent) = captureStatusLineText(
+            line(
+                agentUnresolvedBlind = 5L,
+                agentBlindClasses = listOf("org.panweidb.jdbc.PgPreparedStatement"),
+            ),
+        )!!
+        assertTrue("盲区次数必须可见：$agent", agent.contains("登记盲区 5 次"))
+        assertTrue("盲区类名必须点名：$agent", agent.contains("org.panweidb.jdbc.PgPreparedStatement"))
+    }
+
+    @Test
+    fun test登记盲区_无类名时不带空括号() {
+        val (_, agent) = captureStatusLineText(line(agentUnresolvedBlind = 2L))!!
+        assertTrue("盲区次数仍要报：$agent", agent.contains("登记盲区 2 次"))
+        assertFalse("无类名不得出现空括号：$agent", agent.contains("（）"))
+    }
+
+    @Test
+    fun test增强未开启时三条agent读数不挂段() {
+        val (_, agent) = captureStatusLineText(
+            line(
+                agentStatus = null,
+                agentAssembleFailures = 3L,
+                agentNestSuppressed = 4L,
+                agentNestStale = 6L,
+                agentUnresolvedBlind = 5L,
+            ),
+        )!!
+        assertEquals("增强未开启时无 agent 事实可报", "增强：未开启", agent)
+    }
+
+    @Test
+    fun test_iBatis批处理提示_仅在增强未开启时出现() {
+        val (_, off) = captureStatusLineText(line(agentStatus = null, ibatisBatchHint = true))!!
+        assertTrue("iBatis + 增强未开启：应提示批处理不可见：$off", off.contains("iBatis 批处理"))
+
+        val (_, on) = captureStatusLineText(line(ibatisBatchHint = true))!!
+        assertFalse("增强已开启时由 agent 兜住，不再提示：$on", on.contains("iBatis 批处理"))
+
+        val (_, absent) = captureStatusLineText(line(agentStatus = null, ibatisBatchHint = false))!!
+        assertFalse("未识别到 iBatis 形态时不提示：$absent", absent.contains("iBatis 批处理"))
     }
 
     // ---------- T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计落状态栏 ----------

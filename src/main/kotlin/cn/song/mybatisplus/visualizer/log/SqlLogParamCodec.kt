@@ -97,8 +97,12 @@ object SqlLogParamCodec {
         val stackDigest: String? = null,
         /** T-StackBizFrame S3：产生该 SQL 的线程名（弹层标题用）；旧 payload 为 null。 */
         val threadName: String? = null,
-        /** T-McpAuditTrail T-MAT-03：来源（当前仅 [SqlSource.MCP] 落键）；旧 payload / 非 MCP 条目为 null。
+        /** T-McpAuditTrail T-MAT-03：来源（落键集合只有 [SqlSource.MCP] 与 [SqlSource.SHARDINGSPHERE]——
+         * 它们的来源标记带渲染语义，其余来源（MYBATIS / IBATIS / HIBERNATE / JDBC / AGENT / 控制台）
+         * 一律不落键）；旧 payload / 未落键条目为 null。
          * 读端把它回填进 [LogSqlEntry.source]，不填则沿用默认 [SqlSource.UNKNOWN]。
+         * T-Ibatis2Support 券 H：新增 [SqlSource.IBATIS] **不动这里**——iBatis 条目与 MYBATIS 同口径
+         * （不落键、读回 UNKNOWN），旧条目里的 `MYBATIS` 名字仍按 [SqlSource.values] 名称解析读得出。
          */
         val source: SqlSource? = null,
         /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注；旧 payload 为 null。 */
@@ -164,6 +168,9 @@ object SqlLogParamCodec {
         entry.actualSql?.let { json.name(ACTUAL_SQL_FIELD).value(it) }
         entry.dialectName?.takeIf { it.isNotBlank() }?.let { json.name(DIALECT_FIELD).value(it) }
         if (entry.captureProvenance != CaptureProvenance.UNKNOWN) json.name(PROVENANCE_FIELD).value(entry.captureProvenance.name)
+        // 落键集合不扩张（T-Ibatis2Support 券 H 定案）：IBATIS 与 MYBATIS 同为控制台形态来源，落盘后
+        // 读回一律 UNKNOWN（旧值语义不迁移）——要跨重启保真须另立项（写侧 + SqlLogAutoSaver 的 pd
+        // 行条件两处同改），此处不做未立项的行为扩张。读端按名称解析，旧 `MYBATIS` 值仍读得出。
         if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) json.name(SOURCE_FIELD).value(entry.source.name)
         json.endObject()
         json.close() // 输出 Base64 尾块，不关闭外部 target。

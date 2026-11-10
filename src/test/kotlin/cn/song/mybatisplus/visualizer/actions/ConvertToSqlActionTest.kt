@@ -87,4 +87,66 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         ConvertToSqlAction().update(e)
         assertFalse("普通文本文件不应启用", e.presentation.isEnabledAndVisible)
     }
+
+    /**
+     * T-Ibatis2Support 券 A 收尾：XML 候选判据三路来源。
+     *
+     * 背景＝通用兜底通道对 iBatis `<sqlMap>` 语句**让位**（防与专用 gutter provider 双图标）后，
+     * 若快捷键候选仍只认「MyBatis 语句 + 兜底载体」，Alt+Shift+Q 在 sqlMap 文件里会**空候选**——
+     * gutter 图标正常、快捷键什么都列不出来。本用例把三路来源焊死在单一判据上。
+     */
+    fun testXmlStatementCandidate_三路来源与边界() {
+        myFixture.configureByText(
+            "ibatis.xml",
+            """
+            <sqlMap namespace="user">
+              <resultMap id="rm" class="A"/>
+              <sql id="cols">ID, NAME</sql>
+              <select id="leaf">SELECT 1 FROM T</select>
+              <select id="dyn">
+                WHERE
+                <dynamic prepend="AND">
+                  <isNotNull property="id">ID = #id#</isNotNull>
+                </dynamic>
+              </select>
+              <statement id="raw">SELECT * FROM T WHERE ID = ?</statement>
+            </sqlMap>
+            """.trimIndent(),
+        )
+        val tags = com.intellij.psi.util.PsiTreeUtil.findChildrenOfType(
+            myFixture.file,
+            com.intellij.psi.xml.XmlTag::class.java,
+        )
+        fun tag(name: String, id: String? = null) = tags.first {
+            it.name == name && (id == null || it.getAttributeValue("id") == id)
+        }
+
+        // iBatis 语句：叶子与含动态子标签两种形态都必须进候选（后者正是用户报障的零图标形态）
+        assertTrue("iBatis 叶子 select 应进候选", ConvertToSqlAction.isXmlStatementCandidate(tag("select", "leaf")))
+        assertTrue("含 <dynamic> 的 select 也应进候选", ConvertToSqlAction.isXmlStatementCandidate(tag("select", "dyn")))
+        assertTrue("iBatis <statement> 应进候选", ConvertToSqlAction.isXmlStatementCandidate(tag("statement", "raw")))
+        // 非语句：resultMap / <sql> 片段 / <dynamic> 自身都不该进候选
+        assertFalse("resultMap 不是语句", ConvertToSqlAction.isXmlStatementCandidate(tag("resultMap")))
+        assertFalse("<sql> 片段不是语句", ConvertToSqlAction.isXmlStatementCandidate(tag("sql")))
+        assertFalse("<dynamic> 不是语句", ConvertToSqlAction.isXmlStatementCandidate(tag("dynamic")))
+    }
+
+    /** MyBatis 路径零回归：`<mapper>` 下语句仍进候选（判据重构不得改变既有来源）。 */
+    fun testXmlStatementCandidate_MyBatis路径不变() {
+        myFixture.configureByText(
+            "UserMapper.xml",
+            """
+            <mapper namespace="demo.UserMapper">
+              <select id="byId">SELECT * FROM t_user WHERE id = #{id}</select>
+              <sql id="cols">id, name</sql>
+            </mapper>
+            """.trimIndent(),
+        )
+        val tags = com.intellij.psi.util.PsiTreeUtil.findChildrenOfType(
+            myFixture.file,
+            com.intellij.psi.xml.XmlTag::class.java,
+        )
+        val select = tags.first { it.name == "select" }
+        assertTrue("<mapper> 下语句应进候选", ConvertToSqlAction.isXmlStatementCandidate(select))
+    }
 }

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector.FillTargetLayout
+import cn.song.mybatisplus.visualizer.sql.canCreateSqlPsiFor
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
@@ -132,8 +133,10 @@ internal fun DataSourceSelector.startResultTabRetry(
                     // T8：无错误、无残余时再看完成证据——`use`/DML 这类无结果 Tab 的语句成功时
                     // 完成回显就写在 Output，走中性 showStatus 而不是超时提示（onInfo 缺席的
                     // 调用方保持既有行为不动）。
+                    // T-PreviewDmlResult：写语句（DML/DDL）**结构上就不产生结果页签**，无需等
+                    // Output 回显（真机实证回显不进 history 文档）——直接按已完成处理。
                     val completed = if (realError == null && residue == null) {
-                        hasConsoleCompletionEvidence(sharedConsole ?: preparedConsole)
+                        hasConsoleCompletionEvidence(sharedConsole ?: preparedConsole) || isWriteStatement(sqlText)
                     } else {
                         false
                     }
@@ -1180,6 +1183,7 @@ internal fun DataSourceSelector.afterSubmitted(
         if (ui != null && onError != null) {
             val uiForWatch = ui
             val hintOnError = onError
+            val hintOnInfo = onInfo
             val consoleForWatch = console
             val watch = javax.swing.Timer(8000, null)
             watch.addActionListener {
@@ -1190,24 +1194,39 @@ internal fun DataSourceSelector.afterSubmitted(
                         .getMethod("getCurrentNamespace").invoke(consoleForWatch)
                     ns != null && ns.toString().isNotBlank()
                 }.getOrDefault(true)
-                if (!newTab && !namespaceOk) {
-                    // T-ExecSilentNoop：提交后 8s 回执——namespace 都出来了说明连接**已建立**、
-                    // 探针显示未提交（freshModel 回落）则归因"未提交"而非凭据；否则才落到
-                    // 凭据/驱动。与 40 拍窗口共用 executionHintReported 去重，同次执行只报一次。
-                    if (!executionHintReported) {
-                        executionHintReported = true
-                        val hint = if (demotedOverride) {
-                            MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
-                        } else {
-                            MpSqlVisualizerBundle.message("execute.credential.hint")
+                when {
+                    !newTab && !namespaceOk -> {
+                        // T-ExecSilentNoop：提交后 8s 回执——namespace 都出来了说明连接**已建立**、
+                        // 探针显示未提交（freshModel 回落）则归因"未提交"而非凭据；否则才落到
+                        // 凭据/驱动。与 40 拍窗口共用 executionHintReported 去重，同次执行只报一次。
+                        if (!executionHintReported) {
+                            executionHintReported = true
+                            val hint = if (demotedOverride) {
+                                MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
+                            } else {
+                                MpSqlVisualizerBundle.message("execute.credential.hint")
+                            }
+                            LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=$newTab, namespaceOk=$namespaceOk, demotedOverride=$demotedOverride) - hint=${
+                                if (demotedOverride) "notSubmitted" else "credential"
+                            }")
+                            hintOnError.invoke(hint)
                         }
-                        LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=$newTab, namespaceOk=$namespaceOk, demotedOverride=$demotedOverride) - hint=${
-                            if (demotedOverride) "notSubmitted" else "credential"
-                        }")
-                        hintOnError.invoke(hint)
                     }
-                } else {
-                    LOG.info("[M36] result/layout OK within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - no hint")
+                    // T-PreviewDmlResult（20261110 真机）：写语句**结构上不会有结果页签**——
+                    // 连接已建立（namespace 在）却等满 16s 才下判定，用户早在 14s 关了面板、什么都看不到。
+                    // 8s 处直接给「已提交执行，影响行数见 Output」的中性提示；措辞不宣称"已完成"
+                    // （长事务仍在跑时也不误导），真实结果仍以 Output 为准。
+                    !newTab && namespaceOk && isWriteStatement(sqlText) && !executionHintReported -> {
+                        executionHintReported = true
+                        LOG.info("[M36] write statement submitted without result tab (by design) within 8s - info hint, sql=${sqlText?.take(40)}")
+                        val message = MpSqlVisualizerBundle.message("execute.writeStatementSubmitted")
+                        ApplicationManager.getApplication().invokeLater({
+                            (hintOnInfo ?: hintOnError)?.invoke(message)
+                        }, com.intellij.openapi.application.ModalityState.any())
+                    }
+                    else -> {
+                        LOG.info("[M36] result/layout OK within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - no hint")
+                    }
                 }
             }
             watch.isRepeats = false

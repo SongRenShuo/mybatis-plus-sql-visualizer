@@ -3,14 +3,14 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（126 个通用文件）
-> **项目记忆**：保留 271 个内容文件 + MEMORY.md 索引（第三十二次精简后）
+> **项目记忆**：保留 265 个内容文件 + MEMORY.md 索引（第三十三次精简后）
 
 ---
 
-## 已修复 Bug（267 个）
+## 已修复 Bug（279 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -327,7 +327,20 @@
 | [project-mapper-nav-shortcut-20261105.md](bug-fixes/project-mapper-nav-shortcut-20261105.md) | T-MapperNavShortcut 立项档（20261105）——Mapper↔XML 跳转接入原生快捷键（单个双向 GotoDeclarationHandler+复用 MybatisXmlTargets 清单缓存）；未拍板，D-1~D-3 已移交 project-pending-plans |
 | [project-pages-hql-20261105.md](bug-fixes/project-pages-hql-20261105.md) | T-PagesHql 立项档（20261105）——maintainPage 的 datasource 识别 HQL（判据=根标识符 vs entityClass，`orderMaintain` 反例证 entityClass 非充分条件）；未拍板，D-1~D-6 已移交 project-pending-plans |
 
-## 已解决踩坑（105 个）
+| [project-release-20261108-beta1.md](bug-fixes/project-release-20261108-beta1.md) | v2026.11.8-beta.1 发行档（20261107 已落位，被两个后续内测取代）——范围只含 master `9779d173` T-DateLiteralBackfill（日期族 ANSI 字面量修 Oracle ORA-01843/01861）；「版本号用次日号」因 `-beta.3 < 2026.11.7` 正式版收不到推送；tag 在位、发行提交已推 Gitee |
+| [project-release-20261109-beta1.md](bug-fixes/project-release-20261109-beta1.md) | v2026.11.9-beta.1 发行档（20261109 闭环，已被 v2026.11.10-beta.1 取代）——范围 iBatis 2.x 全面支持 + GoldenDB 第 15 方言 + SQL 列表提速（65e03bae）；tag 前移 f9c5b0c3 双仓 force push + 重发 42596337947 + GitHub 438955517 / Gitee 1290861；tag 强移后 by-tag 端点 404 的处置见项目记忆 |
+| [project-runtime-slot-fill-20261107.md](bug-fixes/project-runtime-slot-fill-20261107.md) | T-RuntimeSlotFill 交付档（已合 master，本体随 2026.11.7-beta.1、缺陷修随 beta.2 发行）——身份内嵌注释 `· rtN` + 四类 slot（VALUE/LOOP/TERNARY/OPTIONAL）+ 一次扫描区间记账 + 留空逐字节原样；OPTIONAL 回填错位/幻影 `param1` 已由 T-RuntimeSlotOptionalFill 修复（bd641efe/0d0f22d0） |
+| [project-dialectgatepass-dead-chain.md](bug-fixes/project-dialectgatepass-dead-chain.md) | T-DialectGatePassDeadChain 交付档（20261102 已实施，CHANGELOG 真机报障条目在案）——方言冲突「放行」先报 BLOCKED 把意图标完成→准备链静默早退；修法＝BLOCKED 只限真阻断 + 7 处早退结算门 + 放行态两蓝字常驻；定向 108/0/0、反向恰 1 红 |
+| [project-capture-stress-test-20261107.md](bug-fixes/project-capture-stress-test-20261107.md) | 增强捕获并发压测（20261107 两轮，插件侧全绿）——脚本 `demo/stress-test/stress_capture.py`；第二轮 runIde 沙盒 ~10万请求零异常、demo 全 GC 存活 ~30MB 无泄漏；HTTP 侧两轮不可比（首轮多挂 cool-request hook agent）；沙盒 log 的 LogPerfProbe 行是插件侧裁判位 |
+| [project-goldendb-dialect-20261107.md](bug-fixes/project-goldendb-dialect-20261107.md) | GoldenDB（中兴）方言对接交付档（master `e302f0c0` 18 笔合流，CI run 42399728368 全 16 job success；随 v2026.11.9-beta.1 作为第 15 方言发行）——守卫 6 类 100 例绿、驱动级替代读数 PASS words=384；措辞只许「驱动级替代读数」禁「真机验证」；测试 classpath 长效注入见 CHANGELOG `8fa413d9` |
+| [project-sqllist-catchup-20261107.md](bug-fixes/project-sqllist-catchup-20261107.md) | T-SqlListCatchup 交付档（八券 A/B/C/D/B2/E/F/G，`207a03f5`，随 v2026.11.9-beta.1 发行）——F2a/G2 截图铁证：已丢弃 1,402 条可见化生效、清屏重放守卫丢弃 138,243→3 行；G2 真丢数据缺陷已修（clear 复用文档实例→守卫水位陈旧）；G3 定界＝停摆是平台文档管线上限非插件；第五轮真机 10.7 万请求慢拍 0/SEVERE 0 |
+| [project-three-lane-branch-merge-20261108.md](bug-fixes/project-three-lane-branch-merge-20261108.md) | 三车道闲时任务执行记录（20261108 offpeak 本体，已完毕）——3 CI 车道全落地、dev/insight 双合并+1轮修复收口、k2j 177 轮生产面收官；沉淀：insight 工作树写权限可用（旧警告证伪）、rerun-failed-jobs API 恒 404（repo+workflow scope 双端点确认）、ci-watch.py stdout 缓冲致中间读数不可见 |
+| [project-ibatis-full-support-20261109.md](bug-fixes/project-ibatis-full-support-20261109.md) | T-Ibatis2Support/Gap 交付档（券 0/A/B/D/E/F/H 随 v2026.11.9-beta.1、Gap 四口子随 v2026.11.10-beta.1 发行；保真 20/20、最终定向 397 类 3906 例 0 失败）——含「插件没生效」三步取证法；剩余券 G（类型映射）与真机验收在 pending-plans 续踪 |
+| [project-junit3-migration-20261105.md](bug-fixes/project-junit3-migration-20261105.md) | T-Junit4Migration 交付档（P0/P1/P2 已实施合 master：13 个从未执行用例复活 `9dc0c263`、DB 集成 SKIP 口径 `0aa0542d`、313 条无效注解清理 `3a07ee7a`、`Junit3SemanticsGuardTest` `99f4c0bb`；P3 全量迁移不排期）——证伪「反引号=不执行」：JUnit3 只看方法名 test 前缀；junit.framework 残留仅 EmptyTextLinkApiGuardTest 1 文件 |
+| [project-perf-review-round5-20261029.md](bug-fixes/project-perf-review-round5-20261029.md) | IDEA 性能影响第五期复查 + T-PerfSweep28 交付档（20261029，四提交 + 全量门禁 8545/0/0/10）——券02 证伪撤销、券03 范围收缩等五券终态 |
+| [project-consolebind263-20261107.md](bug-fixes/project-consolebind263-20261107.md) | T-ConsoleBind263 交付档（263 删 LocalDataSource 致预览换源退化单源，已修合 master `4ef1fe9c`）——真机验收待用户：263 预览换源应列全数据源 |
+
+## 已解决踩坑（108 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -420,17 +433,23 @@
 | [pitfall-probe-ime-and-widget-coords-262.md](pitfalls/pitfall-probe-ime-and-widget-coords-262.md) | 262 探针四坑——IME 吞 ASCII（打字一律剪贴板粘贴）、widget y=1017 坐标当帧量、弹层认键盘（Down+Enter）、设置滚动债 |
 | [pitfall-agent-config-watchdog-15s-silence.md](pitfalls/pitfall-agent-config-watchdog-15s-silence.md) | 增强捕获「约 15~16s 后静默」=T-07 CONFIG 看门狗（`SenderLoop.DEFAULT_CONFIG_WATCHDOG_MS=15s`），不是采集缺陷——探针必须先发 CONFIG 并等 ACK，否则测到的是自停；已做可见化（心跳 `gate`:0|1+告警行） |
 
+| [pitfall-unregistered-jdbc-noise-vs-registration.md](pitfalls/pitfall-unregistered-jdbc-noise-vs-registration.md) | 「未登记 JDBC 实现」8 条=5 Hikari+3 Oracle 连接层噪音，已由 T-CatchAllFamilyFilter 收口（`4fdd7d5e`，随 v2026.11.9-beta.1 发行）——同族继承链双向排除只动曝光面；判据=先看 declared 方法数与「已织入 N」；Oracle 连接层级与 declared prepare 计数留档 |
+| [pitfall-oracle-statement-wrapper-registry-mismatch.md](pitfalls/pitfall-oracle-statement-wrapper-registry-mismatch.md) | Oracle 只出 select 1 from dual：prepare 返回 Wrapper、execute 落在 T4CPreparedStatement，登记对象错位致 PS 全丢——修法已落 master（2026-11-04：`StatementRegistry.registerWithDelegates` 解一层包装登记内层 + NestGate 真产出才抑制 + `lastExitToken` 同帧重复出口去重） |
+| [pitfall-runners-zero-means-unbound-not-unconnected.md](pitfalls/pitfall-runners-zero-means-unbound-not-unconnected.md) | 预览「执行 SQL」报 runners=0 与连接/内省无关，真门是「文件级数据源绑定」——UI-046/048/049 三轮修复与 S2-12 回落已全部闭环并真机复验 |
+
 ## 方法论（1 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
 | [javap-platform-ui-debugging.md](methodology/javap-platform-ui-debugging.md) | 反编译平台 jar 定位私有布局/Swing UI 异常——一次 javap 顶十轮探针；含沙盒 jar 定位、沙盒进程精确识别（勿杀主 IDE）、构建产物 stamp 校验 |
 
-## 用户环境（1 个）
+## 用户环境（2 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
 | [user-grok-api.md](user-context/user-grok-api.md) | Grok 中转 API 配置 |
+
+| [project-workspace-disk-cleanup-20261102.md](user-context/project-workspace-disk-cleanup-20261102.md) | 20261102 外层工作区磁盘清理（已执行完毕实回收 51GB，F 盘 22G→73G 可用）——用户授权 A/B/C2-C6/D/E/F 分组逐项读数、保留面与三条运维定例 |
 
 ---
 
@@ -474,11 +493,15 @@
 
 ---
 
+**第三十三次精简升级（2026-11-10，16 个归档 + 孤儿 33 补册 + 删 1 个 global 重复副本）**：归档判定全部先 git 实测——tags `2026.11.8-beta.1`/`2026.11.9-beta.1`/`2026.11.10-beta.1` 全在位、`origin/master..master` 为 0、`git tag --contains 207a03f5` 证 T-SqlListCatchup 随 2026.11.9-beta.1 发行（65e03bae「iBatis 2.x 全面支持 + GoldenDB 第 15 方言 + SQL 列表提速」）、T-RuntimeSlotOptionalFill 缺陷修随 2026.11.7-beta.2 发行（bd641efe/0d0f22d0）、T-CatchAllFamilyFilter 已实施（4fdd7d5e + c4fde445）、T-Junit4Migration P0/P1/P2 已合 master（计划册状态行：9dc0c263/0aa0542d/3a07ee7a/99f4c0bb；junit.framework 残留仅 1 文件）、T-DynUpdate263 已实施（2769e1b8）、T-ConsoleBind263 已修（4ef1fe9c）、T-EmbeddedConsoleExecRestore 已提交（0574fa1e）、`docs/规范/编码与验收标准-规范.md` 已补建（git ls-files 在册）。归 **bug-fixes 12 个**（发行链 2 + 已交付战役 6：runtime-slot-fill-20261107 / dialectgatepass / goldendb / sqllist-catchup / ibatis-full-support / ibatis 发行链，加压测、三车道、Junit4Migration、perf-review-round5、consolebind263）+ **pitfalls 3 个**（unregistered-jdbc-noise、oracle-wrapper-registry、runners-zero）+ **user-context 1 个**（workspace-disk-cleanup）。同轮：MEMORY.md 孤儿 33 文件补册（CI 流水线全景 / 发行 publish 模式 / 国产库驱动判据表 / agent attach 冒烟配方 / DBX 靶机 / EDT 真机族 / CI 族 / 工具链补 / 文档站与描述页 / 导航机制 / 反馈六条等，按族归并成行）；pitfall-marketplace-description-two-stores-preserveui 删项目副本（global 已有留底，AGENTS.md 指向 global）；project-pending-plans 原地刷新 12 处过期状态（Ibatis2/Gap、CatchAll、RuntimeSlotFill、Panwei、CrossChannel、DynUpdate263、Mcp261、DialectInferFix、LogListAnchor、GaussDb 压缩为 git 实测终态指针，删已闭环 CaptureCoverage 与「编码与验收标准-规范.md 缺档」两条，update.json 官方通道状态单列）；全量备份 memory-backup-20261110（363 文件）。
+
+---
+
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 272（含 MEMORY.md） |
+| 项目 memory（保留） | 266（含 MEMORY.md；内容文件 265） |
 | 全局记忆 global/ | 126 |
-| 归档 archive/ | 359（bug-fixes 256 + pitfalls 100 + methodology 1 + user-context 1 + README） |
-| **合计** | **757** |
+| 归档 archive/ | 375（bug-fixes 268 + pitfalls 103 + methodology 1 + user-context 2 + README） |
+| **合计** | **767** |

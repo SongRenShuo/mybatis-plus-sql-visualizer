@@ -383,6 +383,36 @@ python C:\Users\USER\.zcode\cli\parallel_tasks.py check
 - **真机验收（§6.3）未执行**：本会话没有可驱动的 runIde 沙盒 + `oracle-demo` + `FREEPDB1` 组合，按「环境受限未验证」登记。用户可在自己的 IDE 里按 §6.3 复跑；预期 `UPDATE_TIME` 段显示 `TIMESTAMP '…'`，执行不再 ORA-01843。
 - **未提交**：改动留在 master 工作树（32 个文件 + 3 个新文件），按仓库交付流程待用户确认后提交。
 
+### 12.5 R10：PG 回归修复（2026-11-09）
+
+**现场**：PG 库（`cyzc_db1`）执行预览 SQL 报
+
+```
+cyzc_db1> TIMESTAMP
+[42601] ERROR: syntax error at or near "TIMESTAMP"   位置：1
+```
+
+——控制台只提交了 `TIMESTAMP`，不是整条 SQL。
+
+**根因**：DBN 控制台默认按「光标所在语句 / 选区」提交。日期族改成 ANSI 类型字面量后，
+`AND r.create_time >= TIMESTAMP '…'` 这类长行被折行，光标落在以 `TIMESTAMP` 开头的片段上时，
+`ScriptModelUtil.getSelectedStatementsRange` 把该片段当独立语句提交；PG 收到 `TIMESTAMP` 单字。
+与 SQL 本身无关（该 SQL 在 PG 里是合法的）。
+
+**修法**（`execute/ExecutionScriptScope.kt` 新增 `shouldExecWholeScript`）：单语句预览强制整批提交——
+`SqlTypeClassifier.splitStatements(sql).size <= 1` 时把 `wholeScriptExec` 置真，走
+`DataSourceSelector.wholeScriptExecOption`（`execInside/execOutside = EXECUTE_*_WHOLE_SCRIPT`），
+绕开光标/选区这个变量。多语句预览（主 SQL + 分页 COUNT 等）与 identity 包装产物维持原逻辑。
+
+接线点：`SqlPreviewPanelExecution.executeSql` 的三处 `SqlExecutor.execute/executePrepared`、
+`submitExplainDirectConsole` 的 EXPLAIN 提交、`executeAdhocSql`（与 identity 旗标取或）。
+
+**读数**：`ExecutionScriptScopeTest` 5/0/0/0、`IdentityWholeScriptWiringGuardTest` 4/0/0/0
+（接线守卫仍绿）、`PrepareSingleFlightGateTest` 26/0/0/0；平台腿见提交时的定向读数。
+
+**边界**：本修法解决「提交范围漂移」；若真机上仍复现，说明 DBN 的 `ScriptModel` 本身把字面量
+切成了独立语句，届时再评估「按方言回落裸引号（Oracle/达梦 之外不产 ANSI 字面量）」的备选。
+
 ## 参考
 
 - `docs/调研报告/20260929-1500-R3-日期类型缺口矩阵-验证报告.md`（§二矩阵、§四 D1）

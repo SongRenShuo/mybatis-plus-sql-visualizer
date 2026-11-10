@@ -201,6 +201,9 @@ public final class SqlHookCallbacks {
                 NestGate.markEmitted();
             }
         } catch (Throwable t) {
+            // 采集红线：出口回调自吞，宿主 execute 语义不受影响。
+            // T-PanweiInsertCapture F2：自吞不等于无声——计数随心跳上报（见 ASSEMBLE_FAILURES）。
+            ASSEMBLE_FAILURES.incrementAndGet();
             cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureFailed();
         } finally {
             scope.close();
@@ -356,6 +359,70 @@ public final class SqlHookCallbacks {
 
     /** 汇总行间隔（每满这么多次失败打一行；见 {@link #dropToRaw} 的 T-PS6-08 注释）。 */
     private static final long SUMMARY_EVERY = 100L;
+
+    /**
+     * T-PanweiInsertCapture F2：出口路径**组装失败**累计（静默丢弃的唯一证据）。
+     *
+     * <p>立项动因：{@link #onExecuteExit} 外层 {@code catch (Throwable)} 是采集红线（绝不影响宿主），
+     * 但它把「事件组不出来」这个事实**完全吞掉**——没有计数、没有日志。真机现场「同一秒的 SELECT
+     * 进得了面板、INSERT 进不了」时，若原因是 {@code StackLocator} / {@code WovenEvents.emit} 在
+     * 该条语句上抛了异常，两条通道都看不到任何线索。本计数随心跳上报，给这条路径一个出口。
+     *
+     * <p>口径：进入 {@code onExecuteExit} 之后发生的任何 Throwable（入口/出口 token 判空之后的
+     * 整段，含 NestGate 与事件组装）。单调累计、随心跳整体覆盖，与 {@code dropped}/{@code unreg} 同口径。
+     */
+    private static final AtomicLong ASSEMBLE_FAILURES = new AtomicLong();
+
+    /** 出口路径组装失败累计（心跳 {@code assembleFailures} 键的取值）。 */
+    public static long assembleFailures() {
+        return ASSEMBLE_FAILURES.get();
+    }
+
+    /**
+     * T-PanweiInsertCapture F2：被 {@link NestGate} 抑制的帧累计（心跳 {@code nestSuppressed} 键取值）。
+     *
+     * <p>NestGate 本身包内可见（它是纯门禁，不对外暴露 API），由本类转一手——心跳组装在
+     * {@code transport.SenderLoop}（另一个包），只能经由本公开门面取值。
+     */
+    public static long nestSuppressedCount() {
+        return NestGate.suppressedCount();
+    }
+
+    /**
+     * T-NestGateObserve：**陈旧嵌套**累计（心跳 {@code nestStale} 键取值）。
+     *
+     * <p>与 {@link #nestSuppressedCount()} 的区别是诊断的关键：后者只统计「被内层挤掉的外层帧」，
+     * 深度泄漏时被抑制的是**最外层自己**，那条路径一条都不计（磐维真机现场 nestSuppressed=0 却整类
+     * 语句消失）。本计数只回答「这条线程有没有一条活过阈值的链」——有就是深度未归零。
+     */
+    public static long nestStaleCount() {
+        return NestGate.staleCount();
+    }
+
+    /** T-NestGateObserve：进程级最高嵌套深度（心跳 {@code nestMaxDepth} 键取值）。 */
+    public static int nestMaxDepth() {
+        return NestGate.maxDepth();
+    }
+
+    /** 仅测试用：复位 NestGate 的线程态与观测计数（跨包测试经此转发）。 */
+    public static void resetNestGateForTest() {
+        NestGate.resetForTest();
+    }
+
+    /** 仅测试用：注入 NestGate 时钟（{@code null} = 系统时钟）。 */
+    public static void setNestClockForTest(java.util.function.LongSupplier clock) {
+        NestGate.clockOverride = clock;
+    }
+
+    /** 仅测试用：陈旧嵌套阈值（毫秒）。 */
+    public static void setNestStaleMsForTest(long ms) {
+        NestGate.setStaleMsForTest(ms);
+    }
+
+    /** 仅测试用：复位组装失败计数。 */
+    public static void resetAssembleFailuresForTest() {
+        ASSEMBLE_FAILURES.set(0L);
+    }
 
     /** 供测试观测（反射内联钩子链路不可直接断言的兜底计数）。 */
     public static long fallbackCount() {

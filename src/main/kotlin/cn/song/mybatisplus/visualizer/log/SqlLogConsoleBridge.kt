@@ -288,6 +288,18 @@ open class SqlLogConsoleBridge(
     val consoleLinesSeen = java.util.concurrent.atomic.AtomicLong()
 
     /**
+     * T-PanweiInsertCapture F1：**让位期间被丢弃的可解析 SQL 行**累计（跨全部已挂载控制台）。
+     *
+     * 计数本体在 [SqlCaptureGate.suppressedSqlLines]（`processConsoleLine` 是文件级函数，拿不到本类
+     * 实例），这里只做只读转发，保持面板/状态栏取数入口与其他计数（[consoleLinesSeen] 等）同形。
+     *
+     * 立项动因＝真机现场「控制台里有标准形态的 `INSERT`，面板一条都没有」：agent 在线时桥按设计
+     * 让位，`processConsoleLine` 的 paused 分支只做时间嗅探就 `return emptyList()`，**被丢掉的行
+     * 没有任何读数**——两条通道都没有证据说明「这条 SQL 被让位吃了」。
+     */
+    val suppressedSqlLines: Long get() = SqlCaptureGate.suppressedSqlLines.get()
+
+    /**
      * T-RA-03：重放丢弃行累计（跨全部已挂载控制台求和），SQL 日志面板链路诊断行取数入口。
      *
      * 为什么要在桥这层聚合：计数本体按 console 存在 [BridgeLineContext]（重放守卫每控制台独立
@@ -499,6 +511,9 @@ open class SqlLogConsoleBridge(
         }
         LogPerfProbe.recordGauge("LogBridge.settledBacklog", beatBacklog)
         if (skipped > 0) {
+            // T-PanweiInsertCapture F1：静默冲刷被让位丢弃的条目同口径计入（它们是已解析完成的
+            // SQL 条目，用户视角与「让位丢弃 SQL 行」是同一件事）。
+            SqlCaptureGate.suppressedSqlLines.addAndGet(skipped.toLong())
             LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 $skipped 条（由 agent 通道产出）")
         }
         if (produced > 0) {
@@ -910,6 +925,18 @@ object SqlCaptureGate {
     val paused = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
+     * T-PanweiInsertCapture F1：让位期间被丢弃的**可解析 SQL 行**累计。
+     *
+     * 口径：`processConsoleLine` 处于「paused 且活性回落未解封」时，嗅探（`sniffLogTimestamp`）
+     * 确实解析出条目 → 本计数 +1，随后那一行按让位语义丢弃。噪声行不计。
+     *
+     * 为什么落在闸门对象上：计数点在文件级函数 `processConsoleLine` 内，拿不到 `SqlLogConsoleBridge`
+     * 实例；闸门是两条路径都可见的公共锚点（与 `paused` 同源）。
+     */
+    @JvmField
+    val suppressedSqlLines = java.util.concurrent.atomic.AtomicLong()
+
+    /**
      * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 处理控制台行时置 true
      * （会话内粘滞）。桥据此短路自身的重复解析（条目由 EP 单路产出）。
      *
@@ -1150,6 +1177,11 @@ internal fun processConsoleLine(
             val sniffed = sniffLogTimestamp(line, ctx)
             if (CaptureActivityFallback.onConsoleLine(sniffed.isNotEmpty(), CaptureActivityFallback.now())) {
                 return finishEntries(sniffed, line, ctx, timePrefix)
+            }
+            // T-PanweiInsertCapture F1：让位态丢弃——嗅探已证明这一行是可解析的 SQL，但它进不了面板。
+            // 此前这条路径零读数，真机现场（控制台有 INSERT、面板没有）完全无法自证。
+            if (sniffed.isNotEmpty()) {
+                SqlCaptureGate.suppressedSqlLines.incrementAndGet()
             }
             return emptyList()
         }

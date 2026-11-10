@@ -234,15 +234,40 @@ internal object LogParseDiag {
     /** 参数文本命中日志行特征被拒（最后一道防污染）。 */
     val paramWithLogMarker = java.util.concurrent.atomic.AtomicLong()
 
-    /** 上次已上报的计数快照（仅上报增量，避免刷屏）。 */
-    private var reported = longArrayOf(0, 0, 0, 0)
+    /**
+     * T-PanweiInsertCapture F7：**SQL 形态行未被任何分支消费**的累计。
+     *
+     * 判据：行内含 `Executing:` / `{pstm-` / `{conn-` / `{stmt-` 之一，但走完 [MyBatisLogParser]
+     * 全部分支后落到噪声档。典型来源：`mixedPrefix=false`（只认用户配置的行首前缀）时的
+     * MyBatis `==>  Executing:` 行。它为「某类语句整类不见」提供最小证据——「有 N 行 SQL 日志
+     * 没被识别」，而不是零信息。
+     */
+    val unrecognizedSqlLine = java.util.concurrent.atomic.AtomicLong()
 
-    /** 当前各计数（[paramWithoutContext], [swallowedLineBlocked], [partialMultilineClosed], [paramWithLogMarker]）。 */
+    /**
+     * T-PanweiInsertCapture F6：本会话是否出现过 **iBatis 2.x 日志形态**（`{pstm-`/`{conn-`/`{stmt-}`
+     * 标记行被消费过）。
+     *
+     * 用途：iBatis 的批处理（`executeBatch`）在框架层**不打印任何 SQL 行**（`BaseLogProxy.EXECUTE_METHODS`
+     * 不含该名），控制台通道结构性不可见。面板据此在「iBatis 工程 + 增强捕获未开启」时给出具名提示，
+     * 而不是让用户以为插件坏了。
+     */
+    @Volatile
+    var sawIbatisForm: Boolean = false
+
+    /** 上次已上报的计数快照（仅上报增量，避免刷屏）。 */
+    private var reported = longArrayOf(0, 0, 0, 0, 0)
+
+    /**
+     * 当前各计数（[paramWithoutContext], [swallowedLineBlocked], [partialMultilineClosed],
+     * [paramWithLogMarker], [unrecognizedSqlLine]）。
+     */
     fun counts(): LongArray = longArrayOf(
         paramWithoutContext.get(),
         swallowedLineBlocked.get(),
         partialMultilineClosed.get(),
         paramWithLogMarker.get(),
+        unrecognizedSqlLine.get(),
     )
 
     /**
@@ -255,7 +280,8 @@ internal object LogParseDiag {
         val delta = LongArray(now.size) { now[it] - reported[it] }
         reported = now
         return "控制台解析诊断（增量）：参数行无上下文丢弃=${delta[0]} 空参数行拦下=${delta[1]} " +
-            "多行残句闭合=${delta[2]} 参数含日志特征被拒=${delta[3]}（累计 ${now.joinToString("/")}）"
+            "多行残句闭合=${delta[2]} 参数含日志特征被拒=${delta[3]} " +
+            "未识别的 SQL 形态行=${delta[4]}（累计 ${now.joinToString("/")}）"
     }
 
     /** 全量归零（测试/会话切换）。 */
@@ -265,6 +291,8 @@ internal object LogParseDiag {
         swallowedLineBlocked.set(0)
         partialMultilineClosed.set(0)
         paramWithLogMarker.set(0)
-        reported = longArrayOf(0, 0, 0, 0)
+        unrecognizedSqlLine.set(0)
+        sawIbatisForm = false
+        reported = longArrayOf(0, 0, 0, 0, 0)
     }
 }
