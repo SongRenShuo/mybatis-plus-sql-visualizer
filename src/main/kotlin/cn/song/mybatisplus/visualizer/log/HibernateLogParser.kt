@@ -34,6 +34,15 @@ class HibernateLogParser(
 
     /** 是否识别无前缀的纯 SQL 行（行首即 SELECT/INSERT/UPDATE/DELETE）。 */
     var recognizeBareSql: Boolean = true,
+
+    /**
+     * T-ConsoleFlushAlign：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （绑定参数行 / SQL 续行与语句行同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private val settleMs: Long = DEFAULT_SETTLE_MS,
+
+    /** settle 判定的时钟（测试注入可控件；与 [LogThreadRouter] 共用同一时钟）。 */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -72,6 +81,8 @@ class HibernateLogParser(
         isCollecting = { it.collecting },
         isIdle = { !it.collecting && !it.inComment && it.pendingParams.isEmpty() && it.pendingShadow == null },
         routeNoTokenToRecent = true,
+        // 时钟与 [clock] 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
+        clock = clock,
     )
 
     /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
@@ -291,6 +302,31 @@ class HibernateLogParser(
         return result
     }
 
+    /**
+     * T-ConsoleFlushAlign：静默冲刷——闭合全部**已静默 ≥ [settleMs]** 的桶的待产出条目，产出进
+     * [entries]（由调用方随下一次 [takeEntries] 取走），返回本次产出条数。
+     *
+     * 为什么必须有它：绑定参数行（TRACE 级，`logging.level` 常只开 `org.hibernate.SQL: debug` 不含
+     * type 描述符）到达后要等「非 SQL 行」才闭合；参数行被截断时只等同线程**下一条语句行**闭合——
+     * 实时链路从不调 [closePending]，应用安静后最后一条语句在桶里无限期滞留，`takeEntries()` 恒空。
+     * 静默 ≥ 阈值即判定「后续行不会再来了」，此时闭合是安全的（同
+     * [JdbcTemplateLogParser.flushSettled] 口径：宁交未还原形态，不整段丢弃）。
+     *
+     * 零参条目沿用 T-HibDualCapture 影子槽语义：[closePending] 对零参条目返回 null（条目暂存
+     * `pendingShadow` 等待 stdout 副本合并）——随下一次 [takeEntries] 在非收集态桶上立即交出，不另设冲刷点。
+     *
+     * 调用点两处：① [processConsoleLine] 逐行入口（同控制台线程，喂行后调用，当前行的桶刚被触达故
+     * 不被截断）；② 控制台桥的常规轮询 [SqlLogConsoleBridge.flushSettledEntries]（EDT）——应用之后
+     * 一行都不再打时，靠这一拍兜底。
+     */
+    fun flushSettled(nowMs: Long = clock()): Int {
+        var produced = 0
+        for (bucket in router.settledBuckets(settleMs, nowMs)) {
+            if (closePending(bucket) != null) produced++
+        }
+        return produced
+    }
+
     // ---------- 私有方法 ----------
 
     /**
@@ -433,6 +469,15 @@ class HibernateLogParser(
         const val DEFAULT_SQL_PREFIX = "Hibernate:"
         const val DEFAULT_PARAM_PREFIX = "binding parameter"
         const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /**
+         * T-ConsoleFlushAlign：静默冲刷默认阈值（毫秒），对齐 [JdbcTemplateLogParser.DEFAULT_SETTLE_MS]。
+         *
+         * 取 1 秒的由来：绑定参数行（TRACE）与语句行（DEBUG）由同线程相邻打印，间隔 1ms 量级；1 秒的
+         * 静默足以判定「没有参数行/续行可等」，而误伤（把参数行留在条目外）需要该线程在两行之间
+         * 卡住 1 秒以上。
+         */
+        const val DEFAULT_SETTLE_MS = 1000L
 
         /**
          * 纯 SQL 行模式：行首即 SQL 关键字。
