@@ -593,6 +593,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：**默认关**——EXPLAIN 默认走原生
          * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
          * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。
+         *
+         * R45 拍板收口（2026-11-11 用户定案）：**转正保留、维持默认关**——「保留一个版本周期，
+         * 下版再定摘除」的到期裁决就此关闭：结构化通道转正为常驻能力，摘除案废止；dev 侧 G4
+         * （project-dev-batch-20261031）曾试的「默认开」案同批废止（未回流 master，不追认）。
+         * 设置页开关行自 2026-10-01（0df4a311）起在册（组 1 SQL 预览，`explainStructuredCheck`），
+         * 「启用结构化并重试」通知写入 true 后用户可在设置页关回——单向门不存在，设置文案
+         * 同步去「实验特性」口径（转正后该说法失真）。
          */
         var explainStructuredRender: Boolean = false,
 
