@@ -113,13 +113,39 @@ public final class EventBus {
      *
      * @return true = 已聚合入队（本次未丢事件）；false = 无同模板候选或竞争失败
      */
+    /** T-HiddenBugPerfScan 券 S：尾部快路径探针预算（同模板风暴的命中集中在队尾）。 */
+    private static final int TAIL_PROBE_BUDGET = 64;
+
+    /** 测试缝：满队模板比较次数（快路径 + 全量兜底；原实现为 O(n) 锁步进迭代）。 */
+    static final java.util.concurrent.atomic.AtomicLong TAIL_PROBES = new java.util.concurrent.atomic.AtomicLong();
+
     private static boolean tryAggregateOnFull(SqlEvent event) {
         try {
             final String template = event.sql;
             if (template == null) {
                 return false;
             }
-            for (SqlEvent queued : QUEUE) {
+            // T-HiddenBugPerfScan 券 S：满队扫描降本——原弱一致迭代全队列（最多 2048 次
+            // iterator 锁步进，每步进各抢一次队列锁 + 逐元素整条 SQL equals，风暴/孤儿
+            // agent 场景下宿主采集线程每条 SQL 付数十 µs 采集税）。改一次 toArray 快照
+            // （单次锁内复制，之后无锁比较）+ 两段式：先尾部 64 探针快路径（同模板风暴
+            // 的命中集中在队尾，O(budget) 命中）；未命中再全量快照扫——F2b 语义
+            // 「队内任意位置同模板都可聚合」由既有测试钉死，不得收窄。「单次 offer 只
+            // 折叠一对」不变。
+            final Object[] snapshot = QUEUE.toArray();
+            final int len = snapshot.length;
+            final int floor = Math.max(0, len - TAIL_PROBE_BUDGET);
+            for (int i = len - 1; i >= floor; i--) {
+                TAIL_PROBES.incrementAndGet();
+                final SqlEvent queued = (SqlEvent) snapshot[i];
+                if (queued != null && template.equals(queued.sql) && QUEUE.remove(queued)) {
+                    event.aggregatedCount = queued.aggregatedCount + 1;
+                    return QUEUE.offer(event);
+                }
+            }
+            for (int i = 0; i < floor; i++) {
+                TAIL_PROBES.incrementAndGet();
+                final SqlEvent queued = (SqlEvent) snapshot[i];
                 if (queued != null && template.equals(queued.sql) && QUEUE.remove(queued)) {
                     event.aggregatedCount = queued.aggregatedCount + 1;
                     return QUEUE.offer(event);
