@@ -76,12 +76,20 @@ public class NestGateTest {
         StatementRegistry.register(outer, "SELECT outer", "jdbc:nest://db");
         StatementRegistry.register(inner, "SELECT inner", "jdbc:nest://db");
 
+        // T-PanweiInsertCapture F2：抑制计数基线（静态累计，跨用例不复位）
+        final long suppressedBefore = cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks
+                .nestSuppressedCount();
+
         outer.getClass().getMethod("executeUpdate").invoke(outer);
 
         final SqlEvent first = queue().poll();
         assertNotNull("嵌套链必须恰好产出 1 条事件（外层被抑制）", first);
         assertEquals("必须报最内层（驱动层）那条", "SELECT inner", first.sql);
         assertNull("嵌套链不得产出第二条（双报红线）", queue().poll());
+        assertEquals(
+                "被抑制的外层帧必须计数（F2：此前这条路径零读数）",
+                suppressedBefore + 1,
+                cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.nestSuppressedCount());
     }
 
     @Test

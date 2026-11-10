@@ -31,6 +31,16 @@ final class NestGate {
 
     private static volatile boolean enabled = resolveEnabled();
 
+    /**
+     * T-PanweiInsertCapture F2：被本门抑制的帧累计（单调）。
+     *
+     * <p>为什么需要：本门的正确性依赖「深度最终归零」——一旦某帧的出口钩子缺失，该线程会永久处于
+     * 「内层已产出」态，此后该线程的每条语句都被静默抑制。这类残留此前**零读数**：用户只看到
+     * 「这条线程上的 SQL 全部不见」，日志里一个字都没有。计数随心跳上报，把「抑制了多少」变成事实。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong SUPPRESSED =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /** 每线程嵌套态：depth = 当前已织 execute 帧数；innerEmitted = 本链已有内层产过事件。 */
     private static final class State {
         int depth;
@@ -97,6 +107,11 @@ final class NestGate {
                 s.depth--;
             }
             final boolean mayEmit = !s.innerEmitted;
+            if (!mayEmit) {
+                // T-PanweiInsertCapture F2：被本门抑制的帧数——「同一秒 SELECT 有、INSERT 没有」
+                // 若源于该线程的残留态（深度未归零），这里是唯一读数。单调累计、随心跳上报。
+                SUPPRESSED.incrementAndGet();
+            }
             if (s.depth == 0) {
                 // 最外层已退出：此后没有更外层需要被抑制，清标记即为完整复位。
                 // lastExitToken 刻意不清——同帧的第二条 ATHROW 紧随其后，要靠它去重；下一次
@@ -136,11 +151,17 @@ final class NestGate {
     static void resetForTest() {
         STATE.remove();
         enabled = resolveEnabled();
+        SUPPRESSED.set(0L);
     }
 
     static void setEnabledForTest(boolean value) {
         enabled = value;
         STATE.remove();
+    }
+
+    /** T-PanweiInsertCapture F2：被本门抑制的帧累计（心跳 {@code nestSuppressed} 键取值）。 */
+    static long suppressedCount() {
+        return SUPPRESSED.get();
     }
 
     private static boolean resolveEnabled() {

@@ -61,6 +61,31 @@ internal data class CaptureStatusLine(
      * 无法区分「应用真停了」和「队列溢出在丢」。0 或旧版 agent 未上报时不挂段。
      */
     val agentDropped: Long = 0L,
+    /**
+     * T-PanweiInsertCapture F1：让位（agent 接管）期间**被丢弃的可解析 SQL 行**累计
+     * （[SqlLogConsoleBridge.suppressedSqlLines]）。
+     *
+     * 立项动因＝本次真机现场：控制台里明明有一条标准形态的 `INSERT`（`{pstm-N} Executing Statement:`），
+     * 面板一条都没有——因为 agent 在线、桥按设计让位，那一行被直接丢掉，**两条通道都没有任何读数**
+     * 能说明「有 SQL 行被让位吃掉」。本字段让这类现场一眼可判。0 时不挂段。
+     */
+    val suppressedSqlLines: Long = 0L,
+    /** T-PanweiInsertCapture F2：agent 出口路径组装失败累计（心跳 `assembleFailures`）。0 时不挂段。 */
+    val agentAssembleFailures: Long = 0L,
+    /** T-PanweiInsertCapture F2：被 NestGate 抑制的外层帧累计（心跳 `nestSuppressed`）。0 时不挂段。 */
+    val agentNestSuppressed: Long = 0L,
+    /** T-PanweiInsertCapture F3：登记盲区累计（心跳 `unresolved`）。 */
+    val agentUnresolvedBlind: Long = 0L,
+    /** T-PanweiInsertCapture F3：登记盲区的 PS 实现类名（心跳 `blind`，有界 ≤8）。 */
+    val agentBlindClasses: List<String> = emptyList(),
+    /**
+     * T-PanweiInsertCapture F6：iBatis 批处理提示——本会话**已识别到 iBatis 日志形态**且增强捕获未开启。
+     *
+     * 为什么必须可见：iBatis 2.3.4 的 `BaseLogProxy.EXECUTE_METHODS` 不含 `executeBatch`，
+     * 批处理语句在控制台**一行日志都不产生**（框架事实，控制台侧无法补救）。此时用户看到的是
+     * 「批量写语句一条都不见」，而面板此前对此零解释。
+     */
+    val ibatisBatchHint: Boolean = false,
 )
 
 /**
@@ -109,10 +134,17 @@ internal fun captureStatusLineText(d: CaptureStatusLine): Pair<String, String>? 
     if (!d.capturing) return null
     val consoleBase = MpSqlVisualizerBundle.message("log.statusbar.console", d.consolesAttached, d.linesSeen)
     // 券D：追赶读数挂控制台段尾（>0 才挂；已过 CatchUpBadgeState 一拍节流，无抖动闪烁）
-    val console = if (d.catchUpBehind > 0) {
+    val consoleCatchUp = if (d.catchUpBehind > 0) {
         MpSqlVisualizerBundle.message("log.statusbar.catchup", consoleBase, d.catchUpBehind)
     } else {
         consoleBase
+    }
+    // T-PanweiInsertCapture F1：让位期间被丢弃的可解析 SQL 行（>0 才挂——零值不添噪）
+    // 【反向验证探针锚点】注释掉下面 if 块 = 摘除让位丢弃可见化，CaptureStatusBarTest 对应用例必红。
+    val console = if (d.suppressedSqlLines > 0L) {
+        MpSqlVisualizerBundle.message("log.statusbar.console.suppressed", consoleCatchUp, d.suppressedSqlLines)
+    } else {
+        consoleCatchUp
     }
     val agent = when {
         // 总开关关：无叙事（与 agentStatusText 的 !enabled → null 同口径）
@@ -149,5 +181,43 @@ internal fun captureStatusLineText(d: CaptureStatusLine): Pair<String, String>? 
     } else {
         agentWithDrivers
     }
-    return console to agentWithDropped
+    // T-PanweiInsertCapture F3：登记盲区（>0 才挂；类名有则带括号后缀）——「哪个 PS 类取不到 SQL」
+    // 【反向验证探针锚点】注释掉下面 if 块 = 摘除盲区可见化，CaptureStatusBarTest 盲区用例必红。
+    val agentWithBlind = if (d.agentStatus != null && d.agentUnresolvedBlind > 0L) {
+        val suffix = if (d.agentBlindClasses.isEmpty()) {
+            ""
+        } else {
+            MpSqlVisualizerBundle.message(
+                "log.statusbar.agent.blind.classes",
+                d.agentBlindClasses.joinToString(", "),
+            )
+        }
+        MpSqlVisualizerBundle.message(
+            "log.statusbar.agent.blind",
+            agentWithDropped,
+            d.agentUnresolvedBlind,
+            suffix,
+        )
+    } else {
+        agentWithDropped
+    }
+    // T-PanweiInsertCapture F2：两条静默路径的计数（>0 才挂——正常嵌套会产生少量门禁抑制，持续增长才异常）
+    // 【反向验证探针锚点】注释掉下面 if 块 = 摘除组装失败可见化，CaptureStatusBarTest 对应用例必红。
+    val agentWithAssemble = if (d.agentStatus != null && d.agentAssembleFailures > 0L) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.assemble", agentWithBlind, d.agentAssembleFailures)
+    } else {
+        agentWithBlind
+    }
+    val agentWithNest = if (d.agentStatus != null && d.agentNestSuppressed > 0L) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.nest", agentWithAssemble, d.agentNestSuppressed)
+    } else {
+        agentWithAssemble
+    }
+    // T-PanweiInsertCapture F6：iBatis 批处理无控制台日志（增强未开启时才提示——已开启时由 agent 兜住）
+    val finalAgent = if (d.ibatisBatchHint && d.agentStatus == null) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.ibatisBatch", agentWithNest)
+    } else {
+        agentWithNest
+    }
+    return console to finalAgent
 }

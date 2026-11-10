@@ -34,6 +34,13 @@ public final class DriverRegistry {
         // 两边的语句面/prepare 面各自登记在 WeaveSpecs，勿只登记一半。
         s.add("org.postgresql.Driver");
         s.add("org.opengauss.Driver");
+        // T-PanweiInsertCapture（2026-11-10）方言横向审计：华为两族的连接面此前**漏登记**——
+        // 两者 META-INF/services 声明的都是 `com.huawei.*.Driver`，而语句面/prepare 面早已登记
+        // （`com.huawei.gaussdb.jdbc.jdbc.Pg*` / `com.huawei.opengauss.jdbc.jdbc.Pg*`），属典型的
+        // 「只登记一半」：connect 出口不给 URL，`UrlResolver.lastConnectUrl()` 粗粒度兜底缺失
+        // （单条 URL 仍可由 getURL() 反射取得，故 SQL 不丢，只是归属链少一路兜底）。
+        s.add("com.huawei.gaussdb.jdbc.Driver");
+        s.add("com.huawei.opengauss.jdbc.Driver");
         // H2 / HSQL / SQLite（嵌入式，测试矩阵主力）
         s.add("org.h2.Driver");
         s.add("org.hsqldb.jdbcDriver");
