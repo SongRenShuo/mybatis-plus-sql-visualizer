@@ -269,6 +269,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：先单版本探针——改 1 个发行版 → 拉页面 HTML 数 `user-mention` 确认机制，再批量。**反例**：第一版按「HTML 实体应该能挡住」直接选 `&#64;`，改完 2026.11.10 页面毫无变化，还先怀疑成页面缓存；真因是解实体之后才做提及识别，若当时直接批量就是 30 个白改。
 **Seen 1× (2026-11-10)**——用户报障「Contributors 每次多两个我不认识的」，同轮内先踩 `&#64;` 再说清。
 
+### L28 发行前置是「门禁绿」，不是「`buildPlugin` 成功」——`inspect-plugin-zip` 只证明包内自洽，不证明平台兼容
+
+**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip` 查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
+**证据**：2026-11-10 发行 `2026.11.11-beta.1` 时，本地只跑了 `buildPlugin` + `inspect-plugin-zip` + `ChangeNotesRatingLineGuardTest` + `BundlePlaceholderArityTest` 就打了 tag、建了 Gitee/GitHub 发行版（Gitee 1293976 / GitHub 440141088）；用户当场追问「你发行应该通过 CI 吧」。事后补派 `mode=gate`（run `42788614860` @ `9d32d936`，与 tag `308f5f96` 在 `src/` 零差异）。同一轮的前一版 `2026.11.10` 正式版是按规矩走的：release run `42758016138` 17/17、`verifyplugin` 验的就是待下发 zip。
+**正例**：按 RC-P1d 走——本地 `releaseGate` 为默认路径，需要干净环境才走 CI；要省时间用 RC-P1c 的「零代码改动复用」判据（相对上次全绿提交在 `src/main`/`src/test` 零差异可沿用分片读数），**但 `verifyGate` 不适用复用**：版本号进 `plugin.xml`，jar 变了必须在新产物上重验。**反例**：把「构建成功 + zip 内省 + 文案守卫绿」当发行门禁（本轮即此形态），三条都绿也换不来一句「能装在 243/253/263 上」。
+**Seen 1× (2026-11-10)**——用户点名「应该通过 CI」，同轮补派门禁。
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
