@@ -28,6 +28,12 @@ object SqlLogFileReader {
     internal val formatterCreateCount = java.util.concurrent.atomic.AtomicInteger()
 
     /**
+     * T-HiddenBugPerfScan 券 D 测试缝：readFromFile 打开文件的次数（单遍化前为 2——
+     * 修订遍 + 解析遍；单遍化后为 1）。仅供同模块测试断言；生产语义与本计数无关。
+     */
+    internal val fileOpenCount = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
      * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）5=db（可选，T-AgentDialectLoop）。
      * 毫秒分数为非捕获组——曾误用捕获组占位第 4 组致 logTime 永远读丢（T-AgentDialectLoop 修复）。
@@ -95,24 +101,98 @@ object SqlLogFileReader {
         }
     }
 
-    /** 修订行超限即丢弃剩余字符，不先 readLine 分配任意大小的外部载荷。普通 SQL 不截断。 */
-    private fun boundedLines(reader: java.io.BufferedReader): Sequence<String> = sequence {
-        val text = StringBuilder()
-        var revision = false
-        var overLimit = false
-        while (true) {
-            val c = reader.read()
-            if (c == -1 || c == '\n'.code) {
-                if (text.isNotEmpty() || c != -1) yield(if (overLimit) REVISION_PREFIX else text.toString().removeSuffix("\r"))
-                text.setLength(0); revision = false; overLimit = false
-                if (c == -1) break
-            } else if (!overLimit) {
-                text.append(c.toChar())
-                if (text.length == REVISION_PREFIX.length) revision = text.toString() == REVISION_PREFIX
-                // 最后一个 CR 暂不计入逻辑长度：若随后 LF/EOF，出行时剥除；
-                // 若随后仍有字符，它会重新计入。只宽限单个尾 CR，不截断普通 SQL。
-                val logicalLength = text.length - if (c == '\r'.code) 1 else 0
+    /** 修订行超限即丢弃剩余字符，不先 readLine 分配任意大小的外部载荷。普通 SQL 不截断。
+     *  T-HiddenBugPerfScan 券 D：逐字符 reader.read() 循环（100MB 文件 ≈ 1 亿次虚调用 +
+     *  逐字符 append）改块级读——read(cbuf) 批量取块、块内扫行界、append(char[],off,len)
+     *  批量拼接；修订折叠/行界/尾 CR 宽限语义与旧逐字符版一致（round-trip 与 O147 超限
+     *  折叠测试钉）。 */
+    private fun boundedLines(reader: java.io.BufferedReader): Sequence<String> = object : Sequence<String> {
+        // T-HiddenBugPerfScan 券 D：手写 Iterator 而非 sequence{}——块级状态机局部状态较多，
+        // sequence{} 编译出的协程状态机会触 kotlin/coroutines/jvm/internal/SpillingKt，
+        // 测试 JVM（平台携带的较旧 stdlib）无该类 → NoClassDefFoundError；Iterator 零协程机制。
+        override fun iterator(): Iterator<String> {
+            val buf = CharArray(16 * 1024)
+            val text = StringBuilder()
+            var revision = false
+            var revisionChecked = false
+            var overLimit = false
+            var bufStart = 0
+            var bufEnd = 0
+            var eof = false
+            var nextLine: String? = null
+            var exhausted = false
+
+            // 追加一段块内字符并做修订识别/超限折叠检查（与逐字符版同谓词、块粒度判定，
+            // 产物一致：fold 后整行产裸前缀）。最后一个 CR 暂不计入逻辑长度：若随后 LF/EOF，
+            // 出行时剥除；若随后仍有字符，它会重新计入——只宽限单个尾 CR，不截断普通 SQL。
+            fun appendRange(start: Int, end: Int) {
+                if (overLimit) return
+                text.append(buf, start, end - start)
+                if (!revisionChecked && text.length >= REVISION_PREFIX.length) {
+                    revision = text.startsWith(REVISION_PREFIX)
+                    revisionChecked = true
+                }
+                val logicalLength = text.length - if (text.isNotEmpty() && text[text.length - 1] == '\r') 1 else 0
                 if (revision && logicalLength > MAX_REVISION_PAYLOAD + 150) { text.setLength(0); overLimit = true }
+            }
+
+            // 出行折叠值：overLimit 产裸前缀，否则剥单个尾 CR（空行产空串，与逐字符版一致）
+            fun lineValue(): String =
+                if (overLimit) REVISION_PREFIX else text.toString().removeSuffix("\r")
+
+            fun resetLine() {
+                text.setLength(0); revision = false; revisionChecked = false; overLimit = false
+            }
+
+            /** EOF 冲刷：有残留才产出（原逐字符版 c == -1 且 text 空不产空行）。 */
+            fun flushAtEof(): Boolean {
+                if (text.isNotEmpty()) {
+                    nextLine = lineValue()
+                    resetLine()
+                    return true
+                }
+                return false
+            }
+
+            fun advanceToNextLine(): Boolean {
+                nextLine = null
+                while (true) {
+                    if (bufStart >= bufEnd) {
+                        if (eof) return flushAtEof()
+                        val n = reader.read(buf)
+                        if (n < 0) { eof = true; continue }
+                        bufStart = 0; bufEnd = n
+                        continue
+                    }
+                    var nl = bufStart
+                    while (nl < bufEnd && buf[nl] != '\n') nl++
+                    if (nl >= bufEnd) {
+                        appendRange(bufStart, bufEnd)
+                        bufStart = bufEnd
+                        continue
+                    }
+                    appendRange(bufStart, nl)
+                    bufStart = nl + 1
+                    nextLine = lineValue()
+                    resetLine()
+                    return true
+                }
+            }
+
+            return object : Iterator<String> {
+                override fun hasNext(): Boolean {
+                    if (nextLine != null) return true
+                    if (exhausted) return false
+                    if (!advanceToNextLine()) { exhausted = true; return false }
+                    return true
+                }
+
+                override fun next(): String {
+                    if (!hasNext()) throw NoSuchElementException()
+                    val line = nextLine!!
+                    nextLine = null
+                    return line
+                }
             }
         }
     }
@@ -138,9 +218,12 @@ object SqlLogFileReader {
         // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
         // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
         // T-SqlLogPerf：历史文件加载是 20261006 实测延迟大头嫌疑（8708 条/19MB 计 15~16.6s），阈值打点归因。
+        // T-HiddenBugPerfScan 券 D：单遍化——parseContent(collectRevisions=true) 在行循环中
+        // 收集修订、循环后的 mapIndexed 才 apply（与「先全文扫修订、再全文解析」的双遍完全
+        // 同语义），省掉整文件第二遍；打开次数经 fileOpenCount 供测试断言（反向探锚）。
         return LogPerfProbe.measure("SqlLogFileReader.readFromFile", { "${file.name} ${file.length()}B" }) {
-            val revisions = revisionsIn(file)
-            file.bufferedReader().use { reader -> parseContent(boundedLines(reader), revisions, collectRevisions = false) }
+            fileOpenCount.incrementAndGet()
+            file.bufferedReader().use { reader -> parseContent(boundedLines(reader), Revisions(), collectRevisions = true) }
         }
     }
 
