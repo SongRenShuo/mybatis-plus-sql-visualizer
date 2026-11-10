@@ -664,3 +664,327 @@ CaptureStatusBar / SqlLogPanel / 两份 bundle / NestGateTest），回退后 age
 （夹具在 agent 包内、业务在包外两种形态各一例），否则仍会重演本次的假阳性。
 
 **现场可用判据（现状唯一手段）**：`-Dsqlvis.agent.nestGate=false`。
+
+### 11.8 只观测轮：深度泄漏的可观测化与真机取证（2026-11-10，提交 `8e85d397`）
+
+**目标与红线**：§11.7 已把「磐维 A 模式下 NestGate 深度泄漏」作为事实定死，但泄漏发生在哪一帧没有证据；
+§11.7b 证明在这里顺手改语义会被 10 例测试当场否掉。本轮**只加观测**：不改 `depth`/`innerEmitted` 的
+流转、不改任何返回值、异常全吞、正常语句不抓栈。真机数据见下，泄漏帧已定位到驱动类与方法。
+
+#### 11.8.1 改了什么
+
+| 项 | 落点 | 语义影响 |
+|---|---|---|
+| 链龄 | `NestGate.State.chainStartNanos` + `chainId`，只在 `depth 0→1` 记一次 `nanoTime`（普通语句每帧一次，与入口 token 同量级） | 无 |
+| 陈旧嵌套计数 | `NestGate.NEST_STALE`：`enter()` 在 `depth > 0` 时若 `now - chainStartNanos > sqlvis.agent.nestStaleMs`（默认 5000ms）则 +1 | 无（纯计数，抑制仍由 depth/innerEmitted 决定） |
+| 最高深度 | `NestGate.MAX_DEPTH`（`AtomicInteger` 取大）——判「泄漏后深度是否持续攀升」 | 无 |
+| 一次性取证 dump | 首次判陈旧且 `CaptureBudget.isVerboseLogging()`：一行摘要 + 当前栈前 12 帧，`AtomicBoolean` 只打一次，不含 SQL 原文 | 无 |
+| 接线 | `SqlHookCallbacks.nestStaleCount()/nestMaxDepth()`；心跳 `nestStale`/`nestMaxDepth`（键序固定、无空格、恒出现）；`AgentAttachStats` 字段 + 正则键；状态栏「门禁陈旧 N」（>0 才挂）；zh/en 两份 bundle 成对加键（2 占位） | 无 |
+| 测试缝 | `NestGate.clockOverride`（package-private `LongSupplier`）经 `SqlHookCallbacks.setNestClockForTest/…MsForTest/resetNestGateForTest` 转发 | 仅测试 |
+
+#### 11.8.2 定向读数（只跑定向，未跑全量）
+
+| 面 | 命令 | 读数 |
+|---|---|---|
+| agent | `:sql-visualizer-agent:test --tests "…NestGateTest" --tests "…StatementWeaveEndToEndTest"` | `NestGateTest` **6/0/0/0**（4 旧 + 2 新：`正常嵌套_不误报陈旧且仍只报最内层`、`陈旧嵌套_超阈值计数且语义不变`）、`StatementWeaveEndToEndTest` **13/0/0/0** |
+| 根项目 | `test --tests "…CaptureStatusBarTest" --tests "…BundlePlaceholderArityTest"` | `CaptureStatusBarTest` **29/0/0/0**（新增「门禁陈旧 >0 才挂」）、`BundlePlaceholderArityTest` **4/0/0/0** |
+
+新用例同时钉住两件事：正常嵌套（一次 execute 的时长）`nestStale` 恒 0；用时钟缝把链龄拨过阈值后
+`nestStale` +1，且事件条数与原行为完全一致（嵌套仍只报最内层一条、外层仍计 `nestSuppressed`）。
+
+#### 11.8.3 真机两档读数（香港 `panweidb` A 模式，`155.103.159.54:26201`）
+
+载荷 `tmp/repro/PanweiObserveProbe.java` + 假 IDE 探针 `tmp/repro/Probe.java`，脚本
+`tmp/repro/run-observe.sh`（`GATE=on` / `GATE=off`，端口 53996），agent jar 为本工作树
+`./gradlew :sql-visualizer-agent:agentFatJar` 产物，驱动 `database-lab/vendor/drivers/panweidb-jdbc-2.0.0.jar`。
+载荷顺序＝连接 → `DROP` + `CREATE`（plain Statement）→ **8s**（越过陈旧阈值）→ `INSERT`（`executeUpdate`）→
+`INSERT`（`execute`，iBatis 写路径）→ `SELECT`（`executeQuery`）→ `SELECT COUNT(*)` → **25s 心跳观察窗**。
+
+**默认档（门禁开）** —— 事件列表：
+
+```
+EVENT #1 kind=SELECT u=null sql=select name, setting from pg_settings where name in ('connection_info')
+EVENT #2 kind=SET u=0 sql=set connection_info = '{"driver_name":"JDBC","driver_version":"@GSVERSION@"}'
+EVENT #3 kind=SELECT u=null sql=select count(*) from pg_settings where name = 'support_batch_bind' and setting = 'on';
+EVENT #4 kind=CREATE u=0 sql=CREATE TABLE T_OBS_PROBE (ID NUMBER, NAME VARCHAR2(40))
+（此后 ps.executeUpdate / ps.execute / ps.executeQuery / SELECT COUNT(*) 全部零事件）
+```
+
+心跳原文（连接瞬间那拍全 0；泄漏后的三拍）：
+
+```
+HEARTBEAT {"weavable":1,...,"assembleFailures":0,"nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+HEARTBEAT {"weavable":4,"woven":4,...,"assembleFailures":0,"nestSuppressed":4,"nestStale":4,"nestMaxDepth":2,"unresolved":0}
+```
+
+dump 原文（宿主 stderr，debug 档，只此一次）：
+
+```
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8644 depth=2 thresholdMs=5000
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.dumpStaleChain(NestGate.java:191)
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.noteNestedEnter(NestGate.java:174)
+  at cn.song.mybatisplus.sqlvis.agent.hook.NestGate.enter(NestGate.java:144)
+  at cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.onStatementEnter(SqlHookCallbacks.java:129)
+  at org.panweidb.jdbc.PgPreparedStatement.executeUpdate(PgPreparedStatement.java)
+  at PanweiObserveProbe.main(PanweiObserveProbe.java:44)
+```
+
+**关档（`-Dsqlvis.agent.nestGate=false`）** —— 同一载荷、同一实例：
+
+```
+EVENT #1..3 同上前三条
+EVENT #4 kind=DROP   u=0 sql=DROP TABLE T_OBS_PROBE
+EVENT #5 kind=CREATE u=0 sql=CREATE TABLE T_OBS_PROBE (ID NUMBER, NAME VARCHAR2(40))
+EVENT #6 kind=INSERT u=1 sql=INSERT INTO T_OBS_PROBE (ID, NAME) VALUES (?, ?)
+EVENT #7 kind=INSERT u=1 sql=INSERT INTO T_OBS_PROBE (ID, NAME) VALUES (?, ?)
+EVENT #8 kind=SELECT u=null sql=SELECT NAME FROM T_OBS_PROBE WHERE ID = ?
+EVENT #9 kind=SELECT u=null sql=SELECT COUNT(*) FROM T_OBS_PROBE
+EVENT #10 kind=DELETE u=2 sql=DELETE FROM T_OBS_PROBE
+HEARTBEAT {... "nestSuppressed":0,"nestStale":0,"nestMaxDepth":0,"unresolved":0}   （三拍一致）
+```
+
+**判读**：门禁开时 PS 面与 plain Statement 面在泄漏线程上整类消失，而 `nestSuppressed=0`（首拍）证明
+§11.7 的诊断口径——被抑制的是最外层自己；泄漏后 `nestStale` / `nestMaxDepth` 明显非零。
+关档后事件全出、`nestStale` 不再增长。**关档时 `nestMaxDepth` 也恒 0 属预期**：观测点与门禁共用
+`enabled` 短路（enter 直接返回），不是观测缺失。
+
+#### 11.8.4 泄漏帧定位（本轮最有价值的结论）：`org.panweidb.jdbc.PgStatement.execute`
+
+上面的 dump 只给出「触发陈旧判定的那次嵌套进入」（PS 面），要回答「哪一帧没配平」，用
+`tmp/repro/PanweiNestLeakFrameProbe.java` 做了两档对照（`MODE=fail` / `MODE=ok`，脚本 `run-leakframe.sh`，
+端口 53997）：同一 `createStatement()` 先打一条语句、睡 8s、再打一条——若第一条的出口没配平，第二条
+就是 depth=1 上的嵌套进入，dump 会打出**这条 plain Statement 的实现类**。
+
+`MODE=fail`（第一条 `DROP` 打不存在的表，确定性抛错）：
+
+```
+[probe +2924ms] drop1 failed: ERROR: table "t_leak_frame_absent" does not exist
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8163 depth=2 thresholdMs=5000
+  ...
+  at org.panweidb.jdbc.PgStatement.execute(PgStatement.java)
+  at PanweiNestLeakFrameProbe.main(PanweiNestLeakFrameProbe.java:49)
+HEARTBEAT {... "nestSuppressed":0,"nestStale":2,"nestMaxDepth":3,...}
+```
+
+`MODE=ok`（`CREATE` 成功，8s 后 `DROP` 成功）：
+
+```
+[probe +2819ms] create ok
+[SqlVisAgent] 门禁陈旧链 chainId=4 ageMs=8170 depth=2 thresholdMs=5000
+  ...
+  at org.panweidb.jdbc.PgStatement.execute(PgStatement.java)
+  at PanweiNestLeakFrameProbe.main(PanweiNestLeakFrameProbe.java:39)
+HEARTBEAT {... "nestSuppressed":2,"nestStale":2,"nestMaxDepth":2,...}
+```
+
+**结论**：泄漏帧落在 **plain `Statement` 面（`org.panweidb.jdbc.PgStatement.execute`）**；主观测档的
+`chainId=4` 起点 +2668ms 正对 `DROP` 的执行时刻。§11.8.4 首版据此写成「成功/失败路径都能复现」，
+**该判断已被 §11.8.5 推翻**：`MODE=ok` 那次载荷开头还有一条清理用 `DROP`（表不存在时必抛），链起点
+实际对的是这条**失败**语句；补做的干净对照（只跑成功 `SELECT`、无任何 DDL/异常）不产生泄漏。
+最终定性见 §11.8.5：只有异常路径泄漏。此后该线程的所有语句（含 PS 面）都在这条链上被当成外层：一旦链内某帧真的产出事件
+（主观测档的 `CREATE`），`innerEmitted` 置位，后续整类语句消失——与 §11.7 的现场形态完全一致。
+
+**仍未证的部分（如实登记，已在 §11.8.5 定案）**：dump 只能证明「这条 `execute` 帧的链没有归零」，
+不能靠它区分「多一次入口」与「少一次出口」——两者在观测面上同形。**该问题已在 §11.8.5 用离线织入
+逐方法计数定案（结论 B：异常出口无钩子）**。**本轮按红线不做任何自愈/放行**，
+`-Dsqlvis.agent.nestGate=false` 仍是唯一现场规避手段。
+
+#### 11.8.5 离线定案（2026-11-10）：**B —— 异常出口没有钩子**，A/C 均排除
+
+取证工具 `tmp/audit/cn/song/mybatisplus/sqlvis/agent/WeaveAuditTool.java`（包内可见，直接调生产
+`StatementWeaver.specOf` + `weaveSpec`，与运行时同一条织入通道；对织入产物用 ASM 逐方法数
+`INVOKESTATIC SqlHookCallbacks.onStatementEnter/onExecuteExit` 与原方法显式返回指令数）。
+命令（classpath = agent `build/classes/java/main` + asm/asm-tree/asm-commons 9.8）：
+
+```
+java -cp "<agentClasses>;<asm9.8>;<asm-tree9.8>;<asm-commons9.8>;<auditBin>" \
+  cn.song.mybatisplus.sqlvis.agent.WeaveAuditTool <driver.jar> org.panweidb.jdbc.PgStatement [outDir]
+```
+
+**1) 织入后字节逐方法计数（`panweidb-jdbc-2.0.0.jar`，`PgStatement`；`ent/ext`=织后入口/出口数，
+`hent/hext`=原字节里的同名调用数=0）**
+
+| 方法+描述符 | 原返回指令数 | ent | ext |
+|---|---|---|---|
+| `execute(Ljava/lang/String;)Z` | 1 | 1 | 1 |
+| `executeUpdate(Ljava/lang/String;)I` | 1 | 1 | 1 |
+| `executeQuery(Ljava/lang/String;)Ljava/sql/ResultSet;` | 2 | 1 | 2 |
+| `executeLargeUpdate(Ljava/lang/String;)J` | 1 | 1 | 1 |
+| `executeUpdate(Ljava/lang/String;I)I` | 2 | 1 | 2 |
+| `execute(Ljava/lang/String;[I)Z` | 2 | 1 | 2 |
+| `executeBatch()[I` | 3 | 1 | 3 |
+| `executeLargeBatch()[J` | 2 | 1 | 2 |
+
+工具输出末行：`AUDIT: OK（每个 timed 方法 enter=1 且 exit=原返回指令数）`。`PgPreparedStatement`
+（同 jar）同样 OK：`execute()Z`/`executeUpdate()I`/`executeQuery()ResultSet` 均 `ent=1`，其中
+`executeQuery()ResultSet` 与 `executeBatch()[I` 的 `ext` 分别等于 2/2。`panweidb-jdbc-1.0.0.jar` 的
+`PgStatement` 读数与 2.0.0 逐行一致。**没有任何方法 `ent>1`**——「同一方法被织两遍入口」在字节层不存在。
+
+**2) 同一 class 会不会被织两次（A 的另一条路）：不会**
+
+- `AgentMain.installOrThrow`（`AgentMain.java:84/93/107`）：`installed` 与 `ACTIVE_MARKER` 双重幂等，
+  `inst.addTransformer(new SqlHookTransformer(), true)` 每个 JVM 只调一次；
+- `AgentMain.retransformLoadedDrivers`（`:203`）只走 `inst.retransformClasses(c)`——JVM 对 retransform
+  传入的是**初始类字节**，transformer 输出按「单次织入」重新计算，不会在旧产物上叠加；
+- `CatchAllMatcher.evaluate`（`CatchAllMatcher.java:589-592`）对白名单类 `stats.whitelist++; return;`，
+  补挂轮不会再织白名单类；真机日志 `premain pass 1/5: matched=0 wove=0 (whitelist=3 interface=0)`
+  与心跳 `weavable=4/woven=4`（4 个类各一次）互相印证；
+- 干净对照（下条）在 premain 补挂轮**之后**仍执行成功语句且不泄漏——若发生二次织入，成功路径也会
+  每次 `+1`（`execute` 会有 2 enter、1 exit），实测没有。
+
+**3) C（出口跑了但被 token 去重/异常吞掉）：排除**
+
+- `NestGate.exit` 的 `lastExitToken == token` 早退（`NestGate.java:237`）只对「同一帧的第二个出口」生效；
+  enter 每方法只插一次（上表），故不可能出现「入两次栈只出一次栈」；
+- `onExecuteExit` 的 `token == 0L || stmt == null` 早退只发生在入口已短路时（此时 `enter()` 未执行），
+  仍是 0/0 配对；
+- 唯一理论风险是 `System.nanoTime()` 对同链两帧返回同一值（会误命中去重）——本现场两帧间隔毫秒级，
+  且干净对照无泄漏，不构成本次成因（作为已知边界记录）。
+
+**4) B 的机制（代码级）**
+
+`StatementWeaver.weaveMethod` 只在**方法体里显式出现的** `IRETURN/LRETURN/ARETURN/ATHROW` 前插出口
+（`isTimedExit`，`StatementWeaver.java:289`；插桩循环 `:364`）。异常由被调方法抛出、从本方法逃逸时，
+若本方法体没有 `try/catch/finally`（字节层没有 `athrow` 指令），**没有出口点可插** ——
+`onStatementEnter` 已执行、`onExecuteExit` 永不执行，`depth` 净 `+1`。
+
+原始 `PgStatement.execute(String)Z` 全文只有 6 条指令：
+
+```
+0: aload_0
+1: aload_1
+2: iconst_0
+3: invokevirtual  executeWithFlags:(Ljava/lang/String;I)Z
+6: ireturn
+```
+
+织入后（`tmp/audit/woven/org/panweidb/jdbc/PgStatement.class`，`javap -p -c` 节选）：方法头插入
+`onStatementEnter` + `lstore_2`，唯一 `ireturn` 前插入 `onExecuteExit`（`stmt/op/token/
+Boolean.valueOf(result)/null`），**没有任何异常处理器、`Exception table` 为空**：
+
+```
+0: aload_0
+1: astore 4                      // this 捕获槽
+3: aload_0
+4: invokestatic  SqlHookCallbacks.onStatementEnter:(Ljava/lang/Object;)J
+7: lstore_2                      // token 槽
+8: aload_1
+9: astore 5                      // sql 捕获槽
+11: aload_0 ... 14: invokevirtual  executeWithFlags:(Ljava/lang/String;I)Z
+17: istore 6
+19: aload 4 ... 26: lload_2 ... 29: invokestatic Boolean.valueOf:(Z)Ljava/lang/Boolean;
+33: invokestatic  SqlHookCallbacks.onExecuteExit:(...)V
+36: iload 6
+38: ireturn
+```因此
+`executeWithFlags` 抛出的 `SQLException`（例如 DROP 不存在的表）原样穿出 `execute`，出口钩子不执行。
+
+`executeQuery(String)` 虽有显式 `athrow`（"No results were returned"，偏移 47）且已插出口，但
+`executeWithFlags` 在偏移 23 抛出的异常没有 handler，同样漏。
+
+**5) 真机对照（同一实例，门禁开）**
+
+| 载荷 | 结果 |
+|---|---|
+| 两次失败 `DROP`（表不存在） | 泄漏：`nestStale=2`、`nestMaxDepth=3`，dump 命中 `PgStatement.execute` |
+| 两次成功 `SELECT COUNT(*) FROM pg_settings`（干净对照，`MODE=clean`） | **不泄漏**：3 条事件全出、`nestSuppressed=0`、`nestStale=0`、`nestMaxDepth=1`、无 dump |
+
+（`MODE=ok` 那次不算对照：载荷开头的清理 `DROP` 在表不存在时同样抛错，链起点对的是它。）
+
+**6) 最小修法方案（先出方案，未落码）**
+
+- 文件：`sub-projects/sql-visualizer-agent/src/main/java/cn/song/mybatisplus/sqlvis/agent/StatementWeaver.java`；
+- 做法：timed 面方法体整体包一层 catch-all handler——`TryCatchBlockNode(方法头, 方法尾, handler, null)`，
+  handler 内 `ASTORE retSlot` → 按现有参数序列调 `SqlHookCallbacks.onExecuteExit(stmt, sql, op, token,
+  null, ex)` → `ALOAD retSlot` → `ATHROW`。入口已把 `token/this/sql` 写进自有槽且此后不被覆盖，
+  handler 直接读这些槽（与现有出口读同一组槽）；
+- 帧：handler 处补一个 `FrameNode(F_FULL, locals=[token LONG, this, (sql)], stack=[java/lang/Throwable])`；
+  这是本方案唯一的验证器风险点（项目固定 `COMPUTE_MAXS`、禁 `COMPUTE_FRAMES` 的原因见类注释），
+  必须以「织入类可加载可执行」用例作硬门禁；
+- 与既有出口的关系：显式 `athrow` 前的出口保留；异常再到 handler 会二次调用 `exit`，
+  `NestGate.exit` 的 `lastExitToken` 去重（`NestGate.java:237`）已让它成为 no-op——这正是同帧双 `ATHROW`
+  的原设计，**不需要改 NestGate**；
+- 守卫用例：①夹具方法「委托给会抛的方法且自身无 try/catch」→ 抛完后同线程下一帧必须照常产出；
+  ②反向验证：摘掉 handler 后该用例必红（后续零事件 / `nestMaxDepth=2`）；③字节级断言：timed 方法
+  handler 数=1、每个显式返回仍有 exit、enter 恒 1；④`executeUpdate(I)/execute(Z)/executeQuery(ResultSet)/
+  void` 四种返回形态各一例真织入 + 运行（承接 `StatementWeaverFramePatchVerifyTest` 口径）；
+- 影响面提示：`ADD_BATCH/CLEAR_BATCH/PREPARE`（非 timed）同样只在显式返回前插桩，异常时少记一次登记/
+  清账，但不触碰 NestGate 深度，**不造成语句整类丢失**；本修法只针对 timed 面。
+
+##### 11.8.5.1 修复实施（2026-11-10，提交 `0fc3836c`）
+
+**改法**（`StatementWeaver.java`，只动 timed 面 `EXEC_PARAM/EXEC_CTX/BATCH`；NestGate、
+`SqlHookCallbacks` 签名、三张非 timed 面**未动**）：
+
+- 方法体整体包 catch-all handler：`TryCatchBlockNode(原始方法体首条指令, 方法尾自建 label, handler)`；
+  try 起点在 head 之后（head 内 token 未赋值，不应进 try 范围）；handler 内
+  `ASTORE retSlot` → 调 `onExecuteExit`（stmt/sql/op/token 读入口自有槽，result 传 null，
+  failure 读 retSlot）→ `ALOAD retSlot` → `ATHROW`；
+- 「压 onExecuteExit 实参」抽成 `appendOnExecuteExit`，正常出口与 handler **共用同一份**；
+- handler 帧用 **F_NEW** 编码：本类读类用 `EXPAND_FRAMES`，原方法帧经 `patchFrames` 后都以 F_NEW
+  交给 MethodWriter；若 handler 用 `F_FULL` 会落到另一条只维护 `previousFrameOffset` 的编码路径，
+  而该字段在 F_NEW 路径下从不更新——实测 handler 实际在偏移 73、帧被写成 124，JVM 报
+  `VerifyError: StackMapTable error: bad offset`。帧 locals 只声明出口读取的槽
+  （token LONG / this / 可选 sql），其余 TOP（不依赖形参是否被重新赋值）；
+- 顺序固定为「先 `patchFrames`、再追加 handler 帧」——反过来会让 `patchFrames` 给 handler 帧二次补槽；
+- timed 面的显式返回并入 `RETURN`（void 形态完整性；生产登记表没有 void 的 execute 族方法，
+  对真实类零行为变化）。
+
+**四类守卫用例读数**（`StatementWeaverExceptionExitTest` 新增 6 例；全量定向命令
+`:sql-visualizer-agent:test --tests "…StatementWeaver*" --tests "…StatementWeaveEndToEndTest"
+--tests "…NestGateTest"`）：
+
+| 类 | tests / failures / errors |
+|---|---|
+| `StatementWeaverExceptionExitTest`（新） | 6 / 0 / 0 |
+| `StatementWeaverVendorCoverageTest` | 17 / 0 / 0 |
+| `StatementWeaverFramePatchVerifyTest` | 3 / 0 / 0 |
+| `StatementWeaveEndToEndTest` | 13 / 0 / 0 |
+| `NestGateTest` | 6 / 0 / 0 |
+
+- **行为**：夹具方法「委托给会抛的方法、自身无 try/catch」——int/boolean/ResultSet/void 四种返回各一例，
+  抛出后必须产 1 条 error 事件，随后同线程两帧都照常产出，`nestMaxDepth=1`、`nestStale=0`；
+- **字节级**：磐维 V1/V2（`panweidb-jdbc-1.0.0/2.0.0.jar`）+ 金仓 `KbStatement` + 达梦 `DmdbStatement`
+  + `org.postgresql.jdbc.PgStatement`——每个 timed 方法 `enter=1`、`exit=原显式返回数+1`、
+  catch-all handler 数 = 原值+1、handler 后紧跟帧；
+- **返回形态**：int/boolean/ResultSet/void 四种形态真织入 + 运行（含异常路径，见行为用例）；
+- **帧**：handler 帧存在性由字节级例钉住；`StatementWeaverFramePatchVerifyTest` 的合成漏网形态
+  与全部厂商类的 define+initialize 都通过——**没有任何厂商 jar 触发 VerifyError**。
+
+**反向验证**（临时注掉 `appendCatchAllExitHandler` 调用）：`StatementWeaverExceptionExitTest`
+**6 例中 5 红**——四个行为例统一报「异常出口必须产一条 error 事件（修复前此处为零，且 depth 残留）」，
+字节级例报 `PgStatement#executeQuery(String) 显式返回点必须仍有出口… expected:<3> but was:<2>`；
+恢复调用后复绿（上表读数）。
+
+**真机两档读数**（香港磐维 A 模式，`155.103.159.54:26201`；载荷 `tmp/repro/PanweiNestLeakFrameProbe`
+＝两条**确定性失败**的 `DROP`（间隔 8s）→ 正常 `SELECT COUNT(*) FROM pg_settings`；脚本
+`tmp/repro/run-leakframe.sh`）：
+
+门禁开（默认，修复后）：
+
+```
+EVENT #1 SELECT（驱动连接期）  EVENT #2 SET  EVENT #3 SELECT
+EVENT #4 kind=DROP   u=null sql=DROP TABLE T_LEAK_FRAME_ABSENT     ← 失败语句的 error 事件（修前零）
+EVENT #5 kind=DROP   u=null sql=DROP TABLE T_LEAK_FRAME_ABSENT     ← 同上
+EVENT #6 kind=SELECT u=null sql=SELECT COUNT(*) FROM pg_settings   ← 失败之后的正常语句照常产出
+HEARTBEAT {... "nestSuppressed":0,"nestStale":0,"nestMaxDepth":1,"unresolved":0}
+```
+
+修前同一载荷（§11.8.5 第 5 条）：events 只有 #1-#4（两条 DROP 零事件）、`nestStale=2`、
+`nestMaxDepth=3`；修后 `nestStale=0`、`nestMaxDepth=1`，且**不再出现陈旧链 dump**。
+
+对照 `-Dsqlvis.agent.nestGate=false`：同样 6 条事件，`nestStale=0 / nestMaxDepth=0`（观测点随门禁同关）。
+
+另跑全量 observe 载荷（连接 → DROP → CREATE → 两条 INSERT → SELECT → COUNT → DELETE）门禁开：
+**10 条事件全出**（含 DROP/CREATE/两条 INSERT），三拍心跳 `nestSuppressed=0 / nestStale=0 /
+nestMaxDepth=1`——原用户场景「前几条有、之后整类消失」不再出现。
+
+#### 11.8.6 not run
+
+- 全量门禁 `testShards` 与 `verifyGate` / `verifyPlugin`（按纪律交收口代理）；
+- runIde 沙盒验收（本轮无面板布局/控件改动，状态栏文案由 `CaptureStatusBarTest` 覆盖）；
+- 「多入口 vs 缺出口」的字节层归因——**已在 §11.8.5 完成（结论 B）**，不在此列；
+- §11.8.5 的最小修法落码与守卫用例（本轮只出方案，按红线不改织入器）。
+- 其他数据库（Oracle/PostgreSQL/MySQL 等）的同类观测复跑——本轮只打磐维 A 模式实例。

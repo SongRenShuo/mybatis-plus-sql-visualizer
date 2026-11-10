@@ -53,7 +53,8 @@ public class HeartbeatDiagnosticsTest {
                 body.contains("\"dropped\":"));
         // T-PanweiInsertCapture F2/F3：三条此前完全无出口的静默路径读数 + 盲区类名（恒出现，
         // 无则空串）——「同一秒 SELECT 有、INSERT 没有」的实例级/线程级证据只能从这里拿到。
-        for (String key : new String[]{"assembleFailures", "nestSuppressed", "unresolved"}) {
+        for (String key : new String[]{"assembleFailures", "nestSuppressed", "unresolved",
+                "nestStale", "nestMaxDepth"}) {
             assertTrue("心跳必须恒带 " + key + " 键（F2/F3 静默路径读数）：" + body,
                     body.contains("\"" + key + "\":"));
         }

@@ -74,6 +74,14 @@ internal data class CaptureStatusLine(
     val agentAssembleFailures: Long = 0L,
     /** T-PanweiInsertCapture F2：被 NestGate 抑制的外层帧累计（心跳 `nestSuppressed`）。0 时不挂段。 */
     val agentNestSuppressed: Long = 0L,
+    /**
+     * T-NestGateObserve：**陈旧嵌套**累计（心跳 `nestStale`）。0 时不挂段。
+     *
+     * 与 [agentNestSuppressed] 的分工是深度泄漏的确诊面：后者只计「被内层挤掉的外层帧」，泄漏时
+     * 被抑制的是最外层自己（恒为 0）；本字段 >0 直接说明某条线程有一条活过阈值（默认 5s）的嵌套链，
+     * 即 NestGate 深度未归零——磐维 A 模式「前几条有、之后整类消失」的现场读数。
+     */
+    val agentNestStale: Long = 0L,
     /** T-PanweiInsertCapture F3：登记盲区累计（心跳 `unresolved`）。 */
     val agentUnresolvedBlind: Long = 0L,
     /** T-PanweiInsertCapture F3：登记盲区的 PS 实现类名（心跳 `blind`，有界 ≤8）。 */
@@ -213,11 +221,19 @@ internal fun captureStatusLineText(d: CaptureStatusLine): Pair<String, String>? 
     } else {
         agentWithAssemble
     }
-    // T-PanweiInsertCapture F6：iBatis 批处理无控制台日志（增强未开启时才提示——已开启时由 agent 兜住）
-    val finalAgent = if (d.ibatisBatchHint && d.agentStatus == null) {
-        MpSqlVisualizerBundle.message("log.statusbar.agent.ibatisBatch", agentWithNest)
+    // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数）——只在 >0 时挂；正常嵌套链存活不足阈值，
+    // 该计数恒 0，不产生噪音。
+    // 【反向验证探针锚点】注释掉下面 if 块 = 摘除陈旧嵌套可见化，CaptureStatusBarTest 对应用例必红。
+    val agentWithStale = if (d.agentStatus != null && d.agentNestStale > 0L) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.nestStale", agentWithNest, d.agentNestStale)
     } else {
         agentWithNest
+    }
+    // T-PanweiInsertCapture F6：iBatis 批处理无控制台日志（增强未开启时才提示——已开启时由 agent 兜住）
+    val finalAgent = if (d.ibatisBatchHint && d.agentStatus == null) {
+        MpSqlVisualizerBundle.message("log.statusbar.agent.ibatisBatch", agentWithStale)
+    } else {
+        agentWithStale
     }
     return console to finalAgent
 }

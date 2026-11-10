@@ -29,13 +29,14 @@ class CaptureStatusBarTest {
         suppressedSqlLines: Long = 0L,
         agentAssembleFailures: Long = 0L,
         agentNestSuppressed: Long = 0L,
+        agentNestStale: Long = 0L,
         agentUnresolvedBlind: Long = 0L,
         agentBlindClasses: List<String> = emptyList(),
         ibatisBatchHint: Boolean = false,
     ) = CaptureStatusLine(
         capturing, consolesAttached, linesSeen, agentStatus, agentLivePids, agentPaused, agentEventsReceived,
         unregistered, catchUpBehind, agentDropped, suppressedSqlLines, agentAssembleFailures,
-        agentNestSuppressed, agentUnresolvedBlind, agentBlindClasses, ibatisBatchHint,
+        agentNestSuppressed, agentNestStale, agentUnresolvedBlind, agentBlindClasses, ibatisBatchHint,
     )
 
     @Test
@@ -144,6 +145,19 @@ class CaptureStatusBarTest {
         assertTrue("门禁抑制计数必须可见：$agent", agent.contains("门禁抑制 12"))
     }
 
+    /**
+     * T-NestGateObserve：陈旧嵌套段（深度泄漏的确诊读数）——>0 才挂，0 不添噪。
+     * 反向验证：摘掉 captureStatusLineText 里的 agentNestStale 拼接，本用例必红。
+     */
+    @Test
+    fun test门禁陈旧计数_大于零才挂增强段() {
+        val (_, agent) = captureStatusLineText(line(agentNestStale = 5L))!!
+        assertTrue("陈旧嵌套计数必须可见：$agent", agent.contains("门禁陈旧 5"))
+
+        val (_, quiet) = captureStatusLineText(line())!!
+        assertFalse("正常嵌套（陈旧为 0）不添噪：$quiet", quiet.contains("门禁陈旧"))
+    }
+
     @Test
     fun test登记盲区_带类名后缀() {
         val (_, agent) = captureStatusLineText(
@@ -170,6 +184,7 @@ class CaptureStatusBarTest {
                 agentStatus = null,
                 agentAssembleFailures = 3L,
                 agentNestSuppressed = 4L,
+                agentNestStale = 6L,
                 agentUnresolvedBlind = 5L,
             ),
         )!!

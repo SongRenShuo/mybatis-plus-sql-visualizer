@@ -1733,6 +1733,8 @@ class SqlLogPanel(
                         // 登记盲区）；旧版 agent 无这些键时恒 0，不挂段
                         agentAssembleFailures = stats?.assembleFailures ?: 0L,
                         agentNestSuppressed = stats?.nestSuppressed ?: 0L,
+                        // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数；正常嵌套恒 0）
+                        agentNestStale = stats?.nestStale ?: 0L,
                         agentUnresolvedBlind = stats?.unresolvedBlind ?: 0L,
                         agentBlindClasses = stats?.blindClasses ?: emptyList(),
                         // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在「已识别到

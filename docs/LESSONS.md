@@ -275,6 +275,12 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **证据**：2026-11-10 发行 `2026.11.11-beta.1` 时，本地只跑了 `buildPlugin` + `inspect-plugin-zip` + `ChangeNotesRatingLineGuardTest` + `BundlePlaceholderArityTest` 就打了 tag、建了 Gitee/GitHub 发行版（Gitee 1293976 / GitHub 440141088）；用户当场追问「你发行应该通过 CI 吧」。事后补派 `mode=gate`（run `42788614860` @ `9d32d936`，与 tag `308f5f96` 在 `src/` 零差异）。同一轮的前一版 `2026.11.10` 正式版是按规矩走的：release run `42758016138` 17/17、`verifyplugin` 验的就是待下发 zip。
 **正例**：按 RC-P1d 走——本地 `releaseGate` 为默认路径，需要干净环境才走 CI；要省时间用 RC-P1c 的「零代码改动复用」判据（相对上次全绿提交在 `src/main`/`src/test` 零差异可沿用分片读数），**但 `verifyGate` 不适用复用**：版本号进 `plugin.xml`，jar 变了必须在新产物上重验。**反例**：把「构建成功 + zip 内省 + 文案守卫绿」当发行门禁（本轮即此形态），三条都绿也换不来一句「能装在 243/253/263 上」。
 **Seen 1× (2026-11-10)**——用户点名「应该通过 CI」，同轮补派门禁。
+### L29 织入型 enter/exit 配对不能只挂「方法体里显式出现的返回点」——被调方异常逃逸时没有出口点
+
+**规则**：给方法体插 enter/exit 钩子做配对计数（嵌套门、计时、事务边界都属这类）时，只在 `IRETURN/LRETURN/ARETURN/ATHROW` 前插 exit 是不够的：**异常从被调方法抛出、而本方法体没有 try/catch/finally 时，字节层只有一条正常返回指令、一个 `athrow` 都没有**，出口钩子无处可插 → enter 计入、exit 永不执行，深度/计数永久偏 1。判据必须是「异常穿过本方法时也走出口」——把方法体包一层 catch-all handler（`TryCatchBlockNode` → 调同一出口 → `athrow`），并用「夹具方法自身无 try/catch、委托调用抛异常，抛完后同线程下一帧仍产出」的用例钉住；反向验证摘掉 handler 必须变红。
+**证据**：T-NestGateObserve 离线定案（计划 §11.8.5，2026-11-10）：`StatementWeaver.weaveMethod` 的 `isTimedExit` 只认显式返回点；磐维 A 模式 `org.panweidb.jdbc.PgStatement.execute(String)Z` 原始字节只有 `invokevirtual executeWithFlags` + `ireturn`（无 handler、无 athrow），失败 DROP 的 `SQLException` 逃逸时出口不存在 → 该线程 depth 永久 +1，后续整类语句被当成外层抑制，而 `nestSuppressed` 为 0（被抑制的是最外层自己）。织入产物逐方法计数：enter=1、exit=显式返回数（`execute` 1/1、`executeQuery(String)` 1/2），排除「双重入口」；真机对照：两次失败 DROP 泄漏（`nestStale=2/nestMaxDepth=3`），两次成功 SELECT 不泄漏（`nestStale=0/nestMaxDepth=1`）。
+**正例**：先做「织后字节 enter/exit/返回点逐方法计数」再下结论，并用成功/失败两条载荷做对照；**反例**：拿「exit 数 == 显式返回指令数」当健康判据收工——它天然看不见隐式异常出口（本轮首版就是这么把「成功路径也泄漏」写错的）。
+**Seen 1× (2026-11-10)**
 
 ## 升级记录
 

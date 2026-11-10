@@ -23,11 +23,33 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
  * <p><b>已知取舍</b>：真正的嵌套执行（存储过程内部再执行语句、同一线程里语句套语句）只报最内层，
  * 外层那条会缺——计划 §六 已登记，与「双报」相比是更小的损害（双报会污染归属与计数）。
  * 需要恢复旧行为可置 {@code -Dsqlvis.agent.nestGate=false}。
+ *
+ * <p><b>T-NestGateObserve（2026-11-10，只观测不改语义）。</b>磐维 A 模式真机证明本门存在**深度泄漏**：
+ * 连接创建期之后该线程 depth 未归零、innerEmitted 残留为真，后续每条语句都被当成外层抑制，而
+ * {@code nestSuppressed} 计为 0（被抑制的是最外层自己）。本轮加三样**纯观测**：链龄（链首 nanoTime +
+ * 链号）、陈旧嵌套计数 {@code nestStale}（嵌套进入时链龄超阈值即 +1）、一次性取证 dump（debug 档、
+ * 只第一次、前 12 帧），外加进程级 {@code maxDepth}。任何一项都不改变 depth/innerEmitted 的流转，
+ * 也不改变任何返回值——上一轮在此处改语义导致 10 例转红整案回退（计划 §11.7b）。
  */
 final class NestGate {
 
     /** 开关（默认开）：false = 关闭去重，恢复「每个已织 execute 都产事件」。 */
     static final String ENABLED_PROP = "sqlvis.agent.nestGate";
+
+    /**
+     * T-NestGateObserve：陈旧嵌套阈值（毫秒，默认 5000）。
+     *
+     * <p>真实嵌套链的存活时间是一次 execute 的时长（毫秒级）；链首距今超过该值**仍有新帧进入**，
+     * 说明本链早已不是「一次执行」——典型成因是某帧出口钩子缺失、深度未归零，此线程此后每条语句
+     * 都被当成外层抑制（磐维 A 模式真机形态，计划 §11.7）。
+     */
+    static final String STALE_MS_PROP = "sqlvis.agent.nestStaleMs";
+
+    /** 陈旧阈值默认值（毫秒）。 */
+    static final long DEFAULT_STALE_MS = 5_000L;
+
+    /** 一次性取证 dump 的栈帧数上限（只在这一条路径抓栈，不在每条语句上抓）。 */
+    static final int STALE_DUMP_FRAMES = 12;
 
     private static volatile boolean enabled = resolveEnabled();
 
@@ -41,6 +63,38 @@ final class NestGate {
     private static final java.util.concurrent.atomic.AtomicLong SUPPRESSED =
             new java.util.concurrent.atomic.AtomicLong();
 
+    /**
+     * T-NestGateObserve：**陈旧嵌套**累计（纯观测，不参与任何抑制判定）。
+     *
+     * <p>与 {@link #SUPPRESSED} 的口径差别是本轮立项的核心：{@code nestSuppressed} 计的是
+     * 「已有内层产出、本帧被判为外层」的帧；深度泄漏时被抑制的是**最外层自己**（链首帧早已返回，
+     * 却仍占着 depth），那条路径一条都不计。{@code nestStale} 只回答一个问题：**这条线程有没有一条
+     * 活过阈值的链**——有，就是深度未归零的硬证据。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong NEST_STALE =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** 进程级最高嵌套深度（取大）——判「泄漏后深度是否持续攀升」。 */
+    private static final java.util.concurrent.atomic.AtomicInteger MAX_DEPTH =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 链号自增（dump 打点与后续读数配对用；不改判定）。 */
+    private static final java.util.concurrent.atomic.AtomicLong CHAIN_IDS =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** 陈旧链取证 dump 只打一次（AtomicBoolean，不刷屏）。 */
+    private static final java.util.concurrent.atomic.AtomicBoolean STALE_DUMPED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * 测试缝：时钟（null = {@link System#nanoTime()}）。**仅测试可设**，经
+     * {@link SqlHookCallbacks} 的转发方法注入（本类包内可见，跨包测试够不着）。
+     */
+    static volatile java.util.function.LongSupplier clockOverride;
+
+    /** 陈旧阈值（纳秒；系统属性可覆盖，非法值回落默认）。 */
+    private static volatile long staleNanos = resolveStaleNanos();
+
     /** 每线程嵌套态：depth = 当前已织 execute 帧数；innerEmitted = 本链已有内层产过事件。 */
     private static final class State {
         int depth;
@@ -51,6 +105,10 @@ final class NestGate {
          * 深度会被多减一次、嵌套判定随之错位（真机实证：一条失败 DDL 产出 3 条事件）。
          */
         long lastExitToken;
+        /** T-NestGateObserve：本链起点（只在 depth 0→1 时记一次）；0 = 未记（异常路径）。 */
+        long chainStartNanos;
+        /** T-NestGateObserve：本链号（单调；dump 行用它配对）。 */
+        long chainId;
     }
 
     private static final ThreadLocal<State> STATE = new ThreadLocal<State>() {
@@ -76,10 +134,91 @@ final class NestGate {
                 // lastExitToken 也在这里清——它只服务「同帧第二条 ATHROW」这一窗口。
                 s.innerEmitted = false;
                 s.lastExitToken = 0L;
+                // T-NestGateObserve：链龄起点只在链首记一次——普通语句每帧一次 nanoTime，
+                // 与入口 token 的取值同量级；嵌套帧与出口路径**不**再读时钟。
+                s.chainStartNanos = nowNanos();
+                s.chainId = CHAIN_IDS.incrementAndGet();
+            } else {
+                // 疑似嵌套：这里是唯一的第二个时钟读取点，也是陈旧判定唯一发生地。
+                // 纯计数（NEST_STALE / MAX_DEPTH / 一次性 dump），**不**参与下面 depth 的流转。
+                noteNestedEnter(s);
             }
             s.depth++;
+            noteMaxDepth(s.depth);
         } catch (Throwable ignore) {
             // 门自身失败：不计数即等于关闭本帧去重（放行），绝不影响采集
+        }
+    }
+
+    /**
+     * T-NestGateObserve：嵌套进入时的**纯观测**（不改 depth / innerEmitted / 返回值）。
+     *
+     * <p>判定：链首距今 &gt; {@link #STALE_MS_PROP}（默认 5000ms）即计数一次陈旧嵌套。陈旧本身
+     * 不产生任何行为变化——抑制语义仍由既有 depth/innerEmitted 决定（本轮只观测，见计划 §11.7b：
+     * 上一轮在此改语义导致 10 例转红、整案回退）。
+     */
+    private static void noteNestedEnter(State s) {
+        final long start = s.chainStartNanos;
+        if (start == 0L) {
+            return; // 未记起点（异常路径/旧 State）：无法判龄，不计
+        }
+        final long ageNanos = nowNanos() - start;
+        final long threshold = staleNanos;
+        if (ageNanos <= threshold) {
+            return; // 正常嵌套（一次 execute 的时长）
+        }
+        NEST_STALE.incrementAndGet();
+        // 取证 dump：只在 debug 档、只第一次——不打 SQL 原文，不刷屏。
+        if (cn.song.mybatisplus.sqlvis.agent.CaptureBudget.isVerboseLogging()
+                && STALE_DUMPED.compareAndSet(false, true)) {
+            dumpStaleChain(s, ageNanos);
+        }
+    }
+
+    /**
+     * 一次性取证：一行摘要 + 当前栈前 {@link #STALE_DUMP_FRAMES} 帧。
+     *
+     * <p>为什么栈只在这里抓：正常语句（depth==0→1）与每次出口都不抓栈，抓栈成本只付一次。
+     * 栈里出现的是**触发陈旧判定的那个嵌套 enter 的调用链**（例如驱动的 executeUpdate 及其调用方），
+     * 而「哪一帧没配平」要看链首帧——它不是当前栈上的帧，故 dump 与 {@code chainId/ageMs} 联合读。
+     */
+    private static void dumpStaleChain(State s, long ageNanos) {
+        try {
+            System.err.println("[SqlVisAgent] 门禁陈旧链 chainId=" + s.chainId
+                    + " ageMs=" + (ageNanos / 1_000_000L)
+                    + " depth=" + (s.depth + 1)
+                    + " thresholdMs=" + (staleNanos / 1_000_000L));
+            final StackTraceElement[] frames = new Throwable().getStackTrace();
+            final int n = Math.min(frames.length, STALE_DUMP_FRAMES);
+            for (int i = 0; i < n; i++) {
+                System.err.println("  at " + frames[i]);
+            }
+        } catch (Throwable ignore) {
+            // 取证失败绝不影响采集
+        }
+    }
+
+    /** 进程级最高嵌套深度取大（无锁 CAS；纯计数）。 */
+    private static void noteMaxDepth(int depth) {
+        int cur = MAX_DEPTH.get();
+        while (depth > cur) {
+            if (MAX_DEPTH.compareAndSet(cur, depth)) {
+                return;
+            }
+            cur = MAX_DEPTH.get();
+        }
+    }
+
+    /** 读时钟（测试缝可注入；注入器抛错时回落系统时钟，保证 enter 的流转不被观测量影响）。 */
+    private static long nowNanos() {
+        final java.util.function.LongSupplier clock = clockOverride;
+        if (clock == null) {
+            return System.nanoTime();
+        }
+        try {
+            return clock.getAsLong();
+        } catch (Throwable ignore) {
+            return System.nanoTime();
         }
     }
 
@@ -152,6 +291,13 @@ final class NestGate {
         STATE.remove();
         enabled = resolveEnabled();
         SUPPRESSED.set(0L);
+        // T-NestGateObserve：观测计数与取证闸门同批复位（用例间隔离；不碰抑制语义）
+        NEST_STALE.set(0L);
+        MAX_DEPTH.set(0);
+        CHAIN_IDS.set(0L);
+        STALE_DUMPED.set(false);
+        clockOverride = null;
+        staleNanos = resolveStaleNanos();
     }
 
     static void setEnabledForTest(boolean value) {
@@ -159,9 +305,40 @@ final class NestGate {
         STATE.remove();
     }
 
+    /** 仅测试用：注入时钟（包内直用；跨包测试经 {@link SqlHookCallbacks} 转发）。 */
+    static void setStaleMsForTest(long ms) {
+        staleNanos = Math.max(0L, ms) * 1_000_000L;
+    }
+
     /** T-PanweiInsertCapture F2：被本门抑制的帧累计（心跳 {@code nestSuppressed} 键取值）。 */
     static long suppressedCount() {
         return SUPPRESSED.get();
+    }
+
+    /** T-NestGateObserve：陈旧嵌套累计（心跳 {@code nestStale} 键取值）。纯观测。 */
+    static long staleCount() {
+        return NEST_STALE.get();
+    }
+
+    /** T-NestGateObserve：进程级最高嵌套深度（心跳 {@code nestMaxDepth} 键取值）。 */
+    static int maxDepth() {
+        return MAX_DEPTH.get();
+    }
+
+    /** 陈旧阈值（纳秒）——由系统属性解析，非法值回落 {@link #DEFAULT_STALE_MS}。 */
+    private static long resolveStaleNanos() {
+        try {
+            final String raw = System.getProperty(STALE_MS_PROP);
+            if (raw != null) {
+                final long v = Long.parseLong(raw.trim());
+                if (v >= 0L) {
+                    return v * 1_000_000L;
+                }
+            }
+        } catch (Throwable ignore) {
+            // 非法值按默认
+        }
+        return DEFAULT_STALE_MS * 1_000_000L;
     }
 
     private static boolean resolveEnabled() {
