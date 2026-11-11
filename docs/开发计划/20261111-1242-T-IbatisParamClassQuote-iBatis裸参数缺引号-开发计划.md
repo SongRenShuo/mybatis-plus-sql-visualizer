@@ -86,4 +86,34 @@ iBatis 预览链唯一的参数类型来源是占位符自带的 jdbcType：
 
 ## 七、实施记录
 
-（待填）
+### 落地（`cb4ec1ed3`）
+
+- `ui/IbatisParameterClassResolver`（新）：`parameterClass` → `PsiClass`（FQN 直查 → 短名索引唯一命中）
+  → 属性路径逐段解析字段 → `PsiType` → `ParamHint`。`resolveStrict` 是诊断/测试用的不吞异常入口，
+  `resolve` 用它并吞成空表（生产降级）。
+- `IbatisXmlPreviewService.preview` 增 `project` / `parameterClass` 两参数（默认 null = 纯文本测试链，
+  行为与改前逐字节一致）；`toPreviewResult` 装配改为
+  `hintOf(jdbcType) ?: propertyHints[name] ?: ParamHint()`；`rerender` 闭包携带首屏解析好的 hint。
+- `IbatisStatementPreview.previewTag` 传 `tag.project` / `tag.getAttributeValue("parameterClass")`
+  —— Java DAO 调用行预览（`previewResolved` → `previewTag`）与 XML 语句行同源覆盖。
+
+### 实施中证伪的一条自设前提
+
+第一版 `hintOfType` 用「`resolve()?.qualifiedName` + FQN 集合」匹配，Heavy 测试全红。诊断读数
+`field=username type=PsiType:String typeHint=null`：**无 SDK 的测试环境里 `resolve()` 返回 null**，
+只剩简单名 `String`，与 `java.lang.String` 对不上。修法：取值改为
+`resolve()?.qualifiedName ?: canonicalText`，三类集合同时收 FQN 与简单名，匹配统一按
+`substringAfterLast('.')`。真实 IDE 走 FQN 分支、测试环境走简单名，两条都命中。
+
+### 读数
+
+- `IbatisParamClassQuoteHeavyTest` 6 例全绿（裸参数加引号 / 数值裸渲染 / jdbcType 胜出 /
+  类解析不到维持启发式 / 无 project 维持启发式 / 诊断链）；
+- 同链回归 `IbatisXmlPreviewServiceTest`(44) + `DegradationBannerTest`(5) +
+  `SqlPreviewPanelDynamicBatchTest` 全绿；
+- 反向：摘掉 `?: propertyHints[name]` 补位分支 → `testBareParameterQuotedByParameterClass` 恰 1 红
+  （6 例中 1 失败），还原复绿。
+
+### not run
+
+真机复验（沙盒当前加载 `2026.11.12-beta.2`，jar 内无本轮类；要验需重新构建或装包）。

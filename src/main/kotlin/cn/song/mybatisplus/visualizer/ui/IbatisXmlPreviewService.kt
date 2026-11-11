@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput
+import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.FatalErrors
@@ -17,6 +18,7 @@ import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisStatement
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapParser
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapSqlRenderer
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.project.Project
 
 /**
  * iBatis 2.x 语句预览服务（T-Ibatis2Support 券 A 接管面）：`<sqlMap>` 文本 → 语句 → [PreviewResult]。
@@ -83,6 +85,10 @@ object IbatisXmlPreviewService {
         statementId: String?,
         statementTagName: String? = null,
         statementOrdinal: Int = 0,
+        /** T-IbatisParamClassQuote：解析 `parameterClass` 属性类型用（null = 纯文本测试链，维持现状）。 */
+        project: Project? = null,
+        /** T-IbatisParamClassQuote：语句的 `parameterClass` 原值；null 时回落到 XML 属性里的同名项。 */
+        parameterClass: String? = null,
     ): PreviewResult {
         val model: IbatisSqlMap = try {
             SqlMapParser().parse(fileText)
@@ -100,18 +106,27 @@ object IbatisXmlPreviewService {
         // T-Ibatis2Gap 券 A：把「无参基线」从唯一输出变成初始态——行清单 + 重渲染回调随结果进面板。
         // 回调闭包复用同一 statement（纯数据，无 PSI/引擎引用），面板每次交互重新装配 Map 并渲染。
         val paramModel = IbatisParamModelBuilder.build(statement)
+        val selectKeyRenders = renderSelectKeys(statement, params = null)
+        // T-IbatisParamClassQuote：裸 `#name#` 的类型来源——parameterClass 的属性类型。
+        // 只按首屏实际出现的属性名解析一次，重渲染复用（新分支带出的属性再查不到就维持启发式）。
+        val propertyHints = IbatisParameterClassResolver.resolve(
+            project = project,
+            parameterClass = parameterClass ?: statement.attributes["parameterClass"],
+            propertyNames = rendered.paramNames + selectKeyRenders.flatMap { it.second.paramNames },
+        )
         val baseline = toPreviewResult(
             rendered,
             statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty(),
             // 无参基线：iterate 行全部未供值（待填值态）
             iteratePending = paramModel.iterateRows.isNotEmpty(),
-            selectKeyRenders = renderSelectKeys(statement, params = null),
+            selectKeyRenders = selectKeyRenders,
+            propertyHints = propertyHints,
         )
         return baseline.copy(
             ibatisParamModel = paramModel,
             // T-IbatisFix2 修复三：闭包捕获基线结果——重渲染失败时回落到它（sql 保留降级文本），
             // 不再静默吞掉异常
-            rerender = { input -> rerender(statement, paramModel, baseline, input) },
+            rerender = { input -> rerender(statement, paramModel, baseline, input, propertyHints) },
         )
     }
 
@@ -129,6 +144,8 @@ object IbatisXmlPreviewService {
         paramModel: IbatisParamModel,
         baseline: PreviewResult,
         input: PreviewRerenderInput,
+        /** T-IbatisParamClassQuote：首屏按 parameterClass 解析好的属性 → 引号提示。 */
+        propertyHints: Map<String, ParamHint> = emptyMap(),
     ): PreviewResult = try {
         val params = IbatisParamModelBuilder.assembleParams(paramModel, input)
         val rendered = SqlMapSqlRenderer().render(statement, params)
@@ -137,6 +154,7 @@ object IbatisXmlPreviewService {
             statementHasRawSubstitutionSites = paramModel.dollarRows.isNotEmpty(),
             iteratePending = paramModel.iterateRows.any { input.collections[it.property].orEmpty().isEmpty() },
             selectKeyRenders = renderSelectKeys(statement, params),
+            propertyHints = propertyHints,
         )
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
@@ -299,6 +317,8 @@ object IbatisXmlPreviewService {
         statementHasRawSubstitutionSites: Boolean = false,
         iteratePending: Boolean = false,
         selectKeyRenders: List<Pair<IbatisSelectKey, IbatisRenderResult>> = emptyList(),
+        /** T-IbatisParamClassQuote：属性名 → 引号提示（来自 parameterClass 的字段类型）。 */
+        propertyHints: Map<String, ParamHint> = emptyMap(),
     ): PreviewResult {
         // T-IbatisFix2 修复一：selectKey 块参与 sql/compactSql 组装与参数名序（pre 前 / post 后）
         val assembledSql = assembleMultiStatementSql(rendered, selectKeyRenders)
@@ -321,7 +341,13 @@ object IbatisXmlPreviewService {
         // （quote=null = 面板启发式，与修复前逐字节一致）。
         val jdbcTypes = rendered.paramJdbcTypes + selectKeyRenders.flatMap { it.second.paramJdbcTypes }
         val paramHints = if (names.size == placeholders && jdbcTypes.size == placeholders) {
-            IbatisParamTypeHints.hintsFor(jdbcTypes)
+            // T-IbatisParamClassQuote：jdbcType 仍是首位（既有口径不动）；裸 `#name#`（jdbcType 缺省）
+            // 才按 parameterClass 的属性类型补位——iBatis 引擎本身就是拿它反射决定 setString/setInt
+            jdbcTypes.mapIndexed { index, jdbcType ->
+                IbatisParamTypeHints.hintOf(jdbcType)
+                    ?: propertyHints[names[index]]
+                    ?: ParamHint()
+            }
         } else {
             emptyList()
         }
