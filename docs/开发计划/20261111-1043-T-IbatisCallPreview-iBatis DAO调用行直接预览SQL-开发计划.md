@@ -1,7 +1,7 @@
 # T-IbatisCallPreview：iBatis DAO 调用行直接预览 SQL（图标 + 快捷键）—— 开发计划
 
 - 日期：2026-11-11 10:43（11:10 补入快捷键与 MCP 同源面）
-- 状态：**计划（未实施）**
+- 状态：**已实施并合入 master（`0ff8cf29`，随 6ad04dd2 轮 CI 全绿）；真机验收通过（用户 2026-11-11）**
 - 来源：用户 2026-11-11 新需求两连——①「现在希望这类的可以有预览图标并且直接预览 sql」，指向 `mybatis-plus-sql-visualizer-demo/ibatis2-demo/src/main/java/cn/song/ibatis2demo/UserDaoImpl.java`；②「sql 预览快捷键也需要可以正常用」（`Alt+Shift+Q` / `ConvertToSql`）
 - 前序：`20261109-1130-T-Ibatis2Support`（券 A 预览 / 券 F 跳转）、`20261109-2252-T-Ibatis2Gap`（券 B 双向箭头）、`T-IbatisFix3`（JdbcTemplate 调用行让位）、`T-IbatisFix4`（方法定义行让位）
 - 拍板：**图标形态＝调用行新增预览图标、保留既有跳转箭头**（用户 2026-11-11 选择，D-1）
@@ -410,5 +410,6 @@ private fun tryIbatisMethodFallback(project: Project, element: PsiElement, sourc
 - CHANGELOG / 架构文档：已回填（`CHANGELOG.md` 新增 `[Unreleased]` 段，条目带 `8ad491b8`；
   `docs/架构设计/预览触发面清单-说明文档.md` 新增入口矩阵第 16 行与 iBatis 调用行负例边界）
 - MCP 工具文档：`McpSourceLocator` 类注释与错误提示的 Supported 清单已更新（新增 iBatis 两档）
-- 真机验收进度（用户）：**待验收**——§5.4 共 14 步；第 1 步预期「每个调用行两枚图标（红箭头 + 绿预览）」，
-  第 10~14 步为快捷键与 MCP 判据
+- 真机验收进度（用户）：**通过（2026-11-11）**——§5.4 的图标/快捷键/MCP 判据全部无问题（第 1 步「每个调用行两枚：红箭头 + 绿预览」符合预期）。
+  验收过程中另发现一条与本任务无关的偏差：`selectTwoSegment` 的裸 `#username#` 填数字被裸渲染缺引号（引擎按 `parameterClass` 属性类型引号），已另立
+  `20261111-1242-T-IbatisParamClassQuote` 处理，不在本册范围
