@@ -168,4 +168,16 @@ class NamedParamParserTest {
         assertEquals(1, params.size)
         assertEquals("CUR_USER", params[0].name)
     }
+    @Test
+    fun `字面量与注释内的命名参数不收_券Y11`() {
+        // T-HiddenBugPerfScan 券 Y11：曾裸跑正则——'提交:审核'、'a:b'、-- 见 :doc
+        // 产生幻影参数行；真参数照常收集
+        val params = NamedParamParser.collectNamedParams(
+            "WHERE remark = '提交:审核' AND a = :real1 -- 见 :docId\n" +
+                "AND b = :real2 /* :ghost */ AND c = 1::integer"
+        )
+        val names = params.map { it.name }
+        org.junit.Assert.assertEquals(listOf("real1", "real2"), names)
+    }
+
 }
