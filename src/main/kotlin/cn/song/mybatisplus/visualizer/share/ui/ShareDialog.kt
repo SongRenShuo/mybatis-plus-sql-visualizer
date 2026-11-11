@@ -190,9 +190,7 @@ class ShareDialog(
         val dialog: FileSaverDialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
         val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-diagnostic-report.html")
         if (saved != null) {
-            val file = saved.file
-            shareManager.saveHtmlReport(html, file.absolutePath)
-            BrowserUtil.open(file.toURI().toString())
+            exportHtmlAsync(saved.file, html)
         }
     }
 
@@ -214,9 +212,33 @@ class ShareDialog(
         val dialog: FileSaverDialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
         val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-report.html")
         if (saved != null) {
-            val file = saved.file
-            shareManager.saveHtmlReport(html, file.absolutePath)
-            BrowserUtil.open(file.toURI().toString())
+            exportHtmlAsync(saved.file, html)
+        }
+    }
+
+    /**
+     * T-HiddenBugPerfScan 券 Y1：HTML 产物写盘移出 EDT——产物对 SQL 不截断
+     * （Markdown 路径有 10KB 截断，HTML 无），大 SQL 的逐字符转义高亮 HTML 可达数 MB，
+     * doOKAction（EDT）里同步 writeText 在慢盘/网络盘冻结 UI；仿
+     * SqlPreviewPanelExecution.exportReplayScript 的池线程先例，成功后回 EDT 开浏览器。
+     */
+    private fun exportHtmlAsync(file: java.io.File, html: String) {
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching { shareManager.saveHtmlReport(html, file.absolutePath) }
+                .onSuccess { BrowserUtil.open(file.toURI().toString()) }
+                .onFailure {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(ShareDialog::class.java)
+                        .warn("share html export failed: " + file.absolutePath, it)
+                    project?.let { proj ->
+                        com.intellij.notification.NotificationGroupManager.getInstance()
+                            .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+                            .createNotification(
+                                MpSqlVisualizerBundle.message("share.export.failed", it.message ?: ""),
+                                com.intellij.notification.NotificationType.ERROR,
+                            )
+                            .notify(proj)
+                    }
+                }
         }
     }
 }
