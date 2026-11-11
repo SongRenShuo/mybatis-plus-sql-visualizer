@@ -182,7 +182,7 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             // 「项目候选方言不一致 / 手动指定: MySQL」的旧文案，直到面板重绘或
             // apply 后的 reset() 才追上（用户真机复现）。状态行内容完全由
             // selectedItem 决定（见 refreshInferredLabel），故任何变化都应重算。
-            dialectCombo.addActionListener { refreshInferredLabel() }
+            registerListenerOnce("dialectCombo") { dialectCombo.addActionListener { refreshInferredLabel() } }
             addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
             // T-PT-04 / O-79：空参数填充策略（参数值为空时保留 ? 占位，还是回填 NULL/空字符串）
             emptyParamFillPlaceholderRadio.apply {
@@ -451,11 +451,13 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", crudColorResetButton.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.crudColor.reset")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.crudColor.reset.tip")
-                addActionListener {
-                    crudColorSelectPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_SELECT)
-                    crudColorInsertPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_INSERT)
-                    crudColorUpdatePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_UPDATE)
-                    crudColorDeletePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_DELETE)
+                registerListenerOnce("crudColorResetButton") {
+                    addActionListener {
+                        crudColorSelectPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_SELECT)
+                        crudColorInsertPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_INSERT)
+                        crudColorUpdatePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_UPDATE)
+                        crudColorDeletePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_DELETE)
+                    }
                 }
             })
         }
@@ -530,13 +532,15 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", logAutoSaveCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.autoSave")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
-                addActionListener {
-                    val enabled = isSelected
-                    logAutoSavePathField.isEnabled = enabled
-                    logAutoSaveBrowseButton.isEnabled = enabled
-                    logAutoSavePatternField.isEnabled = enabled
-                    logAutoSaveMaxFilesField.isEnabled = enabled // T-HistoryFileRetention
-                    updateAutoSavePreview()
+                registerListenerOnce("logAutoSaveCheck") {
+                    addActionListener {
+                        val enabled = isSelected
+                        logAutoSavePathField.isEnabled = enabled
+                        logAutoSaveBrowseButton.isEnabled = enabled
+                        logAutoSavePatternField.isEnabled = enabled
+                        logAutoSaveMaxFilesField.isEnabled = enabled // T-HistoryFileRetention
+                        updateAutoSavePreview()
+                    }
                 }
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
@@ -558,11 +562,13 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     add(logAutoSavePatternField.apply {
                         toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
                         emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
-                        document.addDocumentListener(object : javax.swing.event.DocumentListener {
-                            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                        })
+                        registerListenerOnce("logAutoSavePatternDoc") {
+                            document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                                override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                            })
+                        }
                     }, BorderLayout.CENTER)
                     add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
                         toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
@@ -587,10 +593,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", autoInjectInterceptorCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor.tip")
-                addActionListener {
-                    if (isSelected) {
-                        // 触发注入
-                        triggerInterceptorInjection()
+                registerListenerOnce("autoInjectInterceptorCheck") {
+                    addActionListener {
+                        if (isSelected) {
+                            // 触发注入
+                            triggerInterceptorInjection()
+                        }
                     }
                 }
             })
@@ -598,9 +606,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", enhancedCaptureCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.tip")
-                addActionListener {
-                    // T-EnhancedCaptureDefaultOn：勾选即授权，不再弹注入确认；只刷新状态行。
-                    refreshEnhancedStatusLabel()
+                registerListenerOnce("enhancedCaptureCheck") {
+                    addActionListener {
+                        // T-EnhancedCaptureDefaultOn：勾选即授权，不再弹注入确认；只刷新状态行。
+                        refreshEnhancedStatusLabel()
+                    }
                 }
             })
             addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
@@ -705,9 +715,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     add(cacheInfoLabel)
                     add(clearCacheButton.apply {
                         toolTipText = MpSqlVisualizerBundle.message("settings.cache.tip")
-                        addActionListener {
-                            ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
-                            cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
+                        registerListenerOnce("clearCacheButton") {
+                            addActionListener {
+                                ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
+                                cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
+                            }
                         }
                     })
                 })
