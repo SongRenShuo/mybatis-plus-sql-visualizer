@@ -810,6 +810,37 @@ dirTypeIgnored=false, regHideExcluded=false, ideBuild=IU-263.7307.200
 **读数**：`ExecPsiFailureHintTest` **16 / 0 / 0**（新增「可重复读取：同一次失败渲染两次都拿得到」
 「非 PSI 失败不借用」「匹配放宽到任一 PSI 阶段」）。
 
+### 13.16 F8：先复现再修 —— 成因改随文案传递（2026-11-11 第五轮）
+
+**现象**：装包后直接点「执行 SQL」仍无蓝字。用户要求「先复现问题再解决」，本轮按取证三步走。
+
+**取证**
+
+1. **失败路径确认**（`IntelliJIdea2026.3/log/idea.log` 16:18:05–16:18:09）：
+   `createTempPsiFile FAILED at findPsiAfterHeal` 与 `createTempPsiFile failed (reason=…)` 成对出现
+   ⇒ 确实是 `fail()` 写下的失败，不是别的分支。
+2. **装的到底是哪个包**（字节取证，L35 口径）：扫
+   `%APPDATA%/JetBrains/IntelliJIdea2026.3/plugins/mybatis-plus-sql-visualizer/lib/*.jar`——
+   `TempFileHintRecord` **在**、`shouldRelocateExecToRoot` **不在**、`ExecPsiFailureHintKt` 里
+   **没有** `[hint=` / `parseExecHintMessage` ⇒ 装的是 `7ab0d5335`（F6b）。
+   **F7（`3d2428a12`，非破坏性读取）从未被装上验过**。
+3. **复现**：F6b 的 consumer 是「读一次就清」，而一条失败会被投递两次
+   （`failPrepareRequests` 先 `gate.abort(持有者)`、再 `consumed.complete(排队意图)`，两路带同一文案）
+   ⇒ 第一次渲染挂上蓝字，第二次 `cause == null` 走 `resultBox.showError`，纯红字把蓝字盖掉。
+   写成用例「复现蓝字消失_成因编进文案后渲染两次都拿得到」，把 `withExecHint` 退回旧行为时
+   **实测恰 2 红**，复现成立。
+
+**修法**：**成因随失败文案一起走**——`fail()` 把 ` [hint=XXX]` 追加到失败原因里（
+`withExecHint`），UI 用 `resolveTempFileHintCause` 取值、`parseExecHintMessage` 剥掉标记
+（展示文案干净，日志与「复制错误信息」保留标记）。共享字段只作老路径兜底。
+
+为什么这次能收口：前四轮都把成因放在共享可变状态里，靠「谁清谁写」的约定传递，被三种机制各打掉
+一次（预热链入口清空 / 并发失败覆盖 / 第二次渲染时读方清空），动态重载时还可能是两份类实例。
+**文案怎么走、成因就怎么走**，跨线程、跨渲染次数、跨类加载器都不丢，也不需要任何读方负责清理。
+
+**读数**：`ExecPsiFailureHintTest` **18 / 0 / 0 / 0**（新增三条：复现用例、`withExecHint`↔
+`parseExecHintMessage` 互逆、未知成因名不抛）。
+
 ---
 
 ## 参考

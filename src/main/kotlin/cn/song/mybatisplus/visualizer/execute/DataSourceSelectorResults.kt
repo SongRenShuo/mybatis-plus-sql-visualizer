@@ -1792,9 +1792,11 @@ internal fun DataSourceSelector.createTempPsiFile(
     // 由它派发到池线程；[prewarmExecTempFileInner] 走同款 BGT 裸调形态。
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
-    // F6：成因与**阶段**成对记录（[TempFileHintRecord]）——裸字段在并发入口会被清掉，见字段 KDoc
+    // F8：成因**编码进文案本身**（` [hint=XXX]`）。前几轮靠共享字段传递被三种机制各打掉一次
+    //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空）；文案怎么走、成因就怎么走，见 withExecHint。
     fun fail(stage: String, detail: String = "", hint: ExecPsiFailureCause? = null): Nothing? {
-        lastTempFileFailure = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+        val reason = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+        lastTempFileFailure = withExecHint(reason, hint)
         if (hint != null) lastTempFileHintRecord = TempFileHintRecord(stage, hint)
         LOG.warn("[M36] createTempPsiFile FAILED at $stage${if (detail.isNotEmpty()) " ($detail)" else ""}")
         return null

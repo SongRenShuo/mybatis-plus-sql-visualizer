@@ -1121,12 +1121,14 @@ internal fun openFileTypesSettings(proj: Project) {
  * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
  */
 internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
-    // F6：成因与**阶段**成对消费——并发的下一个 createTempPsiFile 入口清不掉它，旧成因也不会被
-    // 安到新失败上（文案里不含该阶段即丢弃）。此前读裸字段，真机上又退化成「只剩红字」。
-    val cause = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.consumeTempFileHintFor(errorMsg)
+    // F8：成因**从文案本身**取（` [hint=XXX]`）。前几轮靠共享字段传递，被三种机制各打掉一次
+    //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空），动态重载后还可能是两份类实例。
+    // 文案怎么走成因就怎么走；产物里把标记剥掉，日志与「复制错误信息」里保留。
+    val cause = cn.song.mybatisplus.visualizer.execute.resolveTempFileHintCause(errorMsg)
+    val shown = cn.song.mybatisplus.visualizer.execute.parseExecHintMessage(errorMsg).text
     val proj = project
     if (cause == null || proj == null) {
-        resultPanel.showError(errorMsg)
+        resultPanel.showError(shown)
         return
     }
     var settingsLabel: String? = null
@@ -1180,7 +1182,7 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
         }
     }
     resultPanel.showErrorWithActions(
-        "$errorMsg — $hint",
+        "$shown — $hint",
         fixLabel = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot") else null,
         fixTooltip = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot.tip") else null,
         fix = if (allowFallback) {

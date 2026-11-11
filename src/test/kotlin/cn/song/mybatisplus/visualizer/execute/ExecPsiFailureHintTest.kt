@@ -197,15 +197,46 @@ class ExecPsiFailureHintTest {
         )
     }
 
+    /**
+     * F8：**复现「直接点执行没有蓝字」**（2026-11-11 第五轮）。
+     *
+     * 真机前四轮的故障点都在「这条文案该挂哪颗蓝字」这一步返回了 null，而它一为 null 就等于面板
+     * 只剩红字。这里按生产的真实形态造文案（`execute.tempFile.failed` 包一层），**连续渲染两次**
+     * ——旧实现第二次就丢（共享字段被读方清空），F8 把成因编进文案后两次都在。
+     */
     @Test
-    fun `成因匹配放宽到任一 PSI 阶段`() {
-        // 阶段名会演进（findPsi / findPsiAfterHeal / dirNoPsi），精确匹配会让入口凭阶段名丢失
-        DataSourceSelector.lastTempFileHintRecord =
-            TempFileHintRecord("dirNoPsi", ExecPsiFailureCause.DIR_NOT_INDEXED)
-        assertEquals(
-            ExecPsiFailureCause.DIR_NOT_INDEXED,
-            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：findPsiAfterHeal: name=x"),
-        )
+    fun `复现蓝字消失_成因编进文案后渲染两次都拿得到`() {
+        // 真机形态：共享字段已经丢了（被并发入口/读方清空、或动态重载后是另一份类实例）
+        DataSourceSelector.lastTempFileHintRecord = null
+        val reason = withExecHint("findPsiAfterHeal: name=mpsql-exec.sql", ExecPsiFailureCause.IGNORED_BY_VCS)
+        val message = "创建临时 SQL 文件失败：$reason"
+        repeat(2) { round ->
+            assertEquals(
+                "第 ${round + 1} 次渲染必须仍拿到成因（只靠共享字段时这里恒为 null ⇒ 面板退化成纯红字）",
+                ExecPsiFailureCause.IGNORED_BY_VCS,
+                resolveTempFileHintCause(message),
+            )
+            assertFalse("展示文案里不得残留标记", parseExecHintMessage(message).text.contains("[hint="))
+        }
+    }
+
+    @Test
+    fun `成因标记与文案互逆`() {
+        val plain = "findPsiAfterHeal: name=x"
+        val marked = withExecHint(plain, ExecPsiFailureCause.DIR_NOT_INDEXED)
+        val parsed = parseExecHintMessage(marked)
+        assertEquals(ExecPsiFailureCause.DIR_NOT_INDEXED, parsed.cause)
+        assertEquals("剥掉标记必须回到原文", plain, parsed.text)
+        // 无标记 ⇒ 原样返回，且不误判成因
+        assertNull(parseExecHintMessage(plain).cause)
+        assertEquals(plain, withExecHint(plain, null))
+    }
+
+    @Test
+    fun `成因标记容错_未知枚举名不炸`() {
+        val parsed = parseExecHintMessage("boom [hint=NOT_A_CAUSE]")
+        assertNull("未知成因名只能当没有，不许抛", parsed.cause)
+        assertEquals("boom", parsed.text)
     }
 
     @Test

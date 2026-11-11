@@ -50,6 +50,49 @@ internal enum class ExecPsiFailureCause {
 }
 
 /**
+ * T-ExecPsiGate F8（2026-11-11 第五轮，用户「还是没解决」）：**成因随失败文案一起走**。
+ *
+ * 前四轮把成因存在共享字段里，靠"谁清谁写"的约定传递，结果被三条不同的机制各打掉一次：
+ * 预热链入口清空（F3）、并发失败覆盖（F5）、同一次失败第二次渲染时读方清空（F7）。而且真机上
+ * 还有一条更狠的：插件被动态重载时 `DataSourceSelector` 这个 object 可能有两份类实例，
+ * 写方与读方根本不在同一个字段上。
+ *
+ * 所以第五轮改成**把成因编码进错误文案本身**（` [hint=IGNORED_BY_VCS]`）：文案怎么走、成因就
+ * 怎么走——跨线程、跨渲染次数、跨类加载器都不会丢，也不需要任何读方负责清理。UI 在渲染前
+ * 用 [parseExecHintMessage] 把它剥掉，用户看不到这段标记（日志与"复制错误信息"里保留，便于归因）。
+ */
+internal data class ExecHintMessage(
+    /** 文案里编码的成因；null = 这条文案不带成因标记 */
+    val cause: ExecPsiFailureCause?,
+    /** 剥掉标记后的展示文案 */
+    val text: String,
+)
+
+private val EXEC_HINT_TOKEN = Regex("""\s*\[hint=([A-Z_]+)]""")
+
+/** 把 `[hint=XXX]` 标记从文案里剥出来（纯函数，表驱动可测）。 */
+internal fun parseExecHintMessage(message: String): ExecHintMessage {
+    val match = EXEC_HINT_TOKEN.find(message) ?: return ExecHintMessage(null, message)
+    val cause = match.groupValues.getOrNull(1)
+        ?.let { id -> runCatching { ExecPsiFailureCause.valueOf(id) }.getOrNull() }
+    return ExecHintMessage(cause, message.replace(EXEC_HINT_TOKEN, ""))
+}
+
+/** 把成因编进失败文案（与 [parseExecHintMessage] 互逆；无成因时原样返回）。 */
+internal fun withExecHint(message: String, cause: ExecPsiFailureCause?): String =
+    if (cause == null) message else "$message [hint=${cause.name}]"
+
+/**
+ * T-ExecPsiGate F8：**UI 侧取成因的唯一入口**——先认文案里编码的标记，再退回共享记录（老路径兼容）。
+ *
+ * 抽成函数是为了让「这条文案该挂哪颗蓝字」可被单测直接复现：真机前四轮的故障点全在这一步
+ * 返回 null（共享字段被清/被覆盖/两份类实例），而返回 null 就等于面板只剩红字。
+ */
+internal fun resolveTempFileHintCause(errorMsg: String): ExecPsiFailureCause? =
+    parseExecHintMessage(errorMsg).cause
+        ?: DataSourceSelector.consumeTempFileHintFor(errorMsg)
+
+/**
  * 观测值 → 原因。
  *
  * @param excluded  `ProjectFileIndex.isExcluded(vf)`
