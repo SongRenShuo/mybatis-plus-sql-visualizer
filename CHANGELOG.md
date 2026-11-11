@@ -11,6 +11,45 @@
 - **第三批方言端到端真机验证（T-DomesticDialects 补章，2026-11-11）**：插件渲染套件 + 保留字全量扫描在真引擎上逐方言执行——**GBase 8a 8.6.2 真机**（真引擎级，269 词扫描全绿；驱动取证：官方驱动无公开坐标，MariaDB Connector/J 3.3.3 可连）、**虚谷 XuGuDB 12.10.13 真机**（真引擎级，Central 驱动 `com.xugu.cloudjdbc.Driver`）、其余 7 家按兼容族真引擎（MySQL 8.4.6 / PostgreSQL 16.14 / Oracle Free 23）族级验证全绿；GBase 8c 因测试服务器整机离线未跑（族内同形已由 PG 腿覆盖）。真机读数修掉一处档位错误（GBase 8a EXPLAIN TEXT→**TABLE**，MySQL 式表格行实证）并订正虚谷驱动类名取证（`com.xuguedata` 在 Central 全系 jar 不存在，采集面前缀补 `com.xugu.` 五处副本同步）；虚谷 `DELETE…LIMIT` 精确复验确证语法错误（首次探针 updateCount=-1 为驱动误报），保守判无维持
 
 ### Fixed
+- **全仓隐藏缺陷与性能问题扫描修复（T-HiddenBugPerfScan，2026-11-11~12，四路只读审计 45 条发现全部处置、38 笔修复提交）**：审计排除另一分支待合流的 25 条安全线索，零重复；逐券「修复 + 定向测试 + （行为型）反向探针」收口，明细见 `docs/开发计划/20261111-0550-T-HiddenBugPerfScan-隐藏缺陷与性能问题修复-开发计划.md`。以下一句一条（按券序）：
+  - **券 A**（9241e0430）：and/or 块体 lambda 内嵌套调用泄漏进外层链——块体收集补「本 lambda 归属 + 链尾」双过滤，不再生成重复条件
+  - **券 B**（8d4fbdb58）：HQL/JPQL 命名/位置参数替换先掩码字面量——字面量内 `:word`/`?N` 不再被换占位符致产物污染与回填错位
+  - **券 C**（016601b60）：EP 主通道解析配置快照固化——设置变更同拍刷新（弱引用注册表）+ applyFilter 补 ctx 锁与桥侧对齐
+  - **券 D**（e206097b4）：历史文件读取单遍化 + 块级读——修订并入解析遍、boundedLines 告别逐字符虚调用（19MB 实测 15~16.6s 的热路径）
+  - **券 E**（a7ae24f94）：SQL→Java 批量路径补实体查找兜底——池任务异常不再静默无反应（PCE 原样上抛 + 用户可见反馈）
+  - **券 F**（ad8f3c54e）：9 处 catch(Throwable) 站点补取消协议——PCE 不再被吞成「未找到」空结果
+  - **券 G**（b0e5fe69d）：SqlHistoryManager 13 个读/改入口与写路径同锁——池线程 add 与 EDT 读并发不再 CME/撕裂
+  - **券 H**（38a9683c6）：EXPLAIN 结果对话框面板树挂载改「常驻一份 + 字段间接」——反复执行不再线性累积泄漏
+  - **券 I**（d9e337be4）：参数导入解析器两缺陷——嵌套 JSON 后顶层键不再丢失、首行含逗号 key=value 不再误入 CSV
+  - **券 K**（500730ffa）：OGNL 超宽整数字面量不再穿透收敛层（回落 BigDecimal）+ 整型除法语义对齐真实 OGNL
+  - **券 L**（e545272ea）：selectFunc 参数位运算符优先级——三参形态别名位不再被聚合函数位吞掉
+  - **券 M**（21802789c）：行注释提取零大拷贝反向回扫——缓存未命中 O(字段数×文件大小) 分配归零
+  - **券 N**（e487dc735）：字符串版多列 orderByAsc/orderByDesc 不再整体丢失 ORDER BY
+  - **券 O**（6237755ba）：SqlTypeClassifier 掩码补反斜杠转义对——INTO OUTFILE 写证据不再从掩码文本消失（确认闸 fail-closed 方向）
+  - **券 P**（718c6ead1）：renderLike 重包 LIKE 字面量补单引号转义——含引号常量不再产出断串 SQL
+  - **券 Q**（e3e98fc8a）：顶格关键字扫描 O(n²) 归零（startsWith(fromIndex) 零分配）+ 复杂度评分词边界补 `_`
+  - **券 R**（72362d4b0）：agent EventBuilder 反射缓存改 ClassValue——静态 Method 强引用不再钉驱动类加载器（券 04 红线补漏网）
+  - **券 S**（00f25d6c3）：agent EventBus 满队聚合扫描降本——iterator 锁步进改单次快照 + 尾部快路径（F2b 语义零收窄）
+  - **券 T**（446a6b375）：dedupeExisting 手动裁剪 O(n²)→O(n)——万级缓冲「移除重复的sql」不再冻结 EDT
+  - **券 V**（1c9831fe3）：设置 JSON 导入后发布 SETTINGS_CHANGE——日志管线/Agent CONFIG/面板不再静默保持旧值
+  - **券 W**（f639b7a95）：McpConfigurable.apply 走 loadState(copy) 与全局面板同口径（项目级页拒判：TFS08 契约钉死外部引用须跨 apply 存活）
+  - **券 X**（bf9e9bbbb）：PageRequest.of(运行时page, 字面量size) 不再丢 OFFSET 与参数行
+  - **券 Y1**（a6a6db76f）：HTML 报告导出写盘移出 EDT——大 SQL 导出不再冻结 UI
+  - **券 Y2**（09252a5a6）：删除 DiagramPanel/SqlPreviewPanel dispose 内的自处置——Disposer 树重入双处置
+  - **券 Y3**（2f341f216）：PerfRuleEngine 规则异常补 WARN 留痕——性能能力不再静默退化
+  - **券 Y4**（e780838a8）：MPJ ON-lambda 的 apply 统一片段通道——运行期拼接段不再静默丢弃
+  - **券 Y5**（268149e37）：extractConsoleError 锚定最后一条命中——重复错误报文不再摘录旧错误上下文
+  - **券 Y6**（27c69b9a0）：setIncrBy/setDecrBy 方言读取传 project——多项目同开不再错族引用
+  - **券 Y7**（d284620ae）：占位符扫描与注释剥离补 MySQL # 行注释——注释里的 ? 不再计入占位符
+  - **券 Y8**（59ead55f0）：ExpressionEvaluator Char 分支补单引号转义——与 String 分支同口径
+  - **券 Y9**（ecc93df6f）：SQL→Java 列对列条件 qualifiedName + 双侧转义——多表列对列不再歧义
+  - **券 Y10**（f2e00cbde）：批量链零列实体不再抛 NoSuchElementException——五处 first() 收敛 null 降级
+  - **券 Y11**（a88b1020c）：NamedParamParser 跳过字面量/注释——:name 不再收幻影参数
+  - **券 Y12**（30b238e30）：OFFSET n ROWS 单独形态报错给可行动文案（模型不可表达「无 count」，接受面扩大另立项）
+  - **券 Y13**（72e9ac861）：TrimSqlNode 无 prefix 不剥 prefixOverrides——对齐 MyBatis 原语义
+  - **券 Y14**（b5c9464df）：SettingsIO 病态数字收敛 ImportException + version<1 拒绝——异常契约补齐
+  - **券 Y15/Y16**（d2277ba75）：设置面板 rebuild 监听器幂等（七处守卫键集）+ 非 UI 页 apply 不再误报语言变更触发全量 rebuild
+  - **券 Y17**（c76729072）：Querydsl BooleanBuilder 引用搜索限 useScope——预览不再裸跑全项目 ReferencesSearch
 - **预览执行 INSERT/UPDATE/DELETE 成功却被报「等待结果超时」（T-PreviewDmlResult，67a574ab）**：数据库控制台对写语句**不建结果页签**，影响行数（`1 row affected in 60 ms`）只写进 Output 视图；插件原来的完成态判据只读 `historyViewer` 文档（真机实证该文档里只有 `Connected` 与 SQL 回显），于是 40 拍窗口到期后 `completed=false`，成功被归成「已提交执行，但等待结果超时」，用户面板里只剩原生 Output。现在按 DML/DDL 首关键字识别「结构上没有结果页签」的语句：提交后 8s、连接已就绪即给中性提示「已提交执行（更新/DDL 语句不产生结果页签），影响行数与耗时见下方控制台 Output」——措辞刻意不宣称「完成」，长事务仍在跑时不误导；40 拍判定侧同步不再把这类语句落超时归因。定向：`PreviewWriteStatementTest` 5 例（含反向验证：移除 `INSERT` 判据后 2 例转红）
 
 ### Changed
