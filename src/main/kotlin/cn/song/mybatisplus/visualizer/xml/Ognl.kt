@@ -24,9 +24,15 @@ data class MockObject(val properties: Map<String, Any?> = emptyMap()) {
     operator fun get(name: String): Any? = properties[name]
 }
 
-/** 求值器的模拟可迭代值（foreach 展开 N 次，元素为无属性 MockObject）。 */
-class MockIterable(val size: Int) : Iterable<MockObject> {
-    override fun iterator(): Iterator<MockObject> = (0 until size).asIterable().map { MockObject() }.iterator()
+/**
+ * 求值器的模拟可迭代值（foreach 展开 N 次，元素为无属性 MockObject）。
+ *
+ * T-MbgExamplePreview M2：可携带元素级模拟值（从调用点反推的 Criteria / Criterion）。
+ * 给了 [elements] 就按元素展开、忽略 [size]；元素只读共享，迭代器每次返回同一批对象。
+ */
+class MockIterable(val size: Int, private val elements: List<MockObject>? = null) : Iterable<MockObject> {
+    override fun iterator(): Iterator<MockObject> =
+        (elements ?: (0 until size).map { MockObject() }).iterator()
 }
 
 /** 表达式 AST。 */

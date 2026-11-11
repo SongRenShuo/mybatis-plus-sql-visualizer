@@ -131,6 +131,12 @@ class XmlPreviewModel private constructor(
     val chooseGroups: List<XmlChooseGroup> = emptyList(),
     /** 语句形态档（T-MbgExamplePreview R5）——null 时不改任何默认值（升级前行为）。 */
     val profile: XmlPreviewProfile? = null,
+    /**
+     * 集合表达式 → 元素级模拟值（T-MbgExamplePreview M2）。键与 [forEachViews] 的
+     * `collectionExpr` 同源（`oredCriteria` / `criteria.criteria`），值为调用点反推出的
+     * Criteria / Criterion；缺席时退回「展开 N 次的无属性元素」。
+     */
+    val collectionElements: Map<String, List<MockObject>> = emptyMap(),
     private val rootNode: SqlNode,
 ) {
 
@@ -251,10 +257,12 @@ class XmlPreviewModel private constructor(
         mockProps.keys.forEach { bindings[it] = mockValueOf(it) }
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
-            bindings[view.collectionExpr] = if (view.collectionExpr in state.forEachNulls) {
-                null
-            } else {
-                MockIterable(state.forEachCounts[view.collectionExpr] ?: DEFAULT_FOREACH_SIZE)
+            val elements = collectionElements[view.collectionExpr]
+            bindings[view.collectionExpr] = when {
+                view.collectionExpr in state.forEachNulls -> null
+                // T-MbgExamplePreview M2：调用点反推到的元素级模拟值优先（Criteria / Criterion）
+                elements != null -> MockIterable(elements.size, elements)
+                else -> MockIterable(state.forEachCounts[view.collectionExpr] ?: DEFAULT_FOREACH_SIZE)
             }
         }
         state.bindOverrides.forEach { (name, value) -> bindings[name] = value }
@@ -330,6 +338,8 @@ class XmlPreviewModel private constructor(
             paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
             /** T-MbgExamplePreview R5：语句形态档（如 [XmlPreviewProfile.MBG_EXAMPLE]）；null = 不改默认。 */
             profile: XmlPreviewProfile? = null,
+            /** T-MbgExamplePreview M2：集合表达式 → 调用点反推的元素级模拟值。 */
+            collectionElements: Map<String, List<MockObject>> = emptyMap(),
         ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
@@ -364,6 +374,7 @@ class XmlPreviewModel private constructor(
                 paramTypes = paramTypes,
                 chooseGroups = chooseGroups,
                 profile = profile,
+                collectionElements = collectionElements,
                 hasDollarRawSegments = dollarTokens.isNotEmpty(),
                 rootNode = statement.node,
             )

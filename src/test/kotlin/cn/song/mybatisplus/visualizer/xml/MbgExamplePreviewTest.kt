@@ -83,6 +83,67 @@ class MbgExamplePreviewTest {
         )
     }
 
+    // ---------------- M2：调用点反推的元素级模拟值 ----------------
+
+    @Test
+    fun `M2元素级模拟值_condition取到真实值且无占位`() {
+        val elements = mapOf(
+            "oredCriteria" to listOf(
+                MbgCriterionMock.criteriaOf(listOf(MbgCriterionMock("cust_id =", listOf("42")))),
+            ),
+            "criteria.criteria" to listOf(MbgCriterionMock("cust_id =", listOf("42")).toMockObject()),
+        )
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = elements,
+        )
+        val sql = compact(m.renderSql().sql)
+        assertEquals(
+            "select 'false' as QUERYID, CUST_ID, STAFF_LOGIN from CT_CUSTMANAGER_REL WHERE ( cust_id = ? )",
+            sql,
+        )
+        assertFalse("拿到真实 condition 后不应再有占位：$sql", sql.contains("{{"))
+    }
+
+    @Test
+    fun `M2方法名后缀到分支类别`() {
+        assertEquals(MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNull"))
+        assertEquals(MbgCriterionKind.NO_VALUE, MbgCriterionMock.kindOf("andCustIdIsNotNull"))
+        assertEquals(MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdIn"))
+        assertEquals(MbgCriterionKind.LIST_VALUE, MbgCriterionMock.kindOf("andCustIdNotIn"))
+        assertEquals(MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdBetween"))
+        assertEquals(MbgCriterionKind.BETWEEN_VALUE, MbgCriterionMock.kindOf("andCustIdNotBetween"))
+        assertEquals(MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdEqualTo"))
+        assertEquals(MbgCriterionKind.SINGLE_VALUE, MbgCriterionMock.kindOf("andCustIdLike"))
+    }
+
+    @Test
+    fun `M2分支布尔值与参数个数一致`() {
+        val noValue = MbgCriterionMock("cust_id is null", emptyList(), MbgCriterionKind.NO_VALUE).toMockObject()
+        assertEquals(true, noValue["noValue"])
+        assertEquals(null, noValue["value"])
+
+        val single = MbgCriterionMock("cust_id =", listOf("42")).toMockObject()
+        assertEquals(true, single["singleValue"])
+        assertEquals("42", single["value"])
+
+        val between = MbgCriterionMock(
+            "cust_id between", listOf("1", "9"), MbgCriterionKind.BETWEEN_VALUE,
+        ).toMockObject()
+        assertEquals(true, between["betweenValue"])
+        assertEquals("1", between["value"])
+        assertEquals("9", between["secondValue"])
+
+        val list = MbgCriterionMock(
+            "cust_id in", listOf("1", "2"), MbgCriterionKind.LIST_VALUE,
+        ).toMockObject()
+        assertEquals(true, list["listValue"])
+        assertEquals(listOf("1", "2"), list["value"])
+    }
+
     // ---------------- R1 + R4 + R5：默认档下的整体产物 ----------------
 
     @Test

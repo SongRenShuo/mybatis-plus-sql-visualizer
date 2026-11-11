@@ -98,10 +98,18 @@ object XmlPreviewService {
             // T-MbgExamplePreview R5：MBG Example 参数类型 → 默认勾选档（distinct / orderByClause 不展开、
             // 集合按 1 项）；解析不到一律 null，行为与升级前一致
             val profile = resolveExampleProfile(project, statement.parameterType, parsed.namespace)
+            // T-MbgExamplePreview M2：Example 形态下再从调用点反推 Criterion（andXxx 方法体的
+            // addCriterion 常量）——拿到真值后 ${criterion.condition} 不再落占位
+            val collectionElements = if (profile == null) {
+                emptyMap()
+            } else {
+                MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
+            }
             XmlPreviewModel.from(
                 statement, parsed.errors,
                 staticFieldValues = staticValues, extraBindings = ewBindings, paramTypes = paramTypes,
                 profile = profile,
+                collectionElements = collectionElements,
             ) to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
