@@ -12,6 +12,8 @@ import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.ui.ParamHistoryCache
 import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
+import cn.song.mybatisplus.visualizer.mcp.McpSettingsOpenResult
+import cn.song.mybatisplus.visualizer.mcp.openMcpServerSettingsPage
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -913,28 +915,19 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /**
      * T-ShortcutSettings：打开平台 MCP Server 设置（定位到 SQL Visualizer 工具）。
-     * 平台 Configurable 类名 = com.intellij.mcpserver.settings.McpServerSettingsConfigurable
-     * （262 mcpserver.jar 常量池实证；注意包名 mcpserver 全小写）。
-     * MCP Server 插件未安装时（243 / 未启用）提示并返回。
+     * 寻址与回退已收归 [openMcpServerSettingsPage] 单一真相源（T-McpSettingsJump 20261111）：
+     * 平台实现类名会搬（263 起设置页进 content module `intellij.mcpserver.frontend` 并换包名），
+     * 按类名写死单点探测就会把「页面搬走了」误报成「IDEA 版本不够」。
+     * 本方法当前无调用方（MCP 已提升为独立子设置页），保留为「关于」节历史入口的等价实现。
      */
     private fun openMcpServerSettings() {
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
-        val configurableClass = runCatching {
-            Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")
-                as? Class<out com.intellij.openapi.options.Configurable>
-        }.getOrNull()
-        if (configurableClass == null) {
-            com.intellij.openapi.ui.Messages.showWarningDialog(
-                project,
-                MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
-                MpSqlVisualizerBundle.message("settings.mcp.title"),
-            )
-            return
-        }
-        runCatching<Unit> {
-            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
-                .showSettingsDialog(project, configurableClass)
-        }
+        if (openMcpServerSettingsPage(project) != McpSettingsOpenResult.UNAVAILABLE) return
+        com.intellij.openapi.ui.Messages.showWarningDialog(
+            project,
+            MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
+            MpSqlVisualizerBundle.message("settings.mcp.title"),
+        )
     }
 
     /**

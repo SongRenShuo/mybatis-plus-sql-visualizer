@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.mcp.McpSettingsOpenResult
 import cn.song.mybatisplus.visualizer.mcp.McpToolGate
 import cn.song.mybatisplus.visualizer.mcp.findMcpToolsetClass
+import cn.song.mybatisplus.visualizer.mcp.openMcpServerSettingsPage
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.ProjectManager
@@ -218,28 +220,21 @@ class McpConfigurable internal constructor(
         )
     }
 
-    /** 跳转平台 MCP Server 设置页。弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许
-     *  白名单内既有场景」）：目标 configurable 类不可用（IDEA < 2025.2 或未装 MCP Server 插件）
-     *  时警告属「配置不可用、用户必须知情」场景，与 PluginSettingsPanel 配置异常 warning 同类
-     *  ——按钮点了无反应不可接受，需明确告知前置条件。 */
+    /** 跳转平台 MCP Server 设置页（寻址与回退见 [openMcpServerSettingsPage]，单一真相源）。
+     *
+     *  弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许白名单内既有场景」）：平台设置页
+     *  确实打不开（插件缺失/被禁，或平台把页面搬走后两条路都不通）属「配置不可用、用户必须知情」
+     *  场景，与 PluginSettingsPanel 配置异常 warning 同类——按钮点了无反应不可接受。
+     *  T-McpSettingsJump：文案不再断言版本（「需要 IDEA 2025.2+」在 2026.3 上不成立），
+     *  改为可操作指引（确认插件启用 / 设置里搜 MCP Server）。 */
     private fun openMcpServerSettings() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull() ?: return
-        val configurableClass = runCatching {
-            Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")
-                as? Class<out com.intellij.openapi.options.Configurable>
-        }.getOrNull()
-        if (configurableClass == null) {
-            Messages.showWarningDialog(
-                project,
-                MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
-                MpSqlVisualizerBundle.message("settings.mcp.title"),
-            )
-            return
-        }
-        runCatching {
-            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
-                .showSettingsDialog(project, configurableClass)
-        }
+        if (openMcpServerSettingsPage(project) != McpSettingsOpenResult.UNAVAILABLE) return
+        Messages.showWarningDialog(
+            project,
+            MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
+            MpSqlVisualizerBundle.message("settings.mcp.title"),
+        )
     }
 
     override fun isModified(): Boolean {
