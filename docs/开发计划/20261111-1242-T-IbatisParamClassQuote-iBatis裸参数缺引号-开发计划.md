@@ -117,3 +117,24 @@ iBatis 预览链唯一的参数类型来源是占位符自带的 jdbcType：
 ### not run
 
 真机复验（沙盒当前加载 `2026.11.12-beta.2`，jar 内无本轮类；要验需重新构建或装包）。
+
+## 八、真机复现与二次修复（L34，`5a2e0419d`）
+
+用户重启沙盒后，从 `sqlmap/User.xml:71`（XML 语句行）与 `UserDaoImpl#selectTwoSegment`（Java 调用行）
+两处复现同一现象。此时沙盒 jar 内**已含** `IbatisParameterClassResolver.class`（zipfile 类扫描取证）
+⇒ 修复真实失效，不是「包旧」。
+
+**断点**：`parameterClass="User"` 走短名索引，而 demo 项目里有 3 个 `User`
+（`cn.song.ibatis2demo.model.User` / `probe.User` / `cn.song.mybatisplusdemo.entity.User`），
+首版 `singleOrNull()` 在多候选时**弃权** ⇒ 该能力在真实多模块工程里从不生效。单模块的 Heavy 测试
+全绿，读不出这个问题（测试环境只有一个同名类）。
+
+**修法**：`pickCandidate` —— 唯一命中直接用；多候选按「语句所在模块」过滤
+（`ModuleUtilCore.findModuleForPsiElement(tag)`，由 `previewTag` 取）；仍不唯一才弃权。
+`preview()` / `resolve()` 增 `moduleName` 参数。
+
+**读数**：`IbatisParamCandidatePickTest` 6 例（纯逻辑，进 testFast）+ `IbatisParamClassQuoteHeavyTest`
+7 例 + `IbatisXmlPreviewServiceTest` 44 例全绿；反向摘掉模块分支 → `多候选按模块收窄到语句所在模块`
+恰 1 红，还原复绿。
+
+**真机复验待做**：`sqlmap/User.xml:71` 填 `123123` 应出 `WHERE USER_NAME = '123123'`（需新包）。
