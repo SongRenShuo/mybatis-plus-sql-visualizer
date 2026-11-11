@@ -9,6 +9,7 @@
 
 ### Fixed
 - **MBG Example 的预览产物从残缺 SQL 变成可读骨架（T-MbgExamplePreview，2d8798a9）**：用户报 `selectByExample` 预览出来是 `WHERE (AND OR (AND … ORDER BY 1`。四条成因逐条收掉：①`${criterion.condition}` 在模拟参数下求值为空，`and` 后什么都不剩——预览现在把求值为空的 `${}` 写成 `{{表达式}}` 占位（真实 SQL 产物路径不受影响），执行前另有更强的确认文案；②foreach 两轮迭代的 `and` 拼成单词 `andand`、separator 粘成 `)or(`——trim 缓冲现在在相邻段紧贴时补一个空格；③`choose` 四个互斥分支默认全开、永远短路到唯一不带参数的 `noValue`——同组现在只默认启用含 `#{}` 的分支；④`parameterType` 是 MBG Example 时 `distinct` 与 `orderByClause` 默认不展开、集合按 1 项（`order by 1` 这种能执行、但语义被改写的产物不再出现）。另外告警行不再把基线渲染的错误和当前勾选的错误混排，`foreach` 集合为 null 的文案改成中文并给「取消为 null 勾选」的指引
+- **复制可执行 SQL 会带出模拟占位，现在产物自己说明（T-CopyPlaceholderMarker，2e553316）**：`{{表达式}}` 是预览占位、不是 SQL 注释，复制链原本原样把它带出去，粘到库里只报语法错、看不出原因。现在产物头部加一条带计数的注释（`-- contains N unresolved ${} placeholders shown as {{...}}; replace them before executing`）；有占位时不再叠加原来那条「已用模拟值填充」（同一件事不说两遍，那条对占位场景本来也不准确）。分享面板的「复制可执行 SQL」此前一条标记都没有，这次一并接上。复制仍不弹确认——弹窗克制只留给执行
 
 ## [2026.11.11] - 2026-11-11
 

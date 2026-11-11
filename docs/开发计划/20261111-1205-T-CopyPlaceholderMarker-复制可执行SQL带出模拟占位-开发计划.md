@@ -56,4 +56,15 @@ MBG Example 的预览产物是 `WHERE ( {{criterion.condition}} ? )`（T-MbgExam
 
 ## 六、实施记录
 
-（待填）
+`2e553316`：`countSimulationPlaceholders` / `unresolvedPlaceholderMarker(n)` / `withPlaceholderMarker`
+三个纯函数落在 `CopyExecutableSqlAction`；`assembleProduct` 的 markers 改为「有占位 → 占位标记，
+否则沿用 raw 标记」；`SqlShareManager.copyExecutableSql` 改调 `withPlaceholderMarker`。
+
+- 读数：`CopyExecutableSqlActionTest` 14 例、`InjectionGateTest`、`RuntimeSlotChainConsistencyTest`、
+  `SqlPreviewPanelRuntimeSlotTest` 全绿。
+- 反向：把 `if (placeholderCount > 0)` 改成恒假 → `含模拟占位_头部用占位标记且不重复raw标记` 与
+  `多处模拟占位_计数正确` 恰 2 红（14 例中 2 失败），还原后复绿。
+
+顺带记一条操作教训：首次做反向验证时代码还没提交，`git checkout -- <file>` 把该文件的全部改动
+一起还原了（常量、Product 字段、markers 逻辑全丢，重做了一遍）。**反向验证前先提交**，或反向时
+只用 Edit 改回而不是 checkout。
