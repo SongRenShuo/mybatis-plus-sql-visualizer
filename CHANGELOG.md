@@ -12,12 +12,16 @@
 ## [Unreleased]
 
 ### Added
+- **方言推断走到死路时会主动说一声（T-NotifyTune 券 A）**：智能推断既没有数据源、项目配置、依赖坐标也没有语法特征可依时，预览其实一直在按 MySQL 兜底渲染，但用户不开预览或设置就看不到——预览面板的状态行和设置页的推断结果都太被动。现在打开含 SQL 的文件（Wrapper 链、注解 SQL、JPA `@Query`、JdbcTemplate、iBatis `sqlMap`、mapper XML、hbm 都算）时在后台判一次，只有真死路（`UNAVAILABLE` 且无方言名）才弹一条提示，说清「按 MySQL 兜底、遇 Oracle/PostgreSQL/SQL Server 会有差异」，并给两个动作：**去设置方言**直接打开插件设置并滚动高亮到方言行，**本项目不再提示**永久静默。标题不写 MyBatis——插件支持面不止它。开关默认开，每台机器至多一条，歧义/冲突不弹（面板里已有处理）
 - **MBG 生成的 Example mapper 预览能从调用点还原条件（T-MbgExamplePreview，6fb76205）**：MBG 的 `andXxxYyy(...)` 方法体固定是一句 `addCriterion("cust_id =", value, "custId")`——`condition` 是常量、分支语义写在方法名后缀里。现在预览会从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用并读那个常量，于是 `${criterion.condition}` 拿到真实列名与操作符：产物从 `WHERE ( {{criterion.condition}} ? )` 变成 `WHERE ( cust_id = ? )`。拿不到调用点（跨模块、无索引、非链式写法）时退回占位，不报错
 - **iBatis DAO 调用行直接预览 SQL（T-IbatisCallPreview，`8ad491b8`）**：`client.queryForList("User.selectAll")` 这类 `SqlMapExecutor` 调用行在原有跳转箭头旁新增预览图标，点开直接渲染对应 `<sqlMap>` 语句（`#name#` 参数、动态条件、`<iterate>`、`<selectKey>` 与 XML 语句行预览一致）；`Alt+Shift+Q` 在调用行与方法定义行同样可直接预览——此前这类位置会被 JDBC 模板通道先认领再拒绝，只得到「未找到」提示；MCP `sqlv_render_sql` 同步支持 iBatis DAO 调用行与 `<sqlMap>` 语句行（`sourceType` 以 `iBatis` 起头）。
 
 ### Fixed
 - **MBG Example 的预览产物从残缺 SQL 变成可读骨架（T-MbgExamplePreview，2d8798a9）**：用户报 `selectByExample` 预览出来是 `WHERE (AND OR (AND … ORDER BY 1`。四条成因逐条收掉：①`${criterion.condition}` 在模拟参数下求值为空，`and` 后什么都不剩——预览现在把求值为空的 `${}` 写成 `{{表达式}}` 占位（真实 SQL 产物路径不受影响），执行前另有更强的确认文案；②foreach 两轮迭代的 `and` 拼成单词 `andand`、separator 粘成 `)or(`——trim 缓冲现在在相邻段紧贴时补一个空格；③`choose` 四个互斥分支默认全开、永远短路到唯一不带参数的 `noValue`——同组现在只默认启用含 `#{}` 的分支；④`parameterType` 是 MBG Example 时 `distinct` 与 `orderByClause` 默认不展开、集合按 1 项（`order by 1` 这种能执行、但语义被改写的产物不再出现）。另外告警行不再把基线渲染的错误和当前勾选的错误混排，`foreach` 集合为 null 的文案改成中文并给「取消为 null 勾选」的指引
 - **复制可执行 SQL 会带出模拟占位，现在产物自己说明（T-CopyPlaceholderMarker，2e553316）**：`{{表达式}}` 是预览占位、不是 SQL 注释，复制链原本原样把它带出去，粘到库里只报语法错、看不出原因。现在产物头部加一条带计数的注释（`-- contains N unresolved ${} placeholders shown as {{...}}; replace them before executing`）；有占位时不再叠加原来那条「已用模拟值填充」（同一件事不说两遍，那条对占位场景本来也不准确）。分享面板的「复制可执行 SQL」此前一条标记都没有，这次一并接上。复制仍不弹确认——弹窗克制只留给执行
+
+### Changed
+- **首次捕获引导不再每次启动 IDE 都弹（T-NotifyTune 券 B）**：那条「已捕获到第一条 SQL」的提示原来只是「每个 IDE 进程一次」——重启 IDE 或反复拉沙盒就会再出现，用户体感为高频。现在改成每台机器一次（持久化记忆），并且三个场景直接跳过：日志窗本来就开着、这次捕获刚把日志窗自动展开、开关被关掉。设置页「界面与操作」新增「首次捕获 SQL 时显示一次性提示」开关，默认开；「SQL 方言无法确定时显示一次性提示」也同区可见——两条一次性提示都能单独关掉
 
 ## [2026.11.12-beta.1] - 2026-11-11
 

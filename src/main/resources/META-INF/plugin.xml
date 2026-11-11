@@ -399,6 +399,12 @@
              （PluginSettings.onboardingAnchorTipShown），gutter 快速路径零改动 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingAnchorTip"/>
 
+        <!-- T-NotifyTune 券 A：SQL 方言死路主动提示——打开 SQL 承载文件时后台算一次方言决策，
+             仅在 UNAVAILABLE 且无方言名（推断真死路）时经预览组弹一次「方言未能确定」；
+             动作「去设置方言」定位到插件方言行、「本项目不再提示」按项目永久抑制；
+             每安装一次性（PluginSettings.dialectTipShown），不阻断任何功能 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.DialectGapTip"/>
+
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）

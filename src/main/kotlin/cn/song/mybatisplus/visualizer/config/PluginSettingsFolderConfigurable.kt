@@ -467,7 +467,10 @@ class PluginSettingsFolderConfigurable : Configurable {
         // 导航按 id 查（见 navigateToPage），id 写错会静默跳不动，由
         // PluginSettingsFolderConfigurableTest 的「id 与类指向同一页」守卫兜住。
         private const val ID_UI = "cn.song.mybatisplus.visualizer.settings.ui"
-        private const val ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview"
+
+        /** T-NotifyTune 券 A：方言设置所在页（预览页）EP id——引导通知动作从对话框外定位用。 */
+        const val PAGE_ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview"
+        private const val ID_PREVIEW = PAGE_ID_PREVIEW
         private const val ID_TABLE_MAPPING = "cn.song.mybatisplus.visualizer.settings.tableMapping"
         private const val ID_SQL_LOG = "cn.song.mybatisplus.visualizer.settings.sqlLog"
 
@@ -484,14 +487,23 @@ class PluginSettingsFolderConfigurable : Configurable {
         internal data class PendingFocus(val pageId: String, val hint: String?)
 
         /**
-         * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
-         * 面板引导链接统一入口——定位高亮复用既有 `navigateToPage → focusTarget`（滚动+黄闪+橙框）。
+         * 打开插件主设置页并定位到指定子页（hint=null 只切页，不作行级定位）。
+         * 定位高亮复用既有 `navigateToPage → focusTarget`（滚动+黄闪+橙框），零新样式。
+         *
+         * T-NotifyTune：由券 A 的方言提示动作引入；页 id 由调用方给出（见 [PAGE_ID_PREVIEW]）。
          */
-        fun openSqlLogSettingsFocused(project: com.intellij.openapi.project.Project, hint: String?) {
-            pendingFocus = PendingFocus(ID_SQL_LOG, hint)
+        fun openSettingsFocused(project: com.intellij.openapi.project.Project, pageId: String, hint: String?) {
+            pendingFocus = PendingFocus(pageId, hint)
             ShowSettingsUtil.getInstance()
                 .showSettingsDialog(project, PluginSettingsFolderConfigurable::class.java)
         }
+
+        /**
+         * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
+         * 面板引导链接统一入口——兼容旧调用，内部走 [openSettingsFocused]。
+         */
+        fun openSqlLogSettingsFocused(project: com.intellij.openapi.project.Project, hint: String?) =
+            openSettingsFocused(project, ID_SQL_LOG, hint)
 
         /** 消费待定位目标（取走即清；生产调度与测试缝单源共用，防两处漂移）。 */
         internal fun consumePendingFocus(): PendingFocus? {
@@ -637,6 +649,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.joinDiagramNative"), b.message("settings.joinDiagramNative.tip"), "settings.section.ui", u))
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
             fields.add(SearchableField(b.message("settings.editorShowWhitespaces"), b.message("settings.editorShowWhitespaces.tip"), "settings.section.ui", u))
+            // T-NotifyTune：两个主动通知开关必须进索引（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
+            fields.add(SearchableField(b.message("settings.dialectTip"), b.message("settings.dialectTip.tip"), "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.firstCaptureGuide"), b.message("settings.firstCaptureGuide.tip"), "settings.section.ui", u))
 
             // 关于
             val a = PAGE_ABOUT.ref
