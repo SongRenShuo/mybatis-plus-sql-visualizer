@@ -1790,6 +1790,7 @@ internal fun DataSourceSelector.createTempPsiFile(
         return null
     }
     lastTempFileFailure = null
+    lastTempFileHint = null
     // M36.5.12：临时文件改存项目内 `.idea/sql-visualizer/exec/`（F-44-4：目录随插件更名）
     //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
     // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
@@ -1866,7 +1867,11 @@ internal fun DataSourceSelector.createTempPsiFile(
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
         null
-    }) ?: return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf))
+    }) ?: run {
+        // 记下「为什么建不出 PSI」——失败文案 + 面板蓝色可点入口都靠它
+        lastTempFileHint = runCatching { execPsiFailureCauseNow(project, vf) }.getOrNull()
+        return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf))
+    }
     // 自愈可能换了一个新 vf（vf 失效重定位），缓存与后续 attach 必须用同一个
     val effectiveVf = runCatching { psi.virtualFile }.getOrNull() ?: vf
     // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
@@ -2020,6 +2025,39 @@ internal fun projectRootExecFile(project: Project, sql: String): java.io.File? =
  * 方言）——只报「显式映射」等于什么都没说。故加 `inheritedLang` 与它的 `canPsiInherited`：
  * 前者为空而后者 false 时，基本可以直接判「这台机器的继承方言建不出 SQL PSI」。
  */
+/**
+ * T-ExecPsiGate 13.10：把当前观测值交给纯函数 [classifyExecPsiFailure]，得「为什么建不出 PSI」。
+ *
+ * 观测面与 2026.3 平台闸门（`AbstractFileViewProvider.shouldCreatePsi`）一一对应：
+ * `ProjectFileIndex.isExcluded` / `Registry("ide.hide.excluded.files")` / `FileTypeManager.isFileIgnored` /
+ * `ProjectFileIndex.isUnderIgnored`，再加上「平台实际选中的语言能否建 PSI」。任何一项取不到都按
+ * false/null 处理——判错最多是入口指偏，不会影响执行链本身。
+ */
+internal fun execPsiFailureCauseNow(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): ExecPsiFailureCause {
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    val excluded = runCatching { fileIndex.isExcluded(vf) }.getOrDefault(false)
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrDefault(false)
+    val underIgnored = runCatching { fileIndex.isUnderIgnored(vf) }.getOrDefault(false)
+    val fileTypesIgnored = runCatching {
+        com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(vf)
+    }.getOrDefault(false)
+    val psiLanguage = runCatching {
+        ReadAction.compute<com.intellij.lang.Language?, Throwable> {
+            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.fileType)
+        }
+    }.getOrNull()
+    return classifyExecPsiFailure(
+        excluded = excluded,
+        regHideExcluded = regHideExcluded,
+        fileTypesIgnored = fileTypesIgnored,
+        underIgnored = underIgnored,
+        psiLangId = psiLanguage?.id,
+        canPsiActual = runCatching { canCreateSqlPsiFor(psiLanguage) }.getOrDefault(false),
+    )
+}
+
 internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): String {
     val mappedId = runCatching {
         ReadAction.compute<String?, Throwable> { DialectPreMapping.configuredLanguageId(project, vf) }
@@ -2216,6 +2254,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     renderedDialectName: String? = null,
 ) {
     lastTempFileFailure = null
+    lastTempFileHint = null
     // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
     // 实际执行之间隔着任意长的排队/执行窗口（victim 测试毫秒级跑完即收尾 dispose）。池线程链
     // 起跑时项目可能已 dispose（含 temporarily-disposed），整链放弃，不在死项目上写/refresh。

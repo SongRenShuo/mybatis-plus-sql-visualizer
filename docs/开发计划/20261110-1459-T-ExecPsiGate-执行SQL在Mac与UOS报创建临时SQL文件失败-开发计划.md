@@ -607,6 +607,33 @@ path=F:/code/.../mybatis-plus-sql-visualizer-demo/.idea/sql-visualizer/exec/mpsq
 待用户用 `61205cf2` 之后的构建在同一 demo 项目 + 同一 Registry/排除状态下验证修复（期望落到
 `<demo>/.sql-visualizer/exec/` 并跑通）。
 
+### 13.10 智能失败提示：精准归因 + 蓝色可点入口（2026-11-11，用户定案）
+
+用户原话：「针对这两个问题做智能错误信息提示，精准识别原因并提供蓝色字体可以点击调整到对应设置页」。
+三种成因在报错上长得一模一样（都是 `findFile` 返回 null、vf 完全有效），而修复点完全不同——过去
+只能给一句笼统失败，用户无处下手。
+
+**实现**：
+
+| 层 | 内容 |
+|---|---|
+| 判定（纯函数） | `execute/ExecPsiFailureHint.kt`：`classifyExecPsiFailure(excluded, regHideExcluded, fileTypesIgnored, underIgnored, psiLangId, canPsiActual)` → `ExecPsiFailureCause`。顺序固定：排除+Registry → 文件类型忽略 → VCS 忽略 → 无语言 → 方言不可用 → UNKNOWN |
+| 观测取值 | `execPsiFailureCauseNow(project, vf)`：`ProjectFileIndex.isExcluded/isUnderIgnored` + `Registry("ide.hide.excluded.files")` + `FileTypeManager.isFileIgnored` + `LanguageUtil.getLanguageForPsi` / `canCreateSqlPsiFor`，任何一项取不到都按 false/null（判错最多入口指偏，不影响执行链） |
+| 传递 | `DataSourceSelector.lastTempFileHint`（@Volatile，冷路径/预热入口清空）+ `consumeTempFileHint()` 取一次即清，避免后续无关错误复用 |
+| 呈现 | `ui/SqlPreviewPanelExecution.showTempFileError(msg)`：走既有的 `SqlResultPanel.showErrorWithActions`（方言闸门同款形态：透明按钮 + `Link.activeForeground`，渲染即蓝字）。5 处 `onError` 直连 `showError` 全部改走它，无 hint 时逐字退回原文案 |
+| 入口映射 | 文件类型忽略 → 打开「设置 → 编辑器 → 文件类型」（EP id `preferences.fileTypes`，2026.3 jar 内 xml 实证）；VCS 忽略 → 打开项目根 `.gitignore`；方言不可用/无语言 → 打开 SQL 方言设置（复用既有 `openSqlDialectSettings`） |
+
+**为什么 Excluded 那档只给文案不给按钮**：`ProjectStructureDialog` 在 243 / 2026.3 都已无稳定公开入口
+（2026.3 lib 内 `ProjectStructure*` 只剩 webide / externalSystem 变体）。宁可指不出，也不把用户送到
+一个错的设置页。
+
+**用例与反向验证**：`ExecPsiFailureHintTest` 7 例表驱动（排除档、Registry 关闭时不误判、文件类型优先于
+VCS、忽略类压过方言类、全正常给 UNKNOWN）；反向验证把两条 `if` 换序 → `7 tests completed, 1 failed`
+（红在「文件类型忽略模式优先于 VCS 忽略」），恢复后全绿、`RED PROBE` 清零。
+
+**适用边界（要说清）**：这条提示只在「连项目根备用落点也建不出 PSI」的残余场景露出——正常修复路径下
+用户看不到它（pre-check 直接把文件写到 `.sql-visualizer/` 就成功了）。它的价值是把残余失败变成可操作。
+
 ---
 
 ## 参考

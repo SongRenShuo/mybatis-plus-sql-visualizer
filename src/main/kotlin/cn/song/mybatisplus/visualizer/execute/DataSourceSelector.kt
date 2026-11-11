@@ -124,6 +124,20 @@ object DataSourceSelector {
     @Volatile
     internal var lastTempFileFailure: String? = null
 
+    /**
+     * T-ExecPsiGate 13.10：最近一次失败**为什么**建不出 PSI（被忽略 / 被排除 / 方言不可用 …）。
+     *
+     * 与 [lastTempFileFailure]（阶段串）互补：那个只说到「哪一段失败」，这个说到「该去哪儿修」。
+     * 面板据此把失败行渲染成「红字 + 蓝色可点入口」（`showErrorWithActions`），把用户直接送到
+     * 设置页 / 项目结构页，而不是让他自己翻。
+     */
+    @Volatile
+    internal var lastTempFileHint: ExecPsiFailureCause? = null
+
+    /** 取一次失败原因并清空（避免后续无关错误复用上一个 hint）。 */
+    internal fun consumeTempFileHint(): ExecPsiFailureCause? =
+        lastTempFileHint.also { lastTempFileHint = null }
+
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
      * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
     @Volatile
