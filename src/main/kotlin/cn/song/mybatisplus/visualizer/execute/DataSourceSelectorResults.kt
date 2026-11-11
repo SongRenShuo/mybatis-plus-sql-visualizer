@@ -1981,6 +1981,33 @@ internal fun DataSourceSelector.healExecPsi(
 }
 
 /**
+ * T-ExecPsiGate 13.12：**目录级**的成因判定（给「预览自动兜底」的告知文案用）。
+ *
+ * 与 [execPsiFailureCauseNow] 的区别：那个判的是**文件**（还要看语言/方言），这里判的是**目录**——
+ * 预览在选出临时目录那一刻文件还没建出来，只能看「这层目录在平台内容模型里的待遇」。
+ * 语言判据给中性值（`GenericSQL` + `canPsiActual=true`），让它落到 UNKNOWN 而不是误报方言问题。
+ *
+ * @return null = 该目录能建 PSI（或探不出来，保守按能）；非 null = 已经落到备用落点，值为成因
+ */
+internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFailureCause? {
+    if (execDirCanHostPsi(project, dir)) return null
+    val dirVf = runCatching { LocalFileSystem.getInstance().findFileByIoFile(dir) }.getOrNull() ?: return null
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    return classifyExecPsiFailure(
+        excluded = runCatching { fileIndex.isExcluded(dirVf) }.getOrDefault(false),
+        regHideExcluded = runCatching {
+            com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+        }.getOrDefault(false),
+        fileTypesIgnored = runCatching {
+            com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf)
+        }.getOrDefault(false),
+        underIgnored = runCatching { fileIndex.isUnderIgnored(dirVf) }.getOrDefault(false),
+        psiLangId = "GenericSQL",
+        canPsiActual = true,
+    )
+}
+
+/**
  * T-ExecPsiGate R6（2026-11-11 用户真机）：**项目根备用执行文件**。
  *
  * 用户实测（UOS + Mac，同一个项目）：同一个 `mpsql-exec.sql`，**放桌面（项目外）用数据源右键

@@ -377,6 +377,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     @Volatile
     internal var previewDisposed = false
 
+    /** 13.12：预览临时目录落到项目根兜底时，「只提示一次」的闸门（本面板生命周期内）。 */
+    internal val previewFallbackNoticeGate = PreviewFallbackNoticeGate()
+
     /**
      * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
      *

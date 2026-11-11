@@ -1,6 +1,15 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
+import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.util.PsiTreeUtil
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -148,5 +157,71 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         )
         val select = tags.first { it.name == "select" }
         assertTrue("<mapper> 下语句应进候选", ConvertToSqlAction.isXmlStatementCandidate(select))
+    }
+
+    /**
+     * T-IbatisCallPreview：iBatis DAO 调用行的形状门必须在 JDBC 通道之前认领。
+     *
+     * 现状（修复前）：`JdbcTemplateSqlLocator` **没有** iBatis 让位门 → 它认领该调用后
+     * `JdbcTemplateSqlPreviewService.preview` 用 `isLikelySql("User.selectById")` 拒绝 → 动作
+     * 已 `return true` → 用户拿到「未找到可转换的 Wrapper」（错源提示）。
+     * 本用例把「JDBC 会认领但渲染不出东西」与「iBatis 门能渲染出 SQL」两侧同时钉住。
+     */
+    fun testiBatis调用行_预览门先于JDBC通道() {
+        myFixture.addFileToProject(
+            "sqlmap/User.xml",
+            """<sqlMap namespace="User"><select id="selectById">SELECT ID FROM T_USER WHERE ID = #id#</select></sqlMap>""",
+        )
+        val dao = myFixture.addFileToProject(
+            "com/demo/UserDaoImpl.java",
+            """
+            package com.demo;
+            public class UserDaoImpl {
+                private Object client;
+                public Object selectById(int id) { return client.queryForObject("User.selectById", id); }
+            }
+            """.trimIndent(),
+        )
+        IbatisXmlStatementTargets.clearCachesForTest()
+        val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
+            .first { it.value == "User.selectById" }
+
+        // 对照：JDBC 通道会认领这个调用（所以「谁先认领」决定用户看到什么）
+        val jdbcCall = JdbcTemplateSqlLocator.locate(literal)
+        assertNotNull("夹具前提：JdbcTemplateSqlLocator 不拦 iBatis 调用", jdbcCall)
+        assertNull(
+            "JDBC 通道对 statementId 渲染不出 SQL（错源提示的来源）",
+            JdbcTemplateSqlPreviewService.preview(jdbcCall!!, literal),
+        )
+
+        // 新门：形状门（与 gutter 让位同一函数）认领并渲染出 iBatis SQL
+        val target = IbatisCallTargets.resolve(literal)
+        assertNotNull("iBatis 形状门应认领该调用", target)
+        assertEquals("User.selectById", target!!.statementId)
+        val preview = IbatisStatementPreview.previewResolved(project, target.statementId, target.ownerNamespace)
+        assertTrue("iBatis 预览应渲染出 SQL：${preview.sql}", preview.sql.contains("FROM T_USER"))
+        assertEquals(listOf("id"), preview.unresolvedParams)
+    }
+
+    /**
+     * 结构守卫（T-IbatisCallPreview）：iBatis 两档回落必须排在 `tryJdbcTemplateFallback` **之前**。
+     *
+     * 这是本轮缺陷的根因——`JdbcTemplateSqlLocator` 没有 iBatis 让位门，先认领会把 statementId
+     * 当 SQL 渲染并得到 null，而动作已 `return true`，用户只看到「未找到」。行为用例只能证明
+     * 形状门本身，认领**顺序**只能在源码上钉：`!` 前缀只出现在回落链里，函数定义行不含它。
+     */
+    fun testiBatis两档回落排在JdbcTemplate之前() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        val ibatisCall = source.indexOf("!tryIbatisCallFallback(")
+        val ibatisMethod = source.indexOf("!tryIbatisMethodFallback(")
+        val jdbc = source.indexOf("!tryJdbcTemplateFallback(")
+        assertTrue(
+            "三档回落都必须出现在链里（call=$ibatisCall method=$ibatisMethod jdbc=$jdbc）",
+            ibatisCall > 0 && ibatisMethod > 0 && jdbc > 0,
+        )
+        assertTrue("调用行 iBatis 回落必须先于 JdbcTemplate", ibatisCall < jdbc)
+        assertTrue("方法级 iBatis 回落同样先于 JdbcTemplate", ibatisMethod < jdbc)
     }
 }

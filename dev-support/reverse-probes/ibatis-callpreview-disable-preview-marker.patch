@@ -1,0 +1,13 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+index af24c0c9..837cdf7b 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt
+@@ -128,7 +128,7 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
+         // ② 预览图标（T-IbatisCallPreview，锚首参字面量的**叶子 token**——平台要求 LineMarker 锚叶子，
+         // 直接锚 PsiLiteralExpression 会触发 "LineMarker is supposed to be registered for leaf elements"；
+         // 与 XML 语句行预览同一枚图标）
+-        if (previewEnabled) {
++        if (false && previewEnabled) {
+             val literalLeaf = first.firstChild ?: first
+             markers.add(
+                 LineMarkerInfo(

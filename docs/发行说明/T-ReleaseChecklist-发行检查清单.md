@@ -51,6 +51,7 @@
 ## 二、准备段（门禁与元数据）
 
 - [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/263 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+  - **内测版不豁免（2026-11-11 用户明确要求）**：`-beta.N` 同样必须过 CI 门禁——正路是**打 tag 之前**派 `build-plugin.yml mode=gate`（L28 口径），绿了再发；若已先发了，**事后立刻补派一次** `mode=gate` 并把 run id 写进 `docs/变更记录.md` 的发行条目。定向测试 + 反向验证照做，但**不能替代**门禁：内测包同样会被用户当成「已修好」的凭据装进真实 IDE，而门禁（243/253/263 兼容 + 五片全量 + fast）是唯一覆盖跨版本兼容与全仓回归的读数。反例：`2026.11.12-beta.1` 只跑了定向就发了，发行说明里只能如实标「未跑 releaseGate」。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
 - [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
@@ -196,6 +197,10 @@
   `python dev-support/mirror-releases-to-github.py --tag {版本号}`（幂等，可反复跑；已存在则只补附件）。
   判据：`--verify-only` 通过、GitHub Releases 页出现同版本且附件 size 与本地 zip 一致。
   **注意上传走 `uploads.github.com`，不是 `api.github.com`（用后者返 404）**。
+  **清单缓存（T-CiMirrorTagMatch，2026-11-11）**：脚本默认读 `.local/gitee-releases.json`；该缓存**只保 30 分钟**
+  （一轮跑的时长），过期自动重拉；`--tag` 显式指定的场合**一律现场拉取**。此前缓存永不过期，
+  导致「刚建完发行版就镜像」被旧清单过滤成 `没有匹配的 tag`（看着像 tag 命名问题），批量模式还会
+  **静默漏镜像**缓存之后发布的版本。排障时先看脚本开头是否打印「拉取 Gitee releases…」。
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。

@@ -6,10 +6,26 @@
 
 ### Added
 - **MBG 生成的 Example mapper 预览能从调用点还原条件（T-MbgExamplePreview，6fb76205）**：MBG 的 `andXxxYyy(...)` 方法体固定是一句 `addCriterion("cust_id =", value, "custId")`——`condition` 是常量、分支语义写在方法名后缀里。现在预览会从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用并读那个常量，于是 `${criterion.condition}` 拿到真实列名与操作符：产物从 `WHERE ( {{criterion.condition}} ? )` 变成 `WHERE ( cust_id = ? )`。拿不到调用点（跨模块、无索引、非链式写法）时退回占位，不报错
+- **iBatis DAO 调用行直接预览 SQL（T-IbatisCallPreview，`8ad491b8`）**：`client.queryForList("User.selectAll")` 这类 `SqlMapExecutor` 调用行在原有跳转箭头旁新增预览图标，点开直接渲染对应 `<sqlMap>` 语句（`#name#` 参数、动态条件、`<iterate>`、`<selectKey>` 与 XML 语句行预览一致）；`Alt+Shift+Q` 在调用行与方法定义行同样可直接预览——此前这类位置会被 JDBC 模板通道先认领再拒绝，只得到「未找到」提示；MCP `sqlv_render_sql` 同步支持 iBatis DAO 调用行与 `<sqlMap>` 语句行（`sourceType` 以 `iBatis` 起头）。
 
 ### Fixed
 - **MBG Example 的预览产物从残缺 SQL 变成可读骨架（T-MbgExamplePreview，2d8798a9）**：用户报 `selectByExample` 预览出来是 `WHERE (AND OR (AND … ORDER BY 1`。四条成因逐条收掉：①`${criterion.condition}` 在模拟参数下求值为空，`and` 后什么都不剩——预览现在把求值为空的 `${}` 写成 `{{表达式}}` 占位（真实 SQL 产物路径不受影响），执行前另有更强的确认文案；②foreach 两轮迭代的 `and` 拼成单词 `andand`、separator 粘成 `)or(`——trim 缓冲现在在相邻段紧贴时补一个空格；③`choose` 四个互斥分支默认全开、永远短路到唯一不带参数的 `noValue`——同组现在只默认启用含 `#{}` 的分支；④`parameterType` 是 MBG Example 时 `distinct` 与 `orderByClause` 默认不展开、集合按 1 项（`order by 1` 这种能执行、但语义被改写的产物不再出现）。另外告警行不再把基线渲染的错误和当前勾选的错误混排，`foreach` 集合为 null 的文案改成中文并给「取消为 null 勾选」的指引
 - **复制可执行 SQL 会带出模拟占位，现在产物自己说明（T-CopyPlaceholderMarker，2e553316）**：`{{表达式}}` 是预览占位、不是 SQL 注释，复制链原本原样把它带出去，粘到库里只报语法错、看不出原因。现在产物头部加一条带计数的注释（`-- contains N unresolved ${} placeholders shown as {{...}}; replace them before executing`）；有占位时不再叠加原来那条「已用模拟值填充」（同一件事不说两遍，那条对占位场景本来也不准确）。分享面板的「复制可执行 SQL」此前一条标记都没有，这次一并接上。复制仍不弹确认——弹窗克制只留给执行
+
+## [2026.11.12-beta.1] - 2026-11-11
+
+> 范围＝`v2026.11.11` 正式版发行包之后的全部用户可见增量（内测版，不上架 Marketplace）。
+
+### Added
+- **执行失败按原因给可点入口（T-ExecPsiGate 13.10，a34aef25）**：命中「文件类型」忽略规则就直达该设置页，被 `.gitignore` 忽略就直达那个文件，方言问题直达 SQL 方言设置；判定由纯函数 `classifyExecPsiFailure` 给出，忽略类原因压过方言类，避免把用户送到错的地方
+- **预览落点兜底改为自动改写加一次性告知（T-ExecPsiGate 13.12，43845bb7）**：`.idea` 下建不出 PSI 时预览自动改用项目根 `.sql-visualizer/preview`，并在面板给一条只出现一次的说明与修配置入口；执行侧仍是阻断性失败，由用户点「改用项目根落点重试」才切，兜底不抢在提示前面（13.11，cef8545e）
+- **OceanBase 的 EXPLAIN 计划树给出索引建议（T-OBExplainFormat，9219ca61）**：与 MySQL 同口径
+
+### Fixed
+- **2026.3 上 MCP 工具页「点击前往」被拦下（T-McpSettingsJump，3106e4c6）**：设置 → 工具 → SQL Visualizer → MCP 工具 →「点击前往」弹「需要 IDEA 2025.2+ 并启用 MCP Server 插件」，而版本与插件都没有问题。根因是平台 263 把 MCP Server 设置页搬进新 content module `intellij.mcpserver.frontend` 并换了包名，旧类名 `com.intellij.mcpserver.settings.McpServerSettingsConfigurable` 在 263.7307.200 整安装零命中，按类名写死的探测恒 null 即被当成「平台不达标」。现在按「类名候选链（新形态在前、旧形态在后）→ 平台按页面 id 打开并选中 → 都失败才提示」寻址；提示文案同步去掉版本断言，改为「确认内置 MCP Server 插件已启用，或在设置中搜索 MCP Server」。11 个 MCP 工具的注册与门控未动（插件 id 与 `mcpToolset` / `mcpToolFilterProvider` EP 在 263 契约一致）
+- **2026.3 上「临时 SQL 文件建不出 PSI」系列（T-ExecPsiGate R4~R7，c46d5907 / 23457844 / 908623ed / 61205cf2）**：反编译 2026.3 平台定案为 `shouldCreatePsi` 闸门——父目录不在内容模型里（`.idea` 被忽略或排除）就不建 PSI，`findFile` 返回 null 而 vf 完全有效；现在按平台同一判据选落点，并把「映射到的方言建不出 PSI」时的钉方言自愈、vf 失效重定位一并补齐
+- **失败文案带上可定位的诊断项（13.9 / 23457844，1a5ce405）**：vf 有效性、文件类型、映射方言、继承方言、平台实际选中的语言、各自能否建 PSI、是否被排除或忽略、Registry 取值、IDE Build 与绝对路径
+- **控制台 MyBatis 与 Hibernate 日志补齐静默冲刷（T-ConsoleFlushAlign，48b6f04f）**：对齐 JdbcTemplate，会话结束前的最后几条 SQL 不再等下一次执行才上屏
 
 ## [2026.11.11] - 2026-11-11
 
@@ -28,7 +44,7 @@
 - **两种真实存在的日志形态此前整条丢失（e2b0b581）**：MyBatis 的 `statementType="STATEMENT"` 走 `SimpleStatementHandler`，只打 `==>  Executing: <sql>`（无 `Preparing:`、无 `Parameters:`），旧解析器接不住；iBatis 2.x 的普通 `Statement`（`createStatement()`）打的是 `{stmt-N} Statement: <sql>`，标记前缀与关键字都与 PreparedStatement 那档不同，旧解析器当噪声丢掉。两者现在都能产出条目（后者来源标记为 IBATIS）。严格前缀模式（关掉「启用混合前缀」）仍按原契约只认用户配置的前缀，未识别的 SQL 形态行会计入解析诊断增量
 - **iBatis 批处理不再无声消失（e2b0b581）**：iBatis 2.x 的 `BaseLogProxy` 只记录 execute/executeUpdate/executeQuery，批处理（`executeBatch`）在框架层**一行日志都不产生**，控制台通道结构性看不到。现在「已识别到 iBatis 形态且增强捕获未开启」时，状态栏给出具名提示（开启增强捕获后由 agent 的批处理形态兜住）
 - **三方数据库增强捕获的同类登记缺口（e2b0b581，横向审计）**：按真实驱动 jar 逐个 javap 核对后补齐——pg 家族 `PgCallableStatement`（7 个包名，函数模式 `executeUpdate` 走 `executeWithFlags` 分支会漏采）、MySQL 5.1 `CallableStatement`、华为两族兼容模式 `MPreparedStatement`（`addBatch(String)` 覆盖父类不回调，批文本漏记）、海量/社区 openGauss 的读写分离包装语句与其连接类（读写分离模式下整条连接的语句进不了登记表）、SQLite 四参 `prepareStatement` 重载实现类、华为两族 connect 面驱动类
-- **Mac / UOS 上点「执行 SQL」恒报「创建临时 SQL 文件失败：findPsi」（T-ExecPsiGate，87226496）**：执行用的临时 SQL 文件，其 PSI 语言由插件写的**文件级方言映射**决定。映射落到本机建不出 SQL PSI 的方言时（自注册方言的 parser definition 未生效、平台缺该方言、或历史版本留在 `workspace.xml` 里的坏映射），平台拿不到 PSI——非方言语言直接在方言替换器里抛 `ClassCastException`，方言类语言则让 `findFile` 返回 null；而 exec 链过去对映射失败**既没有闸门也没有日志**，用户只能看到笼统的 findPsi 报错。预览侧一直有「可建 PSI 门」（目标语言建不出 PSI 就跳过映射），exec 侧缺这一道，所以同一台机器预览正常、点执行必死。现在两条链共用同一道闸门：不建 PSI 就不写映射并清掉历史映射（退回平台默认），`findFile` 仍失败时再清映射重建一次，再失败则**显式钉住一个能建 PSI 的方言**（清映射只会把继承来的方言请回来）；临时文件的 VFS 条目若已失效（同步盘 / 网络盘 / 外部替换的典型形态，平台对这种失效只返回 null），先重新定位取新条目再建 PSI；若某个 IDE 上 `.idea` 目录里的 `.sql` 根本建不出 PSI（**2026.3 起平台新增 `shouldCreatePsi` 闸门：父目录不在内容模型里、或被 excluded，就直接不建 PSI**，同文件放项目外则正常），**优先引导用户修配置**（红字说明原因 + 蓝字直达对应设置页），另给一颗「改用项目根落点重试」——用户点了才把临时文件写到项目根 `.sql-visualizer/`（自带 `.gitignore`，不污染工作树）并记住该选择；失败文案改带 vf 有效性、文件类型、映射语言、继承方言、平台实际选中的 PSI 语言、这几者各自能否建 PSI、IDE Build 号与绝对路径，映射没落地也一定有日志；若最终仍失败，红字后面会给**蓝色可点入口**并按原因细分——文件类型忽略规则未改就直通「设置 → 编辑器 → 文件类型」，被 `.gitignore` 忽略就直通那个文件，方言问题就直通 SQL 方言设置
+- **Mac / UOS 上点「执行 SQL」恒报「创建临时 SQL 文件失败：findPsi」（T-ExecPsiGate，87226496）**：执行用的临时 SQL 文件，其 PSI 语言由插件写的**文件级方言映射**决定。映射落到本机建不出 SQL PSI 的方言时（自注册方言的 parser definition 未生效、平台缺该方言、或历史版本留在 `workspace.xml` 里的坏映射），平台拿不到 PSI——非方言语言直接在方言替换器里抛 `ClassCastException`，方言类语言则让 `findFile` 返回 null；而 exec 链过去对映射失败**既没有闸门也没有日志**，用户只能看到笼统的 findPsi 报错。预览侧一直有「可建 PSI 门」（目标语言建不出 PSI 就跳过映射），exec 侧缺这一道，所以同一台机器预览正常、点执行必死。现在两条链共用同一道闸门：不建 PSI 就不写映射并清掉历史映射（退回平台默认），`findFile` 仍失败时再清映射重建一次，再失败则**显式钉住一个能建 PSI 的方言**（清映射只会把继承来的方言请回来）；临时文件的 VFS 条目若已失效（同步盘 / 网络盘 / 外部替换的典型形态，平台对这种失效只返回 null），先重新定位取新条目再建 PSI；若某个 IDE 上 `.idea` 目录里的 `.sql` 根本建不出 PSI（**2026.3 起平台新增 `shouldCreatePsi` 闸门：父目录不在内容模型里、或被 excluded，就直接不建 PSI**，同文件放项目外则正常），**优先引导用户修配置**（红字说明原因 + 蓝字直达对应设置页），另给一颗「改用项目根落点重试」——用户点了才把临时文件写到项目根 `.sql-visualizer/`（自带 `.gitignore`，不污染工作树）并记住该选择；预览侧因为是降级而不是阻断，自动改写的同时给一条**只出现一次**的告知（含去修配置的蓝字入口），既不静默也不打断；失败文案改带 vf 有效性、文件类型、映射语言、继承方言、平台实际选中的 PSI 语言、这几者各自能否建 PSI、IDE Build 号与绝对路径，映射没落地也一定有日志；若最终仍失败，红字后面会给**蓝色可点入口**并按原因细分——文件类型忽略规则未改就直通「设置 → 编辑器 → 文件类型」，被 `.gitignore` 忽略就直通那个文件，方言问题就直通 SQL 方言设置
 
 ### Changed
 - **「门禁陈旧」读数的判据收口（70048a12）**：原判据是「链龄超 5s 仍进入即计一次」，会把「一条跑几十秒的语句内部再执行语句」这类**合法嵌套**误报成泄漏。现改为「链龄超 **30s** **且**同一链连续 **3** 次超阈值进入才计，同一链只计一次」——合法长语句内部的嵌套是个位数且随后闭合（depth 归零即清零），真泄漏的链一直不闭合、每条语句都以嵌套进入出现，连续次数持续累积。两个门槛可经 `sqlvis.agent.nestStaleMs` / `sqlvis.agent.nestStaleStreak` 覆盖；不改任何抑制语义。定向：`NestGateTest` 含新增「长事务合法嵌套不误报」与「连续三次只计一次、同链不重复计」两例
