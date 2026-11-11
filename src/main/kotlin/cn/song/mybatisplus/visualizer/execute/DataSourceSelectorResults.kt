@@ -2053,9 +2053,21 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
     val ideBuild = runCatching {
         com.intellij.openapi.application.ApplicationInfo.getInstance().build.asString()
     }.getOrNull()
+    // 2026.3 的 shouldCreatePsi 只看「忽略集」或（Registry 勾选时）「排除」；Project 视图里看不到
+    // 不等于被排除——这两个是两个独立谓词。三项一次打全，用户截一张图就能判型。
+    val excluded = runCatching {
+        com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(vf)
+    }.getOrNull()
+    val underIgnored = runCatching {
+        com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(vf)
+    }.getOrNull()
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrNull()
     return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
         "mappedLang=$mappedId, canPsi=$canPsi, inheritedLang=$inheritedId, " +
         "canPsiInherited=$canPsiInherited, psiLang=$psiLang, canPsiActual=$canPsiActual, " +
+        "excluded=$excluded, underIgnored=$underIgnored, regHideExcluded=$regHideExcluded, " +
         "ideBuild=$ideBuild, path=$path"
 }
 
