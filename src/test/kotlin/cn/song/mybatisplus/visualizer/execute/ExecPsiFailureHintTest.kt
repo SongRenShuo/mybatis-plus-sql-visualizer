@@ -166,32 +166,46 @@ class ExecPsiFailureHintTest {
     }
 
     /**
-     * F6：成因必须**按阶段**消费。
+     * F6：成因必须**按失败文案**匹配，且**读方不清空**。
      *
-     * 真机第三轮的症状正是「成因被并发的下一个 `createTempPsiFile` 入口清掉」——面板只剩红字。
-     * 现在成因绑着它所属的阶段：阶段对不上就当过期丢弃（不会把「目录不可用」的入口安到方言失败上），
-     * 阶段对得上则取一次即清。
+     * 真机第四轮的症状是「直接点执行没有蓝字」：同一次失败被渲染两次（abort 持有者 + complete
+     * 排队意图，两路带同一条文案），原来「读一次就清」导致第二次退化成纯红字并覆盖掉蓝字。
      */
     @Test
-    fun `成因按阶段消费_对不上即丢弃`() {
+    fun `成因按文案匹配_非 PSI 失败不借用`() {
         DataSourceSelector.lastTempFileHintRecord =
-            TempFileHintRecord("dirNoPsi", ExecPsiFailureCause.DIR_NOT_INDEXED)
+            TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
         assertNull(
-            "文案里没有该阶段 ⇒ 当过期丢弃（否则会把目录入口安到别的失败上）",
-            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：findPsiAfterHeal: name=x"),
+            "写出/刷新类失败与「为什么建不出 PSI」无关，不得借用该成因",
+            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：writeFile: boom"),
         )
-        assertNull("丢弃后记录已清空", DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"))
     }
 
     @Test
-    fun `成因按阶段消费_对得上取一次即清`() {
+    fun `成因可重复读取_同一次失败渲染两次都拿得到`() {
+        DataSourceSelector.lastTempFileHintRecord =
+            TempFileHintRecord("findPsiAfterHeal", ExecPsiFailureCause.IGNORED_BY_VCS)
+        val msg = "执行失败：创建临时 SQL 文件失败：findPsiAfterHeal: name=mpsql-exec.sql"
+        assertEquals(
+            ExecPsiFailureCause.IGNORED_BY_VCS,
+            DataSourceSelector.consumeTempFileHintFor(msg),
+        )
+        assertEquals(
+            "第二次渲染必须仍拿到（否则蓝字被纯红字覆盖）",
+            ExecPsiFailureCause.IGNORED_BY_VCS,
+            DataSourceSelector.consumeTempFileHintFor(msg),
+        )
+    }
+
+    @Test
+    fun `成因匹配放宽到任一 PSI 阶段`() {
+        // 阶段名会演进（findPsi / findPsiAfterHeal / dirNoPsi），精确匹配会让入口凭阶段名丢失
         DataSourceSelector.lastTempFileHintRecord =
             TempFileHintRecord("dirNoPsi", ExecPsiFailureCause.DIR_NOT_INDEXED)
         assertEquals(
             ExecPsiFailureCause.DIR_NOT_INDEXED,
-            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"),
+            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：findPsiAfterHeal: name=x"),
         )
-        assertNull("只消费一次", DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"))
     }
 
     @Test

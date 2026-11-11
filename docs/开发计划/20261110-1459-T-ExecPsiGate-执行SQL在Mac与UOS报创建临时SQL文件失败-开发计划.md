@@ -786,6 +786,30 @@ dirTypeIgnored=false, regHideExcluded=false, ideBuild=IU-263.7307.200
 失败提示不得再挂 `.gitignore` 入口）、`testDbExecPsiGate` **15 / 0 / 0 / 0**、守卫与更新通道用例 273/0/0。
 反向验证：注释掉分类器里 `if (dirCanHostPsi == false)` ⇒ 恰 2 红，恢复复绿。
 
+### 13.15 F7：同一次失败被渲染两次，读方清空把蓝字覆盖成纯红字（2026-11-11 第四轮）
+
+**现象**：F6 装上去后直接点「执行 SQL」，报文已经带上目录级四项诊断
+（`dirPsi=false, dirExcluded=true, dirUnderIgnored=true`），但**仍然没有蓝字**；而「更多 → 切换数据源」
+那条路同一份报文是有蓝字的。
+
+**根因**：一条失败会被投递**两次**——`failPrepareRequests` 先 `gate.abort(持有者, …)`，
+再 `consumed?.complete(…, message)`，两路带同一条文案。而 F6 的 consumer 是「读一次就清」：
+
+1. 第一次渲染：读到成因 → 挂上蓝字；
+2. 第二次渲染：记录已被清 → `cause == null` → 走 `resultPanel.showError(errorMsg)`，
+   **纯红字把蓝字覆盖掉**。
+
+切源那条路 `prepareOwner == null`（PASS_THROUGH），只投递一次，所以蓝字留得住——用户那句
+「切换数据源时是正常的」又一次替我们定位了链路分叉。
+
+**修法**：consumer 改**非破坏性**（不在这里清空，只由下一次带成因的失败覆盖），并把匹配判据从
+「精确阶段名」放宽成「这条文案是不是 PSI 建不出」（`findPsi*` / `dirNoPsi` 或记录里的阶段）——
+阶段名会演进，精确匹配会让入口凭阶段名丢失。同时失败现场**永不传 null 成因**（归因面自己异常时
+退 `UNKNOWN`，而 `UNKNOWN` 也带落点入口）。
+
+**读数**：`ExecPsiFailureHintTest` **16 / 0 / 0**（新增「可重复读取：同一次失败渲染两次都拿得到」
+「非 PSI 失败不借用」「匹配放宽到任一 PSI 阶段」）。
+
 ---
 
 ## 参考

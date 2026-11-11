@@ -1886,8 +1886,11 @@ internal fun DataSourceSelector.createTempPsiFile(
         null
     }) ?: run {
         // F6：成因随「阶段 + 成因」成对记下——失败文案＋面板蓝色可点入口都靠它，
-        // 且不会被并发的下一个 createTempPsiFile 入口清掉（见 TempFileHintRecord）
+        // 且读方不清空、下一次带成因的失败才覆盖（见 TempFileHintRecord）。
+        // **永不落 null**：归因面自己抛异常时退到 UNKNOWN，而 UNKNOWN 也带落点入口——
+        // 真机第三/四轮的「只剩红字」都是这条链上的 null 造成的。
         val hint = runCatching { execPsiFailureCauseNow(project, vf) }.getOrNull()
+            ?: ExecPsiFailureCause.UNKNOWN
         return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf), hint)
     }
     // 自愈可能换了一个新 vf（vf 失效重定位），缓存与后续 attach 必须用同一个

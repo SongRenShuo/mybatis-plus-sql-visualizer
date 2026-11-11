@@ -148,11 +148,24 @@ object DataSourceSelector {
     @Volatile
     internal var lastTempFileHintRecord: TempFileHintRecord? = null
 
-    /** 取一次「阶段 + 成因」；文案里不含该阶段就当过期，一并丢弃（见 [lastTempFileHintRecord]）。 */
+    /**
+     * 取「阶段 + 成因」——**非破坏性**（不在这里清空）。
+     *
+     * 两个改动都是真机打出来的（2026-11-11 第四轮）：
+     *
+     * 1. **不在这里清空**：同一次失败会被渲染不止一次（`failPrepareRequests` 先 abort 持有者、
+     *    再 complete 排队意图，两路都带同一条文案）。原来「读一次就清」，第一次渲染拿到蓝字、
+     *    第二次退化成纯红字并**把蓝字覆盖掉**——用户看到的正是「直接点执行没有蓝字」。
+     *    记录只由下一次带成因的失败覆盖，不需要读方负责清理。
+     * 2. **判据放宽成「这条文案是不是 PSI 建不出」**：成因只描述「为什么建不出 PSI」这一件事，
+     *    任何 PSI 阶段的失败文案都能用它；按精确阶段名匹配反而会因为阶段名演进（`findPsi` /
+     *    `findPsiAfterHeal` / `dirNoPsi`）把入口丢给用户看不见。
+     */
     internal fun consumeTempFileHintFor(errorMsg: String): ExecPsiFailureCause? {
         val rec = lastTempFileHintRecord ?: return null
-        lastTempFileHintRecord = null
-        return rec.hint.takeIf { errorMsg.contains(rec.stage) }
+        val isPsiFailure = errorMsg.contains("findPsi") || errorMsg.contains("dirNoPsi") ||
+            errorMsg.contains(rec.stage)
+        return rec.hint.takeIf { isPsiFailure }
     }
 
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
