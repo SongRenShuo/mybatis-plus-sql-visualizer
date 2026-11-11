@@ -309,6 +309,71 @@ internal fun SqlPreviewPanel.prewarmAbandoned(): Boolean = previewDisposed || pr
  */
 @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
 
+/**
+ * 13.12：预览落点兜底的「只提示一次」闸门（按面板实例持有，抽成类型以便纯逻辑用例直测）。
+ *
+ * 为什么要去重：落点判定会在每次预览/预热时跑，若每次都弹一条提示就变成新的噪音源；
+ * 用户只需要知道「这个项目我改用了备用落点、以及怎么改回来」一次。
+ */
+internal class PreviewFallbackNoticeGate {
+    private val notified = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** @return true = 本次是首个调用方（应当提示）；后续调用 false */
+    fun shouldNotify(): Boolean = notified.compareAndSet(false, true)
+}
+
+/**
+ * 13.12：预览临时目录改写到项目根时，给一条**只出现一次**的告知 + 蓝字入口。
+ *
+ * 与执行侧的差别（用户 2026-11-11 定案「兜底不得抢在提示前面」的延伸）：执行是阻断性失败，
+ * 必须让用户选；预览的失败形态是**功能降级**，所以这里自动兜底保证预览可用，但**不再静默**——
+ * 明确告诉用户「你项目里 .idea 这层建不出 PSI，我已经改写到项目根」，并给去修配置的入口。
+ */
+internal fun SqlPreviewPanel.notifyPreviewRootFallbackOnce(
+    proj: Project,
+    cause: cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause,
+) {
+    if (!previewFallbackNoticeGate.shouldNotify()) return
+    val settingsLabel: String?
+    val settingsTip: String?
+    val settingsAction: (() -> Unit)?
+    when (cause) {
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_FILE_TYPES -> {
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
+            settingsAction = { openGitignoreFile(proj) }
+        }
+        // 排除 / 方言 / 未识别语言：没有稳定的设置入口或与落点无关，只给告知
+        else -> {
+            settingsLabel = null
+            settingsTip = null
+            settingsAction = null
+        }
+    }
+    val show = {
+        if (!previewDisposed) {
+            resultPanel.showStatusWithActions(
+                MpSqlVisualizerBundle.message("preview.tempDir.fallback.notice"),
+                settingsLabel = settingsLabel,
+                settingsTooltip = settingsTip,
+                settings = settingsAction,
+                warning = true,
+            )
+        }
+    }
+    if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+        show()
+    } else {
+        com.intellij.openapi.application.ApplicationManager.getApplication()
+            .invokeLater(show, com.intellij.openapi.application.ModalityState.nonModal())
+    }
+}
+
 internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
     val proj = project ?: return null
     val base = proj.basePath ?: return null
@@ -320,7 +385,12 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
         base,
         ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
     )
-    val dir = if (cn.song.mybatisplus.visualizer.execute.execDirCanHostPsi(proj, ideaDir)) {
+    // 13.12：切成因判定——「探不过」有四种原因，告知文案与蓝字入口要跟着变
+    val fallbackCause = runCatching {
+        cn.song.mybatisplus.visualizer.execute.execDirFailureCause(proj, ideaDir)
+    }.getOrNull()
+    if (fallbackCause != null) notifyPreviewRootFallbackOnce(proj, fallbackCause)
+    val dir = if (fallbackCause == null) {
         ideaDir
     } else {
         java.io.File(base, ".sql-visualizer${java.io.File.separator}preview").also {

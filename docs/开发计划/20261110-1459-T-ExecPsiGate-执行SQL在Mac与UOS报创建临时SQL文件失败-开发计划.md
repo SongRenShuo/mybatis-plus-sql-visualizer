@@ -654,6 +654,23 @@ VCS、忽略类压过方言类、全正常给 UNKNOWN）；反向验证把两条
 
 **保留**：`projectRootExecFile` / `preferProjectRoot` / `execRootFallbackProjects` / 备用目录的 `.gitignore` 全部保留——它们现在是「用户显式选择」的实现载体。
 
+### 13.12 预览侧对齐：自动兜底 + 只告知一次（2026-11-11，用户采纳推荐方案）
+
+**取舍**：执行与预览的失败严重程度不同，不套同一套交互——
+执行是**阻断**（一条 SQL 都跑不了）⇒ 让用户选（改配置 / 改用项目根重试）；
+预览是**降级**（SQL 照常渲染，只丢补全与高亮）⇒ 我们自动兜底保证可用，但**不再静默**。
+
+| 项 | 内容 |
+|---|---|
+| 判定 | `execDirFailureCause(project, dir)`：**目录级**成因（预览选目录那一刻文件还不存在，判不了语言，故语言判据给中性值防误报方言） |
+| 落点 | 判定非 null ⇒ `<base>/.sql-visualizer/preview`（沿用原 pre-check 行为） |
+| 告知 | `notifyPreviewRootFallbackOnce(proj, cause)`：`PreviewFallbackNoticeGate`（AtomicBoolean）保证**每个面板生命周期只提示一次**；走 `SqlResultPanel.showStatusWithActions`（warning 态 + 蓝字），BGT 调用自动派回 EDT |
+| 入口 | 文件类型忽略 → `preferences.fileTypes`；VCS 忽略 → 项目根 `.gitignore`；排除 / 方言 / 未识别 → 只告知（与执行侧同口径） |
+| 文案 | `preview.tempDir.fallback.notice`：说明「已改写到项目根 .sql-visualizer/preview，预览与补全照常可用」 |
+
+**读数**：`ExecPsiFailureHintTest` 8/0/0/0（新增「预览兜底提示只出一次」）、
+`BundlePlaceholderArityTest` 4/0/0/0、`SqlResultPanelUiTest` 15/0/0/0。
+
 ---
 
 ## 参考

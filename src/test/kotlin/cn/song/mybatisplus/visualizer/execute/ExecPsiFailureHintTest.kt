@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -68,6 +70,20 @@ class ExecPsiFailureHintTest {
     fun `全都正常时不给入口`() {
         // 走到这里说明实际原因在本次判定面之外（vf 失效等）——宁可只报文案，也不指错设置页
         assertEquals(ExecPsiFailureCause.UNKNOWN, classify())
+    }
+
+    /**
+     * 13.12：预览侧「自动兜底 + 只告知一次」的去重闸门。
+     *
+     * 落点判定每次预览/预热都会跑；若每次都提示就变成新噪音源，用户只需要知道一次。
+     * 这里钉「首个调用方 true、其后一律 false」——纯逻辑，不依赖面板实例。
+     */
+    @Test
+    fun `预览兜底提示只出一次`() {
+        val gate = cn.song.mybatisplus.visualizer.ui.PreviewFallbackNoticeGate()
+        assertTrue("首个调用方应当提示", gate.shouldNotify())
+        assertFalse("第二次不应再提示", gate.shouldNotify())
+        assertFalse("第三次同理", gate.shouldNotify())
     }
 
     @Test
