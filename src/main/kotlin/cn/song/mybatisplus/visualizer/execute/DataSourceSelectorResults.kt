@@ -2614,7 +2614,11 @@ internal fun DataSourceSelector.extractConsoleError(
         // 取错误行及其后非空行构成可读上下文——错误消息常跨多行（MySQL 语法错把 "near …" 的
         // SQL 片段跟在其后）。T-CEC-02：4 行放宽到 8 行，并剥掉逐行的 `[时间戳] ` 与提示符。
         val prompt = consolePrompt(console)
-        val idx = lines.indexOf(errorLine)
+        // T-HiddenBugPerfScan 券 Y5：锚定「最后一条」命中行——lastOrNull 按谓词取最后
+        // 命中、indexOf 按字符串等值取首现，同批两语句报出逐字相同错误行时摘录锚定
+        // 旧错误上下文。谓词只依赖行内容，等值最后现即谓词最后命中。
+        val idx = lines.mapIndexedNotNull { i, line -> if (line == errorLine) i else null }.lastOrNull()
+            ?: lines.indexOf(errorLine)
         val excerpt = lines.subList(idx, (idx + EXCERPT_MAX_LINES).coerceAtMost(lines.size))
             .joinToString("\n") { stripConsolePrefix(it, prompt) }
         // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身

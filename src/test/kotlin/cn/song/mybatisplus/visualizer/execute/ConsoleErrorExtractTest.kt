@@ -87,6 +87,25 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         assertEquals("baseline=0 不应走切片", 0, seq.sliceRanges.size)
     }
 
+    /** T-HiddenBugPerfScan 券 Y5：同批两条逐字相同的错误行——摘录锚定最后一次出现。 */
+    fun testDuplicateErrorLinesAnchorLastOccurrence() {
+        val errLine = "SQLException: Unknown column 'q' in 'field list'"
+        val seq = RecordingSeq(
+            "select a from t1\n" + errLine + "\ncontext of first failure\n" +
+                "select b from t2\n" + errLine + "\ncontext of second failure\n",
+        )
+        val err = DataSourceSelector.extractConsoleError(consoleOf(seq), LOG)
+        assertTrue("应检出错误", err != null && err.contains("Unknown column 'q'"))
+        assertTrue(
+            "摘录应锚定最后一次出现（second 上下文）：$err",
+            err!!.contains("context of second failure"),
+        )
+        assertTrue(
+            "不得锚定首现（first 上下文属前一条语句）：$err",
+            !err.contains("context of first failure"),
+        )
+    }
+
     /** 核心回归：baseline>0 只物化新增切片——全量 toString 零调用，旧残留错误不带走。 */
     fun testBaselineSliceOnlyMaterializesNewSegment() {
         val oldPart = "select id from t\nUnknown column 'x' in 'field list'\n"
