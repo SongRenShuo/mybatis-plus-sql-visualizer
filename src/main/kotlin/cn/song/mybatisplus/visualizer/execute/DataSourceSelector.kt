@@ -2122,14 +2122,6 @@ object DataSourceSelector {
         )
 
     /**
-     * T-ExecPsiGate F6：已经**告知过一次**「改用项目根落点」的项目（按 basePath 记，弱引用）。
-     *
-     * 落点从 `.idea` 自动改到项目根是**静默的行为变化**，必须说一次；但每次执行都提示就是新噪音源。
-     */
-    internal val execRootFallbackNotified: MutableSet<String> =
-        java.util.Collections.synchronizedSet(mutableSetOf())
-
-    /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
      * 插件 setText）后 1.5s 防抖自动落盘。动机：console 编辑器文档即 exec 文件 document
      * （attachConsole 挂载点），用户手改滞留「已修改未保存」是第四轮冲突弹窗「内存中更改」

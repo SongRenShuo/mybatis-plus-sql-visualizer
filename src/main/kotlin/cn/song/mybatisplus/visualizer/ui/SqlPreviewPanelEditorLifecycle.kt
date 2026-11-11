@@ -344,22 +344,17 @@ internal fun SqlPreviewPanel.notifyPreviewRootFallbackOnce(
             settingsAction = { openFileTypesSettings(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
-            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
-            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
-            settingsAction = { openGitignoreFile(proj) }
+            // 2026-11-11 用户定案：不引导改 `.gitignore`（忽略 `.idea/` 是正常设置），
+            // 忽略模式统一指向 Settings → Editor → File Types。
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
         }
-        // F5：目录级探针判否（文件级谓词全绿的那种形态）。成因大概率就在项目 .gitignore 里，
-        // 存在这个文件时给入口——预览的告知不该只说「我换落点了」而不给修的地方。
+        // F5：目录级探针判否（文件级谓词全绿的那种形态）——入口同上，指向忽略模式设置页
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIR_NOT_INDEXED -> {
-            if (gitignoreExists(proj)) {
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
-                settingsAction = { openGitignoreFile(proj) }
-            } else {
-                settingsLabel = null
-                settingsTip = null
-                settingsAction = null
-            }
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
         }
         // 排除 / 方言 / 未识别语言：没有稳定的设置入口或与落点无关，只给告知
         else -> {

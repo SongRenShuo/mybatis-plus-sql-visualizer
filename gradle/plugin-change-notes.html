@@ -4,7 +4,7 @@
     <li>iBatis 的 DAO 调用行可直接预览 SQL，跳转箭头旁新增预览图标，<code>Alt+Shift+Q</code> 同样可用</li>
     <li>预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效</li>
     <li>执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown</li>
-    <li>执行时若 IDE 不为 <code>.idea</code> 下的文件建立 PSI (常见于 <code>.gitignore</code> 忽略了 <code>.idea/</code>), 临时 SQL 文件会自动改写到项目根 <code>.sql-visualizer/exec</code> 并给一次提示, 执行不再被拦下</li>
+    <li>执行失败不再只剩一行红字: 落点目录建不出 PSI 时说明原因, 并给出「改用项目根落点重试」与「打开文件类型设置」两颗蓝字入口</li>
     <li>iBatis 预览里裸的 <code>#name#</code> 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号</li>
     <li>复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位</li>
     <li>上一版的按原因给设置入口与一键改用项目根落点保持不变</li>

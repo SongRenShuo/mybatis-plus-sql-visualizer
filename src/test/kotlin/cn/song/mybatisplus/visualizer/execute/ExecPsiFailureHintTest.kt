@@ -133,33 +133,36 @@ class ExecPsiFailureHintTest {
     }
 
     /**
-     * F6（2026-11-11 第三轮验收）：**落点自动改写表**。
+     * F6（2026-11-11 用户定案，两次同一口径）：**落点不改写、失败不引导改 `.gitignore`**。
      *
-     * 真机读数钉死了这一档：`.idea/sql-visualizer/exec` 上 `dirPsi=false / dirExcluded=true /
-     * dirUnderIgnored=true / inContent=false`，而 `.idea` 被 `.gitignore` 忽略是**正常设置**——
-     * 「报错让用户改配置」没有可改的东西，只能换落点。
+     * - 不改写：真机已证明 `.idea/sql-visualizer/exec` 上 `dirPsi=false`，但自动换落点会把项目配置
+     *   的问题藏起来，必须保持「报错 + 让用户点」。所以 `createTempPsiFile` 里不得出现自动改写的调用。
+     * - 不引导 `.gitignore`：`.gitignore` 忽略 `.idea/` 是正常设置，删它是错误引导；忽略模式的可控
+     *   入口统一指向 Settings → Editor → File Types。
+     *
+     * 这里用**标识符级**扫描（不比对空白/格式），只钉「这些东西不许回来」。
      */
     @Test
-    fun `落点改写_主落点可用时不换`() {
-        assertFalse(
-            "健康机器上零成本、零误判：探针说能建 PSI 就绝不能换落点",
-            shouldRelocateExecToRoot(alreadyRoot = false, dirCanHostPsi = true),
-        )
-    }
-
-    @Test
-    fun `落点改写_主落点建不出PSI时换项目根`() {
-        assertTrue(
-            "真机形态：目录级探针判否 ⇒ 自动改写到项目根，用户无感",
-            shouldRelocateExecToRoot(alreadyRoot = false, dirCanHostPsi = false),
-        )
-    }
-
-    @Test
-    fun `落点改写_已在项目根就不再换`() {
-        // 防递归：项目根也建不出 PSI 时只能回到失败文案（带成因与蓝字入口），不能再换
-        assertFalse(shouldRelocateExecToRoot(alreadyRoot = true, dirCanHostPsi = false))
-        assertFalse(shouldRelocateExecToRoot(alreadyRoot = true, dirCanHostPsi = true))
+    fun `落点不许自动改写_提示不许引导改 gitignore`() {
+        val execSource = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
+        ).readText()
+        for (banned in listOf("shouldRelocateExecToRoot", "notifyExecRootFallbackOnce")) {
+            assertFalse(
+                "自动改写落点的实现不得回归（用户 2026-11-11 定案：兜底要用户点）: $banned",
+                execSource.contains(banned),
+            )
+        }
+        for (uiFile in listOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycle.kt",
+        )) {
+            val ui = java.io.File(uiFile).readText()
+            assertFalse(
+                "失败/降级提示不得再挂「打开 .gitignore」入口（用户 2026-11-11 定案）: $uiFile",
+                ui.contains("execute.tempFile.action.gitignore"),
+            )
+        }
     }
 
     /**

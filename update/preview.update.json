@@ -1,7 +1,7 @@
 {
   "version": "2026.11.12-beta.2",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.2/mybatis-plus-sql-visualizer-2026.11.12-beta.2.zip",
-  "changeNotes": "MBG 生成的 Example mapper 也能预览了: 从 andXxxYyy 调用点还原条件，产物从残缺骨架变成可读 SQL\niBatis 的 DAO 调用行可直接预览 SQL，跳转箭头旁新增预览图标，Alt+Shift+Q 同样可用\n预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效\n执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown\n执行时若 IDE 不为 .idea 下的文件建立 PSI (常见于 .gitignore 忽略了 .idea/), 临时 SQL 文件会自动改写到项目根 .sql-visualizer/exec 并给一次提示, 执行不再被拦下\niBatis 预览里裸的 #name# 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号\n复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位\n上一版的按原因给设置入口与一键改用项目根落点保持不变",
+  "changeNotes": "MBG 生成的 Example mapper 也能预览了: 从 andXxxYyy 调用点还原条件，产物从残缺骨架变成可读 SQL\niBatis 的 DAO 调用行可直接预览 SQL，跳转箭头旁新增预览图标，Alt+Shift+Q 同样可用\n预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效\n执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown\n执行失败不再只剩一行红字: 落点目录建不出 PSI 时说明原因, 并给出「改用项目根落点重试」与「打开文件类型设置」两颗蓝字入口\niBatis 预览里裸的 #name# 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号\n复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位\n上一版的按原因给设置入口与一键改用项目根落点保持不变",
   "publishDate": "2026-11-11",
   "sinceBuild": "243"
 }

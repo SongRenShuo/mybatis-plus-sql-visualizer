@@ -1806,13 +1806,12 @@ internal fun DataSourceSelector.createTempPsiFile(
     // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
     // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
     //
-    // T-ExecPsiGate F6（2026-11-11 第三轮验收）：**落点先按原口径走 `.idea`，`findFile` 拿不到 PSI 时
-    // 再用目录级探针判「是不是这个目录的错」**，是就直接换项目根落点重跑一次（用户无感），
-    // 不再让用户点「改用项目根落点重试」——真机读数（IU-263.7307.200，`.idea/sql-visualizer/exec`）：
+    // T-ExecPsiGate F6（2026-11-11 用户定案，两次同一口径）：**落点不改写**——`.idea` 仍是默认，
+    // 建不出 PSI 时把原因与修复入口摆给用户，只有用户点了「改用项目根落点重试」才走备用落点。
+    // 本轮曾实现「探针判否就自动换项目根」，被用户否掉：自动改写会把项目配置的问题藏起来，
+    // 与 13.11 的定案相悖。真机读数（IU-263.7307.200，`.idea/sql-visualizer/exec`）：
     //   dirPsi=false, dirExcluded=true, dirUnderIgnored=true, inContent=false, regHideExcluded=false
-    // 这类项目里 `.idea` 被 `.gitignore` 忽略是**正常设置**，平台永远不会为它建 PSI：也就是说
-    // 「报错引导用户改配置」在这里没有任何可改的东西（用户原话「问题还是没解决呀」）。
-    // 探针放在失败之后而不是写盘之前：健康机器上零成本、零误判（刚 mkdirs 出来的目录不参与判定）。
+    // 所以失败文案必须**说清这一档**并给出可点的兜底入口（F5 的 DIR_NOT_INDEXED / IGNORED_BY_VCS）。
     val preferRoot = project in execRootFallbackProjects
     val ioFile = try {
         projectExecFile(project, sql, preferProjectRoot = preferRoot)
@@ -1873,33 +1872,12 @@ internal fun DataSourceSelector.createTempPsiFile(
         return fail("syncVfContent", "${e.javaClass.simpleName}: ${e.message}")
     }
     mapDialectBeforePsi(project, vf, LOG, renderedDialectName)
-    val firstPsi = try {
+    val psi = try {
         findExecPsi(project, vf)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
-    }
-    // F6：拿不到 PSI、且还没在项目根落点时，先用**目录级**探针判「是不是这层目录的错」——
-    // 是就直接换项目根重跑一次（用户无感）。真机上 `.idea` 被 `.gitignore` 忽略时平台永远不会为
-    // 它建 PSI，让用户去改这个「正常设置」没有意义（见 preferRoot 处的真机读数）。
-    // 探针只在这一刻跑：健康机器零成本，也不会误判刚 mkdirs 出来的目录。
-    if (firstPsi == null) {
-        val execDir = ioFile.parentFile
-        val dirCanHost = execDir == null || execDirCanHostPsi(project, execDir)
-        if (shouldRelocateExecToRoot(alreadyRoot = preferRoot, dirCanHostPsi = dirCanHost)) {
-            execRootFallbackProjects.add(project)
-            val cause = execDir?.let {
-                runCatching { execDirFailureCause(project, it) }.getOrNull()
-            } ?: ExecPsiFailureCause.DIR_NOT_INDEXED
-            notifyExecRootFallbackOnce(project, cause)
-            LOG.warn(
-                "[M36][T-ExecPsiGate] exec land relocated to project root — dir cannot host PSI " +
-                    "(dirPsi=false): ${execDir?.path}",
-            )
-            return createTempPsiFile(project, sql, renderedDialectName)
-        }
-    }
-    val psi = firstPsi ?: (try {
+    } ?: (try {
         // T-ExecPsiGate F2：PSI 取不到时自愈——先看 vf 是否失效（重定位），再清映射重建。
         // 两支都不成立时下面带五元组诊断收口。
         healExecPsi(project, vf, LOG, ioFile)
@@ -2051,43 +2029,11 @@ internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFa
     )
 }
 
-/**
- * T-ExecPsiGate F6：**要不要把执行落点自动改到项目根**（纯函数，表驱动可测）。
- *
- * @param alreadyRoot 这次已经写的是项目根落点（再换就没地方换了，也不能递归）
- * @param dirCanHostPsi 当前落点目录能否建 PSI（探不出来时调用方传 true —— 保守，不换落点）
- * @return true = 换到项目根重试一次
- */
-internal fun shouldRelocateExecToRoot(alreadyRoot: Boolean, dirCanHostPsi: Boolean): Boolean =
-    !alreadyRoot && !dirCanHostPsi
-
 /** F6：主落点目录（`<base>/.idea/sql-visualizer/exec`）——**只算路径**，不建目录、不写盘。 */
 internal fun execPrimaryDir(project: Project): java.io.File? {
     val base = project.basePath ?: return null
     val sep = java.io.File.separator
     return java.io.File(base, ".idea$sep${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${sep}exec")
-}
-
-/**
- * F6：落点从 `.idea` 自动改到项目根时**说一次**。
- *
- * 静默换落点是行为变化，必须告知（与预览侧 13.12 同口径）；但每次执行都说就是新噪音源，
- * 故按项目 basePath 去重。走预览组的 balloon（同族同渠道）。
- */
-internal fun DataSourceSelector.notifyExecRootFallbackOnce(project: Project, cause: ExecPsiFailureCause) {
-    val key = project.basePath ?: project.name
-    if (!execRootFallbackNotified.add(key)) return
-    if (project.isDisposed) return
-    runCatching {
-        com.intellij.notification.NotificationGroupManager.getInstance()
-            .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
-            .createNotification(
-                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-                    .message("execute.tempDir.fallback.notice"),
-                com.intellij.notification.NotificationType.INFORMATION,
-            )
-            .notify(project)
-    }
 }
 
 /**
@@ -2142,19 +2088,28 @@ internal fun execPsiFailureCauseNow(project: Project, vf: com.intellij.openapi.v
     }.getOrNull()
     // F5（2026-11-11 真机）：**平台闸门问的是父目录**，四项文件谓词看不见父目录的待遇。
     // 真机上出现过「文件级全绿、findFile 恒 null」，只靠文件谓词只能判成 UNKNOWN（= 只丢红字，
-    // 没有可点入口，正是这一轮的验收问题）。把目录级探针并进来之后，`shouldCreatePsi` 的两条 null
-    // 分支（名字命中忽略模式 / findDirectory 拿不到父目录）才算被完整覆盖。
+    // 没有可点入口，正是这一轮的验收问题）。所以目录级的「排除 / 忽略 / 忽略模式 / 能否建 PSI」
+    // 一律与文件级取**并集**：闸门只要被父目录挡住就返回 null，取并集才与闸门口径一致。
+    val parentVf = runCatching { vf.parent }.getOrNull()
+    val parentExcluded = runCatching {
+        parentVf != null && fileIndex.isExcluded(parentVf)
+    }.getOrDefault(false)
+    val parentUnderIgnored = runCatching {
+        parentVf != null && fileIndex.isUnderIgnored(parentVf)
+    }.getOrDefault(false)
+    val parentTypeIgnored = runCatching {
+        parentVf != null && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(parentVf)
+    }.getOrDefault(false)
     val dirCanHostPsi = runCatching {
         ReadAction.compute<Boolean, Throwable> {
-            val parent = vf.parent
-            parent != null && PsiManager.getInstance(project).findDirectory(parent) != null
+            parentVf != null && PsiManager.getInstance(project).findDirectory(parentVf) != null
         }
     }.getOrNull()
     return classifyExecPsiFailure(
-        excluded = excluded,
+        excluded = excluded || parentExcluded,
         regHideExcluded = regHideExcluded,
-        fileTypesIgnored = fileTypesIgnored,
-        underIgnored = underIgnored,
+        fileTypesIgnored = fileTypesIgnored || parentTypeIgnored,
+        underIgnored = underIgnored || parentUnderIgnored,
         psiLangId = psiLanguage?.id,
         canPsiActual = runCatching { canCreateSqlPsiFor(psiLanguage) }.getOrDefault(false),
         dirCanHostPsi = dirCanHostPsi,

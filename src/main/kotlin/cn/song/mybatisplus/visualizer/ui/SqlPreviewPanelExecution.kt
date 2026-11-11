@@ -1099,26 +1099,6 @@ internal fun openFileTypesSettings(proj: Project) {
 }
 
 /**
- * 13.10：项目根是否存在 `.gitignore`。
- *
- * 只有存在时才把「打开 .gitignore」当入口——`openGitignoreFile` 会顺手创建空文件，
- * 而空 `.gitignore` 不解释任何事：没有它就不是 VCS 忽略这条成因，宁可少给一个入口。
- */
-internal fun gitignoreExists(proj: Project): Boolean =
-    runCatching { proj.basePath?.let { java.io.File(it, ".gitignore").exists() } ?: false }.getOrDefault(false)
-
-/** 13.10：打开项目根 `.gitignore`（VCS 忽略的修复点就在这个文件里）。 */
-internal fun openGitignoreFile(proj: Project) {
-    runCatching {
-        val base = proj.basePath ?: return
-        val io = java.io.File(base, ".gitignore")
-        if (!io.exists()) io.writeText("")
-        val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io) ?: return
-        com.intellij.openapi.fileEditor.FileEditorManager.getInstance(proj).openFile(vf, true)
-    }
-}
-
-/**
  * T-ExecPsiGate 13.10：临时 SQL 文件失败的**富呈现**——红字 + 蓝色可点入口。
  *
  * 用户 2026-11-11 定案：「针对这两个问题做智能错误信息提示，精准识别原因并提供蓝色字体可以点击
@@ -1129,11 +1109,14 @@ internal fun openGitignoreFile(proj: Project) {
  *  | 成因 | 蓝字入口 |
  *  |---|---|
  *  | 文件类型忽略模式 | 打开 设置 → 编辑器 → 文件类型 |
- *  | VCS 忽略（.gitignore） | 打开项目根 `.gitignore` |
+ *  | 目录被忽略（含 VCS 忽略） | 打开 设置 → 编辑器 → 文件类型（**不引导改 `.gitignore`**，见下） |
  *  | Excluded + Registry | 打开 项目结构 |
  *  | 方言不可用 / 未识别语言 | 打开 SQL 方言设置 |
- *  | 落点目录不被内容模型接管 | 兜底落点（+ 有 .gitignore 时给打开入口） |
+ *  | 落点目录不被内容模型接管 | 打开 文件类型 设置（+ 兜底落点） |
  *  | 判不出成因 | 兜底落点（**不允许只剩红字**） |
+ *
+ * 入口口径（2026-11-11 用户定案）：**不引导用户改 `.gitignore`**——`.gitignore` 里忽略 `.idea/`
+ * 是正常设置，让用户去删它是错误引导；忽略模式的可控入口统一指向 Settings → Editor → File Types。
  *
  * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
  */
@@ -1160,10 +1143,12 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
             settingsAction = { openFileTypesSettings(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
+            // 2026-11-11 用户定案：**不引导改 `.gitignore`**——`.gitignore` 里忽略 `.idea/` 是正常设置，
+            // 让人去删它是错误引导。忽略模式的可控入口统一指向 Settings → Editor → File Types。
             hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.vcs")
-            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
-            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
-            settingsAction = { openGitignoreFile(proj) }
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.EXCLUDED_ROOT -> {
             // 「项目结构」对话框在 243 / 2026.3 都已无稳定公开入口（ProjectStructureDialog 已移除），
@@ -1180,15 +1165,13 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
             allowFallback = false
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIR_NOT_INDEXED -> {
-            // F5（2026-11-11 用户验收）：文件级谓词全绿、平台照样不建 PSI 的唯一形态。
-            // 真实原因在父目录的待遇上（本机实证的成因就是 .gitignore 里有一行 `.idea/`），
-            // 所以这里给**能做的那件事**：兜底落点 + 打开 .gitignore。
+            // F5（2026-11-11 用户验收）：文件级谓词全绿、平台照样不建 PSI 的唯一形态——真实原因在
+            // **父目录**的待遇上。入口同样指向「忽略模式」的设置页（用户 2026-11-11 定案：
+            // 不引导改 .gitignore），兜底落点仍由用户点。
             hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dirNotIndexed")
-            if (gitignoreExists(proj)) {
-                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
-                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
-                settingsAction = { openGitignoreFile(proj) }
-            }
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.UNKNOWN -> {
             // **不再只丢红字**（2026-11-11 用户验收：「没有引导用户调整配置信息」）。
