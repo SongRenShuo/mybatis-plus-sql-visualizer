@@ -312,10 +312,24 @@ internal fun SqlPreviewPanel.prewarmAbandoned(): Boolean = previewDisposed || pr
 internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
     val proj = project ?: return null
     val base = proj.basePath ?: return null
-    val dir = java.io.File(
+    // T-ExecPsiGate R6：2026.3 起平台对「父目录不在内容模型里」的文件不建 PSI
+    // （`AbstractFileViewProvider.shouldCreatePsi`）。`.idea` 被 excluded 的项目里，
+    // 预览临时文件会因此拿不到 PSI（表现为「临时文件解析失败」降级横幅），故先探一次，
+    // 探不过就换到项目根 `.sql-visualizer/preview/`（仍在内容根内、不在 `.idea` 下）。
+    val ideaDir = java.io.File(
         base,
         ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
     )
+    val dir = if (cn.song.mybatisplus.visualizer.execute.execDirCanHostPsi(proj, ideaDir)) {
+        ideaDir
+    } else {
+        java.io.File(base, ".sql-visualizer${java.io.File.separator}preview").also {
+            runCatching {
+                val ignore = java.io.File(base, ".sql-visualizer${java.io.File.separator}.gitignore")
+                if (!ignore.exists()) ignore.writeText("*\n")
+            }
+        }
+    }
     if (!dir.exists() && !dir.mkdirs()) return null
     // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
     // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 [sweepStalePreviewFiles]。

@@ -516,6 +516,70 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
 ② preview 链的临时目录同样在 `.idea/sql-visualizer/preview/`，若用户那边预览也降级（横幅「临时文件解析失败」），
 说明同一根因，需另立项把预览落点一起迁走——本单不动预览，避免扩散。
 
+### 13.7 反编译 2026.3 定案：平台新增 `shouldCreatePsi()` 闸门（2026-11-11 收口）
+
+**不需要下载 Linux 包**：JetBrains 平台 jar 跨 OS 是同一份字节码（Linux / Windows / macOS 的
+`lib/*.jar` 只差原生库与 JBR）。本机正好装了 `IU-263.7307.200`，直接反编译它即可，用 IDE 自带
+Fernflower（`plugins/java-decompiler/lib/java-decompiler.jar` + `jbr/bin/java`）：
+
+```
+java -cp <ide>/plugins/java-decompiler/lib/java-decompiler.jar \
+     org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler -dgs=1 <classes-dir> <out>
+```
+
+**2026.3 的 `SingleRootFileViewProvider`（243 没有这一段）**：
+
+```java
+private PsiFile createFile() {
+    return this.shouldCreatePsi()
+         ? this.createFile(this.getManager().getProject(), this.getVirtualFile(), this.getFileType())
+         : null;                      // ← 闸门不过就直接 null → getPsi 返回 null → findFile 返回 null
+}
+```
+
+**闸门本体（`AbstractFileViewProvider.shouldCreatePsi()`）**：
+
+```java
+protected boolean shouldCreatePsi() {
+    if (this.isIgnored()) return false;                          // ① 文件被 ignored
+    ...
+    if (this.correspondsToRealFile() && vFile.isInLocalFileSystem()) {
+        VirtualFile parent = vFile.getParent();
+        if (parent == null) return false;
+        PsiDirectory psiDir = this.getManager().findDirectory(parent);
+        if (psiDir == null) {                                    // ② 父目录不在内容模型里
+            if (!indexFacade.isInLibrarySource(vFile) && !indexFacade.isInLibraryClasses(vFile)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+```
+
+**这解释了全部现象**：
+- `findDirectory(parent) == null` ⇒ 目录不在内容模型里（未加入 content 或被 **excluded**）。`.idea`
+  被排除是常见形态（`<project>/.idea/misc.xml` 里的 `<excludeFolder>`，随仓库共享）⇒ **该项目的每个
+  开发者在任何 OS 上都会中**——正好是「UOS + Mac 两台、同一个项目 `fortress4_basetime`」。
+- 用户实测「放桌面（项目外）正常、放 `.idea` 必错」——桌面那次走的是平台自己的 Script 动作，
+  不需要 PSI；而 `.idea` 下连 `findDirectory` 都拿不到，PSI 直接没有。
+- **243/262 没有这道闸门**（`createFile()` 直接调 `createFile(...)`），所以我在这台机器上
+  怎么造都复现不出来：这是**平台版本差异**，不是 OS 差异，也不是方言/映射/vf/竞态。
+
+**修法（按平台判据对齐，不再靠撞）**：
+
+| 项 | 内容 |
+|---|---|
+| 判据 | 新增 `execDirCanHostPsi(project, dir)`：复用平台同一条判据 `PsiManager.findDirectory(dir)`，按目录路径记忆（会话级）。探不出来时按「能」处理（保守，失败还有自愈支 4 兜底） |
+| exec | `projectExecFile` 先探 `.idea/sql-visualizer/exec`；探不过就落到 `<base>/.sql-visualizer/exec/`（自带 `.gitignore`，内容 `*`）。**第一次执行就走对，不必先撞三轮失败** |
+| preview | `projectPreviewFile` 同款：探不过就落到 `<base>/.sql-visualizer/preview/`——否则 2026.3 + `.idea` 被排除的项目里，预览会一直挂在「临时文件解析失败」降级横幅 |
+| 自愈支 4 | 保留为兜底（判据探不出来时仍会走到） |
+| 读数 | 定向 **14 tests / 0 failures / 0 errors / 0 skipped** |
+
+**遗留**：`shouldCreatePsi` 的第一条分支（`isIgnored()`，文件被 IDE 标成 ignored）也会产生同样症状，
+本单的 pre-check 只覆盖第二条（`findDirectory`）。若真机仍有残留，把 pre-check 换成「写个探针文件
+试建一次 PSI」即可覆盖——更贵，先不做。
+
 ---
 
 ## 参考

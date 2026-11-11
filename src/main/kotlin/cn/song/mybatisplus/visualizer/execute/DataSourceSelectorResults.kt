@@ -2067,6 +2067,38 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
  * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
  */
 
+/**
+ * T-ExecPsiGate R6：该目录下的文件在**这台 IDE** 上能不能建出 PSI。
+ *
+ * 2026.3 起平台多了一道闸门（`AbstractFileViewProvider.shouldCreatePsi()`，243/262 没有）：
+ * 父目录拿不到 `PsiDirectory`（目录不在内容模型里——未加入 content、或被 excluded，`.idea` 被
+ * 排除是常见形态）且不在库源码/库类里时，`createFile` 直接返回 null ⇒ `PsiManager.findFile`
+ * 返回 null，而 `vf` 完全有效。用户那条「放 `.idea` 下必错、放项目外正常」正是这个闸门。
+ *
+ * 判据直接复用平台那一条（`PsiManager.findDirectory`），保证与平台口径一致。
+ * 探不出来（目录还没进 VFS / 异常）时按「能」处理——保守走原路径，失败还有自愈支 4 兜底；
+ * 这里刻意**不强制 refresh**，避免给每次执行加一次 VFS 刷新。
+ */
+internal fun execDirCanHostPsi(project: Project, dir: java.io.File): Boolean {
+    if (project.isDisposed) return true
+    // 结论按目录路径记忆（内容模型一次会话内基本不变；判错的代价也只是走一次自愈支 4）
+    execDirPsiCapableCache[dir.absolutePath]?.let { return it }
+    if (!dir.exists() && !dir.mkdirs()) return true
+    val dirVf = runCatching {
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)
+    }.getOrNull() ?: return true
+    val capable = runCatching {
+        ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(dirVf)
+        }
+    }.getOrNull() != null
+    execDirPsiCapableCache[dir.absolutePath] = capable
+    return capable
+}
+
+/** [execDirCanHostPsi] 的按目录记忆（IDE 会话级；内容模型变更属罕见事件，判错只多走一次自愈）。 */
+private val execDirPsiCapableCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
 internal fun DataSourceSelector.projectExecFile(
     project: Project,
     sql: String,
@@ -2091,7 +2123,13 @@ internal fun DataSourceSelector.projectExecFile(
         return null
     }
     // R6：项目根备用落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
-    val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
+    // 2026.3 起平台有 shouldCreatePsi 闸门：父目录不在内容模型里（`.idea` 被 excluded 的常见形态）
+    // 就不给 PSI。这里先探一次，能省掉「写 .idea → 建不出 PSI → 撞三轮自愈」的几秒。
+    val mustUseRoot = preferProjectRoot || !execDirCanHostPsi(
+        project,
+        java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
+    )
+    val rootDir = if (mustUseRoot) java.io.File(base, ".sql-visualizer") else null
     val dir = rootDir?.let { java.io.File(it, "exec") }
         ?: java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
     if (!dir.exists() && !dir.mkdirs()) {
