@@ -38,6 +38,10 @@ internal object IbatisStatementPreview {
             statementId = tag.getAttributeValue("id"),
             statementTagName = tag.name,
             statementOrdinal = statementOrdinalOf(tag),
+            // T-IbatisParamClassQuote：PSI 上下文 + `parameterClass` 交给服务——裸 `#name#` 的类型
+            // （引号）只能从参数类的字段类型推，XML 属性里本来就有，此前没人消费
+            project = tag.project,
+            parameterClass = tag.getAttributeValue("parameterClass"),
         )
 
     /**
