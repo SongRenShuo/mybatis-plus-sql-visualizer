@@ -1,10 +1,14 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.update.DevUpdateMode
+import cn.song.mybatisplus.visualizer.update.LocalPackage
+import cn.song.mybatisplus.visualizer.update.LocalPackageScanner
+import cn.song.mybatisplus.visualizer.update.LocalUpdateDir
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
 import cn.song.mybatisplus.visualizer.update.PluginVersion
+import cn.song.mybatisplus.visualizer.update.ScanResult
 import cn.song.mybatisplus.visualizer.update.UpdateManifest
 import cn.song.mybatisplus.visualizer.update.UpdateSource
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -18,6 +22,7 @@ import com.intellij.openapi.progress.util.ProgressIndicatorBase
 import com.intellij.ui.components.labels.LinkLabel
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.RestartDialogImpl
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
@@ -47,14 +52,21 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     internal enum class State { Idle, Checking, UpToDate, Available, Downloading, Installed, InstalledLive, Failed }
 
-    /** 本次（最近一次）检查走的通道（T-DevUpdateChannel）：决定读哪个清单与状态行后缀。 */
-    internal enum class Channel { STABLE, PREVIEW }
+    /**
+     * 本次（最近一次）检查走的通道（T-DevUpdateChannel / T-LocalUpdateDir）：决定读哪个来源
+     * 与状态行后缀。LOCAL = 本地安装包目录（T-LocalUpdateDir）。
+     */
+    internal enum class Channel { STABLE, PREVIEW, LOCAL }
 
-    /** 最近一次检查所用通道（渲染时给状态行加「（开发版通道）」后缀）。 */
+    /** 最近一次检查所用通道（渲染时给状态行加「（开发版通道）」「（本地目录）」后缀）。 */
     internal var channel: Channel = Channel.STABLE
         private set
 
     private var pendingManifest: UpdateManifest? = null
+
+    /** T-LocalUpdateDir：本地通道的待装包（[runInstall] 按通道分流取用）。 */
+    internal var pendingLocalPackage: LocalPackage? = null
+        private set
 
     private var failureReason: String? = null
 
@@ -81,9 +93,62 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     /** 重启回调 seam（T-M28.1：测试注入 fake 不弹原生重启确认框）。 */
     internal var restartAction: () -> Unit = { RestartDialogImpl.restartWithConfirmation() }
 
+    /**
+     * 本地目录扫描编排 seam（T-LocalUpdateDir）：测试注入 fake 不触盘；默认真实扫描。
+     * 入参为目录原文（[localDirField] 当前文本），产出 [ScanResult]——状态行与状态机共用同一读数。
+     */
+    internal var localScanRunner: (String) -> ScanResult =
+        { dir -> LocalPackageScanner.scan(dir, PluginVersion.current(), LocalPackageScanner.sharedCache, platformPluginsDir()) }
+
+    /** 本地安装编排 seam（T-LocalUpdateDir：测试注入 fake 不触平台安装；默认真实 [PluginUpdateRunner.installFromLocal]）。 */
+    internal var localInstallRunner: (LocalPackage, ProgressIndicator?) -> PluginUpdateRunner.InstallResult =
+        { pkg, indicator -> PluginUpdateRunner.installFromLocal(pkg, indicator) }
+
+    /** 打开目录 seam（T-LocalUpdateDir：测试注入断言；默认平台 BrowserUtil 打开目录 URI）。 */
+    internal var localDirectoryOpener: (java.nio.file.Path) -> Unit = { dir ->
+        com.intellij.ide.BrowserUtil.open(dir.toUri().toString())
+    }
+
+    private fun platformPluginsDir(): java.nio.file.Path? =
+        runCatching { com.intellij.openapi.application.PathManager.getPluginsDir() }.getOrNull()
+
     internal val versionLabel = JBLabel()
     internal val autoCheckCheck = JCheckBox()
     internal val checkButton = JButton()
+
+    // ------------------------------------------------------------------
+    // 本地安装包目录（T-LocalUpdateDir）：控件 + 校验状态行 + 防抖
+    // ------------------------------------------------------------------
+
+    internal val localDirField = JBTextField(26)
+
+    /** 行内标签（面板统一标签列装不下嵌套行，这里自带一个；搜索索引经同 key 配对，SettingsPanelSearchableGuardTest）。 */
+    internal val localDirLabel = JBLabel()
+
+    internal val browseLocalDirButton = JButton()
+    internal val openLocalDirButton = JButton()
+    internal val localCheckButton = JButton()
+
+    /** 目录合法性/扫描状态行（EDT 单点渲染 [renderLocalDirStatus]；动态文案，不进搜索索引）。 */
+    internal val localDirStatusLabel = JBLabel(" ")
+
+    /** 最近一次扫描读数（语言切换 [updateTexts] 重渲染状态行用；null = 尚未扫过）。 */
+    private var lastLocalScan: ScanResult? = null
+
+    /** 输入防抖（EDT 单发定时器；[disposeUiResources] 必须停掉，防面板销毁后回调写 UI）。 */
+    private val localDirDebounceTimer = javax.swing.Timer(LOCAL_DIR_DEBOUNCE_MS) { validateLocalDirAsync() }.apply {
+        isRepeats = false
+    }
+
+    /** 本地安装包目录行容器（标签 + 字段 + 浏览 + 打开 + 检测；状态行单独一行，见 [localDirStatusLabel]）。 */
+    internal val localDirRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+        isOpaque = false
+        add(localDirLabel)
+        add(localDirField)
+        add(browseLocalDirButton)
+        add(openLocalDirButton)
+        add(localCheckButton)
+    }
 
     /**
      * 「检测更新（开发版）」按钮（T-DevUpdateChannel）：构造即隐藏，`DevUpdateMode.isEnabled()`
@@ -167,6 +232,15 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         checkPreviewButton.addActionListener { runCheck(Channel.PREVIEW) }
         installButton.addActionListener { runInstall() }
         restartButton.addActionListener { restartIde() }
+        // T-LocalUpdateDir：本地目录行交互（浏览/打开/检测 + 输入防抖校验）
+        browseLocalDirButton.addActionListener { browseLocalDir() }
+        openLocalDirButton.addActionListener { openLocalDir() }
+        localCheckButton.addActionListener { runCheck(Channel.LOCAL) }
+        localDirField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent?) = scheduleLocalDirValidation()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent?) = scheduleLocalDirValidation()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = scheduleLocalDirValidation()
+        })
         // T-ErrReport：报告问题（手动形态，无异常预填）
         reportProblemButton.addActionListener {
             cn.song.mybatisplus.visualizer.feedback.FeedbackReporting.openManualDialog()
@@ -174,6 +248,12 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         buildLayout()
         resetState()
         updateTexts()
+    }
+
+    /** 输入防抖入口：重置单发定时器（400ms 内连续输入只触发最后一次，计划 §3.5）。 */
+    private fun scheduleLocalDirValidation() {
+        localDirDebounceTimer.stop()
+        localDirDebounceTimer.start()
     }
 
     // ------------------------------------------------------------------
@@ -205,6 +285,9 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             add(installButton)
             add(statusLabel)
         })
+        // T-LocalUpdateDir：本地安装包目录行（版本信息正下方，计划 §3.5）
+        row(localDirRow)
+        row(localDirStatusLabel)
         row(autoCheckCheck)
         row(progressBar)
         row(notesContainer)
@@ -231,6 +314,9 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             is CheckResult.Available -> {
                 pendingManifest = result.manifest
                 notesArea.text = renderNotes(result.manifest)
+                // T-LocalUpdateDir：远端通道独占「变更日志 + Gitee 链接」表头；本地通道渲染时另设
+                notesTitleLabel.text = MpSqlVisualizerBundle.message("settings.update.changelog")
+                giteeLink.isVisible = true
                 state = State.Available
             }
             CheckResult.UpToDate -> {
@@ -245,6 +331,188 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             }
         }
         renderState()
+    }
+
+    /**
+     * 本地扫描结果 → 状态机渲染（T-LocalUpdateDir，EDT；测试直接调用）。
+     * DirInvalid/Empty/NoValidPackage/Failed 都归 [State.Failed]（failureReason 用结构化原因，
+     * failureKind 置 null 走通用 checkFailed 分支）；Available 时置 [pendingLocalPackage]，
+     * 日志区显示本地包详情行（无 changeNotes，不放 Gitee 链接）。
+     */
+    internal fun renderLocalCheck(result: ScanResult) {
+        notPublished = false
+        failureKind = null
+        pendingManifest = null
+        pendingLocalPackage = null
+        when (result) {
+            ScanResult.Disabled -> {
+                state = State.Idle
+                renderState()
+                return
+            }
+            is ScanResult.Available -> {
+                pendingLocalPackage = result.latest
+                notesArea.text = MpSqlVisualizerBundle.message(
+                    "settings.update.local.package",
+                    result.latest.fileName,
+                    renderFileSize(result.latest.sizeBytes),
+                )
+                notesTitleLabel.text = MpSqlVisualizerBundle.message("settings.update.local.package.title")
+                giteeLink.isVisible = false
+                state = State.Available
+            }
+            is ScanResult.UpToDate -> state = State.UpToDate
+            is ScanResult.DirInvalid -> {
+                state = State.Failed
+                failureReason = describeLocalDirCheck(result.check)
+            }
+            is ScanResult.Empty -> {
+                state = State.Failed
+                failureReason = MpSqlVisualizerBundle.message("settings.update.local.empty")
+            }
+            is ScanResult.NoValidPackage -> {
+                state = State.Failed
+                failureReason = MpSqlVisualizerBundle.message("settings.update.local.noValid", result.skipped)
+            }
+            is ScanResult.Failed -> {
+                state = State.Failed
+                failureReason = result.reason
+            }
+        }
+        renderState()
+    }
+
+    /** 目录合法性/扫描状态行渲染（EDT 单点；只动 [localDirStatusLabel]，不翻状态机）。 */
+    internal fun renderLocalDirStatus(result: ScanResult) {
+        lastLocalScan = result
+        val status: String
+        when (result) {
+            ScanResult.Disabled -> {
+                localDirStatusLabel.text = MpSqlVisualizerBundle.message("settings.update.local.disabled")
+                localDirStatusLabel.toolTipText = null
+                return
+            }
+            is ScanResult.DirInvalid -> status = describeLocalDirCheck(result.check)
+            is ScanResult.Empty -> status = MpSqlVisualizerBundle.message("settings.update.local.empty")
+            is ScanResult.NoValidPackage -> status = MpSqlVisualizerBundle.message("settings.update.local.noValid", result.skipped)
+            is ScanResult.UpToDate -> status = MpSqlVisualizerBundle.message(
+                "settings.update.local.ready.upToDate", result.total, result.latest.version,
+            )
+            is ScanResult.Available -> status = MpSqlVisualizerBundle.message(
+                "settings.update.local.ready", result.total, result.latest.version,
+            )
+            is ScanResult.Failed -> status = result.reason
+        }
+        localDirStatusLabel.text = status
+        localDirStatusLabel.toolTipText = buildLocalStatusTooltip(result)
+    }
+
+    /** 状态行 tooltip：跳过明细 + 截断提示（计划 §3.3 规则 2「不静默吞」）。 */
+    private fun buildLocalStatusTooltip(result: ScanResult): String? {
+        val samples = when (result) {
+            is ScanResult.NoValidPackage -> result.skippedSamples
+            else -> emptyList()
+        }
+        val truncated = when (result) {
+            is ScanResult.NoValidPackage -> result.truncated
+            is ScanResult.UpToDate -> result.truncated
+            is ScanResult.Available -> result.truncated
+            else -> false
+        }
+        val parts = buildList {
+            if (samples.isNotEmpty()) {
+                add(MpSqlVisualizerBundle.message("settings.update.local.skippedDetail", samples.joinToString("；")))
+            }
+            if (truncated) {
+                add(MpSqlVisualizerBundle.message("settings.update.local.truncated", LocalPackageScanner.MAX_CANDIDATES))
+            }
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("\n")
+    }
+
+    /** DirCheck 各态 → 面向用户的一句原因（i18n）。 */
+    private fun describeLocalDirCheck(check: LocalUpdateDir.DirCheck): String = when (check) {
+        LocalUpdateDir.DirCheck.Disabled ->
+            MpSqlVisualizerBundle.message("settings.update.local.disabled")
+        is LocalUpdateDir.DirCheck.InvalidPath ->
+            MpSqlVisualizerBundle.message("settings.update.local.invalidPath", check.reason)
+        LocalUpdateDir.DirCheck.EnvVarUnsupported ->
+            MpSqlVisualizerBundle.message("settings.update.local.envVar")
+        LocalUpdateDir.DirCheck.Relative ->
+            MpSqlVisualizerBundle.message("settings.update.local.relative")
+        LocalUpdateDir.DirCheck.NotFound ->
+            MpSqlVisualizerBundle.message("settings.update.local.notFound")
+        LocalUpdateDir.DirCheck.Inaccessible ->
+            MpSqlVisualizerBundle.message("settings.update.local.inaccessible")
+        LocalUpdateDir.DirCheck.NotDirectory ->
+            MpSqlVisualizerBundle.message("settings.update.local.notDirectory")
+        LocalUpdateDir.DirCheck.NotReadable ->
+            MpSqlVisualizerBundle.message("settings.update.local.notReadable")
+        LocalUpdateDir.DirCheck.InsidePluginsDir ->
+            MpSqlVisualizerBundle.message("settings.update.local.insidePluginsDir")
+        is LocalUpdateDir.DirCheck.Ok -> ""
+    }
+
+    /** 文件大小展示（KB/MB 一位小数；与通道无关的纯展示）。 */
+    private fun renderFileSize(bytes: Long): String = when {
+        bytes >= 1024 * 1024 -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024 -> String.format("%.0f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
+    /**
+     * 输入防抖到期：BGT 跑一遍扫描（合法性 + 包发现），EDT 回渲染状态行。
+     * 只动 [localDirStatusLabel]，**不翻状态机**——状态机只在用户点「检测本地更新」或启动检测时前进。
+     */
+    private fun validateLocalDirAsync() {
+        val dirRaw = localDirField.text
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            val result = runCatching { localScanRunner(dirRaw) }.getOrElse {
+                ScanResult.Failed(it.message ?: it.toString())
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                if (isDisplayable) renderLocalDirStatus(result)
+            }
+        }
+    }
+
+    /** 浏览目录（照抄 browseAutoSavePath 形态：只选目录，起始 user.home）。 */
+    private fun browseLocalDir() {
+        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(
+            false, true, false, false, false, false,
+        ).withTitle(MpSqlVisualizerBundle.message("settings.update.localDir.browse.tip"))
+        val baseDir = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .findFileByIoFile(java.io.File(System.getProperty("user.home")))
+        val dir = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, baseDir)
+        if (dir != null) {
+            localDirField.text = dir.path
+        }
+    }
+
+    /** 打开目录（配置合法才开；非法态状态行已给原因，不弹窗）。 */
+    private fun openLocalDir() {
+        val check = LocalUpdateDir.parseWithPlatformPluginsDir(localDirField.text)
+        if (check is LocalUpdateDir.DirCheck.Ok) {
+            runCatching { localDirectoryOpener(check.dir) }
+                .onFailure { localDirStatusLabel.text = it.message ?: it.toString() }
+        } else {
+            renderLocalDirStatus(ScanResult.DirInvalid(check))
+        }
+    }
+
+    /**
+     * 持久化值：可解析则存归一路径（`~` 展开后、normalize 过），错误态存 trim 原文——
+     * 重开页面后状态行仍能按原文报出原因（计划 §3.1）。
+     */
+    internal fun normalizedDirForPersist(): String {
+        val raw = localDirField.text.trim()
+        val check = LocalUpdateDir.parseWithPlatformPluginsDir(raw)
+        return if (check is LocalUpdateDir.DirCheck.Ok) check.dir.toString() else raw
+    }
+
+    /** 面板销毁钩子（[PluginSettingsPanel.disposeResources] 调用）：停防抖定时器防销毁后回写。 */
+    internal fun disposeUiResources() {
+        localDirDebounceTimer.stop()
     }
 
     /** 日志区内容：changeNotes + 兼容性警告（sinceBuild 高于当前 IDE 构建时提示不阻塞）。 */
@@ -284,6 +552,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         val done = s == State.Installed || s == State.InstalledLive
         checkButton.isEnabled = !done && s != State.Checking && s != State.Downloading
         checkPreviewButton.isEnabled = checkButton.isEnabled
+        localCheckButton.isEnabled = checkButton.isEnabled
         installButton.isVisible = s == State.Available || s == State.Downloading
         installButton.isEnabled = s == State.Available
         restartButton.isVisible = s == State.Installed
@@ -296,7 +565,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             State.Checking -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.checking")
             State.UpToDate -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.upToDate")
             State.Available -> statusLabel.text =
-                MpSqlVisualizerBundle.message("settings.update.available", pendingManifest?.version ?: "?")
+                MpSqlVisualizerBundle.message("settings.update.available", pendingVersion() ?: "?")
             State.Downloading -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.downloading")
             State.Installed -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
             State.InstalledLive -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installedLive")
@@ -319,9 +588,15 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             }
             State.Idle -> statusLabel.text = " "
         }
-        // T-DevUpdateChannel：开发版通道的检查走同一条状态机，只在文案尾巴标出通道，避免误读
-        if (channel == Channel.PREVIEW && s != State.Idle) {
-            statusLabel.text = statusLabel.text + MpSqlVisualizerBundle.message("settings.update.channel.preview")
+        // T-DevUpdateChannel / T-LocalUpdateDir：三条通道共用同一状态机，只在文案尾巴标出通道避免误读
+        when (channel) {
+            Channel.PREVIEW -> if (s != State.Idle) {
+                statusLabel.text = statusLabel.text + MpSqlVisualizerBundle.message("settings.update.channel.preview")
+            }
+            Channel.LOCAL -> if (s != State.Idle) {
+                statusLabel.text = statusLabel.text + MpSqlVisualizerBundle.message("settings.update.channel.local")
+            }
+            Channel.STABLE -> Unit
         }
         // R62：兜底链接行在「检查失败且通道缺失」或「包未发布」态可见（网络态/其他安装失败/其他态隐藏）
         fallbackLinksContainer.isVisible = s == State.Failed && (
@@ -347,6 +622,21 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         giteeLink.text = MpSqlVisualizerBundle.message("settings.update.viewOnGitee")
         reportProblemButton.text = MpSqlVisualizerBundle.message("settings.update.reportProblem")
         feedbackPoolLink.text = MpSqlVisualizerBundle.message("settings.update.feedbackPool")
+        // T-LocalUpdateDir：本地目录行文案（按钮 + 状态行按最近读数重渲染）
+        localDirLabel.text = MpSqlVisualizerBundle.message("settings.update.localDir")
+        localDirLabel.toolTipText = MpSqlVisualizerBundle.message("settings.update.localDir.tip")
+        browseLocalDirButton.text = MpSqlVisualizerBundle.message("settings.update.localDir.browse")
+        browseLocalDirButton.toolTipText = MpSqlVisualizerBundle.message("settings.update.localDir.browse.tip")
+        openLocalDirButton.text = MpSqlVisualizerBundle.message("settings.update.localDir.open")
+        localCheckButton.text = MpSqlVisualizerBundle.message("settings.update.localDir.check")
+        localCheckButton.toolTipText = MpSqlVisualizerBundle.message("settings.update.localDir.check.tip")
+        val scan = lastLocalScan
+        if (scan == null) {
+            localDirStatusLabel.text = " "
+            localDirStatusLabel.toolTipText = null
+        } else {
+            renderLocalDirStatus(scan)
+        }
         // P-3 的钉子：rebuild 只重建文本，可见性必须按**当前解锁态**重算，否则切语言按钮消失
         applyDevVisibility()
         renderState()
@@ -376,6 +666,13 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         notPublished = false
         channel = Channel.STABLE
         state = State.Idle
+        // T-LocalUpdateDir：本地目录回填 + 状态行复位 + 立即校验一次（防抖 400ms 后出结果）
+        localDirField.text = settings.state.localUpdateDir
+        lastLocalScan = null
+        pendingLocalPackage = null
+        localDirStatusLabel.text = " "
+        localDirStatusLabel.toolTipText = null
+        scheduleLocalDirValidation()
         applyDevVisibility()
         renderState()
     }
@@ -385,12 +682,36 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     // ------------------------------------------------------------------
 
     /**
-     * 检查更新（防重入：Checking/Downloading 中忽略）。两个按钮共用本状态机，只有 [channel] 不同：
-     * 正式通道读 `update/update.json`，开发版通道读 `update/preview.update.json`。
+     * 检查更新（防重入：Checking/Downloading 中忽略）。三个按钮共用本状态机，只有 [channel] 不同：
+     * 正式通道读 `update/update.json`，开发版通道读 `update/preview.update.json`，
+     * 本地通道扫 [localDirField] 当前文本（T-LocalUpdateDir——用输入框现值，不要求先点应用）。
      */
     internal fun runCheck(channel: Channel = Channel.STABLE) {
         if (state == State.Checking || state == State.Downloading) return
         this.channel = channel
+        if (channel == Channel.LOCAL) {
+            val dirRaw = localDirField.text
+            state = State.Checking
+            renderState()
+            ProgressManager.getInstance().run(object : Task.Backgroundable(
+                null,
+                MpSqlVisualizerBundle.message("update.task.check"),
+                true,
+            ) {
+                override fun run(indicator: ProgressIndicator) {
+                    val result = runCatching { localScanRunner(dirRaw) }.getOrElse {
+                        ScanResult.Failed(it.message ?: it.toString())
+                    }
+                    ApplicationManager.getApplication().invokeLater {
+                        if (isDisplayable) {
+                            renderLocalDirStatus(result)
+                            renderLocalCheck(result)
+                        }
+                    }
+                }
+            })
+            return
+        }
         val url = if (channel == Channel.PREVIEW) UpdateSource.previewManifestUrl() else UpdateSource.manifestUrl()
         state = State.Checking
         renderState()
@@ -408,10 +729,36 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         })
     }
 
-    /** 下载并安装（进度条 fraction 经 [SectionProgress] 驱动；防重入：Downloading 中忽略）。 */
+    /** 待装版本号（远端 = 清单；本地 = 扫描出的包；状态机渲染共用）。 */
+    private fun pendingVersion(): String? = pendingManifest?.version ?: pendingLocalPackage?.version
+
+    /**
+     * 下载/安装（进度条 fraction 经 [SectionProgress] 驱动；防重入：Downloading 中忽略）。
+     * T-LocalUpdateDir：LOCAL 通道装 [pendingLocalPackage]（走 [localInstallRunner]），
+     * 其余两通道走 [installRunner] 下载链，不改原语义。
+     */
     internal fun runInstall() {
-        val manifest = pendingManifest ?: return
         if (state == State.Downloading) return
+        if (channel == Channel.LOCAL) {
+            val pkg = pendingLocalPackage ?: return
+            state = State.Downloading
+            renderState()
+            val progress = SectionProgress(progressBar)
+            ProgressManager.getInstance().run(object : Task.Backgroundable(
+                null,
+                MpSqlVisualizerBundle.message("update.task.download"),
+                true,
+            ) {
+                override fun run(indicator: ProgressIndicator) {
+                    val result = localInstallRunner(pkg, progress)
+                    ApplicationManager.getApplication().invokeLater {
+                        if (isDisplayable) renderInstall(result)
+                    }
+                }
+            })
+            return
+        }
+        val manifest = pendingManifest ?: return
         state = State.Downloading
         renderState()
         val progress = SectionProgress(progressBar)
@@ -446,3 +793,6 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         }
     }
 }
+
+/** 本地目录输入防抖间隔（计划 §3.5：400ms 内连续输入只触发最后一次）。 */
+private const val LOCAL_DIR_DEBOUNCE_MS = 400

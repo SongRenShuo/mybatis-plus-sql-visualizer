@@ -302,6 +302,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             runCatching { com.intellij.openapi.util.Disposer.dispose(connection) }
         }
         agentStatusConnection = null
+        // T-LocalUpdateDir：停更新分区的本地目录防抖定时器（防销毁后回调写 UI）
+        updateSection.disposeUiResources()
     }
 
     override fun dispose() {
@@ -1183,7 +1185,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || (SECTION_SQL_LOG in sections && isModifiedSqlLog(s))
             || (SECTION_UI in sections && isModifiedUi(s))
             || (SECTION_SHORTCUTS in sections && isModifiedShortcuts())
-            || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
+            || (SECTION_UPDATE_DIAGNOSTICS in sections && (
+                updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate ||
+                    updateSection.localDirField.text.trim() != s.localUpdateDir
+                ))
     }
 
     /** 全局设置不把首个打开项目的方言冒充其他项目；项目唯一时展示决策状态。 */
@@ -1476,6 +1481,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UPDATE_DIAGNOSTICS in sections) {
             s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
+            // T-LocalUpdateDir：可解析则存归一路径（~ 展开后 normalize），错误态存 trim 原文；
+            // 回写同步到输入框，保证 apply 后 isModified 归零（归一值 ≠ 原文时平台 Apply 会常亮）
+            s.localUpdateDir = updateSection.normalizedDirForPersist()
+            updateSection.localDirField.text = s.localUpdateDir
         }
         languagePending = false
         // 强制触发持久化：原地修改 state 属性后，框架可能不检测引用变化导致 XML 未写入（实证：
