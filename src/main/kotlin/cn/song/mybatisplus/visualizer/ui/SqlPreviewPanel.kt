@@ -980,8 +980,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         runCatching {
             cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
         }
-        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
-        Disposer.dispose(this)
+        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅。
+        // T-HiddenBugPerfScan 券 Y2：删除尾部自处置——面板已由宿主挂树（SqlPreviewDialog:62
+        // Disposer.register(disposable, panel)，唯一实例化点），树级联触发本方法时再对正在
+        // 被处置的自身调用 Disposer.dispose(this) 属重入；全仓无 panel.dispose() 直调路径。
     }
 
     // ------------------------------------------------------------------
