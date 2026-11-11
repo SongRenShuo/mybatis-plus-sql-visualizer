@@ -56,7 +56,7 @@ object UpdateJoinConverter : WrapperConverter {
         val unparsedSets = mutableListOf<String>()
         val sets = chain.calls
             .filter { it.methodName in SET_METHODS }
-            .flatMap { parseSet(it, table, mainAlias, unparsedSets) }
+            .flatMap { parseSet(it, table, mainAlias, unparsedSets, project) }
 
         // 联表子句（渲染于 FROM 之后、SET 之前）；T-FS-04：project 透传至类名兜底推断
         val joins = chain.calls
@@ -98,6 +98,7 @@ object UpdateJoinConverter : WrapperConverter {
         table: TableInfo,
         mainAlias: String,
         unparsedSets: MutableList<String>,
+        project: Project?,
     ): List<SetClause> = when (call.methodName) {
         SET, SET_IF_EXISTS -> {
             // 布尔条件前缀剥离：`set(StrUtil.isNotBlank(x), col, val)` / `set(true, col, val)`
@@ -136,7 +137,8 @@ object UpdateJoinConverter : WrapperConverter {
                 return emptyList()
             }
             // T-M23.5：列名按方言引用（联表 setIncrBy/setDecrBy 解析期拼 rawSql）
-            val qualified = withMainAliasIfUnqualified(column, mainAlias).qualifiedName(currentDialect())
+            // T-HiddenBugPerfScan 券 Y6：project 透传（T-FS-04，与 LambdaUpdateConverter 同批）
+            val qualified = withMainAliasIfUnqualified(column, mainAlias).qualifiedName(currentDialect(project))
             val op = if (call.methodName == SET_INCR) "+" else "-"
             listOf(
                 SetClause(
