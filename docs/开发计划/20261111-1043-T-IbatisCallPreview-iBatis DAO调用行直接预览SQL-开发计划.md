@@ -383,10 +383,13 @@ private fun tryIbatisMethodFallback(project: Project, element: PsiElement, sourc
 - 分支/工作树：`t-ibatis-call-preview` @ `.worktrees/t-ibatis-call-preview`（基点 = 计划文档入库提交 `c0cfdc8e`）
 - 提交：`8ad491b8` feat(ibatis): DAO 调用行直接预览 SQL（图标 + 快捷键 + MCP）（13 文件，+789/−92）；
   本文档末尾的 CHANGELOG 与实施记录随收口提交追加
-- 定向读数（test 桶，2026-11-11）：**120 例 0 失败 0 错误 0 跳过**——`IbatisStatementPreviewTest` 9、
+- 合并：`2c931c72` 并入当时 master `73030f3a`（冲突只有 `CHANGELOG.md` 与开发计划索引：前者保留
+  `[Unreleased]` 段于上游 beta 段之前，后者取上游新增两行 + 本行状态改「已实施」）；合并态复跑读数
+  与下方一致
+- 定向读数（test 桶，2026-11-11；合并态复跑）：**121 例 0 失败 0 错误 0 跳过**——`IbatisStatementPreviewTest` 9、
   `IbatisNavigationLineMarkerProvidersTest` 20、`IbatisXmlGutterLineMarkerProviderTest` 14、
   `IbatisGutterHotPathTest` 9、`IbatisXmlPreviewServiceTest` 44、`JdbcTemplateIbatisMutualExclusionTest` 4、
-  `ConvertToSqlActionTest` 8（收口补结构守卫后 9）、`McpSourceLocatorRenderAtLineTest` 8、
+  `ConvertToSqlActionTest` 9（含收口补的顺序守卫）、`McpSourceLocatorRenderAtLineTest` 8、
   `GutterProviderSingleLookupGuardTest` 4
 - 反向验证：预览 marker 产出点置 `if (false && previewEnabled)`（补丁
   `dev-support/reverse-probes/ibatis-callpreview-disable-preview-marker.patch`）→
