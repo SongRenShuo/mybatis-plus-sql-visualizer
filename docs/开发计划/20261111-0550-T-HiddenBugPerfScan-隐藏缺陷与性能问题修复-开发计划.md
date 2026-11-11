@@ -89,8 +89,10 @@ A → B → C → D → E（P1）→ F~X（P2，按 F/G/H/I/K/L/M/N/O/P/Q/R/S/T/
 - P1 券 A~E：9241e0430 / 8d4fbdb58 / 016601b60 / e206097b4 / a7ae24f94——每券「回归测试先红后绿 + 同族定向回归」收口（读数见提交 body）。
 - P2 券 F~X：ad8f3c54e / b0e5fe69d / 38a9683c6 / d9e337be4 / 500730ffa / e545272ea / 21802789c / e487dc735 / 6237755ba / 718c6ead1 / e3e98fc8a / 72362d4b0 / 00f25d6c3 / 446a6b375 / 1c9831fe3 / f639b7a95 / bf9e9bbbb。
 - P3 券 Y1~Y17：a6a6db76f / 09252a5a6 / 2f341f216 / e780838a8 / 268149e37 / 27c69b9a0 / d284620ae / 59ead55f0 / ecc93df6f / f2e00cbde / a88b1020c / 30b238e30 / 72e9ac861 / b5c9464df / d2277ba75（Y15/Y16 同笔）/ c76729072。
-- **拒判 1 项**：券 W 的项目级设置页 loadState(copy)——被 ProjectPluginSettingsConfigurableTest 两例（TFS08/O58）当场打回：该页既有契约是「外部捕获的 state 引用跨多次 apply 存活且持续可变」，换引用使外部引用陈旧。MCP 页照常落地。
+- **拒判 2 项**：①券 W 的项目级设置页 loadState(copy)——被 ProjectPluginSettingsConfigurableTest 两例（TFS08/O58）当场打回：该页既有契约是「外部捕获的 state 引用跨多次 apply 存活且持续可变」，换引用使外部引用陈旧。MCP 页照常落地。
 - **范围收窄 1 项**：券 Y12「接受 OFFSET n ROWS 单独形态」不可行（LimitClause.count 非空、模型不可表达），落地为可行动报错文案，接受面扩大另立项。
+- **拒判补记（testFast 收口轮）**：券 Y7 整体回退（5132ebf9c）——iBatis  占位语法与 MySQL  行注释在本仓不可区分，PlaceholderPositions/SqlCommentStripper 启用 # 注释语义令 IbatisXmlPreviewServiceTest 实证回归（#orgId# 被吞、? 丢失）；占位符扫描全局启用 # 注释语义拒判。
 - **首版实现缺陷如实登记 2 项**：券 M 的反向回扫首版 lineEnd 退步写错（元素恰起于行首时死循环，测试 JVM 挂起 30 分钟暴露，修正为 lineStart-1）；券 S 的尾部窗口首版收窄 F2b 语义被既有测试打回（改混合方案全量兜底）。另 L4 复发多轮（heredoc/双引号串吃反斜杠——补丁一律改走 Write 工具落脚本）。
 - **not run 条款**：①设置面板面（Y15/Y16，L13 平台 UI 测试域）定向已跑、全量 testShards 未跑待收口；②券 Y10 零列实体 Light 夹具未建；③券 Y6 双项目真机场景未跑；④性能券（D/M/Q/S/T）反向探针不适用（无行为差异），以语义回归 + 结构性证据收口，真机大文件基准待后续可选复测；⑤行为型反向探针（reverse_probe.py）抽样见下。
+- **testFast 收口轮（9e009b044）**：首跑 4852 例 6 红——①券 E/F 新增守卫补 FatalErrors.isFatal 上抛；②ConvertToSqlAction（7→0）/GenerateCrudSql（1→0）豁免条目移除、ConvertSqlToJavaAction（1→2）计数更新；③两个新 Guard 命名测试登记 GUARD_CLASSES；④五个新 Light 测试摘无效 @Test（JUnit3 语义）；⑤BrowserUtil 调用面 5→4（券 Y1 合流）；⑥券 Y7 回退（见上）。PruneGuard 全桶并发下计时型偶发超时、单跑 8/0/0 非回归。
 - **环境备注**：工作树跑测试须 `-PmpDemoProjectDir=` 指向主仓兄弟 demo 克隆（相对路径在 .worktrees 下不成立，5 个 Demo* 用例曾因此假红）；本机代理未开，用户级 gradle.properties 代理行临时注释（备份在侧）。
