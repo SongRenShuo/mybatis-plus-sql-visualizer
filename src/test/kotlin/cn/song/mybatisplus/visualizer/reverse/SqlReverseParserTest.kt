@@ -889,6 +889,19 @@ class SqlReverseParserTest {
         assertNull("嵌套子查询应回落 null", join.subQuery)
     }
 
+    @Test
+    fun `OFFSET_ROWS单独形态_报错给可行动文案_券Y12`() {
+        // T-HiddenBugPerfScan 券 Y12：SQL Server 2012+ 合法的 OFFSET n ROWS（无 FETCH）
+        // 模型暂不可表达（LimitClause.count 非空）——保持拒绝但换可行动文案（曾报
+        // 「缺少关键字 FETCH」不可归因）
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t ORDER BY id OFFSET 10 ROWS") }
+        assertEquals(SqlReverseParser.KEY_PARSE, ex.key)
+        org.junit.Assert.assertTrue(
+            "报错应指路成对 FETCH：${ex.detail}",
+            (ex.detail ?: "").contains("FETCH NEXT"),
+        )
+    }
+
     private fun assertThrows(block: () -> Unit): SqlReverseException =
         try {
             block()
