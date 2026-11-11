@@ -66,4 +66,11 @@ class SqlCommentStripperTest {
         assertTrue("应含 LEFT JOIN", result.contains("LEFT JOIN"))
         assertTrue("应含 ON", result.contains(" ON "))
     }
+    @Test
+    fun `井号行注释被剥离`() {
+        // T-HiddenBugPerfScan 券 Y7：MySQL 口径 # 行注释与 -- 同批对齐
+        val out = cn.song.mybatisplus.visualizer.sql.SqlCommentStripper.strip("SELECT 1 # 注释\n, 2")
+        org.junit.Assert.assertEquals("SELECT 1 , 2", out.replace("\n", " ").replace(Regex("\\s+"), " ").trim())
+    }
+
 }

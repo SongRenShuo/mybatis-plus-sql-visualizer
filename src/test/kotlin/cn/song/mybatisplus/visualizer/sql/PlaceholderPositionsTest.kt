@@ -33,6 +33,13 @@ class PlaceholderPositionsTest {
     }
 
     @Test
+    fun `井号行注释内的问号不算占位符`() {
+        // T-HiddenBugPerfScan 券 Y7：MySQL 口径 # 行注释与 -- 同语义
+        assertEquals(listOf(19), placeholderPositions("SELECT 1 # 参数?说明\n, ?"))
+        assertEquals(emptyList<Int>(), placeholderPositions("SELECT 1 #x?y"))
+    }
+
+    @Test
     fun `单引号转义后的问号仍按字面量处理`() {
         // '它''?' 里的 `?` 是字面量；收尾引号之后才是占位符
         assertEquals(listOf(20), placeholderPositions("SELECT '它''?' AS x, ?"))
