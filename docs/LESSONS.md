@@ -292,6 +292,13 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-10)**——用户一句「应该是 GitHub 单到 Gitee 吧」点出方向错，同日两版都受影响。
 
+### L31 探「平台有没有某能力」不许锚实现类名——类名/包名/module 属内部结构，会随版本搬走
+
+**规则**：反射探测平台能力时，锚点必须是平台**对外契约**：EP 名（`com.intellij.mcpServer.mcpToolset`）、设置页 id（`applicationConfigurable` 的 `id` 属性）、插件 id。实现类 FQN 只能出现在**候选链**里并保留旧形态，不能写成唯一判据；`Class.forName` 落空时的提示文案也不得断言「版本不够」——「页面搬走了」和「没装插件」是两回事，用户看到版本断言只会来报「我被拦了」。判据：同一页面上的两个探测（能力横幅 vs 动作按钮）必须指向同一层契约，否则会出现「横幅说平台在，按钮说平台不达标」的自相矛盾帧。
+**证据**：T-McpSettingsJump（`3106e4c6`，2026-11-11 用户真机 2026.3 / `263.7307.200`）：平台 263 把 MCP Server 设置页从 `com.intellij.mcpserver.settings` 搬进新 content module `intellij.mcpserver.frontend`（`required-if-available="intellij.platform.frontend"`）并换包名；旧 FQN 在整安装（lib + plugins，含 `lib/modules/`）**零命中**，而页面 id `com.intellij.mcpserver.settings` 与插件 id `com.intellij.mcpServer` 一字未变。同帧横幅探 `com.intellij.mcpserver.McpToolset`（仍在公开模块 `intellij.mcpserver`）为真，按钮探旧类名为 null ⇒ 页面自相矛盾，提示把根因指成「需要 IDEA 2025.2+」。仓内同款问题还有第二份（`PluginSettingsPanel` 零调用方副本），两处同批修掉。
+**正例**：先 `unzip -l` 扫清「旧类名还在不在、页面 id 变没变、EP 变没变」三件事再动手；修法＝候选链（新形态在前、旧形态在后）→ 平台按 id 打开并选中 → 都失败才提示，且用源码守卫钉住「设置页类名只允许出现在候选链文件」。**反例**：拿某个版本 jar 常量池里抄到的 FQN 当长期契约（本仓 20260915 就是「262 mcpserver.jar 常量池实证」写下这个类名的——当时全对，半年后搬走）。
+**Seen 1× (2026-11-11)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
