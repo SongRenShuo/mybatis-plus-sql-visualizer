@@ -583,7 +583,10 @@ object BatchOperationConverter {
         // 不复用 [modelBuild]：[BatchModel.renderSql] 的 UPDATE 分支把 fixedColumns 硬编码成 WHERE
         // （BatchModel.kt UPDATE 分支），复用会凭空多出 `WHERE id = ?` 与版本条件。
         if (methodName == "update") return buildNoWhereUpdateBatch(call, table)
-        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        // T-HiddenBugPerfScan 券 Y10：零列实体（无字段/全 @TableField(exist=false)）曾
+        // columns.first() 抛 NoSuchElementException 穿透 convert——本文件其余路径
+        // 「宁可 null 不可炸」，convert 合同允许 null = 不预览
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.firstOrNull() ?: return null
         val versionColumn = table.versionColumn
         val setColumns = table.columns.filter { it.columnName != idColumn.columnName && it.columnName != versionColumn }
         val prefix = entityPrefix(call)
@@ -625,7 +628,10 @@ object BatchOperationConverter {
     private fun buildNoWhereUpdateBatch(call: PsiMethodCallExpression, table: TableInfo): BatchBuild? {
         if (!isNullWrapperShape(call)) return null
         val dialect = currentDialect(call.project)
-        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        // T-HiddenBugPerfScan 券 Y10：零列实体（无字段/全 @TableField(exist=false)）曾
+        // columns.first() 抛 NoSuchElementException 穿透 convert——本文件其余路径
+        // 「宁可 null 不可炸」，convert 合同允许 null = 不预览
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.firstOrNull() ?: return null
         val versionColumn = table.versionColumn
         val setColumns = table.columns.filter {
             it.columnName != idColumn.columnName && it.columnName != versionColumn
@@ -725,7 +731,10 @@ object BatchOperationConverter {
         // 非 null 字面量实参（wrapper 变量 / 内联链 / 其它对象）→ null：由 Wrapper 链路径承载，绝不退化成无 WHERE。
         if (methodName == "delete" || methodName == "remove") return buildNoWhereDeleteBatch(call, table, injectLogicDelete)
         val dialect = currentDialect(call.project)
-        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        // T-HiddenBugPerfScan 券 Y10：零列实体（无字段/全 @TableField(exist=false)）曾
+        // columns.first() 抛 NoSuchElementException 穿透 convert——本文件其余路径
+        // 「宁可 null 不可炸」，convert 合同允许 null = 不预览
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.firstOrNull() ?: return null
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
         val singleId = methodName in SINGLE_ID_DELETE_METHODS
         val (idWhere, idParams) = if (singleId) {
@@ -793,9 +802,12 @@ object BatchOperationConverter {
         table: TableInfo,
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
-    ): BatchBuild {
+    ): BatchBuild? {
         val dialect = currentDialect(call.project)
-        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        // T-HiddenBugPerfScan 券 Y10：零列实体（无字段/全 @TableField(exist=false)）曾
+        // columns.first() 抛 NoSuchElementException 穿透 convert——本文件其余路径
+        // 「宁可 null 不可炸」，convert 合同允许 null = 不预览
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.firstOrNull() ?: return null
         // T-M23.5：全列清单/表名/条件列名按方言引用（用户实测：批量 SELECT 未处理关键字列）
         val selectColumns = table.columns.joinToString(", ") { dialect.quoteIfKeyword(it.columnName) }
         val logicCond = if (injectLogicDelete) table.logicDeleteColumn?.let { "${dialect.quoteIfKeyword(it)} = 0" } else null
@@ -851,8 +863,11 @@ object BatchOperationConverter {
      * 取消勾选 → 纯 INSERT 新记录路径——[BatchModel.conflictColumn] 判活跃态）；
      * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
-    private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
-        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+    private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild? {
+        // T-HiddenBugPerfScan 券 Y10：零列实体（无字段/全 @TableField(exist=false)）曾
+        // columns.first() 抛 NoSuchElementException 穿透 convert——本文件其余路径
+        // 「宁可 null 不可炸」，convert 合同允许 null = 不预览
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.firstOrNull() ?: return null
         val prefix = entityPrefix(call)
         val toggleColumns = batchColumns(prefix, table, table.columns) { true }
         val paramGroups = buildParamGroups(table.columns.map { it.columnName })
