@@ -12,7 +12,7 @@
 
 ## 一、需求拆解
 
-一句话：用户 SQL 里的 `'%' || #GROUP_NAME# || '%'`（Oracle/达梦/PG 字符串拼接）在预览里被显示成 `'%' | | '弘博' | | '%'`——**一个 `||` 运算符被拆成了两个 `|` 字符、中间补了一个空格**。这不是「多打了个空格」的观感问题：`| |` 在 Oracle 里是语法错误，而预览面板的编辑器文本同时就是复制与执行的输入源。
+一句话：用户 SQL 里的 `'%' || #GROUP_NAME# || '%'`（Oracle/达梦/PG 字符串拼接）在预览里被显示成 `'%' | | '弘博' | | '%'`——**一个 `||` 运算符被拆成了两个 `|` 字符、中间补了一个空格**。这不是「多打了个空格」的观感问题：`| |` 这种形态在 PG 系直接报错（Oracle 反而宽容，11g/23c 实测仍能执行，见 §十三 的真库读数），而预览面板的编辑器文本同时就是复制与执行的输入源。
 
 做三件事：
 
@@ -213,7 +213,7 @@ private fun scanOperator() {
   - `amount : : numeric`、`a <= > b`
   恢复实现后 **BUILD SUCCESSFUL**（13/13），再跑整组 373/0/0。
 - **反向验证抓到一处假绿（当轮已修）**：首轮词法用例把 operator token 的文本**拼接**后比对，两个相邻 `|` 拼起来也是 `||` ⇒ 摘掉修复该用例照绿。改成断言「operator token **个数 = 1** 且文本相等」，反向时如期变红（这也印证了「合成样本只能证规则看得见我造的形态」这条仓规）。
-- **not run（交用户真机验收）**：runIde 沙盒里三面走查——① 同一 iBatis 语句预览里 `||` 原样显示；② 复制可执行 SQL 产物干净；③ 直接执行不被语法错拦下。
+- **not run（交用户真机验收，执行面已于 §十三 补验）**：runIde 沙盒里三面走查——① 同一 iBatis 语句预览里 `||` 原样显示；② 复制可执行 SQL 产物干净；③ 直接执行不被语法错拦下。
 
 ## 十一、真机验收步骤（交给用户，助手不自评）
 
@@ -246,3 +246,14 @@ GROUP BY CMIOT_GROUP_ID, GROUP_NAME, GROUP_ID
 ```
 
 沙盒许可就位（本轮实测补充的可复用细节）：agent 走 `-Pmpvs.licenseAgent=C:/Users/USER/.7t/patch/qwdn-afb.jar`，`jcmd VM.command_line` 能读到 `-javaagent:…qwdn-afb.jar`；**`idea.key` 实际生效位置是 `build/<桑盒>/<工程名>/<IU-版本>/config/idea.key`**——放到 `build/<桑盒>/config/` 不生效，会照弹 Manage Licenses「There are no valid licenses」。
+
+## 十三、执行面补充验收（2026-11-11，262 沙盒 + 真 Oracle）
+
+用户要求补上「绑定数据源后继续验」。做法与读数：
+
+- **沙盒**：`-PgifRecord=true`（2026.2.1 平台，`build/MPSV-GifFresh`），demo 工程同前。临时夹具保留（用户 2026-11-11 明示「这个夹具可以留下 不用清掉」）：`gryQryCmiotGroupInfo`（带 `#GROUP_NAME#` 与 `ROWNUM`）+ `concatSmoke`（无参数版）。
+- **数据源**：在 `ibatis2-demo/.idea/dataSources.xml` 写注册表条目（Oracle XE 11g，`jdbc:oracle:thin:@114.66.55.245:20101/XE`），Oracle 驱动从本机 2026.3 的 `jdbc-drivers/Oracle` 整目录拷进沙盒 `config/jdbc-drivers/`（免下载）。**落点差异**：数据源配置要写**当前被打开工程**的 `.idea`（`ibatis2-demo/.idea`），写到父仓 `.idea` 里沙盒看不到（首轮踩到，Database 工具窗显示 No data sources）。
+- **表**：`BS_CMIOTGROUP_SUCCESS` 已在真库 `dbx_test` 上建好并灌 2 行（`弘博科技` / `别的组`），用 DBX MCP 建与查。
+- **A3 执行面（真库）**：面板里同一语句的渲染产物 `SELECT GROUP_ID, GROUP_NAME FROM BS_CMIOTGROUP_SUCCESS WHERE GROUP_NAME LIKE '%' || '弘博' || '%'` 在 Oracle XE 11g 上执行返回 `10 / 弘博科技`（1 行）；在 Oracle Free 23 上 `SELECT '%' | | '弘博' | | '%'` 也返回 `%弘博%`。
+- **A3-GUI 未闭环（平台面限制，如实登记）**：预览面板底部那排按钮（`执行 SQL` / `复制 SQL` / `取消`）在 262 沙盒里对合成输入全无反应——同面板顶部按钮（`压缩` / `执行计划`）点得动，说明是这一排控件的命中面问题，不是对话框整体失焦；robot-server 对该窗口组件也拿不到屏幕链（`component_screen_center` 返回 None）。因此「IDE → Database 控制台」这一跳没有实测，执行能力改由**真库同文本执行**收口（执行链本身取的就是编辑器文本，`SqlPreviewPanelExecution.kt:1261-1266`）。
+- **顺带纠正一处先前判断（重要）**：立项时把 `| |` 写成「Oracle 下语法错误」——**实测不成立**。Oracle 11g 与 23c 都接受运算符内部带空格（`'%' | | '弘博' | | '%'` 照常返回结果）；真正会炸的是 PG 系：PostgreSQL 16.14 上同形直接 `ERROR: operator does not exist: | unknown`。所以本缺陷的准确定性是「产物失真 + 跨库不可执行面（PG/GaussDB/Vastbase/瀚高）」而非「Oracle 必然语法错」，发行文案已按此订正。
