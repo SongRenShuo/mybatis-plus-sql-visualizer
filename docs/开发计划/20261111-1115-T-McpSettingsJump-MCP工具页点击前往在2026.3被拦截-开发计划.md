@@ -1,6 +1,7 @@
 # T-McpSettingsJump：MCP 工具页「点击前往」在 2026.3 被拦下——开发计划
 
 - 立项：2026-11-11
+- 状态：已实施（`3106e4c6`，分支 `t-mcp-settings-jump`；定向 27/0/0/0 含反向验证恰 1 红）；**待 2026.3 真机验收（A2/A3）**
 - 触发：用户真机（IDEA 2026.3，`263.7307.200`）在 设置 → 工具 → SQL Visualizer → MCP 工具 页点
   「点击前往」，弹出 **「需要 IDEA 2025.2+ 并启用 MCP Server 插件，才能管理 SQL Visualizer 的 MCP 工具。」**
   用户原话是「点击前往被拦截了」——版本显然够，插件也内置在场。
@@ -273,3 +274,33 @@ private fun openMcpServerSettings() {
 - 不把 MCP 页从本插件设置树里摘掉（横幅与门控仍是本插件自有的单一真相源，与平台页互补）。
 - 不为这条跳转新增 bundle 键或改弹窗白名单（两种成因合并成一条文案足够，且少一处守卫改动）。
 - 不承诺「未来平台再搬家也不会坏」：本次只保证**判据不再是单点**（类名候选 + 页面 id 双路）。
+
+## 九、实施记录（2026-11-11，分支 `t-mcp-settings-jump`）
+
+提交 `3106e4c6`（6 文件，+197/−41）。落地情况与计划一致：
+
+| 计划项 | 落地 |
+| --- | --- |
+| T1 单一入口 | 新增 `mcp/McpSettingsNavigation.kt`：`MCP_SETTINGS_PAGE_ID` + `MCP_SETTINGS_CONFIGURABLE_CLASSES`（新形态在前）+ `McpSettingsOpenResult`；类名路 → `ShowSettingsUtilImpl` 按 id → 公开 `ShowSettingsUtil` 按 id → `UNAVAILABLE`，末档打一行 warn（候选链与 id 全量入日志，供真机排障） |
+| T2 调用点 | `McpConfigurable.openMcpServerSettings()` 改调入口，只把 `UNAVAILABLE` 翻译成一次 warning；KDoc 写明「文案不再断言版本」的依据 |
+| T3 旧副本 | `PluginSettingsPanel.openMcpServerSettings()` 收成一行委托，KDoc 注明「当前无调用方，保留为历史入口的等价实现」 |
+| T2 文案 | `settings.mcp.unavailable` 双语改写为「未找到 MCP Server 设置页：请确认内置 MCP Server 插件已启用，或在设置中搜索『MCP Server』」（键名不动，幽灵键守卫零改动） |
+| T4 用例 | `McpSettingsNavigationTest` 3 例：候选链覆盖+顺序、页面 id 常量、设置页类名只允许出现在候选链文件 |
+| T5 反向验证 | 候选链临时改回单条旧 FQN → 恰 1 红（`候选链覆盖新旧两形态且新形态在前`），恢复后复绿 |
+
+测试读数（工作树，`-Pkotlin.compiler.execution.strategy=in-process`）：
+
+```
+McpSettingsNavigationTest   3 tests, 0 failures, 0 errors
+BannedApiSourceScanTest    15 tests, 0 failures, 0 errors   （弹窗白名单未破坏）
+McpScopeSourceScanTest      5 tests, 0 failures, 0 errors   （mcpserver 引用仍限 mcp 包）
+SettingsRealityGuardTest    4 tests, 0 failures, 0 errors   （bundle 幽灵键未破坏）
+合计 27/0/0/0
+```
+
+未做（留给验收/后续）：
+
+- **A2 真机未跑**：能不能落到目标页并选中只有 2026.3 实机能判；本次只证明「候选链 + 回退顺序」在逻辑上成立、降级路径不抛异常。
+- **V1 未证**：新 FQN 能否从本插件 classloader 加载未在真机确认（横幅探针已证同一插件里 `McpToolset` 可加载，但那是另一个 content module）；若加载不到，自动走 id 路，功能不受影响。
+- **V3 未证**：平台在页面 id 不存在时的行为仍未实验（见 A2 的三档判读）。
+- **A3 未跑**：本机无 2026.2 安装，旧版本回归面只靠「候选链保留老 FQN」这条静态保证。

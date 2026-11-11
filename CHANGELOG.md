@@ -12,6 +12,7 @@
 - **OceanBase 的 EXPLAIN 计划树给出索引建议（T-OBExplainFormat，9219ca61）**：与 MySQL 同口径
 
 ### Fixed
+- **2026.3 上 MCP 工具页「点击前往」被拦下（T-McpSettingsJump，3106e4c6）**：设置 → 工具 → SQL Visualizer → MCP 工具 →「点击前往」弹「需要 IDEA 2025.2+ 并启用 MCP Server 插件」，而版本与插件都没有问题。根因是平台 263 把 MCP Server 设置页搬进新 content module `intellij.mcpserver.frontend` 并换了包名，旧类名 `com.intellij.mcpserver.settings.McpServerSettingsConfigurable` 在 263.7307.200 整安装零命中，按类名写死的探测恒 null 即被当成「平台不达标」。现在按「类名候选链（新形态在前、旧形态在后）→ 平台按页面 id 打开并选中 → 都失败才提示」寻址；提示文案同步去掉版本断言，改为「确认内置 MCP Server 插件已启用，或在设置中搜索 MCP Server」。11 个 MCP 工具的注册与门控未动（插件 id 与 `mcpToolset` / `mcpToolFilterProvider` EP 在 263 契约一致）
 - **2026.3 上「临时 SQL 文件建不出 PSI」系列（T-ExecPsiGate R4~R7，c46d5907 / 23457844 / 908623ed / 61205cf2）**：反编译 2026.3 平台定案为 `shouldCreatePsi` 闸门——父目录不在内容模型里（`.idea` 被忽略或排除）就不建 PSI，`findFile` 返回 null 而 vf 完全有效；现在按平台同一判据选落点，并把「映射到的方言建不出 PSI」时的钉方言自愈、vf 失效重定位一并补齐
 - **失败文案带上可定位的诊断项（13.9 / 23457844，1a5ce405）**：vf 有效性、文件类型、映射方言、继承方言、平台实际选中的语言、各自能否建 PSI、是否被排除或忽略、Registry 取值、IDE Build 与绝对路径
 - **控制台 MyBatis 与 Hibernate 日志补齐静默冲刷（T-ConsoleFlushAlign，48b6f04f）**：对齐 JdbcTemplate，会话结束前的最后几条 SQL 不再等下一次执行才上屏
