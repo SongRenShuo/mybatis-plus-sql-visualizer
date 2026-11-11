@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.12-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.1/mybatis-plus-sql-visualizer-2026.11.12-beta.1.zip",
-  "changeNotes": "执行失败时按原因给出可点入口，命中文件类型忽略直达设置页、被 gitignore 忽略直达该文件、方言问题直达 SQL 方言设置\n临时目录被 IDE 忽略或排除导致建不出 PSI 时，执行侧先说明原因并给改用项目根落点重试，预览侧自动改用备用目录且只提示一次\n失败文案补齐 vf 有效性、映射方言、平台实际语言与 IDE Build 等诊断项，反馈问题一次截图即可定位\n控制台里 MyBatis 与 Hibernate 的日志补齐静默冲刷，会话结束前的最后几条 SQL 不再等下一次执行才出现\nOceanBase 的 EXPLAIN 计划树也会给出与 MySQL 同口径的索引建议",
+  "version": "2026.11.12-beta.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.2/mybatis-plus-sql-visualizer-2026.11.12-beta.2.zip",
+  "changeNotes": "预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效\n执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown\n上一版的按原因给设置入口与一键改用项目根落点保持不变",
   "publishDate": "2026-11-11",
   "sinceBuild": "243"
 }

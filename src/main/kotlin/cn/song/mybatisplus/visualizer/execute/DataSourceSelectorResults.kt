@@ -341,10 +341,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 断言实证，栈见 createTempPsiFileAsync KDoc）——**EDT 上只做派发**，结果经
     // invokeLater(nonModal) 回到 EDT 续接准备链（弹窗/内嵌控制台/结果面板仍全部在 EDT）。
     // 契约影响：本函数的后续全链已迁入 [continuePrepareAfterTempFile]，由 onReady 驱动。
-    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp ->
+    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp, failureReason ->
         continuePrepareAfterTempFile(
             project = project,
             temp = temp,
+            failureReason = failureReason,
             sql = sql,
             submitSql = submitSql,
             executeAfterPrepare = executeAfterPrepare,
@@ -386,6 +387,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
 internal fun DataSourceSelector.continuePrepareAfterTempFile(
     project: Project,
     temp: Pair<VirtualFile, PsiFile>?,
+    /** [createTempPsiFileAsync] 就地捕获的失败阶段原因（优先于跨线程共享的 `lastTempFileFailure`） */
+    failureReason: String? = null,
     sql: String,
     submitSql: String,
     executeAfterPrepare: Boolean,
@@ -414,9 +417,10 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     if (temp == null) {
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
-        LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
+        val reason = failureReason ?: lastTempFileFailure ?: "unknown"
+        LOG.warn("[M36] createTempPsiFile failed (reason=$reason), abort")
         failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null,
-            MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
+            MpSqlVisualizerBundle.message("execute.tempFile.failed", reason))
         callback?.invoke(false)
         return
     }
@@ -1708,20 +1712,24 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
     project: Project,
     sql: String,
     renderedDialectName: String? = null,
-    onReady: (Pair<VirtualFile, PsiFile>?) -> Unit,
+    onReady: (Pair<VirtualFile, PsiFile>?, String?) -> Unit,
 ) {
     val app = ApplicationManager.getApplication()
+    // T-ExecPsiGate F3（2026-11-11 验收失败）：失败原因**在失败现场就地捕获**、随回调带回。
+    // 原实现让 EDT 续接去读 `lastTempFileFailure` 这个共享字段——而预热链在入口会把它清空
+    // （预热与冷路径并发时，用户看到的就是「创建临时 SQL 文件失败：unknown」）。
+    fun runSlow(report: (Pair<VirtualFile, PsiFile>?, String?) -> Unit) {
+        val pair = createTempPsiFile(project, sql, renderedDialectName)
+        val reason = if (pair == null) lastTempFileFailure else null
+        app.invokeLater({ report(revalidateOnEdt(project, pair), reason) }, ModalityState.nonModal())
+    }
     if (!app.isDispatchThread) {
         // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
         // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
-        val pair = createTempPsiFile(project, sql, renderedDialectName)
-        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
+        runSlow(onReady)
         return
     }
-    app.executeOnPooledThread {
-        val pair = createTempPsiFile(project, sql, renderedDialectName)
-        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
-    }
+    app.executeOnPooledThread { runSlow(onReady) }
 }
 
 /**
@@ -2140,8 +2148,10 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
  */
 internal fun execDirCanHostPsi(project: Project, dir: java.io.File): Boolean {
     if (project.isDisposed) return true
-    // 结论按目录路径记忆（内容模型一次会话内基本不变；判错的代价也只是走一次自愈支 4）
-    execDirPsiCapableCache[dir.absolutePath]?.let { return it }
+    // T-ExecPsiGate F4（2026-11-11 验收失败）：**不缓存结论**。原实现按目录路径记忆到会话结束，
+    // 而「目录能不能建 PSI」取决于内容模型与 Registry（用户随时会改：排除/取消排除、勾/取消
+    // ide.hide.excluded.files）——旧结论会让落点判定恒留在错的一侧（预览实测：改了状态仍写 .idea
+    // → 降级横幅不消失）。探针成本只是一次 VFS 查找 + 一次 PsiDirectory 查找，调用点也不在键盘热路径。
     if (!dir.exists() && !dir.mkdirs()) return true
     val dirVf = runCatching {
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)
@@ -2151,12 +2161,8 @@ internal fun execDirCanHostPsi(project: Project, dir: java.io.File): Boolean {
             PsiManager.getInstance(project).findDirectory(dirVf)
         }
     }.getOrNull() != null
-    execDirPsiCapableCache[dir.absolutePath] = capable
     return capable
 }
-
-/** [execDirCanHostPsi] 的按目录记忆（IDE 会话级；内容模型变更属罕见事件，判错只多走一次自愈）。 */
-private val execDirPsiCapableCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
 internal fun DataSourceSelector.projectExecFile(
     project: Project,
@@ -2259,8 +2265,8 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     LOG: com.intellij.openapi.diagnostic.Logger,
     renderedDialectName: String? = null,
 ) {
-    lastTempFileFailure = null
-    lastTempFileHint = null
+    // T-ExecPsiGate F3：预热链**不清** lastTempFileFailure / lastTempFileHint——它是并发写方，
+    // 清空会把冷路径刚记下的失败原因抹掉（2026-11-11 验收实测：报错文案退化为 unknown）。
     // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
     // 实际执行之间隔着任意长的排队/执行窗口（victim 测试毫秒级跑完即收尾 dispose）。池线程链
     // 起跑时项目可能已 dispose（含 temporarily-disposed），整链放弃，不在死项目上写/refresh。
