@@ -14,7 +14,6 @@ import org.junit.Test
  */
 class McpConfigurableLoadStateTest : BasePlatformTestCase() {
 
-    @Test
     fun testApply后state引用换新_持久化链路可触发() {
         val backup = PluginSettings.getInstance().state.copy()
         try {

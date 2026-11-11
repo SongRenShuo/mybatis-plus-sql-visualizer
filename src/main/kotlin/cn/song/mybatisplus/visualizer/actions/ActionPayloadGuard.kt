@@ -16,5 +16,7 @@ internal inline fun <T> actionPayloadGuarded(default: T, block: () -> T): T = tr
     block()
 } catch (t: Throwable) {
     if (t is ProcessCanceledException || t is CancellationException) throw t
+    // T-FatalPassthrough T-FP-03 收口：JVM 级致命错误原样上抛（testFast 守卫判据）
+    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
     default
 }

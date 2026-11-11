@@ -40,7 +40,6 @@ class JpaQueryEnhancerPageSortTest : BasePlatformTestCase() {
         return JpaQueryEnhancer.evaluatePageSort(method, call.argumentList.expressions.toList())
     }
 
-    @Test
     fun test双字面量PageRequest仍内联OFFSET与LIMIT() {
         val eval = eval("PageRequest.of(2, 20)") ?: error("应产出 PageSortEval")
         val limit = eval.limit ?: error("双字面量应内联 LIMIT")
@@ -49,7 +48,6 @@ class JpaQueryEnhancerPageSortTest : BasePlatformTestCase() {
         assertEquals("双字面量不产生额外参数行", emptyList<String>(), eval.extraParamNames)
     }
 
-    @Test
     fun test运行时page字面量size_OFFSET占位不得丢() {
         val eval = eval("PageRequest.of(pageNum, 20)") ?: error("应产出 PageSortEval")
         val limit = eval.limit ?: error("size 字面量应内联 LIMIT")

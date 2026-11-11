@@ -18,7 +18,6 @@ import org.junit.Test
  */
 class PluginSettingsPanelListenerAccumulationTest : BasePlatformTestCase() {
 
-    @Test
     fun testRebuild两次监听器不累积() {
         val panel = PluginSettingsPanel(PluginSettings.getInstance())
         val before = panel.dialectCombo.actionListeners.size
@@ -33,7 +32,6 @@ class PluginSettingsPanelListenerAccumulationTest : BasePlatformTestCase() {
         assertEquals("守卫前基线应恰为 1（构建期注册一次）", 1, before)
     }
 
-    @Test
     fun test非UI页apply不误报语言变更() {
         val panel = PluginSettingsPanel(PluginSettings.getInstance(), setOf(PluginSettingsPanel.SECTION_SQL_LOG))
         // 非 UI 页：languageCombo 空 model——修复前 selectedItem=null 恒 != s.language → 恒 true

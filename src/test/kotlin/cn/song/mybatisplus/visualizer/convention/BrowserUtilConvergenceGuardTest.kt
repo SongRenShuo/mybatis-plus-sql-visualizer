@@ -66,7 +66,9 @@ class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
     )
 
     /** 期望计数：与 src/main 生产调用点同步（当前 5 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2）。 */
-    private val expectedTotalCallSites = 5
+    // T-HiddenBugPerfScan 券 Y1：ShareDialog 两处导出合流进 exportHtmlAsync（写盘移出 EDT），
+    // 调用面 5→4（文件级豁免仍在侧，收敛口径不变）
+    private val expectedTotalCallSites = 4
 
     /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无 fun 围合为空串）。 */
     internal data class BrowserUtilCallSite(

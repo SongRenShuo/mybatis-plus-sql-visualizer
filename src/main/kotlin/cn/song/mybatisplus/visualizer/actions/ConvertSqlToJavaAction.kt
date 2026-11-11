@@ -337,6 +337,7 @@ internal fun <T> runBatchLookupGuarded(lookup: () -> T): T? = try {
     lookup()
 } catch (t: Throwable) {
     if (t is com.intellij.openapi.progress.ProcessCanceledException || t is java.util.concurrent.CancellationException) throw t
+    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t // T-FatalPassthrough T-FP-03 收口
     com.intellij.openapi.diagnostic.Logger.getInstance(ConvertSqlToJavaAction::class.java)
         .warn("convertBatch: 实体查找失败", t)
     null

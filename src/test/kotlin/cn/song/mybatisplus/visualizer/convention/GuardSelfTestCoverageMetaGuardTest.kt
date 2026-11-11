@@ -653,6 +653,17 @@ class GuardSelfTestCoverageMetaGuardTest {
          * （判据 6）；已登记类里的类级 Boolean 判定函数也必须逐条登记（判据 7）。
          */
         val GUARD_CLASSES = listOf(
+        GuardEntry(
+            "actions/ActionPayloadGuardTest.kt",
+            emptyList(),
+            "T-HiddenBugPerfScan 券 F：actionPayloadGuarded 守卫语义直测（取消协议上抛/普通异常收敛兜底）——"
+                + "无扫描面判定内核（守卫对象是共享助手函数的行为，非源码形态），decisionFns 留空",
+        ),
+        GuardEntry(
+            "actions/ConvertSqlToJavaActionBatchGuardTest.kt",
+            emptyList(),
+            "T-HiddenBugPerfScan 券 E：runBatchLookupGuarded 批量查找守卫语义直测——同上无判定内核，decisionFns 留空",
+        ),
             GuardEntry(
                 "convention/VerifierCliVersionGuardTest.kt",
                 emptyList(),

@@ -15,7 +15,6 @@ import org.junit.Test
  */
 class PluginSettingsImportPublishTest : BasePlatformTestCase() {
 
-    @Test
     fun test导入后SETTINGS_CHANGE被发布() {
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         var fired = 0
@@ -35,7 +34,6 @@ class PluginSettingsImportPublishTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test导入失败不发布() {
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         var fired = 0

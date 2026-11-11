@@ -23,7 +23,6 @@ import org.junit.Test
  */
 class ArgResolverSelectFuncArgPositionsTest : BasePlatformTestCase() {
 
-    @Test
     fun testThreeArgSelectFuncSecondIsFuncArgThirdIsAliasArg() {
         myFixture.configureByText(
             "Demo.java",
@@ -51,7 +50,6 @@ class ArgResolverSelectFuncArgPositionsTest : BasePlatformTestCase() {
         assertEquals("ageCount", (alias as WrapperArg.AliasArg).propertyName)
     }
 
-    @Test
     fun testApplySecondArgStaysFuncLambdaPosition() {
         myFixture.configureByText(
             "Demo.java",

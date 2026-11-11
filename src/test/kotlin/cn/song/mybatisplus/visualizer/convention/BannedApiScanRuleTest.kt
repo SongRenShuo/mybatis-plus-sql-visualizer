@@ -616,9 +616,6 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // filter 接口逐个试、方法/组件查找）——失败即回落轮询兜底 / 返回 null / 视为存活。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt" to
             CatchExemption(12, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
-        // 7 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
-            CatchExemption(7, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
         // 4 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
         // T-M53-II（2026-10-10）：原 5 处中的 `bindAutoPopup` 补全站点搬进 SqlPreviewPanelEditorLifecycle.kt
         // （下面单列 1 处）；余 4 处（updateDiagramTab / showJoinDiagram / clearNativeDiagram 链）
@@ -659,15 +656,13 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 1 处：反射探测返回 false。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt" to
             CatchExemption(1, "反射能力探测失败返回 false"),
-        // 1 处：后台候选收集失败返回空。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromEntityAction.kt" to
-            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
-        // 1 处：同上。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromDbTableAction.kt" to
-            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
-        // 1 处：同上。
+        // T-HiddenBugPerfScan 券 F：上述三文件（ConvertToSqlAction ×7 / GenerateCrudSql 两动作各 1）
+        // 的 catch(Throwable) 站点已统一改走 actionPayloadGuarded（取消协议 + fatal 判定内聚），
+        // 原豁免条目随之移除（守卫「站点数与登记不符」判据）。
+        // 2 处：T-HiddenBugPerfScan 券 E——原单语句路径 1 处 + 新增 runBatchLookupGuarded 1 处
+        // （批量路径兜底；两处均已含取消协议与 fatal 判定，失败即返回空/降级反馈）。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt" to
-            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
+            CatchExemption(2, "后台候选收集失败返回空列表（动作提示无候选）；批量路径经 runBatchLookupGuarded 收敛为用户可见反馈"),
     )
 
     /**
