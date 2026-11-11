@@ -211,6 +211,35 @@ class MbgExamplePreviewTest {
         assertTrue("separator 前后应由空格分隔：$sql", sql.contains(" or "))
     }
 
+    @Test
+    fun `trim体内多次迭代紧贴_不产生单词粘连`() {
+        // 反向探针的落点：上面那条用例在根上下文，appendSql 自带分隔，看不见 trim 缓冲的粘连。
+        // 真实缺陷形态是 `<where>`/`<trim>` 体内 foreach 展开两轮——迭代体被 trim 成紧凑段后
+        // 交给纯 append 的 filtered 缓冲，历史版本此处产出 `1or` / `1and`。
+        val m = XmlPreviewModel.from(
+            XmlMapperParser().parse(
+                """
+                <mapper namespace="n">
+                  <select id="s1">
+                    SELECT * FROM t
+                    <where>
+                      <foreach collection="cs" item="c" separator="or">
+                        and c = 1
+                      </foreach>
+                    </where>
+                  </select>
+                </mapper>
+                """.trimIndent(),
+            ).statements.single(),
+            emptyList(),
+            profile = XmlPreviewProfile(forEachCount = 2),
+        )
+        val sql = compact(m.renderSql().sql)
+        assertFalse("trim 体内不得出现 1or 粘连：$sql", sql.contains("1or"))
+        assertFalse("trim 体内不得出现 1and 粘连：$sql", sql.contains("1and"))
+        assertTrue("两段之间应由空格分隔：$sql", sql.contains(" or "))
+    }
+
     // ---------------- R5：profile 的两项抑制 ----------------
 
     @Test

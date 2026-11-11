@@ -270,10 +270,22 @@ outcomes（默认） = {distinct=true, _parameter != null=true, criteria.valid=t
 - 测试：`MbgExamplePreviewTest` +3（真实 condition 产物 `WHERE ( cust_id = ? )`、kindOf 全后缀、分支布尔值与参数个数）。
 - **not run**：PSI 链路的真实命中率（`ReferencesSearch` 在有索引的真项目里、MBG 方法体常量读取、跨模块 Example 类）——本机只有 Light 测试环境，按计划 V2 交真机验收。
 
+### 反向验证（逐项摘修法，跑完即 `git checkout` 还原）
+
+| 摘掉 | 结果 |
+| --- | --- |
+| T1 的占位返回 | `MBG形态_默认产物_结构正确且缺段可见` 恰 1 红（10 例中 1 失败） |
+| T4 的 choose 组归并 | 3 红（整体产物 / M2 产物 / choose 组断言） |
+| T5 的 `suppressedConditionIds` | 3 红（profile 断言 + 整体产物 + M2 产物） |
+| T2 的 trim 缓冲空格 | `trim体内多次迭代紧贴_不产生单词粘连` 恰 1 红 |
+
+**自查发现（空绿）**：T2 最初的用例放在根上下文，而根 `DynamicContext.appendSql` 自带段间分隔，
+摘掉修复后仍然全绿——夹具形态看不见缺陷。已补 `trim体内多次迭代紧贴_不产生单词粘连`，把夹具挪进
+`<where>` 体内的 foreach 两轮展开（正是 MBG 的形态），反向探针才变红。
+
 ### 待用户验收
 
 1. demo 项目打开 `selectByExample` 预览：首屏应为 `select 'false' as QUERYID, … where ( cust_id = ? )`（调用点能反推时），或 `where ( {{criterion.condition}} ? )`（反推不到时）。
 2. 面板「动态条件」区：choose 四个分支只默认勾一个；`distinct` 与 `orderByClause != null` 默认不勾。
 3. 含占位时点「执行 SQL」应弹新的确认文案；不含占位但含 `${}` 时仍是原文案。
 4. 「为空」的集合勾选后，错误行应是中文且带指引，且不再与基线渲染的错误混排。
-（待填）
