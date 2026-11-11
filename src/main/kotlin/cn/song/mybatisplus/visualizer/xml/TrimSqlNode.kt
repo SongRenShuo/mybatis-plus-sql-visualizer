@@ -41,7 +41,23 @@ open class TrimSqlNode(
 
         private val sqlBuffer = StringBuilder()
 
+        /**
+         * 与 MyBatis 的 `sqlBuffer.append(sql)` 有一处刻意差异（T-MbgExamplePreview R2）：
+         * 相邻两段既不以空白开头、也不以空白结尾时补一个空格。
+         *
+         * 理由：本引擎的 foreach 会把每轮迭代 trim 成紧凑段（T-M25.5），两次迭代的 `and`
+         * 在此处直接相接就成了单词 `andand`，`<trim prefixOverrides="and">` 只裁掉首个，
+         * 残余成了括号里的幽灵条件。真实 MyBatis 因 XML 换行保留空白而不会粘词。
+         * 只影响「trim 体内相邻段紧贴且无空白」的形态；段间原本有空白时行为不变。
+         */
         override fun appendSql(sql: String) {
+            if (sql.isEmpty()) return
+            if (sqlBuffer.isNotEmpty() &&
+                !sqlBuffer.last().isWhitespace() &&
+                !sql.first().isWhitespace()
+            ) {
+                sqlBuffer.append(' ')
+            }
             sqlBuffer.append(sql)
         }
 
@@ -57,6 +73,10 @@ open class TrimSqlNode(
 
         override val staticFieldValues: Map<String, Any?>
             get() = delegate.staticFieldValues
+
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 trim/where/set 体内的 `${}` 仍按空串输出
+        override val emptyDollarPlaceholder: Boolean
+            get() = delegate.emptyDollarPlaceholder
 
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings

@@ -42,6 +42,35 @@ class CopyExecutableSqlAction(private val project: Project?) {
          */
         internal const val DOLLAR_RAW_MARKER = "-- contains \${} raw segments (mock values)"
 
+        /** 模拟占位形态：`{{表达式}}`（T-MbgExamplePreview R1 的预览占位）。 */
+        private val PLACEHOLDER_REGEX = Regex("""\{\{[^{}]*}}""")
+
+        /**
+         * T-CopyPlaceholderMarker：产物里残留的模拟占位个数（`{{表达式}}` 不是 SQL 注释，
+         * `SqlCommentStripper` 不会碰它，会原样跟着产物走）。
+         */
+        internal fun countSimulationPlaceholders(sql: String): Int =
+            PLACEHOLDER_REGEX.findAll(sql).count()
+
+        /**
+         * T-CopyPlaceholderMarker：含模拟占位时的头部标记（带计数）。
+         *
+         * 与 [DOLLAR_RAW_MARKER] 的分工：那条说的是「`${}` 已被模拟值替换」，这条说的是
+         * 「`${}` 根本没求到值、产物里以 `{{…}}` 标出」——同一件事不说两遍，有占位时只用这条。
+         * 英文与既有标记一致：注释随产物走到 PR / 聊天 / 工单，同一条 SQL 里不混排中英。
+         */
+        internal fun unresolvedPlaceholderMarker(count: Int): String =
+            "-- contains $count unresolved \${} placeholders shown as {{...}}; replace them before executing"
+
+        /**
+         * T-CopyPlaceholderMarker：给产物补占位标记（分享面板的复制链复用——它没有
+         * [assembleProduct] 的其它标记，只需要这一条）。无占位时原样返回，逐字节不变。
+         */
+        internal fun withPlaceholderMarker(sql: String): String {
+            val count = countSimulationPlaceholders(sql)
+            return if (count > 0) unresolvedPlaceholderMarker(count) + "\n" + sql else sql
+        }
+
         /**
          * 复制链产物（纯数据，`execute` 与链路一致用例共用）。
          *
@@ -50,6 +79,7 @@ class CopyExecutableSqlAction(private val project: Project?) {
          * @param warnings 占位没填进去的原因（面板可展示）
          * @param replacedPlaceholderCount 被替换掉的 `?` 个数（toast 用）
          * @param mismatchMarker 占位/参数条数不符时的头部标注行（null = 无）
+         * @param simulationPlaceholderCount 产物里残留的 `{{…}}` 模拟占位个数（0 = 无）
          */
         internal data class Product(
             val text: String,
@@ -57,6 +87,7 @@ class CopyExecutableSqlAction(private val project: Project?) {
             val warnings: List<SlotWarning>,
             val replacedPlaceholderCount: Int,
             val mismatchMarker: String?,
+            val simulationPlaceholderCount: Int = 0,
         )
 
         /**
@@ -96,8 +127,15 @@ class CopyExecutableSqlAction(private val project: Project?) {
             }
 
             // T-InjectionGate T-IG-03：含 `${}` raw 段时产物头部加标记注释；无标记时产物逐字节不变
+            // T-CopyPlaceholderMarker：raw 段求值为空时产物里是 `{{…}}` 占位——改用带计数的占位标记
+            // （两者互斥：有占位就不再挂「已用模拟值填充」那条，避免同一件事说两遍）
+            val placeholderCount = countSimulationPlaceholders(executable)
             val markers = buildList {
-                if (hasDollarRawSegments) add(DOLLAR_RAW_MARKER)
+                if (placeholderCount > 0) {
+                    add(unresolvedPlaceholderMarker(placeholderCount))
+                } else if (hasDollarRawSegments) {
+                    add(DOLLAR_RAW_MARKER)
+                }
                 mismatch?.let { add(it) }
             }
             val text = if (markers.isEmpty()) executable else markers.joinToString("\n") + "\n" + executable
@@ -107,6 +145,7 @@ class CopyExecutableSqlAction(private val project: Project?) {
                 warnings = render.warnings,
                 replacedPlaceholderCount = countReplaced(strippedRaw, executable),
                 mismatchMarker = mismatch,
+                simulationPlaceholderCount = placeholderCount,
             )
         }
 

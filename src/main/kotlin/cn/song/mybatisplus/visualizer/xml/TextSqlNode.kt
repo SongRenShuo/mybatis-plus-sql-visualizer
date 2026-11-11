@@ -50,6 +50,10 @@ class TextSqlNode(val text: String) : SqlNode {
                     val roots = OgnlEvaluator.rootVariables(content)
                     if (roots.isNotEmpty()) {
                         context.errors += "模拟参数下表达式 \${$content} 求值为空（MP 占位 ${'$'}{ew...} 等需真实参数值）"
+                        // T-MbgExamplePreview R1：预览占位模式——把缺段显式写进产物。
+                        // MBG 的 `and ${criterion.condition}` 在模拟参数下会退化成裸 `and`，
+                        // 产物看着像插件识别错；占位后是 `( {{criterion.condition}} )`，缺什么一目了然。
+                        if (context.emptyDollarPlaceholder) return@parse "{{$content}}"
                     }
                 }
                 result.value?.toString() ?: ""

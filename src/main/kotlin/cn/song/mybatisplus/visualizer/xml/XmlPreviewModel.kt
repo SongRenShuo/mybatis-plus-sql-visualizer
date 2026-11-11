@@ -48,6 +48,40 @@ data class XmlPreviewState(
 )
 
 /**
+ * choose 互斥组（T-MbgExamplePreview R4）：同一个 `<choose>` 的 when 分支是「只能成立一个」的
+ * 语义，但默认启发式把它们全部置真，渲染按短路顺序永远只走第一个——MBG Example 里第一个恰好是
+ * 唯一不带 `#{}` 的 `noValue` 分支。本表记录组内成员与默认分支，[XmlPreviewModel.defaultState]
+ * 每组只启用一个。
+ *
+ * @param branchIds       组内 when 的 test 表达式原文（顺序 = 短路顺序）
+ * @param defaultBranchId 默认启用的分支（含 `#{}` 参数的分支里最先出现者；全无参数时为首个）
+ */
+data class XmlChooseGroup(val branchIds: List<String>, val defaultBranchId: String?)
+
+/**
+ * 语句形态档（T-MbgExamplePreview R5）：已知框架模板的默认勾选修正。
+ *
+ * 目前只有 MBG 生成器一种形态——Example 参数对象里 `distinct` 默认 false、`orderByClause`
+ * 默认 null，集合（oredCriteria / criteria.criteria）在典型调用里各只有 1 项。无档时不改任何
+ * 默认值，行为与升级前逐字节一致。
+ *
+ * @param suppressedConditionIds 不默认启用的条件 id（test 表达式原文）
+ * @param forEachCount           集合默认展开次数覆盖（null = 沿用 [XmlPreviewModel.DEFAULT_FOREACH_SIZE]）
+ */
+data class XmlPreviewProfile(
+    val suppressedConditionIds: Set<String> = emptySet(),
+    val forEachCount: Int? = null,
+) {
+    companion object {
+        /** MBG 生成器模板的固定 test 文本（`distinct` 与 `orderByClause != null`）。 */
+        val MBG_EXAMPLE = XmlPreviewProfile(
+            suppressedConditionIds = setOf("distinct", "orderByClause != null"),
+            forEachCount = 1,
+        )
+    }
+}
+
+/**
  * XML 预览模型（T-M24-04）：驱动预览面板的动态条件勾选与参数输入。
  *
  * [renderSql] 是**唯一渲染源**——初始渲染与面板勾选重建共用，保证一致；
@@ -93,6 +127,16 @@ class XmlPreviewModel private constructor(
      * 无类型信息不含键（面板按 UNKNOWN 兜底：无占位提示、mock 占位 "1"、引号兜底）。
      */
     val paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
+    /** choose 互斥组（T-MbgExamplePreview R4）——[defaultState] 每组只启用一个分支。 */
+    val chooseGroups: List<XmlChooseGroup> = emptyList(),
+    /** 语句形态档（T-MbgExamplePreview R5）——null 时不改任何默认值（升级前行为）。 */
+    val profile: XmlPreviewProfile? = null,
+    /**
+     * 集合表达式 → 元素级模拟值（T-MbgExamplePreview M2）。键与 [forEachViews] 的
+     * `collectionExpr` 同源（`oredCriteria` / `criteria.criteria`），值为调用点反推出的
+     * Criteria / Criterion；缺席时退回「展开 N 次的无属性元素」。
+     */
+    val collectionElements: Map<String, List<MockObject>> = emptyMap(),
     private val rootNode: SqlNode,
 ) {
 
@@ -154,10 +198,26 @@ class XmlPreviewModel private constructor(
     fun unknownParamSources(sources: Collection<String>): List<String> =
         sources.filter { paramTypeFor(it)?.kind == ParamKind.UNKNOWN }.distinct()
 
-    fun defaultState(): XmlPreviewState = XmlPreviewState(
-        enabledIds = conditionViews.filter { it.defaultEnabled }.map { it.id }.toSet(),
-        forEachCounts = forEachViews.associate { it.collectionExpr to DEFAULT_FOREACH_SIZE },
-    )
+    fun defaultState(): XmlPreviewState {
+        val suppressed = profile?.suppressedConditionIds.orEmpty()
+        val enabled = conditionViews
+            .filter { it.defaultEnabled && it.id !in suppressed }
+            .map { it.id }
+            .toMutableSet()
+        // T-MbgExamplePreview R4：同一 choose 的 when 互斥——组内多于一个时只留默认分支
+        chooseGroups.forEach { group ->
+            val candidates = group.branchIds.filter { it in enabled }
+            if (candidates.size > 1) {
+                val keep = group.defaultBranchId?.takeIf { it in candidates } ?: candidates.first()
+                candidates.filter { it != keep }.forEach { enabled.remove(it) }
+            }
+        }
+        val count = profile?.forEachCount ?: DEFAULT_FOREACH_SIZE
+        return XmlPreviewState(
+            enabledIds = enabled,
+            forEachCounts = forEachViews.associate { it.collectionExpr to count },
+        )
+    }
 
     fun renderSql(): RenderedXmlSql = renderSql(defaultState())
 
@@ -169,6 +229,8 @@ class XmlPreviewModel private constructor(
         protectedNames = state.bindOverrides.keys.toSet(),
         staticFieldValues = staticFieldValues,
         bindNames = bindViews.map { it.name }.toSet(),
+        // T-MbgExamplePreview R1：预览链开启 `${}` 空值占位（真实 SQL 产物路径不受影响）
+        emptyDollarPlaceholder = true,
     )
 
     /**
@@ -195,10 +257,12 @@ class XmlPreviewModel private constructor(
         mockProps.keys.forEach { bindings[it] = mockValueOf(it) }
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
-            bindings[view.collectionExpr] = if (view.collectionExpr in state.forEachNulls) {
-                null
-            } else {
-                MockIterable(state.forEachCounts[view.collectionExpr] ?: DEFAULT_FOREACH_SIZE)
+            val elements = collectionElements[view.collectionExpr]
+            bindings[view.collectionExpr] = when {
+                view.collectionExpr in state.forEachNulls -> null
+                // T-MbgExamplePreview M2：调用点反推到的元素级模拟值优先（Criteria / Criterion）
+                elements != null -> MockIterable(elements.size, elements)
+                else -> MockIterable(state.forEachCounts[view.collectionExpr] ?: DEFAULT_FOREACH_SIZE)
             }
         }
         state.bindOverrides.forEach { (name, value) -> bindings[name] = value }
@@ -238,6 +302,26 @@ class XmlPreviewModel private constructor(
         /** 启发式默认勾选态：含 `== null` → false（变量默认非 null），其余 true（保守展开）。 */
         fun defaultTruth(test: String): Boolean = !test.contains("== null")
 
+        /**
+         * 统计节点树里的 `#{}` token 数（T-MbgExamplePreview R4：choose 组默认分支按「含参数」优先——
+         * 带 `#{}` 的分支在预览里至少能给出 `?` 占位，不带参数的 `and ${...}` 分支往往只剩一个裸 and）。
+         * 转义 `\#{` 不计（与 [TokenParser] 语义一致）。
+         */
+        fun countParameterTokens(node: SqlNode): Int = when (node) {
+            is MixedSqlNode -> node.children.sumOf { countParameterTokens(it) }
+            is TextSqlNode -> {
+                var n = 0
+                TokenParser.parse(node.text, "#{", "}") { n++; it }
+                n
+            }
+            is IfSqlNode -> countParameterTokens(node.contents)
+            is TrimSqlNode -> countParameterTokens(node.contents)
+            is ForeachSqlNode -> countParameterTokens(node.contents)
+            is ChooseSqlNode -> node.whenNodes.sumOf { countParameterTokens(it) } +
+                (node.defaultNode?.let { countParameterTokens(it) } ?: 0)
+            else -> 0
+        }
+
         /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
          *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。
          *  T-M25.2：staticFieldValues 为 `@class@field` → 值（PSI 层解析用户项目常量类）。
@@ -252,15 +336,20 @@ class XmlPreviewModel private constructor(
             extraBindings: Map<String, Any?> = emptyMap(),
             paramQuotes: Map<String, Boolean> = emptyMap(),
             paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
+            /** T-MbgExamplePreview R5：语句形态档（如 [XmlPreviewProfile.MBG_EXAMPLE]）；null = 不改默认。 */
+            profile: XmlPreviewProfile? = null,
+            /** T-MbgExamplePreview M2：集合表达式 → 调用点反推的元素级模拟值。 */
+            collectionElements: Map<String, List<MockObject>> = emptyMap(),
         ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
             val bindViews = mutableListOf<XmlBindView>()
+            val chooseGroups = mutableListOf<XmlChooseGroup>()
             val variables = mutableSetOf<String>()
             val paramProps = mutableSetOf<String>()
             // T-InjectionGate T-IG-01：解析期 `${}` token 收集（非空即「含 raw 原文拼接段」）
             val dollarTokens = mutableListOf<String>()
-            collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+            collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
             variables.remove(DynamicContext.PARAMETER_OBJECT_KEY)
             variables.remove(DynamicContext.DATABASE_ID_KEY)
             paramProps += extraParamProps
@@ -283,6 +372,9 @@ class XmlPreviewModel private constructor(
                     paramQuotes
                 },
                 paramTypes = paramTypes,
+                chooseGroups = chooseGroups,
+                profile = profile,
+                collectionElements = collectionElements,
                 hasDollarRawSegments = dollarTokens.isNotEmpty(),
                 rootNode = statement.node,
             )
@@ -311,11 +403,12 @@ class XmlPreviewModel private constructor(
             variables: MutableSet<String>,
             paramProps: MutableSet<String>,
             dollarTokens: MutableList<String>,
+            chooseGroups: MutableList<XmlChooseGroup>,
         ) {
             when (node) {
                 is MixedSqlNode ->
                     node.children.forEach {
-                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
                     }
                 is StaticTextSqlNode -> Unit
                 is TextSqlNode -> {
@@ -339,22 +432,36 @@ class XmlPreviewModel private constructor(
                         classification.reason,
                         classification.detail,
                     )
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
                 }
                 is ChooseSqlNode -> {
-                    // when 本身是 IfSqlNode，递归 collect 统一处理（此处不重复添加）
+                    // T-MbgExamplePreview R4：组内 when 归组（顺序 = 短路顺序），默认只启用一个——
+                    // 含 `#{}` 参数的分支里最先出现者优先，全无参数时取首个。否则四个互斥分支同真，
+                    // MBG Example 会永远短路到唯一不带参数的 noValue 分支。
+                    val branchIds = mutableListOf<String>()
+                    val paramCounts = mutableListOf<Int>()
                     node.whenNodes.forEach {
-                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
+                        (it as? IfSqlNode)?.let { branch ->
+                            branchIds += branch.test
+                            paramCounts += countParameterTokens(branch.contents)
+                        }
+                    }
+                    if (branchIds.size > 1) {
+                        val defaultBranch = branchIds
+                            .filterIndexed { i, _ -> paramCounts[i] > 0 }
+                            .firstOrNull() ?: branchIds.first()
+                        chooseGroups += XmlChooseGroup(branchIds, defaultBranch)
                     }
                     node.defaultNode?.let {
-                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
                     }
                 }
                 is TrimSqlNode ->
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
                 is ForeachSqlNode -> {
                     forEachViews += XmlForEachView(node.collectionExpression, node.item)
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups)
                 }
                 is VarDeclSqlNode -> {
                     bindViews += XmlBindView(node.name, node.expression)

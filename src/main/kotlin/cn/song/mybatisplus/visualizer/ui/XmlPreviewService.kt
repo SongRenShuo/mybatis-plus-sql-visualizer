@@ -18,6 +18,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.openapi.application.ReadAction
@@ -94,16 +95,28 @@ object XmlPreviewService {
             // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
             // Map/解析失败不含键 → 面板兜底引号、无占位提示）
             val paramTypes = XmlParamTypeResolver.resolveTypes(project, parsed.namespace, statement.id)
+            // T-MbgExamplePreview R5：MBG Example 参数类型 → 默认勾选档（distinct / orderByClause 不展开、
+            // 集合按 1 项）；解析不到一律 null，行为与升级前一致
+            val profile = resolveExampleProfile(project, statement.parameterType, parsed.namespace)
+            // T-MbgExamplePreview M2：Example 形态下再从调用点反推 Criterion（andXxx 方法体的
+            // addCriterion 常量）——拿到真值后 ${criterion.condition} 不再落占位
+            val collectionElements = if (profile == null) {
+                emptyMap()
+            } else {
+                MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
+            }
             XmlPreviewModel.from(
                 statement, parsed.errors,
                 staticFieldValues = staticValues, extraBindings = ewBindings, paramTypes = paramTypes,
+                profile = profile,
+                collectionElements = collectionElements,
             ) to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
         } catch (e: XmlScriptException) {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
-        val result = toResult(model, staticWarnings, entityContext).let { preview ->
+        val result = toResult(model, staticWarnings, entityContext, includeRenderErrors = false).let { preview ->
             if (project == null) preview else {
                 val decision = sourceContext?.takeIf { it.project == project }
                     ?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
@@ -238,6 +251,38 @@ object XmlPreviewService {
         }.toMap()
     }
 
+    /**
+     * T-MbgExamplePreview R5：`parameterType` 是否为 MBG 生成器的 Example 类。
+     *
+     * 判据（任一命中即可，都是 MBG 生成模板的固定结构）：类里有 `oredCriteria` 字段，
+     * 或有 `createCriteria()` 方法。命中 → [XmlPreviewProfile.MBG_EXAMPLE]；无 project、
+     * 空 parameterType、类解析不到 → null（不改任何默认值，行为与升级前一致）。
+     *
+     * `parameterType` 可能是全限定名（MBG 默认）也可能是短名；短名按 mapper 接口所在包补全
+     * （namespace 是 mapper 接口全名，Example 类与之同包）。
+     */
+    internal fun resolveExampleProfile(
+        project: Project?,
+        parameterType: String?,
+        namespace: String?,
+    ): XmlPreviewProfile? {
+        if (project == null || parameterType.isNullOrBlank()) return null
+        val fqn = if ('.' in parameterType) {
+            parameterType
+        } else {
+            val pkg = namespace?.substringBeforeLast('.', "")
+            if (pkg.isNullOrEmpty()) return null else "$pkg.$parameterType"
+        }
+        val psiClass = runCatching {
+            JavaPsiFacade.getInstance(project).findClass(fqn, GlobalSearchScope.allScope(project))
+        }.getOrNull() ?: return null
+        val isExample = runCatching {
+            psiClass.findFieldByName("oredCriteria", true) != null ||
+                psiClass.findMethodsByName("createCriteria", true).isNotEmpty()
+        }.getOrDefault(false)
+        return if (isExample) XmlPreviewProfile.MBG_EXAMPLE else null
+    }
+
     /** 单字段求值：findClass → findFieldByName → 字段初始值常量求值。 */
     internal fun resolveStaticFieldValue(project: Project, className: String, fieldName: String): String? {
         val psiClass = JavaPsiFacade.getInstance(project)
@@ -253,9 +298,17 @@ object XmlPreviewService {
         model: XmlPreviewModel,
         extraWarnings: List<String> = emptyList(),
         entityContext: SqlCompletionContext? = null,
+        /**
+         * T-MbgExamplePreview R6：是否把基线渲染（默认 state）的错误并入 warning。
+         *
+         * 预览面板传 false——面板随后会按用户当前勾选重渲染，并把本轮错误放进 `xmlErrors`；
+         * 两份混装会让告警描述一个与当前产物不一致的状态（用户截图里两条互相矛盾的错误即此形态）。
+         * 注解预览链没有交互态，保持 true（默认），行为不变。
+         */
+        includeRenderErrors: Boolean = true,
     ): PreviewResult {
         val rendered = model.renderSql()
-        val errors = model.errors + extraWarnings + rendered.errors
+        val errors = model.errors + extraWarnings + if (includeRenderErrors) rendered.errors else emptyList()
         val sql = rendered.sql
         return PreviewResult(
             sql = sql,

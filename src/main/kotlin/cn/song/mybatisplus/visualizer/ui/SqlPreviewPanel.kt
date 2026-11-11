@@ -1164,6 +1164,14 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     fun hasDollarRawSegments(): Boolean = current?.hasDollarRawSegments == true
 
+    /**
+     * T-MbgExamplePreview T1：当前编辑器里的产物是否含模拟占位 `{{表达式}}`。
+     *
+     * 占位来自 `${}` 直替在模拟参数下求值为空（MBG Example 的 `${criterion.condition}` 是典型），
+     * 给人看缺段用；送进 JDBC 必然语法错，执行/EXPLAIN 前要转向更强的确认文案。
+     */
+    fun hasSimulationPlaceholders(): Boolean = currentEditorSql().orEmpty().contains("{{")
+
     /** F-8：当前预览的表名（可 null）。 */
     fun currentTableName(): String? = current?.tableName
 

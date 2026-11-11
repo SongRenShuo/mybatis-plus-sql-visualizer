@@ -147,8 +147,9 @@ outcomes（默认） = {distinct=true, _parameter != null=true, criteria.valid=t
 
 **T2　迭代分隔（R2）**
 
-`ForeachSqlNode.FilteredContext.appendSql` 在 trim 后，若本轮内容非空且缓冲已有内容，则补一个空格。
-消除 `andand` 与 `)or(`。不改 `TrimSqlNode` 的裁剪语义，也不改 `<where>` 的八种前后缀变体。
+`ForeachSqlNode.FilteredContext.appendSql` 保持 trim（T-M25.5），段间分隔交给下游缓冲：
+`TrimSqlNode` 的 filtered 缓冲在自己 append 时判断「相邻两段是否都没空白」，紧贴才补一个空格。
+消除 `andand` 与 `)or(`。不改 `<where>` 的八种前后缀变体，也不动 trim 的前后缀裁剪语义。
 
 **T3　foreach 次数提示（R3）**
 
@@ -158,9 +159,8 @@ outcomes（默认） = {distinct=true, _parameter != null=true, criteria.valid=t
 **T4　choose 互斥组（R4）**
 
 `XmlPreviewModel.collect` 里识别 `ChooseSqlNode`，把 `whenNodes` 归为一组（新增
-`XmlConditionView.group` 或独立的 `chooseGroups` 表）。默认只启用组内一个分支，优先级：
-含 `#{}` 且参数最多者（`singleValue` / `betweenValue` / `listValue`）优先于 `noValue`；
-同分取先出现者。面板同组内做成单选（或至少加组标题 + 互斥说明）。
+`XmlChooseGroup(branchIds, defaultBranchId)`）。默认只启用组内一个分支：含 `#{}` 的分支优先于
+`noValue`，同档取先出现者（MBG 四分支里即 `singleValue`）。
 
 风险：用户手写 choose 时，「默认选中带参数的分支」可能与直觉相反。缓解：组内默认项在 UI 上带说明
 （「互斥组，默认选中含参数的分支」），且用户点其他分支即切换。
@@ -250,4 +250,42 @@ outcomes（默认） = {distinct=true, _parameter != null=true, criteria.valid=t
 
 ## 九、实施记录
 
-（待填）
+### M1（`2d8798a9`）
+
+- T1 `TextSqlNode` 增加占位模式，`DynamicContext` 新增 `emptyDollarPlaceholder`（Trim/Foreach 三个过滤上下文全部转发），`XmlSqlRenderer.render` 透传、默认 false，`XmlPreviewModel.renderSql` 传 true。
+- T1 闸门：`SqlPreviewPanel.hasSimulationPlaceholders()`（读编辑器当前文本的 `{{`）接入 `confirmDollarRawSegments`，命中时改用 `execute.confirm.simPlaceholder.message`（双语）。
+- T2：`ForeachSqlNode.FilteredContext` 恢复纯 trim；`TrimSqlNode.FilteredDynamicContext.appendSql` 在「相邻两段紧贴且无空白」时补一个空格。第一版做在 foreach 层，与根上下文的分隔叠加成双空格（`IN ( ?  ,  ? )`），改为下游缓冲后与既有金样逐字一致。
+- T4：`XmlChooseGroup` + `collect` 归组 + `countParameterTokens`；`defaultState` 每组只留一个分支（含 `#{}` 者优先、同档取先出现）。
+- T5：`XmlPreviewProfile.MBG_EXAMPLE`（抑制 `distinct` / `orderByClause != null`，集合按 1 项）+ `XmlPreviewService.resolveExampleProfile`（`parameterType` → PsiClass，判 `oredCriteria` 字段或 `createCriteria()`；短名按 namespace 同包补全）。
+- T6：`toResult` 增 `includeRenderErrors`（面板链传 false）；foreach 两条英文文案中文化并带「取消为 null 勾选」的指引，同步改两处断言。
+- 测试：新增 `MbgExamplePreviewTest`；存量断言更新 5 处（`XmlSqlRendererTest` / `XmlMapParamSpecMatrixTest` X6 / `XmlEwResolverTest` 2 处 / `ForeachSqlNodeTest` + `XmlPreviewModelTest` 文案）。
+- 读数：`MbgExamplePreviewTest` 7 例、`ForeachSqlNodeTest` 12 例、`TrimSqlNodeTest`、`XmlPreviewModelTest`、`XmlSqlRendererTest`、`XmlMapParamSpecMatrixTest`、`ConditionOutcomeProbeTest`、`XmlPreviewModelForeachItemTest`、`XmlScriptBuilderTest`、`fidelity/RealEngineFidelityTest`、`XmlPreviewServiceTest`、`XmlEwResolverTest` 全绿。
+
+### M2（`6fb76205`）
+
+- `MbgCriterionMock`（纯逻辑）：方法名后缀 → `NO_VALUE` / `LIST_VALUE` / `BETWEEN_VALUE` / `SINGLE_VALUE`；`toMockObject()` 产出 `condition` / `value` / `secondValue` / 四个布尔；`criteriaOf()` 产出 `valid=true` + `criteria` 列表。
+- `MockIterable(size, elements)`：给元素时按元素展开；`XmlPreviewModel` 新增 `collectionElements`，`mockBindings` 优先按元素。
+- `MbgExampleCallResolver`（PSI，`ReadAction.compute` 包裹）：mapper 方法 → `ReferencesSearch` 首个调用点 → 首个实参变量名 → 同方法体 `PsiCodeBlock` 内 `and*/or*` 调用 → `resolveMethod()` 且 owning class 以 `Example` 结尾（或内部类宿主以 `Example` 结尾）→ 根的求值链回到 example 变量（也接受类型名含 `Example` / `Criteria` 的分步写法）→ 读方法体 `addCriterion("…")` 第一个实参常量。上限 20 条，任何一步失败返回 null。
+- `XmlPreviewService.preview` 在 profile 命中时注入 `collectionElements`。
+- 测试：`MbgExamplePreviewTest` +3（真实 condition 产物 `WHERE ( cust_id = ? )`、kindOf 全后缀、分支布尔值与参数个数）。
+- **not run**：PSI 链路的真实命中率（`ReferencesSearch` 在有索引的真项目里、MBG 方法体常量读取、跨模块 Example 类）——本机只有 Light 测试环境，按计划 V2 交真机验收。
+
+### 反向验证（逐项摘修法，跑完即 `git checkout` 还原）
+
+| 摘掉 | 结果 |
+| --- | --- |
+| T1 的占位返回 | `MBG形态_默认产物_结构正确且缺段可见` 恰 1 红（10 例中 1 失败） |
+| T4 的 choose 组归并 | 3 红（整体产物 / M2 产物 / choose 组断言） |
+| T5 的 `suppressedConditionIds` | 3 红（profile 断言 + 整体产物 + M2 产物） |
+| T2 的 trim 缓冲空格 | `trim体内多次迭代紧贴_不产生单词粘连` 恰 1 红 |
+
+**自查发现（空绿）**：T2 最初的用例放在根上下文，而根 `DynamicContext.appendSql` 自带段间分隔，
+摘掉修复后仍然全绿——夹具形态看不见缺陷。已补 `trim体内多次迭代紧贴_不产生单词粘连`，把夹具挪进
+`<where>` 体内的 foreach 两轮展开（正是 MBG 的形态），反向探针才变红。
+
+### 待用户验收
+
+1. demo 项目打开 `selectByExample` 预览：首屏应为 `select 'false' as QUERYID, … where ( cust_id = ? )`（调用点能反推时），或 `where ( {{criterion.condition}} ? )`（反推不到时）。
+2. 面板「动态条件」区：choose 四个分支只默认勾一个；`distinct` 与 `orderByClause != null` 默认不勾。
+3. 含占位时点「执行 SQL」应弹新的确认文案；不含占位但含 `${}` 时仍是原文案。
+4. 「为空」的集合勾选后，错误行应是中文且带指引，且不再与基线渲染的错误混排。
