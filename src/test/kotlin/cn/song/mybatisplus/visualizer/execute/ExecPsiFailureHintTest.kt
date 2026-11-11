@@ -21,7 +21,10 @@ class ExecPsiFailureHintTest {
         underIgnored: Boolean = false,
         psiLangId: String? = "MySQL",
         canPsiActual: Boolean = true,
-    ) = classifyExecPsiFailure(excluded, regHideExcluded, fileTypesIgnored, underIgnored, psiLangId, canPsiActual)
+        dirCanHostPsi: Boolean? = null,
+    ) = classifyExecPsiFailure(
+        excluded, regHideExcluded, fileTypesIgnored, underIgnored, psiLangId, canPsiActual, dirCanHostPsi,
+    )
 
     @Test
     fun `excluded 且 Registry 开启判为排除`() {
@@ -68,8 +71,50 @@ class ExecPsiFailureHintTest {
 
     @Test
     fun `全都正常时不给入口`() {
-        // 走到这里说明实际原因在本次判定面之外（vf 失效等）——宁可只报文案，也不指错设置页
+        // 走到这里说明实际原因在本次判定面之外（vf 失效等）——文案仍要带兜底入口（见 UI 侧），
+        // 但**不许**把它指到某个具体设置页：入口指偏比不给入口更糟
         assertEquals(ExecPsiFailureCause.UNKNOWN, classify())
+    }
+
+    /**
+     * F5（2026-11-11 用户验收）：**文件级四项全绿、目录级探针判否** = 真机上唯一还没被覆盖的形态。
+     *
+     * 那一轮的读数：`excluded=false / underIgnored=false / regHideExcluded=false / psiLang=GenericSQL /
+     * canPsiActual=true` 却 `findFile` 恒 null。若这一档仍落 UNKNOWN，面板上就只剩红字——
+     * 用户的原话是「执行sql错误，没有引导用户调整配置信息」。
+     */
+    @Test
+    fun `文件级全绿但目录探针判否时判为目录不可用`() {
+        assertEquals(ExecPsiFailureCause.DIR_NOT_INDEXED, classify(dirCanHostPsi = false))
+    }
+
+    @Test
+    fun `目录探针判否不得被误报成方言问题`() {
+        // 这种机器上 psiLang / canPsiActual 往往都正常；先判语言就会把人送到 SQL 方言设置页
+        assertEquals(
+            ExecPsiFailureCause.DIR_NOT_INDEXED,
+            classify(psiLangId = "GenericSQL", canPsiActual = true, dirCanHostPsi = false),
+        )
+    }
+
+    @Test
+    fun `忽略类成因优先于目录探针`() {
+        // 两者都成立时指向「文件类型」/「.gitignore」是可操作的，落到目录不可用就只剩兜底了
+        assertEquals(
+            ExecPsiFailureCause.IGNORED_BY_FILE_TYPES,
+            classify(fileTypesIgnored = true, dirCanHostPsi = false),
+        )
+        assertEquals(
+            ExecPsiFailureCause.IGNORED_BY_VCS,
+            classify(underIgnored = true, dirCanHostPsi = false),
+        )
+    }
+
+    @Test
+    fun `没探过目录时不参与判定`() {
+        // 文件级调用方（例如预热链）拿不到目录结论，传 null 必须退回原有语义
+        assertEquals(ExecPsiFailureCause.UNKNOWN, classify(dirCanHostPsi = null))
+        assertEquals(ExecPsiFailureCause.DIALECT_UNAVAILABLE, classify(canPsiActual = false, dirCanHostPsi = null))
     }
 
     /**

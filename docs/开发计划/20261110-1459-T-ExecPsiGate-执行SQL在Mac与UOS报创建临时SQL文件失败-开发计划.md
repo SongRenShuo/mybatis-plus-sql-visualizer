@@ -671,6 +671,76 @@ VCS、忽略类压过方言类、全正常给 UNKNOWN）；反向验证把两条
 **读数**：`ExecPsiFailureHintTest` 8/0/0/0（新增「预览兜底提示只出一次」）、
 `BundlePlaceholderArityTest` 4/0/0/0、`SqlResultPanelUiTest` 15/0/0/0。
 
+### 13.13 F5：文件级谓词看不见父目录 —— 「全绿却建不出 PSI」的定案与修法（2026-11-11 傍晚）
+
+**触发**：用户第二次验收（日常 `IU-263.7307.200`，demo 项目 `mybatis-plus-sql-visualizer-demo`，
+`cn.song.ibatis2demo.UserDaoImpl#selectTwoSegment`）。仍是「执行失败：创建临时 SQL 文件失败」，
+**面板上没有任何蓝色入口**，用户原话「执行sql错误，没有引导用户调整配置信息」。
+（F3/F4 已生效——失败原因不再退化成 `unknown`，所以这次读到了完整的诊断串。）
+
+**日志读数**（`%LOCALAPPDATA%/JetBrains/IntelliJIdea2026.3/log/idea.log`，14:59:24 / 15:00:02 两轮，
+行 27664–27749）：整条自愈链完整跑完（清映射 → 钉 MySQL → 钉 GenericSQL），且**每次**映射写入都触发
+一次 `Workspace model updated: Update SQL dialect mappings` + 一次全项目 `UnindexedFilesScanner`；
+诊断串四项全绿：
+
+```
+excluded=false, underIgnored=false, regHideExcluded=false,
+psiLang=GenericSQL, canPsiActual=true, vfValid=true, dir=false
+```
+
+**反编译定案**（`lib/intellij.platform.core.impl.jar`，`-dgs=1` Fernflower）：
+`AbstractFileViewProvider.shouldCreatePsi()` 在 263 上只有三条出口——
+
+```java
+if (this.isIgnored()) return false;                       // ① 只看**文件名**的忽略模式
+else if (InternalPsiVersioning.isInsideVersioningButNotLocks()) return true;
+else { if (correspondsToRealFile() && vFile.isInLocalFileSystem()) {
+          PsiDirectory psiDir = getManager().findDirectory(vFile.getParent());   // ② 问的是**父目录**
+          if (psiDir == null && !isInLibrarySource && !isInLibraryClasses) return false; } return true; }
+```
+
+①的实现是 `FileTypeRegistry.isFileIgnored` → `IgnoredFileCache.calcIgnored` → **只对 `file.getNameSequence()` 做模式匹配**，
+喂给它的正是我们诊断里那句 `fileTypesIgnored`，两者同源。
+②的实现是 `FileManagerImpl.findDirectoryImpl` → `isExcludedOrIgnored(dir)` →
+`Registry.is("ide.hide.excluded.files") ? isExcluded(dir) : isUnderIgnored(dir)`（263 反编译逐字，
+243 沙箱栈同一形态）。
+
+**结论（粒度差，本轮真正的新发现）**：闸门问的是**父目录**，我们的归因面问的是**文件**。
+`isUnderIgnored(文件)=false` 与 `isUnderIgnored(目录)=true` 可以同时成立——真机就是这一对：
+文件落在内容根的文件集里（所以 `isExcluded`/`isUnderIgnored` 都为 false），而目录本身在 workspace model
+里被记为 ignored。于是四项谓词全绿 → `classifyExecPsiFailure` 落 `UNKNOWN` → UI 第 13.10 版对
+`UNKNOWN` 的处置是「保持原文案、不给入口」，红字孤零零一条。**上一版没覆盖的不是分支，是粒度。**
+
+**修法（五处）**
+
+| # | 改动 | 位置 |
+|---|---|---|
+| 1 | **落点目录快路径**：写文件之前先探目录（`execDirCanHostPsi`，与平台同一个 `PsiManager.findDirectory` 调用）；探不过就当场按成因收口，不再撞完整自愈链 | `createTempPsiFile` |
+| 2 | 新增成因 `DIR_NOT_INDEXED`：文件级谓词全绿而目录探针判否 = 这一档专属；分类器新增 `dirCanHostPsi: Boolean?`（`null` = 没探，不参与判定），**排在语言判据之前**（这种机器上 `psiLang`/`canPsiActual` 都正常，先判语言会把人送到 SQL 方言页） | `ExecPsiFailureHint.kt` |
+| 3 | `UNKNOWN` **不再只丢红字**：给专属文案 + 兜底蓝字入口。判不出成因不等于没有出路——兜底落点一定能用 | `showTempFileError` |
+| 4 | 诊断串补 `dirPsi / dirExcluded / dirUnderIgnored`（文件串）与独立的 `execDirDiagnostics`（`dirPsi / inContent / dirExcluded / dirUnderIgnored / dirTypeIgnored`）。真机下一张截图即可定案 | `DataSourceSelectorResults.kt` |
+| 5 | 文案修正：`.gitignore` 里忽略 `.idea/` 是**正常设置**，tip 不再劝用户删它，改为「要保留就用项目根落点」 | bundle 双语 |
+
+`DIR_NOT_INDEXED` 的入口：兜底落点（主）+ 项目根存在 `.gitignore` 时给「打开 .gitignore」；
+预览侧同样补了这一档的入口（此前落到 `else` 分支只告知不给入口）。
+
+**顺带的好处**：快路径把那一串「每写一次映射就重建一次 workspace model + 全项目 scan」省掉了——
+真机日志里那两轮各触发 4 次。
+
+**读数**：`ExecPsiFailureHintTest` **12 / 0 / 0 / 0**（新增 4 例：目录探针判否 → 目录不可用、
+不得误报方言、忽略类成因压过目录探针、未探目录时不参与判定）。
+`testDbExecPsiGate` **15 / 0 / 0 / 0**（新增 `testDirProbePassesOnHealthyExecDir` 钉探针**极性**——
+误判成「不能」的代价比漏判大：每台正常机器上每次执行都会被拦下劝换落点；`testDiagnosticsCarryFiveFields`
+同步加上目录级三项断言）。
+
+**反向验证**：注释掉分类器里 `if (dirCanHostPsi == false)` 一行 ⇒ `ExecPsiFailureHintTest` **恰 2 红**
+（「文件级全绿但目录探针判否时判为目录不可用」「目录探针判否不得被误报成方言问题」），恢复后复绿
+12/0/0/0，`RED PROBE` 标记清零。
+
+**残余（真机复核项）**：若下一轮报文的 `dirPsi=true`，说明这台机器上 `findDirectory` 也正常，
+形态另有来源——但分类一定不会落回「只剩红字」（`UNKNOWN` 也带兜底入口），且诊断串已经能把
+`dirPsi / dirExcluded / dirUnderIgnored / inContent` 一次交全。
+
 ---
 
 ## 参考

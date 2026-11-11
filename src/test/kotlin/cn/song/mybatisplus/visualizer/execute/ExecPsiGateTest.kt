@@ -508,9 +508,39 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         val vf = writeExecFile("select 4")
         val diag = execPsiDiagnostics(project, vf)
         println("[ExecPsiGate] diagnostics=$diag")
-        for (field in listOf("name=mpsql-exec", "vfValid=true", "dir=false", "fileType=", "mappedLang=", "canPsi=", "path=")) {
+        for (field in listOf(
+            "name=mpsql-exec", "vfValid=true", "dir=false", "fileType=", "mappedLang=", "canPsi=", "path=",
+            // F5：目录级三项——「文件级谓词全绿、findFile 仍 null」那种形态只能靠它们判型
+            "dirPsi=", "dirExcluded=", "dirUnderIgnored=",
+        )) {
             assertTrue("诊断串缺少字段 '$field'（用户回传时就靠这几项定位）: $diag", diag.contains(field))
         }
+    }
+
+    /**
+     * F5（2026-11-11 用户验收）：**目录级探针在正常目录上必须判「能」**。
+     *
+     * 探针是 `createTempPsiFile` 快路径的闸门，误判成「不能」的代价比漏判更大：每台正常机器上的
+     * 每次执行都会被拦下、劝用户换落点。所以这里把**极性**钉死——文件能建 PSI 时目录探针必须也
+     * 说能，`execDirFailureCause` 必须返回 null（否则预览会一直挂降级横幅）。
+     */
+    fun testDirProbePassesOnHealthyExecDir() {
+        val (ioFile, vf) = writeExecFileWithIo("select 6")
+        val dir = ioFile.parentFile!!
+        assertNotNull("前置：正常状态文件 PSI 应可建", findExecPsi(project, vf))
+        assertTrue(
+            "文件能建 PSI ⇒ 目录探针必须也判「能」（误判成不能会把正常机器全降级）",
+            execDirCanHostPsi(project, dir),
+        )
+        assertNull(
+            "正常目录不得被判出成因（否则每次执行都劝换落点、每次预览都挂横幅）",
+            execDirFailureCause(project, dir),
+        )
+        val diag = execDirDiagnostics(project, dir)
+        println("[ExecPsiGate] dir diagnostics=$diag")
+        assertTrue("目录诊断必须带探针结论: $diag", diag.contains("dirPsi=true"))
+        assertTrue("目录诊断必须带 inContent（区分「不在内容模型」与「在但被忽略」）: $diag", diag.contains("inContent="))
+        assertTrue("目录诊断必须带绝对路径: $diag", diag.contains("dir="))
     }
 
     // ======================== 辅助 ========================

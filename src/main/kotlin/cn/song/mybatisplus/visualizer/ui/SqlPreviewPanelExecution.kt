@@ -1098,6 +1098,15 @@ internal fun openFileTypesSettings(proj: Project) {
     }
 }
 
+/**
+ * 13.10：项目根是否存在 `.gitignore`。
+ *
+ * 只有存在时才把「打开 .gitignore」当入口——`openGitignoreFile` 会顺手创建空文件，
+ * 而空 `.gitignore` 不解释任何事：没有它就不是 VCS 忽略这条成因，宁可少给一个入口。
+ */
+internal fun gitignoreExists(proj: Project): Boolean =
+    runCatching { proj.basePath?.let { java.io.File(it, ".gitignore").exists() } ?: false }.getOrDefault(false)
+
 /** 13.10：打开项目根 `.gitignore`（VCS 忽略的修复点就在这个文件里）。 */
 internal fun openGitignoreFile(proj: Project) {
     runCatching {
@@ -1123,6 +1132,8 @@ internal fun openGitignoreFile(proj: Project) {
  *  | VCS 忽略（.gitignore） | 打开项目根 `.gitignore` |
  *  | Excluded + Registry | 打开 项目结构 |
  *  | 方言不可用 / 未识别语言 | 打开 SQL 方言设置 |
+ *  | 落点目录不被内容模型接管 | 兜底落点（+ 有 .gitignore 时给打开入口） |
+ *  | 判不出成因 | 兜底落点（**不允许只剩红字**） |
  *
  * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
  */
@@ -1166,9 +1177,21 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
             settingsAction = { openSqlDialectSettings(proj) }
             allowFallback = false
         }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIR_NOT_INDEXED -> {
+            // F5（2026-11-11 用户验收）：文件级谓词全绿、平台照样不建 PSI 的唯一形态。
+            // 真实原因在父目录的待遇上（本机实证的成因就是 .gitignore 里有一行 `.idea/`），
+            // 所以这里给**能做的那件事**：兜底落点 + 打开 .gitignore。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dirNotIndexed")
+            if (gitignoreExists(proj)) {
+                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
+                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
+                settingsAction = { openGitignoreFile(proj) }
+            }
+        }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.UNKNOWN -> {
-            resultPanel.showError(errorMsg)
-            return
+            // **不再只丢红字**（2026-11-11 用户验收：「没有引导用户调整配置信息」）。
+            // 判不出成因不等于没有出路：兜底落点一定能用，文案把可自查的两个入口写出来。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.unknown")
         }
     }
     resultPanel.showErrorWithActions(

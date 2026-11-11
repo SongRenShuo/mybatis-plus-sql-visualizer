@@ -1821,6 +1821,23 @@ internal fun DataSourceSelector.createTempPsiFile(
         mapDialectBeforePsi(project, pair.first, LOG, renderedDialectName)
         return pair
     }
+    // T-ExecPsiGate F5（2026-11-11 用户验收）：**落点目录先探一次，探不过就别撞自愈链**。
+    //
+    // 真机形态（IU-263.7307.200）：文件级四项谓词全绿、`findFile` 恒 null，而平台闸门问的是
+    // `findDirectory(父目录)`——目录不可用这件事文件谓词根本看不见。原实现闷头撞完整条自愈链
+    // （清映射 → 钉 MySQL → 钉 GenericSQL，日志实证每次都引发一次 workspace model 重建 + 一次全项目
+    // scan），最后仍落 UNKNOWN：用户看到一句红字、没有任何可点入口，正是这一轮的验收问题。
+    //
+    // 所以：目录级探针判否就按「目录不可用」当场收口——原因说得准、文案当场给兜底入口，
+    // 也省掉那一串无用的重建。探针本身与平台同一调用（`PsiManager.findDirectory`），
+    // 探不出来时按「能」处理（保守走原路径，失败还有自愈链 + 分类兜底）。
+    ioFile.parentFile?.let { execDir ->
+        if (!execDirCanHostPsi(project, execDir)) {
+            lastTempFileHint = runCatching { execDirFailureCause(project, execDir) }.getOrNull()
+                ?: ExecPsiFailureCause.DIR_NOT_INDEXED
+            return fail("dirNoPsi", execDirDiagnostics(project, execDir))
+        }
+    }
     // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
     // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
     // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
@@ -1995,6 +2012,9 @@ internal fun DataSourceSelector.healExecPsi(
  * 预览在选出临时目录那一刻文件还没建出来，只能看「这层目录在平台内容模型里的待遇」。
  * 语言判据给中性值（`GenericSQL` + `canPsiActual=true`），让它落到 UNKNOWN 而不是误报方言问题。
  *
+ * F5（2026-11-11 真机）：**目录级探针的结论必须显式带进判定**。否则文件级四项谓词全绿时这里仍落
+ * UNKNOWN，调用方（失败文案）就只剩红字、没有任何可点入口——这正是用户第二轮的验收问题。
+ *
  * @return null = 该目录能建 PSI（或探不出来，保守按能）；非 null = 已经落到备用落点，值为成因
  */
 internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFailureCause? {
@@ -2012,6 +2032,7 @@ internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFa
         underIgnored = runCatching { fileIndex.isUnderIgnored(dirVf) }.getOrDefault(false),
         psiLangId = "GenericSQL",
         canPsiActual = true,
+        dirCanHostPsi = false,
     )
 }
 
@@ -2065,6 +2086,16 @@ internal fun execPsiFailureCauseNow(project: Project, vf: com.intellij.openapi.v
             com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.fileType)
         }
     }.getOrNull()
+    // F5（2026-11-11 真机）：**平台闸门问的是父目录**，四项文件谓词看不见父目录的待遇。
+    // 真机上出现过「文件级全绿、findFile 恒 null」，只靠文件谓词只能判成 UNKNOWN（= 只丢红字，
+    // 没有可点入口，正是这一轮的验收问题）。把目录级探针并进来之后，`shouldCreatePsi` 的两条 null
+    // 分支（名字命中忽略模式 / findDirectory 拿不到父目录）才算被完整覆盖。
+    val dirCanHostPsi = runCatching {
+        ReadAction.compute<Boolean, Throwable> {
+            val parent = vf.parent
+            parent != null && PsiManager.getInstance(project).findDirectory(parent) != null
+        }
+    }.getOrNull()
     return classifyExecPsiFailure(
         excluded = excluded,
         regHideExcluded = regHideExcluded,
@@ -2072,6 +2103,7 @@ internal fun execPsiFailureCauseNow(project: Project, vf: com.intellij.openapi.v
         underIgnored = underIgnored,
         psiLangId = psiLanguage?.id,
         canPsiActual = runCatching { canCreateSqlPsiFor(psiLanguage) }.getOrDefault(false),
+        dirCanHostPsi = dirCanHostPsi,
     )
 }
 
@@ -2119,11 +2151,57 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
     val regHideExcluded = runCatching {
         com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
     }.getOrNull()
+    // F5：**文件级谓词看不见父目录**——平台闸门问的是 `findDirectory(父目录)`。真机上出现过
+    // 文件级四项全绿而 findFile 恒 null 的形态，只打文件级等于把唯一能判型的信息落下了。
+    val parentVf = runCatching { vf.parent }.getOrNull()
+    val dirCanHostPsi = runCatching {
+        parentVf != null && ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(parentVf)
+        } != null
+    }.getOrNull()
+    val dirExcluded = runCatching {
+        parentVf != null && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(parentVf)
+    }.getOrNull()
+    val dirUnderIgnored = runCatching {
+        parentVf != null && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(parentVf)
+    }.getOrNull()
     return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
         "mappedLang=$mappedId, canPsi=$canPsi, inheritedLang=$inheritedId, " +
         "canPsiInherited=$canPsiInherited, psiLang=$psiLang, canPsiActual=$canPsiActual, " +
         "excluded=$excluded, underIgnored=$underIgnored, regHideExcluded=$regHideExcluded, " +
+        "dirPsi=${dirCanHostPsi}, dirExcluded=$dirExcluded, dirUnderIgnored=$dirUnderIgnored, " +
         "ideBuild=$ideBuild, path=$path"
+}
+
+/**
+ * T-ExecPsiGate F5（2026-11-11 真机）：**目录级诊断串**（进 `createTempPsiFile` 的 `dirNoPsi` 阶段）。
+ *
+ * 为什么另起一条：真机实测文件级四项谓词可以全绿而 `findFile` 恒 null——平台闸门问的是父目录，
+ * 文件谓词看不见父目录的待遇。把目录级的同一个谓词与探针结论直接打进文案，下一次截图就能定案。
+ */
+internal fun execDirDiagnostics(project: Project, dir: java.io.File): String {
+    val dirVf = runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir) }.getOrNull()
+    val dirPsi = runCatching {
+        if (dirVf == null) null else ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(dirVf)
+        }
+    }.getOrNull() != null
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    val dirExcluded = runCatching { dirVf != null && fileIndex.isExcluded(dirVf) }.getOrDefault(false)
+    val dirUnderIgnored = runCatching { dirVf != null && fileIndex.isUnderIgnored(dirVf) }.getOrDefault(false)
+    val dirTypeIgnored = runCatching {
+        dirVf != null && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf)
+    }.getOrDefault(false)
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrDefault(false)
+    val inContent = runCatching { dirVf != null && fileIndex.isInContent(dirVf) }.getOrDefault(false)
+    val ideBuild = runCatching {
+        com.intellij.openapi.application.ApplicationInfo.getInstance().build.asString()
+    }.getOrNull()
+    return "dir=${dir.path}, dirVfValid=${dirVf != null}, dirPsi=$dirPsi, inContent=$inContent, " +
+        "dirExcluded=$dirExcluded, dirUnderIgnored=$dirUnderIgnored, dirTypeIgnored=$dirTypeIgnored, " +
+        "regHideExcluded=$regHideExcluded, ideBuild=$ideBuild"
 }
 
 /**
