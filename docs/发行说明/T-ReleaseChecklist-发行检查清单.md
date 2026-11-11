@@ -51,6 +51,7 @@
 ## 二、准备段（门禁与元数据）
 
 - [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/263 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+  - **内测版不豁免（2026-11-11 用户明确要求）**：`-beta.N` 同样必须过 CI 门禁——正路是**打 tag 之前**派 `build-plugin.yml mode=gate`（L28 口径），绿了再发；若已先发了，**事后立刻补派一次** `mode=gate` 并把 run id 写进 `docs/变更记录.md` 的发行条目。定向测试 + 反向验证照做，但**不能替代**门禁：内测包同样会被用户当成「已修好」的凭据装进真实 IDE，而门禁（243/253/263 兼容 + 五片全量 + fast）是唯一覆盖跨版本兼容与全仓回归的读数。反例：`2026.11.12-beta.1` 只跑了定向就发了，发行说明里只能如实标「未跑 releaseGate」。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
 - [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
