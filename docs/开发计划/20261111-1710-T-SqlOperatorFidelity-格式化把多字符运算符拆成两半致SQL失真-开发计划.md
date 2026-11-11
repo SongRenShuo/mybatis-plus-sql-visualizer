@@ -86,7 +86,7 @@ type == SqlTokenTypes.OPERATOR -> {
 | 复制可执行 SQL | ✅ | 取面板编辑器文本，产物直接带出坏 SQL |
 | 直接执行 / EXPLAIN | ✅ | 同上，坏 SQL 进数据库 |
 | 分享面板（复制/导出/评论） | ✅ | 同取 `editorDocumentText()` |
-| SQL 日志面板（条目格式化、点击预览、最近执行记录） | ✅（显示） | `SqlFormatter.format` 同源；日志条目复制若取 `restoredSql` 则不受影响（需在实施第一步核一遍 `LogToSqlPanel` / `SqlExportService` 的取文本点） |
+| SQL 日志面板（条目格式化、点击预览、最近执行记录） | ✅（显示 + 两处复制） | 格式化同源 `SqlFormatter.format`。**取文本点已逐个核过**：日志列表批量复制走 `restoredSql`（`log/LogEntryFiltering.kt:110-111`）**不受影响**；`log/LogToSqlPanel.kt:241` 复制的是格式化后的结果编辑器文本、`log/RecentExecutionsDialog.kt:257-268` 复制的是格式化后的显示文本——这两处带出坏 SQL |
 | JdbcTemplate / 注解预览 | ✅（显示+执行） | `JdbcTemplateSqlPreviewService.kt:108` 直接把 `SqlFormatter.format` 的产物当预览 SQL |
 | iBatis / MyBatis XML 渲染本身 | ❌ | 渲染与占位符合并不碰运算符；坏文本是格式化阶段产生的 |
 | 参数回填（`?`、`#x#`、`:name`） | ❌ | `:name` 在 JPA 原生链上已被 `NATIVE_NAMED_PARAM`（含 `(?<!:)` 前视）换成 `?`，不会以 `:` 形态进入格式化器 |
@@ -198,11 +198,28 @@ private fun scanOperator() {
 
 ## 九、待验证前提（实施者先证伪再动手）
 
-1. **P1**：`||` 的坏化只发生在格式化层，iBatis 渲染本身不插空格。→ 用 T2 的 `compactSql`/未格式化态各跑一次比对（若渲染层也坏，方案要扩到 `xml/ibatis` 链）。
+1. **P1（已证伪，渲染层不坏）**：`||` 的坏化只发生在格式化层，iBatis 渲染本身不插空格。证据：`ui/IbatisXmlPreviewService.kt:281-295` 的 `joinToString(" ")` 拼的是**语句块**不是字符；`xml/ibatis/SqlMapSqlRenderer.kt:569` 的空白折叠按空白字符分割，不会在 `|` 与 `|` 之间凭空加空格。
 2. **P2**：`SqlFormatter.formatClauseLine` 与 `formatVertical` 确实共用 `lex()`（同一份 token）。→ 读 `SqlFormatter.kt:264` / `:438` 两处 `lex` 调用点确认；T3 用例兜底。
-3. **P3**：日志面板的「复制」取的是 `restoredSql` 而非格式化文本（即复制链不受影响）。→ `grep` 取证后回填 §三 表格该行。
-4. **P4**：`scanNumber` 不吃掉 `||` 邻接的数字（`1||2`）。→ T1 里加一条 `1||2` 形态。
+3. **P3（已验证）**：日志面板的「批量复制」取 `restoredSql`（`log/LogEntryFiltering.kt:110-111`），**不受影响**；但 `LogToSqlPanel` 与最近执行记录对话框复制的是格式化文本，**受影响**（已回填 §三）。
+4. **P4**：`scanNumber` 不吃掉 `||` 邻接的数字（`1||2`）。→ T1 里有一形 `select 1||2` 兜底。
 
 ## 十、实施记录（收口回填）
 
-（待实施后回填：提交哈希、定向读数、反向验证读数、not run 清单。）
+- **提交**：`990af90a7` 计划与索引；`17eabc420` 词法器修复 + 13 例测试 + 反向验证记录。
+- **生产码改点（只一个文件）**：`ui/highlight/SqlLexer.kt` —— `scanOperator` 改为按 `MULTI_CHAR_OPERATORS` 最长匹配，新增 `matchesAt`；`SqlFormatter` **零改动**（空格规则不动，token 变一个，`| |` 自然消失）。
+- **定向读数**：`ui.highlight.*` + `share.format.*` + `ExecuteSqlSupportTest` = **373 tests / 0 failed**（其中 `SqlFormatterOperatorFidelityTest` 13 例全绿）。
+- **反向验证（两次读数）**：用 `Edit` 把 `scanOperator` 临时改回旧实现 → `SqlFormatterOperatorFidelityTest` **13 tests completed, 10 failed**，10 红全是运算符族（`||` / `::` / `<=>` / `->` / `->>` / `&&` / `<<` / `>>` / `!~` / `@>` / `<@` / `=>` / 三条路径），3 绿是回归守卫（既有比较符、占位符原子段、`#id#>0`）。旧实现的真实产物与用户截图逐字一致：
+  - `AND GROUP_NAME LIKE '%' | | #GROUP_NAME# | | '%'`
+  - `amount : : numeric`、`a <= > b`
+  恢复实现后 **BUILD SUCCESSFUL**（13/13），再跑整组 373/0/0。
+- **反向验证抓到一处假绿（当轮已修）**：首轮词法用例把 operator token 的文本**拼接**后比对，两个相邻 `|` 拼起来也是 `||` ⇒ 摘掉修复该用例照绿。改成断言「operator token **个数 = 1** 且文本相等」，反向时如期变红（这也印证了「合成样本只能证规则看得见我造的形态」这条仓规）。
+- **not run（交用户真机验收）**：runIde 沙盒里三面走查——① 同一 iBatis 语句预览里 `||` 原样显示；② 复制可执行 SQL 产物干净；③ 直接执行不被语法错拦下。
+
+## 十一、真机验收步骤（交给用户，助手不自评）
+
+| 步 | 操作 | 预期 |
+|---|---|---|
+| A1 | 沙盒打开含 `'%' || #GROUP_NAME# || '%'` 的 iBatis `<sqlMap>`，点预览 | 预览里是 `'%' || '弘博' || '%'`，**没有** `| |` |
+| A2 | 面板「复制可执行 SQL」 | 剪贴板里同上，粘到控制台可执行 |
+| A3 | 面板直接执行（Oracle / 达梦 / PG 任一） | 不再报非法运算符 |
+| A4 | 回归：任意一条普通 SELECT 预览 / 格式化 | 与改前一致（比较符、`#{}`、`${}` 不变） |
