@@ -232,6 +232,26 @@ class ExecPsiFailureHintTest {
         assertEquals(plain, withExecHint(plain, null))
     }
 
+    /**
+     * F9（2026-11-11 第六轮）：**所有执行回调都必须经过 `showTempFileError`**。
+     *
+     * 真机最后一层缺口：面板里五个执行调用点只有两处接了对的回调，主执行路径（`executePrepared`
+     * 与全链 `SqlExecutor.execute`）直连 `resultPanel.showError`——于是「直接点执行」永远拿不到
+     * 成因与蓝字入口，而「更多 → 切换数据源」那条走的是已接线的那两处，所以只有它正常。
+     * 用户的原话是「点击更多-切换数据源 才正常」，正是这条分叉。
+     */
+    @Test
+    fun `执行回调不得绕过 showTempFileError`() {
+        val src = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
+        ).readText()
+        val bypass = Regex("""onError = \{\s*errorMsg ->\s*resultPanel\.showError""")
+        assertFalse(
+            "执行回调直连 resultPanel.showError 会丢掉临时文件失败的成因与蓝字入口",
+            bypass.containsMatchIn(src),
+        )
+    }
+
     @Test
     fun `成因标记容错_未知枚举名不炸`() {
         val parsed = parseExecHintMessage("boom [hint=NOT_A_CAUSE]")

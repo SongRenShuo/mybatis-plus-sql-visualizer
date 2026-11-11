@@ -1342,9 +1342,10 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
                     proj, sql, null, isQuery,
                     onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-                    onError = { errorMsg ->
-                        resultPanel.showError(errorMsg)
-                    },
+                    // F9：本路径此前直接 `resultPanel.showError`，从未经过 showTempFileError——
+                    // 临时文件失败的成因与蓝字入口因此在「直接点执行」上永远不出现（切源那条走的是
+                    // 另一个已接线的调用点，所以那边有）。统一走 showTempFileError：无成因时行为等价。
+                    onError = { errorMsg -> showTempFileError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -1367,9 +1368,8 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             proj,
             // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
             onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
-            onError = { errorMsg ->
-                resultPanel.showError(errorMsg)
-            },
+            // F9：同上——执行回调统一走 showTempFileError（无成因时行为等价于 showError）
+            onError = { errorMsg -> showTempFileError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             dialectGateRequest = dialectGateRequest,
             onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -1383,9 +1383,9 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
         // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
-        onError = { errorMsg ->
-            resultPanel.showError(errorMsg)
-        },
+        // F9：统一走 showTempFileError——临时文件失败时的成因与蓝字入口全挂在这里；
+        // 无成因（普通 SQL 错误）时它逐字退回 showError，行为与旧实现一致。
+        onError = { errorMsg -> showTempFileError(errorMsg) },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         dialectGateRequest = dialectGateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -2172,7 +2172,8 @@ internal fun SqlPreviewPanel.promptDataSourceThenRetryStructured(
             previewSql,
             onError = { message ->
                 errorShown.set(true)
-                resultPanel.showError(message)
+                // F9：同样可能是临时文件失败（同一准备链），统一交给 showTempFileError
+                showTempFileError(message)
             },
         )
     }

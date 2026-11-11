@@ -1250,13 +1250,18 @@ internal fun DataSourceSelector.dumpSplitBounds(sp: javax.swing.JSplitPane, log:
  * `onError(String)`；两者**互斥**，不再先后各投一次。
  *
  * **为什么必须互斥**（T-ELU-01 实测的真相，与计划 §一.1 的「按钮可见但点了没反应」不同）：
- * 消费方 `SqlPreviewPanel` 的 `onError` 恒为 `resultPanel.showError(errorMsg)`，而
+ * 消费方 `SqlPreviewPanel` 的 `onError` 早先是 `resultPanel.showError(errorMsg)`，而
  * `showError` 会清掉定位动作与定位按钮（`ui/SqlResultPanel.kt` 的
  * `locateHandler = null` + `errorLocateButton.isVisible = false`）。原实现先投富通道
  * （`showErrorRich` 置按钮可见）、紧接着无条件投旧通道——**同一 EDT 任务内**后者立刻把
  * 前者抹掉，端态恒为「按钮不可见」，T-ELU-01 的「先解析后显隐」因此形同 no-op。
  * 两者呈现的文本同源（富通道 `showErrorRich` 内部就是 `showError(info.message)`），
  * 故富通道成功时不再投旧通道，展示行为等价而定位态得以保留。
+ *
+ * **F9 订正（2026-11-11）**：`onError` 现在**不再**恒为 `showError`——执行回调统一走
+ * `showTempFileError`（临时文件失败要挂成因与蓝字入口），无成因时才退回 `showError`。
+ * 上面那段「恒为 showError」的旧假设也正是临时文件失败在「直接点执行」上从不显示蓝字的根因：
+ * 五个执行调用点里只有两处接了对的回调。
  *
  * 富通道自身抛异常（`runCatching`）时**回退旧通道**——不让「结构化」这一增强把错误呈现吞掉。
  *

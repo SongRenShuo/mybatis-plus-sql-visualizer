@@ -841,6 +841,35 @@ dirTypeIgnored=false, regHideExcluded=false, ideBuild=IU-263.7307.200
 **读数**：`ExecPsiFailureHintTest` **18 / 0 / 0 / 0**（新增三条：复现用例、`withExecHint`↔
 `parseExecHintMessage` 互逆、未知成因名不抛）。
 
+### 13.17 F9：执行回调有一半直连 `showError` —— 蓝字只在「切换数据源」那条路上出现的真因（2026-11-11 第六轮）
+
+**现象**：F8 装上后报文里**已经带** ` [hint=IGNORED_BY_VCS]`（说明成因编码生效），但面板仍是裸文本、
+没有蓝字，而且标记原样显示——标记没被剥掉，说明这条消息**根本没经过** `showTempFileError`。
+用户同时补了一句关键对照：「点击更多-切换数据源 才正常」。
+
+**根因**：`ui/SqlPreviewPanelExecution.kt` 里一共五个执行调用点，只有两处把 `onError` 接到
+`showTempFileError`；**主执行路径**三处（`recoverConsole` 分支、`SqlExecutor.executePrepared`、
+全链 `SqlExecutor.execute`）与 EXPLAIN 结构化准备链一处都直连 `resultPanel.showError`：
+
+```kotlin
+onError = { errorMsg -> resultPanel.showError(errorMsg) }   // ← 成因与蓝字入口在这里丢干净
+```
+
+「更多 → 切换数据源」走的是已接线的那两处，所以只有它正常。这也解释了 13.10 起的一连串怪现象：
+早期截图中蓝字出现过的都是切源/别的路径，直接点执行从来没出现过——**不是成因传丢了，是这条路上
+压根没人读它**。前五轮所有关于"成因在哪丢"的推断都只在读方存在的前提下成立。
+
+**修法**
+
+| # | 改动 |
+|---|---|
+| 1 | 五处执行回调统一走 `showTempFileError`（无成因时它逐字退回 `showError`，普通 SQL 错误行为不变） |
+| 2 | 订正 `deliverError` 的 KDoc 里「`onError` 恒为 `resultPanel.showError`」——这条旧假设正是把缺口藏起来的原因 |
+| 3 | 护栏用例：源码扫描，`onError = { errorMsg -> resultPanel.showError` 这种直连不许再出现 |
+
+**读数**：`ExecPsiFailureHintTest` **19 / 0 / 0 / 0**（新增「执行回调不得绕过 showTempFileError」）。
+反向验证：把主执行路径那处改回 `resultPanel.showError` ⇒ 护栏用例恰 1 红。
+
 ---
 
 ## 参考
