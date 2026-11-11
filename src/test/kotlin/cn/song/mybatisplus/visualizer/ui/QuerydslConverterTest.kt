@@ -155,6 +155,39 @@ class QuerydslConverterTest : BasePlatformTestCase() {
         )
     }
 
+    fun testQd4BooleanBuilder字段变量_限useScope后引用链仍收集_券Y17() {
+        // T-HiddenBugPerfScan 券 Y17：ReferencesSearch 限 variable.useScope（仓内定性「较重」，
+        // 字段变量默认 scope 为全项目）——本例钉「字段变量的 and/or 引用链收集行为不变」
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private JPAQueryFactory queryFactory;
+                private BooleanBuilder builder = new BooleanBuilder();
+
+                public java.util.List<User> demo() {
+                    builder.and(QUser.user.status.eq(1));
+                    builder.or(QUser.user.name.startsWith("a"));
+                    return queryFactory.selectFrom(QUser.user).where(builder).fetch();
+                }
+            }
+
+            $stubs
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("selectFrom"))
+        assertNotNull(result)
+        assertEquals(
+            """
+            SELECT id, name, status
+            FROM t_user
+            WHERE (status = 1 OR name LIKE 'a%')
+            -- Querydsl：Q 类仅携带 Java 属性名，列名按实体注解映射的近似 SQL
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testQdUpdateSetWhereExecuteRendersUpdate() {
         myFixture.configureByText(
             "Demo.java",

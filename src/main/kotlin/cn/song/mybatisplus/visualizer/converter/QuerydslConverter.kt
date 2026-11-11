@@ -412,7 +412,9 @@ object QuerydslConverter {
         initPredicate?.let { conditions.add(it) }
         var sawOr = false
         data class RefEntry(val offset: Int, val op: String?, val call: PsiMethodCallExpression)
-        val refs = ReferencesSearch.search(variable).mapNotNull { reference ->
+        // T-HiddenBugPerfScan 券 Y17：ReferencesSearch 仓内定性「较重」（psi/WrapperCache.kt）——
+        // 曾每次预览裸跑全默认 scope（字段变量时为全项目）；限 useScope 到变量可见域。
+        val refs = ReferencesSearch.search(variable, variable.useScope).mapNotNull { reference ->
             val ref = reference.element as? PsiReferenceExpression ?: return@mapNotNull null
             // .and(pred) / .or(pred)：引用的父是 methodExpression → 调用
             val call = ref.parent?.parent as? PsiMethodCallExpression ?: return@mapNotNull null
