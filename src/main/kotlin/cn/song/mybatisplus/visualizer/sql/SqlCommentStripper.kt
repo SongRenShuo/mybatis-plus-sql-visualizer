@@ -22,9 +22,6 @@ object SqlCommentStripper {
                 chars[i] == '\'' -> i = skipQuoted(chars, i)
                 chars[i] == '-' && i + 1 < chars.size && chars[i + 1] == '-' ->
                     i = markLineComment(chars, i)
-                // T-HiddenBugPerfScan 券 Y7：MySQL 口径 # 行注释与 PlaceholderPositions 同批对齐
-                chars[i] == '#' ->
-                    i = markLineComment(chars, i)
                 chars[i] == '/' && i + 1 < chars.size && chars[i + 1] == '*' ->
                     i = markBlockComment(chars, i)
                 else -> i++

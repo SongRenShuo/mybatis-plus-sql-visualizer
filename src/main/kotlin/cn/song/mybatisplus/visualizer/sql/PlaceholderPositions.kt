@@ -29,11 +29,6 @@ internal fun placeholderPositions(sql: String): List<Int> {
                 c == '-' && i + 1 < sql.length && sql[i + 1] == '-' -> {
                     while (i < sql.length && sql[i] != '\n') i++
                 }
-                // T-HiddenBugPerfScan 券 Y7：MySQL 口径 # 行注释——注释里的 ? 曾被计入
-                // 占位符致回填名额虚增、后续 ? 整体错位（与 -- 分支同语义）
-                c == '#' -> {
-                    while (i < sql.length && sql[i] != '\n') i++
-                }
                 c == '/' && i + 1 < sql.length && sql[i + 1] == '*' -> {
                     i += 2
                     while (i + 1 < sql.length && !(sql[i] == '*' && sql[i + 1] == '/')) i++
