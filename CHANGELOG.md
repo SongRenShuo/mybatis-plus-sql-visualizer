@@ -2,6 +2,14 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+- **MBG 生成的 Example mapper 预览能从调用点还原条件（T-MbgExamplePreview，6fb76205）**：MBG 的 `andXxxYyy(...)` 方法体固定是一句 `addCriterion("cust_id =", value, "custId")`——`condition` 是常量、分支语义写在方法名后缀里。现在预览会从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用并读那个常量，于是 `${criterion.condition}` 拿到真实列名与操作符：产物从 `WHERE ( {{criterion.condition}} ? )` 变成 `WHERE ( cust_id = ? )`。拿不到调用点（跨模块、无索引、非链式写法）时退回占位，不报错
+
+### Fixed
+- **MBG Example 的预览产物从残缺 SQL 变成可读骨架（T-MbgExamplePreview，2d8798a9）**：用户报 `selectByExample` 预览出来是 `WHERE (AND OR (AND … ORDER BY 1`。四条成因逐条收掉：①`${criterion.condition}` 在模拟参数下求值为空，`and` 后什么都不剩——预览现在把求值为空的 `${}` 写成 `{{表达式}}` 占位（真实 SQL 产物路径不受影响），执行前另有更强的确认文案；②foreach 两轮迭代的 `and` 拼成单词 `andand`、separator 粘成 `)or(`——trim 缓冲现在在相邻段紧贴时补一个空格；③`choose` 四个互斥分支默认全开、永远短路到唯一不带参数的 `noValue`——同组现在只默认启用含 `#{}` 的分支；④`parameterType` 是 MBG Example 时 `distinct` 与 `orderByClause` 默认不展开、集合按 1 项（`order by 1` 这种能执行、但语义被改写的产物不再出现）。另外告警行不再把基线渲染的错误和当前勾选的错误混排，`foreach` 集合为 null 的文案改成中文并给「取消为 null 勾选」的指引
+
 ## [2026.11.11] - 2026-11-11
 
 > 范围＝`v2026.11.10` 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.11-beta.1` / `beta.2` 两轮、转正前两笔收口修复与转正后同版补入的 iBatis 全选/清除修复）：**捕获静默路径可见化**、**「整类 SQL 消失」根治**、**Mac/UOS 执行链 PSI 修复**、**预览执行写语句完成态修复**、**iBatis 勾选联动修复**。本节按能力面合并叙述并取代下方两轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 两篇内测说明：`20261110-1651` 捕获静默路径可见化与方言登记补齐、`20261110-1755` 语句抛异常致整类 SQL 消失的根治）。
