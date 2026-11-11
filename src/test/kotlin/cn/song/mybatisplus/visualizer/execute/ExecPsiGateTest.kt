@@ -397,6 +397,37 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * **实验 R5**：映射写入触发的**异步重解析**与紧接着的 `findFile` 之间的竞态。
+     *
+     * 真机线索（2026-11-11）：用户的 SQL Dialects 里 `Global/Project = <None>`，而
+     * `mpsql-exec.sql` 显式映射为 **MySQL**——也就是说映射本身完全正常，`findFile` 却仍拿不到 PSI。
+     * 那剩下的解释只有「**取 PSI 的时刻**不对」：`setMapping` 会经 `LanguageSubstitutors.requestReparsing`
+     * 投一拍**异步写动作**换语言，而 exec 链在 `ensureMapped` 返回后**立刻** findFile
+     * （preview 链有 `awaitPreviewPsiLanguage` 专门等这一拍，exec 链没有）。
+     *
+     * 做法：在池线程上反复跑生产函数 `createTempPsiFile`，每轮**交替目标方言**（MySQL ↔ PostgreSQL）
+     * 强制每轮都真的写一次映射 + 触发重解析，统计失败次数与失败阶段。
+     */
+    fun testCreateTempPsiFileUnderReparseRaceProbe() {
+        var ok = 0
+        val failures = mutableListOf<String>()
+        repeat(3) { i ->
+            val dialect = if (i % 2 == 0) "MySQL" else "PostgreSQL"
+            val pair = com.intellij.openapi.application.ApplicationManager.getApplication()
+                .executeOnPooledThread<Pair<VirtualFile, PsiFile>?> {
+                    DataSourceSelector.createTempPsiFile(project, "select $i", dialect)
+                }.get(30, java.util.concurrent.TimeUnit.SECONDS)
+            if (pair == null) {
+                failures += "#$i($dialect): ${DataSourceSelector.lastTempFileFailure}"
+            } else {
+                ok++
+            }
+        }
+        println("[R5] ok=$ok fail=${failures.size} -> $failures")
+        assertTrue("至少要成功一次（否则是环境问题，不是竞态）", ok > 0)
+    }
+
     // ======================== 诊断 ========================
 
     /**

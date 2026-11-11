@@ -445,6 +445,50 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
 
 **用户侧 1 分钟验证法**：`Settings → Languages & Frameworks → SQL Dialects` 把默认方言改成 MySQL（或 PostgreSQL），再点一次「执行 SQL」。好了 ⇒ 就是继承方言；照旧 ⇒ 排掉这一支，等新诊断里的 `inheritedLang` 说话。
 
+### 13.5 方言设置否证 + R5 + 决定性诊断（2026-11-11 下午）
+
+**用户提供的 SQL Dialects 截图（UOS 那台）**：
+
+| 项 | 值 |
+|---|---|
+| Global SQL Dialect | `<None>` |
+| Project SQL Dialect | `<None>` |
+| `.../.idea/sql-visualizer/exec/mpsql-exec.sql` | **MySQL** |
+| `.../.idea/sql-visualizer/preview` | Oracle |
+
+读法：① 全局/项目默认方言都是 `<None>` ⇒ **13.3 的「继承方言是毒源」被否证**（压根没有继承值）；② exec 文件确实显式映射为 **MySQL**——一个 R4 已证明能建 PSI 的方言，却仍拿不到 PSI。所以问题不在「映射到什么」，而在「**取 PSI 的时刻/环境**」。
+
+**R5：映射写入触发的异步重解析竞态**（preview 有 `awaitPreviewPsiLanguage` 等这一拍，exec 链没有）
+
+池线程上反复跑生产函数 `createTempPsiFile`，每轮交替 MySQL ↔ PostgreSQL 强制真的写一次映射 + 触发重解析：
+
+```
+[R5] ok=20 fail=0 -> []
+```
+
+**本地四条假说全部打不出来**：vf 失效（只能显式造）、并发外部写（R2 344 次写 0 null）、坏映射（R3 恒抛 CCE 不退化成 null）、重解析竞态（R5 20/20 成功）。剩下唯一未拿到的变量是**用户 IDE 的 Build 与 SQL 方言模块的实际状态**。
+
+**因此把决定性证据做进失败文案**（`execPsiDiagnostics` 再补三项）：
+
+| 字段 | 含义 |
+|---|---|
+| `psiLang=` | 平台**实际**给这个文件选中的语言（`LanguageUtil.getLanguageForPsi`）；抛异常则为 `EX:<异常类型>` |
+| `canPsiActual=` | 该实际语言能否建 SQL PSI（`canCreateSqlPsiFor`） |
+| `ideBuild=` | `ApplicationInfo.build.asString()`，例如 `IU-243.28141.41` |
+
+判读表（下一份截图即可定案，不需要日志）：
+
+| psiLang | canPsiActual | 结论与下一步 |
+|---|---|---|
+| `MySQL` | `false` | **那台机器的 MySQL 方言没有可用 ParserDefinition**（SQL 方言模块缺失/与 IDE 版本不匹配）——与本插件无关，但我们可以钉别的方言绕开；同时建议用户修 IDE 安装 |
+| `MySQL` | `true` | 语言没问题，PSI 创建另有原因（FileViewProvider 失效等）——下一步查 provider 状态 |
+| `EX:ClassCastException` | — | 方言替换器在用户机器上直接崩（与 T-PreviewPsiDialect 同族） |
+| `null` | — | 文件类型没有语言（`.sql` 未识别成 SQL） |
+
+本机对照读数（证明字段可用）：`psiLang=GenericSQL, canPsiActual=true, ideBuild=IU-243.28141.41`。
+
+定向 **13 tests / 0 failures / 0 errors / 0 skipped**。
+
 ---
 
 ## 参考

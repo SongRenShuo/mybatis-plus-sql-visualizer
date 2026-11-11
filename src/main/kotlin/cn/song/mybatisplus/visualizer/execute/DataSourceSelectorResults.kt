@@ -1999,9 +1999,27 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
     val isDir = runCatching { vf.isDirectory }.getOrDefault(false)
     val fileTypeName = runCatching { vf.fileType.name }.getOrDefault("?")
     val path = runCatching { vf.path }.getOrDefault("?")
+    // R5（2026-11-11）：真机两台的设置里 exec 文件显式映射为 MySQL、全局/项目方言都是 <None>，
+    // 却仍拿不到 PSI——说明「映射到什么」和「平台实际给这个文件什么语言」已经对不上了。
+    // 直接把平台**实际选中的 PSI 语言**与 IDE Build 打进失败文案：前者是决定性证据（若它抛异常，
+    // 就是方言替换器在用户那台机器上直接崩），后者是唯一还没拿到的环境变量。
+    val psiLangProbe = runCatching {
+        ReadAction.compute<com.intellij.lang.Language?, Throwable> {
+            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.fileType)
+        }
+    }
+    val psiLang = psiLangProbe.getOrNull()?.id
+        ?: psiLangProbe.exceptionOrNull()?.javaClass?.simpleName?.let { "EX:$it" }
+    // 决定性组合：psiLang=MySQL 而 canPsiActual=false ⇒ 那台机器上 MySQL 方言没有可用的
+    // ParserDefinition（SQL 方言模块缺失/版本不匹配），与本插件无关，但我们可以绕开（钉别的方言）。
+    val canPsiActual = runCatching { canCreateSqlPsiFor(psiLangProbe.getOrNull()) }.getOrDefault(false)
+    val ideBuild = runCatching {
+        com.intellij.openapi.application.ApplicationInfo.getInstance().build.asString()
+    }.getOrNull()
     return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
         "mappedLang=$mappedId, canPsi=$canPsi, inheritedLang=$inheritedId, " +
-        "canPsiInherited=$canPsiInherited, path=$path"
+        "canPsiInherited=$canPsiInherited, psiLang=$psiLang, canPsiActual=$canPsiActual, " +
+        "ideBuild=$ideBuild, path=$path"
 }
 
 /**
