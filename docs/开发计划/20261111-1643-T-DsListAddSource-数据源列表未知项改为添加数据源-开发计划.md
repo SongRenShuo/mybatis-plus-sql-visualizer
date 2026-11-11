@@ -204,3 +204,16 @@ DatabaseViewActions.getCreateDataSourceAction(
 - 不恢复历史上被否决的自建换源下拉/链接（T-ExplainFailUx W11 已 revert，维持否决）；
 - 不在「无可用数据源」红条上顺手加动作（属另一议题，本轮只动列表条目）；
 - 不做创建后自动连接/内省（交回平台，用户自己点 Test Connection）。
+
+---
+
+## 十二、实施记录（2026-11-12）
+
+- **车道**：分支 `t-ds-list-add-source`（基于 master `34d3af5ec`）＋ 工作树 `.worktrees/t-ds-list-add-source`；主控单干，未派子代理（用户令）。提交：代码＋测试 `c728c8058`，文档 `e6e4d4942`。
+- **决策点落法（用户未逐项拍板，按计划 §四建议执行）**：D-1 建源成功自动切到新源（回调先核 `DataSourceStorage` 在册，防未配完即切）；D-2 三处列表装配点统一（执行选择器与切换数据源共用 `buildRunnerItems`）；D-3 平台不可用一律隐藏；D-4 主路＝取平台驱动组子项自渲染二级列表，降级路＝直开 `DataSourceManagerDialog` 管理器窗口。
+- **平台前提新证据（实施中 javap 243 定案，进架构文档）**：`NewDataSourceActionGroup.update` 调 `DatabaseViewActions.isDataSourceActionsEnabled`，要求 DataContext 带 `DatabaseView.DATABASE_VIEW_KEY`——**整组直弹必被置灰**（P-2 的具体机理），故驱动子项逐个取出自渲染（子项 `LocalDataSourceManager$2` 的 `actionPerformed` 只读构造期捕获字段，无 DataContext 依赖）。
+- **编译迭代**：`ActionGroup.children` 在 Kotlin 不解析（须 `getChildren(null)`，仓内 `delegateChildren` 同款先例）；测试桩 `val delegate` 与 `fun getDelegate()` 撞 JVM 签名（改 `inner`）。
+- **定向读数（独立沙盒 `MPSV-DsList`，临时 sandboxContainer 已还原未入库；并行登记 t-dslist）**：`DsListAddSourceTest` 12 例新增 ＋ 同链回归 `ChooseDataSourceTakeoverTest` 3 / `PreviewPreparePickTest` 8 / `DataSourceSelectorPreferredMissTest` 6 / `TakeoverUpdateThreadGuardTest` 2 ＝ **31/0/0**。
+- **反向验证两读数（探针逐字还原后复跑）**：三探针（R1 merge 摘「无名丢弃」/ R2 buildRunnerItems 回落 Unknown / R3 摘末尾添加项）→ **12 例 3 失败**，失败点恰为 `test合并_无名条目一律丢弃_不再渲染Unknown`、`testB侧_无名runner不渲染`、`testB侧_末尾添加项在平台可用时追加且不携带runner`，其余 9 例仍绿；逐字还原 → **31/0/0**（`BUILD SUCCESSFUL`）。
+- **not run（如实登记）**：① 真机/沙盒 GUI 走查（§八 1~6，含 P-5「consumer 回调时机与取消不落空源」、P-1 的 `[M36][DsList]` 取证日志读数、P-2 驱动弹层在 262/263 的行为、P-6 Consumer 三版可用性）——需 runIde 沙盒连真实数据源，交用户验收或后续派 GUI 车道；② `resolveLocalDataSource` 的 delegate **成功路**真反射（默认 test 沙盒无 Database jar，退化路已验、语义路经注入桩已验）；③ 全量门禁（本轮只定向，收口时按纪律补 `mode=gate`）。
+- **build.gradle.kts 的临时 sandboxContainer 未随提交入库**（提交前 diff 已核对只剩文档改动）。
