@@ -35,6 +35,16 @@ import javax.swing.Icon
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
+
+/**
+ * T-ExecPsiGate F6：一次「带修复入口」的失败——**阶段 + 成因**成对（见
+ * [DataSourceSelector.lastTempFileHintRecord]）。
+ *
+ * @param stage 失败阶段串的前缀（与 `execute.tempFile.failed` 文案里的同名片段，如 `dirNoPsi`）
+ * @param hint 该阶段对应的成因，决定面板上挂哪颗蓝字入口
+ */
+internal class TempFileHintRecord(val stage: String, val hint: ExecPsiFailureCause)
+
 object DataSourceSelector {
 
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
@@ -125,18 +135,25 @@ object DataSourceSelector {
     internal var lastTempFileFailure: String? = null
 
     /**
-     * T-ExecPsiGate 13.10：最近一次失败**为什么**建不出 PSI（被忽略 / 被排除 / 方言不可用 …）。
+     * T-ExecPsiGate 13.10 / F6：最近一次**带修复入口**的失败——阶段 + 成因**成对**记录。
      *
      * 与 [lastTempFileFailure]（阶段串）互补：那个只说到「哪一段失败」，这个说到「该去哪儿修」。
-     * 面板据此把失败行渲染成「红字 + 蓝色可点入口」（`showErrorWithActions`），把用户直接送到
-     * 设置页 / 项目结构页，而不是让他自己翻。
+     * 面板据此把失败行渲染成「红字 + 蓝色可点入口」（`showErrorWithActions`）。
+     *
+     * **为什么不是一个裸字段**（F6，2026-11-11 第三轮验收实测）：F5 把成因记在裸字段里、并在
+     * `createTempPsiFile` 入口清空。预热链与冷路径并发时，先失败的一方刚写好成因，另一方的入口
+     * 就把它清掉了——用户看到的仍是「只剩红字、没有蓝字」。现在成因绑着**它所属的阶段**，消费时按
+     * 错误文案里的阶段匹配：别人的入口清不掉它，旧成因也不会被安到新失败上（阶段对不上即丢弃）。
      */
     @Volatile
-    internal var lastTempFileHint: ExecPsiFailureCause? = null
+    internal var lastTempFileHintRecord: TempFileHintRecord? = null
 
-    /** 取一次失败原因并清空（避免后续无关错误复用上一个 hint）。 */
-    internal fun consumeTempFileHint(): ExecPsiFailureCause? =
-        lastTempFileHint.also { lastTempFileHint = null }
+    /** 取一次「阶段 + 成因」；文案里不含该阶段就当过期，一并丢弃（见 [lastTempFileHintRecord]）。 */
+    internal fun consumeTempFileHintFor(errorMsg: String): ExecPsiFailureCause? {
+        val rec = lastTempFileHintRecord ?: return null
+        lastTempFileHintRecord = null
+        return rec.hint.takeIf { errorMsg.contains(rec.stage) }
+    }
 
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
      * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
@@ -2103,6 +2120,14 @@ object DataSourceSelector {
         java.util.Collections.synchronizedSet(
             java.util.Collections.newSetFromMap(java.util.WeakHashMap<Project, Boolean>()),
         )
+
+    /**
+     * T-ExecPsiGate F6：已经**告知过一次**「改用项目根落点」的项目（按 basePath 记，弱引用）。
+     *
+     * 落点从 `.idea` 自动改到项目根是**静默的行为变化**，必须说一次；但每次执行都提示就是新噪音源。
+     */
+    internal val execRootFallbackNotified: MutableSet<String> =
+        java.util.Collections.synchronizedSet(mutableSetOf())
 
     /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/

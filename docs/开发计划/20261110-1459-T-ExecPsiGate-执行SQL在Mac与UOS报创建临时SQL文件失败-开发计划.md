@@ -741,6 +741,48 @@ else { if (correspondsToRealFile() && vFile.isInLocalFileSystem()) {
 形态另有来源——但分类一定不会落回「只剩红字」（`UNKNOWN` 也带兜底入口），且诊断串已经能把
 `dirPsi / dirExcluded / dirUnderIgnored / inContent` 一次交全。
 
+### 13.14 F6：真机读数推翻了 13.11 的定案前提 —— 落点改为自动改写（2026-11-11 晚）
+
+**触发**：同一台机器、同一个项目的第三轮验收。这次报文里的目录级诊断**全部命中**：
+
+```
+执行失败：创建临时 SQL 文件失败：dirNoPsi: dir=<base>/.idea/sql-visualizer/exec,
+dirVfValid=true, dirPsi=false, inContent=false, dirExcluded=true, dirUnderIgnored=true,
+dirTypeIgnored=false, regHideExcluded=false, ideBuild=IU-263.7307.200
+```
+
+三个结论，一个比一个重要：
+
+1. **诊断对了**：`dirPsi=false` 就是平台闸门里 `findDirectory(parent)==null` 的直接读数，
+   `inContent=false / dirExcluded=true / dirUnderIgnored=true` 三项把成因钉死在这个目录上。
+2. **面板却仍然只有红字**：成因又丢了。F5 把成因记在裸字段 `lastTempFileHint` 上，而
+   `createTempPsiFile` 入口会清空它——预热链与冷路径并发时，先失败的一方刚写好、另一方的入口就抹掉。
+   与 F3 同根：**失败信息不该走共享可变字段**。
+3. **更关键：13.11 的定案前提不成立**。那条定案是「`.sql-visualizer` 是兜底，先报错引导用户改配置」，
+   前提是「用户有配置可改」。而这个形态的成因是 `.gitignore` 忽略了 `.idea/`——那是**正常设置**，
+   不是用户配错；平台永远不为 `.idea/**` 建 PSI。让用户「去改配置」等于把我们的默认落点选择
+   推给用户收拾，用户的话是「问题还是没解决呀」。
+
+**修法（F6）**
+
+| # | 改动 | 理由 |
+|---|---|---|
+| 1 | 落点**自动改写**：`findFile` 拿不到 PSI 且还没在项目根落点时，用目录级探针判「是不是这层目录的错」，是就换 `<base>/.sql-visualizer/exec/` 重跑一次 | 用户无感地恢复正常执行；探针放在失败之后，健康机器零成本、也不会误判刚 `mkdirs` 出来的目录 |
+| 2 | 改写时给**一次性**告知（预览组 balloon，按项目 basePath 去重） | 静默换落点是行为变化，必须说一次；每次都说又是噪音 |
+| 3 | 成因改为「**阶段 + 成因**」成对记录（`TempFileHintRecord`），消费时按错误文案里的阶段匹配 | 并发入口清不掉别人的记录；旧成因也不会被安到新失败上（阶段对不上即丢弃） |
+| 4 | 13.11 的「用户点了才换」保留为**显式入口**：失败文案里的蓝字仍可点 | 自动改写只覆盖「目录不可用」这一档；File Types 忽略、方言不可用这类仍要用户决策 |
+
+**为什么不是无条件把落点改成项目根**：健康机器上 `.idea` 一直是好用的，无理由改动落点会带来
+目录迁移与缓存失效的连锁；只在「探针证明这层目录不可用」时改写，影响面最小。
+
+**读数**：`ExecPsiFailureHintTest` **17 / 0 / 0 / 0**（新增落点改写三例：可用不换 / 不可用换 / 已在根不再换；
+以及成因按阶段消费两例）、`testDbExecPsiGate` **15 / 0 / 0 / 0**（健康目录探针极性一例未变）。
+反向验证：把 `shouldRelocateExecToRoot` 改成恒 `false` ⇒ 恰 1 红（「主落点建不出 PSI 时换项目根」），
+恢复后复绿 17/0/0/0。
+
+**残余**：真机复核项——若下一轮仍是 `findPsiAfterHeal`（而不是自动改写），说明项目根落点也建不出 PSI，
+那时才需要用户决策；报文会带 `dirPsi / inContent` 两项直接判型。
+
 ---
 
 ## 参考

@@ -1792,20 +1792,30 @@ internal fun DataSourceSelector.createTempPsiFile(
     // 由它派发到池线程；[prewarmExecTempFileInner] 走同款 BGT 裸调形态。
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
-    fun fail(stage: String, detail: String = ""): Nothing? {
+    // F6：成因与**阶段**成对记录（[TempFileHintRecord]）——裸字段在并发入口会被清掉，见字段 KDoc
+    fun fail(stage: String, detail: String = "", hint: ExecPsiFailureCause? = null): Nothing? {
         lastTempFileFailure = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+        if (hint != null) lastTempFileHintRecord = TempFileHintRecord(stage, hint)
         LOG.warn("[M36] createTempPsiFile FAILED at $stage${if (detail.isNotEmpty()) " ($detail)" else ""}")
         return null
     }
     lastTempFileFailure = null
-    lastTempFileHint = null
     // M36.5.12：临时文件改存项目内 `.idea/sql-visualizer/exec/`（F-44-4：目录随插件更名）
     //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
     // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
     // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
     // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
+    //
+    // T-ExecPsiGate F6（2026-11-11 第三轮验收）：**落点先按原口径走 `.idea`，`findFile` 拿不到 PSI 时
+    // 再用目录级探针判「是不是这个目录的错」**，是就直接换项目根落点重跑一次（用户无感），
+    // 不再让用户点「改用项目根落点重试」——真机读数（IU-263.7307.200，`.idea/sql-visualizer/exec`）：
+    //   dirPsi=false, dirExcluded=true, dirUnderIgnored=true, inContent=false, regHideExcluded=false
+    // 这类项目里 `.idea` 被 `.gitignore` 忽略是**正常设置**，平台永远不会为它建 PSI：也就是说
+    // 「报错引导用户改配置」在这里没有任何可改的东西（用户原话「问题还是没解决呀」）。
+    // 探针放在失败之后而不是写盘之前：健康机器上零成本、零误判（刚 mkdirs 出来的目录不参与判定）。
+    val preferRoot = project in execRootFallbackProjects
     val ioFile = try {
-        projectExecFile(project, sql, preferProjectRoot = project in execRootFallbackProjects)
+        projectExecFile(project, sql, preferProjectRoot = preferRoot)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
@@ -1820,23 +1830,6 @@ internal fun DataSourceSelector.createTempPsiFile(
         // 缓存复用不得携带旧映射进 Runner 枚举。
         mapDialectBeforePsi(project, pair.first, LOG, renderedDialectName)
         return pair
-    }
-    // T-ExecPsiGate F5（2026-11-11 用户验收）：**落点目录先探一次，探不过就别撞自愈链**。
-    //
-    // 真机形态（IU-263.7307.200）：文件级四项谓词全绿、`findFile` 恒 null，而平台闸门问的是
-    // `findDirectory(父目录)`——目录不可用这件事文件谓词根本看不见。原实现闷头撞完整条自愈链
-    // （清映射 → 钉 MySQL → 钉 GenericSQL，日志实证每次都引发一次 workspace model 重建 + 一次全项目
-    // scan），最后仍落 UNKNOWN：用户看到一句红字、没有任何可点入口，正是这一轮的验收问题。
-    //
-    // 所以：目录级探针判否就按「目录不可用」当场收口——原因说得准、文案当场给兜底入口，
-    // 也省掉那一串无用的重建。探针本身与平台同一调用（`PsiManager.findDirectory`），
-    // 探不出来时按「能」处理（保守走原路径，失败还有自愈链 + 分类兜底）。
-    ioFile.parentFile?.let { execDir ->
-        if (!execDirCanHostPsi(project, execDir)) {
-            lastTempFileHint = runCatching { execDirFailureCause(project, execDir) }.getOrNull()
-                ?: ExecPsiFailureCause.DIR_NOT_INDEXED
-            return fail("dirNoPsi", execDirDiagnostics(project, execDir))
-        }
     }
     // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
     // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
@@ -1880,12 +1873,33 @@ internal fun DataSourceSelector.createTempPsiFile(
         return fail("syncVfContent", "${e.javaClass.simpleName}: ${e.message}")
     }
     mapDialectBeforePsi(project, vf, LOG, renderedDialectName)
-    val psi = try {
+    val firstPsi = try {
         findExecPsi(project, vf)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
-    } ?: (try {
+    }
+    // F6：拿不到 PSI、且还没在项目根落点时，先用**目录级**探针判「是不是这层目录的错」——
+    // 是就直接换项目根重跑一次（用户无感）。真机上 `.idea` 被 `.gitignore` 忽略时平台永远不会为
+    // 它建 PSI，让用户去改这个「正常设置」没有意义（见 preferRoot 处的真机读数）。
+    // 探针只在这一刻跑：健康机器零成本，也不会误判刚 mkdirs 出来的目录。
+    if (firstPsi == null) {
+        val execDir = ioFile.parentFile
+        val dirCanHost = execDir == null || execDirCanHostPsi(project, execDir)
+        if (shouldRelocateExecToRoot(alreadyRoot = preferRoot, dirCanHostPsi = dirCanHost)) {
+            execRootFallbackProjects.add(project)
+            val cause = execDir?.let {
+                runCatching { execDirFailureCause(project, it) }.getOrNull()
+            } ?: ExecPsiFailureCause.DIR_NOT_INDEXED
+            notifyExecRootFallbackOnce(project, cause)
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec land relocated to project root — dir cannot host PSI " +
+                    "(dirPsi=false): ${execDir?.path}",
+            )
+            return createTempPsiFile(project, sql, renderedDialectName)
+        }
+    }
+    val psi = firstPsi ?: (try {
         // T-ExecPsiGate F2：PSI 取不到时自愈——先看 vf 是否失效（重定位），再清映射重建。
         // 两支都不成立时下面带五元组诊断收口。
         healExecPsi(project, vf, LOG, ioFile)
@@ -1893,9 +1907,10 @@ internal fun DataSourceSelector.createTempPsiFile(
         if (FatalErrors.isFatal(e)) throw e
         null
     }) ?: run {
-        // 记下「为什么建不出 PSI」——失败文案 + 面板蓝色可点入口都靠它
-        lastTempFileHint = runCatching { execPsiFailureCauseNow(project, vf) }.getOrNull()
-        return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf))
+        // F6：成因随「阶段 + 成因」成对记下——失败文案＋面板蓝色可点入口都靠它，
+        // 且不会被并发的下一个 createTempPsiFile 入口清掉（见 TempFileHintRecord）
+        val hint = runCatching { execPsiFailureCauseNow(project, vf) }.getOrNull()
+        return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf), hint)
     }
     // 自愈可能换了一个新 vf（vf 失效重定位），缓存与后续 attach 必须用同一个
     val effectiveVf = runCatching { psi.virtualFile }.getOrNull() ?: vf
@@ -2037,6 +2052,45 @@ internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFa
 }
 
 /**
+ * T-ExecPsiGate F6：**要不要把执行落点自动改到项目根**（纯函数，表驱动可测）。
+ *
+ * @param alreadyRoot 这次已经写的是项目根落点（再换就没地方换了，也不能递归）
+ * @param dirCanHostPsi 当前落点目录能否建 PSI（探不出来时调用方传 true —— 保守，不换落点）
+ * @return true = 换到项目根重试一次
+ */
+internal fun shouldRelocateExecToRoot(alreadyRoot: Boolean, dirCanHostPsi: Boolean): Boolean =
+    !alreadyRoot && !dirCanHostPsi
+
+/** F6：主落点目录（`<base>/.idea/sql-visualizer/exec`）——**只算路径**，不建目录、不写盘。 */
+internal fun execPrimaryDir(project: Project): java.io.File? {
+    val base = project.basePath ?: return null
+    val sep = java.io.File.separator
+    return java.io.File(base, ".idea$sep${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${sep}exec")
+}
+
+/**
+ * F6：落点从 `.idea` 自动改到项目根时**说一次**。
+ *
+ * 静默换落点是行为变化，必须告知（与预览侧 13.12 同口径）；但每次执行都说就是新噪音源，
+ * 故按项目 basePath 去重。走预览组的 balloon（同族同渠道）。
+ */
+internal fun DataSourceSelector.notifyExecRootFallbackOnce(project: Project, cause: ExecPsiFailureCause) {
+    val key = project.basePath ?: project.name
+    if (!execRootFallbackNotified.add(key)) return
+    if (project.isDisposed) return
+    runCatching {
+        com.intellij.notification.NotificationGroupManager.getInstance()
+            .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+            .createNotification(
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+                    .message("execute.tempDir.fallback.notice"),
+                com.intellij.notification.NotificationType.INFORMATION,
+            )
+            .notify(project)
+    }
+}
+
+/**
  * T-ExecPsiGate R6（2026-11-11 用户真机）：**项目根备用执行文件**。
  *
  * 用户实测（UOS + Mac，同一个项目）：同一个 `mpsql-exec.sql`，**放桌面（项目外）用数据源右键
@@ -2045,7 +2099,7 @@ internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFa
  *
  * 本函数给出一条「仍在项目内容根内、但不在 `.idea` 下」的落点：
  * `<projectBase>/.sql-visualizer/exec/mpsql-exec.sql`。目录里顺手写一份 `.gitignore`（内容 `*`），
- * 免得污染用户的 `git status`。只在 `.idea` 那条路建不出 PSI 时才会被用到（自愈支 4），
+ * 免得污染用户的 `git status`。**F6 起由落点探针自动选中**（`decideExecLandingRoot`），
  * 之后由 [DataSourceSelector.execRootFallbackProjects] 记住，后续执行直接走这条路。
  */
 internal fun projectRootExecFile(project: Project, sql: String): java.io.File? =
@@ -2265,13 +2319,13 @@ internal fun DataSourceSelector.projectExecFile(
         LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
         return null
     }
-    // R6：项目根备用落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
-    // 2026-11-11 用户定案：**兜底不得抢在提示前面**。`.idea` 仍是主路径；建不出 PSI 时先把
-    // 原因和修复入口摆给用户（面板红字 + 蓝字），只有用户点了「改用项目根落点重试」才走这里。
-    // 因此这里只认调用方显式传入的 preferProjectRoot（由 [DataSourceSelector.execRootFallbackProjects] 决定）。
+    // R6/F6：项目根落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
+    // 2026-11-11 用户定案「兜底不得抢在提示前面」在被真机推翻一半：`.idea` 被 `.gitignore` 忽略的
+    // 项目里平台**永远不会**为它建 PSI，此时「让用户改配置」没有可改的东西。F6 起由落点探针
+    // （[decideExecLandingRoot]）决定，只认调用方传入的 preferProjectRoot；用户手动点
+    // 「改用项目根落点重试」的那条路仍经 [DataSourceSelector.execRootFallbackProjects] 生效。
     val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
-    val dir = rootDir?.let { java.io.File(it, "exec") }
-        ?: java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
+    val dir = rootDir?.let { java.io.File(it, "exec") } ?: execPrimaryDir(project) ?: return null
     if (!dir.exists() && !dir.mkdirs()) {
         // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
         LOG.warn("[M36] projectExecFile FAILED: mkdirs false (${dir.path})")
@@ -2343,8 +2397,9 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     LOG: com.intellij.openapi.diagnostic.Logger,
     renderedDialectName: String? = null,
 ) {
-    // T-ExecPsiGate F3：预热链**不清** lastTempFileFailure / lastTempFileHint——它是并发写方，
-    // 清空会把冷路径刚记下的失败原因抹掉（2026-11-11 验收实测：报错文案退化为 unknown）。
+    // T-ExecPsiGate F3/F6：预热链是并发写方——它只能写自己的结果，不能清别人的失败记录。
+    // F3 收掉了「入口清空 lastTempFileFailure」；F6 把成因改成「阶段+成因」成对记录后，
+    // 连「谁写谁清」这条隐患也不存在了（消费方按阶段匹配）。
     // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
     // 实际执行之间隔着任意长的排队/执行窗口（victim 测试毫秒级跑完即收尾 dispose）。池线程链
     // 起跑时项目可能已 dispose（含 temporarily-disposed），整链放弃，不在死项目上写/refresh。

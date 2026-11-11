@@ -1138,7 +1138,9 @@ internal fun openGitignoreFile(proj: Project) {
  * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
  */
 internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
-    val cause = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.consumeTempFileHint()
+    // F6：成因与**阶段**成对消费——并发的下一个 createTempPsiFile 入口清不掉它，旧成因也不会被
+    // 安到新失败上（文案里不含该阶段即丢弃）。此前读裸字段，真机上又退化成「只剩红字」。
+    val cause = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.consumeTempFileHintFor(errorMsg)
     val proj = project
     if (cause == null || proj == null) {
         resultPanel.showError(errorMsg)

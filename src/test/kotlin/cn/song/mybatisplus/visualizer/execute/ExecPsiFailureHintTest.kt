@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.execute
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -129,6 +130,65 @@ class ExecPsiFailureHintTest {
         assertTrue("首个调用方应当提示", gate.shouldNotify())
         assertFalse("第二次不应再提示", gate.shouldNotify())
         assertFalse("第三次同理", gate.shouldNotify())
+    }
+
+    /**
+     * F6（2026-11-11 第三轮验收）：**落点自动改写表**。
+     *
+     * 真机读数钉死了这一档：`.idea/sql-visualizer/exec` 上 `dirPsi=false / dirExcluded=true /
+     * dirUnderIgnored=true / inContent=false`，而 `.idea` 被 `.gitignore` 忽略是**正常设置**——
+     * 「报错让用户改配置」没有可改的东西，只能换落点。
+     */
+    @Test
+    fun `落点改写_主落点可用时不换`() {
+        assertFalse(
+            "健康机器上零成本、零误判：探针说能建 PSI 就绝不能换落点",
+            shouldRelocateExecToRoot(alreadyRoot = false, dirCanHostPsi = true),
+        )
+    }
+
+    @Test
+    fun `落点改写_主落点建不出PSI时换项目根`() {
+        assertTrue(
+            "真机形态：目录级探针判否 ⇒ 自动改写到项目根，用户无感",
+            shouldRelocateExecToRoot(alreadyRoot = false, dirCanHostPsi = false),
+        )
+    }
+
+    @Test
+    fun `落点改写_已在项目根就不再换`() {
+        // 防递归：项目根也建不出 PSI 时只能回到失败文案（带成因与蓝字入口），不能再换
+        assertFalse(shouldRelocateExecToRoot(alreadyRoot = true, dirCanHostPsi = false))
+        assertFalse(shouldRelocateExecToRoot(alreadyRoot = true, dirCanHostPsi = true))
+    }
+
+    /**
+     * F6：成因必须**按阶段**消费。
+     *
+     * 真机第三轮的症状正是「成因被并发的下一个 `createTempPsiFile` 入口清掉」——面板只剩红字。
+     * 现在成因绑着它所属的阶段：阶段对不上就当过期丢弃（不会把「目录不可用」的入口安到方言失败上），
+     * 阶段对得上则取一次即清。
+     */
+    @Test
+    fun `成因按阶段消费_对不上即丢弃`() {
+        DataSourceSelector.lastTempFileHintRecord =
+            TempFileHintRecord("dirNoPsi", ExecPsiFailureCause.DIR_NOT_INDEXED)
+        assertNull(
+            "文案里没有该阶段 ⇒ 当过期丢弃（否则会把目录入口安到别的失败上）",
+            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：findPsiAfterHeal: name=x"),
+        )
+        assertNull("丢弃后记录已清空", DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"))
+    }
+
+    @Test
+    fun `成因按阶段消费_对得上取一次即清`() {
+        DataSourceSelector.lastTempFileHintRecord =
+            TempFileHintRecord("dirNoPsi", ExecPsiFailureCause.DIR_NOT_INDEXED)
+        assertEquals(
+            ExecPsiFailureCause.DIR_NOT_INDEXED,
+            DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"),
+        )
+        assertNull("只消费一次", DataSourceSelector.consumeTempFileHintFor("创建临时 SQL 文件失败：dirNoPsi: dir=x"))
     }
 
     @Test
