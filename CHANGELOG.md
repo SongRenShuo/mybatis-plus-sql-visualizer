@@ -2,20 +2,18 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
 ## [2026.11.12-beta.2] - 2026-11-11
 
-> 范围＝`v2026.11.12-beta.1` 之后的验收修复（内测版，不上架 Marketplace）。
-
-### Fixed
-- **预览一直降级、报错只剩 `unknown`（F3/F4，验收实测）**：① 目录能否建 PSI 的判定原按路径**缓存到会话结束**，用户改过排除或忽略设置后旧结论仍然生效，落点被判在错的一侧——预览因此一直走「简化模式」；现改为每次现探，成本只是一次 VFS 查找加一次 PsiDirectory 查找。② 失败阶段原因原靠跨线程共享字段传递，预热链在入口会清空它，与冷路径并发时用户看到的就是「创建临时 SQL 文件失败：unknown」；现在原因在失败现场就地捕获、随回调带回，预热链不再动这两个字段。两条蓝字入口，即按原因打开设置页与改用项目根落点重试，随之稳定出现。
-
-## [Unreleased]
+> 范围＝`v2026.11.12-beta.1` 之后的全部用户可见增量：MBG Example 预览按调用点还原条件、iBatis DAO 调用行预览与裸 `#name#` 参数的引号口径、复制可执行 SQL 的占位说明，以及 beta.1 验收失败的两处修复（内测版，不上架 Marketplace）。
 
 ### Added
 - **MBG 生成的 Example mapper 预览能从调用点还原条件（T-MbgExamplePreview，6fb76205）**：MBG 的 `andXxxYyy(...)` 方法体固定是一句 `addCriterion("cust_id =", value, "custId")`——`condition` 是常量、分支语义写在方法名后缀里。现在预览会从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用并读那个常量，于是 `${criterion.condition}` 拿到真实列名与操作符：产物从 `WHERE ( {{criterion.condition}} ? )` 变成 `WHERE ( cust_id = ? )`。拿不到调用点（跨模块、无索引、非链式写法）时退回占位，不报错
 - **iBatis DAO 调用行直接预览 SQL（T-IbatisCallPreview，`8ad491b8`）**：`client.queryForList("User.selectAll")` 这类 `SqlMapExecutor` 调用行在原有跳转箭头旁新增预览图标，点开直接渲染对应 `<sqlMap>` 语句（`#name#` 参数、动态条件、`<iterate>`、`<selectKey>` 与 XML 语句行预览一致）；`Alt+Shift+Q` 在调用行与方法定义行同样可直接预览——此前这类位置会被 JDBC 模板通道先认领再拒绝，只得到「未找到」提示；MCP `sqlv_render_sql` 同步支持 iBatis DAO 调用行与 `<sqlMap>` 语句行（`sourceType` 以 `iBatis` 起头）。
 
 ### Fixed
+- **预览一直降级、报错只剩 `unknown`（F3/F4，验收实测）**：① 目录能否建 PSI 的判定原按路径**缓存到会话结束**，用户改过排除或忽略设置后旧结论仍然生效，落点被判在错的一侧——预览因此一直走「简化模式」；现改为每次现探，成本只是一次 VFS 查找加一次 PsiDirectory 查找。② 失败阶段原因原靠跨线程共享字段传递，预热链在入口会清空它，与冷路径并发时用户看到的就是「创建临时 SQL 文件失败：unknown」；现在原因在失败现场就地捕获、随回调带回，预热链不再动这两个字段。两条蓝字入口，即按原因打开设置页与改用项目根落点重试，随之稳定出现。
 - **iBatis 预览里裸 `#name#` 参数不再丢引号（T-IbatisParamClassQuote，cb4ec1ed3）**：`WHERE USER_NAME = #username#` 填 `1213` 曾经预览成 `= 1213`——链路唯一的类型来源是占位符自带的 jdbcType（`#x:VARCHAR#`），裸 `#name#` 只能落面板「按值形态猜」，纯数字就不加引号。而 iBatis 引擎是按 `parameterClass` 的字段类型反射决定 `setString`/`setInt`，与值的形态无关。现在预览解析 `parameterClass`（类名或 `<typeAlias>` 别名，短名唯一命中才用）→ 字段类型 → 引号提示；占位符自己写了 jdbcType 的仍以 jdbcType 为准，解析不到（无索引、多候选、无该字段）时维持原启发式不变
 - **MBG Example 的预览产物从残缺 SQL 变成可读骨架（T-MbgExamplePreview，2d8798a9）**：用户报 `selectByExample` 预览出来是 `WHERE (AND OR (AND … ORDER BY 1`。四条成因逐条收掉：①`${criterion.condition}` 在模拟参数下求值为空，`and` 后什么都不剩——预览现在把求值为空的 `${}` 写成 `{{表达式}}` 占位（真实 SQL 产物路径不受影响），执行前另有更强的确认文案；②foreach 两轮迭代的 `and` 拼成单词 `andand`、separator 粘成 `)or(`——trim 缓冲现在只在「粘起来会拼成一个词」时补空格（左侧收尾是操作数、右侧起笔是标识符），`(`、`,`、`)` 与 `?` 之间不再被撑开，`<where>` 里的 `IN (?,?)` / `IN (1,2,4,5)` 保持紧凑（判据收窄见 `6212f24e0`）；③`choose` 四个互斥分支默认全开、永远短路到唯一不带参数的 `noValue`——同组现在只默认启用含 `#{}` 的分支；④`parameterType` 是 MBG Example 时 `distinct` 与 `orderByClause` 默认不展开、集合按 1 项（`order by 1` 这种能执行、但语义被改写的产物不再出现）。另外告警行不再把基线渲染的错误和当前勾选的错误混排，`foreach` 集合为 null 的文案改成中文并给「取消为 null 勾选」的指引
 - **复制可执行 SQL 会带出模拟占位，现在产物自己说明（T-CopyPlaceholderMarker，2e553316）**：`{{表达式}}` 是预览占位、不是 SQL 注释，复制链原本原样把它带出去，粘到库里只报语法错、看不出原因。现在产物头部加一条带计数的注释（`-- contains N unresolved ${} placeholders shown as {{...}}; replace them before executing`）；有占位时不再叠加原来那条「已用模拟值填充」（同一件事不说两遍，那条对占位场景本来也不准确）。分享面板的「复制可执行 SQL」此前一条标记都没有，这次一并接上。复制仍不弹确认——弹窗克制只留给执行

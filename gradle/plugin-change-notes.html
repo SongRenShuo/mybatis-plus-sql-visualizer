@@ -1,7 +1,11 @@
 <h2>v2026.11.12-beta.2</h2>
 <ul>
+    <li>MBG 生成的 Example mapper 也能预览了：从 <code>andXxxYyy</code> 调用点还原条件，产物从残缺骨架变成可读 SQL</li>
+    <li>iBatis 的 DAO 调用行可直接预览 SQL，跳转箭头旁新增预览图标，<code>Alt+Shift+Q</code> 同样可用</li>
     <li>预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效</li>
     <li>执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown</li>
+    <li>iBatis 预览里裸的 <code>#name#</code> 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号</li>
+    <li>复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位</li>
     <li>上一版的按原因给设置入口与一键改用项目根落点保持不变</li>
     <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
