@@ -177,6 +177,11 @@
 
 ## 三、双通道发布段
 
+> **工具（2026-11-11 沉淀）**：CI 运行与发行版状态查询统一走 `python dev-support/ci-status.py`——
+> `runs` 看最近的 `build-plugin.yml` 运行、`run <id>` 看各 job、`wait <id>` 轮询到结束（退出码 0＝success，
+> 适合后台任务）、`release <tag>` 看 GitHub Release 的 id/prerelease/附件字节数、`pick-artifact <id>` 看门禁产物。
+> 此前每轮都在临时目录现写脚本查这些，收口后不必再写。
+
 - [ ] RC-R1 git tag：发行提交之后 `git tag {版本号}` → `git push origin {版本号}`。判据：tag 名与 `version=` 一字不差（§1.1 第 3 条）。
 - [ ] RC-R2 Gitee Release，两条路按发布来源二选一：
   - **CI 发布**（Actions `build-plugin.yml` mode=release/publish 已产出 GitHub Release）：
