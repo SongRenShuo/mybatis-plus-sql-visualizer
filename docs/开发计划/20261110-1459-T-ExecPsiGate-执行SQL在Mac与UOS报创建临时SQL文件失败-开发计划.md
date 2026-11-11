@@ -580,6 +580,33 @@ protected boolean shouldCreatePsi() {
 本单的 pre-check 只覆盖第二条（`findDirectory`）。若真机仍有残留，把 pre-check 换成「写个探针文件
 试建一次 PSI」即可覆盖——更贵，先不做。
 
+### 13.8 Windows 本机复现成功（2026-11-11，根因闭环）
+
+用户在 **Windows + IU-263.7307.200** 上按「勾 `ide.hide.excluded.files` → 重启 → 把 `.idea` 标 Excluded」
+操作，demo 项目 `mybatis-plus-sql-visualizer-demo` 复现出**与 UOS / Mac 完全一致**的五元组：
+
+```
+执行失败：创建临时 SQL 文件失败：findPsiAfterHeal: name=mpsql-exec.sql, vfValid=true,
+dir=false, fileType=SQL, mappedLang=null, canPsi=false,
+path=F:/code/.../mybatis-plus-sql-visualizer-demo/.idea/sql-visualizer/exec/mpsql-exec.sql
+```
+
+⇒ §13.7 的平台闸门推断**已由真机证实**，不再是推断。
+
+**`ide.hide.excluded.files` 的作用（两处，反编译实证）**：
+
+| 面 | 作用 |
+|---|---|
+| 项目视图 / VCS | 工具提示原文「Do not show excluded files in the Project View and exclude them from VCS」——勾上后 Excluded 目录不显示、不入版本控制 |
+| **PSI**（`FileManagerImpl.isExcludedOrIgnored`） | 勾上 → `isExcludedFile` 判定（Mark as Excluded 即无 PSI）；未勾 → `isUnderIgnored` 判定（只有进了**忽略集**才无 PSI） |
+
+于是：
+- 复现旋钮（勾 Registry + Excluded）与用户现场（未勾 + `.idea` 在忽略集里，如 `.gitignore` 命中）**翻的是同一个谓词**，症状一致；
+- 我们的 pre-check 用的是平台原判据 `PsiManager.findDirectory`（内部即走 `isExcludedOrIgnored`）⇒ **两条分支都覆盖**，不依赖 Registry 取值。
+
+待用户用 `61205cf2` 之后的构建在同一 demo 项目 + 同一 Registry/排除状态下验证修复（期望落到
+`<demo>/.sql-visualizer/exec/` 并跑通）。
+
 ---
 
 ## 参考
