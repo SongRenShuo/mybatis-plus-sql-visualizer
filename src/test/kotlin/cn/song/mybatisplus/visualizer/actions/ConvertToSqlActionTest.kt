@@ -1,6 +1,15 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
+import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.util.PsiTreeUtil
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -148,5 +157,49 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         )
         val select = tags.first { it.name == "select" }
         assertTrue("<mapper> 下语句应进候选", ConvertToSqlAction.isXmlStatementCandidate(select))
+    }
+
+    /**
+     * T-IbatisCallPreview：iBatis DAO 调用行的形状门必须在 JDBC 通道之前认领。
+     *
+     * 现状（修复前）：`JdbcTemplateSqlLocator` **没有** iBatis 让位门 → 它认领该调用后
+     * `JdbcTemplateSqlPreviewService.preview` 用 `isLikelySql("User.selectById")` 拒绝 → 动作
+     * 已 `return true` → 用户拿到「未找到可转换的 Wrapper」（错源提示）。
+     * 本用例把「JDBC 会认领但渲染不出东西」与「iBatis 门能渲染出 SQL」两侧同时钉住。
+     */
+    fun testiBatis调用行_预览门先于JDBC通道() {
+        myFixture.addFileToProject(
+            "sqlmap/User.xml",
+            """<sqlMap namespace="User"><select id="selectById">SELECT ID FROM T_USER WHERE ID = #id#</select></sqlMap>""",
+        )
+        val dao = myFixture.addFileToProject(
+            "com/demo/UserDaoImpl.java",
+            """
+            package com.demo;
+            public class UserDaoImpl {
+                private Object client;
+                public Object selectById(int id) { return client.queryForObject("User.selectById", id); }
+            }
+            """.trimIndent(),
+        )
+        IbatisXmlStatementTargets.clearCachesForTest()
+        val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
+            .first { it.value == "User.selectById" }
+
+        // 对照：JDBC 通道会认领这个调用（所以「谁先认领」决定用户看到什么）
+        val jdbcCall = JdbcTemplateSqlLocator.locate(literal)
+        assertNotNull("夹具前提：JdbcTemplateSqlLocator 不拦 iBatis 调用", jdbcCall)
+        assertNull(
+            "JDBC 通道对 statementId 渲染不出 SQL（错源提示的来源）",
+            JdbcTemplateSqlPreviewService.preview(jdbcCall!!, literal),
+        )
+
+        // 新门：形状门（与 gutter 让位同一函数）认领并渲染出 iBatis SQL
+        val target = IbatisCallTargets.resolve(literal)
+        assertNotNull("iBatis 形状门应认领该调用", target)
+        assertEquals("User.selectById", target!!.statementId)
+        val preview = IbatisStatementPreview.previewResolved(project, target.statementId, target.ownerNamespace)
+        assertTrue("iBatis 预览应渲染出 SQL：${preview.sql}", preview.sql.contains("FROM T_USER"))
+        assertEquals(listOf("id"), preview.unresolvedParams)
     }
 }

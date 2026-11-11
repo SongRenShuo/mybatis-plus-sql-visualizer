@@ -58,6 +58,7 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             MapperXmlLocator.clearFileListCacheForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
+            PluginSettings.getInstance().state.ibatisXmlEnabled = true
             // 竞品探针是 object 级全局缝（MapperNavCoexistGateTest 同口径）：用完必须复位
             MyBatisCompetitorGate.resetForTest()
         } finally {
@@ -176,7 +177,12 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun test点号id与裸id两种形态都出Java侧箭头() {
         val dao = addDao()
         addSqlMap()
-        val starts = markers(javaToXml, dao).map { it.element!!.textRange.startOffset }.toSet()
+        // T-IbatisCallPreview：调用行现在有两枚 marker（箭头锚 identifier / 预览锚 literal），
+        // 本断言只看箭头那枚——按锚类型过滤，别把预览 marker 的偏移也算进来。
+        val starts = markers(javaToXml, dao)
+            .filter { it.element is PsiIdentifier }
+            .map { it.element!!.textRange.startOffset }
+            .toSet()
         assertEquals(
             "ns.id 与裸 id 两处调用都应出箭头（byUnknownId/byNonEntry/bySecondArg 三处负例不应出）",
             setOf(
@@ -184,6 +190,50 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
                 firstArgCallName(dao, "queryForObject", "selectBare")!!.textRange.startOffset,
             ),
             starts,
+        )
+    }
+
+    /**
+     * T-IbatisCallPreview：调用行两枚图标共存——跳转箭头（锚方法名 identifier）+
+     * 预览图标（锚首参 literal，与 XML 语句行预览同一枚 sqlGutter 图标），且同一行。
+     */
+    fun testJava调用行_预览与跳转共存恰2() {
+        val dao = addDao()
+        addSqlMap()
+        val callName = firstArgCallName(dao, "queryForObject", "user.selectById")!!
+        val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
+            .first { it.value == "user.selectById" }
+        val onLine = markers(javaToXml, dao).filter { it.element === callName || it.element?.parent === literal }
+        assertEquals("调用行应恰 2 枚图标（跳转 + 预览）：${onLine.map { it.icon }}", 2, onLine.size)
+        assertSame(MpvsIcons.MapperMethod, onLine.single { it.element === callName }.icon)
+        assertSame(
+            IbatisXmlGutterLineMarkerProvider.SQL_PREVIEW_ICON,
+            onLine.single { it.element?.parent === literal }.icon,
+        )
+        val document = dao.viewProvider.document!!
+        assertEquals(
+            "两枚图标必须落在同一行",
+            document.getLineNumber(callName.textRange.startOffset),
+            document.getLineNumber(literal.textRange.startOffset),
+        )
+    }
+
+    /** T-IbatisCallPreview 拍板 D-4：`ibatisXmlEnabled` 只灭预览，跳转箭头保留。 */
+    fun test预览图标受ibatisXmlEnabled约束_箭头不受() {
+        val dao = addDao()
+        addSqlMap()
+        val callName = firstArgCallName(dao, "queryForObject", "user.selectById")!!
+        val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
+            .first { it.value == "user.selectById" }
+        PluginSettings.getInstance().state.ibatisXmlEnabled = false
+        val off = markers(javaToXml, dao)
+        assertEquals("开关关闭：箭头保留", 1, off.count { it.element === callName })
+        assertEquals("开关关闭：预览图标消失", 0, off.count { it.element?.parent === literal })
+        PluginSettings.getInstance().state.ibatisXmlEnabled = true
+        assertEquals(
+            "开关打开：两枚恢复",
+            2,
+            markers(javaToXml, dao).count { it.element === callName || it.element?.parent === literal },
         )
     }
 
