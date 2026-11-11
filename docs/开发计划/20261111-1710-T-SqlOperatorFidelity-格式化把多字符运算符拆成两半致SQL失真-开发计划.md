@@ -223,3 +223,26 @@ private fun scanOperator() {
 | A2 | 面板「复制可执行 SQL」 | 剪贴板里同上，粘到控制台可执行 |
 | A3 | 面板直接执行（Oracle / 达梦 / PG 任一） | 不再报非法运算符 |
 | A4 | 回归：任意一条普通 SELECT 预览 / 格式化 | 与改前一致（比较符、`#{}`、`${}` 不变） |
+
+## 十二、真机验收记录（2026-11-11，runIde 沙盒 IU-2024.3.7.1）
+
+沙盒 `build/MPSV-OpToken`（init 脚本 `.local/optoken-ui243.init.gradle`），demo 工程 `mybatis-plus-sql-visualizer-demo/ibatis2-demo`。临时夹具＝`User.xml` 内新增的 `gryQryCmiotGroupInfo`（形状照抄用户截图），**验完已 `git checkout` 还原**，demo 仓 `git status` 只剩别车道既有的 `application-panwei.yml` 等改动。
+
+| 项 | 操作 | 结果 | 证据帧 |
+|---|---|---|---|
+| A1 预览显示 | 打开 `User.xml`、光标落语句内、`Alt+Shift+Q`；勾选 `isNotEmpty`、`#GROUP_NAME=弘博` | **通过**：`AND GROUP_NAME LIKE '%' || '弘博' || '%'`，两条竖线之间无空格 | `build/MPSV-OpToken-shots/g1-18-selectall.png` |
+| A1b 显式格式化 | 面板点「格式化」（FORMAT 模式） | **通过**：同一行逐字保留 | `build/MPSV-OpToken-shots/g1-20-format-real.png` |
+| A2 复制可执行 SQL | 点「复制 SQL」→ 读剪贴板 | **通过**：产物含 `'%' || '弘博' || '%'`；断言「两条竖线中间带空格」的子串 **不在**产物里（False） | 下方剪贴板全文 |
+| A4 回归 | 同一面板内的普通子句与比较符 | **通过**：`ROWNUM <= ?` / `ROW_NUM >= ?`、缩进与换行与改前一致 | 同上两张帧 |
+| A3 直接执行 | — | **not run**：沙盒未绑定数据源（面板顶部「未绑定数据源…」），本轮无 Oracle 实例接入；执行与复制取同一份编辑器文本（`SqlPreviewPanelExecution.kt:1261-1266` / `CopyExecutableSqlAction.kt:168`），复制面已实测 | — |
+
+A2 剪贴板实测（节选）：
+
+```sql
+FROM BS_CMIOTGROUP_SUCCESS
+WHERE CMIOT_GROUP_ID IS NOT NULL
+    AND GROUP_NAME LIKE '%' || '弘博' || '%'
+GROUP BY CMIOT_GROUP_ID, GROUP_NAME, GROUP_ID
+```
+
+沙盒许可就位（本轮实测补充的可复用细节）：agent 走 `-Pmpvs.licenseAgent=C:/Users/USER/.7t/patch/qwdn-afb.jar`，`jcmd VM.command_line` 能读到 `-javaagent:…qwdn-afb.jar`；**`idea.key` 实际生效位置是 `build/<桑盒>/<工程名>/<IU-版本>/config/idea.key`**——放到 `build/<桑盒>/config/` 不生效，会照弹 Manage Licenses「There are no valid licenses」。
