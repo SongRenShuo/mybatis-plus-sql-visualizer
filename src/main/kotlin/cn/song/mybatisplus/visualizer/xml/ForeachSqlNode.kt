@@ -176,8 +176,8 @@ class ForeachSqlNode(
             // T-M25.5（用户实测）：迭代内容 trim——mapper 里 foreach 体的换行缩进（"\n  #{x}\n"）
             // 若原样输出会使 IN 每项换行一行；trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
             //
-            // T-MbgExamplePreview R2：段间分隔改由下游缓冲负责（[DynamicContext.appendSql] 与
-            // [TrimSqlNode] 的 filtered 缓冲都会补空格）——此处再加空格会叠加成双空格。
+            // T-MbgExamplePreview R2：段间分隔改由下游缓冲负责（[DynamicContext.appendSql] 恒补空格；
+            // [TrimSqlNode] 的 filtered 缓冲仅在粘连会拼成词时补）——此处再加空格会叠加成双空格。
             delegate.appendSql(newSql.trim())
         }
 

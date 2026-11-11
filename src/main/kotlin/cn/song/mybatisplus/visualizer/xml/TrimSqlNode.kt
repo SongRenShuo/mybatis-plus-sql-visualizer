@@ -43,23 +43,38 @@ open class TrimSqlNode(
 
         /**
          * 与 MyBatis 的 `sqlBuffer.append(sql)` 有一处刻意差异（T-MbgExamplePreview R2）：
-         * 相邻两段既不以空白开头、也不以空白结尾时补一个空格。
+         * **且仅当**粘连会拼出一个词（左侧收尾是操作数、右侧起笔是标识符字符）时补一个空格。
          *
          * 理由：本引擎的 foreach 会把每轮迭代 trim 成紧凑段（T-M25.5），两次迭代的 `and`
          * 在此处直接相接就成了单词 `andand`，`<trim prefixOverrides="and">` 只裁掉首个，
          * 残余成了括号里的幽灵条件。真实 MyBatis 因 XML 换行保留空白而不会粘词。
-         * 只影响「trim 体内相邻段紧贴且无空白」的形态；段间原本有空白时行为不变。
+         *
+         * 收窄到「会拼成词」是必须的：R2 首版对任何「两侧都无空白」的相邻段一律补空格，
+         * 于是 foreach 的 `open`/`separator`/`close`（`(`、`,`、`)`）与 `?` 之间也被撑开，
+         * `<where>` 里的 `IN (?,?)` 变成 `IN ( ? , ? )`——而真实 MyBatis 的 trim 缓冲是
+         * 裸 append（其根上下文才按 StringJoiner(" ") 补空格），该形态本应保持紧凑。
+         * 判据只取「左收尾 ∈ {标识符字符, `)`, `]`, `?`, 引号} 且 右起笔 = 标识符字符」，
+         * 故 `(`/`,` 之后的段、以及右起笔为标点的段一律不补——`IN (?,?)`/`IN (1,2,4,5)` 原样保留。
          */
         override fun appendSql(sql: String) {
             if (sql.isEmpty()) return
-            if (sqlBuffer.isNotEmpty() &&
-                !sqlBuffer.last().isWhitespace() &&
-                !sql.first().isWhitespace()
-            ) {
+            if (sqlBuffer.isNotEmpty() && endsOperand(sqlBuffer.last()) && startsIdentifier(sql.first())) {
                 sqlBuffer.append(' ')
             }
             sqlBuffer.append(sql)
         }
+
+        /** 标识符字符（`\w` 面 + `$`：列名/关键字/数字，粘连即拼成一个词）。 */
+        private fun startsIdentifier(c: Char): Boolean =
+            c.isLetterOrDigit() || c == '_' || c == '$'
+
+        /**
+         * 左侧是否以「操作数」收尾——其后紧跟标识符就需要一个空格。
+         * 含右括号/右方括号/引号（子表达式、字面量、反引号标识符）与绑定占位 `?`。
+         * 左括号、逗号、运算符、空白都不在内：它们本身就是分隔符，补空格是多余噪音。
+         */
+        private fun endsOperand(c: Char): Boolean =
+            startsIdentifier(c) || c == ')' || c == ']' || c == '?' || c == '\'' || c == '"' || c == '`'
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
