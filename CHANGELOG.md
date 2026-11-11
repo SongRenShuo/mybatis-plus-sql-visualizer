@@ -2,6 +2,11 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+- **iBatis DAO 调用行直接预览 SQL（T-IbatisCallPreview，`8ad491b8`）**：`client.queryForList("User.selectAll")` 这类 `SqlMapExecutor` 调用行在原有跳转箭头旁新增预览图标，点开直接渲染对应 `<sqlMap>` 语句（`#name#` 参数、动态条件、`<iterate>`、`<selectKey>` 与 XML 语句行预览一致）；`Alt+Shift+Q` 在调用行与方法定义行同样可直接预览——此前这类位置会被 JDBC 模板通道先认领再拒绝，只得到「未找到」提示；MCP `sqlv_render_sql` 同步支持 iBatis DAO 调用行与 `<sqlMap>` 语句行（`sourceType` 以 `iBatis` 起头）。
+
 ## [2026.11.11] - 2026-11-11
 
 > 范围＝`v2026.11.10` 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.11-beta.1` / `beta.2` 两轮、转正前两笔收口修复与转正后同版补入的 iBatis 全选/清除修复）：**捕获静默路径可见化**、**「整类 SQL 消失」根治**、**Mac/UOS 执行链 PSI 修复**、**预览执行写语句完成态修复**、**iBatis 勾选联动修复**。本节按能力面合并叙述并取代下方两轮内测段（它们的逐条记录含根因、提交与反向验证读数，见 `docs/发行说明/` 两篇内测说明：`20261110-1651` 捕获静默路径可见化与方言登记补齐、`20261110-1755` 语句抛异常致整类 SQL 消失的根治）。

@@ -380,10 +380,32 @@ private fun tryIbatisMethodFallback(project: Project, element: PsiElement, sourc
 
 ## 九、实施记录（回填）
 
-- 分支/工作树：
-- 提交：
-- 定向读数（类/例/失败/错误）：
-- 反向验证五轮读数（图标产出 / 图标开关 / 共用装配 / 动作两档 / MCP）：
-- 既有用例影响核对（§5.3 逐条）：
-- CHANGELOG / 架构文档 / MCP 工具文档回填：
-- 真机验收进度（用户）：
+- 分支/工作树：`t-ibatis-call-preview` @ `.worktrees/t-ibatis-call-preview`（基点 = 计划文档入库提交 `c0cfdc8e`）
+- 提交：`8ad491b8` feat(ibatis): DAO 调用行直接预览 SQL（图标 + 快捷键 + MCP）（13 文件，+789/−92）；
+  本文档末尾的 CHANGELOG 与实施记录随收口提交追加
+- 定向读数（test 桶，2026-11-11）：**120 例 0 失败 0 错误 0 跳过**——`IbatisStatementPreviewTest` 9、
+  `IbatisNavigationLineMarkerProvidersTest` 20、`IbatisXmlGutterLineMarkerProviderTest` 14、
+  `IbatisGutterHotPathTest` 9、`IbatisXmlPreviewServiceTest` 44、`JdbcTemplateIbatisMutualExclusionTest` 4、
+  `ConvertToSqlActionTest` 8（收口补结构守卫后 9）、`McpSourceLocatorRenderAtLineTest` 8、
+  `GutterProviderSingleLookupGuardTest` 4
+- 反向验证：预览 marker 产出点置 `if (false && previewEnabled)`（补丁
+  `dev-support/reverse-probes/ibatis-callpreview-disable-preview-marker.patch`）→
+  `IbatisNavigationLineMarkerProvidersTest` **20 例 2 红**（`testJava调用行_预览与跳转共存恰2`、
+  `test预览图标受ibatisXmlEnabled约束_箭头不受`）；恢复后复跑 **20/0**。
+  动作回落链另有源码顺序守卫 `testiBatis两档回落排在JdbcTemplate之前`（认领顺序只能在源码上钉）；
+  MCP 分支由 `McpSourceLocatorRenderAtLineTest` 两条直测
+- 实施期发现并修掉的两处真实形态（P-1/P-2 的实测订正）：
+  1. **LineMarker 锚必须是叶子元素**：直接锚 `PsiLiteralExpression` 触发平台
+     `LineMarker is supposed to be registered for leaf elements only`（19 例连锁红）→ 改锚字面量的
+     首叶子 token，点击 handler 由 token 上爬宿主 literal；
+  2. **`return` 关键字不是调用表达式的祖先**（兄弟位）：MCP「文件+行号」默认锚在行首关键字，
+     `getParentOfType(PsiMethodCallExpression)` 取不到 → `IbatisCallTargets.resolve` 增加
+     「包含调用的语句」回落；新增回归用例 `test光标落在return关键字_仍定位到调用`
+- 既有用例影响核对（§5.3 逐条）：通过。`test点号id与裸id两种形态都出Java侧箭头` 按 `element is PsiIdentifier`
+  过滤（原断言 marker 偏移集合相等）；`IbatisGutterHotPathTest` 扫描清单改为按文件分列
+  （Java→XML provider 的判定函数已是 `createMarkers`）；其余标注「预期仍绿」的用例实测全绿
+- CHANGELOG / 架构文档：已回填（`CHANGELOG.md` 新增 `[Unreleased]` 段，条目带 `8ad491b8`；
+  `docs/架构设计/预览触发面清单-说明文档.md` 新增入口矩阵第 16 行与 iBatis 调用行负例边界）
+- MCP 工具文档：`McpSourceLocator` 类注释与错误提示的 Supported 清单已更新（新增 iBatis 两档）
+- 真机验收进度（用户）：**待验收**——§5.4 共 14 步；第 1 步预期「每个调用行两枚图标（红箭头 + 绿预览）」，
+  第 10~14 步为快捷键与 MCP 判据

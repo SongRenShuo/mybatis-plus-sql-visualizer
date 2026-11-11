@@ -202,4 +202,26 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         assertTrue("iBatis 预览应渲染出 SQL：${preview.sql}", preview.sql.contains("FROM T_USER"))
         assertEquals(listOf("id"), preview.unresolvedParams)
     }
+
+    /**
+     * 结构守卫（T-IbatisCallPreview）：iBatis 两档回落必须排在 `tryJdbcTemplateFallback` **之前**。
+     *
+     * 这是本轮缺陷的根因——`JdbcTemplateSqlLocator` 没有 iBatis 让位门，先认领会把 statementId
+     * 当 SQL 渲染并得到 null，而动作已 `return true`，用户只看到「未找到」。行为用例只能证明
+     * 形状门本身，认领**顺序**只能在源码上钉：`!` 前缀只出现在回落链里，函数定义行不含它。
+     */
+    fun testiBatis两档回落排在JdbcTemplate之前() {
+        val source = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt",
+        ).readText()
+        val ibatisCall = source.indexOf("!tryIbatisCallFallback(")
+        val ibatisMethod = source.indexOf("!tryIbatisMethodFallback(")
+        val jdbc = source.indexOf("!tryJdbcTemplateFallback(")
+        assertTrue(
+            "三档回落都必须出现在链里（call=$ibatisCall method=$ibatisMethod jdbc=$jdbc）",
+            ibatisCall > 0 && ibatisMethod > 0 && jdbc > 0,
+        )
+        assertTrue("调用行 iBatis 回落必须先于 JdbcTemplate", ibatisCall < jdbc)
+        assertTrue("方法级 iBatis 回落同样先于 JdbcTemplate", ibatisMethod < jdbc)
+    }
 }
