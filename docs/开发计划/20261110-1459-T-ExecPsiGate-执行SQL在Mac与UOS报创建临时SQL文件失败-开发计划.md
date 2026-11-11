@@ -874,6 +874,10 @@ onError = { errorMsg -> resultPanel.showError(errorMsg) }   // ← 成因与蓝�
 
 ## 参考
 
+- **本轮复盘（六轮过程、被证伪的假设、下次的检查单）**：`docs/经验总结/20261111-2100-T-ExecPsiGate-六轮真机验收的排查过程与判据演进-经验总结.md`
+- 账本规则：`docs/LESSONS.md` L38（判据层级）· L39（枚举全部消费点接线）· L40（元数据随载体走）
+- CI 查询工具：`dev-support/ci-status.py`（runs / run / wait / release / pick-artifact）
+
 - `execute/DataSourceSelectorResults.kt:1758-1848`（`createTempPsiFile`）、`:1932-2021`（prewarm）、`:416`（文案装配）
 - `execute/DataSourceSelector.kt:2137-2165`（`mapDialectBeforePsi`）、`:1717-1718`（dumb mode 下 push-all 推迟注记）
 - `execute/DialectPreMapping.kt:48/201-217/238-278`（映射编排与静默点）
