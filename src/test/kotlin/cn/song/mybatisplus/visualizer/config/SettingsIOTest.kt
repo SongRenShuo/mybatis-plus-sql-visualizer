@@ -292,4 +292,24 @@ class SettingsIOTest {
             SettingsIO.importFromJson(withoutKey, PluginSettings.State(dialectAuto = false)).dialectAuto,
         )
     }
+    @Test
+    fun `病态数字抛ImportException而非NumberFormatException_券Y14`() {
+        try {
+            SettingsIO.importFromJson("""{"version":1,"x":-}""")
+            org.junit.Assert.fail("应抛 ImportException")
+        } catch (e: SettingsIO.ImportException) {
+            org.junit.Assert.assertTrue(e.message!!.contains("非法数字字面量"))
+        }
+    }
+
+    @Test
+    fun `version小于1拒绝导入_券Y14`() {
+        try {
+            SettingsIO.importFromJson("""{"version":0}""")
+            org.junit.Assert.fail("应抛 ImportException")
+        } catch (e: SettingsIO.ImportException) {
+            org.junit.Assert.assertTrue(e.message!!.contains("版本不合法"))
+        }
+    }
+
 }
