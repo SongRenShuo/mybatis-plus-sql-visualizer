@@ -1863,7 +1863,7 @@ internal fun DataSourceSelector.createTempPsiFile(
     } ?: (try {
         // T-ExecPsiGate F2：PSI 取不到时自愈——先看 vf 是否失效（重定位），再清映射重建。
         // 两支都不成立时下面带五元组诊断收口。
-        healExecPsi(project, vf, LOG, ioFile, sql)
+        healExecPsi(project, vf, LOG, ioFile)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
         null
@@ -1910,7 +1910,6 @@ internal fun DataSourceSelector.healExecPsi(
     vf: com.intellij.openapi.vfs.VirtualFile,
     LOG: com.intellij.openapi.diagnostic.Logger,
     ioFile: java.io.File? = null,
-    sql: String? = null,
 ): PsiFile? {
     // 支 1：vf 失效 → 重新定位
     if (!runCatching { vf.isValid }.getOrDefault(false)) {
@@ -1974,27 +1973,10 @@ internal fun DataSourceSelector.healExecPsi(
         "[M36][T-ExecPsiGate] exec PSI still unavailable after pinning MySQL/GenericSQL — " +
             "inherited=${runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()}: ${vf.name}",
     )
-    // 支 4（R6，用户真机驱动）：`.idea` 这个位置本身建不出 PSI（同一文件放项目外/桌面就正常）。
-    // 换到项目根备用落点再试一次——那里仍在内容根内（方言/数据源解析照常），但不在 `.idea` 下。
-    if (sql != null) {
-        val relocated = runCatching { projectRootExecFile(project, sql) }.getOrNull()
-        val refound = relocated?.let {
-            runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(it) }.getOrNull()
-        }
-        val psi = refound?.let { runCatching { findExecPsi(project, it) }.getOrNull() }
-        if (psi != null) {
-            // 记住这个项目：后续执行直接走备用落点，不必每次都先撞三轮失败（每轮还带 2s EDT 等待）
-            execRootFallbackProjects.add(project)
-            LOG.warn(
-                "[M36][T-ExecPsiGate] exec PSI rebuilt at PROJECT-ROOT fallback — " +
-                    "'.idea' refuses PSI on this IDE: ${refound!!.path}",
-            )
-            return psi
-        }
-        LOG.warn(
-            "[M36][T-ExecPsiGate] project-root fallback also failed: ${relocated?.path ?: "not created"}",
-        )
-    }
+    // 注意（2026-11-11 用户定案）：这里**不再自动换落点**。`.sql-visualizer` 是兜底而不是默认——
+    // 由用户在失败行上点「改用项目根落点重试」触发（那一支会先把项目记进
+    // [DataSourceSelector.execRootFallbackProjects]，之后执行直接走备用落点）。自动换落点会把
+    // 用户项目配置的问题藏起来，正是要避免的。
     return null
 }
 
@@ -2173,13 +2155,10 @@ internal fun DataSourceSelector.projectExecFile(
         return null
     }
     // R6：项目根备用落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
-    // 2026.3 起平台有 shouldCreatePsi 闸门：父目录不在内容模型里（`.idea` 被 excluded 的常见形态）
-    // 就不给 PSI。这里先探一次，能省掉「写 .idea → 建不出 PSI → 撞三轮自愈」的几秒。
-    val mustUseRoot = preferProjectRoot || !execDirCanHostPsi(
-        project,
-        java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec"),
-    )
-    val rootDir = if (mustUseRoot) java.io.File(base, ".sql-visualizer") else null
+    // 2026-11-11 用户定案：**兜底不得抢在提示前面**。`.idea` 仍是主路径；建不出 PSI 时先把
+    // 原因和修复入口摆给用户（面板红字 + 蓝字），只有用户点了「改用项目根落点重试」才走这里。
+    // 因此这里只认调用方显式传入的 preferProjectRoot（由 [DataSourceSelector.execRootFallbackProjects] 决定）。
+    val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
     val dir = rootDir?.let { java.io.File(it, "exec") }
         ?: java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
     if (!dir.exists() && !dir.mkdirs()) {
@@ -2332,7 +2311,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     } ?: (runCatching {
         // T-ExecPsiGate：预热链与冷路径同款自愈（vf 失效重定位 / 清映射重建）。这里只为把缓存
         // 填上——自愈失败不阻断，冷路径自己还有一次机会。
-        healExecPsi(project, vf, LOG, ioFile, sql)
+        healExecPsi(project, vf, LOG, ioFile)
     }.getOrNull()) ?: run {
         LOG.warn("[M36][T-ExecPsiGate] exec prewarm: findFile null — ${execPsiDiagnostics(project, vf)}")
         return

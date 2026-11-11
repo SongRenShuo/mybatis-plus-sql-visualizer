@@ -1125,28 +1125,29 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
         resultPanel.showError(errorMsg)
         return
     }
-    val settingsLabel: String
-    val settingsTip: String
-    val action: () -> Unit
+    var settingsLabel: String? = null
+    var settingsTip: String? = null
+    var settingsAction: (() -> Unit)? = null
+    // 兜底只在「换落点真能解决」的成因上给——方言不可用时挪目录没用，给了等于误导
+    var allowFallback = true
     val hint: String
     when (cause) {
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_FILE_TYPES -> {
             hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.fileTypes")
             settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
             settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
-            action = { openFileTypesSettings(proj) }
+            settingsAction = { openFileTypesSettings(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
             hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.vcs")
             settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore")
             settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.gitignore.tip")
-            action = { openGitignoreFile(proj) }
+            settingsAction = { openGitignoreFile(proj) }
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.EXCLUDED_ROOT -> {
             // 「项目结构」对话框在 243 / 2026.3 都已无稳定公开入口（ProjectStructureDialog 已移除），
-            // 宁可只给原因也不指到错的地方——目录排除属项目级配置，文案里已说清该取消什么。
-            resultPanel.showError("$errorMsg — ${MpSqlVisualizerBundle.message("execute.tempFile.hint.excluded")}")
-            return
+            // 故不给设置页链接（宁可指不出也不指错）；改用项目根落点这一支仍然有效。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.excluded")
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIALECT_UNAVAILABLE,
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.NO_LANGUAGE,
@@ -1154,7 +1155,8 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
             hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dialect")
             settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
             settingsTip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip")
-            action = { openSqlDialectSettings(proj) }
+            settingsAction = { openSqlDialectSettings(proj) }
+            allowFallback = false
         }
         cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.UNKNOWN -> {
             resultPanel.showError(errorMsg)
@@ -1163,9 +1165,18 @@ internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
     }
     resultPanel.showErrorWithActions(
         "$errorMsg — $hint",
+        fixLabel = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot") else null,
+        fixTooltip = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot.tip") else null,
+        fix = if (allowFallback) {
+            {
+                // 用户显式选了兜底：记住该项目（本会话内后续执行直接走备用落点），然后立刻重试一次
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execRootFallbackProjects.add(proj)
+                executeSql()
+            }
+        } else null,
         settingsLabel = settingsLabel,
         settingsTooltip = settingsTip,
-        settings = action,
+        settings = settingsAction,
     )
 }
 

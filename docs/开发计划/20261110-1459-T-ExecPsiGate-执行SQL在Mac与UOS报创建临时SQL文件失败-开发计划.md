@@ -634,6 +634,26 @@ VCS、忽略类压过方言类、全正常给 UNKNOWN）；反向验证把两条
 **适用边界（要说清）**：这条提示只在「连项目根备用落点也建不出 PSI」的残余场景露出——正常修复路径下
 用户看不到它（pre-check 直接把文件写到 `.sql-visualizer/` 就成功了）。它的价值是把残余失败变成可操作。
 
+### 13.11 定案修订：兜底不得抢在提示前面（2026-11-11，用户指令）
+
+用户原话：「记得 `.sql-visualizer` 是兜底的，优先还是让用户修改配置」。据此撤掉两处**静默**换落点：
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `projectExecFile` 的 pre-check | `preferProjectRoot \|\| !execDirCanHostPsi(...)` —— 探到 `.idea` 建不出 PSI 就**静默**改写项目根 | 只认调用方显式传入的 `preferProjectRoot`（由 `execRootFallbackProjects` 决定）；`.idea` 恢复为主路径 |
+| `healExecPsi` 支 4 | 前三支失败后**自动**换落点重建 | **删除**。失败原样上抛，由 UI 把选择和原因摆给用户 |
+
+失败行现在给两颗蓝字（`showErrorWithActions` 的 fix + settings 两个槽位）：
+
+1. **改用项目根落点重试**（fix 槽，立刻能用）→ 把项目记进 `execRootFallbackProjects` + `executeSql()` 重试；本会话后续执行直接走备用落点，不再报错
+2. **打开对应设置页**（settings 槽，根治）：文件类型忽略 → `preferences.fileTypes`；VCS 忽略 → 项目根 `.gitignore`；方言 → SQL 方言设置
+
+方言类成因**不给**兜底按钮（挪目录救不了方言问题，给了等于误导）；`EXCLUDED_ROOT` 只给原因 + 兜底按钮（「项目结构」页在 243/2026.3 无稳定公开入口）。
+
+**预览侧的现状（未随本次对齐，待定）**：`projectPreviewFile` 仍保留 pre-check，探不过就静默落 `<base>/.sql-visualizer/preview/`。理由是预览的失败形态是**功能降级**（黄色横幅），静默换落点至少保证预览可用；若要同样「先提示再兜底」，需给降级横幅加动作入口，另行评估。
+
+**保留**：`projectRootExecFile` / `preferProjectRoot` / `execRootFallbackProjects` / 备用目录的 `.gitignore` 全部保留——它们现在是「用户显式选择」的实现载体。
+
 ---
 
 ## 参考
