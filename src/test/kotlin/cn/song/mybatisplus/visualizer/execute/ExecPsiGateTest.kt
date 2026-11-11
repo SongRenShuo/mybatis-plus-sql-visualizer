@@ -428,6 +428,38 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         assertTrue("至少要成功一次（否则是环境问题，不是竞态）", ok > 0)
     }
 
+    /**
+     * **支 4 判据（R6，用户真机驱动）**：`.idea` 这个位置建不出 PSI 时，项目根备用落点必须可用。
+     *
+     * 用户实测：同一个 `mpsql-exec.sql` 放桌面（项目外）用数据源右键 script 能执行，放 `.idea/` 下
+     * 必报 `findPsi ... null`。所以自愈的最后一步是「换个落点」——`<projectBase>/.sql-visualizer/exec/`，
+     * 仍在内容根内（方言与数据源解析照常），但不在 `.idea` 下。
+     *
+     * 本用例钉三件事：①落点不在 `.idea` 下；②目录自带 `.gitignore`（不污染用户工作树）；③该落点能建 PSI。
+     */
+    fun testProjectRootFallbackBuildsPsi() {
+        val f = projectRootExecFile(project, "select fallback")
+        assertNotNull("项目根备用文件应可创建", f)
+        val normalized = f!!.absolutePath.replace('\\', '/')
+        assertFalse("备用落点不得在 .idea 下（那正是用户报错的位置）: $normalized", normalized.contains("/.idea/"))
+        assertTrue(
+            "备用目录必须自带 .gitignore（内容 *），否则会出现在用户的 git status 里",
+            File(f.parentFile!!.parentFile, ".gitignore").exists(),
+        )
+        val vf = WriteIntentReadAction.compute<VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
+        }
+        assertNotNull("备用文件应 VFS 可见", vf)
+        assertNotNull("项目根落点必须能建 PSI（用户实测项目外/桌面可用）", findExecPsi(project, vf!!))
+        // 清理：把备用目录整个删掉，别在测试项目里留垃圾
+        runCatching {
+            File(f.parentFile!!.parentFile, ".gitignore").delete()
+            f.delete()
+            f.parentFile?.delete()
+            f.parentFile?.parentFile?.delete()
+        }
+    }
+
     // ======================== 诊断 ========================
 
     /**

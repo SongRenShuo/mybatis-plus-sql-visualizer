@@ -2079,6 +2079,18 @@ object DataSourceSelector {
     internal fun conflictProbeProjectsForTest(): MutableSet<Project> = conflictProbeProjects
 
     /**
+     * T-ExecPsiGate R6：**`.idea` 下建不出 PSI 的项目集**（弱键，口径同 [conflictProbeProjects]）。
+     *
+     * 用户真机（UOS + Mac，同一个项目）：exec 文件放 `.idea/` 下必报 `findPsi ... null`，同内容放
+     * 桌面/项目外正常。一旦某个项目只能靠项目根备用落点（`.sql-visualizer/exec/`）把 PSI 建出来，
+     * 就把项目记在这里——后续执行直接走备用落点，不必每次都先撞三轮失败（每轮还带 2s 的 EDT 等待）。
+     */
+    internal val execRootFallbackProjects: MutableSet<Project> =
+        java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap<Project, Boolean>()),
+        )
+
+    /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
      * 插件 setText）后 1.5s 防抖自动落盘。动机：console 编辑器文档即 exec 文件 document
      * （attachConsole 挂载点），用户手改滞留「已修改未保存」是第四轮冲突弹窗「内存中更改」

@@ -1796,7 +1796,7 @@ internal fun DataSourceSelector.createTempPsiFile(
     // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
     // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
     val ioFile = try {
-        projectExecFile(project, sql)
+        projectExecFile(project, sql, preferProjectRoot = project in execRootFallbackProjects)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
@@ -1862,7 +1862,7 @@ internal fun DataSourceSelector.createTempPsiFile(
     } ?: (try {
         // T-ExecPsiGate F2：PSI 取不到时自愈——先看 vf 是否失效（重定位），再清映射重建。
         // 两支都不成立时下面带五元组诊断收口。
-        healExecPsi(project, vf, LOG, ioFile)
+        healExecPsi(project, vf, LOG, ioFile, sql)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
         null
@@ -1905,6 +1905,7 @@ internal fun DataSourceSelector.healExecPsi(
     vf: com.intellij.openapi.vfs.VirtualFile,
     LOG: com.intellij.openapi.diagnostic.Logger,
     ioFile: java.io.File? = null,
+    sql: String? = null,
 ): PsiFile? {
     // 支 1：vf 失效 → 重新定位
     if (!runCatching { vf.isValid }.getOrDefault(false)) {
@@ -1968,8 +1969,44 @@ internal fun DataSourceSelector.healExecPsi(
         "[M36][T-ExecPsiGate] exec PSI still unavailable after pinning MySQL/GenericSQL — " +
             "inherited=${runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()}: ${vf.name}",
     )
+    // 支 4（R6，用户真机驱动）：`.idea` 这个位置本身建不出 PSI（同一文件放项目外/桌面就正常）。
+    // 换到项目根备用落点再试一次——那里仍在内容根内（方言/数据源解析照常），但不在 `.idea` 下。
+    if (sql != null) {
+        val relocated = runCatching { projectRootExecFile(project, sql) }.getOrNull()
+        val refound = relocated?.let {
+            runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(it) }.getOrNull()
+        }
+        val psi = refound?.let { runCatching { findExecPsi(project, it) }.getOrNull() }
+        if (psi != null) {
+            // 记住这个项目：后续执行直接走备用落点，不必每次都先撞三轮失败（每轮还带 2s EDT 等待）
+            execRootFallbackProjects.add(project)
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec PSI rebuilt at PROJECT-ROOT fallback — " +
+                    "'.idea' refuses PSI on this IDE: ${refound!!.path}",
+            )
+            return psi
+        }
+        LOG.warn(
+            "[M36][T-ExecPsiGate] project-root fallback also failed: ${relocated?.path ?: "not created"}",
+        )
+    }
     return null
 }
+
+/**
+ * T-ExecPsiGate R6（2026-11-11 用户真机）：**项目根备用执行文件**。
+ *
+ * 用户实测（UOS + Mac，同一个项目）：同一个 `mpsql-exec.sql`，**放桌面（项目外）用数据源右键
+ * script 能正常执行**，只要放 `.idea/` 下就必报 `findPsi ... null`——即那台机器上 `.idea` 里的
+ * `.sql` 建不出 PSI（`.idea` 被标成 excluded，或平台把它当配置目录对待）。
+ *
+ * 本函数给出一条「仍在项目内容根内、但不在 `.idea` 下」的落点：
+ * `<projectBase>/.sql-visualizer/exec/mpsql-exec.sql`。目录里顺手写一份 `.gitignore`（内容 `*`），
+ * 免得污染用户的 `git status`。只在 `.idea` 那条路建不出 PSI 时才会被用到（自愈支 4），
+ * 之后由 [DataSourceSelector.execRootFallbackProjects] 记住，后续执行直接走这条路。
+ */
+internal fun projectRootExecFile(project: Project, sql: String): java.io.File? =
+    DataSourceSelector.projectExecFile(project, sql, preferProjectRoot = true)
 
 /**
  * T-ExecPsiGate：`findFile` 失败的**诊断串**（进用户可见失败文案的 {0}）。
@@ -2030,7 +2067,16 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
  * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
  */
 
-internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): java.io.File? {
+internal fun DataSourceSelector.projectExecFile(
+    project: Project,
+    sql: String,
+    /**
+     * T-ExecPsiGate R6：true = 写到**项目根备用落点** `<base>/.sql-visualizer/exec/`。
+     * 用于 `.idea` 下建不出 PSI 的机器（用户实测同文件放项目外正常）；复用本函数全套
+     * document 写与冲突规避逻辑，避免备用落点再踩「File Cache Conflict」。
+     */
+    preferProjectRoot: Boolean = false,
+): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
     // （VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
@@ -2044,11 +2090,21 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): 
         LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
         return null
     }
-    val dir = java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
+    // R6：项目根备用落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
+    val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
+    val dir = rootDir?.let { java.io.File(it, "exec") }
+        ?: java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
     if (!dir.exists() && !dir.mkdirs()) {
         // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
         LOG.warn("[M36] projectExecFile FAILED: mkdirs false (${dir.path})")
         return null
+    }
+    // 目录建好之后再写 `.gitignore`（内容 `*`），免得备用目录出现在用户的 git status 里
+    if (rootDir != null) {
+        runCatching {
+            val ignore = java.io.File(rootDir, ".gitignore")
+            if (!ignore.exists()) ignore.writeText("*\n")
+        }
     }
     val f = java.io.File(dir, "mpsql-exec.sql")
     // T-PreviewLockInversion（2026-11-02 性能分析）：临界区**只留「存在性 + 判等 + 首建裸写」**，
@@ -2122,7 +2178,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // 持写意向锁阻塞在 RefreshSessionImpl.waitFor，而会话推进需 WIL/EDT，互等成环（EDT 再被预览
     // 编辑器 mousePressed 排队等 WIL 即扩大为全 IDE「not responding」）。BGT 裸调即平台合法形态
     // （下方 pre-refresh 的 findFileByIoFile 同款；EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，须保留）。
-    val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+    val ioFile = runCatching { projectExecFile(project, sql, preferProjectRoot = project in execRootFallbackProjects) }.getOrElse { e ->
         // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
         // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
         if (FatalErrors.isFatal(e)) throw e
@@ -2187,7 +2243,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     } ?: (runCatching {
         // T-ExecPsiGate：预热链与冷路径同款自愈（vf 失效重定位 / 清映射重建）。这里只为把缓存
         // 填上——自愈失败不阻断，冷路径自己还有一次机会。
-        healExecPsi(project, vf, LOG, ioFile)
+        healExecPsi(project, vf, LOG, ioFile, sql)
     }.getOrNull()) ?: run {
         LOG.warn("[M36][T-ExecPsiGate] exec prewarm: findFile null — ${execPsiDiagnostics(project, vf)}")
         return

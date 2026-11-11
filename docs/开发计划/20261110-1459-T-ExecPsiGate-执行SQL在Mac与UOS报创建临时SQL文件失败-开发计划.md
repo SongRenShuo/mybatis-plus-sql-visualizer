@@ -489,6 +489,33 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
 
 定向 **13 tests / 0 failures / 0 errors / 0 skipped**。
 
+### 13.6 R6：用户关键线索「放桌面正常、放 `.idea` 必错」→ 换落点（2026-11-11）
+
+**用户补充**：把 `mpsql-exec.sql` 放桌面，用数据源右键 script 选中它能正常执行；**只要放 `.idea` 目录下就报错**。
+
+这一句把前面所有假说一次性排掉：不是方言（映射是 MySQL 且能建 PSI）、不是 vf 失效（`vfValid=true`）、
+不是并发或重解析竞态（R2/R3/R5 全空）。剩下的就是**落点本身**——那台机器上 `.idea` 里的 `.sql` 建不出 PSI
+（`.idea` 被标成 excluded，或平台把它当配置目录对待）。
+
+**本机复现失败（如实登记）**：243 上全部用例的 exec 文件本来就在 `.idea/...` 下，PSI 一直正常；想用
+「把目录标成 excluded」造同一条件，`ModuleRootModificationUtil.addExcludedRoot` / `ModuleRootModel.addExcludedRoot`
+在 243 的 API 面上都不可用（sources jar 里连 `SingleRootFileViewProvider` / `ModuleRootLayer` 都没收），
+三次尝试均编译失败后放弃——这条分支**只能靠用户真机验证**。
+
+**修法（自愈支 4 + 粘性记忆）**：
+
+| 项 | 内容 |
+|---|---|
+| 落点 | `<projectBase>/.sql-visualizer/exec/mpsql-exec.sql`——仍在项目内容根内（方言与数据源解析照常），但不在 `.idea` 下 |
+| 复用 | 走 `projectExecFile(preferProjectRoot = true)`，document 写与「File Cache Conflict」规避逻辑不重复实现 |
+| 不污染工作树 | 目录里写一份 `.gitignore`（内容 `*`），`git status` 看不到它 |
+| 粘性记忆 | 一旦某项目只能靠备用落点建出 PSI，就记进 `DataSourceSelector.execRootFallbackProjects`（弱键集）——后续执行**直接**走备用落点，不必每次都先撞三轮失败（每轮还带 2s EDT 有界等待） |
+| 用例 | `testProjectRootFallbackBuildsPsi`：落点不在 `.idea`、自带 `.gitignore`、能建 PSI；定向 **14 tests / 0 failures** |
+
+**未做 / 风险**：① 支 4 的触发链（前三条都失败后才走到）在 243 上造不出环境，故**未做反向验证**，靠用户真机确认；
+② preview 链的临时目录同样在 `.idea/sql-visualizer/preview/`，若用户那边预览也降级（横幅「临时文件解析失败」），
+说明同一根因，需另立项把预览落点一起迁走——本单不动预览，避免扩散。
+
 ---
 
 ## 参考
