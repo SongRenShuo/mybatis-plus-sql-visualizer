@@ -1107,8 +1107,11 @@ object JavaCodeGenerator {
 
         is Condition.Group -> renderGroup(condition, entity)
 
+        // T-HiddenBugPerfScan 券 Y9： qualifiedName + 双侧 javaEscape——曾用裸 columnName
+        // （多表 JOIN 列对列运行期歧义报错）且右侧不转义（双引号标识符打爆生成 Java 的字符串字面量）；
+        // 对照 renderRawCondition 的 qualifiedName 口径
         is Condition.ColumnComparison ->
-            "apply(\"${javaEscape(condition.left.columnName)} = ${condition.right.columnName}\")"
+            "apply(\"${javaEscape(condition.left.qualifiedName)} = ${javaEscape(condition.right.qualifiedName)}\")"
     }
 
     // ------------------------------------------------------------------
