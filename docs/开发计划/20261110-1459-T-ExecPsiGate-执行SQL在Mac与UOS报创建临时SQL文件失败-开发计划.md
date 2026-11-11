@@ -394,6 +394,59 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
 
 ---
 
+## 十三、第二轮真机五元组与 R4 实验（2026-11-11）
+
+### 13.1 真机读数（两台、同一个项目）
+
+| 平台 | 五元组 |
+|---|---|
+| UOS 20 | `findPsiAfterHeal: vfValid=true, dir=false, fileType=SQL, mappedLang=null, canPsi=false, path=/home/cmit/Desktop/develop/workspace/fortress4_basetime/.idea/…` |
+| macOS | `findPsiAfterHeal: vfValid=true, dir=false, fileType=SQL, mappedLang=null, canPsi=false, path=/Users/mmtye/Projects/workspace/fortress4_basetime/.idea/…` |
+
+读法（重要）：
+- `vfValid=true` ⇒ **不是 vf 失效分支**（V3 那支被排除，本单自愈支 1 对这条无效）；
+- `dir=false`、`fileType=SQL` ⇒ 排除目录与文件类型识别；
+- `mappedLang=null` ⇒ 我们自己的文件级映射不存在（heal 已清掉），**此时决定 PSI 语言的是继承链**（项目根/目录映射、全局默认 SQL 方言、`SqlDialectPusher` 按数据源推的方言）；
+- `canPsi=false` **是诊断的产物、不是证据**：它由 `mappedLang=null` 推出（`canCreateSqlPsiFor(null)` 恒 false）。这条已在 R4 里改掉（见 13.3）。
+- 两台机器、**同一个项目名 `fortress4_basetime`** ⇒ 相关性指向**项目级配置**（共享 `.idea` / 统一的 SQL 方言设置），不是操作系统。
+
+### 13.2 R4：把平台里每个方言都试一遍
+
+`testProbeEveryDialectForPsiCreation` 逐个把 exec 文件映射到 `SqlDialectMappings.availableValues` 的**全部 38 个方言**，各取一次 PSI：
+
+```
+[R4] total=38 bad=0 -> []
+[R4] table=[Redshift=PSI, CassandraQL=PSI, Derby=PSI, HiveQL=PSI, SparkSQL=PSI, AZURE=PSI,
+ BigQuery=PSI, ClickHouse=PSI, Cockroach=PSI, CouchbaseQuery=PSI, DM=PSI, Dynamo=PSI, Exasol=PSI,
+ GaussDB=PSI, GenericSQL=PSI, GoldenDB=PSI, Greenplum=PSI, H2=PSI, HSQLDB=PSI, HighGo=PSI, DB2=PSI,
+ DB2_IS=PSI, DB2_ZOS=PSI, MariaDB=PSI, TSQL=PSI, MongoDB=PSI, MySQL=PSI, Oracle=PSI, NetSuite=PSI,
+ OracleSqlPlus=PSI, PostgreSQL=PSI, Redis=PSI, SQL92=PSI, SQLite=PSI, Snowflake=PSI, Sybase=PSI,
+ Vastbase=PSI, Vertica=PSI]
+```
+
+结论：**243 平台上没有任何一个方言会让 PSI 建不出来**。也就是说「继承方言是毒源」这一支在本机复现不出来——它只在**用户那台机器的 IDE 版本**上成立（用户 IDE Build 号仍未知）。
+
+### 13.3 本轮落地（盲修 + 可归因）
+
+| 项 | 内容 |
+|---|---|
+| 自愈支 3 | 清映射后仍拿不到 PSI 时，**显式钉住**一个已知可建 SQL PSI 的方言（MySQL → GenericSQL）。理由：清映射只会把继承值请回来，只有显式映射能覆盖继承链 |
+| 诊断补两字段 | `inheritedLang=`（项目根映射 → 全局默认）与 `canPsiInherited=`。下一份真机报告能直接点名毒源方言，不再让 `canPsi=false` 这种派生值误导判断 |
+| 用例 | `testHealPinsGoodDialectWhenInheritedIsPoison`（目录映射模拟继承毒源 → 清映射救不了 → 钉 MySQL 救回来，日志 `PINNING dialect 'MySQL'`）；`testProbeEveryDialectForPsiCreation`（R4 记录面，钉「全方言可建 PSI」这个基线）；定向 **12 tests / 0 failures / 0 errors / 0 skipped** |
+| 反向验证 | 临时把钉方言的候选列表改成空表（代码内标 `RED PROBE`）→ `12 tests completed, 1 failed`，`testHealPinsGoodDialectWhenInheritedIsPoison` 红在「继承方言是毒源时必须靠『钉住可用方言』救回来」；恢复后复跑全绿，`RED PROBE` 清零 |
+| 代价（要说清） | 钉 MySQL 只是「先让 PSI 建得出来」：若用户的数据源不是 MySQL，runner 枚举会因方言不匹配而变窄，落到 UI-049 的可操作提示（选数据源 / 改方言），而不是硬失败。比「创建临时 SQL 文件失败」进一步，但仍不是完全正常——根治仍要用户的 `inheritedLang` 读数 |
+
+### 13.4 仍缺的一块
+
+用户的 `findFile` 在**继承方言也全绿**的环境里仍返回 null，说明还差一个变量没拿到：**IDE 版本**。下一步只问两件事即可分型：
+
+1. `Help → About` 的 Build 号（例如 `IU-263.7307.200`）；
+2. 该项目里**随便打开一个普通 `.sql` 文件**，语法高亮/表名补全是否正常——不正常说明整个项目的 SQL PSI 都坏了（与本插件无关，是方言设置或 IDE 安装问题）；正常说明只有本插件的临时文件受影响，那要看 Build 号对应的平台行为。
+
+**用户侧 1 分钟验证法**：`Settings → Languages & Frameworks → SQL Dialects` 把默认方言改成 MySQL（或 PostgreSQL），再点一次「执行 SQL」。好了 ⇒ 就是继承方言；照旧 ⇒ 排掉这一支，等新诊断里的 `inheritedLang` 说话。
+
+---
+
 ## 参考
 
 - `execute/DataSourceSelectorResults.kt:1758-1848`（`createTempPsiFile`）、`:1932-2021`（prewarm）、`:416`（文案装配）

@@ -1944,16 +1944,44 @@ internal fun DataSourceSelector.healExecPsi(
                 "(was=$before, cleared=$cleared): ${vf.name}",
         )
     }
-    return healed
+    if (healed != null) return healed
+    // 支 3（R4，2026-11-11 双平台真机五元组驱动）：清映射没用 ⇒ 毒源不是**我们写的**映射，
+    // 而是**继承来的**方言——项目根目录映射 / 全局默认 SQL 方言（Settings → SQL Dialects）/
+    // `SqlDialectPusher` 按数据源推的方言。这三者都靠“没有显式映射”生效，所以清掉我们的映射
+    // 反而把它们请回来了：PSI 语言依旧没有可用 ParserDefinition，findFile 恒 null。
+    // 唯一能覆盖继承值的手段是**显式钉一个已知可建 SQL PSI 的方言**（`canCreateSqlPsiFor` 判过）。
+    for (pinId in listOf(ExecDialectRouting.MYSQL_LANGUAGE_ID, ExecDialectRouting.GENERIC_LANGUAGE_ID)) {
+        val pinLanguage = runCatching { DialectPreMapping.languageById(project, pinId) }.getOrNull() ?: continue
+        if (!canCreateSqlPsiFor(pinLanguage)) continue
+        val mapped = runCatching { DialectPreMapping.ensureMapped(project, vf, pinLanguage, false) }.getOrDefault(false)
+        if (!mapped) continue
+        val pinned = runCatching { findExecPsi(project, vf) }.getOrNull()
+        if (pinned != null) {
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec PSI rebuilt by PINNING dialect '$pinId' — the poison was an " +
+                    "INHERITED dialect (project-root mapping / global default / pusher), not our own: ${vf.name}",
+            )
+            return pinned
+        }
+    }
+    LOG.warn(
+        "[M36][T-ExecPsiGate] exec PSI still unavailable after pinning MySQL/GenericSQL — " +
+            "inherited=${runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()}: ${vf.name}",
+    )
+    return null
 }
 
 /**
- * T-ExecPsiGate：`findFile` 失败的**五元组诊断**（进用户可见失败文案的 {0}）。
+ * T-ExecPsiGate：`findFile` 失败的**诊断串**（进用户可见失败文案的 {0}）。
  *
  * 平台 `FileManagerImpl.findFile` 只有三条 null 分支（目录 / vf 无效 / PSI 创建被拒），三条
  * 在用户侧的表现完全相同（都只是 null）。原文案只带文件名，真机日志与用户反馈都无法区分——
- * 2026-11-10 的 Mac / UOS 报障就卡在这里。五项一次给全：vf 有效性、是否目录、文件类型、
- * 当前生效映射到的语言、该语言能否建 SQL PSI（附绝对路径便于回传）。
+ * 2026-11-10 的 Mac / UOS 报障就卡在这里。
+ *
+ * **R4 补两字段（2026-11-11）**：真机五元组显示 `vfValid=true / mappedLang=null` 却仍拿不到 PSI，
+ * 说明决定 PSI 语言的是**继承来的**方言（项目根目录映射 / 全局默认 SQL 方言 / pusher 按数据源推的
+ * 方言）——只报「显式映射」等于什么都没说。故加 `inheritedLang` 与它的 `canPsiInherited`：
+ * 前者为空而后者 false 时，基本可以直接判「这台机器的继承方言建不出 SQL PSI」。
  */
 internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): String {
     val mappedId = runCatching {
@@ -1962,12 +1990,18 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
     val canPsi = runCatching {
         canCreateSqlPsiFor(mappedId?.let { DialectPreMapping.languageById(project, it) })
     }.getOrDefault(false)
+    // 继承链（项目根映射 → 全局默认）：这才是「没有显式映射」时真正生效的方言
+    val inheritedId = runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()
+    val canPsiInherited = runCatching {
+        canCreateSqlPsiFor(inheritedId?.let { DialectPreMapping.languageById(project, it) })
+    }.getOrDefault(false)
     val vfValid = runCatching { vf.isValid }.getOrDefault(false)
     val isDir = runCatching { vf.isDirectory }.getOrDefault(false)
     val fileTypeName = runCatching { vf.fileType.name }.getOrDefault("?")
     val path = runCatching { vf.path }.getOrDefault("?")
     return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
-        "mappedLang=$mappedId, canPsi=$canPsi, path=$path"
+        "mappedLang=$mappedId, canPsi=$canPsi, inheritedLang=$inheritedId, " +
+        "canPsiInherited=$canPsiInherited, path=$path"
 }
 
 /**

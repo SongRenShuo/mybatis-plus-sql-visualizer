@@ -90,6 +90,49 @@ class ExecPsiGateTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * **实验 R4**：把文件逐个映射到**平台里每一个可用方言**，看谁让 `findFile` 拿不到 PSI。
+     *
+     * 动机（2026-11-11 用户五元组）：`vfValid=true / dir=false / fileType=SQL / mappedLang=null`
+     * ——两条已知分支都被排掉，只剩「PSI 语言没有可用 ParserDefinition」。而当我们自己没写映射时，
+     * 决定 `.sql` 的 PSI 语言的是**平台默认 SQL 方言**（`SqlLanguageSubstitutor` 的
+     * `getConfiguredDefaultSqlDialect`）。所以这里把每个方言都试一遍，看哪些会让 PSI 建不出来。
+     */
+    fun testProbeEveryDialectForPsiCreation() {
+        val mappings = SqlDialectMappings.getInstance(project)
+        val available = mappings.availableValues.mapNotNull { it as? Language }
+        val (ioFile, vf) = writeExecFileWithIo("select dialect-probe")
+        val bad = mutableListOf<String>()
+        val table = mutableListOf<String>()
+        for (language in available) {
+            runCatching { DialectPreMapping.setLanguageOnEdt(project, vf, language) }
+            val outcome = awaitPsiOutcome(vf)
+            table += "${language.id}=$outcome"
+            if (outcome != "PSI") bad += "${language.id}:$outcome"
+        }
+        println("[R4] total=${available.size} bad=${bad.size} -> $bad")
+        println("[R4] table=$table")
+        // 这里只做记录：把「哪些方言建不出 PSI」的事实钉在日志里，供真机比对
+        assertTrue("至少要有 MySQL 这种能建 PSI 的方言（否则平台环境异常）", table.any { it.startsWith("MySQL=") && it.endsWith("=PSI") })
+    }
+
+    /** 取一次「当前映射下的 PSI 结果」，最多等 10 拍让重解析落地；返回 PSI / NULL / THROW:xxx。 */
+    private fun awaitPsiOutcome(vf: VirtualFile): String {
+        var last = "NULL"
+        repeat(10) {
+            UIUtil.dispatchAllInvocationEvents()
+            val r = runCatching { findExecPsi(project, vf) }
+            last = when {
+                r.isFailure -> "THROW:${r.exceptionOrNull()!!.javaClass.simpleName}"
+                r.getOrNull() == null -> "NULL"
+                else -> "PSI"
+            }
+            if (last == "PSI" || last.startsWith("THROW")) return last
+            Thread.sleep(20L)
+        }
+        return last
+    }
+
     fun testNonSqlLanguageCannotBuildPsi() {
         val java = Language.findLanguageByID("JAVA")
         assertNotNull("JAVA 语言应可见（本用例的前提）", java)
@@ -310,6 +353,48 @@ class ExecPsiGateTest : BasePlatformTestCase() {
             "坏映射下 findFile 必须恒抛（出现任何非 THROW 都说明平台行为变了，用户那条纯 null 就多一种来源）: $seq",
             seq.all { it.startsWith("THROW") },
         )
+    }
+
+    /**
+     * **支 3 判据（R4 真机驱动）**：毒源是**继承来的**方言时，清掉文件自己的映射没用。
+     *
+     * 真机证据（2026-11-11，UOS + Mac 两台、同一个项目 `fortress4_basetime`）：
+     * `vfValid=true / dir=false / fileType=SQL / mappedLang=null` 却仍拿不到 PSI ⇒ 决定 PSI
+     * 语言的是继承链（项目根/目录映射、全局默认 SQL 方言、`SqlDialectPusher` 按数据源推的方言）。
+     * 这种状态下「清映射」等于把继承值请回来，必须**显式钉**一个能建 SQL PSI 的方言覆盖它。
+     *
+     * 本用例用「目录映射」模拟继承毒源（平台 `getMappingForHierarchy` 自下而上，目录映射被其下
+     * 文件继承），断言：文件自身无映射时拿不到 PSI → `healExecPsi` 钉住可用方言后拿回 PSI，
+     * 且文件上确实留下了那个显式映射。
+     */
+    fun testHealPinsGoodDialectWhenInheritedIsPoison() {
+        val (ioFile, vf) = writeExecFileWithIo("select 8")
+        val dirVf = WriteIntentReadAction.compute<VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile.parentFile)
+        }
+        assertNotNull("exec 目录应 VFS 可见", dirVf)
+        try {
+            assertTrue(
+                "前置：目录映射必须写成功（模拟继承毒源）",
+                DialectPreMapping.setLanguageOnEdt(project, dirVf!!, NoParserForTest),
+            )
+            assertNull(
+                "前置：继承坏方言下 PSI 必须拿不到（这正是用户五元组的形态）",
+                runCatching { findExecPsi(project, vf) }.getOrNull(),
+            )
+
+            val healed = DataSourceSelector.healExecPsi(project, vf, LOG, ioFile)
+            assertNotNull("继承方言是毒源时必须靠「钉住可用方言」救回来（清映射救不了）", healed)
+            val pinned = DialectPreMapping.configuredLanguageId(project, vf)
+            println("[ExecPsiGate] pinned dialect after inherited-poison heal = $pinned")
+            assertTrue(
+                "钉住后文件上必须有显式映射，且不是那个坏语言（否则继承值又生效了）: $pinned",
+                pinned != null && !pinned.equals(NoParserForTest.id, ignoreCase = true),
+            )
+        } finally {
+            // 目录映射会污染同目录下的其它用例，必须清掉
+            runCatching { DialectPreMapping.clearMapping(project, dirVf!!) }
+        }
     }
 
     // ======================== 诊断 ========================
