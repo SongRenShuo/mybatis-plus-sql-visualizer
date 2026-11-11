@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
@@ -42,6 +43,8 @@ internal object IbatisStatementPreview {
             // （引号）只能从参数类的字段类型推，XML 属性里本来就有，此前没人消费
             project = tag.project,
             parameterClass = tag.getAttributeValue("parameterClass"),
+            // L34：多模块工程里短名重名是常态（demo 三个 User），带上语句所在模块做「就近」收窄
+            moduleName = runCatching { ModuleUtilCore.findModuleForPsiElement(tag)?.name }.getOrNull(),
         )
 
     /**

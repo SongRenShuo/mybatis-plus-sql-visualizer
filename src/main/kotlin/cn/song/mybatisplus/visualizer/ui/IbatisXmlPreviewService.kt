@@ -89,6 +89,11 @@ object IbatisXmlPreviewService {
         project: Project? = null,
         /** T-IbatisParamClassQuote：语句的 `parameterClass` 原值；null 时回落到 XML 属性里的同名项。 */
         parameterClass: String? = null,
+        /**
+         * T-IbatisParamClassQuote（L34）：语句所在模块名——短名重名时按「就近」收窄候选。
+         * null = 不做模块过滤（单模块项目与测试环境的行为与升级前一致）。
+         */
+        moduleName: String? = null,
     ): PreviewResult {
         val model: IbatisSqlMap = try {
             SqlMapParser().parse(fileText)
@@ -113,6 +118,7 @@ object IbatisXmlPreviewService {
             project = project,
             parameterClass = parameterClass ?: statement.attributes["parameterClass"],
             propertyNames = rendered.paramNames + selectKeyRenders.flatMap { it.second.paramNames },
+            moduleName = moduleName,
         )
         val baseline = toPreviewResult(
             rendered,

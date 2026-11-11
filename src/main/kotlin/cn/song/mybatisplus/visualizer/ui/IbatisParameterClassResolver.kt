@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -57,13 +58,15 @@ object IbatisParameterClassResolver {
      * @param project        当前项目（null = 纯文本测试链，直接返回空表）
      * @param parameterClass 语句的 `parameterClass` 属性原值（可能是 FQN，也可能是短名 / 别名）
      * @param propertyNames  `#name#` 的属性名（含点路径也照传，逐段解析）
+     * @param moduleName     语句所在模块名（L34：多模块工程里短名常重名，按「就近」收窄；null = 不做模块过滤）
      */
     fun resolve(
         project: Project?,
         parameterClass: String?,
         propertyNames: Collection<String>,
+        moduleName: String? = null,
     ): Map<String, ParamHint> =
-        runCatching { resolveStrict(project, parameterClass, propertyNames) }.getOrDefault(emptyMap())
+        runCatching { resolveStrict(project, parameterClass, propertyNames, moduleName) }.getOrDefault(emptyMap())
 
     /**
      * 不吞异常的版本（测试/诊断用）：解析链任一步抛错都原样传播。
@@ -75,10 +78,11 @@ object IbatisParameterClassResolver {
         project: Project?,
         parameterClass: String?,
         propertyNames: Collection<String>,
+        moduleName: String? = null,
     ): Map<String, ParamHint> {
         if (project == null || parameterClass.isNullOrBlank() || propertyNames.isEmpty()) return emptyMap()
         return ReadAction.compute<Map<String, ParamHint>, RuntimeException> {
-            val cls = findClass(project, parameterClass.trim()) ?: return@compute emptyMap()
+            val cls = findClass(project, parameterClass.trim(), moduleName) ?: return@compute emptyMap()
             propertyNames.distinct()
                 .mapNotNull { path -> hintOfProperty(cls, path)?.let { path to it } }
                 .toMap()
@@ -86,16 +90,31 @@ object IbatisParameterClassResolver {
     }
 
     /**
-     * 类名 → PsiClass。先按全限定名找；落空再按短名查索引，**唯一命中才用**。
+     * 类名 → PsiClass。先按全限定名找；落空再按短名查索引并收窄（[pickCandidate]）。
      *
      * 短名这条路是给 `<typeAlias alias="User" type="…"/>` 准备的：别名通常与类简单名同名，
-     * 不读 config 也能命中；项目里存在多个同名类时弃权。
+     * 不读 config 也能命中。多模块工程里同名实体是常态（demo 项目三个 `User`），
+     * 所以唯一命中之外还要按「语句所在模块」收窄，仍不唯一才弃权。
      */
-    private fun findClass(project: Project, name: String): PsiClass? {
+    private fun findClass(project: Project, name: String, moduleName: String?): PsiClass? {
         val scope = GlobalSearchScope.allScope(project)
         JavaPsiFacade.getInstance(project).findClass(name, scope)?.let { return it }
-        return PsiShortNamesCache.getInstance(project).getClassesByName(name, scope).singleOrNull()
+        val candidates = PsiShortNamesCache.getInstance(project).getClassesByName(name, scope).filterNotNull()
+        return pickCandidate(candidates, moduleName) { cls ->
+            runCatching { ModuleUtilCore.findModuleForPsiElement(cls)?.name }.getOrNull()
+        }
     }
+
+    /**
+     * 短名候选收窄（纯逻辑，可单测）：唯一命中直接用；多候选时按模块「就近」——
+     * 语句所在模块里恰好一个同名类才算命中，仍不唯一则弃权（贴错类型比不贴更糟）。
+     */
+    internal fun <T> pickCandidate(
+        candidates: List<T>,
+        moduleName: String?,
+        moduleOf: (T) -> String?,
+    ): T? = candidates.singleOrNull()
+        ?: candidates.filter { moduleName != null && moduleOf(it) == moduleName }.singleOrNull()
 
     /** 属性路径 → 提示；任一段解析不到返回 null。 */
     private fun hintOfProperty(root: PsiClass, path: String): ParamHint? {

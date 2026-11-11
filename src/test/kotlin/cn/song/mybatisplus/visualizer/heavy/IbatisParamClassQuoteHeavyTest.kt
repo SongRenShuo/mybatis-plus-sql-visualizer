@@ -121,6 +121,21 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
         )
     }
 
+    /**
+     * L34 回归：项目里有多个同名参数类时**不得猜**——测试项目是单模块（两个候选同模块），
+     * 模块收窄救不了，必须弃权、退回面板启发式（裸渲染），而不是贴到随便一个 `User` 上。
+     * 模块收窄的正例由 `IbatisParamCandidatePickTest` 覆盖（纯逻辑，不需要多模块工程）。
+     */
+    fun testMultipleSameNameCandidatesKeepsHeuristic() {
+        addClassFile("UserInP.java", "package p; public class User { private String username; }")
+        addClassFile("UserInQ.java", "package q; public class User { private String username; }")
+        val result = IbatisXmlPreviewService.preview(xml, "byName", project = project, parameterClass = "User")
+        assertTrue(
+            "多候选且同模块无法区分时应弃权：${result.paramHints}",
+            result.paramHints.all { it.quote == null },
+        )
+    }
+
     fun testUnresolvableParameterClassKeepsHeuristic() {
         // 不注册 User 类：短名索引零命中 → 不产提示，面板启发式（1213 裸渲染）
         assertEquals(

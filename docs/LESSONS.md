@@ -306,6 +306,20 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：摘之前先 `git status` 确认目标文件干净；**反例**：把 checkout 当「撤销我刚才改动的那一行」用。
 **Seen 1× (2026-11-11)**
 
+### L33 增量构建下别手删 `build/classes`——要清就 `clean`，否则 Kotlin 侧 UP-TO-DATE、Java 侧找不到符号
+
+**规则**：为躲「旧字节码冒充回归」（L21）而清产物时，用 `./gradlew clean`（或 `--rerun-tasks`），**不要 `rm -rf build/classes`**。手删 circles 后 Gradle 的 `compileKotlin` 仍判 UP-TO-DATE 被跳过，而 `build/classes` 已不存在 ⇒ 依赖 Kotlin 类的 Java 源（如 `SqlLogToolWindowFactory` 引用 `SqlLogPanel` / `PluginSettings`）整片报「找不到符号」，看起来像真编不过。
+**证据**：T-IbatisParamClassQuote 合并态验证（2026-11-11，master `e06fb3f50`）：`rm -rf build/classes build/tmp/compileKotlin build/tmp/compileTestKotlin` 后跑测试，`:compileJava FAILED — 16 个错误`，全是 `找不到符号 类 SqlLogPanel/PluginSettings`；改用 `./gradlew clean test ...` 后 49 suite / 550 例全绿。
+**正例**：清产物用 `clean`，或在同一命令行带 `--rerun-tasks`；**反例**：只删 `build/classes` 就以为等价于 clean。
+**Seen 1× (2026-11-11)**
+
+### L34 短名解析在多模块项目里必须按「就近」收窄——单一命中才用等于常态弃权
+
+**规则**：用短名索引（`PsiShortNamesCache.getClassesByName`）把 XML/配置里的类名（如 iBatis `parameterClass`、`<typeAlias>`）解析成 `PsiClass` 时，**不能只接受「全项目唯一命中」**——多模块工程里同名实体是常态（demo 项目三个 `User`），一律弃权等于该能力在真实项目里从不生效。收窄顺序：FQN 直查 → 短名唯一 → **按语句/file 所属模块过滤**（候选与使用点同模块者优先）→ 仍不唯一才弃权。
+**证据**：T-IbatisParamClassQuote（2026-11-11，`cb4ec1ed3` 首版）：demo 里 `sqlmap/User.xml` 的 `parameterClass="User"` 解析到 3 个候选（`cn.song.ibatis2demo.model.User` / `probe.User` / `cn.song.mybatisplusdemo.entity.User`）⇒ `singleOrNull()` 返回 null ⇒ 引号修复在真机完全不生效，用户从 Java 调用行与 XML 语句行两处复现同一现象；而单模块的 Heavy 测试全绿，读不出这个问题。
+**正例**：候选解析一律带上下文（模块 / 源根 / 包）收窄；**反例**：拿「唯一命中」当保守策略——测试环境往往只有一个同名类，掩盖真实项目的重名面。
+**Seen 1× (2026-11-11)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
