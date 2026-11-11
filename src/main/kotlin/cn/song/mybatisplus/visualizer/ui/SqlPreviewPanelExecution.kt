@@ -627,11 +627,19 @@ internal fun SqlPreviewPanel.previewSqlForReadonly(): String? {
  */
 
 internal fun SqlPreviewPanel.confirmDollarRawSegments(proj: Project): Boolean {
-    if (current?.hasDollarRawSegments != true) return true
+    val placeholder = hasSimulationPlaceholders()
+    if (current?.hasDollarRawSegments != true && !placeholder) return true
     if (dollarRawConfirmedInSession) return true
+    // T-MbgExamplePreview T1：产物含 {{表达式}} 占位时用更强的文案——那一段不是「模拟值」，
+    // 而是运行期才知道的拼接片段，直接执行必报语法错
+    val messageKey = if (placeholder) {
+        "execute.confirm.simPlaceholder.message"
+    } else {
+        "execute.confirm.dollarRaw.message"
+    }
     val confirm = Messages.showYesNoDialog(
         proj,
-        MpSqlVisualizerBundle.message("execute.confirm.dollarRaw.message", DOLLAR_TOKEN),
+        MpSqlVisualizerBundle.message(messageKey, DOLLAR_TOKEN),
         MpSqlVisualizerBundle.message("execute.confirm.dml"),
         Messages.getWarningIcon(),
     )

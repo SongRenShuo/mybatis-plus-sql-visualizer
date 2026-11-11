@@ -17,6 +17,13 @@ open class DynamicContext(
     private val protectedBindNames: Set<String> = emptySet(),
     /** 静态字段值（T-M25.2）：`@class@field` → 值；预览引擎由 PSI 层解析用户项目常量类注入。 */
     open val staticFieldValues: Map<String, Any?> = emptyMap(),
+    /**
+     * 空值占位模式（T-MbgExamplePreview R1）：`${}` 求值为 null 且表达式含变量引用时，输出
+     * `{{表达式}}` 而不是空串——缺段在产物里可见，不会被误读成「插件把 SQL 识别错了」。
+     *
+     * 默认 false：真实 SQL 产物与全仓既有断言零影响；只有预览渲染链（[XmlPreviewModel.renderSql]）开启。
+     */
+    open val emptyDollarPlaceholder: Boolean = false,
 ) {
 
     /**

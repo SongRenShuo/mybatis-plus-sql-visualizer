@@ -43,7 +43,7 @@ class ForeachSqlNode(
                 applyItem(scoped, o, uniqueNumber)
             }
             contents.apply(FilteredContext(scoped, index, item, uniqueNumber))
-            if (first) first = !scoped.isPrefixApplied()
+            if (first) first = !scoped.hasContent()
             i++
         }
         close?.let { context.appendSql(it) }
@@ -69,7 +69,10 @@ class ForeachSqlNode(
             null -> {
                 if (nullable) null
                 else {
-                    context.errors += "The expression '$collectionExpression' evaluated to a null value."
+                    // T-MbgExamplePreview R6：原文是 MyBatis 英文异常文案，中文 UI 直接透传读不懂；
+                    // 改成中文并给可操作指引（集合为 null 多半是面板勾了「为 null」）
+                    context.errors += "foreach 集合 '$collectionExpression' 求值为 null" +
+                        "（模拟参数没给这个集合；若真实调用中它必有值，请取消该集合的『为 null』勾选）"
                     null
                 }
             }
@@ -77,7 +80,8 @@ class ForeachSqlNode(
             is Array<*> -> value.asList()
             is Map<*, *> -> value.entries
             else -> {
-                context.errors += "Error evaluating expression '$collectionExpression'. Return value (${value::class.simpleName}) was not iterable."
+                context.errors += "foreach 集合 '$collectionExpression' 的求值结果不可迭代" +
+                    "（${value::class.simpleName}）"
                 null
             }
         }
@@ -115,7 +119,8 @@ class ForeachSqlNode(
             delegate.appendSql(sql)
         }
 
-        fun isPrefixApplied(): Boolean = prefixApplied
+        /** 本轮迭代是否产出过内容（separator 顺延判据，见 [ForeachSqlNode.apply]）。 */
+        fun hasContent(): Boolean = prefixApplied
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
@@ -129,6 +134,10 @@ class ForeachSqlNode(
 
         override val staticFieldValues: Map<String, Any?>
             get() = delegate.staticFieldValues
+
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 `${}` 仍按空串输出
+        override val emptyDollarPlaceholder: Boolean
+            get() = delegate.emptyDollarPlaceholder
 
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings
@@ -166,6 +175,9 @@ class ForeachSqlNode(
             }
             // T-M25.5（用户实测）：迭代内容 trim——mapper 里 foreach 体的换行缩进（"\n  #{x}\n"）
             // 若原样输出会使 IN 每项换行一行；trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
+            //
+            // T-MbgExamplePreview R2：段间分隔改由下游缓冲负责（[DynamicContext.appendSql] 与
+            // [TrimSqlNode] 的 filtered 缓冲都会补空格）——此处再加空格会叠加成双空格。
             delegate.appendSql(newSql.trim())
         }
 
@@ -181,6 +193,10 @@ class ForeachSqlNode(
 
         override val staticFieldValues: Map<String, Any?>
             get() = delegate.staticFieldValues
+
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 `${}` 仍按空串输出
+        override val emptyDollarPlaceholder: Boolean
+            get() = delegate.emptyDollarPlaceholder
 
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings
