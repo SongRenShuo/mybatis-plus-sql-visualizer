@@ -474,6 +474,8 @@ runCheck(Channel.LOCAL)
 - **测试订正（dotDot）**：用例构造的 `dir/a/b/../a/b` 归一后是 `dir/a/a/b`（探针实证 exists=false），实现判 NotFound 是**正确**行为；用例改为 `dir/a/b/../b`。
 - **P-3/P-5 部分覆盖**：存在性三态与中文+空格目录已由单测覆盖；UNC 死路径需真网络环境（not run）。
 - **Kotlin 嵌套注释坑（沉淀候选 LESSONS）**：KDoc 里写 `lib/*.jar`，`/*` 会打开嵌套注释且永不闭合 → 全文件语法错（Missing `}` / Unclosed comment）；已全部改写为「lib 目录下插件 jar」。
+- **落点微调（§3.5）**：本地目录行未在 `PluginSettingsPanelSections` 另起 addRow，而是放进 `UpdateSection` 内部（版本信息行的组件本身就是 updateSection，行距与状态机渲染更内聚）；标签列由行内 `localDirLabel` 承担，搜索索引/守卫对账不受影响（`settings.update.localDir` 已登记索引）。
+- **守卫连坐一处**：`BrowserUtilConvergenceGuardTest` 对生产 `BrowserUtil.open` 调用面计数断言——新增打开目录缝须同批登记豁免 + 计数（见 13.6）；「新增 UI 交互须照抄既有同类实现」在这里的镜像＝照抄 seam 形态时也要同步抄它的守卫登记。
 
 ### 13.5 not run
 
@@ -482,4 +484,5 @@ runCheck(Channel.LOCAL)
 
 ### 13.6 testFast 快桶读数（收口补测）
 
-（后台跑完后回填。）
+- 终读：**4898 例 / 0 失败 / 0 错误 / 7 skipped**（skip 为既有环境跳过口径）。
+- 首跑唯一红＝`BrowserUtilConvergenceGuardTest`：新增 `localDirectoryOpener` 默认 lambda 的 `BrowserUtil.open` 调用点未登记（该守卫对调用面计数断言）。照 `captureDirectoryOpener` 先例在豁免清单登记（同为「打开本地目录 + 测试缝」形态，理由逐条写明）并同步 `expectedTotalCallSites` 5→6，复跑全绿。

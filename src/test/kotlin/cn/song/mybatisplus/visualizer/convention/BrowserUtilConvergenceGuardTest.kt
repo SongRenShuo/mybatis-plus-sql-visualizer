@@ -63,10 +63,16 @@ class BrowserUtilConvergenceGuardTest : BannedApiScanSupport() {
                 "用户经 FileSaverDialog 手动确认保存后才触发；ShareDialogTest 不触达导出链" +
                 "（grep 实证 0 调用）。未来任何测试触达导出链前，须先把这两处改走 util.SafeBrowser " +
                 "或加 isUnitTestMode 收敛，不得沿用本豁免。",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/UpdateSection.kt" to
+            "本地安装包目录打开缝（T-LocalUpdateDir，internal var localDirectoryOpener 默认 lambda）：打开" +
+                "用户配置的本地/共享盘目录（目录 URI，文件管理器行为非网页），与 PluginSettingsPanel 的" +
+                "捕获目录打开缝同形态；且本身是测试缝——UpdateSectionTest 注入替代实现断言目标路径，" +
+                "平台调用在测试进程不触达。属性初始化 lambda 无 fun 围合，无法就地收敛，豁免登记；" +
+                "未来若测试改触达默认实现，须先加 isUnitTestMode 收敛。",
     )
 
-    /** 期望计数：与 src/main 生产调用点同步（当前 5 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2）。 */
-    private val expectedTotalCallSites = 5
+    /** 期望计数：与 src/main 生产调用点同步（当前 6 = SqlLogPanel 1 + SafeBrowser 1 + PluginSettingsPanel 1 + ShareDialog 2 + UpdateSection 1）。 */
+    private val expectedTotalCallSites = 6
 
     /** 一个调用站点：文件相对路径、1-based 行号、命中的 API 形态、最小围合函数体（无 fun 围合为空串）。 */
     internal data class BrowserUtilCallSite(
