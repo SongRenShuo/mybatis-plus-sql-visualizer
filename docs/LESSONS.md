@@ -411,7 +411,7 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L45 硬杀沙盒 IDE 会留坏索引：`NOT indexable` + Go-to-File 全空，删 `system/index` 重来
 
-**规则**：沙盒（runIde）别 `Stop-Process -Force`。硬杀后重启常见两症：`ProjectIndexableFilesFilterHealthCheck - Following files are NOT indexable but they were found in filter. Errors count: N`，以及 `Ctrl+Shift+N` 对任何文件名都返回空（工程树看起来正常、类索引还能用，最容易被误判成「工程没加载」）。处置：关掉沙盒后删 `<sandbox>/…/system/index` 与 `system/caches` 再起，重扫约 2 分钟即恢复。附带损失：`config/options/trusted-paths.xml` 也来不及落盘，下次启动还会弹「Trust and Open Project」。
+**规则**：沙盒（runIde）别 `Stop-Process -Force`。硬杀后重启常见两症：`ProjectIndexableFilesFilterHealthCheck - Following files are NOT indexable but they were found in filter. Errors count: N`，以及 `Ctrl+Shift+N` 对任何文件名都返回空（工程树看起来正常、类索引还能用，最容易被误判成「工程没加载」）。处置：关掉沙盒后删 `<sandbox>/…/system/index` 与 `system/caches` 再起，重扫约 2 分钟即恢复。**正确关法是关 IDE 窗口（等同 File → Exit）**：它会走正常退出序列，刷缓存与索引；Gradle 工具窗里停 `runIde` 任务与 `Stop-Process` 在这一点上等价（都是直接终结进程）。附带现象（偶发）：`config/options/trusted-paths.xml` 有时来不及落盘，下次启动还会弹「Trust and Open Project」——本轮两次硬杀里发生一次、另一次正常落盘（mtime 早于杀进程），所以它不是稳定判据。
 
 **证据**：2026-11-12 端到端验收，为换版本两次硬杀沙盒 IDE；首轮 Go-to-File 正常，第二轮起对 `CustAddressMapper`/`pom.xml` 一律空结果，日志 `Errors count: 1502`（示例行含项目根目录与 `pom.xml`）；删索引重启后同查询立刻命中两条。
 
