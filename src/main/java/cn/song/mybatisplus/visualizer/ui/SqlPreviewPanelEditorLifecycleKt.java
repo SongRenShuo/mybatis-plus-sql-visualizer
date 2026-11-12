@@ -275,6 +275,72 @@ public final class SqlPreviewPanelEditorLifecycleKt {
     }
 
     /**
+     * 13.12：预览落点兜底的「只提示一次」闸门（按面板实例持有，抽成类型以便纯逻辑用例直测）。
+     *
+     * <p>为什么要去重：落点判定会在每次预览/预热时跑，若每次都弹一条提示就变成新的噪音源；
+     * 用户只需要知道「这个项目我改用了备用落点、以及怎么改回来」一次。</p>
+     */
+    public static final class PreviewFallbackNoticeGate {
+        private final java.util.concurrent.atomic.AtomicBoolean notified =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /** @return true = 本次是首个调用方（应当提示）；后续调用 false */
+        public boolean shouldNotify() {
+            return notified.compareAndSet(false, true);
+        }
+    }
+
+    /**
+     * 13.12：预览临时目录改写到项目根时，给一条<b>只出现一次</b>的告知 + 蓝字入口。
+     *
+     * <p>与执行侧的差别（用户 2026-11-11 定案「兜底不得抢在提示前面」的延伸）：执行是阻断性失败，
+     * 必须让用户选；预览的失败形态是<b>功能降级</b>，所以这里自动兜底保证预览可用，但<b>不再静默</b>——
+     * 明确告诉用户「你项目里 .idea 这层建不出 PSI，我已经改写到项目根」，并给去修配置的入口。</p>
+     */
+    public static void notifyPreviewRootFallbackOnce(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                                     @NotNull cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause cause) {
+        if (!p.previewFallbackNoticeGate.shouldNotify()) return;
+        String settingsLabel;
+        String settingsTip;
+        Runnable settingsAction;
+        switch (cause) {
+            case IGNORED_BY_FILE_TYPES:
+            case IGNORED_BY_VCS:
+            case DIR_NOT_INDEXED: {
+                // 2026-11-11 用户定案：不引导改 `.gitignore`（忽略 `.idea/` 是正常设置），
+                // 忽略模式统一指向 Settings → Editor → File Types。
+                // F5：目录级探针判否（文件级谓词全绿的那种形态）——入口同上，指向忽略模式设置页
+                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
+                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
+                settingsAction = () -> SqlPreviewPanelExecutionKt.openFileTypesSettings(proj);
+                break;
+            }
+            // 排除 / 方言 / 未识别语言：没有稳定的设置入口或与落点无关，只给告知
+            default: {
+                settingsLabel = null;
+                settingsTip = null;
+                settingsAction = null;
+                break;
+            }
+        }
+        Runnable show = () -> {
+            if (!p.previewDisposed) {
+                p.resultPanel.showStatusWithActions(
+                        MpSqlVisualizerBundle.message("preview.tempDir.fallback.notice"),
+                        null, null, null,
+                        settingsLabel, settingsTip, settingsAction,
+                        null, true);
+            }
+        };
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            show.run();
+        } else {
+            ApplicationManager.getApplication().invokeLater(
+                    show, com.intellij.openapi.application.ModalityState.nonModal());
+        }
+    }
+
+    /**
      * T-PreviewExecDs-01a：项目内预览临时文件——{@code <project>/.idea/sql-visualizer/preview/}。
      * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。VFS 安全写入三态（document 驱动 &gt;
      * setBinaryContent &gt; FileUtil 兜底），杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗。
@@ -289,10 +355,35 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         if (proj == null) return null;
         String base = proj.getBasePath();
         if (base == null) return null;
-        File dir = new File(
+        // T-ExecPsiGate R6：2026.3 起平台对「父目录不在内容模型里」的文件不建 PSI
+        // （`AbstractFileViewProvider.shouldCreatePsi`）。`.idea` 被 excluded 的项目里，
+        // 预览临时文件会因此拿不到 PSI（表现为「临时文件解析失败」降级横幅），故先探一次，
+        // 探不过就换到项目根 `.sql-visualizer/preview/`（仍在内容根内、不在 `.idea` 下）。
+        File ideaDir = new File(
                 base,
                 ".idea" + File.separator + cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME
                         + File.separator + "preview");
+        // 13.12：切成因判定——「探不过」有四种原因，告知文案与蓝字入口要跟着变
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHint.ExecPsiFailureCause fallbackCause;
+        try {
+            fallbackCause = cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
+                    .execDirFailureCause(proj, ideaDir);
+        } catch (Throwable t) { // master runCatching.getOrNull 语义
+            fallbackCause = null;
+        }
+        if (fallbackCause != null) notifyPreviewRootFallbackOnce(p, proj, fallbackCause);
+        File dir;
+        if (fallbackCause == null) {
+            dir = ideaDir;
+        } else {
+            dir = new File(base, ".sql-visualizer" + File.separator + "preview");
+            try {
+                File ignore = new File(base, ".sql-visualizer" + File.separator + ".gitignore");
+                if (!ignore.exists()) ignore.writeText("*\n");
+            } catch (Throwable ignored) {
+                // master runCatching 降级语义
+            }
+        }
         if (!dir.exists() && !dir.mkdirs()) return null;
         // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
         // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 {@link #sweepStalePreviewFiles}。
@@ -380,7 +471,9 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         // ClassCastException → PSI 建不出来 → 整条预览降级（真机 262 实证，10/10 次）。
         // 注册面已在 database-optional.xml 成对补齐；这里留一道保险：将来再漏一个，最差是「这次不映射、
         // 补全按 GenericSQL 走」，不再拖垮整条预览。
-        if (!canCreateSqlPsiFor(targetLanguage)) {
+        // T-ExecPsiGate（2026-11-10）：判据提到 sql 包（SqlPsiCapabilityKt.canCreateSqlPsiFor），
+        // preview 链与 exec 链共用一份，避免再次分叉。
+        if (!cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(targetLanguage)) {
             Logger.getInstance(SqlPreviewPanel.class).info(
                     "[T-PreviewPsiDialect] skip dialect mapping for '" + desiredName + "': language '"
                             + (targetLanguage instanceof com.intellij.lang.Language language
@@ -490,47 +583,6 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             if (System.nanoTime() >= deadline) return current;
             Thread.sleep(10L);
         }
-    }
-
-    /**
-     * T-PreviewPsiDialect：该语言能否建出 SQL PSI（master 顶层 internal 函数的静态承载）。
-     *
-     * <p>判据取自平台行为本身——{@code SqlParserDefinitionBase.createFile} 要求
-     * {@code getFileNodeType().getLanguage()} 是 {@code SqlLanguageDialect}。所以直接查「当前生效的
-     * ParserDefinition 的 file node type 绑定的语言是不是 SQL 方言」。平台内置方言
-     * （MySQL / PostgreSQL / GenericSQL / SQL92）与补齐后的四个自注册方言都返回 true；
-     * 只有回落到基语言 {@code SQL} 的实现返回 false。</p>
-     *
-     * <p><b>刻意不静态引用 {@code com.intellij.sql.*}</b>：本文件属常驻加载面，DatabaseTools 是可选依赖，
-     * 直接引用会让无 Database 插件的环境类加载失败。故按类名沿继承链判定。</p>
-     */
-    public static boolean canCreateSqlPsiFor(Object language) {
-        if (!(language instanceof com.intellij.lang.Language)) {
-            return false;
-        }
-        try {
-            com.intellij.lang.Language lang = (com.intellij.lang.Language) language;
-            Object fileNodeLanguage = com.intellij.lang.LanguageParserDefinitions.INSTANCE
-                    .forLanguage(lang).getFileNodeType().getLanguage();
-            return isSqlLanguageDialectInstance(fileNodeLanguage);
-        } catch (Throwable t) {
-            return false; // runCatching{...}.getOrDefault(false) 语义
-        }
-    }
-
-    /** 按类名沿父类链判断（{@code SqlLanguageDialect} 是抽象类，不是接口）。 */
-    private static boolean isSqlLanguageDialectInstance(Object language) {
-        if (language == null) {
-            return false;
-        }
-        Class<?> c = language.getClass();
-        while (c != null) {
-            if ("com.intellij.sql.dialects.SqlLanguageDialect".equals(c.getName())) {
-                return true;
-            }
-            c = c.getSuperclass();
-        }
-        return false;
     }
 
     /** 默认预算 400ms 重载（master 默认参数）。 */
