@@ -17,9 +17,9 @@
 - **一个方法里两次 Example 查询的条件被拼进同一条 WHERE（T-PreviewOpenPerfM2，D4）**：MBG 生成的服务实现常见 `exampleA…selectByExample(exampleA)` 紧跟 `exampleB…selectByExample(exampleB)`，预览只应还原其中一个；此前会把另一个的条件也并进来，拼出 `tenant_id` 出现两次、永不成立的谓词。现在只收与实参同一个 Example 的条件（`Criteria c = example.createCriteria()` 这种别名写法仍然支持）
 - **同一组条件里 `between` 少一个占位符（T-PreviewOpenPerfM2，D5）**：一批条件里既有等值又有区间时，区间条件会被等值模板渲染，第二个占位连同中间的 `and` 一起丢掉（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）；现在每条条件按自己的真实类型渲染，区间正常显示 `? AND ?`
 
-## [2026.11.12] - 2026-11-11
+## [2026.11.12-beta.3] - 2026-11-12
 
-> 范围＝`v2026.11.11` 正式版发行包之后的全部用户可见增量（含内测 `v2026.11.12-beta.1` / `beta.2` 两轮与本轮转正补入的多字符运算符修复）：**多字符运算符保真**、**MBG Example 按调用点还原条件**、**iBatis DAO 调用行预览与裸参数引号口径**、**2026.3 执行落点 PSI 系列修复**、**控制台日志静默冲刷对齐**。本节按能力面合并叙述并取代两轮内测段，逐条记录（根因、提交、反向验证读数）见 `docs/发行说明/` 两篇内测说明：`20261111-1102` 内测 beta.1、`20261111-1445` 内测 beta.2。
+> 范围＝`v2026.11.11` 正式版之后的所有用户可见增量。本轮内测在 `beta.2` 的基础上补齐真机验收抓到的三条产物级缺陷（MBG 调用点检索取不到结果、同一方法两次 Example 的条件被并进同一条 WHERE、混 kind 时 between 少一个占位符）与一条交互缺陷（XML 选区按快捷键误报未找到），并把首次打开等的那次冷检索挪到后台预取。逐条记录（根因、读数、反向验证）见 `docs/发行说明/` 的内测说明：`20261111-1102` beta.1、`20261111-1445` beta.2、`20261112-1512` beta.3。
 
 ### Added
 - **MBG 生成的 Example mapper 预览能从调用点还原条件（T-MbgExamplePreview，6fb76205）**：MBG 的 `andXxxYyy(...)` 方法体固定是一句 `addCriterion("cust_id =", value, "custId")`——`condition` 是常量、分支语义写在方法名后缀里。现在预览会从 mapper 方法的调用点找到 example 变量，在同一方法体里逐个解析 `and*` / `or*` 调用并读那个常量，于是 `${criterion.condition}` 拿到真实列名与操作符：产物从 `WHERE ( {{criterion.condition}} ? )` 变成 `WHERE ( cust_id = ? )`。拿不到调用点（跨模块、无索引、非链式写法）时退回占位，不报错
@@ -39,6 +39,11 @@
 - **2026.3 上「临时 SQL 文件建不出 PSI」系列（T-ExecPsiGate R4~R7，c46d5907 / 23457844 / 908623ed / 61205cf2）**：反编译 2026.3 平台定案为 `shouldCreatePsi` 闸门——父目录不在内容模型里（`.idea` 被忽略或排除）就不建 PSI，`findFile` 返回 null 而 vf 完全有效；现在按平台同一判据选落点，并把「映射到的方言建不出 PSI」时的钉方言自愈、vf 失效重定位一并补齐
 - **失败文案带上可定位的诊断项（13.9 / 23457844，1a5ce405）**：vf 有效性、文件类型、映射方言、继承方言、平台实际选中的语言、各自能否建 PSI、是否被排除或忽略、Registry 取值、IDE Build 与绝对路径
 - **控制台 MyBatis 与 Hibernate 日志补齐静默冲刷（T-ConsoleFlushAlign，48b6f04f）**：对齐 JdbcTemplate，会话结束前的最后几条 SQL 不再等下一次执行才上屏
+- **MBG Example 预览在真实大工程里一直停在占位符（T-PreviewOpenPerfM2 D1，85e09cab9）**：`ReferencesSearch(...).findFirst()` 在真机上恒返回空——同一 mapper 方法 `Find Usages` 有 253 处引用、索引健康检查也干净，是这条检索链上 `Query.findFirst` 不可靠。改用「取首个命中即止」的遍历后，`${criterion.condition}` 拿到真实列名与操作符；`[m2]` 诊断同时补齐（命中/失效/未解析三条读数、`scope=` 与各类拒绝计数）
+- **同一方法里两次 Example 查询的条件被并进同一条 WHERE（T-PreviewOpenPerfM2 D4，b12ccf8cc）**：MBG 生成的服务实现常在一个方法里先后查两次（`exampleA…selectByExample(exampleA)` 紧跟 `exampleB…`），旧判定按「变量类型名以 Example 结尾」收条件，把另一次查询的也并进来，产物出现两个 `tenant_id`、整条谓词永不成立。现在只收与实参同一个 Example 的条件，`Criteria c = example.createCriteria()` 这种分步别名写法仍然支持
+- **一批条件里既有等值又有区间时，区间条件少一个占位符（T-PreviewOpenPerfM2 D5，875c942f8）**：M2 已推出每条条件的真实类型，而默认勾选档仍把整组 `<choose>` 强制成单分支，区间条件因此被等值模板渲染，第二个占位连同中间的 `and` 一起丢失（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）。现在这类分支按每条条件自己的类型求值，区间正常出 `? AND ?`
+- **在 mapper 语句里选中文字后按快捷键误报未找到（T-PreviewOpenPerfM2 D2，85e09cab9）**：`Ctrl+F` 命中会顺手选中语句 id，此时按 `Alt+Shift+Q` 收不到候选就直接提示「未在光标处找到可预览的 SQL 源」；现在无候选时回落到光标所在的语句
+- **打开 mapper 文件时后台预取条件解析，第一次点开预览不再干等（T-PreviewOpenPerfM2 M11，34488db41 / 773421955）**：真机首次打开 `[open-perf] total=1689~2115ms`，其中 M2 冷检索独占 1628~2042ms，而第二次起只有 30ms 装配。现在 gutter 渲染时对 `select` 且 `parameterType` 以 Example 结尾的语句后台预取一次（失败记忆、单条在途两道护栏，避免打开文件瞬间并发多条冷检索）；实测首次点开 `m2=1ms`、装配 104ms，同语句再点 30ms
 
 ## [2026.11.11] - 2026-11-11
 

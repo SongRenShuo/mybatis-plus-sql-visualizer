@@ -1,3 +1,12 @@
+<h2>v2026.11.12-beta.3</h2>
+<ul>
+    <li>MBG Example 预览在真实大工程里能还原出列名了: 先前的调用点检索取不到结果, 产物一直停在占位符</li>
+    <li>同一个方法里先后两次 Example 查询, 不再把另一次的条件也拼进同一条 WHERE</li>
+    <li>一批条件里既有等值也有区间时, 区间条件不再少一个占位符</li>
+    <li>打开 mapper 文件时后台提前解析一次条件, 第一次点开预览不再干等检索</li>
+    <li>在 mapper 语句里选中文字后按 <code>Alt+Shift+Q</code> 不再误报未找到可预览的 SQL 源</li>
+    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
+</ul>
 <h2>v2026.11.12</h2>
 <ul>
     <li>MBG 生成的 Example mapper 也能预览了: 从 <code>andXxxYyy</code> 调用点还原条件，产物从残缺骨架变成可读 SQL</li>
@@ -11,7 +20,6 @@
     <li>OceanBase 的 EXPLAIN 计划树也会给出与 MySQL 同口径的索引建议</li>
     <li>iBatis 预览里裸的 <code>#name#</code> 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号</li>
     <li>复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位</li>
-    <li>好用的话，欢迎到 Marketplace 页评分留言</li>
 </ul>
 <h2>v2026.11.11</h2>
 <ul>
