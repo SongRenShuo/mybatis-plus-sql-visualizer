@@ -22,6 +22,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
@@ -45,6 +46,12 @@ import com.intellij.psi.xml.XmlTag
  *   行为与改动前逐字节一致。
  */
 object XmlPreviewService {
+
+    /** T-MbgPreviewParityAndOpenPerf P5：装配分段耗时埋点（超阈值才打一条，正常路径不刷屏）。 */
+    private val LOG = Logger.getInstance(XmlPreviewService::class.java)
+
+    /** 分段耗时日志阈值（毫秒）：低于此值不打，避免每次预览都写日志。 */
+    private const val PERF_LOG_THRESHOLD_MS = 200L
 
     /**
      * O-145 W1：只在选定的 mapper 语句域解析实际 SQL 注入；文件内其他语句不能充当 owner。
@@ -82,6 +89,8 @@ object XmlPreviewService {
         var parsedRef: Triple<String?, String, XmlStatementKind>? = null
         val (model, staticWarnings) = try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
+            // T-MbgPreviewParityAndOpenPerf P5：分段计时（把「打开慢」归因到具体一段）
+            val perfStart = System.currentTimeMillis()
             val crossNamespace = XmlCrossNsFragmentResolver.resolve(fileText, project)
             val parsed = XmlMapperParser().parse(fileText, crossNamespace)
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
@@ -97,7 +106,9 @@ object XmlPreviewService {
             val paramTypes = XmlParamTypeResolver.resolveTypes(project, parsed.namespace, statement.id)
             // T-MbgExamplePreview R5：MBG Example 参数类型 → 默认勾选档（distinct / orderByClause 不展开、
             // 集合按 1 项）；解析不到一律 null，行为与升级前一致
+            val perfCtxParsed = System.currentTimeMillis()
             val profile = resolveExampleProfile(project, statement.parameterType, parsed.namespace)
+            val perfProfile = System.currentTimeMillis()
             // T-MbgExamplePreview M2：Example 形态下再从调用点反推 Criterion（andXxx 方法体的
             // addCriterion 常量）——拿到真值后 ${criterion.condition} 不再落占位
             val collectionElements = if (profile == null) {
@@ -105,12 +116,15 @@ object XmlPreviewService {
             } else {
                 MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
             }
-            XmlPreviewModel.from(
+            val perfM2 = System.currentTimeMillis()
+            val built = XmlPreviewModel.from(
                 statement, parsed.errors,
                 staticFieldValues = staticValues, extraBindings = ewBindings, paramTypes = paramTypes,
                 profile = profile,
                 collectionElements = collectionElements,
-            ) to warnings
+            )
+            logPreviewPerf(perfStart, perfCtxParsed, perfProfile, perfM2)
+            built to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
         } catch (e: XmlScriptException) {
@@ -249,6 +263,23 @@ object XmlPreviewService {
                 ref to value
             }
         }.toMap()
+    }
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf P5：装配分段耗时（总耗时低于阈值不打，正常路径零噪音）。
+     *
+     * 现场（2026-11-12）`prewarm done` 到首次 `showSql` 之间有 **5.67s 空档**且插件侧零日志，
+     * 无法归因。这条把装配切成四段：解析+上下文 / profile（PSI 类解析）/ M2（PSI 调用点检索）/
+     * 建模——下次真机复现即可读出是哪一段。
+     */
+    private fun logPreviewPerf(start: Long, ctxEnd: Long, profileEnd: Long, m2End: Long) {
+        val end = System.currentTimeMillis()
+        val total = end - start
+        if (total < PERF_LOG_THRESHOLD_MS) return
+        LOG.info(
+            "[open-perf] total=${total}ms parse+ctx=${ctxEnd - start} " +
+                "profile=${profileEnd - ctxEnd} m2=${m2End - profileEnd} model=${end - m2End}",
+        )
     }
 
     /**
