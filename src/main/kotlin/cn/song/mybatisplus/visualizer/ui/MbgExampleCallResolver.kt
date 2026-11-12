@@ -7,7 +7,6 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
-import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiCodeBlock
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiFile
@@ -263,21 +262,31 @@ object MbgExampleCallResolver {
     }
 
     /**
-     * 调用链的根是否指向 example 变量。
+     * 调用链的根是否指向**本次** selectByExample 实参那个 example 变量。
      *
      * 覆盖两种写法：链式 `example.createCriteria().andXxx(v)`（qualifier 最左端是 example 引用）
-     * 与分步 `Criteria c = example.createCriteria(); c.andXxx(v)`（根变量类型名含 Example / Criteria）。
+     * 与分步 `Criteria c = example.createCriteria(); c.andXxx(v)`（根的**初始化表达式**追溯到 example）。
+     *
+     * 为什么不能按类型名收（E2E 验收缺陷 D4）：同一方法体里常有多个 Example 实例
+     * （MBG 生成的服务实现就是 `exampleNA` / `exampleNB` 各一条链），按「变量类型以 Example 结尾」
+     * 收会把**另一次查询**的条件也并进来——真机产物变成
+     * `WHERE (status = ? AND cust_name LIKE ? AND tenant_id = ? AND create_time BETWEEN ? AND tenant_id = ?)`，
+     * 两个 Example 的 AND 条件被拼成一条永不成立的谓词。所以只认**同一对象**：变量名相同，或该变量的
+     * 初始化表达式追溯后仍落在同一个 example 变量上。
      */
-    private fun rootedAtExample(expr: PsiExpression?, exampleName: String): Boolean {
+    internal fun rootedAtExample(expr: PsiExpression?, exampleName: String): Boolean {
+        val ref = rootReference(expr) ?: return false
+        if (ref.referenceName == exampleName) return true
+        val variable = runCatching { ref.resolve() as? PsiVariable }.getOrNull() ?: return false
+        val initializer = runCatching { variable.initializer }.getOrNull() ?: return false
+        return rootReference(initializer)?.referenceName == exampleName
+    }
+
+    /** 把 `a.b().c()` 这类链剥到最左端的引用表达式（`a`）。 */
+    private fun rootReference(expr: PsiExpression?): PsiReferenceExpression? {
         var cur = expr
         while (cur is PsiMethodCallExpression) cur = cur.methodExpression.qualifierExpression
-        val ref = cur as? PsiReferenceExpression ?: return false
-        if (ref.referenceName == exampleName) return true
-        return runCatching {
-            val variable = ref.resolve() as? PsiVariable ?: return@runCatching false
-            val type = variable.type as? PsiClassType ?: return@runCatching false
-            type.className?.endsWith("Example") == true || type.className == "Criteria"
-        }.getOrDefault(false)
+        return cur as? PsiReferenceExpression
     }
 
     /** `andXxxYyy` 方法体里 `addCriterion("<condition>", ...)` 的第一个实参常量。 */

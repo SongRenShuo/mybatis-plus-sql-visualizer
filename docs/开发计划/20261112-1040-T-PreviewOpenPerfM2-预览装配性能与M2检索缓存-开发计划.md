@@ -197,6 +197,44 @@ M7 把 `revalidateOnEdt` 改成后台执行的 `revalidate`，而守卫仍按旧
 `revalidate` 体内仍是两条 `ReadAction.compute` + `isValid`；自证语料加一条「挪回 invokeLater 必红」反例。
 反向：把生产 `revalidate(project, pair)` 换成 `pair` → 恰 1 红，还原后回绿（`511ad990a`）。
 
+### 缺陷 D4（已修）：同一方法里两个 Example 的条件被并成一条 WHERE
+
+用户真机验收（2026-11-12 12:57，沙盒 `MPSV-E2EAccept`，jar 12:49 含 D1 修复）：
+
+```
+[m2] trace …CustAddressMapper#selectByExample methods=1 (and/or=5 noResolve=0 notExample=0 notRooted=0 noCond=0) [example06A:5] -> criteria=5
+[m2] resolved criteria=5 stamps=2
+[open-perf] total=356ms parse+ctx=35 profile=1 m2=306 model=14
+[T-PreviewFast] request→dialog: 747ms
+```
+
+`[example06A:5]` 就是病灶：MBG 生成的服务实现一个方法里有两条链（`example06A.createCriteria().andX()` …
+`selectByExample(example06A)`；`example06B.createCriteria().andY()` … `selectByExample(example06B)`），
+旧判定 `rootedAtExample` 的兜底是「变量**类型名**以 Example / Criteria 结尾」，于是 06A 的检索把 06B 的
+两条也收了进去，产物拼成
+
+```sql
+WHERE (status = ? AND cust_name LIKE ? AND tenant_id = ? AND create_time BETWEEN ? AND tenant_id = ?)
+```
+
+——两个 Example 的 AND 条件合成一条永不成立的谓词（`tenant_id` 出现两次）。
+
+- 修法：只认**同一对象**——根引用名等于实参变量名，或根变量是局部别名且其**初始化表达式**追溯后落在
+  同一个 example 变量上（覆盖 `Criteria c = example.createCriteria(); c.andX()`）；类型名兜底整条删除。
+- 用例：`MbgExampleRootMatchTest`（3 例）——同名链收（含 alias 派生）、别家链弃、未知名全弃。
+- 反向：把兜底恢复成「按类型名收」→ 3 例全红；还原后回绿。
+
+### 真机验收读数（用户本人，2026-11-12 12:57~12:58）
+
+| 次数 | `[m2]` | `[open-perf]` | `request→dialog` |
+| --- | --- | --- | --- |
+| 首次 | `resolved criteria=5` | `total=356ms … m2=306` | 747ms |
+| 第 2 次 | `cache hit criteria=5` | `total=7ms … m2=0` | 104ms |
+| 第 3 次 | `cache hit` | `total=5ms … m2=0` | 198ms |
+
+⇒ **M1 缓存命中在真机成立**（m2 306ms → 0，装配 356ms → 7ms），「打开慢」的来源从「每次全项目检索」
+变成「首次全项目检索 + 之后 0 成本」。用户原话「效果还不错 比之前快」。
+
 ### 未验证 / 交回用户
 
 - D1/D2 修复后的真机复验（本轮改完只跑了定向测试，沙盒已按用户要求停手）。
