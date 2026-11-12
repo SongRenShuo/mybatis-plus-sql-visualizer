@@ -70,11 +70,19 @@ open class TrimSqlNode(
 
         /**
          * 左侧是否以「操作数」收尾——其后紧跟标识符就需要一个空格。
-         * 含右括号/右方括号/引号（子表达式、字面量、反引号标识符）与绑定占位 `?`。
-         * 左括号、逗号、运算符、空白都不在内：它们本身就是分隔符，补空格是多余噪音。
+         * 含右括号/右方括号/引号（子表达式、字面量、反引号标识符）、绑定占位 `?`，
+         * 以及 `}`（T-MbgPreviewParityAndOpenPerf R1）。
+         *
+         * **`}` 为什么必须在**：本缓冲里放的是**渲染前文本**——`#{criterion.value}` 的收尾是 `}`，
+         * 而 `#{}` → `?` 的替换发生在渲染最后一步（`XmlSqlRenderer.parseParameterMappings` 扫全文），
+         * 所以判据里那个 `?` 在这一层**永远不可能出现**。漏掉 `}` 时两轮 foreach 迭代会拼成
+         * `?and`（真跑不了的错 SQL），比 `andand` 更隐蔽。
+         *
+         * 左括号、逗号、运算符、空白仍不在内：它们本身就是分隔符，补空格是多余噪音。
          */
         private fun endsOperand(c: Char): Boolean =
-            startsIdentifier(c) || c == ')' || c == ']' || c == '?' || c == '\'' || c == '"' || c == '`'
+            startsIdentifier(c) || c == ')' || c == ']' || c == '}' || c == '?' ||
+                c == '\'' || c == '"' || c == '`'
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 

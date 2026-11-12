@@ -144,6 +144,42 @@ class MbgExamplePreviewTest {
         assertEquals(listOf("1", "2"), list["value"])
     }
 
+    // ---------------- T-MbgPreviewParityAndOpenPerf P1/P3：多 Criterion 的迭代间粘连 ----------------
+
+    /**
+     * 用户现场是 4 个 Criterion（我的金样只用 1 个 ⇒ 只有一次迭代，看不到相邻拼接）。
+     *
+     * R1：本引擎的 trim 缓冲里放的是**渲染前文本** `#{criterion.value}`（收尾字符是 `}`），
+     * `#{}` → `?` 的替换在渲染最后一步才做（`XmlSqlRenderer.parseParameterMappings`）——
+     * 补空格判据若漏掉 `}`（或只写渲染后的 `?`），两轮迭代就拼成 `?and`：那是**语法错的 SQL**，
+     * 比当年的 `andand` 更隐蔽。
+     */
+    @Test
+    fun `多Criterion_相邻迭代不得粘成问号加and`() {
+        val criteria = listOf(
+            MbgCriterionMock("CUSTOMERNUMBER =", listOf("3")),
+            MbgCriterionMock("UNIT_ID =", listOf("1")),
+            MbgCriterionMock("CUST_ROLE_CODE =", listOf("2")),
+            MbgCriterionMock("CUST_ID =", listOf("4")),
+        )
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
+        val sql = compact(m.renderSql().sql)
+        assertFalse("不得粘成 ?and（语法错 SQL）：$sql", sql.contains("?and"))
+        assertTrue(
+            "四个条件之间应各有一个空格：$sql",
+            sql.contains("CUSTOMERNUMBER = ? and UNIT_ID = ? and CUST_ROLE_CODE = ? and CUST_ID = ?"),
+        )
+    }
+
     // ---------------- R1 + R4 + R5：默认档下的整体产物 ----------------
 
     @Test
@@ -185,6 +221,38 @@ class MbgExamplePreviewTest {
         assertTrue(enabled.contains("criterion.singleValue"))
         assertFalse(enabled.contains("criterion.noValue"))
         assertFalse(enabled.contains("criterion.betweenValue"))
+        assertFalse(enabled.contains("criterion.listValue"))
+    }
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf (d)：M2 命中时默认分支跟随**反推到的真实 kind**，
+     * 而非启发式（「含 `#{}` 的分支里最先出现者」＝ `singleValue`）。
+     * 这里给 M2 一个 `listValue` 语义的 criterion ⇒ 默认必须落到 `listValue`。
+     */
+    @Test
+    fun `M2命中_choose组默认分支按真实kind取`() {
+        val criteria = listOf(
+            MbgCriterionMock("CUSTOMERNUMBER in", listOf("1", "2"), MbgCriterionKind.LIST_VALUE),
+        )
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
+        val enabled = m.defaultState().enabledIds
+        assertTrue("M2 说是 listValue ⇒ 默认应选 listValue：$enabled", enabled.contains("criterion.listValue"))
+        assertFalse("不应再落到启发式的 singleValue：$enabled", enabled.contains("criterion.singleValue"))
+    }
+
+    @Test
+    fun `M2未命中_仍走启发式默认分支`() {
+        val enabled = model(XmlPreviewProfile.MBG_EXAMPLE).defaultState().enabledIds
+        assertTrue("无 M2 元素时应维持启发式 singleValue：$enabled", enabled.contains("criterion.singleValue"))
         assertFalse(enabled.contains("criterion.listValue"))
     }
 

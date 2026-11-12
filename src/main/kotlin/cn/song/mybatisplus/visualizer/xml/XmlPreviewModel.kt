@@ -204,11 +204,15 @@ class XmlPreviewModel private constructor(
             .filter { it.defaultEnabled && it.id !in suppressed }
             .map { it.id }
             .toMutableSet()
-        // T-MbgExamplePreview R4：同一 choose 的 when 互斥——组内多于一个时只留默认分支
+        // T-MbgExamplePreview R4：同一 choose 的 when 互斥——组内多于一个时只留默认分支。
+        // T-MbgPreviewParityAndOpenPerf (d)：M2 命中时优先按**反推到的真实 kind**选默认分支
+        // （用户不动勾选即得到真实语义；手动改仍完全生效——开关仍是唯一真值源）。
         chooseGroups.forEach { group ->
             val candidates = group.branchIds.filter { it in enabled }
             if (candidates.size > 1) {
-                val keep = group.defaultBranchId?.takeIf { it in candidates } ?: candidates.first()
+                val keep = realKindPreferredBranch(group)?.takeIf { it in candidates }
+                    ?: group.defaultBranchId?.takeIf { it in candidates }
+                    ?: candidates.first()
                 candidates.filter { it != keep }.forEach { enabled.remove(it) }
             }
         }
@@ -217,6 +221,25 @@ class XmlPreviewModel private constructor(
             enabledIds = enabled,
             forEachCounts = forEachViews.associate { it.collectionExpr to count },
         )
+    }
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf (d)：从 M2 反推的元素里读**真实 kind 的多数票**，映射回该组
+     * 对应的 when 分支 id；拿不到（M2 未命中 / 元素没有这四个布尔 / 该 id 不在组里）返回 null，
+     * 调用方退回既有启发式。
+     *
+     * MBG 的 `addCriterion("CUSTOMERNUMBER =", value, "custNumber")` 形态让 M2 知道每个 criterion
+     * 究竟是 noValue / singleValue / betweenValue / listValue——面板默认值据此对齐即可，
+     * 不必新增交互或提示。
+     */
+    private fun realKindPreferredBranch(group: XmlChooseGroup): String? {
+        val elements = collectionElements.values.flatten()
+        if (elements.isEmpty()) return null
+        val best = KIND_FLAGS
+            .mapNotNull { flag -> elements.count { it[flag] == true }.takeIf { it > 0 }?.let { flag to it } }
+            .maxByOrNull { it.second }
+            ?.first ?: return null
+        return group.branchIds.firstOrNull { it == best || it.endsWith(".$best") }
     }
 
     fun renderSql(): RenderedXmlSql = renderSql(defaultState())
@@ -286,6 +309,12 @@ class XmlPreviewModel private constructor(
     companion object {
         /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
         const val DEFAULT_FOREACH_SIZE = 2
+
+        /**
+         * T-MbgPreviewParityAndOpenPerf (d)：MBG Criterion 的四个互斥 kind 标志
+         * （M2 反推产物里的布尔键，也是 choose 组 when 分支 id 的后缀）。
+         */
+        private val KIND_FLAGS = listOf("noValue", "singleValue", "betweenValue", "listValue")
 
         /** foreach item 占位键前缀（变量双写形态 `__frch_<item>_<唯一编号>`，见 [ForeachSqlNode]）。 */
         private const val FRCH_PREFIX = "__frch_"
