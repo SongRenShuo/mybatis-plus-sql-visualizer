@@ -146,6 +146,21 @@ M2 未命中（无 `collectionElements`）时退回现有启发式。
 
 注：P6 与 S1 是两条独立的性能面——即使 P6 做完，MBG 这条 5.67s 仍需 P5 埋点定位（S1/S2/S3）。
 
+### R6（面板口径分叉 —— 2026-11-12 初始态截图暴露）三项「默认值」修复在面板上从未生效
+
+用户补了一张**初始态**截图（未动任何勾选）：`distinct` ✅、`orderByClause != null` ✅、四个 `criterion.*`
+分支全勾，产物 `SELECT DISTINCT 'false' AS QUERYID … WHERE (cust_id =) ORDER BY 1`。
+
+取证：`defaultState()` 全仓只有两个调用点——`renderSql()`（无参版）与 `SqlPreviewPanelResultView` 里
+**只取 `forEachCounts`**；而面板 `enabledIds` 初始化读 `view.defaultEnabled` 的朴素启发式（只判
+`== null`）。⇒ R5 的 profile 抑制（distinct / orderByClause 不展开）、R4 的 choose 组互斥归并、
+(d) 的 M2 真实 kind 默认，**三项在面板上全部落空**；模型侧 `MbgExamplePreviewTest` 因为走
+`defaultState()` 而全绿——**假绿**。
+
+修法：XML 链初始勾选统一取 `defaultState().enabledIds`，并清掉上方按 previewModel 填的通用项；
+新增**面板级**防线 `SqlPreviewPanelXmlDefaultsTest`（断言初始集合 == `defaultState()`，且三项规则生效）。
+这是本轮唯一「用户第一眼就能看到」的缺陷，优先级高于 P1。
+
 ## 四、方案
 
 | 编号 | 内容 | 优先级 |
@@ -156,6 +171,7 @@ M2 未命中（无 `collectionElements`）时退回现有启发式。
 | P4 | M2 kind 与面板勾选：**采纳 (d) 只改默认值**（M2 命中时 choose 组默认分支按真实 kind 取，交互不变） | 高（已拍板） |
 | P5 | 预览链分段埋点（装配 / M2 检索 / renderSql / schema 解析各一段），复测定位 5.7s；按结论决定 M2 缓存或移出 EDT | 高 |
 | P6 | iBatis `parameterClass` 别名先查 `<typeAlias alias type>` 表（config 按模块解析 + 缓存），FQN 直查优先于短名索引 | 中（准确 + 性能；大工程更明显） |
+| P7 | 面板初始勾选与 `defaultState()` 同源（R6：三项默认值修复此前在面板上从未生效）+ 面板级防线用例 | **最高**（用户初始态直接可见） |
 
 ## 五、待验证前提
 
@@ -184,6 +200,7 @@ M2 未命中（无 `collectionElements`）时退回现有启发式。
 | P2 | `e886812e5` | `needsSeparator`＝「粘连成词才补」+「运算符 + `(` 补」；边界用例钉 trim 体内 `IN (?,?)` 与 `count(*)` | 摘掉 operator 档 → 用户态用例恰 1 红 |
 | P5 | `e3b766356` | `XmlPreviewService` 四段耗时埋点（解析+上下文 / profile / M2 / 建模，总耗时 <200ms 不打） | 观测项，无行为变更 |
 | P6 | `e6fbdeb88` | 新 `IbatisTypeAliasResolver`（扫模块内容根的 `sqlMapConfig` 读 `<typeAlias>`，会话级缓存）+ `findClass` 别名优先于短名索引 | 摘掉别名分支 → `testTypeAliasResolvesAmbiguousShortName` 恰 1 红 |
+| P7 | `7789c1da8` | 面板初始勾选改取 `defaultState().enabledIds`（R6 口径分叉）+ 新面板级用例 `SqlPreviewPanelXmlDefaultsTest` | 改回读 `view.defaultEnabled` → 面板用例恰 1 红 |
 
 **实施中的两次自查纠错**：
 
