@@ -134,11 +134,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
      *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
     public static final String SNAPSHOT_CHK = "__chk__:";
+
+    /**
+     * T-PreviewOpenPerfM2 P8：勾选态的<b>当时默认基线</b>（同 id 后缀）。
+     *
+     * <p>快照里的 {@code SNAPSHOT_CHK} 是全量勾选态；召回时若整体覆盖，规则升级后的新默认
+     * （profile 抑制 / choose 组归并 / M2 真实 kind）会被旧快照冲掉。记下基线后，召回只应用
+     * 「用户相对基线的改变」；升级前保存的旧快照无此键 ⇒ 一律不应用，让新默认先落地一次。
+     * 前缀刻意与 {@code SNAPSHOT_CHK} 不互为前缀（{@code __chkbase__:} 不以 {@code __chk__:} 开头）。</p>
+     */
+    public static final String SNAPSHOT_CHK_BASE = "__chkbase__:";
     public static final String SNAPSHOT_FNULL = "__fnull__:";
     public static final String SNAPSHOT_FEV = "__fev__:";
 
     /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
     public static final String PROP_TOGGLE_ID = "mpsv.toggleId";
+
+    /** T-ParamNameTruncation：标签全名锚点——视口变化重排时按它重算省略文本与 tooltip。 */
+    public static final String PROP_LABEL_FULL_TEXT = "mpsv.labelFullText";
 
     /**
      * T-DevAcceptFix ⑤（20261006 验收）：参数输入框的 source 锚点——召回回写按锚点显式映射
@@ -348,6 +361,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public final List<JBTextField> paramFields = new ArrayList<>();
     // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
     public final List<JBLabel> paramWarnLabels = new ArrayList<>();
+    // T-ParamNameTruncation：左栏标签/复选框截断态登记——视口宽度变化后原地重排（不重建左栏）
+    public final List<SqlPreviewPanelParamPanelKt.ParamLabelRef> paramLabelRefs = new ArrayList<>();
+    public final List<SqlPreviewPanelParamPanelKt.ParamCheckRef> paramCheckRefs = new ArrayList<>();
+    /** T-ParamNameTruncation：列宽重排防抖调度器（惰性建，随本面板 Disposer 树释放）。 */
+    public com.intellij.util.Alarm labelRelabelAlarm = null;
     public final List<JCheckBox> conditionCheckBoxes = new ArrayList<>();
     // R30 条件求值探镜：XML 条件行尾的三态结果标注（条件 id → 标签），renderSql 每轮刷新（零监听器）
     public final Map<String, JBLabel> xmlConditionOutcomeLabels = new LinkedHashMap<>();
@@ -470,6 +488,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      *  T-StabilityTail 起语义扩为「放弃预热」：面板 dispose 与**项目开始销毁**（见
      *  {@link #prewarmLifecycleGate}）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
     public volatile boolean previewDisposed = false;
+
+    /** 13.12：预览临时目录落到项目根兜底时，「只提示一次」的闸门（本面板生命周期内）。 */
+    public final SqlPreviewPanelEditorLifecycleKt.PreviewFallbackNoticeGate previewFallbackNoticeGate =
+            new SqlPreviewPanelEditorLifecycleKt.PreviewFallbackNoticeGate();
 
     /**
      * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
@@ -673,12 +695,31 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // R22 T-02/T-03：勾选态与 foreach 行的组件登记（快照枚举 + 召回视觉同步；随 rebuild 清场）
     public final List<JCheckBox> xmlForEachNullBoxes = new ArrayList<>();
     public final List<Pair<String, JBTextField>> xmlForEachValueFields = new ArrayList<>();
+    // T-ForEachInert：foreach 行的「本轮未参与渲染」提示标签（expr → 标签；随 rebuild 清场）。
+    // 判据取渲染产物（`__frch_<item>_*` 映射缺席），故只能在渲染帧内刷新，见 syncXmlForEachInertStates。
+    public final List<Pair<String, JBLabel>> xmlForEachInertLabels = new ArrayList<>();
     public List<String> xmlErrors = List.of();
+    /**
+     * T-FullTableWriteRisk：本轮 XML 渲染产物的全表写风险（无 WHERE 的 DELETE/UPDATE，null = 无）。
+     * 随每轮 renderSql 刷新（勾选变化会改变产物），由 updateMeta 消费成横幅——<b>优先级高于</b>
+     * 「预览未完整还原」。
+     */
+    public FullTableWriteRisk writeRiskWarning = null;
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     public List<cn.song.mybatisplus.visualizer.xml.ParameterMapping> xmlMappings = List.of();
+    // T-Ibatis2Gap 券 A：iBatis 迭代值状态（集合属性名 → 逗号/换行分隔原文）——
+    // 与 xmlForEachValues 同形态：输入框即时写状态，renderSql 帧内统一装配（write-unsafe 重投递也不丢）
+    public final Map<String, String> ibatisIterateValues = new LinkedHashMap<>();
+    // 券 A：iBatis 重渲染告警（renderSql 每轮刷新）；UI-001 起它是 rerender 链横幅的<b>唯一事实源</b>
+    // （基线结果告警不再并入——供值后 fresh 无告警 ⇒ 横幅恢复即隐藏）
+    public List<String> ibatisRenderWarnings = List.of();
+    // UI-001：最近一轮重渲染告警是否信息级（fresh.informationalWarning 透传）
+    public boolean ibatisRenderWarningIsNote = false;
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     public JButton errorCopyButton = null;
     public String currentWarning = null;
+    // UI-001：当前告警是否信息级（横幅/元信息行前缀分档用；false = 失败档 ⚠）
+    public boolean currentWarningIsNote = false;
 
     /**
      * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。
@@ -933,6 +974,19 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             @Override
             public void componentShown(ComponentEvent e) {
                 SqlPreviewPanelResultViewKt.applyMetaTruncation(SqlPreviewPanel.this);
+            }
+        });
+        // T-ParamNameTruncation：左栏视口宽度变化（拖分隔条 / 拉窗口 / 首显）→ 标签列宽原地重算。
+        // 旧实现只在 rebuildLeftPanel 那一瞬间算一次，宽面板里仍按窄列宽截断参数名。
+        paramScroll.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                SqlPreviewPanelParamPanelKt.scheduleParamLabelRelabel(SqlPreviewPanel.this);
+            }
+
+            @Override
+            public void componentShown(ComponentEvent e) {
+                SqlPreviewPanelParamPanelKt.scheduleParamLabelRelabel(SqlPreviewPanel.this);
             }
         });
 
@@ -1346,6 +1400,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return current != null && current.isHasDollarRawSegments();
     }
 
+    /**
+     * T-MbgExamplePreview T1：当前编辑器里的产物是否含模拟占位 {@code {{表达式}}}。
+     *
+     * <p>占位来自 {@code ${}} 直替在模拟参数下求值为空（MBG Example 的 {@code ${criterion.condition}} 是典型），
+     * 给人看缺段用；送进 JDBC 必然语法错，执行/EXPLAIN 前要转向更强的确认文案。</p>
+     */
+    public boolean hasSimulationPlaceholders() {
+        String sql = SqlPreviewPanelExecutionKt.currentEditorSql(this);
+        return sql != null && sql.contains("{{");
+    }
+
     /** F-8：当前预览的表名（可 null）。 */
     public String currentTableName() {
         return current != null ? current.getTableName() : null;
@@ -1614,6 +1679,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** R22 T-02/T-03 测试缝：历史快照构建（含勾选态/foreach 权威态特殊键）。 */
     public Map<String, String> buildHistorySnapshotForTest() {
         return SqlPreviewPanelParamPanelKt.buildHistorySnapshot(this);
+    }
+
+    /**
+     * T-PreviewOpenPerfM2 P8 测试缝：模拟 {@code showResult} 里的<b>默认勾选初始化</b>。
+     *
+     * <p>真实流程是「先按 defaultState 设初始勾选 → 再 recall 叠加用户改变」；测试若只 {@code clearState}
+     * 后直接 recall，就跳过了前半段（P8 之后召回不再负责「补回默认项」）。</p>
+     */
+    public void seedEnabledIdsForTest(Set<String> ids) {
+        enabledIds.clear();
+        enabledIds.addAll(ids);
     }
 
     /** R22 T-02/T-03 测试缝：召回（含勾选态/foreach 权威态还原）。 */
