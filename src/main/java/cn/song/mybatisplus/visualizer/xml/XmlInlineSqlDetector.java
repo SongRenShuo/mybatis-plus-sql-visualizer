@@ -24,7 +24,9 @@ import org.jetbrains.annotations.Nullable;
  * <ul>
  *  <li>认领条件（{@link #isSqlCarrierTag}）：无子标签 + 首段非空文本的前缀词 ∈ {@link #SQL_KEYWORDS}；</li>
  *  <li>排除既有认领（{@link #isClaimedByKnownStructure}）：mapper 语句 / hbm 命名查询 /
- *      pages 的 {@code <datasource>}（图标在 maintainPage 上）——防止既有文件双图标；</li>
+ *      pages 的 {@code <datasource>}（图标在 maintainPage 上）/ iBatis {@code <sqlMap>} 语句
+ *      （T-Ibatis2Support 券 A：由 {@code cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider}
+ *      接管，本通道让位）——防止既有文件双图标；</li>
  *  <li>HQL 判别（{@link #queryTypeOf}）：自身或祖先标签的 {@code type} 属性 ∈ {hql, jpql}
  *      （就近优先），仅预览链（后台线程）调用，不进 gutter 快速路径。</li>
  * </ul>
@@ -66,7 +68,7 @@ public final class XmlInlineSqlDetector {
         return SQL_KEYWORDS.contains(firstWord);
     }
 
-    /** 该标签是否已被 mapper / hbm / pages 三套既有白名单认领（通用检测必须让位，防双图标）。 */
+    /** 该标签是否已被 mapper / hbm / pages / iBatis 四套既有白名单认领（通用检测必须让位，防双图标）。 */
     public static boolean isClaimedByKnownStructure(@NotNull XmlTag tag) {
         String name = tag.getName();
         XmlTag parentTag = tag.getParentTag();
@@ -82,6 +84,16 @@ public final class XmlInlineSqlDetector {
                 && ("maintainPage".equals(parentName)
                     || (parentTag != null && parentTag.getParentTag() != null
                         && "pages".equals(parentTag.getParentTag().getName())))) {
+            return true;
+        }
+        // iBatis 语句（T-Ibatis2Support 券 A）：<sqlMap> 直接子级的语句标签由
+        // IbatisXmlGutterLineMarkerProvider 接管（新的预览入口，见计划册 §券 A）。
+        //
+        // **性能红线**：本判定跑在 gutter 热路径，只许 O(1) 结构比较（标签名 + 父标签名），
+        // 严禁调 IbatisXmlRecognizer 或任何 resolve / 索引查询。判据**直接调用接管方的同一函数**
+        // （而不是在本地复写一遍条件），否则会出现「让位了但没人接管」的图标空洞或
+        // 「两边都认领」的双图标。
+        if (cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
             return true;
         }
         return false;
