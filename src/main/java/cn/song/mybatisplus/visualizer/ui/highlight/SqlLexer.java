@@ -5,6 +5,7 @@ import com.intellij.psi.TokenType;
 import com.intellij.psi.tree.IElementType;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -207,18 +208,36 @@ public class SqlLexer extends LexerBase {
         myTableState = 0;
     }
 
-    /** 运算符 / 标点（= != <> < <= > >= + - * / % ? 等）。 */
+    /**
+     * 运算符 / 标点（= != <> < <= > >= + - * / % ? 等）。
+     *
+     * <p>T-SqlOperatorFidelity（用户 2026-11-11 真机反馈）：多字符运算符必须<b>整体</b>成一个 token。
+     * 原实现只合并 {@code !=} {@code <>} {@code <=} {@code >=} 四个，{@code ||} 被切成两个 {@code |} token，
+     * {@code SqlFormatter} 的「运算符两侧空格」规则随即把它拼成 {@code | |}（Oracle 下语法错）——而预览面板的编辑器文本同时
+     * 是复制可执行 SQL、分享、直接执行的输入源。同类还有 {@code ::}（PG 强转）/ {@code <=>} / {@code ->} / {@code ->>} /
+     * {@code &&} / {@code <<} / {@code >>} / {@code :=} / {@code @>} / {@code <@} / {@code !~} / {@code ~*} / {@code =>}。</p>
+     */
     private void scanOperator() {
-        myTokenEnd++;
-        if (cAt(myTokenStart) == '!' && cAt(myTokenStart + 1) == '=') {
-            myTokenEnd++;
-        } else if (cAt(myTokenStart) == '<' && (cAt(myTokenStart + 1) == '=' || cAt(myTokenStart + 1) == '>')) {
-            myTokenEnd++;
-        } else if (cAt(myTokenStart) == '>' && cAt(myTokenStart + 1) == '=') {
-            myTokenEnd++;
+        for (String op : MULTI_CHAR_OPERATORS) {
+            if (matchesAt(myTokenStart, op)) {
+                myTokenEnd = myTokenStart + op.length();
+                myTokenType = SqlTokenTypes.OPERATOR;
+                myTableState = 0;
+                return;
+            }
         }
+        myTokenEnd++;
         myTokenType = SqlTokenTypes.OPERATOR;
         myTableState = 0;
+    }
+
+    /** index 起是否逐字等于 op（越界即否）。 */
+    private boolean matchesAt(int index, String op) {
+        if (index + op.length() > myEnd) return false;
+        for (int k = 0; k < op.length(); k++) {
+            if (myBuffer.charAt(index + k) != op.charAt(k)) return false;
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------
@@ -285,6 +304,29 @@ public class SqlLexer extends LexerBase {
     private char cAt(int index) {
         return index < myEnd ? myBuffer.charAt(index) : '\u0000';
     }
+
+    /**
+     * 多字符运算符表（T-SqlOperatorFidelity）：<b>长的在前</b>，{@link #scanOperator} 按此顺序最长匹配。
+     *
+     * <p>收录口径＝插件产物与用户 SQL 里真实出现、且合并后不会与别的原子段打架的组合：</p>
+     * <ul>
+     * <li>{@code ||} 字符串拼接（Oracle / 达梦 / 金仓 / PG / SQLite；MySQL 逻辑或）</li>
+     * <li>{@code ::} PG 系强转；{@code :=} 赋值；{@code =>} 具名实参</li>
+     * <li>{@code <=>} MySQL 空安全等值；{@code ->} / {@code ->>} JSON 取值</li>
+     * <li>{@code &&} 逻辑与 / 数组重叠；{@code <<} / {@code >>} 位移</li>
+     * <li>{@code !~} {@code ~*} PG 正则；{@code @>} {@code <@} jsonb/数组包含</li>
+     * <li>既有 {@code !=} {@code <>} {@code <=} {@code >=}（产物逐字节不变）</li>
+     * </ul>
+     *
+     * <p><b>刻意不收录</b>：{@code #>} / {@code #>>} / {@code #-}——iBatis 内联参数 {@code #x#} 的<b>闭合 {@code #}</b> 就在前面，
+     * 合并后 {@code SqlFormatter.matchHashClose} 再也认不出闭合界（{@code WHERE id#>0} 会把参数拆坏）；
+     * {@code ?|} / {@code ?&}——{@code ?} 是未解析参数占位符，另有一套位点记账，不与运算符合并。</p>
+     */
+    private static final List<String> MULTI_CHAR_OPERATORS = List.of(
+            "<=>", "->>",
+            "!=", "<>", "<=", ">=", "||", "::", ":=",
+            "->", "&&", "<<", ">>", "!~", "~*", "@>", "<@", "=>"
+    );
 
     /** SQL 关键字（大写，去重；补全器复用）。 */
     public static final Set<String> KEYWORDS = Set.copyOf(Arrays.asList(
