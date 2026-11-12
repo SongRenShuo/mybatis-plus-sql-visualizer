@@ -11,21 +11,20 @@
 # **只在前 24 小时有代码提交时跑**：changes job 用 `git log --since` 扫代码路径（src / buildSrc /
 # sub-projects / gradle 脚本），全无则其余 job 全部 skip——纯文档日不烧 runner。
 #
-# 需要 secrets 才启用的两条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：
+# 需要 secrets 才启用的一条腿（缺失时该 job 只写一行「未配置」并正常结束，不会把夜间跑成红）：
 #   DIALECT_MATRIX_PROPERTIES  = .local/dialect-external-matrix.properties 的**完整内容**
 #                                （格式见 dev-support/dialect-external/matrix.example.properties）
-#   MPV_DB_URL / MPV_DB_USER / MPV_DB_PASSWORD = 远端 MySQL（database 腿用；e2e 腿 2026-11-12 起
-#                                不再需要，见②）
 #
 # 已知限制：
-#   ① `testDatabase` 从 demo 的 dataSources.xml 取连接，且任务里硬编码 127.0.0.1:7890 代理给 DBN 用
-#      （mpv-testing.gradle.kts 的 registerDbShard）——GitHub runner 上无该代理，所以这条腿要真跑起来
-#      需要先改代码（去代理 / 指向外部库），当前按「有 secret 才试」处理。
-#   ② `e2eFakeIde` 依赖 demo + 本机 MySQL + 本机 JDK8。2026-11-12 起改成 job 自己起 **runner 本地
-#      MySQL**（官方 zip + Windows 服务，见该 job 的「起本地 MySQL」步）：GitHub 的 `services:`
-#      只在 Linux runner 支持，windows runner 上不可用；镜像里只有 mysql 客户端没有 server。
-#      原先连 secret MPV_DB_URL（远端测试服务器），那台机一挂整条腿就红成「等应用就绪超时」，
-#      根因淹没在 13 条连带断言里。
+#   ① 数据库两条腿（database / e2e）2026-11-12 起都**自己起 runner 本地 MySQL**（见
+#      .github/actions/local-mysql）：GitHub 的 `services:`（service container）只在 Linux runner
+#      支持，windows runner 上不可用；windows 镜像只装了 mysql 客户端（runner-images 的
+#      Install-MysqlCli.ps1）没有 server，所以走官方 zip + Windows 服务。两条腿因此都不再需要
+#      数据库相关 secret。代价：不再覆盖「跨网络连远端库」这一面。
+#      历史：e2e 原连 secret MPV_DB_URL（103.36.220.245:25900），那台机 MySQL 一挂整条腿就红成
+#      「等应用就绪超时」，13 条连带断言把根因埋了；database 腿则在库不可达时「显式绿跳」，一直空绿。
+#   ② dialect 腿仍依赖远端测试服务器上的真引擎（103.36.220.245 的 panwei A:26101 / GaussDB:25882
+#      等），那台机的容器不起这条腿就红——环境问题，只能服务器侧修，代码侧绕不过去。
 name: 夜间全量（自动）
 run-name: 夜间全量 · ${{ github.ref_name }} @ ${{ github.sha }}
 
@@ -623,11 +622,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # DB 集成（需 secret：demo 的 dataSources.xml）。已知限制见文件头注释①——runner 上无本地 MySQL
-  # 与 127.0.0.1:7890 代理，这条腿要在 CI 真跑起来需先改代码；此处按「有 secret 才试」处理。
-  # DB 集成（8 个 testDb* + 连通性冒烟）。需 secret MPV_DB_URL/MPV_DB_USER/MPV_DB_PASSWORD——
-  # 指向测试服务器上部署的 MySQL（2026-11-05 部署：103.36.220.245:25900 / mpj_demo）。
-  # 缺 secret 时只写一行 notice 并正常结束，不把夜间跑成红。
+  # DB 集成（8 个 testDb* + 连通性冒烟）。
+  # 2026-11-12：改为 runner 本地 MySQL（本 job 自己起 + 灌库），不再依赖 secret MPV_DB_URL。
+  # 之前那条 secret 指向测试服务器 103.36.220.245:25900，且该腿在库不可达时是「显式绿跳」
+  # （DataSourceJdbcSmokeTest 等：环境不满足就 println+return），所以它一直绿而无实质覆盖。
   database:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
@@ -655,6 +653,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
+      - name: 起本地 MySQL（runner 本地实例）
+        # 与 e2e 腿共用同一个复合动作（services: 只支持 Linux runner）。
+        timeout-minutes: 20
+        uses: ./.github/actions/local-mysql
+      - name: 灌测试库（mpj_demo / mp_demo）
+        # testDb* 读 demo 的 .idea/dataSources.xml（localhost:3306/mpj_demo、root/root）决定连接；
+        # 种子幂等，起不来就硬失败。
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 `
+            -RequireDb -DbHost 127.0.0.1 -DbPort 3306 -DbUser root -DbPassword root `
+            -MysqlBin "$env:MPV_MYSQL_BIN"
+          if ($LASTEXITCODE -ne 0) { throw "灌测试库失败：exit=$LASTEXITCODE" }
       - name: 准备测试 demo（克隆到仓库兄弟目录）
         # 用例读 demo 的 .idea/dataSources.xml 决定连哪个库；XML 在 demo 仓库里已提交，
         # 不需要额外 secret。Gitee 不可达时回落 GitHub 镜像。
@@ -670,26 +680,12 @@ jobs:
           if (-not (Test-Path -LiteralPath $demo)) { throw "demo 克隆失败：$demo" }
           Write-Host "demo 就绪：$demo"
       - name: DB 集成（testDatabase）
-        env:
-          MPV_DB_URL: ${{ secrets.MPV_DB_URL }}
-          MPV_DB_USER: ${{ secrets.MPV_DB_USER }}
-          MPV_DB_PASSWORD: ${{ secrets.MPV_DB_PASSWORD }}
+        # 2026-11-12：连 runner 本地实例——不再注入 mpvDb*，测试侧回落「demo 的 dataSources.xml
+        # + root/root」（DbTestCredentials 的取值口径），与本地开发完全同源。
+        # 注意这条腿的用例多数是「环境不满足就显式绿跳」，所以库没起来时它照样绿：上面两步
+        # （起库 + 灌库）都是硬失败，就是为了别让这层伪装再出现。
         run: |
-          if (-not $env:MPV_DB_URL) {
-            Write-Host '::notice::未配置 secret MPV_DB_URL，跳过 DB 集成（本地 releaseGate 仍会跑）'
-            exit 0
-          }
           $demo = Join-Path (Split-Path -Parent $PWD) 'mybatis-plus-sql-visualizer-demo'
-          # T-CiNightly（2026-11-05 run#3 实证）：JDBC URL 含 `&`，作为 -P 参数穿过 gradlew.bat 时
-          # 会被 cmd 当命令分隔符吃掉（e2e 侧表现就是业务请求全 500）。改为写进 gradle.properties，
-          # 由 buildSrc 的 providers.gradleProperty 读回——文件注入完全绕开命令行解析。
-          Add-Content -LiteralPath 'gradle.properties' -Value @(
-            "",
-            "# CI 注入（不入库，仅本 job 的 runner 副本）",
-            "mpvDbUrl=$env:MPV_DB_URL",
-            "mpvDbUser=$env:MPV_DB_USER",
-            "mpvDbPassword=$env:MPV_DB_PASSWORD"
-          ) -Encoding utf8
           $argList = @(':testDatabase', '-PgifRecord=false', '--console=plain', "-PmpDemoProjectDir=$demo")
           ./gradlew.bat @argList
           exit $LASTEXITCODE
@@ -749,86 +745,21 @@ jobs:
           key: m2-${{ runner.os }}-v1
           restore-keys: m2-${{ runner.os }}-
       - name: 起本地 MySQL（runner 本地实例）
-        # 为什么自己装：GitHub 的 service container（services:）**只在 Linux runner 支持**，
-        # windows runner 上不可用；而 windows 镜像只装了 mysql 客户端（runner-images 的
-        # Install-MysqlCli.ps1），没有 server。所以这里下官方 zip、初始化、注册成 Windows 服务。
-        # 为什么注册服务而不是 Start-Process：step 结束后前台后台进程不保证保留，服务跨步骤存活。
-        # 版本钉 8.0.x：与 demo 的 connector-j 8.0.28 同大版本（镜像自带 8.4 客户端连 8.0 服务端无碍）。
-        # 不缓存 zip：245MB 会挤掉仓库 10GB 缓存里更值钱的编译缓存，夜间一天一次不值当。
+        # services: 只支持 Linux runner，windows runner 上不可用；镜像里也只有 mysql 客户端没有 server。
+        # 具体做法与取舍（zip / initialize-insecure / 注册 Windows 服务 / root 口令 / 不缓存理由）
+        # 见 .github/actions/local-mysql/action.yml 头注释；e2e 与 database 两条腿共用这一份。
         timeout-minutes: 20
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ver  = '8.0.45'
-          $base = 'C:\mysql'
-
-          function Test-Port([int]$Port) {
-            $c = New-Object System.Net.Sockets.TcpClient
-            try { $c.Connect('127.0.0.1', $Port); return $true }
-            catch { return $false }
-            finally { $c.Dispose() }
-          }
-
-          if (Test-Port 3306) { Write-Host '127.0.0.1:3306 已在监听，复用现有实例'; exit 0 }
-
-          $zip = Join-Path $env:RUNNER_TEMP "mysql-$ver-winx64.zip"
-          if (-not (Test-Path -LiteralPath $zip)) {
-            $url = "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-$ver-winx64.zip"
-            Write-Host "下载 $url"
-            curl.exe -sSL --retry 4 --retry-delay 5 -o $zip $url
-            if ($LASTEXITCODE -ne 0) { throw "MySQL zip 下载失败：exit=$LASTEXITCODE" }
-          }
-          if ((Get-Item -LiteralPath $zip).Length -lt 200MB) {
-            throw "MySQL zip 尺寸异常：$((Get-Item -LiteralPath $zip).Length) bytes（下载被截断或拿到错误页）"
-          }
-
-          $stage = Join-Path $env:RUNNER_TEMP 'mysql-unzip'
-          Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-          Move-Item -LiteralPath (Join-Path $stage "mysql-$ver-winx64") -Destination $base -Force
-
-          $ini = Join-Path $base 'my.ini'
-          @(
-            '[mysqld]',
-            'basedir=C:/mysql',
-            'datadir=C:/mysql/data',
-            'port=3306',
-            'bind-address=127.0.0.1',
-            'character-set-server=utf8mb4',
-            'collation-server=utf8mb4_general_ci'
-          ) | Set-Content -LiteralPath $ini -Encoding ascii
-
-          & "$base\bin\mysqld.exe" --defaults-file="$ini" --initialize-insecure --console
-          if ($LASTEXITCODE -ne 0) { throw "mysqld --initialize-insecure 失败：exit=$LASTEXITCODE" }
-
-          & "$base\bin\mysqld.exe" --install MySQLRunner --defaults-file="$ini"
-          if ($LASTEXITCODE -ne 0) { throw "mysqld --install 失败：exit=$LASTEXITCODE" }
-          Start-Service MySQLRunner
-
-          $ok = $false
-          for ($i = 1; $i -le 90; $i++) { if (Test-Port 3306) { $ok = $true; break }; Start-Sleep -Seconds 2 }
-          if (-not $ok) { throw 'mysqld 起后 180s 内未监听 3306' }
-
-          $mysql = "$base\bin\mysql.exe"
-          & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root --skip-password `
-            -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
-          if ($LASTEXITCODE -ne 0) { throw "设置 root 口令失败：exit=$LASTEXITCODE" }
-
-          # 免掉「127.0.0.1 反解成 localhost」这条隐式依赖：显式建同口令的 127.0.0.1 账号
-          $env:MYSQL_PWD = 'root'
-          & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root `
-            -e "CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'root'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION; FLUSH PRIVILEGES;"
-          if ($LASTEXITCODE -ne 0) { throw "创建 root@127.0.0.1 失败：exit=$LASTEXITCODE" }
-          & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root -e "SELECT VERSION() AS v;"
-          if ($LASTEXITCODE -ne 0) { throw 'root/root 登录自检失败' }
-          'MYSQL_PWD=root' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        uses: ./.github/actions/local-mysql
 
       - name: 灌测试库（mpj_demo / mp_demo）
         # setup-test-env.ps1 建两个库并跑 dev-support/test-demo/db/*.sql（幂等：种子自带 DROP/CREATE）。
         # -RequireDb 让客户端或连接不可用时**硬失败**——跳过会让「没验」伪装成「验过」。
-        # -MysqlBin 显式指到刚装的那份客户端，不依赖镜像 PATH 里那个 8.4 客户端。
+        # -MysqlBin 显式指到刚装的那份客户端（local-mysql 动作导出的 MPV_MYSQL_BIN），
+        # 不依赖镜像 PATH 里那个 8.4 客户端。
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 `
             -RequireDb -DbHost 127.0.0.1 -DbPort 3306 -DbUser root -DbPassword root `
-            -MysqlBin 'C:\mysql\bin\mysql.exe'
+            -MysqlBin "$env:MPV_MYSQL_BIN"
           if ($LASTEXITCODE -ne 0) { throw "灌测试库失败：exit=$LASTEXITCODE" }
       - name: 准备测试 demo（克隆到仓库兄弟目录）
         run: |
