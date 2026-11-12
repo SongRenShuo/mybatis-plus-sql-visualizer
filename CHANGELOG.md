@@ -16,6 +16,10 @@
 - **XML 语句里选中文字后按预览快捷键报「未找到」（T-PreviewOpenPerfM2，D2）**：`Ctrl+F` 搜索命中会顺手选中语句 id，此时按 Alt+Shift+Q 收不到候选就直接提示「未在光标处找到可预览的 SQL 源」；现在无候选时回落到光标所在的语句
 - **一个方法里两次 Example 查询的条件被拼进同一条 WHERE（T-PreviewOpenPerfM2，D4）**：MBG 生成的服务实现常见 `exampleA…selectByExample(exampleA)` 紧跟 `exampleB…selectByExample(exampleB)`，预览只应还原其中一个；此前会把另一个的条件也并进来，拼出 `tenant_id` 出现两次、永不成立的谓词。现在只收与实参同一个 Example 的条件（`Criteria c = example.createCriteria()` 这种别名写法仍然支持）
 - **同一组条件里 `between` 少一个占位符（T-PreviewOpenPerfM2，D5）**：一批条件里既有等值又有区间时，区间条件会被等值模板渲染，第二个占位连同中间的 `and` 一起丢掉（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）；现在每条条件按自己的真实类型渲染，区间正常显示 `? AND ?`
+- **左栏集合标签被截成 `criteria.crit…` / `criterion.va…`（T-LabelInset，e9b140fb1）**：标签宽度预算没把行内缩进算进去，最宽的标签恰好差那 8 像素、被 Swing 自己摘掉尾巴（截图放大 + headless 探针逐字复现）。现在预算按「每行文本 + 该行内边距」取最大，foreach / iBatis iterate / `$` 直替三类行都不再截尾；真要超宽时走插件自己的中段省略（保留尾部），不再被 Swing 截尾
+- **改完勾选后横幅停在上一轮的判断（T-PreviewBannerLiveRefresh，e9b140fb1）**：重渲染只更新 SQL 文本、不重算横幅，于是产物里 `{{…}}` 已经没了、「预览未完整还原」照挂；现在重渲染帧内同步刷新警示与横幅（恢复即隐藏）
+- **无 WHERE 的全表删除/更新没有任何提示（T-FullTableWriteRisk，e9b140fb1）**：XML 预览的产物随勾选实时变化，勾掉 `_parameter != null` 之后就是一条 `delete from …`，此前只挂「预览未完整还原」。现在这类产物单独给「⚠ 无 WHERE 条件，将删除全表数据！／将更新全表数据！」，优先级高于渲染警示；判定只看**未回填**的产物（参数值里出现 `where` 不会污染判据）
+- **分支没走到的 foreach 值框填了没反应（T-ForEachInert，e9b140fb1）**：例如 `criterion.value` 只在 `listValue` 分支里展开，当前走 `singleValue` 时填值对产物毫无影响。现在该行给一行灰字说明「本轮未展开：填了不影响产物——勾上引用这一集合的分支后才参与渲染」
 
 ## [2026.11.12-beta.4] - 2026-11-12
 
