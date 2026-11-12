@@ -11,6 +11,7 @@
 ## 补丁清单
 
 | 补丁 | 机制 | 锚定测试 | 校验记录 |
+| `t-hiddenbug-perf-scan-y6-disable-batch-guard.patch` | 券 E runBatchLookupGuarded 收敛判定（批量实体查找守卫，T-HiddenBugPerfScan） | `ConvertSqlToJavaActionBatchGuardTest` | 2026-11-12：`reverse_probe.py --patch --base t-hiddenbug-perf-scan` → exit 0「反证通过」，3 例 1 红 2 绿（摘判定后普通异常炸穿即红；PCE 上抛例不受补丁影响仍绿）。同日另两笔探针走 --commit 整提交反打手工口径（temp worktree 代理问题，见计划册）：券 Y13（72e9ac861，TrimSqlNodeTest 16 例 1 红）反证成立、券 A（9241e0430，ArgResolverNestedBlockLambdaTest 2 例 1 红）反证成立 |
 |---|---|---|---|
 | `7be82118-disable-flush-window.patch` | notifyUi 150ms 刷新时间窗（券 A） | `SqlLogManagerFlushWindowTest` | 2026-11-07：7 例 5 红 2 绿，与该券人工反证分布逐位一致 |
 | `t-ibatis-slowfix-disable-cached-only-probe.patch` | 同步预览实体探针的「零扫描」判定（券 0 T-Ibatis2SlowFix：`EntityAliasSweep.resolveCachedOnly` 直查未命中时不再启动 `@Entity(name)` 别名全扫） | `XmlInlineSqlPreviewServiceTest` + `PagesXmlHqlPreviewTest` + `EntityAliasSweepTest` | 2026-11-09：`reverse_probe.py --patch --base t-ibatis-slowfix` → exit 0「反证通过」，25 例 3 红 22 绿。3 红＝`test物理表名根_同步预览不触发别名全扫`(0→1)、`testUnresolvableEntityClassAndTableRoot_noAliasSweep`(0→2，第 2/4 步各一次)、`testCachedOnlyResolveNeverScans`；同类的 `testCachedOnlyResolveKeepsDirectHitWithoutScan` 仍绿（补丁插在直查命中 return 之后 ⇒ 红来自「扫描被恢复」而非钝刀）。撤销补丁复跑同三例 25/0/0 |

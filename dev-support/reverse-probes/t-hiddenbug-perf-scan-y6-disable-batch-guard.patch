@@ -1,0 +1,17 @@
+diff --git a/src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt b/src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt
+index f324c9cf8..c5c7aa805 100644
+--- a/src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt
++++ b/src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt
+@@ -336,11 +336,7 @@ class ConvertSqlToJavaAction : AnAction() {
+ internal fun <T> runBatchLookupGuarded(lookup: () -> T): T? = try {
+     lookup()
+ } catch (t: Throwable) {
+-    if (t is com.intellij.openapi.progress.ProcessCanceledException || t is java.util.concurrent.CancellationException) throw t
+-    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t // T-FatalPassthrough T-FP-03 收口
+-    com.intellij.openapi.diagnostic.Logger.getInstance(ConvertSqlToJavaAction::class.java)
+-        .warn("convertBatch: 实体查找失败", t)
+-    null
++    throw t
+ }
+ 
+ /** 测试缝：批量实体查找失败的 EDT 反馈（断言收到反馈而非静默；headless 不弹真通知）。 */
