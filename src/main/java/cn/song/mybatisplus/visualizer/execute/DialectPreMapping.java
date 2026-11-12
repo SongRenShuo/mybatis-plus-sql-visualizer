@@ -236,8 +236,12 @@ public final class DialectPreMapping {
 
     private static boolean clearMappingOnEdt(Project project, VirtualFile vf) {
         try {
+            // T-ExecPsiGate：反射面整体不可用时要留痕——原实现静默返回 false，
+            // 上游（exec 清映射自愈 / preview 继承路径）只看得到「没清掉」这一个事实。
             Object mappings = instanceOf(project);
             if (mappings == null) {
+                LOG.warn("[M36] dialect clearMapping skipped: SqlDialectMappings unavailable "
+                        + "(reflection surface missing, Database plugin not loaded?)");
                 return false;
             }
             mappings.getClass()
@@ -260,8 +264,10 @@ public final class DialectPreMapping {
             return false;
         }
         try {
+            // T-ExecPsiGate：同上——反射面缺失必须留痕，否则「映射没写成」在日志里完全没有原因。
             Object mappings = instanceOf(project);
             if (mappings == null) {
+                LOG.warn("[M36] setLanguageOnEdt skipped: SqlDialectMappings unavailable (reflection surface missing)");
                 return false;
             }
             mappings.getClass()
@@ -287,8 +293,10 @@ public final class DialectPreMapping {
             return false;
         }
         try {
+            // T-ExecPsiGate：同上——反射面缺失必须留痕，否则「映射没写成」在日志里完全没有原因。
             Object mappings = instanceOf(project);
             if (mappings == null) {
+                LOG.warn("[M36] setMySqlOnEdt skipped: SqlDialectMappings unavailable (reflection surface missing)");
                 return false;
             }
             Object mysql = findMySql(mappings);
@@ -348,6 +356,12 @@ public final class DialectPreMapping {
             configured = ReadAction.compute(() -> configuredLanguageId(project, vf));
         } catch (Throwable t) {
             configured = null;
+        }
+        // T-ExecPsiGate：探测失败（null）是「保守不跳过、照写一次」的合法分支，但原实现完全静默——
+        // 于是「探测面坏了」与「确实没配过映射」在日志里长得一模一样。稳态命中时不打（避免噪音），
+        // 只在真的要写映射前记一行。
+        if (configured == null && !inProcessMapped) {
+            LOG.info("[M36] dialect mapping probe unavailable for " + vf.getName() + " — attempting EDT write anyway");
         }
         Boolean configuredMatches;
         if (configured == null) {
