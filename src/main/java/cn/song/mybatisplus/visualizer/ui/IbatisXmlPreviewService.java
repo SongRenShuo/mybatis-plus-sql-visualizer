@@ -563,6 +563,15 @@ public final class IbatisXmlPreviewService {
         );
     }
 
+    /**
+     * 「语句未找到」等空产物（{@code IbatisStatementPreview.statementNotFound} 复用；
+     * master 侧为 PreviewResult 命名实参直构，Java 侧统一走本服务构造缝）。
+     */
+    @NotNull
+    public static PreviewResult statementNotFoundResult(@NotNull String message) {
+        return emptyResult(message);
+    }
+
     // ------------------------------------------------------------------
     // 跨波次对齐缝（单点收口，参照 PagesXmlPreviewService.withHqlMeta 先例）
     // ------------------------------------------------------------------
