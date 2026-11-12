@@ -9,6 +9,8 @@
 > **状态图例**：✅ = 已支持；🟡 = 部分支持（含「侥幸可用」——碰巧能出大体正确 SQL 但无显式支持）；⬜ = 暂不支持；❗ = 当前会产出**错误**结果（比不支持更糟，需优先止血）。
 >
 > **任务编号**：SD=Spring Data JDBC/R2DBC，JO=jOOQ，QD=Querydsl，EQ=Easy-Query，JM=Jimmer，XB=xbatis，DS=MyBatis Dynamic SQL，FM=Fluent MyBatis，DV=dbVisitor，BS/ST=BeetlSQL/sqltoy。均为预分配，立项时启用。
+>
+> **已转正备忘（不走本矩阵号段）**：iBatis 2.x 于 2026-11-10 以 **T-Ibatis2Support 系**独立交付（`<sqlMap>` 结构认领 + 20 形态官方 2.3.4.726 引擎逐字节黄金对照 + 双向跳转/交互式参数/编辑期能力），不属于「候选框架」——链路见《02-核心流程详解》§3之二、触发面见《预览触发面清单》#15/#16；同批交付的 MBG Example 条件还原（T-MbgExamplePreview，2026-11-12）走 mapper XML 既有管线，见《预览触发面清单》一之二。
 
 ---
 
@@ -252,3 +254,4 @@
 | 2026-09-05 | **M44 第一批交付勾行（分支 feature/m44-orm-batch2）**：SD 止血 4 任务（含两处 ❗ 错误输出链路修复：JDBC @Query native 路由、@Column value）、xbatis 全量、Easy-Query proxy MVP、MyBatis Dynamic SQL、Querydsl MVP 共 24 个任务行置 ✅/🟡；单智能体实施 + 编排者集中测试，修复三处共性根因（collectSegments 引用层断链、xbatis 泛型形参误当实体、cn.xbatis.* 前缀宽松匹配误判变量）；全量 3353 测试 0 失败 |
 | 2026-09-05 | 初版：四路智能体并行调研（Spring Data JDBC/R2DBC、jOOQ+Querydsl、Easy-Query+Jimmer、国产长尾 7 框架）——建立 10 个框架的 API 覆盖行与立项决策表；关键发现：Spring Data JDBC 存在「侥幸可用」面与两处 ❗ 错误输出链路（@Column value 丢失、JDBC @Query 被当 JPQL）、xbatis 成本 <5% 最易、Querydsl 优于 jOOQ（10-20% vs 25-35%）、Easy-Query 与 MP 9/10 同构可立项、Jimmer 与 Flex 同判暂缓；org.querydsl 坐标已从 Central 下架（openfeign fork 接续）的版本风险记录 |
 | 2026-10-27 | **合并状态订正**：核实 `a3ccca6c`（M44 第一批）已在 master 历史，`converter/` 下 EasyQuery/Xbatis/Mds/Querydsl 四个转换器均在主线且后续有修复（`e8909d70` SPI 穿 project、`4d6a976f` flagSource 口径统一、`6062c26d` 同构普查）；原「分支未合并 master」表述作废。矩阵状态列无变化（仍待立项项不变） |
+| 2026-11-13 | **iBatis 2.x 转正备忘**：登记 iBatis 2.x 已于 2026-11-10（v2026.11.10）以 T-Ibatis2Support 系交付、MBG Example 条件还原于 2026-11-12（v2026.11.12）交付——两者不经本矩阵任务号段（见头部「已转正备忘」），矩阵状态列仍只反映候选框架 |
