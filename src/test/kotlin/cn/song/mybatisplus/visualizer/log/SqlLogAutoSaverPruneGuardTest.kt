@@ -193,8 +193,10 @@ class SqlLogAutoSaverPruneGuardTest {
     private fun awaitBlockContaining(dir: File, marker: String, timeoutMs: Long = 30_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
+            // 收口修正（2026-11-13）：裁剪与本轮询并发——夹具文件可能在 readText 前一瞬被删
+            //（TOCTOU，全量桶实测 FileNotFoundException 假红），消失/读不到按无命中继续轮询。
             val hit = dir.listFiles { f -> f.isFile && f.extension.equals("sql", true) }
-                ?.any { it.readText().contains(marker) } == true
+                ?.any { f -> runCatching { f.readText().contains(marker) }.getOrDefault(false) } == true
             if (hit) return
             Thread.sleep(20)
         }
