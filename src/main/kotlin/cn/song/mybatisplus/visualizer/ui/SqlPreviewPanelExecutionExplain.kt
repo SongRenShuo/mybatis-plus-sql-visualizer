@@ -492,6 +492,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             databaseAvailable = databaseAvailable,
             hasBoundDataSource = boundDs != null,
             hasUnfilledParams = hasUnfilledParams,
+            // T-ObPanelAdvice（dev 侧，合并轮补回）：TEXT 档唯一放行例外——OceanBase 的
+            // ASCII 计划树按表头门放行进结构化链；漏传即 OB TEXT 一律直送原生（面板测试钉）。
+            dialectName = dialect.name,
         )
     ) {
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent -> {

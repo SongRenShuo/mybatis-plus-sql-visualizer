@@ -24,7 +24,10 @@ class SqlLogAutoSaverPruneGuardTest {
     private fun makeFile(dir: String, name: String, stamp: Long) {
         val f = File(dir, name)
         f.parentFile.mkdirs()
-        f.writeText("-- source: x --\nSELECT 1\n\n")
+        // 合并轮收口修正（2026-11-13）：夹具内容此前含 "SELECT 1"——与被写条目同文，
+        // awaitBlockContaining 的首个等待被夹具内容空等穿过（写任务没跑也算「已写」），
+        // 全量共跑态下真时序问题被这个假通过掩盖。改写为不含任何条目标记的中性注释。
+        f.writeText("-- source: x --\n-- filler --\n\n")
         f.setLastModified(stamp)
     }
 
@@ -185,8 +188,9 @@ class SqlLogAutoSaverPruneGuardTest {
         saver.close()
     }
 
-    /** 轮询等待目录内任一 .sql 出现含指定内容的条目块（异步写线程完成信号）。 */
-    private fun awaitBlockContaining(dir: File, marker: String, timeoutMs: Long = 5_000) {
+    /** 轮询等待目录内任一 .sql 出现含指定内容的条目块（异步写线程完成信号）。
+     *  预算 30s（2026-11-13）：全量共跑态下写任务到点时间随负载漂移（与 awaitFileGone 同款口径）。 */
+    private fun awaitBlockContaining(dir: File, marker: String, timeoutMs: Long = 30_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val hit = dir.listFiles { f -> f.isFile && f.extension.equals("sql", true) }
