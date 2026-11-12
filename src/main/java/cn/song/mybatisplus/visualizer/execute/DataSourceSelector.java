@@ -165,6 +165,61 @@ public final class DataSourceSelector {
      */
     public static volatile String lastTempFileFailure = null;
 
+    /**
+     * T-ExecPsiGate F6：一次「带修复入口」的失败——<b>阶段 + 成因</b>成对（见
+     * {@link #lastTempFileHintRecord}）。
+     *
+     * <p>k2j 移植说明：master 侧为 {@code DataSourceSelector.kt} 文件级 internal class
+     * {@code TempFileHintRecord(stage, hint)}——Java 端收敛为本类嵌套承载。</p>
+     */
+    public static final class TempFileHintRecord {
+        /** 失败阶段串的前缀（与 {@code execute.tempFile.failed} 文案里的同名片段，如 {@code dirNoPsi}）。 */
+        public final String stage;
+        /** 该阶段对应的成因，决定面板上挂哪颗蓝字入口。 */
+        public final ExecPsiFailureHint.ExecPsiFailureCause hint;
+
+        public TempFileHintRecord(String stage, ExecPsiFailureHint.ExecPsiFailureCause hint) {
+            this.stage = stage;
+            this.hint = hint;
+        }
+    }
+
+    /**
+     * T-ExecPsiGate 13.10 / F6：最近一次<b>带修复入口</b>的失败——阶段 + 成因<b>成对</b>记录。
+     *
+     * <p>与 {@link #lastTempFileFailure}（阶段串）互补：那个只说到「哪一段失败」，这个说到「该去哪儿修」。
+     * 面板据此把失败行渲染成「红字 + 蓝色可点入口」（{@code showErrorWithActions}）。</p>
+     *
+     * <p><b>为什么不是一个裸字段</b>（F6，2026-11-11 第三轮验收实测）：F5 把成因记在裸字段里、并在
+     * {@code createTempPsiFile} 入口清空。预热链与冷路径并发时，先失败的一方刚写好成因，另一方的入口
+     * 就把它清掉了——用户看到的仍是「只剩红字、没有蓝字」。现在成因绑着<b>它所属的阶段</b>，消费时按
+     * 错误文案里的阶段匹配：别人的入口清不掉它，旧成因也不会被安到新失败上（阶段对不上即丢弃）。</p>
+     */
+    public static volatile TempFileHintRecord lastTempFileHintRecord = null;
+
+    /**
+     * 取「阶段 + 成因」——<b>非破坏性</b>（不在这里清空）。
+     *
+     * <p>两个改动都是真机打出来的（2026-11-11 第四轮）：</p>
+     *
+     * <ol>
+     * <li><b>不在这里清空</b>：同一次失败会被渲染不止一次（{@code failPrepareRequests} 先 abort 持有者、
+     * 再 complete 排队意图，两路都带同一条文案）。原来「读一次就清」，第一次渲染拿到蓝字、
+     * 第二次退化成纯红字并<b>把蓝字覆盖掉</b>——用户看到的正是「直接点执行没有蓝字」。
+     * 记录只由下一次带成因的失败覆盖，不需要读方负责清理。</li>
+     * <li><b>判据放宽成「这条文案是不是 PSI 建不出」</b>：成因只描述「为什么建不出 PSI」这一件事，
+     * 任何 PSI 阶段的失败文案都能用它；按精确阶段名匹配反而会因为阶段名演进（{@code findPsi} /
+     * {@code findPsiAfterHeal} / {@code dirNoPsi}）把入口丢给用户看不见。</li>
+     * </ol>
+     */
+    public static ExecPsiFailureHint.ExecPsiFailureCause consumeTempFileHintFor(String errorMsg) {
+        TempFileHintRecord rec = lastTempFileHintRecord;
+        if (rec == null) return null;
+        boolean isPsiFailure = errorMsg.contains("findPsi") || errorMsg.contains("dirNoPsi")
+                || errorMsg.contains(rec.stage);
+        return isPsiFailure ? rec.hint : null;
+    }
+
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
      * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
     public static volatile VirtualFile dialectMappedVf = null;
@@ -1284,6 +1339,36 @@ public final class DataSourceSelector {
             "completed in", "query ok", "affected", "fetched", "took ", "elapsed"
     );
 
+    /**
+     * T-PreviewDmlResult（20261110 真机）：<b>结果页签结构上不会出现</b>的写语句识别。
+     *
+     * <p>DBN 对 INSERT/UPDATE/DELETE/DDL 不建结果页签，影响行数只写在控制台 Output——40 拍窗口
+     * 必然到期；而 {@link #hasConsoleCompletionEvidence} 读的是 history 文档（真机实证：该文档里只有
+     * {@code Connected} 与 SQL 回显，{@code 1 row affected in 60 ms} 只进 Output 视图），于是成功被归成
+     * {@code execute.timeout.hint}。此判据让该形态直接走「已提交执行」通道。</p>
+     *
+     * <p>只认 DML/DDL 首关键字：查询类语句没有结果页签属于异常（仍走超时/错误分支）；工具语句
+     * （SET/USE/BEGIN）不在此列，由完成态回显判据覆盖。</p>
+     *
+     * @return true = 本条语句执行完也不会有结果页签
+     */
+    public static boolean isWriteStatement(String sqlText) {
+        String text = sqlText == null ? "" : sqlText.trim();
+        if (text.isEmpty()) return false;
+        String keyword;
+        try {
+            keyword = SqlTypeClassifier.getFirstKeyword(text);
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return keyword != null && WRITE_STATEMENT_KEYWORDS.contains(keyword);
+    }
+
+    /** 无结果页签的写语句首关键字（与 {@link #isWriteStatement} 配对，DML/DDL 子集）。 */
+    private static final List<String> WRITE_STATEMENT_KEYWORDS = List.of(
+            "INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE"
+    );
+
     /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
     public static boolean isSqlLine(String line) {
         String lower = line.trim().toLowerCase();
@@ -2070,16 +2155,43 @@ public final class DataSourceSelector {
         }
     }
 
+    /**
+     * 反射获取 Runner 显示名称的<b>可空版</b>（T-DsListAddSource）：解析不出返回 null。
+     *
+     * <p>专供列表装配处使用——「unknown 数据源」死项的 B 侧同源根因就是 {@code "Unknown"} 回落被直接
+     * 渲染进条目。{@code getRunnerName} 的回落<b>保持不动</b>：{@code chosenRunnerName} 比对、
+     * {@code blocksPreferredRunnerMiss} 判据、last-used 记忆链都依赖非空串。</p>
+     *
+     * <p>取名按 <b>{@code getDisplayName} → {@code getName}</b> 两段（T-DsListAddSource 回归修复 2026-11-12）：
+     * 平台 {@code ConsoleRunner} 两者都有，但「数据源对象形态」的实现（{@code DbDataSource}/{@code LocalDataSource}、
+     * 以及测试夹具）常常只暴露 {@code getName}。只认 {@code getDisplayName} 会把这类<b>合法条目</b>判成无名
+     * 而整条丢弃——弹层随之变空、{@code selectedIndex=0} 落空、既不走 {@code onChosen} 也不走 {@code canceled}，
+     * 调用方永远收不到回调（{@code LogToSqlPanelExecuteTest#testPlatformPopupSelectionDisposeIsNotUserCancellation}
+     * 三轮红即此形态）。两段都取不到才算无名：只有那种连名字都不暴露的对象才是要收掉的死项。</p>
+     */
+    public static String optionalRunnerName(Object runner) {
+        for (String methodName : RUNNER_NAME_METHODS) {
+            String name;
+            try {
+                Method method = runner.getClass().getMethod(methodName);
+                method.setAccessible(true);
+                Object r = method.invoke(runner);
+                name = r instanceof String ? (String) r : null;
+            } catch (Throwable ignored) {
+                name = null;
+            }
+            if (name != null && !name.isBlank()) return name;
+        }
+        return null;
+    }
+
+    /** 取名方法候选（顺序即优先级）；两段都失败才判无名。 */
+    private static final String[] RUNNER_NAME_METHODS = {"getDisplayName", "getName"};
+
     /** 反射获取 Runner 显示名称。 */
     public static String getRunnerName(Object runner) {
-        try {
-            Method method = runner.getClass().getMethod("getDisplayName");
-            method.setAccessible(true);
-            Object r = method.invoke(runner);
-            return r instanceof String ? (String) r : "Unknown";
-        } catch (Throwable ignored) {
-            return "Unknown";
-        }
+        String name = optionalRunnerName(runner);
+        return name != null ? name : "Unknown";
     }
 
     /** 反射获取 Runner 图标。 */
@@ -2108,14 +2220,6 @@ public final class DataSourceSelector {
 
     /** 弹窗展示 Runner 列表。 */
     public static void showRunnerPopup(Project project, List<Object> runners, Consumer<Object> callback) {
-        List<RunnerItem> items = new ArrayList<>();
-        for (Object r : runners) items.add(new RunnerItem(r, getRunnerName(r), getRunnerIcon(r)));
-        // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
-        // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
-        boolean multiProject = ProjectManager.getInstance().getOpenProjects().length > 1;
-        String title = multiProject
-                ? MpSqlVisualizerBundle.message("execute.datasource.select.in", project.getName())
-                : MpSqlVisualizerBundle.message("execute.datasource.select");
         com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
                 .createListPopup(createRunnerPopupStep(project, runners, callback))
                 .showInFocusCenter();
@@ -2123,8 +2227,7 @@ public final class DataSourceSelector {
 
     static com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> createRunnerPopupStep(
             Project project, List<Object> runners, Consumer<Object> callback) {
-        List<RunnerItem> items = new ArrayList<>();
-        for (Object r : runners) items.add(new RunnerItem(r, getRunnerName(r), getRunnerIcon(r)));
+        List<RunnerItem> items = buildRunnerItems(runners, NewDataSourceEntry.isAvailable(project));
         boolean multiProject = ProjectManager.getInstance().getOpenProjects().length > 1;
         String title = multiProject
                 ? MpSqlVisualizerBundle.message("execute.datasource.select.in", project.getName())
@@ -2149,6 +2252,15 @@ public final class DataSourceSelector {
             public com.intellij.openapi.ui.popup.PopupStep<?> onChosen(RunnerItem selectedValue, boolean finalChoice) {
                 Logger.getInstance(DataSourceSelector.class).info("[M36] popup onChosen: "
                         + (selectedValue != null ? selectedValue.name : "null"));
+                // T-DsListAddSource：末尾「添加数据源…」——不参与选源，准备链按用户取消终结
+                //（与 Esc 同语义：结算单飞门、不提交 SQL），随即弹平台原生新建数据源流。
+                if (selectedValue != null && selectedValue.addNew) {
+                    choiceAccepted = true;
+                    return doFinalStep(() -> {
+                        NewDataSourceEntry.openCreatePopup(project, null);
+                        deliver(null);
+                    });
+                }
                 // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
                 choiceAccepted = true;
                 return doFinalStep(() -> deliver(selectedValue != null ? selectedValue.runner : null));
@@ -2162,15 +2274,63 @@ public final class DataSourceSelector {
         };
     }
 
-    /** 弹窗列表项（Runner 包装）。 */
+    /** W1 取证一次性探针（unknown 死项成因日志只付一次）。 */
+    private static final java.util.concurrent.atomic.AtomicBoolean unnamedRunnerProbe =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * T-DsListAddSource（20261111）：Runner 列表装配——<b>解析不出名字的条目不渲染</b>，
+     * 末尾追加「添加数据源…」（平台可用时，D-3/D-2）。
+     *
+     * <p>抽成独立函数供测试直测（{@code createRunnerPopupStep} 的弹层依赖 JBPopupFactory，
+     * 纯逻辑单测够不着）；{@code withAddEntry} 显式传参，测试不必伪装平台在位。</p>
+     *
+     * <p>W1 取证（计划 P-1）：有未命名条目被丢弃时记一次性日志（类名列表），B 侧 unknown 的
+     * 确切成因以真机读数为准，日志即证据入口。</p>
+     */
+    public static List<RunnerItem> buildRunnerItems(List<Object> runners, boolean withAddEntry) {
+        List<RunnerItem> cleaned = new ArrayList<>();
+        for (Object runner : runners) {
+            String name = optionalRunnerName(runner);
+            if (name == null) continue;
+            cleaned.add(new RunnerItem(runner, name, getRunnerIcon(runner)));
+        }
+        if (cleaned.size() < runners.size() && unnamedRunnerProbe.compareAndSet(false, true)) {
+            StringBuilder dropped = new StringBuilder();
+            for (Object runner : runners) {
+                if (optionalRunnerName(runner) == null) {
+                    if (dropped.length() > 0) dropped.append(", ");
+                    dropped.append(runner.getClass().getName());
+                }
+            }
+            Logger.getInstance(DataSourceSelector.class)
+                    .info("[M36][DsList] dropped " + (runners.size() - cleaned.size())
+                            + " unnamed runner(s): " + dropped);
+        }
+        List<RunnerItem> items = new ArrayList<>(cleaned);
+        if (withAddEntry) {
+            items.add(new RunnerItem(null, MpSqlVisualizerBundle.message("execute.datasource.add"), null, true));
+        }
+        return items;
+    }
+
+    /** 弹窗列表项（Runner 包装；{@code addNew}=末尾「添加数据源…」动作项，{@code runner} 为 null）。 */
     public static final class RunnerItem {
         final Object runner;
         final String name;
         final javax.swing.Icon icon;
+        final boolean addNew;
+
+        /** {@code addNew} 默认参（master {@code = false}）的重载：3 参形态委托 4 参全参构造器。 */
         RunnerItem(Object runner, String name, javax.swing.Icon icon) {
+            this(runner, name, icon, false);
+        }
+
+        RunnerItem(Object runner, String name, javax.swing.Icon icon, boolean addNew) {
             this.runner = runner;
             this.name = name;
             this.icon = icon;
+            this.addNew = addNew;
         }
     }
 
@@ -2510,6 +2670,25 @@ public final class DataSourceSelector {
     }
 
     /**
+     * T-ExecPsiGate R6：<b>{@code .idea} 下建不出 PSI 的项目集</b>（弱键，口径同 {@link #conflictProbeProjects}）。
+     *
+     * <p>用户真机（UOS + Mac，同一个项目）：exec 文件放 {@code .idea/} 下必报 {@code findPsi ... null}，同内容放
+     * 桌面/项目外正常。一旦某个项目只能靠项目根备用落点（{@code .sql-visualizer/exec/}）把 PSI 建出来，
+     * 就把项目记在这里——后续执行直接走备用落点，不必每次都先撞三轮失败（每轮还带 2s 的 EDT 等待）。</p>
+     *
+     * <p>k2j 移植说明：master 侧为 internal val {@code execRootFallbackProjects}——A3 消费形态为
+     * {@code DataSourceSelector.INSTANCE.execRootFallbackProjects()}（方法访问器），按此落。</p>
+     */
+    private static final Set<Project> execRootFallbackProjectsBacking =
+            java.util.Collections.synchronizedSet(
+                    java.util.Collections.newSetFromMap(new java.util.WeakHashMap<Project, Boolean>()));
+
+    /** {@code execRootFallbackProjects} 访问器（A3 消费形态 {@code DataSourceSelector.INSTANCE.execRootFallbackProjects()}）。 */
+    public static Set<Project> execRootFallbackProjects() {
+        return execRootFallbackProjectsBacking;
+    }
+
+    /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
      * 插件 setText）后 1.5s 防抖自动落盘。动机：console 编辑器文档即 exec 文件 document
      * （attachConsole 挂载点），用户手改滞留「已修改未保存」是第四轮冲突弹窗「内存中更改」
@@ -2617,7 +2796,88 @@ public final class DataSourceSelector {
                 ? language.getID()
                 : (renderedDialectName == null ? ExecDialectRouting.MYSQL_LANGUAGE_ID
                 : ExecDialectRouting.GENERIC_LANGUAGE_ID);
-        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过。
+        applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, renderedDialectName, targetDs);
+    }
+
+    /**
+     * T-ExecPsiGate：exec 侧方言映射的三态结果（供日志与测试判别，生产链只看「有没有映射上」）。
+     */
+    public enum ExecMappingOutcome {
+        /** 映射已就位（写成功，或读探测确认本就等于目标方言）。 */
+        APPLIED,
+
+        /** 目标语言建不出 SQL PSI，闸门拦下：未写映射，并尝试清掉了历史映射。 */
+        SKIPPED_NO_PSI,
+
+        /** 闸门放行但映射没落地（EDT 超时 / 反射面不可用 / setMapping 抛错）。 */
+        NOT_APPLIED,
+    }
+
+    /**
+     * T-ExecPsiGate：<b>可建 PSI 门</b> + 映射落地（exec 链）。
+     *
+     * <p>缺陷形态（2026-11-10 用户报障，Mac / UOS）：{@code mapDialectBeforePsi} 解析出目标方言后<b>无条件</b>
+     * 写映射，而 {@code PsiManager.findFile} 的 PSI 语言正是由这份映射经 {@code LanguageSubstitutors} 决定的
+     * （243 平台 {@code LanguageUtil.getLanguageForPsi} 源码）。目标语言在本机建不出 SQL PSI 时——
+     * 自注册方言的 {@code <lang.parserDefinition>} 未生效、平台缺该方言、或历史版本在
+     * {@code .idea/workspace.xml} 里留下的坏映射——{@code findFile} 只会返回 null（平台侧没有异常可抓），
+     * 用户看到的就是笼统的「创建临时 SQL 文件失败：findPsi」。</p>
+     *
+     * <p>preview 链从一开始就有这道门（{@code ui/SqlPreviewPanelEditorLifecycle} 里的
+     * {@code canCreateSqlPsiFor} 判定后「跳过映射、保平台默认」），exec 链一直缺——所以同一台机器上
+     * 预览正常、点执行必死。</p>
+     *
+     * <p>处置：建不出 PSI 就<b>不写映射</b>，并<b>清掉已有映射</b>（只「不写」不够：上一版写进
+     * workspace.xml 的坏值仍会生效），让 PSI 按平台默认语言建出来。清失败不影响后续
+     * {@code findFile}（取不到 PSI 时 {@code createTempPsiFile} 还有一次自愈重试）。</p>
+     */
+    /** master 默认参（{@code renderedDialectName=null, targetDs=null}）的重载：5 参形态委托全参。 */
+    public static ExecMappingOutcome applyExecDialectMapping(
+            Project project,
+            VirtualFile vf,
+            Logger LOG,
+            Object targetLanguage,
+            String targetId) {
+        return applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, null, null);
+    }
+
+    /** master 默认参（{@code targetDs=null}）的重载：6 参形态委托全参。 */
+    public static ExecMappingOutcome applyExecDialectMapping(
+            Project project,
+            VirtualFile vf,
+            Logger LOG,
+            Object targetLanguage,
+            String targetId,
+            String renderedDialectName) {
+        return applyExecDialectMapping(project, vf, LOG, targetLanguage, targetId, renderedDialectName, null);
+    }
+
+    public static ExecMappingOutcome applyExecDialectMapping(
+            Project project,
+            VirtualFile vf,
+            Logger LOG,
+            Object targetLanguage,
+            String targetId,
+            String renderedDialectName,
+            Object targetDs) {
+        // targetLanguage == null 时没有可判定的语言（historical 行为 = MySQL 语义），闸门无从判起，
+        // 保持既有链路（ensureMapped 内部按 MySQL 处理）。
+        if (targetLanguage != null && !cn.song.mybatisplus.visualizer.sql.SqlPsiCapabilityKt.canCreateSqlPsiFor(targetLanguage)) {
+            boolean cleared = false;
+            try {
+                cleared = DialectPreMapping.clearMapping(project, vf);
+            } catch (Throwable ignored) {
+                // getOrDefault(false) 语义
+            }
+            dialectMappedVf = null;
+            dialectMappedLanguageId = null;
+            LOG.warn("[M36][T-ExecPsiGate] exec dialect mapping SKIPPED for " + vf.getName()
+                    + ": language '" + targetId + "' cannot build SQL PSI (rendered=" + renderedDialectName
+                    + "), historical mapping cleared=" + cleared + "; keep platform default dialect");
+            return ExecMappingOutcome.SKIPPED_NO_PSI;
+        }
+        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
+        // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
         // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
         boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf
                 && targetId.equals(dialectMappedLanguageId);
@@ -2627,7 +2887,19 @@ public final class DataSourceSelector {
             LOG.info("[M36] dialect pre-mapped to " + targetId + " for " + vf.getName()
                     + " (O-136 ds-dialect routing, ds="
                     + (targetDs != null ? targetDs.getClass().getSimpleName() : null) + ")");
+            return ExecMappingOutcome.APPLIED;
         }
+        // T-ExecPsiGate：映射没落地也要留痕——原实现只有 if 没有 else，映射失败零日志，
+        // 用户侧只能看到下游的 findPsi 报错，真因完全不可归因。
+        String mappedLang = null;
+        try {
+            mappedLang = DialectPreMapping.configuredLanguageId(project, vf);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        LOG.warn("[M36][T-ExecPsiGate] exec dialect mapping NOT applied for " + vf.getName()
+                + ": target=" + targetId + ", rendered=" + renderedDialectName + ", mappedLang=" + mappedLang);
+        return ExecMappingOutcome.NOT_APPLIED;
     }
 
     /** 打开 Database 工具窗口（无配置数据源时引导用户，仅显式执行路径调用；预览路径静默）。 */
