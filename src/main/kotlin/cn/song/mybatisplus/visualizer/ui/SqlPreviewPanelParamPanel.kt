@@ -1757,6 +1757,9 @@ internal fun paramLabelColumnWidth(textWidths: List<Int>, viewportPx: Int): Int 
     return textWidths.max().coerceIn(LABEL_COLUMN_MIN_PX, budget)
 }
 
+/** MBG Criterion 的四个 kind 分支后缀（D13c：快照恢复时据此判定“过期勾选”）。 */
+internal val KIND_BRANCH_SUFFIXES: Set<String> = setOf("noValue", "singleValue", "betweenValue", "listValue")
+
 /** T-ParamNameTruncation：标签列宽预算常量（视口比例 / 硬上下限 / 未布局兜底视口 / tooltip 折行宽度）。 */
 internal const val LABEL_COLUMN_VIEWPORT_RATIO = 0.55
 internal const val LABEL_COLUMN_MAX_PX = 480
@@ -2203,7 +2206,15 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 if (recovered == null) {
                     val id = source.removePrefix(SNAPSHOT_CHK)
                     val baseValue = history[SNAPSHOT_CHK_BASE + id]
-                    if (baseValue != null && (value == "1") != (baseValue == "1")) {
+                    // D13c：MBG 无元素注入时 kind 分支已收敛到 singleValue（D13b），快照不得再把它打开——
+                    // 否则旧方案里那次手动勾选会重放，面板上出现「勾着却永远轮不到」的 betweenValue。
+                    val kindBranch = id.substringAfterLast('.') in KIND_BRANCH_SUFFIXES
+                    // 只在「无元素注入」这一档拦（D13b 的收敛口径）；有 M2 元素时 kind 由数据决定，
+                    // 用户显式勾过就照旧恢复。
+                    val noInjection = current?.xmlModel?.collectionElements.isNullOrEmpty()
+                    val defaultKeepsIt = current?.xmlModel?.defaultState()?.enabledIds?.contains(id) == true
+                    val staleKindRestore = value == "1" && kindBranch && noInjection && !defaultKeepsIt
+                    if (baseValue != null && !staleKindRestore && (value == "1") != (baseValue == "1")) {
                         if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
                         stateRestored = true
                     }
