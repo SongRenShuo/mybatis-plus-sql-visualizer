@@ -47,11 +47,15 @@ public class SqlMapperBackspaceHandler extends BackspaceHandlerDelegate {
         return true;
     }
 
-    /** mapper 上下文判定：宿主 XmlFile（根 mapper）或本插件注入片段（语言 MpSqlMapper）。 */
+    /** 语句宿主上下文判定：宿主 XmlFile（根 {@code mapper} 或 iBatis {@code sqlMap}）或本插件注入片段（语言 MpSqlMapper）。 */
     private static boolean isMapperContext(PsiFile file) {
         if (file.getLanguage() == SqlMapperLanguage.INSTANCE) return true;
         if (!(file instanceof XmlFile)) return false;
         XmlFile xmlFile = (XmlFile) file;
-        return xmlFile.getRootTag() != null && xmlFile.getRootTag().getName().equals("mapper");
+        // T-Ibatis2Support 券 D：根守卫放宽到 iBatis `sqlMap`（同一个廉价判据，见
+        // XmlSynHiGate.isStatementHostRootName）。语义留存：成对删的是 `#{}`/`${}` 的 `{}`，
+        // 那是 MyBatis 形态——iBatis 用 `#name#`、正文里不产 `{`，故放宽后在 iBatis 文件里
+        // 本条只在出现字面 `#}`/`$}` 时才触发（真实 iBatis 文档不会产出该形态，无实际介入）。
+        return XmlSynHiGate.isStatementHostRootName(xmlFile.getRootTag() != null ? xmlFile.getRootTag().getName() : null);
     }
 }

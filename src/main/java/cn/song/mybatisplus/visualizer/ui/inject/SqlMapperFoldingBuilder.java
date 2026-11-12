@@ -31,7 +31,7 @@ import java.util.Set;
  *
  * <p>作用面刻意收窄到最小，避免与平台抢 fold 区：</p>
  * <ul>
- *   <li>只在<b>根标签为 {@code mapper}</b> 的文件里生效；</li>
+ *   <li>只在<b>语句宿主根</b>的文件里生效（MyBatis {@code mapper} / iBatis {@code sqlMap}——T-Ibatis2Support 券 D 放宽）；</li>
  *   <li>只对<b>语句标签</b>（select/insert/update/delete）与带 {@code id} 的 {@code <sql>} 建区；</li>
  *   <li>只对<b>跨多行</b>的标签建区（单行标签折叠无视觉意义，且更易与平台区重叠）；</li>
  *   <li>不自带默认折叠（{@code isCollapsedByDefault = false}，与平台「不自动折叠 XML 标签」一致）；</li>
@@ -57,7 +57,10 @@ public class SqlMapperFoldingBuilder extends FoldingBuilderEx {
         if (quick) return FoldingDescriptor.EMPTY;
         if (!(root.getContainingFile() instanceof XmlFile)) return FoldingDescriptor.EMPTY;
         XmlFile file = (XmlFile) root.getContainingFile();
-        if (file.getRootTag() == null || !file.getRootTag().getName().equals("mapper")) {
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（廉价二次判定＝根名恰为 sqlMap，
+        // 见 XmlSynHiGate.isStatementHostRootName / inMapperFile 的放宽说明）。
+        // MyBatis `mapper` 文件判定逐字节不变（`mapper` 根名分支原样保留）。
+        if (!XmlSynHiGate.isStatementHostRootName(file.getRootTag() != null ? file.getRootTag().getName() : null)) {
             return FoldingDescriptor.EMPTY;
         }
         // T-PerfSweep26 F95：体量熔断——超万行级 mapper 不做子树遍历（与注入族 XmlSynHiGate 同阈值同防线）。

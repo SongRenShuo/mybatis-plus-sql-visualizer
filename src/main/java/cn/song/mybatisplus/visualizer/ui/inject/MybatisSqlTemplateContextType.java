@@ -12,7 +12,8 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Set;
 
 /**
- * T-XmlGap W6：live template 的<b>自定义上下文</b>——只在 mapper 语句标签内可用。
+ * T-XmlGap W6：live template 的<b>自定义上下文</b>——只在语句宿主的语句标签内可用
+ * （MyBatis {@code mapper} / iBatis {@code sqlMap}，T-Ibatis2Support 券 D 放宽根守卫）。
  *
  * <p>与竞品的取舍：竞品有 6 个模板集，其中 {@code table}/{@code sql}/{@code ignore} 三个是它的<b>引导注释体系</b>
  * （用户手写 {@code <!--@Table-->}/{@code <!--@sql-->} 喂平台注入）；我方不做校验器、不需要这套注释依赖，
@@ -33,7 +34,14 @@ public class MybatisSqlTemplateContextType extends TemplateContextType {
     public boolean isInContext(@NotNull PsiFile file, int offset) {
         if (!(file instanceof XmlFile)) return false;
         XmlFile xmlFile = (XmlFile) file;
-        if (xmlFile.getRootTag() == null || !xmlFile.getRootTag().getName().equals("mapper")) return false;
+        // T-Ibatis2Support 券 D：语句宿主根放宽到 iBatis `sqlMap`（同一个廉价判据）。
+        // 语义留存（如实登记）：`cd`（CDATA 包裹）是 ORM 中立形态；`co`（foreach 骨架）是 MyBatis
+        // 形态，iBatis 对应物是 `<iterate>`——本券不新增 iBatis 模板（新增模板须动
+        // `resources/templates/**` 与模板名单守卫，且属「做错比不做差」面），故 iBatis 文件里
+        // `co` 仍是 MyBatis foreach 骨架（用户主动敲缩写才会展开，非自动行为）。
+        if (!XmlSynHiGate.isStatementHostRootName(xmlFile.getRootTag() != null ? xmlFile.getRootTag().getName() : null)) {
+            return false;
+        }
         int safeOffset = Math.max(0, Math.min(offset, Math.max(0, file.getTextLength() - 1)));
         PsiElement element = file.findElementAt(safeOffset);
         if (element == null) return false;
