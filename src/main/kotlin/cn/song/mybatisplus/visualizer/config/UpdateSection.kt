@@ -104,9 +104,15 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     internal var localInstallRunner: (LocalPackage, ProgressIndicator?) -> PluginUpdateRunner.InstallResult =
         { pkg, indicator -> PluginUpdateRunner.installFromLocal(pkg, indicator) }
 
-    /** 打开目录 seam（T-LocalUpdateDir：测试注入断言；默认平台 BrowserUtil 打开目录 URI）。 */
+    /**
+     * 打开目录 seam（T-LocalUpdateDir：测试注入断言）。
+     *
+     * 默认走平台 [com.intellij.ide.actions.ShowFilePathAction.openFile]——它按操作系统的
+     * **文件管理器**打开路径；此前用 `BrowserUtil.open(file: URI)` 在 Windows 上是**静默无效**
+     * （真机 2026-11-12 反馈「点打开没反应」：浏览器不处理目录 URI，失败也不抛）。
+     */
     internal var localDirectoryOpener: (java.nio.file.Path) -> Unit = { dir ->
-        com.intellij.ide.BrowserUtil.open(dir.toUri().toString())
+        com.intellij.ide.actions.ShowFilePathAction.openFile(dir.toFile())
     }
 
     private fun platformPluginsDir(): java.nio.file.Path? =
@@ -471,12 +477,14 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
                 ScanResult.Failed(it.message ?: it.toString())
             }
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                if (isDisplayable) renderLocalDirStatus(result)
+                // 不按 isDisplayable 丢弃：面板在懒加载的配置页里可能尚未挂载，丢弃会让状态行
+                // 永久停在旧读数（真机 2026-11-12 症状之一）。设置文本本身无副作用。
+                renderLocalDirStatus(result)
             }
         }
     }
 
-    /** 浏览目录（照抄 browseAutoSavePath 形态：只选目录，起始 user.home）。 */
+    /** 浏览目录（照抄 browseAutoSavePath 形态：只选目录，起始 user.home）；选完立即校验，不等防抖。 */
     private fun browseLocalDir() {
         val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(
             false, true, false, false, false, false,
@@ -485,19 +493,24 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             .findFileByIoFile(java.io.File(System.getProperty("user.home")))
         val dir = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, baseDir)
         if (dir != null) {
+            localDirDebounceTimer.stop()
             localDirField.text = dir.path
+            validateLocalDirAsync()
         }
     }
 
-    /** 打开目录（配置合法才开；非法态状态行已给原因，不弹窗）。 */
+    /**
+     * 打开目录（配置合法才开）。失败不再静默：异常与「平台没开成」都写回状态行，
+     * 用户能区分「路径不对」与「系统没响应」。
+     */
     private fun openLocalDir() {
         val check = LocalUpdateDir.parseWithPlatformPluginsDir(localDirField.text)
-        if (check is LocalUpdateDir.DirCheck.Ok) {
-            runCatching { localDirectoryOpener(check.dir) }
-                .onFailure { localDirStatusLabel.text = it.message ?: it.toString() }
-        } else {
+        if (check !is LocalUpdateDir.DirCheck.Ok) {
             renderLocalDirStatus(ScanResult.DirInvalid(check))
+            return
         }
+        runCatching { localDirectoryOpener(check.dir) }
+            .onFailure { localDirStatusLabel.text = it.message ?: it.toString() }
     }
 
     /**

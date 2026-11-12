@@ -456,6 +456,103 @@ class UpdateSectionTest : BasePlatformTestCase() {
         assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.statusLabel.text)
     }
 
+    // ------------------------------------------------------------------
+    // T-LocalUpdateDir 真机反馈（2026-11-12）：输入路径后状态行不刷新 / 点「打开」无反应
+    // ------------------------------------------------------------------
+
+    /**
+     * 输入后防抖校验必须把状态行刷成实际读数（真机症状：填了路径，状态行仍停在
+     * 「未设置（此项关闭）」——说明输入后的扫描没跑到或结果没回渲染）。
+     */
+    fun testLocalDirTypingRefreshesStatusRow() {
+        val dir = createTempDir("mpvs-ui-status-")
+        try {
+            // 用明确高于当前插件的版本，读数走 Available 文案（不受当前版本号变化影响）
+            writeFakePluginZip(dir, "2099.1.1")
+            section.localDirField.text = dir.absolutePath
+            waitForLocalStatus(MpSqlVisualizerBundle.message("settings.update.local.ready", 1, "2099.1.1"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 点「打开」必须真的调用打开 seam（真机症状：点按钮毫无反应）。 */
+    fun testOpenLocalDirInvokesOpener() {
+        val dir = createTempDir("mpvs-ui-open-")
+        try {
+            writeFakePluginZip(dir, "2099.1.1")
+            val opened = mutableListOf<java.nio.file.Path>()
+            section.localDirectoryOpener = { opened.add(it) }
+            section.localDirField.text = dir.absolutePath
+            // 防抖校验与点击存在竞态：先等一次校验落地，再点开
+            waitForLocalStatusContains("已找到")
+            section.openLocalDirButton.doClick()
+            assertEquals("打开按钮必须调用 seam", 1, opened.size)
+            assertEquals(dir.toPath().toAbsolutePath().normalize(), opened.single())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 路径非法时点「打开」不调 seam，且状态行给出原因（不静默、不弹窗）。 */
+    fun testOpenLocalDirOnInvalidPathShowsReason() {
+        var opened = 0
+        section.localDirectoryOpener = { opened++ }
+        section.localDirField.text = "not-an-absolute-path"
+        section.openLocalDirButton.doClick()
+        assertEquals("非法路径不得打开", 0, opened)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.local.relative"),
+            section.localDirStatusLabel.text,
+        )
+    }
+
+    private fun waitForLocalStatusContains(needle: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (!section.localDirStatusLabel.text.contains(needle) && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertTrue(
+            "状态行应包含「$needle」，实际=「${section.localDirStatusLabel.text}」",
+            section.localDirStatusLabel.text.contains(needle),
+        )
+    }
+
+    private fun waitForLocalStatus(expected: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (section.localDirStatusLabel.text != expected && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertEquals(expected, section.localDirStatusLabel.text)
+    }
+
+    private fun createTempDir(prefix: String): java.io.File =
+        java.nio.file.Files.createTempDirectory(prefix).toFile()
+
+    /** 造一个标准 IPGP 布局假安装包（顶层插件目录 + lib 内嵌 plugin.xml）。 */
+    private fun writeFakePluginZip(dir: java.io.File, version: String) {
+        val xml = """
+            <idea-plugin>
+                <id>${cn.song.mybatisplus.visualizer.update.UpdateSource.PLUGIN_ID}</id>
+                <version>$version</version>
+            </idea-plugin>
+        """.trimIndent()
+        val jarBytes = java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.ZipOutputStream(out).use { jar ->
+                jar.putNextEntry(java.util.zip.ZipEntry("META-INF/plugin.xml"))
+                jar.write(xml.toByteArray())
+                jar.closeEntry()
+            }
+        }.toByteArray()
+        java.util.zip.ZipOutputStream(java.io.FileOutputStream(java.io.File(dir, "pkg-$version.zip"))).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("mybatis-plus-sql-visualizer/lib/plugin.jar"))
+            zip.write(jarBytes)
+            zip.closeEntry()
+        }
+    }
+
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */
     private fun waitForState(target: UpdateSection.State) {
         val deadline = System.currentTimeMillis() + 10_000
