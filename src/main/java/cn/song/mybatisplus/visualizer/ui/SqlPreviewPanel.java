@@ -153,6 +153,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-ParamNameTruncation：标签全名锚点——视口变化重排时按它重算省略文本与 tooltip。 */
     public static final String PROP_LABEL_FULL_TEXT = "mpsv.labelFullText";
 
+    /** R49：条件复选框标签截断预算下限（px）——行尾探镜标注按宽度扣减后仍保底可读（同 checkBoxMaxWidth 下限）。 */
+    public static final int MIN_CHECKBOX_TEXT_WIDTH = 100;
+
     /**
      * T-DevAcceptFix ⑤（20261006 验收）：参数输入框的 source 锚点——召回回写按锚点显式映射
      * （syncParamFieldText），禁以 paramValues 插入序对位 paramFields 行序（方案切换后
