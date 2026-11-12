@@ -5,13 +5,13 @@
 ## [Unreleased]
 
 ### Added
-- **预览面板给出「类型依据」与「预览目标」切换（T-PreviewStmtTypeScope）**：语句类型（UPDATE/DELETE/COUNT/EXISTS）是怎么判出来的直接写在 meta 行——「类型依据: `remove()` 消费（第 235 行）」；同一 wrapper 上有多种消费写法时（真实工程常见：同一个变量先 `update(entity, w)`、重新赋值后再 `delete(w)`），工具栏出现「语句: UPDATE」切换入口，列出全部档位（带方法名与行号）按需切换，悬停也列出全部候选。查询链被判成 UPDATE 这类困惑不必再翻源码猜，也不必因为一个变量被复用就只看到一种语句
+- **预览面板给出「类型依据」与「预览目标」切换（T-PreviewStmtTypeScope，1b3af3ec5）**：语句类型（UPDATE/DELETE/COUNT/EXISTS）是怎么判出来的直接写在 meta 行——「类型依据: `remove()` 消费（第 235 行）」；同一 wrapper 上有多种消费写法时（真实工程常见：同一个变量先 `update(entity, w)`、重新赋值后再 `delete(w)`），工具栏出现「语句: UPDATE」切换入口，列出全部档位（带方法名与行号）按需切换，悬停也列出全部候选。查询链被判成 UPDATE 这类困惑不必再翻源码猜，也不必因为一个变量被复用就只看到一种语句
 - **关于页新增「本地安装包目录」（T-LocalUpdateDir）**：指向一个存放插件 zip 的文件夹（内网共享盘可用），插件自动识别最高版本并可直接安装，新版 IDE 免重启生效；只认本插件的包（包内 id 匹配、不夹带其他插件、IDE 构建号不匹配拒绝安装），目录不存在/不可读/路径不合法在状态行逐条给原因
 - **数据源列表末尾新增「添加数据源…」（T-DsListAddSource，c728c8058）**：预览面板两处数据源列表（内嵌控制台的数据源下拉、「更多 → 切换数据源」）末尾可直接打开 IDE 原生新建数据源对话框，建好后自动切到新源
 
 ### Fixed
-- **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
-- **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
+- **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
+- **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
 - **预览左栏的长参数名不再一直截断（T-ParamNameTruncation，2096fa2f5）**：标签列宽改为跟随左栏宽度，拉宽弹窗或拖动分隔条即显示完整名字；悬停提示恒给完整名，超长名自动折行，不再被屏幕右缘裁掉
 - **本地安装包目录点「打开」没反应（T-LocalUpdateDir，202c5dfcb）**：改用系统文件管理器打开路径（原来走浏览器打开目录地址，浏览器不处理且失败无声）；同时选完目录立即刷新下方状态行，不再滞后
 - **数据源列表末尾多出的「unknown」死项已移除（T-DsListAddSource，c728c8058）**：那不是数据源，是名字解析失败漏出的兜底文案，点了会报「数据源 Unknown 不存在」；现在列表只显示真实数据源
