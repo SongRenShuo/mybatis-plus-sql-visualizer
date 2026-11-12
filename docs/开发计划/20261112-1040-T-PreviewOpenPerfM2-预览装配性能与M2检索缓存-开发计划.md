@@ -55,6 +55,22 @@ ReferencesSearch.search(mapperMethod, GlobalSearchScope.projectScope(project)).f
 | M2 | 缓存失效口径：mapper 文件改动 / 调用点所在 java 文件改动（两者任一 mtime 变则失效；不引入文件监听，按需比 stamp） | 高 |
 | M3 | 冷热态分离取证：在 `logPreviewPerf` 里带上「首次/重开」标记与 `DumbService.isDumb`，把 0.94s 与 5.67s 的差别钉死 | 中 |
 | M4 | 若 M1 后仍有余量，再看 S2（`DatabaseSchemaResolver` 按表 × 全部数据源轮询，日志无耗时）与 S3（JPS 模型保存触发者） | 低（视读数） |
+| M5 | `findCallSite` 用 `findFirst()` 提前终止（原来 `findAll()` 先把全项目引用收成 List 再取第一个） | 高（已实施） |
+| M7 | 执行链 `revalidateOnEdt` 的 PSI 校验移出 EDT —— 修「Plugin to blame: SQL Visualizer」平台慢操作告警 | 高（已实施） |
+| M8 | `DumbService.isDumb` 时跳过 M2 检索，退回占位骨架 | 高（已实施） |
+| M9 | 索引就绪后**自动重算一次**（`PreviewResult.retryWhenIndexReady` + `runWhenSmart`）——冷态秒开骨架 + 稍后补齐 | 高（已实施，用户定案） |
+
+## 三之二、真机读数（2026-11-12，`[T-PreviewFast] request→dialog` vs `[open-perf]`）
+
+| 时刻 | request→dialog | 其中 xml 装配 | 状态 |
+| --- | --- | --- | --- |
+| 11:08 | **7802ms** | 2053ms（m2=1950） | 冷启动 + JPS 在存模型 |
+| 11:21 | **4499ms** | **417ms**（m2=378） | 冷启动（索引重建中） |
+| 11:23 | **170ms** | — | 热态 |
+
+⇒ 「打开慢」= 冷态首次；插件自身装配 417ms（M5 后从 1950ms 降下来），其余在等平台索引。
+`11:08:53 SEVERE - SlowOperations … Plugin to blame: SQL Visualizer` 的栈是
+`revalidateOnEdt → psi.isValid → WorkspaceFileIndexDataImpl.ensureIsUpToDate`（M7 修）。
 
 ## 四、验证
 
@@ -76,6 +92,20 @@ ReferencesSearch.search(mapperMethod, GlobalSearchScope.projectScope(project)).f
 - **V3** 冷态 5.67s 是否真与首次索引绑定（M3 的 `isDumb` 标记能直接回答）。
 
 ## 七、实施记录
+
+### M5 / M7 / M8 / M9（真机读数驱动）
+
+- **M5（`919d2806f`）** `findCallSite` 改 `findFirst()` 提前终止。真机 `m2` 由 **1950ms → 378ms**。
+- **M7（`0f9b850e2`）** 执行链 `revalidateOnEdt` → `revalidate`：`psi.isValid` 会触发
+  `WorkspaceFileIndexDataImpl.ensureIsUpToDate`（平台慢操作），在 EDT 上调即被记
+  「Plugin to blame: SQL Visualizer」（真机 11:08:53 SEVERE 栈实证）。改后台校验，EDT 只投递回调。
+- **M8（`f09cba088`）** `DumbService.isDumb` 时跳过 M2，退回占位骨架（冷态不再同步等索引）。
+- **M9（`305ae0d08`）** `PreviewResult.retryWhenIndexReady` + 面板 `runWhenSmart`：dumb 期先出骨架，
+  smart mode 后 BGT 重算并自动重放 `showResult`（新结果闭包为 null 故不自激；dispose 后放弃）。
+- 定向回归：`XmlPreviewServiceTest` / `XmlEwResolverTest` / `MbgExamplePreviewTest` /
+  `SqlPreviewPanelXmlDefaultsTest` / `MbgExampleCallCacheTest` / `SqlPreviewPanelParamSchemesTest` 全绿。
+- 踩坑记录：改 `PreviewResult` 构造签名后测试侧旧字节码报 `NoSuchMethodError`（LESSONS L21/L33）——
+  用 `compileTestKotlin --rerun-tasks` 重编解决，不要手删 `build/classes`。
 
 ### M1（`9e62f922a`）缓存落地
 
