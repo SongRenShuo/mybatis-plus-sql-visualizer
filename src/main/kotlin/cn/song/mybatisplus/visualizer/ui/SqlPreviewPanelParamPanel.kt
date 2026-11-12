@@ -1265,18 +1265,28 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(
         border = JBUI.Borders.empty(0, 8, 0, 0)
     })
     val valuesField = JBTextField(8).apply {
+        // D14（真机 2026-11-12 17:0x，`deleteByExample`）：**条件对象容器**（`oredCriteria` /
+        // `criteria.criteria`，item 是 criteria / criterion）一律只读——不管有没有 M2 注入。
+        // 这类集合的元素是「条件对象」而不是值；用户填一个字符串会把对象换成字符串，
+        // `${criterion.condition}` 塌成空、`#{criterion.value}` 取到那个字符串（真机 `({{condition}} '1')`）。
+        // 真正该填的值走「参数」区的按条件行。
+        val objectContainer = view.item == "criteria" || view.item == "criterion"
+        val locked = injectedCount != null || objectContainer
         // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
-        // D12：注入集合的值框**不回显任何历史值**——它已只读，回显只会让人以为「填了但改不动」。
-        text = if (injectedCount == null) xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty() else ""
-        if (injectedCount != null) emptyText.text = "已还原 $injectedCount 项"
+        text = if (locked) "" else xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
+        if (locked) emptyText.text = if (injectedCount != null) "已还原 $injectedCount 项" else "按条件对象展开"
         // D9：元素对象由调用点还原的集合不可改写（填值会冲掉还原出来的对象）
-        isEnabled = injectedCount == null
-        toolTipText = if (injectedCount != null) {
-            "该集合已按调用点还原 $injectedCount 项对象，不能在此填值——" +
-                "填了会把还原出来的条件对象冲掉（产物出现半填形态）。要改值请改 SQL 或看「参数」区。"
-        } else {
-            "集合值（逗号分隔，按该集合展开出的占位顺序依次填入；留空 = 默认展开 " +
-                "${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
+        isEnabled = !locked
+        toolTipText = when {
+            injectedCount != null ->
+                "该集合已按调用点还原 $injectedCount 项对象，不能在此填值——" +
+                    "填了会把还原出来的条件对象冲掉（产物出现半填形态）。要改值请改 SQL 或看「参数」区。"
+            objectContainer ->
+                "这个集合装的是条件对象而不是值，不能在此填值——" +
+                    "要填值请用下面「参数」区里按条件列出的行（例如 cust_id = 值）。"
+            else ->
+                "集合值（逗号分隔，按该集合展开出的占位顺序依次填入；留空 = 默认展开 " +
+                    "${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
         }
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
