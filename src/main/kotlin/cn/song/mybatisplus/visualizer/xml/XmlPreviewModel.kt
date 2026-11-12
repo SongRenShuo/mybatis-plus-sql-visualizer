@@ -223,9 +223,9 @@ class XmlPreviewModel private constructor(
         // 连 `?` 都没有，和 select 的默认形态不一致，用户会以为预览坏了。
         // MBG 无元素注入时统一收敛到 `singleValue`：形态 `WHERE ( {{criterion.condition}} ? )`。
         if (profile == XmlPreviewProfile.MBG_EXAMPLE && collectionElements.isEmpty()) {
-            val kindIds = chooseGroups
-                .filter { group -> group.branchIds.isNotEmpty() && group.branchIds.all { isKindBranchId(it) } }
-                .flatMap { it.branchIds }
+            // 按「kind 分支」特征收敛，不依赖 choose 组是否被完整识别——真机上 deleteByExample 的
+            // `<choose>` 没被识别成组，listValue 因此漏在组外一直显示勾选（勾着却永远轮不到）。
+            val kindIds = conditionViews.map { it.id }.filter { isKindBranchId(it) }
             val keep = kindIds.firstOrNull { it.endsWith(KIND_FLAGS[1]) }
             if (keep != null) {
                 kindIds.forEach { id -> if (id == keep) enabled.add(id) else enabled.remove(id) }

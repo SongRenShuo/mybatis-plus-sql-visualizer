@@ -431,6 +431,12 @@ class MbgExamplePreviewTest {
         val enabled = m.defaultState().enabledIds
         assertTrue("默认应勾 singleValue：$enabled", enabled.any { it.endsWith("singleValue") })
         assertFalse("不得停在 noValue：$enabled", enabled.any { it.endsWith("noValue") })
+        // D13b：其余 kind 分支必须一起取消——真机上 listValue 漏在组外一直显示勾选（勾着却轮不到）
+        assertEquals(
+            "kind 分支只允许留一个：$enabled",
+            1,
+            enabled.count { id -> id.endsWith("Value") },
+        )
         val sql = compact(m.renderSql().sql)
         assertTrue("骨架形态应带一个占位：$sql", sql.contains("{{") && sql.contains("?"))
     }
