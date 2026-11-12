@@ -86,23 +86,26 @@ class ExecTempFileEdtGuardTest {
             if (async.contains("ModalityState.any()")) {
                 out += "createTempPsiFileAsync 用 ModalityState.any() 投递（any() 恒 write-unsafe）"
             }
-            if (!async.contains("revalidateOnEdt(")) {
-                out += "createTempPsiFileAsync 回调未经 revalidateOnEdt——异步窗口内 PSI 失效会硬抛" +
+            if (!async.contains("revalidate(")) {
+                out += "createTempPsiFileAsync 回调未经 revalidate——异步窗口内 PSI 失效会硬抛" +
                     "PsiInvalidElementAccessException"
+            } else if (async.indexOf("revalidate(") > async.indexOf("invokeLater(")) {
+                out += "revalidate 落在 invokeLater 回调里（EDT 上判 PSI 有效性＝平台慢操作，真机" +
+                    " 2026-11-12 11:08:53 被记 Plugin to blame: SQL Visualizer）；必须在后台段完成"
             }
         }
 
-        val revalidate = bodyOf(src, "revalidateOnEdt")
+        val revalidate = bodyOf(src, "revalidate")
         if (revalidate == null) {
-            out += "未定位到 revalidateOnEdt 函数体（PSI 失效兜底消失）"
+            out += "未定位到 revalidate 函数体（PSI 失效兜底消失）"
         } else {
             val readLocks = Regex("""ReadAction\.compute""").findAll(revalidate).count()
             if (readLocks < 2) {
-                out += "revalidateOnEdt 的 PSI 判定未全部包 ReadAction（实查 $readLocks 处，" +
-                    "UI-002：EDT 隐式读权限不可依赖）"
+                out += "revalidate 的 PSI 判定未全部包 ReadAction（实查 $readLocks 处，" +
+                    "UI-002：后台线程也要显式读权限）"
             }
             if (!revalidate.contains("isValid")) {
-                out += "revalidateOnEdt 不再判 PSI 有效性（兜底空转）"
+                out += "revalidate 不再判 PSI 有效性（兜底空转）"
             }
         }
 
@@ -148,7 +151,7 @@ class ExecTempFileEdtGuardTest {
         )
     }
 
-    /** 自证：同步直调必红、any() 投递必红、缺线程分流必红、丢收口必红，合规形态不误报。 */
+    /** 自证：同步直调必红、any() 投递必红、缺线程分流必红、丢收口必红、EDT 上校验必红，合规形态不误报。 */
     @Test
     fun `自证_同步直调与any投递与缺分流必被点名`() {
         val syncCall = """
@@ -157,15 +160,18 @@ class ExecTempFileEdtGuardTest {
             }
             internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, sql: String, onReady: () -> Unit) {
                 val app = ApplicationManager.getApplication()
+                fun runSlow(report: () -> Unit) {
+                    val pair = createTempPsiFile(project, sql, null)
+                    revalidate(project, pair)
+                    app.invokeLater({ report() }, ModalityState.nonModal())
+                }
                 if (!app.isDispatchThread) {
-                    app.invokeLater({ onReady() }, ModalityState.nonModal())
+                    runSlow { onReady() }
                     return
                 }
-                app.executeOnPooledThread {
-                    app.invokeLater({ onReady(revalidateOnEdt(project, null)) }, ModalityState.nonModal())
-                }
+                app.executeOnPooledThread { runSlow { onReady() } }
             }
-            internal fun revalidateOnEdt(project: Project, pair: Any?): Any? {
+            internal fun revalidate(project: Project, pair: Any?): Any? {
                 ReadAction.compute<Boolean, Throwable> { psi.isValid }
                 ReadAction.compute<Any?, Throwable> { null }
                 return pair
@@ -190,13 +196,27 @@ class ExecTempFileEdtGuardTest {
         )
 
         val anyModality = syncCall.replace(
-            "app.invokeLater({ onReady() }, ModalityState.nonModal())",
-            "app.invokeLater({ onReady() }, ModalityState.any())",
+            "app.invokeLater({ report() }, ModalityState.nonModal())",
+            "app.invokeLater({ report() }, ModalityState.any())",
         ).replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
         val anyOffenders = tempPsiEdtOffenders(anyModality)
         assertTrue(
             "any() 投递必须被点名：$anyOffenders",
             anyOffenders.any { it.contains("any()") },
+        )
+
+        // M7 反例：把 PSI 有效性校验挪回 invokeLater 回调（EDT 上判 isValid ＝平台慢操作）必须被点名
+        val revalidateOnEdt = syncCall.replace(
+            "        revalidate(project, pair)\n",
+            "",
+        ).replace(
+            "app.invokeLater({ report() }, ModalityState.nonModal())",
+            "app.invokeLater({ revalidate(project, pair); report() }, ModalityState.nonModal())",
+        ).replace("val temp = createTempPsiFile(project, sql, null)", "createTempPsiFileAsync(project, sql) { }")
+        val edtOffenders = tempPsiEdtOffenders(revalidateOnEdt)
+        assertTrue(
+            "EDT 上校验 PSI 有效性必须被点名：$edtOffenders",
+            edtOffenders.any { it.contains("invokeLater 回调里") },
         )
 
         val noBranch = syncCall.replace(
