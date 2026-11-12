@@ -99,6 +99,11 @@ object IbatisParameterClassResolver {
     private fun findClass(project: Project, name: String, moduleName: String?): PsiClass? {
         val scope = GlobalSearchScope.allScope(project)
         JavaPsiFacade.getInstance(project).findClass(name, scope)?.let { return it }
+        // T-MbgPreviewParityAndOpenPerf P6：先查 iBatis `<typeAlias>` 表——别名 → FQN 直查，
+        // 零歧义也省掉下面的候选遍历（大工程里短名索引本身就可能慢）
+        IbatisTypeAliasResolver.fqnOf(project, moduleName, name)
+            ?.let { JavaPsiFacade.getInstance(project).findClass(it, scope) }
+            ?.let { return it }
         val candidates = PsiShortNamesCache.getInstance(project).getClassesByName(name, scope).filterNotNull()
         return pickCandidate(candidates, moduleName) { cls ->
             runCatching { ModuleUtilCore.findModuleForPsiElement(cls)?.name }.getOrNull()

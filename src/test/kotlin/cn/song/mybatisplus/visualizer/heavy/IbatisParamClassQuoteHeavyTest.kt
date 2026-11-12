@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.heavy
 
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.ui.IbatisTypeAliasResolver
 import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.JavaPsiFacade
@@ -46,6 +48,16 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
             VfsUtil.saveText(vf, content.trimIndent())
             PsiManager.getInstance(project).findFile(vf)!!
         }).let { file -> PsiTreeUtil.findChildOfType(file, PsiClass::class.java)!! }
+
+    /** 在项目 src 根下落一个 XML（iBatis config 用；不进 PsiClass 查找）。 */
+    private fun addXmlFile(name: String, content: String) {
+        WriteCommandAction.runWriteCommandAction(project, Computable {
+            val root = createTestProjectStructure()
+            val src = root.findChild("src") ?: root.createChildDirectory(this, "src")
+            val vf = src.findChild(name) ?: src.createChildData(this, name)
+            VfsUtil.saveText(vf, content.trimIndent())
+        })
+    }
 
     private fun addUserClass() = addClassFile(
         "User.java",
@@ -149,5 +161,36 @@ class IbatisParamClassQuoteHeavyTest : HeavyPlatformTestCase() {
         val result = IbatisXmlPreviewService.preview(xml, "byName")
         assertEquals("SELECT ID FROM T_USER WHERE USER_NAME = ?", result.sql)
         assertTrue("无 project 时不应产 hint：${result.paramHints}", result.paramHints.all { it.quote == null })
+    }
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf P6：`<typeAlias>` 比「短名唯一命中」更能消歧义——
+     * 两个同名 `User` 落在**同一模块**，短名 + 模块收窄救不了（同模块多候选 ⇒ 弃权），
+     * 而 sqlMapConfig 的别名直接给出 FQN。
+     */
+    fun testTypeAliasResolvesAmbiguousShortName() {
+        IbatisTypeAliasResolver.clearCache()
+        addClassFile("UserInP.java", "package p; public class User { private String username; }")
+        addClassFile("UserInQ.java", "package q; public class User { private String username; }")
+        addXmlFile(
+            "sqlmap-config.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+               |<!DOCTYPE sqlMapConfig PUBLIC "-//iBATIS.com//DTD SQL Map Config 2.0//EN" "http://ibatis.apache.org/dtd/sql-map-config-2.dtd">
+               |<sqlMapConfig>
+               |  <typeAlias alias="User" type="p.User"/>
+               |</sqlMapConfig>
+            """.trimMargin(),
+        )
+        val result = IbatisXmlPreviewService.preview(
+            xml, "byName",
+            project = project,
+            parameterClass = "User",
+            moduleName = ModuleManager.getInstance(project).modules.first().name,
+        )
+        assertEquals(
+            "别名指向 p.User ⇒ 应拿到类型并加引号：${result.paramHints}",
+            true,
+            result.paramHints.single().quote,
+        )
     }
 }
