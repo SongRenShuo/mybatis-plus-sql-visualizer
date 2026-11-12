@@ -77,4 +77,30 @@ ReferencesSearch.search(mapperMethod, GlobalSearchScope.projectScope(project)).f
 
 ## 七、实施记录
 
-（待填）
+### M1（`9e62f922a`）缓存落地
+
+- key＝`project.locationHash#namespace#statementId`（本 object 是进程级，多项目窗口防撞车）；
+  失效判据＝**解析时实际读过的文件**的 `modificationStamp`（mapper 接口 / Example 方法 / 调用点文件），
+  不引文件监听；
+- `compute` 返回 null（解析不到）**不写缓存**——避免把「当时索引未就绪 / 找不到调用点」永久固化；
+- 缓存外壳抽成纯逻辑 `resolveCached` + `searchRuns` / `cacheHits` 计数，PSI 解析与缓存解耦；
+- 用例 3 例（`MbgExampleCallCacheTest`）：第二次命中只跑一次 compute / 不同 key 互不命中 / null 不写缓存；
+- 反向：摘掉命中分支 → 「第二次命中缓存_不再执行检索」恰 1 红。
+
+**not run（测试环境结构性限制）**：`ReferencesSearch` 在 Heavy 测试项目里命中 0——诊断读数
+
+```
+mapper=com.example.UserMapper method=selectByExample **refs=0**
+example=com.example.UserExample criteria=com.example.UserExample.Criteria
+andMethod=andCustIdEqualTo firstCall=addCriterion
+```
+
+fixture 其余五段全对，只有引用索引未建（同族：`pitfall-filetypeindex-vs-disk-test-files`）。
+⇒「依赖文件改动后失效」「真机收益」两条只能真机验，判据：
+
+1. 同一语句**连续打开两次**，第二次 `[open-perf] m2=` 应接近 0（首次仍约 200ms）；
+2. 改一行调用点代码后再打开，应重新出现较大的 `m2=`（失效生效）。
+
+### M2/M3/M4
+
+未实施：M2 的失效路径待真机 V2 结论；M3（冷热标记）视是否还需要解释 5.67s；M4 视 M1 后余量。
