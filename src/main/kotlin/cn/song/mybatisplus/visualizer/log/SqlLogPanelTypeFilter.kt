@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.awt.RelativePoint
 import com.intellij.util.ui.JBUI
@@ -65,7 +66,15 @@ internal fun labelForType(type: StatementType): String = when (type) {
      */
     internal fun SqlLogPanel.clipToDropdownBudget(text: String, target: JComponent): String {
         val metrics = target.getFontMetrics(target.font)
-        return clipTailToWidth(text, { metrics.stringWidth(it) }, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX))
+        // 合并轮实测定案（2026-11-13）：headless 裸单测（无平台应用）里 JBUIScale 惰性初始化
+        // 尚未预热（「Must be precomputed」，双侧各自全量绿、并集后用例顺序变化触发）——
+        // 无应用态退回未缩放预算；真实 IDE（应用在场、StartupUtil 已预热尺度）行为逐字不变。
+        val budget = if (ApplicationManager.getApplication() == null) {
+            DROPDOWN_TEXT_BUDGET_PX
+        } else {
+            JBUI.scale(DROPDOWN_TEXT_BUDGET_PX)
+        }
+        return clipTailToWidth(text, { metrics.stringWidth(it) }, budget)
     }
 
     /**

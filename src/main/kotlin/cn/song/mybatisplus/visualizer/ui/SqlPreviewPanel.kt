@@ -500,13 +500,13 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
                 cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath)
             }.getOrDefault("")
             if (identity.isBlank()) {
-                SqlHistoryManager.getInstance()
-                    .newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
+                SqlHistoryManager.getInstance().newestParamSnapshot { entry ->
+                    this@historySnapshotFallback.matchesSnapshotKey(entry, key)
+                }
             } else {
-                SqlHistoryManager.getInstance()
-                    .newestParamSnapshotForProject(identity) { entry ->
-                        this@historySnapshotFallback.matchesSnapshotKey(entry, key)
-                    }
+                SqlHistoryManager.getInstance().newestParamSnapshotForProject(identity) { entry ->
+                    this@historySnapshotFallback.matchesSnapshotKey(entry, key)
+                }
             }
         }.getOrNull()
     }

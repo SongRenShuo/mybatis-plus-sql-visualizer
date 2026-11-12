@@ -75,6 +75,8 @@ object SettingsScenarioGroups {
             "displayMaskEnabled",
             // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM（导出文件形态，随历史/日志导出链）
             "csvExportNoBom",
+            // T-Ibatis2Support 券 A（dev 侧）：iBatis 2.x sqlMap 语句预览开关（预览能力，随展示形态）
+            "ibatisXmlEnabled",
             // 引导与日常维护
             "onboardingAnchorTipEnabled", "onboardingAnchorTipShown", "sqlListPreviewHintSeen",
             "autoCheckUpdate",

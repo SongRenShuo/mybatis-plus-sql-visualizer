@@ -561,7 +561,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,
-                onPlan = { outcome ->
+                onPlan = { submitted ->
                     if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
                         return@executeStructured
                     }
@@ -571,14 +571,14 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                     // 既有输入形态（adviseObPlanText 以表头为门），转换后的行列反而取不到。
                     val hints = runCatching {
                         cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
-                            dialect.name, outcome.raw.headers, outcome.raw.rows,
+                            dialect.name, submitted.raw.headers, submitted.raw.rows,
                         )
                     }.getOrDefault(emptyList())
                     // T-ObPanelAdvice：OB TEXT 档 ASCII 计划树 → 结构化行列——解析成功就进面板，
                     // fail-closed 收窄为「解析失败才回退原生」（其余 TEXT/XML 档不进本分支，
                     // 仍由通道判定 DirectSilent 挡在结构化外）
-                    val panelOutcome = if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isStructuredTextPlan(dialect.name)) {
-                        val parsed = cn.song.mybatisplus.visualizer.util.ObExplainPlanTextParser.parse(outcome.raw)
+                    val outcome = if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isStructuredTextPlan(dialect.name)) {
+                        val parsed = cn.song.mybatisplus.visualizer.util.ObExplainPlanTextParser.parse(submitted.raw)
                         if (parsed == null) {
                             notifyExplainStructuredFallback(
                                 proj,
@@ -588,32 +588,32 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                             submitExplainDirect(proj, explainSql, dialectGateRequest)
                             return@executeStructured
                         }
-                        outcome.copy(raw = parsed)
+                        submitted.copy(raw = parsed)
                     } else {
-                        outcome
+                        submitted
                     }
                     // 视图与对比按解析后形态分派：OB = TABLE（解析产物是货真价实的行列表）；
                     // 其余方言 = 提交档原样（MySQL/PG 行为逐字不变）
-                    val panelFormat = if (panelOutcome !== outcome) {
+                    val panelFormat = if (outcome !== submitted) {
                         cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.TABLE
                     } else {
                         outFormat
                     }
-                    val historyCompletion = completeExplainPlanHistory(history, historyRequest, panelOutcome.raw)
+                    val historyCompletion = completeExplainPlanHistory(history, historyRequest, outcome.raw)
                     if (historyCompletion.saved != cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED) {
-                        captureAiContextPlan(history, historyRequest.key, panelOutcome.raw)
+                        captureAiContextPlan(history, historyRequest.key, outcome.raw)
                     }
                     val planDiff = historyCompletion.baselines.firstOrNull()?.let {
-                        ExplainPlanDiff.diff(it.raw, panelOutcome.raw, panelFormat)
+                        ExplainPlanDiff.diff(it.raw, outcome.raw, panelFormat)
                     }
                     // R61 兼容观察值；比较决策由 R90 的目标隔离会话负责。
-                    lastStructuredExplain = explainSql to panelOutcome.raw
+                    lastStructuredExplain = explainSql to outcome.raw
                     var dialogRef: ExplainPlanDialog? = null
                     val view = ExplainPlanResultView(
                         dialectName = dialect.name,
-                        dataSourceName = panelOutcome.dataSourceName,
-                        elapsedMs = panelOutcome.elapsedMs,
-                        raw = panelOutcome.raw,
+                        dataSourceName = outcome.dataSourceName,
+                        elapsedMs = outcome.elapsedMs,
+                        raw = outcome.raw,
                         format = panelFormat,
                         hints = hints,
                         onBackToConsole = {

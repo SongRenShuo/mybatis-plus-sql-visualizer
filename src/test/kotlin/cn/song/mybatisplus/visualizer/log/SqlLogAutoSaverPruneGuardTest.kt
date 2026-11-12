@@ -197,8 +197,10 @@ class SqlLogAutoSaverPruneGuardTest {
         throw AssertionError("等待超时：目录 ${dir.absolutePath} 内未出现含 $marker 的条目")
     }
 
-    /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。 */
-    private fun awaitFileGone(file: File, timeoutMs: Long = 5_000) {
+    /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。
+     *  合并轮全量实测定案（2026-11-13）：5s 预算在 5 分片并行 + 本机满载下会假红（T-CiMarketSplit
+     *  同族，定向复跑恒绿）——预算放宽到 30s，不弱化断言（真没删照样红）。 */
+    private fun awaitFileGone(file: File, timeoutMs: Long = 30_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (!file.exists()) return

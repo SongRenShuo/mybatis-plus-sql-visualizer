@@ -150,7 +150,11 @@ class ExecTempFileEdtGuardTest {
                 out += "$CORE: 不再含 refreshAndFindFileByIoFile（VFS 刷新段被删除/搬走，须重新评审守卫）"
             }
             if (!coreBody.contains("ReadAction") || !coreBody.contains("PsiManager")) {
-                out += "$CORE: 不再含 ReadAction + PsiManager（PSI 获取被掏空——Runner 枚举会拿不到 PsiFile）"
+                // master 演进形态：PSI 获取单点收口在 findExecPsi（内部 ReadAction + PsiManager）——
+                // 核心体委托它即等价满足；两者都不在才是「被掏空」。
+                if (!coreBody.contains("findExecPsi(")) {
+                    out += "$CORE: 不再含 ReadAction + PsiManager（PSI 获取被掏空——Runner 枚举会拿不到 PsiFile）"
+                }
             }
             // master 保留的分流纪律（T-PrewarmWilDeadlock）：refresh 段必须按线程分流——
             // 池线程上包 WIRA × 同步 refresh 会自锁（全 IDE not responding）。
@@ -313,7 +317,25 @@ class ExecTempFileEdtGuardTest {
                 " TransactionGuard Write-unsafe 断言"
         }
         var idx = body.indexOf("$ON_READY(")
-        if (idx < 0) out += "$ASYNC_ENTRY: 未见 $ON_READY( 调用（结果回调不见了？）"
+        if (idx < 0) {
+            // master M7 形态（T-PreviewOpenPerfM2）：onReady 以**引用**交给本地派发器 runSlow，
+            // 实际调用发生在 runSlow 体内 report( 处（包 invokeLater nonModal）——直调形态的
+            // `onReady(` 字面量不再出现。此时判定改为：①两线程分支都把 onReady 交给同一派发器；
+            // ②派发器体内每个 `report(` 调用点都必须落在 write-safe 投递之内。
+            val delegateCount = Regex(Regex.escape("$LOCAL_DISPATCHER($ON_READY)")).findAll(body).count()
+            if (delegateCount < 2) {
+                out += "$ASYNC_ENTRY: 未见 $ON_READY 的 write-safe 派发（直调 `onReady(` 或「$LOCAL_DISPATCHER($ON_READY)」" +
+                    "双分支引用形态都不在场——结果回调不见了？）"
+            }
+            var ridx = body.indexOf("$REPORT(")
+            while (ridx >= 0) {
+                val verdict = deliveryVerdict(body, ridx)
+                if (!verdict.writeSafe) {
+                    out += "$ASYNC_ENTRY:${lineOf(body, ridx)} $REPORT 不在 write-safe 投递里（${verdict.how}）"
+                }
+                ridx = body.indexOf("$REPORT(", ridx + REPORT.length + 1)
+            }
+        }
         while (idx >= 0) {
             val verdict = deliveryVerdict(body, idx)
             if (!verdict.writeSafe) {
@@ -657,7 +679,11 @@ class ExecTempFileEdtGuardTest {
     /** 合成合规异步入口：两分支都经 `invokeLater(…, nonModal)` 投递（与生产形态同构）。 */
     private fun goodAsyncFactory(): String = """
         internal fun DataSourceSelector.createTempPsiFile(project: Project): Pair<VirtualFile, PsiFile>? {
-            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+            if (ApplicationManager.getApplication().isDispatchThread) {
+                WriteIntentReadAction.compute<VirtualFile?> { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile) }
+            } else {
+                LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+            }
             val psi = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
             return null
         }
@@ -780,6 +806,8 @@ class ExecTempFileEdtGuardTest {
         private const val ASYNC_ENTRY = "createTempPsiFileAsync"
         private const val CONTINUATION = "continuePrepareAfterTempFile"
         private const val ON_READY = "onReady"
+        private const val LOCAL_DISPATCHER = "runSlow"
+        private const val REPORT = "report"
 
         /** 规则六站点：缓存命中路径（BGT）与异步窗口兜底（EDT 回调）。 */
         private const val CONSUME_CACHE = "consumeCachedTempPsiFile"
