@@ -45,6 +45,13 @@
 | `sleep-audit.py` | 固定 `sleep` 审计（扫 `src/test` 里的睡眠等待） |
 | `replay-r0-packing.py` | 重放 R0 冷启分片装配，恢复分片包含顺序 |
 
+## 测试服务器运维
+
+| 文件 | 用途 |
+|---|---|
+| `svbackup/` | 测试服务器备份体系的仓库事实源（采集/主流程/告警脚本 + systemd 单元 + 幂等部署脚本）；服务器副本由 `install-svbackup.sh` 部署，见其 `README.md` 与 `.agents/skills/srv-backup-restore/SKILL.md` |
+| `db-lab/patch-panweidb-image.sh` | 磐维 PanWeiDB 容器镜像三处补丁（CPU 预检 / cgroup v2 探测 / listen_addresses 自愈） |
+
 ## 重构辅助（巨型文件拆分，T-M53-II）
 
 两个脚本都按「**逐字符搬运 + 对账**」工作：搬运前后做非空行多重集比对，丢一行即拒绝写盘，
