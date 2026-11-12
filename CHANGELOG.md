@@ -40,7 +40,7 @@
   - **券 Y4**（e780838a8）：MPJ ON-lambda 的 apply 统一片段通道——运行期拼接段不再静默丢弃
   - **券 Y5**（268149e37）：extractConsoleError 锚定最后一条命中——重复错误报文不再摘录旧错误上下文
   - **券 Y6**（27c69b9a0）：setIncrBy/setDecrBy 方言读取传 project——多项目同开不再错族引用
-  - **券 Y7**（d284620ae）：占位符扫描与注释剥离补 MySQL # 行注释——注释里的 ? 不再计入占位符
+  - **券 Y7**（d284620ae，**已回退 5132ebf9c——拒判**）：占位符扫描补 MySQL # 行注释与 iBatis  占位语法在本仓不可区分（IbatisXmlPreviewServiceTest 实证回归），不落地
   - **券 Y8**（59ead55f0）：ExpressionEvaluator Char 分支补单引号转义——与 String 分支同口径
   - **券 Y9**（ecc93df6f）：SQL→Java 列对列条件 qualifiedName + 双侧转义——多表列对列不再歧义
   - **券 Y10**（f2e00cbde）：批量链零列实体不再抛 NoSuchElementException——五处 first() 收敛 null 降级

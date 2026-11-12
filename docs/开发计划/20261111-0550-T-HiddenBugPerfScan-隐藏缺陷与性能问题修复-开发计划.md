@@ -24,7 +24,7 @@
 | D | 历史文件读取整文件两遍（`revisionsIn` 全文一遍 + 解析一遍）且逐字符 `reader.read()` 循环——20261006 实测 15~16.6s/19MB 热路径的最慢形态；`parseContent(collectRevisions=true)` 本就支持单遍语义（apply 在行循环后执行） | `log/SqlLogFileReader.kt:99-118,141-143,237-239` |
 | E | SQL→Java 批量路径 `executeOnPooledThread { ReadAction.compute }` 无 try/catch——PCE/PSI 异常即静默无反应（对照单语句路径 :87-101 有兜底；违背 XmlSynHiGate PCE 契约） | `actions/ConvertSqlToJavaAction.kt:115-132` |
 
-### P2（19 条 → 14 券；C 兼并 EP 无锁、O 兼并 Scorper 边界）
+### P2（19 条 → 17 券；C 兼并 EP 无锁、O 兼并 Scorer 边界）
 
 | 券 | 发现 | 位置 |
 |---|---|---|
@@ -46,7 +46,7 @@
 | W | ProjectPluginSettingsConfigurable 与 McpConfigurable 原地改 state 不走 loadState(copy)（全局面板 :1488-1493 已实证同型缺陷并修复，两页未跟进） | `config/ProjectPluginSettingsConfigurable.kt:440-520`、`McpConfigurable.kt:255-262` |
 | X | JpaQueryEnhancer 只判 size 字面量即内联——`PageRequest.of(运行时page, 字面量size)` 丢 OFFSET、参数行缺 pageOffset、note 谎报 offset=0（KDoc 声明双字面量才内联） | `converter/jpa/JpaQueryEnhancer.kt:94-107` |
 
-### P3（21 条 → 14 券，Y 族）
+### P3（21 条 → 17 券，Y 族）
 
 | 券 | 发现 | 位置 |
 |---|---|---|
@@ -91,10 +91,11 @@ A → B → C → D → E（P1）→ F~X（P2，按 F/G/H/I/K/L/M/N/O/P/Q/R/S/T/
 - P3 券 Y1~Y17：a6a6db76f / 09252a5a6 / 2f341f216 / e780838a8 / 268149e37 / 27c69b9a0 / d284620ae / 59ead55f0 / ecc93df6f / f2e00cbde / a88b1020c / 30b238e30 / 72e9ac861 / b5c9464df / d2277ba75（Y15/Y16 同笔）/ c76729072。
 - **拒判 2 项**：①券 W 的项目级设置页 loadState(copy)——被 ProjectPluginSettingsConfigurableTest 两例（TFS08/O58）当场打回：该页既有契约是「外部捕获的 state 引用跨多次 apply 存活且持续可变」，换引用使外部引用陈旧。MCP 页照常落地。
 - **范围收窄 1 项**：券 Y12「接受 OFFSET n ROWS 单独形态」不可行（LimitClause.count 非空、模型不可表达），落地为可行动报错文案，接受面扩大另立项。
-- **拒判补记（testFast 收口轮）**：券 Y7 整体回退（5132ebf9c）——iBatis  占位语法与 MySQL  行注释在本仓不可区分，PlaceholderPositions/SqlCommentStripper 启用 # 注释语义令 IbatisXmlPreviewServiceTest 实证回归（#orgId# 被吞、? 丢失）；占位符扫描全局启用 # 注释语义拒判。
-- **首版实现缺陷如实登记 2 项**：券 M 的反向回扫首版 lineEnd 退步写错（元素恰起于行首时死循环，测试 JVM 挂起 30 分钟暴露，修正为 lineStart-1）；券 S 的尾部窗口首版收窄 F2b 语义被既有测试打回（改混合方案全量兜底）。另 L4 复发多轮（heredoc/双引号串吃反斜杠——补丁一律改走 Write 工具落脚本）。
+- **拒判补记（testFast 收口轮）**：券 Y7 整体回退（5132ebf9c）——iBatis `#param#` 占位语法与 MySQL `#` 行注释在本仓不可区分，PlaceholderPositions/SqlCommentStripper 启用 # 注释语义令 IbatisXmlPreviewServiceTest 实证回归（#orgId# 被吞、? 丢失）；占位符扫描全局启用 # 注释语义拒判。
+- **首版实现缺陷如实登记 2 项**：券 M 的反向回扫首版 lineEnd 退步写错（元素恰起于行首时死循环，测试 JVM 挂起 30 分钟暴露，psi 包副本修正为 lineStart-1；但补丁脚本把助手误同时追加进 JpaEntityResolver——路径子串匹配缺陷——其内残留首版死循环副本，被显式 import 压制不可达，独立审计揪出后于审计轮删除）；券 S 的尾部窗口首版收窄 F2b 语义被既有测试打回（改混合方案全量兜底）。另 L4 复发多轮（heredoc/双引号串吃反斜杠——补丁一律改走 Write 工具落脚本）。
 - **not run 条款**：①设置面板面（Y15/Y16，L13 平台 UI 测试域）定向已跑、全量 testShards 未跑待收口；②券 Y10 零列实体 Light 夹具未建；③券 Y6 双项目真机场景未跑；④性能券（D/M/Q/S/T）反向探针不适用（无行为差异），以语义回归 + 结构性证据收口，真机大文件基准待后续可选复测；⑤行为型反向探针（reverse_probe.py）抽样见下。
 - **testFast 收口轮（9e009b044）**：首跑 4852 例 6 红——①券 E/F 新增守卫补 FatalErrors.isFatal 上抛；②ConvertToSqlAction（7→0）/GenerateCrudSql（1→0）豁免条目移除、ConvertSqlToJavaAction（1→2）计数更新；③两个新 Guard 命名测试登记 GUARD_CLASSES；④五个新 Light 测试摘无效 @Test（JUnit3 语义）；⑤BrowserUtil 调用面 5→4（券 Y1 合流）；⑥券 Y7 回退（见上）。PruneGuard 全桶并发下计时型偶发超时、单跑 8/0/0 非回归。
 - **not run 补测完成（2026-11-12）**：①Y10 零列实体 Light 夹具（BatchOperationConverterEmptyColumnsTest 1/0/0，convert 收敛 null）；②Y6 项目级方言透传验证（LambdaUpdateConverterDialectProjectTest 1/0/0——项目级 SQL Server + 全局 MySQL，保留字列方括号引用；双项目同开真机形态仍 not run）；③本地基准读数（SqlLogFileReaderBenchmarkTest/TopLevelKeywordBenchmarkTest）：券 D 19MB/8708 条 readFromFile=**701ms**（修复前真机 15~16.6s）、券 Q 50KB SQL 顶格关键字规则三轮均值=**0ms**（修复前单规则秒级）、券 T 12000 条 dedupeExisting=**14ms**（修复前 10⁷~10⁸ 次比较）；④全量分片收口：testShards 5 片 **474 类 4194 例 0 失败 0 错误 6 跳过**（testFast 417 类 4850 例 0/0/8）——L13 设置面板 UI 面收口达成；demo 相对路径以 junction（.worktrees/ 下链接兄弟克隆）解决，且 demo 克隆按用户指示自 Gitee 快进 32 提交至 3bb4489（钉定值 fcb1faf 可达性核对过）；⑤追加反向探针：券 A（9241e0430 整提交反打手工口径，2 例 1 红）与券 E（a7ae24f94 手术式补丁，3 例 1 红，补丁入库 reverse-probes/ 并登记 README）均反证成立，加此前 Y13/I 共 4 笔探针。
+- **独立审计轮（子代理第二双眼，2026-11-12）**：账实核对 45/45 全覆盖 ✓（38 笔哈希逐一真实、拒判/收窄均有提交级证据、三账主体一致）；揪出 4 项收口——①券 M 的 JpaEntityResolver 残留首版死循环助手副本（补丁脚本路径子串匹配缺陷所致，已删、单源=psi 包 import）；②CHANGELOG 券 Y7 条目未反映回退（已补拒判标注）；③券 O 方言盲反斜杠在标准 SQL 方言的残余 fail-open 方向（known-limitation 已登记 KDoc，方言感知掩码另立项）；④券 C 桥侧 refreshConsoleContexts 不持 ctx 锁与 EP 侧不对称（已补 synchronized(ctx)）。P2/P3 小节标题「14 券」算术错已订正。
 - **遗留环境红（与代码无关，如实登记）**：testExternal 的 AcpSignatureCrossVersionTest 1 例——断言本机已装 IDE 2025.3 的 ml-llm 插件携带 ACP 模块，本机该插件目录无此类（MISS 读数为「本品未携带」）——该测试读取本机 IDE 安装目录，与本分支 38 笔提交零交集。
 - **环境备注**：工作树跑测试须 `-PmpDemoProjectDir=` 指向主仓兄弟 demo 克隆（相对路径在 .worktrees 下不成立，5 个 Demo* 用例曾因此假红）；本机代理未开，用户级 gradle.properties 代理行临时注释（备份在侧）。

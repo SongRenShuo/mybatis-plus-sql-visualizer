@@ -625,7 +625,9 @@ open class SqlLogConsoleBridge(
         val cfg = parserConfig()
         // T-Perf-22：values 遍历持监视器（快照后应用，避免与 Filter 回调并发修改）
         val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
-        for (ctx in snapshot) ctx.applyConfig(cfg)
+        // T-HiddenBugPerfScan 券 C（审计补口）：桥侧刷新与 EP 侧同持 ctx 锁——applyConfig
+        // 写解析器字段与 Filter 回调读同批字段，同 ctx 挂双通道时口径须对称
+        for (ctx in snapshot) synchronized(ctx) { ctx.applyConfig(cfg) }
         timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
     }
 
