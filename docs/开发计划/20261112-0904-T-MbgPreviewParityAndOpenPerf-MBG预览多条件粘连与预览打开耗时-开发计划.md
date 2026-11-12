@@ -176,4 +176,33 @@ M2 未命中（无 `collectionElements`）时退回现有启发式。
 
 ## 七、实施记录
 
-（待填）
+| 项 | 提交 | 落点 | 反向验证 |
+| --- | --- | --- | --- |
+| P1 | `9972780e6` | `TrimSqlNode.endsOperand` 纳入 `}`——trim 缓冲是渲染前文本，判据里的 `?` 永不出现 | 摘掉 → 多 Criterion 用例恰 1 红 |
+| P3 | `9972780e6` | `MbgExamplePreviewTest` 新增「多 Criterion 相邻迭代不粘成 `?and`」（对齐用户 4 个 Criterion） | — |
+| (d) | `9972780e6` | `XmlPreviewModel.defaultState` 的 choose 组默认分支按 M2 反推 kind 的**多数票**取；M2 未命中退回启发式 | 摘掉 → `M2命中_choose组默认分支按真实kind取` 恰 1 红 |
+| P2 | `e886812e5` | `needsSeparator`＝「粘连成词才补」+「运算符 + `(` 补」；边界用例钉 trim 体内 `IN (?,?)` 与 `count(*)` | 摘掉 operator 档 → 用户态用例恰 1 红 |
+| P5 | `e3b766356` | `XmlPreviewService` 四段耗时埋点（解析+上下文 / profile / M2 / 建模，总耗时 <200ms 不打） | 观测项，无行为变更 |
+| P6 | `e6fbdeb88` | 新 `IbatisTypeAliasResolver`（扫模块内容根的 `sqlMapConfig` 读 `<typeAlias>`，会话级缓存）+ `findClass` 别名优先于短名索引 | 摘掉别名分支 → `testTypeAliasResolvesAmbiguousShortName` 恰 1 红 |
+
+**实施中的两次自查纠错**：
+
+1. P2 的边界用例第一版把 fixture 放进 select 体内——根上下文的 `StringJoiner(" ")` 本来就按段补空格，
+   所以 `IN (?,?)` 直接红。`6212f24e0` 的紧凑约束只在 **trim 体内**成立，夹具层级放错（同
+   `pitfall-reverse-probe-fixture-layer-mismatch`）；改到 `<where>` 体内后绿。
+2. 并行会话抢共享 `plugins-test` 目录致 `prepareTestSandbox` 失败（`panweidb-jdbc-2.0.0.jar`
+   被「用户映射区域」占用）——按登记表改用独立 `sandboxContainer`（`MPSV-ParityAndOpenPerf`），
+   跑完已还原 `build.gradle.kts`（不入库）。
+
+**读数**：
+
+- 本地已跑（分项、各自全绿）：P1/(d)＝`MbgExamplePreviewTest` + `TrimSqlNodeTest` + `ForeachSqlNodeTest` +
+  `XmlPreviewModelTest` + `SqlPreviewPanelForeachValuesTest` + `XmlSqlRendererTest`；P2＝同上前四个 +
+  `SqlPreviewPanelForeachValuesTest`；P5＝`XmlPreviewServiceTest` + `XmlEwResolverTest` +
+  `MbgExamplePreviewTest`；P6＝`IbatisParamClassQuoteHeavyTest`(8) + `IbatisParamCandidatePickTest`(6)。
+- 反向四轮：P1 与 (d) 合并摘除时恰 2 红（各对应一条用例）、P2 摘 operator 档恰 1 红、P6 摘别名分支恰 1 红。
+- **全量定向与守卫：本地未跑完**——`clean` 把独立沙盒一起清掉，重铺 IDE 发行版时挂起（沙盒目录 45 秒零增长，
+  测试 JVM 无输出），按用户令**改交 CI**（push master 触发 push-test 五片）。这一条在 CI 结果出来前不算读数。
+
+**待用户复验**：`sqlmap/User.xml` 的 iBatis 裸参数在**别名场景**下的引号（别名表首次命中）；
+MBG 多条件产物不再出现 `?and`；P5 埋点需真机再点一次预览才能读出 `[open-perf]` 分段耗时。
