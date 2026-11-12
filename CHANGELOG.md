@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Added
+- **预览面板给出「类型依据」与「预览目标」切换（T-PreviewStmtTypeScope，1b3af3ec5）**：语句类型（UPDATE/DELETE/COUNT/EXISTS）是怎么判出来的直接写在 meta 行——「类型依据: `remove()` 消费（第 235 行）」；同一 wrapper 上有多种消费写法时（真实工程常见：同一个变量先 `update(entity, w)`、重新赋值后再 `delete(w)`），工具栏出现「语句: UPDATE」切换入口，列出全部档位（带方法名与行号）按需切换，悬停也列出全部候选。查询链被判成 UPDATE 这类困惑不必再翻源码猜，也不必因为一个变量被复用就只看到一种语句
+
+### Fixed
+- **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
+- **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
+
 ## [2026.11.12] - 2026-11-12
 
 > 范围＝`v2026.11.11` 正式版发行包之后的全部用户可见增量，含内测 `2026.11.12-beta.1` ~ `beta.4` 四轮，以及同日撤回的旧 `2026.11.12` 正式版所覆盖的内容。本节按能力面合并叙述并取代四轮内测段与 `[Unreleased]`；逐条记录（根因、读数、反向验证）见 `docs/发行说明/`：`20261111-1102` beta.1、`20261111-1445` beta.2、`20261112-1512` beta.3、`20261112-1614` beta.4。

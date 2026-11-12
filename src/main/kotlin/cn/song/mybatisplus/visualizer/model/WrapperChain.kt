@@ -24,6 +24,10 @@ package cn.song.mybatisplus.visualizer.model
      *                        `Page()` 默认 true 反编译实证；`new Page<>(c, s, false)` → false 时
      *                        PaginationInnerInterceptor 不执行 COUNT → 预览不产出 COUNT 包裹；
      *                        标志不可静态判定时保守取 true）
+     * @param decidingConsumption T-PreviewStmtTypeScope：本次判型命中的那次消费调用——上面四个标志由它**单点**决定；
+     *                        null = 该链上没有消费，按默认 SELECT 渲染。面板据此显示「类型 ← 第 N 行的 xxx() 消费」。
+     * @param allConsumptions T-PreviewStmtTypeScope：该 wrapper 上识别到的**全部**消费调用（D-2 作用域收窄前的候选集）。
+     *                        长度 > 1 意味「同一个 wrapper 有多种消费写法」，面板在悬停里列出，用户不必猜。
      */
 data class WrapperChain(
     val wrapperType: WrapperType,
@@ -36,7 +40,51 @@ data class WrapperChain(
     val updateEntityConsumed: Boolean = false,
     val pageLimit: LimitClause? = null,
     val pageSearchCount: Boolean = true,
+    val decidingConsumption: WrapperConsumption? = null,
+    val allConsumptions: List<WrapperConsumption> = emptyList(),
 )
+
+/**
+ * T-PreviewStmtTypeScope：一次被识别到的「消费调用」——wrapper 作为实参传给某个方法，方法名落在消费集合内
+ * （见 [ConsumptionKind]），语句类型据此从默认 SELECT 改判。
+ *
+ * 存在的意义是把「为什么是 UPDATE/DELETE」从隐式判型变成可展示的事实：用户点图标时看的是某一条链，
+ * 而判型依据可能来自同一个 wrapper 变量在**同方法另一条语句**上的消费。面板把「方法名 + 行号」摆出来，
+ * 用户一眼就能对上（T-PreviewStmtTypeScope M1）。
+ *
+ * @param kind            判型档位（DELETE / COUNT / EXISTS / UPDATE_ENTITY / PAGE）
+ * @param methodName      消费方法名（`service.remove(w)` 的 `remove`、`mapper.update(entity, w)` 的 `update` …）
+ * @param referenceOffset wrapper 作为实参的那处引用在文件中的偏移（排序、「锚点之后第一个」判定用）
+ * @param statementRange  该消费调用所在**语句**的偏移区间；[IntRange.EMPTY] = 不可得（拿不到语句祖先）
+ * @param line            1-based 行号；<= 0 = 不可得（文档不可用）
+ * @param fileName        消费调用所在文件名（wrapper 为字段时可跨文件）
+ */
+data class WrapperConsumption(
+    val kind: ConsumptionKind,
+    val methodName: String,
+    val referenceOffset: Int,
+    val statementRange: IntRange = IntRange.EMPTY,
+    val line: Int = 0,
+    val fileName: String = "",
+)
+
+/** T-PreviewStmtTypeScope：消费档位——决定预览语句类型的那一档。 */
+enum class ConsumptionKind {
+    /** `remove` / `delete` / `deleteJoin` → `DELETE FROM`。 */
+    DELETE,
+
+    /** `count` / `selectCount` / `selectJoinCount` → `SELECT COUNT(*)`。 */
+    COUNT,
+
+    /** `exists`（链终结点 / 单参消费）→ `SELECT EXISTS (…)`。 */
+    EXISTS,
+
+    /** `update` / `updateJoin` / `updateJoinAndNull` / `saveOrUpdate` 双参 → 实体列展开的 `UPDATE`。 */
+    UPDATE_ENTITY,
+
+    /** 分页消费（`page` / `selectPage` 等）→ LIMIT 子句；不改语句类型，仅在证据清单里留痕。 */
+    PAGE,
+}
 
 /**
  * Wrapper 上的一次方法调用。

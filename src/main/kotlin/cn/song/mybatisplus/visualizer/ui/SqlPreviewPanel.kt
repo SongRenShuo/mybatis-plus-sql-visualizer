@@ -680,6 +680,25 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var ibatisRenderWarningIsNote = false
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     internal var errorCopyButton: JButton? = null
+
+    /**
+     * T-PreviewStmtTypeScope D-3：「预览目标」切换按钮——同一 wrapper 上出现多种消费写法时可见
+     * （`update(entity, w)` 与 `delete(w)` 复用了同一个变量），点击列出全部档位按需切换。
+     * 单档场景恒隐藏，常规预览不占位。
+     */
+    internal var stmtTypeButton: JButton? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前结果的可切换档位（与 [stmtTypeButton] 同源，弹层用）。 */
+    internal var stmtTypeOptions: List<cn.song.mybatisplus.visualizer.model.ConsumptionKind> = emptyList()
+
+    /** T-PreviewStmtTypeScope D-3：按档位重算当前预览的闭包（结果自带，见 PreviewResult.statementTypeSwitch）。 */
+    internal var stmtTypeSwitcher: ((cn.song.mybatisplus.visualizer.model.ConsumptionKind) -> PreviewResult?)? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前生效的档位（按钮文案与弹层勾选态用；null = 默认 SELECT）。 */
+    internal var stmtTypeCurrent: cn.song.mybatisplus.visualizer.model.ConsumptionKind? = null
+
+    /** T-PreviewStmtTypeScope D-3：该 wrapper 上的全部消费证据（弹层条目里带方法名与行号）。 */
+    internal var stmtTypeEvidences: List<cn.song.mybatisplus.visualizer.model.WrapperConsumption> = emptyList()
     internal var currentWarning: String? = null
     // UI-001：当前告警是否信息级（横幅/元信息行前缀分档用；false = 失败档 ⚠）
     internal var currentWarningIsNote = false
