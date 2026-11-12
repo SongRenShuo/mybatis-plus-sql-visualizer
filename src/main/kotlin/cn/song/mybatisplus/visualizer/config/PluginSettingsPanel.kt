@@ -485,6 +485,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     internal val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
+    /** T-NotifyTune 券 A：SQL 方言死路主动提示开关（默认开）：关闭后方言提示全程静默。 */
+    internal val dialectTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.dialectTip"))
+
+    /** T-NotifyTune 券 B：首次捕获引导开关（默认开）：关闭后首次捕获指路全程静默。 */
+    internal val firstCaptureGuideCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.firstCaptureGuide"))
+
     /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关=不设置该属性、继承 IDE 全局）。 */
     internal val editorShowWhitespacesCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"))
 
@@ -1042,6 +1048,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
         onboardingAnchorTipCheck.isSelected = checked
     }
 
+    /** T-NotifyTune 券 A：方言提示开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setDialectTipCheck(checked: Boolean) {
+        dialectTipCheck.isSelected = checked
+    }
+
+    /** T-NotifyTune 券 B：首次捕获引导开关设置入口（测试用）——与用户勾选同一路径。 */
+    internal fun setFirstCaptureGuideCheck(checked: Boolean) {
+        firstCaptureGuideCheck.isSelected = checked
+    }
+
     /** T-PreviewWhitespaceToggle O-44a：空白符开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     internal fun setEditorShowWhitespacesCheck(checked: Boolean) {
         editorShowWhitespacesCheck.isSelected = checked
@@ -1307,6 +1323,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
+            // T-NotifyTune：两个主动通知开关变更即为 modified
+            || dialectTipCheck.isSelected != s.dialectTipEnabled
+            || firstCaptureGuideCheck.isSelected != s.firstCaptureGuideEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
             || editorShowWhitespacesCheck.isSelected != s.editorShowWhitespaces
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
@@ -1457,6 +1476,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.onboardingAnchorTipEnabled = onboardingAnchorTipCheck.isSelected
+            // T-NotifyTune：两个主动通知开关写回（随 UI 分区）
+            s.dialectTipEnabled = dialectTipCheck.isSelected
+            s.firstCaptureGuideEnabled = firstCaptureGuideCheck.isSelected
             // T-PreviewWhitespaceToggle O-44a：空白符开关写回（随 UI 分区）
             s.editorShowWhitespaces = editorShowWhitespacesCheck.isSelected
             s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
@@ -1579,6 +1601,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled
+            // T-NotifyTune：两个主动通知开关回填
+            dialectTipCheck.isSelected = s.dialectTipEnabled
+            firstCaptureGuideCheck.isSelected = s.firstCaptureGuideEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关回填
             editorShowWhitespacesCheck.isSelected = s.editorShowWhitespaces
             languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()

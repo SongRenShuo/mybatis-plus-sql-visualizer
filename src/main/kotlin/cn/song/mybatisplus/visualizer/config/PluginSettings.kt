@@ -726,6 +726,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var onboardingAnchorTipShown: Boolean = false,
 
+        // ---------- T-NotifyTune：主动通知触点调优（券 A 方言死路提示 / 券 B 首次捕获引导降频） ----------
+
+        /**
+         * 券 A：SQL 方言死路主动提示开关（默认开）——智能推断结果为 `UNAVAILABLE` 且无方言名时，
+         * 打开 SQL 承载文件经预览组弹一次「方言未能确定」指路；关闭后全程静默。
+         */
+        var dialectTipEnabled: Boolean = true,
+
+        /** 券 A：已对本项目永久抑制的方言提示集合（按项目路径哈希，见 DialectGapTip.projectKey）。 */
+        var dialectTipSuppressedProjects: MutableList<String> = mutableListOf(),
+
+        /** 券 A：方言提示已展示（每安装一次性持久化记忆，跨项目/跨会话不再出现）。 */
+        var dialectTipShown: Boolean = false,
+
+        /**
+         * 券 B：首次捕获引导开关（默认开）——关闭后首次捕获指路全程静默。
+         * 红线准入五问第 3 问要求「插件主动触点是带开关或一次性」，本开关与
+         * [firstCaptureGuideShown] 共同补齐该门禁。
+         */
+        var firstCaptureGuideEnabled: Boolean = true,
+
+        /**
+         * 券 B：首次捕获引导已展示（每安装一次性持久化记忆）。
+         * 取代此前「会话级 object 记忆」——那样每重启 IDE / 每拉起一次沙盒就再弹一次，属于高频。
+         */
+        var firstCaptureGuideShown: Boolean = false,
+
         /**
          * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
          * 「启用结构化并重试」推荐通知**只提示一次**。
