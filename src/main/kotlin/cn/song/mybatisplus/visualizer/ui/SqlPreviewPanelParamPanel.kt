@@ -304,8 +304,21 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         }
         if (ordinarySources.isNotEmpty() || mbgRows.isNotEmpty()) {
             if (hasControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
+            if (mbgRows.isNotEmpty()) {
+                // D11b：这一区的行名取自条件文本，但「怎么填」不看提示猜不出来——给一行常驻说明。
+                paramPanel.add(
+                    JBLabel(MpSqlVisualizerBundle.message("panel.param.mbg.hint")).apply {
+                        foreground = PARAM_WARN_FOREGROUND
+                        border = JBUI.Borders.empty(0, 10, 2, 8)
+                    },
+                )
+            }
             ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
-            mbgRows.forEach { (source, label) -> paramPanel.add(buildParamRow(source, labelWidth, label)) }
+            mbgRows.forEach { (source, label) ->
+                paramPanel.add(
+                    buildParamRow(source, labelWidth, label, MpSqlVisualizerBundle.message("panel.param.mbg.tooltip")),
+                )
+            }
         }
         paramPanel.revalidate()
         paramPanel.repaint()
@@ -1253,7 +1266,9 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(
     })
     val valuesField = JBTextField(8).apply {
         // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
-        text = xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
+        // D12：注入集合的值框**不回显任何历史值**——它已只读，回显只会让人以为「填了但改不动」。
+        text = if (injectedCount == null) xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty() else ""
+        if (injectedCount != null) emptyText.text = "已还原 $injectedCount 项"
         // D9：元素对象由调用点还原的集合不可改写（填值会冲掉还原出来的对象）
         isEnabled = injectedCount == null
         toolTipText = if (injectedCount != null) {
@@ -1339,6 +1354,7 @@ internal fun SqlPreviewPanel.buildParamRow(
     source: String,
     labelWidth: Int,
     labelOverride: String? = null,
+    tooltipOverride: String? = null,
 ): JBPanel<JBPanel<*>> {
     val kind = paramKindOf(source)
     // T-PT-02：行尾淡色警示标（校验是提示不是闸门——值照原样渲染，渲染链 renderValue 行为不动）
@@ -1353,7 +1369,7 @@ internal fun SqlPreviewPanel.buildParamRow(
         emptyText.text = paramEmptyText(source, kind)
         // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
         if (text.isNotEmpty()) caretPosition = 0
-        toolTipText = paramTooltip(source, text)
+        toolTipText = tooltipOverride ?: paramTooltip(source, text)
         updateParamWarning(warnLabel, kind, text)
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply, warnLabel, kind)
@@ -1379,27 +1395,43 @@ internal fun SqlPreviewPanel.buildParamRow(
  * 而参数区按既有口径把 `__frch_` 前缀全部过滤掉了（那是给 foreach 值框统一回填的）——结果左栏
  * 一个可填行都没有，用户只能去 foreach 值框填，而那会冲掉还原出来的 Criterion 对象（D9 已改只读）。
  *
- * 这里按占位符的真实键生成行：标签取该 Criterion 的条件文本（`status =` / `staff_login LIKE` /
- * `create_time between`），区间条件再区分「值 / 结束值」；填进去的值照常走 paramValues → bindOverrides。
+ * 标签口径（**D11b 修正**）：`__frch_criterion_N` 的 `N` 是渲染期唯一编号，**不是** criterion 下标
+ * （真机因此显示成「条件 2 值」——查不到第 2 条条件，只能退化成编号）。改为按**首次出现顺序**分组，
+ * 与注入的 criterion 顺序对齐；区间条件两个占位再区分「起始值 / 结束值」。
  */
 internal fun mbgParamRows(result: PreviewResult, xml: XmlPreviewModel): List<Pair<String, String>> {
     if (xml.collectionElements.isEmpty()) return emptyList()
-    val criteria = xml.collectionElements["criteria.criteria"].orEmpty()
-    val indexRegex = Regex("""__frch_criterion_(\d+)""")
-    return result.unresolvedParams
-        .filter { it.startsWith("__frch_criterion") }
-        .distinct()
-        .map { source ->
-            val index = indexRegex.find(source)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-            val condition = criteria.getOrNull(index)?.properties?.get("condition") as? String
-            val base = condition?.takeIf { it.isNotBlank() } ?: "条件 ${index + 1}"
+    val conditions = xml.collectionElements["criteria.criteria"].orEmpty()
+        .map { it.properties["condition"] as? String }
+    return mbgParamRowsOf(result.unresolvedParams, conditions)
+}
+
+/** 纯逻辑（单测入口）：占位符来源 + 各 criterion 的条件文本 → (source, 用户可读标签)。 */
+internal fun mbgParamRowsOf(
+    sources: List<String>,
+    conditions: List<String?>,
+): List<Pair<String, String>> {
+    val prefixRegex = Regex("""^__frch_criterion_(\d+)""")
+    val groups = LinkedHashMap<String, MutableList<String>>()
+    sources.forEach { source ->
+        val number = prefixRegex.find(source)?.groupValues?.getOrNull(1) ?: return@forEach
+        groups.getOrPut(number) { mutableListOf() }.add(source)
+    }
+    val rows = mutableListOf<Pair<String, String>>()
+    groups.values.forEachIndexed { index, groupSources ->
+        val condition = conditions.getOrNull(index)?.takeIf { it.isNotBlank() }?.trim()
+        val base = condition ?: "条件 ${index + 1}"
+        val between = groupSources.size >= 2
+        groupSources.distinct().forEachIndexed { k, source ->
             val suffix = when {
-                source.endsWith(".secondValue") -> " 结束值"
-                source.endsWith(".value") -> " 值"
-                else -> ""
+                between && k == 0 -> " 起始值"
+                between && k == 1 -> " 结束值"
+                else -> " 值"
             }
-            source to (base + suffix)
+            rows += source to (base + suffix)
         }
+    }
+    return rows
 }
 
 // ------------------------------------------------------------------
@@ -2175,8 +2207,11 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 }
             }
             source.startsWith(SNAPSHOT_FEV) -> {
-                if (recovered == null) {
-                    val expr = source.removePrefix(SNAPSHOT_FEV)
+                val expr = source.removePrefix(SNAPSHOT_FEV)
+                // D12：注入集合的值框已只读且不回显——历史里的旧值不再恢复（否则会显示成
+                // 「框里有值但改不动」，反而更像 bug）。
+                val injected = current?.xmlModel?.collectionElements?.containsKey(expr) == true
+                if (recovered == null && !injected) {
                     val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     if (values.isNotEmpty()) {
                         xmlForEachValues[expr] = values
@@ -2250,8 +2285,13 @@ internal fun SqlPreviewPanel.buildHistorySnapshot(): Map<String, String> {
         }
     }
     xmlForEachNulls.forEach { snapshot["$SNAPSHOT_FNULL$it"] = "1" }
+    // D12：注入集合的值框只读且不回显，其权威值不该进出历史（存了也没人恢复，只会让快照里留下
+    // 与界面不一致的旧值）。
+    val injectedCollections = current?.xmlModel?.collectionElements?.keys.orEmpty()
     xmlForEachValues.forEach { (expr, values) ->
-        if (values.isNotEmpty()) snapshot["$SNAPSHOT_FEV$expr"] = values.joinToString(",")
+        if (values.isNotEmpty() && expr !in injectedCollections) {
+            snapshot["$SNAPSHOT_FEV$expr"] = values.joinToString(",")
+        }
     }
     return snapshot
 }

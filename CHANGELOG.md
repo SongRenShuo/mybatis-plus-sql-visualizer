@@ -23,8 +23,10 @@
 
 ### Fixed
 - **MBG 预览左栏没有可填的参数行（T-PreviewOpenPerfM2 D11，c33f9542c）**：参数区把 `__frch_criterion_N.*` 这类键全滤掉了，左栏一行可填都没有；现在按条件文本生成可填行（`staff_login LIKE 值`、`create_time between 值/结束值`），不再只能去 foreach 值框里填
+- **参数行的名字看不出该填什么（T-PreviewOpenPerfM2 D11b）**：`__frch_criterion_N` 的 `N` 是渲染期唯一编号、不是条件下标，按下标取条件会落空，行名退化成「条件 2 值」这种读不懂的形式。现在按出现顺序与条件对齐，行名即条件本身（`cust_id = 值` / 区间分「起始值 / 结束值」），参数区顶部另加一行常驻说明「填值只替换对应的 `?`」
 - **点「清除」后产物里还留着旧值（T-PreviewOpenPerfM2 D10，c33f9542c）**：清除只清了 foreach 权威值，没回收已播种的展开项键（回收路径以 map 非空为前提），产物残留 `BETWEEN '11' AND ?`；现在清除时显式回收，产物与左栏填值一致
-- **foreach 值框会冲掉还原出来的条件对象（T-PreviewOpenPerfM2 D9，89c74c663）**：条件对象已还原时值框改为只读并给出说明，避免半填形态
+- **foreach 值框会冲掉还原出来的条件对象（T-PreviewOpenPerfM2 D9，89c74c663）**：条件对象已还原时值框改为只读并给出说明，避免半填形态；值框也不再回显历史里的旧值（显示「已还原 N 项」），这类集合的值不再进历史与召回
+- **找不到调用点的删除/更新语句，骨架退化成没有占位符（T-PreviewOpenPerfM2 D13）**：`Example_Where_Clause` 的四个 kind 分支在无元素注入时没被收敛，渲染按短路顺序走 `noValue`，产物成了 `WHERE ( {{criterion.condition}} )`——连 `?` 都没有。现在 MBG 无元素注入统一收敛到 `singleValue`，骨架与 select 一致（`WHERE ( {{criterion.condition}} ? )`）
 - **每次打开预览都重扫全部数据源做 schema 预热（T-SchemaPrewarmDedupe，20cc719dd）**：预热链带 60 秒去重窗口，同一张表窗口内只尝试一次，窗口外放行以保留「数据源晚连接后自愈」
 
 ## [2026.11.12-beta.3] - 2026-11-12

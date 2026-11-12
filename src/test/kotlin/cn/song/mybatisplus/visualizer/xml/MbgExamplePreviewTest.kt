@@ -421,6 +421,21 @@ class MbgExamplePreviewTest {
     }
 
     /**
+     * D13（真机 2026-11-12 16:26，`deleteByExample` 无调用点）：MBG 无元素注入时，四个 kind 分支
+     * 必须收敛到 `singleValue`——否则渲染按短路顺序走 `noValue`，产物成 `WHERE ( {{condition}} )`，
+     * 连 `?` 都没有，和 select 的默认形态不一致。
+     */
+    @Test
+    fun `M2未命中_MBG默认收敛到singleValue`() {
+        val m = model(XmlPreviewProfile.MBG_EXAMPLE)
+        val enabled = m.defaultState().enabledIds
+        assertTrue("默认应勾 singleValue：$enabled", enabled.any { it.endsWith("singleValue") })
+        assertFalse("不得停在 noValue：$enabled", enabled.any { it.endsWith("noValue") })
+        val sql = compact(m.renderSql().sql)
+        assertTrue("骨架形态应带一个占位：$sql", sql.contains("{{") && sql.contains("?"))
+    }
+
+    /**
      * D5（真机 2026-11-12 复验）：M2 元素带**逐条真实 kind** 时，choose 不能再按「组内只开一个」强制。
      *
      * 混 kind 的判据点：`tenant_id =`（singleValue）+ `create_time between`（betweenValue）同批注入时，

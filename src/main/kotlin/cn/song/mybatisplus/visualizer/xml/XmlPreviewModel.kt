@@ -217,11 +217,28 @@ class XmlPreviewModel private constructor(
             }
         }
         val count = profile?.forEachCount ?: DEFAULT_FOREACH_SIZE
+        // D13（真机 2026-11-12 16:26，`CustAddressMapper#deleteByExample`）：拿不到调用点时
+        // `Example_Where_Clause` 的四个 kind 分支可能一个都没被组内收敛掉（真机复选框四个全勾），
+        // 渲染按短路顺序永远走第一个 `noValue`——产物就成了 `WHERE ( {{criterion.condition}} )`，
+        // 连 `?` 都没有，和 select 的默认形态不一致，用户会以为预览坏了。
+        // MBG 无元素注入时统一收敛到 `singleValue`：形态 `WHERE ( {{criterion.condition}} ? )`。
+        if (profile == XmlPreviewProfile.MBG_EXAMPLE && collectionElements.isEmpty()) {
+            val kindIds = chooseGroups
+                .filter { group -> group.branchIds.isNotEmpty() && group.branchIds.all { isKindBranchId(it) } }
+                .flatMap { it.branchIds }
+            val keep = kindIds.firstOrNull { it.endsWith(KIND_FLAGS[1]) }
+            if (keep != null) {
+                kindIds.forEach { id -> if (id == keep) enabled.add(id) else enabled.remove(id) }
+            }
+        }
         return XmlPreviewState(
             enabledIds = enabled,
             forEachCounts = forEachViews.associate { it.collectionExpr to count },
         )
     }
+
+    /** 分支 id 是否属于 MBG Criterion 的四个 kind 标志（`criterion.singleValue` 等）。 */
+    private fun isKindBranchId(id: String): Boolean = KIND_FLAGS.any { id == it || id.endsWith(".$it") }
 
     /**
      * T-MbgPreviewParityAndOpenPerf (d)：从 M2 反推的元素里读**真实 kind 的多数票**，映射回该组
