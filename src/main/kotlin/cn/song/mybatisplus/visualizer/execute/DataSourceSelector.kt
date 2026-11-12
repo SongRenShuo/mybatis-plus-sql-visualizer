@@ -1700,12 +1700,21 @@ object DataSourceSelector {
     internal fun registeredDataSourceCount(project: Project): Int =
         runCatching { DataSourceSettings.getAllDataSources(project).size }.getOrDefault(0)
 
-    /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
-    internal fun getRunnerName(runner: Any): String = runCatching {
+    /**
+     * 反射获取 Runner 显示名称的**可空版**（T-DsListAddSource）：解析不出返回 null。
+     *
+     * 专供列表装配处使用——「unknown 数据源」死项的 B 侧同源根因就是本函数的 `"Unknown"`
+     * 回落被直接渲染进条目。`getRunnerName` 的回落**保持不动**：`chosenRunnerName` 比对、
+     * `blocksPreferredRunnerMiss` 判据、last-used 记忆链都依赖非空串。
+     */
+    internal fun optionalRunnerName(runner: Any): String? = runCatching {
         val method = runner.javaClass.getMethod("getDisplayName")
         method.isAccessible = true
         method.invoke(runner) as? String
-    }.getOrNull() ?: "Unknown"
+    }.getOrNull()?.takeUnless { it.isBlank() }
+
+    /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
+    internal fun getRunnerName(runner: Any): String = optionalRunnerName(runner) ?: "Unknown"
 
     /** 反射获取 Runner 图标（数据源 DB 类型图标）。 */
     private fun getRunnerIcon(runner: Any): Icon? = runCatching {
@@ -1733,7 +1742,7 @@ object DataSourceSelector {
     internal fun createRunnerPopupStep(
         project: Project, runners: List<Any>, callback: (Any?) -> Unit,
     ): com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> {
-        val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
+        val items = buildRunnerItems(runners, NewDataSourceEntry.isAvailable(project))
         // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
         // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
         val multiProject = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.size > 1
@@ -1759,6 +1768,15 @@ object DataSourceSelector {
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
                     .info("[M36] popup onChosen: ${selectedValue?.name}")
+                // T-DsListAddSource：末尾「添加数据源…」——不参与选源，准备链按用户取消终结
+                //（与 Esc 同语义：结算单飞门、不提交 SQL），随即弹平台原生新建数据源流。
+                if (selectedValue?.addNew == true) {
+                    choiceAccepted = true
+                    return doFinalStep {
+                        NewDataSourceEntry.openCreatePopup(project, null)
+                        deliver(null)
+                    }
+                }
                 // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
                 choiceAccepted = true
                 return doFinalStep { deliver(selectedValue?.runner) }
@@ -1772,8 +1790,45 @@ object DataSourceSelector {
         return step
     }
 
-    /** 弹窗列表项（Runner 包装）。 */
-    internal data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
+    /**
+     * T-DsListAddSource（20261111）：Runner 列表装配——**解析不出名字的条目不渲染**，
+     * 末尾追加「添加数据源…」（平台可用时，D-3/D-2）。
+     *
+     * 抽成独立函数供测试直测（`createRunnerPopupStep` 的弹层依赖 JBPopupFactory，
+     * 纯逻辑单测够不着）；`withAddEntry` 显式传参，测试不必伪装平台在位。
+     *
+     * W1 取证（计划 P-1）：有未命名条目被丢弃时记一次性日志（类名列表），B 侧 unknown 的
+     * 确切成因以真机读数为准，日志即证据入口。
+     */
+    private val unnamedRunnerProbe = java.util.concurrent.atomic.AtomicBoolean()
+
+    internal fun buildRunnerItems(runners: List<Any>, withAddEntry: Boolean): List<RunnerItem> {
+        val cleaned = runners.mapNotNull { runner ->
+            val name = optionalRunnerName(runner) ?: return@mapNotNull null
+            RunnerItem(runner, name, getRunnerIcon(runner))
+        }
+        if (cleaned.size < runners.size && unnamedRunnerProbe.compareAndSet(false, true)) {
+            val dropped = runners.filter { optionalRunnerName(it) == null }
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info(
+                    "[M36][DsList] dropped ${dropped.size} unnamed runner(s): " +
+                        dropped.joinToString(", ") { it.javaClass.name },
+                )
+        }
+        val items = cleaned.toMutableList()
+        if (withAddEntry) {
+            items += RunnerItem(null, MpSqlVisualizerBundle.message("execute.datasource.add"), null, addNew = true)
+        }
+        return items
+    }
+
+    /** 弹窗列表项（Runner 包装；`addNew`=末尾「添加数据源…」动作项，`runner` 为 null）。 */
+    internal data class RunnerItem(
+        val runner: Any?,
+        val name: String,
+        val icon: Icon?,
+        val addNew: Boolean = false,
+    )
 
     /**
      * 创建临时 .sql 文件（含 SQL），返回 (VirtualFile, PsiFile)。
