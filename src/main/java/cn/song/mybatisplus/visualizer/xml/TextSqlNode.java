@@ -57,6 +57,12 @@ public final class TextSqlNode implements SqlNode {
                     Set<String> roots = OgnlEvaluator.rootVariables(content);
                     if (!roots.isEmpty()) {
                         context.getErrors().add("模拟参数下表达式 ${" + content + "} 求值为空（MP 占位 ${ew...} 等需真实参数值）");
+                        // T-MbgExamplePreview R1：预览占位模式——把缺段显式写进产物。
+                        // MBG 的 `and ${criterion.condition}` 在模拟参数下会退化成裸 `and`，
+                        // 产物看着像插件识别错；占位后是 `( {{criterion.condition}} )`，缺什么一目了然。
+                        if (context.getEmptyDollarPlaceholder()) {
+                            return "{{" + content + "}}";
+                        }
                     }
                 }
                 return ok.value() != null ? ok.value().toString() : "";

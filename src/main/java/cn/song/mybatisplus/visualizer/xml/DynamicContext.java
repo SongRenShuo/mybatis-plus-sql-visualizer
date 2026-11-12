@@ -68,6 +68,15 @@ public class DynamicContext {
     private final Map<String, Boolean> conditionOutcomes = new LinkedHashMap<>();
 
     /**
+     * 空值占位模式（T-MbgExamplePreview R1）：{@code ${}} 求值为 null 且表达式含变量引用时，输出
+     * {@code {{表达式}}} 而不是空串——缺段在产物里可见，不会被误读成「插件把 SQL 识别错了」。
+     *
+     * <p>默认 false：真实 SQL 产物与全仓既有断言零影响；只有预览渲染链
+     * （{@code XmlPreviewModel.renderSql}）开启。</p>
+     */
+    private final boolean emptyDollarPlaceholder;
+
+    /**
      * ${} 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 ${} token 经
      * {@link #countDollarSubstitution()} 自增——引擎忠实口径（MyBatis 对字符串字面量内的 ${}
      * 同样直替，计数不排除）；转义 \${ 不经求值不计。渲染结束随
@@ -88,9 +97,20 @@ public class DynamicContext {
             Set<String> protectedBindNames,
             Map<String, Object> staticFieldValues
     ) {
+        this(initialBindings, conditionOverrides, protectedBindNames, staticFieldValues, false);
+    }
+
+    public DynamicContext(
+            Map<String, Object> initialBindings,
+            Map<String, Boolean> conditionOverrides,
+            Set<String> protectedBindNames,
+            Map<String, Object> staticFieldValues,
+            boolean emptyDollarPlaceholder
+    ) {
         this.conditionOverrides = conditionOverrides;
         this.protectedBindNames = protectedBindNames;
         this.staticFieldValues = staticFieldValues;
+        this.emptyDollarPlaceholder = emptyDollarPlaceholder;
         this.bindings = new HashMap<>(initialBindings);
     }
 
@@ -175,6 +195,14 @@ public class DynamicContext {
     /** 静态字段值（T-M25.2）：@class@field → 值。 */
     public Map<String, Object> getStaticFieldValues() {
         return staticFieldValues;
+    }
+
+    /**
+     * 空值占位模式（T-MbgExamplePreview R1，master 侧 {@code open val}——可覆写转发）：
+     * true 时 {@code ${}} 求值为 null 且含变量引用输出 {@code {{表达式}}} 占位。
+     */
+    public boolean getEmptyDollarPlaceholder() {
+        return emptyDollarPlaceholder;
     }
 
     /**
