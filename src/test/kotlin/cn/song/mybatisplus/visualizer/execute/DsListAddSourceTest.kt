@@ -128,7 +128,17 @@ class DsListAddSourceTest : BasePlatformTestCase() {
     }
 
     private class NamelessRunner {
-        // 无 getDisplayName：反射解析失败，正是平台方言异常时的真实形态
+        // getDisplayName / getName 都没有：连名字都不暴露的对象才是要收掉的死项
+    }
+
+    /** 只暴露 getName 的实现形态（数据源对象与既有测试夹具都是这种；平台 20261112 三轮红的成因）。 */
+    private class NameOnlyRunner(private val name: String) {
+        fun getName(): String = name
+    }
+
+    /** getName 为空的形态：仍算无名。 */
+    private class BlankNameRunner {
+        fun getName(): String = "  "
     }
 
     private val addText: String get() = MpSqlVisualizerBundle.message("execute.datasource.add")
@@ -139,6 +149,28 @@ class DsListAddSourceTest : BasePlatformTestCase() {
             withAddEntry = false,
         )
         assertEquals("只有取名成功的 runner 进列表", listOf("mpj_demo@localhost"), items.map { it.name })
+    }
+
+    fun testB侧_只暴露getName的runner必须保留_不得判无名丢弃() {
+        // 回归（2026-11-12 CI 三轮红）：只认 getDisplayName 会把这类合法条目整条滤掉 →
+        // 弹层空 → selectedIndex=0 落空 → 既不 onChosen 也不 canceled → 调用方永无回调。
+        val items = DataSourceSelector.buildRunnerItems(
+            runners = listOf<Any>(NameOnlyRunner("mp_demo")),
+            withAddEntry = false,
+        )
+        assertEquals("getName 形态必须保留并按该名字渲染", listOf("mp_demo"), items.map { it.name })
+    }
+
+    fun testB侧_两段取名都为空才判无名() {
+        assertNull("getName 为空白也算无名", DataSourceSelector.optionalRunnerName(BlankNameRunner()))
+        assertNull("两个方法都没有才返回 null", DataSourceSelector.optionalRunnerName(NamelessRunner()))
+        assertEquals("getDisplayName 优先于 getName", "display", DataSourceSelector.optionalRunnerName(DisplayAndNameRunner()))
+    }
+
+    /** 两个方法都在：getDisplayName 优先。 */
+    private class DisplayAndNameRunner {
+        fun getDisplayName(): String = "display"
+        fun getName(): String = "name"
     }
 
     fun testB侧_末尾添加项在平台可用时追加且不携带runner() {

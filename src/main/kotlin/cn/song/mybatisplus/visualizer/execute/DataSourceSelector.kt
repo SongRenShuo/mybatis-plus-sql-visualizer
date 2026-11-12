@@ -1703,15 +1703,31 @@ object DataSourceSelector {
     /**
      * 反射获取 Runner 显示名称的**可空版**（T-DsListAddSource）：解析不出返回 null。
      *
-     * 专供列表装配处使用——「unknown 数据源」死项的 B 侧同源根因就是本函数的 `"Unknown"`
-     * 回落被直接渲染进条目。`getRunnerName` 的回落**保持不动**：`chosenRunnerName` 比对、
+     * 专供列表装配处使用——「unknown 数据源」死项的 B 侧同源根因就是 `"Unknown"` 回落被直接
+     * 渲染进条目。`getRunnerName` 的回落**保持不动**：`chosenRunnerName` 比对、
      * `blocksPreferredRunnerMiss` 判据、last-used 记忆链都依赖非空串。
+     *
+     * 取名按 **`getDisplayName` → `getName`** 两段（T-DsListAddSource 回归修复 2026-11-12）：
+     * 平台 `ConsoleRunner` 两者都有，但「数据源对象形态」的实现（`DbDataSource`/`LocalDataSource`、
+     * 以及测试夹具）常常只暴露 `getName`。只认 `getDisplayName` 会把这类**合法条目**判成无名
+     * 而整条丢弃——弹层随之变空、`selectedIndex=0` 落空、既不走 `onChosen` 也不走 `canceled`，
+     * 调用方永远收不到回调（`LogToSqlPanelExecuteTest#testPlatformPopupSelectionDisposeIsNotUserCancellation`
+     * 三轮红即此形态）。两段都取不到才算无名：只有那种连名字都不暴露的对象才是要收掉的死项。
      */
-    internal fun optionalRunnerName(runner: Any): String? = runCatching {
-        val method = runner.javaClass.getMethod("getDisplayName")
-        method.isAccessible = true
-        method.invoke(runner) as? String
-    }.getOrNull()?.takeUnless { it.isBlank() }
+    internal fun optionalRunnerName(runner: Any): String? {
+        for (methodName in RUNNER_NAME_METHODS) {
+            val name = runCatching {
+                val method = runner.javaClass.getMethod(methodName)
+                method.isAccessible = true
+                method.invoke(runner) as? String
+            }.getOrNull()
+            if (!name.isNullOrBlank()) return name
+        }
+        return null
+    }
+
+    /** 取名方法候选（顺序即优先级）；两段都失败才判无名。 */
+    private val RUNNER_NAME_METHODS = arrayOf("getDisplayName", "getName")
 
     /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
     internal fun getRunnerName(runner: Any): String = optionalRunnerName(runner) ?: "Unknown"
