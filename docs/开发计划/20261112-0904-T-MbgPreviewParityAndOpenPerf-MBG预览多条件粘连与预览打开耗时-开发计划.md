@@ -83,10 +83,21 @@ userState= … WHERE ( CUSTOMERNUMBER =(?) and UNIT_ID =(?) and CUST_ROLE_CODE =
 
 M2 从 `addCriterion("CUSTOMERNUMBER =", value, "custNumber")` 能知道每个 criterion 的真实分支
 （这里是 `singleValue`），但渲染仍完全听面板开关 ⇒ 用户开了 `listValue` 就渲染成
-`CUSTOMERNUMBER = (? )` 这种「`=` 配 `(`」的组合。三种处置待拍板：
-(a) M2 有真实 kind 时锁住该 criterion 的分支（面板开关灰置/或仅作提示）；
-(b) 冲突时给横幅提示，不锁；
-(c) 保持现状（面板是唯一真值源）。
+`CUSTOMERNUMBER = (? )` 这种「`=` 配 `(`」的组合。四种处置：
+
+- (a) M2 有真实 kind 时**锁住**该 criterion 的分支（面板开关灰置）；
+- (b) 冲突时给横幅提示，不锁；
+- (c) 保持现状（面板是唯一真值源）；
+- **(d) 只改默认值**：M2 命中时，`defaultState()` 里 choose 组的默认分支按**反推到的真实 kind**
+  取（而不是现在的「含 `#{}` 的分支里最先出现者」）——用户不动勾选时默认就渲染成真实语义
+  （4 个 `singleValue` ⇒ 走 `singleValue` 分支），手动改仍完全生效。
+
+**推荐 (d)**。理由：面板开关继续是唯一真值源（不引入「勾了不生效」的不可预期），不需要新增横幅
+文案与冲突判定，默认值即正确；用户这次的困惑（以为 `listValue` 是真实分支）在 (d) 下不会出现——
+他打开面板看到的就是 `singleValue` 被选中。(a) 会让面板交互变得难以解释，(b) 多一层提示但默认
+仍是错的，(c) 把「用错分支」的责任留给用户。实现要点：`defaultState()` 需要一个「真实 kind 汇总」
+（从 `collectionElements` 的 MockObject 读四个布尔 → 映射到 `criterion.noValue` 等 test id），
+M2 未命中（无 `collectionElements`）时退回现有启发式。
 
 ### R5（性能）打开预览 5.7 秒空档，且插件侧无埋点
 
@@ -119,6 +130,22 @@ M2 从 `addCriterion("CUSTOMERNUMBER =", value, "custNumber")` 能知道每个 c
 1619ms），**剩余五项优化已定位未实施**（预热重复写同一 exec 文件、DumbMode 直接抛、指标重复计数、
 预热预算 500ms vs 实测 2.8s、一次打开装配两次）——本次 5.7s 与之是否同源需一并核对。
 
+#### 关于「忘记识别 `typeAlias`」（用户 2026-11-12 提出）
+
+对 **iBatis 链**成立，对本次 MBG 的 5.67s **不成立**：
+
+- MBG 的 `parameterType` 是 FQN（`…itech.crm.cust.metadata.CtCustmanagerRelExample`），
+  `resolveExampleProfile` 走 `JavaPsiFacade.findClass(FQN)`——一次索引查询，不遍历短名、也不读
+  typeAlias。这条路径上没有 typeAlias 可省。
+- 本次同步路径上唯一的重 PSI 动作是 M2 的 `ReferencesSearch`（S1），与 typeAlias 无关。
+
+但用户的判断在 iBatis 侧是真问题，而且**比「模块收窄」更强**：iBatis 的 `parameterClass="User"` 若能
+先查 `<typeAlias alias type>` 表拿到 FQN，就是 FQN 直查（O(1)、无歧义、不必模块过滤）；短名索引只在
+别名表查不到时兜底。当前实现是「FQN 直查 → 短名索引 → 模块过滤 → 弃权」（L34），缺了最准的第一档，
+而大工程里短名索引本身也可能是慢点（命中数 × PSI 加载）。**列 P6**。
+
+注：P6 与 S1 是两条独立的性能面——即使 P6 做完，MBG 这条 5.67s 仍需 P5 埋点定位（S1/S2/S3）。
+
 ## 四、方案
 
 | 编号 | 内容 | 优先级 |
@@ -126,8 +153,9 @@ M2 从 `addCriterion("CUSTOMERNUMBER =", value, "custNumber")` 能知道每个 c
 | P1 | `endsOperand` 纳入 `}`（`#{}` / `${}` 收尾）——直接消掉 `?and`；顺带核对 `${}` 收尾同形 | 高（语义级） |
 | P2 | 操作符 + `(` 补空格（仅在「左侧是操作符字符」时），保住 `count(*)` / `IN (?,?)` 紧凑 | 中（形态级） |
 | P3 | 补多 Criterion 用例 + 用户态用例（listValue + 集合值），两条都做反向 | 高 |
-| P4 | M2 kind 与面板勾选的优先级裁决（(a)/(b)/(c) 待拍板） | 待拍板 |
+| P4 | M2 kind 与面板勾选：**采纳 (d) 只改默认值**（M2 命中时 choose 组默认分支按真实 kind 取，交互不变） | 高（已拍板） |
 | P5 | 预览链分段埋点（装配 / M2 检索 / renderSql / schema 解析各一段），复测定位 5.7s；按结论决定 M2 缓存或移出 EDT | 高 |
+| P6 | iBatis `parameterClass` 别名先查 `<typeAlias alias type>` 表（config 按模块解析 + 缓存），FQN 直查优先于短名索引 | 中（准确 + 性能；大工程更明显） |
 
 ## 五、待验证前提
 
