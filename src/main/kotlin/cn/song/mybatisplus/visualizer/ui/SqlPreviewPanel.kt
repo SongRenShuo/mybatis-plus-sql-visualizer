@@ -1327,6 +1327,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** R22 T-02/T-03 测试缝：历史快照构建（含勾选态/foreach 权威态特殊键）。 */
     internal fun buildHistorySnapshotForTest(): Map<String, String> = buildHistorySnapshot()
+
+    /**
+     * T-PreviewOpenPerfM2 P8 测试缝：模拟 `showResult` 里的**默认勾选初始化**。
+     *
+     * 真实流程是「先按 defaultState 设初始勾选 → 再 recall 叠加用户改变」；测试若只 `clearState`
+     * 后直接 recall，就跳过了前半段（P8 之后召回不再负责「补回默认项」）。
+     */
+    internal fun seedEnabledIdsForTest(ids: Set<String>) {
+        enabledIds.clear()
+        enabledIds.addAll(ids)
+    }
     /** R22 T-02/T-03 测试缝：召回（含勾选态/foreach 权威态还原）。 */
     internal fun recallFromHistoryForTest() = recallFromHistory()
     /** R22 T-02 测试缝：可见勾选框选中态（按 client property id/expr 查）。 */
@@ -1440,6 +1451,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
         internal const val SNAPSHOT_CHK = "__chk__:"
+
+        /**
+         * T-PreviewOpenPerfM2 P8：勾选态的**当时默认基线**（同 id 后缀）。
+         *
+         * 快照里的 `SNAPSHOT_CHK` 是全量勾选态；召回时若整体覆盖，规则升级后的新默认
+         * （profile 抑制 / choose 组归并 / M2 真实 kind）会被旧快照冲掉。记下基线后，召回只应用
+         * 「用户相对基线的改变」；升级前保存的旧快照无此键 ⇒ 一律不应用，让新默认先落地一次。
+         * 前缀刻意与 `SNAPSHOT_CHK` 不互为前缀（`__chkbase__:` 不以 `__chk__:` 开头）。
+         */
+        internal const val SNAPSHOT_CHK_BASE = "__chkbase__:"
         internal const val SNAPSHOT_FNULL = "__fnull__:"
         internal const val SNAPSHOT_FEV = "__fev__:"
 

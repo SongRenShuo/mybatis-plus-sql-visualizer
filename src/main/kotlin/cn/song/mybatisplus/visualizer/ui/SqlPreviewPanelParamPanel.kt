@@ -63,6 +63,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SCHEME_ROW_NA
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_ROW_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_LABEL_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK_BASE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FNULL
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FEV
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PROP_TOGGLE_ID
@@ -2087,10 +2088,16 @@ internal fun SqlPreviewPanel.recallFromHistory() {
             source.startsWith(SNAPSHOT_CHK) -> {
                 // T-PresetMethodBinding：跨 SQL 回落不恢复勾选态——条件 id 是按解析序递增的序号，
                 // SQL 增删条件后整体移位，套用旧快照会把勾选落到别的条件上（错位比丢失更难排查）。
+                // T-PreviewOpenPerfM2 P8：按「相对当时默认基线」的**差异**恢复。快照里的 SNAPSHOT_CHK
+                // 是全量勾选态，直接覆盖会把规则升级后的新默认（profile 抑制 / choose 组归并 /
+                // M2 真实 kind）整体冲掉；无基线键的旧快照（升级前保存）一律不应用。
                 if (recovered == null) {
                     val id = source.removePrefix(SNAPSHOT_CHK)
-                    if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
-                    stateRestored = true
+                    val baseValue = history[SNAPSHOT_CHK_BASE + id]
+                    if (baseValue != null && (value == "1") != (baseValue == "1")) {
+                        if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
+                        stateRestored = true
+                    }
                 }
             }
             source.startsWith(SNAPSHOT_FNULL) -> {
@@ -2158,12 +2165,23 @@ internal fun SqlPreviewPanel.buildHistorySnapshot(): Map<String, String> {
         }
     }
     val seenToggles = mutableSetOf<String>()
+    // T-PreviewOpenPerfM2 P8：同时记录「当时的默认基线」。
+    // - XML 链：= defaultState().enabledIds（规则升级后基线变化，召回只应用用户的改变）；
+    // - 其他链（Wrapper/JPA，无 defaultState）：基线全 "0" ⇒ 差异＝全部勾选项，召回等价于旧的
+    //   「全量还原」语义，行为不变。
+    val defaults = current?.xmlModel?.defaultState()?.enabledIds.orEmpty()
     (conditionCheckBoxes + batchCheckBoxes).forEach { cb ->
         val id = cb.getClientProperty(PROP_TOGGLE_ID) as? String ?: return@forEach
         seenToggles += id
         snapshot["$SNAPSHOT_CHK$id"] = if (id in enabledIds) "1" else "0"
+        snapshot["$SNAPSHOT_CHK_BASE$id"] = if (id in defaults) "1" else "0"
     }
-    enabledIds.forEach { if (it !in seenToggles) snapshot["$SNAPSHOT_CHK$it"] = "1" }
+    enabledIds.forEach {
+        if (it !in seenToggles) {
+            snapshot["$SNAPSHOT_CHK$it"] = "1"
+            snapshot["$SNAPSHOT_CHK_BASE$it"] = if (it in defaults) "1" else "0"
+        }
+    }
     xmlForEachNulls.forEach { snapshot["$SNAPSHOT_FNULL$it"] = "1" }
     xmlForEachValues.forEach { (expr, values) ->
         if (values.isNotEmpty()) snapshot["$SNAPSHOT_FEV$expr"] = values.joinToString(",")

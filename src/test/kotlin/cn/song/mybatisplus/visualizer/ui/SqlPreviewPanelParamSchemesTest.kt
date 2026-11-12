@@ -147,8 +147,11 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val snapshot = HashMap(p.buildHistorySnapshotForTest())
         val expected = defaults - idToDisable
 
-        // 模拟"新会话"：清状态 → 快照入缓存 → 召回
+        // 模拟"新会话"：清状态 → 重放 showResult 的默认初始化 → 快照入缓存 → 召回。
+        // T-PreviewOpenPerfM2 P8 后，召回归还的是「用户相对默认基线的改变」，默认项由初始化提供
+        // （真实流程：showResult 先 defaultState 设初始勾选，再 recall 叠加差异）。
         p.clearStateForTest()
+        p.seedEnabledIdsForTest(defaults)
         p.loadSnapshotForTest(snapshot)
         p.recallFromHistoryForTest()
 
