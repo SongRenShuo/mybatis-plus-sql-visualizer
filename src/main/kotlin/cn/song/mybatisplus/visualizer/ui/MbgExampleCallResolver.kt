@@ -145,15 +145,18 @@ object MbgExampleCallResolver {
         )
     }
 
-    /** mapper 方法在本项目里的首个调用点。 */
-    private fun findCallSite(project: Project, method: PsiMethod): PsiMethodCallExpression? =
-        ReferencesSearch.search(method, GlobalSearchScope.projectScope(project))
-            .findAll()
-            .asSequence()
-            .mapNotNull { ref: PsiReference ->
-                PsiTreeUtil.getParentOfType(ref.element, PsiMethodCallExpression::class.java)
-            }
-            .firstOrNull()
+    /**
+     * mapper 方法在本项目里的**首个**调用点。
+     *
+     * T-PreviewOpenPerfM2 M5：用 `findFirst()` 而不是 `findAll()`——后者会把全项目引用先收集成
+     * List 再取第一个。真机读数（2026-11-12 11:08）单次检索 1950ms，其中相当部分是「多收结果」；
+     * 而这里只需要一个调用点，Query API 的 `findFirst` 会提前终止遍历。
+     */
+    private fun findCallSite(project: Project, method: PsiMethod): PsiMethodCallExpression? {
+        val ref = ReferencesSearch.search(method, GlobalSearchScope.projectScope(project)).findFirst()
+            ?: return null
+        return PsiTreeUtil.getParentOfType(ref.element, PsiMethodCallExpression::class.java)
+    }
 
     /** 调用实参的变量名（`selectByExample(example)` → `example`）。 */
     private fun exampleVariableName(call: PsiMethodCallExpression): String? =
