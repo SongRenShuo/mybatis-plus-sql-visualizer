@@ -280,11 +280,15 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         }
         // #{} 参数值输入（T-M25.4：foreach 展开项不再单独建行——集合值由 foreach 输入框统一回填）
         val ordinarySources = result.unresolvedParams.distinct().filter { !it.startsWith("__frch_") }
+        // D11：MBG 注入时占位符来源全是 `__frch_criterion_N.*`，上面那步会把它们全滤掉——
+        // 左栏因此没有可填行。这里按真实占位键补行，标签用该 Criterion 的条件文本。
+        val mbgRows = mbgParamRows(result, xmlModel)
         // T-M26.3：两列行标签列宽统一（foreach/参数按最长可见标签自适应 140~260）
         // T-M26.5：foreach 行标签即集合表达式（分区标题已含「foreach 集合」语义）
         val labelWidth = labelColumnWidth(
             xmlModel.forEachViews.map { it.collectionExpr } +
-                ordinarySources.map { "#$it" },
+                ordinarySources.map { "#$it" } +
+                mbgRows.map { it.second },
         )
         if (xmlModel.conditionViews.isNotEmpty()) {
             paramPanel.add(conditionSectionHeader())
@@ -298,9 +302,10 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 )
             }
         }
-        if (ordinarySources.isNotEmpty()) {
+        if (ordinarySources.isNotEmpty() || mbgRows.isNotEmpty()) {
             if (hasControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
             ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
+            mbgRows.forEach { (source, label) -> paramPanel.add(buildParamRow(source, labelWidth, label)) }
         }
         paramPanel.revalidate()
         paramPanel.repaint()
@@ -1095,6 +1100,13 @@ internal fun SqlPreviewPanel.clearConditionValues() {
     // foreach 权威值（可见字段文本）；监听链同步权威 map，权威 map 再显式清一遍兜底
     xmlForEachValueFields.forEach { it.second.text = "" }
     xmlForEachValues.clear()
+    // D10（真机 2026-11-12）：展开项键必须一起清。`syncForEachItemValues` 负责回收 `__frch_*`，
+    // 但它以 `xmlForEachValues` 非空为前提——上一步 clear 之后那条路径直接 return，值就永久残留
+    // （真机：点「清除」后产物里仍是 `BETWEEN '11' AND ?`）。
+    paramValues.keys.filter { it.startsWith("__frch_") }.toList().forEach { source ->
+        paramValues.remove(source)
+        syncParamFieldText(source, "")
+    }
     // iBatis iterate 值（可见字段文本 + 权威 map）——与 foreach 同语义（留空 = 该段不展开）
     ibatisModel?.iterateRows?.forEach { row ->
         syncParamFieldText(row.property, "")
@@ -1323,7 +1335,11 @@ internal fun SqlPreviewPanel.syncForEachItemValues(xml: XmlPreviewModel) {
 
 /** 普通参数行：`#<source>` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
 
-internal fun SqlPreviewPanel.buildParamRow(source: String, labelWidth: Int): JBPanel<JBPanel<*>> {
+internal fun SqlPreviewPanel.buildParamRow(
+    source: String,
+    labelWidth: Int,
+    labelOverride: String? = null,
+): JBPanel<JBPanel<*>> {
     val kind = paramKindOf(source)
     // T-PT-02：行尾淡色警示标（校验是提示不是闸门——值照原样渲染，渲染链 renderValue 行为不动）
     val warnLabel = JBLabel("").apply {
@@ -1349,11 +1365,41 @@ internal fun SqlPreviewPanel.buildParamRow(source: String, labelWidth: Int): JBP
     paramWarnLabels += warnLabel
     // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
     return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
-        add(paramLabel(source, labelWidth))
+        add(if (labelOverride != null) columnLabel(labelOverride, labelWidth) else paramLabel(source, labelWidth))
         add(field)
         add(warnLabel)
         border = JBUI.Borders.empty(0, 8, 2, 8)
     }
+}
+
+/**
+ * D11（真机 2026-11-12）：MBG 预览的可填行。
+ *
+ * M2 注入后，语句里的占位符来源全是 `__frch_criterion_N.value` / `.secondValue` 这类**展开项键**，
+ * 而参数区按既有口径把 `__frch_` 前缀全部过滤掉了（那是给 foreach 值框统一回填的）——结果左栏
+ * 一个可填行都没有，用户只能去 foreach 值框填，而那会冲掉还原出来的 Criterion 对象（D9 已改只读）。
+ *
+ * 这里按占位符的真实键生成行：标签取该 Criterion 的条件文本（`status =` / `staff_login LIKE` /
+ * `create_time between`），区间条件再区分「值 / 结束值」；填进去的值照常走 paramValues → bindOverrides。
+ */
+internal fun mbgParamRows(result: PreviewResult, xml: XmlPreviewModel): List<Pair<String, String>> {
+    if (xml.collectionElements.isEmpty()) return emptyList()
+    val criteria = xml.collectionElements["criteria.criteria"].orEmpty()
+    val indexRegex = Regex("""__frch_criterion_(\d+)""")
+    return result.unresolvedParams
+        .filter { it.startsWith("__frch_criterion") }
+        .distinct()
+        .map { source ->
+            val index = indexRegex.find(source)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+            val condition = criteria.getOrNull(index)?.properties?.get("condition") as? String
+            val base = condition?.takeIf { it.isNotBlank() } ?: "条件 ${index + 1}"
+            val suffix = when {
+                source.endsWith(".secondValue") -> " 结束值"
+                source.endsWith(".value") -> " 值"
+                else -> ""
+            }
+            source to (base + suffix)
+        }
 }
 
 // ------------------------------------------------------------------
