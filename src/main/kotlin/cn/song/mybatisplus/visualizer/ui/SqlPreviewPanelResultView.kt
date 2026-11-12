@@ -219,6 +219,8 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
+        // T-FullTableWriteRisk：风险态随新预览清场（渲染帧内按本轮产物重算，见 renderSql）
+        writeRiskWarning = null
         xmlDollarSubstitutions = 0
         // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
         val initial = model.renderSql(XmlPreviewState(
@@ -734,6 +736,19 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
+    }
+    // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化，最典型是勾掉
+    // `_parameter != null` 后变成全表写）。**优先级高于上面那条「预览未完整还原」**——预览可能是
+    // 完整还原的，用户最该知道的是这一句；故独占写风险类别、用不带「未完整还原」前缀的文案，
+    // 两者互不冒充（同档优先级下后写者占位，见 DegradationBanner.priority）。
+    val writeRisk = result.xmlModel?.let { writeRiskWarning }
+    if (writeRisk != null) {
+        degradationBanner.show(
+            DegradationBanner.Kind.WRITE_RISK,
+            MpSqlVisualizerBundle.message(writeRisk.bundleKey),
+        )
+    } else {
+        degradationBanner.clear(DegradationBanner.Kind.WRITE_RISK)
     }
     // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
     // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。

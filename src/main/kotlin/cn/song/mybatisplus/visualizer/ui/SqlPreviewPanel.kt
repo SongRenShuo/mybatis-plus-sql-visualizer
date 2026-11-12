@@ -658,7 +658,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // R22 T-02/T-03：勾选态与 foreach 行的组件登记（快照枚举 + 召回视觉同步；随 rebuild 清场）
     internal val xmlForEachNullBoxes = mutableListOf<JCheckBox>()
     internal val xmlForEachValueFields = mutableListOf<Pair<String, JBTextField>>()
+    // T-ForEachInert：foreach 行的「本轮未参与渲染」提示标签（expr → 标签；随 rebuild 清场）。
+    // 判据取渲染产物（`__frch_<item>_*` 映射缺席），故只能在渲染帧内刷新，见 syncXmlForEachInertStates。
+    internal val xmlForEachInertLabels = mutableListOf<Pair<String, JBLabel>>()
     internal var xmlErrors = listOf<String>()
+    /**
+     * T-FullTableWriteRisk：本轮 XML 渲染产物的全表写风险（无 WHERE 的 DELETE/UPDATE，null = 无）。
+     * 随每轮 renderSql 刷新（勾选变化会改变产物），由 [updateMeta] 消费成横幅——**优先级高于**
+     * 「预览未完整还原」。
+     */
+    internal var writeRiskWarning: FullTableWriteRisk? = null
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     internal var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
     // T-Ibatis2Gap 券 A：iBatis 迭代值状态（集合属性名 → 逗号/换行分隔原文）——
