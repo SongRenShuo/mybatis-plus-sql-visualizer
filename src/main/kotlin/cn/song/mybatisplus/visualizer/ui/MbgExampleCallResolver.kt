@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
@@ -144,12 +145,22 @@ object MbgExampleCallResolver {
             file?.virtualFile?.takeIf { it.isValid }?.let { stamps[it] = it.modificationStamp }
         }
         note(mapperClass.containingFile)
+        // T-PreviewOpenPerfM2 M10：检索范围收到「mapper 所在模块及其依赖它的模块」。
+        // 引用方**必须**能看见该接口，所以这个范围在语义上不丢命中，却比全项目小得多——
+        // 真机首次打开 m2=1628ms（253 处引用、冷索引），全项目作用域是大头。
+        val module = runCatching { ModuleUtilCore.findModuleForPsiElement(mapperClass) }.getOrNull()
+        val scope = if (module != null) {
+            GlobalSearchScope.moduleWithDependentsScope(module)
+        } else {
+            GlobalSearchScope.projectScope(project)
+        }
+        trace.append("scope=${if (module != null) module.name else "PROJECT"} ")
         val mocks = mutableListOf<MbgCriterionMock>()
         val methods = mapperClass.findMethodsByName(statementId, true)
         trace.append("methods=${methods.size} ")
         methods.forEach { method ->
             note(method.containingFile)
-            val call = findCallSite(project, method)
+            val call = findCallSite(scope, method)
             if (call == null) {
                 trace.append("noCallSite ")
                 return@forEach
@@ -187,8 +198,7 @@ object MbgExampleCallResolver {
      * 有 253 处引用、索引健康）——`Query.findFirst()` 在这条检索链上不可靠。改为 `forEach`
      * 取首个命中（语义等价、仍是提前终止，不把全项目引用收成 List）。
      */
-    private fun findCallSite(project: Project, method: PsiMethod): PsiMethodCallExpression? {
-        val scope = GlobalSearchScope.projectScope(project)
+    private fun findCallSite(scope: GlobalSearchScope, method: PsiMethod): PsiMethodCallExpression? {
         // ① 先按「提前终止」取第一个命中（不收集全量）
         var ref: PsiReference? = null
         ReferencesSearch.search(method, scope).forEach { candidate ->
