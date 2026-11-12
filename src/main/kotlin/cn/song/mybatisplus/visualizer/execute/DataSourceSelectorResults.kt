@@ -1726,7 +1726,12 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
     fun runSlow(report: (Pair<VirtualFile, PsiFile>?, String?) -> Unit) {
         val pair = createTempPsiFile(project, sql, renderedDialectName)
         val reason = if (pair == null) lastTempFileFailure else null
-        app.invokeLater({ report(revalidateOnEdt(project, pair), reason) }, ModalityState.nonModal())
+        // T-PreviewOpenPerfM2 M7：PSI 有效性校验留在**后台**完成，EDT 只做回调投递。
+        // `psi.isValid` 会触发 `WorkspaceFileIndexDataImpl.ensureIsUpToDate`（平台标注的慢操作），
+        // 在 EDT 上调用会被 SlowOperations 断言拦下并记「Plugin to blame: SQL Visualizer」
+        // （真机 2026-11-12 11:08:53 SEVERE，栈落在下面这个函数里）。
+        val revalidated = revalidate(project, pair)
+        app.invokeLater({ report(revalidated, reason) }, ModalityState.nonModal())
     }
     if (!app.isDispatchThread) {
         // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
@@ -1749,12 +1754,14 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
  * 兜底口径：**只有 PSI 失效才重解析**（有效即原样返回，热路径零额外开销）；重解析仍失败则
  * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。
  *
- * 线程契约（UI-002）：本函数在 **EDT**（write-safe 投递内）执行，但 `psi.isValid` / `findFile`
- * 都是 PSI API，**读权限一律显式取**——不依赖 EDT 隐式读权限（新线程模型下
- * `Application.isReadAccessAllowed()` 只看本线程读许可；`TransactionGuard` 的 write-safe 只放开
- * 文档写、不放读）。后台误调本函数也不会打平台读锁断言。
+ * 线程契约（T-PreviewOpenPerfM2 M7 修订）：本函数在**后台**执行（原设计是 EDT + 显式读锁）。
+ * `psi.isValid` 内部会走 `FileManagerImpl.evaluateValidity → shouldResurrect → createFile →
+ * findDirectory → isUnderIgnored → WorkspaceFileIndexDataImpl.ensureIsUpToDate`——**平台明确标注
+ * 的慢操作**；在 EDT 上调用会被 `SlowOperations` 断言拦下，并给插件记一条
+ * 「Plugin to blame: SQL Visualizer」（真机 2026-11-12 11:08:53 SEVERE 实证）。
+ * 后台线程天然豁免该断言，读权限仍显式取（与 UI-002 同口径）。
  */
-internal fun revalidateOnEdt(
+internal fun revalidate(
     project: Project,
     pair: Pair<VirtualFile, PsiFile>?,
 ): Pair<VirtualFile, PsiFile>? {
