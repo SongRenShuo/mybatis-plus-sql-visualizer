@@ -202,7 +202,13 @@ M2 未命中（无 `collectionElements`）时退回现有启发式。
   `MbgExamplePreviewTest`；P6＝`IbatisParamClassQuoteHeavyTest`(8) + `IbatisParamCandidatePickTest`(6)。
 - 反向四轮：P1 与 (d) 合并摘除时恰 2 红（各对应一条用例）、P2 摘 operator 档恰 1 红、P6 摘别名分支恰 1 红。
 - **全量定向与守卫：本地未跑完**——`clean` 把独立沙盒一起清掉，重铺 IDE 发行版时挂起（沙盒目录 45 秒零增长，
-  测试 JVM 无输出），按用户令**改交 CI**（push master 触发 push-test 五片）。这一条在 CI 结果出来前不算读数。
+  测试 JVM 无输出），按用户令**改交 CI**（push master 触发 push-test 五片）。
+- **CI 读数（run `43136753539`，树 `51d3bd88a`）**：**9/10 job 绿**（test 1/3/4/5 + fast 1/2 + nudge）；
+  唯一红＝分片 2 的 `LogToSqlPanelExecuteTest#testPlatformPopupSelectionDisposeIsNotUserCancellation`
+  （`AssertionFailedError: expected:<[CallbackRunner@…]> but was:<[]>`）。
+- **该红与本轮改动无关**（决定性证据：前一轮 `43129449046` 的树是 `bf258ec02`＝本次改动**之前**的 master，
+  同 job 同用例同形态；`43134264631` 的树 `5a5eba644` 亦然）。它属 `log` 面板，本次改动全在 `xml`／预览 `ui`，
+  无交集 ⇒ 需另立任务定位（形态像「回调未登记/未触发」）。
 
 **待用户复验**：`sqlmap/User.xml` 的 iBatis 裸参数在**别名场景**下的引号（别名表首次命中）；
 MBG 多条件产物不再出现 `?and`；P5 埋点需真机再点一次预览才能读出 `[open-perf]` 分段耗时。
