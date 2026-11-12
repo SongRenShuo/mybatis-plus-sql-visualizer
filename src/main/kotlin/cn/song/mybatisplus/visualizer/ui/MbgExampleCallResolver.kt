@@ -197,7 +197,10 @@ object MbgExampleCallResolver {
             GlobalSearchScope.projectScope(project)
         }
         trace.append("scope=${if (module != null) module.name else "PROJECT"} ")
-        val mocks = mutableListOf<MbgCriterionMock>()
+        // D7（真机 2026-11-12 15:00）：`oredCriteria` 必须按**每条 Criteria**分组，不能拍平成一条。
+        // `example.createCriteria().andA()` 与 `example.or().andB()` 在 MBG 里是两条 Criteria，
+        // `Example_Where_Clause` 用 `separator="or"` 连接——拍平就把 `( a ) or ( b )` 错拼成 `a and b`。
+        val groups = LinkedHashMap<Any, MutableList<MbgCriterionMock>>()
         val methods = mapperClass.findMethodsByName(statementId, true)
         trace.append("methods=${methods.size} ")
         methods.forEach { method ->
@@ -219,15 +222,18 @@ object MbgExampleCallResolver {
                 return@forEach
             }
             val found = collectCriteria(project, body, exampleName, trace)
-            trace.append("[$exampleName:${found.size}] ")
-            mocks += found
+            trace.append("[${exampleName}:${found.values.sumOf { it.size }}/${found.size}] ")
+            for ((groupKey, list) in found) {
+                groups.getOrPut(groupKey) { mutableListOf() }.addAll(list)
+            }
         }
-        LOG.info("[m2] trace $namespace#$statementId $trace -> criteria=${mocks.size}")
-        if (mocks.isEmpty()) return null
+        val flat = groups.values.flatten()
+        LOG.info("[m2] trace $namespace#$statementId $trace -> criteria=${flat.size} groups=${groups.size}")
+        if (flat.isEmpty()) return null
         return CachedResolution(
             elements = mapOf(
-                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(mocks)),
-                "criteria.criteria" to mocks.map { it.toMockObject() },
+                "oredCriteria" to groups.values.map { MbgCriterionMock.criteriaOf(it) },
+                "criteria.criteria" to flat.map { it.toMockObject() },
             ),
             stamps = stamps,
         )
@@ -275,15 +281,18 @@ object MbgExampleCallResolver {
         body: PsiCodeBlock,
         exampleName: String,
         trace: StringBuilder? = null,
-    ): List<MbgCriterionMock> {
-        val result = mutableListOf<MbgCriterionMock>()
+    ): LinkedHashMap<Any, MutableList<MbgCriterionMock>> {
+        // D7：键＝这条条件所属的 Criteria 节点（`createCriteria()` / `or()` 调用，或别名变量的初始化表达式）；
+        // 同一 Criteria 的多条条件落在同一组，不同 Criteria 之间由 `Example_Where_Clause` 的 `or` 连接。
+        val groups = LinkedHashMap<Any, MutableList<MbgCriterionMock>>()
         var matched = 0
         var noResolve = 0
         var notExample = 0
         var notRooted = 0
         var noCondition = 0
+        var total = 0
         PsiTreeUtil.findChildrenOfType(body, PsiMethodCallExpression::class.java).forEach { call ->
-            if (result.size >= MAX_CRITERIA) return@forEach
+            if (total >= MAX_CRITERIA) return@forEach
             val name = call.methodExpression.referenceName ?: return@forEach
             if (!AND_OR_METHOD.matches(name)) return@forEach
             matched++
@@ -305,14 +314,37 @@ object MbgExampleCallResolver {
                 noCondition++
                 return@forEach
             }
-            result += MbgCriterionMock(
+            val groupKey = criteriaGroupKey(call, exampleName) ?: exampleName
+            groups.getOrPut(groupKey) { mutableListOf() } += MbgCriterionMock(
                 condition = condition,
                 values = call.argumentList.expressions.map { it.text },
                 kind = MbgCriterionMock.kindOf(name),
             )
+            total++
         }
         trace?.append("(and/or=$matched noResolve=$noResolve notExample=$notExample notRooted=$notRooted noCond=$noCondition) ")
-        return result
+        return groups
+    }
+
+    /**
+     * D7：一条 `and*` / `or*` 条件归属哪条 Criteria。
+     *
+     * 链上最靠近根的 `createCriteria()` / `or()` 调用就是分界线——`example.createCriteria().andA().andB()` 的
+     * 两条都归同一节点，`example.or().andC()` 归另一个节点。分步别名（`Criteria c = example.createCriteria();
+     * c.andA()`）用变量的初始化表达式当键。认不出时返回 null，调用方按「同一个 example」兜底成一组。
+     */
+    private fun criteriaGroupKey(call: PsiMethodCallExpression, exampleName: String): Any? {
+        var cur: PsiExpression? = call.methodExpression.qualifierExpression
+        while (cur is PsiMethodCallExpression) {
+            when (cur.methodExpression.referenceName) {
+                "createCriteria", "or" -> return cur
+            }
+            cur = cur.methodExpression.qualifierExpression
+        }
+        val ref = cur as? PsiReferenceExpression ?: return null
+        if (ref.referenceName == exampleName) return null
+        val variable = runCatching { ref.resolve() as? PsiVariable }.getOrNull() ?: return null
+        return runCatching { variable.initializer }.getOrNull()
     }
 
     /** 方法是否属于 MBG 的 `XxxExample`（或其内部类 `Criteria`）。 */

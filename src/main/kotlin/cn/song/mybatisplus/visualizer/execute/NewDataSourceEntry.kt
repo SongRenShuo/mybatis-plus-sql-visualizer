@@ -62,7 +62,18 @@ internal object NewDataSourceEntry {
 
     /** 平台「新建数据源」入口是否可用。决定列表是否显示「添加数据源…」（D-3：隐藏而非置灰）。 */
     internal fun isAvailable(project: Project): Boolean =
-        availabilityForTest?.invoke(project) ?: (buildNativeDriverActions(project) != null)
+        availabilityForTest?.invoke(project) ?: nativeDatabasePresent()
+
+    /**
+     * Database 插件是否在位——**只做类可达判定，不展开原生动作组**。
+     *
+     * D8（真机 2026.11.12 2026.3 日志）：本方法被菜单更新路径（`ChooseDataSourceTakeoverGroup.getChildren`）
+     * 调用，原本在里面调 `ActionGroup.getChildren(null)` 展开驱动组；2026.3 平台把这种手写展开记为
+     * **插件错误**并抛 `Throwable: Do not call getChildren(null). Do not expand action groups manually.`
+     * （`DefaultActionGroup.reportGetChildrenForNullEvent`）。菜单更新是高频路径，不能在这里展开组。
+     */
+    private fun nativeDatabasePresent(): Boolean =
+        cls(LOCAL_DS_CLASS) != null && cls(DS_MANAGER_CLASS) != null && cls(DB_VIEW_ACTIONS_CLASS) != null
 
     /**
      * 弹平台原生「新建数据源」驱动列表（D-4 主路：二级菜单，对齐原生「+」的形态）。
@@ -144,10 +155,12 @@ internal object NewDataSourceEntry {
             method.invoke(null, manager, project, "", false, consumer) as? AnAction
         }.getOrNull() ?: return null
         val actionGroup = group as? ActionGroup ?: return null
-        // DefaultActionGroup 无参 getChildren 不存在（243 javap 实证）；带事件重载标 OverrideOnly，
-        // 仓内既有先例（ChooseDataSourceTakeover.delegateChildren）即直接调用——子项在构造期已定，
-        // 事件不参与计算，传 null。
-        val children = runCatching { actionGroup.getChildren(null) }.getOrNull() ?: return null
+        // D8（2026.3 平台实证）：`getChildren(null)` 已被平台禁止——`DefaultActionGroup.reportGetChildrenForNullEvent`
+        // 会抛 `Throwable: Do not call getChildren(null). Do not expand action groups manually.`，
+        // IDE 直接记一条插件错误。这里传一个**真实的事件对象**（不是 null），并把这条路径限制在
+        // 用户点击「添加数据源…」时执行（`isAvailable` 已改为纯类可达判定，不再展开组）。
+        val event = AnActionEvent.createFromDataContext("MpSqlVisualizer", null, DataContext.EMPTY_CONTEXT)
+        val children = runCatching { actionGroup.getChildren(event).toList() }.getOrNull() ?: return null
         val items = ArrayList<DriverItem>(children.size)
         for (action in children) {
             val text = runCatching { action.templatePresentation.text }.getOrNull()

@@ -302,6 +302,11 @@ class XmlPreviewModel private constructor(
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
             val elements = collectionElements[view.collectionExpr]
+            // D7：M2 注入（有元素级模拟值）时，点号表达式（`criteria.criteria`）不再绑成全局集合——
+            // 否则内层 foreach 走的是这份全局列表，外层每条 Criteria 都会把全部条件再渲染一遍
+            //（真机 `( a ) or( b )` 变成 `( a and b ) or ( a and b )`）。跳过绑定，让路径解析落到
+            // 每条 Criteria 自己的 `criteria` 属性上（注入的 Criteria 必带该属性）。
+            if (collectionElements.isNotEmpty() && '.' in view.collectionExpr) return@forEach
             bindings[view.collectionExpr] = when {
                 view.collectionExpr in state.forEachNulls -> null
                 // T-MbgExamplePreview M2：调用点反推到的元素级模拟值优先（Criteria / Criterion）

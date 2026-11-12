@@ -394,6 +394,33 @@ class MbgExamplePreviewTest {
     }
 
     /**
+     * D7（真机 2026-11-12 15:00，`CustmanagerRelQueryRepro.queryOr`）：`example.or()` 开出来的是
+     * **第二条 Criteria**，`Example_Where_Clause` 用 `separator="or"` 连接；拍平成一条 Criteria 会把
+     * `( cust_id = ? ) or ( staff_login like ? )` 错拼成 `cust_id = ? and staff_login like ?`。
+     */
+    @Test
+    fun `M2两条Criteria_按or连接而不是and`() {
+        val criteriaA = listOf(MbgCriterionMock("cust_id =", listOf("42")))
+        val criteriaB = listOf(MbgCriterionMock("staff_login like", listOf("song%")))
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(
+                    MbgCriterionMock.criteriaOf(criteriaA),
+                    MbgCriterionMock.criteriaOf(criteriaB),
+                ),
+                "criteria.criteria" to (criteriaA + criteriaB).map { it.toMockObject() },
+            ),
+        )
+        val sql = compact(m.renderSql().sql)
+        assertTrue("两条 Criteria 必须各自成组并用 or 连接：$sql", sql.contains("( cust_id = ? ) or ( staff_login like ? )"))
+        assertFalse("不得拍平成 and：$sql", sql.contains("cust_id = ? and staff_login like"))
+    }
+
+    /**
      * D5（真机 2026-11-12 复验）：M2 元素带**逐条真实 kind** 时，choose 不能再按「组内只开一个」强制。
      *
      * 混 kind 的判据点：`tenant_id =`（singleValue）+ `create_time between`（betweenValue）同批注入时，

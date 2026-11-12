@@ -113,7 +113,11 @@ class ForeachSqlNode(
 
         override fun appendSql(sql: String) {
             if (!prefixApplied && sql.isNotBlank()) {
-                delegate.appendSql(prefix)
+                // D7：单词分隔符（`or` / `and` / `union all`）后补一个空格——否则与下一段的
+                // 起始 `(` 粘成 `or(`（真机 `WHERE ( a ) or( b )`）。标点分隔符（`,`）保持原样，
+                // `IN (?,?)` 的紧凑形态不动。
+                val sep = if (prefix.lastOrNull()?.isLetterOrDigit() == true) "$prefix " else prefix
+                delegate.appendSql(sep)
                 prefixApplied = true
             }
             delegate.appendSql(sql)
