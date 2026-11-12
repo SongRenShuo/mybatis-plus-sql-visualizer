@@ -689,6 +689,24 @@ jobs:
           $argList = @(':testDatabase', '-PgifRecord=false', '--console=plain', "-PmpDemoProjectDir=$demo")
           ./gradlew.bat @argList
           exit $LASTEXITCODE
+      - name: DB 腿逐例读数（tests / skipped / failures）
+        # 为什么需要这一步：testDb* 的用例大多是「环境不满足就显式绿跳」（println + return），而
+        # Gradle 默认不打印测试 stdout、test-results 也没上传工件——「绿」到底是真跑还是全跳，
+        # 日志里看不出来。2026-11-12 首轮本地库改造就是这样：绿了但读不出逐例口径。
+        # 这里**只打印不设闸门**：先攒两轮读数，再决定要不要把「全跳」判成失败。
+        if: always()
+        run: |
+          $files = Get-ChildItem -Path build/test-results -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue
+          if (-not $files) { Write-Host '（没有 test-results：任务可能在配置期就失败了）'; exit 0 }
+          $t = 0; $s = 0; $x = 0; $e = 0
+          foreach ($f in $files) {
+            [xml]$d = Get-Content -LiteralPath $f.FullName -Raw
+            $t += [int]$d.testsuite.tests
+            $s += [int]$d.testsuite.skipped
+            $x += [int]$d.testsuite.failures
+            $e += [int]$d.testsuite.errors
+          }
+          Write-Host ("DB 腿读数：files={0} tests={1} skipped={2} failures={3} errors={4}" -f $files.Count, $t, $s, $x, $e)
 
   # 真机端到端（e2eFakeIde）：起假 IDE 探针 + demo 应用（Spring Boot），验证 agent 通道全链路。
   # 前置：JDK8（被测应用）、Maven（联网解析，夜间时间充足）、demo 工程、可连的 MySQL。
