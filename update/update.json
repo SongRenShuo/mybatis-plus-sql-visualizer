@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.12-beta.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.2/mybatis-plus-sql-visualizer-2026.11.12-beta.2.zip",
-  "changeNotes": "MBG 生成的 Example mapper 也能预览了: 从 andXxxYyy 调用点还原条件，产物从残缺骨架变成可读 SQL\niBatis 的 DAO 调用行可直接预览 SQL，跳转箭头旁新增预览图标，Alt+Shift+Q 同样可用\n预览与执行的临时目录判定不再缓存会话级结论，改了排除或忽略设置后下一次打开立即生效\n执行失败的原因不再被预热链并发清空，报错行稳定给出具体阶段与诊断项，不再退化成 unknown\n执行失败不再只剩一行红字: 落点目录建不出 PSI 时说明原因, 并给出「改用项目根落点重试」与「打开文件类型设置」两颗蓝字入口\niBatis 预览里裸的 #name# 参数按 parameterClass 字段类型决定引号，纯数字不再丢引号\n复制可执行 SQL 时，产物头部会用带计数的注释说明哪些是待替换的预览占位\n上一版的按原因给设置入口与一键改用项目根落点保持不变",
-  "publishDate": "2026-11-11",
+  "version": "2026.11.12-beta.4",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.4/mybatis-plus-sql-visualizer-2026.11.12-beta.4.zip",
+  "changeNotes": "MBG Example 预览的左栏现在能按条件直接填值: 等值和区间都会生成可填行, 行名就是条件本身, 参数区顶部写明填值只替换对应的 ?\n点「清除」后不再残留旧值: 区间条件不会留下半截的旧值, 产物与左栏填值始终一致\n左栏的行名不再被截成 criteria.crit…: 列宽跟着面板宽度走, 放不下时可悬停看全名\n条件里那两层集合的值框不再让人白填: 装条件对象的一律只读并说明该去哪里填, 分支没走到的标「本轮未展开, 填了不影响产物」\n删除、更新这类找不到调用点的语句, 预览骨架不再退化成连一个占位符都没有的形态\n横幅与风险提示随产物实时刷新: 改完勾选不再挂着上一轮的「未完整还原」, 产物变成没有 WHERE 的全表删除或更新时顶部直接警示\n每次打开预览不再重扫全部数据源做 schema 预热: 60 秒内同一张表只预热一次, 打开更快, 也不再往日志里刷",
+  "publishDate": "2026-11-12",
   "sinceBuild": "243"
 }
