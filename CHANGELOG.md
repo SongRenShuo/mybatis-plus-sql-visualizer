@@ -43,6 +43,7 @@
 - **同一方法里两次 Example 查询的条件被并进同一条 WHERE（T-PreviewOpenPerfM2 D4，b12ccf8cc）**：MBG 生成的服务实现常在一个方法里先后查两次（`exampleA…selectByExample(exampleA)` 紧跟 `exampleB…`），旧判定按「变量类型名以 Example 结尾」收条件，把另一次查询的也并进来，产物出现两个 `tenant_id`、整条谓词永不成立。现在只收与实参同一个 Example 的条件，`Criteria c = example.createCriteria()` 这种分步别名写法仍然支持
 - **一批条件里既有等值又有区间时，区间条件少一个占位符（T-PreviewOpenPerfM2 D5，875c942f8）**：M2 已推出每条条件的真实类型，而默认勾选档仍把整组 `<choose>` 强制成单分支，区间条件因此被等值模板渲染，第二个占位连同中间的 `and` 一起丢失（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）。现在这类分支按每条条件自己的类型求值，区间正常出 `? AND ?`
 - **在 mapper 语句里选中文字后按快捷键误报未找到（T-PreviewOpenPerfM2 D2，85e09cab9）**：`Ctrl+F` 命中会顺手选中语句 id，此时按 `Alt+Shift+Q` 收不到候选就直接提示「未在光标处找到可预览的 SQL 源」；现在无候选时回落到光标所在的语句
+- **接口方法的预览仍卡在占位符（T-PreviewOpenPerfM2 D6，bdc1f89ab）**：`ReferencesSearch` 对接口方法会把「实现的声明处 / 方法引用」一并返回，这类命中上溯没有方法调用节点；旧逻辑只看第一个命中，撞上这种就整条放弃（真机 `mybatis-plus-demo` 的 `CtCustmanagerRelMapper#selectByExample` 明明有两个调用点却报 `noCallSite`）。现在跳过不可用的命中继续找真正的调用点，找到第一个即停
 - **打开 mapper 文件时后台预取条件解析，第一次点开预览不再干等（T-PreviewOpenPerfM2 M11，34488db41 / 773421955）**：真机首次打开 `[open-perf] total=1689~2115ms`，其中 M2 冷检索独占 1628~2042ms，而第二次起只有 30ms 装配。现在 gutter 渲染时对 `select` 且 `parameterType` 以 Example 结尾的语句后台预取一次（失败记忆、单条在途两道护栏，避免打开文件瞬间并发多条冷检索）；实测首次点开 `m2=1ms`、装配 104ms，同语句再点 30ms
 
 ## [2026.11.11] - 2026-11-11
