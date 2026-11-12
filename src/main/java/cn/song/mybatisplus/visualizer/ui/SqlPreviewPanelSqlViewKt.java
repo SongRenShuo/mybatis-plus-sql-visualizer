@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.execute.DocWriteContext;
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor;
 import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.model.PreviewRerenderInput;
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel;
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
@@ -46,6 +47,7 @@ import com.intellij.openapi.keymap.KeymapManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
+import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -292,7 +294,54 @@ public final class SqlPreviewPanelSqlViewKt {
         SqlPreviewModel model = result.getPreviewModel();
         cn.song.mybatisplus.visualizer.model.BatchModel batch = result.getBatchModel();
         XmlPreviewModel xml = result.getXmlModel();
-        if (xml != null) {
+        Function1<PreviewRerenderInput, PreviewResult> ibatisRerender = result.getRerender();
+        if (ibatisRerender != null) {
+            // T-Ibatis2Gap 券 A：iBatis 参数/条件可交互——面板状态（值/勾选/迭代列表）交给预览服务
+            // 闭包重渲染（渲染接缝 A：PreviewResult.rerender 回调，MyBatis 链零感知）。
+            Map<String, List<String>> collections = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : p.ibatisIterateValues.entrySet()) {
+                List<String> values = new ArrayList<>();
+                for (String part : entry.getValue().split("[,\n]")) {
+                    String trimmed = part.trim();
+                    if (!trimmed.isEmpty()) values.add(trimmed);
+                }
+                collections.put(entry.getKey(), values);
+            }
+            PreviewRerenderInput input = new PreviewRerenderInput(
+                    new LinkedHashMap<>(p.paramValues),
+                    new LinkedHashSet<>(p.enabledIds),
+                    collections);
+            PreviewResult fresh;
+            try { // master runCatching 降级语义：rerender 异常不冒泡，回退基线文本
+                fresh = ibatisRerender.invoke(input);
+            } catch (Throwable e) {
+                p.ibatisRenderWarnings = List.of(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                showSql(p, p.compactMode ? result.getCompactSql() : result.getSql());
+                SqlPreviewPanelResultViewKt.updateMeta(p, result);
+                return;
+            }
+            p.ibatisRenderWarnings = fresh.getWarning() != null ? List.of(fresh.getWarning()) : List.of();
+            // UI-001：分档随本轮结果整体替换（信息级说明走 ℹ 前缀，不冒充失败）
+            p.ibatisRenderWarningIsNote = fresh.isInformationalWarning();
+            // iterate 值播种：渲染器按列表长度产出 `ids[0..n-1]` 参数名——按当前值序回填（与
+            // xml 的 syncForEachItemValues 同语义：状态 → 渲染单向流动，不留旧键）
+            if (result.getIbatisParamModel() != null) {
+                for (cn.song.mybatisplus.visualizer.xml.ibatis.IbatisParamModel.IbatisIterateRow row
+                        : result.getIbatisParamModel().iterateRows()) {
+                    List<String> values = input.collections().get(row.property());
+                    if (values == null) values = List.of();
+                    for (int i = 0; i < values.size(); i++) {
+                        p.paramValues.put(row.property() + "[" + i + "]", values.get(i));
+                    }
+                }
+            }
+            String base = p.compactMode ? fresh.getCompactSql() : fresh.getSql();
+            List<String> sources = !fresh.getPlaceholderParamNames().isEmpty()
+                    ? fresh.getPlaceholderParamNames() : fresh.getUnresolvedParams();
+            showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p, base, sources, fresh.getParamHints()));
+            // 警示行与横幅随本轮刷新（iterate 留空等降级形态必须可见，不得静默）
+            SqlPreviewPanelResultViewKt.updateMeta(p, result);
+        } else if (xml != null) {
             // T-M24-04：XML 动态 SQL——渲染单源 XmlPreviewModel.renderSql(state)，勾选/次数/覆盖变更重渲染
             XmlPreviewState state = new XmlPreviewState(
                     new LinkedHashSet<>(p.enabledIds),
@@ -306,6 +355,8 @@ public final class SqlPreviewPanelSqlViewKt {
             // O-78：foreach 值按本帧新鲜映射清单播种（写安全闸重投递时与映射刷新同帧延迟，
             // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
             SqlPreviewPanelParamPanelKt.syncForEachItemValues(p, xml);
+            // T-ForEachInert：同帧刷新「本轮未展开」提示（判据也是 __frch_ 映射清单）
+            SqlPreviewPanelParamPanelKt.syncXmlForEachInertStates(p, xml);
             p.xmlDollarSubstitutions = rendered.dollarSubstitutions();
             // R30 探镜：本轮条件判定结果刷新条件行尾三态标注（只读观测，不参与渲染文本）
             SqlPreviewPanelParamPanelKt.syncXmlConditionOutcomeLabels(p, xml, rendered);
@@ -330,6 +381,17 @@ public final class SqlPreviewPanelSqlViewKt {
             Set<Integer> inListIndices = SqlPreviewPanelParamPanelKt.detectInClauseParams(p, sql);
             List<ParamHint> xmlHints = XmlParamBackfillHints.xmlBackfillHints(xml, sources, inListIndices, p.xmlMappings);
             showSql(p, SqlPreviewPanelParamPanelKt.backfillParamsBySource(p, sql, sources, xmlHints));
+            // T-FullTableWriteRisk：全表写风险判据取**未回填**的本轮产物（master 的 `base`——回填前、
+            // 限行追加前）——回填会把参数值当字面量填进文本，值里出现 `where` 这类词会污染关键词判定。
+            String riskBase = p.compactMode
+                    ? SqlPreviewPanel.WHITESPACE_REGEX.matcher(rendered.sql()).replaceAll(" ").trim()
+                    : rendered.sql();
+            p.writeRiskWarning = SqlWriteRiskTextKt.fullTableWriteRisk(riskBase);
+            // T-PreviewBannerLiveRefresh：横幅/元信息随本轮重渲染刷新。此前只有 iBatis 分支调
+            // updateMeta，XML 分支不调 ⇒ 勾选变化后横幅停在 showResult 那一刻的判定：产物里的
+            // `{{}}` 已经没了，那条「预览未完整还原」还挂着；反过来勾掉条件开关让产物变成无 WHERE
+            // 的全表 DELETE 时，也没有任何风险提示（真机 2026-11-12 两处都观察到）。
+            SqlPreviewPanelResultViewKt.updateMeta(p, result);
         } else if (batch != null) {
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
             Set<String> active = new LinkedHashSet<>(p.enabledIds);
@@ -703,7 +765,12 @@ public final class SqlPreviewPanelSqlViewKt {
         p.xmlForEachNulls.clear();
         p.xmlErrors = List.of();
         p.xmlDollarSubstitutions = 0;
+        // T-Ibatis2Gap 券 A：iBatis 交互态随清空复位（不跨预览残留）
+        p.ibatisIterateValues.clear();
+        p.ibatisRenderWarnings = List.of();
+        p.ibatisRenderWarningIsNote = false;
         p.currentWarning = null;
+        p.currentWarningIsNote = false;
         if (p.errorCopyButton != null) p.errorCopyButton.setVisible(false);
         p.toggleSelectButton = null;
         p.batchToggleSelectButton = null;
