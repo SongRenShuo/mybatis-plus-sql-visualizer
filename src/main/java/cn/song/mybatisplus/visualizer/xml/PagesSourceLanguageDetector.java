@@ -23,6 +23,14 @@ import java.util.regex.Pattern;
  * {@code HqlEntityNameExtractor::extract} 与 PSI 实体解析），使本文件不依赖 {@code psi} 包，
  * 也让纯 JUnit 能覆盖用户样本形态。master 顶层 {@code object}，k2j 落静态承载
  * （A2 调用点已按 {@code PagesSourceLanguageDetector.detect(...)} 写死）。</p>
+ *
+ * <p>券 0（T-Ibatis2SlowFix）：<b>本判定逻辑不动</b>——改的是注入进来的探针形态。
+ * 第 4 步是唯一需要「反查实体」的一步，也是三条判定里唯一会引出<b>全项目类短名扫描</b>的一步
+ * （{@code @Entity(name=...)} 别名反查，实测单次约 1s、历史同形态 70s 冻结 EDT）。占用例的同步调用方
+ * （两条 XML 预览链）注入的探针改为<b>零扫描</b>形态（直查 + 只读别名缓存）：
+ * 根标识符解析不到实体时本步与第 5 步同结论（保守 SQL），而"扫描触顶"在改动前本就按未解析返回，
+ * 故<b>判定逐值不变</b>，只是不再付扫描代价。第 2/3 步按 {@code entityClass} 直查即可满足
+ * （{@code entityClass} 在场时直接给出类，实体名/表名都从该类读），不依赖反查。</p>
  */
 public final class PagesSourceLanguageDetector {
 
