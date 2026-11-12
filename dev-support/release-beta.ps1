@@ -5,6 +5,12 @@
 #   pwsh -File dev-support/release-beta.ps1 -Version ... -Notes ... -DryRun      # print only, run nothing
 #   pwsh -File dev-support/release-beta.ps1 -Version ... -Notes ... -SkipGates    # rerun from tag step
 #   pwsh -File dev-support/release-beta.ps1 -Version ... -Notes ... -SkipCi -SkipGitee   # tag+push only
+#   pwsh -File dev-support/release-beta.ps1 -Version ... -Notes ... -MarketplaceLite     # beta round: marketplace leg 243 only
+#
+# -MarketplaceLite passes `marketplace_lite=true` to the release workflow: the marketplace leg is the
+# floor of the whole run (it hangs off `needs: build`, build 7.0min + marketplace(263) 10.3min ~= 17.3min
+# of an 18m22s wall). Keeping only 243 (5.1min) lowers that floor to ~12.1min while per-target API
+# compatibility stays fully covered by verify x3. Default off: a formal release still runs all three.
 #
 # Rules baked in here (each one is a paid-for lesson, do not "simplify" them away):
 #   - GitHub push always goes through dev-support/push-all.ps1. A bare `git push github` pops the
@@ -26,6 +32,7 @@ param(
     [switch]$SkipGates,
     [switch]$SkipCi,
     [switch]$SkipGitee,
+    [switch]$MarketplaceLite,
     [string]$Branch = "master",
     [int]$CiTimeoutMin = 45,
     [int]$ProxyPort = 7890
@@ -158,9 +165,14 @@ if (-not $SkipCi) {
         $env:GH_TOKEN = (Get-Content -LiteralPath $tokenFile -Raw | ConvertFrom-Json).github_personal_access_token
     }
     if ($script:failed.Count -eq 0) {
+        # marketplace 腿挂在 build 之后，是整轮墙钟的地板（build 7.0 + marketplace(263) 10.3 ≈ 17.3min）。
+        # -MarketplaceLite 只把这条腿压到 243（约 5.1min），逐目标 API 兼容仍由 verify×3 全覆盖；
+        # 默认不带，正式版走原样三条腿。
+        $dispatchArgs = @("workflow", "run", "build-plugin.yml", "--ref", $Branch, "-f", "mode=release")
+        if ($MarketplaceLite) { $dispatchArgs += @("-f", "marketplace_lite=true") }
         try {
             if (-not $DryRun) {
-                Invoke-Gh @("workflow", "run", "build-plugin.yml", "--ref", $Branch, "-f", "mode=release") | Out-Null
+                Invoke-Gh $dispatchArgs | Out-Null
                 Start-Sleep -Seconds 15
                 $runId = $null
                 for ($i = 0; $i -lt 10 -and -not $runId; $i++) {
@@ -187,7 +199,7 @@ if (-not $SkipCi) {
                 $script:runId = $runId
                 $script:done += "ci"
             } else {
-                Write-Note ("DRY  gh workflow run build-plugin.yml --ref {0} -f mode=release" -f $Branch)
+                Write-Note ("DRY  gh " + ($dispatchArgs -join ' '))
             }
         } catch { Fail "ci" $_.Exception.Message }
     }

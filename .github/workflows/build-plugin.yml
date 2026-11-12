@@ -31,6 +31,11 @@ on:
         description: '完整发行说明路径（留空＝按版本号在 docs/发行说明 下匹配；仅在正文里作链接）'
         required: false
         type: string
+      marketplace_lite:
+        description: 'marketplace 腿只跑 243（内测轮省约 5 分钟墙钟；逐目标 API 兼容仍由 verify×3 全覆盖）'
+        required: false
+        type: boolean
+        default: false
 
 # 创建 Release 并上传资产需要写权限（GITHUB_TOKEN）；
 # actions: read 用于 publish 模式跨运行下载门禁产物（显式声明 permissions 会重置所有默认作用域）
@@ -274,13 +279,17 @@ jobs:
       matrix:
         # T-CiMarketIdeProvision（2026-11-06）：ide = 该目标在 gradle transforms 里的解包目录名，
         # 供「确认验证目标 IDE 已解包」那步做存在性检查（名字错了就永远判定缺失、白跑一次 verifyPlugin）。
-        include:
-          - tag: '243'
-            ide: ideaIU-2024.3.7.1-win
-          - tag: '253'
-            ide: idea-2025.3.5-win
-          - tag: '263'
-            ide: idea-2026.3-win
+        #
+        # T-BetaMarketLite（2026-11-12）：`marketplace_lite=true` 时只留 243。依据是墙钟实测
+        # （run 43203043486）：这条腿挂在 `needs: build` 后面，是整轮的地板——
+        #   build 7.0min + marketplace(263) 10.3min ≈ 17.3min（实际墙钟 18m22s）；
+        #   而 marketplace(243) 只要 5.1min ⇒ 留 243 可把地板压到约 12.1min（比「全砍」还快，
+        #   因为全砍后接上来的是 verify(263) 6.0min）。
+        # 覆盖上说得通：marketplace 腿验的是上架侧规则（descriptor / changeNotes / 市场约束），
+        # 各目标基本同源；**逐目标的 API 兼容**仍由 verify×3 全量覆盖，253/263 一个不少。
+        # 用 matrix 过滤而不是给 job 加条件：matrix 少一条时 job 结果仍是 success，
+        # `gate` 那条「五条腿必须全 success、skipped 视同未验证」的断言不必开口子。
+        include: ${{ fromJSON(inputs.marketplace_lite && '[{"tag":"243","ide":"ideaIU-2024.3.7.1-win"}]' || '[{"tag":"243","ide":"ideaIU-2024.3.7.1-win"},{"tag":"253","ide":"idea-2025.3.5-win"},{"tag":"263","ide":"idea-2026.3-win"}]') }}
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -646,7 +655,7 @@ jobs:
           if ($bad.Count -gt 0) {
             throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
           }
-          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×3 / verify×3 / test×6（5 片 + 快桶腿）'
+          Write-Host '五条腿全部 success：build / verifyplugin / marketplace（matrix 决定条数：默认 3，marketplace_lite 时 1）/ verify×3 / test×6（5 片 + 快桶腿）'
 
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
