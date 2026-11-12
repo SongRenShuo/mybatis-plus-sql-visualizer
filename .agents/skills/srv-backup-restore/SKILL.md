@@ -168,6 +168,29 @@ docker exec xc3-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$M
 比对行数（通用套路）：列出源库每张表，逐表 `count(*)` 与 `restore_verify` 比，全等才算过。
 2026-10-31 实测基线：GaussDB 12 张、OceanBase 11 张、HighGo 5 张，**逐表全等**。
 
+### 3.2.1 2026-11-13 新仓库首轮恢复演练实录（9 引擎，逐坑实证）
+
+对 2026-11-12 重建后的新仓库（`/v2` 前缀，快照 `f3f9fd64`，12 个 dump 文件）做了一轮完整演练，
+`restic restore` → 逐引擎灌 `restore_verify` 临时库 → 比对 → 清理，**全部走通**。相对旧配方的实测差异：
+
+| 引擎 | 结果 | 实测配方要点（与上表的差异） |
+|---|---|---|
+| MariaDB | ✓（schema 比对，源库空） | **dump 首行 `/*M!999999\- enable the sandbox mode */` 会让 mariadb 客户端忽略后续全部语句**——导入前 `sed '1d'` 删掉；再 sed 改库名 |
+| MySQL8 | ✓ **6 表精确行数全等**（3/3/4/3/3/4） | sed 改库名直接导入即可 |
+| TiDB | ✓（`t_probe` 还原） | dump 采集已走「借 xc3-mysql8 网关」通道，导入同样借网关 `docker exec xc3-mysql8 mysql -h172.17.0.1 -P24000 ...` |
+| OceanBase | ✓（schema 比对，源库空） | **临时库要先用 `root@test` 建并授权给 xc3**（xc3 无建库权）；**导入别用 mysql 8 客户端**——连 OB 执行 DDL 报 `Character set '45' is not a compiled character set`（OB 的 charset 编号体系与 MySQL 8 客户端不兼容），改用 **OB 容器内 obclient** |
+| Vastbase A/B | ✓（gs_restore 完成） | 业务用户 xc3 **无 CREATEDB**（超级用户是 `omm`，env `INITUSER=omm`/`INITPASSWORD`）——建临时库要用 omm，gs_restore 用 xc3 |
+| openGauss | ✓（超管 restore） | xc3 **无权 set `session_replication_role`** → gs_restore 直接用超管 `opengauss` 执行；gsql `-c` 两条语句分号串联会静默漏跑第二条，DROP/CREATE 分两条 `-c` |
+| GaussDB | ✓（gs_restore 完成） | omm 建库 + gs_restore；容器内 gsql 直连要 `-h127.0.0.1` + `LD_LIBRARY_PATH=/opt/gaussdb/app/lib` |
+| HighGo | ✓（schema 比对，源库空） | **psql `-c` 多语句包单事务**——`DROP DATABASE` 报 cannot run inside a transaction block，DROP/CREATE 分两条 `-c`；pg_restore 的 `-U xc3` 口令是 **`HG_XC3_PASS`**（业务用户），不是超管的 `HG_PASS` |
+| MSSQL | — | 无业务库时采集端本就不产出 `.bak`（`database_id > 4` 为空），跳过属正常 |
+
+**先决条件提醒**：vastbase/openGauss/gaussdb/highgo 的 `restore_verify` 建库分别要用 `omm`/`opengauss`/`omm`/`highgo` 超管（业务用户 xc3 无 CREATEDB），建完 gs_restore 时业务用户能还原自己的库，但 openGauss 的 gs_restore 遇 `session_replication_role` 权限时仍需超管。演练后 `DROP DATABASE restore_verify`（各引擎）+ `rm -rf /tmp/verify`，并用 `SHOW DATABASES LIKE 'restore_verify'` 确认清干净。
+
+采集端对应修复（2026-11-13 五振，`dev-support/svbackup/svbackup-collect.sh`）：①MySQL 族枚举改用 `mysql -e SHOW DATABASES`（mysqldump 没有 `-e`）；②gs_dump/gsql 显式 `-W'<口令>'`（不认 PGPASSWORD），**pg_dump 的 `-W` 是无参 flag** 绝不能连写口令（会报 `invalid option -- 'X'`）；③TiDB/OceanBase 无容器内客户端 → 借 xc3-mysql8 走宿主网关 + `--column-statistics=0`（TiDB/OB 无 column_statistics 表）；④MariaDB 的 dump 不带 `--skip-column-statistics`；⑤`timeout` 调不动 shell 函数（函数体内自带 timeout）、函数版 dump 别丢 `> "$out"`、`dbuser_for` 里 mariadb/mysql8 的用户要拆（mysql8 只有 root）。
+
+2026-11-13 基线：9 引擎 dump→restore 全通（临时库已清），全过程与逐坑实录见 `docs/经验总结/20261113-0105-七牛备份恢复演练全引擎打通-经验总结.md`。
+
 清理（别把临时库留在机器上）：
 
 ```bash
