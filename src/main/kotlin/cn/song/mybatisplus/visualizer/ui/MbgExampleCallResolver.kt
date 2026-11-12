@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
 import cn.song.mybatisplus.visualizer.xml.MockObject
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.module.ModuleUtilCore
@@ -60,6 +62,9 @@ object MbgExampleCallResolver {
     )
 
     private val cache = ConcurrentHashMap<String, CachedResolution>()
+
+    /** 预取在途集合（同一 key 只跑一个后台任务）。 */
+    private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
     internal var cacheHits: Int = 0
@@ -123,6 +128,32 @@ object MbgExampleCallResolver {
 
     private fun describe(entry: CachedResolution): String =
         "criteria=${entry.elements["criteria.criteria"]?.size ?: 0} stamps=${entry.stamps.size}"
+
+    /**
+     * 预取（T-PreviewOpenPerfM2 M11）：把 M2 检索挪到「用户还在看文件」的时候。
+     *
+     * 真机首开 `[open-perf] … m2=1628/2042ms`、`request→dialog 2714/4580ms`，而第二次起 m2≈0、
+     * 弹窗 200ms 级——首开慢的全部就是这一次冷检索。gutter 渲染本来就要遍历 mapper 语句，
+     * 顺手在后台跑一次即可让「点开」命中缓存；不改变任何交互，失败静默。
+     *
+     * 去重：同一 key 只允许一个在途任务（`inFlight`），缓存新鲜则直接返回。
+     */
+    fun prefetch(project: Project?, namespace: String?, statementId: String) {
+        if (project == null || namespace.isNullOrBlank()) return
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        val key = "${project.locationHash}#$namespace#$statementId"
+        cache[key]?.let { if (isFresh(it)) return }
+        if (!inFlight.add(key)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                resolve(project, namespace, statementId)
+            } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t
+            } finally {
+                inFlight.remove(key)
+            }
+        }
+    }
 
     /** 依赖文件全部仍有效且 stamp 未变才算新鲜（不引文件监听，按需比 stamp）。 */
     private fun isFresh(entry: CachedResolution): Boolean =
