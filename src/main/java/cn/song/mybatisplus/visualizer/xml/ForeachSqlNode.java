@@ -103,7 +103,7 @@ public final class ForeachSqlNode implements SqlNode {
             }
             contents.apply(new FilteredContext(scoped, index, item, uniqueNumber));
             if (first) {
-                first = !scoped.isPrefixApplied();
+                first = !scoped.hasContent();
             }
             i++;
         }
@@ -140,7 +140,10 @@ public final class ForeachSqlNode implements SqlNode {
             if (nullable) {
                 return null;
             }
-            context.getErrors().add("The expression '" + collectionExpression + "' evaluated to a null value.");
+            // T-MbgExamplePreview R6：原文是 MyBatis 英文异常文案，中文 UI 直接透传读不懂；
+            // 改成中文并给可操作指引（集合为 null 多半是面板勾了「为 null」）
+            context.getErrors().add("foreach 集合 '" + collectionExpression + "' 求值为 null"
+                    + "（模拟参数没给这个集合；若真实调用中它必有值，请取消该集合的『为 null』勾选）");
             return null;
         }
         if (value instanceof Iterable<?>) {
@@ -152,8 +155,8 @@ public final class ForeachSqlNode implements SqlNode {
         if (value instanceof Map<?, ?>) {
             return ((Map<?, ?>) value).entrySet();
         }
-        context.getErrors().add("Error evaluating expression '" + collectionExpression + "'. Return value ("
-                + (value == null ? "null" : value.getClass().getSimpleName()) + ") was not iterable.");
+        context.getErrors().add("foreach 集合 '" + collectionExpression + "' 的求值结果不可迭代"
+                + "（" + (value == null ? "null" : value.getClass().getSimpleName()) + "）");
         return null;
     }
 
@@ -191,13 +194,19 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public void appendSql(String sql) {
             if (!prefixApplied && !sql.isBlank()) {
-                delegate.appendSql(prefix);
+                // D7：单词分隔符（`or` / `and` / `union all`）后补一个空格——否则与下一段的
+                // 起始 `(` 粘成 `or(`（真机 `WHERE ( a ) or( b )`）。标点分隔符（`,`）保持原样，
+                // `IN (?,?)` 的紧凑形态不动。
+                String sep = !prefix.isEmpty() && Character.isLetterOrDigit(prefix.charAt(prefix.length() - 1))
+                        ? prefix + " " : prefix;
+                delegate.appendSql(sep);
                 prefixApplied = true;
             }
             delegate.appendSql(sql);
         }
 
-        boolean isPrefixApplied() {
+        /** 本轮迭代是否产出过内容（separator 顺延判据，见 {@link ForeachSqlNode#apply}）。 */
+        boolean hasContent() {
             return prefixApplied;
         }
 
@@ -247,6 +256,12 @@ public final class ForeachSqlNode implements SqlNode {
         public Map<String, Boolean> getConditionOutcomes() {
             return delegate.getConditionOutcomes();
         }
+
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 ${} 仍按空串输出
+        @Override
+        public boolean getEmptyDollarPlaceholder() {
+            return delegate.getEmptyDollarPlaceholder();
+        }
     }
 
     /** #{item.x} / #{index.x} 重写上下文：把 token 内容开头的 item/index 名重写为 __frch_ 唯一名。 */
@@ -283,7 +298,10 @@ public final class ForeachSqlNode implements SqlNode {
                 return "#{" + newContent + "}";
             });
             // 迭代内容 trim——mapper 里 foreach 体的换行缩进原样输出会使 IN 每项换行一行；
-            // trim 后预览紧凑（SQL 语义不变）。
+            // trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
+            //
+            // T-MbgExamplePreview R2：段间分隔改由下游缓冲负责（DynamicContext.appendSql 恒补空格；
+            // TrimSqlNode 的 filtered 缓冲仅在粘连会拼成词时补）——此处再加空格会叠加成双空格。
             delegate.appendSql(newSql.trim());
         }
 
@@ -332,6 +350,12 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public Map<String, Boolean> getConditionOutcomes() {
             return delegate.getConditionOutcomes();
+        }
+
+        // T-MbgExamplePreview R1：占位模式必须转发——否则 foreach 体内的 ${} 仍按空串输出
+        @Override
+        public boolean getEmptyDollarPlaceholder() {
+            return delegate.getEmptyDollarPlaceholder();
         }
     }
 }
