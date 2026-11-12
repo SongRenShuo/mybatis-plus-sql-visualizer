@@ -66,6 +66,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FNULL
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FEV
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PROP_TOGGLE_ID
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PROP_LABEL_FULL_TEXT
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PROP_FIELD_SOURCE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PROP_FOREACH_NULL
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.NUMBER_REGEX
@@ -151,6 +152,9 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     paramPanel.removeAll()
     paramFields.clear()
     paramWarnLabels.clear()
+    // T-ParamNameTruncation：标签/复选框截断态登记随本轮重建清场（控件引用不能跨预览复用）
+    paramLabelRefs.clear()
+    paramCheckRefs.clear()
     // T-RuntimeSlotFill 券 C：占位行随本轮重建清场（控件引用不能跨预览复用）
     runtimeSlotRows.clear()
     runtimeSlotWarningLabel = null
@@ -324,7 +328,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         }
         if (ibatisModel.iterateRows.isNotEmpty()) {
             paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.ibatis.iterate.section")))
-            ibatisModel.iterateRows.forEach { paramPanel.add(buildIbatisIterateRow(it)) }
+            ibatisModel.iterateRows.forEach { paramPanel.add(buildIbatisIterateRow(it, labelWidth)) }
         }
         val coveredSources = ibatisModel.placeholderRows.map { it.name }.toSet() +
             ibatisModel.dollarRows.map { it.name }.toSet()
@@ -1009,19 +1013,22 @@ internal fun SqlPreviewPanel.buildConditionRow(view: ConditionView): JBPanel<JBP
                 }
             }
         }
+        val outcomeReserve = outcomeLabel?.preferredSize?.width ?: 0
         val displayLabel = checkBoxText(
             rawLabel,
-            (checkBoxMaxWidth() - (outcomeLabel?.preferredSize?.width ?: 0)).coerceAtLeast(MIN_CHECKBOX_TEXT_WIDTH),
+            (checkBoxMaxWidth() - outcomeReserve).coerceAtLeast(MIN_CHECKBOX_TEXT_WIDTH),
         )
     val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
         // T-M26.3：标签被截断时 tooltip 展示表达式原文（否则保留 flagSource 提示）
-        toolTipText = if (displayLabel != rawLabel) rawLabel else conditionTooltip(view)
+        toolTipText = if (displayLabel != rawLabel) wrappedLabelTooltip(rawLabel) else conditionTooltip(view)
         putClientProperty(PROP_TOGGLE_ID, view.id) // R22 T-02：快照枚举/召回同步的 id 锚点
         addActionListener {
             if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
             renderSql()
         }
     }
+    // T-ParamNameTruncation：登记全名与标注预留宽度，视口变化后按同一口径重排
+    registerCheckBoxLabel(checkBox, rawLabel, outcomeReserve, conditionTooltip(view))
     conditionCheckBoxes += checkBox
         // 不可标注时补 null 占位——本表按 **条件行下标** 与 [conditionCheckBoxes] 对齐，
         // 「跳着加」会让下标错位到别的条件上（前置无标志条件把后面的标注整段前移）。
@@ -1133,13 +1140,16 @@ internal fun SqlPreviewPanel.buildXmlConditionRow(view: XmlConditionView): JBPan
     val displayLabel = checkBoxText(rawLabel)
     val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
         // T-M26.3：标签被截断时 tooltip 展示 test 表达式原文（否则保留条件提示）
-        toolTipText = if (displayLabel != rawLabel) rawLabel else MpSqlVisualizerBundle.message("panel.xml.condition")
+        toolTipText = if (displayLabel != rawLabel) wrappedLabelTooltip(rawLabel)
+        else MpSqlVisualizerBundle.message("panel.xml.condition")
         putClientProperty(PROP_TOGGLE_ID, view.id) // R22 T-02：快照枚举/召回同步的 id 锚点（XML 条件行）
         addActionListener {
             if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
             renderSql()
         }
     }
+    // T-ParamNameTruncation：登记全名（XML 条件行无行尾标注，预留 0）
+    registerCheckBoxLabel(checkBox, rawLabel, 0, MpSqlVisualizerBundle.message("panel.xml.condition"))
     conditionCheckBoxes += checkBox
     val outcomeLabel = JBLabel().apply {
         foreground = UIUtil.getContextHelpForeground()
@@ -1338,13 +1348,15 @@ internal fun SqlPreviewPanel.buildIbatisConditionRow(row: IbatisConditionRow, mo
     val rawLabel = model.labelOf(row)
     val displayLabel = checkBoxText(rawLabel)
     val checkBox = JCheckBox(displayLabel, row.id in enabledIds).apply {
-        toolTipText = if (displayLabel != rawLabel) rawLabel else rawLabel
+        toolTipText = rawLabel
         putClientProperty(PROP_TOGGLE_ID, row.id) // R22 T-02：快照枚举/召回同步的 id 锚点（与 XML 条件行同形态）
         addActionListener {
             if (isSelected) enabledIds.add(row.id) else enabledIds.remove(row.id)
             renderSql()
         }
     }
+    // T-ParamNameTruncation：登记全名（iBatis 条件行无行尾标注，预留 0）
+    registerCheckBoxLabel(checkBox, rawLabel, 0, rawLabel)
     conditionCheckBoxes += checkBox
     return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
         add(checkBox)
@@ -1365,10 +1377,12 @@ internal fun SqlPreviewPanel.buildIbatisConditionRow(row: IbatisConditionRow, mo
 }
 
 /** iBatis 迭代行：`iterate: ids` 标签 + 值列表输入（逗号/换行分隔）——留空 = 该段不展开（引擎降级，现状一致）。 */
-internal fun SqlPreviewPanel.buildIbatisIterateRow(row: IbatisIterateRow): JBPanel<JBPanel<*>> {
+internal fun SqlPreviewPanel.buildIbatisIterateRow(row: IbatisIterateRow, labelWidth: Int): JBPanel<JBPanel<*>> {
     val labelText = "iterate: ${row.property}"
     val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
-    panel.add(columnLabel(labelText, labelColumnWidth(listOf(labelText))).apply {
+    // T-ParamNameTruncation：标签列宽取本分区统一列宽（旧实现按「本行单条文本」自算，
+    // 与同区占位符/参数行不齐，输入框左缘对不上）
+    panel.add(columnLabel(labelText, labelWidth).apply {
         border = JBUI.Borders.empty(0, 8, 0, 0)
     })
     val field = JBTextField(16).apply {
@@ -1541,30 +1555,182 @@ internal fun SqlPreviewPanel.paramLabel(source: String, columnWidth: Int): JBLab
 
 /**
  * T-M26.3：两列行标签——统一列宽（输入框左缘对齐，IDEA 表单惯例），
- * 文本超列宽时中段省略（保留尾部）+ tooltip 全名。
+ * 文本超列宽时中段省略（保留尾部）。
+ *
+ * T-ParamNameTruncation：全名 tooltip **无条件**设置——旧实现只在「构建那一刻判定超宽」的分支里设，
+ * 而列宽会随视口变化（见 [relabelParamLabels]），一旦事后变窄就会「截断了却没有 tooltip」，
+ * 正是用户「悬停也看不到全名」的成因面。标签同时登记进 [SqlPreviewPanel.paramLabelRefs]，
+ * 供视口变化时原地重排（不重建左栏——重建会丢输入焦点与未保存文本）。
  */
 
-internal fun SqlPreviewPanel.columnLabel(fullText: String, columnWidth: Int): JBLabel = JBLabel(fullText).apply {
+internal fun SqlPreviewPanel.columnLabel(fullText: String, columnWidth: Int): JBLabel = JBLabel().apply {
+    putClientProperty(PROP_LABEL_FULL_TEXT, fullText)
+    applyLabelColumn(this, fullText, columnWidth)
+    paramLabelRefs += ParamLabelRef(label = this, fullText = fullText)
+}
+
+/** T-ParamNameTruncation：单个标签的截断态落定（构建期与视口变化重排共用同一套度量）。 */
+
+internal fun SqlPreviewPanel.applyLabelColumn(label: JBLabel, fullText: String, columnWidth: Int) {
     val metrics = getFontMetrics(UIUtil.getLabelFont())
-    if (metrics.stringWidth(fullText) > columnWidth) {
-        toolTipText = fullText
-        text = ellipsize(fullText, metrics, columnWidth)
-    }
-    preferredSize = Dimension(columnWidth, preferredSize.height)
+    val display = if (metrics.stringWidth(fullText) > columnWidth) ellipsize(fullText, metrics, columnWidth) else fullText
+    if (label.text != display) label.text = display
+    val tooltip = wrappedLabelTooltip(fullText)
+    if (label.toolTipText != tooltip) label.toolTipText = tooltip
+    label.preferredSize = Dimension(columnWidth, label.preferredSize.height)
 }
 
 /**
- * T-M26.3：两列行标签列宽——按最长可见标签自适应，**上限跟随左栏视口宽度**
- * （标签列 + 输入框约 90px + 间距边距 38px 不超出视口，保证标题行右侧按钮不被推出；
- * 默认 240 面板 → 上限约 109，宽面板放宽至 260 封顶；未布局/测试环境取 260）。
+ * T-ParamNameTruncation：tooltip 文本——短名原样，超长名改用 `<html>` 软折行。
+ *
+ * Swing 对**纯文本** tooltip 不做折行，单行超屏宽时会被裁掉（「悬停也看不全」的第二个成因面）；
+ * 断行优先落在 `.` / `_` / `)` 之后，`criteria.criteriaValue` 这类层级名折行后仍可读。
+ */
+
+internal fun wrappedLabelTooltip(fullText: String, charsPerLine: Int = LABEL_TOOLTIP_WRAP_CHARS): String {
+    if (fullText.length <= charsPerLine) return fullText
+    return "<html>" + softWrapLines(fullText, charsPerLine).joinToString("<br>") { escapeTooltipHtml(it) } + "</html>"
+}
+
+/** 软折行（纯函数）：每段 ≤ [width]，优先在层级分隔符后断，找不到就硬断。 */
+private fun softWrapLines(text: String, width: Int): List<String> {
+    val lines = mutableListOf<String>()
+    var start = 0
+    while (start < text.length) {
+        if (text.length - start <= width) {
+            lines += text.substring(start)
+            break
+        }
+        var end = start + width
+        for (i in end downTo start + (width / 2).coerceAtLeast(1)) {
+            val ch = text[i - 1]
+            if (ch == '.' || ch == '_' || ch == ')') {
+                end = i
+                break
+            }
+        }
+        lines += text.substring(start, end)
+        start = end
+    }
+    return lines
+}
+
+private fun escapeTooltipHtml(text: String): String =
+    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+/**
+ * T-M26.3：两列行标签列宽——按最长可见标签自适应，上限跟随左栏视口宽度。
+ *
+ * T-ParamNameTruncation：旧实现把它算成「构建时定稿一次」（`viewport` 取自弹窗定尺前的瞬时宽度，
+ * 且上限硬编码 260px），于是**拉宽弹窗、拖宽分隔条都不会变**，30 多个字符以上的名字永远截断。
+ * 现改为「视口 × [LABEL_COLUMN_VIEWPORT_RATIO]，硬上限 [LABEL_COLUMN_MAX_PX]」，
+ * 并由 [relabelParamLabels] 在视口变化后重算。
  */
 
 internal fun SqlPreviewPanel.labelColumnWidth(texts: List<String>): Int {
-    if (texts.isEmpty()) return 140
+    if (texts.isEmpty()) return LABEL_COLUMN_MIN_PX
     val metrics = getFontMetrics(UIUtil.getLabelFont())
-    val viewport = paramScroll.viewport.width
-    val maxWidth = if (viewport <= 0) 260 else (viewport - 128).coerceIn(80, 260)
-    return texts.maxOf { metrics.stringWidth(it) }.coerceIn(80, maxWidth)
+    return paramLabelColumnWidth(texts.map { metrics.stringWidth(it) }, paramScroll.viewport.width)
+}
+
+/**
+ * 列宽预算的纯函数形态（脱 FontMetrics/组件，headless 可直测）：内容宽度按「视口 × 比例」封顶，
+ * 再夹在 [[LABEL_COLUMN_MIN_PX]]/[LABEL_COLUMN_MAX_PX] 之间；[viewportPx] <= 0（未布局）
+ * 时按 [LABEL_COLUMN_FALLBACK_VIEWPORT_PX] 估算。
+ */
+
+internal fun paramLabelColumnWidth(textWidths: List<Int>, viewportPx: Int): Int {
+    if (textWidths.isEmpty()) return LABEL_COLUMN_MIN_PX
+    val viewport = if (viewportPx > 0) viewportPx else LABEL_COLUMN_FALLBACK_VIEWPORT_PX
+    val budget = (viewport * LABEL_COLUMN_VIEWPORT_RATIO).toInt()
+        .coerceIn(LABEL_COLUMN_MIN_PX, LABEL_COLUMN_MAX_PX)
+    return textWidths.max().coerceIn(LABEL_COLUMN_MIN_PX, budget)
+}
+
+/** T-ParamNameTruncation：标签列宽预算常量（视口比例 / 硬上下限 / 未布局兜底视口 / tooltip 折行宽度）。 */
+internal const val LABEL_COLUMN_VIEWPORT_RATIO = 0.55
+internal const val LABEL_COLUMN_MAX_PX = 480
+internal const val LABEL_COLUMN_MIN_PX = 80
+internal const val LABEL_COLUMN_FALLBACK_VIEWPORT_PX = 640
+internal const val LABEL_TOOLTIP_WRAP_CHARS = 64
+
+/** T-ParamNameTruncation：视口变化 → 重排的防抖窗口（拖分隔条时连续触发，按次重排会抖）。 */
+internal const val LABEL_RELABEL_DEBOUNCE_MS = 120
+
+/** T-ParamNameTruncation：左栏标签/复选框的截断态登记（视口变化后原地重排的依据）。 */
+internal data class ParamLabelRef(val label: JBLabel, val fullText: String)
+
+internal data class ParamCheckRef(
+    val box: JCheckBox,
+    val fullText: String,
+    /** 行尾标注预留宽度（R49 求值探镜）；无标注为 0。 */
+    val reservePx: Int,
+    /** 未被截断时沿用的原有提示（条件语义/flagSource 提示）。 */
+    val fallbackTooltip: String?,
+)
+
+/**
+ * T-ParamNameTruncation：视口尺寸变化后重排（防抖由调用方 [scheduleParamLabelRelabel] 负责）。
+ * 只改已有标签的文本/首选尺寸/tooltip；不重建左栏、不碰参数值状态表与召回链。
+ */
+
+internal fun SqlPreviewPanel.relabelParamLabels() {
+    if (paramLabelRefs.isEmpty() && paramCheckRefs.isEmpty()) return
+    val metrics = getFontMetrics(UIUtil.getLabelFont())
+    val columnWidth = paramLabelColumnWidth(
+        paramLabelRefs.map { metrics.stringWidth(it.fullText) },
+        paramScroll.viewport.width,
+    )
+    paramLabelRefs.forEach { applyLabelColumn(it.label, it.fullText, columnWidth) }
+    val boxBudget = checkBoxMaxWidth()
+    paramCheckRefs.forEach { ref ->
+        applyCheckBoxLabel(
+            ref.box,
+            ref.fullText,
+            (boxBudget - ref.reservePx).coerceAtLeast(MIN_CHECKBOX_TEXT_WIDTH),
+            ref.fallbackTooltip,
+        )
+    }
+    paramPanel.revalidate()
+    paramPanel.repaint()
+}
+
+/** T-ParamNameTruncation：左栏视口变化 → 防抖登记一次重排（Alarm 随面板 Disposer 树释放）。 */
+
+internal fun SqlPreviewPanel.scheduleParamLabelRelabel() {
+    val alarm = labelRelabelAlarm
+        ?: com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, this)
+            .also { labelRelabelAlarm = it }
+    alarm.cancelAllRequests()
+    alarm.addRequest({ relabelParamLabels() }, LABEL_RELABEL_DEBOUNCE_MS)
+}
+
+/**
+ * T-ParamNameTruncation：复选框标签截断态落定——被截断时 tooltip 换成全名（T-M26.3 既有口径），
+ * 未被截断时退回行内原有提示；构建期与视口变化重排共用。
+ */
+
+internal fun SqlPreviewPanel.applyCheckBoxLabel(
+    box: JCheckBox,
+    fullText: String,
+    maxWidth: Int,
+    fallbackTooltip: String?,
+) {
+    val display = checkBoxText(fullText, maxWidth)
+    if (box.text != display) box.text = display
+    val tooltip = if (display != fullText) wrappedLabelTooltip(fullText) else fallbackTooltip
+    if (box.toolTipText != tooltip) box.toolTipText = tooltip
+}
+
+/** T-ParamNameTruncation：复选框标签登记（全名 + 标注预留宽度 + 未截断时的原有提示）。 */
+
+internal fun SqlPreviewPanel.registerCheckBoxLabel(
+    box: JCheckBox,
+    fullText: String,
+    reservePx: Int,
+    fallbackTooltip: String?,
+) {
+    paramCheckRefs += ParamCheckRef(box, fullText, reservePx, fallbackTooltip)
 }
 
 /**

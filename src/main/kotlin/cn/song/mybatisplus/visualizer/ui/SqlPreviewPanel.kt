@@ -241,6 +241,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal val paramFields = mutableListOf<JBTextField>()
     // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
     internal val paramWarnLabels = mutableListOf<JBLabel>()
+    // T-ParamNameTruncation：左栏标签/复选框截断态登记——视口宽度变化后原地重排（不重建左栏）
+    internal val paramLabelRefs = mutableListOf<ParamLabelRef>()
+    internal val paramCheckRefs = mutableListOf<ParamCheckRef>()
+    /** T-ParamNameTruncation：列宽重排防抖调度器（惰性建，随本面板 Disposer 树释放）。 */
+    internal var labelRelabelAlarm: com.intellij.util.Alarm? = null
     internal val conditionCheckBoxes = mutableListOf<JCheckBox>()
     // R30 条件求值探镜：XML 条件行尾的三态结果标注（条件 id → 标签），renderSql 每轮刷新（零监听器）
     internal val xmlConditionOutcomeLabels = mutableMapOf<String, JBLabel>()
@@ -821,6 +826,12 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
             override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+        })
+        // T-ParamNameTruncation：左栏视口宽度变化（拖分隔条 / 拉窗口 / 首显）→ 标签列宽原地重算。
+        // 旧实现只在 rebuildLeftPanel 那一瞬间算一次，宽面板里仍按窄列宽截断参数名。
+        paramScroll.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = scheduleParamLabelRelabel()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = scheduleParamLabelRelabel()
         })
 
         // T-StackHoverUi：调用栈悬停弹层（调试器 Frames 风格）——meta 行悬停承接完整调用链，
@@ -1434,6 +1445,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
         /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
         internal const val PROP_TOGGLE_ID = "mpsv.toggleId"
+
+        /** T-ParamNameTruncation：标签全名锚点——视口变化重排时按它重算省略文本与 tooltip。 */
+        internal const val PROP_LABEL_FULL_TEXT = "mpsv.labelFullText"
 
         /** R49：条件复选框标签截断预算下限（px）——行尾探镜标注按宽度扣减后仍保底可读（同 [checkBoxMaxWidth] 下限）。 */
         internal const val MIN_CHECKBOX_TEXT_WIDTH = 100
