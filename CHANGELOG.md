@@ -46,6 +46,8 @@
 - **接口方法的预览仍卡在占位符（T-PreviewOpenPerfM2 D6，bdc1f89ab）**：`ReferencesSearch` 对接口方法会把「实现的声明处 / 方法引用」一并返回，这类命中上溯没有方法调用节点；旧逻辑只看第一个命中，撞上这种就整条放弃（真机 `mybatis-plus-demo` 的 `CtCustmanagerRelMapper#selectByExample` 明明有两个调用点却报 `noCallSite`）。现在跳过不可用的命中继续找真正的调用点，找到第一个即停
 - **`example.or()` 的条件被拍成 AND（T-PreviewOpenPerfM2 D7）**：MBG 里 `createCriteria()` 与 `or()` 开的是**不同 Criteria**，`Example_Where_Clause` 用 `separator="or"` 连接；此前把所有条件拍平成一条 Criteria，`( cust_id = ? ) or ( staff_login like ? )` 被渲染成 `cust_id = ? and staff_login like ?`，结果集语义整个变了。现在按 Criteria 分组，且内层 `criteria.criteria` 不再被全局集合遮蔽（原来每条 Criteria 都会把全部条件再渲染一遍），`or` 与后面的 `(` 之间也补上了空格
 - **2026.3 打开数据源列表刷一条插件错误（T-PreviewOpenPerfM2 D8）**：菜单更新路径会走「新建数据源」可用性判定，那里用 `ActionGroup.getChildren(null)` 展开了原生驱动组；2026.3 把这种手写展开记为插件错误并抛 `Throwable: Do not call getChildren(null)`。现在可用性判定只做类可达判断（不在高频路径展开组），真正点击时用带真实事件的重载取子项
+- **MBG 预览没有可填的参数行，且清除后值还留着（T-PreviewOpenPerfM2 D10/D11）**：M2 注入后语句占位符来源全是 `__frch_criterion_N.*`，参数区按「foreach 展开项不单独建行」把这类键全滤掉了——左栏一个可填行都没有，用户只能去 foreach 值框填，而那会冲掉还原出来的条件对象；同时「清除」只清了 foreach 权威值、没回收已播种的展开项键（回收路径以 map 非空为前提），残留值一直留在产物里。现在按条件文本生成可填行（`staff_login LIKE 值`、`create_time between 值/结束值`），清除时显式回收展开项键；M2 已还原元素对象的 foreach 集合，值框改为只读
+- **每次打开预览都重扫全部数据源做 schema 预热（T-SchemaPrewarmDedupe）**：真机日志里一次打开跑两遍预热、每遍把 15 个数据源全遍历且全部 `resolved=0`，下次打开原样重来。现在预热链带 60 秒去重窗口（同一张表窗口内只尝试一次），窗口外放行以保留「数据源晚连接后自愈」；`bailAfterTraversal` 的既有语义未动
 - **打开 mapper 文件时后台预取条件解析，第一次点开预览不再干等（T-PreviewOpenPerfM2 M11，34488db41 / 773421955）**：真机首次打开 `[open-perf] total=1689~2115ms`，其中 M2 冷检索独占 1628~2042ms，而第二次起只有 30ms 装配。现在 gutter 渲染时对 `select` 且 `parameterType` 以 Example 结尾的语句后台预取一次（失败记忆、单条在途两道护栏，避免打开文件瞬间并发多条冷检索）；实测首次点开 `m2=1ms`、装配 104ms，同语句再点 30ms
 
 ## [2026.11.11] - 2026-11-11
