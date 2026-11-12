@@ -1,10 +1,13 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.update.DevUpdateMode
+import cn.song.mybatisplus.visualizer.update.LocalPackage
+import cn.song.mybatisplus.visualizer.update.LocalUpdateDir
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
 import cn.song.mybatisplus.visualizer.update.PluginVersion
+import cn.song.mybatisplus.visualizer.update.ScanResult
 import cn.song.mybatisplus.visualizer.update.UpdateManifest
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -422,6 +425,221 @@ class UpdateSectionTest : BasePlatformTestCase() {
             section.statusLabel.text,
         )
         assertFalse("普通安装失败不给兜底链接", section.fallbackLinksContainer.isVisible)
+    }
+
+    // ------------------------------------------------------------------
+    // T-LocalUpdateDir：本地目录通道（渲染 / 分流 / 状态行 / 远端回归）
+    // ------------------------------------------------------------------
+
+    private fun localPkg(version: String = "2026.11.12"): LocalPackage =
+        LocalPackage(version, java.nio.file.Path.of("unused.zip"), "unused.zip", 1, 1, null)
+
+    fun testLocalCheckAvailableRendersAndArmsInstall() {
+        section.localScanRunner = { ScanResult.Available(localPkg(), total = 1, skipped = 0) }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.Available)
+        assertEquals(UpdateSection.Channel.LOCAL, section.channel)
+        assertEquals("2026.11.12", section.pendingLocalPackage?.version)
+        // 状态行带「（本地目录）」后缀；日志区显示本地包详情（无 Gitee 链接）
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.available", "2026.11.12") +
+                MpSqlVisualizerBundle.message("settings.update.channel.local"),
+            section.statusLabel.text,
+        )
+        assertTrue(section.installButton.isVisible && section.installButton.isEnabled)
+        assertFalse("本地通道不显示 Gitee 链接", section.giteeLink.isVisible)
+    }
+
+    fun testLocalInstallBranchGoesToLocalRunner() {
+        var localCalls = 0
+        var remoteCalls = 0
+        section.localScanRunner = { ScanResult.Available(localPkg(), total = 1, skipped = 0) }
+        section.localInstallRunner = { _, _ -> localCalls++; InstallResult.InstalledDynamic("2026.11.12") }
+        section.installRunner = { _, _ -> remoteCalls++; InstallResult.InstalledRestartRequired }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.Available)
+        section.installButton.doClick()
+        waitForState(UpdateSection.State.InstalledLive)
+        assertEquals("本地通道必须走 localInstallRunner", 1, localCalls)
+        assertEquals("本地通道不得走下载链", 0, remoteCalls)
+        // InstalledLive 态：安装按钮隐藏（与远端热生效态同渲染）、重启按钮也不出现
+        assertFalse(section.installButton.isVisible)
+        assertFalse(section.restartButton.isVisible)
+    }
+
+    fun testLocalDirInvalidShowsReasonAndNoInstall() {
+        section.localScanRunner = { ScanResult.DirInvalid(LocalUpdateDir.DirCheck.NotFound) }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.Failed)
+        assertEquals(
+            MpSqlVisualizerBundle.message(
+                "settings.update.checkFailed",
+                MpSqlVisualizerBundle.message("settings.update.local.notFound"),
+            ) + MpSqlVisualizerBundle.message("settings.update.channel.local"),
+            section.statusLabel.text,
+        )
+        assertFalse(section.installButton.isVisible)
+    }
+
+    fun testLocalNoValidPackageShowsSkipCount() {
+        section.localScanRunner = {
+            ScanResult.NoValidPackage(java.nio.file.Path.of("d"), skipped = 2, skippedSamples = listOf("x"), truncated = false)
+        }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.Failed)
+        assertEquals(
+            MpSqlVisualizerBundle.message(
+                "settings.update.checkFailed",
+                MpSqlVisualizerBundle.message("settings.update.local.noValid", 2),
+            ) + MpSqlVisualizerBundle.message("settings.update.channel.local"),
+            section.statusLabel.text,
+        )
+    }
+
+    fun testLocalUpToDateSuffixAndNoInstall() {
+        section.localScanRunner = { ScanResult.UpToDate(localPkg("2026.11.11"), total = 1, skipped = 0) }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.UpToDate)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.upToDate") +
+                MpSqlVisualizerBundle.message("settings.update.channel.local"),
+            section.statusLabel.text,
+        )
+        assertFalse(section.installButton.isVisible)
+    }
+
+    fun testLocalDirStatusRowRendersScanResult() {
+        section.renderLocalDirStatus(ScanResult.Available(localPkg(), total = 3, skipped = 1))
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.local.ready", 3, "2026.11.12"),
+            section.localDirStatusLabel.text,
+        )
+        section.renderLocalDirStatus(ScanResult.DirInvalid(LocalUpdateDir.DirCheck.InsidePluginsDir))
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.local.insidePluginsDir"),
+            section.localDirStatusLabel.text,
+        )
+        section.renderLocalDirStatus(ScanResult.Disabled)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.local.disabled"), section.localDirStatusLabel.text)
+    }
+
+    fun testLocalStatusSurvivesUpdateTexts() {
+        // P-3 钉子同源：语言切换 rebuild 只重建文本，状态行必须按最近读数重渲染（不丢状态）
+        section.renderLocalDirStatus(ScanResult.UpToDate(localPkg("2026.11.11"), total = 2, skipped = 0))
+        section.updateTexts()
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.local.ready.upToDate", 2, "2026.11.11"),
+            section.localDirStatusLabel.text,
+        )
+    }
+
+    fun testRemoteChannelUnpollutedAfterLocal() {
+        // 回归：本地通道用过一次后，正式通道读数与后缀不受污染
+        section.localScanRunner = { ScanResult.UpToDate(localPkg(), total = 1, skipped = 0) }
+        section.localCheckButton.doClick()
+        waitForState(UpdateSection.State.UpToDate)
+        section.checkRunner = { CheckResult.UpToDate }
+        section.checkButton.doClick()
+        waitForState(UpdateSection.State.UpToDate)
+        assertEquals(UpdateSection.Channel.STABLE, section.channel)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.statusLabel.text)
+    }
+
+    // ------------------------------------------------------------------
+    // T-LocalUpdateDir 真机反馈（2026-11-12）：输入路径后状态行不刷新 / 点「打开」无反应
+    // ------------------------------------------------------------------
+
+    /**
+     * 输入后防抖校验必须把状态行刷成实际读数（真机症状：填了路径，状态行仍停在
+     * 「未设置（此项关闭）」——说明输入后的扫描没跑到或结果没回渲染）。
+     */
+    fun testLocalDirTypingRefreshesStatusRow() {
+        val dir = createTempDir("mpvs-ui-status-")
+        try {
+            // 用明确高于当前插件的版本，读数走 Available 文案（不受当前版本号变化影响）
+            writeFakePluginZip(dir, "2099.1.1")
+            section.localDirField.text = dir.absolutePath
+            waitForLocalStatus(MpSqlVisualizerBundle.message("settings.update.local.ready", 1, "2099.1.1"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 点「打开」必须真的调用打开 seam（真机症状：点按钮毫无反应）。 */
+    fun testOpenLocalDirInvokesOpener() {
+        val dir = createTempDir("mpvs-ui-open-")
+        try {
+            writeFakePluginZip(dir, "2099.1.1")
+            val opened = mutableListOf<java.nio.file.Path>()
+            section.localDirectoryOpener = { opened.add(it) }
+            section.localDirField.text = dir.absolutePath
+            // 防抖校验与点击存在竞态：先等一次校验落地，再点开
+            waitForLocalStatusContains("已找到")
+            section.openLocalDirButton.doClick()
+            assertEquals("打开按钮必须调用 seam", 1, opened.size)
+            assertEquals(dir.toPath().toAbsolutePath().normalize(), opened.single())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 路径非法时点「打开」不调 seam，且状态行给出原因（不静默、不弹窗）。 */
+    fun testOpenLocalDirOnInvalidPathShowsReason() {
+        var opened = 0
+        section.localDirectoryOpener = { opened++ }
+        section.localDirField.text = "not-an-absolute-path"
+        section.openLocalDirButton.doClick()
+        assertEquals("非法路径不得打开", 0, opened)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.local.relative"),
+            section.localDirStatusLabel.text,
+        )
+    }
+
+    private fun waitForLocalStatusContains(needle: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (!section.localDirStatusLabel.text.contains(needle) && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertTrue(
+            "状态行应包含「$needle」，实际=「${section.localDirStatusLabel.text}」",
+            section.localDirStatusLabel.text.contains(needle),
+        )
+    }
+
+    private fun waitForLocalStatus(expected: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (section.localDirStatusLabel.text != expected && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertEquals(expected, section.localDirStatusLabel.text)
+    }
+
+    private fun createTempDir(prefix: String): java.io.File =
+        java.nio.file.Files.createTempDirectory(prefix).toFile()
+
+    /** 造一个标准 IPGP 布局假安装包（顶层插件目录 + lib 内嵌 plugin.xml）。 */
+    private fun writeFakePluginZip(dir: java.io.File, version: String) {
+        val xml = """
+            <idea-plugin>
+                <id>${cn.song.mybatisplus.visualizer.update.UpdateSource.PLUGIN_ID}</id>
+                <version>$version</version>
+            </idea-plugin>
+        """.trimIndent()
+        val jarBytes = java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.ZipOutputStream(out).use { jar ->
+                jar.putNextEntry(java.util.zip.ZipEntry("META-INF/plugin.xml"))
+                jar.write(xml.toByteArray())
+                jar.closeEntry()
+            }
+        }.toByteArray()
+        java.util.zip.ZipOutputStream(java.io.FileOutputStream(java.io.File(dir, "pkg-$version.zip"))).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("mybatis-plus-sql-visualizer/lib/plugin.jar"))
+            zip.write(jarBytes)
+            zip.closeEntry()
+        }
     }
 
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */

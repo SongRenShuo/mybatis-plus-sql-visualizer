@@ -93,6 +93,13 @@ data class PreviewResult(
      */
     val hasDollarRawSegments: Boolean = false,
     /**
+     * T-PreviewOpenPerfM2 M9：本次预览因**索引未就绪**（dumb mode）跳过了 M2 调用点检索，
+     * 这里是「索引就绪后重算一次」的闭包；面板据此挂 `DumbService.runWhenSmart` 自动刷新，
+     * 让冷态首次打开既秒出骨架、又能在索引就绪后补上真实 Criterion。
+     * null = 无需重试（未跳过 / 非 XML 链）。
+     */
+    val retryWhenIndexReady: (() -> PreviewResult?)? = null,
+    /**
      * UI-001：[warning] 是否为**信息性说明**（非渲染失败）。
      *
      * true 时面板横幅/元信息行用 `ℹ` 信息级前缀（`panel.banner.renderNote`），不再冒充

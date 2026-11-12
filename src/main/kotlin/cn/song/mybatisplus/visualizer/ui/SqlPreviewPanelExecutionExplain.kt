@@ -41,7 +41,6 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
 //（含结构化 EXPLAIN 与降级通知）」内聚成员，原样搬出到本文件——方法体逐字符搬运，
 // 同包 top-level internal 可见性不变，零行为改动。
 
-/**
  * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
  * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
  * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
@@ -128,7 +127,7 @@ internal fun SqlPreviewPanel.explainSql() {
      * R46：查询链的未识别对象轻通知（非模态、不阻断执行——与 DML 确认弹窗同源同文案）。
      * 无发现或单测模式不弹（弹窗/通知克制红线；真机才提示）。
      */
-    internal fun SqlPreviewPanel.notifySchemaIssues(
+    private fun SqlPreviewPanel.notifySchemaIssues(
         proj: Project,
         issues: List<cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.Issue>,
     ) {
@@ -198,12 +197,12 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
             // 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」3 条）：
             // ```
             // SEVERE - TransactionGuardImpl - Write-unsafe context!
-            //   at DataSourceSelectorResultsKt.reuseSharedConsole(DataSourceSelectorResults.kt:750)
+            //   at DataSourceSelectorResultsKt.reuseSharedConsole(...)
             //        [WriteCommandAction { editor.document.setText(sql) }]
-            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(DataSourceSelectorConsole.kt:666)
+            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(...)
             //        [WriteAction { writeVfTextViaDocument(...) }]
             //   at SqlExecutor.execute → chooseAndPrepare
-            //   at submitExplainDirectConsole$lambda$0$0(SqlPreviewPanelExecutionExplain.kt:198)
+            //   at submitExplainDirectConsole$lambda$0$0
             // ```
             // `ModalityState.any()` 恒 write-unsafe（平台构造期只把 nonModal 登记为 write-safe），
             // 于是整条执行链（复用控制台的 `document.setText`、执行前的 vf 文档同步）都在
@@ -218,7 +217,7 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                         embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)
                     },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onError = { errorMsg -> showTempFileError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -492,9 +491,6 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             databaseAvailable = databaseAvailable,
             hasBoundDataSource = boundDs != null,
             hasUnfilledParams = hasUnfilledParams,
-            // T-ObPanelAdvice：OB TEXT 档（structuredTextPlan 在册）放行进结构化通道——
-            // 不传时 TEXT 档一律直送（既有调用点/用例零改编译）
-            dialectName = dialect.name,
         )
     ) {
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent -> {
@@ -564,50 +560,23 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,
-                onPlan = { submitted ->
+                onPlan = { outcome ->
                     if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
                         return@executeStructured
                     }
                     // 索引建议联动（ExplainIndexAdvisor 规则集的面板侧消费——只提示不执行；
-                    // 建议器异常不连坐计划渲染，降级为无建议）。
-                    // 按提交返回的**原始行列**计算：OB TEXT 档的单列 ASCII 计划树正是建议器
-                    // 既有输入形态（adviseObPlanText 以表头为门），转换后的行列反而取不到。
+                    // 建议器异常不连坐计划渲染，降级为无建议）
                     val hints = runCatching {
                         cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
-                            dialect.name, submitted.raw.headers, submitted.raw.rows,
+                            dialect.name, outcome.raw.headers, outcome.raw.rows,
                         )
                     }.getOrDefault(emptyList())
-                    // T-ObPanelAdvice：OB TEXT 档 ASCII 计划树 → 结构化行列——解析成功就进面板，
-                    // fail-closed 收窄为「解析失败才回退原生」（其余 TEXT/XML 档不进本分支，
-                    // 仍由通道判定 DirectSilent 挡在结构化外）
-                    val outcome = if (cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.isStructuredTextPlan(dialect.name)) {
-                        val parsed = cn.song.mybatisplus.visualizer.util.ObExplainPlanTextParser.parse(submitted.raw)
-                        if (parsed == null) {
-                            notifyExplainStructuredFallback(
-                                proj,
-                                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.TEXT_PLAN_UNPARSEABLE,
-                                detail = null,
-                            )
-                            submitExplainDirect(proj, explainSql, dialectGateRequest)
-                            return@executeStructured
-                        }
-                        submitted.copy(raw = parsed)
-                    } else {
-                        submitted
-                    }
-                    // 视图与对比按解析后形态分派：OB = TABLE（解析产物是货真价实的行列表）；
-                    // 其余方言 = 提交档原样（MySQL/PG 行为逐字不变）
-                    val panelFormat = if (outcome !== submitted) {
-                        cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.TABLE
-                    } else {
-                        outFormat
-                    }
                     val historyCompletion = completeExplainPlanHistory(history, historyRequest, outcome.raw)
                     if (historyCompletion.saved != cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED) {
                         captureAiContextPlan(history, historyRequest.key, outcome.raw)
                     }
                     val planDiff = historyCompletion.baselines.firstOrNull()?.let {
-                        ExplainPlanDiff.diff(it.raw, outcome.raw, panelFormat)
+                        ExplainPlanDiff.diff(it.raw, outcome.raw, outFormat)
                     }
                     // R61 兼容观察值；比较决策由 R90 的目标隔离会话负责。
                     lastStructuredExplain = explainSql to outcome.raw
@@ -617,7 +586,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         dataSourceName = outcome.dataSourceName,
                         elapsedMs = outcome.elapsedMs,
                         raw = outcome.raw,
-                        format = panelFormat,
+                        format = outFormat,
                         hints = hints,
                         onBackToConsole = {
                             dialogRef?.close(0)
@@ -681,7 +650,7 @@ internal fun SqlPreviewPanel.backToPreview() {
 }
 
 /** P3a：执行结果视图头部——明确当前不是预览编辑态，并提供显式「返回预览」。 */
-internal fun SqlPreviewPanel.executeViewHeader(): JComponent =
+private fun SqlPreviewPanel.executeViewHeader(): JComponent =
     com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>(java.awt.BorderLayout()).apply {
         isOpaque = false
         border = JBUI.Borders.empty(2, 8)
@@ -718,8 +687,6 @@ internal fun SqlPreviewPanel.notifyExplainStructuredFallback(
                 MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDatabasePlugin")
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS ->
                 MpSqlVisualizerBundle.message("panel.explain.structured.reason.unfilledParams")
-            cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.TEXT_PLAN_UNPARSEABLE ->
-                MpSqlVisualizerBundle.message("panel.explain.structured.reason.textPlanUnparseable")
             null -> detail ?: ""
         }
         Notification(
@@ -769,7 +736,8 @@ internal fun SqlPreviewPanel.promptDataSourceThenRetryStructured(
             previewSql,
             onError = { message ->
                 errorShown.set(true)
-                resultPanel.showError(message)
+                // F9：同样可能是临时文件失败（同一准备链），统一交给 showTempFileError
+                showTempFileError(message)
             },
         )
     }

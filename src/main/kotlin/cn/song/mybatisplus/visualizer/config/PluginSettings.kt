@@ -267,6 +267,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var ignoredUpdateVersions: String = "",
 
         /**
+         * 本地安装包目录（T-LocalUpdateDir）：把内网/共享盘构建的插件 zip 放这里，设置页与
+         * 启动检测自动识别最高版本并可直接安装（平台允许则热生效，243 等回退重启脚本）。
+         * 空字符串 = 关闭。已做 `~` 展开与 `Path` 归一（[cn.song.mybatisplus.visualizer.update.LocalUpdateDir]）；
+         * 机器相关，不进设置导出/导入（SettingsIO 硬编码清单，天然不含）。
+         */
+        var localUpdateDir: String = "",
+
+        /**
          * SQL 反向转换的默认 Wrapper 形态（T-M36.3）：[REVERSE_AUTO] 自动 /
          * [REVERSE_QUERY] 字符串列名 / [REVERSE_LAMBDA] Lambda / [REVERSE_MPJ_LAMBDA] MPJ。
          * 分发逻辑见 [cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat]。
@@ -602,12 +610,18 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * PG 家族 JSON 计划在面板内结构化渲染＋索引建议条；其余方言（TEXT/XML 不硬解析）与
          * 判定/执行/渲染任一失败路径一律 fail-closed 回退原生控制台直送通道（双通道并存不替换）。
          *
-         * 口径沿革：R33 引入（自建执行链，核实报告 V41 定案）→ T-DevAcceptFix ②（20261006 验收
-         * 采 B 案）因「表格形态交互不如原生控制台」改为默认关、通道整体保留一个版本周期 →
-         * R45 转正为正式能力、**默认开**（观察期已过；用户仍可在设置页显式关闭，关闭后与原生
-         * 直送通道逐字一致）。存量用户已显式关闭的值不受影响（持久化值优先于声明默认值）。
+         * T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：**默认关**——EXPLAIN 默认走原生
+         * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
+         * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。
+         *
+         * R45 拍板收口（2026-11-11 用户定案）：**转正保留、维持默认关**——「保留一个版本周期，
+         * 下版再定摘除」的到期裁决就此关闭：结构化通道转正为常驻能力，摘除案废止；dev 侧 G4
+         * （project-dev-batch-20261031）曾试的「默认开」案同批废止（未回流 master，不追认）。
+         * 设置页开关行自 2026-10-01（0df4a311）起在册（组 1 SQL 预览，`explainStructuredCheck`），
+         * 「启用结构化并重试」通知写入 true 后用户可在设置页关回——单向门不存在，设置文案
+         * 同步去「实验特性」口径（转正后该说法失真）。
          */
-        var explainStructuredRender: Boolean = true,
+        var explainStructuredRender: Boolean = false,
 
         /** R90：原始计划跨会话保留需独立同意；旧渲染开关不代表落盘授权，缺字段默认关闭。 */
         var explainPlanRetentionEnabled: Boolean = false,

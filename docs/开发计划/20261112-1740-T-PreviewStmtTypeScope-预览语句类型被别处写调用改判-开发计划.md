@@ -1,0 +1,129 @@
+# T-PreviewStmtTypeScope：查询链预览被判成 UPDATE/DELETE——判型依据不可见、判型作用域过宽
+
+- 立项：2026-11-12（用户真机反馈，我方未复现，先出计划）
+- 触发：用户在 Component 形态的老工程里，光标落在 `LambdaQueryWrapper` 查询链上，预览给出
+  `UPDATE cu_party_org_member SET …` / `DELETE FROM cu_party_org_member …`；同一批代码走到
+  `mapper.selectOne(wrapper)` 处预览是 `SELECT`（用户判为「正常」），上一层调用点点击图标却变成 `UPDATE`。
+- 关联：`SqlPreviewService` 语句类型分派（`ui/SqlPreviewService.kt:331-377`）、`WrapperLocator` 消费语义识别
+  （`psi/WrapperLocator.kt:933-938` / :1044 / :1083）、`WrapperCache` 锚点维度（2026-08-12 同族回归见
+  `psi/WrapperCache.kt:11-13`）
+
+## 一、四张截图的读数（2026-11-12 用户提供）
+
+| 图 | 代码位置 | 面板头部 | SQL 形态 | 左侧面板 |
+| --- | --- | --- | --- | --- |
+| 1 | 调用方 117-119 行（`new LambdaQueryWrapper` + 两个 `.eq` + `component.qryOneByWrapper(w)`） | `LAMBDA_QUERY` / `cu_party_org_member` | `UPDATE`：SET 全列（18 列，`?` 占位）+ `WHERE ORG_MEMBER_ID = ? AND PARTY_ID = ?` | 预设 + 动态条件（两条，均勾选）+ 参数 `#?` |
+| 3 | 同上代码区 | 同上 | `DELETE FROM`：`WHERE ORG_MEMBER_ID = ? AND PARTY_ID = ?` | 与图 1 逐项相同 |
+| 4 | Component 内 `qryOneByWrapper` 的 `mapper.selectOne(wrapper)` 附近（第 58-60 行） | 同上 | `SELECT` 全列 `FROM cu_party_org_member`，**无 WHERE** | 「无未解析参数」+ 底部「取消 / 执行 SQL / 复制」按钮 |
+| 2 / 5 | 只是 MyBatis-Plus 3.5.2 `selectOne` 源码与 Component 类头，无预览产出 | — | — | — |
+
+三处共同点：类型都报 `LAMBDA_QUERY`、同一张表、条件列都是那两个；图 1 与图 3 的条件面板逐项相同。
+图 4 的面板形态（「无未解析参数」+ 底部按钮）与图 1/3（预设 + 动态条件 + 参数）**不是同一套左栏渲染**，
+需要用户确认图 4 是从哪个入口触发的（图标 / `Alt+Shift+Q` / 声明行预览）。
+
+## 二、判型机制实证（源码为准，逐条已核对）
+
+预览语句类型取自 `WrapperChain` 的四个消费标志，分派顺序固定（`SqlPreviewService.kt:331-377`）：
+
+| 优先级 | 产出语句 | 标志 | 置位条件（**只看调用方方法名**） | 集合出处 |
+| --- | --- | --- | --- | --- |
+| 1 | `SELECT COUNT(*)` | `countConsumed` | 名 ∈ {`count`, `selectJoinCount`, `selectCount`} | `WrapperLocator.kt:1430` |
+| 2 | `SELECT EXISTS (…)` | `existsConsumed` | 名 = `exists`（链终结点） | `:1433` |
+| 3 | `UPDATE`（实体列展开 SET） | `updateEntityConsumed` | 名 ∈ {`update`, `updateJoin`, `updateJoinAndNull`, `saveOrUpdate`} 且实参 ≥2、wrapper 不在首参 | `:1082`、判定体 `:1044-1063` |
+| 4 | `DELETE FROM` | `deleteConsumed` | 名 ∈ {`remove`, `delete`, `deleteJoin`} | `:1410` |
+| 5 | `SELECT`（默认） | 以上全为假 | 其余任何方法名，含不认识的自定义方法名 | 既有契约见 `ConsumerMethodsCoverageTest.kt:20-25` |
+
+第 3 档 SET 列 = 表全列去掉主键与 `@Version`（`SqlPreviewService.kt:355-361`），WHERE 取 wrapper 条件——
+与图 1 完全吻合；第 4 档 = `DeleteStatement(table, parsed.conditions)`（`:374`），与图 3 吻合。
+
+两个决定性的点：
+
+1. **标志的扫描范围是「该 wrapper 变量/链的全部引用」**——`ReferencesSearch.search(variable)` 逐个引用调
+   `isConsumerArgument` / `isEntityUpdateArgument`（`WrapperLocator.kt:933-938`），不是在锚点所在语句里找。
+   因此**同一变量在任何位置触发预览，判型结果都相同，与点击位置无关**。
+2. **判型只认方法名字符串**，没有任何 receiver/家族门（`isConsumerArgument` `:1083-1097`、
+   `isEntityUpdateArgument` `:1044-1063`）。同样的家族判定在锚点侧 `WrapperAnchorDetector` 是有的
+   （`hasMpCrudReceiver`，`WrapperAnchorDetector.kt:128-146`）——两侧口径不一致。
+
+由此可推：图 1/3 能出 UPDATE/DELETE，说明**那个 wrapper 的引用集合里确实存在名为
+`update`/`delete`/`remove` 的消费调用**；又因为第 3 档恒在第 4 档之前，**同一个变量不可能在两次触发里
+分别给出 UPDATE 和 DELETE**（除非两次之间改过代码，或面板显示的不是本次锚点的结果）。
+
+## 三、三种可能（按可能性排序，各带判据）
+
+**H1 同一 wrapper 变量在方法内被「查询 + 更新/删除」双消费**
+用户在同一方法里把同一个 wrapper 既传给查询 helper，又在别处交给 `update(entity, w)` / `delete(w)`。
+预览按「最强消费」判型（第 3/4 档先命中），于是看起来「查询链被判成 update」。
+- 判据：把光标分别放到 117 / 118 / 119 行各触发一次，**三次结果相同**；在同一方法内按变量名查找它的全部出现处，
+  能找到 `xxx.update(entity, w)` 或 `xxx.delete(w)`。
+
+**H2 面板/结果没跟上本次触发（显示上一次锚点的结果）**
+- 判据：同一图标连点两次结果应完全相同；在两个锚点间来回点，面板每次都跟着变。
+  `WrapperCache` 的键 =（文件 + 锚点起始偏移 + 开关 + 表配置签名）+ `modificationStamp` 失效
+  （`WrapperCache.kt:35-42` / `:76-82`），锚点偏移取自 `anchor.textRange.startOffset`；若两次触发解析到
+  同一偏移却给出不同结果，问题就在缓存/面板刷新侧而不在判型侧。
+
+**H3 锚点解析错位：同一文件多个 wrapper 链（查询/删除/修改），锚点配错了链**
+- 判据：三次结果**互不相同**且与行号相关；需要该方法的完整代码确认其中有几个 wrapper 变量。
+  （同族病灶出现过一次：缓存只按文件 → 删除/修改被串成查询，见 `WrapperCache.kt:11-13` 的 2026-08-12 记录。
+  现在缓存键已含锚点偏移，但若锚点元素本身认错，「同一条链」的假设仍会破。）
+
+## 四、定因（先做这一步，再做修复）
+
+| 步骤 | 做法 | 期望读数 |
+| --- | --- | --- |
+| S1（用户） | 把光标分别放到 117 / 118 / 119 行，各触发一次预览（图标与 `Alt+Shift+Q` 各来一遍） | 三次相同 ⇒ H1/H2；三种类型都出现 ⇒ H3 |
+| S2（用户） | 在该方法内 `Ctrl+F` 那个 wrapper 变量名，逐处核对是否有 `update(...)` / `delete(...)` / `remove(...)` 带它作实参 | 找得到 ⇒ H1 成立，判型其实是「对」的，问题是不可见 |
+| S3（我方） | fixture F1「同变量双消费」：`w` 同时被 `qryOneByWrapper(w)` 与 `mapper.update(entity, w)` 消费，断言产出 `UPDATE` | 命中即证明「与点击位置无关、按最强消费判型」 |
+| S4（我方） | fixture F2「参数锚点」：Component 形参 `wrapper` + 体内 `mapper.selectOne(wrapper)`，断言 `SELECT` 且无 WHERE | 复现图 4 的「跨方法取不到条件」行为，定性它是能力边界而非判型错 |
+| S5（我方） | fixture F3「非 MP 同名调用」：`list.remove(w)` / `helper.update(key, w)`，断言当前是否误判 DELETE/UPDATE | 命中即确认 §五 M3 的过触发面真实存在 |
+| S6（用户） | 提供该方法的完整代码（含 120 行以后）与图 4 的触发入口 | 收口 H1/H3 |
+
+## 五、修复方案
+
+**M1（必做，可见化）** 预览面板元信息行 / 悬停提示给出「判型依据」：语句类型 + 决定它的那次消费调用
+（方法名 + 行号），例如 `UPDATE ← 第 120 行 cuPartyOrgMemberMapper.update(entity, wrapper)`。
+目标：即使判型是对的，用户也能立刻明白为什么不是 SELECT。（同类先例：面板既有的「未绑定数据源」提示行。）
+
+**M2（需拍板，判型作用域）** 把消费识别从「该变量的全部引用」收窄到与「正在看的语句」相干的范围，三档：
+
+| 序号 | 口径 | 代价 |
+| --- | --- | --- |
+| D-1 | 只看锚点所在语句 | 最贴直觉；`w = new …;` 与 `service.remove(w);` 分离写法在声明行会掉回 SELECT |
+| D-2 | 锚点所在语句 + 该方法内锚点之后的第一个消费调用 | 保住分离写法，改动小，**推荐先做** |
+| D-3 | 不收窄，同一变量有多种消费时面板给出「查询 / 更新 / 删除」多档由用户选 | 体验最好，成本最高（可复用 T-M29.6 的选择栏先例），建议后续按读数再上 |
+
+**M3（必做，补家族门）** 判型侧复用锚点侧那套 receiver 家族判定（MP CRUD / MPJ / 自有 service 变量，
+`WrapperAnchorDetector.kt:128-146` 的 `hasMpCrudReceiver` 口径），把「非 MP 的同名方法」挡在置位之外：
+`cache.remove(k, w)`、自研 `xxx.update(key, w)` 这类调用不该把查询链改判成写。原则与锚点侧一致：宁可不判写。
+
+**M4（必做，契约入文档）** 把 §二的判型表与优先级写进 `docs/架构设计/` 对应子系统文档的预览语句类型一节；
+「未知消费名 → 默认 SELECT」已在 `ConsumerMethodsCoverageTest` 头注释里，同步到面板可解释的提示文案。
+
+## 六、验证
+
+- 定向：新增 `PreviewStmtTypeScopeTest`（F1/F2/F3 三例 + M3 反向用例）；回归
+  `SqlPreviewServiceRoutingTest`（`:122` update 消费、`:164` delete 消费）、`ConsumerMethodsCoverageTest`、
+  `WrapperLocatorTest`。
+- 反向：临时摘掉 M3 的家族门 → F3 必须变红（同病变红才算规则看得见真实形态）。
+- 真机：用 Component 形态的最小工程（`dev-support/test-demo` 或用户工程）走查——同一变量双消费时
+  面板出现 M1 的依据行；D-2 落地后类型随锚点所在语句变化，且分离写法（声明行 + `remove(w)`）仍判 DELETE。
+
+## 七、待验证前提（实施者先证伪再动手）
+
+- P-1 「判型只看方法名、扫描变量全部引用、与触发位置无关」——按源码直读得出，须用 F1 实测钉住。
+- P-2 用户看到的 UPDATE/DELETE 确实来自截图里那段代码（而不是别处锚点、或面板滞后）。
+- P-3 `hasMpCrudReceiver` 那套家族判定可以无副作用地复用到判型侧（要确认它对 `IService` 变量、对
+  「自有 Component 中间层」这两种接收者能判对）。
+- P-4 图 4 的入口与图 1/3 是否同一条链路（面板左栏形态不同，可能是声明行预览或另一入口）。
+
+## 八、不做
+
+- 不改「未知消费方法名 → 默认 SELECT」的既有契约。
+- 不改 MP 真实语义：`update(entity, w)` 确实就是 UPDATE、`delete(w)` 就是 DELETE，预览不该为了好看而降级。
+- 不动 `WrapperCache` 的键维度（已含锚点偏移 + `modificationStamp`）；H2 若成立再单独立项。
+- 不按「只认同语句消费」一刀切（会破 `声明 + remove(w)` 的存量写法），故 D-1 不单独实施。
+
+## 九、实施记录
+
+（实施后回填）

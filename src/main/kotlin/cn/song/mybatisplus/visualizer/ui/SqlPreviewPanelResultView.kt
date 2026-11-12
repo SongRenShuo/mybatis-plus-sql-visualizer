@@ -18,6 +18,8 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -227,16 +229,24 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     result.batchModel?.toggleColumns?.forEach { col ->
         if (col.checked) enabledIds.add(col.columnName)
     }
-    // T-M24-04：XML 预览状态初始化（条件开关走 enabledIds，按启发式默认勾选；foreach/bind 独立状态）
+    // T-M24-04：XML 预览状态初始化。
+    // T-MbgPreviewParityAndOpenPerf P7（面板口径对齐）：初始勾选必须与渲染**同源**。
+    // 此前这里读 `view.defaultEnabled` 的朴素启发式（只判 `== null`），而 profile 抑制
+    // （distinct / orderByClause 不展开）、choose 组互斥归并、M2 真实 kind 默认这三项都只在
+    // `defaultState()` 里实现 ⇒ 它们在面板上**从未生效**：用户初始态仍带 DISTINCT、ORDER BY 1、
+    // 四个互斥分支全勾（2026-11-12 真机截图实证）。现统一走 defaultState()，并把上方按 previewModel
+    // 填的通用勾选清掉（XML 链以 XML 模型为准，batch/wrapper 链不共存）。
     result.xmlModel?.let { model ->
-        model.conditionViews.forEach { view ->
-            if (view.defaultEnabled) enabledIds.add(view.id)
-        }
+        val defaults = model.defaultState()
+        enabledIds.clear()
+        enabledIds.addAll(defaults.enabledIds)
         xmlForEachCounts.clear()
-        xmlForEachCounts.putAll(model.defaultState().forEachCounts)
+        xmlForEachCounts.putAll(defaults.forEachCounts)
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
+        // T-FullTableWriteRisk：风险态随新预览清场（渲染帧内按本轮产物重算，见 renderSql）
+        writeRiskWarning = null
         xmlDollarSubstitutions = 0
         // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
         val initial = model.renderSql(XmlPreviewState(
@@ -284,6 +294,25 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
     // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
     prepareDefaultConsole()
+    // T-PreviewOpenPerfM2 M9：本次因索引未就绪（dumb mode）跳过过 M2 调用点反推——索引就绪后
+    // **自动重算一次**。BGT 重算 + 回 EDT 重放 showResult；新结果的 retryWhenIndexReady 恒为 null
+    //（那一刻已是 smart mode），因此不会自激循环；面板已 dispose 则放弃。
+    result.retryWhenIndexReady?.let { retry ->
+        val proj = project
+        if (proj != null) {
+            DumbService.getInstance(proj).runWhenSmart {
+                if (Disposer.isDisposed(this)) return@runWhenSmart
+                SqlPreviewService.previewAsync(proj, { retry() }) { fresh ->
+                    if (fresh != null && !Disposer.isDisposed(this)) {
+                        com.intellij.openapi.diagnostic.Logger
+                            .getInstance(SqlPreviewPanel::class.java)
+                            .info("[open-perf] m2 retry after smart mode applied")
+                        showResult(fresh)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -790,6 +819,19 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
+    }
+    // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化，最典型是勾掉
+    // `_parameter != null` 后变成全表写）。**优先级高于上面那条「预览未完整还原」**——预览可能是
+    // 完整还原的，用户最该知道的是这一句；故独占写风险类别、用不带「未完整还原」前缀的文案，
+    // 两者互不冒充（同档优先级下后写者占位，见 DegradationBanner.priority）。
+    val writeRisk = result.xmlModel?.let { writeRiskWarning }
+    if (writeRisk != null) {
+        degradationBanner.show(
+            DegradationBanner.Kind.WRITE_RISK,
+            MpSqlVisualizerBundle.message(writeRisk.bundleKey),
+        )
+    } else {
+        degradationBanner.clear(DegradationBanner.Kind.WRITE_RISK)
     }
     // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
     // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。

@@ -46,15 +46,17 @@ class IbatisGutterHotPathTest {
      * 这两个文件里合法存在点击期目标解析（`IbatisJavaCallSites` 的词索引），整文件扫描会对着
      * 点击路径误报。daemon 每趟真正跑的判定路径就是被扫的这两个函数。
      */
-    private val navProviderRelativePaths = listOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt",
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt",
-    )
-
-    /** 券 B 两个跳转 provider 被扫的 daemon 判定函数（慢趟门控 + 锚定判定）。 */
-    private val navProviderScanMarkers = listOf(
-        "override fun collectSlowLineMarkers",
-        "private fun createMarker",
+    /**
+     * 券 B 两个跳转 provider 被扫的 daemon 判定函数（慢趟门控 + 锚定判定）。
+     *
+     * T-IbatisCallPreview：Java→XML provider 的 `createMarker` 改为 `createMarkers`（一个调用点产出
+     * 两枚 marker），两份 provider 的函数名不再相同，故按文件分列；签名再漂移时提取失败会直接 error。
+     */
+    private val navProviderScanMarkers: Map<String, List<String>> = mapOf(
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt" to
+            listOf("override fun collectSlowLineMarkers", "private fun createMarker"),
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt" to
+            listOf("override fun collectSlowLineMarkers", "private fun createMarkers"),
     )
 
     /** 禁止 token（正则片段；判定前先剥注释，故 KDoc 里点名这些 API 不会误报）。 */
@@ -109,9 +111,9 @@ class IbatisGutterHotPathTest {
      */
     @Test
     fun `券B两个跳转provider_慢趟门控与锚定判定零resolve零索引查询`() {
-        for (rel in navProviderRelativePaths) {
+        for ((rel, markers) in navProviderScanMarkers) {
             val source = stripComments(readMain(rel))
-            for (marker in navProviderScanMarkers) {
+            for (marker in markers) {
                 val body = extractBracedBody(source, marker)
                     ?: error("无法提取 $rel 的 $marker 方法体（签名形态漂移？）——扫描面失效按红处理")
                 assertNoForbidden("$rel#$marker", body)

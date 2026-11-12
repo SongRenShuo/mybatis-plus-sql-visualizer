@@ -97,7 +97,8 @@ class XmlEwResolverTest : BasePlatformTestCase() {
         myFixture.configureByText("Unrelated.java", "public class Unrelated { int x = 1; }")
         val result = XmlPreviewService.preview(mapperXml, "selectList", project)
         assertTrue("应提示未找到调用：${result.warning}", result.warning?.contains("未找到") == true)
-        assertEquals("SELECT * FROM t_user", result.sql.replace(Regex("\\s+"), " ").trim())
+        // T-MbgExamplePreview R1：预览链占位模式——未展开的 ew 段以 {{表达式}} 显式可见
+        assertEquals("SELECT * FROM t_user {{ew.customSqlSegment}}", result.sql.replace(Regex("\\s+"), " ").trim())
     }
 
     fun testEwNoNamespaceDegrades() {
@@ -111,9 +112,14 @@ class XmlEwResolverTest : BasePlatformTestCase() {
     }
 
     fun testEwWithoutProjectKeepsOldBehavior() {
-        // 无 project（纯文本）→ 不展开（占位求值为空提示）
+        // 无 project（纯文本）→ 不展开：产物里以占位标出缺段。
+        // T-MbgExamplePreview R6：preview() 的 warning 只留解析期/静态告警，渲染期提示由面板按
+        // 本轮勾选重渲染后经 xmlErrors 显示——故此处改断言产物形态。
         val result = XmlPreviewService.preview(mapperXml, "selectList", null)
-        assertTrue("无 project 时应保持占位求值为空提示", result.warning?.contains("求值为空") == true)
+        assertEquals(
+            "SELECT * FROM t_user {{ew.customSqlSegment}}",
+            result.sql.replace(Regex("\\s+"), " ").trim(),
+        )
     }
 
     // O-77 T-EwStatementScope：同文件他语句的 ew 占位不再记账到本语句——

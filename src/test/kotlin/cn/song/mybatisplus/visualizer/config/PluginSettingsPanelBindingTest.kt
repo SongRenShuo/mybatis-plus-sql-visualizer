@@ -59,6 +59,44 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         }
     }
 
+    /** T-LocalUpdateDir：本地安装包目录的 isModified / apply / reset 三处接线（照抄路径项范式）。 */
+    fun testLocalUpdateDirBinding() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.localUpdateDir
+        try {
+            settings.state.localUpdateDir = ""
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val field = configurable.panelForTest().updateSection.localDirField
+
+            assertFalse("初始应与配置一致（无变化）", configurable.isModified())
+
+            // 错误态路径：apply 存 trim 原文（重开页面后状态行仍能按原文报原因）
+            field.text = "C:\\mpvs-nonexistent-dir-2026"
+            assertTrue("改目录应检测到变化", configurable.isModified())
+            configurable.apply()
+            assertEquals("错误态应存 trim 原文", "C:\\mpvs-nonexistent-dir-2026", settings.state.localUpdateDir)
+            assertFalse("apply 回写同步后 isModified 应归零", configurable.isModified())
+
+            // 合法目录：apply 存归一路径（绝对 + normalize，去尾分隔符）
+            val tmpDir = java.nio.file.Files.createTempDirectory("mpvs-bind-")
+            field.text = tmpDir.toString() + java.io.File.separator
+            configurable.apply()
+            assertEquals(
+                "合法路径应存 normalize 形态（无尾分隔符）",
+                tmpDir.toAbsolutePath().normalize().toString(),
+                settings.state.localUpdateDir,
+            )
+
+            configurable.reset()
+            assertEquals("reset 应回填配置值", settings.state.localUpdateDir, field.text)
+            assertFalse("reset 后应与配置一致", configurable.isModified())
+            java.nio.file.Files.deleteIfExists(tmpDir)
+        } finally {
+            settings.state.localUpdateDir = old
+        }
+    }
+
     fun testAutoCaptureToggleAppliesToState() {
         val settings = PluginSettings.getInstance()
         val old = settings.state.logAutoCaptureOnStart

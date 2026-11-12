@@ -295,6 +295,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             // O-78：foreach 值按本帧新鲜映射清单播种（写安全闸重投递时与映射刷新同帧延迟，
             // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
             syncForEachItemValues(xml)
+            // T-ForEachInert：同帧刷新「本轮未展开」提示（判据也是 __frch_ 映射清单）
+            syncXmlForEachInertStates(xml)
             xmlDollarSubstitutions = rendered.dollarSubstitutions
             // R30 探镜：本轮条件判定结果刷新条件行尾三态标注（只读观测，不参与渲染文本）
             syncXmlConditionOutcomeLabels(xml, rendered)
@@ -324,6 +326,14 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
                 xmlHints + addedSources.map { ParamHint(quote = false) },
             )
             showSql(filledMain, count)
+            // T-FullTableWriteRisk：全表写风险判据取**未回填**的本轮产物（`base`）——回填会把
+            // 参数值当字面量填进文本，值里出现 `where` 这类词会污染关键词判定。
+            writeRiskWarning = fullTableWriteRisk(base)
+            // T-PreviewBannerLiveRefresh：横幅/元信息随本轮重渲染刷新。此前只有 iBatis 分支调
+            // updateMeta，XML 分支不调 ⇒ 勾选变化后横幅停在 showResult 那一刻的判定：产物里的
+            // `{{}}` 已经没了，那条「预览未完整还原」还挂着；反过来勾掉条件开关让产物变成无 WHERE
+            // 的全表 DELETE 时，也没有任何风险提示（真机 2026-11-12 两处都观察到）。
+            updateMeta(result)
         }
         // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
         batch != null -> {

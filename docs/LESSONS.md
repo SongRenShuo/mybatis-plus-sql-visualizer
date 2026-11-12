@@ -224,12 +224,15 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **判据**：某类**整类全红**且报错是 `<init>` 或 `copy$default` 的 `NoSuchMethodError` → 一律先 `rm -rf build/classes`，不要去查调用点。
 **Seen 4× (2026-11-07 ×2, 2026-11-09 ×2)**
 
-### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉
+### L22 后台长命令禁用 `2>&1 | tail -N` 收尾——失败正文会被管道截断吞掉，退出码还会被换掉
 
 **证据**：`./gradlew buildPlugin 2>&1 | tail -15` 后台跑，失败后日志文件只有 gradle 警告尾 + `BUILD FAILED in 9s`，`What went wrong` 段整段丢失；重跑不带 tail 全量落盘才看到真因（`prepareSandbox` 对沙盒内 jsqlparser jar 的 mmap 锁，`请求的操作无法在使用用户映射区域打开的文件上执行`）。tail 先于异常处理执行，等于把排障证据裁掉只留结论行。
-**正例**：后台长命令重定向全量到文件（`> /tmp/build.log 2>&1`），判读用 grep 提取；必须 tail 时对失败路径重跑一次不截断的采集。`reverse_probe.py` 据此固定为全量捕获 + 失败时打错误行子集。
-**反例**：`| tail -N` 当作「日志瘦身」常态化——tail 的 N 行里恰好没有失败原因时，二次重跑 whole job 的成本远大于第一次就落全量。
-**Seen 1× (2026-11-07)**
+
+**第二形态（2026-11-12）退出码也被换掉**：`./gradlew test … 2>&1 | tail -60` 拉起的后台任务，收尾报 `exit_code 0`，而日志正文写着 `359 tests completed, 2 failed` / `BUILD FAILED`——管道把整条命令的退出码换成了 `tail` 的。于是「后台任务完成」与「构建成功」在工具层读数上完全一样，只有翻正文才看得出红。附带一半是进度不可见：`tail` 要等上游 EOF 才开始输出，中途去读输出文件恒为空（本轮两次误以为任务没起来）。
+
+**正例**：后台长命令重定向全量到文件（`> /tmp/build.log 2>&1`）+ 紧跟一句 `echo "GRADLE_EXIT=$?"` 把真退出码打进日志；判读用 grep 提取；必须 tail 时对失败路径重跑一次不截断的采集。`reverse_probe.py` 据此固定为全量捕获 + 失败时打错误行子集。
+**反例**：`| tail -N` 当作「日志瘦身」常态化——tail 的 N 行里恰好没有失败原因时，二次重跑 whole job 的成本远大于第一次就落全量；或者拿后台任务的 exit_code 当构建结论。
+**Seen 2× (2026-11-07, 2026-11-12)**
 
 ### L23 runIde 沙盒开着时 gradle 构建失败 ≠ 构建坏——先探针验证沙盒里的部署再决定重建
 
@@ -291,6 +294,193 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：`mode=release` 一条命令做完「构建+门禁+发 GitHub」，再 `--from-github` 收 Gitee；离线自测/内测包另存，不混进 `build/distributions`。**反例**：先本地打包去发 Gitee，再用镜像脚本补 GitHub——两侧字节与正文的来源都不一致，且事后要再跑一轮 publish 才能纠正。
 
 **Seen 1× (2026-11-10)**——用户一句「应该是 GitHub 单到 Gitee 吧」点出方向错，同日两版都受影响。
+
+### L31 探「平台有没有某能力」不许锚实现类名——类名/包名/module 属内部结构，会随版本搬走
+
+**规则**：反射探测平台能力时，锚点必须是平台**对外契约**：EP 名（`com.intellij.mcpServer.mcpToolset`）、设置页 id（`applicationConfigurable` 的 `id` 属性）、插件 id。实现类 FQN 只能出现在**候选链**里并保留旧形态，不能写成唯一判据；`Class.forName` 落空时的提示文案也不得断言「版本不够」——「页面搬走了」和「没装插件」是两回事，用户看到版本断言只会来报「我被拦了」。判据：同一页面上的两个探测（能力横幅 vs 动作按钮）必须指向同一层契约，否则会出现「横幅说平台在，按钮说平台不达标」的自相矛盾帧。
+**证据**：T-McpSettingsJump（`3106e4c6`，2026-11-11 用户真机 2026.3 / `263.7307.200`）：平台 263 把 MCP Server 设置页从 `com.intellij.mcpserver.settings` 搬进新 content module `intellij.mcpserver.frontend`（`required-if-available="intellij.platform.frontend"`）并换包名；旧 FQN 在整安装（lib + plugins，含 `lib/modules/`）**零命中**，而页面 id `com.intellij.mcpserver.settings` 与插件 id `com.intellij.mcpServer` 一字未变。同帧横幅探 `com.intellij.mcpserver.McpToolset`（仍在公开模块 `intellij.mcpserver`）为真，按钮探旧类名为 null ⇒ 页面自相矛盾，提示把根因指成「需要 IDEA 2025.2+」。仓内同款问题还有第二份（`PluginSettingsPanel` 零调用方副本），两处同批修掉。
+**正例**：先 `unzip -l` 扫清「旧类名还在不在、页面 id 变没变、EP 变没变」三件事再动手；修法＝候选链（新形态在前、旧形态在后）→ 平台按 id 打开并选中 → 都失败才提示，且用源码守卫钉住「设置页类名只允许出现在候选链文件」。**反例**：拿某个版本 jar 常量池里抄到的 FQN 当长期契约（本仓 20260915 就是「262 mcpserver.jar 常量池实证」写下这个类名的——当时全对，半年后搬走）。
+**Seen 1× (2026-11-11)**
+
+### L32 反向验证前先提交——`git checkout -- <file>` 回退的是整个文件，未提交改动一并消失
+
+**规则**：做「摘掉修复分支 → 期望变红 → 还原」时，被摘的文件必须先处于已提交状态。否则 `git checkout -- <file>` 还原的是**该文件到 HEAD 的全部内容**，同文件里其它未提交改动（常量区、data class 字段、相邻逻辑）一起被抹掉。两条路：先提交（哪怕只提交一版中间态）再摘；或还原时只用 Edit 把那一行改回，不用 checkout。
+**证据**：T-CopyPlaceholderMarker（2026-11-11，`2e553316` 前的自查轮）：把 `assembleProduct` 的 `if (placeholderCount > 0)` 临时改成恒假跑反向，跑完 `git checkout -- CopyExecutableSqlAction.kt`——该文件的占位常量、`Product.simulationPlaceholderCount` 字段、markers 互斥逻辑全在未提交状态，一次抹掉，四处改动重做一遍。
+**正例**：摘之前先 `git status` 确认目标文件干净；**反例**：把 checkout 当「撤销我刚才改动的那一行」用。
+**Seen 1× (2026-11-11)**
+
+### L33 增量构建下别手删 `build/classes`——要清就 `clean`，否则 Kotlin 侧 UP-TO-DATE、Java 侧找不到符号
+
+**规则**：为躲「旧字节码冒充回归」（L21）而清产物时，用 `./gradlew clean`（或 `--rerun-tasks`），**不要 `rm -rf build/classes`**。手删 circles 后 Gradle 的 `compileKotlin` 仍判 UP-TO-DATE 被跳过，而 `build/classes` 已不存在 ⇒ 依赖 Kotlin 类的 Java 源（如 `SqlLogToolWindowFactory` 引用 `SqlLogPanel` / `PluginSettings`）整片报「找不到符号」，看起来像真编不过。
+**证据**：T-IbatisParamClassQuote 合并态验证（2026-11-11，master `e06fb3f50`）：`rm -rf build/classes build/tmp/compileKotlin build/tmp/compileTestKotlin` 后跑测试，`:compileJava FAILED — 16 个错误`，全是 `找不到符号 类 SqlLogPanel/PluginSettings`；改用 `./gradlew clean test ...` 后 49 suite / 550 例全绿。
+**正例**：清产物用 `clean`，或在同一命令行带 `--rerun-tasks`；**反例**：只删 `build/classes` 就以为等价于 clean。
+**Seen 1× (2026-11-11)**
+
+### L34 短名解析在多模块项目里必须按「就近」收窄——单一命中才用等于常态弃权
+
+**规则**：用短名索引（`PsiShortNamesCache.getClassesByName`）把 XML/配置里的类名（如 iBatis `parameterClass`、`<typeAlias>`）解析成 `PsiClass` 时，**不能只接受「全项目唯一命中」**——多模块工程里同名实体是常态（demo 项目三个 `User`），一律弃权等于该能力在真实项目里从不生效。收窄顺序：FQN 直查 → 短名唯一 → **按语句/file 所属模块过滤**（候选与使用点同模块者优先）→ 仍不唯一才弃权。
+**证据**：T-IbatisParamClassQuote（2026-11-11，`cb4ec1ed3` 首版）：demo 里 `sqlmap/User.xml` 的 `parameterClass="User"` 解析到 3 个候选（`cn.song.ibatis2demo.model.User` / `probe.User` / `cn.song.mybatisplusdemo.entity.User`）⇒ `singleOrNull()` 返回 null ⇒ 引号修复在真机完全不生效，用户从 Java 调用行与 XML 语句行两处复现同一现象；而单模块的 Heavy 测试全绿，读不出这个问题。
+**正例**：候选解析一律带上下文（模块 / 源根 / 包）收窄；**反例**：拿「唯一命中」当保守策略——测试环境往往只有一个同名类，掩盖真实项目的重名面。
+**Seen 1× (2026-11-11)**
+
+### L35 判「用户手上那个包有没有这条修复」看 jar 内的类/字节，别信版本号
+
+**规则**：用户报「还是复现」时，判「他跑的是不是含修复的包」必须拿产物取证——扫沙盒插件 jar 的类表/字节（`zipfile` 列名即可）或以行为差异为准。**插件版本号不是判据**：`runIde` 每次启动按当前源码构建部署，`plugin.xml` 版本号没人动就仍是旧号，「版本号没变」与「代码是旧的」是两件事。
+**证据**：T-IbatisParamClassQuote（2026-11-11）：第一轮我据此弹「沙盒是 `2026.11.12-beta.2`，不含本轮修复」并让用户重装；第二轮扫 jar 才看到 `IbatisParameterClassResolver.class` **已在包内**（用户重启过沙盒，runIde 已部署新源码）——版本号相同掩盖了「新代码已上线」，白耗一轮，且把用户引向「去看包版本」。
+**正例**：`python -c "import zipfile;print([n for n in zipfile.ZipFile(j).namelist() if 'X' in n])"`；**反例**：拿版本号/构建时间当唯一判据、据此下「你没装上新包」的结论。
+**同日内第二例（T-ExecPsiGate，2026-11-11 晚）**：连续给了四个同版本号（`2026.11.12-beta.2`）的包，只在嘴上说"重建了"，没给可自查的凭据——用户实际装的停在 `7ab0d5335`（F6b），后续 F7 那次修复从未被验过，白耗一轮。补的规矩：**每次给包必须同时给 `sha256` + 一句"装完确认 `plugins/<id>/lib/<jar>` 的修改时间"**，并在判定"他的包是旧的"之前先扫安装目录的字节。
+**Seen 1× (2026-11-11)**
+
+### L36 「多候选就弃权」这类保守降级，必须先在真实项目形态上量出歧义度，否则是「测试全绿、真机从不生效」
+
+**规则**：写「歧义时宁缺勿错」的降级分支（短名解析、模糊匹配、多结果取一）之前，先用一条命令量真实数据的歧义度（同名类数、候选分布、模块数）。歧义在真实项目里是常态时，「弃权」等于该能力从不生效——正确做法是**引入收窄维度**（模块 / 源根 / 包 / namespace）把候选降到唯一，而不是把弃权当稳妥。同一道理也适用于「取第一个」「按字典序取最小」这类兜底：先看真实分布再定。
+**证据**：T-IbatisParamClassQuote（同日两版对照）：`cb4ec1ed3` 写 `singleOrNull()`（弃权），单模块 Heavy 测试全绿；真机 demo 有 3 个 `User` ⇒ 恒弃权 ⇒ 用户从 Java 调用行与 XML 语句行两处复现，多花两轮。收窄维度＝语句所属模块（`ModuleUtilCore.findModuleForPsiElement`），`5a2e0419d` 落地后真机验收通过。歧义度本就是一条命令的量：`find . -name User.java | wc -l`。
+**正例**：先量歧义度再定策略，策略里带收窄维度；**反例**：把「唯一命中才用」当默认保守值——它在测试环境（单一同名类）永远绿。
+**Seen 1× (2026-11-11)**
+
+### L37 为「防粘词」补分隔时，判据必须取「不补就拼成一个词」，不能取「两侧都无空白」
+
+**规则**：在拼接缓冲里补分隔符（空格）防粘连，判据要落在缺陷本征上——只有**左侧收尾是操作数**（标识符字符、右括号、右方括号、引号、`?`）**且右侧起笔是标识符字符**时才补；「相邻两段都无空白」是表象判据，它把 `(`、`,`、`)` 与 `?` 之间也一起撑开。同理，任何「为了不粘」而加的分隔/兜底，先问一句：**不加真的会错吗**——不会错的地方加分隔，就是把一个契约（渲染形态逐字比对）改成另一个契约。
+**证据**：T-MbgExamplePreview R2（2026-11-11）：R2 首版按「两侧都无空白即补空格」修 `andand`/`1or`，`<where>` 里的 `IN (?,?)` 被撑成 `IN ( ? , ? )`，`SqlPreviewPanelForeachValuesTest` 两例在 CI 连红三轮（run `42959261562` 分片 4、`42963361087` 分片 4、`42966848222` 分片 3）；收到「会拼成词」后定向 80/0/0、宽面 103 suite / 1124 例 0 失败，而 `andand`/`1or`/`)or(` 三种粘连判据同时保持（`6212f24e0`）。
+**正例**：判据写成「不补会拼成一个 token」；**反例**：把「相邻且都无空白」当补分隔的条件，靠 CI 去发现它撑开了哪些既有契约。
+**Seen 1× (2026-11-11)**
+
+### L38 解释「平台为什么拒绝」时，判据必须与被拒对象同一层级
+
+**规则**：复述平台闸门条件前，先读它的字节码确认**它在问谁、问的是哪一层**（文件 / 父目录 / 内容根），我们的观测面跟着同层级取。用文件级谓词去解释「父目录不可用」永远解释不通，只会落到「未知」——而交互层是按成因挂入口的，「未知」等于没有入口。推论：**「判不出成因」不等于「没有可给的下一步」**，兜底档也必须给一个可点的动作。
+**证据**：T-ExecPsiGate F5（2026-11-11）：263 的 `AbstractFileViewProvider.shouldCreatePsi()` 第一层判 `isFileIgnored(file.getNameSequence())`、第二层判 `findDirectory(vFile.getParent())`；真机（`IU-263.7307.200`，`IntelliJIdea2026.3/log/idea.log` 行 27664–27749）上文件级 `isExcluded=false / isUnderIgnored=false / regHideExcluded=false` 全绿而 `findFile` 恒 null，归因落 UNKNOWN，面板只剩一行红字（用户原话「执行sql错误，没有引导用户调整配置信息」），白耗一轮验收。改法两件：目录探针并进分类器（`dirCanHostPsi`）+ 写文件前用同一个平台调用先探一次；`UNKNOWN` 档同时补上兜底入口。
+**正例**：先反编译确认闸门的**接收方层级**，探针直接复用平台那一条调用（`PsiManager.findDirectory`）；**反例**：把手边现成的文件级谓词当通用解释，靠真机日志一轮轮试。
+**Seen 1× (2026-11-11)**
+
+### L39 修「某条信息没显示」之前，先枚举**这个回调的全部消费点**是否都接上了
+
+**规则**：给"失败原因 / 提示 / 入口"接线时，不许只改「我复现时走的那一条调用链」。先去数同一个回调（此例 `onError`）在文件里有几个调用点，逐个核对；再接一条**源码护栏**（禁用 `onError = { … resultPanel.showError`）把"漏接"变成红灯。判定顺序也要改：看到"同一功能两个入口，只有其中一个正常"，先 diff 两个入口的**接线**，不要先怀疑数据或竞态——接线差异能造出与竞态完全一样的现象（有时有、某入口恒无）。
+
+**证据**：T-ExecPsiGate F9（2026-11-11）：`ui/SqlPreviewPanelExecution.kt` 里五个执行调用点只有两处把 `onError` 接到 `showTempFileError`，主执行路径（`recoverConsole` 分支 / `executePrepared` / 全链 `SqlExecutor.execute`）与 EXPLAIN 结构化准备链四处直连 `resultPanel.showError`。于是"临时文件失败 → 按原因给蓝字入口"这条功能在**直接点执行**上从未生效过，只有「更多 → 切换数据源」那条能看到——用户连着三轮用这个对照给我指路（"点击更多-切换数据源 才正常"），而我前五轮都在追"成因在哪一步丢"，前提就错。修完 `ExecPsiFailureHintTest` 19/0/0，反向把主路径改回裸 `showError` ⇒ 护栏用例恰 1 红。
+
+**正例**：接一条逻辑前先 `grep` 该回调的全部调用点并逐一改；改完加源码扫描护栏；**反例**：只改复现路径，然后靠"现象时有时无"去猜并发。
+
+**Seen 1× (2026-11-11)**
+
+### L40 一次性元数据别走共享可变状态，让它**随载体走**（消息/返回值/回调参数）
+
+**规则**：跨线程、跨渲染次数传递的小块元数据（失败成因、诊断快照、提示级别）优先编码进**载体本身**——错误文案里带标记、返回值里带字段、回调参数里带对象。只要还留一处"谁清谁写"的约定，就一定会被重复渲染、并发写方或类重载打掉。共享字段只配当兜底层。配套口径：读方**不清空**（由下一次写入覆盖），清理责任不放在读方。
+
+**证据**：T-ExecPsiGate F3→F8（2026-11-11 五轮，同一病根犯了四次）：① F3 预热链入口清空 `lastTempFileFailure` → 文案退化 `unknown`；② F5 并发失败覆盖 → 归因错；③ F7「读一次就清」被**同一次失败的第二次渲染**清掉（一条失败投递两次：`gate.abort(持有者)` + `consumed.complete(排队意图)`，切源那条 `prepareOwner=null` 只投一次所以正常）；④ F8 才改成把成因编码进文案 ` [hint=XXX]`（`withExecHint` / `parseExecHintMessage`），至此跨线程/跨渲染/跨类加载器全部免疫。复现用例：把成因编码退回旧行为 + 共享字段置空 ⇒ 恰 2 红。
+
+**正例**：`fail()` 产出带标记的 reason，UI 侧解析并剥离标记（展示干净、日志保留）；**反例**：把成因存 object 字段、靠读方 `consume` 清空，然后为每次"丢了"再打一个补丁。
+
+**Seen 1× (2026-11-11)**
+
+### L41 收窄「怎么认一个对象」的契约前，先枚举仓里既有实现与夹具暴露的是哪一种形态
+
+**规则**：把「取不到 X 就丢弃/降级」写成新契约之前，先 `grep` 全仓有多少实现与测试桩只提供**另一种**同名取法（`getDisplayName` vs `getName`、`getUrl` vs `getJdbcUrl` 这类平台同义方法）。只认一个方法名会把合法条目静默判成"无名"，症状**不是报错**而是「集合被滤空 → 索引落空 → 回调既不 onChosen 也不 canceled → 调用方永远收不到结果」，最后表现为一堆**看似无关**的用例红。取名/取键这类兼容面一律走**方法名候选链**，全都取不到才算缺席。
+
+**证据**：T-DsListAddSource 回归（2026-11-12）：`c728c8058` 给 Runner 弹层加「`optionalRunnerName` 为空即不渲染」，而该函数只反射 `getDisplayName`；`LogToSqlPanelExecuteTest.CallbackRunner` 只实现 `getName()`（数据源对象形态也一样）⇒ 唯一一条被滤掉、弹层变空，`testPlatformPopupSelectionDisposeIsNotUserCancellation` 在推送测试连红四轮（run `43127711688` / `43129449046` / `43134264631` / `43136753539`，断言 `expected [CallbackRunner@…] but was []`）。修法＝候选链 `getDisplayName` → `getName`，都空才判无名（`d289ac1a6`）；定向 49/0/0，反向把候选收窄回单方法 ⇒ 恰 2 红（CI 那条 + 新增回归用例 `testB侧_只暴露getName的runner必须保留_不得判无名丢弃`）。
+
+**正例**：候选链 + 「两条都取不到才缺席」+ 补一条钉死「只暴露另一种取法」的用例；**反例**：拿单一反射方法名当"这个对象有没有名字"的唯一判据，靠 CI 去发现被滤掉了什么。
+
+**Seen 1× (2026-11-12)**
+
+### L42 一条测试腿「绿」却不产出逐例口径，就是空绿——先补可见性，再谈覆盖率
+
+**规则**：凡带「环境不满足就 println + return」这类显式绿跳的腿，必须在同一 job 内产出一行逐例汇总（files / tests / skipped / failures）。没有这行数字，`BUILD SUCCESSFUL` 什么都不证明。判定顺序也固定：**腿红先读环境**（实例起没起来、连没连上），**腿绿先读逐例口径**（跑了几例、跳了几例）；两者都不读就写结论，等于替下一次踩坑铺路。闸门先只钉「检测本身失效」——`files=0` 或 `tests=0` 即失败；跳过率留观察，别在没摸清底数时动门禁口径。
+
+**证据**：T-NightlyLocalMysql（2026-11-12）：`database` 腿自 2026-11-05 起连的是远端 `103.36.220.245:25900`，那台机 MySQL 不可达时 `DataSourceJdbcSmokeTest` 等用例按「显式绿跳」直接 return，于是夜间连红 6 轮里这条腿一直是 success，日志里只有步骤名和 `BUILD SUCCESSFUL in 9m 24s`，没有一个逐例数字。补一步解析 `build/test-results/**/TEST-*.xml` 后首轮读数 `files=10 tests=86 skipped=0 failures=0 errors=0`（run `43146861779`），同轮 `e2e` 从 `PASS=13 FAIL=13` 变 `PASS=26 FAIL=0`。
+
+**正例**：`if: always()` 汇总 XML 打印逐例读数，只对「一例没跑」设闸；**反例**：拿堆栈里唯一的 `BUILD SUCCESSFUL` 当覆盖证据。
+
+**Seen 1× (2026-11-12)**
+
+### L43 CI 需要外部实例时，先问「它能不能由 runner 自给」，再把环境腿与代码眼分开定责
+
+**规则**：把测试腿绑到共享服务器前，先查三件事：runner 能不能自起该服务（GitHub 的 service container **只在 Linux runner 支持**，windows/macOS 一律不可用）、镜像里有没有 server（有客户端 ≠ 有 server）、自起要几步。能自给就自给——共享实例会把「别人的机器挂了」变成「我们的门禁红了」，而且连带断言会把根因埋掉：一个库连不上能生出十几条业务断言失败，读报的人只看到最后一条。确实不能自给的腿（需要多种真引擎的 dialect 这类），必须在记录里显式写「环境腿、只能服务器侧修」，别让下一个人从代码里找原因。
+
+**证据**：T-NightlyLocalMysql（2026-11-12）：`e2e` 腿连 secret `MPV_DB_URL`（`103.36.220.245:25900`），那台机 MySQL 不可达时 demo 应用照常起在 8082，但首条查库 `HikariPool-1` 初始化失败（`CommunicationsException` → `ConnectException: Connection timed out`）→ 探针「等应用就绪超时 120000ms」→ `断言 PASS=13 FAIL=13`，11-10 与 11-12 两轮同形。改成 runner 本地 zip 8.0.45 + `mysqld --install` 注册 Windows 服务后 `PASS=26 FAIL=0`（探针 16.6s，run `43143657370`），同轮 `database` 腿转真跑。同轮 `dialect` 仍红在 `panwei_a:26101 / gaussdb_kernel503:25882 Connection refused`——那是环境腿，代码侧绕不过去。
+
+**正例**：`services:` 不可用时用「zip + `--initialize-insecure` + 注册 Windows 服务」自给，起库与灌库两步都硬失败；**反例**：让 CI 腿依赖一台没有 SLA 的测试机，再靠加断言去「提高覆盖」。
+
+**Seen 1× (2026-11-12)**
+
+### L44 `Query.findFirst()` 当短路用会在 `ReferencesSearch` 链上恒空——用 `forEach` 提前终止
+
+**规则**：想在「全项目引用检索」这条链上只要第一个命中，别用 `ReferencesSearch.search(...).findFirst()`：真机大工程上它能稳定返回 null（同一方法 `Find Usages` 有 253 处引用、索引健康检查也是干净的）。正确写法是 `forEach { hit = it; false }`——语义等价、同样提前终止、不把结果收成 List。更要紧的是**判据顺序**：这类「检索拿不到 → 静默返回 null → 上游退回占位骨架」的链路，必须留一条能自证的读数（本次加了 `[m2] trace … methods=1 noCallSite -> criteria=0`），否则「已修好」与「从未生效」在日志里长得一模一样。
+
+**证据**：T-PreviewOpenPerfM2 端到端验收（2026-11-12，cust-big-demo 大工程）：面板产物停在 `WHERE ( {{ criterion.condition }} ? )`、`[open-perf] … m2=101`，埋点给出 `methods=1 noCallSite`；同刻在 IDE 里对同一方法 `Alt+F7` 得 253 处。同一 `findFirst` 写法此前只在 Heavy 测试里跑过，而那条路本来就 `refs=0`（引用索引未建），**从未被真机证过**——M5 的「findFirst 提前终止」属未验即用。
+
+**正例**：`forEach` 取首个命中 + 空结果时打 `totalRefs` 诊断；**反例**：把「测试里也能编译」当成「检索语义成立」。
+
+**Seen 1× (2026-11-12)**
+
+### L45 硬杀沙盒 IDE 会留坏索引：`NOT indexable` + Go-to-File 全空，删 `system/index` 重来
+
+**规则**：沙盒（runIde）别 `Stop-Process -Force`。硬杀后重启常见两症：`ProjectIndexableFilesFilterHealthCheck - Following files are NOT indexable but they were found in filter. Errors count: N`，以及 `Ctrl+Shift+N` 对任何文件名都返回空（工程树看起来正常、类索引还能用，最容易被误判成「工程没加载」）。处置：关掉沙盒后删 `<sandbox>/…/system/index` 与 `system/caches` 再起，重扫约 2 分钟即恢复。**正确关法是关 IDE 窗口（等同 File → Exit）**：它会走正常退出序列，刷缓存与索引；Gradle 工具窗里停 `runIde` 任务与 `Stop-Process` 在这一点上等价（都是直接终结进程）。附带现象（偶发）：`config/options/trusted-paths.xml` 有时来不及落盘，下次启动还会弹「Trust and Open Project」——本轮两次硬杀里发生一次、另一次正常落盘（mtime 早于杀进程），所以它不是稳定判据。
+
+**证据**：2026-11-12 端到端验收，为换版本两次硬杀沙盒 IDE；首轮 Go-to-File 正常，第二轮起对 `CustAddressMapper`/`pom.xml` 一律空结果，日志 `Errors count: 1502`（示例行含项目根目录与 `pom.xml`）；删索引重启后同查询立刻命中两条。
+
+**正例**：换版本前走 IDE 正常退出，必须硬杀时预留「删索引重扫」的时间；**反例**：把 Go-to-File 空结果当成内容根/模块配置问题去改 `.iml`。
+
+**Seen 1× (2026-11-12)**
+
+### L46 合成输入先看输入法：`typewrite` 会被中文 IME 吃成候选词
+
+**规则**：GUI 探针往 IDE 输入框写字一律走**剪贴板粘贴**（`gifkit.paste`：`SetClipboardData` + `Ctrl+V`），别用 `pyautogui.write/typewrite`——中文输入法处于中文态时 ASCII 会被合成候选词（实测输 `pom.xml` 得 `破灭. x|m`，结果列表全是「消灭了/小毛驴/写满了」），于是「查不到文件」这类假阴性会一路误导到内容根、索引、Maven 导入上去。同一次会话里前几轮成功、后几轮失败，正是 IME 被快捷键（如 Shift 切换）翻过去的表现。
+
+**证据**：2026-11-12 端到端验收，同一查询先成功后失败，截图查询框是 `破灭, CustAddressMapper`；改粘贴后一次命中。
+
+**正例**：粘贴后截图核对输入框文本再 Enter；**反例**：拿「查不到」直接推断索引坏了（本轮真索引坏另有一条 L45，两者叠加过一次）。
+
+**Seen 1× (2026-11-12)**
+
+### L47 多仓推送别拿凭据文件里的 `owner/repo` 拼 URL；推送脚本一律纯 ASCII
+
+**规则**：同一个 owner 下多个仓库时，推送 URL 里的**仓库名必须显式写死**，不能读 `.local/*.json` 的 `repo` 字段——那份文件常常是从别的仓整体拷过来的，字段还写着原仓名，拼出来的 URL 会把 A 仓的提交往 B 仓推。push 前先把目标 URL 打出来（token 打码）再执行。另外推送脚本**只写 ASCII**：PowerShell 5.1 对无 BOM 的 `.ps1` 按 ANSI 解码，中文注释会把下一行吃掉——变量赋值被吞后 URL 变成 `https://host/owner/.git/`（实测 403 `token is not authorized to access this project`，且报错文案完全不指向「变量为空」）。
+
+**证据**：2026-11-12 推 demo 仓，第一版脚本用 `$ge.repo` 拼 URL → 实际目标 `gitee.com/songrenshuo/mybatis-plus-sql-visualizer.git`，被远端 `! [rejected] (fetch first)` 拦下才没把 demo 提交推进插件仓；改成写死 `mybatis-plus-sql-visualizer-demo` 后同一脚本又因中文注释吃掉 `$repoName` 赋值而推成 `gitee.com/songrenshuo/.git/`（403）；注释译成英文后 `30932a0..7689f60` 双仓正常推上。
+
+**正例**：仓名常量 + 回显目标 URL + 纯 ASCII 注释 + `-c credential.helper=` 与 `GIT_TERMINAL_PROMPT=0`；**反例**：读凭据文件里的 `repo` 当目标仓（它只是元数据，没人保证与所在仓一致）。
+
+**Seen 1× (2026-11-12)**
+
+### L48 标签被截成 `Xxx.yy...` 先别改省略号逻辑：那是 Swing 自己截的，内边距没算进列宽
+
+**规则**：`JLabel` 的文本放不下时，**Swing 自己**会把尾部换成 `...`（保留头部），这条路绕开我们自己的省略实现——所以看到「头部保留 + 尾省略号」就要怀疑「组件宽 − 内边距」不够，而不是去调中段省略的保留比例。纪律有两半：① `preferredSize.width` 被钉成「文本宽度」的行，边框必须**先落地再量**（`getInsets` 晚于度量就等于按「没有内边距」算可用宽度）；② 列宽预算要按「每行文本 + **该行**内边距」取最大，不是「最大文本宽 + 最大内边距」。判定截断态时用可绘宽度（列宽 − 左右内边距），这样即使因视口上限被压窄，也是走我们那套「保留尾部」的中段省略，而不是被 Swing 摘掉尾巴。
+
+**证据**：2026-11-12 真机（`deleteByExample` 面板）：三行集合标签里 `criteria.criteria` / `criterion.value` 显示成 `criteria.crit...` / `criterion.va...`，而同一套「列宽随视口自适应 + 全名 tooltip」的修复（`2096fa2f5`）已在包内。两步取证：8× 放大截图确认是保留头部；JDK8 headless 探针 `SwingUtilities.layoutCompoundLabel(avail=70, "criteria.criteria")` → `"criteria.crit..."` 逐字复现。算账也对得上（同字号探针读数）：文本 77px 被 `LABEL_COLUMN_MIN_PX=80` 抬到 80，行内边框再吃掉 8px，绘制区 72px < 77px。
+
+**正例**：边框由 `columnLabel(text, width, border)` 在度量前落下 + 预算吃进 `border.getBorderInsets(null).left`；**反例**：只把列宽上限从「硬编码 260」改成「视口 × 比例」——那一步改了上限、没碰内边距，真机上该截的还是截。
+
+**Seen 1× (2026-11-12)**
+
+### L49 横幅/告警挂在「重渲染」路径之外＝停在上一轮的判定
+
+**规则**：交互式预览里同一份产物有两条更新路径——「开窗」与「勾选后重渲染」。任何由产物派生的**呈现态**（告警横幅、风险提示、降级说明、行尾标注）都必须在**两条路径**上都重算；只在开窗时算一次，用户改完勾选看到的就永远是开窗那一刻的结论。落地口径：把「本轮产物派生的态」集中成构造函数（本轮＝`updateMeta`），重渲染分支结尾统一调它；**新增派生态时同时问一句「重渲染分支会不会重算」**。
+
+**证据**：2026-11-12 真机：`deleteByExample` 取消勾选 `_parameter != null` 后产物已从 `delete from CUST_ADDRESS WHERE ( {{…}} ? )` 变成 `delete from CUST_ADDRESS`，面板上「预览未完整还原」照挂（`xmlErrors` 确实按帧刷新，但消费它的 `updateMeta` 只有 iBatis 分支调）；反过来，产物变成无 WHERE 的全表 DELETE 时也**没有任何风险提示**——两个症状同因。
+
+**正例**：重渲染分支结尾 `updateMeta(result)`，风险判据取**未回填**的本轮产物；**反例**：把横幅状态当成 `showResult` 的一次性产物（或拿回填后的文本判关键词——参数值里的 `where` 会污染判定）。
+
+**Seen 1× (2026-11-12)**
+
+### L50 摘除式反向探针要自证生效：改完 grep 目标语句，剩余引用必须是 0
+
+**规则**：临时摘掉一行修复做反向验证时，`old_string` 只覆盖**那一行本身**，别拿紧邻的插入行当锚点；改完立刻 `grep -c '<目标语句>' src/main` 确认它真的不再被执行（从 1 变 0）。这类探针最阴的失败是「探针没落地」——修复仍在跑，用例当然还是绿的，而这份绿与「这个修复其实是多余的」在读数上一模一样。同理，多路探针同跑时，某一半边绿要先看探针足迹，不要直接读成「该修复不必要」。
+
+**证据**：2026-11-12 T-PreviewBannerLiveRefresh：摘 `updateMeta(result)` 时 Edit 的 `old_string` 取的是紧邻的 `writeRiskWarning = fullTableWriteRisk(base)` 行，于是新加的 `// updateMeta(result)` 注释与**原来的**调用并存，探针等于没打；三处探针同跑时 A/C 各自变红、D 那半边绿，差一步就写成「这条修复不必要、可以删」。换成整行锚点并 grep 确认剩余 0 次后，`XmlPreviewBannerRefreshTest` 恰 1 红，断言正是「产物已无占位 ⇒ 陈旧渲染警示必须随本轮清除」。
+
+**正例**：探针后先 `grep -c` 自证 + 只跑测那条行为的用例；**反例**：拿摘要行/相邻行当锚点摘调用，探针绿了不留足迹就下结论。
+
+**Seen 1× (2026-11-12)**
+
+### L51 retry 救不了「一次性读完」的下载：先确认有没有续传语义，判据用服务端给的 digest
+
+**规则**：把「重试」当万灵药之前，先看被重试的动作有没有**续传/幂等**语义。一次 `urlopen(...).read()` 拉 8MB 附件没有续传——链路每轮在同一处被掐时，重试只是把同一个失败从头再演一遍，每轮还白付前面已经下过的字节。正解：`Range` 从本地已落字节续拉 + 块级 flush 落盘；判据用**服务端声明的 digest**（GitHub Release API 的 `assets[].digest` 就是 `sha256:…`）而不是「长度相等」；连续 N 轮零进展即判链路不可用，并**把替代通道写进报错**（同一次 Actions 运行的 `plugin-<n>` 产物是同一份字节，走另一条 host）。同理，`gh run watch` 的退出码不能当发行结论——代理掐断会让它提前退出，判据永远取 `gh run view` 的 `conclusion`。
+
+**证据**：2026-11-12 发 beta.4，`gitee-release.py --from-github` 的下载步三轮分别停在 0.83MB / 1.78MB / 1.97MB（`http.client.IncompleteRead(831805 bytes read, 7267971 more expected)`），每轮都从 0 重来；换可续传 `curl -C -` 后同一份文件累积到 7.37MB 再补齐，随后走**同一个脚本的本地 zip 分支**建版，`--verify-only` [3/3] sha256 与 GitHub 声明逐字节一致。同轮 `gh run watch` 被代理掐成 `failed to get run … EOF`，而 `gh run view` 显示 16/16 全绿仍在推进——差点把网络抖动读成流水线失败。脚本已按此改造（`_download_asset_resumable`：`.partial` 续传 + `assets[].digest` 校验 + 零进展 3 轮放弃并打印替代命令），落地探针＝把 8,099,776 字节的包截断到 4MB 再让它续传，sha256 与 GitHub 声明一致。
+
+**正例**：续传 + digest 判据 + 报错里带替代通道；**反例**：把「重试 4 轮全失败」当成网络暂时抖动继续干等。
+
+**Seen 1× (2026-11-12)**
 
 ## 升级记录
 

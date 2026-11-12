@@ -338,10 +338,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // ExecTempFileFactory.createTempPsiFileAsync KDoc）——**EDT 上只做派发**，结果经
     // invokeLater 回到 EDT 续接准备链（弹窗/内嵌控制台/结果面板仍全部在 EDT）。
     // 契约影响：本函数的后续全链已迁入 [continuePrepareAfterTempFile]，由 onReady 驱动。
-    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp ->
+    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp, failureReason ->
         continuePrepareAfterTempFile(
             project = project,
             temp = temp,
+            failureReason = failureReason,
             sql = sql,
             submitSql = submitSql,
             executeAfterPrepare = executeAfterPrepare,
@@ -383,7 +384,9 @@ internal fun DataSourceSelector.chooseAndPrepare(
  */
 internal fun DataSourceSelector.continuePrepareAfterTempFile(
     project: Project,
-    temp: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?,
+    temp: Pair<VirtualFile, PsiFile>?,
+    /** [createTempPsiFileAsync] 就地捕获的失败阶段原因（优先于跨线程共享的 `lastTempFileFailure`） */
+    failureReason: String? = null,
     sql: String,
     submitSql: String,
     executeAfterPrepare: Boolean,
@@ -412,9 +415,10 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     if (temp == null) {
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
-        LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
+        val reason = failureReason ?: lastTempFileFailure ?: "unknown"
+        LOG.warn("[M36] createTempPsiFile failed (reason=$reason), abort")
         failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null,
-            MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
+            MpSqlVisualizerBundle.message("execute.tempFile.failed", reason))
         callback?.invoke(false)
         return
     }
@@ -1111,13 +1115,18 @@ internal fun DataSourceSelector.attachResultsHook(
  * `onError(String)`；两者**互斥**，不再先后各投一次。
  *
  * **为什么必须互斥**（T-ELU-01 实测的真相，与计划 §一.1 的「按钮可见但点了没反应」不同）：
- * 消费方 `SqlPreviewPanel` 的 `onError` 恒为 `resultPanel.showError(errorMsg)`，而
+ * 消费方 `SqlPreviewPanel` 的 `onError` 早先是 `resultPanel.showError(errorMsg)`，而
  * `showError` 会清掉定位动作与定位按钮（`ui/SqlResultPanel.kt` 的
  * `locateHandler = null` + `errorLocateButton.isVisible = false`）。原实现先投富通道
  * （`showErrorRich` 置按钮可见）、紧接着无条件投旧通道——**同一 EDT 任务内**后者立刻把
  * 前者抹掉，端态恒为「按钮不可见」，T-ELU-01 的「先解析后显隐」因此形同 no-op。
  * 两者呈现的文本同源（富通道 `showErrorRich` 内部就是 `showError(info.message)`），
  * 故富通道成功时不再投旧通道，展示行为等价而定位态得以保留。
+ *
+ * **F9 订正（2026-11-11）**：`onError` 现在**不再**恒为 `showError`——执行回调统一走
+ * `showTempFileError`（临时文件失败要挂成因与蓝字入口），无成因时才退回 `showError`。
+ * 上面那段「恒为 showError」的旧假设也正是临时文件失败在「直接点执行」上从不显示蓝字的根因：
+ * 五个执行调用点里只有两处接了对的回调。
  *
  * 富通道自身抛异常（`runCatching`）时**回退旧通道**——不让「结构化」这一增强把错误呈现吞掉。
  *
@@ -1548,7 +1557,46 @@ internal fun DataSourceSelector.installOutputHistoryFillLayout(root: java.awt.Co
  * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
  */
 
-internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): java.io.File? {
+/**
+ * T-ExecPsiGate R6：该目录下的文件在**这台 IDE** 上能不能建出 PSI。
+ *
+ * 2026.3 起平台多了一道闸门（`AbstractFileViewProvider.shouldCreatePsi()`，243/262 没有）：
+ * 父目录拿不到 `PsiDirectory`（目录不在内容模型里——未加入 content、或被 excluded，`.idea` 被
+ * 排除是常见形态）且不在库源码/库类里时，`createFile` 直接返回 null ⇒ `PsiManager.findFile`
+ * 返回 null，而 `vf` 完全有效。用户那条「放 `.idea` 下必错、放项目外正常」正是这个闸门。
+ *
+ * 判据直接复用平台那一条（`PsiManager.findDirectory`），保证与平台口径一致。
+ * 探不出来（目录还没进 VFS / 异常）时按「能」处理——保守走原路径，失败还有自愈支 4 兜底；
+ * 这里刻意**不强制 refresh**，避免给每次执行加一次 VFS 刷新。
+ */
+internal fun execDirCanHostPsi(project: Project, dir: java.io.File): Boolean {
+    if (project.isDisposed) return true
+    // T-ExecPsiGate F4（2026-11-11 验收失败）：**不缓存结论**。原实现按目录路径记忆到会话结束，
+    // 而「目录能不能建 PSI」取决于内容模型与 Registry（用户随时会改：排除/取消排除、勾/取消
+    // ide.hide.excluded.files）——旧结论会让落点判定恒留在错的一侧（预览实测：改了状态仍写 .idea
+    // → 降级横幅不消失）。探针成本只是一次 VFS 查找 + 一次 PsiDirectory 查找，调用点也不在键盘热路径。
+    if (!dir.exists() && !dir.mkdirs()) return true
+    val dirVf = runCatching {
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)
+    }.getOrNull() ?: return true
+    val capable = runCatching {
+        ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(dirVf)
+        }
+    }.getOrNull() != null
+    return capable
+}
+
+internal fun DataSourceSelector.projectExecFile(
+    project: Project,
+    sql: String,
+    /**
+     * T-ExecPsiGate R6：true = 写到**项目根备用落点** `<base>/.sql-visualizer/exec/`。
+     * 用于 `.idea` 下建不出 PSI 的机器（用户实测同文件放项目外正常）；复用本函数全套
+     * document 写与冲突规避逻辑，避免备用落点再踩「File Cache Conflict」。
+     */
+    preferProjectRoot: Boolean = false,
+): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-PerfSweep30 01a 测试缝：入口计数（cache-only 命中应完全不进本函数——它后面的两次
     // syncExecVfContentIfNeeded 收敛各付一次 EDT 派发探测，正是本券要省的）
@@ -1565,11 +1613,24 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): 
         LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
         return null
     }
-    val dir = java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
+    // R6/F6：项目根落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
+    // 2026-11-11 用户定案「兜底不得抢在提示前面」在被真机推翻一半：`.idea` 被 `.gitignore` 忽略的
+    // 项目里平台**永远不会**为它建 PSI，此时「让用户改配置」没有可改的东西。F6 起由落点探针
+    // （[decideExecLandingRoot]）决定，只认调用方传入的 preferProjectRoot；用户手动点
+    // 「改用项目根落点重试」的那条路仍经 [DataSourceSelector.execRootFallbackProjects] 生效。
+    val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
+    val dir = rootDir?.let { java.io.File(it, "exec") } ?: execPrimaryDir(project) ?: return null
     if (!dir.exists() && !dir.mkdirs()) {
         // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
         LOG.warn("[M36] projectExecFile FAILED: mkdirs false (${dir.path})")
         return null
+    }
+    // 目录建好之后再写 `.gitignore`（内容 `*`），免得备用目录出现在用户的 git status 里
+    if (rootDir != null) {
+        runCatching {
+            val ignore = java.io.File(rootDir, ".gitignore")
+            if (!ignore.exists()) ignore.writeText("*\n")
+        }
     }
     val f = java.io.File(dir, "mpsql-exec.sql")
     // T-PreviewLockInversion（2026-11-02 性能分析）：临界区**只留「存在性 + 判等 + 首建裸写」**，

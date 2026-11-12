@@ -32,11 +32,15 @@ import java.awt.BorderLayout
 class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
 
     /** 消息类别（同类别「恢复即清除」；高优先类别不被低优先类别清除）。 */
-    enum class Kind { RENDER_WARNING, DEGRADED, DOLLAR_INJECT }
+    enum class Kind { RENDER_WARNING, WRITE_RISK, DEGRADED, DOLLAR_INJECT }
 
     /** 类别优先级（数值大者优先——show 低优先不覆盖高优先）。 */
     private fun priority(kind: Kind): Int = when (kind) {
         Kind.DEGRADED -> 2
+        // T-FullTableWriteRisk：与 RENDER_WARNING **同档**——两者都在讲产物本身有问题，故按
+        // 「谁后写谁占位」定序；调用方先挂渲染警示、后挂写风险 ⇒ 同时存在时写风险优先展示。
+        // 降级（编辑器尚未就绪，产物可能还不是最终形态）仍高于两者。
+        Kind.WRITE_RISK -> 1
         Kind.RENDER_WARNING -> 1
         Kind.DOLLAR_INJECT -> 0
     }

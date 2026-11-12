@@ -257,13 +257,55 @@ object DatabaseSchemaResolver {
     fun prefetchTables(project: Project?, tableNames: Collection<String>): Int {
         if (project == null) return 0
         if (!isDatabaseAvailable()) return 0
+        val now = System.currentTimeMillis()
         var resolved = 0
+        var skipped = 0
         for (name in tableNames) {
             if (name.isBlank()) continue
-            val meta = runCatching { tableMeta(project, name) }.getOrNull() ?: continue
-            if (meta.columns.isNotEmpty() || meta.comment != null) resolved++
+            val key = "${project.locationHash}|${name.lowercase()}"
+            if (prewarmWindowHit(key, now)) {
+                skipped++
+                continue
+            }
+            val meta = runCatching { tableMeta(project, name) }.getOrNull()
+            stampPrewarmAttempt(key, System.currentTimeMillis())
+            if (meta != null && (meta.columns.isNotEmpty() || meta.comment != null)) resolved++
+        }
+        if (skipped > 0) {
+            LOG.info("[T-DbSchemaCompletion] prewarm window skip: skipped=$skipped resolved=$resolved")
         }
         return resolved
+    }
+
+    /**
+     * T-SchemaPrewarmDedupe：预热去重窗口。
+     *
+     * 为什么单独给预热开窗口、而不去动 [bailAfterTraversal] 的「查不了不记账」：那条语义是
+     * 「数据源晚连接 / 内省完成后能自愈」的正确性护栏（4 处既有断言钉住，见本文件 T-PS6-08 留档）。
+     * 而预热只是「顺手补全上下文」的尽力动作——真机实测一次打开里跑两遍、每遍把 15 个数据源全遍历
+     * 且全部 bail（`resolved=0`），下一次打开原样重来，纯白付。
+     *
+     * 窗口内直接跳过；窗口外放行，自愈语义不变。
+     */
+    private fun prewarmWindowHit(key: String, now: Long): Boolean =
+        prewarmWindowHitAt(prewarmAttemptAt[key], now, prewarmWindowMs)
+
+    /** 纯判定（单测入口）：上次尝试在窗口内 → 跳过；`window <= 0` 等价关闭。 */
+    internal fun prewarmWindowHitAt(last: Long?, now: Long, window: Long): Boolean {
+        if (window <= 0L || last == null) return false
+        val elapsed = now - last
+        return elapsed in 0 until window
+    }
+
+    private fun stampPrewarmAttempt(key: String, at: Long) {
+        if (prewarmWindowMs <= 0L) return
+        if (prewarmAttemptAt.size > PREWARM_ATTEMPT_CAP) prewarmAttemptAt.clear()
+        prewarmAttemptAt[key] = at
+    }
+
+    /** 测试缝：清空预热窗口（窗口旋钮见 [prewarmWindowMs]）。 */
+    internal fun resetPrewarmWindowForTest() {
+        prewarmAttemptAt.clear()
     }
 
     /**
@@ -359,6 +401,20 @@ object DatabaseSchemaResolver {
 
     /** 负缓存 TTL（毫秒）：时间戳惰性过期，过期即重扫，无常驻定时器。 */
     internal const val NEGATIVE_TTL_MS = 30_000L
+
+    /**
+     * T-SchemaPrewarmDedupe：预热去重窗口默认值（60s）。真机一次打开里预热会跑两遍、每遍把全部
+     * 数据源遍历一遍且全部 bail，窗口内重复尝试没有意义；窗口外放行，保持「数据源晚连接后自愈」。
+     */
+    internal const val PREWARM_WINDOW_MS = 60_000L
+
+    /** 测试/排障旋钮：`<= 0` 等价关闭窗口（生产恒等于 [PREWARM_WINDOW_MS]）。 */
+    @Volatile internal var prewarmWindowMs: Long = PREWARM_WINDOW_MS
+
+    /** 预热尝试时刻（键 = project.locationHash|表名小写）；容量超限直接清空，避免长会话无界增长。 */
+    private val prewarmAttemptAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private const val PREWARM_ATTEMPT_CAP = 512
 
     /** 测试专用 TTL 旋钮（生产恒等于 [NEGATIVE_TTL_MS]；调短/归零验证过期语义）。 */
     @Volatile internal var negativeTtlMs: Long = NEGATIVE_TTL_MS

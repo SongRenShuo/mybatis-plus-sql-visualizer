@@ -309,13 +309,105 @@ internal fun SqlPreviewPanel.prewarmAbandoned(): Boolean = previewDisposed || pr
  */
 @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
 
+/**
+ * 13.12：预览落点兜底的「只提示一次」闸门（按面板实例持有，抽成类型以便纯逻辑用例直测）。
+ *
+ * 为什么要去重：落点判定会在每次预览/预热时跑，若每次都弹一条提示就变成新的噪音源；
+ * 用户只需要知道「这个项目我改用了备用落点、以及怎么改回来」一次。
+ */
+internal class PreviewFallbackNoticeGate {
+    private val notified = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** @return true = 本次是首个调用方（应当提示）；后续调用 false */
+    fun shouldNotify(): Boolean = notified.compareAndSet(false, true)
+}
+
+/**
+ * 13.12：预览临时目录改写到项目根时，给一条**只出现一次**的告知 + 蓝字入口。
+ *
+ * 与执行侧的差别（用户 2026-11-11 定案「兜底不得抢在提示前面」的延伸）：执行是阻断性失败，
+ * 必须让用户选；预览的失败形态是**功能降级**，所以这里自动兜底保证预览可用，但**不再静默**——
+ * 明确告诉用户「你项目里 .idea 这层建不出 PSI，我已经改写到项目根」，并给去修配置的入口。
+ */
+internal fun SqlPreviewPanel.notifyPreviewRootFallbackOnce(
+    proj: Project,
+    cause: cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause,
+) {
+    if (!previewFallbackNoticeGate.shouldNotify()) return
+    val settingsLabel: String?
+    val settingsTip: String?
+    val settingsAction: (() -> Unit)?
+    when (cause) {
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_FILE_TYPES -> {
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
+            // 2026-11-11 用户定案：不引导改 `.gitignore`（忽略 `.idea/` 是正常设置），
+            // 忽略模式统一指向 Settings → Editor → File Types。
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        // F5：目录级探针判否（文件级谓词全绿的那种形态）——入口同上，指向忽略模式设置页
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIR_NOT_INDEXED -> {
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        // 排除 / 方言 / 未识别语言：没有稳定的设置入口或与落点无关，只给告知
+        else -> {
+            settingsLabel = null
+            settingsTip = null
+            settingsAction = null
+        }
+    }
+    val show = {
+        if (!previewDisposed) {
+            resultPanel.showStatusWithActions(
+                MpSqlVisualizerBundle.message("preview.tempDir.fallback.notice"),
+                settingsLabel = settingsLabel,
+                settingsTooltip = settingsTip,
+                settings = settingsAction,
+                warning = true,
+            )
+        }
+    }
+    if (com.intellij.openapi.application.ApplicationManager.getApplication().isDispatchThread) {
+        show()
+    } else {
+        com.intellij.openapi.application.ApplicationManager.getApplication()
+            .invokeLater(show, com.intellij.openapi.application.ModalityState.nonModal())
+    }
+}
+
 internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
     val proj = project ?: return null
     val base = proj.basePath ?: return null
-    val dir = java.io.File(
+    // T-ExecPsiGate R6：2026.3 起平台对「父目录不在内容模型里」的文件不建 PSI
+    // （`AbstractFileViewProvider.shouldCreatePsi`）。`.idea` 被 excluded 的项目里，
+    // 预览临时文件会因此拿不到 PSI（表现为「临时文件解析失败」降级横幅），故先探一次，
+    // 探不过就换到项目根 `.sql-visualizer/preview/`（仍在内容根内、不在 `.idea` 下）。
+    val ideaDir = java.io.File(
         base,
         ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
     )
+    // 13.12：切成因判定——「探不过」有四种原因，告知文案与蓝字入口要跟着变
+    val fallbackCause = runCatching {
+        cn.song.mybatisplus.visualizer.execute.execDirFailureCause(proj, ideaDir)
+    }.getOrNull()
+    if (fallbackCause != null) notifyPreviewRootFallbackOnce(proj, fallbackCause)
+    val dir = if (fallbackCause == null) {
+        ideaDir
+    } else {
+        java.io.File(base, ".sql-visualizer${java.io.File.separator}preview").also {
+            runCatching {
+                val ignore = java.io.File(base, ".sql-visualizer${java.io.File.separator}.gitignore")
+                if (!ignore.exists()) ignore.writeText("*\n")
+            }
+        }
+    }
     if (!dir.exists() && !dir.mkdirs()) return null
     // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
     // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 [sweepStalePreviewFiles]。

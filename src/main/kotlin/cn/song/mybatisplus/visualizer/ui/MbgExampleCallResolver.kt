@@ -1,0 +1,394 @@
+package cn.song.mybatisplus.visualizer.ui
+
+import cn.song.mybatisplus.visualizer.util.FatalErrors
+import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
+import cn.song.mybatisplus.visualizer.xml.MockObject
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.module.ModuleUtilCore
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiCodeBlock
+import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiMethod
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiVariable
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.searches.ReferencesSearch
+import com.intellij.psi.util.PsiTreeUtil
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * MBG Example 调用点解析（T-MbgExamplePreview M2）。
+ *
+ * MBG 生成器的 Example 用法固定为
+ * `example.createCriteria().andCustIdEqualTo(v)` + `mapper.selectByExample(example)`，
+ * 而 `andXxxYyy` 的方法体固定是一句 `addCriterion("cust_id =", value, "custId")`。
+ * 所以反推 Criterion 不需要猜列名：从 mapper 方法的调用点拿到 example 变量，
+ * 在同一方法体里找 `and*` / `or*` 调用，再读对应方法的 `addCriterion` 第一个实参常量即可。
+ *
+ * 产出直接喂给 [cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.from] 的
+ * `collectionElements`：
+ *  - `oredCriteria` → 一个 Criteria 元素（`valid=true` + `criteria` 列表）
+ *  - `criteria.criteria` → 上述 Criterion 元素
+ *
+ * 全部失败路径返回 null（无 project / 接口不可解析 / 找不到调用点 / 方法体没有 addCriterion 常量），
+ * 上游据此退回升级前的「无属性元素」行为——不报错、不改变既有预览。
+ */
+object MbgExampleCallResolver {
+
+    private val LOG = Logger.getInstance(MbgExampleCallResolver::class.java)
+
+    /** MBG Criteria 的方法名：`and` / `or` + 大写驼峰首字母。 */
+    private val AND_OR_METHOD = Regex("""^(and|or)[A-Z]\w+$""")
+
+    /** 单次反推的 Criterion 上限（防御性：方法体里可能有大量链式调用）。 */
+    private const val MAX_CRITERIA = 20
+
+    /**
+     * 缓存条目（T-PreviewOpenPerfM2 M1）：`ReferencesSearch` 是**全项目索引检索**，实测在最小规模
+     * demo 上就占装配耗时的 78%（`[open-perf] m2=207` / `total=266ms`），大工程按命中规模放大；
+     * 而原实现每次 `preview()` 都重跑。key＝`namespace#statementId`，失效判据＝解析时实际读过的
+     * 文件的 `modificationStamp`（mapper 接口 / Example 方法 / 调用点所在文件，任一改动即失效）。
+     */
+    internal data class CachedResolution(
+        val elements: Map<String, List<MockObject>>,
+        val stamps: Map<VirtualFile, Long>,
+    )
+
+    private val cache = ConcurrentHashMap<String, CachedResolution>()
+
+    /** 预取在途集合（同一 key 只跑一个后台任务）。 */
+    private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** 预取失败记忆（本会话不再重试；预览路径不受影响）。 */
+    private val prefetchFailed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
+    internal var cacheHits: Int = 0
+        private set
+
+    internal var searchRuns: Int = 0
+        private set
+
+    /** 测试缝：清空缓存与计数。 */
+    internal fun resetCacheForTest() {
+        cache.clear()
+        cacheHits = 0
+        searchRuns = 0
+    }
+
+    fun resolve(
+        project: Project?,
+        namespace: String?,
+        statementId: String,
+    ): Map<String, List<MockObject>>? {
+        if (project == null || namespace.isNullOrBlank()) return null
+        // key 带 project 身份：本 object 是进程级，多项目窗口打开时同 `namespace#statementId`
+        // 会撞车（不同项目可以有同名 mapper）
+        val key = "${project.locationHash}#$namespace#$statementId"
+        return runCatching {
+            ReadAction.compute<Map<String, List<MockObject>>?, RuntimeException> {
+                resolveCached(key) { resolveInReadAction(project, namespace, statementId) }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * 缓存外壳（**纯逻辑**，可单测）：命中且依赖文件未变则直接返回；否则执行 [compute] 并落缓存。
+     *
+     * `compute` 返回 null 表示「解析不到」——**不写缓存**：把「当时索引没就绪 / 找不到调用点」
+     * 永久固化下来会让下次打开永远拿不到（宁可比预期多跑一次）。
+     */
+    internal fun resolveCached(
+        key: String,
+        compute: () -> CachedResolution?,
+    ): Map<String, List<MockObject>>? {
+        cache[key]?.let { cached ->
+            if (isFresh(cached)) {
+                cacheHits++
+                LOG.info("[m2] cache hit ${describe(cached)} $key")
+                return cached.elements
+            }
+            LOG.info("[m2] cache stale (依赖文件已改) $key")
+        }
+        searchRuns++
+        val resolved = compute()
+        if (resolved == null) {
+            // 不写缓存：把「当时索引没就绪 / 找不到调用点」永久固化会让下次打开永远拿不到
+            LOG.info("[m2] unresolved（不写缓存） $key")
+            return null
+        }
+        cache[key] = resolved
+        LOG.info("[m2] resolved ${describe(resolved)} $key")
+        return resolved.elements
+    }
+
+    private fun describe(entry: CachedResolution): String =
+        "criteria=${entry.elements["criteria.criteria"]?.size ?: 0} stamps=${entry.stamps.size}"
+
+    /**
+     * 预取（T-PreviewOpenPerfM2 M11）：把 M2 检索挪到「用户还在看文件」的时候。
+     *
+     * 真机首开 `[open-perf] … m2=1628/2042ms`、`request→dialog 2714/4580ms`，而第二次起 m2≈0、
+     * 弹窗 200ms 级——首开慢的全部就是这一次冷检索。gutter 渲染本来就要遍历 mapper 语句，
+     * 顺手在后台跑一次即可让「点开」命中缓存；不改变任何交互，失败静默。
+     *
+     * 三条护栏（真机 2026-11-12 14:05 实测教训）：
+     *  - **失败记忆**：解析不到（`countByExample` / `deleteByExample` 这类在本项目里根本没有调用点的
+     *    语句就是常态）不写缓存，而 gutter 会反复重绘 —— 不记失败就会变成每次重绘都重跑一次全项目
+     *    检索（实测 6 秒内同一语句跑了 4 轮、日志刷屏）。记下 key 后本会话不再预取；
+     *    预览路径仍照常现算，不受影响。
+     *  - **单条在途**：预取是尽力而为，已有任务在跑就不再排（避免打开文件瞬间并发多条冷检索）。
+     *  - 缓存新鲜则直接返回；单元测试模式不触发（避免后台线程干扰断言）。
+     */
+    fun prefetch(project: Project?, namespace: String?, statementId: String) {
+        if (project == null || namespace.isNullOrBlank()) return
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        val key = "${project.locationHash}#$namespace#$statementId"
+        if (key in prefetchFailed) return
+        cache[key]?.let { if (isFresh(it)) return }
+        if (inFlight.isNotEmpty()) return
+        if (!inFlight.add(key)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                if (resolve(project, namespace, statementId) == null) prefetchFailed.add(key)
+            } catch (t: Throwable) {
+                prefetchFailed.add(key)
+                if (FatalErrors.isFatal(t)) throw t
+            } finally {
+                inFlight.remove(key)
+            }
+        }
+    }
+
+    /** 依赖文件全部仍有效且 stamp 未变才算新鲜（不引文件监听，按需比 stamp）。 */
+    private fun isFresh(entry: CachedResolution): Boolean =
+        entry.stamps.all { (file, stamp) -> file.isValid && file.modificationStamp == stamp }
+
+    private fun resolveInReadAction(
+        project: Project,
+        namespace: String,
+        statementId: String,
+    ): CachedResolution? {
+        val trace = StringBuilder()
+        val mapperClass = JavaPsiFacade.getInstance(project)
+            .findClass(namespace, GlobalSearchScope.allScope(project))
+        if (mapperClass == null) {
+            LOG.info("[m2] trace $namespace#$statementId mapperClass=NOT_FOUND")
+            return null
+        }
+        val stamps = mutableMapOf<VirtualFile, Long>()
+        fun note(file: PsiFile?) {
+            file?.virtualFile?.takeIf { it.isValid }?.let { stamps[it] = it.modificationStamp }
+        }
+        note(mapperClass.containingFile)
+        // T-PreviewOpenPerfM2 M10：检索范围收到「mapper 所在模块及其依赖它的模块」。
+        // 引用方**必须**能看见该接口，所以这个范围在语义上不丢命中，却比全项目小得多——
+        // 真机首次打开 m2=1628ms（253 处引用、冷索引），全项目作用域是大头。
+        val module = runCatching { ModuleUtilCore.findModuleForPsiElement(mapperClass) }.getOrNull()
+        val scope = if (module != null) {
+            GlobalSearchScope.moduleWithDependentsScope(module)
+        } else {
+            GlobalSearchScope.projectScope(project)
+        }
+        trace.append("scope=${if (module != null) module.name else "PROJECT"} ")
+        // D7（真机 2026-11-12 15:00）：`oredCriteria` 必须按**每条 Criteria**分组，不能拍平成一条。
+        // `example.createCriteria().andA()` 与 `example.or().andB()` 在 MBG 里是两条 Criteria，
+        // `Example_Where_Clause` 用 `separator="or"` 连接——拍平就把 `( a ) or ( b )` 错拼成 `a and b`。
+        val groups = LinkedHashMap<Any, MutableList<MbgCriterionMock>>()
+        val methods = mapperClass.findMethodsByName(statementId, true)
+        trace.append("methods=${methods.size} ")
+        methods.forEach { method ->
+            note(method.containingFile)
+            val call = findCallSite(scope, method)
+            if (call == null) {
+                trace.append("noCallSite ")
+                return@forEach
+            }
+            note(call.containingFile)
+            val exampleName = exampleVariableName(call)
+            if (exampleName == null) {
+                trace.append("noExampleArg(arg=${call.argumentList.expressions.firstOrNull()?.text?.take(40)}) ")
+                return@forEach
+            }
+            val body = PsiTreeUtil.getParentOfType(call, PsiCodeBlock::class.java)
+            if (body == null) {
+                trace.append("noBody ")
+                return@forEach
+            }
+            val found = collectCriteria(project, body, exampleName, trace)
+            trace.append("[${exampleName}:${found.values.sumOf { it.size }}/${found.size}] ")
+            for ((groupKey, list) in found) {
+                groups.getOrPut(groupKey) { mutableListOf() }.addAll(list)
+            }
+        }
+        val flat = groups.values.flatten()
+        LOG.info("[m2] trace $namespace#$statementId $trace -> criteria=${flat.size} groups=${groups.size}")
+        if (flat.isEmpty()) return null
+        return CachedResolution(
+            elements = mapOf(
+                "oredCriteria" to groups.values.map { MbgCriterionMock.criteriaOf(it) },
+                "criteria.criteria" to flat.map { it.toMockObject() },
+            ),
+            stamps = stamps,
+        )
+    }
+
+    /**
+     * mapper 方法在本项目里的**首个可用调用点**。
+     *
+     * T-PreviewOpenPerfM2 M5 的 `findFirst()` 在真机大工程上返回 null（同一方法 `Find Usages`
+     * 有 253 处引用、索引健康）——`Query.findFirst()` 在这条检索链上不可靠。改为 `forEach`
+     * 取首个命中（语义等价、仍是提前终止，不把全项目引用收成 List）。
+     *
+     * D6（真机 2026-11-12 14:46，`mybatis-plus-demo` 的 `CtCustmanagerRelMapper#selectByExample`）：
+     * **命中不等于能当调用点用**。`ReferencesSearch` 对接口方法会把「实现的声明处 / 方法引用」
+     * 一起返回，这类 ref 的 element 上溯没有 `PsiMethodCallExpression`——取第一个 ref 就直接放弃，
+     * trace 里就是 `noCallSite`，而项目里明明有两个真实调用点。现在改为跳过不可用的 ref 继续找。
+     */
+    private fun findCallSite(scope: GlobalSearchScope, method: PsiMethod): PsiMethodCallExpression? {
+        var site: PsiMethodCallExpression? = null
+        var refsSeen = 0
+        ReferencesSearch.search(method, scope).forEach { candidate ->
+            refsSeen++
+            val call = PsiTreeUtil.getParentOfType(candidate.element, PsiMethodCallExpression::class.java)
+            if (call == null) {
+                true // 声明处 / 方法引用：继续找下一个
+            } else {
+                site = call
+                false
+            }
+        }
+        if (site == null) {
+            val total = runCatching { ReferencesSearch.search(method, scope).findAll().size }.getOrNull()
+            LOG.info("[m2] findCallSite empty method=$method refsSeen=$refsSeen totalRefs=$total")
+        }
+        return site
+    }
+
+    /** 调用实参的变量名（`selectByExample(example)` → `example`）。 */
+    private fun exampleVariableName(call: PsiMethodCallExpression): String? =
+        (call.argumentList.expressions.firstOrNull() as? PsiReferenceExpression)?.referenceName
+
+    /** 方法体内所有以 example 为根的 `and*` / `or*` 调用。 */
+    private fun collectCriteria(
+        project: Project,
+        body: PsiCodeBlock,
+        exampleName: String,
+        trace: StringBuilder? = null,
+    ): LinkedHashMap<Any, MutableList<MbgCriterionMock>> {
+        // D7：键＝这条条件所属的 Criteria 节点（`createCriteria()` / `or()` 调用，或别名变量的初始化表达式）；
+        // 同一 Criteria 的多条条件落在同一组，不同 Criteria 之间由 `Example_Where_Clause` 的 `or` 连接。
+        val groups = LinkedHashMap<Any, MutableList<MbgCriterionMock>>()
+        var matched = 0
+        var noResolve = 0
+        var notExample = 0
+        var notRooted = 0
+        var noCondition = 0
+        var total = 0
+        PsiTreeUtil.findChildrenOfType(body, PsiMethodCallExpression::class.java).forEach { call ->
+            if (total >= MAX_CRITERIA) return@forEach
+            val name = call.methodExpression.referenceName ?: return@forEach
+            if (!AND_OR_METHOD.matches(name)) return@forEach
+            matched++
+            val method = call.resolveMethod()
+            if (method == null) {
+                noResolve++
+                return@forEach
+            }
+            if (!isExampleCriteria(method)) {
+                notExample++
+                return@forEach
+            }
+            if (!rootedAtExample(call.methodExpression.qualifierExpression, exampleName)) {
+                notRooted++
+                return@forEach
+            }
+            val condition = addCriterionCondition(project, method)
+            if (condition == null) {
+                noCondition++
+                return@forEach
+            }
+            val groupKey = criteriaGroupKey(call, exampleName) ?: exampleName
+            groups.getOrPut(groupKey) { mutableListOf() } += MbgCriterionMock(
+                condition = condition,
+                values = call.argumentList.expressions.map { it.text },
+                kind = MbgCriterionMock.kindOf(name),
+            )
+            total++
+        }
+        trace?.append("(and/or=$matched noResolve=$noResolve notExample=$notExample notRooted=$notRooted noCond=$noCondition) ")
+        return groups
+    }
+
+    /**
+     * D7：一条 `and*` / `or*` 条件归属哪条 Criteria。
+     *
+     * 链上最靠近根的 `createCriteria()` / `or()` 调用就是分界线——`example.createCriteria().andA().andB()` 的
+     * 两条都归同一节点，`example.or().andC()` 归另一个节点。分步别名（`Criteria c = example.createCriteria();
+     * c.andA()`）用变量的初始化表达式当键。认不出时返回 null，调用方按「同一个 example」兜底成一组。
+     */
+    private fun criteriaGroupKey(call: PsiMethodCallExpression, exampleName: String): Any? {
+        var cur: PsiExpression? = call.methodExpression.qualifierExpression
+        while (cur is PsiMethodCallExpression) {
+            when (cur.methodExpression.referenceName) {
+                "createCriteria", "or" -> return cur
+            }
+            cur = cur.methodExpression.qualifierExpression
+        }
+        val ref = cur as? PsiReferenceExpression ?: return null
+        if (ref.referenceName == exampleName) return null
+        val variable = runCatching { ref.resolve() as? PsiVariable }.getOrNull() ?: return null
+        return runCatching { variable.initializer }.getOrNull()
+    }
+
+    /** 方法是否属于 MBG 的 `XxxExample`（或其内部类 `Criteria`）。 */
+    private fun isExampleCriteria(method: PsiMethod): Boolean {
+        val owner = method.containingClass ?: return false
+        return owner.name?.endsWith("Example") == true ||
+            owner.containingClass?.name?.endsWith("Example") == true
+    }
+
+    /**
+     * 调用链的根是否指向**本次** selectByExample 实参那个 example 变量。
+     *
+     * 覆盖两种写法：链式 `example.createCriteria().andXxx(v)`（qualifier 最左端是 example 引用）
+     * 与分步 `Criteria c = example.createCriteria(); c.andXxx(v)`（根的**初始化表达式**追溯到 example）。
+     *
+     * 为什么不能按类型名收（E2E 验收缺陷 D4）：同一方法体里常有多个 Example 实例
+     * （MBG 生成的服务实现就是 `exampleNA` / `exampleNB` 各一条链），按「变量类型以 Example 结尾」
+     * 收会把**另一次查询**的条件也并进来——真机产物变成
+     * `WHERE (status = ? AND cust_name LIKE ? AND tenant_id = ? AND create_time BETWEEN ? AND tenant_id = ?)`，
+     * 两个 Example 的 AND 条件被拼成一条永不成立的谓词。所以只认**同一对象**：变量名相同，或该变量的
+     * 初始化表达式追溯后仍落在同一个 example 变量上。
+     */
+    internal fun rootedAtExample(expr: PsiExpression?, exampleName: String): Boolean {
+        val ref = rootReference(expr) ?: return false
+        if (ref.referenceName == exampleName) return true
+        val variable = runCatching { ref.resolve() as? PsiVariable }.getOrNull() ?: return false
+        val initializer = runCatching { variable.initializer }.getOrNull() ?: return false
+        return rootReference(initializer)?.referenceName == exampleName
+    }
+
+    /** 把 `a.b().c()` 这类链剥到最左端的引用表达式（`a`）。 */
+    private fun rootReference(expr: PsiExpression?): PsiReferenceExpression? {
+        var cur = expr
+        while (cur is PsiMethodCallExpression) cur = cur.methodExpression.qualifierExpression
+        return cur as? PsiReferenceExpression
+    }
+
+    /** `andXxxYyy` 方法体里 `addCriterion("<condition>", ...)` 的第一个实参常量。 */
+    private fun addCriterionCondition(project: Project, method: PsiMethod): String? {
+        val body = method.body ?: return null
+        val call = PsiTreeUtil.findChildOfType(body, PsiMethodCallExpression::class.java) ?: return null
+        if (call.methodExpression.referenceName != "addCriterion") return null
+        val arg = call.argumentList.expressions.firstOrNull() ?: return null
+        return JavaPsiFacade.getInstance(project)
+            .constantEvaluationHelper.computeConstantExpression(arg) as? String
+    }
+}

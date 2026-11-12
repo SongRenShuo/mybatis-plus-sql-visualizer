@@ -520,7 +520,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
                     proj, sql, null, isQuery,
                     onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onError = { errorMsg -> showTempFileError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     wholeScriptExec = wholeScriptExec,
                     dialectGateRequest = dialectGateRequest,
@@ -540,7 +540,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
         val executed = SqlExecutor.executePrepared(
             proj,
             onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
-            onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            onError = { errorMsg -> showTempFileError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest,
@@ -552,7 +552,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
         proj, sql, null, isQuery,
         onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        onError = { errorMsg -> resultPanel.showError(errorMsg) },
+        onError = { errorMsg -> showTempFileError(errorMsg) },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         wholeScriptExec = wholeScriptExec,
         dialectGateRequest = dialectGateRequest,
@@ -664,11 +664,19 @@ internal fun SqlPreviewPanel.previewSqlForReadonly(): String? {
  */
 
 internal fun SqlPreviewPanel.confirmDollarRawSegments(proj: Project): Boolean {
-    if (current?.hasDollarRawSegments != true) return true
+    val placeholder = hasSimulationPlaceholders()
+    if (current?.hasDollarRawSegments != true && !placeholder) return true
     if (dollarRawConfirmedInSession) return true
+    // T-MbgExamplePreview T1：产物含 {{表达式}} 占位时用更强的文案——那一段不是「模拟值」，
+    // 而是运行期才知道的拼接片段，直接执行必报语法错
+    val messageKey = if (placeholder) {
+        "execute.confirm.simPlaceholder.message"
+    } else {
+        "execute.confirm.dollarRaw.message"
+    }
     val confirm = Messages.showYesNoDialog(
         proj,
-        MpSqlVisualizerBundle.message("execute.confirm.dollarRaw.message", DOLLAR_TOKEN),
+        MpSqlVisualizerBundle.message(messageKey, DOLLAR_TOKEN),
         MpSqlVisualizerBundle.message("execute.confirm.dml"),
         Messages.getWarningIcon(),
     )
@@ -934,7 +942,7 @@ internal fun SqlPreviewPanel.switchDataSourceInPlace(preferredRunnerName: String
             lastDialectGateMessage = null
         },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        onError = { errorMsg -> resultPanel.showError(errorMsg) },
+        onError = { errorMsg -> showTempFileError(errorMsg) },
         dialectGateRequest = gateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
         forceChoose = true,
@@ -1113,6 +1121,120 @@ internal fun openSqlDialectSettings(proj: Project) {
     }
 }
 
+/** 设置 → 编辑器 → 文件类型（EP id 由平台声明，2026.3 实证：`preferences.fileTypes`）。 */
+private const val FILE_TYPES_SETTING_ID = "preferences.fileTypes"
+
+/** 13.10：打开「设置 → 编辑器 → 文件类型」（用户在那里能看到/改「忽略的文件和文件夹」）。 */
+internal fun openFileTypesSettings(proj: Project) {
+    val opened = runCatching {
+        com.intellij.ide.actions.ShowSettingsUtilImpl.showSettingsDialog(proj, FILE_TYPES_SETTING_ID, null)
+    }.isSuccess
+    if (!opened) {
+        com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+            .showSettingsDialog(proj, FILE_TYPES_SETTING_ID)
+    }
+}
+
+/**
+ * T-ExecPsiGate 13.10：临时 SQL 文件失败的**富呈现**——红字 + 蓝色可点入口。
+ *
+ * 用户 2026-11-11 定案：「针对这两个问题做智能错误信息提示，精准识别原因并提供蓝色字体可以点击
+ * 调整到对应设置页」。三种成因在报错上长得一模一样（都是 `findFile` 返回 null），过去的处理只能
+ * 给一句笼统失败；现在按 [cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause] 把用户直接
+ * 送到修复点：
+ *
+ *  | 成因 | 蓝字入口 |
+ *  |---|---|
+ *  | 文件类型忽略模式 | 打开 设置 → 编辑器 → 文件类型 |
+ *  | 目录被忽略（含 VCS 忽略） | 打开 设置 → 编辑器 → 文件类型（**不引导改 `.gitignore`**，见下） |
+ *  | Excluded + Registry | 打开 项目结构 |
+ *  | 方言不可用 / 未识别语言 | 打开 SQL 方言设置 |
+ *  | 落点目录不被内容模型接管 | 打开 文件类型 设置（+ 兜底落点） |
+ *  | 判不出成因 | 兜底落点（**不允许只剩红字**） |
+ *
+ * 入口口径（2026-11-11 用户定案）：**不引导用户改 `.gitignore`**——`.gitignore` 里忽略 `.idea/`
+ * 是正常设置，让用户去删它是错误引导；忽略模式的可控入口统一指向 Settings → Editor → File Types。
+ *
+ * 没有 hint（普通 SQL 执行错误）时逐字退回 [SqlResultPanel.showError]，不干扰既有文案。
+ */
+internal fun SqlPreviewPanel.showTempFileError(errorMsg: String) {
+    // F8：成因**从文案本身**取（` [hint=XXX]`）。前几轮靠共享字段传递，被三种机制各打掉一次
+    //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空），动态重载后还可能是两份类实例。
+    // 文案怎么走成因就怎么走；产物里把标记剥掉，日志与「复制错误信息」里保留。
+    val cause = cn.song.mybatisplus.visualizer.execute.resolveTempFileHintCause(errorMsg)
+    val shown = cn.song.mybatisplus.visualizer.execute.parseExecHintMessage(errorMsg).text
+    val proj = project
+    if (cause == null || proj == null) {
+        resultPanel.showError(shown)
+        return
+    }
+    var settingsLabel: String? = null
+    var settingsTip: String? = null
+    var settingsAction: (() -> Unit)? = null
+    // 兜底只在「换落点真能解决」的成因上给——方言不可用时挪目录没用，给了等于误导
+    var allowFallback = true
+    val hint: String
+    when (cause) {
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_FILE_TYPES -> {
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.fileTypes")
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.IGNORED_BY_VCS -> {
+            // 2026-11-11 用户定案：**不引导改 `.gitignore`**——`.gitignore` 里忽略 `.idea/` 是正常设置，
+            // 让人去删它是错误引导。忽略模式的可控入口统一指向 Settings → Editor → File Types。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.vcs")
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.EXCLUDED_ROOT -> {
+            // 「项目结构」对话框在 243 / 2026.3 都已无稳定公开入口（ProjectStructureDialog 已移除），
+            // 故不给设置页链接（宁可指不出也不指错）；改用项目根落点这一支仍然有效。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.excluded")
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIALECT_UNAVAILABLE,
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.NO_LANGUAGE,
+        -> {
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dialect")
+            settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
+            settingsTip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip")
+            settingsAction = { openSqlDialectSettings(proj) }
+            allowFallback = false
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.DIR_NOT_INDEXED -> {
+            // F5（2026-11-11 用户验收）：文件级谓词全绿、平台照样不建 PSI 的唯一形态——真实原因在
+            // **父目录**的待遇上。入口同样指向「忽略模式」的设置页（用户 2026-11-11 定案：
+            // 不引导改 .gitignore），兜底落点仍由用户点。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dirNotIndexed")
+            settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes")
+            settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip")
+            settingsAction = { openFileTypesSettings(proj) }
+        }
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureCause.UNKNOWN -> {
+            // **不再只丢红字**（2026-11-11 用户验收：「没有引导用户调整配置信息」）。
+            // 判不出成因不等于没有出路：兜底落点一定能用，文案把可自查的两个入口写出来。
+            hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.unknown")
+        }
+    }
+    resultPanel.showErrorWithActions(
+        "$shown — $hint",
+        fixLabel = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot") else null,
+        fixTooltip = if (allowFallback) MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot.tip") else null,
+        fix = if (allowFallback) {
+            {
+                // 用户显式选了兜底：记住该项目（本会话内后续执行直接走备用落点），然后立刻重试一次
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execRootFallbackProjects.add(proj)
+                executeSql()
+            }
+        } else null,
+        settingsLabel = settingsLabel,
+        settingsTooltip = settingsTip,
+        settings = settingsAction,
+    )
+}
+
 /**
  * 按 configurable EP **id** 取方言设置页，不实例化整棵设置树。
  *
@@ -1260,9 +1382,10 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
                     proj, sql, null, isQuery,
                     onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-                    onError = { errorMsg ->
-                        resultPanel.showError(errorMsg)
-                    },
+                    // F9：本路径此前直接 `resultPanel.showError`，从未经过 showTempFileError——
+                    // 临时文件失败的成因与蓝字入口因此在「直接点执行」上永远不出现（切源那条走的是
+                    // 另一个已接线的调用点，所以那边有）。统一走 showTempFileError：无成因时行为等价。
+                    onError = { errorMsg -> showTempFileError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -1285,9 +1408,8 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
             proj,
             // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
             onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
-            onError = { errorMsg ->
-                resultPanel.showError(errorMsg)
-            },
+            // F9：同上——执行回调统一走 showTempFileError（无成因时行为等价于 showError）
+            onError = { errorMsg -> showTempFileError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             dialectGateRequest = dialectGateRequest,
             onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -1301,9 +1423,9 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
         // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
-        onError = { errorMsg ->
-            resultPanel.showError(errorMsg)
-        },
+        // F9：统一走 showTempFileError——临时文件失败时的成因与蓝字入口全挂在这里；
+        // 无成因（普通 SQL 错误）时它逐字退回 showError，行为与旧实现一致。
+        onError = { errorMsg -> showTempFileError(errorMsg) },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         dialectGateRequest = dialectGateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },

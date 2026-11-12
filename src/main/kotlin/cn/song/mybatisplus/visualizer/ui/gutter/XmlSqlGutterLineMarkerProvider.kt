@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.ui.MbgExampleCallResolver
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
@@ -45,6 +46,10 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return null
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
+        // T-PreviewOpenPerfM2 M11：MBG Example 语句的首次预览慢在 M2 引用检索（真机 1628~2042ms，
+        // 弹窗 2.7~4.6s），第二次起只有 200ms 级。渲染 gutter 时顺手在后台预取一次——用户从
+        // 「看到图标」到「点开」通常有秒级延迟，届时缓存已热；不改变任何交互，失败静默。
+        runCatching { prefetchMbgExample(tag) }
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
@@ -55,6 +60,21 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             GutterIconRenderer.Alignment.CENTER,
             { MpSqlVisualizerBundle.message("gutter.xml.accessible.name") },
         )
+    }
+
+    /**
+     * M11 预取入口：只对 MBG Example 形态（`parameterType` 以 `Example` 结尾）的语句触发，
+     * 其余语句（普通 mapper SQL）M2 根本不参与，预取纯属白烧。
+     */
+    private fun prefetchMbgExample(tag: XmlTag) {
+        // 只预取 select：真机上 countByExample / deleteByExample 这些语句多数没有调用点，
+        // 预取它们只会白烧一轮检索（实测 6 秒内同一语句重跑 4 轮）。
+        if (tag.name != "select") return
+        val paramType = tag.getAttributeValue("parameterType") ?: return
+        if (!paramType.endsWith("Example")) return
+        val id = tag.getAttributeValue("id") ?: return
+        val namespace = tag.parentTag?.getAttributeValue("namespace") ?: return
+        MbgExampleCallResolver.prefetch(tag.project, namespace, id)
     }
 
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */

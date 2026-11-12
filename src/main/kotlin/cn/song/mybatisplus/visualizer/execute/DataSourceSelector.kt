@@ -36,6 +36,16 @@ import javax.swing.Icon
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
+
+/**
+ * T-ExecPsiGate F6：一次「带修复入口」的失败——**阶段 + 成因**成对（见
+ * [DataSourceSelector.lastTempFileHintRecord]）。
+ *
+ * @param stage 失败阶段串的前缀（与 `execute.tempFile.failed` 文案里的同名片段，如 `dirNoPsi`）
+ * @param hint 该阶段对应的成因，决定面板上挂哪颗蓝字入口
+ */
+internal class TempFileHintRecord(val stage: String, val hint: ExecPsiFailureCause)
+
 object DataSourceSelector {
 
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
@@ -121,6 +131,40 @@ object DataSourceSelector {
      */
     @Volatile
     internal var lastTempFileFailure: String? = null
+
+    /**
+     * T-ExecPsiGate 13.10 / F6：最近一次**带修复入口**的失败——阶段 + 成因**成对**记录。
+     *
+     * 与 [lastTempFileFailure]（阶段串）互补：那个只说到「哪一段失败」，这个说到「该去哪儿修」。
+     * 面板据此把失败行渲染成「红字 + 蓝色可点入口」（`showErrorWithActions`）。
+     *
+     * **为什么不是一个裸字段**（F6，2026-11-11 第三轮验收实测）：F5 把成因记在裸字段里、并在
+     * `createTempPsiFile` 入口清空。预热链与冷路径并发时，先失败的一方刚写好成因，另一方的入口
+     * 就把它清掉了——用户看到的仍是「只剩红字、没有蓝字」。现在成因绑着**它所属的阶段**，消费时按
+     * 错误文案里的阶段匹配：别人的入口清不掉它，旧成因也不会被安到新失败上（阶段对不上即丢弃）。
+     */
+    @Volatile
+    internal var lastTempFileHintRecord: TempFileHintRecord? = null
+
+    /**
+     * 取「阶段 + 成因」——**非破坏性**（不在这里清空）。
+     *
+     * 两个改动都是真机打出来的（2026-11-11 第四轮）：
+     *
+     * 1. **不在这里清空**：同一次失败会被渲染不止一次（`failPrepareRequests` 先 abort 持有者、
+     *    再 complete 排队意图，两路都带同一条文案）。原来「读一次就清」，第一次渲染拿到蓝字、
+     *    第二次退化成纯红字并**把蓝字覆盖掉**——用户看到的正是「直接点执行没有蓝字」。
+     *    记录只由下一次带成因的失败覆盖，不需要读方负责清理。
+     * 2. **判据放宽成「这条文案是不是 PSI 建不出」**：成因只描述「为什么建不出 PSI」这一件事，
+     *    任何 PSI 阶段的失败文案都能用它；按精确阶段名匹配反而会因为阶段名演进（`findPsi` /
+     *    `findPsiAfterHeal` / `dirNoPsi`）把入口丢给用户看不见。
+     */
+    internal fun consumeTempFileHintFor(errorMsg: String): ExecPsiFailureCause? {
+        val rec = lastTempFileHintRecord ?: return null
+        val isPsiFailure = errorMsg.contains("findPsi") || errorMsg.contains("dirNoPsi") ||
+            errorMsg.contains(rec.stage)
+        return rec.hint.takeIf { isPsiFailure }
+    }
 
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
      * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
@@ -1178,12 +1222,37 @@ object DataSourceSelector {
     internal fun registeredDataSourceCount(project: Project): Int =
         runCatching { DataSourceSettings.getAllDataSources(project).size }.getOrDefault(0)
 
+    /**
+     * 反射获取 Runner 显示名称的**可空版**（T-DsListAddSource）：解析不出返回 null。
+     *
+     * 专供列表装配处使用——「unknown 数据源」死项的 B 侧同源根因就是 `"Unknown"` 回落被直接
+     * 渲染进条目。`getRunnerName` 的回落**保持不动**：`chosenRunnerName` 比对、
+     * `blocksPreferredRunnerMiss` 判据、last-used 记忆链都依赖非空串。
+     *
+     * 取名按 **`getDisplayName` → `getName`** 两段（T-DsListAddSource 回归修复 2026-11-12）：
+     * 平台 `ConsoleRunner` 两者都有，但「数据源对象形态」的实现（`DbDataSource`/`LocalDataSource`、
+     * 以及测试夹具）常常只暴露 `getName`。只认 `getDisplayName` 会把这类**合法条目**判成无名
+     * 而整条丢弃——弹层随之变空、`selectedIndex=0` 落空、既不走 `onChosen` 也不走 `canceled`，
+     * 调用方永远收不到回调（`LogToSqlPanelExecuteTest#testPlatformPopupSelectionDisposeIsNotUserCancellation`
+     * 三轮红即此形态）。两段都取不到才算无名：只有那种连名字都不暴露的对象才是要收掉的死项。
+     */
+    internal fun optionalRunnerName(runner: Any): String? {
+        for (methodName in RUNNER_NAME_METHODS) {
+            val name = runCatching {
+                val method = runner.javaClass.getMethod(methodName)
+                method.isAccessible = true
+                method.invoke(runner) as? String
+            }.getOrNull()
+            if (!name.isNullOrBlank()) return name
+        }
+        return null
+    }
+
+    /** 取名方法候选（顺序即优先级）；两段都失败才判无名。 */
+    private val RUNNER_NAME_METHODS = arrayOf("getDisplayName", "getName")
+
     /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
-    internal fun getRunnerName(runner: Any): String = runCatching {
-        val method = runner.javaClass.getMethod("getDisplayName")
-        method.isAccessible = true
-        method.invoke(runner) as? String
-    }.getOrNull() ?: "Unknown"
+    internal fun getRunnerName(runner: Any): String = optionalRunnerName(runner) ?: "Unknown"
 
     /** 反射获取 Runner 图标（数据源 DB 类型图标）。 */
     private fun getRunnerIcon(runner: Any): Icon? = runCatching {
@@ -1211,7 +1280,7 @@ object DataSourceSelector {
     internal fun createRunnerPopupStep(
         project: Project, runners: List<Any>, callback: (Any?) -> Unit,
     ): com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> {
-        val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
+        val items = buildRunnerItems(runners, NewDataSourceEntry.isAvailable(project))
         // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
         // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
         val multiProject = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.size > 1
@@ -1237,6 +1306,15 @@ object DataSourceSelector {
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
                     .info("[M36] popup onChosen: ${selectedValue?.name}")
+                // T-DsListAddSource：末尾「添加数据源…」——不参与选源，准备链按用户取消终结
+                //（与 Esc 同语义：结算单飞门、不提交 SQL），随即弹平台原生新建数据源流。
+                if (selectedValue?.addNew == true) {
+                    choiceAccepted = true
+                    return doFinalStep {
+                        NewDataSourceEntry.openCreatePopup(project, null)
+                        deliver(null)
+                    }
+                }
                 // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
                 choiceAccepted = true
                 return doFinalStep { deliver(selectedValue?.runner) }
@@ -1250,8 +1328,45 @@ object DataSourceSelector {
         return step
     }
 
-    /** 弹窗列表项（Runner 包装）。 */
-    internal data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
+    /**
+     * T-DsListAddSource（20261111）：Runner 列表装配——**解析不出名字的条目不渲染**，
+     * 末尾追加「添加数据源…」（平台可用时，D-3/D-2）。
+     *
+     * 抽成独立函数供测试直测（`createRunnerPopupStep` 的弹层依赖 JBPopupFactory，
+     * 纯逻辑单测够不着）；`withAddEntry` 显式传参，测试不必伪装平台在位。
+     *
+     * W1 取证（计划 P-1）：有未命名条目被丢弃时记一次性日志（类名列表），B 侧 unknown 的
+     * 确切成因以真机读数为准，日志即证据入口。
+     */
+    private val unnamedRunnerProbe = java.util.concurrent.atomic.AtomicBoolean()
+
+    internal fun buildRunnerItems(runners: List<Any>, withAddEntry: Boolean): List<RunnerItem> {
+        val cleaned = runners.mapNotNull { runner ->
+            val name = optionalRunnerName(runner) ?: return@mapNotNull null
+            RunnerItem(runner, name, getRunnerIcon(runner))
+        }
+        if (cleaned.size < runners.size && unnamedRunnerProbe.compareAndSet(false, true)) {
+            val dropped = runners.filter { optionalRunnerName(it) == null }
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info(
+                    "[M36][DsList] dropped ${dropped.size} unnamed runner(s): " +
+                        dropped.joinToString(", ") { it.javaClass.name },
+                )
+        }
+        val items = cleaned.toMutableList()
+        if (withAddEntry) {
+            items += RunnerItem(null, MpSqlVisualizerBundle.message("execute.datasource.add"), null, addNew = true)
+        }
+        return items
+    }
+
+    /** 弹窗列表项（Runner 包装；`addNew`=末尾「添加数据源…」动作项，`runner` 为 null）。 */
+    internal data class RunnerItem(
+        val runner: Any?,
+        val name: String,
+        val icon: Icon?,
+        val addNew: Boolean = false,
+    )
 
     /**
      * 创建临时 .sql 文件（含 SQL），返回 (VirtualFile, PsiFile)。
@@ -1631,6 +1746,18 @@ object DataSourceSelector {
 
     /** T-PS5-08 测试缝：探针项目集（弱引用可达性断言用；生产链路无调用点）。 */
     internal fun conflictProbeProjectsForTest(): MutableSet<Project> = conflictProbeProjects
+
+    /**
+     * T-ExecPsiGate R6：**`.idea` 下建不出 PSI 的项目集**（弱键，口径同 [conflictProbeProjects]）。
+     *
+     * 用户真机（UOS + Mac，同一个项目）：exec 文件放 `.idea/` 下必报 `findPsi ... null`，同内容放
+     * 桌面/项目外正常。一旦某个项目只能靠项目根备用落点（`.sql-visualizer/exec/`）把 PSI 建出来，
+     * 就把项目记在这里——后续执行直接走备用落点，不必每次都先撞三轮失败（每轮还带 2s 的 EDT 等待）。
+     */
+    internal val execRootFallbackProjects: MutableSet<Project> =
+        java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap<Project, Boolean>()),
+        )
 
     /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/

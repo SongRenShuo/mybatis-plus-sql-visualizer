@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.10-beta.3",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.10-beta.3/mybatis-plus-sql-visualizer-2026.11.10-beta.3.zip",
-  "changeNotes": "iBatis 的 sqlMap 语句 id 上 Ctrl+B 与 Ctrl+Click 现在能跳回 DAO 调用点，双向都通了\niBatis 的 DAO 调用行与方法定义行都不再多出一枚点开没有 SQL 的预览图标\n带 jdbcType 的占位符按类型回填，VARCHAR 加引号，数值不加，时间走标准字面量\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-11-10",
+  "version": "2026.11.12-beta.4",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.4/mybatis-plus-sql-visualizer-2026.11.12-beta.4.zip",
+  "changeNotes": "MBG Example 预览的左栏现在能按条件直接填值: 等值和区间都会生成可填行, 行名就是条件本身, 参数区顶部写明填值只替换对应的 ?\n点「清除」后不再残留旧值: 区间条件不会留下半截的旧值, 产物与左栏填值始终一致\n左栏的行名不再被截成 criteria.crit…: 列宽跟着面板宽度走, 放不下时可悬停看全名\n条件里那两层集合的值框不再让人白填: 装条件对象的一律只读并说明该去哪里填, 分支没走到的标「本轮未展开, 填了不影响产物」\n删除、更新这类找不到调用点的语句, 预览骨架不再退化成连一个占位符都没有的形态\n横幅与风险提示随产物实时刷新: 改完勾选不再挂着上一轮的「未完整还原」, 产物变成没有 WHERE 的全表删除或更新时顶部直接警示\n每次打开预览不再重扫全部数据源做 schema 预热: 60 秒内同一张表只预热一次, 打开更快, 也不再往日志里刷",
+  "publishDate": "2026-11-12",
   "sinceBuild": "243"
 }

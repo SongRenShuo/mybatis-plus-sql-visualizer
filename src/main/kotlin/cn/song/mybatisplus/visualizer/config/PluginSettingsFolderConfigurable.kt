@@ -678,6 +678,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             // NEW-18：一键环境体检入口（搜「体检/环境/诊断」可定位；SettingsPanelSearchableGuardTest 守卫）
             fields.add(SearchableField(b.message("settings.envCheck.label"), b.message("settings.envCheck.tip"), "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
+            // T-LocalUpdateDir：本地安装包目录（搜「本地/安装包/离线/内网/目录」必须能翻到该行）
+            fields.add(SearchableField(b.message("settings.update.localDir"), b.message("settings.update.localDir.tip"), "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
             // T-ProjectSettingsScope P3：项目级设置页 11 项（总开关 + 10 项可覆盖字段；O-58 起新增

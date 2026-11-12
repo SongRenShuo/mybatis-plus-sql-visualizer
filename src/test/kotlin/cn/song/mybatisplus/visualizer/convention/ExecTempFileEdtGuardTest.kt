@@ -48,7 +48,7 @@ import java.io.File
  * LastUsedWriteOnEdtGuardTest 反向验证时踩过这个坑）。
  *
  * 规则六（UI-002，2026-11-04 真机）：**PSI 有效性判定必须在读锁内**。慢段搬上池线程后，
- * `consumeCachedTempPsiFile` 的 `psi.isValid`（BGT）与 `revalidateOnEdt` 的两处 `isValid`
+ * `consumeCachedTempPsiFile` 的 `psi.isValid`（BGT）与 `revalidate` 的两处 `isValid`
  * （EDT 回调）都不能靠「EDT 隐式读权限」或「readCatching 兜底」蒙混——新线程模型下
  * `Application.isReadAccessAllowed()` 只看本线程读许可，无锁即打
  * `Read access is allowed from inside read-action only`（真机三连栈）。判定口径：
@@ -123,6 +123,24 @@ class ExecTempFileEdtGuardTest {
             if (!asyncBody.contains("isDispatchThread")) out += "$ASYNC_ENTRY: 缺 isDispatchThread 判定（无从判断该不该派发）"
             if (!asyncBody.contains("executeOnPooledThread")) out += "$ASYNC_ENTRY: 缺 executeOnPooledThread（慢段未离开 EDT）"
             if (!asyncBody.contains("invokeLater")) out += "$ASYNC_ENTRY: 缺 invokeLater（结果未回到 EDT，UI 续接会越线程）"
+            // M7 补强（T-PreviewOpenPerfM2，master 2026-11-12）：投递模态必须是 nonModal，
+            // 且 PSI 有效性校验（revalidate）必须在后台段完成——落在 invokeLater 回调里就是
+            // EDT 上判 isValid，平台 SlowOperations 断言会记「Plugin to blame: SQL Visualizer」
+            //（真机 2026-11-12 11:08:53 实证）。
+            if (!asyncBody.contains("ModalityState.nonModal()")) {
+                out += "$ASYNC_ENTRY: 续接投递不是 ModalityState.nonModal()——" +
+                    "续接链会写文档，any()/默认模态必触发 TransactionGuard Write-unsafe"
+            }
+            if (asyncBody.contains("ModalityState.any()")) {
+                out += "$ASYNC_ENTRY: 用 ModalityState.any() 投递（any() 恒 write-unsafe）"
+            }
+            if (!asyncBody.contains("$REVALIDATE(")) {
+                out += "$ASYNC_ENTRY: 回调未经 $REVALIDATE——异步窗口内 PSI 失效会硬抛" +
+                    "PsiInvalidElementAccessException"
+            } else if (asyncBody.indexOf("$REVALIDATE(") > asyncBody.indexOf("invokeLater(")) {
+                out += "$REVALIDATE 落在 invokeLater 回调里（EDT 上判 PSI 有效性＝平台慢操作，真机" +
+                    " 2026-11-12 11:08:53 被记 Plugin to blame: SQL Visualizer）；必须在后台段完成"
+            }
         }
 
         // ---- 规则四：慢段本体仍须真的做 refresh + PSI 查找（防被悄悄掏空） ----
@@ -134,6 +152,12 @@ class ExecTempFileEdtGuardTest {
             if (!coreBody.contains("ReadAction") || !coreBody.contains("PsiManager")) {
                 out += "$CORE: 不再含 ReadAction + PsiManager（PSI 获取被掏空——Runner 枚举会拿不到 PsiFile）"
             }
+            // master 保留的分流纪律（T-PrewarmWilDeadlock）：refresh 段必须按线程分流——
+            // 池线程上包 WIRA × 同步 refresh 会自锁（全 IDE not responding）。
+            if (!coreBody.contains("isDispatchThread")) {
+                out += "$CORE 的 refresh 段未按线程分流——池线程上包 WIRA × 同步 refresh " +
+                    "会自锁（T-PrewarmWilDeadlock，全 IDE not responding）"
+            }
         }
 
         // ---- 规则五：结果回调必须是 write-safe 投递（any() 恒 write-unsafe） ----
@@ -141,6 +165,23 @@ class ExecTempFileEdtGuardTest {
 
         // ---- 规则六：PSI 有效性判定必须在读锁内（BGT / EDT 都不隐含读权限） ----
         out += psiValidityReadLockOffenders(selectorSource, factorySource)
+
+        // ---- 规则七（master 演进并轨）：异步续接链收口必须齐备 ----
+        val continuationBody = bodyOf(results, CONTINUATION)
+        if (continuationBody == null) {
+            out += "$resultsPath: 未定位到 $CONTINUATION 函数体（异步续接链消失）"
+        } else {
+            if (continuationBody.contains("$CORE(")) {
+                out += "$CONTINUATION 内又直接调用 $CORE（续接在 EDT 上）"
+            }
+            if (!continuationBody.contains("failPrepareRequests(")) {
+                out += "$CONTINUATION 丢失建链失败收口 failPrepareRequests"
+            }
+            if (!continuationBody.contains("isPrepareActive(")) {
+                out += "$CONTINUATION 丢失迟到续接守卫 isPrepareActive" +
+                    "（异步窗口内门已易主仍会建第二条会话/控制台）"
+            }
+        }
         return out
     }
 
@@ -151,7 +192,7 @@ class ExecTempFileEdtGuardTest {
      * `consumeCachedTempPsiFile` 里 `runCatching { psi.isValid }` 没有读锁——平台
      * `FileManagerImpl.evaluateValidity`（`@RequiresReadLock`）打
      * `Read access is allowed from inside read-action only`（真机同一栈三连：evaluateValidity /
-     * findDirectory / ensureIsUpToDate）。同族风险在 `revalidateOnEdt`（EDT 回调内两处 `isValid`），
+     * findDirectory / ensureIsUpToDate）。同族风险在 `revalidate`（EDT 回调内两处 `isValid`），
      * 那里同样显式取读锁，不依赖 EDT 隐式权限。
      *
      * 判定：两个函数体内的**每处 `.isValid`** 都必须落在 `ReadAction.compute{…}` 的括号作用域内；
@@ -390,11 +431,109 @@ class ExecTempFileEdtGuardTest {
                     continuePrepareAfterTempFile(project = project, temp = temp)
                 }
             }
+            internal fun DataSourceSelector.continuePrepareAfterTempFile(project: Project, temp: Any?) {
+                if (temp == null) failPrepareRequests(null, null, null, null, null, "x")
+                if (!isPrepareActive()) return
+            }
         """.trimIndent()
         assertEquals(
             "合规异步形态不应误报：${offendersOf(goodResults, goodAsyncFactory())}",
             0,
             offendersOf(goodResults, goodAsyncFactory()).size,
+        )
+    }
+
+    /**
+     * 自证（master M7 演进并轨，T-PreviewOpenPerfM2）：同步直调必红、any() 投递必红、
+     * 缺线程分流必红、丢续接收口必红、EDT 上校验 PSI 必红，合规形态不误报。
+     */
+    @Test
+    fun `自证_M7并轨_any投递与EDT上校验与缺分流与丢收口必被点名`() {
+        val goodResults = """
+            internal fun DataSourceSelector.chooseAndPrepare(project: Project, sql: String) {
+                createTempPsiFileAsync(project, sql) { temp -> continuePrepareAfterTempFile(project, temp) }
+            }
+            internal fun DataSourceSelector.continuePrepareAfterTempFile(project: Project, temp: Any?) {
+                if (temp == null) failPrepareRequests(null, null, null, null, null, "x")
+                if (!isPrepareActive()) return
+            }
+        """.trimIndent()
+        val goodFactory = """
+            internal fun DataSourceSelector.createTempPsiFile(project: Project): Any? {
+                if (ApplicationManager.getApplication().isDispatchThread) {
+                    WriteIntentReadAction.compute<Any?> { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f) }
+                } else {
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
+                }
+                val psi = ReadAction.compute<PsiFile?, Throwable> { PsiManager.getInstance(project).findFile(vf) }
+                return null
+            }
+            internal fun revalidate(project: Project, pair: Any?): Any? {
+                ReadAction.compute<Boolean, Throwable> { psi.isValid }
+                ReadAction.compute<Any?, Throwable> { null }
+                return pair
+            }
+            internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
+                val app = ApplicationManager.getApplication()
+                fun runSlow(report: () -> Unit) {
+                    val pair = createTempPsiFile(project)
+                    revalidate(project, pair)
+                    app.invokeLater({ report() }, ModalityState.nonModal())
+                }
+                if (!app.isDispatchThread) {
+                    runSlow { onReady(null) }
+                    return
+                }
+                app.executeOnPooledThread { runSlow { onReady(null) } }
+            }
+        """.trimIndent()
+        assertEquals(
+            "合规形态不应误报：${offendersOf(goodResults, goodFactory)}",
+            0,
+            offendersOf(goodResults, goodFactory).size,
+        )
+
+        // any() 投递必红（规则三 + 规则五双点名）
+        val anyModality = goodFactory.replace("ModalityState.nonModal()", "ModalityState.any()")
+        val anyOffenders = offendersOf(goodResults, anyModality)
+        assertTrue("any() 投递必须被点名：$anyOffenders", anyOffenders.any { it.contains("any()") })
+
+        // M7 反例：把 PSI 有效性校验挪回 invokeLater 回调（EDT 上判 isValid）必须被点名
+        val edtValidation = goodFactory
+            .replace("revalidate(project, pair)\n", "")
+            .replace(
+                "app.invokeLater({ report() }, ModalityState.nonModal())",
+                "app.invokeLater({ revalidate(project, pair); report() }, ModalityState.nonModal())",
+            )
+        val edtOffenders = offendersOf(goodResults, edtValidation)
+        assertTrue(
+            "EDT 上校验 PSI 有效性必须被点名：$edtOffenders",
+            edtOffenders.any { it.contains("invokeLater 回调里") },
+        )
+
+        // refresh 段缺线程分流必红（T-PrewarmWilDeadlock）
+        val noBranch = goodFactory.replace(
+            "if (ApplicationManager.getApplication().isDispatchThread) {",
+            "if (true) {",
+        )
+        val branchOffenders = offendersOf(goodResults, noBranch)
+        assertTrue(
+            "refresh 段缺线程分流必须被点名：$branchOffenders",
+            branchOffenders.any { it.contains("未按线程分流") },
+        )
+
+        // 丢续接收口必红（failPrepareRequests / isPrepareActive）
+        val noFailsafeResults = goodResults
+            .replace("if (temp == null) failPrepareRequests(null, null, null, null, null, \"x\")", "")
+            .replace("if (!isPrepareActive()) return", "")
+        val failsafeOffenders = offendersOf(noFailsafeResults, goodFactory)
+        assertTrue(
+            "丢建链失败收口必须被点名：$failsafeOffenders",
+            failsafeOffenders.any { it.contains("failPrepareRequests") },
+        )
+        assertTrue(
+            "丢迟到续接守卫必须被点名：$failsafeOffenders",
+            failsafeOffenders.any { it.contains("isPrepareActive") },
         )
     }
 
@@ -490,9 +629,9 @@ class ExecTempFileEdtGuardTest {
         val gone = psiValidityReadLockOffenders(deleted, goodAsyncFactory())
         assertTrue("PSI 判定被整体删除必须被点名：$gone", gone.any { it.contains("未见 `.isValid`") })
 
-        // 形态四：revalidateOnEdt 的 EDT 侧判定裸奔
+        // 形态四：revalidate 的 EDT 侧判定裸奔
         val badFactory = """
-            internal fun revalidateOnEdt(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
+            internal fun revalidate(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
                 if (pair == null) return null
                 val (vf, psi) = pair
                 if (psi.isValid) return pair
@@ -501,9 +640,9 @@ class ExecTempFileEdtGuardTest {
             }
         """.trimIndent()
         val edtNaked = psiValidityReadLockOffenders(COMPLIANT_SELECTOR, badFactory)
-        assertTrue("revalidateOnEdt 的裸 psi.isValid 必须被点名：$edtNaked", edtNaked.any { it.contains("不在 ReadAction 作用域内") })
+        assertTrue("revalidate 的裸 psi.isValid 必须被点名：$edtNaked", edtNaked.any { it.contains("不在 ReadAction 作用域内") })
         assertTrue(
-            "revalidateOnEdt 锁外 fresh.isValid 必须被点名：$edtNaked",
+            "revalidate 锁外 fresh.isValid 必须被点名：$edtNaked",
             edtNaked.count { it.contains("不在 ReadAction 作用域内") } >= 2,
         )
 
@@ -523,7 +662,7 @@ class ExecTempFileEdtGuardTest {
             return null
         }
 
-        internal fun revalidateOnEdt(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
+        internal fun revalidate(project: Project, pair: Pair<VirtualFile, PsiFile>?): Pair<VirtualFile, PsiFile>? {
             if (pair == null) return null
             val (vf, psi) = pair
             if (ReadAction.compute<Boolean, Throwable> { psi.isValid }) return pair
@@ -536,12 +675,12 @@ class ExecTempFileEdtGuardTest {
         internal fun DataSourceSelector.createTempPsiFileAsync(project: Project, onReady: (Any?) -> Unit) {
             val app = ApplicationManager.getApplication()
             if (!app.isDispatchThread) {
-                val pair = createTempPsiFile(project)
+                val pair = revalidate(project, createTempPsiFile(project))
                 app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
                 return
             }
             app.executeOnPooledThread {
-                val pair = createTempPsiFile(project)
+                val pair = revalidate(project, createTempPsiFile(project))
                 app.invokeLater({ onReady(pair) }, ModalityState.nonModal())
             }
         }
@@ -644,7 +783,7 @@ class ExecTempFileEdtGuardTest {
 
         /** 规则六站点：缓存命中路径（BGT）与异步窗口兜底（EDT 回调）。 */
         private const val CONSUME_CACHE = "consumeCachedTempPsiFile"
-        private const val REVALIDATE = "revalidateOnEdt"
+        private const val REVALIDATE = "revalidate"
 
         /** 规则六缺省语料（合规形态）：自证用例只喂 results/factory 两段时不误报。 */
         private const val COMPLIANT_SELECTOR = """

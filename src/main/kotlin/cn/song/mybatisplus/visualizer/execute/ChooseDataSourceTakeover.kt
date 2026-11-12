@@ -50,6 +50,36 @@ import javax.swing.Icon
 internal fun takeoverAppliesTo(filePath: String?): Boolean =
     filePath != null && DataSourceSelector.isExecVfPath(filePath)
 
+/**
+ * T-DsListAddSource（20261111）：两路数据源合并的**纯函数**（测试直测）。
+ *
+ * 1. 每个条目先投影成 `LocalDataSource`（`DbDataSource.getDelegate()` 解包，见
+ *    [DataSourceSettings.resolveLocalDataSource]——`getAllDataSourcesForExec` 返回的是 PSI 层
+ *    `DbDataSource`，投影失败丢弃）；
+ * 2. 名字解析失败丢弃——**控制台下拉末尾「unknown」死项的根因**（名字回落 `"Unknown"` 被直接
+ *    渲染进条目），宁缺毋滥，不再漏出 unknown；
+ * 3. 按 uniqueId 去重（取不到 id 才按显示名兜底），registered 先入、native 补集在后。
+ *
+ * 投影/取名以函数入参注入：单测传桩即可（默认实现走反射，平台缺席时返回 null，行为一致）。
+ */
+internal fun mergeLocalDataSources(
+    registered: List<Any>,
+    native: List<Any>,
+    resolve: (Any) -> Any? = DataSourceSettings::resolveLocalDataSource,
+    uniqueIdOf: (Any) -> String? = DataSourceSettings::getUniqueId,
+    nameOf: (Any) -> String? = DataSourceSettings::nameOrNull,
+): List<Any> {
+    val seen = HashSet<String>()
+    val out = ArrayList<Any>(registered.size + native.size)
+    for (ds in registered + native) {
+        val local = resolve(ds) ?: continue
+        val name = nameOf(local) ?: continue
+        val key = uniqueIdOf(local) ?: "name:$name"
+        if (seen.add(key)) out += local
+    }
+    return out
+}
+
 internal class ChooseDataSourceTakeoverGroup(
     private val original: AnAction,
 ) : ActionGroup(original.templateText ?: "", true) {
@@ -147,12 +177,23 @@ internal class ChooseDataSourceTakeoverGroup(
         val sources = dataSourcesFor(project, file)
         // 每次点开都记一条：用户手动动作、频率极低；一次性日志在真机会漏掉「这次点开」的读数。
         LOG.info("[M36][Takeover] getChildren: sources=${sources.size}, file=${file?.path}")
-        if (sources.isEmpty()) return delegateChildren(e)
-        return sources.map { ds ->
-            val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull().orEmpty()
-            val icon = runCatching { ds.javaClass.getMethod("getIcon").invoke(ds) as? Icon }.getOrNull()
-            SwitchToDataSourceAction(project, name, icon)
-        }.toTypedArray()
+        val withAddEntry = NewDataSourceEntry.isAvailable(project)
+        // T-DsListAddSource：列表为空但平台新建入口在位时，仍单独给「添加数据源…」出口——
+        // 空列表什么都不给＝用户没有任何出路（计划 §七 用例 4）。
+        if (sources.isEmpty() && !withAddEntry) return delegateChildren(e)
+        val actions = ArrayList<AnAction>(sources.size + 1)
+        for (ds in sources) {
+            actions += SwitchToDataSourceAction(
+                project,
+                DataSourceSettings.nameOrNull(ds).orEmpty(),
+                runCatching { DataSourceSettings.getIcon(ds) }.getOrNull(),
+            )
+        }
+        // T-DsListAddSource：末尾「添加数据源…」（D-3 平台不可用时隐藏，不做置灰死项）
+        if (withAddEntry) {
+            actions += AddDataSourceAction()
+        }
+        return actions.toTypedArray()
     }
 
     private fun delegateChildren(e: AnActionEvent?): Array<AnAction> =
@@ -183,13 +224,14 @@ internal class ChooseDataSourceTakeoverGroup(
         }.onFailure { e ->
             LOG.warn("[M36][Takeover] native source enumeration FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }.getOrDefault(emptyList())
-        if (fromNative.isEmpty()) return all
-        if (all.isEmpty()) return fromNative
-        val seen = all.mapNotNull { runCatching { DataSourceSettings.getName(it) }.getOrNull() }.toMutableSet()
-        val merged = all.toMutableList()
-        for (ds in fromNative) {
-            val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull().orEmpty()
-            if (name.isNotBlank() && seen.add(name)) merged += ds
+        val merged = mergeLocalDataSources(all, fromNative)
+        // T-DsListAddSource W1 取证：被丢弃条目数逐次点开记一条（unknown 死项根因），真机读数以此为准。
+        val rawTotal = all.size + fromNative.size
+        if (merged.size < rawTotal) {
+            LOG.info(
+                "[M36][Takeover][DsList] dropped ${rawTotal - merged.size} unresolvable entr(ies): " +
+                    "raw=${all.size}+${fromNative.size}, clean=${merged.size}, file=${vf?.path}",
+            )
         }
         return merged
     }
@@ -246,13 +288,23 @@ internal class ChooseDataSourceTakeoverGroup(
             return
         }
         val sources = dataSourcesFor(project, file)
-        val items = sources.mapNotNull { ds ->
-            val name = runCatching { DataSourceSettings.getName(ds) }.getOrNull()
-            if (name.isNullOrBlank()) {
-                null
-            } else {
-                name to runCatching { ds.javaClass.getMethod("getIcon").invoke(ds) as? Icon }.getOrNull()
-            }
+        val withAddEntry = NewDataSourceEntry.isAvailable(project)
+        // T-DsListAddSource：条目模型与 B 侧（Runner 弹窗）共用 RunnerItem；sources 已在
+        // dataSourcesFor 里收口成「可解析名字的 LocalDataSource」，此处名字必非空。
+        val items = sources.map { ds ->
+            DataSourceSelector.RunnerItem(
+                ds,
+                DataSourceSettings.nameOrNull(ds).orEmpty(),
+                runCatching { DataSourceSettings.getIcon(ds) }.getOrNull(),
+            )
+        }.toMutableList()
+        if (withAddEntry) {
+            items += DataSourceSelector.RunnerItem(
+                null,
+                MpSqlVisualizerBundle.message("execute.datasource.add"),
+                null,
+                addNew = true,
+            )
         }
         if (items.isEmpty()) {
             original.actionPerformed(e)
@@ -263,17 +315,23 @@ internal class ChooseDataSourceTakeoverGroup(
             // 用 BaseListPopupStep 而不是 createActionGroupPopup：后者会把数据源名里的 `_`
             // 当助记符吃掉（真机 `mpj_demo@localhost` 显示成缺少下划线），且带搜索框、位置跟着
             // 焦点组件漂。纯列表 + showUnderneathOf 才与原生控制台那个下拉一致。
-            val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<Pair<String, Icon?>>(
+            val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<DataSourceSelector.RunnerItem>(
                 MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
                 items,
             ) {
-                override fun getTextFor(value: Pair<String, Icon?>): String = value.first
-                override fun getIconFor(value: Pair<String, Icon?>): Icon? = value.second
+                override fun getTextFor(value: DataSourceSelector.RunnerItem): String = value.name
+                override fun getIconFor(value: DataSourceSelector.RunnerItem): Icon? = value.icon
                 override fun onChosen(
-                    selectedValue: Pair<String, Icon?>,
+                    selectedValue: DataSourceSelector.RunnerItem?,
                     finalChoice: Boolean,
                 ): com.intellij.openapi.ui.popup.PopupStep<*>? {
-                    val picked = selectedValue.first
+                    // T-DsListAddSource：末尾「添加数据源…」→ 平台原生新建数据源流（不换源不执行）
+                    if (selectedValue?.addNew == true) {
+                        return doFinalStep {
+                            NewDataSourceEntry.openCreatePopup(project, e.inputEvent?.component)
+                        }
+                    }
+                    val picked = selectedValue?.name.orEmpty()
                     return doFinalStep {
                         LOG.info("[M36][Takeover] popup picked: $picked")
                         SqlPreviewService.activePreviewPanel(project)?.switchDataSourceTo(picked)
@@ -295,6 +353,20 @@ internal class ChooseDataSourceTakeoverGroup(
 
     /** 还原用：被接管的原生动作（dispose 时换回）。 */
     internal fun originalActionForRestore(): AnAction = original
+
+    /**
+     * T-DsListAddSource：末尾「添加数据源…」——弹平台原生新建数据源流（驱动列表 → 原生属性
+     * 对话框，见 [NewDataSourceEntry]）。工具栏下拉的子项形态。
+     */
+    private class AddDataSourceAction : AnAction(MpSqlVisualizerBundle.message("execute.datasource.add")) {
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val project = e.project ?: return
+            com.intellij.openapi.diagnostic.Logger.getInstance(ChooseDataSourceTakeoverGroup::class.java)
+                .info("[M36][AddSource] toolbar entry clicked")
+            NewDataSourceEntry.openCreatePopup(project, e.inputEvent?.component)
+        }
+    }
 
     /** 子项：选中某个数据源 → 走插件换源链（只换源，不提交 SQL）。 */
     private class SwitchToDataSourceAction(

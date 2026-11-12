@@ -394,7 +394,489 @@ SqlLanguageSubstitutor.getSqlLanguageFromMapping(SqlLanguageSubstitutor.java:98)
 
 ---
 
+## 十三、第二轮真机五元组与 R4 实验（2026-11-11）
+
+### 13.1 真机读数（两台、同一个项目）
+
+| 平台 | 五元组 |
+|---|---|
+| UOS 20 | `findPsiAfterHeal: vfValid=true, dir=false, fileType=SQL, mappedLang=null, canPsi=false, path=/home/cmit/Desktop/develop/workspace/fortress4_basetime/.idea/…` |
+| macOS | `findPsiAfterHeal: vfValid=true, dir=false, fileType=SQL, mappedLang=null, canPsi=false, path=/Users/mmtye/Projects/workspace/fortress4_basetime/.idea/…` |
+
+读法（重要）：
+- `vfValid=true` ⇒ **不是 vf 失效分支**（V3 那支被排除，本单自愈支 1 对这条无效）；
+- `dir=false`、`fileType=SQL` ⇒ 排除目录与文件类型识别；
+- `mappedLang=null` ⇒ 我们自己的文件级映射不存在（heal 已清掉），**此时决定 PSI 语言的是继承链**（项目根/目录映射、全局默认 SQL 方言、`SqlDialectPusher` 按数据源推的方言）；
+- `canPsi=false` **是诊断的产物、不是证据**：它由 `mappedLang=null` 推出（`canCreateSqlPsiFor(null)` 恒 false）。这条已在 R4 里改掉（见 13.3）。
+- 两台机器、**同一个项目名 `fortress4_basetime`** ⇒ 相关性指向**项目级配置**（共享 `.idea` / 统一的 SQL 方言设置），不是操作系统。
+
+### 13.2 R4：把平台里每个方言都试一遍
+
+`testProbeEveryDialectForPsiCreation` 逐个把 exec 文件映射到 `SqlDialectMappings.availableValues` 的**全部 38 个方言**，各取一次 PSI：
+
+```
+[R4] total=38 bad=0 -> []
+[R4] table=[Redshift=PSI, CassandraQL=PSI, Derby=PSI, HiveQL=PSI, SparkSQL=PSI, AZURE=PSI,
+ BigQuery=PSI, ClickHouse=PSI, Cockroach=PSI, CouchbaseQuery=PSI, DM=PSI, Dynamo=PSI, Exasol=PSI,
+ GaussDB=PSI, GenericSQL=PSI, GoldenDB=PSI, Greenplum=PSI, H2=PSI, HSQLDB=PSI, HighGo=PSI, DB2=PSI,
+ DB2_IS=PSI, DB2_ZOS=PSI, MariaDB=PSI, TSQL=PSI, MongoDB=PSI, MySQL=PSI, Oracle=PSI, NetSuite=PSI,
+ OracleSqlPlus=PSI, PostgreSQL=PSI, Redis=PSI, SQL92=PSI, SQLite=PSI, Snowflake=PSI, Sybase=PSI,
+ Vastbase=PSI, Vertica=PSI]
+```
+
+结论：**243 平台上没有任何一个方言会让 PSI 建不出来**。也就是说「继承方言是毒源」这一支在本机复现不出来——它只在**用户那台机器的 IDE 版本**上成立（用户 IDE Build 号仍未知）。
+
+### 13.3 本轮落地（盲修 + 可归因）
+
+| 项 | 内容 |
+|---|---|
+| 自愈支 3 | 清映射后仍拿不到 PSI 时，**显式钉住**一个已知可建 SQL PSI 的方言（MySQL → GenericSQL）。理由：清映射只会把继承值请回来，只有显式映射能覆盖继承链 |
+| 诊断补两字段 | `inheritedLang=`（项目根映射 → 全局默认）与 `canPsiInherited=`。下一份真机报告能直接点名毒源方言，不再让 `canPsi=false` 这种派生值误导判断 |
+| 用例 | `testHealPinsGoodDialectWhenInheritedIsPoison`（目录映射模拟继承毒源 → 清映射救不了 → 钉 MySQL 救回来，日志 `PINNING dialect 'MySQL'`）；`testProbeEveryDialectForPsiCreation`（R4 记录面，钉「全方言可建 PSI」这个基线）；定向 **12 tests / 0 failures / 0 errors / 0 skipped** |
+| 反向验证 | 临时把钉方言的候选列表改成空表（代码内标 `RED PROBE`）→ `12 tests completed, 1 failed`，`testHealPinsGoodDialectWhenInheritedIsPoison` 红在「继承方言是毒源时必须靠『钉住可用方言』救回来」；恢复后复跑全绿，`RED PROBE` 清零 |
+| 代价（要说清） | 钉 MySQL 只是「先让 PSI 建得出来」：若用户的数据源不是 MySQL，runner 枚举会因方言不匹配而变窄，落到 UI-049 的可操作提示（选数据源 / 改方言），而不是硬失败。比「创建临时 SQL 文件失败」进一步，但仍不是完全正常——根治仍要用户的 `inheritedLang` 读数 |
+
+### 13.4 仍缺的一块
+
+用户的 `findFile` 在**继承方言也全绿**的环境里仍返回 null，说明还差一个变量没拿到：**IDE 版本**。下一步只问两件事即可分型：
+
+1. `Help → About` 的 Build 号（例如 `IU-263.7307.200`）；
+2. 该项目里**随便打开一个普通 `.sql` 文件**，语法高亮/表名补全是否正常——不正常说明整个项目的 SQL PSI 都坏了（与本插件无关，是方言设置或 IDE 安装问题）；正常说明只有本插件的临时文件受影响，那要看 Build 号对应的平台行为。
+
+**用户侧 1 分钟验证法**：`Settings → Languages & Frameworks → SQL Dialects` 把默认方言改成 MySQL（或 PostgreSQL），再点一次「执行 SQL」。好了 ⇒ 就是继承方言；照旧 ⇒ 排掉这一支，等新诊断里的 `inheritedLang` 说话。
+
+### 13.5 方言设置否证 + R5 + 决定性诊断（2026-11-11 下午）
+
+**用户提供的 SQL Dialects 截图（UOS 那台）**：
+
+| 项 | 值 |
+|---|---|
+| Global SQL Dialect | `<None>` |
+| Project SQL Dialect | `<None>` |
+| `.../.idea/sql-visualizer/exec/mpsql-exec.sql` | **MySQL** |
+| `.../.idea/sql-visualizer/preview` | Oracle |
+
+读法：① 全局/项目默认方言都是 `<None>` ⇒ **13.3 的「继承方言是毒源」被否证**（压根没有继承值）；② exec 文件确实显式映射为 **MySQL**——一个 R4 已证明能建 PSI 的方言，却仍拿不到 PSI。所以问题不在「映射到什么」，而在「**取 PSI 的时刻/环境**」。
+
+**R5：映射写入触发的异步重解析竞态**（preview 有 `awaitPreviewPsiLanguage` 等这一拍，exec 链没有）
+
+池线程上反复跑生产函数 `createTempPsiFile`，每轮交替 MySQL ↔ PostgreSQL 强制真的写一次映射 + 触发重解析：
+
+```
+[R5] ok=20 fail=0 -> []
+```
+
+**本地四条假说全部打不出来**：vf 失效（只能显式造）、并发外部写（R2 344 次写 0 null）、坏映射（R3 恒抛 CCE 不退化成 null）、重解析竞态（R5 20/20 成功）。剩下唯一未拿到的变量是**用户 IDE 的 Build 与 SQL 方言模块的实际状态**。
+
+**因此把决定性证据做进失败文案**（`execPsiDiagnostics` 再补三项）：
+
+| 字段 | 含义 |
+|---|---|
+| `psiLang=` | 平台**实际**给这个文件选中的语言（`LanguageUtil.getLanguageForPsi`）；抛异常则为 `EX:<异常类型>` |
+| `canPsiActual=` | 该实际语言能否建 SQL PSI（`canCreateSqlPsiFor`） |
+| `ideBuild=` | `ApplicationInfo.build.asString()`，例如 `IU-243.28141.41` |
+
+判读表（下一份截图即可定案，不需要日志）：
+
+| psiLang | canPsiActual | 结论与下一步 |
+|---|---|---|
+| `MySQL` | `false` | **那台机器的 MySQL 方言没有可用 ParserDefinition**（SQL 方言模块缺失/与 IDE 版本不匹配）——与本插件无关，但我们可以钉别的方言绕开；同时建议用户修 IDE 安装 |
+| `MySQL` | `true` | 语言没问题，PSI 创建另有原因（FileViewProvider 失效等）——下一步查 provider 状态 |
+| `EX:ClassCastException` | — | 方言替换器在用户机器上直接崩（与 T-PreviewPsiDialect 同族） |
+| `null` | — | 文件类型没有语言（`.sql` 未识别成 SQL） |
+
+本机对照读数（证明字段可用）：`psiLang=GenericSQL, canPsiActual=true, ideBuild=IU-243.28141.41`。
+
+定向 **13 tests / 0 failures / 0 errors / 0 skipped**。
+
+### 13.6 R6：用户关键线索「放桌面正常、放 `.idea` 必错」→ 换落点（2026-11-11）
+
+**用户补充**：把 `mpsql-exec.sql` 放桌面，用数据源右键 script 选中它能正常执行；**只要放 `.idea` 目录下就报错**。
+
+这一句把前面所有假说一次性排掉：不是方言（映射是 MySQL 且能建 PSI）、不是 vf 失效（`vfValid=true`）、
+不是并发或重解析竞态（R2/R3/R5 全空）。剩下的就是**落点本身**——那台机器上 `.idea` 里的 `.sql` 建不出 PSI
+（`.idea` 被标成 excluded，或平台把它当配置目录对待）。
+
+**本机复现失败（如实登记）**：243 上全部用例的 exec 文件本来就在 `.idea/...` 下，PSI 一直正常；想用
+「把目录标成 excluded」造同一条件，`ModuleRootModificationUtil.addExcludedRoot` / `ModuleRootModel.addExcludedRoot`
+在 243 的 API 面上都不可用（sources jar 里连 `SingleRootFileViewProvider` / `ModuleRootLayer` 都没收），
+三次尝试均编译失败后放弃——这条分支**只能靠用户真机验证**。
+
+**修法（自愈支 4 + 粘性记忆）**：
+
+| 项 | 内容 |
+|---|---|
+| 落点 | `<projectBase>/.sql-visualizer/exec/mpsql-exec.sql`——仍在项目内容根内（方言与数据源解析照常），但不在 `.idea` 下 |
+| 复用 | 走 `projectExecFile(preferProjectRoot = true)`，document 写与「File Cache Conflict」规避逻辑不重复实现 |
+| 不污染工作树 | 目录里写一份 `.gitignore`（内容 `*`），`git status` 看不到它 |
+| 粘性记忆 | 一旦某项目只能靠备用落点建出 PSI，就记进 `DataSourceSelector.execRootFallbackProjects`（弱键集）——后续执行**直接**走备用落点，不必每次都先撞三轮失败（每轮还带 2s EDT 有界等待） |
+| 用例 | `testProjectRootFallbackBuildsPsi`：落点不在 `.idea`、自带 `.gitignore`、能建 PSI；定向 **14 tests / 0 failures** |
+
+**未做 / 风险**：① 支 4 的触发链（前三条都失败后才走到）在 243 上造不出环境，故**未做反向验证**，靠用户真机确认；
+② preview 链的临时目录同样在 `.idea/sql-visualizer/preview/`，若用户那边预览也降级（横幅「临时文件解析失败」），
+说明同一根因，需另立项把预览落点一起迁走——本单不动预览，避免扩散。
+
+### 13.7 反编译 2026.3 定案：平台新增 `shouldCreatePsi()` 闸门（2026-11-11 收口）
+
+**不需要下载 Linux 包**：JetBrains 平台 jar 跨 OS 是同一份字节码（Linux / Windows / macOS 的
+`lib/*.jar` 只差原生库与 JBR）。本机正好装了 `IU-263.7307.200`，直接反编译它即可，用 IDE 自带
+Fernflower（`plugins/java-decompiler/lib/java-decompiler.jar` + `jbr/bin/java`）：
+
+```
+java -cp <ide>/plugins/java-decompiler/lib/java-decompiler.jar \
+     org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler -dgs=1 <classes-dir> <out>
+```
+
+**2026.3 的 `SingleRootFileViewProvider`（243 没有这一段）**：
+
+```java
+private PsiFile createFile() {
+    return this.shouldCreatePsi()
+         ? this.createFile(this.getManager().getProject(), this.getVirtualFile(), this.getFileType())
+         : null;                      // ← 闸门不过就直接 null → getPsi 返回 null → findFile 返回 null
+}
+```
+
+**闸门本体（`AbstractFileViewProvider.shouldCreatePsi()`）**：
+
+```java
+protected boolean shouldCreatePsi() {
+    if (this.isIgnored()) return false;                          // ① 文件被 ignored
+    ...
+    if (this.correspondsToRealFile() && vFile.isInLocalFileSystem()) {
+        VirtualFile parent = vFile.getParent();
+        if (parent == null) return false;
+        PsiDirectory psiDir = this.getManager().findDirectory(parent);
+        if (psiDir == null) {                                    // ② 父目录不在内容模型里
+            if (!indexFacade.isInLibrarySource(vFile) && !indexFacade.isInLibraryClasses(vFile)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+```
+
+**这解释了全部现象**：
+- `findDirectory(parent) == null` ⇒ 目录不在内容模型里（未加入 content 或被 **excluded**）。`.idea`
+  被排除是常见形态（`<project>/.idea/misc.xml` 里的 `<excludeFolder>`，随仓库共享）⇒ **该项目的每个
+  开发者在任何 OS 上都会中**——正好是「UOS + Mac 两台、同一个项目 `fortress4_basetime`」。
+- 用户实测「放桌面（项目外）正常、放 `.idea` 必错」——桌面那次走的是平台自己的 Script 动作，
+  不需要 PSI；而 `.idea` 下连 `findDirectory` 都拿不到，PSI 直接没有。
+- **243/262 没有这道闸门**（`createFile()` 直接调 `createFile(...)`），所以我在这台机器上
+  怎么造都复现不出来：这是**平台版本差异**，不是 OS 差异，也不是方言/映射/vf/竞态。
+
+**修法（按平台判据对齐，不再靠撞）**：
+
+| 项 | 内容 |
+|---|---|
+| 判据 | 新增 `execDirCanHostPsi(project, dir)`：复用平台同一条判据 `PsiManager.findDirectory(dir)`，按目录路径记忆（会话级）。探不出来时按「能」处理（保守，失败还有自愈支 4 兜底） |
+| exec | `projectExecFile` 先探 `.idea/sql-visualizer/exec`；探不过就落到 `<base>/.sql-visualizer/exec/`（自带 `.gitignore`，内容 `*`）。**第一次执行就走对，不必先撞三轮失败** |
+| preview | `projectPreviewFile` 同款：探不过就落到 `<base>/.sql-visualizer/preview/`——否则 2026.3 + `.idea` 被排除的项目里，预览会一直挂在「临时文件解析失败」降级横幅 |
+| 自愈支 4 | 保留为兜底（判据探不出来时仍会走到） |
+| 读数 | 定向 **14 tests / 0 failures / 0 errors / 0 skipped** |
+
+**遗留**：`shouldCreatePsi` 的第一条分支（`isIgnored()`，文件被 IDE 标成 ignored）也会产生同样症状，
+本单的 pre-check 只覆盖第二条（`findDirectory`）。若真机仍有残留，把 pre-check 换成「写个探针文件
+试建一次 PSI」即可覆盖——更贵，先不做。
+
+### 13.8 Windows 本机复现成功（2026-11-11，根因闭环）
+
+用户在 **Windows + IU-263.7307.200** 上按「勾 `ide.hide.excluded.files` → 重启 → 把 `.idea` 标 Excluded」
+操作，demo 项目 `mybatis-plus-sql-visualizer-demo` 复现出**与 UOS / Mac 完全一致**的五元组：
+
+```
+执行失败：创建临时 SQL 文件失败：findPsiAfterHeal: name=mpsql-exec.sql, vfValid=true,
+dir=false, fileType=SQL, mappedLang=null, canPsi=false,
+path=F:/code/.../mybatis-plus-sql-visualizer-demo/.idea/sql-visualizer/exec/mpsql-exec.sql
+```
+
+⇒ §13.7 的平台闸门推断**已由真机证实**，不再是推断。
+
+**`ide.hide.excluded.files` 的作用（两处，反编译实证）**：
+
+| 面 | 作用 |
+|---|---|
+| 项目视图 / VCS | 工具提示原文「Do not show excluded files in the Project View and exclude them from VCS」——勾上后 Excluded 目录不显示、不入版本控制 |
+| **PSI**（`FileManagerImpl.isExcludedOrIgnored`） | 勾上 → `isExcludedFile` 判定（Mark as Excluded 即无 PSI）；未勾 → `isUnderIgnored` 判定（只有进了**忽略集**才无 PSI） |
+
+于是：
+- 复现旋钮（勾 Registry + Excluded）与用户现场（未勾 + `.idea` 在忽略集里，如 `.gitignore` 命中）**翻的是同一个谓词**，症状一致；
+- 我们的 pre-check 用的是平台原判据 `PsiManager.findDirectory`（内部即走 `isExcludedOrIgnored`）⇒ **两条分支都覆盖**，不依赖 Registry 取值。
+
+待用户用 `61205cf2` 之后的构建在同一 demo 项目 + 同一 Registry/排除状态下验证修复（期望落到
+`<demo>/.sql-visualizer/exec/` 并跑通）。
+
+### 13.10 智能失败提示：精准归因 + 蓝色可点入口（2026-11-11，用户定案）
+
+用户原话：「针对这两个问题做智能错误信息提示，精准识别原因并提供蓝色字体可以点击调整到对应设置页」。
+三种成因在报错上长得一模一样（都是 `findFile` 返回 null、vf 完全有效），而修复点完全不同——过去
+只能给一句笼统失败，用户无处下手。
+
+**实现**：
+
+| 层 | 内容 |
+|---|---|
+| 判定（纯函数） | `execute/ExecPsiFailureHint.kt`：`classifyExecPsiFailure(excluded, regHideExcluded, fileTypesIgnored, underIgnored, psiLangId, canPsiActual)` → `ExecPsiFailureCause`。顺序固定：排除+Registry → 文件类型忽略 → VCS 忽略 → 无语言 → 方言不可用 → UNKNOWN |
+| 观测取值 | `execPsiFailureCauseNow(project, vf)`：`ProjectFileIndex.isExcluded/isUnderIgnored` + `Registry("ide.hide.excluded.files")` + `FileTypeManager.isFileIgnored` + `LanguageUtil.getLanguageForPsi` / `canCreateSqlPsiFor`，任何一项取不到都按 false/null（判错最多入口指偏，不影响执行链） |
+| 传递 | `DataSourceSelector.lastTempFileHint`（@Volatile，冷路径/预热入口清空）+ `consumeTempFileHint()` 取一次即清，避免后续无关错误复用 |
+| 呈现 | `ui/SqlPreviewPanelExecution.showTempFileError(msg)`：走既有的 `SqlResultPanel.showErrorWithActions`（方言闸门同款形态：透明按钮 + `Link.activeForeground`，渲染即蓝字）。5 处 `onError` 直连 `showError` 全部改走它，无 hint 时逐字退回原文案 |
+| 入口映射 | 文件类型忽略 → 打开「设置 → 编辑器 → 文件类型」（EP id `preferences.fileTypes`，2026.3 jar 内 xml 实证）；VCS 忽略 → 打开项目根 `.gitignore`；方言不可用/无语言 → 打开 SQL 方言设置（复用既有 `openSqlDialectSettings`） |
+
+**为什么 Excluded 那档只给文案不给按钮**：`ProjectStructureDialog` 在 243 / 2026.3 都已无稳定公开入口
+（2026.3 lib 内 `ProjectStructure*` 只剩 webide / externalSystem 变体）。宁可指不出，也不把用户送到
+一个错的设置页。
+
+**用例与反向验证**：`ExecPsiFailureHintTest` 7 例表驱动（排除档、Registry 关闭时不误判、文件类型优先于
+VCS、忽略类压过方言类、全正常给 UNKNOWN）；反向验证把两条 `if` 换序 → `7 tests completed, 1 failed`
+（红在「文件类型忽略模式优先于 VCS 忽略」），恢复后全绿、`RED PROBE` 清零。
+
+**适用边界（要说清）**：这条提示只在「连项目根备用落点也建不出 PSI」的残余场景露出——正常修复路径下
+用户看不到它（pre-check 直接把文件写到 `.sql-visualizer/` 就成功了）。它的价值是把残余失败变成可操作。
+
+### 13.11 定案修订：兜底不得抢在提示前面（2026-11-11，用户指令）
+
+用户原话：「记得 `.sql-visualizer` 是兜底的，优先还是让用户修改配置」。据此撤掉两处**静默**换落点：
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `projectExecFile` 的 pre-check | `preferProjectRoot \|\| !execDirCanHostPsi(...)` —— 探到 `.idea` 建不出 PSI 就**静默**改写项目根 | 只认调用方显式传入的 `preferProjectRoot`（由 `execRootFallbackProjects` 决定）；`.idea` 恢复为主路径 |
+| `healExecPsi` 支 4 | 前三支失败后**自动**换落点重建 | **删除**。失败原样上抛，由 UI 把选择和原因摆给用户 |
+
+失败行现在给两颗蓝字（`showErrorWithActions` 的 fix + settings 两个槽位）：
+
+1. **改用项目根落点重试**（fix 槽，立刻能用）→ 把项目记进 `execRootFallbackProjects` + `executeSql()` 重试；本会话后续执行直接走备用落点，不再报错
+2. **打开对应设置页**（settings 槽，根治）：文件类型忽略 → `preferences.fileTypes`；VCS 忽略 → 项目根 `.gitignore`；方言 → SQL 方言设置
+
+方言类成因**不给**兜底按钮（挪目录救不了方言问题，给了等于误导）；`EXCLUDED_ROOT` 只给原因 + 兜底按钮（「项目结构」页在 243/2026.3 无稳定公开入口）。
+
+**预览侧的现状（未随本次对齐，待定）**：`projectPreviewFile` 仍保留 pre-check，探不过就静默落 `<base>/.sql-visualizer/preview/`。理由是预览的失败形态是**功能降级**（黄色横幅），静默换落点至少保证预览可用；若要同样「先提示再兜底」，需给降级横幅加动作入口，另行评估。
+
+**保留**：`projectRootExecFile` / `preferProjectRoot` / `execRootFallbackProjects` / 备用目录的 `.gitignore` 全部保留——它们现在是「用户显式选择」的实现载体。
+
+### 13.12 预览侧对齐：自动兜底 + 只告知一次（2026-11-11，用户采纳推荐方案）
+
+**取舍**：执行与预览的失败严重程度不同，不套同一套交互——
+执行是**阻断**（一条 SQL 都跑不了）⇒ 让用户选（改配置 / 改用项目根重试）；
+预览是**降级**（SQL 照常渲染，只丢补全与高亮）⇒ 我们自动兜底保证可用，但**不再静默**。
+
+| 项 | 内容 |
+|---|---|
+| 判定 | `execDirFailureCause(project, dir)`：**目录级**成因（预览选目录那一刻文件还不存在，判不了语言，故语言判据给中性值防误报方言） |
+| 落点 | 判定非 null ⇒ `<base>/.sql-visualizer/preview`（沿用原 pre-check 行为） |
+| 告知 | `notifyPreviewRootFallbackOnce(proj, cause)`：`PreviewFallbackNoticeGate`（AtomicBoolean）保证**每个面板生命周期只提示一次**；走 `SqlResultPanel.showStatusWithActions`（warning 态 + 蓝字），BGT 调用自动派回 EDT |
+| 入口 | 文件类型忽略 → `preferences.fileTypes`；VCS 忽略 → 项目根 `.gitignore`；排除 / 方言 / 未识别 → 只告知（与执行侧同口径） |
+| 文案 | `preview.tempDir.fallback.notice`：说明「已改写到项目根 .sql-visualizer/preview，预览与补全照常可用」 |
+
+**读数**：`ExecPsiFailureHintTest` 8/0/0/0（新增「预览兜底提示只出一次」）、
+`BundlePlaceholderArityTest` 4/0/0/0、`SqlResultPanelUiTest` 15/0/0/0。
+
+### 13.13 F5：文件级谓词看不见父目录 —— 「全绿却建不出 PSI」的定案与修法（2026-11-11 傍晚）
+
+**触发**：用户第二次验收（日常 `IU-263.7307.200`，demo 项目 `mybatis-plus-sql-visualizer-demo`，
+`cn.song.ibatis2demo.UserDaoImpl#selectTwoSegment`）。仍是「执行失败：创建临时 SQL 文件失败」，
+**面板上没有任何蓝色入口**，用户原话「执行sql错误，没有引导用户调整配置信息」。
+（F3/F4 已生效——失败原因不再退化成 `unknown`，所以这次读到了完整的诊断串。）
+
+**日志读数**（`%LOCALAPPDATA%/JetBrains/IntelliJIdea2026.3/log/idea.log`，14:59:24 / 15:00:02 两轮，
+行 27664–27749）：整条自愈链完整跑完（清映射 → 钉 MySQL → 钉 GenericSQL），且**每次**映射写入都触发
+一次 `Workspace model updated: Update SQL dialect mappings` + 一次全项目 `UnindexedFilesScanner`；
+诊断串四项全绿：
+
+```
+excluded=false, underIgnored=false, regHideExcluded=false,
+psiLang=GenericSQL, canPsiActual=true, vfValid=true, dir=false
+```
+
+**反编译定案**（`lib/intellij.platform.core.impl.jar`，`-dgs=1` Fernflower）：
+`AbstractFileViewProvider.shouldCreatePsi()` 在 263 上只有三条出口——
+
+```java
+if (this.isIgnored()) return false;                       // ① 只看**文件名**的忽略模式
+else if (InternalPsiVersioning.isInsideVersioningButNotLocks()) return true;
+else { if (correspondsToRealFile() && vFile.isInLocalFileSystem()) {
+          PsiDirectory psiDir = getManager().findDirectory(vFile.getParent());   // ② 问的是**父目录**
+          if (psiDir == null && !isInLibrarySource && !isInLibraryClasses) return false; } return true; }
+```
+
+①的实现是 `FileTypeRegistry.isFileIgnored` → `IgnoredFileCache.calcIgnored` → **只对 `file.getNameSequence()` 做模式匹配**，
+喂给它的正是我们诊断里那句 `fileTypesIgnored`，两者同源。
+②的实现是 `FileManagerImpl.findDirectoryImpl` → `isExcludedOrIgnored(dir)` →
+`Registry.is("ide.hide.excluded.files") ? isExcluded(dir) : isUnderIgnored(dir)`（263 反编译逐字，
+243 沙箱栈同一形态）。
+
+**结论（粒度差，本轮真正的新发现）**：闸门问的是**父目录**，我们的归因面问的是**文件**。
+`isUnderIgnored(文件)=false` 与 `isUnderIgnored(目录)=true` 可以同时成立——真机就是这一对：
+文件落在内容根的文件集里（所以 `isExcluded`/`isUnderIgnored` 都为 false），而目录本身在 workspace model
+里被记为 ignored。于是四项谓词全绿 → `classifyExecPsiFailure` 落 `UNKNOWN` → UI 第 13.10 版对
+`UNKNOWN` 的处置是「保持原文案、不给入口」，红字孤零零一条。**上一版没覆盖的不是分支，是粒度。**
+
+**修法（五处）**
+
+| # | 改动 | 位置 |
+|---|---|---|
+| 1 | **落点目录快路径**：写文件之前先探目录（`execDirCanHostPsi`，与平台同一个 `PsiManager.findDirectory` 调用）；探不过就当场按成因收口，不再撞完整自愈链 | `createTempPsiFile` |
+| 2 | 新增成因 `DIR_NOT_INDEXED`：文件级谓词全绿而目录探针判否 = 这一档专属；分类器新增 `dirCanHostPsi: Boolean?`（`null` = 没探，不参与判定），**排在语言判据之前**（这种机器上 `psiLang`/`canPsiActual` 都正常，先判语言会把人送到 SQL 方言页） | `ExecPsiFailureHint.kt` |
+| 3 | `UNKNOWN` **不再只丢红字**：给专属文案 + 兜底蓝字入口。判不出成因不等于没有出路——兜底落点一定能用 | `showTempFileError` |
+| 4 | 诊断串补 `dirPsi / dirExcluded / dirUnderIgnored`（文件串）与独立的 `execDirDiagnostics`（`dirPsi / inContent / dirExcluded / dirUnderIgnored / dirTypeIgnored`）。真机下一张截图即可定案 | `DataSourceSelectorResults.kt` |
+| 5 | 文案修正：`.gitignore` 里忽略 `.idea/` 是**正常设置**，tip 不再劝用户删它，改为「要保留就用项目根落点」 | bundle 双语 |
+
+`DIR_NOT_INDEXED` 的入口：兜底落点（主）+ 项目根存在 `.gitignore` 时给「打开 .gitignore」；
+预览侧同样补了这一档的入口（此前落到 `else` 分支只告知不给入口）。
+
+**顺带的好处**：快路径把那一串「每写一次映射就重建一次 workspace model + 全项目 scan」省掉了——
+真机日志里那两轮各触发 4 次。
+
+**读数**：`ExecPsiFailureHintTest` **12 / 0 / 0 / 0**（新增 4 例：目录探针判否 → 目录不可用、
+不得误报方言、忽略类成因压过目录探针、未探目录时不参与判定）。
+`testDbExecPsiGate` **15 / 0 / 0 / 0**（新增 `testDirProbePassesOnHealthyExecDir` 钉探针**极性**——
+误判成「不能」的代价比漏判大：每台正常机器上每次执行都会被拦下劝换落点；`testDiagnosticsCarryFiveFields`
+同步加上目录级三项断言）。
+
+**反向验证**：注释掉分类器里 `if (dirCanHostPsi == false)` 一行 ⇒ `ExecPsiFailureHintTest` **恰 2 红**
+（「文件级全绿但目录探针判否时判为目录不可用」「目录探针判否不得被误报成方言问题」），恢复后复绿
+12/0/0/0，`RED PROBE` 标记清零。
+
+**残余（真机复核项）**：若下一轮报文的 `dirPsi=true`，说明这台机器上 `findDirectory` 也正常，
+形态另有来源——但分类一定不会落回「只剩红字」（`UNKNOWN` 也带兜底入口），且诊断串已经能把
+`dirPsi / dirExcluded / dirUnderIgnored / inContent` 一次交全。
+
+### 13.14 F6：成因来源换层 + 两次用户定案把交互钉死（2026-11-11 晚）
+
+**触发**：同一台机器、同一个项目的第三轮验收。这次报文里的目录级诊断**全部命中**：
+
+```
+执行失败：创建临时 SQL 文件失败：dirNoPsi: dir=<base>/.idea/sql-visualizer/exec,
+dirVfValid=true, dirPsi=false, inContent=false, dirExcluded=true, dirUnderIgnored=true,
+dirTypeIgnored=false, regHideExcluded=false, ideBuild=IU-263.7307.200
+```
+
+三个结论：
+
+1. **诊断对了**：`dirPsi=false` 就是平台闸门里 `findDirectory(parent)==null` 的直接读数，
+   `inContent=false / dirExcluded=true / dirUnderIgnored=true` 三项把成因钉死在这个目录上。
+2. **面板却仍然只有红字**：成因又丢了。F5 把成因记在裸字段 `lastTempFileHint` 上，而
+   `createTempPsiFile` 入口会清空它——预热链与冷路径并发时，先失败的一方刚写好、另一方的入口就抹掉。
+   与 F3 同根：**失败信息不该走共享可变字段**。
+3. 用户另一条观察定位到链路分叉：**「更多 → 切换数据源」那条路的提示是正常的**。差别正是链路形态——
+   切源走同步链（写完成因立刻被读），直接执行走异步链（与预热链并发）。这条观察独立复现了第 2 点。
+
+**两次用户定案（先后否掉本轮的两次过度设计）**
+
+| 时间 | 我的方案 | 用户定案 | 结论 |
+|---|---|---|---|
+| 第三轮 | 探针判否就**自动改写**到项目根（无感恢复执行） | 「默认不应该改写呀 应该引导用户修改设置吧？」 | **撤回自动改写**；13.11「兜底要用户点」继续有效 |
+| 第三轮 | 失败提示挂「打开 .gitignore」 | 「不应该引导用户修改 .gitignore 而是修改设置里的 Settings → Editor → File Types」 | **所有忽略类入口统一指向文件类型设置页**；`.gitignore` 链接删除 |
+
+两条都记在案，避免后续再自行"优化"回去。
+
+**最终落地（F6）**
+
+| # | 改动 | 理由 |
+|---|---|---|
+| 1 | 成因与**阶段**成对记录（`TempFileHintRecord`），消费时按错误文案里的阶段匹配 | 并发入口清不掉别人的记录；旧成因也安不到新失败上（阶段对不上即丢弃） |
+| 2 | 归因来源从「文件级四项」扩到**文件∪目录**（`excluded / underIgnored / fileTypesIgnored` 取并集，`dirCanHostPsi` 单列） | 闸门问的是父目录；取并集才与闸门口径一致（真机就是这个组合） |
+| 3 | 失败诊断串补 `dirPsi / dirExcluded / dirUnderIgnored / inContent`，另设 `execDirDiagnostics` | 一张截图即可判型 |
+| 4 | 忽略类成因（含 `DIR_NOT_INDEXED`）的蓝色入口一律 = 打开**文件类型**设置页；`.gitignore` 入口删除（含预览侧） | 用户定案 |
+| 5 | `UNKNOWN` 兜底档也给落点入口 | 判不出成因不等于没有出路 |
+
+**不做的事**：自动改写落点、无条件把默认落点改成项目根、引导用户编辑 `.gitignore`。
+
+**读数**：`ExecPsiFailureHintTest` **15 / 0 / 0 / 0**（含新增的两条「用户定案」护栏：自动改写实现不得回归、
+失败提示不得再挂 `.gitignore` 入口）、`testDbExecPsiGate` **15 / 0 / 0 / 0**、守卫与更新通道用例 273/0/0。
+反向验证：注释掉分类器里 `if (dirCanHostPsi == false)` ⇒ 恰 2 红，恢复复绿。
+
+### 13.15 F7：同一次失败被渲染两次，读方清空把蓝字覆盖成纯红字（2026-11-11 第四轮）
+
+**现象**：F6 装上去后直接点「执行 SQL」，报文已经带上目录级四项诊断
+（`dirPsi=false, dirExcluded=true, dirUnderIgnored=true`），但**仍然没有蓝字**；而「更多 → 切换数据源」
+那条路同一份报文是有蓝字的。
+
+**根因**：一条失败会被投递**两次**——`failPrepareRequests` 先 `gate.abort(持有者, …)`，
+再 `consumed?.complete(…, message)`，两路带同一条文案。而 F6 的 consumer 是「读一次就清」：
+
+1. 第一次渲染：读到成因 → 挂上蓝字；
+2. 第二次渲染：记录已被清 → `cause == null` → 走 `resultPanel.showError(errorMsg)`，
+   **纯红字把蓝字覆盖掉**。
+
+切源那条路 `prepareOwner == null`（PASS_THROUGH），只投递一次，所以蓝字留得住——用户那句
+「切换数据源时是正常的」又一次替我们定位了链路分叉。
+
+**修法**：consumer 改**非破坏性**（不在这里清空，只由下一次带成因的失败覆盖），并把匹配判据从
+「精确阶段名」放宽成「这条文案是不是 PSI 建不出」（`findPsi*` / `dirNoPsi` 或记录里的阶段）——
+阶段名会演进，精确匹配会让入口凭阶段名丢失。同时失败现场**永不传 null 成因**（归因面自己异常时
+退 `UNKNOWN`，而 `UNKNOWN` 也带落点入口）。
+
+**读数**：`ExecPsiFailureHintTest` **16 / 0 / 0**（新增「可重复读取：同一次失败渲染两次都拿得到」
+「非 PSI 失败不借用」「匹配放宽到任一 PSI 阶段」）。
+
+### 13.16 F8：先复现再修 —— 成因改随文案传递（2026-11-11 第五轮）
+
+**现象**：装包后直接点「执行 SQL」仍无蓝字。用户要求「先复现问题再解决」，本轮按取证三步走。
+
+**取证**
+
+1. **失败路径确认**（`IntelliJIdea2026.3/log/idea.log` 16:18:05–16:18:09）：
+   `createTempPsiFile FAILED at findPsiAfterHeal` 与 `createTempPsiFile failed (reason=…)` 成对出现
+   ⇒ 确实是 `fail()` 写下的失败，不是别的分支。
+2. **装的到底是哪个包**（字节取证，L35 口径）：扫
+   `%APPDATA%/JetBrains/IntelliJIdea2026.3/plugins/mybatis-plus-sql-visualizer/lib/*.jar`——
+   `TempFileHintRecord` **在**、`shouldRelocateExecToRoot` **不在**、`ExecPsiFailureHintKt` 里
+   **没有** `[hint=` / `parseExecHintMessage` ⇒ 装的是 `7ab0d5335`（F6b）。
+   **F7（`3d2428a12`，非破坏性读取）从未被装上验过**。
+3. **复现**：F6b 的 consumer 是「读一次就清」，而一条失败会被投递两次
+   （`failPrepareRequests` 先 `gate.abort(持有者)`、再 `consumed.complete(排队意图)`，两路带同一文案）
+   ⇒ 第一次渲染挂上蓝字，第二次 `cause == null` 走 `resultBox.showError`，纯红字把蓝字盖掉。
+   写成用例「复现蓝字消失_成因编进文案后渲染两次都拿得到」，把 `withExecHint` 退回旧行为时
+   **实测恰 2 红**，复现成立。
+
+**修法**：**成因随失败文案一起走**——`fail()` 把 ` [hint=XXX]` 追加到失败原因里（
+`withExecHint`），UI 用 `resolveTempFileHintCause` 取值、`parseExecHintMessage` 剥掉标记
+（展示文案干净，日志与「复制错误信息」保留标记）。共享字段只作老路径兜底。
+
+为什么这次能收口：前四轮都把成因放在共享可变状态里，靠「谁清谁写」的约定传递，被三种机制各打掉
+一次（预热链入口清空 / 并发失败覆盖 / 第二次渲染时读方清空），动态重载时还可能是两份类实例。
+**文案怎么走、成因就怎么走**，跨线程、跨渲染次数、跨类加载器都不丢，也不需要任何读方负责清理。
+
+**读数**：`ExecPsiFailureHintTest` **18 / 0 / 0 / 0**（新增三条：复现用例、`withExecHint`↔
+`parseExecHintMessage` 互逆、未知成因名不抛）。
+
+### 13.17 F9：执行回调有一半直连 `showError` —— 蓝字只在「切换数据源」那条路上出现的真因（2026-11-11 第六轮）
+
+**现象**：F8 装上后报文里**已经带** ` [hint=IGNORED_BY_VCS]`（说明成因编码生效），但面板仍是裸文本、
+没有蓝字，而且标记原样显示——标记没被剥掉，说明这条消息**根本没经过** `showTempFileError`。
+用户同时补了一句关键对照：「点击更多-切换数据源 才正常」。
+
+**根因**：`ui/SqlPreviewPanelExecution.kt` 里一共五个执行调用点，只有两处把 `onError` 接到
+`showTempFileError`；**主执行路径**三处（`recoverConsole` 分支、`SqlExecutor.executePrepared`、
+全链 `SqlExecutor.execute`）与 EXPLAIN 结构化准备链一处都直连 `resultPanel.showError`：
+
+```kotlin
+onError = { errorMsg -> resultPanel.showError(errorMsg) }   // ← 成因与蓝字入口在这里丢干净
+```
+
+「更多 → 切换数据源」走的是已接线的那两处，所以只有它正常。这也解释了 13.10 起的一连串怪现象：
+早期截图中蓝字出现过的都是切源/别的路径，直接点执行从来没出现过——**不是成因传丢了，是这条路上
+压根没人读它**。前五轮所有关于"成因在哪丢"的推断都只在读方存在的前提下成立。
+
+**修法**
+
+| # | 改动 |
+|---|---|
+| 1 | 五处执行回调统一走 `showTempFileError`（无成因时它逐字退回 `showError`，普通 SQL 错误行为不变） |
+| 2 | 订正 `deliverError` 的 KDoc 里「`onError` 恒为 `resultPanel.showError`」——这条旧假设正是把缺口藏起来的原因 |
+| 3 | 护栏用例：源码扫描，`onError = { errorMsg -> resultPanel.showError` 这种直连不许再出现 |
+
+**读数**：`ExecPsiFailureHintTest` **19 / 0 / 0 / 0**（新增「执行回调不得绕过 showTempFileError」）。
+反向验证：把主执行路径那处改回 `resultPanel.showError` ⇒ 护栏用例恰 1 红。
+
+---
+
 ## 参考
+
+- **本轮复盘（六轮过程、被证伪的假设、下次的检查单）**：`docs/经验总结/20261111-2100-T-ExecPsiGate-六轮真机验收的排查过程与判据演进-经验总结.md`
+- 账本规则：`docs/LESSONS.md` L38（判据层级）· L39（枚举全部消费点接线）· L40（元数据随载体走）
+- CI 查询工具：`dev-support/ci-status.py`（runs / run / wait / release / pick-artifact）
 
 - `execute/DataSourceSelectorResults.kt:1758-1848`（`createTempPsiFile`）、`:1932-2021`（prewarm）、`:416`（文案装配）
 - `execute/DataSourceSelector.kt:2137-2165`（`mapDialectBeforePsi`）、`:1717-1718`（dumb mode 下 push-all 推迟注记）
