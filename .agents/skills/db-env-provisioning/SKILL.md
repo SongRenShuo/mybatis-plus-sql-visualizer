@@ -353,6 +353,8 @@ docker exec -u 70:70 -e GAUSSHOME=/opt/gaussdb/app -e LD_LIBRARY_PATH=/opt/gauss
   gs_initdb -D /home/omm/probe/data -U omm -w '<密码>' --encoding=UTF-8 --locale=C \
   --nodename=xc3probe --host-ip=127.0.0.1 --undostoragetype=page --dbcompatibility=A
 # 4) gs_ctl start -D ... -Z single_node -l ...
+# 5) 容器内 gsql 直连必须带 -h127.0.0.1 与 LD_LIBRARY_PATH=/opt/gaussdb/app/lib（缺则报
+#    libcjson.so.1 cannot open shared object file，与 openGauss 同款）；口令容器 env 用 -W 传
 ```
 
 启动日志里 `product control file` / `gaussdb.version` / `Alarm Module` / `gscgroup_omm.cfg` / `$GAUSSLOG`
@@ -495,6 +497,23 @@ OceanBase 的两个坑：①`memory_limit` 不能低于 `sum(unit MEMORY_SIZE) +
 `The memory of memstore needs to be less than 90% of the new memory ... shrink is not supported`，
 先看 `GV$OB_MEMSTORE` 的 `memstore_used` 再决定压到多少。即使压了 `memory_limit`，observer 的 anon 常驻
 也**不会立即释放**（本轮 6G→5G 后 anon 纹丝不动在 4.21GiB），定 cap 要照 anon 而不是照 memory_limit。
+
+### 2026-11-13 第二轮治理新增的四个坑
+
+1. **MSSQL `max server memory` 是 advanced option**：直接
+   `sp_configure 'max server memory', 512` 报 `Msg 15123 ... may be an advanced option`。两步法：
+   先 `sp_configure 'show advanced options', 1; RECONFIGURE` 再改目标项。改完**必须回读**
+   `SELECT value_in_use FROM sys.configurations` 确认（第一遍直改失败被误当成已执行，输出被 grep 吃掉才没发现）。
+   RSS 回落与 cap 收缩配合（本轮 768→591MiB 未重启即回落）；纯改参仍建议重启后复核 RSS。
+2. **cap 有两处事实源**：运行时 cap（`docker update`）与幂等重建脚本里写死的 `--memory=`——
+   只改前者，下次整机重放（跑 vastbase/OB 的 start.sh、gaussdb init.sh、a-deploy.sh）全部回退旧值。
+   治理时两处都 `sed` 同步；参数化脚本（磐维 v2 编排器 cap 是第 4 参）在头注释记传参值；台账 TSV 内存列一并更新。
+3. **Vastbase 容器内口令变量是 `GS_USERPASSWORD`**：start.sh 是宿主上的幂等重建脚本
+   （`docker rm -f` + 完整 `docker run`，数据在宿主卷跳过初始化），容器 env 是 KubeBlocks 风格；
+   `docker exec` 里拿 db.env 的 `$VB_PASS` 是空的 → vsql 报 `Invalid username/password` 虚惊。
+   vsql 不读 PGPASSWORD，容器内用 `-W "$GS_USERPASSWORD"` + `LD_LIBRARY_PATH=/home/omm/vbdata/install/vastbase/lib`。
+4. **Oracle `v$parameter` 查询的引号**：SQL 里的单引号经 `sh -c` 双引号嵌套被吃（`\047` 转义也翻车），
+   用管道法：`echo "select ... in ('sga_max_size',...);" | docker exec -i <c> sqlplus -s "/ as sysdba"`。
 
 ### 哪些改法在线、哪些要重启
 
@@ -717,7 +736,9 @@ select current_user, current_database(),
 | 第二次跑渲染套件必红 | 上一轮残留夹具表 | 确认套件已幂等（建前收尾都 DROP） |
 | 绿了但验的不是目标库 | 配置缓存复用上一族 URL / 方言名回退 MySQL | `--no-configuration-cache` + 方言名逐字核对断言 |
 | `gs_ctl restart` 卡死 | 容器 PID1 是 tail，僵尸不回收 | `--init` 重起容器 |
-| `mysql:8.0` 容器秒退，日志 `Fatal glibc error: CPU does not support x86-64-v2` | 官方 `mysql:8.0` 是 **Oracle Linux 9** 基底，glibc 以 x86-64-v2 为基线；靶机是 QEMU 虚机（`/proc/cpuinfo` 无 `sse4_1/sse4_2/popcnt`，只有 `cx16`） | 换 **`mysql:8.0-debian`**（Debian 12）。已拉的 OL9 版在本机不可用，别反复试 |
+| `mysql:8.0` 容器秒退，日志 `Fatal glibc error: CPU does not support x86-64-v2` | 官方 `mysql:8.0` 是 **Oracle Linux 9** 基底，glibc 以 x86-64-v2 为基线；靶机是 QEMU 虚机（`/proc/cpuinfo` 无 `sse4_1/sse4_2/popcnt`，只有 `cx16`） | 换 **`mysql:8.0-debian`**（Debian 12）。已拉的 OL9 版在本机不可用，别反复试。**TiDB 同款**：官方镜像 v7.5 起换 Rocky/OL9 基底，v8.5/v7.5 本机均炸；唯一可用的是 v6.5（Ubuntu 基底），台账 TSV 已写死「勿再拉 v7+/v8+」 |
+| `Msg 15123 ... configuration option 'max server memory' does not exist, or it may be an advanced option` | MSSQL 高级选项默认隐藏 | 两步法：先 `sp_configure 'show advanced options', 1; RECONFIGURE` 再改目标项；改完回读 `value_in_use` 确认（别拿被 grep 吃掉的输出当成功） |
+| 「容器 Up 2 hours 但记忆里是昨天起的」怀疑重启循环 | **UTC/北京日期心算错误**的假象（跨日工作常见） | 用 `docker inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}'` 确定性字段判，别拿 `docker ps` 相对时间加时区推断（LESSONS L58） |
 | 灌进库的中文变 `C3A5C2BCC2A0…`（HEX 可验） | 容器内 `LANG` 为空 → mysql 客户端 `--default-character-set=auto` 落到 **latin1**，initdb 阶段 UTF-8 种子被双编码 | 初始化脚本**首行**加 `SET NAMES utf8mb4;` 后重灌；重建卷时这行必须保留（原始副本留 `.orig`） |
 | 容器起来了但外部连不上（容器内/localhost 正常） | MySQL 的 `root` 默认只允许 `localhost` | 起容器加 `-e MYSQL_ROOT_HOST=%` |
 | `gs_preinstall` 报 `This cluster is missing the rdtscp or avx instruction` 并退出 | 预检要求 `lscpu` 同时有 avx 与 rdtscp，QEMU vCPU 没有；**引擎本体不需要** | 把 `script/local/PreInstallUtility.py` 里 `check_cpu_instructions` 的 `raise` 改成 `pass`（留 `.orig`） |
@@ -785,6 +806,18 @@ ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/replay.tsv'
 
 # 4) 收尾：台账补行（test-databases.md + db-env-instances.tsv 两处都补）→ DBX 登记（首个查询可能
 #    CONNECTION_OUT_OF_SCOPE，放行一次）→ 若参与 CI，更新仓库 secrets（-PmpvDbUrl/-PmpvDbUser/-PmpvDbPassword）
+
+# 5) 内存治理收尾轮（必做，不是「有空再做」——2026-11-13 实测欠压：重建只按台账旧 cap 起、
+#    内部参数全是镜像默认值，available 只剩 3144MB；治理一轮后 4149MB）：
+#    a) docker update 把全部 cap 收到 §2.5 目标值（在线无重启；逐个改、inspect 复核）
+#    b) 内部参数逐实例核：Oracle SGA/PGA（默认 1536M，压 512/512/256 scope=spfile+重启）、
+#       MSSQL max server memory（默认无限=2147483647，先 show advanced options 再压 512）、
+#       openGauss/Vastbase shared_buffers（镜像默认 1024M，压 256MB+重启）、MySQL/MariaDB buffer pool
+#    c) cap 有两处事实源：运行时 + 幂等重建脚本里写死的 --memory=（vastbase/OB start.sh、
+#       gaussdb init.sh、a-deploy.sh）——治理必须两处都 sed 同步，否则下次重放全部回退旧值；
+#       参数化脚本（磐维 c-orchestrate-panweidb-v2.sh 第 4 参）在头注释记传参值
+#    d) 反向验证：一个小容器 cap 压 16m → OOMKilled=true Exit=137 → 恢复，两次读数留档
+#    e) 复核 free -m 的 available ≥3GB + 13/13 数据面 SELECT 1 + 台账 TSV 内存列同步
 ```
 
 ### 磐维 PanWeiDB：不能「一把梭」，三处补丁有时序

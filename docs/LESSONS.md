@@ -532,6 +532,26 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L57 整机重建的收尾必须包含内存治理轮；cap 有「运行时 + 重建脚本」两处事实源
+
+**规则**：按清单重建出来的容器只是「按台账旧 cap 起的欠压状态」——重建只压了部署脚本自带的那些参数，其余实例的内部参数全是镜像默认值。所以 §9 重建顺序的收尾固定一步是**内存治理轮**：① `docker update` 把 11+ 个 cap 全部收到 §2.5 目标值（在线、无重启）；② 逐实例核对内部参数（Oracle SGA/PGA、MSSQL `max server memory`、openGauss 族 `shared_buffers`/`max_connections`、MySQL/MariaDB buffer pool），欠压的按 §2.5 改法压掉。另外 **cap 有两处事实源**：运行时 cap 与幂等重建脚本里写死的 `--memory=`——只改前者，下次整机重放全部回退旧值；治理必须两处都改（`sed` 同步 start.sh/init.sh/a-deploy，参数化脚本在头注释记传参值），并同步台账 TSV 的内存列。
+
+**证据**：2026-11-13 第二轮治理，采集实测四处欠压（Oracle SGA 1536M 默认、MSSQL `max server memory` 2147483647 无限、openGauss/Vastbase A/B `shared_buffers` 各 1024MB），cap 收缩 11 个（总 cap 40.7G→19.3G）+ 四处参数压缩后 `available` 3144→**4149MB**（+1005MB），13/13 数据面实连通；highgo 压 16m 反向验证 `OOMKilled=true Exit=137 Restarts=3`、恢复 512m 复活。重建脚本里抓到五处旧 cap（oceanbase start.sh `--memory=8g`、gaussdb init.sh 4g、vastbase A/B start.sh 4g/2g、a-deploy.sh 3g/2g）已全部同步。详见 `docs/经验总结/20261113-0057-测试服务器容器内存第二轮压缩-经验总结.md` 与 skill §2.5/§9。
+
+**正例**：治理清单逐实例核（cap + 内部参数）+ 两处事实源同步 + 反向验证两次读数；**反例**：只 `docker update` 运行时 cap 就宣布「压完了」，重建脚本里旧 cap 原封不动。
+
+**Seen 1× (2026-11-13)**
+
+### L58 判容器重启循环用 `docker inspect` 确定性字段，别拿 `docker ps` 相对时间加时区心算
+
+**规则**：`docker ps` 的 `Up 2 hours` 是相对当前时刻的模糊展示；跨 UTC/北京两个日期工作（会话发生在夜里、服务器日志打 UTC）时，拿「记忆里的创建时刻」跟它对比极易把时区差当成重启循环。判据永远是 `docker inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}'`——这三个字段直接回答「重启过几次、有没有 OOM、到底何时启动」。
+
+**证据**：2026-11-13 内存治理中途看到部分容器 `Up 2 hours`/`Up About an hour` 而「记忆里是昨天起的」，差点判成隐藏重启循环；inspect 证实 `restarts=0 / OOMKilled=false`、StartedAt 与创建一致——实际是把 UTC 和北京日期搞混（部署发生在当天 UTC 下午，容器确实只跑了 1~2 小时）。
+
+**正例**：`for c in $(docker ps -q); do docker inspect -f '{{.Name}} {{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}' $c; done` 一次看清；**反例**：盯着 `docker ps` 的 Up 时长加心算时区下结论。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
