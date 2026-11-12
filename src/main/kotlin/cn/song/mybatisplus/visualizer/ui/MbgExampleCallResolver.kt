@@ -15,7 +15,6 @@ import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
-import com.intellij.psi.PsiReference
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.search.GlobalSearchScope
@@ -235,26 +234,35 @@ object MbgExampleCallResolver {
     }
 
     /**
-     * mapper 方法在本项目里的**首个**调用点。
+     * mapper 方法在本项目里的**首个可用调用点**。
      *
      * T-PreviewOpenPerfM2 M5 的 `findFirst()` 在真机大工程上返回 null（同一方法 `Find Usages`
      * 有 253 处引用、索引健康）——`Query.findFirst()` 在这条检索链上不可靠。改为 `forEach`
      * 取首个命中（语义等价、仍是提前终止，不把全项目引用收成 List）。
+     *
+     * D6（真机 2026-11-12 14:46，`mybatis-plus-demo` 的 `CtCustmanagerRelMapper#selectByExample`）：
+     * **命中不等于能当调用点用**。`ReferencesSearch` 对接口方法会把「实现的声明处 / 方法引用」
+     * 一起返回，这类 ref 的 element 上溯没有 `PsiMethodCallExpression`——取第一个 ref 就直接放弃，
+     * trace 里就是 `noCallSite`，而项目里明明有两个真实调用点。现在改为跳过不可用的 ref 继续找。
      */
     private fun findCallSite(scope: GlobalSearchScope, method: PsiMethod): PsiMethodCallExpression? {
-        // ① 先按「提前终止」取第一个命中（不收集全量）
-        var ref: PsiReference? = null
+        var site: PsiMethodCallExpression? = null
+        var refsSeen = 0
         ReferencesSearch.search(method, scope).forEach { candidate ->
-            ref = candidate
-            false
+            refsSeen++
+            val call = PsiTreeUtil.getParentOfType(candidate.element, PsiMethodCallExpression::class.java)
+            if (call == null) {
+                true // 声明处 / 方法引用：继续找下一个
+            } else {
+                site = call
+                false
+            }
         }
-        if (ref == null) {
-            // ② 诊断：真机上「forEach 也为空」时把总引用数记下来，区分「索引没建」与「检索语义不同」
+        if (site == null) {
             val total = runCatching { ReferencesSearch.search(method, scope).findAll().size }.getOrNull()
-            LOG.info("[m2] findCallSite empty method=$method totalRefs=$total")
-            return null
+            LOG.info("[m2] findCallSite empty method=$method refsSeen=$refsSeen totalRefs=$total")
         }
-        return PsiTreeUtil.getParentOfType(ref!!.element, PsiMethodCallExpression::class.java)
+        return site
     }
 
     /** 调用实参的变量名（`selectByExample(example)` → `example`）。 */
