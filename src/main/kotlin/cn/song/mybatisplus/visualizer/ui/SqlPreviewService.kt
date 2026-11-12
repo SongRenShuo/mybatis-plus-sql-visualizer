@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution
@@ -258,7 +259,15 @@ class SqlPreviewService(internal val project: Project) {
             sqlPsiResolution = sqlResolution, moduleResolution = moduleResolution)
     }
 
-    fun preview(anchor: PsiElement, sourceContext: PreviewSourceContext? = null): PreviewResult? {
+    /**
+     * @param preferredConsumption T-PreviewStmtTypeScope D-3：强制判型档位（面板「预览目标」切换用）；
+     *        null = 按 D-2 依锚点位置判定。强制档位参与缓存键，切换后不会命中旧档位的缓存条目。
+     */
+    fun preview(
+        anchor: PsiElement,
+        sourceContext: PreviewSourceContext? = null,
+        preferredConsumption: cn.song.mybatisplus.visualizer.model.ConsumptionKind? = null,
+    ): PreviewResult? {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
         if (settings?.state?.jdbcSqlPreviewEnabled != false) {
@@ -284,9 +293,12 @@ class SqlPreviewService(internal val project: Project) {
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
         // （文件戳不变的场景）不再命中旧解析结果
         val resolveVariables = effectiveReplaceParams()
+        // T-PreviewStmtTypeScope D-3：强制档位进缓存签名——同一锚点在不同「预览目标」下是不同结果，
+        // 不区分就会切换回旧档位的 SQL（锚点偏移维度不变，只能靠签名维度隔离）。
+        val consumptionSignature = preferredConsumption?.name ?: ""
         val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables,
-            "${tableConfigSignature()}|${decision.status}|${decision.dialectName}|${decision.source}|${decision.dataSourceIds}") {
-            WrapperLocator.locateWithTable(anchor, resolveVariables)
+            "${tableConfigSignature()}|${decision.status}|${decision.dialectName}|${decision.source}|${decision.dataSourceIds}|kind:$consumptionSignature") {
+            WrapperLocator.locateWithTable(anchor, resolveVariables, preferredConsumption)
         }
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
         // 实体文件变化不触发）：命中缓存时校验实体文件戳（@TableName/@TableField 注解来源），
@@ -429,16 +441,37 @@ class SqlPreviewService(internal val project: Project) {
                 historyFingerprintSeed = historyFingerprintSeed,
                 dialect = dialect,
                 dialectDecision = decision,
+                // T-PreviewStmtTypeScope：判型依据随结果进面板（meta 行 + 悬停）——「为什么是
+                // UPDATE/DELETE」在面板上可见（来自哪条语句的哪个消费方法），不再让用户猜。
+                decidingConsumption = located.chain.decidingConsumption,
+                otherConsumptions = located.chain.allConsumptions.filterNot { it == located.chain.decidingConsumption },
             )
             recordHistory(result, anchor)
+            // T-PreviewStmtTypeScope D-3：同一 wrapper 上出现多种消费写法时，不替用户拍板——把可切换的
+            // 「预览目标」随结果带到面板（默认 = D-2 判定的那一档，切换后按强制档位重算）。
+            // 只有 ≥2 档才挂重算闭包：单档场景既不持有 PSI 引用，也不给面板多余入口。
+            val statementTypeOptions = located.chain.allConsumptions
+                .map { it.kind }
+                .distinct()
+                .filter { it != ConsumptionKind.PAGE }
+                .sortedBy { STATEMENT_TYPE_ORDER.indexOf(it) }
+            val switchable = if (statementTypeOptions.size > 1) {
+                { kind: ConsumptionKind -> preview(anchor, context, kind) }
+            } else {
+                null
+            }
+            val withChoices = result.copy(
+                statementTypeOptions = statementTypeOptions,
+                statementTypeSwitch = switchable,
+            )
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
-                result.copy(
-                    sql = "SELECT EXISTS (${result.sql})",
-                    compactSql = "SELECT EXISTS (${result.compactSql})",
+                withChoices.copy(
+                    sql = "SELECT EXISTS (${withChoices.sql})",
+                    compactSql = "SELECT EXISTS (${withChoices.compactSql})",
                 )
             } else {
-                result
+                withChoices
             }
         }
 
@@ -1728,6 +1761,17 @@ class SqlPreviewService(internal val project: Project) {
     private val UPDATE_DELETE_JOIN_TYPES: Set<WrapperType> = setOf(
         WrapperType.UPDATE_JOIN,
         WrapperType.DELETE_JOIN,
+    )
+
+    /**
+     * T-PreviewStmtTypeScope D-3：面板「预览目标」切换列表的档位顺序——与判型分派优先级同源
+     * （count > exists > update > delete）。PAGE 不进列表：它只追加 LIMIT，不改变语句类型。
+     */
+    private val STATEMENT_TYPE_ORDER: List<ConsumptionKind> = listOf(
+        ConsumptionKind.COUNT,
+        ConsumptionKind.EXISTS,
+        ConsumptionKind.UPDATE_ENTITY,
+        ConsumptionKind.DELETE,
     )
 
     /**
