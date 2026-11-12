@@ -267,6 +267,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var ignoredUpdateVersions: String = "",
 
         /**
+         * 本地安装包目录（T-LocalUpdateDir）：把内网/共享盘构建的插件 zip 放这里，设置页与
+         * 启动检测自动识别最高版本并可直接安装（平台允许则热生效，243 等回退重启脚本）。
+         * 空字符串 = 关闭。已做 `~` 展开与 `Path` 归一（[cn.song.mybatisplus.visualizer.update.LocalUpdateDir]）；
+         * 机器相关，不进设置导出/导入（SettingsIO 硬编码清单，天然不含）。
+         */
+        var localUpdateDir: String = "",
+
+        /**
          * SQL 反向转换的默认 Wrapper 形态（T-M36.3）：[REVERSE_AUTO] 自动 /
          * [REVERSE_QUERY] 字符串列名 / [REVERSE_LAMBDA] Lambda / [REVERSE_MPJ_LAMBDA] MPJ。
          * 分发逻辑见 [cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat]。

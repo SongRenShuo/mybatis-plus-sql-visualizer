@@ -30,12 +30,108 @@ class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
         val settings = PluginSettings.getInstance()
-        if (!shouldStartupCheck(settings.state.autoCheckUpdate, alreadyChecked)) return
-        alreadyChecked = true
+        // 忽略版本快照：远端与本地两通道共用同一份（启动时定格，避免检查途中配置漂移）
         ignoredVersions = settings.state.ignoredUpdateVersions
-        ApplicationManager.getApplication().invokeLater {
-            checkAndNotify(project)
+        // 远端通道（M28 既有：autoCheckUpdate 门）
+        if (shouldStartupCheck(settings.state.autoCheckUpdate, alreadyChecked)) {
+            alreadyChecked = true
+            ApplicationManager.getApplication().invokeLater {
+                checkAndNotify(project)
+            }
         }
+        // 本地目录通道（T-LocalUpdateDir，D-2：配置目录即 opt-in；与远端并行独立，
+        // autoCheckUpdate 关闭不影响本地检测）
+        val localDir = settings.state.localUpdateDir
+        if (shouldStartupCheckLocal(localDir, alreadyCheckedLocal)) {
+            alreadyCheckedLocal = true
+            ApplicationManager.getApplication().invokeLater {
+                checkLocalAndNotify(project, localDir)
+            }
+        }
+    }
+
+    /**
+     * 本地目录静默检测（T-LocalUpdateDir）：仅 Available 且版本未被忽略时弹通知；
+     * 目录非法/为空/全是旧版本/列举失败一律静默（页面状态行承载原因，启动链不打扰）。
+     */
+    private fun checkLocalAndNotify(project: Project, dirRaw: String) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            null,
+            MpSqlVisualizerBundle.message("update.task.check"),
+            true,
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                val result = LocalPackageScanner.scan(
+                    dirRaw,
+                    PluginVersion.current(),
+                    LocalPackageScanner.sharedCache,
+                    runCatching { com.intellij.openapi.application.PathManager.getPluginsDir() }.getOrNull(),
+                )
+                if (result !is ScanResult.Available) return
+                // 忽略守卫：该版本已被用户忽略 → 静默（与远端共用 ignoredUpdateVersions，D-7）
+                if (isVersionIgnored(result.latest.version, ignoredVersions)) return
+                ApplicationManager.getApplication().invokeLater {
+                    // T-Perf-21：后台检查完成时项目可能已关闭——不向 disposed project 弹通知
+                    if (project.isDisposed) return@invokeLater
+                    showLocalAvailable(project, result.latest)
+                }
+            }
+        })
+    }
+
+    /**
+     * 「本地目录发现可用更新」通知（T-LocalUpdateDir）：立即安装（装本地文件，不走下载）/
+     * 忽略此版本 / 稍后；无「查看发布页」动作（与网络来源无关）。
+     */
+    private fun showLocalAvailable(project: Project, pkg: LocalPackage) {
+        val pluginName = MpSqlVisualizerBundle.message("plugin.name")
+        val notification = NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP_ID)
+            .createNotification(
+                MpSqlVisualizerBundle.message("update.notification.title", pluginName),
+                MpSqlVisualizerBundle.message("update.notification.local.content", pkg.version, pkg.fileName),
+                NotificationType.INFORMATION,
+            )
+        // 点击先过期本通知：动作闭包持有旧 classloader 强引用（与远端 showAvailable 同纪律，T-DynUpdate）
+        notification.addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.installNow")) {
+            notification.expire()
+            installLocalNow(project, pkg)
+        })
+        notification.addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.ignore")) {
+            PluginSettings.getInstance().loadState(
+                PluginSettings.getInstance().state.copy(
+                    ignoredUpdateVersions = ignoreVersion(pkg.version, ignoredVersions),
+                )
+            )
+            notification.expire()
+        })
+        notification.addAction(
+            NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message("update.notification.later")) { }
+        )
+        runCatching { notification.notify(project) }
+    }
+
+    /** 本地包后台安装（无下载段；三态收尾复用远端通道的完成/重启/失败通知）。 */
+    private fun installLocalNow(project: Project, pkg: LocalPackage) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            null,
+            MpSqlVisualizerBundle.message("update.task.download"),
+            true,
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                val result = PluginUpdateRunner.installFromLocal(pkg, indicator)
+                ApplicationManager.getApplication().invokeLater {
+                    when (result) {
+                        is PluginUpdateRunner.InstallResult.InstalledDynamic ->
+                            showInstalledLive(project, result.version)
+                        is PluginUpdateRunner.InstallResult.InstalledRestartRequired -> showInstalled(project)
+                        is PluginUpdateRunner.InstallResult.Failed -> showInstallFailed(project, result.message)
+                        // 本地通道不存在「包未发布」态（无 HTTP）——sealed 全覆盖占位
+                        is PluginUpdateRunner.InstallResult.NotPublished -> Unit
+                    }
+                }
+            }
+        })
     }
 
     /** 静默检查：仅 Available 且未被忽略时弹通知（UpToDate/Failure/忽略 → 静默）。 */
@@ -178,6 +274,10 @@ class StartupUpdateCheck : ProjectActivity {
         @Volatile
         private var alreadyChecked = false
 
+        /** 本地目录通道的应用级单次守卫（T-LocalUpdateDir：会话内只检测一次）。 */
+        @Volatile
+        private var alreadyCheckedLocal = false
+
         /** 启动时读取的忽略版本列表快照（避免检查过程中配置被修改导致不一致）。 */
         @Volatile
         private var ignoredVersions: String = ""
@@ -185,6 +285,13 @@ class StartupUpdateCheck : ProjectActivity {
         /** 启动检查决策（纯函数，单测覆盖）：开关关或本会话已检查 → 跳过。 */
         internal fun shouldStartupCheck(autoCheck: Boolean, alreadyChecked: Boolean): Boolean =
             autoCheck && !alreadyChecked
+
+        /**
+         * 启动本地检测决策（纯函数，T-LocalUpdateDir）：目录未配置或本会话已检测 → 跳过。
+         * D-2：配置目录即视为开启（无独立开关）；远端 autoCheckUpdate 与此互不影响。
+         */
+        internal fun shouldStartupCheckLocal(dirRaw: String, alreadyCheckedLocal: Boolean): Boolean =
+            dirRaw.isNotBlank() && !alreadyCheckedLocal
 
         /**
          * 通知内容：第一行版本号（`版本 2026.8.22-beta.1（Gitee 通道）`），

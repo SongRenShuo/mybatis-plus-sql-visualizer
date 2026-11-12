@@ -1,10 +1,12 @@
 package cn.song.mybatisplus.visualizer.update
 
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.util.io.HttpRequests
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.ZipFile
 
@@ -114,8 +116,7 @@ object PluginUpdateRunner {
      * @param install 安装 seam（默认 [DynamicInstallSupport.install]——动态热替换优先、
      *   脚本兜底；**单测不触达**，注入 fake 全分支覆盖）。
      */
-    fun downloadAndInstall(
-        manifest: UpdateManifest,
+    fun downloadAndInstall(        manifest: UpdateManifest,
         indicator: ProgressIndicator?,
         download: (String, Path) -> Unit = { url, target -> UpdateApi.download(url, target, indicator) },
         install: (Path) -> InstallResult = { DynamicInstallSupport.install(it) },
@@ -155,6 +156,84 @@ object PluginUpdateRunner {
             } else {
                 LOG.warn("downloadAndInstall: failed — ${e.message}", e)
                 InstallResult.Failed(e.message ?: e.toString())
+            }
+        } finally {
+            FileUtil.delete(temp)
+        }
+    }
+
+    /**
+     * 安装本地包（T-LocalUpdateDir 计划 §3.4）：与下载链平级的入口，不改现有方法签名。
+     *
+     * 顺序刻意如此（计划 §3.4 步骤 1-6）：
+     * 1. **归属、布局与兼容性复核（G1+G2+D-5）在复制之前**——先否掉「根本不该装」的包，
+     *    不去碰用户目录里的可疑文件；**不复用扫描期缓存结论**（扫描到点击之间共享盘文件可能被换）；
+     * 2. 复制到临时副本（之后的校验/安装只用副本，网络盘抖动/杀软占用不牵连安装过程）；
+     * 3. 副本过 zip 有界守卫；
+     * 4. install seam（[DynamicInstallSupport.install]——热生效优先、重启脚本兜底）；
+     * 5. finally 删**临时副本**，用户目录里的源包一律不动（与 `downloadAndInstall` 删下载件的
+     *    生命周期同源；直连源文件会让回退链的二次复制出现两处不一致）。
+     *
+     * @param verify 归属复核 seam（默认 [PluginPackageOwnership.verify]；测试注入）。
+     * @param currentIdeBaseline 当前 IDE baseline 主版本 seam（D-5；默认读 [ApplicationInfo]，测试注入固定值）。
+     * @param install 安装 seam（默认 [DynamicInstallSupport.install]；**单测不触达**，注入 fake 全分支覆盖）。
+     */
+    internal fun installFromLocal(
+        pkg: LocalPackage,
+        indicator: ProgressIndicator? = null,
+        verify: (Path) -> Ownership = { PluginPackageOwnership.verify(it) },
+        currentIdeBaseline: () -> Int? = {
+            runCatching { ApplicationInfo.getInstance().build.baselineVersion }.getOrNull()
+        },
+        install: (Path) -> InstallResult = { DynamicInstallSupport.install(it) },
+    ): InstallResult {
+        // 1. 归属 + 布局（G1/G2）
+        when (val ownership = verify(pkg.path)) {
+            is Ownership.NotOurs -> {
+                LOG.info("installFromLocal: not our package — ${ownership.reason}")
+                return InstallResult.Failed("不是本插件的安装包，已拒绝: ${ownership.reason}")
+            }
+            is Ownership.Tainted -> {
+                LOG.info("installFromLocal: tainted package — ${ownership.reason}")
+                return InstallResult.Failed("安装包内含其他内容，已拒绝安装: ${ownership.reason}")
+            }
+            is Ownership.Ours -> Unit
+        }
+        // D-5 兼容性：包要求更高 IDE baseline ⇒ 阻止（共享盘里可能是给别的 IDE 打的包，装上即坏）
+        val baseline = currentIdeBaseline()
+        if (PluginPackageOwnership.isSinceBuildIncompatible(pkg.sinceBuildBaseline, baseline)) {
+            LOG.info("installFromLocal: since-build ${pkg.sinceBuildBaseline} > current $baseline — rejected")
+            return InstallResult.Failed(
+                "该安装包要求 IDE 构建 ≥ ${pkg.sinceBuildBaseline}，当前为 $baseline；请改用与当前 IDE 匹配的包"
+            )
+        }
+        // 2. 临时副本（源包不动）
+        val temp: File = try {
+            FileUtil.createTempFile("mpvs-local-", ".zip", false)
+        } catch (e: Exception) {
+            return InstallResult.Failed(e.message ?: e.toString())
+        }
+        return try {
+            try {
+                Files.copy(pkg.path, temp.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            } catch (e: Exception) {
+                LOG.info("installFromLocal: copy failed — ${e.message}")
+                return InstallResult.Failed("无法读取本地安装包「${pkg.fileName}」: ${e.message ?: e.toString()}")
+            }
+            LOG.info("installFromLocal: copied ${pkg.path} -> $temp (${temp.length()} bytes)")
+            // 3. 副本校验（防复制窗口内被替换的极小代价）
+            if (!isValidZip(temp)) {
+                InstallResult.Failed("本地安装包不是有效的插件压缩包: ${pkg.fileName}")
+            } else {
+                when (val guard = UpdateZipGuard.check(temp.toPath())) {
+                    is UpdateZipGuard.GuardResult.Reject ->
+                        InstallResult.Failed("本地安装包未通过安全校验: ${guard.reason}")
+                    UpdateZipGuard.GuardResult.Ok -> {
+                        LOG.info("installFromLocal: guards passed, calling install (source=${pkg.path})")
+                        // 4. 安装（热生效 / 重启脚本，三态透传）
+                        install(temp.toPath())
+                    }
+                }
             }
         } finally {
             FileUtil.delete(temp)

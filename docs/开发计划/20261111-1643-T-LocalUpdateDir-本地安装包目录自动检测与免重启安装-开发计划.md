@@ -438,4 +438,51 @@ runCheck(Channel.LOCAL)
 
 ## 十三、实施记录
 
-（实施后回写：提交哈希、定向读数、反向验证两次读数、not run 清单、真机验收结论。）
+- 实施分支：`t-local-update-dir` @ 工作树 `.worktrees/t-local-update-dir`（从 master `34d3af5ec` 切出；并行登记 `t-local-update-dir` / 沙盒 `wt-local-update-dir`；本节回填**工作树副本**，主仓只读）。
+
+### 13.1 里程碑落点（全部完成）
+
+| 里程碑 | 落点 |
+|---|---|
+| M1 路径层 | `update/LocalUpdateDir.kt`（parse/expandUserHome/isInside；PathManager 隔离在 parseWithPlatformPluginsDir）+ `LocalUpdateDirTest` 22 例 |
+| M2 扫描层 | `update/PluginPackageOwnership.kt`（G1 复用 validateArtifact + G2 顶层唯一目录 + since-build 顺带读取）+ `update/LocalPackageScanner.kt`（非递归/上限 100/(path,size,mtime) 缓存/只升不降）+ 两类测试 12+22 例 |
+| M3 安装层 | `PluginUpdateRunner.installFromLocal`（复核 → 临时副本 → 双守卫 → 动态安装；源包不动）+ `PluginUpdateRunnerLocalTest` 10 例 |
+| M4 页面 | `UpdateSection`：`Channel.LOCAL`、localScanRunner/localInstallRunner/localDirectoryOpener seam、本地目录行（标签+字段+浏览+打开+检测）+ 状态行防抖校验（javax.swing.Timer 400ms）、`runCheck`/`runInstall` 分流、`disposeUiResources`；`PluginSettingsPanel` isModified/apply/reset/dispose 四处接线（apply 存归一路径并回写输入框）；`PluginSettings.localUpdateDir` 字段；`UpdateSectionTest` +8 例、`PluginSettingsPanelBindingTest` +1 例 |
+| M5 启动检测 | `StartupUpdateCheck`：`shouldStartupCheckLocal` 纯函数 + `alreadyCheckedLocal` 会话单次 + `checkLocalAndNotify`/`showLocalAvailable`/`installLocalNow`（三态收尾复用既有通知；无发布页动作）+ `StartupUpdateCheckTest` +3 例 |
+| M6 收尾 | i18n 双语 25 键（en/zh，`BundleParityGuardTest` 绿）；搜索索引关于节 +1 条（`SettingsPanelSearchableGuardTest` 绿，状态行按动态文案进豁免清单并附理由）；架构文档 02 §8/§8.2、README「本地安装包目录」节、弹窗红线触点清单第 3 处主动触点登记、CHANGELOG `[Unreleased]` |
+
+### 13.2 定向读数
+
+- 终跑（含 SettingsTruth / SettingsIO 等相邻守卫）：**299 例 / 0 失败 / 0 错误 / 0 跳过**（update 包 24 类 + config 4 类 + BundleParityGuard；新增 5 类共 78 例）。
+- 过程共五跑：首跑 7 红（2 处实现订正 + 5 处测试订正，见 13.4）→ 二跑 1 红（dotDot 用例自身路径构造错误）→ 三跑全绿 → 反向验证 5 轮 → 终跑全绿。
+
+### 13.3 反向验证（成对读数，全部 Edit 摘除 → 红 → 还原 → 终跑绿）
+
+| 探针 | 摘除面 | 实际红读数 |
+|---|---|---|
+| A1 | `installFromLocal` 的 G1 拒绝分支（NotOurs） | `installFromLocal_foreignId_rejectedBeforeInstall` 恰 1 红（夹带用例仍绿——两闸门互不遮蔽） |
+| A2 | `installFromLocal` 的 G2 拒绝分支（Tainted） | `installFromLocal_taintedPackage_rejectedBeforeInstall` 恰 1 红（冒名用例仍绿） |
+| B | `PluginPackageOwnership.doVerify` 的 G2 布局块（只留 G1） | 恰 5 红：`verify_smuggledSecondPlugin_tainted` / `verify_wrongTopDirName_tainted` / `verify_topDirNameCaseVariant_tainted` / `verify_strayTopLevelFile_tainted` + 扫描期 `scan_smuggledPackage_skipped_notOffered`；标准/平坦布局与 foreignId 用例仍绿（G1 不会替 G2 挡住这批夹具——夹具分离有效） |
+| C | 「只升不降」比较 | 恰 3 红：`scan_onlyOlderVersions_upToDate` / `scan_equalVersion_upToDate` / `scan_overCap_truncatedAndScannedTopByMtime` |
+| D | 临时副本（直连源文件安装） | 恰 2 红：`installFromLocal_happyPath_tempUsedAndCleaned_sourceUntouched`（install 收到源文件）/ `installFromLocal_sourceVanishedAfterGate_copyFailure`（复制失败形态消失） |
+
+### 13.4 实测订正与前提对账
+
+- **P-9 已证**：真实 `buildPlugin` 产物（`mybatis-plus-sql-visualizer-2026.11.12.zip`，6 条目）顶层**只有一个目录**，LICENSE/THIRD-PARTY-NOTICES 在插件目录内（非 zip 根）——G2 严格拒绝顶层外来条目不误杀真包。
+- **实现订正 1（G2 平坦布局）**：直属 `META-INF/plugin.xml` 的 zip 会登记出顶层段 `META-INF`，首版把它当外来目录误拒（`verify_directDescriptorLayout_isOurs` 抓出）；修法＝判定前摘出 `META-INF` 段（flat = 除 META-INF 外无顶层目录），并新增「插件目录与 META-INF 混排 → Tainted」。
+- **实现订正 2（大小写变体）**：首版 `equals(ignoreCase=true)` 会放行 `MYBATIS-PLUS-SQL-VISUALIZER`，Linux/macOS 解包会得到第二个同 id 插件目录；改**精确匹配**，变体一律 Tainted（测试钉住）。
+- **测试订正（dotDot）**：用例构造的 `dir/a/b/../a/b` 归一后是 `dir/a/a/b`（探针实证 exists=false），实现判 NotFound 是**正确**行为；用例改为 `dir/a/b/../b`。
+- **P-3/P-5 部分覆盖**：存在性三态与中文+空格目录已由单测覆盖；UNC 死路径需真网络环境（not run）。
+- **Kotlin 嵌套注释坑（沉淀候选 LESSONS）**：KDoc 里写 `lib/*.jar`，`/*` 会打开嵌套注释且永不闭合 → 全文件语法错（Missing `}` / Unclosed comment）；已全部改写为「lib 目录下插件 jar」。
+- **落点微调（§3.5）**：本地目录行未在 `PluginSettingsPanelSections` 另起 addRow，而是放进 `UpdateSection` 内部（版本信息行的组件本身就是 updateSection，行距与状态机渲染更内聚）；标签列由行内 `localDirLabel` 承担，搜索索引/守卫对账不受影响（`settings.update.localDir` 已登记索引）。
+- **守卫连坐一处**：`BrowserUtilConvergenceGuardTest` 对生产 `BrowserUtil.open` 调用面计数断言——新增打开目录缝须同批登记豁免 + 计数（见 13.6）；「新增 UI 交互须照抄既有同类实现」在这里的镜像＝照抄 seam 形态时也要同步抄它的守卫登记。
+
+### 13.5 not run
+
+- 全量门禁 `testShards` / `verifyGate`：按计划 §八属收口段（单路跑），本实施轮未跑；本轮以 `testFast` 快桶补一道日常验证（读数回填见 13.6）。
+- runIde 沙盒端到端：动态热替换真实安装链、243/253/262/263 分平台热替换矩阵（P-1）、GUI 验收 A1~A14——按「GUI 验收用户自做」惯例交用户；判据与失败时日志行见计划 §九。
+
+### 13.6 testFast 快桶读数（收口补测）
+
+- 终读：**4898 例 / 0 失败 / 0 错误 / 7 skipped**（skip 为既有环境跳过口径）。
+- 首跑唯一红＝`BrowserUtilConvergenceGuardTest`：新增 `localDirectoryOpener` 默认 lambda 的 `BrowserUtil.open` 调用点未登记（该守卫对调用面计数断言）。照 `captureDirectoryOpener` 先例在豁免清单登记（同为「打开本地目录 + 测试缝」形态，理由逐条写明）并同步 `expectedTotalCallSites` 5→6，复跑全绿。

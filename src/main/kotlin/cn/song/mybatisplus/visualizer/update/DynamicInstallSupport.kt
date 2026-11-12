@@ -184,8 +184,12 @@ object DynamicInstallSupport {
         }
     }.getOrElse { ArtifactCheck.Invalid("artifact not readable: ${it.message}") }
 
-    /** plugin.xml 有界读取（超限判 Invalid——KB 级文件读出 MB 级即异常包）。 */
-    private fun readDescriptorBounded(stream: java.io.InputStream): String {
+    /**
+     * plugin.xml 有界读取（超限判 Invalid——KB 级文件读出 MB 级即异常包）。
+     * internal：PluginPackageOwnership 的 since-build 顺带读取复用同一实现（T-LocalUpdateDir，
+     * 只放宽可见性不改语义/签名）。
+     */
+    internal fun readDescriptorBounded(stream: java.io.InputStream): String {
         val buf = ByteArray(64 * 1024)
         val out = java.io.ByteArrayOutputStream()
         var read = 0L
@@ -218,7 +222,8 @@ object DynamicInstallSupport {
     private fun extractTag(xml: String, tag: String): String? =
         Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
 
-    private const val MAX_INNER_ENTRIES = 2000
+    /** lib 目录下插件 jar 内嵌描述符扫描的条目上限（internal：PluginPackageOwnership 同序扫描复用）。 */
+    internal const val MAX_INNER_ENTRIES = 2000
 
     /** plugin.xml 读取上限（实测 KB 级，×100 余量；超限即异常包）。 */
     internal const val MAX_DESCRIPTOR_XML_BYTES = 1024 * 1024
