@@ -49,14 +49,53 @@ public final class CopyExecutableSqlAction {
      */
     public static final String DOLLAR_RAW_MARKER = "-- contains ${} raw segments (mock values)";
 
+    /** 模拟占位形态：{@code {{表达式}}}（T-MbgExamplePreview R1 的预览占位）。 */
+    private static final java.util.regex.Pattern PLACEHOLDER_REGEX = java.util.regex.Pattern.compile("\\{\\{[^{}]*}}");
+
+    /**
+     * T-CopyPlaceholderMarker：产物里残留的模拟占位个数（{@code {{表达式}}} 不是 SQL 注释，
+     * {@code SqlCommentStripper} 不会碰它，会原样跟着产物走）。
+     */
+    public static int countSimulationPlaceholders(@NotNull String sql) {
+        java.util.regex.Matcher matcher = PLACEHOLDER_REGEX.matcher(sql);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * T-CopyPlaceholderMarker：含模拟占位时的头部标记（带计数）。
+     *
+     * <p>与 {@link #DOLLAR_RAW_MARKER} 的分工：那条说的是「{@code ${}} 已被模拟值替换」，这条说的是
+     * 「{@code ${}} 根本没求到值、产物里以 {@code {{…}}} 标出」——同一件事不说两遍，有占位时只用这条。
+     * 英文与既有标记一致：注释随产物走到 PR / 聊天 / 工单，同一条 SQL 里不混排中英。</p>
+     */
+    @NotNull
+    public static String unresolvedPlaceholderMarker(int count) {
+        return "-- contains " + count + " unresolved ${} placeholders shown as {{...}}; replace them before executing";
+    }
+
+    /**
+     * T-CopyPlaceholderMarker：给产物补占位标记（分享面板的复制链复用——它没有
+     * {@link #assembleProduct} 的其它标记，只需要这一条）。无占位时原样返回，逐字节不变。
+     */
+    @NotNull
+    public static String withPlaceholderMarker(@NotNull String sql) {
+        int count = countSimulationPlaceholders(sql);
+        return count > 0 ? unresolvedPlaceholderMarker(count) + "\n" + sql : sql;
+    }
+
     /**
      * 复制链产物（纯数据，{@code execute} 与链路一致用例共用）。
      *
-     * @param text                    真正写进剪贴板的文本（含头部标记行）
-     * @param slotsApplied            被填进 SQL 的运行期占位 id
-     * @param warnings                占位没填进去的原因（面板可展示）
-     * @param replacedPlaceholderCount 被替换掉的 {@code ?} 个数（toast 用）
-     * @param mismatchMarker          占位/参数条数不符时的头部标注行（null = 无）
+     * @param text                       真正写进剪贴板的文本（含头部标记行）
+     * @param slotsApplied               被填进 SQL 的运行期占位 id
+     * @param warnings                   占位没填进去的原因（面板可展示）
+     * @param replacedPlaceholderCount   被替换掉的 {@code ?} 个数（toast 用）
+     * @param mismatchMarker             占位/参数条数不符时的头部标注行（null = 无）
+     * @param simulationPlaceholderCount 产物里残留的 {@code {{…}}} 模拟占位个数（0 = 无）
      */
     public static final class Product {
         public final String text;
@@ -65,14 +104,22 @@ public final class CopyExecutableSqlAction {
         public final int replacedPlaceholderCount;
         @Nullable
         public final String mismatchMarker;
+        public final int simulationPlaceholderCount;
 
         public Product(String text, List<String> slotsApplied, List<SlotWarning> warnings,
-                       int replacedPlaceholderCount, @Nullable String mismatchMarker) {
+                       int replacedPlaceholderCount, @Nullable String mismatchMarker, int simulationPlaceholderCount) {
             this.text = text;
             this.slotsApplied = slotsApplied;
             this.warnings = warnings;
             this.replacedPlaceholderCount = replacedPlaceholderCount;
             this.mismatchMarker = mismatchMarker;
+            this.simulationPlaceholderCount = simulationPlaceholderCount;
+        }
+
+        /** master 侧默认参量便捷构造器（{@code simulationPlaceholderCount = 0}）。 */
+        public Product(String text, List<String> slotsApplied, List<SlotWarning> warnings,
+                       int replacedPlaceholderCount, @Nullable String mismatchMarker) {
+            this(text, slotsApplied, warnings, replacedPlaceholderCount, mismatchMarker, 0);
         }
     }
 
@@ -105,12 +152,19 @@ public final class CopyExecutableSqlAction {
                         PlaceholderPositionsKt.placeholderPositions(strippedRaw).size(), sources.size());
 
         // T-InjectionGate T-IG-03：含 `${}` raw 段时产物头部加标记注释；无标记时产物逐字节不变
+        // T-CopyPlaceholderMarker：raw 段求值为空时产物里是 `{{…}}` 占位——改用带计数的占位标记
+        // （两者互斥：有占位就不再挂「已用模拟值填充」那条，避免同一件事说两遍）
+        int placeholderCount = countSimulationPlaceholders(executable);
         List<String> markers = new ArrayList<>();
-        if (hasDollarRawSegments) markers.add(DOLLAR_RAW_MARKER);
+        if (placeholderCount > 0) {
+            markers.add(unresolvedPlaceholderMarker(placeholderCount));
+        } else if (hasDollarRawSegments) {
+            markers.add(DOLLAR_RAW_MARKER);
+        }
         if (mismatch != null) markers.add(mismatch);
         String text = markers.isEmpty() ? executable : String.join("\n", markers) + "\n" + executable;
         return new Product(text, render.getAppliedSlotIds(), render.getWarnings(),
-                countReplaced(strippedRaw, executable), mismatch);
+                countReplaced(strippedRaw, executable), mismatch, placeholderCount);
     }
 
     /** Kotlin 默认参等价重载：slots/slotValues/sources/paramValues 缺省（行为零变化形态）。 */
