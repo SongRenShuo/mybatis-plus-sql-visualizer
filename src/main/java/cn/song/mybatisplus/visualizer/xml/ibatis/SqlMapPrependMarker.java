@@ -102,6 +102,11 @@ public final class SqlMapPrependMarker {
             return index;
         }
 
+        /** 本迭代上下文归属的 {@code <iterate>} 标签。 */
+        public IbatisTagNode getTag() {
+            return tag;
+        }
+
         public String getProperty() {
             return property;
         }

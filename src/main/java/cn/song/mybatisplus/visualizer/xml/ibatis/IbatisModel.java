@@ -186,6 +186,11 @@ public final class IbatisModel {
         public IbatisParamMapping(String propertyName, String jdbcTypeName) {
             this(propertyName, jdbcTypeName, null, null, null, null);
         }
+
+        /** master 侧命名实参（{@code numericScale} 缺省 {@code null}）的 5 参便捷构造器（parameterMap 装配位点）。 */
+        public IbatisParamMapping(String propertyName, String jdbcTypeName, String nullValue, String javaTypeName, String mode) {
+            this(propertyName, jdbcTypeName, nullValue, javaTypeName, mode, null);
+        }
     }
 
     /** 一条 {@code #...#} 的解析产物：SQL 文本中的 {@code ?} 与紧随其后的原始文本段（{@code $} 替换后仍是字面量）。 */
