@@ -112,6 +112,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     /** 备份可用性查询 seam（按钮可用态刷新用；测试注入免盘）。 */
     internal var rollbackAvailability: () -> cn.song.mybatisplus.visualizer.update.UpdateBackupStore.BackupInfo? =
         { cn.song.mybatisplus.visualizer.update.UpdateBackupStore.currentBackup() }
+
+    /**
      * 本地目录扫描编排 seam（T-LocalUpdateDir）：测试注入 fake 不触盘；默认真实扫描。
      * 入参为目录原文（[localDirField] 当前文本），产出 [ScanResult]——状态行与状态机共用同一读数。
      */

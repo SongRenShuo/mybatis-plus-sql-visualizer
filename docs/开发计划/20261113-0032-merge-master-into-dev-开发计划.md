@@ -63,4 +63,22 @@
 
 ## 实施记录
 
-（实施中逐项回填）
+### 2026-11-13 00:32~01:1x 合并实施
+
+- 工作树 `.worktrees/dev-merge`（dev @ `192f4e19b`），`git merge origin/master` → 13 冲突文件全部逐 hunk 裁决，合并提交 **`a5f54c45a`**。
+- **R45 语义簇（关键裁决）**：`explainStructuredRender` 默认值 dev=true（10-31 默认开案）× master=false（2026-11-11 用户定案「转正保留、维持默认关；dev 侧 G4 默认开案废止不追认」）——**按 master 定案取默认关**：
+  - `PluginSettings.kt` KDoc + 默认值取 master；bundle 双语取 master 口径；
+  - dev 侧 `ExplainStructuredDefaultOnGuardTest`（钉 true）删除，恢复 master 的 `ExplainStructuredDefaultOffGuardTest`，元守卫登记同步改回；
+  - `PluginSettingsPersistenceTest` 往返用例回默认关口径；
+  - 全景盘点 §〇 表 #13 取 master 版记录 + 拍板段补并轨注记。
+- **搬移×演进三连**（dev 拆文件 × master 原地演进，函数体全部灌 master 最新版、结构保持 dev）：
+  - `ExecTempFileFactory.kt`（+ master 5 个新诊断函数）；`DataSourceSelectorResults.kt` 签名演进（failureReason 参数）取 master、搬空区域保持 dev；
+  - `SqlPreviewPanelExecutionExplain.kt`（22 函数）；`SqlPreviewPanelExecution.kt` 拆分结构保持 dev；
+  - `McpSourceLocator.kt`：dev RenderStep 结构 + master iBatis 两档叠加（toOutcome/fail 包 `RenderStep.Direct`）。
+- **守卫并轨**：`ExecTempFileEdtGuardTest` 以 dev 三文件内核为骨架，并轨 master M7 补强（nonModal / revalidate 位置 / 缺 revalidate 三规则）+ 回补 dev 重构时丢失的 refresh 分流（T-PrewarmWilDeadlock）与续接收口（failPrepareRequests/isPrepareActive）两规则，新增五态自证用例；`revalidateOnEdt`→`revalidate` 全量改名。
+- `ExplainIndexAdvisor.kt` 取 dev 单源化版（master 仅注释差异，且 DM8 已随 T-Fr45DmGuard 走 TABLE 档）；`UpdateSection.kt`/`DataSourceSelectorResults` seam/CHANGELOG/计划册保双方。
+- `update/update.json`/`preview.update.json` 为 master 发行状态顺流（与 origin/master 逐字节一致，与上轮合并 `192f4e19b` 同款处理）。
+
+### 门禁读数
+
+（testShards 全量随后回填）

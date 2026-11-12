@@ -14,6 +14,7 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
 import javax.swing.Icon
 
 // T-M53-II（2026-10-10）：以下为 DataSourceSelector 的「结果 Tab 重试、钩子挂载与临时文件」内聚成员，
