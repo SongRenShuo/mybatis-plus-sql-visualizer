@@ -429,6 +429,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L47 多仓推送别拿凭据文件里的 `owner/repo` 拼 URL；推送脚本一律纯 ASCII
+
+**规则**：同一个 owner 下多个仓库时，推送 URL 里的**仓库名必须显式写死**，不能读 `.local/*.json` 的 `repo` 字段——那份文件常常是从别的仓整体拷过来的，字段还写着原仓名，拼出来的 URL 会把 A 仓的提交往 B 仓推。push 前先把目标 URL 打出来（token 打码）再执行。另外推送脚本**只写 ASCII**：PowerShell 5.1 对无 BOM 的 `.ps1` 按 ANSI 解码，中文注释会把下一行吃掉——变量赋值被吞后 URL 变成 `https://host/owner/.git/`（实测 403 `token is not authorized to access this project`，且报错文案完全不指向「变量为空」）。
+
+**证据**：2026-11-12 推 demo 仓，第一版脚本用 `$ge.repo` 拼 URL → 实际目标 `gitee.com/songrenshuo/mybatis-plus-sql-visualizer.git`，被远端 `! [rejected] (fetch first)` 拦下才没把 demo 提交推进插件仓；改成写死 `mybatis-plus-sql-visualizer-demo` 后同一脚本又因中文注释吃掉 `$repoName` 赋值而推成 `gitee.com/songrenshuo/.git/`（403）；注释译成英文后 `30932a0..7689f60` 双仓正常推上。
+
+**正例**：仓名常量 + 回显目标 URL + 纯 ASCII 注释 + `-c credential.helper=` 与 `GIT_TERMINAL_PROMPT=0`；**反例**：读凭据文件里的 `repo` 当目标仓（它只是元数据，没人保证与所在仓一致）。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
