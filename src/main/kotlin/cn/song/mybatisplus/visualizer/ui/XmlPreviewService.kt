@@ -23,6 +23,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
@@ -111,7 +112,15 @@ object XmlPreviewService {
             val perfProfile = System.currentTimeMillis()
             // T-MbgExamplePreview M2：Example 形态下再从调用点反推 Criterion（andXxx 方法体的
             // addCriterion 常量）——拿到真值后 ${criterion.condition} 不再落占位
-            val collectionElements = if (profile == null) {
+            // T-PreviewOpenPerfM2 M8：dumb mode（索引未就绪 / 正在重建）时**跳过 M2 检索**。
+            // `ReferencesSearch` 依赖索引，在索引构建期会同步等待——真机 2026-11-12 11:21 冷启动首次
+            // 打开 request→dialog 4499ms，而同一时刻 xml 装配只有 417ms；热态同一语句仅 170ms。
+            // 跳过后退回占位骨架（`{{criterion.condition}}`），热态打开或下次打开由缓存补齐。
+            val m2Allowed = project != null && !DumbService.getInstance(project).isDumb
+            val collectionElements = if (profile == null || !m2Allowed) {
+                if (profile != null) {
+                    LOG.info("[open-perf] m2 skipped: dumb mode (索引未就绪)")
+                }
                 emptyMap()
             } else {
                 MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
