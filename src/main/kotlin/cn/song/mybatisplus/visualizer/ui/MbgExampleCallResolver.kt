@@ -66,6 +66,9 @@ object MbgExampleCallResolver {
     /** 预取在途集合（同一 key 只跑一个后台任务）。 */
     private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+    /** 预取失败记忆（本会话不再重试；预览路径不受影响）。 */
+    private val prefetchFailed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
     internal var cacheHits: Int = 0
         private set
@@ -136,18 +139,27 @@ object MbgExampleCallResolver {
      * 弹窗 200ms 级——首开慢的全部就是这一次冷检索。gutter 渲染本来就要遍历 mapper 语句，
      * 顺手在后台跑一次即可让「点开」命中缓存；不改变任何交互，失败静默。
      *
-     * 去重：同一 key 只允许一个在途任务（`inFlight`），缓存新鲜则直接返回。
+     * 三条护栏（真机 2026-11-12 14:05 实测教训）：
+     *  - **失败记忆**：解析不到（`countByExample` / `deleteByExample` 这类在本项目里根本没有调用点的
+     *    语句就是常态）不写缓存，而 gutter 会反复重绘 —— 不记失败就会变成每次重绘都重跑一次全项目
+     *    检索（实测 6 秒内同一语句跑了 4 轮、日志刷屏）。记下 key 后本会话不再预取；
+     *    预览路径仍照常现算，不受影响。
+     *  - **单条在途**：预取是尽力而为，已有任务在跑就不再排（避免打开文件瞬间并发多条冷检索）。
+     *  - 缓存新鲜则直接返回；单元测试模式不触发（避免后台线程干扰断言）。
      */
     fun prefetch(project: Project?, namespace: String?, statementId: String) {
         if (project == null || namespace.isNullOrBlank()) return
         if (ApplicationManager.getApplication().isUnitTestMode) return
         val key = "${project.locationHash}#$namespace#$statementId"
+        if (key in prefetchFailed) return
         cache[key]?.let { if (isFresh(it)) return }
+        if (inFlight.isNotEmpty()) return
         if (!inFlight.add(key)) return
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                resolve(project, namespace, statementId)
+                if (resolve(project, namespace, statementId) == null) prefetchFailed.add(key)
             } catch (t: Throwable) {
+                prefetchFailed.add(key)
                 if (FatalErrors.isFatal(t)) throw t
             } finally {
                 inFlight.remove(key)

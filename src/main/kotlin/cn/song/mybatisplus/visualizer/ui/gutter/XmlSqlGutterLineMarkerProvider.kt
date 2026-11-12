@@ -67,6 +67,9 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
      * 其余语句（普通 mapper SQL）M2 根本不参与，预取纯属白烧。
      */
     private fun prefetchMbgExample(tag: XmlTag) {
+        // 只预取 select：真机上 countByExample / deleteByExample 这些语句多数没有调用点，
+        // 预取它们只会白烧一轮检索（实测 6 秒内同一语句重跑 4 轮）。
+        if (tag.name != "select") return
         val paramType = tag.getAttributeValue("parameterType") ?: return
         if (!paramType.endsWith("Example")) return
         val id = tag.getAttributeValue("id") ?: return
