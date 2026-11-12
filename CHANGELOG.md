@@ -17,6 +17,16 @@
 - **一个方法里两次 Example 查询的条件被拼进同一条 WHERE（T-PreviewOpenPerfM2，D4）**：MBG 生成的服务实现常见 `exampleA…selectByExample(exampleA)` 紧跟 `exampleB…selectByExample(exampleB)`，预览只应还原其中一个；此前会把另一个的条件也并进来，拼出 `tenant_id` 出现两次、永不成立的谓词。现在只收与实参同一个 Example 的条件（`Criteria c = example.createCriteria()` 这种别名写法仍然支持）
 - **同一组条件里 `between` 少一个占位符（T-PreviewOpenPerfM2，D5）**：一批条件里既有等值又有区间时，区间条件会被等值模板渲染，第二个占位连同中间的 `and` 一起丢掉（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）；现在每条条件按自己的真实类型渲染，区间正常显示 `? AND ?`
 
+## [2026.11.12-beta.4] - 2026-11-12
+
+> 范围＝`2026.11.12-beta.3` 之后真机验收抓到的四处修复：MBG 预览参数区没有可填行、清除后产物残留旧值、foreach 值框冲掉还原出的条件、每次打开预览都重扫全部数据源。逐条记录（根因、读数、反向验证）见 `docs/发行说明/20261112-1614-预览参数填值与清除回收与预热去重-内测说明.md`。
+
+### Fixed
+- **MBG 预览左栏没有可填的参数行（T-PreviewOpenPerfM2 D11，c33f9542c）**：参数区把 `__frch_criterion_N.*` 这类键全滤掉了，左栏一行可填都没有；现在按条件文本生成可填行（`staff_login LIKE 值`、`create_time between 值/结束值`），不再只能去 foreach 值框里填
+- **点「清除」后产物里还留着旧值（T-PreviewOpenPerfM2 D10，c33f9542c）**：清除只清了 foreach 权威值，没回收已播种的展开项键（回收路径以 map 非空为前提），产物残留 `BETWEEN '11' AND ?`；现在清除时显式回收，产物与左栏填值一致
+- **foreach 值框会冲掉还原出来的条件对象（T-PreviewOpenPerfM2 D9，89c74c663）**：条件对象已还原时值框改为只读并给出说明，避免半填形态
+- **每次打开预览都重扫全部数据源做 schema 预热（T-SchemaPrewarmDedupe，20cc719dd）**：预热链带 60 秒去重窗口，同一张表窗口内只尝试一次，窗口外放行以保留「数据源晚连接后自愈」
+
 ## [2026.11.12-beta.3] - 2026-11-12
 
 > 范围＝`v2026.11.11` 正式版之后的所有用户可见增量。本轮内测在 `beta.2` 的基础上补齐真机验收抓到的三条产物级缺陷（MBG 调用点检索取不到结果、同一方法两次 Example 的条件被并进同一条 WHERE、混 kind 时 between 少一个占位符）与一条交互缺陷（XML 选区按快捷键误报未找到），并把首次打开等的那次冷检索挪到后台预取。逐条记录（根因、读数、反向验证）见 `docs/发行说明/` 的内测说明：`20261111-1102` beta.1、`20261111-1445` beta.2、`20261112-1512` beta.3。
