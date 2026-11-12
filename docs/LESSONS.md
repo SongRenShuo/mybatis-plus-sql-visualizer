@@ -369,6 +369,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-11)**
 
+### L41 收窄「怎么认一个对象」的契约前，先枚举仓里既有实现与夹具暴露的是哪一种形态
+
+**规则**：把「取不到 X 就丢弃/降级」写成新契约之前，先 `grep` 全仓有多少实现与测试桩只提供**另一种**同名取法（`getDisplayName` vs `getName`、`getUrl` vs `getJdbcUrl` 这类平台同义方法）。只认一个方法名会把合法条目静默判成"无名"，症状**不是报错**而是「集合被滤空 → 索引落空 → 回调既不 onChosen 也不 canceled → 调用方永远收不到结果」，最后表现为一堆**看似无关**的用例红。取名/取键这类兼容面一律走**方法名候选链**，全都取不到才算缺席。
+
+**证据**：T-DsListAddSource 回归（2026-11-12）：`c728c8058` 给 Runner 弹层加「`optionalRunnerName` 为空即不渲染」，而该函数只反射 `getDisplayName`；`LogToSqlPanelExecuteTest.CallbackRunner` 只实现 `getName()`（数据源对象形态也一样）⇒ 唯一一条被滤掉、弹层变空，`testPlatformPopupSelectionDisposeIsNotUserCancellation` 在推送测试连红四轮（run `43127711688` / `43129449046` / `43134264631` / `43136753539`，断言 `expected [CallbackRunner@…] but was []`）。修法＝候选链 `getDisplayName` → `getName`，都空才判无名（`d289ac1a6`）；定向 49/0/0，反向把候选收窄回单方法 ⇒ 恰 2 红（CI 那条 + 新增回归用例 `testB侧_只暴露getName的runner必须保留_不得判无名丢弃`）。
+
+**正例**：候选链 + 「两条都取不到才缺席」+ 补一条钉死「只暴露另一种取法」的用例；**反例**：拿单一反射方法名当"这个对象有没有名字"的唯一判据，靠 CI 去发现被滤掉了什么。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
