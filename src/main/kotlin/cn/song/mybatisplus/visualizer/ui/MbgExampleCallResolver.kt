@@ -4,10 +4,12 @@ import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiCodeBlock
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiReference
@@ -16,6 +18,7 @@ import com.intellij.psi.PsiVariable
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiTreeUtil
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * MBG Example 调用点解析（T-MbgExamplePreview M2）。
@@ -42,37 +45,103 @@ object MbgExampleCallResolver {
     /** 单次反推的 Criterion 上限（防御性：方法体里可能有大量链式调用）。 */
     private const val MAX_CRITERIA = 20
 
+    /**
+     * 缓存条目（T-PreviewOpenPerfM2 M1）：`ReferencesSearch` 是**全项目索引检索**，实测在最小规模
+     * demo 上就占装配耗时的 78%（`[open-perf] m2=207` / `total=266ms`），大工程按命中规模放大；
+     * 而原实现每次 `preview()` 都重跑。key＝`namespace#statementId`，失效判据＝解析时实际读过的
+     * 文件的 `modificationStamp`（mapper 接口 / Example 方法 / 调用点所在文件，任一改动即失效）。
+     */
+    internal data class CachedResolution(
+        val elements: Map<String, List<MockObject>>,
+        val stamps: Map<VirtualFile, Long>,
+    )
+
+    private val cache = ConcurrentHashMap<String, CachedResolution>()
+
+    /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
+    internal var cacheHits: Int = 0
+        private set
+
+    internal var searchRuns: Int = 0
+        private set
+
+    /** 测试缝：清空缓存与计数。 */
+    internal fun resetCacheForTest() {
+        cache.clear()
+        cacheHits = 0
+        searchRuns = 0
+    }
+
     fun resolve(
         project: Project?,
         namespace: String?,
         statementId: String,
     ): Map<String, List<MockObject>>? {
         if (project == null || namespace.isNullOrBlank()) return null
+        // key 带 project 身份：本 object 是进程级，多项目窗口打开时同 `namespace#statementId`
+        // 会撞车（不同项目可以有同名 mapper）
+        val key = "${project.locationHash}#$namespace#$statementId"
         return runCatching {
             ReadAction.compute<Map<String, List<MockObject>>?, RuntimeException> {
-                resolveInReadAction(project, namespace, statementId)
+                resolveCached(key) { resolveInReadAction(project, namespace, statementId) }
             }
         }.getOrNull()
     }
+
+    /**
+     * 缓存外壳（**纯逻辑**，可单测）：命中且依赖文件未变则直接返回；否则执行 [compute] 并落缓存。
+     *
+     * `compute` 返回 null 表示「解析不到」——**不写缓存**：把「当时索引没就绪 / 找不到调用点」
+     * 永久固化下来会让下次打开永远拿不到（宁可比预期多跑一次）。
+     */
+    internal fun resolveCached(
+        key: String,
+        compute: () -> CachedResolution?,
+    ): Map<String, List<MockObject>>? {
+        cache[key]?.let { cached ->
+            if (isFresh(cached)) {
+                cacheHits++
+                return cached.elements
+            }
+        }
+        searchRuns++
+        val resolved = compute() ?: return null
+        cache[key] = resolved
+        return resolved.elements
+    }
+
+    /** 依赖文件全部仍有效且 stamp 未变才算新鲜（不引文件监听，按需比 stamp）。 */
+    private fun isFresh(entry: CachedResolution): Boolean =
+        entry.stamps.all { (file, stamp) -> file.isValid && file.modificationStamp == stamp }
 
     private fun resolveInReadAction(
         project: Project,
         namespace: String,
         statementId: String,
-    ): Map<String, List<MockObject>>? {
+    ): CachedResolution? {
         val mapperClass = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return null
+        val stamps = mutableMapOf<VirtualFile, Long>()
+        fun note(file: PsiFile?) {
+            file?.virtualFile?.takeIf { it.isValid }?.let { stamps[it] = it.modificationStamp }
+        }
+        note(mapperClass.containingFile)
         val mocks = mutableListOf<MbgCriterionMock>()
         mapperClass.findMethodsByName(statementId, true).forEach { method ->
+            note(method.containingFile)
             val call = findCallSite(project, method) ?: return@forEach
+            note(call.containingFile)
             val exampleName = exampleVariableName(call) ?: return@forEach
             val body = PsiTreeUtil.getParentOfType(call, PsiCodeBlock::class.java) ?: return@forEach
             mocks += collectCriteria(project, body, exampleName)
         }
         if (mocks.isEmpty()) return null
-        return mapOf(
-            "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(mocks)),
-            "criteria.criteria" to mocks.map { it.toMockObject() },
+        return CachedResolution(
+            elements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(mocks)),
+                "criteria.criteria" to mocks.map { it.toMockObject() },
+            ),
+            stamps = stamps,
         )
     }
 
