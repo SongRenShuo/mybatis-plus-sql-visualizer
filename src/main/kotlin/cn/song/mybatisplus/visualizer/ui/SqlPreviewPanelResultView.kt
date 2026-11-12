@@ -201,13 +201,19 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     result.batchModel?.toggleColumns?.forEach { col ->
         if (col.checked) enabledIds.add(col.columnName)
     }
-    // T-M24-04：XML 预览状态初始化（条件开关走 enabledIds，按启发式默认勾选；foreach/bind 独立状态）
+    // T-M24-04：XML 预览状态初始化。
+    // T-MbgPreviewParityAndOpenPerf P7（面板口径对齐）：初始勾选必须与渲染**同源**。
+    // 此前这里读 `view.defaultEnabled` 的朴素启发式（只判 `== null`），而 profile 抑制
+    // （distinct / orderByClause 不展开）、choose 组互斥归并、M2 真实 kind 默认这三项都只在
+    // `defaultState()` 里实现 ⇒ 它们在面板上**从未生效**：用户初始态仍带 DISTINCT、ORDER BY 1、
+    // 四个互斥分支全勾（2026-11-12 真机截图实证）。现统一走 defaultState()，并把上方按 previewModel
+    // 填的通用勾选清掉（XML 链以 XML 模型为准，batch/wrapper 链不共存）。
     result.xmlModel?.let { model ->
-        model.conditionViews.forEach { view ->
-            if (view.defaultEnabled) enabledIds.add(view.id)
-        }
+        val defaults = model.defaultState()
+        enabledIds.clear()
+        enabledIds.addAll(defaults.enabledIds)
         xmlForEachCounts.clear()
-        xmlForEachCounts.putAll(model.defaultState().forEachCounts)
+        xmlForEachCounts.putAll(defaults.forEachCounts)
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
