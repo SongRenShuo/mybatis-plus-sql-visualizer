@@ -133,7 +133,7 @@ object XmlPreviewService {
                 profile = profile,
                 collectionElements = collectionElements,
             )
-            logPreviewPerf(perfStart, perfCtxParsed, perfProfile, perfM2)
+            logPreviewPerf(perfStart, perfCtxParsed, perfProfile, perfM2, always = profile != null)
             built to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
@@ -292,10 +292,12 @@ object XmlPreviewService {
      * 无法归因。这条把装配切成四段：解析+上下文 / profile（PSI 类解析）/ M2（PSI 调用点检索）/
      * 建模——下次真机复现即可读出是哪一段。
      */
-    private fun logPreviewPerf(start: Long, ctxEnd: Long, profileEnd: Long, m2End: Long) {
+    private fun logPreviewPerf(start: Long, ctxEnd: Long, profileEnd: Long, m2End: Long, always: Boolean = false) {
         val end = System.currentTimeMillis()
         val total = end - start
-        if (total < PERF_LOG_THRESHOLD_MS) return
+        // MBG Example 档恒记（`always`）：缓存命中的热态打开常在 200ms 以下，阈值会把
+        // 「第二次 m2 是否接近 0」这条唯一可证伪的读数一起吞掉（T-PreviewOpenPerfM2 M1 验收缺口）。
+        if (!always && total < PERF_LOG_THRESHOLD_MS) return
         LOG.info(
             "[open-perf] total=${total}ms parse+ctx=${ctxEnd - start} " +
                 "profile=${profileEnd - ctxEnd} m2=${m2End - profileEnd} model=${end - m2End}",

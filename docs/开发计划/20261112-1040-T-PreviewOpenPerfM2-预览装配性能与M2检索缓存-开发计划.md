@@ -134,3 +134,56 @@ fixture 其余五段全对，只有引用索引未建（同族：`pitfall-filety
 ### M2/M3/M4
 
 未实施：M2 的失效路径待真机 V2 结论；M3（冷热标记）视是否还需要解释 5.67s；M4 视 M1 后余量。
+
+## 八、端到端验收（2026-11-12，`mybatis-plus-sql-visualizer-demo/cust-big-demo`）
+
+沙盒：`build/MPSV-E2EAccept`（IU-2024.3.7.1，`runIde -PgifRobotServer=true`），在役 jar 先按 L35
+用 javap/grep 核过字节（`MbgExampleCallResolver.cache/cacheHits/searchRuns/resolveCached`、
+`DataSourceSelectorResultsKt.revalidate`（`revalidateOnEdt` 已无）、`PreviewResult.retryWhenIndexReady`、
+`XmlPreviewService` 里的 `DumbService.isDumb` + `m2 skipped: dumb mode`）——**被测树＝已推树**。
+
+### 已验证（读数来自 `idea.log`）
+
+| 项 | 读数 | 结论 |
+| --- | --- | --- |
+| 首次打开 `selectByExample`（多模块大工程） | `[open-perf] total=204ms parse+ctx=54 profile=1 m2=134 model=15`；`request→dialog: 607ms` | 装配 204ms，其余在面板/控制台预热 |
+| 同语句再开（第 2/3/4 次） | `request→dialog: 172ms / 175ms / 34ms` | 热态稳定在 200ms 级 |
+| 慢操作告警 | 整场 `grep -c SEVERE` = **0**、`Plugin to blame` = **0** | M7 生效（原 `revalidateOnEdt` 栈不再出现） |
+| 默认勾选档（P7） | `distinct` 未勾、`orderByClause != null` 未勾、`criterion.noValue/betweenValue/listValue` 未勾、仅 `criterion.singleValue` 勾 | 与 `MBG_EXAMPLE` 档一致，无全勾 |
+| 粘连 | 产物 `WHERE ( {{ criterion.condition }} ? )`，多 Criterion 时无 `andand` / `)or(` | T1/Trim 分隔修复在真机成立 |
+
+> 说明：第 2 次起没有 `[open-perf]` 行，是 `PERF_LOG_THRESHOLD_MS=200` 把 <200ms 的读数吞掉了——
+> 而「第二次 m2 应接近 0」正是 M1 唯一可证伪的读数。已改为 **MBG 档恒记**（`logPreviewPerf(always=profile!=null)`）。
+
+### 缺陷 D1（已修，待真机复验）：真机上 M2 恒不命中
+
+埋点读数（本轮新增 `[m2]` 诊断）：
+
+```
+[m2] trace cn.song.custmetadata.mapper.CustAddressMapper#selectByExample methods=1 noCallSite  -> criteria=0
+[m2] unresolved（不写缓存） 5c317272#cn.song.custmetadata.mapper.CustAddressMapper#selectByExample
+[open-perf] total=166ms parse+ctx=50 profile=1 m2=101 model=14
+```
+
+- 失败环节＝`findCallSite`：`ReferencesSearch.search(method, projectScope).findFirst()` 返回 null。
+- 反向证据：同刻在 IDE 里对同一方法 `Alt+F7` 得 **253 处引用**，索引健康检查也干净 ⇒ 索引没坏，
+  是 **M5 换上的 `Query.findFirst()` 在这条链上不可靠**（M5 只在 Heavy 测试里跑过，而那里
+  `refs=0`——从未被真机证过）。
+- 修法：改 `forEach { hit = it; false }` 取首个命中（语义等价、仍提前终止），空结果时再打
+  `totalRefs=` 诊断，把「索引没建」与「检索语义不同」分开。
+- 影响面：所有 MBG Example 语句的 Criterion 反推；不修则真机上永远停在占位骨架。
+
+### 缺陷 D2（已修，待真机复验）：选区落在语句内部时按快捷键报「未找到」
+
+复现路径：`Ctrl+F` 命中 `selectByExample`（命中即选中）→ `Alt+Shift+Q` → 气泡「未在光标处找到可预览的 SQL 源」；
+把光标换成**点击**（无选区）到同一行/语句体内再按快捷键即正常。
+
+- 根因：`previewXmlSelection` 按「语句 startOffset 落在选区内」收候选，选中语句 id 时 0 命中 →
+  旧行为直接 `showResult(null)`。
+- 修法：0 候选时回落 `previewXmlStatement`（光标所在语句），多候选逻辑不变。
+
+### 未验证 / 交回用户
+
+- D1/D2 修复后的真机复验（本轮改完只跑了定向测试，沙盒已按用户要求停手）。
+- M1 缓存命中读数（依赖 D1 修好——`unresolved` 不写缓存，所以本轮第二次打开必然重跑检索）。
+- 用户真机口径：Maven 已导入 + 有 JDK 的工程（本沙盒没点「Load Maven Project」，`Project JDK is not defined`）。

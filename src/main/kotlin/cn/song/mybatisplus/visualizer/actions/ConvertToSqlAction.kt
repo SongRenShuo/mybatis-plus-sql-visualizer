@@ -576,7 +576,11 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (tags.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    // E2E 验收缺陷 D2：选区落在语句**内部**（典型：Ctrl+F 命中后自动选中语句 id、
+                    // 或用户双击 `selectByExample` 再按快捷键）时，按「startOffset 在选区内」收不到候选，
+                    // 旧行为直接报「未找到可预览的 SQL 源」——明明光标就在语句里。改为回落光标所在语句
+                    // （0 候选之外的语义与多候选一致，不牺牲已有分发）。全部无语句时仍走原提示。
+                    0 -> previewXmlStatement(project, file, editor, sourceLocation)
                     1 -> previewXmlTag(project, file, tags[0], sourceLocation)
                     else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL

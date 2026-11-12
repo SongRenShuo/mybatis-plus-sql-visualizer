@@ -399,6 +399,36 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L44 `Query.findFirst()` 当短路用会在 `ReferencesSearch` 链上恒空——用 `forEach` 提前终止
+
+**规则**：想在「全项目引用检索」这条链上只要第一个命中，别用 `ReferencesSearch.search(...).findFirst()`：真机大工程上它能稳定返回 null（同一方法 `Find Usages` 有 253 处引用、索引健康检查也是干净的）。正确写法是 `forEach { hit = it; false }`——语义等价、同样提前终止、不把结果收成 List。更要紧的是**判据顺序**：这类「检索拿不到 → 静默返回 null → 上游退回占位骨架」的链路，必须留一条能自证的读数（本次加了 `[m2] trace … methods=1 noCallSite -> criteria=0`），否则「已修好」与「从未生效」在日志里长得一模一样。
+
+**证据**：T-PreviewOpenPerfM2 端到端验收（2026-11-12，cust-big-demo 大工程）：面板产物停在 `WHERE ( {{ criterion.condition }} ? )`、`[open-perf] … m2=101`，埋点给出 `methods=1 noCallSite`；同刻在 IDE 里对同一方法 `Alt+F7` 得 253 处。同一 `findFirst` 写法此前只在 Heavy 测试里跑过，而那条路本来就 `refs=0`（引用索引未建），**从未被真机证过**——M5 的「findFirst 提前终止」属未验即用。
+
+**正例**：`forEach` 取首个命中 + 空结果时打 `totalRefs` 诊断；**反例**：把「测试里也能编译」当成「检索语义成立」。
+
+**Seen 1× (2026-11-12)**
+
+### L45 硬杀沙盒 IDE 会留坏索引：`NOT indexable` + Go-to-File 全空，删 `system/index` 重来
+
+**规则**：沙盒（runIde）别 `Stop-Process -Force`。硬杀后重启常见两症：`ProjectIndexableFilesFilterHealthCheck - Following files are NOT indexable but they were found in filter. Errors count: N`，以及 `Ctrl+Shift+N` 对任何文件名都返回空（工程树看起来正常、类索引还能用，最容易被误判成「工程没加载」）。处置：关掉沙盒后删 `<sandbox>/…/system/index` 与 `system/caches` 再起，重扫约 2 分钟即恢复。附带损失：`config/options/trusted-paths.xml` 也来不及落盘，下次启动还会弹「Trust and Open Project」。
+
+**证据**：2026-11-12 端到端验收，为换版本两次硬杀沙盒 IDE；首轮 Go-to-File 正常，第二轮起对 `CustAddressMapper`/`pom.xml` 一律空结果，日志 `Errors count: 1502`（示例行含项目根目录与 `pom.xml`）；删索引重启后同查询立刻命中两条。
+
+**正例**：换版本前走 IDE 正常退出，必须硬杀时预留「删索引重扫」的时间；**反例**：把 Go-to-File 空结果当成内容根/模块配置问题去改 `.iml`。
+
+**Seen 1× (2026-11-12)**
+
+### L46 合成输入先看输入法：`typewrite` 会被中文 IME 吃成候选词
+
+**规则**：GUI 探针往 IDE 输入框写字一律走**剪贴板粘贴**（`gifkit.paste`：`SetClipboardData` + `Ctrl+V`），别用 `pyautogui.write/typewrite`——中文输入法处于中文态时 ASCII 会被合成候选词（实测输 `pom.xml` 得 `破灭. x|m`，结果列表全是「消灭了/小毛驴/写满了」），于是「查不到文件」这类假阴性会一路误导到内容根、索引、Maven 导入上去。同一次会话里前几轮成功、后几轮失败，正是 IME 被快捷键（如 Shift 切换）翻过去的表现。
+
+**证据**：2026-11-12 端到端验收，同一查询先成功后失败，截图查询框是 `破灭, CustAddressMapper`；改粘贴后一次命中。
+
+**正例**：粘贴后截图核对输入框文本再 Enter；**反例**：拿「查不到」直接推断索引坏了（本轮真索引坏另有一条 L45，两者叠加过一次）。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

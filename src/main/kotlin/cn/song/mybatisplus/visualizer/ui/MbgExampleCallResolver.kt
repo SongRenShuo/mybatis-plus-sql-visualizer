@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.xml.MbgCriterionMock
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
@@ -38,6 +39,8 @@ import java.util.concurrent.ConcurrentHashMap
  * 上游据此退回升级前的「无属性元素」行为——不报错、不改变既有预览。
  */
 object MbgExampleCallResolver {
+
+    private val LOG = Logger.getInstance(MbgExampleCallResolver::class.java)
 
     /** MBG Criteria 的方法名：`and` / `or` + 大写驼峰首字母。 */
     private val AND_OR_METHOD = Regex("""^(and|or)[A-Z]\w+$""")
@@ -101,14 +104,25 @@ object MbgExampleCallResolver {
         cache[key]?.let { cached ->
             if (isFresh(cached)) {
                 cacheHits++
+                LOG.info("[m2] cache hit ${describe(cached)} $key")
                 return cached.elements
             }
+            LOG.info("[m2] cache stale (依赖文件已改) $key")
         }
         searchRuns++
-        val resolved = compute() ?: return null
+        val resolved = compute()
+        if (resolved == null) {
+            // 不写缓存：把「当时索引没就绪 / 找不到调用点」永久固化会让下次打开永远拿不到
+            LOG.info("[m2] unresolved（不写缓存） $key")
+            return null
+        }
         cache[key] = resolved
+        LOG.info("[m2] resolved ${describe(resolved)} $key")
         return resolved.elements
     }
+
+    private fun describe(entry: CachedResolution): String =
+        "criteria=${entry.elements["criteria.criteria"]?.size ?: 0} stamps=${entry.stamps.size}"
 
     /** 依赖文件全部仍有效且 stamp 未变才算新鲜（不引文件监听，按需比 stamp）。 */
     private fun isFresh(entry: CachedResolution): Boolean =
@@ -119,22 +133,44 @@ object MbgExampleCallResolver {
         namespace: String,
         statementId: String,
     ): CachedResolution? {
+        val trace = StringBuilder()
         val mapperClass = JavaPsiFacade.getInstance(project)
-            .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return null
+            .findClass(namespace, GlobalSearchScope.allScope(project))
+        if (mapperClass == null) {
+            LOG.info("[m2] trace $namespace#$statementId mapperClass=NOT_FOUND")
+            return null
+        }
         val stamps = mutableMapOf<VirtualFile, Long>()
         fun note(file: PsiFile?) {
             file?.virtualFile?.takeIf { it.isValid }?.let { stamps[it] = it.modificationStamp }
         }
         note(mapperClass.containingFile)
         val mocks = mutableListOf<MbgCriterionMock>()
-        mapperClass.findMethodsByName(statementId, true).forEach { method ->
+        val methods = mapperClass.findMethodsByName(statementId, true)
+        trace.append("methods=${methods.size} ")
+        methods.forEach { method ->
             note(method.containingFile)
-            val call = findCallSite(project, method) ?: return@forEach
+            val call = findCallSite(project, method)
+            if (call == null) {
+                trace.append("noCallSite ")
+                return@forEach
+            }
             note(call.containingFile)
-            val exampleName = exampleVariableName(call) ?: return@forEach
-            val body = PsiTreeUtil.getParentOfType(call, PsiCodeBlock::class.java) ?: return@forEach
-            mocks += collectCriteria(project, body, exampleName)
+            val exampleName = exampleVariableName(call)
+            if (exampleName == null) {
+                trace.append("noExampleArg(arg=${call.argumentList.expressions.firstOrNull()?.text?.take(40)}) ")
+                return@forEach
+            }
+            val body = PsiTreeUtil.getParentOfType(call, PsiCodeBlock::class.java)
+            if (body == null) {
+                trace.append("noBody ")
+                return@forEach
+            }
+            val found = collectCriteria(project, body, exampleName, trace)
+            trace.append("[$exampleName:${found.size}] ")
+            mocks += found
         }
+        LOG.info("[m2] trace $namespace#$statementId $trace -> criteria=${mocks.size}")
         if (mocks.isEmpty()) return null
         return CachedResolution(
             elements = mapOf(
@@ -148,14 +184,25 @@ object MbgExampleCallResolver {
     /**
      * mapper 方法在本项目里的**首个**调用点。
      *
-     * T-PreviewOpenPerfM2 M5：用 `findFirst()` 而不是 `findAll()`——后者会把全项目引用先收集成
-     * List 再取第一个。真机读数（2026-11-12 11:08）单次检索 1950ms，其中相当部分是「多收结果」；
-     * 而这里只需要一个调用点，Query API 的 `findFirst` 会提前终止遍历。
+     * T-PreviewOpenPerfM2 M5 的 `findFirst()` 在真机大工程上返回 null（同一方法 `Find Usages`
+     * 有 253 处引用、索引健康）——`Query.findFirst()` 在这条检索链上不可靠。改为 `forEach`
+     * 取首个命中（语义等价、仍是提前终止，不把全项目引用收成 List）。
      */
     private fun findCallSite(project: Project, method: PsiMethod): PsiMethodCallExpression? {
-        val ref = ReferencesSearch.search(method, GlobalSearchScope.projectScope(project)).findFirst()
-            ?: return null
-        return PsiTreeUtil.getParentOfType(ref.element, PsiMethodCallExpression::class.java)
+        val scope = GlobalSearchScope.projectScope(project)
+        // ① 先按「提前终止」取第一个命中（不收集全量）
+        var ref: PsiReference? = null
+        ReferencesSearch.search(method, scope).forEach { candidate ->
+            ref = candidate
+            false
+        }
+        if (ref == null) {
+            // ② 诊断：真机上「forEach 也为空」时把总引用数记下来，区分「索引没建」与「检索语义不同」
+            val total = runCatching { ReferencesSearch.search(method, scope).findAll().size }.getOrNull()
+            LOG.info("[m2] findCallSite empty method=$method totalRefs=$total")
+            return null
+        }
+        return PsiTreeUtil.getParentOfType(ref!!.element, PsiMethodCallExpression::class.java)
     }
 
     /** 调用实参的变量名（`selectByExample(example)` → `example`）。 */
@@ -167,22 +214,44 @@ object MbgExampleCallResolver {
         project: Project,
         body: PsiCodeBlock,
         exampleName: String,
+        trace: StringBuilder? = null,
     ): List<MbgCriterionMock> {
         val result = mutableListOf<MbgCriterionMock>()
+        var matched = 0
+        var noResolve = 0
+        var notExample = 0
+        var notRooted = 0
+        var noCondition = 0
         PsiTreeUtil.findChildrenOfType(body, PsiMethodCallExpression::class.java).forEach { call ->
             if (result.size >= MAX_CRITERIA) return@forEach
             val name = call.methodExpression.referenceName ?: return@forEach
             if (!AND_OR_METHOD.matches(name)) return@forEach
-            val method = call.resolveMethod() ?: return@forEach
-            if (!isExampleCriteria(method)) return@forEach
-            if (!rootedAtExample(call.methodExpression.qualifierExpression, exampleName)) return@forEach
-            val condition = addCriterionCondition(project, method) ?: return@forEach
+            matched++
+            val method = call.resolveMethod()
+            if (method == null) {
+                noResolve++
+                return@forEach
+            }
+            if (!isExampleCriteria(method)) {
+                notExample++
+                return@forEach
+            }
+            if (!rootedAtExample(call.methodExpression.qualifierExpression, exampleName)) {
+                notRooted++
+                return@forEach
+            }
+            val condition = addCriterionCondition(project, method)
+            if (condition == null) {
+                noCondition++
+                return@forEach
+            }
             result += MbgCriterionMock(
                 condition = condition,
                 values = call.argumentList.expressions.map { it.text },
                 kind = MbgCriterionMock.kindOf(name),
             )
         }
+        trace?.append("(and/or=$matched noResolve=$noResolve notExample=$notExample notRooted=$notRooted noCond=$noCondition) ")
         return result
     }
 
