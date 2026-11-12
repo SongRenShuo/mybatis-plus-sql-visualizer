@@ -235,6 +235,35 @@ WHERE (status = ? AND cust_name LIKE ? AND tenant_id = ? AND create_time BETWEEN
 ⇒ **M1 缓存命中在真机成立**（m2 306ms → 0，装配 356ms → 7ms），「打开慢」的来源从「每次全项目检索」
 变成「首次全项目检索 + 之后 0 成本」。用户原话「效果还不错 比之前快」。
 
+### 缺陷 D5（已修）：混 kind 时 between 条件被单值模板渲染，丢掉第二个占位
+
+用户第二次复验（2026-11-12 13:11，`[m2] resolved criteria=2`）产物是：
+
+```sql
+WHERE (create_time BETWEEN '11' AND tenant_id = ?)
+```
+
+模型层三路探针（`MbgExamplePreviewTest`，同一 XML 模板 + 手工注入 mock）：
+
+| 注入 | 产物 | 占位数 |
+| --- | --- | --- |
+| 只有 `create_time between` | `create_time between ? and ?` | 2 ✓ |
+| `tenant_id =` + `between` | `tenant_id = ? and create_time between ?` | 2 ✗（应 3） |
+| `between` + `tenant_id =` | `create_time between ? and tenant_id = ?` | 2 ✗（应 3） |
+
+⇒ 只要**同批混了两种 kind**，between 就少一个占位（`and #{criterion.secondValue}` 整段消失），
+真机上那个 `'11'` 就是「一个占位 + 面板回填」的残骸。
+
+- 根因：`defaultState()` 把 choose 组按「组内只开一个」强制成**单一分支**（多数票），而
+  `renderSql` 又把 `enabledIds` 之外的 id 全部覆盖成 false——于是 between 条件被 `singleValue`
+  模板渲染（`${condition} #{value}`），第二个占位连同中间的字面 `and` 一起丢。
+- 修法（数据优先）：M2 注入了元素级 kind 时，`KIND_FLAGS` 那四个分支**不再接受开关强制**，交给表达式
+  按每条 criterion 自己的标志求值（`kindDrivenConditionIds()`）；其它形态的 choose 不受影响。
+- 用例：`M2混kind_每条criterion按自身分支渲染`（17 例类内新增 1 例，三种注入形态 + 占位数 3/2）。
+- 反向：让 `kindDrivenConditionIds()` 返回空集 → 恰 1 红（17 tests, 1 failed）；还原后回绿。
+- 同链定向：`xml.*` + `MbgExampleRootMatchTest` / `MbgExampleCallCacheTest` /
+  `SqlPreviewPanelXmlDefaultsTest` / `XmlPreviewServiceTest` / `SqlPreviewPanelParamSchemesTest` 全绿。
+
 ### 未验证 / 交回用户
 
 - D1/D2 修复后的真机复验（本轮改完只跑了定向测试，沙盒已按用户要求停手）。

@@ -247,14 +247,35 @@ class XmlPreviewModel private constructor(
     fun renderSql(state: XmlPreviewState): RenderedXmlSql = XmlSqlRenderer().render(
         node = rootNode,
         bindings = mockBindings(state),
-        // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值
-        conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
+        // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值。
+        // 例外（D5）：M2 反推到的元素带**逐条真实 kind**，choose 的四个 kind 分支不能再按「组内只开一个」
+        // 强制——否则一个 between 条件会被 singleValue 模板渲染成 `between ?`（丢第二个占位，真机表现为
+        // `BETWEEN '11'`）。这类 id 直接交给表达式按每条 criterion 自己的标志求值。
+        conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) }
+            .filterKeys { it !in kindDrivenConditionIds() },
         protectedNames = state.bindOverrides.keys.toSet(),
         staticFieldValues = staticFieldValues,
         bindNames = bindViews.map { it.name }.toSet(),
         // T-MbgExamplePreview R1：预览链开启 `${}` 空值占位（真实 SQL 产物路径不受影响）
         emptyDollarPlaceholder = true,
     )
+
+    /**
+     * 由数据（而非开关）决定真值的条件 id：M2 注入了元素级 kind 时，choose 里那四个 kind 分支。
+     *
+     * 判据只看组内分支是否**全是** `KIND_FLAGS`——其它形态的 choose（业务自写的 `status != null` 等）
+     * 仍走「组内只开一个」的既有语义，不受影响。
+     */
+    private fun kindDrivenConditionIds(): Set<String> {
+        if (collectionElements.isEmpty()) return emptySet()
+        return chooseGroups
+            .filter { group ->
+                group.branchIds.isNotEmpty() &&
+                    group.branchIds.all { id -> KIND_FLAGS.any { id == it || id.endsWith(".$it") } }
+            }
+            .flatMap { it.branchIds }
+            .toSet()
+    }
 
     /**
      * R30 探镜：本轮渲染的条件求值结果（三态，键与 [conditionViews] 的 id 同源——面板条件行

@@ -15,6 +15,7 @@
 - **大工程里 MBG Example 预览退回占位符（T-PreviewOpenPerfM2，D1）**：调用点检索此前「只取第一个引用」的写法在真实多模块工程上一直取不到（同一方法 `Find Usages` 有 253 处引用），`${criterion.condition}` 因此停在 `{{…}}`；改为取到首个命中即停止的遍历后能正常还原列名
 - **XML 语句里选中文字后按预览快捷键报「未找到」（T-PreviewOpenPerfM2，D2）**：`Ctrl+F` 搜索命中会顺手选中语句 id，此时按 Alt+Shift+Q 收不到候选就直接提示「未在光标处找到可预览的 SQL 源」；现在无候选时回落到光标所在的语句
 - **一个方法里两次 Example 查询的条件被拼进同一条 WHERE（T-PreviewOpenPerfM2，D4）**：MBG 生成的服务实现常见 `exampleA…selectByExample(exampleA)` 紧跟 `exampleB…selectByExample(exampleB)`，预览只应还原其中一个；此前会把另一个的条件也并进来，拼出 `tenant_id` 出现两次、永不成立的谓词。现在只收与实参同一个 Example 的条件（`Criteria c = example.createCriteria()` 这种别名写法仍然支持）
+- **同一组条件里 `between` 少一个占位符（T-PreviewOpenPerfM2，D5）**：一批条件里既有等值又有区间时，区间条件会被等值模板渲染，第二个占位连同中间的 `and` 一起丢掉（真机产物 `create_time BETWEEN '11' AND tenant_id = ?`）；现在每条条件按自己的真实类型渲染，区间正常显示 `? AND ?`
 
 ## [2026.11.12] - 2026-11-11
 

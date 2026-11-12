@@ -392,4 +392,45 @@ class MbgExamplePreviewTest {
         assertEquals(null, XmlPreviewService.resolveExampleProfile(null, "x.CtCustmanagerRelExample", "n"))
         assertEquals(null, XmlPreviewService.resolveExampleProfile(null, null, "n"))
     }
+
+    /**
+     * D5（真机 2026-11-12 复验）：M2 元素带**逐条真实 kind** 时，choose 不能再按「组内只开一个」强制。
+     *
+     * 混 kind 的判据点：`tenant_id =`（singleValue）+ `create_time between`（betweenValue）同批注入时，
+     * 旧默认把整组强制成 singleValue ⇒ between 走单值模板渲染成 `between ?`，第二个占位（secondValue）
+     * 连字面 `and` 一起丢掉，真机上就是 `WHERE (create_time BETWEEN '11' AND tenant_id = ?)`。
+     * 期望：三条占位、between 出 `? and ?`。
+     */
+    @Test
+    fun `M2混kind_每条criterion按自身分支渲染`() {
+        fun render(vararg criteria: MbgCriterionMock): String {
+            val list = criteria.toList()
+            val parsed = XmlMapperParser().parse(mapper)
+            val m = XmlPreviewModel.from(
+                parsed.statements.first { it.id == "selectByExample" },
+                parsed.errors,
+                profile = XmlPreviewProfile.MBG_EXAMPLE,
+                collectionElements = mapOf(
+                    "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(list)),
+                    "criteria.criteria" to list.map { it.toMockObject() },
+                ),
+            )
+            return compact(m.renderSql().sql)
+        }
+
+        val single = MbgCriterionMock("tenant_id =", listOf("tenantId"))
+        val between = MbgCriterionMock("create_time between", listOf("startTime", "endTime"), MbgCriterionKind.BETWEEN_VALUE)
+
+        val betweenFirst = render(between, single)
+        assertTrue("between 必须保留两个占位：$betweenFirst", betweenFirst.contains("create_time between ? and ?"))
+        assertTrue("单值条件仍是单占位：$betweenFirst", betweenFirst.contains("tenant_id = ?"))
+        assertEquals("两条条件共三个占位：$betweenFirst", 3, betweenFirst.count { it == '?' })
+
+        val singleFirst = render(single, between)
+        assertTrue("顺序不影响：$singleFirst", singleFirst.contains("create_time between ? and ?"))
+        assertEquals("两条条件共三个占位：$singleFirst", 3, singleFirst.count { it == '?' })
+
+        val onlyBetween = render(between)
+        assertEquals("单条 between 仍是两个占位：$onlyBetween", 2, onlyBetween.count { it == '?' })
+    }
 }
