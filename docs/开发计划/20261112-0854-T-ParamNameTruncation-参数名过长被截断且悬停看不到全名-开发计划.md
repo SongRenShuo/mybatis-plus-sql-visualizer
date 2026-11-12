@@ -179,6 +179,8 @@
 
 ## 九、实施记录（2026-11-12，方案 A）
 
+提交：`2096fa2f5`（master）——代码 + 用例 + CHANGELOG 回填 + 本计划文件。
+
 代码：
 
 - `SqlPreviewPanel.kt`：标签/复选框登记表（`paramLabelRefs` / `paramCheckRefs`）、`paramScroll` 尺寸监听、
