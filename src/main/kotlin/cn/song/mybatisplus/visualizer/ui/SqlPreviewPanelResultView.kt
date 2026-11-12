@@ -18,6 +18,8 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -264,6 +266,25 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
     // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
     prepareDefaultConsole()
+    // T-PreviewOpenPerfM2 M9：本次因索引未就绪（dumb mode）跳过过 M2 调用点反推——索引就绪后
+    // **自动重算一次**。BGT 重算 + 回 EDT 重放 showResult；新结果的 retryWhenIndexReady 恒为 null
+    //（那一刻已是 smart mode），因此不会自激循环；面板已 dispose 则放弃。
+    result.retryWhenIndexReady?.let { retry ->
+        val proj = project
+        if (proj != null) {
+            DumbService.getInstance(proj).runWhenSmart {
+                if (Disposer.isDisposed(this)) return@runWhenSmart
+                SqlPreviewService.previewAsync(proj, { retry() }) { fresh ->
+                    if (fresh != null && !Disposer.isDisposed(this)) {
+                        com.intellij.openapi.diagnostic.Logger
+                            .getInstance(SqlPreviewPanel::class.java)
+                            .info("[open-perf] m2 retry after smart mode applied")
+                        showResult(fresh)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

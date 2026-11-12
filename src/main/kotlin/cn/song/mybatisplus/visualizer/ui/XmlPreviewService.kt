@@ -88,6 +88,8 @@ object XmlPreviewService {
     ): PreviewResult {
         // R12 T-PaginationSim：解析产物三元组（namespace/语句 id/语句类型）透出 try 块——分页模拟后处理用
         var parsedRef: Triple<String?, String, XmlStatementKind>? = null
+        // T-PreviewOpenPerfM2 M9：本轮是否因 dumb mode 跳过了 M2（决定要不要挂「索引就绪后重算」）
+        var m2Skipped = false
         val (model, staticWarnings) = try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
             // T-MbgPreviewParityAndOpenPerf P5：分段计时（把「打开慢」归因到具体一段）
@@ -117,10 +119,9 @@ object XmlPreviewService {
             // 打开 request→dialog 4499ms，而同一时刻 xml 装配只有 417ms；热态同一语句仅 170ms。
             // 跳过后退回占位骨架（`{{criterion.condition}}`），热态打开或下次打开由缓存补齐。
             val m2Allowed = project != null && !DumbService.getInstance(project).isDumb
+            m2Skipped = profile != null && !m2Allowed
+            if (m2Skipped) LOG.info("[open-perf] m2 skipped: dumb mode (索引未就绪)")
             val collectionElements = if (profile == null || !m2Allowed) {
-                if (profile != null) {
-                    LOG.info("[open-perf] m2 skipped: dumb mode (索引未就绪)")
-                }
                 emptyMap()
             } else {
                 MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
@@ -151,13 +152,23 @@ object XmlPreviewService {
         }
         val ref = parsedRef ?: return result
 
-        return applyPagination(
+        val finalResult = applyPagination(
             result,
             project = project,
             namespace = ref.first,
             statementId = ref.second,
             kind = ref.third,
         )
+        // T-PreviewOpenPerfM2 M9：索引未就绪时跳过过 M2 —— 挂「就绪后重算一次」的闭包，
+        // 面板收到后由 `DumbService.runWhenSmart` 在 smart mode 重算并刷新
+        //（冷态秒出骨架 + 索引就绪后自动补齐真实 Criterion，无需用户手动刷新）。
+        return if (m2Skipped) {
+            finalResult.copy(
+                retryWhenIndexReady = { preview(fileText, statementId, project, entityContext, sourceContext) },
+            )
+        } else {
+            finalResult
+        }
     }
 
     /**
