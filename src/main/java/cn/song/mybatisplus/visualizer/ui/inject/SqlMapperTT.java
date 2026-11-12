@@ -67,5 +67,16 @@ public final class SqlMapperTT {
     /** W3：OGNL 静态引用 {@code @com.Foo@bar}（类引用 + 成员）整体一个 token。 */
     public static final IElementType STATIC_REF = new IElementType("MPSQL_STATIC_REF", SqlMapperLanguage.INSTANCE);
 
+    /**
+     * T-Ibatis2Support 券 D：iBatis 转义字面量 {@code ##} / {@code $$}（iBatis 规范：{@code ##} 产出字面 {@code #}、
+     * {@code $$} 产出字面 {@code $}）。<b>按普通文本处理</b>——{@link SqlMapperSyntaxHighlighter} 对它返回空键表，
+     * 故渲染为无色的普通文本（这正是「不是参数占位」的可观测形态），也不进颜色设置页。
+     *
+     * <p>T-Ibatis2Support 券 D —— iBatis 定界符：{@code #name#} / {@code #name:TYPE#} / {@code #name:TYPE:nullValue#} 复用
+     * {@link #PARAM_HASH}、{@code $name$} 复用 {@link #PARAM_DOLLAR}（「整段一个 token」，见 {@code SqlMapperHighlightingLexer}
+     * 的券 D 段）；{@code ##} / {@code $$} 转义字面量新增 {@link #IBATIS_ESCAPE}。</p>
+     */
+    public static final IElementType IBATIS_ESCAPE = new IElementType("MPSQL_IBATIS_ESCAPE", SqlMapperLanguage.INSTANCE);
+
     public static final IElementType WHITE_SPACE = new IElementType("MPSQL_WHITE_SPACE", SqlMapperLanguage.INSTANCE);
 }
