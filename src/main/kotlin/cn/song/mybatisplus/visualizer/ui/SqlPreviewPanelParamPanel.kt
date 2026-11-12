@@ -292,7 +292,11 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         }
         if (xmlModel.forEachViews.isNotEmpty()) {
             paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.xml.foreach.section")))
-            xmlModel.forEachViews.forEach { paramPanel.add(buildXmlForEachRow(it, labelWidth)) }
+            xmlModel.forEachViews.forEach {
+                paramPanel.add(
+                    buildXmlForEachRow(it, labelWidth, xmlModel.collectionElements[it.collectionExpr]?.size),
+                )
+            }
         }
         if (ordinarySources.isNotEmpty()) {
             if (hasControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
@@ -1216,9 +1220,21 @@ internal fun SqlPreviewPanel.xmlConditionAnnotationTooltip(view: XmlConditionVie
     }
 }
 
-/** T-M25.4：foreach 行——**集合表达式标签 + 集合值输入框**（逗号分隔，如 `2,3` → 展开两项并回填）+ null 复选框（T-M26.5：标签即集合表达式，分区标题已含「foreach 集合」语义）。 */
-
-internal fun SqlPreviewPanel.buildXmlForEachRow(view: XmlForEachView, labelWidth: Int): JBPanel<JBPanel<*>> {
+/**
+ * T-M25.4：foreach 行——集合表达式标签 + 集合值输入框 + null 复选框
+ * （T-M26.5：标签即集合表达式，分区标题已含「foreach 集合」语义）。
+ *
+ * D9（真机 2026-11-12 用户实测）：M2 已按调用点还原出**元素对象**的集合，值框必须**只读**。
+ * `oredCriteria` / `criteria.criteria` 这类集合的「值」是还原出来的 Criteria / Criterion 对象，
+ * 用户在框里填 `1` 会把 `__frch_criterion_0` 从对象换成字符串——渲染时 `#{criterion.value}` 取到
+ * 那个字符串、`#{criterion.secondValue}` 取不到，产物就成了 `BETWEEN '1' AND ?` 这种半填形态。
+ * 旧工具提示还写着「MBG Example 这类集合通常只有 1 项，可填 1」，等于主动引导用户踩这个坑。
+ */
+internal fun SqlPreviewPanel.buildXmlForEachRow(
+    view: XmlForEachView,
+    labelWidth: Int,
+    injectedCount: Int? = null,
+): JBPanel<JBPanel<*>> {
     val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
     row.add(columnLabel(view.collectionExpr, labelWidth).apply {
         border = JBUI.Borders.empty(0, 8, 0, 0)
@@ -1226,10 +1242,15 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(view: XmlForEachView, labelWidth
     val valuesField = JBTextField(8).apply {
         // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
         text = xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
-        // T-MbgExamplePreview T3：留空的默认展开次数对 IN 这类集合是合理的，但 MBG Example 的
-        // oredCriteria / criteria 集合典型只有 1 项——明确提示，避免用户以为预览把一次调用展开成了多次
-        toolTipText = "集合值（逗号分隔，如 2,3；留空 = 默认展开 ${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）。" +
-            "MBG Example 这类 oredCriteria / criteria 集合通常只有 1 项，可填 1"
+        // D9：元素对象由调用点还原的集合不可改写（填值会冲掉还原出来的对象）
+        isEnabled = injectedCount == null
+        toolTipText = if (injectedCount != null) {
+            "该集合已按调用点还原 $injectedCount 项对象，不能在此填值——" +
+                "填了会把还原出来的条件对象冲掉（产物出现半填形态）。要改值请改 SQL 或看「参数」区。"
+        } else {
+            "集合值（逗号分隔，按该集合展开出的占位顺序依次填入；留空 = 默认展开 " +
+                "${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
+        }
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
             override fun removeUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
