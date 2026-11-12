@@ -180,6 +180,60 @@ class MbgExamplePreviewTest {
         )
     }
 
+    /** T-MbgPreviewParityAndOpenPerf P2：操作符与内层 foreach 的 `(` 之间要有空格（用户态 listValue）。 */
+    @Test
+    fun `用户态_listValue分支_操作符与左括号不粘连`() {
+        val criteria = listOf(
+            MbgCriterionMock("CUSTOMERNUMBER =", listOf("3"), MbgCriterionKind.LIST_VALUE),
+        )
+        val parsed = XmlMapperParser().parse(mapper)
+        val m = XmlPreviewModel.from(
+            parsed.statements.first { it.id == "selectByExample" },
+            parsed.errors,
+            profile = XmlPreviewProfile.MBG_EXAMPLE,
+            collectionElements = mapOf(
+                "oredCriteria" to listOf(MbgCriterionMock.criteriaOf(criteria)),
+                "criteria.criteria" to criteria.map { it.toMockObject() },
+            ),
+        )
+        val state = XmlPreviewState(
+            enabledIds = setOf("_parameter != null", "criteria.valid", "criterion.listValue"),
+            forEachCounts = mapOf("oredCriteria" to 1, "criteria.criteria" to 1, "criterion.value" to 1),
+        )
+        val sql = compact(m.renderSql(state).sql)
+        assertFalse("操作符与左括号不得粘成 `=(`：$sql", sql.contains("=("))
+        assertTrue("应为 `CUSTOMERNUMBER = (?)`：$sql", sql.contains("CUSTOMERNUMBER = (?)"))
+    }
+
+    /**
+     * P2 的边界：`6212f24e0` 用两例 CI 红换来的「紧凑」约束不能被我这次的补空格规则破坏。
+     *
+     * **夹具必须在 `<where>`（trim）体内**——该约束管的是 trim 缓冲的拼接；放在 select 体内会走
+     * 根上下文的 `StringJoiner(" ")`，那层本来就按段补空格，测不出任何东西（同
+     * `pitfall-reverse-probe-fixture-layer-mismatch` 的层级错位）。
+     */
+    @Test
+    fun `trim体内_IN列表与前缀函数保持紧凑`() {
+        val m = XmlPreviewModel.from(
+            XmlMapperParser().parse(
+                """
+                <mapper namespace="n">
+                  <select id="s1">SELECT count(*) FROM t
+                    <where>
+                      id IN
+                      <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+                    </where>
+                  </select>
+                </mapper>
+                """.trimIndent(),
+            ).statements.single(),
+            emptyList(),
+        )
+        val sql = compact(m.renderSql().sql)
+        assertTrue("IN 列表在 trim 体内保持紧凑：$sql", sql.contains("IN (?,?)"))
+        assertTrue("前缀函数不被撑开：$sql", sql.contains("count(*)"))
+    }
+
     // ---------------- R1 + R4 + R5：默认档下的整体产物 ----------------
 
     @Test

@@ -58,11 +58,28 @@ open class TrimSqlNode(
          */
         override fun appendSql(sql: String) {
             if (sql.isEmpty()) return
-            if (sqlBuffer.isNotEmpty() && endsOperand(sqlBuffer.last()) && startsIdentifier(sql.first())) {
+            if (sqlBuffer.isNotEmpty() && needsSeparator(sqlBuffer.last(), sql.first())) {
                 sqlBuffer.append(' ')
             }
             sqlBuffer.append(sql)
         }
+
+        /**
+         * 两个相邻段之间是否需要一个空格。
+         *
+         * 1. **粘连成词才补**（`6212f24e0` 收窄后的口径，也是 `IN (?,?)` 保持紧凑的约束）：
+         *    左侧以操作数收尾且右侧以标识符起笔时补，否则不补。
+         * 2. **操作符与左括号之间补**（T-MbgPreviewParityAndOpenPerf P2）：`= (` 而不是 `=(`。
+         *    只认「左侧是操作符字符」这一种情形，所以 `count(*)`（左为标识符）、`( ?`（左为左括号）
+         *    都不受影响——MBG 的 `and ${condition}` 与内层 `<foreach open="(">` 会被撑成
+         *    `CUSTOMERNUMBER = (?)`，与真实 MyBatis 保留 XML 换行的形态一致。
+         */
+        private fun needsSeparator(last: Char, first: Char): Boolean =
+            (endsOperand(last) && startsIdentifier(first)) ||
+                (last in OPERATOR_CHARS && first == '(')
+
+        /** 运算符字符（`= < > ! + - * / % | & ^`：其后紧跟 `(` 属于「条件 + 列表/分组」形态）。 */
+        private val OPERATOR_CHARS = "=<>!+-*/%|&^"
 
         /** 标识符字符（`\w` 面 + `$`：列名/关键字/数字，粘连即拼成一个词）。 */
         private fun startsIdentifier(c: Char): Boolean =
