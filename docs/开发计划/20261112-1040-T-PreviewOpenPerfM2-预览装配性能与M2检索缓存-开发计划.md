@@ -182,6 +182,21 @@ fixture 其余五段全对，只有引用索引未建（同族：`pitfall-filety
   旧行为直接 `showResult(null)`。
 - 修法：0 候选时回落 `previewXmlStatement`（光标所在语句），多候选逻辑不变。
 
+### 缺陷 D3（已修）：M7 改了线程契约，源码守卫没跟上 → CI 红
+
+CI `43149573766`（推送测试 @ `6775ba22b`）唯一红 job 是 fast(1)：
+
+```
+ExecTempFileEdtGuardTest > 执行临时文件构建必须离开EDT且续接收口齐备 FAILED
+AssertionError at ExecTempFileEdtGuardTest.kt:143
+```
+
+M7 把 `revalidateOnEdt` 改成后台执行的 `revalidate`，而守卫仍按旧名定位函数体 → 定位失败即点名
+「PSI 失效兜底消失」。按「改名/搬家后守卫必须同步跟进」的原设计更新契约：`revalidate(` 必须在
+`invokeLater(` **之前**（放进回调就是在 EDT 上判 `psi.isValid`，正是那条 `Plugin to blame` 的栈），
+`revalidate` 体内仍是两条 `ReadAction.compute` + `isValid`；自证语料加一条「挪回 invokeLater 必红」反例。
+反向：把生产 `revalidate(project, pair)` 换成 `pair` → 恰 1 红，还原后回绿（`511ad990a`）。
+
 ### 未验证 / 交回用户
 
 - D1/D2 修复后的真机复验（本轮改完只跑了定向测试，沙盒已按用户要求停手）。
