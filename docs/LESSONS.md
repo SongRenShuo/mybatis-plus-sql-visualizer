@@ -482,6 +482,56 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L52 整机重建时，运维脚本只放服务器＝没备份；口令只放服务器＝备份永久失效
+
+**规则**：凡是要靠「服务器重装后照单重建」的东西，事实源必须在仓库里，服务器上的副本只是部署产物。两条具体要求：① 备份/部署脚本落 `dev-support/svbackup/`（仓库资产）+ `install-svbackup.sh` 幂等部署，改脚本先改仓库再重新部署，并用 `sha256sum` 核对仓库=服务器；② restic 仓库口令必须**离线双份**（服务器 `/etc/svbackup/pass` 之外，至少密码管理器或另一台设备各一份），AK/SK 丢了还能新建一对，仓库口令丢了没有任何恢复路径——对象还在，但 `--insecure-no-password snapshots` 只回 `wrong password or no key found`。用户放弃旧口令后另起新仓库时，**不要对同一 bucket 直接 `restic init`**（会重写 `config`/`key` 让旧数据彻底不可恢复），改用同一 bucket 的 `/v2` 路径前缀做独立仓库，旧对象原封不动。
+
+**证据**：2026-11-12 重装后 `/usr/local/bin/svbackup-*.sh`、`/etc/svbackup/`、`/var/backups/svbackup/`、systemd 单元、restic 二进制全部蒸发，旧脚本无法逐字复刻只能按架构文档重写；本地全工作区与三台存活机（香港/百度云/华为云）都无 `pass` 副本，旧快照数据读不出。按用户授权用 `s3:.../songsrv-backup/v2` 新建仓库（repo `29b6eef669`），`init` + smoke 备份 + 完整 `svbackup.service` 主流程均 rc=0。详见 `docs/经验总结/20261112-2140-测试服务器整机重建与备份体系入仓-经验总结.md` §三/§四与 `.agents/skills/srv-backup-restore/SKILL.md`「四条铁律」。
+
+**正例**：脚本入仓 + 部署副本 sha256 对齐 + 口令离线双份 + 新仓库用路径前缀隔离；**反例**：把 `credentials` 里的 AK/SK 当「凭据备份」——它不含仓库口令，AK/SK 有效也解不了密。
+
+**Seen 1× (2026-11-12)**
+
+### L53 多路重建先查 containerd content store，别把「docker images 空」当层没落盘
+
+**规则**：Docker 29 默认 containerd image store（`driver-type: io.containerd.snapshotter.v1`），层落在 `/var/lib/containerd/io.containerd.content.v1.content/blobs/sha256/<64hex>`（文件名即 digest），**与 `data-root` 分离**。整机重建第一步就该枚举它并按 manifest 的 digest 精确匹配、硬链接补进工作目录 → `docker load`，能省掉几小时逐层下载。但「pull 失败也保留层」不是普遍成立：highgo 大层响应超时后 5 层全在（68→76 blob），gaussdb 公共域末段额外 blob 超时却触发 dockerd 回滚把 5 层清掉（82→76 blob）。判别口径是失败后**立刻** `du -sh` content store 并按 digest 查在不在，在就复用、不在就重试，而不是只看 `docker images`。
+
+**证据**：2026-11-12 重建，B 组用 content store 硬链接把 vastbase 13 层逐层 sha256 校验通过、零 curl 下载即 `docker load` 成功（1.31GB）；主控独立枚举实证 68 blob/2.4G（含 926MB/429MB/374MB/259MB/181MB 大层），highgo 5 个大层全 HIT、gaussdb 5 层一度全 MISS。`docker pull` 在本机三源单路都卡在「层落盘→image 提交」，正是靠逐层 curl + `docker load` 或改走轩辕专属域才落地。详见 `docs/经验总结/20261112-2140-…` §四与 `.agents/skills/db-env-provisioning/SKILL.md` §1 第 5/6 条。
+
+**正例**：先 `find …/blobs/sha256 -printf '%f %s\n'` 再决定下不下载；**反例**：拿 `data-root` 只有 236K 就断言「什么都没下过」，或把「pull 失败层一定还在」写进口径。
+
+**Seen 1× (2026-11-12)**
+
+### L54 生成 pull 命令前先读服务方 Agent 文档；占位符必须逐字照抄
+
+**规则**：用户给出 `https://xuanyuan.cloud/agents.md` 这类服务方规范且要求「先阅读并遵守」时，**未读文档前不要生成 pull 命令或排错方案**；默认方案以文档为准（该文 §0.2 把 `registry-mirrors` 列为「禁止作为 Agent 默认」、§2.2 MUST 优先显式域名 pull、§3 MUST NOT 失败即换官方源）。另外本次环境会把消息里的 `{{PHONE_*}}` / `{{SECRET_*}}` 等占位符在显示层替换成随机串，**只能原样使用用户给的那个 id，不能凭记忆改写**——第一次 login 把 `18624714650` 写成另一个 `18210421986`，直接回「用户名或密码验证失败」；原样照抄后 `Login Succeeded`。
+
+**证据**：2026-11-12 按文档 §1.2 查登录态、§1.3 一次性 login、§2.2 用 `docker.xuanyuan.run/...`（及用户补的专属域 `6rzy4mgbhtco8j6ztc.xuanyuan.run`）为默认方案，SQL Server 按 §2.1 走 `-mcr` 专属域；失败按 §3.3 重试轩辕路径而非换官方源。highgo/gaussdb/opengauss/Oracle/OceanBase/mssql 六个大镜像都在 2~5 分钟落地（MB/s 级），比逐层 curl 的几十 KB/s 快两个数量级。详见 `docs/经验总结/20261112-2140-…` §七与 `.agents/skills/db-env-provisioning/SKILL.md` §1 第 8 条。
+
+**正例**：读文档 → 查登录态 → 显式域名 pull → 分类错误重试；**反例**：凭印象继续用 `registry-mirrors`/免费域，或把占位符 id 改写后反复试错。
+
+**Seen 1× (2026-11-12)**
+
+### L55 systemd 服务不继承 `docker run -e`：安装期参数必须注入镜像层可 source 的文件
+
+**规则**：以 systemd 为 ENTRYPOINT 的镜像（磐维 PanWeiDB `init-db.service` 跑 `/root/run.sh`），**`docker run -e KEY=VAL` 的容器环境变量不会传进该服务进程**——PID1 `/proc/1/environ` 有，run.sh 进程 `/proc/44/environ` 没有，`systemctl show -p Environment` 为空。于是 ansible 收到 `-e dbcompatibility=` 空值，`gs_initdb --dbcompatibility=` 空值→引擎**默认落 A 档**，标称 B/MySQL 档的实例静默装成 A。修法无时序竞态：`docker create`（不 start）→ `docker cp` 往 `/root/.bashrc` 注入 `export dbcompatibility=B|A` → `docker start`（run.sh 第 2 行 `source` 它）。装完**必须验** `show sql_compatibility` / `pg_database.datcompatibility` 真的落对档，不能只看 `select 1` 通。
+
+**证据**：2026-11-12 C 组首装 26100 装成 A 档，用 `systemctl show -p Environment` 空、`/proc/1/environ` 与 `/proc/44/environ` 对比、`gs_local` 日志第 511 行 `--dbcompatibility=` 三层证据钉死；注入后两实例实证 `gs_initdb --dbcompatibility=B|A`、`PW_COMPATIBILITY` 文件、四库 compat 全对档，A 档 `select dummy from dual`→X。同类「配置传不进服务」的变体：OceanBase `MODE=mini` 只自动建 `root@test`、不自动建 `xc3` 业务用户（首次 `xc3@test` 报 `ERROR 1045`，需 `root@test` 下 `CREATE USER 'xc3'` 且用户名不带 `@test`）。
+
+**正例**：注入可 source 文件 + 装完验兼容档；**反例**：只改 `docker run -e` 并相信日志里的「安装成功」。
+
+**Seen 1× (2026-11-12)**
+
+### L56 三组并行重建：冲突由主控统一处置，判据落在磁盘字节与实连，不落在显示串
+
+**规则**：多子代理并行部署时，主控把「恢复作业基准」写成服务器上的共享文件，凭据只在 `/etc/svbackup/db.env`（600），基准里只写变量名；遇到组间抢带宽/抢共享层/孤儿进程，由主控读 `ps`/`du` 证据后统一清孤儿、定错峰顺序，**不叫子代理自己 kill**。判据要落在「写进磁盘的字节」与「实连 SELECT 1 通不通」：本次环境的占位符替换把库名、容器名、变量名都显示成随机串，三组一度以为不一致，最后靠 A 组逐字节 hex（`78 63 33 5f 74 65 73 74` = `xc3_test`）钉死所有脚本写进磁盘的是同一个真值。另：别在任务运行中改脚本——在途进程会读到写到一半的中间态，日志炸 `line 127: syntax error near unexpected token ')'`（内嵌 Python 泄漏到 shell），而事后 `bash -n` 磁盘版本是过的。
+
+**证据**：2026-11-12 三组（A 轻量 5 / B PG 族与 OceanBase 4 / C 磐维与 Oracle 3）后台并行，主控统一处置 4 路 `docker pull` 并发挂死、孤儿 curl（PPID=1 仍在下 29MB 白占带宽）、`--max-time 900` 掐断 76MB 冷门层、脚本运行中改写等冲突；最终 12/12 容器 Up、12/12 端口可达、`verify-restore.sh` PASS=18 FAIL=0。子代理只跑定向验证、不跑全量/构建校验，如实登记 not run。详见 `docs/经验总结/20261112-2140-…` §五与 `.agents/skills/db-env-provisioning/SKILL.md` §1 第 1/4 条。
+
+**正例**：共享基准 + 主控统一处置 + hex/实连判据 + 改脚本前确认无在途读者；**反例**：拿终端显示的替换串当真实值改脚本，或让子代理各自 kill 抢通道。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
