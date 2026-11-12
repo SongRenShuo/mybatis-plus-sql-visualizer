@@ -79,6 +79,17 @@
 - `ExplainIndexAdvisor.kt` 取 dev 单源化版（master 仅注释差异，且 DM8 已随 T-Fr45DmGuard 走 TABLE 档）；`UpdateSection.kt`/`DataSourceSelectorResults` seam/CHANGELOG/计划册保双方。
 - `update/update.json`/`preview.update.json` 为 master 发行状态顺流（与 origin/master 逐字节一致，与上轮合并 `192f4e19b` 同款处理）。
 
-### 门禁读数
+### 门禁读数（2026-11-13 收口，最终 HEAD `e6508b6e0`）
 
-（testShards 全量随后回填）
+- **compileKotlin + compileTestKotlin**：全绿（合并态编译经 4 轮修复收口，`920c619ca`）。
+- **testFast**：5339 例，**0 失败**，10 skip（`e6508b6e0` 实跑；首轮 12 红全部修复——守卫接缝/R51 接线/预算留痕/场景组登记/headless 尺度回退）。
+- **testShard1 / testShard2 / testShard3 / testShard4 / testShard5**：逐桶显式跑齐，**全部绿**（shard2 含 OB 面板修复验证，`dialectName` 实参回补 `57ea2700a`；shard3/4 首曝的 R51/F-13 两红定性 dev 潜伏红已修，`9091fc5f8`；prune TOCTOU 假红修 `e6508b6e0`）。
+- **log 包全量（`test --tests log.*`）**：2049 例绿（prune 夹具修正后含共跑态）。
+- **testExternal**：32 例 1 失败 1 skip——`AcpSignatureCrossVersionTest` 红为**环境腿**（本机 IDEA 2025.3 的 AI Assistant 插件内容漂移，缺 `AcpIdeaMcpTransportProvider.class`，与合并无关；L43 口径）。
+- **教训沉淀**：L52（testShards lane 停摆 + 桶画像缺口 18%——「全量」的部分桶假象）。
+
+### not run 条款
+
+- **verifyGate / buildPlugin / verifyPlugin / releaseGate**：按用户指令本轮不跑（构建校验）。
+- **AcpSignatureCrossVersionTest**：环境腿未过（上述），代码侧无修复项；本机 AI Assistant 插件恢复携带目标类后自愈。
+- **真机 GUI 走查**：本轮未做（合并轮纪律为全量桶收口；面板行为面建议下一轮真机验收时带看 OB 结构化面板与历史重跑图标）。

@@ -482,6 +482,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L52 「testShards 全量」不是全量：lane 编排失败即停发新分片 + 桶权重画像陈旧留下覆盖缺口
+
+**规则**：① `testShards` 的 lane 编排在任一测试任务失败后**不再发新分片**——BUILD FAILED 的读数里「已跑分片全绿」不等于「未跑分片绿」，本轮 testShard1/2/5 在多轮全量里从未执行；② 分片桶按 `dev-support/test-shard-weights.tsv` 装箱，画像陈旧时**约 18% 检出测试类不在任何桶里**（gradle 配置段每次都打印提示）——这些类在两侧分支的历次「全量绿」里从未跑过。两件叠加的后果：合并轮 dev 侧三处潜伏红（F-12 裸 AllIcons、F-08 回写接线形态、F-13 空值方向口径）与 OB 面板回归直到「显式逐分片调用 `./gradlew testShardN …`」才首曝。**判据**：全量收官必须核对本次实际执行的 test 任务清单（日志 grep `> Task :test`），显式逐桶跑齐才算全量；桶提示「画像陈旧」出现时先跑 `weight-refresh.ps1` 再装箱。
+
+**证据**：合并轮 `57ea2700a` 链——ExplainObTextPlanPanelTest 2 例红在 testShard2 首次执行（run3）才暴露，run1/run2 因 lane 停摆未跑 shard2；HistorySqlLogPanel.kt:1008 裸 AllIcons（dev `965dcd325` F-12 引入）与 ToolbarIconSemanticsTest（base 既有守卫）双侧全量均未相遇，直到 `test --tests "cn.song.mybatisplus.visualizer.log.*"` 全包跑才红。
+
+**正例**：收官轮显式 `./gradlew testShard1 … testShard5 testFast`（绕开 external 环境红的停摆效应）；**反例**：拿 `testShards` 的「已跑桶全绿」当全量结论——本轮 14 红里有 5 例来自「从未跑过的桶」。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
