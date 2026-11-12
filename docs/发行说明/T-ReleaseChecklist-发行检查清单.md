@@ -275,3 +275,5 @@ curl -s "https://gitee.com/api/v5/repos/SongRenShuo/mybatis-plus-sql-visualizer/
 ## 八、执行节奏参考
 
 正常发行：§二 → §三 → §四（第一档收口）→ N-24 破零三件套。审核退回：§五回路后回 §四。任何中断：§六先行。发行窗口、跟版与破零动作的调度口径见全景批次开发计划（P0-2 窗口）。
+
+**内测版一条命令（2026-11-12 起，`dev-support/release-beta.ps1`）**：`pwsh -File dev-support/release-beta.ps1 -Version 2026.11.x-beta.N -Notes "docs/发行说明/<本版内测说明>.md"`。它按顺序执行：前置闸门（干净树 / 分支 / `gradle.properties` 版本位 / 必须带 `-beta.N` / 说明文件存在，任一不满足即中止且不做任何对外动作）→ changeNotes 评分引导守卫 + `buildPlugin` + `inspect-plugin-zip --version` → tag（已存在且指向别的提交就失败，**不静默前移**）→ `push-all.ps1 -Branch master -Tags` → dispatch `mode=release` 并按 `gh run view --json conclusion` 等结论（不取 `gh run watch` 的退出码，代理掐断会让它提前退出）→ `gitee-release.py --from-github --prerelease --yes` 与 `--verify-only` → 打印 done / CI run / tag / GitHub id / Gitee URL。`-DryRun` 只打印命令；`-SkipGates` / `-SkipCi` / `-SkipGitee` 供分步重跑。`update/update.json` 不在脚本内（归用户本人）。
