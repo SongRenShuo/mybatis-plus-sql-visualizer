@@ -32,6 +32,12 @@ public class XmlPreviewModel {
     /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
     public static final int DEFAULT_FOREACH_SIZE = 2;
 
+    /**
+     * T-MbgPreviewParityAndOpenPerf (d)：MBG Criterion 的四个互斥 kind 标志
+     * （M2 反推产物里的布尔键，也是 choose 组 when 分支 id 的后缀）。
+     */
+    private static final List<String> KIND_FLAGS = List.of("noValue", "singleValue", "betweenValue", "listValue");
+
     /** foreach item 占位键前缀（变量双写形态 {@code __frch_<item>_<唯一编号>}，见 ForeachSqlNode）。 */
     private static final String FRCH_PREFIX = "__frch_";
 
@@ -60,6 +66,12 @@ public class XmlPreviewModel {
     private final boolean hasDollarRawSegments;
     /** T-PT-01：参数类型类别映射（参数路径 → ParamTypeInfo）。 */
     private final Map<String, ParamTypeInfo> paramTypes;
+    /** choose 互斥组（T-MbgExamplePreview R4）——defaultState 每组只启用一个分支。 */
+    private final List<XmlChooseGroup> chooseGroups;
+    /** 语句形态档（T-MbgExamplePreview R5）——null 时不改任何默认值（升级前行为）。 */
+    private final XmlPreviewProfile profile;
+    /** 集合表达式 → 元素级模拟值（T-MbgExamplePreview M2）。 */
+    private final Map<String, List<MockObject>> collectionElements;
     private final SqlNode rootNode;
 
     private XmlPreviewModel(
@@ -77,6 +89,9 @@ public class XmlPreviewModel {
             Map<String, Boolean> paramQuotes,
             boolean hasDollarRawSegments,
             Map<String, ParamTypeInfo> paramTypes,
+            List<XmlChooseGroup> chooseGroups,
+            XmlPreviewProfile profile,
+            Map<String, List<MockObject>> collectionElements,
             SqlNode rootNode
     ) {
         this.statementId = statementId;
@@ -93,6 +108,9 @@ public class XmlPreviewModel {
         this.paramQuotes = paramQuotes;
         this.hasDollarRawSegments = hasDollarRawSegments;
         this.paramTypes = paramTypes;
+        this.chooseGroups = chooseGroups;
+        this.profile = profile;
+        this.collectionElements = collectionElements;
         this.rootNode = rootNode;
     }
 
@@ -158,6 +176,21 @@ public class XmlPreviewModel {
      * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型映射（psi 层只做映射，类别枚举在 xml 层）。
      * 无类型信息不含键（面板按 UNKNOWN 兜底：无占位提示、mock 占位 "1"、引号兜底）。
      */
+    /** choose 互斥组（T-MbgExamplePreview R4）。 */
+    public List<XmlChooseGroup> getChooseGroups() {
+        return chooseGroups;
+    }
+
+    /** 语句形态档（T-MbgExamplePreview R5；可为 null）。 */
+    public XmlPreviewProfile getProfile() {
+        return profile;
+    }
+
+    /** 集合表达式 → 元素级模拟值（T-MbgExamplePreview M2）。 */
+    public Map<String, List<MockObject>> getCollectionElements() {
+        return collectionElements;
+    }
+
     public Map<String, ParamTypeInfo> getParamTypes() {
         return paramTypes;
     }
@@ -260,13 +293,127 @@ public class XmlPreviewModel {
     }
 
     public XmlPreviewState defaultState() {
-        Set<String> enabledIds = conditionViews.stream()
-                .filter(XmlConditionView::defaultEnabled)
-                .map(XmlConditionView::id)
-                .collect(Collectors.toSet());
+        Set<String> suppressed = profile != null ? profile.suppressedConditionIds() : Set.of();
+        // Kotlin mutableSetOf() = LinkedHashSet（保序）
+        Set<String> enabled = new LinkedHashSet<>();
+        for (XmlConditionView view : conditionViews) {
+            if (view.defaultEnabled() && !suppressed.contains(view.id())) {
+                enabled.add(view.id());
+            }
+        }
+        // T-MbgExamplePreview R4：同一 choose 的 when 互斥——组内多于一个时只留默认分支。
+        // T-MbgPreviewParityAndOpenPerf (d)：M2 命中时优先按**反推到的真实 kind**选默认分支
+        // （用户不动勾选即得到真实语义；手动改仍完全生效——开关仍是唯一真值源）。
+        for (XmlChooseGroup group : chooseGroups) {
+            List<String> candidates = new ArrayList<>();
+            for (String id : group.branchIds()) {
+                if (enabled.contains(id)) {
+                    candidates.add(id);
+                }
+            }
+            if (candidates.size() > 1) {
+                String keep = realKindPreferredBranch(group);
+                if (keep == null || !candidates.contains(keep)) {
+                    keep = group.defaultBranchId();
+                }
+                if (keep == null || !candidates.contains(keep)) {
+                    keep = candidates.get(0);
+                }
+                for (String id : candidates) {
+                    if (!id.equals(keep)) {
+                        enabled.remove(id);
+                    }
+                }
+            }
+        }
+        Integer profileCount = profile != null ? profile.forEachCount() : null;
+        int count = profileCount != null ? profileCount : DEFAULT_FOREACH_SIZE;
+        // D13（真机 2026-11-12 16:26，`CustAddressMapper#deleteByExample`）：拿不到调用点时
+        // `Example_Where_Clause` 的四个 kind 分支可能一个都没被组内收敛掉（真机复选框四个全勾），
+        // 渲染按短路顺序永远走第一个 `noValue`——产物就成了 `WHERE ( {{criterion.condition}} )`，
+        // 连 `?` 都没有，和 select 的默认形态不一致，用户会以为预览坏了。
+        // MBG 无元素注入时统一收敛到 `singleValue`：形态 `WHERE ( {{criterion.condition}} ? )`。
+        if (profile == XmlPreviewProfile.MBG_EXAMPLE && collectionElements.isEmpty()) {
+            // 按「kind 分支」特征收敛，不依赖 choose 组是否被完整识别——真机上 deleteByExample 的
+            // `<choose>` 没被识别成组，listValue 因此漏在组外一直显示勾选（勾着却永远轮不到）。
+            List<String> kindIds = new ArrayList<>();
+            for (XmlConditionView view : conditionViews) {
+                if (isKindBranchId(view.id())) {
+                    kindIds.add(view.id());
+                }
+            }
+            String keep = null;
+            for (String id : kindIds) {
+                if (id.endsWith(KIND_FLAGS.get(1))) {
+                    keep = id;
+                    break;
+                }
+            }
+            if (keep != null) {
+                for (String id : kindIds) {
+                    if (id.equals(keep)) {
+                        enabled.add(id);
+                    } else {
+                        enabled.remove(id);
+                    }
+                }
+            }
+        }
         Map<String, Integer> forEachCounts = forEachViews.stream()
-                .collect(Collectors.toMap(XmlForEachView::collectionExpr, v -> DEFAULT_FOREACH_SIZE));
-        return new XmlPreviewState(enabledIds, forEachCounts, Set.of(), Map.of());
+                .collect(Collectors.toMap(XmlForEachView::collectionExpr, v -> count));
+        return new XmlPreviewState(enabled, forEachCounts, Set.of(), Map.of());
+    }
+
+    /** 分支 id 是否属于 MBG Criterion 的四个 kind 标志（{@code criterion.singleValue} 等）。 */
+    private boolean isKindBranchId(String id) {
+        for (String flag : KIND_FLAGS) {
+            if (id.equals(flag) || id.endsWith("." + flag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf (d)：从 M2 反推的元素里读<b>真实 kind 的多数票</b>，映射回该组
+     * 对应的 when 分支 id；拿不到（M2 未命中 / 元素没有这四个布尔 / 该 id 不在组里）返回 null，
+     * 调用方退回既有启发式。
+     *
+     * <p>MBG 的 {@code addCriterion("CUSTOMERNUMBER =", value, "custNumber")} 形态让 M2 知道每个
+     * criterion 究竟是 noValue / singleValue / betweenValue / listValue——面板默认值据此对齐即可，
+     * 不必新增交互或提示。</p>
+     */
+    private String realKindPreferredBranch(XmlChooseGroup group) {
+        List<MockObject> elements = new ArrayList<>();
+        for (List<MockObject> list : collectionElements.values()) {
+            elements.addAll(list);
+        }
+        if (elements.isEmpty()) {
+            return null;
+        }
+        String best = null;
+        int bestCount = 0;
+        for (String flag : KIND_FLAGS) {
+            int counted = 0;
+            for (MockObject element : elements) {
+                if (Boolean.TRUE.equals(element.get(flag))) {
+                    counted++;
+                }
+            }
+            if (counted > bestCount) {
+                bestCount = counted;
+                best = flag;
+            }
+        }
+        if (best == null) {
+            return null;
+        }
+        for (String id : group.branchIds()) {
+            if (id.equals(best) || id.endsWith("." + best)) {
+                return id;
+            }
+        }
+        return null;
     }
 
     public RenderedXmlSql renderSql() {
@@ -274,14 +421,59 @@ public class XmlPreviewModel {
     }
 
     public RenderedXmlSql renderSql(XmlPreviewState state) {
+        // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值。
+        // 例外（D5）：M2 反推到的元素带**逐条真实 kind**，choose 的四个 kind 分支不能再按「组内只开一个」
+        // 强制——否则一个 between 条件会被 singleValue 模板渲染成 `between ?`（丢第二个占位，真机表现为
+        // `BETWEEN '11'`）。这类 id 直接交给表达式按每条 criterion 自己的标志求值。
+        Map<String, Boolean> conditionOverrides = conditionViews.stream()
+                .collect(Collectors.toMap(XmlConditionView::id, v -> state.enabledIds().contains(v.id())));
+        conditionOverrides.keySet().removeAll(kindDrivenConditionIds());
         return new XmlSqlRenderer().render(
                 rootNode,
                 mockBindings(state),
-                conditionViews.stream().collect(Collectors.toMap(XmlConditionView::id, v -> state.enabledIds().contains(v.id()))),
+                conditionOverrides,
                 state.bindOverrides().keySet(),
                 staticFieldValues,
-                bindViews.stream().map(XmlBindView::name).collect(Collectors.toSet())
+                bindViews.stream().map(XmlBindView::name).collect(Collectors.toSet()),
+                // T-MbgExamplePreview R1：预览链开启 ${} 空值占位（真实 SQL 产物路径不受影响）
+                true
         );
+    }
+
+    /**
+     * 由数据（而非开关）决定真值的条件 id：M2 注入了元素级 kind 时，choose 里那四个 kind 分支。
+     *
+     * <p>判据只看组内分支是否<b>全是</b> {@code KIND_FLAGS}——其它形态的 choose
+     * （业务自写的 {@code status != null} 等）仍走「组内只开一个」的既有语义，不受影响。</p>
+     */
+    private Set<String> kindDrivenConditionIds() {
+        if (collectionElements.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (XmlChooseGroup group : chooseGroups) {
+            if (group.branchIds().isEmpty()) {
+                continue;
+            }
+            boolean allKindFlags = true;
+            for (String id : group.branchIds()) {
+                boolean matched = false;
+                for (String flag : KIND_FLAGS) {
+                    if (id.equals(flag) || id.endsWith("." + flag)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    allKindFlags = false;
+                    break;
+                }
+            }
+            if (allKindFlags) {
+                result.addAll(group.branchIds());
+            }
+        }
+        return result;
     }
 
     /**
@@ -318,8 +510,19 @@ public class XmlPreviewModel {
         }
         bindings.put(DynamicContext.DATABASE_ID_KEY, null);
         for (XmlForEachView view : forEachViews) {
+            List<MockObject> elements = collectionElements.get(view.collectionExpr());
+            // D7：M2 注入（有元素级模拟值）时，点号表达式（`criteria.criteria`）不再绑成全局集合——
+            // 否则内层 foreach 走的是这份全局列表，外层每条 Criteria 都会把全部条件再渲染一遍
+            //（真机 `( a ) or( b )` 变成 `( a and b ) or ( a and b )`）。跳过绑定，让路径解析落到
+            // 每条 Criteria 自己的 `criteria` 属性上（注入的 Criteria 必带该属性）。
+            if (!collectionElements.isEmpty() && view.collectionExpr().indexOf('.') > -1) {
+                continue;
+            }
             if (state.forEachNulls().contains(view.collectionExpr())) {
                 bindings.put(view.collectionExpr(), null);
+            } else if (elements != null) {
+                // T-MbgExamplePreview M2：调用点反推到的元素级模拟值优先（Criteria / Criterion）
+                bindings.put(view.collectionExpr(), new MockIterable(elements.size(), elements));
             } else {
                 bindings.put(view.collectionExpr(),
                         new MockIterable(state.forEachCounts().getOrDefault(view.collectionExpr(), DEFAULT_FOREACH_SIZE)));
@@ -370,6 +573,27 @@ public class XmlPreviewModel {
             Map<String, Boolean> paramQuotes,
             Map<String, ParamTypeInfo> paramTypes
     ) {
+        return from(statement, errors, extraParamProps, staticFieldValues, extraBindings, paramQuotes, paramTypes, null, Map.of());
+    }
+
+    /**
+     * master 侧命名实参扩展后的全参入口。
+     *
+     * @param profile            T-MbgExamplePreview R5：语句形态档（如 {@code XmlPreviewProfile.MBG_EXAMPLE}）；
+     *                           null = 不改默认。
+     * @param collectionElements T-MbgExamplePreview M2：集合表达式 → 调用点反推的元素级模拟值。
+     */
+    public static XmlPreviewModel from(
+            XmlStatement statement,
+            List<String> errors,
+            Set<String> extraParamProps,
+            Map<String, Object> staticFieldValues,
+            Map<String, Object> extraBindings,
+            Map<String, Boolean> paramQuotes,
+            Map<String, ParamTypeInfo> paramTypes,
+            XmlPreviewProfile profile,
+            Map<String, List<MockObject>> collectionElements
+    ) {
         List<XmlConditionView> conditionViews = new ArrayList<>();
         List<XmlForEachView> forEachViews = new ArrayList<>();
         List<XmlBindView> bindViews = new ArrayList<>();
@@ -378,7 +602,8 @@ public class XmlPreviewModel {
         Set<String> paramProps = new LinkedHashSet<>();
         // T-InjectionGate T-IG-01：解析期 ${} token 收集（非空即「含 raw 原文拼接段」）
         List<String> dollarTokens = new ArrayList<>();
-        collect(statement.node(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+        List<XmlChooseGroup> chooseGroups = new ArrayList<>();
+        collect(statement.node(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
         variables.remove(DynamicContext.PARAMETER_OBJECT_KEY);
         variables.remove(DynamicContext.DATABASE_ID_KEY);
         paramProps.addAll(extraParamProps);
@@ -407,6 +632,9 @@ public class XmlPreviewModel {
                 effectiveQuotes,
                 !dollarTokens.isEmpty(),
                 paramTypes,
+                chooseGroups,
+                profile,
+                collectionElements,
                 statement.node()
         );
     }
@@ -456,11 +684,12 @@ public class XmlPreviewModel {
             List<XmlBindView> bindViews,
             Set<String> variables,
             Set<String> paramProps,
-            List<String> dollarTokens
+            List<String> dollarTokens,
+            List<XmlChooseGroup> chooseGroups
     ) {
         if (node instanceof MixedSqlNode m) {
             for (SqlNode c : m.getChildren()) {
-                collect(c, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+                collect(c, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
             }
         } else if (node instanceof StaticTextSqlNode) {
             // no-op
@@ -480,22 +709,114 @@ public class XmlPreviewModel {
             ExprClassification classification = OgnlEvaluator.classifyDetail(i.getTest());
             conditionViews.add(new XmlConditionView(i.getTest(), i.getTest(), defaultTruth(i.getTest()),
                     classification.support(), classification.reason(), classification.detail()));
-            collect(i.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+            collect(i.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
         } else if (node instanceof ChooseSqlNode c) {
+            // T-MbgExamplePreview R4：组内 when 归组（顺序 = 短路顺序），默认只启用一个——
+            // 含 #{} 参数的分支里最先出现者优先，全无参数时取首个。否则四个互斥分支同真，
+            // MBG Example 会永远短路到唯一不带参数的 noValue 分支。
+            List<String> branchIds = new ArrayList<>();
+            List<Integer> paramCounts = new ArrayList<>();
             for (SqlNode w : c.getWhenNodes()) {
-                collect(w, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+                collect(w, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
+                if (w instanceof IfSqlNode branch) {
+                    branchIds.add(branch.getTest());
+                    paramCounts.add(countParameterTokens(branch.getContents()));
+                }
+            }
+            if (branchIds.size() > 1) {
+                String defaultBranch = null;
+                for (int i = 0; i < branchIds.size(); i++) {
+                    if (paramCounts.get(i) > 0) {
+                        defaultBranch = branchIds.get(i);
+                        break;
+                    }
+                }
+                if (defaultBranch == null) {
+                    defaultBranch = branchIds.get(0);
+                }
+                chooseGroups.add(new XmlChooseGroup(List.copyOf(branchIds), defaultBranch));
             }
             if (c.getDefaultNode() != null) {
-                collect(c.getDefaultNode(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+                collect(c.getDefaultNode(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
             }
         } else if (node instanceof TrimSqlNode tr) {
-            collect(tr.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+            collect(tr.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
         } else if (node instanceof ForeachSqlNode f) {
             forEachViews.add(new XmlForEachView(f.getCollectionExpression(), f.getItem()));
-            collect(f.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
+            collect(f.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens, chooseGroups);
         } else if (node instanceof VarDeclSqlNode v) {
             bindViews.add(new XmlBindView(v.getName(), v.getExpression()));
             collectExpressionPaths(v.getExpression(), variables, paramProps);
         }
+    }
+
+    /**
+     * 统计节点树里的 {@code #{}} token 数（T-MbgExamplePreview R4：choose 组默认分支按「含参数」优先——
+     * 带 {@code #{}} 的分支在预览里至少能给出 {@code ?} 占位，不带参数的 {@code and ${...}} 分支往往只剩一个裸 and）。
+     * 转义 {@code \#{}} 不计（与 {@link TokenParser} 语义一致）。
+     *
+     * <p>master 侧同文件顶层函数，Java 侧落本类静态方法。</p>
+     */
+    public static int countParameterTokens(SqlNode node) {
+        if (node instanceof MixedSqlNode m) {
+            int total = 0;
+            for (SqlNode child : m.getChildren()) {
+                total += countParameterTokens(child);
+            }
+            return total;
+        }
+        if (node instanceof TextSqlNode t) {
+            int[] n = {0};
+            TokenParser.parse(t.getText(), "#{", "}", token -> {
+                n[0]++;
+                return token;
+            });
+            return n[0];
+        }
+        if (node instanceof IfSqlNode i) {
+            return countParameterTokens(i.getContents());
+        }
+        if (node instanceof TrimSqlNode tr) {
+            return countParameterTokens(tr.getContents());
+        }
+        if (node instanceof ForeachSqlNode f) {
+            return countParameterTokens(f.getContents());
+        }
+        if (node instanceof ChooseSqlNode c) {
+            int total = 0;
+            for (SqlNode w : c.getWhenNodes()) {
+                total += countParameterTokens(w);
+            }
+            if (c.getDefaultNode() != null) {
+                total += countParameterTokens(c.getDefaultNode());
+            }
+            return total;
+        }
+        return 0;
+    }
+
+    /**
+     * choose 互斥组（T-MbgExamplePreview R4）：同一个 {@code <choose>} 的 when 分支是「只能成立一个」的
+     * 语义，但默认启发式把它们全部置真，渲染按短路顺序永远只走第一个——MBG Example 里第一个恰好是
+     * 唯一不带 {@code #{}} 的 {@code noValue} 分支。本表记录组内成员与默认分支，
+     * {@link XmlPreviewModel#defaultState()} 每组只启用一个。
+     *
+     * <p>master 侧同文件顶层 data class，Java 侧聚合落本类嵌套 record。</p>
+     */
+    public record XmlChooseGroup(List<String> branchIds, String defaultBranchId) {
+    }
+
+    /**
+     * 语句形态档（T-MbgExamplePreview R5）：已知框架模板的默认勾选修正。
+     *
+     * <p>目前只有 MBG 生成器一种形态——Example 参数对象里 {@code distinct} 默认 false、
+     * {@code orderByClause} 默认 null，集合（oredCriteria / criteria.criteria）在典型调用里各只有 1 项。
+     * 无档时不改任何默认值，行为与升级前逐字节一致。</p>
+     */
+    public record XmlPreviewProfile(java.util.Set<String> suppressedConditionIds, Integer forEachCount) {
+
+        /** MBG 生成器模板的固定 test 文本（{@code distinct} 与 {@code orderByClause != null}）。 */
+        public static final XmlPreviewProfile MBG_EXAMPLE =
+                new XmlPreviewProfile(Set.of("distinct", "orderByClause != null"), 1);
     }
 }
