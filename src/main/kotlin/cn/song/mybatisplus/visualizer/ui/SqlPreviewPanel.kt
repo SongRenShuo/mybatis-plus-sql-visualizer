@@ -544,9 +544,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             }.getOrDefault("")
             val manager = SqlHistoryManager.getInstance()
             if (identity.isBlank()) {
-                manager.updateNewestParamSnapshot({ entry -> matchesSnapshotKey(entry, key) }, snapshot)
+                SqlHistoryManager.getInstance().updateNewestParamSnapshot({ entry -> matchesSnapshotKey(entry, key) }, snapshot)
             } else {
-                manager.updateNewestParamSnapshotForProject(identity, { entry -> matchesSnapshotKey(entry, key) }, snapshot)
+                SqlHistoryManager.getInstance().updateNewestParamSnapshotForProject(identity, { entry -> matchesSnapshotKey(entry, key) }, snapshot)
             }
         }
     }
