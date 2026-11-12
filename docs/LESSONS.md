@@ -379,6 +379,26 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L42 一条测试腿「绿」却不产出逐例口径，就是空绿——先补可见性，再谈覆盖率
+
+**规则**：凡带「环境不满足就 println + return」这类显式绿跳的腿，必须在同一 job 内产出一行逐例汇总（files / tests / skipped / failures）。没有这行数字，`BUILD SUCCESSFUL` 什么都不证明。判定顺序也固定：**腿红先读环境**（实例起没起来、连没连上），**腿绿先读逐例口径**（跑了几例、跳了几例）；两者都不读就写结论，等于替下一次踩坑铺路。闸门先只钉「检测本身失效」——`files=0` 或 `tests=0` 即失败；跳过率留观察，别在没摸清底数时动门禁口径。
+
+**证据**：T-NightlyLocalMysql（2026-11-12）：`database` 腿自 2026-11-05 起连的是远端 `103.36.220.245:25900`，那台机 MySQL 不可达时 `DataSourceJdbcSmokeTest` 等用例按「显式绿跳」直接 return，于是夜间连红 6 轮里这条腿一直是 success，日志里只有步骤名和 `BUILD SUCCESSFUL in 9m 24s`，没有一个逐例数字。补一步解析 `build/test-results/**/TEST-*.xml` 后首轮读数 `files=10 tests=86 skipped=0 failures=0 errors=0`（run `43146861779`），同轮 `e2e` 从 `PASS=13 FAIL=13` 变 `PASS=26 FAIL=0`。
+
+**正例**：`if: always()` 汇总 XML 打印逐例读数，只对「一例没跑」设闸；**反例**：拿堆栈里唯一的 `BUILD SUCCESSFUL` 当覆盖证据。
+
+**Seen 1× (2026-11-12)**
+
+### L43 CI 需要外部实例时，先问「它能不能由 runner 自给」，再把环境腿与代码眼分开定责
+
+**规则**：把测试腿绑到共享服务器前，先查三件事：runner 能不能自起该服务（GitHub 的 service container **只在 Linux runner 支持**，windows/macOS 一律不可用）、镜像里有没有 server（有客户端 ≠ 有 server）、自起要几步。能自给就自给——共享实例会把「别人的机器挂了」变成「我们的门禁红了」，而且连带断言会把根因埋掉：一个库连不上能生出十几条业务断言失败，读报的人只看到最后一条。确实不能自给的腿（需要多种真引擎的 dialect 这类），必须在记录里显式写「环境腿、只能服务器侧修」，别让下一个人从代码里找原因。
+
+**证据**：T-NightlyLocalMysql（2026-11-12）：`e2e` 腿连 secret `MPV_DB_URL`（`103.36.220.245:25900`），那台机 MySQL 不可达时 demo 应用照常起在 8082，但首条查库 `HikariPool-1` 初始化失败（`CommunicationsException` → `ConnectException: Connection timed out`）→ 探针「等应用就绪超时 120000ms」→ `断言 PASS=13 FAIL=13`，11-10 与 11-12 两轮同形。改成 runner 本地 zip 8.0.45 + `mysqld --install` 注册 Windows 服务后 `PASS=26 FAIL=0`（探针 16.6s，run `43143657370`），同轮 `database` 腿转真跑。同轮 `dialect` 仍红在 `panwei_a:26101 / gaussdb_kernel503:25882 Connection refused`——那是环境腿，代码侧绕不过去。
+
+**正例**：`services:` 不可用时用「zip + `--initialize-insecure` + 注册 Windows 服务」自给，起库与灌库两步都硬失败；**反例**：让 CI 腿依赖一台没有 SLA 的测试机，再靠加断言去「提高覆盖」。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
