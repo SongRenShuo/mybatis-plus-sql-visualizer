@@ -472,6 +472,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-12)**
 
+### L51 retry 救不了「一次性读完」的下载：先确认有没有续传语义，判据用服务端给的 digest
+
+**规则**：把「重试」当万灵药之前，先看被重试的动作有没有**续传/幂等**语义。一次 `urlopen(...).read()` 拉 8MB 附件没有续传——链路每轮在同一处被掐时，重试只是把同一个失败从头再演一遍，每轮还白付前面已经下过的字节。正解：`Range` 从本地已落字节续拉 + 块级 flush 落盘；判据用**服务端声明的 digest**（GitHub Release API 的 `assets[].digest` 就是 `sha256:…`）而不是「长度相等」；连续 N 轮零进展即判链路不可用，并**把替代通道写进报错**（同一次 Actions 运行的 `plugin-<n>` 产物是同一份字节，走另一条 host）。同理，`gh run watch` 的退出码不能当发行结论——代理掐断会让它提前退出，判据永远取 `gh run view` 的 `conclusion`。
+
+**证据**：2026-11-12 发 beta.4，`gitee-release.py --from-github` 的下载步三轮分别停在 0.83MB / 1.78MB / 1.97MB（`http.client.IncompleteRead(831805 bytes read, 7267971 more expected)`），每轮都从 0 重来；换可续传 `curl -C -` 后同一份文件累积到 7.37MB 再补齐，随后走**同一个脚本的本地 zip 分支**建版，`--verify-only` [3/3] sha256 与 GitHub 声明逐字节一致。同轮 `gh run watch` 被代理掐成 `failed to get run … EOF`，而 `gh run view` 显示 16/16 全绿仍在推进——差点把网络抖动读成流水线失败。脚本已按此改造（`_download_asset_resumable`：`.partial` 续传 + `assets[].digest` 校验 + 零进展 3 轮放弃并打印替代命令），落地探针＝把 8,099,776 字节的包截断到 4MB 再让它续传，sha256 与 GitHub 声明一致。
+
+**正例**：续传 + digest 判据 + 报错里带替代通道；**反例**：把「重试 4 轮全失败」当成网络暂时抖动继续干等。
+
+**Seen 1× (2026-11-12)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
