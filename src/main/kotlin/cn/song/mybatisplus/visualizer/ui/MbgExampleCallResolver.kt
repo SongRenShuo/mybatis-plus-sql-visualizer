@@ -7,7 +7,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.module.ModuleUtilCore
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiCodeBlock
@@ -20,7 +22,12 @@ import com.intellij.psi.PsiVariable
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.util.concurrency.AppExecutorUtil
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * MBG Example 调用点解析（T-MbgExamplePreview M2）。
@@ -49,6 +56,36 @@ object MbgExampleCallResolver {
     /** 单次反推的 Criterion 上限（防御性：方法体里可能有大量链式调用）。 */
     private const val MAX_CRITERIA = 20
 
+    // ------------------------------------------------------------------
+    // T-StartupReadLockFreeze（S2/S3）：预取与预览解析的预算
+    // 现场：后台预取在**阻塞读锁**里跑 `ReferencesSearch`，与 EDT 的「写意图 → 写锁升级」互等
+    // （计划 §二/§三）。以下预算只削减投机性加速，任何一项命中都不影响预览功能本身。
+    // ------------------------------------------------------------------
+
+    /** Registry 总开关（plugin.xml `<registryKey>`）；关闭＝整段预取早退，预览不受影响。 */
+    internal const val REGISTRY_KEY = "sqlvis.mbg.prefetch"
+
+    /** 项目首次被本插件看到后的冷却窗口：避开索引构建与数据源加载窗口（S2 第 3 条）。 */
+    internal const val PREFETCH_COOLDOWN_MS = 10_000L
+
+    /** 每项目每会话的预取检索次数上限（S2 第 2 条）。 */
+    internal const val PREFETCH_BUDGET_PER_PROJECT = 32
+
+    /** 单次预取检索的硬预算：到点取消并记入失败记忆（S2 第 2 条）。 */
+    internal const val PREFETCH_SEARCH_BUDGET_MS = 1_500L
+
+    /**
+     * 规模熔断阈值（S2 第 1 条）：取计划 §九 D-2 的「首次检索耗时自适应」口径，不用模块文件数计数。
+     *
+     * 理由：文件计数要额外查一次 `FileIndex`/`FileTypeIndex`，那本身也是索引操作（索引期同样会等）；
+     * 而耗时是检索**已经付过的成本**，零额外查询，且天然适配「同一 namespace 在不同工程规模下」
+     * 的差异（静态阈值只能按最大工程保守取值）。超过该阈值即本会话对该 namespace 熔断。
+     */
+    internal const val SCALE_BREAKER_MS = 800L
+
+    /** 预览侧 `resolve()` 的单次预算（S3）：超预算返回 null，由调用方降级为占位骨架。 */
+    internal const val RESOLVE_BUDGET_MS = 800L
+
     /**
      * 缓存条目（T-PreviewOpenPerfM2 M1）：`ReferencesSearch` 是**全项目索引检索**，实测在最小规模
      * demo 上就占装配耗时的 78%（`[open-perf] m2=207` / `total=266ms`），大工程按命中规模放大；
@@ -62,11 +99,17 @@ object MbgExampleCallResolver {
 
     private val cache = ConcurrentHashMap<String, CachedResolution>()
 
-    /** 预取在途集合（同一 key 只跑一个后台任务）。 */
-    private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
     /** 预取失败记忆（本会话不再重试；预览路径不受影响）。 */
     private val prefetchFailed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** 每个项目第一次被本插件看到的时间：冷却窗口（[PREFETCH_COOLDOWN_MS]）的起点。 */
+    private val firstSeenAt: MutableMap<String, Long> = ConcurrentHashMap()
+
+    /** 每项目每会话已消耗的预取预算（[PREFETCH_BUDGET_PER_PROJECT]）。 */
+    private val budgetUsed: MutableMap<String, Int> = ConcurrentHashMap()
+
+    /** 规模熔断：检索耗时超过 [SCALE_BREAKER_MS] 的 namespace，本会话不再预取（S2 第 1 条）。 */
+    private val circuitOpenNamespaces: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
     internal var cacheHits: Int = 0
@@ -75,13 +118,51 @@ object MbgExampleCallResolver {
     internal var searchRuns: Int = 0
         private set
 
-    /** 测试缝：清空缓存与计数。 */
+    /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`）。 */
+    internal var isDumbProvider: (Project) -> Boolean = { project ->
+        runCatching { DumbService.isDumb(project) }.getOrDefault(false)
+    }
+
+    /** 测试缝：项目是否初始化完成（平台 API 在项目打开早期为 false）。 */
+    internal var isProjectInitializedProvider: (Project) -> Boolean = { project ->
+        runCatching { project.isInitialized }.getOrDefault(false)
+    }
+
+    /** 测试缝：Registry 总开关读取（生产＝`Registry.is(REGISTRY_KEY, true)`）。 */
+    internal var prefetchEnabledProvider: () -> Boolean = {
+        // `is` 是 Kotlin 关键字，调用 Java 侧 `Registry.is(String, boolean)` 必须加反引号；
+        // 该重载在 key 未注册时直接返回默认值（不抛 MissingResourceException），正好当兜底。
+        runCatching { Registry.`is`(REGISTRY_KEY, true) }.getOrDefault(true)
+    }
+
+    /** 测试缝：清空缓存、计数与全部预取闸门状态。 */
     internal fun resetCacheForTest() {
         cache.clear()
         cacheHits = 0
         searchRuns = 0
+        prefetchFailed.clear()
+        firstSeenAt.clear()
+        budgetUsed.clear()
+        circuitOpenNamespaces.clear()
     }
 
+    /** 一次检索的产物＋耗时（规模门与日志都要用真实检索耗时，不含等索引的时间）。 */
+    private data class SearchOutcome(val resolved: CachedResolution?, val elapsedMs: Long)
+
+    /**
+     * 预览侧同步入口（S3）。
+     *
+     * 原实现是 `ReadAction.compute`——**阻塞读锁**，在几千文件的工程里一次检索可秒级持锁，
+     * 撞上 EDT 的「写意图 → 写锁升级」就是计划 §三 的互等。现在改走
+     * `ReadAction.nonBlocking { … }.inSmartMode(project)`：
+     *  - 等索引交给平台在**不持读锁**的状态下等待（`inSmartMode`）；
+     *  - 检索在应用线程池里跑，调用方只按 [RESOLVE_BUDGET_MS] 有界等待，超预算取消并返回 null
+     *    （调用方 `XmlPreviewService` 已按「解析不到」降级为占位骨架）；
+     *  - 调用方**已经**持读锁时（如 MCP 渲染链 `ReadAction.compute` 内）不退化成后台等锁，
+     *    就地嵌套读动作——否则多一次读锁往返，还可能撞上写优先的等待。
+     *
+     * 返回值语义不变：解析不到 / 超预算 / 异常都返回 null。
+     */
     fun resolve(
         project: Project?,
         namespace: String?,
@@ -90,12 +171,52 @@ object MbgExampleCallResolver {
         if (project == null || namespace.isNullOrBlank()) return null
         // key 带 project 身份：本 object 是进程级，多项目窗口打开时同 `namespace#statementId`
         // 会撞车（不同项目可以有同名 mapper）
-        val key = "${project.locationHash}#$namespace#$statementId"
-        return runCatching {
-            ReadAction.compute<Map<String, List<MockObject>>?, RuntimeException> {
-                resolveCached(key) { resolveInReadAction(project, namespace, statementId) }
+        val key = keyOf(project, namespace, statementId)
+        cachedIfFresh(key)?.let { return it }
+        val startedMs = System.currentTimeMillis()
+        val outcome = try {
+            if (ApplicationManager.getApplication().isReadAccessAllowed) {
+                ReadAction.compute<SearchOutcome, RuntimeException> {
+                    searchOnce(key) { resolveInReadAction(project, namespace, statementId) }
+                }
+            } else {
+                resolveBounded(project, namespace, statementId, key, startedMs)
             }
-        }.getOrNull()
+        } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t
+            logSkip("resolve", "error:${t.javaClass.simpleName}", startedMs, key)
+            return null
+        }
+        val resolved = outcome?.resolved ?: return null
+        return storeResolved(key, resolved).elements
+    }
+
+    /** S3 的有界路径：提交非阻塞读动作，只等 [RESOLVE_BUDGET_MS]，超时取消。 */
+    private fun resolveBounded(
+        project: Project,
+        namespace: String,
+        statementId: String,
+        key: String,
+        startedMs: Long,
+    ): SearchOutcome? {
+        val promise = ReadAction.nonBlocking<SearchOutcome> {
+            searchOnce(key) { resolveInReadAction(project, namespace, statementId) }
+        }
+            .inSmartMode(project)
+            .expireWith(project)
+            .submit(AppExecutorUtil.getAppExecutorService())
+        return try {
+            promise.blockingGet(RESOLVE_BUDGET_MS.toInt(), TimeUnit.MILLISECONDS)
+        } catch (t: TimeoutException) {
+            promise.cancel()
+            logSkip("resolve", "timeout", startedMs, key)
+            null
+        } catch (t: Throwable) {
+            promise.cancel()
+            if (FatalErrors.isFatal(t)) throw t
+            logSkip("resolve", "error:${t.javaClass.simpleName}", startedMs, key)
+            null
+        }
     }
 
     /**
@@ -103,33 +224,62 @@ object MbgExampleCallResolver {
      *
      * `compute` 返回 null 表示「解析不到」——**不写缓存**：把「当时索引没就绪 / 找不到调用点」
      * 永久固化下来会让下次打开永远拿不到（宁可比预期多跑一次）。
+     *
+     * T-StartupReadLockFreeze S1：拆成「新鲜判定 / 检索 / 落缓存」三段（[cachedIfFresh] /
+     * [searchOnce] / [storeResolved]），预取的非阻塞回调只需复用后两段——本函数的行为保持不变。
      */
     internal fun resolveCached(
         key: String,
         compute: () -> CachedResolution?,
     ): Map<String, List<MockObject>>? {
-        cache[key]?.let { cached ->
-            if (isFresh(cached)) {
-                cacheHits++
-                LOG.info("[m2] cache hit ${describe(cached)} $key")
-                return cached.elements
-            }
-            LOG.info("[m2] cache stale (依赖文件已改) $key")
-        }
-        searchRuns++
-        val resolved = compute()
+        cachedIfFresh(key)?.let { return it }
+        val outcome = searchOnce(key, compute)
+        val resolved = outcome.resolved
         if (resolved == null) {
             // 不写缓存：把「当时索引没就绪 / 找不到调用点」永久固化会让下次打开永远拿不到
             LOG.info("[m2] unresolved（不写缓存） $key")
             return null
         }
+        return storeResolved(key, resolved).elements
+    }
+
+    /** 新鲜判定 + 命中计数（缓存命中才自增 [cacheHits]）。 */
+    private fun cachedIfFresh(key: String): Map<String, List<MockObject>>? {
+        val cached = cache[key] ?: return null
+        if (!isFresh(cached)) {
+            LOG.info("[m2] cache stale (依赖文件已改) $key")
+            return null
+        }
+        cacheHits++
+        LOG.info("[m2] cache hit ${describe(cached)} $key")
+        return cached.elements
+    }
+
+    /** 唯一自增 [searchRuns] 的地方：真正执行一次 PSI 检索并计时。 */
+    private fun searchOnce(key: String, compute: () -> CachedResolution?): SearchOutcome {
+        searchRuns++
+        val startedMs = System.currentTimeMillis()
+        val resolved = compute()
+        return SearchOutcome(resolved, System.currentTimeMillis() - startedMs)
+    }
+
+    /** 落缓存（唯一的写入口）。 */
+    private fun storeResolved(key: String, resolved: CachedResolution): CachedResolution {
         cache[key] = resolved
         LOG.info("[m2] resolved ${describe(resolved)} $key")
-        return resolved.elements
+        return resolved
     }
 
     private fun describe(entry: CachedResolution): String =
         "criteria=${entry.elements["criteria.criteria"]?.size ?: 0} stamps=${entry.stamps.size}"
+
+    private fun keyOf(project: Project, namespace: String, statementId: String): String =
+        "${project.locationHash}#$namespace#$statementId"
+
+    /** S6：跳过/放弃路径统一一条 info（`[m2] <stage> skip reason=… elapsedMs=…`），供真机取证。 */
+    private fun logSkip(stage: String, reason: String, startedMs: Long, key: String) {
+        LOG.info("[m2] $stage skip reason=$reason elapsedMs=${System.currentTimeMillis() - startedMs} key=$key")
+    }
 
     /**
      * 预取（T-PreviewOpenPerfM2 M11）：把 M2 检索挪到「用户还在看文件」的时候。
@@ -138,32 +288,160 @@ object MbgExampleCallResolver {
      * 弹窗 200ms 级——首开慢的全部就是这一次冷检索。gutter 渲染本来就要遍历 mapper 语句，
      * 顺手在后台跑一次即可让「点开」命中缓存；不改变任何交互，失败静默。
      *
-     * 三条护栏（真机 2026-11-12 14:05 实测教训）：
+     * **T-StartupReadLockFreeze（S1/S2）**：原实现用 `executeOnPooledThread` + `resolve()` 的
+     * **阻塞读锁**跑索引检索，并且在途集合是「全局单飞」（一条卡住拖死所有 key）。现在：
+     *  - 检索走 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project)
+     *    .coalesceBy(this, key)`——等索引不持读锁、可被取消，同 key 单飞而不同 key 互不阻塞；
+     *  - 三道闸（Registry 开关 / 项目就绪 / dumb / 冷却）与预算、规模熔断见 [decidePrefetch]；
+     *  - 单次硬预算 [PREFETCH_SEARCH_BUDGET_MS] 到点取消该任务并记失败记忆；
      *  - **失败记忆**：解析不到（`countByExample` / `deleteByExample` 这类在本项目里根本没有调用点的
      *    语句就是常态）不写缓存，而 gutter 会反复重绘 —— 不记失败就会变成每次重绘都重跑一次全项目
-     *    检索（实测 6 秒内同一语句跑了 4 轮、日志刷屏）。记下 key 后本会话不再预取；
-     *    预览路径仍照常现算，不受影响。
-     *  - **单条在途**：预取是尽力而为，已有任务在跑就不再排（避免打开文件瞬间并发多条冷检索）。
-     *  - 缓存新鲜则直接返回；单元测试模式不触发（避免后台线程干扰断言）。
+     *    检索（实测 6 秒内同一语句跑了 4 轮、日志刷屏）。记下 key 后本会话不再预取。
+     *  - 单元测试模式不触发（避免后台线程干扰断言）。
      */
     fun prefetch(project: Project?, namespace: String?, statementId: String) {
         if (project == null || namespace.isNullOrBlank()) return
         if (ApplicationManager.getApplication().isUnitTestMode) return
-        val key = "${project.locationHash}#$namespace#$statementId"
-        if (key in prefetchFailed) return
-        cache[key]?.let { if (isFresh(it)) return }
-        if (inFlight.isNotEmpty()) return
-        if (!inFlight.add(key)) return
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                if (resolve(project, namespace, statementId) == null) prefetchFailed.add(key)
-            } catch (t: Throwable) {
+        val key = keyOf(project, namespace, statementId)
+        val startedMs = System.currentTimeMillis()
+        val decision = decidePrefetch(
+            projectKey = project.locationHash,
+            namespace = namespace,
+            key = key,
+            initialized = isProjectInitializedProvider(project),
+            dumb = isDumbProvider(project),
+            enabled = prefetchEnabledProvider(),
+            nowMs = startedMs,
+        )
+        if (!decision.allowed) {
+            logSkip("prefetch", decision.reason ?: "gate", startedMs, key)
+            return
+        }
+        submitPrefetch(project, namespace, statementId, key, startedMs)
+    }
+
+    /** 预取决策（放行 / 跳过原因）。纯函数（状态只在本 object 内），可在无平台环境单测。 */
+    internal fun decidePrefetch(
+        projectKey: String,
+        namespace: String,
+        key: String,
+        initialized: Boolean,
+        dumb: Boolean,
+        enabled: Boolean,
+        nowMs: Long,
+    ): PrefetchDecision {
+        // 冷却起点＝本插件第一次看到该项目的时刻（243 的 Project 没有「打开时间」API；
+        // gutter 首次渲染与项目打开基本同期，用首次到达时间当代理）
+        val firstSeen = firstSeenAt.computeIfAbsent(projectKey) { nowMs }
+        if (!enabled) return PrefetchDecision(false, "registry-off")
+        if (!initialized) return PrefetchDecision(false, "project-not-initialized")
+        if (dumb) return PrefetchDecision(false, "dumb-mode")
+        if (nowMs - firstSeen < PREFETCH_COOLDOWN_MS) return PrefetchDecision(false, "cooldown")
+        if (namespace in circuitOpenNamespaces) return PrefetchDecision(false, "scale-circuit-open")
+        if (key in prefetchFailed) return PrefetchDecision(false, "failed-before")
+        cache[key]?.let { if (isFresh(it)) return PrefetchDecision(false, "cache-fresh") }
+        val used = budgetUsed[projectKey] ?: 0
+        if (used >= PREFETCH_BUDGET_PER_PROJECT) return PrefetchDecision(false, "budget-exhausted")
+        budgetUsed[projectKey] = used + 1
+        return PrefetchDecision(true, null)
+    }
+
+    /** 预取决策结果；[reason] 同时进日志与测试断言。 */
+    internal data class PrefetchDecision(val allowed: Boolean, val reason: String?)
+
+    /**
+     * 生产调度：非阻塞读动作 + 单次硬预算。
+     *
+     * 三条关键属性（对应现场两根栈）：
+     *  1. 检索不再由调用线程持阻塞读锁执行——`inSmartMode` 把「等索引」交给平台；
+     *  2. 超时 `cancel()` 由 nonBlocking 的进度检查传播进 `ReferencesSearch`，读锁随之释放；
+     *  3. `coalesceBy(this, key)` 只合并同一个 key，卡住一条不再阻塞别的 key。
+     */
+    private fun submitPrefetch(
+        project: Project,
+        namespace: String,
+        statementId: String,
+        key: String,
+        startedMs: Long,
+    ) {
+        val promise = ReadAction.nonBlocking<SearchOutcome> {
+            searchOnce(key) { resolveInReadAction(project, namespace, statementId) }
+        }
+            .inSmartMode(project)
+            .expireWith(project)
+            .coalesceBy(this, key)
+            .submit(AppExecutorUtil.getAppExecutorService())
+        // 只有第一条结算路径生效（超时 / 成功 / 失败可能并发）
+        val settled = AtomicBoolean(false)
+        fun settle(action: () -> Unit) {
+            if (settled.compareAndSet(false, true)) action()
+        }
+        val timer = AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            settle {
+                if (!promise.isDone) promise.cancel()
                 prefetchFailed.add(key)
-                if (FatalErrors.isFatal(t)) throw t
-            } finally {
-                inFlight.remove(key)
+                logSkip("prefetch", "timeout", startedMs, key)
+            }
+        }, PREFETCH_SEARCH_BUDGET_MS, TimeUnit.MILLISECONDS)
+        promise.onSuccess { outcome ->
+            timer.cancel(false)
+            settle { onPrefetchDone(key, namespace, outcome, startedMs) }
+        }.onError { error ->
+            timer.cancel(false)
+            settle {
+                if (error is CancellationException || error is com.intellij.openapi.progress.ProcessCanceledException) {
+                    // 项目关闭 / 被同 key 的新任务合并掉：不记失败，只留一条日志
+                    logSkip("prefetch", "cancelled", startedMs, key)
+                    return@settle
+                }
+                prefetchFailed.add(key)
+                logSkip("prefetch", "error:${error.javaClass.simpleName}", startedMs, key)
             }
         }
+    }
+
+    /** 预取成功/解析不到的统一收口：落缓存或记失败，并按真实检索耗时决定是否熔断该 namespace。 */
+    private fun onPrefetchDone(key: String, namespace: String, outcome: SearchOutcome, startedMs: Long) {
+        val resolved = outcome.resolved
+        if (resolved == null) {
+            prefetchFailed.add(key)
+            logSkip("prefetch", "unresolved", startedMs, key)
+            return
+        }
+        if (outcome.elapsedMs >= SCALE_BREAKER_MS) {
+            circuitOpenNamespaces.add(namespace)
+            LOG.info("[m2] prefetch circuit-open namespace=$namespace searchMs=${outcome.elapsedMs}")
+        }
+        storeResolved(key, resolved)
+    }
+
+    /**
+     * 测试缝：跑一遍与 [prefetch] **同一套**决策链，放行时同步执行「检索 + 落缓存」。
+     *
+     * 生产与这里的差异只有「调度」那一段（`ReadAction.nonBlocking` + 预算计时器）——决策、
+     * 计数与落盘走同一条代码。纯 JUnit 里没有 Project，故项目身份与三道闸读数由参数注入。
+     *
+     * @return null＝已放行（并已执行一次检索）；非 null＝跳过原因
+     */
+    internal fun prefetchForTest(
+        projectKey: String,
+        namespace: String,
+        statementId: String,
+        initialized: Boolean = true,
+        dumb: Boolean = false,
+        enabled: Boolean = true,
+        nowMs: Long = System.currentTimeMillis(),
+        search: () -> CachedResolution? = { null },
+    ): String? {
+        val key = "$projectKey#$namespace#$statementId"
+        val startedMs = System.currentTimeMillis()
+        val decision = decidePrefetch(projectKey, namespace, key, initialized, dumb, enabled, nowMs)
+        if (!decision.allowed) {
+            logSkip("prefetch", decision.reason ?: "gate", startedMs, key)
+            return decision.reason
+        }
+        onPrefetchDone(key, namespace, searchOnce(key, search), startedMs)
+        return null
     }
 
     /** 依赖文件全部仍有效且 stamp 未变才算新鲜（不引文件监听，按需比 stamp）。 */
