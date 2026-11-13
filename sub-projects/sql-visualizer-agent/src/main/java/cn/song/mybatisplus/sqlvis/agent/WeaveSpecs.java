@@ -134,6 +134,38 @@ final class WeaveSpecs {
                 "org.panweidb.jdbc.PgStatement",
                 "org.panweidb.jdbc.PgPreparedStatement",
                 "org.panweidb.jdbc.PgCallableStatement");
+        // T-PanweiInsertCapture（2026-11-10）方言横向审计补齐：以下类此前**未登记**，命中即
+        // 「那类语句零事件」。三组证据均来自真实 jar 的 javap（驱动 jar 已在 agent test classpath，
+        // 缺的写在 BYTE_VERIFIABLE_EXCLUDES 并注明原因）。
+        //
+        // ① pg 家族 PgCallableStatement（函数模式漏采）：七个包名同构——
+        //    `executeUpdate()` 在 `isFunction` 分支走 `executeWithFlags(int)`（该方法名不在
+        //    EXEC_NAMES），非函数分支 `invokespecial` 回已登记父类。父类织入只覆盖 invokespecial
+        //    那条路，函数模式（`{? = call …}`）整条漏。磐维早已按此单列（上一组），其余六族照抄。
+        //    金仓类名是 KbCallableStatement（完全重定位谱系，字节与 pgjdbc 同构）。
+        putSpec(statementFace,
+                "org.postgresql.jdbc.PgCallableStatement",
+                "org.opengauss.jdbc.PgCallableStatement",
+                "com.huawei.gaussdb.jdbc.jdbc.PgCallableStatement",
+                "com.huawei.opengauss.jdbc.jdbc.PgCallableStatement",
+                "com.highgo.jdbc.jdbc.PgCallableStatement",
+                "cn.com.vastbase.jdbc.PgCallableStatement",
+                "com.kingbase8.jdbc.KbCallableStatement");
+        // ② MySQL 5.1 谱系的 CallableStatement：GoldenDB 组已单列（见上），上游 5.1 漏登记。
+        //    本机无 mysql-connector 5.1 jar（环境受限未做字节层），但登记成本为零且与 GoldenDB 对称。
+        putSpec(statementFace, "com.mysql.jdbc.CallableStatement");
+        // ③ 华为两族 MySQL 兼容模式的 MPreparedStatement：自有 `addBatch(String)` 且不回调父类
+        //    （invokespecial PgPreparedStatement.addBatchInternal），父类织入盖不到 → 兼容模式下
+        //    批文本漏记。只登记 ADD_BATCH 关心的那一类，其余形态沿用 statementFace。
+        putSpec(statementFace,
+                "com.huawei.gaussdb.jdbc.jdbc.MPreparedStatement",
+                "com.huawei.opengauss.jdbc.jdbc.MPreparedStatement");
+        // ④ 读写分离包装语句（海量 Vastbase / 社区 openGauss 6.0）：独立实现类
+        //    `implements java.sql.PreparedStatement` 且自有 execute 族（bytecode: getfield
+        //    pgPreparedStatement + invokeinterface），父类织入完全不覆盖；其连接类见 prepare 面。
+        putSpec(statementFace,
+                "cn.com.vastbase.jdbc.ReadWriteSplittingPgPreparedStatement",
+                "org.opengauss.jdbc.ReadWriteSplittingPgPreparedStatement");
         // MariaDB（mariadb-java-client 3.3.3，T-CaptureCoverage 券 01）：3.x 全部重写为自有类
         // （`org.mariadb.jdbc.Statement` / `ClientPreparedStatement` / `ServerPreparedStatement`
         // 均 implements java.sql.* 而非继承 MySQL `StatementImpl`，包名与 com.mysql 无交集），
@@ -214,6 +246,20 @@ final class WeaveSpecs {
                 // 磐维 PanweiDB（T-IbatisPanwei 券 C）：prepare 面单列；getURL() javap 实测 public，
                 // UrlResolver 的反射兜底可用
                 "org.panweidb.jdbc.PgConnection");
+        // T-PanweiInsertCapture（2026-11-10）方言横向审计补齐（prepare 面）：
+        //
+        // ① 读写分离连接（海量 Vastbase / 社区 openGauss 6.0）：驱动常量池实证这两个类会被
+        //    `Driver` 产出（`ReadWriteSplittingPgConnection implements java.sql.Connection`，
+        //    `prepareStatement(String)` 返回 ReadWriteSplittingPgPreparedStatement）。此前只登记了
+        //    普通 PgConnection —— 读写分离模式下**整条连接**的 PS 都进不了登记表，表现为
+        //    「看着支持、一条不出」（与磐维 20261106 形态同类）。语句面见本类前段。
+        // ② SQLite 四参 prepare 重载：`JDBC3Connection.prepareStatement(String,int,int,int)` 是
+        //    abstract（织入跳过 abstract），实现在 `org.sqlite.jdbc4.JDBC4Connection` 且未登记 ——
+        //    走该重载创建的 PS 无登记。1/2/3 参重载在父类仍是具体方法、出口钩子在位，故影响窄。
+        putSpec(prepareFace,
+                "cn.com.vastbase.readwritesplitting.ReadWriteSplittingPgConnection",
+                "org.opengauss.readwritesplitting.ReadWriteSplittingPgConnection",
+                "org.sqlite.jdbc4.JDBC4Connection");
         // MariaDB 连接（T-CaptureCoverage 券 01）：`org.mariadb.jdbc.Connection` 是 3.x 自有连接类
         // （非 MySQL ConnectionImpl 子类），prepareStatement/prepareCall 出口在此登记 PS→SQL。
         putSpec(prepareFace, "org.mariadb.jdbc.Connection");

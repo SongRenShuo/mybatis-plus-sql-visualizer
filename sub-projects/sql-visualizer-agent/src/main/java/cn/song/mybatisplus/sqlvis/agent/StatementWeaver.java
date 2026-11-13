@@ -3,15 +3,21 @@ package cn.song.mybatisplus.sqlvis.agent;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.VarInsnNode;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 语句面/prepare 面织入器（T-StatementWeave，ASM Tree API）——「attach 即生效」的直接落点：
@@ -21,7 +27,9 @@ import org.objectweb.asm.tree.VarInsnNode;
  * <p>织入形态（与 [ConnectWeaver] 同契约）：只改方法体、不增删成员（retransform 合规）；
  * 注入零分支直线 invokestatic，回调自吞一切 Throwable；**织入期判定可见性**——定义类 loader
  * 解析不到回调类则整类不织入（安全降级）。入口+出口双插桩拿精确耗时（计划 §四.4 主案），
- * 出口覆盖 ARETURN 与 ATHROW 两路径（异常也产事件，原样重抛语义不变）。
+ * timed 面出口覆盖**所有**显式返回（IRETURN/LRETURN/ARETURN/RETURN/ATHROW），并用方法体级
+ * catch-all handler 补上「异常从被调方法逃逸、本方法体没有 athrow」这一隐式出口
+ * （T-NestGateFix，计划 §11.8.5：缺它会让 NestGate 深度泄漏、后续整类语句消失）。
  *
  * <p>回调签名被本类字节码硬编码，改动须两侧同步（SqlHookCallbacks javadoc 互指）。
  * spec 驱动：类名 → 允许的织入形态（[Kind]），签名不匹配安全跳过（登记表契约）。
@@ -276,8 +284,10 @@ public final class StatementWeaver implements Opcodes {
     }
 
     /**
-     * EXEC_PARAM/EXEC_CTX/BATCH：方法头插入口（token=nanoTime，0=短路），每个 ARETURN/ATHROW
-     * 前插出口；ADD_BATCH/CLEAR_BATCH/PREPARE：只在 RETURN/ARETURN 前插出口（无计时无 token）。
+     * EXEC_PARAM/EXEC_CTX/BATCH：方法头插入口（token=nanoTime，0=短路），每个显式返回
+     * （IRETURN/LRETURN/ARETURN/RETURN/ATHROW）前插出口，并在方法体外套 catch-all handler
+     * 覆盖「异常从被调方法逃逸」的隐式出口（T-NestGateFix）；ADD_BATCH/CLEAR_BATCH/PREPARE：
+     * 只在 RETURN/ARETURN 前插出口（无计时无 token，异常少记一次登记不影响 NestGate 深度）。
      * 新槽：token 2 槽 + 出口暂存 1 槽（ARETURN 结果与 ATHROW 异常不同路径可共用）。
      */
     /**
@@ -287,7 +297,10 @@ public final class StatementWeaver implements Opcodes {
      * 存槽、回调处装箱（Integer.valueOf/Long.valueOf）、调用后恢复原值再返回。
      */
     private static boolean isTimedExit(int op) {
-        return op == IRETURN || op == LRETURN || op == ARETURN || op == ATHROW;
+        // T-NestGateFix：并入 RETURN——timed 面出口完整性要求「每个返回路径都有出口」。生产登记表里
+        // 没有 void 的 execute 族方法（审计过 panweidb/node 的 timed 面全是 int/long/boolean/ResultSet），
+        // 这条只服务守卫用例的 void 形态，并防止将来登记一个 void 方法时正常路径静默漏出口。
+        return op == IRETURN || op == LRETURN || op == ARETURN || op == RETURN || op == ATHROW;
     }
 
     /** 方法描述符的返回类型是否为 boolean（`)Z`）——决定 IRETURN 结果装箱成 Boolean 还是 Integer。 */
@@ -319,7 +332,13 @@ public final class StatementWeaver implements Opcodes {
         final int sqlSlot = (kind == Kind.EXEC_PARAM) ? thisSlot + 1 : -1; // 引用（String，首参）
         final int retSlot = (sqlSlot >= 0 ? sqlSlot : thisSlot) + 1;       // 出口暂存 2 槽
         int inserted = 0;
-
+        // T-NestGateFix（2026-11-10）：timed 面的异常出口。try 范围从**原始方法体第一条指令**开始
+        // （head 之后）——head 里唯一的可抛指令 onStatementEnter 自身全吞、LSTORE 不可抛，且在
+        // head 内 token 尚未赋值，若把 head 也包进 try，handler 帧声称的 token 槽在该点会是 top。
+        // try 的 end 在方法末尾自建 label（AbstractInsnNode 列表尾不是 label），handler 追加在其后，
+        // 不会被自身 try 范围包住。
+        final AbstractInsnNode originalFirst = mn.instructions.getFirst();
+        final LabelNode tryStart = new LabelNode();
         if (timed) {
             final InsnList head = new InsnList();
             head.add(new VarInsnNode(ALOAD, 0));
@@ -331,7 +350,8 @@ public final class StatementWeaver implements Opcodes {
                 head.add(new VarInsnNode(ALOAD, 1));
                 head.add(new VarInsnNode(ASTORE, sqlSlot));
             }
-            mn.instructions.insertBefore(mn.instructions.getFirst(), head);
+            mn.instructions.insertBefore(originalFirst, tryStart);
+            mn.instructions.insertBefore(tryStart, head);
         }
 
         AbstractInsnNode insn = mn.instructions.getFirst();
@@ -362,59 +382,23 @@ public final class StatementWeaver implements Opcodes {
                 mn.instructions.insertBefore(insn, l);
                 inserted++;
             } else if (timed && isTimedExit(op)) {
-                final boolean throwing = op == ATHROW;
                 final InsnList l = new InsnList();
-                // 1) 返回值/异常先存槽
+                // 1) 返回值/异常先存槽（RETURN 无返回值，不存不恢复）
                 if (op == IRETURN) {
                     l.add(new VarInsnNode(ISTORE, retSlot));
                 } else if (op == LRETURN) {
                     l.add(new VarInsnNode(LSTORE, retSlot));
-                } else {
+                } else if (op != RETURN) {
                     l.add(new VarInsnNode(ASTORE, retSlot)); // ARETURN 引用结果 / ATHROW 异常
                 }
-                // 2) 回调参数：stmt, sql, op, token, result, failure（BATCH 的 sql 槽传 null，
-                //    批 SQL 由回调按 op 名从登记表批串/preparedSql 取——出口块保持单一签名）
-                l.add(new VarInsnNode(ALOAD, timed ? thisSlot : 0)); // stmt：timed 读入口捕获槽
-                if (kind == Kind.EXEC_PARAM) {
-                    l.add(new VarInsnNode(ALOAD, sqlSlot)); // sql = 入口捕获的首参
-                } else {
-                    l.add(new InsnNode(ACONST_NULL)); // EXEC_CTX/BATCH：SQL 走登记表
-                }
-                l.add(new LdcInsnNode(mn.name)); // op 名（织入期常量）
-                l.add(new VarInsnNode(LLOAD, tokenSlot));
-                if (throwing) {
-                    l.add(new InsnNode(ACONST_NULL)); // result
-                    l.add(new VarInsnNode(ALOAD, retSlot)); // failure
-                } else if (op == IRETURN) {
-                    l.add(new VarInsnNode(ILOAD, retSlot)); // 先压 int 参
-                    // 返回类型按**描述符**判定而非 opcode：execute() 返回 boolean、executeUpdate() 返回
-                    // int，两者都是 IRETURN。若一律装箱成 Integer，事件里 Boolean.FALSE 的判定就失效
-                    // （execute() 的影响行数改走 getUpdateCount 的分支永远进不去，updateCount 恒 null——
-                    // O147 真机用例实测）。
-                    if (returnsBoolean(mn.desc)) {
-                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
-                                "(Z)Ljava/lang/Boolean;", false));
-                    } else {
-                        l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
-                                "(I)Ljava/lang/Integer;", false)); // 装箱为结果
-                    }
-                    l.add(new InsnNode(ACONST_NULL)); // failure
-                } else if (op == LRETURN) {
-                    l.add(new VarInsnNode(LLOAD, retSlot)); // 先压 long 参
-                    l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Long", "valueOf",
-                            "(J)Ljava/lang/Long;", false));
-                    l.add(new InsnNode(ACONST_NULL)); // failure
-                } else {
-                    l.add(new VarInsnNode(ALOAD, retSlot)); // result（引用）
-                    l.add(new InsnNode(ACONST_NULL)); // failure
-                }
-                l.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onExecuteExit", EXIT_SIG, false));
+                // 2) 出口回调（与异常 handler 共用同一份实参序列，见 appendOnExecuteExit）
+                appendOnExecuteExit(l, kind, mn, thisSlot, sqlSlot, tokenSlot, retSlot, op);
                 // 3) 恢复返回值
                 if (op == IRETURN) {
                     l.add(new VarInsnNode(ILOAD, retSlot));
                 } else if (op == LRETURN) {
                     l.add(new VarInsnNode(LLOAD, retSlot));
-                } else {
+                } else if (op != RETURN) {
                     l.add(new VarInsnNode(ALOAD, retSlot));
                 }
                 mn.instructions.insertBefore(insn, l);
@@ -426,11 +410,136 @@ public final class StatementWeaver implements Opcodes {
             // 槽布局在方法顶部已算好；此处按新布局重算 maxLocals（token 2 + this 1 + sql 0/1 + 暂存 2）
             mn.maxLocals = retSlot + 2;
             if (timed) {
+                // 必须先补原帧、再追加 handler 帧：patchFrames 会给**每个** FrameNode 追加
+                // token/this/sql 槽位，若 handler 帧先存在就会被二次追加（跨类校验期 VerifyError）。
                 patchFrames(mn, tokenSlot, thisSlot, sqlSlot, ownerInternal);
+                appendCatchAllExitHandler(mn, kind, tryStart, tokenSlot, thisSlot, sqlSlot, retSlot,
+                        ownerInternal);
             }
             return true;
         }
         return false;
+    }
+
+    /**
+     * T-NestGateFix：压 {@code SqlHookCallbacks.onExecuteExit} 的全部实参并调用（正常出口与异常
+     * handler **共用同一份**，避免两处漂移）。
+     *
+     * @param returnOp 正常路径传原返回 opcode（IRETURN/LRETURN/ARETURN），异常 handler 传 ATHROW
+     *                 （result 压 null、failure 读 retSlot）
+     */
+    private static void appendOnExecuteExit(InsnList l, Kind kind, MethodNode mn,
+                                            int thisSlot, int sqlSlot, int tokenSlot, int retSlot,
+                                            int returnOp) {
+        // 实参：stmt, sql, op, token, result, failure（BATCH 的 sql 槽传 null，批 SQL 由回调按 op 名
+        // 从登记表批串/preparedSql 取——出口块保持单一签名）
+        l.add(new VarInsnNode(ALOAD, thisSlot)); // stmt：读入口捕获槽
+        if (kind == Kind.EXEC_PARAM) {
+            l.add(new VarInsnNode(ALOAD, sqlSlot)); // sql = 入口捕获的首参
+        } else {
+            l.add(new InsnNode(ACONST_NULL)); // EXEC_CTX/BATCH：SQL 走登记表
+        }
+        l.add(new LdcInsnNode(mn.name)); // op 名（织入期常量）
+        l.add(new VarInsnNode(LLOAD, tokenSlot));
+        if (returnOp == ATHROW) {
+            l.add(new InsnNode(ACONST_NULL)); // result
+            l.add(new VarInsnNode(ALOAD, retSlot)); // failure
+        } else if (returnOp == RETURN) {
+            l.add(new InsnNode(ACONST_NULL)); // result（void）
+            l.add(new InsnNode(ACONST_NULL)); // failure
+        } else if (returnOp == IRETURN) {
+            l.add(new VarInsnNode(ILOAD, retSlot)); // 先压 int 参
+            // 返回类型按**描述符**判定而非 opcode：execute() 返回 boolean、executeUpdate() 返回
+            // int，两者都是 IRETURN。若一律装箱成 Integer，事件里 Boolean.FALSE 的判定就失效
+            // （execute() 的影响行数改走 getUpdateCount 的分支永远进不去，updateCount 恒 null——
+            // O147 真机用例实测）。
+            if (returnsBoolean(mn.desc)) {
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Boolean", "valueOf",
+                        "(Z)Ljava/lang/Boolean;", false));
+            } else {
+                l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
+                        "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+            }
+            l.add(new InsnNode(ACONST_NULL)); // failure
+        } else if (returnOp == LRETURN) {
+            l.add(new VarInsnNode(LLOAD, retSlot)); // 先压 long 参
+            l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Long", "valueOf",
+                    "(J)Ljava/lang/Long;", false));
+            l.add(new InsnNode(ACONST_NULL)); // failure
+        } else {
+            l.add(new VarInsnNode(ALOAD, retSlot)); // result（引用）
+            l.add(new InsnNode(ACONST_NULL)); // failure
+        }
+        l.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onExecuteExit", EXIT_SIG, false));
+    }
+
+    /**
+     * T-NestGateFix（2026-11-10）：timed 面的 **catch-all 异常出口**——方法体抛出的任何 Throwable
+     * （含从被调方法逃逸、本方法体没有显式 athrow 的形态）都先走一次 {@code onExecuteExit}，
+     * 再原样重抛。动因见计划 §11.8.5：只对方法体内显式 return/athrow 插桩时，异常逃逸路径没有
+     * 出口点，`NestGate.enter` 计入而 `exit` 不执行 → 该线程 depth 永久 +1，后续整类语句被当成
+     * 外层抑制（磐维 A 模式 `PgStatement.execute` 真机实证）。
+     *
+     * <p><b>帧</b>：handler 处补 F_NEW 帧（与 EXPAND_FRAMES 读入的原方法帧同一编码路径），locals
+     * 只声明出口实际读取的三个槽（token LONG / this / 可选 sql），其余槽一律 TOP——TOP 对任何实参
+     * 类型都可接受，避免依赖原方法参数是否被重新赋值。本帧在 {@link #patchFrames} **之后**追加，
+     * 故不会被二次补槽。
+     *
+     * <p><b>双出口去重</b>：显式 athrow 前已有出口；异常再进 handler 会二次调用
+     * {@code NestGate.exit}，其 {@code lastExitToken} 去重使其成为 no-op（同帧双 ATHROW 的原设计）。
+     */
+    private static void appendCatchAllExitHandler(MethodNode mn, Kind kind, LabelNode tryStart,
+                                                  int tokenSlot, int thisSlot, int sqlSlot,
+                                                  int retSlot, String ownerInternal) {
+        final LabelNode tryEnd = new LabelNode();
+        final LabelNode handler = new LabelNode();
+        mn.instructions.add(tryEnd);
+        mn.instructions.add(handler);
+        final Object[] frameLocals = handlerFrameLocals(ownerInternal, tokenSlot, thisSlot, sqlSlot);
+        // 必须用 F_NEW：本织入器读类时用 EXPAND_FRAMES，原方法帧（经 patchFrames 处理后）都以
+        // F_NEW 交给 MethodWriter；F_NEW 走 visitFrameEnd 路径（previousFrame 数组维护偏移）。
+        // 若这里用 F_FULL 这类压缩帧类型，会落到另一条只维护 previousFrameOffset 字段的路径——
+        // 该字段在 F_NEW 路径下从不更新，混用会算错 offset_delta（实测：handler 实际在 73，
+        // 编出来的帧落在 124，JVM 报 VerifyError: StackMapTable error: bad offset）。
+        mn.instructions.add(new FrameNode(Opcodes.F_NEW,
+                frameLocals.length, frameLocals, 1, new Object[]{"java/lang/Throwable"}));
+        final InsnList l = new InsnList();
+        l.add(new VarInsnNode(ASTORE, retSlot)); // 取出异常
+        appendOnExecuteExit(l, kind, mn, thisSlot, sqlSlot, tokenSlot, retSlot, ATHROW);
+        l.add(new VarInsnNode(ALOAD, retSlot));
+        l.add(new InsnNode(ATHROW)); // 原样重抛（语义不变）
+        mn.instructions.add(l);
+        if (mn.tryCatchBlocks == null) {
+            mn.tryCatchBlocks = new ArrayList<TryCatchBlockNode>();
+        }
+        mn.tryCatchBlocks.add(new TryCatchBlockNode(tryStart, tryEnd, handler, null));
+    }
+
+    /**
+     * handler 帧的 locals（ASM API 形态：long 占 1 个元素、TOP 占 1 槽）。
+     *
+     * <p>只声明出口实际读取的槽：0..tokenSlot-1 全部 TOP（含 this 与形参——handler 不读它们，
+     * TOP 对任何实际类型都可接受），tokenSlot 为 LONG（head 已赋值且此后不被覆盖），
+     * thisSlot 为定义类，sqlSlot（仅 EXEC_PARAM）为 String。
+     */
+    private static Object[] handlerFrameLocals(String ownerInternal, int tokenSlot, int thisSlot,
+                                               int sqlSlot) {
+        final List<Object> locals = new ArrayList<Object>();
+        for (int slot = 0; slot < tokenSlot; slot++) {
+            locals.add(Opcodes.TOP);
+        }
+        locals.add(Opcodes.LONG);
+        for (int slot = tokenSlot + 2; slot < thisSlot; slot++) {
+            locals.add(Opcodes.TOP);
+        }
+        locals.add(ownerInternal);
+        if (sqlSlot >= 0) {
+            for (int slot = thisSlot + 1; slot < sqlSlot; slot++) {
+                locals.add(Opcodes.TOP);
+            }
+            locals.add("java/lang/String");
+        }
+        return locals.toArray();
     }
 
     /**
