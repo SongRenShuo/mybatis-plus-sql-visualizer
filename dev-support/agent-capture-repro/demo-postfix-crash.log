@@ -1,0 +1,419 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v2.6.3)
+
+2026-10-06 14:35:38.583  INFO 13916 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : Starting SelfDevFrameworkDemoApplication v1.0.0 using Java 1.8.0_181 on HQZC-01 with PID 13916 (F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo\selfdev-framework-demo\target\selfdev-framework-demo-1.0.0.jar started by USER in F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-dev\dev-support\tmp-capturerepro)
+2026-10-06 14:35:38.585  INFO 13916 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : No active profile set, falling back to default profiles: default
+2026-10-06 14:35:39.856  INFO 13916 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8086 (http)
+2026-10-06 14:35:39.870  INFO 13916 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-06 14:35:39.870  INFO 13916 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.56]
+2026-10-06 14:35:39.931  INFO 13916 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-10-06 14:35:39.931  INFO 13916 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1291 ms
+2026-10-06 14:35:40.075  INFO 13916 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-10-06 14:35:40.291  INFO 13916 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-10-06 14:35:40.301  WARN 13916 --- [           main] ConfigServletWebServerApplicationContext : Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'selfDevFrameworkController': Unsatisfied dependency expressed through field 'styleService'; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'sourceCaptureStyleServiceImpl': Unsatisfied dependency expressed through field 'dataQueryTool'; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dataQueryTool' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dataQueryTool' parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'localDbService' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'localDbService' parameter 1; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+2026-10-06 14:35:40.301  INFO 13916 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...
+2026-10-06 14:35:40.309  INFO 13916 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.
+2026-10-06 14:35:40.313  INFO 13916 --- [           main] o.apache.catalina.core.StandardService   : Stopping service [Tomcat]
+2026-10-06 14:35:40.322  INFO 13916 --- [           main] ConditionEvaluationReportLoggingListener : 
+
+Error starting ApplicationContext. To display the conditions report re-run your application with 'debug' enabled.
+2026-10-06 14:35:40.343 ERROR 13916 --- [           main] o.s.boot.SpringApplication               : Application run failed
+
+org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'selfDevFrameworkController': Unsatisfied dependency expressed through field 'styleService'; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'sourceCaptureStyleServiceImpl': Unsatisfied dependency expressed through field 'dataQueryTool'; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dataQueryTool' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dataQueryTool' parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'localDbService' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'localDbService' parameter 1; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue(AutowiredAnnotationBeanPostProcessor.java:659) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.inject(AutowiredAnnotationBeanPostProcessor.java:639) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.InjectionMetadata.inject(InjectionMetadata.java:119) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor.postProcessProperties(AutowiredAnnotationBeanPostProcessor.java:399) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.populateBean(AbstractAutowireCapableBeanFactory.java:1431) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:619) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons(DefaultListableBeanFactory.java:953) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.context.support.AbstractApplicationContext.finishBeanFactoryInitialization(AbstractApplicationContext.java:918) ~[spring-context-5.3.15.jar!/:5.3.15]
+	at org.springframework.context.support.AbstractApplicationContext.refresh(AbstractApplicationContext.java:583) ~[spring-context-5.3.15.jar!/:5.3.15]
+	at org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext.refresh(ServletWebServerApplicationContext.java:145) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.SpringApplication.refresh(SpringApplication.java:732) [spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.SpringApplication.refreshContext(SpringApplication.java:414) [spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:302) [spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1303) [spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1292) [spring-boot-2.6.3.jar!/:2.6.3]
+	at cn.song.selfdevdemo.SelfDevFrameworkDemoApplication.main(SelfDevFrameworkDemoApplication.java:23) [classes!/:1.0.0]
+	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[na:1.8.0_181]
+	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[na:1.8.0_181]
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[na:1.8.0_181]
+	at java.lang.reflect.Method.invoke(Method.java:498) ~[na:1.8.0_181]
+	at org.springframework.boot.loader.MainMethodRunner.run(MainMethodRunner.java:49) [selfdev-framework-demo-1.0.0.jar:1.0.0]
+	at org.springframework.boot.loader.Launcher.launch(Launcher.java:108) [selfdev-framework-demo-1.0.0.jar:1.0.0]
+	at org.springframework.boot.loader.Launcher.launch(Launcher.java:58) [selfdev-framework-demo-1.0.0.jar:1.0.0]
+	at org.springframework.boot.loader.JarLauncher.main(JarLauncher.java:88) [selfdev-framework-demo-1.0.0.jar:1.0.0]
+Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'sourceCaptureStyleServiceImpl': Unsatisfied dependency expressed through field 'dataQueryTool'; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dataQueryTool' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dataQueryTool' parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'localDbService' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'localDbService' parameter 1; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue(AutowiredAnnotationBeanPostProcessor.java:659) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.inject(AutowiredAnnotationBeanPostProcessor.java:639) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.InjectionMetadata.inject(InjectionMetadata.java:119) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor.postProcessProperties(AutowiredAnnotationBeanPostProcessor.java:399) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.populateBean(AbstractAutowireCapableBeanFactory.java:1431) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:619) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.config.DependencyDescriptor.resolveCandidate(DependencyDescriptor.java:276) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.doResolveDependency(DefaultListableBeanFactory.java:1389) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.resolveDependency(DefaultListableBeanFactory.java:1309) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue(AutowiredAnnotationBeanPostProcessor.java:656) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 28 common frames omitted
+Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dataQueryTool' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dataQueryTool' parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'localDbService' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'localDbService' parameter 1; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:800) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.instantiateUsingFactoryMethod(ConstructorResolver.java:541) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.instantiateUsingFactoryMethod(AbstractAutowireCapableBeanFactory.java:1352) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance(AbstractAutowireCapableBeanFactory.java:1195) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:582) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.config.DependencyDescriptor.resolveCandidate(DependencyDescriptor.java:276) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.doResolveDependency(DefaultListableBeanFactory.java:1389) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.resolveDependency(DefaultListableBeanFactory.java:1309) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue(AutowiredAnnotationBeanPostProcessor.java:656) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 42 common frames omitted
+Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'localDbService' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'localDbService' parameter 1; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:800) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.instantiateUsingFactoryMethod(ConstructorResolver.java:541) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.instantiateUsingFactoryMethod(AbstractAutowireCapableBeanFactory.java:1352) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance(AbstractAutowireCapableBeanFactory.java:1195) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:582) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.config.DependencyDescriptor.resolveCandidate(DependencyDescriptor.java:276) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.doResolveDependency(DefaultListableBeanFactory.java:1389) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.resolveDependency(DefaultListableBeanFactory.java:1309) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.resolveAutowiredArgument(ConstructorResolver.java:887) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:791) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 55 common frames omitted
+Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'dmlRepository' defined in com.corp.engine.config.EngineConfiguration: Unsatisfied dependency expressed through method 'dmlRepository' parameter 0; nested exception is org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:800) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.instantiateUsingFactoryMethod(ConstructorResolver.java:541) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.instantiateUsingFactoryMethod(AbstractAutowireCapableBeanFactory.java:1352) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance(AbstractAutowireCapableBeanFactory.java:1195) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:582) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.config.DependencyDescriptor.resolveCandidate(DependencyDescriptor.java:276) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.doResolveDependency(DefaultListableBeanFactory.java:1389) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.resolveDependency(DefaultListableBeanFactory.java:1309) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.resolveAutowiredArgument(ConstructorResolver.java:887) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:791) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 69 common frames omitted
+Caused by: org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'dataSourceScriptDatabaseInitializer' defined in class path resource [org/springframework/boot/autoconfigure/sql/init/DataSourceInitializationConfiguration.class]: Invocation of init method failed; nested exception is org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.initializeBean(AbstractAutowireCapableBeanFactory.java:1804) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:620) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:335) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:333) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:322) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:208) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.config.DependencyDescriptor.resolveCandidate(DependencyDescriptor.java:276) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.doResolveDependency(DefaultListableBeanFactory.java:1389) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.DefaultListableBeanFactory.resolveDependency(DefaultListableBeanFactory.java:1309) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.resolveAutowiredArgument(ConstructorResolver.java:887) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:791) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 83 common frames omitted
+Caused by: org.springframework.jdbc.datasource.init.UncategorizedScriptException: Failed to execute database script; nested exception is java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at org.springframework.jdbc.datasource.init.DatabasePopulatorUtils.execute(DatabasePopulatorUtils.java:67) ~[spring-jdbc-5.3.15.jar!/:5.3.15]
+	at org.springframework.boot.jdbc.init.DataSourceScriptDatabaseInitializer.runScripts(DataSourceScriptDatabaseInitializer.java:90) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.sql.init.AbstractScriptDatabaseInitializer.runScripts(AbstractScriptDatabaseInitializer.java:145) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.sql.init.AbstractScriptDatabaseInitializer.applyScripts(AbstractScriptDatabaseInitializer.java:107) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.sql.init.AbstractScriptDatabaseInitializer.applySchemaScripts(AbstractScriptDatabaseInitializer.java:97) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.sql.init.AbstractScriptDatabaseInitializer.initializeDatabase(AbstractScriptDatabaseInitializer.java:75) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.boot.sql.init.AbstractScriptDatabaseInitializer.afterPropertiesSet(AbstractScriptDatabaseInitializer.java:65) ~[spring-boot-2.6.3.jar!/:2.6.3]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.invokeInitMethods(AbstractAutowireCapableBeanFactory.java:1863) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.initializeBean(AbstractAutowireCapableBeanFactory.java:1800) ~[spring-beans-5.3.15.jar!/:5.3.15]
+	... 96 common frames omitted
+Caused by: java.lang.VerifyError: Stack map does not match the one at exception handler 46
+Exception Details:
+  Location:
+    com/mysql/cj/jdbc/StatementImpl.execute(Ljava/lang/String;[Ljava/lang/String;)Z @46: astore_3
+  Reason:
+    Type top (current frame, locals[3]) is not assignable to long (stack map, locals[3])
+  Current Frame:
+    bci: @6
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', top, long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Stackmap Frame:
+    bci: @46
+    flags: { }
+    locals: { 'com/mysql/cj/jdbc/StatementImpl', 'java/lang/String', '[Ljava/lang/String;', long, long_2nd }
+    stack: { 'com/mysql/cj/exceptions/CJException' }
+  Bytecode:
+    0x0000000: 2ab8 02b1 3704 2a2b 2cc6 000c 2cbe 9e00
+    0x0000010: 0704 a700 0403 b702 b536 062a 2b13 02b6
+    0x0000020: 1604 1506 b802 ba01 b802 be15 06ac 4e2d
+    0x0000030: 2ab6 00f6 b800 fc3a 062a 2b13 02b6 1604
+    0x0000040: 0119 06b8 02be 1906 bf                 
+  Exception Handler Table:
+    bci [6, 46] => handler: 46
+  Stackmap Table:
+    full_frame(@21,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200]})
+    full_frame(@22,{Object[#2],Object[#200],Object[#843],Long},{Object[#2],Object[#200],Integer})
+    same_locals_1_stack_item_frame(@46,Object[#99])
+
+	at com.mysql.cj.jdbc.ConnectionImpl.createStatement(ConnectionImpl.java:1091) ~[mysql-connector-java-8.0.28.jar!/:8.0.28]
+	at com.mysql.cj.jdbc.ConnectionImpl.createStatement(ConnectionImpl.java:1085) ~[mysql-connector-java-8.0.28.jar!/:8.0.28]
+	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[na:1.8.0_181]
+	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[na:1.8.0_181]
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[na:1.8.0_181]
+	at java.lang.reflect.Method.invoke(Method.java:498) ~[na:1.8.0_181]
+	at cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler.invoke(ConnectionHandler.java:44) ~[mps-sql-agent.jar:na]
+	at com.sun.proxy.$Proxy56.createStatement(Unknown Source) ~[na:na]
+	at com.zaxxer.hikari.pool.ProxyConnection.createStatement(ProxyConnection.java:294) ~[HikariCP-4.0.3.jar!/:na]
+	at com.zaxxer.hikari.pool.HikariProxyConnection.createStatement(HikariProxyConnection.java) ~[HikariCP-4.0.3.jar!/:na]
+	at org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(ScriptUtils.java:256) ~[spring-jdbc-5.3.15.jar!/:5.3.15]
+	at org.springframework.jdbc.datasource.init.ResourceDatabasePopulator.populate(ResourceDatabasePopulator.java:254) ~[spring-jdbc-5.3.15.jar!/:5.3.15]
+	at org.springframework.jdbc.datasource.init.DatabasePopulatorUtils.execute(DatabasePopulatorUtils.java:54) ~[spring-jdbc-5.3.15.jar!/:5.3.15]
+	... 104 common frames omitted
+

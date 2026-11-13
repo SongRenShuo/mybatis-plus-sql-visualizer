@@ -1,0 +1,30 @@
+AGENT=F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev/.intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/system/plugins/mpsv-agent/mps-sql-agent-826696652.jar
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v2.6.3)
+
+2026-10-06 14:37:37.886  INFO 64592 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : Starting SelfDevFrameworkDemoApplication v1.0.0 using Java 1.8.0_181 on HQZC-01 with PID 64592 (F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo\selfdev-framework-demo\target\selfdev-framework-demo-1.0.0.jar started by USER in F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-dev\dev-support\tmp-capturerepro)
+2026-10-06 14:37:37.890  INFO 64592 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : No active profile set, falling back to default profiles: default
+2026-10-06 14:37:39.151  INFO 64592 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8086 (http)
+2026-10-06 14:37:39.162  INFO 64592 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-06 14:37:39.163  INFO 64592 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.56]
+2026-10-06 14:37:39.220  INFO 64592 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-10-06 14:37:39.220  INFO 64592 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1276 ms
+2026-10-06 14:37:39.372  INFO 64592 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-10-06 14:37:39.590  INFO 64592 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-10-06 14:37:40.229  INFO 64592 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8086 (http) with context path ''
+2026-10-06 14:37:40.240  INFO 64592 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : Started SelfDevFrameworkDemoApplication in 2.881 seconds (JVM running for 3.298)
+2026-10-06 14:38:02.619  INFO 64592 --- [nio-8086-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-10-06 14:38:02.620  INFO 64592 --- [nio-8086-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-10-06 14:38:02.620  INFO 64592 --- [nio-8086-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 0 ms
+2026-10-06 14:38:02.664 DEBUG 64592 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 14:38:02.664 DEBUG 64592 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT COUNT(*) FROM (SELECT p.id, p.plan_id, p.schema_code, p.project_name, p.owner, p.status, p.amount, p.create_time, p.update_time FROM biz_project_plan p WHERE p.owner = ? ORDER BY p.create_time DESC) cnt]
+2026-10-06 14:38:02.706 DEBUG 64592 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 14:38:02.706 DEBUG 64592 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT p.id, p.plan_id, p.schema_code, p.project_name, p.owner, p.status, p.amount, p.create_time, p.update_time FROM biz_project_plan p WHERE p.owner = ? ORDER BY p.create_time DESC LIMIT 0, 5]
+2026-10-06 14:38:02.853 DEBUG 64592 --- [nio-8086-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 14:38:02.853 DEBUG 64592 --- [nio-8086-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT COUNT(*) FROM biz_project_plan p WHERE p.status = ?]

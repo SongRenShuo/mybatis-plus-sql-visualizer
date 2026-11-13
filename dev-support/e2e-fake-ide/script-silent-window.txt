@@ -1,0 +1,54 @@
+# 假 IDE 探针脚本：T-AgentSilentAfter16s —— 「启动约 16s 后静默」的窗口验收
+#
+# 目标：把采集窗口拉到 >30s，分三段（A 无参 / A2 带参 / B 分组）验证「过了 15s 关」之后
+#      仍持续产出事件。这正是磐维 + GaussDB 验收轮里观察到的静默窗口（事件截止 14.9~16.8s）。
+#
+# 用法（工作树根）：
+#   DEMO_DIR=<demo>/mybatis-plus-demo DEMO_PROFILE=panwei-gaussdb \
+#   APP_MAIN=cn.song.mybatisplusdemo.MybatisPlusDemoApplication \
+#   E2E_SCRIPT=$PWD/dev-support/e2e-fake-ide/script-silent-window.txt \
+#     bash dev-support/e2e-fake-ide/run-e2e.sh
+#
+# 注（T-AgentSilentAfter16s §五-1 取证结论，2026-11-06）：本脚本**必须**先下发一次 CONFIG。
+#   不加这一步，agent 的 T-07 看门狗（`SenderLoop.DEFAULT_CONFIG_WATCHDOG_MS=15s`，会话建立后从未收到
+#   CONFIG → 主动停采）会在 HELLO+15s 整点把采集关掉——实测基线轮：HELLO +4170ms、末条事件 +19106ms
+#   （= 4170+15000 的下一轮轮询）、其后三段请求全部 0 条，app.log 有且仅有一条
+#   「[T-AgentConfigChannel] 会话建立后 15000ms 内未收到任何 CONFIG，按保守策略主动停采」。
+#   真实 IDE 在会话建立后立刻下发 CONFIG（AgentManager.attachToPid / onPremainConnected 各一处），
+#   本脚本按同一时序补上，否则测到的是「看门狗按设计自停」而不是采集链。
+
+mark 0 握手：等 agent 回连（premain 阶段即连）
+wait-hello 90000
+config {"disabled":false,"desensitize":true}
+expect-ack "disabled":false
+wait-http http://localhost:8082/order/list 180000
+
+mark A @0s 无参查询：MP LambdaQueryWrapper 全表查 t_order
+reset-events
+get http://localhost:8082/order/list
+assert-events 5000
+report-events
+
+mark A2 @约 10s 带参查询
+sleep 4000
+reset-events
+get http://localhost:8082/order/list?minAmount=100&maxAmount=300&status=1
+assert-events 5000
+report-events
+
+mark B @约 20s 分组统计（落在「15s 关」之后的第一个窗口）
+sleep 4000
+reset-events
+get http://localhost:8082/order/sum
+assert-events 5000
+report-events
+
+mark C @约 30s 再次带参查询（确认不是「只恢复一次」）
+sleep 4000
+reset-events
+get http://localhost:8082/order/list?minAmount=50&maxAmount=500
+assert-events 5000
+report-events
+
+summary
+quit

@@ -1,0 +1,29 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v2.6.3)
+
+2026-10-06 15:07:42.039  INFO 58228 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : Starting SelfDevFrameworkDemoApplication v1.0.0 using Java 1.8.0_181 on HQZC-01 with PID 58228 (F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo\selfdev-framework-demo\target\selfdev-framework-demo-1.0.0.jar started by USER in F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-dev\dev-support\tmp-capturerepro)
+2026-10-06 15:07:42.042  INFO 58228 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : No active profile set, falling back to default profiles: default
+2026-10-06 15:07:43.481  INFO 58228 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8086 (http)
+2026-10-06 15:07:43.493  INFO 58228 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-06 15:07:43.493  INFO 58228 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.56]
+2026-10-06 15:07:43.555  INFO 58228 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-10-06 15:07:43.555  INFO 58228 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1460 ms
+2026-10-06 15:07:43.724  INFO 58228 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-10-06 15:07:43.984  INFO 58228 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-10-06 15:07:44.698  INFO 58228 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8086 (http) with context path ''
+2026-10-06 15:07:44.710  INFO 58228 --- [           main] c.s.s.SelfDevFrameworkDemoApplication    : Started SelfDevFrameworkDemoApplication in 3.129 seconds (JVM running for 3.564)
+2026-10-06 15:08:02.975  INFO 58228 --- [nio-8086-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-10-06 15:08:02.975  INFO 58228 --- [nio-8086-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-10-06 15:08:02.976  INFO 58228 --- [nio-8086-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-10-06 15:08:03.033 DEBUG 58228 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 15:08:03.034 DEBUG 58228 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT COUNT(*) FROM (SELECT p.id, p.plan_id, p.schema_code, p.project_name, p.owner, p.status, p.amount, p.create_time, p.update_time FROM biz_project_plan p WHERE p.owner = ? ORDER BY p.create_time DESC) cnt]
+2026-10-06 15:08:03.080 DEBUG 58228 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 15:08:03.080 DEBUG 58228 --- [nio-8086-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT p.id, p.plan_id, p.schema_code, p.project_name, p.owner, p.status, p.amount, p.create_time, p.update_time FROM biz_project_plan p WHERE p.owner = ? ORDER BY p.create_time DESC LIMIT 0, 5]
+2026-10-06 15:08:05.298 DEBUG 58228 --- [nio-8086-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-10-06 15:08:05.298 DEBUG 58228 --- [nio-8086-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT COUNT(*) FROM biz_project_plan p WHERE p.status = ?]

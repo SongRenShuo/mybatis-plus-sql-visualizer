@@ -1,0 +1,8 @@
+allprojects {
+    afterEvaluate { p ->
+        if (p == p.rootProject && p.extensions.findByName('intellijPlatform') != null) {
+            p.extensions.getByName('intellijPlatform').sandboxContainer.set(
+                p.layout.buildDirectory.dir('MPSV-O147-Acceptance'))
+        }
+    }
+}
