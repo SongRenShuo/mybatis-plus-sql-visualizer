@@ -39,9 +39,9 @@ class IbatisParamModelTest {
         </sqlMap>
     """.trimIndent()
 
-    private fun parse(): IbatisSqlMap = SqlMapParser().parse(sqlMap)
+    private fun parse(): IbatisModel.IbatisSqlMap = SqlMapParser().parse(sqlMap)
 
-    private fun statement(id: String): IbatisStatement = parse().statementById(id)!!
+    private fun statement(id: String): IbatisModel.IbatisStatement = parse().statementById(id)!!
 
     private fun model(id: String): IbatisParamModel = IbatisParamModel.IbatisParamModelBuilder.build(statement(id))
 
