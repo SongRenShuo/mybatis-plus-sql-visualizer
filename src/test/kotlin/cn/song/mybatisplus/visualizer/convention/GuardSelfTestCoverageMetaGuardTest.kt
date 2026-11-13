@@ -654,6 +654,25 @@ class GuardSelfTestCoverageMetaGuardTest {
          */
         val GUARD_CLASSES = listOf(
             GuardEntry(
+                "update/HotUpdateSettingsGuardTest.kt",
+                emptyList(),
+                "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
+                    "处理条件必须是「isUpdate 且本插件」、设置窗口按类名后缀 SettingsDialog 收口、" +
+                    "PLUGIN_ID 与 plugin.xml 的 <id> 一字不差。判定内核是三个纯函数，用例直接断言，" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把 shouldHandle 的插件 id 改成别的、或 isSettingsDialogClass 改成正向 contains，" +
+                    "对应用例必红（实施轮以「反向探针」口径核过同类判定）。",
+            ),
+            GuardEntry(
+                "ui/XmlSqlCompletionContextResolverIndexKeySourceScanTest.kt",
+                emptyList(),
+                "L65 守卫（2026-11-13）：`JavaAnnotationIndex` 的键是**注解简单名**（243 字节码实证：" +
+                    "`JavaAnnotationElementType.indexStub` 先 indexOf('(') 截断再取短类名），" +
+                    "按 FQN 查恒空——`XmlSqlCompletionContextResolver` 的兜底分支曾如此。判定内核＝剥注释后" +
+                    "扫 `getAnnotations(` 的实参是否为简单名常量 + 常量值是否等于 TableName，无返回违规点集合的" +
+                    "具名判定函数，故 decisionFns 留空；灵敏度=把实参改回 FQN → 本类恰 1 红（实施轮实测）。",
+            ),
+            GuardEntry(
                 "convention/VerifierCliVersionGuardTest.kt",
                 emptyList(),
                 "T-CiMarketSplit verifier-cli 版本钉子守卫：判定内核内联于用例——读 " +

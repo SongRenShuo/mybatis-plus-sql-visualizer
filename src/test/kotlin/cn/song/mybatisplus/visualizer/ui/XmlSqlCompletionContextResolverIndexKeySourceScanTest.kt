@@ -18,7 +18,7 @@ import java.io.File
  * 文件**恒 0 命中**（仓内既有口径），真机才能验；能钉住的就是「传的是简单名」这件事本身。
  * 反向改回 FQN ⇒ 本用例必须变红。
  */
-class XmlSqlCompletionContextResolverIndexKeyTest {
+class XmlSqlCompletionContextResolverIndexKeySourceScanTest {
 
     private val source: String by lazy {
         val candidates = listOf(
