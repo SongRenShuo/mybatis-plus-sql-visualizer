@@ -461,3 +461,41 @@ Registry 关闭 → 0；smart+就绪+开关开 → `searchRuns==1` 且同 key �
   S3＝**nonBlocking + 800 ms 有界等待**（非 `executeSynchronously`）。
 - 用户自救口径更新：§六 第 1 条（关左侧图标）之外，新增「Registry 搜 `sqlvis.mbg.prefetch` 取消勾选」＝
   只关预取、保留预览。
+
+---
+
+## 十四、追加现场（2026-11-13 10:0x）：关图标后冻结消失，但「带 Example_Where_Clause 的预览」仍 30s
+
+### 14.1 用户读数（三张图）
+
+| 项 | 读数 |
+|---|---|
+| 关「在代码左侧显示预览 SQL 图标」后 | 「没那么卡了」「取消勾选后没有那个问题了」——**印证 §三 的冻结点判定：预取链是主因** |
+| 点开带 `<include refid="Example_Where_Clause"/>` 的语句（图 1 的 ①） | 约 **30s** 才出结果（面板先显示「正在准备预览…」） |
+| 点开不带该 include 的语句（图 1 的 ② `selectByPrimaryKey`） | 很快 |
+| 30s 后 | 该 XML 编辑器顶部弹「Plugin 'SQL Visualizer' might be slowing things down」（IDEA 的 EDT 慢操作/插件归因横幅） |
+| 语料规模 | 该 mapper XML 共 600+ 行，`<sql id="Example_Where_Clause">` 就在同一文件（图 3：foreach/trim/choose 四分支 + 嵌套 foreach） |
+
+### 14.2 判读（待日志证伪）
+
+两条语句的唯一差别就是 `parameterType` 是 MBG Example ⇒ 只有这两段会跑（`XmlPreviewService.kt:113-128`）：
+
+| 段 | 代码 | 本次修复后的形态 |
+|---|---|---|
+| `profile` | `resolveExampleProfile(project, statement.parameterType, parsed.namespace)` | **未加预算**（同 11.12） |
+| `m2` | `MbgExampleCallResolver.resolve(...)` → `ReferencesSearch` | 已改为 `submit + blockingGet(800ms) + 超时 cancel → null`（`MbgExampleCallResolver.kt:87/194-209`），左栏退占位骨架 |
+
+`[open-perf] total=… parse+ctx=… profile=… m2=… model=…` 会把 30s 钉到具体一段（`XmlPreviewService.kt:295-305`）。
+在 11.12 里 m2 无预算、无 dumb 兜底，大工程（>1000 表 / 上万实体、253+ 引用）30s 与 §二 那条检索同源；
+IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，同 §三 3.3）。
+
+### 14.3 复验判据（装本单修复包后）
+
+1. 同一条带 `Example_Where_Clause` 的语句点开，判据：`[open-perf]` 的 `m2≤800` 或 `m2=0`（dumb 期跳过），`total` 从 30s 量级降到秒级；左栏允许先出占位骨架（`{{criterion.condition}}`）。
+2. 不再出现「Plugin 'SQL Visualizer' might be slowing things down」。
+3. 若 total 仍 30s 且 **profile 段占大头** ⇒ 另立 S7（`resolveExampleProfile` 有界化），不并入本单；届时按 `[open-perf]` 的 profile 读数决定阈值与降级形态（无 profile 时左栏回退为无预设骨架）。
+
+### 14.4 需要的读数
+
+- 那 30s 窗口的 `[open-perf]` 行（通常一条，`always=true` 对 Example 档恒记）；
+- 若有 `[m2]` 行（`cache hit` / `unresolved` / `prefetch skip reason=…`）一并给。
