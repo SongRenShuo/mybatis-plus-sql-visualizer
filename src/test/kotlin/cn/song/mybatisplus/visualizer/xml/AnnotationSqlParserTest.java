@@ -51,7 +51,8 @@ public class AnnotationSqlParserTest {
     public void 非script纯文本_dollar属性链求值为空时提示() throws Exception {
         XmlPreviewModel model = parser.parse("SELECT ${x.y} FROM t", XmlStatementKind.SELECT, List.of());
         RenderedXmlSql rendered = model.renderSql();
-        assertEquals("SELECT FROM t", compact(rendered.sql()));
+        // T-MbgExamplePreview R1：预览链占位模式——求值为空写成 {{表达式}}，不再是无声空串
+        assertEquals("SELECT {{x.y}} FROM t", compact(rendered.sql()));
         boolean anyEmpty = rendered.errors().stream().anyMatch(e -> e.contains("求值为空"));
         assertTrue(anyEmpty);
     }
