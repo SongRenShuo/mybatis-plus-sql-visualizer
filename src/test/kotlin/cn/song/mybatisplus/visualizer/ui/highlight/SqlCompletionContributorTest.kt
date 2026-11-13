@@ -231,4 +231,21 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
         val roundTrip = com.intellij.psi.PsiDocumentManager.getInstance(proj).getPsiFile(doc!!)
         assertNotNull("PsiDocumentManager 应能从 document 反查到 PSI（补全框架依赖）", roundTrip)
     }
+
+    /**
+     * §二十八：用户实测形态——在 SELECT 列表里删到 `DEL_` 再补 `DEL_F`，补全没反应。
+     * 先钉死「子句判定」这一半：这段文本必须判成 SELECT 列位（不是 TABLE），否则列名分支会被整段跳过。
+     */
+    fun testSelectListPartialColumnClause() {
+        val samples = listOf(
+            "SELECT 'false' AS QUERYID, ID, DEL_" to SqlClause.SELECT_COLUMN,
+            "SELECT 'false' AS QUERYID, ID, DEL_F" to SqlClause.SELECT_COLUMN,
+            // WHERE 后的部分列名是列位（实测返回 COLUMN；我最初的 UNKNOWN 预期是错的）
+            "SELECT ID, DEL_FLAG FROM CUST_CHANNEL WHERE DEL_F" to SqlClause.COLUMN,
+        )
+        samples.forEach { (text, expected) ->
+            val actual = detectClause(text, text.length)
+            assertEquals("子句判定: \"$text\"", expected, actual)
+        }
+    }
 }

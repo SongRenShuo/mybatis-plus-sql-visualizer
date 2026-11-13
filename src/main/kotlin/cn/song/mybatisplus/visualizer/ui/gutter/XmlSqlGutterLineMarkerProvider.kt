@@ -50,6 +50,10 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         // 弹窗 2.7~4.6s），第二次起只有 200ms 级。渲染 gutter 时顺手在后台预取一次——用户从
         // 「看到图标」到「点开」通常有秒级延迟，届时缓存已热；不改变任何交互，失败静默。
         runCatching { prefetchMbgExample(tag) }
+        // §二十七：文件首次渲染 gutter 时后台预热一次「补全上下文」（实体解析冷态实测 13.3s）。
+        // 原来这笔成本压在点击预览里（pre-assembly:completion=13280ms）；挪到文件打开时，
+        // 用户真去点预览/补全时已经是热态。每个文件只做一次，dumb 期跳过（等下次渲染再试）。
+        runCatching { warmCompletionContextOnce(tag) }
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
@@ -115,6 +119,38 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
+
+        /** §二十七：已预热过补全上下文的文件（按 VirtualFile.url，每文件一次）。 */
+        private val warmedContextFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /**
+         * 后台预热补全上下文（实体解析 + 参数名）。**不解析联表候选**（那条另有预热链）。
+         * 读动作走 nonBlocking + inSmartMode：等索引不持读锁，可取消。
+         */
+        private fun warmCompletionContextOnce(tag: XmlTag) {
+            val project = tag.project
+            val fileUrl = tag.containingFile?.virtualFile?.url ?: return
+            if (!warmedContextFiles.add(fileUrl)) return
+            if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) {
+                warmedContextFiles.remove(fileUrl) // 索引期不预热，等下一次渲染再试
+                return
+            }
+            val started = System.currentTimeMillis()
+            com.intellij.openapi.application.ReadAction.nonBlocking<Unit> {
+                XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = false)
+                Unit
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
+                .onSuccess {
+                    LOG.info("[open-perf] ctx warm done in ${System.currentTimeMillis() - started}ms file=$fileUrl")
+                }
+                .onError { t ->
+                    warmedContextFiles.remove(fileUrl)
+                    LOG.info("[open-perf] ctx warm fail ${t.javaClass.simpleName}: ${t.message}")
+                }
+        }
 
         private val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", XmlSqlGutterLineMarkerProvider::class.java)

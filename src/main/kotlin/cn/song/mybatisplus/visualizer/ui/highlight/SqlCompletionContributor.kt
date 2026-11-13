@@ -54,6 +54,9 @@ class SqlCompletionContributor : CompletionContributor() {
          */
         private val documentContexts = WeakHashMap<Document, SqlCompletionContext>()
 
+        /** §二十七：已打过补全触发日志的文档（WeakHashMap 当集合用，防日志刷屏）。 */
+        private val completionLogSeen = WeakHashMap<Document, Boolean>()
+
         fun registerContext(document: Document, ctx: SqlCompletionContext) {
             documentContexts[document] = ctx
             LOG.debug("[SqlCompletion] registerContext: doc=${document.hashCode()}, table=${ctx.tableName}, mapSize=${documentContexts.size}")
@@ -104,6 +107,17 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
                         ?: documentContexts[parameters.editor.document]
+                    // §二十七：补全是否真的被触发、上下文里有几列——用户报「补全没反应」时不用再猜。
+                    // 每个 Document 只打一条（WeakHashMap 计数，文档释放自动清理）。
+                    if (!completionLogSeen.containsKey(parameters.editor.document)) {
+                        completionLogSeen[parameters.editor.document] = true
+                        LOG.info(
+                            "[completion] invoke: ctx=${ctx?.tableName ?: "-"} cols=${ctx?.columns?.size ?: -1} " +
+                                "candidates=${ctx?.candidateTables?.size ?: -1} schemaCols=${ctx?.schemaColumns?.size ?: -1} " +
+                                "editorCtx=${parameters.editor.getUserData(SqlCompletionContext.KEY) != null} " +
+                                "doc=${parameters.editor.document.hashCode()}",
+                        )
+                    }
                     if (LOG.isDebugEnabled) LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
