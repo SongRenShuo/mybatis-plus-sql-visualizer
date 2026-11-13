@@ -259,19 +259,25 @@ object XmlSqlCompletionContextResolver {
     }
 
     /**
-     * T-StartupReadLockFreeze §二十九：**按类名 + 文件版本**缓存实体解析结果。
+     * T-StartupReadLockFreeze §二十九：**按「类名 + 类正文指纹」**缓存实体解析结果。
      *
      * 真机实测 `EntityResolver.resolve` 对同一实体每次要 9 秒，而它自己的缓存键含
      * `identityHashCode(PsiFile)`——PSI 一重建就失配，于是每次点击都重算一遍
-     * （`resolve=9314/9447/9259ms` 三连）。这里改用 `qualifiedName + modificationStamp`
-     * 做键：类文件没改就直接复用，改了就自然失效。
+     * （`resolve=9314/9447/9259ms` 三连）。
+     *
+     * 判据演进（两次都被真机/门禁打回，别再退）：
+     *  1. `modificationStamp`：PSI 重建（含本插件自己写临时文档）会把它顶掉，同一实体反复重算
+     *     （实测 `resolve=1ms` 之后紧接着 `4786ms`）；
+     *  2. **TTL 优先**（§三十二）：把「失配」钝化成「60 秒内一律命中」——代价是**内容改了也不重算**：
+     *     dev 实测同一 `com.example.DeviceInfoEntity` 在不同场景里 `@TableName` 不同，第二个场景拿到
+     *     第一个的解析结果，别名列补全整片消失（CI `test(4)` 三连红）；用户侧等价于「改了实体注解，
+     *     预览与补全 60 秒内还是旧的」。
+     *  3. 现口径：`clazz.text.hashCode()`——PSI 重建后**内容不变即哈希不变**（不误 miss），真改了注解/
+     *     字段就变（不误 hit）。文本读取是 O(类大小) 的 PSI 走树（微秒级），远低于一次 resolve。
      */
     private val entityInfoCache: MutableMap<String, EntityInfoEntry> = java.util.concurrent.ConcurrentHashMap()
 
-    private data class EntityInfoEntry(val stamp: Long, val table: TableInfo, val createdAt: Long)
-
-    /** §三十二：实体解析缓存 TTL——文件 stamp 在本工程里会被高频动作顶掉，纯 stamp 判据必然反复 miss。 */
-    internal var entityCacheTtlMs = 60_000L
+    private data class EntityInfoEntry(val signature: Int, val table: TableInfo)
 
     /** 测试缝：真正执行 `EntityResolver.resolve` 的次数（验证缓存命中用）。 */
     internal var entityResolveRuns = 0
@@ -284,19 +290,18 @@ object XmlSqlCompletionContextResolver {
 
     private fun resolveEntityCached(project: Project, clazz: PsiClass): TableInfo? {
         val qName = clazz.qualifiedName ?: clazz.name ?: return null
-        val stamp = runCatching { clazz.containingFile?.modificationStamp ?: 0L }.getOrDefault(0L)
-        val now = System.currentTimeMillis()
+        // 内容指纹：PSI 重建不误 miss，真改注解/字段不误 hit（口径详见 entityInfoCache 的 KDoc）
+        val signature = runCatching { clazz.text.hashCode() }.getOrDefault(0)
         entityInfoCache[qName]?.let { entry ->
-            // TTL 内直接命中；TTL 外要求 stamp 未变（文件真被改了才重算）
-            if (now - entry.createdAt in 0 until entityCacheTtlMs || entry.stamp == stamp) {
-                LOG.info("[open-perf] entity cache hit qName=$qName ttl=${now - entry.createdAt}ms")
+            if (entry.signature == signature) {
+                LOG.info("[open-perf] entity cache hit qName=$qName sig=$signature")
                 return entry.table
             }
         }
         LOG.info("[open-perf] entity cache miss qName=$qName → EntityResolver.resolve")
         val resolved = runCatching { EntityResolver().resolve(clazz) }.getOrNull() ?: return null
         entityResolveRuns++
-        entityInfoCache[qName] = EntityInfoEntry(stamp, resolved, now)
+        entityInfoCache[qName] = EntityInfoEntry(signature, resolved)
         return resolved
     }
 
