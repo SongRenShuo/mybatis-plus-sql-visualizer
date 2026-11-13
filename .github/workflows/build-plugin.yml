@@ -31,6 +31,11 @@ on:
         description: '完整发行说明路径（留空＝按版本号在 docs/发行说明 下匹配；仅在正文里作链接）'
         required: false
         type: string
+      marketplace_lite:
+        description: 'marketplace 聚合腿只跑 243 子任务（内测轮省墙钟；逐目标 API 兼容仍由 verify×3 全覆盖）'
+        required: false
+        type: boolean
+        default: false
 
 # 创建 Release 并上传资产需要写权限（GITHUB_TOKEN）；
 # actions: read 用于 publish 模式跨运行下载门禁产物（显式声明 permissions 会重置所有默认作用域）
@@ -321,9 +326,16 @@ jobs:
           ":verifyPlugin -x buildPlugin -PgifRecord=false --console=plain"
 
       - name: Marketplace 门禁（在线 + 无豁免，聚合任务）
-        run: >-
-          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
-          ":verifyMarketplace -PgifRecord=false --console=plain"
+        # T-BetaMarketLite（2026-11-12，master 183c98b3d 增量按 k2j 形态适配）：marketplace_lite=true
+        # 时只跑 verifyMarketplace243 子任务。master 侧依据是墙钟实测（run 43203043486）：marketplace
+        # 腿挂在 needs: build 后面，是整轮的地板；k2j 形态里这条腿是单 job 聚合（子任务
+        # verifyMarketplace243/253/262 在本 job 内跑），lite 时收窄为 243 子任务即可达成同款收益。
+        # 覆盖上说得通：marketplace 腿验的是上架侧规则（descriptor / changeNotes / 市场约束），
+        # 各目标基本同源；**逐目标的 API 兼容**仍由 verify×3 全量覆盖，253/262 一个不少。
+        # 前置 warmup 保持全目标 :verifyPlugin -x buildPlugin（k2j 既有形态，无条件预热）不变。
+        run: |
+          $marketTask = if ('${{ inputs.marketplace_lite }}' -eq 'true') { ':verifyMarketplace243' } else { ':verifyMarketplace' }
+          pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs "$marketTask -PgifRecord=false --console=plain"
 
   # T-CiMatrix（2026-11-04）：三目标兼容验证并行——每个 job 只验一个 IDE 版本
   # （-PverifyIdes=243/253/262 单版本模式，buildSrc 的 pluginVerification.ides 与 verifyGate
@@ -571,7 +583,7 @@ jobs:
           if ($bad.Count -gt 0) {
             throw ("门禁未全部通过：" + ($bad -join '、') + "。skipped 视同未验证，不得当作通过。")
           }
-          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×1（k2j 聚合腿） / verify×3 / test×6（5 片 + 快桶腿）'
+          Write-Host '五条腿全部 success：build / verifyplugin / marketplace×1（k2j 聚合腿；marketplace_lite 时仅 243 子任务）/ verify×3 / test×6（5 片 + 快桶腿）'
 
   publish:
     # 门禁通过后才进入本 job；挂 environment 后这里会停下来等人工批准
