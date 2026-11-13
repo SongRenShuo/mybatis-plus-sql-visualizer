@@ -58,6 +58,49 @@ class PreviewAssemblyWarmTest : BasePlatformTestCase() {
         assertEquals("同文件同语句只允许预热一次", 1, PreviewAssemblyWarm.runCount.get())
     }
 
+    fun test同一文件的第二条语句不再预热() {
+        // 真机教训（2026-11-13 22:20 用户沙盒）：一个 mapper 有 11 条语句，原实现按「文件#语句」去重
+        // ⇒ 一次渲染预热 11 次（日志 `assembly warm done` × 11，每条 9.8~10.9s）。改为每文件一次。
+        PreviewAssemblyWarm.syncForTest = true
+        myFixture.configureByText(
+            "TwoStmtMapper.xml",
+            """
+            <mapper namespace="com.example.TwoStmtMapper">
+              <select id="first" resultType="map">select * from t_a</select>
+              <select id="second" resultType="map">select * from t_b</select>
+            </mapper>
+            """.trimIndent(),
+        )
+        val tags = PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java).filter { it.name == "select" }
+        assertEquals("夹具应有两条语句", 2, tags.size)
+        PreviewAssemblyWarm.warmOnce(tags[0])
+        PreviewAssemblyWarm.warmOnce(tags[1])
+        assertEquals("同一文件只预热一次（不是每条语句一次）", 1, PreviewAssemblyWarm.runCount.get())
+    }
+
+    fun test每项目预热文件数有上限() {
+        PreviewAssemblyWarm.syncForTest = true
+        var warmed = 0
+        repeat(PreviewAssemblyWarm.WARM_FILES_PER_PROJECT + 2) { i ->
+            myFixture.configureByText(
+                "CapMapper$i.xml",
+                """
+                <mapper namespace="com.example.CapMapper$i">
+                  <select id="selectCap$i" resultType="map">select * from t_cap_$i</select>
+                </mapper>
+                """.trimIndent(),
+            )
+            val tag = PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java).first { it.name == "select" }
+            PreviewAssemblyWarm.warmOnce(tag)
+        }
+        warmed = PreviewAssemblyWarm.runCount.get()
+        assertEquals(
+            "每项目每会话最多预热 ${PreviewAssemblyWarm.WARM_FILES_PER_PROJECT} 个文件（实际 $warmed）",
+            PreviewAssemblyWarm.WARM_FILES_PER_PROJECT,
+            warmed,
+        )
+    }
+
     fun test缺少语句id时不预热() {
         PreviewAssemblyWarm.syncForTest = true
         PreviewAssemblyWarm.warmOnce(mapperTag(withId = false))

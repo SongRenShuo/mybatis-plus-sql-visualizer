@@ -365,6 +365,17 @@ class EntityClassFinder(private val project: Project) {
      * 就本次降级（返回空），下一次查询命中。
      */
     private fun ensureInferredScan(entry: ReverseLookupCache) {
+        // 项目级「跨 ORM 回补结果」缓存（按结构版本）：命中就直接并进去，不再跑全项目推断。
+        // 真机教训（2026-11-13 22:20 用户沙盒）：缓存条目按 TTL(5min) 重建，而回补标记原本挂在条目上
+        // ⇒ 每个 TTL 周期都要重扫一遍全项目（该工程实测 `跨 ORM 回补完成 tables=8906`，一趟 4.7s+）。
+        cachedInferredIndex()?.let { cached ->
+            if (!entry.inferredScanDone) {
+                for ((table, classes) in cached) entry.index.getOrPut(table) { classes }
+                entry.inferredScanDone = true
+                LOG.info("[open-perf] 跨 ORM 回补命中项目级缓存 tables=${cached.size}（跳过全项目推断）")
+            }
+            return
+        }
         val app = ApplicationManager.getApplication()
         val onEdt = app.isDispatchThread
         if (entry.inferredBuilding.compareAndSet(false, true)) {
@@ -421,6 +432,8 @@ class EntityClassFinder(private val project: Project) {
             for ((table, classes) in built) entry.index.getOrPut(table) { classes }
             entry.inferredScanDone = true
             entry.inferredScanCount++
+            // 落项目级缓存（按结构版本失效）：TTL 重建的条目直接复用，不再重扫
+            project.putUserData(INFERRED_INDEX_KEY, projectStructureVersion() to built)
             LOG.info(
                 "[open-perf] 跨 ORM 回补完成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms",
             )
@@ -524,11 +537,22 @@ class EntityClassFinder(private val project: Project) {
     ) {
         try {
             if (built == null) return
-            // 条目可能已被换掉（结构版本变化 / TTL 到期）——旧结果不得写进新条目
-            if (project.getUserData(REVERSE_LOOKUP_CACHE_KEY) !== entry) return
+            // 条目可能已被换掉（启动期结构版本抖动 / TTL 到期）。真机教训（2026-11-13 22:20 用户沙盒）：
+            // 一个疗程里 `候选源=注解索引` 打了 7 次、只 1 次「一次建成」——说明 6 次扫描的结果被
+            // 「条目已换」直接丢弃、然后又在新条目上重扫。改为**落到当前条目**：结果对当前结构仍成立
+            // （本次扫描就是在新结构下跑的），丢弃才是浪费。
+            val current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return
+            val target = current
+            if (target.built) return
             entry.index.putAll(built)
-            entry.scans++
-            entry.built = true
+            target.index.putAll(built)
+            // 已有项目级回补结果（同一结构版本）→ 直接并进来，新条目立刻具备 MBG/iBatis 那部分
+            cachedInferredIndex()?.let { cached ->
+                for ((table, classes) in cached) target.index.getOrPut(table) { classes }
+                target.inferredScanDone = true
+            }
+            target.scans++
+            target.built = true
             indexBuildCount(project).incrementAndGet()
             LOG.info(
                 "[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms" +
@@ -536,6 +560,9 @@ class EntityClassFinder(private val project: Project) {
             )
         } finally {
             releaseBuild(entry)
+            // 顺手放行「当前条目」的等待者——等待者可能挂在被替换掉的旧条目上
+            val current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY)
+            if (current != null && current !== entry) releaseBuild(current)
         }
     }
 
@@ -577,6 +604,12 @@ class EntityClassFinder(private val project: Project) {
      * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值的实体取不到表名（老版本全量扫描同样
      * 取不到注解值，但会退化成「按类名推断」而可能命中）——约定命名场景仍由快路径兜住。
      */
+    /** 项目级「跨 ORM 回补结果」——同结构版本才有效（结构变了就作废重扫）。 */
+    private fun cachedInferredIndex(): Map<String, List<MatchedClass>>? {
+        val cached = project.getUserData(INFERRED_INDEX_KEY) ?: return null
+        return if (cached.first == projectStructureVersion()) cached.second else null
+    }
+
     private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
         indexScanDelayMsForTest?.let { if (it > 0) Thread.sleep(it) }
         // 只建「注解索引」这一半；未命中的表由 findByTableNameAnnotationCached 触发
@@ -774,6 +807,10 @@ class EntityClassFinder(private val project: Project) {
 
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
+
+        /** 项目级「跨 ORM 回补结果」缓存（结构版本 → 表名索引）——TTL 重建条目时不重扫全项目。 */
+        private val INFERRED_INDEX_KEY =
+            Key.create<Pair<Long, Map<String, List<MatchedClass>>>>("sqlvis.reverseLookup.inferredIndex")
 
         /** 跨缓存实例的累计建索引次数（守卫用，见 [indexBuildCount]）。 */
         private val REVERSE_LOOKUP_SCAN_TOTAL_KEY =

@@ -27,7 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * - **不写执行文件**：`mpsql-exec.sql` 的写盘属于 `SqlPreviewService.previewAsync` 的预热分支，本类不调用。
  * - **不触发同步检索**：`preview` 内部对 M2 一律 deferred（首开骨架语义不变）。
  * - **dumb 态跳过**：索引期预热只会跟着索引一起等，跳过等价于现状。
- * - **单会话单文件单语句一次**：`coalesceBy` 单飞 + `warmed` 去重；失败/取消会把 key 放回去等下次渲染重试。
+ * - **每文件一次 + 每项目 【WARM_FILES_PER_PROJECT】 个文件**：`coalesceBy` 单飞 + 文件级去重；
+ *   失败/取消会把名额与去重标记放回去，等下次渲染重试。
  *
  * ## 开关与回退
  *
@@ -44,8 +45,21 @@ internal object PreviewAssemblyWarm {
 
     private val LOG = Logger.getInstance(PreviewAssemblyWarm::class.java)
 
-    /** 已预热过的 `文件#语句`（每文件每语句一次；取消/失败会移除以便下次重试）。 */
-    private val warmed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /**
+     * 每个项目**每会话**允许预热的文件数上限。
+     *
+     * 真机教训（2026-11-13 22:20 用户沙盒日志）：一个 mapper 文件有 **11 条语句**，原实现按
+     * `文件#语句` 去重 ⇒ 一次文件渲染预热了 11 次（日志 `assembly warm done in 9.8~10.9s` × 11，
+     * 那 10 秒几乎全在等 smart mode，但落地时 11 份装配挤在同一刻跑）。预热只为「首次点击」服务，
+     * 一个文件一次就够，且整会话不该无限制地铺开。
+     */
+    internal const val WARM_FILES_PER_PROJECT = 2
+
+    /** 已预热过的文件（按 VirtualFile.url，每文件一次；取消/失败会移除以便下次重试）。 */
+    private val warmedFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** 每项目已用掉的预热额度（会话级）。 */
+    private val usedPerProject: MutableMap<String, AtomicInteger> = java.util.concurrent.ConcurrentHashMap()
 
     /** 实际跑完的预热次数（守卫读数；不代表用户可见行为）。 */
     internal val runCount = AtomicInteger()
@@ -59,7 +73,8 @@ internal object PreviewAssemblyWarm {
     internal var syncForTest: Boolean? = null
 
     internal fun resetForTest() {
-        warmed.clear()
+        warmedFiles.clear()
+        usedPerProject.clear()
         runCount.set(0)
         enabledProvider = { runCatching { Registry.`is`(REGISTRY_KEY, true) }.getOrDefault(true) }
         syncForTest = null
@@ -76,10 +91,19 @@ internal object PreviewAssemblyWarm {
         if (project.isDisposed) return
         val file = tag.containingFile ?: return
         val statementId = runCatching { tag.getAttributeValue("id") }.getOrNull()?.takeIf { it.isNotBlank() } ?: return
-        val key = (file.virtualFile?.url ?: file.name) + "#" + statementId
-        if (!warmed.add(key)) return
+        val fileKey = file.virtualFile?.url ?: file.name
+        val key = "$fileKey#$statementId"
+        // ① 每文件一次（不是每语句——一个 mapper 常有十几条语句，见 WARM_FILES_PER_PROJECT 的实测教训）
+        if (!warmedFiles.add(fileKey)) return
+        // ② 每项目每会话的额度（预热只服务「首次点击」，不该无限铺开）
+        val used = usedPerProject.computeIfAbsent(project.locationHash) { AtomicInteger() }
+        if (used.incrementAndGet() > WARM_FILES_PER_PROJECT) {
+            warmedFiles.remove(fileKey)
+            return
+        }
         if (runCatching { DumbService.isDumb(project) }.getOrDefault(false)) {
-            warmed.remove(key) // 索引期不预热，等下一次渲染再试
+            warmedFiles.remove(fileKey) // 索引期不预热，等下一次渲染再试
+            used.decrementAndGet()
             return
         }
         val started = System.currentTimeMillis()
@@ -95,11 +119,13 @@ internal object PreviewAssemblyWarm {
                 .coalesceBy(this, "assemblyWarm:$key")
                 .submit(AppExecutorUtil.getAppExecutorService())
                 .onError { t ->
-                    warmed.remove(key)
+                    warmedFiles.remove(fileKey)
+                    used.decrementAndGet()
                     LOG.info("[open-perf] assembly warm 未完成：${t.javaClass.simpleName}（下次渲染重试）")
                 }
         }.onFailure {
-            warmed.remove(key)
+            warmedFiles.remove(fileKey)
+            used.decrementAndGet()
         }
     }
 
@@ -126,7 +152,7 @@ internal object PreviewAssemblyWarm {
             LOG.info("[open-perf] assembly warm done in ${System.currentTimeMillis() - startedMs}ms key=$key")
         } catch (t: Throwable) {
             if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
-            warmed.remove(key)
+            warmedFiles.remove(key.substringBefore('#'))
             LOG.info("[open-perf] assembly warm fail ${t.javaClass.simpleName}: ${t.message}（等价于没预热）")
         }
     }
