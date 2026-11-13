@@ -387,3 +387,77 @@ fun prefetch(project: Project?, namespace: String?, statementId: String) {
 - `CHANGELOG.md` 的 `[Unreleased]` 未由本车道回填（车道文件范围不含该文件）：T-StartupReadLockFreeze 的用户可见条目应在 S1/S2 合流后按能力面统一落笔。
 - S4-b（`WriteCommandAction.runWriteCommandAction` 统一化）仍按 §九 D-3 留作后续。本轮实测新增一条支撑：投递拍也会被套写意图包装，只有「不持写意图的写入口」才可能避开升级等待，S4-b 的评估应以此为前提。
 - 真机验收（§十）判据里与本项相关的只有第 1、5 条的一半：日志应能看到 `[T-WSC] write deferred to nonModal + bounded wait … (S4-a)` 与 `dispatch accepted without waiting (caller is EDT, S4-a)`；「不再弹 not responding」是 S1/S2 与本项合力的结果，不能单记在本项。
+### 13.9 车道 A（预取链：S1 / S2 / S3 / S5-XmlEw / S6）— 2026-11-13
+
+- 工作树：`F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\.worktrees\mpsv-startup-freeze-a`
+- 分支：`t-startup-freeze-prefetch`（基点 master `077d4370f`）
+- 提交：`39d4b2706`（`git show --stat` 只列 4 个文件：`src/main/kotlin/…/ui/MbgExampleCallResolver.kt`、
+  `src/main/kotlin/…/ui/XmlEwResolver.kt`、`src/main/resources/META-INF/plugin.xml`、
+  `src/test/kotlin/…/ui/MbgExamplePrefetchGateTest.kt`）
+
+**落地内容**
+
+| 项 | 落地形态 |
+|---|---|
+| S1 预取去阻塞 | `prefetch` 改 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project).coalesceBy(this, key).submit(AppExecutorUtil.getAppExecutorService())`；删掉「阻塞读锁 + `executeOnPooledThread`」与全局 `inFlight` 单飞（`coalesceBy` 只合并同 key，卡一条不再拖死其它 key）。`resolveCached` 拆成 `cachedIfFresh` / `searchOnce` / `storeResolved`，非阻塞回调复用后两段；`resolveCached` 对外语义与既有 3 条断言不变 |
+| S2 预算 | 每项目每会话 32 次检索；单次 1500 ms 硬预算（到点 `promise.cancel()`，由 nonBlocking 的进度检查传播进 `ReferencesSearch`，读锁随之释放）并记失败记忆 |
+| S2 三道闸 | `Registry` 开关 → 项目未初始化 → dumb → 冷却（10 s）→ namespace 规模熔断 → 失败记忆 → 缓存新鲜 → 预算；任一命中只打 `[m2] prefetch skip reason=…` |
+| S2 规模门 | 取 §九 D-2 的「首次检索耗时自适应」：单次真实检索耗时 ≥800 ms 即本会话对该 namespace 熔断（`[m2] prefetch circuit-open namespace=…`）。**不用模块文件数计数**：文件计数要额外查 `FileIndex`/`FileTypeIndex`，那本身也是索引操作（索引期同样会等）；耗时为已付成本、零额外查询，且随工程规模自适应 |
+| S2 开关 | plugin.xml `<registryKey key="sqlvis.mbg.prefetch" defaultValue="true" description="…"/>`（主 `<extensions defaultExtensionNs="com.intellij">` 块内）；代码经 `prefetchEnabledProvider` 读取（`Registry.is(key, true)`，`is` 为 Kotlin 关键字须反引号）。`com.intellij.registryKey` EP 在 243 `app-client.jar!/META-INF/IdeCore.xml` 实证存在且 `dynamic="true"`，**未降级为 sysprop** |
+| S3 预览解析 | 内部改 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project).submit(…)` + `promise.blockingGet(800 ms)`；超时 `cancel()` 并返回 null（`XmlPreviewService` 已按「解析不到」降级占位骨架）。**未用 `executeSynchronously`**，理由见下 |
+| S5 同族面（仅本车道） | `XmlEwResolver` 的默认 `callFinder` 加 `DumbService.isDumb` 门（dumb 时返回空并打 `[m2] resolve skip reason=dumb-mode stage=ew-refs`，与 `MapperNavigationTargets` 同口径） |
+| S6 可见性 | 跳过/放弃路径统一 `[m2] prefetch / resolve skip reason=… elapsedMs=… key=…`；无新增通知/状态栏项 |
+
+**与计划文本的三处偏差（各有实证理由）**
+
+1. **S3 未用 `executeSynchronously()`**。243 字节码实证（`javap -c NonBlockingReadActionImpl`）：
+   ① `executeSynchronously` 遇到 `coalesceBy`/`finishOnUiThread` 直接抛 `IllegalStateException`；
+   ② 它**没有时间预算**，`inSmartMode` 约束未满足时走 `invokeLater` + `awaitWithCheckCanceled`
+   在**调用线程上等**——正是本单要消灭的「调用方持等」形态；③ 「超预算返回 null」在该 API 上无法实现。
+   落地改为「提交 + 有界 `blockingGet(800 ms)` + 超时 cancel」：调用方最多付出 800 ms，读锁由平台线程持有且可取消。
+   额外分支：调用方**已持读锁**（MCP `renderXmlSnippet` 的 `ReadAction.compute` 内）时就地嵌套读动作，省一次锁往返。
+2. **规模门取耗时自适应而非模块文件数**（理由见上表；即 §九 D-2 的建议口径）。
+3. **冷却起点用「本插件第一次看到该项目的时间」代理「项目打开时间」**：243 的 `Project` 无打开时间 API
+   （`javap` 核过 `com.intellij.openapi.project.Project` 全部公开方法）。副作用＝项目打开后 10 s 内 gutter
+   首屏不预取，正好落在要避开的数据源/索引加载窗口。
+
+**定向读数（`./gradlew -Pkotlin.compiler.execution.strategy=in-process test --tests …`，工作树仅本轮 4 文件改动）**
+
+| 测试类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `ui.MbgExampleCallCacheTest`（既有） | 3 | 0 | 0 | 0 |
+| `ui.MbgExamplePrefetchGateTest`（新增，a~f 六条闸） | 6 | 0 | 0 | 0 |
+| `ui.XmlEwResolverTest`（S5 触碰文件回归） | 6 | 0 | 0 | 0 |
+| `config.PluginXmlStructureGuardTest` | 23 | 0 | 0 | 0 |
+| `config.PluginXmlExtensionPointResolutionTest` | 4 | 0 | 0 | 0 |
+| `convention.DynamicEpComplianceGuardTest` | 3 | 0 | 0 | 0 |
+| `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 | 0 |
+
+新增用例与断言对应：dumb → `searchRuns==0`；未初始化 → 0；冷却期内（t=0 与 t=COOLDOWN−1 两拍）→ 0；
+Registry 关闭 → 0；smart+就绪+开关开 → `searchRuns==1` 且同 key 再来一次为 `cache-fresh`；预算耗尽 → 停在 32。
+
+**反向验证（摘除式，LESSONS L50：先自证探针落地）**
+
+| 步骤 | 读数 |
+|---|---|
+| 摘除 | 把 `if (dumb) return PrefetchDecision(false, "dumb-mode")` 改为 `// RED PROBE…` 注释行； `grep -cE '^[[:space:]]*if \(dumb\) return PrefetchDecision'` ＝ **0**（未注释语句归零，探针确实生效） |
+| 红 | `MbgExamplePrefetchGateTest`：tests=6 **failures=1** errors=0 skipped=0；失败例「dumb态不预取」，`expected:<[dumb-mode]> but was:<[cooldown]>`（去掉 dumb 门后冷却门接管，说明该断言认的正是 dumb 门） |
+| 还原 | 恢复该行：同 grep ＝ **1**，`grep -c 'RED PROBE'` ＝ **0**；重跑 tests=6 failures=0 errors=0 skipped=0 |
+
+**not run（如实标注）**
+
+- 全量 `testShards`、`verifyGate`/`verifyPlugin`/`verifySmoke`/`buildPlugin`、`runIde` 沙盒走查；
+- §十「真机验收」5 步（用户侧 1000+ 表工程，冷索引首开 / 预览 1 s 内出骨架 / 连滚 5 分钟无冻结报告 /
+  Registry 开关复测 / `[m2]` 日志抽查）；
+- **生产调度段无平台级用例**：纯 JUnit 无 `Project`，`ReadAction.nonBlocking` + 预算计时器这一段只有编译期
+  与 API 面核实（方法签名逐个 `javap` 对过 243 发行包），决策/计数/落盘由 `prefetchForTest` 覆盖；
+- `WrapperLocator`、`SqlDialectMappingPrewarm`、`OnboardingAnchorTip` 未改（车道边界，计划 §五 S5 表登记项
+  由主控另行安排）。
+
+**移交项（主控收口）**
+
+- `CHANGELOG.md` 的 `[Unreleased]` 未回填（车道文件边界）：建议按 `39d4b2706` 记一条「打开大工程不再因预取卡死；
+  新增 Registry 开关 `sqlvis.mbg.prefetch`（默认开，只关预取）」。开关最终形态＝**plugin.xml `registryKey`**（非 sysprop）；
+  S3＝**nonBlocking + 800 ms 有界等待**（非 `executeSynchronously`）。
+- 用户自救口径更新：§六 第 1 条（关左侧图标）之外，新增「Registry 搜 `sqlvis.mbg.prefetch` 取消勾选」＝
+  只关预取、保留预览。

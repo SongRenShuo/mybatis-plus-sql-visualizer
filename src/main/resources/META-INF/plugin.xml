@@ -463,6 +463,14 @@
              本类只把占位换成 `select#id`，作用面收窄到 mapper 文件的语句标签/<sql> 且跨多行） -->
         <lang.foldingBuilder language="XML" order="first"
                              implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperFoldingBuilder"/>
+        <!-- T-StartupReadLockFreeze S2：MBG Example 预取总开关。
+             预取是投机性加速（打开 mapper XML 时提前跑 M2 引用检索），在超大工程 + 冷索引期会与
+             EDT 的写锁升级互等（2026-11-12 现场两根栈，计划 §二/§三）。关闭只影响「第一次点开预览
+             是否命中热缓存」，预览功能本身不受影响；打开＝平台 Registry（Help → Find Action →
+             Registry…）搜 sqlvis.mbg.prefetch 勾选，改动即时生效（每次预取都重新读）。
+             代码读取：ui/MbgExampleCallResolver.prefetchEnabledProvider。 -->
+        <registryKey key="sqlvis.mbg.prefetch" defaultValue="true"
+                     description="Prefetch MBG Example call-site resolution in background (speeds up the first SQL preview). Disable if the IDE freezes while opening large mapper XML files; previews keep working."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
