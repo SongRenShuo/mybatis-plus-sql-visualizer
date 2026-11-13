@@ -669,6 +669,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
+### L69 镜像动作模板呈现只能走平台 `copyFrom`，直写 `setEnabled`/`setVisible` 是断言面
+
+**规则**：在 `AnAction.update()` 里把事件呈现回写进 `templatePresentation`（接管组让工具栏按钮显示数据源名那类需求）时，**不能**直接调 `templatePresentation.setEnabled/setVisible`——243 平台（`app-client.jar` 字节码实证）这两个 setter 开头就 `assertNotTemplatePresentation`：查 `myFlags & 4096`（TEMPLATE 位）后 `warnInProduction` 带全栈，每次 update 两条 WARN，263 有升级为 error 的风险。合规通道是平台自家的 `Presentation.copyFrom(Presentation)`——私有实现直接 `BitUtil.set(myFlags, …)` 写 enabled/visible 位、不经断言，且补发属性变化事件（手写镜像反而没发）；文本/描述/图标/客户端属性一并镜像，`setPerformGroup` 不在复制面、仍单独设。`setText`/`setIcon`/`setPerformGroup` 不带断言，构造期直写无碍。
+
+**证据**：2026-11-14 用户验收沙盒日志（IU-2024.3.7.1，01:49 控制台挂载）每轮 update 两条 `WARN - Presentation - Template presentations must not be used directly`，全 log 累计 40 条，栈落在 `ChooseDataSourceTakeoverGroup.update` 的 265/266 行。修法 `be43c4bf6` 收敛为 `copyFrom`；守卫 `TakeoverUpdateThreadGuardTest` 禁令牌 +2，反向改回旧写法守卫恰红两处、复改回绿（2/2 + 4/4）。
+
+**正例**：需要镜像呈现时优先找平台自家的批量复制 API（`copyFrom`），它自己就是平台维护的合规路径，还带事件通知；**反例**：逐 setter 手抄呈现字段——新增字段漏抄是 bug，抄到带断言的 setter 是告警。
+
+**Seen 1× (2026-11-14)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
