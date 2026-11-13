@@ -61,6 +61,15 @@ object XmlSqlCompletionContextResolver {
     /** @TableName 注解全限定名（真实 MP 注解，libs.mp.core 提供）。 */
     private const val TABLE_NAME_ANNOTATION = "com.baomidou.mybatisplus.annotation.TableName"
 
+    /**
+     * @TableName 的**简单名**——注解 stub 索引的键就是它（不是 FQN）。
+     *
+     * 243 `JavaAnnotationElementType.indexStub` 字节码实证：键＝`getReferenceShortName(text)`，
+     * 该方法先 `indexOf('(')` 截断再取短类名 ⇒ 属性名/属性值都进不了索引，键恒为 `TableName`。
+     * 因此**按 FQN 查这个索引永远查不到**（该兜底曾恒空，20261113 修）。
+     */
+    private const val TABLE_NAME_ANNOTATION_SIMPLE_NAME = "TableName"
+
     /** 联表候选上限（防大项目候选爆炸，M27 §3.2）。 */
     private const val CANDIDATES_CAP = 50
 
@@ -469,8 +478,18 @@ object XmlSqlCompletionContextResolver {
     /**
      * 项目内 `@TableName` 实体类：
      *  - 注解类可解析（真实 IDE）→ [AnnotatedElementsSearch.searchPsiClasses]（官方注解索引）；
-     *  - 注解类不可解析（测试沙盒/缺依赖）→ 兜底按 FQN 直查 [JavaAnnotationIndex] 注解 stub
-     *    索引（源文件中**全限定名**书写的注解可命中，实体类注解场景即类级注解）。
+     *  - 注解类不可解析（测试沙盒/缺依赖）→ 兜底按**简单名**直查 [JavaAnnotationIndex] 注解 stub
+     *    索引，命中后按注解原文筛掉非本注解的同名者。
+     *
+     * **索引键是简单名，不是 FQN（243 字节码实证，20261113 修）**：
+     * `JavaAnnotationElementType.indexStub` 写入的键＝ `getReferenceShortName(stub.getText())`，
+     * 它先 `indexOf('(')` 截断（属性名/属性值根本不进索引）、再取短类名 ⇒ 键永远是 `TableName`。
+     * 旧实现把 FQN 传进 `getAnnotations(...)`，于是这条兜底**恒空**（且只在「注解类解析不到」时
+     * 才走，正好是它被写出来要救的那个场景）。源码守卫
+     * `XmlSqlCompletionContextResolverIndexKeyTest` 钉住「只传简单名」。
+     *
+     * 同名误命中筛选走**文本**（不 resolve）：写的名字是 `TableName` 或 `com.baomidou…TableName`
+     * 才算；能解析出 FQN 时再要求等于本注解 FQN，拦掉自定义/别家同名注解。
      * 任一环节异常 → 空列表（不抛异常）。
      */
     private fun findTableNameEntities(project: Project): List<PsiClass> {
@@ -480,9 +499,23 @@ object XmlSqlCompletionContextResolver {
             if (annotationClass != null) {
                 AnnotatedElementsSearch.searchPsiClasses(annotationClass, scope).findAll().toList()
             } else {
-                JavaAnnotationIndex.getInstance().getAnnotations(TABLE_NAME_ANNOTATION, project, scope)
+                JavaAnnotationIndex.getInstance().getAnnotations(TABLE_NAME_ANNOTATION_SIMPLE_NAME, project, scope)
+                    .filter { isMybatisTableNameAnnotation(it) }
                     .mapNotNull { PsiTreeUtil.getParentOfType(it, PsiClass::class.java) }
             }
         }.getOrElse { emptyList() }
+    }
+
+    /**
+     * 该注解是不是 MyBatis-Plus 的 `@TableName`（文本判据，不触发 resolve）。
+     *
+     * 索引只保证「简单名是 TableName」；自己人写 `@TableName`、或写全限定名 `@com.baomidou…TableName`
+     * 都算；若注解能解析出 FQN 且不是本注解（自定义同名注解），排除。
+     */
+    private fun isMybatisTableNameAnnotation(annotation: com.intellij.psi.PsiAnnotation): Boolean {
+        val written = annotation.nameReferenceElement?.referenceName ?: return false
+        if (written != TABLE_NAME_ANNOTATION_SIMPLE_NAME) return false
+        val resolved = runCatching { annotation.qualifiedName }.getOrNull()
+        return resolved == null || resolved == TABLE_NAME_ANNOTATION
     }
 }
