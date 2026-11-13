@@ -17,6 +17,21 @@
   崩溃线程 `C2 CompilerThread0` 正在编译平台类 `VisualLineFragmentsIterator::init`），与插件逻辑无关——
   同期本机还在跑 gradle 测试 JVM；属环境面，不在本项范围。
 
+### 1.1 第二轮：真机复验发现**第二处**接管也在刷同一条告警（2026-11-13 10:5x）
+
+首版（`3ce4b7c54`）只改了 `EditorCommentShortcuts`。用户在装了新包的沙盒里再操作一次后，日志仍有告警。
+按调用点归因（每条告警在 `cn.song.mybatisplus` 的第一个栈帧）得到**两处**：
+
+| 调用点 | 告警数 | 时间分布 |
+| --- | --- | --- |
+| `EditorCommentShortcuts.uninstall` | 5 | 08:22 / 08:25 / 09:11 ×2 / 09:38（**全在首版修复前**） |
+| `PreviewDataSourceActionHost.dispose`（`ChooseDataSourceTakeover.kt:444`） | 3 | 08:32 / 09:22 / **10:44（装了首版包之后）** |
+
+即：首版对第一处**已生效**（10:43 起动的会话里 `EditorCommentShortcuts` 零告警），剩下的全来自控制台
+「选择数据源」动作组的接管（`ActionManager.replaceAction("Console.Jdbc.ChooseDataSource", 包装组)`），
+它换入/换回同样是 `replaceAction`。这正是仓内「修一个点要横向审计所有同类面」那条纪律的适用面——
+首版只扫了「我改的那个文件」，没有扫「全仓 replaceAction 调用点」。
+
 ## 二、平台判据（IDEA 2024.3 / `app-client.jar` 字节码实证）
 
 1. `com.intellij.openapi.actionSystem.AnAction.setShortcutSet(ShortcutSet)` 打告警的**四个条件**（偏移 9–80）：
@@ -44,6 +59,7 @@
 | M2 | 键位绑定不变：平台回填的仍是 `ProxyShortcutSet(actionId)`（按 keymap 惰性解析），换入/换回后键位数与 keymap 一致 | 同上（由用例钉住） |
 | M3 | 源码守卫：`replaceAction(` 在类文件里只允许出现 1 次（即 `replaceActionSilently` 内），且必须先出现 `setShortcutSet(CustomShortcutSet.EMPTY)` | `EditorCommentShortcutsTest.test源码守卫_…` |
 | M4 | 行为用例：换入后 / 换回后的 `shortcutSet.keys.size` 必须等于 keymap 对该 id 的映射数 | 同上 |
+| M5 | **横向审计（第二轮补）**：`replaceActionSilently` 提到 `util/ActionReplaceSilently.kt` 共享；`ChooseDataSourceTakeover` 的安装与 dispose 还原两处改走它；源码守卫扩为**全树**——`src/main` 里 `replaceAction(` 只允许出现在助手文件（且仅一处） | `execute/ChooseDataSourceTakeover.kt` + `util/ActionReplaceSilently.kt` |
 
 为什么不改用「组件级快捷键」（`EmptyAction.wrap` + `registerCustomShortcutSet(set, component)`）：
 那条路会**丢掉编辑器右键菜单项**（菜单项引用的是全局 action id），等于回退 O-134 已收口的一半覆盖面；
@@ -92,4 +108,25 @@
 - 实施中两处自纠：① 测试 API 用 `shortcutSet.keys`（243 已无此 getter，实为 `shortcuts`）；
   ② 源码守卫里最早写成 `".replaceAction("`（辅助函数是扩展函数、调用无点号），改成 `"replaceAction("`——
   两处都被定向跑抓出来，未进提交。
+
+### 6.3 第二轮（M5，同一项内的横向审计）
+
+真机复验（10:44）发现仍有告警，按调用点归因后修第二处接管，见 §1.1。
+
+- 落地：新增 `util/ActionReplaceSilently.kt`（`internal fun ActionManager.replaceActionSilently`，
+  KDoc 带字节码判据与单一入口约定）；`EditorCommentShortcuts` 删掉私有同名助手改用它；
+  `ChooseDataSourceTakeover` 的 `install()` 与 `dispose()` 两处改走它。
+- 守卫升级：`EditorCommentShortcutsTest` 的源码守卫从「单文件」改成「**全树**」——遍历
+  `src/main/kotlin` 所有 `.kt`（剥注释后）统计 `\breplaceAction\(`，只允许命中助手文件且仅 1 处，
+  并要求它排在 `setShortcutSet(CustomShortcutSet.EMPTY)` 之后。用例改名为
+  `test源码守卫_全树只允许经replaceActionSilently换全局动作`。
+- 读数：定向 **146/0/0**（`EditorCommentShortcutsTest` 17 + `EditorCopyShortcutsTest` + `convention.*` 28 类）。
+- 反向（第二轮探针）：把 `ChooseDataSourceTakeover.install()` 那处改回裸 `manager.replaceAction(...)`
+  → `EditorCommentShortcutsTest` **17 例 1 红**，message 明确点名两个越界文件
+  （`ChooseDataSourceTakeover.kt, 1` + 助手文件）——证明守卫确实看得见「第二处」；还原后 17/0/0。
+- 过滤面教训（写进报告用）：`--tests "cn.song.mybatisplus.visualizer.execute.*"` 会把需要 `com.intellij.database`
+  的 DB 集成用例拖进默认 `test` 桶（7 红全是 `NoClassDefFoundError: SqlDialectMappings` 与
+  「请走 testDb* 桶」断言），收窄到具体类即可——与 `reference-db-integration-test-bucket-wiring` 同因。
+- not run：真机日志复验（**第二轮**：需用户再开一次预览关面板，期望两处归因都归零）、全量门禁、verifyGate。
+
 

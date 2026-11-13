@@ -5,7 +5,6 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
@@ -103,31 +102,12 @@ internal object EditorCommentShortcuts {
     }
 
     /**
-     * T-CommentShortcutKeymap：**先把自己的快捷键集合置为 [CustomShortcutSet.EMPTY]，再换入/换回**。
-     *
-     * 为什么必须这一步（243 字节码实证，见 20261113 开发计划 §二）：
-     *  - `ActionManagerImplKt.registerAction` 对新注册的动作无条件执行
-     *    `action.registerCustomShortcutSet(ProxyShortcutSet(actionId), null)`——即每次
-     *    `replaceAction` 都会给**换入的那个实例**重新 `setShortcutSet(新 ProxyShortcutSet)`；
-     *  - `AnAction.setShortcutSet` 在「新集合 ≠ 当前集合 **且** 当前集合 ≠ `CustomShortcutSet.EMPTY`
-     *    且 PROJECT_OPENED 已发生 且 `ActionManager.getId(this) != null`」时打
-     *    `WARN + PluginException(ShortcutSet of global AnActions should not be changed outside of
-     *    KeymapManager)`（2024.3 真机日志实测 7 条，栈落在本类 install/uninstall 的 replaceAction）；
-     *  - 唯一豁免条件就是「当前集合恰为 `CustomShortcutSet.EMPTY`」（字节码 `if_acmpeq EMPTY → 跳过`）。
-     *
-     * 本行自身不告警：此刻 [action] 还没在注册表里（`unregisterAction` 已把 `actionToId` 条目移除、
-     * 换入前的新实例根本没登记过），`ActionManager.getId(action)` 为 null ⇒ 告警块整体跳过。
-     * 换入后平台回填的 `ProxyShortcutSet(id)` 仍然是**按 keymap 惰性解析**的那一套，键位绑定不变。
+     * 换入/换回统一走 [replaceActionSilently]（`util/ActionReplaceSilently.kt`）：先把自己的
+     * `ShortcutSet` 置为 `CustomShortcutSet.EMPTY` 再 `replaceAction`，从而不触发平台
+     * 「ShortcutSet of global AnActions should not be changed outside of KeymapManager」告警
+     * （判据见该文件 KDoc 与 20261113 开发计划 §二）。键位仍由平台回填的 `ProxyShortcutSet(id)`
+     * 按 keymap 惰性解析，行为不变。
      */
-    private fun ActionManager.replaceActionSilently(actionId: String, action: AnAction) {
-        // `getId(action) == null` 是本行不告警的前提：正常换入（新实例未登记）与正常换回
-        // （`unregisterAction` 已把原动作从 actionToId 移除）都满足。被别人登记着时不预置——
-        // 预置本身会告警，交给平台回填（那种场景下平台侧本来也会告警一次，不叠加即可）。
-        if (getId(action) == null) {
-            action.setShortcutSet(CustomShortcutSet.EMPTY)
-        }
-        replaceAction(actionId, action)
-    }
 
     /** 该编辑器是否已被本接管打标（接线覆盖测试与排障用；判定与动作内一致）。 */
     internal fun isMarked(editor: Editor): Boolean = editor.getUserData(MARKER) == true
