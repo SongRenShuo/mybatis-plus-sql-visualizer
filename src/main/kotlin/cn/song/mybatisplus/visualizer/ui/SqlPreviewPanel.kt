@@ -768,6 +768,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var schemeCombo: JComboBox<String>? = null
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
     internal var bindStateLabel: JBLabel? = null
+
+    /** T-PreviewExecWriteDefer：惰性口径下的「显示执行控制台」链接（bind-state 行内）。 */
+    internal var bindStateShowConsoleLink: com.intellij.ui.components.labels.LinkLabel<Any>? = null
+
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     internal var schemeSyncingCombo = false
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -1486,6 +1490,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         /** O-95 S3：绑定数据源指示行/标签 panel.name 锚点（测试定位 + paramRowLabelForTest 排除同口径）。 */
         internal const val BIND_STATE_ROW_NAME = "mpsv.bindStateRow"
         internal const val BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel"
+
+        /** T-PreviewExecWriteDefer：bind-state 行「显示执行控制台」链接的控件名（测试/守卫定位用）。 */
+        internal const val BIND_STATE_SHOW_CONSOLE_NAME = "mpsv.showConsoleLink"
 
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */

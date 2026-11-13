@@ -12,7 +12,7 @@ import org.junit.Test
  * 平台重算语言替换 + 推文件属性 ⇒ 工程进 dumb（第 1 次写→dumb；第 2 次不写→无 dumb）。惰性口径把
  * 这一步挪到「首次执行」，执行链自己会准备 + 同步 exec 文件。
  */
-class PreviewConsoleEagerTest : BasePlatformTestCaseShim() {
+class PreviewConsoleEagerTest : com.intellij.testFramework.fixtures.BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
@@ -43,7 +43,28 @@ class PreviewConsoleEagerTest : BasePlatformTestCaseShim() {
         PreviewConsoleEager.enabledForTest = true
         assertTrue(PreviewConsoleEager.enabled())
     }
-}
 
-/** 平台测试基类（本任务只需项目夹具，避免引 Heavy）。 */
-abstract class BasePlatformTestCaseShim : com.intellij.testFramework.fixtures.BasePlatformTestCase()
+    /**
+     * 接线守卫：bind-state 行必须提供「显示执行控制台」链接，且**惰性口径下才显示**。
+     *
+     * 为什么在这里守：惰性口径下控制台不在打开时创建，而换数据源只能走控制台自带的 Data Sources 菜单
+     * （仓内 W12 定案：不自建换源 UI）——没有这个链接，用户就没有「先看控制台/先换源」的入口。
+     */
+    fun test显示控制台入口仍在且受惰性口径控制() {
+        val candidates = listOf(
+            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt"),
+            java.io.File("../src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt"),
+        )
+        val source = candidates.firstOrNull { it.isFile }?.readText(Charsets.UTF_8)
+            ?: error("找不到 SqlPreviewPanelParamPanel.kt")
+        val codeOnly = source
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("//[^\n]*"), "")
+        assertTrue("bind-state 行必须有「显示执行控制台」链接", codeOnly.contains("panel.console.show"))
+        assertTrue("链接点击必须触发 prepareDefaultConsole", codeOnly.contains("prepareDefaultConsole()"))
+        assertTrue(
+            "链接可见性必须受惰性口径控制（否则 eager 下会多出一个没用的入口）",
+            codeOnly.contains("PreviewConsoleEager.enabled()"),
+        )
+    }
+}

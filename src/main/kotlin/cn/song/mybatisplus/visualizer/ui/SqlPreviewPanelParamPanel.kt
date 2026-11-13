@@ -19,6 +19,7 @@ import cn.song.mybatisplus.visualizer.sql.ValueType
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.ui.components.labels.LinkLabel
 import cn.song.mybatisplus.visualizer.xml.ExprReason
 import cn.song.mybatisplus.visualizer.xml.ExprSupport
 import cn.song.mybatisplus.visualizer.xml.ConditionOutcome
@@ -64,6 +65,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.presetSection
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SCHEME_ROW_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_ROW_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_LABEL_NAME
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_SHOW_CONSOLE_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK_BASE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FNULL
@@ -613,9 +615,24 @@ internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
         foreground = UIUtil.getContextHelpForeground()
     }
     bindStateLabel = label
+    // T-PreviewExecWriteDefer：惰性口径（默认）下预览打开不准备控制台——那一步会写带方言映射的
+    // `mpsql-exec.sql`，平台为「语言替换」重算并推文件属性 ⇒ 工程短暂进 dumb。但用户要「先看控制台 /
+    // 先换数据源」时得有入口：这里给一个**只准备控制台、不执行**的链接。控制台出现后换源仍走它自带的
+    // Data Sources 菜单（与 T-ExplainSwitchNative W12 定案一致：**不自建换源 UI**）。
+    val showConsoleLink = LinkLabel<Any>(
+        MpSqlVisualizerBundle.message("panel.console.show"), null,
+    ) { _, _ ->
+        prepareDefaultConsole()
+        refreshBindStateRow()
+    }.apply {
+        name = BIND_STATE_SHOW_CONSOLE_NAME
+        toolTipText = MpSqlVisualizerBundle.message("panel.console.show.tip")
+    }
+    bindStateShowConsoleLink = showConsoleLink
     return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 2)).apply {
         name = BIND_STATE_ROW_NAME
         add(label)
+        add(showConsoleLink)
         // T-ExplainSwitchNative W12（2026-10-24 用户实测三图）：
         // 图三证明**平台原生工具栏自带 `Data Sources` 菜单**（含 Detach Data Source + 全部源），
         // 那才是「切换数据源」的正确形态。插件侧自建入口（W2 下拉 / W5 链接）已被用户否决；
@@ -634,6 +651,8 @@ internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
 internal fun SqlPreviewPanel.refreshBindStateRow() {
     val label = bindStateLabel ?: return
     label.text = bindStateText()
+    // 惰性口径下、控制台还没挂上时给「显示执行控制台」入口；挂上后（或 eager 口径）隐藏
+    bindStateShowConsoleLink?.isVisible = !PreviewConsoleEager.enabled() && !consoleAttachedToMe()
 }
 
 /**
