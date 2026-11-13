@@ -110,7 +110,8 @@ public class ForeachSqlNodeTest {
     public void null集合默认报错记录() throws Exception {
         RenderedXmlSql result = render(foreach("list"), java.util.Collections.<String, Object>singletonMap("list", null));
         assertEquals("", result.sql());
-        assertTrue(result.errors().stream().anyMatch(e -> e.contains("evaluated to a null value")));
+        // T-MbgExamplePreview R6：文案已中文化（原 MyBatis 英文原文透传到中文 UI）
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("求值为 null")));
     }
 
     @Test
