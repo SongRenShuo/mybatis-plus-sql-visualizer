@@ -1321,7 +1321,9 @@ class BannedApiSourceScanTest {
         // 15→17（T-SyncK2JMaster177，2026-11-08 守卫实测）：A2 波次把 master 的
         // createTempPsiFileAsync / revalidateOnEdt 两个 runCatching 落成 catch(Throwable)+fatal 透传
         // （主控收口改 sneakyThrow），本文件判定点 +2。
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 17,
+        // 17→19（T-SyncK2JMaster178，2026-11-14 守卫实测重登）：A4 批 T-ExecPsiGate 自愈链
+        // （f933c4977，master 183c98b3d）翻译净增 2 处判定（F3 失败原因就地捕获 / F5 站点）。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 19,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
         // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
         // T-EnhancedCaptureDefaultOn（2026-10-19）：consent 机器整段摘除（确认弹窗/预热确认/复用授权
@@ -1337,6 +1339,13 @@ class BannedApiSourceScanTest {
         "src/main/java/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.java" to 1,
         // 2 处：预览服务（T-FP-02b 收口：预览主链降级不算「可选能力探测」，见 master 同族注）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
+        // 1 处（T-SyncK2JMaster178，2026-11-14 新入落地集）：A5 批 iBatis sqlMap 渲染链——
+        // catch(Throwable) 内 fatal 一律立即透传、不落「未渲染节点」事实（OOM/栈溢出不是某个
+        // 标签的渲染失败，记成渲染事实既误导又可能二次 OOM），守卫实测口径计数 1。
+        "src/main/java/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.java" to 1,
+        // 2 处（T-SyncK2JMaster178，2026-11-14 新入落地集）：A5 批 iBatis sqlMap 语句预览服务——
+        // 渲染主链与 selectKey 分支各 1 处 fatal 立即透传，守卫实测口径计数 2。
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.java" to 2,
     )
 
     /**
@@ -1437,7 +1446,13 @@ class BannedApiSourceScanTest {
     // 各批 `runCatching` 落成 try/catch(Throwable)（A1 sql 族 / A2 execute+ui 族 / A3 log+config+update 族 /
     // A4c 面板族），新增站点集中在方言路由、预览装配链、日志追赶链与内测渠道状态机；实测口径 833 个
     // .java 文件 998 站点。守卫原读数 expected:<957> but was:<998>。
-    private val fatalCatchSiteTotalBaseline = 998
+    // T-SyncK2JMaster178（2026-11-14 守卫实测重登）：998 → 1140。本轮 master 95e107b1..183c98b3d
+    // 生产翻译（iBatis/MBG 子链路族 / 执行链 T-ExecPsiGate 自愈链 / T-PreviewDmlResult 写语句通道 /
+    // 更新族与 MCP 导航族等波次 A 全批），master 侧 `runCatching` 降级形态继续落成 Java
+    // try/catch(Throwable)（876 个 .java 文件守卫实测 1140 站点，守卫原读数 expected:<998> but was:<1140>）。
+    // 新增站点均为降级/探测/兜底语义；外层 fatal 透传判定落地集新增 SqlMapSqlRenderer(1) /
+    // IbatisXmlPreviewService(2)，ResultsKt 17→19（T-ExecPsiGate F3/F5）——见 [fatalPassthroughGuardedFiles]。
+    private val fatalCatchSiteTotalBaseline = 1140
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
