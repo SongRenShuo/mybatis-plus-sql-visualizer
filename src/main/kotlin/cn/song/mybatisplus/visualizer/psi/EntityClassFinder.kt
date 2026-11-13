@@ -360,7 +360,7 @@ class EntityClassFinder(private val project: Project) {
             entry.index.putAll(built)
             entry.scans++
             entry.built = true
-            totalScanCountForTest(project).incrementAndGet()
+            indexBuildCount(project).incrementAndGet()
             LOG.info("[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - started}ms")
         } finally {
             entry.building.set(false)
@@ -514,7 +514,7 @@ class EntityClassFinder(private val project: Project) {
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
 
-        /** 跨缓存实例的累计建索引次数（测试守卫用，见 [totalScanCountForTest]）。 */
+        /** 跨缓存实例的累计建索引次数（守卫用，见 [indexBuildCount]）。 */
         private val REVERSE_LOOKUP_SCAN_TOTAL_KEY =
             Key.create<java.util.concurrent.atomic.AtomicInteger>("mp-visualizer.reverseLookupScanTotal")
 
@@ -625,12 +625,12 @@ class EntityClassFinder(private val project: Project) {
             project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.scans ?: 0
 
         /**
-         * 测试访问器：**跨缓存实例**的累计建索引次数。
+         * **跨缓存实例**的累计建索引次数（索引建立方每建一次 +1；守卫与观测用）。
          *
          * 为什么需要它：缓存条目被判定失效时会重建（`scans` 归零），只看 [scanCountForTest] 分不清
          * 「没重扫」和「重扫了但新条目从 0 起算」——「打字不作废索引」这类守卫会**空绿**（实测踩过）。
          */
-        internal fun totalScanCountForTest(project: Project): java.util.concurrent.atomic.AtomicInteger =
+        internal fun indexBuildCount(project: Project): java.util.concurrent.atomic.AtomicInteger =
             project.getUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY)
                 ?: java.util.concurrent.atomic.AtomicInteger().also {
                     project.putUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY, it)

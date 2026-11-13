@@ -264,7 +264,7 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
 
         // ① 未过 TTL：索引不重建（这就是「打字不作废索引」的契约，反向改回 PSI 版本基准 → 本断言必红）
         assertTrue("未过 TTL 时索引不得因正文修改重建", EntityClassFinder(project).find("new_table").isEmpty())
-        assertEquals("未过 TTL 不得重扫", 1, EntityClassFinder.totalScanCountForTest(project).get())
+        assertEquals("未过 TTL 不得重扫", 1, EntityClassFinder.indexBuildCount(project).get())
 
         // ② 过 TTL（置 0）：重建索引 → 新表名可被找到
         EntityClassFinder.reverseLookupTtlMs = 0L

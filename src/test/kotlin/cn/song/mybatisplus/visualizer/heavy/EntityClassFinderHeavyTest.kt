@@ -317,7 +317,7 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         assertTrue("夹具有效性：编辑后 PSI 版本必须递增（$psiBefore → $psiAfter）", psiAfter > psiBefore)
 
         assertTrue(EntityClassFinder(project).find("sys_account_role_rel").isNotEmpty())
-        assertEquals("改源码正文后不得重扫全工程", 1, EntityClassFinder.totalScanCountForTest(project).get())
+        assertEquals("改源码正文后不得重扫全工程", 1, EntityClassFinder.indexBuildCount(project).get())
     }
 
     fun testReverseLookupCacheInvalidatedOnPsiChange() {
