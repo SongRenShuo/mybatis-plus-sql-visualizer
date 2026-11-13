@@ -271,8 +271,19 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
     // 缓存本次 SQL 供下次对比）。
     previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
-    // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
-    prepareDefaultConsole()
+    // M36.5：原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）。
+    // T-PreviewExecWriteDefer：**惰性口径**（默认）下预览打开不准备控制台——这一步会写
+    // `mpsql-exec.sql`，而该文件带方言映射，平台会为「语言替换」重算并推文件属性 ⇒ 整个工程进 dumb，
+    // 还会在 EDT 上复活它的 PSI（`SlowOperations` SEVERE）。控制台交给用户第一次执行/切换数据源时由
+    // 执行链 `selectAndExecute` 自行「准备 + 同步 exec 文件 + 执行」（既有行为）。
+    if (PreviewConsoleEager.enabled()) {
+        prepareDefaultConsole()
+    } else {
+        PreviewConsoleEager.recordDeferred()
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
+            "[open-perf] console prep DEFERRED（惰性口径：预览打开不写 exec 文件）",
+        )
+    }
     // T-StartupReadLockFreeze §14.8：本次 M2 已转后台 —— 等**这一次解析落地**再重算。
     // 不能复用下面的 `runWhenSmart`：smart mode 现已就绪，它会立即触发并重算出同一份占位骨架，
     // 形成空转（每次空转还要再跑一遍装配）。这里等的是 `m2AwaitKey` 对应的那次检索完成。

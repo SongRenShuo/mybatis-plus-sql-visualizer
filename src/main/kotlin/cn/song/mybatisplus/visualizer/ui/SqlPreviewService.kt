@@ -2160,7 +2160,11 @@ class SqlPreviewService(internal val project: Project) {
                 // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
                 // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
                 // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
-                if (result != null && result.previewModel == null && result.batchModel == null &&
+                // T-PreviewExecWriteDefer：惰性口径下**不预热 exec 文件**——预热本身就是「写带方言映射的
+                // mpsql-exec.sql」，会触发 PushedFilePropertiesUpdater ⇒ 工程进 dumb（用户 00:10 A/B：
+                // 第 1 次写→dumb、第 2 次不写→无 dumb）。执行链在用户真执行时会自己同步该文件。
+                if (PreviewConsoleEager.enabled() && result != null && result.previewModel == null &&
+                    result.batchModel == null &&
                     result.xmlModel == null && result.fillClauses.isNullOrEmpty() &&
                     cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
                 ) {

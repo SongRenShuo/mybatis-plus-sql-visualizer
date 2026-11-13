@@ -494,6 +494,11 @@
              代码读取：ui/PreviewAssemblyWarm.enabledProvider。 -->
         <registryKey key="sqlvis.preview.assemblyWarm" defaultValue="true"
                      description="Warm up the SQL preview assembly in background when a mapper XML opens (no UI is created). Disable to build the preview only on click."/>
+        <!-- T-PreviewExecWriteDefer：预览打开是否立即准备执行控制台（会写 mpsql-exec.sql；该文件带方言映射，
+             写入会让平台重算语言替换并推文件属性 ⇒ 工程短暂进 dumb）。默认惰性：控制台在首次执行/切换
+             数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
+        <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
+                     description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
