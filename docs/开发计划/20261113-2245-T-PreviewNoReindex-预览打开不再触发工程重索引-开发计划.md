@@ -74,4 +74,36 @@
 
 ## 六、实施记录
 
-待实施。落地后回填：取证读数（谁触发 dumb）、改动与提交哈希、定向用例、沙盒 A1~A4、not run 清单。
+### 6.1 S0 取证（两处对照，2026-11-13 22:2x / 23:04）
+
+| 环境 | 预览次数 | `enter dumb mode` | 方言映射 | 其他 |
+|---|---|---|---|---|
+| 我的沙盒（`cust-big-demo`，单模块，无编译） | 4 | **0** | `dialect mapping skipped (already=MySQL)` | `preview root: .idea`；`preview temp: created …-N.sql` |
+| 用户会话（demo 多模块，327 条 `BUILDER_PROCESS`） | 7 | **7（严格同拍）** | 未知（该版无 S0 埋点） | dumb 与编译活动相关性仅 2/8 |
+
+两点结论：
+1. **不是「新文件」引起的**：dumb 的任务名是 `com.intellij.openapi.roots.impl.PushedFilePropertiesUpdater`
+   ——**属性推送**，与我们每轮 `setMapping`（`SqlDialectPusher` push-all）同源；纯新增文件走的是索引更新
+   任务。且我的沙盒每轮都新建临时文件却 0 次 dumb（`.idea` 本就被排除索引）。
+2. **与「编译」也不强相关**：8 次 dumb 里只有 2 次 ±3s 内有 `BUILDER_PROCESS`，而 7 次预览全对应 dumb。
+3. 差异解释：我的沙盒里 `getConfiguredMapping` 能读到 MySQL（历史会话写过文件级映射）⇒ 跳过写入；
+   用户工程里探测返回不可判定 ⇒ 旧口径「保守照写」⇒ 每轮 push-all ⇒ 每轮 dumb。
+
+### 6.2 S1 修法（`mappedMemo`）
+
+`DialectPreMapping` 新增 `mappedMemo`（`project.locationHash|vf.path` → (languageId, 写入时刻)，TTL 10 分钟）：
+- 探测**可用**时仍以平台为准（不看备忘）——避免「用户手动改过映射而我们照旧跳过」；
+- 探测**不可用**（`configured == null`）时，若备忘显示上一轮已写成目标方言且未过期 ⇒ 跳过写入
+  （这正是消灭「每轮 push-all dumb」的那一刀）；
+- 写入成功才落备忘，过期后允许再写一次（宁多一次校验，不要永远跳过）。
+
+守卫：`skipByMemo` 纯函数 4 例（探测可用不看备忘 / 备忘命中跳过 / 过期照写 / 目标变化照写）+
+接线源码守卫（`skipByOwnMemo` 与 `mappedMemo[key] =` 必须在位）。
+反向：# 备忘判定一旦摘掉，`skipByMemo` 的三态用例直接红（纯函数是主证据；接线守卫防「接了但没生效」）。
+
+### 6.3 读数与 not run
+
+- **not run**：用户工程复测 A1（连开 4 次预览 `enter dumb mode` 应为 0 次）、A2 的 `console-visible`
+  对比、A3 的模态冲突回归——按用户 2026-11-13「最后的 GUI 验收我来」留给用户。
+- 复测看点：`[M36] dialect mapping skipped (already=memo:MySQL byMemo=true)` 应出现，且其后**不再**出现
+  `enter dumb mode [工程名]`；`request→console-visible` 应明显下降（用户基线 4619 / 392 / 1053 / 316ms）。

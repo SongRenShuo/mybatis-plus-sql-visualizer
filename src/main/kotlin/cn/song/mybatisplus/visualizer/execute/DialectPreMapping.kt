@@ -51,6 +51,41 @@ internal object DialectPreMapping {
         inProcessMapped || configuredIsMySql == true
 
     /**
+     * 已成功写入的映射**备忘**（`project|vf.path` → (languageId, 写入时刻)）。
+     *
+     * 为什么需要：平台探测 `getConfiguredMapping(vf)` 只在**该 vf 自己**上有显式映射时才返回语言；
+     * 而我们对预览文件是按**父目录**映射的（见 `SqlPreviewPanel` 的 KDoc）、对 `mpsql-exec.sql` 是按文件。
+     * 一旦探测返回 null（无法判定），旧口径「保守照写」会**每次预览都重写一次映射**，而 `setMapping`
+     * 会触发 `SqlDialectPusher` push-all ⇒ 平台 `PushedFilePropertiesUpdater` ⇒ **整个工程进 dumb mode**。
+     * 真机现场（2026-11-13 22:20 用户会话）：7 次预览 7 次 `enter dumb mode`，每次都紧跟
+     * 「exec 落盘 + dialect pre-mapped」，dumb 任务名就是 `PushedFilePropertiesUpdater`——不是新文件引起的。
+     */
+    private val mappedMemo: MutableMap<String, Pair<String, Long>> = java.util.concurrent.ConcurrentHashMap()
+
+    /** 备忘有效期：用户可能手动改映射，过期后允许再写一次（宁多一次校验，不要永远跳过）。 */
+    internal const val MAPPING_MEMO_TTL_MS: Long = 10L * 60 * 1000
+
+    /**
+     * 纯判定：探测**不可用**（`probeId == null`）时，是否可凭备忘跳过这次写入。
+     *
+     * 探测可用时一律以平台为准（不看备忘）——避免「用户手动只掉映射、我们仍按备忘跳过」。
+     */
+    internal fun skipByMemo(probeId: String?, targetId: String?, memoLangId: String?, memoAgeMs: Long): Boolean {
+        if (probeId != null) return false
+        if (memoLangId == null) return false
+        if (memoAgeMs !in 0 until MAPPING_MEMO_TTL_MS) return false
+        val target = targetId ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+        return memoLangId.equals(target, ignoreCase = true)
+    }
+
+    /** 备忘键（项目 + 映射目标路径——预览按目录、exec 按文件，各记一条）。 */
+    internal fun memoKey(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): String =
+        project.locationHash + "|" + vf.path
+
+    /** 测试缝：清空备忘。 */
+    internal fun clearMemoForTest() = mappedMemo.clear()
+
+    /**
      * 只读探测 vf 的文件级方言映射是否已显式配置为 MySQL。null = 反射/环境异常（无法判定）。
      * 须在 ReadAction 内调用（[ensureMapped] 已代包；EDT 调用方自行保证）。
      */
@@ -281,10 +316,22 @@ internal object DialectPreMapping {
             targetId == null -> configured.equals(ExecDialectRouting.MYSQL_LANGUAGE_ID, ignoreCase = true)
             else -> configured.equals(targetId, ignoreCase = true)
         }
-        if (shouldSkip(inProcessMapped, configuredMatches)) {
-            // T-PreviewNoReindex S0 取证：区分「跳过」与「真写」——原来两者都返回 true，日志无从判断
-            // `enter dumb mode` 是不是方言映射写入（`SqlDialectPusher` push-all）引起的。
-            LOG.info("[M36] dialect mapping skipped (already=${configured ?: "in-process"} target=${targetId ?: "MySQL"}) ${vf.name}")
+        val key = memoKey(project, vf)
+        val memo = mappedMemo[key]
+        val skipByPlatform = shouldSkip(inProcessMapped, configuredMatches)
+        // 探测不可用（configured == null）时看备忘：我们上一轮确实写成过目标方言就别再写——
+        // 每次重写都会 push-all ⇒ 工程进 dumb（真机 7/7 复现，见 mappedMemo 的 KDoc）。
+        val skipByOwnMemo = configured == null && skipByMemo(
+            probeId = null,
+            targetId = targetId,
+            memoLangId = memo?.first,
+            memoAgeMs = memo?.let { System.currentTimeMillis() - it.second } ?: Long.MAX_VALUE,
+        )
+        if (skipByPlatform || skipByOwnMemo) {
+            LOG.info(
+                "[M36] dialect mapping skipped (already=${configured ?: "memo:${memo?.first}"} " +
+                    "target=${targetId ?: "MySQL"} byMemo=$skipByOwnMemo) ${vf.name}",
+            )
             return true
         }
         val done = CountDownLatch(1)
@@ -303,6 +350,9 @@ internal object DialectPreMapping {
         if (!signaled) {
             LOG.warn("[M36] dialect EDT mapping dispatch timed out after ${waitMs}ms (EDT busy?), continue findFile")
             return false
+        }
+        if (mapped) {
+            mappedMemo[key] = (targetId ?: ExecDialectRouting.MYSQL_LANGUAGE_ID) to System.currentTimeMillis()
         }
         return mapped
     }
