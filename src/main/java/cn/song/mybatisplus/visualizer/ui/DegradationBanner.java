@@ -130,14 +130,25 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         setVisible(false);
     }
 
-    /** 显示提示（文案由调用方按 i18n 键组装三要素）。 */
+    /** 显示提示（文案由调用方按 i18n 键组装三要素）。Kotlin 默认参数 {@code tooltip = null} 的等价重载。 */
     public void show(Kind kind, String message) {
+        show(kind, message, null);
+    }
+
+    /** 显示提示（文案由调用方按 i18n 键组装三要素）。 */
+    public void show(Kind kind, String message, @Nullable String tooltip) {
         // 高优先类别挂起期间，低优先提示不覆盖（DEGRADED 常驻语义的泛化——
         // RENDER_WARNING 挂起时 DOLLAR_INJECT 信息提示同样让位，警示清除后下次更新再回）
         Kind current = currentKind;
         if (current != null && priority(current) > priority(kind)) return;
         currentKind = kind;
         label.setText(message);
+        // T-DegradedPreviewUx P2：降级=提示色、渲染警示=错误色（同一 label 按类别切换）
+        label.setForeground(kind == Kind.DEGRADED
+                ? JBColor.namedColor("WarningForeground", new JBColor(0xB26A00, 0xE0A94D))
+                : JBColor.namedColor("ErrorForeground", JBColor.RED));
+        // 宽度不足时正文会被裁：调用方传入完整文案作 tooltip（不新造「详情」控件）
+        label.setToolTipText(tooltip);
         dismissButton.setVisible(kind == Kind.DOLLAR_INJECT);
         dismissButton.setToolTipText(message);
         // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现

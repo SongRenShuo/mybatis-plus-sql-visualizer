@@ -234,6 +234,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public static final long PREWARM_WAIT_MS = 500L;
 
     /**
+     * T-DegradedPreviewUx P1：预热超时（产物仍在途）型降级横幅的宽限期毫秒——期内产物到达即静默
+     * 换装（主路径装配取消定时器），横幅一次都不出现；到点仍未恢复才显示超时型横幅。硬失败不走这条路。
+     */
+    public static final long DEGRADED_GRACE_MS = 3000L;
+
+    /**
      * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预热目录残留清扫的**年龄**上限（7 天）。
      */
     public static final long STALE_PREVIEW_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000;
@@ -449,6 +455,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * 误判成用户编辑（换装被永久挡掉）。
      */
     public String lastRenderedSql = null;
+
+    /**
+     * T-DegradedPreviewUx P1：瞬时降级的宽限定时器。
+     *
+     * <p>预热超时（产物仍在途）时不立刻挂横幅——{@link #DEGRADED_GRACE_MS} 内产物到达会由主路径装配
+     * 取消本定时器，横幅一次都不出现；到点仍未恢复才显示超时型横幅。硬失败不走这条路。</p>
+     */
+    public javax.swing.Timer degradedGraceTimer = null;
+
+    /** 宽限定时器到点后要披露的原因（{@link #cancelDegradedGraceTimer} 一并清空）。 */
+    public PreviewDegradationReason degradedGraceReason = null;
 
     /** R90：同目标会话基线与持久化历史协调；未知 UUID 仅按目标对象身份比较。 */
     public final cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession explainPlanHistorySession =
@@ -1176,6 +1193,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      */
     public PrewarmAwait<Pair<VirtualFile, PsiFile>> prewarmAwaitForTest() {
         return prewarmAwait;
+    }
+
+    /** T-DegradedPreviewUx P1：宽限定时器挂起中（超时型降级横幅待披露）——测试观测口。 */
+    public boolean degradedGracePendingForTest() {
+        return degradedGraceTimer != null && degradedGraceTimer.isRunning();
     }
 
     /**
