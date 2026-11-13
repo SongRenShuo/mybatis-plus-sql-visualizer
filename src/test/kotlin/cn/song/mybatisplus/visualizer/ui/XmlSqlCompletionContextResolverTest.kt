@@ -336,4 +336,45 @@ class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
         )
         assertNull("Example 无对应实体时必须降级为 null", ctx.main)
     }
+
+    /**
+     * §二十六：mapper 接口解析不到时（MBG 风格 / 沙盒没 Load Maven），用 SQL 里的 FROM 表名反查实体。
+     * 真机 16:55 出现过 `main=-`，那时补全整片为空。
+     */
+    fun testFromTableNameFallback() {
+        // 注意：必须保留 addFileToProject 返回的 Java 文件句柄——`myFixture.file` 是后配的 XML，
+        // 从它里面找 Java 类必然 NoSuchElement（本轮实测踩到）。
+        val javaFile = myFixture.addFileToProject(
+            "CustChannelHolder.java",
+            """
+            package com.example;
+
+            @com.baomidou.mybatisplus.annotation.TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+                private String channelName;
+            }
+            """.trimIndent(),
+        )
+        // Light 沙盒里 EntityClassFinder 依赖索引（返回空），用注入缝提供「表名 → 实体」
+        val entityClass = PsiTreeUtil.findChildrenOfType(javaFile, com.intellij.psi.PsiClass::class.java)
+            .first { it.name == "CustChannel" }
+        XmlSqlCompletionContextResolver.entityFinderForTest = { _, table ->
+            if (table == "cust_channel") entityClass else null
+        }
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.NoSuchMapperInterface">
+              <select id="selectAll" resultType="map">
+                select * from cust_channel where id = #{'$'}{id}
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectAll",
+        )
+        XmlSqlCompletionContextResolver.entityFinderForTest = null
+        assertEquals("应按 FROM 表名反查到实体", "cust_channel", ctx.main?.tableName)
+        assertTrue("反查到的实体应带列", (ctx.main?.columns?.size ?: 0) >= 3)
+    }
 }

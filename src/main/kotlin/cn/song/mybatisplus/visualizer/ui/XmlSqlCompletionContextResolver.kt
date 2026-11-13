@@ -67,6 +67,9 @@ object XmlSqlCompletionContextResolver {
     /** 候选解析预算（T-StartupReadLockFreeze §十九）：超预算即停，剩余候选等下次缓存重建。 */
     internal var candidatesBudgetMs = 400L
 
+    /** 测试缝：表名 → 实体类（Light 沙盒里 EntityClassFinder 依赖索引、拿不到；生产恒 null）。 */
+    internal var entityFinderForTest: ((Project, String) -> PsiClass?)? = null
+
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlCompletionContextResolver::class.java)
 
     /** 非实体参数简单名集合：MP Wrapper 族 + 基本类型包装 + 常见非实体类型（简单名匹配）。 */
@@ -109,7 +112,16 @@ object XmlSqlCompletionContextResolver {
         val method = statementTag.getAttributeValue("id")?.let { id ->
             mapperClass?.findMethodsByName(id, false)?.firstOrNull()
         }
-        return resolveCommon(project, mapperClass, method, includeCandidates)
+        // §二十六：mapper 接口/泛型实体解析不到时的兜底——直接从语句文本取 FROM/JOIN 表名，
+        // 按表名反查实体（MBG 风格 mapper、沙盒没 Load Maven 时最常见）。
+        val fallbackTable = runCatching {
+            // 注意：这里的 `\\b` 必须是正则词界。上一版经脚本写入时被写成了退格符（U+0008），
+            // 正则变成「退格 + from|join」，永远不匹配 ⇒ 兜底恒为 null（已修，勿再用脚本写这段）。
+            Regex("(?i)\\b(?:from|join)\\s+([A-Za-z_][A-Za-z0-9_]*)")
+                .find(statementTag.value.text)
+                ?.groupValues?.getOrNull(1)
+        }.getOrNull()
+        return resolveCommon(project, mapperClass, method, includeCandidates, fallbackTable)
     }
 
     /**
@@ -132,12 +144,24 @@ object XmlSqlCompletionContextResolver {
         mapperClass: PsiClass?,
         method: PsiMethod?,
         includeCandidates: Boolean = true,
+        fallbackTableName: String? = null,
     ): SourceSqlContext {
         val t0 = System.currentTimeMillis()
         val mainEntity = findMainEntity(mapperClass, method)
         val t1 = System.currentTimeMillis()
-        val mainTable = mainEntity?.let { runCatching { EntityResolver().resolve(it) }.getOrNull() }
+        val resolvedTable = mainEntity?.let { runCatching { EntityResolver().resolve(it) }.getOrNull() }
             ?.takeIf { it.tableName.isNotEmpty() }
+        // §二十六：接口/泛型都没解析到时，用 SQL 里的表名反查实体（表名 → @TableName/类名约定）
+        val mainTable = resolvedTable ?: fallbackTableName?.let { table ->
+            runCatching {
+                val clazz = entityFinderForTest?.invoke(project, table)
+                    ?: cn.song.mybatisplus.visualizer.psi.EntityClassFinder(project).find(table).firstOrNull()
+                clazz?.let { EntityResolver().resolve(it) }?.takeIf { it.tableName.isNotEmpty() }
+            }.getOrNull()
+        }
+        if (resolvedTable == null && mainTable != null) {
+            LOG.info("[open-perf] ctx fallback: table=$fallbackTableName 反查到实体 ${mainTable.tableName}")
+        }
         val t2 = System.currentTimeMillis()
         val candidates = if (includeCandidates) buildCandidates(project, mainTable) else emptyList()
         val t3 = System.currentTimeMillis()
