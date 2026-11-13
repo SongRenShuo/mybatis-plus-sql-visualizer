@@ -360,6 +360,62 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         assertEquals("索引重建后（新缓存实例）应扫描 1 次", 1, EntityClassFinder.scanCountForTest(project))
     }
 
+    fun testAsyncIndexBuildDoesNotBlockCaller() {
+        // 真机（2026-11-13 沙盒）：全量扫描实测 4737ms / 9675ms，压在**点击链**上就是「打开还是慢」。
+        // 契约：扫描派到应用线程池，调用方至多等 INDEX_WAIT_BUDGET_MS，超预算就用当前结果返回。
+        // 注入 3 秒扫描延迟 ⇒ 若退化成同步扫描，本次 find 必然 >3s，本用例红。
+        val entity = addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class RoleRel {}
+            """,
+        )
+        EntityClassFinder.syncIndexBuildForTest = false
+        EntityClassFinder.indexScanDelayMsForTest = 3_000L
+        try {
+            val started = System.currentTimeMillis()
+            val first = EntityClassFinder(project).find("sys_account_role_rel")
+            val elapsed = System.currentTimeMillis() - started
+            assertTrue("首次查询不得同步等全量扫描（实测 $elapsed ms）", elapsed < 2_500)
+            assertTrue("扫描未完成时本次降级返回空（不是报错）", first.isEmpty())
+
+            // 后台补齐后：索引建成、下一次查询命中
+            val deadline = System.currentTimeMillis() + 20_000
+            while (EntityClassFinder.indexBuildCount(project).get() == 0 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(100)
+            }
+            assertEquals("后台扫描应最终落地一次", 1, EntityClassFinder.indexBuildCount(project).get())
+            val second = EntityClassFinder(project).find("sys_account_role_rel")
+            assertEquals("索引就绪后应命中", 1, second.size)
+            assertEquals("RoleRel", second[0].name)
+            assertEquals("命中后不得再扫", 1, EntityClassFinder.indexBuildCount(project).get())
+            assertTrue("夹具有效性：实体类必须真的存在（否则本用例什么都没验）", entity.isValid())
+        } finally {
+            EntityClassFinder.syncIndexBuildForTest = null
+            EntityClassFinder.indexScanDelayMsForTest = null
+        }
+    }
+
+    fun testAsyncIndexBuildQueryDoesNotHangWhenBuildInFlight() {
+        // 在途/失败路径必须放行等待者：否则后来者白等一整个预算、且索引再没人能建。
+        // 注入 2 秒延迟让「在途」稳定出现，连查两次都应在预算内返回（不得挂死）。
+        EntityClassFinder.syncIndexBuildForTest = false
+        EntityClassFinder.indexScanDelayMsForTest = 2_000L
+        try {
+            val started = System.currentTimeMillis()
+            assertTrue(EntityClassFinder(project).find("not_exist_table_async_1").isEmpty())
+            assertTrue(EntityClassFinder(project).find("not_exist_table_async_2").isEmpty())
+            val elapsed = System.currentTimeMillis() - started
+            assertTrue("两次在途查询都必须在预算内返回（实测 $elapsed ms）", elapsed < 2_400)
+        } finally {
+            EntityClassFinder.syncIndexBuildForTest = null
+            EntityClassFinder.indexScanDelayMsForTest = null
+        }
+    }
+
     fun testReverseLookupHitRestoresClassesByQualifiedName() {
         // 命中缓存后按类名/全限定名重取：同名类（不同包）不会误配
         addClassFile(

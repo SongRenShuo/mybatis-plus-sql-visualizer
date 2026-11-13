@@ -13,6 +13,8 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
+import com.intellij.util.concurrency.AppExecutorUtil
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -348,23 +350,66 @@ class EntityClassFinder(private val project: Project) {
      * 旧口径是「查一个表名扫一遍」，而 `cust-big-demo` 这类工程一次扫描 3.8s（16804 个类逐个读
      * `@TableName` / 推断表名）——用户每打开一条不同表的语句就再吃一次。
      *
-     * 并发口径：**不阻塞后来者**。索引建立中时，后来的调用方立刻返回空（预览照常打开、上下文降级），
-     * 由先到的线程把索引填好，下一次查询即命中。EDT 上等别人扫 3.8s 正是要根治的形态。
+     * **扫描不上调用方线程**：派到应用线程池（`ReadAction.nonBlocking`，不持读锁等索引），调用方
+     * **至多**等 [INDEX_WAIT_BUDGET_MS]；超预算就用当前（多半空）的结果返回——真机实证（2026-11-13
+     * 沙盒）：「一次建成」这一步实测 **4737ms / 9675ms**，压在点击链上就是用户看到的「打开还是慢」。
+     * 预算内建完就直接命中（同一趟扫描很快返回），建不完则本次降级、下一次查询命中。
      */
     private fun ensureIndexBuilt(entry: ReverseLookupCache) {
         if (entry.built) return
-        if (!entry.building.compareAndSet(false, true)) return
+        if (entry.building.compareAndSet(false, true)) {
+            // 测试口径走同步：既有断言按「首次查询即建好」写（`indexBuildCount`/`scans` 读数）
+            if (syncIndexBuildForTest ?: ApplicationManager.getApplication().isUnitTestMode) {
+                applyBuiltIndex(entry, runCatching { scanAllTablesIndex() }.getOrNull())
+                return
+            }
+            dispatchIndexBuild(entry)
+        }
+        runCatching { entry.latch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS) }
+    }
+
+    /** 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。 */
+    private fun dispatchIndexBuild(entry: ReverseLookupCache) {
+        ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
+            runCatching { scanAllTablesIndex() }.getOrNull()
+        }
+            .inSmartMode(project)
+            .expireWith(ApplicationManager.getApplication())
+            .submit(AppExecutorUtil.getAppExecutorService())
+            .onSuccess { built -> applyBuiltIndex(entry, built) }
+            .onError { t ->
+                LOG.info("[open-perf] 反查索引建立失败：${t.javaClass.simpleName}（下次查询重试）")
+                releaseBuild(entry)
+            }
+    }
+
+    /**
+     * 索引建成落地（同步/异步共用）。三件事按序做完：填索引 → 置 `built`（**@Volatile，写在其后**，
+     * 保证读到 `built=true` 的线程一定看得到已填充的 `index`）→ 放行等待者。
+     */
+    private fun applyBuiltIndex(entry: ReverseLookupCache, built: Map<String, List<MatchedClass>>?) {
+        val started = System.currentTimeMillis()
         try {
-            val started = System.currentTimeMillis()
-            val built = scanAllTablesIndex()
+            if (built == null) return
+            // 条目可能已被换掉（结构版本变化 / TTL 到期）——旧结果不得写进新条目
+            if (project.getUserData(REVERSE_LOOKUP_CACHE_KEY) !== entry) return
             entry.index.putAll(built)
             entry.scans++
             entry.built = true
             indexBuildCount(project).incrementAndGet()
-            LOG.info("[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - started}ms")
+            LOG.info(
+                "[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - started}ms" +
+                    " testSync=${syncIndexBuildForTest == true || ApplicationManager.getApplication().isUnitTestMode}",
+            )
         } finally {
-            entry.building.set(false)
+            releaseBuild(entry)
         }
+    }
+
+    /** 放行等待者并释放在途标记（失败路径同样要放行，否则等待者白等一个预算）。 */
+    private fun releaseBuild(entry: ReverseLookupCache) {
+        entry.building.set(false)
+        entry.latch.countDown()
     }
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
@@ -385,6 +430,7 @@ class EntityClassFinder(private val project: Project) {
      * 无注解则按类名推断（`EntityResolver.inferDecoratedTableName`）。
      */
     private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
+        indexScanDelayMsForTest?.let { if (it > 0) Thread.sleep(it) }
         val cache = PsiShortNamesCache.getInstance(project)
         val scope = GlobalSearchScope.projectScope(project)
         val index = HashMap<String, MutableList<MatchedClass>>()
@@ -465,8 +511,10 @@ class EntityClassFinder(private val project: Project) {
         val index: MutableMap<String, List<MatchedClass>>,
         /** 索引是否已建成（未建成时是「没人扫过」，不是「该表确实没有实体」）。 */
         @Volatile var built: Boolean = false,
-        /** 正在建索引的线程标记——后来者不等待、直接降级返回空。 */
+        /** 正在建索引的线程标记——后来者不重复派，只按预算等一等。 */
         val building: AtomicBoolean = AtomicBoolean(false),
+        /** 建成/失败时放行等待者（等待有预算上限，见 [INDEX_WAIT_BUDGET_MS]）。 */
+        val latch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         var scans: Int = 0,
     )
@@ -517,6 +565,21 @@ class EntityClassFinder(private val project: Project) {
         /** 跨缓存实例的累计建索引次数（守卫用，见 [indexBuildCount]）。 */
         private val REVERSE_LOOKUP_SCAN_TOTAL_KEY =
             Key.create<java.util.concurrent.atomic.AtomicInteger>("mp-visualizer.reverseLookupScanTotal")
+
+        /**
+         * 调用方等待索引建成的**预算上限**（毫秒）。真机实测一趟全量扫描 4737/9675ms，压在点击链上
+         * 就是「打开还是慢」；预算内建完就命中，建不完本次降级（返回空上下文）、下一次查询命中。
+         */
+        internal const val INDEX_WAIT_BUDGET_MS: Long = 800L
+
+        /**
+         * 测试缝：强制建索引走**同步**分支。默认 null ⇒ 看 [com.intellij.openapi.application.ApplicationManager.isUnitTestMode]
+         * （单测/沙盒里为 true，走同步，既有断言按同步写）；置 false 可强制验异步分支。
+         */
+        internal var syncIndexBuildForTest: Boolean? = null
+
+        /** 测试缝：给全量扫描注入人为延迟（毫秒），用于断言「调用方不被扫描阻塞」。 */
+        internal var indexScanDelayMsForTest: Long? = null
 
         /** 库扫描缓存键（T-JarEmbedded 方案 1）。 */
         private val LIBRARY_SWEEP_CACHE_KEY = Key.create<LibrarySweepCache>("mp-visualizer.librarySweepCache")
