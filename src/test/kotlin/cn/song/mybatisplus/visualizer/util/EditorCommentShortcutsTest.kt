@@ -344,7 +344,14 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
 
     /**
      * T-CommentShortcutKeymap 源码守卫（**全树**）：`src/main` 里 `replaceAction(` 只允许出现在共享助手
-     * `util/ActionReplaceSilently.kt` 内（且只有一处），并且必须排在「置 `CustomShortcutSet.EMPTY`」之后。
+     * `util/ActionReplaceSilently.kt` 内（且只有一处），并且必须排在「把快捷键集合置为 EMPTY」之后。
+     *
+     * 三条钉：
+     *  1. `replaceAction(` 只能由共享助手调用（其余接管点一律经 `replaceActionSilently`）；
+     *  2. 助手内「置 EMPTY」必须在 `replaceAction` 之前；
+     *  3. **`setShortcutSet(` 在 `src/main` 里一处都不许有**——它在平台是 `@ApiStatus.Internal`，
+     *     `verifyPlugin` 会判 INTERNAL_API_USAGES 并把发行轮打成红（2026.11.13 首发实测），
+     *     等价且公共的写法是 `registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)`。
      *
      * 行为级断言够不着——平台告警是 `Logger.warn(PluginException)`，仓内无日志捕获通道；而「忘了先置
      * EMPTY」在功能上完全无感（键位照旧生效），只有真机日志里刷
@@ -359,8 +366,10 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
         fun stripped(file: File) = file.readText()
             .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（KDoc 里会提到这些符号）
             .replace(Regex("""(?m)^\s*//.*$"""), "")         // 剥行注释
-        val offenders = File("src/main/kotlin").walkTopDown()
+        val files = File("src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
+            .toList()
+        val offenders = files
             .mapNotNull { file ->
                 val hits = Regex("""\breplaceAction\(""").findAll(stripped(file)).count()
                 if (hits > 0) file.path.replace('\\', '/') to hits else null
@@ -375,11 +384,20 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
         assertEquals("助手文件里只应有一处 replaceAction 调用", 1, offenders.single().second)
         val helper = stripped(File(helperRel)).substringAfter("fun ActionManager.replaceActionSilently", "")
         assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
-        val emptySet = helper.indexOf("setShortcutSet(CustomShortcutSet.EMPTY)")
+        val emptySet = helper.indexOf("registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)")
         val replace = helper.indexOf("replaceAction(")
         assertTrue(
-            "必须先 setShortcutSet(CustomShortcutSet.EMPTY)（$emptySet）再 replaceAction（$replace）",
+            "必须先 registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)（$emptySet）再 replaceAction（$replace）",
             emptySet in 0 until replace,
+        )
+        val internalApiSites = files
+            .filter { stripped(it).contains("setShortcutSet(") }
+            .map { it.path.replace('\\', '/') }
+        assertEquals(
+            "setShortcutSet 是平台 Internal API，verifyPlugin 会判 INTERNAL_API_USAGES；" +
+                "改用 registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)：$internalApiSites",
+            emptyList<String>(),
+            internalApiSites,
         )
     }
 }

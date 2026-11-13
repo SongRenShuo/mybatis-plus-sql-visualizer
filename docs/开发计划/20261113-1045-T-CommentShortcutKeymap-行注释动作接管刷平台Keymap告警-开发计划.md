@@ -55,7 +55,7 @@
 
 | 编号 | 内容 | 落点 |
 | --- | --- | --- |
-| M1 | 换入/换回统一走 `ActionManager.replaceActionSilently`：**先 `action.setShortcutSet(CustomShortcutSet.EMPTY)`，再 `replaceAction`**。这一步自身不告警（动作此刻未在注册表，`getId` 为 null），随后平台的回填命中「当前集合 == EMPTY」豁免 | `util/EditorCommentShortcuts.kt` |
+| M1 | 换入/换回统一走 `ActionManager.replaceActionSilently`：**先经公共 `registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)` 把快捷键集合置空，再 `replaceAction`**（不能用 `AnAction.setShortcutSet`——平台 `@ApiStatus.Internal`，`verifyPlugin` 判 INTERNAL_API_USAGES 会拦发行轮）。这一步自身不告警（动作此刻未在注册表，`getId` 为 null），随后平台的回填命中「当前集合 == EMPTY」豁免 | `util/EditorCommentShortcuts.kt` |
 | M2 | 键位绑定不变：平台回填的仍是 `ProxyShortcutSet(actionId)`（按 keymap 惰性解析），换入/换回后键位数与 keymap 一致 | 同上（由用例钉住） |
 | M3 | 源码守卫：`replaceAction(` 在类文件里只允许出现 1 次（即 `replaceActionSilently` 内），且必须先出现 `setShortcutSet(CustomShortcutSet.EMPTY)` | `EditorCommentShortcutsTest.test源码守卫_…` |
 | M4 | 行为用例：换入后 / 换回后的 `shortcutSet.keys.size` 必须等于 keymap 对该 id 的映射数 | 同上 |

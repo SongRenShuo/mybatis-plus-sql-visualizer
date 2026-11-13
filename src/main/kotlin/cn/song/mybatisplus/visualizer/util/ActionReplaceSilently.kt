@@ -27,10 +27,21 @@ import com.intellij.openapi.actionSystem.CustomShortcutSet
  *
  * **单一入口约束**：`src/main` 里不允许在别处直接调 `ActionManager.replaceAction`
  * （`EditorCommentShortcutsTest` 有全树源码守卫）；新增接管点必须走本函数。
+ *
+ * **只能用公共 API**：置 EMPTY 必须经 `registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)`，
+ * 不能直接用 `AnAction.setShortcutSet`——后者在平台是 `@ApiStatus.Internal`，`verifyPlugin` 会判
+ * `INTERNAL_API_USAGES` 并直接把发行轮打成红（2026.11.13 首次发内测版实测）。守卫同时禁止
+ * `src/main` 出现 `setShortcutSet(`。
  */
 internal fun ActionManager.replaceActionSilently(actionId: String, action: AnAction) {
     if (getId(action) == null) {
-        action.setShortcutSet(CustomShortcutSet.EMPTY)
+        // T-CommentShortcutKeymap：这里**不能**用 `AnAction.setShortcutSet`——它在平台里是
+        // `@ApiStatus.Internal`，`verifyPlugin` 会判 INTERNAL_API_USAGES 并拦下发行轮
+        //（2026.11.13 首发实测）。改为调**公共**的 `registerCustomShortcutSet(set, null)`：
+        // 其方法体就是 `setShortcutSet(set)`（243 字节码偏移 9-13）+ null 组件直接返回，
+        // 效果等价、且只走公开 API。传的必须是 `CustomShortcutSet.EMPTY` **这个单例**
+        //（平台按引用比较豁免），自建空 CustomShortcutSet 不算。
+        action.registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)
     }
     replaceAction(actionId, action)
 }
