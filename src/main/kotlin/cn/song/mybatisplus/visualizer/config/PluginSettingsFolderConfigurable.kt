@@ -635,6 +635,13 @@ class PluginSettingsFolderConfigurable : Configurable {
             // 界面与操作
             val u = PAGE_UI.ref
             fields.add(SearchableField(b.message("settings.showGutterIcon"), "", "settings.section.ui", u))
+            // T-PreviewExecWriteDefer：控制台准备档（三档）——新增设置行必须同步登记到搜索索引
+            fields.add(
+                SearchableField(
+                    b.message("settings.consolePrep"), b.message("settings.consolePrep.tip"),
+                    "settings.section.ui", u,
+                ),
+            )
             // T-MapperNavCoexistYield：共存让位开关（界面节，默认开）
             fields.add(SearchableField(b.message("settings.mapperNavYield"), b.message("settings.mapperNavYield.tip"), "settings.section.ui", u))
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
