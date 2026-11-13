@@ -6,9 +6,11 @@
 
 ## [2026.11.13-beta.2] - 2026-11-13
 
-> 范围＝`2026.11.13-beta.1` 之后的**首开提速与 SQL 补全**增量（内测，Gitee 抢先体验通道），全部落在 `bccc3fd8e`（T-StartupReadLockFreeze 第 4~6 轮，合并 11 笔）。逐条记录见 `docs/发行说明/20261113-1704-首开提速与SQL补全修复-内测说明.md`。
+> 范围＝`2026.11.13-beta.1` 之后的**首开提速与 SQL 补全**增量（内测，Gitee 抢先体验通道）：打开与补全链路（`bccc3fd8e`，T-StartupReadLockFreeze 第 4~6 轮，合并 11 笔），以及两笔补全实体推断修复（`7a0d2a101` / `866c6e651`）。逐条记录见 `docs/发行说明/20261113-1704-首开提速与SQL补全修复-内测说明.md`。
 
 ### Fixed
+- **MBG 查询的列名补全给出 `xxx_example` 假列（T-StartupReadLockFreeze §二十五，`7a0d2a101`）**：`selectByExample(XxxExample)` 的实参是查询条件对象，却被当成实体、表名推成 `cust_channel_example`，列只剩 Example 自身的 3 个字段。现在参数名以 Example 结尾时按 MBG 约定回查同包实体 `Xxx`，查不到则跳过（宁可 `main=null` 也不给假列）
+- **mapper 接口与泛型都解析不到时列名补全整片为空（T-StartupReadLockFreeze §二十六，`866c6e651`）**：新增兜底——从语句文本取 FROM/JOIN 表名反查实体再取列，只在前两条主实体链路都失败时生效，不改变既有优先级
 - **大工程里带 `Example_Where_Clause` 的预览打开慢（T-StartupReadLockFreeze §14.8，`bccc3fd8e`）**：条件反推改到后台——首次打开立即出占位骨架，检索落地后自动刷新补上真实条件；不再同步等待一次动辄数秒的调用点检索（真机冷态 2.4s，超大工程 30s 级）
 - **首次打开预览还要等补全上下文解析（T-StartupReadLockFreeze §十九，`bccc3fd8e`）**：表/列候选原本会把工程内所有 `@TableName` 实体解析一遍再截断（2500 表工程 6~10 秒、且无缓存）；现在按上限边解析边停、项目级缓存按 PSI 版本失效、单次解析 400ms 预算
 

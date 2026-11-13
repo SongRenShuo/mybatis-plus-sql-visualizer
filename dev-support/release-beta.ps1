@@ -21,6 +21,9 @@
 #   - update/update.json belongs to the repo owner. This script never touches it.
 #   - The GitHub asset download inside gitee-release.py is resumable now; if it still cannot finish,
 #     the script falls back to the same bytes from the release run artifact (also L51).
+#   - The beta notes file is named `-内测说明.md`, while the publish job only auto-matches
+#     `docs/发行说明/*-发行说明.md`. So -Notes is always forwarded to the workflow as the `notes`
+#     input; without it `publish` cannot find the body and the whole release run goes red (RC-P4c).
 #
 # Exit code: 0 = every step passed, 1 = at least one step failed (summary at the end).
 
@@ -169,6 +172,13 @@ if (-not $SkipCi) {
         # -MarketplaceLite 只把这条腿压到 243（约 5.1min），逐目标 API 兼容仍由 verify×3 全覆盖；
         # 默认不带，正式版走原样三条腿。
         $dispatchArgs = @("workflow", "run", "build-plugin.yml", "--ref", $Branch, "-f", "mode=release")
+        # CI 的工作目录＝仓库根，路径必须是仓库相对（且用正斜杠）才认得到；绝对路径先折回来。
+        $notesForCi = $Notes
+        if ([System.IO.Path]::IsPathRooted($notesForCi)) {
+            $notesForCi = [System.IO.Path]::GetRelativePath($repoRoot, $notesForCi)
+        }
+        $notesForCi = $notesForCi -replace '\\', '/'
+        $dispatchArgs += @("-f", ("notes={0}" -f $notesForCi))
         if ($MarketplaceLite) { $dispatchArgs += @("-f", "marketplace_lite=true") }
         try {
             if (-not $DryRun) {
