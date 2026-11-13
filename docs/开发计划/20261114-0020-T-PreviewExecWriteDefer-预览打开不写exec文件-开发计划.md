@@ -87,3 +87,37 @@
 - Registry `sqlvis.preview.eagerConsole` 保留为**高级逃生舱**（置 true 强制 EAGER 语义）；
 - 守卫：`PreviewConsoleEagerTest` 增三档判定矩阵 + 默认档 = LAZY + 枚举名/存档值一致性；
   `PluginSettingsPanelBindingTest`（17 例）与 `BundleParityGuardTest` 全绿。
+
+### 6.2 自验收读数（2026-11-14 01:19~01:30，runIde 沙盒 IU-2024.3.7.1，cust-big-demo）
+
+**A1（主判据）通过**——预览打开不再写 exec 文件、不再进 dumb：
+
+```
+01:19:31,646  [T-PreviewFast] request→dialog: 305ms      ← 会话首开（冷）
+01:19:31,853  [M36] preview temp: created mpsql-preview-74872-*.sql
+01:19:31,937  [open-perf] console prep DEFERRED（惰性口径：预览打开不写 exec 文件）
+```
+
+同窗口内 **没有** `exec file updated`、**没有** `enter dumb mode`、**没有** `SlowOperations` SEVERE；
+右侧只剩 SQL 编辑器，绑定行显示「未绑定数据源（在控制台执行一次查询即可绑定） 显示执行控制台」，
+弹窗底部「执行 SQL / 复制 SQL / 复制 SQL 并关闭」齐备。
+
+**入口有效性通过**——点「显示执行控制台」后：
+
+```
+01:21:59,090  [M36] prepareDefaultConsole: editor=true, ...
+01:21:59,132  [M36] exec file updated via document+save
+01:21:59,139  enter dumb mode [cust-big-demo]
+```
+
+即：写盘与 dumb **只在用户显式点入口时发生一次**，与设计一致（用户动作可接受）。
+
+**A3 未完全验证（环境限制）**：该沙盒工程无可用数据源（同段日志 `runners=0`），控制台拿不到 runner ⇒
+原生控制台组件不会挂上，无法在本环境目视「控制台出现 + 工具栏（含 Data Sources 菜单）」。链路本身已触发
+（`prepareDefaultConsole` 有日志），但「控制台可见」这一条留给有数据源的工程复验。
+
+**A4 由用例覆盖、GUI 未验**：三档判定矩阵（LAZY / LAZY_SILENT / EAGER）在 `PreviewConsoleEagerTest` 全绿；
+GUI 侧设置页下拉已目视确认存在（「执行控制台：按需准备（带入口）」），但自动化点击设置页 OK 未能稳定落地
+（坐标偏差），EAGER 档的端到端行为改由用例 + 代码路径同源（`prepareDefaultConsole()` 仍是旧路径）担保。
+
+**遗留**：无数据源工程里点「显示执行控制台」不会出现控制台（与 eager 档下的旧行为一致），属既有语义，非本刀引入。
