@@ -50,6 +50,7 @@
 | 文件 | 用途 |
 |---|---|
 | `svbackup/` | 测试服务器备份体系的仓库事实源（采集/主流程/告警脚本 + systemd 单元 + 幂等部署脚本）；服务器副本由 `install-svbackup.sh` 部署，见其 `README.md` 与 `.agents/skills/srv-backup-restore/SKILL.md` |
+| `db-env/` | 测试服务器 13 个数据库容器的**声明式配方**（`docker-compose.yml` + `.env.example` + `README.md`）：轻档 10 个默认起、`--profile heavy` 再起 OceanBase 与磐维 A/B；只适用于全新机器，用法与后置步骤见其 `README.md` 与 skill §10 |
 | `db-lab/patch-panweidb-image.sh` | 磐维 PanWeiDB 容器镜像三处补丁（CPU 预检 / cgroup v2 探测 / listen_addresses 自愈） |
 
 ## 重构辅助（巨型文件拆分，T-M53-II）

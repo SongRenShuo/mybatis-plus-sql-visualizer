@@ -113,3 +113,6 @@ record/_elev_ac.log
 
 # Marketplace 截图上传临时目录（一次性产物，不入库）
 .tmp-marketplace-upload/
+
+# dev-support/db-env：compose 用的口令文件（模板 .env.example 可入仓，.env 不可）
+dev-support/db-env/.env

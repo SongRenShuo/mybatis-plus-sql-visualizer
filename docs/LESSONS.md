@@ -582,6 +582,30 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
+### L62 compose 只认领带自己 label 的容器：在役机器上 `up` 必撞名；已有卷要 `external: true`
+
+**规则**：把在役容器写成 compose 配方时，三件事必须在文件里显式表达，否则「配方看着对、一跑就废」：
+① **`network_mode: bridge`**——不写的话 compose 会另建 `<project>_default` 网络、容器落到新网段，
+凡是有「按已知网关 IP 直连」的旁路（本项目备份采集借另一容器走 `172.17.0.1`）或把容器 IP 写进配置的
+（磐维 `listen_addresses`）都会静默失效；② **已在役的命名卷加 `external: true`**——只写 `name:` 会报
+`volume "x" already exists but was not created by Docker Compose` 并试图创建同名卷，`external` 才是"别管它直接用"；
+③ **compose 靠 `com.docker.compose.*` label 认领容器**，在役容器没有这些 label 而 `container_name` 唯一 ⇒
+在役机器 `up` 必撞 `Conflict. The container name ... is already in use`。所以这类配方的定位只能是
+「全新机器一键起」，在役机器只当应然状态参照。另：配方里写 canonical 镜像名时，经 mirror 拉下来的 tag 名
+带前缀（`docker.xuanyuan.run/x`），不 `docker tag` 回 canonical，compose 会去官方拉并撞匿名限流。
+
+**证据**：2026-11-13 落 `dev-support/db-env/docker-compose.yml`（13 服务，逐字段从 `docker inspect` 抄录）。
+`docker compose config --quiet` RC=0、13 服务/13 端口/3 heavy/3 external 全对；`--dry-run up -d` 依次暴露三件事：
+先因 `pingcap/tidb:v6.5.6` 无本地 tag 去 Docker Hub 拉 → `toomanyrequests: unauthenticated pull rate limit`；
+补 tag 后报三条卷 `already exists but was not created by Docker Compose`；再加 `--profile` 看全 13 服务时
+确认它把在役容器全判成 `Creating`（即不认领），且会另建 `db-env_default` 网络。修 `external` + `network_mode`
+后复验：卷警告 0、网络不再创建、13 服务全解析。详见 skill §10 与 `dev-support/db-env/README.md`。
+
+**正例**：`config --quiet` 过语法门禁 → `--dry-run up` 看计划与警告 → 逐个消警告并确认不建多余资源；
+**反例**：只 `config --quiet` 说"配方 OK"（它不校验卷归属、网络模式、image tag 是否本地存在）。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

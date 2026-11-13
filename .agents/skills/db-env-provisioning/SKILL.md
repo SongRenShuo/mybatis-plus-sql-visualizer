@@ -914,4 +914,35 @@ ssh root@103.36.220.245 'bash /root/bootstrap-db-env.sh /root/replay.tsv'
 | `docs/开发流程-派活与验收清单.md` §三 | 多子代理并行派活的通用口径 |
 | `dev-support/svbackup/` + `.agents/skills/srv-backup-restore/SKILL.md` | 备份体系（仓库资产 + 作业手册），与实例重建是两件事 |
 | `docs/架构设计/测试服务器备份与恢复体系-说明文档.md` | 备份体系设计与决策记录 |
+| **`dev-support/db-env/docker-compose.yml`** | **13 容器的声明式配方（容器骨架）**，2026-11-13 从在役容器 inspect 抄录；用法见其 `README.md` 与本文 §10 |
+
+## 10. 声明式配方（docker compose）：新机器一键起，在役机器只作参照
+
+13 个容器的**容器骨架**（镜像 / 端口 / 内存 cap / shm / ulimit / privileged / init / 卷 / env 键）已落
+`dev-support/db-env/docker-compose.yml`，事实源是 2026-11-13 对在役容器的逐字段 `docker inspect`。配套
+`.env.example`（变量名模板，无口令）与 `README.md`（前置步骤 / 内存分档 / 变量映射 / 后置步骤表）。
+
+**用法**：口令从 `.local/db-env.env`（本机）或 `/root/db-env.env`（服务器 600）取；
+`docker compose --env-file /root/db-env.env up -d` 起轻档 10 个（RSS ≈ 4.6G），加 `--profile heavy` 再起
+OceanBase + 磐维 A/B（RSS ≈ 4.9G）。分档就是为「控制内存不撑爆」——默认不把 3.8G 的 OceanBase 拉起来。
+
+**五个实测约束**（2026-11-13 在真实服务器 `config --quiet` + `--dry-run up` 验证）：
+
+1. **只在全新机器用**。compose 靠 `com.docker.compose.*` label 认领容器，在役容器没有这些 label 而
+   `container_name` 唯一 ⇒ 在役机器 `up` 必撞 `Conflict. The container name ... is already in use`。
+   想在役机器切 compose 管理只能删容器重建，会丢磐维 `run.sh`/`.bashrc` 补丁这类容器层改动，得不偿失。
+2. **`network_mode: bridge` 必须显式写**。否则 compose 建 `db-env_default` 网络、容器换到 172.18.x，
+   打断备份采集「借 xc3-mysql8 走 `172.17.0.1` 网关」的回退通道，也改变磐维 `listen_addresses` 的网段。
+3. **已在役的命名卷要 `external: true`**。只写 `name:` 会报
+   `volume "xxx" already exists but was not created by Docker Compose` 并试图"创建"同名卷。
+4. **镜像必须先 `docker tag` 回 canonical 名**。配方写的是 `pingcap/tidb:v6.5.6`，而经轩辕域拉下来的是
+   `docker.xuanyuan.run/pingcap/tidb:v6.5.6`；不补 tag 时 compose 会去 Docker Hub 拉，实测撞
+   `toomanyrequests: unauthenticated pull rate limit`。
+5. **MariaDB 卷是配方与现状唯一的差异**：在役是匿名卷、配方改成命名卷，首次 `up` 建空卷，旧数据要先
+   用 `docker run --rm -v <旧卷>:/from -v <新卷>:/to alpine cp -a /from/. /to/` 迁移。
+
+**编排不出来的后置步骤**（GaussDB 的 gs_initdb、Vastbase 初始化、磐维三处补丁 + `.bashrc` 注入、
+HighGo 口令直写、OceanBase 业务用户补建、TiDB/MSSQL/Oracle 的内部参数）不在 compose 里，README 第四节
+逐实例给了步骤与本文对应章节号。`docker compose config --quiet` 是语法门禁；`--dry-run up -d` 可看计划
+（dry-run 的 `Creating/Created` 只是计划文本，实测不落盘真正资源）。
 
