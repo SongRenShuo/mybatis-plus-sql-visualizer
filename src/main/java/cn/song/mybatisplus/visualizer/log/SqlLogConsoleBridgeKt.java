@@ -64,6 +64,11 @@ public final class SqlLogConsoleBridgeKt {
                 if (CaptureActivityFallback.onConsoleLine(!sniffed.isEmpty(), CaptureActivityFallback.now())) {
                     return finishEntries(sniffed, line, ctx, timePrefix);
                 }
+                // T-PanweiInsertCapture F1：让位态丢弃——嗅探已证明这一行是可解析的 SQL，但它进不了面板。
+                // 此前这条路径零读数，真机现场（控制台有 INSERT、面板没有）完全无法自证。
+                if (!sniffed.isEmpty()) {
+                    SqlCaptureGate.suppressedSqlLines.incrementAndGet();
+                }
                 return List.of();
             }
         }
@@ -119,9 +124,16 @@ public final class SqlLogConsoleBridgeKt {
         // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
         // 那些语句永无同线程后继行）。冲刷出的条目与本次喂行产出的条目由下方同一次 takeEntries() 一并交出。
         // R10：ShardingSphere 解析器同款接入（其条目只在下一条 Logic 行闭合，静默冲刷是低频访问的兜底）。
+        // T-ConsoleFlushAlign：MyBatis / Hibernate 同款接入——无参语句（MyBatis 不打 Parameters 行）、
+        // TRACE 关闭的 Hibernate 末条语句与日志截断尾（「Preparing:/SQL 行已见、参数行未达」窗口）
+        // 仍要等同线程后继行才闭合，实时链路从不调 closePending，靠这一拍兜底。
         ctx.jdbcParser.flushSettled();
         if (ctx.shardingEnabled) {
             ctx.shardingParser.flushSettled();
+        }
+        ctx.myBatisParser.flushSettled();
+        if (ctx.hibernateEnabled()) {
+            ctx.hibernateParser.flushSettled();
         }
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());

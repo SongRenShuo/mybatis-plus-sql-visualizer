@@ -70,6 +70,20 @@ public class SqlLogConsoleBridge {
             new java.util.concurrent.atomic.AtomicLong();
 
     /**
+     * T-PanweiInsertCapture F1：<b>让位期间被丢弃的可解析 SQL 行</b>累计（跨全部已挂载控制台）。
+     *
+     * <p>计数本体在 {@link SqlCaptureGate#suppressedSqlLines}（{@code processConsoleLine} 是文件级函数，拿不到本类
+     * 实例），这里只做只读转发，保持面板/状态栏取数入口与其他计数（{@link #consoleLinesSeen} 等）同形。</p>
+     *
+     * <p>立项动因＝真机现场「控制台里有标准形态的 {@code INSERT}，面板一条都没有」：agent 在线时桥按设计
+     * 让位，{@code processConsoleLine} 的 paused 分支只做时间嗅探就 {@code return emptyList()}，<b>被丢掉的行
+     * 没有任何读数</b>——两条通道都没有证据说明「这条 SQL 被让位吃了」。</p>
+     */
+    public long getSuppressedSqlLines() {
+        return SqlCaptureGate.suppressedSqlLines.get();
+    }
+
+    /**
      * T-RA-03：重放丢弃行累计（跨全部已挂载控制台求和），SQL 日志面板链路诊断行取数入口。
      *
      * <p>为什么要在桥这层聚合：计数本体按 console 存在 {@link BridgeLineContext}（重放守卫每控制台独立
@@ -645,16 +659,49 @@ public class SqlLogConsoleBridge {
                         }
                     }
                 }
+                // T-ConsoleFlushAlign：MyBatis / Hibernate 同款静默兜底——正常参数化语句虽在参数行到达
+                // 即闭合，但无参语句（MyBatis 不打 Parameters 行）、TRACE 关闭的 Hibernate 末条语句与
+                // 日志截断尾（「Preparing:/SQL 行已见、参数行未达」）仍要等同线程后继行才闭合，
+                // 应用安静后同样滞留（Hibernate 受喂行开关门控，与 processConsoleLine 同口径）。
+                ctx.myBatisParser.flushSettled(nowMs);
+                java.util.List<LogSqlEntry> myBatisTaken = ctx.myBatisParser.takeEntries();
+                beatBacklog += myBatisTaken.size();
+                for (LogSqlEntry entry : myBatisTaken) {
+                    if (SqlCaptureGate.bridgeSuppressed()) {
+                        skipped++;
+                        continue;
+                    }
+                    if (buffer.addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE))) {
+                        produced++;
+                    }
+                }
+                if (ctx.hibernateEnabled) {
+                    ctx.hibernateParser.flushSettled(nowMs);
+                    java.util.List<LogSqlEntry> hibernateTaken = ctx.hibernateParser.takeEntries();
+                    beatBacklog += hibernateTaken.size();
+                    for (LogSqlEntry entry : hibernateTaken) {
+                        if (SqlCaptureGate.bridgeSuppressed()) {
+                            skipped++;
+                            continue;
+                        }
+                        if (buffer.addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE))) {
+                            produced++;
+                        }
+                    }
+                }
             }
         }
         LogPerfProbe.recordGauge("LogBridge.settledBacklog", beatBacklog);
         if (skipped > 0) {
+            // T-PanweiInsertCapture F1：静默冲刷被让位丢弃的条目同口径计入（它们是已解析完成的
+            // SQL 条目，用户视角与「让位丢弃 SQL 行」是同一件事）。
+            SqlCaptureGate.suppressedSqlLines.addAndGet(skipped);
             LOG.info("flushSettledEntries: 增强接管沿已封停桥，丢弃本次静默冲刷条目 " + skipped + " 条（由 agent 通道产出）");
         }
         if (produced > 0) {
             LOG.info("flushSettledEntries: 静默冲刷待闭合条目 " + produced + " 条（语句行之后同线程再无后继行——"
-                    + "JdbcTemplate 无 TRACE 参数行 / 线程按请求新建；阈值 "
-                    + JdbcTemplateLogParser.DEFAULT_SETTLE_MS + "ms）");
+                    + "JdbcTemplate 无 TRACE 参数行 / MyBatis 无参语句与截断尾 / Hibernate TRACE 关闭的末条语句；"
+                    + "阈值 " + JdbcTemplateLogParser.DEFAULT_SETTLE_MS + "ms）");
         }
         return produced;
     }
