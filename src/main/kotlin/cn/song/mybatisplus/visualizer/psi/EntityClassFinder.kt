@@ -265,7 +265,8 @@ class EntityClassFinder(private val project: Project) {
                     for (clazz in namesCache.getClassesByName(shortName, scope)) {
                         if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
                         if (isVoDto(clazz)) continue
-                        val table = tableNameAnnotation(clazz) ?: continue
+                        // 依赖库里的实体同样按各 ORM 的表名注解认（MP `@TableName` / JPA `@Table(name)`）
+                        val table = TableNameAnnotations.tableNameOfClass(clazz) ?: continue
                         if (table.isBlank()) continue
                         tables.getOrPut(table.lowercase()) { mutableListOf() } +=
                             MatchedClass(shortName, clazz.qualifiedName)
@@ -340,10 +341,93 @@ class EntityClassFinder(private val project: Project) {
     private fun findByTableNameAnnotationCached(tableName: String): List<PsiClass> {
         val entry = reverseLookupCache()
         ensureIndexBuilt(entry)
+        var hit = entry.index[tableName.lowercase()]
+        // 跨 ORM 兜底：注解索引只覆盖「带表名注解」的实体（MP `@TableName`、JPA `@Table`）。工程里是
+        // MBG/iBatis/Kotlin 或自定义映射、又没有注解时，这里会**全部未命中**——按查询做一次
+        // 「全项目推断扫描」并合并进同一索引（只此一次，之后同结构版本都命中）。
+        // 判据用「索引里是否有该表」，不是「有没有注解」：一个工程里MP 与 MBG 混用时，MP 部分走
+        // 注解索引、MBG 部分靠这次回补。
+        if (hit == null && !entry.inferredScanDone) {
+            ensureInferredScan(entry)
+            hit = entry.index[tableName.lowercase()]
+        }
         // 顺序契约不变：旧实现按类名排序返回（多候选时调用方按此顺序处理）
-        return (entry.index[tableName.lowercase()] ?: emptyList())
+        return (hit ?: emptyList())
             .sortedBy { it.shortName }
             .mapNotNull { restoreMatched(it) }
+    }
+
+    /**
+     * 「全项目推断」回补（跨 ORM 兜底）：只在**注解索引未命中**时触发，结果合并进同一索引并置
+     * [ReverseLookupCache.inferredScanDone]（每个结构版本/缓存期至多一次）。
+     *
+     * 成本与口径同 [ensureIndexBuilt]：派到应用线程池、EDT 不等、非 EDT 有界等一个预算；本次等不到
+     * 就本次降级（返回空），下一次查询命中。
+     */
+    private fun ensureInferredScan(entry: ReverseLookupCache) {
+        val app = ApplicationManager.getApplication()
+        val onEdt = app.isDispatchThread
+        if (entry.inferredBuilding.compareAndSet(false, true)) {
+            if (syncIndexBuildForTest ?: app.isUnitTestMode) {
+                runInferredScan(entry)
+                return
+            }
+            if (!retryCooldownElapsed(entry)) {
+                entry.inferredBuilding.set(false)
+                return
+            }
+            val started = System.currentTimeMillis()
+            ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
+                try {
+                    scanInferredTableIndex()
+                } catch (pce: com.intellij.openapi.progress.ProcessCanceledException) {
+                    throw pce
+                } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t
+                    null
+                }
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .submit(AppExecutorUtil.getAppExecutorService())
+                .onSuccess { built -> mergeInferred(entry, built, started) }
+                .onError { t ->
+                    LOG.info("[open-perf] 跨 ORM 回补未完成：${t.javaClass.simpleName}")
+                    entry.lastAbortAt = System.currentTimeMillis()
+                    entry.inferredBuilding.set(false)
+                }
+        }
+        if (onEdt) return
+        runCatching { entry.inferredLatch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS) }
+    }
+
+    /** 同步口径（测试/预热线程）跑一次全项目推断扫描并合并。 */
+    private fun runInferredScan(entry: ReverseLookupCache) {
+        val started = System.currentTimeMillis()
+        val built = runCatching {
+            scanInferredTableIndex()
+        }.getOrElse { t ->
+            if (FatalErrors.isFatal(t)) throw t
+            null
+        }
+        mergeInferred(entry, built, started)
+    }
+
+    private fun mergeInferred(entry: ReverseLookupCache, built: Map<String, List<MatchedClass>>?, startedMs: Long) {
+        try {
+            if (built == null) return
+            if (project.getUserData(REVERSE_LOOKUP_CACHE_KEY) !== entry) return
+            // 合并而非覆盖：注解索引那部分更准（值直接来自注解），不被推断结果冲掉
+            for ((table, classes) in built) entry.index.getOrPut(table) { classes }
+            entry.inferredScanDone = true
+            entry.inferredScanCount++
+            LOG.info(
+                "[open-perf] 跨 ORM 回补完成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms",
+            )
+        } finally {
+            entry.inferredBuilding.set(false)
+            entry.inferredLatch.countDown()
+        }
     }
 
     /**
@@ -495,56 +579,61 @@ class EntityClassFinder(private val project: Project) {
      */
     private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
         indexScanDelayMsForTest?.let { if (it > 0) Thread.sleep(it) }
-        val annotated = scanAnnotatedTableIndex()
-        if (annotated.isNotEmpty()) return annotated
-        // 一个 `@TableName` 都没有（纯 JPA / 原生 MyBatis 工程；以及测试夹具——stub 索引对 fixture 里
-        // 新建的文件不给结果）：退回「全项目类名推断」的老口径，能力不降级、成本只在这种
-        // 「本来就没有注解可查」的工程里付（此时老口径本来也在付）。
-        LOG.info("[open-perf] 反查索引候选源=注解索引为空 → 退回全项目推断扫描")
-        return scanInferredTableIndex()
+        // 只建「注解索引」这一半；未命中的表由 findByTableNameAnnotationCached 触发
+        // `ensureInferredScan`（全项目推断，跨 ORM 兜底）按需回补，不在这里无条件扫全项目。
+        return scanAnnotatedTableIndex()
     }
 
     /**
-     * 候选源＝**平台注解索引**：只取带 `@TableName` 的类，不再遍历全项目类。
+     * 候选源＝**平台注解索引**，覆盖各 ORM 的表名注解（MP `@TableName`、JPA `@Table`；
+     * 见 [TableNameAnnotations]）。只取带注解的类，不遍历全项目类。
      *
      * 演进（每步都有真机读数）：
      *  1. 「查一个表名就把全项目类扫一遍」——16804 类一趟 3.8s，用户每换一张表再吃一次；
      *  2. 「一次扫描建全表索引」——消掉重复，但这一趟本身 **4.7~9.7s**（逐类 `inferDecoratedTableName`
      *     要走命名策略/设置）；
-     *  3. 现在：`JavaAnnotationIndex.getAnnotations("TableName", …)`（索引查询，O(log n) + 候选数），
-     *     候选从「全项目类数」降到「带 `@TableName` 的实体数」，且不再为非实体类算推断表名。
+     *  3. 现在：注解索引查询（O(log n) + 候选数），候选从「全项目类数」降到「带表名注解的实体数」，
+     *     且不再为非实体类算推断表名。真机实测 `tables=8688 → 812`、重建 `4737ms → 187ms`。
      *
-     * 为什么可以让出「无注解按类名推断」这半边：慢路径存在的理由是「实体名与表名对不上、只有注解能
-     * 说明」，而**按命名约定的匹配本来就走快路径**（[candidateClassNames] 4 个候选 + `EntityResolver`
-     * 按真实策略校验表名，覆盖驼峰/Entity 后缀/`t_` 前缀等）。
+     * 覆盖边界：**无注解**的实体（MBG 生成器、iBatis、Kotlin 或自定义映射）不在这里——它们由
+     * ①命名约定快路径（[candidateClassNames] + `EntityResolver` 校验）与 ②未命中时的
+     * [ensureInferredScan] 回补共同覆盖，两条都不需要注解在场。
      *
      * 注解索引的键是**简单名**（243 字节码实证：`JavaAnnotationElementType.indexStub` 先 `indexOf('(')`
      * 截断再取短类名，属性名/属性值都不进索引）——所以拿到候选后**自己读注解值**，
      * 并按注解原文筛掉别家同名注解（不 resolve，缺依赖时也能判）。
      *
-     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值读不到表名。
+     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值读不到表名（老口径会退化成按类名推断）
+     * ——这类实体在未命中回补里仍会按推断命中。
      */
     private fun scanAnnotatedTableIndex(): Map<String, List<MatchedClass>> {
         val index = HashMap<String, MutableList<MatchedClass>>()
         val scope = GlobalSearchScope.projectScope(project)
-        val annotations = JavaAnnotationIndex.getInstance()
-            .getAnnotations(TABLE_NAME_ANNOTATION_SIMPLE_NAME, project, scope)
         var scanned = 0
-        for (annotation in annotations) {
-            // 取消检查：候选虽少，但读注解/取宿主类仍是 PSI 访问，平台要写权限时必须能被中断
-            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
-            scanned++
-            if (!isMybatisTableNameAnnotation(annotation)) continue
-            val clazz = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java) ?: continue
-            if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
-            if (isVoDto(clazz)) continue
-            val className = clazz.name ?: continue
-            val tableName = tableNameAnnotation(clazz)?.takeIf { it.isNotBlank() } ?: continue
-            index.getOrPut(tableName.lowercase()) { mutableListOf() }
-                .add(MatchedClass(className, clazz.qualifiedName))
+        var candidates = 0
+        for (simpleName in TableNameAnnotations.simpleNames) {
+            val annotations = runCatching {
+                JavaAnnotationIndex.getInstance().getAnnotations(simpleName, project, scope)
+            }.getOrElse { t ->
+                if (FatalErrors.isFatal(t)) throw t
+                emptyList()
+            }
+            candidates += annotations.size
+            for (annotation in annotations) {
+                // 取消检查：候选虽少，但读注解/取宿主类仍是 PSI 访问，平台要写权限时必须能被中断
+                if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
+                scanned++
+                val tableName = TableNameAnnotations.tableNameOf(annotation)?.takeIf { it.isNotBlank() } ?: continue
+                val clazz = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java) ?: continue
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                if (isVoDto(clazz)) continue
+                val className = clazz.name ?: continue
+                index.getOrPut(tableName.lowercase()) { mutableListOf() }
+                    .add(MatchedClass(className, clazz.qualifiedName))
+            }
         }
         LOG.info(
-            "[open-perf] 反查索引候选源=注解索引 候选注解=${annotations.size} " +
+            "[open-perf] 反查索引候选源=注解索引 候选注解=$candidates " +
                 "入索引类=${index.values.sumOf { it.size }}",
         )
         return index
@@ -569,7 +658,8 @@ class EntityClassFinder(private val project: Project) {
                 if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
                 if (isVoDto(clazz)) continue
                 val className = clazz.name ?: continue
-                val annotated = tableNameAnnotation(clazz)
+                // 跨 ORM：MP `@TableName` / JPA `@Table(name)` 都认（见 TableNameAnnotations）
+                val annotated = TableNameAnnotations.tableNameOfClass(clazz)
                 // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
                 // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
                 val resolvedTable = annotated
@@ -580,28 +670,6 @@ class EntityClassFinder(private val project: Project) {
             }
         }
         return index
-    }
-
-    /**
-     * 该注解是不是 MyBatis-Plus 的 `@TableName`（文本判据，不触发 resolve）。
-     *
-     * 索引只保证「写的简单名是 TableName」；能解析出 FQN 时要求等于本注解 FQN，拦掉自定义同名注解
-     * （解析不出来＝工程没接 MP 依赖，此时按写的名字认）。
-     */
-    private fun isMybatisTableNameAnnotation(annotation: com.intellij.psi.PsiAnnotation): Boolean {
-        if (annotation.nameReferenceElement?.referenceName != TABLE_NAME_ANNOTATION_SIMPLE_NAME) return false
-        val resolved = runCatching { annotation.qualifiedName }.getOrNull()
-        return resolved == null || resolved == TABLE_NAME
-    }
-
-    /** 类级 @TableName 注解值；无注解或值非字符串返回 null（短名兜底——注解类不可解析环境仍可识别）。 */
-    private fun tableNameAnnotation(clazz: PsiClass): String? {
-        val annotations = clazz.modifierList?.annotations ?: return null
-        val annotation = annotations.firstOrNull { it.qualifiedName == TABLE_NAME }
-            ?: annotations.firstOrNull { it.nameReferenceElement?.referenceName == "TableName" }
-            ?: return null
-        val value = annotation.findAttributeValue("value") as? PsiLiteralExpression ?: return null
-        return value.value as? String
     }
 
     private fun isVoDto(clazz: PsiClass): Boolean =
@@ -651,6 +719,14 @@ class EntityClassFinder(private val project: Project) {
         val latch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
         /** 上次被撤销/失败的时间戳（0 = 从未）。冷却窗口用它，防连续输入把扫描打成「反复重投」。 */
         @Volatile var lastAbortAt: Long = 0L,
+        /** 跨 ORM 回补（[ensureInferredScan]）是否已做过——每个结构版本/缓存期至多一次。 */
+        @Volatile var inferredScanDone: Boolean = false,
+        /** 回补在途标记（与注解索引建立互不阻塞）。 */
+        val inferredBuilding: AtomicBoolean = AtomicBoolean(false),
+        /** 回补完成/失败时放行等待者。 */
+        val inferredLatch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
+        /** 回补次数（守卫读数：注解索引未命中才允许 +1）。 */
+        var inferredScanCount: Int = 0,
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         var scans: Int = 0,
     )
@@ -696,11 +772,6 @@ class EntityClassFinder(private val project: Project) {
 
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
 
-        /**
-         * 注解 stub 索引的键（**简单名**，不是 FQN）：243 `JavaAnnotationElementType.indexStub` 建键时
-         * 先 `indexOf('(')` 截断再取短类名 ⇒ 含属性值的完整写法与 FQN 写法都归到这个短名下。
-         */
-        private const val TABLE_NAME_ANNOTATION_SIMPLE_NAME = "TableName"
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
 
@@ -831,6 +902,10 @@ class EntityClassFinder(private val project: Project) {
             project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, null)
             project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, null)
         }
+
+        /** 测试访问器：跨 ORM 回补（全项目推断扫描）执行次数——注解索引未命中才允许 +1，每期至多一次。 */
+        internal fun inferredScanCountForTest(project: Project): Int =
+            project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.inferredScanCount ?: 0
 
         /** 测试访问器：项目级全量反查扫描次数（缓存命中后不再增长）。 */
         internal fun scanCountForTest(project: Project): Int =

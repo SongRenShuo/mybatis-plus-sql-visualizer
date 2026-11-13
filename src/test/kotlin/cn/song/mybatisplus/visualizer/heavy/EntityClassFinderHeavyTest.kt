@@ -360,6 +360,51 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         assertEquals("索引重建后（新缓存实例）应扫描 1 次", 1, EntityClassFinder.scanCountForTest(project))
     }
 
+    fun testJpaTableEntityResolvedViaCrossOrmFallback() {
+        // 跨 ORM：JPA `@Table(name=…)` 的实体必须能被反查出来（注解索引只查简单名，值自己读；
+        // 夹具里 stub 索引不给结果 ⇒ 走「注解索引未命中 → 全项目推断回补」，正好把回补链也验了）
+        addClassFile(
+            "LegacyBooking.java",
+            """
+            package com.example;
+            import javax.persistence.Table;
+
+            @Table(name = "t_legacy_booking")
+            public class LegacyBooking { private Long id; }
+            """,
+        )
+        val found = EntityClassFinder(project).find("t_legacy_booking")
+        assertEquals("JPA @Table 的表名应能反查到实体", 1, found.size)
+        assertEquals("LegacyBooking", found[0].name)
+        // 回补次数与环境有关（注解索引在 Heavy 夹具里可用时根本不需要回补）；钉的是**不无限回补**：
+        // 首次未命中允许触发一次，之后任何未命中都不得再扫。
+        val afterHit = EntityClassFinder.inferredScanCountForTest(project)
+        assertTrue("回补至多一次（实际 $afterHit）", afterHit <= 1)
+        assertTrue(EntityClassFinder(project).find("not_exist_orm_table_zzz").isEmpty())
+        val afterFirstMiss = EntityClassFinder.inferredScanCountForTest(project)
+        assertTrue("首轮未命中后回补次数至多一次（实际 $afterFirstMiss）", afterFirstMiss <= 1)
+        assertTrue(EntityClassFinder(project).find("not_exist_orm_table_yyy").isEmpty())
+        assertEquals("之后的未命中不得再回补", afterFirstMiss, EntityClassFinder.inferredScanCountForTest(project))
+    }
+
+    fun testCrossOrmFallbackRunsAtMostOncePerCachePeriod() {
+        addClassFile(
+            "JakartaBooking.java",
+            """
+            package com.example;
+            import jakarta.persistence.Table;
+
+            @Table(name = "t_jakarta_booking")
+            public class JakartaBooking { private Long id; }
+            """,
+        )
+        val finder = EntityClassFinder(project)
+        assertEquals(1, finder.find("t_jakarta_booking").size)
+        assertEquals("命中缓存后不得再回补", 1, finder.find("t_jakarta_booking").size)
+        assertTrue("查不存在的表也不得再回补", finder.find("not_exist_orm_table_xyz").isEmpty())
+        assertEquals("每个缓存期至多回补一次", 1, EntityClassFinder.inferredScanCountForTest(project))
+    }
+
     fun testAsyncIndexBuildDoesNotBlockCaller() {
         // 真机（2026-11-13 沙盒）：全量扫描实测 4737ms / 9675ms，压在**点击链**上就是「打开还是慢」。
         // 契约：扫描派到应用线程池，调用方至多等 INDEX_WAIT_BUDGET_MS，超预算就用当前结果返回。
