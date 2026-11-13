@@ -2561,15 +2561,26 @@ internal fun DataSourceSelector.dispatchDocWriteOnEdt(
         // PSI 事件链（PsiDocumentManagerBase 为平台断言点之一）即报 Write-unsafe context!。
         // 本分支是 [writeVfTextViaDocument] 调用面里唯一未过 DocWriteContext 闸的入口
         // （本函数另两形态已闸；471/1699/2776 三处直调各自包 WriteAction，R33 日志无实证指向）。
-        // 判为可写 → 就地写（常态行为逐字不变）；判为不安全 → 转 nonModal 延后一拍并返回
-        // false（写体 docWriteOnce 幂等：内容相同不 setText、已落盘不 save；现有调用方——
-        // gStrip 回写不消费返回值、syncExecVfContentIfNeeded 各调用方亦不消费——延后语义安全，
-        // 与下方有界等待路径「判不安全立即交还」同一纪律）。
-        var ok = false
-        DocWriteContext.runWriteSafe(project, "exec doc sync (edt direct)") {
-            ok = docWriteOnce(project, vf, sql)
-        }
-        return ok
+        //
+        // T-StartupReadLockFreeze S4-a（2026-11-13 用户 Linux 打开即冻结，栈 2 实证）：**不再在
+        // 本拍就地写**。原实现「判为可写 → block() 就地执行」把 `WriteAction` 夹在调用方自己的
+        // 活动里，于是写意图读锁要在同拍内升级为写锁（`runWriteActionBlocking` →
+        // `prepareWriteFromWriteIntentBlocking` → `upgradeWritePermit`），升级要等**所有**读者
+        // 退出；后台只要有一条阻塞读（M2 预取的 `ReadAction.compute`→`computeBlocking`，不可取消）
+        // 就等不到，EDT 当场冻结。现在与 BGT 分支同构：nonModal 投递一拍 + 有界等待，调用方
+        // **不再被写升级阻塞**；已在 EDT 时投递后立即交还（见 [DocWriteContext.invokeLaterWriteSafeAndWait]
+        // 的自等保护）。写体 [docWriteOnce] 幂等（内容相同不 setText、已落盘不 saveDocument），
+        // 延后一拍不改变可见终态；现有调用方（gStrip 回写不消费返回值、
+        // syncExecVfContentIfNeeded 各调用方亦不消费）延后语义安全，与下方有界等待路径
+        // 「判不安全立即交还」同一纪律（计划 §十二 已核对，实施轮逐调用点复核见计划 §十三）。
+        //
+        // 边界（诚实口径）：本改动去掉的是「就地升级」，投递出去的那一拍仍走平台写锁获取——
+        // 若读者长持不放（冻结现场），该拍仍会等；彻底解决依赖 S1/S3（后台不再阻塞持读锁）。
+        return DocWriteContext.invokeLaterWriteSafeAndWait(
+            project,
+            "exec doc sync (edt→nonModal, S4-a)",
+            waitBudgetMs,
+        ) { docWriteOnce(project, vf, sql) }
     }
     if (waitBudgetMs <= 0L) {
         // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）
