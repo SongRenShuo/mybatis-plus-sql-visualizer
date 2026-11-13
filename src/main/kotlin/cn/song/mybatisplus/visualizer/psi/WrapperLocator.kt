@@ -1201,8 +1201,19 @@ object WrapperLocator {
     /** 消费表达式 → 证据（不是消费返回 null）。 */
     private fun consumptionOf(wrapperExpr: PsiElement, call: PsiMethodCallExpression): WrapperConsumption? =
         consumptionKindOf(call, wrapperExpr)?.let { kind ->
-            consumptionEvidence(wrapperExpr, kind, call.methodExpression.referenceName ?: "", call)
+            // T-PreviewStmtTypeScope：实体更新档位带上**实体实参文本**（`update(patch, w)` 的 `patch`），
+            // 让 SET 占位符能逐列生成参数来源（`patch.order_no`）而不是整列共用一个来源。
+            val detail = if (kind == ConsumptionKind.UPDATE_ENTITY) {
+                call.argumentList.expressions.firstOrNull()?.text
+                    ?.takeIf { it.isNotBlank() && it.length <= ENTITY_ARG_TEXT_LIMIT } ?: ""
+            } else {
+                ""
+            }
+            consumptionEvidence(wrapperExpr, kind, call.methodExpression.referenceName ?: "", call, detail)
         }
+
+    /** 实体实参文本上限（超出则不作为参数来源前缀，回落「实体」兜底文案）。 */
+    private const val ENTITY_ARG_TEXT_LIMIT = 60
 
     /**
      * T-PreviewStmtTypeScope：构造一条消费证据（M1 展示载体 + D-2 排序依据）。
@@ -1211,12 +1222,14 @@ object WrapperLocator {
      * @param kind         档位
      * @param methodName   方法名留痕；空串时回落到调用的方法名（DeleteChain 这类链类型事实需显式给）
      * @param call         消费调用；null 表示「不是调用形态」（如 DeleteChain 链类型事实）
+     * @param detail       档位补充事实（实体更新档位＝实体实参文本，见 [consumptionOf]）
      */
     private fun consumptionEvidence(
         offsetSource: PsiElement,
         kind: ConsumptionKind,
         methodName: String,
         call: PsiMethodCallExpression? = null,
+        detail: String = "",
     ): WrapperConsumption {
         val statement = PsiTreeUtil.getParentOfType(offsetSource, PsiStatement::class.java, false)
         val range = statement?.textRange?.let { it.startOffset..(it.endOffset - 1) } ?: IntRange.EMPTY
@@ -1233,6 +1246,7 @@ object WrapperLocator {
             statementRange = range,
             line = line,
             fileName = offsetSource.containingFile?.name ?: "",
+            detail = detail,
         )
     }
 

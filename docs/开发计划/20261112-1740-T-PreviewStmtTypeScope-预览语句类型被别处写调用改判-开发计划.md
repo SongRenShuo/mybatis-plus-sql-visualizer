@@ -181,9 +181,18 @@
 | D-B1 | `findWrapperVariable` 新增 `PsiAssignmentExpression` 分支：LHS 解析到 wrapper 变量就按**变量**返回（LHS 不是 wrapper 时不命中、继续向上，不拦普通赋值） | `WrapperLocator.findWrapperVariable` |
 | D-B2 | 重新赋值分段：赋值 LHS 的偏移记为段界，`filterCallsToAnchorSegment` 只收**锚点所在段**的链上调用（锚点在首次重新赋值前 → 只收声明段；之后 → 只收该赋值之后）。消费证据**不过滤**（D-3 切换要看到全部档位） | `WrapperLocator.buildChain` + `filterCallsToAnchorSegment`（internal 纯函数） |
 
-读数：`PreviewStmtTypeScopeTest` 新增两例（赋值锚点端到端 + 分段纯函数），定向六类 **100/0/0**
-（PreviewStmtTypeScopeTest 14 + ConsumerMethodsCoverageTest 33 + WrapperLocatorTest 31 +
-SqlPreviewServiceRoutingTest 6 + SqlPreviewTopRowLayoutTest 9 + SqlPreviewPanelMetaHintTooltipTest 7）；
+同一轮真机还抓到第三处（D-C）：`update(entity, wrapper)` 预览的 SET 各列占位符**共用同一来源 `"?"`**，
+面板按来源去重后只剩一行 `#?`，填一个值就把 `order_no / user_id / amount / status / create_time`
+全填成同一个数（真机产物 `order_no = '1', user_id = 1, amount = 1, …`）。
+
+| 编号 | 修法 | 落点 |
+| --- | --- | --- |
+| D-C | 实体更新档位的消费证据带上**实体实参文本**（`update(patch, w)` 的 `patch`），SET 占位符逐列生成来源 `patch.<列名>`；取不到时回落 `实体.<列名>` | `WrapperConsumption.detail`（新字段）+ `WrapperLocator.consumptionOf` + `SqlPreviewService` 实体更新分支 |
+
+读数：`PreviewStmtTypeScopeTest` 新增三例（赋值锚点端到端 + 分段纯函数 + SET 逐列来源）。
+本轮定向 **107/0/0**（PreviewStmtTypeScopeTest 15 + ConsumerMethodsCoverageTest 33 + WrapperLocatorTest 31 +
+SqlPreviewServiceRoutingTest 6 + SqlPreviewServiceConfigTest 18 + BundlePlaceholderArityTest 4）；
+前一轮同批还跑过 SqlPreviewTopRowLayoutTest 9 + SqlPreviewPanelMetaHintTooltipTest 7（工具栏新入口 / meta 新分段）。
 反向两探针（分别摘掉 D-B1 / D-B2）各自恰红，见 §9.5。
 
 ### 9.5 反向验证（2026-11-13 第二轮）
@@ -192,8 +201,9 @@ SqlPreviewServiceRoutingTest 6 + SqlPreviewTopRowLayoutTest 9 + SqlPreviewPanelM
 | --- | --- | --- |
 | A | `findWrapperVariable` 的 `PsiAssignmentExpression` 分支 | `PreviewStmtTypeScopeTest` **14 例 1 红**，恰为 `testReassignmentAnchorUsesVariableChainAndAnchorSegment`，message「锚点之后最近的消费是 delete，应判 DELETE: **null**」——判型依据全丢，正是用户看到的退化形态 |
 | B | `filterCallsToAnchorSegment` 的段过滤（直接 `return calls`） | 同 **14 例 1 红**、同一用例，message「不该把 update 段的 status 条件带进来: DELETE FROM `order` WHERE user_id = ? AND status = 0 AND order_no = ? AND user_id = ?」 |
+| C | D-C 的逐列来源（回退成共用 `"?"`） | **15 例 1 红**、恰为 `testEntityUpdateSetPlaceholdersHavePerColumnSources`，message「SET 每列一个来源（id 不进 SET）: [?, ?, ?, ?, ?, userId] expected:<5> but was:<0>」——顺带实证了修复前的来源就是 5 个相同的 `?`（面板合成一行、填一个值填满整列），WHERE 侧来源是 `userId` |
 
-两探针各自命中一处修复、互不掩盖；还原后 14/0/0（合计见 §9.4 末行）。
+三探针各自命中一处修复、互不掩盖；还原后 15/0/0（合计见 §9.4 末行）。
 
 ### 9.6 已知边界
 
