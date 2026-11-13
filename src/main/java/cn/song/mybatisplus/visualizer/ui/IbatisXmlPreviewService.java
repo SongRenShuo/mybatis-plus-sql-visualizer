@@ -225,10 +225,14 @@ public final class IbatisXmlPreviewService {
     @NotNull
     public static PreviewResult rerenderFailedResult(@NotNull PreviewResult baseline, @NotNull Throwable error) {
         String reason = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
+        // T-SyncK2JMaster178-fix2：master baseline.copy(warning = "重渲染失败：<原因>", informationalWarning = false)
+        // ——k2j 此前漏译 warning 位（恒 null），失败档静默无告警，与「失败可见」口径相悖。
         return withIbatisOverride(
             baseline,
             baseline.getSql(), baseline.getCompactSql(), baseline.getUnresolvedParams(), baseline.getParamTable(),
-            baseline.getWrapperType(), baseline.getTableName(), null, baseline.getParamHints(),
+            baseline.getWrapperType(), baseline.getTableName(),
+            MpSqlVisualizerBundle.message("ibatis.preview.rerenderFailed.warning", reason),
+            baseline.getParamHints(),
             baseline.isHasDollarRawSegments(), false,
             baseline.getIbatisParamModel(), baseline.getRerender()
         );
