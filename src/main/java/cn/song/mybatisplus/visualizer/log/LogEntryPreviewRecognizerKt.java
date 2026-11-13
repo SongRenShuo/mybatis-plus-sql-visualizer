@@ -330,13 +330,17 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
         // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
         // T-JdbcThreadBucket F2：零参数时按来源分流——JdbcTemplate 引导开 org.springframework.jdbc.core，
         // Hibernate 引导开 type.descriptor.sql（避免把 JDBC 条目误导向 Hibernate 配置）
+        // T-Ibatis2Support 券 H：iBatis 条目单独分流——它的绑定参数走 `{pstm-N} Parameters:` 行，
+        // 不排查 Hibernate 的 TRACE 开关（照通用文案会把人引到无关配置上去）
         String warning = countPlaceholders(entry.restoredSql()) > 0
             ? MpSqlVisualizerBundle.message(entry.params().isEmpty()
                 ? (entry.source() == SqlSource.JDBC
                     ? "log.preview.unresolvedNoBinding.jdbc"
                     : entry.source() == SqlSource.SHARDINGSPHERE
                         ? "log.preview.unresolvedNoBinding.sharding"
-                        : "log.preview.unresolvedNoBinding")
+                        : entry.source() == SqlSource.IBATIS
+                            ? "log.preview.unresolvedNoBinding.ibatis"
+                            : "log.preview.unresolvedNoBinding")
                 : "log.preview.unresolvedWarning")
             : null;
         // master 具名参数新增 stackDigest = stackDigest；Java 按全参构造位置传入
