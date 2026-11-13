@@ -271,4 +271,18 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
         )
         assertTrue("空名不产生别名", SqlCompletionContributor.columnNameAliases(" ").isEmpty())
     }
+
+    /**
+     * §三十三：插入形态跟随输入风格——大写 SQL 补大写、小写 SQL 补小写、混合保持原名。
+     */
+    fun testPreferredColumnVariant() {
+        val camel = "delFlag"
+        assertEquals("全大写输入 → UPPER_SNAKE", "DEL_FLAG", SqlCompletionContributor.preferredColumnVariant(camel, "DEL_F"))
+        assertEquals("全小写输入 → snake", "del_flag", SqlCompletionContributor.preferredColumnVariant(camel, "del_f"))
+        assertEquals("混合输入 → 保持原名", camel, SqlCompletionContributor.preferredColumnVariant(camel, "Del"))
+        assertEquals("空前缀 → 保持原名", camel, SqlCompletionContributor.preferredColumnVariant(camel, ""))
+        // 列名本身已是 snake：大小写两种输入各自得到对应形态
+        assertEquals("snake 列名 + 大写输入 → 大写形态", "DEL_FLAG", SqlCompletionContributor.preferredColumnVariant("del_flag", "DEL_F"))
+        assertEquals("snake 列名 + 小写输入 → 原样", "del_flag", SqlCompletionContributor.preferredColumnVariant("del_flag", "del_f"))
+    }
 }

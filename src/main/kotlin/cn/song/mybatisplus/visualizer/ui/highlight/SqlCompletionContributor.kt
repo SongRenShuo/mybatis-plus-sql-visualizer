@@ -60,6 +60,26 @@ class SqlCompletionContributor : CompletionContributor() {
          * 动机：实体列的 `ColumnInfo.columnName` 在 MP 工程里可能是驼峰（由字段名推出），
          * 而用户在 SQL 里写的是 `DEL_FLAG` 这种大写蛇形，前缀匹配（大小写敏感）永远命中不了。
          */
+        /**
+         * §三十三：按用户已输入前缀的大小写风格选择**插入形态**。
+         *
+         * - 前缀全大写（`DEL_F`）→ `DEL_FLAG`；全小写（`del_f`）→ `del_flag`；混合或空 → 原名。
+         * 规则取「输入即所得」：用户写大写 SQL 就补大写，不做单方面改风格。
+         */
+        internal fun preferredColumnVariant(name: String, prefixText: String): String {
+            val aliases = columnNameAliases(name)
+            if (aliases.size == 1) return name
+            val upper = aliases.first { it == it.uppercase() && it != name }
+            val lower = aliases.firstOrNull { it == it.lowercase() && it != name }
+            val hasUpper = prefixText.any { it.isUpperCase() }
+            val hasLower = prefixText.any { it.isLowerCase() }
+            return when {
+                hasUpper && !hasLower -> upper
+                hasLower && !hasUpper -> lower ?: name
+                else -> name
+            }
+        }
+
         internal fun columnNameAliases(name: String): List<String> {
         if (name.isBlank()) return emptyList()
         val snake = cn.song.mybatisplus.visualizer.util.CaseFormatUtil.camelToSnake(name)
@@ -169,8 +189,13 @@ class SqlCompletionContributor : CompletionContributor() {
                             // 任一形态命中前缀即收录，并把别名注册为 lookup string（回车插入原名）。
                             val aliases = columnNameAliases(candidate.name)
                             if (aliases.any { prefix.prefixMatches(it) }) {
-                                var element = columnLookupElement(candidate)
-                                aliases.drop(1).forEach { alias -> element = element.withLookupString(alias) }
+                                // §三十三：插入形态**跟随输入的大小写风格**——
+                                // 全大写输入补 UPPER_SNAKE、全小写补 snake、混合/空补原名；
+                                // 其余别名一律注册成 lookup string，保证怎么敲都能命中。
+                                val insertAs = preferredColumnVariant(candidate.name, prefix.prefix)
+                                var element = columnLookupElement(candidate, insertAs)
+                                aliases.filter { it != insertAs }
+                                    .forEach { alias -> element = element.withLookupString(alias) }
                                 result.addElement(element)
                                 addedColumns++
                             }
