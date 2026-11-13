@@ -2,7 +2,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
-import cn.song.mybatisplus.visualizer.ui.IbatisStatementPreview;
 import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -91,7 +90,7 @@ public class IbatisXmlGutterLineMarkerProvider implements LineMarkerProvider {
             elt -> MpSqlVisualizerBundle.message("gutter.ibatis.tooltip"),
             IbatisGutterNavigationHandler.INSTANCE,
             GutterIconRenderer.Alignment.CENTER,
-            () -> MpSqlVisualizerBundle.message("gutter.ibatis.accessible.name"),
+            () -> MpSqlVisualizerBundle.message("gutter.ibatis.accessible.name")
         );
     }
 
@@ -114,7 +113,7 @@ public class IbatisXmlGutterLineMarkerProvider implements LineMarkerProvider {
                 result -> {
                     SqlPreviewService.showResult(project, result);
                     return kotlin.Unit.INSTANCE;
-                },
+                }
             );
         }
     }

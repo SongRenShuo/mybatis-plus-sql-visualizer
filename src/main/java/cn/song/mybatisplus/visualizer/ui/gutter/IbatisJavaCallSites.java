@@ -116,7 +116,7 @@ public final class IbatisJavaCallSites {
                 GlobalSearchScope.projectScope(project),
                 word,
                 UsageSearchContext.IN_STRINGS,
-                true,
+                true
             );
         } catch (Throwable ignored) {
             // 失败退化为「本次无目标」

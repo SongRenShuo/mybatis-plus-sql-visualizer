@@ -2,7 +2,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
-import cn.song.mybatisplus.visualizer.ui.IbatisStatementPreview;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets;
@@ -154,7 +153,7 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         List<XmlAttributeValue> anchors = IbatisXmlStatementTargets.resolveStatementAnchors(
             project,
             statementId,
-            IbatisCallTargets.ownerNamespace(element),
+            IbatisCallTargets.ownerNamespace(element)
         );
         if (anchors.isEmpty()) {
             return null;
@@ -166,7 +165,7 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
             elt -> MpSqlVisualizerBundle.message("gutter.ibatisCallNav.tooltip"),
             IbatisToXmlNavigationHandler.INSTANCE,
             GutterIconRenderer.Alignment.CENTER,
-            () -> MpSqlVisualizerBundle.message("gutter.ibatisCallNav.accessible.name"),
+            () -> MpSqlVisualizerBundle.message("gutter.ibatisCallNav.accessible.name")
         ));
         // ② 预览图标（T-IbatisCallPreview，锚首参字面量的叶子 token——平台要求 LineMarker 锚叶子，
         // 直接锚 PsiLiteralExpression 会触发 "LineMarker is supposed to be registered for leaf elements"；
@@ -178,7 +177,7 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
                 elt -> MpSqlVisualizerBundle.message("gutter.ibatisCallPreview.tooltip"),
                 IbatisCallPreviewHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                () -> MpSqlVisualizerBundle.message("gutter.ibatisCallPreview.accessible.name"),
+                () -> MpSqlVisualizerBundle.message("gutter.ibatisCallPreview.accessible.name")
             ));
         }
         return markers;
@@ -226,7 +225,7 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
                     List<XmlAttributeValue> anchors = IbatisXmlStatementTargets.resolveStatementAnchors(
                         project,
                         statementId,
-                        IbatisCallTargets.ownerNamespace(elt),
+                        IbatisCallTargets.ownerNamespace(elt)
                     );
                     return anchors.isEmpty() ? null : anchors.get(0);
                 });
@@ -275,7 +274,7 @@ public class IbatisJavaToXmlLineMarkerProvider implements LineMarkerProvider {
                 result -> {
                     SqlPreviewService.showResult(project, result);
                     return kotlin.Unit.INSTANCE;
-                },
+                }
             );
         }
     }

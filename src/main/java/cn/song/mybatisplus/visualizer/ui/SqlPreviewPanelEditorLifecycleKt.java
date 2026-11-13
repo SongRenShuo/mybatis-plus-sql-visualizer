@@ -379,7 +379,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             dir = new File(base, ".sql-visualizer" + File.separator + "preview");
             try {
                 File ignore = new File(base, ".sql-visualizer" + File.separator + ".gitignore");
-                if (!ignore.exists()) ignore.writeText("*\n");
+                if (!ignore.exists()) java.nio.file.Files.writeString(ignore.toPath(), "*\n");
             } catch (Throwable ignored) {
                 // master runCatching 降级语义
             }

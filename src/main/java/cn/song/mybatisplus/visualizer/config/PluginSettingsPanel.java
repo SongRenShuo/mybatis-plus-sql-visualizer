@@ -1606,7 +1606,7 @@ public class PluginSettingsPanel implements Disposable {
             || (sections.contains(SECTION_SHORTCUTS) && isModifiedShortcuts())
             || (sections.contains(SECTION_UPDATE_DIAGNOSTICS)
                 && (updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate()
-                    || !updateSection.getLocalDirField().getText().trim().equals(s.getLocalUpdateDir())))
+                    || !updateSection.getLocalDirField().getText().trim().equals(s.getLocalUpdateDir())));
     }
 
     private boolean isModifiedPreview(PluginSettings.State s) {

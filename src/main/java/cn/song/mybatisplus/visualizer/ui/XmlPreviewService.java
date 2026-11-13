@@ -25,7 +25,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlMapperModel;
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser;
 import cn.song.mybatisplus.visualizer.xml.XmlParseException;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
-import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile;
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.XmlPreviewProfile;
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
 import cn.song.mybatisplus.visualizer.xml.XmlStatement;
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind;

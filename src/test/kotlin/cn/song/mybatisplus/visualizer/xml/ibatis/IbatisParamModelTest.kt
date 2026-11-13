@@ -148,7 +148,7 @@ class IbatisParamModelTest {
         val m = model("selectByIterate")
         val filled = IbatisParamModel.IbatisParamModelBuilder.assembleParams(
             m,
-            PreviewRerenderInput(mapOf(), mapOf(), mapOf("ids" to listOf("X1", "X2", "X3"))),
+            PreviewRerenderInput(mapOf<String, String>(), setOf<String>(), mapOf("ids" to listOf("X1", "X2", "X3"))),
         ) as Map<*, *>
         assertEquals(listOf("X1", "X2", "X3"), filled["ids"])
         val empty = IbatisParamModel.IbatisParamModelBuilder.assembleParams(m, PreviewRerenderInput())

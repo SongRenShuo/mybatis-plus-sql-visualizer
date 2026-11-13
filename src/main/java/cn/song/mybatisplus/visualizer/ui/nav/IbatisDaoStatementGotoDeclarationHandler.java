@@ -108,7 +108,7 @@ public class IbatisDaoStatementGotoDeclarationHandler implements GotoDeclaration
         List<XmlAttributeValue> anchors = IbatisXmlStatementTargets.resolveStatementAnchors(
             element.getProject(),
             statementId,
-            ownerNamespace(element),
+            ownerNamespace(element)
         );
         return anchors.isEmpty() ? null : anchors.toArray(new PsiElement[0]);
     }

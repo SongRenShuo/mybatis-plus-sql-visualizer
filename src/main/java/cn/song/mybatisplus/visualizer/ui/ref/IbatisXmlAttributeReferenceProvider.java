@@ -34,7 +34,7 @@ public class IbatisXmlAttributeReferenceProvider extends PsiReferenceProvider {
         if (attr == null) {
             return PsiReference.EMPTY_ARRAY;
         }
-        XmlTag tag = attr.getParent() instanceof XmlTag host ? host : null;
+        XmlTag tag = attr.getParent() instanceof XmlTag ? (XmlTag) attr.getParent() : null;
         if (tag == null) {
             return PsiReference.EMPTY_ARRAY;
         }

@@ -1620,7 +1620,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
                         attachStats != null ? attachStats.blindClasses() : List.of(),
                         // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在「已识别到
                         // iBatis 形态 且 增强捕获未开启」时提示（已开启时由 agent 侧的 BATCH 形态兜住）
-                        LogParseDiag.sawIbatisForm());
+                        LogParseDiag.sawIbatisForm()));
             } catch (Throwable ignored) {
                 texts = null; // runCatching().getOrNull() 等价
             }

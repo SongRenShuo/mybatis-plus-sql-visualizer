@@ -150,7 +150,7 @@ public final class IbatisXmlPreviewService {
             project,
             parameterClass != null ? parameterClass : statement.attributes().get("parameterClass"),
             propertyNames,
-            moduleName,
+            moduleName
         );
         PreviewResult baseline = toPreviewResult(
             rendered,
@@ -158,14 +158,14 @@ public final class IbatisXmlPreviewService {
             // 无参基线：iterate 行全部未供值（待填值态）
             !paramModel.iterateRows().isEmpty(),
             selectKeyRenders,
-            propertyHints,
+            propertyHints
         );
         // T-IbatisFix2 修复三：闭包捕获基线结果——重渲染失败时回落到它（sql 保留降级文本），
         // 不再静默吞掉异常
         return withIbatisModel(
             baseline,
             paramModel,
-            input -> rerender(statement, paramModel, baseline, input, propertyHints),
+            input -> rerender(statement, paramModel, baseline, input, propertyHints)
         );
     }
 
@@ -195,7 +195,7 @@ public final class IbatisXmlPreviewService {
             IbatisRenderResult rendered = new SqlMapSqlRenderer().render(statement, params);
             boolean iteratePending = false;
             for (IbatisParamModel.IbatisIterateRow row : paramModel.iterateRows()) {
-                List<String> values = input.getCollections().get(row.property());
+                List<String> values = input.collections().get(row.property());
                 if (values == null || values.isEmpty()) {
                     iteratePending = true;
                     break;
@@ -206,7 +206,7 @@ public final class IbatisXmlPreviewService {
                 !paramModel.dollarRows().isEmpty(),
                 iteratePending,
                 renderSelectKeys(statement, params),
-                propertyHints,
+                propertyHints
             );
         } catch (Throwable e) {
             if (FatalErrors.isFatal(e)) {
@@ -230,7 +230,7 @@ public final class IbatisXmlPreviewService {
             baseline.getSql(), baseline.getCompactSql(), baseline.getUnresolvedParams(), baseline.getParamTable(),
             baseline.getWrapperType(), baseline.getTableName(), null, baseline.getParamHints(),
             baseline.isHasDollarRawSegments(), false,
-            baseline.getIbatisParamModel(), baseline.getRerender(),
+            baseline.getIbatisParamModel(), baseline.getRerender()
         );
     }
 
@@ -271,6 +271,8 @@ public final class IbatisXmlPreviewService {
                     List.of(selectKey.id()),
                     List.of(),
                     true,
+                    List.of(),
+                    List.of()
                 );
             }
             result.add(new kotlin.Pair<>(selectKey, rendered));
@@ -503,7 +505,7 @@ public final class IbatisXmlPreviewService {
                 || statementHasRawSubstitutionSites || sql.contains("${"),
             // UI-001：informationalWarning（ℹ 信息级前缀）
             failureWarnings.isEmpty() && !warningsForLine.isEmpty(),
-            null, null,
+            null, null
         );
     }
 
@@ -559,7 +561,7 @@ public final class IbatisXmlPreviewService {
             "", "", List.of(), null,
             null, null, message, List.of(),
             false, false,
-            null, null,
+            null, null
         );
     }
 
@@ -638,7 +640,7 @@ public final class IbatisXmlPreviewService {
             b != null ? b.getDegradations() : null,
             b != null ? b.getRuntimeSlots() : null,
             ibatisParamModel,
-            rerender,
+            rerender
         );
     }
 
@@ -655,7 +657,7 @@ public final class IbatisXmlPreviewService {
             baseline.getSql(), baseline.getCompactSql(), baseline.getUnresolvedParams(), baseline.getParamTable(),
             baseline.getWrapperType(), baseline.getTableName(), baseline.getWarning(), baseline.getParamHints(),
             baseline.isHasDollarRawSegments(), baseline.isInformationalWarning(),
-            ibatisParamModel, rerender,
+            ibatisParamModel, rerender
         );
     }
 }

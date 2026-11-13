@@ -2153,7 +2153,7 @@ public final class DataSourceSelectorResultsKt {
      * <p>抽成函数只为让自愈链与诊断共用同一份取法，语义与既有 {@code ReadAction.compute { findFile(vf) }} 逐字一致。</p>
      */
     @Nullable
-    public static PsiFile findExecPsi(@NotNull Project project, @NotNull VirtualFile vf) {
+    public static PsiFile findExecPsi(@NotNull Project project, @NotNull VirtualFile vf) throws Throwable {
         return ReadAction.compute(
                 (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
                         PsiManager.getInstance(project).findFile(vf));
@@ -2461,10 +2461,11 @@ public final class DataSourceSelectorResultsKt {
             // getOrDefault(false) 语义
         }
         Boolean dirCanHostPsi = null;
+        final VirtualFile parentVfF = parentVf;
         try {
             dirCanHostPsi = ReadAction.compute(
                     (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) () ->
-                            parentVf != null && PsiManager.getInstance(project).findDirectory(parentVf) != null);
+                            parentVfF != null && PsiManager.getInstance(project).findDirectory(parentVfF) != null);
         } catch (Throwable ignored) {
             // getOrNull 语义
         }
@@ -2598,10 +2599,11 @@ public final class DataSourceSelectorResultsKt {
             // getOrNull 语义
         }
         Boolean dirCanHostPsi = null;
+        final VirtualFile parentVfF2 = parentVf;
         try {
-            dirCanHostPsi = parentVf != null && ReadAction.compute(
+            dirCanHostPsi = parentVfF2 != null && ReadAction.compute(
                     (com.intellij.openapi.util.ThrowableComputable<com.intellij.psi.PsiDirectory, Throwable>) () ->
-                            PsiManager.getInstance(project).findDirectory(parentVf)) != null;
+                            PsiManager.getInstance(project).findDirectory(parentVfF2)) != null;
         } catch (Throwable ignored) {
             // getOrNull 语义
         }
@@ -2644,9 +2646,10 @@ public final class DataSourceSelectorResultsKt {
         boolean dirPsi = false;
         try {
             if (dirVf != null) {
+                final VirtualFile dirVfF = dirVf;
                 dirPsi = ReadAction.compute(
                         (com.intellij.openapi.util.ThrowableComputable<com.intellij.psi.PsiDirectory, Throwable>) () ->
-                                PsiManager.getInstance(project).findDirectory(dirVf)) != null;
+                                PsiManager.getInstance(project).findDirectory(dirVfF)) != null;
             }
         } catch (Throwable ignored) {
             // getOrNull 语义
@@ -2722,10 +2725,11 @@ public final class DataSourceSelectorResultsKt {
         }
         if (dirVf == null) return true;
         boolean capable = false;
+        final VirtualFile dirVfF2 = dirVf;
         try {
             capable = ReadAction.compute(
                     (com.intellij.openapi.util.ThrowableComputable<com.intellij.psi.PsiDirectory, Throwable>) () ->
-                            PsiManager.getInstance(project).findDirectory(dirVf)) != null;
+                            PsiManager.getInstance(project).findDirectory(dirVfF2)) != null;
         } catch (Throwable ignored) {
             // getOrNull 语义
         }

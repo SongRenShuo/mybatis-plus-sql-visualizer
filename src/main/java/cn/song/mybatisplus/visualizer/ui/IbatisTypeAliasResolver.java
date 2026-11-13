@@ -83,7 +83,7 @@ public final class IbatisTypeAliasResolver {
                         }
                     }
                     return true;
-                },
+                }
             );
         }
         return table;

@@ -127,7 +127,7 @@ public class IbatisXmlToJavaLineMarkerProvider implements LineMarkerProvider {
             elt -> MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.tooltip"),
             IbatisToJavaNavigationHandler.INSTANCE,
             GutterIconRenderer.Alignment.CENTER,
-            () -> MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.accessible.name"),
+            () -> MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.accessible.name")
         );
     }
 

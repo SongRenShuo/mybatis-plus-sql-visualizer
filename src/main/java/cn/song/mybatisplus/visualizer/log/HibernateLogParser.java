@@ -149,6 +149,7 @@ public class HibernateLogParser {
                 Bucket::new,
                 b -> b.collecting,
                 b -> !b.collecting && !b.inComment && b.pendingParams.isEmpty() && b.pendingShadow == null,
+                LogThreadRouter.DEFAULT_MAX_BUCKETS,
                 true,
                 // 时钟与 clock 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
                 clock);

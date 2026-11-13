@@ -252,7 +252,7 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
      * {@code column}/{@code property} 反引号候选（{@code quotedIdentifierCandidates} 按标签名扫，iBatis 同名标签在场）。
      * 这是「不做错」的降级形态：不产出错误候选，仅覆盖面小于 MyBatis。</p>
      */
-    private static void addSqlCompletions(
+    private void addSqlCompletions(
             XmlTag enclosingTag,
             String statementText,
             int caretInStatement,

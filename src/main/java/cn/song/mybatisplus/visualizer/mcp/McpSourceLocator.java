@@ -353,7 +353,7 @@ public final class McpSourceLocator {
                 ? " A Wrapper chain was detected nearby; retry with the exact line of the chain head call."
                 : " Supported: MyBatis-Plus Wrapper chains, mapper XML statements, MyBatis annotation SQL, "
                     + "JPA (@Query/derived/CriteriaQuery), HQL, JdbcTemplate string SQL, "
-                    + "iBatis <sqlMap> statements, iBatis DAO calls (SqlMapExecutor entry names with a statement id)."
+                    + "iBatis <sqlMap> statements, iBatis DAO calls (SqlMapExecutor entry names with a statement id).")
         );
     }
 

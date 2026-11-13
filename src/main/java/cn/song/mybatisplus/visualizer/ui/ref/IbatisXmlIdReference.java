@@ -27,7 +27,7 @@ public class IbatisXmlIdReference extends SoftXmlAttributeReference {
         return IbatisXmlStatementTargets.resolveSameFileIdReference(
             value.getContainingFile(),
             targetTagName,
-            value.getValue(),
+            value.getValue()
         );
     }
 }

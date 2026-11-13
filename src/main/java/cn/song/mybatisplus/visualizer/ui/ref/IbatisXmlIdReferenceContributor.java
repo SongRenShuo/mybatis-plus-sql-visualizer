@@ -46,7 +46,7 @@ public class IbatisXmlIdReferenceContributor extends PsiReferenceContributor {
     public void registerReferenceProviders(@NotNull PsiReferenceRegistrar registrar) {
         registrar.registerReferenceProvider(
             PlatformPatterns.psiElement(XmlAttributeValue.class),
-            IbatisXmlAttributeReferenceProvider.INSTANCE,
+            IbatisXmlAttributeReferenceProvider.INSTANCE
         );
     }
 }

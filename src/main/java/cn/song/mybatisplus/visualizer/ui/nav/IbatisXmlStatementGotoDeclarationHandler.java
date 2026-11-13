@@ -108,7 +108,7 @@ public class IbatisXmlStatementGotoDeclarationHandler implements GotoDeclaration
             element.getProject(),
             IbatisXmlStatementTargets.rootNamespace(tag.getContainingFile()),
             statementId,
-            MAX_TARGETS,
+            MAX_TARGETS
         );
         return literals.isEmpty() ? null : literals.toArray(new PsiElement[0]);
     }
@@ -131,7 +131,7 @@ public class IbatisXmlStatementGotoDeclarationHandler implements GotoDeclaration
             if (attribute == null || !ID_ATTRIBUTE.equals(attribute.getName())) {
                 return null;
             }
-            return attribute.getParent() instanceof XmlTag host ? host : null;
+            return attribute.getParent() instanceof XmlTag ? (XmlTag) attribute.getParent() : null;
         }
         XmlTag tag = PsiTreeUtil.getParentOfType(element, XmlTag.class, false);
         if (tag == null) {

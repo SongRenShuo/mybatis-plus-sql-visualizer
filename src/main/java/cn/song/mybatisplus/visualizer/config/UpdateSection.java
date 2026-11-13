@@ -560,10 +560,11 @@ public class UpdateSection extends JPanel {
             } catch (Throwable t) {
                 result = new ScanResult.Failed(t.getMessage() != null ? t.getMessage() : t.toString());
             }
+            final ScanResult finalResult = result;
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
                 // 不按 isDisplayable 丢弃：面板在懒加载的配置页里可能尚未挂载，丢弃会让状态行
                 // 永久停在旧读数（真机 2026-11-12 症状之一）。设置文本本身无副作用。
-                renderLocalDirStatus(result);
+                renderLocalDirStatus(finalResult);
             });
         });
     }
@@ -776,10 +777,11 @@ public class UpdateSection extends JPanel {
                     } catch (Throwable t) {
                         result = new ScanResult.Failed(t.getMessage() != null ? t.getMessage() : t.toString());
                     }
+                    final ScanResult finalResult = result;
                     ApplicationManager.getApplication().invokeLater(() -> {
                         if (isDisplayable()) {
-                            renderLocalDirStatus(result);
-                            renderLocalCheck(result);
+                            renderLocalDirStatus(finalResult);
+                            renderLocalCheck(finalResult);
                         }
                     });
                 }

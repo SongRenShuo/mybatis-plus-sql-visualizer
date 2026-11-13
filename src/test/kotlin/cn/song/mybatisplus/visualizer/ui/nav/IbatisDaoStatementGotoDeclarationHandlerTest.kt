@@ -112,7 +112,7 @@ class IbatisDaoStatementGotoDeclarationHandlerTest : BasePlatformTestCase() {
 
     /** handler 不读 editor/offset（纯元素形态判定），传 null 即可。 */
     private fun targets(element: PsiElement): List<PsiElement> =
-        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.toList().orEmpty()
+        handler.getGotoDeclarationTargets(element, element.textOffset, null)?.toList()?.filterNotNull().orEmpty()
 
     private fun assertAnchor(target: PsiElement, expectedId: String, expectedFile: String) {
         assertTrue("落点应是 id 属性值元素，实际 ${target.javaClass.name}", target is XmlAttributeValue)

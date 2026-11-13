@@ -228,7 +228,7 @@ public final class PluginUpdateRunner {
     /** 安装本地包（使用默认 verify/baseline/install seam）。 */
     public static InstallResult installFromLocal(LocalPackage pkg, ProgressIndicator indicator) {
         return installFromLocal(pkg, indicator,
-            LocalPackageOwnership.INSTANCE::verify,
+            PluginPackageOwnership::verify,
             () -> {
                 try { // master runCatching 语义
                     return com.intellij.openapi.application.ApplicationInfo.getInstance().getBuild().getBaselineVersion();
