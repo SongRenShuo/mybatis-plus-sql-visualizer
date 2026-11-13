@@ -1024,3 +1024,28 @@ freeze/sluggish 记账（最近的记账停在 19:56:57 启动阶段），同期
 守卫：`TableNameAnnotationsTest` 7 例；Heavy 补 2 例（JPA 命中、回补至多一次且未命中不再扫）。
 反向：摘掉 JPA 源 → 5 例红，还原复绿。**not run**：真机 JPA/iBatis 工程实测（沙盒语料是 MP+MBG 混合，
 JPA 分支由夹具覆盖）。
+
+### 22.14 跨 ORM 分源后的复测（21:08/21:09 沙盒）：索引链无回退，首开的剩余成本换到了「面板/控制台准备」
+
+```
+21:08:55  ctx detail: entity=5ms resolve=53ms ...            ← 冷实体解析 53ms（之后 1~3ms）
+21:08:56  warmCandidates ok=true cached=0 elapsed=724ms       ← 预热跑了但缓存 0 条（见下）
+21:09:03  ctx detail: entity=2ms resolve=1ms candidates=0ms
+21:09:03  [open-perf] total=59ms parse+ctx=47 profile=0 m2=0 model=12   ← 装配只要 59ms
+21:09:04  [T-PreviewFast] request→dialog: 671ms                ← 装配→弹窗之间 593ms 在别处
+21:09:04  [M36] createEditor / prepareDefaultConsole / exec file updated / prewarm done in 293ms
+21:09:22  request→dialog: 16ms
+21:09:27  request→dialog: 7ms
+21:09:33  request→dialog: 8ms
+```
+
+两点结论：
+
+1. **索引链没有回退**（`resolve` 1~53ms、稳定态 `request→dialog` 7~16ms），跨 ORM 分源只是把注解索引
+   从查 1 个简单名变成查 2 个（`TableName` / `Table`），稳态成本无感。
+2. 首开那 671ms **不是索引**：装配（`total=59ms`）→ 弹窗（671ms）之间的 593ms 花在预览面板的
+   **编辑器/控制台准备**上（`createEditor` → `prepareDefaultConsole` → exec 文件落盘 → `prewarm 293ms`）。
+   这是既有链路的成本，与本次反查/候选改造无关；真要再压，方向是把 `prewarm`（293ms）也挪到弹窗之后。
+
+`warmCandidates cached=0`：预热在工程索引尚未就绪时跑了一次（`elapsed=724ms` 却解析出 0 条），
+属候选链既有行为（下一次 `refreshCompletionContext` 会补），不是跨 ORM 改动引入的。
