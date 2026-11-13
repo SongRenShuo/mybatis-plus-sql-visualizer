@@ -918,3 +918,31 @@ Read access is allowed from inside read-action only
 **下一步（未做）**：这 4.7~9.7 秒还能再压——平台注解索引 `JavaAnnotationIndex.getAnnotations("TableName")`
 可把候选从「全项目类数」降到「带注解的实体数」（调研见 22.5；属性值仍要逐候选读）。当前先靠
 「挪出调用方线程 + 有界等待」把用户可感延迟消掉；若真机上仍能感知冷启动那一次，再走这条。
+
+### 22.9 第三轮真机读数（2026-11-13 20:08 沙盒，async + 有界等 800ms 之后）
+
+```
+20:08:30,057  ctx detail: entity=31ms resolve=804ms include=false     ← gutter 预热被预算截断（= 800ms 上界）
+20:08:30,057  ctx warm done in 839ms                                  ← 预热不再占用户等待
+20:08:35,386  反查索引一次建成 tables=8688（后台线程，testSync=false） ← 扫描全在后台跑完
+20:08:36,500  ctx detail: entity=0ms resolve=34ms candidates=374ms    ← 反查已就绪：34ms
+20:08:36,585  [T-PreviewFast] request→dialog: 501ms                   ← 首次点击（原 4190 / 5119ms）
+20:08:53,838  ctx detail: resolve=5ms   → request→dialog: 32ms
+20:08:59,515  ctx detail: resolve=0ms   → request→dialog: 254ms
+20:09:05,205  ctx detail: resolve=0ms   → request→dialog: 8ms
+```
+
+对照 22.7 的同一组读数：`resolve=` 段 **3737/4737ms → 0~34ms**，`request→dialog` **4190/5119ms →
+8~501ms**（首次 501ms 里含冷态装配，稳定态两位数毫秒）。
+
+**顺手修的埋点失真**：重构后 `[open-perf] 反查索引一次建成` 的耗时量的是「落地那一下」（日志里一度只
+显示 1ms），起点改回派发前，读数才代表调用方视角的真实成本（含排队 + 扫描 ≈ 4.7s，但已不在调用方线程）。
+
+### 22.10 同期回归修复（CI `test(4)` 三连红，`6cf7366f2` 之前一笔）
+
+实体解析缓存的命中条件写成「TTL 内一律命中 || stamp 未变」⇒ **内容改了也命中**。CI 三个别名列用例
+（`XmlSqlCompletionContributorTest` 04/11/13）用 `@TableName("t")`，而同类默认夹具用 `t_device_info`：
+第二个场景拿到第一个的解析结果 → 主表名不对 → `FROM t u` 的别名绑定对不上 → 别名列补全整片消失。
+用户侧等价形态＝改了实体上的 `@TableName`/字段，预览与补全 60 秒内还是旧的。
+修法：判据改 `clazz.text.hashCode()`（内容指纹，PSI 重建不误 miss、真改了不误 hit）。
+反向验证：命中条件改回「无视内容一律命中」→ 恰三红，还原复绿。

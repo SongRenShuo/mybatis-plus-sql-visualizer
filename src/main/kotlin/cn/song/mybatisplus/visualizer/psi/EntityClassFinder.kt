@@ -360,7 +360,8 @@ class EntityClassFinder(private val project: Project) {
         if (entry.building.compareAndSet(false, true)) {
             // 测试口径走同步：既有断言按「首次查询即建好」写（`indexBuildCount`/`scans` 读数）
             if (syncIndexBuildForTest ?: ApplicationManager.getApplication().isUnitTestMode) {
-                applyBuiltIndex(entry, runCatching { scanAllTablesIndex() }.getOrNull())
+                val started = System.currentTimeMillis()
+                applyBuiltIndex(entry, runCatching { scanAllTablesIndex() }.getOrNull(), started)
                 return
             }
             dispatchIndexBuild(entry)
@@ -370,13 +371,15 @@ class EntityClassFinder(private val project: Project) {
 
     /** 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。 */
     private fun dispatchIndexBuild(entry: ReverseLookupCache) {
+        // 起点在**派发前**：日志里的耗时含排队 + 扫描，是调用方视角的真实成本（曾被写成只量落地那一下 = 1ms）
+        val started = System.currentTimeMillis()
         ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
             runCatching { scanAllTablesIndex() }.getOrNull()
         }
             .inSmartMode(project)
             .expireWith(ApplicationManager.getApplication())
             .submit(AppExecutorUtil.getAppExecutorService())
-            .onSuccess { built -> applyBuiltIndex(entry, built) }
+            .onSuccess { built -> applyBuiltIndex(entry, built, started) }
             .onError { t ->
                 LOG.info("[open-perf] 反查索引建立失败：${t.javaClass.simpleName}（下次查询重试）")
                 releaseBuild(entry)
@@ -386,9 +389,14 @@ class EntityClassFinder(private val project: Project) {
     /**
      * 索引建成落地（同步/异步共用）。三件事按序做完：填索引 → 置 `built`（**@Volatile，写在其后**，
      * 保证读到 `built=true` 的线程一定看得到已填充的 `index`）→ 放行等待者。
+     *
+     * @param startedMs 扫描起点（派发前/同步分支进入前），用于日志给出调用方视角的真实耗时
      */
-    private fun applyBuiltIndex(entry: ReverseLookupCache, built: Map<String, List<MatchedClass>>?) {
-        val started = System.currentTimeMillis()
+    private fun applyBuiltIndex(
+        entry: ReverseLookupCache,
+        built: Map<String, List<MatchedClass>>?,
+        startedMs: Long,
+    ) {
         try {
             if (built == null) return
             // 条目可能已被换掉（结构版本变化 / TTL 到期）——旧结果不得写进新条目
@@ -398,7 +406,7 @@ class EntityClassFinder(private val project: Project) {
             entry.built = true
             indexBuildCount(project).incrementAndGet()
             LOG.info(
-                "[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - started}ms" +
+                "[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms" +
                     " testSync=${syncIndexBuildForTest == true || ApplicationManager.getApplication().isUnitTestMode}",
             )
         } finally {
