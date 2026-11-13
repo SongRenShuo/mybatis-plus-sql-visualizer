@@ -145,7 +145,8 @@ public class XmlPreviewModelTest {
         XmlPreviewState state = copyNull(m.defaultState(), Set.of("ids"));
         RenderedXmlSql result = m.renderSql(state);
         assertEquals("SELECT * FROM t WHERE id IN", compact(result.sql()));
-        assertTrue(result.errors().stream().anyMatch(e -> e.contains("evaluated to a null value")));
+        // T-MbgExamplePreview R6：文案已中文化（原 MyBatis 英文原文透传到中文 UI）
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("求值为 null")));
     }
 
     @Test
