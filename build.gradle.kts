@@ -109,6 +109,9 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-Ibatis2Support 券 B/C（2026-11-09）：iBatis 2.x 真引擎保真对照（golden oracle，逐字节）。
+    // 仅测试 classpath——红线「零 mybatis 依赖」只约束 implementation（生产依赖图不变，生产仍只有 jsqlparser）。
+    testImplementation("org.apache.ibatis:ibatis-sqlmap:2.3.4.726")
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
     // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
