@@ -107,3 +107,36 @@
   对比、A3 的模态冲突回归——按用户 2026-11-13「最后的 GUI 验收我来」留给用户。
 - 复测看点：`[M36] dialect mapping skipped (already=memo:MySQL byMemo=true)` 应出现，且其后**不再**出现
   `enter dumb mode [工程名]`；`request→console-visible` 应明显下降（用户基线 4619 / 392 / 1053 / 316ms）。
+
+### 6.4 用户验收复测（2026-11-13 23:26~23:28 沙盒）：**备忘生效，但 dumb 仍在——上一轮的归因错了**
+
+```
+23:27:41,192  request→dialog: 1256ms（会话首开）
+23:27:41,891  dialect mapping skipped (already=MySQL target=MySQL byMemo=…)   ← 备忘生效：**没有写映射**
+23:27:42,194  [M36] exec file updated via document+save                       ← 真正的触发点
+23:27:42,955  enter dumb mode
+23:27:43,015  (dumb mode task) PushedFilePropertiesUpdater
+23:27:43,022  Reparsing …/.idea/sql-visualiz…                                 ← 重解析的是我们的 exec/预览文件
+23:27:44,548  request→console-visible: 4613ms
+```
+
+该会话统计：`preview temp: created` ×4、`exec file updated` ×4、`enter dumb mode` ×4、`dialect mapping skipped` ×11
+——**四次预览四次 dumb，且每次 dumb 都紧跟 exec 落盘**；全程**没有一次映射写入**。
+
+结论订正：
+- **C2（方言映射写入）被证伪**：备忘把它彻底短路了（`byMemo=true`），dumb 照旧 ⇒ 不是它。
+- **真凶是 exec 文件的内容写入**（`document+save` → 平台 `PushedFilePropertiesUpdater` → `Reparsing` 我们的文件
+  → dumb）。同一份代码在我沙盒（`cust-big-demo`，单模块）连写 3 次 exec 文件、dumb **0 次** ⇒ 该平台行为
+  **与工程形态相关**（多模块/挂编译器的工程才触发）。
+- 因此 6.2 的备忘修复**不解决**用户看到的 dumb；它的价值只剩「避免某些环境下反复 push-all」的加固，保留。
+
+为什么不再硬啃（成本/收益）：exec 文件**必须**在工程内才有 PSI 与原生控制台（R6 的 `shouldCreatePsi` 限制，
+这也是它从系统临时目录搬到 `.idea` 的原因），所以「不写工程内文件」这条路与「控制台要能执行」直接冲突；
+剩下的候选都动的是执行链核心时序——
+1. **把 exec 落盘推迟到「首次真要执行」**（预览打开只绑定文档不落盘）⇒ dumb 从「预览打开」挪到「点执行」，
+   总时长不降、但不再打断预览后的索引；碰 T-PreviewFlash / UI-023 / exec doc lock 三条既有守卫，风险中高；
+2. 换落点回系统临时目录 ⇒ 直接牺牲 PSI/控制台能力（R6 已证伪过一次）。
+3. 报 JetBrains：`PushedFilePropertiesUpdater` 对「excluded 目录内的子文件内容变更」也进 dumb，疑似平台过宽。
+
+**建议**：本任务在「已取证 + 已加固」处收口，不再为 ~0.8~1.3s（且属平台行为）去改执行链时序；若用户后续仍被
+「预览后补全短暂失灵」困扰，再单独立项做候选 1。
