@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
-import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.XmlPreviewProfile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
