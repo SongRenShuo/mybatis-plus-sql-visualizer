@@ -156,6 +156,19 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean xmlInlineSqlEnabled = true;
 
         /**
+         * iBatis 2.x {@code <sqlMap>} 语句预览开关（T-Ibatis2Support 券 A，默认开）：
+         * {@code <sqlMap>} 直接子级的语句标签（select/insert/update/delete/statement/procedure）行显示
+         * 预览图标，含 {@code <dynamic>} / {@code <isNotNull>} 子标签的语句同样出图标；点击走
+         * {@code cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService}（原生 SQL 直显 + {@code #name#}
+         * 参数识别），不经通用兜底通道的实体探针。
+         *
+         * <p>关闭后本 provider 零产出；对应标签同时<b>不再被通用兜底通道认领</b>
+         * （{@code XmlInlineSqlDetector.isClaimedByKnownStructure} 的让位是无条件的结构判定）——
+         * 即该类语句整体零图标，与「mapper 组开关关闭」同款语义。</p>
+         */
+        private boolean ibatisXmlEnabled = true;
+
+        /**
          * T-PagesHql（默认 {@link #PAGES_SOURCE_AUTO}）：maintainPage {@code <datasource>} 的源语言判定档。
          *
          * <ul>
@@ -253,6 +266,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         private boolean autoCheckUpdate = false;
         private String ignoredUpdateVersions = "";
+
+        /**
+         * 本地安装包目录（T-LocalUpdateDir）：把内网/共享盘构建的插件 zip 放这里，设置页与
+         * 启动检测自动识别最高版本并可直接安装（平台允许则热生效，243 等回退重启脚本）。
+         * 空字符串 = 关闭。已做 {@code ~} 展开与 {@code Path} 归一
+         * （{@code cn.song.mybatisplus.visualizer.update.LocalUpdateDir}）；
+         * 机器相关，不进设置导出/导入（SettingsIO 硬编码清单，天然不含）。
+         */
+        private String localUpdateDir = "";
         private String reverseWrapperFormat = REVERSE_AUTO;
 
         /**
@@ -451,6 +473,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * <p>T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：<b>默认关</b>——EXPLAIN 默认走原生
          * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
          * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。</p>
+         *
+         * <p>R45 拍板收口（2026-11-11 用户定案）：<b>转正保留、维持默认关</b>——「保留一个版本周期，
+         * 下版再定摘除」的到期裁决就此关闭：结构化通道转正为常驻能力，摘除案废止；dev 侧 G4
+         * （project-dev-batch-20261031）曾试的「默认开」案同批废止（未回流 master，不追认）。
+         * 设置页开关行自 2026-10-01（0df4a311）起在册（组 1 SQL 预览，{@code explainStructuredCheck}），
+         * 「启用结构化并重试」通知写入 true 后用户可在设置页关回——单向门不存在，设置文案
+         * 同步去「实验特性」口径（转正后该说法失真）。</p>
          */
         private boolean explainStructuredRender = false;
 
@@ -622,6 +651,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
         public boolean getXmlInlineSqlEnabled() { return xmlInlineSqlEnabled; }
         public void setXmlInlineSqlEnabled(boolean xmlInlineSqlEnabled) { this.xmlInlineSqlEnabled = xmlInlineSqlEnabled; }
+
+        public boolean getIbatisXmlEnabled() { return ibatisXmlEnabled; }
+        public void setIbatisXmlEnabled(boolean ibatisXmlEnabled) { this.ibatisXmlEnabled = ibatisXmlEnabled; }
+
+        public String getLocalUpdateDir() { return localUpdateDir; }
+        public void setLocalUpdateDir(String localUpdateDir) { this.localUpdateDir = localUpdateDir; }
 
         /** T-PagesHql：maintainPage datasource 源语言判定档（AUTO/SQL/HQL，默认 AUTO）。 */
         public String getPagesXmlSourceMode() { return pagesXmlSourceMode; }
@@ -946,6 +981,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
             c.xmlInlineSqlEnabled = xmlInlineSqlEnabled;
+            c.ibatisXmlEnabled = ibatisXmlEnabled;
+            c.localUpdateDir = localUpdateDir;
             c.pagesXmlSourceMode = pagesXmlSourceMode;
             c.sampleLimit = sampleLimit;
             c.xmlSynHiEnabled = xmlSynHiEnabled;
@@ -1059,6 +1096,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
                     && xmlInlineSqlEnabled == that.xmlInlineSqlEnabled
+                    && ibatisXmlEnabled == that.ibatisXmlEnabled
                     && sampleLimit == that.sampleLimit
                     && xmlSynHiEnabled == that.xmlSynHiEnabled
                     && gutterGroupMapperXml == that.gutterGroupMapperXml
@@ -1126,6 +1164,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(removeTableSuffix, that.removeTableSuffix)
                     && columnCalibrationEnabled == that.columnCalibrationEnabled
                     && Objects.equals(ignoredUpdateVersions, that.ignoredUpdateVersions)
+                    && Objects.equals(localUpdateDir, that.localUpdateDir)
                     && Objects.equals(reverseWrapperFormat, that.reverseWrapperFormat)
                     && Objects.equals(embeddedColumnNaming, that.embeddedColumnNaming)
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
@@ -1166,14 +1205,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int hashCode() {
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
-                    showGutterIcon, xmlInlineSqlEnabled, editorShowWhitespaces, language, injectLogicDelete,
+                    showGutterIcon, xmlInlineSqlEnabled, ibatisXmlEnabled, editorShowWhitespaces, language, injectLogicDelete,
                     sampleLimit, xmlSynHiEnabled, pagesXmlSourceMode,
                     gutterGroupMapperXml, gutterGroupAnnotation, gutterGroupJpaHql, gutterGroupJdbc,
                     gutterGroupOther, gutterGroupInlineFallback,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
-                    autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
+                    autoCheckUpdate, ignoredUpdateVersions, localUpdateDir, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
                     libraryEntitySweepEnabled, sqlListPreviewHintSeen,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
