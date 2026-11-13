@@ -132,8 +132,15 @@ class BundleParityGuardTest {
             .map { it to metaInfXml(it) }
         // key="..."（configurable/notificationGroup）与 action 的 text=/description=（resource-bundle 约定即 key）
         val attrRefs = Regex("""(?:key|text|description)="([^"]+)"""")
+        // `com.intellij.registryKey` 是例外族（T-StartupReadLockFreeze `sqlvis.mbg.prefetch` 首用）：
+        //   - key＝注册表标识符，按平台约定是 `a.b.c` 形态，**不是** bundle 键；
+        //   - description＝平台 Registry UI 的纯英文说明，平台不做 `%key%` 替换。
+        // 两者都不适用「属性即 bundle 键」的约定，故整元素排除（只此一类，别扩面）。
+        val registryKeyElement = Regex("""<registryKey\b[^>]*/>""")
         val missing = xmls
-            .flatMap { (name, xml) -> attrRefs.findAll(xml).map { name to it.groupValues[1] } }
+            .flatMap { (name, rawXml) ->
+                attrRefs.findAll(registryKeyElement.replace(rawXml, "")).map { name to it.groupValues[1] }
+            }
             .filter { (_, key) -> key.contains('.') && key !in known }
             .map { (name, key) -> "$name: \"$key\"" }
             .sorted()
