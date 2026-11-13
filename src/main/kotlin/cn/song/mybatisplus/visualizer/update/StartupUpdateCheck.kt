@@ -29,6 +29,9 @@ import com.intellij.util.ui.RestartDialogImpl
 class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // T-HotUpdateSettingsGuard：借启动活动把热更新兜底服务拉起来（应用级单例，重复取无副作用）——
+        // 动态装载时平台会对已开工程重跑启动活动，新代际据此订阅 DynamicPluginListener 并补做一次代际比对。
+        runCatching { HotUpdateSettingsGuard.getInstance() }
         val settings = PluginSettings.getInstance()
         // 忽略版本快照：远端与本地两通道共用同一份（启动时定格，避免检查途中配置漂移）
         ignoredVersions = settings.state.ignoredUpdateVersions
