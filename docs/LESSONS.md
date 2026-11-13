@@ -619,6 +619,36 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
+### L64 反查/索引类缓存别挂 `PsiModificationTracker`——插件自己的 PSI 写入会把它顶掉，「每次打开都重扫」
+
+**规则**：给「全工程扫描 → 结果缓存」选失效基准时，先问一句**这条链路自己会不会改 PSI**。预览/执行/补全链会写执行文件、建临时 PsiFile、在对话框里改文档——这些都递增 `PsiModificationTracker.modificationCount`，于是「版本相等」的判据在**每次用户操作之后**都失配，缓存退化成「每次重扫」。正确基准＝**项目结构版本**（`ProjectRootModificationTracker`：文件增删/依赖/模块根变化才涨，改已有文件正文不涨）+ 一个 TTL 兜住「改了注解/常量这类正文修改」。仓内已有同款实证（`LibrarySweepCache` KDoc：改一个文件 4→16，故不用 PSI 版本），本次是第二次踩——**新写缓存照 `LibrarySweepCache` / `ReverseLookupCache` 抄基准，别默认挂 PSI 版本**。
+
+**证据**：2026-11-13 真机（`cust-big-demo`，16804 类）同一份日志里热冷交替：`18:52:59 resolve=2ms`（缓存热）→ 我们自己写 exec 文件 → `19:00:08 resolve=3994ms`、`19:00:44 resolve=3737ms`；`request→dialog` 4190/3931ms，而同时段另两次是 94/319ms。修法（`c96759946`）：一次扫描建「表名 → 类」全表索引（不再「查一个表名扫一遍」）+ 结构版本 & TTL(5min) 失效 + 索引建立中后来者不等待。定向 `EntityClassFinderHeavyTest` 18/0/0/0 + `EntityClassFinderIntegrationTest` 21/0/0/0；反向（换回 PSI 版本基准）两条守卫各恰 1 红。
+
+**正例**：先把「谁在改 PSI」列清再选基准，并用真机同 session 冷热交替读数验证（同一份日志里 2ms 与 3994ms 并存＝缓存被判失效，而非扫描变慢）；**反例**：拿「缓存命中」日志行当命中证据——`entity cache hit` 与 `resolve=3994ms` 可以同时出现（两段是不同缓存），只看那一行会判成「缓存没问题」。
+
+**Seen 1× (2026-11-13)**
+
+### L65 平台注解索引的键是**注解简单名**、且**属性值不进索引**——按 FQN 查恒空，按值反查类没有直查通道
+
+**规则**：用 `JavaAnnotationIndex.getAnnotations(?)` 取「带某注解的元素」时，键必须传**简单名**（`TableName`），传全限定名一条都查不到；索引里也没有属性名/属性值（243 `JavaAnnotationElementType.indexStub` 的键＝`getReferenceShortName(text)`，字节码先 `indexOf('(')` 截断再取短类名）。所以「注解属性值 → 类」的一步 O(log n) 直查在平台层不存在，只能「按注解名取候选（索引）→ 逐候选读注解值过滤（PSI）」；要不要换，先把候选量（带注解的类数）与全项目类数比一比。传 FQN ⇒ 该分支**恒空**，而它通常写在「类解析不到才走」的兜底里，正好是最需要它的场景，错得最隐蔽。
+
+**证据**：2026-11-13 用户令「调研能不能复用 idea 自己构建的索引」；后台代理反编译 `plugins/java/lib/java-impl.jar` 取证，本人复核 `JavaAnnotationElementType.indexStub` 字节码（`indexOf(40)`＝`(`，随后取短类名）与 `JavaAnnotationIndex extends StringStubIndexExtension<PsiAnnotation>`。本轮顺带修掉仓内真缺陷：`XmlSqlCompletionContextResolver.findTableNameEntities` 兜底分支把 FQN 传给了该索引（恒空），改传简单名 + 按注解原文筛同名（不 resolve），守卫 `XmlSqlCompletionContextResolverIndexKeyTest` 钉住「只传简单名」。全 IDE 132 个索引注册里 4 个与注解相关，无一按属性值建键。
+
+**正例**：先看**写入侧**的建键逻辑（`indexStub`）再写查询侧，并在守卫里钉住「键长什么样」；**反例**：照 API 名与参数名猜语义（`getAnnotations(String, …)` 看着像收 FQN），或拿「查询失败返回空」当正常降级——恒空与真无匹配在读数上完全一样。
+
+**Seen 1× (2026-11-13)**
+
+### L66 组件释放只挂 `removeNotify` 不保险——IDE 直接退出时它不必然到达，平台按「内存泄漏」记账
+
+**规则**：编辑器、监听器、`Disposer.newDisposable()`（无父件＝挂在 ROOT）这类资源的释放，**不能只挂在 `removeNotify → release` 一条路径上**。宿主 dispose（面板/DialogWrapper 关闭、IDE 退出）是另一条独立路径，两条都要能收口，且收口动作必须幂等（先到者做完、后到者零动作）。判据：日志里出现 `#c.i.o.u.ObjectTree - Memory leak detected: '<名字>' … but wasn't disposed` + `Plugin to blame: <你的插件>`，名字就是你的 disposable 名或平台给你的对象造的子件（编辑器会连带报 `CaretModelImpl` / `EditorView`）。**新写「面板里造编辑器/挂监听」的代码时，就地把释放挂到面板的 `dispose()` 上**；`Disposer.newDisposable(name)` 一律补 `Disposer.register(宿主, it)` 或显式 dispose。
+
+**证据**：2026-11-13 沙盒退出，4 条 SEVERE（`SqlPreviewPanel.autoPopup`、`Disposer$CheckedDisposableImpl`、`com.intellij.openapi.editor.impl.CaretModelImpl`、`…view.EditorView`，同一秒四连）。根因：预览编辑器与 autopopup listener 只由 `disposeCurrentEditorOnly()` 释放，而它挂在 `removeNotify` 上；IDE 退出走的是 DialogWrapper dispose 链。修法 `a02ad51cf`：`SqlPreviewPanel.dispose()` 兜底调 `disposeCurrentEditorOnly()` + 显式 dispose `autoPopupDisposable`。守卫 `testDisposeReleasesPreviewEditorAndAutoPopupListener`（装配编辑器 → dispose → 断言 editor 与 autoPopupDisposable 皆空）；反向删掉兜底两行 → 恰 1 红。同族审计：全仓 `Disposer.newDisposable(` 仅两处，另一处（`ExecDocAutosaveHost`）已 `Disposer.register(this, parent)`。
+
+**正例**：把「谁负责释放」当成两条路径（组件移除 / 宿主销毁）分别写清并各留一条断言；**反例**：拿「手工关窗口后没报泄漏」当验证——`removeNotify` 那条路本来就走得到，漏的正是退出这条。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

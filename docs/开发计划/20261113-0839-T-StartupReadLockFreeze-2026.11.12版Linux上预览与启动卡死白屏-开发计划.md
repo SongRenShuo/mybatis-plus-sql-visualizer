@@ -818,3 +818,71 @@ Read access is allowed from inside read-action only
 - **Light 沙盒不加载 plugin.xml 的 EP**：平台 fixture 里显式注册 `CompletionContributor` 也不行（EP 名常量在 243 是 `LanguageExtensionPoint` 派发），补全的端到端只能靠 GUI + 日志；因此把「前缀 → 候选」这段做成纯函数用例（`columnNameAliases`）收口。
 - **`Ctrl+Space` 被系统输入法吞掉**：GUI 触发补全只能用「键入触发自动弹出」，脚本里不要按 `Ctrl+Space`。
 - 沙盒 jar 必须在被测动作**之前**构建：本轮两次因为「jar 早于修复提交」而白跑一轮，判据是 `unzip -p jar …class | grep 新符号`。
+
+---
+
+## 二十二、第七轮现场（2026-11-13 20:00 用户真机）：打开预览面板还是太慢 —— 反查索引每次重扫
+
+### 22.1 读数（沙盒 `idea.log`，同一份日志里热冷交替）
+
+```
+18:52:57  entity cache hit ttl=434650ms  → ctx detail: entity=0ms resolve=3811ms candidates=0ms include=true
+18:52:59  entity cache hit ttl=436528ms  → ctx detail: entity=0ms resolve=2ms    candidates=0ms include=true
+19:00:08  entity cache hit ttl=865761ms  → ctx detail: entity=1ms resolve=3994ms
+          gutter pre-assembly: sourceCtx=0ms completion=3995ms dumb=false
+          [T-PreviewFast] request→dialog: 4190ms
+19:00:44  …                              → ctx detail: entity=1ms resolve=3737ms
+          [T-PreviewFast] request→dialog: 3931ms
+```
+
+读法：`entity=` 段已经是缓存命中（0~1ms），**3.7~4.0 秒全在 `resolve=` 段**——`resolveCommon` 里
+「主实体链路失败 → 用 SQL 里的表名反查实体」这一步，即 `EntityClassFinder.find(table)` 的
+`@TableName` 反查慢路径（16804 个类一趟全量扫描）。
+
+### 22.2 机制：`PsiModificationTracker` 失效基准 + 我们自己写 PSI
+
+反查缓存原来的失效基准是 `PsiModificationTracker.modificationCount`，它对**任何** PSI 变化都递增；
+而预览链路自己就在改 PSI（写 `mpsql-exec.sql`、临时 PsiFile、对话框里打字）。于是形成
+「打开预览 → 写 exec 文件 → 缓存失效 → 下次打开重扫全工程」的闭环，`18:52:59` 的 2ms 与
+`19:00:08` 的 3994ms 之间就差了一次我们自己造成的 PSI 变化。
+
+### 22.3 修法（`c96759946`）
+
+1. **一次扫描建全表索引**：不再「查一个表名扫一遍」，改为一次遍历把「表名 → 类」全部收进索引，
+   任意表名查询 O(1)（用户每换一条不同表的语句不再各吃一次 3.8s）。
+2. **并发口径**：索引建立中时后来者**不等待**、立即返回空（预览照常打开、上下文降级），
+   由先到的线程填索引——「EDT 上等别人扫 4 秒」正是要根治的形态。
+3. **失效基准改项目结构版本 + TTL(5min)**：打字与我们自己的 PSI 写入不再作废索引；改实体上的
+   `@TableName` 最迟一个 TTL 周期后自动重建。
+
+### 22.4 守卫与反向验证
+
+- 新增 `testReverseLookupIndexSurvivesSourceEdit`（改已有文件正文不作废索引，并断言 PSI 版本确实递增，
+  防夹具空绿）；改写 `testPsiModificationInvalidatesCache`（①未过 TTL 不重建 ②过 TTL 重建后新表名可见）；
+  新增跨缓存实例的累计计数 `totalScanCountForTest`（只看 `scans` 会因条目重建归零而**空绿**——第一版
+  守卫就是这么假绿的）。
+- 反向验证：把失效基准换回 `PsiModificationTracker` → 上述两条用例**各恰 1 红**，还原后复绿。
+- 定向：`EntityClassFinderHeavyTest` 18/0/0/0 + `EntityClassFinderIntegrationTest` 21/0/0/0。
+
+### 22.5 平台索引复用调研（用户 20261113 令「看看能不能复用 idea 自己构建的索引」）
+
+后台子代理反编译 243 平台（`plugins/java/lib/java-impl.jar`）取证，结论如下（关键处已自行 javap 复核）：
+
+- **注解属性值没有被任何平台索引收录**：`JavaAnnotationElementType.indexStub` 写入的键＝
+  `getReferenceShortName(stub.getText())`，先 `indexOf('(')`（字节码偏移 `bipush 40`）截断、再取短类名
+  ⇒ 键恒为 `TableName`；属性名/属性值都不进索引。全 IDE 132 个索引注册里 4 个与注解相关，**没有一个按属性值建键**。
+- 因此「`@TableName("cust_address")` → 类」的一步 O(log n) 直查在平台层**不存在**，只能
+  「按注解名取候选（索引，O(log n)）→ 逐候选读注解值过滤（PSI）」。与现路径相比，候选量从
+  「项目类数 16804」降到「带 `@TableName` 的实体数」，**能换掉一半**：省的是逐类短名索引查询与无注解类的读取；
+  换不掉的是「无注解、按类名推断表名」那条（索引与推断表名无关）。
+- 结论：**本轮不做**（当前 TTL+结构版本口径已把 3.8s 从「每次打开」压成「每个结构版本一次」，
+  且该一次落在打开文件的后台预热里）；登记为后续可选优化（若真机上仍能感知冷启动那一次，再换注解索引取候选）。
+- **顺带修掉一个真缺陷**：`XmlSqlCompletionContextResolver.findTableNameEntities` 的兜底分支把 **FQN**
+  传给了 `JavaAnnotationIndex.getAnnotations(...)`，而索引键是简单名 ⇒ 该分支**恒空**（且它只在
+  「注解类解析不到」时走，正是它要救的场景）。已改为传简单名 + 按注解原文筛同名（不 resolve），
+  守卫 `XmlSqlCompletionContextResolverIndexKeyTest` 钉住「只传简单名」（反向改回 FQN 必红）。
+
+### 22.6 not run
+
+- 全量门禁（按用户口径走 CI，本地不跑）；GUI 复验（沙盒已在后台重启，逐场景读 `request→dialog` 与
+  `pre-assembly` 读数中）：本轮要证的是「同一份日志里热/冷交替时 `resolve=` 段不再出现 3.7~4.0 秒」。

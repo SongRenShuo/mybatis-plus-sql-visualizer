@@ -33,7 +33,28 @@
 
 ## 四、实施记录
 
-待实施。落地后本节回填：改动的文件与提交哈希、定向用例读数、反向验证读数、真机读数、not run 项。
+**已实施（2026-11-13，提交 `29e872abe`）**：新增 `update/HotUpdateSettingsGuard.kt`（APP 级服务，`@Service`，
+由 `StartupUpdateCheck` 启动活动取一次完成订阅）+ 定向用例 + i18n 3 键（中英）+ `StartupUpdateCheck` 一行接线。
+
+与计划的三处偏差（都由平台实证驱动）：
+
+1. **订阅点从 `pluginLoaded` 改到 `beforePluginUnload`**（计划 §二 G1 写的是装载侧）。原因：243 的
+   `DynamicPluginListener` 五个方法里只有 `beforePluginUnload` / `pluginUnloaded` 带 `boolean isUpdate`
+   （`javap util-8.jar` 实证，`pluginLoaded` 只有 descriptor 一个形参）⇒ 装载回调判不出「这次是热更新」；
+   且新代际订阅晚于该事件（服务在启动活动/首次使用时才创建），那时也来不及。`beforePluginUnload`
+   是唯一「本代际还活着 + 确定是更新」的时刻。
+2. **判据去掉 GENERATION_KEY 代际标记**：首版设计用「本次 classloader ≠ 会话里记下的那个」补事件，
+   在确定订阅点后成了多余机制，删掉（少一个跨 classloader 状态位就少一处难查的失配）。
+3. **G2 的「重启 IDE」动作用 `RestartDialogImpl.restartWithConfirmation`**（与 `StartupUpdateCheck`
+   既有「更新完成，重启生效」气泡同款），文案复用既有 `update.notification.restart`。
+
+读数：
+
+- 定向 `HotUpdateSettingsGuardTest` **4/0/0/0**（含 `plugin.xml <id>` 与 `PLUGIN_ID` 一致性守卫——
+  判据靠 id 字符串比对，改了 id 而常量没跟会静默失效）；
+- `BundleParityGuardTest` **5/0/0/0**（新增 3 键中英双语齐备）。
+- **not run**：`pluginLoaded` 之外的 A1~A3 需要真机/沙盒走一次「热装本地包」才能读，本轮未跑
+  （留待与下一轮内测包一起验）。
 
 ## 五、验收
 
