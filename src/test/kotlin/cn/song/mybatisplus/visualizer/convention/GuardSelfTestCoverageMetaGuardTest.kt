@@ -786,14 +786,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "反查打开入口独立成 LogEntryPreviewOpener.java，方言传参锚点改 toPreviewResult + " +
                     "entry.dialectName() Java 实参形态。）",
             ),
-            // ---- changeNotes 评分引导句守卫（2026-10-30，用户二次指出） ----
+            // ---- changeNotes 守卫（2026-10-30 评分引导句；2026-11-10 补裸 @ 提及） ----
             GuardEntry(
                 "convention/ChangeNotesRatingLineGuardTest.kt",
                 emptyList(),
-                "changeNotes 评分引导句只留最新块守卫：判定内核内联于两个用例——数 gradle/plugin-change-notes.html " +
-                    "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；并断言该行落在第一个 <h2> 块内。" +
+                "changeNotes 守卫：判定内核内联于三个用例——数 gradle/plugin-change-notes.html " +
+                    "里「好用的话，欢迎到 Marketplace 页评分留言」的出现次数须恰为 1；断言该行落在第一个 <h2> 块内；" +
+                    "并断言剥掉 <code>…</code> 后全文没有裸 @ 紧跟 ASCII 字母（GitHub 会解析成 @用户 提及，" +
+                    "发行版 Contributors 冒出无关账号，注解名须写成 <code>@Query</code>）。" +
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
-                    "灵敏度＝把该行复制到第二块必红、只留历史块必红，两向已实测。",
+                    "灵敏度＝把该行复制到第二块必红、只留历史块必红、把 <code>@X</code> 拆成裸 @X 必红，三向已实测。",
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
@@ -1256,6 +1258,20 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "（mybatis-plus-sql-visualizer-docs/），与 src/main 树无关。自证语料（合成表漂移形态" +
                     "各一例）：`漂移自证_分页族归错被抓` / `漂移自证_ROWNUM写法被抓` / " +
                     "`漂移自证_漏方言被抓` / `漂移自证_upsert族归错被抓`。",
+            ),
+            // ---- T-ExecSlowOps-BP：执行临时文件构建移出 EDT（2026-11-04 回 port dev ba314f42；B5 落 k2j） ----
+            GuardEntry(
+                "convention/ExecTempFileEdtGuardTest.kt",
+                listOf(DecisionFn("tempPsiEdtOffenders", FnKind.VIOLATIONS)),
+                "T-ExecSlowOps-BP：执行临时文件构建的 EDT 慢操作守卫（master 真机一轮 36 条 " +
+                    "`Slow operations are prohibited on EDT`，栈 chooseAndPrepare → createTempPsiFile → " +
+                    "PsiManager.findFile → WorkspaceFileIndex.ensureIsUpToDate）。判据六条：chooseAndPrepare " +
+                    "不得直接调 createTempPsiFile（必须经 createTempPsiFileAsync）；async 三段式 + nonModal + " +
+                    "revalidate 兜底；revalidate 两处 PSI 判定包 ReadAction；慢段 refresh 按线程分流" +
+                    "（BGT 裸调防 WIRA 自锁）；续接链保留 failPrepareRequests 与迟到守卫 isPrepareActive。" +
+                    "自证语料=「同步直调/any 投递/缺分流/丢收口必被点名」+「合规形态不误报」。" +
+                    "（k2j：守卫目标 Java 承载件 DataSourceSelectorResultsKt.java；声明锚按 Java 修饰符行形态、" +
+                    "多重载合并判定、isPrepareActive 取 Supplier 裸令牌。）",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(
