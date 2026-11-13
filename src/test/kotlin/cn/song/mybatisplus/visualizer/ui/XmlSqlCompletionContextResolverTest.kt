@@ -34,6 +34,7 @@ class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
         super.setUp()
         XmlSqlCompletionContextResolver.clearCandidatesCacheForTest()
         XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = null
+        XmlSqlCompletionContextResolver.resetEntityCacheForTest()
     }
 
     // ------------------------------------------------------------------
@@ -335,6 +336,38 @@ class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
             "selectByExample",
         )
         assertNull("Example 无对应实体时必须降级为 null", ctx.main)
+    }
+
+    /**
+     * §二十九：实体解析必须按「类名 + 文件版本」缓存。
+     *
+     * 真机实测 `EntityResolver.resolve` 对同一实体每次 9 秒（`resolve=9314/9447/9259ms` 三连），
+     * 而它自己的缓存键含 PSI identity，PSI 一重建就失配 ⇒ 每次点击重算。这里钉住「第二次不再解析」。
+     */
+    fun testEntityResolveCached() {
+        addMapperFile(
+            """
+            @com.baomidou.mybatisplus.annotation.TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+            }
+            """.trimIndent(),
+        )
+        val xml = """
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectAll" resultType="map">select * from cust_channel</select>
+            </mapper>
+        """.trimIndent()
+        val first = resolveXml(xml, "selectAll")
+        val second = resolveXml(xml, "selectAll")
+        assertEquals("cust_channel", first.main?.tableName)
+        assertEquals("cust_channel", second.main?.tableName)
+        assertEquals(
+            "同一实体只应真正解析一次（第二次命中类名+版本缓存）",
+            1,
+            XmlSqlCompletionContextResolver.entityResolveRuns,
+        )
     }
 
     /**

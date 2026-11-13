@@ -149,14 +149,14 @@ object XmlSqlCompletionContextResolver {
         val t0 = System.currentTimeMillis()
         val mainEntity = findMainEntity(mapperClass, method)
         val t1 = System.currentTimeMillis()
-        val resolvedTable = mainEntity?.let { runCatching { EntityResolver().resolve(it) }.getOrNull() }
+        val resolvedTable = mainEntity?.let { clazz -> resolveEntityCached(project, clazz) }
             ?.takeIf { it.tableName.isNotEmpty() }
         // §二十六：接口/泛型都没解析到时，用 SQL 里的表名反查实体（表名 → @TableName/类名约定）
         val mainTable = resolvedTable ?: fallbackTableName?.let { table ->
             runCatching {
                 val clazz = entityFinderForTest?.invoke(project, table)
                     ?: cn.song.mybatisplus.visualizer.psi.EntityClassFinder(project).find(table).firstOrNull()
-                clazz?.let { EntityResolver().resolve(it) }?.takeIf { it.tableName.isNotEmpty() }
+                clazz?.let { resolveEntityCached(project, it) }?.takeIf { it.tableName.isNotEmpty() }
             }.getOrNull()
         }
         if (resolvedTable == null && mainTable != null) {
@@ -247,6 +247,37 @@ object XmlSqlCompletionContextResolver {
             return clazz
         }
         return null
+    }
+
+    /**
+     * T-StartupReadLockFreeze §二十九：**按类名 + 文件版本**缓存实体解析结果。
+     *
+     * 真机实测 `EntityResolver.resolve` 对同一实体每次要 9 秒，而它自己的缓存键含
+     * `identityHashCode(PsiFile)`——PSI 一重建就失配，于是每次点击都重算一遍
+     * （`resolve=9314/9447/9259ms` 三连）。这里改用 `qualifiedName + modificationStamp`
+     * 做键：类文件没改就直接复用，改了就自然失效。
+     */
+    private val entityInfoCache: MutableMap<String, Pair<Long, TableInfo>> = java.util.concurrent.ConcurrentHashMap()
+
+    /** 测试缝：真正执行 `EntityResolver.resolve` 的次数（验证缓存命中用）。 */
+    internal var entityResolveRuns = 0
+        private set
+
+    internal fun resetEntityCacheForTest() {
+        entityInfoCache.clear()
+        entityResolveRuns = 0
+    }
+
+    private fun resolveEntityCached(project: Project, clazz: PsiClass): TableInfo? {
+        val qName = clazz.qualifiedName ?: clazz.name ?: return null
+        val stamp = runCatching { clazz.containingFile?.modificationStamp ?: 0L }.getOrDefault(0L)
+        entityInfoCache[qName]?.let { (cachedStamp, table) ->
+            if (cachedStamp == stamp) return table
+        }
+        val resolved = runCatching { EntityResolver().resolve(clazz) }.getOrNull() ?: return null
+        entityResolveRuns++
+        entityInfoCache[qName] = stamp to resolved
+        return resolved
     }
 
     /** `xxx.CustChannelExample` → 同包 `xxx.CustChannel`（MBG 生成器的固定命名对）。 */

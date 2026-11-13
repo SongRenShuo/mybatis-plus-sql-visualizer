@@ -54,8 +54,8 @@ class SqlCompletionContributor : CompletionContributor() {
          */
         private val documentContexts = WeakHashMap<Document, SqlCompletionContext>()
 
-        /** §二十七：已打过补全触发日志的文档（WeakHashMap 当集合用，防日志刷屏）。 */
-        private val completionLogSeen = WeakHashMap<Document, Boolean>()
+        /** §二十七：每个文档已打过几次补全日志（WeakHashMap，最多记 5 次）。 */
+        private val completionLogBudget = WeakHashMap<Document, Int>()
 
         fun registerContext(document: Document, ctx: SqlCompletionContext) {
             documentContexts[document] = ctx
@@ -107,17 +107,15 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
                         ?: documentContexts[parameters.editor.document]
-                    // §二十七：补全是否真的被触发、上下文里有几列——用户报「补全没反应」时不用再猜。
-                    // 每个 Document 只打一条（WeakHashMap 计数，文档释放自动清理）。
-                    if (!completionLogSeen.containsKey(parameters.editor.document)) {
-                        completionLogSeen[parameters.editor.document] = true
-                        LOG.info(
-                            "[completion] invoke: ctx=${ctx?.tableName ?: "-"} cols=${ctx?.columns?.size ?: -1} " +
-                                "candidates=${ctx?.candidateTables?.size ?: -1} schemaCols=${ctx?.schemaColumns?.size ?: -1} " +
-                                "editorCtx=${parameters.editor.getUserData(SqlCompletionContext.KEY) != null} " +
-                                "doc=${parameters.editor.document.hashCode()}",
-                        )
-                    }
+                    // §二十七：补全是否真的被触发、加进去了几条——用户报「补全没反应」时不用再猜。
+                    // 每个文档只记前 5 次（autopopup 每敲一个字符触发一次，全记会刷屏）。
+                    val docKey = parameters.editor.document
+                    val logged = completionLogBudget[docKey] ?: 0
+                    val shouldLog = logged < 5
+                    if (shouldLog) completionLogBudget[docKey] = logged + 1
+                    var addedColumns = 0
+                    var addedTable = 0
+                    var addedAlias = 0
                     if (LOG.isDebugEnabled) LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
@@ -138,6 +136,7 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 候选与主表去重）
                     provider.tableName(ctx)?.takeIf { prefix.prefixMatches(it) }?.let { table ->
                         result.addElement(withComment(LookupElementBuilder.create(table), provider.tableComment(ctx)))
+                        addedTable++
                     }
                     provider.candidateTables(ctx).forEach { t ->
                         if (t.tableName != ctx.tableName && prefix.prefixMatches(t.tableName)) {
@@ -154,6 +153,7 @@ class SqlCompletionContributor : CompletionContributor() {
                         mergeColumnCandidates(ctx).forEach { candidate ->
                             if (prefix.prefixMatches(candidate.name)) {
                                 result.addElement(columnLookupElement(candidate))
+                                addedColumns++
                             }
                         }
                     }
@@ -166,7 +166,16 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 表别名：仅子句无法判定时（全量候选）
                     if (clause == SqlClause.UNKNOWN) {
                         provider.tableAlias(ctx)?.takeIf { prefix.prefixMatches(it) }
-                            ?.let { result.addElement(LookupElementBuilder.create(it)) }
+                            ?.let { result.addElement(LookupElementBuilder.create(it)); addedAlias++ }
+                    }
+                    if (shouldLog) {
+                        LOG.info(
+                            "[completion] invoke: clause=$clause prefix='${prefix.prefix}' " +
+                                "ctx=${ctx.tableName ?: "-"} cols=${ctx.columns.size} " +
+                                "candidates=${ctx.candidateTables.size} schemaCols=${ctx.schemaColumns.size} " +
+                                "added(tbl=$addedTable col=$addedColumns alias=$addedAlias) " +
+                                "doc=${docKey.hashCode()}",
+                        )
                     }
                 }
             },
