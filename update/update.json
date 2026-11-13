@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.12-beta.4",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.12-beta.4/mybatis-plus-sql-visualizer-2026.11.12-beta.4.zip",
-  "changeNotes": "MBG Example 预览的左栏现在能按条件直接填值: 等值和区间都会生成可填行, 行名就是条件本身, 参数区顶部写明填值只替换对应的 ?\n点「清除」后不再残留旧值: 区间条件不会留下半截的旧值, 产物与左栏填值始终一致\n左栏的行名不再被截成 criteria.crit…: 列宽跟着面板宽度走, 放不下时可悬停看全名\n条件里那两层集合的值框不再让人白填: 装条件对象的一律只读并说明该去哪里填, 分支没走到的标「本轮未展开, 填了不影响产物」\n删除、更新这类找不到调用点的语句, 预览骨架不再退化成连一个占位符都没有的形态\n横幅与风险提示随产物实时刷新: 改完勾选不再挂着上一轮的「未完整还原」, 产物变成没有 WHERE 的全表删除或更新时顶部直接警示\n每次打开预览不再重扫全部数据源做 schema 预热: 60 秒内同一张表只预热一次, 打开更快, 也不再往日志里刷",
-  "publishDate": "2026-11-12",
+  "version": "2026.11.13-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.13-beta.1/mybatis-plus-sql-visualizer-2026.11.13-beta.1.zip",
+  "changeNotes": "2026.11.12 在 Linux 上打开即卡死、预览白屏的问题已修: 调用点预取不再占着读锁, 预览解析加了单次上限; 同时升级后会自动修好被旧版本写坏的工程文件, 数据源切换记忆也不再写坏它\n预览会说清这条语句类型是怎么判出来的: 顶部标出依据是哪一行的哪个调用, 同一个 wrapper 有多种用法时可点「语句」下拉切换查看\n一个 wrapper 在多处被复用时, 预览跟着光标所在的语句走; 在重新赋值那一行点预览也不再丢条件和类型\n实体更新的 SET 各列可以逐列填值, 不再被一个输入框一次性填满\n名字叫 remove/delete 的普通集合调用不再把查询链误判成删除\n方言实在推断不出来时会主动提示一次, 并可直接去设置方言或本项目不再提示\n「已捕获到第一条 SQL」的引导改成每台机器只提示一次, 重启 IDE 不再重复弹\n预览里的 INSERT 列名提示不再和 IDEA 自带的重复, 交给原生显示",
+  "publishDate": "2026-11-13",
   "sinceBuild": "243"
 }
