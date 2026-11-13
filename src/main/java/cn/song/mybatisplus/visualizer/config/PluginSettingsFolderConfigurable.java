@@ -745,6 +745,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.mapperNavYield"), msg("settings.mapperNavYield.tip"), "settings.section.ui", u));
         // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
         fields.add(new SearchableField(msg("settings.xmlInlineSql"), msg("settings.xmlInlineSql.tip"), "settings.section.ui", u));
+        // T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览开关（界面节）
+        fields.add(new SearchableField(msg("settings.ibatisXml"), msg("settings.ibatisXml.tip"), "settings.section.ui", u));
         // T-PagesHql：maintainPage <datasource> 源语言档（界面节）
         fields.add(new SearchableField(msg("settings.pagesSource"), msg("settings.pagesSource.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.language"), "", "settings.section.ui", u));
@@ -758,6 +760,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         SubPageRef a = PAGE_ABOUT.ref;
         fields.add(new SearchableField(msg("settings.cache.label"), msg("settings.cache.tip"), "settings.section.about", a));
         fields.add(new SearchableField(msg("settings.update.versionInfo"), "", "settings.section.about", a));
+        // T-LocalUpdateDir：本地安装包目录（搜「本地/安装包/离线/内网/目录」必须能翻到该行）
+        fields.add(new SearchableField(msg("settings.update.localDir"), msg("settings.update.localDir.tip"), "settings.section.about", a));
         fields.add(new SearchableField(msg("settings.buildNumber"), msg("settings.buildNumber.tip"), "settings.section.about", a));
 
         // T-ProjectSettingsScope P3：项目级设置页 11 项（总开关 + 10 项可覆盖字段；O-58 起新增

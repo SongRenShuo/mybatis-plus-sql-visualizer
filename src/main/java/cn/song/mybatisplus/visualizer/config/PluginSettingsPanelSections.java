@@ -442,6 +442,10 @@ public final class PluginSettingsPanelSections {
                 self.xmlInlineSqlCheck.setText(MpSqlVisualizerBundle.message("settings.xmlInlineSql"));
                 self.xmlInlineSqlCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip"));
                 addRow(p, g, "", self.xmlInlineSqlCheck);
+                // T-Ibatis2Support 券 A：iBatis 2.x <sqlMap> 语句预览开关（默认开）
+                self.ibatisXmlCheck.setText(MpSqlVisualizerBundle.message("settings.ibatisXml"));
+                self.ibatisXmlCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.ibatisXml.tip"));
+                addRow(p, g, "", self.ibatisXmlCheck);
                 // T-PagesHql：maintainPage <datasource> 源语言档（自动 / 仅 SQL / 仅 HQL）
                 self.pagesSourceCombo.setModel(new javax.swing.DefaultComboBoxModel<>(self.pagesSourceOptions()));
                 self.pagesSourceCombo.setToolTipText(MpSqlVisualizerBundle.message("settings.pagesSource.tip"));
