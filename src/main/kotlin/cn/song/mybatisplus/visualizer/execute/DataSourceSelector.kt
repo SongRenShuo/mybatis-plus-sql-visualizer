@@ -2081,9 +2081,10 @@ object DataSourceSelector {
         )
 
     /**
-     * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式
-     * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
-     * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 [execWriteActionFailureInjection]
+     * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方**投递一拍后交还**（T-StartupReadLockFreeze
+     * S4-a 起不再就地写）；BGT 两段式 invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：
+     * BGT 等 EDT，EDT 永不反向阻塞，超时自愈不互锁——**对偶**同样成立：EDT 也不得在写意图上下文里
+     * 就地升级写锁，见 [DocWriteContext] 类头第三条纪律）。失败注入缝 [execWriteActionFailureInjection]
      * 在 [docWriteOnce] 内统一生效（EDT/BGT 两形态等价）。
      *
      * T-PreviewFast P2：`waitBudgetMs <= 0` 时走 **fire-and-forget**（派发后立即返回 true）——
@@ -2106,8 +2107,10 @@ object DataSourceSelector {
      *    路径已由 T-ExecDocSync3 定为无害（不裸写、内容旧一拍由后续同步链收敛）；
      *  - EDT 直调（T-PreviewEdtGuard S2 补口）：原样直跑 [docWriteOnce]，write-unsafe 活动里
      *    （WriteAction 不 confer 写安全资格，T-WriteSafeCtx）即 R33 三验 2 组 Write-unsafe 的本体
-     *    ——现同样过闸（runWriteSafe）：可写就地执行（ok=写结果）；不可写转 nonModal 延后一拍
-     *    并返回 false（调用方均不消费该返回值，见分支内注释）。
+     *    ——现同样过闸，且 **T-StartupReadLockFreeze S4-a 起不再就地写**：
+     *    `invokeLaterWriteSafeAndWait` 投递一拍（nonModal）后交还，写体在下一拍过闸执行。
+     *    返回值语义随之变成「已受理/已执行」而不是「本拍已写完」——调用方均不消费该返回值
+     *    （见分支内注释与计划 §十三 复核），不得据此读回内容。
      */
     /** internal 供测试（T-PreviewEdtGuard S2：EDT 直调分支闸门行为直测）。 */
     internal fun docWriteOnce(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean = runCatching {

@@ -1,7 +1,7 @@
 # T-StartupReadLockFreeze：2026.11.12 在 Linux 上打开即卡死 / 预览白屏——后台阻塞读锁与 EDT 写锁升级互锁
 
 - 立项：2026-11-13 08:39（用户三批现场材料：两份 Java 线程栈 + 一张白屏窗口图 + 冻结报告目录截图）
-- 状态：**已出计划，未动 `src/main`**；用户侧即时自救见 §六，不需要等本单实施
+- 状态：**已实施（2026-11-13）**：两车道合流于分支 `t-startup-readlock-freeze`（集成提交 `ef49211d5`，车道提交 `39d4b2706` 预取链 / `9f712eb78` 写路径），中央定向 17 类 **133/0/0/0**（含 4 个 plugin.xml 守卫），全量 `testShards` 读数见 §13.10；真机 5 步验收（§十）仍待用户；用户侧即时自救见 §六
 - 现象口径（用户原话）：「2026.11.12 版 mac 上正常，linux 上 idea 打开后就卡死」；「昨天那个白屏问题依然存在，点击后好久才出来界面，界面还空白，估计是在加载或者扫描，然后就开始 dump 了」；工程规模「表上千了，实体类上万」
 - 关联代码：`ui/MbgExampleCallResolver.kt`、`ui/gutter/XmlSqlGutterLineMarkerProvider.kt`、`ui/XmlPreviewService.kt`、`execute/DataSourceSelectorResults.kt`、`execute/DataSourceSelector.kt`、`execute/DocWriteContext.kt`
 - 关联版本：tag `2026.11.12`（预取在该 tag 首次进包；`2026.11.11` 的 gutter provider 里没有这条调用，`git show` 实证为空）
@@ -300,4 +300,202 @@ fun prefetch(project: Project?, namespace: String?, statementId: String) {
 
 ## 十三、实施记录
 
-（待实施回填：分支/工作树、提交哈希、定向与反向读数、真机验收结论）
+### 13.1 车道与范围（2026-11-13，车道 B：EDT document 写路径）
+
+| 项 | 读数 |
+|---|---|
+| 分支 | `t-startup-freeze-docwrite`（基线 `077d4370f`） |
+| 工作树 | `.worktrees/mpsv-startup-freeze-b`（并行登记 `name=T-StartupFreezeB`，主控登记） |
+| 本轮实施 | §五 **S4-a**：`dispatchDocWriteOnEdt` 的 EDT 分支不再就地写 |
+| 本轮未动 | S1/S2/S3/S5/S6（S1/S2 属车道 A）；`ui/MbgExampleCallResolver.kt`、`ui/XmlEwResolver.kt`、`plugin.xml`、bundle 属性（车道 A 拥有） |
+
+### 13.2 改动（提交 `9f712eb78`，4 文件 +328/−14）
+
+`execute/DocWriteContext.kt`
+- 新增 `invokeLaterWriteSafeAndWait(expireWith, reason, waitBudgetMs, block): Boolean`：`invokeLater(..., ModalityState.nonModal())` + `CountDownLatch` 有界等待；非 EDT 超时返回 false 并记 WARN（`[M36] exec doc write nonModal dispatch timeout after …ms (EDT busy?)`，沿用既有 exec doc sync 的日志口径与检索习惯）；**已在 EDT 不自等**（投递后立即交还，写体下一次事件泵执行），否则「本拍等本拍排出去的事件」只能烧满预算。
+- 新增测试缝 `deferEvenInUnitTestMode`（默认 `false`）：单测线程即 EDT 且调用线程被 latch 阻塞时无人泵队列，默认走与 `runWriteSafe` 等价的就地路径（既有用例语义不变）；置 `true` 走生产形态，供专项用例观测。
+- 类头补**第三条纪律**：EDT 不得在写意图上下文里就地升级写锁——这是「BGT 等 EDT、EDT 永不反向阻塞」的对偶；并写明事故链（`runWithWritingAllowed` → `runIntendedWriteActionOnCurrentThread` → `prepareWriteFromWriteIntentBlocking` → `upgradeWritePermit`，2026-11-13 用户 Linux 冻结栈 2）。
+- `runWriteSafe` 的就地语义**未改**（`SqlToJavaPanel` 三处、`SqlPreviewPanelSqlView` 的写安全检查调用方维持原状）。
+
+`execute/DataSourceSelectorResults.kt`
+- `dispatchDocWriteOnEdt` EDT 分支：`runWriteSafe { ok = docWriteOnce(...) }` → `invokeLaterWriteSafeAndWait(...) { docWriteOnce(...) }`；fire-and-forget（`waitBudgetMs<=0`）与 BGT 有界分支原样不动，写体仍过 `runWriteSafe` 闸（保留「判为不安全转二次投递」）。注释按实情改写，含边界说明（见 13.4-1）。
+
+`execute/DataSourceSelector.kt`
+- 仅 KDoc 同步（「EDT 调用方同步直执行」→「投递一拍后交还」+ 对偶纪律指向），无逻辑改动。
+
+`src/test/.../execute/DocWriteDispatchSafetyTest.kt`（新增 4 例）
+- 可写上下文：断言**投递计数 +1、磁盘/文档保持旧值、立即交还**，泵一拍后收敛；
+- 不可写上下文：原语义不变（转 nonModal、返回 false、不就地写、不白等）；
+- owner 已销毁：排队拍被丢弃、写体不执行、调用方只等预算（300ms，实测 <1.5s）；
+- 新 API 的 BGT 正路：投递 → 测试 EDT 泵那一拍 → 有界等待拿到写体结果。
+
+### 13.3 调用方复核（§十二 风险项的落实）
+
+| 调用点 | 返回值用途 | 结论 |
+|---|---|---|
+| `DataSourceSelectorResults.kt:2337`（`projectExecFile` 内） | 只选日志行：true → `exec file updated via document+save`；false → 重进锁复核，仍不一致则 warn + **不裸写**。两分支都 `return f` | 不消费写结果 ✓ |
+| `DataSourceSelector.kt:2160`（`syncExecVfContentIfNeeded` 返回给）`DataSourceSelectorResults.kt:1853/1883`（`createTempPsiFile`）、`:2407/2434`（`prewarmExecTempFileInner`） | 表达式语句，结果丢弃 | ✓ |
+| `DataSourceSelectorConsole.kt:592`（`\G` 剥离回写控制台文档） | 结果丢弃；执行文本取 `gStrip.submitText`，不读文档 | ✓（余留排序说明见 13.4-2） |
+
+生产线程面（本轮 grep 复核，不是从注释推的）：`createTempPsiFile` 的生产入口只有 `createTempPsiFileAsync`（EDT 侧 `executeOnPooledThread`，`:1742`；BGT 侧就地），预热链在 BGT；`syncExecVfContentIfNeeded` 三个生产调用点同属这两条 BGT 链。**因此 EDT 分支在生产上只剩 `\G` 回写一个真实调用方**，其余是防御分支（`createTempPsiFile` 内「EDT 分支本券后生产不可达」自述）与测试。
+
+### 13.4 与计划的偏差与诚实边界（实施轮实测）
+
+1. **S4-a 只去掉「就地升级」形态，不单独解除互锁。** 冷启动实测与仓内平台源码笔记相互印证：`TransactionGuardImpl.wrapLaterInvocation` 对 nonModal 投递拍套 `runWithWritingAllowed`，所以投递出去的那一拍照样进 `runIntendedWriteActionOnCurrentThread` → 写意图读锁 → `upgradeWritePermit` 等读者。本轮换来的是「调用方不再被写升级阻塞 + 等待有界 + 写不再夹在调用方活动里」；读者长持不放时那一拍照样会等，冻结的彻底解除仍依赖 S1/S3（后台不阻塞持读锁）。**真机验收不得把「不再冻结」单独记在本项账上。**
+2. **`\G` 回写的排序**：延后一拍后控制台文档改写发生在下一拍；执行内容不受影响（取 `submitText`）。正常时序下改写先于执行结果回显（同为 EDT FIFO，先排队者先执行），残余风险低但存在。
+3. **测试缝的代价**：`deferEvenInUnitTestMode` 默认为 false，意味着默认单测不覆盖生产分支（生产形态由 `DocWriteDispatchSafetyTest` 打开该缝覆盖）。这是「既有 54 例保持绿」的前提：`BasePlatformTestCase` 把用例体跑在 EDT 上，生产形态在单测里必然自等烧满预算，`ExecDocSyncTest`/`ExecDocSync2Test` 又依赖「EDT 直调当场落盘」。
+
+### 13.5 定向测试读数（不跑全量）
+
+```
+./gradlew test -Pkotlin.compiler.execution.strategy=in-process \
+  --tests "cn.song.mybatisplus.visualizer.execute.DocWriteDispatchSafetyTest" \
+  --tests "cn.song.mybatisplus.visualizer.execute.DocWriteContextTest" \
+  --tests "cn.song.mybatisplus.visualizer.execute.ExecDocSyncTest" \
+  --tests "cn.song.mybatisplus.visualizer.execute.ExecDocSync2Test" \
+  --tests "cn.song.mybatisplus.visualizer.execute.ExecVfDivergenceProbeTest" \
+  --tests "cn.song.mybatisplus.visualizer.execute.ExecDocPrewarmDisposeGuardTest" \
+  --tests "cn.song.mybatisplus.visualizer.convention.BannedApiScanRuleTest"
+```
+
+读数（改动后）：**58 tests / 0 skipped / 0 failures / 0 errors，BUILD SUCCESSFUL（1m08s）**；把超时日志口径对齐 `[M36]`（只在超时分支，无断言覆盖）后按同一命令复跑终态：**58 / 0 / 0 / 0，BUILD SUCCESSFUL（1m04s）**，即上表读数对应提交 `9f712eb78` 的最终形态。
+分项：`BannedApiScanRule` 12、`DocWriteContext` 9、`DocWriteDispatchSafety` 4、`ExecDocPrewarmDisposeGuard` 4、`ExecDocSync2` 8、`ExecDocSync` 14、`ExecVfDivergenceProbe` 7。
+口径说明：既有 54 例的「改动前基线」未单独采集（同一命令在本轮改动落地前启动，编译窗口与编辑重叠，读数不代表改动前状态）；「既有用例保持绿」的判据取上面这一次同批读数（54 例与新 4 例同批全绿）。
+新增用例耗时：可写上下文延后 0.54s、owner 已销毁 0.49s、BGT 正路 0.22s、不可写路径 6.65s（含类 setup）。
+
+### 13.6 反向验证（两次读数 + 还原）
+
+夹具：把 EDT 分支改回就地写（`runWriteSafe { ok = docWriteOnce(...) }`），测试与生产其余部分不动。
+
+| 次 | 读数 |
+|---|---|
+| 第 1 次（改回就地写） | `testEdtBranchDefersInsteadOfWritingInlineWhenContextAllowed FAILED` @ `DocWriteDispatchSafetyTest.kt:82`（「必须投递一拍（不得就地写）」）→ 4 tests / 1 failed，BUILD FAILED（45s） |
+| 第 2 次（同一改动独立复跑） | 同一用例同一行 FAILED → 4 tests / 1 failed，BUILD FAILED（47s） |
+| 第 3 次（还原后） | 58 / 0 / 0 / 0，BUILD SUCCESSFUL |
+
+判别力来源：改回就地执行后可写上下文当场写盘、`deferredCount` 不动，三条断言（投递计数、磁盘、文档）都会红；第 82 行是第一个命中的断言。
+
+### 13.7 not run 清单
+
+- 未跑全量（`testShards` / `testFast` 全桶）、未跑 `verifyGate` / `verifyPlugin` / `verifySmoke` / `buildPlugin`、未 `clean`、未 `--stop`、未跑 Docker 腿；
+- 未在 runIde 沙盒、也未在用户 Linux / mac 真机验证（§十 真机验收由用户侧执行）；
+- 未对 `MbgExampleCallResolver` / `XmlEwResolver` / gutter 链做任何验证（车道 A 范围）；
+- 收口跑定向时工作树状态：仅有本轮四个改动文件，反向验证探针已还原，`git status` 无残留。
+
+### 13.8 交接
+
+- `CHANGELOG.md` 的 `[Unreleased]` 未由本车道回填（车道文件范围不含该文件）：T-StartupReadLockFreeze 的用户可见条目应在 S1/S2 合流后按能力面统一落笔。
+- S4-b（`WriteCommandAction.runWriteCommandAction` 统一化）仍按 §九 D-3 留作后续。本轮实测新增一条支撑：投递拍也会被套写意图包装，只有「不持写意图的写入口」才可能避开升级等待，S4-b 的评估应以此为前提。
+- 真机验收（§十）判据里与本项相关的只有第 1、5 条的一半：日志应能看到 `[T-WSC] write deferred to nonModal + bounded wait … (S4-a)` 与 `dispatch accepted without waiting (caller is EDT, S4-a)`；「不再弹 not responding」是 S1/S2 与本项合力的结果，不能单记在本项。
+### 13.9 车道 A（预取链：S1 / S2 / S3 / S5-XmlEw / S6）— 2026-11-13
+
+- 工作树：`F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\.worktrees\mpsv-startup-freeze-a`
+- 分支：`t-startup-freeze-prefetch`（基点 master `077d4370f`）
+- 提交：`39d4b2706`（`git show --stat` 只列 4 个文件：`src/main/kotlin/…/ui/MbgExampleCallResolver.kt`、
+  `src/main/kotlin/…/ui/XmlEwResolver.kt`、`src/main/resources/META-INF/plugin.xml`、
+  `src/test/kotlin/…/ui/MbgExamplePrefetchGateTest.kt`）
+
+**落地内容**
+
+| 项 | 落地形态 |
+|---|---|
+| S1 预取去阻塞 | `prefetch` 改 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project).coalesceBy(this, key).submit(AppExecutorUtil.getAppExecutorService())`；删掉「阻塞读锁 + `executeOnPooledThread`」与全局 `inFlight` 单飞（`coalesceBy` 只合并同 key，卡一条不再拖死其它 key）。`resolveCached` 拆成 `cachedIfFresh` / `searchOnce` / `storeResolved`，非阻塞回调复用后两段；`resolveCached` 对外语义与既有 3 条断言不变 |
+| S2 预算 | 每项目每会话 32 次检索；单次 1500 ms 硬预算（到点 `promise.cancel()`，由 nonBlocking 的进度检查传播进 `ReferencesSearch`，读锁随之释放）并记失败记忆 |
+| S2 三道闸 | `Registry` 开关 → 项目未初始化 → dumb → 冷却（10 s）→ namespace 规模熔断 → 失败记忆 → 缓存新鲜 → 预算；任一命中只打 `[m2] prefetch skip reason=…` |
+| S2 规模门 | 取 §九 D-2 的「首次检索耗时自适应」：单次真实检索耗时 ≥800 ms 即本会话对该 namespace 熔断（`[m2] prefetch circuit-open namespace=…`）。**不用模块文件数计数**：文件计数要额外查 `FileIndex`/`FileTypeIndex`，那本身也是索引操作（索引期同样会等）；耗时为已付成本、零额外查询，且随工程规模自适应 |
+| S2 开关 | plugin.xml `<registryKey key="sqlvis.mbg.prefetch" defaultValue="true" description="…"/>`（主 `<extensions defaultExtensionNs="com.intellij">` 块内）；代码经 `prefetchEnabledProvider` 读取（`Registry.is(key, true)`，`is` 为 Kotlin 关键字须反引号）。`com.intellij.registryKey` EP 在 243 `app-client.jar!/META-INF/IdeCore.xml` 实证存在且 `dynamic="true"`，**未降级为 sysprop** |
+| S3 预览解析 | 内部改 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project).submit(…)` + `promise.blockingGet(800 ms)`；超时 `cancel()` 并返回 null（`XmlPreviewService` 已按「解析不到」降级占位骨架）。**未用 `executeSynchronously`**，理由见下 |
+| S5 同族面（仅本车道） | `XmlEwResolver` 的默认 `callFinder` 加 `DumbService.isDumb` 门（dumb 时返回空并打 `[m2] resolve skip reason=dumb-mode stage=ew-refs`，与 `MapperNavigationTargets` 同口径） |
+| S6 可见性 | 跳过/放弃路径统一 `[m2] prefetch / resolve skip reason=… elapsedMs=… key=…`；无新增通知/状态栏项 |
+
+**与计划文本的三处偏差（各有实证理由）**
+
+1. **S3 未用 `executeSynchronously()`**。243 字节码实证（`javap -c NonBlockingReadActionImpl`）：
+   ① `executeSynchronously` 遇到 `coalesceBy`/`finishOnUiThread` 直接抛 `IllegalStateException`；
+   ② 它**没有时间预算**，`inSmartMode` 约束未满足时走 `invokeLater` + `awaitWithCheckCanceled`
+   在**调用线程上等**——正是本单要消灭的「调用方持等」形态；③ 「超预算返回 null」在该 API 上无法实现。
+   落地改为「提交 + 有界 `blockingGet(800 ms)` + 超时 cancel」：调用方最多付出 800 ms，读锁由平台线程持有且可取消。
+   额外分支：调用方**已持读锁**（MCP `renderXmlSnippet` 的 `ReadAction.compute` 内）时就地嵌套读动作，省一次锁往返。
+2. **规模门取耗时自适应而非模块文件数**（理由见上表；即 §九 D-2 的建议口径）。
+3. **冷却起点用「本插件第一次看到该项目的时间」代理「项目打开时间」**：243 的 `Project` 无打开时间 API
+   （`javap` 核过 `com.intellij.openapi.project.Project` 全部公开方法）。副作用＝项目打开后 10 s 内 gutter
+   首屏不预取，正好落在要避开的数据源/索引加载窗口。
+
+**定向读数（`./gradlew -Pkotlin.compiler.execution.strategy=in-process test --tests …`，工作树仅本轮 4 文件改动）**
+
+| 测试类 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `ui.MbgExampleCallCacheTest`（既有） | 3 | 0 | 0 | 0 |
+| `ui.MbgExamplePrefetchGateTest`（新增，a~f 六条闸） | 6 | 0 | 0 | 0 |
+| `ui.XmlEwResolverTest`（S5 触碰文件回归） | 6 | 0 | 0 | 0 |
+| `config.PluginXmlStructureGuardTest` | 23 | 0 | 0 | 0 |
+| `config.PluginXmlExtensionPointResolutionTest` | 4 | 0 | 0 | 0 |
+| `convention.DynamicEpComplianceGuardTest` | 3 | 0 | 0 | 0 |
+| `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 | 0 |
+
+新增用例与断言对应：dumb → `searchRuns==0`；未初始化 → 0；冷却期内（t=0 与 t=COOLDOWN−1 两拍）→ 0；
+Registry 关闭 → 0；smart+就绪+开关开 → `searchRuns==1` 且同 key 再来一次为 `cache-fresh`；预算耗尽 → 停在 32。
+
+**反向验证（摘除式，LESSONS L50：先自证探针落地）**
+
+| 步骤 | 读数 |
+|---|---|
+| 摘除 | 把 `if (dumb) return PrefetchDecision(false, "dumb-mode")` 改为 `// RED PROBE…` 注释行； `grep -cE '^[[:space:]]*if \(dumb\) return PrefetchDecision'` ＝ **0**（未注释语句归零，探针确实生效） |
+| 红 | `MbgExamplePrefetchGateTest`：tests=6 **failures=1** errors=0 skipped=0；失败例「dumb态不预取」，`expected:<[dumb-mode]> but was:<[cooldown]>`（去掉 dumb 门后冷却门接管，说明该断言认的正是 dumb 门） |
+| 还原 | 恢复该行：同 grep ＝ **1**，`grep -c 'RED PROBE'` ＝ **0**；重跑 tests=6 failures=0 errors=0 skipped=0 |
+
+**not run（如实标注）**
+
+- 全量 `testShards`、`verifyGate`/`verifyPlugin`/`verifySmoke`/`buildPlugin`、`runIde` 沙盒走查；
+- §十「真机验收」5 步（用户侧 1000+ 表工程，冷索引首开 / 预览 1 s 内出骨架 / 连滚 5 分钟无冻结报告 /
+  Registry 开关复测 / `[m2]` 日志抽查）；
+- **生产调度段无平台级用例**：纯 JUnit 无 `Project`，`ReadAction.nonBlocking` + 预算计时器这一段只有编译期
+  与 API 面核实（方法签名逐个 `javap` 对过 243 发行包），决策/计数/落盘由 `prefetchForTest` 覆盖；
+- `WrapperLocator`、`SqlDialectMappingPrewarm`、`OnboardingAnchorTip` 未改（车道边界，计划 §五 S5 表登记项
+  由主控另行安排）。
+
+**移交项（主控收口）**
+
+- `CHANGELOG.md` 的 `[Unreleased]` 未回填（车道文件边界）：建议按 `39d4b2706` 记一条「打开大工程不再因预取卡死；
+  新增 Registry 开关 `sqlvis.mbg.prefetch`（默认开，只关预取）」。开关最终形态＝**plugin.xml `registryKey`**（非 sysprop）；
+  S3＝**nonBlocking + 800 ms 有界等待**（非 `executeSynchronously`）。
+- 用户自救口径更新：§六 第 1 条（关左侧图标）之外，新增「Registry 搜 `sqlvis.mbg.prefetch` 取消勾选」＝
+  只关预取、保留预览。
+
+---
+
+## 十四、追加现场（2026-11-13 10:0x）：关图标后冻结消失，但「带 Example_Where_Clause 的预览」仍 30s
+
+### 14.1 用户读数（三张图）
+
+| 项 | 读数 |
+|---|---|
+| 关「在代码左侧显示预览 SQL 图标」后 | 「没那么卡了」「取消勾选后没有那个问题了」——**印证 §三 的冻结点判定：预取链是主因** |
+| 点开带 `<include refid="Example_Where_Clause"/>` 的语句（图 1 的 ①） | 约 **30s** 才出结果（面板先显示「正在准备预览…」） |
+| 点开不带该 include 的语句（图 1 的 ② `selectByPrimaryKey`） | 很快 |
+| 30s 后 | 该 XML 编辑器顶部弹「Plugin 'SQL Visualizer' might be slowing things down」（IDEA 的 EDT 慢操作/插件归因横幅） |
+| 语料规模 | 该 mapper XML 共 600+ 行，`<sql id="Example_Where_Clause">` 就在同一文件（图 3：foreach/trim/choose 四分支 + 嵌套 foreach） |
+
+### 14.2 判读（待日志证伪）
+
+两条语句的唯一差别就是 `parameterType` 是 MBG Example ⇒ 只有这两段会跑（`XmlPreviewService.kt:113-128`）：
+
+| 段 | 代码 | 本次修复后的形态 |
+|---|---|---|
+| `profile` | `resolveExampleProfile(project, statement.parameterType, parsed.namespace)` | **未加预算**（同 11.12） |
+| `m2` | `MbgExampleCallResolver.resolve(...)` → `ReferencesSearch` | 已改为 `submit + blockingGet(800ms) + 超时 cancel → null`（`MbgExampleCallResolver.kt:87/194-209`），左栏退占位骨架 |
+
+`[open-perf] total=… parse+ctx=… profile=… m2=… model=…` 会把 30s 钉到具体一段（`XmlPreviewService.kt:295-305`）。
+在 11.12 里 m2 无预算、无 dumb 兜底，大工程（>1000 表 / 上万实体、253+ 引用）30s 与 §二 那条检索同源；
+IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，同 §三 3.3）。
+
+### 14.3 复验判据（装本单修复包后）
+
+1. 同一条带 `Example_Where_Clause` 的语句点开，判据：`[open-perf]` 的 `m2≤800` 或 `m2=0`（dumb 期跳过），`total` 从 30s 量级降到秒级；左栏允许先出占位骨架（`{{criterion.condition}}`）。
+2. 不再出现「Plugin 'SQL Visualizer' might be slowing things down」。
+3. 若 total 仍 30s 且 **profile 段占大头** ⇒ 另立 S7（`resolveExampleProfile` 有界化），不并入本单；届时按 `[open-perf]` 的 profile 读数决定阈值与降级形态（无 profile 时左栏回退为无预设骨架）。
+
+### 14.4 需要的读数
+
+- 那 30s 窗口的 `[open-perf]` 行（通常一条，`always=true` 对 Example 档恒记）；
+- 若有 `[m2]` 行（`cache hit` / `unresolved` / `prefetch skip reason=…`）一并给。
