@@ -257,7 +257,12 @@ object XmlSqlCompletionContextResolver {
      * （`resolve=9314/9447/9259ms` 三连）。这里改用 `qualifiedName + modificationStamp`
      * 做键：类文件没改就直接复用，改了就自然失效。
      */
-    private val entityInfoCache: MutableMap<String, Pair<Long, TableInfo>> = java.util.concurrent.ConcurrentHashMap()
+    private val entityInfoCache: MutableMap<String, EntityInfoEntry> = java.util.concurrent.ConcurrentHashMap()
+
+    private data class EntityInfoEntry(val stamp: Long, val table: TableInfo, val createdAt: Long)
+
+    /** §三十二：实体解析缓存 TTL——文件 stamp 在本工程里会被高频动作顶掉，纯 stamp 判据必然反复 miss。 */
+    internal var entityCacheTtlMs = 60_000L
 
     /** 测试缝：真正执行 `EntityResolver.resolve` 的次数（验证缓存命中用）。 */
     internal var entityResolveRuns = 0
@@ -271,12 +276,18 @@ object XmlSqlCompletionContextResolver {
     private fun resolveEntityCached(project: Project, clazz: PsiClass): TableInfo? {
         val qName = clazz.qualifiedName ?: clazz.name ?: return null
         val stamp = runCatching { clazz.containingFile?.modificationStamp ?: 0L }.getOrDefault(0L)
-        entityInfoCache[qName]?.let { (cachedStamp, table) ->
-            if (cachedStamp == stamp) return table
+        val now = System.currentTimeMillis()
+        entityInfoCache[qName]?.let { entry ->
+            // TTL 内直接命中；TTL 外要求 stamp 未变（文件真被改了才重算）
+            if (now - entry.createdAt in 0 until entityCacheTtlMs || entry.stamp == stamp) {
+                LOG.info("[open-perf] entity cache hit qName=$qName ttl=${now - entry.createdAt}ms")
+                return entry.table
+            }
         }
+        LOG.info("[open-perf] entity cache miss qName=$qName → EntityResolver.resolve")
         val resolved = runCatching { EntityResolver().resolve(clazz) }.getOrNull() ?: return null
         entityResolveRuns++
-        entityInfoCache[qName] = stamp to resolved
+        entityInfoCache[qName] = EntityInfoEntry(stamp, resolved, now)
         return resolved
     }
 
