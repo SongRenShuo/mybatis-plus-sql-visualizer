@@ -154,7 +154,8 @@ class GutterProviderSingleLookupGuardTest {
     // 扫描面与提取器
     // ------------------------------------------------------------------
 
-    /** 被守卫的 14 个 provider（F51 起 XmlInlineSqlGutterLineMarkerProvider 收编，豁免撤销）。
+    /** 被守卫的 15 个 provider（F51 起 XmlInlineSqlGutterLineMarkerProvider 收编，豁免撤销；
+     *  T-Ibatis2Support 券 A 新增 IbatisXmlGutterLineMarkerProvider，同口径入库）。
      * k2j 适配：生产树为 src/main/java 下的 .java 文件（master 侧为 .kt）。 */
     private val providerFileNames = listOf(
         "SqlGutterLineMarkerProvider.java",
@@ -171,6 +172,7 @@ class GutterProviderSingleLookupGuardTest {
         "NamedQueryGutterLineMarkerProvider.java",
         "StringSqlMethodGutterLineMarkerProvider.java",
         "XmlInlineSqlGutterLineMarkerProvider.java",
+        "IbatisXmlGutterLineMarkerProvider.java",
     )
 
     private val gutterDir =
