@@ -164,9 +164,41 @@
 - **构建校验**（`verifyGate` / `buildPlugin`）未跑：本改动未动 `build.gradle.kts` / `plugin.xml` 的 EP 与
   since-build，不属「大改动」判据。
 
-### 9.4 已知边界
+### 9.4 真机验收回抓的第二处缺口：重新赋值行的 `new` 锚点（2026-11-13）
+
+用户拿 demo 语料 `WrapperReuseRepro` 第 100 行（`w = new LambdaQueryWrapper<>();` 的重新赋值）点预览图标，
+得到的是**无 WHERE 的 SELECT**（`SELECT id, order_no, … FROM t_order`），条件与消费全丢。
+
+根因：`locateWithTable` 的定位顺序里 `findWrapperVariable` 先于 `buildChainFromNew`，但**赋值表达式右侧的
+`new` 不在任何 `PsiVariable` 祖先内**（LHS 的变量不是 RHS 的祖先），于是落到 `buildChainFromNew`——它只收
+「以该 `new` 为链首」的调用（`new W().eq(...)` 连写形态），赋值之后另起语句的 `w.eq(...)` 与 `delete(w)`
+自然全丢；锚点又落在两条消费之间，判型证据也一并丢失，退化成默认 SELECT。
+
+两处修法：
+
+| 编号 | 修法 | 落点 |
+| --- | --- | --- |
+| D-B1 | `findWrapperVariable` 新增 `PsiAssignmentExpression` 分支：LHS 解析到 wrapper 变量就按**变量**返回（LHS 不是 wrapper 时不命中、继续向上，不拦普通赋值） | `WrapperLocator.findWrapperVariable` |
+| D-B2 | 重新赋值分段：赋值 LHS 的偏移记为段界，`filterCallsToAnchorSegment` 只收**锚点所在段**的链上调用（锚点在首次重新赋值前 → 只收声明段；之后 → 只收该赋值之后）。消费证据**不过滤**（D-3 切换要看到全部档位） | `WrapperLocator.buildChain` + `filterCallsToAnchorSegment`（internal 纯函数） |
+
+读数：`PreviewStmtTypeScopeTest` 新增两例（赋值锚点端到端 + 分段纯函数），定向六类 **100/0/0**
+（PreviewStmtTypeScopeTest 14 + ConsumerMethodsCoverageTest 33 + WrapperLocatorTest 31 +
+SqlPreviewServiceRoutingTest 6 + SqlPreviewTopRowLayoutTest 9 + SqlPreviewPanelMetaHintTooltipTest 7）；
+反向两探针（分别摘掉 D-B1 / D-B2）各自恰红，见 §9.5。
+
+### 9.5 反向验证（2026-11-13 第二轮）
+
+| 探针 | 摘掉什么 | 读数 |
+| --- | --- | --- |
+| A | `findWrapperVariable` 的 `PsiAssignmentExpression` 分支 | `PreviewStmtTypeScopeTest` **14 例 1 红**，恰为 `testReassignmentAnchorUsesVariableChainAndAnchorSegment`，message「锚点之后最近的消费是 delete，应判 DELETE: **null**」——判型依据全丢，正是用户看到的退化形态 |
+| B | `filterCallsToAnchorSegment` 的段过滤（直接 `return calls`） | 同 **14 例 1 红**、同一用例，message「不该把 update 段的 status 条件带进来: DELETE FROM `order` WHERE user_id = ? AND status = 0 AND order_no = ? AND user_id = ?」 |
+
+两探针各自命中一处修复、互不掩盖；还原后 14/0/0（合计见 §9.4 末行）。
+
+### 9.6 已知边界
 
 - D-2 的默认落点仍是启发式：锚点在「消费之前、且中间没有消费语句」时取最近一条；要换档只能靠 D-3 手动切。
 - D-3 只在**同一 wrapper 上出现 ≥2 档**时出现入口；单档场景面板完全不变（不留闭包、不占工具栏位）。
 - 强制档位重算会照常 `recordHistory`——同一段代码的不同档位各记一条历史（它们是不同 SQL，行为合理）。
+- 重新赋值分段只按「赋值点在锚点前后」切段：同一段内若再次对同一 wrapper 追加条件（`w = new …; w.eq(a); w.eq(b); delete(w)`）仍是整段合并，不做语句级细分。
 

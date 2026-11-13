@@ -4,9 +4,11 @@ import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperConsumption
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
+import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiParameter
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -46,6 +48,13 @@ class PreviewStmtTypeScopeTest : BasePlatformTestCase() {
         .collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
         .first { it.methodExpression.referenceName == methodName }
         .argumentList.expressions.last()
+
+    /** 第 [index] 个 wrapper `new` 表达式的 `new` 关键字（gutter 图标锚点与该 leaf 同源）。 */
+    private fun newKeywordOf(index: Int): PsiElement {
+        val newExpr = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiNewExpression::class.java)
+            .filter { (it.type as? PsiClassType)?.className == "LambdaQueryWrapper" }[index]
+        return newExpr.firstChild
+    }
 
     private fun evidence(
         kind: ConsumptionKind,
@@ -164,7 +173,90 @@ class PreviewStmtTypeScopeTest : BasePlatformTestCase() {
         assertEquals("delete", result.decidingConsumption?.methodName)
     }
 
-    fun testDecidingConsumptionFollowsAnchorStatement() {        val delete = evidence(ConsumptionKind.DELETE, "remove", 100, 90..120)
+    fun testReassignmentAnchorUsesVariableChainAndAnchorSegment() {
+        // 用户 2026-11-13 真机复现（demo 语料 WrapperReuseRepro 第 100 行）：重新赋值语句的 `new` 锚点。
+        // 修复前该锚点走 buildChainFromNew，只收赋值表达式内部的链 → 丢掉后续 .eq 语句与 delete(w) 消费，
+        // 预览退化成无 WHERE 的 SELECT；修复后按目标变量走变量路径，且只收锚点所在段的条件。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private OrderComponent orderComponent;
+                public int m(Order patch, Integer userId, String orderNo) {
+                    LambdaQueryWrapper<Order> w = new LambdaQueryWrapper<Order>();
+                    w.eq(Order::getUserId, userId)
+                        .eq(Order::getStatus, 0);
+                    orderComponent.update(patch, w);
+                    w = new LambdaQueryWrapper<Order>();
+                    w.eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getUserId, userId);
+                    return orderComponent.delete(w);
+                }
+
+                static class OrderComponent {
+                    public boolean update(Object entity, Object wrapper) { return true; }
+                    public int delete(Object wrapper) { return 0; }
+                }
+
+                static class Order { private Integer userId; private Integer status; private String orderNo; }
+            }
+            """.trimIndent(),
+        )
+        // ① 重新赋值行的 `new` 锚点：按目标变量走变量路径，判到锚点之后最近的消费 → DELETE
+        val located = WrapperLocator.locateWithTable(newKeywordOf(1))
+        assertNotNull("重新赋值锚点应定位到变量链（修复前落到内联 new 路径）", located)
+        assertTrue(
+            "锚点之后最近的消费是 delete，应判 DELETE: ${located!!.chain.decidingConsumption}",
+            located.chain.deleteConsumed,
+        )
+        // ② 只收锚点所在段的条件：delete 段是 order_no + user_id，不该带 update 段的 status
+        val result = newService().preview(newKeywordOf(1))
+        assertNotNull(result)
+        assertTrue("应产出 DELETE: ${result!!.sql}", result.sql.startsWith("DELETE"))
+        assertTrue("delete 段条件应保留 order_no: ${result.sql}", result.sql.contains("order_no"))
+        assertTrue("delete 段条件应保留 user_id: ${result.sql}", result.sql.contains("user_id"))
+        assertFalse("不该把 update 段的 status 条件带进来: ${result.sql}", result.sql.contains("status"))
+        // ③ 声明段的锚点仍按声明段的链渲染（存量行为）：WHERE 只该有 user_id / status
+        val declaration = newService().preview(newKeywordOf(0))
+        assertNotNull(declaration)
+        val declarationWhere = declaration!!.sql.substringAfter("WHERE", "")
+        assertTrue("声明段 WHERE 应保留 status 条件: ${declaration.sql}", declarationWhere.contains("status"))
+        assertFalse(
+            "声明段 WHERE 不该带 delete 段的 order_no（SET 列里出现属正常）: ${declaration.sql}",
+            declarationWhere.contains("order_no"),
+        )
+    }
+
+    fun testSegmentFilterKeepsEverythingWithoutReassignment() {
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void m() {
+                    LambdaQueryWrapper<Order> w = new LambdaQueryWrapper<Order>();
+                    w.eq(Order::getUserId, 1);
+                }
+                static class Order { private Integer userId; }
+            }
+            """.trimIndent(),
+        )
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java).toList()
+        // 无重新赋值点 / 无锚点时全量返回（存量行为零变化）
+        assertEquals(
+            "无重新赋值点 → 全量返回",
+            calls,
+            WrapperLocator.filterCallsToAnchorSegment(calls, emptyList(), 0),
+        )
+        assertEquals(
+            "无锚点 → 全量返回",
+            calls,
+            WrapperLocator.filterCallsToAnchorSegment(calls, listOf(5), null),
+        )
+        assertEquals("空输入恒空", emptyList<PsiMethodCallExpression>(), WrapperLocator.filterCallsToAnchorSegment(emptyList(), emptyList(), 10))
+    }
+
+    fun testDecidingConsumptionFollowsAnchorStatement() {
+        val delete = evidence(ConsumptionKind.DELETE, "remove", 100, 90..120)
         val update = evidence(ConsumptionKind.UPDATE_ENTITY, "update", 200, 190..220)
         // ① 锚点落在 delete 语句内 → 该语句的消费优先（哪怕 update 优先级更高）
         assertEquals(
