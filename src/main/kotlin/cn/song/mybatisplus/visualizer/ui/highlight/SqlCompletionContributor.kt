@@ -54,6 +54,18 @@ class SqlCompletionContributor : CompletionContributor() {
          */
         private val documentContexts = WeakHashMap<Document, SqlCompletionContext>()
 
+        /**
+         * §三十一：列名候选的**别名形态**（原名 + snake + UPPER_SNAKE，去重、保序）。
+         *
+         * 动机：实体列的 `ColumnInfo.columnName` 在 MP 工程里可能是驼峰（由字段名推出），
+         * 而用户在 SQL 里写的是 `DEL_FLAG` 这种大写蛇形，前缀匹配（大小写敏感）永远命中不了。
+         */
+        internal fun columnNameAliases(name: String): List<String> {
+        if (name.isBlank()) return emptyList()
+        val snake = cn.song.mybatisplus.visualizer.util.CaseFormatUtil.camelToSnake(name)
+        return linkedSetOf(name, snake, snake.uppercase()).filter { it.isNotBlank() }
+        }
+
         /** §二十七：每个文档已打过几次补全日志（WeakHashMap，最多记 5 次）。 */
         private val completionLogBudget = WeakHashMap<Document, Int>()
 
@@ -151,8 +163,15 @@ class SqlCompletionContributor : CompletionContributor() {
                         // 本处零遍历——autopopup 每敲一个标识符字符都走这里（T-Perf-09 红线）；
                         // 同名列注释/类型取数据源（M35 优先级），tailText 追加 DB 类型串标注来源。
                         mergeColumnCandidates(ctx).forEach { candidate ->
-                            if (prefix.prefixMatches(candidate.name)) {
-                                result.addElement(columnLookupElement(candidate))
+                            // §三十一：实体列是驼峰（`delFlag`），SQL 里常写大写蛇形（`DEL_FLAG`）——
+                            // 只按原名做前缀匹配会让「敲 DEL_F 补不出来」（真机 prefix='DEL_F'
+                            // ctx cols=19 却 added col=0）。这里对每个候选生成别名形态：
+                            // 任一形态命中前缀即收录，并把别名注册为 lookup string（回车插入原名）。
+                            val aliases = columnNameAliases(candidate.name)
+                            if (aliases.any { prefix.prefixMatches(it) }) {
+                                var element = columnLookupElement(candidate)
+                                aliases.drop(1).forEach { alias -> element = element.withLookupString(alias) }
+                                result.addElement(element)
                                 addedColumns++
                             }
                         }
@@ -174,6 +193,7 @@ class SqlCompletionContributor : CompletionContributor() {
                                 "ctx=${ctx.tableName ?: "-"} cols=${ctx.columns.size} " +
                                 "candidates=${ctx.candidateTables.size} schemaCols=${ctx.schemaColumns.size} " +
                                 "added(tbl=$addedTable col=$addedColumns alias=$addedAlias) " +
+                                "sample=${ctx.columns.take(3)} " +
                                 "doc=${docKey.hashCode()}",
                         )
                     }

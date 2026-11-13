@@ -49,7 +49,7 @@ internal fun mergeColumnCandidates(context: SqlCompletionContext): List<ColumnCa
  *
  * 与表名候选的 `withComment`（仅注释）分开：列候选多一段类型串，类型正是「来自数据源」的可视标记。
  */
-internal fun columnLookupElement(candidate: ColumnCandidate): LookupElement {
+internal fun columnLookupElement(candidate: ColumnCandidate): LookupElementBuilder {
     val tail = listOfNotNull(
         candidate.comment?.takeIf { it.isNotBlank() },
         candidate.typeSpec?.takeIf { it.isNotBlank() },

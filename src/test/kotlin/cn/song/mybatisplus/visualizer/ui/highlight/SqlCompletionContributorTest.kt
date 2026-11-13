@@ -248,4 +248,27 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
             assertEquals("子句判定: \"$text\"", expected, actual)
         }
     }
+
+    /**
+     * §三十一：列名别名形态。真机证据：`prefix='DEL_F' ctx cols=19 added col=0`——
+     * 实体列名是驼峰（`delFlag`），用户敲的是大写蛇形（`DEL_FLAG`），前缀匹配命中不了。
+     */
+    fun testColumnNameAliases() {
+        assertEquals(
+            "驼峰列名要能补出大写蛇形",
+            listOf("delFlag", "del_flag", "DEL_FLAG"),
+            SqlCompletionContributor.columnNameAliases("delFlag"),
+        )
+        assertEquals(
+            "已是蛇形/大写的列名保持原样（不产生重复别名）",
+            listOf("DEL_FLAG"),
+            SqlCompletionContributor.columnNameAliases("DEL_FLAG"),
+        )
+        assertEquals(
+            "普通小写列名也给一份大写形态（SQL 里常写 ID）",
+            listOf("id", "ID"),
+            SqlCompletionContributor.columnNameAliases("id"),
+        )
+        assertTrue("空名不产生别名", SqlCompletionContributor.columnNameAliases(" ").isEmpty())
+    }
 }
