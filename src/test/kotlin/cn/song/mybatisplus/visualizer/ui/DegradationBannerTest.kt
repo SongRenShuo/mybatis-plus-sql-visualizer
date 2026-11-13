@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -105,6 +107,56 @@ class DegradationBannerTest : BasePlatformTestCase() {
                 "警示恢复 null → 渲染警示类别应清除（${banner.kindForTest()}）",
                 banner.kindForTest() != DegradationBanner.Kind.RENDER_WARNING,
             )
+        } finally {
+            SqlPreviewPanelSqlViewKt.clear(panel)
+        }
+    }
+
+    // ---------- UI-001：iBatis rerender 链横幅跟随新结果（整体替换）+ 信息级前缀 ----------
+
+    /** 对齐 demo `User.xml` selectByIterate 形态（基线降级 → 供值完整）。 */
+    private fun ibatisIterateXml(): String = """
+        <sqlMap namespace="user">
+            <select id="selectByIterate" parameterClass="java.util.Map">
+                SELECT ID, USER_NAME FROM T_USER
+                <dynamic prepend="WHERE">
+                    <iterate property="ids" open="(" close=")" conjunction="OR"> ID = #ids[]# </iterate>
+                </dynamic>
+            </select>
+        </sqlMap>
+    """.trimIndent()
+
+    fun testiBatis供值后横幅恢复即清除_撤值后随新结果回归() {
+        val panel = SqlPreviewPanel(project)
+        val banner = panel.degradationBannerForTest()
+        try {
+            val result = IbatisXmlPreviewService.preview(ibatisIterateXml(), "selectByIterate", "select", 0, null, null, null)
+            assertNotNull("基线待填值告警在场", result.warning)
+            SqlPreviewPanelResultViewKt.showResult(panel, result)
+            // 供值：iterate 列表输入 → renderSql 走 rerender → fresh 无告警 → 横幅必须清除
+            // （UI-001 主缺陷：基线「渲染降级」告警残留、点「刷新」也不消失）
+            panel.ibatisIterateValues["ids"] = "X1,X2,X3"
+            panel.renderSqlForTest()
+            assertNull("供值后 currentWarning 必须被新结果整体替换为空", panel.currentWarning)
+            assertTrue(
+                "供值后横幅不得仍挂渲染警示（${banner.kindForTest()}）",
+                banner.kindForTest() != DegradationBanner.Kind.RENDER_WARNING,
+            )
+            // 反向：撤值 → 基线待填值告警随新结果回归（整体替换是双向的）
+            panel.ibatisIterateValues.clear()
+            panel.renderSqlForTest()
+            assertNotNull("撤值后基线告警应随新结果回归", panel.currentWarning)
+            assertTrue("基线告警为信息级（待填值）", panel.currentWarningIsNote)
+            if (banner.kindForTest() == DegradationBanner.Kind.RENDER_WARNING) {
+                assertEquals(
+                    "信息级说明用 ℹ 前缀，不冒充「⚠ 预览未完整还原」",
+                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+                        "panel.banner.renderNote",
+                        panel.currentWarning!!,
+                    ),
+                    banner.textForTest(),
+                )
+            }
         } finally {
             SqlPreviewPanelSqlViewKt.clear(panel)
         }
