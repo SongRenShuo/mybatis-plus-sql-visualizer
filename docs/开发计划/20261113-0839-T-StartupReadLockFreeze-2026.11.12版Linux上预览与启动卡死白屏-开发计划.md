@@ -794,3 +794,27 @@ Read access is allowed from inside read-action only
 修法：参数简单名以 `Example` 结尾时按 MBG 约定回查同包 `Xxx` 实体；查不到就跳过（宁可 main=null）。
 读数：`testExampleParamNotTreatedAsEntity` / `testExampleParamWithoutEntityDegradesToNull` 两例，
 反向去掉该分支 → 2 红，还原复绿。
+
+---
+
+## 二十一、自验收（2026-11-13 18:00+，runIde 全屏沙盒 + 日志判据）
+
+### 21.1 冷启动契约的三次修正（全部由真机日志驱动）
+
+| 现象（日志） | 根因 | 修法 |
+|---|---|---|
+| `resolve=9314/9447/9259ms` 三连 | `EntityResolver` 自带缓存键含 `identityHashCode(PsiFile)`，PSI 重建即失配 | 自有缓存（类名 + stamp），`d829…` 起 |
+| 同一实体两次 `resolve=1ms / 4786ms` | 纯 stamp 判据在本工程被高频动作顶掉 | 改 **TTL(60s) 内直接命中**，TTL 外才要求 stamp 未变；加命中/未命中日志 |
+| `prefix='DEL_F' ctx cols=19 added col=0` | 实体列名是小写蛇形（`del_flag`），用户敲大写（`DEL_FLAG`），前缀匹配命中不了 | `columnNameAliases`（原名 + snake + UPPER_SNAKE），任一形态命中即收录并注册为 lookup string |
+
+### 21.2 真机读数（cust-big-demo，全屏 runIde 沙盒）
+
+- 预览打开 `request→dialog`：**10s → 696ms**（`resolve=1ms`，实体缓存命中）；
+- 补全：`prefix='DEL_F' … added col=1`，弹窗出现 `DEL_` / `DEL_F` 候选项（截图 `q3-completion.png`）；
+- 与用户原场景一致的文件（`CustAddressMapper.xml` / `cust_address`）与语句（`selectByExample`）。
+
+### 21.3 环境坑（本轮踩到）
+
+- **Light 沙盒不加载 plugin.xml 的 EP**：平台 fixture 里显式注册 `CompletionContributor` 也不行（EP 名常量在 243 是 `LanguageExtensionPoint` 派发），补全的端到端只能靠 GUI + 日志；因此把「前缀 → 候选」这段做成纯函数用例（`columnNameAliases`）收口。
+- **`Ctrl+Space` 被系统输入法吞掉**：GUI 触发补全只能用「键入触发自动弹出」，脚本里不要按 `Ctrl+Space`。
+- 沙盒 jar 必须在被测动作**之前**构建：本轮两次因为「jar 早于修复提交」而白跑一轮，判据是 `unzip -p jar …class | grep 新符号`。
