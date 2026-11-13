@@ -4,15 +4,16 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootModificationTracker
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 实体类查找器（T-M36.2：SQL 反向转换的 LambdaQueryWrapper 上下文解析）。
@@ -23,9 +24,10 @@ import com.intellij.psi.search.PsiShortNamesCache
  *    `sys_account_role_rel` → `AccountRoleRel[Entity]`，前缀不一致常见命名直接命中）→
  *    [PsiShortNamesCache] 按类名检索 → [EntityResolver] 解析校验表名精确匹配，防同名词误配；
  * 2. **@TableName 反查慢路径**（快路径未命中时兜底，结果项目级缓存）：
- *    全量扫描项目类，匹配「@TableName 注解值」或「推断表名」等于 SQL 表名的类——
- *    扫描结果（类名/全限定名）缓存于 Project userData，以 `PsiModificationTracker.modificationCount`
- *    失效（PSI 任何修改自动重扫一次；无实体匹配场景不再每次转换全量扫描——性能修复）。
+ *    全量扫描项目类，匹配「@TableName 注解值」或「推断表名」等于 SQL 表名的类。
+ *    扫描**一次建全表索引**（表名 → 类名/全限定名）缓存于 Project userData，任意表名查询 O(1)；
+ *    失效基准＝项目结构版本（[ProjectRootModificationTracker]）+ TTL（见 [ReverseLookupCache] 注释：
+ *    挂 `PsiModificationTracker` 会被我们自己写 exec 文件/临时 PSI 顶掉，导致每次打开预览都重扫）。
  *
  * T-JarEmbedded W2（20261016）：**实体类可能来自依赖 JAR**（共享模型模块，工程无源码）——快路径
  * 此前用 `projectScope`，这类工程的实体一个都反查不到（用户报障场景）。现补**库兜底**：项目 scope
@@ -323,25 +325,46 @@ class EntityClassFinder(private val project: Project) {
      * 「@TableName 注解值」或「推断表名（[EntityResolver.inferDecoratedTableName]）」等于 SQL 表名
      * （大小写不敏感）的类。
      *
-     * **性能（用户反馈：无实体场景转换卡顿）**：全量扫描为 O(项目类数) PSI 索引访问，此前每次
-     * 转换都执行（快路径 0 命中时必触发，JOIN 每张副表各一次）——现把扫描结果（类全限定名）
-     * 缓存于 Project userData：同表名后续 find 直接按类名重取（几次索引查询）；缓存以
-     * `PsiModificationTracker.modificationCount` 失效（PSI 修改后自动重扫一次）。
+     * **性能（用户反馈：无实体场景转换卡顿 / 打开预览仍慢）**：全量扫描为 O(项目类数) PSI 索引访问。
+     * 现在**一次扫描建「表名 → 类」全表索引**（不是「查一个表名扫一遍」——实测 16804 类的工程一趟
+     * 3.8s，用户每换一张表再吃一次），缓存于 Project userData，任意表名查询 O(1)；索引建立中时
+     * 后来的调用方**不等待**，立即返回空（预览照常打开、上下文降级），下一次查询即命中。
+     * 失效基准＝项目结构版本 + TTL（[ReverseLookupCache] 有实测依据）。
      * 缓存存类名字符串而非 PsiClass 引用（PSI 对象随文件修改失效，引用长期持有不安全）。
      * 须在 ReadAction 内调用。
      */
     private fun findByTableNameAnnotationCached(tableName: String): List<PsiClass> {
         val entry = reverseLookupCache()
-        val key = tableName.lowercase()
-        val cached = entry.names[key]
-        if (cached != null) {
-            return cached.mapNotNull { restoreMatched(it) }
+        ensureIndexBuilt(entry)
+        // 顺序契约不变：旧实现按类名排序返回（多候选时调用方按此顺序处理）
+        return (entry.index[tableName.lowercase()] ?: emptyList())
+            .sortedBy { it.shortName }
+            .mapNotNull { restoreMatched(it) }
+    }
+
+    /**
+     * 建索引：**一次全量扫描覆盖所有表名**，之后任意表名查询都是 O(1)。
+     *
+     * 旧口径是「查一个表名扫一遍」，而 `cust-big-demo` 这类工程一次扫描 3.8s（16804 个类逐个读
+     * `@TableName` / 推断表名）——用户每打开一条不同表的语句就再吃一次。
+     *
+     * 并发口径：**不阻塞后来者**。索引建立中时，后来的调用方立刻返回空（预览照常打开、上下文降级），
+     * 由先到的线程把索引填好，下一次查询即命中。EDT 上等别人扫 3.8s 正是要根治的形态。
+     */
+    private fun ensureIndexBuilt(entry: ReverseLookupCache) {
+        if (entry.built) return
+        if (!entry.building.compareAndSet(false, true)) return
+        try {
+            val started = System.currentTimeMillis()
+            val built = scanAllTablesIndex()
+            entry.index.putAll(built)
+            entry.scans++
+            entry.built = true
+            totalScanCountForTest(project).incrementAndGet()
+            LOG.info("[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - started}ms")
+        } finally {
+            entry.building.set(false)
         }
-        entry.scans++
-        val matched = scanAllClassesByTableName(tableName)
-        entry.names[key] = matched.map { MatchedClass(it.name ?: return@map null, it.qualifiedName) }
-            .filterNotNull()
-        return matched
     }
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
@@ -354,11 +377,17 @@ class EntityClassFinder(private val project: Project) {
             .firstOrNull { it.qualifiedName == matched.qualifiedName && !isVoDto(it) }
     }
 
-    /** 全量扫描匹配表名的类（P2：跳过接口/枚举/注解类——MP 实体恒为 class）。 */
-    private fun scanAllClassesByTableName(tableName: String): List<PsiClass> {
+    /**
+     * 全量扫描一次，建「表名（小写）→ 匹配类」索引（P2：跳过接口/枚举/注解类——MP 实体恒为 class）。
+     *
+     * 与旧 [scanAllClassesByTableName] 的差别只有一处：**不再为单个表名提前 `equals` 过滤**，
+     * 而是把每个类解析出的表名都收进索引。类上的表名来源逐字不变：`@TableName` 注解值优先，
+     * 无注解则按类名推断（`EntityResolver.inferDecoratedTableName`）。
+     */
+    private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
         val cache = PsiShortNamesCache.getInstance(project)
         val scope = GlobalSearchScope.projectScope(project)
-        val result = mutableListOf<PsiClass>()
+        val index = HashMap<String, MutableList<MatchedClass>>()
         var scanned = 0
         for (shortName in cache.getAllClassNames()) {
             // 取消检查（T-GutterDupFreeze 口径，与库扫描同一收口）：全量短名遍历跑在阻塞式
@@ -375,13 +404,14 @@ class EntityClassFinder(private val project: Project) {
                 val annotated = tableNameAnnotation(clazz)
                 // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
                 // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
-                val resolvedTable = annotated ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
-                if (resolvedTable.equals(tableName, ignoreCase = true)) {
-                    result.add(clazz)
-                }
+                val resolvedTable = annotated
+                    ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
+                if (resolvedTable.isNullOrBlank()) continue
+                index.getOrPut(resolvedTable.lowercase()) { mutableListOf() }
+                    .add(MatchedClass(className, clazz.qualifiedName))
             }
         }
-        return result.sortedBy { it.name }
+        return index
     }
 
     /** 类级 @TableName 注解值；无注解或值非字符串返回 null（短名兜底——注解类不可解析环境仍可识别）。 */
@@ -414,12 +444,29 @@ class EntityClassFinder(private val project: Project) {
         return listOf(pascal, "${pascal}Entity", noFirstSeg, "${noFirstSeg}Entity").distinct()
     }
 
-    /** 项目级反查缓存（Project userData；PsiModificationTracker 失效）。 */
+    /**
+     * 项目级反查缓存（Project userData）。
+     *
+     * 失效基准＝**项目结构版本**（[ProjectRootModificationTracker]）+ **TTL**（[reverseLookupTtlMs]）。
+     *
+     * 为什么不再挂 [PsiModificationTracker]：它对**任何** PSI 变化都递增，而预览链路自己就会改 PSI
+     * （写 `mpsql-exec.sql`、临时 PsiFile、对话框里打字）。实测 `cust-big-demo`（16804 类）：
+     * 打开预览 18:52:59 缓存热（`resolve=2ms`）→ 我们自己写 exec 文件 → 19:00:08、19:00:44 两次
+     * `resolve=3994ms / 3737ms`，也就是**每次打开预览都在重扫全工程**，用户看到的就是「打开还是慢」。
+     * 结构版本对「改已有文件正文」不递增（[LibrarySweepCache] 已有同样实证），TTL 负责兜住
+     * 「改了实体上的 `@TableName`」这类正文修改——最迟一个 TTL 周期后自动重建。
+     */
     private data class ReverseLookupCache(
-        /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
-        val count: Long,
-        /** 表名（小写）→ 匹配类（短名 + 全限定名）。 */
-        val names: MutableMap<String, List<MatchedClass>>,
+        /** 建索引时的项目结构版本——结构变化（增删文件/依赖/模块根）后失效重建。 */
+        val structureVersion: Long,
+        /** 建索引时间（TTL 判据）。 */
+        val createdAt: Long,
+        /** 表名（小写）→ 匹配类（短名 + 全限定名）；一次扫描建全表索引，任意表名 O(1)。 */
+        val index: MutableMap<String, List<MatchedClass>>,
+        /** 索引是否已建成（未建成时是「没人扫过」，不是「该表确实没有实体」）。 */
+        @Volatile var built: Boolean = false,
+        /** 正在建索引的线程标记——后来者不等待、直接降级返回空。 */
+        val building: AtomicBoolean = AtomicBoolean(false),
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         var scans: Int = 0,
     )
@@ -446,20 +493,30 @@ class EntityClassFinder(private val project: Project) {
     )
 
     private fun reverseLookupCache(): ReverseLookupCache {
-        // 失效计数：PsiModificationTracker（IPGP 中位于 com.intellij.psi.util 包，编译实证；
-        // PSI 任何修改递增，缓存自动失效重扫）
-        val current = PsiModificationTracker.getInstance(project).modificationCount
+        val current = ProjectRootModificationTracker.getInstance(project).modificationCount
+        val now = System.currentTimeMillis()
         val existing = project.getUserData(REVERSE_LOOKUP_CACHE_KEY)
-        if (existing != null && existing.count == current) return existing
-        val fresh = ReverseLookupCache(current, mutableMapOf())
+        if (existing != null &&
+            existing.structureVersion == current &&
+            now - existing.createdAt in 0 until reverseLookupTtlMs
+        ) {
+            return existing
+        }
+        val fresh = ReverseLookupCache(current, now, mutableMapOf())
         project.putUserData(REVERSE_LOOKUP_CACHE_KEY, fresh)
         return fresh
     }
 
     companion object {
+        private val LOG = Logger.getInstance(EntityClassFinder::class.java)
+
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
+
+        /** 跨缓存实例的累计建索引次数（测试守卫用，见 [totalScanCountForTest]）。 */
+        private val REVERSE_LOOKUP_SCAN_TOTAL_KEY =
+            Key.create<java.util.concurrent.atomic.AtomicInteger>("mp-visualizer.reverseLookupScanTotal")
 
         /** 库扫描缓存键（T-JarEmbedded 方案 1）。 */
         private val LIBRARY_SWEEP_CACHE_KEY = Key.create<LibrarySweepCache>("mp-visualizer.librarySweepCache")
@@ -567,10 +624,29 @@ class EntityClassFinder(private val project: Project) {
         internal fun scanCountForTest(project: Project): Int =
             project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.scans ?: 0
 
-        /** 反查缓存信息（设置页展示）：返回（缓存表名条目数, 缓存类名总数）；无缓存 → (0, 0)。 */
+        /**
+         * 测试访问器：**跨缓存实例**的累计建索引次数。
+         *
+         * 为什么需要它：缓存条目被判定失效时会重建（`scans` 归零），只看 [scanCountForTest] 分不清
+         * 「没重扫」和「重扫了但新条目从 0 起算」——「打字不作废索引」这类守卫会**空绿**（实测踩过）。
+         */
+        internal fun totalScanCountForTest(project: Project): java.util.concurrent.atomic.AtomicInteger =
+            project.getUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY)
+                ?: java.util.concurrent.atomic.AtomicInteger().also {
+                    project.putUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY, it)
+                }
+
+        /**
+         * 反查索引 TTL（毫秒）。默认 5 分钟：结构版本兜住文件增删/依赖变化，
+         * TTL 兜住「改已有实体文件的 `@TableName`」这类结构版本看不见的正文修改。
+         * 测试可置 0 强制下一次查询重建。
+         */
+        internal var reverseLookupTtlMs: Long = 300_000L
+
+        /** 反查缓存信息（设置页展示）：返回（索引表名条目数, 索引类名总数）；无缓存 → (0, 0)。 */
         internal fun reverseLookupCacheInfo(project: Project): Pair<Int, Int> {
             val entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return 0 to 0
-            return entry.names.size to entry.names.values.sumOf { it.size }
+            return entry.index.size to entry.index.values.sumOf { it.size }
         }
 
         /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
@@ -587,7 +663,7 @@ class EntityClassFinder(private val project: Project) {
         internal fun reverseLookupCacheSizeBytes(project: Project): Long {
             val entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return 0L
             var bytes = 0L
-            for ((table, classes) in entry.names) {
+            for ((table, classes) in entry.index) {
                 bytes += table.length * 2L + 16
                 for (matched in classes) {
                     val nameLen = matched.shortName.length + (matched.qualifiedName?.length ?: 0)

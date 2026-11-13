@@ -215,8 +215,12 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
     }
 
     /**
-     * 接缝：EntityClassFinder（PSI 修改 → 缓存失效）→ 下游（新表名可被找到）。
-     * 场景：文档修改后缓存失效，重新扫描找到修改后的 @TableName。
+     * 接缝：EntityClassFinder（索引重建 → 新表名可见）→ 下游（新表名可被找到）。
+     *
+     * 失效契约（20261113 改）：索引失效基准＝**项目结构版本 + TTL**，**不再**挂 `PsiModificationTracker`。
+     * 原因见 `ReverseLookupCache` 注释：预览链路自己就会改 PSI（写 exec 文件/临时 PsiFile/对话框打字），
+     * 挂 PSI 版本等于每次打开预览都重扫全工程（真机实测 `resolve=3994ms`）。本用例把两条都钉住：
+     * ①改 `@TableName` 后**未过 TTL**时索引不重建（打字不作废索引）；②过 TTL 后重建、新表名可见。
      */
     fun testPsiModificationInvalidatesCache() {
         // 使用与表名驼峰无关的类名（RoleRel ↔ sys_account_role_rel）：快路径不命中 → 走反查慢路径
@@ -237,10 +241,10 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
         assertEquals(1, EntityClassFinder(project).find("old_table").size)
         assertEquals("首次扫描应为 1 次", 1, EntityClassFinder.scanCountForTest(project))
 
-        // 新表名此时找不到（走反查慢路径 → 负缓存）
+        // 新表名此时找不到（索引里没有它）
         assertTrue("新表名修改前应找不到", EntityClassFinder(project).find("new_table").isEmpty())
 
-        // 修改文档 @TableName → PSI modificationCount 递增 → 缓存失效
+        // 修改文档 @TableName
         val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)!!
         WriteCommandAction.runWriteCommandAction(project, Computable {
             document.setText(
@@ -258,10 +262,20 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
         })
         PsiDocumentManager.getInstance(project).commitDocument(document)
 
-        // 缓存失效后重新扫描 → 新表名可被找到
-        val found = EntityClassFinder(project).find("new_table")
-        assertEquals("PSI 修改后应找到新表名实体", 1, found.size)
+        // ① 未过 TTL：索引不重建（这就是「打字不作废索引」的契约，反向改回 PSI 版本基准 → 本断言必红）
+        assertTrue("未过 TTL 时索引不得因正文修改重建", EntityClassFinder(project).find("new_table").isEmpty())
+        assertEquals("未过 TTL 不得重扫", 1, EntityClassFinder.totalScanCountForTest(project).get())
+
+        // ② 过 TTL（置 0）：重建索引 → 新表名可被找到
+        EntityClassFinder.reverseLookupTtlMs = 0L
+        val found = try {
+            EntityClassFinder(project).find("new_table")
+        } finally {
+            EntityClassFinder.reverseLookupTtlMs = 300_000L
+        }
+        assertEquals("TTL 到期重建后应找到新表名实体", 1, found.size)
         assertEquals("RoleRel", found[0].name)
+        assertEquals("重建应恰好扫 1 次（新缓存实例）", 1, EntityClassFinder.scanCountForTest(project))
     }
 
     /**

@@ -270,20 +270,59 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testReverseLookupCachedAcrossFinds() {
-        // 无匹配实体表名：首次 find 全量扫描 1 次；再次 find 同表名 → 缓存命中不再扫描；
-        // 不同表名 → 再次扫描（各表名独立缓存条目）
+        // 无匹配实体表名：首次 find 全量扫描 1 次建**全表索引**；之后无论查同表名还是**别的表名**
+        // 都只走索引、零扫描（旧口径是「查一个表名扫一遍」，16804 类的工程每换一张表再吃 3.8s）
         val finder = EntityClassFinder(project)
         assertTrue(finder.find("not_exist_table_1").isEmpty())
         assertEquals("首次查找应触发 1 次全量扫描", 1, EntityClassFinder.scanCountForTest(project))
         assertTrue(finder.find("not_exist_table_1").isEmpty())
         assertEquals("同表名二次查找应命中缓存（扫描次数不变）", 1, EntityClassFinder.scanCountForTest(project))
         assertTrue(finder.find("not_exist_table_2").isEmpty())
-        assertEquals("不同表名应再次扫描", 2, EntityClassFinder.scanCountForTest(project))
+        assertEquals("不同表名也应命中索引（不得再扫）", 1, EntityClassFinder.scanCountForTest(project))
+    }
+
+    fun testReverseLookupIndexSurvivesSourceEdit() {
+        // 失效基准＝项目结构版本 + TTL：**改已有文件正文（打字）**不得作废索引。
+        // 这条直接对着真机现象：预览链路自己会改 PSI（写 exec 文件、临时 PsiFile、对话框打字），
+        // 旧口径挂 PsiModificationTracker ⇒ 每次打开预览都重扫全工程（实测 resolve=3994ms）。
+        val entity = addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class RoleRel {}
+            """,
+        )
+        assertTrue(EntityClassFinder(project).find("sys_account_role_rel").isNotEmpty())
+        assertEquals(1, EntityClassFinder.scanCountForTest(project))
+
+        // 模拟打字：改**已有文件**的正文（PSI 版本递增；项目结构不变 ⇒ 索引应存活）
+        val vf = entity.containingFile.virtualFile
+        val psiBefore = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
+        WriteCommandAction.runWriteCommandAction(project, Computable {
+            VfsUtil.saveText(
+                vf,
+                """
+                import com.baomidou.mybatisplus.annotation.TableName;
+
+                @TableName("sys_account_role_rel")
+                public class RoleRel { private Long id; }
+                """.trimIndent(),
+            )
+        })
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val psiAfter = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
+        // 夹具有效性：编辑后 PSI 版本必须递增，否则本用例什么都没验（空绿）
+        assertTrue("夹具有效性：编辑后 PSI 版本必须递增（$psiBefore → $psiAfter）", psiAfter > psiBefore)
+
+        assertTrue(EntityClassFinder(project).find("sys_account_role_rel").isNotEmpty())
+        assertEquals("改源码正文后不得重扫全工程", 1, EntityClassFinder.totalScanCountForTest(project).get())
     }
 
     fun testReverseLookupCacheInvalidatedOnPsiChange() {
-        // PSI 修改（文档内容变化递增 modificationCount；新建文件不递增实证）
-        // → 缓存失效重扫 → 修改后的 @TableName 可被找到
+        // TTL 兜住「改已有实体上的 @TableName」这类结构版本看不见的正文修改：
+        // 把 TTL 置 0 ⇒ 下一次查询必重建索引 ⇒ 改后的 @TableName 能被找到（默认 5 分钟，见 ReverseLookupCache）
         val psiFile = addClassFile(
             "RoleRel.java",
             """
@@ -295,7 +334,7 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         ).containingFile
         assertTrue(EntityClassFinder(project).find("sys_account_role_rel").isEmpty())
         assertEquals(1, EntityClassFinder.scanCountForTest(project))
-        // 文档修改（Document.setText → PsiModificationTracker.modificationCount 递增 → 缓存失效）
+        // 文档修改（Document.setText）
         val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)!!
         WriteCommandAction.runWriteCommandAction(project, Computable {
             document.setText(
@@ -309,10 +348,16 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
             null
         })
         PsiDocumentManager.getInstance(project).commitDocument(document)
-        val found = EntityClassFinder(project).find("sys_account_role_rel")
-        assertEquals("PSI 修改后应重新扫描并找到修改后的实体", 1, found.size)
+        // TTL 置 0：即便结构版本没变也强制重建（模拟「过了 TTL 周期」）
+        EntityClassFinder.reverseLookupTtlMs = 0L
+        val found = try {
+            EntityClassFinder(project).find("sys_account_role_rel")
+        } finally {
+            EntityClassFinder.reverseLookupTtlMs = 300_000L
+        }
+        assertEquals("索引重建后应找到修改后的实体", 1, found.size)
         assertEquals("RoleRel", found[0].name)
-        // 缓存失效重建后扫描计数归零（新缓存实例）——重新扫描生效由 found.size 承担验证
+        assertEquals("索引重建后（新缓存实例）应扫描 1 次", 1, EntityClassFinder.scanCountForTest(project))
     }
 
     fun testReverseLookupHitRestoresClassesByQualifiedName() {
@@ -364,11 +409,13 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
     }
 
     fun testReverseLookupCacheInfoAndClear() {
-        // 缓存信息：无匹配表名扫描后应有 1 条条目（负缓存）；清除后归零且下次 find 重新扫描
+        // 索引信息＝**已建索引里的条目**（表名→类）；查一个不存在的表名不会往索引里塞负条目
+        // （旧口径按「查询过的表名」建负缓存，现在是「一次扫描建全表索引」，没匹配自然不进索引）
         assertTrue(EntityClassFinder(project).find("not_exist_table_1").isEmpty())
-        val (tables, classes) = EntityClassFinder.reverseLookupCacheInfo(project)
-        assertEquals("扫描后应缓存 1 张表条目", 1, tables)
-        assertEquals("负缓存条目类数应为 0", 0, classes)
+        assertEquals("无实体的夹具：索引条目应为空", 0 to 0, EntityClassFinder.reverseLookupCacheInfo(project))
+        assertEquals("但索引已建成（扫描 1 次，后续零扫描）", 1, EntityClassFinder.scanCountForTest(project))
+        assertTrue(EntityClassFinder(project).find("not_exist_table_1").isEmpty())
+        assertEquals("二次 find 不得重扫", 1, EntityClassFinder.scanCountForTest(project))
         // 清除缓存 → 信息归零 → 再 find 重新扫描（scanCount 重置后再次为 1）
         EntityClassFinder.clearReverseLookupCache(project)
         assertEquals("清除后缓存信息应归零", 0 to 0, EntityClassFinder.reverseLookupCacheInfo(project))
