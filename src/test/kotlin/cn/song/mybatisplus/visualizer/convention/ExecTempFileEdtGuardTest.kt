@@ -310,7 +310,7 @@ class ExecTempFileEdtGuardTest {
      * Java 方法声明点：行首缩进后跟 Java 修饰符，签名行内出现 `name(`（Kotlin `fun` 锚的 Java
      * 等价形态）。修饰符打头 + 词边界，普通调用点/字符串内出现不命中；返回每个声明处 `name(` 的下标。
      */
-    private fun declarationSites(src: String, fn: String): List<Int> {
+    private fun declarationIndexes(src: String, fn: String): List<Int> {
         val re = Regex(
             """(?m)^[ \t]*(?:public|private|protected|static|final|synchronized)\s+[\w.<>\[\], ?]*\b""" +
                 Regex.escape(fn) + """\s*\(""",
@@ -342,7 +342,7 @@ class ExecTempFileEdtGuardTest {
 
     /** 同名全部重载的函数体合并（委托壳 + 全参真身一并纳入判定面）。无任何声明时返回 null。 */
     private fun mergedBodyOf(src: String, fn: String): String? {
-        val bodies = declarationSites(src, fn).mapNotNull { bodyRange(src, it)?.let { r -> src.substring(r.first, r.last + 1) } }
+        val bodies = declarationIndexes(src, fn).mapNotNull { bodyRange(src, it)?.let { r -> src.substring(r.first, r.last + 1) } }
         return when {
             bodies.isEmpty() -> null
             bodies.size == 1 -> bodies[0]
