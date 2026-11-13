@@ -1587,6 +1587,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 }
                 cn.song.mybatisplus.visualizer.log.agent.AgentManager am =
                         cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project);
+                // T-PanweiInsertCapture F2/F3：最近一次 agent 心跳上报（组装失败 / 门禁抑制 / 登记盲区），
+                // 留一个本地引用，避免状态栏每个字段各取一次原子读
                 cn.song.mybatisplus.visualizer.log.agent.AgentAttachStats attachStats =
                         cn.song.mybatisplus.visualizer.log.agent.AgentAttachReport.latest();
                 texts = CaptureStatusBar.captureStatusLineText(new CaptureStatusBar.CaptureStatusLine(
@@ -1604,7 +1606,21 @@ public class SqlLogPanel extends JPanel implements Disposable {
                         catchUpBadgeState.onNextBeat(manager.getEntries().pendingNotifyCount()),
                         // T-SqlListCatchup 券 F2a：agent 侧事件队列丢弃累计（心跳 dropped 键，>0 挂尾）——
                         // 风暴期队列溢出丢弃从此在用户视角可见，不再只有 agent 进程内计数
-                        attachStats != null ? attachStats.dropped() : 0L));
+                        attachStats != null ? attachStats.dropped() : 0L,
+                        // T-PanweiInsertCapture F1：让位期间被丢弃的可解析 SQL 行——「控制台明明有、
+                        // 面板就是没有」这类现场的唯一读数（此前两条通道都没有证据）
+                        manager.getConsoleBridge().getSuppressedSqlLines(),
+                        // T-PanweiInsertCapture F2/F3：agent 侧三条静默路径的透出（组装失败 / 门禁抑制 /
+                        // 登记盲区）；旧版 agent 无这些键时恒 0，不挂段
+                        attachStats != null ? attachStats.assembleFailures() : 0L,
+                        attachStats != null ? attachStats.nestSuppressed() : 0L,
+                        // T-NestGateObserve：陈旧嵌套（深度泄漏的确诊读数；正常嵌套恒 0）
+                        attachStats != null ? attachStats.nestStale() : 0L,
+                        attachStats != null ? attachStats.unresolvedBlind() : 0L,
+                        attachStats != null ? attachStats.blindClasses() : List.of(),
+                        // T-PanweiInsertCapture F6：iBatis 批处理在框架层不打印 SQL 行——只在「已识别到
+                        // iBatis 形态 且 增强捕获未开启」时提示（已开启时由 agent 侧的 BATCH 形态兜住）
+                        LogParseDiag.sawIbatisForm());
             } catch (Throwable ignored) {
                 texts = null; // runCatching().getOrNull() 等价
             }
