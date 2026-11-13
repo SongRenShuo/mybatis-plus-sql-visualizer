@@ -2396,10 +2396,21 @@ object DataSourceSelector {
         renderedDialectName: String? = null,
         targetDs: Any? = null,
     ): ExecMappingOutcome {
+        // T-PreviewNoReindex S2：方言映射落在**父目录**而不是文件本身。
+        //
+        // 现场（2026-11-13 23:27 用户会话）：每次预览写完 `mpsql-exec.sql` 平台都会
+        // `Reparsing …/mpsql-exec.sql because of language substitution` → `PushedFilePropertiesUpdater`
+        // → **整个工程进 dumb mode**。语言替换是**文件级映射**带来的：文件内容一变，平台就要重算它的
+        // 替换语言并推属性。预览侧的临时文件早就改成「按父目录映射」（平台 `getMappingForHierarchy`
+        // 自下而上继承），exec 侧一直按文件映射——本轮对齐成目录级，让内容重写不再触发替换重算。
+        //
+        // 映射对象是目录不影响「文件解析成目标方言」：平台按层级继承，目录下所有文件（含每轮新建的
+        // 预览临时文件）都拿到同一方言，同时也顺带消灭「每个新文件名各写一次映射」。
+        val mappingTarget = vf.parent ?: vf
         // targetLanguage == null 时没有可判定的语言（historical 行为 = MySQL 语义），闸门无从判起，
         // 保持既有链路（ensureMapped 内部按 MySQL 处理）。
         if (targetLanguage != null && !canCreateSqlPsiFor(targetLanguage)) {
-            val cleared = runCatching { DialectPreMapping.clearMapping(project, vf) }.getOrDefault(false)
+            val cleared = runCatching { DialectPreMapping.clearMapping(project, mappingTarget) }.getOrDefault(false)
             dialectMappedVf = null
             dialectMappedLanguageId = null
             LOG.warn(
@@ -2412,9 +2423,10 @@ object DataSourceSelector {
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
         // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
-        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf && dialectMappedLanguageId == targetId
-        if (DialectPreMapping.ensureMapped(project, vf, targetLanguage, inProcessMapped)) {
-            dialectMappedVf = vf
+        val inProcessMapped =
+            dialectMappedVf?.isValid == true && dialectMappedVf === mappingTarget && dialectMappedLanguageId == targetId
+        if (DialectPreMapping.ensureMapped(project, mappingTarget, targetLanguage, inProcessMapped)) {
+            dialectMappedVf = mappingTarget
             dialectMappedLanguageId = targetId
             LOG.info("[M36] dialect pre-mapped to $targetId for ${vf.name} (O-136 ds-dialect routing, ds=${targetDs?.javaClass?.simpleName})")
             return ExecMappingOutcome.APPLIED

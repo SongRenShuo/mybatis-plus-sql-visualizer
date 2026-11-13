@@ -140,3 +140,29 @@
 
 **建议**：本任务在「已取证 + 已加固」处收口，不再为 ~0.8~1.3s（且属平台行为）去改执行链时序；若用户后续仍被
 「预览后补全短暂失灵」困扰，再单独立项做候选 1。
+
+### 6.5 机制精确定位（2026-11-14 00:0x，从用户 23:27 日志取的全路径）
+
+```
+23:27:42,194  [M36] exec file updated via document+save
+23:27:43,015  (dumb mode task) PushedFilePropertiesUpdaterImpl$MyDumbModeTask
+23:27:43,022  Reparsing …/.idea/sql-visualizer/exec/mpsql-exec.sql because of **language substitution**
+```
+
+链条读法：**我们写这个文件 → 平台为它重算「语言替换」（因为我们给它设了方言映射）→ 推文件属性（需要索引）
+→ 整个工程进 dumb → 重解析该文件**。不是新文件、不是编译、也不是「映射写入」（备忘已把写入压到 0）。
+
+据此本轮再动一刀（`applyExecDialectMapping`）：**方言映射从「文件级」改为「父目录级」**——与预览侧一致
+（平台 `getMappingForHierarchy` 自下而上继承，目录映射覆盖其下全部文件，含每轮新建的预览临时文件）。
+目的：内容重写时不再因「文件自己的映射」触发替换重算。**该刀是否真能消掉 dumb 尚待复测**（本地单模块工程
+不复现，只能由用户在 demo 多模块工程验）。
+
+**决定性 A/B（2 分钟，用户侧）**：同一语句连开两次预览。
+- 第二次日志应出现 `[M36] exec file content already matches — write SKIPPED`；
+- 若第二次**不再**出现 `enter dumb mode` ⇒ 触发点＝**写入** ⇒ 下一刀走「exec 落盘推迟到首次执行」（方案 C）；
+- 若第二次**仍有** dumb ⇒ 触发点＝**替换重算本身**（与映射落点无关）⇒ 下一刀走「exec 文件不设方言映射，
+  方言由数据源/控制台决定」（方案 A，需验控制台内 SQL 解析仍按目标方言）。
+
+**not run**：`ExecPsiGateTest` 属 `testDbExecPsiGate` 桶（需 Database 插件），本地跑该桶会因缺插件红，
+本轮的映射目标改动由 CI 的 DB 腿覆盖；该测试的断言用 `configuredLanguageId`（含继承链），目录级映射
+仍会读出目标方言，预期不破。
