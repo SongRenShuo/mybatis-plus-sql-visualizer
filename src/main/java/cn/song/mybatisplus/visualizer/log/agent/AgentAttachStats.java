@@ -61,15 +61,50 @@ public record AgentAttachStats(
          * 整体覆盖口径与 {@code matched} 等键一致）。0 = 旧版 agent 未上报，或确实零丢弃——状态栏只对
          * &gt;0 挂段，两种「0」都不产生噪音。
          */
-        long dropped
+        long dropped,
+        /**
+         * T-PanweiInsertCapture F3：登记盲区 PS 实现类名（agent 心跳 {@code blind} 键，逗号分隔、有界 8 个）。
+         *
+         * <p>与 {@link #unregisteredImplementations} 不是一回事：{@code unreg} 是「类不在驱动白名单」，{@code blind} 是
+         * 「类在织入面内、但执行时登记表里查不到它的 SQL」。后者才是「同一秒 SELECT 能采到、INSERT
+         * 采不到」在实例级的最直接解释。空 = 旧 agent 未上报或确实无盲区。</p>
+         */
+        List<String> blindClasses,
+        /**
+         * T-PanweiInsertCapture F2：{@code onExecuteExit} 外层 {@code catch (Throwable)} 吞掉的组装失败累计
+         * （agent 心跳 {@code assembleFailures} 键）。事件「组不出来」此前零出口，&gt;0 即说明存在静默丢弃。
+         */
+        long assembleFailures,
+        /**
+         * T-PanweiInsertCapture F2：被 {@code NestGate} 抑制的外层帧累计（心跳 {@code nestSuppressed} 键）。
+         * 正常嵌套（Hikari/MyBatis 包装层）会产生少量计数；<b>持续增长</b>才是线程残留态的信号。
+         */
+        long nestSuppressed,
+        /**
+         * T-NestGateObserve：<b>陈旧嵌套</b>累计（心跳 {@code nestStale} 键）。
+         *
+         * <p>与 {@link #nestSuppressed} 的差别是本轮立项的核心：后者只统计「被内层挤掉的外层帧」，而深度泄漏时
+         * 被抑制的是最外层自己（该路径不计）。&gt;0 即说明某条线程存在一条活过阈值（默认 5s）的嵌套链，
+         * 也就是「深度未归零」的硬证据。</p>
+         */
+        long nestStale,
+        /**
+         * T-NestGateObserve：进程级最高嵌套深度（心跳 {@code nestMaxDepth} 键）。与 {@link #nestStale} 配对读——
+         * 泄漏后深度持续攀升说明残留帧在累加，而不是一次性的单帧错位。
+         */
+        long nestMaxDepth,
+        /**
+         * T-PanweiInsertCapture F3：登记盲区累计（心跳 {@code unresolved} 键），与 {@link #blindClasses} 配对读。
+         */
+        long unresolvedBlind
 ) {
 
-    /** 便捷构造器：unregisteredImplementations/dropped 缺省（Kotlin 默认参数；旧调用点兼容）。 */
+    /** 便捷构造器：unregisteredImplementations/dropped 及 T-PanweiInsertCapture F2/F3 新字段缺省（Kotlin 默认参数；旧调用点兼容）。 */
     public AgentAttachStats(long matched, long weavable, long woven, long matchedByInterface,
                             long interfaceWoven, long failed, long unmodifiable, long skippedByVersion,
                             int catchAll) {
         this(matched, weavable, woven, matchedByInterface, interfaceWoven, failed, unmodifiable,
-                skippedByVersion, catchAll, List.of(), 0L);
+                skippedByVersion, catchAll, List.of(), 0L, List.of(), 0L, 0L, 0L, 0L, 0L);
     }
 
     /** 命中类数（{@code matched} 与 {@code weavable} 取大——心跳只带后者时的零命中判据）。 */
@@ -94,7 +129,7 @@ public record AgentAttachStats(
 
     /** 单键匹配：{@code "matched":12}（允许冒号后空白；值域只认整数，防止把 JSON 字符串误读成数字）。 */
     private static final Pattern KEY_VALUE = Pattern.compile(
-            "\"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped)\"\\s*:\\s*(-?\\d{1,15})");
+            "\"(matched|matchedByInterface|weavable|woven|failed|unmodifiable|interfaceWoven|skippedByVersion|catchAll|dropped|assembleFailures|nestSuppressed|nestStale|nestMaxDepth|unresolved)\"\\s*:\\s*(-?\\d{1,15})");
 
     /**
      * 券 D：未登记实现类名（{@code "unreg":"a.b.C,d.e.F"}）。
@@ -104,6 +139,12 @@ public record AgentAttachStats(
      * 这类无害写法（逐项 trim 后丢弃空项）。</p>
      */
     private static final Pattern UNREG_VALUE = Pattern.compile("\"unreg\"\\s*:\\s*\"([A-Za-z0-9_.$, ]*)\"");
+
+    /**
+     * T-PanweiInsertCapture F3：登记盲区类名（{@code "blind":"a.b.C,d.e.F"}）。
+     * 值域与 {@link #UNREG_VALUE} 同款（只类名字符 + 逗号 + 空格）——脏串宁可不解析。
+     */
+    private static final Pattern BLIND_VALUE = Pattern.compile("\"blind\"\\s*:\\s*\"([A-Za-z0-9_.$, ]*)\"");
 
     /** 未登记实现的上报上限（与 agent 侧 {@code CaptureBudget.MAX_UNREGISTERED} 同值；超出的丢弃）。 */
     public static final int MAX_UNREGISTERED = 8;
@@ -142,12 +183,23 @@ public record AgentAttachStats(
                 values.getOrDefault("skippedByVersion", 0L),
                 values.getOrDefault("catchAll", 0L).intValue(),
                 parseUnregistered(body),
-                values.getOrDefault("dropped", 0L));
+                values.getOrDefault("dropped", 0L),
+                parseCsvNames(body, BLIND_VALUE),
+                values.getOrDefault("assembleFailures", 0L),
+                values.getOrDefault("nestSuppressed", 0L),
+                values.getOrDefault("nestStale", 0L),
+                values.getOrDefault("nestMaxDepth", 0L),
+                values.getOrDefault("unresolved", 0L));
     }
 
     /** {@code unreg} 值 → 类名列表（去空白、去空项、去重、截到 {@link #MAX_UNREGISTERED}；无键=空列表）。 */
     private static List<String> parseUnregistered(String body) {
-        Matcher m = UNREG_VALUE.matcher(body);
+        return parseCsvNames(body, UNREG_VALUE);
+    }
+
+    /** 通用 CSV 类名解析（{@code "key":"a,b"} → 列表；值域非法/空/无键 → 空列表）。 */
+    private static List<String> parseCsvNames(String body, Pattern pattern) {
+        Matcher m = pattern.matcher(body);
         String raw = m.find() ? m.group(1) : null;
         if (raw == null || raw.isEmpty()) return List.of();
         java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
