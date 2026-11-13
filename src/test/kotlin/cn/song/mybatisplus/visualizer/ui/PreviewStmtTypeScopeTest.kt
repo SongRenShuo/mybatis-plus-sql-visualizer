@@ -517,6 +517,40 @@ class PreviewStmtTypeScopeTest : BasePlatformTestCase() {
         )
     }
 
+    fun testEntityUpdateSetPlaceholdersHavePerColumnSources() {
+        // 用户 2026-11-13 真机：实体更新的六列 SET 共用 source "?"，面板按来源去重后只剩一行 `#?`，
+        // 填一个值（1）就把整列 SET 填成同一个数（order_no = '1', user_id = 1, …）。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DemoMapper demoMapper;
+                public void m(Order patch, Integer userId) {
+                    LambdaQueryWrapper<Order> w = new LambdaQueryWrapper<Order>();
+                    w.eq(Order::getUserId, userId).eq(Order::getStatus, 0);
+                    demoMapper.update(patch, w);
+                }
+                interface DemoMapper { int update(Object entity, Object wrapper); }
+                static class Order {
+                    private Integer id;
+                    private String orderNo;
+                    private Integer userId;
+                    private java.math.BigDecimal amount;
+                    private Integer status;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(argumentAnchorOf("update"))
+        assertNotNull(result)
+        assertTrue("应产出 UPDATE: ${result!!.sql}", result.sql.startsWith("UPDATE"))
+        val setSources = result.unresolvedParams.filter { it.startsWith("patch.") }
+        assertEquals("SET 每列一个来源（id 不进 SET）: ${result.unresolvedParams}", 5, setSources.size)
+        assertEquals("来源不得重复，否则面板会合成一行: $setSources", setSources.distinct().size, setSources.size)
+        assertTrue("来源取「实体实参.列名」: $setSources", setSources.contains("patch.order_no"))
+        assertFalse("不再出现整列共用的裸 \"?\" 来源: ${result.unresolvedParams}", result.unresolvedParams.contains("?"))
+    }
+
     fun testEvidenceTextAndCandidateSection() {
         val evidence = evidence(ConsumptionKind.UPDATE_ENTITY, "update", 0, IntRange.EMPTY, line = 120)
         val text = stmtTypeSourceText(evidence)

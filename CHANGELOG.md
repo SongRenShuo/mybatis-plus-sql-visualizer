@@ -10,6 +10,7 @@
 - **数据源列表末尾新增「添加数据源…」（T-DsListAddSource，c728c8058）**：预览面板两处数据源列表（内嵌控制台的数据源下拉、「更多 → 切换数据源」）末尾可直接打开 IDE 原生新建数据源对话框，建好后自动切到新源
 
 ### Fixed
+- **实体更新的 SET 参数被一个输入框填满（T-PreviewStmtTypeScope）**：`update(entity, wrapper)` 预览里 SET 各列的占位符此前共用一个来源（`?`），左栏只剩一行 `#?`——填一个值（比如 1）就把 `order_no / user_id / amount / status / create_time` 全填成 1。现在每列各有来源（`patch.order_no` …），一行一列，填哪个改哪个
 - **重新赋值那一行点预览，条件与消费全丢成无 WHERE 的 SELECT（T-PreviewStmtTypeScope，3731e2eed）**：`w = new LambdaQueryWrapper<>();` 这种「重新赋值」行上的预览图标挂在赋值表达式右侧的 `new` 上，此前只收该赋值表达式内部的链，后续另起语句的 `w.eq(...)` 与 `delete(w)` 全被丢掉。现在赋值锚点按**目标变量**走变量链，且重新赋值即分段——锚点在哪一段就只收那一段的条件（赋值前是声明段的 `user_id / status`，赋值后是 `order_no / user_id`），DELETE 不再串进上一段的 `status`
 - **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
 - **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层

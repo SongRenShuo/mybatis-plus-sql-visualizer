@@ -58,6 +58,9 @@ data class WrapperChain(
  * @param statementRange  该消费调用所在**语句**的偏移区间；[IntRange.EMPTY] = 不可得（拿不到语句祖先）
  * @param line            1-based 行号；<= 0 = 不可得（文档不可用）
  * @param fileName        消费调用所在文件名（wrapper 为字段时可跨文件）
+ * @param detail          档位相关的补充事实：实体更新档位下是**实体实参的源码文本**（`update(patch, w)` 的
+ *                        `patch`），供 SET 占位符逐列生成参数来源（`patch.order_no`）——否则整列 SET 共用
+ *                         同一个来源，面板只建一行、填一个值就把所有列填成同一个数。
  */
 data class WrapperConsumption(
     val kind: ConsumptionKind,
@@ -66,6 +69,7 @@ data class WrapperConsumption(
     val statementRange: IntRange = IntRange.EMPTY,
     val line: Int = 0,
     val fileName: String = "",
+    val detail: String = "",
 )
 
 /** T-PreviewStmtTypeScope：消费档位——决定预览语句类型的那一档。 */

@@ -364,13 +364,25 @@ class SqlPreviewService(internal val project: Project) {
                 located.chain.updateEntityConsumed &&
                     located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES -> {
                     val parsed = QueryWrapperParser(table).parse(located.chain)
+                    // T-PreviewStmtTypeScope（用户 2026-11-13 真机）：SET 占位符**逐列**给出来源
+                    // （`patch.order_no`）。此前六列共用 source "?"，面板按来源去重后只剩一行 `#?`，
+                    // 填一个值就把整列 SET 全填成同一个数（真机产物 `order_no = '1', user_id = 1, …`）。
+                    val entityExpr = located.chain.decidingConsumption
+                        ?.takeIf { it.kind == ConsumptionKind.UPDATE_ENTITY }
+                        ?.detail?.takeIf { it.isNotBlank() }
+                        ?: ENTITY_PARAM_FALLBACK
                     val sets = table.columns
                         .filter { !it.isId }
                         // T-M22-02：@Version 列排除——实体 SET 不含 version（对齐 MP
                         // OptimisticLockerInnerInterceptor：version 不进实体字段 SET，
                         // 由 [injectOptimisticLockCondition] 追加 `version = version + 1`）
                         .filter { it.columnName != table.versionColumn }
-                        .map { SetClause(column = ColumnRef(columnName = it.columnName), value = SqlValue.Placeholder("?")) }
+                        .map {
+                            SetClause(
+                                column = ColumnRef(columnName = it.columnName),
+                                value = SqlValue.Placeholder("$entityExpr.${it.columnName}"),
+                            )
+                        }
                     UpdateStatement(table, sets, parsed.conditions)
                 }
                 // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费；
@@ -1758,6 +1770,12 @@ class SqlPreviewService(internal val project: Project) {
      * 用于 [preview] 的 updateEntityConsumed / deleteConsumed 早退分支类型守卫，新类型走
      * ConverterRegistry 分派（保留主表别名与 JOIN，不走单表实体展开 / 单表 DeleteStatement 路径）。
      */
+    /**
+     * T-PreviewStmtTypeScope：实体更新 SET 占位符的来源前缀兜底——实体实参文本取不到时
+     * （锚点不在调用内 / 实参过长）用「实体」，面板参数行仍逐列可辨（`实体.order_no`）。
+     */
+    private val ENTITY_PARAM_FALLBACK = "实体"
+
     private val UPDATE_DELETE_JOIN_TYPES: Set<WrapperType> = setOf(
         WrapperType.UPDATE_JOIN,
         WrapperType.DELETE_JOIN,
