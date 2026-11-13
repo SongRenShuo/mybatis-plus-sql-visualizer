@@ -11,6 +11,8 @@ import com.intellij.openapi.roots.ProjectRootModificationTracker
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.impl.java.stubs.index.JavaAnnotationIndex
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
 import com.intellij.util.concurrency.AppExecutorUtil
@@ -462,27 +464,100 @@ class EntityClassFinder(private val project: Project) {
     }
 
     /**
-     * 全量扫描一次，建「表名（小写）→ 匹配类」索引（P2：跳过接口/枚举/注解类——MP 实体恒为 class）。
+     * 建「表名（小写）→ 匹配类」索引。**候选源＝平台注解索引**，不再遍历全项目类。
      *
-     * 与旧 [scanAllClassesByTableName] 的差别只有一处：**不再为单个表名提前 `equals` 过滤**，
-     * 而是把每个类解析出的表名都收进索引。类上的表名来源逐字不变：`@TableName` 注解值优先，
-     * 无注解则按类名推断（`EntityResolver.inferDecoratedTableName`）。
+     * 演进（每步都有真机读数）：
+     *  1. 「查一个表名就把全项目类扫一遍」——16804 类一趟 3.8s，用户每换一张表再吃一次；
+     *  2. 「一次扫描建全表索引」——消掉重复，但这一趟本身 **4.7~9.7s**（逐类 `inferDecoratedTableName`
+     *     要走命名策略/设置）；
+     *  3. 现在：`JavaAnnotationIndex.getAnnotations("TableName", …)` **只取带注解的类**（索引查询，
+     *     O(log n) + 候选数）。`cust-big-demo` 上候选从 16804 降到「带 `@TableName` 的实体数」，
+     *     且不再为每个非实体类算推断表名——那才是 4.7s 的大头。
+     *
+     * 为什么可以丢掉「无注解按类名推断」这半边：慢路径存在的理由是「实体名与表名对不上、只有注解能
+     * 说明」，而**按命名约定的匹配本来就走快路径**（[candidateClassNames] 4 个候选 + `EntityResolver`
+     * 按真实策略校验表名，覆盖驼峰/Entity 后缀/`t_` 前缀等）。索引侧不再重复做这件事。
+     *
+     * 注解索引的键是**简单名**（243 字节码实证：`JavaAnnotationElementType.indexStub` 先 `indexOf('(')`
+     * 截断再取短类名，属性名/属性值都不进索引）——所以下面按名字拿到候选后**自己读注解值**，
+     * 并按注解原文筛掉别家同名注解（不 resolve，缺依赖时也能判）。
+     *
+     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值的实体取不到表名（老版本全量扫描同样
+     * 取不到注解值，但会退化成「按类名推断」而可能命中）——约定命名场景仍由快路径兜住。
      */
     private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
         indexScanDelayMsForTest?.let { if (it > 0) Thread.sleep(it) }
+        val annotated = scanAnnotatedTableIndex()
+        if (annotated.isNotEmpty()) return annotated
+        // 一个 `@TableName` 都没有（纯 JPA / 原生 MyBatis 工程；以及测试夹具——stub 索引对 fixture 里
+        // 新建的文件不给结果）：退回「全项目类名推断」的老口径，能力不降级、成本只在这种
+        // 「本来就没有注解可查」的工程里付（此时老口径本来也在付）。
+        LOG.info("[open-perf] 反查索引候选源=注解索引为空 → 退回全项目推断扫描")
+        return scanInferredTableIndex()
+    }
+
+    /**
+     * 候选源＝**平台注解索引**：只取带 `@TableName` 的类，不再遍历全项目类。
+     *
+     * 演进（每步都有真机读数）：
+     *  1. 「查一个表名就把全项目类扫一遍」——16804 类一趟 3.8s，用户每换一张表再吃一次；
+     *  2. 「一次扫描建全表索引」——消掉重复，但这一趟本身 **4.7~9.7s**（逐类 `inferDecoratedTableName`
+     *     要走命名策略/设置）；
+     *  3. 现在：`JavaAnnotationIndex.getAnnotations("TableName", …)`（索引查询，O(log n) + 候选数），
+     *     候选从「全项目类数」降到「带 `@TableName` 的实体数」，且不再为非实体类算推断表名。
+     *
+     * 为什么可以让出「无注解按类名推断」这半边：慢路径存在的理由是「实体名与表名对不上、只有注解能
+     * 说明」，而**按命名约定的匹配本来就走快路径**（[candidateClassNames] 4 个候选 + `EntityResolver`
+     * 按真实策略校验表名，覆盖驼峰/Entity 后缀/`t_` 前缀等）。
+     *
+     * 注解索引的键是**简单名**（243 字节码实证：`JavaAnnotationElementType.indexStub` 先 `indexOf('(')`
+     * 截断再取短类名，属性名/属性值都不进索引）——所以拿到候选后**自己读注解值**，
+     * 并按注解原文筛掉别家同名注解（不 resolve，缺依赖时也能判）。
+     *
+     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值读不到表名。
+     */
+    private fun scanAnnotatedTableIndex(): Map<String, List<MatchedClass>> {
+        val index = HashMap<String, MutableList<MatchedClass>>()
+        val scope = GlobalSearchScope.projectScope(project)
+        val annotations = JavaAnnotationIndex.getInstance()
+            .getAnnotations(TABLE_NAME_ANNOTATION_SIMPLE_NAME, project, scope)
+        var scanned = 0
+        for (annotation in annotations) {
+            // 取消检查：候选虽少，但读注解/取宿主类仍是 PSI 访问，平台要写权限时必须能被中断
+            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
+            scanned++
+            if (!isMybatisTableNameAnnotation(annotation)) continue
+            val clazz = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java) ?: continue
+            if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+            if (isVoDto(clazz)) continue
+            val className = clazz.name ?: continue
+            val tableName = tableNameAnnotation(clazz)?.takeIf { it.isNotBlank() } ?: continue
+            index.getOrPut(tableName.lowercase()) { mutableListOf() }
+                .add(MatchedClass(className, clazz.qualifiedName))
+        }
+        LOG.info(
+            "[open-perf] 反查索引候选源=注解索引 候选注解=${annotations.size} " +
+                "入索引类=${index.values.sumOf { it.size }}",
+        )
+        return index
+    }
+
+    /**
+     * 退回口径：全项目短名遍历 + 逐类推断表名（`@TableName` 优先、无注解按命名策略推断）。
+     * 只在注解索引一个候选都给不出时使用（见 [scanAllTablesIndex]）。
+     */
+    private fun scanInferredTableIndex(): Map<String, List<MatchedClass>> {
         val cache = PsiShortNamesCache.getInstance(project)
         val scope = GlobalSearchScope.projectScope(project)
         val index = HashMap<String, MutableList<MatchedClass>>()
         var scanned = 0
         for (shortName in cache.getAllClassNames()) {
-            // 取消检查（T-GutterDupFreeze 口径，与库扫描同一收口）：全量短名遍历跑在阻塞式
-            // ReadAction 里，读锁全程不放——平台需要写锁时须能中断，否则冻住 EDT。
+            // 取消检查（T-GutterDupFreeze 口径）：全量短名遍历跑在读动作里，平台需要写锁时须能中断
             if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
             scanned++
             // 短名快筛：VO/DTO 结尾的直接跳过（避免逐类检查）
             if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
             for (clazz in cache.getClassesByName(shortName, scope)) {
-                // P2：接口/枚举/注解类不可能是 MP 实体，跳过（减少 PSI 访问）
                 if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
                 if (isVoDto(clazz)) continue
                 val className = clazz.name ?: continue
@@ -497,6 +572,18 @@ class EntityClassFinder(private val project: Project) {
             }
         }
         return index
+    }
+
+    /**
+     * 该注解是不是 MyBatis-Plus 的 `@TableName`（文本判据，不触发 resolve）。
+     *
+     * 索引只保证「写的简单名是 TableName」；能解析出 FQN 时要求等于本注解 FQN，拦掉自定义同名注解
+     * （解析不出来＝工程没接 MP 依赖，此时按写的名字认）。
+     */
+    private fun isMybatisTableNameAnnotation(annotation: com.intellij.psi.PsiAnnotation): Boolean {
+        if (annotation.nameReferenceElement?.referenceName != TABLE_NAME_ANNOTATION_SIMPLE_NAME) return false
+        val resolved = runCatching { annotation.qualifiedName }.getOrNull()
+        return resolved == null || resolved == TABLE_NAME
     }
 
     /** 类级 @TableName 注解值；无注解或值非字符串返回 null（短名兜底——注解类不可解析环境仍可识别）。 */
@@ -600,6 +687,12 @@ class EntityClassFinder(private val project: Project) {
         private val LOG = Logger.getInstance(EntityClassFinder::class.java)
 
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
+
+        /**
+         * 注解 stub 索引的键（**简单名**，不是 FQN）：243 `JavaAnnotationElementType.indexStub` 建键时
+         * 先 `indexOf('(')` 截断再取短类名 ⇒ 含属性值的完整写法与 FQN 写法都归到这个短名下。
+         */
+        private const val TABLE_NAME_ANNOTATION_SIMPLE_NAME = "TableName"
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
 

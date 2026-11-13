@@ -346,7 +346,10 @@ object XmlSqlCompletionContextResolver {
         // T-StartupReadLockFreeze §十九（2026-11-13 15:00 真机）：原实现把**全项目** `@TableName` 实体
         // 逐个 `EntityResolver.resolve`，最后才 `take(50)`——2500 表工程上一次 6~10s（`pre-assembly`
         // 埋点直接读出 completion=10327ms/5924ms，且无缓存、第二次照样慢）。
-        // 现在：①命中项目级缓存直接返回；②边解析边判上限，够 50 就停；③超过预算立刻放弃剩余。
+        // §三十五（2026-11-13 20:xx 真机）：即便加了缓存与预算，**冷态首次仍要 374ms**（预算 400ms 打满，
+        // 只解析出 1 个候选——本工程 `EntityResolver.resolve` 单次就是百毫秒级）。候选只服务补全的
+        // JOIN 表名提示，不该压在点击/补全路径上 ⇒ 改「缓存优先」：未命中就派后台预热（去重、可取消），
+        // 本次降级为空，预热落地后 `refreshCompletionContext()` 回填。
         val now = System.currentTimeMillis()
         val cachedBase = candidatesCache.get(project.locationHash)?.let { entry ->
             // §二十：失效判据从 PsiModificationTracker 改成 TTL——本插件预览链自己会写临时 SQL 文档，
@@ -359,33 +362,58 @@ object XmlSqlCompletionContextResolver {
             }
         }
         val base = cachedBase ?: run {
-            val resolved = mutableListOf<TableInfo>()
-            val resolvedSeen = mutableSetOf<String>()
-            val deadline = System.currentTimeMillis() + candidatesBudgetMs
-            var scanned = 0
-            val entities = tableNameEntitiesProviderForTest?.invoke(project)
-                ?: findTableNameEntities(project)
-            for (entityClass in entities) {
-                if (resolved.size >= CANDIDATES_CAP) break
-                if (System.currentTimeMillis() >= deadline) {
-                    LOG.info(
-                        "[open-perf] ctx candidates budget hit: scanned=$scanned resolved=${resolved.size} " +
-                            "budget=${candidatesBudgetMs}ms",
-                    )
-                    break
-                }
-                scanned++
-                entitiesResolved++
-                val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: continue
-                if (table.tableName.isEmpty()) continue
-                if (resolvedSeen.add(table.tableName)) resolved += table
+            if (candidatesBlockingBuildEnabled()) {
+                computeCandidatesNow(project)
+            } else {
+                warmCandidates(project) // 后台预热（含单飞 coalesceBy）；本次返回主表兜底
+                emptyList()
             }
-            candidatesCache[project.locationHash] = CandidatesEntry(System.currentTimeMillis(), resolved)
-            resolved
         }
         base.forEach { table -> if (seen.add(table.tableName)) result += table }
         return result.take(CANDIDATES_CAP)
     }
+
+    /**
+     * 冷态候选的**同步**计算（仅在测试口径、或由 [warmCandidates] 的后台任务调用时执行）。
+     *
+     * 边解析边判上限（够 [CANDIDATES_CAP] 就停）、超 [candidatesBudgetMs] 立刻放弃剩余、结果落 TTL 缓存。
+     */
+    private fun computeCandidatesNow(project: Project): List<TableInfo> {
+        val resolved = mutableListOf<TableInfo>()
+        val resolvedSeen = mutableSetOf<String>()
+        val deadline = System.currentTimeMillis() + candidatesBudgetMs
+        var scanned = 0
+        val entities = tableNameEntitiesProviderForTest?.invoke(project)
+            ?: findTableNameEntities(project)
+        for (entityClass in entities) {
+            if (resolved.size >= CANDIDATES_CAP) break
+            if (System.currentTimeMillis() >= deadline) {
+                LOG.info(
+                    "[open-perf] ctx candidates budget hit: scanned=$scanned resolved=${resolved.size} " +
+                        "budget=${candidatesBudgetMs}ms",
+                )
+                break
+            }
+            scanned++
+            entitiesResolved++
+            val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: continue
+            if (table.tableName.isEmpty()) continue
+            if (resolvedSeen.add(table.tableName)) resolved += table
+        }
+        candidatesCache[project.locationHash] = CandidatesEntry(System.currentTimeMillis(), resolved)
+        return resolved
+    }
+
+    /**
+     * 冷态是否允许**同步**算候选。默认＝单测口径 true（既有用例按「首次即拿到候选」写）；
+     * 生产 false ⇒ 缓存优先 + 后台预热（`candidatesBlockingBuildForTest = false` 可在用例里验生产分支）。
+     */
+    private fun candidatesBlockingBuildEnabled(): Boolean =
+        candidatesBlockingBuildForTest
+            ?: com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode
+
+    /** 测试缝：强制冷态口径（null＝按环境判定）。 */
+    internal var candidatesBlockingBuildForTest: Boolean? = null
 
     /** 候选缓存条目：按 `PsiModificationTracker` 版本失效（改代码/加实体即重建一次）。 */
     private data class CandidatesEntry(val createdAt: Long, val tables: List<TableInfo>)
@@ -421,7 +449,7 @@ object XmlSqlCompletionContextResolver {
         // 单测走同步路径（测试线程持读动作、没有真正的索引等待），生产走 nonBlocking
         if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
             val ok = runCatching {
-                buildCandidates(project, null)
+                computeCandidatesNow(project)
                 true
             }.getOrDefault(false)
             if (ok) onReady()
@@ -430,7 +458,7 @@ object XmlSqlCompletionContextResolver {
         }
         return runCatching {
             ReadAction.nonBlocking<Unit> {
-                buildCandidates(project, null)
+                computeCandidatesNow(project)
                 Unit
             }
                 .inSmartMode(project)

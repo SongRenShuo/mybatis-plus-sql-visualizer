@@ -36,6 +36,8 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
             XmlSqlCompletionContextResolver.candidatesBudgetMs = 400L
             // 注入缝必须复原：同一 JVM 里后续测试类会拿到已 dispose 的 PSI 类（实测 6 例连锁红）
             XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = null
+            // §三十五 口径缝同样复原（null＝按环境判定：单测同步、生产缓存优先）
+            XmlSqlCompletionContextResolver.candidatesBlockingBuildForTest = null
         } finally {
             super.tearDown()
         }
@@ -147,5 +149,50 @@ class XmlSqlCompletionCandidatesBudgetTest : BasePlatformTestCase() {
 
         assertEquals("预览打开不得产出候选", 0, ctx.candidates.size)
         assertEquals("预览打开不得解析任何实体", 0, XmlSqlCompletionContextResolver.entitiesResolved)
+    }
+
+    /**
+     * §三十五（2026-11-13 20:xx 真机）：**生产口径冷态不得同步解析候选**——命中缓存优先，未命中派预热。
+     *
+     * 真机读数：冷态首次 `candidates=374ms`（预算 400ms 打满，只解析出 1 个候选；本工程
+     * `EntityResolver.resolve` 单次百毫秒级），而候选只服务 JOIN 表名提示，不该压在点击/补全路径上。
+     * 反向：把口径改回同步（`candidatesBlockingBuildForTest = true`）→ 首次就拿到候选，本用例必红。
+     */
+    fun test冷态候选生产口径不同步解析_缓存优先() {
+        val src = StringBuilder("package com.example;\n")
+        for (i in 1..60) {
+            src.append("@com.baomidou.mybatisplus.annotation.TableName(\"t_cold_$i\")\n")
+            src.append("public class ColdEntity$i { private Long id; }\n")
+        }
+        val entitiesFile = myFixture.addFileToProject("ColdEntities.java", src.toString())
+        val entityClasses = com.intellij.psi.util.PsiTreeUtil
+            .findChildrenOfType(entitiesFile, com.intellij.psi.PsiClass::class.java)
+            .filter { it.name?.startsWith("ColdEntity") == true }
+        XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = { entityClasses }
+        XmlSqlCompletionContextResolver.candidatesBlockingBuildForTest = false
+        myFixture.configureByText(
+            "ColdMapper.xml",
+            """
+            <mapper namespace="com.example.ColdMapper">
+              <select id="selectCold" resultType="map">select * from t_cold_1</select>
+            </mapper>
+            """.trimIndent(),
+        )
+        val tag = com.intellij.psi.util.PsiTreeUtil.findChildrenOfType(myFixture.file, XmlTag::class.java)
+            .first { it.getAttributeValue("id") == "selectCold" }
+
+        val first = XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = true)
+        assertTrue(
+            "冷态首次不得同步解析候选（实际拿到 ${first.candidates.size} 个）",
+            first.candidates.size <= 1,
+        )
+
+        // 预热落地（单测口径：warm 同步执行）后：只读缓存可用，下一次查询命中候选
+        assertTrue(
+            "预热落地后只读候选缓存应有内容",
+            XmlSqlCompletionContextResolver.cachedCandidateTables(project).isNotEmpty(),
+        )
+        val second = XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = true)
+        assertTrue("预热后下一次应拿到候选（实际 ${second.candidates.size} 个）", second.candidates.size >= 2)
     }
 }
