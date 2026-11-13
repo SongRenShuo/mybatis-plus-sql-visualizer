@@ -996,3 +996,31 @@ freeze/sluggish 记账（最近的记账停在 19:56:57 启动阶段），同期
 
 已知边界（记档）：`@TableName(SOME_CONSTANT)` 这类非字面量取值读不到表名；不再由索引兜「无注解 +
 类名不合约定」的实体（老口径靠推断能命中，现在只能靠改名或加注解）。
+
+### 22.13 用户提醒「记得兼容不同 ORM」——候选源改成按 ORM 分源 + 未命中回补
+
+22.12 把候选源收窄到 `@TableName` 后，**JPA 工程（`@Table(name=…)`）会整片漏掉**；而且这种漏在测试
+夹具里看不见（注解索引对 fixture 曾给不出结果，用例走的是推断那半边，绿得毫无意义）。按下面三条收口：
+
+1. **分源表**（新 `psi/TableNameAnnotations`，单一事实源）：MP `@TableName(value)`、
+   `javax.persistence.Table(name)`、`jakarta.persistence.Table(name)`；**非字面量**取值返回 null。
+2. **未命中回补**：注解索引查不到该表时，触发一次「全项目推断扫描」并合并进同一索引（每个缓存期
+   至多一次，`inferredScanCount` 可读）。这条覆盖 **MBG / iBatis / Kotlin / 自定义映射**——它们根本没有
+   表名注解，只靠注解索引必然漏。口径与注解索引一致：派到应用线程池、EDT 不等、非 EDT 有界等预算。
+3. **依赖库扫描**（T-JarEmbedded 方案 1）也改用同一注解源——共享模型模块里的 JPA 实体同样能被反查。
+
+**跨 ORM 覆盖矩阵**（改后）：
+
+| 工程类型 | 表名来源 | 走哪条 | 成本 |
+|---|---|---|---|
+| MP（`@TableName`） | 注解索引 | 快路径① | 稳态 ~200ms/结构版本（后台） |
+| JPA（`@Table`） | 注解索引（同一索引） | 快路径① | 同上 |
+| MBG / iBatis / Kotlin / 自定义 | 无注解 ⇒ 类名约定 + 推断 | 快路径②③，未命中时回补① | 首个未命中触发一次全项目推断（后台，4.7s 级） |
+
+**踩坑记档（L68）**：`PsiAnnotation.getQualifiedName()` 在注解类**解析不到**时返回**短名**而非 null
+（探针实测 `@TableName` → `qn=TableName`）。按 FQN 相等比较会把所有「缺依赖」场景判成「别家注解」
+⇒ 快路径与回补一起静默失效，自测时 11 个反查用例同时归零。判据改为「带包的 FQN 才参与比较」。
+
+守卫：`TableNameAnnotationsTest` 7 例；Heavy 补 2 例（JPA 命中、回补至多一次且未命中不再扫）。
+反向：摘掉 JPA 源 → 5 例红，还原复绿。**not run**：真机 JPA/iBatis 工程实测（沙盒语料是 MP+MBG 混合，
+JPA 分支由夹具覆盖）。
