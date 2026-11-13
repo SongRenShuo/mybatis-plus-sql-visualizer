@@ -74,4 +74,24 @@
 
 ## 七、实施记录
 
-待实施。落地后回填：提交哈希、注入点与开关、定向用例读数、沙盒 A1~A4 读数、not run 清单。
+**已实施（2026-11-13 22:0x）**：新增 `ui/PreviewAssemblyWarm.kt`（object，`warmOnce(tag)` 幂等），
+接线在 `XmlSqlGutterLineMarkerProvider` 的文件打开预热处（紧跟既有 `warmCompletionContextOnce`，同一信号）；
+Registry `sqlvis.preview.assemblyWarm`（默认开，plugin.xml `<registryKey>` 已登记）。
+
+落地形态与计划的偏差：无。要点复述：
+
+- 走 `XmlPreviewService.preview(...)` 这个**纯装配入口**（返回 `PreviewResult` 直接丢弃），不碰
+  `SqlPreviewService.previewAsync`（那条会写 exec 临时文件、建控制台），所以 §三 W1-b 的四条边界天然满足；
+- 去重键＝`文件 url#语句 id`；`coalesceBy(this, "assemblyWarm:$key")` 单飞；dumb 跳过并把 key 放回；
+  失败/取消把 key 放回（下次渲染重试）；`expireWith(project)` 随工程关闭撤掉；
+- 测试缝：`enabledProvider`（Registry 读取）、`syncForTest`（单测同步）、`runCount`（次数读数）、
+  `resetForTest()`（跨测试类清态）。
+
+守卫 `PreviewAssemblyWarmTest` **5/0/0/0**：开关关死不跑、同语句只跑一次、无 id 不跑、预热不建弹窗且
+工程根不新增任何文件（A3 副作用门的机内版）、**接线点源码守卫**（防止「holder 有用例但没人调它」的空绿）。
+反向：摘掉 gutter 接线 + 去掉去重 → 恰 2 红，还原复绿。定向：`*PreviewAssemblyWarm*` / `*SqlPreviewPanel*` /
+`*XmlSqlGutter*` / plugin.xml 三守卫全绿。
+
+**not run**：A1/A2/A4 的沙盒读数（按用户 2026-11-13「这次最后的 gui 验收我来」留给用户验收）——
+判据见 §五；日志锚点 `[open-perf] assembly warm done in Xms key=…`（预热是否跑、耗时）与
+`[T-PreviewFast] request→dialog: Xms` / `[open-perf] dialog: construct=Xms show=Xms`（首开三段）。

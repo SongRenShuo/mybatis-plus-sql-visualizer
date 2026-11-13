@@ -489,6 +489,11 @@
              代码读取：ui/MbgExampleCallResolver.prefetchEnabledProvider。 -->
         <registryKey key="sqlvis.mbg.prefetch" defaultValue="true"
                      description="Prefetch MBG Example call-site resolution in background (speeds up the first SQL preview). Disable if the IDE freezes while opening large mapper XML files; previews keep working."/>
+        <!-- T-PreviewAssemblyWarm：文件打开时后台预热一次「预览装配」（只算不建 UI，结果丢弃），把首次
+             预览里的冷类加载/JIT 提前消化掉。关掉即回到「点击时才装配」，无任何残留。
+             代码读取：ui/PreviewAssemblyWarm.enabledProvider。 -->
+        <registryKey key="sqlvis.preview.assemblyWarm" defaultValue="true"
+                     description="Warm up the SQL preview assembly in background when a mapper XML opens (no UI is created). Disable to build the preview only on click."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

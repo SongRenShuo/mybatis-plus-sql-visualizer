@@ -54,6 +54,10 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         // 原来这笔成本压在点击预览里（pre-assembly:completion=13280ms）；挪到文件打开时，
         // 用户真去点预览/补全时已经是热态。每个文件只做一次，dumb 期跳过（等下次渲染再试）。
         runCatching { warmCompletionContextOnce(tag) }
+        // T-PreviewAssemblyWarm：同一信号再预热一次**装配**（只算不建 UI，结果丢弃）——把首次预览里
+        // 那 351ms 的冷类加载/JIT 提前消化掉；与上面 ctx 预热不同文件级去重、互不替代。
+        // 开关：Registry `sqlvis.preview.assemblyWarm`（默认开）；dumb 期跳过；失败静默。
+        runCatching { cn.song.mybatisplus.visualizer.ui.PreviewAssemblyWarm.warmOnce(tag) }
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
