@@ -90,6 +90,8 @@ object XmlPreviewService {
         var parsedRef: Triple<String?, String, XmlStatementKind>? = null
         // T-PreviewOpenPerfM2 M9：本轮是否因 dumb mode 跳过了 M2（决定要不要挂「索引就绪后重算」）
         var m2Skipped = false
+        // T-StartupReadLockFreeze §14.8：本轮 M2 是否转后台（决定要不要挂「解析落地后重算」）
+        var m2AwaitKey: String? = null
         val (model, staticWarnings) = try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
             // T-MbgPreviewParityAndOpenPerf P5：分段计时（把「打开慢」归因到具体一段）
@@ -121,10 +123,20 @@ object XmlPreviewService {
             val m2Allowed = project != null && !DumbService.getInstance(project).isDumb
             m2Skipped = profile != null && !m2Allowed
             if (m2Skipped) LOG.info("[open-perf] m2 skipped: dumb mode (索引未就绪)")
-            val collectionElements = if (profile == null || !m2Allowed) {
-                emptyMap()
+            // T-StartupReadLockFreeze §14.8：首开**只读缓存**，未命中就转后台并挂「落地后重算」。
+            // 依据（2026-11-13 沙盒日志）：`ReferencesSearch` 的开销藏在引擎内部——refsSeen 仅 13 条
+            // 却耗 2.4s，逐条自查的截止判定只在两次 next() 之间生效，同步等必然慢（用户侧 30s 档）。
+            val cachedM2 = if (profile == null || !m2Allowed) {
+                null
             } else {
-                MbgExampleCallResolver.resolve(project, parsed.namespace, statement.id).orEmpty()
+                MbgExampleCallResolver.resolveCachedOnly(project, parsed.namespace, statement.id)
+            }
+            if (profile != null && m2Allowed && cachedM2 == null) {
+                m2AwaitKey = MbgExampleCallResolver.warmForPreview(project, parsed.namespace, statement.id)
+            }
+            val collectionElements = cachedM2.orEmpty()
+            if (cachedM2 == null && profile != null) {
+                LOG.info("[open-perf] m2 deferred（首开出骨架，后台补齐后自动刷新）")
             }
             val perfM2 = System.currentTimeMillis()
             val built = XmlPreviewModel.from(
@@ -159,6 +171,15 @@ object XmlPreviewService {
             statementId = ref.second,
             kind = ref.third,
         )
+        // T-StartupReadLockFreeze §14.8：M2 已转后台 —— 带上等待 key，面板在解析落地后重算刷新。
+        // 重算闭包与新结果都走同一入口；重算时缓存已热，`resolveCachedOnly` 直接命中，不会再转后台
+        //（因此不会自激循环；万一仍未命中，新结果会再带一次 key，属于「再等一轮」而非空转）。
+        m2AwaitKey?.let { key ->
+            return finalResult.copy(
+                m2AwaitKey = key,
+                retryWhenIndexReady = { preview(fileText, statementId, project, entityContext, sourceContext) },
+            )
+        }
         // T-PreviewOpenPerfM2 M9：索引未就绪时跳过过 M2 —— 挂「就绪后重算一次」的闭包，
         // 面板收到后由 `DumbService.runWhenSmart` 在 smart mode 重算并刷新
         //（冷态秒出骨架 + 索引就绪后自动补齐真实 Criterion，无需用户手动刷新）。

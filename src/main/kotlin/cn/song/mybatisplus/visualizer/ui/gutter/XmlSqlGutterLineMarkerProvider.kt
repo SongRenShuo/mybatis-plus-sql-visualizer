@@ -85,13 +85,25 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             val file = tag.containingFile as? XmlFile ?: return
             val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
+                val t0 = System.currentTimeMillis()
                 val context = XmlPreviewService.resolveSourceContext(file, tag)
                 contextRef.set(context)
-                // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
-                // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
-                // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
-                val src = XmlSqlCompletionContextResolver.resolveXml(project, tag)
-                val entity = src.main?.let { m ->
+                val t1 = System.currentTimeMillis()
+                // T-StartupReadLockFreeze §十八（2026-11-13 14:48 真机）：索引期**不做**实体/表上下文解析。
+                // 它依赖索引，冷启动时会跟着 JavaBuilder/索引一起等——实测「点击 → compute 开始」11s，
+                // 其中 8s 是 IDE 在建索引/编译，而我们这段闭包就排在哪里等读锁；
+                // 实体上下文只影响补全提示（表/列来源），缺席不影响 SQL 预览本身。
+                val dumb = runCatching {
+                    com.intellij.openapi.project.DumbService.isDumb(project)
+                }.getOrDefault(false)
+                // §二十：预览打开不解析联表候选（实测 2~3s、最终只得 1 个候选），候选留给补全触发时再算
+                val src = if (dumb) null else XmlSqlCompletionContextResolver.resolveXml(project, tag, includeCandidates = false)
+                val t2 = System.currentTimeMillis()
+                LOG.info(
+                    "[open-perf] pre-assembly: sourceCtx=${t1 - t0}ms completion=${t2 - t1}ms dumb=$dumb" +
+                        if (dumb) "（索引未就绪，已跳过实体上下文）" else "",
+                )
+                val entity = src?.main?.let { m ->
                     SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
                 }
                 XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
@@ -102,6 +114,8 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
     }
 
     companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
+
         private val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", XmlSqlGutterLineMarkerProvider::class.java)
 

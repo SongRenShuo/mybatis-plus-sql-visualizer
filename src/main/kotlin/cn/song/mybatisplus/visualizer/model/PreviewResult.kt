@@ -93,6 +93,15 @@ data class PreviewResult(
      */
     val retryWhenIndexReady: (() -> PreviewResult?)? = null,
     /**
+     * T-StartupReadLockFreeze §14.8：本次预览的 M2 调用点检索**转后台**了（首开同步走太慢，
+     * 真机 2500 表工程一次检索 2.4s 且无法在引擎内部打断），这里是等待就绪的 key；
+     * 面板据此挂 `MbgExampleCallResolver.whenResolved`，解析落地后重算并刷新。
+     *
+     * 与 [retryWhenIndexReady] 的区别：后者语义是「等 smart mode」（已就绪时会立即触发，
+     * 拿来等 M2 会空转），前者等的是**具体一次解析完成**。null = 无需等待。
+     */
+    val m2AwaitKey: String? = null,
+    /**
      * UI-001：[warning] 是否为**信息性说明**（非渲染失败）。
      *
      * true 时面板横幅/元信息行用 `ℹ` 信息级前缀（`panel.banner.renderNote`），不再冒充

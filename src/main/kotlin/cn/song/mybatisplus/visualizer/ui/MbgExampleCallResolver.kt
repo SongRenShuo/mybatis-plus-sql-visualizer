@@ -87,6 +87,17 @@ object MbgExampleCallResolver {
     internal const val RESOLVE_BUDGET_MS = 800L
 
     /**
+     * 预览首开触发的后台补齐预算（§14.8）。
+     *
+     * 比预取的 1500ms 宽得多：它是在用户**已经看到占位骨架**之后跑的，不需要抢时间；
+     * 真机 2500 表工程上一次检索 2.5s 级，1500ms 只会让它反复超时、缓存永远暖不起来。
+     */
+    internal const val WARM_BUDGET_MS = 10_000L
+
+    /** 同一语句最多挂几个「解析完成即重刷」监听（防反复打开堆积）。 */
+    internal const val MAX_READY_LISTENERS = 8
+
+    /**
      * 缓存条目（T-PreviewOpenPerfM2 M1）：`ReferencesSearch` 是**全项目索引检索**，实测在最小规模
      * demo 上就占装配耗时的 78%（`[open-perf] m2=207` / `total=266ms`），大工程按命中规模放大；
      * 而原实现每次 `preview()` 都重跑。key＝`namespace#statementId`，失效判据＝解析时实际读过的
@@ -110,6 +121,26 @@ object MbgExampleCallResolver {
 
     /** 规模熔断：检索耗时超过 [SCALE_BREAKER_MS] 的 namespace，本会话不再预取（S2 第 1 条）。 */
     private val circuitOpenNamespaces: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * T-StartupReadLockFreeze §14.8：M2 就绪回调（预览首开转异步后的自动重刷入口）。
+     *
+     * 键＝[keyOf]；解析完成（成功或确认无结果）即全部触发并清空；同一 key 最多挂
+     * [MAX_READY_LISTENERS] 个，防同一语句反复打开把监听堆起来。
+     */
+    private val readyListeners: MutableMap<String, MutableList<() -> Unit>> = ConcurrentHashMap()
+
+    /**
+     * §14.11：已经启动过补齐的 key（同一缓存代只补一次）。
+     *
+     * 为什么必须有：warm 补不到结果时也会 `fireReady`（否则面板会一直等一个永不到来的回调），
+     * 面板据此重算——重算又冷命中、又转后台，形成自激。真机 14:31 实测 3 秒 10 轮。
+     */
+    private val warmAttempted: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** 纯判定（单测入口）：缓存已热 → 不必补；本代已补过 → 不再补。 */
+    internal fun shouldStartWarm(cacheFresh: Boolean, alreadyAttempted: Boolean): Boolean =
+        !cacheFresh && !alreadyAttempted
 
     /** 诊断/测试缝：缓存命中次数与真正执行检索的次数（单线程测试用，生产仅观测）。 */
     internal var cacheHits: Int = 0
@@ -144,6 +175,8 @@ object MbgExampleCallResolver {
         firstSeenAt.clear()
         budgetUsed.clear()
         circuitOpenNamespaces.clear()
+        warmAttempted.clear()
+        readyListeners.clear()
     }
 
     /** 一次检索的产物＋耗时（规模门与日志都要用真实检索耗时，不含等索引的时间）。 */
@@ -232,6 +265,119 @@ object MbgExampleCallResolver {
     }
 
     /**
+     * T-StartupReadLockFreeze §14.8：**只读缓存**，绝不触发检索。
+     *
+     * 预览首开用它决定「立即出占位骨架 + 转后台」，这是本单最后的形态：真机日志证明
+     * `ReferencesSearch` 在超大工程上的开销藏在引擎内部（`refsSeen` 仅 13 条却 2.4s），
+     * 逐条自查的截止判定只能在两次 `next()` 之间生效，救不了单次内部耗时。同步等它＝必然慢。
+     */
+    fun resolveCachedOnly(
+        project: Project?,
+        namespace: String?,
+        statementId: String,
+    ): Map<String, List<MockObject>>? {
+        if (project == null || namespace.isNullOrBlank()) return null
+        val key = keyOf(project, namespace, statementId)
+        cachedOnlyOverrideForTest?.let { return it(key) }
+        return cachedIfFresh(key)
+    }
+
+    /**
+     * 测试缝：冷缓存判定（平台测试里没有真实索引规模，用它模拟「一定未命中」）。
+     * 生产恒为 null。
+     */
+    internal var cachedOnlyOverrideForTest: ((String) -> Map<String, List<MockObject>>?)? = null
+
+    /**
+     * 测试缝：warm 调度的等待 key（模拟「已转后台」）；生产恒为 null。
+     * 配合 [cachedOnlyOverrideForTest] 可在无真实检索成本的前提下验证首开链路不阻塞。
+     */
+    internal var warmOverrideForTest: ((String) -> String?)? = null
+
+    /**
+     * 预览首开触发的后台补齐（§14.8）：**绕过**冷却 / 失败记忆 / 预算三道预取闸——
+     * 这不是投机性预取，而是「用户已经看着占位骨架在等结果」的显式请求。
+     *
+     * @return 就绪监听的 key；null＝无需等待（已有新鲜缓存 / 无法调度）
+     */
+    fun warmForPreview(project: Project?, namespace: String?, statementId: String): String? {
+        if (project == null || namespace.isNullOrBlank()) return null
+        val key = keyOf(project, namespace, statementId)
+        // §14.11（2026-11-13 14:31 真机）：同一 key 同一缓存代只允许启动一次补齐。
+        // 不在「补不到结果」这条路上设闸会自激：warm 无果 → fireReady → 面板重算 → 仍冷 → 再 warm，
+        // 实测 3 秒内 10 轮、每轮都走完整 showResult（控制台准备 + exec 写 + 重排），
+        // 用户看到的就是「一直不秒开」。缓存失效（文件改动）时才移除重试资格。
+        // 判在测试缝之前：否则「第二次打开该不该再补」在单测里不可观测。
+        if (!shouldStartWarm(cachedIfFresh(key) != null, key in warmAttempted)) {
+            LOG.info("[m2] warm skip reason=already-attempted key=$key")
+            return null
+        }
+        warmAttempted.add(key)
+        warmOverrideForTest?.let { return it(key) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return null
+        val deadlineAt = System.currentTimeMillis() + WARM_BUDGET_MS
+        LOG.info("[m2] warm start key=$key")
+        runCatching {
+            ReadAction.nonBlocking<CachedResolution?> {
+                resolveInReadAction(project, namespace, statementId, deadlineAt)
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .coalesceBy(this, "warm:$key")
+                .submit(AppExecutorUtil.getAppExecutorService())
+                .onSuccess { resolved ->
+                    if (resolved != null) {
+                        storeResolved(key, resolved)
+                    } else {
+                        LOG.info("[m2] warm unresolved（占位保持） $key")
+                        fireReady(key)
+                    }
+                }
+                .onError { t ->
+                    LOG.info("[m2] warm fail ${t.javaClass.simpleName} key=$key")
+                    fireReady(key)
+                }
+        }.onFailure { t ->
+            LOG.info("[m2] warm dispatch fail ${t.javaClass.simpleName} key=$key")
+            // 调度就没成功：退回补齐资格，下次打开还能重试
+            warmAttempted.remove(key)
+            fireReady(key)
+            return null
+        }
+        return key
+    }
+
+    /**
+     * 注册「该 key 解析完成」的一次性回调；已有新鲜缓存则**立即**回调。
+     *
+     * 键来自 [warmForPreview] 的返回值（预览结果里以 `m2AwaitKey` 透传），面板据此等落地再重算。
+     *
+     * @return true＝已受理（缓存命中当场回调 / 已登记等待）；false＝超出 [MAX_READY_LISTENERS]
+     */
+    fun whenResolved(key: String, callback: () -> Unit): Boolean {
+        if (cachedIfFresh(key) != null) {
+            callback()
+            return true
+        }
+        val list = readyListeners.computeIfAbsent(key) {
+            java.util.Collections.synchronizedList(mutableListOf())
+        }
+        if (list.size >= MAX_READY_LISTENERS) {
+            LOG.info("[m2] whenResolved 超上限，丢弃 key=$key")
+            return false
+        }
+        list.add(callback)
+        return true
+    }
+
+    /** 触发并清空该 key 的就绪回调（解析落地 / 确认无结果 / 失败三处都调，避免面板一直等）。 */
+    private fun fireReady(key: String) {
+        val list = readyListeners.remove(key) ?: return
+        val snapshot = synchronized(list) { list.toList() }
+        snapshot.forEach { cb -> runCatching { cb() } }
+    }
+
+    /**
      * 缓存外壳（**纯逻辑**，可单测）：命中且依赖文件未变则直接返回；否则执行 [compute] 并落缓存。
      *
      * `compute` 返回 null 表示「解析不到」——**不写缓存**：把「当时索引没就绪 / 找不到调用点」
@@ -260,6 +406,8 @@ object MbgExampleCallResolver {
         val cached = cache[key] ?: return null
         if (!isFresh(cached)) {
             LOG.info("[m2] cache stale (依赖文件已改) $key")
+            // §14.11：依赖文件改了＝新的缓存代，恢复补齐资格，否则这次改动永远补不上
+            warmAttempted.remove(key)
             return null
         }
         cacheHits++
@@ -279,6 +427,8 @@ object MbgExampleCallResolver {
     private fun storeResolved(key: String, resolved: CachedResolution): CachedResolution {
         cache[key] = resolved
         LOG.info("[m2] resolved ${describe(resolved)} $key")
+        // §14.8：预览首开在等这个信号（面板拿到后重算并刷新），预取成功也走这里
+        fireReady(key)
         return resolved
     }
 

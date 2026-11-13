@@ -273,10 +273,32 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
     // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
     prepareDefaultConsole()
+    // T-StartupReadLockFreeze §14.8：本次 M2 已转后台 —— 等**这一次解析落地**再重算。
+    // 不能复用下面的 `runWhenSmart`：smart mode 现已就绪，它会立即触发并重算出同一份占位骨架，
+    // 形成空转（每次空转还要再跑一遍装配）。这里等的是 `m2AwaitKey` 对应的那次检索完成。
+    val m2AwaitKey = result.m2AwaitKey
+    val m2Retry = result.retryWhenIndexReady
+    if (m2AwaitKey != null && m2Retry != null) {
+        val proj = project
+        if (proj != null) {
+            MbgExampleCallResolver.whenResolved(m2AwaitKey) {
+                if (!Disposer.isDisposed(this)) {
+                    SqlPreviewService.previewAsync(proj, { m2Retry() }) { fresh ->
+                        if (fresh != null && !Disposer.isDisposed(this)) {
+                            com.intellij.openapi.diagnostic.Logger
+                                .getInstance(SqlPreviewPanel::class.java)
+                                .info("[open-perf] m2 async ready applied")
+                            showResult(fresh)
+                        }
+                    }
+                }
+            }
+        }
+    }
     // T-PreviewOpenPerfM2 M9：本次因索引未就绪（dumb mode）跳过过 M2 调用点反推——索引就绪后
     // **自动重算一次**。BGT 重算 + 回 EDT 重放 showResult；新结果的 retryWhenIndexReady 恒为 null
     //（那一刻已是 smart mode），因此不会自激循环；面板已 dispose 则放弃。
-    result.retryWhenIndexReady?.let { retry ->
+    if (m2AwaitKey == null) result.retryWhenIndexReady?.let { retry ->
         val proj = project
         if (proj != null) {
             DumbService.getInstance(proj).runWhenSmart {

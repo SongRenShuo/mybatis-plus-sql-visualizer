@@ -533,6 +533,43 @@ IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，�
 
 **残留待验**：修后单次上限 800ms 是否仍被用户感知为「慢」（真机 2500 表工程首开一次检索的实际耗时分布），以及 `profile` 段（`resolveExampleProfile`）在超大工程上的耗时——两者都由下一次 `[open-perf]` 行裁决；若 `profile` 占大头，按 §14.3 另立 S7。
 
+### 14.8 二次返工（同日 13:14 日志）：截止判定生效但仍慢 —— 改为「首开不检索」
+
+用户复验仍报慢，新日志给出定性读数：
+
+```
+13:13:48 [open-perf] total=1427ms  m2=1362
+13:14:05 [open-perf] total=2482ms  m2=2469
+[m2] findCallSite empty method=selectByExample refsSeen=13 deadlineHit=true
+[m2] resolve skip reason=deadline elapsedMs=2469
+```
+
+**判读**：截止判定确实在跑（`deadlineHit=true`、`reason=deadline`），但耗时藏在 `ReferencesSearch` **引擎内部**——`refsSeen` 只有 13 条、单条投影就要一两百毫秒，逐条自查只能落在两次 `next()` 之间，管不住单次内部开销。结论：**超大工程上这条路不该同步走**，调阈值没有意义。
+
+**改法（S7，实施同批）**：
+- `MbgExampleCallResolver` 新增 `resolveCachedOnly`（只读缓存）、`warmForPreview`（后台补齐，预算 10s，绕过冷却/失败记忆/预取预算——这是「用户已在等结果」的显式请求）、`whenResolved`（一次性就绪回调，`storeResolved`/确认无结果/失败三处都触发）。
+- `XmlPreviewService`：首开只读缓存，未命中即 `warmForPreview` 并把 key 透传进 `PreviewResult.m2AwaitKey`（附 `retryWhenIndexReady` 重算闭包）；同步 `resolve()` 不再出现在预览链（由源码守卫钉住）。
+- `SqlPreviewPanelResultView`：`m2AwaitKey != null` 时挂 `whenResolved` 等落地再重算刷新；**不能**复用 `runWhenSmart`（smart 已就绪会立即触发、重算出同一份骨架，形成空转）。
+- 设计取舍：首开拿不到 Criterion 时左栏退化到占位骨架（`{{criterion.condition}}`），落地后自动补齐——用「一次自动刷新」换掉「首开最长 30s 的阻塞」。
+
+**读数**：M2 族 40/0/0/0（`MbgExample*` + `XmlEwResolver` + `MbgExamplePreview` 19 例）；面板族 17/0/0/0（`SqlPreviewPanelBindState` 11 / `EmptyHint` 1 / `PreparingPlaceholder` 2 / `ResolveDeadline` 3）。
+**踩坑**：新增 `PreviewResult` 字段后，`SqlPreviewPanelBindStateTest` 全红 `NoSuchMethodError`——增量编译没重编旧测试类（main 13:23 新、test 11:40 旧）。处置：`compileTestKotlin --rerun-tasks` 后复绿；同类「陈旧产物劫持」按既有纪律先查类时间戳，不要先怀疑代码。
+
+### 14.9 非 GUI 性能验收（用户 2026-11-13 要求：先自测再交 GUI）
+
+用户明确「你应该先自己尝试通过测试用例 非 gui 的方式进行验证性能问题 验证没问题我再通过 gui 验收」。据此新增 `MbgExampleAsyncOpenTest`（`BasePlatformTestCase`），在没有真实索引规模的前提下**模拟「一定未命中」**，把首开行为钉死：
+
+| 用例 | 断言 | 结果 |
+|---|---|---|
+| `test首开不等待检索且带就绪key` | ① `searchRuns` 不变（未触发同步检索）② warm 恰好发起 1 次 ③ 结果带 `m2AwaitKey` ④ 首开 `<1500ms` 返回 ⑤ 仍有可读 SQL（骨架） | 通过 |
+| `test缓存命中时不转后台也不带就绪key` | 命中＝warm 0 次、`m2AwaitKey` 为 null（不空转） | 通过 |
+
+测试缝：`cachedOnlyOverrideForTest`（冷缓存判定）与 `warmOverrideForTest`（warm 的等待 key），生产恒为 null。
+
+**反向验证（L50）**：把 `XmlPreviewService` 的 `resolveCachedOnly(...)` 换回同步 `resolve(...)` → **3 红**（两行为用例 + `预览首开不得同步调用 M2 检索` 源码守卫）；还原后 5/0/0/0。
+
+**边界**：这里证的是「首开不再等检索」这一机制，不证真实工程上的绝对耗时——后者仍需用户在 GUI/真机复验一次（判据见 §14.3 的日志行）。
+
 ---
 
 ## 十五、门禁读数（§13.10）
@@ -556,3 +593,190 @@ IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，�
 - `verifyPlugin` / `buildPlugin` / `verifySmoke`（按「大改动或发版前」判据，本单未触发；`plugin.xml` 只加了扩展未改 EP 声明与 since-build）；
 - 真机 5 步（§十）与 §14.3 的复验：待用户装包后执行；
 - 生产调度段（nonBlocking + 预算计时器 + `inSmartMode`）没有平台级用例，只做了 243 发行包的 API 面 javap 核实（见 §13.9）。
+
+---
+
+## 十六、第三轮现场（2026-11-13 13:47 沙盒）：装配已 64ms，但 `request→dialog` 仍 19.8s
+
+### 16.1 读数（同一份 `idea.log`）
+
+```
+13:47:20,413 [open-perf] total=64ms  parse+ctx=41 profile=2 m2=2 model=19        ← M2 已转后台，装配 64ms
+13:47:21,898 [T-PreviewFast] request→dialog: 19771ms                              ← 弹窗等了 19.8 秒
+19824 × "DatabaseSchemaResolver scan: table=…, bail=DasModel 遍历 0 张表（内省未完成）"
+      覆盖 830 张表 × 15 个数据源，13:47:11 → 13:47:56（约 45s），同一表重复 2~3 轮
+```
+
+### 16.2 判读
+
+- M2 那条链已经修好（§14.8 的 `m2 deferred` + 64ms 装配），**剩下的慢是另一条链**：schema 全表扫描。
+- 19824 次扫描**全部**以 `DasModel 遍历 0 张表（内省未完成）` 收尾——数据源模型还没加载，每一次都必然问不出结果；这是纯白付。
+- 量级：830 表 × 15 源 = 12450 次/轮，实际约 2 轮 → 45s，与 `request→dialog` 的 19.8s 窗口重叠，且这部分如果落在 EDT 上会直接堵住弹窗。
+
+### 16.3 修法（S8，已实施）
+
+1. **模型冷窗口**（`DatabaseSchemaResolver`）：`tryCompute` 在逐源遍历**前**自查 `modelsColdNow(project)`；一次「所有源都 bail 且无列无注释」即 `stampModelsCold`，窗口（`modelsColdWindowMs`，初值 20s）内直接返回 `scanBailed`，窗口外自动重试——与 `bailAfterTraversal` 的「查不了不记账、下次重试」自愈语义同向。
+2. **预热批次闸**：`prefetchTables` 在模型冷时整批跳过；一次预热超过 `BIG_BATCH_WARN=50` 张表时打一条 `prewarm big batch` 并附 8 帧调用栈（诊断用，下次真机直接读出「谁在整工程扫表」），且**禁止在 EDT 上跑**（自动改派业务线程）。
+3. 这三条都不改功能性结果：模型冷时本来也拿不到列，只是不再把「拿不到」重复 12450 次。
+
+### 16.4 读数与反向验证
+
+- 新增 `DatabaseSchemaResolverModelsColdTest` 5 例（窗口内/窗口外/未观测/窗口关闭/时钟回拨 + 接线钉死「tryCompute 必须在遍历前自查」）→ **5/0/0/0**；连同 `SchemaPrewarmWindowTest` / `DatabaseSchemaResolverBailTest` / `NegativeCacheTest` 全绿。
+- 反向验证（L50）：把 `tryCompute` 的自查改成 `if (false)` → 1 红（接线用例 `扫描入口必须在遍历前自查模型冷`）；还原后复绿。
+- 前一轮 CI（`e16552fb0`，run `43374030679`）8/8 job success。
+
+### 16.5 仍待确认
+
+「谁在整工程扫表」还没从静态代码里定位到（插件内公开入口 `prefetchTables` 的调用方都只传 1~8 张表）；本次用 `prewarm big batch` 的调用栈把它留给下一次真机日志。若下一轮日志显示调用方是实体解析/补全链，再按批量化或 dumb/初始化门进一步收敛。
+
+---
+
+## 十七、第四轮现场（2026-11-13 14:31 沙盒）：扫表已压掉，但出现自激刷新
+
+### 17.1 读数
+
+| 项 | 读数 | 判读 |
+|---|---|---|
+| 装配 | `[open-perf] total=6ms`（多轮） | M2 转后台已生效 |
+| schema 扫描 | 14:31 之后仅 **30 条**（模型冷 stamp 之后）；13:47 那场 19854 条不再出现 | §十六 的模型冷窗口生效 |
+| `m2 async ready applied` | 3 秒内 **10 次**（每 ~600ms 一轮） | **本轮新问题：自激刷新** |
+
+### 17.2 判读（自激链）
+
+```
+首开 → cachedOnly miss → warmForPreview 启动（key=K）
+     → warm 补不到结果 → fireReady(K) → 面板重算 showResult
+     → 重算仍 miss（本来就没结果）→ warmForPreview 再启动（K）
+     → 又 fireReady(K) → … 每 600ms 一轮
+```
+
+每轮都走完整 `showResult`（控制台准备 + exec 文件写 + 面板重排），用户感知就是「一直不秒开」。
+
+### 17.3 修法（S9）
+
+- `warmAttempted`：同一 key 同一缓存代只允许启动一次补齐；`shouldStartWarm(cacheFresh, alreadyAttempted)` 纯判定。
+  缓存失效（`cachedIfFresh` 发现依赖文件已改）时移除资格，保证改文件后仍能补；`warm` 调度失败也退回资格。
+- 仍然在「补不到结果」时 `fireReady`（否则面板会等一个永不到来的回调），但第二轮不再转后台 ⇒ 最多多一次重算即收敛，不自激。
+- 判定放在测试缝之前，使「第二次打开该不该再补」在单测里可观测。
+
+### 17.4 读数与反向验证
+
+- `MbgExampleAsyncOpenTest` 新增 `test补不到结果时不得自激重试`（首开 warm 1 次、二开不再转后台）与 `test补齐资格判定`；连同既有 2 例 → 4/0/0/0。
+- 反向验证：把资格判定改成 `if (false)` → `test补不到结果时不得自激重试` 1 红（`MbgExampleAsyncOpenTest.kt:71`），还原后复绿。
+- 前一阶段 CI（`c20101ff`）8/8 job success。
+
+---
+
+## 十八、第五轮现场（2026-11-13 14:48 沙盒）：11.9s 在「装配之前」，且大半是 IDE 冷启动
+
+### 18.1 时间线（同一次点击，逐行对齐）
+
+| 时刻 | 行 | 判读 |
+|---|---|---|
+| 14:47:52.27 | `request`（点击） | — |
+| 14:47:52.41 | `模型冷` stamp | schema 扫描已被压住 |
+| 14:47:55.7~57.3 | 830 × `prewarm skipped: models cold, tables=1` | 预热逐表投递仍在刷（已不扫表，只记账） |
+| 14:47:57.1 | `JavaBuilder … Compiling` | **IDE 正在建索引/编译** |
+| 14:48:03.3 | `[T-EmbeddedIdentify]`（compute 内首次落日志） | 点击到真正开算 = **11s** |
+| 14:48:03.52 | `[open-perf] total=53ms` | 插件装配 53ms |
+| 14:48:04.19 | `request→dialog: 11919ms` | 弹窗时间＝IDE 冷启动 + 装配 |
+| 14:48:33.3 | `request→dialog: 278ms`（第三次） | IDE 热后同一条语句 278ms |
+
+### 18.2 判读
+
+- 插件自身装配已稳定在 **53~64ms**；剩下的 11s 里绝大部分是 **IDE 冷启动期在建索引/编译**，我们的读动作排在后面等锁。
+- 但有两处是我们可以让出来的：
+  1. 点击闭包里的**实体/表上下文解析**（`XmlSqlCompletionContextResolver.resolveXml`）依赖索引，索引期跟着一起等；它只影响补全提示，不影响 SQL 预览。
+  2. `ColumnNameCalibrator` 在索引期仍会**逐表投递 schema 预热**（830 次），每次都在「模型冷」里空转——纯噪音。
+
+### 18.3 修法（S10）
+
+- `XmlSqlGutterLineMarkerProvider` 的点击闭包加 dumb 门：索引期跳过 `resolveXml`（entity 传 null），并打一条
+  `[open-perf] pre-assembly: sourceCtx=…ms completion=…ms dumb=…`，把「点击 → 装配 → 弹窗」三段拆开；
+  下一次真机日志可直接读出每段耗时，不再靠猜。
+- `ColumnNameCalibrator.requestPrefetch` 加 dumb 门：索引期不投递预热（那时数据源模型同样没加载），索引就绪后的重绘自然补。
+
+### 18.4 验收口径（给用户）
+
+「秒开」要在**IDE 空闲后**量：同一语句第三次打开是 278ms 属正常；刚打开工程、状态栏还在建索引/编译时点开，任何插件都要排在 IDE 自己的写动作后面。下次日志若仍慢，直接看 `pre-assembly` 那行的三段数字：
+- `sourceCtx` 大 → 文件/源上下文解析，按需缓存；
+- `completion` 大且 `dumb=false` → 实体上下文在热态也重，需按表批量或懒化；
+- 三段都小但 `request→dialog` 仍大 → 弹窗/面板构造成本（下一轮查 `showResult` 段）。
+
+---
+
+## 十九、第六轮现场（2026-11-13 15:00 沙盒，IDE 空闲后仍慢）：`completion` 段 6~10 秒
+
+### 19.1 读数（埋点直接读出）
+
+```
+15:00:37 [open-perf] pre-assembly: sourceCtx=17ms completion=10327ms dumb=false
+15:00:38 [T-PreviewFast] request→dialog: 11322ms
+15:00:51 [open-perf] pre-assembly: sourceCtx=0ms completion=5924ms dumb=false   ← 第二次仍 5.9s
+15:00:51 [T-PreviewFast] request→dialog: 5938ms
+```
+
+`dumb=false`（IDE 已空闲），耗时全部落在 `XmlSqlCompletionContextResolver.resolveXml`。
+
+### 19.2 根因
+
+`buildCandidates`（`XmlSqlCompletionContextResolver.kt:207` 旧实现）把**全项目** `@TableName` 实体逐个
+`EntityResolver().resolve(...)`，**最后**才 `take(CANDIDATES_CAP=50)`——2500 表工程上把上万实体解析一遍，
+只为取前 50 个；而且**没有缓存**，第二次打开照样重来。
+
+### 19.3 修法（S11）
+
+1. **边解析边判上限**：够 50 个立即 break（不再「全解析后截断」）。
+2. **项目级候选缓存**：键＝`locationHash`，值随 `PsiModificationTracker.modificationCount` 失效；
+   同会话第二次打开直接命中。
+3. **预算**：单次候选解析 400ms（`candidatesBudgetMs`）到点即停，剩余候选等下次缓存重建。
+4. 分段埋点 `[open-perf] ctx detail: entity=… resolve=… candidates=…`，下一次真机日志可直接定段。
+
+### 19.4 读数与反向验证（非 GUI）
+
+- 新增 `XmlSqlCompletionCandidatesBudgetTest`（60 个 `@TableName` 实体）：
+  - 首次解析的实体数必须 ≤ 50（上限截断）；
+  - 同会话第二次解析必须命中缓存（`candidatesCacheHits == 1`）。
+- **首版空绿已修**：Light 沙盒里 `AnnotatedElementsSearch` 返回空（`entitiesResolved=0`），用例等于没测；
+  加 `tableNameEntitiesProviderForTest` 注入缝喂真实 PSI 类后才有意义。
+- 反向验证：①去掉上限 break → 解析 60 个 → 1 红；②关掉缓存命中 → `cacheHits=0` → 1 红；均已还原。
+- 缓存引入的**用例串扰**也已处理：同测试类共享 project 时上一条用例的候选会漏进下一条
+  （`testNoNamespaceDegradesToNullMain` 因此变红），在既有用例 `setUp` 清缓存后复绿。
+
+### 19.5 待验
+
+下一次真机 `pre-assembly` 行预期 `completion` 从 5924~10327ms 降到 **≤400ms（首次）** 与 **≈0（二次）**；
+若首次仍偏大，按 `ctx detail` 的 `entity/resolve/candidates` 三段继续收。
+
+---
+
+## 二十、补全链修复（2026-11-13 16:40 用户真机栈）
+
+### 20.1 我的实现错误：候选补齐在无读动作的工作线程里跑
+
+用户贴的栈（`ApplicationImpl pooled thread`）：
+
+```
+XmlSqlCompletionContextResolver.warmCandidates(:312) → buildCandidates(:265)
+ → findTableNameEntities(:361) → JavaPsiFacade.findClass
+Read access is allowed from inside read-action only
+```
+
+`warmCandidates` 由面板 `executeOnPooledThread` 调用，而里面全是 PSI/索引读——不包读动作必然抛，
+异常被 `runCatching` 吞掉 ⇒ **候选永远补不进去**（用户看到的「补全一直空」），同时刷一屏 IDEA 报错。
+
+修法：`warmCandidates` 改用 `ReadAction.nonBlocking { … }.inSmartMode(project).expireWith(project)
+.coalesceBy(this, key)`（与 S1 预取链同款：等索引不持读锁、可取消），落地后回调刷新上下文；
+单测走同步分支（测试线程持读动作）。面板调用点相应去掉外层 `executeOnPooledThread`。
+
+### 20.2 顺带修掉的第二处：子句判定读旧 PSI
+
+「删掉最后几个字符再补就没提示」＝子句判定读 `containingFile.text`（PSI 未 commit，读到改动前 SQL），
+判成 TABLE ⇒ 列名分支整段跳过。改用 `parameters.editor.document.text` + `parameters.offset`（§二十三），
+源码守卫 `SqlCompletionClauseSourceTest` 钉住。
+
+### 20.3 环境残留：workspace.xml 的 `last.runner.id` 缺引号
+
+用户贴的 `PropertiesComponent` → `JsonDecodingException: Expected quotation mark` 即 T-LastUsedEdt 的存量损坏
+（`"mpsql.visualizer.last.runner.id": 8d6c2a1b-…` 值未加引号）。已直接修复 demo 仓 `.idea/workspace.xml`
+该条目（沙盒项目为 `mybatis-plus-sql-visualizer-demo`）；`.idea/` 不入库，无需提交。

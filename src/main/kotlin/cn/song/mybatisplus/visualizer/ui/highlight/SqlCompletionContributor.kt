@@ -108,11 +108,15 @@ class SqlCompletionContributor : CompletionContributor() {
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
                     // 异常/无文件回退 UNKNOWN）
+                    //
+                    // T-StartupReadLockFreeze §二十三（用户 2026-11-13）：「刚开始有补全，删掉最后几个字符
+                    // 再补就没了」。根因是这里读的是 **PSI 文本**——补全期间文档刚被改、PSI 还没 commit
+                    //（嵌入式/非项目 PSI 的 commit 是惰性的），读到的是**改动前**的 SQL，子句被判成
+                    // TABLE ⇒ 列名分支整段跳过（表名分支还在，所以看起来"补全还在但没列"）。
+                    // 改用**编辑器文档文本 + 编辑器 offset**（与补全器同一坐标系），不再受 commit 时机影响。
                     val clause = runCatching {
-                        detectClause(
-                            parameters.position.containingFile?.text.orEmpty(),
-                            parameters.position.textRange.startOffset,
-                        )
+                        val docText = parameters.editor.document.text
+                        detectClause(docText, parameters.offset.coerceIn(0, docText.length))
                     }.getOrElse { SqlClause.UNKNOWN }
 
                     // 表名：全位置提示（主表 + 联表候选，前缀过滤——T-M27.4 用户需求

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -63,6 +64,11 @@ object XmlSqlCompletionContextResolver {
     /** 联表候选上限（防大项目候选爆炸，M27 §3.2）。 */
     private const val CANDIDATES_CAP = 50
 
+    /** 候选解析预算（T-StartupReadLockFreeze §十九）：超预算即停，剩余候选等下次缓存重建。 */
+    internal var candidatesBudgetMs = 400L
+
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlCompletionContextResolver::class.java)
+
     /** 非实体参数简单名集合：MP Wrapper 族 + 基本类型包装 + 常见非实体类型（简单名匹配）。 */
     private val NON_ENTITY_SIMPLE_NAMES = setOf(
         // MP Wrapper 族（简单名匹配——测试环境类型未解析场景 canonicalText 为短名同样生效）
@@ -83,7 +89,17 @@ object XmlSqlCompletionContextResolver {
      *                     经 [XmlFile.rootTag] 向上获取；id 属性即语句 id）
      * @return [SourceSqlContext]；任何环节失败均降级（main=null/空候选/空参数名），不抛异常
      */
-    fun resolveXml(project: Project, statementTag: XmlTag): SourceSqlContext {
+    fun resolveXml(
+        project: Project,
+        statementTag: XmlTag,
+        /**
+         * T-StartupReadLockFreeze §二十（2026-11-13 15:31 真机）：是否解析**联表候选**（全项目
+         * `@TableName` 实体逐个 `EntityResolver.resolve`）。预览打开一律传 false——实测候选段
+         * 2~3s 且最终只得到 1 个候选（多数实体解析结果为空表名，上限按"已解析"计数拦不住整轮扫描）；
+         * 候选只服务 JOIN 表名补全，等用户真正触发补全时再算（默认 true）。
+         */
+        includeCandidates: Boolean = true,
+    ): SourceSqlContext {
         // 向上找根 <mapper> tag 的 namespace（与 XmlEwResolver 的 namespace 来源一致）
         val namespace = (statementTag.containingFile as? XmlFile)?.rootTag?.getAttributeValue("namespace")
         val mapperClass = namespace?.takeIf { it.isNotEmpty() }?.let {
@@ -93,7 +109,7 @@ object XmlSqlCompletionContextResolver {
         val method = statementTag.getAttributeValue("id")?.let { id ->
             mapperClass?.findMethodsByName(id, false)?.firstOrNull()
         }
-        return resolveCommon(project, mapperClass, method)
+        return resolveCommon(project, mapperClass, method, includeCandidates)
     }
 
     /**
@@ -111,13 +127,28 @@ object XmlSqlCompletionContextResolver {
     // ------------------------------------------------------------------
 
     /** 主实体解析（优先级从高到低）：① Mapper 泛型基类实参 ② 方法实体参数；均失败 → null。 */
-    private fun resolveCommon(project: Project, mapperClass: PsiClass?, method: PsiMethod?): SourceSqlContext {
+    private fun resolveCommon(
+        project: Project,
+        mapperClass: PsiClass?,
+        method: PsiMethod?,
+        includeCandidates: Boolean = true,
+    ): SourceSqlContext {
+        val t0 = System.currentTimeMillis()
         val mainEntity = findMainEntity(mapperClass, method)
+        val t1 = System.currentTimeMillis()
         val mainTable = mainEntity?.let { runCatching { EntityResolver().resolve(it) }.getOrNull() }
             ?.takeIf { it.tableName.isNotEmpty() }
+        val t2 = System.currentTimeMillis()
+        val candidates = if (includeCandidates) buildCandidates(project, mainTable) else emptyList()
+        val t3 = System.currentTimeMillis()
+        // §十九：分段埋点，下一次真机日志可直接读出「哪一段在吃时间」
+        LOG.info(
+            "[open-perf] ctx detail: entity=${t1 - t0}ms resolve=${t2 - t1}ms " +
+                "candidates=${t3 - t2}ms candidatesCount=${candidates.size} include=$includeCandidates",
+        )
         return SourceSqlContext(
             main = mainTable?.let { buildMainContext(it) },
-            candidates = buildCandidates(project, mainTable),
+            candidates = candidates,
             // T-PT-01：paramTypes 键序 = 命名参数序 + param1..N（与旧 paramNames 列表逐项一致）
             paramNames = AnnotationSqlPreviewService.paramTypes(method).keys.toList(),
         )
@@ -211,12 +242,142 @@ object XmlSqlCompletionContextResolver {
             result += it
             seen += it.tableName
         }
-        findTableNameEntities(project).forEach { entityClass ->
-            val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: return@forEach
-            if (seen.add(table.tableName)) result += table
+        // T-StartupReadLockFreeze §十九（2026-11-13 15:00 真机）：原实现把**全项目** `@TableName` 实体
+        // 逐个 `EntityResolver.resolve`，最后才 `take(50)`——2500 表工程上一次 6~10s（`pre-assembly`
+        // 埋点直接读出 completion=10327ms/5924ms，且无缓存、第二次照样慢）。
+        // 现在：①命中项目级缓存直接返回；②边解析边判上限，够 50 就停；③超过预算立刻放弃剩余。
+        val now = System.currentTimeMillis()
+        val cachedBase = candidatesCache.get(project.locationHash)?.let { entry ->
+            // §二十：失效判据从 PsiModificationTracker 改成 TTL——本插件预览链自己会写临时 SQL 文档，
+            // 每次打开都把版本号顶掉，实测第二次打开仍要 2116ms（缓存等于没有）。
+            if (now - entry.createdAt in 0 until candidatesTtlMs) {
+                candidatesCacheHits++
+                entry.tables
+            } else {
+                null
+            }
         }
+        val base = cachedBase ?: run {
+            val resolved = mutableListOf<TableInfo>()
+            val resolvedSeen = mutableSetOf<String>()
+            val deadline = System.currentTimeMillis() + candidatesBudgetMs
+            var scanned = 0
+            val entities = tableNameEntitiesProviderForTest?.invoke(project)
+                ?: findTableNameEntities(project)
+            for (entityClass in entities) {
+                if (resolved.size >= CANDIDATES_CAP) break
+                if (System.currentTimeMillis() >= deadline) {
+                    LOG.info(
+                        "[open-perf] ctx candidates budget hit: scanned=$scanned resolved=${resolved.size} " +
+                            "budget=${candidatesBudgetMs}ms",
+                    )
+                    break
+                }
+                scanned++
+                entitiesResolved++
+                val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: continue
+                if (table.tableName.isEmpty()) continue
+                if (resolvedSeen.add(table.tableName)) resolved += table
+            }
+            candidatesCache[project.locationHash] = CandidatesEntry(System.currentTimeMillis(), resolved)
+            resolved
+        }
+        base.forEach { table -> if (seen.add(table.tableName)) result += table }
         return result.take(CANDIDATES_CAP)
     }
+
+    /** 候选缓存条目：按 `PsiModificationTracker` 版本失效（改代码/加实体即重建一次）。 */
+    private data class CandidatesEntry(val createdAt: Long, val tables: List<TableInfo>)
+
+    /** 候选缓存 TTL（§二十）：候选只服务补全提示，容忍 2 分钟陈旧，换掉被自写文档顶掉的版本判据。 */
+    internal var candidatesTtlMs = 120_000L
+
+    private val candidatesCache: MutableMap<String, CandidatesEntry> = java.util.concurrent.ConcurrentHashMap()
+
+    /**
+     * T-StartupReadLockFreeze §二十一：**后台补齐候选**（预览打开不再同步算它）。
+     *
+     * 供面板在预览显示后调用：BGT 里把全项目 `@TableName` 实体解析进 TTL 缓存，落地后由调用方
+     * `refreshCompletionContext()` 回填补全上下文，用户真正补全时就有表名候选。
+     *
+     * @return true＝缓存已可用（本次刚算完或本来就热）
+     */
+    fun warmCandidates(project: Project?, onReady: () -> Unit = {}): Boolean {
+        if (project == null) return false
+        if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) return false
+        val now = System.currentTimeMillis()
+        val entry = candidatesCache[project.locationHash]
+        if (entry != null && now - entry.createdAt in 0 until candidatesTtlMs) {
+            onReady()
+            return true
+        }
+        // T-StartupReadLockFreeze §二十四（2026-11-13 真机栈实证）：本方法由面板在工作线程上调用，
+        // 而 `buildCandidates → findTableNameEntities → JavaPsiFacade.findClass` 全是 PSI/索引读——
+        // 不包读动作会抛 `Read access is allowed from inside read-action only`，异常被 runCatching 吞掉
+        // ⇒ 候选永远补不进去（用户看到的就是「补全一直是空的」），同时刷一屏 IDEA 报错。
+        // 用 nonBlocking + inSmartMode：等待索引时不持读锁、可取消，与 S1 预取链同款。
+        val started = System.currentTimeMillis()
+        // 单测走同步路径（测试线程持读动作、没有真正的索引等待），生产走 nonBlocking
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
+            val ok = runCatching {
+                buildCandidates(project, null)
+                true
+            }.getOrDefault(false)
+            if (ok) onReady()
+            LOG.info("[completion] warmCandidates(unit-test) ok=$ok cached=${cachedCandidateTables(project).size}")
+            return ok
+        }
+        return runCatching {
+            ReadAction.nonBlocking<Unit> {
+                buildCandidates(project, null)
+                Unit
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .coalesceBy(this, "warmCandidates:${project.locationHash}")
+                .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
+                .onSuccess {
+                    LOG.info(
+                        "[completion] warmCandidates ok=true cached=${cachedCandidateTables(project).size} " +
+                            "elapsed=${System.currentTimeMillis() - started}ms",
+                    )
+                    onReady()
+                }
+                .onError { t ->
+                    LOG.info("[completion] warmCandidates fail ${t.javaClass.simpleName}: ${t.message}")
+                }
+            true
+        }.getOrDefault(false)
+    }
+
+    /** 只读候选缓存（补全上下文构造用）：未预热/已过期 → 空列表，绝不触发解析。 */
+    fun cachedCandidateTables(project: Project?): List<TableInfo> {
+        if (project == null) return emptyList()
+        val entry = candidatesCache[project.locationHash] ?: return emptyList()
+        val now = System.currentTimeMillis()
+        return if (now - entry.createdAt in 0 until candidatesTtlMs) entry.tables else emptyList()
+    }
+
+    /** 测试缝：清空候选缓存。 */
+    internal fun clearCandidatesCacheForTest() {
+        candidatesCache.clear()
+        candidatesCacheHits = 0
+        entitiesResolved = 0
+    }
+
+    /**
+     * 测试缝：候选实体来源。Light 沙盒拿不到 `@TableName` 注解索引（实测返回空 ⇒ 用例会空绿），
+     * 用它直接喂 PSI 类，才能真的压到「全项目逐个 resolve」这条循环。生产恒为 null。
+     */
+    internal var tableNameEntitiesProviderForTest: ((Project) -> List<com.intellij.psi.PsiClass>)? = null
+
+    /** 测试缝：缓存命中次数（探针用——真机那 6~10s 在 60 实体的单测规模里量不出来，只能钉住行为）。 */
+    internal var candidatesCacheHits = 0
+        private set
+
+    /** 测试缝：真正执行 `EntityResolver.resolve` 的实体数（上限断言的直接证据）。 */
+    internal var entitiesResolved = 0
+        private set
 
     /**
      * 项目内 `@TableName` 实体类：

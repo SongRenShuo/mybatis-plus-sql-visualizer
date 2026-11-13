@@ -56,13 +56,34 @@ class MbgExampleResolveDeadlineTest {
         )
     }
 
-    private fun resolverSource(): String {
+    @Test
+    fun `预览首开不得同步调用 M2 检索`() {
+        val src = xmlPreviewSource()
+        assertFalse(
+            "XmlPreviewService 不得再调用同步 resolve(...)：首开必须只读缓存 + 转后台" +
+                "（真机 refsSeen=13 却 2.4s，引擎内部耗时无法被逐条自查打断）",
+            Regex("""MbgExampleCallResolver\.resolve\(""").containsMatchIn(src),
+        )
+        assertTrue("首开必须走 resolveCachedOnly", "resolveCachedOnly(" in src)
+        assertTrue("未命中必须转后台 warmForPreview", "warmForPreview(" in src)
+        assertTrue("结果必须带 m2AwaitKey 供面板等落地", "m2AwaitKey" in src)
+    }
+
+    private fun resolverSource(): String = sourceOf(
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/MbgExampleCallResolver.kt",
+    )
+
+    private fun xmlPreviewSource(): String = sourceOf(
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlPreviewService.kt",
+    )
+
+    private fun sourceOf(relativePath: String): String {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            val f = File(dir, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/MbgExampleCallResolver.kt")
+            val f = File(dir, relativePath)
             if (f.isFile) return f.readText()
             dir = dir.parentFile
         }
-        error("未找到 MbgExampleCallResolver.kt（user.dir=${System.getProperty("user.dir")}）")
+        error("未找到 $relativePath（user.dir=${System.getProperty("user.dir")}）")
     }
 }
