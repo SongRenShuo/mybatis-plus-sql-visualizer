@@ -572,7 +572,17 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
-### L61 后台阻塞读锁与 EDT 写意图升级是死锁对：两侧栈各自都「像在正常干活」
+### L61 判「平台能否加载这份状态」不能拿 `Json.parseToJsonElement` 的成败当判据——它对裸值宽松
+
+**规则**：要判「这块 JSON 平台能不能反序列化成功」，必须按**平台那个 serializable 的类型要求**去校验，而不是「能否解析成 `JsonElement`」。`Json.parseToJsonElement` 对**未加引号的值是宽松的**（`{"k": 8d6c2a1b}` 会解析成一个非字符串 `JsonPrimitive` 而不抛错），而平台 `BasePropertyService.MyState` 是 `Map<String,String>` 的**流式严格解码**，遇到裸值直接 `JsonDecodingException: Unexpected JSON token ... Expected quotation mark '"'`。两者判据不一致的后果不是「多修」而是**「永远不修」**：真机损坏形态被判成健康，自愈逻辑全程空转。通用化：任何「探测某份文本是否可用」的判据，都要对齐**真正消费它的那一方的解析器与类型**；能拿到对方同一入口就用同一入口，拿不到就按它的类型约束自己写形态校验。
+
+**证据**：T-WorkspaceHeal 定向测试首轮 12 例红 3 例（`test缺尾引号`、`test两端都缺`、`test别人插件键坏`），诊断读数 `DIAG jsonAccepted=true err= | bothOutcome=Healthy`——宽松解析器确实放过了裸值。改成「`keyToString` 每个值必须是 JSON 字符串 + `keyToStringList` 必须是字符串数组」后 15 例全绿，并留回归用例 `test裸值必须判不可加载即使宽松解析器放过它` 把两者差异钉死。提交 `d87853744`。
+
+**正例**：先写一条「证明宽松解析器会放过这个形态」的用例，再写「我的判据必须拒绝它」的用例，两条并排放；**反例**：用 `runCatching { Json.parseToJsonElement(x) }.isSuccess` 当「是否合法」的唯一判据（本项目真机损坏形态下它恒为 true）。
+
+**Seen 1× (2026-11-13)**
+
+### L62 后台阻塞读锁与 EDT 写意图升级是死锁对：两侧栈各自都「像在正常干活」
 
 **规则**：看到「IDE 打开即卡死 / 窗口白屏 / 冻结报告每 5 秒一份」时，先按**锁对**查，不要先当性能问题查。判据是两份栈合起来读：
 - 后台侧出现 `ReadAction.compute → computeBlocking → ReferencesSearch / PsiSearchHelper`（阻塞读动作，**不可被写动作取消**，索引期还会同步等 smart mode）；
