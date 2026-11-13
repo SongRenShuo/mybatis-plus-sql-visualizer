@@ -39,6 +39,7 @@ Gitee 自动发行脚本（可复用）
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import subprocess
@@ -158,6 +159,65 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
+# 附件下载参数：块大小 1MB（块级 flush 才能续传）、总轮次上限、连续「零进展」轮次上限
+ASSET_CHUNK = 1 << 20
+ASSET_MAX_ROUNDS = 24
+ASSET_MAX_STALLED = 3
+
+
+def _download_asset_resumable(asset_url, token, partial_path, expected_size):
+    """可续传下载 GitHub Release 附件，返回落盘字节数。
+
+    为什么不再一次 `urlopen(...).read()`（2026-11-12 实测）：单次 read 没有续传语义，
+    8MB 附件在这类链路上经常一到 1~2MB 就被掐（`http.client.IncompleteRead`），
+    此时「重试」只是把同一个失败从头再演一遍——本轮连试 3 次分别停在 0.83MB / 1.78MB /
+    1.97MB。改成 `Range` 从本地已落字节续拉、块级 flush 后，同一份文件靠多轮累积拉完。
+
+    判据三档：实际字节数 == GitHub 报的 size；连续 [ASSET_MAX_STALLED] 轮一个字节都没多
+    ⇒ 判定链路不可用并给出替代通道；总轮次 [ASSET_MAX_ROUNDS] 兜底防死循环。
+    """
+    have = os.path.getsize(partial_path) if os.path.exists(partial_path) else 0
+    rounds = 0
+    stalled = 0
+    while True:
+        if expected_size and have >= expected_size:
+            return have
+        if rounds >= ASSET_MAX_ROUNDS or stalled >= ASSET_MAX_STALLED:
+            raise SystemExit(
+                f"ERROR: 附件下载反复中断（已落 {have}/{expected_size} 字节，轮次 {rounds}）。\n"
+                f"  链路一直掐断时改走另一条通道取同一份字节，再走本地 zip 分支建版：\n"
+                f"    gh run download <release-run-id> -n plugin-<n> -D build/distributions\n"
+                f"    python dev-support/gitee-release.py --version <ver> --notes <md> --prerelease --yes"
+            )
+        rounds += 1
+        headers = {
+            "Authorization": "Bearer " + token,
+            "Accept": "application/octet-stream",
+            "User-Agent": "sql-visualizer-release-sync",
+        }
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        before = have
+        try:
+            resp = urllib.request.urlopen(
+                urllib.request.Request(asset_url, headers=headers), timeout=120
+            )
+            # 206 = 续传被接受；200 = 服务端忽略 Range（从头给），必须清空本地避免拼接错位
+            if have and getattr(resp, "status", 200) != 206:
+                have = 0
+            with open(partial_path, "ab" if have else "wb") as f:
+                while True:
+                    chunk = resp.read(ASSET_CHUNK)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    f.flush()
+        except (http.client.IncompleteRead, urllib.error.URLError, OSError, TimeoutError) as e:  # noqa: BLE001
+            print(f"  .. 下载中断（已落 {os.path.getsize(partial_path) if os.path.exists(partial_path) else 0} 字节）：{type(e).__name__}")
+        have = os.path.getsize(partial_path) if os.path.exists(partial_path) else 0
+        stalled = stalled + 1 if have <= before else 0
+
+
 # ---------------------------------------------------------------------------
 # --from-github：把 GitHub Release 的同名附件同步成 Gitee 发行版
 # 设计约束（用户 2026-10-26 定）：Gitee 仍是主仓，GitHub 触发的发布只能**经人确认**后才
@@ -240,29 +300,37 @@ def fetch_github_zip(version, zip_name, dest):
         names = "、".join(a.get("name", "?") for a in assets) or "（无附件）"
         raise SystemExit(f"ERROR: GitHub 发行版 {version} 里没有附件 {zip_name}；现有：{names}")
     expected = int(asset.get("size") or 0)
-    req = urllib.request.Request(asset["url"], headers={
-        "Authorization": "Bearer " + token,
-        "Accept": "application/octet-stream",
-        "User-Agent": "sql-visualizer-release-sync",
-    })
-    data = urllib.request.urlopen(req, timeout=600).read()
-    if expected and len(data) != expected:
-        raise SystemExit(f"ERROR: 下载长度不符：GitHub 报 {expected} 字节，实际 {len(data)} 字节")
-    sha = hashlib.sha256(data).hexdigest()
+    # T-AssetResume：可续传下载落到 `.partial`，校验通过才挪到 dest——这样「本地已有同名 zip
+    # 但内容不同就拒绝覆盖」这条守卫仍然成立（不会先被下载写坏再比哈希）。
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    partial = dest + ".partial"
+    size = _download_asset_resumable(asset["url"], token, partial, expected)
+    if expected and size != expected:
+        os.remove(partial)
+        raise SystemExit(f"ERROR: 下载长度不符：GitHub 报 {expected} 字节，实际 {size} 字节")
+    sha = _sha256_file(partial)
+    # 首选判据：GitHub API 自己给的 digest（`sha256:…`）——比「长度相等」强，且不用信本地算的对不对
+    declared = (asset.get("digest") or "").strip().lower()
+    if declared.startswith("sha256:") and declared.split(":", 1)[1] != sha:
+        os.remove(partial)
+        raise SystemExit(
+            f"ERROR: 附件 sha256 与 GitHub 声明不一致（声明 {declared.split(':', 1)[1][:16]}… / 实算 {sha[:16]}…），"
+            f"已删除半截文件，请重跑"
+        )
     if os.path.exists(dest):
         local_sha = _sha256_file(dest)
         if local_sha != sha:
+            os.remove(partial)
             raise SystemExit(
                 f"ERROR: 本地已有同名 zip 但内容不同（本地 {local_sha[:16]}… / GitHub {sha[:16]}…）。\n"
                 f"  确认以 GitHub 为准就先把它移走：{dest}"
             )
+        os.remove(partial)
         print(f"  本地已存在同名 zip，sha256 与 GitHub 一致（{sha[:16]}…），直接复用")
-        return bool(rel.get("prerelease")), sha, len(data)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, "wb") as f:
-        f.write(data)
-    print(f"  已从 GitHub 下载 {zip_name}（{len(data)} 字节，sha256 {sha[:16]}…）")
-    return bool(rel.get("prerelease")), sha, len(data)
+        return bool(rel.get("prerelease")), sha, size
+    os.replace(partial, dest)
+    print(f"  已从 GitHub 下载 {zip_name}（{size} 字节，sha256 {sha[:16]}…）")
+    return bool(rel.get("prerelease")), sha, size
 
 
 def verify_artifact(token, owner, repo, version, zip_path, strict):

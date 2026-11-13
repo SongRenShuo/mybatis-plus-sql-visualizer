@@ -166,6 +166,30 @@ rm -rf /tmp/verify; docker exec xc3-gaussdb-kernel503 rm -f /home/omm/g.dump
 2. 容器 env 里没有标准密码变量且 `db.env` 也没有对应条目——补 `/etc/svbackup/db.env`（600）。
 3. 端口非标——脚本已按 `docker port` 取容器内端口，一般不用动。
 
+### 4.1 「未知族」分支是仓库膨胀的最大风险（2026-11-08 实测踩坑）
+
+**事故**：PanWeiDB（openGauss 系，镜像 `shine_fei/panweidb:3.4.0`）镜像名不含任何已知族关键字，
+落进「未知族」分支 → **对它的数据卷做文件级 tar** → 两个容器各打出 **3 GB** 的 `.tar.zst`。
+快照体积从 3 MiB（11-05）暴涨到 6 GiB（11-06）、12 GiB（11-07），**两天打爆 10 GB 免费额度**。
+
+**根因链**：镜像名匹配 → 未命中 → 文件级 tar → 数据库原始数据卷（GB 级）被整卷打包。
+**这类引擎要特别警惕**：PG 系的国产分支（PanWeiDB / 虚谷 / 金仓 / 达梦…）镜像名千奇百怪，
+很容易一个都不匹配。
+
+**三条处置**（按优先级）：
+1. **先 SKIP，再考虑逻辑导出**。测试实例（如 PanWeiDB）备份价值低，加一条 SKIP 分支最省事：
+   ```sh
+   *panwei*)
+     warn "→ $c [$img] 跳过：测试实例，不做文件级 tar（避免原始数据卷撑爆仓库）" ;;
+   ```
+   放在 `case` 里 `*)` 之前即可。**不要**因为「它能用 gs_dump」就归进 PG 族——那需要同时满足
+   ①镜像名命中 ②`probe_tool` 能找到工具 ③`pg_env` 能找到库路径 ④`db.env` 里有该实例的凭据，
+   四条缺一就导出失败（实测：凭据缺失 → `Invalid username/password`）。
+2. **真要逻辑导出**：三处都要补——`case` 关键字、`probe_tool` 的可执行路径列表、`pg_env` 的库路径列表。
+   漏一处就是 `rc=1 size=0`。
+3. **加体积哨兵**：采集后 `du -sh` 本次 dump，超过阈值（如 500 MB）就告警。这次若能早发现，
+   不至于两天涨到 12 GB。
+
 ## 五、排障速查（都是实测踩过的）
 
 | 现象 | 根因 | 处置 |
@@ -178,6 +202,25 @@ rm -rf /tmp/verify; docker exec xc3-gaussdb-kernel503 rm -f /home/omm/g.dump
 | `cache lookup failed for index N` | 源库有悬挂索引（库侧问题） | 脚本会自动重试一次，通常第二遍就过；仍失败则手工 `systemctl start svbackup.service` 重跑 |
 | `unable to locate cache directory` | systemd 下无 `HOME` | service 里 `Environment="HOME=/root"` + `XDG_CACHE_HOME` |
 | 告警发不出、`http=000` | 用了 `workers.dev` 域名 | 国内服务器不可达，必须用 `https://sql-visualizer.jvtools.cn/api/v1/notify/backup` |
+| **`Invalid username/password,login denied`** | 该实例的凭据不在 `db.env` 里（`dbuser_for`/`dbpass_for` 的 case 没覆盖它） | 要么补 `/etc/svbackup/db.env`，要么按 §4.1 直接 SKIP 该实例。**别硬修**——测试实例不值得为它维护一条凭据链 |
+| 仓库体积暴涨、`ABORT: 仍超 9GB` | 某个容器被「未知族」分支做了文件级 tar | 先 `restic stats --mode raw-data` 看总量，再 `restic ls latest /var/backups/svbackup/dumps/<日期>/volumes` 找出大文件，按 §4.1 定位是哪个容器 |
+
+### 5.1 超标了怎么降下来（实测有效）
+
+`forget --keep-last N --prune` **只能删快照，压不掉单快照内部的体积**——这次收紧到 3 份后仍是 11.8 GB。
+必须**按 ID 精确删掉大快照**再 prune：
+
+```sh
+set -a; . /etc/svbackup/credentials; set +a
+R=/root/.local/bin/restic; O="-o s3.region=cn-east-1"
+$R $O snapshots                                   # 看体积，找异常大的
+$R $O forget <id1> <id2>                         # 精确删（注意：是 `forget <id>`，没有 --forget 这个 flag）
+$R $O prune --max-repack-size 2G                 # 真正释放空间
+$R $O stats --mode raw-data                      # 确认降下来
+```
+
+2026-11-08 实测：删掉 11-06/11-07 两个大快照 + prune 后，**11.8 GiB → 1.16 MiB**，回到免费额度内。
+**注意**：`prune` 才会重打包释放空间，`forget` 只是取消引用；两者必须都做。
 
 ## 六、告警链路
 
