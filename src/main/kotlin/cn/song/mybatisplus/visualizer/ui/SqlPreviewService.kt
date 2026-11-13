@@ -2009,8 +2009,7 @@ class SqlPreviewService(internal val project: Project) {
          */
         @Volatile
         var lastPreviewRequestMs: Long = 0L
-            internal set
-
+        
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
@@ -2082,9 +2081,21 @@ class SqlPreviewService(internal val project: Project) {
                     runCatching { previous.doDispose() }
                 }
             }
+            // T-PreviewFast P8（2026-11-13 用户令「性能做到极致」）：把「弹窗侧」拆成两段量——
+            // ② 弹窗构造（面板 + 编辑器 + 控制台准备，全在 EDT 构造期同步跑）；
+            // ③ show→返回。配合 `request→dialog`（请求→进入本方法）与 `[M36] prewarm`、
+            // `prepareDefaultConsole` 的时长，就能判「剩余时间在谁身上」。
+            // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
+            // 的请求被后一次请求覆盖成 1ms），不可信。
+            val constructStarted = System.currentTimeMillis()
             val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
+            val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
+            val showStarted = System.currentTimeMillis()
             dialog.show()
+            LOG.info(
+                "[open-perf] dialog: construct=${constructMs}ms show=${System.currentTimeMillis() - showStarted}ms",
+            )
         }
 
         /**

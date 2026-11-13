@@ -1049,3 +1049,29 @@ JPA 分支由夹具覆盖）。
 
 `warmCandidates cached=0`：预热在工程索引尚未就绪时跑了一次（`elapsed=724ms` 却解析出 0 条），
 属候选链既有行为（下一次 `refreshCompletionContext` 会补），不是跨 ORM 改动引入的。
+
+### 22.15 第五轮（`P8` 埋点）：把「弹窗侧」也拆开量——稳定态 55~75ms，冷态首开 ~700ms 是类加载
+
+新增两条**局部作用域**埋点（不再用全局单槽时间戳：并发预览会互相覆盖，实测把 651ms 的请求量成 1ms）：
+
+```
+21:44:30,962  [T-PreviewFast] request→dialog: 351ms        ← 本会话第一次：请求→进入 showResult（含冷装配）
+21:44:31,306  [open-perf] dialog: construct=256ms show=88ms ← 弹窗构造冷：编辑器/控制台/Laf 首次初始化
+--- 之后每一次 ---
+21:44:42,385  request→dialog: 17ms
+21:44:42,438  dialog: construct=15ms show=38ms              ← 合计 ≈ 70ms
+21:44:53,757  request→dialog: 10ms / construct=20ms show=29ms ← 合计 ≈ 59ms
+```
+
+同时给 `prepareDefaultConsole` 加了耗时埋点，读数 `elapsed=0ms`（exec 临时文件已被 `previewAsync` 的后台
+预热写就，控制台准备为零成本）——**由此否掉**「把控制台准备挪到 show 之后」这条优化：收益为零，只是
+徒增一次时序改动。
+
+结论（用户「性能做到极致」的落点）：
+- **稳定态**：请求→可见 **≈ 55~75ms**（10~17 装配+排队、15~20 构造、29~38 show）；
+- **本会话第一次**：≈ 695ms，其中 construct 256ms（vs 热态 15~20ms）＝ 编辑器/控制台/Laf 的**首次类加载与
+  初始化**，属 JVM 冷启动成本，不是某个热点；再往下压只能靠「打开文件时预构建面板」这种收益可疑的改造；
+- 反查索引（含 JPA 源后）`tables=1012`，建成后 `resolve` 稳定 0~2ms。
+
+**not run**：`ExecPsiGateTest` 属 `testDbExecPsiGate` 桶（需 Database 插件），本轮用 `--tests` 误把它拉进普通
+`test` 任务，7 例失败是环境缺插件所致（非回归；CI 走独立任务）。

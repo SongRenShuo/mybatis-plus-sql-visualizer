@@ -2440,6 +2440,8 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
  */
 
 internal fun SqlPreviewPanel.prepareDefaultConsole() {
+    // T-PreviewFast P8：控制台准备的耗时（弹窗构造期的最后一段）——决定要不要挪到 show 之后一拍
+    val preparedAt = System.currentTimeMillis()
     val proj = project ?: return
     // T-NativeSwitchTakeover：接管控制台工具栏的原生数据源下拉（幂等）——必须早于控制台创建，
     // 平台 header 是按 id 从 ActionManager 取 Console.Jdbc.Right 组件的。
@@ -2454,7 +2456,7 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
     // 入口锚点（2026-11-02 沙盒验收）：预览打开后控制台没挂上时，先要能区分「SQL 源取不到 →
     // 提前返回」与「Database 不可用 → 静默回退」这两条静默路径。
     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
-        "[M36] prepareDefaultConsole: editor=${editor != null}, sqlLen=${sql?.length ?: -1}, " +
+        "[M36] prepareDefaultConsole: editor=${editor != null}, sqlLen=${sql?.length ?: -1}, " + "elapsed=${System.currentTimeMillis() - preparedAt}ms, " +
             "dbAvailable=${cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()}",
     )
     if (sql == null) return
