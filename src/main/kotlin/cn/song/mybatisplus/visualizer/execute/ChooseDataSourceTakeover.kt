@@ -257,13 +257,18 @@ internal class ChooseDataSourceTakeoverGroup(
         // 262 字节码实证：原生 `update` 会 setPopop/setPerformGroup(true) 等——`setPerformGroup`
         // 正是工具栏把这个组渲染成「图标+文案」按钮（而非纯图标组）的开关。本类不能覆写 final 的
         // getTemplatePresentation，于是把原生每次算好的呈现写回模板，按钮才会显示数据源名。
+        //
+        // T-TemplatePresentationWarn：镜像**不能**直接 `templatePresentation.setEnabled/setVisible`——
+        // 243 平台（app-client.jar 字节码实证）这两个 setter 开头就 `assertNotTemplatePresentation`，
+        // 检查 TEMPLATE 位（myFlags & 4096）后 `warnInProduction`：每次 update 打两条 WARN 带全栈，
+        // 263 有升级为 error 的风险。平台自己的 `copyFrom(Presentation)` 是合规通道：私有实现直接
+        // `BitUtil.set(myFlags, …)` 写 enabled/visible 位、不经断言，且补发 enabled/visible 属性变化
+        // 事件（工具栏按钮据事件重绘，比手写镜像还多一层正规通知）。文本/图标/描述/客户端属性也一并
+        // 镜像进来；performGroup 位不在 copyFrom 的复制面里，仍单独设。
         runCatching {
             e.presentation.setPerformGroup(true)
             templatePresentation.setPerformGroup(true)
-            templatePresentation.setText(e.presentation.text ?: "", false)
-            templatePresentation.icon = e.presentation.icon
-            templatePresentation.setEnabled(e.presentation.isEnabled)
-            templatePresentation.setVisible(e.presentation.isVisible)
+            templatePresentation.copyFrom(e.presentation)
         }
     }
 
