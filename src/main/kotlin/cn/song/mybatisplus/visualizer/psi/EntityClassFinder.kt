@@ -369,7 +369,13 @@ class EntityClassFinder(private val project: Project) {
             // 测试口径走同步：既有断言按「首次查询即建好」写（`indexBuildCount`/`scans` 读数）
             if (syncIndexBuildForTest ?: app.isUnitTestMode) {
                 val started = System.currentTimeMillis()
-                applyBuiltIndex(entry, runCatching { scanAllTablesIndex() }.getOrNull(), started)
+                val built = runCatching {
+                    scanAllTablesIndex()
+                }.getOrElse { t ->
+                    if (FatalErrors.isFatal(t)) throw t
+                    null
+                }
+                applyBuiltIndex(entry, built, started)
                 return
             }
             if (!retryCooldownElapsed(entry)) {
@@ -405,6 +411,8 @@ class EntityClassFinder(private val project: Project) {
             } catch (pce: com.intellij.openapi.progress.ProcessCanceledException) {
                 throw pce // 撤销要能被平台看见（否则非阻塞读动作退化成「不可撤销的长读者」）
             } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t
+                LOG.info("[open-perf] 反查索引扫描异常：${t.javaClass.simpleName}")
                 null
             }
         }
