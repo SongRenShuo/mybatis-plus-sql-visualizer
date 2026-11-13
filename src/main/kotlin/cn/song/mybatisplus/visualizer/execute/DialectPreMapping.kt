@@ -281,7 +281,12 @@ internal object DialectPreMapping {
             targetId == null -> configured.equals(ExecDialectRouting.MYSQL_LANGUAGE_ID, ignoreCase = true)
             else -> configured.equals(targetId, ignoreCase = true)
         }
-        if (shouldSkip(inProcessMapped, configuredMatches)) return true
+        if (shouldSkip(inProcessMapped, configuredMatches)) {
+            // T-PreviewNoReindex S0 取证：区分「跳过」与「真写」——原来两者都返回 true，日志无从判断
+            // `enter dumb mode` 是不是方言映射写入（`SqlDialectPusher` push-all）引起的。
+            LOG.info("[M36] dialect mapping skipped (already=${configured ?: "in-process"} target=${targetId ?: "MySQL"}) ${vf.name}")
+            return true
+        }
         val done = CountDownLatch(1)
         var mapped = false
         // T-ThreadFix C：write-safe 投递（同 clearMapping 的说明）——setMapping 触发平台重解析写动作，

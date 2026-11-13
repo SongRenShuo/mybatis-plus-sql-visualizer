@@ -409,6 +409,10 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
         }
     }
     if (!dir.exists() && !dir.mkdirs()) return null
+    // T-PreviewNoReindex S0 取证：预览文件落在哪一侧（`.idea/…` 通常被排除索引；项目根 `.sql-visualizer/…`
+    // **不在**排除范围）——`enter dumb mode` 到底由「新文件」还是「方言映射」触发，先靠这行定位。
+    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        .info("[M36] preview root: ${if (fallbackCause == null) ".idea" else "project-root(.sql-visualizer)"} dir=${dir.path}")
     // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
     // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 [sweepStalePreviewFiles]。
     // 每次面板生命周期只扫一次（清扫是兜底，不必每次预览都付一遍 listFiles）。
@@ -421,6 +425,8 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
     // （inlay 不报错，只是永不出现）。
     val f = java.io.File(dir, nextPreviewTempFileName())
     val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
+    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        .info("[M36] preview temp: ${if (existing != null) "reused" else "created"} ${f.name}")
     if (existing != null) {
         val ok = runCatching {
             com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
