@@ -780,3 +780,17 @@ Read access is allowed from inside read-action only
 用户贴的 `PropertiesComponent` → `JsonDecodingException: Expected quotation mark` 即 T-LastUsedEdt 的存量损坏
 （`"mpsql.visualizer.last.runner.id": 8d6c2a1b-…` 值未加引号）。已直接修复 demo 仓 `.idea/workspace.xml`
 该条目（沙盒项目为 `mybatis-plus-sql-visualizer-demo`）；`.idea/` 不入库，无需提交。
+
+### 20.4 真机日志追加（16:35/16:55）：Example 参数被当成实体
+
+```
+16:35 [completion] ctx: main=cust_channel_example columns=3    ← 表名与列都错
+16:55 [completion] ctx: main=cust_channel columns=19           ← 偶发正确
+16:55 [completion] ctx: main=- columns=0
+```
+
+`findEntityParam` 把 `selectByExample(XxxExample)` 的 **Example 参数当实体**：表名推成
+`cust_channel_example`、列取到 Example 的 3 个字段 ⇒ 列名补全给出完全错误的候选。
+修法：参数简单名以 `Example` 结尾时按 MBG 约定回查同包 `Xxx` 实体；查不到就跳过（宁可 main=null）。
+读数：`testExampleParamNotTreatedAsEntity` / `testExampleParamWithoutEntityDegradesToNull` 两例，
+反向去掉该分支 → 2 红，还原复绿。

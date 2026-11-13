@@ -211,9 +211,30 @@ object XmlSqlCompletionContextResolver {
             if (clazz is PsiTypeParameter) continue
             val name = clazz.name ?: continue
             if (name in NON_ENTITY_SIMPLE_NAMES) continue
+            if (name.endsWith("Example")) {
+                // T-StartupReadLockFreeze §二十五（2026-11-13 真机日志）：MBG 的 `selectByExample(XxxExample)`
+                // 参数是**查询条件对象**，不是实体。原实现把它当实体 ⇒ 表名推成 `cust_channel_example`、
+                // 列只有 Example 的 3 个字段（真机 `[completion] ctx: main=cust_channel_example columns=3`），
+                // 列名补全于是给出完全错误的候选。
+                // 按 MBG 命名约定回查同包实体 `Xxx`；查不到就跳过（宁可 main=null，也不拿 Example 当实体）。
+                exampleEntityOf(clazz)?.let { return it }
+                continue
+            }
             return clazz
         }
         return null
+    }
+
+    /** `xxx.CustChannelExample` → 同包 `xxx.CustChannel`（MBG 生成器的固定命名对）。 */
+    private fun exampleEntityOf(exampleClass: PsiClass): PsiClass? {
+        val qualified = exampleClass.qualifiedName ?: return null
+        if (!qualified.endsWith("Example")) return null
+        val entityFqn = qualified.removeSuffix("Example")
+        if (entityFqn.substringAfterLast('.').isEmpty()) return null
+        return runCatching {
+            JavaPsiFacade.getInstance(exampleClass.project)
+                .findClass(entityFqn, GlobalSearchScope.allScope(exampleClass.project))
+        }.getOrNull()
     }
 
     // ------------------------------------------------------------------

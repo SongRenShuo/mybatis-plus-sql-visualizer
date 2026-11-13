@@ -265,4 +265,75 @@ class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
         assertEquals("t_device_info", ctx.main?.tableName)
         assertEquals("注解方法参数名应含 @Param/实际名", listOf("entity"), ctx.paramNames)
     }
+
+    // ------------------------------------------------------------------
+    // §二十五：MBG selectByExample(XxxExample) 的参数不是实体
+    // ------------------------------------------------------------------
+
+    /**
+     * 真机日志（2026-11-13 16:35）：`[completion] ctx: main=cust_channel_example columns=3`——
+     * 把 MBG 的 Example 类当成了实体，表名推成 `cust_channel_example`、列只有 Example 的 3 个字段，
+     * 列名补全于是给出完全错误的候选。修复后应按约定回查同包实体。
+     */
+    fun testExampleParamNotTreatedAsEntity() {
+        addMapperFile(
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+                private String channelName;
+            }
+
+            public class CustChannelExample {
+                private Integer distinct;
+                private String orderByClause;
+                private java.util.List oredCriteria;
+            }
+
+            public interface CustChannelMapper {
+                CustChannel selectByExample(CustChannelExample example);
+            }
+            """.trimIndent(),
+        )
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.CustChannelMapper">
+              <select id="selectByExample" parameterType="com.example.CustChannelExample" resultType="map">
+                select * from cust_channel
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectByExample",
+        )
+        assertEquals("主表必须取同包实体，而不是 Example 类", "cust_channel", ctx.main?.tableName)
+    }
+
+    /** 同包实体不存在时宁可 main=null，也不得把 Example 当实体（否则补全给出 xxx_example 的假列）。 */
+    fun testExampleParamWithoutEntityDegradesToNull() {
+        addMapperFile(
+            """
+            public class OrphanExample {
+                private Integer distinct;
+            }
+
+            public interface OrphanMapper {
+                Object selectByExample(OrphanExample example);
+            }
+            """.trimIndent(),
+        )
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.OrphanMapper">
+              <select id="selectByExample" parameterType="com.example.OrphanExample" resultType="map">
+                select * from orphan
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectByExample",
+        )
+        assertNull("Example 无对应实体时必须降级为 null", ctx.main)
+    }
 }
