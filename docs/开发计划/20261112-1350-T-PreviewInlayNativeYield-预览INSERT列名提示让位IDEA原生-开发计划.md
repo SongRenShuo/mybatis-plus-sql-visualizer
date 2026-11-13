@@ -217,6 +217,44 @@ if (NativeColumnInlayYieldGate.shouldYield()) return null
 
 ---
 
+## 十、实施记录（2026-11-12）
+
+**决策定案**（用户当日「按照你的推荐」）：**D1-A** 能力级整体让位、**D2-A** 原生被用户关掉时本插件同样不出、**D3-A** v1 不加插件设置项。
+
+**落点**：工作树 `.worktrees/t-preview-inlay-native-yield`，分支 `t-preview-inlay-native-yield`（自 master `b6e09d78e` 切出），实施提交 **`5f054e4c8`**。
+
+| 项 | 内容 |
+|---|---|
+| 新增 | `ui/inlay/NativeColumnInlayYieldGate.kt`——双 EP 枚举（`codeInsight.declarativeInlayProvider` / `codeInsight.inlayProvider`）、`providerId` 或实现类简单名双锚点、bean 属性全反射读（不绑两代 bean 类）、进程级懒缓存、`probe` 测试缝、探测失败只 WARN 一次并降级为不在位 |
+| 接入 | `PreviewInsertColumnInlayProvider.getCollectorFor` 第 0 道闸：`if (NativeColumnInlayYieldGate.shouldYield()) return null`；provider KDoc 的「三道闸门」改为四道 |
+| 测试 | 新增 `NativeColumnInlayYieldGateTest`（10 例：锚点真值表 4 / 探针三形态 3 / 缓存 2 / 真探测链降级 1）；`PreviewInsertColumnInlayProviderTest` 补 2 例（在位 ⇒ 零提示、不在位 ⇒ 正向契约不变）；三个平台测试类（`InsertColumnInlayGateTest` / `InsertColumnInlayPanelWiringTest` / `PreviewInsertColumnInlayProviderTest`）在 setUp 钉死 `probe={false}`——测试平台是 IU 2024.3.7.1，DatabaseTools 在位时这一道门会把用例整体短路成假红 |
+| 文档 | `docs/架构设计/01-项目架构总览.md`「预览编辑器专属 EP」行补让位门与机制依据；`CHANGELOG.md [Unreleased] → Fixed` 一句 |
+
+**定向读数**：`./gradlew test --tests "cn.song.mybatisplus.visualizer.ui.inlay.*"` → **68 tests / 0 failures / 0 errors / 0 skipped**（Gate 6 / Wiring 3 / Planner 32 / YieldGate 10 / Provider 17）。
+
+**反向验证**（三轮，均先提交再改，改完 `git checkout --` 还原；每轮只跑对应类）：
+
+| 轮 | 改动 | 读数 |
+|---|---|---|
+| R1 | 摘掉 `getCollectorFor` 的让位行 | Provider 类 17 例 **恰 1 红**（`test原生列名inlay在位时整体让位_零提示`），其余 16 绿 |
+| R2 | 摘掉 `matchesAnchor` 的 providerId 锚点分支 | YieldGate 类 10 例 **恰 1 红**（`testAnchor_按ProviderId命中`），其余 9 绿 |
+| R3 | `getOrDefault(false)` 反转成 `true`（探测失败视为在位） | YieldGate 类 10 例 **恰 1 红**（`testProbe_探测异常降级为不在位`），其余 9 绿 |
+
+R3 的附带读数：`test真实探测链_无平台实例时降级为不在位且不抛` 在反转后仍为绿 ⇒ 纯 JUnit 环境下 `extensionList` 不抛、直接探空，即"无平台实例"走的是正常空结果路径，`getOrDefault` 只兜真正的异常。这条与 §八 P-5 相关，见下。
+
+**前提收窄（实施时推翻/消解）**：
+
+- **P-3 / P-4 / P-6 全部作废**：D2-A 定案「在位即让位、不看开启态」，实现里完全不读原生设置，于是 `DeclarativeInlayHintsSettings.isOptionEnabled` 的 providerId 口径、read-lock 断言、声明式 bean 字段形态三条都不再需要；bean 属性走反射候选链，**P-4 由设计本身消化**（不静态引用任何 bean 类，243 上形态不同也照常降级）。
+- **P-5 未单独实测**：三个平台测试类无条件注入 `probe={false}`，故"测试平台是否枚举到 DatabaseTools 的 provider"不影响读数；该推断没有取到实测读数，按「未验证」登记（不影响结论）。
+
+**not run（留待真机/合流）**：
+
+- **P-1 分诊**：用户在装了 DatabaseTools 的 263 上关掉 `INSERT … VALUES` 列名后重开预览，重复的那一枚应消失——这一条同时是本次缺陷的 A/B 判据，单测无法替代；
+- **A1~A4 真机验收**（§七）与 **P-2 的 243/253/262 版本面**；
+- **全量门禁**（`testShards`）：本任务属纯显示层，定向 68 例覆盖了新增判定与既有契约；全量按三档分层未跑，合流前由用户决定是否补。
+
+---
+
 ## 附：取证命令（复现本次结论）
 
 ```bash

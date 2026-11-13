@@ -141,7 +141,10 @@ jobs:
         # 「下载编译产物失败 → 分片/兼容门禁 skipped」，testShards 一片都没跑。
         # 产物在 buildPlugin 成功时就已生成，与 verifyPlugin 成败无关；让下游照常跑，
         # 才能看到「测试绿不绿」这个独立信息（本 job 仍会因 verifyPlugin 失败标红）。
-        if: ${{ !cancelled() && inputs.mode != 'publish' }}
+        # 2026-11-13：条件收窄到 gate/release——tests 模式 build job 不跑任何 gradle 构建
+        # （打包插件步 gate/release 专属），本步在 tests 下必然「No files were found」标红
+        # （run 43265523784 实证），而 test 分片自 T-CiTestDecouple 起已不消费本工件。
+        if: ${{ !cancelled() && (inputs.mode == 'gate' || inputs.mode == 'release') }}
         uses: actions/upload-artifact@v7
         with:
           name: build-outputs

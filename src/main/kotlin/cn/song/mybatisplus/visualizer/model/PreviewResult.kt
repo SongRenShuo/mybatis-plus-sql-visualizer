@@ -201,6 +201,31 @@ data class PreviewResult(
      * null = 无模型级重渲染能力（既有构造点零影响）。
      */
     val rerender: ((PreviewRerenderInput) -> PreviewResult)? = null,
+    /**
+     * T-PreviewStmtTypeScope：本次判型命中的消费调用——语句类型为什么是 UPDATE/DELETE/COUNT/EXISTS 的来历。
+     *
+     * null = 该链上没有消费调用，按默认 SELECT 渲染。面板 meta 行据此显示「类型依据: `remove()` 第 120 行」，
+     * 悬停列全部候选（[otherConsumptions]），用户不必猜「为什么查询链被判成 update」。
+     */
+    val decidingConsumption: WrapperConsumption? = null,
+    /** T-PreviewStmtTypeScope：该 wrapper 上识别到的**全部**消费调用（D-2 作用域收窄前的候选集）。 */
+    val otherConsumptions: List<WrapperConsumption> = emptyList(),
+    /**
+     * T-PreviewStmtTypeScope D-3：可切换的预览目标——该 wrapper 上出现过的消费档位（按分派优先级去重排序）。
+     *
+     * 长度 ≥ 2 表示「同一段代码在运行时可能产出多种语句」（典型：同一 wrapper 变量先交给
+     * `update(entity, w)`、重新赋值后交给 `delete(w)`）。此时面板不替用户拍板：给出切换入口，
+     * 默认落在判型依据命中的那一档（D-2），其余由用户按需切换。
+     */
+    val statementTypeOptions: List<ConsumptionKind> = emptyList(),
+    /**
+     * T-PreviewStmtTypeScope D-3：按指定档位重算本次预览（同一锚点、强制判型）。
+     *
+     * 只有 [statementTypeOptions] 长度 ≥ 2 时才挂（单档场景不持有闭包，也不留 PSI 引用）。
+     * 闭包内做 PSI 读取，调用方必须经 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService.previewAsync]
+     * 在后台线程执行。返回 null = 该档位不可用（链/表不可解析）。
+     */
+    val statementTypeSwitch: ((ConsumptionKind) -> PreviewResult?)? = null,
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

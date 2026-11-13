@@ -4,10 +4,23 @@
 
 ## [Unreleased]
 
+### Added
+- **预览面板给出「类型依据」与「预览目标」切换（T-PreviewStmtTypeScope，1b3af3ec5）**：语句类型（UPDATE/DELETE/COUNT/EXISTS）是怎么判出来的直接写在 meta 行——「类型依据: `remove()` 消费（第 235 行）」；同一 wrapper 上有多种消费写法时（真实工程常见：同一个变量先 `update(entity, w)`、重新赋值后再 `delete(w)`），工具栏出现「语句: UPDATE」切换入口，列出全部档位（带方法名与行号）按需切换，悬停也列出全部候选。查询链被判成 UPDATE 这类困惑不必再翻源码猜，也不必因为一个变量被复用就只看到一种语句
+- **方言推断走到死路时会主动说一声（T-NotifyTune 券 A）**：智能推断既没有数据源、项目配置、依赖坐标也没有语法特征可依时，预览其实一直在按 MySQL 兜底渲染，但用户不开预览或设置就看不到——预览面板的状态行和设置页的推断结果都太被动。现在打开含 SQL 的文件（Wrapper 链、注解 SQL、JPA `@Query`、JdbcTemplate、iBatis `sqlMap`、mapper XML、hbm 都算）时在后台判一次，只有真死路（`UNAVAILABLE` 且无方言名）才弹一条提示，说清「按 MySQL 兜底、遇 Oracle/PostgreSQL/SQL Server 会有差异」，并给两个动作：**去设置方言**直接打开插件设置并滚动高亮到方言行，**本项目不再提示**永久静默。标题不写 MyBatis——插件支持面不止它。开关默认开，每台机器至多一条，歧义/冲突不弹（面板里已有处理）
+
 ### Fixed
 - **大工程打开即卡死 / 预览白屏（T-StartupReadLockFreeze，39d4b2706 / 9f712eb78）**：左侧预览图标的调用点预取不再占读锁跑索引检索（改智能模式后台任务，索引期不抢锁、有预算与熔断），预览解析单次上限 800ms 超时退占位骨架；执行链的文档写不再在被调用方活动里就地升级写锁。新增 Registry 开关 `sqlvis.mbg.prefetch`（默认开，只关预取、预览照常）
 - **预览换源记忆不再写坏工程文件（T-LastUsedEdt，e08280a00）**：数据源回调在后台线程写 `.idea/workspace.xml` 的 last-used 条目，与平台保存竞争后值丢引号、每次启动报 JsonDecodingException；写入统一归位 EDT
 - **已写坏的工程文件会自动修好（T-WorkspaceHeal）**：升级后第一次打开工程时自动把被旧版本写坏的那条记录补回，并备份原文件；本次启动可能仍有那条报错，重启 IDE 后不再出现
+- **关预览面板时刷一条平台 Keymap 告警（T-CommentShortcutKeymap，3ce4b7c54）**：预览编辑器接管行注释（`Ctrl+/` 改插 `--`）用的是 `ActionManager.replaceAction`，而平台每次注册动作都会回填 `ProxyShortcutSet`，于是 `AnAction.setShortcutSet` 对「全局动作在 KeymapManager 之外被改快捷键」打 WARN——真机日志每关一次面板刷一条。现在换入/换回前先把动作的快捷键集合置为 `CustomShortcutSet.EMPTY`（平台唯一豁免条件），键位仍由 keymap 惰性解析，告警消失、`Ctrl+/` 行为不变。同一处修复也覆盖控制台「选择数据源」动作组的接管（两处都在换全局动作，e00e779b5）
+- **实体更新的 SET 参数被一个输入框填满（T-PreviewStmtTypeScope，90e494b33）**：`update(entity, wrapper)` 预览里 SET 各列的占位符此前共用一个来源（`?`），左栏只剩一行 `#?`——填一个值（比如 1）就把 `order_no / user_id / amount / status / create_time` 全填成 1。现在每列各有来源（`patch.order_no` …），一行一列，填哪个改哪个
+- **重新赋值那一行点预览，条件与消费全丢成无 WHERE 的 SELECT（T-PreviewStmtTypeScope，3731e2eed）**：`w = new LambdaQueryWrapper<>();` 这种「重新赋值」行上的预览图标挂在赋值表达式右侧的 `new` 上，此前只收该赋值表达式内部的链，后续另起语句的 `w.eq(...)` 与 `delete(w)` 全被丢掉。现在赋值锚点按**目标变量**走变量链，且重新赋值即分段——锚点在哪一段就只收那一段的条件（赋值前是声明段的 `user_id / status`，赋值后是 `order_no / user_id`），DELETE 不再串进上一段的 `status`
+- **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
+- **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
+- **预览 insert 的列名提示不再和 IDEA 自带的重复（T-PreviewInlayNativeYield，5f054e4c8）**：IDEA Ultimate 自带的「SQL 列名」inlay（`INSERT … VALUES` 一项默认开启）与预览面板的 INSERT 目标列提示做的是同一件事，同一条 `VALUES` 的每个值前面会出现两枚同名胶囊（`CUST_NO CUST_NO '1'`）。现在检测到原生那侧在位就让位，只留原生的一枚；没装 DatabaseTools、Community 版、或检测不到时本插件照旧提示。在 IDEA 设置里关掉该提示时本插件也不补回来——关掉的就是这个提示
+
+### Changed
+- **首次捕获引导不再每次启动 IDE 都弹（T-NotifyTune 券 B）**：那条「已捕获到第一条 SQL」的提示原来只是「每个 IDE 进程一次」——重启 IDE 或反复拉沙盒就会再出现，用户体感为高频。现在改成每台机器一次（持久化记忆），并且三个场景直接跳过：日志窗本来就开着、这次捕获刚把日志窗自动展开、开关被关掉。设置页「界面与操作」新增「首次捕获 SQL 时显示一次性提示」开关，默认开；「SQL 方言无法确定时显示一次性提示」也同区可见——两条一次性提示都能单独关掉
 
 ## [2026.11.12] - 2026-11-12
 

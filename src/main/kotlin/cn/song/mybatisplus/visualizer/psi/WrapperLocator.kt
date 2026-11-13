@@ -1,16 +1,19 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
+import cn.song.mybatisplus.visualizer.model.WrapperConsumption
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.psi.PsiAssignmentExpression
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
@@ -68,13 +71,17 @@ object WrapperLocator {
      *  - Wrappers 静态工厂 / 服务链（`Wrappers.<X>lambdaQuery()...` / `service.lambdaQuery()...`）
      * T-M23.7：末尾追加 [locateFromChainCall] 兜底——链中/链尾（eq/list 调用处）任意位置定位。
      */
-    fun locateWithTable(anchor: PsiElement, resolveVariables: Boolean = true): LocatedWrapper? {
+    fun locateWithTable(
+        anchor: PsiElement,
+        resolveVariables: Boolean = true,
+        preferredConsumption: ConsumptionKind? = null,
+    ): LocatedWrapper? {
         val extension = anchor.containingFile?.virtualFile?.extension
         if (extension == "kt" || extension == "kts") return null
-        findWrapperVariable(anchor)?.let { return buildChain(it, resolveVariables) }
-        findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it, resolveVariables) }
-        findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it, resolveVariables) }
-        locateFromChainCall(anchor, resolveVariables)?.let { return it }
+        findWrapperVariable(anchor)?.let { return buildChain(it, resolveVariables, anchor, preferredConsumption) }
+        findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it, resolveVariables, anchor, preferredConsumption) }
+        findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it, resolveVariables, anchor, preferredConsumption) }
+        locateFromChainCall(anchor, resolveVariables, preferredConsumption)?.let { return it }
         return null
     }
 
@@ -93,7 +100,11 @@ object WrapperLocator {
      *
      * 仅用户显式触发（快捷键/右键）时调用，无 M10 daemon 性能红线。
      */
-    private fun locateFromChainCall(anchor: PsiElement, resolveVariables: Boolean): LocatedWrapper? {
+    private fun locateFromChainCall(
+        anchor: PsiElement,
+        resolveVariables: Boolean,
+        preferredConsumption: ConsumptionKind? = null,
+    ): LocatedWrapper? {
         val call = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull() ?: return null
@@ -105,8 +116,8 @@ object WrapperLocator {
             chainHead.methodExpression.qualifierExpression is PsiNewExpression ->
                 (chainHead.methodExpression.qualifierExpression as PsiNewExpression)
                     .takeIf { detectWrapperType(it.type) != null }
-                    ?.let { buildChainFromNew(it, resolveVariables) }
-            isWrapperFactoryCall(chainHead) -> buildChainFromFactory(chainHead, resolveVariables)
+                    ?.let { buildChainFromNew(it, resolveVariables, anchor, preferredConsumption) }
+            isWrapperFactoryCall(chainHead) -> buildChainFromFactory(chainHead, resolveVariables, anchor, preferredConsumption)
             else -> null
         }
     }
@@ -216,6 +227,15 @@ object WrapperLocator {
                 is PsiLocalVariable -> if (isWrapperVariable(current)) return current
                 is PsiField -> if (isWrapperVariable(current)) return current
                 is PsiParameter -> if (isWrapperVariable(current)) return current
+                // T-PreviewStmtTypeScope：赋值表达式右侧的 wrapper 构造/工厂链（`w = new LambdaQueryWrapper<>()`
+                // 的 new 锚点、`w = Wrappers.lambdaQuery()...`）按目标变量走变量路径——buildChainFromNew /
+                // buildChainFromFactory 只收集赋值表达式内部的链，会丢掉该变量后续的 .eq 语句与消费调用
+                // （demo 语料 WrapperReuseRepro 重新赋值行实测：预览退化成无 WHERE 的 SELECT）。
+                // LHS 不是 wrapper 变量时不命中，继续向上（不拦截普通赋值）。
+                is PsiAssignmentExpression -> {
+                    val target = (current.lExpression as? PsiReferenceExpression)?.resolve() as? PsiVariable
+                    if (target != null && isWrapperVariable(target)) return target
+                }
                 // 实参位置的 wrapper 引用（`update(null, wrapper)` / `selectCount(wrapper)`，U08，T-M15-05）：
                 // 直接 resolve 引用到 wrapper 变量即命中（isWrapperVariable 类型检查兜底，不会误判普通变量）
                 is PsiReferenceExpression -> {
@@ -403,8 +423,16 @@ object WrapperLocator {
      *
      * 收集以该 new 表达式为链起点的所有链式调用（`new W().select(...).eq(...)`），
      * 按源码结束位置排序。
+     *
+     * @param anchor T-PreviewStmtTypeScope：触发预览的锚点（D-2 按它选判型依据）；null = 无锚点上下文
+     * @param preferredConsumption T-PreviewStmtTypeScope D-3：强制档位（面板「预览目标」切换用）；null = 按 D-2 判
      */
-    private fun buildChainFromNew(newExpr: PsiNewExpression, resolveVariables: Boolean): LocatedWrapper? {
+    private fun buildChainFromNew(
+        newExpr: PsiNewExpression,
+        resolveVariables: Boolean,
+        anchor: PsiElement? = null,
+        preferredConsumption: ConsumptionKind? = null,
+    ): LocatedWrapper? {
         val wrapperType = detectWrapperType(newExpr.type) ?: return null
         // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
         // entityInfoFromType 解析不到实体）时，从构造第一参表达式类型解析实体；
@@ -435,11 +463,15 @@ object WrapperLocator {
             .map { ArgResolver.toWrapperCall(it, table, resolvedEntity?.name, resolveVariables) }
 
         // 消费识别：wrapper 作为实参传给删除/计数/exists/实体更新方法（`service.remove(new W()...)` / `service.count(...)` / `service.exists(...)` / `service.update(entity, ...)`）
+        // T-PreviewStmtTypeScope：先记**证据**（档位 + 方法名 + 行号 + 语句区间），再由 [decideConsumption]
+        // 按锚点位置选出一条决定语句类型——旧口径「该 wrapper 任意一处被消费即改判」在「同一 wrapper
+        // 多处消费」时会让判型与用户正在看的语句脱钩（真机报障：查询链预览出 UPDATE/DELETE）。
         val consumingCall = newExpr.consumingCall()
-        val deleteConsumed = consumingCall?.let { it.methodExpression.referenceName in deleteConsumerMethodNames } == true
-        val countConsumed = consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true
-        val existsConsumed = consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true
-        val updateEntityConsumed = isEntityUpdateConsumer(newExpr)
+        val consumptions = mutableListOf<WrapperConsumption>()
+        if (consumingCall != null) {
+            consumptionOf(newExpr, consumingCall)?.let { consumptions += it }
+        }
+        val deciding = decideConsumption(consumptions, anchorOffsetOf(anchor), preferredConsumption)
         // T-M29-02/03：分页消费（`service.page(page, new W()...)`）——Page 实参解析为 LIMIT 子句
         // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A）
         val pageArg = consumingCall?.let {
@@ -448,8 +480,11 @@ object WrapperLocator {
 
         return LocatedWrapper(
             chain = WrapperChain(
-                wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed,
-                existsConsumed, updateEntityConsumed, pageArg?.limit, pageArg?.searchCount ?: true,
+                wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias,
+                deciding?.kind == ConsumptionKind.DELETE, deciding?.kind == ConsumptionKind.COUNT,
+                deciding?.kind == ConsumptionKind.EXISTS, deciding?.kind == ConsumptionKind.UPDATE_ENTITY,
+                pageArg?.limit, pageArg?.searchCount ?: true,
+                decidingConsumption = deciding, allConsumptions = consumptions.sortedBy { it.referenceOffset },
             ),
             table = table,
             entityFile = resolvedEntity?.containingFile,
@@ -485,8 +520,16 @@ object WrapperLocator {
      * 收集以该工厂调用为链起点的所有链式调用（`Wrappers.<T>lambdaQuery().select(...).eq(...)`、
      * `service.lambdaQuery()...one()` 服务链，T-M15-01），按源码结束位置排序；
      * 工厂调用自身（非 Wrapper 操作）不入链；链式终结点（one/list/count/update/remove 等）识别消费语义后剔除。
+     *
+     * @param anchor T-PreviewStmtTypeScope：触发预览的锚点（D-2 按它选判型依据）；null = 无锚点上下文
+     * @param preferredConsumption T-PreviewStmtTypeScope D-3：强制档位（面板「预览目标」切换用）；null = 按 D-2 判
      */
-    private fun buildChainFromFactory(factoryCall: PsiMethodCallExpression, resolveVariables: Boolean): LocatedWrapper? {
+    private fun buildChainFromFactory(
+        factoryCall: PsiMethodCallExpression,
+        resolveVariables: Boolean,
+        anchor: PsiElement? = null,
+        preferredConsumption: ConsumptionKind? = null,
+    ): LocatedWrapper? {
         val wrapperType = factoryWrapperType(factoryCall) ?: return null
         // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底；
         // 服务链（`service.lambdaQuery()`，无类型实参）回退到调用表达式返回类型（LambdaQueryChainWrapper<T>），
@@ -565,16 +608,35 @@ object WrapperLocator {
         val wrapperCalls = nonTerminalCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
         // 消费识别：wrapper 作为实参传给删除/计数/exists/实体更新方法（`service.remove(Wrappers.<T>lambdaQuery()...)` 等）
+        // T-PreviewStmtTypeScope：链式终结点（`...remove()`）与实参形态（`service.remove(链)`）都先记成证据，
+        // 再由 [decideConsumption] 按锚点位置推出决定语句类型的那一条。
         val consumingCall = factoryCall.consumingCall()
-        val deleteConsumed = chainDeleteConsumed ||
-            (consumingCall?.let { it.methodExpression.referenceName in deleteConsumerMethodNames } == true)
-        val countConsumed = chainCountConsumed ||
-            (consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true)
-        val existsConsumed = chainExistsConsumed ||
-            (consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true)
-        val updateEntityConsumed = isEntityUpdateConsumer(factoryCall) || chainUpdateEntity
+        val consumptions = mutableListOf<WrapperConsumption>()
+        terminal?.let { t ->
+            val terminalKind = when {
+                chainDeleteConsumed -> ConsumptionKind.DELETE
+                chainCountConsumed -> ConsumptionKind.COUNT
+                chainExistsConsumed -> ConsumptionKind.EXISTS
+                chainUpdateEntity -> ConsumptionKind.UPDATE_ENTITY
+                terminalName == PAGE_TERMINAL -> ConsumptionKind.PAGE
+                else -> null
+            }
+            if (terminalKind != null) {
+                consumptions += consumptionEvidence(t, terminalKind, t.methodExpression.referenceName ?: "", t)
+            }
+        }
+        // XB（M44）：DeleteChain 工厂链没有 remove 终结点，删除语义来自链类型本身——按链首位置记为证据，
+        // 锚点落在链内任意位置（同一条语句）即命中。
+        if (xbatisChainFamilyOf(factoryCall) == XBATIS_DELETE_CHAIN &&
+            consumptions.none { it.kind == ConsumptionKind.DELETE }
+        ) {
+            consumptions += consumptionEvidence(factoryCall, ConsumptionKind.DELETE, XBATIS_DELETE_CHAIN, factoryCall)
+        }
+        consumingCall?.let { call -> consumptionOf(factoryCall, call)?.let { consumptions += it } }
+        val deciding = decideConsumption(consumptions, anchorOffsetOf(anchor), preferredConsumption)
         // T-M29-02/03：分页消费（链式终结点 page / `service.page(page, Wrappers.lambdaQuery()...)` 实参形态）
         // R12 T-PaginationSim：链式终结点优先，实参形态次之；searchCount 取命中形态的解析值
+        // （分页只影响 LIMIT/COUNT 包裹，不参与语句类型判型，故不走 [decideConsumption]）
         val pageArg = chainPageArg ?: consumingCall?.let {
             if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageArg(it) else null
         }
@@ -590,9 +652,14 @@ object WrapperLocator {
         return LocatedWrapper(
             chain = WrapperChain(
                 wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, constructorAlias = null,
-                deleteConsumed = deleteConsumed, countConsumed = countConsumed, existsConsumed = existsConsumed,
-                updateEntityConsumed = updateEntityConsumed, pageLimit = pageLimit,
+                deleteConsumed = deciding?.kind == ConsumptionKind.DELETE,
+                countConsumed = deciding?.kind == ConsumptionKind.COUNT,
+                existsConsumed = deciding?.kind == ConsumptionKind.EXISTS,
+                updateEntityConsumed = deciding?.kind == ConsumptionKind.UPDATE_ENTITY,
+                pageLimit = pageLimit,
                 pageSearchCount = pageArg?.searchCount ?: true,
+                decidingConsumption = deciding,
+                allConsumptions = consumptions.sortedBy { it.referenceOffset },
             ),
             table = table,
             entityFile = entityClass?.containingFile,
@@ -884,8 +951,16 @@ object WrapperLocator {
      * 调用来源（按源码 offset 合并排序、去重）：
      *  - 变量初始化表达式中的链式调用（new W().eq(...)）
      *  - 变量后续引用上的方法调用（wrapper.eq(...)）
+     *
+     * @param anchor T-PreviewStmtTypeScope：触发预览的锚点（D-2 按它选判型依据）；null = 无锚点上下文
+     * @param preferredConsumption T-PreviewStmtTypeScope D-3：强制档位（面板「预览目标」切换用）；null = 按 D-2 判
      */
-    private fun buildChain(variable: PsiVariable, resolveVariables: Boolean): LocatedWrapper? {
+    private fun buildChain(
+        variable: PsiVariable,
+        resolveVariables: Boolean,
+        anchor: PsiElement? = null,
+        preferredConsumption: ConsumptionKind? = null,
+    ): LocatedWrapper? {
         // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）；
         // O-8（缺陷 A）：var 推断形态（typeElement 文本 "var"）工厂链头原实现不识别，补第三顺位
         val isVarDeclaration = (variable as? PsiLocalVariable)?.typeElement?.text == "var"
@@ -911,12 +986,18 @@ object WrapperLocator {
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
         val callElements = mutableListOf<Pair<PsiMethodCallExpression, Int>>()
-        // XB（M44）：DeleteChain 变量分步形态（`DeleteChain c = DeleteChain.of(mapper, X.class); c.eq(...)`)
-        // → DELETE 语义（XbatisConverter 按 deleteConsumed 分派）
-        var deleteConsumed = (variable.type as? PsiClassType)?.className == "DeleteChain"
-        var countConsumed = false
-        var existsConsumed = false
-        var updateEntityConsumed = false
+        // T-PreviewStmtTypeScope：消费识别产物是**证据清单**（档位 + 方法名 + 行号 + 语句区间），四个标志
+        // 由 [decideConsumption] 按锚点位置单点决定，见循环内注释。
+        val consumptions = mutableListOf<WrapperConsumption>()
+        // T-PreviewStmtTypeScope：重新赋值点（赋值 LHS 是该变量）——wrapper 被重新赋值即开启一段新的
+        // 条件生命周期，[filterCallsToAnchorSegment] 据此只收锚点所在段的链上调用。
+        val assignmentOffsets = mutableListOf<Int>()
+        // XB（M44）：DeleteChain 变量分步形态（`DeleteChain c = DeleteChain.of(mapper, X.class); c.eq(...)`）
+        // → DELETE 语义（XbatisConverter 按 deleteConsumed 分派）；删除语义来自链类型本身而非引用消费，
+        // 按变量声明位置记为证据（锚点在声明语句内即命中）。
+        if ((variable.type as? PsiClassType)?.className == "DeleteChain") {
+            consumptions += consumptionEvidence(variable, ConsumptionKind.DELETE, XBATIS_DELETE_CHAIN)
+        }
         // T-M29-02/03：分页消费（`service.page(new Page<>(...), wrapper)`）→ Page 实参解析的 LIMIT 子句
         // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A，默认 true 对齐 MP Page 默认）
         var pageLimit: LimitClause? = null
@@ -930,12 +1011,15 @@ object WrapperLocator {
         }
 
         // 2. 变量引用上的方法调用（分步写法）+ 消费识别（`service.remove(wrapper)` / `service.count(wrapper)` 等）
+        // T-PreviewStmtTypeScope：消费不再「任意一处即置标志」，而是收进证据清单——作用域收窄见 [decideConsumption]
         ReferencesSearch.search(variable).forEach { ref ->
             val refExpression = ref.element as? PsiReferenceExpression ?: return@forEach
-            if (isConsumerArgument(refExpression, deleteConsumerMethodNames)) deleteConsumed = true
-            if (isConsumerArgument(refExpression, countConsumerMethodNames)) countConsumed = true
-            if (isConsumerArgument(refExpression, setOf(EXISTS_CONSUMER))) existsConsumed = true
-            if (isEntityUpdateArgument(refExpression)) updateEntityConsumed = true
+            // T-PreviewStmtTypeScope：重新赋值点记录（`w = new LambdaQueryWrapper<>()` 的 LHS 引用）
+            val parent = refExpression.parent
+            if (parent is PsiAssignmentExpression && parent.lExpression === refExpression) {
+                assignmentOffsets += refExpression.textRange.startOffset
+            }
+            consumerCallOf(refExpression)?.let { consumptionOf(refExpression, it)?.let { evidence -> consumptions += evidence } }
             // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
             if (pageLimit == null) {
                 pageConsumingCall(refExpression)?.let { call ->
@@ -999,9 +1083,21 @@ object WrapperLocator {
             enclosingIf == null || seenIfStatements.add(enclosingIf)
         }
 
-        val wrapperCalls = dedupedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
+        // T-PreviewStmtTypeScope：重新赋值分段——锚点落在哪一段条件生命周期，就只收那一段的链上调用
+        // （demo 语料 WrapperReuseRepro：重新赋值行的锚点若收全量，DELETE 会带上 update 段的 user_id/status）
+        val segmentCalls = filterCallsToAnchorSegment(dedupedCalls, assignmentOffsets, anchorOffsetOf(anchor))
+        val wrapperCalls = segmentCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
+        // T-PreviewStmtTypeScope M2（D-2）：从全部消费证据里按锚点位置选一条决定语句类型；
+        // D-3 的强制档位（面板切换）优先于 D-2。
+        val deciding = decideConsumption(consumptions, anchorOffsetOf(anchor), preferredConsumption)
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount),
+            chain = WrapperChain(
+                wrapperType, entityClass?.name, wrapperCalls, constructorAlias,
+                deciding?.kind == ConsumptionKind.DELETE, deciding?.kind == ConsumptionKind.COUNT,
+                deciding?.kind == ConsumptionKind.EXISTS, deciding?.kind == ConsumptionKind.UPDATE_ENTITY,
+                pageLimit, pageSearchCount,
+                decidingConsumption = deciding, allConsumptions = consumptions.sortedBy { it.referenceOffset },
+            ),
             table = table,
         )
     }
@@ -1036,84 +1132,244 @@ object WrapperLocator {
         return ArgResolver.collectCallChain(outermost)
     }
 
-    /**
-     * 判断引用是否作为**实参**传给指定消费方法集合（`service.remove(wrapper)` / `service.count(wrapper)` 等）。
-     *
-     * 引用是方法调用 qualifier（`wrapper.eq(...)` 的链调用）或位于其他上下文时返回 false。
-     */
-    private fun isEntityUpdateArgument(ref: PsiReferenceExpression): Boolean {
-        var cursor: PsiElement? = ref.parent
-        while (cursor != null) {
-            when (cursor) {
-                is PsiExpressionList -> {
-                    val call = cursor.parent as? PsiMethodCallExpression ?: return false
-                    if (call.methodExpression.referenceName !in UPDATE_CONSUMER_METHODS) return false
-                    val args = call.argumentList.expressions
-                    // 双参、wrapper 不是首参，且首参不是 null 字面量（`update(null, wrapper)` 为 mapper 批量更新，非实体更新）
-                    if (args.size < 2) return false
-                    if (args[0] is PsiLiteralExpression && (args[0] as PsiLiteralExpression).value == null) return false
-                    return args.indexOfFirst { it === ref } >= 1
-                }
-                // 引用是链调用的 qualifier / 语句 / 方法 / 类边界，不是消费实参
-                is PsiMethodCallExpression, is PsiStatement, is PsiMethod, is PsiClass -> return false
-            }
-            cursor = cursor.parent
-        }
-        return false
-    }
-
-    /**
-     * 判断表达式是否作为**实体更新消费**的 wrapper 实参（`service.update(entity, new W()...)` / 工厂内联形态，
-     * U07-②，T-M15-04）：消费方法为 update、实参 >= 2 且 wrapper 位于非首参实参子树内
-     * （entity 在前、wrapper 在后；wrapper 可能是链表达式，用 isAncestor 判定归属）。
-     */
-    private fun isEntityUpdateConsumer(expr: PsiElement): Boolean {
-        val call = expr.consumingCall() ?: return false
-        if (call.methodExpression.referenceName !in UPDATE_CONSUMER_METHODS) return false
-        val args = call.argumentList.expressions
-        if (args.size < 2) return false
-        // `update(null, wrapper)` 第一参为 null 字面量 → mapper 批量更新，非实体更新
-        if (args[0] is PsiLiteralExpression && (args[0] as PsiLiteralExpression).value == null) return false
-        return args.drop(1).any { arg -> PsiTreeUtil.isAncestor(arg, expr, false) }
-    }
+    // ------------------------------------------------------------------
+    // T-PreviewStmtTypeScope：消费证据（判型依据）与 D-2 作用域收窄
+    // ------------------------------------------------------------------
 
     /** 实体更新消费方法名（`service.update(entity, wrapper)` 双参形态；updateJoin/updateJoinAndNull 为 MPJ 官方联表更新，M15 增补；
      *  T-M20-10：`saveOrUpdate(entity, wrapper)` 双参按实体字段展开 UPDATE（近似 MP 先更新语义，upsert 预览以 UPDATE 呈现））。 */
     private val UPDATE_CONSUMER_METHODS = setOf("update", "updateJoin", "updateJoinAndNull", "saveOrUpdate")
-    private fun isConsumerArgument(ref: PsiReferenceExpression, consumerMethods: Set<String>): Boolean {
-        var cursor: PsiElement? = ref.parent
-        while (cursor != null) {
-            when (cursor) {
-                is PsiExpressionList -> {
-                    val call = cursor.parent as? PsiMethodCallExpression ?: return false
-                    return call.methodExpression.referenceName in consumerMethods
-                }
-                // 引用是链调用的 qualifier / 语句 / 方法 / 类边界，不是消费实参
-                is PsiMethodCallExpression, is PsiStatement, is PsiMethod, is PsiClass -> return false
-            }
-            cursor = cursor.parent
-        }
-        return false
-    }
 
     /**
-     * T-M29-02：引用是否作为**分页消费方法**的实参（`service.page(page, wrapper)` / `selectPage` 等）；
-     * 命中返回消费调用（[parsePageLimit] 从其实参解析 Page），否则 null。判定规则同 [isConsumerArgument]。
+     * 引用所在**消费调用的实参列表父调用**（`wrapper` 作为实参传给谁）；引用不在实参位置
+     * （链上 qualifier / 非调用上下文）返回 null。旧 isConsumerArgument / isEntityUpdateArgument /
+     * pageConsumingCall 三处同构向上遍历收口于此。
      */
-    private fun pageConsumingCall(ref: PsiReferenceExpression): PsiMethodCallExpression? {
+    private fun consumerCallOf(ref: PsiReferenceExpression): PsiMethodCallExpression? {
         var cursor: PsiElement? = ref.parent
         while (cursor != null) {
             when (cursor) {
-                is PsiExpressionList -> {
-                    val call = cursor.parent as? PsiMethodCallExpression ?: return null
-                    return call.takeIf { it.methodExpression.referenceName in pageConsumerMethodNames }
-                }
+                is PsiExpressionList -> return cursor.parent as? PsiMethodCallExpression
+                // 引用是链调用的 qualifier / 语句 / 方法 / 类边界，不是消费实参
                 is PsiMethodCallExpression, is PsiStatement, is PsiMethod, is PsiClass -> return null
             }
             cursor = cursor.parent
         }
         return null
     }
+
+    /**
+     * T-M29-02：引用是否作为**分页消费方法**的实参（`service.page(page, wrapper)` / `selectPage` 等）；
+     * 命中返回消费调用（[parsePageLimit] 从其实参解析 Page），否则 null。
+     */
+    private fun pageConsumingCall(ref: PsiReferenceExpression): PsiMethodCallExpression? =
+        consumerCallOf(ref)?.takeIf { it.methodExpression.referenceName in pageConsumerMethodNames }
+
+    /**
+     * T-PreviewStmtTypeScope：一处消费表达式的**档位**判定——方法名落在消费集合内 + 档位形态 + M3 接收者负门；
+     * 不是消费返回 null。
+     *
+     * @param wrapperExpr 该 wrapper 在实参中的表达式（引用 / 内联链表达式），UPDATE 档位据它判「wrapper 非首参」
+     */
+    private fun consumptionKindOf(call: PsiMethodCallExpression, wrapperExpr: PsiElement): ConsumptionKind? {
+        val name = call.methodExpression.referenceName ?: return null
+        val kind = when {
+            name in UPDATE_CONSUMER_METHODS -> ConsumptionKind.UPDATE_ENTITY
+            name in deleteConsumerMethodNames -> ConsumptionKind.DELETE
+            name in countConsumerMethodNames -> ConsumptionKind.COUNT
+            name == EXISTS_CONSUMER -> ConsumptionKind.EXISTS
+            name in pageConsumerMethodNames -> ConsumptionKind.PAGE
+            else -> return null
+        }
+        if (hasNonDbReceiver(call)) return null
+        if (kind == ConsumptionKind.UPDATE_ENTITY && !isEntityUpdateShape(call, wrapperExpr)) return null
+        return kind
+    }
+
+    /**
+     * 实体更新消费形态（U07-②，T-M15-04）：实参 >= 2、wrapper 位于**非首参**子树内（entity 在前、
+     * wrapper 在后；`update(null, wrapper)` 首参 null 字面量为 mapper 批量更新，不算实体更新）。
+     * 引用形态与内联链表达式共用同一判据。
+     */
+    private fun isEntityUpdateShape(call: PsiMethodCallExpression, wrapperExpr: PsiElement): Boolean {
+        val args = call.argumentList.expressions
+        if (args.size < 2) return false
+        if (args[0] is PsiLiteralExpression && (args[0] as PsiLiteralExpression).value == null) return false
+        return args.drop(1).any { arg -> PsiTreeUtil.isAncestor(arg, wrapperExpr, false) }
+    }
+
+    /** 消费表达式 → 证据（不是消费返回 null）。 */
+    private fun consumptionOf(wrapperExpr: PsiElement, call: PsiMethodCallExpression): WrapperConsumption? =
+        consumptionKindOf(call, wrapperExpr)?.let { kind ->
+            // T-PreviewStmtTypeScope：实体更新档位带上**实体实参文本**（`update(patch, w)` 的 `patch`），
+            // 让 SET 占位符能逐列生成参数来源（`patch.order_no`）而不是整列共用一个来源。
+            val detail = if (kind == ConsumptionKind.UPDATE_ENTITY) {
+                call.argumentList.expressions.firstOrNull()?.text
+                    ?.takeIf { it.isNotBlank() && it.length <= ENTITY_ARG_TEXT_LIMIT } ?: ""
+            } else {
+                ""
+            }
+            consumptionEvidence(wrapperExpr, kind, call.methodExpression.referenceName ?: "", call, detail)
+        }
+
+    /** 实体实参文本上限（超出则不作为参数来源前缀，回落「实体」兜底文案）。 */
+    private const val ENTITY_ARG_TEXT_LIMIT = 60
+
+    /**
+     * T-PreviewStmtTypeScope：构造一条消费证据（M1 展示载体 + D-2 排序依据）。
+     *
+     * @param offsetSource 偏移/行号取谁（引用优先；内联链取链首表达式）
+     * @param kind         档位
+     * @param methodName   方法名留痕；空串时回落到调用的方法名（DeleteChain 这类链类型事实需显式给）
+     * @param call         消费调用；null 表示「不是调用形态」（如 DeleteChain 链类型事实）
+     * @param detail       档位补充事实（实体更新档位＝实体实参文本，见 [consumptionOf]）
+     */
+    private fun consumptionEvidence(
+        offsetSource: PsiElement,
+        kind: ConsumptionKind,
+        methodName: String,
+        call: PsiMethodCallExpression? = null,
+        detail: String = "",
+    ): WrapperConsumption {
+        val statement = PsiTreeUtil.getParentOfType(offsetSource, PsiStatement::class.java, false)
+        val range = statement?.textRange?.let { it.startOffset..(it.endOffset - 1) } ?: IntRange.EMPTY
+        val line = runCatching {
+            val file = offsetSource.containingFile ?: return@runCatching 0
+            val document = PsiDocumentManager.getInstance(offsetSource.project).getDocument(file)
+                ?: return@runCatching 0
+            document.getLineNumber(offsetSource.textRange.startOffset) + 1
+        }.getOrDefault(0)
+        return WrapperConsumption(
+            kind = kind,
+            methodName = methodName.ifBlank { call?.methodExpression?.referenceName ?: "" },
+            referenceOffset = offsetSource.textRange.startOffset,
+            statementRange = range,
+            line = line,
+            fileName = offsetSource.containingFile?.name ?: "",
+            detail = detail,
+        )
+    }
+
+    /** 锚点偏移（D-2 判型用）；无锚点上下文返回 null（[decideConsumption] 退回档位优先级口径）。 */
+    private fun anchorOffsetOf(anchor: PsiElement?): Int? = anchor?.textRange?.startOffset
+
+    /**
+     * T-PreviewStmtTypeScope M2（D-2）：从全部消费证据里选出**决定语句类型**的那一条。
+     *
+     *  1. 锚点所在语句里命中消费 → 取该语句内的消费（同语句多条按档位优先级 COUNT > EXISTS > UPDATE >
+     *     DELETE > PAGE）；
+     *  2. 否则取**锚点之后最近**的一条（保住 `w = new ...; service.remove(w);` 这类声明与消费分离的写法）；
+     *  3. 都没有 → null，语句类型维持默认 SELECT。
+     *
+     * 旧口径是「该 wrapper 任意一处被消费即改判」——同一 wrapper 在方法里被多处消费时，判型与用户
+     * 正在看的那条语句脱钩（真机报障：查询链预览出 UPDATE/DELETE，见 20261112-1740 开发计划 §二）。
+     *
+     * @param anchorOffset 触发预览的锚点偏移；null = 无锚点上下文，退回旧口径（按档位优先级取一条）
+     * @param preferred    D-3 强制档位（面板「预览目标」切换）：命中该档时优先于下面的位置判定；
+     *                     该档没有证据时回落 D-2（防御：UI 只会给出现过的档位，正常不会走到）
+     */
+    internal fun decideConsumption(
+        consumptions: List<WrapperConsumption>,
+        anchorOffset: Int?,
+        preferred: ConsumptionKind? = null,
+    ): WrapperConsumption? {
+        if (consumptions.isEmpty()) return null
+        fun byPriority(list: List<WrapperConsumption>): WrapperConsumption? =
+            list.minWithOrNull(compareBy({ CONSUMPTION_PRIORITY.indexOf(it.kind) }, { it.referenceOffset }))
+        if (preferred != null) {
+            val pool = consumptions.filter { it.kind == preferred }
+            if (pool.isNotEmpty()) {
+                // 同档多条写法：锚点之后最近的一条优先（与 D-2 同口径），否则取最早的一条
+                return anchorOffset?.let { anchor ->
+                    pool.filter { it.referenceOffset >= anchor }.minByOrNull { it.referenceOffset }
+                } ?: pool.minByOrNull { it.referenceOffset }
+            }
+        }
+        if (anchorOffset == null) return byPriority(consumptions)
+        byPriority(consumptions.filter { anchorOffset in it.statementRange })?.let { return it }
+        return consumptions.filter { it.referenceOffset >= anchorOffset }.minByOrNull { it.referenceOffset }
+    }
+
+    /**
+     * T-PreviewStmtTypeScope：重新赋值分段——wrapper 变量被重新赋值后，赋值点即新一段条件生命周期的起点；
+     * 锚点落在哪一段，就只收那一段的链上调用。
+     *
+     *  - 锚点在某次重新赋值之后 → 只收该赋值之后的调用（`w = new ...; w.eq(b); delete(w)` 的锚点
+     *    不再带上前一段的 `w.eq(a)`）；
+     *  - 锚点在第一次重新赋值之前（含变量声明行）→ 只收该赋值之前的调用（声明段的链）；
+     *  - 无重新赋值 / 无锚点 → 全量（存量行为零变化）。
+     *
+     * 消费证据**不在此过滤**：D-3 的「预览目标」切换需要全部档位（update 段的证据在 delete 段的
+     * 锚点上仍要能切到）。纯函数，单测直接驱动。
+     */
+    internal fun filterCallsToAnchorSegment(
+        calls: List<PsiMethodCallExpression>,
+        assignmentOffsets: List<Int>,
+        anchorOffset: Int?,
+    ): List<PsiMethodCallExpression> {
+        if (assignmentOffsets.isEmpty() || anchorOffset == null) return calls
+        val segmentStart = assignmentOffsets.filter { it <= anchorOffset }.maxOrNull()
+        return if (segmentStart != null) {
+            calls.filter { it.textRange.startOffset > segmentStart }
+        } else {
+            val firstAssignment = assignmentOffsets.minOrNull() ?: return calls
+            calls.filter { it.textRange.startOffset < firstAssignment }
+        }
+    }
+
+    /** 消费档位优先级（与 SqlPreviewService 分派顺序同源：count > exists > update > delete > page）。 */
+    private val CONSUMPTION_PRIORITY: List<ConsumptionKind> = listOf(
+        ConsumptionKind.COUNT, ConsumptionKind.EXISTS, ConsumptionKind.UPDATE_ENTITY,
+        ConsumptionKind.DELETE, ConsumptionKind.PAGE,
+    )
+
+    /**
+     * T-PreviewStmtTypeScope M3：接收者负门——`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类
+     * JDK 容器/常见非 DB 类型上的同名调用不是 SQL 消费语义，不该把查询链改判成删除/更新
+     * （判型侧此前只看方法名字符串，与锚点侧带家族判定的口径不一致）。
+     *
+     * 取**负门**而非「正向要求 MP CRUD 家族」是有意的：正向白名单（[WrapperAnchorDetector] 侧
+     * `hasMpCrudReceiver` 的口径）要求接收者类型能解析到 BaseMapper/IService 家族，而真实工程与测试语料
+     * 大量使用「未接入依赖的自有 Service 桩 / 自有 Component 中间层」，正向判定会把它们的
+     * `service.remove(w)` / `service.update(entity, w)` 一并否掉（存量语义大面积回退）。负门只切掉
+     * 「明确不是 DB 接收者」的那一小撮，宁缺毋滥的方向与锚点侧一致。
+     */
+    private fun hasNonDbReceiver(call: PsiMethodCallExpression): Boolean {
+        val qualifier = call.methodExpression.qualifierExpression as? PsiReferenceExpression ?: return false
+        val type = runCatching { qualifier.type as? PsiClassType }.getOrNull() ?: return false
+        return isNonDbReceiverType(type, 0)
+    }
+
+    /** 类型父链（含自身，深度上限 [NON_DB_RECEIVER_DEPTH]）是否命中 JDK 容器/常见非 DB 类型。 */
+    private fun isNonDbReceiverType(type: PsiClassType, depth: Int): Boolean {
+        if (depth > NON_DB_RECEIVER_DEPTH) return false
+        val resolved = runCatching { type.resolve()?.qualifiedName }.getOrNull()
+        if (resolved != null) {
+            if (resolved in NON_DB_RECEIVER_FQNS) return true
+        } else {
+            // 类型不可解析（依赖未索引 / 桩语料）时按简单名兜底：裸 `List` / `Map` 不可能是工程自有 DB 类型
+            val simple = type.canonicalText.substringBefore('<').substringAfterLast('.')
+            if (simple in NON_DB_RECEIVER_SIMPLE_NAMES) return true
+        }
+        return runCatching { type.superTypes }.getOrNull()
+            ?.any { it is PsiClassType && isNonDbReceiverType(it, depth + 1) } == true
+    }
+
+    /** JDK 容器/常见非 DB 接收者类型（解析成功时按全限定名判定）。 */
+    private val NON_DB_RECEIVER_FQNS: Set<String> = setOf(
+        "java.util.Collection", "java.util.List", "java.util.Set", "java.util.Map",
+        "java.util.Iterator", "java.lang.Iterable", "java.util.Optional",
+        "java.util.stream.Stream", "java.lang.CharSequence", "java.lang.String",
+        "java.lang.StringBuilder", "java.lang.StringBuffer", "java.lang.Class",
+        "java.lang.Thread", "java.lang.ThreadLocal", "java.io.Writer", "java.io.OutputStream",
+    )
+
+    /** 类型不可解析时的简单名兜底集合（与 [NON_DB_RECEIVER_FQNS] 同口径）。 */
+    private val NON_DB_RECEIVER_SIMPLE_NAMES: Set<String> =
+        NON_DB_RECEIVER_FQNS.mapTo(mutableSetOf()) { it.substringAfterLast('.') }
+
+    /** 类型父链遍历深度上限（接收者至多几跳；防病态继承链的无界递归）。 */
+    private const val NON_DB_RECEIVER_DEPTH = 4
 
     /**
      * T-M29-03：解析分页消费调用的 Page 实参（`new Page<>(current, size)`）为 [LimitClause]。

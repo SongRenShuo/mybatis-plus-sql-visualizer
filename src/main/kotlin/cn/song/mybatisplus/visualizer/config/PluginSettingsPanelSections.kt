@@ -672,6 +672,15 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip")
                 toolTipText = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip.tip")
             })
+            // T-NotifyTune 券 A/B：两个主动通知开关（一次性语义见 DialectGapTip / FirstCaptureGuide）
+            addRow(p, g, "", dialectTipCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.dialectTip")
+                toolTipText = MpSqlVisualizerBundle.message("settings.dialectTip.tip")
+            })
+            addRow(p, g, "", firstCaptureGuideCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.firstCaptureGuide")
+                toolTipText = MpSqlVisualizerBundle.message("settings.firstCaptureGuide.tip")
+            })
             // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
             addRow(p, g, "", editorShowWhitespacesCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces")

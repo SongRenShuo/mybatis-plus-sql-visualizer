@@ -56,6 +56,9 @@
 预览按「最强消费」判型（第 3/4 档先命中），于是看起来「查询链被判成 update」。
 - 判据：把光标分别放到 117 / 118 / 119 行各触发一次，**三次结果相同**；在同一方法内按变量名查找它的全部出现处，
   能找到 `xxx.update(entity, w)` 或 `xxx.delete(w)`。
+- **2026-11-12 用户回传真机代码确认 H1**：同一个 `cuPartyOrgMemberEntityLambdaQueryWrapper` 在 216-217 行
+  交给 `cuPartyOrgMemberComponent.update(entity, w)`，232 行重新赋值后 235 行交给 `delete(w)`——两种消费
+  同在一个方法里，中间还夹着别的分支。旧口径下 update 档位恒先命中，于是查询侧那条链的预览也报 UPDATE。
 
 **H2 面板/结果没跟上本次触发（显示上一次锚点的结果）**
 - 判据：同一图标连点两次结果应完全相同；在两个锚点间来回点，面板每次都跟着变。
@@ -85,13 +88,14 @@
 （方法名 + 行号），例如 `UPDATE ← 第 120 行 cuPartyOrgMemberMapper.update(entity, wrapper)`。
 目标：即使判型是对的，用户也能立刻明白为什么不是 SELECT。（同类先例：面板既有的「未绑定数据源」提示行。）
 
-**M2（需拍板，判型作用域）** 把消费识别从「该变量的全部引用」收窄到与「正在看的语句」相干的范围，三档：
+**M2（已拍板 2026-11-12：D-2 + D-3 一起落地）** 把消费识别从「该变量的全部引用」收窄到与「正在看的语句」
+相干的范围，并把其余档位交给用户选：
 
-| 序号 | 口径 | 代价 |
+| 序号 | 口径 | 结论 |
 | --- | --- | --- |
-| D-1 | 只看锚点所在语句 | 最贴直觉；`w = new …;` 与 `service.remove(w);` 分离写法在声明行会掉回 SELECT |
-| D-2 | 锚点所在语句 + 该方法内锚点之后的第一个消费调用 | 保住分离写法，改动小，**推荐先做** |
-| D-3 | 不收窄，同一变量有多种消费时面板给出「查询 / 更新 / 删除」多档由用户选 | 体验最好，成本最高（可复用 T-M29.6 的选择栏先例），建议后续按读数再上 |
+| D-1 | 只看锚点所在语句 | **不做**：`w = new …;` 与 `service.remove(w);` 分离写法在声明行会掉回 SELECT |
+| D-2 | 锚点所在语句 + 锚点之后的第一个消费调用 | **已实施**：作为**默认选中项**（`WrapperLocator.decideConsumption` 位置判定） |
+| D-3 | 多档消费时面板给出多目标由用户选 | **已实施**：用户 2026-11-12 定「不要为了省事，往插件长远发展做」⇒ 与 D-2 并用，不是替代关系——D-2 决定默认落点，D-3 把其余档位摆出来，切换即按强制档位重算 |
 
 **M3（必做，补家族门）** 判型侧复用锚点侧那套 receiver 家族判定（MP CRUD / MPJ / 自有 service 变量，
 `WrapperAnchorDetector.kt:128-146` 的 `hasMpCrudReceiver` 口径），把「非 MP 的同名方法」挡在置位之外：
@@ -102,9 +106,11 @@
 
 ## 六、验证
 
-- 定向：新增 `PreviewStmtTypeScopeTest`（F1/F2/F3 三例 + M3 反向用例）；回归
+- 定向：新增 `PreviewStmtTypeScopeTest`（F1/F2/F3 三例 + 用户真机形态「同变量复用 update/delete」一例 +
+  D-2/D-3 的判型纯函数用例 + M1 文案用例）；回归
   `SqlPreviewServiceRoutingTest`（`:122` update 消费、`:164` delete 消费）、`ConsumerMethodsCoverageTest`、
-  `WrapperLocatorTest`。
+  `WrapperLocatorTest`、`SqlPreviewTopRowLayoutTest`（工具栏新增入口）、`SqlPreviewPanelMetaHintTooltipTest`
+  （meta 行新增分段）。
 - 反向：临时摘掉 M3 的家族门 → F3 必须变红（同病变红才算规则看得见真实形态）。
 - 真机：用 Component 形态的最小工程（`dev-support/test-demo` 或用户工程）走查——同一变量双消费时
   面板出现 M1 的依据行；D-2 落地后类型随锚点所在语句变化，且分离写法（声明行 + `remove(w)`）仍判 DELETE。
@@ -126,4 +132,83 @@
 
 ## 九、实施记录
 
-（实施后回填）
+实施于工作树 `.worktrees/t-preview-stmt-type-scope`，分支 `t-preview-stmt-type-scope`，自 master `822519919` 起。
+
+### 9.1 落地清单
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| M1 | 判型依据可见化 | `model/WrapperChain.kt` 新增 `WrapperConsumption` / `ConsumptionKind`；`WrapperChain.decidingConsumption` / `allConsumptions`；`PreviewResult.decidingConsumption` / `otherConsumptions`；面板 meta 行「类型依据: xxx() 消费（第 N 行）」+ 悬停列全部候选（`SqlPreviewPanelResultView.updateMeta` / `stmtTypeSourceText` / `stmtTypeCandidatesSection`，双语 key `panel.meta.stmtType*`） |
+| M2-D-2 | 判型作用域收窄（默认落点） | `WrapperLocator.decideConsumption`（锚点所在语句 → 锚点之后最近一条 → 默认 SELECT）；三个 build 路径统一改为「先记证据、后单选」；证据按源码偏移排序（`ReferencesSearch` 返回顺序不保证源码序，实施中实测到 `[delete, update]` 反序） |
+| M2-D-3 | 多目标切换（用户 2026-11-12 拍板「往长远做」落地） | `PreviewResult.statementTypeOptions` / `statementTypeSwitch`；`preview(anchor, ctx, preferred)` 强制档位 + 强制档位进 `WrapperCache` 签名（否则切换命中旧档位缓存）；面板工具栏「语句: X」入口 + `BaseListPopupStep` 弹层（`updateStmtTypeSwitch` / `showStmtTypePopup` / `switchStmtType`，重算走 `previewAsync`） |
+| M3 | 接收者负门 | `WrapperLocator.hasNonDbReceiver`（JDK 容器/常见非 DB 类型，含父链、深度 4）。**偏离计划的一处**：计划写的是「复用锚点侧 `hasMpCrudReceiver` 家族判定」，实测该正向白名单会否掉未接依赖的自有 Service 桩与自有 Component 中间层（`ConsumerMethodsCoverageTest` 全量语料即属此类），故改为负门（只切「明确不是 DB 接收者」的一小撮）——P-3 的结论即此 |
+| M4 | 判型表入文档 | `docs/架构设计/02-核心流程详解.md` 新增 §2.3.1（判型表 + D-2 / D-3 / M3 / M1 四条口径），预览流程图节点补指向 |
+
+### 9.2 验证读数（2026-11-12）
+
+- 定向（六类）：`PreviewStmtTypeScopeTest` 12/0/0 · `ConsumerMethodsCoverageTest` 33/0/0 ·
+  `WrapperLocatorTest` 31/0/0 · `SqlPreviewServiceRoutingTest` 6/0/0 ·
+  `SqlPreviewTopRowLayoutTest` 9/0/0 · `SqlPreviewPanelMetaHintTooltipTest` 7/0/0 —— 合计 **98/0/0**。
+- 反向（M3 负门）：临时注释 `if (hasNonDbReceiver(call)) return null` → `PreviewStmtTypeScopeTest` **12 例 1 红**，
+  且恰好是 `testJdkCollectionRemoveIsNotSqlConsumption`（message：`List.remove(Object) 不是 SQL 删除消费，不应改判 DELETE`），
+  其余 11 例保持绿（探针精准、非散弹）；还原后 12/0/0。
+- 用户真机形态回归：`testReusedWrapperVariablePicksConsumptionOfAnchoredStatement` 直接复刻 216-217 行
+  `update(entity, w)` + 232 行重新赋值 + 235 行 `delete(w)` 的复用写法——锚点在 update 语句判 UPDATE、
+  在 delete 语句判 DELETE，两处证据都进候选集。
+
+### 9.3 not run（如实登记）
+
+- **全量门禁**（`testFast` / `testShards`）未跑：按纪律由独立只读收口车道跑，不在实施车道跑全量。
+- **真机 GUI 验收**未跑：需在 2026.3 真机确认「语句: UPDATE」按钮出现、弹层可切到 DELETE 且产物随之变化
+  （沙盒/用户工程二选一）。
+- **构建校验**（`verifyGate` / `buildPlugin`）未跑：本改动未动 `build.gradle.kts` / `plugin.xml` 的 EP 与
+  since-build，不属「大改动」判据。
+
+### 9.4 真机验收回抓的第二处缺口：重新赋值行的 `new` 锚点（2026-11-13）
+
+用户拿 demo 语料 `WrapperReuseRepro` 第 100 行（`w = new LambdaQueryWrapper<>();` 的重新赋值）点预览图标，
+得到的是**无 WHERE 的 SELECT**（`SELECT id, order_no, … FROM t_order`），条件与消费全丢。
+
+根因：`locateWithTable` 的定位顺序里 `findWrapperVariable` 先于 `buildChainFromNew`，但**赋值表达式右侧的
+`new` 不在任何 `PsiVariable` 祖先内**（LHS 的变量不是 RHS 的祖先），于是落到 `buildChainFromNew`——它只收
+「以该 `new` 为链首」的调用（`new W().eq(...)` 连写形态），赋值之后另起语句的 `w.eq(...)` 与 `delete(w)`
+自然全丢；锚点又落在两条消费之间，判型证据也一并丢失，退化成默认 SELECT。
+
+两处修法：
+
+| 编号 | 修法 | 落点 |
+| --- | --- | --- |
+| D-B1 | `findWrapperVariable` 新增 `PsiAssignmentExpression` 分支：LHS 解析到 wrapper 变量就按**变量**返回（LHS 不是 wrapper 时不命中、继续向上，不拦普通赋值） | `WrapperLocator.findWrapperVariable` |
+| D-B2 | 重新赋值分段：赋值 LHS 的偏移记为段界，`filterCallsToAnchorSegment` 只收**锚点所在段**的链上调用（锚点在首次重新赋值前 → 只收声明段；之后 → 只收该赋值之后）。消费证据**不过滤**（D-3 切换要看到全部档位） | `WrapperLocator.buildChain` + `filterCallsToAnchorSegment`（internal 纯函数） |
+
+同一轮真机还抓到第三处（D-C）：`update(entity, wrapper)` 预览的 SET 各列占位符**共用同一来源 `"?"`**，
+面板按来源去重后只剩一行 `#?`，填一个值就把 `order_no / user_id / amount / status / create_time`
+全填成同一个数（真机产物 `order_no = '1', user_id = 1, amount = 1, …`）。
+
+| 编号 | 修法 | 落点 |
+| --- | --- | --- |
+| D-C | 实体更新档位的消费证据带上**实体实参文本**（`update(patch, w)` 的 `patch`），SET 占位符逐列生成来源 `patch.<列名>`；取不到时回落 `实体.<列名>` | `WrapperConsumption.detail`（新字段）+ `WrapperLocator.consumptionOf` + `SqlPreviewService` 实体更新分支 |
+
+读数：`PreviewStmtTypeScopeTest` 新增三例（赋值锚点端到端 + 分段纯函数 + SET 逐列来源）。
+本轮定向 **107/0/0**（PreviewStmtTypeScopeTest 15 + ConsumerMethodsCoverageTest 33 + WrapperLocatorTest 31 +
+SqlPreviewServiceRoutingTest 6 + SqlPreviewServiceConfigTest 18 + BundlePlaceholderArityTest 4）；
+前一轮同批还跑过 SqlPreviewTopRowLayoutTest 9 + SqlPreviewPanelMetaHintTooltipTest 7（工具栏新入口 / meta 新分段）。
+反向两探针（分别摘掉 D-B1 / D-B2）各自恰红，见 §9.5。
+
+### 9.5 反向验证（2026-11-13 第二轮）
+
+| 探针 | 摘掉什么 | 读数 |
+| --- | --- | --- |
+| A | `findWrapperVariable` 的 `PsiAssignmentExpression` 分支 | `PreviewStmtTypeScopeTest` **14 例 1 红**，恰为 `testReassignmentAnchorUsesVariableChainAndAnchorSegment`，message「锚点之后最近的消费是 delete，应判 DELETE: **null**」——判型依据全丢，正是用户看到的退化形态 |
+| B | `filterCallsToAnchorSegment` 的段过滤（直接 `return calls`） | 同 **14 例 1 红**、同一用例，message「不该把 update 段的 status 条件带进来: DELETE FROM `order` WHERE user_id = ? AND status = 0 AND order_no = ? AND user_id = ?」 |
+| C | D-C 的逐列来源（回退成共用 `"?"`） | **15 例 1 红**、恰为 `testEntityUpdateSetPlaceholdersHavePerColumnSources`，message「SET 每列一个来源（id 不进 SET）: [?, ?, ?, ?, ?, userId] expected:<5> but was:<0>」——顺带实证了修复前的来源就是 5 个相同的 `?`（面板合成一行、填一个值填满整列），WHERE 侧来源是 `userId` |
+
+三探针各自命中一处修复、互不掩盖；还原后 15/0/0（合计见 §9.4 末行）。
+
+### 9.6 已知边界
+
+- D-2 的默认落点仍是启发式：锚点在「消费之前、且中间没有消费语句」时取最近一条；要换档只能靠 D-3 手动切。
+- D-3 只在**同一 wrapper 上出现 ≥2 档**时出现入口；单档场景面板完全不变（不留闭包、不占工具栏位）。
+- 强制档位重算会照常 `recordHistory`——同一段代码的不同档位各记一条历史（它们是不同 SQL，行为合理）。
+- 重新赋值分段只按「赋值点在锚点前后」切段：同一段内若再次对同一 wrapper 追加条件（`w = new …; w.eq(a); w.eq(b); delete(w)`）仍是整段合并，不做语句级细分。
+
