@@ -45,7 +45,9 @@ import java.util.regex.Pattern;
  * <li><b>类型接入</b>：{@code Parameters:} 行先挂起（键 = pstm id），同 id 的 {@code Types:} 行按位置并入
  *   {@code LogSqlParam.type} 后闭合。<b>必须并入类型</b>：{@code 00340025002200200006} 这类纯数字串在无类型
  *   启发式下会裸出成数值字面量（Oracle 模式语义错误）。兜底闭合点：同 id 的新 {@code Executing
- *   Statement}、{@code {conn-N} Preparing Statement:}、MyBatis {@code Preparing:} 语句行、closePending；
+ *   Statement}、{@code {conn-N} Preparing Statement:}、MyBatis {@code Preparing:} 语句行、closePending、
+ *   flushSettled（T-ConsoleFlushAlign：挂起组<b>自身</b>静默 ≥ 阈值才冲——Types 与 Parameters 同线程
+ *   相邻输出，间隔 1ms 量级，静默 1s 即判定 Types 行不会再来了，逐行喂行永不误撕参数组）；
  *   {@code Types:} 缺行时按无类型启发式渲染（现状口径），不伪造类型；</li>
  * <li><b>takeEntries 不冲刷挂起态</b>：生产桥每行喂入后都会调 takeEntries，若在此闭合，{@code Parameters:}
  *   行一落地就被取出、随后的 {@code Types:} 行永远无处并入；</li>
@@ -61,22 +63,52 @@ public class MyBatisLogParser {
     private static final String DEFAULT_PARAM_PREFIX = "Parameters:";
     private static final int DEFAULT_MAX_PARSE_LENGTH = 20000;
 
+    /**
+     * T-ConsoleFlushAlign：静默冲刷默认阈值（毫秒），对齐 {@link JdbcTemplateLogParser#DEFAULT_SETTLE_MS}。
+     *
+     * <p>取 1 秒的由来：{@code Parameters:} 行与 {@code Preparing:} 行由同一线程相邻打印，间隔 1ms 量级；1 秒的静默
+     * 足以判定「没有参数行可等」（无参语句 / 截断尾），而误伤（把参数行留在条目外）需要该线程在
+     * 两行之间卡住 1 秒以上。</p>
+     */
+    public static final long DEFAULT_SETTLE_MS = 1000L;
+
     // ---------- iBatis 2.x 标记（券 A/B） ----------
 
-    /** 廉价前置判据（两次 indexOf 即可挡掉 MyBatis/Hibernate 行，不跑正则）。 */
+    /** 廉价前置判据（三次 indexOf 即可挡掉 MyBatis/Hibernate 行，不跑正则）。 */
     private static final String PSTM_MARKER_PREFIX = "{pstm-";
     private static final String CONN_MARKER_PREFIX = "{conn-";
 
-    /** 标记种类分组值：{conn-N} 只消费不产条目，其余（pstm）走语句状态机。 */
+    /** T-PanweiInsertCapture F5：iBatis {@code StatementLogProxy} 的标记（plain {@code Statement}）。 */
+    private static final String STMT_MARKER_PREFIX = "{stmt-";
+
+    /** 标记种类分组值：{conn-N} 只消费不产条目，{stmt-N} 走 plain Statement 分支，pstm 走三行组。 */
     private static final String CONN_KIND = "conn";
+    private static final String STMT_KIND = "stmt";
 
     private static final String IBATIS_EXECUTING_STATEMENT = "Executing Statement:";
     private static final String IBATIS_PREPARING_STATEMENT = "Preparing Statement:";
     private static final String IBATIS_PARAMETERS = "Parameters:";
     private static final String IBATIS_TYPES = "Types:";
 
-    /** iBatis JDBC 日志代理的实例计数器标记：{pstm-100021} / {conn-100022}。 */
-    private static final Pattern IBATIS_MARKER = Pattern.compile("\\{(pstm|conn)-(\\d+)\\}");
+    /**
+     * T-PanweiInsertCapture F5：iBatis plain {@code Statement} 的执行行关键字（{@code {stmt-N} Statement: <sql>}）。
+     * 与 {@link #IBATIS_EXECUTING_STATEMENT} 的差别是<b>两个词都不同</b>（标记前缀 {@code stmt} + 关键字 {@code Statement:}），
+     * 源码依据 {@code StatementLogProxy.invoke}。
+     */
+    private static final String IBATIS_STATEMENT = "Statement:";
+
+    /**
+     * T-PanweiInsertCapture F4：MyBatis {@code StatementLogger} 的固定文案（{@code SimpleStatementHandler}，
+     * 即 mapper 上 {@code statementType="STATEMENT"}）。{@code mybatis-3.5.19} 字节码实证：常量池
+     * {@code ldc // String  Executing:}，前缀 {@code ==> } 由 {@code BaseJdbcLogger} 拼出，故按关键字定位、不认前缀。
+     *
+     * <p>与 {@code Preparing:} 的关系：{@code MappedStatement} 的 {@code statementType} 二选一，同一次执行不会同时出现
+     * 两种行；万一出现，由 {@code LogSqlEntryBuffer} 既有同 SQL 去重折叠（⨉N），本解析器不另设折叠。</p>
+     */
+    private static final String EXECUTING_KEYWORD = "Executing:";
+
+    /** iBatis JDBC 日志代理的实例计数器标记：{pstm-100021} / {conn-100022} / {stmt-100023}。 */
+    private static final Pattern IBATIS_MARKER = Pattern.compile("\\{(pstm|conn|stmt)-(\\d+)\\}");
 
     /**
      * Hibernate 参数绑定行模式：`binding parameter [N] as [TYPE] - [VALUE]`
@@ -97,6 +129,15 @@ public class MyBatisLogParser {
     private boolean mixedPrefix;
     private int maxParseLength;
 
+    /**
+     * T-ConsoleFlushAlign：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （{@code Parameters:} 行与 {@code Preparing:} 行同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private final long settleMs;
+
+    /** settle 判定的时钟（测试注入可控件；与 {@link LogThreadRouter} 共用同一时钟）。 */
+    private final kotlin.jvm.functions.Function0<Long> clock;
+
     private final List<LogSqlEntry> entries = new ArrayList<>();
 
     /**
@@ -108,6 +149,12 @@ public class MyBatisLogParser {
         final String logLine;
         /** null = {@code Parameters:} 行未到（仅 SQL 已知）；非 null = 参数已到、等 {@code Types:} 并入 */
         List<LogSqlParam> params = null;
+        /**
+         * T-ConsoleFlushAlign：该挂起组最近一次收到行的时钟毫秒（{@link #flushSettled(long)}
+         * 对挂起组做<b>自身</b>静默判定的判据——挂起组不归 {@link LogThreadRouter} 分桶管，路由器的
+         * lastActivity 覆盖不到它，须自带）。
+         */
+        long lastTouchMs = 0L;
 
         IbatisPending(String sql, String logLine) {
             this.sql = sql;
@@ -118,6 +165,13 @@ public class MyBatisLogParser {
             this.sql = sql;
             this.logLine = logLine;
             this.params = params;
+        }
+
+        IbatisPending(String sql, String logLine, List<LogSqlParam> params, long lastTouchMs) {
+            this.sql = sql;
+            this.logLine = logLine;
+            this.params = params;
+            this.lastTouchMs = lastTouchMs;
         }
     }
 
@@ -144,33 +198,55 @@ public class MyBatisLogParser {
         boolean continuing = false;
     }
 
-    private final LogThreadRouter<Bucket> router = new LogThreadRouter<>(
-            Bucket::new,
-            // 无线程 token 的裸行（续行 / 「前缀独占一行」的下一行）要落到**正在等待它**的桶——
-            // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
-            b -> b.continuing || b.prefixMatched || b.paramPrefixMatched,
-            b -> b.pendingSql == null && !b.prefixMatched && !b.paramPrefixMatched);
+    /**
+     * T-HibConc：线程分桶路由。
+     *
+     * <p>初始化已挪入构造器体（k2j 规则：字段初始化器引用主构造参数 {@code clock} → 挪构造器）。</p>
+     */
+    private final LogThreadRouter<Bucket> router;
 
     public MyBatisLogParser() {
         this(new LogSqlRestorer());
     }
 
     public MyBatisLogParser(LogSqlRestorer restorer) {
-        this(restorer, DEFAULT_SQL_PREFIX, DEFAULT_PARAM_PREFIX, true, DEFAULT_MAX_PARSE_LENGTH);
+        this(restorer, DEFAULT_SQL_PREFIX, DEFAULT_PARAM_PREFIX, true, DEFAULT_MAX_PARSE_LENGTH,
+                DEFAULT_SETTLE_MS, System::currentTimeMillis);
     }
 
     /** 全配置便捷构造（restorer 取默认）——master 具名默认参数形态（EP Filter/桥用）。 */
     public MyBatisLogParser(String sqlPrefix, String paramPrefix, boolean mixedPrefix, int maxParseLength) {
-        this(new LogSqlRestorer(), sqlPrefix, paramPrefix, mixedPrefix, maxParseLength);
+        this(new LogSqlRestorer(), sqlPrefix, paramPrefix, mixedPrefix, maxParseLength,
+                DEFAULT_SETTLE_MS, System::currentTimeMillis);
     }
 
     public MyBatisLogParser(LogSqlRestorer restorer, String sqlPrefix, String paramPrefix,
                             boolean mixedPrefix, int maxParseLength) {
+        this(restorer, sqlPrefix, paramPrefix, mixedPrefix, maxParseLength,
+                DEFAULT_SETTLE_MS, System::currentTimeMillis);
+    }
+
+    /** master 主构造全参形态（T-ConsoleFlushAlign：settleMs/clock 注入入口，测试用）。 */
+    public MyBatisLogParser(LogSqlRestorer restorer, String sqlPrefix, String paramPrefix,
+                            boolean mixedPrefix, int maxParseLength,
+                            long settleMs, kotlin.jvm.functions.Function0<Long> clock) {
         this.restorer = restorer;
         this.sqlPrefix = sqlPrefix;
         this.paramPrefix = paramPrefix;
         this.mixedPrefix = mixedPrefix;
         this.maxParseLength = maxParseLength;
+        this.settleMs = settleMs;
+        this.clock = clock;
+        this.router = new LogThreadRouter<>(
+                Bucket::new,
+                // 无线程 token 的裸行（续行 / 「前缀独占一行」的下一行）要落到**正在等待它**的桶——
+                // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
+                b -> b.continuing || b.prefixMatched || b.paramPrefixMatched,
+                b -> b.pendingSql == null && !b.prefixMatched && !b.paramPrefixMatched,
+                LogThreadRouter.DEFAULT_MAX_BUCKETS,
+                false,
+                // 时钟与 clock 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
+                clock);
     }
 
     public LogSqlRestorer getRestorer() {
@@ -225,6 +301,21 @@ public class MyBatisLogParser {
     private void feedInto(Bucket bucket, String line) {
         // 分支 0（券 A/B）：iBatis 2.x 标记行——命中即消费并返回，绝不落到下方用户配置前缀分支
         if (feedIbatis(bucket, line)) return;
+
+        // 分支 0.5（T-PanweiInsertCapture F4）：MyBatis `SimpleStatementHandler` 形态
+        // `==>  Executing: <sql>`（mapper 上 statementType="STATEMENT"）。
+        // 该形态**没有** `Preparing:`、也没有 `Parameters:`（MyBatis 直接拼 SQL），故命中即整条产出，
+        // 不进 pending 态。只在 mixedPrefix（宽容匹配，默认）时生效——`mixedPrefix=false` 的契约是
+        // 「只认用户配置的行首前缀」，硬塞内建形态会破坏它（该形态下按未识别行计数，见分支 7）。
+        if (mixedPrefix) {
+            String execSql = extractAfterKeyword(line, EXECUTING_KEYWORD);
+            if (execSql != null && !execSql.isEmpty()) {
+                flushIbatis();         // 与分支 1 同序：先闭合 iBatis 挂起参数组
+                closePending(bucket);  // 再闭合上一条未完成的 MyBatis 语句
+                emitEntry(execSql.substring(0, Math.min(maxParseLength, execSql.length())), line, List.of());
+                return;
+            }
+        }
 
         // 分支 1：Preparing 行（有 SQL 同行）
         String sql = extractAfterKeyword(line, sqlPrefix);
@@ -324,24 +415,58 @@ public class MyBatisLogParser {
         }
 
         // 分支 7：噪声行（与旧行为一致）
+        //
+        // T-PanweiInsertCapture F7：SQL 形态行落到这里 = **有日志但没被任何分支识别**——最典型的就是
+        // `mixedPrefix=false`（只认用户配置的行首前缀）时的 MyBatis `Executing:` 行。计数随增量诊断行
+        // 上报，让「某类语句整类不见」至少留下「有 N 行 SQL 没被识别」这一条证据。
+        //
+        // 只查 `Executing:` 一个关键字：`{pstm-`/`{conn-`/`{stmt-` 三种标记行在分支 0 已被无条件消费
+        // （feedIbatis 的 else 分支恒 return true），走不到这里；对它们再做 contains 是纯浪费。
+        if (line.contains(EXECUTING_KEYWORD)) {
+            LogParseDiag.unrecognizedSqlLine.incrementAndGet();
+        }
     }
 
-    // ---------- iBatis 2.x 标记行（券 A/B） ----------
+    // ---------- iBatis 2.x 标记行（券 A/B；T-PanweiInsertCapture F5 扩 {stmt-N}） ----------
 
     /**
-     * 处理带 {@code {pstm-N}} / {@code {conn-N}} 标记的行；返回 true 表示<b>本行已被消费</b>（调用方须立即返回）。
+     * 处理带 {@code {pstm-N}} / {@code {conn-N}} / {@code {stmt-N}} 标记的行；返回 true 表示<b>本行已被消费</b>（调用方须立即返回）。
      *
      * <p>廉价前置一次 {@code contains}：MyBatis/Hibernate 日志行在热路径上（每行每解析器调用）零正则开销。</p>
+     *
+     * <p><b>T-PanweiInsertCapture F5</b>：{@code {stmt-N}} 是 iBatis {@code StatementLogProxy} 的标记（plain {@code Statement}，
+     * 由 {@code Connection.createStatement()} 产生），文案是 {@code Statement: <sql>}——与 PreparedStatement 的
+     * {@code {pstm-N} Executing Statement:} <b>标记前缀与关键字都不同</b>。此前只查 {@code {pstm-}/{conn-}，
+     * 这类语句落到噪声档被静默丢弃（iBatis 源码 {@code StatementLogProxy.invoke} 实证）。</p>
      */
     private boolean feedIbatis(Bucket bucket, String line) {
-        if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)) return false;
+        if (!line.contains(PSTM_MARKER_PREFIX) && !line.contains(CONN_MARKER_PREFIX)
+                && !line.contains(STMT_MARKER_PREFIX)) {
+            return false;
+        }
         java.util.regex.Matcher marker = IBATIS_MARKER.matcher(line);
         if (!marker.find()) return false;
         String id = marker.group(2);
+        String kind = marker.group(1);
         String rest = line.substring(marker.end()).trim();
-        if (CONN_KIND.equals(marker.group(1))) {
+        // T-PanweiInsertCapture F6：本会话出现过 iBatis 形态 → 批处理不可见提示的触发条件之一
+        LogParseDiag.setSawIbatisForm(true);
+        if (CONN_KIND.equals(kind)) {
             // {conn-N} Preparing Statement: <sql>（及 conn 的其它行）只消费不产条目（D-2）
             if (rest.startsWith(IBATIS_PREPARING_STATEMENT)) flushIbatis();
+            return true;
+        }
+        if (STMT_KIND.equals(kind)) {
+            // T-PanweiInsertCapture F5：`{stmt-N} Statement: <sql>`——plain Statement 的执行行。
+            // 它**没有** Parameters/Types 行（参数由调用方直接拼进 SQL），命中即整条产出。
+            if (rest.startsWith(IBATIS_STATEMENT)) {
+                closePending(bucket); // 与 onIbatisExecuting 同序：先闭合上一条未完成语句
+                String sql = rest.substring(IBATIS_STATEMENT.length()).trim();
+                if (!sql.isEmpty()) {
+                    emitEntry(sql.substring(0, Math.min(maxParseLength, sql.length())), line, List.of(), SqlSource.IBATIS);
+                }
+            }
+            // 其余带 stmt 标记的行（Closing statement 等）只消费不产条目
             return true;
         }
         if (rest.startsWith(IBATIS_EXECUTING_STATEMENT)) {
@@ -368,7 +493,7 @@ public class MyBatisLogParser {
         closePending(bucket);
         if (sql.isEmpty()) return;
         ibatisPending.put(id, new IbatisPending(
-                sql.substring(0, Math.min(maxParseLength, sql.length())), line));
+                sql.substring(0, Math.min(maxParseLength, sql.length())), line, null, clock.invoke()));
     }
 
     /** {pstm-N} Parameters: ——挂起等 Types；无对应语句（上下文已丢）按既有诊断计数丢弃。 */
@@ -383,9 +508,10 @@ public class MyBatisLogParser {
             // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
             ibatisPending.remove(id);
             emitIbatis(pending);
-            ibatisPending.put(id, new IbatisPending(pending.sql, pending.logLine, params));
+            ibatisPending.put(id, new IbatisPending(pending.sql, pending.logLine, params, clock.invoke()));
         } else {
             pending.params = params;
+            pending.lastTouchMs = clock.invoke(); // T-ConsoleFlushAlign：Parameters 行刷新挂起组活动时间
         }
     }
 
@@ -396,12 +522,12 @@ public class MyBatisLogParser {
         List<LogSqlParam> params = pending.params;
         if (params == null) return; // 形态异常（Types 先于 Parameters）：保留 SQL 等参数行
         ibatisPending.remove(id);
-        emitEntry(pending.sql, pending.logLine, MyBatisLogParserKt.applyIbatisTypes(params, MyBatisLogParserKt.parseIbatisTypes(text)));
+        emitEntry(pending.sql, pending.logLine, MyBatisLogParserKt.applyIbatisTypes(params, MyBatisLogParserKt.parseIbatisTypes(text)), SqlSource.IBATIS);
     }
 
     /** 按「无类型兜底」闭合单条 iBatis 挂起态（Types 缺行 / 被新语句顶掉）。 */
     private LogSqlEntry emitIbatis(IbatisPending pending) {
-        return emitEntry(pending.sql, pending.logLine, pending.params != null ? pending.params : List.of());
+        return emitEntry(pending.sql, pending.logLine, pending.params != null ? pending.params : List.of(), SqlSource.IBATIS);
     }
 
     /** 冲刷全部 iBatis 挂起态（按插入序），返回首个产出条目（保持 closePending 返回语义）。 */
@@ -417,8 +543,19 @@ public class MyBatisLogParser {
         return first;
     }
 
-    /** 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份）。 */
+    /** 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份；默认来源 = MYBATIS）。 */
     private LogSqlEntry emitEntry(String sql, String logLine, List<LogSqlParam> params) {
+        return emitEntry(sql, logLine, params, SqlSource.MYBATIS);
+    }
+
+    /**
+     * 条目产出唯一收口（MyBatis 桶闭合与 iBatis 挂起闭合共用，避免两处各构造一份）。
+     *
+     * <p>{@code source} 由产出方显式指出：{@link SqlSource#MYBATIS} = 默认的 {@code Preparing:}/{@code Parameters:} 口径，
+     * {@link SqlSource#IBATIS} = {@code {pstm-N}} 三行组（iBatis 2.x）。<b>两条链路共用本方法</b>，所以来源标记
+     * 不能在这里按「解析器是谁」推断，必须由调用方传入（同一个 MyBatisLogParser 实例同时吃两种日志）。</p>
+     */
+    private LogSqlEntry emitEntry(String sql, String logLine, List<LogSqlParam> params, SqlSource source) {
         String restored = restorer.restore(sql, params);
         Long logTs = logLine != null ? LogTimestampParser.parse(logLine) : null;
         LogSqlEntry entry = new LogSqlEntry(
@@ -428,7 +565,7 @@ public class MyBatisLogParser {
                 System.currentTimeMillis(),
                 logTs,
                 LogSqlEntry.summarizeSql(restored),
-                SqlSource.MYBATIS,
+                source,
                 null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
         entries.add(entry);
@@ -508,6 +645,51 @@ public class MyBatisLogParser {
         List<LogSqlEntry> result = new ArrayList<>(entries);
         entries.clear();
         return result;
+    }
+
+    /**
+     * T-ConsoleFlushAlign：静默冲刷——闭合全部<b>已静默 ≥ {@code settleMs}</b> 的桶的待产出条目，随后冲刷
+     * 自身同样静默的 iBatis 挂起组；产出进 {@code entries}（由调用方随下一次 {@code takeEntries} 取走），返回本次
+     * 产出条数。
+     *
+     * <p>为什么必须有它：参数化语句的条目虽在 {@code Parameters:} 行到达即闭合（分支 4），但<b>无参语句</b>（MyBatis
+     * 不打 {@code Parameters:} 行）要等同线程的下一条语句行才闭合、日志截断尾的「{@code Preparing:} 已见 /
+     * {@code Parameters:} 未达」窗口则永远等不到参数行——实时链路从不调 {@code closePending}，这些语句在应用安静后
+     * 无限期滞留，{@code takeEntries()} 恒空。静默 ≥ 阈值即判定「后续行不会再来了」，此时闭合是安全的
+     * （同 {@code JdbcTemplateLogParser.flushSettled} 口径：宁交未还原形态，不整段丢弃）。</p>
+     *
+     * <p>iBatis 挂起组<b>不归桶管</b>（键 = pstm id，路由器的 lastActivity 覆盖不到），须按组内自带
+     * {@code IbatisPending.lastTouchMs} 判静默；无条件 {@code flushIbatis()} 会把「{@code Parameters:} → {@code Types:}（间隔
+     * 1ms 量级）」撕开、丢类型，故必须逐组判静默（T-PanweiInsertCapture 券 A/B 的类型并入约定不破）。</p>
+     *
+     * <p>调用点两处：① {@code processConsoleLine} 逐行入口（同控制台线程，喂行后调用，当前行的桶刚被触达故
+     * 不被截断）；② 控制台桥的常规轮询 {@code SqlLogConsoleBridge.flushSettledEntries}（EDT）——应用之后
+     * 一行都不再打时，靠这一拍兜底。</p>
+     */
+    public int flushSettled() {
+        return flushSettled(clock.invoke());
+    }
+
+    /** {@link #flushSettled()} 的显式时刻形态（master 默认参数 {@code nowMs = clock()} 的等价重载）。 */
+    public int flushSettled(long nowMs) {
+        int produced = 0;
+        // iBatis 挂起组（不归桶管）：逐组判静默（LinkedHashMap 插入序，与 closePending 的 flushIbatis 同口径）
+        List<String> settledIbatisKeys = new ArrayList<>();
+        for (java.util.Map.Entry<String, IbatisPending> e : ibatisPending.entrySet()) {
+            if (nowMs - e.getValue().lastTouchMs >= settleMs) {
+                settledIbatisKeys.add(e.getKey());
+            }
+        }
+        for (String key : settledIbatisKeys) {
+            IbatisPending pending = ibatisPending.remove(key);
+            if (pending == null) continue;
+            emitIbatis(pending);
+            produced++;
+        }
+        for (Bucket bucket : router.settledBuckets(settleMs, nowMs)) {
+            if (closePending(bucket) != null) produced++;
+        }
+        return produced;
     }
 
     private String extractAfterKeyword(String line, String keyword) {
