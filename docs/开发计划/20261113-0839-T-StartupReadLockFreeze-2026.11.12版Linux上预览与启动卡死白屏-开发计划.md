@@ -1,7 +1,7 @@
 # T-StartupReadLockFreeze：2026.11.12 在 Linux 上打开即卡死 / 预览白屏——后台阻塞读锁与 EDT 写锁升级互锁
 
 - 立项：2026-11-13 08:39（用户三批现场材料：两份 Java 线程栈 + 一张白屏窗口图 + 冻结报告目录截图）
-- 状态：**已出计划，未动 `src/main`**；用户侧即时自救见 §六，不需要等本单实施
+- 状态：**已实施（2026-11-13）**：两车道合流于分支 `t-startup-readlock-freeze`（集成提交 `ef49211d5`，车道提交 `39d4b2706` 预取链 / `9f712eb78` 写路径），中央定向 17 类 **133/0/0/0**（含 4 个 plugin.xml 守卫），全量 `testShards` 读数见 §13.10；真机 5 步验收（§十）仍待用户；用户侧即时自救见 §六
 - 现象口径（用户原话）：「2026.11.12 版 mac 上正常，linux 上 idea 打开后就卡死」；「昨天那个白屏问题依然存在，点击后好久才出来界面，界面还空白，估计是在加载或者扫描，然后就开始 dump 了」；工程规模「表上千了，实体类上万」
 - 关联代码：`ui/MbgExampleCallResolver.kt`、`ui/gutter/XmlSqlGutterLineMarkerProvider.kt`、`ui/XmlPreviewService.kt`、`execute/DataSourceSelectorResults.kt`、`execute/DataSourceSelector.kt`、`execute/DocWriteContext.kt`
 - 关联版本：tag `2026.11.12`（预取在该 tag 首次进包；`2026.11.11` 的 gutter provider 里没有这条调用，`git show` 实证为空）

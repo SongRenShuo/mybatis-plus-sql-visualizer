@@ -572,6 +572,19 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
+### L61 后台阻塞读锁与 EDT 写意图升级是死锁对：两侧栈各自都「像在正常干活」
+
+**规则**：看到「IDE 打开即卡死 / 窗口白屏 / 冻结报告每 5 秒一份」时，先按**锁对**查，不要先当性能问题查。判据是两份栈合起来读：
+- 后台侧出现 `ReadAction.compute → computeBlocking → ReferencesSearch / PsiSearchHelper`（阻塞读动作，**不可被写动作取消**，索引期还会同步等 smart mode）；
+- EDT 侧出现 `runIntendedWriteActionOnCurrentThread → WriteAction.run → runWriteActionBlocking → prepareWriteFromWriteIntentBlocking → upgradeWritePermit`（写意图读锁在有读者时无法升级）。
+两者互为对方的等待来源，索引推进又要写权限 ⇒ 闭环。三条纪律：①索引检索不得在阻塞读动作里跑，用 `ReadAction.nonBlocking{}.inSmartMode(project).expireWith().coalesceBy()`；②EDT 不得在写意图上下文里就地升级写锁，写体走投递 + 有界等待；③「BGT 等 EDT、EDT 永不反向阻塞」是对偶，反方向也要写成纪律（本次事故就是反方向没写）。另外：改了投递形态不等于解冻——平台对 nonModal 投递拍同样套 `runWithWritingAllowed`，只有把「对立面的长读者」拆掉才真正解除。
+
+**证据**：2026-11-13 用户 Linux 冻结（`threadDumps-freeze-20261113-082447`，8 份 dump 每 5 秒一份、持续 >40 s；工程 >1000 表 / 上万实体）。栈 1 绿底帧 `MbgExampleCallResolver.prefetch → resolve → ReadAction.compute(:95) → computeBlocking(ReadAction.java:88) → findCallSite → ReferencesSearch`；栈 2 `AWT-EventQueue-0` `TransactionGuardImpl.runWithWritingAllowed → dispatchDocWriteOnEdt(:2588) → DocWriteContext.runWriteSafe(:72) → docWriteOnce(DataSourceSelector.kt:2085) → WriteAction.run → prepareWriteFromWriteIntentBlocking → upgradeWritePermit`。版本相关性：`2026.11.11` 的 gutter provider 无 prefetch（`git show` 实证为空），`2026.11.12` 新增；同一 M2 检索预览链有 dumb 门、预取链没有（`XmlPreviewService.kt:121` vs `MbgExampleCallResolver.prefetch`）。修后定向 133/0/0/0（17 类，含 4 个 plugin.xml 守卫）；反向验证：摘 dumb 门 6 例 1 红、改回就地写 4 例 1 红。详见 `docs/开发计划/20261113-0839-T-StartupReadLockFreeze-…-开发计划.md` §二/§三/§十三。
+
+**正例**：两份栈按「谁在等谁」对齐成一条环，再用版本 tag 对照找驱动点；**反例**：只看 EDT 栈判「插件在 EDT 干了重活」，或只看后台栈判「检索太慢」，各自都能解释现象却修不到点（改投递形态的实验即证伪：冻结点不变）。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
