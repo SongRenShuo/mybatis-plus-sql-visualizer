@@ -3,14 +3,14 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（126 个通用文件）
-> **项目记忆**：保留 265 个内容文件 + MEMORY.md 索引（第三十三次精简后）
+> **项目记忆**：保留 333 个内容文件 + MEMORY.md 索引（第三十四次精简后）
 
 ---
 
-## 已修复 Bug（268 个）
+## 已修复 Bug（289 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -329,8 +329,29 @@
 | [project-junit3-migration-20261105.md](bug-fixes/project-junit3-migration-20261105.md) | T-Junit4Migration 交付档（P0/P1/P2 已实施合 master：13 个从未执行用例复活 `9dc0c263`、DB 集成 SKIP 口径 `0aa0542d`、313 条无效注解清理 `3a07ee7a`、`Junit3SemanticsGuardTest` `99f4c0bb`；P3 全量迁移不排期）——证伪「反引号=不执行」：JUnit3 只看方法名 test 前缀；junit.framework 残留仅 EmptyTextLinkApiGuardTest 1 文件 |
 | [project-perf-review-round5-20261029.md](bug-fixes/project-perf-review-round5-20261029.md) | IDEA 性能影响第五期复查 + T-PerfSweep28 交付档（20261029，四提交 + 全量门禁 8545/0/0/10）——券02 证伪撤销、券03 范围收缩等五券终态 |
 | [project-consolebind263-20261107.md](bug-fixes/project-consolebind263-20261107.md) | T-ConsoleBind263 交付档（263 删 LocalDataSource 致预览换源退化单源，已修合 master `4ef1fe9c`）——真机验收待用户：263 预览换源应列全数据源 |
+| [project-release-20261112-beta2-rerelease.md](bug-fixes/project-release-20261112-beta2-rerelease.md) | v2026.11.12-beta.2 同版重发档（2026-11-11 用户令「更新文案后重新发行」；配方=删旧 Release→tag 前移→publish→Gitee --from-github；原 tag 82b065dda/Gitee 1297061/GitHub 441318632）——双通道终态实测在册（Gitee 17:08/GitHub 09:05Z） |
+| [project-release-20261112-beta3.md](bug-fixes/project-release-20261112-beta3.md) | v2026.11.12 正式版撤回→beta.3 替档（撤回配方=GitHub `gh release delete --cleanup-tag`、Gitee `--delete-only` 不动 tag 再 `push :refs/tags/`；**推 tag 不自动发布要 dispatch mode=release**；三次 dispatch 两次取消、tag 前移 4c6a283e9→29cfa2502→ab9a8c308；Gitee id=1301068 prerelease）——后继 beta.4 与正式版均已发行，D9 折进 beta.4 |
+| [project-release-20261112-beta4.md](bug-fixes/project-release-20261112-beta4.md) | v2026.11.12-beta.4 内测发行档（第二批四修并入文案后重打包；门禁 PASS、双仓推 master+tag、release run 43203043486）——双通道终态实测在册（Gitee 19:34/GitHub 11:02Z） |
+| [project-release-20261111-formal.md](bug-fixes/project-release-20261111-formal.md) | v2026.11.11 正式版发行档（首轮 run 42880832461 16/16、GitHub 440800514、Gitee 1295690、tag @ `0b166603`）——用户令同版重发补入 e1cf3872：先删旧 Release 再强移 tag `6f6187ea`、CI 重跑 42895392825；Marketplace 在审旧包须先撤回；`gitee-release.py` 必须带 `--from-github` |
+| [project-release-20261110-beta1.md](bug-fixes/project-release-20261110-beta1.md) | v2026.11.10 同日四轮并转正档（beta.1→beta.3→正式版，GitHub 439966289/Gitee 1293132，tag `2026.11.10` @ `8561fafc`，release run 42758016138 17/17）——转正要删被取代的内测块（changeNotes+CHANGELOG 两处）；L25 第 3 例=正式版块全角冒号；`MPV-Build` 唯一⇒发版前挪走本地 zip |
+| [project-ibatis2-gap-fix-round.md](bug-fixes/project-ibatis2-gap-fix-round.md) | T-Ibatis2Gap 三轮真机缺陷修完转正档（beta.1~beta.3 发行；让位门与 MyBatisCodeHelperPro 解耦；沙盒验收 A1~A3 通过，A4 读数因脏 buffer 作废）——selectByCondition 勾选联动已由 `e1cf3872` 修复随 2026.11.11 重发版发行 |
+| [project-panwei-insert-capture-20261110.md](bug-fixes/project-panwei-insert-capture-20261110.md) | T-PanweiInsertCapture 交付档（四条静默路径可见化 F1~F3+两形态补齐 F4/F5+批处理提示/未识别行计数 F6/F7+方言横审五处登记）——香港磐维 A 模式三步定因 NestGate 深度泄漏；自愈第一版被 10 例测试否掉回退；NestGate 根治 `0fc3836c`+观测 `8e85d397` 已随 2026.11.11 正式版发行 |
+| [project-schema-prewarm-dedupe-20261112.md](bug-fixes/project-schema-prewarm-dedupe-20261112.md) | T-SchemaPrewarmDedupe 交付档（一次打开跑两遍预热×15 数据源全 bail resolved=0；预热链单独开 60s `(project,table)` 去重窗口 `prewarmWindowMs` 可关；**刻意不动** `bailAfterTraversal` 自愈语义 4 处断言钉住；首开剩余 1.3s 是 Swing/JIT 一次性成本不动；`20cc719dd` 在 master） |
+| [project-nightly-local-mysql-20261112.md](bug-fixes/project-nightly-local-mysql-20261112.md) | T-NightlyLocalMysql 收官档（夜间 e2e/database 腿改 runner 本地 MySQL：e2e `PASS=26 FAIL=0`（原 13/13）、DB 腿 files=10 tests=86（原空绿）+`files=0/tests=0` 闸门反向三档验过）——三红归因=服务器侧 dialect 端口 refused+e2e 远端 MySQL 不可达+extras 类计数抖动 |
+| [project-param-name-truncation-20261112.md](bug-fixes/project-param-name-truncation-20261112.md) | T-ParamNameTruncation 交付档（预览左栏长参数名：方案 A=列宽随视口自适应 55%/480/80+全名 HTML 折行 tooltip 恒可得+probe 不重建左栏）——隔离工作树 206/0/0、反向两轮各恰 1 红；已推 origin/master `2096fa2f5`（20261113 实测） |
+| [project-ds-list-add-source-20261111.md](bug-fixes/project-ds-list-add-source-20261111.md) | T-DsListAddSource 收官档（unknown 死项收口+末尾「添加数据源…」`c728c8058`；定向 31/0/0、反向 12/3→31/0、合并态含守卫 58/0/0/0）——新坑=`NewDataSourceActionGroup.update` 要 `DatabaseView.DATABASE_VIEW_KEY` 整组直弹必灰；用户验收通过且测试不补 |
+| [project-local-update-dir-20261111.md](bug-fixes/project-local-update-dir-20261111.md) | T-LocalUpdateDir 交付档（关于页「本地安装包目录」自动检测+免重启安装：三道归属闸门 G1 id 匹配/G2 顶层唯一目录防夹带/G3 zip 守卫+installFromLocal 临时副本）——树哈希相等证「被测树==已推树」`bf258ec02`；not run=testShards 全量、沙盒热替换矩阵、GUI A1~A14 |
+| [project-mbg-example-preview-20261111.md](bug-fixes/project-mbg-example-preview-20261111.md) | T-MbgExamplePreview 交付档（默认产物 `WHERE ( {{criterion.condition}} ? )`、调用点命中时按 `andXxx` 方法体 `addCriterion("cust_id =")` 常量取列名而非猜；merge `df845f6e` 双仓 `3c17cff1`，工作树与分支已清理）——not run=PSI 链路真机命中率与首屏验收 |
+| [project-copy-placeholder-marker-20261111.md](bug-fixes/project-copy-placeholder-marker-20261111.md) | T-CopyPlaceholderMarker 交付档（复制可执行 SQL 的模拟占位加 `-- contains N unresolved ${} placeholders …` 带计数头部标记，含占位时替代旧 raw 标记；`{{…}}` 不是注释 SqlCommentStripper 不剥）——否决注入型占位/弹确认/拒绝复制 |
+| [project-ibatis-param-class-quote-20261111.md](bug-fixes/project-ibatis-param-class-quote-20261111.md) | T-IbatisParamClassQuote 交付档（iBatis 裸 #x# 参数缺引号：类型源与引擎对齐=parameterClass 字段类型，jdbcType 仍优先；短名索引唯一命中才用、多候选弃权）——Heavy 6 例+同链回归 55 例绿、反向恰 1 红；not run 真机复验 |
+| [project-ibatis-call-preview-20261111.md](bug-fixes/project-ibatis-call-preview-20261111.md) | T-IbatisCallPreview 交付档（iBatis DAO 调用行预览图标+保留箭头；同一 provider 两枚 marker 共用一次 `resolveStatementAnchors`；共用装配 `IbatisStatementPreview`）——Alt+Shift+Q 与 MCP `sqlv_render_sql` 同源两档；定向 121/0/0、反向恰 2 红；真机验收通过（`0ff8cf29`） |
+| [project-mcp-settings-jump-263.md](bug-fixes/project-mcp-settings-jump-263.md) | T-McpSettingsJump 交付档（263 把设置页搬进 content module `intellij.mcpserver.frontend`、包名带 frontend 致旧 FQN 零命中，而插件拿实现类名当能力探针→误报「需要 2025.2+」）——改类名候选链（新→旧）+按页面 id `com.intellij.mcpserver.settings` 打开并选中才提示；真机验收通过（`3106e4c6`/`7525f5e1`） |
+| [project-preview-openperf-m2-e2e-20261112.md](bug-fixes/project-preview-openperf-m2-e2e-20261112.md) | T-PreviewOpenPerfM2 端到端收官档（M1 缓存命中真机成立 306ms→0；D1~D12 十二缺陷实录=findFirst 恒空/XML 选区回落光标语句/守卫契约/or() 拍成 AND/命中引用≠可用调用点/2026.3 getChildren(null)/foreach 值框置只读/清除回收 __frch_ 键/MBG 按条件文本补参数行/标签按出现顺序对齐/只读框不回显历史值）——M10 收窄 scope 无效（冷索引固定成本）、M11 gutter 渲染时后台预取+三条防自旋护栏；β4 文案 `2c40bcb86` 已随 beta.4 发行 |
+| [project-competitive-round37-report.md](bug-fixes/project-competitive-round37-report.md) | 竞品横向对比第三十七轮调研档（20261110，窗口 5.77 天/477 笔/发行 4 版）——我方下载历史最快档但位次首次回撤、Hibernate Debugger 官方曝光位爆发、DBX 语义诊断破零、zMyBatis 治理收尾；D211/D212/V238/O-161 移交 F 队列全压 dev |
+| [project-master-into-dev-merge-20261103.md](bug-fixes/project-master-into-dev-merge-20261103.md) | T-MasterToDevMerge 两轮反向合流档（1103 首轮 `1bf55efa`+1106 二轮 `fafc2042`/`f80d7aab`，二轮 22 冲突）——master 语义增量必须搬进 dev 新文件；源码扫描守卫前提会过期；判失败是否合并引入=临时 worktree 检出合并前 HEAD 对照复跑 |
+| [reference-ci-linux-migration.md](bug-fixes/reference-ci-linux-migration.md) | CI 换 Linux runner 调研定案（2026-11-05：只值 2~4 分钟、7 处硬阻塞、混合迁移被 10GB 缓存上限互踢）——维持 Windows runner 不迁；再提迁移先读本档 |
 
-## 已解决踩坑（103 个）
+## 已解决踩坑（107 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -422,6 +443,10 @@
 | [pitfall-unregistered-jdbc-noise-vs-registration.md](pitfalls/pitfall-unregistered-jdbc-noise-vs-registration.md) | 「未登记 JDBC 实现」8 条=5 Hikari+3 Oracle 连接层噪音，已由 T-CatchAllFamilyFilter 收口（`4fdd7d5e`，随 v2026.11.9-beta.1 发行）——同族继承链双向排除只动曝光面；判据=先看 declared 方法数与「已织入 N」；Oracle 连接层级与 declared prepare 计数留档 |
 | [pitfall-oracle-statement-wrapper-registry-mismatch.md](pitfalls/pitfall-oracle-statement-wrapper-registry-mismatch.md) | Oracle 只出 select 1 from dual：prepare 返回 Wrapper、execute 落在 T4CPreparedStatement，登记对象错位致 PS 全丢——修法已落 master（2026-11-04：`StatementRegistry.registerWithDelegates` 解一层包装登记内层 + NestGate 真产出才抑制 + `lastExitToken` 同帧重复出口去重） |
 | [pitfall-runners-zero-means-unbound-not-unconnected.md](pitfalls/pitfall-runners-zero-means-unbound-not-unconnected.md) | 预览「执行 SQL」报 runners=0 与连接/内省无关，真门是「文件级数据源绑定」——UI-046/048/049 三轮修复与 S2-12 回落已全部闭环并真机复验 |
+| [pitfall-nestgate-depth-leak-suppresses-thread.md](pitfalls/pitfall-nestgate-depth-leak-suppresses-thread.md) | NestGate 深度泄漏会让该线程后续语句全丢（门按线程记账、依赖 enter/exit 配平；驱动 connect/init 跑内部语句后最易漏出；`nestSuppressed` 只计「外层被抑制」恒 0 别当没问题）——自愈判据不能锚帧名（夹具在 agent 包内⇒锚到 JUnit 帧 10 红回退），改栈深区间/先观测后放行；根治 `0fc3836c`（catch-all 异常出口）已随 2026.11.11 发行 |
+| [pitfall-mbg-example-ref-and-or-grouping.md](pitfalls/pitfall-mbg-example-ref-and-or-grouping.md) | MBG Example M2 第二轮三机制坑（**命中引用≠可用调用点**：ReferencesSearch 对接口方法返实现声明处/方法引用；`or()` 开的是另一条 Criteria 拍平变 AND；`__frch_criterion_N` 的 N 是渲染期计数器不是下标；`清除` 必须显式回收 `__frch_` 键）——随 T-MbgExamplePreview/OpenPerfM2 交付 |
+| [pitfall-preview-dml-completion-evidence-wrong-source.md](pitfalls/pitfall-preview-dml-completion-evidence-wrong-source.md) | 预览执行 DML 完成态判据读错视图（`hasConsoleCompletionEvidence` 只读 console history 而「1 row affected」在 Output 视图⇒成功被判 `execute.timeout.hint`）——修法按 DML/DDL 首关键字判无结果页签+8s 中性提示；已修 `67a574ab` 随 2026.11.11 发行 |
+| [pitfall-dbx-docker-plugin-unknown-host-key.md](pitfalls/pitfall-dbx-docker-plugin-unknown-host-key.md) | DBX Docker 插件连不上=缺主机密钥（unix-over-nc 走 SSH+nc，host/port 2375 不生效别开 2375；~/.ssh/known_hosts 缺该主机即失败）——与在役的 pitfall-dbx-docker-plugin-ssh-known-hosts 同主题，项目侧保留后者、本档归并留底 |
 
 ## 方法论（1 个）
 
@@ -429,13 +454,17 @@
 |------|----------|
 | [javap-platform-ui-debugging.md](methodology/javap-platform-ui-debugging.md) | 反编译平台 jar 定位私有布局/Swing UI 异常——一次 javap 顶十轮探针；含沙盒 jar 定位、沙盒进程精确识别（勿杀主 IDE）、构建产物 stamp 校验 |
 
-## 用户环境（2 个）
+## 用户环境（6 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
 | [user-grok-api.md](user-context/user-grok-api.md) | Grok 中转 API 配置 |
 
 | [project-workspace-disk-cleanup-20261102.md](user-context/project-workspace-disk-cleanup-20261102.md) | 20261102 外层工作区磁盘清理（已执行完毕实回收 51GB，F 盘 22G→73G 可用）——用户授权 A/B/C2-C6/D/E/F 分组逐项读数、保留面与三条运维定例 |
+| [feedback-no-blocking-wait-on-long-commands.md](user-context/feedback-no-blocking-wait-on-long-commands.md) | 长命令禁阻塞主控（sleep 轮询与 `TaskOutput block=true` 都算；20261112 两次当场纠正）——与在役的 feedback-background-task-no-blocking-wait 同口径，本档归并留底；现行标准=后台启动+完成通知，等待期做不依赖读数的事 |
+| [git-bash-cjk-mojibake-fix.md](user-context/git-bash-cjk-mojibake-fix.md) | 本机 Git Bash 中文乱码根治（中文请求体写 UTF-8 文件再 `curl --data-binary`、代码造数用 `\uXXXX`）——global `win32-shell-cjk-mojibake` 已覆盖，AGENTS.md 有精炼摘要 |
+| [reference-github-api-token-authoritative-readings.md](user-context/reference-github-api-token-authoritative-readings.md) | 竞品调研 GitHub Release/stars/tags 权威读数走 `.local/github-token.json` 项目令牌（Bearer+`curl -x` 代理，禁 `git credential fill`）——AGENTS.md 规则 10 已固化；zMyBatis 三端点 0/0/1、「匿名额度耗尽缺读数」连续三轮销案记录留档 |
+| [reference-dual-remote-token-push.md](user-context/reference-dual-remote-token-push.md) | 双仓非交互推送令牌写法（GitHub `x-access-token:<token>@`、Gitee `<owner>:<token>@`，带 `-c credential.helper=` 与 `GIT_TERMINAL_PROMPT=0` 绕开 GCM 弹窗）——与在役的 project-dual-repo-github-mirror 及 AGENTS.md 规则 10 重复，归并留底 |
 
 ---
 
@@ -483,11 +512,15 @@
 
 ---
 
+**第三十四次精简升级（2026-11-13，29 个归档 + 孤儿 7 补册 + 索引去重 1）**：归档判定先 git/双通道实测——tag `2026.11.12` 双远端在位且 GitHub Release（prerelease=False，11-12 20:39 北京）/Gitee Release（20:42）实体均在 ⇒ 整条 2026.11.12 发行链（beta.2 重发/beta.3/beta.4）闭环；`2096fa2f5`（ParamTruncation）实测在 origin/master、`20cc719dd`（SchemaPrewarm）在 master。归 **bug-fixes 21 个**（发行链 5：release-20261112-beta2-rerelease/beta3/beta4 + release-20261111-formal + release-20261110-beta1；已交付战役 12：ibatis2-gap-fix-round、panwei-insert-capture、schema-prewarm-dedupe、nightly-local-mysql、param-name-truncation、ds-list-add-source、local-update-dir、mbg-example-preview、copy-placeholder-marker、ibatis-param-class-quote、ibatis-call-preview、mcp-settings-jump263；e2e 收官 1：preview-openperf-m2；竞品轮次 1：round37；合流档 1：master-into-dev-merge-20261103；CI 调研定案 1：ci-linux-migration）+ **pitfalls 4 个**（nestgate-depth-leak 根治已发行、mbg-example-ref-and-or 并入 e2e 档、preview-dml-completion 已修发行、dbx-docker-unknown-host-key 与 ssh-known-hosts 同主题归并）+ **user-context 4 个**（no-blocking-wait 与现行口径重复归并、git-bash-cjk global 已覆盖、github-api-token AGENTS 规则 10 已固化、dual-remote-token-push 与双仓镜像档重复归并）。同轮：MEMORY.md 索引去重 1 处（rollback-snapshot 双条目并一）+ 孤儿 7 文件补册（feedback-package-ownership-gates、feedback-ui-copy-name-real-tab、feedback-verify-status-before-dispatch、pitfall-gha-jobs-watcher、pitfall-gitbash-cygpath-classpath、reference-swing-jlabel-truncation、project-a08-nightly-redpoint）+ 过期尾巴刷新（beta 基号已用掉 2026.11.12 ⇒ 下一批内测从 2026.11.13-beta.1 起；**update.json 实测停 2026.11.12-beta.4 而正式版已双通道发行＝用户手改项待更新**）。项目 memory 361→332 内容文件。全量备份 memory-backup-20261113（363 文件）。
+
+---
+
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 266（含 MEMORY.md；内容文件 265） |
+| 项目 memory（保留） | 333（含 MEMORY.md；内容文件 332） |
 | 全局记忆 global/ | 126 |
-| 归档 archive/ | 375（bug-fixes 268 + pitfalls 103 + methodology 1 + user-context 2 + README） |
-| **合计** | **767** |
+| 归档 archive/ | 405（bug-fixes 289 + pitfalls 107 + methodology 1 + user-context 6 + README） |
+| **合计** | **864** |
