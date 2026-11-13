@@ -502,7 +502,36 @@ IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，�
 
 ### 14.5 追加反馈的第二条（同日稍后）：关图标后只剩「带 Example 的语句慢」
 
-同一用户随后确认：「取消勾选后没有那个问题了」——即 §六 第 1 条的零成本自救有效，冻结点确为预取链。剩余现象即 §14.1 的 30s 档，按 §14.3 复验。
+同一用户随后确认：「取消勾选后没有那个问题了」——即 §六 第 1 条的自我缓解有效，冻结点确为预取链。剩余现象即 §14.1 的 30s 档，按 §14.3 复验。
+
+### 14.6 沙盒日志定位（2026-11-13 12:52，master 沙盒首开）：800ms 上限被绕过
+
+用户用 master 起沙盒复验「首次还是很慢」，`idea.log` 给出决定性读数（`.intellijPlatform/sandbox/…/log/idea.1.log:47592`）：
+
+```
+12:52:49 [open-perf] total=3275ms parse+ctx=38 profile=1 m2=3219 model=17   ← 首次（冷）
+12:52:49 [open-perf] total=8ms    parse+ctx=8  profile=0 m2=0    model=0    ← 第二次（缓存命中）
+```
+
+`m2=3219ms` 说明 S3 的 800ms 预算在真机上没有生效。根因不在预算值，而在**预算放错了层**：
+
+- 预览主链 `SqlPreviewService.previewAsync`（`SqlPreviewService.kt:2135`）把整段装配包在 `ReadAction.compute` 里；
+- 于是 `MbgExampleCallResolver.resolve()` 里 `ApplicationManager.getApplication().isReadAccessAllowed` 恒为真，走的是「已持读锁 → 就地嵌套、**没有等待预算**」那条分支；
+- `blockingGet(RESOLVE_BUDGET_MS)` 只存在于非持锁分支，冷态一次 `ReferencesSearch` 就把它吃成 3.2s（用户 2500 表工程上是 30s 量级）。
+
+同一段代码里还有一处翻倍：`findCallSite` 在「没有可用调用点」的分支里**再跑一次** `ReferencesSearch.search(...).findAll()` 只为数 `totalRefs`——而「没有调用点」正是高频失败路径，等于把最贵的一次检索做两遍。
+
+### 14.7 修复（同日，提交见 §十五 追加行）
+
+1. **预算挪进检索本身**：`resolve()` 统一算出 `deadlineAt = startedMs + RESOLVE_BUDGET_MS`，两条分支都把 `deadlineAt` 传进 `resolveInReadAction`；`resolveInReadAction` 在逐方法循环、`findCallSite` 在逐引用循环里自查 `isDeadlineHit(deadlineAt)`，到点立即停并按「解析不到」返回 null（调用方已降级为占位骨架）。裁决理由：等待式预算在持锁上下文里天生走不到，取消 API 又不能穿透已持有的阻塞读动作；只有把上限落在检索循环里，两条路才受同一个约束。
+2. **删掉失败路径的二次全量检索**：`refsSeen` 已是扫描条数（提前终止时 `site` 非空、不走该分支），`totalRefs` 冗余。
+3. 到点截断与「解析不到」在日志里可区分：`[m2] resolve skip reason=deadline elapsedMs=…`。
+
+**读数**：`MbgExampleResolveDeadlineTest`（新增 2 例）+ `MbgExamplePrefetchGateTest` + `MbgExampleCallCacheTest` + `MbgExampleRootMatchTest` + `XmlEwResolverTest` → **20/0/0/0**。
+**反向验证（L50）**：把 `findCallSite` 里的自查改成 `isDeadlineHit(Long.MAX_VALUE)` → 新用例 1 红（`MbgExampleResolveDeadlineTest.kt:52`，"实际命中" 断言失败）；还原后 20/0/0/0。
+**同轮修掉一个假绿**：该守卫首版按「全文件出现 `isDeadlineHit(deadlineAt)` ≥2 次」判定，摘除探针后仍为 2（测试缝 `isDeadlineHitForTest` 自己算一次）——反向验证当场暴露，改为只解析 `findCallSite` 函数体。
+
+**残留待验**：修后单次上限 800ms 是否仍被用户感知为「慢」（真机 2500 表工程首开一次检索的实际耗时分布），以及 `profile` 段（`resolveExampleProfile`）在超大工程上的耗时——两者都由下一次 `[open-perf]` 行裁决；若 `profile` 占大头，按 §14.3 另立 S7。
 
 ---
 

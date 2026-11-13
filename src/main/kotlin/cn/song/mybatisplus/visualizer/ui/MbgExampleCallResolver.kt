@@ -174,33 +174,45 @@ object MbgExampleCallResolver {
         val key = keyOf(project, namespace, statementId)
         cachedIfFresh(key)?.let { return it }
         val startedMs = System.currentTimeMillis()
+        // T-StartupReadLockFreeze §14（2026-11-13 真机 `m2=3219ms` 实证）：预算必须**落在检索本身**，
+        // 不能只落在「等多久」上——预览主链 `SqlPreviewService.previewAsync` 把整段装配包在
+        // `ReadAction.compute` 里，`isReadAccessAllowed` 恒为真，于是原来的「已持读锁→就地嵌套」分支
+        // 绕开了 `blockingGet(RESOLVE_BUDGET_MS)`，冷态一次 ReferencesSearch 把 800ms 上限吃成 3.2s
+        // （用户 2500 表工程上是 30s 量级）。现在两条分支共用同一个截止时刻，检索内部逐条引用自查。
+        val deadlineAt = startedMs + RESOLVE_BUDGET_MS
         val outcome = try {
             if (ApplicationManager.getApplication().isReadAccessAllowed) {
                 ReadAction.compute<SearchOutcome, RuntimeException> {
-                    searchOnce(key) { resolveInReadAction(project, namespace, statementId) }
+                    searchOnce(key) { resolveInReadAction(project, namespace, statementId, deadlineAt) }
                 }
             } else {
-                resolveBounded(project, namespace, statementId, key, startedMs)
+                resolveBounded(project, namespace, statementId, key, startedMs, deadlineAt)
             }
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t
             logSkip("resolve", "error:${t.javaClass.simpleName}", startedMs, key)
             return null
         }
-        val resolved = outcome?.resolved ?: return null
+        val resolved = outcome?.resolved
+        if (resolved == null) {
+            // 到点被截断要留痕（与「解析不到」区分），真机按 reason=deadline 检索
+            if (System.currentTimeMillis() >= deadlineAt) logSkip("resolve", "deadline", startedMs, key)
+            return null
+        }
         return storeResolved(key, resolved).elements
     }
 
-    /** S3 的有界路径：提交非阻塞读动作，只等 [RESOLVE_BUDGET_MS]，超时取消。 */
+    /** S3 的有界路径：提交非阻塞读动作，只等 [RESOLVE_BUDGET_MS]（检索内部同时受 [deadlineAt] 约束）。 */
     private fun resolveBounded(
         project: Project,
         namespace: String,
         statementId: String,
         key: String,
         startedMs: Long,
+        deadlineAt: Long,
     ): SearchOutcome? {
         val promise = ReadAction.nonBlocking<SearchOutcome> {
-            searchOnce(key) { resolveInReadAction(project, namespace, statementId) }
+            searchOnce(key) { resolveInReadAction(project, namespace, statementId, deadlineAt) }
         }
             .inSmartMode(project)
             .expireWith(project)
@@ -280,6 +292,19 @@ object MbgExampleCallResolver {
     private fun logSkip(stage: String, reason: String, startedMs: Long, key: String) {
         LOG.info("[m2] $stage skip reason=$reason elapsedMs=${System.currentTimeMillis() - startedMs} key=$key")
     }
+
+    /**
+     * 检索内部的截止判定（T-StartupReadLockFreeze §14）。
+     *
+     * 必须放在**检索本身**里，而不是调用方「等多久」上：预览主链整体包在 `ReadAction.compute` 内，
+     * `isReadAccessAllowed` 恒为真，等待式预算（`blockingGet`）在那种上下文里根本走不到。
+     * `Long.MAX_VALUE`（默认值）语义＝不设限，供纯逻辑单测与预取链复用。
+     */
+    private fun isDeadlineHit(deadlineAt: Long): Boolean =
+        deadlineAt != Long.MAX_VALUE && System.currentTimeMillis() >= deadlineAt
+
+    /** 测试缝：截止判定的纯逻辑入口（见 `MbgExampleResolveDeadlineTest`）。 */
+    internal fun isDeadlineHitForTest(deadlineAt: Long): Boolean = isDeadlineHit(deadlineAt)
 
     /**
      * 预取（T-PreviewOpenPerfM2 M11）：把 M2 检索挪到「用户还在看文件」的时候。
@@ -452,6 +477,7 @@ object MbgExampleCallResolver {
         project: Project,
         namespace: String,
         statementId: String,
+        deadlineAt: Long = Long.MAX_VALUE,
     ): CachedResolution? {
         val trace = StringBuilder()
         val mapperClass = JavaPsiFacade.getInstance(project)
@@ -482,8 +508,12 @@ object MbgExampleCallResolver {
         val methods = mapperClass.findMethodsByName(statementId, true)
         trace.append("methods=${methods.size} ")
         methods.forEach { method ->
+            if (isDeadlineHit(deadlineAt)) {
+                trace.append("deadline ")
+                return@forEach
+            }
             note(method.containingFile)
-            val call = findCallSite(scope, method)
+            val call = findCallSite(scope, method, deadlineAt)
             if (call == null) {
                 trace.append("noCallSite ")
                 return@forEach
@@ -529,22 +559,30 @@ object MbgExampleCallResolver {
      * 一起返回，这类 ref 的 element 上溯没有 `PsiMethodCallExpression`——取第一个 ref 就直接放弃，
      * trace 里就是 `noCallSite`，而项目里明明有两个真实调用点。现在改为跳过不可用的 ref 继续找。
      */
-    private fun findCallSite(scope: GlobalSearchScope, method: PsiMethod): PsiMethodCallExpression? {
+    private fun findCallSite(
+        scope: GlobalSearchScope,
+        method: PsiMethod,
+        deadlineAt: Long = Long.MAX_VALUE,
+    ): PsiMethodCallExpression? {
         var site: PsiMethodCallExpression? = null
         var refsSeen = 0
+        var deadlineHit = false
         ReferencesSearch.search(method, scope).forEach { candidate ->
             refsSeen++
             val call = PsiTreeUtil.getParentOfType(candidate.element, PsiMethodCallExpression::class.java)
-            if (call == null) {
-                true // 声明处 / 方法引用：继续找下一个
-            } else {
-                site = call
-                false
+            when {
+                // 逐条引用自查截止时刻：这是整条 M2 里最贵的一段（全项目/模块索引检索），
+                // 大工程上没有这个检查就只能等它自己跑完（真机 30s 档）。到点即停，按「解析不到」降级。
+                isDeadlineHit(deadlineAt) -> { deadlineHit = true; false }
+                call == null -> true // 声明处 / 方法引用：继续找下一个
+                else -> { site = call; false }
             }
         }
         if (site == null) {
-            val total = runCatching { ReferencesSearch.search(method, scope).findAll().size }.getOrNull()
-            LOG.info("[m2] findCallSite empty method=$method refsSeen=$refsSeen totalRefs=$total")
+            // 原实现此处再跑一次 `ReferencesSearch.search(...).findAll()` 只为数 totalRefs——
+            // 恰是「没有调用点」的高频失败路径，等于把最贵的一次检索翻倍；refsSeen 已是扫描条数
+            //（提前终止时 site 非空，不走本分支），故直接用它，不再二次检索。
+            LOG.info("[m2] findCallSite empty method=$method refsSeen=$refsSeen deadlineHit=$deadlineHit")
         }
         return site
     }
