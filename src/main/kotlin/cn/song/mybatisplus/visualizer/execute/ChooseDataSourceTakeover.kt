@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.switchDataSourceTo
 import cn.song.mybatisplus.visualizer.update.BarrierRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.replaceActionSilently
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -422,7 +423,7 @@ internal class PreviewDataSourceActionHost : com.intellij.openapi.Disposable {
         }
         if (original is ChooseDataSourceTakeoverGroup) return
         val takeover = ChooseDataSourceTakeoverGroup(original)
-        manager.replaceAction(ACTION_ID, takeover)
+        manager.replaceActionSilently(ACTION_ID, takeover)
         installed = takeover
         log.info("[M36][Takeover] installed: $ACTION_ID -> original=${original.javaClass.name}")
         BarrierRegistry.register(
@@ -441,7 +442,7 @@ internal class PreviewDataSourceActionHost : com.intellij.openapi.Disposable {
         runCatching {
             val manager = ActionManager.getInstance()
             if (manager.getAction(ACTION_ID) === takeover) {
-                manager.replaceAction(ACTION_ID, takeover.originalActionForRestore())
+                manager.replaceActionSilently(ACTION_ID, takeover.originalActionForRestore())
             }
         }
     }

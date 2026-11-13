@@ -343,27 +343,40 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
     }
 
     /**
-     * T-CommentShortcutKeymap 源码守卫：换动作**必须**经 `replaceActionSilently`（先置 EMPTY）。
+     * T-CommentShortcutKeymap 源码守卫（**全树**）：`src/main` 里 `replaceAction(` 只允许出现在共享助手
+     * `util/ActionReplaceSilently.kt` 内（且只有一处），并且必须排在「置 `CustomShortcutSet.EMPTY`」之后。
      *
-     * 行为级断言够不着——平台告警是 `Logger.warn(PluginException)`，仓内无日志捕获通道；
-     * 而「忘了先置 EMPTY」在功能上完全无感（键位照旧生效），只有真机日志里刷
+     * 行为级断言够不着——平台告警是 `Logger.warn(PluginException)`，仓内无日志捕获通道；而「忘了先置
+     * EMPTY」在功能上完全无感（键位照旧生效），只有真机日志里刷
      * `ShortcutSet of global AnActions should not be changed outside of KeymapManager`。
      * 故按 PerfSweep27StaticGuardTest 的 `File("src/main/kotlin/$rel")` 先例做结构钉。
+     *
+     * **为什么扫全树而不是单文件**：2026-11-13 真机日志按调用点归因后发现**两处**接管都在刷同一条告警
+     * （`EditorCommentShortcuts` 与 `ChooseDataSourceTakeover`），单文件守卫会漏掉后者（实测漏了 3 条）。
      */
-    fun test源码守卫_换全局动作必须经replaceActionSilently() {
-        val src = File("src/main/kotlin/cn/song/mybatisplus/visualizer/util/EditorCommentShortcuts.kt")
-            .readText()
-            .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（本文件的 KDoc 里提到这些符号）
+    fun test源码守卫_全树只允许经replaceActionSilently换全局动作() {
+        val helperRel = "src/main/kotlin/cn/song/mybatisplus/visualizer/util/ActionReplaceSilently.kt"
+        fun stripped(file: File) = file.readText()
+            .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（KDoc 里会提到这些符号）
             .replace(Regex("""(?m)^\s*//.*$"""), "")         // 剥行注释
+        val offenders = File("src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .mapNotNull { file ->
+                val hits = Regex("""\breplaceAction\(""").findAll(stripped(file)).count()
+                if (hits > 0) file.path.replace('\\', '/') to hits else null
+            }
+            .sortedBy { it.first }
+            .toList()
         assertEquals(
-            "replaceAction 只允许出现在 replaceActionSilently 内（先置 CustomShortcutSet.EMPTY 再换）",
-            1,
-            Regex("""\breplaceAction\(""").findAll(src).count(),
+            "只有共享助手可以调 replaceAction（其余接管点一律经 replaceActionSilently）: $offenders",
+            listOf(helperRel),
+            offenders.map { it.first },
         )
-        val helper = src.substringAfter("fun ActionManager.replaceActionSilently", "")
+        assertEquals("助手文件里只应有一处 replaceAction 调用", 1, offenders.single().second)
+        val helper = stripped(File(helperRel)).substringAfter("fun ActionManager.replaceActionSilently", "")
+        assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
         val emptySet = helper.indexOf("setShortcutSet(CustomShortcutSet.EMPTY)")
         val replace = helper.indexOf("replaceAction(")
-        assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
         assertTrue(
             "必须先 setShortcutSet(CustomShortcutSet.EMPTY)（$emptySet）再 replaceAction（$replace）",
             emptySet in 0 until replace,
