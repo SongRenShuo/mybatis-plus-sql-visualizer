@@ -562,6 +562,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-13)**
 
+### L60 外部连不上先按四层排，`refused` 与「握手期断连」不是一回事
+
+**规则**：真机实例「外部连不上」不许直接归到网络。按四层从外往里排，错在哪层、报错就长什么样：①宿主机端口 `ss -tlnp`（无进程＝容器没起）②DNAT 目标 `nft list chain ip nat DOCKER` 与容器实际 IP 对照（指向已消失的 IP ⇒ **超时**）③容器内监听地址（只听 `127.0.0.1` ⇒ **refused**）④`pg_hba.conf` 放行来源（只放行容器网段 ⇒ 外部连接在**握手期被踢**，pgjdbc `The connection attempt failed.`、原生客户端 `os error 10054`，**不是 refused**）。判据口诀：refused 在 ①③、超时在 ②、握手期断连在 ④。配套两条纪律：改 hba 用 `gs_ctl reload` 不用 restart（restart 会打断在跑的真机矩阵，红了自己也分不清谁弄的）；「端口 OPEN」不算活的证据——`docker-proxy` 会先自己完成 TCP 握手，必须做到客户端能查（`SELECT 1`）。
+
+**证据**：夜间 `dialect` 腿连红四轮（11-09 起，run `43125167048` / `43143657370` / `43154447017` / `43335074786` 系）读数恒为「通过 2 / 失败 2」，失败两实例同在 `103.36.220.245`（panwei_a:26101、gaussdb:25882），通过两实例同在 `114.66.55.245`。前两层都正常，第三层 gaussdb 只听 loopback（改 `listen_addresses='*'`），第四层三套 hba 全只放行容器网段——修完第三层后报错从 `Connection refused` 变成 `The connection attempt failed.`，我一度按网络排查；用 DBX 从本机直连复现 `10054` 才定性，补 `host all all 0.0.0.0/0 sha256` 后 gaussdb 539ms、panwei A 984ms 连通。方法全文见 `docs/经验总结/20261113-0845-夜间dialect腿连红根因与真机实例对外可达四层排查法-经验总结.md` 与 skill §4.5。
+
+**正例**：每层各取一条读数写进结论，改完用「外部视角」复验（DBX/公网客户端，而不是容器内 localhost）；**反例**：看到 `connection attempt failed` 就归因「跨洋网络抖动」，或拿容器内 `SELECT 1` 通当作外部可用。
+
+**Seen 1× (2026-11-13)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

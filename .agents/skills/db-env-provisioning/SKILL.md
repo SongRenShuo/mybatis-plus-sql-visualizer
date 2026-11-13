@@ -408,7 +408,9 @@ docker run -d --name panweidb-test --restart unless-stopped --privileged=true \
    容器重启换 IP 后 `gs_ctl start` 报 `FATAL: could not create listen socket for "172.17.0.x:17700"`。
    在 `run.sh` 的启动分支（`gs_ctl start` 之前）按当前 IP 重写 `postgresql.conf` 即可自愈。
    注意 **`gs_guc` 不接受 `*`，也不接受逗号值**（`ERROR: The parameter(*) exists illegal character:*` /
-   `The value "0.0.0.0,localhost" ... is incorrect`），只能改文件：
+   `The value "0.0.0.0,localhost" ... is incorrect`），只能改文件。
+   **2026-11-13 改法升级**：直接把文件写成 `listen_addresses = '*'` 可行（`gs_guc` 的限制只约束它自己那条命令），
+   panweidb-ora/-test 与 gaussdb 现在都是 `'*'` + hba 放 `0.0.0.0/0`，**彻底不依赖容器 IP**（配套改动见 §4.5）：
 
 ```bash
 ip=$(hostname -I | awk '{print $1}')
@@ -677,6 +679,45 @@ select current_user, current_database(),
 这两个都是真机才暴露的）；拿 MySQL 承载 MariaDB 驱动只是驱动级替代读数，不能写成「MariaDB 已验证」。
 **结论里必须带实例版本**——Kernel 503 不等于商用 5.x，社区镜像不等于厂商官方。
 
+## 4.5 外部连不上：按四层排，报错文案直接指层（2026-11-13 实录）
+
+真机腿红在「连不上」时，别一上来怀疑网络。四层从外往里排，**错在哪层，报错文案就长什么样**：
+
+| 层 | 查法 | 坏了的典型症状 |
+|---|---|---|
+| ① 宿主机端口 | `ss -tlnp \| grep <port>` | 没有进程 ⇒ 容器没起 / 端口没发布 |
+| ② DNAT 目标 | `nft list chain ip nat DOCKER \| grep <port>`（老宿主用 `iptables -t nat -L DOCKER`），与 `docker inspect <容器> --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'` 逐个对 | 目标指向已消失的容器 IP ⇒ SYN 石沉大海（**超时**，不是 refused）。容器重建 / 换网络后必查 |
+| ③ 容器内核监听地址 | 容器内 `ss -tln \| grep <引擎端口>` | 只听 `127.0.0.1:x` ⇒ 外部经 DNAT 进来**被拒（refused）**。openGauss 族改 `listen_addresses = '*'`，MySQL 族改 `bind-address=0.0.0.0` |
+| ④ pg_hba / 认证来源 | 容器内 `grep -Ev '^\s*#' pg_hba.conf` | 只放行容器网段时，外部连接在**握手期被踢**：pgjdbc `The connection attempt failed.`，DBX/原生客户端 `os error 10054 远程主机强迫关闭了一个现有的连接`。**不是 refused**，极易误判成网络抖动 |
+
+判据口诀：**refused 落在 ①③，超时落在 ②，握手期断连落在 ④**。
+
+11-13 这轮的真凶是 ④，而且出现过一次误判：`listen_addresses` 修好后 `refused` 变成「connection attempt
+failed.」，我一度按网络问题排查；用 DBX 从本机直连复现出 `10054` 才定性——hba 只有 `127.0.0.1/32`、
+`::1/128`、`172.17.0.0/16`，而 DNAT 进来的外部连接源 IP 是**真实公网地址**，一条都匹配不上。补
+`host all all 0.0.0.0/0 sha256`（+ `::/0`）后即通。**口令认证，不放开 trust**；该靶机本来就是公网端口 + 口令模式。
+
+三个实操要点：
+
+- **改 hba 用 `gs_ctl reload`，别 restart**：hba 是 SIGHUP 级配置，reload 不打断正在跑的渲染套件；restart 会让
+  262 词 × 4 worker 的真机矩阵瞬间全红，还分不清是自己改坏的还是本来红。
+- **引号必须真落盘**：跨层拼命令（本地 → bash → `docker exec` → `sh`）里 `'*'` 极易被吃掉，落成无引号的
+  `listen_addresses = *`，openGauss 直接 `could not start server`。改完一律 `grep '^listen_addresses'` 回读。
+- **「端口 OPEN」不等于库活着**：`docker-proxy` 会先自己完成 TCP 握手。所以必须做到 §4 第 2 档（客户端能查），
+  只做第 1 档（TCP 通）会给出假绿。
+
+### 整机重启后哪些实例自己回来（2026-11-13 实测）
+
+`--restart unless-stopped` 只拉起**容器**，不保证**库进程**：
+
+| 实例 | 容器重启后 | 缺口 |
+|---|---|---|
+| `xc3-mysql8` / `xc3-opengauss` / 磐维两档 | 库随容器起来 | — |
+| `xc3-gaussdb-kernel503` | **容器 Up、库不在** | 镜像 Cmd 只有 `tail -f /dev/null`，没有 entrypoint；必须人工起：`docker exec -u omm <容器> bash -lc 'export LD_LIBRARY_PATH=/opt/gaussdb/app/lib:$LD_LIBRARY_PATH; gs_ctl start -D /home/omm/probe/data'` |
+
+**`gs_ctl` / `gsql` 必带 `LD_LIBRARY_PATH`**：不带会报 `libpq.so.5.5` / `libcjson.so.1` cannot open shared
+object file——那是环境问题，不是库装坏了，别按「库坏了」处理。
+
 ## 5. 登记 DBX 与驱动
 
 **DBX 登记**（用户惯例）：加进 **Song 分组**，命名 `<服务器短名> | <产品名+版本>`，如
@@ -743,7 +784,9 @@ select current_user, current_database(),
 | 容器起来了但外部连不上（容器内/localhost 正常） | MySQL 的 `root` 默认只允许 `localhost` | 起容器加 `-e MYSQL_ROOT_HOST=%` |
 | `gs_preinstall` 报 `This cluster is missing the rdtscp or avx instruction` 并退出 | 预检要求 `lscpu` 同时有 avx 与 rdtscp，QEMU vCPU 没有；**引擎本体不需要** | 把 `script/local/PreInstallUtility.py` 里 `check_cpu_instructions` 的 `raise` 改成 `pass`（留 `.orig`） |
 | `gs_checkos` 报 GAUSS-51400（`find /etc/sysconfig/network-scripts` 失败）或 GAUSS-50612（`ethtool -g eth0` Operation not supported） | cgroup v2 下 `checkDockerEnv()` 恒假 ⇒ 9 处「容器内可容忍」分支失效 | 在 `checkDockerEnv()` 加 `/.dockerenv` 判定（首选）；或补 `mkdir -p /etc/sysconfig/network-scripts` |
-| 容器重启后 `FATAL: could not create listen socket for "172.17.0.x:17700"` | `listen_addresses` 写死了安装时的容器 IP，重启换了 IP | 启动脚本里按 `hostname -I` 重写 `postgresql.conf` 的 `listen_addresses`（`gs_guc` 不收 `*`/逗号值） |
+| 容器重启后 `FATAL: could not create listen socket for "172.17.0.x:17700"` | `listen_addresses` 写死了安装时的容器 IP，重启换了 IP | 启动脚本里按 `hostname -I` 重写 `postgresql.conf` 的 `listen_addresses`（`gs_guc` 不收 `*`/逗号值）；**2026-11-13 起 panweidb-ora/test 与 gaussdb 已直接写 `'*'`（改文件可行，`gs_guc` 的限制只约束它自己那条命令），不再依赖容器 IP** |
+| 外部连不上，容器内/localhost 正常，pgjdbc 报 `The connection attempt failed.`、DBX 报 `os error 10054` | **pg_hba 只放行容器网段**，外部源 IP 匹配不到任何规则 ⇒ 握手期被踢（不是 refused） | 打开 `pg_hba.conf` 确认有无覆盖外部源的规则；补 `host all all 0.0.0.0/0 sha256` + `::/0 sha256`，`gs_ctl reload` 生效（别 restart，会打断真机矩阵）。排查全链见 §4.5 |
+| 整机重启后容器 Up 但库连不上（gaussdb） | 镜像无 entrypoint，`Cmd` 只有 `tail -f /dev/null`，库进程不会自启 | `docker exec -u omm <容器> bash -lc 'export LD_LIBRARY_PATH=/opt/gaussdb/app/lib:$LD_LIBRARY_PATH; gs_ctl start -D /home/omm/probe/data'`；缺 `LD_LIBRARY_PATH` 会误报 `libpq.so.5.5` 缺失 |
 | 起库报 `the values of memory out of limit ... = 5057MB` | `max_process_memory` 被压到引擎下限以下 | 抬回 ≥5GB（记账上限非预占），改压 `shared_buffers` |
 | `CREATE DATABASE … DBCOMPATIBILITY 'A'` 报 `option "dbcompatibility" not recognized` | 该产品的兼容档是**安装期**参数，不是建库选项 | 另起一个容器按目标档安装，别在单实例里切档 |
 
