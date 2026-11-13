@@ -9,11 +9,13 @@ import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import java.io.File
 
 /**
  * T-PreviewLineCommentDash O-134/D136：预览行注释统一 `--` 接管件的行为契约。
@@ -308,5 +310,63 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
             EditorCommentShortcuts.uninstall(ed)
             EditorFactory.getInstance().releaseEditor(ed)
         }
+    }
+
+    /**
+     * T-CommentShortcutKeymap：换入/换回不得改动键盘绑定本身。
+     *
+     * 换入后平台会给新实例回填 `ProxyShortcutSet(actionId)`（按 keymap 惰性解析），所以键位数必须
+     * 与 keymap 对该 id 的映射一致——这同时是「先置 CustomShortcutSet.EMPTY」不丢键位的回归网。
+     */
+    fun test换入换回后快捷键绑定仍与keymap一致() {
+        val keymapKeys = KeymapManager.getInstance().activeKeymap
+            .getShortcuts(IdeActions.ACTION_COMMENT_LINE).size
+        val ed = editor("SELECT 1;")
+        try {
+            EditorCommentShortcuts.install(ed)
+            val installed = ActionManager.getInstance().getAction(IdeActions.ACTION_COMMENT_LINE)!!
+            assertEquals(
+                "换入后键位数应仍来自 keymap（ProxyShortcutSet 惰性解析）",
+                keymapKeys,
+                installed.shortcutSet.shortcuts.size,
+            )
+            EditorCommentShortcuts.uninstall(ed)
+            assertEquals(
+                "换回后原动作键位数应仍来自 keymap",
+                keymapKeys,
+                originalAction.shortcutSet.shortcuts.size,
+            )
+        } finally {
+            EditorCommentShortcuts.uninstall(ed)
+            EditorFactory.getInstance().releaseEditor(ed)
+        }
+    }
+
+    /**
+     * T-CommentShortcutKeymap 源码守卫：换动作**必须**经 `replaceActionSilently`（先置 EMPTY）。
+     *
+     * 行为级断言够不着——平台告警是 `Logger.warn(PluginException)`，仓内无日志捕获通道；
+     * 而「忘了先置 EMPTY」在功能上完全无感（键位照旧生效），只有真机日志里刷
+     * `ShortcutSet of global AnActions should not be changed outside of KeymapManager`。
+     * 故按 PerfSweep27StaticGuardTest 的 `File("src/main/kotlin/$rel")` 先例做结构钉。
+     */
+    fun test源码守卫_换全局动作必须经replaceActionSilently() {
+        val src = File("src/main/kotlin/cn/song/mybatisplus/visualizer/util/EditorCommentShortcuts.kt")
+            .readText()
+            .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（本文件的 KDoc 里提到这些符号）
+            .replace(Regex("""(?m)^\s*//.*$"""), "")         // 剥行注释
+        assertEquals(
+            "replaceAction 只允许出现在 replaceActionSilently 内（先置 CustomShortcutSet.EMPTY 再换）",
+            1,
+            Regex("""\breplaceAction\(""").findAll(src).count(),
+        )
+        val helper = src.substringAfter("fun ActionManager.replaceActionSilently", "")
+        val emptySet = helper.indexOf("setShortcutSet(CustomShortcutSet.EMPTY)")
+        val replace = helper.indexOf("replaceAction(")
+        assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
+        assertTrue(
+            "必须先 setShortcutSet(CustomShortcutSet.EMPTY)（$emptySet）再 replaceAction（$replace）",
+            emptySet in 0 until replace,
+        )
     }
 }

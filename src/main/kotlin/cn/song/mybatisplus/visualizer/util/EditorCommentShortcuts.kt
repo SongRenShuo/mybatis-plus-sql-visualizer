@@ -5,6 +5,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
@@ -42,6 +43,13 @@ import com.intellij.openapi.util.TextRange
  *
  * 测试缝照 [EditorCopyShortcuts]：纯逻辑（行级切换）与 [DashLineCommentAction] 均 internal，
  * 单测可直接构造动作 + 自建 DataContext 驱动（不依赖真键盘分发）。
+ *
+ * **T-CommentShortcutKeymap（2026-11-13）**：换入/换回一律经 [replaceActionSilently]——先把自己的
+ * `ShortcutSet` 置为 [CustomShortcutSet.EMPTY] 再 `replaceAction`。平台 `registerAction` 每次注册都会
+ * 回填 `ProxyShortcutSet(actionId)`，而 `AnAction.setShortcutSet` 只对「当前集合恰为 EMPTY」放行，
+ * 否则在 PROJECT_OPENED 之后打 `ShortcutSet of global AnActions should not be changed outside of
+ * KeymapManager` 告警（真机日志实测 7 条，栈落在本类 install/uninstall）。判据与字节码偏移见
+ * `docs/开发计划/20261113-1045-T-CommentShortcutKeymap-*`。
  */
 internal object EditorCommentShortcuts {
 
@@ -67,7 +75,7 @@ internal object EditorCommentShortcuts {
             val original = manager.getAction(IdeActions.ACTION_COMMENT_LINE)
             if (original != null) {
                 val replacement = DashLineCommentAction(original)
-                manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement)
+                manager.replaceActionSilently(IdeActions.ACTION_COMMENT_LINE, replacement)
                 installedAction = replacement
                 refCount = 0
             }
@@ -86,12 +94,39 @@ internal object EditorCommentShortcuts {
                 val manager = ActionManager.getInstance()
                 // 只在当前在位的仍是本接管件时换回（防覆盖别的组件在期间的替换）
                 if (manager.getAction(IdeActions.ACTION_COMMENT_LINE) === replacement) {
-                    manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement.original)
+                    manager.replaceActionSilently(IdeActions.ACTION_COMMENT_LINE, replacement.original)
                 }
             }
             installedAction = null
             refCount = 0
         }
+    }
+
+    /**
+     * T-CommentShortcutKeymap：**先把自己的快捷键集合置为 [CustomShortcutSet.EMPTY]，再换入/换回**。
+     *
+     * 为什么必须这一步（243 字节码实证，见 20261113 开发计划 §二）：
+     *  - `ActionManagerImplKt.registerAction` 对新注册的动作无条件执行
+     *    `action.registerCustomShortcutSet(ProxyShortcutSet(actionId), null)`——即每次
+     *    `replaceAction` 都会给**换入的那个实例**重新 `setShortcutSet(新 ProxyShortcutSet)`；
+     *  - `AnAction.setShortcutSet` 在「新集合 ≠ 当前集合 **且** 当前集合 ≠ `CustomShortcutSet.EMPTY`
+     *    且 PROJECT_OPENED 已发生 且 `ActionManager.getId(this) != null`」时打
+     *    `WARN + PluginException(ShortcutSet of global AnActions should not be changed outside of
+     *    KeymapManager)`（2024.3 真机日志实测 7 条，栈落在本类 install/uninstall 的 replaceAction）；
+     *  - 唯一豁免条件就是「当前集合恰为 `CustomShortcutSet.EMPTY`」（字节码 `if_acmpeq EMPTY → 跳过`）。
+     *
+     * 本行自身不告警：此刻 [action] 还没在注册表里（`unregisterAction` 已把 `actionToId` 条目移除、
+     * 换入前的新实例根本没登记过），`ActionManager.getId(action)` 为 null ⇒ 告警块整体跳过。
+     * 换入后平台回填的 `ProxyShortcutSet(id)` 仍然是**按 keymap 惰性解析**的那一套，键位绑定不变。
+     */
+    private fun ActionManager.replaceActionSilently(actionId: String, action: AnAction) {
+        // `getId(action) == null` 是本行不告警的前提：正常换入（新实例未登记）与正常换回
+        // （`unregisterAction` 已把原动作从 actionToId 移除）都满足。被别人登记着时不预置——
+        // 预置本身会告警，交给平台回填（那种场景下平台侧本来也会告警一次，不叠加即可）。
+        if (getId(action) == null) {
+            action.setShortcutSet(CustomShortcutSet.EMPTY)
+        }
+        replaceAction(actionId, action)
     }
 
     /** 该编辑器是否已被本接管打标（接线覆盖测试与排障用；判定与动作内一致）。 */
