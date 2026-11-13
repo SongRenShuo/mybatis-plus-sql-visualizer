@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.psi.PsiAssignmentExpression
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
@@ -226,6 +227,15 @@ object WrapperLocator {
                 is PsiLocalVariable -> if (isWrapperVariable(current)) return current
                 is PsiField -> if (isWrapperVariable(current)) return current
                 is PsiParameter -> if (isWrapperVariable(current)) return current
+                // T-PreviewStmtTypeScope：赋值表达式右侧的 wrapper 构造/工厂链（`w = new LambdaQueryWrapper<>()`
+                // 的 new 锚点、`w = Wrappers.lambdaQuery()...`）按目标变量走变量路径——buildChainFromNew /
+                // buildChainFromFactory 只收集赋值表达式内部的链，会丢掉该变量后续的 .eq 语句与消费调用
+                // （demo 语料 WrapperReuseRepro 重新赋值行实测：预览退化成无 WHERE 的 SELECT）。
+                // LHS 不是 wrapper 变量时不命中，继续向上（不拦截普通赋值）。
+                is PsiAssignmentExpression -> {
+                    val target = (current.lExpression as? PsiReferenceExpression)?.resolve() as? PsiVariable
+                    if (target != null && isWrapperVariable(target)) return target
+                }
                 // 实参位置的 wrapper 引用（`update(null, wrapper)` / `selectCount(wrapper)`，U08，T-M15-05）：
                 // 直接 resolve 引用到 wrapper 变量即命中（isWrapperVariable 类型检查兜底，不会误判普通变量）
                 is PsiReferenceExpression -> {
@@ -979,6 +989,9 @@ object WrapperLocator {
         // T-PreviewStmtTypeScope：消费识别产物是**证据清单**（档位 + 方法名 + 行号 + 语句区间），四个标志
         // 由 [decideConsumption] 按锚点位置单点决定，见循环内注释。
         val consumptions = mutableListOf<WrapperConsumption>()
+        // T-PreviewStmtTypeScope：重新赋值点（赋值 LHS 是该变量）——wrapper 被重新赋值即开启一段新的
+        // 条件生命周期，[filterCallsToAnchorSegment] 据此只收锚点所在段的链上调用。
+        val assignmentOffsets = mutableListOf<Int>()
         // XB（M44）：DeleteChain 变量分步形态（`DeleteChain c = DeleteChain.of(mapper, X.class); c.eq(...)`）
         // → DELETE 语义（XbatisConverter 按 deleteConsumed 分派）；删除语义来自链类型本身而非引用消费，
         // 按变量声明位置记为证据（锚点在声明语句内即命中）。
@@ -1001,6 +1014,11 @@ object WrapperLocator {
         // T-PreviewStmtTypeScope：消费不再「任意一处即置标志」，而是收进证据清单——作用域收窄见 [decideConsumption]
         ReferencesSearch.search(variable).forEach { ref ->
             val refExpression = ref.element as? PsiReferenceExpression ?: return@forEach
+            // T-PreviewStmtTypeScope：重新赋值点记录（`w = new LambdaQueryWrapper<>()` 的 LHS 引用）
+            val parent = refExpression.parent
+            if (parent is PsiAssignmentExpression && parent.lExpression === refExpression) {
+                assignmentOffsets += refExpression.textRange.startOffset
+            }
             consumerCallOf(refExpression)?.let { consumptionOf(refExpression, it)?.let { evidence -> consumptions += evidence } }
             // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
             if (pageLimit == null) {
@@ -1065,7 +1083,10 @@ object WrapperLocator {
             enclosingIf == null || seenIfStatements.add(enclosingIf)
         }
 
-        val wrapperCalls = dedupedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
+        // T-PreviewStmtTypeScope：重新赋值分段——锚点落在哪一段条件生命周期，就只收那一段的链上调用
+        // （demo 语料 WrapperReuseRepro：重新赋值行的锚点若收全量，DELETE 会带上 update 段的 user_id/status）
+        val segmentCalls = filterCallsToAnchorSegment(dedupedCalls, assignmentOffsets, anchorOffsetOf(anchor))
+        val wrapperCalls = segmentCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
         // T-PreviewStmtTypeScope M2（D-2）：从全部消费证据里按锚点位置选一条决定语句类型；
         // D-3 的强制档位（面板切换）优先于 D-2。
         val deciding = decideConsumption(consumptions, anchorOffsetOf(anchor), preferredConsumption)
@@ -1253,6 +1274,33 @@ object WrapperLocator {
         if (anchorOffset == null) return byPriority(consumptions)
         byPriority(consumptions.filter { anchorOffset in it.statementRange })?.let { return it }
         return consumptions.filter { it.referenceOffset >= anchorOffset }.minByOrNull { it.referenceOffset }
+    }
+
+    /**
+     * T-PreviewStmtTypeScope：重新赋值分段——wrapper 变量被重新赋值后，赋值点即新一段条件生命周期的起点；
+     * 锚点落在哪一段，就只收那一段的链上调用。
+     *
+     *  - 锚点在某次重新赋值之后 → 只收该赋值之后的调用（`w = new ...; w.eq(b); delete(w)` 的锚点
+     *    不再带上前一段的 `w.eq(a)`）；
+     *  - 锚点在第一次重新赋值之前（含变量声明行）→ 只收该赋值之前的调用（声明段的链）；
+     *  - 无重新赋值 / 无锚点 → 全量（存量行为零变化）。
+     *
+     * 消费证据**不在此过滤**：D-3 的「预览目标」切换需要全部档位（update 段的证据在 delete 段的
+     * 锚点上仍要能切到）。纯函数，单测直接驱动。
+     */
+    internal fun filterCallsToAnchorSegment(
+        calls: List<PsiMethodCallExpression>,
+        assignmentOffsets: List<Int>,
+        anchorOffset: Int?,
+    ): List<PsiMethodCallExpression> {
+        if (assignmentOffsets.isEmpty() || anchorOffset == null) return calls
+        val segmentStart = assignmentOffsets.filter { it <= anchorOffset }.maxOrNull()
+        return if (segmentStart != null) {
+            calls.filter { it.textRange.startOffset > segmentStart }
+        } else {
+            val firstAssignment = assignmentOffsets.minOrNull() ?: return calls
+            calls.filter { it.textRange.startOffset < firstAssignment }
+        }
     }
 
     /** 消费档位优先级（与 SqlPreviewService 分派顺序同源：count > exists > update > delete > page）。 */

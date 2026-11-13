@@ -10,6 +10,7 @@
 - **数据源列表末尾新增「添加数据源…」（T-DsListAddSource，c728c8058）**：预览面板两处数据源列表（内嵌控制台的数据源下拉、「更多 → 切换数据源」）末尾可直接打开 IDE 原生新建数据源对话框，建好后自动切到新源
 
 ### Fixed
+- **重新赋值那一行点预览，条件与消费全丢成无 WHERE 的 SELECT（T-PreviewStmtTypeScope）**：`w = new LambdaQueryWrapper<>();` 这种「重新赋值」行上的预览图标挂在赋值表达式右侧的 `new` 上，此前只收该赋值表达式内部的链，后续另起语句的 `w.eq(...)` 与 `delete(w)` 全被丢掉。现在赋值锚点按**目标变量**走变量链，且重新赋值即分段——锚点在哪一段就只收那一段的条件（赋值前是声明段的 `user_id / status`，赋值后是 `order_no / user_id`），DELETE 不再串进上一段的 `status`
 - **同一个 wrapper 被多处消费时，预览语句类型与正在看的语句脱钩（T-PreviewStmtTypeScope，1b3af3ec5）**：判型此前只要该变量在**任意位置**被写调用消费过就改判（`mapper.update(entity, w)` / `delete(w)` 可能写在另一条语句上），于是查询链的预览出 UPDATE/DELETE。现在判型依据按锚点位置单选：优先锚点所在语句内的消费，其次锚点之后最近的一次；「声明与消费分离」（`w = new …; service.remove(w);`）照旧判 DELETE
 - **JDK 容器上的同名调用会把查询链改判成删除（T-PreviewStmtTypeScope，1b3af3ec5）**：`list.remove(wrapper)` / `map.remove(k, wrapper)` 这类调用此前按方法名就改判 DELETE；现在叠加接收者负门——接收者类型（含父链）落在 JDK 容器/常见非 DB 类型集合内即不算 SQL 消费。取负门而非「正向要求 MP CRUD 家族」是有意的：正向判定会否掉未接依赖的自有 Service 桩与自有 Component 中间层
 - **预览左栏的长参数名不再一直截断（T-ParamNameTruncation，2096fa2f5）**：标签列宽改为跟随左栏宽度，拉宽弹窗或拖动分隔条即显示完整名字；悬停提示恒给完整名，超长名自动折行，不再被屏幕右缘裁掉
