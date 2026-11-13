@@ -946,3 +946,29 @@ Read access is allowed from inside read-action only
 用户侧等价形态＝改了实体上的 `@TableName`/字段，预览与补全 60 秒内还是旧的。
 修法：判据改 `clazz.text.hashCode()`（内容指纹，PSI 重建不误 miss、真改了不误 hit）。
 反向验证：命中条件改回「无视内容一律命中」→ 恰三红，还原复绿。
+
+### 22.11 用户追问「全在后台线程会不会导致 IDEA 卡顿」——逐条核过，并补了两处硬护栏
+
+结论：**扫描本身不会让 IDEA 卡**，但原实现有两条真实风险，已按下面口径改掉。
+
+**① 扫描不在 EDT，EDT 只派发（O(1)）**：预览装配在 `executeOnPooledThread + ReadAction.compute` 里
+（`SqlPreviewService.previewAsync`），gutter 预热是 `ReadAction.nonBlocking`，扫描落在应用线程池。
+**真机证据**：20:08 那趟 4.7s 扫描期间，沙盒 `idea.log` **没有**任何 `PerformanceWatcher` 的
+freeze/sluggish 记账（最近的记账停在 19:56:57 启动阶段），同期 `request→dialog` 是 32/254/8ms。
+
+**② 但「补全」在 EDT 上**：`XmlSqlCompletionContributor.addCompletions`（每敲一个字符）也会走反查
+——原实现按 800ms 预算等后台扫描，等于**在 EDT 上最多卡 800ms**。这就是用户担心的那种卡顿形态，
+已改为：**EDT 只派发、立即返回**（`isDispatchThread` 时不等）；索引由预热/上一次派发在后台建好。
+守卫 `testEdtCallNeverWaitsForIndexBuild`（注入 3s 扫描延迟，EDT 内调用耗时必须 < 预算的一半）；
+反向改成「EDT 也等待」→ 恰 1 红。
+
+**③ 长读动作会不会挡住写动作（打字）**：扫描跑在 `ReadAction.nonBlocking` 里，平台要拿写权限时会
+**撤销**它；扫描每 `LIBRARY_SWEEP_CANCEL_INTERVAL = 64` 个短名 `checkCanceled()` 一次，
+撤销在毫秒级生效（本轮补：**不吞 `ProcessCanceledException`**——吞掉会让非阻塞读动作退化成
+「不可撤销的长读者」，这正是 11.12 冻结事故的形态）。另外补 **10 秒冷却**：
+刚被撤销/失败过就不再立刻重投，否则「输入 → 扫描被取消 → 下次输入再投」会反复空转白烧 CPU。
+
+**④ 剩下的真实成本**（接受，不再是 UI 风险）：每个结构版本（含 5 分钟 TTL 到期）会有一趟
+4.7~9.7s 的**后台** CPU 扫描——表现为风扇/占用，不是界面卡顿；若扫描在途时用户点击预览，
+非 EDT 调用方最多等 800ms 以换取完整上下文（等不到则本次降级、下次命中）。想再压这一档，
+走 §22.5 的「平台注解索引取候选（16804 → 约 2500）」路线，未做。

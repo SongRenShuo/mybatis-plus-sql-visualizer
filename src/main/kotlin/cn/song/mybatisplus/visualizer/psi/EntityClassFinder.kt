@@ -350,38 +350,69 @@ class EntityClassFinder(private val project: Project) {
      * 旧口径是「查一个表名扫一遍」，而 `cust-big-demo` 这类工程一次扫描 3.8s（16804 个类逐个读
      * `@TableName` / 推断表名）——用户每打开一条不同表的语句就再吃一次。
      *
-     * **扫描不上调用方线程**：派到应用线程池（`ReadAction.nonBlocking`，不持读锁等索引），调用方
-     * **至多**等 [INDEX_WAIT_BUDGET_MS]；超预算就用当前（多半空）的结果返回——真机实证（2026-11-13
-     * 沙盒）：「一次建成」这一步实测 **4737ms / 9675ms**，压在点击链上就是用户看到的「打开还是慢」。
-     * 预算内建完就直接命中（同一趟扫描很快返回），建不完则本次降级、下一次查询命中。
+     * **扫描不上调用方线程**：派到应用线程池（`ReadAction.nonBlocking`，不持读锁等索引），
+     * 非 EDT 调用方**至多**等 [INDEX_WAIT_BUDGET_MS]；超预算就用当前（多半空）的结果返回。
+     * 真机实证（2026-11-13 沙盒）：一趟「一次建成」实测 **4737ms / 9675ms**，压在点击链上就是
+     * 用户看到的「打开还是慢」。
+     *
+     * **EDT 一律不等**（补全每敲一个字符都会走到这里）：`ApplicationManager.isDispatchThread` 时
+     * 只派发、立即返回。等于在 EDT 上等一次动辄数秒的后台扫描，正是本轮要根治的形态；
+     * 索引由预热（BGT）/上一次派发在后台建好，下一次查询即命中。
      */
     private fun ensureIndexBuilt(entry: ReverseLookupCache) {
         if (entry.built) return
+        val app = ApplicationManager.getApplication()
+        val onEdt = app.isDispatchThread
         if (entry.building.compareAndSet(false, true)) {
             // 测试口径走同步：既有断言按「首次查询即建好」写（`indexBuildCount`/`scans` 读数）
-            if (syncIndexBuildForTest ?: ApplicationManager.getApplication().isUnitTestMode) {
+            if (syncIndexBuildForTest ?: app.isUnitTestMode) {
                 val started = System.currentTimeMillis()
                 applyBuiltIndex(entry, runCatching { scanAllTablesIndex() }.getOrNull(), started)
                 return
             }
+            if (!retryCooldownElapsed(entry)) {
+                // 刚被撤销/失败过：不立刻重投，否则连续输入会把「扫一段被取消」打成死循环
+                releaseBuild(entry)
+                return
+            }
             dispatchIndexBuild(entry)
         }
+        if (onEdt) return
         runCatching { entry.latch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS) }
     }
 
-    /** 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。 */
+    /** 上次被撤销/失败后的冷却窗口——防止「输入 → 扫描被写动作取消 → 下次输入再投」反复空转。 */
+    private fun retryCooldownElapsed(entry: ReverseLookupCache): Boolean {
+        val last = entry.lastAbortAt
+        return last == 0L || System.currentTimeMillis() - last >= INDEX_RETRY_COOLDOWN_MS
+    }
+
+    /**
+     * 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。
+     *
+     * 与写动作的关系：`ReadAction.nonBlocking` 在平台要拿写权限时会被撤销，本扫描每
+     * [LIBRARY_SWEEP_CANCEL_INTERVAL] 个短名 `ProgressManager.checkCanceled()` 一次，
+     * 所以「用户一打字」就能让出读锁（撤销即抛 PCE，见下方不吞 PCE 的写法）。
+     */
     private fun dispatchIndexBuild(entry: ReverseLookupCache) {
         // 起点在**派发前**：日志里的耗时含排队 + 扫描，是调用方视角的真实成本（曾被写成只量落地那一下 = 1ms）
         val started = System.currentTimeMillis()
         ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
-            runCatching { scanAllTablesIndex() }.getOrNull()
+            try {
+                scanAllTablesIndex()
+            } catch (pce: com.intellij.openapi.progress.ProcessCanceledException) {
+                throw pce // 撤销要能被平台看见（否则非阻塞读动作退化成「不可撤销的长读者」）
+            } catch (t: Throwable) {
+                null
+            }
         }
             .inSmartMode(project)
-            .expireWith(ApplicationManager.getApplication())
+            .expireWith(project)
             .submit(AppExecutorUtil.getAppExecutorService())
             .onSuccess { built -> applyBuiltIndex(entry, built, started) }
             .onError { t ->
-                LOG.info("[open-perf] 反查索引建立失败：${t.javaClass.simpleName}（下次查询重试）")
+                LOG.info("[open-perf] 反查索引建立未完成：${t.javaClass.simpleName}（冷却 ${INDEX_RETRY_COOLDOWN_MS}ms 后重试）")
+                entry.lastAbortAt = System.currentTimeMillis()
                 releaseBuild(entry)
             }
     }
@@ -523,6 +554,8 @@ class EntityClassFinder(private val project: Project) {
         val building: AtomicBoolean = AtomicBoolean(false),
         /** 建成/失败时放行等待者（等待有预算上限，见 [INDEX_WAIT_BUDGET_MS]）。 */
         val latch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
+        /** 上次被撤销/失败的时间戳（0 = 从未）。冷却窗口用它，防连续输入把扫描打成「反复重投」。 */
+        @Volatile var lastAbortAt: Long = 0L,
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         var scans: Int = 0,
     )
@@ -579,6 +612,13 @@ class EntityClassFinder(private val project: Project) {
          * 就是「打开还是慢」；预算内建完就命中，建不完本次降级（返回空上下文）、下一次查询命中。
          */
         internal const val INDEX_WAIT_BUDGET_MS: Long = 800L
+
+        /**
+         * 扫描被撤销/失败后的**冷却窗口**。为什么需要：`ReadAction.nonBlocking` 在平台要拿写权限时会被
+         * 撤销（用户一打字就要写锁），而补全在 EDT 上每敲一个字符都会问一次反查——没有冷却时
+         * 「投一次 → 立刻被取消 → 再投」会把一个 5~10s 的扫描打成无限重试，机器白烧。
+         */
+        internal const val INDEX_RETRY_COOLDOWN_MS: Long = 10_000L
 
         /**
          * 测试缝：强制建索引走**同步**分支。默认 null ⇒ 看 [com.intellij.openapi.application.ApplicationManager.isUnitTestMode]

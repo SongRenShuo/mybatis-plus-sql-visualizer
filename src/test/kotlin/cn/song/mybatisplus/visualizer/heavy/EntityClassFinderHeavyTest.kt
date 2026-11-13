@@ -416,6 +416,33 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         }
     }
 
+    fun testEdtCallNeverWaitsForIndexBuild() {
+        // 用户 2026-11-13 追问「全在后台线程会不会导致 IDEA 卡顿」：扫描确实不在 EDT，但**补全在 EDT 上**
+        // 每敲一个字符都会走到反查——若这里还按预算等 800ms，观感就是明显卡顿。契约：EDT 只派发、立即返回。
+        // 注入 3 秒扫描延迟 ⇒ 若在 EDT 上等待，本用例必红。
+        EntityClassFinder.syncIndexBuildForTest = false
+        EntityClassFinder.indexScanDelayMsForTest = 3_000L
+        try {
+            val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+            var elapsed = -1L
+            app.invokeAndWait {
+                com.intellij.openapi.application.ReadAction.compute<Unit, RuntimeException> {
+                    val t0 = System.currentTimeMillis()
+                    EntityClassFinder(project).find("not_exist_edt_table")
+                    elapsed = System.currentTimeMillis() - t0
+                }
+            }
+            // 阈值取「预算的一半」：EDT 不等时是毫秒级；若退化成按预算等待（800ms）必然超过它
+            assertTrue(
+                "EDT 上不得等待全量扫描（实测 $elapsed ms，预算 ${EntityClassFinder.INDEX_WAIT_BUDGET_MS}ms 的一半为上限）",
+                elapsed < EntityClassFinder.INDEX_WAIT_BUDGET_MS / 2,
+            )
+        } finally {
+            EntityClassFinder.syncIndexBuildForTest = null
+            EntityClassFinder.indexScanDelayMsForTest = null
+        }
+    }
+
     fun testReverseLookupHitRestoresClassesByQualifiedName() {
         // 命中缓存后按类名/全限定名重取：同名类（不同包）不会误配
         addClassFile(
