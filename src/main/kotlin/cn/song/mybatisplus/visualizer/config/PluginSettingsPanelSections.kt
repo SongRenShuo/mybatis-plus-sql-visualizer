@@ -656,6 +656,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.ibatisXml")
                 toolTipText = MpSqlVisualizerBundle.message("settings.ibatisXml.tip")
             })
+            // T-PreviewExecWriteDefer：控制台准备档（惰性 / 惰性无入口 / 打开即准备）——
+            // 惰性＝预览打开不建控制台（不写带方言映射的 exec 文件，避免工程短暂进 dumb）。
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.consolePrep"), consolePrepCombo.apply {
+                model = DefaultComboBoxModel(consolePrepOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.consolePrep.tip")
+            })
             // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
                 model = DefaultComboBoxModel(pagesSourceOptions())

@@ -34,8 +34,47 @@ internal object PreviewConsoleEager {
     /** Registry 开关（plugin.xml `<registryKey>` 登记；缺失时按默认值 false＝惰性）。 */
     internal const val REGISTRY_KEY = "sqlvis.preview.eagerConsole"
 
-    /** 测试缝：null＝按环境判定（单测＝eager，生产＝Registry）。 */
+    /** 三档口径（设置页可切；字符串存档见 `PluginSettings.State.consolePrepMode`）。 */
+    internal enum class Mode {
+        /** 默认：不建控制台（不写 exec 文件），绑定行给「显示执行控制台」入口。 */
+        LAZY,
+
+        /** 同 LAZY，但不放入口（极简派）。 */
+        LAZY_SILENT,
+
+        /** 旧行为：打开即准备控制台。 */
+        EAGER,
+    }
+
+    /** 测试缝：null＝按环境判定（单测＝eager，生产＝设置页口径）。 */
     internal var enabledForTest: Boolean? = null
+
+    /** 测试缝：强制口径（null＝读设置页）。 */
+    internal var modeForTest: Mode? = null
+
+    /** 当前口径：设置页 → 解析失败回落 LAZY。 */
+    internal fun mode(): Mode {
+        modeForTest?.let { return it }
+        val raw = runCatching {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.consolePrepMode
+        }.getOrNull()
+        return when (raw?.uppercase()) {
+            "EAGER" -> Mode.EAGER
+            "LAZY_SILENT" -> Mode.LAZY_SILENT
+            else -> Mode.LAZY
+        }
+    }
+
+    /** 是否**立即**准备控制台（＝旧行为）。Registry `sqlvis.preview.eagerConsole` 仍在：置 true 可强制回旧行为。 */
+    internal fun eager(): Boolean = enabledForTest ?: runCatching {
+        ApplicationManager.getApplication().isUnitTestMode ||
+            mode() == Mode.EAGER ||
+            Registry.`is`(REGISTRY_KEY, false)
+    }.getOrDefault(true)
+
+    /** 是否显示「显示执行控制台」入口（只有 LAZY 档给；eager 不需要，SILENT 明确不要）。 */
+    internal fun showShowConsoleEntry(): Boolean =
+        !eager() && mode() == Mode.LAZY
 
     /** 惰性延后次数（守卫读数：预览打开真的走了「不准备控制台」分支）。 */
     internal val deferredCount = java.util.concurrent.atomic.AtomicInteger()
@@ -46,12 +85,10 @@ internal object PreviewConsoleEager {
 
     internal fun resetForTest() {
         enabledForTest = null
+        modeForTest = null
         deferredCount.set(0)
     }
 
-    internal fun enabled(): Boolean =
-        enabledForTest ?: runCatching {
-            ApplicationManager.getApplication().isUnitTestMode ||
-                Registry.`is`(REGISTRY_KEY, false)
-        }.getOrDefault(true)
+    /** 兼容旧调用点：等价于 [eager]。 */
+    internal fun enabled(): Boolean = eager()
 }

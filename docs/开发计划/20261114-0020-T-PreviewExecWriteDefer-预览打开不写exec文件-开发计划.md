@@ -71,3 +71,19 @@
 （控制台显示/执行/换数据源）、A4 开关回退。**已知取舍**：惰性口径下预览打开时**控制台区域为空**，
 首次执行（或点「切换数据源」）后才出现——这是本刀的代价；要恢复旧观感把 `sqlvis.preview.eagerConsole`
 置 true 即可。
+
+### 6.1 三档口径（设置页可切，2026-11-14 01:1x 追加）
+
+用户要求「设置页也露一格」→ 新增 `PluginSettings.State.consolePrepMode`（默认 `LAZY`）与设置页下拉
+「界面与操作 → 执行控制台」，三档：
+
+| 档位 | 存档值 | 预览打开时 | 绑定行入口 |
+|---|---|---|---|
+| 按需准备（带入口）**默认** | `LAZY` | 不建控制台（不写 exec 文件） | 有「显示执行控制台」 |
+| 按需准备（不放入口） | `LAZY_SILENT` | 同上 | 无 |
+| 打开即准备（旧行为） | `EAGER` | 建控制台（写 exec 文件） | 无（不需要） |
+
+- 选项**由 `PreviewConsoleEager.Mode` 枚举派生**（key 用完整字面量，bundle 守卫可扫），UI 与解析端不可能分叉；
+- Registry `sqlvis.preview.eagerConsole` 保留为**高级逃生舱**（置 true 强制 EAGER 语义）；
+- 守卫：`PreviewConsoleEagerTest` 增三档判定矩阵 + 默认档 = LAZY + 枚举名/存档值一致性；
+  `PluginSettingsPanelBindingTest`（17 例）与 `BundleParityGuardTest` 全绿。

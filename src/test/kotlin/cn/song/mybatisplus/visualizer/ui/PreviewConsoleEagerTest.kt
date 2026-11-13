@@ -63,8 +63,41 @@ class PreviewConsoleEagerTest : com.intellij.testFramework.fixtures.BasePlatform
         assertTrue("bind-state 行必须有「显示执行控制台」链接", codeOnly.contains("panel.console.show"))
         assertTrue("链接点击必须触发 prepareDefaultConsole", codeOnly.contains("prepareDefaultConsole()"))
         assertTrue(
-            "链接可见性必须受惰性口径控制（否则 eager 下会多出一个没用的入口）",
-            codeOnly.contains("PreviewConsoleEager.enabled()"),
+            "链接可见性必须受三档口径控制（否则 eager/SILENT 下会多出一个没用的入口）",
+            codeOnly.contains("PreviewConsoleEager.showShowConsoleEntry()"),
+        )
+    }
+
+    fun test三档口径的判定矩阵() {
+        // LAZY（默认）：不 eager，且给「显示执行控制台」入口
+        PreviewConsoleEager.modeForTest = PreviewConsoleEager.Mode.LAZY
+        PreviewConsoleEager.enabledForTest = false
+        assertFalse("LAZY 不得 eager", PreviewConsoleEager.enabled())
+        assertTrue("LAZY 必须给入口", PreviewConsoleEager.showShowConsoleEntry())
+
+        // LAZY_SILENT：不 eager，也不给入口
+        PreviewConsoleEager.modeForTest = PreviewConsoleEager.Mode.LAZY_SILENT
+        assertFalse(PreviewConsoleEager.enabled())
+        assertFalse("LAZY_SILENT 不得给入口", PreviewConsoleEager.showShowConsoleEntry())
+
+        // EAGER：回到旧行为（打开即准备），入口无意义
+        PreviewConsoleEager.modeForTest = PreviewConsoleEager.Mode.EAGER
+        PreviewConsoleEager.enabledForTest = null
+        assertTrue("EAGER 必须 eager", PreviewConsoleEager.enabled())
+        assertFalse("EAGER 下不显示入口", PreviewConsoleEager.showShowConsoleEntry())
+    }
+
+    fun test设置页默认档是惰性带入口() {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.State()
+        assertEquals("新装/未设置时应为 LAZY（惰性 + 入口）", "LAZY", state.consolePrepMode)
+    }
+
+    fun test三档枚举名与存档值一致() {
+        // 设置页选项由枚举名派生（见 consolePrepOptions），落盘值也存枚举名——
+        // 改名即等于改存档格式，必须有守卫提醒。
+        assertEquals(
+            listOf("LAZY", "LAZY_SILENT", "EAGER"),
+            PreviewConsoleEager.Mode.values().map { it.name },
         )
     }
 }

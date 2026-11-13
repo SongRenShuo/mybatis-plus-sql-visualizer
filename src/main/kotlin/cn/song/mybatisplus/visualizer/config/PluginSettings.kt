@@ -84,6 +84,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showGutterIcon: Boolean = true,
 
         /**
+         * T-PreviewExecWriteDefer：预览打开时「是否立即准备执行控制台」。
+         *
+         * 取值（[cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager] 解析）：
+         *  - `LAZY`（默认）：不建控制台（不写带方言映射的 exec 文件 ⇒ 不进 dumb），绑定行给
+         *    「显示执行控制台」入口；
+         *  - `LAZY_SILENT`：同上但不放入口（极简派）；
+         *  - `EAGER`：打开即准备控制台（旧行为，每次预览会写 exec 文件）。
+         */
+        var consolePrepMode: String = "LAZY",
+
+        /**
          * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
          * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。

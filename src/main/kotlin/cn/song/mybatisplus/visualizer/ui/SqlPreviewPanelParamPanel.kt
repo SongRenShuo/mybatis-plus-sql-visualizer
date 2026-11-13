@@ -652,7 +652,7 @@ internal fun SqlPreviewPanel.refreshBindStateRow() {
     val label = bindStateLabel ?: return
     label.text = bindStateText()
     // 惰性口径下、控制台还没挂上时给「显示执行控制台」入口；挂上后（或 eager 口径）隐藏
-    bindStateShowConsoleLink?.isVisible = !PreviewConsoleEager.enabled() && !consoleAttachedToMe()
+    bindStateShowConsoleLink?.isVisible = PreviewConsoleEager.showShowConsoleEntry() && !consoleAttachedToMe()
 }
 
 /**

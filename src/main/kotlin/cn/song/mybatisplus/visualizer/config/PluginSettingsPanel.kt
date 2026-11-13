@@ -148,6 +148,27 @@ class PluginSettingsPanel @JvmOverloads constructor(
         override fun toString(): String = label
     }
 
+    /** T-PreviewExecWriteDefer：控制台准备档（三档，见 `PreviewConsoleEager.Mode`）。 */
+    internal data class ConsolePrepOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    /**
+     * 控制台准备档选项——**直接由 `PreviewConsoleEager.Mode` 派生**（顺序与取值同源），
+     * 这样设置页 UI 与解析端不可能分叉（新增一档只需改枚举 + 加一条 bundle 文案）。
+     */
+    internal fun consolePrepOptions(): Array<ConsolePrepOption> =
+        cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.values().map { mode ->
+            // key 用**完整字面量**（不拼接）：bundle 守卫会把字面量前缀当 key 引用，拼接形态既绕不过守卫、
+            // 也让缺键在运行期才暴露（message() 缺键返回 key 原文，UI 直接显示键名）。
+            val key = when (mode) {
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.LAZY -> "settings.consolePrep.lazy"
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.LAZY_SILENT -> "settings.consolePrep.lazySilent"
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.EAGER -> "settings.consolePrep.eager"
+            }
+            ConsolePrepOption(mode.name, MpSqlVisualizerBundle.message(key))
+        }.toTypedArray()
+
     internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
@@ -571,6 +592,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** maintainPage `<datasource>` 源语言档（T-PagesHql：AUTO/SQL/HQL）。 */
     internal val pagesSourceCombo = JComboBox<PagesSourceOption>()
+
+    /** T-PreviewExecWriteDefer：控制台准备档下拉（惰性 / 惰性无入口 / 打开即准备）。 */
+    internal val consolePrepCombo = JComboBox<ConsolePrepOption>()
 
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
@@ -1319,6 +1343,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || ibatisXmlCheck.isSelected != s.ibatisXmlEnabled
             // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
             || (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value != s.pagesXmlSourceMode
+            || (consolePrepCombo.selectedItem as? ConsolePrepOption)?.value != s.consolePrepMode
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
@@ -1471,6 +1496,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
             s.pagesXmlSourceMode = (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value
                 ?: PluginSettings.PAGES_SOURCE_AUTO
+            s.consolePrepMode = (consolePrepCombo.selectedItem as? ConsolePrepOption)?.value ?: "LAZY"
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
@@ -1597,6 +1623,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-PagesHql：maintainPage 源语言档回填
             pagesSourceCombo.selectedItem = pagesSourceOptions().firstOrNull { it.value == s.pagesXmlSourceMode }
                 ?: pagesSourceOptions().first()
+            consolePrepCombo.selectedItem = consolePrepOptions().firstOrNull { it.value == s.consolePrepMode }
+                ?: consolePrepOptions().first()
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
