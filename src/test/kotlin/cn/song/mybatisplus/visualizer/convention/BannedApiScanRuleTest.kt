@@ -602,6 +602,11 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java",
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java",
         "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java",
+        // T-SyncK2JMaster178（2026-11-14）：A5 批 iBatis 链新入落地集（与 BannedApiSourceScanTest
+        // .fatalPassthroughGuardedFiles 同批联动）——SqlMapSqlRenderer 渲染链 fatal 立即透传 1 处、
+        // IbatisXmlPreviewService 渲染主链 + selectKey 分支各 1 处。
+        "src/main/java/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.java",
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.java",
         // T-FP-02b（独立复核条件项）：预览主链收口（判 fatal + 非 fatal 补 WARN 留痕）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java",
         // T-RecentExecMenu（20261007）：两处后台候选收集站点整段收口（非 fatal 仍降级）。
@@ -619,7 +624,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // T-SyncK2JMaster177（2026-11-08）重登 15→17：A2 波次把 master 的
         // createTempPsiFileAsync / revalidateOnEdt 两个 `runCatching` 落成 catch(Throwable)+fatal 透传
         // （主控编译收口改为 sneakyThrow 透传，判定点仍是 FatalErrors.isFatal 两处），守卫实测 17。
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 17,
+        // T-SyncK2JMaster178（2026-11-14）重登 17→19：A4 批 T-ExecPsiGate 自愈链（f933c4977）
+        // 翻译净增 2 处判定（F3 失败原因就地捕获 / F5 站点），守卫实测 19。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 19,
+        // T-SyncK2JMaster178（2026-11-14）新入落地集：A5 批 iBatis 链（同 BannedApiSourceScanTest 落地集注）。
+        "src/main/java/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapSqlRenderer.java" to 1,
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/IbatisXmlPreviewService.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
@@ -663,8 +673,9 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 新增 1 处捕获站点，同源降级语义。
         // 16→19（T-SyncK2JMaster175 A 波，守卫实测 2026-10-31）：A1/A2 方言与推断族/日志与采集族
         // 增量补译新增 3 处捕获站点（方言继承入口/预览取源换源/日志采集链降级），同源降级语义。
+        // 19→20（T-SyncK2JMaster178，守卫实测 2026-11-14）：本轮生产增量新增 1 处捕获站点（降级语义）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycleKt.java" to
-            CatchExemption(19, "编辑器装配/预热/补全链降级（补全弹窗异常不影响输入、预热失败下次重试——runCatching 翻译站点）"),
+            CatchExemption(20, "编辑器装配/预热/补全链降级（补全弹窗异常不影响输入、预热失败下次重试——runCatching 翻译站点）"),
         // 13 处：原生 Database 插件图表可选能力探测，失败回落自建 A 路径（零劣化）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.java" to
             CatchExemption(13, "原生 Database 图表可选能力探测，失败回落自建 A 路径（零劣化）"),
@@ -851,15 +862,19 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            // T-SyncK2JMaster177（2026-11-08 守卫实测）：529 → 559 / 957 → 998。生产面 112 件全量同步
-            // 把 master 侧各批 runCatching 落成 try/catch(Throwable)，新增降级站点 41 处（其中 11 处带
-            // fatal 判定入落地集/豁免表，其余 30 处为未判定降级站点）。
-            559,
+            // T-SyncK2JMaster178（2026-11-14 守卫实测）：559 → 631 / 998 → 1140。本轮 master
+            // 95e107b1..183c98b3d 生产翻译（iBatis/MBG 子链路族 / 执行链 T-ExecPsiGate 自愈链 /
+            // T-PreviewDmlResult 写语句通道 / 更新族与 MCP 导航族等波次 A 全批）把 master 侧
+            // runCatching 降级形态继续落成 try/catch(Throwable)（876 个 .java 文件全量 1140 站点，
+            // 其中 72 处为未落地/未豁免文件的无判定降级站点；外层 fatal 判定落地集新增
+            // SqlMapSqlRenderer(1)/IbatisXmlPreviewService(2)、ResultsKt 17→19，豁免表
+            // SqlPreviewPanelEditorLifecycleKt 19→20）。守卫原读数 expected:<559> but was:<631>。
+            631,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            998,
+            1140,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
