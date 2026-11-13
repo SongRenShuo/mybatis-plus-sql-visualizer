@@ -27,6 +27,10 @@ import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerP
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTarget;
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets;
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview;
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -183,7 +187,9 @@ public final class ConvertToSqlAction extends AnAction {
                 (PreviewResult result) -> {
                     if (result != null) {
                         SqlPreviewService.showResult(project, result, sourceLocation);
-                    } else if (!tryHqlFallback(service, project, element, sourceLocation)
+                    } else if (!tryIbatisCallFallback(project, element, sourceLocation)
+                            && !tryIbatisMethodFallback(project, element, sourceLocation)
+                            && !tryHqlFallback(service, project, element, sourceLocation)
                             && !tryNamedQueryFallback(service, project, element, sourceLocation)
                             && !tryJdbcTemplateFallback(project, element, sourceLocation)
                             && !tryJpaFallback(service, project, element, sourceLocation)
@@ -206,6 +212,75 @@ public final class ConvertToSqlAction extends AnAction {
             selectionStart = m.getSelectionStart();
             selectionEnd = m.getSelectionEnd();
         }
+    }
+
+    /**
+     * T-IbatisCallPreview：光标在 iBatis {@code SqlMapExecutor} 调用行上 → 直接预览该语句的 SQL。
+     *
+     * <p>为什么必须排在 {@code tryJdbcTemplateFallback} 之前：{@code SqlMapExecutor} 的入口名
+     * （{@code queryForObject} / {@code queryForList} / {@code queryForMap} / {@code update} / {@code delete}）与 JDBC 模板白名单
+     * 完全重叠，而 {@code JdbcTemplateSqlLocator} <b>没有</b> iBatis 让位门（gutter 侧那道门在
+     * {@code JdbcTemplateSqlGutterLineMarkerProvider}）——此前该调用被 JDBC 通道认领后 {@code isLikelySql}
+     * 拒绝、通道又已 {@code return true}，用户只拿到「未找到可转换的 Wrapper」（错源提示）。</p>
+     *
+     * <p>形状门复用 {@link IbatisCallTargets}（内部就是 {@code IbatisCallYieldGate}，与 gutter 让位同一函数）；
+     * 目标解析与渲染全部在 {@code SqlPreviewService.previewAsync} 的读权限内完成，EDT 只取字符串。</p>
+     *
+     * <p>目标不存在时 {@code IbatisStatementPreview.previewResolved} 返回「语句未找到」可见失败——
+     * 形状命中即认领、不回落 JDBC（标识符形态首参本来就不是 SQL）。</p>
+     */
+    private boolean tryIbatisCallFallback(Project project, PsiElement element, String sourceLocation) {
+        IbatisCallTarget target = IbatisCallTargets.resolve(element);
+        if (target == null) return false;
+        previewIbatisTarget(project, target, sourceLocation);
+        return true;
+    }
+
+    /**
+     * T-IbatisCallPreview：光标在方法定义行 / 方法体任意处 → 按方法体内的 iBatis 调用出候选
+     * （0 → 继续回落；1 → 直接预览；多 → {@link SqlSelectionDialog}）。
+     *
+     * <p>用户按快捷键时常把光标停在方法名上；不补这一档，定义行仍会落到
+     * {@code tryMethodBodyStringSqlFallback}（{@code collectMethodCandidates} 同样没有 iBatis 门）→ 同一个
+     * 错源提示。方法体扫描带「无引号 / 超长方法体」两道廉价预筛（{@link IbatisCallTargets#callsInMethod}）。</p>
+     */
+    private boolean tryIbatisMethodFallback(Project project, PsiElement element, String sourceLocation) {
+        PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class, false);
+        if (method == null) return false;
+        if (method.getBody() == null) return false;
+        java.util.List<IbatisCallTarget> targets = IbatisCallTargets.callsInMethod(method);
+        if (targets.isEmpty()) return false;
+        if (targets.size() == 1) {
+            previewIbatisTarget(project, targets.get(0), sourceLocation);
+            return true;
+        }
+        java.util.List<SqlSelectionDialog.Row> rows = new ArrayList<>();
+        for (IbatisCallTarget target : targets) {
+            // master: target.call.containingFile.viewProvider.document?.getLineNumber(...)?.plus(1) ?: 0
+            com.intellij.openapi.editor.Document viewDoc =
+                    target.call().getContainingFile().getViewProvider().getDocument();
+            int line = viewDoc != null
+                    ? viewDoc.getLineNumber(target.call().getTextRange().getStartOffset()) + 1
+                    : 0;
+            String methodName = target.call().getMethodExpression().getReferenceName();
+            rows.add(SqlSelectionDialog.Row.of(
+                    (methodName != null ? methodName : "?") + "(\"" + target.statementId() + "\")（第 " + line + " 行）",
+                    target.call().getText().trim()));
+        }
+        new SqlSelectionDialog<>(project, targets, rows, (IbatisCallTarget selected) -> {
+            previewIbatisTarget(project, selected, sourceLocation);
+        }).show();
+        return true;
+    }
+
+    /** 预览一个 iBatis 调用目标（后台 ReadAction 内解析语句 + 渲染，EDT 只渲染结果）。 */
+    private void previewIbatisTarget(Project project, IbatisCallTarget target, String sourceLocation) {
+        // 只把字符串带进后台块（PSI 元素不跨线程读；解析链自己持读锁）
+        String statementId = target.statementId();
+        String ownerNamespace = target.ownerNamespace();
+        SqlPreviewService.previewAsync(project,
+                () -> IbatisStatementPreview.previewResolved(project, statementId, ownerNamespace),
+                (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
     }
 
     /**
@@ -488,9 +563,23 @@ public final class ConvertToSqlAction extends AnAction {
                     List<XmlTag> inlineTags = XmlInlineSqlDetector.INSTANCE.detectionEnabled()
                             ? XmlInlineSqlGutterLineMarkerProvider.carriersInRange(file, selStart, selEnd)
                             : Collections.<XmlTag>emptyList();
-                    List<XmlTag> tags = new ArrayList<>(mapperTags.size() + inlineTags.size());
+                    // 券 A 收尾：iBatis 语句候选（根 <sqlMap> 的直接子级，O(子级数)；兜底已让位须在此补回）
+                    List<XmlTag> ibatisTags = new ArrayList<>();
+                    XmlTag rootTag = file.getRootTag();
+                    if (rootTag != null && IbatisXmlGutterLineMarkerProvider.SQL_MAP_TAG.equals(rootTag.getName())) {
+                        for (PsiElement child : rootTag.getChildren()) {
+                            if (child instanceof XmlTag
+                                    && IbatisXmlGutterLineMarkerProvider.isStatementAnchor((XmlTag) child)
+                                    && ((XmlTag) child).getTextRange().getStartOffset() >= selStart
+                                    && ((XmlTag) child).getTextRange().getStartOffset() <= selEnd) {
+                                ibatisTags.add((XmlTag) child);
+                            }
+                        }
+                    }
+                    List<XmlTag> tags = new ArrayList<>(mapperTags.size() + inlineTags.size() + ibatisTags.size());
                     tags.addAll(mapperTags);
                     tags.addAll(inlineTags);
+                    tags.addAll(ibatisTags);
                     tags.sort(Comparator.comparingInt(t -> t.getTextRange().getStartOffset()));
                     List<SqlSelectionDialog.Row> rows = tags.stream().map(t -> {
                         int line = lineOf(t);
@@ -509,7 +598,11 @@ public final class ConvertToSqlAction extends AnAction {
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (project.isDisposed()) return;
                 if (tags.isEmpty()) {
-                    SqlPreviewService.showResult(project, null, sourceLocation);
+                    // E2E 验收缺陷 D2：选区落在语句**内部**（典型：Ctrl+F 命中后自动选中语句 id、
+                    // 或用户双击 `selectByExample` 再按快捷键）时，按「startOffset 在选区内」收不到候选，
+                    // 旧行为直接报「未找到可预览的 SQL 源」——明明光标就在语句里。改为回落光标所在语句
+                    // （0 候选之外的语义与多候选一致，不牺牲已有分发）。全部无语句时仍走原提示。
+                    previewXmlStatement(project, file, editor, sourceLocation);
                 } else if (tags.size() == 1) {
                     previewXmlTag(project, file, tags.get(0), sourceLocation);
                 } else {
@@ -530,8 +623,7 @@ public final class ConvertToSqlAction extends AnAction {
         PsiElement element = file.findElementAt(editor.getCaretModel().getOffset());
         XmlTag tag = element != null ? PsiTreeUtil.getParentOfType(element, XmlTag.class) : null;
         XmlTag statement = tag;
-        while (statement != null && !XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(statement.getName())
-                && !(XmlInlineSqlDetector.INSTANCE.detectionEnabled() && XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(statement))) {
+        while (statement != null && !isXmlStatementCandidate(statement)) {
             statement = statement.getParentTag();
         }
         if (statement != null) {
@@ -546,8 +638,7 @@ public final class ConvertToSqlAction extends AnAction {
             try {
                 payload = ReadAction.compute(() -> {
                     List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
-                            .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName())
-                                    || (XmlInlineSqlDetector.INSTANCE.detectionEnabled() && XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(it)))
+                            .filter(ConvertToSqlAction::isXmlStatementCandidate)
                             .collect(Collectors.toList());
                     List<SqlSelectionDialog.Row> rows = statements.stream().map(t -> {
                         int line = lineOf(t);
@@ -586,6 +677,16 @@ public final class ConvertToSqlAction extends AnAction {
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
     private void previewXmlTag(Project project, XmlFile file, XmlTag tag, String sourceLocation) {
+        // T-Ibatis2Support 券 A 收尾：iBatis 语句走独立预览链——它没有 namespace / Mapper 接口 /
+        // 实体注解，进 mapper 链只会拿到空上下文；且兜底通道已让位，不补这条就一个入口都没有。
+        // T-IbatisCallPreview：装配收口到 IbatisStatementPreview.previewTag（与 gutter / MCP 同源，
+        // 并补上无 id 语句的 ordinal 回落）。
+        if (IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
+            SqlPreviewService.previewAsync(project,
+                    () -> IbatisStatementPreview.previewTag(tag),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return;
+        }
         if (XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(tag)) {
             SqlPreviewService.previewAsync(project,
                     () -> XmlInlineSqlPreviewService.INSTANCE.preview(project, tag),
@@ -775,4 +876,21 @@ public final class ConvertToSqlAction extends AnAction {
 
     /** 插件动作 ID（plugin.xml 中注册）。 */
     public static final String ACTION_ID = "cn.song.mybatisplus.visualizer.ConvertToSql";
+
+    /**
+     * T-Ibatis2Support 券 A 收尾：XML 侧「这算一条可预览的语句吗」的<b>单一判据</b>。
+     *
+     * <p>三路来源：MyBatis mapper 语句 / 通用内嵌 SQL 载体 / iBatis {@code <sqlMap>} 语句。</p>
+     *
+     * <p>第三条是必须的：通用兜底通道已对 iBatis 语句<b>让位</b>（防与专用 provider 双图标），
+     * 若不在这里补回，Alt+Shift+Q 在 sqlMap 文件里会一条语句都列不出来——gutter 图标正常、
+     * 快捷键却空候选，属最难自证的半可用态。</p>
+     *
+     * <p>三处消费点共用本判据（光标上爬 / 全文件候选 / 选区候选），避免三份条件漂移。</p>
+     */
+    static boolean isXmlStatementCandidate(com.intellij.psi.xml.XmlTag tag) {
+        return XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(tag.getName())
+                || (XmlInlineSqlDetector.INSTANCE.detectionEnabled() && XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(tag))
+                || IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag);
+    }
 }
