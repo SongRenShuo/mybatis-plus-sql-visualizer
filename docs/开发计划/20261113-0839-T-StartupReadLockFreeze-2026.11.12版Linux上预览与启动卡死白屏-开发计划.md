@@ -886,3 +886,35 @@ Read access is allowed from inside read-action only
 
 - 全量门禁（按用户口径走 CI，本地不跑）；GUI 复验（沙盒已在后台重启，逐场景读 `request→dialog` 与
   `pre-assembly` 读数中）：本轮要证的是「同一份日志里热/冷交替时 `resolve=` 段不再出现 3.7~4.0 秒」。
+
+### 22.7 第二轮真机读数（2026-11-13 19:33 / 19:48 沙盒）：索引建成本身 4.7~9.7 秒，且压在点击链上
+
+改完 22.3 之后重启沙盒复测，同一份日志给出下一步：
+
+```
+19:33:10  ctx detail: entity=256ms resolve=3459ms include=false      ← 建索引在别的线程进行中
+19:33:20  [open-perf] 反查索引一次建成 tables=8688 耗时=9675ms        ← 冷态一趟扫描 9.7s
+19:33:20  ctx detail: entity=0ms resolve=9745ms include=false         ← 赢家线程等了整趟
+19:48:13  ctx detail: entity=4ms resolve=762ms include=true           ← 主实体链路直接命中，没走反查
+19:48:25  [open-perf] 反查索引一次建成 tables=8688 耗时=4737ms        ← TTL 到期后重建，4.7s
+19:48:26  [T-PreviewFast] request→dialog: 5119ms                      ← 这 4.7s 就压在点击上
+```
+
+三点结论：①「一次扫描建全表索引」把「每次打开重扫」消掉了（19:48:13 那种主链路命中就是 762ms），
+但②**这一趟扫描本身 4.7~9.7 秒**，只要它跑在调用方线程上，用户照样等；③TTL(5min) 到期后的第一次
+查询会把这趟扫描重新压到点击上。
+
+### 22.8 第二轮修法（`e99750f53`）
+
+扫描派到应用线程池（`ReadAction.nonBlocking{}.inSmartMode(project).expireWith(app).submit(AppExecutorUtil…)`，
+不持读锁等索引），调用方**至多**等 `INDEX_WAIT_BUDGET_MS = 800ms`：预算内建完就命中，建不完本次降级
+返回空上下文、下一次查询命中（等待者由 `CountDownLatch` 放行；失败路径同样放行，否则后来者白等一整个
+预算且索引再没人能建）。测试口径默认走同步分支（`isUnitTestMode`），既有「首次查询即建好」的断言不变。
+
+守卫：`testAsyncIndexBuildDoesNotBlockCaller`（注入 3s 扫描延迟 → 首次 find <2.5s 且返回空，随后后台
+落地、第二次命中）、`testAsyncIndexBuildQueryDoesNotHangWhenBuildInFlight`；反向（把建索引改回同步）
+恰 1 红。定向 EntityClassFinder 两测试类 + 补全上下文 + 面板生命周期全绿。
+
+**下一步（未做）**：这 4.7~9.7 秒还能再压——平台注解索引 `JavaAnnotationIndex.getAnnotations("TableName")`
+可把候选从「全项目类数」降到「带注解的实体数」（调研见 22.5；属性值仍要逐候选读）。当前先靠
+「挪出调用方线程 + 有界等待」把用户可感延迟消掉；若真机上仍能感知冷启动那一次，再走这条。
