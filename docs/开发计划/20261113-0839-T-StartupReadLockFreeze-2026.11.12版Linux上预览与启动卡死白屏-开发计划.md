@@ -1,7 +1,7 @@
 # T-StartupReadLockFreeze：2026.11.12 在 Linux 上打开即卡死 / 预览白屏——后台阻塞读锁与 EDT 写锁升级互锁
 
 - 立项：2026-11-13 08:39（用户三批现场材料：两份 Java 线程栈 + 一张白屏窗口图 + 冻结报告目录截图）
-- 状态：**已实施（2026-11-13）**：两车道合流于分支 `t-startup-readlock-freeze`（集成提交 `ef49211d5`，车道提交 `39d4b2706` 预取链 / `9f712eb78` 写路径），中央定向 17 类 **133/0/0/0**（含 4 个 plugin.xml 守卫），全量 `testShards` 读数见 §13.10；真机 5 步验收（§十）仍待用户；用户侧即时自救见 §六
+- 状态：**已实施（2026-11-13）**：两车道合流于分支 `t-startup-readlock-freeze`（集成提交 `ef49211d5`，车道提交 `39d4b2706` 预取链 / `9f712eb78` 写路径），中央定向 17 类 **133/0/0/0**（含 4 个 plugin.xml 守卫），全量门禁改由 CI 承担（run `43350850354` 8/8 job success，读数见 §十五）；真机 5 步验收（§十）与 §14.3 复验仍待用户；用户侧即时自救见 §六
 - 现象口径（用户原话）：「2026.11.12 版 mac 上正常，linux 上 idea 打开后就卡死」；「昨天那个白屏问题依然存在，点击后好久才出来界面，界面还空白，估计是在加载或者扫描，然后就开始 dump 了」；工程规模「表上千了，实体类上万」
 - 关联代码：`ui/MbgExampleCallResolver.kt`、`ui/gutter/XmlSqlGutterLineMarkerProvider.kt`、`ui/XmlPreviewService.kt`、`execute/DataSourceSelectorResults.kt`、`execute/DataSourceSelector.kt`、`execute/DocWriteContext.kt`
 - 关联版本：tag `2026.11.12`（预取在该 tag 首次进包；`2026.11.11` 的 gutter provider 里没有这条调用，`git show` 实证为空）
@@ -499,3 +499,31 @@ IDEA 的「拖慢」横幅则说明 EDT 也被牵连（写锁升级等读锁，�
 
 - 那 30s 窗口的 `[open-perf]` 行（通常一条，`always=true` 对 Example 档恒记）；
 - 若有 `[m2]` 行（`cache hit` / `unresolved` / `prefetch skip reason=…`）一并给。
+
+### 14.5 追加反馈的第二条（同日稍后）：关图标后只剩「带 Example 的语句慢」
+
+同一用户随后确认：「取消勾选后没有那个问题了」——即 §六 第 1 条的零成本自救有效，冻结点确为预取链。剩余现象即 §14.1 的 30s 档，按 §14.3 复验。
+
+---
+
+## 十五、门禁读数（§13.10）
+
+### 15.1 中央定向（合流态，本机）
+
+命令：`./gradlew test -Pkotlin.compiler.execution.strategy=in-process` + 17 个 `--tests`（预取/缓存/写路径/exec 同步/守卫族/plugin.xml）。
+读数：**tests=133, failures=0, errors=0, skipped=0**（17 类；含 `MbgExampleCallResolver` 3+6+3、`XmlEwResolver` 6、`DocWriteDispatchSafety` 4、`DocWriteContext` 9、`ExecDocSync` 14+8、`ExecDocPrewarm`/`AutosaveHost`/`Gate`/`VfDivergence`、`BannedApiScanRule` 12、`BannedApiSourceScan` 15、四守卫 23/4/3/8）。
+
+### 15.2 全量门禁：改由 CI 承担（用户 2026-11-13 指示「直接合并主分支跑 CI，不要在本地跑」）
+
+| 轮次 | 提交 | 结果 | 处置 |
+|---|---|---|---|
+| run `43348966367` | `164c499bc` | **5 个 test 分片全 success，`fast (2)` 1 红**：`BundleParityGuardTest.pluginXml与optionalXml引用的key必须存在于bundle`（`:140`） | 新增的 `<registryKey key="sqlvis.mbg.prefetch" description="…"/>` 被守卫当成 bundle 引用（key 是注册表标识符、description 是 Registry UI 纯英文串，平台不做 `%key%` 替换）。修法＝扫描前整元素剔除 `registryKey` 族，提交 `2f56f8eb7` |
+| run `43350850354` | `2f56f8eb7` | **8/8 job success**（test 1~5 + fast 1~2 + nightly-nudge），约 10.5 分钟 | — |
+
+修守卫后本机只跑了受影响的两类（`BundleParityGuardTest` 5/0/0/0、`GuardSelfTestCoverageMetaGuardTest` 8/0/0/0），其余交给 CI。
+
+### 15.3 not run
+
+- `verifyPlugin` / `buildPlugin` / `verifySmoke`（按「大改动或发版前」判据，本单未触发；`plugin.xml` 只加了扩展未改 EP 声明与 since-build）；
+- 真机 5 步（§十）与 §14.3 的复验：待用户装包后执行；
+- 生产调度段（nonBlocking + 预算计时器 + `inSmartMode`）没有平台级用例，只做了 243 发行包的 API 面 javap 核实（见 §13.9）。
