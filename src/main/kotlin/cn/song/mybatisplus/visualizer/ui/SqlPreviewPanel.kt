@@ -1021,6 +1021,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
         }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        // T-PreviewEditorLeak（2026-11-13 真机 SEVERE 驱动）：**兜底释放预览编辑器与 autopopup
+        // listener**。常规路径是 `removeNotify → releaseEditor`，而 IDE 退出/窗口已隐藏时
+        // removeNotify 不必然到达；此时残留的编辑器（含平台 CaretModelImpl/EditorView 子件）与
+        // `SqlPreviewPanel.autoPopup`（`Disposer.newDisposable` 的 ROOT 级子件）都会被平台
+        // ObjectTree 报 "Memory leak detected … Plugin to blame: SQL Visualizer"（实测一次退出 4 条）。
+        // 两个调用都幂等：编辑器已释放/字段已空时零动作。
+        runCatching { disposeCurrentEditorOnly() }
+        runCatching {
+            autoPopupDisposable?.let { Disposer.dispose(it) }
+            autoPopupDisposable = null
+        }
         Disposer.dispose(this)
     }
 

@@ -12,6 +12,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -230,6 +231,28 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
         } finally {
             JoinFkRegistry.clearForTest()
         }
+    }
+
+    // ============== T-PreviewEditorLeak：dispose 兜底释放编辑器与 autopopup listener ==============
+
+    /**
+     * 面板 dispose 必须**兜底**释放预览编辑器与 autopopup 的 ROOT 级 disposable。
+     *
+     * 真机驱动（2026-11-13 沙盒退出，4 条 SEVERE）：常规路径是 `removeNotify → releaseEditor`，
+     * 而 IDE 退出/窗口已隐藏时 removeNotify 不必然到达 ⇒ 残留编辑器（连同平台 CaretModelImpl /
+     * EditorView 子件）与 `SqlPreviewPanel.autoPopup` 被 ObjectTree 报 "Memory leak detected …
+     * Plugin to blame: SQL Visualizer"。反向去掉 dispose 里的兜底两行 ⇒ 本用例必红。
+     */
+    fun testDisposeReleasesPreviewEditorAndAutoPopupListener() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
+        assertNotNull("前置：应已装配预览编辑器", panel.editorForTest())
+        assertNotNull("前置：应已挂 autopopup 监听 disposable", panel.autoPopupDisposable)
+
+        panel.dispose()
+
+        assertNull("panel dispose 必须释放预览编辑器（IDE 退出时 removeNotify 不保证到达）", panel.editorForTest())
+        assertNull("panel dispose 必须一并释放 autopopup 的 ROOT 级 disposable", panel.autoPopupDisposable)
     }
 }
 
