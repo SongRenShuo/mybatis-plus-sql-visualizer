@@ -53,7 +53,7 @@ class IbatisXmlPreviewServiceTest {
         assertEquals("参数名按 `?` 出现序（面板据此列参数行）", listOf("orgName"), result.unresolvedParams)
         assertEquals("参数对照表复用既有渲染", "-- 参数对照: [orgName=?]", result.paramTable)
         assertNull("无告警语句不应有降级横幅", result.warning)
-        assertFalse("无 \$ / \${} 时注入闸门不得误报", result.hasDollarRawSegments)
+        assertFalse("无 \$ / \${} 时注入闸门不得误报", result.isHasDollarRawSegments())
     }
 
     @Test
@@ -143,7 +143,7 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(xml, "d")
         assertTrue(
             "`\$x\$` 站点是运行期原文直拼面，无参基线取不到值也必须进既有 \${} 确认闸门",
-            result.hasDollarRawSegments,
+            result.isHasDollarRawSegments(),
         )
         assertEquals("无参基线：`\$x\$` 取不到值被静默丢弃（引擎语义）", "SELECT * FROM ", result.sql)
     }
@@ -153,14 +153,14 @@ class IbatisXmlPreviewServiceTest {
         val xml = "<sqlMap><select id=\"e\">SELECT '\$\$' AS DOLLAR FROM T</select></sqlMap>"
         val result = preview(xml, "e")
         assertEquals("`\$\$` 是引擎的字面量 `\$`，转义段不是直拼面", "SELECT '$' AS DOLLAR FROM T", result.sql)
-        assertFalse("转义段不得误报注入闸门", result.hasDollarRawSegments)
+        assertFalse("转义段不得误报注入闸门", result.isHasDollarRawSegments())
     }
 
     @Test
     fun `未替换的属性占位_同样置注入闸门并给告警`() {
         val xml = "<sqlMap><select id=\"p\">SELECT * FROM \${tableName}</select></sqlMap>"
         val result = preview(xml, "p")
-        assertTrue("`\${...}` 原文段必须进闸门", result.hasDollarRawSegments)
+        assertTrue("`\${...}` 原文段必须进闸门", result.isHasDollarRawSegments())
         assertNotNull("引擎会替换全局属性，本链保留原文 → 必须有可见告警", result.warning)
     }
 
@@ -347,13 +347,13 @@ class IbatisXmlPreviewServiceTest {
             ),
         )
         assertTrue("USER_NAME LIKE '%ali%'：${fresh.sql}", fresh.sql.contains("USER_NAME LIKE '%ali%'"))
-        assertTrue("`\$x\$` 直替照常触发注入闸门", fresh.hasDollarRawSegments)
+        assertTrue("`\$x\$` 直替照常触发注入闸门", fresh.isHasDollarRawSegments())
     }
 
     @Test
     fun `券A_基线保留dollar站点_闸门不因空值丢失`() {
         val result = preview(conditionXml, "selectByCondition")
-        assertTrue("`\$x\$` 站点存在即置闸（即使基线取值被引擎静默丢弃）", result.hasDollarRawSegments)
+        assertTrue("`\$x\$` 站点存在即置闸（即使基线取值被引擎静默丢弃）", result.isHasDollarRawSegments())
     }
 
     @Test
@@ -385,16 +385,16 @@ class IbatisXmlPreviewServiceTest {
             PreviewRerenderInput(emptyMap(), emptySet(), mapOf("ids" to listOf("X1", "X2", "X3"))),
         )
         assertNull("供值后 SQL 完整，告警必须为空（面板横幅据此恢复即隐藏）", fresh.warning)
-        assertFalse(fresh.informationalWarning)
+        assertFalse(fresh.isInformationalWarning())
     }
 
     @Test
     fun `UI-001_iterate基线降级为信息级待填值提示`() {
         val result = preview(conditionXml, "selectByIterate")
         assertNotNull("基线告警仍在（不得吞掉）", result.warning)
-        assertTrue("iterate 未供值 = 待填值提示，不是渲染失败", result.informationalWarning)
+        assertTrue("iterate 未供值 = 待填值提示，不是渲染失败", result.isInformationalWarning())
         val baseline = rerender(result, PreviewRerenderInput())
-        assertTrue("面板初始态同一语义", baseline.informationalWarning)
+        assertTrue("面板初始态同一语义", baseline.isInformationalWarning())
     }
 
     @Test
@@ -409,7 +409,7 @@ class IbatisXmlPreviewServiceTest {
         """.trimIndent()
         val result = preview(xml, "stUi", "statement")
         assertNotNull("引擎行为说明仍在（不得吞掉）", result.warning)
-        assertTrue("parameterMap 说明 = 信息级（附带同族：横幅不得以「未完整还原」开头）", result.informationalWarning)
+        assertTrue("parameterMap 说明 = 信息级（附带同族：横幅不得以「未完整还原」开头）", result.isInformationalWarning())
     }
 
     @Test
@@ -428,7 +428,7 @@ class IbatisXmlPreviewServiceTest {
         """.trimIndent()
         val result = preview(xml, "stMis", "statement")
         assertNotNull(result.warning)
-        assertFalse("数量不符 = 真错配（paramN 兜底），保持失败档", result.informationalWarning)
+        assertFalse("数量不符 = 真错配（paramN 兜底），保持失败档", result.isInformationalWarning())
     }
 
     @Test
@@ -446,14 +446,14 @@ class IbatisXmlPreviewServiceTest {
         """.trimIndent()
         val result = preview(xml, "stExtra", "statement")
         assertNotNull(result.warning)
-        assertTrue("声明多于位点 = 按位对齐 + 引擎行为说明，信息级", result.informationalWarning)
+        assertTrue("声明多于位点 = 按位对齐 + 引擎行为说明，信息级", result.isInformationalWarning())
     }
 
     @Test
     fun `UI-001_渲染配置告警保持失败档`() {
         val result = preview("<sqlMap><select id=\"s\">SELECT A FROM T WHERE B = #b</select></sqlMap>", "s")
         assertNotNull("未闭合 # 是配置告警，不得吞掉", result.warning)
-        assertFalse("渲染配置告警不是信息级说明", result.informationalWarning)
+        assertFalse("渲染配置告警不是信息级说明", result.isInformationalWarning())
     }
 
     // ------------------------------------------------------------------
@@ -644,7 +644,7 @@ class IbatisXmlPreviewServiceTest {
             "告警须明确写「重渲染失败」+ 异常消息：$warning",
             warning.contains("重渲染失败") && warning.contains("boom-in-rerender"),
         )
-        assertFalse("失败档必须走 ⚠ 横幅，不得标成信息级（否则用户看不到）", failed.informationalWarning)
+        assertFalse("失败档必须走 ⚠ 横幅，不得标成信息级（否则用户看不到）", failed.isInformationalWarning())
         assertEquals("sql 保留基线降级文本（不是空结果、也不是静默旧值）", baseline.sql, failed.sql)
         assertNotNull("回调保留：用户修正参数后可立即重试", failed.rerender)
     }
@@ -682,7 +682,7 @@ class IbatisXmlPreviewServiceTest {
         val warning = result.warning ?: error("真失败必须可见")
         assertTrue("真失败（数量不符）留在 ⚠ 行：$warning", warning.contains("占位符"))
         assertFalse("信息级「引擎行为」说明不得混入失败档合并行：$warning", warning.contains("引擎行为"))
-        assertFalse("混合场景整体是失败档", result.informationalWarning)
+        assertFalse("混合场景整体是失败档", result.isInformationalWarning())
     }
 
     @Test
@@ -699,6 +699,6 @@ class IbatisXmlPreviewServiceTest {
         val result = preview(xml, "stOnly", "statement")
         val warning = result.warning ?: error("信息级说明不得吞掉")
         assertTrue("信息级说明仍在：$warning", warning.contains("引擎行为"))
-        assertTrue(result.informationalWarning)
+        assertTrue(result.isInformationalWarning())
     }
 }
