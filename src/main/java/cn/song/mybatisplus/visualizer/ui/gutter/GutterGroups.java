@@ -38,8 +38,14 @@ public final class GutterGroups {
             Map.entry("XmlSqlGutterLineMarkerProvider", "mapperXml"),
             Map.entry("PagesXmlGutterLineMarkerProvider", "mapperXml"),
             Map.entry("HbmNamedQueryGutterLineMarkerProvider", "mapperXml"),
+            // T-Ibatis2Support 券 A（拍板 D-8）：iBatis <sqlMap> 语句归 mapperXml 组
+            // （语义最接近：都是「XML 里的 SQL 语句」；新增独立组会多一个设置开关与 i18n 面）
+            Map.entry("IbatisXmlGutterLineMarkerProvider", "mapperXml"),
             Map.entry("MapperXmlToJavaLineMarkerProvider", "mapperXml"),
             Map.entry("MapperJavaToXmlLineMarkerProvider", "mapperXml"),
+            // T-Ibatis2Gap 券 B：iBatis <sqlMap> 双向跳转（预览图标同组先例拍板 D-8，语义同源）
+            Map.entry("IbatisXmlToJavaLineMarkerProvider", "mapperXml"),
+            Map.entry("IbatisJavaToXmlLineMarkerProvider", "mapperXml"),
             Map.entry("AnnotationSqlGutterLineMarkerProvider", "annotation"),
             Map.entry("NamedQueryGutterLineMarkerProvider", "annotation"),
             Map.entry("JpaGutterLineMarkerProvider", "jpaHql"),
