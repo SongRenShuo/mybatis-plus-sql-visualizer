@@ -938,7 +938,7 @@ Read access is allowed from inside read-action only
 **顺手修的埋点失真**：重构后 `[open-perf] 反查索引一次建成` 的耗时量的是「落地那一下」（日志里一度只
 显示 1ms），起点改回派发前，读数才代表调用方视角的真实成本（含排队 + 扫描 ≈ 4.7s，但已不在调用方线程）。
 
-### 22.10 同期回归修复（CI `test(4)` 三连红，`6cf7366f2` 之前一笔）
+### 22.10 同期回归修复（CI `test(4)` 三连红，提交 `ad292a169`）
 
 实体解析缓存的命中条件写成「TTL 内一律命中 || stamp 未变」⇒ **内容改了也命中**。CI 三个别名列用例
 （`XmlSqlCompletionContributorTest` 04/11/13）用 `@TableName("t")`，而同类默认夹具用 `t_device_info`：
