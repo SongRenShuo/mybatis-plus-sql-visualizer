@@ -118,4 +118,11 @@ private fun writeThroughIfValid() {
 
 ## 九、实施记录
 
-（实施后回填：提交哈希、定向读数、反向成对读数、真机验收结论。）
+- 实施分支：`t-localdir-persist` @ 工作树 `.worktrees/t-localdir-persist`（计划提交 `6b3ad9de4` 之上切出；并行登记 `t-localdir-persist` / 沙盒 `wt-localdir-persist`；本节回填**工作树副本**）。
+- M1 落点：`UpdateSection.validateLocalDirAsync` 的 BGT 决议（Available/UpToDate/Empty/NoValidPackage → 归一路径；Disabled → 空串；DirInvalid/Failed → 不写）+ EDT 落盘 `writeThrough(normalized)`（换引用 `loadState(state.copy(...))`、同值幂等、回写归一值使 isModified 归零）。browse 走同一条防抖校验链即写穿；`openLocalDir` 不写配置（打开不该改配置）。
+- M2 落点：`UpdateSectionTest` 三例（写穿 ValidDir / Disabled 写穿空值 / 错误态不覆盖已写穿值）+ `PluginSettingsPersistenceTest.testStateRoundTripKeepsLocalUpdateDir`（XmlSerializer 真实序列化往返，P-4/P-7 一次钉住）。
+- M3 落点：CHANGELOG `[Unreleased]` Fixed 一句（按用户口径简写）。
+- **定向读数**：终跑宽定向 **292 / 0 失败 / 0 错误 / 0 跳过**（update 全包 + UpdateSectionTest + Binding + Persistence + 5 守卫）。
+- **反向验证（成对读数）**：摘掉 validateLocalDirAsync 里的 `writeThrough` 调用 → `testLocalDirWriteThroughOnValidDir` 与 `testLocalDirErrorStateNotWriteThrough` 恰 2 红（Disabled 例断言空态本就为空、自然通过，符合预期）；还原后终跑全绿。
+- **过程记录**：两轮 `insufficient memory ... G1 virtual space`（Commit 74.2/74.7GB 打满）——`./gradlew --stop` 停空闲 daemon 回收 1.3GB + `-PtestHeapSize=320m` 降测试堆后恢复；另有测试 helper 返回类型笔误（Path/File）一轮编译红。
+- **not run**：`testShards` 全量（按 20261113 用户口径改走 CI：合 master 推双仓触发 push-test，后台轮询读数）；runIde 沙盒与真机 GUI 验收（写穿后重启路径保留 = 验收 A1，交用户）。
