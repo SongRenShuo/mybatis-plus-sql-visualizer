@@ -154,3 +154,21 @@
 - A4：回退通道双开关在场——`sqlvis.gutter.warmDelayMs=0` 回首渲染立即踢；`sqlvis.preview.assemblyWarm=false` 关装配预热（原开关未动）。
 
 **红线遵守**：未触碰 `update/update.json`、`CHANGELOG.md`、`MapperNavigationLineMarkerProviders.kt`；未 push；未跑全量/未 clean/未 --stop。
+
+### 主控验收记录（2026-11-14 23:1x，runIde IU-2024.3.7.1 cust-big-demo，合并态包 0dd0aef52）
+
+**前置**：沙盒日志归档清零；在役包核验（22:46 新包 javap：F1 `resolvedStatementKeys`/`buildStatementMarker`、F2 `GutterWarmScheduler` 双入口在役；plugin.xml `sqlvis.gutter.warmDelayMs` 登记）；并行登记正常进出。
+
+| 项 | 判据 | 读数 | 结论 |
+|---|---|---|---|
+| A1 F1 图标不闪没 | 冷开 41 帧逐秒（22:48 会话）+ 41 帧完整冷开（23:18 会话） | 两轮均「预览图标先落、MP 图标后落、双图标全程稳定」，无「双图标→单图标」回退 | **通过**（GUI 实测） |
+| A2 S1 形态 | 图标两波落地间隔 | 预览图标首渲染即落、MP 图标 +2~3s；暖重开 <1s 双图标齐（acc_warm_sheet + 23:19:57 日志 159/393ms） | **通过**（现象本体与修复前一致，属平台多波次，F2 不拖累） |
+| A3 F2 延迟生效 | `ctx warm done` 时刻随 `warmDelayMs` 后移 | 对照轮（5000）kick≈smart+8~9s；**决策轮（ide.general.xml 置 30000）kick≈smart+34s**（23:18:07，前三轮 8~9s 形态消失）；回补/装配链全部落在延迟踢出窗内；暖重开立即踢（159/393ms） | **通过**（延迟/立即两分支真机均证） |
+| A4 噪音 | 0 ERROR / 0 SlowOperations | 全 log 0/0（各轮） | **通过** |
+| 回退通道 | Registry 键 | Registry UI 显示键+默认 5000+自定义描述渲染正常；`0=旧行为` 由单测钉住 | **通过** |
+
+**验收期一处夹具污染已恢复**：v1 场景在 IDE 初始化完成前打字，`CtAccount0002Mapper.xml` 串进 `CustAddressMapper.xml` 正文（`Base_Column_List`→`BCtAccount0002Mapper.xmlase_Column_List`）且被 IDE 自动保存落盘（21:43 截图 105 行已见污染形态）——编辑器内 undo + demo 仓 `git checkout --` 恢复，`git status` 复核干净。教训：**冷窗口期禁止对 IDE 打字**（弹层未就绪=文本落编辑器），passive 口径才是正路。
+
+**探针坑（三层定位，值一条平台事实）**：给沙盒预设 Registry 值时，手写 `config/options/registry.xml`（`<option>` 与 `<entry>` 两种形态都试过）**243 一律不读**——该版本 Registry 持久化在 **`ide.general.xml` 的 `Registry` 组件**（`<entry key value source>` 形态，平台自写条目可对照）；UI 改值后强杀进程也不落盘（自动保存未到点）。决策轮改 `ide.general.xml` 后延迟分支立即显形。Registry UI 显示的 Value/Source 列是「文件是否被读回」的最快判据（Source 空=覆盖未生效）。
+
+**遗留**：S2 显形窗（解析瞬时失败致图标摘除）在沙盒依旧未自然复现——F1 行为由单测矩阵+接线守卫+反向验证兜底，真机若再现闪没按 §六步骤取证。
