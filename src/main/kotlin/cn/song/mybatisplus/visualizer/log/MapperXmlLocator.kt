@@ -54,12 +54,36 @@ object MapperXmlLocator {
         return s.substring(0, idx) to s.substring(idx + 1)
     }
 
-    /** 读上下文内的定位主体（清单槽新鲜度 → memo → 逐文件 namespace/id 校验 → 行号换算）。 */
+    /** 读上下文内的定位主体（清单槽可用性 → memo → 逐文件 namespace/id 校验 → 行号换算）。 */
     private fun locateUnderRead(project: Project, namespace: String, id: String): Location? {
-        // 先取**新鲜**清单槽：TTL 过期 / 任一文件失效 / 项目不匹配都会换代（既有 T-PS5-05 语义）。
-        // memo 挂在槽实例上，换代即整体失效——命中路径与清单新鲜度严格同代，不会让过期结果
-        // 跳过重扫（既有 TTL 用例钉死该语义）。
-        val slot = currentFileListSlot(project)
+        // F1''（T-GutterFirstOpenDelay 续刀，2026-11-15）：**清单构建移出慢趟关键路径**。
+        // 真机实证（demo 根工程，scope≈4841 XML）：慢趟首跑在本 ReadAction 里逐个 PSI 解析
+        // 全项目 XML 筛 `<mapper>` 根元素，JPS 持续写盘时反复被 PCE 取消 → 慢趟饿死 →
+        // Java→XML 图标长期缺席（cust-big-demo 单工程 ~2100 XML 尚可忍受，根工程翻倍即失守）。
+        // 新语义：
+        //  - 无可用槽 → 只踢后台异步构建 + 立即返回 null，**不写 MISS**（「还没查到」不得固化为「真没有」）；
+        //    构建落地后一次性 restart daemon 让慢趟重跑（missedWhilePending 只在异步路径置位）；
+        //  - 有槽但 TTL 过期 → **服务旧值** + 后台刷新（stale-while-revalidate：旧列表对本就存在的
+        //    文件依然正确，图标不因刷新而缺席；新增文件至多滞后一个刷新周期）；
+        //  - 单测模式/测试缝强制同步 = 旧同步语义原样保留（既有 13 例零改动）。
+        var slot = currentSlotIfUsable(project)
+        if (slot == null) {
+            if (useSyncBranch()) {
+                rebuildSlotSync(project)
+                slot = fileListSlot?.takeIf { it.project.get() === project } ?: return null
+            } else {
+                missedWhilePending.set(true)
+                kickAsyncListBuild(project)
+                return null
+            }
+        } else if (clockMs() - slot.atMs > fileListTtlMs) {
+            if (useSyncBranch()) {
+                rebuildSlotSync(project)
+                slot = fileListSlot?.takeIf { it.project.get() === project } ?: return null
+            } else {
+                kickAsyncListBuild(project) // serve stale：本轮继续用旧槽
+            }
+        }
         val memoKey = namespace to id
         slot.memo[memoKey]?.let { cached -> return cached as? Location }
         var first: Pair<XmlFile, XmlTag>? = null
@@ -79,7 +103,7 @@ object MapperXmlLocator {
             val document = PsiDocumentManager.getInstance(project).getDocument(file) ?: return@let null
             Location(vf, document.getLineNumber(tag.textRange.startOffset))
         }
-        // 负结果以 MISS 哨兵承载（ConcurrentHashMap 不接受 null 值）
+        // 负结果以 MISS 哨兵承载（ConcurrentHashMap 不接受 null 值）——只在**有可用槽**时才负缓存
         slot.memo[memoKey] = location ?: MISS
         return location
     }
@@ -125,33 +149,82 @@ object MapperXmlLocator {
     /** T-PS5-05 测试缝：清空文件列表缓存（用例隔离；生产链路无调用点）。 */
     internal fun clearFileListCacheForTest() {
         fileListSlot = null
+        missedWhilePending.set(false)
+        asyncBuildRunning.set(false)
     }
 
-    /**
-     * T-PS5-05：mapper XML 的 VirtualFile 列表（索引 + PSI 根元素预筛）——**单槽缓存**。
-     *
-     * 为什么要缓存：大项目（数千 XML）每次跳转都全项目扫描索引 + 逐个 PSI 解析根元素判
-     * `<mapper>`，首跳百毫秒级且发生在 EDT ReadAction 内。缓存只存**已筛出的 mapper XML**
-     * （VirtualFile 而非 PsiFile：PSI 可能被平台失效，取用前统一 [VirtualFile.isValid] 校验）。
-     *
-     * 失效纪律（**禁引 PsiTreeChangeListener/EditorFactoryListener**——红线族维持 0）：
-     *  - TTL 上界（默认 5s，新增文件最多滞后一个窗口）；
-     *  - 取用时 `isValid` 全检，任一失效（删除/改名）即重扫一次；
-     *  - 项目身份不匹配（多项目同开）不命中，重扫。
-     *
-     * 单槽 + 项目弱引用（不挂项目 Disposable、不加监听器）：无跨项目泄漏，项目关闭后条目随
-     * GC 回收；多项目交替访问退化为重扫（与无缓存等价，无正确性风险）。
-     */
-    private fun currentFileListSlot(project: Project): FileListSlot {
-        val now = clockMs()
-        fileListSlot?.let { slot ->
-            if (slot.project.get() === project &&
-                now - slot.atMs <= fileListTtlMs &&
-                slot.files.all { it.isValid }
-            ) {
-                return slot
-            }
+    /** 测试缝：清单构建模式（null=按环境判定：单测=同步保旧语义；生产=异步）。 */
+    internal var asyncListBuildForTest: Boolean? = null
+
+    /** 测试缝：清单落地后的 daemon 重启捕获（生产=`DaemonCodeAnalyzer.restart`）。 */
+    internal var restartAnalyzerForTest: ((Project) -> Unit)? = null
+
+    /** 异步构建在途旗标（按对象级——清单槽本就是全局单槽）。 */
+    private val asyncBuildRunning = java.util.concurrent.atomic.AtomicBoolean()
+
+    /** 「清单未就绪期间有 locate 落空」标记——构建落地后据此一次性重启 daemon。 */
+    private val missedWhilePending = java.util.concurrent.atomic.AtomicBoolean()
+
+    /** 本轮 locate 走同步分支还是异步语义：缝 true=异步、false=同步；null=按环境（单测=同步保旧语义）。
+     *  注意与 [kickAsyncListBuild] 的内联执行判据分离——缝非 null 时语义按缝、但构建内联执行保确定性。 */
+    private fun useSyncBranch(): Boolean =
+        asyncListBuildForTest?.let { !it } ?: runCatching {
+            com.intellij.openapi.application.ApplicationManager.getApplication()?.isUnitTestMode == true
+        }.getOrDefault(true)
+
+    /** 无可用槽/TTL 过期时的后台刷新（幂等：在途即返）；生产走 nonBlocking 读 + 可取消。
+     *  测试缝（[asyncListBuildForTest] 非 null）时**内联执行**构建+重启通知（用例确定性）。 */
+    private fun kickAsyncListBuild(project: Project) {
+        if (!asyncBuildRunning.compareAndSet(false, true)) return
+        if (asyncListBuildForTest != null || useSyncBranch()) {
+            // 测试缝/单测强制同步：落地 + 按需重启，一次调用内完成（行为确定性）
+            runCatching { rebuildSlotSync(project) }
+            asyncBuildRunning.set(false)
+            fireRestartIfMissed(project)
+            return
         }
+        runCatching {
+            com.intellij.openapi.application.ReadAction.nonBlocking<Unit> {
+                runCatching { rebuildSlotSync(project) }
+                Unit
+            }.expireWith(project)
+                .coalesceBy(this, "mapperXmlList:${project.locationHash}")
+                .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
+                .onSuccess {
+                    asyncBuildRunning.set(false)
+                    fireRestartIfMissed(project)
+                }
+                .onError { t ->
+                    asyncBuildRunning.set(false)
+                    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
+                }
+        }.onFailure { t ->
+            // 调度失败退化为同步构建：清单是必要的，失败不该把它丢掉
+            asyncBuildRunning.set(false)
+            LOG.info("MapperXmlLocator: 异步清单构建调度失败 ${t.javaClass.simpleName}，退化为同步")
+            runCatching { rebuildSlotSync(project) }
+            fireRestartIfMissed(project)
+        }
+    }
+
+    /** 清单落地后的重跑通知：pending 期有 locate 落空过才重启（一次性，防自激环）。 */
+    private fun fireRestartIfMissed(project: Project) {
+        if (!missedWhilePending.getAndSet(false)) return
+        restartAnalyzerForTest?.invoke(project) ?: runCatching {
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(
+                Runnable {
+                    if (!project.isDisposed) {
+                        com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart()
+                    }
+                },
+                com.intellij.openapi.application.ModalityState.any(),
+            )
+        }
+    }
+
+    /** 清单构建主体（旧 `currentFileListSlot` 的扫描段；同步调用点=单测缝/异步落地回调）。 */
+    private fun rebuildSlotSync(project: Project) {
+        val now = clockMs()
         indexScanCount.incrementAndGet()
         val files = runCatching {
             val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
@@ -162,9 +235,15 @@ object MapperXmlLocator {
                 .mapNotNull { it.virtualFile }
                 .toList()
         }.getOrDefault(emptyList())
-        val slot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
-        fileListSlot = slot
-        return slot
+        fileListSlot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
+    }
+
+    /** 当前可用槽（项目匹配 + 文件全部有效；**不含 TTL 判定**——过期槽 serve stale 由调用方决定）。 */
+    private fun currentSlotIfUsable(project: Project): FileListSlot? {
+        fileListSlot?.let { slot ->
+            if (slot.project.get() === project && slot.files.all { it.isValid }) return slot
+        }
+        return null
     }
 
     /**

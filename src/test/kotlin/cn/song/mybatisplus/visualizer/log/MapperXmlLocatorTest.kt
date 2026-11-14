@@ -164,4 +164,61 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
         assertEquals("失效文件触发重扫一次", before + 1, MapperXmlLocator.indexScanCount.get())
         MapperXmlLocator.clearFileListCacheForTest()
     }
+
+    // ------------------------------------------------------------------
+    // F1''（T-GutterFirstOpenDelay 续刀）：清单构建移出慢趟关键路径——
+    // 真机实证（demo 根工程 scope≈4841 XML）：慢趟 ReadAction 里逐个 PSI 解析全项目 XML，
+    // JPS 写盘反复 PCE → 慢趟饿死 → Java→XML 图标长期缺席。异步语义=无槽只踢后台构建
+    // （不写 MISS）、落地一次性 restart、过期槽 serve stale。
+    // ------------------------------------------------------------------
+
+    fun testF1双撇_异步模式无槽时立即返回null不写MISS且落地后restart重跑() {
+        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
+        var restarts = 0
+        MapperXmlLocator.restartAnalyzerForTest = { restarts++ }
+        MapperXmlLocator.asyncListBuildForTest = true
+        try {
+            MapperXmlLocator.clearFileListCacheForTest()
+            val scansBefore = MapperXmlLocator.indexScanCount.get()
+            // 无槽：异步模式立即返回 null（不阻塞慢趟），并踢构建（测试缝同步落地）
+            assertNull("无可用槽时须立即返回 null（等后台清单）", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
+            assertEquals("落地重启恰好一次（missedWhilePending）", 1, restarts)
+            // 落地后：槽可用，第二次 locate 正常命中——MISS 未被首趟污染（真查到了）
+            val loc = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+            assertNotNull("清单落地后 locate 必须命中", loc)
+            assertEquals("UserMapper.xml", loc!!.virtualFile.name)
+            assertEquals("清单构建恰好一次（首趟未写 MISS，未引发反复重扫）",
+                scansBefore + 1, MapperXmlLocator.indexScanCount.get())
+        } finally {
+            MapperXmlLocator.asyncListBuildForTest = null
+            MapperXmlLocator.restartAnalyzerForTest = null
+            MapperXmlLocator.clearFileListCacheForTest()
+        }
+    }
+
+    fun testF1双撇_异步模式过期槽服务旧值不缺席() {
+        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
+        MapperXmlLocator.restartAnalyzerForTest = { }
+        MapperXmlLocator.asyncListBuildForTest = true
+        try {
+            MapperXmlLocator.clearFileListCacheForTest()
+            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById") // 首查：踢构建+落地
+            val scansAfterFirst = MapperXmlLocator.indexScanCount.get()
+            val clockBefore = MapperXmlLocator.clockMs
+            MapperXmlLocator.clockMs = { clockBefore() + 10_000L } // 越过 TTL（5s）
+            try {
+                // TTL 过期：serve stale——结果不缺席，且后台刷新被踢（缝内同步落地，重扫恰一次）
+                val loc = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+                assertNotNull("过期槽须服务旧值（图标不因刷新缺席）", loc)
+                assertEquals("刷新恰好踢一次（stale-while-revalidate）",
+                    scansAfterFirst + 1, MapperXmlLocator.indexScanCount.get())
+            } finally {
+                MapperXmlLocator.clockMs = clockBefore
+            }
+        } finally {
+            MapperXmlLocator.asyncListBuildForTest = null
+            MapperXmlLocator.restartAnalyzerForTest = null
+            MapperXmlLocator.clearFileListCacheForTest()
+        }
+    }
 }
