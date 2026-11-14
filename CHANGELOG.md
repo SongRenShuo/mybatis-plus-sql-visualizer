@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Added
+- **新增 10 个国产/信创数据库方言（第 16~25 方言，官方文档级 + 族推定，未经真机引擎验证；T-DomesticDialects，8735a6a69 / 5ab49ed6b / 692bebc74）**：TiDB、PolarDB-X、PolarDB（Oracle 兼容版）、GBase 8a、GBase 8c、神通 Oscar、优炫 UXDB、AntDB、虚谷 XuGu、崖山 YashanDB——设置页可选、按各自兼容族渲染（MySQL/PG/Oracle 形态分页与引用、UPSERT 按 openGauss 真机实证形态等，逐项证据档见方言 KDoc）。连接面全链接通：`jdbc:polardb(b2|x):` / `jdbc:gbase(8c):` / `jdbc:oscar:` / `jdbc:uxdb:` / `jdbc:antdb:` / `jdbc:xugu:` / `jdbc:yasdb:` URL→方言、列表角标显示、MCP 识别（含「神通/优炫/虚谷/崖山」中文别名）、执行目标路由、IDEA SQL Dialects 语言注册（Generic 样板成对注册）；TiDB/PolarDB-X 走 `jdbc:mysql:` 不劫持（GoldenDB 先例）。能力矩阵如实显示：EXPLAIN 接入 8 家（TiDB/PolarDB-X 文档级 TABLE 档，其余保守 TEXT 档）、神通/崖山无输出形态证据不接入（P-9）；保留字按族底表复用（「宁可多包」，待真机校验）
+- **增强捕获驱动面扩容（T-DomesticDialects，5ab49ed6b）**：有专用驱动包名的 5 家（GBase `com.gbase.*`、PolarDB `com.aliyun.polardb.*`、神通 `com.oscar.*`、虚谷 `com.xuguedata.*`、崖山 `com.yashandb.*`）登记进框架帧跳过前缀（agent/IDE/注入模板/文档示例四副本同步），来源定位不再指进驱动内部
+- **国产数据库方言支持全景调研（T-DomesticDialects，f3ae7f5fc）**：`docs/调研报告/20261109-2345-国产信创数据库方言扩展-调研报告.md`（四大兼容阵营 + 逐库驱动/EXPLAIN/License 取证 + D1~D4 定案）与 `docs/开发计划/20261109-2345-国产信创数据库方言扩展-开发计划.md`（11 触点标准接入清单 + 券分解 + 验收判据）
+- **第三批方言端到端真机验证（T-DomesticDialects 补章，2026-11-11）**：插件渲染套件 + 保留字全量扫描在真引擎上逐方言执行——**GBase 8a 8.6.2 真机**（真引擎级，269 词扫描全绿；驱动取证：官方驱动无公开坐标，MariaDB Connector/J 3.3.3 可连）、**虚谷 XuGuDB 12.10.13 真机**（真引擎级，Central 驱动 `com.xugu.cloudjdbc.Driver`）、其余 7 家按兼容族真引擎（MySQL 8.4.6 / PostgreSQL 16.14 / Oracle Free 23）族级验证全绿；GBase 8c 因测试服务器整机离线未跑（族内同形已由 PG 腿覆盖）。真机读数修掉一处档位错误（GBase 8a EXPLAIN TEXT→**TABLE**，MySQL 式表格行实证）并订正虚谷驱动类名取证（`com.xuguedata` 在 Central 全系 jar 不存在，采集面前缀补 `com.xugu.` 五处副本同步）；虚谷 `DELETE…LIMIT` 精确复验确证语法错误（首次探针 updateCount=-1 为驱动误报），保守判无维持
+
 ### Fixed
 - **本地安装包目录重启后不再丢失（T-LocalDirPersist）**：选好或填好目录立即保存（原来只有点「确定」才落盘，而选目录→检测→安装的流程不会经过确定，导致每次重启都要重填）；删空目录同样被记住（等于关闭该功能），路径不合法时不保存并在状态行说明原因
 

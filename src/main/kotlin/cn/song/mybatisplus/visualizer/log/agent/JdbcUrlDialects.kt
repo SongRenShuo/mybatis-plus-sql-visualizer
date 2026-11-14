@@ -48,6 +48,23 @@ internal object JdbcUrlDialects {
         //（p9/p11/p37 文档级 + 驱动字节码 URL_PREFIX 常量双证）。角标是事实展示命名空间，
         // 显示名即产品名（与渲染方言的注册名同为 "GoldenDB"，但两者映射独立维护）。
         "goldendb" to "GoldenDB",
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批角标位。证据档位见各方言 KDoc 与
+        // 调研报告 §3.2。TiDB / PolarDB-X 的 MySQL 版走 jdbc:mysql:（无自有子协议，不劫持，
+        // GoldenDB 先例），故不在此登记；gbase 仍显示 GBASE 家族名（8a/8s 共用子协议，歧义
+        // 处理见 GBase8aDialect KDoc），8c 有自有前缀单独登记。
+        "polardb" to "PolarDB",
+        "polardb2" to "PolarDB",
+        "polardbx" to "PolarDB-X",
+        "gbase8c" to "GBase 8c",
+        "oscar" to "Oscar",
+        "uxdb" to "UXDB",
+        "antdb" to "AntDB",
+        "xugu" to "XuGu",
+        "yasdb" to "YashanDB",
+        // 券 H 识别位（TDSQL / SinoDB / XCloud）**本轮不登记**：调研（2026-11-09）未取得
+        // 三者自有 JDBC 子协议的官方证据——TDSQL MySQL 版经 Proxy 走 jdbc:mysql:（无身份，
+        // 不劫持）、TDSQL-PG 走 pgJDBC、SinoDB/XCloud 子协议未取证。有证据才加（L14：
+        // 「未取到」不等于「没有」，不臆造映射）；真机/官方文档证据到位后按档补登。
     )
 
     /**

@@ -521,8 +521,11 @@ class CrudSqlGeneratorTest {
     fun nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource() {
         val nonFolding = DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
         // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
+        // T-DomesticDialects（2026-11-09）：TiDB / PolarDB-X / GBase 8a=NONE（MySQL 族底推定，
+        // 与 OceanBase/GoldenDB 同为模式推定档）、XuGu（虚谷）=NONE（保守默认，不猜折叠方向）
+        // 加入本清单。
         assertEquals(
-            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase", "GoldenDB"),
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase", "GoldenDB", "TiDB", "PolarDB-X", "GBase 8a", "XuGu（虚谷）"),
             nonFolding.map { it.name },
         )
         nonFolding.forEach { dialect ->

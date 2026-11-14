@@ -33,6 +33,19 @@ object McpDialectDetector {
         // 驱动字节码 URL_PREFIX 常量双证）。次序安全：`jdbc:goldendb` 与首位的 `jdbc:mysql`
         // 前缀互不包含（前缀匹配 startsWith/contains），不会被误命中。
         "jdbc:goldendb" to "GoldenDB",
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批 URL 前缀位（证据档位见各方言 KDoc
+        // 与调研报告 §3.2；TiDB/PolarDB-X 的 MySQL 版走 jdbc:mysql: 不劫持，不在此登记）。
+        // 次序敏感：polardbx 必须在 polardb 之前（前缀包含关系）、gbase8c 必须在 gbase 之前
+        //（「先匹配先赢」）；polardb 前缀同时覆盖 polardb:// 与 polardb2:// 两种 URL。
+        "jdbc:polardbx" to "PolarDB-X",
+        "jdbc:polardb" to "PolarDB",
+        "jdbc:gbase8c" to "GBase 8c",
+        "jdbc:gbase" to "GBase 8a",
+        "jdbc:oscar" to "Oscar（神通）",
+        "jdbc:uxdb" to "UXDB（优炫）",
+        "jdbc:antdb" to "AntDB",
+        "jdbc:xugu" to "XuGu（虚谷）",
+        "jdbc:yasdb" to "YashanDB（崖山）",
     )
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -75,6 +88,25 @@ object McpDialectDetector {
         // GoldenDB 厂商主体；「中兴」全文 0 命中，不加（加错别名不会误判，但无证据不收）。
         "goldendb" to "GoldenDB",
         "金篆" to "GoldenDB",
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批别名位。英文小写别名照各库官方
+        // 英文名；中文别名只收厂商/产品公开中文名（「中兴」GoldenDB 先例：无证据不收）。
+        "tidb" to "TiDB",
+        "polardbx" to "PolarDB-X",
+        "polardb" to "PolarDB",
+        "gbase" to "GBase 8a",
+        "gbase 8a" to "GBase 8a",
+        "gbase8c" to "GBase 8c",
+        "gbase 8c" to "GBase 8c",
+        "oscar" to "Oscar（神通）",
+        "神通" to "Oscar（神通）",
+        "uxdb" to "UXDB（优炫）",
+        "优炫" to "UXDB（优炫）",
+        "antdb" to "AntDB",
+        "xugu" to "XuGu（虚谷）",
+        "虚谷" to "XuGu（虚谷）",
+        "yashandb" to "YashanDB（崖山）",
+        "yasdb" to "YashanDB（崖山）",
+        "崖山" to "YashanDB（崖山）",
     )
 
     /** agent 显式方言名归一化（精确别名匹配；不可识别返回 null）。 */

@@ -76,6 +76,22 @@ internal object ExecDialectRouting {
         // （p37「完全兼容 MySQL 客户端」+ manifest "MySQL Connector Java"），平台缺位时落
         // MySQL 兜底（渲染形态逐项相同）。
         "GoldenDB" to listOf("GoldenDB", "MySQL"),
+        // T-DomesticDialects（2026-11-09）：国产/信创第三批（15 → 25）。前五项（TiDB/PolarDB-X/
+        // PolarDB/GBase 8a/GBase 8c）与后五项（Oscar/UXDB/AntDB/XuGu/YashanDB）均为自注册
+        // 方言（sql.domestic 包 + database-optional.xml 成对注册，GoldenDbSqlDialect 同款），
+        // 候选链首项即本方言语言 id；平台缺位时落族兜底（MySQL/Oracle/PostgreSQL/openGauss）。
+        // TiDB / PolarDB-X MySQL 版走 jdbc:mysql: 不劫持，方言靠设置页手动选择——本表服务
+        // 的是「数据源方言已配成该库」的 Runner 枚举路径。
+        "TiDB" to listOf("TiDB", "MySQL"),
+        "PolarDB-X" to listOf("PolarDB-X", "MySQL"),
+        "PolarDB" to listOf("PolarDB", "Oracle"),
+        "GBase 8a" to listOf("GBase 8a", "MySQL"),
+        "GBase 8c" to listOf("GBase 8c", "openGauss", "PostgreSQL"),
+        "Oscar（神通）" to listOf("Oscar", "Oracle"),
+        "UXDB（优炫）" to listOf("UXDB", "PostgreSQL"),
+        "AntDB" to listOf("AntDB", "PostgreSQL"),
+        "XuGu（虚谷）" to listOf("XuGu", "MySQL"),
+        "YashanDB（崖山）" to listOf("YashanDB", "Oracle"),
     )
 
     /** 目标数据源解析测试缝（headless 无 DataSourceStorage；生产恒 null 走真链）。 */

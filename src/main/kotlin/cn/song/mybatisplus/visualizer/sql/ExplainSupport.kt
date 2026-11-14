@@ -181,6 +181,68 @@ object ExplainSupport {
         // 会让索引建议走错解析分支而永不触发），未取证前不猜档——真机 `EXPLAIN SELECT 1`
         // 读数到位后按实际档位登记。
         Entry("GoldenDB", null, null, "官方文档级（开发支持 V6.1.03.10 p323-325）：EXPLAIN 语法在册（可选项 FORMAT=JSON|Oracle、DB/PROXY 节点级计划），但原文无任何输出形态示例——TABLE 行式 / TEXT 树式定不了档，P-9 诚实不接入；真机读数到位后按档登记"),
+        // ---- T-DomesticDialects（2026-11-09）：国产/信创第三批 EXPLAIN 登记（证据档位逐条注明，
+        // 照 OceanBase/GoldenDB 教训：无输出形态证据就不接档/不猜档） ----
+        Entry(
+            "TiDB",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TABLE,
+            "官方文档级（docs.pingcap.com《EXPLAIN》《EXPLAIN ANALYZE》）：EXPLAIN 输出为表格式行（id/task/estRows…），MySQL 8 风格；EXPLAIN ANALYZE 为真执行，本插件不使用（估算形态已满足展示且避免写操作风险）。无真机，读数到位后升档",
+        ),
+        Entry(
+            "PolarDB-X",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TABLE,
+            "官方文档级（doc.polardbx.com 优化与执行章节）：MySQL 协议兼容、EXPLAIN 输出 MySQL 8 风格表格行。无真机，读数到位后升档",
+        ),
+        Entry(
+            "PolarDB",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "族推定（PG 内核改造 + Oracle 兼容面）：2.0 驱动基于 pgJDBC（官方 JDBC O 2.0 文档），EXPLAIN 基础形态按 PG 默认 TEXT 行推定；未取得输出形态原文，档位保守取 TEXT——真机读数到位后按实际档位订正（OceanBase 教训：档位误登会让索引建议走错解析分支）",
+        ),
+        Entry(
+            "GBase 8a",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TABLE,
+            "真机引擎级实证（GBase 8a 8.6.2.43-R7-free @114.66.55.245:20116，2026-11-11）：EXPLAIN SELECT 返回 MySQL 式表格行（select_type/table/type/possible_keys/key/rows/Extra 七列）；EXPLAIN ANALYZE / FORMAT JSON / EXPLAIN INSERT 均语法错误（「仅支持 SELECT」与官方文档一致，ExplainGate SELECT 白名单自然对齐）；DELETE…LIMIT 语法错误（'This version of GBase doesn't yet support ORDER BY, LIMIT and IGNORE in DELETE syntax'）。档位由保守 TEXT 按真机读数升 TABLE",
+        ),
+        Entry(
+            "GBase 8c",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "族推定（openGauss 同源内核）：openGauss 真机实证 FORMAT JSON 可用（本表 openGauss 行），但 8c 未取得输出形态原文——档位保守取 TEXT，真机读数到位后按实际档位订正",
+        ),
+        Entry(
+            "Oscar（神通）",
+            null,
+            null,
+            "P-9 诚实不接入：Oracle 血统 + 现主推 openGauss 版内核（证据源冲突），EXPLAIN 语句形态与输出档位均未取证——真机读数到位后按档登记",
+        ),
+        Entry(
+            "UXDB（优炫）",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "族推定（基于 PostgreSQL）：EXPLAIN 基础形态按 PG 默认 TEXT 行推定；输出形态未取证，真机读数到位后按实际档位订正",
+        ),
+        Entry(
+            "AntDB",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "族推定（PG 引擎，官方手册在册 pgJDBC 连接）：EXPLAIN 基础形态按 PG 默认 TEXT 行推定；Oracle 引擎模式不在本方言范围（渲染按 PG 模式，见 AntDbDialect KDoc）。真机读数到位后升档",
+        ),
+        Entry(
+            "XuGu（虚谷）",
+            "EXPLAIN $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "官方文档级（docs.xugudb.com《EXPLAIN》）：EXPLAIN {查询} 语句在册；输出形态未取证，档位保守取 TEXT。无真机",
+        ),
+        Entry(
+            "YashanDB（崖山）",
+            null,
+            null,
+            "P-9 诚实不接入：Oracle 兼容声明有据（MP YASDB 同族映射），但 EXPLAIN 语句与输出形态均未取证——真机读数到位后按档登记",
+        ),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

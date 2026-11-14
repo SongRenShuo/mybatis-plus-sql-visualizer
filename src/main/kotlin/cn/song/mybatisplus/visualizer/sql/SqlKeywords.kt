@@ -626,3 +626,48 @@ val GOLDENDB_RESERVED: Set<String> = setOf(
     // X / Z
     "xor", "zerofill",
 )
+
+// ---------------------------------------------------------------------------
+// T-DomesticDialects（2026-11-09）：国产/信创第三批新方言保留字。
+//
+// 口径（照 GOLDENDB/瀚高/海量先例）：**族底表复用 + 「宁可多包」**——引用幂等安全
+// （被引用的词在本方言是保留字才需要包，多包不改变语义）；无官方差异表的方言如实
+// 注明「族底表，待真机校验」，不臆造差异。三类：
+//  - MySQL 族底：TiDB / PolarDB-X / GBase 8a（官方 MySQL 协议兼容声明，关键词集以
+//    MySQL 8.0 为基线是保守下界——各库自有新增词在官方关键字页登记后按并集扩表）；
+//  - Oracle 族底：PolarDB（Oracle 兼容版）/ 神通 Oscar / 崖山 YashanDB（MP DbType
+//    同族映射佐证）；
+//  - PG 族底：GBase 8c（openGauss 同源）/ 优炫 UXDB / AntDB（PG 模式）。
+// 虚谷 XuGu 例外：混合自有语法且标识符规则官方文档未逐字取证，保留字基线取
+// [MYSQL_RESERVED]（分页按 MySQL 风格渲染同向），证据档位逐项见 [XuGuDialect] KDoc。
+// ---------------------------------------------------------------------------
+
+/** TiDB 保留字：MySQL 8.0 族底（TiDB 官方兼容 MySQL 8.0 关键词集；自有新增词待官方《关键词》页逐词取证后并集扩表）。 */
+val TIDB_RESERVED: Set<String> = MYSQL_RESERVED
+
+/** PolarDB-X 保留字：MySQL 族底（原 DRDS，MySQL 协议兼容；自有分库分中间件关键字待官方取证后并集扩表）。 */
+val POLARDBX_RESERVED: Set<String> = MYSQL_RESERVED
+
+/** GBase 8a 保留字：MySQL 族底（8a 为 MySQL 血统分析型集群，兼容 MySQL 5.7 语法）。 */
+val GBASE8A_RESERVED: Set<String> = MYSQL_RESERVED
+
+/** PolarDB（Oracle 兼容版）保留字：Oracle 族底（MP `POLARDB` → OracleDialect 同族映射佐证）。 */
+val POLARDB_RESERVED: Set<String> = ORACLE_RESERVED
+
+/** 神通 Oscar 保留字：Oracle 族底（MP `OSCAR` → OracleDialect 同族映射佐证）。 */
+val OSCAR_RESERVED: Set<String> = ORACLE_RESERVED
+
+/** 崖山 YashanDB 保留字：Oracle 族底（MP `YASDB` 同族映射佐证）。 */
+val YASDB_RESERVED: Set<String> = ORACLE_RESERVED
+
+/** GBase 8c 保留字：PG 族底（openGauss 同源内核；官方关键字表待取证后与 [OPENGAUSS_RESERVED] 取并集）。 */
+val GBASE8C_RESERVED: Set<String> = PG_RESERVED
+
+/** 优炫 UXDB 保留字：PG 族底（基于 PostgreSQL；MP `UXDB` → PostgreDialect 同族映射佐证）。 */
+val UXDB_RESERVED: Set<String> = PG_RESERVED
+
+/** AntDB 保留字：PG 族底（PG/Oracle 双引擎，渲染按 PG 模式；自有词待官方取证后并集扩表）。 */
+val ANTDB_RESERVED: Set<String> = PG_RESERVED
+
+/** 虚谷 XuGu 保留字：MySQL 族底（分页按 MySQL 风格渲染同向；混合自有语法，标识符规则待真机校验）。 */
+val XUGU_RESERVED: Set<String> = MYSQL_RESERVED

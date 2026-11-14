@@ -103,6 +103,10 @@ dependencies {
     testImplementation(libs.dameng.jdbc)
     testImplementation(libs.opengauss.jdbc)
     testImplementation(libs.oceanbase.client)
+    // T-DomesticDialects（2026-11-11）：虚谷 XuGu 外部实例验证驱动（Central `com.xugudb:xugu-jdbc`，
+    // 驱动类 `com.xugu.cloudjdbc.Driver`，jar 字节码实测全库无 com.xuguedata 条目、接受 jdbc: 前缀）。
+    // License Proprietary——只进测试 classpath 供引擎验证，插件运行时零依赖不变、不随包分发。
+    testImplementation(libs.xugu.jdbc)
     // T-IbatisPanwei（2026-11-06）：磐维 PanWeiDB 驱动——公开仓库拿不到厂商标，jar 入库在
     // database-lab/vendor/drivers/，按仓库相对路径挂**测试 classpath**（仅测试面，供
     // dialectExternalVerify 连磐维 A/B 实例跑方言渲染套件；插件运行时零依赖不变）。

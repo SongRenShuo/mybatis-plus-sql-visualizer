@@ -281,6 +281,14 @@ public class SqlSourceInterceptor implements InnerInterceptor {
                 cn.startsWith("com.mysql.") || cn.startsWith("org.mariadb.") || cn.startsWith("org.postgresql.") ||
                 // GoldenDB（中兴金篆，com.goldendb.*）：MySQL 5.1 整包重命名分叉（T-GoldenDbDialect 券 B）
                 cn.startsWith("com.goldendb.") ||
+                // T-DomesticDialects（2026-11-09）：国产第三批有专用驱动包名的 5 家（与
+                // CallerSourceLocator / StackDigestFrames 三表同步——LocatorSkipPrefixSyncTest 守卫）
+                cn.startsWith("com.gbase.") ||
+                cn.startsWith("com.aliyun.polardb.") ||
+                cn.startsWith("com.oscar.") ||
+                cn.startsWith("com.xugu.") ||
+                cn.startsWith("com.xuguedata.") ||
+                cn.startsWith("com.yashandb.") ||
                 cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
                 cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
                 cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||

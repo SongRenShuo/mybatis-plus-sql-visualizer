@@ -6,8 +6,12 @@ import cn.song.mybatisplus.visualizer.sql.DmDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
+import cn.song.mybatisplus.visualizer.sql.OscarDialect
+import cn.song.mybatisplus.visualizer.sql.PolarDbDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+import cn.song.mybatisplus.visualizer.sql.XuGuDialect
+import cn.song.mybatisplus.visualizer.sql.YashanDbDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -26,7 +30,9 @@ class DialectVerifySupportUpsertModeTest {
 
     @Test
     fun `无原生upsert的方言必须推导为降级路径`() {
-        val degrade = listOf(OracleDialect, SqlServerDialect, DmDialect)
+        // T-DomesticDialects（2026-11-09）：PolarDB / Oscar / XuGu / YashanDB 四方言无原生 upsert
+        // 证据（KDoc 证据档：Oracle 族 MERGE 形态与 XuGu 保守判无）→ 全部走降级路径
+        val degrade = listOf(OracleDialect, SqlServerDialect, DmDialect, PolarDbDialect, OscarDialect, XuGuDialect, YashanDbDialect)
         for (dialect in degrade) {
             assertEquals(
                 "${dialect.name} 的 upsert 渲染入口应全为 null（无原生 upsert）",
@@ -48,11 +54,16 @@ class DialectVerifySupportUpsertModeTest {
 
     @Test
     fun `有原生upsert的方言必须推导为实际执行`() {
-        // 覆盖注册表里所有**不是**上面三族的方言：任一族的渲染入口被误删都会在这里变红
-        val degradeNames = setOf(OracleDialect.name, SqlServerDialect.name, DmDialect.name)
+        // 覆盖注册表里所有**不是**上面降级族的方言：任一族的渲染入口被误删都会在这里变红
+        val degradeNames = setOf(
+            OracleDialect.name, SqlServerDialect.name, DmDialect.name,
+            PolarDbDialect.name, OscarDialect.name, XuGuDialect.name, YashanDbDialect.name,
+        )
         val natives = DialectRegistry.dialects.filter { it.name !in degradeNames }
-        // T-GoldenDbDialect（券 A）：p66 ON DUPLICATE KEY UPDATE 原生 upsert，第 12 族
-        assertEquals("注册表应含 12 族原生 upsert 方言", 12, natives.size)
+        // T-GoldenDbDialect（券 A）：p66 ON DUPLICATE KEY UPDATE 原生 upsert，第 12 族；
+        // T-DomesticDialects（2026-11-09）：TiDB / PolarDB-X / GBase 8a / GBase 8c / UXDB / AntDB
+        // 六方言带原生 upsert 形态（族底推定），12 → 18
+        assertEquals("注册表应含 18 族原生 upsert 方言", 18, natives.size)
         for (dialect in natives) {
             assertEquals(
                 "${dialect.name} 应推导为 REAL",
