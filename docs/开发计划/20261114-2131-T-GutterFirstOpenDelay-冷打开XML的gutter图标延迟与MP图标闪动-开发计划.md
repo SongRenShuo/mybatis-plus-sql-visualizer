@@ -98,4 +98,36 @@
 
 ## 八、实施记录
 
-（待实施方回填：本仓纪律「计划 §实施记录回写你工作树里的副本」）
+### F2 实施记录（分支 t-gutter-warm-delay）
+
+- 分支/工作树：`t-gutter-warm-delay`（自 master `a45427770` 切出，独立工作树 `.worktrees/t-gutter-warm-delay`）；**留在分支上未合并**。实施期间跑测试时工作树干净（唯一提交 `7ad1d1a5d` 即全部实施内容，反向验证的红探针在提交后做、改回后 `git diff` 为空）。
+
+**落点与形态**：
+
+- 新增 `ui/gutter/GutterWarmScheduler.kt`（internal object）：`getLineMarkerInfo` 原三处直踢收拢为 `GutterWarmScheduler.onGutterFirstRender(tag)` 一个调度点；判定内核抽纯函数 `shouldKickNow(dumb, msSinceProjectSmart, delayMs)`（dumb ⇒ 不踢；delay≤0 ⇒ 立即踢；到点 ⇒ 立即踢；未到 ⇒ 延迟派发）。延迟派发走 `AppExecutorUtil.getAppScheduledExecutorService().schedule(...)`（243 API 实证：同仓 `MbgExampleCallResolver.kt:554` 在用 + IU-243 sources jar 反查 `getAppScheduledExecutorService(): ScheduledExecutorService`；整数 Registry 读数用 `Registry.intValue(key, default)`，util-8.jar javap 实证）。
+- 调度语义（KDoc 写清，见源文件）：延迟锚点＝本会话内最近一次观察到工程 smart 的时刻（per project，渲染遇 dumb 即清锚点重起算——锚点不早于真实 smart 进入时刻，实际延迟 ≥ 配置值，方向保守）；到点复查「工程未关、已 smart、文件仍在」，到点仍 dumb 放弃本轮等下次渲染（与三链既有 dumb 跳出口径一致）。每文件一次的**调度**去重（按 VirtualFile.url，踢出/放弃即撤销）；三链自身每文件去重（`warmedContextFiles`、`PreviewAssemblyWarm.warmedFiles`）不动，不产生重复踢。
+- `warmedContextFiles.add` 时机随踢出后移（到点才记）的边角：延迟窗内文件被关闭 ⇒ 到点 `tag.isValid=false` 放弃本轮且三链未记去重 ⇒ 重开时重新调度，等价「没预热过」；预热已落地后关闭重开 ⇒ 三链按 URL 去重早退。
+- 三链统一踢出点 `XmlSqlGutterLineMarkerProvider.kickFileWarmers`（companion，顺序与原直踢一致）；`prefetchMbgExample` 随之从实例方法挪进 companion（companion 调不到实例方法，语义不变）。
+- Registry：`sqlvis.gutter.warmDelayMs`，默认 5000；**0 = 旧行为立即踢**（回退通道，且不做 dumb 预检——三链自带 dumb 检查保持原语义）。plugin.xml `<registryKey>` 纯英文 description 登记，BundleParityGuard 对 registryKey 族整元素豁免（未引入 bundle 键）。
+- 既有用例零改动：`PreviewAssemblyWarmTest` 7 例原样绿（其接线守卫断言 `PreviewAssemblyWarm.warmOnce(` 在 provider 源码内——`kickFileWarmers` 保住了这一点）。
+
+**提交清单**：
+
+- `7ad1d1a5d` feat(gutter): F2 首渲染预热延迟化——三链合并为 GutterWarmScheduler 单调度点（调度器 + 接线 + registry + 单测，一笔过编译过定向；反向验证前先提交，符合 LESSONS L32）
+
+**定向读数**（`.worktrees/t-gutter-warm-delay`，`./gradlew test --tests ... -Pkotlin.compiler.execution.strategy=in-process`，2026-11-14 22:35）：
+
+- `GutterWarmSchedulerTest` 7/7 绿（纯函数矩阵 4 例 + 接线守卫 3 例）；
+- `PreviewAssemblyWarmTest` 7/7 绿（零改动）。
+
+**反向验证**（接线守卫红/绿两读数）：
+
+- 红（临时把 `getLineMarkerInfo` 改回直踢绕过调度器）：`GutterWarmSchedulerTest > 首渲染预热必须经调度器 FAILED — java.lang.AssertionError: getLineMarkerInfo 必须经 GutterWarmScheduler.onGutterFirstRender 调度（F2：三链合并为一个调度点）`（GutterWarmSchedulerTest.kt:90）；
+- 绿（还原后 `git diff` 为空再跑）：`GutterWarmSchedulerTest` 7/7、`PreviewAssemblyWarmTest` 7/7，BUILD SUCCESSFUL。
+
+**验收对照**：
+
+- A3：`ctx warm done` / `assembly warm done` 日志锚点与链路未动（只是踢出时刻后移/或暖场立即踢）；定向测试全绿。沙盒冷窗复跑（观察 `ctx warm done` 时刻是否后移 ≈5s）属 runIde 腿，本刀未跑——留给主控合并后的验收复跑或 A/B（§六第 4 步）。
+- A4：回退通道双开关在场——`sqlvis.gutter.warmDelayMs=0` 回首渲染立即踢；`sqlvis.preview.assemblyWarm=false` 关装配预热（原开关未动）。
+
+**红线遵守**：未触碰 `update/update.json`、`CHANGELOG.md`、`MapperNavigationLineMarkerProviders.kt`；未 push；未跑全量/未 clean/未 --stop。
