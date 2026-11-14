@@ -328,7 +328,7 @@ open_paths()   # 返回当前激活文件 + 全部打开文件，可用于开录
   **启动约定（用户 2026-10-13 定调、2026-10-13 再次强调）：沙盒只许用「上面这条命令」起，不许用任何「自己拼参数的 `idea64.exe …`」形式。** 两者区别就在这里——前者是「命令」，后者是「自定义命令指定参数」，而后者全都会「看起来正常」地起错：
 
   - `idea64.exe "-Djb.vmOptionsFile=…\sandbox.vmoptions"`：启动器**不解析该命令行参数**，静默退回默认配置 = **起了一个日常 IDE**（2026-10-12 用户连纠两次，定调严重问题）。
-  - `idea64.exe -Didea.config.path=<沙盒>/config -Didea.system.path=… -Didea.plugins.path=…`：看似把沙盒三路径都指了，但**绕过 gradle**（插件改动不重装）且**不读沙盒 `config/idea64.exe.vmoptions`**（用户保留的 agent/参数被静默漏掉）。项目记忆 `runide-demo-verify-workflow` 里那条「手工启动沙盒 IDE 的可用命令」**已作废**，勿再照做。
+  - `idea64.exe -Didea.config.path=<沙盒>/config -Didea.system.path=… -Didea.plugins.path=…`：看似把沙盒三路径都指了，但**绕过 gradle**（插件改动不重装）且**不读沙盒 `config/idea64.exe.vmoptions`**（用户保留的 agent/参数被静默漏掉）。项目记忆 `runide-demo-verify-workflow` 里那条「手工启动沙盒 IDE 的可用命令」**已作废**，勿再照做。**20261114 补实测机理**：jcmd 证实 `plugins.path` 会被启动器**静默重置回 `%APPDATA%` selector 目录**（config/system/log 反而生效）→ 实例「正常起来」却加载日常插件（同 ID 双份时 semver 正式版压过 pre-release beta）；换 `IDEA_PROPERTIES` 环境变量 + 全新 selector 也无效（插件列表仍是日常全套、目标目录 jar 未被锁）。判「加载源对不对」的利器＝**rename 探针**（目标 jar rename 成功=没被锁=没被加载）+ `jcmd VM.system_properties` 对路径。详见 `docs/调研报告/20261114-1500-…-调研报告.md` §2c。
   - `IDEA_VM_OPTIONS` + `record/sandbox_start.cmd`：口径作废（同上，只读 `record/sandbox.vmoptions`）；该 `.cmd` 文件头亦自述「FALLBACK ONLY」，不再作应急备选。
 
   **许可/插件变更会让 IDE 自己重启（`Restarter`）——别顺着走**：它会丢掉沙盒的 `-Didea.config.path`，把 IDE 拉成**日常 IDE**（坑 30），`runIde` 任务随之 exit 7。**正确处置＝杀掉那个进程，重新跑上面这条 gradle 命令**，不要接受它的重启结果。
