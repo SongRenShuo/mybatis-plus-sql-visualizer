@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.log.MapperXmlLocator
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -19,11 +20,13 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         MapperXmlLocator.clearFileListCacheForTest()
+        MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
     }
 
     override fun tearDown() {
         try {
             MapperXmlLocator.clearFileListCacheForTest()
+            MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
         } finally {
             super.tearDown()
         }
@@ -160,5 +163,58 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             }
         }
         assertEquals(before, MapperXmlLocator.indexScanCount.get())
+    }
+
+    // ------------------------------------------------------------------
+    // F1（T-GutterFirstOpenDelay）：解析失败不摘图标——正缓存判定矩阵
+    // dumb 判定走 isDumbProvider 测试缝（承 MbgExampleCallResolver 定例），矩阵与夹具真实
+    // dumb 态解耦（夹具方法体在读操作内，waitForSmartMode 不可用）。
+    // ------------------------------------------------------------------
+
+    fun testF1ResolveSuccessProducesMarkerAndSeedsPositiveCache() {
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        addMapper()
+        val xml = addXml("<select id=\"count\">SELECT 1</select>")
+        val marker = markers(xmlProvider, xml).single()
+        assertSame(MpvsIcons.MapperStatement, marker.icon)
+        assertTrue(
+            "解析成功必须记入会话级正缓存",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
+    }
+
+    fun testF1ResolveFailureWithCacheHitStillProducesMarker() {
+        // 冷窗形态模拟：namespace 侧接口不可解析（无对应 Java 文件），但本会话早先解析成功过该 key。
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        val xml = addXml("<select id=\"count\">SELECT 1</select>")
+        assertTrue("resolveInterfaceMethod 对该 key 必须确实解析失败（否则本用例测不到失败分支）",
+            MybatisXmlTargets.resolveInterfaceMethod(project, "com.demo.UserMapper", "count") == null)
+        val marker = markers(xmlProvider, xml).single()
+        assertSame(MpvsIcons.MapperStatement, marker.icon)
+    }
+
+    fun testF1ResolveFailureWithoutCacheProducesNoMarkerAndLeavesCacheClean() {
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        addMapper()
+        val xml = addXml("<select id=\"ghost\">SELECT 1</select>")
+        assertEmpty(markers(xmlProvider, xml))
+        assertFalse(
+            "「真没有」的负例不得污染正缓存",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"),
+        )
+    }
+
+    fun testF1DumbModeOptimisticallyProducesMarkerWithoutCaching() {
+        // F1-b：dumb 窗内解析失败也乐观产出（不摘图标），且失败路径不得入正缓存。
+        // dumb 判定走 isDumbProvider 测试缝（承 MbgExampleCallResolver 定例），不依赖平台真实 dumb 态。
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { true } }
+        addMapper()
+        val xml = addXml("<select id=\"ghost\">SELECT 1</select>")
+        val marker = markers(xmlProvider, xml)
+        assertEquals("dumb 窗内解析失败须乐观产出（F1-b）", 1, marker.size)
+        assertSame(MpvsIcons.MapperStatement, marker.single().icon)
+        assertFalse("乐观产出不得污染正缓存",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"))
     }
 }
