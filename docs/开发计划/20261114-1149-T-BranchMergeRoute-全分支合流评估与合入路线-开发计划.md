@@ -112,3 +112,31 @@ git push origin --delete t-domestic-db-dialects t-hiddenbug-perf-scan t-security
 - A1：本计划只产文档与侦察读数，生产代码零改动（已满足）。
 - A2：六分支的 ahead/behind/merge-base/cherry 读数为 2026-11-14 11:49 实测，后续启动合流时以当时重测为准（master 仍在前进）。
 - A3：任何 merge/push/删支动作在用户点名前不执行（AGENTS.md 规则 9）。
+
+---
+
+## 八、实施记录（2026-11-14 回填，第 1~3 支合流已完成、CI 全绿）
+
+**执行分支**：`t-branch-merge-route`（工作树 `.worktrees/t-branch-merge-route`，自 master `b1e4c9630` 拉出）。用户指示改走**单整合支三连合 + CI 跑测试**路线（替代第三节「逐支并回 master」流程）；**不合 master 等用户点名**。
+
+**三连合并（冲突逐 hunk 裁决）**：
+
+| 提交 | 合入支 | 冲突面与裁决 |
+|---|---|---|
+| `89bcde9c8` | t-domestic-db-dialects | 架构总览 3 行（sql 行取支侧 `domestic/` 子包、ui/update 行取 master 侧新形态）+ 测试指南 1 行（25 方言口径、类计数留收口重登）；CHANGELOG/索引自动合成 |
+| `a032104dd` | t-hiddenbug-perf-scan | `SqlPreviewPanel.dispose`（T-PreviewEditorLeak 兜底释放×券 Y2 去自处置——两者兼容并存）；CHANGELOG（已发行 11.11 段的 T-PreviewDmlResult 重复行去除）；索引行并入去重 |
+| `26344112a` | t-security-audit-fixes | `SettingsIO`（Y14 版本下限×T-SAF-08 值级校验并存）；`Ognl.kt` 超长整数面值（**裁决取券 K① BigDecimal 回落**——真实 OGNL 语义且异常封闭目标同样达成，SAF 侧 3 例「降级 Err」断言改写）；日志三件套（券 D 块级读×T-SAF-20/22/23 织入：IbatisPending 双时钟、evictExpiredIbatis、forceClose 路由、非修订行 1MB 折叠进块级实现）；`SettingsIOTest`/`SqlReverseParserTest` 双侧测试段并存；LESSONS 分支条目改挂 L71；CHANGELOG 已发行段重复行去除 |
+
+**CI 修红五轮（build-plugin.yml workflow_dispatch mode=tests，每轮约 8~13 分钟）**：
+
+| 轮 | run | 红 | 修复 |
+|---|---|---|---|
+| 1 | 43557539650 | 6 腿全红——classpath 依赖校验缺 4 件 | `76061f29e` 清单补 jackson-base 2.20.2 pom + junit-bom 5.11.4/5.13.1/5.13.4 module（plugins.gradle.org 直取 sha256，与既有条目交叉验证字节一致） |
+| 2 | 43558973969 | 6 腿红——testCompileClasspath 缺 9 件 | `906ef7719` 补 xugu-jdbc 12.3.9 jar+pom（dialects 支新增 Central 依赖）/org.osgi core+compendium 5.0.0/checker-qual 3.5.0 pom/junit-bom 5.7.0+5.12.2 module |
+| 3 | 43560569917 | fast 绿，5 片红——intellijPlatformTestRuntime 缺 2 件 | `78c607480` 补 jackson-base/core 2.17.1 |
+| 4 | 43562439748 | 2 片红——真测试：`PluginXmlStructureGuardTest`（描述方言数 15 vs 注册表 25）+ `SqlPreviewPanelStackDigestTest` 5 例（`<-` vs `&lt;-`） | `45d5a9aa6` plugin.xml 描述 15→25（**dialects 支漏更，支上未跑 testShards 故未暴露**）；栈摘要测试改「原始契约截 120 先定 → 再转义」口径（保留 T-SAF-10 转义，Swing 回读渲染不变） |
+| 5 | 43563839764 | — | **全绿**：build + test(1~5) + test(fast) 7 job 全部 success |
+
+**教训**（供 LESSONS 收口评估）：①任务支只跑 testFast 不跑 testShards 时，plugin.xml 描述对账类守卫红会潜伏到合流轮——dialects 支的 15→25 漏更即此形态；②严格依赖校验清单随「合并后依赖树变化」必漂，合流轮 CI 首曝面集中在 classpath→testCompile→intellijPlatformTestRuntime 三层逐层揭示，逐层直取官方源 sha256 补登即可收敛，不需本地 Gradle。
+
+**not run 条款**：verify×3 / verifyplugin / marketplace / gate 未跑（mode=tests 不含）；夜间轮（agent 子项目测试、真机方言、DB 集成、e2e）未跑；runIde GUI 走查未做。合回 master 与删支（D-3）等用户点名。
