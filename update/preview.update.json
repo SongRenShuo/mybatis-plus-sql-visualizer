@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.14-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.14-beta.1/mybatis-plus-sql-visualizer-2026.11.14-beta.1.zip",
-  "changeNotes": "打开 mapper 就在后台预热预览, 点开更快\n打开预览不再把工程短暂拖进重索引, 补全不再跟着失灵; 执行控制台第一次执行时才准备, 设置页可调三档口径\n表名反查索引大幅提速: 建索引挪到后台, 候选源改走注解索引, 启动期不再重复建 7 次\n表名反查按 ORM 分源, JPA 工程同样适用\n敲 DEL_F 能补出 DEL_FLAG, 列名补全支持大写蛇形别名, 插入形态跟随输入大小写\n数据源切换按钮不再刷 IDE 日志告警, 退出 IDE 不再报插件内存泄漏\n上一版已知问题已修: 热更新后设置页报错, 现在更新前自动关闭设置窗口并提示重启",
+  "version": "2026.11.14",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.14/mybatis-plus-sql-visualizer-2026.11.14.zip",
+  "changeNotes": "打开 mapper 就在后台预热预览, 大工程里预览先出骨架、条件随后自动补齐, 点开更快\n打开预览不再把工程短暂拖进重索引, 补全不再跟着失灵; 执行控制台第一次执行时才准备, 设置页可调三档口径\n表名反查索引大幅提速: 建索引挪到后台, 候选源改走注解索引, 启动期不再重复建 7 次; 按 ORM 分源后 JPA 工程同样适用\n预览会说清语句类型是怎么判出来的, 同一个 wrapper 多处复用时可点「语句」下拉切换; 实体更新的 SET 各列可以逐列填值\n一个 wrapper 在多处被复用、重新赋值或遇到同名的普通集合调用时, 不再把查询链误判成删除\nSQL 补全一组修复与提速: 敲 DEL_F 能补出 DEL_FLAG, 插入形态跟随输入大小写, 删掉几个字符后照常给出列名, MBG 查询不再给假列, 改实体注解立刻生效\n2026.11.12 在 Linux 上打开即卡死、预览白屏的问题已修; 数据源切换记忆不再写坏工程文件, 升级后会自动修好被旧版本写坏的文件\n方言实在推断不出来时会主动提示一次, 可直达设置; 「已捕获到第一条 SQL」的引导改成每台机器只提示一次\n预览里的 INSERT 列名提示让位 IDEA 自带的同类提示, 不再重复显示\n本地安装包目录重启后不再丢失; 热更新后设置页报错、数据源按钮刷日志告警、退出报内存泄漏等问题已修",
   "publishDate": "2026-11-14",
   "sinceBuild": "243"
 }
