@@ -18,6 +18,20 @@ import org.junit.Assert.assertNull
  */
 class MapperXmlLocatorTest : BasePlatformTestCase() {
 
+    /** F1''：静态槽/静态旗标跨用例污染防线——每用例前后强制清零（单测 sync 语义不变）。 */
+    override fun setUp() {
+        super.setUp()
+        MapperXmlLocator.clearFileListCacheForTest()
+    }
+
+    override fun tearDown() {
+        try {
+            MapperXmlLocator.clearFileListCacheForTest()
+        } finally {
+            super.tearDown()
+        }
+    }
+
     private val mapperXml = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.demo.mapper.UserMapper">
@@ -196,10 +210,34 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
         }
     }
 
+    fun testF1双撇_头扫盲区按文件名兜底PSI_ORM覆盖不收窄() {
+        // 根标签前有超长注释（>16KB 头扫窗）的 MBG 生成文件：头扫看不见 <mapper，
+        // 文件名含 Mapper → PSI 兜底路径必须把它捞回来（旧全量 PSI 口径的能力面）。
+        val bigComment = "<!-- " + "x".repeat(20_000) + " -->\n"
+        val xml = "<?xml version=\"1.0\"?>\n" + bigComment +
+            "<mapper namespace=\"com.demo.mapper.BigMapper\">\n" +
+            "    <select id=\"selectById\">SELECT 1</select>\n</mapper>\n"
+        addMapperXml("src/main/resources/mapper/BigMapper.xml", xml)
+        val loc = MapperXmlLocator.locate(project, "com.demo.mapper.BigMapper.selectById")
+        assertNotNull("头扫盲区文件必须由文件名兜底 PSI 捞回（ORM 覆盖面不收窄）", loc)
+    }
+
+    fun testF1双撇_iBatisSqlMap边界与旧口径一致_不入清单() {
+        // iBatis 2.x <sqlMap> 根：旧 PSI 筛选（rootTag=="mapper"）本就不收入本定位器的清单
+        //（iBatis 跳转走 IbatisXmlLocators 独立链）——头扫+兜底口径必须同样排除，不悄悄扩面。
+        val sqlMapXml = "<?xml version=\"1.0\"?>\n" +
+            "<sqlMap namespace=\"com.demo.mapper.UserDao\">\n" +
+            "    <select id=\"selectById\">SELECT 1</select>\n</sqlMap>\n"
+        addMapperXml("src/main/resources/sqlmap/UserDao.xml", sqlMapXml)
+        assertNull("sqlMap 文件不入 mapper 定位清单（与旧口径一致）",
+            MapperXmlLocator.locate(project, "com.demo.mapper.UserDao.selectById"))
+    }
+
     fun testF1双撇_异步模式过期槽服务旧值不缺席() {
         addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
         MapperXmlLocator.restartAnalyzerForTest = { }
         MapperXmlLocator.asyncListBuildForTest = true
+        MapperXmlLocator.fileListTtlMs = 5_000L
         try {
             MapperXmlLocator.clearFileListCacheForTest()
             MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById") // 首查：踢构建+落地
@@ -218,7 +256,44 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
         } finally {
             MapperXmlLocator.asyncListBuildForTest = null
             MapperXmlLocator.restartAnalyzerForTest = null
+            MapperXmlLocator.fileListTtlMs = 30_000L
             MapperXmlLocator.clearFileListCacheForTest()
         }
+    }
+
+    fun testF1双撇_头扫内核_属性序与引号形态() {
+        // 正常形态：DOCTYPE 之后根标签带 namespace
+        assertEquals(
+            "com.demo.mapper.UserMapper",
+            MapperXmlLocator.namespaceFromHeadText(
+                "<?xml version=\"1.0\"?>\n" +
+                    "<!DOCTYPE mapper PUBLIC \"-//mybatis.org//DTD Mapper 3.0//EN\" \"x\">\n" +
+                    "<mapper namespace=\"com.demo.mapper.UserMapper\">\n" +
+                    "    <select id=\"a\">x</select>\n" +
+                    "</mapper>\n",
+            ),
+        )
+        // namespace 属性在其它属性之后（非首属性）
+        assertEquals(
+            "com.demo.B",
+            MapperXmlLocator.namespaceFromHeadText("<mapper parameterType=\"x\" namespace=\"com.demo.B\">"),
+        )
+        // 单引号形态
+        assertEquals("com.demo.C", MapperXmlLocator.namespaceFromHeadText("<mapper namespace='com.demo.C'>"))
+    }
+
+    fun testF1双撇_头扫内核_非mapper与mappers前缀不误收() {
+        // 根元素不是 mapper（page 内嵌 mapper 子标签）→ 内层 mapper 标签无 namespace → null
+        assertNull(
+            MapperXmlLocator.namespaceFromHeadText(
+                "<page namespace=\"com.demo.UserMapper\"><mapper><select id=\"a\"/></mapper></page>",
+            ),
+        )
+        // `<mappers>`（MyBatis 配置根）内的 <mapper> 条目只带 resource/class 不带 namespace
+        assertNull(MapperXmlLocator.namespaceFromHeadText("<mappers><mapper resource=\"x.xml\"/></mappers>"))
+        // 无 mapper 标签
+        assertNull(MapperXmlLocator.namespaceFromHeadText("<foo namespace=\"x\"/>"))
+        // mapper 标签无 namespace 属性
+        assertNull(MapperXmlLocator.namespaceFromHeadText("<mapper><select id=\"a\"/></mapper>"))
     }
 }

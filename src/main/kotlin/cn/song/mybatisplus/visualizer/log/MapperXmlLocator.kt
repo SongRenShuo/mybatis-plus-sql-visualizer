@@ -88,9 +88,11 @@ object MapperXmlLocator {
         slot.memo[memoKey]?.let { cached -> return cached as? Location }
         var first: Pair<XmlFile, XmlTag>? = null
         var extraHits = 0
-        for (vf in slot.files) {
+        for (desc in slot.files) {
+            // F1''：namespace 在清单构建期已提取——只对命中的 1~2 个候选付 PSI（全量 PSI 已死）
+            if (desc.namespace != namespace) continue
             statementScanCount.incrementAndGet()
-            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            val file = PsiManager.getInstance(project).findFile(desc.vf) as? XmlFile ?: continue
             val tag = findStatementTag(file, namespace, id) ?: continue
             val hit = file to tag
             if (first == null) first = hit else extraHits++
@@ -109,8 +111,13 @@ object MapperXmlLocator {
     }
 
     /**
-     * T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳 +
+     * T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件描述符列表 + 时间戳 +
      * 券01 语句定位结果 memo）。
+     *
+     * F1''（T-GutterFirstOpenDelay 续刀）：列表元素从裸 VirtualFile 升级为 [MapperFileDesc]——
+     * namespace 在清单构建期用**原始头扫**提取（不 PSI），慢趟定位只对 namespace 命中的
+     * 1~2 个候选做 PSI（此前 4841 个 XML 全量 PSI 解析，根工程首扫数十秒且被 JPS 写盘
+     * 反复取消）。
      *
      * memo 与清单**同生共死**：条目每次换代即新建空 memo（对照 MybatisXmlTargets F96
      * namespaceSlot 的 listingGeneration 同代失效先例）。memo 键为 `namespace to id`，
@@ -118,18 +125,22 @@ object MapperXmlLocator {
      */
     private class FileListSlot(
         val project: java.lang.ref.WeakReference<Project>,
-        val files: List<VirtualFile>,
+        val files: List<MapperFileDesc>,
         val atMs: Long,
     ) {
         val memo = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, Any>()
     }
 
+    /** 清单元素：mapper XML 文件 + 构建期提取的根标签 namespace（原始头扫，非 PSI）。 */
+    private class MapperFileDesc(val vf: VirtualFile, val namespace: String)
+
     /**
      * T-PS5-05：缓存 TTL 上界（毫秒）。新增 mapper XML 后至多一个窗口内跳转仍按旧列表
      * （删除由 [VirtualFile.isValid] 即时兜底：任一缓存文件失效即刻重扫）。
-     * 测试注入短窗驱动过期语义。
+     * 测试注入短窗驱动过期语义。F1''：5s→30s——首扫便宜化（头扫+描述符缓存）后避免高频
+     * 重建；新增文件至多滞后 30s（serve stale 期间图标不缺席）。
      */
-    internal var fileListTtlMs: Long = 5_000L
+    internal var fileListTtlMs: Long = 30_000L
 
     /** T-PS5-05 测试缝：时间源（默认系统时钟）。 */
     internal var clockMs: () -> Long = { System.currentTimeMillis() }
@@ -187,7 +198,8 @@ object MapperXmlLocator {
             com.intellij.openapi.application.ReadAction.nonBlocking<Unit> {
                 runCatching { rebuildSlotSync(project) }
                 Unit
-            }.expireWith(project)
+            }.inSmartMode(project)
+                .expireWith(project)
                 .coalesceBy(this, "mapperXmlList:${project.locationHash}")
                 .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
                 .onSuccess {
@@ -222,26 +234,75 @@ object MapperXmlLocator {
         }
     }
 
-    /** 清单构建主体（旧 `currentFileListSlot` 的扫描段；同步调用点=单测缝/异步落地回调）。 */
+    /** 清单构建主体（同步调用点=单测缝/异步落地回调）：头扫提取 namespace + 描述符跨代缓存。 */
     private fun rebuildSlotSync(project: Project) {
         val now = clockMs()
         indexScanCount.incrementAndGet()
         val files = runCatching {
             val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
-            FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
+            val candidates: Sequence<MapperFileDesc?> = FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
                 .asSequence()
-                .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
-                .filter { it.rootTag?.name == "mapper" }
-                .mapNotNull { it.virtualFile }
-                .toList()
+                .mapNotNull { vf ->
+                    // F1''：namespace 头扫提取（不 PSI）。曾试过 path+stamp+length 描述符跨代缓存，
+                    // 但 LightVirtualFile（内存 fixture/部分 VFS 形态）path 固定、stamp 不可靠，
+                    // 跨清单代缓存会毒化——砍掉：TTL 30s 下重建频率低，头扫本身 2~3s 可接受。
+                    val ns: String? = namespaceFromHead(vf)
+                        // ORM 兼容兜底：头扫窗（16KB）内没看到 `<mapper` 的文件不直接判出局——
+                        // 文件名含 Mapper/sqlmap 的（MBG/各代 ORM 生成物的命名惯例）回退一次
+                        // PSI 解析取根标签 namespace，保证「根标签在头扫窗之外」的极端文件
+                        // 不因头扫窗收窄而丢图标（旧 PSI 全量口径的能力面）。
+                        ?: runCatching {
+                            if (!looksLikeMapperFile(vf.name)) return@runCatching null
+                            (PsiManager.getInstance(project).findFile(vf) as? XmlFile)
+                                ?.rootTag?.let { root ->
+                                    if (root.name == "mapper") root.getAttributeValue("namespace") else null
+                                }?.takeIf { it.isNotBlank() }
+                        }.getOrNull()
+                    ns?.takeIf { it.isNotEmpty() }?.let { MapperFileDesc(vf, it) }
+                }
+            candidates.filterNotNull().toList()
         }.getOrDefault(emptyList())
         fileListSlot = FileListSlot(java.lang.ref.WeakReference(project), files, now)
+    }
+
+    /** 文件名形态兜底判据：MBG/各代 ORM 生成物的命名惯例（XxxMapper.xml / sqlmap*.xml）。 */
+    private fun looksLikeMapperFile(name: String): Boolean =
+        name.contains("Mapper", ignoreCase = true) || name.contains("sqlmap", ignoreCase = true)
+
+    /** 头扫字节数：mapper 根标签必在文件头部（XML 声明 + DOCTYPE 之后）。 */
+    private const val HEAD_SCAN_BYTES = 16 * 1024
+
+    /** `<mapper` 根标签开锚（`<mappers`/`<mapperX` 不命中）；属性序列任意，namespace 双/单引号都认。 */
+    private val MAPPER_TAG_START = Regex("<mapper[\\s>/]")
+
+    private val NS_ATTR = Regex("""namespace\s*=\s*(["'])([^"']+)\1""")
+
+    /** VFS 原始头扫：不 PSI——读文件头 [HEAD_SCAN_BYTES] 字节，`<mapper …>` 开标签内提取 namespace。 */
+    private fun namespaceFromHead(vf: VirtualFile): String? = try {
+        vf.inputStream.use { ins ->
+            val buf = ByteArray(HEAD_SCAN_BYTES)
+            val n = ins.readNBytes(buf, 0, buf.size)
+            val head = String(buf, 0, n, Charsets.UTF_8)
+            namespaceFromHeadText(head)
+        }
+    } catch (t: Throwable) {
+        if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
+        null
+    }
+
+    /** 纯文本判定内核（可纯单测）：`<mapper …>` 开标签内的 namespace 属性值；无/空 → null。 */
+    internal fun namespaceFromHeadText(head: String): String? {
+        val tagStart = MAPPER_TAG_START.find(head) ?: return null
+        val tagEnd = head.indexOf('>', tagStart.range.first)
+        if (tagEnd < 0) return null
+        return NS_ATTR.find(head.substring(tagStart.range.first, tagEnd))?.groupValues?.get(2)
+            ?.takeIf { it.isNotBlank() }
     }
 
     /** 当前可用槽（项目匹配 + 文件全部有效；**不含 TTL 判定**——过期槽 serve stale 由调用方决定）。 */
     private fun currentSlotIfUsable(project: Project): FileListSlot? {
         fileListSlot?.let { slot ->
-            if (slot.project.get() === project && slot.files.all { it.isValid }) return slot
+            if (slot.project.get() === project && slot.files.all { it.vf.isValid }) return slot
         }
         return null
     }
