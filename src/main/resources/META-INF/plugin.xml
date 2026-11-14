@@ -410,6 +410,8 @@
              检测到可预览 SQL 时经预览组弹一次「Alt+Shift+Q」指路通知；一次性状态持久化
              （PluginSettings.onboardingAnchorTipShown），gutter 快速路径零改动 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingAnchorTip"/>
+        <!-- T-RollbackSnapshotPreExec P1：快照目录启动兜底剪枝（开关关闭时不跑，fail-open） -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStartupPruner"/>
         <!-- T-WorkspaceHeal（2026-11-13）：项目打开时自愈被旧版本写坏的 .idea/workspace.xml——
              写侧根因（后台线程写项目级 PropertiesComponent 与平台保存竞争）已随 EDT 归位修掉，
              但已损坏的工程不会自己好：平台每次启动报 JsonDecodingException 且不重写该条目。

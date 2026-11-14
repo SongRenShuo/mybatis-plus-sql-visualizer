@@ -287,6 +287,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
     internal val displayMaskCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"))
 
+    /** T-RollbackSnapshotPreExec：UPDATE/DELETE 执行前自动采集改前快照（默认关，关闭时零查询零 IO）。 */
+    internal val rollbackSnapshotBeforeExecCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec"))
+
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     internal val stackMaxFramesField = JBTextField(6)
 
@@ -1307,6 +1310,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || displayMaskCheck.isSelected != s.displayMaskEnabled
+            || rollbackSnapshotBeforeExecCheck.isSelected != s.rollbackSnapshotBeforeExec
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1448,6 +1452,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.displayMaskEnabled = displayMaskCheck.isSelected
+            s.rollbackSnapshotBeforeExec = rollbackSnapshotBeforeExecCheck.isSelected
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1675,6 +1680,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             displayMaskCheck.isSelected = s.displayMaskEnabled
+            rollbackSnapshotBeforeExecCheck.isSelected = s.rollbackSnapshotBeforeExec
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

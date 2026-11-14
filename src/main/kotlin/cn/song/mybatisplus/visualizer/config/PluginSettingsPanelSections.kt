@@ -687,6 +687,11 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.firstCaptureGuide")
                 toolTipText = MpSqlVisualizerBundle.message("settings.firstCaptureGuide.tip")
             })
+            // T-RollbackSnapshotPreExec：UPDATE/DELETE 执行前自动改前快照（默认关；关闭时零查询零 IO）
+            addRow(p, g, "", rollbackSnapshotBeforeExecCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec")
+                toolTipText = MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec.tip")
+            })
             // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
             addRow(p, g, "", editorShowWhitespacesCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces")

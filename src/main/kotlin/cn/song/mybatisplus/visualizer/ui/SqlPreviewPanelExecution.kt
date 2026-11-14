@@ -3,6 +3,10 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotCapture
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotFileStore
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotProjectStore
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
@@ -580,6 +584,125 @@ internal fun SqlPreviewPanel.registerRollbackSnapshotIfNeeded(
     val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
     val table = analyzed.targetTable ?: return
     store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns, dialect = dialect)
+}
+
+/**
+ * T-RollbackSnapshotPreExec P2：UPDATE/DELETE 提交前的改前快照采集（**默认关**）。
+ *
+ * 顺序契约：采集必须先于提交完成——快照是「改前」镜像，查晚了就是改后状态（计划 §3.2）。
+ * 开关关闭 / 形态不可采集 / 无绑定数据源 / 采集失败 → 立即 [onProceed]（fail-open，不阻断）；
+ * 成功 → 落盘后 [onProceed]。磁盘写在池线程（EDT 只装内存态），查库走 [PreviewSideQuery]
+ * 只读旁路（过 McpSelectGuard + 方言闸），超时/行上限由 [RollbackSnapshotCapture] 常量与
+ * [RollbackSnapshotFileStore] 剪枝兜底。
+ *
+ * 测试缝：查询通道经 [PreviewSideQuery.runnerForTest] 注入假通道计数（无真库 headless 覆盖
+ * 「开关关→零查询 / 开关开→采集成功」）；数据源经 [captureTargetForTest] 注入假目标。
+ */
+@Volatile
+internal var captureTargetForTest: (() -> Any?)? = null
+
+/** 测试缝：headless 面板无预览 → 闸请求会落 RENDER_UNKNOWN/TARGET_UNKNOWN 档；注入显式 MATCH 请求走全链。 */
+@Volatile
+internal var captureGateRequestForTest: (() -> cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request)? = null
+
+internal fun SqlPreviewPanel.captureSnapshotBeforeExecThen(
+    proj: com.intellij.openapi.project.Project,
+    sql: String,
+    onProceed: () -> Unit,
+) {
+    val enabled = PluginSettings.getInstance().state.rollbackSnapshotBeforeExec
+    if (!enabled) {
+        onProceed()
+        return
+    }
+    val plan = RollbackSnapshotCapture.analyze(SqlCommentStripper.strip(sql))
+    val capturable = plan as? RollbackSnapshotCapture.Plan.Capturable ?: run {
+        // 不可采集形态：与 registerRollbackSnapshotIfNeeded 的静默跳过同口径，不留状态行噪音
+        onProceed()
+        return
+    }
+    // 测试缝：headless 无共享控制台（boundConsoleDataSource 恒 null），注入假数据源走全链
+    val target = captureTargetForTest?.invoke()
+        ?: runCatching { DataSourceSelector.boundConsoleDataSource() }.getOrNull()
+    if (target == null) {
+        resultPanel.showStatus(MpSqlVisualizerBundle.message("rollback.snapshot.capture.noDataSource"))
+        onProceed()
+        return
+    }
+    val connectionName = runCatching { DataSourceSelector.boundConsoleDataSourceName() }.getOrNull()
+    val gateRequest = captureGateRequestForTest?.invoke()
+        ?: executionDialectGateRequest(
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+        )
+    val startedAt = System.currentTimeMillis()
+    PreviewSideQuery.run(
+        proj,
+        target,
+        capturable.selectSql,
+        gateRequest,
+        scalar = false,
+        requireSelectGuard = true,
+        channelNote = "rollback-snapshot",
+    ) { result ->
+        when (result) {
+            is PreviewSideQuery.Result.Table -> saveCapturedSnapshotBeforeExec(
+                proj, capturable, sql, result.raw, connectionName, startedAt,
+            )
+            is PreviewSideQuery.Result.Blocked ->
+                resultPanel.showStatus(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.capture.blocked") + " " + result.message,
+                )
+            is PreviewSideQuery.Result.Failed ->
+                resultPanel.showStatus(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.capture.failed") + " " + result.message,
+                )
+            is PreviewSideQuery.Result.Scalar -> {
+                // 单值形态不是采集查询的预期结果——按失败口径提示，不阻断执行
+                resultPanel.showStatus(MpSqlVisualizerBundle.message("rollback.snapshot.capture.failed"))
+            }
+        }
+        onProceed()
+    }
+}
+
+/** P2 落盘装配：行上限截断 + 记录装配 + 池线程写盘（EDT 只装索引内存态，V7 降级在 runCatching 内）。 */
+private fun SqlPreviewPanel.saveCapturedSnapshotBeforeExec(
+    proj: com.intellij.openapi.project.Project,
+    capturable: RollbackSnapshotCapture.Plan.Capturable,
+    statementSql: String,
+    raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
+    connectionName: String?,
+    startedAtMs: Long,
+) {
+    val columns = raw.headers
+    val allRows = raw.rows
+    val limited = if (allRows.size > RollbackSnapshotCapture.ROW_LIMIT) {
+        allRows.take(RollbackSnapshotCapture.ROW_LIMIT)
+    } else allRows
+    val record = RollbackSnapshotFileStore.SnapshotRecord(
+        id = RollbackSnapshotFileStore.newId(startedAtMs),
+        createdAtMs = startedAtMs,
+        mode = capturable.statementKind,
+        connectionName = connectionName,
+        database = null,
+        table = capturable.targetTable,
+        dialect = current?.effectiveDialect?.name,
+        statementSql = statementSql,
+        snapshotSelectSql = capturable.selectSql,
+        columns = columns,
+        beforeRows = limited,
+        rowLimitHit = allRows.size > RollbackSnapshotCapture.ROW_LIMIT || raw.truncated,
+        warnings = if (raw.truncated) listOf("query truncated at collector budget") else emptyList(),
+        status = RollbackSnapshotFileStore.Status.CAPTURED,
+    )
+    val service = proj.getService(RollbackSnapshotProjectStore::class.java)
+    service.persist(record, startedAtMs)
+    resultPanel.showStatus(
+        MpSqlVisualizerBundle.message(
+            "rollback.snapshot.capture.saved",
+            limited.size, columns.size,
+        ),
+    )
 }
 
 /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
@@ -1320,6 +1443,32 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
     )
 
+    // T-RollbackSnapshotPreExec P2：开关开启且形态可采集 → 先异步采集改前快照，采集完成后
+    // 再提交执行（快照必须是「改前」镜像，顺序不可交换）；关闭/不可采集/无数据源/采集失败
+    // → 立即原链提交（fail-open，不阻断；关闭时零额外查询零 IO，行为与关闭前逐字节一致）。
+    captureSnapshotBeforeExecThen(proj, sql) {
+        submitExecutionAfterSnapshotGate(
+            proj, sql, rawSql, isQuery, wholeScript, dialectGateRequest, forceChoose,
+        )
+    }
+}
+
+/**
+ * T-RollbackSnapshotPreExec P2：预览面板执行链的提交段（原 executeSql 尾段原样迁出）。
+ *
+ * 拆出成独立函数是为了让「异步采集改前快照 → 采集完成回调里再提交」成立——采集必须先于
+ * 提交完成（否则查到的是改后状态），而采集走只读旁路的池线程+EDT 回调，无法在 EDT 上同步
+ * 等待（V2 红线：EDT 不许阻塞）。入参是 executeSql 的既有局部变量，语义逐字节不变。
+ */
+private fun SqlPreviewPanel.submitExecutionAfterSnapshotGate(
+    proj: com.intellij.openapi.project.Project,
+    sql: String,
+    rawSql: String,
+    isQuery: Boolean,
+    wholeScript: Boolean,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    forceChoose: Boolean,
+) {
     // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
     //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
     resultPanel.showLoading()

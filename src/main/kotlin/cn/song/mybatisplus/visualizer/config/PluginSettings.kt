@@ -792,6 +792,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * agent 侧来源判定也按业务帧对待（不再上顶到调用方）。CONFIG 热下发。空 = 未登记。
          */
         var sourceFrameBizJarPrefixes: String = "",
+
+        /**
+         * T-RollbackSnapshotPreExec：UPDATE/DELETE 执行前自动采集改前快照（**默认关**——
+         * 2026-11-11 用户定案）。开启后执行链在确认之后、提交之前经只读旁路把 WHERE 命中行
+         * 查回并落盘 `<项目根>/.sql-visualizer/snapshots/`（上限 500 行/超时 2s/保留 7 天/
+         * 200 条/总量 50MB，见 [cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotFileStore]）；
+         * 采集失败**不阻断执行**（fail-open）。关闭时零额外查询、零额外 IO，行为与关闭前逐字节一致。
+         */
+        var rollbackSnapshotBeforeExec: Boolean = false,
     )
 
     private var state = State()
