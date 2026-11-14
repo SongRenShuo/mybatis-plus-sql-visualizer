@@ -129,12 +129,12 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
-        <!-- T-RollbackSnapshotPreExec P0（V1 探针）：表格形态 diff 走自写 FrameDiffTool——
+        <!-- T-RollbackSnapshotPreExec P3：表格形态 diff 走自写 FrameDiffTool——
              262 的 DiffContent 无 getComponent()（classfile 实证），唯一公开的自定义视图入口是
-             FrameDiffTool$DiffViewer#getComponent()；平台把 EP 扩展排在内置 DiffTool 之前，
-             canShow 命中即被选中。探针三件套见 ui/diff/RollbackTableDiffProbeTool.kt，
-             P3 正式三件套将替换其内部渲染。 -->
-        <diff.DiffTool implementation="cn.song.mybatisplus.visualizer.ui.diff.RollbackTableDiffProbeTool"/>
+             FrameDiffTool$DiffViewer#getComponent()；243 实测 EP 工具不在内置清单最前（探针下标
+             8/13），选择正确性由「唯一 canShow 命中」保证。三件套见 ui/diff/RollbackTableDiff.kt
+             （P0 探针已正式化）。 -->
+        <diff.DiffTool implementation="cn.song.mybatisplus.visualizer.ui.diff.RollbackTableDiffTool"/>
         <!-- T-SettingsSearchA：插件设置项进入 IDE 自带设置搜索索引。
              平台索引有两个来源——插件 jar 内 search/searchableOptions.xml（构建期 fork IDE 生成，
              本仓 buildSearchableOptions=false 因 Windows 中文环境 locale 失败）与运行期
