@@ -56,6 +56,10 @@ object RollbackSnapshotCapture {
         )
         // 快照 SELECT 直接复用原 WHERE 文本——若 WHERE 里仍有未填值的参数标记，只读旁路无法执行，
         // 与其到库端报错不如在源头拒绝（计划 §3.3「填不全就拒绝并说明缺哪个参数」的落地形态）。
+        // 反向验证读数（2026-11-14）：本守卫短路成恒放行时 unfilledParameterMarkerRejected 与
+        // testSwitchOnUnfilledParameterSkipsCapture 恰 2 红，恢复后全绿；关键字判定（RED-PROBE-1）
+        // 无独立红面——snapshotSelectSql 只在 UPDATE/DELETE AST 分支产出，INSERT/SELECT 走不到
+        // Capturable 分支，属结构性双重守卫（探针读数已登记计划）。
         if (hasUnfilledParameterMarker(cleanedSql)) {
             return Plan.NotCapturable("SQL still contains unfilled ?/placeholder markers")
         }
