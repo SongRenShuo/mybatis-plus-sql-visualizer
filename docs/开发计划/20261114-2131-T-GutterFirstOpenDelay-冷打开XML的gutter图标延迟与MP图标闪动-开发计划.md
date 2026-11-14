@@ -98,4 +98,26 @@
 
 ## 八、实施记录
 
-（待实施方回填：本仓纪律「计划 §实施记录回写你工作树里的副本」）
+### F1 实施记录（主分支）
+
+实施：2026-11-14，主分支 master 工作树直改，提交 `d3eb65079`（fix(gutter)），docs 回填另笔。
+
+**改动点**
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/MapperNavigationLineMarkerProviders.kt`——`MapperXmlToJavaLineMarkerProvider.createMarker` 判定改四段（①成功入缓存 ②失败+缓存命中仍产出 ③失败+dumb 乐观产出（F1-b）④失败+其余不产出），F1-a 正缓存＝companion `resolvedStatementKeys`（ConcurrentHashMap.newKeySet，键 `namespace#id`，会话级无失效，取舍写进类头注释）；F1-b dumb 判定走 `isDumbProvider` 测试缝（承 MbgExampleCallResolver 定例）；marker 构造抽 `buildStatementMarker` 消除双份；不 catch PCE。`MapperJavaToXmlLineMarkerProvider`（Java→XML 方向）本轮不动——横向审计：其依赖 `MapperXmlLocator.locate`，无「消失重现」实证面，且其 resolve 语义（定位不到就不出图标）与 XML 侧冷窗失败形态不同源，留观察。
+- `resolveInterfaceMethod` 本体未动（只读工具别处在用）。
+- 测试：`MapperNavigationLineMarkerProvidersTest` 加 F1 判定矩阵 4 例（setUp/tearDown 复位正缓存防跨用例污染）；新增 `MapperXmlSlowResolveFailGuardTest` 接线守卫 2 例（源码扫描钉「判定在 createMarker 解析失败分支上」，含修复前/先缓存后解析/无解析调用三种漂移自证）。
+
+**定向测试读数**（`./gradlew test --tests <两 FQCN> -Pkotlin.compiler.execution.strategy=in-process`，非全量）
+
+- `MapperNavigationLineMarkerProvidersTest`：tests=15 failures=0 errors=0（含 F1 矩阵 4 例：成功入缓存 / 失败+命中仍产出 / 失败+未命中不产出且不污染缓存 / dumb 乐观产出不入缓存）；
+- `MapperXmlSlowResolveFailGuardTest`：tests=2 failures=0 errors=0。
+
+**反向验证**（摘掉「失败但缓存命中仍产出」分支复跑，中间态未提交）
+
+- 第一读数（摘分支后）：17 例 **2 红**——`testF1ResolveFailureWithCacheHitStillProducesMarker` NoSuchElementException（`.single()` 空＝图标被摘形态，即缺陷本体复现）＋ `MapperXmlSlowResolveFailGuardTest` 接线守卫 AssertionError（wiring=false）；
+- 第二读数（Edit 恢复分支后复跑）：17 例 **0 红**，BUILD SUCCESSFUL。
+
+**实施期订正（计划未预见的夹具事实）**：BasePlatformTestCase 夹具方法体跑在读操作内，`DumbService.waitForSmartMode` 断言「Don't invoke waitForSmartMode from inside read action in dumb mode」——矩阵用例不能依赖夹具真实 dumb 态，已改走 `isDumbProvider` 测试缝（原设想 assertSmartMode 前置删除）。
+
+**无 CHANGELOG**（主控合并期补账，本刀不回填）。未碰 `update/update.json`，未 push。
