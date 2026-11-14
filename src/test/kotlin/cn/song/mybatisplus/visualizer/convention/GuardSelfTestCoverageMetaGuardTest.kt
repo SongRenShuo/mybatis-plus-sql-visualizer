@@ -1260,6 +1260,21 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
                     "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
             ),
+            // ---- T-GutterFirstOpenDelay F1：XML→Java 跳转图标「解析失败不摘图标」接线守卫（2026-11-14） ----
+            GuardEntry(
+                "ui/gutter/MapperXmlSlowResolveFailGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarker 配平方法体，判「解析失败分支上是否先查
+                    // 正缓存（resolvedStatementKeys）再 dumb 乐观产出」。自证语料同文件——
+                    // 「F1守卫自证_修复后形态放行修复前形态必红」以合成样本直接调用（放行/必红/
+                    // 先缓存后解析/空体四向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                ),
+                "T-GutterFirstOpenDelay F1 接线守卫：钉住 MapperXmlToJavaLineMarkerProvider.createMarker 的" +
+                    "「解析失败不摘图标」接线——失败分支必须先查正缓存再 dumb 乐观产出，防接线漂移（判定先于" +
+                    "解析/漏缓存查询）让冷打开 S2 图标闪没回归。CI fast(1) 红的教训：新增 Guard 族文件落在 " +
+                    "ui/gutter（非 convention）也会被文件名闭包扫到，漏登即红——按文件名含 Guard 全清单登记。",
+            ),
             GuardEntry(
                 "convention/ConsolePsiWarmGuardTest.kt",
                 listOf(
