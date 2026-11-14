@@ -230,7 +230,10 @@ intellijPlatform {
     // T-GifRecordSwitch：录制态用独立沙盒，避免与并行任务（record/ 脚本、其他会话）
     // 的沙盒/索引互锁；常规态用默认沙盒。
     if (gifRecord) {
-        sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
+        // T-SandboxReuse（20261114 提效调研 P0-1）：录制沙盒容器迁到插件仓之外的持久
+        // home（sql-visualizer-recording 仓 sandbox-live/），build/ 被 clean 不再带走
+        // idea.key、系统/工程索引、信任态与通知静音态（旧值 build/MPSV-GifFresh）。
+        sandboxContainer.fileValue(file("../sql-visualizer-recording/sandbox-live/MPSV-GifFresh"))
     }
     // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
     // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。
