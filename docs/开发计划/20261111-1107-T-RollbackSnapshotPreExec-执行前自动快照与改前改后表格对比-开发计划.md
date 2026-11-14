@@ -249,6 +249,20 @@ P0~P7 全部落地（用户令「实施开发计划的所有内容」+「全部�
 
 **二轮 run `43564945775`（SUCCESS，06:09→06:2x）**：**15 绿 + `publish` 跳过**（gate 模式不发布，符合预期）。逐腿：`build` / `test (fast)` 9m09s / `test (1)` 5m58s / `test (2)` 7m56s / `test (3)` 6m32s / `test (4)` 7m23s / `test (5)` 7m31s / `verifyplugin` / `verify`(243·253·263) / `marketplace`(243·253·263) / `gate` 全 success。
 
-**例数口径如实登记**：成功腿日志不打印 `N tests completed`（该行仅在失败时输出），故 **CI 侧例数不可读数**，本表只记结论与时长；**不引用首轮失败腿的例数**（fast 5020 例含 1 红、shard1 883 例、shard4 1018 例）当作通过读数——失败腿例数不覆盖全桶。本地定向例数见 §九 表（testFast ≈49 + 平台桶 23，均含对应守卫类回归）。
+**三轮 run `43568606287`（SUCCESS，补 `c6b222c9d` 后重派）**：15 绿 + `publish` 跳过。此轮同时验收「成功腿打印例数」补丁（见下），**全量例数首次可读**：
+
+| 腿 | 例数 | skipped | 类数 |
+|---|---|---|---|
+| `test (fast)` | 5020 | 9 | 426 |
+| `test (1)` | 883 | 0 | 97 |
+| `test (2)` | 903 | 0 | 99 |
+| `test (3)` | 969 | 2 | 97 |
+| `test (4)` | 1018 | 5 | 96 |
+| `test (5)` | 906 | 1 | 96 |
+| **合计** | **9699** | **17** | **911** |
+
+分片五腿合计 4679 例 / 485 类，fast 桶独立 5020 例 / 426 类（纯逻辑桶与分片不重叠）；`failures=0 errors=0` 全腿。
+
+**门禁例数读数的机制补丁（`c6b222c9d`）**：此前 Gradle 只在有失败时输出「N tests completed, M failed」，成功腿日志里没有任何例数——「静默跳过大半用例」与「真全绿」在日志上不可区分（二轮 15 腿全绿却读不出一个数，仓内历史读数却都是 `8092/0/0/9` 形态）。现在 `tasks.withType<Test>()` 收尾打印一行 `MPV-TEST-COUNT task=… tests=… skipped=… failures=… errors=… suites=…`：戳落 `temporaryDir`（不写 `reports/`，那是 `@OutputDirectory`，写进去会毁 up-to-date 让本地测试每次重跑）、只计 `mtime ≥ 戳` 的 XML 防跨轮混计、失败腿不执行 `doLast`（Gradle 自带失败汇总行互补）。首验 `tests=0` 的定因已记入代码注释：JUnit XML 首行是 `<?xml?>` 声明、`<testsuite>` 在第二行，必须读前 5 行。
 
 **not run 复核**：`runIde` 真机全链仍未跑（V1 diff 窗口渲染、V9 JBR 内 javac 真值、V10 插件 classloader 边界、脚本管理对话框/变量表/日志区 GUI、日志面板采集提示）——交用户按 §八 11 步验收。
