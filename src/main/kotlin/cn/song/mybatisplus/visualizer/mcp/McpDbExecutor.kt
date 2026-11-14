@@ -72,6 +72,46 @@ internal fun <T> withDbBlockingContext(block: () -> T): T {
 }
 
 /**
+ * T-SAF-03（mcp-select-guard.client-side-only-readonly-gap，D3=A fail-closed）：
+ * 连接层只读强制（顶层函数，测试缝——与 [drainWarnings] 同款理由：裸 JUnit 不触
+ * [McpDbExecutor] 的 Logger 初始化）。
+ *
+ * 对 [remoteConnection] 调 `setReadOnly(true)`：
+ *  - 解析缝（[resolver]）返回 null（平台签名漂移/裁剪发行版）→ 结构化错误拒绝；
+ *  - 调用抛异常（驱动不支持/连接已关等，[java.lang.reflect.InvocationTargetException] 解包）→
+ *    结构化错误拒绝，失败原因进消息；
+ *  - **绝不降级为读写执行**——sqlv_explain 向 agent 宣称 strictly read-only，做不到就该拒绝。
+ *
+ * 失败以 [java.sql.SQLException]（消息带 [McpToolErrors.READ_ONLY_ENFORCEMENT_FAILED] 码）
+ * 冒泡：explain 适配层经 formatFailure 包为 DATASOURCE_UNREACHABLE，结构化码随消息透出
+ * （agent 可读）。
+ */
+internal fun enforceReadOnlyConnection(
+    remoteConnection: Any,
+    resolver: () -> java.lang.reflect.Method? = McpDbExecutor.setReadOnlyResolver,
+) {
+    val method = resolver()
+        ?: throw java.sql.SQLException(
+            McpToolErrors.code(
+                McpToolErrors.READ_ONLY_ENFORCEMENT_FAILED,
+                "connection-level read-only cannot be enforced (setReadOnly entry not resolvable); " +
+                    "refusing to execute (fail-closed).",
+            ),
+        )
+    runCatching { method.invoke(remoteConnection, true) }.getOrElse { e ->
+        val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        throw java.sql.SQLException(
+            McpToolErrors.code(
+                McpToolErrors.READ_ONLY_ENFORCEMENT_FAILED,
+                "connection-level read-only could not be enforced (setReadOnly failed: " +
+                    "${cause?.message ?: cause?.javaClass?.simpleName}); refusing to execute (fail-closed).",
+            ),
+            cause,
+        )
+    }
+}
+
+/**
  * T-McpToolset headless 执行通道（sqlv_explain 专用，反射隔离 DatabaseTools）。
  *
  * 为什么不复用 [cn.song.mybatisplus.visualizer.execute.SqlExecutor]：既有执行链是 UI 控制台
@@ -97,6 +137,21 @@ internal fun <T> withDbBlockingContext(block: () -> T): T {
 object McpDbExecutor {
 
     private val LOG = Logger.getInstance(McpDbExecutor::class.java)
+
+    /**
+     * T-SAF-03：`setReadOnly(Boolean)` 反射解析缝（默认从 DBN remote 镜像的声明接口/类解析；
+     * 测试注入以观察调用路径——DynamicInstallSupport.edtDispatcher 同款测试缝先例）。
+     * 返回 null = 平台入口不可解析（签名漂移/裁剪发行版），由 [enforceReadOnlyConnection] 拒绝执行。
+     */
+    @Volatile
+    internal var setReadOnlyResolver: () -> java.lang.reflect.Method? =
+        {
+            runCatching {
+                Class.forName(REMOTE_CONNECTION).getMethod("setReadOnly", Boolean::class.javaPrimitiveType)
+            }.recoverCatching {
+                Class.forName(CONNECTION).getMethod("setReadOnly", Boolean::class.javaPrimitiveType)
+            }.getOrNull()
+        }
 
     /** database 插件标记类（探测用，与 DatabaseSchemaResolver 同款）。 */
     private const val MANAGER_CLASS = "com.intellij.database.psi.DataSourceManager"
@@ -305,6 +360,11 @@ object McpDbExecutor {
             val connection = Class.forName(GUARDED_REF).getMethod("get").invoke(ref)
             val remoteConnection = findInterfaceMethod(connection, CONNECTION_CORE, CONNECTION, "getRemoteConnection")
                 .invoke(connection)
+            // T-SAF-03（mcp-select-guard.client-side-only-readonly-gap，D3=A fail-closed）：
+            // 连接层只读强制——setReadOnly(true) 入口缺失/驱动不支持/调用失败一律拒绝执行，
+            // 绝不降级为读写执行。executeQuery 通道与 channelNote 宽容通道（Oracle/SQL Server
+            // EXPLAIN 包装）同走此处；工具已向 agent 宣称 strictly read-only，做不到就该拒绝。
+            enforceReadOnlyConnection(remoteConnection)
             val statement = Class.forName(REMOTE_CONNECTION).getMethod("createStatement").invoke(remoteConnection)
             try {
                 // 超时护栏：驱动级建议值，设置 0=不限；设置失败不拦执行（护栏尽力而为语义）

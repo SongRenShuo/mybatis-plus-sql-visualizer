@@ -61,6 +61,38 @@ object SqlLogFileReader {
     internal const val MAX_REVISIONS = 2048
     private const val MAX_REVISION_TOTAL = 8 * 1024 * 1024
     private val ID_REGEX = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+    // T-SAF-23（history.reader.unbounded-line-buffering）：读侧资源上限。
+    // 写侧有 100MB rollThreshold，读侧曾无任何逐行/逐文件上限——被植入或超大的 .sql
+    // 历史文件在历史读取与 MCP 历史搜索期间无界缓冲（超限折叠曾只保护 revision 行）。
+
+    /** 非 revision 单行累积上限（字符）：超限折叠为 [OVERSIZE_LINE_PLACEHOLDER]。 */
+    internal const val MAX_LINE_CHARS = 1024 * 1024
+
+    /**
+     * 非 revision 超长行的折叠占位注释（SQL 块注释形态）：EntryBlockScanner 的两级头部判据
+     * （新版 `-- ... source: ... time: ...` / 旧版 `-- 日期`）都不命中，块连续性保持；
+     * 也不以 `-- ` 起结，不会被判为旧版头部劈块。
+     */
+    internal const val OVERSIZE_LINE_PLACEHOLDER = "/* sql-visualizer: 超长行已折叠（单行超 1MB 上限） */"
+
+    /** 单文件读取上限（字节）：对齐写侧 SqlLogAutoSaver.rollThresholdBytes（100MB），超限拒读并告警。 */
+    internal const val MAX_READ_FILE_BYTES = 100L * 1024 * 1024
+
+    /** T-SAF-23 测试缝：逐行/逐文件上限覆盖（null = 生产常量；测试用小上限避免大夹具）。 */
+    @Volatile internal var maxLineCharsForTest: Int? = null
+    @Volatile internal var maxReadFileBytesForTest: Long? = null
+
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlLogFileReader::class.java)
+
+    /** T-SAF-23：单文件读取闸门——超限 warn 拒读（readFromFile/forEachEntry/countInFile 统一口径）。 */
+    private fun overReadLimit(file: File): Boolean {
+        val limit = maxReadFileBytesForTest ?: MAX_READ_FILE_BYTES
+        val length = file.length()
+        if (length <= limit) return false
+        LOG.warn("SQL 历史读取：文件超过单文件读取上限（$length B > $limit B），拒绝读取 ${file.absolutePath}")
+        return true
+    }
     private data class Revision(val identity: String, val entry: LogSqlEntry)
 
     private class Revisions {
@@ -105,7 +137,10 @@ object SqlLogFileReader {
      *  T-HiddenBugPerfScan 券 D：逐字符 reader.read() 循环（100MB 文件 ≈ 1 亿次虚调用 +
      *  逐字符 append）改块级读——read(cbuf) 批量取块、块内扫行界、append(char[],off,len)
      *  批量拼接；修订折叠/行界/尾 CR 宽限语义与旧逐字符版一致（round-trip 与 O147 超限
-     *  折叠测试钉）。 */
+     *  折叠测试钉）。
+     *  T-SAF-23（合流裁决：织入券 D 块级实现）：非 revision 行同样有界——单行累积超
+     *  [MAX_LINE_CHARS]（或测试缝覆盖值）时折叠为 [OVERSIZE_LINE_PLACEHOLDER]（不判为头部，
+     *  块连续性保持），超长内容不再缓冲。 */
     private fun boundedLines(reader: java.io.BufferedReader): Sequence<String> = object : Sequence<String> {
         // T-HiddenBugPerfScan 券 D：手写 Iterator 而非 sequence{}——块级状态机局部状态较多，
         // sequence{} 编译出的协程状态机会触 kotlin/coroutines/jvm/internal/SpillingKt，
@@ -121,6 +156,9 @@ object SqlLogFileReader {
             var eof = false
             var nextLine: String? = null
             var exhausted = false
+            // T-SAF-23：出行折叠值——修订行超限产裸 REVISION_PREFIX，非修订行超限产占位注释
+            val maxLineChars = maxLineCharsForTest ?: MAX_LINE_CHARS
+            var placeholder = REVISION_PREFIX
 
             // 追加一段块内字符并做修订识别/超限折叠检查（与逐字符版同谓词、块粒度判定，
             // 产物一致：fold 后整行产裸前缀）。最后一个 CR 暂不计入逻辑长度：若随后 LF/EOF，
@@ -133,15 +171,20 @@ object SqlLogFileReader {
                     revisionChecked = true
                 }
                 val logicalLength = text.length - if (text.isNotEmpty() && text[text.length - 1] == '\r') 1 else 0
-                if (revision && logicalLength > MAX_REVISION_PAYLOAD + 150) { text.setLength(0); overLimit = true }
+                if (revision && logicalLength > MAX_REVISION_PAYLOAD + 150) {
+                    text.setLength(0); overLimit = true; placeholder = REVISION_PREFIX
+                } else if (!revision && logicalLength > maxLineChars) {
+                    text.setLength(0); overLimit = true; placeholder = OVERSIZE_LINE_PLACEHOLDER
+                }
             }
 
             // 出行折叠值：overLimit 产裸前缀，否则剥单个尾 CR（空行产空串，与逐字符版一致）
             fun lineValue(): String =
-                if (overLimit) REVISION_PREFIX else text.toString().removeSuffix("\r")
+                if (overLimit) placeholder else text.toString().removeSuffix("\r")
 
             fun resetLine() {
                 text.setLength(0); revision = false; revisionChecked = false; overLimit = false
+                placeholder = REVISION_PREFIX
             }
 
             /** EOF 冲刷：有残留才产出（原逐字符版 c == -1 且 text 空不产空行）。 */
@@ -215,6 +258,8 @@ object SqlLogFileReader {
 
     fun readFromFile(file: File): List<LogSqlEntry> {
         if (!file.exists()) return emptyList()
+        // T-SAF-23：单文件读取闸门（对齐写侧 100MB rollThreshold）——超限拒读（空列表），不缓冲
+        if (overReadLimit(file)) return emptyList()
         // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
         // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
         // T-SqlLogPerf：历史文件加载是 20261006 实测延迟大头嫌疑（8708 条/19MB 计 15~16.6s），阈值打点归因。
@@ -244,6 +289,8 @@ object SqlLogFileReader {
      */
     fun countInFile(file: File): Int {
         if (!file.exists()) return 0
+        // T-SAF-23：单文件读取闸门——超限计数 0 且不进缓存（超限文件被删减后按新长度正常计数）
+        if (overReadLimit(file)) return 0
         val key = file.absolutePath
         val lastModified = file.lastModified()
         val length = file.length()
@@ -316,6 +363,8 @@ object SqlLogFileReader {
      */
     fun forEachEntry(file: File, action: (LogSqlEntry) -> Boolean) {
         if (!file.exists()) return
+        // T-SAF-23：单文件读取闸门（MCP sqlv_history_search 走本入口）——超限零回调
+        if (overReadLimit(file)) return
         // T-SqlLogPerf：与 readFromFile 同款阈值打点（风暴期归因，常态零噪音）
         LogPerfProbe.measure("SqlLogFileReader.forEachEntry", { "${file.name} ${file.length()}B" }) {
             val revisions = revisionsIn(file)

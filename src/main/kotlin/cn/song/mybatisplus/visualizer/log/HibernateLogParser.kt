@@ -41,7 +41,7 @@ class HibernateLogParser(
      */
     private val settleMs: Long = DEFAULT_SETTLE_MS,
 
-    /** settle 判定的时钟（测试注入可控件；与 [LogThreadRouter] 共用同一时钟）。 */
+    /** settle/T-SAF-22 老化判定的时钟（测试注入可控件；与 [LogThreadRouter] 共用同一时钟）。 */
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -81,7 +81,10 @@ class HibernateLogParser(
         isCollecting = { it.collecting },
         isIdle = { !it.collecting && !it.inComment && it.pendingParams.isEmpty() && it.pendingShadow == null },
         routeNoTokenToRecent = true,
-        // 时钟与 [clock] 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
+        // T-SAF-22：挂起桶老化（与 MyBatisLogParser 同批接入）——静默超阈值的收集态桶
+        // 在容量压力下强制闭合产出后淘汰（collecting 态同样让 isIdle 恒假，#22 病灶的一半）
+        forceClose = { closePending(it) },
+        // 时钟与 [clock] 同源（flushSettled 静默判定与 T-SAF-22 老化判定一致性；测试注入可控件）
         clock = clock,
     )
 

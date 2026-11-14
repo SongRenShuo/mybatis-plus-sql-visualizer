@@ -222,6 +222,39 @@ class OgnlEvaluatorTest {
         assertTrue(OgnlEvaluator.parse("") is ParseResult.Err) // 空表达式无主
     }
 
+    // ------------------------------------------------------------------
+    // 异常封闭与递归深度守卫（T-SAF-19：Ognl.kt@parse-exception-confinement）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `超长整数面值_不抛异常按大整数解析`() {
+        // 修复前：Lexer.number() 的 raw.toLong() 对 20+ 位面值抛未捕获 NumberFormatException，
+        // 逃出 parse() 的 ParseResult.Err 契约直达调用方（XmlPreviewModel / MCP mapper-check）。
+        // 合流裁决（T-SecurityAuditFixes T-SAF-19 × T-HiddenBugPerfScan 券 K①）：异常封闭目标由
+        // BigDecimal 回落达成（不抛即无外逃），语义取真实 OGNL 的大整数形态（OgnlNumericBoundaryTest 口径），
+        // 不走 Err 拒绝
+        val r = OgnlEvaluator.parse("99999999999999999999")
+        assertTrue("超长面值应按大整数解析为 Ok：$r", r is ParseResult.Ok)
+    }
+
+    @Test
+    fun `超长整数面值_求值不抛且按大整数比较`() {
+        // 修复前：evaluate(text) 在 Throwable 守卫的 AST 求值器之外调用 parse()，NFE 直接外抛。
+        // 合流裁决同上：BigDecimal 回落保证不抛，比较语义按真实 OGNL 大整数（>1 判真）
+        val r = OgnlEvaluator.evaluate("99999999999999999999 > 1", emptyMap())
+        assertTrue("求值应得 Ok：$r", r is EvalResult.Ok)
+        assertTrue("99999999999999999999 > 1 应判真：$r", OgnlEvaluator.isTrue((r as EvalResult.Ok).value))
+    }
+
+    @Test
+    fun `深度嵌套括号_有界失败而非栈溢出`() {
+        // 修复前：50000 层括号驱动 parseOr..parsePrimary 递归下降 → StackOverflowError
+        // 逃出 Err 契约；修复后递归深度计数（上限 512）超限抛 OgnlParseException → Err
+        val expr = "(".repeat(50000) + "1" + ")".repeat(50000)
+        val r = OgnlEvaluator.parse(expr)
+        assertTrue("应有界失败返回 Err：$r", r is ParseResult.Err)
+    }
+
     @Test
     fun `根变量提取`() {
         assertEquals(setOf("_parameter"), OgnlEvaluator.rootVariables("_parameter.getTitle()"))

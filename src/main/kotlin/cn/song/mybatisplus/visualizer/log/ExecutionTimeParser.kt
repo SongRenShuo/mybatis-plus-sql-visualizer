@@ -32,8 +32,25 @@ object ExecutionTimeParser {
     /** MP ExecuteTime 格式：`ExecuteTime: 456ms` / `ExecuteTime=789`。 */
     private val MP_EXECUTE_TIME_REGEX = Regex("""(?i)\bExecuteTime\s*[:=]\s*(\d+)\s*ms?\b""")
 
-    /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
-    private val TRAILING_MS_REGEX = Regex("""[\]\s]\s*(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
+    /**
+     * 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。
+     *
+     * T-SAF-21：前导由**消费式**字符类 `[\]\s]` 改为**定宽 lookbehind** `(?<=[\]\s])`——
+     * 语义逐字等价（数字前紧邻字符是 `]` 或空白即命中；中间的空白段本就由「紧邻」覆盖），
+     * 但回溯形态从二次降为线性：旧形态下每个空白索引都是一次匹配尝试起点、`\s*(\d+)`
+     * 迫使每次尝试回溯整个空白段（O(段长²)）；lookbehind 形态下每个不命中索引 O(1) 失败
+     * （后看一位 + 数字判定），无界控制台长行的空白填充段不再产生平方级回溯。
+     * 分组仍是 1 = 数字（调用方只取 groupValues[1]，匹配区间前移无行为差）。
+     *
+     * T-SAF-21 二次修正：lookbehind 只消除「尝试起点」的消费成本，每个空白索引上
+     * `\s*(\d+)` 仍贪婪吞完整段再逐位回溯——长空白段（行尾无数字）仍是 O(段长²)。
+     * 故求值点加双闸：O(1) 尾部预检（trim 后不以 ms 结尾直接跳过）+ 行尾窗口
+     * （[TRAILING_WINDOW_CHARS]），窗口内匹配语义与全行逐字等价（见 parse 内注释）。
+     */
+    private val TRAILING_MS_REGEX = Regex("""(?<=[\]\s])(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
+
+    /** T-SAF-21 二次修正：行尾兜底求值的输入窗口（字符）；窗口内匹配与全行语义逐字等价。 */
+    private val TRAILING_WINDOW_CHARS = 128
 
     /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
     private val customPrefixRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
@@ -75,8 +92,14 @@ object ExecutionTimeParser {
             return it.groupValues[1].toLongOrNull()
         }
         // 6. 行尾纯数字 + ms 兜底
-        TRAILING_MS_REGEX.find(text)?.let {
-            return it.groupValues[1].toLongOrNull()
+        // T-SAF-21 二次修正：先 O(1) 尾部预检（trim 后不以 ms 结尾直接跳过本兜底——空白炸弹行
+        // 在此被拒绝），命中预检再把求值输入截到行尾窗口；窗口内正则语义与全行逐字等价
+        //（数字段 + 紧邻前导的长度远小于窗口；超窗的对抗性超长数字段按无耗时处理，属有界评估口径）。
+        val trimmedEnd = text.trimEnd()
+        if (trimmedEnd.endsWith("ms")) {
+            TRAILING_MS_REGEX.find(trimmedEnd.takeLast(TRAILING_WINDOW_CHARS))?.let {
+                return it.groupValues[1].toLongOrNull()
+            }
         }
         // 7. 自定义前缀（T-PerfSweep F2：正则按前缀缓存，捕捉热路径不再每条动态编译）
         if (!customPrefix.isNullOrBlank()) {

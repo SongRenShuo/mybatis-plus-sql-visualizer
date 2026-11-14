@@ -36,6 +36,7 @@ import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -135,7 +136,9 @@ internal fun buildStackDigestInlineLine(digest: String?): String {
         } else {
             excerpt
         }
-    return "   " + label + " " + summary
+    // T-SAF-10：栈帧文本是低信任数据（agent 上报/任意宿主进程），进 meta 行（<html> 包装态）
+    // 前转义。仅含 & < > " ' 的摘要在转义后显示不变，既有截断断言（纯字母数字 fixture）不受影响。
+    return "   " + label + " " + HtmlEscape.escape(summary)
 }
 
 // ------------------------------------------------------------------

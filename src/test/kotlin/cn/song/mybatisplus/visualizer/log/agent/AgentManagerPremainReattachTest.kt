@@ -131,7 +131,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         awaitTrue("暂停后 accept 线程应退出（socket 保留）") { channel.acceptThread?.isAlive == false }
 
         val parked = Socket("127.0.0.1", port)
-        writeFrame(parked, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        writeFrame(parked, AgentProtocol.CMD_HELLO, helloBody(selfPid))
         Thread.sleep(600)
         assertTrue("暂停期不得建会话", manager.sessions.isEmpty())
         assertTrue("暂停通道应仍在表内", manager.premainChannels.contains(channel))
@@ -163,7 +163,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
         // 模拟 agent 停泊重连（HELLO 已进内核缓冲区）
         val parked = Socket("127.0.0.1", port)
-        writeFrame(parked, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        writeFrame(parked, AgentProtocol.CMD_HELLO, helloBody(selfPid))
 
         // 重开增强（上升沿语义：开关与确认态恢复）→ pid 命中暂停表 → resume
         enableCapture()
@@ -307,6 +307,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
             p
         }
         manager.attachPorts[selfPid] = deadAttachPort
+        manager.attachTokens[selfPid] = p4Token
 
         assertTrue("P4 恢复应命中登记表", manager.resumeAttachPortIfHit(selfPid))
         assertTrue("恢复成功后登记条目应被消费", manager.attachPorts.isEmpty())
@@ -318,7 +319,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
         // 模拟 agent 的 SenderLoop 对原端口回连（重开后下一拍拨号即中）
         val redial = Socket("127.0.0.1", deadAttachPort)
-        writeFrame(redial, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        writeFrame(redial, AgentProtocol.CMD_HELLO, """{"pid":$selfPid,"token":"$p4Token"}""")
         awaitTrue("P4：re-bind 后 agent 回连未重建会话") { manager.sessions.size == 1 }
         awaitTrue("P4：重建会话后在线态未恢复") { manager.online }
         assertEquals(selfPid, manager.sessions[0].pid)
@@ -330,7 +331,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         enableCapture()
         assertTrue("第二循环应命中暂停表 resume", manager.resumePausedPremainChannelIfHit(selfPid))
         val redial2 = Socket("127.0.0.1", deadAttachPort)
-        writeFrame(redial2, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        writeFrame(redial2, AgentProtocol.CMD_HELLO, """{"pid":$selfPid,"token":"$p4Token"}""")
         awaitTrue("P4：第二循环未重建会话") { manager.sessions.size == 1 }
         redial.close()
         redial2.close()
@@ -401,7 +402,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         // 复刻挂死现场：claimed 暂停通道 + 一个永不退出的旧 accept 线程。
         // 注：线程体必须捕获 channel（非捕获 lambda 会被编译成 testXxx$lambda$N 合成方法，
         // JUnit3 反射把它当测试方法报「Test method isn't public」——下同，不再用裸 sleep 体）
-        val channel = PremainChannel(server.localPort, server, 0L).apply {
+        val channel = PremainChannel(server.localPort, server, 0L, p4Token).apply {
             claimed = true
             claimedAtMs = System.currentTimeMillis()
             pid = selfPid
@@ -440,7 +441,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     fun testP5_旧循环被新代取代_代际失主让位通道不收口() {
         enableCapture()
         val server = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
-        val channel = PremainChannel(server.localPort, server, 0L).apply {
+        val channel = PremainChannel(server.localPort, server, 0L, p4Token).apply {
             claimed = true
             claimedAtMs = System.currentTimeMillis()
             pid = selfPid
@@ -491,6 +492,9 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         awaitTrue("前置：通道 pid 未登记（分流判据依赖它）") { channel.pid == selfPid }
     }
 
+    /** T-SAF-02：P4 用例自持的通道令牌（attachPorts 直写登记时配套，模拟 loadAgent 下发的那一次）。 */
+    private val p4Token = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
     private fun portOf(vmOption: String): Int =
         Regex("port=(\\d+)").find(vmOption)?.groupValues?.get(1)?.toInt()
             ?: error("VM 选项里没有 port：$vmOption")
@@ -498,8 +502,18 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     /** 首次回连：建连 + HELLO（pid 由暂停判据的进程存活检查消费，须为测试 JVM 自身）。 */
     private fun connectAndClaim(port: Int, pid: Long): Socket {
         val socket = Socket("127.0.0.1", port)
-        writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        writeFrame(socket, AgentProtocol.CMD_HELLO, helloBody(pid, port))
         return socket
+    }
+
+    /**
+     * T-SAF-02：HELLO body 随通道令牌回带（正常 agent 路径）。[port] 定位通道取其令牌；
+     * P4（attach 端口 re-bind）路径的令牌在登记表里，用例自持（见 [p4Token]）。
+     */
+    private fun helloBody(pid: Long, port: Int = -1): String {
+        val token = if (port >= 0) manager.premainChannels.first { it.port == port }.channelToken
+        else manager.premainChannels[0].channelToken
+        return """{"pid":$pid,"token":"$token"}"""
     }
 
     private fun writeFrame(socket: Socket, cmd: Int, body: String) {

@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -824,9 +825,14 @@ internal fun SqlPreviewPanel.switchStmtType(kind: ConsumptionKind) {
 }
 
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
+    // T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）：meta 行的**数据位**——
+    // tableName（实体注解字面量）、XML statementId/parameterType（mapper XML，低信任）、
+    // 警示文本（解析/渲染错误合并）、调用栈摘要、perf 警告文案——全部先经 HtmlEscape.escape
+    // 再进 metaCoreText；metaPerfSegments 非空时可见行带 <html> 包装，未转义数据即活 markup，
+    // 且同文经 metaTooltipBase 到达 tooltip。标记包装（<font>/<br>）由下游拼装保持原样。
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
-        result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: $it") }
+        result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: ${HtmlEscape.escape(it)}") }
         // T-PagesHql：源语言非 SQL 时明示「已转换」（用户投诉的一半是「不知道插件做了什么」）
         if (result.sourceLanguage != SourceLanguage.SQL) {
             add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.sourceLanguage.name))
@@ -836,8 +842,8 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         result.decidingConsumption?.let { add(stmtTypeSourceText(it)) }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         result.xmlModel?.let { xml ->
-            add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")
-            xml.parameterType?.let { add("parameterType: $it") }
+            add("XML ${xml.kind.name.lowercase()}: ${HtmlEscape.escape(xml.statementId)}")
+            xml.parameterType?.let { add("parameterType: ${HtmlEscape.escape(it)}") }
         }
     }.joinToString("   ")
     // UI-001：告警唯一事实源分档——MyBatis XML 链维持「基线告警 + 本轮 xmlErrors」合并；
@@ -853,7 +859,8 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             if (result.xmlModel != null) xmlErrors else emptyList(),
         )
     }
-    val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ $it" else "   ⚠ $it" } ?: ""
+    // T-SAF-09/10：告警文本未转义即活 markup——ℹ/⚠ 前缀为包装非数据，数据段一律过 HtmlEscape
+    val warningLine = currentWarning?.let { if (currentWarningIsNote) "   ℹ ${HtmlEscape.escape(it)}" else "   ⚠ ${HtmlEscape.escape(it)}" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。
     // 文案组装抽为纯函数 [buildStackDigestInlineLine]（同文件顶层）——§3.3 验收项
@@ -1015,7 +1022,9 @@ internal fun SqlPreviewPanel.buildPerfSegments(result: PreviewResult): List<Meta
         val isError = warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN
         val prefix = if (isError) "⚠ " else "ℹ "
         MetaPerfSegment(
-            text = prefix + localizeWarning(warning),
+            // T-SAF-10：perf 警告文案含 messageArgs（低信任数据），进 <font color=...> markup
+            // 前转义（文案进可见行 <html> 包装与 tooltip）
+            text = prefix + HtmlEscape.escape(localizeWarning(warning)),
             // T-UN-13（T-UiNative）：HTML 段色写死 hex → namedColor 取主题色再注入（亮值不变，
             // HTML 结构与截断逻辑不动）
             color = MpvsUiColors.htmlHex(if (isError) MpvsUiColors.PERF_ERROR_TEXT else MpvsUiColors.PERF_INFO_TEXT),

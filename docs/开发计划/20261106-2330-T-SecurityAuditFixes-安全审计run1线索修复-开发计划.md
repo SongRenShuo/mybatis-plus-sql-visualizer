@@ -9,6 +9,68 @@
 
 ---
 
+## 实施记录（2026-11-07 回填，实施已完成）
+
+**分支与区间**：`t-security-audit-fixes`，实施区间 `7389cde46..e8d2a635d`（三车道 worktree 并行 + 记账代理账本闭环，未推送远端）。
+
+**决策定案**：D1=A（禁用内嵌原生 ▶/Ctrl+Enter）｜D2=**用户定案：凭据为测试服务器保留现状，T-SAF-01 全项取消**｜D3=A（只读失败即拒）｜D4=A（Central 置前 + verification 严格校验）｜D5=温和版（多来源信号延迟兜底桶配对）｜D6=A（manifest 并列 sha256 —— 本次未实施，登记 followup）。
+
+**批次完成状态**：
+
+| 批次 | 结果 |
+|---|---|
+| 0（T-SAF-01） | **取消**（用户豁免：测试服务器凭据保留现状） |
+| 1（复核波 R-01/R-02/R-03 + 新面快扫） | 全部「维持」；DevUpdateMode/PlatformEpDynamism 扫描 info 无发现 |
+| 2（高价值边界，9 工作项 10 线索） | 全部落地（车道 A/B/C 并行） |
+| 3（资源上限统一，7 工作项） | 全部落地（含车道分组遗漏的 T-SAF-18/19 由车道 D 补齐——记账代理核查拦截了虚构处置） |
+| 4（构建防线 T-SAF-14/15/16） | 全部落地（仓库序翻转 + 356 组件 verification-metadata + wrapper 官方锚 + pin 精确门禁） |
+
+**合并验证**：testFast 全绿（4528 测试，verification 严格模式下跑通）+ 平台 test 定向组绿（通道认证/Premain 回归/只读执行/UI 转义/项目级设置/zip 守卫/描述符解析/HTML 报告）。合并期修正 9 处（三车道交界编译问题、测试校准、BannedApiScan 豁免登记等，见 e8d2a635d 及各 fix(test) 提交）。
+
+**账本闭环**：`findings.json` 最终 **24 confirmed（已修复）+ 1 needs_validation（#1 凭据，所有者豁免）**，双验证器 PASS；记账提交 `a8236247a`（21 条首轮）+ `80e79f483`（补账 3 条）。CHANGELOG `[Unreleased]` Fixed 段回填 24 条。
+
+**遗留 followups**（登记于审计账本与车道报告，未阻塞收官）：共享骨架出口脱敏、BoundedRegex 步数级预算统一、审计清单外两处 escapeHtml 收敛、项目级设置 UI 内联校验反馈、所有者 runIde 端到端核对（T-SAF-02/03/04）、manifest 并列 sha256（D6）。
+
+### 附：遗留 followups 详解（2026-11-07 补记）
+
+以下内容为各车道实施报告与父会话收口时的原始 followups（此前未持久化，本段补记）；每条含现状/风险/建议口径。均非漏洞、不阻塞收官。
+
+**1. MCP 出口脱敏收进共享骨架**（源自 T-SAF-07）
+- 现状：`mcpMaskEnabled` 脱敏由各工具自行调用 `DisplayMasker.maskDisplay`（renderLogs 与 historySearch 各自一处）；共享输出骨架 `McpToolsetSupport.audit` 原样透传。
+- 风险：将来新增携带还原 SQL 的 MCP 工具若忘调脱敏，会重演「一条通道脱敏、另一条明文」的分歧。
+- 建议：脱敏下沉到共享骨架统一出口，新工具默认被覆盖。
+
+**2. BoundedRegex 步数级预算统一**（源自 T-SAF-24 + T-SAF-25）
+- 现状：两套正则求值预算并存——`util/BoundedRegex.kt`（字符读计数，200k 上限，引擎步数紧上界）与 HistorySearchService 内联时间预算（单条目 50ms 记 miss、整查 2s 失败，弱点是超时窗口内线程仍被占）。
+- 建议：统一到 BoundedRegex 计数式实现，两处及未来调用点走同一机制。
+
+**3. 审计清单外两处 escapeHtml 收敛**（车道 C 实施时发现）
+- 现状：收敛覆盖审计点名的六处变体 + HtmlReportFormatter；清单外还有 `ui/diagram/DiagramRenderer.kt:792`、`share/format/DiagnosticReportFormatter.kt:261` 两处同类逐点实现（未被判定为漏洞，仅未归共享工具）。
+- 建议：一并收敛到 `util/HtmlEscape.kt`，防漂移。
+
+**4. 项目级设置 UI 内联校验反馈**（源自 T-SAF-08）
+- 现状：非法 SQL 位形设置值在导入路径被整体拒绝、项目级读取路径 warn 后回退全局；但设置页 UI（PluginSettingsPanel*.kt）手输非法值时无内联提示，仅 idea.log 一条 warn——用户以为生效、实际被静默回退。
+- 建议：设置面板对相关字段加即时校验反馈（红字/禁用保存）。
+
+**5. 所有者 runIde 端到端核对**（T-SAF-02/03/04 的部署面，回归测试打在接缝层）
+- T-SAF-02：开增强捕获跑应用，确认 agent 经令牌认证正常建立会话（合法捕获链路未被令牌误伤）。
+- T-SAF-03：对真实数据源跑 sqlv_explain，确认 `setReadOnly(true)` 在平台 243/262 的 RemoteConnection 反射链上真的生效（接缝缺失/失败时应见结构化拒绝而非静默放行）。
+- T-SAF-04：内嵌预览面板原生 ▶/Ctrl+Enter 应已置灰，插件按钮链照常工作。
+- 另：T-SAF-06 插件侧已先行拒绝恶意条目名，平台解压器行为的取证仍可在 runIde 做一次；T-SAF-05 端到端更新流（UpdateFlowHeavyTest 模式）可顺手验。
+
+**6. manifest 并列 sha256（决策 D6，本次未实施）**
+- 更新链的最后一层纵深：发布侧（gitee-release.py / writeUpdateManifest）把产物 sha256 与 downloadUrl 一起写进 `update/update.json`，消费侧（PluginUpdateRunner）安装前比对。未做原因：`update/update.json` 按 AGENTS.md 仅用户本人可改、涉及发布流水线，需用户参与。
+
+**7. T-SAF-11 定案测试实测**（合并验证已跑，此处登记口径）：JSqlParser 5.3 对 CTE/派生表内 INTO 的解析形态由定案测试实测定案；解析失败形态守卫已 fail-closed，无行为缺口。
+
+**已知口径（非改进项）**：
+- T-SAF-02 发行批同步：旧 agent+新插件组合 HELLO 无令牌会被拒绝（协议 break 有意为之，随制品同版本分发）；`update/update.json` 仅用户本人可改。
+- T-SAF-12：纯 token-less 流首条错配信息论不可判定，自学校信号自第二条参数行起生效；彻底消除需上游（控制台桥）提供行级线程上下文，另行立项。
+- T-SAF-13：Windows 符号链接回归测试在无特权机器 skip，CI 应在可建符号链接的 runner 上跑真覆盖。
+- BoundedRegex 超预算 warn 为 once-per-JVM 全局；per-pattern attribution 有助诊断（未来增强）。
+
+---
+
 ## 一、线索总账与批次映射（25 条）
 
 优先级口径沿用审计报告 §4（所有者可行动性）。每条线索的完整源码轨迹、证据与验证计划**不在本文件重复**，以 `docs/安全审计/2026-11-06/NEEDS-VALIDATION.md` 对应章节为准；本表只登记指纹、修复工作项与批次。

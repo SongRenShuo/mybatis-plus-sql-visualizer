@@ -49,6 +49,9 @@ class SqlLogAutoSaver(
     private var currentResolvedName: String = ""  // 当前解析后的文件名（不含滚动序号）
     private var currentIndex: Int = 1  // 当前滚动序号（1=无后缀）
 
+    /** T-SAF-13：符号链接/非常规文件拒写时记录的解析名——同名不再逐条重试刷告警，换名后重置。 */
+    private var openRefusedForName: String? = null
+
     /** T-HistoryFileRetention：历史文件保留上限（按基名归并的组数）。<=0 = 全量保留。 */
     @Volatile
     private var maxFiles: Int = 0
@@ -378,6 +381,7 @@ class SqlLogAutoSaver(
         familyRegex = buildFamilyRegex(fileNamePattern)
         lastPruneAtMs = -1L
         currentResolvedName = ""
+        openRefusedForName = null
         currentIndex = 1
     }
 
@@ -409,12 +413,16 @@ class SqlLogAutoSaver(
     /** 写入前状态机：首写/文件名切换/滚动阈值检查与重开（须在 @Synchronized 内调用）。 */
     private fun prepareForEntry(entry: LogSqlEntry) {
         val resolved = resolveFileName()
-        if (writer == null || resolved != currentResolvedName) {
-            // 首次写入 / 文件名切换：重开文件，滚动序号复位
+        if (resolved != currentResolvedName) {
+            // 文件名切换：重开文件，滚动序号复位
             closeWriter()
+            openRefusedForName = null
             currentResolvedName = resolved
             currentIndex = 1
             openWriterForCurrent()
+        } else if (writer == null) {
+            // 首次写入或上次打开失败：重试打开（T-SAF-13：安全拒写按名记忆，同名不再逐条重试刷告警）
+            if (openRefusedForName != resolved) openWriterForCurrent()
         } else if ((currentFile?.length() ?: 0L) >= rollThresholdBytes) {
             // 单文件超限：滚动（xxx.sql → xxx.2.sql）
             closeWriter()
@@ -435,12 +443,33 @@ class SqlLogAutoSaver(
     /** 根据 currentResolvedName + currentIndex 打开文件。 */
     private fun openWriterForCurrent() {
         val file = File(currentFileName())
+        // T-SAF-13（history.autosave.append-open-symlink-follow，D 决策 2026-11-06）：
+        // 打开前以 NOFOLLOW 审查既有文件——与修订路径 fileKey（:98-102）同款判据
+        // （isRegularFile && !isSymbolicLink）。pattern 推导名在打开前被植入符号链接时，
+        // CREATE+APPEND 曾会跟随链接把头行 + restoredSql + Base64 pd 载荷追加到项目外目标；
+        // 现拒绝本次打开（告警并跳过本批写入，不丢其他条目），与修订路径的符号链接遏制对齐。
+        // T-SAF-13 修正：非法路径（Windows 非法字符等）在 toPath() 即抛 InvalidPathException
+        //（非 IOException 子类，外层 runCatching 曾未覆盖到这一步），与原「无效路径不抛异常」
+        // 口径对齐——按拒绝处理（warn + 跳过本批，openRefusedForName 备忘防刷屏）。
+        val regular = runCatching { isRegularFileNoFollow(file) }.getOrElse {
+            LOG.warn("自动保存历史 SQL：目标路径无法解析为安全路径，拒绝本批写入 ${file.absolutePath}", it)
+            false
+        }
+        if (!regular) {
+            LOG.warn("自动保存历史 SQL：目标文件非常规文件或为符号链接，拒绝本批写入 ${file.absolutePath}")
+            openRefusedForName = currentResolvedName
+            writer = null
+            currentFile = null
+            return
+        }
         runCatching {
             file.parentFile?.mkdirs()
-            // APPEND 模式：多次启动后历史内容追加而非覆盖
+            // APPEND 模式：多次启动后历史内容追加而非覆盖；
+            // NOFOLLOW_LINKS：审查与打开之间的 TOCTOU 窗口内被替换成符号链接时打开失败（fail-closed）
             writer = Files.newBufferedWriter(
                 file.toPath(), Charsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.APPEND
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS,
             )
             currentFile = file
         }.onFailure {
@@ -448,6 +477,22 @@ class SqlLogAutoSaver(
             writer = null
             currentFile = null
         }
+    }
+
+    /**
+     * T-SAF-13：NOFOLLOW 常规文件审查——文件不存在视为可打开（CREATE 语义）；
+     * 存在时必须同时满足 isRegularFile && !isSymbolicLink（与 [fileKey] 同款判据）。
+     */
+    private fun isRegularFileNoFollow(file: File): Boolean {
+        val path = file.toPath()
+        if (!Files.exists(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return true
+        return runCatching {
+            val attrs = Files.readAttributes(
+                path, java.nio.file.attribute.BasicFileAttributes::class.java,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS,
+            )
+            attrs.isRegularFile && !attrs.isSymbolicLink
+        }.getOrElse { false }
     }
 
     /** 当前应写入的完整文件名（含目录 + 滚动序号后缀）。 */

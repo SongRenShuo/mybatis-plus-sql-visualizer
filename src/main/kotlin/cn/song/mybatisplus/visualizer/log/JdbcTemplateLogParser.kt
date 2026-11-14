@@ -75,6 +75,8 @@ class JdbcTemplateLogParser(
         factory = { ThreadBucket() },
         isCollecting = { it.collecting },
         isIdle = { it.pendingSql == null && !it.collecting },
+        // T-SAF-22：老化淘汰前强制闭合（与 flushSettled 互补——老化兜底容量压力下的漏网挂起态）
+        forceClose = { closeBucketPending(it) },
         clock = clock,
     )
 

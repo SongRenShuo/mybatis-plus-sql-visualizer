@@ -1000,4 +1000,29 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
+    // ======================== T-SAF-10：快照查询行（label + tooltip）转义 ========================
+
+    /**
+     * T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）回归：snapshotSelectSql 源自
+     * 较低信任的捕获/解析文本（RollbackSqlGenerator :283 'SELECT * FROM $table WHERE ...'），
+     * assembleSnapshotSection 曾把截断后的 $shown 未转义插进 <html><code> 标签（:626），
+     * 并把原始 sql 直接挂 toolTipText（:627）——toolTipText 以 <html> 起结时被 Swing 按 HTML
+     * 渲染（内容/布局注入 + 潜在 <img src> 资源加载）。
+     *
+     * **修复前失败断言**：`快照行不得含未转义标记`——修复前载荷原样出现在 label 文本与
+     * tooltip 中。
+     */
+    fun testSnapshotSectionEscapesLowerTrustSql_TSAF10() {
+        val payload = "<html><img src=http://127.0.0.1:1/probe.png></html>"
+        val result = unableUpdateResult().copy(snapshotSelectSql = payload)
+        val dialog = newDialog(result, "UPDATE")
+        try {
+            val label = dialog.snapshotQueryLabelForTest()
+            assertFalse("快照行不得含未转义标记：${label.text}", label.text.contains("<img"))
+            val tooltip = label.toolTipText.orEmpty()
+            assertFalse("快照 tooltip 不得保留可渲染的 <html> 起结：$tooltip", tooltip.startsWith("<html"))
+        } finally {
+            dialog.doDispose()
+        }
+    }
 }

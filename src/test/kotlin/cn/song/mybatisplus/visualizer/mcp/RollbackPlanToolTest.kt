@@ -39,4 +39,20 @@ class RollbackPlanToolTest {
         val error = runCatching { SqlVisualizerRollbackPlanTool().rollbackPlan("", "") }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)
     }
+
+    // ------------------------------------------------------------------
+    // T-SAF-17（mcp-sqlv-text-tools-unbounded-sql-input）：输入长度上限
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `超长输入_结构化拒绝（先红）`() {
+        // PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH（20000）口径：改前无上限，超长 SQL
+        // 直通 RollbackSqlGenerator 解析链（先红：断言结构化拒绝失败）。
+        val big = "DELETE FROM t WHERE id IN (" + "1, ".repeat(11_000) + "1)"
+        val error = runCatching { SqlVisualizerRollbackPlanTool().rollbackPlan(big, "id") }.exceptionOrNull()
+        assertTrue("超长应抛 SqlvExpectedToolException：$error", error is SqlvExpectedToolException)
+        val message = (error as? SqlvExpectedToolException)?.message
+        assertTrue("错误应带 INVALID_ARGUMENT 码：$message", message.orEmpty().contains(McpToolErrors.INVALID_ARGUMENT))
+        assertTrue("错误应带长度上限语义：$message", message.orEmpty().contains("maximum length"))
+    }
 }

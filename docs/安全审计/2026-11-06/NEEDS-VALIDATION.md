@@ -2,6 +2,12 @@
 
 生成时间 2026-11-06T00:31:45.481Z，由 findings.json 派生（25 条记录，全部为 `needs_validation`，按「所有者可行动性」排序）。每条线索均有源码级轨迹与精确阻塞点，均不带严重级别。本次运行无法执行目标受控代码（审计主机无 OS 级沙箱），因此每条记录都需要一次有界本地检查与 / 或一次由所有者观察的部署检查来定案。
 
+## 2026-11-07 修复落地更新（T-SecurityAuditFixes 分支，账本闭环）
+
+修复批次落地后本文件对应的 `findings.json` 已更新（双验证器 PASS）：**24 条线索转 `confirmed`（已修复）**——lane_a（T-SAF-20/21/22/12/02）、lane_b（T-SAF-05/06/03/07/11/17/24）、lane_c（T-SAF-04/08/09/10/13/23/25）共 19 项 src/main 修复 + 构建防线 T-SAF-15/16（提交 965a15168）+ 车道 D 补齐 T-SAF-18/19（5dba1ac62/6c6fb091a、f07c7d8b7/dcf869d17，合并验证修正 e8d2a635d）+ 构建防线 T-SAF-14（b51f664af：mavenCentral 置前 + verification-metadata.xml 356 组件 sha256 严格校验），每条均以「先红复现测试在修复前转红 → 修复提交落地 → 回归通过」定案（T-SAF-14 为配置型控制，以 write-verification-metadata 实跑生成 + 严格模式 compileKotlin/testFast 全绿背书），并按 report-schema confirmed 分支补齐 intended_behavior / conditions / execution / remediation / severity / confidence。**唯一遗留 `needs_validation`：#1 凭据，为所有者明示豁免**（2026-11-06 定案：测试服务器口径，不轮换、不清理、不加守卫——豁免而非缩水）。
+
+以下正文保留审计原判轨迹（原始 blockers / validation_plan 与逐条记录），供审计追溯，不逐条重写；confirmed 记录的最终口径以 `findings.json` 为准。
+
 图例：**本** = 运行有界本地检查；**部** = 所有者观察部署事实。
 
 | # | 线索 | 边界 | 首步 |

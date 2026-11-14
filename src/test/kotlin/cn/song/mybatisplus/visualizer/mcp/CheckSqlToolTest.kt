@@ -59,4 +59,21 @@ class CheckSqlToolTest {
         assertFalse("`$$` 残留不进核查输出", output.contains("$$"))
         assertTrue(output, output.contains("DDL"))
     }
+
+    // ------------------------------------------------------------------
+    // T-SAF-17（mcp-sqlv-text-tools-unbounded-sql-input）：输入长度上限
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `超长输入_结构化拒绝（先红）`() {
+        // PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH（20000）口径：同级的 render-logs 通道
+        // 对同类解析 sink 强制 20k 上限，本工具改前无上限——超长输入直通语句拆分/解析/探测链
+        // （先红：断言结构化拒绝失败，实际返回正常输出或抛非结构化错误）。
+        val big = "SELECT * FROM t WHERE id IN (" + "1, ".repeat(11_000) + "1)"
+        val error = runCatching { SqlVisualizerCheckSqlTool().checkSql(big) }.exceptionOrNull()
+        assertTrue("超长应抛 SqlvExpectedToolException：$error", error is SqlvExpectedToolException)
+        val message = (error as? SqlvExpectedToolException)?.message
+        assertTrue("错误应带 INVALID_ARGUMENT 码：$message", message.orEmpty().contains(McpToolErrors.INVALID_ARGUMENT))
+        assertTrue("错误应带长度上限语义：$message", message.orEmpty().contains("maximum length"))
+    }
 }

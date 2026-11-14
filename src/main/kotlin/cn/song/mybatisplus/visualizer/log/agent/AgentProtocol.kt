@@ -63,9 +63,42 @@ object AgentProtocol {
      * T-StackHoverUi：追加 `stackFrames`（调用栈快照总帧数；旧 agent 的 AgentArgs.parse 容忍未知键）。
      * 缺省 24 与 PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES 同值
      * （协议层不反向依赖 config 包；生产调用方一律显式传设置值）。
+     *
+     * T-SAF-02：追加 `token`（通道令牌，[newChannelToken] 产物）——loopback 绑定不是对端认证，
+     * 本机任意进程都能连上协商端口；令牌经 agentArgs 下发（唯一出口是目标 JVM 的 agent 参数，
+     * 与端口同通道、同等可见性），agent 在 HELLO 帧回带，IDE 侧验令牌通过才提交会话。
+     * null 时省略键（既有调用方/测试的零兼容负担；生产链路一律非 null）。
      */
-    fun agentArgs(port: Int, logLevel: String = "warn", stackMaxFrames: Int = 24): String =
-        "port=$port;logLevel=$logLevel;stackFrames=$stackMaxFrames"
+    fun agentArgs(port: Int, logLevel: String = "warn", stackMaxFrames: Int = 24, channelToken: String? = null): String {
+        val base = "port=$port;logLevel=$logLevel;stackFrames=$stackMaxFrames"
+        return if (channelToken.isNullOrEmpty()) base else "$base;token=$channelToken"
+    }
+
+    /** 通道令牌随机源（T-SAF-02；SecureRandom，进程内复用）。 */
+    private val channelTokenRandom = java.security.SecureRandom()
+
+    /**
+     * T-SAF-02：生成通道令牌（128bit SecureRandom → 32 位 hex）。每通道（premain 协商 /
+     * attach 一次性 ServerSocket / 原端口 re-bind）各生成一次，绝不跨通道复用；
+     * hex 形态无需 JSON/参数转义，令牌值不落任何日志。
+     */
+    fun newChannelToken(): String {
+        val bytes = ByteArray(16)
+        channelTokenRandom.nextBytes(bytes)
+        val sb = StringBuilder(32)
+        for (b in bytes) {
+            sb.append("0123456789abcdef"[(b.toInt() shr 4) and 0x0f])
+            sb.append("0123456789abcdef"[b.toInt() and 0x0f])
+        }
+        return sb.toString()
+    }
+
+    /** HELLO 帧内令牌键的提取（T-SAF-02；agent 侧 SenderLoop.helloBody 的 `,"token":"<hex>"` 对应）。 */
+    internal val HELLO_TOKEN_REGEX = Regex("\"token\"\\s*:\\s*\"([0-9a-fA-F]+)\"")
+
+    /** 从 HELLO body 提取通道令牌（无该键/畸形返回 null——调用方按「无令牌」拒绝）。 */
+    internal fun parseHelloToken(helloBody: String): String? =
+        HELLO_TOKEN_REGEX.find(helloBody)?.groupValues?.get(1)
 
     /** CONFIG 帧 body：禁用/脱敏开关（agent 侧极简 contains 解析对应——键序固定）。 */
     fun configBody(disabled: Boolean, desensitize: Boolean): String =

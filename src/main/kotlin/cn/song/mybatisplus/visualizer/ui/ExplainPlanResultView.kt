@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
@@ -257,8 +258,11 @@ class ExplainPlanResultView(
         return lines
     }
 
-    private fun escapeHtml(text: String): String =
-        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    /**
+     * HTML 转义（T-SAF-10：收敛到共享 [HtmlEscape]，本类不再持有本地变体——
+     * 本地实现曾缺 `'`/`"` 转义）。
+     */
+    private fun escapeHtml(text: String): String = HtmlEscape.escape(text)
 
     // ---------- 测试探针（internal，同 SqlResultPanel.currentErrorForTest 惯例） ----------
 

@@ -237,50 +237,46 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
             return
         }
 
-        // 4.3.1 M36.5.4：编辑器块补 DataProvider——原生头部工具栏动作（▶执行等）经
-        // JdbcConsole.findConsole(event) 解析控制台，仅两条路：PlatformCoreDataKeys.FILE_EDITOR
-        // （嵌入面板无 FileEditor）或 SessionClientHolder.CLIENT_KEY（组件 DataProvider 链）——
-        // 嵌入面板两者皆缺 → ▶执行按钮恒禁用（沙盒实测，QueryActionBase.update 需
-        // EDITOR + console）。包一层 DataProvider 直供 CLIENT_KEY=console + EDITOR=editor，
-        // 工具栏动作数据上下文与原生工具窗口等效。
-        val clientKeyName: String? = runCatching {
-            (Class.forName("com.intellij.database.console.client.SessionClientHolder")
-                .getField("CLIENT_KEY").get(null)
-                    as com.intellij.openapi.actionSystem.DataKey<*>).name
-        }.getOrNull()
-        val consoleForData = console
-        val editorForData = editor
-        // M36.5.7：补 PSI_FILE/VIRTUAL_FILE——▶ 启用链 isApplicable →
-        // JdbcConsoleProvider.isSqlAtPlace(psiFile, editor) 需要 PSI_FILE
-        // （javap 实证）；嵌入面板无 FileEditor/平台 Provider 链，须直供。
+        // 4.3.1 M36.5.4 + **T-SAF-04 安全决策（D1=A，2026-11-06）**：编辑器块保留 DataProvider，
+        // 但**不再直供 EDITOR 与 DBN SessionClientHolder.CLIENT_KEY**。历史背景：原生头部
+        // 工具栏动作（▶执行等）经 JdbcConsole.findConsole(event) 解析控制台（仅
+        // PlatformCoreDataKeys.FILE_EDITOR 或 SessionClientHolder.CLIENT_KEY 两条路，嵌入面板
+        // 皆缺 → ▶ 恒禁用，沙盒实测 QueryActionBase.update 需 EDITOR + console）；M36.5.4 曾
+        // 为恢复 ▶ 便利功能直供 CLIENT_KEY=console + EDITOR=editor。但原生 ▶ / 控制台
+        // Ctrl+Enter 提交控制台文档**不经插件的执行授权链**（SqlTypeClassifier DML 确认、
+        // ${}-raw/未知参数确认、ExecutionDialectGate.allowDialectGate——它们只挂在插件按钮链
+        // SqlPreviewPanel.executeSql 上），而文档文本源自捕获的控制台/日志输出（低信任主体）
+        // ——同一控制台上两个视觉相邻的执行功能守卫集不同（同级控制等价性失败）。
+        // **决策**：禁用是最小可靠修复——移除 CLIENT_KEY/EDITOR 注入使原生 ▶/Ctrl+Enter 在
+        // 内嵌面板不可解析控制台（动作恒禁用），执行只留插件按钮全门禁链；原生入口是便利
+        // 功能，失去后插件按钮仍在。PROJECT/VIRTUAL_FILE/PSI_FILE 供给保留（复制/导航等
+        // 非执行 affordance 的平台能力仍需）。见 EmbeddedNativeExecSourceScanTest 入口点扫描。
+        // M36.5.7：PSI_FILE/VIRTUAL_FILE 直供——嵌入面板无 FileEditor/平台 Provider 链。
         // PSI 预解析包 ReadAction（DataProvider.getData 可能在 BGT 动作更新线程调用）。
         val vfForData = vf
         // M36.5.14：psiForData 不再是固定快照——文件内容每次预览都会更新（setText/
         // setBinaryContent），PSI 随之重建，prepare 时预解析的 PsiFile 会 **isValid=false**，
-        // isSqlAtPlace(invalidPsi) 恒 false → 原生 ▶ 恒灰（12:29:49 探针 isSqlAtPlace=false
-        // 实证）。改为 lazy 取值时**失效检测 + 实时重解析**（lazy 回调在平台 read action 中）。
+        // isSqlAtPlace(invalidPsi) 恒 false（原生 ▶ 已按 T-SAF-04 禁用，本 lazy 供给服务
+        // 其余平台能力）。改为 lazy 取值时**失效检测 + 实时重解析**（lazy 回调在平台 read action 中）。
         var psiForData: PsiFile? = runCatching {
             @Suppress("DEPRECATION")
             ReadAction.compute<PsiFile, Throwable> {
                 PsiManager.getInstance(project).findFile(vf)
             }
         }.getOrNull()
-        // M36.5.9：改实现 **UiDataProvider**（legacy DataProvider 在 2024.3 被 DataValidators
+        // M36.5.9：实现 **UiDataProvider**（legacy DataProvider 在 2024.3 被 DataValidators
         // 拒绝 PSI——PluginException "PSI element ... provided on EDT ... Use DataSink.lazy"，
-        // 用户堆栈实证，validOrNull 返回 null → isApplicable 拿到 null → ▶ 恒灰）。
-        // PSI_FILE 经 DataSink.lazy 异步提供（平台在 read action 中取值）；CLIENT_KEY 反射
-        // 取 DataKey 后 set（值非 PSI 可同步）。
+        // 用户堆栈实证）。PSI_FILE 经 DataSink.lazy 异步提供（平台在 read action 中取值）。
+        // T-SAF-04：**刻意不 set** CommonDataKeys.EDITOR 与 SessionClientHolder.CLIENT_KEY——
+        // 二者是原生执行动作解析控制台的必要数据，缺失即原生 ▶/Ctrl+Enter 恒禁用。
         val editorComponent: javax.swing.JComponent =
             object : com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>(
                 java.awt.BorderLayout(),
             ), com.intellij.openapi.actionSystem.UiDataProvider {
                 override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
-                    // M36.5.15：补 PROJECT——原生动作（含 ▶ 执行）的 update 普遍依赖
-                    // CommonDataKeys.PROJECT，嵌入面板的 DataProvider 链缺失时 AnActionEvent
-                    // .project=null → 动作禁用（▶ 灰的最后一环：PSI_FILE/isSqlAtPlace 已
-                    // 12:42 版本修复为 true，唯 PROJECT 未直供）
+                    // M36.5.15：补 PROJECT——原生动作（复制/导航等非执行 affordance）的 update
+                    // 普遍依赖 CommonDataKeys.PROJECT
                     sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT, project)
-                    sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR, editorForData)
                     sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE, vfForData)
                     // M36.5.14：PSI 失效检测 + 实时重解析（快照失效是 ▶ 恒灰根因）
                     sink.lazy(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE) {
@@ -290,15 +286,6 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                                 PsiManager.getInstance(project).findFile(vfForData).also { psiForData = it }
                             }
                         }.getOrNull()
-                    }
-                    if (clientKeyName != null) {
-                        @Suppress("UNCHECKED_CAST")
-                        sink.set(
-                            Class.forName("com.intellij.database.console.client.SessionClientHolder")
-                                .getField("CLIENT_KEY").get(null)
-                                    as com.intellij.openapi.actionSystem.DataKey<Any>,
-                            consoleForData,
-                        )
                     }
                 }
             }.apply {
@@ -394,10 +381,13 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         }
 
         // 4.6 内嵌（M36.5.6：准备阶段**只嵌编辑器块**——"Console output" 空占位不再预嵌；
-        // 结果区由 ContentManager 监听换入：任何执行路径（原生 ▶ / 控制台 Ctrl+Enter /
-        // 插件按钮）产生结果内容（contentAdded）即换入完整 SplitPane——三路径全覆盖、
-        // 以真实结果出现为准。准备+执行全链仍直接嵌完整 SplitPane（执行后立即有结果可看）。
-        // 塌缩防护不变：4.3 首选高度兜底 + embedConsole 分隔保险。
+        // 结果区由 ContentManager 监听换入：任何执行路径产生结果内容（contentAdded）即换入
+        // 完整 SplitPane——以真实结果出现为准。执行路径现状（T-SAF-04 安全决策 D1=A，
+        // 2026-11-06）：原生 ▶ / 控制台 Ctrl+Enter 已随 UiDataProvider 的 CLIENT_KEY/EDITOR
+        // 注入移除而恒禁用（不经插件执行授权链的原生入口刻意关闭，见 4.3.1 注释），
+        // 内嵌面板只留**插件按钮全门禁链**一条执行路径；结果换入钩子仍对任何来源的结果
+        // 内容生效（含 DBN 侧自行产生的展示）。准备+执行全链仍直接嵌完整 SplitPane
+        // （执行后立即有结果可看）。塌缩防护不变：4.3 首选高度兜底 + embedConsole 分隔保险。
         // M36.5.8：pendingOnConsole 覆盖全路径——执行后结果区组件会被 RunnerLayoutUi 重建，
         // 旧引用显示停留在上一轮（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）；
         // startResultTabRetry 找到结果 Tab 后重取组件换入（refreshResultsComponent）。

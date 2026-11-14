@@ -246,6 +246,29 @@
       "Jar 任务通过 outputs.upToDateWhen{false}（build.gradle.kts:259-265）强制注入 MPV-Build 时间戳，使 release zip 不可复现；可复现构建会使 release 脚本中的 sha256 校验成为更强的证据。",
       "不存在 secret 扫描（gitleaks 等）工作流；.gitignore 对 gitee-token.*、.local/*、*.token、.secrets/ 的覆盖是正确的，且 git 历史中没有出现 token 文件，因此这仅是加固。",
       "CI 测试任务（nightly-full.yml:347、:436，https://github.com/SongRenShuo/mybatis-plus-sql-visualizer-demo）中克隆默认分支头部的 demo 仓库是一个可变、未绑定的测试输入；它仅到达测试执行环节，不会进入交付产物。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-14",
+        "commits": [
+          "b51f664af"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-15",
+        "commits": [
+          "965a15168"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-16",
+        "commits": [
+          "965a15168"
+        ]
+      }
     ]
   },
   {
@@ -482,6 +505,13 @@
       "dev-support/mirror-releases-to-github.py:82 将 Gitee 个人访问令牌作为 URL 查询参数（access_token=）发送，可能泄露到代理/HTTP 日志中；同一脚本已对 GitHub 使用 Authorization Bearer。",
       "AgentManager.extractPremainAgentJar 在插件临时目录中仅做长度检查后就复用已存在的 CRC32 命名 jar；在复用前验证内容哈希（其他位置已在使用 SHA-256）可消除同主体预置攻击。",
       "database-lab README/compose 记录了实验密码（p05pass、P05pass!strong、SYSDBA）——对于用户自建的本地容器可以接受，但 README 可明确声明这些密码不得用于任何主机可访问的实例。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "豁免",
+        "fix": "T-SAF-01",
+        "commits": []
+      }
     ]
   },
   {
@@ -674,6 +704,16 @@
       "DatabaseConsoleLauncher 将待执行的 SQL（可能包含字面量参数值）写入共享临时目录中的临时文件 'mpsql-exec-*.sql'；考虑限制权限或在控制台关闭时清理。",
       "HtmlReportFormatter 硬编码了一个与 DiagnosticReportFormatter 完全相同的 escapeHtml 变体；将两者合并到一个转义辅助方法可防止该候选项所利用的分歧。",
       "ACP registrar 和 ShareContentProjection 已验证为可靠：仅使用固定反射目标，且共享投影是严格的、有损的净化器，采用失败关闭的省略策略。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-09",
+        "commits": [
+          "7a56f934f",
+          "d3e7ebd1b"
+        ]
+      }
     ]
   },
   {
@@ -831,6 +871,24 @@
       "DynamicTableNameProcessor.regexCache 是一个无界、未同步的 HashMap，在渲染线程与 PluginCacheManager.clearCache 之间共享——应使用 ConcurrentHashMap 并限制缓存模式数量。",
       "tenantColumnName/tablePrefix/tableSuffix 和 TableNameRule.replacement 是落在标识符位置的纯自由文本设置；在设置字段层面使用标识符形状白名单（如 ^[A-Za-z_][A-Za-z0-9_$]*$）可强制句法位置不变量，而无需触及渲染器的透传设计。",
       "dataPermissionMockCondition 按设计为原始文本（文档说明其为 WHERE 片段，DataPermissionPlaceholder.kt:40）；长度上限以及在包含 ';'、'--' 或 '/*' 时发出警告可限制静默逃逸尝试，而不会移除该功能。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-08",
+        "commits": [
+          "ee31117f9",
+          "586d5d40"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-25",
+        "commits": [
+          "9c122fe68",
+          "99ac9a88f"
+        ]
+      }
     ]
   },
   {
@@ -1052,6 +1110,16 @@
       "ExecFileBinding.resolveSharedConsoleReuse 的传统回退方案在无法解析 UUID 身份时使用显示名相等性，两个同名数据源即可满足；DataSourceSelector.realignExecBind 在与原生固定值不同时会静默地将平台按文件固定值重写为内存/学习目标。",
       "MysqlClientGSuffix 在确认对话框（显示原文）与提交（submitText）之间剥离尾部的 \\G——按设计的双状态分离，行锚定且字符串字面量安全，但这是刻意的显示/执行文本差异。",
       "SqlExecutor.executionAttemptForTest 是一个仅测试用的接缝，设置后会使所有执行变为空操作；已验证不存在生产环境设置器（仅在 src/test 中），但添加一条防御性断言——在单元测试模式之外它应为 null——可加固入口点。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-04",
+        "commits": [
+          "1ba06bf43",
+          "10e26eeba"
+        ]
+      }
     ]
   },
   {
@@ -1206,6 +1274,24 @@
       "EntrySourceMatcher.normalize（EntrySourceMatcher.kt:52-53、71-72）不会折叠 '..'；SourcePathResolver.resolveVirtualFile 拼接 root + rel，因此被植入的历史头可以将跳转源码指向项目根目录之外——应在 findFileByPath 之前折叠或拒绝 '..'。",
       "历史 pd 载荷的 'pv'/'s' 键允许被植入的历史文件伪造 captureProvenance/source（SqlLogParamCodec.kt:166-167、234-239）；考虑将来源绑定到 o147-id 写入实例，而不是从可重复读取的文件内容中接受它。",
       "readFromFile 在解析遍之前执行第二次完整遍历来处理修订（revisionsIn，SqlLogFileReader.kt:120-122）——虽有界但在大文件上使 IO 翻倍；单遍设计也便于添加每行限制。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-23",
+        "commits": [
+          "3d8150c55",
+          "6f778d74c"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-13",
+        "commits": [
+          "d88923012",
+          "d4a31a032"
+        ]
+      }
     ]
   },
   {
@@ -1392,6 +1478,16 @@
       "MyBatisLogParser 分支 3（仅 'Parameters:' 前缀、等待 SQL 时）在未调用 closePending 的情况下放弃等待，使之前的 pendingSql 保持开放，成为后续裸行的延续目标；looksLikeLogLine/外来语句守卫限制了内容，但显式关闭可收紧状态机。",
       "SqlLogEntryBuffer 的 200 条目上限限定了面板内存，但 ConsoleReplayGuard 水印状态和每控制台 BridgeLineContexts 会持续整个控制台生命周期；reset() 存在，但仅连接到面板清除路径，而非控制台内容移除。",
       "用户输入的正则搜索（HISTORY_REGEX_PREFIX）被编译并对条目文本运行；此处的灾难性回溯是自伤性的同主体输入（HistoryRegexMemo 仅记忆编译结果），无发现。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-12",
+        "commits": [
+          "35477751f",
+          "4707e1d87"
+        ]
+      }
     ]
   },
   {
@@ -1767,6 +1863,32 @@
       "MyBatisLogParser 分支 3（仅 'Parameters:' 前缀、等待 SQL 时）在未调用 closePending 的情况下放弃等待，使之前的 pendingSql 保持开放，成为后续裸行的延续目标；looksLikeLogLine/外来语句守卫限制了内容，但显式关闭可收紧状态机。",
       "SqlLogEntryBuffer 的 200 条目上限限定了面板内存，但 ConsoleReplayGuard 水印状态和每控制台 BridgeLineContexts 会持续整个控制台生命周期；reset() 存在，但仅连接到面板清除路径，而非控制台内容移除。",
       "用户输入的正则搜索（HISTORY_REGEX_PREFIX）被编译并对条目文本运行；此处的灾难性回溯是自伤性的同主体输入（HistoryRegexMemo 仅记忆编译结果），无发现。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-20",
+        "commits": [
+          "a3a9ef9cb",
+          "9cf2425cd"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-21",
+        "commits": [
+          "302d41947",
+          "fbdd4f997"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-22",
+        "commits": [
+          "da90431c3",
+          "9069bad33"
+        ]
+      }
     ]
   },
   {
@@ -1922,6 +2044,16 @@
       "EntrySourceMatcher.normalize（EntrySourceMatcher.kt:52-53、71-72）不会折叠 '..'；SourcePathResolver.resolveVirtualFile 拼接 root + rel，因此被植入的历史头可以将跳转源码指向项目根目录之外——应在 findFileByPath 之前折叠或拒绝 '..'。",
       "历史 pd 载荷的 'pv'/'s' 键允许被植入的历史文件伪造 captureProvenance/source（SqlLogParamCodec.kt:166-167、234-239）；考虑将来源绑定到 o147-id 写入实例，而不是从可重复读取的文件内容中接受它。",
       "readFromFile 在解析遍之前执行第二次完整遍历来处理修订（revisionsIn，SqlLogFileReader.kt:120-122）——虽有界但在大文件上使 IO 翻倍；单遍设计也便于添加每行限制。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-23",
+        "commits": [
+          "3d8150c55",
+          "6f778d74c"
+        ]
+      }
     ]
   },
   {
@@ -2088,6 +2220,16 @@
       "resumeAttachPortIfHit 使用 SO_REUSEADDR 重新绑定记录的端口（AgentManager.kt:1577-1581），但未将首个 HELLO 的 pid 与记录的 pid 进行验证——占用该端口的 squatters 会收到 CONFIG 帧，并静默地将恢复降级为 loadAgent 路径；在服务前验证所声明的 pid 可将重绑定恢复绑定到通道身份。",
       "PremainTaskScope 仅对外部系统配置排除 test/IDE fork 任务（PremainTaskScope.kt:94-110）；attach 路径（processStarted）仍将 test fork JVM 视为 attach 候选——这是一个已登记的同主体残留（RunConfigurationProcessListener.kt:78-79），如果收紧为'代理仅属于用户应用'则值得关闭。",
       "AgentEvent 的 sourceFile 被原样写入自动保存头（SqlLogAutoSaver.kt:488-490），且规范化路径解析未显式拒绝 '..' 片段（EntrySourceMatcher.kt:71-72、:94-114）；从头字段中剥离控制字符/换行并在 SourcePathResolver 中拒绝 '..' 片段，可使两个汇聚点在通道修复之外仍具备纵深防御能力。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-02",
+        "commits": [
+          "5ac6fdb4f",
+          "0495ade42"
+        ]
+      }
     ]
   },
   {
@@ -2242,6 +2384,16 @@
       "resumeAttachPortIfHit 使用 SO_REUSEADDR 重新绑定记录的端口（AgentManager.kt:1577-1581），但未将首个 HELLO 的 pid 与记录的 pid 进行验证——占用该端口的 squatters 会收到 CONFIG 帧，并静默地将恢复降级为 loadAgent 路径；在服务前验证所声明的 pid 可将重绑定恢复绑定到通道身份。",
       "PremainTaskScope 仅对外部系统配置排除 test/IDE fork 任务（PremainTaskScope.kt:94-110）；attach 路径（processStarted）仍将 test fork JVM 视为 attach 候选——这是一个已登记的同主体残留（RunConfigurationProcessListener.kt:78-79），如果收紧为'代理仅属于用户应用'则值得关闭。",
       "AgentEvent 的 sourceFile 被原样写入自动保存头（SqlLogAutoSaver.kt:488-490），且规范化路径解析未显式拒绝 '..' 片段（EntrySourceMatcher.kt:71-72、:94-114）；从头字段中剥离控制字符/换行并在 SourcePathResolver 中拒绝 '..' 片段，可使两个汇聚点在通道修复之外仍具备纵深防御能力。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-02",
+        "commits": [
+          "5ac6fdb4f",
+          "0495ade42"
+        ]
+      }
     ]
   },
   {
@@ -2565,6 +2717,16 @@
       "resumeAttachPortIfHit 使用 SO_REUSEADDR 重新绑定记录的端口（AgentManager.kt:1577-1581），但未将首个 HELLO 的 pid 与记录的 pid 进行验证——占用该端口的 squatters 会收到 CONFIG 帧，并静默地将恢复降级为 loadAgent 路径；在服务前验证所声明的 pid 可将重绑定恢复绑定到通道身份。",
       "PremainTaskScope 仅对外部系统配置排除 test/IDE fork 任务（PremainTaskScope.kt:94-110）；attach 路径（processStarted）仍将 test fork JVM 视为 attach 候选——这是一个已登记的同主体残留（RunConfigurationProcessListener.kt:78-79），如果收紧为'代理仅属于用户应用'则值得关闭。",
       "AgentEvent 的 sourceFile 被原样写入自动保存头（SqlLogAutoSaver.kt:488-490），且规范化路径解析未显式拒绝 '..' 片段（EntrySourceMatcher.kt:71-72、:94-114）；从头字段中剥离控制字符/换行并在 SourcePathResolver 中拒绝 '..' 片段，可使两个汇聚点在通道修复之外仍具备纵深防御能力。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-02",
+        "commits": [
+          "5ac6fdb4f",
+          "0495ade42"
+        ]
+      }
     ]
   },
   {
@@ -2942,6 +3104,25 @@
       "FORBIDDEN_WORDS 有意省略 desc/replace/comment，依赖结构化的 `is Select` 门控；目前正确，因为 JSqlParser 5.3 的 Select 家族（PlainSelect、SetOperationList、Values、TableStatement）不包含写形式，但未来对结构化门控的任何放宽都会使扫描在设计上不完整——SqlVisualizerExplainTool.kt:81 处 ExplainGate 第二道门控是值得保留的有用第三层。",
       "MAX_RESULT_HOPS=32 限制 execute() 结果遍历（McpDbExecutor.kt:402-408），但第一个之后的结果集从未被排空；finally 块中的 statement.close 覆盖了 JDBC 端，因此这只是驱动行为清洁性说明。",
       "McpSelectGuardTest 未覆盖：CTE 内嵌 INTO、美元引号字符串内容、MySQL 反斜杠转义引号字面量，或 SELECT 调用的存储函数——前三者通过源码阅读被固定为拒绝方向，第四者是候选 mcp-select-guard.client-side-only-readonly-gap 的主题。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-03",
+        "commits": [
+          "8f556d347",
+          "4da7b48a4"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-11",
+        "commits": [
+          "a895a914a",
+          "14c4574a0",
+          "78f41eea4"
+        ]
+      }
     ]
   },
   {
@@ -3195,6 +3376,24 @@
       "兄弟通道之间的错误处理不对称：perf_advice 在 runCatching 中包装 JSqlParser（SqlPerfAnalyzer.kt:122，捕获 Throwable），而 check_sql 和 rollback_plan 仅捕获 Exception（UnboundedWriteDetector.kt:162、RollbackSqlGenerator.kt:133）——统一为致命放行语义并加上输入上限可使四个通道一致。",
       "schema 上下文输出有每单元格 200 字符上限，但没有每表列上限（McpSchemaFormatter.format 输出每个返回表的所有列），因此非常宽的表主导输出；每表列预算可限定它。",
       "UnboundedWriteDetector.parseStatementsShared 的单个 AST 槽是 @Volatile，在 UI EDT 确认流程与 MCP 分发器线程之间共享；复用前进行内容相等性检查目前可防止错误 AST 复用，但任何未来修改节点的消费者都需要先离开共享槽（现有硬约束记录在 UnboundedWriteDetector.kt:79-82）。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-17",
+        "commits": [
+          "d02ddec0d",
+          "b0c7bf701"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-18",
+        "commits": [
+          "5dba1ac62",
+          "6c6fb091a"
+        ]
+      }
     ]
   },
   {
@@ -3335,6 +3534,25 @@
       "McpFilePathResolver.resolveInsideProject 拒绝任何包含 '..' 的路径，即使它是合法的文件名组件（例如 'data..2024.xml'），这是一种过严的失败关闭行为；安全上无害，但值得注意以避免未来的放宽压力。",
       "sqlv_render_logs 接受 logText 时没有总输入上限（仅有每语句 20k 上限，MyBatisLogParser.maxParseLength）；平台通道大小限制是唯一的事实上限——显式总上限可对应 McpRenderInput 的片段上限。",
       "McpAuditLog 的参数摘要（例如 sqlv_explain 的 executionArgsSummary 中的 selectSql）将截断的代理 SQL 文本写入 idea.log；仅本地，但与 mcpMaskEnabled 一致的掩码将使审计通道与输出掩码意图保持一致。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-07",
+        "commits": [
+          "0619a92d3",
+          "79efe38f7"
+        ]
+      },
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-24",
+        "commits": [
+          "fc81f5684",
+          "f49190dde",
+          "78f41eea4"
+        ]
+      }
     ]
   },
   {
@@ -3693,6 +3911,16 @@
       "将六个每文件 escapeHtml 变体（CommunityDialog.kt:137、ExplainPlanResultView.kt:260、ExplainPlanDialog.kt:120、RollbackSqlDialog.kt:1020、SqlResultPanel 内联转义、SqlPreviewPanelParamPanel.kt:87）合并为一个共享工具，使元素内容转义不会逐站点退化。",
       "将现有 putClientProperty(\"html.disable\", true) 模式（DegradationBanner.kt:57）应用于不需要 HTML 标记的 snapshotQueryLabel、metaLabel、warningLabel 和 SqlResultPanel infoLabel，并在可见标签转义的同时转义 toolTipText 赋值。",
       "ExplainPlanResultView.kt:72-81 将 dialectName/dataSourceName 未转义地插值到头部 <html> 标签中——目前仅为操作者信任的值，但如果传入远程派生名称则很脆弱。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-10",
+        "commits": [
+          "7a56f934f",
+          "d3e7ebd1b"
+        ]
+      }
     ]
   },
   {
@@ -4052,6 +4280,16 @@
       "PlatformPluginInstaller.ensureReadable 对持久化的 pending zip 设置 rw-r--r--（全局可读 POSIX 权限）；内容为不含机密的插件代码，因此可以接受，但如果 pending 目录曾存放其他内容则值得加注释。",
       "在临时文件和 system/mpvs-update pending 副本上，下载、守卫、验证与平台提取之间的 TOCTOU 是此单用户桌面模型上的同主体本地进程关注点；按候选门控规则 3 排除，为完整起见记录。",
       "缺失工件签名验证是已知的同行记录根因；按源码其可利用条件为：控制托管 update/update.json 的 Gitee 仓库/账户、Gitee 被攻破，或同主体的 mpvs.update.manifest.url 覆盖——没有额外的插件端控制可补偿，且上述两个候选与之无关。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-05",
+        "commits": [
+          "daf6617af",
+          "addc3f3de"
+        ]
+      }
     ]
   },
   {
@@ -4191,6 +4429,16 @@
       "PlatformPluginInstaller.ensureReadable 对持久化的 pending zip 设置 rw-r--r--（全局可读 POSIX 权限）；内容为不含机密的插件代码，因此可以接受，但如果 pending 目录曾存放其他内容则值得加注释。",
       "在临时文件和 system/mpvs-update pending 副本上，下载、守卫、验证与平台提取之间的 TOCTOU 是此单用户桌面模型上的同主体本地进程关注点；按候选门控规则 3 排除，为完整起见记录。",
       "缺失工件签名验证是已知的同行记录根因；按源码其可利用条件为：控制托管 update/update.json 的 Gitee 仓库/账户、Gitee 被攻破，或同主体的 mpvs.update.manifest.url 覆盖——没有额外的插件端控制可补偿，且上述两个候选与之无关。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-06",
+        "commits": [
+          "efefc4eaf",
+          "98eff6fa8"
+        ]
+      }
     ]
   },
   {
@@ -4321,6 +4569,16 @@
       "OGNL 运算符语义与真正的 OGNL OgnlOps 存在未登记在 docs/调研报告/20260919-T-FidelityEval-自研与真引擎已知差异清单.md 中的分歧：跨类型相等（'1' == 1 在真正 OGNL 中为 true，此处为 false，Ognl.kt:526-531）、非数值字符串的关系比较（此处为字典序，真正 OGNL 为数值转换/NFE，Ognl.kt:534-539），以及对 String 的 'in' 作为子串成员判定（Ognl.kt:565-571）。<if test> 的生产渲染是切换驱动的（XmlPreviewModel.kt:164-172），因此影响仅限于 bind/${}/foreach-null 求值，但应将这些登记为已知差异或与 OgnlOps 对齐，以防止预览与运行时 SQL 的静默分歧。",
       "OgnlEvaluator.parseCache（Ognl.kt:121-131）限制条目数（1024，溢出时全部清除），但没有每表达式长度上限；对抗性 mapper 文本可在每进程中保留多达 1024 个无界长度表达式字符串。每键长度上限（例如超过几 KB 跳过缓存）可限定它。",
       "SecureXml 实体估计器将通用实体值中的 '%name;' 视为 PE 'included in literal' 扩展；当被引用的名称声明为通用实体而非参数实体时，JDK 会拒绝该文档，因此失配方向是失败关闭的多计——如果估计器将来被重新调整，除意识外无需操作。"
+    ],
+    "fix_dispositions": [
+      {
+        "fingerprint": "已修复",
+        "fix": "T-SAF-19",
+        "commits": [
+          "f07c7d8b7",
+          "dcf869d17"
+        ]
+      }
     ]
   },
   {

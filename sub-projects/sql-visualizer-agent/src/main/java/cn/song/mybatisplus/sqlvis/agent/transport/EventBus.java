@@ -67,13 +67,26 @@ public final class EventBus {
     private static volatile boolean started = false;
     private static volatile int port = 0;
 
+    /** 通道令牌（T-SAF-02）：随 HELLO 帧回带，IDE 侧验令牌通过才提交会话；旧 IDE 不下发 → null。 */
+    private static volatile String channelToken = null;
+
+    /** 兼容旧调用方/测试：无令牌启动（HELLO 不带 token 键，与修复前行为逐字一致）。 */
     public static synchronized void start(int serverPort) {
+        start(serverPort, null);
+    }
+
+    /**
+     * T-SAF-02：带通道令牌启动。令牌由 IDE 侧逐通道生成、随 agentArgs 下发（AgentArgs.parse 的
+     * {@code token} 键），agent 只做原样回带——验令牌判定位恒在 IDE 侧，agent 侧零状态。
+     */
+    public static synchronized void start(int serverPort, String token) {
         if (started) {
             return;
         }
         port = serverPort;
+        channelToken = token;
         started = true;
-        final Thread sender = new Thread(new SenderLoop(serverPort), "sqlvis-agent-sender");
+        final Thread sender = new Thread(new SenderLoop(serverPort, token), "sqlvis-agent-sender");
         sender.setDaemon(true);
         sender.start();
     }

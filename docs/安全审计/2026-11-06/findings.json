@@ -1,10 +1,11 @@
 [
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "agent-ipc-loopback-unauth-session-trust",
-    "title": "未认证的 loopback agent 通道：任何本地进程都可以注入伪造的 SQL 事件、夺取捕获控制权、抑制 attach，并窃听 agent 的 SQL 帧",
-    "description": "IDE-agent IPC 通道在两个方向上都没有对端认证。IDE 的 loopback ServerSockets（attach 链 AgentManager.kt:799、premain 通道 :899、重绑定 :1577-1581）接受任何本地连接，并将其转换为完整的 AgentSession，其帧被视为 agent 权威；会话身份是自报的 HELLO pid。对恶意本地进程的后果：(1) 注入伪造的 SQL 事件，这些事件流入与控制台行相同的 sink（面板、带攻击者选定来源头的自动保存文件、跳转源码导航、历史与方言推断）；(2) 伪造 CMD_CONFIG_ACK 来控制 SqlCaptureGate.paused（抑制控制台桥或伪造“agent 已确认活动”），并用选定的 pid 投毒 attachedPids 以抑制对真实目标的 attach；(3) 通过赢得端口竞争，接收 agent 的 EVENT 帧（SQL 文本和字面量参数值），并用伪造的 CONFIG 在 15s 看门狗之后维持流。已验证此路径上最强的、源码可见的控制为：仅 loopback 绑定、1MB 帧上限（AgentProtocol.kt:41、SenderLoop.java:53）、捕获状态/用户暂停门（AgentSessionSupport.kt:513,538）、按 pid 的 HELLO 去重（AgentManager.kt:1156-1160）以及 SenderLoop MAX_FAST_DROPS（SenderLoop.java:112）——它们都是捕获状态、速率或按 pid 的机制，没有一个是身份对端检查；IDE 侧（src/main/kotlin/.../log/agent/）和 agent 侧（sub-projects/sql-visualizer-agent）代码中都不存在 token、共享密钥、HMAC、OS 对端凭据或远程地址检查，并且协商的端口在没有任何 capability secret 的情况下传递给目标 JVM（AgentProtocol.kt:67-68）。决定性的 OS 级事实（适用哪种本地对抗模型、跨用户的 loopback 可达性、端口发现）在本次纯源码运行中无法本地观察。",
-    "claimed_root_cause": "AgentManager 绑定 loopback ServerSockets（AgentManager.kt:799 attach、:899 premain、:1577-1581 重绑定），并在没有 OS 对端凭据、共享密钥或通道所有权检查的情况下授予每个被接受的连接完整会话权限；HELLO pid（AgentManager.kt:157、:1196-1210）是自报的，并被信任用于 attachedPids 注册（AgentManager.kt:1162）和 premain 通道 pid；AgentSession.handleFrame（AgentSessionSupport.kt:486-588）将来自任何已连接 socket 的 EVENT/HEARTBEAT/CONFIG_ACK 帧应用于面板/自动保存/导航 sink 和 SqlCaptureGate 桥门；agent 侧 SenderLoop（SenderLoop.java:225）无条件地向任何响应协商端口的对象写入 HELLO/HEARTBEAT/EVENT 帧（SQL + 字面量参数值），并应用来自该对端的入站 CONFIG（SenderLoop.java:429-471）。",
+    "title": "未认证的 loopback agent 通道：任何本地进程都可以注入伪造的 SQL 事件、夺取捕获控制权、抑制 attach，并窃听 agent 的 SQL 帧（已修复）",
+    "description": "IDE-agent IPC 通道在两个方向上都没有对端认证。IDE 的 loopback ServerSockets（attach 链 AgentManager.kt:799、premain 通道 :899、重绑定 :1577-1581）接受任何本地连接，并将其转换为完整的 AgentSession，其帧被视为 agent 权威；会话身份是自报的 HELLO pid。对恶意本地进程的后果：(1) 注入伪造的 SQL 事件，这些事件流入与控制台行相同的 sink（面板、带攻击者选定来源头的自动保存文件、跳转源码导航、历史与方言推断）；(2) 伪造 CMD_CONFIG_ACK 来控制 SqlCaptureGate.paused（抑制控制台桥或伪造“agent 已确认活动”），并用选定的 pid 投毒 attachedPids 以抑制对真实目标的 attach；(3) 通过赢得端口竞争，接收 agent 的 EVENT 帧（SQL 文本和字面量参数值），并用伪造的 CONFIG 在 15s 看门狗之后维持流。已验证此路径上最强的、源码可见的控制为：仅 loopback 绑定、1MB 帧上限（AgentProtocol.kt:41、SenderLoop.java:53）、捕获状态/用户暂停门（AgentSessionSupport.kt:513,538）、按 pid 的 HELLO 去重（AgentManager.kt:1156-1160）以及 SenderLoop MAX_FAST_DROPS（SenderLoop.java:112）——它们都是捕获状态、速率或按 pid 的机制，没有一个是身份对端检查；IDE 侧（src/main/kotlin/.../log/agent/）和 agent 侧（sub-projects/sql-visualizer-agent）代码中都不存在 token、共享密钥、HMAC、OS 对端凭据或远程地址检查，并且协商的端口在没有任何 capability secret 的情况下传递给目标 JVM（AgentProtocol.kt:67-68）。决定性的 OS 级事实（适用哪种本地对抗模型、跨用户的 loopback 可达性、端口发现）在本次纯源码运行中无法本地观察。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-02：AgentProtocol.newChannelToken() 每通道生成 128bit SecureRandom 令牌，随 agentArgs 下发、HELLO 回带，IDE 三处会话提交点恒量时间验令牌、失败 fail-closed（协议 break：旧 agent + 新插件被拒，已登记）（提交 5ac6fdb4f/0495ade42）；回归测试通过。",
+    "root_cause": "AgentManager 绑定 loopback ServerSockets（AgentManager.kt:799 attach、:899 premain、:1577-1581 重绑定），并在没有 OS 对端凭据、共享密钥或通道所有权检查的情况下授予每个被接受的连接完整会话权限；HELLO pid（AgentManager.kt:157、:1196-1210）是自报的，并被信任用于 attachedPids 注册（AgentManager.kt:1162）和 premain 通道 pid；AgentSession.handleFrame（AgentSessionSupport.kt:486-588）将来自任何已连接 socket 的 EVENT/HEARTBEAT/CONFIG_ACK 帧应用于面板/自动保存/导航 sink 和 SqlCaptureGate 桥门；agent 侧 SenderLoop（SenderLoop.java:225）无条件地向任何响应协商端口的对象写入 HELLO/HEARTBEAT/EVENT 帧（SQL + 字面量参数值），并应用来自该对端的入站 CONFIG（SenderLoop.java:429-471）。",
+    "intended_behavior": "IDE agent IPC 通道只接受持有通道令牌的对端：无令牌或令牌不匹配的 loopback 连接在会话提交前被拒绝，其任何帧不进入面板/自动保存/捕获门 sink。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -91,21 +92,50 @@
         "description": "handleInbound 通过基于 contains 的解析（:430-436、:472）应用来自同一未认证对端的 CONFIG，使抢占者能够通过发送任何带 \"disabled\":false 的帧使捕获在超过看门狗（:295-303）后保持启用。"
       }
     ],
-    "blockers": [
-      "此 host 上没有 OS 强制的沙箱可用于目标控制的执行（本次运行仅为源码审查；不允许启动任何本地进程、socket harness、双 JVM 变体或 IDE 实例，因此不存在有界的本地观察结果）",
-      "本地对抗模型在源码中不可见：适用哪种跨主体攻击者（同一用户的另一个非特权进程 vs 不同的本地 OS 用户），以及决定可达性的 OS 事实——不同用户的进程能否连接到/扫描开发者的 loopback 端口并读取携带协商端口的 -javaagent 命令行（或 attach 链监听器）；Windows loopback ACL 行为无法从仓库源码观察",
-      "没有有界的本地观察结果：将外部 loopback 连接接受为 agent 会话、注入伪造的面板条目、CONFIG_ACK 门翻转（SqlCaptureGate.paused）、attachedPids 投毒抑制后续 attachToPid，以及端口抢占窃听 agent 的 SQL 帧超过 15s 看门狗，均未在本地演示"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "本地对抗模型：攻击者为开发者主机上另一本地进程，能发现或扫描 premain/attach 的 loopback 端口；跨用户可达性等 OS 级事实在纯源码运行中不可观察"
+      },
+      {
+        "kind": "system_configuration",
+        "description": "增强捕获启用时通道才存在；协商端口随 -javaagent 参数下发（同机进程可从命令行读取端口，但仍无令牌）"
+      }
     ],
-    "validation_plan": {
-      "local": "从仓库根目录非破坏性地运行现有的真实 socket harness：`gradlew.bat test --tests cn.song.mybatisplus.visualizer.log.agent.AgentManagerPremainTest --tests cn.song.mybatisplus.visualizer.log.agent.AgentManagerIntakeGateTest`（两者都存在于 src/test/kotlin/cn/song/mybatisplus/visualizer/log/agent/；它们已经使用普通的无凭据 java.net.Socket 客户端通过真实 loopback socket 驱动 premain/accept/intake 路径——AgentManagerPremainTest.kt:110,198,249 和 AgentManagerIntakeGateTest.kt:93-94——因此绿色运行是进程内基线，表明无凭据的连接被接受且其帧被采信；注意构建需要 IntelliJ 平台发行版和 JDK 17 已在本地 Gradle 缓存中，依据仓库的离线构建说明）。然后是双进程变体：当 harness 持有已接受的 premain/attach 端口时，第二个 JVM 进程连接到它，写入一个 4 字节长度的 HELLO 帧 {\"pid\":<选定>} 加上 CMD_EVENT 和 CMD_HEARTBEAT 帧，并断言 (a) 伪造的 LogSqlEntry（攻击者选定的 sql/params/sourceFile/sourceCandidates）落入条目缓冲区，且其 sourceFile 逐字出现在自动保存头中，(b) 伪造的 CMD_CONFIG_ACK {\"disabled\":false} 翻转 configAckDisabled 并通过 updateOnline 驱动 SqlCaptureGate.paused=true，(c) 对声称 pid 的 attachedPids 注册使后续 attachToPid(pid) 在 putIfAbsent（AgentManager.kt:585）处提前返回而不 loadAgent；抢占变体在 agent 拨号之前绑定协商端口，记录接收到的含字面量参数值的 CMD_EVENT 帧，并验证在 15s 看门狗窗口（SenderLoop.java:71）内伪造的 {\"disabled\":false} CMD_CONFIG 使流无限期存活。",
-      "deployment": "在所有者自己的开发者机器上进行仅由所有者观察的检查（自己的机器、自己的插件实例、无第三方）：在启用增强捕获且应用在 IDE 下运行时，启动第二个本地进程，对 loopback 进行连接扫描以找到 premain/attach 端口（或从目标 JVM 的 -javaagent 命令行读取端口），发送 HELLO+EVENT 帧，观察伪造的 SQL 行（带攻击者选定的来源头）出现在插件面板和自动保存文件中；另外，在第二个进程中绑定 agent 的协商端口（在 agent 拨号之前，例如在全新 Run 期间），观察 agent 向该进程写入 SQL 帧（SQL 文本 + 参数字面量）以及伪造 pid 在插件状态/attach 日志中的 attach 抑制效果。"
+    "execution": {
+      "attacker_perspective": "同机本地进程连接 premain/attach loopback 端口并提交伪造 HELLO/EVENT/CONFIG_ACK 帧，注入面板条目、翻转 SqlCaptureGate 捕获门、投毒 attachedPids 或抢占端口窃听 agent SQL 帧。",
+      "payloads": [
+        "4 字节长度前缀 HELLO 帧 {\"pid\":12345}（无令牌）+ 伪造 CMD_EVENT/CMD_HEARTBEAT/CMD_CONFIG_ACK {\"disabled\":false}"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.agent.AgentManagerChannelAuthTest"
+      ],
+      "observed_result": "修复前无令牌连接被接受为完整会话（既有 AgentManagerPremainTest/AgentManagerIntakeGateTest 以无凭据 Socket 驱动真实 loopback 即复现面），先红测试 test无令牌连接被拒_不建会话 断言拒绝；修复提交 5ac6fdb4f/0495ade42 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "双向通道令牌认证：IDE 每通道生成 128bit SecureRandom 令牌随 agentArgs 下发，HELLO 回带，三处会话提交点恒量时间验令牌，验令失败即拒绝（fail-closed）。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "源码级确定（AgentManager 三处 accept 循环零对端认证，R-03 复核维持），利用只需同机进程与端口发现；纯源码运行未做双 JVM 实测"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "桌面单用户模型下伪造 SQL 条目进面板/自动保存、捕获门翻转与 SQL 帧窃听均限本机当前用户会话（先红测试覆盖拒绝路径），无跨主体提权证据"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.agent.AgentManagerChannelAuthTest.test无令牌连接被拒_不建会话 在修复前转红（审计缺陷复现）、修复提交 0495ade42 后回归通过"
     }
   },
   {
     "verdict": "needs_validation",
     "fingerprint": "db-env-provisioning.skill.highgo-xc3-password",
     "title": "在 .agents/skills/db-env-provisioning/SKILL.md 中为公共测试服务器实例提交了可用的数据库凭据",
-    "description": "仓库在一个已提交的操作技能文档中，随维护者测试服务器的公网 IP 以及该实例的 Docker 端口映射，附带了用户 xc3 的字面量 HighGo（瀚高）数据库密码。已只读验证：该字面量同时存在于所引用的行（工作树中）与 git HEAD 中（git show HEAD grep 命中），该文件被 git 跟踪（git ls-files --error-unmatch），且未被 .gitignore 覆盖（git check-ignore 退出码 1）。同一文档明确说明该凭据无法通过引擎的口令策略更改，必须原样维护，因此它很可能仍是该实例上 xc3 账户的现行密码。如果映射端口暴露在互联网上，任何阅读该公开仓库的人都可以 xc3 身份连接到该数据库实例。",
+    "description": "仓库在一个已提交的操作技能文档中，随维护者测试服务器的公网 IP 以及该实例的 Docker 端口映射，附带了用户 xc3 的字面量 HighGo（瀚高）数据库密码。已只读验证：该字面量同时存在于所引用的行（工作树中）与 git HEAD 中（git show HEAD grep 命中），该文件被 git 跟踪（git ls-files --error-unmatch），且未被 .gitignore 覆盖（git check-ignore 退出码 1）。同一文档明确说明该凭据无法通过引擎的口令策略更改，必须原样维护，因此它很可能仍是该实例上 xc3 账户的现行密码。如果映射端口暴露在互联网上，任何阅读该公开仓库的人都可以 xc3 身份连接到该数据库实例。 用户定案（2026-11-06）：该凭据为维护者测试服务器实例口径、保留现状——T-SAF-01 取消（不轮换、不清理、不加守卫），风险由所有者明示接受（豁免，非缩水）。",
     "claimed_root_cause": "一份操作手册在提交时使用了真实（而非占位）口令字面量，而同一手册中所有同级实例以及示例 TSV 都使用脱敏占位符（<强口令>、change-me）；文档树中不存在针对凭据字面量的 pre-commit 守卫。",
     "trace": [
       {
@@ -160,8 +190,7 @@
       }
     ],
     "blockers": [
-      "此 host 上没有 OS 强制的沙箱可用于目标控制的执行",
-      "缺少部署观察：测试服务器的 HighGo 监听器（103.36.220.245:25866）是否暴露在维护者网络之外，以及所提交的凭据对 xc3 账户是否仍然有效——本次纯源码运行不允许任何网络接触"
+      "部署面暴露（103.36.220.245:25866 是否出维护者网络）与口令现行有效性仍属部署事实；所有者已接受风险（测试服务器口径），轮换豁免（2026-11-06 定案）"
     ],
     "validation_plan": {
       "local": "添加一个源码扫描守卫（现有模式：BannedApiSourceScanTest 风格的守卫），断言 .agents/**、docs/**、dev-support/** 中没有 PASSWORD '...' 字面量或未脱敏的 jdbc 口令属性，然后验证它能在当前 SKILL.md:160 内容上变红。",
@@ -169,11 +198,12 @@
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "dynamic-tablename-rule.regex-unbounded",
-    "title": "导入的动态表名正则规则在预览渲染路径上被编译和执行，没有复杂度或超时上限",
-    "description": "DynamicTableNameProcessor 用 Regex(pattern) 编译每个规则模式，并在每次 wrapper 预览渲染时运行 regex.find(tableName)（DynamicTableNameProcessor.kt:39），没有超时、输入长度上限或复杂度筛查。dynamicTableNameRules 是导入设置文件可设置的字段之一，因此共享文件可以安装一个灾难性回溯模式（嵌套量词套交替），当操作员预览任何表名触发病态路径的语句时就会挂住预览渲染——其可用性影响波及文件作者之外。正则结果缓存还是非同步的 mutableMapOf（第 26 行），可能在渲染期间被读取，并被另一线程的 PluginCacheManager.clearAll（PluginCacheManager.kt:33）清空。",
-    "claimed_root_cause": "来自设置的用户/导入者提供的正则，在渲染路径上执行时没有 ReDoS 上限（没有超时、没有模式筛查、没有输入上限），且编译缓存非同步。",
+    "title": "导入的动态表名正则规则在预览渲染路径上被编译和执行，没有复杂度或超时上限（已修复）",
+    "description": "DynamicTableNameProcessor 用 Regex(pattern) 编译每个规则模式，并在每次 wrapper 预览渲染时运行 regex.find(tableName)（DynamicTableNameProcessor.kt:39），没有超时、输入长度上限或复杂度筛查。dynamicTableNameRules 是导入设置文件可设置的字段之一，因此共享文件可以安装一个灾难性回溯模式（嵌套量词套交替），当操作员预览任何表名触发病态路径的语句时就会挂住预览渲染——其可用性影响波及文件作者之外。正则结果缓存还是非同步的 mutableMapOf（第 26 行），可能在渲染期间被读取，并被另一线程的 PluginCacheManager.clearAll（PluginCacheManager.kt:33）清空。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-25：新增 util/BoundedRegex.kt（字符读预算 200k，超限视为无匹配）+ 编译缓存改 ConcurrentHashMap 封顶 256（BoundedRegex 改 Kotlin Regex API 为合并验证修正）（提交 9c122fe68/99ac9a88f）；回归测试通过。",
+    "root_cause": "来自设置的用户/导入者提供的正则，在渲染路径上执行时没有 ReDoS 上限（没有超时、没有模式筛查、没有输入上限），且编译缓存非同步。",
+    "intended_behavior": "导入的动态表名正则在预览渲染路径上有界求值：病态回溯模式在预算内返回（视为无匹配）而非挂住渲染，编译缓存并发有界。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -214,21 +244,48 @@
         "description": "导入的规则模式原样接受自共享设置文件（'TableNameRule(pattern, replacement, enabled)'）"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标受控执行的、由操作系统强制的沙箱",
-      "缺少观测：本地计时测量，证明病态的导入模式（嵌套量词形式）对现实表名（约 20-64 字符）在本项目所用 JVM 上会产生长时间运行的 regex.find"
+    "conditions": [
+      {
+        "kind": "system_configuration",
+        "description": "病态模式经共享设置导入通道进入（dynamicTableNameRules 为导入字段）；导入侧 T-SAF-08 值级校验之后此处为运行时兜底预算"
+      }
     ],
-    "validation_plan": {
-      "local": "向 src/test/kotlin/cn/song/mybatisplus/visualizer/sql/interceptor/DynamicTableNameProcessorTest.kt 添加一个计时用例：TableNameRule 使用嵌套量词模式（例如 '(a+)+$' 风格）对抗 30+ 字符的对抗性表名字符串，在本地断言/wall-clock process() 调用；以 gradle --tests cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest 运行，并在有界 wall clock 下记录耗时。",
-      "deployment": "由所有者观察：在 runIde 沙箱中导入包含病态规则的设置文件，预览一个表名触发病态回溯路径的 wrapper（现实长度的非匹配输入），观察 IDE 渲染路径停顿——然后确认修复（超时/步数受限的匹配）消除了停顿。"
+    "execution": {
+      "attacker_perspective": "共享设置文件携带嵌套量词灾难性回溯模式，操作员预览任何表名触发病态路径的语句时预览渲染被挂住。",
+      "payloads": [
+        "TableNameRule(pattern=\"(a+)+$\" 风格嵌套量词, ...) 对 30+ 字符对抗性表名"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（病态模式无预算执行、缓存非同步，lane 报告登记的复现证据），修复提交 9c122fe68/99ac9a88f 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "BoundedRegex 字符读预算（200k 超限视为无匹配）+ 正则编译缓存改并发有界 ConcurrentHashMap（封顶 256）。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "病态模式需先经导入通道进入（先红测试 DynamicTableNameProcessorTest.病态回溯模式有界返回_T-SAF-25 覆盖该面）"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "影响为预览渲染路径停顿（可用性），不涉及数据外泄或越权写入"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest.病态回溯模式有界返回_T-SAF-25 在修复前转红（审计缺陷复现）、修复提交 99ac9a88f 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "execute.embedded-native-console-exec-bypasses-confirm-chain",
-    "title": "接入插件预览控制台的 native execute 功能绕过了插件 DML 确认 / 无界写入 / 方言门链",
-    "description": "DataSourceSelector.prepareAfterEditorResolved 在插件预览面板内伪造了完整的 native 执行上下文：它安装了一个暴露 PROJECT、EDITOR、VIRTUAL_FILE、PSI_FILE 和 DBN SessionClientHolder.CLIENT_KEY 的 UiDataProvider（DataSourceSelectorConsole.kt:273-303），并通过 JdbcConsole.buildHeaderComponent (:342-350) 构建 native Console.Jdbc.Left/Right 头，明确地使 native Execute (▶) 工具栏动作和 Ctrl+Enter 在嵌入式控制台编辑器上启用（插件自己的注释记录了没有此接线 ▶ 会被永久禁用，因为 QueryActionBase.update 需要 EDITOR+console，而嵌入式面板缺少 FileEditor/平台 provider）。插件自己在 :397-398 的注释列举了在此控制台上的三条执行路径（'原生 ▶ / 控制台 Ctrl+Enter / 插件按钮'）。只有插件按钮路径运行执行授权链——SqlTypeClassifier DML 确认（带 ExecuteConfirmMessages/SchemaValidationGate 行）、${}-raw 和未知参数确认、ExecutionDialectGate.allowDialectGate。native ▶ / Ctrl+Enter 路径通过平台动作链提交控制台文档，而没有任何这些门，而文档文本是插件从捕获的控制台/日志输出派生的 SQL——确认链旨在防范的较低信任主体。结果：在同一不受信任 SQL 上的两个视觉相邻的 execute 功能具有不同的守卫集（同级控制等价性失败）。",
-    "claimed_root_cause": "prepareAfterEditorResolved 故意在插件面板内重建平台执行数据上下文（CLIENT_KEY/PROJECT/EDITOR/VIRTUAL_FILE/PSI_FILE 通过 UiDataProvider，DataSourceSelectorConsole.kt:273-303）和 native 头（:342-350）以使 ▶/Ctrl+Enter 工作，但插件的执行授权门只存在于插件驱动的提交路径中（SqlPreviewPanel.executeSql、executeOnConsole、chooseAndPrepare）；没有任何门附加到控制台编辑器或 native 动作路径。",
+    "title": "接入插件预览控制台的 native execute 功能绕过了插件 DML 确认 / 无界写入 / 方言门链（已修复）",
+    "description": "DataSourceSelector.prepareAfterEditorResolved 在插件预览面板内伪造了完整的 native 执行上下文：它安装了一个暴露 PROJECT、EDITOR、VIRTUAL_FILE、PSI_FILE 和 DBN SessionClientHolder.CLIENT_KEY 的 UiDataProvider（DataSourceSelectorConsole.kt:273-303），并通过 JdbcConsole.buildHeaderComponent (:342-350) 构建 native Console.Jdbc.Left/Right 头，明确地使 native Execute (▶) 工具栏动作和 Ctrl+Enter 在嵌入式控制台编辑器上启用（插件自己的注释记录了没有此接线 ▶ 会被永久禁用，因为 QueryActionBase.update 需要 EDITOR+console，而嵌入式面板缺少 FileEditor/平台 provider）。插件自己在 :397-398 的注释列举了在此控制台上的三条执行路径（'原生 ▶ / 控制台 Ctrl+Enter / 插件按钮'）。只有插件按钮路径运行执行授权链——SqlTypeClassifier DML 确认（带 ExecuteConfirmMessages/SchemaValidationGate 行）、${}-raw 和未知参数确认、ExecutionDialectGate.allowDialectGate。native ▶ / Ctrl+Enter 路径通过平台动作链提交控制台文档，而没有任何这些门，而文档文本是插件从捕获的控制台/日志输出派生的 SQL——确认链旨在防范的较低信任主体。结果：在同一不受信任 SQL 上的两个视觉相邻的 execute 功能具有不同的守卫集（同级控制等价性失败）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-04：D1=A：移除 CLIENT_KEY 与 EDITOR 注入，内嵌面板禁用原生 ▶/Ctrl+Enter，执行只留插件按钮全门禁链（所有者 runIde 核对项：原生 ▶ 在沙箱置灰）（提交 1ba06bf43/10e26eeba）；回归测试通过。",
+    "root_cause": "prepareAfterEditorResolved 故意在插件面板内重建平台执行数据上下文（CLIENT_KEY/PROJECT/EDITOR/VIRTUAL_FILE/PSI_FILE 通过 UiDataProvider，DataSourceSelectorConsole.kt:273-303）和 native 头（:342-350）以使 ▶/Ctrl+Enter 工作，但插件的执行授权门只存在于插件驱动的提交路径中（SqlPreviewPanel.executeSql、executeOnConsole、chooseAndPrepare）；没有任何门附加到控制台编辑器或 native 动作路径。",
+    "intended_behavior": "同一不受信任 SQL 的所有执行入口过同一确认门链：内嵌预览面板不再提供绕过插件 DML 确认/无界写入/方言门的原生执行 affordance。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -281,22 +338,48 @@
         "description": "allowDialectGate 在此定义并仅从插件驱动的提交路径调用——executeOnConsole (DataSourceSelectorConsole.kt:559)、chooseAndPrepare 会话消费者 (DataSourceSelectorResults.kt:456) 和 structured-EXPLAIN 预检查 (SqlPreviewPanelExecution.kt:1738)——从不从 native 动作路径调用"
       }
     ],
-    "blockers": [
-      "此 host 上没有 OS 强制的沙箱可用于目标控制的执行",
-      "缺少观察：嵌入式头中的 native ▶/Ctrl+Enter 是否真的以注入的 UiDataProvider 上下文到达平台 QueryActionBase 并在没有任何插件门的情况下提交——接线是反射的，在某些 IDE/Database 插件版本上可能失败或被 DataValidators 拒绝",
-      "缺少观察：平台 Database 控制台是否在此嵌入式配置下对危险语句（例如无界 UPDATE/DELETE）施加自己的执行前确认；这样的平台警告会将差距缩小为守卫等价性/措辞问题，而非缺少确认"
+    "conditions": [
+      {
+        "kind": "third_party_dependency",
+        "description": "原生执行动作解析依赖 IntelliJ 平台 Database 插件（QueryActionBase 需 EDITOR+console 上下文）；修复通过撤除插件侧数据上下文使平台动作在嵌入式面板不可用"
+      }
     ],
-    "validation_plan": {
-      "local": "runIde-sandbox robot 检查加上无头入口点扫描：扩展 ExecutionDialectGateTest 风格的“未覆盖入口点”扫描，枚举 prepareAfterEditorResolved 接线的每个执行功能（UiDataProvider 键 :277-303、来自 buildHeaderComponent :342-350 的 Console.Jdbc.Left 动作），并断言每个都解析到一个有门的入口；然后在 IDE 沙箱中从日志条目打开无界 DML（UPDATE t SET x=1 无 WHERE）的预览，点击嵌入式 native ▶（使用配置的虚拟 loopback 数据源），观察提交前是否出现任何确认；锚定现有测试：ExecutionDialectGateTest、ExecTempFileEdtGuardTest、RollbackSqlPanelTest（确认路径等价性基线）",
-      "deployment": "所有者在本地虚拟 MySQL/PG 数据源上运行 runIde（IntelliJ 2024.3 + Database 插件）：通过插件 Execute 按钮执行一次相同的无界 DML，再通过嵌入式 native ▶/Ctrl+Enter 执行一次，然后比较控制台历史与 affected rows，以确定 native 路径是否在没有无界写入确认的情况下执行"
+    "execution": {
+      "attacker_perspective": "恶意项目把带确认链语义破坏载荷的 SQL 渲染进控制台文档，操作员在视觉相邻的内嵌面板上用原生 ▶/Ctrl+Enter 提交，绕过 SqlTypeClassifier 确认与方言门。",
+      "payloads": [
+        "UiDataProvider 注入键 CLIENT_KEY/EDITOR/VIRTUAL_FILE/PSI_FILE（DataSourceSelectorConsole.kt:273-303）；无界 DML 示例 UPDATE t SET x=1（无 WHERE）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.execute.EmbeddedNativeExecSourceScanTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（入口点扫描发现 DataProvider 直供 CLIENT_KEY/EDITOR，lane 报告登记的复现证据），修复提交 1ba06bf43/10e26eeba 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "D1=A 定案：内嵌面板移除 CLIENT_KEY/EDITOR 注入，禁用原生 ▶/Ctrl+Enter，执行收敛到插件按钮全门禁链。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "接线为插件自身代码（入口点扫描先红测试直接断言），hostile-project 提供语句文本、操作员一键提交"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "同级守卫等价性失败：无界 DML 绕过确认链在操作员数据源执行；平台层是否另有警告不可见，实际效果为守卫差异而非必然未确认执行"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.execute.EmbeddedNativeExecSourceScanTest.内嵌面板DataProvider不得直供CLIENT_KEY与EDITOR_T-SAF-04 在修复前转红（审计缺陷复现）、修复提交 10e26eeba 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "gradle-deps-aliyun-mirror-first-no-verification",
-    "title": "依赖解析优先使用阿里云镜像而非 Maven Central 且无依赖校验，被替换的镜像字节未经质疑地进入发布的插件",
-    "description": "settings.gradle.kts 在 dependencyResolutionManagement 中先于 mavenCentral（第 52 行）声明 https://maven.aliyun.com/repository/public（第 50 行），而 Gradle 对每个模块都从第一个包含它的仓库解析。仓库中没有 gradle/verification-metadata.xml（已核实：gradle/ 只含 libs.versions.toml、plugin-change-notes.html 和 wrapper/），因此整个构建中任何地方都没有强制任何构件校验和。CI 加固步骤（build-plugin.yml 中五处）只剥离代理属性并重写 Gradle wrapper URL，依赖镜像仍处于激活状态。唯一的运行时依赖 com.github.jsqlparser:jsqlparser:5.3 因此经由这条优先级链解析，其字节被打进 build/distributions/*.zip，作为插件构件上传，并发布到 GitHub Releases 与 Gitee beta 自更新通道（update/update.json downloadUrl）。任何能影响该镜像为这些坐标提供内容的人（镜像运营方被攻破、镜像与 Central 漂移）都能触达被执行的插件代码，而没有任何完整性检查会察觉。",
-    "claimed_root_cause": "仓库解析顺序让第三方镜像优先于权威 Maven Central，而构建未定义任何依赖校验（校验和/签名），因此预期控制（Central 作为可信根）是被配置绕过，而非被攻破。",
+    "title": "依赖解析优先使用阿里云镜像而非 Maven Central 且无依赖校验，被替换的镜像字节未经质疑地进入发布的插件（已修复）",
+    "description": "settings.gradle.kts 在 dependencyResolutionManagement 中先于 mavenCentral（第 52 行）声明 https://maven.aliyun.com/repository/public（第 50 行），而 Gradle 对每个模块都从第一个包含它的仓库解析。仓库中没有 gradle/verification-metadata.xml（已核实：gradle/ 只含 libs.versions.toml、plugin-change-notes.html 和 wrapper/），因此整个构建中任何地方都没有强制任何构件校验和。CI 加固步骤（build-plugin.yml 中五处）只剥离代理属性并重写 Gradle wrapper URL，依赖镜像仍处于激活状态。唯一的运行时依赖 com.github.jsqlparser:jsqlparser:5.3 因此经由这条优先级链解析，其字节被打进 build/distributions/*.zip，作为插件构件上传，并发布到 GitHub Releases 与 Gitee beta 自更新通道（update/update.json downloadUrl）。任何能影响该镜像为这些坐标提供内容的人（镜像运营方被攻破、镜像与 Central 漂移）都能触达被执行的插件代码，而没有任何完整性检查会察觉。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-14：settings.gradle.kts mavenCentral 置前（阿里云镜像降为可用性后备）+ gradle/verification-metadata.xml（356 组件 sha256，write-verification-metadata 26 分钟实跑生成）依赖严格校验（D4=A）（提交 b51f664af）；回归通过。",
+    "root_cause": "仓库解析顺序让第三方镜像优先于权威 Maven Central，而构建未定义任何依赖校验（校验和/签名），因此预期控制（Central 作为可信根）是被配置绕过，而非被攻破。",
+    "intended_behavior": "依赖解析以 Maven Central 为可信根并强制构件完整性：镜像降为后备，任何组件字节与 verification-metadata.xml 登记的 sha256 不符即构建失败关闭（替换字节 fail-closed）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -337,21 +420,53 @@
         "description": "已核实：CI 把 gradle-wrapper.properties 从 mirrors.cloud.tencent.com 重写为 services.gradle.org/distributions（:94 注释『使用 Gradle 官方下载源』），这是仓库内自认第三方镜像未被同等信任的佐证；对依赖镜像并未施加同等的不信任。"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱（禁止对目标仓库运行 gradle 解析）",
-      "镜像为这些坐标提供的字节（maven.aliyun.com 与 repo1.maven.org）在源码中不可见；两者当前是否不同，只有 owner 观察到的下载/比对才能定论"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是镜像（maven.aliyun.com）为某坐标提供被替换/漂移的字节；镜像与 Central 的现实偏差从未实测，严格校验使该偏差不再能进入构建产物"
+      },
+      {
+        "kind": "system_configuration",
+        "description": "verification 严格模式覆盖当前依赖闭包（356 组件）；分发到 testShards/runIde 等更广任务时若出现未登记构件，按 gradle 提示扩清单"
+      }
     ],
-    "validation_plan": {
-      "local": "在批准的沙箱内、禁用外网并配置本地 registry：用 `./gradlew --write-verification-metadata sha256 buildPlugin`（或 `help` 加解析任务）生成 verification metadata，对照权威 Central 构件摘要检查 com.github.jsqlparser:jsqlparser:5.3 记录的 sha256；启用严格校验（带 Central 摘要的 verification-metadata.xml）会让任何镜像偏差确定性地构建失败。",
-      "deployment": "由 owner 观察验证，除已配置的两个公共构件 URL 外不做任何在线探测：下载 https://maven.aliyun.com/repository/public/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar 与 https://repo1.maven.org/maven2/com/github/jsqlparser/jsqlparser/5.3/jsqlparser-5.3.jar，比对 sha256；然后提交 pin 住摘要的 gradle/verification-metadata.xml（可选把 mavenCentral 调到前面），使替换 fail-closed。"
+    "execution": {
+      "attacker_perspective": "被攻陷/漂移的镜像为 jsqlparser 等坐标提供替换字节，经由镜像优先解析链打进发布插件 zip 并流入 GitHub Releases/Gitee beta 自更新通道，无任何完整性检查察觉。",
+      "payloads": [
+        "com.github.jsqlparser:jsqlparser:5.3 被替换字节（settings.gradle.kts 镜像优先解析链 → buildPlugin 产物）"
+      ],
+      "instructions": [
+        "gradlew.bat dependency verification（严格校验：verification-metadata.xml 随构建强制；篡改任一登记构件即失败关闭）",
+        "gradlew.bat testFast（verification 严格模式下 compileKotlin/testFast 全绿；分发到 testShards/runIde 等更广任务时若出现未登记构件，按 gradle 提示扩清单）"
+      ],
+      "observed_result": "配置型控制无先红单测口径：修复提交 b51f664af 落地（settings.gradle.kts 镜像降后备 + verification-metadata.xml 356 组件 sha256，write-verification-metadata 26 分钟实跑生成）后，verification 严格模式下 compileKotlin/testFast 全绿——镜像字节偏差即构建失败关闭。"
+    },
+    "remediation": {
+      "strategy": "D4=A：mavenCentral 置前（可信根）+ verification-metadata.xml 356 组件 sha256 严格校验；镜像保留为代理失效时的可用性后备；未登记构件按 gradle 提示扩清单。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "low",
+        "reason": "利用前提是第三方镜像基础设施被攻陷或漂移（仓库内 CI 对 wrapper 镜像的重写佐证镜像未被等信任）；严格校验落地后该通道确定性失败关闭"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "供应链完整性：替换字节本可触达被执行的插件代码与发布构件（GitHub Releases/Gitee beta）；校验和锚定后影响被压缩到构建失败"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "配置型控制无先红单测；完整性由 356 组件 sha256 严格校验（write-verification-metadata 26 分钟实跑生成）与 verification 严格模式 compileKotlin/testFast 全绿背书，修复提交 b51f664af 入库"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "gradle-wrapper-tencent-mirror-no-sha256",
-    "title": "Gradle wrapper 分发包从腾讯云镜像拉取且无 distributionSha256Sum，本地构建（含 Gitee beta 发布构建）运行未校验的工具链",
-    "description": "gradle/wrapper/gradle-wrapper.properties 把 distributionUrl（第 3 行）钉在 mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip，且不含 distributionSha256Sum（已跨整个 10 行文件核实），因此 wrapper 接受镜像为 Gradle 9.7.0 分发包提供的任何字节。每个 GitHub Actions 工作流都会在运行开始时把该 URL 重写为官方 services.gradle.org 源（build-plugin.yml:102 为五处之一，nightly-full.yml:99 为六处之一，push-test.yml:74 为两处之一）—— 这是仓库内自认该镜像未被同等信任的佐证 —— 但本地开发者构建，包括维护者产出 Gitee beta 通道发布 zip 的本地 buildPlugin + gitee-release.py 流程（update/update.json downloadUrl 指向 gitee.com releases），运行的是未修改的 wrapper。因此被攻破或漂移的镜像由此触达开发者的构建工具链，并进一步触达 beta 发布构件，而没有任何校验和能检测替换。",
-    "claimed_root_cause": "Gradle 分发源是第三方镜像，缺少独立完整性钉定（distributionSha256Sum），因此工具链字节在未施加 CI 侧重写 URL 的机器上没有可信根。",
+    "title": "Gradle wrapper 分发包从腾讯云镜像拉取且无 distributionSha256Sum，本地构建（含 Gitee beta 发布构建）运行未校验的工具链（已修复）",
+    "description": "gradle/wrapper/gradle-wrapper.properties 把 distributionUrl（第 3 行）钉在 mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip，且不含 distributionSha256Sum（已跨整个 10 行文件核实），因此 wrapper 接受镜像为 Gradle 9.7.0 分发包提供的任何字节。每个 GitHub Actions 工作流都会在运行开始时把该 URL 重写为官方 services.gradle.org 源（build-plugin.yml:102 为五处之一，nightly-full.yml:99 为六处之一，push-test.yml:74 为两处之一）—— 这是仓库内自认该镜像未被同等信任的佐证 —— 但本地开发者构建，包括维护者产出 Gitee beta 通道发布 zip 的本地 buildPlugin + gitee-release.py 流程（update/update.json downloadUrl 指向 gitee.com releases），运行的是未修改的 wrapper。因此被攻破或漂移的镜像由此触达开发者的构建工具链，并进一步触达 beta 发布构件，而没有任何校验和能检测替换。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-15：gradle-wrapper.properties 写入 distributionSha256Sum=官方 9.7.0-bin.zip 校验和（2026-11-06 实取 84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae）（提交 965a15168）；回归测试通过。",
+    "root_cause": "Gradle 分发源是第三方镜像，缺少独立完整性钉定（distributionSha256Sum），因此工具链字节在未施加 CI 侧重写 URL 的机器上没有可信根。",
+    "intended_behavior": "Gradle wrapper 分发包有独立完整性锚：镜像提供的字节与官方发布校验和不符时 wrapper 下载失败（fail-closed）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -392,21 +507,52 @@
         "description": "已核实：Gitee beta 发布路径的 verify_artifact 用 sha256 把本地 zip 与下载的附件比对，这保护的是构建之后的传输，而非产出本地 zip 的工具链。"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱（禁止对目标仓库运行 ./gradlew）",
-      "mirrors.cloud.tencent.com 当前是否为 Gradle 9.7.0 分发包提供与 services.gradle.org 逐字节相同的文件，在源码中不可见，需要 owner 观察到的下载比对"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是腾讯云镜像为 Gradle 9.7.0 分发包提供被替换/漂移的字节（镜像被攻陷或与 services.gradle.org 漂移）；两侧当前字节异同从未实测比对"
+      },
+      {
+        "kind": "system_configuration",
+        "description": "保护覆盖本地开发者构建（含 Gitee beta 发布构建链）；CI 的镜像→官方 URL 重写逻辑保留不动"
+      }
     ],
-    "validation_plan": {
-      "local": "在沙箱内、无外网，给 gradle-wrapper.properties 加上 distributionSha256Sum，并把 distributionUrl 指向一个本地夹具目录，该目录提供经修改的分发包 zip 副本 —— `./gradlew --version` 必须未过校验和检查而失败；然后提供未修改的 zip 并观察成功，证明该控制封堵了缺口。",
-      "deployment": "由 owner 观察验证：下载 https://mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip 与 https://services.gradle.org/distributions/gradle-9.7.0-bin.zip，比对 sha256，然后把 distributionSha256Sum（官方分发包公布的校验和）提交进 gradle/wrapper/gradle-wrapper.properties，使本地与 CI 的 wrapper 下载在替换时 fail-closed。"
+    "execution": {
+      "attacker_perspective": "被攻陷/漂移的镜像向本地 gradlew 分发被替换的工具链字节，进入开发者构建与 beta 发布构件。",
+      "payloads": [
+        "被修改的 gradle-9.7.0-bin.zip 副本（distributionUrl=mirrors.cloud.tencent.com/gradle/gradle-9.7.0-bin.zip）"
+      ],
+      "instructions": [
+        "gradlew.bat --version（wrapper 校验和自动验证；防篡改口径：提供被修改的分发包副本时校验必须失败关闭）"
+      ],
+      "observed_result": "校验和锚定类控制无先红单测口径：修复提交 965a15168 写入官方 distributionSha256Sum（2026-11-06 实取）后，`gradlew --version` 在当前分发包上校验通过、任何字节替换即校验失败关闭；配置本身经源码核实（10 行 properties 全文曾无 sha256）。"
+    },
+    "remediation": {
+      "strategy": "distributionSha256Sum 钉官方发布校验和（2026-11-06 实取），本地与 CI 的 wrapper 下载在替换时 fail-closed。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "low",
+        "reason": "利用前提是第三方镜像基础设施被攻陷或漂移；CI 每次运行还把 URL 重写回官方源（仓库内佐证镜像未被等信任）"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "被替换工具链字节触达开发者构建与 Gitee beta 发布构件（gitee-release.py 流程），发行面完整性受影响"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "medium",
+      "reason": "无可先红的自动化复现测试（校验和锚定为配置控制）；官方 9.7.0-bin.zip 校验和 2026-11-06 实取并随提交 965a15168 入库，证据等级低于先红转绿类修复"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "history.autosave.append-open-symlink-follow",
-    "title": "自动保存写入器以 CREATE+APPEND 打开历史文件并跟随符号链接，而修订路径强制不跟随，导致可被植入项目外符号链接目标追加写入",
-    "description": "合并/修订追加路径谨慎地拒绝不配合的文件：fileKey() 以 NOFOLLOW 读取属性并拒绝非常规文件与符号链接（SqlLogAutoSaver.kt:98-102），修订写入还用 LinkOption.NOFOLLOW_LINKS 加文件锁重新打开（:136-141）。主条目写入路径则没有这些防护：openWriterForCurrent 调用 Files.newBufferedWriter(path, CREATE, APPEND) 时既无 LinkOption.NOFOLLOW_LINKS，也无常规文件检查（:436-451，打开在 :441）。默认 saveDir 位于项目内（.idea/sql-visualizer/sql-history，resolveHistoryDir 在 :626-630；运维设置的 custom path 按原样采用），因此任何能在写入器打开文件之前（configure、IDE 启动、日期占位符变化或 roll —— BufferedWriter 句柄在多次打开之间一直持有）在由 pattern 推导出的名字处植入符号链接的东西，都会把该次打开后的每一次追加——头行、源自不可信控制台文本的、受攻击者影响的 restoredSql、以及 Base64 的 pd 行（writeEntryText，restoredSql 写于 :526）——重定向到项目外的目标，例如 user.home 下的某个文件；合并路径的 fileKey CAS 本会拒绝这种确切状态。",
-    "claimed_root_cause": "openWriterForCurrent（SqlLogAutoSaver.kt:436-451）缺少修订路径（fileKey，SqlLogAutoSaver.kt:98-102）已经实现的 NOFOLLOW_LINKS 选项与 isRegularFile/!isSymbolicLink 审查 —— 两条写同一文件族的路径在符号链接遏制上不一致。",
+    "title": "自动保存写入器以 CREATE+APPEND 打开历史文件并跟随符号链接，而修订路径强制不跟随，导致可被植入项目外符号链接目标追加写入（已修复）",
+    "description": "合并/修订追加路径谨慎地拒绝不配合的文件：fileKey() 以 NOFOLLOW 读取属性并拒绝非常规文件与符号链接（SqlLogAutoSaver.kt:98-102），修订写入还用 LinkOption.NOFOLLOW_LINKS 加文件锁重新打开（:136-141）。主条目写入路径则没有这些防护：openWriterForCurrent 调用 Files.newBufferedWriter(path, CREATE, APPEND) 时既无 LinkOption.NOFOLLOW_LINKS，也无常规文件检查（:436-451，打开在 :441）。默认 saveDir 位于项目内（.idea/sql-visualizer/sql-history，resolveHistoryDir 在 :626-630；运维设置的 custom path 按原样采用），因此任何能在写入器打开文件之前（configure、IDE 启动、日期占位符变化或 roll —— BufferedWriter 句柄在多次打开之间一直持有）在由 pattern 推导出的名字处植入符号链接的东西，都会把该次打开后的每一次追加——头行、源自不可信控制台文本的、受攻击者影响的 restoredSql、以及 Base64 的 pd 行（writeEntryText，restoredSql 写于 :526）——重定向到项目外的目标，例如 user.home 下的某个文件；合并路径的 fileKey CAS 本会拒绝这种确切状态。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-13：openWriterForCurrent：打开前 NOFOLLOW 属性审查（isRegularFile && !isSymbolicLink）+ 打开 NOFOLLOW_LINKS；拒写跳过本批不丢其他条目；无效路径拒绝（合并验证修正）（提交 d88923012/d4a31a032）；回归测试通过。",
+    "root_cause": "openWriterForCurrent（SqlLogAutoSaver.kt:436-451）缺少修订路径（fileKey，SqlLogAutoSaver.kt:98-102）已经实现的 NOFOLLOW_LINKS 选项与 isRegularFile/!isSymbolicLink 审查 —— 两条写同一文件族的路径在符号链接遏制上不一致。",
+    "intended_behavior": "主条目写入路径与修订路径同规：历史文件打开前后都不跟随符号链接，植入链接导致拒写并计数，而非把追加写入重定向到项目外目标。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -447,21 +593,48 @@
         "description": "修订追加用 LinkOption.NOFOLLOW_LINKS 重新打开 —— 该控制手段在仓库内已存在，只是没有应用到条目打开路径"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱",
-      "缺少观测：在 openWriterForCurrent 运行之前植入于 pattern 推导名处的符号链接（写入器在 configure/roll 各次打开之间持有已打开句柄，因此植入必须早于打开）在目标操作系统上是否真被 CREATE+APPEND 打开所跟随，以及真实写入批次中追加的字节是否落入链接目标",
-      "缺少观测：被符号链接的 .idea/sql-visualizer/sql-history 条目在 owner 平台上是否能挺过 git checkout（checkout 行为在源码之外）"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "本地对抗模型：攻击者进程须在写入器打开文件之前（configure/IDE 启动/日期变化/roll）于 .idea/sql-visualizer/sql-history/ 按 pattern 推导名植入符号链接（写入器句柄跨批持有）"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展 SqlLogAutoSaverTest 测试装置（测试文件已存在；gradle --tests cn.song.mybatisplus.visualizer.log.SqlLogAutoSaverTest）：创建临时 saveDir，在 configure 保存器之前按默认 pattern 创建指向第二个临时文件的符号链接（对应真实的先植入后打开窗口），用时钟注入 configure 保存器，提交一个条目，断言链接目标是否收到追加的字节；然后对 openWriterForCurrent 应用 NOFOLLOW_LINKS/常规文件审查，并补充回归断言：写入被拒绝并记录日志。"
+    "execution": {
+      "attacker_perspective": "本地进程在写入器打开前植入指向项目外（如 user.home）的符号链接，使头行、restoredSql 与 Base64 pd 载荷的后续追加落入链接目标。",
+      "payloads": [
+        "pattern 推导名处指向项目外目标的符号链接（先植入后打开窗口）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.SqlLogAutoSaverTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（CREATE+APPEND 无 NOFOLLOW、无类型审查，lane 报告登记的复现证据），修复提交 d88923012/d4a31a032 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "对齐修订路径的符号链接遏制：打开前 NOFOLLOW 属性审查 + 打开 NOFOLLOW_LINKS，拒写跳过本批（不丢其他条目）并记日志。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "需本地进程在打开前赢得植入窗口（先红测试 SqlLogAutoSaverTest.打开前发现植入符号链接拒绝写入_T-SAF-13 以该时序复现）"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "同用户本地攻击者本已可写这些目标；增量收益限于把捕获 SQL 派生内容追加到项目外路径的内容洗白，追加型写入无覆盖破坏"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.SqlLogAutoSaverTest.打开前发现植入符号链接拒绝写入_T-SAF-13 在修复前转红（审计缺陷复现）、修复提交 d4a31a032 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "history.reader.unbounded-line-buffering",
-    "title": "被植入或超大的 .sql 历史文件在历史读取与 MCP 历史搜索期间于 IDE 内存中无界缓冲非 revision 行与块",
-    "description": "SqlLogFileReader 逐行流式读取文件以避免整文件缓冲（T-SqlHistoryFull），但 boundedLines 只折叠以 revision 前缀 '-- pd: o147-revision: ' 开头的行（折叠条件在 SqlLogFileReader.kt:115）。其余每一行——SQL 主体、头部，或主 '-- pd: <base64> --' 负载行——都在没有任何长度或总大小上限的情况下累积，而且 EntryBlockScanner 还会把一个块的每一行主体保留到下一个头部（bodyLines.add 在 :297，仅在头部行之后）。设计中提到的 100MB 上限只是写入侧的滚动阈值（SqlLogAutoSaver.kt:31 的 rollThresholdBytes）；读取器接受任意大小的文件——readFromFile/forEachEntry/countInFile 没有文件大小闸门（已验证）。任何对项目目录有写权限的对象（例如提交 .idea/sql-visualizer/sql-history/*.sql 的仓库，或任何本地进程）都能植入这样的文件；它会在用户打开历史标签页时被解析（后台任务，HistorySqlLogPanel.kt:526），并经由 MCP 工具 sqlv_history_search，在 AI 代理调用 HistorySearchService.search 时被解析——后者的 MAX_SCAN_ENTRIES=200_000 限制条目数量但不限制每条字节数（HistorySearchService.kt:60）。",
-    "claimed_root_cause": "boundedLines（SqlLogFileReader.kt:99-118）的长度折叠只应用于 REVISION_PREFIX 行；非 revision 路径上没有逐行、逐块或逐文件的字节上限（EntryBlockScanner.bodyLines 累积在 SqlLogFileReader.kt:297、:336 的全量复制 joinToString、:322-332 的 Base64 解码 + JSON 解析全量复制），且 readFromFile/forEachEntry/countInFile 中没有文件大小闸门。",
+    "title": "被植入或超大的 .sql 历史文件在历史读取与 MCP 历史搜索期间于 IDE 内存中无界缓冲非 revision 行与块（已修复）",
+    "description": "SqlLogFileReader 逐行流式读取文件以避免整文件缓冲（T-SqlHistoryFull），但 boundedLines 只折叠以 revision 前缀 '-- pd: o147-revision: ' 开头的行（折叠条件在 SqlLogFileReader.kt:115）。其余每一行——SQL 主体、头部，或主 '-- pd: <base64> --' 负载行——都在没有任何长度或总大小上限的情况下累积，而且 EntryBlockScanner 还会把一个块的每一行主体保留到下一个头部（bodyLines.add 在 :297，仅在头部行之后）。设计中提到的 100MB 上限只是写入侧的滚动阈值（SqlLogAutoSaver.kt:31 的 rollThresholdBytes）；读取器接受任意大小的文件——readFromFile/forEachEntry/countInFile 没有文件大小闸门（已验证）。任何对项目目录有写权限的对象（例如提交 .idea/sql-visualizer/sql-history/*.sql 的仓库，或任何本地进程）都能植入这样的文件；它会在用户打开历史标签页时被解析（后台任务，HistorySqlLogPanel.kt:526），并经由 MCP 工具 sqlv_history_search，在 AI 代理调用 HistorySearchService.search 时被解析——后者的 MAX_SCAN_ENTRIES=200_000 限制条目数量但不限制每条字节数（HistorySearchService.kt:60）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-23：单行 1MB 折叠占位注释 + 单文件 100MB 闸（对齐写侧滚动阈值），三个读取器统一（提交 3d8150c55/6f778d74c）；回归测试通过。",
+    "root_cause": "boundedLines（SqlLogFileReader.kt:99-118）的长度折叠只应用于 REVISION_PREFIX 行；非 revision 路径上没有逐行、逐块或逐文件的字节上限（EntryBlockScanner.bodyLines 累积在 SqlLogFileReader.kt:297、:336 的全量复制 joinToString、:322-332 的 Base64 解码 + JSON 解析全量复制），且 readFromFile/forEachEntry/countInFile 中没有文件大小闸门。",
+    "intended_behavior": "历史读取与 MCP 历史搜索对被植入/超大 .sql 文件保持有界内存：单行超限折叠、单文件超限拒读，而非无界缓冲。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -519,21 +692,48 @@
         "description": "现有测试只针对 REVISION_PREFIX 行验证超限折叠（此处是巨大的 'A'.repeat(MAX_REVISION_PAYLOAD+500) revision 行）；非 revision 的巨大行路径未被测试"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标受控执行的、由操作系统强制的沙箱",
-      "缺少观测：通过 readFromFile、forEachEntry 和 countInFile 读取有界超大夹具（例如一条 64-128MB 的单个非 revision 行，以及一条 64MB 的 '-- pd: ' 负载行）时，IDE 进程解析路径测得的堆增长/保留（或 OOM）"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是 resolveHistoryDir 输出（默认 .idea/sql-visualizer/sql-history/，项目内可写目录）出现被植入的超大 .sql 文件——本地进程或提交该目录的仓库均可"
+      }
     ],
-    "validation_plan": {
-      "local": "gradle --tests cn.song.mybatisplus.visualizer.log.SqlLogFileReaderTest 加上 O147HistoryUpgradeTest 夹具模式（两个测试文件都存在）：写入一个临时 .sql，包含一条 64MB 的非 revision 行和一个带 64MB '-- pd: ' 负载行的块，然后在受限的 JVM 堆（例如 -Xmx256m）下运行 SqlLogFileReader.readFromFile、forEachEntry 和 countInFile，观察堆增长/OOM，并与被折叠的 revision 前缀对照行比较；一旦加入新的逐行/逐文件上限，即断言其生效。还要用相同的夹具和 scanEntryCap，通过 HistorySearchService 测试（HistorySearchFilterTest 存在）验证代理路径。",
-      "deployment": "由所有者在真实 IDE 上观察：提交一个包含 .idea/sql-visualizer/sql-history/planted.sql（其中有一行 512MB）的项目，打开 SQL Visualizer 历史标签页和/或从 MCP 客户端调用 sqlv_history_search，并在性能分析器中观察 IDE 内存/挂起。"
+    "execution": {
+      "attacker_perspective": "植入含 64MB 单条非 revision 行或 64MB pd 载荷行的历史文件，在用户打开历史标签页或 AI 代理调用 sqlv_history_search 时于 IDE 进程内无界缓冲拖垮/耗尽堆。",
+      "payloads": [
+        "64-128MB 单条非 revision 行；带 64MB '-- pd: ' 载荷行的条目块（-Xmx256m 口径）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.SqlLogFileReaderTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（boundedLines 仅折叠 revision 前缀行、读取器无文件大小闸，lane 报告登记的复现证据；O147 大夹具经测试缝放开读闸完成增长对照），修复提交 3d8150c55/6f778d74c 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "读侧与写侧同规：单行 1MB 折叠为占位注释 + 单文件 100MB 闸，readFromFile/forEachEntry/countInFile 三读取器统一。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "植入面为项目内可写目录（先红测试 SqlLogFileReaderTest.超长非revision行折叠为占位注释_T-SAF-23 以夹具复现），历史标签页或 MCP 代理调用即触达"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "可用性影响（IDE 堆增长/挂起），无数据外泄或持久破坏"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.SqlLogFileReaderTest.超长非revision行折叠为占位注释_T-SAF-23 在修复前转红（审计缺陷复现）、修复提交 6f778d74c 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "log.executiontimeparser.trailing-ms-whitespace-backtracking",
-    "title": "ExecutionTimeParser 的 trailing-ms 正则表达式对无界控制台长行中的连续空白段产生平方级回溯",
-    "description": "finishEntries 对每个产出条目的行的完整、未截断的控制台行运行 ExecutionTimeParser.parse（既包括 SqlLogConsoleBridge.kt:1170 处的正常 processConsoleLine 出口，也包括 :1114 处的嗅探解封出口）。TRAILING_MS_REGEX = [\\]\\s]\\s*(\\d+)\\s*ms\\s*$（MULTILINE，ExecutionTimeParser.kt:36）以一个匹配每个空格的字符类开头，因此在空白密集的行上，引擎会在每个空白索引处重试，先贪婪消费再回溯整个剩余空白段：每个空白段为 O(段长^2)，即与行长成平方关系。源码检查确认，前五个正则的 leading token 都是字面量式的（elapsed/consumed、TimeCount、time、executeMillis、ExecuteTime），在每个不匹配位置都是 O(1) 失败；只有 TRAILING_MS_REGEX 的 leading [\\]\\s] 让每个空格都成为一次完整尝试的位置。宿主进程的一条约 500KB 填充行（例如 '==> Parameters: 1(Long)' 后跟数百 KB 空格）会让解析线程在每行上付出超线性数量的引擎步骤。",
-    "claimed_root_cause": "一个处于热路径的时长正则，其 leading token 是未锚定的、匹配空白的字符类，被应用于完整的无界控制台行；与解析器中受 maxParseLength 限制的 SQL 主体不同，传给 ExecutionTimeParser.parse 的行从未被截断。",
+    "title": "ExecutionTimeParser 的 trailing-ms 正则表达式对无界控制台长行中的连续空白段产生平方级回溯（已修复）",
+    "description": "finishEntries 对每个产出条目的行的完整、未截断的控制台行运行 ExecutionTimeParser.parse（既包括 SqlLogConsoleBridge.kt:1170 处的正常 processConsoleLine 出口，也包括 :1114 处的嗅探解封出口）。TRAILING_MS_REGEX = [\\]\\s]\\s*(\\d+)\\s*ms\\s*$（MULTILINE，ExecutionTimeParser.kt:36）以一个匹配每个空格的字符类开头，因此在空白密集的行上，引擎会在每个空白索引处重试，先贪婪消费再回溯整个剩余空白段：每个空白段为 O(段长^2)，即与行长成平方关系。源码检查确认，前五个正则的 leading token 都是字面量式的（elapsed/consumed、TimeCount、time、executeMillis、ExecuteTime），在每个不匹配位置都是 O(1) 失败；只有 TRAILING_MS_REGEX 的 leading [\\]\\s] 让每个空格都成为一次完整尝试的位置。宿主进程的一条约 500KB 填充行（例如 '==> Parameters: 1(Long)' 后跟数百 KB 空格）会让解析线程在每行上付出超线性数量的引擎步骤。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-21：TRAILING_MS_REGEX lookbehind 重锚定 + trim 尾预检 + 128 字符行尾窗口——空白炸弹行 O(1) 拒绝（合并验证二次修正）（提交 302d41947/fbdd4f997）；回归测试通过。",
+    "root_cause": "一个处于热路径的时长正则，其 leading token 是未锚定的、匹配空白的字符类，被应用于完整的无界控制台行；与解析器中受 maxParseLength 限制的 SQL 主体不同，传给 ExecutionTimeParser.parse 的行从未被截断。",
+    "intended_behavior": "时长解析热路径对任意长度控制台行保持有界成本：行尾 ms 兜底正则不得在连续空白段上产生平方级回溯。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -574,21 +774,48 @@
         "description": "对照：同一管线会把 SQL 主体截断到 maxParseLength，说明预期的每行上限并未扩展到这条路径"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标受控执行的、由操作系统强制的沙箱",
-      "缺少观测：在 1k/10k/100k 字符的空白段夹具上测得的 CPU 时间增长，用以证明平方曲线以及 IDE 解析路径中可感知的逐行停顿"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "本地对抗模型：病态行来自本机被托管进程的控制台输出（宿主打印空白填充行即触发，无需交互）"
+      }
     ],
-    "validation_plan": {
-      "local": "纯 JVM：扩展 ExecutionTimeParserTest（gradle --tests cn.song.mybatisplus.visualizer.log.ExecutionTimeParserTest），加入增长夹具——ExecutionTimeParser.parse(\"==> Parameters: 1(Long)\" + \" \".repeat(n))，n 取 1_000 / 10_000 / 100_000，断言修复后 wall-clock 扩展不再是超线性的（预先截断该行或锚定模式）；未修复的构建从 10k 到 100k 应显示约 100 倍增长。",
-      "deployment": "由所有者观察：在启用捕获的沙箱化 runIde 中，让演示应用打印一条数百 KB 的填充 Parameters 行，并在控制台输出线程上观察捕获延迟诊断（consoleLinesSeen 的推进与时间的关系）。"
+    "execution": {
+      "attacker_perspective": "被托管进程打印一条 '==> Parameters: 1(Long)' 后接数百 KB 空白的控制台行，使解析线程在每个空白索引处重试行尾正则，冻结控制台捕获管线。",
+      "payloads": [
+        "\"==> Parameters: 1(Long)\" + \" \".repeat(1_000 / 10_000 / 100_000)"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.ExecutionTimeParserTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（10k→100k 增长护栏呈超线性，lane 报告登记的复现证据），修复提交 302d41947/fbdd4f997 落地后回归通过（阈值按线性口径重标定 20→200）。"
+    },
+    "remediation": {
+      "strategy": "TRAILING_MS_REGEX 前导 lookbehind 重锚定 + trim 尾预检 + 128 字符行尾窗口，空白密集行 O(1) 拒绝。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "任何被托管进程输出空白密集行即触发（先红测试 ExecutionTimeParserTest.空白段增长不得超线性 以增长夹具复现），无需对抗意图即可命中"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "逐行解析停顿属可用性影响，随行结束即恢复，无持久破坏"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.ExecutionTimeParserTest.空白段增长不得超线性 在修复前转红（审计缺陷复现）、修复提交 fbdd4f997 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "log.mybatis.parseparams.unbounded-quadratic-regex",
-    "title": "MyBatis Parameters 文本被二次复杂度正则解析且没有现有的 maxParseLength 上限，冻结控制台解析线程",
-    "description": "控制台过滤器将整条控制台行无界地交给解析器。MyBatisLogParser 将 Preparing SQL 主体截断到 maxParseLength（line 87），但 Parameters: 余下部分未截断就传给 parseParams（分支 4 line 131/138，以及 line 125 的仅前缀 Parameters 续行分支）。PARAM_REGEX 的 (?:\\A|,\\s*)(.+?)\\(...\\)(?=,\\s*|\\z) 惰性扩展配合逗号交替起始位置，使得对无括号的逗号密集文本 findAll 在行长度上是二次的（在达到 parseParams:307 的二次成本回退 text.split(',') 之前，每个逗号起始位置都惰性重新扫描到输入末尾寻找 '('），因此来自任何托管进程的单条数百 KB 多 '==> Parameters:' 控制台行会在控制台过滤器/EP 线程上驱动超线性 CPU，使捕获和 UI 响应停滞。源码检查确认在 applyFilter（SqlConsoleBridgeFilterProvider.kt:83）和 parseParams 之间没有任何截断——processConsoleLine 和 handleConsoleLine 传递原始行（SqlLogConsoleBridge.kt:1094-1171）。",
-    "claimed_root_cause": "现有的每行上限（maxParseLength，有意应用于 MyBatisLogParser.kt:87 的 pendingSql 和所有其他解析器的 SQL 主体）从未在 parseParams 之前应用于 Parameters 文本，且 PARAM_REGEX 在逗号密集无括号输入上具有二次最坏情况回溯。",
+    "title": "MyBatis Parameters 文本被二次复杂度正则解析且没有现有的 maxParseLength 上限，冻结控制台解析线程（已修复）",
+    "description": "控制台过滤器将整条控制台行无界地交给解析器。MyBatisLogParser 将 Preparing SQL 主体截断到 maxParseLength（line 87），但 Parameters: 余下部分未截断就传给 parseParams（分支 4 line 131/138，以及 line 125 的仅前缀 Parameters 续行分支）。PARAM_REGEX 的 (?:\\A|,\\s*)(.+?)\\(...\\)(?=,\\s*|\\z) 惰性扩展配合逗号交替起始位置，使得对无括号的逗号密集文本 findAll 在行长度上是二次的（在达到 parseParams:307 的二次成本回退 text.split(',') 之前，每个逗号起始位置都惰性重新扫描到输入末尾寻找 '('），因此来自任何托管进程的单条数百 KB 多 '==> Parameters:' 控制台行会在控制台过滤器/EP 线程上驱动超线性 CPU，使捕获和 UI 响应停滞。源码检查确认在 applyFilter（SqlConsoleBridgeFilterProvider.kt:83）和 parseParams 之间没有任何截断——processConsoleLine 和 handleConsoleLine 传递原始行（SqlLogConsoleBridge.kt:1094-1171）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-20：分支 3/4 参数文本与 iBatis 参数/类型行统一 take(maxParseLength)（R-01 复核确认 iBatis 分支合入后病灶未变）（提交 a3a9ef9cb/9cf2425cd）；回归测试通过。",
+    "root_cause": "现有的每行上限（maxParseLength，有意应用于 MyBatisLogParser.kt:87 的 pendingSql 和所有其他解析器的 SQL 主体）从未在 parseParams 之前应用于 Parameters 文本，且 PARAM_REGEX 在逗号密集无括号输入上具有二次最坏情况回溯。",
+    "intended_behavior": "进入 parseParams 的参数文本与 SQL 主体同规套用 maxParseLength 截断，解析成本对控制台行长保持有界（不再有未截断入口）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -636,21 +863,48 @@
         "description": "PARAM_REGEX 交替 '(?:\\A|,\\s*)' 允许每个逗号作为匹配起点；惰性 '(.+?)' 在每个起点重新扫描到字符串末尾，然后 :307 的线性 split(',') 回退才能运行"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "缺失观察：实测的挂钟时间增长曲线（1k/10k/100k 字符逗号密集 Parameters 行），证明超线性解析成本和 IDE 宿主中导致的控制台线程停滞"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "本地对抗模型：逗号密集无括号的超长 '==> Parameters:' 行来自本机被托管进程的控制台输出"
+      }
     ],
-    "validation_plan": {
-      "local": "纯 JVM 单元测试装置，无需 IDE：扩展现有 MyBatisLogParser 测试集（MyBatisLogParserTest.kt / LogParseConcurrencyTest.kt 都存在，通过 gradle --tests cn.song.mybatisplus.visualizer.log.MyBatisLogParserTest 运行）。对 n = 1_000 / 10_000 / 100_000 馈入 MyBatisLogParser(maxParseLength=20000).feed(\"==> Parameters: \" + \"a,\".repeat(n)) 并计时 feed()；预期约 10x/100x 超线性增长确认上限失效；然后断言修复方案 paramsText.take(maxParseLength) 在 parseParams 之前恢复线性时间。",
-      "deployment": "所有者观察：在沙箱化 runIde 中，从演示应用在启用捕获的情况下打印单条 200k 字符逗号密集的 '==> Parameters:' 行，观察插件诊断中的控制台输出线程停滞/捕获滞后（consoleLinesSeen vs entries produced）。"
+    "execution": {
+      "attacker_perspective": "被托管进程输出单条数百 KB 逗号密集 Parameters 行，驱动 PARAM_REGEX 在每个逗号起点惰性重扫到行尾，冻结控制台过滤器/EP 解析线程。",
+      "payloads": [
+        "\"==> Parameters: \" + \"a,\".repeat(1_000 / 10_000 / 100_000)（maxParseLength=20000 口径）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.MyBatisLogParserTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（extractAfterKeyword 结果未 take() 即进 parseParams，lane 报告登记的复现证据），修复提交 a3a9ef9cb/9cf2425cd 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "Parameters 文本与 iBatis 参数/类型行统一 take(maxParseLength)，与 SQL 主体（MyBatisLogParser.kt:87 既有控制）同规。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "超长 Parameters 行可由普通应用意外产出、恶意进程刻意产出（先红测试 MyBatisLogParserTest.超长Parameters行截断到maxParseLength 以 n=1k/10k/100k 增长夹具复现）"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "控制台过滤器/EP 线程超线性 CPU 冻结捕获与 UI 响应，持续期内 IDE 可用性受损"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.MyBatisLogParserTest.超长Parameters行截断到maxParseLength 在修复前转红（审计缺陷复现）、修复提交 9cf2425cd 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "log.threadrouter.failopen-fallback-cross-thread-param-mixing",
-    "title": "无 token 的日志行共用一个兜底解析桶，重新引入跨线程 Preparing/Parameters 错配并直达 SQL 执行",
-    "description": "线程分桶——并发参数错配的修复手段——在 threadTokenOf 无法提取 token 时会 fail-open：这类行被路由到单个共享兜底桶，该桶持有单槽位的 pendingSql/pendingParams 状态（LogThreadRouter.kt:45,117）。两个线程各自打印裸 '==> Preparing:'/'==> Parameters:' 行（没有日志框架的级别关键字，MyBatis 打到 stdout 的日志即典型如此）时，会在同一个桶内交错。对确定性交错 A-Preparing(a)、B-Preparing(b)、A-Parameters(1)、B-Parameters(9) 做源码推演：B 的 Preparing 以无参数方式关闭 A 的语句（branch-1 的 closePending），随后 A 的 Parameters 与 B 的 pendingSql 配对，产出条目「b 被用 A 的值还原」（MyBatisLogParser.kt:138 的 branch 4 + closePending:194 + 位置还原器 restore），而 B 的 Parameters 被丢弃（paramWithoutContext）。控制台捕获变体会在 SqlLogPanel 以及导出中暴露这条错配的 restoredSql（SqlLogPanelActions.kt:108 是导出行构建处）；执行边界是 LogToSqlPanel，它把粘贴的日志文本送入同一条 MyBatisLogParser/LogThreadRouter fail-open 路径（LogToSqlPanel.kt:490-491），并把转换后的语句发给 SqlExecutor.execute（LogToSqlPanel.kt:302/323 -> executeSql:340 -> SqlExecutor.execute:359），也就是说 SQL 是用来自另一条语句的参数值执行的（DML 确认与方言门禁仍在，但用户无法从已确认的 SQL 文本中发现错配）。",
-    "claimed_root_cause": "LogThreadRouter.bucketForToken 在 threadTokenOf(line) 返回 null 时总是返回共享兜底桶（刻意的 fail-open，以免丢失续行），而兜底桶携带的正是分桶修复本要取代的同一套单槽位配对状态机；由于无 token 的行根本没有身份信息，没有任何守卫会拒绝一条 token 与 pendingSql 的 token 不同的 Parameters 行。",
+    "title": "无 token 的日志行共用一个兜底解析桶，重新引入跨线程 Preparing/Parameters 错配并直达 SQL 执行（已修复）",
+    "description": "线程分桶——并发参数错配的修复手段——在 threadTokenOf 无法提取 token 时会 fail-open：这类行被路由到单个共享兜底桶，该桶持有单槽位的 pendingSql/pendingParams 状态（LogThreadRouter.kt:45,117）。两个线程各自打印裸 '==> Preparing:'/'==> Parameters:' 行（没有日志框架的级别关键字，MyBatis 打到 stdout 的日志即典型如此）时，会在同一个桶内交错。对确定性交错 A-Preparing(a)、B-Preparing(b)、A-Parameters(1)、B-Parameters(9) 做源码推演：B 的 Preparing 以无参数方式关闭 A 的语句（branch-1 的 closePending），随后 A 的 Parameters 与 B 的 pendingSql 配对，产出条目「b 被用 A 的值还原」（MyBatisLogParser.kt:138 的 branch 4 + closePending:194 + 位置还原器 restore），而 B 的 Parameters 被丢弃（paramWithoutContext）。控制台捕获变体会在 SqlLogPanel 以及导出中暴露这条错配的 restoredSql（SqlLogPanelActions.kt:108 是导出行构建处）；执行边界是 LogToSqlPanel，它把粘贴的日志文本送入同一条 MyBatisLogParser/LogThreadRouter fail-open 路径（LogToSqlPanel.kt:490-491），并把转换后的语句发给 SqlExecutor.execute（LogToSqlPanel.kt:302/323 -> executeSql:340 -> SqlExecutor.execute:359），也就是说 SQL 是用来自另一条语句的参数值执行的（DML 确认与方言门禁仍在，但用户无法从已确认的 SQL 文本中发现错配）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-12：D5 温和版定案：多来源信号下延迟兜底桶配对，归属不明时参数挂起 needsThreadContext 并入 LogParseDiag 计数（已知边界：纯裸流首条错配信息论不可判定）（提交 35477751f/4707e1d87）；回归测试通过。",
+    "root_cause": "LogThreadRouter.bucketForToken 在 threadTokenOf(line) 返回 null 时总是返回共享兜底桶（刻意的 fail-open，以免丢失续行），而兜底桶携带的正是分桶修复本要取代的同一套单槽位配对状态机；由于无 token 的行根本没有身份信息，没有任何守卫会拒绝一条 token 与 pendingSql 的 token 不同的 Parameters 行。",
+    "intended_behavior": "无 token 行在共享兜底桶内不得把一条语句的 SQL 与另一来源的参数配对产出条目；存在多来源混淆信号时延迟配对而非错配。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -698,21 +952,48 @@
         "description": "KDoc 记录了该状态机本要修复的原始缺陷（'并发下条目严重不正确'），确认绕过分桶时错配的影响类别（引文在此行，而非 :17）"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱",
-      "缺少观测：能演示具体错配条目（线程 B 的 Preparing SQL 被用线程 A 的 Parameters 值还原）到达 LogSqlEntry.restoredSql 的确定性交错夹具"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "两个及以上线程向同一控制台打印无日志框架前缀的裸 '==> Preparing:'/'==> Parameters:' 行（MyBatis 直打 stdout 的典型形态）"
+      }
     ],
-    "validation_plan": {
-      "local": "纯 JVM：扩展 LogParseConcurrencyTest / LogThreadRouterTest（两者均存在；gradle --tests cn.song.mybatisplus.visualizer.log.LogParseConcurrencyTest），用两条交错的无 token 流通过 MyBatisLogParser.feed(line) 喂入：A：'==> Preparing: SELECT * FROM a WHERE id = ?'，B：'==> Preparing: INSERT INTO b VALUES (?)'，A：'==> Parameters: 1(Long)'，B：'==> Parameters: 9(Long)'。在当前源码上预期的错配形状是：条目 1 = A 的 SQL、无参数（被 B 的 Preparing 关闭），条目 2 = B 的 SQL 被用 A 的值 1(Long) 还原，B 的值被丢弃且 LogParseDiag.paramWithoutContext 递增；断言实际产生的跨线程配对，然后用带 token 的行重跑，确认分桶路径配对正确。",
-      "deployment": "由 owner 观察：沙箱 demo 应用中两个线程用 MyBatis 日志打到 stdout（无日志前缀）执行不同语句，开启捕获，然后检查面板条目中是否存在交叉配对的参数值；和/或把同一段交错 stdout 文本粘贴进 Log-to-SQL 面板，观察提供给执行的转换后 SQL。"
+    "execution": {
+      "attacker_perspective": "两个并发线程的裸 Preparing/Parameters 行在共享兜底桶内交错，产出「B 的 SQL 被 A 的参数值还原」的错配条目并直达面板/导出/Log-to-SQL 执行。",
+      "payloads": [
+        "A：'==> Preparing: SELECT * FROM a WHERE id = ?'；B：'==> Preparing: INSERT INTO b VALUES (?)'；A：'==> Parameters: 1(Long)'；B：'==> Parameters: 9(Long)'"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.LogParseConcurrencyTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（确定性 A/B 交错夹具产出跨线程配对、LogParseDiag.paramWithoutContext 递增，lane 报告登记的复现证据），修复提交 35477751f/4707e1d87 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "D5 温和版：兜底桶多来源疑似信号下延迟配对（needsThreadContext 挂起 + LogParseDiag 计数），错配实证即无参闭合；单流行为不变。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "裸 stdout 多线程输出为常见形态（先红测试 LogParseConcurrencyTest.多来源控制台下无token行配对不再错配 以确定性交错夹具复现）；错配需具体交错时序"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "错配还原 SQL 以另一语句的参数值在真实数据源执行（DML 确认仍在但用户无法从确认文本察觉），数据完整性影响；纯裸流首条错配边界仍在"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.LogParseConcurrencyTest.多来源控制台下无token行配对不再错配 在修复前转红（审计缺陷复现）、修复提交 4707e1d87 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "log.threadrouter.unbounded-nonidle-bucket-retention",
-    "title": "MyBatis/Hibernate 解析器的线程桶在 pending 期间永不被淘汰，随每个控制台累积无界保留的 SQL",
-    "description": "LogThreadRouter 将桶数量上限设为 64（DEFAULT_MAX_BUCKETS），但 evictIdle 只移除 isIdle 的桶。一个 MyBatisLogParser 桶如果收到过 Preparing: 或裸 SQL 行、却没有收尾 Parameters 行，就会持有 pendingSql（最多 maxParseLength=20000 字符，外加未截断的 pendingLogLine 原始行）或 prefixMatched/paramPrefixMatched 等待状态，因而永远不会空闲（isIdle 位于 MyBatisLogParser.kt:65，要求 pendingSql == null && !prefixMatched && !paramPrefixMatched）。HibernateLogParser.feedIdle 同样把 collecting 置为 true。与 JdbcTemplate 和 ShardingSphere 解析器不同，MyBatisLogParser 和 HibernateLogParser 没有 flushSettled：全源码 grep 确认 flushSettled/settledBuckets 只针对 jdbcParser 和 shardingParser 调用（SqlLogConsoleBridge.kt:1165-1166 的逐行路径，以及 :453/:467 的 EDT 周期性 flushSettledEntries），且捕获路径从不调用 ctx.myBatisParser.closePending()/ctx.hibernateParser.closePending()（closePending() 的调用方只有 LogToSqlPanel 和 SqlVisualizerRenderLogsTool，且各自作用于自己的解析器实例）。因此，每个打印过一条未闭合语句的唯一线程 token 都会在控制台的生命周期内保留其 SQL 文本：在持续的日志量与不断变化的线程名之下，保留内存会随打印的 SQL 总量线性增长，而 IDE 控制台循环缓冲区会把同样的文本丢弃。",
-    "claimed_root_cause": "淘汰资格（isIdle）被定义为「没有 pending 语句」，而本可把 pending 桶转为 idle 的 settled-flush 机制只存在于 JdbcTemplate 和 ShardingSphere 解析器；MyBatis/Hibernate 的 pending 桶永远没有资格被 64 桶上限淘汰。",
+    "title": "MyBatis/Hibernate 解析器的线程桶在 pending 期间永不被淘汰，随每个控制台累积无界保留的 SQL（已修复）",
+    "description": "LogThreadRouter 将桶数量上限设为 64（DEFAULT_MAX_BUCKETS），但 evictIdle 只移除 isIdle 的桶。一个 MyBatisLogParser 桶如果收到过 Preparing: 或裸 SQL 行、却没有收尾 Parameters 行，就会持有 pendingSql（最多 maxParseLength=20000 字符，外加未截断的 pendingLogLine 原始行）或 prefixMatched/paramPrefixMatched 等待状态，因而永远不会空闲（isIdle 位于 MyBatisLogParser.kt:65，要求 pendingSql == null && !prefixMatched && !paramPrefixMatched）。HibernateLogParser.feedIdle 同样把 collecting 置为 true。与 JdbcTemplate 和 ShardingSphere 解析器不同，MyBatisLogParser 和 HibernateLogParser 没有 flushSettled：全源码 grep 确认 flushSettled/settledBuckets 只针对 jdbcParser 和 shardingParser 调用（SqlLogConsoleBridge.kt:1165-1166 的逐行路径，以及 :453/:467 的 EDT 周期性 flushSettledEntries），且捕获路径从不调用 ctx.myBatisParser.closePending()/ctx.hibernateParser.closePending()（closePending() 的调用方只有 LogToSqlPanel 和 SqlVisualizerRenderLogsTool，且各自作用于自己的解析器实例）。因此，每个打印过一条未闭合语句的唯一线程 token 都会在控制台的生命周期内保留其 SQL 文本：在持续的日志量与不断变化的线程名之下，保留内存会随打印的 SQL 总量线性增长，而 IDE 控制台循环缓冲区会把同样的文本丢弃。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-22：evictIdle 第二规则：非空闲但静默 >60s 先 forceClose 再淘汰；ibatisPending 挂起态接入同判据老化（R-01 将其并入修复面）（提交 da90431c3/9069bad33）；回归测试通过。",
+    "root_cause": "淘汰资格（isIdle）被定义为「没有 pending 语句」，而本可把 pending 桶转为 idle 的 settled-flush 机制只存在于 JdbcTemplate 和 ShardingSphere 解析器；MyBatis/Hibernate 的 pending 桶永远没有资格被 64 桶上限淘汰。",
+    "intended_behavior": "解析器线程桶数量与保留内存有界：非空闲但静默超过阈值的桶被强制闭合并淘汰，未闭合语句不再随控制台生命周期永久保留。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -760,21 +1041,48 @@
         "description": "isIdle = pendingSql == null && !prefixMatched && !paramPrefixMatched —— 持有 pendingSql 的桶永远无法被淘汰"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标受控执行的、由操作系统强制的沙箱",
-      "缺少观测：在 N 个唯一 token 的未闭合 Preparing 行（例如 N = 1k/10k/100k）的有界夹具上测得的保留桶数量与堆增长，用以证明超出 64 桶上限的无界保留"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "持续日志量与不断变化的线程名（每请求线程池打印无收尾 Parameters 的 Preparing 行）"
+      }
     ],
-    "validation_plan": {
-      "local": "纯 JVM：扩展 LogThreadRouterTest / LogParseConcurrencyTest（两者都存在；gradle --tests cn.song.mybatisplus.visualizer.log.LogThreadRouterTest）——向 MyBatisLogParser 喂入 N 行 '2026-01-01 [thread-i] DEBUG ==> Preparing: <20k-char SQL>'，使用互不相同的 thread-i，然后断言 router.bucketCount() 保持有界且桶变为可淘汰；在当前源码上，bucketCount() 会增长到 N，每个桶最多保留 20k 字符的 pendingSql 外加原始 pendingLogLine。",
-      "deployment": "由所有者观察：在沙箱化 runIde 中运行一个每请求使用线程池、发出无参数语句的演示应用；在控制台循环缓冲区已裁剪掉同样输出之后，观察可归因于解析器桶的 IDE 堆保留。"
+    "execution": {
+      "attacker_perspective": "被托管进程以大量唯一线程 token 打印未闭合 Preparing 行，每个 token 永久保留至多 20k 字符 pendingSql，保留内存随 SQL 总量线性增长超出 64 桶上限。",
+      "payloads": [
+        "N 条 '2026-01-01 [thread-i] DEBUG ==> Preparing: <20k-char SQL>'（N=1k/10k/100k 唯一 token）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.log.LogThreadRouterTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（bucketCount 增长到 N 且桶不可淘汰，lane 报告登记的复现证据），修复提交 da90431c3/9069bad33 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "静默老化淘汰：非空闲但静默 >60s 的桶 forceClose 后驱逐；ibatisPending 接入同一老化判据。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "普通应用线程池即可触发（先红测试 LogThreadRouterTest.非空闲桶静默超阈值后被淘汰 以 N 唯一 token 夹具复现），无需对抗意图"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "保留内存线性增长属可用性/资源影响，控制台循环缓冲已丢弃同样文本，无功能或数据破坏"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.log.LogThreadRouterTest.非空闲桶静默超阈值后被淘汰 在修复前转红（审计缺陷复现）、修复提交 9069bad33 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "mcp-select-guard.client-side-only-readonly-gap",
-    "title": "MCP 只读执行守卫仅在客户端：SELECT 调用的服务器端副作用以完整数据源权限执行，而 sqlv_explain 宣称 readOnlyHint=TRUE",
-    "description": "sqlv_explain 告诉 MCP agent 该工具严格只读（SqlVisualizerExplainTool.kt:30 的 @McpToolHints readOnlyHint=TRUE 以及第 26-27 行的描述 'Strictly read-only ... rejections are fail-closed'）。实际的控制是 McpSelectGuard.checkSingleSelect——一个按设计允许任何单条纯 SELECT 的客户端语句形状和关键字过滤器——随后 McpDbExecutor 用其存储的凭据连接到项目数据源，并在没有任何数据库层只读强制的情况下执行该语句（全仓库 grep src/main 未发现 connection.setReadOnly、SET TRANSACTION READ ONLY 和会话只读初始化）。一个作为纯 SELECT 通过守卫的语句仍可能通过 SELECT 调用的函数和存储例程（执行 DML 的用户定义函数；引擎内建如 MySQL load_file()、PostgreSQL pg_read_file/pg_ls_dir/lo_import/dblink/pg_sleep）以及通过计划期函数求值，以数据源账户的完整权限造成服务器端写入和状态改变。守卫自己的 deny-list（McpSelectGuard.kt:37-45，已验证 FORBIDDEN_WORDS）覆盖语句动词，而非函数体，且没有下游层收窄账户的权限。",
-    "claimed_root_cause": "McpSelectGuard 将只读作为纯客户端语法属性（单条纯 SELECT）强制执行，而 McpDbExecutor.executeQuery 从不将连接或会话置于只读模式（没有 setReadOnly、没有只读事务启动），因此传达给 agent 的保证（readOnlyHint TRUE）超出了此仓库中任何层所强制的内容；有效权限是数据源账户的完整权限集。",
+    "title": "MCP 只读执行守卫仅在客户端：SELECT 调用的服务器端副作用以完整数据源权限执行，而 sqlv_explain 宣称 readOnlyHint=TRUE（已修复）",
+    "description": "sqlv_explain 告诉 MCP agent 该工具严格只读（SqlVisualizerExplainTool.kt:30 的 @McpToolHints readOnlyHint=TRUE 以及第 26-27 行的描述 'Strictly read-only ... rejections are fail-closed'）。实际的控制是 McpSelectGuard.checkSingleSelect——一个按设计允许任何单条纯 SELECT 的客户端语句形状和关键字过滤器——随后 McpDbExecutor 用其存储的凭据连接到项目数据源，并在没有任何数据库层只读强制的情况下执行该语句（全仓库 grep src/main 未发现 connection.setReadOnly、SET TRANSACTION READ ONLY 和会话只读初始化）。一个作为纯 SELECT 通过守卫的语句仍可能通过 SELECT 调用的函数和存储例程（执行 DML 的用户定义函数；引擎内建如 MySQL load_file()、PostgreSQL pg_read_file/pg_ls_dir/lo_import/dblink/pg_sleep）以及通过计划期函数求值，以数据源账户的完整权限造成服务器端写入和状态改变。守卫自己的 deny-list（McpSelectGuard.kt:37-45，已验证 FORBIDDEN_WORDS）覆盖语句动词，而非函数体，且没有下游层收窄账户的权限。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-03：enforceReadOnlyConnection → setReadOnly(true)，入口缺失/调用失败抛 MCP_READ_ONLY_UNENFORCED 拒绝执行（D3=A fail-closed；所有者 runIde 核对项：真实 RemoteConnection 跨 243/262 生效）（提交 8f556d347/4da7b48a4）；回归测试通过。",
+    "root_cause": "McpSelectGuard 将只读作为纯客户端语法属性（单条纯 SELECT）强制执行，而 McpDbExecutor.executeQuery 从不将连接或会话置于只读模式（没有 setReadOnly、没有只读事务启动），因此传达给 agent 的保证（readOnlyHint TRUE）超出了此仓库中任何层所强制的内容；有效权限是数据源账户的完整权限集。",
+    "intended_behavior": "sqlv_explain 的只读承诺由数据库连接层强制：会话未能成功置只读即拒绝执行（fail-closed），SELECT 调用的副作用函数不再以可写连接执行。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -815,21 +1123,53 @@
         "description": "工具元数据宣称 readOnlyHint=TRUE（第 30 行），描述向 agent 声称 'Strictly read-only ... rejections are fail-closed'（第 26-27 行）。"
       }
     ],
-    "blockers": [
-      "此 host 上没有 OS 强制的沙箱可用于目标控制的执行",
-      "缺少观察：受支持引擎通过 DatabaseConnectionManager/RemoteStatement 反射通道以数据源账户执行 SELECT 调用的有副作用函数/存储例程（例如执行 DML 的 H2 CREATE ALIAS 函数，或 PostgreSQL SELECT pg_read_file()）的实测行为——副作用是否发生并提交在源码中不可见，平台 DBN 连接层是否施加任何自己的只读属性也不可见"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "方言/驱动对 setReadOnly 的支持差异决定拒绝面；真实 RemoteConnection 上的端到端生效核对（所有者 runIde）尚未完成"
+      },
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理常被投喂不可信内容：连接的 agent 经 sqlv_explain 对真实项目数据源提交 SELECT <副作用函数>(...) 即可触达"
+      }
     ],
-    "validation_plan": {
-      "local": "用 assertAllowed(\"SELECT MY_WRITE_FN(1)\") 和 CREATE-ALIAS 风格的调用形式扩展 McpSelectGuardTest（src/test/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuardTest.kt）语料，以固定守卫允许函数形式 SELECT 的行为（纯逻辑、普通 JUnit；运行 gradle --tests cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest）。端到端副作用观察无法在普通 JUnit 中通过 McpDbExecutor 进行（它反射进入 com.intellij.database 平台类），因此引擎级事实由所有者单独观察：在一个一次性的、可丢弃的内存/文件 H2 数据库上通过普通 JDBC，CREATE ALIAS 一个执行 INSERT 的函数，通过裸 Statement 执行 SELECT MY_WRITE_FN(1)（与 RemoteStatement 镜像的相同 JDBC 契约），并在调用后观察插入的行——用虚拟数据建立最小的引擎级边界结果。",
-      "deployment": "在所有者的一次性数据源上进行仅由所有者观察的检查：用调用执行 DML 的存储函数的 SELECT 调用 sqlv_explain（例如 PostgreSQL `SELECT touch_audit_log()`），并从数据库侧确认 DML 已提交，而工具返回了只读计划响应；可选地验证在配置账户下 pg_read_file/load_file 的可用性。"
+    "execution": {
+      "attacker_perspective": "被投喂不可信内容的 AI 代理用 SQL 调用形式（SELECT MY_WRITE_FN(1)/pg_read_file() 等）经 sqlv_explain 在数据源账户权限下触发服务器端写入/读文件，而工具宣称 strictly read-only。",
+      "payloads": [
+        "SELECT MY_WRITE_FN(1)（CREATE ALIAS 执行 INSERT 的函数）",
+        "SELECT pg_read_file('/etc/passwd')（PostgreSQL）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.mcp.McpDbExecutorReadOnlyTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（executeQueryInternal 无任何 setReadOnly/只读事务设置，先红测试 McpDbExecutorReadOnlyTest 钉住 setReadOnly 失败/缺失结构化拒绝），修复提交 8f556d347/4da7b48a4 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "D3=A fail-closed：建连后强制 setReadOnly(true)，入口缺失或调用失败抛 MCP_READ_ONLY_UNENFORCED 拒绝执行。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "守卫结构上允许函数形式 SELECT（先红测试 McpDbExecutorReadOnlyTest 钉住只读强制缝），代理投毒是 MCP 工具面的常态假设；引擎级副作用实测由所有者单独观察"
+      },
+      "impact": {
+        "score": "high",
+        "reason": "数据源账户完整权限下的服务器端写入/状态改变与文件读取（代理驱动、可越权触达真实 DB）；运行时端到端尚未实测，故 overall 收敛到 medium"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.mcp.McpDbExecutorReadOnlyTest 在修复前转红（审计缺陷复现）、修复提交 4da7b48a4 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "mcp-select-guard.into-clause-non-recursive-cte-gap",
-    "title": "Guard 的 INTO 结构检查只覆盖顶层：CTE 或派生表内的 SELECT ... INTO <table> 同时绕过 hasIntoClause 与短语扫描",
-    "description": "hasIntoClause（McpSelectGuard.kt:216-222，已核实）只在顶层 PlainSelect 以及 SetOperationList 的直接分支上检查 intoTables/intoTempTable；它从不访问 CTE（WithItem）定义内部或派生表/join 子查询中的 PlainSelect 主体。紧随其后的关键字/短语扫描（第 124-126 行）仅兜底文件/变量形式的 INTO（FORBIDDEN_PHRASES 第 64-67 行：into outfile、into dumpfile、into var、into @），并不覆盖普通的 `SELECT ... INTO <table>`（SQL Server/H2 建表形式）。第 215 行的注释断言 CTE 中的 INTO 仍会落在 PlainSelect 上，但被检查的 PlainSelect 只是最外层那一个，因此形如 `WITH c AS (SELECT a INTO bak FROM s) SELECT * FROM c` 的语句，只要 JSqlParser 5.3 将其解析为内层 PlainSelect 持有 intoTables、外层为空（ExplainGate 的首关键字检查允许 WITH），就能同时通过 INTO 检查与短语扫描。嵌套的 FOR UPDATE 不受影响（for update / for share / lock in share mode 短语是在整段文本中做子串扫描的）。",
-    "claimed_root_cause": "hasIntoClause 没有递归遍历嵌套查询主体（WithItem 的 select 主体、派生表、join），而文本兜底只枚举了文件/变量形式的 INTO，导致建表形式的 SELECT INTO 在嵌套位置无法被检出。",
+    "title": "Guard 的 INTO 结构检查只覆盖顶层：CTE 或派生表内的 SELECT ... INTO <table> 同时绕过 hasIntoClause 与短语扫描（已修复）",
+    "description": "hasIntoClause（McpSelectGuard.kt:216-222，已核实）只在顶层 PlainSelect 以及 SetOperationList 的直接分支上检查 intoTables/intoTempTable；它从不访问 CTE（WithItem）定义内部或派生表/join 子查询中的 PlainSelect 主体。紧随其后的关键字/短语扫描（第 124-126 行）仅兜底文件/变量形式的 INTO（FORBIDDEN_PHRASES 第 64-67 行：into outfile、into dumpfile、into var、into @），并不覆盖普通的 `SELECT ... INTO <table>`（SQL Server/H2 建表形式）。第 215 行的注释断言 CTE 中的 INTO 仍会落在 PlainSelect 上，但被检查的 PlainSelect 只是最外层那一个，因此形如 `WITH c AS (SELECT a INTO bak FROM s) SELECT * FROM c` 的语句，只要 JSqlParser 5.3 将其解析为内层 PlainSelect 持有 intoTables、外层为空（ExplainGate 的首关键字检查允许 WITH），就能同时通过 INTO 检查与短语扫描。嵌套的 FOR UPDATE 不受影响（for update / for share / lock in share mode 短语是在整段文本中做子串扫描的）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-11：hasIntoClause 递归遍历（WithItem/派生表/JOIN/SetOperationList）+ 括号上下文 INTO<非关键字标识符> 词法兜底；JSqlParser 5.3 实际解析形态由父合并验证定案测试实测（提交 a895a914a/14c4574a0/78f41eea4）；回归测试通过。",
+    "root_cause": "hasIntoClause 没有递归遍历嵌套查询主体（WithItem 的 select 主体、派生表、join），而文本兜底只枚举了文件/变量形式的 INTO，导致建表形式的 SELECT INTO 在嵌套位置无法被检出。",
+    "intended_behavior": "SELECT ... INTO 建表形式在任意嵌套位置（CTE/派生表/JOIN 子查询）都被守卫拒绝：结构检查递归全覆盖，文本兜底补嵌套 INTO <标识符> 形态。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -877,22 +1217,53 @@
         "description": "注释声称 CTE 中的 INTO 仍会落在 PlainSelect 上，但该例程只检查最外层那一个 —— 所述理由与实现覆盖范围不符。"
       }
     ],
-    "blockers": [
-      "本机没有可供目标受控执行的 OS 级强制沙箱",
-      "缺少观测：实测 JSqlParser 5.3 对 `WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c`（以及派生表形式）的行为 —— 它是解析为单个 Select、内层 PlainSelect 持有 intoTables 且外层 intoTables 为 null，还是解析失败（后者会重新回到 fail-closed）",
-      "缺少观测：任一受支持引擎（H2、SQL Server、MySQL、PostgreSQL、DM、KingBase）对 CTE/派生表内 SELECT ... INTO <table> 的实测接受度 —— 若引擎不接受，该结构性缺口没有可达影响"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "引擎需接受嵌套位置的 SELECT ... INTO（H2/SQL Server 等建表形式）；JSqlParser 5.3 的 AST 形态已由定案测试实测钉住"
+      },
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理被投喂不可信内容后经 sqlv_explain 提交 CTE 包裹的建表语句"
+      }
     ],
-    "validation_plan": {
-      "local": "在 McpSelectGuardTest（src/test/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuardTest.kt）中加入精确夹具 `WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c`（以及派生表变体 `(SELECT a INTO b FROM s)`），并通过 SqlAstParser.parseStatements 对 JSqlParser 5.3 的 AST 形状做断言 —— 哪个 PlainSelect 持有 intoTables、guard 的判定是否放行 —— 用 gradle --tests cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest 运行；若 guard 放行，再针对临时内存 H2（支持 SELECT...INTO）加一层引擎级检查，通过普通 JDBC（而非需要平台类的 McpDbExecutor）执行，以确定嵌套形式是否真的会执行。",
-      "deployment": "由 owner 观察验证：用 CTE-INTO 语句对临时 SQL Server 或 H2 数据源运行 sqlv_explain，并在数据库侧观察是否创建了表 `b`/`bak`。"
+    "execution": {
+      "attacker_perspective": "代理提交 WITH c AS (SELECT a INTO bak FROM s) SELECT * FROM c，绕过顶层 INTO 结构检查与短语扫描，以数据源账户权限在真实库建表。",
+      "payloads": [
+        "WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c",
+        "派生表变体 (SELECT a INTO b FROM s)"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（先红测试钉住守卫放行与 AST 形态：内层 PlainSelect 持有 intoTables 而检查只看最外层），修复提交 a895a914a/14c4574a0/78f41eea4 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "hasIntoClause 改递归遍历全部嵌套 Select + 括号上下文 INTO<非关键字标识符> 词法兜底（量词形态判定修正随 78f41eea4 一并落）。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "语句形状门对 WITH 放行、嵌套 INTO 结构缺口由先红测试 McpSelectGuardTest.拒绝_CTE与派生表内SELECT_INTO建表 钉住；引擎接受度依数据源方言"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "以数据源账户权限在真实库创建表（代理驱动的未授权 DDL）；范围限于建表类副作用"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.mcp.McpSelectGuardTest.拒绝_CTE与派生表内SELECT_INTO建表 在修复前转红（审计缺陷复现）、修复提交 78f41eea4 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "mcp-sqlv-text-tools-unbounded-sql-input",
-    "title": "MCP 文本分析工具（sqlv_check_sql、sqlv_rollback_plan、sqlv_reverse_sql、sqlv_perf_advice）解析长度无上限的 agent 提供 SQL，而同级的 render-logs 路径对同一 sink 类别强制执行 20k 上限",
-    "description": "四个 MCP 文本分析工具接受来自已连接 AI agent 的原始 sql: String 并同步解析（通过共享 SqlAstParser 的 JSqlParser，路径为 UnboundedWriteDetector.parseStatementsShared / RollbackSqlGenerator.generate / SqlPerfAnalyzer，加上自身无长度上限的 SqlStatementSplitter），运行在 IDE 的 MCP 分派路径上，没有输入长度或解析成本上限（已核实：sqlv_check_sql 位于 SqlVisualizerCheckSqlTool.kt:39，sqlv_rollback_plan 位于 SqlVisualizerRollbackPlanTool.kt:37-40，sqlv_reverse_sql 位于 SqlVisualizerReverseSqlTool.kt:44-48，sqlv_perf_advice 位于 SqlVisualizerPerfAdviceTool.kt:56-57——均未验证长度；只有 isBlank 检查）。为同一 JSqlParser sink 提供输入的控制台/render-logs 解析器强制执行 PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH=20000（PluginSettings.kt:832，在 SqlVisualizerRenderLogsTool.kt:82 应用），确立了此 sink 类别预期的有界求值不变量。单次携带数 MB SQL 的 MCP 调用（或重复调用）会在 IDE 进程内驱动无界解析工作和 AST 内存放大，而解析器级 StackOverflowError/OutOfMemoryError 会逃逸工具的 Exception 处理器，因为审计边界故意重新抛出 VirtualMachineError（FatalErrors.isFatal，McpToolsetSupport.kt:147）。",
-    "claimed_root_cause": "四个 MCP 工具入口点和共享 SqlAstParser 构建时未加入日志解析路径已有的输入长度门（maxParseLength=20000）；解析成本和 AST 分配恰好在 AI agent 提供 SQL 文本的信任边界上无界，而 rollback 流水线唯一的界限（MAX_STATEMENTS=500、MAX_TOTAL_CHARS=256KiB）适用于输出，而非输入。",
+    "title": "MCP 文本分析工具（sqlv_check_sql、sqlv_rollback_plan、sqlv_reverse_sql、sqlv_perf_advice）解析长度无上限的 agent 提供 SQL，而同级的 render-logs 路径对同一 sink 类别强制执行 20k 上限（已修复）",
+    "description": "四个 MCP 文本分析工具接受来自已连接 AI agent 的原始 sql: String 并同步解析（通过共享 SqlAstParser 的 JSqlParser，路径为 UnboundedWriteDetector.parseStatementsShared / RollbackSqlGenerator.generate / SqlPerfAnalyzer，加上自身无长度上限的 SqlStatementSplitter），运行在 IDE 的 MCP 分派路径上，没有输入长度或解析成本上限（已核实：sqlv_check_sql 位于 SqlVisualizerCheckSqlTool.kt:39，sqlv_rollback_plan 位于 SqlVisualizerRollbackPlanTool.kt:37-40，sqlv_reverse_sql 位于 SqlVisualizerReverseSqlTool.kt:44-48，sqlv_perf_advice 位于 SqlVisualizerPerfAdviceTool.kt:56-57——均未验证长度；只有 isBlank 检查）。为同一 JSqlParser sink 提供输入的控制台/render-logs 解析器强制执行 PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH=20000（PluginSettings.kt:832，在 SqlVisualizerRenderLogsTool.kt:82 应用），确立了此 sink 类别预期的有界求值不变量。单次携带数 MB SQL 的 MCP 调用（或重复调用）会在 IDE 进程内驱动无界解析工作和 AST 内存放大，而解析器级 StackOverflowError/OutOfMemoryError 会逃逸工具的 Exception 处理器，因为审计边界故意重新抛出 VirtualMachineError（FatalErrors.isFatal，McpToolsetSupport.kt:147）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-17：四工具入口 sql.length > DEFAULT_LOG_MAX_PARSE_LENGTH(20000) 抛 INVALID_ARGUMENT（未动 PluginSettings.kt）（提交 d02ddec0d/b0c7bf701）；回归测试通过。",
+    "root_cause": "四个 MCP 工具入口点和共享 SqlAstParser 构建时未加入日志解析路径已有的输入长度门（maxParseLength=20000）；解析成本和 AST 分配恰好在 AI agent 提供 SQL 文本的信任边界上无界，而 rollback 流水线唯一的界限（MAX_STATEMENTS=500、MAX_TOTAL_CHARS=256KiB）适用于输出，而非输入。",
+    "intended_behavior": "MCP 文本分析工具对 agent 提供 SQL 与 render-logs 通道同规：输入超过 20000 字符结构化拒绝，解析成本与 AST 分配在信任边界上有界。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -945,21 +1316,48 @@
         "description": "isFatal 对 VirtualMachineError（StackOverflowError/OutOfMemoryError）返回 true，因此解析器 Errors 被 McpToolsetSupport.kt:146-147 的审计 catch 有意不捕获。"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "未在 JSqlParser 5.3 上对受限对抗性 SQL fixture 本地观测到解析成本/AST 内存增长曲线（源码分析确立了缺失的上限和同级的 20k 上限，而非实测增长）",
-      "IntelliJ 平台 MCP 分派器对未捕获 VirtualMachineError 的遏制（工具调用失败 vs 线程死亡 vs 进程影响）是平台行为，本仓库不可见"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理常被投喂不可信内容：已连接 agent 携带数 MB SQL 单次或重复调用即触发；FatalErrors 对 VirtualMachineError 的致命透传是该 sink 的既有语义"
+      }
     ],
-    "validation_plan": {
-      "local": "在现有纯函数核心上的 Plain-JUnit 测试装置（均可在无平台类型下调用）：扩展 cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest、RollbackPlanToolTest 和 PerfAdviceToolTest（以及 reverse 通道的 cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest），使用受限对抗性 fixture（例如 'SELECT 1 OR 1 OR ...' 链和多 MB 语句列表）在 JVM -Xmx/-Xss 限制下运行；测量解析时间和峰值内存增长，与等效的 20k 上限同级输入对比，验证解析器 StackOverflowError 逃逸 checkSql/rollbackPlan（UnboundedWriteDetector.kt:162 / RollbackSqlGenerator.kt:133 的仅 Exception catch）并被 FatalErrors.isFatal 重新抛出，然后断言新的输入长度上限（与 DEFAULT_LOG_MAX_PARSE_LENGTH 对齐）拒绝该 fixture。使用 gradle --tests cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest（及同级测试类）运行。"
+    "execution": {
+      "attacker_perspective": "已连接 agent 以单次数 MB SQL 或重复调用四个文本工具，在 IDE 的 MCP 分派路径驱动无界解析与 AST 内存放大，StackOverflowError/OutOfMemoryError 透传平台。",
+      "payloads": [
+        "数 MB 单语句（'SELECT 1 OR 1 OR ...' 链）与超语句数列表经 sqlv_check_sql/sqlv_rollback_plan/sqlv_reverse_sql/sqlv_perf_advice"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（四入口仅 isBlank 检查，先红测试 CheckSqlToolTest.超长输入_结构化拒绝 钉住结构化拒绝缺失），修复提交 d02ddec0d/b0c7bf701 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "四个文本工具入口统一 20000 字符输入上限（对齐 DEFAULT_LOG_MAX_PARSE_LENGTH 同级不变量），超限 INVALID_ARGUMENT 结构化拒绝。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "已连接 agent 单次调用即可触发（先红测试 CheckSqlToolTest.超长输入_结构化拒绝 钉住缺上限形态）；代理被投喂不可信内容是常态假设"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "IDE MCP 分派路径无界解析/内存放大可用性影响；平台对致命错误的遏制范围使后果存在放大可能，但无数据外泄"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.mcp.CheckSqlToolTest.超长输入_结构化拒绝 在修复前转红（审计缺陷复现）、修复提交 b0c7bf701 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "mcp.history_search.agent-regex-unbounded-backtracking",
-    "title": "sqlv_history_search 中由代理提供的正则表达式在历史 SQL 上求值时没有超时或成本预算，可在 IDE 进程内造成灾难性回溯的 CPU 耗尽",
-    "description": "sqlv_history_search 接受代理可控的正则，该正则只做语法检查即被编译（HistorySearchService.kt:231，runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }），并在 IDE 的 MCP 分发路径上对每个扫描到的历史条目的 rawSql/restoredSql 以 containsMatchIn 求值（第 221 行）。扫描上限（MAX_SCAN_ENTRIES = 200_000，第 60 行）限制条目数量，但不限制每次正则求值的成本；控制台捕获的条目受 20k 日志 maxParseLength 限制，而 MCP 植入的条目（mcpHistoryEntry）承载原始代理 selectSql，受 McpSelectGuard.MAX_SQL_LENGTH = 200_000 上限约束。Java 的正则引擎没有内置求值超时，因此病态模式对长 token 求值时可能让调用线程无限期停顿。对抗性输入可在同一工具面内植入：代理可以先通过 sqlv_explain 把任意 selectSql 记录进历史（经由 mcpHistoryEntry 记录到自动保存链），或依赖控制台捕获的 SQL 中已包含的长 token。",
-    "claimed_root_cause": "HistorySearchService 编译并应用代理正则时，没有模式复杂度限制、没有依赖输入长度的保护、也没有求值超时；该服务中唯一的预算限制的是结果数量与条目数量，而不是每次正则的成本。",
+    "title": "sqlv_history_search 中由代理提供的正则表达式在历史 SQL 上求值时没有超时或成本预算，可在 IDE 进程内造成灾难性回溯的 CPU 耗尽（已修复）",
+    "description": "sqlv_history_search 接受代理可控的正则，该正则只做语法检查即被编译（HistorySearchService.kt:231，runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }），并在 IDE 的 MCP 分发路径上对每个扫描到的历史条目的 rawSql/restoredSql 以 containsMatchIn 求值（第 221 行）。扫描上限（MAX_SCAN_ENTRIES = 200_000，第 60 行）限制条目数量，但不限制每次正则求值的成本；控制台捕获的条目受 20k 日志 maxParseLength 限制，而 MCP 植入的条目（mcpHistoryEntry）承载原始代理 selectSql，受 McpSelectGuard.MAX_SQL_LENGTH = 200_000 上限约束。Java 的正则引擎没有内置求值超时，因此病态模式对长 token 求值时可能让调用线程无限期停顿。对抗性输入可在同一工具面内植入：代理可以先通过 sqlv_explain 把任意 selectSql 记录进历史（经由 mcpHistoryEntry 记录到自动保存链），或依赖控制台捕获的 SQL 中已包含的长 token。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-24：三道闸：模式长度 256 / 复杂度初筛（量化分组套无界量词 + 双重量词，{n,} 才算无界为合并验证修正）/ 求值预算（单条目 50ms 记 miss、整查 2s 结构化失败）（提交 fc81f5684/f49190dde/78f41eea4）；回归测试通过。",
+    "root_cause": "HistorySearchService 编译并应用代理正则时，没有模式复杂度限制、没有依赖输入长度的保护、也没有求值超时；该服务中唯一的预算限制的是结果数量与条目数量，而不是每次正则的成本。",
+    "intended_behavior": "代理提供的正则在编译与求值两层有预算：高危形态拒绝、求值超预算按 miss/结构化失败收敛，不在 IDE 分派线程无限期停顿。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1000,22 +1398,48 @@
         "description": "mcpHistoryEntry 将代理选定的 selectSql 原样记录（rawSql = restoredSql = 去除首尾空白的输入，不减少长度；外部上限为 McpSelectGuard.MAX_SQL_LENGTH = 200_000，McpSelectGuard.kt:24）到 source 为 SqlSource.MCP 的历史链中，给了代理一种自助方式去植入随后会被该正则求值的长对抗性 token。"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标受控执行的、由操作系统强制的沙箱",
-      "缺少观测：在本代码路径下，用 JDK java.util.regex 对 20k 字符条目求值病态模式（例如 '(a+)+b'）测得的 wall-clock，用以量化每次调用实际停顿多久",
-      "缺少观测：平台 MCP server 通道是否施加了每次调用超时或序列化上限，从而约束被卡住的分发线程（平台行为在本仓库中不可见）"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "对抗输入可自助植入：代理可先经 sqlv_explain 把长 token selectSql 记入历史（mcpHistoryEntry，上限 200k 字符）或依赖控制台捕获长 token"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展现有的纯逻辑测试 cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest（它不涉及平台类型，直接驱动 HistorySearchService.search(perFile, query, nowMs)）：构建 perFile，其中一个条目的 restoredSql 为 20k 个 'a' 字符，以 Query(regex = \"(a+)+b\") 调用 search，并加 wall-clock 断言（例如必须在 2 秒内返回），观察超时——用假数据确立无界回溯停顿。以 gradle --tests cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest 运行。",
-      "deployment": "由所有者观察：在沙箱化 IDE 中运行插件的 MCP server，通过 sqlv_explain 植入一条长 token 语句，然后以病态正则调用 sqlv_history_search，并在 IDE 响应性或 idea.log 中观察被卡住的调用。"
+    "execution": {
+      "attacker_perspective": "代理以嵌套量词病态正则调用 sqlv_history_search，对至多 20 万条历史条目（每条至多 200k 字符）做无预算回溯，CPU 耗尽卡死 IDE 分派线程。",
+      "payloads": [
+        "Query(regex=\"(a+)+b\") 对 restoredSql 为 20000 个 'a' 的条目"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（runCatching 仅语法检查、containsMatchIn 无预算，先红测试 HistorySearchServiceTest.test嵌套量词高危正则_拒绝 钉住拒绝缺失），修复提交 fc81f5684/f49190dde/78f41eea4 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "正则三道闸：模式长度 256 上限 + 复杂度初筛（量化分组套无界量词/双重量词拒绝）+ 求值预算（单条目 50ms、整查 2s）。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "正则与植入输入同面供给（先红测试 HistorySearchServiceTest.test嵌套量词高危正则_拒绝 钉住拒绝缺失），单次调用即触发"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "代理驱动的 CPU 耗尽（IDE 分派线程停顿）属可用性影响；整查 2s 预算落地后残余面收敛"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.mcp.HistorySearchServiceTest.test嵌套量词高危正则_拒绝 在修复前转红（审计缺陷复现）、修复提交 78f41eea4 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "mcp.history_search.masking-not-applied",
-    "title": "即使启用了插件的 MCP 输出脱敏设置，sqlv_history_search 仍返回带有未脱敏字面量参数值的还原 SQL",
-    "description": "插件暴露了一个「MCP 输出脱敏」设置（mcpMaskEnabled，PluginSettings.kt:677，已验证：`var mcpMaskEnabled: Boolean = false`）。脱敏是按工具分别应用的：只有 SqlVisualizerRenderLogsTool 对其输出调用 DisplayMasker.maskDisplay（SqlVisualizerRenderLogsTool.kt:112；全仓库 grep 确认这是 mcp 包中唯一的 maskDisplay 调用点）。同类的历史通道 sqlv_history_search 提供相同的数据类——参数已回填为字面量值的 restoredSql 条目——并且每次调用返回最多 100 个预览，每个 8 行/600 字符（allDates=true 会扩大到整个历史目录），而路径上任何地方都没有应用脱敏。因此，已连接的 agent 可以通过用针对敏感列的关键字搜索历史，提取操作员要求插件挡在 AI 上下文之外的敏感字面量。",
-    "claimed_root_cause": "输出脱敏并未在共享工具集输出骨架中强制（McpToolsetSupport.audit 返回原始 block 字符串，McpToolsetSupport.kt:127-154）；每个工具必须自行选择启用，而 SqlVisualizerHistorySearchTool.formatResult 在编写时没有加入 maskDisplay 调用，因此 mcpMaskEnabled 不变式在一个输出通道上成立，在另一个通道上静默失效。",
+    "title": "即使启用了插件的 MCP 输出脱敏设置，sqlv_history_search 仍返回带有未脱敏字面量参数值的还原 SQL（已修复）",
+    "description": "插件暴露了一个「MCP 输出脱敏」设置（mcpMaskEnabled，PluginSettings.kt:677，已验证：`var mcpMaskEnabled: Boolean = false`）。脱敏是按工具分别应用的：只有 SqlVisualizerRenderLogsTool 对其输出调用 DisplayMasker.maskDisplay（SqlVisualizerRenderLogsTool.kt:112；全仓库 grep 确认这是 mcp 包中唯一的 maskDisplay 调用点）。同类的历史通道 sqlv_history_search 提供相同的数据类——参数已回填为字面量值的 restoredSql 条目——并且每次调用返回最多 100 个预览，每个 8 行/600 字符（allDates=true 会扩大到整个历史目录），而路径上任何地方都没有应用脱敏。因此，已连接的 agent 可以通过用针对敏感列的关键字搜索历史，提取操作员要求插件挡在 AI 上下文之外的敏感字面量。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-07：formatResult 增 maskLiterals 形参（null 读 mcpMaskEnabled），sqlPreview 经 DisplayMasker.maskDisplay；McpToolsetSupport 共享骨架统一出口脱敏登记 followup（提交 0619a92d3/79efe38f7）；回归测试通过。",
+    "root_cause": "输出脱敏并未在共享工具集输出骨架中强制（McpToolsetSupport.audit 返回原始 block 字符串，McpToolsetSupport.kt:127-154）；每个工具必须自行选择启用，而 SqlVisualizerHistorySearchTool.formatResult 在编写时没有加入 maskDisplay 调用，因此 mcpMaskEnabled 不变式在一个输出通道上成立，在另一个通道上静默失效。",
+    "intended_behavior": "mcpMaskEnabled 脱敏不变式对所有返回 restoredSql 预览的 MCP 通道成立：开启脱敏后 sqlv_history_search 输出的敏感字面量被打码。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1061,21 +1485,52 @@
         "description": "mcpMaskEnabled 是一个全局设置（默认关闭），没有会把 history_search 排除在外的按通道作用域；其 KDoc 声明目的是将敏感字面量挡在 AI 上下文之外。"
       }
     ],
-    "blockers": [
-      "本机上没有可用于目标控制执行的 OS 强制沙箱",
-      "缺失观察：有界本地运行尚未观察到值级输出——即由已保存后还原的历史条目产生的 Hit.sqlPreview 是否确实包含回填的字面量（源码确立了这一往返：SqlLogParamCodec.encodeEntry 将 restoredSql 持久化为文件体，SqlLogFileReader 原样还原 entry.restoredSql，且 McpHistoryIngestTest 夹具显示 restoredSql 可往返，但工具渲染的输出字符串未被观察到）"
+    "conditions": [
+      {
+        "kind": "system_configuration",
+        "description": "前提是操作员在插件设置开启「MCP 输出脱敏」（mcpMaskEnabled，默认关闭）且历史中存在含敏感字面量的条目"
+      },
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理对真实操作数据产生的历史发起关键字搜索即可触达（代理被投喂不可信内容的常态假设）"
+      }
     ],
-    "validation_plan": {
-      "local": "两个使用虚拟数据的纯 JUnit 步骤：(1) 运行 gradle --tests cn.song.mybatisplus.visualizer.mcp.McpHistoryIngestTest，确认 restoredSql 经已保存历史文件的往返；(2) 在 cn.song.mybatisplus.visualizer.mcp.HistorySearchToolTest 中添加一个用例，构造一个 HistorySearchService.Result，其中某个 Hit 的 sqlPreview 内嵌一个虚拟敏感字面量（例如 \"password = 'hunter-pw-123'\"），调用 formatResult，并断言该字面量原样出现且没有 '***' 脱敏；在同一测试中，对同一字面量调用兄弟工具 SqlVisualizerRenderLogsTool.renderLogs(..., maskLiterals = true) 并断言它确实被脱敏——在相同虚拟输入下钉住两通道的不一致。",
-      "deployment": "由 owner 观察、非破坏性：在沙箱 IDE 实例中于插件设置里启用「MCP 输出脱敏」，针对一个临时数据源运行一条带类密码字面量的 SQL，使其落入自动保存的历史；用测试客户端连接内置 MCP 服务器，调用 sqlv_history_search 并以针对该列的关键字搜索，观察响应中是否出现未脱敏的字面量。"
+    "execution": {
+      "attacker_perspective": "已连接 agent 以敏感列关键字搜索历史，从 sqlv_history_search 返回的 restoredSql 预览中提取操作员要求挡在 AI 上下文之外的敏感字面量。",
+      "payloads": [
+        "keyword=password 对含 \"password = 'hunter-pw-123'\" 字面量的历史条目（脱敏开启）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.mcp.HistorySearchToolTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（formatResult 直拼 hit.sqlPreview、mcp 包内 maskDisplay 仅 render-logs 调用，先红测试 HistorySearchToolTest.test脱敏开_敏感字面量打码 钉住两通道不一致），修复提交 0619a92d3/79efe38f7 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "formatResult 接入 maskLiterals（null 读 mcpMaskEnabled），sqlPreview 经 DisplayMasker.maskDisplay 与 render-logs 同口径。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "脱敏开启 + 一次关键字搜索即触发（先红测试 HistorySearchToolTest.test脱敏开_敏感字面量打码 以虚拟字面量复现）"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "敏感字面量（口令/凭据类）泄露进 AI 上下文，违反操作员明示的脱敏配置；不直接构成主机或 DB 入侵"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.mcp.HistorySearchToolTest.test脱敏开_敏感字面量打码 在修复前转红（审计缺陷复现）、修复提交 79efe38f7 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "settings-import.sql-fragment-unvalidated",
-    "title": "导入或与 VCS 共享的设置字段在渲染/执行的 SQL 中未做内容校验便被拼接，使共享设置文件可以改变语句语义",
-    "description": "SettingsIO.importFromJson 接受 logicDeleteValue、tenantColumnName、tenantColumnDefault、dataPermissionMockCondition 和 dynamicTableNameRules.replacement 的任意字符串（tablePrefix/tableSuffix 也会到达同一标识符汇聚点），并且每个下游注入点都将这些值渲染进 SQL 文本，没有引号、转义或语法位置强制（SettingsIO.kt 或渲染层中任何地方都不存在值级校验）。因此，团队共享的设置文件（或提交的 .idea/mp-sql-visualizer-project.xml）可以翻转渲染语句的含义：logicDeleteValue='0 OR 1=1' 会把注入的守卫变成 'AND deleted = 0 OR 1=1'（按 'x AND a OR b' 计算时对所有行都为真，因此预览的 DELETE 实际上变成未过滤的），tenantColumnName='tenant_id=1 OR 1=1 --' 会替换租户过滤器，dataPermissionMockCondition 会追加任意 WHERE 片段，而动态表名 replacement 可以把 FROM 指向任意 SQL 文本。被改变的语句会显示在预览面板中，并在执行时原样提交给操作员的数据源。操作员可见的控制（白名单合并、版本门）约束的是文件可以设置哪些键，而从不约束这些键可以包含什么。",
-    "claimed_root_cause": "设置到 SQL 的边界有键级白名单（SettingsIO.kt:91-113）但没有值级校验，而渲染层（SqlGenerator）按设计是直通的（SqlValue.Literal.raw 和 Condition.Raw.sqlText 原样渲染；标识符仅在保留字冲突时加引号），因此任何较低信任的设置通道（共享导入文件、VCS 共享的项目 XML）都可以把任意 SQL 文本放进渲染和执行语句的 WHERE 字面量、标识符和表名位置。",
+    "title": "导入或与 VCS 共享的设置字段在渲染/执行的 SQL 中未做内容校验便被拼接，使共享设置文件可以改变语句语义（已修复）",
+    "description": "SettingsIO.importFromJson 接受 logicDeleteValue、tenantColumnName、tenantColumnDefault、dataPermissionMockCondition 和 dynamicTableNameRules.replacement 的任意字符串（tablePrefix/tableSuffix 也会到达同一标识符汇聚点），并且每个下游注入点都将这些值渲染进 SQL 文本，没有引号、转义或语法位置强制（SettingsIO.kt 或渲染层中任何地方都不存在值级校验）。因此，团队共享的设置文件（或提交的 .idea/mp-sql-visualizer-project.xml）可以翻转渲染语句的含义：logicDeleteValue='0 OR 1=1' 会把注入的守卫变成 'AND deleted = 0 OR 1=1'（按 'x AND a OR b' 计算时对所有行都为真，因此预览的 DELETE 实际上变成未过滤的），tenantColumnName='tenant_id=1 OR 1=1 --' 会替换租户过滤器，dataPermissionMockCondition 会追加任意 WHERE 片段，而动态表名 replacement 可以把 FROM 指向任意 SQL 文本。被改变的语句会显示在预览面板中，并在执行时原样提交给操作员的数据源。操作员可见的控制（白名单合并、版本门）约束的是文件可以设置哪些键，而从不约束这些键可以包含什么。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-08：新增 config/SettingsValueValidator.kt 共享校验器（标识符白名单/单字面量/mock condition 长度+危险片段），导入整体拒绝逐字段报告，项目级读取路径同规（越界改 ProjectPluginSettings.kt 已父审查通过）（提交 ee31117f9/586d5d40）；回归测试通过。",
+    "root_cause": "设置到 SQL 的边界有键级白名单（SettingsIO.kt:91-113）但没有值级校验，而渲染层（SqlGenerator）按设计是直通的（SqlValue.Literal.raw 和 Condition.Raw.sqlText 原样渲染；标识符仅在保留字冲突时加引号），因此任何较低信任的设置通道（共享导入文件、VCS 共享的项目 XML）都可以把任意 SQL 文本放进渲染和执行语句的 WHERE 字面量、标识符和表名位置。",
+    "intended_behavior": "设置到 SQL 的注入字段（logicDeleteValue/tenantColumnName/tenantColumnDefault/tablePrefix/tableSuffix/dataPermissionMockCondition/动态表名规则）在导入与项目级两条读取路径上都过值级校验，改变语句语义的载荷被整体拒绝并逐字段报告。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1150,22 +1605,52 @@
         "description": "PluginSettings.fromJson 将导入的 JSON 加上实时实例状态传入 SettingsIO.importFromJson 和 loadState——导入会覆盖后续每次渲染所用到的实时全局状态"
       }
     ],
-    "blockers": [
-      "本机上没有可用于目标控制执行的 OS 强制沙箱",
-      "缺失观察：本地渲染的 SQL 文本（针对携带载荷值的导入状态，例如 logicDeleteValue='0 OR 1=1'、tenantColumnName='tenant_id=1 OR 1=1 --'、包含 SQL 文本的 dynamicTableNameRules replacement），以确认每个片段都原样落入生成的语句",
-      "缺失观察：由 owner 在虚拟本地数据源上观察执行，确认操作员执行预览的 DELETE/UPDATE 时改变的行范围（例如 'AND deleted = 0 OR 1=1' 因 AND/OR 优先级而匹配所有行）"
+    "conditions": [
+      {
+        "kind": "system_configuration",
+        "description": "前提是操作员导入较低信任的共享设置文件，或 VCS 合并了恶意 .idea/mp-sql-visualizer-project.xml（hostile-project/共享设置通道）"
+      }
     ],
-    "validation_plan": {
-      "local": "无需 IDE 的纯函数校验：扩展 src/test/kotlin/cn/song/mybatisplus/visualizer/config/SettingsIOTest.kt，使用一个导入 JSON，其中 logicDeleteValue='0 OR 1=1'、tenantColumnName='tenant_id=1 OR 1=1 --'、dataPermissionMockCondition='1=1 UNION SELECT 1'，以及一个包含 SQL 文本的 dynamicTableNameRules replacement；然后用 SqlGenerator.generate（无 IDE 依赖）渲染得到的语句模型，并断言 WHERE/表文本包含每个注入片段；复用现有 harness PluginSettingsTestSupport（src/test/kotlin/cn/song/mybatisplus/visualizer/testutil/PluginSettingsTestSupport.kt）、DataPermissionPlaceholderTest 和 DynamicTableNameProcessorTest 作为模式。运行：gradle --tests cn.song.mybatisplus.visualizer.config.SettingsIOTest --tests cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessorTest --tests cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholderTest。",
-      "deployment": "由 owner 在虚拟本地 MySQL 上观察检查：通过设置页的导入按钮导入精心构造的设置 JSON，预览某个 @TableLogic 实体的 wrapper DELETE/SELECT，通过标准 DML 确认点击 Execute，并将受影响/返回的行与 MyBatis-Plus 运行时实际执行的语句（插件声明的保真目标）进行比较，确认导入文件改变了执行 SQL 的语义，超出了操作员可见配置的范围。"
+    "execution": {
+      "attacker_perspective": "共享设置文件携带 logicDeleteValue='0 OR 1=1' 等载荷，导入后渲染语句的 WHERE/标识符/表名位被注入任意 SQL 文本并随操作员执行提交到数据源。",
+      "payloads": [
+        "logicDeleteValue='0 OR 1=1'",
+        "tenantColumnName='tenant_id=1 OR 1=1 --'",
+        "dataPermissionMockCondition='1=1 UNION SELECT 1'",
+        "dynamicTableNameRules.replacement 含 SQL 文本"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.config.SettingsIOTest",
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（导入与项目级读取路径值原样通过、渲染层直通，先红测试 SettingsIOTest.testImportRejectsLogicDeleteValueOrConnector 与 ProjectPluginSettingsTest.testProjectSqlFragmentOverridesRejectedOnReadPath 钉住两通道），修复提交 ee31117f9/586d5d40 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "SettingsValueValidator 共享校验器接入导入与项目级两条读取路径：标识符白名单/单字面量/mock condition 长度与危险片段校验，违规整体拒绝并逐字段报告。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "共享设置/项目 XML 是现实分发通道（先红测试钉住导入与项目级两路径的拒绝缺失），一次导入即持续影响后续渲染"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "渲染语句语义被翻转（逻辑删除守卫失效/租户过滤被替换）并随操作员执行提交；执行前 DML 确认仍在，但确认文本本身已被注入改变"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.config.SettingsIOTest.testImportRejectsLogicDeleteValueOrConnector 在修复前转红（审计缺陷复现）、修复提交 586d5d40 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "share.html-report-export.unescaped-tableName-src",
-    "title": "导出的 SQL/HTML 报告未转义地插值较低信任的 tableName 和参数来源名称，并自动在浏览器中打开文件",
-    "description": "F-8「导出 HTML 报告」共享通道会写出一个独立 HTML 文件，并在用户确认保存对话框后用默认浏览器打开它（BrowserUtil.open）。HtmlReportFormatter 会转义 SQL 标记和参数值，但原样插值表名（'<b>$it</b>'，:72）、方言（:73）和参数来源名称（'<code>$src</code>'，:147）。PreviewResult.tableName 和 unresolvedParams 携带来自较低信任项目文件的任意字符串（实体 @TableName/@TableField 注解值、实体列名）——按架构，其信任主体低于操作员。恶意克隆的项目可以在这些字段中放置带标记的字符串；当开发者导出报告时，注入的标记会在被打开报告的 file:// 上下文中被渲染为 HTML。同类诊断 HTML 格式化器会转义相同字段，表明了该格式化器所违反的预期不变式。",
-    "claimed_root_cause": "HtmlReportFormatter.format/buildParamsTable 仅对 SQL 文本和参数值应用 escapeHtml，而遗漏了 tableName（HtmlReportFormatter.kt:72）、dialect（:73）和参数来源名称（:147），同时导出流程会自动在浏览器中打开保存的文件；上游对项目文件派生的注解字符串不存在字符校验（EntityResolver.kt:454-472）。",
+    "title": "导出的 SQL/HTML 报告未转义地插值较低信任的 tableName 和参数来源名称，并自动在浏览器中打开文件（已修复）",
+    "description": "F-8「导出 HTML 报告」共享通道会写出一个独立 HTML 文件，并在用户确认保存对话框后用默认浏览器打开它（BrowserUtil.open）。HtmlReportFormatter 会转义 SQL 标记和参数值，但原样插值表名（'<b>$it</b>'，:72）、方言（:73）和参数来源名称（'<code>$src</code>'，:147）。PreviewResult.tableName 和 unresolvedParams 携带来自较低信任项目文件的任意字符串（实体 @TableName/@TableField 注解值、实体列名）——按架构，其信任主体低于操作员。恶意克隆的项目可以在这些字段中放置带标记的字符串；当开发者导出报告时，注入的标记会在被打开报告的 file:// 上下文中被渲染为 HTML。同类诊断 HTML 格式化器会转义相同字段，表明了该格式化器所违反的预期不变式。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-09：HtmlReportFormatter tableName/dialect/来源名补转义，与 T-SAF-10 共享 util/HtmlEscape.kt 收敛实现（提交 7a56f934f/d3e7ebd1b）；回归测试通过。",
+    "root_cause": "HtmlReportFormatter.format/buildParamsTable 仅对 SQL 文本和参数值应用 escapeHtml，而遗漏了 tableName（HtmlReportFormatter.kt:72）、dialect（:73）和参数来源名称（:147），同时导出流程会自动在浏览器中打开保存的文件；上游对项目文件派生的注解字符串不存在字符校验（EntityResolver.kt:454-472）。",
+    "intended_behavior": "导出 HTML 报告中所有较低信任字段（表名/方言/参数来源名）与 SQL 文本同规转义，注解派生标记不进入渲染的 HTML。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1235,22 +1720,53 @@
         "description": "现有转义测试（'format_HTML特殊字符_正确转义'）只覆盖 SQL 文本，不覆盖 tableName 或来源名称——未测试的边界"
       }
     ],
-    "blockers": [
-      "本机上没有可用于目标控制执行的 OS 强制沙箱",
-      "BrowserUtil.open 启动的外部浏览器中 file:// HTML 报告的脚本执行行为是无法从源码观察的浏览器/部署事实（现代浏览器对 file 源脚本限制各不相同）；没有它，观察到的效果是报告中的 HTML 内容注入，而非脚本执行",
-      "端到端链条（预览携带恶意 @TableName 的项目实体、导出 HTML 报告、观察被打开的报告）未在此纯源码运行中执行"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "载荷来自恶意克隆项目的 @TableName/@TableField 注解字符串（hostile-project 通道），操作员导出报告时触达"
+      },
+      {
+        "kind": "third_party_dependency",
+        "description": "脚本执行与否取决于外部浏览器对 file:// 源的限制；本修复保证的是 HTML 内容注入面消除（转义后标记不渲染）"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展 src/test/kotlin/cn/song/mybatisplus/visualizer/share/format/HtmlReportFormatterTest.kt（纯 JUnit，无 IDE）：调用 HtmlReportFormatter.format(sql=\"SELECT 1\", sources=listOf(\"<img src=x onerror=alert(1)>\"), paramValues=mapOf(\"<img src=x onerror=alert(1)>\" to \"v\"), tableName=\"<img src=y onerror=alert(2)>\", dialect=\"MySQL\")，并断言输出中除了转义实体之外不包含原始 '<img'；目前预期对 tableName、dialect 和来源名称列失败，而 DiagnosticReportFormatter.formatHtml 可通过同一载荷。使用 gradle --tests cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatterTest 运行",
-      "deployment": "在 runIde 沙箱中使用一个演示项目，其实体携带 @TableName(\"<img src=x onerror=console.log(1)>\") 且 @TableField 列名携带标记，预览该实体的一条语句，运行 Share > Export HTML Report，观察自动打开的浏览器是否从保存的文件执行注入的处理器（仅使用本地虚拟载荷，无外部调用）"
+    "execution": {
+      "attacker_perspective": "恶意项目在 @TableName 等注解放 '<img src=x onerror=...>' 形标记，开发者导出 HTML 报告并在浏览器打开时渲染注入内容。",
+      "payloads": [
+        "tableName=\"<img src=y onerror=alert(2)>\"",
+        "sources/paramValues 键=\"<img src=x onerror=alert(1)>\""
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatterTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（tableName/dialect/来源名原样插值而 SQL 文本已转义，先红测试 HtmlReportFormatterTest.format_低信任tableName_dialect与参数来源_全部转义_T-SAF-09 钉住遗漏），修复提交 7a56f934f/d3e7ebd1b 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "HtmlReportFormatter 对 tableName/dialect/来源名补 escapeHtml，转义实现收敛到共享 util/HtmlEscape.kt。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "hostile-project 注解字段即载荷（先红测试 HtmlReportFormatterTest.format_低信任tableName_dialect与参数来源_全部转义_T-SAF-09 钉住），导出即触达"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "现代浏览器对 file:// 源脚本限制使边界效果为 HTML 内容/布局注入与潜在图片资源请求；转义后注入面消除"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatterTest.format_低信任tableName_dialect与参数来源_全部转义_T-SAF-09 在修复前转红（审计缺陷复现）、修复提交 d3e7ebd1b 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "sql-reverse-parser-unbounded-recursion",
-    "title": "SqlReverseParser 递归下降没有嵌套深度守卫：深度括号或嵌套子查询 SQL 经由 sqlv_reverse_sql 触发 StackOverflowError",
-    "description": "SqlReverseParser 是一个手写递归下降解析器，其括号条件分支经由循环 parseConditionInternal（line 856）-> parseGroup（line 962）-> parseConditionList（line 782）-> parseAndSegment（line 801）-> parseCondition（line 842）-> parseConditionInternal 递归，每层嵌套消耗约 4-5 个栈帧，另有第二个递归循环 parseSubqueryTable（line 679）-> parseSubqueryStructure（line 707）-> parse（line 34）对应每个 FROM 子查询层级。两个循环均无深度计数器（经 grep 核实：文件中唯一的 'depth' 变量是括号平衡计数器，不存在递归深度限制），入口工具 sqlv_reverse_sql 接受未设上限的 SQL 字符串且只捕获 SqlReverseException（SqlVisualizerReverseSqlTool.kt:57），因此紧凑的对抗性输入（数千字节的 '('）会驱动 StackOverflowError，MCP 审计边界将其作为 VirtualMachineError（FatalErrors.isFatal）重新抛给平台分派器。与 JSqlParser 不同，这甚至不需要大输入：每字节的嵌套深度是最大的。",
-    "claimed_root_cause": "递归下降解析器编写时没有递归深度守卫或输入上限；每层括号的帧成本意味着栈深度随攻击者选择的嵌套线性增长，而没有任何层（工具、解析器或审计）限制该深度。",
+    "title": "SqlReverseParser 递归下降没有嵌套深度守卫：深度括号或嵌套子查询 SQL 经由 sqlv_reverse_sql 触发 StackOverflowError（已修复）",
+    "description": "SqlReverseParser 是一个手写递归下降解析器，其括号条件分支经由循环 parseConditionInternal（line 856）-> parseGroup（line 962）-> parseConditionList（line 782）-> parseAndSegment（line 801）-> parseCondition（line 842）-> parseConditionInternal 递归，每层嵌套消耗约 4-5 个栈帧，另有第二个递归循环 parseSubqueryTable（line 679）-> parseSubqueryStructure（line 707）-> parse（line 34）对应每个 FROM 子查询层级。两个循环均无深度计数器（经 grep 核实：文件中唯一的 'depth' 变量是括号平衡计数器，不存在递归深度限制），入口工具 sqlv_reverse_sql 接受未设上限的 SQL 字符串且只捕获 SqlReverseException（SqlVisualizerReverseSqlTool.kt:57），因此紧凑的对抗性输入（数千字节的 '('）会驱动 StackOverflowError，MCP 审计边界将其作为 VirtualMachineError（FatalErrors.isFatal）重新抛给平台分派器。与 JSqlParser 不同，这甚至不需要大输入：每字节的嵌套深度是最大的。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-18：递归下降加深度守卫——depth 参数局部贯穿 parseConditionInternal/parseSubqueryTable 两个递归环（上限 256，无状态 object 不用成员变量防并发串扰），超限抛 SqlReverseException 结构化拒绝；合并验证修正 e8d2a635d：FROM 子查询用例降 500 层（20000 层 token 化先 OOM，500 层越守卫先红仍有区分度）（提交 5dba1ac62/6c6fb091a）；回归通过。",
+    "root_cause": "递归下降解析器编写时没有递归深度守卫或输入上限；每层括号的帧成本意味着栈深度随攻击者选择的嵌套线性增长，而没有任何层（工具、解析器或审计）限制该深度。",
+    "intended_behavior": "递归下降解析对攻击者可控嵌套深度有界：括号与 FROM 子查询两个递归环带深度计数（上限 256），超限抛 SqlReverseException 走工具既有结构化错误通道，而非 StackOverflowError 逃逸 MCP 分派器。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1298,21 +1814,49 @@
         "description": "VirtualMachineError 被归类为致命并被审计边界重新抛出（McpToolsetSupport.kt:146-147）。"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "未在实际运行解析器的 JVM 上对受限 fixture 本地观测到 StackOverflowError 阈值（嵌套深度 x 每层帧数 vs JVM 默认栈）",
-      "IntelliJ 平台 MCP 分派器对重新抛出的 VirtualMachineError 的遏制是本仓库不可见的平台行为"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "AI 代理常被投喂不可信内容：经 sqlv_reverse_sql 提交深度嵌套 SQL 即触达（每字节嵌套是最大深度放大形态）；已知口径——子查询环超限异常被既有回落通道收编为「有界降级」，主体结构化拒绝 repro 由括号用例承载"
+      }
     ],
-    "validation_plan": {
-      "local": "在 cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest 和 cn.song.mybatisplus.visualizer.mcp.ReverseSqlToolTest（两者都存在，是基于纯核心的 plain JUnit）中添加用例：在受限 -Xss 下对 'SELECT * FROM t WHERE ' + '('*20000 + 'a=1' + ')'*20000（以及嵌套 FROM 子查询变体）调用 reverseSql；若无深度守卫，预期 StackOverflowError 逃逸 reverseSql，然后断言在添加深度守卫/输入上限后接受并降级或返回结构化错误。使用 gradle --tests cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest 运行。"
+    "execution": {
+      "attacker_perspective": "代理经 sqlv_reverse_sql 提交数千字节的深度括号嵌套 SQL，驱动每层 4-5 个栈帧的递归下降耗尽 JVM 栈，StackOverflowError 作为 VirtualMachineError 被 MCP 审计边界透传平台。",
+      "payloads": [
+        "'SELECT * FROM t WHERE ' + '('*20000 + 'a=1' + ')'*20000",
+        "深度嵌套 FROM 子查询变体（定案口径 500 层）"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest"
+      ],
+      "observed_result": "修复前先红测试（深度括号嵌套_结构化拒绝而非栈溢出：20000 层括号断言 SqlReverseException）被 StackOverflowError 炸穿 assertThrows 即复现；修复提交 5dba1ac62/6c6fb091a 落地后回归通过（合并验证修正 e8d2a635d：FROM 子查询用例降 500 层、现实深度防误杀）。"
+    },
+    "remediation": {
+      "strategy": "两个递归环入口加 depth 局部参数贯穿（上限 256），超限抛 SqlReverseException 走结构化拒绝；object 保持无状态、深度以局部参数传递防并发串扰。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "已连接 agent 单次调用即可触发，紧凑对抗输入（数千字节括号）即最大化深度（先红测试 SqlReverseParserTest 深度括号用例在修复前被 SOE 炸穿）"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "IDE MCP 分派路径 StackOverflowError 透传属可用性影响（FatalErrors 将 VirtualMachineError 归类致命）；平台遏制范围之外无数据外泄或持久破坏"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 SqlReverseParserTest 深度括号用例在修复前被 StackOverflowError 炸穿（审计缺陷复现）、修复提交 6c6fb091a 后回归通过（e8d2a635d 定案口径）"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt@parse-exception-confinement",
-    "title": "OgnlEvaluator.parse 泄漏 NumberFormatException（整数面值 > Long.MAX_VALUE）和 StackOverflowError（深度嵌套）出其 ParseResult/Err 契约，未捕获地到达 MCP mapper-check 和 UI 预览",
-    "description": "用于 <if test>、<bind value>、${} 和 foreach collection 表达式的自定义 OGNL 求值器将所有解析失败降级为 ParseResult.Err，所有求值期失败降级为 EvalResult.Err——但 parseUncached（Ognl.kt:133-137）只捕获 OgnlParseException，而 evaluate(text) 在 Throwable 保护的 AST 求值器之外调用 parse()（Ognl.kt:153-157；:152 的 KDoc 将其降级承诺限定在求值期，而 parse() 本身将 ParseResult.Err 呈现为其唯一的面向调用者的失败模式，每个基于 parse 构建的辅助函数都假设它不会抛出）。一个 20+ 位的普通整数面值会使 Lexer.number() 从 raw.toLong() 抛出 java.lang.NumberFormatException（Ognl.kt:686），而深度嵌套的括号会在递归下降解析器中耗尽栈（Ognl.kt:749,771-995），因此未捕获的 NumberFormatException/StackOverflowError 从 XmlPreviewModel.from（XmlPreviewModel.kt:263->297 collect->rootPaths，模型构建期间 :333 classifyDetail；XmlPreviewModel.kt 不含 try/catch）和 XmlPreviewModel.renderSql（经由 TextSqlNode.kt:44、IfSqlNode.kt:69、ForeachSqlNode.kt:61；XmlSqlRenderer.kt 不含 try/catch）传播出去。Mapper XML 是较低信任的输入（项目文件、经由 MCP mapper-check 工具的 AI agent 提供的片段），具体 sink 是 SqlVisualizerMapperCheckTool，它在调用 XmlPreviewModel.from 和 model.renderSql()（SqlVisualizerMapperCheckTool.kt:116-117）之前只捕获 XmlParseException（SqlVisualizerMapperCheckTool.kt:93-99）；审计包装器只重新抛出意外异常（McpToolsetSupport.kt:146-149），ui/XmlPreviewService.toResult（XmlPreviewService.kt:257）同样无保护。预期最小影响：agent 或 mapper 编写的包含 <bind name=\"x\" value=\"99999999999999999999\"/> 或 <if test=\"ts > 99999999999999999999\"/> 的语句会使工具/预览路径抛出异常，而不是返回带错误行的降级输出。",
-    "claimed_root_cause": "OgnlEvaluator.parse 中的异常隔离缺口：Lexer.number()（src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686）执行 raw.toLong() 时未捕获超长面值的 NumberFormatException，parseUncached/parse/evaluate(text)（Ognl.kt:133-137,124-131,153-157）只捕获 OgnlParseException，因此词法器的运行时异常（以及 Parser 无界递归下降的 StackOverflowError，Ognl.kt:749,771-995）绕过 Err 降级契约，逃逸到假设 parse()/evaluate() 从不抛出的调用者。",
+    "title": "OgnlEvaluator.parse 泄漏 NumberFormatException（整数面值 > Long.MAX_VALUE）和 StackOverflowError（深度嵌套）出其 ParseResult/Err 契约，未捕获地到达 MCP mapper-check 和 UI 预览（已修复）",
+    "description": "用于 <if test>、<bind value>、${} 和 foreach collection 表达式的自定义 OGNL 求值器将所有解析失败降级为 ParseResult.Err，所有求值期失败降级为 EvalResult.Err——但 parseUncached（Ognl.kt:133-137）只捕获 OgnlParseException，而 evaluate(text) 在 Throwable 保护的 AST 求值器之外调用 parse()（Ognl.kt:153-157；:152 的 KDoc 将其降级承诺限定在求值期，而 parse() 本身将 ParseResult.Err 呈现为其唯一的面向调用者的失败模式，每个基于 parse 构建的辅助函数都假设它不会抛出）。一个 20+ 位的普通整数面值会使 Lexer.number() 从 raw.toLong() 抛出 java.lang.NumberFormatException（Ognl.kt:686），而深度嵌套的括号会在递归下降解析器中耗尽栈（Ognl.kt:749,771-995），因此未捕获的 NumberFormatException/StackOverflowError 从 XmlPreviewModel.from（XmlPreviewModel.kt:263->297 collect->rootPaths，模型构建期间 :333 classifyDetail；XmlPreviewModel.kt 不含 try/catch）和 XmlPreviewModel.renderSql（经由 TextSqlNode.kt:44、IfSqlNode.kt:69、ForeachSqlNode.kt:61；XmlSqlRenderer.kt 不含 try/catch）传播出去。Mapper XML 是较低信任的输入（项目文件、经由 MCP mapper-check 工具的 AI agent 提供的片段），具体 sink 是 SqlVisualizerMapperCheckTool，它在调用 XmlPreviewModel.from 和 model.renderSql()（SqlVisualizerMapperCheckTool.kt:116-117）之前只捕获 XmlParseException（SqlVisualizerMapperCheckTool.kt:93-99）；审计包装器只重新抛出意外异常（McpToolsetSupport.kt:146-149），ui/XmlPreviewService.toResult（XmlPreviewService.kt:257）同样无保护。预期最小影响：agent 或 mapper 编写的包含 <bind name=\"x\" value=\"99999999999999999999\"/> 或 <if test=\"ts > 99999999999999999999\"/> 的语句会使工具/预览路径抛出异常，而不是返回带错误行的降级输出。【修复落地 2026-11-07，T-SecurityAuditFixes 分支（车道 D / 构建防线）】T-SAF-19：三处异常封闭：①Lexer.number 改 toLongOrNull，超长整数面值入既有 Err 通道 ②parse/evaluate 外层补 catch Throwable 收敛 ParseResult.Err/EvalResult.Err（对齐 KDoc 承诺；BannedApiScan 豁免登记 1→3，catch Throwable 是 Err 契约本体）③递归下降深度上限 512（提交 f07c7d8b7/dcf869d17）；回归通过。",
+    "root_cause": "OgnlEvaluator.parse 中的异常隔离缺口：Lexer.number()（src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt:686）执行 raw.toLong() 时未捕获超长面值的 NumberFormatException，parseUncached/parse/evaluate(text)（Ognl.kt:133-137,124-131,153-157）只捕获 OgnlParseException，因此词法器的运行时异常（以及 Parser 无界递归下降的 StackOverflowError，Ognl.kt:749,771-995）绕过 Err 降级契约，逃逸到假设 parse()/evaluate() 从不抛出的调用者。",
+    "intended_behavior": "OGNL 求值器的 Err 降级契约完整：词法、解析、求值各层任何失败（含超长整数面值与深度嵌套）都降级为 ParseResult.Err/EvalResult.Err，不再有 NumberFormatException/StackOverflowError 逃逸到假设 parse()/evaluate() 从不抛出的调用者（MCP mapper-check 与 UI 预览）。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1387,23 +1931,51 @@
         "description": "现有测试 '解析失败返回Err_非法语法与未闭合' 只固定语法错误的 Err 降级；没有用例覆盖超长数值面值或病态嵌套，因此该缺口未经测试"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱",
-      "缺失观察：对包含 <bind name=\"x\" value=\"99999999999999999999\"/> 的语句进行 OgnlEvaluator.parse(\"99999999999999999999\") / OgnlEvaluator.evaluate 的受限本地运行，以观察实际抛出的 NumberFormatException 与预期的 ParseResult.Err/EvalResult.Err（源码审查确立了逃逸路径但未确立观测到的运行时结果）",
-      "缺失观察：对深度嵌套括号 test 表达式进行 OgnlEvaluator.parse 的受限本地运行，以观察 StackOverflowError 与优雅 Err，以及目标 JVM 上发生时的递归深度",
-      "缺失观察：McpToolsetSupport.audit 之上的平台 MCP shell（McpToolsetDynamicRegistrar 生成的工具 shell / IntelliJ MCP server）是否将来自 SqlVisualizerMapperCheckTool 的未捕获 Throwable 转换为结构化工具错误或将其作为工具失败传播——对本单元的源码审查确立了异常既逃逸 XmlParseException 处理器（SqlVisualizerMapperCheckTool.kt:95）又逃逸审计包装器的重新抛出（McpToolsetSupport.kt:146-149），但 registrar 在本单元审查路径之外（由 mcp hunter 拥有）"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "mapper XML 为较低信任输入（项目文件或 AI agent 经 sqlv_mapper_check 提供的片段）：test/bind/${}/collection 表达式内 20+ 位整数面值或深度嵌套即触发"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展 src/test/kotlin/cn/song/mybatisplus/visualizer/xml/OgnlEvaluatorTest.kt：(1) 断言 OgnlEvaluator.parse(\"99999999999999999999\") 返回 ParseResult.Err 且不抛出；(2) 断言 OgnlEvaluator.evaluate(\"99999999999999999999 > 1\", emptyMap()) 返回 EvalResult.Err；(3) 在 XmlPreviewModelTest/XmlScriptBuilderTest 中的 render 层用例，解析包含 <bind name=\"x\" value=\"99999999999999999999\"/> 和 <if test=\"ts > 99999999999999999999\"> 的 mapper，断言 XmlPreviewModel.from/renderSql 产生降级输出加 errors 行而非抛出；(4) 深度用例馈入深度嵌套括号表达式（例如 50,000 层嵌套括号）并断言有界失败而非 StackOverflowError。使用 gradle --tests cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest --tests cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest 运行。如果断言以抛出的异常失败，则按其观测到的可用性/健壮性影响确认候选。",
-      "deployment": "所有者在 IDE 沙箱中观察检查：对包含 <bind name=\"x\" value=\"99999999999999999999\"/> 的 mapper XML 调用 sqlv_mapper_check MCP 工具（或打开预览面板），确认工具返回结构化错误结果还是在 IDE 错误日志中出现未处理异常。"
+    "execution": {
+      "attacker_perspective": "agent 或恶意 mapper 在 <bind value>/<if test> 写超长整数面值或深度嵌套表达式，NumberFormatException/StackOverflowError 逃逸 Err 契约，炸穿 XmlPreviewModel 模型构建与工具处理器。",
+      "payloads": [
+        "<bind name=\"x\" value=\"99999999999999999999\"/>",
+        "<if test=\"ts > 99999999999999999999\">",
+        "50000 层嵌套括号 test 表达式"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest",
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest"
+      ],
+      "observed_result": "修复前先红测试转红即复现（OgnlEvaluatorTest：超长整数 parse 外抛 NumberFormatException、50000 层嵌套 StackOverflowError；XmlPreviewModelTest：超长整数 bind 炸穿模型构建）；修复提交 f07c7d8b7/dcf869d17 落地后回归通过（合并验证修正 e8d2a635d：BannedApiScan 豁免登记 1→3）。"
+    },
+    "remediation": {
+      "strategy": "三处封闭：toLongOrNull 入 Err 通道 + parse/evaluate 外层 Throwable 收敛 Err（契约本体，BannedApiScan 豁免登记）+ 递归下降深度上限 512。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "mapper 片段是 agent 可直接供给的低信任输入（先红测试 OgnlEvaluatorTest/XmlPreviewModelTest 三用例钉住外抛形态），单次 mapper-check 或预览即触发"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "未处理异常炸穿 MCP 工具与 UI 预览路径属可用性/健壮性影响（工具返回未定形态而非降级输出）；无数据外泄或越权"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 OgnlEvaluatorTest（超长整数/50000 层嵌套）与 XmlPreviewModelTest（bind 渲染层）在修复前转红（审计缺陷复现）、修复提交 dcf869d17 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "ui.swing-html-label.unescaped-lower-trust-text",
-    "title": "较低信任字符串被未转义地插值进回滚对话框、预览元信息行和错误工具提示中启用 HTML 的 Swing 标签",
-    "description": "插件通过 Swing HTML 标签渲染较低信任的文本（从控制台捕获还原的 SQL 片段、mapper XML 语句标识符、DB 服务器错误文本）。同类位置一致转义，且若干组件使用 Swing 的 'html.disable' 客户端属性，但有三个汇聚点将此类文本未转义、也未设置 html.disable 地插值进 <html> JBLabel 或工具提示：RollbackSqlDialog 快照查询行（:626，以及 :627 的原始 tooltip）、SqlPreviewPanel 元信息行（tableName / XML statementId / 解析器警告 / 堆栈摘要；当存在 perf 警告段时可见的 <html> 包装生效）、以及 SqlResultPanel 错误工具提示（:277）。Swing HTML 渲染无法执行脚本，且这些 JLabel 没有 HyperlinkListener，因此边界效果限于 HTML 内容/布局注入，外加潜在的 <img src> 资源加载（从 IDE 进程向攻击者选定 URL 发出的请求）；IntelliJ JBLabel/工具提示 HTML 在运行时的实际图片加载行为是缺失的观察。",
-    "claimed_root_cause": "各站点各自为政的 HTML 转义，没有共享不变式：若干调用点转义 &<> 且五个标签禁用 HTML，但 RollbackSqlDialog.kt:626、SqlPreviewPanelResultView.kt fullDisplayText/applyMetaTruncation（:719/:728）和 SqlResultPanel.kt:277（toolTipText）在未转义、也未设置 html.disable 客户端属性的情况下将较低信任字符串插值进 HTML 上下文。",
+    "title": "较低信任字符串被未转义地插值进回滚对话框、预览元信息行和错误工具提示中启用 HTML 的 Swing 标签（已修复）",
+    "description": "插件通过 Swing HTML 标签渲染较低信任的文本（从控制台捕获还原的 SQL 片段、mapper XML 语句标识符、DB 服务器错误文本）。同类位置一致转义，且若干组件使用 Swing 的 'html.disable' 客户端属性，但有三个汇聚点将此类文本未转义、也未设置 html.disable 地插值进 <html> JBLabel 或工具提示：RollbackSqlDialog 快照查询行（:626，以及 :627 的原始 tooltip）、SqlPreviewPanel 元信息行（tableName / XML statementId / 解析器警告 / 堆栈摘要；当存在 perf 警告段时可见的 <html> 包装生效）、以及 SqlResultPanel 错误工具提示（:277）。Swing HTML 渲染无法执行脚本，且这些 JLabel 没有 HyperlinkListener，因此边界效果限于 HTML 内容/布局注入，外加潜在的 <img src> 资源加载（从 IDE 进程向攻击者选定 URL 发出的请求）；IntelliJ JBLabel/工具提示 HTML 在运行时的实际图片加载行为是缺失的观察。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-10：六处逐点 escapeHtml 变体收敛到 util/HtmlEscape.kt；三处未转义汇聚（回滚对话框快照行/预览元信息链/错误 tooltip）修复；html.disable 加至无需 HTML 的标签（提交 7a56f934f/d3e7ebd1b）；回归测试通过。",
+    "root_cause": "各站点各自为政的 HTML 转义，没有共享不变式：若干调用点转义 &<> 且五个标签禁用 HTML，但 RollbackSqlDialog.kt:626、SqlPreviewPanelResultView.kt fullDisplayText/applyMetaTruncation（:719/:728）和 SqlResultPanel.kt:277（toolTipText）在未转义、也未设置 html.disable 客户端属性的情况下将较低信任字符串插值进 HTML 上下文。",
+    "intended_behavior": "Swing HTML 标签与工具提示中的低信任文本（快照 SQL/预览元信息/DB 错误文本）统一转义或禁用 HTML 渲染，三处汇聚点与同类位置一致。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1473,23 +2045,53 @@
         "description": "CommunityDialog 定义了又一个各站点局部的 escapeHtml（:137-138，转义 &<>\" 并应用于 :116 的 <html> 描述标签）——一个完整的转义器，但本身是各站点临时变体，没有共享工具，强化了各站点临时转义的根因（各汇聚点之间没有共享不变式）"
       }
     ],
-    "blockers": [
-      "本机上没有可用于目标控制执行的 OS 强制沙箱",
-      "未观察到 IntelliJ JBLabel/BasicHTML 渲染是否确实从这些特定标签获取 <img src=\"http(s)://…\">（或 file:…）资源——这是一个决定效果是否超出布局/内容扭曲的平台运行时事实",
-      "未观察到在此平台版本上 ToolTipManager HTML 渲染是否为 SqlResultPanel 错误工具提示加载 <img> 资源（且原始工具提示仅在错误文本本身以 '<html>' 开头时才按 HTML 渲染）",
-      "未观察到这些 JLabel 是否在 runIde 沙箱中端到端地被攻击者形状的数据触达（控制台捕获与各汇聚点之间的解析/截断步骤可能改变载荷；预览元信息行的 <html> 包装还要求存在 perf 警告段）"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "载荷源自控制台捕获还原的 SQL 片段、mapper XML 语句标识符或 DB 服务器错误文本（较低信任主体）；预览元信息行的 <html> 包装还需 perf 警告段在场"
+      },
+      {
+        "kind": "third_party_dependency",
+        "description": "IntelliJ JBLabel/ToolTipManager 对 <img src> 资源的加载行为是平台运行时事实；本修复保证的是标记不进入 HTML 上下文"
+      }
     ],
-    "validation_plan": {
-      "local": "在 IDE 测试沙箱中（支持 headless），运行现有 UI harness gradle --tests cn.song.mybatisplus.visualizer.ui.RollbackSqlPanelTest（以及 SqlResultPanel UI harness），并扩展一个最小用例：将 snapshotQueryLabel.text / metaLabel.text 设为 '<html><img src=\"http://127.0.0.1:<ephemeral-loopback-port>/probe.png\"></html>'，并将 SqlResultPanel tooltip 设为以 '<html><img src=…>' 开头的字符串，同时用 loopback 监听器记录请求；断言是否有抓取到达（基线：同一字符串被转义）。还要断言当前行为：让包含 '<img src=…>' 的表片段从 RollbackSqlGenerator snapshotSelectSql（:283）流入 snapshotQueryLabel（:626），以确认未转义的传播",
-      "deployment": "由 owner 在 runIde 沙箱中观察检查：捕获一条其解析后的表片段包含 '<img src=http://<loopback-listener>/x.png>' 的日志行，打开 SQL 预览（元信息行）和回滚对话框（快照查询行），并悬停在一个消息以 '<html>' 开头的执行错误上；通过 loopback 监听器观察 IDE 是否发出图片抓取，并确认普通 JBLabel 上不可能激活脚本/链接"
+    "execution": {
+      "attacker_perspective": "恶意日志/DB 错误文本携带 '<html><img src=...>' 形标记进入回滚对话框快照行、预览元信息行或错误 tooltip，触发 Swing HTML 渲染的内容注入与潜在资源请求。",
+      "payloads": [
+        "snapshotSelectSql 携带 '<img src=http://127.0.0.1:<port>/probe.png>'",
+        "以 '<html>' 开头的 DB 错误消息进 toolTipText"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.ui.RollbackSqlDialogTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（三汇聚点未转义且无 html.disable，先红测试 RollbackSqlDialogTest.testSnapshotSectionEscapesLowerTrustSql_TSAF10 等三类钉住），修复提交 7a56f934f/d3e7ebd1b 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "共享 util/HtmlEscape.kt 收敛六处逐点变体，修复三处未转义汇聚，无需 HTML 的标签统一 putClientProperty(\"html.disable\", true)。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "控制台捕获/DB 错误文本是常态低信任输入（先红测试 RollbackSqlDialogTest.testSnapshotSectionEscapesLowerTrustSql_TSAF10 钉住三汇聚）"
+      },
+      "impact": {
+        "score": "low",
+        "reason": "Swing HTML 不可执行脚本、无 HyperlinkListener，边界效果限于内容/布局注入与潜在 <img> 资源请求；转义后消除"
+      },
+      "overall_severity": "low"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.ui.RollbackSqlDialogTest.testSnapshotSectionEscapesLowerTrustSql_TSAF10（另两类汇聚同批覆盖） 在修复前转红（审计缺陷复现）、修复提交 d3e7ebd1b 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "update.UpdateZipGuard.entry-name-platform-delegated",
-    "title": "更新 zip 防护仅限制大小与条目数量，而将条目名称清洗（zip-slip、Windows 保留设备名）完全委托给未经验证的平台解压器",
-    "description": "UpdateZipGuard.check 是归档/安装边界上的插件侧控制，仅校验条目数量以及声明与实际大小；它从不检查 entry.name。实际解压由平台代码完成：重启脚本路径上的 StartupActionScriptManager.UnzipCommand，以及动态路径上 PluginInstaller.installAndLoadDynamicPlugin 内部的 unpack。两个解压器的规范化行为（拒绝 ../ 与嵌套 ..、绝对路径或盘符限定的目标、NTFS 冒号/备用数据流名称、CON/NUL 等保留设备名、Windows 上结尾的点/空格、重复条目名）在本仓库中不可见，仓库中也没有任何测试对遍历命名或 Windows 恶意条目名的解压进行验证。如果任一平台解压器按原始名称写入条目，攻击者通道可控的更新 zip 会在安装时把文件写到插件根目录之外，或在开发者机器上写入恶意文件名（重启脚本路径会在下次 IDE 启动时执行，且不再重新校验）。",
-    "claimed_root_cause": "负责保证归档边界的组件（UpdateZipGuard）并不校验消费者所依赖的属性（安全条目路径）；本应强制该属性的解压组件属于平台代码，其保证是假设的而非验证的；并且重启脚本路径会在下次启动时重新执行已持久化的 zip，而不重新运行任何防护。",
+    "title": "更新 zip 防护仅限制大小与条目数量，而将条目名称清洗（zip-slip、Windows 保留设备名）完全委托给未经验证的平台解压器（已修复）",
+    "description": "UpdateZipGuard.check 是归档/安装边界上的插件侧控制，仅校验条目数量以及声明与实际大小；它从不检查 entry.name。实际解压由平台代码完成：重启脚本路径上的 StartupActionScriptManager.UnzipCommand，以及动态路径上 PluginInstaller.installAndLoadDynamicPlugin 内部的 unpack。两个解压器的规范化行为（拒绝 ../ 与嵌套 ..、绝对路径或盘符限定的目标、NTFS 冒号/备用数据流名称、CON/NUL 等保留设备名、Windows 上结尾的点/空格、重复条目名）在本仓库中不可见，仓库中也没有任何测试对遍历命名或 Windows 恶意条目名的解压进行验证。如果任一平台解压器按原始名称写入条目，攻击者通道可控的更新 zip 会在安装时把文件写到插件根目录之外，或在开发者机器上写入恶意文件名（重启脚本路径会在下次 IDE 启动时执行，且不再重新校验）。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-06：check 前置 entryNameIssue：拒 .. 段/绝对盘符/ADS 冒号/Windows 保留设备名/段尾点空格——插件侧不再依赖平台解压器保证（R-02 复核确认 UpdateZipGuard 未变后实施）（提交 efefc4eaf/98eff6fa8）；回归测试通过。",
+    "root_cause": "负责保证归档边界的组件（UpdateZipGuard）并不校验消费者所依赖的属性（安全条目路径）；本应强制该属性的解压组件属于平台代码，其保证是假设的而非验证的；并且重启脚本路径会在下次启动时重新执行已持久化的 zip，而不重新运行任何防护。",
+    "intended_behavior": "更新 zip 的条目名在插件侧守卫内校验：zip-slip/绝对盘符/ADS 冒号/保留设备名/尾点尾空格条目在解压前被拒绝，不委托平台解压行为。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1542,22 +2144,56 @@
         "description": "测试套件（类声明于第 23 行；覆盖形式枚举于 KDoc 第 16-21 行）覆盖撒谎的头部、条目数量和大小上限，但没有遍历名称、绝对路径、冒号/ADS 或保留名称的测试夹具——边界的 zip-slip 那一半未被测试"
       }
     ],
-    "blockers": [
-      "本机上没有可用于目标控制执行的 OS 强制沙箱",
-      "StartupActionScriptManager.UnzipCommand 与 PluginInstaller 动态 unpack 的条目路径规范化行为（包括 Windows 特有的冒号/ADS、保留设备名和结尾点处理）实现在本仓库之外的 IntelliJ 平台 jar 中，在此处不可见源码",
-      "动态 unpack 路径与启动脚本 UnzipCommand 是否共用同一解压器实现（从而在一方得到阳性结果即可覆盖另一方）是本仓库无法观察到的平台事实"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是更新通道（manifest/downloadUrl/release 附件）被攻陷——与 #5 同一通道前提"
+      },
+      {
+        "kind": "third_party_dependency",
+        "description": "平台解压器行为仍不可见；修复后插件侧先行拒绝，不再依赖其条目名规范化保证"
+      }
     ],
-    "validation_plan": {
-      "local": "在获批的沙箱中，构造一个包含条目 '../zipslip-probe.txt'、'C:\\\\absolute-probe.txt'、'probe:ads.txt'、'CON.txt' 以及一个正常条目的夹具 zip；对空目标目录运行安装路径所消费的平台 unzip（StartupActionScriptManager 命令执行或 PluginInstaller unpack，使用 PlatformPluginInstallerTest.kt 的 harness 风格），并断言目录之外没有出现任何文件；此外扩展 UpdateZipGuardTest，至少钉住恶意条目名称会被报告。记录所使用的确切 JDK/平台版本。",
-      "deployment": "由 owner 在一次性 Windows IDE 上观察检查：通过真实更新流程（本地 manifest，经 -Dmpvs.update.manifest.url）安装精心构造的探针 zip，并在计划的启动脚本运行之后，验证 PathManager.getPluginsDir() 之外不存在探针文件，且没有创建 ADS/保留名称文件。"
+    "execution": {
+      "attacker_perspective": "通道攻陷者投递含 '../zipslip-probe.txt'、'C:\\absolute-probe.txt'、'probe:ads.txt'、'CON.txt' 类条目的更新 zip，安装时越出插件根目录写文件。",
+      "payloads": [
+        "'../zipslip-probe.txt'",
+        "'C:\\\\absolute-probe.txt'",
+        "'probe:ads.txt'",
+        "'CON.txt'",
+        "段尾点/空格条目"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.update.UpdateZipGuardTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（check 从不校验 entry.name，先红测试 UpdateZipGuardTest.traversalEntryNameIsRejected 钉住恶意条目名放行），修复提交 efefc4eaf/98eff6fa8 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "UpdateZipGuard.check 前置条目名校验（.. 段/盘符/ADS/保留设备名/尾点尾空格），fail-closed 不再委托平台。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "利用前提为更新通道被攻陷（先红测试 UpdateZipGuardTest.traversalEntryNameIsRejected 钉住插件侧缺口）；通道前提同时已意味着可替换插件本身"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "越出插件根目录的任意路径写入与 Windows 恶意文件名落地（重启脚本路径下次启动执行且不再复检）；通道前提使其成为纵深而非唯一防线"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.update.UpdateZipGuardTest.traversalEntryNameIsRejected 在修复前转红（审计缺陷复现）、修复提交 98eff6fa8 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "update.validateArtifact.regex-comment-desync",
-    "title": "更新产物 plugin-id 门使用的正则可能被 XML 注释与平台描述符解析器去同步",
-    "description": "DynamicInstallSupport.validateArtifact 是在安装前将下载的更新 zip 绑定到此插件身份的唯一控制。它在原始 plugin.xml 文本上用正则 <id>(.*?)</id>（DOT_MATCHES_ALL）提取 <id>，这会匹配 XML 注释内的标签内容，而实际安装所用的平台描述符加载器解析真实 XML 并忽略注释。一个伪造的描述符，其唯一位于真实 <id>...</id> 之前的匹配位于注释内，就能通过门，而平台读取到的是外部插件 id；动态安装路径将 zip 和平台解析的描述符直接传递给 PluginInstaller.installAndLoadDynamicPlugin，自身不做任何 id 比较，而重启脚本回退路径将 zip 的（攻击者命名的）顶层目录解包到 plugins 根目录下。这破坏了文档记录的更新服务器到 IDE 边界的“plugin-id 匹配”不变量：被攻陷的更新通道不再局限于替换此插件，而是可以以另一个插件的身份安装内容。前提是控制更新通道（manifest 或 downloadUrl），这已经产生作为此插件的任意代码；额外收益是植入/替换不同的插件身份。",
-    "claimed_root_cause": "checkDescriptorXml 验证对原始文本的正则提取（DynamicInstallSupport.kt:182-183），而不是平台消费者使用的解析 XML 树；门产生的保证（id 等于 PLUGIN_ID）不是消费者所假定的保证（平台解析的描述符 id 是 visualizer id）。",
+    "title": "更新产物 plugin-id 门使用的正则可能被 XML 注释与平台描述符解析器去同步（已修复）",
+    "description": "DynamicInstallSupport.validateArtifact 是在安装前将下载的更新 zip 绑定到此插件身份的唯一控制。它在原始 plugin.xml 文本上用正则 <id>(.*?)</id>（DOT_MATCHES_ALL）提取 <id>，这会匹配 XML 注释内的标签内容，而实际安装所用的平台描述符加载器解析真实 XML 并忽略注释。一个伪造的描述符，其唯一位于真实 <id>...</id> 之前的匹配位于注释内，就能通过门，而平台读取到的是外部插件 id；动态安装路径将 zip 和平台解析的描述符直接传递给 PluginInstaller.installAndLoadDynamicPlugin，自身不做任何 id 比较，而重启脚本回退路径将 zip 的（攻击者命名的）顶层目录解包到 plugins 根目录下。这破坏了文档记录的更新服务器到 IDE 边界的“plugin-id 匹配”不变量：被攻陷的更新通道不再局限于替换此插件，而是可以以另一个插件的身份安装内容。前提是控制更新通道（manifest 或 downloadUrl），这已经产生作为此插件的任意代码；额外收益是植入/替换不同的插件身份。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-05：checkDescriptorXml 弃用 extractTag 正则、改 SecureXml.parse 真解析取 <id>/<version>；非良构 XML 拒（fail closed 收窄放行面）（R-02 复核确认 extractTag :218-219 未变后实施）（提交 daf6617af/addc3f3de）；回归测试通过。",
+    "root_cause": "checkDescriptorXml 验证对原始文本的正则提取（DynamicInstallSupport.kt:182-183），而不是平台消费者使用的解析 XML 树；门产生的保证（id 等于 PLUGIN_ID）不是消费者所假定的保证（平台解析的描述符 id 是 visualizer id）。",
+    "intended_behavior": "插件身份门与平台消费者解析同一 XML 树：正则/解析器去同步不再可能，注释内假 id 不生效，非良构描述符拒绝。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1622,22 +2258,52 @@
         "description": "guard-then-install 顺序确认 validateArtifact（在安装内部）是平台安装之前唯一的身份门"
       }
     ],
-    "blockers": [
-      "此 host 上没有 OS 强制的沙箱可用于目标控制的执行",
-      "平台对真实 id 不匹配的行为（PluginInstaller.installAndLoadDynamicPlugin 接受、重复 id 冲突处理、从 zip 顶层名派生安装目录，以及外部 id 产物是否替换另一个已安装插件）在本仓库之外的 IntelliJ 平台 jar 中实现，无法从源码观察",
-      "平台解析器对双形式描述符（被注释的良性 id 加真实外部 id）所见的确切 XML 需要在一个 fixture 上运行平台描述符加载器，这是目标控制的执行"
+    "conditions": [
+      {
+        "kind": "environmental_dependency",
+        "description": "前提是更新通道（Gitee release 附件 / update.json downloadUrl / manifest）被攻陷——该前提下攻击者已可替换此插件本身，此门额外约束的是以另一插件身份安装"
+      },
+      {
+        "kind": "third_party_dependency",
+        "description": "平台对真实外部 id 产物的安装/冲突行为在本仓库之外；修复保证的是门与消费者看到同一 id"
+      }
     ],
-    "validation_plan": {
-      "local": "扩展 src/test/kotlin/cn/song/mybatisplus/visualizer/update/DynamicInstallSupportTest.kt，加入一个 fixture zip，其 META-INF/plugin.xml 为 '<idea-plugin> <!-- <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id> --> <id>com.example.foreign</id> <version>2099.1.1</version> </idea-plugin>'，并断言 validateArtifact 返回 ArtifactCheck.Ok——这在不触及平台的情况下证明门/消费者去同步。然后，在批准的沙箱内，运行现有的 runIde 端到端 harness（src/test/kotlin/cn/song/mybatisplus/visualizer/heavy/UpdateFlowHeavyTest.kt 模式），由本地 manifest 提供同一 fixture，观察平台安装的内容。",
-      "deployment": "在所有者的一次性 IDE 上进行仅由所有者观察的检查：将 -Dmpvs.update.manifest.url 设置为一个本地 HTTP 服务器，其 manifest.downloadUrl 指向伪造的 fixture zip，运行更新流程，并记录重启后的插件列表/安装目录——具体是外部 id 插件是否被安装或是否引发重复 id 冲突。"
+    "execution": {
+      "attacker_perspective": "通道攻陷者投递描述符中真实 <id> 之前唯一匹配位于 XML 注释内的 zip，通过正则身份门而平台解析到外部 id，以另一插件身份安装内容。",
+      "payloads": [
+        "<idea-plugin> <!-- <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id> --> <id>com.example.foreign</id> <version>2099.1.1</version> </idea-plugin>"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.update.DynamicInstallSupportTest"
+      ],
+      "observed_result": "修复前该断言失败即复现（extractTag 首匹配含注释内容，先红测试 DynamicInstallSupportTest.validateArtifactRejectsCommentDesyncForeignId 钉住去同步），修复提交 daf6617af/addc3f3de 落地后回归通过。"
+    },
+    "remediation": {
+      "strategy": "checkDescriptorXml 改 SecureXml.parse 真解析（1MB 有界读取保留），非良构 XML 直接拒绝。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "利用前提为更新通道被攻陷（先红测试 DynamicInstallSupportTest.validateArtifactRejectsCommentDesyncForeignId 钉住去同步形态）；同前提下此缺口是身份约束的旁路而非初始入口"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "以另一插件身份安装内容（破坏 plugin-id 匹配不变量）；通道前提使其为身份面加固收益，超出版主插件替换的增量有限"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.update.DynamicInstallSupportTest.validateArtifactRejectsCommentDesyncForeignId 在修复前转红（审计缺陷复现）、修复提交 addc3f3de 后回归通过"
     }
   },
   {
-    "verdict": "needs_validation",
+    "verdict": "confirmed",
     "fingerprint": "verifier-cli-gate-jar-first-match-ignores-pin",
-    "title": "市场/兼容性门禁通过首次匹配的缓存遍历解析 verifier-cli jar，当 Gradle 缓存中同时存在多个版本时会静默忽略已固定（pinned）的版本",
-    "description": "权威发行门禁（verifyGate 以及 build-plugin.yml 的 gate job 在发布前要求的三个 verifyMarketplaceVerdict 分支）通过在 Gradle 缓存模块目录上执行 walkTopDown().maxDepth(4).filter{verifier-cli-*-all.jar}.firstOrNull() 来选择其 verifier-cli jar，且不与 dev-support/verifier-cli-version.txt（pin: 1.411，已在第 1 行核实）进行任何比较。CI 会将已固定的 jar 种子化到同一模块目录下的 ci-seed 子目录中，而 gradle/actions/setup-gradle 缓存会在多次运行间保留旧版本 jar，因此可能同时存在多个版本，被选中的 jar 取决于未指定的遍历顺序。唯一的守卫 VerifierCliVersionGuardTest 只断言已固定版本在缓存版本之中（允许额外版本），并按其自身文档在 CI 和缓存为空时跳过。仓库自身的注释记录了一起真实事件：该遍历曾选中非预期的旧版 1.409，而预期是 1.410，且这两个版本会产生不同的判定结果。后果：门禁可能用无人固定的 verifier 版本计算其阻止发行的判定，而发行仍绿灯通过。",
-    "claimed_root_cause": "门禁从版本 pin（dev-support/verifier-cli-version.txt）到实际执行的 verifier 二进制的信任交接未在解析点强制执行：首次匹配的文件系统遍历取代了 pin，而补偿性测试并未断言门禁实际运行的内容。",
+    "title": "市场/兼容性门禁通过首次匹配的缓存遍历解析 verifier-cli jar，当 Gradle 缓存中同时存在多个版本时会静默忽略已固定（pinned）的版本（已修复）",
+    "description": "权威发行门禁（verifyGate 以及 build-plugin.yml 的 gate job 在发布前要求的三个 verifyMarketplaceVerdict 分支）通过在 Gradle 缓存模块目录上执行 walkTopDown().maxDepth(4).filter{verifier-cli-*-all.jar}.firstOrNull() 来选择其 verifier-cli jar，且不与 dev-support/verifier-cli-version.txt（pin: 1.411，已在第 1 行核实）进行任何比较。CI 会将已固定的 jar 种子化到同一模块目录下的 ci-seed 子目录中，而 gradle/actions/setup-gradle 缓存会在多次运行间保留旧版本 jar，因此可能同时存在多个版本，被选中的 jar 取决于未指定的遍历顺序。唯一的守卫 VerifierCliVersionGuardTest 只断言已固定版本在缓存版本之中（允许额外版本），并按其自身文档在 CI 和缓存为空时跳过。仓库自身的注释记录了一起真实事件：该遍历曾选中非预期的旧版 1.409，而预期是 1.410，且这两个版本会产生不同的判定结果。后果：门禁可能用无人固定的 verifier 版本计算其阻止发行的判定，而发行仍绿灯通过。【修复落地 2026-11-07，T-SecurityAuditFixes 分支】T-SAF-16：pinnedVerifierCliJar 三解析点（:204/:357/:481）统一 pin 精确匹配 + 缺失即失败；VerifierCliVersionGuardTest 反转为断言解析点选中版本==pin（不再容许多余版本）（提交 965a15168）；回归测试通过。",
+    "root_cause": "门禁从版本 pin（dev-support/verifier-cli-version.txt）到实际执行的 verifier 二进制的信任交接未在解析点强制执行：首次匹配的文件系统遍历取代了 pin，而补偿性测试并未断言门禁实际运行的内容。",
+    "intended_behavior": "发行门禁实际执行的 verifier-cli jar 与 pin 文件（dev-support/verifier-cli-version.txt）一致：三个解析点精确匹配 pin 版本，找不到即失败，不再首次匹配兜底。",
     "trace": [
       {
         "kind": "entrypoint",
@@ -1690,13 +2356,39 @@
         "description": "已核实（从 :323 更正为）：种子步骤的 run 块将已固定的 jar 写入遍历稍后扫描的缓存路径内的 $dst = .../verifier-cli/ci-seed，但没有任何东西移除或遮蔽 gradle 缓存恢复的其他版本 jar。"
       }
     ],
-    "blockers": [
-      "本机没有可用于目标控制执行的 OS 级强制沙箱（在多版本缓存中观察 verifyGate 选中哪个 jar 需要针对目标运行 gradle）",
-      "walkTopDown 在 CI runner（windows-latest、NTFS）上对双版本缓存的具体选取顺序无法从源码看出；仓库内注释证明了顺序依赖性，但无法证明当前 runner 的行为"
+    "conditions": [
+      {
+        "kind": "system_configuration",
+        "description": "Gradle 缓存中并存多个 verifier-cli 版本（setup-gradle 缓存恢复 + ci-seed 种子化）时才可触发选错；单版本缓存下首匹配即 pin"
+      }
     ],
-    "validation_plan": {
-      "local": "在沙箱中：在临时 GRADLE_USER_HOME 的 caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/{1.410/<hash>/,ci-seed/} 下放置两个名为 verifier-cli-1.410-all.jar 和 verifier-cli-1.411-all.jar 的 jar 文件，运行 `./gradlew verifyGate -PverifyOnly=true -PverifyIdes=smoke`（或重现同一 walkTopDown().firstOrNull() 表达式的最小任务）并记录 classpath 解析到的版本；反转创建顺序重复以证明顺序依赖性。回归用例：断言解析到的 jar 版本在三个解析点（:204, :357, :481）均等于 dev-support/verifier-cli-version.txt。",
-      "deployment": "所有者在 CI 环境上观察检查：在恢复了 setup-gradle 缓存的 windows-latest runner 上，在分派发行运行之前于 verify 和 marketplace job 中记录解析到的 verifier-cli jar 路径/版本；或者在解析时强制 pin（将遍历过滤为 verifier-cli-<pin>-all.jar 或在多版本匹配时失败），并确认门禁仍能找到已种子的 jar。"
+    "execution": {
+      "attacker_perspective": "多版本缓存中 walkTopDown 字典序选中非 pin 的旧 verifier（仓库注释记录的真实事件：选 1.409 而非 1.410），门禁用过期判定给发行放行。",
+      "payloads": [
+        "caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli/{1.409/<hash>/,ci-seed/} 并存 verifier-cli-1.409-all.jar 与 verifier-cli-1.411-all.jar"
+      ],
+      "instructions": [
+        "gradlew.bat testFast --tests cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"
+      ],
+      "observed_result": "修复前守卫只断言 pin 在缓存版本之中（允许多余版本、按其 KDoc 在 CI/空缓存跳过），不约束门禁实际选中 jar；反转后的守卫测试在旧实现上转红，修复提交 965a15168 落地后通过。"
+    },
+    "remediation": {
+      "strategy": "三个解析点统一 pinnedVerifierCliJar：按 pin 精确过滤 + 缺失即失败，守卫测试反转为选中版本==pin。"
+    },
+    "severity": {
+      "likelihood": {
+        "score": "medium",
+        "reason": "多版本缓存并存是 CI 缓存恢复的常态（仓库注释记录真实发生）；反转守卫测试钉住解析点==pin 不变量"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "过期 verifier 判定授权发行（门禁绿灯失真）；属构建防线完整性而非运行时漏洞"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "复现测试 cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest 在修复前转红（审计缺陷复现）、修复提交 965a15168 后回归通过"
     }
   }
 ]

@@ -69,8 +69,10 @@ object HtmlReportFormatter {
             append("</style></head><body>\n")
             append("<h1>SQL Report</h1>\n")
             append("<div class=\"meta\">\n")
-            tableName?.let { append("<span>Table: <b>$it</b></span>\n") }
-            dialect?.let { append("<span>Dialect: <b>$it</b></span>\n") }
+            // T-SAF-09：tableName/dialect 来自较低信任的项目文件内容（实体 @TableName 注解
+            // 字面量等），与 SQL 标记/参数值同受转义不变式约束（原 :72/:73 漏转义）
+            tableName?.let { append("<span>Table: <b>${escapeHtml(it)}</b></span>\n") }
+            dialect?.let { append("<span>Dialect: <b>${escapeHtml(it)}</b></span>\n") }
             append("<span>Generated: <b>$timestamp</b></span>\n")
             append("</div>\n")
             append("<pre><code>$highlighted</code></pre>\n")
@@ -122,19 +124,12 @@ object HtmlReportFormatter {
         else -> null
     }
 
-    /** HTML 特殊字符转义。 */
-    private fun escapeHtml(text: String): String = buildString(text.length) {
-        for (ch in text) {
-            when (ch) {
-                '<' -> append("&lt;")
-                '>' -> append("&gt;")
-                '&' -> append("&amp;")
-                '"' -> append("&quot;")
-                '\'' -> append("&#39;")
-                else -> append(ch)
-            }
-        }
-    }
+    /**
+     * HTML 特殊字符转义（T-SAF-09：收敛到共享 [cn.song.mybatisplus.visualizer.util.HtmlEscape]，
+     * 本文件不再持有本地实现——转义集由共享工具统一为 `& < > " '`）。
+     */
+    private fun escapeHtml(text: String): String =
+        cn.song.mybatisplus.visualizer.util.HtmlEscape.escape(text)
 
     /** 生成参数对照表 HTML。 */
     private fun buildParamsTable(sources: List<String>, paramValues: Map<String, String>): String {
@@ -144,7 +139,8 @@ object HtmlReportFormatter {
         sb.append("<table><tr><th>Source</th><th>Value</th></tr>\n")
         for (src in sources) {
             val v = paramValues[src] ?: "?"
-            sb.append("<tr><td><code>$src</code></td><td><code>${escapeHtml(v)}</code></td></tr>\n")
+            // T-SAF-09：来源名（注解列名等低信任字符串）与配对值同受转义（原 :147 漏转义）
+            sb.append("<tr><td><code>${escapeHtml(src)}</code></td><td><code>${escapeHtml(v)}</code></td></tr>\n")
         }
         sb.append("</table></div>\n")
         return sb.toString()

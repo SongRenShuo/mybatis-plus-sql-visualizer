@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import net.sf.jsqlparser.statement.select.PlainSelect
+import net.sf.jsqlparser.statement.select.Select
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -290,5 +292,84 @@ class McpSelectGuardTest {
         // Throwable/StackOverflowError fail-closed 路径原样保留：语法错误/截断输入照拒
         assertDenied("SELEC * FORM [t]", McpToolErrors.SQL_BLOCKED, "方括号形态语法错误应拒")
         assertDenied("SELECT * FROM [t] WHERE", McpToolErrors.SQL_BLOCKED, "截断语句应拒")
+    }
+
+    // ------------------------------------------------------------------
+    // T-SAF-11（mcp-select-guard.into-clause-non-recursive-cte-gap）：嵌套 INTO 定案
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `AST形态定案_CTE内SELECT_INTO的解析形态记录`() {
+        // 定案测试（NEEDS-VALIDATION #11）：记录 JSqlParser 5.3 对
+        // `WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c` 的三种可能形态——
+        //  ①解析失败：守卫 fail-closed（SQL_BLOCKED）已挡，无需修；
+        //  ②解析成功、内层 CTE 的 PlainSelect 持 intoTables（外层 null）：改前 hasIntoClause
+        //    只查最外层 → 放行（先红），修=递归遍历；
+        //  ③解析成功但解析器丢弃 INTO（任何 PlainSelect 都不持）：改前同样放行（先红），
+        //    修=词法兜底。
+        // 本例按实际命中的形态记录并验证守卫拒绝；无条件拒绝契约由下一例钉死。
+        val parsed = try {
+            cn.song.mybatisplus.visualizer.execute.SqlAstParser.parseStatements(
+                "WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c",
+            )
+        } catch (t: Throwable) {
+            null
+        }
+        if (parsed == null) {
+            assertDenied(
+                "WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c",
+                McpToolErrors.SQL_BLOCKED,
+                "形态①解析失败：fail-closed 应拒",
+            )
+            return
+        }
+        val select = parsed.single() as Select
+        val top = select as PlainSelect
+        val topHolds = !top.intoTables.isNullOrEmpty() || top.intoTempTable != null
+        // CTE 体形态：WithItem.select = ParenthesedSelect（内层再持真实 PlainSelect）——逐层探测
+        fun anyInto(s: Select?): Boolean = when (s) {
+            is PlainSelect -> !s.intoTables.isNullOrEmpty() || s.intoTempTable != null
+            is net.sf.jsqlparser.statement.select.ParenthesedSelect -> anyInto(s.select)
+            else -> false
+        }
+        val nestedHolds = top.withItemsList.orEmpty().any { anyInto(it.select) }
+        // 形状记录（失败消息携带实测读数）：②nested / ③dropped——两者改前都放行（先红），
+        // 修复后任一形态都由 AST 递归或词法兜底拒绝；形态②的断言读数在守卫拒绝消息中可见
+        val shape = when {
+            topHolds -> "TOP（外层持有，本就应被顶层检查拦下）"
+            nestedHolds -> "NESTED（内层 CTE PlainSelect 持 intoTables）"
+            else -> "DROPPED（解析器丢弃 INTO，靠词法兜底）"
+        }
+        assertDenied(
+            "WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c",
+            McpToolErrors.SQL_BLOCKED,
+            "CTE 内建表 INTO 应拒（实测形态=$shape）",
+        )
+    }
+
+    @Test
+    fun `拒绝_CTE与派生表内SELECT_INTO建表（先红）`() {
+        // 改前：hasIntoClause 只查最外层 PlainSelect（注释声称「CTE 中的 INTO 仍落在
+        // PlainSelect 上」但被查的只是最外层那一个），FORBIDDEN_PHRASES 亦无普通
+        // `INTO <标识符>`——若解析成功则两条都放行（先红）；解析失败形态 fail-closed 照拒。
+        // 修复后 AST 递归（WithItem/派生表/JOIN 子查询）与词法兜底任一命中即 SQL_BLOCKED。
+        assertDenied(
+            "WITH c AS (SELECT a INTO b FROM s) SELECT * FROM c",
+            McpToolErrors.SQL_BLOCKED,
+            "CTE 内建表 INTO 应拒",
+        )
+        assertDenied(
+            "SELECT * FROM (SELECT a INTO b FROM s) t",
+            McpToolErrors.SQL_BLOCKED,
+            "派生表内建表 INTO 应拒",
+        )
+    }
+
+    @Test
+    fun `放行_括号内普通标识符不因词法兜底误杀`() {
+        // 词法兜底回归：into 是普通标识符子串/普通词时不得误拒（词起点判据 + 全词比较）
+        assertAllowed("SELECT * FROM t WHERE x IN (SELECT constrainto FROM u)")
+        assertAllowed("SELECT (a + b) FROM t")
+        assertAllowed("SELECT * FROM t WHERE x IN (1, 2, 3)")
     }
 }

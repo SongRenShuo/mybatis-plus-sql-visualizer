@@ -57,6 +57,8 @@ class ShardingSphereLogParser(
         // Logic/Actual 行各带日志框架前缀（线程 token 在位），裸行只有正文续行形态——骨架按
         // 「收集态桶优先」共享路由即可，不开 MRU（Hibernate 专属开关，无其双行形态）。
         // 时钟与 [clock] 同源（flushSettled 的静默判定一致性；测试注入可控件）。
+        // T-SAF-22：老化淘汰前强制闭合（与 flushSettled 互补——老化兜底容量压力下的漏网挂起态）。
+        forceClose = { closeBucketPending(it) },
         clock = clock,
     )
 

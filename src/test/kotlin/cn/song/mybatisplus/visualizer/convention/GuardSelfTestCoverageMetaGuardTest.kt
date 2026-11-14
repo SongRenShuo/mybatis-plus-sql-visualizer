@@ -744,6 +744,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
             ),
             GuardEntry(
+                "execute/EmbeddedNativeExecSourceScanTest.kt",
+                emptyList(),
+                "内嵌面板原生执行入口封堵守卫（T-SecurityAuditFixes T-SAF-04，D1=A 2026-11-06 定案）：判定内核内联于用例——" +
+                    "断言 DataSourceSelectorConsole 的 UiDataProvider 不再直供 DBN SessionClientHolder.CLIENT_KEY 与 " +
+                    "CommonDataKeys.EDITOR（原生 ▶/Ctrl+Enter 依赖二者在内嵌面板解析控制台），且三路径注释已记录封堵决策；" +
+                    "插件按钮全门禁链不受影响。无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=恢复 CLIENT_KEY 或 EDITOR 注入任一即红（用例内合成样本自证）。",
+            ),
+            GuardEntry(
                 "convention/EnhancedCaptureDefaultOnGuardTest.kt",
                 emptyList(),
                 "增强捕获默认开启/确认流删除守卫（T-EnhancedCaptureDefaultOn）：判定内核内联于三个用例——" +

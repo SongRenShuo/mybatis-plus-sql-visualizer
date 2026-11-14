@@ -75,7 +75,7 @@ object SettingsIO {
      * @param json JSON 字符串
      * @param base 未出现在 JSON 中的键的取值来源（默认出厂默认态，供「只要文件值」的调用方使用）
      * @return 恢复后的 State（不含全局项如 language/shortcut，保持 base 现值）
-     * @throws ImportException JSON 格式错误或版本不兼容
+     * @throws ImportException JSON 格式错误、版本不兼容，或 SQL 位形字段值级校验未通过
      */
     fun importFromJson(json: String, base: PluginSettings.State = PluginSettings.State()): PluginSettings.State {
         val map = parseJson(json)
@@ -87,6 +87,30 @@ object SettingsIO {
         // T-HiddenBugPerfScan 券 Y14：version<1（0/-1 手改坏文件）曾照常导入
         if (version < 1) {
             throw ImportException("配置文件版本不合法（version=$version，应为 >= 1）")
+        }
+        // T-SAF-08（settings-import.sql-fragment-unvalidated）：SQL 位形字段值级校验——
+        // 任一字段被拒时整体拒绝导入并逐字段列出原因（不静默丢弃）。共享设置文件/项目 XML
+        // 曾可把任意 SQL 文本塞进 WHERE 字面量/标识符/表名位置（渲染层按设计直通）。
+        val violations = buildList {
+            map.getString("logicDeleteValue")?.let { SettingsValueValidator.checkLogicDeleteValue(it)?.let(::add) }
+            map.getString("tenantColumnName")?.let { SettingsValueValidator.checkTenantColumnName(it)?.let(::add) }
+            map.getString("tenantColumnDefault")?.let { SettingsValueValidator.checkTenantColumnDefault(it)?.let(::add) }
+            map.getString("tablePrefix")?.let { SettingsValueValidator.checkTablePrefix(it)?.let(::add) }
+            map.getString("tableSuffix")?.let { SettingsValueValidator.checkTableSuffix(it)?.let(::add) }
+            map.getString("dataPermissionMockCondition")?.let {
+                SettingsValueValidator.checkDataPermissionMockCondition(it)?.let(::add)
+            }
+            map.getArray("dynamicTableNameRules")?.let { rules ->
+                deserializeRules(rules).forEach { rule ->
+                    SettingsValueValidator.checkTableNameRulePattern(rule)?.let(::add)
+                }
+            }
+        }
+        if (violations.isNotEmpty()) {
+            throw ImportException(
+                "导入已拒绝：以下设置字段的值未通过 SQL 位形安全校验（共享设置文件不得改动语句语义）：\n" +
+                    violations.joinToString("\n") { "- ${it.field}: ${it.reason}" },
+            )
         }
         // copy() 而非直接改写 base：调用方传入的多为活状态（instance.state.copy()），
         // 就地改写会污染它

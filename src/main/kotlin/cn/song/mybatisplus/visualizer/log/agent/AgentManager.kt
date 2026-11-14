@@ -224,6 +224,13 @@ class AgentManager(private val project: Project) : Disposable {
     internal val attachedPids = ConcurrentHashMap<Long, Long>()
 
     /**
+     * T-SAF-02：pid → attach 通道令牌（[attachAndOffer] 随 agentArgs 下发的那一次的令牌）。
+     * 与 [attachPorts] 同生命周期：原端口 re-bind 恢复（[resumeAttachPortIfHit]）时据此重建
+     * 验令牌判据——agent 侧 SenderLoop 重连回带的就是当年 loadAgent 下发的那个令牌。
+     */
+    internal val attachTokens = ConcurrentHashMap<Long, String>()
+
+    /**
      * T-PremainReattach P4：attach 装载进程的回连端口登记表（pid → [attachAndOffer] 供端口）。
      *
      * attach 链的 ServerSocket 是一次性的（accept 一次即随 `use{}` 关闭），agent 侧 SenderLoop
@@ -799,6 +806,9 @@ class AgentManager(private val project: Project) : Disposable {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
             val port = server.localPort
             server.soTimeout = 10_000
+            // T-SAF-02：每条 attach 通道生成一次性令牌，随 loadAgent 参数下发；agent HELLO 回带，
+            // 握手即验——验不过的对端（端口抢占/本地扫描连接）拒绝建会话。
+            val channelToken = AgentProtocol.newChannelToken()
             var vm: VirtualMachine? = null
             try {
                 vm = VirtualMachine.attach(pid.toString())
@@ -809,6 +819,7 @@ class AgentManager(private val project: Project) : Disposable {
                         AgentProtocol.agentArgs(
                             port,
                             stackMaxFrames = PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames,
+                            channelToken = channelToken,
                         ),
                     )
                 } catch (e: com.sun.tools.attach.AgentLoadException) {
@@ -823,9 +834,20 @@ class AgentManager(private val project: Project) : Disposable {
                 }
                 return try {
                     val accepted = server.accept()
+                    // T-SAF-02：握手即验令牌（提交会话/登记端口之前）——旧版 agent（无令牌键）
+                    // 与令牌不匹配的对端一律拒绝。验读只消费 HELLO 一帧且无预读缓冲，
+                    // 剩余字节原样留给随后构造的 AgentSession（与 premain 链同款）。
+                    val hello = readHello(accepted)
+                    if (!helloTokenMatches(channelToken, hello.token)) {
+                        LOG.warn("attach 握手令牌校验失败（pid=$pid）——拒绝连接（对端非本插件注入的 agent）")
+                        runCatching { accepted.close() }
+                        return null
+                    }
                     // T-PremainReattach P4：握手成功 = agent 的 SenderLoop 认下了这个端口（之后
-                    // 断线重连也拨它）——登记 pid→端口供关再开时原端口 re-bind 恢复（见 [attachPorts]）
+                    // 断线重连也拨它）——登记 pid→端口供关再开时原端口 re-bind 恢复（见 [attachPorts]）；
+                    // 令牌一并登记（re-bind 重建的通道用同一判据验回连）。
                     attachPorts[pid] = port
+                    attachTokens[pid] = channelToken
                     accepted
                 } catch (e: SocketTimeoutException) {
                     LOG.warn("accept 超时：agent 未在 10s 内连接（pid=$pid）——回落桥")
@@ -835,6 +857,18 @@ class AgentManager(private val project: Project) : Disposable {
                 runCatching { vm?.detach() }
             }
         }
+    }
+
+    /**
+     * T-SAF-02：通道令牌比对。expected 为 null（无令牌登记的异常态）一律拒绝——fail-closed；
+     * 比较走恒量时间（MessageDigest.isEqual），不给逐字节猜令牌留时序侧信道。
+     */
+    private fun helloTokenMatches(expected: String?, actual: String?): Boolean {
+        if (expected.isNullOrEmpty() || actual.isNullOrEmpty()) return false
+        return java.security.MessageDigest.isEqual(
+            expected.toByteArray(Charsets.UTF_8),
+            actual.toByteArray(Charsets.UTF_8),
+        )
     }
 
     // ---------- T-M56Phase2-Premain：启动即捕获补位 ----------
@@ -862,11 +896,19 @@ class AgentManager(private val project: Project) : Disposable {
         return when (val decision = PremainInjection.decide(true, jar != null, port)) {
             is PremainInjection.Decision.Inject -> {
                 LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
+                // T-SAF-02：本通道令牌随 args 下发（HELLO 回带、acceptPremain 验证）；通道缺席属
+                // 内部态异常（openPremainChannel 成功必在表内），按协商失败处理（不注入无令牌的通道）
+                val channelToken = premainChannels.firstOrNull { it.port == decision.port }?.channelToken
+                if (channelToken == null) {
+                    LOG.warn("premain 注入跳过：通道令牌缺失（内部态异常）——回落 attach/桥")
+                    return null
+                }
                 // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
                 PremainInjection.vmOption(
                     jar!!.absolutePath,
                     decision.port,
                     PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames,
+                    channelToken,
                 )
             }
             is PremainInjection.Decision.Skip -> {
@@ -902,7 +944,7 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.warn("openPremainChannel: 端口前置协商失败——本次不注入（回落 attach/桥）", t)
             return null
         }
-        val channel = PremainChannel(server.localPort, server, clockMs())
+        val channel = PremainChannel(server.localPort, server, clockMs(), AgentProtocol.newChannelToken())
         premainChannels.add(channel)
         registerChannelDisposable(channel)
         // T-ReleasePerf8（S5 挂死修复）：启动即取新代（0→1），后续 resume 递增取代
@@ -1111,12 +1153,22 @@ class AgentManager(private val project: Project) : Disposable {
      */
     private fun onPremainConnected(channel: PremainChannel, socket: Socket): Long {
         try {
+            // T-SAF-02：身份门在最前——loopback 绑定不是对端认证，本机任意进程都能连上协商端口；
+            // 通道令牌（随 agentArgs 下发、agent HELLO 回带）是唯一注入链归属凭据。验不过的连接
+            // 一律拒绝（fail-closed：无令牌/不匹配/通道无令牌登记），拒绝即关 socket、不建会话、
+            // 不写幂等表（审计 #2 的伪造 HELLO/CONFIG_ACK/attachedPids 投毒面由此封口）。
+            val hello = readHello(socket)
+            if (!helloTokenMatches(channel.channelToken, hello.token)) {
+                LOG.info("premain 回连令牌校验失败（通道 ${channel.port}）——拒绝连接（对端非本插件注入的 agent）")
+                runCatching { socket.close() }
+                return 0L
+            }
             if (!isEnhancedActive()) {
                 LOG.info("premain 回连到达但增强捕获已关闭/未确认——丢弃连接")
                 runCatching { socket.close() }
                 return 0L
             }
-            val pid = readHelloPid(socket)
+            val pid = hello.pid
             // T-PremainReattach：pid 读到即尽早登记（会话构建链里还有 CONFIG 下发/巡检懒启/广播等
             // 毫秒级步骤）——关开关分流（pauseOrClosePremainChannels）与 resume 查表都按 pid 判，
             // 登记晚于「会话已建立」会造成关开关恰落窗口内、通道被误关而非暂停的竞态。
@@ -1188,26 +1240,38 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /**
-     * 读首帧 HELLO（`{"pid":<n>}`，SenderLoop.java:39）取 agent 自报 pid；非 HELLO/超时/畸形返回 0。
+     * HELLO 帧解析产物（T-SAF-02）：agent 自报 pid + 回带的通道令牌（旧版 agent 无 token 键 → null）。
+     */
+    internal class HelloFrame(val pid: Long, val token: String?)
+
+    /**
+     * 读首帧 HELLO（`{"pid":<n>[,"token":"<hex>"]}`，SenderLoop.helloBody 对应）取 agent 自报
+     * pid 与通道令牌；非 HELLO/超时/畸形返回 pid=0、token=null（调用方按「验令牌不过」拒绝）。
      *
      * 用裸 `DataInputStream` 读且只读一帧：它不做预读缓冲，剩余字节原样留给随后构造的
      * [AgentSession]（其内部另起 `DataInputStream` 走同一 socket 输入流），不会吞掉后续帧。
      */
-    internal fun readHelloPid(socket: Socket): Long = runCatching {
+    internal fun readHello(socket: Socket): HelloFrame = runCatching {
         socket.soTimeout = HELLO_READ_TIMEOUT_MS
         val input = DataInputStream(socket.getInputStream())
         val len = input.readInt()
-        if (len <= 0 || len > AgentProtocol.MAX_FRAME_LEN) return@runCatching 0L
+        if (len <= 0 || len > AgentProtocol.MAX_FRAME_LEN) return@runCatching HelloFrame(0L, null)
         val cmd = input.readUnsignedByte()
         val body = ByteArray(len)
         input.readFully(body)
-        if (cmd != AgentProtocol.CMD_HELLO) return@runCatching 0L
-        HELLO_PID_REGEX.find(String(body, Charsets.UTF_8))
-            ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        if (cmd != AgentProtocol.CMD_HELLO) return@runCatching HelloFrame(0L, null)
+        val text = String(body, Charsets.UTF_8)
+        HelloFrame(
+            HELLO_PID_REGEX.find(text)?.groupValues?.get(1)?.toLongOrNull() ?: 0L,
+            AgentProtocol.parseHelloToken(text),
+        )
     }.getOrElse {
-        LOG.info("readHelloPid: HELLO 未取到（${it.javaClass.simpleName}: ${it.message}）——按 pid 未知继续")
-        0L
+        LOG.info("readHello: HELLO 未取到（${it.javaClass.simpleName}: ${it.message}）——按 pid 未知处理")
+        HelloFrame(0L, null)
     }
+
+    /** 读首帧 HELLO 取 pid（T-SAF-02 前的既有口径；令牌校验见 [readHello] 的调用方）。 */
+    internal fun readHelloPid(socket: Socket): Long = readHello(socket).pid
 
     /** premain 专用 jar 落盘路径缓存（与 attach 的 [cachedAgentJar] 分开，语义不同见 [extractPremainAgentJar]）。 */
     @Volatile
@@ -1430,6 +1494,8 @@ class AgentManager(private val project: Project) : Disposable {
             .forEach { closePremainChannel(it) }
         // T-PremainReattach P4：attach 端口登记表顺带清死 pid 条目（表规模有界；活 pid 条目保留）
         attachPorts.entries.removeIf { e -> !isProcessAlive(e.key) }
+        // T-SAF-02：令牌登记表与端口表同生命周期（死 pid 的令牌一并清，防表漂移）
+        attachTokens.entries.removeIf { e -> !isProcessAlive(e.key) }
     }
 
     /**
@@ -1574,6 +1640,9 @@ class AgentManager(private val project: Project) : Disposable {
      */
     internal fun resumeAttachPortIfHit(pid: Long): Boolean {
         val port = attachPorts.remove(pid) ?: return false
+        // T-SAF-02：re-bind 重建的通道沿用当年 loadAgent 下发的令牌（agent 重连回带的仍是它）；
+        // 无令牌登记（异常态）时通道按 fail-closed 拒绝一切回连（见 onPremainConnected）。
+        val token = attachTokens.remove(pid)
         val server = try {
             ServerSocket().apply {
                 reuseAddress = true
@@ -1584,7 +1653,7 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.warn("attach 恢复：端口 $port re-bind 失败（pid=$pid，端口可能已被占用）——清除登记回落 attach/桥", t)
             return false
         }
-        val channel = PremainChannel(port, server, clockMs())
+        val channel = PremainChannel(port, server, clockMs(), token)
         channel.claimed = true
         channel.claimedAtMs = clockMs()
         channel.pid = pid
