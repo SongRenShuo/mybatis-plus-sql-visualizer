@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
@@ -47,6 +48,13 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         return sb.substring(0, length)
     }
 
+    /**
+     * 合流裁决（T-SecurityAuditFixes T-SAF-09/10 × T-StackBizFrame S3）：栈摘要是低信任数据，
+     * 进 <html> 包装的 meta 行前经 [HtmlEscape.escape]——断言侧期望一律「原始契约（取景/120 截断）
+     * 先定，再转义」拼装；可见渲染（Swing HTML 回读）不变。
+     */
+    private fun esc(s: String): String = HtmlEscape.escape(s)
+
     private fun makeResult(stackDigest: String?, threadName: String? = null): PreviewResult = PreviewResult(
         sql = "SELECT id\nFROM user\nWHERE username = ?",
         compactSql = "SELECT id FROM user WHERE username = ?",
@@ -67,15 +75,12 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         val digest = chainOf(300)
         val inline = buildStackDigestInlineLine(digest)
 
-        // 摘要 = 前 120 字符 + 截断标记（逐字期望值，非仅长度断言）
-        assertEquals(prefix() + digest.substring(0, 120) + "…", inline)
+        // 摘要 = 原始契约截到前 120 字符 + 截断标记，出 meta 行前整体转义（T-SAF-10，逐字期望值）
+        val expectedRaw = digest.substring(0, 120)
+        assertEquals(prefix() + esc(expectedRaw) + "…", inline)
         assertTrue("摘要应带截断标记", inline.endsWith("…"))
-        // 调用栈本体长度 = 120 + 标记 1 字符，未超上限
-        assertEquals(121, inline.removePrefix(prefix()).length)
-        assertTrue(
-            "摘要（去前缀后）不得超过 ${STACK_DIGEST_MAX_CHARS} + 标记长度",
-            inline.length <= prefix().length + STACK_DIGEST_MAX_CHARS + 1,
-        )
+        // 截断预算按原始摘要计（120 + 标记 1 字符）；转义只膨胀实体、不改取值口径，
+        // 逐字比对已钉原始预算，长度上界断言随转义契约退役
         assertFalse("摘要不得含完整链", inline.contains(digest))
     }
 
@@ -84,21 +89,20 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         assertTrue("构造前提：短栈 < ${STACK_DIGEST_MAX_CHARS}", digest.length < STACK_DIGEST_MAX_CHARS)
         val inline = buildStackDigestInlineLine(digest)
 
-        assertEquals(prefix() + digest, inline)
+        assertEquals(prefix() + esc(digest), inline)
         assertFalse("短栈摘要不应出现截断标记", inline.contains("…"))
     }
 
     fun test边界_120字符不截断_121字符截断() {
         val at120 = chainOf(STACK_DIGEST_MAX_CHARS)
         assertEquals(STACK_DIGEST_MAX_CHARS, at120.length)
-        assertEquals(prefix() + at120, buildStackDigestInlineLine(at120))
+        assertEquals(prefix() + esc(at120), buildStackDigestInlineLine(at120))
 
         val at121 = chainOf(STACK_DIGEST_MAX_CHARS + 1)
         assertEquals(STACK_DIGEST_MAX_CHARS + 1, at121.length)
         val truncated = buildStackDigestInlineLine(at121)
-        assertEquals(prefix() + at121.substring(0, STACK_DIGEST_MAX_CHARS) + "…", truncated)
-        // 边界外仅 1 字符，仍按「截到 120 + 标记」处理（严格大于阈值才截断）
-        assertEquals(121, truncated.removePrefix(prefix()).length)
+        // 边界外仅 1 字符，仍按「原始摘要截到 120 + 标记」处理（严格大于阈值才截断），再转义
+        assertEquals(prefix() + esc(at121.substring(0, STACK_DIGEST_MAX_CHARS)) + "…", truncated)
     }
 
     fun test无调用栈_内联摘要为空() {
@@ -159,7 +163,7 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
             "<-com.acme.task.OrderTask#run:45"
         val inline = buildStackDigestInlineLine(digest)
         assertEquals(
-            prefix() + "com.acme.service.OrderService#find:42<-com.acme.task.OrderTask#run:45",
+            prefix() + esc("com.acme.service.OrderService#find:42<-com.acme.task.OrderTask#run:45"),
             inline,
         )
         assertFalse("摘要不得再以 agent 埋点帧开头", inline.contains("WovenEvents"))
@@ -228,7 +232,10 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
 
             val visible = panel.metaLabelForTest()
             assertTrue("可见 meta 行应含调用栈文案节点", visible.contains(label()))
-            assertTrue("可见行应含 120 字符截断摘要（带截断标记）", visible.contains(digest.substring(0, 120) + "…"))
+            assertTrue(
+                "可见行应含 120 字符截断摘要（原始预算 + 截断标记，转义后形态）",
+                visible.contains(esc(digest.substring(0, 120)) + "…"),
+            )
             assertFalse("可见行不应含完整链（完整链归悬停弹层）", visible.contains(digest))
             // T-StackHoverUi 反证：完整链不再退回 tooltip（旧 P6 契约已换代）
             assertFalse((panel.metaTooltipForTest() ?: "").contains(digest))
