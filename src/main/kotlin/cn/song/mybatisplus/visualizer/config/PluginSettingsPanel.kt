@@ -290,6 +290,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** T-RollbackSnapshotPreExec：UPDATE/DELETE 执行前自动采集改前快照（默认关，关闭时零查询零 IO）。 */
     internal val rollbackSnapshotBeforeExecCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec"))
 
+    /** T-RollbackSnapshotPreExec P7：SQL 前/后置脚本总开关（默认关）+ 管理入口。 */
+    internal val sqlScriptEnabledCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.sqlScript.enabled"))
+    internal val sqlScriptManageButton = javax.swing.JButton(MpSqlVisualizerBundle.message("settings.sqlScript.manage"))
+
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     internal val stackMaxFramesField = JBTextField(6)
 
@@ -1311,6 +1315,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || displayMaskCheck.isSelected != s.displayMaskEnabled
             || rollbackSnapshotBeforeExecCheck.isSelected != s.rollbackSnapshotBeforeExec
+            || sqlScriptEnabledCheck.isSelected != s.sqlScriptEnabled
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1453,6 +1458,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.displayMaskEnabled = displayMaskCheck.isSelected
             s.rollbackSnapshotBeforeExec = rollbackSnapshotBeforeExecCheck.isSelected
+            s.sqlScriptEnabled = sqlScriptEnabledCheck.isSelected
+            // P7：全局脚本/数据源级脚本/变量表在「脚本管理」对话框内直写 State（编辑器不在本面板）
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1681,6 +1688,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             displayMaskCheck.isSelected = s.displayMaskEnabled
             rollbackSnapshotBeforeExecCheck.isSelected = s.rollbackSnapshotBeforeExec
+            sqlScriptEnabledCheck.isSelected = s.sqlScriptEnabled
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

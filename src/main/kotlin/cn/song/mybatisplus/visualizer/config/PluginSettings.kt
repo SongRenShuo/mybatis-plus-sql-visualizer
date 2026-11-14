@@ -801,6 +801,20 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 采集失败**不阻断执行**（fail-open）。关闭时零额外查询、零额外 IO，行为与关闭前逐字节一致。
          */
         var rollbackSnapshotBeforeExec: Boolean = false,
+
+        /**
+         * T-RollbackSnapshotPreExec P7：SQL 前/后置脚本总开关（**默认关**——红线三道闸第一道）。
+         * 开启后执行链按 全局级 → 数据源级 → 语句级 顺序合并运行前置/后置脚本（D-2 全部级），
+         * 前置返回 false 可否决执行、异常硬阻断；脚本以当前用户权限执行任意 Java 代码、
+         * 无沙箱（文案明示是第二道闸），执行全留痕是第三道闸。
+         */
+        var sqlScriptEnabled: Boolean = false,
+
+        /** P7：全局级前置脚本文本（空 = 无全局前置；数据源级/语句级见 SqlScriptProjectState 与语句级作用域）。 */
+        var sqlScriptPreGlobal: String = "",
+
+        /** P7：全局级后置脚本文本（空 = 无全局后置）。 */
+        var sqlScriptPostGlobal: String = "",
     )
 
     private var state = State()

@@ -692,6 +692,21 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec")
                 toolTipText = MpSqlVisualizerBundle.message("settings.rollback.snapshot.beforeExec.tip")
             })
+            // T-RollbackSnapshotPreExec P7：前/后置脚本总开关（默认关）+「脚本管理」入口（三档作用域/变量表/日志）
+            addRow(p, g, "", sqlScriptEnabledCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.sqlScript.enabled")
+                toolTipText = MpSqlVisualizerBundle.message("settings.sqlScript.enabled.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.sqlScript.manage"), sqlScriptManageButton.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.sqlScript.manage.tip")
+                addActionListener {
+                    // 设置页是 APP 级（无绑定项目）；脚本的项目级数据（数据源脚本/变量表）挂在
+                    // 当前打开的项目上，取首个打开项目（与仓内 settings 面板既有 project 取法同源）
+                    val target = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
+                        ?: return@addActionListener
+                    cn.song.mybatisplus.visualizer.script.SqlScriptManagerDialog.show(target)
+                }
+            })
             // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
             addRow(p, g, "", editorShowWhitespacesCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces")

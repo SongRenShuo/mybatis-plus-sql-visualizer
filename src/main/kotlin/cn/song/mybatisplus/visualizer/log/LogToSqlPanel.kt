@@ -355,6 +355,31 @@ class LogToSqlPanel(
             if (confirm != com.intellij.openapi.ui.Messages.YES) return
         }
         val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
+        // T-RollbackSnapshotPreExec P5：日志还原链的执行前快照采集（开关默认关；无绑定数据源
+        // 跳过；采集失败不阻断）——完成后 EDT 继续提交（快照必须是「改前」镜像，顺序不可交换）
+        val application = ApplicationManager.getApplication()
+        if (application.isDispatchThread) {
+            cn.song.mybatisplus.visualizer.ui.captureSnapshotStandalone(
+                project, sql,
+                onStatus = { msg -> status(msg, error = false) },
+                onProceed = {
+                    application.invokeLater({
+                        executeSqlAfterSnapshotGate(sql, isQuery, dialectGateRequest)
+                    }, com.intellij.openapi.application.ModalityState.any())
+                },
+            )
+        } else {
+            // 非 EDT 调用（理论不发生——入口都在 EDT）：直接原链
+            executeSqlAfterSnapshotGate(sql, isQuery, dialectGateRequest)
+        }
+    }
+
+    /** P5：日志链提交段（原 executeSql 尾段迁出——采集完成后经 EDT 回调进入）。 */
+    private fun executeSqlAfterSnapshotGate(
+        sql: String,
+        isQuery: Boolean,
+        dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    ) {
         status(MpSqlVisualizerBundle.message("logToSql.execute.pending"), error = false)
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,

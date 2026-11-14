@@ -625,6 +625,203 @@ internal fun SqlPreviewPanel.showRollbackSnapshotHistory() {
     RollbackSnapshotHistoryDialog(proj).show()
 }
 
+/**
+ * T-RollbackSnapshotPreExec P5：**无面板上下文**的执行前快照采集（日志转 SQL 面板等
+ * 非预览链入口）。与面板路径同一套判定/落盘/降级语义，只去掉面板 UI 依赖——状态提示
+ * 经 [onStatus] 回调（EDT），提交继续经 [onProceed]（EDT）。
+ * 数据源取共享控制台绑定（`boundConsoleDataSource`）——日志链自建控制台不回填该绑定，
+ * 取不到即跳过采集（fail-open，如实提示）。
+ */
+internal fun captureSnapshotStandalone(
+    proj: com.intellij.openapi.project.Project,
+    sql: String,
+    onStatus: (String) -> Unit,
+    onProceed: () -> Unit,
+) {
+    val enabled = PluginSettings.getInstance().state.rollbackSnapshotBeforeExec
+    if (!enabled) {
+        onProceed()
+        return
+    }
+    val plan = RollbackSnapshotCapture.analyze(SqlCommentStripper.strip(sql))
+    val capturable = plan as? RollbackSnapshotCapture.Plan.Capturable ?: run {
+        onProceed()
+        return
+    }
+    val target = runCatching { DataSourceSelector.boundConsoleDataSource() }.getOrNull()
+    if (target == null) {
+        onStatus(MpSqlVisualizerBundle.message("rollback.snapshot.capture.noDataSource"))
+        onProceed()
+        return
+    }
+    val connectionName = runCatching { DataSourceSelector.boundConsoleDataSourceName() }.getOrNull()
+    val gateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
+    val startedAt = System.currentTimeMillis()
+    PreviewSideQuery.run(
+        proj, target, capturable.selectSql, gateRequest, scalar = false,
+        requireSelectGuard = true, channelNote = "rollback-snapshot-log",
+    ) { result ->
+        val record = when (result) {
+            is PreviewSideQuery.Result.Table -> RollbackSnapshotFileStore.SnapshotRecord(
+                id = RollbackSnapshotFileStore.newId(startedAt),
+                createdAtMs = startedAt,
+                mode = capturable.statementKind,
+                connectionName = connectionName,
+                database = null,
+                table = capturable.targetTable,
+                dialect = null,
+                statementSql = sql,
+                snapshotSelectSql = capturable.selectSql,
+                columns = result.raw.headers,
+                beforeRows = result.raw.rows.take(RollbackSnapshotCapture.ROW_LIMIT),
+                rowLimitHit = result.raw.rows.size > RollbackSnapshotCapture.ROW_LIMIT || result.raw.truncated,
+                status = RollbackSnapshotFileStore.Status.CAPTURED,
+            )
+            else -> {
+                onStatus(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.capture.failed") + " " +
+                        when (result) {
+                            is PreviewSideQuery.Result.Blocked -> result.message
+                            is PreviewSideQuery.Result.Failed -> result.message
+                            else -> "unexpected result"
+                        },
+                )
+                null
+            }
+        }
+        record?.let {
+            proj.getService(RollbackSnapshotProjectStore::class.java).persist(it, startedAt)
+            onStatus(
+                MpSqlVisualizerBundle.message(
+                    "rollback.snapshot.capture.saved",
+                    it.beforeRows.size, it.columns.size,
+                ),
+            )
+        }
+        onProceed()
+    }
+}
+
+/**
+ * T-RollbackSnapshotPreExec P7：前置/后置脚本链的取词与运行编排（预览面板路径）。
+ *
+ * 顺序契约（计划 §3.9 第 7 条）：确认对话框 → **前置脚本（可否决）** → 快照采集 → 提交执行
+ * → 执行成功回调 → **后置脚本** → 改后采集。脚本在池线程跑（javac/编译不许进 EDT，V2 同源），
+ * 完成后 invokeLater 回 EDT 继续；总开关关闭时立即放行（零脚本零编译）。
+ *
+ * @param onProceed EDT 回调；[vetoed]=true 时调用方不应继续执行
+ */
+internal fun SqlPreviewPanel.runPreScriptsThen(
+    proj: com.intellij.openapi.project.Project,
+    sql: String,
+    onProceed: (vetoed: Boolean, logText: String) -> Unit,
+) {
+    val settings = PluginSettings.getInstance().state
+    if (!settings.sqlScriptEnabled) {
+        onProceed(false, "")
+        return
+    }
+    val dataSourceName = runCatching { DataSourceSelector.boundConsoleDataSourceName() }.getOrNull()
+    val scripts = buildList {
+        if (settings.sqlScriptPreGlobal.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.GLOBAL, settings.sqlScriptPreGlobal,
+            ))
+        }
+        val dsPre = proj.getService(cn.song.mybatisplus.visualizer.script.SqlScriptProjectState::class.java)
+            .preScriptFor(dataSourceName ?: "")
+        if (dsPre.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.DATA_SOURCE, dsPre,
+            ))
+        }
+        val statementPre = cn.song.mybatisplus.visualizer.script.SqlScriptStatementScope.preScriptFor(this@runPreScriptsThen)
+        if (statementPre.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.STATEMENT, statementPre,
+            ))
+        }
+    }
+    if (scripts.isEmpty()) {
+        onProceed(false, "")
+        return
+    }
+    val startedAt = System.currentTimeMillis()
+    ApplicationManager.getApplication().executeOnPooledThread {
+        val env = proj.getService(cn.song.mybatisplus.visualizer.script.SqlScriptVarsBridge::class.java).env
+        val ctx = cn.song.mybatisplus.visualizer.script.api.SqlExecContext(
+            sql,
+            SqlTypeClassifier.getFirstKeyword(sql) ?: "",
+            "",
+            dataSourceName,
+            current?.effectiveDialect?.name,
+        )
+        val outcome = cn.song.mybatisplus.visualizer.script.SqlScriptRunner.runPreChain(scripts, ctx, env)
+        cn.song.mybatisplus.visualizer.script.SqlScriptManagerDialog.appendLog(
+            "[${startedAt}] pre scripts (${scripts.size} 段): $outcome",
+        )
+        ApplicationManager.getApplication().invokeLater({
+            when (outcome) {
+                is cn.song.mybatisplus.visualizer.script.SqlScriptRunner.PreOutcome.Proceed -> onProceed(false, outcome.logText)
+                is cn.song.mybatisplus.visualizer.script.SqlScriptRunner.PreOutcome.Vetoed -> {
+                    resultPanel.showStatus(MpSqlVisualizerBundle.message("script.pre.vetoed"))
+                    onProceed(true, outcome.logText)
+                }
+                is cn.song.mybatisplus.visualizer.script.SqlScriptRunner.PreOutcome.Blocked -> {
+                    resultPanel.showStatus(MpSqlVisualizerBundle.message("script.pre.blocked") + " " + outcome.reason)
+                    onProceed(true, outcome.logText)
+                }
+            }
+        }, com.intellij.openapi.application.ModalityState.any())
+    }
+}
+
+/** P7：后置脚本链（执行成功回调里 fire-and-forget，池线程；失败只进日志不影响结果）。 */
+internal fun SqlPreviewPanel.runPostScripts(
+    proj: com.intellij.openapi.project.Project,
+    sql: String,
+    startedAtMs: Long,
+    snapshotId: String?,
+) {
+    val settings = PluginSettings.getInstance().state
+    if (!settings.sqlScriptEnabled) return
+    val dataSourceName = runCatching { DataSourceSelector.boundConsoleDataSourceName() }.getOrNull()
+    val scripts = buildList {
+        if (settings.sqlScriptPostGlobal.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.GLOBAL, settings.sqlScriptPostGlobal,
+            ))
+        }
+        val dsPost = proj.getService(cn.song.mybatisplus.visualizer.script.SqlScriptProjectState::class.java)
+            .postScriptFor(dataSourceName ?: "")
+        if (dsPost.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.DATA_SOURCE, dsPost,
+            ))
+        }
+        val statementPost = cn.song.mybatisplus.visualizer.script.SqlScriptStatementScope.postScriptFor(this@runPostScripts)
+        if (statementPost.isNotBlank()) {
+            add(cn.song.mybatisplus.visualizer.script.SqlScriptRunner.ScriptEntry(
+                cn.song.mybatisplus.visualizer.script.SqlScriptRunner.Scope.STATEMENT, statementPost,
+            ))
+        }
+    }
+    if (scripts.isEmpty()) return
+    ApplicationManager.getApplication().executeOnPooledThread {
+        val env = proj.getService(cn.song.mybatisplus.visualizer.script.SqlScriptVarsBridge::class.java).env
+        val result = cn.song.mybatisplus.visualizer.script.api.SqlExecResult(
+            -1,
+            emptyList(),
+            emptyList(),
+            false,
+            snapshotId,
+            System.currentTimeMillis() - startedAtMs,
+        )
+        val logText = cn.song.mybatisplus.visualizer.script.SqlScriptRunner.runPostChain(scripts, result, env)
+        cn.song.mybatisplus.visualizer.script.SqlScriptManagerDialog.appendLog("[${startedAtMs}] post scripts: $logText")
+    }
+}
+
 internal fun SqlPreviewPanel.captureSnapshotBeforeExecThen(
     proj: com.intellij.openapi.project.Project,
     sql: String,
@@ -1475,14 +1672,17 @@ internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
         else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
     )
 
-    // T-RollbackSnapshotPreExec P2/P3：开关开启且形态可采集 → 先异步采集改前快照，采集完成后
-    // 再提交执行（快照必须是「改前」镜像，顺序不可交换）；采集信息带回提交链，执行成功回调里
-    // 触发改后反查。关闭/不可采集/无数据源/采集失败 → 立即原链提交（fail-open，不阻断；
-    // 关闭时零额外查询零 IO，行为与关闭前逐字节一致）。
-    captureSnapshotBeforeExecThen(proj, sql) { info ->
-        submitExecutionAfterSnapshotGate(
-            proj, sql, rawSql, isQuery, wholeScript, dialectGateRequest, forceChoose, info,
-        )
+    // T-RollbackSnapshotPreExec P2/P3/P7：确认后的编排链——前置脚本（可否决）→ 快照采集 →
+    // 提交执行 → 执行成功回调里改后采集 + 后置脚本。任一环节被否决/失败均 fail-open 或软否决
+    //（不模态阻断）；总开关关闭时零脚本零查询零 IO。
+    val execStartedAtMs = System.currentTimeMillis()
+    runPreScriptsThen(proj, sql) { vetoed, _ ->
+        if (vetoed) return@runPreScriptsThen
+        captureSnapshotBeforeExecThen(proj, sql) { info ->
+            submitExecutionAfterSnapshotGate(
+                proj, sql, rawSql, isQuery, wholeScript, dialectGateRequest, forceChoose, info, execStartedAtMs,
+            )
+        }
     }
 }
 
@@ -1503,9 +1703,13 @@ private fun SqlPreviewPanel.submitExecutionAfterSnapshotGate(
     dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
     forceChoose: Boolean,
     snapshotInfo: RollbackSnapshotCaptureInfo?,
+    execStartedAtMs: Long,
 ) {
-    // 改后采集触发器（fire-and-forget，不阻塞结果呈现；快照未采集时为 null，零开销）
-    val afterExecTrigger = snapshotInfo?.let { info -> { capturePostSnapshot(proj, info) } }
+    // 改后采集 + 后置脚本触发器（fire-and-forget，不阻塞结果呈现）
+    val afterExecTrigger: () -> Unit = {
+        snapshotInfo?.let { info -> capturePostSnapshot(proj, info) }
+        runPostScripts(proj, sql, execStartedAtMs, snapshotInfo?.id)
+    }
     // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
     //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
     resultPanel.showLoading()
