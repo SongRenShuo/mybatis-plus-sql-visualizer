@@ -659,6 +659,10 @@ class PluginSettingsFolderConfigurable : Configurable {
             // T-NotifyTune：两个主动通知开关必须进索引（SettingsPanelSearchableGuardTest 断言一；禁入 UNINDEXED_SWITCH_KEYS）
             fields.add(SearchableField(b.message("settings.dialectTip"), b.message("settings.dialectTip.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.firstCaptureGuide"), b.message("settings.firstCaptureGuide.tip"), "settings.section.ui", u))
+            // T-RollbackSnapshotPreExec：执行前自动快照开关 + 前/后置脚本开关与「脚本管理」入口
+            fields.add(SearchableField(b.message("settings.rollback.snapshot.beforeExec"), b.message("settings.rollback.snapshot.beforeExec.tip"), "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.sqlScript.enabled"), b.message("settings.sqlScript.enabled.tip"), "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.sqlScript.manage"), b.message("settings.sqlScript.manage.tip"), "settings.section.ui", u))
 
             // 关于
             val a = PAGE_ABOUT.ref

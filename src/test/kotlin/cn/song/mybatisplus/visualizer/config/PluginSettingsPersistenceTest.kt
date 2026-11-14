@@ -182,6 +182,16 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 "zh 下 T-DataSourceBadgeMode 数据源角标开关应为中文文案: $zhTexts",
                 zhTexts.any { it.contains("数据源角标显示完整上下文") },
             )
+            // T-RollbackSnapshotPreExec：执行前快照开关文案正反两面（zh 侧）
+            assertTrue(
+                "zh 下执行前快照开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("执行 UPDATE / DELETE 前自动留存改前快照") },
+            )
+            // 前/后置脚本总开关文案（zh 侧）
+            assertTrue(
+                "zh 下前/后置脚本总开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("启用 SQL 前/后置脚本") },
+            )
             // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
             panel.selectLanguage("en")
             panel.rebuild()
@@ -208,6 +218,16 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue(
                 "rebuild 后 T-DataSourceBadgeMode 数据源角标开关应刷新为英文文案: $texts",
                 texts.any { it.contains("full data source context") },
+            )
+            // T-RollbackSnapshotPreExec：执行前快照开关文案（en 侧）
+            assertTrue(
+                "rebuild 后执行前快照开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Capture a before-image snapshot") },
+            )
+            // 前/后置脚本总开关文案（en 侧）
+            assertTrue(
+                "rebuild 后前/后置脚本总开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Enable custom SQL pre/post scripts") },
             )
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
@@ -244,7 +264,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // 首次捕获引导开关（firstCaptureGuideCheck，界面节）+1 后为 51。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 51", 51, texts.size)
+            // T-RollbackSnapshotPreExec：执行前自动快照开关 +1（界面节）后为 52；
+            // 前/后置脚本总开关 +1（界面节）后为 53。
+            // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
+            assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
+            assertEquals("复选框总数应为 53", 53, texts.size)
         } finally {
             settings.state.language = old
         }
