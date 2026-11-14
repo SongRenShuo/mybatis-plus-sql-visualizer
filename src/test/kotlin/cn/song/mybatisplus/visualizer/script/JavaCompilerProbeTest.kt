@@ -24,7 +24,7 @@ import javax.tools.ToolProvider
  * - V10（JDK 侧）：「javac 内存编译 → 自定义 classloader 加载 → MethodHandle 调用」
  *   整链跑通。插件 classloader 边界的真值待 P6 集成与 runIde 复验。
  *
- * 本文件零 `com.intellij` 引用（testFast 快桶划桶规则）。
+ * 本文件源码刻意不出现平台包名字面量（testFast 划桶按字面过滤，注释里写了会被踢出快桶）。
  */
 class JavaCompilerProbeTest {
 
