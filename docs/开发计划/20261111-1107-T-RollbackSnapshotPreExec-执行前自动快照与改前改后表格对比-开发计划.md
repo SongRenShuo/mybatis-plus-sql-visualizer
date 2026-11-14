@@ -238,3 +238,17 @@ P0~P7 全部落地（用户令「实施开发计划的所有内容」+「全部�
 **verifyGate/buildPlugin（大改动：新增 `diff.DiffTool` EP + 3 个 postStartupActivity 类）**：见 §九末尾读数（收口轮）。
 **not run（如实登记）**：runIde 真机全链（V1 diff 窗口实际渲染、V9 JBR javac 真值、V10 插件 classloader 边界、脚本管理对话框/变量表/日志区 GUI、日志面板采集提示）——交用户验收，见 §八 11 步。
 **偏离计划已声明**：①语句级脚本 v1 面板生命周期不持久化；②主键为启发式非元数据真值；③历史对话框不做旁路执行；④脚本编辑器 v1 JBTextArea。
+
+### 九·1 门禁读数（CI，用户令「交给 CI 跑，减少本地压力」）
+
+**首轮 run `43562660574`（FAILED，17:47 收口）**：`verify`×3（243/253/263 三目标）+ `verifyplugin` + `marketplace`×3 + `build` **全绿**（新增 `diff.DiffTool` EP 跨三版本兼容一次过）；红在 `test (fast)` 1 例与 `test (1)`/`test (4)` 各 1 例——**全是新增设置字段的既有守卫涟漪**：
+- `SettingsRealityGuardTest`「摆而不绑」：`sqlScriptManageButton` 未进 `PANEL_WHITELIST`（纯动作按钮，照 `prefixFixButton` 口径豁免）；
+- `PluginSettingsPersistenceTest.testLanguageWriteThroughRefreshesCheckboxTexts`：复选框总数 51→53 未同步（注释链 + zh/en 双语正反断言同批补）；
+- `SettingsPanelSearchableGuardTest`「面板文本 ↔ 搜索索引」：三条新文案未进 `buildSearchableFields`。
+修复提交 `d619e63cc`（本地三守卫类复跑全绿：fast 1 例 + 平台桶 Persistence/Searchable 两例）。
+
+**二轮 run `43564945775`（SUCCESS，06:09→06:2x）**：**15 绿 + `publish` 跳过**（gate 模式不发布，符合预期）。逐腿：`build` / `test (fast)` 9m09s / `test (1)` 5m58s / `test (2)` 7m56s / `test (3)` 6m32s / `test (4)` 7m23s / `test (5)` 7m31s / `verifyplugin` / `verify`(243·253·263) / `marketplace`(243·253·263) / `gate` 全 success。
+
+**例数口径如实登记**：成功腿日志不打印 `N tests completed`（该行仅在失败时输出），故 **CI 侧例数不可读数**，本表只记结论与时长；**不引用首轮失败腿的例数**（fast 5020 例含 1 红、shard1 883 例、shard4 1018 例）当作通过读数——失败腿例数不覆盖全桶。本地定向例数见 §九 表（testFast ≈49 + 平台桶 23，均含对应守卫类回归）。
+
+**not run 复核**：`runIde` 真机全链仍未跑（V1 diff 窗口渲染、V9 JBR 内 javac 真值、V10 插件 classloader 边界、脚本管理对话框/变量表/日志区 GUI、日志面板采集提示）——交用户按 §八 11 步验收。
