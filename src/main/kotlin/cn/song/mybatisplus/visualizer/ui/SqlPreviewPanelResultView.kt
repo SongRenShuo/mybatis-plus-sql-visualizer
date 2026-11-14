@@ -89,6 +89,8 @@ internal fun SqlPreviewPanel.toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>
 
 internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = listOf(
     MpSqlVisualizerBundle.message("panel.rollbackSql") to { showRollbackSql() },
+    // T-RollbackSnapshotPreExec P4：执行前快照历史（对比/回滚 SQL 文本/删除；紧随回滚 SQL 入口）
+    MpSqlVisualizerBundle.message("panel.rollbackSnapshotHistory") to { showRollbackSnapshotHistory() },
     // T-DialectGatePassDeadChain（2026-11-02 用户实测「换源没有反应」）：换源入口**常驻**——
     // 状态行那两段蓝字只在方言冲突态出现，一旦执行失败，错误行会把它们顶掉，而「想换源」恰恰
     // 最常发生在这时。原生控制台下拉靠不住：exec 文件被平台 per-file 关联钉在旧源上

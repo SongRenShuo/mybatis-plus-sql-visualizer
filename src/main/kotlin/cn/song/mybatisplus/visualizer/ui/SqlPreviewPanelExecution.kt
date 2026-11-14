@@ -619,6 +619,12 @@ internal class RollbackSnapshotCaptureInfo(
     val keyColumnIndexes: List<Int>,
 )
 
+/** T-RollbackSnapshotPreExec P4：「回滚快照历史」入口（「更多」菜单，见 moreActions）。 */
+internal fun SqlPreviewPanel.showRollbackSnapshotHistory() {
+    val proj = project ?: return
+    RollbackSnapshotHistoryDialog(proj).show()
+}
+
 internal fun SqlPreviewPanel.captureSnapshotBeforeExecThen(
     proj: com.intellij.openapi.project.Project,
     sql: String,
@@ -684,8 +690,7 @@ internal fun SqlPreviewPanel.captureSnapshotBeforeExecThen(
     }
 }
 
-/** P2/P3 落盘装配：行上限截断 + 记录装配 + 池线程写盘；返回采集信息供提交链触发改后反查。 */
-private fun SqlPreviewPanel.saveCapturedSnapshotBeforeExec(
+/** P2/P3 落盘装配：行上限截断 + 记录装配 + 池线程写盘；返回采集信息供提交链触发改后反查。 */private fun SqlPreviewPanel.saveCapturedSnapshotBeforeExec(
     proj: com.intellij.openapi.project.Project,
     capturable: RollbackSnapshotCapture.Plan.Capturable,
     statementSql: String,

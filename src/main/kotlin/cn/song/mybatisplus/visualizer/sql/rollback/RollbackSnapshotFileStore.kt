@@ -180,7 +180,8 @@ object RollbackSnapshotFileStore {
         rebuildIndex(dir, nowMs)
     }
 
-    private fun rebuildIndex(dir: Path, nowMs: Long) {
+    /** 从条目文件重建索引（外部删除单条目后也走这里；幂等）。 */
+    fun rebuildIndex(dir: Path, nowMs: Long) {
         val entries = listRecordFiles(dir)
         writeIndex(dir, entries, nowMs)
     }

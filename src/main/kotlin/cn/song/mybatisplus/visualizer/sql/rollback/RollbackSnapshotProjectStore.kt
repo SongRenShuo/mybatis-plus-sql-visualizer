@@ -55,6 +55,13 @@ class RollbackSnapshotProjectStore(private val project: Project) {
         mutate: (RollbackSnapshotFileStore.SnapshotRecord) -> RollbackSnapshotFileStore.SnapshotRecord,
     ): Boolean = runCatching { RollbackSnapshotFileStore.updateStatus(dir(), id, mutate) }.getOrDefault(false)
 
+    /** 删除单条目（历史对话框「删除」用）；删除后重建索引。 */
+    fun deleteEntry(id: String): Boolean = runCatching {
+        val removed = java.nio.file.Files.deleteIfExists(dir().resolve("$id.json"))
+        RollbackSnapshotFileStore.rebuildIndex(dir(), System.currentTimeMillis())
+        removed
+    }.getOrDefault(false)
+
     companion object {
         private val LOG = Logger.getInstance(RollbackSnapshotProjectStore::class.java)
     }
