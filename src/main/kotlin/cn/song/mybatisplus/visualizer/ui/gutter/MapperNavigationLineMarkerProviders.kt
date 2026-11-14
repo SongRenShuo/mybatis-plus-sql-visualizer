@@ -38,12 +38,13 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         /** F1-a 会话级正缓存：本会话解析成功过的 `namespace#id`。无失效，取舍见类头注释。 */
         internal val resolvedStatementKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-        internal fun resetResolvedCacheForTest() = resolvedStatementKeys.clear()
-    }
+        /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`，F1-b 乐观产出用），形态承 MbgExampleCallResolver。
+         *  F1' 起双侧共用（Java 侧 `MapperJavaToXmlLineMarkerProvider` 的失败分支同读此缝）。 */
+        internal var isDumbProvider: (Project) -> Boolean = { project ->
+            runCatching { DumbService.isDumb(project) }.getOrDefault(false)
+        }
 
-    /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`，F1-b 乐观产出用），形态承 MbgExampleCallResolver。 */
-    internal var isDumbProvider: (Project) -> Boolean = { project ->
-        runCatching { DumbService.isDumb(project) }.getOrDefault(false)
+        internal fun resetResolvedCacheForTest() = resolvedStatementKeys.clear()
     }
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? = null
@@ -145,19 +146,39 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val containingClass = method.containingClass ?: return null
         if (!containingClass.isInterface) return null
         val namespace = containingClass.qualifiedName ?: return null
-        if (MapperXmlLocator.locate(element.project, "$namespace.${method.name}") == null) return null
-        return LineMarkerInfo(
-            element, element.textRange, MpvsIcons.MapperMethod,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip") },
-            { _, elt ->
-                val currentMethod = elt.parent as? PsiMethod ?: return@LineMarkerInfo
-                val currentNamespace = currentMethod.containingClass?.qualifiedName ?: return@LineMarkerInfo
-                val target = MapperXmlLocator.locate(elt.project, "$currentNamespace.${currentMethod.name}") ?: return@LineMarkerInfo
-                val file = target.virtualFile.takeIf { it.isValid } ?: return@LineMarkerInfo
-                OpenFileDescriptor(elt.project, file, target.line, 0).navigate(true)
-            },
-            com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
-        )
+        // F1 同构（T-GutterFirstOpenDelay，治 Java 侧 S2'：冷窗/索引临界期 MapperXmlLocator.locate
+        // 瞬时落空（XML 清单未就绪）→ 慢趟结果固化 → Java→XML 图标长期缺席，直到文件改动才恢复——
+        // 真机 2026-11-15 实证：CustChannelMapper/CustAddressMapper 全部方法行无图标，daemon 重跑即回。
+        // 与 XML 侧同不变式：图标只在「确认真没有」时缺席，不在「还没查到」时缺席。
+        // 注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
+        val key = "$namespace#${method.name}"
+        val project = element.project
+        val resolved = MapperXmlLocator.locate(project, "$namespace.${method.name}")
+        if (resolved != null) {
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
+            return buildMethodMarker(element)
+        }
+        // —— 解析失败分支（与 XML 侧同构：缓存命中/dumb 乐观产出，缺一即回退成旧「解析失败即缺席」形态）——
+        if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) {
+            return buildMethodMarker(element) // F1-a：XML 侧确认过的语句双向受益
+        }
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) {
+            return buildMethodMarker(element) // F1-b：dumb 窗乐观产出，smart 后重跑自愈
+        }
+        return null
     }
+
+    private fun buildMethodMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperMethod,
+        { MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip") },
+        { _, elt ->
+            val currentMethod = elt.parent as? PsiMethod ?: return@LineMarkerInfo
+            val currentNamespace = currentMethod.containingClass?.qualifiedName ?: return@LineMarkerInfo
+            val target = MapperXmlLocator.locate(elt.project, "$currentNamespace.${currentMethod.name}") ?: return@LineMarkerInfo
+            val file = target.virtualFile.takeIf { it.isValid } ?: return@LineMarkerInfo
+            OpenFileDescriptor(elt.project, file, target.line, 0).navigate(true)
+        },
+        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
+    )
 }

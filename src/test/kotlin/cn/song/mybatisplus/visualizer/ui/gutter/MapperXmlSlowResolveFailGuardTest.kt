@@ -8,12 +8,14 @@ import org.junit.Test
 import java.io.File
 
 /**
- * F1（T-GutterFirstOpenDelay）接线守卫：`MapperXmlToJavaLineMarkerProvider.createMarker`
- * 的解析失败分支必须挂着「正缓存命中仍产出」（F1-a）与「dumb 乐观产出」（F1-b）两道判定。
+ * F1（T-GutterFirstOpenDelay）接线守卫：双向跳转两个 provider 的 `createMarker`
+ * 解析失败分支都必须挂着「正缓存命中仍产出」（F1-a）与「dumb 乐观产出」（F1-b）两道判定——
+ * XML 侧锚 `resolveInterfaceMethod(`，Java 侧锚 `MapperXmlLocator.locate(`（F1' 2026-11-15，
+ * 真机实证 Java→XML 图标因冷窗 locate 落空 + 慢趟结果固化而长期缺席）。
  *
  * 防「守卫函数有了没人调」的空绿：行为矩阵（[MapperNavigationLineMarkerProvidersTest] 的
- * F1 用例）从消费侧证明缓存命中真会影响产出；本守卫从源码形态钉住判定必须落在
- * `resolveInterfaceMethod` **之后**（即失败分支上）——判定被挪到解析之前/分支删掉即红。
+ * F1/F1' 用例）从消费侧证明缓存命中真会影响产出；本守卫从源码形态钉住判定必须落在
+ * 解析调用**之后**（即失败分支上）——判定被挪到解析之前/分支删掉即红。
  *
  * 防空绿自证（对齐 GutterProviderSingleLookupGuardTest 惯例）：修复后形态放行、
  * 修复前形态（无失败分支判定）必红、扫描面漂移（提取不到方法体/解析调用）按红处理不静默。
@@ -75,6 +77,50 @@ class MapperXmlSlowResolveFailGuardTest {
         assertNull(failureBranchWiring("return null"))
     }
 
+    @Test
+    fun `F1接线守卫_Java侧createMarker失败分支必须挂缓存与dumb判定`() {
+        val body = extractCreateMarkerBody(1)
+            ?: error("无法提取第二个 createMarker（MapperJavaToXmlLineMarkerProvider，签名/顺序漂移？）——守卫扫描面失效按红处理")
+        val wiring = javaFailureBranchWiring(body)
+        assertNotNull("Java 侧 createMarker 内必须存在 MapperXmlLocator.locate 解析调用（扫描面漂移？）", wiring)
+        assertTrue(
+            "Java 侧的解析失败分支必须挂 F1-a（resolvedStatementKeys.contains 命中仍产出）" +
+                "与 F1-b（isDumbProvider 乐观产出）两道判定，且都落在 MapperXmlLocator.locate 之后。实测 wiring=$wiring",
+            wiring == true,
+        )
+        assertTrue(
+            "Java 侧 createMarker 同样不得吞异常（平台契约禁 catch ProcessCanceledException）",
+            !body.contains("catch"),
+        )
+    }
+
+    @Test
+    fun `F1守卫自证_Java侧修复后形态放行修复前形态必红`() {
+        // Java 侧修复后形态（判定在 locate 之后的失败分支上）必须放行。
+        val fixed = """
+            val resolved = MapperXmlLocator.locate(project, statementId)
+            if (resolved != null) {
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
+                return buildMethodMarker(element)
+            }
+            if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) return buildMethodMarker(element)
+            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+            return null
+        """.trimIndent()
+        assertEquals("Java 侧修复后形态必须放行（wiring=true）", true, javaFailureBranchWiring(fixed))
+
+        // Java 侧修复前形态（locate 失败即 return null，无失败分支判定）必须被报出。
+        val legacy = """
+            val resolved = MapperXmlLocator.locate(project, statementId)
+            if (resolved == null) return null
+            return buildMethodMarker(element)
+        """.trimIndent()
+        assertEquals("Java 侧修复前形态必须报红（wiring=false）", false, javaFailureBranchWiring(legacy))
+
+        // 扫描面漂移形态：无 locate 调用 → 返回 null（调用方按红处理）。
+        assertNull(javaFailureBranchWiring("return null"))
+    }
+
     // ------------------------------------------------------------------
     // 扫描面与提取器
     // ------------------------------------------------------------------
@@ -89,12 +135,15 @@ class MapperXmlSlowResolveFailGuardTest {
         error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
     }
 
-    /** 取文件内第一个 `private fun createMarker`（MapperXmlToJavaLineMarkerProvider 在前）的配平方法体。 */
-    private fun extractCreateMarkerBody(): String? {
+    /** 取文件内第 `occurrence`（0 起）个 `private fun createMarker` 的配平方法体——0=XML 侧，1=Java 侧。 */
+    private fun extractCreateMarkerBody(occurrence: Int = 0): String? {
         val stripped = stripComments(sourceFile().readText())
         val marker = "private fun createMarker"
-        val start = stripped.indexOf(marker)
-        if (start < 0) return null
+        var start = -1
+        repeat(occurrence + 1) {
+            start = stripped.indexOf(marker, if (start < 0) 0 else start + marker.length)
+            if (start < 0) return null
+        }
         val open = stripped.indexOf('{', start + marker.length)
         if (open < 0) return null
         var depth = 0
@@ -111,18 +160,23 @@ class MapperXmlSlowResolveFailGuardTest {
     }
 
     /**
-     * 失败分支接线判定：方法体内 `resolveInterfaceMethod(` 解析调用之后的文本里，
+     * 失败分支接线判定：方法体内解析调用（[anchor]）之后的文本里，
      * F1-a（`resolvedStatementKeys.contains(`）与 F1-b（`isDumbProvider(`）判定必须都存在——
      * 即两道判定都在解析**之后**（失败分支上）。无解析调用返回 null（调用方按红处理）。
+     * XML 侧锚=`resolveInterfaceMethod(`，Java 侧锚=`MapperXmlLocator.locate(`。
      */
-    private fun failureBranchWiring(body: String): Boolean? {
-        val resolveIdx = body.indexOf("resolveInterfaceMethod(")
+    private fun failureBranchWiring(body: String, anchor: String = "resolveInterfaceMethod("): Boolean? {
+        val resolveIdx = body.indexOf(anchor)
         if (resolveIdx < 0) return null
         val afterResolve = body.substring(resolveIdx)
         val f1a = afterResolve.contains("resolvedStatementKeys.contains(")
         val f1b = afterResolve.contains("isDumbProvider(")
         return f1a && f1b
     }
+
+    /** Java 侧（`MapperJavaToXmlLineMarkerProvider.createMarker`）的失败分支接线判定。 */
+    private fun javaFailureBranchWiring(body: String): Boolean? =
+        failureBranchWiring(body, anchor = "MapperXmlLocator.locate(")
 
     /** 剥行注释与块注释（该文件方法体内只有 // 注释；KDoc 含花括号也不干扰配平）。 */
     private fun stripComments(source: String): String {

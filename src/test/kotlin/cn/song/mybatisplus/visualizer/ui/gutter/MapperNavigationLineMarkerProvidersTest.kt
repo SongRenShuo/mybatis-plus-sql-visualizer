@@ -172,7 +172,8 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testF1ResolveSuccessProducesMarkerAndSeedsPositiveCache() {
-        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         addMapper()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
         val marker = markers(xmlProvider, xml).single()
@@ -186,7 +187,8 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testF1ResolveFailureWithCacheHitStillProducesMarker() {
         // 冷窗形态模拟：namespace 侧接口不可解析（无对应 Java 文件），但本会话早先解析成功过该 key。
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
         assertTrue("resolveInterfaceMethod 对该 key 必须确实解析失败（否则本用例测不到失败分支）",
             MybatisXmlTargets.resolveInterfaceMethod(project, "com.demo.UserMapper", "count") == null)
@@ -195,7 +197,8 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     }
 
     fun testF1ResolveFailureWithoutCacheProducesNoMarkerAndLeavesCacheClean() {
-        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { false } }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         addMapper()
         val xml = addXml("<select id=\"ghost\">SELECT 1</select>")
         assertEmpty(markers(xmlProvider, xml))
@@ -208,13 +211,73 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun testF1DumbModeOptimisticallyProducesMarkerWithoutCaching() {
         // F1-b：dumb 窗内解析失败也乐观产出（不摘图标），且失败路径不得入正缓存。
         // dumb 判定走 isDumbProvider 测试缝（承 MbgExampleCallResolver 定例），不依赖平台真实 dumb 态。
-        val xmlProvider = MapperXmlToJavaLineMarkerProvider().apply { isDumbProvider = { true } }
-        addMapper()
-        val xml = addXml("<select id=\"ghost\">SELECT 1</select>")
-        val marker = markers(xmlProvider, xml)
-        assertEquals("dumb 窗内解析失败须乐观产出（F1-b）", 1, marker.size)
-        assertSame(MpvsIcons.MapperStatement, marker.single().icon)
-        assertFalse("乐观产出不得污染正缓存",
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"))
+        // 缝是伴生共享（Java/XML 两侧同读），用完即还原，防测试顺序泄漏。
+        val original = MapperXmlToJavaLineMarkerProvider.isDumbProvider
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { true }
+        try {
+            val xmlProvider = MapperXmlToJavaLineMarkerProvider()
+            addMapper()
+            val xml = addXml("<select id=\"ghost\">SELECT 1</select>")
+            val marker = markers(xmlProvider, xml)
+            assertEquals("dumb 窗内解析失败须乐观产出（F1-b）", 1, marker.size)
+            assertSame(MpvsIcons.MapperStatement, marker.single().icon)
+            assertFalse("乐观产出不得污染正缓存",
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#ghost"))
+        } finally {
+            MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // F1'（T-GutterFirstOpenDelay Java 侧）：MapperXmlLocator.locate 瞬时落空不缺席——
+    // 真机 2026-11-15 实证：冷窗/索引临界期慢趟首跑 locate 落空 → 慢趟结果固化 →
+    // Java→XML 图标长期缺席（CustChannelMapper/CustAddressMapper 全方法行，daemon 重跑才恢复）。
+    // 判定与 XML 侧同构：成功入共享正缓存 / 失败+缓存命中 / 失败+dumb 乐观 / 其余不产出。
+    // ------------------------------------------------------------------
+
+    fun testF1JavaLocateSuccessProducesMarkerAndSeedsPositiveCache() {
+        val java = addMapper()
+        addXml("<select id=\"count\">SELECT 1</select>")
+        val marker = markers(javaProvider, java).single()
+        assertSame(MpvsIcons.MapperMethod, marker.icon)
+        assertTrue(
+            "locate 成功必须记入共享正缓存（Java 侧失败分支靠它双向受益）",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
+    }
+
+    fun testF1JavaLocateFailureWithCacheHitStillProducesMarker() {
+        // 冷窗形态模拟：无对应 XML（locate 必落空），但本会话早先 XML 侧确认过该语句双向存在。
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        assertTrue("locate 对该 key 必须确实落空（否则本用例测不到失败分支）",
+            MapperXmlLocator.locate(project, "com.demo.UserMapper.count") == null)
+        val marker = markers(javaProvider, addMapper())
+        assertEquals("缓存命中必须照常产出（图标不缺席）", 1, marker.size)
+        assertEquals("count", marker.single().element?.text)
+    }
+
+    fun testF1JavaDumbOptimisticallyProducesMarkerWithoutPollutingCache() {
+        // F1-b Java 侧：dumb 窗内 locate 落空也乐观产出；失败路径不得污染正缓存。
+        val original = MapperXmlToJavaLineMarkerProvider.isDumbProvider
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { true }
+        try {
+            val marker = markers(javaProvider, addMapper())
+            assertEquals("dumb 窗内 locate 落空须乐观产出（接口 5 个方法）", 5, marker.size)
+            assertFalse("乐观产出不得污染正缓存",
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#missing"))
+        } finally {
+            MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
+        }
+    }
+
+    fun testF1JavaCacheMissAndSmartProducesNoMarkerNegative() {
+        // 负例不回归：真没有对应 XML（缓存空 + smart）依旧不产出。显式置 smart 缝防兄弟用例泄漏。
+        val original = MapperXmlToJavaLineMarkerProvider.isDumbProvider
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        try {
+            assertEmpty(markers(javaProvider, addMapper()))
+        } finally {
+            MapperXmlToJavaLineMarkerProvider.isDumbProvider = original
+        }
     }
 }

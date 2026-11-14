@@ -172,3 +172,9 @@
 **探针坑（三层定位，值一条平台事实）**：给沙盒预设 Registry 值时，手写 `config/options/registry.xml`（`<option>` 与 `<entry>` 两种形态都试过）**243 一律不读**——该版本 Registry 持久化在 **`ide.general.xml` 的 `Registry` 组件**（`<entry key value source>` 形态，平台自写条目可对照）；UI 改值后强杀进程也不落盘（自动保存未到点）。决策轮改 `ide.general.xml` 后延迟分支立即显形。Registry UI 显示的 Value/Source 列是「文件是否被读回」的最快判据（Source 空=覆盖未生效）。
 
 **遗留**：S2 显形窗（解析瞬时失败致图标摘除）在沙盒依旧未自然复现——F1 行为由单测矩阵+接线守卫+反向验证兜底，真机若再现闪没按 §六步骤取证。
+
+### 增补 F1'（2026-11-15 主控实施）：Java→XML 侧同构缺陷修复
+
+用户报 `CustChannelMapper.java` 跳转图标不显示；沙盒复现实锤为**全局性**（CustAddressMapper.java 同样无图标），机制与 XML 侧 S2 同构——冷窗/索引临界期慢趟首跑 `MapperXmlLocator.locate` 的 XML 清单瞬时落空 → **慢趟结果固化**（daemon 不自动重跑慢趟）→ Java→XML 图标长期缺席，直到文件改动触发重分析才恢复（敲空格+撤销即回，实锤）。XML 侧因 F1-b dumb 乐观产出兜住，Java 侧无此兜底。
+
+修法＝与 F1 同构（同文件 `MapperJavaToXmlLineMarkerProvider.createMarker`）：成功入**共享正缓存**（`resolvedStatementKeys`，XML 侧确认过的语句双向受益）/ 失败+缓存命中仍产出 / 失败+dumb 窗乐观产出 / 其余不产出；`isDumbProvider` 测试缝移入 companion 双侧共用。定向 **31/31 绿**（矩阵 19＝原 15+Java 侧 4；接线守卫 4＝原 2+Java 侧 2，提取器泛化到第 N 个 createMarker、Java 侧锚 `MapperXmlLocator.locate(`）；反向摘分支恰红 3（矩阵 2+守卫 1）→ 恢复复绿。沙盒目视复验：修复包（jar 00:39）暖开 `CustChannelMapper.java` 全方法行图标在（首截图 10s 未显＝首次全项目 XML 清单构建成本，既有缓存链，非本刀范围）。
