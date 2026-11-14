@@ -129,6 +129,12 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
+        <!-- T-RollbackSnapshotPreExec P0（V1 探针）：表格形态 diff 走自写 FrameDiffTool——
+             262 的 DiffContent 无 getComponent()（classfile 实证），唯一公开的自定义视图入口是
+             FrameDiffTool$DiffViewer#getComponent()；平台把 EP 扩展排在内置 DiffTool 之前，
+             canShow 命中即被选中。探针三件套见 ui/diff/RollbackTableDiffProbeTool.kt，
+             P3 正式三件套将替换其内部渲染。 -->
+        <diff.DiffTool implementation="cn.song.mybatisplus.visualizer.ui.diff.RollbackTableDiffProbeTool"/>
         <!-- T-SettingsSearchA：插件设置项进入 IDE 自带设置搜索索引。
              平台索引有两个来源——插件 jar 内 search/searchableOptions.xml（构建期 fork IDE 生成，
              本仓 buildSearchableOptions=false 因 Windows 中文环境 locale 失败）与运行期
@@ -404,7 +410,6 @@
              检测到可预览 SQL 时经预览组弹一次「Alt+Shift+Q」指路通知；一次性状态持久化
              （PluginSettings.onboardingAnchorTipShown），gutter 快速路径零改动 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.onboarding.OnboardingAnchorTip"/>
-
         <!-- T-WorkspaceHeal（2026-11-13）：项目打开时自愈被旧版本写坏的 .idea/workspace.xml——
              写侧根因（后台线程写项目级 PropertiesComponent 与平台保存竞争）已随 EDT 归位修掉，
              但已损坏的工程不会自己好：平台每次启动报 JsonDecodingException 且不重写该条目。
