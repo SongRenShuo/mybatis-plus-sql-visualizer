@@ -199,6 +199,55 @@ tasks.withType<Test>().configureEach {
     // formatTimestampFragment 的 SimpleDateFormat 走 ThreadLocal 缓存、构造时固化默认时区，
     // 测试内 setDefault 管不到已缓存实例。本机即 CST，此参数为无操作。
     jvmArgs("-Duser.timezone=Asia/Shanghai")
+
+    // T-TestCountReport（2026-11-14，CI 收口实测缺口）：**成功腿也打印例数**。
+    // 背景：Gradle 只在有失败时输出「N tests completed, M failed」——成功腿日志里没有任何
+    // 例数，门禁收口只剩 conclusion + 时长，「静默跳过大半用例」与「真全绿」在日志上不可
+    // 区分（T-RollbackSnapshotPreExec 二轮 CI 实测：15 腿全绿却读不出任何例数）。
+    // 做法：任务收尾扫本轮 JUnit XML 头属性汇总一行，前缀固定 `MPV-TEST-COUNT` 供 grep 与
+    // CI 抽取。失败腿不执行 doLast（Gradle 自带失败汇总行已带例数），两条路径互补不重复。
+    // 本轮边界：doFirst 在 temporaryDir 落毫秒戳（**不写 reports 目录**——那是任务的
+    // @OutputDirectory，写入会污染 up-to-date 快照让测试每次重跑），doLast 只计 mtime ≥ 戳的
+    // XML，防跨轮残留混计（同 T-TestPerf10 S2 对聚合报告的 `.round-start` 口径）。
+    val mpvJunitXmlDir = reports.junitXml.outputLocation
+    doFirst {
+        val marker = File(temporaryDir, "mpv-count-start.txt")
+        marker.parentFile?.mkdirs()
+        marker.writeText(System.currentTimeMillis().toString())
+    }
+    doLast {
+        val dir = mpvJunitXmlDir.get().asFile
+        if (!dir.isDirectory) return@doLast
+        val startedAt = runCatching {
+            File(temporaryDir, "mpv-count-start.txt").readText().trim().toLong()
+        }.getOrDefault(0L)
+        fun attr(head: String, name: String): Int =
+            Regex("""\b$name="(\d+)"""").find(head)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        var tests = 0
+        var skipped = 0
+        var failures = 0
+        var errors = 0
+        var suites = 0
+        dir.listFiles()?.forEach { f ->
+            if (!f.isFile || !f.name.startsWith("TEST-") || !f.name.endsWith(".xml")) return@forEach
+            if (f.lastModified() < startedAt) return@forEach
+            // JUnit XML 首行是 `<?xml ...?>` 声明、`<testsuite>` 属性在第二行——只读首行会
+            // 恒判「不是 testsuite」（本轮首验即 0/0 空读数的形态），故取前 5 行拼接
+            val head = runCatching {
+                f.useLines { lines -> lines.take(5).joinToString("\n") }
+            }.getOrNull().orEmpty()
+            if (!head.contains("<testsuite")) return@forEach
+            suites++
+            tests += attr(head, "tests")
+            skipped += attr(head, "skipped")
+            failures += attr(head, "failures")
+            errors += attr(head, "errors")
+        }
+        logger.lifecycle(
+            "MPV-TEST-COUNT task=$name tests=$tests skipped=$skipped failures=$failures " +
+                "errors=$errors suites=$suites",
+        )
+    }
 }
 
 // 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
