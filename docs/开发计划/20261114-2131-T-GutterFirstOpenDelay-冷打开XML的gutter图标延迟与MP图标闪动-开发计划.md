@@ -178,3 +178,21 @@
 用户报 `CustChannelMapper.java` 跳转图标不显示；沙盒复现实锤为**全局性**（CustAddressMapper.java 同样无图标），机制与 XML 侧 S2 同构——冷窗/索引临界期慢趟首跑 `MapperXmlLocator.locate` 的 XML 清单瞬时落空 → **慢趟结果固化**（daemon 不自动重跑慢趟）→ Java→XML 图标长期缺席，直到文件改动触发重分析才恢复（敲空格+撤销即回，实锤）。XML 侧因 F1-b dumb 乐观产出兜住，Java 侧无此兜底。
 
 修法＝与 F1 同构（同文件 `MapperJavaToXmlLineMarkerProvider.createMarker`）：成功入**共享正缓存**（`resolvedStatementKeys`，XML 侧确认过的语句双向受益）/ 失败+缓存命中仍产出 / 失败+dumb 窗乐观产出 / 其余不产出；`isDumbProvider` 测试缝移入 companion 双侧共用。定向 **31/31 绿**（矩阵 19＝原 15+Java 侧 4；接线守卫 4＝原 2+Java 侧 2，提取器泛化到第 N 个 createMarker、Java 侧锚 `MapperXmlLocator.locate(`）；反向摘分支恰红 3（矩阵 2+守卫 1）→ 恢复复绿。沙盒目视复验：修复包（jar 00:39）暖开 `CustChannelMapper.java` 全方法行图标在（首截图 10s 未显＝首次全项目 XML 清单构建成本，既有缓存链，非本刀范围）。
+
+### 增补 F1'''（2026-11-15 主控实施）：MPJ 精华采纳——自定义 fileBasedIndex 替换清单状态机
+
+子智能体反编译调研（`docs/调研报告/20261115-0202-MPJ跳转实现反编译调研-调研报告.md`）给出 Top1 可借鉴点：
+MPJ（MyBatisCodeHelper-Pro 3.6.8+2321）把 mapper XML 的 namespace 在**索引期**摊平成键（自定义
+`fileBasedIndex`，索引 ID `MybatisCodeHelperIndexer6`），运行时 `getContainingFiles` 毫秒级出答案、
+失效全交平台增量。采纳前先核屏障风险：平台 `product.jar/META-INF/plugin.xml` 实证
+`<extensionPoint name="fileBasedIndex" dynamic="true"/>`——**非动态卸载屏障**，热更新特性不受影响
+（推翻既有记忆里的屏障清单，平台声明为唯一权威）。
+
+**实施**：新建 `log/MapperNamespaceIndex`（ScalarIndexExtension，键=根标签 namespace，输入过滤器=XML，
+`dependsOnFileContent`，version=1，提取内核=原头扫正则喂 `FileContent.contentAsText` 全文本）；plugin.xml
+注册 `<fileBasedIndex>`；`MapperXmlLocator` 瘦身重写（locate=索引查询+PSI 校验，删除单槽/TTL/头扫
+异步/missedWhilePending/restart 整套状态机）；provider 层 F1'/F1-b 失败分支兜底保留（索引未就绪窗口由
+它们接住）。既有 TTL/缓存/异步机制测试随机制退役（行为面保留）。
+
+**测试**：定向 84/84 绿（locator 9 + 导航 19 + Gate 11 + 守卫 4 + Ibatis + 元守卫 8 + BannedApi 12 等）；
+新增索引内核纯单测 2 例。**not run**：verifyPlugin（新增 EP=大改动判据，主控后台跑后推送）。

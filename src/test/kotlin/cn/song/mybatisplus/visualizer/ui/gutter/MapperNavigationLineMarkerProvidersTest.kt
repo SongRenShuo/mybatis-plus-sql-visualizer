@@ -19,13 +19,11 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        MapperXmlLocator.clearFileListCacheForTest()
         MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
     }
 
     override fun tearDown() {
         try {
-            MapperXmlLocator.clearFileListCacheForTest()
             MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
         } finally {
             super.tearDown()
@@ -153,16 +151,17 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertEmpty(markers(xmlProvider, xml))
     }
 
-    fun testFastPathDoesNotScanMapperFiles() {
+    fun testFastPathDoesNotProduceMarkers() {
+        // F1''' 起定位走平台 fileBasedIndex（getContainingFiles），fast path 不再持有任何
+        // 本插件自建扫描计数缝——本用例保留「fast path 零产出」的行为面（原 indexScanCount
+        // 断言随 T-PS5-05 单槽机制退役删除）。
         val java = addMapper()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
-        val before = MapperXmlLocator.indexScanCount.get()
         for ((provider, file) in listOf(javaProvider to java, xmlProvider to xml)) {
             for (element in PsiTreeUtil.collectElements(file) { it.firstChild == null }) {
                 assertNull(provider.getLineMarkerInfo(element))
             }
         }
-        assertEquals(before, MapperXmlLocator.indexScanCount.get())
     }
 
     // ------------------------------------------------------------------

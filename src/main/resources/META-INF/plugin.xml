@@ -227,6 +227,12 @@
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
 
+        <!-- F1''' T-GutterFirstOpenDelay 精华采纳刀：mapper XML namespace 自定义标量索引——
+             索引期摊平 namespace，Java→XML 跳转定位运行时毫秒级出答案（MPJ 反编译调研 Top1
+             可借鉴点，平台 EP 声明 dynamic="true" 非动态卸载屏障，热更新特性不受影响）。
+             索引器只读文件头提取根标签 namespace；正确性闸门在 PSI 侧（根 namespace+id 精确匹配）。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
