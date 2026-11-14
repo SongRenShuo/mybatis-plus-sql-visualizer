@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
+import cn.song.mybatisplus.visualizer.ui.standalone.SqlStandalonePreviewPanel
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
@@ -200,6 +201,10 @@ internal class CountSnapshotAccumulator(
  * - 去重徽章：开启「移除重复的sql」后被丢弃的 SQL 在条目旁累加显示 ⨉N
  * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收口）
  */
+/** T-SqlPreviewStandalone：独立预览工作台 tab 的 registry 键名（plugin.xml `<registryKey>` 同名登记；
+ *  文件级而非 companion——本类已有 companion，Kotlin 不允许双 companion；测试守卫同样可达）。 */
+internal const val STANDALONE_TAB_REGISTRY_KEY = "sqlvis.preview.standaloneTab"
+
 class SqlLogPanel(
     internal val project: Project,
     internal val manager: SqlLogManager,
@@ -340,6 +345,23 @@ class SqlLogPanel(
     // 必须声明在 init 之前：init 块内会读它完成注册，声明在后会读到未初始化值（本仓构造期序坑第三次）。
     private val openEntryInTabCallback: (LogSqlEntry, LogEntryTab) -> Unit =
         { entry, tab -> openEntryInTab(entry, tab) }
+
+    // T-SqlPreviewStandalone：「打开 SQL 预览工作台」通道回调的稳定引用（init 注册 / dispose
+    // 同一性注销用，同 onOpenEntryInTabCallback 的构造期序坑）。参数 = 剪贴板预填候选（D-4）。
+    private val openStandalonePreviewCallback: (String?) -> Unit =
+        { prefill -> openStandalonePreview(prefill) }
+
+    // T-SqlPreviewStandalone：以下三件必须声明在 init 块**之前**——init 期 addStandaloneTab()
+    // 经 `standalonePanel by lazy` 读委托，声明在后则此刻委托仍是 JVM 默认 null（DialogWrapper-
+    // InitOrder 守卫实测点名，2026-11-14）；lazy 无初值安全面靠声明位次保证，无逃逸面。
+    /** 独立预览工作台面板（懒创建；首次 tab 挂载/页签切换才实例化，关 tab 的会话零 Editor 代价）。 */
+    private val standalonePanel: SqlStandalonePreviewPanel by lazy { SqlStandalonePreviewPanel(project) }
+
+    /** 工作台页签句柄（registry 关闭时为 null）。 */
+    private var standaloneTab: com.intellij.ui.tabs.TabInfo? = null
+
+    /** Disposer 防重注册守卫（对齐 historyPanelRegistered 先例）。 */
+    private var standalonePanelRegistered = false
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -856,6 +878,13 @@ class SqlLogPanel(
         // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
         // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab()
+        // T-SqlPreviewStandalone：独立 SQL 预览工作台 tab（D-2）。registry `sqlvis.preview.standaloneTab`
+        // 兜底显隐——关掉后 tab 不再挂载（重启后生效），通道回调仍注册（触发时按「未就绪」轻通知降级，
+        // 不静默）；面板懒创建（lazy），关 tab 的会话零 Editor 代价。
+        if (com.intellij.openapi.util.registry.Registry.`is`(STANDALONE_TAB_REGISTRY_KEY, true)) {
+            addStandaloneTab()
+        }
+        manager.onOpenStandalonePreview = openStandalonePreviewCallback
         add(tabs.component, BorderLayout.CENTER)
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
@@ -1308,6 +1337,37 @@ class SqlLogPanel(
         historyTab = tabs.addTab(
             com.intellij.ui.tabs.TabInfo(historyPanel).setText(MpSqlVisualizerBundle.message("log.tab.history")),
         )
+    }
+
+    /** 添加独立预览工作台 tab（构造期唯一调用点；registry 开启时）。 */
+    private fun addStandaloneTab() {
+        if (!standalonePanelRegistered) {
+            Disposer.register(this, standalonePanel)
+            standalonePanelRegistered = true
+        }
+        standaloneTab = tabs.addTab(
+            com.intellij.ui.tabs.TabInfo(standalonePanel)
+                .setText(MpSqlVisualizerBundle.message("log.tab.standalone")),
+        )
+    }
+
+    /**
+     * T-SqlPreviewStandalone：面板外请求（D-3 action）打开工作台页签——预填候选文本（可空）、
+     * 聚焦输入区并触发解析。registry 关闭时无 tab：轻通知指路开关，不静默。
+     */
+    internal fun openStandalonePreview(prefillText: String?) {
+        val tab = standaloneTab
+        if (tab == null) {
+            Notification(
+                "cn.song.mybatisplus.visualizer.preview",
+                MpSqlVisualizerBundle.message("standalone.status.disabled.title"),
+                MpSqlVisualizerBundle.message("standalone.status.disabled.message"),
+                NotificationType.INFORMATION,
+            ).notify(project)
+            return
+        }
+        standalonePanel.focusAndMaybeResolve(prefillText)
+        tabs.select(tab, true)
     }
 
     /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
@@ -2552,6 +2612,11 @@ class SqlLogPanel(
         manager.removeCapturingListener(capturingUiListener)
         // T-RecentExecMenu O-119：注销送页签通道（同一性判定——防误清他人注册）
         if (manager.onOpenEntryInTab === openEntryInTabCallback) manager.onOpenEntryInTab = null
+        // T-SqlPreviewStandalone：注销工作台通道（同一性判定同上）+ 释放工作台面板
+        if (manager.onOpenStandalonePreview === openStandalonePreviewCallback) {
+            manager.onOpenStandalonePreview = null
+        }
+        if (standalonePanelRegistered) standalonePanel.dispose()
         previewHost.hideHint()
         dockedPreview.dispose()
         logToSqlPanel.dispose()
