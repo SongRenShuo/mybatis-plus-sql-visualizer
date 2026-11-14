@@ -499,6 +499,11 @@
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-SqlPreviewStandalone：主侧边栏是否挂载「SQL 预览」独立工作台 tab（粘贴 SQL/mapper XML
+             片段 → 识别 → 格式化/填值/复制/弹框）。关闭后 tab 不再挂载（重启后生效），预览弹窗与
+             语句入口不受影响。代码读取：log/SqlLogPanel.kt（STANDALONE_TAB_REGISTRY_KEY 文件级常量）。 -->
+        <registryKey key="sqlvis.preview.standaloneTab" defaultValue="true"
+                     description="Show the standalone SQL preview workbench tab in the main sidebar tool window (paste SQL or mapper XML fragments, then format / fill values / copy / open in dialog). Disable to remove the tab after a restart; statement-entry previews are unaffected."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
@@ -538,6 +543,19 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
+        </action>
+
+        <!-- T-SqlPreviewStandalone：打开 SQL 预览工作台（主侧边栏新 tab；粘贴 SQL/mapper XML 片段
+             → 识别 → 格式化/填值/复制/在弹框中打开）。Tools 菜单全局入口 + Alt+Shift+P
+             （Alt+Shift+Q/J 已被正反向转换占用；与既有动作同款双 keymap 登记，冲突可在 Keymap 改绑） -->
+        <action id="cn.song.mybatisplus.visualizer.OpenSqlPreview"
+                class="cn.song.mybatisplus.visualizer.actions.OpenSqlPreviewAction"
+                text="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.text"
+                description="action.cn.song.mybatisplus.visualizer.OpenSqlPreview.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt shift P"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift P"/>
         </action>
 
         <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；
