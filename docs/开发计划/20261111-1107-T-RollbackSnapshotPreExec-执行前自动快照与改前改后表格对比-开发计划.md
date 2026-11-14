@@ -221,3 +221,20 @@
 9. （脚本，P7 后）设置页脚本开关默认关；开启后写入一段前置脚本返回 `false` → 执行被否决且面板状态行提示，不弹快照查询。
 10. （脚本，P7 后）后置脚本里 `log.println("...")` 与 `env.setVar("lastCount", rows)` → 脚本日志区可见输出、变量表出现 `lastCount`；再把前置脚本改为 `log.println(env.getVar("lastCount"))` 后执行 → 能读到上次的值。
 11. （脚本，P7 后）死循环脚本 → 5 秒左右被中断，执行链恢复可用，脚本日志有超时记录；关闭脚本开关 → 一切照旧。
+
+## 九、实施记录（2026-11-14，分支 t-rollback-preexec，工作树 .worktrees/t-rollback-preexec）
+
+P0~P7 全部落地（用户令「实施开发计划的所有内容」+「全部由主控来做」，并行代理因并发额度收敛）：
+
+| 阶段 | 提交 | 读数 |
+|---|---|---|
+| P0 探针 | `3015c193c` | 平台桶 5 例 + testFast javac 探针 2 例；订正两条子代理失真：243/262 `FrameDiffTool` 都是 `createComponent`（非 createViewer）、`DiffManagerEx.getInstance()`（非 getInstanceEx）；**243 实测 EP 工具不在 getDiffTools() 清单最前**（探针下标 8/13），选择正确性改钉「唯一 canShow 命中」 |
+| P1+P2 | `d53c35eae` | testFast 13 例（Capture 形态矩阵 + FileStore 落盘/索引/剪枝）+ 平台桶 6 例（编排：开关关零查询/开先查后提交/INSERT 跳过/未填参数跳过/无数据源 fail-open/常量钉子）；反向验证：参数守卫短路 → **恰 2 红**（纯逻辑 + 面板各 1），恢复全绿；关键字判定短路无独立红面（snapshotSelectSql 只在 UPDATE/DELETE AST 分支产出，结构性双重守卫）——读数入册 `17b6a19b7` |
+| P6 引擎 | `0b935b205` | testFast 15 例（引擎 13 + javac 探针 2）：正常/否决/后置写变量/异常收敛/编译诊断/500ms 超时中断/缓存命中零重编译/空模板零编译/classpath 隔离/IEnv 广播。实施踩坑四则：javac「public 类须同名 .java」→ 内存 URI 按声明类名动态定；vararg out 投影禁展开 → 显式数组；setLocation File/Path 双重载歧义 → setLocationFromPaths；**testFast 划桶按源码字面含「com.intellij」过滤，注释里写了也被踢出快桶＝空绿**（V9 探针首轮即空绿，靠 No tests found 暴露；已记 pitfall-testfast-bucket-literal-filter-and-config-cache） |
+| P3 对比 | `88996453f` | 对齐器纯逻辑 10 例（主键启发式两类命名/单键数字转义/复合键元组/行序降级/引号规则）+ 平台桶 7 例（三件套 EP/唯一 canShow/viewer 生命周期/statusPanel/对齐状态） |
+| P4 历史 | `baf12a728` | 回滚生成 5 例（按行 CAS/NULL 局限/无键 UNABLE/DELETE 回填/空输入）+ 「更多」菜单契约守卫九项→十项；v1 改档：从历史直接执行需另起临时执行链，登记为后续项（生成 SQL 文本走用户既有链消费） |
+| P5+P7 | `db55aac74` | 编排链 6 例（三档顺序/否决短路/异常硬阻断/空清单/后置失败只记日志/空脚本跳过）+ 面板回归 6 例 + 回滚 SQL 5 例回归。管理对话框 package 错写 ui（编译期暴露即修） |
+
+**verifyGate/buildPlugin（大改动：新增 `diff.DiffTool` EP + 3 个 postStartupActivity 类）**：见 §九末尾读数（收口轮）。
+**not run（如实登记）**：runIde 真机全链（V1 diff 窗口实际渲染、V9 JBR javac 真值、V10 插件 classloader 边界、脚本管理对话框/变量表/日志区 GUI、日志面板采集提示）——交用户验收，见 §八 11 步。
+**偏离计划已声明**：①语句级脚本 v1 面板生命周期不持久化；②主键为启发式非元数据真值；③历史对话框不做旁路执行；④脚本编辑器 v1 JBTextArea。
