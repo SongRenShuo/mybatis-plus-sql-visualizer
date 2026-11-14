@@ -179,7 +179,12 @@ object ExpressionEvaluator {
             is Boolean -> SqlValue.Literal(value.toString())
 
             // 字符 → 单引号包裹
-            is Char -> SqlValue.Literal("'$value'", unquoted = value.toString())
+            // T-HiddenBugPerfScan 券 Y8：与 String 分支同口径补 ' → '' 转义——Char 值
+            // 含单引号（.eq(::getX, '\'')）曾产出三引号断串 raw
+            is Char -> SqlValue.Literal(
+                raw = "'" + value.toString().replace("'", "''") + "'",
+                unquoted = value.toString(),
+            )
 
             // 数值类型（Byte/Short/Int/Long/Float/Double）
             is Number -> SqlValue.Literal(value.toString())

@@ -48,7 +48,11 @@ object PerfRuleEngine {
                 }
                 if (result.isNotEmpty()) warnings.addAll(result)
             } catch (e: Exception) {
-                // 规则隔离：单规则异常不阻塞其他规则
+                // 规则隔离：单规则异常不阻塞其他规则。
+                // T-HiddenBugPerfScan 券 Y3：KDoc 承诺「异常时记录并跳过」，曾空 catch 零日志——
+                // 规则内部抛错只表现为「该规则静默不再产出告警」，性能分析能力静默退化不可归因。
+                com.intellij.openapi.diagnostic.Logger.getInstance(PerfRuleEngine::class.java)
+                    .warn("perf rule '" + (runCatching { rule.ruleId }.getOrDefault("?")) + "' failed", e)
             }
         }
         return warnings

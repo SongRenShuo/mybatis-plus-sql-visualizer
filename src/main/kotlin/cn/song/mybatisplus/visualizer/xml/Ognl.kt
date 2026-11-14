@@ -557,10 +557,22 @@ object OgnlEvaluator {
     private fun times(left: Any?, right: Any?): Any? =
         if (left is Number && right is Number) toDecimal(left).multiply(toDecimal(right)) else null
 
-    private fun div(left: Any?, right: Any?): Any? =
-        if (left is Number && right is Number && toDecimal(right) != BigDecimal.ZERO)
-            toDecimal(left).divide(toDecimal(right))
-        else null
+    private fun div(left: Any?, right: Any?): Any? {
+        if (left !is Number || right !is Number || toDecimal(right) == BigDecimal.ZERO) return null
+        // T-HiddenBugPerfScan 券 K②：真实 OGNL（ASTDivide/OgnlOps.divide）对两个整型操作数
+        // 做整除（7/2=2），曾统一 BigDecimal.divide 得 3.5——test="total / 2 > 10" 分支与
+        // 运行时分叉、${pages / 2} 产物出非法 SQL 片段；循环小数再抛 ArithmeticException。
+        // 同为整型（含溢出回落的 BigDecimal 整数值）→ BigInteger 整除（截断向零）；
+        // 混有小数 → 保持 BigDecimal 精确除。
+        return if (isIntegral(left) && isIntegral(right))
+            toDecimal(left).divideToIntegralValue(toDecimal(right))
+        else toDecimal(left).divide(toDecimal(right))
+    }
+
+    /** 整型判定（含词法溢出回落的 BigDecimal——无小数点即整数值）。 */
+    private fun isIntegral(n: Number): Boolean =
+        n is Byte || n is Short || n is Int || n is Long || n is java.math.BigInteger ||
+            (n is BigDecimal && n.stripTrailingZeros().scale() <= 0)
 
     private fun mod(left: Any?, right: Any?): Any? =
         if (left is Number && right is Number && toDecimal(right) != BigDecimal.ZERO)
@@ -689,7 +701,11 @@ object OgnlEvaluator {
                 while (pos < text.length && text[pos].isDigit()) pos++
             }
             val raw = text.substring(start, pos)
-            val value = if (raw.contains('.')) raw.toDouble() else raw.toLong()
+            // T-HiddenBugPerfScan 券 K①：超宽整数字面量（>Long.MAX_VALUE）曾 toLong() 直抛
+            // NumberFormatException——unchecked 异常穿透 parseUncached 的 OgnlParseException
+            // 收敛层直上 EDT（mapper 里 test="id > 99999999999999999999" 即触发预览整链失败）。
+            // 真实 OGNL 按大整数处理：回落 BigDecimal（Number 家族，比较/算术/toDecimal 全兼容）。
+            val value = if (raw.contains('.')) raw.toDouble() else raw.toLongOrNull() ?: java.math.BigDecimal(raw)
             return Token(TokenKind.NUMBER, raw, value)
         }
 

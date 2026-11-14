@@ -55,10 +55,18 @@ object NamedParamParser {
         val seen = LinkedHashSet<String>()
         val result = mutableListOf<NamedParam>()
         val allMatches = mutableListOf<MatchWithOrder>()
+        // T-HiddenBugPerfScan 券 Y11：字符串字面量/注释内的 :name 不收（对齐 Spring
+        // NamedParameterUtils 的参数扫描与同目录 JdbcTemplateSqlPreviewService 对 ? 的
+        // string-aware 口径）——曾对聚合 SQL 裸跑正则，'提交:审核'、'a:b'、-- 见 :doc
+        // 产生幻影参数行。掩码区间与 PlaceholderPositions 同口径
+        // （单引号字面量含 '' 转义、-- 与 # 行注释、块注释）。
+        val masked = maskLiteralsAndComments(sql)
         for (m in NAMED_PARAM_PATTERN.findAll(sql)) {
+            if (masked[m.range.first]) continue
             allMatches += MatchWithOrder(m.groupValues[1], m.range.first, numeric = false)
         }
         for (m in NUMERIC_PARAM_PATTERN.findAll(sql)) {
+            if (masked[m.range.first]) continue
             allMatches += MatchWithOrder(m.groupValues[1], m.range.first, numeric = true)
         }
         allMatches.sortBy { it.offset }
@@ -97,6 +105,60 @@ object NamedParamParser {
     fun quoteHint(param: NamedParam): ParamHint = when {
         param.quotedLike -> ParamHint(quote = true)
         else -> ParamHint(quote = false)
+    }
+
+    /**
+     * T-HiddenBugPerfScan 券 Y11：标记字符串字面量与注释区间（true = 参数扫描应跳过）。
+     * 口径：单引号字面量（'' 转义成对消费）、-- 与 # 行注释、/* */ 块注释。
+     */
+    private fun maskLiteralsAndComments(sql: String): BooleanArray {
+        val masked = BooleanArray(sql.length)
+        var i = 0
+        while (i < sql.length) {
+            when {
+                sql[i] == '\'' -> {
+                    masked[i] = true
+                    i++
+                    while (i < sql.length) {
+                        masked[i] = true
+                        if (sql[i] == '\'') {
+                            if (i + 1 < sql.length && sql[i + 1] == '\'') {
+                                masked[i + 1] = true
+                                i += 2
+                            } else {
+                                i++
+                                break
+                            }
+                        } else i++
+                    }
+                }
+                sql[i] == '-' && i + 1 < sql.length && sql[i + 1] == '-' -> {
+                    while (i < sql.length && sql[i] != '\n') {
+                        masked[i] = true
+                        i++
+                    }
+                }
+                sql[i] == '#' -> {
+                    while (i < sql.length && sql[i] != '\n') {
+                        masked[i] = true
+                        i++
+                    }
+                }
+                sql[i] == '/' && i + 1 < sql.length && sql[i + 1] == '*' -> {
+                    while (i < sql.length) {
+                        masked[i] = true
+                        if (sql[i] == '*' && i + 1 < sql.length && sql[i + 1] == '/') {
+                            masked[i + 1] = true
+                            i += 2
+                            break
+                        }
+                        i++
+                    }
+                }
+                else -> i++
+            }
+        }
+        return masked
     }
 }
 

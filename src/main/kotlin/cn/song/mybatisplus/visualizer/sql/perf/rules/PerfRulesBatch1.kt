@@ -224,7 +224,8 @@ private fun hasTopLevelKeyword(upperSql: String, keyword: String): Boolean {
             '(' -> depth++
             ')' -> depth--
             else -> {
-                if (depth == 0 && upperSql.substring(i).startsWith(keyword)) {
+                // T-HiddenBugPerfScan 券 Q：substring(i) 每字符位整段复制 O(n2) 改 startsWith(fromIndex) 零分配，语义一致
+                if (depth == 0 && upperSql.startsWith(keyword, i)) {
                     val before = upperSql.getOrNull(i - 1)
                     val after = upperSql.getOrNull(i + keyword.length)
                     if ((before == null || !before.isLetterOrDigit() && before != '_') &&

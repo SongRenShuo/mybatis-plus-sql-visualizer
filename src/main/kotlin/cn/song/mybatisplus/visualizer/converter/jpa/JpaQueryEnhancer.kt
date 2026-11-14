@@ -93,11 +93,19 @@ object JpaQueryEnhancer {
                 isPageableType(typeName) -> {
                     val pageEval = argExpr?.let { evalPageRequest(it) }
                     // 双字面量（page/size 均可求值）才内联；否则占位 + 参数行
+                    // T-HiddenBugPerfScan 券 X：双字面量才内联（KDoc 声明的判据）——曾只判
+                    // size：PageRequest.of(运行时page, 字面量size) 时 offset=null（渲染语义
+                    // =无 OFFSET）、参数行缺 pageOffset、note 谎报 offset=0，预览变首页语义。
                     val sizeLiteral = pageEval?.second as? SqlValue.Literal
-                    if (sizeLiteral != null) {
-                        val offsetLiteral = pageEval.first as? SqlValue.Literal
-                        notes += "PageRequest.of 静态求值：offset=${offsetLiteral?.unquoted ?: "0"}，size=${sizeLiteral.unquoted}"
+                    val offsetLiteral = pageEval?.first as? SqlValue.Literal
+                    if (offsetLiteral != null && sizeLiteral != null) {
+                        notes += "PageRequest.of 静态求值：offset=${offsetLiteral.unquoted}，size=${sizeLiteral.unquoted}"
                         limit = LimitClause(offset = offsetLiteral, count = sizeLiteral)
+                    } else if (sizeLiteral != null) {
+                        // page 运行时变量 + size 字面量：LIMIT 内联、OFFSET 占位 + 参数行
+                        notes += "PageRequest.of 静态求值：offset=运行时变量（占位 pageOffset），size=${sizeLiteral.unquoted}（LIMIT 内联）"
+                        limit = LimitClause(offset = SqlValue.Placeholder("pageOffset"), count = sizeLiteral)
+                        extraParams += listOf("pageOffset")
                     } else {
                         limit = LimitClause(
                             offset = SqlValue.Placeholder("pageOffset"),

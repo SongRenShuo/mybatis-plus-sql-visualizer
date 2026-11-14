@@ -65,6 +65,27 @@ public class EventBusAggregateTest {
         return out;
     }
 
+    /** 0（券 S）：异模板满队 offer 走尾部快路径 miss 后全量兜底——语义不变（F2b 全扫钉死）。 */
+    @Test
+    public void 异模板满队offer_全量兜底语义不变() {
+        fillDistinct(CAPACITY);
+        EventBus.offer(ev("tpl-new-distinct"));
+        // 逐旧腾位后条目数仍满（新事件入队、最旧入账本），聚合未发生
+        assertEquals(CAPACITY, drainAll().size());
+    }
+
+    /** 0b（券 S）：同模板风暴——最新同模板事件在队尾，尾部快路径 O(1)~O(budget) 命中聚合。 */
+    @Test
+    public void 同模板在队尾_尾部快路径命中聚合() {
+        fillDistinct(CAPACITY - 1);
+        EventBus.offer(ev("storm-tpl")); // 占队尾 1 位
+        final long before = EventBus.TAIL_PROBES.get();
+        EventBus.offer(ev("storm-tpl"));
+        final long probes = EventBus.TAIL_PROBES.get() - before;
+        assertTrue("队尾命中应 ≤ 2 探针（快路径）：实际 " + probes, probes <= 2);
+        assertEquals("聚合不丢信号：满队条目数不变", CAPACITY, drainAll().size());
+    }
+
     /** ①队列满 + 同模板：聚合为一条（保留最新、计数累加），不产生丢弃、队列仍满。 */
     @Test
     public void 队列满_同模板事件聚合不丢执行次数() {

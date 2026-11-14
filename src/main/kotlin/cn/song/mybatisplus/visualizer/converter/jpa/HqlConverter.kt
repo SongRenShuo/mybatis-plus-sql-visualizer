@@ -134,16 +134,24 @@ object HqlConverter {
         }
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
-        val inClauseParams = findInClauseParams(hql)
+        // T-HiddenBugPerfScan 券 B：命名/位置参数替换先掩码字面量——字面量内的 `:word`
+        // （'HH:mm'、消息文本 '订单:status'）此前会被全文正则换成 `?` 且计入名序表，
+        // 产物字面量被改写、按位回填从该处起整体错位。与后续步骤的 JpaSqlLiteralMasking
+        // 同款「掩码→替换→还原」两段式（哨兵非标识符字符，不影响下游词边界语义）。
+        val (paramMaskedHql, paramLiterals) = JpaSqlLiteralMasking.mask(hql)
+        val inClauseParams = findInClauseParams(paramMaskedHql)
 
         // 1. 替换命名参数 :param → ?
         // T-JpaParamOrder F3：替换前用同一正则收集名序（findAll 顺序=首现序=替换后 `?` 序），
-        // 供渲染期按名回填；`::` 双冒号由正则负向断言排除，与替换语义一致
-        val placeholderParamNames = HQL_NAMED_PARAM_TO_Q.findAll(hql).map { it.groupValues[1] }.toList()
-        var sql = replaceNamedParameters(hql)
+        // 供渲染期按名回填；`::` 双冒号由正则负向断言排除，与替换语义一致。
+        // 名序收集同在掩码文本上做（字面量内冒号不得计入参数名）。
+        val placeholderParamNames = HQL_NAMED_PARAM_TO_Q.findAll(paramMaskedHql).map { it.groupValues[1] }.toList()
+        var sql = replaceNamedParameters(paramMaskedHql)
 
         // 2. 替换位置参数 ?1 → ?
         sql = replacePositionalParameters(sql)
+        // 还原字面量（后续步骤各自再做掩码周期，行为不变）
+        sql = JpaSqlLiteralMasking.unmask(sql, paramLiterals)
 
         // 3. 处理 IN 子句：IN ? → IN (?)
         sql = handleInClause(sql)

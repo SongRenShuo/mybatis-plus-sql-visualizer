@@ -50,7 +50,7 @@ class GenerateCrudSqlFromEntityAction : AnAction() {
         val entityClasses = collectEntityClasses(e).filter { isMpEntity(it) }
         if (entityClasses.isEmpty()) return
         @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-        val payload = try {
+        val payload = actionPayloadGuarded(emptyList<Pair<String, List<CrudStatement>>>()) {
             ReadAction.compute<List<Pair<String, List<CrudStatement>>>, Throwable> {
                 entityClasses.mapNotNull { clazz ->
                     val spec = entitySpec(clazz) ?: return@mapNotNull null
@@ -58,8 +58,6 @@ class GenerateCrudSqlFromEntityAction : AnAction() {
                     if (statements.isEmpty()) null else spec.tableName to statements
                 }
             }
-        } catch (t: Throwable) {
-            emptyList<Pair<String, List<CrudStatement>>>()
         }
         ApplicationManager.getApplication().invokeLater {
             if (payload.isEmpty()) {

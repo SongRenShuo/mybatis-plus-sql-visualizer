@@ -254,6 +254,9 @@ class McpConfigurable internal constructor(
         state.mcpDisabledTools = McpToolGate.TOOL_NAMES
             .filter { toolCheckBoxes[it]?.isSelected == false }
             .toMutableList()
+        // T-HiddenBugPerfScan 券 W：强制触发持久化——与 PluginSettingsPanel.apply() 已实证的
+        // 同型缺陷同口径（原地改 state 引用不变，XML 可能不写入）。
+        PluginSettings.getInstance().loadState(state.copy())
     }
 
     override fun reset() {

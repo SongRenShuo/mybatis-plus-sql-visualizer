@@ -14,6 +14,15 @@ class TrimSqlNodeTest {
 
     private fun text(value: String): SqlNode = MixedSqlNode(listOf(StaticTextSqlNode(value)))
 
+    @Test
+    fun `trim无prefix时prefixOverrides不剥_券Y13`() {
+        // T-HiddenBugPerfScan 券 Y13：对齐 MyBatis——无 prefix 属性的合法 <trim>
+        // 运行时原样输出，本引擎曾剥掉 AND 前缀致预览与运行时产物分叉
+        val node = TrimSqlNode(text("AND x = 1"), prefix = null, prefixesToOverride = listOf("AND "), suffix = null, suffixesToOverride = null)
+        val out = render(node).sql
+        org.junit.Assert.assertEquals("AND x = 1", out.trim())
+    }
+
     // ------------------------------------------------------------------
     // where
     // ------------------------------------------------------------------
@@ -114,4 +123,5 @@ class TrimSqlNodeTest {
             XmlSqlRenderer().render(node, emptyMap(), conditionOverrides = mapOf("id != null" to true)).sql,
         )
     }
+
 }

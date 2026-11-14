@@ -141,6 +141,11 @@ open class TrimSqlNode(
         }
 
         private fun applyPrefix(sql: String, upper: String): String? {
+            // T-HiddenBugPerfScan 券 Y13：对齐 MyBatis TrimSqlNode.applyPrefix——剥除包在
+            // prefix != null 内：无 prefix 属性的合法 <trim prefixOverrides="AND ">运行时
+            // 原样输出，本引擎曾剥掉前缀致预览与运行时产物分叉（where/set 的 prefix 恒有值
+            // 不受影响）。
+            if (prefix == null) return sql
             var result = sql
             for (toRemove in prefixesToOverride) {
                 if (upper.startsWith(toRemove)) {
@@ -148,7 +153,7 @@ open class TrimSqlNode(
                     break
                 }
             }
-            return if (prefix != null) "$prefix $result" else result
+            return "$prefix $result"
         }
 
         private fun applySuffix(sql: String, upper: String): String? {

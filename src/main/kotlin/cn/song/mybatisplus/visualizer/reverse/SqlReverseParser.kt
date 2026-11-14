@@ -1287,6 +1287,19 @@ object SqlReverseParser {
     private fun parseOffsetFetch(cursor: Cursor): LimitClause {
         val offset = parseLimitValue(cursor)
         expectKeyword(cursor, "ROWS")
+        // T-HiddenBugPerfScan 券 Y12：OFFSET n ROWS 单独出现是 SQL Server 2012+ 合法分页，
+        // 但 LimitClause.count 非空、模型不可表达「无 count」——保持拒绝，但把 KEY_PARSE
+        // 的「缺少关键字 FETCH」换成可行动文案（声明支持面内的缺口如实指路）。
+        val afterRows = cursor.peek()
+        if (afterRows == null || !cursor.isKeyword(afterRows, "FETCH") &&
+            !cursor.isKeyword(afterRows, "FIRST") && !cursor.isKeyword(afterRows, "NEXT")
+        ) {
+            throw SqlReverseException(
+                afterRows?.offset ?: cursor.offsetAtEnd(),
+                KEY_PARSE,
+                "OFFSET n ROWS 单独形态暂不支持（模型需成对 FETCH）——请补 FETCH NEXT m ROWS ONLY 或改用 OFFSET m ROWS FETCH NEXT",
+            )
+        }
         expectKeyword(cursor, "FETCH")
         expectKeyword(cursor, "NEXT")
         val count = parseLimitValue(cursor)

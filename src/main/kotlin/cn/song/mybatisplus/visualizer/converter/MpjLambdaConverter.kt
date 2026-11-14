@@ -764,8 +764,13 @@ object MpjLambdaConverter : WrapperConverter {
                     }
                 }
                 "apply" -> {
-                    val raw = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
-                    if (raw != null) Condition.Raw(raw) else null
+                    // T-HiddenBugPerfScan 券 Y4：与 MpjJoinSupport.parseOnLambda 统一片段通道
+                    // （asSqlFragment）——曾只认纯字面量：运行期拼接段（apply("t1.v = " + x)）
+                    // 被静默丢弃；纯字面量自带 ? 时不带 params，该 ? 无来源致后续回填整体
+                    // 错位（T-UpdateSetSqlConcat 同族）。
+                    call.args.firstOrNull().asSqlFragment()?.let { frag ->
+                        if (frag.text.isNotBlank()) Condition.Raw(frag.text, params = frag.params) else null
+                    }
                 }
                 else -> null
             }

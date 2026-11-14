@@ -39,7 +39,7 @@ class GenerateCrudSqlFromDbTableAction : AnAction() {
         val tables = selectedTables(e)
         if (tables.isEmpty()) return
         @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-        val payload = try {
+        val payload = actionPayloadGuarded(emptyList<Pair<String, List<CrudStatement>>>()) {
             ReadAction.compute<List<Pair<String, List<CrudStatement>>>, Throwable> {
                 tables.mapNotNull { table ->
                     val spec = DbTableSpecAdapter.toSpec(table)
@@ -47,8 +47,6 @@ class GenerateCrudSqlFromDbTableAction : AnAction() {
                     if (statements.isEmpty()) null else spec.tableName to statements
                 }
             }
-        } catch (t: Throwable) {
-            emptyList<Pair<String, List<CrudStatement>>>()
         }
         ApplicationManager.getApplication().invokeLater {
             if (payload.isEmpty()) {

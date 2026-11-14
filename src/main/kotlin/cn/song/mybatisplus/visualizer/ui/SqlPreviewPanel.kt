@@ -362,6 +362,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var impactResultLabel: JBLabel? = null
     /** T-PreviewSideQuery P2：EXPLAIN 非模态结果对话框（不替换预览编辑器）。 */
     internal var explainResultDialog: ExplainPlanDialog? = null
+    /** T-HiddenBugPerfScan 券 H：当前结果对话框的面板树注册句柄（换新前先摘，反复执行不累积）。 */
+    internal var explainDialogRegistration: com.intellij.openapi.Disposable? = null
 
     /**
      * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
@@ -1024,7 +1026,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         runCatching {
             cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
         }
-        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅。
         // T-PreviewEditorLeak（2026-11-13 真机 SEVERE 驱动）：**兜底释放预览编辑器与 autopopup
         // listener**。常规路径是 `removeNotify → releaseEditor`，而 IDE 退出/窗口已隐藏时
         // removeNotify 不必然到达；此时残留的编辑器（含平台 CaretModelImpl/EditorView 子件）与
@@ -1036,7 +1038,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             autoPopupDisposable?.let { Disposer.dispose(it) }
             autoPopupDisposable = null
         }
-        Disposer.dispose(this)
+        // T-HiddenBugPerfScan 券 Y2（合流裁决）：删除尾部 `Disposer.dispose(this)` 自处置——面板已由
+        // 宿主挂树（SqlPreviewDialog:62 Disposer.register(disposable, panel)，唯一实例化点），树级联
+        // 触发本方法时再对正被处置的自身调用 Disposer.dispose(this) 属重入；全仓无 panel.dispose()
+        // 直调路径。T-PreviewEditorLeak 的两处兜底释放均幂等，留；自处置行不保留。
     }
 
     // ------------------------------------------------------------------

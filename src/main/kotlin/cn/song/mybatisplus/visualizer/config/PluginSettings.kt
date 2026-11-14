@@ -984,6 +984,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         fun fromJson(json: String) {
             val instance = getInstance()
             instance.loadState(SettingsIO.importFromJson(json, instance.state.copy()))
+            // T-HiddenBugPerfScan 券 V：导入后发布 SETTINGS_CHANGE——与设置页 apply()
+            // 同语义（PluginSettingsPanel.kt:1495 对照）：SqlLogManager（前缀/去重窗/过滤词
+            // 即时生效）、SqlLogPanel/HistorySqlLogPanel、SqlPreviewPanel、AgentManager
+            // （CONFIG 热下发）曾全部保持旧值到下次设置页 Apply。经 EDT 派发（订阅方
+            // 按 EDT 语义处理刷新）；headless 无 Application 时跳过（纯逻辑测试）。
+            com.intellij.openapi.application.ApplicationManager.getApplication()?.invokeLater {
+                com.intellij.openapi.application.ApplicationManager.getApplication()
+                    ?.messageBus
+                    ?.syncPublisher(SETTINGS_CHANGE_TOPIC)
+                    ?.settingsChanged()
+            }
         }
     }
 }

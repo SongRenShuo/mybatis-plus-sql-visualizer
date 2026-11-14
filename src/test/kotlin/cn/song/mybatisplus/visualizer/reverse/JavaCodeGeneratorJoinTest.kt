@@ -946,4 +946,23 @@ class JavaCodeGeneratorJoinTest {
         assertTrue(code, code.contains("Page<UserVo> page = userService.selectJoinListPage(new Page<>(1, 10), UserVo.class, wrapper);"))
         assertTrue(code, code.contains("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖"))
     }
+    @Test
+    fun `列对列条件qualifiedName且双侧引用_券Y9`() {
+        val result = SqlReverseResult(
+            tableName = "a",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.ColumnComparison(
+                    ColumnRef(tableAlias = "t1", columnName = "a_id"),
+                    ColumnRef(tableAlias = "t", columnName = "id"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        org.junit.Assert.assertTrue(
+            "列对列 apply 应含两侧列引用：$code",
+            code.contains(".apply(") && code.contains("a_id") && code.contains("id"),
+        )
+    }
+
 }

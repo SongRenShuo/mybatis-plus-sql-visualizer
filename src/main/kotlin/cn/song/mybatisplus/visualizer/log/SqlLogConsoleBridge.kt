@@ -652,25 +652,10 @@ open class SqlLogConsoleBridge(
         val cfg = parserConfig()
         // T-Perf-22：values 遍历持监视器（快照后应用，避免与 Filter 回调并发修改）
         val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
-        for (ctx in snapshot) applyConfig(ctx, cfg)
+        // T-HiddenBugPerfScan 券 C（审计补口）：桥侧刷新与 EP 侧同持 ctx 锁——applyConfig
+        // 写解析器字段与 Filter 回调读同批字段，同 ctx 挂双通道时口径须对称
+        for (ctx in snapshot) synchronized(ctx) { ctx.applyConfig(cfg) }
         timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
-    }
-
-    /** 把 [ParserConfig] 快照同步进 [BridgeLineContext]（挂载与设置变更共用）。 */
-    private fun applyConfig(ctx: BridgeLineContext, cfg: ParserConfig) {
-        ctx.myBatisParser.sqlPrefix = cfg.sqlPrefix
-        ctx.myBatisParser.paramPrefix = cfg.paramPrefix
-        ctx.myBatisParser.mixedPrefix = cfg.mixedPrefix
-        ctx.myBatisParser.maxParseLength = cfg.maxParseLength
-        ctx.hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
-        ctx.hibernateParser.paramPrefix = cfg.hibernateParamPrefix
-        ctx.hibernateParser.mixedPrefix = cfg.mixedPrefix
-        ctx.hibernateParser.maxParseLength = cfg.maxParseLength
-        ctx.jdbcParser.enabled = cfg.jdbcEnabled
-        ctx.jdbcParser.maxParseLength = cfg.maxParseLength
-        ctx.hibernateEnabled = cfg.hibernateEnabled
-        ctx.shardingParser.maxParseLength = cfg.maxParseLength
-        ctx.shardingEnabled = cfg.shardingEnabled
     }
 
     /**
@@ -904,6 +889,27 @@ internal class BridgeLineContext(
 
     /** 控制台文档 modificationStamp 读取函数（editor 不可得时为 null）。 */
     var docStampReader: (() -> Long)? = null
+
+    /**
+     * T-HiddenBugPerfScan 券 C：把 [ParserConfig] 快照同步进本上下文（桥挂载/设置变更
+     * 与 EP 通道刷新共用——单一字段面，取代桥侧私有 applyConfig）。调用方负责并发：
+     * 桥侧在 refreshConsoleContexts 快照后应用，EP 侧在 synchronized(ctx) 内应用。
+     */
+    fun applyConfig(cfg: ParserConfig) {
+        myBatisParser.sqlPrefix = cfg.sqlPrefix
+        myBatisParser.paramPrefix = cfg.paramPrefix
+        myBatisParser.mixedPrefix = cfg.mixedPrefix
+        myBatisParser.maxParseLength = cfg.maxParseLength
+        hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
+        hibernateParser.paramPrefix = cfg.hibernateParamPrefix
+        hibernateParser.mixedPrefix = cfg.mixedPrefix
+        hibernateParser.maxParseLength = cfg.maxParseLength
+        jdbcParser.enabled = cfg.jdbcEnabled
+        jdbcParser.maxParseLength = cfg.maxParseLength
+        hibernateEnabled = cfg.hibernateEnabled
+        shardingParser.maxParseLength = cfg.maxParseLength
+        shardingEnabled = cfg.shardingEnabled
+    }
 
     /** 控制台首行文本读取函数（混合态判定用；editor 不可得时为 null）。 */
     var line0Reader: (() -> String?)? = null

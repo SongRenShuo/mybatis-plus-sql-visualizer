@@ -159,7 +159,9 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     /** R15：钉住上限（防钉住分区无限膨胀挤占淘汰机制）。 */
     private val MAX_PINNED = 50
 
-    /** R15：切换钉住态；钉住数达 [MAX_PINNED] 上限时拒绝并返回 false。 */
+    /** R15：切换钉住态；钉住数达 [MAX_PINNED] 上限时拒绝并返回 false。
+     *  T-HiddenBugPerfScan 券 G：读/改入口与写路径同锁（池线程 add 与 EDT 读并发）。 */
+    @Synchronized
     fun togglePin(id: String): Boolean {
         val entry = findById(id) ?: return false
         if (!entry.pinned) {
@@ -172,15 +174,19 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
 
     // ---------- 查询（最新在前） ----------
 
-    /** 全部条目（含收藏与非收藏，按时间倒序合并）。 */
+    /** 全部条目（含收藏与非收藏，按时间倒序合并）。
+     *  T-HiddenBugPerfScan 券 G：锁内复制快照——池线程 [add]/[loadState] 与 EDT 读并发，
+     *  mergeByTimestamp 裸遍历同一 MutableList 曾可 CME/撕裂。 */
     val entries: List<SqlHistoryEntry>
-        get() = mergeByTimestamp(state.favoriteEntries, state.entries)
+        @Synchronized get() = mergeByTimestamp(state.favoriteEntries, state.entries)
 
     /** 按 id 查找条目（含收藏分区）。 */
+    @Synchronized
     fun findById(id: String): SqlHistoryEntry? =
         state.entries.firstOrNull { it.id == id } ?: state.favoriteEntries.firstOrNull { it.id == id }
 
     /** 收藏条目（时间倒序）。 */
+    @Synchronized
     fun filterFavorites(): List<SqlHistoryEntry> = state.favoriteEntries.toList()
 
     // ---------- 收藏 ----------
@@ -189,6 +195,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
      * 切换收藏状态。
      * 收藏 → 移入 [State.favoriteEntries]；取消收藏 → 移回 [State.entries]。
      */
+    @Synchronized
     fun toggleFavorite(id: String) {
         val inNormal = state.entries.indexOfFirst { it.id == id }
         if (inNormal >= 0) {
@@ -210,6 +217,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     // ---------- 标签 ----------
 
     /** 为条目添加标签（去重）。 */
+    @Synchronized
     fun addTag(id: String, tag: String) {
         if (tag.isBlank()) return
         findById(id)?.let { e ->
@@ -218,15 +226,18 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     }
 
     /** 移除条目的指定标签。 */
+    @Synchronized
     fun removeTag(id: String, tag: String) {
         findById(id)?.tags?.remove(tag)
     }
 
     /** 全部标签集合（所有条目的标签并集）。 */
+    @Synchronized
     fun allTags(): Set<String> =
         (state.entries + state.favoriteEntries).flatMap { it.tags }.toSet()
 
     /** 按标签筛选条目（精确匹配，时间倒序）。 */
+    @Synchronized
     fun filterByTag(tag: String): List<SqlHistoryEntry> =
         entries.filter { it.tags.contains(tag) }
 
@@ -236,6 +247,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
      * 子串搜索（SQL 文本，忽略大小写）。空查询返回全量。
      * 简单 substring 匹配，200 条 < 10ms。
      */
+    @Synchronized
     fun search(query: String): List<SqlHistoryEntry> {
         if (query.isBlank()) return entries
         val q = query.trim().lowercase()
@@ -254,6 +266,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
      *
      * @return 是否命中并更新（未命中不抛——面板链路静默容错）
      */
+    @Synchronized
     fun updateNewestParamSnapshot(match: (SqlHistoryEntry) -> Boolean, snapshot: Map<String, String>): Boolean {
         if (snapshot.isEmpty()) return false
         val entry = entries.firstOrNull(match) ?: return false
@@ -266,6 +279,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
      * R51：按匹配谓词取**最新一条**条目的参数快照（recall 链在 ParamHistoryCache 未命中时的
      * 回落源；快照为空的条目不参与——无快照的历史回落无意义）。
      */
+    @Synchronized
     fun newestParamSnapshot(match: (SqlHistoryEntry) -> Boolean): Map<String, String>? {
         val entry = entries.firstOrNull { match(it) && it.paramSnapshot.isNotEmpty() } ?: return null
         return entry.paramSnapshot
@@ -290,6 +304,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
 
     // ---------- 持久化 ----------
 
+    @Synchronized
     override fun getState(): State = state
 
     @Synchronized

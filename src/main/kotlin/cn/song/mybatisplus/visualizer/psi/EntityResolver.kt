@@ -387,21 +387,8 @@ class EntityResolver {
             val comment = ownFirstLine.removePrefix("//").trim()
             if (comment.isNotBlank()) return comment
         }
-        // 路径 ②：文档文本向上扫描
-        val offset = element.textRange.startOffset
-        val before = element.containingFile.text.substring(0, offset)
-        val lines = before.split("\n")
-        for (i in lines.indices.reversed()) {
-            val line = lines[i].trim()
-            if (line.isEmpty()) continue
-            if (line.startsWith("@")) continue
-            if (line.startsWith("//")) {
-                val comment = line.removePrefix("//").trim()
-                return comment.takeIf { it.isNotBlank() }
-            }
-            return null
-        }
-        return null
+        // 路径 ②：文档文本向上扫描（T-HiddenBugPerfScan 券 M：零大拷贝反向回扫）
+        return lineCommentAboveElement(element)
     }
 
     /** 注解 → 注释属性白名单（swagger/easyexcel 等业务注解的注释属性）。 */
@@ -706,4 +693,35 @@ class EntityResolver {
                 ?: runCatching { PluginSettings.getInstance().state.ignoredFields }.getOrDefault(""))
                 .split(';').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }
+}
+
+/**
+ * T-HiddenBugPerfScan 券 M：元素上方行注释提取（文档文本向上回扫）。
+ *
+ * 曾用 `containingFile.text.substring(0, offset) + split("\n")` 整段复制——每字段一次
+ * O(offset) 拷贝 + O(行数) 切分（resolveColumns 对每字段调用，缓存未命中即
+ * O(字段数×文件大小) 分配，大文件首解析产生数百 MB 字符串垃圾）。改为在原文本上
+ * 反向逐行回扫（零大拷贝），行判定语义逐字一致（空行跳过、@ 注解行跳过、首个 `//`
+ * 行取注释、其余行停止）。
+ */
+internal fun lineCommentAboveElement(element: com.intellij.psi.PsiElement): String? {
+    val text = element.containingFile.text
+    var lineEnd = element.textRange.startOffset
+    while (lineEnd > 0) {
+        val lineStart = text.lastIndexOf('\n', lineEnd - 1) + 1
+        val line = text.substring(lineStart, lineEnd).trim()
+        if (line.isNotEmpty()) {
+            if (line.startsWith("@")) {
+                // 注解行：继续向上
+            } else if (line.startsWith("//")) {
+                val comment = line.removePrefix("//").trim()
+                return comment.takeIf { it.isNotBlank() }
+            } else {
+                return null
+            }
+        }
+        if (lineStart == 0) return null // 已扫到文件首行
+        lineEnd = lineStart - 1 // 上一行止于换行符本身（lineStart-1 处的换行符不属上一行）
+    }
+    return null
 }

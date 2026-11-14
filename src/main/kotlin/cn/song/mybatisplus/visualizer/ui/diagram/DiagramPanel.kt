@@ -432,7 +432,11 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     override fun dispose() {
         currentModel = null
-        Disposer.dispose(this)
+        // T-HiddenBugPerfScan 券 Y2：删除自处置——本实例已由宿主挂树
+        // （SqlPreviewPanel Disposer.register(this, diagramPanel)），树级联到达本方法
+        // 时再对正在被处置的自身调用 Disposer.dispose(this) 属重入双处置
+        // （平台记 already disposed 级错误日志/测试断言失败风险）。全仓无
+        // diagramPanel.dispose() 直调路径（grep 取证），树处置已覆盖。
     }
 
     private companion object {

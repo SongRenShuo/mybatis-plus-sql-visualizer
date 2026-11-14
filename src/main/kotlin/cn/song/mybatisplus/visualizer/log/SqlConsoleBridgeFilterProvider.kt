@@ -32,6 +32,53 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlConsoleBridgeFilterProvider::class.java)
+
+        /**
+         * T-HiddenBugPerfScan 券 C：EP ctx 注册表（弱引用）。T-LogPerf-04 之后配置刷新只剩
+         * `SqlLogManager` 设置监听里的 `bridge.refreshConsoleContexts()`——它只遍历**桥侧**
+         * consoleContexts，EP 侧 ctx 构造后无任何刷新点（快照在控制台创建时刻固化）→ 捕捉中
+         * 改 SQL/参数前缀等设置对 EP 主通道永不生效（T-CaptureTruth 起 EP 为主通道、桥被短路，
+         * 桥侧刷新救不了它）。EP ctx 经 [registerEpContext] 登记，设置变更与桥同拍刷新。
+         * 弱引用：EP filter 由平台 console 持有，console 关闭后 ctx 不可达即自动出局，
+         * 不钉旧控制台（照 UrlResolver/EventBuilder 的「禁静态强引用宿主对象」口径）。
+         */
+        private val epContexts =
+            java.util.concurrent.CopyOnWriteArrayList<java.lang.ref.WeakReference<BridgeLineContext>>()
+
+        /** EP ctx 登记（同实例幂等；顺手清理已不可达的弱引用）。 */
+        internal fun registerEpContext(ctx: BridgeLineContext) {
+            if (epContexts.none { it.get() === ctx }) epContexts += java.lang.ref.WeakReference(ctx)
+            epContexts.removeAll { it.get() == null }
+        }
+
+        /** 设置变更：把 [cfg] 同步进全部存活 EP ctx（与桥侧 refreshConsoleContexts 同字段面）。 */
+        internal fun refreshEpContexts(cfg: ParserConfig) {
+            epContexts.removeAll { it.get() == null }
+            for (ref in epContexts) {
+                val ctx = ref.get() ?: continue
+                synchronized(ctx) { ctx.applyConfig(cfg) }
+            }
+        }
+
+        /** [SqlLogManager] 设置监听入口：读当前配置并刷新 EP ctx（测试直接用 [refreshEpContexts]）。 */
+        internal fun refreshEpContextsFromSettings() {
+            refreshEpContexts(parserConfig())
+        }
+
+        private fun parserConfig(): ParserConfig {
+            val state = PluginSettings.getInstance().state
+            return ParserConfig(
+                sqlPrefix = state.logSqlPrefix,
+                paramPrefix = state.logParamPrefix,
+                mixedPrefix = state.logMixedPrefix,
+                maxParseLength = state.logMaxParseLength,
+                hibernateSqlPrefix = state.logHibernateSqlPrefix,
+                hibernateParamPrefix = state.logHibernateParamPrefix,
+                hibernateEnabled = state.logHibernateEnabled,
+                jdbcEnabled = state.logJdbcEnabled,
+                shardingEnabled = state.logShardingSphereEnabled,
+            )
+        }
     }
 
     /** EP 行过滤器：实例即 per-console 解析状态。 */
@@ -65,19 +112,9 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             shardingEnabled = parserConfig().shardingEnabled,
         )
 
-        private fun parserConfig(): ParserConfig {
-            val state = PluginSettings.getInstance().state
-            return ParserConfig(
-                sqlPrefix = state.logSqlPrefix,
-                paramPrefix = state.logParamPrefix,
-                mixedPrefix = state.logMixedPrefix,
-                maxParseLength = state.logMaxParseLength,
-                hibernateSqlPrefix = state.logHibernateSqlPrefix,
-                hibernateParamPrefix = state.logHibernateParamPrefix,
-                hibernateEnabled = state.logHibernateEnabled,
-                jdbcEnabled = state.logJdbcEnabled,
-                shardingEnabled = state.logShardingSphereEnabled,
-            )
+        init {
+            // T-HiddenBugPerfScan 券 C：ctx 进注册表——设置变更与桥同拍刷新（快照不得固化）
+            registerEpContext(ctx)
         }
 
         override fun applyFilter(line: String, entireLength: Int): Filter.Result? {
@@ -87,7 +124,12 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             // timePrefixCache 形态，刷新点一致：挂载/设置变更；EP 首行早于桥挂载时惰性补种）。
             // 值语义与原逐行读取一致（blank 归 null）。
             val timePrefix = manager.consoleBridge.currentTimePrefix()
-            val produced = processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
+            // T-HiddenBugPerfScan 券 C②：以 ctx 为锁与桥侧同款（T-ConsolePendingFlush：解析器
+            // 桶状态/pendingSource/pendingError 是跨行共享态）——平台异步 filter（AsyncFilterRunner）
+            // 可并发跑多个 highlight job，不锁则大输出下解析状态串台（T-LogParseConc 同族）。
+            val produced = synchronized(ctx) {
+                processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
+            }
             // T-CaptureTruth T-CT-04：置位条件由「处理过任意一行」收窄为「实证产出过条目」——
             // EP 被平台调用 ≠ EP 真在链上产出（覆盖不全时原口径会封死桥的回落通道 → 静默零捕获）。
             // 置位前桥侧照常解析；置位后桥只短路重复解析，条目仍由 EP 单路产出。

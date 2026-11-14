@@ -119,7 +119,7 @@ class ConvertToSqlAction : AnAction() {
                 // T-M23.8 增量修复（EDT 慢操作）：候选扫描 + 弹窗显示文本（摘要/行文本，含 PSI 解析）
                 // 一并后台 ReadAction 预计算——SqlSelectionDialog 构造只做纯 UI 渲染（EDT 上 PSI 解析
                 // 会被 2025.3+ SlowOperations 守卫禁止，实测 SEVERE "Slow operations are prohibited on EDT"）
-                val payload = try {
+                val payload = actionPayloadGuarded(Triple(emptyList(), emptyList(), false)) {
                     ReadAction.compute<Triple<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>, Boolean>, Throwable> {
                         val heads = WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
                         Triple(
@@ -133,8 +133,6 @@ class ConvertToSqlAction : AnAction() {
                             kotlinWrapperUnavailableInRange(file, selStart, selEnd),
                         )
                     }
-                } catch (t: Throwable) {
-                    Triple(emptyList(), emptyList(), false)
                 }
                 val (chainHeads, displayTexts, kotlinWrapperUnavailable) = payload
                 ApplicationManager.getApplication().invokeLater {
@@ -452,7 +450,7 @@ class ConvertToSqlAction : AnAction() {
         onEmpty: (() -> Unit)? = null,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val annotations = AnnotationSqlPreviewService.annotationCandidates(file)
                     annotations to annotations.map { anno ->
@@ -463,8 +461,6 @@ class ConvertToSqlAction : AnAction() {
                         )
                     }
                 }
-            } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -497,7 +493,7 @@ class ConvertToSqlAction : AnAction() {
         onEmpty: (() -> Unit)? = null,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val annotations = AnnotationSqlPreviewService.annotationCandidatesInRange(file, selStart, selEnd)
                     annotations to annotations.map { anno ->
@@ -508,8 +504,6 @@ class ConvertToSqlAction : AnAction() {
                         )
                     }
                 }
-            } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -543,7 +537,7 @@ class ConvertToSqlAction : AnAction() {
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int, sourceLocation: String?) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     // O-72：mapper 语句候选 + 通用内嵌 SQL 载体候选（排除集合保证互斥，按 offset 归并）
                     val mapperTags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
@@ -569,8 +563,6 @@ class ConvertToSqlAction : AnAction() {
                         )
                     }
                 }
-            } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -613,7 +605,7 @@ class ConvertToSqlAction : AnAction() {
         // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（大 XML 中 EDT 直跑
         // findChildrenOfType 构成卡顿；0/1/多 分发在后台结果回来后进行，EDT 只做预览与弹窗）
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
                         .filter { isXmlStatementCandidate(it) }
@@ -628,8 +620,6 @@ class ConvertToSqlAction : AnAction() {
                     }
                     statements to displayTexts
                 }
-            } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
@@ -714,7 +704,7 @@ class ConvertToSqlAction : AnAction() {
         // 光标不在页面语句内 → 全部候选
         // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（同 mapper 语句分支）
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val root = file.rootTag
                     val statements = root?.children?.filterIsInstance<XmlTag>()
@@ -731,8 +721,6 @@ class ConvertToSqlAction : AnAction() {
                     }
                     statements to displayTexts
                 }
-            } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
@@ -757,7 +745,7 @@ class ConvertToSqlAction : AnAction() {
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewPagesSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val payload = try {
+            val payload = actionPayloadGuarded(emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()) {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val tags = PagesXmlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
                     tags to tags.map { tag ->
@@ -770,8 +758,6 @@ class ConvertToSqlAction : AnAction() {
                         )
                     }
                 }
-            } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {

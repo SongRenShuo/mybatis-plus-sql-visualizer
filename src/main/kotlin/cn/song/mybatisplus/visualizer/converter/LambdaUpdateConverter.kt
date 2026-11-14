@@ -34,7 +34,7 @@ object LambdaUpdateConverter : WrapperConverter {
         val unparsedSets = mutableListOf<String>()
         val sets = chain.calls
             .filter { it.methodName in SET_METHODS }
-            .mapNotNull { parseSet(it, unparsedSets) }
+            .mapNotNull { parseSet(it, unparsedSets, project) }
 
         // 条件部分：过滤 set/setSql/setIncrBy/setDecrBy/last 调用后复用 Query 解析（QueryWrapperParser 忽略未知方法，天然兼容）
         val conditionCalls = chain.calls.filterNot { it.methodName in SET_METHODS || it.methodName == LAST }
@@ -62,7 +62,7 @@ object LambdaUpdateConverter : WrapperConverter {
      * @param unparsedSets 解析失败的调用原文收集器（T-UpdateSetSqlConcat：UI 警示用）；
      *                     布尔条件为 false 的主动跳过不计入（那是 MP 语义，不是解析失败）
      */
-    private fun parseSet(call: WrapperCall, unparsedSets: MutableList<String>): SetClause? = when (call.methodName) {
+    private fun parseSet(call: WrapperCall, unparsedSets: MutableList<String>, project: Project?): SetClause? = when (call.methodName) {
         SET, SET_IF_EXISTS -> {
             val args = call.args
             // 布尔条件前缀剥离（U03）：`set(StrUtil.isNotBlank(x), col, val)` / `set(true, col, val)`
@@ -105,7 +105,9 @@ object LambdaUpdateConverter : WrapperConverter {
             }
             val op = if (call.methodName == SET_INCR) "+" else "-"
             // T-M23.5：列名按方言引用（setIncrBy/setDecrBy 解析期拼 rawSql）
-            val qualified = column.qualifiedName(currentDialect())
+            // T-HiddenBugPerfScan 券 Y6：project 透传（T-FS-04）——曾调无参 currentDialect()
+            // 落全局手动值/MySQL 兜底，多项目同开且项目级方言不同时保留字引用错族。
+            val qualified = column.qualifiedName(currentDialect(project))
             SetClause(
                 rawSql = "$qualified = $qualified $op ${renderSetValue(value)}",
                 // T-UpdateSetSqlConcat：rawSql 里的 `?` 也要登记来源（否则后续条件整体错位）

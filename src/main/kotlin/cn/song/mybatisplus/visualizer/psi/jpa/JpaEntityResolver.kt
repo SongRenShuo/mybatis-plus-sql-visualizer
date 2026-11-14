@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import cn.song.mybatisplus.visualizer.psi.lineCommentAboveElement
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
@@ -556,21 +557,8 @@ class JpaEntityResolver {
             val comment = ownFirstLine.removePrefix("//").trim()
             if (comment.isNotBlank()) return comment
         }
-        // 路径 ②：文档文本向上扫描
-        val offset = element.textRange.startOffset
-        val before = element.containingFile.text.substring(0, offset)
-        val lines = before.split("\n")
-        for (i in lines.indices.reversed()) {
-            val line = lines[i].trim()
-            if (line.isEmpty()) continue
-            if (line.startsWith("@")) continue
-            if (line.startsWith("//")) {
-                val comment = line.removePrefix("//").trim()
-                return comment.takeIf { it.isNotBlank() }
-            }
-            return null
-        }
-        return null
+        // 路径 ②：文档文本向上扫描（T-HiddenBugPerfScan 券 M：零大拷贝反向回扫）
+        return lineCommentAboveElement(element)
     }
 
     /** 注解 → 注释属性白名单（swagger/easyexcel 等业务注解的注释属性）。 */
@@ -843,3 +831,4 @@ class JpaEntityResolver {
                 .split(';').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }
 }
+

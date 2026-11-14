@@ -2,7 +2,12 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
 
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 
 /**
@@ -32,6 +37,31 @@ public class EventBuilderTest {
         // 旧实现的 bug 面：SELECT 走 execute() → true → 旧代码上报 getUpdateCount()=-1
         assertNull("ResultSet 结果不得上报影响行数",
                 EventBuilder.extractUpdateCount("execute", Boolean.TRUE, new FakeStatement(-1)));
+    }
+
+    @Test
+    public void 无静态Method强引用字段_券R红线() {
+        // T-HiddenBugPerfScan 券 R：UPDATE_COUNT_METHOD 曾是 static AtomicReference<Method>——
+        // Method 反向强引用 declaringClass（驱动类）→ classloader，热部署/重部署场景钉住旧
+        // loader（券 04 红线：禁静态强引用驱动类；UrlResolver 同期已改 ClassValue，此处漏网）。
+        // 结构断言：摘掉 ClassValue 改造（回归静态强引用）本例必红。
+        for (Field f : EventBuilder.class.getDeclaredFields()) {
+            assertFalse("EventBuilder 不得有静态 AtomicReference 字段（券 R/04 红线）: " + f.getName(),
+                    f.getType().getName().contains("AtomicReference"));
+            assertNotEquals("EventBuilder 不得有静态 Method 类型字段（券 R/04 红线）: " + f.getName(),
+                    Method.class, f.getType());
+        }
+    }
+
+    @Test
+    public void 无getUpdateCount方法的类_负缓存收敛为null() {
+        // METHOD_ABSENT 哨兵：ClassValue 未命中每次重算须显式缓存否定结果
+        class NoCountStatement {
+            public void doNothing() {
+            }
+        }
+        assertNull(EventBuilder.extractUpdateCount("execute", Boolean.FALSE, new NoCountStatement()));
+        assertNull("负缓存路径重复调用稳定", EventBuilder.extractUpdateCount("execute", Boolean.FALSE, new NoCountStatement()));
     }
 
     @Test

@@ -84,6 +84,10 @@ object SettingsIO {
         if (version > CURRENT_VERSION) {
             throw ImportException("配置文件版本不匹配（文件版本 $version > 当前支持版本 $CURRENT_VERSION）")
         }
+        // T-HiddenBugPerfScan 券 Y14：version<1（0/-1 手改坏文件）曾照常导入
+        if (version < 1) {
+            throw ImportException("配置文件版本不合法（version=$version，应为 >= 1）")
+        }
         // copy() 而非直接改写 base：调用方传入的多为活状态（instance.state.copy()），
         // 就地改写会污染它
         val state = base.copy()
@@ -291,10 +295,14 @@ object SettingsIO {
                 while (!atEnd() && peek().isDigit()) pos++
             }
             val text = input.substring(start, pos)
+            // T-HiddenBugPerfScan 券 Y14：病态数字（"1."、"-"、"1e"）曾抛裸
+            // NumberFormatException——契约是 ImportException（parseBoolean/parseNull
+            // 同文件其余分支均抛 ImportException，唯数字路径不一致）
             return if (isFloat || text.contains('e', ignoreCase = true)) {
-                text.toDouble()
+                text.toDoubleOrNull() ?: throw ImportException("非法数字字面量：$text")
             } else {
-                text.toLongOrNull() ?: text.toDouble()
+                text.toLongOrNull() ?: text.toDoubleOrNull()
+                    ?: throw ImportException("非法数字字面量：$text")
             }
         }
 

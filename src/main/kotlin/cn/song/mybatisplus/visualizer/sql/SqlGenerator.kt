@@ -576,7 +576,10 @@ object SqlGenerator {
             "?"
         }
         is SqlValue.Literal -> {
-            val v = pattern.unquoted
+            // T-HiddenBugPerfScan 券 P：unquoted 是未转义原文（psi 层 raw 已做 单引号加倍 转义），
+            // 重包引号前必须补转义，曾直接拼 unquoted 产出三引号断串（LIKE 常量含单引号即触发），
+            // 对照 renderValue 的 Literal 路径（用已转义 raw）统一口径。
+            val v = pattern.unquoted.replace("'", "''")
             val core = when (position) {
                 LikePosition.ANYWHERE -> "%$v%"
                 LikePosition.LEFT -> "%$v"

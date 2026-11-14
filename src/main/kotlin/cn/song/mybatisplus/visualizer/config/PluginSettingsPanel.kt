@@ -248,6 +248,18 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     /** 方言下拉（选项来自方言注册表；T-DialectAutoInfer 首项为「智能推断」）。 */
+    /**
+     * T-HiddenBugPerfScan 券 Y15：buildSections 在字段级控件上重复挂监听器（同文件顶部
+     * 红线自述「挂 addRow 处会随重建叠加」）——rebuild（语言切换 / 非 UI 页 apply）线性
+     * 累积：模式预览每键 k 次重算、注入行 k 次触发、refreshEnhancedStatusLabel 遍历
+     * openProjects 同量放大。守卫键集让七处注册幂等（同键只挂一次）。
+     */
+    private val registeredListenerKeys = mutableSetOf<String>()
+
+    internal fun registerListenerOnce(key: String, register: () -> Unit) {
+        if (registeredListenerKeys.add(key)) register()
+    }
+
     internal val dialectCombo = JComboBox(
         (listOf(MpSqlVisualizerBundle.message("settings.dialect.auto")) + DialectRegistry.dialects.map { it.name }).toTypedArray(),
     )
@@ -1372,7 +1384,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         val s = settings.state
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
-        val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
+        // T-HiddenBugPerfScan 券 Y16：非 UI 分区面板的 languageCombo 空 model（buildSections
+        // 仅在 SECTION_UI 页灌 model）——selectedItem=null 恒 != s.language，每次 Apply/OK
+        // 都误报 languageChanged=true 触发全量 rebuild（并放大券 Y15 的监听器累积）。
+        // 补 SECTION_UI 门：非 UI 页语言判定恒 false（该页本就没有语言控件）。
+        val languageChanged = languagePending ||
+            (SECTION_UI in sections && (languageCombo.selectedItem as? LanguageOption)?.value != s.language)
         if (SECTION_PREVIEW in sections) {
             // T-DialectAutoInfer：哨兵项=推断模式；具体方言=手动模式（保留原值语义）
             val selected = dialectCombo.selectedItem as? String
