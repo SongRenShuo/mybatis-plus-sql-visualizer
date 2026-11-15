@@ -163,6 +163,25 @@ curl -s https://plugins.jetbrains.com/api/plugins/33633 | python -m json.tool | 
 5. `parallel_tasks.py done --name release-<版本>` 注销登记（禁裸 done）。
 6. 若为 beta 系列：下一发 beta 重复本流程，changeNotes 块替换为本发累计内容。
 
+## 9b. 时间预算与并行窗口（2026-11-15 复盘）
+
+一次内测发行的墙钟由四段组成，压缩空间全在 CI 之外——**CI 环节本身不减**。
+
+| 段 | 本轮实测 | 性质 |
+|---|---|---|
+| 物料准备（侦察 → 3 路后台起草 → 七项核对 → 发行提交） | 13 min | 可压：上一轮落账时预置下一轮模板，代理改「校对」而非从零起草 |
+| tag 前判据 | 4 min → **秒级**（本轮已改 py，见 §2） | 判据仍在，只是不跑 gradle |
+| CI `mode=release` | **14.77 min，14/14 全绿** | 硬地板：build 5.38 → verify(263) 8.67 是关键路径，test 10.73 被完全覆盖 |
+| CI 后收尾（落账 3 处 + PATCH 正文 + skill + 注销） | 6 min | 可压：整体搬进 CI 等待期 |
+
+零改动、下次立刻可用的三条：
+
+1. **CI 等待期不空等**：dispatch 后 `gh workflow run` 的 stdout 直接给 run URL（`release-beta.ps1` 已改为解析它，省 15~115s）。把 `ci-status.py wait <run_id>` 挂后台任务，主控同时写落账模板、收尾文档、commit-msg、读数采集脚本。符合全局「长命令后台化、不许 sleep 空等、主控并行车道固定写文档」。
+2. **提前填构建记录行**：run id 在 dispatch 后十几秒就有，而 `gitee-release.py --notes` 是建版时现读文件（`gitee-release.py:466`）。在 CI 窗口里把发行说明尾部 `构建记录：…/actions/runs/{run_id}` 填好，Gitee 建版即自带该行，**省掉一次 PATCH**。落账三处只依赖 3 个动态数字（run id / GitHub Release id / Gitee 发行版 id），先写带「CI 读数待回填」的完整模板，CI 一绿只做替换，1 分钟内收口。
+3. **物料模板预置**：上一轮落账提交顺手把下一轮的内测说明骨架、changeNotes 新块、CHANGELOG `[Unreleased]`、preview 骨架、变更记录/MEMORY 占位行落盘。三路后台代理已是并发上限（≤3），压缩空间在「写什么」不是「派几路」。
+
+CI 侧的诚实结论（不减环节，只记录，不建议为了省时动）：关键路径是 `build → verify(263)`；verify(263) 比 243 慢约 4.4 min 是 IDE 263 每轮重解包（验证腿 `cache-read-only: true`、写权限只在 build，且 build 早就只跑 `:buildPlugin` 不再产出 263 的 transform）。一次性把 263 解包预置进共享 Gradle 缓存可净省约 2.5 min（估算，验证口径一字不改）。**不推荐**让验证腿与 build 并行各自重编译：各腿重打包的 zip 带新 `MPV-Build` 时间戳，会破坏「验过的字节 = 发的字节」不变量（`mpv-verification.gradle.kts:427-429`、`nightly-full.yml:81-83`）。test 腿已被覆盖、不是地板，压它没有收益。
+
 ## 10. 不得自动做的事
 
 - 不改 `update/update.json`（只用户本人，`AGENTS.md:11`）。
