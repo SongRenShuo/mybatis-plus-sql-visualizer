@@ -191,14 +191,20 @@ if (-not $SkipCi) {
         if ($MarketplaceLite) { $dispatchArgs += @("-f", "marketplace_lite=true") }
         try {
             if (-not $DryRun) {
-                Invoke-Gh $dispatchArgs | Out-Null
-                Start-Sleep -Seconds 15
-                $runId = $null
-                for ($i = 0; $i -lt 10 -and -not $runId; $i++) {
-                    $list = (Invoke-Gh @("run", "list", "--limit", "3", "--json", "databaseId,headSha,name")) | Out-String
-                    $runs = $list | ConvertFrom-Json
-                    $hit = $runs | Where-Object { $_.headSha -eq $headSha -and $_.name -like "*release*" } | Select-Object -First 1
-                    if ($hit) { $runId = $hit.databaseId } else { Start-Sleep -Seconds 10 }
+                # gh workflow run prints the run URL on stdout; parse it directly instead of
+                # sleeping 15s and polling `gh run list` up to 10x10s (15~115s of pure waiting).
+                $dispatchOut = (Invoke-Gh $dispatchArgs) | Out-String
+                $m = [regex]::Match($dispatchOut, '/actions/runs/(\d+)')
+                $runId = if ($m.Success) { $m.Groups[1].Value } else { $null }
+                if (-not $runId) {
+                    Write-Note "run URL not in gh output, falling back to run list lookup"
+                    Start-Sleep -Seconds 15
+                    for ($i = 0; $i -lt 10 -and -not $runId; $i++) {
+                        $list = (Invoke-Gh @("run", "list", "--limit", "3", "--json", "databaseId,headSha,name")) | Out-String
+                        $runs = $list | ConvertFrom-Json
+                        $hit = $runs | Where-Object { $_.headSha -eq $headSha -and $_.name -like "*release*" } | Select-Object -First 1
+                        if ($hit) { $runId = $hit.databaseId } else { Start-Sleep -Seconds 10 }
+                    }
                 }
                 if (-not $runId) { throw "could not find the dispatched release run" }
                 Write-Ok ("run {0} dispatched" -f $runId)
