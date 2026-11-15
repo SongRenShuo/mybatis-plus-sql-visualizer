@@ -700,6 +700,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-15)**
 
+### L72 CI 提速先量「全局地板」再动刀：单腿变快≠整轮变快，放大共享缓存会连坐所有腿
+
+**规则**：动 CI 编排前，先用 `gh run view <id> --json jobs` 拉逐 job / 逐 step 的 `startedAt`/`completedAt`，找出**整轮关键路径**与**真地板**；只优化关键路径上的腿才可能省墙钟。任何改动都用同 workflow、只差一个变量的 `mode=gate` 轮做 A/B（不发布），并对比「整轮 conclusion 时刻」而非单腿耗时。两条已证伪的路线不要再试：①把最长测试腿切片并行——固定成本（缓存恢复/编译/demo）占大头，切片只省测试执行那一小段；②把 IDE 解包预置进共享 `gradle-transforms` 缓存——条目变大会让**所有** `cache-read-only` 腿的恢复一起变慢，省下的单腿 provisioning 被分摊开销吃光还倒赔。共享缓存逼近 10GB 上限时还会触发淘汰抖动。③连续多轮预热/淘汰会让共享缓存进入不健康态：此时「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，可能误判已解包而跳过 provisioning，随后 `verifyGate` 硬校验报「IDE 发行目录未在 transforms 找到」成片红——A/B 前先确认缓存状态干净，别在脏缓存上继续测。
+
+**证据**：2026-11-15 两轮真 CI A/B，基线 run `43668500925` 13.1 min（逐 step：`test(fast)` 11.27 是真地板；`verify(263)` 6.78 里 provisioning 占 3.82、验证本体仅 1.07；build 6.20 中缓存恢复 2.23）。① `test(fast)` 拆 `fast1/fast2`（`-PfastBucketSliceCount=2`）：run `43671286693` success，单腿降到 9.40/10.50，但 `test(1)` 11.52 接棒成新地板，整轮 12.9 min ≈ 无收益（`37dc0e617` → 已 revert）。② 一次性 263 缓存预热（独立 workflow 用可写 setup-gradle 跑 `:verifyPlugin -PverifyIdes=263 -x buildPlugin`）：run `43672377221` success，新 `gradle-transforms` 条目 6216.8MB（原 4662MB）；复验 run `43673292675` success 且 **verify(263) provisioning 3.82→0.02 min 确实命中**，但「配置 Gradle 缓存」1.52→3.07、`test(fast)` 11.27→**14.90**，整轮约 15.3 min，净负收益约 2.2 min（`07781a5d6`/`0ca427250` 已撤销，缓存由 build job 常规保存自动回落到 8.25→2.04GB）。两条改动均已 revert，`build-plugin.yml` 与基线逐字一致。第三次尝试「把 verify(263) 的 provisioning `:verifyPlugin` 与 `:verifyGate` 合进同一次 gradle 调用」在 run `43675893389` 上 failure：`verify(253)` / `verify(263)` 的 `:verifyGate` 报「IDE 发行目录未在 transforms 找到」——根因是反复预热/淘汰把共享缓存搞乱后，「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，误判已解包而跳过 provisioning；与合并改动本身无关（该轮 `$found=true`，走的是原分支）。已 revert，主 workflow 再次与基线逐字一致。
+
+**正例**：先量逐 step 耗时定位真地板，再用 `mode=gate` 同变量 A/B，负收益立即 revert；**反例**：只看「某条腿慢 3.82 min」就动手，或把「单腿变快」当成「整轮变快」写进结论。CI 编排历经 run#5 35.0 → run#19 13.4 min 的多轮优化，当前已接近地板，改动前先假设收益为 0 并用 A/B 证伪。
+
+**Seen 1× (2026-11-15)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
