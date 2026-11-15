@@ -47,6 +47,14 @@ import os
 import re
 import sys
 
+# Windows runner 的 stdout 默认 cp1252、本机 Git Bash 控制台常见 GBK，print 中文会抛
+# UnicodeEncodeError（2026-11-15 gate run 43667161444 实测）。判据输出含中文，
+# 入口处显式重配为 UTF-8；不影响读取（读文件本来就显式 encoding='utf-8'）。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOTES_REL = os.path.join('gradle', 'plugin-change-notes.html')
 PREVIEW_REL = os.path.join('update', 'preview.update.json')
