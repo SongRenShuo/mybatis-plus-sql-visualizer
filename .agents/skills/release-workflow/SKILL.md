@@ -55,13 +55,12 @@ description: 插件双通道发行作业法——把 master 上的发行提交�
 写文案的硬规矩：
 
 - 新块置顶时同批删上一块那行评分引导句，句末 ≤60 字中性措辞；块内禁全角 `（ ） ：`；`@注解名` 用 `<code>` 包裹（LESSONS L27）。
-- 两条机器判据必须跑在 `git tag` 之前（LESSONS L25）：
+- 源码级机器判据必须跑在 `git tag` 之前（LESSONS L25；`release-beta.ps1` 的 gates 就是下面两条、本地零 Gradle）：
   ```
-  ./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.ChangeNotesRatingLineGuardTest"
-  ./gradlew buildPlugin
-  python dev-support/inspect-plugin-zip.py --version {版本}
+  python -I dev-support/check-change-notes.py --version {版本}
+  python -I dev-support/check-change-notes.py --self-test
   ```
-  前者断言评分句全文只 1 次，后者六项判据全 OK 才继续（清单 RC-P3/RC-P5）。红了改文案重提交。
+  前者把评分句全文 1 次 / 最新块 / 无裸 @ / 首个 h2 为本版 / 本版块 `<li>` 数与全角零命中 / preview 逐字一致（C7）/ preview version 与 downloadUrl 指向本版（C8）等判据一次跑完（源码级、秒级），后者用 9 条合成违规样本断言恰红、正对照 PASS。`check-change-notes.py` 不删另两道：Kotlin 守卫 `ChangeNotesRatingLineGuardTest` 仍由 CI `testFast` 腿跑；产物级 `python -I dev-support/inspect-plugin-zip.py --version {版本}`（版本号用 `--print-version` 取）由 CI build job 在 `:buildPlugin` 之后对**本轮真正发布的那份 zip**跑，是额外防线、不是替代（清单 §1.2）。红了改文案重提交。
 - 双通道正文不对齐：GitHub 由 CI 拼「本版变更 + 元信息 + `<details>` 折叠历史」，Gitee 用发行说明全文；说明尾部带一行 `构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`（清单 RC-P4b）。run id 未知时留占位，别编；CI 生成的 GitHub 正文已自带这一行，不需要再 PATCH GitHub。
 - 转正时删掉被吸收的 beta 块 + `CHANGELOG.md` 对应 beta 段，按能力面合并，细目靠内测说明留档（清单 §1.2）。
 - 已发布段准入看产物不看提交：条目能力必须在该版本 tag 的树里找得到落点（`Gitee自动发行工作流-说明文档.md:116-135`）。
@@ -72,11 +71,11 @@ description: 插件双通道发行作业法——把 master 上的发行提交�
 
 默认本地 `./gradlew releaseGate`（约 51 分钟），判据 BUILD SUCCESSFUL + `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份 Compatible（清单 RC-P1）。日常 `verifyPlugin` 已是报告生成器，发版只认 `verifyGate`。
 
-- 门禁绿才是发行前置；`buildPlugin` 出包 + `inspect-plugin-zip` PASS 都只证明包内自洽，不证明平台兼容（LESSONS L28）。
+- 门禁绿才是发行前置；`buildPlugin` 出包 + `inspect-plugin-zip` PASS 都只证明包内自洽，不证明平台兼容（LESSONS L28；`inspect-plugin-zip.py` 现由 CI 在 `:buildPlugin` 后对真正发布的那份 zip 跑）。
 - 内测不豁免：打 tag 之前派 `build-plugin.yml mode=gate`，绿了再发；已先发的立刻补派并把 run id 写进变更记录（清单 RC-P1）。
 - 零代码改动转正可复用分片读数（RC-P1c 三约束）：`git diff --stat <上次全绿提交> HEAD -- src/main src/test` 为空、改动仅限版本号/文案类、受文案影响的守卫单独复跑、发行说明如实写「分片读数沿用」。`verifyGate` 不适用复用。
 - 仅在需要离开机器 / 干净环境时走 CI：`gh workflow run build-plugin.yml --ref master -f mode=gate`。四种 mode：`gate` 不发布 / `release` 门禁后发 GitHub / `publish` 复用已成功门禁产物 / `tests` 只跑测试（build-plugin.yml:4-8）。`publish` 只认运行级 `conclusion=success`（:707-708），首发轮 publish 失败后带 notes 的重发只能走 `mode=release` 重跑门禁（清单 RC-P4c）。
-- 产物核对：`python dev-support/inspect-plugin-zip.py --version {版本}` 退出码 0；沙盒冒烟 `./gradlew runIde` 后 Install Plugin from Disk 验 gutter / 转换 / 日志面板 / 设置页（清单 RC-P6）。
+- 产物核对：`python -I dev-support/inspect-plugin-zip.py --version {版本}` 退出码 0；CI build job 在 `:buildPlugin` 之后对**本轮真正发布的那份 zip**也跑这一步（新增两步之一，环节只增不减），源码级文案判据则由 `check-change-notes.py` 在 tag 前零 Gradle 完成；沙盒冒烟 `./gradlew runIde` 后 Install Plugin from Disk 验 gutter / 转换 / 日志面板 / 设置页（清单 RC-P6）。
 - CI 命中 `ClosedFileSystemException` 是 Gradle zip 文件系统竞态，不是测试失败：九处调用统一走 `dev-support/ci/run-gradle-retry.ps1`（先 `--stop` 换 daemon + 清 IDE 解包目录 + `--max-workers=1`），看到 `::warning::命中 Gradle zip 文件系统竞态` 即已自动重跑。
 
 ## 4. 发行提交与 tag
@@ -107,7 +106,7 @@ gh workflow run build-plugin.yml --ref master -f mode=release -f notes={notes路
 ```
 pwsh -File dev-support/release-beta.ps1 -Version {版本} -Notes "{notes路径}" -MarketplaceLite
 ```
-它按七步走完：前置闸门 → gates（评分句守卫 + buildPlugin + inspect-plugin-zip）→ tag → `push-all.ps1 -Tags` → dispatch + 轮询 → GitHub 读数 → Gitee 同步 + `--verify-only`（清单 §八）。`-DryRun` 只打印；`-SkipGates` / `-SkipCi` / `-SkipGitee` 供分步重跑；脚本从不碰 `update/update.json`。
+它按七步走完：前置闸门 → gates（`python -I dev-support/check-change-notes.py --version {版本}` + `--self-test`，源码级零 Gradle、脚本本地不再跑 gradle）→ tag → `push-all.ps1 -Tags` → dispatch + 轮询 → GitHub 读数 → Gitee 同步 + `--verify-only`（清单 §八）。CI 侧 build job 在 `:buildPlugin` 后**新增两步**：`check-change-notes.py`（含 `--self-test`）与 `inspect-plugin-zip.py --version`（用 `--print-version` 取版本号），查本轮真正发布的那份 zip；Kotlin 守卫 `ChangeNotesRatingLineGuardTest` 仍由 `testFast` 腿跑，CI 环节只增不减。`-DryRun` 只打印；`-SkipGates` / `-SkipCi` / `-SkipGitee` 供分步重跑；脚本从不碰 `update/update.json`。
 
 读数与轮询：
 ```
@@ -170,7 +169,7 @@ curl -s https://plugins.jetbrains.com/api/plugins/33633 | python -m json.tool | 
 - 不自动 push 远端、建 tag、发行、上传 Marketplace、外发内容；合流 dev↔master / insight→dev 同样等用户点名（`AGENTS.md:9`）。
 - 不裸 `git push github`；推送 GitHub 一律走项目令牌（`AGENTS.md:10`）；调 GitHub API 也别用 `git credential fill`，直接读 `.local/github-token.json`。
 - 不跑全量门禁冒充 CI 结论、不在报告里写没跑过的读数；不把 `buildPlugin` 成功当门禁（L28）。
-- 不编造 run id / Release id / CI 结论；不发版后再跑文案自检（L25）。
+- 不编造 run id / Release id / CI 结论；不发版后再跑文案自检（L25）；不把 `check-change-notes.py` / `inspect-plugin-zip.py` 的绿灯当发行门禁（门禁仍认 `releaseGate` / CI `mode=gate`，L28），也不因判据换成 py 就删 Kotlin 守卫或减 CI 环节。
 - 不在 Gitee 未推 tag 时建发行版；不拿本地 zip 先发 Gitee 再镜像 GitHub（L30 反路）。
 - 不用 `--replace` 改正文；PATCH 不漏 `prerelease`。
 - 不降分片换并行、不 `clean`、不 `--stop` 别人的 gradle（AGENTS.md 全局并行纪律）。
@@ -178,9 +177,9 @@ curl -s https://plugins.jetbrains.com/api/plugins/33633 | python -m json.tool | 
 ## 11. 为什么（规则一句话 + 出处）
 
 - 版本号/tag 逐字一致：downloadUrl 按标签段拼接，差一字用户点更新就 404。（清单 §1.1 第 3 条）
-- 两条 changeNotes 判据卡在 tag 前：文案会被 `patchPluginXml` 编进 zip，发出去再发现只能 tag 前移 + 双通道重发。（LESSONS L25）
+- 源码级 changeNotes 判据（`check-change-notes.py`，含评分句 / 最新块 / 裸 @ / 首个 h2 / 全角 / preview 逐字一致）卡在 tag 前：文案会被 `patchPluginXml` 编进 zip，发出去再发现只能 tag 前移 + 双通道重发；产物级 `inspect-plugin-zip.py` 由 CI 在 `:buildPlugin` 后对真正发布的那份 zip 再查一遍，是额外防线不是替代。（LESSONS L25）
 - `@注解名` 用 `<code>`：GitHub 先解实体再识别提及，`&#64;` 与反引号都挡不住。（LESSONS L27）
-- 门禁绿才是前置：`inspect-plugin-zip` 查包内自洽，`verifyGate` 查这份字节在 243/253/263 能不能加载。（LESSONS L28）
+- 门禁绿才是前置：`inspect-plugin-zip`（现由 CI 在 `:buildPlugin` 后对发布产物跑）查包内自洽，`verifyGate` 查这份字节在 243/253/263 能不能加载。（LESSONS L28）
 - 方向 CI → GitHub → Gitee：本地先发 Gitee 再镜像会让两侧附件字节与正文来源都不一致。（LESSONS L30）
 - 结论取 `conclusion` 不取 `watch` 退出码：代理掐断会让 watch 提前退出。（LESSONS L51）
 - 下载要续传 + 服务端 digest：一次 `read()` 没有续传语义，重试只是把同一失败重演，长度相等不是内容相等。（LESSONS L51）
@@ -196,4 +195,4 @@ curl -s https://plugins.jetbrains.com/api/plugins/33633 | python -m json.tool | 
 
 ## 12. 实证（2026-11-15，仅作形态举例，不是通用值）
 
-发行 `2026.11.15-beta.1`：发行提交 `1c36c369c`（7 文件）；因 `2026.11.14` 基号已被正式版占用改用新基号 `2026.11.15`；范围 `2026.11.14..HEAD` 23 笔；tag 指向发行提交，双仓 master 与 tag 同指该提交；本地三道门禁全绿后 `mode=release`（带 `notes` + `marketplace_lite=true`）run 43659175871 14/14 全绿；GitHub Release 445715456（prerelease，附件 8,253,623 字节、sha256 `b511cd14…`）、Gitee 发行版 1310184（`--from-github`，`--verify-only` [3/3] Verified，逐字节一致）；本地 gates 包与 CI 包哈希不同，按护栏移出 `build/distributions/` 后续跑；落账提交 `a95c74231` 回填读数与构建记录行，Gitee 正文用 by-id PATCH 补该行（GitHub 正文已自带）。`update/update.json` 未动，由用户本人维护。
+发行 `2026.11.15-beta.1`：发行提交 `1c36c369c`（7 文件）；因 `2026.11.14` 基号已被正式版占用改用新基号 `2026.11.15`；范围 `2026.11.14..HEAD` 23 笔；tag 指向发行提交，双仓 master 与 tag 同指该提交；本地三道门禁全绿后 `mode=release`（带 `notes` + `marketplace_lite=true`）run 43659175871 14/14 全绿；GitHub Release 445715456（prerelease，附件 8,253,623 字节、sha256 `b511cd14…`）、Gitee 发行版 1310184（`--from-github`，`--verify-only` [3/3] Verified，逐字节一致）；本地 gates 包与 CI 包哈希不同，按护栏移出 `build/distributions/` 后续跑；落账提交 `a95c74231` 回填读数与构建记录行，Gitee 正文用 by-id PATCH 补该行（GitHub 正文已自带）。`update/update.json` 未动，由用户本人维护。本轮实证是历史读数，保留不改；后续判据实现已改为双轨（源码级 `check-change-notes.py` 在 tag 前、产物级 `inspect-plugin-zip.py` 由 CI 在 `:buildPlugin` 后跑），见 §2。
