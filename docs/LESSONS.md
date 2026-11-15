@@ -694,7 +694,7 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **规则**：往 `.github/workflows/` 里加 `python xxx.py` 步骤时，脚本入口必须显式 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')`（stderr 同），因为 Windows runner 的 Python stdout 默认 **cp1252**，任何中文 `print` 都会抛 `UnicodeEncodeError: 'charmap' codec can't encode characters`；本机 Git Bash 控制台常见 GBK，同样受益。读文件本来就要显式 `encoding='utf-8'`（`mpv-release.gradle.kts:18-20` 的 GBK 教训同源）。判断失败原因要看日志里的解释器路径与栈：`C:\hostedtoolcache\windows\Python\3.12.10` 已存在就说明**不缺 Python**，别去加 `actions/setup-python`（加了也不解决编码，还多一个 job 步）。改完用 `PYTHONIOENCODING=cp1252 python -I <脚本>` 与 pwsh 双模拟复跑，再派一轮真 CI 取证。
 
-**证据**：2026-11-15 `mode=gate` run `43667161444` 的 build job 红在新增的「changeNotes 源码级判据」步——`check-change-notes.py` 打印 `[OK ] C1 评分引导句…` 时 cp1252 编码失败，连 `--self-test` 与后续产物自检一起被跳过；同轮 runner 自带 Python 3.12.10。修法＝两个脚本（`check-change-notes.py` / `inspect-plugin-zip.py`，后者也有中文 `[OK]/结果:` 行）入口各加重配（`83375e4b1`）；`PYTHONIOENCODING=cp1252` 与 pwsh 模拟全 PASS，复验轮 `43668500925` 的读数待回填。诊断中一度误判「缺 python 解释器」而加了 setup-python 步，读日志后撤销——**先取证再动手**的又一例。
+**证据**：2026-11-15 `mode=gate` run `43667161444` 的 build job 红在新增的「changeNotes 源码级判据」步——`check-change-notes.py` 打印 `[OK ] C1 评分引导句…` 时 cp1252 编码失败，连 `--self-test` 与后续产物自检一起被跳过；同轮 runner 自带 Python 3.12.10。修法＝两个脚本（`check-change-notes.py` / `inspect-plugin-zip.py`，后者也有中文 `[OK]/结果:` 行）入口各加重配（`83375e4b1`）；`PYTHONIOENCODING=cp1252` 与 pwsh 模拟全 PASS，复验 `mode=gate` run **`43668500925` conclusion=success（13 成功 / publish 按 gate 设计 skipped）**，日志里两步分别打印 `结果: PASS` 与 `反向读数: 9/9 条判据变红`、产物自检步正常执行。诊断中一度误判「缺 python 解释器」而加了 setup-python 步，读日志后撤销——**先取证再动手**的又一例。
 
 **正例**：读栈定位到 `encodings/cp1252.py` → 只改输出编码、不动判据逻辑；**反例**：见红就加 setup-python 或把脚本输出改成全 ASCII（判据标签可读性下降，且掩盖真实原因）。
 
