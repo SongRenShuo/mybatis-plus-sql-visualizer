@@ -24,6 +24,10 @@
 #   - The beta notes file is named `-内测说明.md`, while the publish job only auto-matches
 #     `docs/发行说明/*-发行说明.md`. So -Notes is always forwarded to the workflow as the `notes`
 #     input; without it `publish` cannot find the body and the whole release run goes red (RC-P4c).
+#   - Local gates are source-level and Python-only (no Gradle). changeNotes checks live in
+#     dev-support/check-change-notes.py; the Kotlin guard still runs in CI testFast and the
+#     artifact-level inspect-plugin-zip.py now runs in CI right after :buildPlugin, so the
+#     zip actually shipped is what gets checked. Do not "optimize" by dropping either.
 #
 # Exit code: 0 = every step passed, 1 = at least one step failed (summary at the end).
 
@@ -115,13 +119,18 @@ $headSha = (git rev-parse HEAD).Trim()
 Write-Note ("HEAD = {0}" -f $headSha)
 if ($script:failed.Count -gt 0) { Write-Fail "aborting before any outward action"; exit 1 }
 
-# ---------------------------------------------------------------- 1. gates (change notes guard + package + inspector)
+# ---------------------------------------------------------------- 1. gates (source-level change notes checks, no Gradle)
+# Both tag-before criteria from T-ReleaseChecklist §1.2 are static checks on
+# gradle/plugin-change-notes.html + update/preview.update.json. The old Kotlin guard
+# (3m35s on a cold configuration cache) and the local buildPlugin + inspect-plugin-zip
+# are NOT removed: the Kotlin guard still runs in CI testFast, and inspect-plugin-zip.py
+# now runs in CI right after :buildPlugin against the shipped zip (build-plugin.yml).
+# Running them locally only duplicated CI work and produced a second, different zip.
 if (-not $SkipGates) {
-    Write-Step "gates: change notes guard + buildPlugin + inspect-plugin-zip"
+    Write-Step "gates: check-change-notes.py (source-level, zero Gradle)"
     try {
-        Step-Run "change notes rating guard" ".\gradlew.bat" @("test", "--tests", "cn.song.mybatisplus.visualizer.convention.ChangeNotesRatingLineGuardTest")
-        Step-Run "buildPlugin" ".\gradlew.bat" @("buildPlugin")
-        Step-Run "inspect-plugin-zip" "python" @("dev-support/inspect-plugin-zip.py", "--version", $Version)
+        Step-Run "change notes source checks" "python" @("-I", "dev-support/check-change-notes.py", "--version", $Version)
+        Step-Run "change notes reverse probe" "python" @("-I", "dev-support/check-change-notes.py", "--self-test")
         Write-Ok "gates passed"
         $script:done += "gates"
     } catch { Fail "gates" $_.Exception.Message }
