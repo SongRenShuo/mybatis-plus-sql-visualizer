@@ -49,13 +49,11 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         IbatisXmlStatementTargets.clearCachesForTest()
-        MapperXmlLocator.clearFileListCacheForTest()
     }
 
     override fun tearDown() {
         try {
             IbatisXmlStatementTargets.clearCachesForTest()
-            MapperXmlLocator.clearFileListCacheForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
             PluginSettings.getInstance().state.ibatisXmlEnabled = true

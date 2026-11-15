@@ -149,7 +149,8 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）；**2026-11-07 T-SqlListCatchup 合 master `a0cc268e` 后 CI 三轮红 8 例**——券 A 给 `notifyUi` 加了 150ms 刷新窗（通知转 Alarm 延迟补刷），`SqlLogTailFollowTest`×5 / `SqlLogPanelFilterTest`×1 / `SqlListV179HeadlessTest`×1 断言的「动作后列表已同步刷新」全部失效（headless 泵不到未到点的 Alarm），另 `ReplayGuardStormVerdictTest` 未登记进元守卫。本战役六轮定向 + 244 例集成收口全绿，**一个都没抓到**，全靠 CI 全量。
 **正例**：动设置页 section 控件/面板布局/增删 JComboBox 等控件的提交，报告里写明「平台 UI 测试面，全量未跑＝not run 待收口」；**反例**：testFast 快桶绿就宣称设置页改动收口。
 **追加口径（2026-11-07）**：**引入「延迟/异步化」机制的改动与改布局同价**——任何把同步刷新改成延迟补刷（时间窗、节流、Alarm、invokeLater 链）的提交，都会让既有 UI 测试里的「动作后立即断言」失效；此类改动的定向面必须显式列出受影响的面板测试类（`SqlLogTailFollow*`/`SqlLogPanel*`/`SqlListV179*` 等）并逐个跑到，或直接以 CI 全量轮为准再收口。修复口径＝测试侧注入同步调度器（`manager.catchUpScheduler = { _, action -> action() }`，机制本身由专项用例覆盖），不要为了让测试变绿去放宽生产窗口。
-**Seen 3× (2026-10-25, 2026-10-26, 2026-11-07)**
+**追加口径（2026-11-14）**：**新增守卫/扫描类测试文件，定向清单必须含 `GuardSelfTestCoverageMetaGuardTest` 本身**——文件名含 `Guard`/`SourceScanTest` 就落在元守卫的文件名闭包扫描面（放 `convention/` 外的 `ui/gutter/` 也一样），漏登 `GUARD_CLASSES` 只在跑元守卫或 CI 全量时红。T-GutterFirstOpenDelay F1（`d3eb65079`）新增 `ui/gutter/MapperXmlSlowResolveFailGuardTest` 未登记，本地定向（含合并态四套件复跑）全绿，CI fast(1) `磁盘上存在未登记的守卫类` 才抓到（run 43606177980）；补登 `be43c4bf6` 同款先例已二现。
+**Seen 4× (2026-10-25, 2026-10-26, 2026-11-07, 2026-11-14)**
 
 ### L12 守卫的口径要以生产代码的实际契约为准，不能按「更严格更好」想象
 
@@ -250,10 +251,10 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L25 置顶 change-notes 新块时两件事同批做完并跑机器判据，且必须跑在打 tag 之前
 
-**规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（`dev-support/inspect-plugin-zip.py` 的同名断言）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
+**规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（现由 `dev-support/check-change-notes.py` 在 tag 前源码级判定，产物级再由 CI 在 `:buildPlugin` 后跑 `inspect-plugin-zip.py` 复核）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
 **证据**：2026-11-09 发行 v2026.11.9-beta.1 两处同时踩——①本地先跑守卫，`ChangeNotesRatingLineGuardTest` 1 红（评分引导句出现 2 次，`v2026.11.8` 历史块那行没删），改后 29/0/0/0；②自检放在**发布之后**才跑，`inspect-plugin-zip.py` 报 FAIL（第 3 条「新增中兴 GoldenDB 方言（第 15 种）…」的全角括号），此时 GitHub Release `438955517` 与 Gitee 发行版 `1290785` 已是带病产物，只能 tag 前移（`65e03bae` → `f9c5b0c3`）+ 重发一轮。
-**正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`inspect-plugin-zip.py` 跑在 `git tag` 之前，红了改文案重提交，代价是几十秒。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
-**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角判据在 `inspect-plugin-zip.py` 里、需要先有 zip——正确顺序是 tag 前**本地 `buildPlugin` 一次 + 跑检查器**（几十秒），而不是只跑守卫测试。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
+**正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`check-change-notes.py` 跑在 `git tag` 之前（秒级、零 Gradle），产物级 `inspect-plugin-zip.py` 由 CI 在 `:buildPlugin` 后对发布 zip 复核，红了改文案重提交。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
+**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角当时只在 `inspect-plugin-zip.py` 里、需要先有 zip，所以漏了。判据实现现已换成双轨：静态判据（评分句 / 最新块 / 裸 @ / 首个 h2 / 全角 / preview 逐字一致）由 `dev-support/check-change-notes.py` 在 tag 前秒级完成、零 Gradle 并带 `--self-test` 反向验证；产物级由 CI 在 `:buildPlugin` 之后对真正发布的那份 zip 跑 `inspect-plugin-zip.py`。两条文案判据仍须在 tag 前绿，本地 gates 虽不再跑 gradle，发行门禁（`releaseGate` / CI build）照常 `buildPlugin`，产物级复核挂在它后面——不是不需要 `buildPlugin`，更不是放行先发后检。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
 
 ### L26 用户报「多一个图标 / 点不跳」时按锚点矩阵逐格核，别只修截图指到的那一格
 
@@ -274,7 +275,7 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L28 发行前置是「门禁绿」，不是「`buildPlugin` 成功」——`inspect-plugin-zip` 只证明包内自洽，不证明平台兼容
 
-**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip` 查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
+**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip`（现由 CI 在 `:buildPlugin` 之后对真正发布的那份 zip 跑）查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
 **证据**：2026-11-10 发行 `2026.11.11-beta.1` 时，本地只跑了 `buildPlugin` + `inspect-plugin-zip` + `ChangeNotesRatingLineGuardTest` + `BundlePlaceholderArityTest` 就打了 tag、建了 Gitee/GitHub 发行版（Gitee 1293976 / GitHub 440141088）；用户当场追问「你发行应该通过 CI 吧」。事后补派 `mode=gate`（run `42788614860` @ `9d32d936`，与 tag `308f5f96` 在 `src/` 零差异）。同一轮的前一版 `2026.11.10` 正式版是按规矩走的：release run `42758016138` 17/17、`verifyplugin` 验的就是待下发 zip。
 **正例**：按 RC-P1d 走——本地 `releaseGate` 为默认路径，需要干净环境才走 CI；要省时间用 RC-P1c 的「零代码改动复用」判据（相对上次全绿提交在 `src/main`/`src/test` 零差异可沿用分片读数），**但 `verifyGate` 不适用复用**：版本号进 `plugin.xml`，jar 变了必须在新产物上重验。**反例**：把「构建成功 + zip 内省 + 文案守卫绿」当发行门禁（本轮即此形态），三条都绿也换不来一句「能装在 243/253/263 上」。
 **Seen 1× (2026-11-10)**——用户点名「应该通过 CI」，同轮补派门禁。
@@ -688,6 +689,26 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：先取证后重触发——实例没动、CI 9 分钟转绿；**反例**：一红就上服务器重启容器/调 `max_connections`（本轮水位 9/200，动了也白动），或者反过来「服务器故障红属正常」直接无视——两种都是不取证。
 
 **Seen 1× (2026-11-14)**
+
+### L71 CI 首次引入 Python 脚本先重配 stdout 为 UTF-8，别把编码红误诊成缺解释器
+
+**规则**：往 `.github/workflows/` 里加 `python xxx.py` 步骤时，脚本入口必须显式 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')`（stderr 同），因为 Windows runner 的 Python stdout 默认 **cp1252**，任何中文 `print` 都会抛 `UnicodeEncodeError: 'charmap' codec can't encode characters`；本机 Git Bash 控制台常见 GBK，同样受益。读文件本来就要显式 `encoding='utf-8'`（`mpv-release.gradle.kts:18-20` 的 GBK 教训同源）。判断失败原因要看日志里的解释器路径与栈：`C:\hostedtoolcache\windows\Python\3.12.10` 已存在就说明**不缺 Python**，别去加 `actions/setup-python`（加了也不解决编码，还多一个 job 步）。改完用 `PYTHONIOENCODING=cp1252 python -I <脚本>` 与 pwsh 双模拟复跑，再派一轮真 CI 取证。
+
+**证据**：2026-11-15 `mode=gate` run `43667161444` 的 build job 红在新增的「changeNotes 源码级判据」步——`check-change-notes.py` 打印 `[OK ] C1 评分引导句…` 时 cp1252 编码失败，连 `--self-test` 与后续产物自检一起被跳过；同轮 runner 自带 Python 3.12.10。修法＝两个脚本（`check-change-notes.py` / `inspect-plugin-zip.py`，后者也有中文 `[OK]/结果:` 行）入口各加重配（`83375e4b1`）；`PYTHONIOENCODING=cp1252` 与 pwsh 模拟全 PASS，复验 `mode=gate` run **`43668500925` conclusion=success（13 成功 / publish 按 gate 设计 skipped）**，日志里两步分别打印 `结果: PASS` 与 `反向读数: 9/9 条判据变红`、产物自检步正常执行。诊断中一度误判「缺 python 解释器」而加了 setup-python 步，读日志后撤销——**先取证再动手**的又一例。
+
+**正例**：读栈定位到 `encodings/cp1252.py` → 只改输出编码、不动判据逻辑；**反例**：见红就加 setup-python 或把脚本输出改成全 ASCII（判据标签可读性下降，且掩盖真实原因）。
+
+**Seen 1× (2026-11-15)**
+
+### L72 CI 提速先量「全局地板」再动刀：单腿变快≠整轮变快，放大共享缓存会连坐所有腿
+
+**规则**：动 CI 编排前，先用 `gh run view <id> --json jobs` 拉逐 job / 逐 step 的 `startedAt`/`completedAt`，找出**整轮关键路径**与**真地板**；只优化关键路径上的腿才可能省墙钟。任何改动都用同 workflow、只差一个变量的 `mode=gate` 轮做 A/B（不发布），并对比「整轮 conclusion 时刻」而非单腿耗时。两条已证伪的路线不要再试：①把最长测试腿切片并行——固定成本（缓存恢复/编译/demo）占大头，切片只省测试执行那一小段；②把 IDE 解包预置进共享 `gradle-transforms` 缓存——条目变大会让**所有** `cache-read-only` 腿的恢复一起变慢，省下的单腿 provisioning 被分摊开销吃光还倒赔。共享缓存逼近 10GB 上限时还会触发淘汰抖动。③连续多轮预热/淘汰会让共享缓存进入不健康态：此时「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，可能误判已解包而跳过 provisioning，随后 `verifyGate` 硬校验报「IDE 发行目录未在 transforms 找到」成片红——A/B 前先确认缓存状态干净，别在脏缓存上继续测。
+
+**证据**：2026-11-15 两轮真 CI A/B，基线 run `43668500925` 13.1 min（逐 step：`test(fast)` 11.27 是真地板；`verify(263)` 6.78 里 provisioning 占 3.82、验证本体仅 1.07；build 6.20 中缓存恢复 2.23）。① `test(fast)` 拆 `fast1/fast2`（`-PfastBucketSliceCount=2`）：run `43671286693` success，单腿降到 9.40/10.50，但 `test(1)` 11.52 接棒成新地板，整轮 12.9 min ≈ 无收益（`37dc0e617` → 已 revert）。② 一次性 263 缓存预热（独立 workflow 用可写 setup-gradle 跑 `:verifyPlugin -PverifyIdes=263 -x buildPlugin`）：run `43672377221` success，新 `gradle-transforms` 条目 6216.8MB（原 4662MB）；复验 run `43673292675` success 且 **verify(263) provisioning 3.82→0.02 min 确实命中**，但「配置 Gradle 缓存」1.52→3.07、`test(fast)` 11.27→**14.90**，整轮约 15.3 min，净负收益约 2.2 min（`07781a5d6`/`0ca427250` 已撤销，缓存由 build job 常规保存自动回落到 8.25→2.04GB）。两条改动均已 revert，`build-plugin.yml` 与基线逐字一致。第三次尝试「把 verify(263) 的 provisioning `:verifyPlugin` 与 `:verifyGate` 合进同一次 gradle 调用」在 run `43675893389` 上 failure：`verify(253)` / `verify(263)` 的 `:verifyGate` 报「IDE 发行目录未在 transforms 找到」——根因是反复预热/淘汰把共享缓存搞乱后，「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，误判已解包而跳过 provisioning；与合并改动本身无关（该轮 `$found=true`，走的是原分支）。已 revert，主 workflow 再次与基线逐字一致。
+
+**正例**：先量逐 step 耗时定位真地板，再用 `mode=gate` 同变量 A/B，负收益立即 revert；**反例**：只看「某条腿慢 3.82 min」就动手，或把「单腿变快」当成「整轮变快」写进结论。CI 编排历经 run#5 35.0 → run#19 13.4 min 的多轮优化，当前已接近地板，改动前先假设收益为 0 并用 A/B 证伪。
+
+**Seen 1× (2026-11-15)**
 
 ## 升级记录
 
