@@ -169,7 +169,9 @@ git merge --no-ff dev
 | 守卫账本·预算/归组 | dev（5396 例 2 红） | GiantFileBudget 5 文件超线（合并并集）+ T-NotifyTune 4 个 Boolean 未归 SettingsScenarioGroups（master 无此 dev 守卫故漏登） | `ce8fbd03b` 按守卫自身流程提额（注明理由、拆分仍首选）+ 补登归组 | dev `43917243979` ✅ |
 | 依赖校验清单缺登记 | merge-route / security | **L80 三轮打地鼠**：①idea:idea:2025.3.5 安装包 zip ②jackson-base/junit-bom BOM ③jackson-core module——冷缓存每次解析出新元数据 | 结构性收口：`<trust file=".*\.(pom|module)">` 全量放行元数据文件（依赖描述非字节级制品），jar/zip sha256 严格校验不动；idea 安装包按 group+name 窄口径 | route `43916478233` ✅ / security 第三轮清单全过 |
 | 真缺陷（合流引入） | security / insight | security：T-SAF-09/10 转义钩子落在 master 新渲染路径下游，纯文本态栈摘要显示字面 `&lt;-`——判定①真缺陷，转义挪到两处 `<html>` 拼装边界+新增 HTML 态回归用例（`8a67887ae`，注入面不放松）。insight：10 类自有测试落 testFast 快桶（源码无 `com.intellij` 字面量但被测生产类走平台 UI），按既有协议加排除名单（`a77a6e8c4`，整桶 5623/0 本地权威） | | security `43931919466` ✅ / insight 重触发中 |
-| 环境抖动 | insight | `ExternalTemplateRendererTest` 外部渲染器 30s 超时（六轮 gate 并发抢机器；master 历轮从未红） | rerun-failed-jobs 未生效，改派全新 gate | insight 第三轮 |
+| 环境抖动 | insight | `ExternalTemplateRendererTest` 外部渲染器 30s 超时（六轮 gate 并发抢机器；master 历轮从未红） | rerun-failed-jobs 未生效，改派全新 gate | insight 第三轮 `43932008569` ✅ |
+
+**终局**（2026-11-17 03:06）：八支 gate 全绿——preview `43907520040` / dialects `43915730620` / rollback `43907537976` / security `43931919466` / hiddenbug `43916284026` / merge-route `43916478233` / dev `43917243979` / insight `43932008569`。修红裁决纪律沿用：守卫账本漂移按对账修、禁弱化守卫语义；真缺陷修生产侧；k2j 支全程未动。
 
 修红裁决纪律沿用：守卫账本漂移按对账修、禁弱化守卫语义；真缺陷修生产侧；k2j 支全程未动。
 
