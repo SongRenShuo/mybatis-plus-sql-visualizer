@@ -43,6 +43,8 @@ internal object DataSourceFingerprint {
             val digest = java.security.MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
             digest.joinToString("") { "%02x".format(it) }
         } catch (t: Throwable) {
+            // T-FP 纪律：fatal 透传（指纹算不出只是降级为「无指纹兜底」，VirtualMachineError 不吞）
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
             LOG.debug("DataSourceFingerprint: digest unavailable", t)
             null
         }
