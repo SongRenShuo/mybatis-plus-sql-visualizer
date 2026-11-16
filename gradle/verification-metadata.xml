@@ -18,6 +18,11 @@
               243 用户命中 243.28141.41），逐版本写死 checksum 等于让构建依赖「谁在哪个 IDE 里同步」。
               POM 是构件元数据、不含代码，故按 group 信任 .pom；该 group 的二进制构件不受影响。 -->
          <trust group="com.jetbrains.intellij.idea" file=".*\.pom" regex="true"/>
+         <!-- T-BranchAlignMerge 合流轮补丁（LESSONS L80 同类）：verifyPlugin 253 目标的独立安装包
+              idea:idea:2025.3.5（JetBrains IDE Installers 仓）不在清单——分支 gate 冷缓存首次下载即
+              Dependency verification failed。按 group+name 窄口径放行安装包 zip（版本无关），
+              ideaIU 组件的 sha256 校验不动。 -->
+         <trust group="idea" name="idea" file=".*win\.zip" regex="true"/>
          <!-- Gradle 发行版自身的附属物（IDE 脚本模型会解析，CLI 不会）：`gradle:gradle:<ver>` 的
               源码包、`org.apache.groovy` / `org.codehaus.groovy` 的变体元数据与 jar，全部来自**本机
               Gradle 发行版**（Gradle custom / Gradle distributions / Gradle Libs 仓库）。发行版本身
