@@ -222,4 +222,57 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 
 ## 九、实施记录
 
-（待实施后回填：改动点、提交哈希、定向读数、反向验证两读数、真机验收表）
+实施：2026-11-16，主分支 master 直改，两笔代码 + 一笔文档（用户令「在主分支实施开发计划的所有内容」）。
+
+### 9.1 改动点与提交
+
+| 提交 | 范围 | 内容 |
+|---|---|---|
+| `b5ccf14c7` | P0 | 新增 `xml/ibatis/SqlMapNamespaceIndex.kt`（`all` / `ns:` / `stmt:` 三类键，纯文本内核 + 三类查询）；`plugin.xml` 注册 `<fileBasedIndex>`；新增 `xml/ibatis/SqlMapNamespaceIndexTest`（内核 5 + 索引集成 2） |
+| `bcad37b84` | P1/P2/P3/P5 | `ui/nav/IbatisXmlStatementTargets.kt` 瘦身（索引查询 + PSI 校验，TTL/清单代/单槽/三个计数缝/`clearCachesForTest` 全部退役）；`IbatisJavaToXmlLineMarkerProvider` 四段式 + `buildMarkers` 抽取 + `resolvedIbatisKeys` / `isDumbProvider` / `resetResolvedCacheForTest`；Registry `sqlvis.gutter.ibatisIndexedResolve`；`[gutter-perf]` 日志；新守卫 `IbatisGutterFailBranchGuardTest`（登记元守卫）；矩阵 `testF1i_*` 六例；两条计数缝机制用例改行为/源码扫描形态 |
+| 本笔（文档） | P4/P5 账 | CHANGELOG `[Unreleased]`、本计划 §九、`docs/索引/开发计划.md` 状态、`docs/架构设计/02-核心流程详解.md` iBatis 双向跳转段、`docs/LESSONS.md` L74 |
+
+`plugin.xml` 两处登记：`<fileBasedIndex implementation="…SqlMapNamespaceIndex"/>`（与 MyBatis 侧 `MapperNamespaceIndex` 相邻）与 `<registryKey key="sqlvis.gutter.ibatisIndexedResolve" defaultValue="true">`（纯英文 description，`BundleParityGuard` 对 registryKey 族整元素豁免）。
+
+### 9.2 与计划的偏离（三处，均有理由）
+
+1. **P0 键面扩到三类**：计划写 `all` + `ns:<namespace>`；实现加了 `stmt:<id>`（6 类语句标签的 id）。理由：iBatis 默认 `useStatementNamespaces=false`，裸 id 是**默认形态**，只索引 namespace 会让裸 id 仍需遍历全部 sqlMap 文件；P1 原方案「裸 id 保留 memo，失效戳改 `PsiModificationTracker`」会被每次击键推高计数而不停失效（等于每趟 pass 重扫），故直接索引化后把该 memo 一并删除，本节吸收 P1 的「保留 memo」项。
+2. **根标签判定用全文而非 16KB 头**：索引期本来就拿到了 `contentAsText` 全文，截 16KB 只会引入「长注释/长头文件漏收」风险；改为「首个 `<sqlMap` 锚 + `<sqlMapConfig` 位置比较」（配置文件里的 `<sqlMap resource=…>` 子元素已排除，`SqlMapNamespaceIndexTest` 两例钉住）。语句 id 本来就只能在全文里找。
+3. **顺带修一处潜伏缺陷**：gutter 侧 `IbatisCallTargets.ownerNamespace(element)` 从 identifier 起爬要 7 跳才到 `PsiClass`，超出其 6 跳上限 → 静默取到 null，裸 id 的「同命名空间优先」偏好一直没生效。改为从调用表达式起爬（5 跳），并把所属类限定名放进正缓存键（裸 id 形态），`testF1i_裸id缓存键带所属类限定名` 钉住。该缺陷由本轮 `testF1i_*` 首次暴露（改前无用例断言过这条偏好）。
+
+### 9.3 定向读数（`./gradlew test --tests … -Pkotlin.compiler.execution.strategy=in-process --no-configuration-cache`，非全量）
+
+| 测试类 | tests | failures | errors |
+|---|---|---|---|
+| `xml.ibatis.SqlMapNamespaceIndexTest` | 7 | 0 | 0 |
+| `ui.gutter.IbatisNavigationLineMarkerProvidersTest` | 26 | 0 | 0 |
+| `ui.gutter.IbatisGutterFailBranchGuardTest` | 2 | 0 | 0 |
+| `ui.gutter.IbatisGutterHotPathTest` | 9 | 0 | 0 |
+| `ui.gutter.IbatisStatementPreviewTest` | 9 | 0 | 0 |
+| `ui.gutter.JdbcTemplateIbatisMutualExclusionTest` | 4 | 0 | 0 |
+| `ui.gutter.MapperXmlSlowResolveFailGuardTest` | 4 | 0 | 0 |
+| `ui.nav.IbatisDaoStatementGotoDeclarationHandlerTest` | 15 | 0 | 0 |
+| `ui.nav.IbatisGotoRealEntryTest` | 2 | 0 | 0 |
+| `ui.ref.IbatisXmlIdReferenceContributorTest` | 14 | 0 | 0 |
+| `actions.ConvertToSqlActionTest` | 9 | 0 | 0 |
+| `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 |
+| **合计** | **109** | **0** | **0** |
+
+实施期两处先红后修（记录在案，供后续复盘）：`SqlMapNamespaceIndexTest` 首跑 1 红（`<sqlMapConfig>` 内嵌 `<sqlMap>` 被收成 `all`）→ 加配置文件根锚排除；矩阵首跑 1 红（裸 id 缓存键取不到所属类）→ 即 9.2 第 3 条缺陷。
+
+### 9.4 反向验证（摘分支 → 两红 → 恢复 → 全绿）
+
+临时注释掉 `IbatisJavaToXmlLineMarkerProvider.createMarkers` 的正缓存命中分支（③）：
+
+- **第一读数**：28 例 **2 红** —— `IbatisNavigationLineMarkerProvidersTest.testF1i_解析失败但缓存命中_图标不缺席`（图标被摘形态复现）＋ `IbatisGutterFailBranchGuardTest.P2接线守卫_createMarkers必须挂dumb门与正缓存兜底`（wiring=false）；
+- **第二读数**（Edit 恢复分支、`git diff -- src/main` 为空后复跑）：**0 红**，BUILD SUCCESSFUL。
+
+### 9.5 未做与遗留
+
+- **A1~A9 真机/沙盒验收未跑**：本刀按要求只做定向测试收口；A1/A2/A9 需要真机 2026.3（用户环境）或 runIde 沙盒，留给用户复验或下一轮 runIde。注意首次启用索引时工程会全量建一次索引（`Indices to be built` 里会多出 `cn.song.mybatisplus.sqlMapNs`），属一次性成本。
+- **P-1（2493 次解析的确切耗时）未做数值实测**：修复后链路已无全扫，该前提对结论不再必要；日志锚点 `[gutter-perf] ibatis resolve: source=index … ms=` 可在真机直接读数（A1）。
+- **P4 横向审计仅出结论**：`ui/ref/MybatisXmlTargets`（同病、在 XML 属性 reference 热路径）、`psi/XmlCrossNsFragmentResolver`、`psi/jpa/HbmXmlEntityResolver` 三面未动，仍按 §四 P4 表留待下批。
+- **点击期 `runCatching` 未收紧**：`IbatisDaoStatementGotoDeclarationHandler.getGotoDeclarationTargets` 与两个 gutter 点击 handler 仍用 `runCatching` 包裹（契约是「任何异常按本次不接管」）。P3 只约束定位链本身不再把取消吞成结果；点击链若也要严格遵守 PCE 语义需另立项（改动面涉及用户可感的「点了没反应」时机）。
+- **Registry 回退通道**（`sqlvis.gutter.ibatisIndexedResolve=false`）按计划只保留一版，下一版删除 `legacySqlMapFiles` 与 `indexedResolveEnabledProvider`。
+
+红线遵守：未触碰 `update/update.json`；未 push；未跑全量测试；未 `clean` / `--stop`。

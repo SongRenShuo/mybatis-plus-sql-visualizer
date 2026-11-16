@@ -720,6 +720,31 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-16)**
 
+### L74 机制替换要覆盖「同形态的平行实现」，只修被点名的那条链等于没修
+
+**规则**：做**机制替换类**改动（全项目扫描→自定义索引、同步→异步、吞异常→上抛）时，落笔前先把
+「同形态的弟弟们」列全：同一入口语义、同一老实现样式（同样的 `FileTypeIndex` 全扫、同样的单槽 TTL、
+同样的 `runCatching{}.getOrDefault(emptyList())`）的平行类/函数。验收判据不是「报障文件好了」，
+而是「这份同类形态清单里不存在第二个老实现」，清单要写进计划文件（本项目在计划 §四 P4 横向审计表）。
+理由：机制替换通常只被一处故障触发，而报障往往下一次落在**没被点到**的那条平行链上，时间差几天，
+容易被当成新 bug 重新归因、从头再查一遍。
+
+**证据**：T-GutterFirstOpenDelay F1'''（`7dc6c1c73`，2026-11-15）把 MyBatis 侧的 `MapperXmlLocator`
+换成自定义索引 `MapperNamespaceIndex`，而未动 iBatis 侧**同形态**的 `IbatisXmlStatementTargets`
+（仍是 `FileTypeIndex` 全项目 XML + 逐个 PSI 解析筛 sqlMap 文件 + 5s TTL 单槽 + `runCatching` 吞取消）。
+次日（2026-11-16）用户在 `UserDaoImpl.java` 报「预览/跳转图标加载很慢，且出现过一次后无故不显示」：
+日志实测 demo 根工程 **2493 个 XML / 16.58 MB** 逐个解析才筛出 303 个 `<sqlMap>`，同进程三工程
+互相踢单槽；`09:03:19` / `09:06:02` 两次预览 `[M36] showSql len=0`（= `statementNotFound`）与
+`09:04:22`/`09:05:05`/`09:07:38` 的 `len=86/86/85` 好/坏交替，正是「取消被吞成空清单 + 慢趟结果固化」的指纹。
+修法（`b5ccf14c7` 索引 + `bcad37b84` 瘦身/兜底）＝同形态迁移，横向审计表另列 `MybatisXmlTargets`
+（同病，挂 reference 热路径）、`XmlCrossNsFragmentResolver`、`HbmXmlEntityResolver` 三面待办。
+
+**正例**：替换前 grep「老机制的指纹」（本次是 `FileTypeIndex.getFiles(XmlFileType` + `fileListTtlMs` +
+`getOrDefault(emptyList())`）得到全集，再逐个判定进不进热路径；**反例**：只改报障类，或改完只跑
+报障文件的用例（本次若止步于此，iBatis 侧要再等下一次用户报障）。
+
+**Seen 1× (2026-11-16)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
