@@ -287,3 +287,38 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 - **Registry 回退通道**（`sqlvis.gutter.ibatisIndexedResolve=false`）按计划只保留一版，下一版删除 `legacySqlMapFiles` 与 `indexedResolveEnabledProvider`。
 
 红线遵守：未触碰 `update/update.json`；未 push；未跑全量测试；未 `clean` / `--stop`。
+
+### 9.6 增补 P2.1（2026-11-16 用户沙盒复验报障）：目标确定不存在时必须收回正缓存
+
+**报障**：用户按 A5 把 `User.xml` 的 `namespace="User"` 改掉，**图标没消失**。定性为 bug：P2 的正缓存
+只进不出（为修 S2「无故消失」而设的会话级缓存无失效），真删/改名/改 namespace 时图标靠旧记忆续命。
+
+**修法**：把「查不到」拆成三态，判据是**查询是否成功执行**，不是返回值是否为空：
+
+| 三态 | 触发 | provider 处置 |
+|---|---|---|
+| `Found` | 索引查询成功且有 PSI 精确命中 | 入正缓存 + 产出 |
+| `Unknown` | dumb / 索引重建中 `IndexNotReadyException` / 候选文件 PSI 瞬时取不到 | 缓存命中仍产出、**不动缓存**（保住 S2） |
+| `Absent` | 查询成功执行、候选面确无目标 | **`resolvedIbatisKeys.remove`** + 不产出（P2.1） |
+
+- `IbatisXmlStatementTargets.lookupStatementAnchors` 新增三态入口；`resolveStatementAnchors` 退化成
+  它的列表视图（预览 / Ctrl+B / MCP 口径零变化）；`IndexNotReadyException` 归 `Unknown`，
+  `ProcessCanceledException` 仍上抛。
+- provider 由四段式改五段式，`Absent` 分支负责摘图标 + 收回缓存；新增 `lookupOverrideForTest`
+  测试缝（`resetResolvedCacheForTest` 一并清）。
+- 守卫 `IbatisGutterFailBranchGuardTest`：锚点改 `lookupStatementAnchors(`，并新增「`Absent` 分支必须
+  `resolvedIbatisKeys.remove(`」的强制项；自证语料扩到五向，其中「缓存只进不出」必须报红。
+
+**提交**：`8eca5211f`。
+
+**读数**：定向 9 类 **95/0/0/0**（`IbatisNavigationLineMarkerProvidersTest` 28 例，含新增
+`testF1i_确定不存在_摘图标并收回缓存`、`testF1i_索引重建中未知_缓存命中仍产出`、
+`testF1i_改namespace后查询真实返回absent`——最后一条用真实索引 + VFS 改 namespace 钉住分类
+不是靠猜）。反向验证：摘掉 `resolvedIbatisKeys.remove(key)` 一行 → 30 例 **恰 2 红**
+（矩阵「确定不存在」+ 守卫），Edit 恢复后 **0 红**。
+
+**同族未修（登记）**：MyBatis 侧的 `MapperXmlToJavaLineMarkerProvider` / `MapperJavaToXmlLineMarkerProvider`
+用的是同一套「`resolvedStatementKeys` 只进不出」形态（删掉 mapper 方法 / 改 `<mapper namespace>`
+时图标同样会滞留）。本刀不动它：它已在 2026.11.16 发行并验收，改动面涉及两个 provider + `MybatisXmlTargets`
++ `MapperXmlSlowResolveFailGuardTest`（该守卫还硬编码「方法体内不得出现 catch」，而 MyBatis 侧的
+三态化需要 catch `IndexNotReadyException`），须单独立项、单独一轮定向与真机复验。
