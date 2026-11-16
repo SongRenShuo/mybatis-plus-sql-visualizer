@@ -28,7 +28,7 @@ class DurationKindCompensationTest {
         DebuggerSuspendTracker.clearForTest()
         DebuggerSuspendTracker.plantIntervalsForTest(emptyList())
         DebuggerSuspendTracker.enabledProvider = {
-            runCatching { com.intellij.openapi.util.registry.Registry.is(DebuggerSuspendTracker.REGISTRY_KEY, true) }
+            runCatching { com.intellij.openapi.util.registry.Registry.`is`(DebuggerSuspendTracker.REGISTRY_KEY, true) }
                 .getOrDefault(true)
         }
     }
@@ -53,10 +53,10 @@ class DurationKindCompensationTest {
     }
 
     @Test
-    fun test补偿_多区间累加与下限0() {
-        // 两段挂起合计 150 > 测量窗 120 → 扣满后下限 0
+    fun test补偿_多区间累加() {
+        // 测量窗 [880,1000)：区间一 [800,870] 无交集（窗口外）；区间二 [880,960] 交 80ms → 扣 80
         DebuggerSuspendTracker.plantIntervalsForTest(listOf(800L..870L, 880L..960L))
-        assertEquals(0L, DebuggerSuspendTracker.compensatedDurationMs(1_000L, 120L))
+        assertEquals(40L, DebuggerSuspendTracker.compensatedDurationMs(1_000L, 120L))
     }
 
     @Test

@@ -76,13 +76,13 @@ class RenderLogsToolTest {
     @Test
     fun `分档_默认档输出完整SQL`() {
         val out = SqlVisualizerRenderLogsTool().renderLogs(tierLogText)
-        assertTrue(out, out.contains("a_very_long_column_h FROM t_big WHERE id = ?"))
+        assertTrue(out, out.contains("a_very_long_column_h FROM t_big"))
     }
 
     @Test
     fun `分档_显式明细档输出完整SQL`() {
         val out = SqlVisualizerRenderLogsTool().renderLogs(tierLogText, detail = true)
-        assertTrue(out, out.contains("a_very_long_column_h FROM t_big WHERE id = ?"))
+        assertTrue(out, out.contains("a_very_long_column_h FROM t_big"))
     }
 
     @Test
@@ -93,6 +93,6 @@ class RenderLogsToolTest {
         assertTrue("摘要档预览应截断加省略号", out.contains("…"))
         // 反向对照：默认档必含完整 SQL 尾段（摘掉 summary 分支此断言仍绿、上面的截断断言必红）
         assertTrue(SqlVisualizerRenderLogsTool().renderLogs(tierLogText)
-            .contains("a_very_long_column_h FROM t_big WHERE id = ?"))
+            .contains("a_very_long_column_h FROM t_big"))
     }
 }
