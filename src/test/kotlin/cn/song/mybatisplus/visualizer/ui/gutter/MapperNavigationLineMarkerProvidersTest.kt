@@ -183,16 +183,36 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
     }
 
-    fun testF1ResolveFailureWithCacheHitStillProducesMarker() {
-        // 冷窗形态模拟：namespace 侧接口不可解析（无对应 Java 文件），但本会话早先解析成功过该 key。
+    fun testF1ResolveUnknownWithCacheHitStillProducesMarker() {
+        // 冷窗形态（S2）：查询**没算完**（Unknown），不是「确定没有」——已确认过的图标必须留着。
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Unknown }
         MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val xmlProvider = MapperXmlToJavaLineMarkerProvider()
         val xml = addXml("<select id=\"count\">SELECT 1</select>")
-        assertTrue("resolveInterfaceMethod 对该 key 必须确实解析失败（否则本用例测不到失败分支）",
-            MybatisXmlTargets.resolveInterfaceMethod(project, "com.demo.UserMapper", "count") == null)
         val marker = markers(xmlProvider, xml).single()
         assertSame(MpvsIcons.MapperStatement, marker.icon)
+        assertTrue(
+            "Unknown 不得动缓存",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
+    }
+
+    /**
+     * P2.1（T-MapperGutterEvict，2026-11-16）：确定不存在时图标必须消失并收回缓存——
+     * 早期 F1 缓存只进不出，删掉接口方法 / 改 `<mapper namespace>` 后图标靠旧记忆续命。
+     */
+    fun testF1ResolveAbsentEvictsPositiveCacheAndProducesNoMarker() {
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MybatisXmlTargets.methodLookupOverrideForTest = { _, _, _ -> MybatisXmlTargets.MethodLookup.Absent }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        val xmlProvider = MapperXmlToJavaLineMarkerProvider()
+        val xml = addXml("<select id=\"count\">SELECT 1</select>")
+        assertEmpty(markers(xmlProvider, xml))
+        assertFalse(
+            "确定不存在必须收回正缓存，否则下一趟慢 pass 还会把图标画回来",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
     }
 
     fun testF1ResolveFailureWithoutCacheProducesNoMarkerAndLeavesCacheClean() {
@@ -245,14 +265,30 @@ class MapperNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
     }
 
-    fun testF1JavaLocateFailureWithCacheHitStillProducesMarker() {
-        // 冷窗形态模拟：无对应 XML（locate 必落空），但本会话早先 XML 侧确认过该语句双向存在。
+    fun testF1JavaLocateUnknownWithCacheHitStillProducesMarker() {
+        // 冷窗形态：locate **没算完**（Unknown）——缓存命中必须照常产出，缓存不动。
         MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
-        assertTrue("locate 对该 key 必须确实落空（否则本用例测不到失败分支）",
-            MapperXmlLocator.locate(project, "com.demo.UserMapper.count") == null)
+        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Unknown }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
         val marker = markers(javaProvider, addMapper())
-        assertEquals("缓存命中必须照常产出（图标不缺席）", 1, marker.size)
+        assertEquals("Unknown + 缓存命中必须照常产出（图标不缺席）", 1, marker.size)
         assertEquals("count", marker.single().element?.text)
+        assertTrue(
+            "Unknown 不得动缓存",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
+    }
+
+    /** P2.1（T-MapperGutterEvict，2026-11-16）：Java 侧确定不存在时摘图标并收回缓存。 */
+    fun testF1JavaLocateAbsentEvictsPositiveCacheAndProducesNoMarker() {
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add("com.demo.UserMapper#count")
+        MapperXmlLocator.lookupOverrideForTest = { _, _ -> MapperXmlLocator.Lookup.Absent }
+        MapperXmlToJavaLineMarkerProvider.isDumbProvider = { false }
+        assertEmpty(markers(javaProvider, addMapper()))
+        assertFalse(
+            "确定不存在必须收回正缓存（删掉 XML 语句 / 改 namespace 后图标不得续命）",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.UserMapper#count"),
+        )
     }
 
     fun testF1JavaDumbOptimisticallyProducesMarkerWithoutPollutingCache() {

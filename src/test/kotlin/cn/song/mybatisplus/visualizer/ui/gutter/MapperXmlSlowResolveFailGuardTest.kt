@@ -23,69 +23,87 @@ import java.io.File
 class MapperXmlSlowResolveFailGuardTest {
 
     @Test
-    fun `F1接线守卫_createMarker失败分支必须挂正缓存与dumb乐观判定`() {
+    fun `F1接线守卫_createMarker失败分支必须挂三态兜底`() {
         val body = extractCreateMarkerBody()
             ?: error("无法提取 MapperXmlToJavaLineMarkerProvider.createMarker 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
         val wiring = failureBranchWiring(body)
-        assertNotNull("createMarker 内必须存在 resolveInterfaceMethod 解析调用（扫描面漂移？）", wiring)
+        assertNotNull("createMarker 内必须存在 lookupInterfaceMethod 查询调用（扫描面漂移？）", wiring)
         assertTrue(
-            "createMarker 的解析失败分支必须挂 F1-a（resolvedStatementKeys.contains 命中仍产出）" +
-                "与 F1-b（isDumbProvider 乐观产出）两道判定，且都落在 resolveInterfaceMethod 之后。实测 wiring=$wiring",
+            "createMarker 必须：① 查询前先过硬 dumb 门（isDumbProvider，避免索引重建期查索引）" +
+                "② Unknown 分支保留缓存命中（resolvedStatementKeys.contains，F1-a/S2）" +
+                "③ Absent 分支收回缓存（resolvedStatementKeys.remove，P2.1：删方法/改 namespace 后图标不得续命）。" +
+                "实测 wiring=$wiring",
             wiring == true,
         )
         assertTrue(
-            "createMarker 不得吞异常（平台契约禁 catch ProcessCanceledException；解析失败走返回 null 语义）",
+            "createMarker 不得吞异常（平台契约禁 catch ProcessCanceledException；三态化把 IndexNotReady 的" +
+                "catch 收敛在 MybatisXmlTargets.lookupInterfaceMethod 内）",
             !body.contains("catch"),
         )
     }
 
     @Test
     fun `F1守卫自证_修复后形态放行修复前形态必红`() {
-        // 修复后形态（判定在解析之后的失败分支上）必须放行。
+        // 修复后形态（dumb 门前移 + Unknown 留缓存 + Absent 收回缓存）必须放行。
         val fixed = """
-            val resolved = resolveInterfaceMethod(project, namespace, id)
-            if (resolved != null) {
-                resolvedStatementKeys.add(key)
-                return buildStatementMarker(element)
-            }
-            if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
             if (isDumbProvider(project)) return buildStatementMarker(element)
-            return null
+            return when (MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id)) {
+                is Found -> { resolvedStatementKeys.add(key); buildStatementMarker(element) }
+                Unknown -> if (resolvedStatementKeys.contains(key)) buildStatementMarker(element) else null
+                Absent -> { resolvedStatementKeys.remove(key); null }
+            }
         """.trimIndent()
         assertEquals("修复后形态必须放行（wiring=true）", true, failureBranchWiring(fixed))
 
-        // 修复前形态（解析失败即 return null，无任何失败分支判定）必须被报出——
-        // 守卫提取器/判定退化成恒 true 即空绿。
-        val legacy = """
-            val resolved = resolveInterfaceMethod(project, namespace, id)
-            if (resolved == null) return null
-            return buildStatementMarker(element)
-        """.trimIndent()
-        assertEquals("修复前形态必须报红（wiring=false）", false, failureBranchWiring(legacy))
-
-        // 判定挪到解析之前（先查缓存再解析）也必须报红——守住「判定在失败分支上」的语义。
-        val misordered = """
-            if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
+        // 修复前形态（F1 首版）：缓存只进不出——Absent 也靠 contains 续命，P2.1 报障本体。
+        val legacyNoEvict = """
+            val resolved = lookupInterfaceMethod(project, namespace, id)
+            if (resolved != null) { resolvedStatementKeys.add(key); return buildStatementMarker(element) }
             if (isDumbProvider(project)) return buildStatementMarker(element)
-            val resolved = resolveInterfaceMethod(project, namespace, id)
-            if (resolved != null) resolvedStatementKeys.add(key)
+            if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
             return null
         """.trimIndent()
-        assertEquals("判定先于解析（不在失败分支上）必须报红", false, failureBranchWiring(misordered))
+        assertEquals("缓存只进不出（无 remove）必须报红", false, failureBranchWiring(legacyNoEvict))
 
-        // 扫描面漂移形态：无解析调用 → 提取器返回 null（调用方按红处理）。
+        // 无任何缓存判定的形态同样报红。
+        val legacy = """
+            if (lookupInterfaceMethod(project, namespace, id) == null) return null
+            return buildStatementMarker(element)
+        """.trimIndent()
+        assertEquals("无兜底判定的形态必须报红（wiring=false）", false, failureBranchWiring(legacy))
+
+        // dumb 门挪到查询之后（索引重建期先查索引 → IndexNotReadyException）必须报红。
+        val misordered = """
+            val resolved = lookupInterfaceMethod(project, namespace, id)
+            if (isDumbProvider(project)) return buildStatementMarker(element)
+            resolvedStatementKeys.remove(key)
+            if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
+            return null
+        """.trimIndent()
+        assertEquals("dumb 门晚于查询必须报红", false, failureBranchWiring(misordered))
+
+        // 缓存分支挪到查询之前同样必须报红——守住「判定在失败分支上」的语义。
+        val cacheFirst = """
+            if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element)
+            resolvedStatementKeys.remove(key)
+            lookupInterfaceMethod(project, namespace, id)
+            return null
+        """.trimIndent()
+        assertEquals("缓存分支先于查询必须报红", false, failureBranchWiring(cacheFirst))
+
+        // 扫描面漂移形态：无查询调用 → 提取器返回 null（调用方按红处理）。
         assertNull(failureBranchWiring("return null"))
     }
 
     @Test
-    fun `F1接线守卫_Java侧createMarker失败分支必须挂缓存与dumb判定`() {
+    fun `F1接线守卫_Java侧createMarker失败分支必须挂三态兜底`() {
         val body = extractCreateMarkerBody(1)
             ?: error("无法提取第二个 createMarker（MapperJavaToXmlLineMarkerProvider，签名/顺序漂移？）——守卫扫描面失效按红处理")
         val wiring = javaFailureBranchWiring(body)
-        assertNotNull("Java 侧 createMarker 内必须存在 MapperXmlLocator.locate 解析调用（扫描面漂移？）", wiring)
+        assertNotNull("Java 侧 createMarker 内必须存在 MapperXmlLocator.locateOrUnknown 查询调用（扫描面漂移？）", wiring)
         assertTrue(
-            "Java 侧的解析失败分支必须挂 F1-a（resolvedStatementKeys.contains 命中仍产出）" +
-                "与 F1-b（isDumbProvider 乐观产出）两道判定，且都落在 MapperXmlLocator.locate 之后。实测 wiring=$wiring",
+            "Java 侧必须：① 查询前先过硬 dumb 门 ② Unknown 保留缓存命中 ③ Absent 收回缓存" +
+                "（与 XML 侧同构）。实测 wiring=$wiring",
             wiring == true,
         )
         assertTrue(
@@ -96,28 +114,28 @@ class MapperXmlSlowResolveFailGuardTest {
 
     @Test
     fun `F1守卫自证_Java侧修复后形态放行修复前形态必红`() {
-        // Java 侧修复后形态（判定在 locate 之后的失败分支上）必须放行。
+        // Java 侧修复后形态（dumb 门前移 + 三态兜底）必须放行。
         val fixed = """
-            val resolved = MapperXmlLocator.locate(project, statementId)
-            if (resolved != null) {
-                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
-                return buildMethodMarker(element)
-            }
-            if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) return buildMethodMarker(element)
             if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
-            return null
+            return when (MapperXmlLocator.locateOrUnknown(project, statementId)) {
+                is Found -> { MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key); buildMethodMarker(element) }
+                Unknown -> if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) buildMethodMarker(element) else null
+                Absent -> { MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key); null }
+            }
         """.trimIndent()
         assertEquals("Java 侧修复后形态必须放行（wiring=true）", true, javaFailureBranchWiring(fixed))
 
-        // Java 侧修复前形态（locate 失败即 return null，无失败分支判定）必须被报出。
-        val legacy = """
-            val resolved = MapperXmlLocator.locate(project, statementId)
-            if (resolved == null) return null
-            return buildMethodMarker(element)
+        // Java 侧修复前形态（缓存只进不出，无 remove）必须被报出。
+        val legacyNoEvict = """
+            val resolved = MapperXmlLocator.locateOrUnknown(project, statementId)
+            if (resolved != null) { MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key); return buildMethodMarker(element) }
+            if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+            if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) return buildMethodMarker(element)
+            return null
         """.trimIndent()
-        assertEquals("Java 侧修复前形态必须报红（wiring=false）", false, javaFailureBranchWiring(legacy))
+        assertEquals("Java 侧缓存只进不出必须报红（wiring=false）", false, javaFailureBranchWiring(legacyNoEvict))
 
-        // 扫描面漂移形态：无 locate 调用 → 返回 null（调用方按红处理）。
+        // 扫描面漂移形态：无查询调用 → 返回 null（调用方按红处理）。
         assertNull(javaFailureBranchWiring("return null"))
     }
 
@@ -160,23 +178,25 @@ class MapperXmlSlowResolveFailGuardTest {
     }
 
     /**
-     * 失败分支接线判定：方法体内解析调用（[anchor]）之后的文本里，
-     * F1-a（`resolvedStatementKeys.contains(`）与 F1-b（`isDumbProvider(`）判定必须都存在——
-     * 即两道判定都在解析**之后**（失败分支上）。无解析调用返回 null（调用方按红处理）。
-     * XML 侧锚=`resolveInterfaceMethod(`，Java 侧锚=`MapperXmlLocator.locate(`。
+     * 失败分支接线判定（T-MapperGutterEvict P2.1 起为三态形态）：查询调用（[anchor]）**之前**必须有
+     * dumb 门（`isDumbProvider(`，避免索引重建期查索引），**之后**必须同时有
+     * 「Unknown 保留缓存」（`resolvedStatementKeys.contains(`）与「Absent 收回缓存」
+     * （`resolvedStatementKeys.remove(`）。无查询调用返回 null（调用方按红处理）。
+     * XML 侧锚=`lookupInterfaceMethod(`，Java 侧锚=`MapperXmlLocator.locateOrUnknown(`。
      */
-    private fun failureBranchWiring(body: String, anchor: String = "resolveInterfaceMethod("): Boolean? {
+    private fun failureBranchWiring(body: String, anchor: String = "lookupInterfaceMethod("): Boolean? {
         val resolveIdx = body.indexOf(anchor)
         if (resolveIdx < 0) return null
-        val afterResolve = body.substring(resolveIdx)
-        val f1a = afterResolve.contains("resolvedStatementKeys.contains(")
-        val f1b = afterResolve.contains("isDumbProvider(")
-        return f1a && f1b
+        val before = body.substring(0, resolveIdx)
+        val after = body.substring(resolveIdx)
+        return before.contains("isDumbProvider(") &&
+            after.contains("resolvedStatementKeys.contains(") &&
+            after.contains("resolvedStatementKeys.remove(")
     }
 
     /** Java 侧（`MapperJavaToXmlLineMarkerProvider.createMarker`）的失败分支接线判定。 */
     private fun javaFailureBranchWiring(body: String): Boolean? =
-        failureBranchWiring(body, anchor = "MapperXmlLocator.locate(")
+        failureBranchWiring(body, anchor = "MapperXmlLocator.locateOrUnknown(")
 
     /** 剥行注释与块注释（该文件方法体内只有 // 注释；KDoc 含花括号也不干扰配平）。 */
     private fun stripComments(source: String): String {

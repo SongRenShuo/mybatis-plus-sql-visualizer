@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.ref
 
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
@@ -202,6 +203,34 @@ object MybatisXmlTargets {
         val iface = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return null
         return iface.findMethodsByName(name, true).firstOrNull()
+    }
+
+    /** 接口方法定位三态（T-MapperGutterEvict P2.1 同构，2026-11-16）。 */
+    sealed interface MethodLookup {
+        class Found(val method: PsiMethod) : MethodLookup
+        object Absent : MethodLookup
+        object Unknown : MethodLookup
+    }
+
+    /** 测试缝：替换三态定位（生产＝null）。矩阵用例用它驱动 Unknown / Absent 分支。 */
+    internal var methodLookupOverrideForTest: ((Project, String, String) -> MethodLookup)? = null
+
+    /**
+     * 三态定位——gutter provider 用它区分「暂时查不了」与「确定没有」：前者保留已确认的图标
+     * （F1 的 S2 兜底），后者**收回正缓存并摘图标**（P2.1：删掉接口方法 / 改 `<mapper namespace>`
+     * 后图标不得靠旧记忆续命）。`IndexNotReadyException`（Java 索引重建中）归 [MethodLookup.Unknown]。
+     */
+    fun lookupInterfaceMethod(project: Project?, namespace: String?, methodName: String): MethodLookup {
+        val name = methodName.trim()
+        if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return MethodLookup.Absent
+        methodLookupOverrideForTest?.let { override -> return override(project, namespace, name) }
+        val iface = try {
+            JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project))
+        } catch (e: IndexNotReadyException) {
+            return MethodLookup.Unknown
+        } ?: return MethodLookup.Absent
+        val method = iface.findMethodsByName(name, true).firstOrNull() ?: return MethodLookup.Absent
+        return MethodLookup.Found(method)
     }
 
     /** `property="a.b"` / `<arg property>` 的**首段**字段解析（深层链后续可扩展）。 */

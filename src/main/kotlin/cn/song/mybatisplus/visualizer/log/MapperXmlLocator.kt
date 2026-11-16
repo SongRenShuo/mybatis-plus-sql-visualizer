@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
@@ -38,6 +39,31 @@ import com.intellij.psi.xml.XmlTag
 object MapperXmlLocator {
 
     private val LOG = Logger.getInstance(MapperXmlLocator::class.java)
+
+    /** 定位三态（T-MapperGutterEvict P2.1 同构，2026-11-16）：确定命中 / 确定没有 / 暂时查不了。 */
+    sealed interface Lookup {
+        class Found(val location: Location) : Lookup
+        object Absent : Lookup
+        object Unknown : Lookup
+    }
+
+    /** 测试缝：替换三态定位（生产＝null）。矩阵用例用它驱动 Unknown / Absent 分支。 */
+    internal var lookupOverrideForTest: ((Project, String) -> Lookup)? = null
+
+    /**
+     * 三态定位——供 gutter provider 区分「暂时查不了」与「确定没有」：
+     * 前者保留已确认的图标（F1' 的 S2 兜底），后者**收回正缓存并摘图标**（P2.1）。
+     * `IndexNotReadyException`（索引重建中）归 [Lookup.Unknown]；`ProcessCanceledException` 仍上抛。
+     */
+    fun locateOrUnknown(project: Project, statementId: String): Lookup {
+        lookupOverrideForTest?.let { override -> return override(project, statementId) }
+        val location = try {
+            locate(project, statementId)
+        } catch (e: IndexNotReadyException) {
+            return Lookup.Unknown
+        }
+        return if (location != null) Lookup.Found(location) else Lookup.Absent
+    }
 
     /** 定位结果：mapper XML 文件 + 语句标签起始行（0-based，OpenFileDescriptor 直用）。 */
     data class Location(val virtualFile: VirtualFile, val line: Int)

@@ -44,7 +44,12 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
             runCatching { DumbService.isDumb(project) }.getOrDefault(false)
         }
 
-        internal fun resetResolvedCacheForTest() = resolvedStatementKeys.clear()
+        internal fun resetResolvedCacheForTest() {
+            resolvedStatementKeys.clear()
+            // P2.1 三态测试缝一并复位，防跨用例泄漏（用例用它们驱动 Unknown/Absent 分支）
+            MybatisXmlTargets.methodLookupOverrideForTest = null
+            MapperXmlLocator.lookupOverrideForTest = null
+        }
     }
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? = null
@@ -83,19 +88,27 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         if (tag.parentTag?.name != "mapper") return null
         val namespace = MybatisXmlTargets.rootNamespace(tag.containingFile) ?: return null
         val id = tag.getAttributeValue("id")?.takeIf { it.isNotBlank() } ?: return null
-        // F1 判定顺序（①成功入缓存 ②失败+缓存命中 ③失败+dumb 乐观 ④失败+其余不产出）见类头注释。
-        // 注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
+        // T-MapperGutterEvict P2.1（2026-11-16）：五段判定——
+        // ① dumb 窗乐观产出（不查 Java 索引，不入缓存）
+        // ② 确定存在 → 入正缓存并产出
+        // ③ 暂时查不了（索引重建中）→ 缓存命中仍产出、不动缓存（F1-a/S2 兜底）
+        // ④ 确定不存在（接口方法删了 / namespace 改了）→ 收回缓存并摘图标（P2.1）
+        // ⑤ 其余不产出。注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
         val key = "$namespace#$id"
         val project = element.project
-        val resolved = MybatisXmlTargets.resolveInterfaceMethod(project, namespace, id)
-        if (resolved != null) {
-            resolvedStatementKeys.add(key)
-            return buildStatementMarker(element)
+        if (isDumbProvider(project)) return buildStatementMarker(element)
+        return when (MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id)) {
+            is MybatisXmlTargets.MethodLookup.Found -> {
+                resolvedStatementKeys.add(key)
+                buildStatementMarker(element)
+            }
+            MybatisXmlTargets.MethodLookup.Unknown ->
+                if (resolvedStatementKeys.contains(key)) buildStatementMarker(element) else null
+            MybatisXmlTargets.MethodLookup.Absent -> {
+                resolvedStatementKeys.remove(key)
+                null
+            }
         }
-        // —— 解析失败分支（F1-a/F1-b 全部落在这里，缺一即回退成旧「解析失败即摘图标」形态）——
-        if (resolvedStatementKeys.contains(key)) return buildStatementMarker(element) // F1-a
-        if (isDumbProvider(project)) return buildStatementMarker(element) // F1-b
-        return null
     }
 
     private fun buildStatementMarker(element: XmlToken): LineMarkerInfo<*> = LineMarkerInfo(
@@ -153,19 +166,21 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         // 注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
         val key = "$namespace#${method.name}"
         val project = element.project
-        val resolved = MapperXmlLocator.locate(project, "$namespace.${method.name}")
-        if (resolved != null) {
-            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
-            return buildMethodMarker(element)
+        // T-MapperGutterEvict P2.1（2026-11-16）：与 XML 侧同构五段式——dumb 乐观 / 确定存在入缓存 /
+        // 暂时查不了保留缓存命中 / 确定不存在收回缓存并摘图标。dumb 门前移，避免在索引重建期查索引。
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+        return when (MapperXmlLocator.locateOrUnknown(project, "$namespace.${method.name}")) {
+            is MapperXmlLocator.Lookup.Found -> {
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
+                buildMethodMarker(element)
+            }
+            MapperXmlLocator.Lookup.Unknown ->
+                if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) buildMethodMarker(element) else null
+            MapperXmlLocator.Lookup.Absent -> {
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key)
+                null
+            }
         }
-        // —— 解析失败分支（与 XML 侧同构：缓存命中/dumb 乐观产出，缺一即回退成旧「解析失败即缺席」形态）——
-        if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) {
-            return buildMethodMarker(element) // F1-a：XML 侧确认过的语句双向受益
-        }
-        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) {
-            return buildMethodMarker(element) // F1-b：dumb 窗乐观产出，smart 后重跑自愈
-        }
-        return null
     }
 
     private fun buildMethodMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(
