@@ -104,8 +104,6 @@ public interface UserMapper { void selectById(); }""",
 
     fun testDumb_日志跳转_resolveXml_未命中且smart恢复后命中() {
         addMapperXml()
-        cn.song.mybatisplus.visualizer.log.MapperXmlLocator.clearFileListCacheForTest()
-        val before = cn.song.mybatisplus.visualizer.log.MapperXmlLocator.indexScanCount.get()
         val entry = cn.song.mybatisplus.visualizer.log.LogSqlEntry(
             rawSql = "SELECT 1",
             restoredSql = "SELECT 1",
@@ -117,15 +115,12 @@ public interface UserMapper { void selectById(); }""",
             cn.song.mybatisplus.visualizer.log.LogEntryJumpOps.resolveXml(project, entry)
         }
         assertNull("dumb 态日志跳转应未命中（不抛不静默成功）", dumbTarget)
-        // smart 恢复后：必须重新扫描并命中——dumb 态的空结果不得进 5s TTL 单槽
+        // smart 恢复后：必须重新解析并命中——dumb 态的空结果不得固化（F1''' 起
+        // 清单走 MapperNamespaceIndex 平台增量，T-PS5-05 单槽 TTL 缓存与
+        // indexScanCount/clearFileListCacheForTest 计数缝随该机制整体退役）
         val smartTarget = cn.song.mybatisplus.visualizer.log.LogEntryJumpOps.resolveXml(project, entry)
-        assertNotNull("smart 恢复后日志跳转应命中（空表不得被缓存）", smartTarget)
+        assertNotNull("smart 恢复后日志跳转应命中（空结果不得被缓存）", smartTarget)
         assertEquals("UserMapper.xml", smartTarget!!.virtualFile.name)
-        assertEquals(
-            "dumb 调用不计为有效扫描：smart 恢复后全扫恰一次（dumb 空槽 + smart 重扫）",
-            1,
-            cn.song.mybatisplus.visualizer.log.MapperXmlLocator.indexScanCount.get() - before,
-        )
     }
 
     // ------------------------------------------------------------------
@@ -134,20 +129,13 @@ public interface UserMapper { void selectById(); }""",
 
     fun testDumb_gutter双跳_MapperXmlLocator_locate_未命中且smart恢复后命中() {
         addMapperXml()
-        cn.song.mybatisplus.visualizer.log.MapperXmlLocator.clearFileListCacheForTest()
-        val before = cn.song.mybatisplus.visualizer.log.MapperXmlLocator.indexScanCount.get()
         val dumbLoc = inDumb {
             cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
         }
         assertNull("dumb 态 gutter 跳转应未命中（不抛不静默成功）", dumbLoc)
         val smartLoc = cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-        assertNotNull("smart 恢复后 gutter 跳转应命中（空表不得被缓存）", smartLoc)
+        assertNotNull("smart 恢复后 gutter 跳转应命中（空结果不得被缓存）", smartLoc)
         assertEquals("UserMapper.xml", smartLoc!!.virtualFile.name)
-        assertEquals(
-            "smart 恢复后全扫恰一次（dumb 空表不入槽）",
-            1,
-            cn.song.mybatisplus.visualizer.log.MapperXmlLocator.indexScanCount.get() - before,
-        )
     }
 
     fun testDumb_gutter双跳_MybatisXmlTargets_resolveClass_resolveInterfaceMethod_返回null() {
