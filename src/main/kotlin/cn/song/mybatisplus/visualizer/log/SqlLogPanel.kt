@@ -1035,7 +1035,11 @@ class SqlLogPanel(
         _toolbarRef = toolbar // 保存引用供 capturing 监听刷新
 
         updateTypeFilterButton()
-        updateSortButtonText()
+        // 构造期**不刷工具栏**：此刻 toolbar 还没 addNotify，平台的 updateActionsImmediately 会被
+        // 直接忽略并记一条 WARN + Throwable（`'cn.song.mybatisplus.visualizer.log.toolbar' toolbar
+        // manual update is ignored. Newly created toolbars are updated automatically on addNotify`）——
+        // 2026-11-16 真机 idea.log 取证。排序动作的文案/tooltip 由 sortModeAction.update() 在平台
+        // 首次 addNotify 更新时算出，这里刷本来就是空操作（见 refreshSortAction 注释）。
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
         // 左侧动作图标组（CENTER）+ 右侧列表控制组（EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选在最右）。
         // T-SqlListSortRight（2026-10-14 用户两轮校正）：排序**并入左侧动作组**（组内最后一个动作），
@@ -2246,17 +2250,15 @@ class SqlLogPanel(
         refreshSortAction()
     }
 
-    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
+    /**
+     * 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip「排序：<方式>」承载）。
+     *
+     * 只用于**已上屏**的调用点（用户改排序方式后）。**禁止在构造期调用**——此时工具栏还没
+     * addNotify，平台会忽略这次刷新并记一条 WARN + Throwable（T-DebugLogNoise，2026-11-16）。
+     * 文案本身由 [sortModeAction] 的 update 输出，首次 addNotify 更新即正确。
+     */
     private fun refreshSortAction() {
         _toolbarRef?.updateActionsImmediately()
-    }
-
-    /**
-     * 排序动作文案 = 当前方式标签（见 [sortModeAction] 的 update：进 presentation.text 与 tooltip）。
-     * 工具窗工具栏按惯例只渲染图标，故当前方式实际由 tooltip「排序：<方式>」与菜单选中态承载。
-     */
-    private fun updateSortButtonText() {
-        refreshSortAction()
     }
 
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {

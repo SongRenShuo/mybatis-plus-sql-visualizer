@@ -467,8 +467,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     }
 
     /**
-     * 输入防抖到期：BGT 跑一遍扫描（合法性 + 包发现），EDT 回渲染状态行。
-     * 只动 [localDirStatusLabel]，**不翻状态机**——状态机只在用户点「检测本地更新」或启动检测时前进。
+     * 输入防抖到期：BGT 跑一遍扫描（合法性 + 包发现），EDT 回渲染状态行 + **写穿持久化**
+     * （T-LocalDirPersist：合法目录与删空即存，不依赖 OK/Apply——真机 2026-11-14 反馈
+     * 「每次都需要调」的根因是主流程没有任何保存点）。
+     * 只动 [localDirStatusLabel] 与 localUpdateDir 配置，**不翻状态机**。
      */
     private fun validateLocalDirAsync() {
         val dirRaw = localDirField.text
@@ -476,11 +478,33 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             val result = runCatching { localScanRunner(dirRaw) }.getOrElse {
                 ScanResult.Failed(it.message ?: it.toString())
             }
+            // 写穿值在 BGT 决议（需要 FS 判定，禁上 EDT）；null = 错误态不写穿
+            val persistValue: String? = when (result) {
+                is ScanResult.DirInvalid, is ScanResult.Failed -> null
+                ScanResult.Disabled -> ""
+                else ->
+                    // Available/UpToDate/Empty/NoValidPackage ⇒ 目录层已判 Ok；重取归一路径
+                    (LocalUpdateDir.parse(dirRaw, platformPluginsDir()) as? LocalUpdateDir.DirCheck.Ok)?.dir?.toString()
+            }
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                 // 不按 isDisplayable 丢弃：面板在懒加载的配置页里可能尚未挂载，丢弃会让状态行
                 // 永久停在旧读数（真机 2026-11-12 症状之一）。设置文本本身无副作用。
                 renderLocalDirStatus(result)
+                persistValue?.let { writeThrough(it) }
             }
+        }
+    }
+
+    /**
+     * 写穿持久化（T-LocalDirPersist）：换引用强制落盘（照 apply 的实证纪律——原地改可能
+     * 不被 XmlSerializer 检测到），幂等（同值不触发持久化周期），并把归一值回写输入框
+     * 使 `isModified` 归零（路径已落盘，无「待应用」的东西）。
+     */
+    private fun writeThrough(normalized: String) {
+        if (normalized == settings.state.localUpdateDir) return
+        settings.loadState(settings.state.copy(localUpdateDir = normalized))
+        if (localDirField.text != normalized) {
+            localDirField.text = normalized
         }
     }
 

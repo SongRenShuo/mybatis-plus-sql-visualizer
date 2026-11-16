@@ -507,6 +507,71 @@ class UpdateSectionTest : BasePlatformTestCase() {
         )
     }
 
+    // ------------------------------------------------------------------
+    // T-LocalDirPersist：写穿持久化（合法目录/删空即存，错误态不存）
+    // ------------------------------------------------------------------
+
+    private fun writeThroughValidDir(): java.io.File {
+        val dir = createTempDir("mpvs-persist-")
+        writeFakePluginZip(dir, "2099.1.1")
+        section.localDirField.text = dir.absolutePath
+        waitForLocalStatusContains("已找到")
+        return dir
+    }
+
+    /** 合法目录：防抖校验落地后必须已写穿 state（不依赖 OK/Apply），且字段回填归一值。 */
+    fun testLocalDirWriteThroughOnValidDir() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.localUpdateDir
+        try {
+            settings.state.localUpdateDir = ""
+            section.resetState()
+            val dir = writeThroughValidDir()
+            val normalized = dir.toPath().toAbsolutePath().normalize().toString()
+            assertEquals("合法目录必须写穿 state", normalized, settings.state.localUpdateDir)
+            assertEquals("输入框应回填归一值（isModified 随之归零）", normalized, section.localDirField.text)
+        } finally {
+            settings.state.localUpdateDir = old
+            section.disposeUiResources()
+        }
+    }
+
+    /** 删空输入框＝显式关闭：Disabled 态允许写穿空值（D-4）。 */
+    fun testLocalDirWriteThroughOnDisabled() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.localUpdateDir
+        try {
+            settings.state.localUpdateDir = ""
+            section.resetState()
+            writeThroughValidDir()
+            section.localDirField.text = ""
+            waitForLocalStatus(MpSqlVisualizerBundle.message("settings.update.local.disabled"))
+            assertEquals("删空应写穿空值（显式关闭被记住）", "", settings.state.localUpdateDir)
+        } finally {
+            settings.state.localUpdateDir = old
+            section.disposeUiResources()
+        }
+    }
+
+    /** 错误态不写穿：已有合法值不被中间错误路径覆盖（D-2）。 */
+    fun testLocalDirErrorStateNotWriteThrough() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.localUpdateDir
+        try {
+            settings.state.localUpdateDir = ""
+            section.resetState()
+            val dir = writeThroughValidDir()
+            val persisted = settings.state.localUpdateDir
+            section.localDirField.text = "not-an-absolute-path"
+            waitForLocalStatus(MpSqlVisualizerBundle.message("settings.update.local.relative"))
+            assertEquals("错误态不得覆盖已写穿的合法值", persisted, settings.state.localUpdateDir)
+            assertEquals("已写穿的合法值不受影响", dir.toPath().toAbsolutePath().normalize().toString(), persisted)
+        } finally {
+            settings.state.localUpdateDir = old
+            section.disposeUiResources()
+        }
+    }
+
     private fun waitForLocalStatusContains(needle: String) {
         val deadline = System.currentTimeMillis() + 8_000
         while (!section.localDirStatusLabel.text.contains(needle) && System.currentTimeMillis() < deadline) {
