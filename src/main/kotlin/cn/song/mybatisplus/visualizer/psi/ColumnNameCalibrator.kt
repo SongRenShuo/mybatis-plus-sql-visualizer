@@ -353,6 +353,9 @@ object ColumnNameCalibrator {
             return
         }
         if (project == null) return
+        // §18（2026-11-13 14:47 真机）：索引期不投递 schema 预热——那会儿数据源模型同样没加载，
+        // 830 张表逐张投递只会刷出 830 条「模型冷跳过」，纯噪音；索引就绪后的下一次重绘会自然补。
+        if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) return
         inFlightPrefetch.incrementAndGet()
         val future = runCatching {
             ApplicationManager.getApplication()?.executeOnPooledThread {

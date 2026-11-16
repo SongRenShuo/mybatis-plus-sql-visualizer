@@ -97,4 +97,63 @@ class McpSourceLocatorRenderAtLineTest : BasePlatformTestCase() {
         val error = outcome.error.orEmpty()
         assertTrue("超界应报 beyond the end: $error", error.contains("beyond the end"))
     }
+
+    // ------------------------------------------------------------------
+    // T-IbatisCallPreview：iBatis 两条定位面（sqlMap 语句 / DAO 调用行）
+    // ------------------------------------------------------------------
+
+    private val sqlMap = """
+        <sqlMap namespace="User">
+            <select id="selectById">SELECT ID FROM T_USER WHERE ID = #id#</select>
+        </sqlMap>
+    """.trimIndent()
+
+    private val ibatisDao = """
+        package cn.demo;
+        public class UserDaoImpl {
+            private Object client;
+            public Object selectById(int id) {
+                return client.queryForObject("User.selectById", id);
+            }
+        }
+    """.trimIndent()
+
+    private fun render(relPath: String, line: Int?): McpSourceLocator.Outcome =
+        McpSourceLocator.renderAtLine(project, relPath, line)
+
+    /**
+     * sqlMap 用 `addFileToProject` 进项目索引（namespace → 文件解析走 `FileTypeIndex`）；
+     * 磁盘 `writeMapper` 造的文件不保证进 **FileTypeIndex**（既有 mapper 用例只走「路径 → PSI」，
+     * 不查索引，所以没暴露）。Java DAO 仍写磁盘（`McpFilePathResolver` 按 basePath 解析绝对路径）。
+     */
+    private fun addSqlMap(): com.intellij.psi.PsiFile = myFixture.addFileToProject("sqlmap/User.xml", sqlMap)
+
+    fun testiBatis_sqlMap语句行走iBatis渲染() {
+        // 本用例只走「路径 → PSI → 标签直渲」，不查 FileTypeIndex，写磁盘即可
+        writeMapper("sqlmap/User.xml", sqlMap)
+        val outcome = render("sqlmap/User.xml", 2)
+        assertNull("iBatis sqlMap 语句行应命中: ${outcome.error}", outcome.error)
+        assertTrue(
+            "sourceType 应以 iBatis sqlMap 起头: ${outcome.sourceType}",
+            outcome.sourceType.orEmpty().startsWith("iBatis sqlMap"),
+        )
+        assertTrue("应渲染出 iBatis SQL: ${outcome.sql}", outcome.sql.orEmpty().contains("FROM T_USER"))
+        assertTrue("参数名应来自 #id#: ${outcome.paramTable}", outcome.paramTable.orEmpty().contains("id"))
+    }
+
+    fun testiBatis_Java调用行与方法定义行() {
+        addSqlMap()
+        writeMapper("cn/demo/UserDaoImpl.java", ibatisDao)
+
+        // 调用行（`return client.queryForObject("User.selectById", id);`）
+        val callOutcome = render("cn/demo/UserDaoImpl.java", 5)
+        assertNull("iBatis 调用行应命中: ${callOutcome.error}", callOutcome.error)
+        assertEquals("iBatis (User.selectById)", callOutcome.sourceType)
+        assertTrue("应渲染出 iBatis SQL: ${callOutcome.sql}", callOutcome.sql.orEmpty().contains("FROM T_USER"))
+
+        // 方法定义行（方法体内恰一条 iBatis 调用 → 方法级回落）
+        val methodOutcome = render("cn/demo/UserDaoImpl.java", 4)
+        assertNull("iBatis 方法定义行应命中: ${methodOutcome.error}", methodOutcome.error)
+        assertEquals("iBatis (User.selectById)", methodOutcome.sourceType)
+    }
 }

@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.xml.EwPlaceholder
 import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -31,6 +33,8 @@ import com.intellij.psi.util.PsiTreeUtil
  */
 object XmlEwResolver {
 
+    private val LOG = Logger.getInstance(XmlEwResolver::class.java)
+
     /** 解析结果：变量名 → mock 属性值（customSqlSegment/sqlSelect/sqlSet 片段）。 */
     fun resolve(
         namespace: String?,
@@ -39,7 +43,19 @@ object XmlEwResolver {
         project: Project,
         warnings: MutableList<String>,
         callFinder: (PsiMethod) -> List<PsiElement> = { method ->
-            ReferencesSearch.search(method).findAll().map { it.element }
+            // T-StartupReadLockFreeze S5（同族面）：`ReferencesSearch` 依赖索引，索引构建期会同步等待
+            // ——预览装配线程在这里持锁等索引，撞上 EDT 的写锁升级就是冻结（计划 §三）。
+            // 与 MapperNavigationTargets 同口径：dumb 时降级为空（预览退回占位提示），不做检索。
+            val startedMs = System.currentTimeMillis()
+            if (DumbService.isDumb(method.project)) {
+                LOG.info(
+                    "[m2] resolve skip reason=dumb-mode stage=ew-refs " +
+                        "elapsedMs=${System.currentTimeMillis() - startedMs} method=${method.name}",
+                )
+                emptyList()
+            } else {
+                ReferencesSearch.search(method).findAll().map { it.element }
+            }
         },
     ): Map<String, Map<String, String>> {
         if (placeholders.isEmpty()) return emptyMap()

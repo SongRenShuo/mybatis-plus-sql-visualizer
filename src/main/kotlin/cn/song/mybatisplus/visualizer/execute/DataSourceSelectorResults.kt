@@ -341,10 +341,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 断言实证，栈见 createTempPsiFileAsync KDoc）——**EDT 上只做派发**，结果经
     // invokeLater(nonModal) 回到 EDT 续接准备链（弹窗/内嵌控制台/结果面板仍全部在 EDT）。
     // 契约影响：本函数的后续全链已迁入 [continuePrepareAfterTempFile]，由 onReady 驱动。
-    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp ->
+    createTempPsiFileAsync(project, submitSql, dialectGateRequest?.renderedDialectName) { temp, failureReason ->
         continuePrepareAfterTempFile(
             project = project,
             temp = temp,
+            failureReason = failureReason,
             sql = sql,
             submitSql = submitSql,
             executeAfterPrepare = executeAfterPrepare,
@@ -386,6 +387,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
 internal fun DataSourceSelector.continuePrepareAfterTempFile(
     project: Project,
     temp: Pair<VirtualFile, PsiFile>?,
+    /** [createTempPsiFileAsync] 就地捕获的失败阶段原因（优先于跨线程共享的 `lastTempFileFailure`） */
+    failureReason: String? = null,
     sql: String,
     submitSql: String,
     executeAfterPrepare: Boolean,
@@ -414,9 +417,10 @@ internal fun DataSourceSelector.continuePrepareAfterTempFile(
     if (temp == null) {
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
-        LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
+        val reason = failureReason ?: lastTempFileFailure ?: "unknown"
+        LOG.warn("[M36] createTempPsiFile failed (reason=$reason), abort")
         failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null,
-            MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
+            MpSqlVisualizerBundle.message("execute.tempFile.failed", reason))
         callback?.invoke(false)
         return
     }
@@ -1246,13 +1250,18 @@ internal fun DataSourceSelector.dumpSplitBounds(sp: javax.swing.JSplitPane, log:
  * `onError(String)`；两者**互斥**，不再先后各投一次。
  *
  * **为什么必须互斥**（T-ELU-01 实测的真相，与计划 §一.1 的「按钮可见但点了没反应」不同）：
- * 消费方 `SqlPreviewPanel` 的 `onError` 恒为 `resultPanel.showError(errorMsg)`，而
+ * 消费方 `SqlPreviewPanel` 的 `onError` 早先是 `resultPanel.showError(errorMsg)`，而
  * `showError` 会清掉定位动作与定位按钮（`ui/SqlResultPanel.kt` 的
  * `locateHandler = null` + `errorLocateButton.isVisible = false`）。原实现先投富通道
  * （`showErrorRich` 置按钮可见）、紧接着无条件投旧通道——**同一 EDT 任务内**后者立刻把
  * 前者抹掉，端态恒为「按钮不可见」，T-ELU-01 的「先解析后显隐」因此形同 no-op。
  * 两者呈现的文本同源（富通道 `showErrorRich` 内部就是 `showError(info.message)`），
  * 故富通道成功时不再投旧通道，展示行为等价而定位态得以保留。
+ *
+ * **F9 订正（2026-11-11）**：`onError` 现在**不再**恒为 `showError`——执行回调统一走
+ * `showTempFileError`（临时文件失败要挂成因与蓝字入口），无成因时才退回 `showError`。
+ * 上面那段「恒为 showError」的旧假设也正是临时文件失败在「直接点执行」上从不显示蓝字的根因：
+ * 五个执行调用点里只有两处接了对的回调。
  *
  * 富通道自身抛异常（`runCatching`）时**回退旧通道**——不让「结构化」这一增强把错误呈现吞掉。
  *
@@ -1708,20 +1717,29 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
     project: Project,
     sql: String,
     renderedDialectName: String? = null,
-    onReady: (Pair<VirtualFile, PsiFile>?) -> Unit,
+    onReady: (Pair<VirtualFile, PsiFile>?, String?) -> Unit,
 ) {
     val app = ApplicationManager.getApplication()
+    // T-ExecPsiGate F3（2026-11-11 验收失败）：失败原因**在失败现场就地捕获**、随回调带回。
+    // 原实现让 EDT 续接去读 `lastTempFileFailure` 这个共享字段——而预热链在入口会把它清空
+    // （预热与冷路径并发时，用户看到的就是「创建临时 SQL 文件失败：unknown」）。
+    fun runSlow(report: (Pair<VirtualFile, PsiFile>?, String?) -> Unit) {
+        val pair = createTempPsiFile(project, sql, renderedDialectName)
+        val reason = if (pair == null) lastTempFileFailure else null
+        // T-PreviewOpenPerfM2 M7：PSI 有效性校验留在**后台**完成，EDT 只做回调投递。
+        // `psi.isValid` 会触发 `WorkspaceFileIndexDataImpl.ensureIsUpToDate`（平台标注的慢操作），
+        // 在 EDT 上调用会被 SlowOperations 断言拦下并记「Plugin to blame: SQL Visualizer」
+        // （真机 2026-11-12 11:08:53 SEVERE，栈落在下面这个函数里）。
+        val revalidated = revalidate(project, pair)
+        app.invokeLater({ report(revalidated, reason) }, ModalityState.nonModal())
+    }
     if (!app.isDispatchThread) {
         // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
         // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
-        val pair = createTempPsiFile(project, sql, renderedDialectName)
-        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
+        runSlow(onReady)
         return
     }
-    app.executeOnPooledThread {
-        val pair = createTempPsiFile(project, sql, renderedDialectName)
-        app.invokeLater({ onReady(revalidateOnEdt(project, pair)) }, ModalityState.nonModal())
-    }
+    app.executeOnPooledThread { runSlow(onReady) }
 }
 
 /**
@@ -1736,12 +1754,14 @@ internal fun DataSourceSelector.createTempPsiFileAsync(
  * 兜底口径：**只有 PSI 失效才重解析**（有效即原样返回，热路径零额外开销）；重解析仍失败则
  * 按建链失败返回 null（续接链会走既有失败文案，不把死 PSI 递进 Runner 枚举）。
  *
- * 线程契约（UI-002）：本函数在 **EDT**（write-safe 投递内）执行，但 `psi.isValid` / `findFile`
- * 都是 PSI API，**读权限一律显式取**——不依赖 EDT 隐式读权限（新线程模型下
- * `Application.isReadAccessAllowed()` 只看本线程读许可；`TransactionGuard` 的 write-safe 只放开
- * 文档写、不放读）。后台误调本函数也不会打平台读锁断言。
+ * 线程契约（T-PreviewOpenPerfM2 M7 修订）：本函数在**后台**执行（原设计是 EDT + 显式读锁）。
+ * `psi.isValid` 内部会走 `FileManagerImpl.evaluateValidity → shouldResurrect → createFile →
+ * findDirectory → isUnderIgnored → WorkspaceFileIndexDataImpl.ensureIsUpToDate`——**平台明确标注
+ * 的慢操作**；在 EDT 上调用会被 `SlowOperations` 断言拦下，并给插件记一条
+ * 「Plugin to blame: SQL Visualizer」（真机 2026-11-12 11:08:53 SEVERE 实证）。
+ * 后台线程天然豁免该断言，读权限仍显式取（与 UI-002 同口径）。
  */
-internal fun revalidateOnEdt(
+internal fun revalidate(
     project: Project,
     pair: Pair<VirtualFile, PsiFile>?,
 ): Pair<VirtualFile, PsiFile>? {
@@ -1784,8 +1804,12 @@ internal fun DataSourceSelector.createTempPsiFile(
     // 由它派发到池线程；[prewarmExecTempFileInner] 走同款 BGT 裸调形态。
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
-    fun fail(stage: String, detail: String = ""): Nothing? {
-        lastTempFileFailure = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+    // F8：成因**编码进文案本身**（` [hint=XXX]`）。前几轮靠共享字段传递被三种机制各打掉一次
+    //（预热入口清空 / 并发覆盖 / 第二次渲染时读方清空）；文案怎么走、成因就怎么走，见 withExecHint。
+    fun fail(stage: String, detail: String = "", hint: ExecPsiFailureCause? = null): Nothing? {
+        val reason = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+        lastTempFileFailure = withExecHint(reason, hint)
+        if (hint != null) lastTempFileHintRecord = TempFileHintRecord(stage, hint)
         LOG.warn("[M36] createTempPsiFile FAILED at $stage${if (detail.isNotEmpty()) " ($detail)" else ""}")
         return null
     }
@@ -1795,8 +1819,16 @@ internal fun DataSourceSelector.createTempPsiFile(
     // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
     // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
     // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
+    //
+    // T-ExecPsiGate F6（2026-11-11 用户定案，两次同一口径）：**落点不改写**——`.idea` 仍是默认，
+    // 建不出 PSI 时把原因与修复入口摆给用户，只有用户点了「改用项目根落点重试」才走备用落点。
+    // 本轮曾实现「探针判否就自动换项目根」，被用户否掉：自动改写会把项目配置的问题藏起来，
+    // 与 13.11 的定案相悖。真机读数（IU-263.7307.200，`.idea/sql-visualizer/exec`）：
+    //   dirPsi=false, dirExcluded=true, dirUnderIgnored=true, inContent=false, regHideExcluded=false
+    // 所以失败文案必须**说清这一档**并给出可点的兜底入口（F5 的 DIR_NOT_INDEXED / IGNORED_BY_VCS）。
+    val preferRoot = project in execRootFallbackProjects
     val ioFile = try {
-        projectExecFile(project, sql)
+        projectExecFile(project, sql, preferProjectRoot = preferRoot)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
@@ -1866,7 +1898,15 @@ internal fun DataSourceSelector.createTempPsiFile(
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e
         null
-    }) ?: return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf))
+    }) ?: run {
+        // F6：成因随「阶段 + 成因」成对记下——失败文案＋面板蓝色可点入口都靠它，
+        // 且读方不清空、下一次带成因的失败才覆盖（见 TempFileHintRecord）。
+        // **永不落 null**：归因面自己抛异常时退到 UNKNOWN，而 UNKNOWN 也带落点入口——
+        // 真机第三/四轮的「只剩红字」都是这条链上的 null 造成的。
+        val hint = runCatching { execPsiFailureCauseNow(project, vf) }.getOrNull()
+            ?: ExecPsiFailureCause.UNKNOWN
+        return fail("findPsiAfterHeal", execPsiDiagnostics(project, vf), hint)
+    }
     // 自愈可能换了一个新 vf（vf 失效重定位），缓存与后续 attach 必须用同一个
     val effectiveVf = runCatching { psi.virtualFile }.getOrNull() ?: vf
     // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
@@ -1944,17 +1984,155 @@ internal fun DataSourceSelector.healExecPsi(
                 "(was=$before, cleared=$cleared): ${vf.name}",
         )
     }
-    return healed
+    if (healed != null) return healed
+    // 支 3（R4，2026-11-11 双平台真机五元组驱动）：清映射没用 ⇒ 毒源不是**我们写的**映射，
+    // 而是**继承来的**方言——项目根目录映射 / 全局默认 SQL 方言（Settings → SQL Dialects）/
+    // `SqlDialectPusher` 按数据源推的方言。这三者都靠“没有显式映射”生效，所以清掉我们的映射
+    // 反而把它们请回来了：PSI 语言依旧没有可用 ParserDefinition，findFile 恒 null。
+    // 唯一能覆盖继承值的手段是**显式钉一个已知可建 SQL PSI 的方言**（`canCreateSqlPsiFor` 判过）。
+    for (pinId in listOf(ExecDialectRouting.MYSQL_LANGUAGE_ID, ExecDialectRouting.GENERIC_LANGUAGE_ID)) {
+        val pinLanguage = runCatching { DialectPreMapping.languageById(project, pinId) }.getOrNull() ?: continue
+        if (!canCreateSqlPsiFor(pinLanguage)) continue
+        val mapped = runCatching { DialectPreMapping.ensureMapped(project, vf, pinLanguage, false) }.getOrDefault(false)
+        if (!mapped) continue
+        val pinned = runCatching { findExecPsi(project, vf) }.getOrNull()
+        if (pinned != null) {
+            LOG.warn(
+                "[M36][T-ExecPsiGate] exec PSI rebuilt by PINNING dialect '$pinId' — the poison was an " +
+                    "INHERITED dialect (project-root mapping / global default / pusher), not our own: ${vf.name}",
+            )
+            return pinned
+        }
+    }
+    LOG.warn(
+        "[M36][T-ExecPsiGate] exec PSI still unavailable after pinning MySQL/GenericSQL — " +
+            "inherited=${runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()}: ${vf.name}",
+    )
+    // 注意（2026-11-11 用户定案）：这里**不再自动换落点**。`.sql-visualizer` 是兜底而不是默认——
+    // 由用户在失败行上点「改用项目根落点重试」触发（那一支会先把项目记进
+    // [DataSourceSelector.execRootFallbackProjects]，之后执行直接走备用落点）。自动换落点会把
+    // 用户项目配置的问题藏起来，正是要避免的。
+    return null
 }
 
 /**
- * T-ExecPsiGate：`findFile` 失败的**五元组诊断**（进用户可见失败文案的 {0}）。
+ * T-ExecPsiGate 13.12：**目录级**的成因判定（给「预览自动兜底」的告知文案用）。
+ *
+ * 与 [execPsiFailureCauseNow] 的区别：那个判的是**文件**（还要看语言/方言），这里判的是**目录**——
+ * 预览在选出临时目录那一刻文件还没建出来，只能看「这层目录在平台内容模型里的待遇」。
+ * 语言判据给中性值（`GenericSQL` + `canPsiActual=true`），让它落到 UNKNOWN 而不是误报方言问题。
+ *
+ * F5（2026-11-11 真机）：**目录级探针的结论必须显式带进判定**。否则文件级四项谓词全绿时这里仍落
+ * UNKNOWN，调用方（失败文案）就只剩红字、没有任何可点入口——这正是用户第二轮的验收问题。
+ *
+ * @return null = 该目录能建 PSI（或探不出来，保守按能）；非 null = 已经落到备用落点，值为成因
+ */
+internal fun execDirFailureCause(project: Project, dir: java.io.File): ExecPsiFailureCause? {
+    if (execDirCanHostPsi(project, dir)) return null
+    val dirVf = runCatching { LocalFileSystem.getInstance().findFileByIoFile(dir) }.getOrNull() ?: return null
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    return classifyExecPsiFailure(
+        excluded = runCatching { fileIndex.isExcluded(dirVf) }.getOrDefault(false),
+        regHideExcluded = runCatching {
+            com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+        }.getOrDefault(false),
+        fileTypesIgnored = runCatching {
+            com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf)
+        }.getOrDefault(false),
+        underIgnored = runCatching { fileIndex.isUnderIgnored(dirVf) }.getOrDefault(false),
+        psiLangId = "GenericSQL",
+        canPsiActual = true,
+        dirCanHostPsi = false,
+    )
+}
+
+/** F6：主落点目录（`<base>/.idea/sql-visualizer/exec`）——**只算路径**，不建目录、不写盘。 */
+internal fun execPrimaryDir(project: Project): java.io.File? {
+    val base = project.basePath ?: return null
+    val sep = java.io.File.separator
+    return java.io.File(base, ".idea$sep${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${sep}exec")
+}
+
+/**
+ * T-ExecPsiGate R6（2026-11-11 用户真机）：**项目根备用执行文件**。
+ *
+ * 用户实测（UOS + Mac，同一个项目）：同一个 `mpsql-exec.sql`，**放桌面（项目外）用数据源右键
+ * script 能正常执行**，只要放 `.idea/` 下就必报 `findPsi ... null`——即那台机器上 `.idea` 里的
+ * `.sql` 建不出 PSI（`.idea` 被标成 excluded，或平台把它当配置目录对待）。
+ *
+ * 本函数给出一条「仍在项目内容根内、但不在 `.idea` 下」的落点：
+ * `<projectBase>/.sql-visualizer/exec/mpsql-exec.sql`。目录里顺手写一份 `.gitignore`（内容 `*`），
+ * 免得污染用户的 `git status`。**F6 起由落点探针自动选中**（`decideExecLandingRoot`），
+ * 之后由 [DataSourceSelector.execRootFallbackProjects] 记住，后续执行直接走这条路。
+ */
+internal fun projectRootExecFile(project: Project, sql: String): java.io.File? =
+    DataSourceSelector.projectExecFile(project, sql, preferProjectRoot = true)
+
+/**
+ * T-ExecPsiGate：`findFile` 失败的**诊断串**（进用户可见失败文案的 {0}）。
  *
  * 平台 `FileManagerImpl.findFile` 只有三条 null 分支（目录 / vf 无效 / PSI 创建被拒），三条
  * 在用户侧的表现完全相同（都只是 null）。原文案只带文件名，真机日志与用户反馈都无法区分——
- * 2026-11-10 的 Mac / UOS 报障就卡在这里。五项一次给全：vf 有效性、是否目录、文件类型、
- * 当前生效映射到的语言、该语言能否建 SQL PSI（附绝对路径便于回传）。
+ * 2026-11-10 的 Mac / UOS 报障就卡在这里。
+ *
+ * **R4 补两字段（2026-11-11）**：真机五元组显示 `vfValid=true / mappedLang=null` 却仍拿不到 PSI，
+ * 说明决定 PSI 语言的是**继承来的**方言（项目根目录映射 / 全局默认 SQL 方言 / pusher 按数据源推的
+ * 方言）——只报「显式映射」等于什么都没说。故加 `inheritedLang` 与它的 `canPsiInherited`：
+ * 前者为空而后者 false 时，基本可以直接判「这台机器的继承方言建不出 SQL PSI」。
  */
+/**
+ * T-ExecPsiGate 13.10：把当前观测值交给纯函数 [classifyExecPsiFailure]，得「为什么建不出 PSI」。
+ *
+ * 观测面与 2026.3 平台闸门（`AbstractFileViewProvider.shouldCreatePsi`）一一对应：
+ * `ProjectFileIndex.isExcluded` / `Registry("ide.hide.excluded.files")` / `FileTypeManager.isFileIgnored` /
+ * `ProjectFileIndex.isUnderIgnored`，再加上「平台实际选中的语言能否建 PSI」。任何一项取不到都按
+ * false/null 处理——判错最多是入口指偏，不会影响执行链本身。
+ */
+internal fun execPsiFailureCauseNow(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): ExecPsiFailureCause {
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    val excluded = runCatching { fileIndex.isExcluded(vf) }.getOrDefault(false)
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrDefault(false)
+    val underIgnored = runCatching { fileIndex.isUnderIgnored(vf) }.getOrDefault(false)
+    val fileTypesIgnored = runCatching {
+        com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(vf)
+    }.getOrDefault(false)
+    val psiLanguage = runCatching {
+        ReadAction.compute<com.intellij.lang.Language?, Throwable> {
+            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.fileType)
+        }
+    }.getOrNull()
+    // F5（2026-11-11 真机）：**平台闸门问的是父目录**，四项文件谓词看不见父目录的待遇。
+    // 真机上出现过「文件级全绿、findFile 恒 null」，只靠文件谓词只能判成 UNKNOWN（= 只丢红字，
+    // 没有可点入口，正是这一轮的验收问题）。所以目录级的「排除 / 忽略 / 忽略模式 / 能否建 PSI」
+    // 一律与文件级取**并集**：闸门只要被父目录挡住就返回 null，取并集才与闸门口径一致。
+    val parentVf = runCatching { vf.parent }.getOrNull()
+    val parentExcluded = runCatching {
+        parentVf != null && fileIndex.isExcluded(parentVf)
+    }.getOrDefault(false)
+    val parentUnderIgnored = runCatching {
+        parentVf != null && fileIndex.isUnderIgnored(parentVf)
+    }.getOrDefault(false)
+    val parentTypeIgnored = runCatching {
+        parentVf != null && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(parentVf)
+    }.getOrDefault(false)
+    val dirCanHostPsi = runCatching {
+        ReadAction.compute<Boolean, Throwable> {
+            parentVf != null && PsiManager.getInstance(project).findDirectory(parentVf) != null
+        }
+    }.getOrNull()
+    return classifyExecPsiFailure(
+        excluded = excluded || parentExcluded,
+        regHideExcluded = regHideExcluded,
+        fileTypesIgnored = fileTypesIgnored || parentTypeIgnored,
+        underIgnored = underIgnored || parentUnderIgnored,
+        psiLangId = psiLanguage?.id,
+        canPsiActual = runCatching { canCreateSqlPsiFor(psiLanguage) }.getOrDefault(false),
+        dirCanHostPsi = dirCanHostPsi,
+    )
+}
+
 internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): String {
     val mappedId = runCatching {
         ReadAction.compute<String?, Throwable> { DialectPreMapping.configuredLanguageId(project, vf) }
@@ -1962,12 +2140,94 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
     val canPsi = runCatching {
         canCreateSqlPsiFor(mappedId?.let { DialectPreMapping.languageById(project, it) })
     }.getOrDefault(false)
+    // 继承链（项目根映射 → 全局默认）：这才是「没有显式映射」时真正生效的方言
+    val inheritedId = runCatching { DialectPreMapping.inheritedLanguageId(project) }.getOrNull()
+    val canPsiInherited = runCatching {
+        canCreateSqlPsiFor(inheritedId?.let { DialectPreMapping.languageById(project, it) })
+    }.getOrDefault(false)
     val vfValid = runCatching { vf.isValid }.getOrDefault(false)
     val isDir = runCatching { vf.isDirectory }.getOrDefault(false)
     val fileTypeName = runCatching { vf.fileType.name }.getOrDefault("?")
     val path = runCatching { vf.path }.getOrDefault("?")
+    // R5（2026-11-11）：真机两台的设置里 exec 文件显式映射为 MySQL、全局/项目方言都是 <None>，
+    // 却仍拿不到 PSI——说明「映射到什么」和「平台实际给这个文件什么语言」已经对不上了。
+    // 直接把平台**实际选中的 PSI 语言**与 IDE Build 打进失败文案：前者是决定性证据（若它抛异常，
+    // 就是方言替换器在用户那台机器上直接崩），后者是唯一还没拿到的环境变量。
+    val psiLangProbe = runCatching {
+        ReadAction.compute<com.intellij.lang.Language?, Throwable> {
+            com.intellij.lang.LanguageUtil.getLanguageForPsi(project, vf, vf.fileType)
+        }
+    }
+    val psiLang = psiLangProbe.getOrNull()?.id
+        ?: psiLangProbe.exceptionOrNull()?.javaClass?.simpleName?.let { "EX:$it" }
+    // 决定性组合：psiLang=MySQL 而 canPsiActual=false ⇒ 那台机器上 MySQL 方言没有可用的
+    // ParserDefinition（SQL 方言模块缺失/版本不匹配），与本插件无关，但我们可以绕开（钉别的方言）。
+    val canPsiActual = runCatching { canCreateSqlPsiFor(psiLangProbe.getOrNull()) }.getOrDefault(false)
+    val ideBuild = runCatching {
+        com.intellij.openapi.application.ApplicationInfo.getInstance().build.asString()
+    }.getOrNull()
+    // 2026.3 的 shouldCreatePsi 只看「忽略集」或（Registry 勾选时）「排除」；Project 视图里看不到
+    // 不等于被排除——这两个是两个独立谓词。三项一次打全，用户截一张图就能判型。
+    val excluded = runCatching {
+        com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(vf)
+    }.getOrNull()
+    val underIgnored = runCatching {
+        com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(vf)
+    }.getOrNull()
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrNull()
+    // F5：**文件级谓词看不见父目录**——平台闸门问的是 `findDirectory(父目录)`。真机上出现过
+    // 文件级四项全绿而 findFile 恒 null 的形态，只打文件级等于把唯一能判型的信息落下了。
+    val parentVf = runCatching { vf.parent }.getOrNull()
+    val dirCanHostPsi = runCatching {
+        parentVf != null && ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(parentVf)
+        } != null
+    }.getOrNull()
+    val dirExcluded = runCatching {
+        parentVf != null && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isExcluded(parentVf)
+    }.getOrNull()
+    val dirUnderIgnored = runCatching {
+        parentVf != null && com.intellij.openapi.roots.ProjectFileIndex.getInstance(project).isUnderIgnored(parentVf)
+    }.getOrNull()
     return "name=${vf.name}, vfValid=$vfValid, dir=$isDir, fileType=$fileTypeName, " +
-        "mappedLang=$mappedId, canPsi=$canPsi, path=$path"
+        "mappedLang=$mappedId, canPsi=$canPsi, inheritedLang=$inheritedId, " +
+        "canPsiInherited=$canPsiInherited, psiLang=$psiLang, canPsiActual=$canPsiActual, " +
+        "excluded=$excluded, underIgnored=$underIgnored, regHideExcluded=$regHideExcluded, " +
+        "dirPsi=${dirCanHostPsi}, dirExcluded=$dirExcluded, dirUnderIgnored=$dirUnderIgnored, " +
+        "ideBuild=$ideBuild, path=$path"
+}
+
+/**
+ * T-ExecPsiGate F5（2026-11-11 真机）：**目录级诊断串**（进 `createTempPsiFile` 的 `dirNoPsi` 阶段）。
+ *
+ * 为什么另起一条：真机实测文件级四项谓词可以全绿而 `findFile` 恒 null——平台闸门问的是父目录，
+ * 文件谓词看不见父目录的待遇。把目录级的同一个谓词与探针结论直接打进文案，下一次截图就能定案。
+ */
+internal fun execDirDiagnostics(project: Project, dir: java.io.File): String {
+    val dirVf = runCatching { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir) }.getOrNull()
+    val dirPsi = runCatching {
+        if (dirVf == null) null else ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(dirVf)
+        }
+    }.getOrNull() != null
+    val fileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+    val dirExcluded = runCatching { dirVf != null && fileIndex.isExcluded(dirVf) }.getOrDefault(false)
+    val dirUnderIgnored = runCatching { dirVf != null && fileIndex.isUnderIgnored(dirVf) }.getOrDefault(false)
+    val dirTypeIgnored = runCatching {
+        dirVf != null && com.intellij.openapi.fileTypes.FileTypeManager.getInstance().isFileIgnored(dirVf)
+    }.getOrDefault(false)
+    val regHideExcluded = runCatching {
+        com.intellij.openapi.util.registry.Registry.`is`("ide.hide.excluded.files")
+    }.getOrDefault(false)
+    val inContent = runCatching { dirVf != null && fileIndex.isInContent(dirVf) }.getOrDefault(false)
+    val ideBuild = runCatching {
+        com.intellij.openapi.application.ApplicationInfo.getInstance().build.asString()
+    }.getOrNull()
+    return "dir=${dir.path}, dirVfValid=${dirVf != null}, dirPsi=$dirPsi, inContent=$inContent, " +
+        "dirExcluded=$dirExcluded, dirUnderIgnored=$dirUnderIgnored, dirTypeIgnored=$dirTypeIgnored, " +
+        "regHideExcluded=$regHideExcluded, ideBuild=$ideBuild"
 }
 
 /**
@@ -1978,7 +2238,46 @@ internal fun execPsiDiagnostics(project: Project, vf: com.intellij.openapi.vfs.V
  * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
  */
 
-internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): java.io.File? {
+/**
+ * T-ExecPsiGate R6：该目录下的文件在**这台 IDE** 上能不能建出 PSI。
+ *
+ * 2026.3 起平台多了一道闸门（`AbstractFileViewProvider.shouldCreatePsi()`，243/262 没有）：
+ * 父目录拿不到 `PsiDirectory`（目录不在内容模型里——未加入 content、或被 excluded，`.idea` 被
+ * 排除是常见形态）且不在库源码/库类里时，`createFile` 直接返回 null ⇒ `PsiManager.findFile`
+ * 返回 null，而 `vf` 完全有效。用户那条「放 `.idea` 下必错、放项目外正常」正是这个闸门。
+ *
+ * 判据直接复用平台那一条（`PsiManager.findDirectory`），保证与平台口径一致。
+ * 探不出来（目录还没进 VFS / 异常）时按「能」处理——保守走原路径，失败还有自愈支 4 兜底；
+ * 这里刻意**不强制 refresh**，避免给每次执行加一次 VFS 刷新。
+ */
+internal fun execDirCanHostPsi(project: Project, dir: java.io.File): Boolean {
+    if (project.isDisposed) return true
+    // T-ExecPsiGate F4（2026-11-11 验收失败）：**不缓存结论**。原实现按目录路径记忆到会话结束，
+    // 而「目录能不能建 PSI」取决于内容模型与 Registry（用户随时会改：排除/取消排除、勾/取消
+    // ide.hide.excluded.files）——旧结论会让落点判定恒留在错的一侧（预览实测：改了状态仍写 .idea
+    // → 降级横幅不消失）。探针成本只是一次 VFS 查找 + 一次 PsiDirectory 查找，调用点也不在键盘热路径。
+    if (!dir.exists() && !dir.mkdirs()) return true
+    val dirVf = runCatching {
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)
+    }.getOrNull() ?: return true
+    val capable = runCatching {
+        ReadAction.compute<com.intellij.psi.PsiDirectory?, Throwable> {
+            PsiManager.getInstance(project).findDirectory(dirVf)
+        }
+    }.getOrNull() != null
+    return capable
+}
+
+internal fun DataSourceSelector.projectExecFile(
+    project: Project,
+    sql: String,
+    /**
+     * T-ExecPsiGate R6：true = 写到**项目根备用落点** `<base>/.sql-visualizer/exec/`。
+     * 用于 `.idea` 下建不出 PSI 的机器（用户实测同文件放项目外正常）；复用本函数全套
+     * document 写与冲突规避逻辑，避免备用落点再踩「File Cache Conflict」。
+     */
+    preferProjectRoot: Boolean = false,
+): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
     // （VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
@@ -1992,11 +2291,24 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): 
         LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
         return null
     }
-    val dir = java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
+    // R6/F6：项目根落点（不在 `.idea` 下）——`<base>/.sql-visualizer/exec`
+    // 2026-11-11 用户定案「兜底不得抢在提示前面」在被真机推翻一半：`.idea` 被 `.gitignore` 忽略的
+    // 项目里平台**永远不会**为它建 PSI，此时「让用户改配置」没有可改的东西。F6 起由落点探针
+    // （[decideExecLandingRoot]）决定，只认调用方传入的 preferProjectRoot；用户手动点
+    // 「改用项目根落点重试」的那条路仍经 [DataSourceSelector.execRootFallbackProjects] 生效。
+    val rootDir = if (preferProjectRoot) java.io.File(base, ".sql-visualizer") else null
+    val dir = rootDir?.let { java.io.File(it, "exec") } ?: execPrimaryDir(project) ?: return null
     if (!dir.exists() && !dir.mkdirs()) {
         // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
         LOG.warn("[M36] projectExecFile FAILED: mkdirs false (${dir.path})")
         return null
+    }
+    // 目录建好之后再写 `.gitignore`（内容 `*`），免得备用目录出现在用户的 git status 里
+    if (rootDir != null) {
+        runCatching {
+            val ignore = java.io.File(rootDir, ".gitignore")
+            if (!ignore.exists()) ignore.writeText("*\n")
+        }
     }
     val f = java.io.File(dir, "mpsql-exec.sql")
     // T-PreviewLockInversion（2026-11-02 性能分析）：临界区**只留「存在性 + 判等 + 首建裸写」**，
@@ -2057,7 +2369,9 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     LOG: com.intellij.openapi.diagnostic.Logger,
     renderedDialectName: String? = null,
 ) {
-    lastTempFileFailure = null
+    // T-ExecPsiGate F3/F6：预热链是并发写方——它只能写自己的结果，不能清别人的失败记录。
+    // F3 收掉了「入口清空 lastTempFileFailure」；F6 把成因改成「阶段+成因」成对记录后，
+    // 连「谁写谁清」这条隐患也不存在了（消费方按阶段匹配）。
     // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
     // 实际执行之间隔着任意长的排队/执行窗口（victim 测试毫秒级跑完即收尾 dispose）。池线程链
     // 起跑时项目可能已 dispose（含 temporarily-disposed），整链放弃，不在死项目上写/refresh。
@@ -2070,7 +2384,7 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     // 持写意向锁阻塞在 RefreshSessionImpl.waitFor，而会话推进需 WIL/EDT，互等成环（EDT 再被预览
     // 编辑器 mousePressed 排队等 WIL 即扩大为全 IDE「not responding」）。BGT 裸调即平台合法形态
     // （下方 pre-refresh 的 findFileByIoFile 同款；EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，须保留）。
-    val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+    val ioFile = runCatching { projectExecFile(project, sql, preferProjectRoot = project in execRootFallbackProjects) }.getOrElse { e ->
         // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
         // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
         if (FatalErrors.isFatal(e)) throw e
@@ -2247,15 +2561,26 @@ internal fun DataSourceSelector.dispatchDocWriteOnEdt(
         // PSI 事件链（PsiDocumentManagerBase 为平台断言点之一）即报 Write-unsafe context!。
         // 本分支是 [writeVfTextViaDocument] 调用面里唯一未过 DocWriteContext 闸的入口
         // （本函数另两形态已闸；471/1699/2776 三处直调各自包 WriteAction，R33 日志无实证指向）。
-        // 判为可写 → 就地写（常态行为逐字不变）；判为不安全 → 转 nonModal 延后一拍并返回
-        // false（写体 docWriteOnce 幂等：内容相同不 setText、已落盘不 save；现有调用方——
-        // gStrip 回写不消费返回值、syncExecVfContentIfNeeded 各调用方亦不消费——延后语义安全，
-        // 与下方有界等待路径「判不安全立即交还」同一纪律）。
-        var ok = false
-        DocWriteContext.runWriteSafe(project, "exec doc sync (edt direct)") {
-            ok = docWriteOnce(project, vf, sql)
-        }
-        return ok
+        //
+        // T-StartupReadLockFreeze S4-a（2026-11-13 用户 Linux 打开即冻结，栈 2 实证）：**不再在
+        // 本拍就地写**。原实现「判为可写 → block() 就地执行」把 `WriteAction` 夹在调用方自己的
+        // 活动里，于是写意图读锁要在同拍内升级为写锁（`runWriteActionBlocking` →
+        // `prepareWriteFromWriteIntentBlocking` → `upgradeWritePermit`），升级要等**所有**读者
+        // 退出；后台只要有一条阻塞读（M2 预取的 `ReadAction.compute`→`computeBlocking`，不可取消）
+        // 就等不到，EDT 当场冻结。现在与 BGT 分支同构：nonModal 投递一拍 + 有界等待，调用方
+        // **不再被写升级阻塞**；已在 EDT 时投递后立即交还（见 [DocWriteContext.invokeLaterWriteSafeAndWait]
+        // 的自等保护）。写体 [docWriteOnce] 幂等（内容相同不 setText、已落盘不 saveDocument），
+        // 延后一拍不改变可见终态；现有调用方（gStrip 回写不消费返回值、
+        // syncExecVfContentIfNeeded 各调用方亦不消费）延后语义安全，与下方有界等待路径
+        // 「判不安全立即交还」同一纪律（计划 §十二 已核对，实施轮逐调用点复核见计划 §十三）。
+        //
+        // 边界（诚实口径）：本改动去掉的是「就地升级」，投递出去的那一拍仍走平台写锁获取——
+        // 若读者长持不放（冻结现场），该拍仍会等；彻底解决依赖 S1/S3（后台不再阻塞持读锁）。
+        return DocWriteContext.invokeLaterWriteSafeAndWait(
+            project,
+            "exec doc sync (edt→nonModal, S4-a)",
+            waitBudgetMs,
+        ) { docWriteOnce(project, vf, sql) }
     }
     if (waitBudgetMs <= 0L) {
         // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）

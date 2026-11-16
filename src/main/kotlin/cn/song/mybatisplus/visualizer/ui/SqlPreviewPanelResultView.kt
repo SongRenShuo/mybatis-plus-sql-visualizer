@@ -1,9 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SourceLanguage
+import cn.song.mybatisplus.visualizer.model.WrapperConsumption
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.withResolvedDialect
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
@@ -18,6 +20,8 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -43,6 +47,9 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.MetaPerfSegment
 
 internal fun SqlPreviewPanel.toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
     layout = BoxLayout(this, BoxLayout.X_AXIS)
+    // T-PreviewStmtTypeScope D-3：预览目标切换（同一 wrapper 有多种消费写法时才可见，见 updateStmtTypeSwitch）
+    stmtTypeButton = smallButton("") { showStmtTypePopup() }.apply { isVisible = false }
+    add(stmtTypeButton)
     errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
         if (copyError()) {
             // T-ExecCopyFix：复制成功反馈（对齐 SqlClickPreview.flashCopied 对号语义）
@@ -201,16 +208,24 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     result.batchModel?.toggleColumns?.forEach { col ->
         if (col.checked) enabledIds.add(col.columnName)
     }
-    // T-M24-04：XML 预览状态初始化（条件开关走 enabledIds，按启发式默认勾选；foreach/bind 独立状态）
+    // T-M24-04：XML 预览状态初始化。
+    // T-MbgPreviewParityAndOpenPerf P7（面板口径对齐）：初始勾选必须与渲染**同源**。
+    // 此前这里读 `view.defaultEnabled` 的朴素启发式（只判 `== null`），而 profile 抑制
+    // （distinct / orderByClause 不展开）、choose 组互斥归并、M2 真实 kind 默认这三项都只在
+    // `defaultState()` 里实现 ⇒ 它们在面板上**从未生效**：用户初始态仍带 DISTINCT、ORDER BY 1、
+    // 四个互斥分支全勾（2026-11-12 真机截图实证）。现统一走 defaultState()，并把上方按 previewModel
+    // 填的通用勾选清掉（XML 链以 XML 模型为准，batch/wrapper 链不共存）。
     result.xmlModel?.let { model ->
-        model.conditionViews.forEach { view ->
-            if (view.defaultEnabled) enabledIds.add(view.id)
-        }
+        val defaults = model.defaultState()
+        enabledIds.clear()
+        enabledIds.addAll(defaults.enabledIds)
         xmlForEachCounts.clear()
-        xmlForEachCounts.putAll(model.defaultState().forEachCounts)
+        xmlForEachCounts.putAll(defaults.forEachCounts)
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
+        // T-FullTableWriteRisk：风险态随新预览清场（渲染帧内按本轮产物重算，见 renderSql）
+        writeRiskWarning = null
         xmlDollarSubstitutions = 0
         // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
         val initial = model.renderSql(XmlPreviewState(
@@ -256,8 +271,60 @@ internal fun SqlPreviewPanel.showResult(input: PreviewResult) {
     // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
     // 缓存本次 SQL 供下次对比）。
     previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
-    // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
-    prepareDefaultConsole()
+    // M36.5：原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）。
+    // T-PreviewExecWriteDefer：**惰性口径**（默认）下预览打开不准备控制台——这一步会写
+    // `mpsql-exec.sql`，而该文件带方言映射，平台会为「语言替换」重算并推文件属性 ⇒ 整个工程进 dumb，
+    // 还会在 EDT 上复活它的 PSI（`SlowOperations` SEVERE）。控制台交给用户第一次执行/切换数据源时由
+    // 执行链 `selectAndExecute` 自行「准备 + 同步 exec 文件 + 执行」（既有行为）。
+    if (PreviewConsoleEager.enabled()) {
+        prepareDefaultConsole()
+    } else {
+        PreviewConsoleEager.recordDeferred()
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
+            "[open-perf] console prep DEFERRED（惰性口径：预览打开不写 exec 文件）",
+        )
+    }
+    // T-StartupReadLockFreeze §14.8：本次 M2 已转后台 —— 等**这一次解析落地**再重算。
+    // 不能复用下面的 `runWhenSmart`：smart mode 现已就绪，它会立即触发并重算出同一份占位骨架，
+    // 形成空转（每次空转还要再跑一遍装配）。这里等的是 `m2AwaitKey` 对应的那次检索完成。
+    val m2AwaitKey = result.m2AwaitKey
+    val m2Retry = result.retryWhenIndexReady
+    if (m2AwaitKey != null && m2Retry != null) {
+        val proj = project
+        if (proj != null) {
+            MbgExampleCallResolver.whenResolved(m2AwaitKey) {
+                if (!Disposer.isDisposed(this)) {
+                    SqlPreviewService.previewAsync(proj, { m2Retry() }) { fresh ->
+                        if (fresh != null && !Disposer.isDisposed(this)) {
+                            com.intellij.openapi.diagnostic.Logger
+                                .getInstance(SqlPreviewPanel::class.java)
+                                .info("[open-perf] m2 async ready applied")
+                            showResult(fresh)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // T-PreviewOpenPerfM2 M9：本次因索引未就绪（dumb mode）跳过过 M2 调用点反推——索引就绪后
+    // **自动重算一次**。BGT 重算 + 回 EDT 重放 showResult；新结果的 retryWhenIndexReady 恒为 null
+    //（那一刻已是 smart mode），因此不会自激循环；面板已 dispose 则放弃。
+    if (m2AwaitKey == null) result.retryWhenIndexReady?.let { retry ->
+        val proj = project
+        if (proj != null) {
+            DumbService.getInstance(proj).runWhenSmart {
+                if (Disposer.isDisposed(this)) return@runWhenSmart
+                SqlPreviewService.previewAsync(proj, { retry() }) { fresh ->
+                    if (fresh != null && !Disposer.isDisposed(this)) {
+                        com.intellij.openapi.diagnostic.Logger
+                            .getInstance(SqlPreviewPanel::class.java)
+                            .info("[open-perf] m2 retry after smart mode applied")
+                        showResult(fresh)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -632,6 +699,130 @@ internal fun mergePreviewWarnings(initial: String?, current: List<String>): Stri
     (listOfNotNull(initial?.takeIf { it.isNotBlank() }) + current.filter { it.isNotBlank() })
         .distinct().joinToString("；").ifEmpty { null }
 
+/**
+ * T-PreviewStmtTypeScope：判型依据的可见行片段——「类型依据: remove() 消费（第 120 行）」。
+ *
+ * 行号取不到时（文档不可用 / 跨文件证据）退到不带行号的文案，不显示「第 0 行」这种噪声。
+ */
+internal fun stmtTypeSourceText(evidence: WrapperConsumption): String =
+    if (evidence.line > 0) {
+        MpSqlVisualizerBundle.message("panel.meta.stmtTypeSource", evidence.methodName, evidence.line)
+    } else {
+        MpSqlVisualizerBundle.message("panel.meta.stmtTypeSourceNoLine", evidence.methodName)
+    }
+
+/** T-PreviewStmtTypeScope：判型档位 → 产物语句形态标签（SQL 关键字，双语不译）。 */
+internal fun stmtTypeKindLabel(kind: ConsumptionKind): String = when (kind) {
+    ConsumptionKind.DELETE -> "DELETE"
+    ConsumptionKind.COUNT -> "SELECT COUNT(*)"
+    ConsumptionKind.EXISTS -> "SELECT EXISTS"
+    ConsumptionKind.UPDATE_ENTITY -> "UPDATE"
+    ConsumptionKind.PAGE -> "LIMIT"
+}
+
+/**
+ * T-PreviewStmtTypeScope：判型依据的悬停段——列出该 wrapper 上识别到的**全部**消费调用。
+ *
+ * 长度 > 1 才产出：判型只取一条（D-2：锚点所在语句 > 锚点之后最近一条），把落选的摊开，
+ * 用户才能看懂「为什么这一行不是它」而不必去猜或翻源码。
+ */
+internal fun stmtTypeCandidatesSection(result: PreviewResult): String {
+    if (result.otherConsumptions.isEmpty()) return ""
+    val lines = result.otherConsumptions.joinToString("\n") { consumption ->
+        val where = if (consumption.line > 0) {
+            "${consumption.fileName}:${consumption.line}"
+        } else {
+            consumption.fileName
+        }
+        "  $where  ${consumption.methodName}() → ${stmtTypeKindLabel(consumption.kind)}"
+    }
+    return "\n\n" + MpSqlVisualizerBundle.message("panel.meta.stmtTypeCandidates", lines)
+}
+
+/**
+ * T-PreviewStmtTypeScope D-3：把「预览目标」按钮与当前结果对齐。
+ *
+ * 判定依据可能来自同方法另一条语句——同一个 wrapper 变量先喂 `update(entity, w)`、重新赋值后再喂
+ * `delete(w)`，这是真实工程里很常见的复用写法。此时不替用户拍板：按钮列出全部档位，默认落在
+ * D-2 命中的那一档。只有一档（或多档但没挂重算闭包）时按钮隐藏，常规预览零占位。
+ */
+internal fun SqlPreviewPanel.updateStmtTypeSwitch(result: PreviewResult) {
+    stmtTypeOptions = result.statementTypeOptions
+    stmtTypeSwitcher = result.statementTypeSwitch
+    stmtTypeCurrent = result.decidingConsumption?.kind
+    stmtTypeEvidences = listOfNotNull(result.decidingConsumption) + result.otherConsumptions
+    val button = stmtTypeButton ?: return
+    if (result.statementTypeOptions.size < 2 || result.statementTypeSwitch == null) {
+        button.isVisible = false
+        return
+    }
+    button.isVisible = true
+    button.text = MpSqlVisualizerBundle.message("panel.stmtType.button", stmtTypeKindLabelOf(stmtTypeCurrent))
+}
+
+/** T-PreviewStmtTypeScope D-3：档位标签（null = 默认 SELECT，即该链上没有被消费改判）。 */
+internal fun stmtTypeKindLabelOf(kind: ConsumptionKind?): String =
+    kind?.let { stmtTypeKindLabel(it) } ?: "SELECT"
+
+/** T-PreviewStmtTypeScope D-3：弹层条目文案——档位 + 依据（方法名/行号），当前生效项打勾。 */
+internal fun stmtTypeOptionLabel(
+    kind: ConsumptionKind,
+    current: Boolean,
+    evidence: WrapperConsumption?,
+): String {
+    val mark = if (current) "✓ " else "   "
+    val detail = evidence?.let { c ->
+        c.methodName + "()" + if (c.line > 0) MpSqlVisualizerBundle.message("panel.stmtType.line", c.line) else ""
+    }
+    return mark + stmtTypeKindLabel(kind) + (detail?.let { " · $it" } ?: "")
+}
+
+/**
+ * T-PreviewStmtTypeScope D-3：弹出「预览目标」列表（复用 [moreActionsStep] 的 BaseListPopupStep 先例，
+ * 本仓现网风格；动作体延后到弹层销毁之后执行，避免平台判焦点风险）。
+ */
+internal fun SqlPreviewPanel.showStmtTypePopup() {
+    if (stmtTypeOptions.size < 2) return
+    val anchorButton = stmtTypeButton ?: return
+    val items = stmtTypeOptions.map { kind ->
+        stmtTypeOptionLabel(kind, kind == stmtTypeCurrent, stmtTypeEvidences.firstOrNull { it.kind == kind })
+    }
+    val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<String>(
+        MpSqlVisualizerBundle.message("panel.stmtType.popupHint"),
+        items,
+    ) {
+        override fun onChosen(
+            selectedValue: String?,
+            finalChoice: Boolean,
+        ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+            if (!finalChoice) return null
+            val kind = stmtTypeOptions.getOrNull(items.indexOf(selectedValue))
+            if (kind != null) {
+                // 与「更多」菜单同款：动作延后到弹层销毁后执行（平台焦点风险已知）
+                ApplicationManager.getApplication().invokeLater { switchStmtType(kind) }
+            }
+            return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+        }
+    }
+    com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+        .createListPopup(step)
+        .show(com.intellij.ui.awt.RelativePoint(anchorButton, java.awt.Point(0, anchorButton.height)))
+}
+
+/**
+ * T-PreviewStmtTypeScope D-3：按指定档位重算当前预览并重放结果。
+ *
+ * 重算走 [SqlPreviewService.previewAsync]（后台 ReadAction + EDT 回调），与 `retryWhenIndexReady`
+ * 同一先例；面板已销毁则丢弃（不允许晚到产物回写）。
+ */
+internal fun SqlPreviewPanel.switchStmtType(kind: ConsumptionKind) {
+    val switcher = stmtTypeSwitcher ?: return
+    val proj = project ?: return
+    SqlPreviewService.previewAsync(proj, { switcher(kind) }) { fresh ->
+        if (fresh != null && !Disposer.isDisposed(this)) showResult(fresh)
+    }
+}
+
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
@@ -640,6 +831,9 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         if (result.sourceLanguage != SourceLanguage.SQL) {
             add(MpSqlVisualizerBundle.message("panel.meta.sourceLanguage", result.sourceLanguage.name))
         }
+        // T-PreviewStmtTypeScope：判型依据——语句类型来自哪一次消费调用（方法名 + 行号）。
+        // 用户报障「查询链被识别成 UPDATE」的真实成因是判型依据落在同方法另一条语句上，本段把它摆到明面。
+        result.decidingConsumption?.let { add(stmtTypeSourceText(it)) }
         // T-M24-04：XML 语句元信息（类型 + parameterType）
         result.xmlModel?.let { xml ->
             add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")
@@ -678,7 +872,11 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     metaCoreText = meta + warningLine
     metaLineDigest = stackInline
     metaPerfSegments = buildPerfSegments(result)
-    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text }
+    // T-PreviewStmtTypeScope：判型依据的「全部候选」进悬停（可见行只留命中的那一条，避免挤掉表名）
+    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text } +
+        stmtTypeCandidatesSection(result)
+    // T-PreviewStmtTypeScope D-3：同步「预览目标」切换入口（多档可见，单档隐藏）
+    updateStmtTypeSwitch(result)
     metaTooltipSuffix = dialectCapabilityTooltipSection(result)
     applyDialectStatusSegment()
     // T-StackBizFrame S3：线程名随快照一起喂弹层（标题展示；null 时标题退回纯「调用栈」）
@@ -707,6 +905,19 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
         )
     } else {
         degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
+    }
+    // T-FullTableWriteRisk：无 WHERE 的 DELETE/UPDATE（XML 链产物随勾选实时变化，最典型是勾掉
+    // `_parameter != null` 后变成全表写）。**优先级高于上面那条「预览未完整还原」**——预览可能是
+    // 完整还原的，用户最该知道的是这一句；故独占写风险类别、用不带「未完整还原」前缀的文案，
+    // 两者互不冒充（同档优先级下后写者占位，见 DegradationBanner.priority）。
+    val writeRisk = result.xmlModel?.let { writeRiskWarning }
+    if (writeRisk != null) {
+        degradationBanner.show(
+            DegradationBanner.Kind.WRITE_RISK,
+            MpSqlVisualizerBundle.message(writeRisk.bundleKey),
+        )
+    } else {
+        degradationBanner.clear(DegradationBanner.Kind.WRITE_RISK)
     }
     // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
     // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。

@@ -154,7 +154,8 @@ class XmlMapParamSpecMatrixTest : BasePlatformTestCase() {
               <select id="s1">SELECT * FROM ${'$'}{map.column} WHERE id = 1</select>
             </mapper>
             """,
-            "SELECT * FROM WHERE id = 1",
+            // T-MbgExamplePreview R1：预览链开启占位模式，缺段以 {{表达式}} 显式可见（不再是空串）
+            "SELECT * FROM {{map.column}} WHERE id = 1",
         )
         assertTrue(
             "X6: 应有求值为空显式提示：${rendered.errors}",

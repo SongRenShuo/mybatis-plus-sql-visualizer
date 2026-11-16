@@ -18,9 +18,12 @@ import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewProfile
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
@@ -44,6 +47,12 @@ import com.intellij.psi.xml.XmlTag
  *   行为与改动前逐字节一致。
  */
 object XmlPreviewService {
+
+    /** T-MbgPreviewParityAndOpenPerf P5：装配分段耗时埋点（超阈值才打一条，正常路径不刷屏）。 */
+    private val LOG = Logger.getInstance(XmlPreviewService::class.java)
+
+    /** 分段耗时日志阈值（毫秒）：低于此值不打，避免每次预览都写日志。 */
+    private const val PERF_LOG_THRESHOLD_MS = 200L
 
     /**
      * O-145 W1：只在选定的 mapper 语句域解析实际 SQL 注入；文件内其他语句不能充当 owner。
@@ -79,31 +88,82 @@ object XmlPreviewService {
     ): PreviewResult {
         // R12 T-PaginationSim：解析产物三元组（namespace/语句 id/语句类型）透出 try 块——分页模拟后处理用
         var parsedRef: Triple<String?, String, XmlStatementKind>? = null
+        // T-PreviewOpenPerfM2 M9：本轮是否因 dumb mode 跳过了 M2（决定要不要挂「索引就绪后重算」）
+        var m2Skipped = false
+        // T-StartupReadLockFreeze §14.8：本轮 M2 是否转后台（决定要不要挂「解析落地后重算」）
+        var m2AwaitKey: String? = null
         val (model, staticWarnings) = try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
+            // T-MbgPreviewParityAndOpenPerf P5：分段计时（把「打开慢」归因到具体一段）
+            val perfStart = System.currentTimeMillis()
             val crossNamespace = XmlCrossNsFragmentResolver.resolve(fileText, project)
             val parsed = XmlMapperParser().parse(fileText, crossNamespace)
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
             parsedRef = Triple(parsed.namespace, statement.id, statement.kind)
             val warnings = mutableListOf<String>()
-            val staticValues = resolveStaticFields(fileText, project, warnings)
+            // T-BindStaticRefCrossNs：静态常量扫描域必须与渲染域一致。跨命名空间 include 的片段在
+            // 解析期被展开进语句树（T-IC-02），但片段文本在**另一个文件**里——只扫当前文件会把
+            // 片段内 `<bind value="@类@字段"/>` 漏出注入表（表现：同语句里本地 bind 正常、
+            // 片段内 bind 求值为空）。无跨命名空间引用时 fragments 为空表，本次扫描与改动前一致。
+            val staticValues = resolveStaticFields(
+                buildList {
+                    add(fileText)
+                    addAll(crossNamespace.fragments.values)
+                },
+                project,
+                warnings,
+            )
             // T-M26-B（P-立项-03）：MP 占位展开（${ew.customSqlSegment} 等）——Java 关联 wrapper 实参 → 片段注入
             // O-77 T-EwStatementScope：占位按语句域扫描（statement.rawText），他语句占位不再记账到本语句
             val ewBindings = resolveEwPlaceholders(fileText, statement.rawText, parsed.namespace, statement.id, project, warnings)
             // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
             // Map/解析失败不含键 → 面板兜底引号、无占位提示）
             val paramTypes = XmlParamTypeResolver.resolveTypes(project, parsed.namespace, statement.id)
-            XmlPreviewModel.from(
+            // T-MbgExamplePreview R5：MBG Example 参数类型 → 默认勾选档（distinct / orderByClause 不展开、
+            // 集合按 1 项）；解析不到一律 null，行为与升级前一致
+            val perfCtxParsed = System.currentTimeMillis()
+            val profile = resolveExampleProfile(project, statement.parameterType, parsed.namespace)
+            val perfProfile = System.currentTimeMillis()
+            // T-MbgExamplePreview M2：Example 形态下再从调用点反推 Criterion（andXxx 方法体的
+            // addCriterion 常量）——拿到真值后 ${criterion.condition} 不再落占位
+            // T-PreviewOpenPerfM2 M8：dumb mode（索引未就绪 / 正在重建）时**跳过 M2 检索**。
+            // `ReferencesSearch` 依赖索引，在索引构建期会同步等待——真机 2026-11-12 11:21 冷启动首次
+            // 打开 request→dialog 4499ms，而同一时刻 xml 装配只有 417ms；热态同一语句仅 170ms。
+            // 跳过后退回占位骨架（`{{criterion.condition}}`），热态打开或下次打开由缓存补齐。
+            val m2Allowed = project != null && !DumbService.getInstance(project).isDumb
+            m2Skipped = profile != null && !m2Allowed
+            if (m2Skipped) LOG.info("[open-perf] m2 skipped: dumb mode (索引未就绪)")
+            // T-StartupReadLockFreeze §14.8：首开**只读缓存**，未命中就转后台并挂「落地后重算」。
+            // 依据（2026-11-13 沙盒日志）：`ReferencesSearch` 的开销藏在引擎内部——refsSeen 仅 13 条
+            // 却耗 2.4s，逐条自查的截止判定只在两次 next() 之间生效，同步等必然慢（用户侧 30s 档）。
+            val cachedM2 = if (profile == null || !m2Allowed) {
+                null
+            } else {
+                MbgExampleCallResolver.resolveCachedOnly(project, parsed.namespace, statement.id)
+            }
+            if (profile != null && m2Allowed && cachedM2 == null) {
+                m2AwaitKey = MbgExampleCallResolver.warmForPreview(project, parsed.namespace, statement.id)
+            }
+            val collectionElements = cachedM2.orEmpty()
+            if (cachedM2 == null && profile != null) {
+                LOG.info("[open-perf] m2 deferred（首开出骨架，后台补齐后自动刷新）")
+            }
+            val perfM2 = System.currentTimeMillis()
+            val built = XmlPreviewModel.from(
                 statement, parsed.errors,
                 staticFieldValues = staticValues, extraBindings = ewBindings, paramTypes = paramTypes,
-            ) to warnings
+                profile = profile,
+                collectionElements = collectionElements,
+            )
+            logPreviewPerf(perfStart, perfCtxParsed, perfProfile, perfM2, always = profile != null)
+            built to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
         } catch (e: XmlScriptException) {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
-        val result = toResult(model, staticWarnings, entityContext).let { preview ->
+        val result = toResult(model, staticWarnings, entityContext, includeRenderErrors = false).let { preview ->
             if (project == null) preview else {
                 val decision = sourceContext?.takeIf { it.project == project }
                     ?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
@@ -115,13 +175,32 @@ object XmlPreviewService {
         }
         val ref = parsedRef ?: return result
 
-        return applyPagination(
+        val finalResult = applyPagination(
             result,
             project = project,
             namespace = ref.first,
             statementId = ref.second,
             kind = ref.third,
         )
+        // T-StartupReadLockFreeze §14.8：M2 已转后台 —— 带上等待 key，面板在解析落地后重算刷新。
+        // 重算闭包与新结果都走同一入口；重算时缓存已热，`resolveCachedOnly` 直接命中，不会再转后台
+        //（因此不会自激循环；万一仍未命中，新结果会再带一次 key，属于「再等一轮」而非空转）。
+        m2AwaitKey?.let { key ->
+            return finalResult.copy(
+                m2AwaitKey = key,
+                retryWhenIndexReady = { preview(fileText, statementId, project, entityContext, sourceContext) },
+            )
+        }
+        // T-PreviewOpenPerfM2 M9：索引未就绪时跳过过 M2 —— 挂「就绪后重算一次」的闭包，
+        // 面板收到后由 `DumbService.runWhenSmart` 在 smart mode 重算并刷新
+        //（冷态秒出骨架 + 索引就绪后自动补齐真实 Criterion，无需用户手动刷新）。
+        return if (m2Skipped) {
+            finalResult.copy(
+                retryWhenIndexReady = { preview(fileText, statementId, project, entityContext, sourceContext) },
+            )
+        } else {
+            finalResult
+        }
     }
 
     /**
@@ -219,11 +298,19 @@ object XmlPreviewService {
      * 静态字段引用解析（T-M25.2）：扫描文本中的 `@类全名@字段名`（OGNL 静态访问），
      * 经 PSI 定位用户项目中的常量类与字段初始值（computeConstantExpression）；
      * 无 project（纯文本测试环境）→ 空映射；类/字段缺失或非常量 → warning + 不注入。
+     *
+     * T-BindStaticRefCrossNs：多文本入口——调用方必须把**所有会被渲染的文本**传进来
+     * （当前 mapper 文件 + 跨命名空间 include 片段），保证扫描域与渲染域一致；
+     * 引用按 `类@字段` 跨文本去重，同一个常量只解析一次。
      */
-    internal fun resolveStaticFields(fileText: String, project: Project?, warnings: MutableList<String>): Map<String, Any?> {
+    internal fun resolveStaticFields(
+        texts: Collection<String>,
+        project: Project?,
+        warnings: MutableList<String>,
+    ): Map<String, Any?> {
         if (project == null) return emptyMap()
-        val refs = STATIC_REF_REGEX.findAll(fileText)
-            .map { "${it.groupValues[1]}@${it.groupValues[2]}" }
+        val refs = texts.asSequence()
+            .flatMap { text -> STATIC_REF_REGEX.findAll(text).map { "${it.groupValues[1]}@${it.groupValues[2]}" } }
             .toSet()
         if (refs.isEmpty()) return emptyMap()
         return refs.mapNotNull { ref ->
@@ -238,11 +325,75 @@ object XmlPreviewService {
         }.toMap()
     }
 
-    /** 单字段求值：findClass → findFieldByName → 字段初始值常量求值。 */
+    /** 单文本入口（注解 `<script>` 链等只有一段文本的调用方）。 */
+    internal fun resolveStaticFields(
+        fileText: String,
+        project: Project?,
+        warnings: MutableList<String>,
+    ): Map<String, Any?> = resolveStaticFields(listOf(fileText), project, warnings)
+
+    /**
+     * T-MbgPreviewParityAndOpenPerf P5：装配分段耗时（总耗时低于阈值不打，正常路径零噪音）。
+     *
+     * 现场（2026-11-12）`prewarm done` 到首次 `showSql` 之间有 **5.67s 空档**且插件侧零日志，
+     * 无法归因。这条把装配切成四段：解析+上下文 / profile（PSI 类解析）/ M2（PSI 调用点检索）/
+     * 建模——下次真机复现即可读出是哪一段。
+     */
+    private fun logPreviewPerf(start: Long, ctxEnd: Long, profileEnd: Long, m2End: Long, always: Boolean = false) {
+        val end = System.currentTimeMillis()
+        val total = end - start
+        // MBG Example 档恒记（`always`）：缓存命中的热态打开常在 200ms 以下，阈值会把
+        // 「第二次 m2 是否接近 0」这条唯一可证伪的读数一起吞掉（T-PreviewOpenPerfM2 M1 验收缺口）。
+        if (!always && total < PERF_LOG_THRESHOLD_MS) return
+        LOG.info(
+            "[open-perf] total=${total}ms parse+ctx=${ctxEnd - start} " +
+                "profile=${profileEnd - ctxEnd} m2=${m2End - profileEnd} model=${end - m2End}",
+        )
+    }
+
+    /**
+     * T-MbgExamplePreview R5：`parameterType` 是否为 MBG 生成器的 Example 类。
+     *
+     * 判据（任一命中即可，都是 MBG 生成模板的固定结构）：类里有 `oredCriteria` 字段，
+     * 或有 `createCriteria()` 方法。命中 → [XmlPreviewProfile.MBG_EXAMPLE]；无 project、
+     * 空 parameterType、类解析不到 → null（不改任何默认值，行为与升级前一致）。
+     *
+     * `parameterType` 可能是全限定名（MBG 默认）也可能是短名；短名按 mapper 接口所在包补全
+     * （namespace 是 mapper 接口全名，Example 类与之同包）。
+     */
+    internal fun resolveExampleProfile(
+        project: Project?,
+        parameterType: String?,
+        namespace: String?,
+    ): XmlPreviewProfile? {
+        if (project == null || parameterType.isNullOrBlank()) return null
+        val fqn = if ('.' in parameterType) {
+            parameterType
+        } else {
+            val pkg = namespace?.substringBeforeLast('.', "")
+            if (pkg.isNullOrEmpty()) return null else "$pkg.$parameterType"
+        }
+        val psiClass = runCatching {
+            JavaPsiFacade.getInstance(project).findClass(fqn, GlobalSearchScope.allScope(project))
+        }.getOrNull() ?: return null
+        val isExample = runCatching {
+            psiClass.findFieldByName("oredCriteria", true) != null ||
+                psiClass.findMethodsByName("createCriteria", true).isNotEmpty()
+        }.getOrDefault(false)
+        return if (isExample) XmlPreviewProfile.MBG_EXAMPLE else null
+    }
+
+    /**
+     * 单字段求值：findClass → findFieldByName → 字段初始值常量求值。
+     *
+     * T-BindStaticRefCrossNs S2：常量可能声明在父类或接口上（`@子类@CONST` 这种写法在真机上能跑，
+     * 因为 MyBatis/OGNL 走反射 `Class.getField`，**含**继承的 public 字段）——故按 `checkBases = true`
+     * 查，与运行时口径一致。
+     */
     internal fun resolveStaticFieldValue(project: Project, className: String, fieldName: String): String? {
         val psiClass = JavaPsiFacade.getInstance(project)
             .findClass(className, GlobalSearchScope.allScope(project)) ?: return null
-        val field = psiClass.findFieldByName(fieldName, false) ?: return null
+        val field = psiClass.findFieldByName(fieldName, true) ?: return null
         val initializer = field.initializer ?: return null
         return JavaPsiFacade.getInstance(project)
             .constantEvaluationHelper.computeConstantExpression(initializer)?.toString()
@@ -253,9 +404,17 @@ object XmlPreviewService {
         model: XmlPreviewModel,
         extraWarnings: List<String> = emptyList(),
         entityContext: SqlCompletionContext? = null,
+        /**
+         * T-MbgExamplePreview R6：是否把基线渲染（默认 state）的错误并入 warning。
+         *
+         * 预览面板传 false——面板随后会按用户当前勾选重渲染，并把本轮错误放进 `xmlErrors`；
+         * 两份混装会让告警描述一个与当前产物不一致的状态（用户截图里两条互相矛盾的错误即此形态）。
+         * 注解预览链没有交互态，保持 true（默认），行为不变。
+         */
+        includeRenderErrors: Boolean = true,
     ): PreviewResult {
         val rendered = model.renderSql()
-        val errors = model.errors + extraWarnings + rendered.errors
+        val errors = model.errors + extraWarnings + if (includeRenderErrors) rendered.errors else emptyList()
         val sql = rendered.sql
         return PreviewResult(
             sql = sql,

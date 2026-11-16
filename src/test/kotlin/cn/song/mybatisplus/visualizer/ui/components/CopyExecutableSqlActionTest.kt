@@ -120,4 +120,56 @@ class CopyExecutableSqlActionTest {
         )
         assertEquals("SELECT 1", result)
     }
+
+    // ---------------- T-CopyPlaceholderMarker：模拟占位跟着产物走 ----------------
+
+    @Test
+    fun `含模拟占位_头部用占位标记且不重复raw标记`() {
+        val product = CopyExecutableSqlAction.assembleProduct(
+            rawSql = "SELECT * FROM t WHERE ( {{criterion.condition}} ? )",
+            hasDollarRawSegments = true,
+        )
+        assertEquals(1, product.simulationPlaceholderCount)
+        assertTrue(product.text, product.text.startsWith(CopyExecutableSqlAction.unresolvedPlaceholderMarker(1)))
+        assertTrue("产物本体保留占位：${product.text}", product.text.contains("{{criterion.condition}}"))
+        assertFalse(
+            "有占位时不应再挂「已用模拟值填充」那条：${product.text}",
+            product.text.contains(CopyExecutableSqlAction.DOLLAR_RAW_MARKER),
+        )
+    }
+
+    @Test
+    fun `多处模拟占位_计数正确`() {
+        val product = CopyExecutableSqlAction.assembleProduct(
+            rawSql = "SELECT * FROM t WHERE {{a.b}} = ? AND {{c.d}} = ?",
+            hasDollarRawSegments = true,
+        )
+        assertEquals(2, product.simulationPlaceholderCount)
+        assertTrue(product.text.startsWith(CopyExecutableSqlAction.unresolvedPlaceholderMarker(2)))
+    }
+
+    @Test
+    fun `无占位_保留既有raw标记`() {
+        val product = CopyExecutableSqlAction.assembleProduct(
+            rawSql = "SELECT * FROM t WHERE id = 1",
+            hasDollarRawSegments = true,
+        )
+        assertEquals(0, product.simulationPlaceholderCount)
+        assertTrue(product.text.startsWith(CopyExecutableSqlAction.DOLLAR_RAW_MARKER))
+    }
+
+    @Test
+    fun `无占位无raw_产物逐字节不变`() {
+        val product = CopyExecutableSqlAction.assembleProduct(rawSql = "SELECT 1")
+        assertEquals("SELECT 1", product.text)
+        assertEquals(0, product.simulationPlaceholderCount)
+        assertFalse(product.text.startsWith("--"))
+    }
+
+    @Test
+    fun `share链复用占位标记_无占位原样返回`() {
+        val withPlaceholder = CopyExecutableSqlAction.withPlaceholderMarker("SELECT * FROM t WHERE {{a.b}} = 1")
+        assertTrue(withPlaceholder.startsWith(CopyExecutableSqlAction.unresolvedPlaceholderMarker(1)))
+        assertEquals("SELECT 1", CopyExecutableSqlAction.withPlaceholderMarker("SELECT 1"))
+    }
 }

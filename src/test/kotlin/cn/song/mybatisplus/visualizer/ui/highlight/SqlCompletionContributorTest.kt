@@ -231,4 +231,58 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
         val roundTrip = com.intellij.psi.PsiDocumentManager.getInstance(proj).getPsiFile(doc!!)
         assertNotNull("PsiDocumentManager 应能从 document 反查到 PSI（补全框架依赖）", roundTrip)
     }
+
+    /**
+     * §二十八：用户实测形态——在 SELECT 列表里删到 `DEL_` 再补 `DEL_F`，补全没反应。
+     * 先钉死「子句判定」这一半：这段文本必须判成 SELECT 列位（不是 TABLE），否则列名分支会被整段跳过。
+     */
+    fun testSelectListPartialColumnClause() {
+        val samples = listOf(
+            "SELECT 'false' AS QUERYID, ID, DEL_" to SqlClause.SELECT_COLUMN,
+            "SELECT 'false' AS QUERYID, ID, DEL_F" to SqlClause.SELECT_COLUMN,
+            // WHERE 后的部分列名是列位（实测返回 COLUMN；我最初的 UNKNOWN 预期是错的）
+            "SELECT ID, DEL_FLAG FROM CUST_CHANNEL WHERE DEL_F" to SqlClause.COLUMN,
+        )
+        samples.forEach { (text, expected) ->
+            val actual = detectClause(text, text.length)
+            assertEquals("子句判定: \"$text\"", expected, actual)
+        }
+    }
+
+    /**
+     * §三十一：列名别名形态。真机证据：`prefix='DEL_F' ctx cols=19 added col=0`——
+     * 实体列名是驼峰（`delFlag`），用户敲的是大写蛇形（`DEL_FLAG`），前缀匹配命中不了。
+     */
+    fun testColumnNameAliases() {
+        assertEquals(
+            "驼峰列名要能补出大写蛇形",
+            listOf("delFlag", "del_flag", "DEL_FLAG"),
+            SqlCompletionContributor.columnNameAliases("delFlag"),
+        )
+        assertEquals(
+            "已是蛇形/大写的列名保持原样（不产生重复别名）",
+            listOf("DEL_FLAG"),
+            SqlCompletionContributor.columnNameAliases("DEL_FLAG"),
+        )
+        assertEquals(
+            "普通小写列名也给一份大写形态（SQL 里常写 ID）",
+            listOf("id", "ID"),
+            SqlCompletionContributor.columnNameAliases("id"),
+        )
+        assertTrue("空名不产生别名", SqlCompletionContributor.columnNameAliases(" ").isEmpty())
+    }
+
+    /**
+     * §三十三：插入形态跟随输入风格——大写 SQL 补大写、小写 SQL 补小写、混合保持原名。
+     */
+    fun testPreferredColumnVariant() {
+        val camel = "delFlag"
+        assertEquals("全大写输入 → UPPER_SNAKE", "DEL_FLAG", SqlCompletionContributor.preferredColumnVariant(camel, "DEL_F"))
+        assertEquals("全小写输入 → snake", "del_flag", SqlCompletionContributor.preferredColumnVariant(camel, "del_f"))
+        assertEquals("混合输入 → 保持原名", camel, SqlCompletionContributor.preferredColumnVariant(camel, "Del"))
+        assertEquals("空前缀 → 保持原名", camel, SqlCompletionContributor.preferredColumnVariant(camel, ""))
+        // 列名本身已是 snake：大小写两种输入各自得到对应形态
+        assertEquals("snake 列名 + 大写输入 → 大写形态", "DEL_FLAG", SqlCompletionContributor.preferredColumnVariant("del_flag", "DEL_F"))
+        assertEquals("snake 列名 + 小写输入 → 原样", "del_flag", SqlCompletionContributor.preferredColumnVariant("del_flag", "del_f"))
+    }
 }

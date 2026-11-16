@@ -241,6 +241,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal val paramFields = mutableListOf<JBTextField>()
     // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
     internal val paramWarnLabels = mutableListOf<JBLabel>()
+    // T-ParamNameTruncation：左栏标签/复选框截断态登记——视口宽度变化后原地重排（不重建左栏）
+    internal val paramLabelRefs = mutableListOf<ParamLabelRef>()
+    internal val paramCheckRefs = mutableListOf<ParamCheckRef>()
+    /** T-ParamNameTruncation：列宽重排防抖调度器（惰性建，随本面板 Disposer 树释放）。 */
+    internal var labelRelabelAlarm: com.intellij.util.Alarm? = null
     internal val conditionCheckBoxes = mutableListOf<JCheckBox>()
     // R30 条件求值探镜：XML 条件行尾的三态结果标注（条件 id → 标签），renderSql 每轮刷新（零监听器）
     internal val xmlConditionOutcomeLabels = mutableMapOf<String, JBLabel>()
@@ -378,6 +383,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      *  [prewarmLifecycleGate]）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
     @Volatile
     internal var previewDisposed = false
+
+    /** 13.12：预览临时目录落到项目根兜底时，「只提示一次」的闸门（本面板生命周期内）。 */
+    internal val previewFallbackNoticeGate = PreviewFallbackNoticeGate()
 
     /**
      * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
@@ -652,7 +660,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // R22 T-02/T-03：勾选态与 foreach 行的组件登记（快照枚举 + 召回视觉同步；随 rebuild 清场）
     internal val xmlForEachNullBoxes = mutableListOf<JCheckBox>()
     internal val xmlForEachValueFields = mutableListOf<Pair<String, JBTextField>>()
+    // T-ForEachInert：foreach 行的「本轮未参与渲染」提示标签（expr → 标签；随 rebuild 清场）。
+    // 判据取渲染产物（`__frch_<item>_*` 映射缺席），故只能在渲染帧内刷新，见 syncXmlForEachInertStates。
+    internal val xmlForEachInertLabels = mutableListOf<Pair<String, JBLabel>>()
     internal var xmlErrors = listOf<String>()
+    /**
+     * T-FullTableWriteRisk：本轮 XML 渲染产物的全表写风险（无 WHERE 的 DELETE/UPDATE，null = 无）。
+     * 随每轮 renderSql 刷新（勾选变化会改变产物），由 [updateMeta] 消费成横幅——**优先级高于**
+     * 「预览未完整还原」。
+     */
+    internal var writeRiskWarning: FullTableWriteRisk? = null
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     internal var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
     // T-Ibatis2Gap 券 A：iBatis 迭代值状态（集合属性名 → 逗号/换行分隔原文）——
@@ -665,6 +682,25 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var ibatisRenderWarningIsNote = false
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     internal var errorCopyButton: JButton? = null
+
+    /**
+     * T-PreviewStmtTypeScope D-3：「预览目标」切换按钮——同一 wrapper 上出现多种消费写法时可见
+     * （`update(entity, w)` 与 `delete(w)` 复用了同一个变量），点击列出全部档位按需切换。
+     * 单档场景恒隐藏，常规预览不占位。
+     */
+    internal var stmtTypeButton: JButton? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前结果的可切换档位（与 [stmtTypeButton] 同源，弹层用）。 */
+    internal var stmtTypeOptions: List<cn.song.mybatisplus.visualizer.model.ConsumptionKind> = emptyList()
+
+    /** T-PreviewStmtTypeScope D-3：按档位重算当前预览的闭包（结果自带，见 PreviewResult.statementTypeSwitch）。 */
+    internal var stmtTypeSwitcher: ((cn.song.mybatisplus.visualizer.model.ConsumptionKind) -> PreviewResult?)? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前生效的档位（按钮文案与弹层勾选态用；null = 默认 SELECT）。 */
+    internal var stmtTypeCurrent: cn.song.mybatisplus.visualizer.model.ConsumptionKind? = null
+
+    /** T-PreviewStmtTypeScope D-3：该 wrapper 上的全部消费证据（弹层条目里带方法名与行号）。 */
+    internal var stmtTypeEvidences: List<cn.song.mybatisplus.visualizer.model.WrapperConsumption> = emptyList()
     internal var currentWarning: String? = null
     // UI-001：当前告警是否信息级（横幅/元信息行前缀分档用；false = 失败档 ⚠）
     internal var currentWarningIsNote = false
@@ -734,6 +770,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var schemeCombo: JComboBox<String>? = null
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
     internal var bindStateLabel: JBLabel? = null
+
+    /** T-PreviewExecWriteDefer：惰性口径下的「显示执行控制台」链接（bind-state 行内）。 */
+    internal var bindStateShowConsoleLink: com.intellij.ui.components.labels.LinkLabel<Any>? = null
+
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     internal var schemeSyncingCombo = false
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -820,6 +860,12 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
             override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+        })
+        // T-ParamNameTruncation：左栏视口宽度变化（拖分隔条 / 拉窗口 / 首显）→ 标签列宽原地重算。
+        // 旧实现只在 rebuildLeftPanel 那一瞬间算一次，宽面板里仍按窄列宽截断参数名。
+        paramScroll.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = scheduleParamLabelRelabel()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = scheduleParamLabelRelabel()
         })
 
         // T-StackHoverUi：调用栈悬停弹层（调试器 Frames 风格）——meta 行悬停承接完整调用链，
@@ -980,10 +1026,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         runCatching {
             cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
         }
-        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅。
-        // T-HiddenBugPerfScan 券 Y2：删除尾部自处置——面板已由宿主挂树（SqlPreviewDialog:62
-        // Disposer.register(disposable, panel)，唯一实例化点），树级联触发本方法时再对正在
-        // 被处置的自身调用 Disposer.dispose(this) 属重入；全仓无 panel.dispose() 直调路径。
+        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        // T-PreviewEditorLeak（2026-11-13 真机 SEVERE 驱动）：**兜底释放预览编辑器与 autopopup
+        // listener**。常规路径是 `removeNotify → releaseEditor`，而 IDE 退出/窗口已隐藏时
+        // removeNotify 不必然到达；此时残留的编辑器（含平台 CaretModelImpl/EditorView 子件）与
+        // `SqlPreviewPanel.autoPopup`（`Disposer.newDisposable` 的 ROOT 级子件）都会被平台
+        // ObjectTree 报 "Memory leak detected … Plugin to blame: SQL Visualizer"（实测一次退出 4 条）。
+        // 两个调用都幂等：编辑器已释放/字段已空时零动作。
+        // （合流注记：本支原券 Y2 曾删除尾部自处置 Disposer.dispose(this)——master 侧 T-PreviewEditorLeak
+        // 2026-11-13 起保留该调用并已随 2026.11.16 正式版在产，按「master 基线」保留 master 形态，Y2 不再保留）
+        runCatching { disposeCurrentEditorOnly() }
+        runCatching {
+            autoPopupDisposable?.let { Disposer.dispose(it) }
+            autoPopupDisposable = null
+        }
+        Disposer.dispose(this)
     }
 
     // ------------------------------------------------------------------
@@ -1165,6 +1222,14 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     fun hasDollarRawSegments(): Boolean = current?.hasDollarRawSegments == true
 
+    /**
+     * T-MbgExamplePreview T1：当前编辑器里的产物是否含模拟占位 `{{表达式}}`。
+     *
+     * 占位来自 `${}` 直替在模拟参数下求值为空（MBG Example 的 `${criterion.condition}` 是典型），
+     * 给人看缺段用；送进 JDBC 必然语法错，执行/EXPLAIN 前要转向更强的确认文案。
+     */
+    fun hasSimulationPlaceholders(): Boolean = currentEditorSql().orEmpty().contains("{{")
+
     /** F-8：当前预览的表名（可 null）。 */
     fun currentTableName(): String? = current?.tableName
 
@@ -1309,6 +1374,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** R22 T-02/T-03 测试缝：历史快照构建（含勾选态/foreach 权威态特殊键）。 */
     internal fun buildHistorySnapshotForTest(): Map<String, String> = buildHistorySnapshot()
+
+    /**
+     * T-PreviewOpenPerfM2 P8 测试缝：模拟 `showResult` 里的**默认勾选初始化**。
+     *
+     * 真实流程是「先按 defaultState 设初始勾选 → 再 recall 叠加用户改变」；测试若只 `clearState`
+     * 后直接 recall，就跳过了前半段（P8 之后召回不再负责「补回默认项」）。
+     */
+    internal fun seedEnabledIdsForTest(ids: Set<String>) {
+        enabledIds.clear()
+        enabledIds.addAll(ids)
+    }
     /** R22 T-02/T-03 测试缝：召回（含勾选态/foreach 权威态还原）。 */
     internal fun recallFromHistoryForTest() = recallFromHistory()
     /** R22 T-02 测试缝：可见勾选框选中态（按 client property id/expr 查）。 */
@@ -1419,14 +1495,30 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         internal const val BIND_STATE_ROW_NAME = "mpsv.bindStateRow"
         internal const val BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel"
 
+        /** T-PreviewExecWriteDefer：bind-state 行「显示执行控制台」链接的控件名（测试/守卫定位用）。 */
+        internal const val BIND_STATE_SHOW_CONSOLE_NAME = "mpsv.showConsoleLink"
+
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
         internal const val SNAPSHOT_CHK = "__chk__:"
+
+        /**
+         * T-PreviewOpenPerfM2 P8：勾选态的**当时默认基线**（同 id 后缀）。
+         *
+         * 快照里的 `SNAPSHOT_CHK` 是全量勾选态；召回时若整体覆盖，规则升级后的新默认
+         * （profile 抑制 / choose 组归并 / M2 真实 kind）会被旧快照冲掉。记下基线后，召回只应用
+         * 「用户相对基线的改变」；升级前保存的旧快照无此键 ⇒ 一律不应用，让新默认先落地一次。
+         * 前缀刻意与 `SNAPSHOT_CHK` 不互为前缀（`__chkbase__:` 不以 `__chk__:` 开头）。
+         */
+        internal const val SNAPSHOT_CHK_BASE = "__chkbase__:"
         internal const val SNAPSHOT_FNULL = "__fnull__:"
         internal const val SNAPSHOT_FEV = "__fev__:"
 
         /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
         internal const val PROP_TOGGLE_ID = "mpsv.toggleId"
+
+        /** T-ParamNameTruncation：标签全名锚点——视口变化重排时按它重算省略文本与 tooltip。 */
+        internal const val PROP_LABEL_FULL_TEXT = "mpsv.labelFullText"
 
         /** R49：条件复选框标签截断预算下限（px）——行尾探镜标注按宽度扣减后仍保底可读（同 [checkBoxMaxWidth] 下限）。 */
         internal const val MIN_CHECKBOX_TEXT_WIDTH = 100

@@ -44,6 +44,23 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class InsertColumnInlayGateTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // T-PreviewInlayNativeYield：让位门在测试平台（IU 2024.3.7.1，DatabaseTools 在位）会把 provider
+        // 整体短路成零提示。本类验的是「让位门以内」的既有契约（一次性闸门 + 规划缓存），故先钉死
+        // 「原生不在位」，读数与该门上线前逐字一致；让位门本身另有 NativeColumnInlayYieldGateTest。
+        NativeColumnInlayYieldGate.resetForTest()
+        NativeColumnInlayYieldGate.probe = { false }
+    }
+
+    override fun tearDown() {
+        try {
+            NativeColumnInlayYieldGate.resetForTest()
+        } finally {
+            super.tearDown()
+        }
+    }
+
     private val provider = PreviewInsertColumnInlayProvider()
 
     private val insertSql = "INSERT INTO user (id, name) VALUES (1, 'admin')"

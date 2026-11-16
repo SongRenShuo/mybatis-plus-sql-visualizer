@@ -325,6 +325,9 @@ internal fun SqlPreviewService.buildPreviewResult(
     historyFingerprintSeed: String? = null,
     dialect: cn.song.mybatisplus.visualizer.sql.Dialect = currentDialect(),
     dialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null,
+    /** T-PreviewStmtTypeScope：判型依据（消费调用）与全部候选；面板 meta 行/悬停展示。 */
+    decidingConsumption: cn.song.mybatisplus.visualizer.model.WrapperConsumption? = null,
+    otherConsumptions: List<cn.song.mybatisplus.visualizer.model.WrapperConsumption> = emptyList(),
 ): PreviewResult {
     val compact = !formatSql()
     val generated = SqlGenerator.generateWithParams(statement, compact = compact, dialect = dialect)
@@ -358,6 +361,9 @@ internal fun SqlPreviewService.buildPreviewResult(
         countSql = countSql,
         // 缺陷②修复：参数历史键指纹用「注入前」文本（开关切换不再改键，回填不丢）
         historyFingerprintSeed = historyFingerprintSeed,
+        // T-PreviewStmtTypeScope：判型依据（面板 meta 行 + 悬停）
+        decidingConsumption = decidingConsumption,
+        otherConsumptions = otherConsumptions,
     )
 }
 

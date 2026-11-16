@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.model.ConsumptionKind
 import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution
@@ -258,7 +259,15 @@ class SqlPreviewService(internal val project: Project) {
             sqlPsiResolution = sqlResolution, moduleResolution = moduleResolution)
     }
 
-    fun preview(anchor: PsiElement, sourceContext: PreviewSourceContext? = null): PreviewResult? {
+    /**
+     * @param preferredConsumption T-PreviewStmtTypeScope D-3：强制判型档位（面板「预览目标」切换用）；
+     *        null = 按 D-2 依锚点位置判定。强制档位参与缓存键，切换后不会命中旧档位的缓存条目。
+     */
+    fun preview(
+        anchor: PsiElement,
+        sourceContext: PreviewSourceContext? = null,
+        preferredConsumption: cn.song.mybatisplus.visualizer.model.ConsumptionKind? = null,
+    ): PreviewResult? {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
         if (settings?.state?.jdbcSqlPreviewEnabled != false) {
@@ -284,9 +293,12 @@ class SqlPreviewService(internal val project: Project) {
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
         // （文件戳不变的场景）不再命中旧解析结果
         val resolveVariables = effectiveReplaceParams()
+        // T-PreviewStmtTypeScope D-3：强制档位进缓存签名——同一锚点在不同「预览目标」下是不同结果，
+        // 不区分就会切换回旧档位的 SQL（锚点偏移维度不变，只能靠签名维度隔离）。
+        val consumptionSignature = preferredConsumption?.name ?: ""
         val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables,
-            "${tableConfigSignature()}|${decision.status}|${decision.dialectName}|${decision.source}|${decision.dataSourceIds}") {
-            WrapperLocator.locateWithTable(anchor, resolveVariables)
+            "${tableConfigSignature()}|${decision.status}|${decision.dialectName}|${decision.source}|${decision.dataSourceIds}|kind:$consumptionSignature") {
+            WrapperLocator.locateWithTable(anchor, resolveVariables, preferredConsumption)
         }
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
         // 实体文件变化不触发）：命中缓存时校验实体文件戳（@TableName/@TableField 注解来源），
@@ -352,13 +364,25 @@ class SqlPreviewService(internal val project: Project) {
                 located.chain.updateEntityConsumed &&
                     located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES -> {
                     val parsed = QueryWrapperParser(table).parse(located.chain)
+                    // T-PreviewStmtTypeScope（用户 2026-11-13 真机）：SET 占位符**逐列**给出来源
+                    // （`patch.order_no`）。此前六列共用 source "?"，面板按来源去重后只剩一行 `#?`，
+                    // 填一个值就把整列 SET 全填成同一个数（真机产物 `order_no = '1', user_id = 1, …`）。
+                    val entityExpr = located.chain.decidingConsumption
+                        ?.takeIf { it.kind == ConsumptionKind.UPDATE_ENTITY }
+                        ?.detail?.takeIf { it.isNotBlank() }
+                        ?: ENTITY_PARAM_FALLBACK
                     val sets = table.columns
                         .filter { !it.isId }
                         // T-M22-02：@Version 列排除——实体 SET 不含 version（对齐 MP
                         // OptimisticLockerInnerInterceptor：version 不进实体字段 SET，
                         // 由 [injectOptimisticLockCondition] 追加 `version = version + 1`）
                         .filter { it.columnName != table.versionColumn }
-                        .map { SetClause(column = ColumnRef(columnName = it.columnName), value = SqlValue.Placeholder("?")) }
+                        .map {
+                            SetClause(
+                                column = ColumnRef(columnName = it.columnName),
+                                value = SqlValue.Placeholder("$entityExpr.${it.columnName}"),
+                            )
+                        }
                     UpdateStatement(table, sets, parsed.conditions)
                 }
                 // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费；
@@ -429,16 +453,37 @@ class SqlPreviewService(internal val project: Project) {
                 historyFingerprintSeed = historyFingerprintSeed,
                 dialect = dialect,
                 dialectDecision = decision,
+                // T-PreviewStmtTypeScope：判型依据随结果进面板（meta 行 + 悬停）——「为什么是
+                // UPDATE/DELETE」在面板上可见（来自哪条语句的哪个消费方法），不再让用户猜。
+                decidingConsumption = located.chain.decidingConsumption,
+                otherConsumptions = located.chain.allConsumptions.filterNot { it == located.chain.decidingConsumption },
             )
             recordHistory(result, anchor)
+            // T-PreviewStmtTypeScope D-3：同一 wrapper 上出现多种消费写法时，不替用户拍板——把可切换的
+            // 「预览目标」随结果带到面板（默认 = D-2 判定的那一档，切换后按强制档位重算）。
+            // 只有 ≥2 档才挂重算闭包：单档场景既不持有 PSI 引用，也不给面板多余入口。
+            val statementTypeOptions = located.chain.allConsumptions
+                .map { it.kind }
+                .distinct()
+                .filter { it != ConsumptionKind.PAGE }
+                .sortedBy { STATEMENT_TYPE_ORDER.indexOf(it) }
+            val switchable = if (statementTypeOptions.size > 1) {
+                { kind: ConsumptionKind -> preview(anchor, context, kind) }
+            } else {
+                null
+            }
+            val withChoices = result.copy(
+                statementTypeOptions = statementTypeOptions,
+                statementTypeSwitch = switchable,
+            )
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
-                result.copy(
-                    sql = "SELECT EXISTS (${result.sql})",
-                    compactSql = "SELECT EXISTS (${result.compactSql})",
+                withChoices.copy(
+                    sql = "SELECT EXISTS (${withChoices.sql})",
+                    compactSql = "SELECT EXISTS (${withChoices.compactSql})",
                 )
             } else {
-                result
+                withChoices
             }
         }
 
@@ -1725,9 +1770,26 @@ class SqlPreviewService(internal val project: Project) {
      * 用于 [preview] 的 updateEntityConsumed / deleteConsumed 早退分支类型守卫，新类型走
      * ConverterRegistry 分派（保留主表别名与 JOIN，不走单表实体展开 / 单表 DeleteStatement 路径）。
      */
+    /**
+     * T-PreviewStmtTypeScope：实体更新 SET 占位符的来源前缀兜底——实体实参文本取不到时
+     * （锚点不在调用内 / 实参过长）用「实体」，面板参数行仍逐列可辨（`实体.order_no`）。
+     */
+    private val ENTITY_PARAM_FALLBACK = "实体"
+
     private val UPDATE_DELETE_JOIN_TYPES: Set<WrapperType> = setOf(
         WrapperType.UPDATE_JOIN,
         WrapperType.DELETE_JOIN,
+    )
+
+    /**
+     * T-PreviewStmtTypeScope D-3：面板「预览目标」切换列表的档位顺序——与判型分派优先级同源
+     * （count > exists > update > delete）。PAGE 不进列表：它只追加 LIMIT，不改变语句类型。
+     */
+    private val STATEMENT_TYPE_ORDER: List<ConsumptionKind> = listOf(
+        ConsumptionKind.COUNT,
+        ConsumptionKind.EXISTS,
+        ConsumptionKind.UPDATE_ENTITY,
+        ConsumptionKind.DELETE,
     )
 
     /**
@@ -1947,8 +2009,7 @@ class SqlPreviewService(internal val project: Project) {
          */
         @Volatile
         var lastPreviewRequestMs: Long = 0L
-            internal set
-
+        
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
@@ -2020,9 +2081,21 @@ class SqlPreviewService(internal val project: Project) {
                     runCatching { previous.doDispose() }
                 }
             }
+            // T-PreviewFast P8（2026-11-13 用户令「性能做到极致」）：把「弹窗侧」拆成两段量——
+            // ② 弹窗构造（面板 + 编辑器 + 控制台准备，全在 EDT 构造期同步跑）；
+            // ③ show→返回。配合 `request→dialog`（请求→进入本方法）与 `[M36] prewarm`、
+            // `prepareDefaultConsole` 的时长，就能判「剩余时间在谁身上」。
+            // 注：不再量「池线程→EDT 排队」——该值依赖全局单槽时间戳，并发预览会串读数（实测 651ms
+            // 的请求被后一次请求覆盖成 1ms），不可信。
+            val constructStarted = System.currentTimeMillis()
             val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
+            val constructMs = System.currentTimeMillis() - constructStarted
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
+            val showStarted = System.currentTimeMillis()
             dialog.show()
+            LOG.info(
+                "[open-perf] dialog: construct=${constructMs}ms show=${System.currentTimeMillis() - showStarted}ms",
+            )
         }
 
         /**
@@ -2087,7 +2160,11 @@ class SqlPreviewService(internal val project: Project) {
                 // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
                 // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
                 // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
-                if (result != null && result.previewModel == null && result.batchModel == null &&
+                // T-PreviewExecWriteDefer：惰性口径下**不预热 exec 文件**——预热本身就是「写带方言映射的
+                // mpsql-exec.sql」，会触发 PushedFilePropertiesUpdater ⇒ 工程进 dumb（用户 00:10 A/B：
+                // 第 1 次写→dumb、第 2 次不写→无 dumb）。执行链在用户真执行时会自己同步该文件。
+                if (PreviewConsoleEager.enabled() && result != null && result.previewModel == null &&
+                    result.batchModel == null &&
                     result.xmlModel == null && result.fillClauses.isNullOrEmpty() &&
                     cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
                 ) {

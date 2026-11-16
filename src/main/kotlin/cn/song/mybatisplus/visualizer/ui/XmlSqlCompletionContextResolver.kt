@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -60,8 +61,25 @@ object XmlSqlCompletionContextResolver {
     /** @TableName 注解全限定名（真实 MP 注解，libs.mp.core 提供）。 */
     private const val TABLE_NAME_ANNOTATION = "com.baomidou.mybatisplus.annotation.TableName"
 
+    /**
+     * @TableName 的**简单名**——注解 stub 索引的键就是它（不是 FQN）。
+     *
+     * 243 `JavaAnnotationElementType.indexStub` 字节码实证：键＝`getReferenceShortName(text)`，
+     * 该方法先 `indexOf('(')` 截断再取短类名 ⇒ 属性名/属性值都进不了索引，键恒为 `TableName`。
+     * 因此**按 FQN 查这个索引永远查不到**（该兜底曾恒空，20261113 修）。
+     */
+    private const val TABLE_NAME_ANNOTATION_SIMPLE_NAME = "TableName"
+
     /** 联表候选上限（防大项目候选爆炸，M27 §3.2）。 */
     private const val CANDIDATES_CAP = 50
+
+    /** 候选解析预算（T-StartupReadLockFreeze §十九）：超预算即停，剩余候选等下次缓存重建。 */
+    internal var candidatesBudgetMs = 400L
+
+    /** 测试缝：表名 → 实体类（Light 沙盒里 EntityClassFinder 依赖索引、拿不到；生产恒 null）。 */
+    internal var entityFinderForTest: ((Project, String) -> PsiClass?)? = null
+
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlCompletionContextResolver::class.java)
 
     /** 非实体参数简单名集合：MP Wrapper 族 + 基本类型包装 + 常见非实体类型（简单名匹配）。 */
     private val NON_ENTITY_SIMPLE_NAMES = setOf(
@@ -83,7 +101,17 @@ object XmlSqlCompletionContextResolver {
      *                     经 [XmlFile.rootTag] 向上获取；id 属性即语句 id）
      * @return [SourceSqlContext]；任何环节失败均降级（main=null/空候选/空参数名），不抛异常
      */
-    fun resolveXml(project: Project, statementTag: XmlTag): SourceSqlContext {
+    fun resolveXml(
+        project: Project,
+        statementTag: XmlTag,
+        /**
+         * T-StartupReadLockFreeze §二十（2026-11-13 15:31 真机）：是否解析**联表候选**（全项目
+         * `@TableName` 实体逐个 `EntityResolver.resolve`）。预览打开一律传 false——实测候选段
+         * 2~3s 且最终只得到 1 个候选（多数实体解析结果为空表名，上限按"已解析"计数拦不住整轮扫描）；
+         * 候选只服务 JOIN 表名补全，等用户真正触发补全时再算（默认 true）。
+         */
+        includeCandidates: Boolean = true,
+    ): SourceSqlContext {
         // 向上找根 <mapper> tag 的 namespace（与 XmlEwResolver 的 namespace 来源一致）
         val namespace = (statementTag.containingFile as? XmlFile)?.rootTag?.getAttributeValue("namespace")
         val mapperClass = namespace?.takeIf { it.isNotEmpty() }?.let {
@@ -93,7 +121,16 @@ object XmlSqlCompletionContextResolver {
         val method = statementTag.getAttributeValue("id")?.let { id ->
             mapperClass?.findMethodsByName(id, false)?.firstOrNull()
         }
-        return resolveCommon(project, mapperClass, method)
+        // §二十六：mapper 接口/泛型实体解析不到时的兜底——直接从语句文本取 FROM/JOIN 表名，
+        // 按表名反查实体（MBG 风格 mapper、沙盒没 Load Maven 时最常见）。
+        val fallbackTable = runCatching {
+            // 注意：这里的 `\\b` 必须是正则词界。上一版经脚本写入时被写成了退格符（U+0008），
+            // 正则变成「退格 + from|join」，永远不匹配 ⇒ 兜底恒为 null（已修，勿再用脚本写这段）。
+            Regex("(?i)\\b(?:from|join)\\s+([A-Za-z_][A-Za-z0-9_]*)")
+                .find(statementTag.value.text)
+                ?.groupValues?.getOrNull(1)
+        }.getOrNull()
+        return resolveCommon(project, mapperClass, method, includeCandidates, fallbackTable)
     }
 
     /**
@@ -111,13 +148,40 @@ object XmlSqlCompletionContextResolver {
     // ------------------------------------------------------------------
 
     /** 主实体解析（优先级从高到低）：① Mapper 泛型基类实参 ② 方法实体参数；均失败 → null。 */
-    private fun resolveCommon(project: Project, mapperClass: PsiClass?, method: PsiMethod?): SourceSqlContext {
+    private fun resolveCommon(
+        project: Project,
+        mapperClass: PsiClass?,
+        method: PsiMethod?,
+        includeCandidates: Boolean = true,
+        fallbackTableName: String? = null,
+    ): SourceSqlContext {
+        val t0 = System.currentTimeMillis()
         val mainEntity = findMainEntity(mapperClass, method)
-        val mainTable = mainEntity?.let { runCatching { EntityResolver().resolve(it) }.getOrNull() }
+        val t1 = System.currentTimeMillis()
+        val resolvedTable = mainEntity?.let { clazz -> resolveEntityCached(project, clazz) }
             ?.takeIf { it.tableName.isNotEmpty() }
+        // §二十六：接口/泛型都没解析到时，用 SQL 里的表名反查实体（表名 → @TableName/类名约定）
+        val mainTable = resolvedTable ?: fallbackTableName?.let { table ->
+            runCatching {
+                val clazz = entityFinderForTest?.invoke(project, table)
+                    ?: cn.song.mybatisplus.visualizer.psi.EntityClassFinder(project).find(table).firstOrNull()
+                clazz?.let { resolveEntityCached(project, it) }?.takeIf { it.tableName.isNotEmpty() }
+            }.getOrNull()
+        }
+        if (resolvedTable == null && mainTable != null) {
+            LOG.info("[open-perf] ctx fallback: table=$fallbackTableName 反查到实体 ${mainTable.tableName}")
+        }
+        val t2 = System.currentTimeMillis()
+        val candidates = if (includeCandidates) buildCandidates(project, mainTable) else emptyList()
+        val t3 = System.currentTimeMillis()
+        // §十九：分段埋点，下一次真机日志可直接读出「哪一段在吃时间」
+        LOG.info(
+            "[open-perf] ctx detail: entity=${t1 - t0}ms resolve=${t2 - t1}ms " +
+                "candidates=${t3 - t2}ms candidatesCount=${candidates.size} include=$includeCandidates",
+        )
         return SourceSqlContext(
             main = mainTable?.let { buildMainContext(it) },
-            candidates = buildCandidates(project, mainTable),
+            candidates = candidates,
             // T-PT-01：paramTypes 键序 = 命名参数序 + param1..N（与旧 paramNames 列表逐项一致）
             paramNames = AnnotationSqlPreviewService.paramTypes(method).keys.toList(),
         )
@@ -180,9 +244,77 @@ object XmlSqlCompletionContextResolver {
             if (clazz is PsiTypeParameter) continue
             val name = clazz.name ?: continue
             if (name in NON_ENTITY_SIMPLE_NAMES) continue
+            if (name.endsWith("Example")) {
+                // T-StartupReadLockFreeze §二十五（2026-11-13 真机日志）：MBG 的 `selectByExample(XxxExample)`
+                // 参数是**查询条件对象**，不是实体。原实现把它当实体 ⇒ 表名推成 `cust_channel_example`、
+                // 列只有 Example 的 3 个字段（真机 `[completion] ctx: main=cust_channel_example columns=3`），
+                // 列名补全于是给出完全错误的候选。
+                // 按 MBG 命名约定回查同包实体 `Xxx`；查不到就跳过（宁可 main=null，也不拿 Example 当实体）。
+                exampleEntityOf(clazz)?.let { return it }
+                continue
+            }
             return clazz
         }
         return null
+    }
+
+    /**
+     * T-StartupReadLockFreeze §二十九：**按「类名 + 类正文指纹」**缓存实体解析结果。
+     *
+     * 真机实测 `EntityResolver.resolve` 对同一实体每次要 9 秒，而它自己的缓存键含
+     * `identityHashCode(PsiFile)`——PSI 一重建就失配，于是每次点击都重算一遍
+     * （`resolve=9314/9447/9259ms` 三连）。
+     *
+     * 判据演进（两次都被真机/门禁打回，别再退）：
+     *  1. `modificationStamp`：PSI 重建（含本插件自己写临时文档）会把它顶掉，同一实体反复重算
+     *     （实测 `resolve=1ms` 之后紧接着 `4786ms`）；
+     *  2. **TTL 优先**（§三十二）：把「失配」钝化成「60 秒内一律命中」——代价是**内容改了也不重算**：
+     *     dev 实测同一 `com.example.DeviceInfoEntity` 在不同场景里 `@TableName` 不同，第二个场景拿到
+     *     第一个的解析结果，别名列补全整片消失（CI `test(4)` 三连红）；用户侧等价于「改了实体注解，
+     *     预览与补全 60 秒内还是旧的」。
+     *  3. 现口径：`clazz.text.hashCode()`——PSI 重建后**内容不变即哈希不变**（不误 miss），真改了注解/
+     *     字段就变（不误 hit）。文本读取是 O(类大小) 的 PSI 走树（微秒级），远低于一次 resolve。
+     */
+    private val entityInfoCache: MutableMap<String, EntityInfoEntry> = java.util.concurrent.ConcurrentHashMap()
+
+    private data class EntityInfoEntry(val signature: Int, val table: TableInfo)
+
+    /** 测试缝：真正执行 `EntityResolver.resolve` 的次数（验证缓存命中用）。 */
+    internal var entityResolveRuns = 0
+        private set
+
+    internal fun resetEntityCacheForTest() {
+        entityInfoCache.clear()
+        entityResolveRuns = 0
+    }
+
+    private fun resolveEntityCached(project: Project, clazz: PsiClass): TableInfo? {
+        val qName = clazz.qualifiedName ?: clazz.name ?: return null
+        // 内容指纹：PSI 重建不误 miss，真改注解/字段不误 hit（口径详见 entityInfoCache 的 KDoc）
+        val signature = runCatching { clazz.text.hashCode() }.getOrDefault(0)
+        entityInfoCache[qName]?.let { entry ->
+            if (entry.signature == signature) {
+                LOG.info("[open-perf] entity cache hit qName=$qName sig=$signature")
+                return entry.table
+            }
+        }
+        LOG.info("[open-perf] entity cache miss qName=$qName → EntityResolver.resolve")
+        val resolved = runCatching { EntityResolver().resolve(clazz) }.getOrNull() ?: return null
+        entityResolveRuns++
+        entityInfoCache[qName] = EntityInfoEntry(signature, resolved)
+        return resolved
+    }
+
+    /** `xxx.CustChannelExample` → 同包 `xxx.CustChannel`（MBG 生成器的固定命名对）。 */
+    private fun exampleEntityOf(exampleClass: PsiClass): PsiClass? {
+        val qualified = exampleClass.qualifiedName ?: return null
+        if (!qualified.endsWith("Example")) return null
+        val entityFqn = qualified.removeSuffix("Example")
+        if (entityFqn.substringAfterLast('.').isEmpty()) return null
+        return runCatching {
+            JavaPsiFacade.getInstance(exampleClass.project)
+                .findClass(entityFqn, GlobalSearchScope.allScope(exampleClass.project))
+        }.getOrNull()
     }
 
     // ------------------------------------------------------------------
@@ -211,18 +343,186 @@ object XmlSqlCompletionContextResolver {
             result += it
             seen += it.tableName
         }
-        findTableNameEntities(project).forEach { entityClass ->
-            val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: return@forEach
-            if (seen.add(table.tableName)) result += table
+        // T-StartupReadLockFreeze §十九（2026-11-13 15:00 真机）：原实现把**全项目** `@TableName` 实体
+        // 逐个 `EntityResolver.resolve`，最后才 `take(50)`——2500 表工程上一次 6~10s（`pre-assembly`
+        // 埋点直接读出 completion=10327ms/5924ms，且无缓存、第二次照样慢）。
+        // §三十五（2026-11-13 20:xx 真机）：即便加了缓存与预算，**冷态首次仍要 374ms**（预算 400ms 打满，
+        // 只解析出 1 个候选——本工程 `EntityResolver.resolve` 单次就是百毫秒级）。候选只服务补全的
+        // JOIN 表名提示，不该压在点击/补全路径上 ⇒ 改「缓存优先」：未命中就派后台预热（去重、可取消），
+        // 本次降级为空，预热落地后 `refreshCompletionContext()` 回填。
+        val now = System.currentTimeMillis()
+        val cachedBase = candidatesCache.get(project.locationHash)?.let { entry ->
+            // §二十：失效判据从 PsiModificationTracker 改成 TTL——本插件预览链自己会写临时 SQL 文档，
+            // 每次打开都把版本号顶掉，实测第二次打开仍要 2116ms（缓存等于没有）。
+            if (now - entry.createdAt in 0 until candidatesTtlMs) {
+                candidatesCacheHits++
+                entry.tables
+            } else {
+                null
+            }
         }
+        val base = cachedBase ?: run {
+            if (candidatesBlockingBuildEnabled()) {
+                computeCandidatesNow(project)
+            } else {
+                warmCandidates(project) // 后台预热（含单飞 coalesceBy）；本次返回主表兜底
+                emptyList()
+            }
+        }
+        base.forEach { table -> if (seen.add(table.tableName)) result += table }
         return result.take(CANDIDATES_CAP)
     }
 
     /**
+     * 冷态候选的**同步**计算（仅在测试口径、或由 [warmCandidates] 的后台任务调用时执行）。
+     *
+     * 边解析边判上限（够 [CANDIDATES_CAP] 就停）、超 [candidatesBudgetMs] 立刻放弃剩余、结果落 TTL 缓存。
+     */
+    private fun computeCandidatesNow(project: Project): List<TableInfo> {
+        val resolved = mutableListOf<TableInfo>()
+        val resolvedSeen = mutableSetOf<String>()
+        val deadline = System.currentTimeMillis() + candidatesBudgetMs
+        var scanned = 0
+        val entities = tableNameEntitiesProviderForTest?.invoke(project)
+            ?: findTableNameEntities(project)
+        for (entityClass in entities) {
+            if (resolved.size >= CANDIDATES_CAP) break
+            if (System.currentTimeMillis() >= deadline) {
+                LOG.info(
+                    "[open-perf] ctx candidates budget hit: scanned=$scanned resolved=${resolved.size} " +
+                        "budget=${candidatesBudgetMs}ms",
+                )
+                break
+            }
+            scanned++
+            entitiesResolved++
+            val table = runCatching { EntityResolver().resolve(entityClass) }.getOrNull() ?: continue
+            if (table.tableName.isEmpty()) continue
+            if (resolvedSeen.add(table.tableName)) resolved += table
+        }
+        candidatesCache[project.locationHash] = CandidatesEntry(System.currentTimeMillis(), resolved)
+        return resolved
+    }
+
+    /**
+     * 冷态是否允许**同步**算候选。默认＝单测口径 true（既有用例按「首次即拿到候选」写）；
+     * 生产 false ⇒ 缓存优先 + 后台预热（`candidatesBlockingBuildForTest = false` 可在用例里验生产分支）。
+     */
+    private fun candidatesBlockingBuildEnabled(): Boolean =
+        candidatesBlockingBuildForTest
+            ?: com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode
+
+    /** 测试缝：强制冷态口径（null＝按环境判定）。 */
+    internal var candidatesBlockingBuildForTest: Boolean? = null
+
+    /** 候选缓存条目：按 `PsiModificationTracker` 版本失效（改代码/加实体即重建一次）。 */
+    private data class CandidatesEntry(val createdAt: Long, val tables: List<TableInfo>)
+
+    /** 候选缓存 TTL（§二十）：候选只服务补全提示，容忍 2 分钟陈旧，换掉被自写文档顶掉的版本判据。 */
+    internal var candidatesTtlMs = 120_000L
+
+    private val candidatesCache: MutableMap<String, CandidatesEntry> = java.util.concurrent.ConcurrentHashMap()
+
+    /**
+     * T-StartupReadLockFreeze §二十一：**后台补齐候选**（预览打开不再同步算它）。
+     *
+     * 供面板在预览显示后调用：BGT 里把全项目 `@TableName` 实体解析进 TTL 缓存，落地后由调用方
+     * `refreshCompletionContext()` 回填补全上下文，用户真正补全时就有表名候选。
+     *
+     * @return true＝缓存已可用（本次刚算完或本来就热）
+     */
+    fun warmCandidates(project: Project?, onReady: () -> Unit = {}): Boolean {
+        if (project == null) return false
+        if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) return false
+        val now = System.currentTimeMillis()
+        val entry = candidatesCache[project.locationHash]
+        if (entry != null && now - entry.createdAt in 0 until candidatesTtlMs) {
+            onReady()
+            return true
+        }
+        // T-StartupReadLockFreeze §二十四（2026-11-13 真机栈实证）：本方法由面板在工作线程上调用，
+        // 而 `buildCandidates → findTableNameEntities → JavaPsiFacade.findClass` 全是 PSI/索引读——
+        // 不包读动作会抛 `Read access is allowed from inside read-action only`，异常被 runCatching 吞掉
+        // ⇒ 候选永远补不进去（用户看到的就是「补全一直是空的」），同时刷一屏 IDEA 报错。
+        // 用 nonBlocking + inSmartMode：等待索引时不持读锁、可取消，与 S1 预取链同款。
+        val started = System.currentTimeMillis()
+        // 单测走同步路径（测试线程持读动作、没有真正的索引等待），生产走 nonBlocking
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
+            val ok = runCatching {
+                computeCandidatesNow(project)
+                true
+            }.getOrDefault(false)
+            if (ok) onReady()
+            LOG.info("[completion] warmCandidates(unit-test) ok=$ok cached=${cachedCandidateTables(project).size}")
+            return ok
+        }
+        return runCatching {
+            ReadAction.nonBlocking<Unit> {
+                computeCandidatesNow(project)
+                Unit
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .coalesceBy(this, "warmCandidates:${project.locationHash}")
+                .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
+                .onSuccess {
+                    LOG.info(
+                        "[completion] warmCandidates ok=true cached=${cachedCandidateTables(project).size} " +
+                            "elapsed=${System.currentTimeMillis() - started}ms",
+                    )
+                    onReady()
+                }
+                .onError { t ->
+                    LOG.info("[completion] warmCandidates fail ${t.javaClass.simpleName}: ${t.message}")
+                }
+            true
+        }.getOrDefault(false)
+    }
+
+    /** 只读候选缓存（补全上下文构造用）：未预热/已过期 → 空列表，绝不触发解析。 */
+    fun cachedCandidateTables(project: Project?): List<TableInfo> {
+        if (project == null) return emptyList()
+        val entry = candidatesCache[project.locationHash] ?: return emptyList()
+        val now = System.currentTimeMillis()
+        return if (now - entry.createdAt in 0 until candidatesTtlMs) entry.tables else emptyList()
+    }
+
+    /** 测试缝：清空候选缓存。 */
+    internal fun clearCandidatesCacheForTest() {
+        candidatesCache.clear()
+        candidatesCacheHits = 0
+        entitiesResolved = 0
+    }
+
+    /**
+     * 测试缝：候选实体来源。Light 沙盒拿不到 `@TableName` 注解索引（实测返回空 ⇒ 用例会空绿），
+     * 用它直接喂 PSI 类，才能真的压到「全项目逐个 resolve」这条循环。生产恒为 null。
+     */
+    internal var tableNameEntitiesProviderForTest: ((Project) -> List<com.intellij.psi.PsiClass>)? = null
+
+    /** 测试缝：缓存命中次数（探针用——真机那 6~10s 在 60 实体的单测规模里量不出来，只能钉住行为）。 */
+    internal var candidatesCacheHits = 0
+        private set
+
+    /** 测试缝：真正执行 `EntityResolver.resolve` 的实体数（上限断言的直接证据）。 */
+    internal var entitiesResolved = 0
+        private set
+
+    /**
      * 项目内 `@TableName` 实体类：
      *  - 注解类可解析（真实 IDE）→ [AnnotatedElementsSearch.searchPsiClasses]（官方注解索引）；
-     *  - 注解类不可解析（测试沙盒/缺依赖）→ 兜底按 FQN 直查 [JavaAnnotationIndex] 注解 stub
-     *    索引（源文件中**全限定名**书写的注解可命中，实体类注解场景即类级注解）。
+     *  - 注解类不可解析（测试沙盒/缺依赖）→ 兜底按**简单名**直查 [JavaAnnotationIndex] 注解 stub
+     *    索引，命中后按注解原文筛掉非本注解的同名者。
+     *
+     * **索引键是简单名，不是 FQN（243 字节码实证，20261113 修）**：
+     * `JavaAnnotationElementType.indexStub` 写入的键＝ `getReferenceShortName(stub.getText())`，
+     * 它先 `indexOf('(')` 截断（属性名/属性值根本不进索引）、再取短类名 ⇒ 键永远是 `TableName`。
+     * 旧实现把 FQN 传进 `getAnnotations(...)`，于是这条兜底**恒空**（且只在「注解类解析不到」时
+     * 才走，正好是它被写出来要救的那个场景）。源码守卫
+     * `XmlSqlCompletionContextResolverIndexKeyTest` 钉住「只传简单名」。
+     *
+     * 同名误命中筛选走**文本**（不 resolve）：写的名字是 `TableName` 或 `com.baomidou…TableName`
+     * 才算；能解析出 FQN 时再要求等于本注解 FQN，拦掉自定义/别家同名注解。
      * 任一环节异常 → 空列表（不抛异常）。
      */
     private fun findTableNameEntities(project: Project): List<PsiClass> {
@@ -232,9 +532,23 @@ object XmlSqlCompletionContextResolver {
             if (annotationClass != null) {
                 AnnotatedElementsSearch.searchPsiClasses(annotationClass, scope).findAll().toList()
             } else {
-                JavaAnnotationIndex.getInstance().getAnnotations(TABLE_NAME_ANNOTATION, project, scope)
+                JavaAnnotationIndex.getInstance().getAnnotations(TABLE_NAME_ANNOTATION_SIMPLE_NAME, project, scope)
+                    .filter { isMybatisTableNameAnnotation(it) }
                     .mapNotNull { PsiTreeUtil.getParentOfType(it, PsiClass::class.java) }
             }
         }.getOrElse { emptyList() }
+    }
+
+    /**
+     * 该注解是不是 MyBatis-Plus 的 `@TableName`（文本判据，不触发 resolve）。
+     *
+     * 索引只保证「简单名是 TableName」；自己人写 `@TableName`、或写全限定名 `@com.baomidou…TableName`
+     * 都算；若注解能解析出 FQN 且不是本注解（自定义同名注解），排除。
+     */
+    private fun isMybatisTableNameAnnotation(annotation: com.intellij.psi.PsiAnnotation): Boolean {
+        val written = annotation.nameReferenceElement?.referenceName ?: return false
+        if (written != TABLE_NAME_ANNOTATION_SIMPLE_NAME) return false
+        val resolved = runCatching { annotation.qualifiedName }.getOrNull()
+        return resolved == null || resolved == TABLE_NAME_ANNOTATION
     }
 }

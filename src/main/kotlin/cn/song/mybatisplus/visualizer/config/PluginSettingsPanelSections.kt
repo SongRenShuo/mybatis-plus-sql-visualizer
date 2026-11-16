@@ -666,6 +666,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.ibatisXml")
                 toolTipText = MpSqlVisualizerBundle.message("settings.ibatisXml.tip")
             })
+            // T-PreviewExecWriteDefer：控制台准备档（惰性 / 惰性无入口 / 打开即准备）——
+            // 惰性＝预览打开不建控制台（不写带方言映射的 exec 文件，避免工程短暂进 dumb）。
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.consolePrep"), consolePrepCombo.apply {
+                model = DefaultComboBoxModel(consolePrepOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.consolePrep.tip")
+            })
             // T-PagesHql：maintainPage `<datasource>` 源语言档（自动 / 仅 SQL / 仅 HQL）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.pagesSource"), pagesSourceCombo.apply {
                 model = DefaultComboBoxModel(pagesSourceOptions())
@@ -681,6 +687,15 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             addRow(p, g, "", onboardingAnchorTipCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip")
                 toolTipText = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip.tip")
+            })
+            // T-NotifyTune 券 A/B：两个主动通知开关（一次性语义见 DialectGapTip / FirstCaptureGuide）
+            addRow(p, g, "", dialectTipCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.dialectTip")
+                toolTipText = MpSqlVisualizerBundle.message("settings.dialectTip.tip")
+            })
+            addRow(p, g, "", firstCaptureGuideCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.firstCaptureGuide")
+                toolTipText = MpSqlVisualizerBundle.message("settings.firstCaptureGuide.tip")
             })
             // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
             addRow(p, g, "", editorShowWhitespacesCheck.apply {
