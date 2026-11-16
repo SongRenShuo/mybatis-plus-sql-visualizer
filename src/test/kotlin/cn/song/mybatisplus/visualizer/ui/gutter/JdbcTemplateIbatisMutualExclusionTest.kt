@@ -46,7 +46,7 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
         PluginSettings.getInstance().state.showGutterIcon = true
         PluginSettings.getInstance().state.jdbcSqlPreviewEnabled = true
         PluginSettings.getInstance().state.gutterGroupMapperXml = true
@@ -55,7 +55,7 @@ class JdbcTemplateIbatisMutualExclusionTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         try {
-            IbatisXmlStatementTargets.clearCachesForTest()
+            IbatisXmlStatementTargets.resetPerfLogForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.jdbcSqlPreviewEnabled = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true

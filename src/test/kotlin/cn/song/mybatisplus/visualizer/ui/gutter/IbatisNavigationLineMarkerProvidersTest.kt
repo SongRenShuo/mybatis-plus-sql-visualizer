@@ -18,9 +18,11 @@ import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 
 /**
  * T-Ibatis2Gap 券 B：iBatis `<sqlMap>` 语句 ⇄ Java `SqlMapExecutor` 调用点的**双向 gutter 跳转**用例。
@@ -48,12 +50,14 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
+        IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
     }
 
     override fun tearDown() {
         try {
-            IbatisXmlStatementTargets.clearCachesForTest()
+            IbatisXmlStatementTargets.resetPerfLogForTest()
+            IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
             PluginSettings.getInstance().state.ibatisXmlEnabled = true
@@ -455,5 +459,96 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     fun test分组登记_两个新provider归mapperXml组() {
         assertEquals("mapperXml", GutterGroups.groupOf("IbatisXmlToJavaLineMarkerProvider"))
         assertEquals("mapperXml", GutterGroups.groupOf("IbatisJavaToXmlLineMarkerProvider"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-IbatisGutterPerf P2：解析失败不摘图标——正缓存 / dumb 乐观产出判定矩阵
+    // （与 MyBatis 侧 F1/F1' 矩阵同构；dumb 走 isDumbProvider 测试缝，不依赖夹具真实 dumb 态）
+    // ------------------------------------------------------------------
+
+    /** 某个调用点的两枚 marker（锚 = 方法名 identifier + 首参 literal 叶子）。 */
+    private fun markersForCall(dao: PsiFile, literalValue: String): List<LineMarkerInfo<*>> {
+        val callName = firstArgCallName(dao, "queryForObject", literalValue)!!
+        val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
+            .first { it.value == literalValue }
+        return markers(javaToXml, dao).filter { it.element === callName || it.element?.parent === literal }
+    }
+
+    fun testF1i_解析成功_入正缓存并产出两枚() {
+        val dao = addDao()
+        addSqlMap()
+        assertEquals("解析成功应出两枚（跳转 + 预览）", 2, markersForCall(dao, "user.selectById").size)
+        assertTrue(
+            "解析成功必须记入会话级正缓存",
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
+        )
+    }
+
+    fun testF1i_解析失败但缓存命中_图标不缺席() {
+        // 冷窗形态：项目里没有 sqlMap（解析必落空），但本会话早先确认过该语句存在。
+        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add("user.selectById")
+        val dao = addDao()
+        assertEquals(
+            "本用例必须确实落在解析失败分支（否则测不到兜底）",
+            0,
+            IbatisXmlStatementTargets.resolveStatementAnchors(project, "user.selectById").size,
+        )
+        assertEquals(
+            "缓存命中必须照常产出——慢趟按趟换装不得摘掉已确认的图标",
+            2,
+            markersForCall(dao, "user.selectById").size,
+        )
+    }
+
+    fun testF1i_解析失败且无缓存_不产出且不污染缓存() {
+        val dao = addDao()
+        addSqlMap()
+        assertEquals("真不存在的语句不得出图标", 0, markersForCall(dao, "user.missing").size)
+        assertFalse(
+            "「真没有」的负例不得污染正缓存",
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.missing"),
+        )
+    }
+
+    fun testF1i_dumb窗乐观产出且不入缓存() {
+        val original = IbatisJavaToXmlLineMarkerProvider.isDumbProvider
+        IbatisJavaToXmlLineMarkerProvider.isDumbProvider = { true }
+        try {
+            val dao = addDao()
+            assertEquals(
+                "dumb 窗（索引不可查）应乐观产出两枚，含真不存在的语句",
+                2,
+                markersForCall(dao, "user.missing").size,
+            )
+            assertFalse(
+                "乐观产出不得污染正缓存（否则 key 会被错当成「确认存在」）",
+                IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.missing"),
+            )
+        } finally {
+            IbatisJavaToXmlLineMarkerProvider.isDumbProvider = original
+        }
+    }
+
+    fun testF1i_裸id缓存键带所属类限定名() {
+        val dao = addDao()
+        addSqlMap()
+        assertEquals(2, markersForCall(dao, "selectBare").size)
+        assertTrue(
+            "裸 id 的缓存键必须带所属类限定名（同一裸 id 在不同 DAO 上可能偏好不同的 sqlMap 文件）",
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("selectBare@com.demo.UserDao"),
+        )
+    }
+
+    /** P5 回退通道：`sqlvis.gutter.ibatisIndexedResolve=false` 走旧的全项目扫描，功能不得退化。 */
+    fun testF1i_回退开关走旧扫描路径仍能解析() {
+        val original = IbatisXmlStatementTargets.indexedResolveEnabledProvider
+        IbatisXmlStatementTargets.indexedResolveEnabledProvider = { false }
+        try {
+            val dao = addDao()
+            addSqlMap()
+            assertEquals("回退到全项目扫描后功能不得退化", 2, markersForCall(dao, "user.selectById").size)
+        } finally {
+            IbatisXmlStatementTargets.indexedResolveEnabledProvider = original
+        }
     }
 }

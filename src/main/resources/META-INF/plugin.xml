@@ -517,6 +517,11 @@
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-IbatisGutterPerf P5：iBatis 语句定位是否走自定义索引（SqlMapNamespaceIndex）。
+             默认 true＝索引查询（毫秒级、失效交平台增量）；false＝回旧的全项目 XML 扫描（仅 A/B 与应急，
+             下一版删除该通道）。代码读取：ui/nav/IbatisXmlStatementTargets.indexedResolveEnabledProvider。 -->
+        <registryKey key="sqlvis.gutter.ibatisIndexedResolve" defaultValue="true"
+                     description="Resolve iBatis sqlMap statement locations through the custom file index (fast, incrementally invalidated). Disable to fall back to scanning every XML file in the project (slow; kept only for A/B comparison)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

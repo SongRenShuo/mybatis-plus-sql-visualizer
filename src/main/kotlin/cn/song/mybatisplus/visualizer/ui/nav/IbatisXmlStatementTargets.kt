@@ -1,8 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui.nav
 
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisStatementKind
+import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -12,8 +16,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
-import java.lang.ref.WeakReference
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * T-Ibatis2Support 券 F（车道 L8）：iBatis 2.x `<sqlMap>` 的 id → 标签定位**单一事实源**。
@@ -22,27 +25,34 @@ import java.util.concurrent.atomic.AtomicInteger
  * `cn.song.mybatisplus.visualizer.ui.ref.IbatisXmlIdReferenceContributor`（XML 内部 id 引用）共用，
  * 避免两处各写一份标签名表与落点口径。
  *
+ * ## 定位链（T-IbatisGutterPerf P1 起走自定义索引，2026-11-16）
+ *
+ * `ns.id` / 裸 `id` → [SqlMapNamespaceIndex] 一次索引查询拿到**候选文件**
+ * （`ns:` 键 / `stmt:` 键）→ PSI 侧校验根 `namespace` + 语句 `id` 精确匹配 → 返回 `id` 属性值元素。
+ *
+ * 历史（三轮演进，均见 `docs/开发计划/20261116-0925-T-IbatisGutterPerf-*`）：
+ *  - 券 F：全项目 XML 逐个 PSI 解析筛 sqlMap 文件 + 文件清单单槽 TTL(5s) + 结果级单槽 memo；
+ *  - T-IbatisGutterPerf P1：清单与语句两层都换成自定义索引（`all` / `ns:` / `stmt:` 三类键），
+ *    TTL / 清单代 / 单槽 memo 整套状态机退役——失效全交平台增量，不再有「清单未就绪」窗口，
+ *    也不会出现多工程同开互相踢槽。
+ *
  * ## 门控成本（性能红线）
  *
  * 热路径（reference contributor 的每个 `XmlAttributeValue`、每次 `resolve()`）**只走 O(1) 判定**：
- * [isSqlMapFile] 是一次 `rootTag?.name` 字符串比较。`xml/ibatis/IbatisXmlRecognizer.recognize(file)`
- * 内含 `SqlMapClient` 的 classpath 索引查询（`JavaPsiFacade.findClass`），**严禁**在本对象或调用方
- * 热路径上调用——iBatis 与 MyBatis 由根标签名天然互斥（`sqlMap` vs `mapper`），无需三选二识别。
- * 同文件 id 查找（[findIdAttributeInFile]）是文件内标签遍历，与 `ui/ref/MybatisXmlTargets` 同口径。
+ * [isSqlMapFile] 是一次 `rootTag?.name` 字符串比较；同文件 id 查找（[findIdAttributeInFile]）是
+ * 文件内标签遍历。`xml/ibatis/IbatisXmlRecognizer.recognize(file)` 内含 `SqlMapClient` 的 classpath
+ * 索引查询（`JavaPsiFacade.findClass`），**严禁**在本对象或调用方热路径上调用——iBatis 与 MyBatis
+ * 由根标签名天然互斥（`sqlMap` vs `mapper`），无需三选二识别。
  *
- * 跨文件（`ns.id` / 裸 id）查找只发生在用户按键触发的 goto 路径（不进 daemon/索引热路径，见
- * [IbatisDaoStatementGotoDeclarationHandler] 类注释），靠**文件清单单槽 TTL 缓存** +
- * **结果级单槽 memo** 把重复实查压成查表。
+ * ## 失败语义（T-IbatisGutterPerf P3）
  *
- * ## 缓存失效口径（全部廉价路径，不引监听器）
+ * - dumb / 索引未就绪：**不查索引**，返回空（「本次没有」），但不写任何负缓存——就绪后下次照常解析；
+ * - 读操作被写操作撤销（`ProcessCanceledException`）：**不吞**，直接上抛让本趟作废、平台自行重跑。
+ *   旧实现用 `runCatching{}.getOrDefault(emptyList())` 把取消吞成「空清单」并当正常结果缓存，
+ *   慢趟换装后图标粘性缺席（用户 2026-11-16 真机报障：图标出现过一次后无故不再显示）。
  *
- * 1. 项目身份不一致（`WeakReference<Project>` 比较）→ 重建；
- * 2. 文件清单 TTL（默认 5s，[fileListTtlMs]）过期 → 重扫；
- * 3. 参与上次扫描的文件某个 `isValid` 变假（被删/移动）→ 重扫；
- * 4. 清单换代（[Listing.generation] 递增）→ 结果级 memo（namespace→文件、裸 id→落点）一并失效。
- *
- * 与 `log/MapperXmlLocator`、`psi/XmlCrossNsFragmentResolver` 同款形态：**失败退化为「本次不接管」**
- * （返回空/ null），绝不抛穿。
+ * 回退通道：Registry `sqlvis.gutter.ibatisIndexedResolve=false` 回旧的全项目 XML 扫描（A/B 用，
+ * 下一版删除）；日志锚点 `[gutter-perf] ibatis resolve: source=index|scan …`。
  *
  * ## 落点口径
  *
@@ -53,6 +63,11 @@ internal object IbatisXmlStatementTargets {
 
     /** iBatis 语句映射文件根标签名（`sql-map-2.dtd`）。MyBatis 3 的根是 `mapper`——两者互斥。 */
     const val SQL_MAP_ROOT_TAG: String = "sqlMap"
+
+    /** 回退开关（T-IbatisGutterPerf P5）：false＝回旧的全项目 XML 扫描（A/B 用，下一版删除）。 */
+    private const val INDEXED_RESOLVE_REGISTRY_KEY = "sqlvis.gutter.ibatisIndexedResolve"
+
+    private val LOG = Logger.getInstance(IbatisXmlStatementTargets::class.java)
 
     /** 根标签名 == `sqlMap`（热路径唯一门控；O(1)，零索引、零识别器调用）。 */
     fun isSqlMapFile(file: PsiFile?): Boolean = (file as? XmlFile)?.rootTag?.name == SQL_MAP_ROOT_TAG
@@ -132,11 +147,11 @@ internal object IbatisXmlStatementTargets {
     /**
      * `ns.id` / 裸 `id` → 语句标签的 `id` 属性值元素（Java DAO → XML 语句跳转用）。
      *
-     * - `ns.id`：按**最后一个** `.` 切 namespace / statementId，namespace 匹配项目内 sqlMap 文件的
-     *   根 `namespace` 属性（[findSqlMapFileByNamespace]）；
-     * - 裸 `id`：在全部 sqlMap 文件里找语句标签（iBatis `useStatementNamespaces` 默认 false →
+     * - `ns.id`：按**最后一个** `.` 切 namespace / statementId → 索引 `ns:` 键取候选文件 →
+     *   PSI 校验根 `namespace` 匹配后定位同 id 语句（多模块同名时取第一个真有该语句的文件）；
+     * - 裸 `id`：索引 `stmt:` 键取候选文件（iBatis `useStatementNamespaces` 默认 false →
      *   statement id 全局唯一）。命中多文件时**与 [preferredNamespace] 相同的文件优先**，其余按
-     *   清单序（多目标交平台弹选择器）。
+     *   索引序（多目标交平台弹选择器）。
      *
      * @param preferredNamespace 引用点所属类的限定名（无则 null；仅用于裸 id 的排序偏好）
      */
@@ -147,52 +162,72 @@ internal object IbatisXmlStatementTargets {
     ): List<XmlAttributeValue> {
         val statementId = rawStatementId.trim()
         if (project == null || statementId.isEmpty()) return emptyList()
+        val indexed = indexedResolveEnabled()
+        // dumb / 索引未就绪：不查索引（查询会抛 IndexNotReadyException），按「本次没有」返回，
+        // 但**不留任何负缓存**——这是旧链「空清单被固化」的反面（见类头「失败语义」）。
+        if (indexed && DumbService.isDumb(project)) return emptyList()
+        val startedNs = System.nanoTime()
         val dot = statementId.lastIndexOf('.')
-        if (dot > 0 && dot < statementId.length - 1) {
+        val anchors = if (dot > 0 && dot < statementId.length - 1) {
             val namespace = statementId.substring(0, dot).trim()
             val id = statementId.substring(dot + 1).trim()
-            if (namespace.isEmpty() || id.isEmpty()) return emptyList()
-            val file = findSqlMapFileByNamespace(project, namespace) ?: return emptyList()
-            return statementAnchorsIn(file, id)
+            if (namespace.isEmpty() || id.isEmpty()) emptyList()
+            else anchorsByNamespace(project, namespace, id, indexed)
+        } else {
+            anchorsByStatementId(project, statementId, preferredNamespace, indexed)
         }
-        return bareStatementAnchors(project, statementId, preferredNamespace)
-    }
-
-    /**
-     * 按 namespace 找 sqlMap 文件（文件清单 TTL 缓存 + 单槽结果级 memo）。
-     *
-     * memo 以**清单代**为失效戳（清单重建即换代），负结果一并缓存——与
-     * `ui/ref/MybatisXmlTargets.findMapperFileByNamespace` 同形态，只是根标签判据换成 `sqlMap`。
-     */
-    fun findSqlMapFileByNamespace(project: Project, namespace: String): XmlFile? {
-        val ns = namespace.trim()
-        if (ns.isEmpty()) return null
-        val listing = sqlMapListing(project)
-        namespaceSlot?.let { slot ->
-            if (slot.project.get() === project &&
-                slot.listingGeneration == listing.generation &&
-                slot.namespace == ns
-            ) {
-                return slot.file?.takeIf { it.isValid }
-            }
-        }
-        namespaceScanCount.incrementAndGet()
-        var found: XmlFile? = null
-        for (vf in listing.files) {
-            if (!vf.isValid) continue
-            val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
-            if (xmlFile.rootTag?.getAttributeValue("namespace")?.trim() == ns) {
-                found = xmlFile
-                break
-            }
-        }
-        namespaceSlot = NamespaceSlot(WeakReference(project), listing.generation, ns, found)
-        return found
+        logPerf(statementId, anchors, indexed, startedNs)
+        return anchors
     }
 
     // ------------------------------------------------------------------
     // 内部实现
     // ------------------------------------------------------------------
+
+    /** `ns.id`：索引只给候选文件，namespace 与 id 都由 PSI 精确校验（索引键偏差不会错跳）。 */
+    private fun anchorsByNamespace(
+        project: Project,
+        namespace: String,
+        id: String,
+        indexed: Boolean,
+    ): List<XmlAttributeValue> {
+        val files = if (indexed) {
+            SqlMapNamespaceIndex.getSqlMapFilesByNamespace(project, namespace)
+        } else {
+            legacySqlMapFiles(project)
+        }
+        for (vf in files) {
+            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            if (file.rootTag?.getAttributeValue("namespace")?.trim() != namespace) continue
+            val anchors = statementAnchorsIn(file, id)
+            if (anchors.isNotEmpty()) return anchors
+        }
+        return emptyList()
+    }
+
+    /** 裸 statement id：索引 `stmt:` 键取候选文件；同 namespace 的文件排首位。 */
+    private fun anchorsByStatementId(
+        project: Project,
+        id: String,
+        preferredNamespace: String?,
+        indexed: Boolean,
+    ): List<XmlAttributeValue> {
+        val files = if (indexed) {
+            SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, id)
+        } else {
+            legacySqlMapFiles(project)
+        }
+        val hits = ArrayList<Pair<String?, XmlAttributeValue>>()
+        for (vf in files) {
+            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            val anchors = statementAnchorsIn(file, id)
+            if (anchors.isEmpty()) continue
+            val ns = file.rootTag?.getAttributeValue("namespace")?.trim()
+            for (anchor in anchors) hits.add(ns to anchor)
+        }
+        if (preferredNamespace.isNullOrEmpty()) return hits.map { it.second }
+        return hits.sortedBy { if (it.first == preferredNamespace) 0 else 1 }.map { it.second }
+    }
 
     /** `<sqlMap>` 直接子级里的语句标签（`id` 字面值命中全部返回，含 `<selectKey>` 之外的重复 id 变体）。 */
     private fun statementAnchorsIn(file: XmlFile, id: String): List<XmlAttributeValue> {
@@ -202,121 +237,50 @@ internal object IbatisXmlStatementTargets {
             .mapNotNull { it.getAttribute("id")?.valueElement }
     }
 
-    /** 裸 statement id：全项目 sqlMap 扫一遍（结果级单槽 memo），同 namespace 的文件优先。 */
-    private fun bareStatementAnchors(
-        project: Project,
-        id: String,
-        preferredNamespace: String?,
-    ): List<XmlAttributeValue> {
-        val listing = sqlMapListing(project)
-        val cached = statementIdSlot
-        val hits: List<Pair<String?, XmlAttributeValue>> =
-            if (cached != null &&
-                cached.project.get() === project &&
-                cached.listingGeneration == listing.generation &&
-                cached.statementId == id &&
-                cached.hits.all { it.second.isValid }
-            ) {
-                cached.hits
-            } else {
-                statementScanCount.incrementAndGet()
-                val collected = ArrayList<Pair<String?, XmlAttributeValue>>()
-                for (vf in listing.files) {
-                    if (!vf.isValid) continue
-                    val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
-                    val anchors = statementAnchorsIn(xmlFile, id)
-                    if (anchors.isEmpty()) continue
-                    val ns = xmlFile.rootTag?.getAttributeValue("namespace")?.trim()
-                    for (anchor in anchors) collected.add(ns to anchor)
-                }
-                statementIdSlot = StatementIdSlot(WeakReference(project), listing.generation, id, collected)
-                collected
-            }
-        if (preferredNamespace.isNullOrEmpty()) return hits.map { it.second }
-        return hits.sortedBy { if (it.first == preferredNamespace) 0 else 1 }.map { it.second }
+    /**
+     * 回退通道（Registry `sqlvis.gutter.ibatisIndexedResolve=false`）：旧的全项目 XML 扫描。
+     *
+     * 仅 A/B 与应急用，下一版删除。**不再包 `runCatching`**：取消/索引未就绪应当上抛或由调用方
+     * 的 dumb 门拦住，吞成空清单正是本任务要根治的缺陷（T-IbatisGutterPerf P3）。
+     */
+    private fun legacySqlMapFiles(project: Project): List<VirtualFile> {
+        val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
+        return FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
+            .asSequence()
+            .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
+            .filter { it.rootTag?.name == SQL_MAP_ROOT_TAG }
+            .mapNotNull { it.virtualFile }
+            .toList()
     }
 
-    // ------------------------------------------------------------------
-    // 文件清单与结果级 memo（单槽 + TTL；失效口径见类注释）
-    // ------------------------------------------------------------------
-
-    private class FileListSlot(
-        val project: WeakReference<Project>,
-        val files: List<VirtualFile>,
-        val atMs: Long,
-        val generation: Long,
-    )
-
-    private class NamespaceSlot(
-        val project: WeakReference<Project>,
-        val listingGeneration: Long,
-        val namespace: String,
-        val file: XmlFile?,
-    )
-
-    private class StatementIdSlot(
-        val project: WeakReference<Project>,
-        val listingGeneration: Long,
-        val statementId: String,
-        val hits: List<Pair<String?, XmlAttributeValue>>,
-    )
-
-    private class Listing(val files: List<VirtualFile>, val generation: Long)
-
-    /** 清单 TTL 上界（毫秒）：新增/删除 sqlMap XML 后至多一个窗口内解析不到（过期即重扫）。 */
-    internal var fileListTtlMs: Long = 5_000L
-
-    internal var clockMs: () -> Long = { System.currentTimeMillis() }
-
-    /** 测试缝：文件清单实扫次数（memo/TTL 命中不计数）。 */
-    internal val indexScanCount = AtomicInteger(0)
-
-    /** 测试缝：namespace → 文件实查次数。 */
-    internal val namespaceScanCount = AtomicInteger(0)
-
-    /** 测试缝：裸 statement id 实扫次数。 */
-    internal val statementScanCount = AtomicInteger(0)
-
-    @Volatile
-    private var fileListSlot: FileListSlot? = null
-
-    @Volatile
-    private var namespaceSlot: NamespaceSlot? = null
-
-    @Volatile
-    private var statementIdSlot: StatementIdSlot? = null
-
-    private var listingGenerationCounter: Long = 0L
-
-    /** 测试缝：清空全部缓存（用例隔离；生产链路无调用点）。 */
-    internal fun clearCachesForTest() {
-        fileListSlot = null
-        namespaceSlot = null
-        statementIdSlot = null
+    /** 索引化开关（生产＝`Registry.is(key, true)`；key 未注册时直接返回默认值）。 */
+    internal var indexedResolveEnabledProvider: () -> Boolean = {
+        // `is` 是 Kotlin 关键字，调 Java 侧 `Registry.is(String, boolean)` 必须加反引号。
+        runCatching { Registry.`is`(INDEXED_RESOLVE_REGISTRY_KEY, true) }.getOrDefault(true)
     }
 
-    private fun sqlMapListing(project: Project): Listing {
-        val now = clockMs()
-        fileListSlot?.let { slot ->
-            if (slot.project.get() === project &&
-                now - slot.atMs <= fileListTtlMs &&
-                slot.files.all { it.isValid }
-            ) {
-                return Listing(slot.files, slot.generation)
-            }
-        }
-        indexScanCount.incrementAndGet()
-        val files = runCatching {
-            val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
-            FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
-                .asSequence()
-                .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
-                .filter { it.rootTag?.name == SQL_MAP_ROOT_TAG }
-                .mapNotNull { it.virtualFile }
-                .toList()
-        }.getOrDefault(emptyList())
-        val generation = ++listingGenerationCounter
-        fileListSlot = FileListSlot(WeakReference(project), files, now, generation)
-        return Listing(files, generation)
+    private fun indexedResolveEnabled(): Boolean = indexedResolveEnabledProvider()
+
+    /** 每条语句只记一次定位读数（source / 候选命中数 / 首个落点文件 / 耗时）。 */
+    private val perfLoggedKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    private fun logPerf(
+        statementId: String,
+        anchors: List<XmlAttributeValue>,
+        indexed: Boolean,
+        startedNs: Long,
+    ) {
+        if (!perfLoggedKeys.add(statementId)) return
+        val ms = (System.nanoTime() - startedNs) / 1_000_000
+        val file = anchors.firstOrNull()?.containingFile?.virtualFile?.path ?: "-"
+        LOG.info(
+            "[gutter-perf] ibatis resolve: source=${if (indexed) "index" else "scan"} " +
+                "statementId=$statementId hits=${anchors.size} file=$file ms=$ms",
+        )
+    }
+
+    /** 测试缝：清空「每条语句只记一次」的日志去重集（对应旧 `clearCachesForTest` 的调用位）。 */
+    internal fun resetPerfLogForTest() {
+        perfLoggedKeys.clear()
     }
 }

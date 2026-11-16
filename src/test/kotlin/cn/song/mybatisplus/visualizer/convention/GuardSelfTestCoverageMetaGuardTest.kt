@@ -1276,6 +1276,19 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "解析/漏缓存查询）让冷打开 S2 图标闪没/缺席回归。CI fast(1) 红的教训：新增 Guard 族文件落在 " +
                     "ui/gutter（非 convention）也会被文件名闭包扫到，漏登即红——按文件名含 Guard 全清单登记。",
             ),
+            // ---- T-IbatisGutterPerf P2：iBatis 调用行图标「解析失败不摘图标」接线守卫（2026-11-16） ----
+            GuardEntry(
+                "ui/gutter/IbatisGutterFailBranchGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarkers 配平方法体，判「dumb 门在索引查询之前
+                    // + 正缓存命中分支在解析之后」。自证语料同文件——「P2守卫自证_修复后形态放行…」
+                    // 以合成样本直接调用（放行/必红/dumb 门错位/缓存先于解析/空体五向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                ),
+                "T-IbatisGutterPerf P2 接线守卫：钉住 iBatis Java→XML provider 的 createMarkers" +
+                    "「dumb 乐观产出 + 正缓存命中仍产出」接线——dumb 门必须在索引查询之前（dumb 期查索引" +
+                    "抛 IndexNotReadyException），缓存分支必须在解析失败分支上。",
+            ),
             GuardEntry(
                 "convention/ConsolePsiWarmGuardTest.kt",
                 listOf(
