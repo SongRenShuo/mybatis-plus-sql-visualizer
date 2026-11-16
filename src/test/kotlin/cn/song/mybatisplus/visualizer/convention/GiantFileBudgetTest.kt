@@ -42,10 +42,16 @@ class GiantFileBudgetTest {
         // 2060 → 2160（2026-11-13 master 并入 dev 合并轮 a5f54c45a：v2026.11.12 整线（M 系列执行链
         //   线程契约/失败接线）与 dev 侧残留面并集，实测 2151 行 +91 超线。**拆分仍首选**，本提额只为
         //   合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2160,
+        // 2160 → 2210（2026-11-17 master 并入 dev 合并轮 aba1e47ba：T-PreviewExecWriteDefer 惰性口径
+        //   注释与 T-PerfSweep30 dumb 重试门禁并集，实测 2153 行。**拆分仍首选**，本提额只为合并期
+        //   留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt" to 2210,
         // 2200 → 2421（2026-10-25: 合并 master 实测 2385 行，含执行计划回控制台/只读快照改造，+185 行）
         // 2103 → 2000（2026-10-31 D202: 语句后处理拆出 StatementOps，实测 1847 行）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2000,
+        // 2000 → 2080（2026-11-17 master 并入 dev 合并轮 aba1e47ba：T-PreviewExecWriteDefer 惰性口径
+        //   门禁并集 + T-PerfSweep30 dumb 重试路径与 02d 可见归因，实测 2037 行 +37 超线。**拆分仍
+        //   首选**，本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to 2080,
         // 2349 → 2000（2026-10-31 D202: 控制台文本探测拆出 ConsoleText，实测 1989 行）
         // 2000 → 2010（2026-11-04 UI-002: consumeCachedTempPsiFile 的 PSI 判定补读锁——BGT 无读许可，
         //   真机 `Read access is allowed from inside read-action only` 硬抛；增量含读锁代码与线程契约
@@ -55,7 +61,10 @@ class GiantFileBudgetTest {
         // 2025 → 2250（2026-11-13 master 并入 dev 合并轮 a5f54c45a：master 执行链 M 系列（cacheOnly
         //   预热门/失败接线）与 dev 侧增量并集，实测 2237 行 +212 超线。**拆分仍首选**：拆分债挂闲时
         //   清单，本提额只为合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2250,
+        // 2250 → 2300（2026-11-17 master 并入 dev 合并轮 aba1e47ba：T-PreviewExecWriteDefer 两形态
+        //   （dev onEdtForLastUsed 辅助 + master 内联语义注释）并集，实测 2252 行 +2 超线。**拆分仍
+        //   首选**，本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to 2300,
         // 2026 → 2349（2026-10-25: 合并 master 实测 2314 行，含取源十二轮收口与跨源列证据，+288 行）
         // 2194 → 2000（2026-10-31 D202: 输出写入/分栏取证拆出 ConsoleOutput，实测 1987 行）
         // 2000 → 2030（2026-11-04 UI-003: else 分支接 PreviewPreparePick.decide——预览准备「静默选源/
@@ -72,7 +81,9 @@ class GiantFileBudgetTest {
         // 2160 → 2240（2026-11-13 master 并入 dev 合并轮 a5f54c45a：master exec 链 M 系列（failureReason
         //   参数/failure hint 消费点）与 dev 侧增量并集（exec 临时文件族已拆出 ExecTempFileFactory），
         //   实测 2231 行 +71 超线。**拆分仍首选**，本提额只为合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2240,
+        // 2240 → 2290（2026-11-17 master 并入 dev 合并轮 aba1e47ba：T-PreviewExecWriteDefer 两形态
+        //   并集余量，实测 2242 行 +2 超线。**拆分仍首选**，本提额只为合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt" to 2290,
         // 2007 → 2133（2026-10-25: 合并 master 实测 2101 行，含取源结果面板改造，+94 行）
         // 2133 → 2194（2026-10-28: 再并 master 实测 2162 行，ExecFileBinding 绑定态与换源通道落位，+29 行超线）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to 1927,
@@ -86,7 +97,10 @@ class GiantFileBudgetTest {
         //   D13 MBG kind 收敛/D14 值框只读等）与 dev F 队列（F-06① 列头溯源/F-13 列排序/F-15 空间类型等）
         //   并集，实测 2893 行 +603 超线。**拆分仍首选**：运行期占位行族/列头溯源族各自可拆独立文件
         //   （拆分债挂闲时清单），本提额只为合并期留痕解红，不是许可继续增长）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 2900,
+        // 2900 → 2960（2026-11-17 master 并入 dev 合并轮 aba1e47ba：master D 系列（运行期占位行/MBG
+        //   kind 收敛补遗）与 dev F 队列余量并集，实测 2912 行 +12 超线。**拆分仍首选**，本提额只为
+        //   合并期留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelParamPanel.kt" to 2960,
         // 1918 → 1972（2026-10-25: 合并 master 实测 1942 行，含 FieldFill/画布工具栏改造，+24 行）
         // 1830 → 1840（2026-10-31 合流实测 1835 行：FR-0045 设置子页入口 + NEW-18 体检入口两笔合法增量；
         //   体检动作方法体已按 D202 拆到同包 PluginSettingsPanelEnvCheck.kt，此处只留按钮/状态行/展示缝）
@@ -96,7 +110,11 @@ class GiantFileBudgetTest {
         // 1870 → 1880（2026-11-13 master 并入 dev 合并轮 a5f54c45a：master D 系列（本地更新目录行/
         //   schema 预热开关接线）与 dev F 队列开关面板增量并集，实测 1876 行 +6 超线。
         //   **拆分仍首选**，本提额只为合并期留痕解红）
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1880,
+        // 1880 → 1960（2026-11-17 master 并入 dev 合并轮 aba1e47ba：master T-PreviewExecWriteDefer
+        //   控制台准备三档 UI + T-NotifyTune 两个一次性提示开关行（dialectTip/firstCaptureGuide）
+        //   与 dev F 队列面板余量并集，实测 1929 行 +49 超线。**拆分仍首选**，本提额只为合并期
+        //   留痕解红，不是许可继续增长）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt" to 1960,
         // 1777 → 1790（2026-11-06 F-07：卸载/禁用清理钩子接线——dispose 停采下发、落盘 jar 修剪、
         //   目录收口委托，实测 1785 行 +8 超线；清理内核已抽到 AgentResidueCleaner.kt，此处只剩接线。
         //   **拆分仍首选**，本提额只为批次留痕解红）

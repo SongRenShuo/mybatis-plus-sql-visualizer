@@ -80,6 +80,9 @@ object SettingsScenarioGroups {
             // 引导与日常维护
             "onboardingAnchorTipEnabled", "onboardingAnchorTipShown", "sqlListPreviewHintSeen",
             "autoCheckUpdate",
+            // T-NotifyTune 券 A（master 并入，2026-11-17 对账补登）：SQL 方言死路一次性提示
+            //（开关 + 每安装一次性状态位，随方言推断 `dialectAuto` 同场景）
+            "dialectTipEnabled", "dialectTipShown",
         ),
         TUNING to listOf(
             // 生成语句语义
@@ -104,6 +107,9 @@ object SettingsScenarioGroups {
             "logToolWindowAutoShowOnStart",
             // 日志框架门
             "logHibernateEnabled", "logJdbcEnabled", "logShardingSphereEnabled",
+            // T-NotifyTune 券 B（master 并入，2026-11-17 对账补登）：首次捕获引导一次性提示
+            //（开关 + 每台机器一次性状态位，随捕获行为同场景）
+            "firstCaptureGuideEnabled", "firstCaptureGuideShown",
             // 恢复与兜底
             "literalParamRecovery",
             // agent 采集（enhancedCaptureConfirmed 是迁移期兼容字段，只在 loadState 归一里读，
