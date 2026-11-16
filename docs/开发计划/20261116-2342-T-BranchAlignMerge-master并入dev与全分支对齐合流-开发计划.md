@@ -18,7 +18,6 @@
 | `dev` | 0/205 | 0/0 | 独立工作树（mybatis-plus-sql-visualizer-dev） | 落后 master 205 笔，工作树干净 |
 | `t-domestic-db-dialects` | 9/384 | 9/520 | 无独立工作树 | A 级自包含方言支 |
 | `T-SqlPreviewStandalone` | 4/90 | 119/341 | `.worktrees/T-SqlPreviewStandalone` | 预览独立打开支，工作树干净 |
-| `t-standalone-hotreload` | 0/81 | 124/341 | 无独立工作树，**仅本地**（origin/github 均无） | 是 master 祖先（ahead=0），吃 master 即 fast-forward |
 | `t-rollback-preexec` | 12/87 | 130/341 | `.worktrees/t-rollback-preexec` | 快照预执行支，工作树干净 |
 | `t-security-audit-fixes` | 61/383 | 61/519 | 无独立工作树 | 安全审计支 |
 | `t-sql-insight` | 568/383 | 236/187 | 独立工作树（mpsv-sql-insight） | 语义引擎支，体量最大；ahead/dev=236、behind/dev=187 说明与 dev 各有独有提交 |
@@ -44,8 +43,10 @@
 ## 二、目标与总原则
 
 1. **第一步**：`master → dev`（在 dev 工作树执行）。
-2. **第二步**：把 master 与 dev 合入其余全部 7 支（k2j 除外，见 D-1）。
-3. **等价性说明**：第一步完成后 `dev ⊇ master`，因此第二步每支 `merge dev` 一次即同时吃进 master 与 dev。为与用户指令逐字对应，默认写法为**每支两笔**：先 `merge master`、后 `merge dev`（轨迹清晰）；若用户嫌合流提交翻倍，可拍板改单笔 `merge dev`（D-3）。**两种写法的最终内容完全等价**。
+2. **第二步**：其余各支**分组对齐**（用户 2026-11-16 明确：有的吃 dev、有的吃 master，不是每支都吃两份，k2j 除外见 D-1）：
+   - **吃 master 组**（6 支）：基线在 master（behind master ≪ behind dev）、归宿是合回 master 的功能支——只 `merge master`，**不吃 dev**（吃 dev 会把 dev 线 341 笔 MagpieGems 等整线拖进功能支，造成反向污染）；
+   - **吃 dev 组**（1 支）：`t-sql-insight` 基线在 dev（behind dev 187 ≪ behind master 383），且先例定案走 insight→dev→master——只 `merge dev`（第一步后 dev ⊇ master，顺带吃进主线 205 笔）。
+3. 分组判据（双证）：① 数值接近度（每支 behind master vs behind dev，§1.1 实测）；② 先例路线归属（T-BranchMergeRoute 定案：dialects/hiddenbug/security/rollback/preview 走合回 master 路线，insight 走 dev 路线）。两组无歧义支。
 4. 冲突裁决约定：
    - 文档类（CHANGELOG.md / README.md / docs/LESSONS.md / 架构设计 / 索引）：**双保留**，按时间顺序重排条目；LESSONS 单行表格行沿用「checkout 选边 + 小 Edit 补格」先例。
    - 代码类：逐 hunk 裁决，以 master 侧为基线语义（本轮目的就是让各支吃进主线新形态），分支侧增量保留。
@@ -68,13 +69,15 @@
 
 ## 四、实施步骤
 
-### 第 0 步：前置准备
+### 第 0 步：前置准备与清理（清理部分 2026-11-16 已完成）
 
 ```bash
 git fetch origin --prune          # 补齐远端分支
 git switch -c t-hiddenbug-perf-scan origin/t-hiddenbug-perf-scan   # 远端支建本地
 git switch -c t-branch-merge-route origin/t-branch-merge-route
 ```
+
+已完成清理（用户 2026-11-16 点头）：① `t-standalone-hotreload` 本地支删除（ahead/master=0 已被 master 吸收，`git branch -d` 安全删，悬置哈希 `28531e967` reflog 可回溯）；② `.worktrees/mybatis-plus-sql-visualizer-demo/` 孤儿目录删除（是 demo 仓 gitee `mybatis-plus-sql-visualizer-demo.git` 的独立完整克隆，不在本仓 worktree 注册表，local master 0 笔独有、落后 origin 19 笔、树干净）。
 
 ### 第 1 步：master → dev（dev 工作树）
 
@@ -88,25 +91,32 @@ git -C mybatis-plus-sql-visualizer-dev commit           # 默认合并信息
 
 收口：dev 工作树编译（`compileKotlin` 或 testFast 定向）+ 冲突文件涉及的定向测试（三件测试类冲突必验）。
 
-### 第 2 步：master+dev 合入其余各支（按体量从小到大，逐支顺序）
+### 第 2 步：分组对齐（按体量从小到大，逐支顺序，每组单笔）
 
-每支两笔（D-3 可改单笔）：
+**2A 组——吃 master（6 支，基线在 master、归宿合回 master）**：
 
 ```bash
 git merge --no-ff master
+```
+
+| 顺序 | 分支 | 执行落点 | 预计冲突面 | 收口 |
+|---|---|---|---|---|
+| 2.1 | `T-SqlPreviewStandalone` | 其工作树 | 本支 4 笔领先且近期贴 master 开发，预计小 | 编译 + PreviewStandalone 定向 |
+| 2.2 | `t-domestic-db-dialects` | 主仓 | 方言注册表交叠小 | 编译 + DialectDomesticFamilyTest |
+| 2.3 | `t-rollback-preexec` | 其工作树 | SQL 执行链文件交叠风险中 | 编译 + RollbackSnapshot 定向 |
+| 2.4 | `t-security-audit-fixes` | 主仓 | 守卫/构建链文件交叠风险中 | 编译 + 安全守卫定向 |
+| 2.5 | `t-hiddenbug-perf-scan` | 主仓（新建本地） | 与 security 同基、修复面交叠风险中 | 编译 + testFast 快桶定向 |
+| 2.6 | `t-branch-merge-route` | 主仓（新建本地） | **非纯文档支**（20261116 复核实测：213 文件 +13064/−811，含 agent hook 等真实代码），冲突面预计中等 | 编译 |
+
+**2B 组——吃 dev（1 支，dev 线上演进支；dev 已含 master，单笔 merge dev 即同时吃进主线）**：
+
+```bash
 git merge --no-ff dev
 ```
 
 | 顺序 | 分支 | 执行落点 | 预计冲突面 | 收口 |
 |---|---|---|---|---|
-| 2.1 | `t-standalone-hotreload` | 主仓（无工作树） | 吃 master 是 ff、吃 dev 约为主→dev 那 20 个文件的子集 | 编译 |
-| 2.2 | `T-SqlPreviewStandalone` | 其工作树 | 本支 4 笔领先且近期贴 master 开发，预计小 | 编译 + PreviewStandalone 定向 |
-| 2.3 | `t-domestic-db-dialects` | 主仓 | 方言注册表与 dev/master 交叠小 | 编译 + DialectDomesticFamilyTest |
-| 2.4 | `t-rollback-preexec` | 其工作树 | ahead/dev=130，SQL 执行链文件交叠风险中 | 编译 + RollbackSnapshot 定向 |
-| 2.5 | `t-security-audit-fixes` | 主仓 | 守卫/构建链文件交叠风险中 | 编译 + 安全守卫定向 |
-| 2.6 | `t-hiddenbug-perf-scan` | 主仓（新建本地） | 与 security 同基、修复面交叠风险中 | 编译 + testFast 快桶定向 |
-| 2.7 | `t-branch-merge-route` | 主仓（新建本地） | **非纯文档支**（20261116 复核实测：213 文件 +13064/−811，含 agent hook 等真实代码），冲突面预计中等 | 编译 |
-| 2.8 | `t-sql-insight` | mpsv-sql-insight 工作树 | ahead/dev=236、behind/dev=187，**最大**；硬前置见下 | 合并后编译 + 四件定向守卫 + NestGate 默认值重拍 |
+| 2.7 | `t-sql-insight` | mpsv-sql-insight 工作树 | ahead/dev=236、behind/dev=187，**最大**；硬前置见下 | 合并后编译 + 四件定向守卫 + NestGate 默认值重拍 |
 
 **insight 支硬前置**（沿用 T-BranchMergeRoute 在册结论）：
 - merge-tree 预演先行，真冲突面逐 hunk 出裁决清单后才动；
@@ -138,22 +148,22 @@ git merge --no-ff dev
 
 | 步骤 | 状态 | 合并哈希 | 冲突文件与裁决 |
 |---|---|---|---|
+| 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
 | 第 0 步 fetch+建本地 | 待做 | | |
 | 第 1 步 master→dev | 待做 | | |
-| 2.1 hotreload | 待做 | | |
-| 2.2 preview | 待做 | | |
-| 2.3 dialects | 待做 | | |
-| 2.4 rollback | 待做 | | |
-| 2.5 security | 待做 | | |
-| 2.6 hiddenbug | 待做 | | |
-| 2.7 merge-route | 待做 | | |
-| 2.8 insight | 待做 | | |
+| 2.1 preview 吃 master | 待做 | | |
+| 2.2 dialects 吃 master | 待做 | | |
+| 2.3 rollback 吃 master | 待做 | | |
+| 2.4 security 吃 master | 待做 | | |
+| 2.5 hiddenbug 吃 master | 待做 | | |
+| 2.6 merge-route 吃 master | 待做 | | |
+| 2.7 insight 吃 dev | 待做 | | |
 
 ## 七、决策点（须用户拍板）
 
 - **D-1 k2j 支**：`feature/kotlin-to-java` 是 100% Java 端口支，机械合并 master 会把 Kotlin 源整树注入（k2j-port-sync 明文「同步功能不合并分支」）。**默认本轮跳过**，用户若要跟版则另行点名走 k2j-port-sync 独立轮（手工翻译，非合并）。
 - **D-2 远端支**：`t-hiddenbug-perf-scan`/`t-branch-merge-route` 仅在远端，本轮 fetch 后建本地支合入；是否把这两支也纳入「所有分支」范围，默认**纳入**。
-- **D-3 合流写法**：每支两笔（先 master 后 dev）还是单笔 merge dev（内容等价、提交减半）。默认**两笔**。
+- **D-3 合流写法**：**已定案**（用户 2026-11-16）——按支分组，不是每支吃两份：吃 master 组 6 支单笔 `merge master`，吃 dev 组 insight 单笔 `merge dev`（dev 已含 master）。
 - **D-4 推送**：全部合并完成后是否立即 push 双仓（含补 github/master 落后一笔）。默认**等用户点名**。
 
 ## 八、待验证前提（实施前先证伪）
