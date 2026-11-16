@@ -6,7 +6,9 @@ import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.nav.IbatisXmlStatementTargets
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
+import com.intellij.openapi.application.WriteAction
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiIdentifier
@@ -484,19 +486,38 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
     }
 
-    fun testF1i_解析失败但缓存命中_图标不缺席() {
-        // 冷窗形态：项目里没有 sqlMap（解析必落空），但本会话早先确认过该语句存在。
+    fun testF1i_索引重建中未知_缓存命中仍产出() {
+        // 冷窗形态（S2）：查询**没算完**（Unknown），不是「确定没有」——已确认过的图标必须留着。
         IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add("user.selectById")
+        IbatisXmlStatementTargets.lookupOverrideForTest = { _, _, _ -> IbatisXmlStatementTargets.Lookup.Unknown }
         val dao = addDao()
         assertEquals(
-            "本用例必须确实落在解析失败分支（否则测不到兜底）",
-            0,
-            IbatisXmlStatementTargets.resolveStatementAnchors(project, "user.selectById").size,
-        )
-        assertEquals(
-            "缓存命中必须照常产出——慢趟按趟换装不得摘掉已确认的图标",
+            "Unknown（暂时查不了）时缓存命中必须照常产出——慢趟按趟换装不得摘掉已确认的图标",
             2,
             markersForCall(dao, "user.selectById").size,
+        )
+        assertTrue(
+            "Unknown 不得动缓存",
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
+        )
+    }
+
+    /**
+     * P2.1（用户 2026-11-16 报障）：把 `User.xml` 的 `namespace="User"` 改掉后图标必须消失。
+     * 早期版本正缓存无失效，图标靠缓存续命——本用例钉住「确定不存在 ⇒ 摘图标 + 收回缓存」。
+     */
+    fun testF1i_确定不存在_摘图标并收回缓存() {
+        IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.add("user.selectById")
+        IbatisXmlStatementTargets.lookupOverrideForTest = { _, _, _ -> IbatisXmlStatementTargets.Lookup.Absent }
+        val dao = addDao()
+        assertEquals(
+            "确定不存在（namespace 改了 / 语句删了）时不得再靠缓存续命",
+            0,
+            markersForCall(dao, "user.selectById").size,
+        )
+        assertFalse(
+            "确定不存在必须收回正缓存，否则下一趟慢 pass 还会把它画回来",
+            IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.selectById"),
         )
     }
 
@@ -507,6 +528,27 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         assertFalse(
             "「真没有」的负例不得污染正缓存",
             IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("user.missing"),
+        )
+    }
+
+    /** 三态内核：真实索引查询下，namespace 改掉后必须是 Absent（而不是 Unknown）——否则缓存永不收回。 */
+    fun testF1i_改namespace后查询真实返回absent() {
+        val sqlMap = addSqlMap()
+        assertEquals(
+            "改 namespace 之前必须是 Found",
+            true,
+            IbatisXmlStatementTargets.lookupStatementAnchors(project, "user.selectById") is
+                IbatisXmlStatementTargets.Lookup.Found,
+        )
+        val vf = sqlMap.virtualFile
+        WriteAction.run<RuntimeException> {
+            VfsUtil.saveText(vf, VfsUtil.loadText(vf).replace("namespace=\"user\"", "namespace=\"userRenamed\""))
+        }
+        assertEquals(
+            "改 namespace 之后必须落到 Absent（查询成功执行且无目标），否则正缓存不会收回；" +
+                "实测=${IbatisXmlStatementTargets.lookupStatementAnchors(project, "user.selectById")::class.simpleName}",
+            IbatisXmlStatementTargets.Lookup.Absent,
+            IbatisXmlStatementTargets.lookupStatementAnchors(project, "user.selectById"),
         )
     }
 

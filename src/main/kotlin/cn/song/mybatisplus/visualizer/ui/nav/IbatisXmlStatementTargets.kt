@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.VirtualFile
@@ -68,6 +69,16 @@ internal object IbatisXmlStatementTargets {
     private const val INDEXED_RESOLVE_REGISTRY_KEY = "sqlvis.gutter.ibatisIndexedResolve"
 
     private val LOG = Logger.getInstance(IbatisXmlStatementTargets::class.java)
+
+    /** 定位三态（语义见 [lookupStatementAnchors]）：确定存在 / 确定不存在 / 暂时查不了。 */
+    sealed interface Lookup {
+        class Found(val anchors: List<XmlAttributeValue>) : Lookup
+        object Absent : Lookup
+        object Unknown : Lookup
+    }
+
+    /** 测试缝：替换三态查询（生产＝null）。矩阵用例用它驱动 Unknown / Absent 两个分支。 */
+    internal var lookupOverrideForTest: ((Project, String, String?) -> Lookup)? = null
 
     /** 根标签名 == `sqlMap`（热路径唯一门控；O(1)，零索引、零识别器调用）。 */
     fun isSqlMapFile(file: PsiFile?): Boolean = (file as? XmlFile)?.rootTag?.name == SQL_MAP_ROOT_TAG
@@ -147,11 +158,8 @@ internal object IbatisXmlStatementTargets {
     /**
      * `ns.id` / 裸 `id` → 语句标签的 `id` 属性值元素（Java DAO → XML 语句跳转用）。
      *
-     * - `ns.id`：按**最后一个** `.` 切 namespace / statementId → 索引 `ns:` 键取候选文件 →
-     *   PSI 校验根 `namespace` 匹配后定位同 id 语句（多模块同名时取第一个真有该语句的文件）；
-     * - 裸 `id`：索引 `stmt:` 键取候选文件（iBatis `useStatementNamespaces` 默认 false →
-     *   statement id 全局唯一）。命中多文件时**与 [preferredNamespace] 相同的文件优先**，其余按
-     *   索引序（多目标交平台弹选择器）。
+     * 三态语义见 [lookupStatementAnchors]；本重载只取「找到」的锚，把「确定不存在」与「暂时查不了」
+     * 都折叠成空列表（预览 / Ctrl+B / MCP 的口径：查不到就回落，不区分原因）。
      *
      * @param preferredNamespace 引用点所属类的限定名（无则 null；仅用于裸 id 的排序偏好）
      */
@@ -159,25 +167,56 @@ internal object IbatisXmlStatementTargets {
         project: Project?,
         rawStatementId: String,
         preferredNamespace: String? = null,
-    ): List<XmlAttributeValue> {
+    ): List<XmlAttributeValue> =
+        when (val lookup = lookupStatementAnchors(project, rawStatementId, preferredNamespace)) {
+            is Lookup.Found -> lookup.anchors
+            else -> emptyList()
+        }
+
+    /**
+     * 定位**三态**（T-IbatisGutterPerf P2.1，2026-11-16 用户报障「改了 namespace 图标不消失」）：
+     *
+     * - [Lookup.Found]：确定存在；
+     * - [Lookup.Absent]：**确定**不存在——索引查询已成功执行、候选面没有该 namespace / 语句；
+     *   调用方据此摘图标并**收回正缓存**（缓存不能给已删除/改名的目标续命）；
+     * - [Lookup.Unknown]：暂时查不了（dumb / 索引重建中 `IndexNotReadyException` / 候选文件 PSI
+     *   瞬时取不到）——调用方据此**保留**已确认的图标、且不动缓存。
+     *
+     * 为什么必须分三态：慢趟结果按趟整体替换，把「暂时查不了」当「不存在」会造成图标粘性缺席
+     * （S2）；反过来把「确定不存在」当「暂时查不了」会让图标永不过期（P2.1 报障）。两者只能靠
+     * 「查询是否成功执行」区分，不能靠返回值是否为空。
+     *
+     * @param preferredNamespace 引用点所属类的限定名（无则 null；仅用于裸 id 的排序偏好）
+     */
+    fun lookupStatementAnchors(
+        project: Project?,
+        rawStatementId: String,
+        preferredNamespace: String? = null,
+    ): Lookup {
         val statementId = rawStatementId.trim()
-        if (project == null || statementId.isEmpty()) return emptyList()
+        if (project == null || statementId.isEmpty()) return Lookup.Absent
+        lookupOverrideForTest?.let { override -> return override(project, statementId, preferredNamespace) }
         val indexed = indexedResolveEnabled()
-        // dumb / 索引未就绪：不查索引（查询会抛 IndexNotReadyException），按「本次没有」返回，
-        // 但**不留任何负缓存**——这是旧链「空清单被固化」的反面（见类头「失败语义」）。
-        if (indexed && DumbService.isDumb(project)) return emptyList()
+        // dumb / 索引未就绪：不查索引（查询会抛 IndexNotReadyException），按「未知」返回，
+        // 且**不留任何负缓存**——这是旧链「空清单被固化」的反面（见类头「失败语义」）。
+        if (indexed && DumbService.isDumb(project)) return Lookup.Unknown
         val startedNs = System.nanoTime()
         val dot = statementId.lastIndexOf('.')
-        val anchors = if (dot > 0 && dot < statementId.length - 1) {
-            val namespace = statementId.substring(0, dot).trim()
-            val id = statementId.substring(dot + 1).trim()
-            if (namespace.isEmpty() || id.isEmpty()) emptyList()
-            else anchorsByNamespace(project, namespace, id, indexed)
-        } else {
-            anchorsByStatementId(project, statementId, preferredNamespace, indexed)
+        val lookup = try {
+            if (dot > 0 && dot < statementId.length - 1) {
+                val namespace = statementId.substring(0, dot).trim()
+                val id = statementId.substring(dot + 1).trim()
+                if (namespace.isEmpty() || id.isEmpty()) Lookup.Absent
+                else lookupByNamespace(project, namespace, id, indexed)
+            } else {
+                lookupByStatementId(project, statementId, preferredNamespace, indexed)
+            }
+        } catch (e: IndexNotReadyException) {
+            // 索引重建中：这是「未知」不是「没有」（PCE 不在此列，它必须上抛让本趟作废）。
+            Lookup.Unknown
         }
-        logPerf(statementId, anchors, indexed, startedNs)
-        return anchors
+        logPerf(statementId, lookup, indexed, startedNs)
+        return lookup
     }
 
     // ------------------------------------------------------------------
@@ -185,48 +224,60 @@ internal object IbatisXmlStatementTargets {
     // ------------------------------------------------------------------
 
     /** `ns.id`：索引只给候选文件，namespace 与 id 都由 PSI 精确校验（索引键偏差不会错跳）。 */
-    private fun anchorsByNamespace(
+    private fun lookupByNamespace(
         project: Project,
         namespace: String,
         id: String,
         indexed: Boolean,
-    ): List<XmlAttributeValue> {
+    ): Lookup {
         val files = if (indexed) {
             SqlMapNamespaceIndex.getSqlMapFilesByNamespace(project, namespace)
         } else {
             legacySqlMapFiles(project)
         }
+        var psiUnavailable = false
         for (vf in files) {
-            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile
+            if (file == null) {
+                psiUnavailable = true
+                continue
+            }
             if (file.rootTag?.getAttributeValue("namespace")?.trim() != namespace) continue
             val anchors = statementAnchorsIn(file, id)
-            if (anchors.isNotEmpty()) return anchors
+            if (anchors.isNotEmpty()) return Lookup.Found(anchors)
         }
-        return emptyList()
+        return if (psiUnavailable) Lookup.Unknown else Lookup.Absent
     }
 
     /** 裸 statement id：索引 `stmt:` 键取候选文件；同 namespace 的文件排首位。 */
-    private fun anchorsByStatementId(
+    private fun lookupByStatementId(
         project: Project,
         id: String,
         preferredNamespace: String?,
         indexed: Boolean,
-    ): List<XmlAttributeValue> {
+    ): Lookup {
         val files = if (indexed) {
             SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, id)
         } else {
             legacySqlMapFiles(project)
         }
         val hits = ArrayList<Pair<String?, XmlAttributeValue>>()
+        var psiUnavailable = false
         for (vf in files) {
-            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile
+            if (file == null) {
+                psiUnavailable = true
+                continue
+            }
             val anchors = statementAnchorsIn(file, id)
             if (anchors.isEmpty()) continue
             val ns = file.rootTag?.getAttributeValue("namespace")?.trim()
             for (anchor in anchors) hits.add(ns to anchor)
         }
-        if (preferredNamespace.isNullOrEmpty()) return hits.map { it.second }
-        return hits.sortedBy { if (it.first == preferredNamespace) 0 else 1 }.map { it.second }
+        if (hits.isEmpty()) return if (psiUnavailable) Lookup.Unknown else Lookup.Absent
+        val ordered = if (preferredNamespace.isNullOrEmpty()) hits.map { it.second }
+        else hits.sortedBy { if (it.first == preferredNamespace) 0 else 1 }.map { it.second }
+        return Lookup.Found(ordered)
     }
 
     /** `<sqlMap>` 直接子级里的语句标签（`id` 字面值命中全部返回，含 `<selectKey>` 之外的重复 id 变体）。 */
@@ -266,16 +317,22 @@ internal object IbatisXmlStatementTargets {
 
     private fun logPerf(
         statementId: String,
-        anchors: List<XmlAttributeValue>,
+        lookup: Lookup,
         indexed: Boolean,
         startedNs: Long,
     ) {
         if (!perfLoggedKeys.add(statementId)) return
         val ms = (System.nanoTime() - startedNs) / 1_000_000
-        val file = anchors.firstOrNull()?.containingFile?.virtualFile?.path ?: "-"
+        val anchors = (lookup as? Lookup.Found)?.anchors
+        val state = when (lookup) {
+            is Lookup.Found -> "found"
+            Lookup.Absent -> "absent"
+            Lookup.Unknown -> "unknown"
+        }
+        val file = anchors?.firstOrNull()?.containingFile?.virtualFile?.path ?: "-"
         LOG.info(
             "[gutter-perf] ibatis resolve: source=${if (indexed) "index" else "scan"} " +
-                "statementId=$statementId hits=${anchors.size} file=$file ms=$ms",
+                "statementId=$statementId state=$state hits=${anchors?.size ?: 0} file=$file ms=$ms",
         )
     }
 

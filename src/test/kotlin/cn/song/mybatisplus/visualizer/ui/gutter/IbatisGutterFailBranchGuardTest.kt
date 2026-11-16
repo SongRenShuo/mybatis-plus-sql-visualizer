@@ -23,14 +23,16 @@ import java.io.File
 class IbatisGutterFailBranchGuardTest {
 
     @Test
-    fun `P2接线守卫_createMarkers必须挂dumb门与正缓存兜底`() {
+    fun `P2接线守卫_createMarkers必须挂dumb门与三态兜底`() {
         val body = extractCreateMarkersBody()
             ?: error("无法提取 IbatisJavaToXmlLineMarkerProvider.createMarkers 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
         val wiring = failureBranchWiring(body)
-        assertNotNull("createMarkers 内必须存在 resolveStatementAnchors 解析调用（扫描面漂移？）", wiring)
+        assertNotNull("createMarkers 内必须存在 lookupStatementAnchors 查询调用（扫描面漂移？）", wiring)
         assertTrue(
             "createMarkers 必须：① 索引查询前先过 isDumbProvider 门（dumb 期乐观产出、不查索引）" +
-                "② 解析失败分支上挂 resolvedIbatisKeys.contains 命中仍产出。实测 wiring=$wiring",
+                "② Unknown 分支保留缓存命中（resolvedIbatisKeys.contains）" +
+                "③ Absent 分支收回缓存（resolvedIbatisKeys.remove，P2.1「改 namespace 图标不消失」）。" +
+                "实测 wiring=$wiring",
             wiring == true,
         )
         assertTrue(
@@ -41,43 +43,57 @@ class IbatisGutterFailBranchGuardTest {
 
     @Test
     fun `P2守卫自证_修复后形态放行修复前形态与错位形态必红`() {
-        // 修复后形态：dumb 门在索引查询之前 + 缓存命中分支在解析之后。
+        // 修复后形态：dumb 门在查询之前 + Unknown 留缓存 + Absent 收回缓存。
         val fixed = """
             if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
-            if (resolveStatementAnchors(project, statementId, ownerNamespace).isNotEmpty()) {
+            return when (val lookup = lookupStatementAnchors(project, statementId, ownerNamespace)) {
+                is Lookup.Found -> { resolvedIbatisKeys.add(key); buildMarkers(element, first, previewEnabled) }
+                Lookup.Unknown -> if (resolvedIbatisKeys.contains(key)) buildMarkers(element, first, previewEnabled) else null
+                Lookup.Absent -> { resolvedIbatisKeys.remove(key); null }
+            }
+        """.trimIndent()
+        assertEquals("修复后形态必须放行（wiring=true）", true, failureBranchWiring(fixed))
+
+        // 修复前形态（P2 首版）：dumb 门与缓存命中也都在，唯独缓存**只进不出**——
+        // Absent 也靠 contains 续命，改 namespace 后图标不消失。缺少 remove 一项即须报红。
+        val legacyNoEvict = """
+            if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
+            if (lookupStatementAnchors(project, statementId, ownerNamespace).isNotEmpty()) {
                 resolvedIbatisKeys.add(key)
                 return buildMarkers(element, first, previewEnabled)
             }
             if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
             return null
         """.trimIndent()
-        assertEquals("修复后形态必须放行（wiring=true）", true, failureBranchWiring(fixed))
+        assertEquals("缓存只进不出（无 remove）必须报红", false, failureBranchWiring(legacyNoEvict))
 
-        // 修复前形态：解析失败即 return null，无任何兜底判定。
+        // 无任何兜底判定的形态同样报红（解析失败即返回 null，缓存既不入也不收回）。
         val legacy = """
-            if (resolveStatementAnchors(project, statementId, ownerNamespace).isEmpty()) return null
+            if (lookupStatementAnchors(project, statementId, ownerNamespace).isEmpty()) return null
             return buildMarkers(element, first, previewEnabled)
         """.trimIndent()
-        assertEquals("修复前形态必须报红（wiring=false）", false, failureBranchWiring(legacy))
+        assertEquals("无兜底判定的形态必须报红（wiring=false）", false, failureBranchWiring(legacy))
 
         // dumb 门挪到索引查询之后（dumb 期先查索引 → IndexNotReadyException）同样必须报红。
         val misordered = """
-            val anchors = resolveStatementAnchors(project, statementId, ownerNamespace)
+            val anchors = lookupStatementAnchors(project, statementId, ownerNamespace)
             if (isDumbProvider(project)) return buildMarkers(element, first, previewEnabled)
-            if (anchors.isNotEmpty()) return buildMarkers(element, first, previewEnabled)
-            return buildMarkers(element, first, previewEnabled)
+            resolvedIbatisKeys.remove(key)
+            if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
+            return null
         """.trimIndent()
         assertEquals("dumb 门晚于索引查询必须报红", false, failureBranchWiring(misordered))
 
-        // 缓存分支挪到解析之前（先查缓存再解析）也必须报红——守住「判定在失败分支上」。
+        // 缓存分支挪到查询之前（先查缓存再解析）也必须报红——守住「判定在失败分支上」。
         val cacheFirst = """
             if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
-            if (resolveStatementAnchors(project, statementId, ownerNamespace).isNotEmpty()) return buildMarkers(element, first, previewEnabled)
+            resolvedIbatisKeys.remove(key)
+            if (lookupStatementAnchors(project, statementId, ownerNamespace) is Lookup.Found) return buildMarkers(element, first, previewEnabled)
             return null
         """.trimIndent()
-        assertEquals("缓存分支先于解析必须报红", false, failureBranchWiring(cacheFirst))
+        assertEquals("缓存分支先于查询必须报红", false, failureBranchWiring(cacheFirst))
 
-        // 扫描面漂移形态：无解析调用 → 返回 null（调用方按红处理）。
+        // 扫描面漂移形态：无查询调用 → 返回 null（调用方按红处理）。
         assertNull(failureBranchWiring("return null"))
     }
 
@@ -118,15 +134,18 @@ class IbatisGutterFailBranchGuardTest {
     }
 
     /**
-     * 接线判定：解析调用（`resolveStatementAnchors(`）**之前**必须有 dumb 门（`isDumbProvider(`），
-     * **之后**必须有正缓存命中分支（`resolvedIbatisKeys.contains(`）。无解析调用返回 null（按红处理）。
+     * 接线判定：查询调用（`lookupStatementAnchors(`）**之前**必须有 dumb 门（`isDumbProvider(`），
+     * **之后**必须同时有「Unknown 保留缓存」（`resolvedIbatisKeys.contains(`）与
+     * 「Absent 收回缓存」（`resolvedIbatisKeys.remove(`）。无查询调用返回 null（按红处理）。
      */
     private fun failureBranchWiring(body: String): Boolean? {
-        val resolveIdx = body.indexOf("resolveStatementAnchors(")
+        val resolveIdx = body.indexOf("lookupStatementAnchors(")
         if (resolveIdx < 0) return null
         val before = body.substring(0, resolveIdx)
         val after = body.substring(resolveIdx)
-        return before.contains("isDumbProvider(") && after.contains("resolvedIbatisKeys.contains(")
+        return before.contains("isDumbProvider(") &&
+            after.contains("resolvedIbatisKeys.contains(") &&
+            after.contains("resolvedIbatisKeys.remove(")
     }
 
     /** 剥行注释与块注释（KDoc 里的花括号不干扰配平）。 */

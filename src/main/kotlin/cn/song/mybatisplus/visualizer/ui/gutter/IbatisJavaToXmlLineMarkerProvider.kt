@@ -62,10 +62,12 @@ import java.util.concurrent.ConcurrentHashMap
  * 自己再跑一遍——所以「瞬时解析失败」会被固化成「图标粘性缺席」（用户 2026-11-16 真机报障：
  * 图标出现过一次后无故不再显示）。三道兜底：
  *
- * - **正缓存**（[resolvedIbatisKeys]）：本会话解析成功过一次的语句，之后解析失败也不摘图标；
+ * - **正缓存**（[resolvedIbatisKeys]）：本会话解析成功过一次的语句，**暂时**查不到也不摘图标；
  * - **dumb 乐观产出**：索引不可查的窗口（工程打开后头几秒 / 重建索引）照出两枚，**不入缓存**
  *   ——宁可短暂多一枚点了会提示「语句未找到」的图标，也不让已确认过的图标消失；
- * - **解析失败 + 缓存命中 / dumb 以外**才返回 null（真不存在的语句依旧不显示）。
+ * - **确定不存在**（P2.1，2026-11-16 用户报障「改 `namespace` 图标不消失」）：查询**成功执行**
+ *   且确认无目标时，收回正缓存并摘图标——缓存只能扛「暂时查不了」，不能给已删除/改名的目标续命。
+ *   三态由 [IbatisXmlStatementTargets.lookupStatementAnchors] 提供，不靠「返回是否为空」猜。
  *
  * ## 开关
  *
@@ -93,8 +95,10 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         /**
          * T-IbatisGutterPerf P2-a：会话级正缓存——本会话解析成功过的语句键（见 [cacheKey]）。
          *
-         * 无失效（与 MyBatis 侧 F1-a `resolvedStatementKeys` 同口径）：语句被删/改名后最坏表现是
-         * 「多一枚点了会提示『语句未找到』的图标」，换来「一次成功、此后不再无故消失」。
+         * **失效口径（P2.1 起）**：只在「确定不存在」时收回（[IbatisXmlStatementTargets.Lookup.Absent]，
+         * 见 `createMarkers` ④）。语义边界写死在这里：缓存扛的是「暂时查不了不摘图标」，
+         * **不扛**「目标已经没了」——早期版本无失效，导致改 `namespace` 后图标靠缓存续命不消失
+         * （2026-11-16 用户报障）。
          */
         internal val resolvedIbatisKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -111,6 +115,7 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
         internal fun resetResolvedCacheForTest() {
             resolvedIbatisKeys.clear()
             optimisticLoggedKeys.clear()
+            IbatisXmlStatementTargets.lookupOverrideForTest = null
         }
 
         /**
@@ -153,9 +158,13 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
      * 一个调用点 → 两枚 marker（跳转 + 预览）。返回 null 表示该元素不是 iBatis 调用点
      * 或目标语句确实不存在（两枚同生共死）。
      *
-     * 四段判定（T-IbatisGutterPerf P2）：dumb 窗乐观产出 → 解析成功入正缓存 → 解析失败但缓存
-     * 命中仍产出 → 其余不产出。**不 catch 任何异常**（`ProcessCanceledException` 必须上抛让本趟
-     * 作废，吞掉等于把「没算完」写成「没有」）。
+     * 五段判定（T-IbatisGutterPerf P2 / P2.1）：dumb 窗乐观产出 → 确定存在入正缓存 → 暂时查不了
+     * 且缓存命中仍产出 → 确定不存在收回缓存并摘图标 → 其余不产出。**不 catch 任何异常**
+     * （`ProcessCanceledException` 必须上抛让本趟作废，吞掉等于把「没算完」写成「没有」）。
+     *
+     * 「存在形态」与「消失形态」各由一个真机报障定义：S2＝冷窗瞬时失败把图标摘掉再不回来；
+     * P2.1＝`User.xml` 改掉 `namespace` 后图标靠正缓存续命不消失。两者只能靠三态区分
+     * （见 [IbatisXmlStatementTargets.lookupStatementAnchors]），不能靠「返回空不空」。
      */
     private fun createMarkers(element: PsiElement, previewEnabled: Boolean): List<LineMarkerInfo<*>>? {
         if (element !is PsiIdentifier) return null
@@ -177,15 +186,23 @@ class IbatisJavaToXmlLineMarkerProvider : LineMarkerProvider {
             logOptimisticOnce(statementId)
             return buildMarkers(element, first, previewEnabled)
         }
-        // ② 解析成功：入正缓存并产出。
-        if (IbatisXmlStatementTargets.resolveStatementAnchors(project, statementId, ownerNamespace).isNotEmpty()) {
-            resolvedIbatisKeys.add(key)
-            return buildMarkers(element, first, previewEnabled)
+        return when (val lookup = IbatisXmlStatementTargets.lookupStatementAnchors(project, statementId, ownerNamespace)) {
+            // ② 确定存在：入正缓存并产出。
+            is IbatisXmlStatementTargets.Lookup.Found -> {
+                resolvedIbatisKeys.add(key)
+                buildMarkers(element, first, previewEnabled)
+            }
+            // ③ 暂时查不了（索引重建中 / 候选 PSI 瞬时取不到）：本会话确认过的语句继续显示，
+            //    不摘图标、不动缓存（S2 旧报障「图标无故消失」的兜底）。
+            IbatisXmlStatementTargets.Lookup.Unknown ->
+                if (resolvedIbatisKeys.contains(key)) buildMarkers(element, first, previewEnabled) else null
+            // ④ 确定不存在（语句被删/改名、namespace 改了）：收回缓存并摘图标——缓存不得给
+            //    不存在的目标续命（2026-11-16 用户报障「改 namespace 图标不消失」）。
+            IbatisXmlStatementTargets.Lookup.Absent -> {
+                resolvedIbatisKeys.remove(key)
+                null
+            }
         }
-        // ③ 解析失败但本会话确认过：慢趟换装不得摘掉已显示的图标。
-        if (resolvedIbatisKeys.contains(key)) return buildMarkers(element, first, previewEnabled)
-        // ④ 未确认过且确实解析不到：不出（不制造「点开必空」的假图标）。
-        return null
     }
 
     /** 两枚 marker 的构造（三条产出路径共用，避免形态漂移）。 */
