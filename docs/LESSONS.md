@@ -710,6 +710,16 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-15)**
 
+### L73 「文本扫描 + PSI 预解析」的旁路必须随内容来源扩域，否则只在片段里失效
+
+**规则**：新增一类**文本来源**（跨文件 include 片段、注入片段、模板展开）时，所有「扫原文 + 查 PSI/索引」的预解析旁路都要在同一批扩域；判据是**渲染域 == 扫描域**，不是「编译过、渲染跑通」。这类漏项的现场读数是**差分形态**：同一条语句里本地写法生效、来自片段的一模一样的写法不生效——见到这种差分先查「这条内容由哪段文本承载、那段文本进没进扫描」，不要先怀疑常量类型/模块可见性/PSI 解析能力。
+
+**证据**：T-BindStaticRefCrossNs（2026-11-16，用户 `cyzc-platform` / IDEA 2026.3）：`T-IC-02` 加跨命名空间 include 后，`XmlPreviewService.preview` 的静态常量扫描仍只传 `fileText`；片段内 `<bind value="@com.cyzc...DicConstants@DIC_VALUE_STATION_CATEGORY_BIKE"/>` 因此漏出注入表 → `Ognl` 按 `类@字段` 键取到 null 且不报错 → `VarDeclSqlNode` 出「求值为空」红条；同语句本地 `@…DIC_VALUE_BIKE_ORDER_END` 正常回填 `3`，正是差分。修法（`ad1deacb0`）＝多文本入口（当前文件 + `crossNamespace.fragments.values`），顺带把 `findFieldByName(…, checkBases = true)` 对齐运行时反射 `Class.getField`（含继承）。读数：改前 3 红；改后定向 74/0/0/0；反向验证摘掉片段文本恰 2 红、退回 `checkBases=false` 恰 1 红。同轮横向核过 ew 占位（`rawText` 取的是展开后的 `element.textContent`，已覆盖）与参数类型（按方法签名，不涉文本）。
+
+**正例**：先按「渲染域」列内容来源清单，再逐个核对扫描域；**反例**：只修报障的那一处，或把「渲染能跑通」当成「预解析覆盖完整」。
+
+**Seen 1× (2026-11-16)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
