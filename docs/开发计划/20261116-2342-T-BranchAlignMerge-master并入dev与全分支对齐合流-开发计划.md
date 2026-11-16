@@ -182,7 +182,7 @@ git merge --no-ff dev
 | 2.4 security 吃 master | 待做 | | |
 | 2.5 hiddenbug 吃 master | 待做 | | |
 | 2.6 merge-route 吃 master | 待做 | | |
-| 2.7 insight 吃 dev | 待做 | | |
+| 2.7 insight 吃 dev | **已合并**（2026-11-17，merge commit `805068ede`；实际冲突 7 文件＝预演清单一致）。编译与定向读数见本行补记（构建车道等位后回填）。NestGate 默认值硬前置裁决：**主线默认开**（`resolveEnabled` 恢复 dev 形态，回退开关 `-Dsqlvis.agent.nestGate=false`），insight 侧 2026-10-30「默认关」裁决注释留档备查；SqlInsightWeaveProbeTest 改按回退开关形态守卫洞察身份模型契约（门开时异对象嵌套外层帧被抑制＝已登记运行时差异）；NestGateTest 开闸注释同步改口径 | `805068ede` | docs/索引/开发计划.md＝dev 侧 19 行全并入 + T-SqlInsight 行保留 insight 交付状态（dev 侧是「功能未开工」旧档）；SqlPreviewPanel.kt＝两枚测试锚点常量并存（BIND_STATE_SWITCH_NAME / BIND_STATE_SHOW_CONSOLE_NAME）；SqlPreviewPanelExecution.kt＝insight 代际守卫（generation/result/acceptsDelivery）+ 主线 preparedAt 计时并存；xml 四件＝主线语义为基线 + insight 渲染留痕并入：TrimSqlNode.appendSql 取主线 R2 粘词补空格 + insight `accountAppend` 记账与 renderTrace/traceSlice 成员；ForeachSqlNode 取 insight `applyNode` 派发 + 主线 `hasContent` 判据；XmlSqlRenderer.render 取 insight traceEnabled/isCancelled + 主线 emptyDollarPlaceholder（DynamicContext 五参）；XmlPreviewModel.renderSql 取 insight scenarioBindings（collection/parameter values）+ 主线 kindDriven 过滤与 ${} 空值占位 |
 
 ## 七、决策点（须用户拍板）
 
