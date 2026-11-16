@@ -827,9 +827,11 @@ internal fun SqlPreviewPanel.switchStmtType(kind: ConsumptionKind) {
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // T-SAF-10（ui.swing-html-label.unescaped-lower-trust-text）：meta 行的**数据位**——
     // tableName（实体注解字面量）、XML statementId/parameterType（mapper XML，低信任）、
-    // 警示文本（解析/渲染错误合并）、调用栈摘要、perf 警告文案——全部先经 HtmlEscape.escape
-    // 再进 metaCoreText；metaPerfSegments 非空时可见行带 <html> 包装，未转义数据即活 markup，
-    // 且同文经 metaTooltipBase 到达 tooltip。标记包装（<font>/<br>）由下游拼装保持原样。
+    // 警示文本（解析/渲染错误合并）、perf 警告文案——先经 HtmlEscape.escape 再进 metaCoreText；
+    // 调用栈摘要（metaLineDigest）按纯文本组装，转义在本文件两处 <html> 包装边界对齐
+    // （2026-11-17 修正：meta 行 plain/<html> 双形态，组装点转义会让纯文本态显示字面 &lt;-）。
+    // metaPerfSegments 非空时可见行带 <html> 包装，未转义数据即活 markup，且同文经
+    // metaTooltipBase 到达 tooltip。标记包装（<font>/<br>）由下游拼装保持原样。
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
         result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: ${HtmlEscape.escape(it)}") }
@@ -969,7 +971,12 @@ internal fun SqlPreviewPanel.applyMetaTruncation() {
     metaLabel.text = if (metaPerfSegments.isEmpty()) {
         line1
     } else {
-        "<html>$line1<br>${perfLineHtml(budget, metrics)}</html>"
+        // T-SAF-10 转义位置修正（2026-11-17，CI run 43925934655）：meta 行是 plain / <html> 双形态
+        // （perf 段在位才包 <html>）。低信任数据位已在组装点转义（tableName/警示/栈摘要出处见各自
+        // 注释），本边界对**栈摘要段**（metaLineDigest，组装态纯文本、分隔符恒含 `<-`）补转义——
+        // 纯文本态按原文显示（用户见 `<-` 箭头），HTML 态转义后显示语义不变、注入被阻断。
+        // 宽度按转义前口径测量（line1 用原文），实体展开只影响 HTML 态截断保守度。
+        "<html>${metaLineWithinBudget(metaLineText, metaLineHead, HtmlEscape.escape(metaLineDigest), widthOf, budget)}<br>${perfLineHtml(budget, metrics)}</html>"
     }
 }
 
@@ -978,7 +985,8 @@ internal fun SqlPreviewPanel.applyMetaTruncation() {
 internal fun SqlPreviewPanel.fullDisplayText(): String {
     if (metaPerfSegments.isEmpty()) return metaLineText
     val markup = metaPerfSegments.joinToString("；") { "<font color=\"${it.color}\">${it.text}</font>" }
-    return "<html>$metaLineText<br>   $markup</html>"
+    // T-SAF-10 转义位置修正：与 applyMetaTruncation 同口径——HTML 包装态对栈摘要段转义。
+    return "<html>${metaLineHead + HtmlEscape.escape(metaLineDigest)}<br>   $markup</html>"
 }
 
 /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */

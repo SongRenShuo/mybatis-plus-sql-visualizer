@@ -31,6 +31,8 @@
 
 **遗留 followups**（登记于审计账本与车道报告，未阻塞收官）：共享骨架出口脱敏、BoundedRegex 步数级预算统一、审计清单外两处 escapeHtml 收敛、项目级设置 UI 内联校验反馈、所有者 runIde 端到端核对（T-SAF-02/03/04）、manifest 并列 sha256（D6）。
 
+**T-SAF-10 收口轮修正（2026-11-17，CI run 43925934655 test(2) 腿 5 红）**：T-SAF-09/10（`d3e7ebd1b`）把调用栈摘要的转义放在了 `buildStackDigestInlineLine` 组装点——但预览 meta 行是 **plain / `<html>` 双形态**（`SqlPreviewPanel.applyMetaTruncation` / `fullDisplayText`：perf 段在位才包 `<html>`），纯文本态（无 perf 警告，常态）把转义实体原样显示，用户看到字面 `&lt;-`（栈摘要分隔符恒含 `<-`；本地复现 5 例 ComparisonFailure 与 CI 一致）。**判定＝①真缺陷（转义位置错），非断言漂移**——修法＝转义挪到真正的 HTML 包装边界：组装点回归纯文本（P5 契约原样），`applyMetaTruncation` / `fullDisplayText` 两处 `<html>` 拼装点对 `metaLineDigest` 段过 `HtmlEscape.escape`。注入面不放松：纯文本态无注入面；HTML 态恶意栈帧转义入行（新增回归用例 `testHTML包装态_恶意栈帧不进活markup且箭头转义后语义不变` 钉住，载荷置取景窗内防被 StackDigestFrames 裁掉）。定向读数：StackDigest 19 + MetaHintTooltip 8 + TopRowLayout 9 + SqlResultPanelUi 16 + RollbackSqlDialog 39 = 91 例 0 红（含 T-SAF-10 既有回归面全绿）。
+
 ### 附：遗留 followups 详解（2026-11-07 补记）
 
 以下内容为各车道实施报告与父会话收口时的原始 followups（此前未持久化，本段补记）；每条含现状/风险/建议口径。均非漏洞、不阻塞收官。
