@@ -35,6 +35,31 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-LocalDirPersist P-4：XmlSerializer 对 `localUpdateDir` 字段名无保留字问题，
+     * 且 Windows 反斜杠与中文目录经**真实序列化**往返逐字保留（计划 P-7）。
+     */
+    fun testStateRoundTripKeepsLocalUpdateDir() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.localUpdateDir
+        try {
+            val path = "C:\\mpvs-pkgs\\插件包 目录"
+            settings.state.localUpdateDir = path
+            // 真实序列化：state → XML 元素 → 反序列化回 State（等价磁盘落盘/读盘）
+            val xml = com.intellij.util.xmlb.XmlSerializer.serialize(settings.getState())
+            val fresh = PluginSettings()
+            fresh.loadState(com.intellij.util.xmlb.XmlSerializer.deserialize(xml, PluginSettings.State::class.java))
+            assertEquals("round-trip 应逐字保留（含反斜杠与中文）", path, fresh.state.localUpdateDir)
+            // 显式关闭态（空值）同样保留
+            settings.state.localUpdateDir = ""
+            val freshEmpty = PluginSettings()
+            freshEmpty.loadState(settings.getState())
+            assertEquals("", freshEmpty.state.localUpdateDir)
+        } finally {
+            settings.state.localUpdateDir = old
+        }
+    }
+
     fun testConfigurableApplyWritesLanguageThenResetReadsIt() {
         // 设置页链路：切 en → apply → state=en；重新打开（新 panel）reset → combo 选中 en
         val settings = PluginSettings.getInstance()
@@ -220,9 +245,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // F-03（t-idle-f2）：项目打开时自动打开日志窗口开关（logToolWindowAutoShowCheck）+1 → 42。
             // F-14（DBX #318）：CSV 导出省略 UTF-8 BOM 开关（csvExportNoBomCheck）+1 → 43。
             // T-Ibatis2Support 券 A（master 并入）：iBatis 2.x sqlMap 语句预览开关（ibatisXmlCheck，界面节）+1 → 44（合并态实跑核对）。
+            // T-NotifyTune（master 并入）：方言死路提示开关（dialectTipCheck，界面节）+1 → 45；
+            // 首次捕获引导开关（firstCaptureGuideCheck，界面节）+1 → 46。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 44", 44, texts.size)
+            assertEquals("复选框总数应为 46", 46, texts.size)
         } finally {
             settings.state.language = old
         }

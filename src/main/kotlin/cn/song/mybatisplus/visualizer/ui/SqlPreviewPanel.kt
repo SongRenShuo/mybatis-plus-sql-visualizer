@@ -699,6 +699,25 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var ibatisRenderWarningIsNote = false
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     internal var errorCopyButton: JButton? = null
+
+    /**
+     * T-PreviewStmtTypeScope D-3：「预览目标」切换按钮——同一 wrapper 上出现多种消费写法时可见
+     * （`update(entity, w)` 与 `delete(w)` 复用了同一个变量），点击列出全部档位按需切换。
+     * 单档场景恒隐藏，常规预览不占位。
+     */
+    internal var stmtTypeButton: JButton? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前结果的可切换档位（与 [stmtTypeButton] 同源，弹层用）。 */
+    internal var stmtTypeOptions: List<cn.song.mybatisplus.visualizer.model.ConsumptionKind> = emptyList()
+
+    /** T-PreviewStmtTypeScope D-3：按档位重算当前预览的闭包（结果自带，见 PreviewResult.statementTypeSwitch）。 */
+    internal var stmtTypeSwitcher: ((cn.song.mybatisplus.visualizer.model.ConsumptionKind) -> PreviewResult?)? = null
+
+    /** T-PreviewStmtTypeScope D-3：当前生效的档位（按钮文案与弹层勾选态用；null = 默认 SELECT）。 */
+    internal var stmtTypeCurrent: cn.song.mybatisplus.visualizer.model.ConsumptionKind? = null
+
+    /** T-PreviewStmtTypeScope D-3：该 wrapper 上的全部消费证据（弹层条目里带方法名与行号）。 */
+    internal var stmtTypeEvidences: List<cn.song.mybatisplus.visualizer.model.WrapperConsumption> = emptyList()
     internal var currentWarning: String? = null
     // UI-001：当前告警是否信息级（横幅/元信息行前缀分档用；false = 失败档 ⚠）
     internal var currentWarningIsNote = false
@@ -776,6 +795,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var schemeCombo: JComboBox<String>? = null
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
     internal var bindStateLabel: JBLabel? = null
+
+    /** T-PreviewExecWriteDefer：惰性口径下的「显示执行控制台」链接（bind-state 行内）。 */
+    internal var bindStateShowConsoleLink: com.intellij.ui.components.labels.LinkLabel<Any>? = null
+
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     internal var schemeSyncingCombo = false
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -1041,6 +1064,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
         }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        // T-PreviewEditorLeak（2026-11-13 真机 SEVERE 驱动）：**兜底释放预览编辑器与 autopopup
+        // listener**。常规路径是 `removeNotify → releaseEditor`，而 IDE 退出/窗口已隐藏时
+        // removeNotify 不必然到达；此时残留的编辑器（含平台 CaretModelImpl/EditorView 子件）与
+        // `SqlPreviewPanel.autoPopup`（`Disposer.newDisposable` 的 ROOT 级子件）都会被平台
+        // ObjectTree 报 "Memory leak detected … Plugin to blame: SQL Visualizer"（实测一次退出 4 条）。
+        // 两个调用都幂等：编辑器已释放/字段已空时零动作。
+        runCatching { disposeCurrentEditorOnly() }
+        runCatching {
+            autoPopupDisposable?.let { Disposer.dispose(it) }
+            autoPopupDisposable = null
+        }
         Disposer.dispose(this)
     }
 
@@ -1505,6 +1539,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         /** O-95 S3：绑定数据源指示行/标签 panel.name 锚点（测试定位 + paramRowLabelForTest 排除同口径）。 */
         internal const val BIND_STATE_ROW_NAME = "mpsv.bindStateRow"
         internal const val BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel"
+
+        /** T-PreviewExecWriteDefer：bind-state 行「显示执行控制台」链接的控件名（测试/守卫定位用）。 */
+        internal const val BIND_STATE_SHOW_CONSOLE_NAME = "mpsv.showConsoleLink"
 
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */

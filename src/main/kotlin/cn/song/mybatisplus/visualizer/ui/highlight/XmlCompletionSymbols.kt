@@ -228,10 +228,42 @@ internal object XmlCompletionSymbols {
      * 跨文件 `<sql id>` 候选（**带 `namespace.` 前缀**形态，W4-2 的 `refid` 跨文件）：
      * 项目内其它 XML 文件里根 `<mapper>` 的 `<sql id>`。
      *
-     * 索引来源 `FileTypeIndex`（XML 文件类型，**非全项目类扫描**）；dumb 态或索引不可用 → 空。
+     * T-IndexScanSweep2 P1（2026-11-16）起走**项目级名称清单服务** [XmlSymbolNameIndexCache]：一次构建、
+     * 按索引状态失效、补全期**零 PSI 全扫**（改造前每次补全对最多 500 个 XML 建 PSI）。服务只维护
+     * 「全项目」名称集，故本处再减去**当前文件自身**的 `ns.sqlId`（同文件片段由 [localIds] 以裸 id 形态
+     * 补齐——与改造前 `filter { it != currentVf }` 同语义）。建好前 / dumb 态 → 空。
+     *
+     * 边界（如实登记）：改造前按**文件身份**排除当前文件；现按**名字集合**排除——若两个不同文件声明了
+     * 同一 `ns.sqlId`（同 namespace 重名属工程错误）会被一并排除；无 namespace 的 mapper 文件（少见）
+     * 其裸 id 亦按名字排除，可能连带排除他文件的同名裸 id。均为病态形态，不改「正常工程逐项一致」。
+     *
+     * 回退：Registry `sqlvis.completion.nameIndexCache=false` → [legacyCrossFileSqlIds]（原现扫实现）。
      */
     fun crossFileSqlIds(project: Project, currentFile: XmlFile?): List<String> = runCatching {
         if (DumbService.isDumb(project)) return emptyList()
+        val service = XmlSymbolNameIndexCache.getInstance(project)
+        if (!service.isCacheEnabled()) return legacyCrossFileSqlIds(project, currentFile)
+        val all = service.crossFileSqlIds()
+        if (all.isEmpty()) return emptyList()
+        val own = ownSqlIds(currentFile)
+        all.asSequence().filter { it !in own }.take(CAP).toList()
+    }.getOrElse { emptyList() }
+
+    /** 当前文件自身的 `ns.sqlId` 集（单文件活 PSI 读，廉价；无 namespace 时裸 id）。 */
+    private fun ownSqlIds(currentFile: XmlFile?): Set<String> = runCatching {
+        val root = currentFile?.rootTag ?: return emptySet()
+        if (root.name != "mapper") return emptySet()
+        val ns = root.getAttributeValue("namespace")?.takeIf { it.isNotBlank() }
+        root.findSubTags("sql").mapNotNull { sql ->
+            sql.getAttributeValue("id")?.takeIf { it.isNotBlank() }?.let { id -> if (ns != null) "$ns.$id" else id }
+        }.toSet()
+    }.getOrElse { emptySet() }
+
+    /**
+     * 现扫实现（T-IndexScanSweep2 P1 前的原实现，**Registry 回退通道专用**，下一版删除）：
+     * `FileTypeIndex(XML)` 取全项目 XML → 逐个建 PSI → 取根 `<mapper>` 的 `<sql id>`，按文件身份排除当前文件。
+     */
+    private fun legacyCrossFileSqlIds(project: Project, currentFile: XmlFile?): List<String> = runCatching {
         val currentVf = currentFile?.virtualFile
         val psiManager = PsiManager.getInstance(project)
         FileTypeIndex.getFiles(XmlFileType.INSTANCE, GlobalSearchScope.projectScope(project))
@@ -273,31 +305,44 @@ internal object XmlCompletionSymbols {
     // ------------------------------------------------------------------
 
     /**
+     * 全项目 mybatis-config.xml `<properties>` 的 key 聚合（T-IndexScanSweep2 P1（2026-11-16）起走
+     * **项目级名称清单服务** [XmlSymbolNameIndexCache]：一次构建、按索引状态失效、补全期零 PSI 全扫；
+     * 建好前 / dumb 态 → 空）。
+     *
+     * key 口径**以 MyBatis 实现为准**（`XMLConfigBuilder.propertiesElement` →
+     * `XNode.getChildrenAsProperties()`，mybatis 3.5.19 sources 实读）：`<properties>` 的子标签
+     * **标签名被忽略**，key 取子标签的 `name` 属性值（且要求 `value` 属性在场）。
+     * 例：`<property name="schemaName" value="app"/>` → key = `schemaName`。
+     *
+     * 已知边界（不覆盖）：`<properties resource="…"/>`/`url="…"` 指向的外部 .properties 文件里的
+     * key 不可见（需读文件内容，本轮不做）；`<settings>` 的 `name` 属性是设置项、不是变量，不入集。
+     *
+     * 回退：Registry `sqlvis.completion.nameIndexCache=false` → [legacyConfigPropertyKeys]（原现扫实现，
+     * 其失效戳是 `PsiModificationTracker.modificationCount`——击键即失效，等于没有）。
+     * 单文件纯函数 [propertyKeysOf] 保留供测试直测。
+     */
+    fun configPropertyKeys(project: Project): List<String> = runCatching {
+        if (DumbService.isDumb(project)) return emptyList()
+        val service = XmlSymbolNameIndexCache.getInstance(project)
+        if (!service.isCacheEnabled()) return legacyConfigPropertyKeys(project)
+        service.configPropertyKeys()
+    }.getOrElse { emptyList() }
+
+    /**
      * 缓存**挂在 project 上**（不是进程级单例字段）：原先用「进程级 `@Volatile stamp/value` +
      * 比当前 project 的 modificationCount」，多项目 IDE 里两个 project 的计数撞上时会互相读到
      * 对方的缓存值（本轮补测发现的结构性缺陷，已改）。挂 project 后随 project 一起回收，无泄漏。
+     * （现仅服务于 Registry 回退通道 [legacyConfigPropertyKeys]。）
      */
     private val PROPS_CACHE_STAMP: Key<Long> = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_STAMP")
 
     private val PROPS_CACHE_VALUE: Key<List<String>> = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_VALUE")
 
     /**
-     * 全项目 mybatis-config.xml `<properties>` 的 key 聚合（**带缓存**：按
-     * `PsiModificationTracker.modificationCount` 失效，缓存挂 project）。
-     *
-     * key 口径**以 MyBatis 实现为准**（`XMLConfigBuilder.propertiesElement` →
-     * `XNode.getChildrenAsProperties()`，mybatis 3.5.19 sources 实读）：`<properties>` 的子标签
-     * **标签名被忽略**，key 取子标签的 `name` 属性值（且要求 `value` 属性在场）。
-     * 例：`<property name="schemaName" value="app"/>` → key = `schemaName`。
-     * 本轮补测前这里取的是**子标签名**（恒为 `"property"`），等于该能力对真实配置文件无效。
-     *
-     * 已知边界（不覆盖）：`<properties resource="…"/>`/`url="…"` 指向的外部 .properties 文件里的
-     * key 不可见（需读文件内容，本轮不做）；`<settings>` 的 `name` 属性是设置项、不是变量，不入集。
-     *
-     * dumb 态/索引不可用 → 空。单文件纯函数 [propertyKeysOf] 供测试直测。
+     * 现扫实现（T-IndexScanSweep2 P1 前的原实现，**Registry 回退通道专用**，下一版删除）：
+     * `FileTypeIndex(XML)` 全项目逐个建 PSI，按 `PsiModificationTracker.modificationCount` 失效。
      */
-    fun configPropertyKeys(project: Project): List<String> = runCatching {
-        if (DumbService.isDumb(project)) return emptyList()
+    private fun legacyConfigPropertyKeys(project: Project): List<String> = runCatching {
         val stamp = PsiModificationTracker.getInstance(project).modificationCount
         if (project.getUserData(PROPS_CACHE_STAMP) == stamp) {
             return project.getUserData(PROPS_CACHE_VALUE) ?: emptyList()

@@ -29,6 +29,9 @@ import com.intellij.util.ui.RestartDialogImpl
 class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // T-HotUpdateSettingsGuard：借启动活动把热更新兜底服务拉起来（应用级单例，重复取无副作用）——
+        // 动态装载时平台会对已开工程重跑启动活动，新代际据此订阅 DynamicPluginListener 并补做一次代际比对。
+        runCatching { HotUpdateSettingsGuard.getInstance() }
         // F-11：上游 MyBatis 版本监听（独立于插件自更新开关——它看的是项目依赖面而不是本插件
         // 版本；自身有每项目一次守卫 + 无变化静默，见 UpstreamVersionMonitor）。放在自动检查
         // 开关判定之前，保证 autoCheckUpdate 关着时版本变化仍可见。

@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.ui.nav
 
-import cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlTargets
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiIdentifier
@@ -31,12 +30,13 @@ class MapperNavigationGotoDeclarationHandlerTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        MybatisXmlTargets.clearFileListCacheForTest()
+        // T-MapperXmlTargetsIndex（2026-11-16）：namespace→文件改走自定义索引，旧的
+        // 「清单单槽 TTL / namespace memo」已退役，无缓存需要清（索引由平台增量维护）。
     }
 
     override fun tearDown() {
         try {
-            MybatisXmlTargets.clearFileListCacheForTest()
+            // 同上：无自建缓存
         } finally {
             super.tearDown()
         }

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
 import cn.song.mybatisplus.visualizer.execute.JdbcUrlDatabase
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -257,6 +258,22 @@ object DatabaseSchemaResolver {
     fun prefetchTables(project: Project?, tableNames: Collection<String>): Int {
         if (project == null) return 0
         if (!isDatabaseAvailable()) return 0
+        // §14.10：模型冷时整批跳过——每次都是「15 个源全 bail」，纯白付（真机 830 表 × 15 源 = 45s）
+        if (modelsColdNow(project)) {
+            LOG.info("[T-DbSchemaCompletion] prewarm skipped: models cold, tables=${tableNames.size}")
+            return 0
+        }
+        // §14.10 诊断：一次性预热一大批表时留调用栈，揪出「谁在整工程扫表」（本轮真机就是它吃掉 19.8s）
+        if (tableNames.size > BIG_BATCH_WARN) {
+            LOG.warn("[T-DbSchemaCompletion] prewarm big batch: tables=${tableNames.size}\n${callerTrace()}")
+            // 大批量预热绝不能占 EDT：改派业务线程后再跑（本调用立即返回 0）
+            if (ApplicationManager.getApplication()?.isDispatchThread == true) {
+                ApplicationManager.getApplication()?.executeOnPooledThread(
+                    Runnable { prefetchTables(project, tableNames) },
+                )
+                return 0
+            }
+        }
         val now = System.currentTimeMillis()
         var resolved = 0
         var skipped = 0
@@ -596,6 +613,13 @@ object DatabaseSchemaResolver {
     // DasTypedObject）。收录条件放宽为「comment/typeSpec 非空 或 notNull==true」后，仅非空标记
     // 列（comment/typeSpec 双空）也会进 Map——只消费 comment 的调用点自行过滤 blank 保持放宽前语义。
     private fun tryCompute(project: Project, tableName: String): TableMeta {
+        // T-StartupReadLockFreeze §14.10（2026-11-13 沙盒日志）：数据源模型未加载时（`DasModel 遍历 0 张表`），
+        // 逐表逐源的完整扫描必然全部 bail——真机一次打开里出现 830 表 × 15 源 = 19824 次、耗 ~45s，
+        // 挡住预览弹窗（request→dialog 19.8s）。一次「全部源都 bail」就是「模型冷」的充分证据：
+        // 窗口内直接按 scanBailed 返回，不再逐源遍历；窗口外自动重试，内省完成后自愈。
+        if (modelsColdNow(project)) {
+            return TableMeta(null, emptyMap(), scanBailed = true)
+        }
         val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap()).also {
             LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=$tableName")
         }
@@ -603,7 +627,50 @@ object DatabaseSchemaResolver {
             LOG.info("DatabaseSchemaResolver: no data sources configured, table=$tableName")
             return TableMeta(null, emptyMap())
         }
-        return resolveFromSources(tableName, dataSources)
+        val resolved = resolveFromSources(tableName, dataSources)
+        if (resolved.scanBailed && resolved.columns.isEmpty() && resolved.comment == null) {
+            stampModelsCold(project)
+        }
+        return resolved
+    }
+
+    // ---------------- 模型冷窗口（T-StartupReadLockFreeze §14.10） ----------------
+
+    /** projectKey → 最近一次观测到「所有源都 bail（模型未加载）」的时刻。 */
+    private val modelsColdAt: MutableMap<String, Long> = java.util.concurrent.ConcurrentHashMap()
+
+    /** 模型冷窗口：窗口内跳过 schema 扫描（这里省的是纯白付的遍历，不是功能性结果）。 */
+    internal var modelsColdWindowMs: Long = 20_000L
+
+    /** 一次预热超过该表数即视为「整工程扫表」，留调用栈并禁止在 EDT 上跑（§14.10）。 */
+    internal const val BIG_BATCH_WARN = 50
+
+    /** 诊断用：当前调用栈前 8 帧（真机只靠日志就能定位「谁在整工程扫表」）。 */
+    private fun callerTrace(): String =
+        Thread.currentThread().stackTrace.drop(2).take(8).joinToString("\n") { "\tat $it" }
+
+    /** 测试缝：[modelsColdWindowMs] 的可注入窗口（<=0 等价关闭）。 */
+    internal fun modelsColdNowAt(lastAt: Long?, now: Long, window: Long): Boolean =
+        lastAt != null && window > 0L && (now - lastAt) in 0 until window
+
+    internal fun modelsColdNow(project: Project?, now: Long = System.currentTimeMillis()): Boolean =
+        modelsColdNowAt(modelsColdAt[projectKeyOf(project)], now, modelsColdWindowMs)
+
+    private fun stampModelsCold(project: Project?) {
+        val key = projectKeyOf(project) ?: return
+        val first = modelsColdAt.put(key, System.currentTimeMillis()) == null
+        if (first) {
+            LOG.info(
+                "DatabaseSchemaResolver: 模型冷（所有数据源的内省都未完成）——${modelsColdWindowMs}ms 内跳过 schema 扫描，" +
+                    "窗口外自动重试",
+            )
+        }
+    }
+
+    private fun projectKeyOf(project: Project?): String? = runCatching { project?.locationHash }.getOrNull()
+
+    internal fun resetModelsColdForTest() {
+        modelsColdAt.clear()
     }
 
     /**

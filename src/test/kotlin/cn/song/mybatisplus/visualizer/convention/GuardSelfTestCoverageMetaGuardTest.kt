@@ -692,6 +692,25 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "因此报缺口；现「判定内核能看见缺失的图标资源」已直接断言提取器能提非空站点集合。",
             ),
             GuardEntry(
+                "update/HotUpdateSettingsGuardTest.kt",
+                emptyList(),
+                "T-HotUpdateSettingsGuard 守卫：热更新（动态装载）后设置页「确定」无反应的兜底判定——" +
+                    "处理条件必须是「isUpdate 且本插件」、设置窗口按类名后缀 SettingsDialog 收口、" +
+                    "PLUGIN_ID 与 plugin.xml 的 <id> 一字不差。判定内核是三个纯函数，用例直接断言，" +
+                    "无「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把 shouldHandle 的插件 id 改成别的、或 isSettingsDialogClass 改成正向 contains，" +
+                    "对应用例必红（实施轮以「反向探针」口径核过同类判定）。",
+            ),
+            GuardEntry(
+                "ui/XmlSqlCompletionContextResolverIndexKeySourceScanTest.kt",
+                emptyList(),
+                "L65 守卫（2026-11-13）：`JavaAnnotationIndex` 的键是**注解简单名**（243 字节码实证：" +
+                    "`JavaAnnotationElementType.indexStub` 先 indexOf('(') 截断再取短类名），" +
+                    "按 FQN 查恒空——`XmlSqlCompletionContextResolver` 的兜底分支曾如此。判定内核＝剥注释后" +
+                    "扫 `getAnnotations(` 的实参是否为简单名常量 + 常量值是否等于 TableName，无返回违规点集合的" +
+                    "具名判定函数，故 decisionFns 留空；灵敏度=把实参改回 FQN → 本类恰 1 红（实施轮实测）。",
+            ),
+            GuardEntry(
                 "convention/VerifierCliVersionGuardTest.kt",
                 emptyList(),
                 "T-CiMarketSplit verifier-cli 版本钉子守卫：判定内核内联于用例——读 " +
@@ -1358,6 +1377,35 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "EDT，而它委托的原生 ChooseDataSourceAction javap 实证是 BGT。判据两条：必须显式声明 " +
                     "ActionUpdateThread.BGT；update 体内不得出现 PSI/Swing/EDT-only 令牌。自证语料=" +
                     "「未声明 BGT 与 update 体触 PSI 各必被点名」+「合规形态不误报」。",
+            ),
+            // ---- T-GutterFirstOpenDelay F1：XML→Java 跳转图标「解析失败不摘图标」接线守卫（2026-11-14） ----
+            GuardEntry(
+                "ui/gutter/MapperXmlSlowResolveFailGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarker 配平方法体，判「解析失败分支上是否先查
+                    // 正缓存（resolvedStatementKeys）再 dumb 乐观产出」。自证语料同文件——
+                    // 「F1守卫自证_修复后形态放行修复前形态必红」「F1守卫自证_Java侧…」以合成样本
+                    // 直接调用（放行/必红/先缓存后解析/空体四向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                    DecisionFn("javaFailureBranchWiring", FnKind.HELPER),
+                ),
+                "T-GutterFirstOpenDelay F1/F1' 接线守卫：钉住双向跳转两个 provider 的 createMarker" +
+                    "「解析失败不摘图标」接线——失败分支必须先查正缓存再 dumb 乐观产出，防接线漂移（判定先于" +
+                    "解析/漏缓存查询）让冷打开 S2 图标闪没/缺席回归。CI fast(1) 红的教训：新增 Guard 族文件落在 " +
+                    "ui/gutter（非 convention）也会被文件名闭包扫到，漏登即红——按文件名含 Guard 全清单登记。",
+            ),
+            // ---- T-IbatisGutterPerf P2：iBatis 调用行图标「解析失败不摘图标」接线守卫（2026-11-16） ----
+            GuardEntry(
+                "ui/gutter/IbatisGutterFailBranchGuardTest.kt",
+                listOf(
+                    // 判定谓词（Boolean? 形态）：读 createMarkers 配平方法体，判「dumb 门在索引查询之前
+                    // + 正缓存命中分支在解析之后」。自证语料同文件——「P2守卫自证_修复后形态放行…」
+                    // 以合成样本直接调用（放行/必红/dumb 门错位/缓存先于解析/空体五向），故不登记豁免。
+                    DecisionFn("failureBranchWiring", FnKind.HELPER),
+                ),
+                "T-IbatisGutterPerf P2 接线守卫：钉住 iBatis Java→XML provider 的 createMarkers" +
+                    "「dumb 乐观产出 + 正缓存命中仍产出」接线——dumb 门必须在索引查询之前（dumb 期查索引" +
+                    "抛 IndexNotReadyException），缓存分支必须在解析失败分支上。",
             ),
             GuardEntry(
                 "convention/ConsolePsiWarmGuardTest.kt",

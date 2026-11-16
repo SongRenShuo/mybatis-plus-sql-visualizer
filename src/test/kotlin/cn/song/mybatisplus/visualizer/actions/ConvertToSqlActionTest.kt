@@ -182,7 +182,7 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        IbatisXmlStatementTargets.clearCachesForTest()
+        IbatisXmlStatementTargets.resetPerfLogForTest()
         val literal = PsiTreeUtil.findChildrenOfType(dao, PsiLiteralExpression::class.java)
             .first { it.value == "User.selectById" }
 

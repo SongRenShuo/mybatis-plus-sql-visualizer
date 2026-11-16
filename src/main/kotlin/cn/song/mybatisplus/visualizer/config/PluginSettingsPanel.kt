@@ -170,6 +170,27 @@ class PluginSettingsPanel @JvmOverloads constructor(
         override fun toString(): String = label
     }
 
+    /** T-PreviewExecWriteDefer：控制台准备档（三档，见 `PreviewConsoleEager.Mode`）。 */
+    internal data class ConsolePrepOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    /**
+     * 控制台准备档选项——**直接由 `PreviewConsoleEager.Mode` 派生**（顺序与取值同源），
+     * 这样设置页 UI 与解析端不可能分叉（新增一档只需改枚举 + 加一条 bundle 文案）。
+     */
+    internal fun consolePrepOptions(): Array<ConsolePrepOption> =
+        cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.values().map { mode ->
+            // key 用**完整字面量**（不拼接）：bundle 守卫会把字面量前缀当 key 引用，拼接形态既绕不过守卫、
+            // 也让缺键在运行期才暴露（message() 缺键返回 key 原文，UI 直接显示键名）。
+            val key = when (mode) {
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.LAZY -> "settings.consolePrep.lazy"
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.LAZY_SILENT -> "settings.consolePrep.lazySilent"
+                cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager.Mode.EAGER -> "settings.consolePrep.eager"
+            }
+            ConsolePrepOption(mode.name, MpSqlVisualizerBundle.message(key))
+        }.toTypedArray()
+
     internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
@@ -532,6 +553,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     internal val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
+    /** T-NotifyTune 券 A：SQL 方言死路主动提示开关（默认开）：关闭后方言提示全程静默。 */
+    internal val dialectTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.dialectTip"))
+
+    /** T-NotifyTune 券 B：首次捕获引导开关（默认开）：关闭后首次捕获指路全程静默。 */
+    internal val firstCaptureGuideCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.firstCaptureGuide"))
+
     /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关=不设置该属性、继承 IDE 全局）。 */
     internal val editorShowWhitespacesCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"))
 
@@ -612,6 +639,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** maintainPage `<datasource>` 源语言档（T-PagesHql：AUTO/SQL/HQL）。 */
     internal val pagesSourceCombo = JComboBox<PagesSourceOption>()
+
+    /** T-PreviewExecWriteDefer：控制台准备档下拉（惰性 / 惰性无入口 / 打开即准备）。 */
+    internal val consolePrepCombo = JComboBox<ConsolePrepOption>()
 
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
@@ -1107,6 +1137,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
         onboardingAnchorTipCheck.isSelected = checked
     }
 
+    /** T-NotifyTune 券 A：方言提示开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setDialectTipCheck(checked: Boolean) {
+        dialectTipCheck.isSelected = checked
+    }
+
+    /** T-NotifyTune 券 B：首次捕获引导开关设置入口（测试用）——与用户勾选同一路径。 */
+    internal fun setFirstCaptureGuideCheck(checked: Boolean) {
+        firstCaptureGuideCheck.isSelected = checked
+    }
+
     /** T-PreviewWhitespaceToggle O-44a：空白符开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     internal fun setEditorShowWhitespacesCheck(checked: Boolean) {
         editorShowWhitespacesCheck.isSelected = checked
@@ -1379,10 +1419,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || ibatisXmlCheck.isSelected != s.ibatisXmlEnabled
             // T-PagesHql：源语言档变更即为 modified（漏挂会让下拉改了 Apply 不启用）
             || (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value != s.pagesXmlSourceMode
+            || (consolePrepCombo.selectedItem as? ConsolePrepOption)?.value != s.consolePrepMode
             // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
             || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
+            // T-NotifyTune：两个主动通知开关变更即为 modified
+            || dialectTipCheck.isSelected != s.dialectTipEnabled
+            || firstCaptureGuideCheck.isSelected != s.firstCaptureGuideEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
             || editorShowWhitespacesCheck.isSelected != s.editorShowWhitespaces
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
@@ -1534,11 +1578,15 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-PagesHql：maintainPage 源语言档写回（随 UI 分区，读写判定同归属）
             s.pagesXmlSourceMode = (pagesSourceCombo.selectedItem as? PagesSourceOption)?.value
                 ?: PluginSettings.PAGES_SOURCE_AUTO
+            s.consolePrepMode = (consolePrepCombo.selectedItem as? ConsolePrepOption)?.value ?: "LAZY"
             // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
             s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.onboardingAnchorTipEnabled = onboardingAnchorTipCheck.isSelected
+            // T-NotifyTune：两个主动通知开关写回（随 UI 分区）
+            s.dialectTipEnabled = dialectTipCheck.isSelected
+            s.firstCaptureGuideEnabled = firstCaptureGuideCheck.isSelected
             // T-PreviewWhitespaceToggle O-44a：空白符开关写回（随 UI 分区）
             s.editorShowWhitespaces = editorShowWhitespacesCheck.isSelected
             s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
@@ -1653,10 +1701,15 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-PagesHql：maintainPage 源语言档回填
             pagesSourceCombo.selectedItem = pagesSourceOptions().firstOrNull { it.value == s.pagesXmlSourceMode }
                 ?: pagesSourceOptions().first()
+            consolePrepCombo.selectedItem = consolePrepOptions().firstOrNull { it.value == s.consolePrepMode }
+                ?: consolePrepOptions().first()
             // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
             xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled
+            // T-NotifyTune：两个主动通知开关回填
+            dialectTipCheck.isSelected = s.dialectTipEnabled
+            firstCaptureGuideCheck.isSelected = s.firstCaptureGuideEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关回填
             editorShowWhitespacesCheck.isSelected = s.editorShowWhitespaces
             languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()

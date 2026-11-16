@@ -246,11 +246,12 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // F96（T-PerfSweep26）：namespace→文件结果级 memo
+    // T-MapperXmlTargetsIndex（2026-11-16）：namespace→文件改走自定义索引
+    // （F96 的「清单单槽 TTL + namespace 结果级 memo」随 FileTypeIndex 全扫一起退役）
     // ------------------------------------------------------------------
 
-    /** 同一 namespace 二次解析不重复实查（memo 命中）；文件清单代不变。 */
-    fun testF96_同namespace二次解析_不重复实查() {
+    /** 同一 namespace 连续解析结果稳定——索引查询无 TTL 换代抖动，不会「这一刻有、下一刻没有」。 */
+    fun testF96_同namespace连续解析_结果稳定() {
         myFixture.addFileToProject(
             "m/UserMapper.xml",
             """<mapper namespace="m.user"><sql id="f">SELECT 1</sql></mapper>""",
@@ -259,56 +260,30 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
             "mapper.xml",
             """<mapper namespace="n"><select id="s">SELECT * FROM t <include refid="m.user.f"/></select></mapper>""",
         )
-        MybatisXmlTargets.clearFileListCacheForTest()
-        MybatisXmlTargets.namespaceScanCount.set(0)
-        MybatisXmlTargets.indexScanCount.set(0)
 
         val first = MybatisXmlTargets.findMapperFileByNamespace(project, "m.user")
         assertNotNull("首次解析应命中", first)
-        val scansAfterFirst = MybatisXmlTargets.namespaceScanCount.get()
-        assertEquals("首次解析应有且仅有一次实查", 1, scansAfterFirst)
-
         val second = MybatisXmlTargets.findMapperFileByNamespace(project, "m.user")
         assertNotNull("二次解析应命中", second)
-        assertEquals(
-            "同 namespace 二次解析不得重复实查（F96 memo）",
-            scansAfterFirst,
-            MybatisXmlTargets.namespaceScanCount.get(),
-        )
-        assertEquals("二次解析不得触发文件清单重扫", 1, MybatisXmlTargets.indexScanCount.get())
+        assertEquals("两次解析必须落到同一文件", first!!.virtualFile, second!!.virtualFile)
     }
 
-    /** 负结果同样入 memo：不存在的 namespace 二次解析不重复实查。 */
-    fun testF96_不存在namespace_负结果也入memo() {
+    /** 负结果不被记住：不存在的 namespace 连续解析都返回 null。 */
+    fun testF96_不存在namespace_连续解析都为null() {
         myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
-        MybatisXmlTargets.clearFileListCacheForTest()
-        MybatisXmlTargets.namespaceScanCount.set(0)
-
         assertNull(MybatisXmlTargets.findMapperFileByNamespace(project, "no.such.ns"))
-        val scans = MybatisXmlTargets.namespaceScanCount.get()
         assertNull(MybatisXmlTargets.findMapperFileByNamespace(project, "no.such.ns"))
-        assertEquals("负结果应入 memo，不重复实查", scans, MybatisXmlTargets.namespaceScanCount.get())
     }
 
-    /** 文件清单换代（TTL 过期重扫）后 memo 失效：新增同 namespace 文件可被后续解析看到。 */
-    fun testF96_清单换代后memo失效_新增文件可见() {
+    /** 新增同 namespace 文件立即可见——索引由平台增量维护，没有旧实现的 5 秒 TTL 空窗。 */
+    fun testF96_新增同namespace文件_立即可见() {
+        myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
+        assertNull("前置：此时确实还没有该 namespace", MybatisXmlTargets.findMapperFileByNamespace(project, "m.same"))
         myFixture.addFileToProject("m/A.xml", """<mapper namespace="m.same"><sql id="a">SELECT 1</sql></mapper>""")
-        myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
-        MybatisXmlTargets.clearFileListCacheForTest()
-
-        var now = 1_000L
-        MybatisXmlTargets.clockMs = { now }
-        try {
-            assertNotNull(MybatisXmlTargets.findMapperFileByNamespace(project, "m.same"))
-            // 推进时钟越过 TTL，使文件清单重扫换代
-            now += MybatisXmlTargets.fileListTtlMs + 1
-            MybatisXmlTargets.indexScanCount.set(0)
-            val afterExpiry = MybatisXmlTargets.findMapperFileByNamespace(project, "m.same")
-            assertNotNull("换代后应重新解析到目标", afterExpiry)
-            assertEquals("TTL 过期应触发一次清单重扫", 1, MybatisXmlTargets.indexScanCount.get())
-        } finally {
-            MybatisXmlTargets.clockMs = { System.currentTimeMillis() }
-        }
+        assertNotNull(
+            "新增文件必须在同一会话内立即可见（旧链 5s TTL 内会漏）",
+            MybatisXmlTargets.findMapperFileByNamespace(project, "m.same"),
+        )
     }
 
     // ------------------------------------------------------------------

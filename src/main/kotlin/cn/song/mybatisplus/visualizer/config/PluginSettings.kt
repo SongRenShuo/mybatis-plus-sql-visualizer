@@ -84,6 +84,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showGutterIcon: Boolean = true,
 
         /**
+         * T-PreviewExecWriteDefer：预览打开时「是否立即准备执行控制台」。
+         *
+         * 取值（[cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager] 解析）：
+         *  - `LAZY`（默认）：不建控制台（不写带方言映射的 exec 文件 ⇒ 不进 dumb），绑定行给
+         *    「显示执行控制台」入口；
+         *  - `LAZY_SILENT`：同上但不放入口（极简派）；
+         *  - `EAGER`：打开即准备控制台（旧行为，每次预览会写 exec 文件）。
+         */
+        var consolePrepMode: String = "LAZY",
+
+        /**
          * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
          * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
@@ -774,6 +785,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * （开关本身见 [onboardingAnchorTipEnabled]）。
          */
         var onboardingAnchorTipShown: Boolean = false,
+
+        // ---------- T-NotifyTune：主动通知触点调优（券 A 方言死路提示 / 券 B 首次捕获引导降频） ----------
+
+        /**
+         * 券 A：SQL 方言死路主动提示开关（默认开）——智能推断结果为 `UNAVAILABLE` 且无方言名时，
+         * 打开 SQL 承载文件经预览组弹一次「方言未能确定」指路；关闭后全程静默。
+         */
+        var dialectTipEnabled: Boolean = true,
+
+        /** 券 A：已对本项目永久抑制的方言提示集合（按项目路径哈希，见 DialectGapTip.projectKey）。 */
+        var dialectTipSuppressedProjects: MutableList<String> = mutableListOf(),
+
+        /** 券 A：方言提示已展示（每安装一次性持久化记忆，跨项目/跨会话不再出现）。 */
+        var dialectTipShown: Boolean = false,
+
+        /**
+         * 券 B：首次捕获引导开关（默认开）——关闭后首次捕获指路全程静默。
+         * 红线准入五问第 3 问要求「插件主动触点是带开关或一次性」，本开关与
+         * [firstCaptureGuideShown] 共同补齐该门禁。
+         */
+        var firstCaptureGuideEnabled: Boolean = true,
+
+        /**
+         * 券 B：首次捕获引导已展示（每安装一次性持久化记忆）。
+         * 取代此前「会话级 object 记忆」——那样每重启 IDE / 每拉起一次沙盒就再弹一次，属于高频。
+         */
+        var firstCaptureGuideShown: Boolean = false,
 
         /**
          * NEW-19：最近一次已提示过「本版亮点」的插件版本（一次性 / **版本粒度**记忆）。
