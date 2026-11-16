@@ -150,7 +150,7 @@ git merge --no-ff dev
 |---|---|---|---|
 | 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
 | 第 0 步 fetch+建本地+四工作树 | **已做**（2026-11-17）：dialects/security/hiddenbug/merge-route 各建独立工作树；master 双仓推送成功（github 落后一笔补齐） | | |
-| 第 1 步 master→dev | 子代理执行中 | | |
+| 第 1 步 master→dev | **完成**（2026-11-17，子代理执行：合并 `aba1e47ba` + dumb 夹具修复 `5bcfe2de6`/`097474f1e` + 记录回填，dev tip `7fc7b3a42` 已推双仓 + gate run `43911747068`） | `aba1e47ba` | 实际 20 文件＝预演逐一一致：生产代码 MapperXmlLocator 取 master F1''' 索引化、SqlPreviewService 取 dev 重构+master 惰性门禁、DataSourceSelector 取 dev、SqlLogPanel 取 dev 单行、StartupUpdateCheck 双钩子并存；plugin.xml/Bundle 键冲突以 master 为准 dev 独有键全保留；测试取合并态（Guard 双侧 83 条、Persistence 预置 46）；CHANGELOG 双保留、LESSONS L52 撞号 master 优先 dev 顺延 L80、架构计数脚本实测重写、索引并集去重。编译 3m32s 绿，定向 10 类 **96/0/0/0**；dev 独有测试引用 master 已退役缝（DumbModeClickChainGuardTest）两笔修复收口 |
 | 2.1 preview 吃 master | **完成**（合并 `054827e50`，编译绿，Standalone 定向 2 类绿，双仓已推） | `054827e50` | CHANGELOG（分支 Unreleased 条目保留+master 11.16 段接上）；plugin.xml（双方 registryKey 追加型双保留） |
 | 2.2 dialects 吃 master | **完成**（合并 `5e8baf493`，编译绿，双仓已推） | `5e8baf493` | CHANGELOG（同款）；架构 01 `sql` 行取分支侧（含 domestic/ 超集）、`ui`/`update` 行取 master；架构 03 取 master 四行、sql 行并成 25 方言并实测 61 类 |
 | 2.3 rollback 吃 master | **完成**（合并 `1028a117e`，编译绿，双仓已推） | `1028a117e` | CHANGELOG（Unreleased 快照/脚本 4 条保留；T-LocalDirPersist 已随 11.14 发行自动合并不丢） |
