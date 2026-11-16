@@ -517,6 +517,12 @@
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-IbatisXmlArrowCallerGate：iBatis `<sqlMap>` 语句行的跳转箭头是否要求「Java 侧真的存在
+             调用点」。默认 true＝只有存在调用点才出箭头（改名/删调用后箭头消失，不制造点开必空的假图标）；
+             false＝回到旧行为（无条件出箭头，目标留到点击时查）。回退通道，下一版删除。
+             代码读取：ui/gutter/IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider。 -->
+        <registryKey key="sqlvis.gutter.ibatisXmlArrowRequiresCaller" defaultValue="true"
+                     description="Show the iBatis XML-statement navigation arrow only when a Java call site actually references that statement. Disable to draw the arrow unconditionally (legacy behavior: the target is resolved on click)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

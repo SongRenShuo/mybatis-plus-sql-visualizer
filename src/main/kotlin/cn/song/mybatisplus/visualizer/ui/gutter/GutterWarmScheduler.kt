@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Computable
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.psi.xml.XmlTag
 import com.intellij.util.concurrency.AppExecutorUtil
@@ -37,6 +38,11 @@ import java.util.concurrent.TimeUnit
  *   预热已落地的文件关闭重开 ⇒ 三链按 URL 去重早退，不会重复预热。
  * - **`sqlvis.gutter.warmDelayMs` = 0 ＝ 旧行为**：首渲染立即踢（回退通道），且不经 dumb
  *   预检——三链自带的 dumb 检查保持原语义。
+ * - **延迟派发体在读动作内执行**（T-GutterWarmReadAction，2026-11-16 真机 SEVERE 实证）：
+ *   `AppScheduledExecutorService` 的池线程**不持读动作**，而「到点复检」的 `tag.isValid` 与三链
+ *   同步段的 `tag.containingFile`/`getAttributeValue` 都是 PSI 读——不包读动作会抛
+ *   `Read access is allowed from inside read-action only`（沙盒一次连出 3 条 SEVERE）。三链内部
+ *   重活各自开 `ReadAction.nonBlocking`，此处只需把「复检 + 踢出」整体包一次读动作。
  *
  * 调度失败（极端场景 executor 不可用）退化成立即踢：预热是有价值的，失败不该把它丢掉。
  */
@@ -120,14 +126,25 @@ internal object GutterWarmScheduler {
     private fun scheduleWarmIfDue(project: Project, tag: XmlTag, fileUrl: String, remainingMs: Long) {
         val fire = Runnable {
             scheduledFiles.remove(fileUrl)
-            val due = runCatching {
-                !project.isDisposed &&
-                    !runCatching { DumbService.isDumb(project) }.getOrDefault(true) &&
-                    tag.isValid
+            val app = ApplicationManager.getApplication() ?: return@Runnable
+            // T-GutterWarmReadAction（2026-11-16 真机 SEVERE 实证）：本 Runnable 跑在
+            // `AppScheduledExecutorService` 的池线程上，**不持读动作**，而「到点复检」的
+            // `tag.isValid` 与三条预热链同步段的 `tag.containingFile` / `getAttributeValue`
+            // 都是 PSI 读——不包读动作即抛
+            // `Read access is allowed from inside read-action only`（沙盒 12:35:42 一次连出 3 条）。
+            // 三链内部的重活各自开 `ReadAction.nonBlocking`，这里只需把「复检 + 踢出」包成一次读动作。
+            runCatching {
+                app.runReadAction(
+                    Computable {
+                        val due = !project.isDisposed &&
+                            !runCatching { DumbService.isDumb(project) }.getOrDefault(true) &&
+                            tag.isValid
+                        if (due) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag)
+                    },
+                )
             }.onFailure { t ->
                 if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
-            }.getOrDefault(false)
-            if (due) XmlSqlGutterLineMarkerProvider.kickFileWarmers(tag)
+            }
         }
         val sync = syncDispatchForTest
             ?: (runCatching { ApplicationManager.getApplication()?.isUnitTestMode }.getOrDefault(false) == true)

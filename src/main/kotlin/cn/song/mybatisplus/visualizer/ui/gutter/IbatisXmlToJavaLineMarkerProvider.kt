@@ -39,8 +39,26 @@ import java.awt.event.MouseEvent
  *  3. 该 token 是 `XmlTagUtil.getStartTagNameElement`（一语句一锚，闭合名不重复出图标）；
  *  4. 语句标签是 `<sqlMap>` 直接子级且 `id` 非空。
  *
- * **禁止**在本 provider 的判定路径上做任何项目级搜索 / 引用解析：目标是否存在到
- * **点击时**才查（[IbatisJavaCallSites] 走词索引，见其注释）——找不到就无动作、不报错。
+ * ## 目标存在性（T-IbatisXmlArrowCallerGate，2026-11-16 口径变更）
+ *
+ * 原口径＝**无条件出箭头**，目标是否存在留到点击时查（点击找不到就无动作）。用户 2026-11-16
+ * 报障：把 XML 语句 `id` 改名（`selectAll` → `selectAll02`）后，**语句行仍挂着箭头**、点下去
+ * 没反应——即「点开必空」的假图标，与 MyBatis 侧（`MapperXmlToJavaLineMarkerProvider` 必须先
+ * 解析到接口方法才画）和本插件自己的「同生共死」原则都不一致，故本刀改成**按调用点存在性出箭头**。
+ *
+ * 代价与护栏（本次是有意的取舍，不是回归）：
+ *  - 底层是词索引查询（[IbatisJavaCallSites.lookupCallSite]），**常见词命中面大**（`selectAll`
+ *    这类 id 在 Java 侧也是常见方法名）；因此按 F1/P2.1 同款「命中入缓存 / 确认缺失收回缓存」
+ *    处理——同一语句只在判定变化时付费，稳态每趟零查询；
+ *  - 单词条非法标识符形态（含 `.`/`-` 等）判不了 → [IbatisJavaCallSites.CallLookup.Unknown]，
+ *    保留既有缓存判定，不因此隐藏箭头；
+ *  - 回退通道：Registry `sqlvis.gutter.ibatisXmlArrowRequiresCaller=false` 回到「无条件出箭头」
+ *    旧行为（真机 A/B 用；下一版删除）。
+ *
+ * 仍**禁止**在本 provider 内直接写项目级搜索 API（`GlobalSearchScope`/`PsiSearchHelper`/
+ * `PsiTreeUtil` 等）——判定只能经 `IbatisJavaCallSites` 这一个收口（`IbatisGutterHotPathTest`
+ * 的禁用词表原样保留，扫面含本文件的 `createMarker`）。
+ *
  * 与 MyBatis 侧的分工：`MapperXmlToJavaLineMarkerProvider` 只认根标签 `mapper`（`isMapperFile`
  * 门控），本 provider 只认 `sqlMap`——两套根标签天然互斥，同一行不会双箭头（用例钉住）。
  *
@@ -59,6 +77,36 @@ import java.awt.event.MouseEvent
  * provider 的跳转箭头（慢趟锚）——两者**共存是预期**（MyBatis 文件同样预览 + 跳转并存）。
  */
 class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
+
+    companion object {
+
+        /** 回退通道：false＝回到「无条件出箭头」旧行为（真机 A/B 用，下一版删除）。 */
+        internal const val REQUIRES_CALLER_REGISTRY_KEY = "sqlvis.gutter.ibatisXmlArrowRequiresCaller"
+
+        /**
+         * 本会话确认过「Java 侧存在调用点」的语句键（`namespace|statementId`）。
+         * 与 `IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys` 同口径：命中入缓存、
+         * **确认缺失即收回**（P2.1 教训：只进不出的缓存会给已删除的目标续命）。
+         */
+        internal val resolvedIbatisCallKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`）。 */
+        internal var isDumbProvider: (Project) -> Boolean = { project ->
+            runCatching { DumbService.isDumb(project) }.getOrDefault(false)
+        }
+
+        /** 测试缝：回退开关（生产＝`Registry.is(key, true)`；键未登记时直接返回默认值）。 */
+        internal var requiresCallerProvider: () -> Boolean = {
+            // `is` 是 Kotlin 关键字，调 Java 侧 `Registry.is(String, boolean)` 必须加反引号。
+            runCatching { com.intellij.openapi.util.registry.Registry.`is`(REQUIRES_CALLER_REGISTRY_KEY, true) }
+                .getOrDefault(true)
+        }
+
+        internal fun resetCallKeysCacheForTest() {
+            resolvedIbatisCallKeys.clear()
+            IbatisJavaCallSites.lookupOverrideForTest = null
+        }
+    }
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         return null
@@ -87,14 +135,36 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
         if (!IbatisXmlStatementTargets.isSqlMapFile(file)) return null
         if (tag.parentTag?.name != IbatisXmlStatementTargets.SQL_MAP_ROOT_TAG) return null
         val statementId = tag.getAttributeValue("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        return LineMarkerInfo(
-            element, element.textRange, MpvsIcons.MapperStatement,
-            { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.tooltip") },
-            IbatisToJavaNavigationHandler,
-            GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.accessible.name") },
-        )
+        // 回退通道：旧行为＝无条件出箭头（目标存在性留到点击时查）
+        if (!requiresCallerProvider()) return buildMarker(element)
+        val project = element.project
+        // dumb 窗：词索引不可查，乐观产出（不入缓存）——与 Java→XML 侧 F1-b 同口径
+        if (isDumbProvider(project)) return buildMarker(element)
+        val namespace = IbatisXmlStatementTargets.rootNamespace(file)
+        val key = "${namespace.orEmpty()}|$statementId"
+        return when (val lookup = IbatisJavaCallSites.lookupCallSite(project, namespace, statementId)) {
+            is IbatisJavaCallSites.CallLookup.Found -> {
+                resolvedIbatisCallKeys.add(key)
+                buildMarker(element)
+            }
+            // 暂时判不了（词形态不支持等）：保留已确认过的箭头，不新画
+            IbatisJavaCallSites.CallLookup.Unknown ->
+                if (resolvedIbatisCallKeys.contains(key)) buildMarker(element) else null
+            // 确定没有调用点（语句改名/删了调用）：收回缓存并摘箭头——不制造「点开必空」的假图标
+            IbatisJavaCallSites.CallLookup.Absent -> {
+                resolvedIbatisCallKeys.remove(key)
+                null
+            }
+        }
     }
+
+    private fun buildMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperStatement,
+        { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.tooltip") },
+        IbatisToJavaNavigationHandler,
+        GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.ibatisStatementNav.accessible.name") },
+    )
 
     /** 点击处理：EDT 内联 ReadAction 里走词索引找调用点（找不到 = 无动作，不弹提示不报错）。 */
     private object IbatisToJavaNavigationHandler : GutterIconNavigationHandler<PsiElement> {
@@ -196,5 +266,40 @@ internal object IbatisJavaCallSites {
         if (value == statementId) return true
         if (namespace != null && value == "$namespace.$statementId") return true
         return value.endsWith(".$statementId") && value.length > statementId.length + 1
+    }
+
+    /**
+     * 「Java 侧是否存在调用点」**三态**（T-IbatisXmlArrowCallerGate，2026-11-16 用户报障）：
+     *
+     * - [CallLookup.Found]：找到调用点字面量（箭头该出）；
+     * - [CallLookup.Absent]：词索引查询成功执行、确认没有调用点（箭头不该出——用户把 XML 语句
+     *   `id` 改名后，XML 行仍挂着「点了没反应」的箭头，正是缺这一态）；
+     * - [CallLookup.Unknown]：暂时判不了（dumb / 词不是合法 Java 标识符形态）——调用方保留既有判定。
+     */
+    sealed interface CallLookup {
+        class Found(val literal: PsiLiteralExpression) : CallLookup
+        object Absent : CallLookup
+        object Unknown : CallLookup
+    }
+
+    /** 测试缝：替换三态查询（生产＝null）。矩阵用例用它驱动 Unknown / Absent 分支。 */
+    internal var lookupOverrideForTest: ((Project, String?, String) -> CallLookup)? = null
+
+    /**
+     * 调用点存在性三态（供 gutter 判定；点击期仍走 [findFirstCallLiteral]，两者同源同一个词索引查询）。
+     *
+     * 成本提示：底层是 `processElementsWithWord` 词索引查询，**常见词（如 `selectAll`）命中面较大**，
+     * 故调用方（`IbatisXmlToJavaLineMarkerProvider`）按「命中入缓存 / 确认缺失收回缓存」处理，
+     * 避免每趟慢 pass 对每条语句重复付费；另有 Registry 回退通道可整项关掉该判定。
+     */
+    fun lookupCallSite(project: Project, namespace: String?, statementId: String): CallLookup {
+        val sid = statementId.trim()
+        if (sid.isEmpty()) return CallLookup.Absent
+        lookupOverrideForTest?.let { override -> return override(project, namespace, sid) }
+        val word = sid.substringAfterLast('.')
+        if (word.isEmpty() || !word.all { Character.isJavaIdentifierPart(it) }) return CallLookup.Unknown
+        if (DumbService.isDumb(project)) return CallLookup.Unknown
+        val found = findAllCallLiterals(project, namespace, sid, 1).firstOrNull()
+        return if (found != null) CallLookup.Found(found) else CallLookup.Absent
     }
 }

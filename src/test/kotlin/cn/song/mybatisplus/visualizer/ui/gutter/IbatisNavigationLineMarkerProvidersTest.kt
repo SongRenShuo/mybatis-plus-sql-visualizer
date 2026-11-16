@@ -54,12 +54,14 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         super.setUp()
         IbatisXmlStatementTargets.resetPerfLogForTest()
         IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
+        IbatisXmlToJavaLineMarkerProvider.resetCallKeysCacheForTest()
     }
 
     override fun tearDown() {
         try {
             IbatisXmlStatementTargets.resetPerfLogForTest()
             IbatisJavaToXmlLineMarkerProvider.resetResolvedCacheForTest()
+            IbatisXmlToJavaLineMarkerProvider.resetCallKeysCacheForTest()
             PluginSettings.getInstance().state.showGutterIcon = true
             PluginSettings.getInstance().state.gutterGroupMapperXml = true
             PluginSettings.getInstance().state.ibatisXmlEnabled = true
@@ -255,12 +257,41 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             </sqlMap>
             """.trimIndent(),
         )
+        // T-IbatisXmlArrowCallerGate：箭头按「Java 侧存在调用点」出，故六条语句各配一个调用点
+        myFixture.addFileToProject(
+            "com/demo/AllDao.java",
+            """
+            package com.demo;
+            public class AllDao {
+                private Object client;
+                public void a() {
+                    client.queryForObject("all.s", null);
+                    client.insert("all.i", null);
+                    client.update("all.u", null);
+                    client.delete("all.d", null);
+                    client.queryForList("all.st", null);
+                    client.queryForObject("all.p", null);
+                }
+            }
+            """.trimIndent(),
+        )
         val names = markers(xmlToJava, sqlMap).map { it.element?.text }
         assertEquals(listOf("select", "insert", "update", "delete", "statement", "procedure"), names)
     }
 
     fun test一语句一锚_闭合名与片段不重复出箭头() {
         addDao()
+        // selectNoCaller 在 addDao() 里没有调用点，本用例只为「一语句一锚」形态取证，补一个调用点
+        myFixture.addFileToProject(
+            "com/demo/ExtraDao.java",
+            """
+            package com.demo;
+            public class ExtraDao {
+                private Object client;
+                public Object a() { return client.queryForObject("user.selectNoCaller", null); }
+            }
+            """.trimIndent(),
+        )
         val sqlMap = addSqlMap()
         // 3 条语句（selectById/selectBare/selectNoCaller）各恰 1 个箭头；闭合名 token 与 <sql> 片段不认领
         val ids = markerStatementIds(xmlToJava, sqlMap).filterNotNull()
@@ -285,12 +316,103 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
     // 2. 负例
     // ------------------------------------------------------------------
 
-    fun testXML侧目标不存在_箭头仍在但点击无动作无异常() {
+    /**
+     * T-IbatisXmlArrowCallerGate（2026-11-16 用户报障本体）：XML 语句 `id` 改名/调用点删除后，
+     * 语句行**不得**再挂着「点了没反应」的跳转箭头。`addSqlMap()` 里 `selectNoCaller` 无调用点。
+     */
+    fun testXML侧无调用点_不出现跳转箭头() {
         addDao()
         val sqlMap = addSqlMap()
-        val marker = markers(xmlToJava, sqlMap).single { statementIdOf(it) == "selectNoCaller" }
-        // 点击期才解析（券 B 口径）：无 Java 调用点 → 无动作、无异常
-        navigate(marker)
+        assertNull(
+            "无 Java 调用点的语句不得出箭头（点开必空的假图标）",
+            markers(xmlToJava, sqlMap).firstOrNull { statementIdOf(it) == "selectNoCaller" },
+        )
+        assertEquals(
+            "有调用点的两条语句箭头照旧",
+            setOf("selectById", "selectBare"),
+            markerStatementIds(xmlToJava, sqlMap).filterNotNull().toSet(),
+        )
+    }
+
+    /** 回退通道：`sqlvis.gutter.ibatisXmlArrowRequiresCaller=false` 回到「无条件出箭头」（点击无目标即无动作）。 */
+    fun test回退开关关闭_恢复无条件出箭头且点击无动作() {
+        val original = IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider
+        IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider = { false }
+        try {
+            addDao()
+            val sqlMap = addSqlMap()
+            val marker = markers(xmlToJava, sqlMap).single { statementIdOf(it) == "selectNoCaller" }
+            navigate(marker) // 无 Java 调用点 → 无动作、无异常
+        } finally {
+            IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider = original
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 2b. 箭头门槛三态矩阵（T-IbatisXmlArrowCallerGate）
+    // ------------------------------------------------------------------
+
+    fun test箭头门槛_命中调用点_出箭头并记入缓存() {
+        addDao()
+        val sqlMap = addSqlMap()
+        assertEquals(
+            "有调用点必须出箭头（selectNoCaller 无调用点 → 不出）",
+            setOf("selectById", "selectBare"),
+            markerStatementIds(xmlToJava, sqlMap).filterNotNull().toSet(),
+        )
+        assertTrue(
+            "命中必须记入会话级缓存",
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+        )
+    }
+
+    fun test箭头门槛_确定无调用点_摘箭头并收回缓存() {
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Absent }
+        addDao()
+        val sqlMap = addSqlMap()
+        assertNull(
+            "确定无调用点时不得再靠缓存续命",
+            markers(xmlToJava, sqlMap).firstOrNull { statementIdOf(it) == "selectById" },
+        )
+        assertFalse(
+            "确定无调用点必须收回缓存，否则下一趟慢 pass 还会把箭头画回来",
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+        )
+    }
+
+    fun test箭头门槛_判定未知_缓存命中仍出箭头() {
+        IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.add("user|selectById")
+        IbatisJavaCallSites.lookupOverrideForTest = { _, _, _ -> IbatisJavaCallSites.CallLookup.Unknown }
+        addDao()
+        val sqlMap = addSqlMap()
+        assertNotNull(
+            "Unknown（判不了）时缓存命中必须照常出箭头",
+            markers(xmlToJava, sqlMap).firstOrNull { statementIdOf(it) == "selectById" },
+        )
+        assertTrue(
+            "Unknown 不得动缓存",
+            IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectById"),
+        )
+    }
+
+    fun test箭头门槛_dumb窗乐观产出不入缓存() {
+        val original = IbatisXmlToJavaLineMarkerProvider.isDumbProvider
+        IbatisXmlToJavaLineMarkerProvider.isDumbProvider = { true }
+        try {
+            addDao()
+            val sqlMap = addSqlMap()
+            assertNotNull(
+                "dumb 窗（词索引不可查）应乐观出箭头",
+                markers(xmlToJava, sqlMap).firstOrNull { statementIdOf(it) == "selectNoCaller" },
+            )
+            assertFalse(
+                "乐观产出不得污染缓存",
+                IbatisXmlToJavaLineMarkerProvider.resolvedIbatisCallKeys.contains("user|selectNoCaller"),
+            )
+        } finally {
+            IbatisXmlToJavaLineMarkerProvider.isDumbProvider = original
+        }
     }
 
     fun testJava侧目标不存在_无图标() {

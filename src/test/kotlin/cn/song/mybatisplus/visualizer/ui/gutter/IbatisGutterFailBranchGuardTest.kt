@@ -101,6 +101,91 @@ class IbatisGutterFailBranchGuardTest {
     // 扫描面与提取器
     // ------------------------------------------------------------------
 
+    /**
+     * T-IbatisXmlArrowCallerGate（2026-11-16 用户报障）：XML→Java 方向的箭头门槛也必须挂三态——
+     * 「确定无调用点」要收回缓存并摘箭头（改 `id`/删调用后不得留「点开必空」的假图标）。
+     */
+    @Test
+    fun `箭头门槛守卫_XML侧createMarker必须挂三态`() {
+        val body = extractBody(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisXmlToJavaLineMarkerProvider.kt",
+            "private fun createMarker",
+        ) ?: error("无法提取 IbatisXmlToJavaLineMarkerProvider.createMarker 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
+        val wiring = failureBranchWiring(
+            body,
+            anchor = "IbatisJavaCallSites.lookupCallSite(",
+            keepToken = "resolvedIbatisCallKeys.contains(",
+            evictToken = "resolvedIbatisCallKeys.remove(",
+        )
+        assertNotNull("createMarker 内必须存在 IbatisJavaCallSites.lookupCallSite 调用（扫描面漂移？）", wiring)
+        assertTrue(
+            "箭头门槛必须：① 查询前先过硬 dumb 门 ② Unknown 保留缓存命中 ③ Absent 收回缓存并摘箭头。" +
+                "实测 wiring=$wiring",
+            wiring == true,
+        )
+    }
+
+    /** 扫描面漂移与老形态自证：无查询调用 → null；缺 remove → false；三态齐 → true。 */
+    @Test
+    fun `箭头门槛守卫自证_缺收回或漂移必红`() {
+        assertNull(
+            "无查询调用（扫描面漂移）按红处理",
+            failureBranchWiring(
+                "return buildMarker(element)",
+                anchor = "IbatisJavaCallSites.lookupCallSite(",
+                keepToken = "resolvedIbatisCallKeys.contains(",
+                evictToken = "resolvedIbatisCallKeys.remove(",
+            ),
+        )
+        val legacy = """
+            if (!requiresCallerProvider()) return buildMarker(element)
+            if (isDumbProvider(project)) return buildMarker(element)
+            val exists = IbatisJavaCallSites.lookupCallSite(project, namespace, statementId) != null
+            if (resolvedIbatisCallKeys.contains(key)) return buildMarker(element)
+            return if (exists) buildMarker(element) else null
+        """.trimIndent()
+        assertEquals(
+            "只进不出（缺 remove）必须报红",
+            false,
+            failureBranchWiring(
+                legacy,
+                anchor = "IbatisJavaCallSites.lookupCallSite(",
+                keepToken = "resolvedIbatisCallKeys.contains(",
+                evictToken = "resolvedIbatisCallKeys.remove(",
+            ),
+        )
+    }
+
+    private fun repoFile(relative: String): File {
+        var root = File(System.getProperty("user.dir")).absoluteFile
+        repeat(6) {
+            val candidate = File(root, relative)
+            if (candidate.isFile) return candidate
+            root = root.parentFile ?: return@repeat
+        }
+        error("未定位到仓库根（$relative 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
+    }
+
+    /** 取任意源文件里指定签名（含关键词）的配平方法体；提取不到返回 null（调用方按红处理）。 */
+    private fun extractBody(relativePath: String, marker: String): String? {
+        val stripped = stripComments(repoFile(relativePath).readText())
+        val start = stripped.indexOf(marker)
+        if (start < 0) return null
+        val open = stripped.indexOf('{', start + marker.length)
+        if (open < 0) return null
+        var depth = 0
+        for (i in open until stripped.length) {
+            when (stripped[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return stripped.substring(open, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
     private fun sourceFile(): File {
         val relative = "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt"
         var root = File(System.getProperty("user.dir")).absoluteFile
@@ -134,18 +219,24 @@ class IbatisGutterFailBranchGuardTest {
     }
 
     /**
-     * 接线判定：查询调用（`lookupStatementAnchors(`）**之前**必须有 dumb 门（`isDumbProvider(`），
-     * **之后**必须同时有「Unknown 保留缓存」（`resolvedIbatisKeys.contains(`）与
-     * 「Absent 收回缓存」（`resolvedIbatisKeys.remove(`）。无查询调用返回 null（按红处理）。
+     * 接线判定：查询调用（[anchor]）**之前**必须有 dumb 门（`isDumbProvider(`），**之后**必须同时有
+     * 「Unknown 保留缓存」（[keepToken]）与「Absent 收回缓存」（[evictToken]）。无查询调用返回
+     * null（按红处理）。默认锚＝Java→XML 侧；XML→Java 侧（箭头门槛）传 `lookupCallSite(` 与
+     * `resolvedIbatisCallKeys.*`。
      */
-    private fun failureBranchWiring(body: String): Boolean? {
-        val resolveIdx = body.indexOf("lookupStatementAnchors(")
+    private fun failureBranchWiring(
+        body: String,
+        anchor: String = "lookupStatementAnchors(",
+        keepToken: String = "resolvedIbatisKeys.contains(",
+        evictToken: String = "resolvedIbatisKeys.remove(",
+    ): Boolean? {
+        val resolveIdx = body.indexOf(anchor)
         if (resolveIdx < 0) return null
         val before = body.substring(0, resolveIdx)
         val after = body.substring(resolveIdx)
         return before.contains("isDumbProvider(") &&
-            after.contains("resolvedIbatisKeys.contains(") &&
-            after.contains("resolvedIbatisKeys.remove(")
+            after.contains(keepToken) &&
+            after.contains(evictToken)
     }
 
     /** 剥行注释与块注释（KDoc 里的花括号不干扰配平）。 */
