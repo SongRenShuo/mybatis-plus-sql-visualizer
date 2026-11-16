@@ -189,16 +189,24 @@ class XmlSqlRendererTest {
     }
 
     @Test
-    fun `dollar表达式未解析时输出空串并记录错误`() {
+    fun `dollar表达式未解析时输出占位并记录错误`() {
         val m = model("""
             <mapper namespace="n">
               <select id="s1">SELECT * FROM t WHERE ${'$'}{ew.customSqlSegment}</select>
             </mapper>
         """.trimIndent())
         val result = m.renderSql()
-        // ew 无模拟值 → 空串（MP 占位等场景由面板标注）
-        assertEquals("SELECT * FROM t WHERE", result.sql)
+        // T-MbgExamplePreview R1：预览链开启占位模式——缺段写成 {{表达式}}，不再是无声空串
+        assertEquals("SELECT * FROM t WHERE {{ew.customSqlSegment}}", result.sql)
         assertTrue(result.errors.isNotEmpty())
+    }
+
+    @Test
+    fun `renderer直接调用时占位默认关_空值仍输出空串`() {
+        // T-MbgExamplePreview R1 的默认值闸：真实 SQL 产物路径（renderer 默认参数）不受占位模式影响
+        val context = DynamicContext(mapOf(DynamicContext.PARAMETER_OBJECT_KEY to null))
+        TextSqlNode("SELECT * FROM t WHERE \${ew.customSqlSegment}").apply(context)
+        assertEquals("SELECT * FROM t WHERE", context.getSql())
     }
 
     @Test

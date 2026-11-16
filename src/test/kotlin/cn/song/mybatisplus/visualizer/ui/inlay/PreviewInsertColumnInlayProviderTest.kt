@@ -7,6 +7,7 @@ import com.intellij.codeInsight.hints.InlayHintsSinkImpl
 import com.intellij.codeInsight.hints.NoSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -33,6 +34,23 @@ import org.junit.Assert.assertTrue
  *     临时名 / 非数字段，且 `mpsql-exec.sql` 即便挂上载体也零提示（已知边界不得变成错误渲染）。
  */
 class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
+
+    override fun setUp() {
+        super.setUp()
+        // T-PreviewInlayNativeYield：测试平台（IU 2024.3.7.1）上 DatabaseTools 的 SQL 列名 inlay 在位，
+        // 让位门会整体短路 provider，本类全部正向用例会变成「零提示」假红。故先钉死「原生不在位」；
+        // 「在位 ⇒ 零提示」由本类 test原生列名inlay在位时整体让位_零提示 与计划 §七 真机 A1 覆盖。
+        NativeColumnInlayYieldGate.resetForTest()
+        NativeColumnInlayYieldGate.probe = { false }
+    }
+
+    override fun tearDown() {
+        try {
+            NativeColumnInlayYieldGate.resetForTest()
+        } finally {
+            super.tearDown()
+        }
+    }
 
     private val provider = PreviewInsertColumnInlayProvider()
 
@@ -172,6 +190,31 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
         assertEquals(
             "kind=INSERT 而文本无 INSERT 语句 → 提示条数为零（规划器零命中）",
             "SELECT id, name FROM user",
+            dumped,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewInlayNativeYield：原生让位门的接线（在位 ⇒ 本条功能整体不出）
+    // ------------------------------------------------------------------
+
+    fun test原生列名inlay在位时整体让位_零提示() {
+        NativeColumnInlayYieldGate.resetForTest()
+        NativeColumnInlayYieldGate.probe = { true }
+        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT)
+        assertNull(
+            "原生列名 inlay 在位时本插件必须零提示——否则同一 offset 上会出现两枚同名胶囊（本次缺陷的现象）",
+            dumped,
+        )
+    }
+
+    fun test让位门不在位时正向契约不变() {
+        NativeColumnInlayYieldGate.resetForTest()
+        NativeColumnInlayYieldGate.probe = { false }
+        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT)
+        assertEquals(
+            "让位门不可用（Community / 未装 DatabaseTools / 探测降级）时，本插件提示必须照旧——不因让位把功能丢掉",
+            "INSERT INTO user (id, name) VALUES (/*<# id #>*/1, /*<# name #>*/'admin')",
             dumped,
         )
     }

@@ -16,8 +16,8 @@ import org.junit.Assert.assertNull
  * 券01（T-PerfSweep28-01）：Mapper 双向跳转 gutter 的门控与 memo 行为收口。
  *
  * 三面判据（先红后绿读数见计划 §实施记录）：
- *  ① locate 结果级 memo——同一 `namespace.id` 在文件清单同一代内第二次定位零文件遍历
- *     （statementScanCount 测试缝；修复前每个方法声明每趟付 O(mapper 文件数) 根标签比对）；
+ *  ① locate 结果稳定（重复定位同文件；负结果不抛不挂）——F1''' 起定位走平台 fileBasedIndex，
+ *     原 statementScanCount/memo 测试缝随单槽机制退役；
  *  ② 接口前置——非接口类（service/util）的方法声明零定位触达、零标记（P-1 夹具）；
  *  ③ 组闸——关 mapperXml 组后双 Provider 零标记且零定位触达（R28-2）；
  *  另含多模块同名（同 namespace 同 id）首命中文件稳定的 P-3 夹具。
@@ -43,16 +43,13 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        MapperXmlLocator.clearFileListCacheForTest()
-        MapperXmlLocator.statementScanCount.set(0)
         MyBatisCompetitorGate.resetForTest()
     }
 
     override fun tearDown() {
         try {
-            MapperXmlLocator.clearFileListCacheForTest()
-        } finally {
             MyBatisCompetitorGate.resetForTest()
+        } finally {
             super.tearDown()
         }
     }
@@ -76,24 +73,20 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
 
     // ---------- ① locate 结果级 memo ----------
 
-    fun testLocateMemo_同窗口第二次零文件遍历() {
+    fun testLocateRepeat_结果稳定且多模块同名全命中清单() {
+        // F1''' 起定位走平台 fileBasedIndex：重复定位的结果稳定性由索引查询保证
+        // （statementScanCount/memo 测试缝随 T-PS5-05 单槽机制退役，行为面保留）。
         addMapperXmls(2)
         val first = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
         assertNotNull("首次定位应命中", first)
-        val afterFirst = MapperXmlLocator.statementScanCount.get()
-        assertEquals("首次定位应逐文件访问 2 个 mapper XML", 2, afterFirst)
-
         val second = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-        assertEquals("memo 命中应返回同一文件", first!!.virtualFile, second!!.virtualFile)
-        assertEquals("第二次定位应零文件遍历（memo 命中）", afterFirst, MapperXmlLocator.statementScanCount.get())
+        assertEquals("重复定位应返回同一文件", first!!.virtualFile, second!!.virtualFile)
 
-        // 负结果也缓存（非 Mapper 方法必然落空，修前每趟重付全程）
+        // 负结果稳定（非 Mapper 方法必然落空，回退 Java 跳转）
         val miss1 = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.notExists")
         assertNull(miss1)
-        val afterMiss1 = MapperXmlLocator.statementScanCount.get()
         val miss2 = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.notExists")
         assertNull(miss2)
-        assertEquals("负结果的第二次定位也应零文件遍历", afterMiss1, MapperXmlLocator.statementScanCount.get())
     }
 
     // ---------- P-3 夹具：多模块同名首命中稳定 ----------
@@ -141,19 +134,17 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
     fun test非接口类方法_零定位触达零标记() {
         addMapperXmlForInterface()
         myFixture.configureByText("UserService.java", plainClassFixture)
-        val before = MapperXmlLocator.statementScanCount.get()
         val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
         assertEquals("service 类方法声明不应产生标记", 0, markers.size)
-        assertEquals("非接口方法不应触达 locate（接口前置）", before, MapperXmlLocator.statementScanCount.get())
     }
 
     fun test接口方法_恰一标记且定位命中() {
         addMapperXmlForInterface()
         myFixture.configureByText("UserMapper.java", javaFixture)
-        val before = MapperXmlLocator.statementScanCount.get()
         val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
         assertEquals("UserMapper.selectById 声明行应恰 1 标记", 1, markers.size)
-        assertTrue("接口方法应触达 locate", MapperXmlLocator.statementScanCount.get() > before)
+        assertTrue("接口方法应触达 locate（正缓存入账）",
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains("com.demo.mapper.UserMapper#selectById"))
     }
 
     fun test关mapperXml组_零标记零定位触达() {
@@ -162,11 +153,14 @@ class MapperNavigationGutterGateTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val before = settings.state
         try {
+            // 正缓存是伴生共享（前序用例可能已入账）——先复位，让「组关不入账」断言落在干净态
+            MapperXmlToJavaLineMarkerProvider.resetResolvedCacheForTest()
             settings.loadState(PluginSettings.State(showGutterIcon = true, gutterGroupMapperXml = false))
-            MapperXmlLocator.statementScanCount.set(0)
             val markers = collectMarkers(MapperJavaToXmlLineMarkerProvider(), methodNameLeaves())
             assertEquals("组关时 Java 侧零标记", 0, markers.size)
-            assertEquals("组关时不得触达 locate（门在重逻辑前）", 0, MapperXmlLocator.statementScanCount.get())
+            assertEquals("组关时零触达 locate（正缓存不得入账）", false,
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys
+                    .contains("com.demo.mapper.UserMapper#selectById"))
         } finally {
             settings.loadState(before)
         }

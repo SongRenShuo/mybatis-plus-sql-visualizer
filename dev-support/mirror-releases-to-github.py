@@ -64,16 +64,29 @@ def load_gitee_token():
     return cfg.get('gitee_personal_access_token')
 
 
+# T-CiMirrorTagMatch：清单缓存保质期——只覆盖一轮跑的时长，跨轮必须重拉
+CACHE_TTL_SECONDS = 30 * 60
+
+
 def load_gitee_releases(fresh=False):
     """Gitee releases 清单。
 
-    默认读 .local/gitee-releases.json（上一轮回填时抓的缓存）；缓存缺失或 --fresh
-    时现场拉一份并落盘。走这个缓存而不是每次现拉，是为了让「同一份清单」在
+    默认读 .local/gitee-releases.json（上一轮回填时抓的缓存）；缓存缺失、已过期或
+    --fresh 时现场拉一份并落盘。走缓存而不是每次现拉，是为了让「同一份清单」在
     下载、建版、校验三个阶段保持一致——中途 Gitee 有新版也不会让本次跑偏。
+
+    T-CiMirrorTagMatch（2026-11-11 实证）：**缓存必须有保质期**。原实现只在文件
+    缺失时重拉，缓存一旦落盘就永不过期——当天 18:14 的缓存（最新到 2026.11.11-beta.2）
+    让次日 `--tag 2026.11.12-beta.1` 报「没有匹配的 tag」，看着像 tag 命名问题，
+    实际是新发行版根本不在缓存里；同理批量模式会**静默漏镜像**缓存之后发布的版本。
+    保质期只需覆盖「一轮跑」的时长，取 30 分钟。
     """
     path = os.path.join(LOCAL, 'gitee-releases.json')
     if os.path.exists(path) and not fresh:
-        return json.load(open(path, encoding='utf-8'))
+        age = time.time() - os.path.getmtime(path)
+        if age <= CACHE_TTL_SECONDS:
+            return json.load(open(path, encoding='utf-8'))
+        print('Gitee releases 缓存已过期（%.1f 小时前），重新拉取…' % (age / 3600.0), flush=True)
 
     tok = load_gitee_token()
     if not tok:
@@ -224,13 +237,20 @@ def main():
     args = ap.parse_args()
 
     token, owner, repo = load_github()
-    releases = load_gitee_releases(fresh=args.fresh)
+    # T-CiMirrorTagMatch：**显式 --tag 一律现场拉取**——指向的通常就是刚建/刚更新的那个
+    # 发行版，缓存几乎必然落后（2026-11-11 实证：内测版刚建完就镜像，旧缓存里没有它，
+    # 脚本报「没有匹配的 tag」，误导成 tag 命名问题）。
+    releases = load_gitee_releases(fresh=bool(args.tag) or args.fresh)
     # Gitee 返回顺序是创建时间正序，GitHub 也按此顺序建，时间线一致
     if args.tag:
         want = set(args.tag)
         releases = [r for r in releases if r['tag_name'] in want]
         if not releases:
-            sys.exit('没有匹配的 tag: %s' % args.tag)
+            sys.exit(
+                'Gitee 上没有 tag 为 %s 的发行版（已强制刷新清单，不是缓存问题）。请先确认 Gitee 发行版已创建、'
+                'tag 与 gradle.properties 的 version 一字不差，再重跑。'
+                % '、'.join(args.tag)
+            )
 
     print('版本数：%d   目标：%s/%s' % (len(releases), owner, repo), flush=True)
     stats = {'created': 0, 'existed': 0, 'uploaded': 0, 'verified': 0, 'failed': []}

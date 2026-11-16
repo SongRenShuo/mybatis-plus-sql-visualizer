@@ -54,6 +54,41 @@ class SqlCompletionContributor : CompletionContributor() {
          */
         private val documentContexts = WeakHashMap<Document, SqlCompletionContext>()
 
+        /**
+         * §三十一：列名候选的**别名形态**（原名 + snake + UPPER_SNAKE，去重、保序）。
+         *
+         * 动机：实体列的 `ColumnInfo.columnName` 在 MP 工程里可能是驼峰（由字段名推出），
+         * 而用户在 SQL 里写的是 `DEL_FLAG` 这种大写蛇形，前缀匹配（大小写敏感）永远命中不了。
+         */
+        /**
+         * §三十三：按用户已输入前缀的大小写风格选择**插入形态**。
+         *
+         * - 前缀全大写（`DEL_F`）→ `DEL_FLAG`；全小写（`del_f`）→ `del_flag`；混合或空 → 原名。
+         * 规则取「输入即所得」：用户写大写 SQL 就补大写，不做单方面改风格。
+         */
+        internal fun preferredColumnVariant(name: String, prefixText: String): String {
+            val aliases = columnNameAliases(name)
+            if (aliases.size == 1) return name
+            val upper = aliases.first { it == it.uppercase() && it != name }
+            val lower = aliases.firstOrNull { it == it.lowercase() && it != name }
+            val hasUpper = prefixText.any { it.isUpperCase() }
+            val hasLower = prefixText.any { it.isLowerCase() }
+            return when {
+                hasUpper && !hasLower -> upper
+                hasLower && !hasUpper -> lower ?: name
+                else -> name
+            }
+        }
+
+        internal fun columnNameAliases(name: String): List<String> {
+        if (name.isBlank()) return emptyList()
+        val snake = cn.song.mybatisplus.visualizer.util.CaseFormatUtil.camelToSnake(name)
+        return linkedSetOf(name, snake, snake.uppercase()).filter { it.isNotBlank() }
+        }
+
+        /** §二十七：每个文档已打过几次补全日志（WeakHashMap，最多记 5 次）。 */
+        private val completionLogBudget = WeakHashMap<Document, Int>()
+
         fun registerContext(document: Document, ctx: SqlCompletionContext) {
             documentContexts[document] = ctx
             LOG.debug("[SqlCompletion] registerContext: doc=${document.hashCode()}, table=${ctx.tableName}, mapSize=${documentContexts.size}")
@@ -104,15 +139,28 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
                         ?: documentContexts[parameters.editor.document]
+                    // §二十七：补全是否真的被触发、加进去了几条——用户报「补全没反应」时不用再猜。
+                    // 每个文档只记前 5 次（autopopup 每敲一个字符触发一次，全记会刷屏）。
+                    val docKey = parameters.editor.document
+                    val logged = completionLogBudget[docKey] ?: 0
+                    val shouldLog = logged < 5
+                    if (shouldLog) completionLogBudget[docKey] = logged + 1
+                    var addedColumns = 0
+                    var addedTable = 0
+                    var addedAlias = 0
                     if (LOG.isDebugEnabled) LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
                     // 异常/无文件回退 UNKNOWN）
+                    //
+                    // T-StartupReadLockFreeze §二十三（用户 2026-11-13）：「刚开始有补全，删掉最后几个字符
+                    // 再补就没了」。根因是这里读的是 **PSI 文本**——补全期间文档刚被改、PSI 还没 commit
+                    //（嵌入式/非项目 PSI 的 commit 是惰性的），读到的是**改动前**的 SQL，子句被判成
+                    // TABLE ⇒ 列名分支整段跳过（表名分支还在，所以看起来"补全还在但没列"）。
+                    // 改用**编辑器文档文本 + 编辑器 offset**（与补全器同一坐标系），不再受 commit 时机影响。
                     val clause = runCatching {
-                        detectClause(
-                            parameters.position.containingFile?.text.orEmpty(),
-                            parameters.position.textRange.startOffset,
-                        )
+                        val docText = parameters.editor.document.text
+                        detectClause(docText, parameters.offset.coerceIn(0, docText.length))
                     }.getOrElse { SqlClause.UNKNOWN }
 
                     // 表名：全位置提示（主表 + 联表候选，前缀过滤——T-M27.4 用户需求
@@ -120,6 +168,7 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 候选与主表去重）
                     provider.tableName(ctx)?.takeIf { prefix.prefixMatches(it) }?.let { table ->
                         result.addElement(withComment(LookupElementBuilder.create(table), provider.tableComment(ctx)))
+                        addedTable++
                     }
                     provider.candidateTables(ctx).forEach { t ->
                         if (t.tableName != ctx.tableName && prefix.prefixMatches(t.tableName)) {
@@ -134,8 +183,21 @@ class SqlCompletionContributor : CompletionContributor() {
                         // 本处零遍历——autopopup 每敲一个标识符字符都走这里（T-Perf-09 红线）；
                         // 同名列注释/类型取数据源（M35 优先级），tailText 追加 DB 类型串标注来源。
                         mergeColumnCandidates(ctx).forEach { candidate ->
-                            if (prefix.prefixMatches(candidate.name)) {
-                                result.addElement(columnLookupElement(candidate))
+                            // §三十一：实体列是驼峰（`delFlag`），SQL 里常写大写蛇形（`DEL_FLAG`）——
+                            // 只按原名做前缀匹配会让「敲 DEL_F 补不出来」（真机 prefix='DEL_F'
+                            // ctx cols=19 却 added col=0）。这里对每个候选生成别名形态：
+                            // 任一形态命中前缀即收录，并把别名注册为 lookup string（回车插入原名）。
+                            val aliases = columnNameAliases(candidate.name)
+                            if (aliases.any { prefix.prefixMatches(it) }) {
+                                // §三十三：插入形态**跟随输入的大小写风格**——
+                                // 全大写输入补 UPPER_SNAKE、全小写补 snake、混合/空补原名；
+                                // 其余别名一律注册成 lookup string，保证怎么敲都能命中。
+                                val insertAs = preferredColumnVariant(candidate.name, prefix.prefix)
+                                var element = columnLookupElement(candidate, insertAs)
+                                aliases.filter { it != insertAs }
+                                    .forEach { alias -> element = element.withLookupString(alias) }
+                                result.addElement(element)
+                                addedColumns++
                             }
                         }
                     }
@@ -148,7 +210,17 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 表别名：仅子句无法判定时（全量候选）
                     if (clause == SqlClause.UNKNOWN) {
                         provider.tableAlias(ctx)?.takeIf { prefix.prefixMatches(it) }
-                            ?.let { result.addElement(LookupElementBuilder.create(it)) }
+                            ?.let { result.addElement(LookupElementBuilder.create(it)); addedAlias++ }
+                    }
+                    if (shouldLog) {
+                        LOG.info(
+                            "[completion] invoke: clause=$clause prefix='${prefix.prefix}' " +
+                                "ctx=${ctx.tableName ?: "-"} cols=${ctx.columns.size} " +
+                                "candidates=${ctx.candidateTables.size} schemaCols=${ctx.schemaColumns.size} " +
+                                "added(tbl=$addedTable col=$addedColumns alias=$addedAlias) " +
+                                "sample=${ctx.columns.take(3)} " +
+                                "doc=${docKey.hashCode()}",
+                        )
                     }
                 }
             },

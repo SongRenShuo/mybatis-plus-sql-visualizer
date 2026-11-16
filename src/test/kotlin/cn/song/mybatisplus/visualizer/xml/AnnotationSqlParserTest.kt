@@ -41,7 +41,8 @@ class AnnotationSqlParserTest {
     fun `非script纯文本_dollar属性链求值为空时提示`() {
         val model = parser.parse("SELECT ${'$'}{x.y} FROM t", XmlStatementKind.SELECT, emptyList())
         val rendered = model.renderSql()
-        assertEquals("SELECT FROM t", compact(rendered.sql))
+        // T-MbgExamplePreview R1：预览链占位模式——求值为空写成 {{表达式}}，不再是无声空串
+        assertEquals("SELECT {{x.y}} FROM t", compact(rendered.sql))
         assertTrue(rendered.errors.any { it.contains("求值为空") })
     }
 

@@ -14,6 +14,9 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
@@ -31,8 +34,11 @@ import com.intellij.psi.xml.XmlTag
  * T-McpToolset sqlv_render_sql 定位与渲染适配层。
  *
  * 复刻 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 光标分支的服务层等价物：
- * 「文件 + 行号」→ PSI 锚点 → 13 类触发面定位链（Wrapper 链 / MyBatis 注解 / mapper XML /
- * HQL / 自定义 DAO HQL / JdbcTemplate / @Query / 派生查询 / CriteriaQuery / 方法体字符串 SQL）。
+ * 「文件 + 行号」→ PSI 锚点 → 触发面定位链（Wrapper 链 / MyBatis 注解 / mapper XML / HQL /
+ * 自定义 DAO HQL / JdbcTemplate / @Query / 派生查询 / CriteriaQuery / 方法体字符串 SQL /
+ * iBatis sqlMap 语句 / iBatis DAO 调用行）。iBatis 两档（T-IbatisCallPreview）与 Action 同序同判据
+ * ——`JdbcTemplateSqlLocator` 不含 iBatis 让位门，若不在它之前拦下，sqlMap 会被 MyBatis 渲染器
+ * 错渲、DAO 调用会被 JDBC 通道认领后拒绝。
  * 与 Action 的差异（MCP 约束）：
  *  - 全程 [ReadAction]（MCP 调用在平台协程线程，读 PSI 必须持读锁）；
  *  - 零弹窗：多候选不弹选择框，取首个候选并在结果中说明（方法体多 SQL / 文件级注解候选
@@ -157,14 +163,24 @@ object McpSourceLocator {
                 )
             }
             var tag: XmlTag? = PsiTreeUtil.getParentOfType(element, XmlTag::class.java)
-            while (tag != null && tag.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) {
+            while (tag != null && !isXmlStatementTag(tag)) {
                 tag = tag.parentTag
             }
             if (tag == null) {
                 return fail(
                     McpToolErrors.SOURCE_NOT_FOUND,
-                    "no mapper statement (select/insert/update/delete) at the given location ($location)." +
+                    "no mapper statement (select/insert/update/delete) or iBatis sqlMap statement " +
+                        "at the given location ($location)." +
                         " Pass the line of a statement tag or any line inside it.",
+                )
+            }
+            // T-IbatisCallPreview：iBatis <sqlMap> 语句走自己的渲染链——`#name#` 语义与 MyBatis 的
+            // `#{name}` 不同，交给 XmlPreviewService 会原样保留 # 而渲染成空参数。
+            if (IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
+                val ibatisId = tag.getAttributeValue("id")
+                return toOutcome(
+                    IbatisStatementPreview.previewTag(tag),
+                    sourceType = "iBatis sqlMap${ibatisId?.let { " ($it)" } ?: ""}",
                 )
             }
             val statementId = tag.getAttributeValue("id")
@@ -189,6 +205,21 @@ object McpSourceLocator {
 
         val service = project.getService(SqlPreviewService::class.java)
         service.preview(element)?.let { return toOutcome(it, sourceType = it.wrapperType?.name?.lowercase()?.replace("_", " ") ?: "Wrapper chain") }
+
+        // iBatis DAO 调用行（T-IbatisCallPreview）：与 ConvertToSqlAction.tryIbatisCallFallback 同序
+        // （先于 JDBC/HQL）——`JdbcTemplateSqlLocator` 不含 iBatis 让位门，晚一步就会被它认领后拒绝。
+        IbatisCallTargets.resolve(element)?.let { target ->
+            val tag = IbatisStatementPreview.resolveStatementTag(project, target.statementId, target.ownerNamespace)
+                ?: return fail(
+                    McpToolErrors.SOURCE_NOT_FOUND,
+                    "iBatis statement \"${target.statementId}\" was not found in any <sqlMap> file; " +
+                        "check the statement id or the sqlMap file that declares it.",
+                )
+            return toOutcome(
+                IbatisStatementPreview.previewTag(tag),
+                sourceType = "iBatis (${target.statementId})",
+            )
+        }
 
         // HQL / 自定义 DAO HQL（同 Action 的 tryHqlFallback 顺序）
         HqlQueryLocator.locate(element)?.let {
@@ -215,6 +246,25 @@ object McpSourceLocator {
             return toOutcome(service.previewCriteriaQuery(element), sourceType = "CriteriaQuery")
         }
 
+        // 方法体 iBatis 候选（T-IbatisCallPreview）：与 ConvertToSqlAction.tryIbatisMethodFallback 同序，
+        // 先于方法体字符串 SQL（后者同样没有 iBatis 让位门）。零弹窗取首个可解析目标。
+        if (method != null) {
+            val ibatisTargets = IbatisCallTargets.callsInMethod(method)
+            for (target in ibatisTargets) {
+                val tag = IbatisStatementPreview.resolveStatementTag(project, target.statementId, target.ownerNamespace)
+                    ?: continue
+                val degraded = if (ibatisTargets.size > 1) {
+                    "method body has ${ibatisTargets.size} iBatis calls; rendering the first resolvable one — " +
+                        "pass a line number inside another call to pick it."
+                } else null
+                return toOutcome(
+                    IbatisStatementPreview.previewTag(tag),
+                    sourceType = "iBatis (${target.statementId})",
+                    degraded = degraded,
+                )
+            }
+        }
+
         // 方法体字符串 SQL 多候选：零弹窗取首个（Action 弹选择框；agent 可换行号取其他候选）
         if (method != null && method.body != null) {
             val candidates = JdbcTemplateSqlPreviewService.collectMethodCandidates(method)
@@ -236,10 +286,19 @@ object McpSourceLocator {
                 " A Wrapper chain was detected nearby; retry with the exact line of the chain head call."
             } else {
                 " Supported: MyBatis-Plus Wrapper chains, mapper XML statements, MyBatis annotation SQL, " +
-                    "JPA (@Query/derived/CriteriaQuery), HQL, JdbcTemplate string SQL."
+                    "JPA (@Query/derived/CriteriaQuery), HQL, JdbcTemplate string SQL, " +
+                    "iBatis <sqlMap> statements, iBatis DAO calls (SqlMapExecutor entry names with a statement id)."
             },
         )
     }
+
+    /**
+     * XML 语句判定：MyBatis mapper 4 类标签 ∪ iBatis `<sqlMap>` 6 类语句（T-IbatisCallPreview）。
+     * 两族标签名有交集（select/insert/update/delete），按父标签分流——sqlMap 直接子级走 iBatis 渲染。
+     */
+    private fun isXmlStatementTag(tag: XmlTag): Boolean =
+        tag.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS ||
+            IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)
 
     /** PsiElement 锚点直渲（Wrapper 链头已定位场景——供 toolset 内部复用）。 */
     fun previewAnchor(project: Project, anchor: PsiElement): Outcome {
