@@ -523,6 +523,12 @@
              代码读取：ui/gutter/IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider。 -->
         <registryKey key="sqlvis.gutter.ibatisXmlArrowRequiresCaller" defaultValue="true"
                      description="Show the iBatis XML-statement navigation arrow only when a Java call site actually references that statement. Disable to draw the arrow unconditionally (legacy behavior: the target is resolved on click)."/>
+        <!-- T-IndexScanSweep2 P1：补全候选「项目级名称清单」（跨文件 <sql id> / mybatis-config <properties> key）
+             是否走一次构建并缓存的服务。默认 true＝按索引状态失效、补全期零 PSI 全扫；false＝回到每次补全
+             现扫（FileTypeIndex 全项目 XML + 逐个建 PSI）的旧行为，供真机 A/B。回退通道，下一版删除。
+             代码读取：ui/highlight/XmlSymbolNameIndexCache.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true"
+                     description="Cache the project-wide completion name list (cross-file sql-id refs and mybatis-config properties keys) in a per-project service invalidated by index state. Disable to rescan all XML files on every completion (legacy behavior)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
