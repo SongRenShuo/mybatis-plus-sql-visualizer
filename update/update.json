@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.15-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.15-beta.1/mybatis-plus-sql-visualizer-2026.11.15-beta.1.zip",
-  "changeNotes": "大工程里 Mapper 跳转图标改走自定义索引, namespace 在 IDE 索引期摊平成键, 定位一次索引查询即可, 不必每次全项目扫描\nJava 接口方法行的跳转图标不再长期缺席, 索引未就绪时先给出图标, 真没有对应 XML 的方法依旧不显示\n冷打开 mapper XML 时跳转图标不再闪没, 解析成功过一次就记住, 瞬时失败不再摘掉已显示的图标\n打开 mapper 文件头几秒不再和后台预热抢资源, 预取/补全/预览装配推迟到工程就绪后再做, Registry sqlvis.gutter.warmDelayMs 可调\n大工程下 Mapper 双向跳转图标整体提速, 支持热更新免重启安装",
-  "publishDate": "2026-11-15",
+  "version": "2026.11.16-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.16-beta.1/mybatis-plus-sql-visualizer-2026.11.16-beta.1.zip",
+  "changeNotes": "Mapper 与 iBatis 的跳转图标改走自定义索引, 大工程冷开毫秒级定位\n索引未就绪时的瞬时解析失败不再摘掉已显示的跳转图标\n目标删掉或改名后图标会收回, iBatis 箭头不再跨命名空间认领同名语句\n打开 mapper 的预热延后到工程就绪后, 不再刷读权限报错, sqlvis.gutter.warmDelayMs 可调\n跨命名空间公共片段改按索引查询, 改了立刻生效\n片段里的 bind 静态常量与父类接口常量现在都能认出\nSQL 日志工具窗首次打开少一条无害告警",
+  "publishDate": "2026-11-16",
   "sinceBuild": "243"
 }
