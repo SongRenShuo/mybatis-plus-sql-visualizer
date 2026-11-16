@@ -334,4 +334,24 @@ class AnnotationPreviewServiceTest : BasePlatformTestCase() {
         val props = result.xmlModel!!.paramProps
         assertTrue("别名键应进模型参数属性（_parameter 属性 + 顶层变量双写）：$props", props.containsAll(listOf("list", "collection")))
     }
+
+    fun testXmlPreviewResolvesInheritedStaticConstant() {
+        // T-BindStaticRefCrossNs S2：常量声明在父类时也要能解析（运行时 OGNL 走 Class.getField，含继承）
+        myFixture.addFileToProject(
+            "com/demo/BaseConsts.java",
+            "package com.demo; public class BaseConsts { public static final String IDLE = \"9\"; }",
+        )
+        myFixture.configureByText("SubConsts.java", "package com.demo; public class SubConsts extends BaseConsts { }")
+        val mapper = """
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="status" value="@com.demo.SubConsts@IDLE"/>
+                SELECT * FROM t WHERE status = #{status}
+              </select>
+            </mapper>
+        """.trimIndent()
+        val result = XmlPreviewService.preview(mapper, "s1", project)
+        assertNull("继承来的静态常量应解析成功：${result.warning}", result.warning)
+        assertEquals("9", result.xmlModel!!.renderSql().bindValues["status"])
+    }
 }

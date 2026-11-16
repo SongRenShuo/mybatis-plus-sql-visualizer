@@ -256,4 +256,48 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
         )
         XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
     }
+
+    // ===== T-BindStaticRefCrossNs：跨命名空间片段内的 bind 静态常量（用户语料 StationAuthScope.xml 形态）=====
+
+    private fun constsFixture(value: String) {
+        myFixture.addFileToProject(
+            "com/demo/Consts.java",
+            "package com.demo; public class Consts { public static final int IDLE = $value; }",
+        )
+    }
+
+    private fun scopeFragment(fieldName: String): String = """<mapper namespace="com.demo.ConstsMapper">
+          <sql id="scope"><bind name="scopeCategory" value="@com.demo.Consts@$fieldName"/>AND cat = #{scopeCategory}</sql>
+        </mapper>"""
+
+    private fun includeScope(): PreviewResult = preview(
+        """
+        <mapper namespace="com.demo.OrderMapper">
+          <select id="s1">SELECT * FROM t WHERE 1 = 1
+            <include refid="com.demo.ConstsMapper.scope"/></select>
+        </mapper>
+        """.trimIndent(),
+    )
+
+    fun testT_BindStaticRefCrossNs_片段内bind静态常量按项目PSI求值() {
+        constsFixture("7")
+        addMapper("src/main/resources/mapper/ConstsMapper.xml", scopeFragment("IDLE"))
+        val result = includeScope()
+        // 判别器：bind 求值结果进 bindValues（面板参数行据此回填）——只扫当前文件时此处恒 null
+        val rendered = result.xmlModel!!.renderSql()
+        assertEquals("7", rendered.bindValues["scopeCategory"])
+        assertTrue(
+            "片段内静态常量已解析时不得再报「求值为空」：${rendered.errors}",
+            rendered.errors.none { it.contains("求值为空") },
+        )
+        assertNull("解析成功不应有基线告警：${result.warning}", result.warning)
+    }
+
+    fun testT_BindStaticRefCrossNs_片段内字段不存在仍报警() {
+        constsFixture("7")
+        addMapper("src/main/resources/mapper/ConstsMapper.xml", scopeFragment("MISSING"))
+        val result = includeScope()
+        // 扫描域扩大后，解析不到的片段 ref 同样进基线告警（面板横幅），与同文件 ref 同口径
+        assertTrue("片段内解析不到须给出信号：${result.warning}", result.warning?.contains("MISSING") == true)
+    }
 }
