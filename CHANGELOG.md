@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **mapper 补全的「跨文件片段名」与 mybatis-config 变量名不再每次按键都重扫全项目 XML（T-IndexScanSweep2 P1，`b77180ee6`）**：在 mapper XML 里写 `<include refid="…"/>` 时的跨文件片段候选、以及 `${…}`/`<if test>` 里来自 mybatis-config `<properties>` 的变量名，原本每次弹出补全都把项目内最多 500 个 XML 文件逐个解析一遍再拼清单（工程越大越慢，而清单内容几乎不变；实测同一清单连续两次调用耗时同量级＝每次全付）。现在改由项目级服务一次构建、按 IDE 索引状态失效（新增/删除/保存 mapper 或配置文件后立即生效，无 5 秒窗口），补全期不再解析全项目 XML，大工程连续补全只在首次建一次清单。想回到旧的「每次现扫」行为，可在 Registry 把 `sqlvis.completion.nameIndexCache` 置 false（回退通道下一版删除）
 - **iBatis 语句行的箭头不再跳到别的命名空间的同名语句（`2eecbdcba`）**：多命名空间的工程里同名语句很常见（比如到处都有 `selectById`），旧实现对调用点字面量的匹配放宽到「任意前缀 + 同名尾段」，于是 `User.xml` 的 `selectById` 会跳到 `OdLogistics60233DaoImpl.java` 这类完全无关的文件。现在只认两种精确形态：裸 `id`（未开命名空间前缀的工程）或「本文件 `namespace.` + `id`」；点击箭头与 Ctrl+Click 同一口径
 - **iBatis 语句行的跳转箭头在没有调用点时不再显示（T-IbatisXmlArrowCallerGate，`e4b3fdd27`）**：把语句 `id` 改名（或删掉调用它的 Java 代码）之后，Java 调用行的图标会正确消失，但 XML 语句行上的箭头还挂着、点下去没有任何反应——一个「点开必空」的假图标。现在箭头与「Java 侧是否真的调用过这条语句」绑定：目标不在了箭头就消失，写了调用点又会回来；索引重建的短暂窗口内照旧先显示（不闪没）。想回到旧的「无条件显示」行为，可在 Registry 把 `sqlvis.gutter.ibatisXmlArrowRequiresCaller` 置 false
 - **打开 mapper 文件后不再往 IDE 日志刷「Read access is allowed from inside read-action only」报错（`e4b3fdd27`）**：打开 mapper XML 后延迟几秒做的那批后台预热（调用点预取 / 补全上下文 / 预览装配），到点执行时跑在后台线程池上、没有读权限却去读了 PSI，IDE 会把这条记成 SEVERE（实测一次连出 3 条）。现在这一步在正确的读权限内执行，预热的时机与内容不变
