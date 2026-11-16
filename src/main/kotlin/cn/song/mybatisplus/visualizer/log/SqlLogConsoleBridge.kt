@@ -1303,6 +1303,8 @@ private fun finishEntries(
             mapperStatement = eSrc?.mapperStatement,
             requestTag = eSrc?.requestTag,
             executionTimeMs = duration ?: e.executionTimeMs,
+            // T-HdAbsorb D215：控制台回落通道的耗时来自日志文本解析——近似档（展示 ~ 前缀）。
+            durationKind = if (duration != null) DurationKind.APPROXIMATE else e.durationKind,
         )
     }
     if (ctx.pendingSource != null) ctx.pendingSource = null
