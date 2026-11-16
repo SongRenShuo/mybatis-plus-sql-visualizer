@@ -1,0 +1,217 @@
+# T-IbatisGutterPerf：iBatis DAO 调用行两枚 gutter 图标首开慢与「无故消失」
+
+- 立项：2026-11-16 09:25
+- 任务源：用户 2026-11-16 真机反馈（IDEA 2026.3，demo 根工程 `mybatis-plus-sql-visualizer-demo`）
+- 反馈原话要点：「UserDaoImpl 的预览图标和跳转图标加载的很慢，可能存在性能问题」「图标一开始显示过，后面也无故不显示了」
+- 观察文件：`ibatis2-demo/src/main/java/cn/song/ibatis2demo/UserDaoImpl.java`（135 行，21 个 `SqlMapExecutor` 调用点，全部 `ns.id` 形态：`client.queryForList("User.selectAll")`）
+
+## 一、问题界定
+
+两个症状，指向**同一条解析链**：
+
+| # | 症状 | 涉及图标 | 产出者 |
+|---|---|---|---|
+| S1 | 打开 `UserDaoImpl.java` 后图标要等很久才出现 | 预览图标（`sqlGutter.svg`，锚首参字面量）+ 跳转箭头（`MpvsIcons.MapperMethod`，锚方法名 identifier） | 同一 provider `IbatisJavaToXmlLineMarkerProvider` |
+| S2 | 图标出现过一次，之后不再回来（不滚动、不编辑就一直是空的） | 同上，两枚**同生共死** | 同上 + 解析链失败语义 |
+
+两枚图标由同一个 `createMarkers` 一次产出（`src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/IbatisJavaToXmlLineMarkerProvider.kt:96-140`），门槛是同一句 `anchors.isEmpty()` 判定，所以「同慢、同灭」是设计必然，不是两个 bug。
+
+顺带一个未报告但同源的第三症状：
+
+| # | 症状 | 链路 |
+|---|---|---|
+| S3 | 在 `UserDaoImpl.java` 上 Ctrl+B 跳转也会卡一下（EDT） | `IbatisDaoStatementGotoDeclarationHandler.targetsFor` 在 EDT 上直调同一条解析链 |
+
+## 二、现场证据（2026.3 真机日志 + 语料实测）
+
+### 2.1 语料规模（demo 根工程，`F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo`）
+
+| 项 | 读数 | 取法 |
+|---|---|---|
+| 工程内 XML 文件数 | **2493** 个 / **16.58 MB**（排除 `target/`） | `find -name "*.xml" -not -path "*/target/*"` |
+| 其中 `<sqlMap>` 根（iBatis） | **303** 个 | `grep -rl "<sqlMap"` |
+| 其中 `<mapper>` 根（MyBatis 3） | **2054** 个 | `grep -rl "<mapper "` |
+| 索引扫描文件总数（工程打开时） | **202833** 个（`UnindexedFilesScanner`，09:03:10） | 见 2.2 引用的日志 |
+
+### 2.2 日志锚点（`C:\Users\USER\AppData\Local\JetBrains\IntelliJIdea2026.3\log\idea.log`）
+
+| 行号 | 时间 | 事件 | 意义 |
+|---|---|---|---|
+| 497 | 08:43:57 | `dynamic install succeeded — plugin hot-reloaded to 2026.11.16` | 本轮是**热更新后**的会话，插件 classloader 换代 |
+| 397-398 | 08:43:56 | `Clearing storage data for: MapperNamespaceIndex` / `Indices to be built: FilenameIndex(v=258), cn.song.mybatisplus.mapperNamespace(v=1)` | 热更新使自定义索引存储被清，全量重建（MyBatis 侧 F1''' 索引） |
+| 3604-3613 | 09:03:06 | `Scheduling indexing of pom.xml ... by request of indexes: [cn.song.mybatisplus.mapperNamespace->NOT_INDEXED]` | 同一批里 XML 全量进索引——**证明自定义 XML 索引的输入面就是全部 XML** |
+| 3617 → 3850 | 09:03:06.715 → 09:03:14.871 | `enter dumb mode [demo]` → `exit dumb mode [demo]` | 工程打开后有 **8.1 秒 dumb 窗** |
+| 3779 | 09:03:10 | `Scanning completed ... Number of scanned files: 202833` | 根工程 20 万文件；用户是「大工程根目录打开」场景 |
+| 263-264, 3403 | 09:03:04 起 | `project=mybatis-plus-sql-visualizer` / `cyzc-platform` / `mybatis-plus-sql-visualizer-demo` 三工程同进程 | **三个工程窗口同开**（下文 RC-2 的关键前提） |
+| 3926 → 5473 | 09:03:19 ~ 09:08:01 | 八次 `[M36] preview root` | 用户在本窗口反复点预览图标（S1 的用户动作） |
+
+补充事实：日志里 **0 条** iBatis 侧解析日志，因为该链路全程静默——`runCatching` 把异常吞掉（RC-4），没有任何 `ERROR`/`WARN` 会让用户或我们看到「这一趟没算完」。
+
+## 三、静态归因（代码面，逐条可复核）
+
+链路：`collectSlowLineMarkers`（每个 `PsiIdentifier` 一次）→ `IbatisXmlStatementTargets.resolveStatementAnchors` → `findSqlMapFileByNamespace` → `sqlMapListing`。
+
+### RC-1（慢的主因）清单构建是「全项目 XML 的 PSI 解析」
+
+`src/main/kotlin/cn/song/mybatisplus/visualizer/ui/nav/IbatisXmlStatementTargets.kt:309-317`：
+
+```kotlin
+val files = runCatching {
+    FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
+        .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }  // ← 2493 次建 PSI
+        .filter { it.rootTag?.name == SQL_MAP_ROOT_TAG }                              // ← 2493 次整文件解析
+        ...
+}
+```
+
+`FileTypeIndex.getFiles(XML, projectScope)` 返回全部 2493 个 XML，然后**每一个都 `findFile` + 取 `rootTag`**（等于解析整份 XML）才筛出 303 个 sqlMap。这与 MyBatis 侧在 F1'''（`7dc6c1c73`）里删掉的老实现是**同一份形态**：当时正是因为「4841 个 XML 的 PSI 解析」把慢趟饿死，才换成了 `MapperNamespaceIndex` 自定义索引。**iBatis 这条平行实现没跟着换，是 F1''' 横向审计的漏网面。**
+
+### RC-2（慢的放大器）单槽 + 全局 + 5 秒 TTL，且被多工程互相踢
+
+同一文件的 259-299 行：`fileListSlot` 是**进程级单槽**（`@Volatile private var fileListSlot: FileListSlot?`），槽的有效性判据里带 `slot.project.get() === project`；`fileListTtlMs = 5_000L`。
+
+- 编辑器保持打开时，慢趟每 5 秒就会重扫一次全项目 XML（滚动 / 光标 / 编辑都会触发新的 pass）；
+- 用户在同一个 IDE 进程里开着**三个工程**（2.2 已证），任一工程窗口的 pass 都会把另一个工程的槽挤掉 → 「槽命中率≈0」；
+- `listingGenerationCounter`（第 289 行）是**非 volatile 的裸 `var`**，慢趟（BGT）与 Ctrl+B（EDT）并发自增，换代戳本身也不可靠。
+
+### RC-3（慢的次因）namespace 二次解析
+
+`findSqlMapFileByNamespace`（第 165-190 行）拿到清单后，又对清单里的文件逐个 `PsiManager.findFile(vf)` + `rootTag?.getAttributeValue("namespace")`。清单是 303 个文件，而 demo 的 `User.xml` 在 `ibatis2-demo/`，索引序里排在 `cust-big-demo/cust-order/sqlmap/Od*.xml`（303 个里的绝大多数）之后 → **每个 `User.*` 调用点首次解析要再摸一遍 300 来个文件**。
+
+`UserDaoImpl` 有 21 个调用点，同一趟 pass 里 21 次 `resolveStatementAnchors`（每处只由方法名 identifier 触发一次；两枚 marker 在同一次调用里一并产出）；`namespaceSlot` 只缓存**最后一个** namespace，勉强能吃住同一 pass 内的重复，但跨 pass 只要 TTL 过期就全部重来。
+
+### RC-4（S2 的主因）「没算完」被写成「没有」
+
+`sqlMapListing` 用 `runCatching { ... }.getOrDefault(emptyList())` 收尾：
+
+- dumb/索引未就绪时 `FileTypeIndex.getFiles` 抛 `IndexNotReadyException`；
+- 慢趟的读操作被写操作打断时抛 `ProcessCanceledException`（PCE）。
+
+两种异常都被吞成**空清单**，并被当作一次正常结果写进槽（换代 + 5s TTL）。随后 `resolveStatementAnchors` 返回空 → `createMarkers` 返回 null → 平台在**本趟换装**时把上一趟已渲染的两枚图标摘掉。
+
+关键在平台语义：慢趟结果按趟整体替换，**一趟没产出就等于「这个元素没有图标」**，而 daemon 不会因为「上次空」自己再跑一遍。这一条在 F1' 复盘里已经被实测钉死（`CustChannelMapper.java` 敲空格+撤销即恢复，滚动不恢复）。所以 S2 一旦发生就是**粘性的**，直到下一次真正的编辑触发重分析——正是用户说的「无故不显示」。
+
+`status`: 这也是为什么日志里一条痕迹都没有：吞异常 + 静默返回 null。
+
+### RC-5（S2 的兜底面）dumb 直接弃权，没有 F1' 的乐观产出
+
+`IbatisJavaToXmlLineMarkerProvider.kt:110`：`if (DumbService.isDumb(project)) return null`。工程打开后的 8 秒 dumb 窗（2.2 第 3617/3850 行）里，任何一次 pass 都会把图标摘掉；而 MyBatis 侧 F1-b 已有「dumb 窗乐观产出（不入缓存）」兜底，iBatis 侧没有对标实现。
+
+### RC-6（S3）Ctrl+B 在 EDT 上跑同一条重链
+
+`IbatisDaoStatementGotoDeclarationHandler.getGotoDeclarationTargets` 在 EDT 被调用，`targetsFor` 里 `ReadAction.compute` 是**内联执行**（EDT 上），于是 RC-1 的 2493 次 PSI 解析直接压在 EDT 上——用户感知为「跳转卡一下」。
+
+### 归因结论（一句话）
+
+不是「图标渲染慢」，是**每次判定目标是否存在，都要把项目里 2493 个 XML 重新 PSI 解析一遍去找那 303 个 sqlMap**；而失败/取消会被静默固化成「不存在」，慢趟换装后不再重试。MyBatis 侧三刀（F1 / F1' / F1'''）修的就是这两件事，iBatis 侧是同一形态的未迁移副本。
+
+## 四、修法设计
+
+### P0 主刀：新增 iBatis 自定义索引，替换清单状态机
+
+新增 `src/main/kotlin/cn/song/mybatisplus/visualizer/xml/ibatis/SqlMapNamespaceIndex.kt`：
+
+- `ScalarIndexExtension<String>`，`ID.create("cn.song.mybatisplus.sqlMapNs")`，`getVersion() = 1`；
+- 每份 XML 产**两个键**：
+  - `all`——常量键，`getContainingFiles("all")` 直接得到「项目内全部 sqlMap 文件」（裸 id 路径的清单，**零 PSI**）；
+  - `ns:<namespace>`——根标签 `namespace` 非空时产出（`ns.id` 路径的主查询）。
+  - 键前缀 `ns:` 避免 namespace 字面量等于 `all` 时撞键。
+- 提取内核与 `MapperNamespaceIndex.namespaceFromHeadText` 同形（原始文本 16KB 头扫、双/单引号都认），但**锚根标签名 `sqlMap`**：`<mapper>` 不产键，`<sqlMap>` 与 MyBatis 互斥，不扩面。
+- `getInputFilter() = DefaultFileTypeSpecificInputFilter(XmlFileType.INSTANCE)`、`dependsOnFileContent() = true`（与已发行的 `MapperNamespaceIndex` 同一条已验证形态；`plugin.xml` 里 `<fileBasedIndex>` 的 `dynamic="true"` 平台声明已核，热更新不受影响）。
+- 正确性闸门仍在 PSI 侧：`statementAnchorsIn` 校验根标签 + `id` 精确相等；索引只负责「去哪几个文件里找」，键偶有偏差只会漏查不会错跳。
+
+**为什么新开索引而不是复用 `MapperNamespaceIndex`**：复用要把已发行、已验收的 MyBatis 索引版本从 1 升到 2 并触发全量重建，同时把两个 ORM 域的失效/失败耦合在一起；新索引各自独立 bump，代价是 XML 文件多跑一遍 16KB 头扫（相对 2493 次整文件解析可以忽略）。此方案已在调研报告 MPJ 的形态里有先例（它同时挂着多个 `fileBasedIndex`）。
+
+**注册**：`src/main/resources/META-INF/plugin.xml` 在现有 `MapperNamespaceIndex` 注册（第 234-235 行）旁边加一条 `<fileBasedIndex implementation="...SqlMapNamespaceIndex"/>`，注释写清「iBatis 2.x，根标签 `sqlMap`」。
+
+### P1 瘦身：`IbatisXmlStatementTargets` 退掉 TTL/换代/清单槽
+
+- `sqlMapListing(project)` → `SqlMapNamespaceIndex.getAllSqlMapFiles(project)`（索引查询）；
+- `findSqlMapFileByNamespace` → `SqlMapNamespaceIndex.getSqlMapFilesByNamespace(project, ns)`，取第一个 root namespace 精确匹配的文件；
+- 删除：`FileListSlot`、`Listing`、`listingGenerationCounter`、`fileListTtlMs`、`clockMs`、`indexScanCount`、`clearCachesForTest`、`listing.files.all { isValid }` 那套失效判据；
+- 保留 `statementIdSlot`（裸 id 结果 memo），但失效戳改成 `PsiModificationTracker.getInstance(project).modificationCount` + 命中元素 `isValid`，不再依赖「清单代」；
+- 对外签名 `resolveStatementAnchors` / `resolveSameFileIdReference` / `findIdAttributeInFile` / `STATEMENT_ENTRY_METHODS` 全部不变——`ui/ref`、`ui/nav`、`actions`、`mcp` 六处调用方零改动。
+
+预期形态与 F1''' 后的 `MapperXmlLocator`（303 → ~100 行）一致：只留「索引查询 + PSI 校验」。
+
+### P2 兜底：provider 失败分支照 F1' 四段式
+
+`IbatisJavaToXmlLineMarkerProvider.createMarkers` 改为：
+
+1. `resolveStatementAnchors` 非空 → 入**正缓存** `resolvedIbatisKeys`（`ConcurrentHashMap.newKeySet`，键 = 解析成功用的 `statementId` 原文）→ 产出；
+2. 空 + 正缓存命中 → 仍产出（慢趟换装不再摘已确认的图标）；
+3. 空 + dumb（`isDumbProvider` 测试缝）→ 乐观产出，**不入缓存**；
+4. 其余 → 不产出。
+
+缓存是**会话级不失效**（与 MyBatis 侧 F1-a 同口径）：语句被删/改名后最坏表现为「多一枚点了会提示『语句未找到』的图标」，可接受；换来的是「一次成功、此后不再无故消失」。
+
+XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定是否同改：其锚在 XML 语句行、不依赖跨文件解析，**本轮不动**，写入计划留观察。
+
+### P3 异常语义：不许把「取消」当「没有」
+
+- `sqlMapListing`（改造后就是一次索引查询）**不得**再包 `runCatching{}.getOrDefault(emptyList())`；
+  - `ProcessCanceledException` → 直接上抛（本趟作废，平台自行重跑）；
+  - `IndexNotReadyException` → 返回 null 语义（「未知」而非「空」），且**不写任何负缓存**。
+- 仓内既有正解形态：`FatalErrors.isFatal(t) ?: throw t`（F1''' / `MapperNamespaceIndex` 调用侧同款）。
+
+### P4 横向审计（同类面，本轮只出结论，不顺手扩面）
+
+| 面 | 现形态 | 判定 |
+|---|---|---|
+| `ui/ref/MybatisXmlTargets`（`FileTypeIndex` + 单槽 TTL，第 314 行） | 挂在 XML 属性值 reference 热路径（每个 `XmlAttributeValue` resolve） | **同病**，但用户在 vivo 工程实测未报；列为下一批候选（本批不动，避免与已验收的 F1''' 交叠） |
+| `psi/XmlCrossNsFragmentResolver`（第 107 行） | 同上形态，跨命名空间片段解析 | 冷路径（预览/构建期），暂留 |
+| `psi/jpa/HbmXmlEntityResolver`（第 221 行） | `FileTypeIndex` + 后缀过滤 | 冷路径（仅 JPA 预览），暂留 |
+| `log/MapperXmlLocator` | 已索引化（F1'''） | 已修 |
+| `log/MapperNamespaceIndex` | 已索引化 | 已修 |
+
+判定口径：**进不进 gutter / reference 热路径**。进则索引化，不进则留。
+
+### P5 观测与回退
+
+- 新增 INFO 日志（只打一次/每文件）：`[gutter-perf] ibatis resolve: source=index|memo|optimistic statementId=… file=… ms=…`——把「为什么这一刻没图标」从不可见变成可读；
+- 回退开关（Registry）：`sqlvis.gutter.ibatisIndexedResolve`（默认 true）→ false 走旧 `FileTypeIndex` 全扫路径；旧路径保留一个会话用于 A/B（下一版删除）。
+
+## 五、兼容面（不得收窄）
+
+- 只认根标签 `<sqlMap>`（iBatis 2.x，`sql-map-2.dtd`）：MyBatis 3 `<mapper>`、iBatis 3、JPA/HBM、MBG 全链**零改动**；
+- 索引输入过滤是「全部 XML」，比旧路径的「全部 XML + PSI 解析」**只多不少**，不引入漏查；
+- 顺带收益：`target/classes/sqlmap/User.xml` 这类产物副本此前会参与多命中，改走平台索引后由「排除目录」统一处理，多命中噪音下降；
+- 索引失效全交平台增量（`dependsOnFileContent=true`）：新增/删除/改 namespace 的 sqlMap 文件立刻可查，**不再有 5 秒真空窗**；
+- ORM 覆盖面不变：`StatementEntryMethods` 仍是 `javap` 实测的 `SqlMapExecutor` 清单，不增不减。
+
+## 六、验收清单（可照抄）
+
+| 项 | 判据 | 期望读数 |
+|---|---|---|
+| A1 | demo 根工程冷开 `UserDaoImpl.java`，图标出现耗时 | 首趟 pass 完成即出；日志 `[gutter-perf] ibatis resolve: source=index` 的 `ms` 单项 < 30ms（对比改前同锚点从打开到出图 ≥ 数秒） |
+| A2 | 图标不再无故消失 | 打开后连续 60s 不做编辑、只滚动；再触发一次 Build（进 dumb 窗）；两轮后两枚图标仍在 |
+| A3 | Ctrl+B 不卡 EDT | 点击到跳转 < 200ms；日志 `source=index`，无 `source=scan` |
+| A4 | dumb 窗乐观产出 | dumb 期间图标在；dumb 结束后图标仍在（且此时才入正缓存） |
+| A5 | 索引正确性 | 改 `User.xml` 的 `namespace`，图标随之消失（索引失效生效）；改回即恢复 |
+| A6 | ORM 不串 | 同一工程里 `CustAddressMapper.java`（MyBatis）图标行为不变；`<mapper>` 文件不产任何 iBatis 键（单测钉） |
+| A7 | 回退通道 | Registry `sqlvis.gutter.ibatisIndexedResolve=false` 后行为回到旧路径（`source=scan`） |
+| A8 | 噪音 | 全 log 0 ERROR；无新增 `SlowOperations` SEVERE |
+
+> 用户 2026-11-16 的原始反馈（S1/S2）在 A1/A2 覆盖；用户若继续在 2026.3 真机复验，取证口径＝「打开文件时刻 → 首枚图标时刻」+ 该时段的 `[gutter-perf]` 行。
+
+## 七、实施顺序与提交切分
+
+1. `SqlMapNamespaceIndex` + 内核单测（纯文本提取矩阵）+ `plugin.xml` 注册 → 提交一笔；
+2. `IbatisXmlStatementTargets` 瘦身 + 现有 12 个测试文件的机制断言迁移 → 提交一笔；
+3. provider 失败分支 + 接线守卫（新 `Guard` 文件名必须登记 `GuardSelfTestCoverageMetaGuardTest`，否则 CI `fast` 红——L13 Seen 4×）+ 正向矩阵 → 提交一笔；
+4. 日志/Registry 回退 + 文档回填（`CHANGELOG [Unreleased]`、计划册、索引行、`docs/架构设计/02-核心流程详解.md` 里 iBatis 解析链的描述、`LESSONS` 收口条目）→ 提交一笔。
+
+每笔单独可编译、单独定向测试；禁止攒最后一次性提交（LESSONS 既有条目）。
+
+## 八、待验证前提（实施者先证伪再动手）
+
+| # | 推断 | 证伪方式 |
+|---|---|---|
+| P-1 | 「2493 次 PSI 解析」是 S1 的主因，量级在秒级 | 改前在 demo 根工程加一次性计时探针（`System.err` + `nanoTime`），记录 `sqlMapListing` 单次耗时；若实测 < 300ms，则 S1 另有主因，须回头重查慢趟排队 |
+| P-2 | S2 的触发窗是 dumb/取消导致空清单被固化 | 复现时把 `runCatching` 临时改成「吞异常打日志」，看是否出现 `[IndexNotReady|PCE]`；若一次都不出现，则 S2 是别的失败面 |
+| P-3 | 慢趟结果确实整体替换、且平台不自动重跑 | 已有 F1' 真机实证（空格+撤销恢复、滚动不恢复）；若本次复验推翻，P2 设计要重估 |
+| P-4 | 自定义索引在 2026.3 上对 `<sqlMap>` 文件的覆盖与 `FileTypeIndex` 等价（含 `.xml` 大小写、排除目录口径） | 单测 + 真机 A5（改 namespace）双证 |
+
+## 九、实施记录
+
+（待实施后回填：改动点、提交哈希、定向读数、反向验证两读数、真机验收表）
