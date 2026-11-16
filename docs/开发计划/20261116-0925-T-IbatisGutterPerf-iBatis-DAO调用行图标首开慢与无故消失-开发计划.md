@@ -21,6 +21,7 @@
 | # | 症状 | 链路 |
 |---|---|---|
 | S3 | 在 `UserDaoImpl.java` 上 Ctrl+B 跳转也会卡一下（EDT） | `IbatisDaoStatementGotoDeclarationHandler.targetsFor` 在 EDT 上直调同一条解析链 |
+| S4 | 同一解析链在快捷键/预览通道上「时好时坏」：09:03:19 与 09:06:02 两次预览 `len=0`（空白面板 = `statementNotFound()`），而 09:04:22 / 09:05:05 / 09:07:38 / 09:08:01 同一操作 `len=84~97` 正常 | `ConvertToSqlAction.previewIbatisTarget` → 同一个 `IbatisStatementPreview.previewResolved` |
 
 ## 二、现场证据（2026.3 真机日志 + 语料实测）
 
@@ -44,6 +45,10 @@
 | 3779 | 09:03:10 | `Scanning completed ... Number of scanned files: 202833` | 根工程 20 万文件；用户是「大工程根目录打开」场景 |
 | 263-264, 3403 | 09:03:04 起 | `project=mybatis-plus-sql-visualizer` / `cyzc-platform` / `mybatis-plus-sql-visualizer-demo` 三工程同进程 | **三个工程窗口同开**（下文 RC-2 的关键前提） |
 | 3926 → 5473 | 09:03:19 ~ 09:08:01 | 八次 `[M36] preview root` | 用户在本窗口反复点预览图标（S1 的用户动作） |
+| 3928 / 5119 | 09:03:19 / 09:06:02 | `[M36] showSql ... len=0` | 预览面板**空白**——即 `IbatisStatementPreview.statementNotFound()` 的可见失败形态 |
+| 4466 / 4794 / 5465 | 09:04:22 / 09:05:05 / 09:08:01 | `[M36] showSql ... len=86 / 86 / 84` | 同一条解析链**同时段又能解析**——好/坏交替 |
+| 4887 / 4918 | 09:05:44 / 09:05:47 | `BUILDER_PROCESS [stderr]: Process creation` | 紧接着 09:06:02 的 `len=0`（JPS 写盘 → 读被取消的窗口） |
+| 4434 / 5648 | 09:03:41 / 09:08:33 | `Using preloaded build process to compile F:/.../mybatis-plus-sql-visualizer-demo` | demo 工程两次编译，均在用户操作时段内 |
 
 补充事实：日志里 **0 条** iBatis 侧解析日志，因为该链路全程静默——`runCatching` 把异常吞掉（RC-4），没有任何 `ERROR`/`WARN` 会让用户或我们看到「这一趟没算完」。
 
@@ -92,6 +97,8 @@ val files = runCatching {
 关键在平台语义：慢趟结果按趟整体替换，**一趟没产出就等于「这个元素没有图标」**，而 daemon 不会因为「上次空」自己再跑一遍。这一条在 F1' 复盘里已经被实测钉死（`CustChannelMapper.java` 敲空格+撤销即恢复，滚动不恢复）。所以 S2 一旦发生就是**粘性的**，直到下一次真正的编辑触发重分析——正是用户说的「无故不显示」。
 
 `status`: 这也是为什么日志里一条痕迹都没有：吞异常 + 静默返回 null。
+
+**用户自己的点击记录已经把这个「时好时坏」拍在日志里**（不是纯推断）：09:03:19（工程刚退出 dumb 5 秒）与 09:06:02（紧跟 09:05:44/09:05:47 的构建进程写盘）两次预览打开的是**空面板**——`previewResolved` 在解析不到语句时返回 `statementNotFound()`（`sql=""` + 「语句未找到」告警），所以 `[M36] showSql ... len=0` 就是这个失败态的直接读数；而 09:04:22 / 09:05:05 / 09:07:38 / 09:08:01 同样操作分别是 86 / 86 / 85 / 84 字符。**同一个文件、同一个语句、十几分钟内好/坏交替**，正是「取消窗口把空清单固化」的指纹。
 
 ### RC-5（S2 的兜底面）dumb 直接弃权，没有 F1' 的乐观产出
 
@@ -191,6 +198,7 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 | A6 | ORM 不串 | 同一工程里 `CustAddressMapper.java`（MyBatis）图标行为不变；`<mapper>` 文件不产任何 iBatis 键（单测钉） |
 | A7 | 回退通道 | Registry `sqlvis.gutter.ibatisIndexedResolve=false` 后行为回到旧路径（`source=scan`） |
 | A8 | 噪音 | 全 log 0 ERROR；无新增 `SlowOperations` SEVERE |
+| A9 | S4 空面板不再出现 | 冷开工程后 1 分钟内连点同一条语句的预览 ≥10 次（含 Build 触发写盘的窗口），`[M36] showSql` 的 `len` 必须恒 > 0，不得出现 `len=0`；出现即判失败并附 `[gutter-perf]` 行 |
 
 > 用户 2026-11-16 的原始反馈（S1/S2）在 A1/A2 覆盖；用户若继续在 2026.3 真机复验，取证口径＝「打开文件时刻 → 首枚图标时刻」+ 该时段的 `[gutter-perf]` 行。
 
