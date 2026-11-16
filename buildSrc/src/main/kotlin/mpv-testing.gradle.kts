@@ -414,11 +414,24 @@ val fastBucketClasses: List<String> = testFileEntries
     // 隐性平台依赖排除名单：测试源码无 com.intellij 字面引用，但被测生产类内部走平台 UI/
     // 静态状态，脱离平台 JVM 即红（testFast 首跑 4 类 28 例实证；失败形态=NoClassDefFoundError
     // UIUtil / Application NPE / Must be precomputed）。新类踩同坑时在此追加。
+    // T-BranchAlignMerge-insfix（2026-11-17，CI run 43914861235 test(fast) 17 红实证）：insight 线
+    // 新增 8 类同坑——测试源码零 com.intellij 字面量，但 InsightPanel/RequestBaselineView/
+    // OfflineTraceView 等生产类内部走平台 UI（JBScrollPane→JBViewport 静态初始化抛
+    // InaccessibleObjectException、OnePixelSplitter Could not initialize class、JBUI
+    // "Must be precomputed"）；本地 testFast 精确复现同栈，默认 test 任务（平台引导在位）全绿。
     .filter { it !in setOf(
         "cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanelTest",
         "cn.song.mybatisplus.visualizer.ui.diagram.DiagramRendererTest",
         "cn.song.mybatisplus.visualizer.actions.CrudSqlPreviewFlowTest",
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
+        "cn.song.mybatisplus.visualizer.ui.InsightPresentationTest",
+        "cn.song.mybatisplus.visualizer.ui.InsightSummaryTest",
+        "cn.song.mybatisplus.visualizer.ui.OfflineTraceViewTest",
+        "cn.song.mybatisplus.visualizer.ui.RequestBaselineViewTest",
+        "cn.song.mybatisplus.visualizer.ui.RuntimeEvidencePanelTest",
+        "cn.song.mybatisplus.visualizer.ui.RuntimeInsightViewTest",
+        "cn.song.mybatisplus.visualizer.ui.ScenarioInsightViewTest",
+        "cn.song.mybatisplus.visualizer.ui.insight.InsightDetailPanelLayoutTest",
     ) }
 
 // T-CiFastSplit（2026-11-05）：快桶切片——-PfastBucketSliceCount=N（默认 1，整桶，既有语义零变化）
