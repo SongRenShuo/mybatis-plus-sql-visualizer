@@ -13,14 +13,16 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 
 /**
  * T-PerfSweep30 券02/02e：DumbMode 点击链防护夹具（三链：gutter 双跳 / 日志跳转 / 预览 compute）。
  *
  * dumb 夹具用平台 [DumbModeTestUtils.computeInDumbModeSynchronously]（显式置 dumb——不走写意图
  * 判据，BasePlatformTestCase 全程持写意图与本面无关），断言三条点击链在 dumb 态：
- *  ①不抛异常；②不静默成功（返回「未命中」等价语义，调用方走既有回退）；③不把空结果写缓存
- * （smart 恢复后必须重新扫描并命中——空表进 5s TTL 单槽是 T-PerfSweep30 立项主害）。
+ *  ①不静默成功（返回「未命中」等价语义或按 F1''' 契约抛 IndexNotReadyException 由 provider 层
+ * 兜底为 Lookup.Unknown，2026-11-17 master 并入 dev 合并对齐）；②不把空结果写缓存（smart 恢复后
+ * 必须重新解析并命中——旧 T-PS5-05 单槽 TTL 缓存已退役，空结果固化风险由平台索引增量接管）。
  *
  * 前提 1 探针用例（test前提1_probe_dumb态索引API行为）记录 findClass / PsiShortNamesCache /
  * FileTypeIndex 在 dumb 态的实际行为（抛 IndexNotReadyException 或静默回落），结论随券02报告回填。
@@ -102,7 +104,7 @@ public interface UserMapper { void selectById(); }""",
     // ② 日志跳转链（LogEntryJumpOps.resolveXml → MapperXmlLocator）
     // ------------------------------------------------------------------
 
-    fun testDumb_日志跳转_resolveXml_未命中且smart恢复后命中() {
+    fun testDumb_日志跳转_resolveXml_dumb抛IndexNotReady且smart恢复后命中() {
         addMapperXml()
         val entry = cn.song.mybatisplus.visualizer.log.LogSqlEntry(
             rawSql = "SELECT 1",
@@ -110,16 +112,22 @@ public interface UserMapper { void selectById(); }""",
             params = emptyList(),
             mapperStatement = "com.demo.mapper.UserMapper.selectById",
         )
-        // dumb 态：返回 null（未命中语义，调用方回退 Java 跳转），不抛异常
-        val dumbTarget = inDumb {
-            cn.song.mybatisplus.visualizer.log.LogEntryJumpOps.resolveXml(project, entry)
-        }
-        assertNull("dumb 态日志跳转应未命中（不抛不静默成功）", dumbTarget)
-        // smart 恢复后：必须重新解析并命中——dumb 态的空结果不得固化（F1''' 起
-        // 清单走 MapperNamespaceIndex 平台增量，T-PS5-05 单槽 TTL 缓存与
-        // indexScanCount/clearFileListCacheForTest 计数缝随该机制整体退役）
+        // dumb 态（master F1''' 形态语义，2026-11-17 合并对齐）：MapperNamespaceIndex 的
+        // fileBasedIndex 查询在 dumb 抛 IndexNotReadyException——dumb 防护收在调用侧
+        // （gutter provider 走 locateOrUnknown 的 Lookup.Unknown 兜底，见下一条用例）。
+        // dev 侧旧 T-PS5-05 TTL 槽的「dumb 返回 null 不抛」前提随该机制退役。
+        val dumbErr = runCatching {
+            inDumb {
+                cn.song.mybatisplus.visualizer.log.LogEntryJumpOps.resolveXml(project, entry)
+            }
+        }.exceptionOrNull()
+        assertTrue(
+            "dumb 态 resolveXml 应抛 IndexNotReadyException（provider 层兜底）实际=$dumbErr",
+            dumbErr is com.intellij.openapi.project.IndexNotReadyException,
+        )
+        // smart 恢复后：必须重新解析并命中——dumb 异常不留任何空结果缓存
         val smartTarget = cn.song.mybatisplus.visualizer.log.LogEntryJumpOps.resolveXml(project, entry)
-        assertNotNull("smart 恢复后日志跳转应命中（空结果不得被缓存）", smartTarget)
+        assertNotNull("smart 恢复后日志跳转应命中", smartTarget)
         assertEquals("UserMapper.xml", smartTarget!!.virtualFile.name)
     }
 
@@ -127,15 +135,32 @@ public interface UserMapper { void selectById(); }""",
     // ① gutter 双跳链（MapperXmlLocator + MybatisXmlTargets）
     // ------------------------------------------------------------------
 
-    fun testDumb_gutter双跳_MapperXmlLocator_locate_未命中且smart恢复后命中() {
+    fun testDumb_gutter双跳_MapperXmlLocator_locate_dumb抛IndexNotReady且locateOrUnknown归Unknown() {
         addMapperXml()
-        val dumbLoc = inDumb {
-            cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+        val dumbLocateErr = runCatching {
+            inDumb {
+                cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+            }
+        }.exceptionOrNull()
+        assertTrue(
+            "dumb 态 locate 应抛 IndexNotReadyException（provider 层兜底）实际=$dumbLocateErr",
+            dumbLocateErr is com.intellij.openapi.project.IndexNotReadyException,
+        )
+        // provider 层实际消费的三态契约：dumb → Lookup.Unknown（不抛，「暂时查不了」保留图标）
+        val dumbLookup = inDumb {
+            cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locateOrUnknown(project, "com.demo.mapper.UserMapper.selectById")
         }
-        assertNull("dumb 态 gutter 跳转应未命中（不抛不静默成功）", dumbLoc)
-        val smartLoc = cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-        assertNotNull("smart 恢复后 gutter 跳转应命中（空结果不得被缓存）", smartLoc)
-        assertEquals("UserMapper.xml", smartLoc!!.virtualFile.name)
+        assertTrue(
+            "dumb 态 locateOrUnknown 应归 Lookup.Unknown 实际=$dumbLookup",
+            dumbLookup is cn.song.mybatisplus.visualizer.log.MapperXmlLocator.Lookup.Unknown,
+        )
+        // smart 恢复后：正常命中（空结果不得被缓存）
+        val smartLookup = cn.song.mybatisplus.visualizer.log.MapperXmlLocator.locateOrUnknown(project, "com.demo.mapper.UserMapper.selectById")
+        assertTrue(
+            "smart 恢复后 locateOrUnknown 应 Found 实际=$smartLookup",
+            smartLookup is cn.song.mybatisplus.visualizer.log.MapperXmlLocator.Lookup.Found,
+        )
+        assertEquals("UserMapper.xml", (smartLookup as cn.song.mybatisplus.visualizer.log.MapperXmlLocator.Lookup.Found).location.virtualFile.name)
     }
 
     fun testDumb_gutter双跳_MybatisXmlTargets_resolveClass_resolveInterfaceMethod_返回null() {
