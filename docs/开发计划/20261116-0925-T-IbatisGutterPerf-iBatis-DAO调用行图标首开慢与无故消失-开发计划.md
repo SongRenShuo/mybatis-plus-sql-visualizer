@@ -258,6 +258,11 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 | `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 |
 | **合计** | **109** | **0** | **0** |
 
+`plugin.xml` 动了两处 EP/注册（`<fileBasedIndex>` + `<registryKey>`，属「大改动」判据），故按纪律补跑构建校验与 EP 守卫：
+
+- `./gradlew verifyPlugin --no-configuration-cache`：**BUILD SUCCESSFUL**（IU-243.28141.41 / IU-253.33514.17 / IU-263.7307.200 三份报告），`Dynamic Plugin Eligibility: Plugin can probably be enabled or disabled without IDE restart`；输出里只有改造前既有的 Experimental / OverrideOnly 警告（`NewDataSourceEntry` 等，与本次无关）；
+- EP/本地化守卫三件：`config.PluginXmlExtensionPointResolutionTest` 4/0、`config.PluginXmlStructureGuardTest` 23/0、`i18n.BundleParityGuardTest` 5/0（registryKey 族整元素豁免仍生效，新键纯英文 description 未被判缺 bundle）。
+
 实施期两处先红后修（记录在案，供后续复盘）：`SqlMapNamespaceIndexTest` 首跑 1 红（`<sqlMapConfig>` 内嵌 `<sqlMap>` 被收成 `all`）→ 加配置文件根锚排除；矩阵首跑 1 红（裸 id 缓存键取不到所属类）→ 即 9.2 第 3 条缺陷。
 
 ### 9.4 反向验证（摘分支 → 两红 → 恢复 → 全绿）
