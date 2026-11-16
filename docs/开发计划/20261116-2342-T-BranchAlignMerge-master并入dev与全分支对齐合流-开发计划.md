@@ -157,7 +157,7 @@ git merge --no-ff dev
 | 2.4 security 吃 master | **完成**（合并 `7f1ec6d1d`，编译绿，双仓已推） | `7f1ec6d1d` | 两个解析器 6+2 hunk 双保留（分支 T-SAF-22 forceClose/createdAtMs/TTL + master T-ConsoleFlushAlign settleMs/lastTouchMs 全并存，LogThreadRouter 自动合并已含两侧 API）；LESSONS 取 master 整体+安全教训让号改 **L80** 追加；CHANGELOG 双保留并去 3 条已发行重复（T-DevUpdateChannel/T-HotSwapUnloadSafety/T-RuntimeSlotOptionalFill） |
 | 2.5 hiddenbug 吃 master | **完成**（合并 `41706930b`，编译后台，双仓待推） | `41706930b` | SqlPreviewPanel dispose 尾 `Disposer.dispose(this)`：分支券 Y2 删自处置 vs master T-PreviewEditorLeak 保留——按 master 基线保留 master 形态并加合流注记；架构 01/03 同 dialects 款（sql 行 65 类实测）；索引保 master 全表+分支 HiddenBugPerfScan 行按日期插入；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去已发行重复（DmlResult/LastUsedEdt/WorkspaceHeal 等） |
 | 2.6 merge-route 吃 master | **完成**（合并 `912dba4e2`，编译后台，双仓待推） | `912dba4e2` | LESSONS 取 master+安全教训改 L80（与 security 同款，该支并过 security）；索引保 master 表+BranchMergeRoute 行用分支侧新状态（前三支已实施）；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去 LocalDirPersist 已发行条目 |
-| 2.7 insight 吃 dev | 预演完成：对当前 dev 仅 4 个 xml 引擎代码冲突（ForeachSqlNode/TrimSqlNode/XmlPreviewModel/XmlSqlRenderer），文档全自动合并；**正式合并等第 1 步 dev 合完** | | |
+| 2.7 insight 吃 dev | **完成**（2026-11-17，子代理执行：合并 `805068ede` + 记录回填，tip `d7c3fe94d` 已推双仓 + gate run `43914861235`） | `805068ede` | 实际 7 文件＝预演一致：索引取并集但 T-SqlInsight 行保 insight 交付态版；SqlPreviewPanel/Execution 测试锚点与守卫成员并存；xml 四文件主线基线（hasContent/R2 补空格/kindDriven/五参 DynamicContext）+ insight 增量（renderTrace/traceSlice/accountAppend/scenarioBindings/isCancelled）全并入。**NestGate 显式裁决：合并态默认关→改回主线默认开**（KDoc 留档 insight 2026-10-30 旧裁决，回退 `-Dsqlvis.agent.nestGate=false`），`SqlInsightWeaveProbeTest` 改按回退开关形态跑。编译 2m44s 绿，定向 13 类 **131/0/0/0**（含 agent 侧 NestGateTest/InsightWeaveProbe） |
 
 ## 七、决策点（须用户拍板）
 
