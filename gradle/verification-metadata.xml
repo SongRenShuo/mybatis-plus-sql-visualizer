@@ -23,6 +23,12 @@
               Dependency verification failed。按 group+name 窄口径放行安装包 zip（版本无关），
               ideaIU 组件的 sha256 校验不动。 -->
          <trust group="idea" name="idea" file=".*win\.zip" regex="true"/>
+         <!-- T-BranchAlignMerge 合流轮补丁 2（L80 同类）：master 11.14~11.16 新插件依赖在 Gradle
+              Central Plugin Repository 解析出的 BOM 元数据（jackson-base 2.20.2 pom / junit-bom
+              5.11.4/5.13.1/5.13.4 module）不在清单——按 group+name 窄口径放行元数据文件
+              （pom/module 非字节级制品，jar 校验不动）。 -->
+         <trust group="com.fasterxml.jackson" name="jackson-base" file=".*\.pom" regex="true"/>
+         <trust group="org.junit" name="junit-bom" file=".*\.module" regex="true"/>
          <!-- Gradle 发行版自身的附属物（IDE 脚本模型会解析，CLI 不会）：`gradle:gradle:<ver>` 的
               源码包、`org.apache.groovy` / `org.codehaus.groovy` 的变体元数据与 jar，全部来自**本机
               Gradle 发行版**（Gradle custom / Gradle distributions / Gradle Libs 仓库）。发行版本身
