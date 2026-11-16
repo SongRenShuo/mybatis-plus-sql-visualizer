@@ -263,6 +263,12 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 - `./gradlew verifyPlugin --no-configuration-cache`：**BUILD SUCCESSFUL**（IU-243.28141.41 / IU-253.33514.17 / IU-263.7307.200 三份报告），`Dynamic Plugin Eligibility: Plugin can probably be enabled or disabled without IDE restart`；输出里只有改造前既有的 Experimental / OverrideOnly 警告（`NewDataSourceEntry` 等，与本次无关）；
 - EP/本地化守卫三件：`config.PluginXmlExtensionPointResolutionTest` 4/0、`config.PluginXmlStructureGuardTest` 23/0、`i18n.BundleParityGuardTest` 5/0（registryKey 族整元素豁免仍生效，新键纯英文 description 未被判缺 bundle）。
 
+### 9.3.1 CI 读数（推送后）
+
+- 推送：`dev-support/push-all.ps1 -Branch master` 双仓成功（Gitee 主仓 + GitHub 直连兜底，日志 `x-access-token:***@`＝走令牌通路、无 GUI 弹窗）。
+- `推送测试 · master` run **`43790850727`**（head `cfbf47168`）：**8/8 全绿** —— fast(1)、fast(2)、test(1)~test(5)、nightly-nudge 全 success；`nightly-nudge` 注记「本轮周期已有夜间轮，跳过兜底派发」（与本次改动无关）。
+- 桶归属核对：`SqlMapNamespaceIndexTest`（`BasePlatformTestCase`）→ 分片腿；`IbatisGutterFailBranchGuardTest`（纯 JUnit）→ fast 快桶腿。两条腿都绿；CI 侧 config cache 显示 `no cached configuration is available`（分片计划按当前源码重算），新类不存在「不在任何片里」的空绿面。fast 绿同时证明新 Guard 文件在 `GuardSelfTestCoverageMetaGuardTest` 的登记被接受（漏登即 fast 红，L13）。
+
 实施期两处先红后修（记录在案，供后续复盘）：`SqlMapNamespaceIndexTest` 首跑 1 红（`<sqlMapConfig>` 内嵌 `<sqlMap>` 被收成 `all`）→ 加配置文件根锚排除；矩阵首跑 1 红（裸 id 缓存键取不到所属类）→ 即 9.2 第 3 条缺陷。
 
 ### 9.4 反向验证（摘分支 → 两红 → 恢复 → 全绿）
