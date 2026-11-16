@@ -17,7 +17,9 @@ import java.io.File
  *
  * 不在扫面内（有意保留）：`psi/jpa/HbmXmlEntityResolver`（只对 `.hbm.xml` 做 PSI 解析，全项目
  * `FileTypeIndex` 仅取文件列表、不解析非 hbm XML，且只在 JPA 预览冷路径上跑）、
- * `ui/highlight/XmlCompletionSymbols`（补全上下文，另有 dumb 闸）。
+ * `ui/highlight/XmlCompletionSymbols`（T-IndexScanSweep2 P1 起改由
+ * `ui/highlight/XmlCompletionNameIndexWiringTest` 按**方法体**扫描——该文件保留了 Registry 回退通道的
+ * `legacyXxx` 现扫实现，整文件扫会把合法回退实现也判红）。
  */
 class MapperFileLookupIndexTest {
 
