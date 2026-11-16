@@ -149,8 +149,33 @@ git merge --no-ff dev
 | 步骤 | 状态 | 合并哈希 | 冲突文件与裁决 |
 |---|---|---|---|
 | 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
-| 第 0 步 fetch+建本地 | 待做 | | |
-| 第 1 步 master→dev | 待做 | | |
+| 第 0 步 fetch+建本地 | 已可用（master 本地引用在位，第 1 步 merge 直接受益） | | |
+| 第 1 步 master→dev | **已合并**（2026-11-17，merge commit `aba1e47ba`；实际冲突 20 文件＝预演清单逐个一致，无增减）；编译与定向测试读数见下补记 | `aba1e47ba` | 见下方逐文件裁决表 |
+
+**第 1 步逐文件裁决表（20 文件，实际清单＝预演清单）**
+
+| 文件 | 裁决 |
+|---|---|
+| CHANGELOG.md | 双保留重排：dev `[Unreleased]` 的 OB 收口条目在前，master 的 2026.11.16 / 2026.11.14 版本段随后；python 脚本写盘曾出现半落位（标记残留+段落重复），已用 Edit 工具修正复核 |
+| README.md | hunk1 取 master 新措辞（运行期占位逐个填值 + Mapper 双向跳转）并保留 dev 独有「禁用 API 检查」条目；hunk2 增强捕获取 dev 全句（JDBC 兜底匹配为 dev 独有文档增量，master 未删该能力）+ 控制台回落取 master（补 iBatis） |
+| docs/LESSONS.md | master L52~L79 编号优先；dev 侧 L52（testShards lane）撞号顺延重编为 L80 置于 master 块后；两侧无文内交叉引用需修正 |
+| docs/memory-archive/README.md | 计数撞数按统计节口径（归档目录文件数）实测重登：bug-fixes 300 / pitfalls 112，统计行 archive 420；双保留无丢行 |
+| 架构设计/01-项目架构总览.md | 6 hunk：对齐头取「master@2026-11-13 并入 dev 合并态」合并表述；附属能力取 master 新基线 + dev 独有增量（java.sql 兜底、重渲染回落出口、达梦 EXPLAIN/NOT_A_SQL_DATASOURCE、禁用 API/留痕/模板 hook 三件、9 子页）；测试行按合并态实测 1024 文件（1017 kt+7 java，*Test.kt 996）重写；E1/E2 与 X1/X2 取 master（19 provider）+ dev ScanBannedApiUsagesAction；表格 gutter/Action 行同理合并 |
+| 架构设计/02-核心流程详解.md | 两侧各有一个 §2.9：master MBG 段留 2.9，dev FR-0045 段重编 2.10，双保留 |
+| 架构设计/03-开发与测试指南.md | 3 hunk：三档计数按合并态实测（537/436/23=996）；守卫族清单取 master 行 + dev 独有成员（DumbModeClickChainGuardTest、HotUpdateSettingsGuardTest），计数按实测 70/7/83 GuardEntry；3.2 分包表 master 散文为基线 + dev 独有包（diagnostic 4 / dumbmode 1 / inspection 12 / ui/nav 等）并按脚本实测重登各类数 |
+| docs/索引/开发计划.md | 3 hunk：hunk1 master 14 新条目 + dev 20261113-0032 条目按日期序插入并去重（master 重复的 20261112-1350 行取 master 新版删 dev 旧版）；hunk2 dev 36 行 + master 独有 11 行并集按日期倒序重排；hunk3 取 master（状态已更新为已闭环/部分落地） |
+| PluginSettingsFolderConfigurable.kt | 双保留：dev gutterGroup.aggregate 与 master consolePrep 两条搜索索引条目并存 |
+| DataSourceSelector.kt | 3 hunk 均取 dev：`onEdtForLastUsed` 辅助函数与 master 内联 invokeLater 逻辑逐字等价（同 ModalityState.any()），dev 重构形态承载 |
+| MapperXmlLocator.kt | 取 master F1''' 索引化新形态（120 行版）；dev 侧 T-PS5-05 单槽 TTL/memo 机制随 master「整体退役」删除，import 去重（IndexNotReadyException 单份） |
+| SqlLogPanel.kt | 取 dev 单行 `internal var pendingRefreshAfterChain`；master inline 的 appendRebuildChunk/flushRebuildChainSync/排序族与 dev 拆分文件 SqlLogPanelRefresh.kt 语义等价，丢弃 inline 块防重复定义 |
+| SqlPreviewService.kt | dev dispatchPrewarm 重构形态为基线 + master T-PreviewExecWriteDefer 惰性门禁（`PreviewConsoleEager.enabled()`）提至派发点；dumb 重试路径同补门禁 |
+| StartupUpdateCheck.kt | 双保留：master HotUpdateSettingsGuard 拉起 + dev UpstreamVersionMonitor，两钩子并存 |
+| plugin.xml | 3 hunk 均双保留（notificationGroup 三组并存；startup activity 六条并存；dev inspection 族 8 条 localInspection + master 6 条 registryKey 顺序拼接）；XML minidom 校验通过 |
+| MpSqlVisualizerBundle.properties | 双保留：dev onboarding.mapperPrimer/statusbar.sqlviz 键 + master dialectGapTip 键 |
+| MpSqlVisualizerBundle_zh.properties | 同上（中文档） |
+| PluginSettingsPersistenceTest.kt | 复选框计数断言：dev 注释链为基线（含 SettingsConverge -6 等）+ master 两开关（dialectTip/firstCaptureGuide）+2 → 预置 46，实跑核对 |
+| GuardSelfTestCoverageMetaGuardTest.kt | 2 hunk 双保留：dev 5 条 + master 2 条 GUARD_CLASSES 全并存（合并态 83 条 GuardEntry） |
+| LastUsedWriteOnEdtGuardTest.kt | add/add 取 dev 版（大括号配对切体防假绿 + 委托归位形态 + 辅助函数兜底用例），与合并后生产代码委托形态匹配 |
 | 2.1 preview 吃 master | 待做 | | |
 | 2.2 dialects 吃 master | 待做 | | |
 | 2.3 rollback 吃 master | 待做 | | |
