@@ -812,6 +812,32 @@ Unknown 保留 / Absent `remove` 并摘图标），`catch IndexNotReadyException
 
 **Seen 1× (2026-11-16)**
 
+### L78 调度器/延迟派发体读 PSI 必须自带读动作，且**测试缝同步执行**会让这类缺陷永远不被单测发现
+
+**规则**：任何交给 `AppScheduledExecutorService` / 池线程的**延迟派发体**，只要摸 PSI（`isValid`、
+`containingFile`、`getAttributeValue`、`text`…），就必须在体内自带 `runReadAction`——**不能依赖调用方
+上下文**：同一段逻辑从「EDT/读动作里的立即踢」搬到「池线程上的到点踢」时，读权限会静默丢失。
+更要命的是这类缺陷**进不了单测**：把延迟派发改成同步执行的测试缝（`syncDispatchForTest` /
+unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，断言永远不触发——所以验收只能靠
+**源码扫描守卫**（钉「延迟体里有 runReadAction，且复检与干活都在它之后」），并按惯例配老形态自证。
+
+**证据**：2026-11-16 沙盒 `idea.log` 12:35:42 一次连出 3 条
+`SEVERE - #c.i.u.c.ThreadingAssertions - Read access is allowed from inside read-action only`，
+三帧同源 `GutterWarmScheduler.scheduleWarmIfDue$lambda$0`：`:126` 的 `tag.isValid`（到点复检）、
+`:130` 经 `kickFileWarmers` 进 `warmCompletionContextOnce` 与 `PreviewAssemblyWarm.warmOnce` 的
+`tag.containingFile`。F2（`7ad1d1a5d`，2026-11-14）把三条预热链从「首渲染直踢」改为「延迟派发」时丢了
+读动作；该缺陷带病过了 11-14 的验收与 11-16 的发行，直到用户沙盒跑够长才现形。修法（`e4b3fdd27`）＝
+「到点复检 + 踢出」整体包一次 `runReadAction`（三链内部重活各自开 `NonBlocking`）；守卫＝
+`GutterWarmSchedulerTest.延迟派发体必须包读动作`（含老形态自证）。**同族第二例**：同一份日志 11-13
+另有 41 条同类报错，来自 `XmlSqlCompletionContextResolver.warmCandidates`（面板线在工作线程上调用，
+已于 §二十四 补 `nonBlocking + inSmartMode`）——同一个「异步链没读动作」在两个链路上各栽一次。
+
+**正例**：延迟体整体包一次读动作，重活交给链内的 `nonBlocking`；守卫扫「复检/干活是否都在读动作之后」。
+**反例**：靠「调用方通常在 EDT」的隐含前提；只给点击/验收路径补；或以为「单测全绿＝这条链没问题」
+（本缺陷单测 7 例全绿）。
+
+**Seen 1× (2026-11-16)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |

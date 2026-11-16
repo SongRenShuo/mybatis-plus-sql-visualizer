@@ -376,3 +376,44 @@ iBatis 回归 28/2/9）。反向验证：摘掉 XML 侧 `resolvedStatementKeys.r
 属**改造前既有**的方言映射 EP 限制，与本次无关）。净 diff：**-266 / +66 行**（三处状态机退役）。
 
 **提交**：`501db7d89`。
+
+### 9.9 增补（2026-11-16 用户沙盒第二轮报障）：延迟预热补读动作 + XML 侧箭头加调用点门槛
+
+用户沙盒实测报两件，均同日修复（`e4b3fdd27`）。
+
+**A. `GutterWarmScheduler` 延迟派发缺读动作（IDE 日志 3 条 SEVERE）**
+
+- 现场：`idea.log` 12:35:42 连出 3 条 `SEVERE - #c.i.u.c.ThreadingAssertions - Read access is allowed
+  from inside read-action only`，三帧同源 `GutterWarmScheduler.scheduleWarmIfDue$lambda$0`（`:126` 的
+  `tag.isValid`；`:130` 经 `kickFileWarmers` 进 `warmCompletionContextOnce` / `PreviewAssemblyWarm.warmOnce`
+  的 `tag.containingFile`）。
+- 根因：F2 的延迟派发跑在 `AppScheduledExecutorService` 池线程上，**不持读动作**；F2 之前的「首渲染直踢」
+  跑在平台给 `getLineMarkerInfo` 的读动作里，故只有延迟路径会炸。
+- 修法：把「到点复检 + 踢出」整体包一次 `runReadAction`（三链内部重活各自 `ReadAction.nonBlocking`）。
+- **为什么两天没被发现**：`GutterWarmSchedulerTest` 的单测 seam（`syncDispatchForTest`/unit-test 模式）
+  让延迟体**同步跑在已持读动作的测试线程**里，断言永远不触发 ⇒ 新增源码扫描守卫
+  `GutterWarmSchedulerTest.延迟派发体必须包读动作`（含老形态自证），并记入 LESSONS **L78**。
+- 同日志 11-13 另有 41 条同族报错（`XmlSqlCompletionContextResolver.warmCandidates` 当时未包读动作，
+  已在 §二十四 修）——这是**同族在不同链路上的第二次**，故本轮补的是「机制级守卫」而不是再修一处。
+
+**B. iBatis XML 语句行箭头无调用点也显示（用户报障「改 id 后 XML 图标没消失」）**
+
+- 现场：`User.xml` 的 `<select id="selectAll">` 改名 `selectAll02` 后，Java 调用行图标正确消失
+  （P2.1 已修），XML 语句行**仍挂箭头**且点击无反应。
+- 根因（设计如此，非回归）：`IbatisXmlToJavaLineMarkerProvider.createMarker` 原为**无条件出箭头**，
+  目标存在性留到点击时查；书面证据＝仓内 `test六种语句标签全部出XML侧箭头`（夹具无 Java 调用点却断言 6 箭头）。
+- 修法：加三态调用点门槛（`IbatisJavaCallSites.lookupCallSite` → Found/Absent/Unknown），
+  provider 五段式（dumb 乐观不入缓存 / Found 入缓存 / Unknown 保留 / **Absent `remove` 并摘箭头** / 其余不出）；
+  回退通道 Registry `sqlvis.gutter.ibatisXmlArrowRequiresCaller`（默认 true）。
+- 守卫扩面：`IbatisGutterFailBranchGuardTest` 判定函数参数化，新增「XML 侧 createMarker 必须挂三态」
+  （缺 `remove` 即红）+ 缺 remove/漂移自证；`IbatisGutterHotPathTest` 禁用词表不变——搜索能力只准从
+  `IbatisJavaCallSites` 收口走，KDoc 写明这条边界。
+- 测试：矩阵 +4（命中入缓存 / 确定无调用点摘箭头并收回 / 判定未知缓存命中仍出 / dumb 乐观不入缓存）、
+  用户场景 +1、回退通道 +1；两条既有正例补 Java 调用点夹具以保持原断言。
+
+**读数**：定向 49 类 **408/0/0/0**；反向验证摘掉 `resolvedIbatisCallKeys.remove(key)` 恰 2 红
+（矩阵「确定无调用点」+ 守卫 XML 侧项）→ 恢复 0 红。
+
+**性能取舍（如实记录，待真机观察）**：调用点存在性走词索引查询，**常见词命中面大**（`selectAll`
+在 Java 侧也是常见方法名）——按「命中入缓存 / 确认缺失收回」处理，稳态零查询；若真机出现可测的
+慢趟变慢，先看 `[gutter-perf]` 与慢趟时长，再决定是否收紧（回退通道已就位）。
