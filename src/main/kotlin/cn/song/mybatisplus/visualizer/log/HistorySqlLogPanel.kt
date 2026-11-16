@@ -1005,7 +1005,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      */
     private inner class RerunSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            // F-12 修正（合并轮守卫复核）：裸 AllIcons 违反 ToolbarIconSemanticsTest 的
+            // MpvsIcons 统一口径（dev 全量桶覆盖缺口漏检），改走仓内图标表
+            e.presentation.icon = MpvsIcons.Execute
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.rerun")
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.rerun.tip")
         }

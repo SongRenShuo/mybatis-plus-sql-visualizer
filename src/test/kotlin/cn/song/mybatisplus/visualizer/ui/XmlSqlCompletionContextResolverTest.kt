@@ -25,6 +25,18 @@ import org.junit.Assert.assertTrue
  */
 class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
 
+    /**
+     * T-StartupReadLockFreeze §十九：候选实体现在是**项目级缓存**（按 `PsiModificationTracker` 失效）。
+     * Light 沙盒同一测试类共享一个 project 且测试间不改 PSI ⇒ 上一条用例的候选会漏进下一条
+     * （实测 `testNoNamespaceDegradesToNullMain` 因此变红）。每个用例前清缓存，保持用例隔离。
+     */
+    override fun setUp() {
+        super.setUp()
+        XmlSqlCompletionContextResolver.clearCandidatesCacheForTest()
+        XmlSqlCompletionContextResolver.tableNameEntitiesProviderForTest = null
+        XmlSqlCompletionContextResolver.resetEntityCacheForTest()
+    }
+
     // ------------------------------------------------------------------
     // fixture 工具
     // ------------------------------------------------------------------
@@ -253,5 +265,149 @@ class XmlSqlCompletionContextResolverTest : BasePlatformTestCase() {
         assertNotNull("注解方法场景应解析出主表", ctx.main)
         assertEquals("t_device_info", ctx.main?.tableName)
         assertEquals("注解方法参数名应含 @Param/实际名", listOf("entity"), ctx.paramNames)
+    }
+
+    // ------------------------------------------------------------------
+    // §二十五：MBG selectByExample(XxxExample) 的参数不是实体
+    // ------------------------------------------------------------------
+
+    /**
+     * 真机日志（2026-11-13 16:35）：`[completion] ctx: main=cust_channel_example columns=3`——
+     * 把 MBG 的 Example 类当成了实体，表名推成 `cust_channel_example`、列只有 Example 的 3 个字段，
+     * 列名补全于是给出完全错误的候选。修复后应按约定回查同包实体。
+     */
+    fun testExampleParamNotTreatedAsEntity() {
+        addMapperFile(
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+                private String channelName;
+            }
+
+            public class CustChannelExample {
+                private Integer distinct;
+                private String orderByClause;
+                private java.util.List oredCriteria;
+            }
+
+            public interface CustChannelMapper {
+                CustChannel selectByExample(CustChannelExample example);
+            }
+            """.trimIndent(),
+        )
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.CustChannelMapper">
+              <select id="selectByExample" parameterType="com.example.CustChannelExample" resultType="map">
+                select * from cust_channel
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectByExample",
+        )
+        assertEquals("主表必须取同包实体，而不是 Example 类", "cust_channel", ctx.main?.tableName)
+    }
+
+    /** 同包实体不存在时宁可 main=null，也不得把 Example 当实体（否则补全给出 xxx_example 的假列）。 */
+    fun testExampleParamWithoutEntityDegradesToNull() {
+        addMapperFile(
+            """
+            public class OrphanExample {
+                private Integer distinct;
+            }
+
+            public interface OrphanMapper {
+                Object selectByExample(OrphanExample example);
+            }
+            """.trimIndent(),
+        )
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.OrphanMapper">
+              <select id="selectByExample" parameterType="com.example.OrphanExample" resultType="map">
+                select * from orphan
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectByExample",
+        )
+        assertNull("Example 无对应实体时必须降级为 null", ctx.main)
+    }
+
+    /**
+     * §二十九：实体解析必须按「类名 + 文件版本」缓存。
+     *
+     * 真机实测 `EntityResolver.resolve` 对同一实体每次 9 秒（`resolve=9314/9447/9259ms` 三连），
+     * 而它自己的缓存键含 PSI identity，PSI 一重建就失配 ⇒ 每次点击重算。这里钉住「第二次不再解析」。
+     */
+    fun testEntityResolveCached() {
+        addMapperFile(
+            """
+            @com.baomidou.mybatisplus.annotation.TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+            }
+            """.trimIndent(),
+        )
+        val xml = """
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectAll" resultType="map">select * from cust_channel</select>
+            </mapper>
+        """.trimIndent()
+        val first = resolveXml(xml, "selectAll")
+        val second = resolveXml(xml, "selectAll")
+        assertEquals("cust_channel", first.main?.tableName)
+        assertEquals("cust_channel", second.main?.tableName)
+        assertEquals(
+            "同一实体只应真正解析一次（第二次命中类名+版本缓存）",
+            1,
+            XmlSqlCompletionContextResolver.entityResolveRuns,
+        )
+    }
+
+    /**
+     * §二十六：mapper 接口解析不到时（MBG 风格 / 沙盒没 Load Maven），用 SQL 里的 FROM 表名反查实体。
+     * 真机 16:55 出现过 `main=-`，那时补全整片为空。
+     */
+    fun testFromTableNameFallback() {
+        // 注意：必须保留 addFileToProject 返回的 Java 文件句柄——`myFixture.file` 是后配的 XML，
+        // 从它里面找 Java 类必然 NoSuchElement（本轮实测踩到）。
+        val javaFile = myFixture.addFileToProject(
+            "CustChannelHolder.java",
+            """
+            package com.example;
+
+            @com.baomidou.mybatisplus.annotation.TableName("cust_channel")
+            public class CustChannel {
+                private Long id;
+                private String channelCode;
+                private String channelName;
+            }
+            """.trimIndent(),
+        )
+        // Light 沙盒里 EntityClassFinder 依赖索引（返回空），用注入缝提供「表名 → 实体」
+        val entityClass = PsiTreeUtil.findChildrenOfType(javaFile, com.intellij.psi.PsiClass::class.java)
+            .first { it.name == "CustChannel" }
+        XmlSqlCompletionContextResolver.entityFinderForTest = { _, table ->
+            if (table == "cust_channel") entityClass else null
+        }
+        val ctx = resolveXml(
+            """
+            <mapper namespace="com.example.NoSuchMapperInterface">
+              <select id="selectAll" resultType="map">
+                select * from cust_channel where id = #{'$'}{id}
+              </select>
+            </mapper>
+            """.trimIndent(),
+            "selectAll",
+        )
+        XmlSqlCompletionContextResolver.entityFinderForTest = null
+        assertEquals("应按 FROM 表名反查到实体", "cust_channel", ctx.main?.tableName)
+        assertTrue("反查到的实体应带列", (ctx.main?.columns?.size ?: 0) >= 3)
     }
 }

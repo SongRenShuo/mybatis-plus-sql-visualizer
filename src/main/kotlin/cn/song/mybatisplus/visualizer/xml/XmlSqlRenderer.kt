@@ -76,8 +76,10 @@ class XmlSqlRenderer {
         bindNames: Set<String> = emptySet(),
         traceEnabled: Boolean = false,
         isCancelled: () -> Boolean = { false },
+        /** T-MbgExamplePreview R1：`${}` 空值输出 `{{表达式}}` 占位（预览链开启，默认关）。 */
+        emptyDollarPlaceholder: Boolean = false,
     ): RenderedXmlSql {
-        val context = DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues)
+        val context = DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues, emptyDollarPlaceholder)
         if (traceEnabled) context.renderTrace = XmlRenderTraceRecorder(node, isCancelled)
         context.applyNode(node)
         // T-M25.5：渲染完成后提取 bind 求值结果（含覆盖值）——参数行自动回填显示

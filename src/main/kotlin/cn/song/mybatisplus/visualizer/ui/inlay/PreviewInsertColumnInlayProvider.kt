@@ -144,7 +144,11 @@ object PreviewInlayScope {
  * 在**本面板预览编辑器**的 INSERT 语句上，为每个 VALUES 表达式 / SELECT 投影挂目标列名提示，
  * 让多列动态 INSERT 的「列-值错位」一眼可见。规划规则见 [InsertColumnInlayPlanner]。
  *
- * 三道闸门（任一不满足即返回 null，平台侧「无 collector」= 零 inlay）：
+ * 四道闸门（任一不满足即返回 null，平台侧「无 collector」= 零 inlay）：
+ *  0. **原生让位**（T-PreviewInlayNativeYield）：[NativeColumnInlayYieldGate] 判定 IDEA 自带的 SQL
+ *     列名 inlay（providerId `sql.column.names.inlay.hints`，选项 `sql.show.column.names.in.insert.values`）
+ *     在位时**整体让位**——那一侧默认开启、做的正是同一件事，两边都画就是同一 offset 上两枚同名胶囊。
+ *     判据只取「在位」，不取「本次这条语句对方是否真画得出」（收集期两侧互相不可见，平台机制见该门 KDoc）；
  *  1. **作用域**：[PreviewInlayScope.previewStatementKind] 双锚点（文件名 + userData）；
  *  2. **语句类型**：`xmlModel.kind == INSERT`（面板经 [PreviewInlayScope.attach] 注入；
  *     非 INSERT 与「无 xmlModel 的非 XML 预览链」都取不到 INSERT 值 → 不提示）；
@@ -166,6 +170,9 @@ class PreviewInsertColumnInlayProvider : InlayHintsProvider<NoSettings>, DumbAwa
         settings: NoSettings,
         sink: InlayHintsSink,
     ): InlayHintsCollector? {
+        // 第 0 道（T-PreviewInlayNativeYield）：IDEA 自带的 SQL 列名 inlay 在位即整体让位。
+        // 放在最前——它是「这条功能还要不要」的开关，作用域/类型/可判三道只决定「画哪些」。
+        if (NativeColumnInlayYieldGate.shouldYield()) return null
         if (PreviewInlayScope.previewStatementKind(file, editor) != XmlStatementKind.INSERT) return null
         return InsertColumnInlayCollector(PresentationFactory(editor))
     }

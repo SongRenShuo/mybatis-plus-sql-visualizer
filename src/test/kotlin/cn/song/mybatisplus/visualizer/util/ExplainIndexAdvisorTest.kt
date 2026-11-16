@@ -422,6 +422,7 @@ class ExplainIndexAdvisorTest {
         assertTrue(ExplainIndexAdvisor.advise("MySQL", listOf("EXPLAIN"), rows = listOf(listOf("foo"))).isEmpty())
     }
 
+
     // ---------- F59（T-PerfSweep18）：文本树 Regex 提 object 单例 ----------
 
     /**

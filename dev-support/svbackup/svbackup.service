@@ -1,0 +1,12 @@
+[Unit]
+Description=svbackup — 测试服务器逻辑备份（采集 + restic 上传 + 滚动保留 + 容量闸门）
+After=docker.service
+Wants=docker.service
+OnFailure=svbackup-alert@%n.service
+
+[Service]
+Type=oneshot
+Environment="HOME=/root"
+Environment="XDG_CACHE_HOME=/root/.cache"
+ExecStart=/usr/local/bin/svbackup-run.sh
+TimeoutStartSec=3600

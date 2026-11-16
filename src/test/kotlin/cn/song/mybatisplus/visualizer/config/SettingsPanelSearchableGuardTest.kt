@@ -258,6 +258,9 @@ class SettingsPanelSearchableGuardTest : BasePlatformTestCase() {
         panel.updateSection.versionLabel,
         panel.updateSection.statusLabel,
         panel.updateSection.installedLabel,
+        // T-LocalUpdateDir：本地安装包目录的扫描/校验状态行（动态文案：目录合法性与包计数随输入变化，
+        // 不是固定设置项；行标签 settings.update.localDir 已在搜索索引登记，搜索面不缺）
+        panel.updateSection.localDirStatusLabel,
     )
 
     // ------------------------------------------------------------------

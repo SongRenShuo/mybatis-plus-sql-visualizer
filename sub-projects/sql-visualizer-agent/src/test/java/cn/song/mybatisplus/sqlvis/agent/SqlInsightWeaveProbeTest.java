@@ -39,11 +39,19 @@ public class SqlInsightWeaveProbeTest {
     }
 
     private boolean disabled;
+    private boolean gateSaved;
     private Object statement;
 
     @Before public void setUp() throws Exception {
         disabled = AgentState.isDisabled();
         AgentState.setDisabled(false);
+        // T-BranchAlignMerge 2.7（2026-11-17）：主线（dev/master）并入口径＝NestGate 默认开。
+        // 本类守卫的是洞察执行身份模型（异对象嵌套＝两次独立执行），该模型与「外层一律抑制」
+        // 在门开启时正面相撞（NestGate 类 KDoc 存档的 2026-10-30 裁决）——主线下该形态的外层帧
+        // 会被抑制，属已登记的运行时差异。本类全部用例按**回退开关形态**（nestGate=false）跑，
+        // 即守卫「关闭去重门时每个已织 execute 各自产事件」的洞察契约；生产遇洞察身份丢失
+        // 置 -Dsqlvis.agent.nestGate=false 即回到本类钉住的形态。
+        gateSaved = nestGateEnabled(false);
         queue().clear();
         String name = StatementFixture.class.getName();
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -65,7 +73,27 @@ public class SqlInsightWeaveProbeTest {
 
     @After public void tearDown() throws Exception {
         queue().clear();
+        nestGateRestore(gateSaved);
         AgentState.setDisabled(disabled);
+    }
+
+    /** NestGate 在 hook 包且 package-private，走反射桥（同 NestGateTest 先例）。 */
+    private static boolean nestGateEnabled(boolean value) throws Exception {
+        final Class<?> gate = Class.forName("cn.song.mybatisplus.sqlvis.agent.hook.NestGate");
+        final Field cur = gate.getDeclaredField("enabled");
+        cur.setAccessible(true);
+        final boolean saved = cur.getBoolean(null);
+        final java.lang.reflect.Method set = gate.getDeclaredMethod("setEnabledForTest", boolean.class);
+        set.setAccessible(true);
+        set.invoke(null, value);
+        return saved;
+    }
+
+    private static void nestGateRestore(boolean value) throws Exception {
+        final Class<?> gate = Class.forName("cn.song.mybatisplus.sqlvis.agent.hook.NestGate");
+        final java.lang.reflect.Method set = gate.getDeclaredMethod("setEnabledForTest", boolean.class);
+        set.setAccessible(true);
+        set.invoke(null, value);
     }
 
     @Test public void pureIreturnUpdateIsAlreadyCaptured() throws Exception {

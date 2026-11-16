@@ -1,0 +1,86 @@
+# 在 windows runner 上起一个本地 MySQL 实例（供 nightly-full.yml 的 e2e / database 两条腿共用）。
+#
+# 为什么不写 `services:`：GitHub 的 service container / job container **只在 Linux runner 支持**，
+# windows、macOS runner 上用了直接失败。而 windows 镜像（Windows2022-Readme / Install-MysqlCli.ps1
+# 实证）只装了 mysql **客户端**，没有 server。所以这里自己下官方 zip、初始化、注册成 Windows 服务。
+#
+# 为什么注册服务而不是 Start-Process：step 结束后起的进程不保证保留；Windows 服务跨步骤存活，
+# 且随 job 结束被一次性 runner 丢弃。
+#
+# 版本钉 8.0.x（8.0.45）：与 demo 的 connector-j 8.0.28 同大版本、与种子 SQL（dev-support/test-demo/db）
+# 实测兼容。root 口令固定 root：demo 的 .idea/dataSources*.xml 模板与 DB 集成测试常量都是 root/root。
+#
+# 为什么不用 actions/cache 存 zip：245MB 会挤掉仓库 10GB 缓存里更值钱的编译缓存，夜间一天一次不值当。
+name: local-mysql
+description: '在 windows runner 上起本地 MySQL（services 语法只支持 Linux runner，镜像只有客户端）'
+
+runs:
+  using: composite
+  steps:
+    - name: 起本地 MySQL
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ver  = '8.0.45'
+        $base = 'C:\mysql'
+
+        function Test-Port([int]$Port) {
+          $c = New-Object System.Net.Sockets.TcpClient
+          try { $c.Connect('127.0.0.1', $Port); return $true }
+          catch { return $false }
+          finally { $c.Dispose() }
+        }
+
+        if (Test-Port 3306) { Write-Host '127.0.0.1:3306 已在监听，复用现有实例'; exit 0 }
+
+        $zip = Join-Path $env:RUNNER_TEMP "mysql-$ver-winx64.zip"
+        if (-not (Test-Path -LiteralPath $zip)) {
+          $url = "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-$ver-winx64.zip"
+          Write-Host "下载 $url"
+          curl.exe -sSL --retry 4 --retry-delay 5 -o $zip $url
+          if ($LASTEXITCODE -ne 0) { throw "MySQL zip 下载失败：exit=$LASTEXITCODE" }
+        }
+        if ((Get-Item -LiteralPath $zip).Length -lt 200MB) {
+          throw "MySQL zip 尺寸异常：$((Get-Item -LiteralPath $zip).Length) bytes（下载被截断或拿到错误页）"
+        }
+
+        $stage = Join-Path $env:RUNNER_TEMP 'mysql-unzip'
+        Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+        Move-Item -LiteralPath (Join-Path $stage "mysql-$ver-winx64") -Destination $base -Force
+
+        $ini = Join-Path $base 'my.ini'
+        @(
+          '[mysqld]',
+          'basedir=C:/mysql',
+          'datadir=C:/mysql/data',
+          'port=3306',
+          'bind-address=127.0.0.1',
+          'character-set-server=utf8mb4',
+          'collation-server=utf8mb4_general_ci'
+        ) | Set-Content -LiteralPath $ini -Encoding ascii
+
+        & "$base\bin\mysqld.exe" --defaults-file="$ini" --initialize-insecure --console
+        if ($LASTEXITCODE -ne 0) { throw "mysqld --initialize-insecure 失败：exit=$LASTEXITCODE" }
+
+        & "$base\bin\mysqld.exe" --install MySQLRunner --defaults-file="$ini"
+        if ($LASTEXITCODE -ne 0) { throw "mysqld --install 失败：exit=$LASTEXITCODE" }
+        Start-Service MySQLRunner
+
+        $ok = $false
+        for ($i = 1; $i -le 90; $i++) { if (Test-Port 3306) { $ok = $true; break }; Start-Sleep -Seconds 2 }
+        if (-not $ok) { throw 'mysqld 起后 180s 内未监听 3306' }
+
+        $mysql = "$base\bin\mysql.exe"
+        & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root --skip-password `
+          -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+        if ($LASTEXITCODE -ne 0) { throw "设置 root 口令失败：exit=$LASTEXITCODE" }
+
+        # 免掉「127.0.0.1 反解成 localhost」这条隐式依赖：显式建同口令的 127.0.0.1 账号
+        $env:MYSQL_PWD = 'root'
+        & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root `
+          -e "CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'root'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+        if ($LASTEXITCODE -ne 0) { throw "创建 root@127.0.0.1 失败：exit=$LASTEXITCODE" }
+        & $mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u root -e "SELECT VERSION() AS v;"
+        if ($LASTEXITCODE -ne 0) { throw 'root/root 登录自检失败' }
+        'MYSQL_PWD=root' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        'MPV_MYSQL_BIN=C:\mysql\bin\mysql.exe' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

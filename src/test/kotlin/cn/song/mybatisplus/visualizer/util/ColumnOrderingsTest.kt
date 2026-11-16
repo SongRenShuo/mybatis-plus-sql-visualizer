@@ -138,10 +138,14 @@ class ColumnOrderingsTest {
             listOf("v", "r2"),
             listOf("", "r3"),
         )
-        // 两个空值行彼此相等，稳定排序保持原始顺序（r1 在前）——升序降序一致。
+        // 两个空值行彼此相等，稳定排序保持原始顺序（r1 在前）。
+        // 方向口径以 [ColumnOrderings] KDoc 定案为准：**方向不进本对象**——升序空值恒尾，
+        // 降序由平台 TableRowSorter 对同一比较器反转（空值即恒头）；「双向恒排尾」须面板侧
+        // 接管方向才能实现，另立项处理。合并轮收口修正（2026-11-13）：本用例原第二断言按
+        // 「双向恒尾」写期望，与实现定案相悖（dev 全量桶覆盖缺口漏检）。
         val asc = ColumnOrderings.byColumnIndex<List<String?>>(0) { row, i -> row[i] }!!
         assertEquals(listOf("r2", "r1", "r3"), rows.sortedWith(asc).map { it[1] })
-        assertEquals(listOf("r2", "r1", "r3"), rows.sortedWith(asc.reversed()).map { it[1] })
+        assertEquals(listOf("r1", "r3", "r2"), rows.sortedWith(asc.reversed()).map { it[1] })
     }
 
     @Test

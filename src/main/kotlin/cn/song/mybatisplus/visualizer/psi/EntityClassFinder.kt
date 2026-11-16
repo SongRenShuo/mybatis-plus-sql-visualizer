@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
@@ -11,9 +12,13 @@ import com.intellij.openapi.roots.ProjectRootModificationTracker
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.psi.util.PsiModificationTracker
+import com.intellij.psi.impl.java.stubs.index.JavaAnnotationIndex
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
+import com.intellij.util.concurrency.AppExecutorUtil
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 实体类查找器（T-M36.2：SQL 反向转换的 LambdaQueryWrapper 上下文解析）。
@@ -24,9 +29,10 @@ import com.intellij.psi.search.PsiShortNamesCache
  *    `sys_account_role_rel` → `AccountRoleRel[Entity]`，前缀不一致常见命名直接命中）→
  *    [PsiShortNamesCache] 按类名检索 → [EntityResolver] 解析校验表名精确匹配，防同名词误配；
  * 2. **@TableName 反查慢路径**（快路径未命中时兜底，结果项目级缓存）：
- *    全量扫描项目类，匹配「@TableName 注解值」或「推断表名」等于 SQL 表名的类——
- *    扫描结果（类名/全限定名）缓存于 Project userData，以 `PsiModificationTracker.modificationCount`
- *    失效（PSI 任何修改自动重扫一次；无实体匹配场景不再每次转换全量扫描——性能修复）。
+ *    全量扫描项目类，匹配「@TableName 注解值」或「推断表名」等于 SQL 表名的类。
+ *    扫描**一次建全表索引**（表名 → 类名/全限定名）缓存于 Project userData，任意表名查询 O(1)；
+ *    失效基准＝项目结构版本（[ProjectRootModificationTracker]）+ TTL（见 [ReverseLookupCache] 注释：
+ *    挂 `PsiModificationTracker` 会被我们自己写 exec 文件/临时 PSI 顶掉，导致每次打开预览都重扫）。
  *
  * T-JarEmbedded W2（20261016）：**实体类可能来自依赖 JAR**（共享模型模块，工程无源码）——快路径
  * 此前用 `projectScope`，这类工程的实体一个都反查不到（用户报障场景）。现补**库兜底**：项目 scope
@@ -272,7 +278,8 @@ class EntityClassFinder(private val project: Project) {
                     for (clazz in namesCache.getClassesByName(shortName, scope)) {
                         if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
                         if (isVoDto(clazz)) continue
-                        val table = tableNameAnnotation(clazz) ?: continue
+                        // 依赖库里的实体同样按各 ORM 的表名注解认（MP `@TableName` / JPA `@Table(name)`）
+                        val table = TableNameAnnotations.tableNameOfClass(clazz) ?: continue
                         if (table.isBlank()) continue
                         tables.getOrPut(table.lowercase()) { mutableListOf() } +=
                             MatchedClass(shortName, clazz.qualifiedName)
@@ -336,25 +343,246 @@ class EntityClassFinder(private val project: Project) {
      * 「@TableName 注解值」或「推断表名（[EntityResolver.inferDecoratedTableName]）」等于 SQL 表名
      * （大小写不敏感）的类。
      *
-     * **性能（用户反馈：无实体场景转换卡顿）**：全量扫描为 O(项目类数) PSI 索引访问，此前每次
-     * 转换都执行（快路径 0 命中时必触发，JOIN 每张副表各一次）——现把扫描结果（类全限定名）
-     * 缓存于 Project userData：同表名后续 find 直接按类名重取（几次索引查询）；缓存以
-     * `PsiModificationTracker.modificationCount` 失效（PSI 修改后自动重扫一次）。
+     * **性能（用户反馈：无实体场景转换卡顿 / 打开预览仍慢）**：全量扫描为 O(项目类数) PSI 索引访问。
+     * 现在**一次扫描建「表名 → 类」全表索引**（不是「查一个表名扫一遍」——实测 16804 类的工程一趟
+     * 3.8s，用户每换一张表再吃一次），缓存于 Project userData，任意表名查询 O(1)；索引建立中时
+     * 后来的调用方**不等待**，立即返回空（预览照常打开、上下文降级），下一次查询即命中。
+     * 失效基准＝项目结构版本 + TTL（[ReverseLookupCache] 有实测依据）。
      * 缓存存类名字符串而非 PsiClass 引用（PSI 对象随文件修改失效，引用长期持有不安全）。
      * 须在 ReadAction 内调用。
      */
     private fun findByTableNameAnnotationCached(tableName: String): List<PsiClass> {
         val entry = reverseLookupCache()
-        val key = tableName.lowercase()
-        val cached = entry.names[key]
-        if (cached != null) {
-            return cached.mapNotNull { restoreMatched(it) }
+        ensureIndexBuilt(entry)
+        var hit = entry.index[tableName.lowercase()]
+        // 跨 ORM 兜底：注解索引只覆盖「带表名注解」的实体（MP `@TableName`、JPA `@Table`）。工程里是
+        // MBG/iBatis/Kotlin 或自定义映射、又没有注解时，这里会**全部未命中**——按查询做一次
+        // 「全项目推断扫描」并合并进同一索引（只此一次，之后同结构版本都命中）。
+        // 判据用「索引里是否有该表」，不是「有没有注解」：一个工程里MP 与 MBG 混用时，MP 部分走
+        // 注解索引、MBG 部分靠这次回补。
+        if (hit == null && !entry.inferredScanDone) {
+            ensureInferredScan(entry)
+            hit = entry.index[tableName.lowercase()]
         }
-        entry.scans++
-        val matched = scanAllClassesByTableName(tableName)
-        entry.names[key] = matched.map { MatchedClass(it.name ?: return@map null, it.qualifiedName) }
-            .filterNotNull()
-        return matched
+        // 顺序契约不变：旧实现按类名排序返回（多候选时调用方按此顺序处理）
+        return (hit ?: emptyList())
+            .sortedBy { it.shortName }
+            .mapNotNull { restoreMatched(it) }
+    }
+
+    /**
+     * 「全项目推断」回补（跨 ORM 兜底）：只在**注解索引未命中**时触发，结果合并进同一索引并置
+     * [ReverseLookupCache.inferredScanDone]（每个结构版本/缓存期至多一次）。
+     *
+     * 成本与口径同 [ensureIndexBuilt]：派到应用线程池、EDT 不等、非 EDT 有界等一个预算；本次等不到
+     * 就本次降级（返回空），下一次查询命中。
+     */
+    private fun ensureInferredScan(entry: ReverseLookupCache) {
+        // 项目级「跨 ORM 回补结果」缓存（按结构版本）：命中就直接并进去，不再跑全项目推断。
+        // 真机教训（2026-11-13 22:20 用户沙盒）：缓存条目按 TTL(5min) 重建，而回补标记原本挂在条目上
+        // ⇒ 每个 TTL 周期都要重扫一遍全项目（该工程实测 `跨 ORM 回补完成 tables=8906`，一趟 4.7s+）。
+        cachedInferredIndex()?.let { cached ->
+            if (!entry.inferredScanDone) {
+                for ((table, classes) in cached) entry.index.getOrPut(table) { classes }
+                entry.inferredScanDone = true
+                LOG.info("[open-perf] 跨 ORM 回补命中项目级缓存 tables=${cached.size}（跳过全项目推断）")
+            }
+            return
+        }
+        val app = ApplicationManager.getApplication()
+        val onEdt = app.isDispatchThread
+        if (entry.inferredBuilding.compareAndSet(false, true)) {
+            if (syncIndexBuildForTest ?: app.isUnitTestMode) {
+                runInferredScan(entry)
+                return
+            }
+            if (!retryCooldownElapsed(entry)) {
+                entry.inferredBuilding.set(false)
+                return
+            }
+            val started = System.currentTimeMillis()
+            ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
+                try {
+                    scanInferredTableIndex()
+                } catch (pce: com.intellij.openapi.progress.ProcessCanceledException) {
+                    throw pce
+                } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t
+                    null
+                }
+            }
+                .inSmartMode(project)
+                .expireWith(project)
+                .submit(AppExecutorUtil.getAppExecutorService())
+                .onSuccess { built -> mergeInferred(entry, built, started) }
+                .onError { t ->
+                    LOG.info("[open-perf] 跨 ORM 回补未完成：${t.javaClass.simpleName}")
+                    entry.lastAbortAt = System.currentTimeMillis()
+                    entry.inferredBuilding.set(false)
+                }
+        }
+        if (onEdt) return
+        runCatching { entry.inferredLatch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS) }
+    }
+
+    /** 同步口径（测试/预热线程）跑一次全项目推断扫描并合并。 */
+    private fun runInferredScan(entry: ReverseLookupCache) {
+        val started = System.currentTimeMillis()
+        val built = runCatching {
+            scanInferredTableIndex()
+        }.getOrElse { t ->
+            if (FatalErrors.isFatal(t)) throw t
+            null
+        }
+        mergeInferred(entry, built, started)
+    }
+
+    private fun mergeInferred(entry: ReverseLookupCache, built: Map<String, List<MatchedClass>>?, startedMs: Long) {
+        try {
+            if (built == null) return
+            if (project.getUserData(REVERSE_LOOKUP_CACHE_KEY) !== entry) return
+            // 合并而非覆盖：注解索引那部分更准（值直接来自注解），不被推断结果冲掉
+            for ((table, classes) in built) entry.index.getOrPut(table) { classes }
+            entry.inferredScanDone = true
+            entry.inferredScanCount++
+            // 落项目级缓存（按结构版本失效）：TTL 重建的条目直接复用，不再重扫
+            project.putUserData(INFERRED_INDEX_KEY, projectStructureVersion() to built)
+            LOG.info(
+                "[open-perf] 跨 ORM 回补完成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms",
+            )
+        } finally {
+            entry.inferredBuilding.set(false)
+            entry.inferredLatch.countDown()
+        }
+    }
+
+    /**
+     * 建索引：**一次全量扫描覆盖所有表名**，之后任意表名查询都是 O(1)。
+     *
+     * 旧口径是「查一个表名扫一遍」，而 `cust-big-demo` 这类工程一次扫描 3.8s（16804 个类逐个读
+     * `@TableName` / 推断表名）——用户每打开一条不同表的语句就再吃一次。
+     *
+     * **扫描不上调用方线程**：派到应用线程池（`ReadAction.nonBlocking`，不持读锁等索引），
+     * 非 EDT 调用方**至多**等 [INDEX_WAIT_BUDGET_MS]；超预算就用当前（多半空）的结果返回。
+     * 真机实证（2026-11-13 沙盒）：一趟「一次建成」实测 **4737ms / 9675ms**，压在点击链上就是
+     * 用户看到的「打开还是慢」。
+     *
+     * **EDT 一律不等**（补全每敲一个字符都会走到这里）：`ApplicationManager.isDispatchThread` 时
+     * 只派发、立即返回。等于在 EDT 上等一次动辄数秒的后台扫描，正是本轮要根治的形态；
+     * 索引由预热（BGT）/上一次派发在后台建好，下一次查询即命中。
+     */
+    private fun ensureIndexBuilt(entry: ReverseLookupCache) {
+        if (entry.built) return
+        val app = ApplicationManager.getApplication()
+        val onEdt = app.isDispatchThread
+        if (entry.building.compareAndSet(false, true)) {
+            // 测试口径走同步：既有断言按「首次查询即建好」写（`indexBuildCount`/`scans` 读数）
+            if (syncIndexBuildForTest ?: app.isUnitTestMode) {
+                val started = System.currentTimeMillis()
+                val built = runCatching {
+                    scanAllTablesIndex()
+                }.getOrElse { t ->
+                    if (FatalErrors.isFatal(t)) throw t
+                    null
+                }
+                applyBuiltIndex(entry, built, started)
+                return
+            }
+            if (!retryCooldownElapsed(entry)) {
+                // 刚被撤销/失败过：不立刻重投，否则连续输入会把「扫一段被取消」打成死循环
+                releaseBuild(entry)
+                return
+            }
+            dispatchIndexBuild(entry)
+        }
+        if (onEdt) return
+        runCatching { entry.latch.await(INDEX_WAIT_BUDGET_MS, TimeUnit.MILLISECONDS) }
+    }
+
+    /** 上次被撤销/失败后的冷却窗口——防止「输入 → 扫描被写动作取消 → 下次输入再投」反复空转。 */
+    private fun retryCooldownElapsed(entry: ReverseLookupCache): Boolean {
+        val last = entry.lastAbortAt
+        return last == 0L || System.currentTimeMillis() - last >= INDEX_RETRY_COOLDOWN_MS
+    }
+
+    /**
+     * 把全量扫描派到应用线程池（不持读锁等索引；扫描内部自带取消检查）。
+     *
+     * 与写动作的关系：`ReadAction.nonBlocking` 在平台要拿写权限时会被撤销，本扫描每
+     * [LIBRARY_SWEEP_CANCEL_INTERVAL] 个短名 `ProgressManager.checkCanceled()` 一次，
+     * 所以「用户一打字」就能让出读锁（撤销即抛 PCE，见下方不吞 PCE 的写法）。
+     */
+    private fun dispatchIndexBuild(entry: ReverseLookupCache) {
+        // 起点在**派发前**：日志里的耗时含排队 + 扫描，是调用方视角的真实成本（曾被写成只量落地那一下 = 1ms）
+        val started = System.currentTimeMillis()
+        ReadAction.nonBlocking<Map<String, List<MatchedClass>>?> {
+            try {
+                scanAllTablesIndex()
+            } catch (pce: com.intellij.openapi.progress.ProcessCanceledException) {
+                throw pce // 撤销要能被平台看见（否则非阻塞读动作退化成「不可撤销的长读者」）
+            } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t
+                LOG.info("[open-perf] 反查索引扫描异常：${t.javaClass.simpleName}")
+                null
+            }
+        }
+            .inSmartMode(project)
+            .expireWith(project)
+            .submit(AppExecutorUtil.getAppExecutorService())
+            .onSuccess { built -> applyBuiltIndex(entry, built, started) }
+            .onError { t ->
+                LOG.info("[open-perf] 反查索引建立未完成：${t.javaClass.simpleName}（冷却 ${INDEX_RETRY_COOLDOWN_MS}ms 后重试）")
+                entry.lastAbortAt = System.currentTimeMillis()
+                releaseBuild(entry)
+            }
+    }
+
+    /**
+     * 索引建成落地（同步/异步共用）。三件事按序做完：填索引 → 置 `built`（**@Volatile，写在其后**，
+     * 保证读到 `built=true` 的线程一定看得到已填充的 `index`）→ 放行等待者。
+     *
+     * @param startedMs 扫描起点（派发前/同步分支进入前），用于日志给出调用方视角的真实耗时
+     */
+    private fun applyBuiltIndex(
+        entry: ReverseLookupCache,
+        built: Map<String, List<MatchedClass>>?,
+        startedMs: Long,
+    ) {
+        try {
+            if (built == null) return
+            // 条目可能已被换掉（启动期结构版本抖动 / TTL 到期）。真机教训（2026-11-13 22:20 用户沙盒）：
+            // 一个疗程里 `候选源=注解索引` 打了 7 次、只 1 次「一次建成」——说明 6 次扫描的结果被
+            // 「条目已换」直接丢弃、然后又在新条目上重扫。改为**落到当前条目**：结果对当前结构仍成立
+            // （本次扫描就是在新结构下跑的），丢弃才是浪费。
+            val current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return
+            val target = current
+            if (target.built) return
+            entry.index.putAll(built)
+            target.index.putAll(built)
+            // 已有项目级回补结果（同一结构版本）→ 直接并进来，新条目立刻具备 MBG/iBatis 那部分
+            cachedInferredIndex()?.let { cached ->
+                for ((table, classes) in cached) target.index.getOrPut(table) { classes }
+                target.inferredScanDone = true
+            }
+            target.scans++
+            target.built = true
+            indexBuildCount(project).incrementAndGet()
+            LOG.info(
+                "[open-perf] 反查索引一次建成 tables=${built.size} 耗时=${System.currentTimeMillis() - startedMs}ms" +
+                    " testSync=${syncIndexBuildForTest == true || ApplicationManager.getApplication().isUnitTestMode}",
+            )
+        } finally {
+            releaseBuild(entry)
+            // 顺手放行「当前条目」的等待者——等待者可能挂在被替换掉的旧条目上
+            val current = project.getUserData(REVERSE_LOOKUP_CACHE_KEY)
+            if (current != null && current !== entry) releaseBuild(current)
+        }
+    }
+
+    /** 放行等待者并释放在途标记（失败路径同样要放行，否则等待者白等一个预算）。 */
+    private fun releaseBuild(entry: ReverseLookupCache) {
+        entry.building.set(false)
+        entry.latch.countDown()
     }
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
@@ -367,44 +595,127 @@ class EntityClassFinder(private val project: Project) {
             .firstOrNull { it.qualifiedName == matched.qualifiedName && !isVoDto(it) }
     }
 
-    /** 全量扫描匹配表名的类（P2：跳过接口/枚举/注解类——MP 实体恒为 class）。 */
-    private fun scanAllClassesByTableName(tableName: String): List<PsiClass> {
+    /**
+     * 建「表名（小写）→ 匹配类」索引。**候选源＝平台注解索引**，不再遍历全项目类。
+     *
+     * 演进（每步都有真机读数）：
+     *  1. 「查一个表名就把全项目类扫一遍」——16804 类一趟 3.8s，用户每换一张表再吃一次；
+     *  2. 「一次扫描建全表索引」——消掉重复，但这一趟本身 **4.7~9.7s**（逐类 `inferDecoratedTableName`
+     *     要走命名策略/设置）；
+     *  3. 现在：`JavaAnnotationIndex.getAnnotations("TableName", …)` **只取带注解的类**（索引查询，
+     *     O(log n) + 候选数）。`cust-big-demo` 上候选从 16804 降到「带 `@TableName` 的实体数」，
+     *     且不再为每个非实体类算推断表名——那才是 4.7s 的大头。
+     *
+     * 为什么可以丢掉「无注解按类名推断」这半边：慢路径存在的理由是「实体名与表名对不上、只有注解能
+     * 说明」，而**按命名约定的匹配本来就走快路径**（[candidateClassNames] 4 个候选 + `EntityResolver`
+     * 按真实策略校验表名，覆盖驼峰/Entity 后缀/`t_` 前缀等）。索引侧不再重复做这件事。
+     *
+     * 注解索引的键是**简单名**（243 字节码实证：`JavaAnnotationElementType.indexStub` 先 `indexOf('(')`
+     * 截断再取短类名，属性名/属性值都不进索引）——所以下面按名字拿到候选后**自己读注解值**，
+     * 并按注解原文筛掉别家同名注解（不 resolve，缺依赖时也能判）。
+     *
+     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值的实体取不到表名（老版本全量扫描同样
+     * 取不到注解值，但会退化成「按类名推断」而可能命中）——约定命名场景仍由快路径兜住。
+     */
+    /** 项目级「跨 ORM 回补结果」——同结构版本才有效（结构变了就作废重扫）。 */
+    private fun cachedInferredIndex(): Map<String, List<MatchedClass>>? {
+        val cached = project.getUserData(INFERRED_INDEX_KEY) ?: return null
+        return if (cached.first == projectStructureVersion()) cached.second else null
+    }
+
+    private fun scanAllTablesIndex(): Map<String, List<MatchedClass>> {
+        indexScanDelayMsForTest?.let { if (it > 0) Thread.sleep(it) }
+        // 只建「注解索引」这一半；未命中的表由 findByTableNameAnnotationCached 触发
+        // `ensureInferredScan`（全项目推断，跨 ORM 兜底）按需回补，不在这里无条件扫全项目。
+        return scanAnnotatedTableIndex()
+    }
+
+    /**
+     * 候选源＝**平台注解索引**，覆盖各 ORM 的表名注解（MP `@TableName`、JPA `@Table`；
+     * 见 [TableNameAnnotations]）。只取带注解的类，不遍历全项目类。
+     *
+     * 演进（每步都有真机读数）：
+     *  1. 「查一个表名就把全项目类扫一遍」——16804 类一趟 3.8s，用户每换一张表再吃一次；
+     *  2. 「一次扫描建全表索引」——消掉重复，但这一趟本身 **4.7~9.7s**（逐类 `inferDecoratedTableName`
+     *     要走命名策略/设置）；
+     *  3. 现在：注解索引查询（O(log n) + 候选数），候选从「全项目类数」降到「带表名注解的实体数」，
+     *     且不再为非实体类算推断表名。真机实测 `tables=8688 → 812`、重建 `4737ms → 187ms`。
+     *
+     * 覆盖边界：**无注解**的实体（MBG 生成器、iBatis、Kotlin 或自定义映射）不在这里——它们由
+     * ①命名约定快路径（[candidateClassNames] + `EntityResolver` 校验）与 ②未命中时的
+     * [ensureInferredScan] 回补共同覆盖，两条都不需要注解在场。
+     *
+     * 注解索引的键是**简单名**（243 字节码实证：`JavaAnnotationElementType.indexStub` 先 `indexOf('(')`
+     * 截断再取短类名，属性名/属性值都不进索引）——所以拿到候选后**自己读注解值**，
+     * 并按注解原文筛掉别家同名注解（不 resolve，缺依赖时也能判）。
+     *
+     * 已知边界：`@TableName(SOME_CONSTANT)` 这类**非字面量**取值读不到表名（老口径会退化成按类名推断）
+     * ——这类实体在未命中回补里仍会按推断命中。
+     */
+    private fun scanAnnotatedTableIndex(): Map<String, List<MatchedClass>> {
+        val index = HashMap<String, MutableList<MatchedClass>>()
+        val scope = GlobalSearchScope.projectScope(project)
+        var scanned = 0
+        var candidates = 0
+        for (simpleName in TableNameAnnotations.simpleNames) {
+            val annotations = runCatching {
+                JavaAnnotationIndex.getInstance().getAnnotations(simpleName, project, scope)
+            }.getOrElse { t ->
+                if (FatalErrors.isFatal(t)) throw t
+                emptyList()
+            }
+            candidates += annotations.size
+            for (annotation in annotations) {
+                // 取消检查：候选虽少，但读注解/取宿主类仍是 PSI 访问，平台要写权限时必须能被中断
+                if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
+                scanned++
+                val tableName = TableNameAnnotations.tableNameOf(annotation)?.takeIf { it.isNotBlank() } ?: continue
+                val clazz = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java) ?: continue
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                if (isVoDto(clazz)) continue
+                val className = clazz.name ?: continue
+                index.getOrPut(tableName.lowercase()) { mutableListOf() }
+                    .add(MatchedClass(className, clazz.qualifiedName))
+            }
+        }
+        LOG.info(
+            "[open-perf] 反查索引候选源=注解索引 候选注解=$candidates " +
+                "入索引类=${index.values.sumOf { it.size }}",
+        )
+        return index
+    }
+
+    /**
+     * 退回口径：全项目短名遍历 + 逐类推断表名（`@TableName` 优先、无注解按命名策略推断）。
+     * 只在注解索引一个候选都给不出时使用（见 [scanAllTablesIndex]）。
+     */
+    private fun scanInferredTableIndex(): Map<String, List<MatchedClass>> {
         val cache = PsiShortNamesCache.getInstance(project)
         val scope = GlobalSearchScope.projectScope(project)
-        val result = mutableListOf<PsiClass>()
+        val index = HashMap<String, MutableList<MatchedClass>>()
         var scanned = 0
         for (shortName in cache.getAllClassNames()) {
-            // 取消检查（T-GutterDupFreeze 口径，与库扫描同一收口）：全量短名遍历跑在阻塞式
-            // ReadAction 里，读锁全程不放——平台需要写锁时须能中断，否则冻住 EDT。
+            // 取消检查（T-GutterDupFreeze 口径）：全量短名遍历跑在读动作里，平台需要写锁时须能中断
             if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
             scanned++
             // 短名快筛：VO/DTO 结尾的直接跳过（避免逐类检查）
             if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
             for (clazz in cache.getClassesByName(shortName, scope)) {
-                // P2：接口/枚举/注解类不可能是 MP 实体，跳过（减少 PSI 访问）
                 if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
                 if (isVoDto(clazz)) continue
                 val className = clazz.name ?: continue
-                val annotated = tableNameAnnotation(clazz)
+                // 跨 ORM：MP `@TableName` / JPA `@Table(name)` 都认（见 TableNameAnnotations）
+                val annotated = TableNameAnnotations.tableNameOfClass(clazz)
                 // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
                 // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
-                val resolvedTable = annotated ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
-                if (resolvedTable.equals(tableName, ignoreCase = true)) {
-                    result.add(clazz)
-                }
+                val resolvedTable = annotated
+                    ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
+                if (resolvedTable.isNullOrBlank()) continue
+                index.getOrPut(resolvedTable.lowercase()) { mutableListOf() }
+                    .add(MatchedClass(className, clazz.qualifiedName))
             }
         }
-        return result.sortedBy { it.name }
-    }
-
-    /** 类级 @TableName 注解值；无注解或值非字符串返回 null（短名兜底——注解类不可解析环境仍可识别）。 */
-    private fun tableNameAnnotation(clazz: PsiClass): String? {
-        val annotations = clazz.modifierList?.annotations ?: return null
-        val annotation = annotations.firstOrNull { it.qualifiedName == TABLE_NAME }
-            ?: annotations.firstOrNull { it.nameReferenceElement?.referenceName == "TableName" }
-            ?: return null
-        val value = annotation.findAttributeValue("value") as? PsiLiteralExpression ?: return null
-        return value.value as? String
+        return index
     }
 
     private fun isVoDto(clazz: PsiClass): Boolean =
@@ -427,12 +738,41 @@ class EntityClassFinder(private val project: Project) {
         return listOf(pascal, "${pascal}Entity", noFirstSeg, "${noFirstSeg}Entity").distinct()
     }
 
-    /** 项目级反查缓存（Project userData；PsiModificationTracker 失效）。 */
+    /**
+     * 项目级反查缓存（Project userData）。
+     *
+     * 失效基准＝**项目结构版本**（[ProjectRootModificationTracker]）+ **TTL**（[reverseLookupTtlMs]）。
+     *
+     * 为什么不再挂 [PsiModificationTracker]：它对**任何** PSI 变化都递增，而预览链路自己就会改 PSI
+     * （写 `mpsql-exec.sql`、临时 PsiFile、对话框里打字）。实测 `cust-big-demo`（16804 类）：
+     * 打开预览 18:52:59 缓存热（`resolve=2ms`）→ 我们自己写 exec 文件 → 19:00:08、19:00:44 两次
+     * `resolve=3994ms / 3737ms`，也就是**每次打开预览都在重扫全工程**，用户看到的就是「打开还是慢」。
+     * 结构版本对「改已有文件正文」不递增（[LibrarySweepCache] 已有同样实证），TTL 负责兜住
+     * 「改了实体上的 `@TableName`」这类正文修改——最迟一个 TTL 周期后自动重建。
+     */
     private data class ReverseLookupCache(
-        /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
-        val count: Long,
-        /** 表名（小写）→ 匹配类（短名 + 全限定名）。 */
-        val names: MutableMap<String, List<MatchedClass>>,
+        /** 建索引时的项目结构版本——结构变化（增删文件/依赖/模块根）后失效重建。 */
+        val structureVersion: Long,
+        /** 建索引时间（TTL 判据）。 */
+        val createdAt: Long,
+        /** 表名（小写）→ 匹配类（短名 + 全限定名）；一次扫描建全表索引，任意表名 O(1)。 */
+        val index: MutableMap<String, List<MatchedClass>>,
+        /** 索引是否已建成（未建成时是「没人扫过」，不是「该表确实没有实体」）。 */
+        @Volatile var built: Boolean = false,
+        /** 正在建索引的线程标记——后来者不重复派，只按预算等一等。 */
+        val building: AtomicBoolean = AtomicBoolean(false),
+        /** 建成/失败时放行等待者（等待有预算上限，见 [INDEX_WAIT_BUDGET_MS]）。 */
+        val latch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
+        /** 上次被撤销/失败的时间戳（0 = 从未）。冷却窗口用它，防连续输入把扫描打成「反复重投」。 */
+        @Volatile var lastAbortAt: Long = 0L,
+        /** 跨 ORM 回补（[ensureInferredScan]）是否已做过——每个结构版本/缓存期至多一次。 */
+        @Volatile var inferredScanDone: Boolean = false,
+        /** 回补在途标记（与注解索引建立互不阻塞）。 */
+        val inferredBuilding: AtomicBoolean = AtomicBoolean(false),
+        /** 回补完成/失败时放行等待者。 */
+        val inferredLatch: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(1),
+        /** 回补次数（守卫读数：注解索引未命中才允许 +1）。 */
+        var inferredScanCount: Int = 0,
         /** 全量扫描次数（测试访问器断言缓存命中不再扫描）。 */
         var scans: Int = 0,
     )
@@ -459,20 +799,57 @@ class EntityClassFinder(private val project: Project) {
     )
 
     private fun reverseLookupCache(): ReverseLookupCache {
-        // 失效计数：PsiModificationTracker（IPGP 中位于 com.intellij.psi.util 包，编译实证；
-        // PSI 任何修改递增，缓存自动失效重扫）
-        val current = PsiModificationTracker.getInstance(project).modificationCount
+        val current = ProjectRootModificationTracker.getInstance(project).modificationCount
+        val now = System.currentTimeMillis()
         val existing = project.getUserData(REVERSE_LOOKUP_CACHE_KEY)
-        if (existing != null && existing.count == current) return existing
-        val fresh = ReverseLookupCache(current, mutableMapOf())
+        if (existing != null &&
+            existing.structureVersion == current &&
+            now - existing.createdAt in 0 until reverseLookupTtlMs
+        ) {
+            return existing
+        }
+        val fresh = ReverseLookupCache(current, now, mutableMapOf())
         project.putUserData(REVERSE_LOOKUP_CACHE_KEY, fresh)
         return fresh
     }
 
     companion object {
+        private val LOG = Logger.getInstance(EntityClassFinder::class.java)
+
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
 
+
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
+
+        /** 项目级「跨 ORM 回补结果」缓存（结构版本 → 表名索引）——TTL 重建条目时不重扫全项目。 */
+        private val INFERRED_INDEX_KEY =
+            Key.create<Pair<Long, Map<String, List<MatchedClass>>>>("sqlvis.reverseLookup.inferredIndex")
+
+        /** 跨缓存实例的累计建索引次数（守卫用，见 [indexBuildCount]）。 */
+        private val REVERSE_LOOKUP_SCAN_TOTAL_KEY =
+            Key.create<java.util.concurrent.atomic.AtomicInteger>("mp-visualizer.reverseLookupScanTotal")
+
+        /**
+         * 调用方等待索引建成的**预算上限**（毫秒）。真机实测一趟全量扫描 4737/9675ms，压在点击链上
+         * 就是「打开还是慢」；预算内建完就命中，建不完本次降级（返回空上下文）、下一次查询命中。
+         */
+        internal const val INDEX_WAIT_BUDGET_MS: Long = 800L
+
+        /**
+         * 扫描被撤销/失败后的**冷却窗口**。为什么需要：`ReadAction.nonBlocking` 在平台要拿写权限时会被
+         * 撤销（用户一打字就要写锁），而补全在 EDT 上每敲一个字符都会问一次反查——没有冷却时
+         * 「投一次 → 立刻被取消 → 再投」会把一个 5~10s 的扫描打成无限重试，机器白烧。
+         */
+        internal const val INDEX_RETRY_COOLDOWN_MS: Long = 10_000L
+
+        /**
+         * 测试缝：强制建索引走**同步**分支。默认 null ⇒ 看 [com.intellij.openapi.application.ApplicationManager.isUnitTestMode]
+         * （单测/沙盒里为 true，走同步，既有断言按同步写）；置 false 可强制验异步分支。
+         */
+        internal var syncIndexBuildForTest: Boolean? = null
+
+        /** 测试缝：给全量扫描注入人为延迟（毫秒），用于断言「调用方不被扫描阻塞」。 */
+        internal var indexScanDelayMsForTest: Long? = null
 
         /** 库扫描缓存键（T-JarEmbedded 方案 1）。 */
         private val LIBRARY_SWEEP_CACHE_KEY = Key.create<LibrarySweepCache>("mp-visualizer.librarySweepCache")
@@ -576,14 +953,37 @@ class EntityClassFinder(private val project: Project) {
             project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, null)
         }
 
+        /** 测试访问器：跨 ORM 回补（全项目推断扫描）执行次数——注解索引未命中才允许 +1，每期至多一次。 */
+        internal fun inferredScanCountForTest(project: Project): Int =
+            project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.inferredScanCount ?: 0
+
         /** 测试访问器：项目级全量反查扫描次数（缓存命中后不再增长）。 */
         internal fun scanCountForTest(project: Project): Int =
             project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.scans ?: 0
 
-        /** 反查缓存信息（设置页展示）：返回（缓存表名条目数, 缓存类名总数）；无缓存 → (0, 0)。 */
+        /**
+         * **跨缓存实例**的累计建索引次数（索引建立方每建一次 +1；守卫与观测用）。
+         *
+         * 为什么需要它：缓存条目被判定失效时会重建（`scans` 归零），只看 [scanCountForTest] 分不清
+         * 「没重扫」和「重扫了但新条目从 0 起算」——「打字不作废索引」这类守卫会**空绿**（实测踩过）。
+         */
+        internal fun indexBuildCount(project: Project): java.util.concurrent.atomic.AtomicInteger =
+            project.getUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY)
+                ?: java.util.concurrent.atomic.AtomicInteger().also {
+                    project.putUserData(REVERSE_LOOKUP_SCAN_TOTAL_KEY, it)
+                }
+
+        /**
+         * 反查索引 TTL（毫秒）。默认 5 分钟：结构版本兜住文件增删/依赖变化，
+         * TTL 兜住「改已有实体文件的 `@TableName`」这类结构版本看不见的正文修改。
+         * 测试可置 0 强制下一次查询重建。
+         */
+        internal var reverseLookupTtlMs: Long = 300_000L
+
+        /** 反查缓存信息（设置页展示）：返回（索引表名条目数, 索引类名总数）；无缓存 → (0, 0)。 */
         internal fun reverseLookupCacheInfo(project: Project): Pair<Int, Int> {
             val entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return 0 to 0
-            return entry.names.size to entry.names.values.sumOf { it.size }
+            return entry.index.size to entry.index.values.sumOf { it.size }
         }
 
         /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
@@ -600,7 +1000,7 @@ class EntityClassFinder(private val project: Project) {
         internal fun reverseLookupCacheSizeBytes(project: Project): Long {
             val entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return 0L
             var bytes = 0L
-            for ((table, classes) in entry.names) {
+            for ((table, classes) in entry.index) {
                 bytes += table.length * 2L + 16
                 for (matched in classes) {
                     val nameLen = matched.shortName.length + (matched.qualifiedName?.length ?: 0)

@@ -115,6 +115,16 @@ internal fun SqlPreviewPanel.completionTables(result: PreviewResult?): List<Stri
 
 internal fun SqlPreviewPanel.prefetchSchemaForCompletion(result: PreviewResult) {
     val proj = project ?: return
+    // T-StartupReadLockFreeze §二十一：联表候选改到后台补齐（打开时不再同步算），
+    // 落地后与 schema 预热同样刷新一次补全上下文——否则补全表名候选一直是空的。
+    // §二十四：warmCandidates 自己负责读动作（nonBlocking + inSmartMode）与索引等待，
+    // 落地后回调；调用线程不必再包 executeOnPooledThread（缓存已热时它会同步回调）。
+    cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver.warmCandidates(proj) {
+        ApplicationManager.getApplication().invokeLater {
+            if (current !== result || project?.isDisposed == true) return@invokeLater
+            refreshCompletionContext()
+        }
+    }
     val tables = completionTables(result)
     if (tables.isEmpty()) return
     ApplicationManager.getApplication().executeOnPooledThread {
@@ -140,12 +150,22 @@ internal fun SqlPreviewPanel.buildCompletionContext(): SqlCompletionContext = Sq
     columnComments = current?.columnComments ?: emptyMap(),
     tableComment = current?.tableComment,
     // T-M27.4：联表候选表（XML 预览经 resolveXml 注入；预览补全表名候选）
-    candidateTables = current?.candidateTables.orEmpty(),
+    // T-StartupReadLockFreeze §二十一：预览打开不再同步算候选（真机 candidates 段 2~3s、只得 1 个），
+    // 改为打开后后台补齐；这里在结果里没有候选时回退读只读缓存——预热落地后面板会 refresh 一次。
+    candidateTables = current?.candidateTables.orEmpty().ifEmpty {
+        cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver.cachedCandidateTables(project)
+    },
     // T-DbSchemaCompletion：数据源 schema 列（库里存在而实体类没有的列也是候选）。
     // 只读预热缓存（columnsCached 不触发遍历）；未预热/无数据源时空 Map = 改动前语义。
     schemaColumns = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
         .columnsCached(project, completionTables(current)),
-)
+).also { ctx ->
+    // §二十二：补全「有没有内容」要在日志里可见（用户报「补全没了」时不用再猜是哪一路为空）
+    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java).info(
+        "[completion] ctx: main=${ctx.tableName ?: "-"} columns=${ctx.columns.size} " +
+            "candidates=${ctx.candidateTables.size} schemaColumns=${ctx.schemaColumns.size}",
+    )
+}
 
 /**
  * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填。
@@ -296,6 +316,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             // O-78：foreach 值按本帧新鲜映射清单播种（写安全闸重投递时与映射刷新同帧延迟，
             // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
             syncForEachItemValues(xml)
+            // T-ForEachInert：同帧刷新「本轮未展开」提示（判据也是 __frch_ 映射清单）
+            syncXmlForEachInertStates(xml)
             xmlDollarSubstitutions = rendered.dollarSubstitutions
             // R30 探镜：本轮条件判定结果刷新条件行尾三态标注（只读观测，不参与渲染文本）
             syncXmlConditionOutcomeLabels(xml, rendered)
@@ -325,6 +347,14 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
                 xmlHints + addedSources.map { ParamHint(quote = false) },
             )
             showSql(filledMain, count)
+            // T-FullTableWriteRisk：全表写风险判据取**未回填**的本轮产物（`base`）——回填会把
+            // 参数值当字面量填进文本，值里出现 `where` 这类词会污染关键词判定。
+            writeRiskWarning = fullTableWriteRisk(base)
+            // T-PreviewBannerLiveRefresh：横幅/元信息随本轮重渲染刷新。此前只有 iBatis 分支调
+            // updateMeta，XML 分支不调 ⇒ 勾选变化后横幅停在 showResult 那一刻的判定：产物里的
+            // `{{}}` 已经没了，那条「预览未完整还原」还挂着；反过来勾掉条件开关让产物变成无 WHERE
+            // 的全表 DELETE 时，也没有任何风险提示（真机 2026-11-12 两处都观察到）。
+            updateMeta(result)
         }
         // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
         batch != null -> {

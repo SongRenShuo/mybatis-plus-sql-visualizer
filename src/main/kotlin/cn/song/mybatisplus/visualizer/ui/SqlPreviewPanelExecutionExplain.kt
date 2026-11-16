@@ -40,8 +40,8 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
 // T-M53-II（2026-10-10）同法，D202 第六次登记：SqlPreviewPanel 的「EXPLAIN 双通道执行链
 //（含结构化 EXPLAIN 与降级通知）」内聚成员，原样搬出到本文件——方法体逐字符搬运，
 // 同包 top-level internal 可见性不变，零行为改动。
-
 /**
+
  * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
  * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
  * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
@@ -198,12 +198,12 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
             // 缺陷实证（2026-11-04 真机 243 沙盒，一次「预览+执行」3 条）：
             // ```
             // SEVERE - TransactionGuardImpl - Write-unsafe context!
-            //   at DataSourceSelectorResultsKt.reuseSharedConsole(DataSourceSelectorResults.kt:750)
+            //   at DataSourceSelectorResultsKt.reuseSharedConsole(...)
             //        [WriteCommandAction { editor.document.setText(sql) }]
-            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(DataSourceSelectorConsole.kt:666)
+            //   at ... DataSourceSelectorConsoleKt.executeOnConsole(...)
             //        [WriteAction { writeVfTextViaDocument(...) }]
             //   at SqlExecutor.execute → chooseAndPrepare
-            //   at submitExplainDirectConsole$lambda$0$0(SqlPreviewPanelExecutionExplain.kt:198)
+            //   at submitExplainDirectConsole$lambda$0$0
             // ```
             // `ModalityState.any()` 恒 write-unsafe（平台构造期只把 nonModal 登记为 write-safe），
             // 于是整条执行链（复用控制台的 `document.setText`、执行前的 vf 文档同步）都在
@@ -218,7 +218,7 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
                         embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)
                     },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onError = { errorMsg -> showTempFileError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     dialectGateRequest = dialectGateRequest,
                     onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
@@ -492,8 +492,8 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             databaseAvailable = databaseAvailable,
             hasBoundDataSource = boundDs != null,
             hasUnfilledParams = hasUnfilledParams,
-            // T-ObPanelAdvice：OB TEXT 档（structuredTextPlan 在册）放行进结构化通道——
-            // 不传时 TEXT 档一律直送（既有调用点/用例零改编译）
+            // T-ObPanelAdvice（dev 侧，合并轮补回）：TEXT 档唯一放行例外——OceanBase 的
+            // ASCII 计划树按表头门放行进结构化链；漏传即 OB TEXT 一律直送原生（面板测试钉）。
             dialectName = dialect.name,
         )
     ) {
@@ -769,7 +769,8 @@ internal fun SqlPreviewPanel.promptDataSourceThenRetryStructured(
             previewSql,
             onError = { message ->
                 errorShown.set(true)
-                resultPanel.showError(message)
+                // F9：同样可能是临时文件失败（同一准备链），统一交给 showTempFileError
+                showTempFileError(message)
             },
         )
     }

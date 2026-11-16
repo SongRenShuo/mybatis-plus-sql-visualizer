@@ -55,8 +55,9 @@ public class NestGateTest {
         cn.song.mybatisplus.sqlvis.agent.hook.SqlHookCallbacks.resetNestGateForTest();
         savedDisabled = AgentState.isDisabled();
         AgentState.setDisabled(false);
-        // 门在本分支默认关（嵌套语义裁决见 NestGate 类 KDoc）——本类守卫的是「门开启时」的
-        // 去重能力，故显式开闸跑；默认关的语义由 SqlInsightWeaveProbeTest 的嵌套用例守卫。
+        // 门在主线（dev/master）默认开（T-BranchAlignMerge 2.7，2026-11-17，回退开关
+        // -Dsqlvis.agent.nestGate=false）——本类守卫「门开启时」的去重能力，显式开闸跑；
+        // 关门形态（洞察身份模型契约）由 SqlInsightWeaveProbeTest 按回退开关守卫。
         nestGateEnabled(true);
         dir = Files.createTempDirectory("sqlvis-nestgate-").toFile();
         writeWoven("FakeVendorFixtures$VendorPs", PS_FACE);

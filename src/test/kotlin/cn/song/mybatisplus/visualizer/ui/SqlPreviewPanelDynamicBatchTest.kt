@@ -253,6 +253,72 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         panel.clear()
     }
 
+    /** 构造 iBatis 动态条件语句的预览结果（真实服务链：解析 → 无参基线 + 重渲染回调）。 */
+    private fun ibatisDynamicResult(): PreviewResult {
+        val xml =
+            """<sqlMap><select id="selectByCondition">SELECT id, username, status, age FROM t_user""" +
+                """<dynamic prepend="WHERE">""" +
+                """<isNotNull property="id">id = #id#</isNotNull>""" +
+                """<isNotEmpty property="username">AND username = #username#</isNotEmpty>""" +
+                """<isEqual property="status" compareValue="1">AND status = #status#</isEqual>""" +
+                """<isGreaterThan property="age" compareValue="18">AND age > #age#</isGreaterThan>""" +
+                """</dynamic></select></sqlMap>"""
+        return IbatisXmlPreviewService.preview(xml, "selectByCondition")
+    }
+
+    fun testIbatisSelectAllRerendersSql() {
+        // T-IbatisSelectAll（20261111 录制现场实测）：iBatis 链点「全选」四个条件复选框全勾上、
+        // SQL 预览却不重渲染——setAllConditions 只枚举 Wrapper/XML 两份 conditionViews，
+        // iBatis 条件 id（`ibatis-cond-N`）在 ibatisParamModel 里，两份皆空 ⇒ enabledIds 一个没动，
+        // rerender 收到的启用集与基线相同，SQL 逐字节不变。单框切换（listener 直写 enabledIds）不受影响。
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(ibatisDynamicResult())
+        assertTrue("前置：四个 iBatis 条件行必须建成复选框", panel.conditionCheckboxForTest(3) != null)
+        // 无参基线：条件整段跳过（无 WHERE）
+        val baselineSql = panel.editorForTest()!!.document.text
+        assertFalse("无参基线不应有 WHERE 段", baselineSql.contains("WHERE"))
+
+        // 点「全选」：复选框全勾 + enabledIds 落齐四条 + WHERE 段实时出现（修复点）
+        val toggle = panel.toggleSelectButtonForTest()!!
+        toggle.doClick()
+        assertEquals("全选后四条 iBatis 条件 id 必须进启用集", 4, panel.enabledIdsForTest().size)
+        assertTrue(panel.conditionCheckboxForTest(0)!!.isSelected)
+        assertTrue(panel.conditionCheckboxForTest(3)!!.isSelected)
+        assertTrue("全选后 SQL 必须实时重渲染出 WHERE 段", panel.editorForTest()!!.document.text.contains("WHERE"))
+        assertTrue(panel.editorForTest()!!.document.text.contains("id = ?"))
+        assertEquals("全勾后应翻转为全不选文案", MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
+
+        // 再点一次 → 全不选 → 条件整段移除
+        toggle.doClick()
+        assertTrue(panel.enabledIdsForTest().isEmpty())
+        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
+
+        // 单框切换路径回归钉：全不选后勾单个条件，WHERE 段同样实时出现（既有行为，不得被本次修复波及）
+        panel.conditionCheckboxForTest(0)!!.doClick()
+        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE"))
+        panel.clear()
+    }
+
+    fun testIbatisClearButtonClearsConditionValues() {
+        // 清除按钮（iBatis 链）：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复 ?。
+        // 此前只枚举 Wrapper 条件值来源与 unresolvedParams（iBatis 基线两者皆空），点清除毫无反应。
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(ibatisDynamicResult())
+        assertNotNull("清除按钮应存在", panel.clearButtonForTest())
+        // 勾选 isNotNull(id) + 填值 42（程序化 setText 经监听链同步 paramValues 并同步重渲染）
+        panel.conditionCheckboxForTest(0)!!.doClick()
+        panel.syncParamFieldText("id", "42")
+        assertTrue("填值后 SQL 应回填 42", panel.editorForTest()!!.document.text.contains("id = 42"))
+
+        // 点击清除：值清空、勾选态保留、SQL 回 ? 形态
+        panel.clearButtonForTest()!!.doClick()
+        assertEquals("", panel.paramValuesForTest()["id"])
+        assertTrue("清除不影响勾选态", panel.conditionCheckboxForTest(0)!!.isSelected)
+        assertTrue("清除后 SQL 应恢复 ?", panel.editorForTest()!!.document.text.contains("id = ?"))
+        assertFalse(panel.editorForTest()!!.document.text.contains("id = 42"))
+        panel.clear()
+    }
+
     fun testClearButtonClearsConditionValues() {
         // 清除按钮：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复含 ?
         val panel = SqlPreviewPanel(project)

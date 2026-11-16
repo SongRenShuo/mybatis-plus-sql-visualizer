@@ -1,8 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui.ref
 
+import cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
@@ -10,7 +11,6 @@ import com.intellij.psi.PsiField
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiMethod
-import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
 import com.intellij.psi.util.PsiTreeUtil
@@ -18,7 +18,6 @@ import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
-import java.lang.ref.WeakReference
 
 /**
  * T-XmlGap W7：mapper XML 内的引用解析目标集合（不注册任何 inspection/annotator——红线）。
@@ -106,41 +105,34 @@ object MybatisXmlTargets {
     }
 
     /**
-     * 按 namespace 找 mapper XML 文件（索引 + 根元素预筛，文件清单单槽 TTL 缓存 +
-     * **namespace→文件结果级 memo**，见 [namespaceSlot]）。
+     * 按 namespace 找 mapper XML 文件。
      *
-     * F96（T-PerfSweep26）：只有文件清单缓存时，同一 namespace 的重复 resolve 每次都要
-     * 逐文件 `PsiManager.findFile` + `rootTag.namespace` 比对；查找用法/重命名会批量触发，
-     * 成本相乘。结果级 memo 以**文件清单代**为戳（清单重建即失效），负结果一并缓存。
+     * 历史：F96（T-PerfSweep26）曾用「文件清单单槽 TTL(5s) + namespace 结果级 memo」压重复解析，
+     * 但清单本身是 `FileTypeIndex` 取全项目 XML 再逐个 PSI 解析筛 `<mapper>`——大工程（demo 根工程
+     * 实测 2493 个 XML）每次 TTL 过期都要重扫一遍，而这条链挂在 **XML 属性 reference 热路径**上
+     * （每个 `XmlAttributeValue` 的 resolve 都会走到）。
+     *
+     * T-MapperXmlTargetsIndex（2026-11-16）起改走 F1''' 的自定义索引 [MapperNamespaceIndex]：
+     * namespace 在索引期摊平，运行时一次 `getContainingFiles` 出候选文件，失效全交平台增量；
+     * PSI 侧仍校验根标签 `namespace` 精确匹配——索引键偶有偏差只会漏查、不会错跳。
+     * （与 `ui/nav/IbatisXmlStatementTargets` 的 iBatis 链同款收口。）
      */
     fun findMapperFileByNamespace(project: Project, namespace: String): XmlFile? {
         if (namespace.isEmpty()) return null
-        val listing = mapperXmlListing(project)
-        namespaceSlot?.let { slot ->
-            if (slot.project.get() === project &&
-                slot.listingGeneration == listing.generation &&
-                slot.namespace == namespace
-            ) {
-                return slot.file?.takeIf { it.isValid }
-            }
+        // 索引不可查（dumb / 重建中）：按「本次没有」返回——引用是 soft，不标红也不抛穿调用方
+        // （旧实现的 runCatching 也是这个效果；区别只是不再把「查不到」固化成任何缓存）。
+        if (DumbService.isDumb(project)) return null
+        val candidates = try {
+            MapperNamespaceIndex.getMapperXmlFiles(project, namespace)
+        } catch (e: IndexNotReadyException) {
+            return null
         }
-        namespaceScanCount.incrementAndGet()
-        var found: XmlFile? = null
-        for (vf in listing.files) {
+        for (vf in candidates) {
             if (!vf.isValid) continue
             val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
-            if (xmlFile.rootTag?.getAttributeValue("namespace") == namespace) {
-                found = xmlFile
-                break
-            }
+            if (xmlFile.rootTag?.getAttributeValue("namespace") == namespace) return xmlFile
         }
-        namespaceSlot = NamespaceSlot(
-            project = WeakReference(project),
-            listingGeneration = listing.generation,
-            namespace = namespace,
-            file = found,
-        )
-        return found
+        return null
     }
 
     /**
@@ -211,6 +203,34 @@ object MybatisXmlTargets {
         return iface.findMethodsByName(name, true).firstOrNull()
     }
 
+    /** 接口方法定位三态（T-MapperGutterEvict P2.1 同构，2026-11-16）。 */
+    sealed interface MethodLookup {
+        class Found(val method: PsiMethod) : MethodLookup
+        object Absent : MethodLookup
+        object Unknown : MethodLookup
+    }
+
+    /** 测试缝：替换三态定位（生产＝null）。矩阵用例用它驱动 Unknown / Absent 分支。 */
+    internal var methodLookupOverrideForTest: ((Project, String, String) -> MethodLookup)? = null
+
+    /**
+     * 三态定位——gutter provider 用它区分「暂时查不了」与「确定没有」：前者保留已确认的图标
+     * （F1 的 S2 兜底），后者**收回正缓存并摘图标**（P2.1：删掉接口方法 / 改 `<mapper namespace>`
+     * 后图标不得靠旧记忆续命）。`IndexNotReadyException`（Java 索引重建中）归 [MethodLookup.Unknown]。
+     */
+    fun lookupInterfaceMethod(project: Project?, namespace: String?, methodName: String): MethodLookup {
+        val name = methodName.trim()
+        if (project == null || namespace.isNullOrEmpty() || name.isEmpty()) return MethodLookup.Absent
+        methodLookupOverrideForTest?.let { override -> return override(project, namespace, name) }
+        val iface = try {
+            JavaPsiFacade.getInstance(project).findClass(namespace, GlobalSearchScope.allScope(project))
+        } catch (e: IndexNotReadyException) {
+            return MethodLookup.Unknown
+        } ?: return MethodLookup.Absent
+        val method = iface.findMethodsByName(name, true).firstOrNull() ?: return MethodLookup.Absent
+        return MethodLookup.Found(method)
+    }
+
     /** `property="a.b"` / `<arg property>` 的**首段**字段解析（深层链后续可扩展）。 */
     fun resolvePropertyField(project: Project?, holderClass: PsiClass?, rawProperty: String): PsiField? {
         if (project == null || holderClass == null) return null
@@ -254,81 +274,11 @@ object MybatisXmlTargets {
     private const val MAX_PROPERTY_DEPTH = 16
 
     // ------------------------------------------------------------------
-    // mapper XML 文件清单（单槽 TTL 缓存；模式同 log/MapperXmlLocator，禁引监听器）
+    // 测试缝
     // ------------------------------------------------------------------
-
-    private class FileListSlot(
-        val project: WeakReference<Project>,
-        val files: List<VirtualFile>,
-        val atMs: Long,
-        val generation: Long,
-    )
-
-    /**
-     * F96（T-PerfSweep26）：namespace → mapper 文件的**单槽结果级 memo**。
-     *
-     * 失效戳=文件清单代 [FileListSlot.generation]（清单重建即换代，含新增/删除 mapper XML 后
-     * TTL 过期重扫）；文件对象自身 invalid（被删/移动）时回落重查。单槽容量=最近一个 namespace
-     * ——引用解析天然按 refid 顺序访问、局部性强，且槽内只持一个 XmlFile 强引用（PSI 强引用
-     * 生命周期与项目一致，不额外钉住文件）。
-     */
-    private class NamespaceSlot(
-        val project: WeakReference<Project>,
-        val listingGeneration: Long,
-        val namespace: String,
-        val file: XmlFile?,
-    )
-
-    /** TTL 上界（毫秒）：新增 mapper XML 后至多一个窗口内解析不到（过期即重扫）。 */
-    internal var fileListTtlMs: Long = 5_000L
-
-    internal var clockMs: () -> Long = { System.currentTimeMillis() }
-
-    internal val indexScanCount = java.util.concurrent.atomic.AtomicInteger(0)
-
-    /** F96 测试缝：namespace→文件实查次数（memo 命中不计数）。 */
-    internal val namespaceScanCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     /** F97 测试缝：`resolveClass` 实际执行次数（批内 memo 命中不计数）。 */
     internal val classResolveCount = java.util.concurrent.atomic.AtomicInteger(0)
-
-    @Volatile
-    private var fileListSlot: FileListSlot? = null
-
-    @Volatile
-    private var namespaceSlot: NamespaceSlot? = null
-
-    /** 文件清单 + 其代（代在每次重扫时递增；namespace memo 以此为失效戳）。 */
-    private class Listing(val files: List<VirtualFile>, val generation: Long)
-
-    private var listingGenerationCounter: Long = 0L
-
-    internal fun clearFileListCacheForTest() {
-        fileListSlot = null
-        namespaceSlot = null
-    }
-
-    private fun mapperXmlListing(project: Project): Listing {
-        val now = clockMs()
-        fileListSlot?.let { slot ->
-            if (slot.project.get() === project && now - slot.atMs <= fileListTtlMs && slot.files.all { it.isValid }) {
-                return Listing(slot.files, slot.generation)
-            }
-        }
-        indexScanCount.incrementAndGet()
-        val files = runCatching {
-            val xmlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("XML")
-            FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
-                .asSequence()
-                .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
-                .filter { it.rootTag?.name == "mapper" }
-                .mapNotNull { it.virtualFile }
-                .toList()
-        }.getOrDefault(emptyList())
-        val generation = ++listingGenerationCounter
-        fileListSlot = FileListSlot(WeakReference(project), files, now, generation)
-        return Listing(files, generation)
-    }
 
     /** 测试缝：`PsiElement` 归属的 mapper 文件（供用例断言解析落点）。 */
     internal fun ownerFileOf(element: PsiElement): PsiFile? = element.containingFile

@@ -52,7 +52,7 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
         var psiTextInCallback: String? = null
         var vfTextInCallback: String? = null
 
-        DataSourceSelector.createTempPsiFileAsync(project, sql) { pair ->
+        DataSourceSelector.createTempPsiFileAsync(project, sql) { pair, _ ->
             callbackRan = true
             callbackOnEdt = ApplicationManager.getApplication().isDispatchThread
             // 契约读数：write-safe 投递（nonModal）下平台会套 runWithWritingAllowed，
@@ -97,7 +97,7 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
             vfTextInCallback,
         )
         assertNotSame(
-            "回调里的 PSI 不能是死实例（revalidateOnEdt 兜底必须在投递前生效）",
+            "回调里的 PSI 不能是死实例（revalidate 兜底必须在投递前生效）",
             "<invalid>",
             psiTextInCallback,
         )
@@ -110,8 +110,8 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
      * 丢弃旧 PSI（`vf.isValid` 仍 true，只有内容变了）→ EDT 回调里读 `psi.text` 硬抛
      * `PsiInvalidElementAccessException: different providers: …; null(0)`。
      *
-     * 本用例直接钉兜底内核 [revalidateOnEdt]：先造一个**已失效**的 PSI（写内容把它顶掉），
-     * 再断言兜底返回的是**新解析出的有效 PSI 且内容为新内容**。反向验证：把 [revalidateOnEdt]
+     * 本用例直接钉兜底内核 [revalidate]：先造一个**已失效**的 PSI（写内容把它顶掉），
+     * 再断言兜底返回的是**新解析出的有效 PSI 且内容为新内容**。反向验证：把 [revalidate]
      * 改成直返 `pair`，本用例必红（读到死 PSI 抛 PsiInvalidElementAccessException）。
      */
     fun testRevalidateOnEdtRebuildsInvalidatedPsi() {
@@ -126,7 +126,7 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
         assertFalse("夹具前提：文件删除后旧 PSI 必须已失效", stalePsi.isValid)
 
         val fresh = myFixture.addFileToProject("exec/psi-revalidate.sql", "SELECT 2")
-        val rebuilt = revalidateOnEdt(project, fresh.virtualFile to stalePsi)
+        val rebuilt = revalidate(project, fresh.virtualFile to stalePsi)
         assertNotNull("PSI 失效后必须重解析成功，而不是把死 PSI 递进续接链", rebuilt)
         assertTrue("重解析结果必须有效", rebuilt!!.second.isValid)
         assertNotSame("必须换成新 PSI 实例（复用死 PSI 等于没兜）", stalePsi, rebuilt.second)
@@ -134,8 +134,8 @@ class ExecTempFileAsyncTest : BasePlatformTestCase() {
         assertSame("VF 不应被替换", fresh.virtualFile, rebuilt.first)
 
         // 有效 PSI 走热路径：原样返回，不额外重解析
-        val hot = revalidateOnEdt(project, rebuilt)
+        val hot = revalidate(project, rebuilt)
         assertSame("有效 PSI 必须原样返回（热路径零额外开销）", rebuilt.second, hot!!.second)
-        assertNull("null 入参原样透传（建链失败语义不变）", revalidateOnEdt(project, null))
+        assertNull("null 入参原样透传（建链失败语义不变）", revalidate(project, null))
     }
 }

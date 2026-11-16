@@ -1,0 +1,6 @@
+[Unit]
+Description=svbackup 失败兜底告警（OnFailure 目标）
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/svbackup-notify.sh high "svbackup 服务失败" "单元 %i 执行失败，见 journalctl -u %i"

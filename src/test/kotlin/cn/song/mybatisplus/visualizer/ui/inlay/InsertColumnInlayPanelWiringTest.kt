@@ -27,6 +27,23 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  */
 class InsertColumnInlayPanelWiringTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // T-PreviewInlayNativeYield：测试平台（IU 2024.3.7.1）上 DatabaseTools 的 SQL 列名 inlay 在位，
+        // 让位门会整体短路 provider。本类验的是面板装配（语句类型载体 → INSERT 才出提示），
+        // 故先钉死「原生不在位」；让位门自身由 NativeColumnInlayYieldGateTest 覆盖。
+        NativeColumnInlayYieldGate.resetForTest()
+        NativeColumnInlayYieldGate.probe = { false }
+    }
+
+    override fun tearDown() {
+        try {
+            NativeColumnInlayYieldGate.resetForTest()
+        } finally {
+            super.tearDown()
+        }
+    }
+
     private val insertMapper = """
         <mapper namespace="com.example.BizMapper">
           <insert id="insertOne">

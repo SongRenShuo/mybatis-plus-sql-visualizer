@@ -24,7 +24,10 @@ class SqlLogAutoSaverPruneGuardTest {
     private fun makeFile(dir: String, name: String, stamp: Long) {
         val f = File(dir, name)
         f.parentFile.mkdirs()
-        f.writeText("-- source: x --\nSELECT 1\n\n")
+        // 合并轮收口修正（2026-11-13）：夹具内容此前含 "SELECT 1"——与被写条目同文，
+        // awaitBlockContaining 的首个等待被夹具内容空等穿过（写任务没跑也算「已写」），
+        // 全量共跑态下真时序问题被这个假通过掩盖。改写为不含任何条目标记的中性注释。
+        f.writeText("-- source: x --\n-- filler --\n\n")
         f.setLastModified(stamp)
     }
 
@@ -185,20 +188,25 @@ class SqlLogAutoSaverPruneGuardTest {
         saver.close()
     }
 
-    /** 轮询等待目录内任一 .sql 出现含指定内容的条目块（异步写线程完成信号）。 */
-    private fun awaitBlockContaining(dir: File, marker: String, timeoutMs: Long = 5_000) {
+    /** 轮询等待目录内任一 .sql 出现含指定内容的条目块（异步写线程完成信号）。
+     *  预算 30s（2026-11-13）：全量共跑态下写任务到点时间随负载漂移（与 awaitFileGone 同款口径）。 */
+    private fun awaitBlockContaining(dir: File, marker: String, timeoutMs: Long = 30_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
+            // 收口修正（2026-11-13）：裁剪与本轮询并发——夹具文件可能在 readText 前一瞬被删
+            //（TOCTOU，全量桶实测 FileNotFoundException 假红），消失/读不到按无命中继续轮询。
             val hit = dir.listFiles { f -> f.isFile && f.extension.equals("sql", true) }
-                ?.any { it.readText().contains(marker) } == true
+                ?.any { f -> runCatching { f.readText().contains(marker) }.getOrDefault(false) } == true
             if (hit) return
             Thread.sleep(20)
         }
         throw AssertionError("等待超时：目录 ${dir.absolutePath} 内未出现含 $marker 的条目")
     }
 
-    /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。 */
-    private fun awaitFileGone(file: File, timeoutMs: Long = 5_000) {
+    /** 轮询等待文件被删（裁剪是异步写线程的后续动作，不能用固定睡眠当同步）。
+     *  合并轮全量实测定案（2026-11-13）：5s 预算在 5 分片并行 + 本机满载下会假红（T-CiMarketSplit
+     *  同族，定向复跑恒绿）——预算放宽到 30s，不弱化断言（真没删照样红）。 */
+    private fun awaitFileGone(file: File, timeoutMs: Long = 30_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (!file.exists()) return

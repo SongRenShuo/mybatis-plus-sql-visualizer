@@ -23,13 +23,18 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
  * <p><b>已知取舍</b>：真正的嵌套执行（存储过程内部再执行语句、同一线程里语句套语句）只报最内层，
  * 外层那条会缺——计划 §六 已登记，与「双报」相比是更小的损害（双报会污染归属与计数）。
  *
- * <p><b>默认关（t-sql-insight 并入 master 2026-10-30 裁决，本分支维持）</b>：本门在 master 侧默认开
- * （T-CaptureCatchAll 券 07，随 v2026.10.31-beta.1 发行）；但 SQL 洞察线的执行身份模型
- * （[ExecutionScope]：异对象嵌套＝两次独立执行、各自身份、No text/time dedup，守卫＝
- * SqlInsightWeaveProbeTest#nestedDifferentStatementRemainsDistinctAndCanArriveOutOfOrder）
- * 与「外层一律抑制」正面相撞，运行时行为不可调和。本分支以洞察保真度优先＝默认关；
- * 生产确遇 Hikari/MyBatis 包装层双报可置 {@code -Dsqlvis.agent.nestGate=true} 恢复只报
- * 最内层（NestGateTest 以显式开闸钉住门能力不回归）。
+ * <p><b>默认开（T-BranchAlignMerge 2.7 主线并入裁决，2026-11-17）</b>：主线（dev/master）默认开
+ * （T-CaptureCatchAll 券 07，随 v2026.10.31-beta.1 发行）。本分支曾以洞察保真度优先默认关
+ * （2026-10-30 t-sql-insight 并入 master 裁决：SQL 洞察线的执行身份模型 [ExecutionScope]——
+ * 异对象嵌套＝两次独立执行、各自身份、No text/time dedup，守卫＝
+ * SqlInsightWeaveProbeTest#nestedDifferentStatementRemainsDistinctAndCanArriveOutOfOrder——
+ * 与「外层一律抑制」正面相撞）。本轮按 T-BranchAlignMerge 合流裁决**恢复主线默认开**；
+ * 该取舍记录保留如下备查，回退开关＝{@code -Dsqlvis.agent.nestGate=false}（恢复「嵌套不抑制」
+ * 的旧行为）。生产确遇 Hikari/MyBatis 包装层双报无需动作（默认已只报最内层）。
+ *
+ * <p><i>历史裁决存档（2026-10-30，已被 2026-11-17 主线默认覆盖）：洞察保真度优先＝默认关；
+ * ExecutionScope 与本门「外层一律抑制」正面相撞，运行时行为不可调和——若洞察链守卫
+ * （SqlInsightWeaveProbeTest）在本默认下转红，需回到用户拍板重裁。</i>
  *
  * <p><b>T-NestGateObserve（2026-11-10，只观测不改语义；dev 侧并入，观测与本开关默认值正交）。</b>
  * 磐维 A 模式真机证明本门存在**深度泄漏**：连接创建期之后该线程 depth 未归零、innerEmitted 残留为真，
@@ -41,7 +46,7 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
  */
 final class NestGate {
 
-    /** 开关（默认关，见类 KDoc 裁决）：true = 开启去重（嵌套只报最内层）。 */
+    /** 开关（默认开，主线口径）：false = 关闭去重，恢复「每个已织 execute 都产事件」。 */
     static final String ENABLED_PROP = "sqlvis.agent.nestGate";
 
     /**
@@ -403,13 +408,13 @@ final class NestGate {
             final String raw = System.getProperty(ENABLED_PROP);
             if (raw != null) {
                 final String v = raw.trim();
-                if ("true".equalsIgnoreCase(v) || "1".equals(v)) {
-                    return true;
+                if ("false".equalsIgnoreCase(v) || "0".equals(v)) {
+                    return false;
                 }
             }
         } catch (Throwable ignore) {
-            // 非法值按默认关
+            // 非法值按默认开（主线口径，2026-11-17 合并裁决）
         }
-        return false;
+        return true;
     }
 }

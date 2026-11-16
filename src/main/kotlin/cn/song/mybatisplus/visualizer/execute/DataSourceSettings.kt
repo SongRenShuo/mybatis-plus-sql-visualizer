@@ -132,6 +132,50 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
             }.getOrNull()
         }
 
+        // ---------- T-DsListAddSource（20261111）：名字解析可空化与 DbDataSource 投影 ----------
+        //
+        // 「unknown 数据源」死项的根因（计划 §2.2，243 database-plugin.jar javap 实证）：
+        // `DbImplUtil.getAllDataSourcesForExec(PsiFile)` 返回 `JBIterable<DbDataSource>`
+        // （PSI 层包装），而既有取名链用 LocalDataSource 上的 Method 去反射 invoke →
+        // IllegalArgumentException → runCatching 吞掉 → 回落字面量 "Unknown"。
+        // 列表装配处改用下面两个入口：解析不出就丢弃条目，不再漏出 unknown。
+        //
+        // 既有 [getName] 的 "Unknown" 回落**保持不动**：last-used 记忆链、`chosenRunnerName`
+        // 比对、方言闸门（ExecutionDialectGate）都依赖它返回非空串，语义面零变化。
+
+        /** DbDataSource 类名（PSI 层数据源包装；反射用，Community 缺席时返回 null）。 */
+        private const val DB_DS_DELEGATE_METHOD = "getDelegate"
+
+        /**
+         * 把任意平台数据源对象投影成 `LocalDataSource`。
+         *
+         * `DbDataSource.getDelegate()`（桥方法返回 `RawDataSource`）解出内层原始源，
+         * 只有真 `LocalDataSource` 才认；本身已是 LocalDataSource 时原样返回。
+         * 平台不可用 / delegate 缺失 / 内层不是 LocalDataSource → null。
+         */
+        fun resolveLocalDataSource(ds: Any): Any? {
+            if (cachedClass(LOCAL_DS_CLASS)?.isInstance(ds) == true) return ds
+            return runCatching {
+                val delegate = ds.javaClass.getMethod(DB_DS_DELEGATE_METHOD).invoke(ds)
+                if (delegate != null && cachedClass(LOCAL_DS_CLASS)?.isInstance(delegate) == true) delegate else null
+            }.getOrNull()
+        }
+
+        /**
+         * 解析显示名，解析不出（对象类型不匹配 / 名字为空）返回 null。
+         *
+         * 专供**列表装配**处使用；与 [getName] 的差别只在失败路径——列表宁缺毋滥，
+         * 名字取不出就隐藏条目，而不是渲染一条点不了的 "Unknown"。
+         */
+        fun nameOrNull(ds: Any): String? {
+            val local = resolveLocalDataSource(ds) ?: return null
+            return runCatching {
+                cachedClass(LOCAL_DS_CLASS)?.let { cls ->
+                    cachedMethod(cls, "getName")?.invoke(local) as? String
+                }
+            }.getOrNull()?.takeUnless { it.isBlank() }
+        }
+
         // ---------- F68a（T-PerfSweep20）：反射 Class/Method 记忆化 ----------
         //
         // 比照 SqlLogConsoleBridge.methodCache 范式（:695）：预览绑定指示行取名链每次刷新
