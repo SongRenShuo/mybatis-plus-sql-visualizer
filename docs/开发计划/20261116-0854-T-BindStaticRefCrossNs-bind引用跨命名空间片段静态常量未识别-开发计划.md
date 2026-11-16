@@ -211,5 +211,6 @@ python C:/Users/USER/.zcode/cli/parallel_tasks.py check
 | 还原后复跑 | 74/0/0/0（同一命令重跑，确认提交内容即该绿态） |
 | CI 门禁 | 双仓推送后 GitHub `推送测试 · master @ 6c15d7f6` run **`43785965787`**，8/8 job success（`fast(1)`/`fast(2)` + `test(1)~test(5)` + `nightly-nudge`），01:23:16Z → 01:32:00Z |
 | P-3 性能 | 未单独计时：跨命名空间引用缺失时 `fragments` 为空表，扫描与改动前逐字节等价；命中时新增的是片段内**去重后**的 `findClass` 次数（本夹具 1 次） |
-| A1 真机验收 | **待用户复验**（`cyzc-platform` 预览 `selectOrderAggTwoPeriod`：红条消失、`#scopeCategoryBike` 回填 `1`） |
+| A1 真机验收 | **用户 2026-11-16 复验正常**（IDEA 2026.3，`cyzc-platform`）。运行包取证：已装插件 `MPV-Build=1794796956873`（本地 10:42:36 构建）的 `XmlPreviewService.class` 常量池含 `resolveStaticFields(Collection;…)` 与单文本双重重载 ⇒ 跑的就是带修复的包；对应 `idea.log` 预览轮 10:46:57 / 10:47:15。注：`静态常量…求值为空` 只进面板 `xmlErrors`、**从不落日志**，故「红条消失」以目测为准，日志只能证构建版本与链路无异常 |
+| 真机日志读数（留档） | 冷开 `request→dialog: 3839ms`（entity `cache miss→resolve=227ms`、`DatabaseSchemaResolver tablesScanned=339`、`[open-perf] total=2352 parse+ctx=2337 model=15`、`assembly warm done 1513ms`）；18s 后暖开 `dialog: construct=24ms show=82ms`（`total` 未打点＝低于 200ms 阈值）。同毫秒出现两条 `total` ⇒ 预热装配与真实打开各算一遍（在册未实施项「一次打开装配两次」，非本次引入）。我方 WARN 仅 `createEditor path`/`releaseEditor path` 两条自有诊断 Throwable 被平台节流；SEVERE 一条落在免重启热更新 `DynamicInstallSupport→DynamicPlugins.loadPlugin` 的 EDT 配置组通知超 811ms，与预览链路无关 |
 | S3 未做 | `static {}` 块赋值、`Integer.valueOf(...)` 类非常量初始化式维持「解析不到 + 手填覆盖值」，已写入 `docs/架构设计/02-核心流程详解.md` §3 已知边界 |
