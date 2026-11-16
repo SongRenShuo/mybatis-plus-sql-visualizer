@@ -233,6 +233,12 @@
              索引器只读文件头提取根标签 namespace；正确性闸门在 PSI 侧（根 namespace+id 精确匹配）。 -->
         <fileBasedIndex
                 implementation="cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex"/>
+        <!-- T-IbatisGutterPerf（2026-11-16）：iBatis 2.x <sqlMap> 的 namespace / 语句 id 自定义标量索引——
+             旧链要把全项目 XML 逐个 PSI 解析才筛出 sqlMap 文件（demo 根工程 2493 → 303，5s TTL 重扫），
+             本索引在索引期摊平三类键（all / ns: / stmt:），运行时一次 getContainingFiles 出候选文件。
+             只认根标签 sqlMap（与上面 MyBatis 侧 mapper 索引互斥、不扩面）；正确性闸门在 PSI 侧精确匹配。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
