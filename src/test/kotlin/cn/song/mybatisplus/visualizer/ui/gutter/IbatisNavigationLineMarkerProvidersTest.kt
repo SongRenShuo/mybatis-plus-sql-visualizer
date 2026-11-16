@@ -334,6 +334,71 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * T-IbatisXmlArrowNamespace（2026-11-16 用户报障「xml 跳 Java 跳错地方」）：词索引按词取候选，
+     * 多命名空间工程里同名 id 遍地——旧实现还认「任意前缀的尾段 `.id`」，于是 `User.xml` 的
+     * `selectById` 被 `OdLogistics60233.selectById` 抢先命中，点箭头跳到别的 DAO。
+     * 命名空间是语句身份的一部分：跨命名空间同名 id 是**另一条语句**，不得互相认领。
+     */
+    fun test同id不同namespace不得误命中() {
+        val userXml = myFixture.addFileToProject(
+            "sqlmap/User.xml",
+            """<sqlMap namespace="user"><select id="selectById">SELECT 1 FROM T_USER</select></sqlMap>""",
+        )
+        myFixture.addFileToProject(
+            "sqlmap/Order.xml",
+            """<sqlMap namespace="order"><select id="selectById">SELECT 2 FROM T_ORDER</select></sqlMap>""",
+        )
+        myFixture.addFileToProject(
+            "com/demo/OrderDao.java",
+            """
+            package com.demo;
+            public class OrderDao {
+                private Object client;
+                public Object a() { return client.queryForObject("order.selectById", null); }
+            }
+            """.trimIndent(),
+        )
+        assertNull(
+            "user 命名空间不得命中 order.selectById（跨命名空间同 id 是另一条语句）",
+            IbatisJavaCallSites.findFirstCallLiteral(project, "user", "selectById"),
+        )
+        assertNotNull(
+            "order 命名空间仍应命中自己的调用点",
+            IbatisJavaCallSites.findFirstCallLiteral(project, "order", "selectById"),
+        )
+        assertNull(
+            "User.xml 不得因为别的命名空间有同名调用点而出箭头",
+            markers(xmlToJava, userXml).firstOrNull { statementIdOf(it) == "selectById" },
+        )
+    }
+
+    /** 反向：`useStatementNamespaces=false`（默认）时调用点用**裸 id**，必须照旧命中。 */
+    fun test裸id形态仍命中() {
+        val sqlMap = myFixture.addFileToProject(
+            "sqlmap/Bare.xml",
+            """<sqlMap namespace="user"><select id="selectById">SELECT 1 FROM T_USER</select></sqlMap>""",
+        )
+        myFixture.addFileToProject(
+            "com/demo/BareDao.java",
+            """
+            package com.demo;
+            public class BareDao {
+                private Object client;
+                public Object a() { return client.queryForObject("selectById", null); }
+            }
+            """.trimIndent(),
+        )
+        assertNotNull(
+            "裸 id 形态必须命中（heads 关闭命名空间前缀的工程）",
+            IbatisJavaCallSites.findFirstCallLiteral(project, "user", "selectById"),
+        )
+        assertNotNull(
+            "裸 id 命中必须让语句行出箭头",
+            markers(xmlToJava, sqlMap).firstOrNull { statementIdOf(it) == "selectById" },
+        )
+    }
+
     /** 回退通道：`sqlvis.gutter.ibatisXmlArrowRequiresCaller=false` 回到「无条件出箭头」（点击无目标即无动作）。 */
     fun test回退开关关闭_恢复无条件出箭头且点击无动作() {
         val original = IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider

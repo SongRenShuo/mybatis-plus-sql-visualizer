@@ -203,7 +203,7 @@ class IbatisXmlToJavaLineMarkerProvider : LineMarkerProvider {
  */
 internal object IbatisJavaCallSites {
 
-    /** 首个命中字面量（`ns.id` / 裸 `id` / 任意 namespace 前缀的 `.id` 尾缀形态）。 */
+    /** 首个命中字面量（`本文件 namespace.id` 或裸 `id` 两种精确形态，见 [matches]）。 */
     fun findFirstCallLiteral(project: Project, namespace: String?, statementId: String): PsiLiteralExpression? =
         findAllCallLiterals(project, namespace, statementId, 1).firstOrNull()
 
@@ -260,12 +260,21 @@ internal object IbatisJavaCallSites {
         return found
     }
 
-    /** 字面量值命中：裸 `id`、`ns.id`（本文件 namespace）、或任意前缀的尾段 `… . id`。 */
+    /**
+     * 字面量值命中，**只认两种精确形态**：
+     *  - 裸 `id`：`useStatementNamespaces=false`（默认）时运行期 id 不带命名空间前缀；
+     *  - `本文件 namespace.` + `id`：`true` 时引擎按 `namespace + "." + id` 组装运行期 id
+     *    （`namespace` 即 XML 根标签的 `namespace` 属性值，可含点，按字符串精确比较）。
+     *
+     * **禁止**再放宽成「任意前缀的尾段 `.id`」（T-IbatisXmlArrowNamespace，2026-11-16 用户报障）：
+     * 词索引按词取候选，多命名空间工程里同 id 遍地——demo 里 `User.xml` 的 `selectById` 就被
+     * `OdLogistics60233.selectById` 抢先命中，点箭头直接跳到 `OdLogistics60233DaoImpl.java`。
+     * 命名空间是 iBatis 语句身份的一部分，跨命名空间的同名 id 是**另一条语句**，不得互相认领。
+     */
     private fun matches(literal: PsiLiteralExpression, namespace: String?, statementId: String): Boolean {
         val value = (literal.value as? String)?.trim() ?: return false
         if (value == statementId) return true
-        if (namespace != null && value == "$namespace.$statementId") return true
-        return value.endsWith(".$statementId") && value.length > statementId.length + 1
+        return namespace != null && value == "$namespace.$statementId"
     }
 
     /**
