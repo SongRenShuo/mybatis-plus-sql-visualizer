@@ -799,6 +799,16 @@ verifier JVM）＋全量测试（多个 1GB 堆测试 JVM）＋runIde（2GB 级�
 
 **Seen 1× (2026-11-16)**
 
+### L77 共用工作树里别家车道的在途文档别用 `git stash push` 挪开——pop 冲突窗口里对方会把冲突标记提交进去
+
+**规则**：多车道共用一个工作树时，给「别家正在改的共享文档」腾位，禁用 `git stash push -- <文件>`。stash 只把内容挪进你的 stash、文件在工作树里回到 HEAD 版本，而对方下一次 `git add`/commit 会把你 pop 出来的冲突块（`<<<<<<<` / `=======` / `>>>>>>>`）当成正常内容提交——冲突标记直接进主干。正路三条：等对方提交完再动同一文件；只用 `git apply --cached` 暂存自己那一段；或把自己的改动做成排在对方之后的独立小提交。附加坑：`git checkout --ours/--theirs` 在 stash pop 冲突上**并不解决问题**（当时 `git ls-files -u` 无条目，命令静默无效），别把它当兜底。
+
+**证据**：2026-11-16 本仓 master，用 `git stash push -- CHANGELOG.md` 给别家的 iBatis 落账行腾位，pop 时形成冲突块；同一分钟对方提交 `39203c4b5` 把带 `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes` 的 CHANGELOG 一并提交（`git log -S'<<<<<<< Updated upstream' -- CHANGELOG.md` 定位）。修复 `ba2b7ea41`：`git checkout 887882a42 -- CHANGELOG.md` 取回干净版，手工补回对方那格的哈希 `8eca5211f`，再全仓扫 `\n<<<<<<< ` 确认 0 命中。
+
+**正例**：对方提交完再动同一文件；**反例**：stash 挪开别家在途文档、或冲突后只 `checkout` 一侧就宣布解决。
+
+**Seen 1× (2026-11-16)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
