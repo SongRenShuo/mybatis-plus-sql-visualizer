@@ -745,6 +745,37 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 **Seen 1× (2026-11-16)**
 
+### L75 构建/沙盒「静默结束」先读 hs_err 与 commit，别先怀疑代码或增量缓存
+
+**规则**：Gradle 构建或 runIde 出现「跑到某个 task 就结束、既无 `e:` 编译错误也无 `BUILD FAILED`
+段」这种**静默死亡**时，按进程级死因排查，顺序固定：① 在**工程根与启动目录**找当天的
+`hs_err_pid*.log`（JVM 崩溃必然落盘）；② 看首屏关键字——`There is insufficient memory` /
+`Native memory allocation (malloc) failed … Chunk::new` / `mmap failed … G1 virtual space` 一律是
+**提交量（commit）耗尽**，与源码无关；③ 采 commit 而不是 CPU（本机定例：`Get-Counter
+'\Memory\Committed Bytes'` 对比 `TotalVirtualMemorySize`）；④ 列本机 java 进程的**启动日期**，
+杀「今天之前启动且命令行含 `-Djps.java.compiling.tool=Javac`」的孤儿编译 worker（历史 runIde
+沙盒强关后的残留，单个 `-Xmx700m` 但会涨），杀前逐个打印 PID+启动时间；
+⑤ 先 `./gradlew --stop` 回收空闲 daemon；⑥ 复测 commit，再用 `./gradlew compileKotlin` 反证
+「源码本来就能编译」。
+
+**证据**：2026-11-16 用户启动沙盒失败，控制台停在 `> Task :compileKotlin` 后报「已失败 53 秒」，
+无任何编译错误行。根目录两份 `hs_err` 定死因：`hs_err_pid8456.log`（10:18）＝
+`Native memory allocation (mmap) failed to map 1023410176 bytes. Error detail: G1 virtual space`；
+`hs_err_pid17376.log`（10:23，正是该次 runIde 的 daemon）＝`malloc failed to allocate 1144816 bytes.
+Error detail: Chunk::new`（JIT arena）。清理前实测 **Commit 67.1GB / 上限 76.4GB（88%）**、空闲物理
+内存 8.5GB；本机共 11 个孤儿 JPS 编译进程（启动于 11-10 / 11-13 / 11-14 / 11-15，路径指
+`transforms/…/ideaIU-2024.3.7.1-win`）。`./gradlew --stop` + 按启动日期筛杀孤儿后：
+**Commit 45.3GB / 74.9GB、空闲 10.8GB**（空出 21.8GB）；随即 `./gradlew compileKotlin`
+**BUILD SUCCESSFUL**（2m21s，配置缓存正常存储），证明与本次代码改动无关。同族但不同的两笔已有账：
+L22/L23 记的是 prepareSandbox 的 **mmap 文件锁**（沙盒在跑），本条记的是**内存提交量**。
+
+**正例**：先 `hs_err` → commit → 进程清单，三步定性再动手；**反例**：把「停在 compileKotlin」当成
+Kotlin 增量编译坏了去 clean/重建，或在 88% commit 的状态下继续叠 verifyPlugin（一次 3 个 IDE
+verifier JVM）＋全量测试（多个 1GB 堆测试 JVM）＋runIde（2GB 级），必然再崩。用户要起沙盒前，
+本机不应同时跑全量/构建校验。
+
+**Seen 1× (2026-11-16)**
+
 ## 升级记录
 
 | 日期 | 条目 | 去向 |
