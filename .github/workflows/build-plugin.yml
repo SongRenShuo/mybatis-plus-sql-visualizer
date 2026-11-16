@@ -128,6 +128,26 @@ jobs:
           pwsh -NoProfile -File dev-support/ci/run-gradle-retry.ps1 -GradleArgs
           ":buildPlugin -PgifRecord=false --console=plain"
 
+      # changeNotes 双轨判据（T-ReleaseChecklist §1.2）。两条都必须在建发行版之前绿，
+      # 且查的是本轮真正要发布的那份 zip，而不是发行机上的另一份本地包：
+      #   ① 源码级：评分引导句/最新块/裸 @/全角/首个 h2/preview 逐字一致（零 Gradle，秒级）。
+      #      Kotlin 守卫 ChangeNotesRatingLineGuardTest 仍由 testFast 腿跑，此处不删 CI 环节。
+      #   ② 产物级：jar 名 / plugin.xml <version> / MANIFEST Version / change-notes 真的编进
+      #      zip / 本版块全角零命中。此前 inspect-plugin-zip.py 只在发行机本地跑，CI 无覆盖。
+      - name: changeNotes 源码级判据（含反向验证）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        shell: pwsh
+        run: |
+          python -I dev-support/check-change-notes.py
+          python -I dev-support/check-change-notes.py --self-test
+
+      - name: 产物自检（本轮发布的那份 zip）
+        if: inputs.mode == 'gate' || inputs.mode == 'release'
+        shell: pwsh
+        run: |
+          $v = (python -I dev-support/check-change-notes.py --print-version).Trim()
+          python -I dev-support/inspect-plugin-zip.py --version $v
+
       # T-CiMatrix（2026-11-04）：verifyGate（三目标）与 testShards（五片）已拆到独立 matrix job 并行。
       # T-CiSplitMarketplace（2026-11-05）：verifyMarketplace 原在本 job 串行跑 4.8 分钟
       # （三目标逐个验证 2m41s/4m06s/4m17s，日志时间戳可对），而它是下游九个 job 全等的墙钟起点。

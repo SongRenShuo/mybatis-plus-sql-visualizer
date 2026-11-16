@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.14-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.14-beta.1/mybatis-plus-sql-visualizer-2026.11.14-beta.1.zip",
-  "changeNotes": "打开 mapper 就在后台预热预览, 点开更快\n打开预览不再把工程短暂拖进重索引, 补全不再跟着失灵; 执行控制台第一次执行时才准备, 设置页可调三档口径\n表名反查索引大幅提速: 建索引挪到后台, 候选源改走注解索引, 启动期不再重复建 7 次\n表名反查按 ORM 分源, JPA 工程同样适用\n敲 DEL_F 能补出 DEL_FLAG, 列名补全支持大写蛇形别名, 插入形态跟随输入大小写\n数据源切换按钮不再刷 IDE 日志告警, 退出 IDE 不再报插件内存泄漏\n上一版已知问题已修: 热更新后设置页报错, 现在更新前自动关闭设置窗口并提示重启",
-  "publishDate": "2026-11-14",
+  "version": "2026.11.16-beta.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.11.16-beta.2/mybatis-plus-sql-visualizer-2026.11.16-beta.2.zip",
+  "changeNotes": "Mapper 与 iBatis 的跳转图标改走自定义索引, 大工程冷开毫秒级定位\n索引未就绪时的瞬时解析失败不再摘掉已显示的跳转图标\n目标删掉或改名后图标会收回, iBatis 箭头不再跨命名空间认领同名语句\n打开 mapper 的预热延后到工程就绪后, 不再刷读权限报错, sqlvis.gutter.warmDelayMs 可调\n跨命名空间公共片段改按索引查询, 改了立刻生效\n片段里的 bind 静态常量与父类接口常量现在都能认出\nSQL 日志工具窗首次打开少一条无害告警\nmapper 补全的跨文件片段名与 config 变量名改为索引一次构建, 不再每次按键重扫全项目 XML",
+  "publishDate": "2026-11-16",
   "sinceBuild": "243"
 }

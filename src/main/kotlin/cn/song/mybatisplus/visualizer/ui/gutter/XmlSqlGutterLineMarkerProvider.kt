@@ -46,18 +46,11 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
         if (gutterState != null && !gutterState.showGutterIcon) return null
         if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
-        // T-PreviewOpenPerfM2 M11：MBG Example 语句的首次预览慢在 M2 引用检索（真机 1628~2042ms，
-        // 弹窗 2.7~4.6s），第二次起只有 200ms 级。渲染 gutter 时顺手在后台预取一次——用户从
-        // 「看到图标」到「点开」通常有秒级延迟，届时缓存已热；不改变任何交互，失败静默。
-        runCatching { prefetchMbgExample(tag) }
-        // §二十七：文件首次渲染 gutter 时后台预热一次「补全上下文」（实体解析冷态实测 13.3s）。
-        // 原来这笔成本压在点击预览里（pre-assembly:completion=13280ms）；挪到文件打开时，
-        // 用户真去点预览/补全时已经是热态。每个文件只做一次，dumb 期跳过（等下次渲染再试）。
-        runCatching { warmCompletionContextOnce(tag) }
-        // T-PreviewAssemblyWarm：同一信号再预热一次**装配**（只算不建 UI，结果丢弃）——把首次预览里
-        // 那 351ms 的冷类加载/JIT 提前消化掉；与上面 ctx 预热不同文件级去重、互不替代。
-        // 开关：Registry `sqlvis.preview.assemblyWarm`（默认开）；dumb 期跳过；失败静默。
-        runCatching { cn.song.mybatisplus.visualizer.ui.PreviewAssemblyWarm.warmOnce(tag) }
+        // F2（T-GutterFirstOpenDelay）：三条预热链合并为一个调度点——工程 smart 后延迟
+        // `sqlvis.gutter.warmDelayMs`（默认 5000ms；0 = 旧行为立即踢）再踢一次，避免冷打开窗口里
+        // 与快/慢趟 pass、索引重建抢 BGT（实测首开重活：反查索引 3337ms + 跨 ORM 回补 15017ms +
+        // assembly warm 17095ms）。调度语义、边角与回退通道见 [GutterWarmScheduler] 的 KDoc。
+        runCatching { GutterWarmScheduler.onGutterFirstRender(tag) }
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
@@ -68,21 +61,6 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             GutterIconRenderer.Alignment.CENTER,
             { MpSqlVisualizerBundle.message("gutter.xml.accessible.name") },
         )
-    }
-
-    /**
-     * M11 预取入口：只对 MBG Example 形态（`parameterType` 以 `Example` 结尾）的语句触发，
-     * 其余语句（普通 mapper SQL）M2 根本不参与，预取纯属白烧。
-     */
-    private fun prefetchMbgExample(tag: XmlTag) {
-        // 只预取 select：真机上 countByExample / deleteByExample 这些语句多数没有调用点，
-        // 预取它们只会白烧一轮检索（实测 6 秒内同一语句重跑 4 轮）。
-        if (tag.name != "select") return
-        val paramType = tag.getAttributeValue("parameterType") ?: return
-        if (!paramType.endsWith("Example")) return
-        val id = tag.getAttributeValue("id") ?: return
-        val namespace = tag.parentTag?.getAttributeValue("namespace") ?: return
-        MbgExampleCallResolver.prefetch(tag.project, namespace, id)
     }
 
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */
@@ -123,6 +101,41 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(XmlSqlGutterLineMarkerProvider::class.java)
+
+        /**
+         * M11 预取入口：只对 MBG Example 形态（`parameterType` 以 `Example` 结尾）的语句触发，
+         * 其余语句（普通 mapper SQL）M2 根本不参与，预取纯属白烧。
+         * （F2 起从实例方法挪进 companion——统一踢出点 [kickFileWarmers] 在 companion，三条链须同域。）
+         */
+        private fun prefetchMbgExample(tag: XmlTag) {
+            // 只预取 select：真机上 countByExample / deleteByExample 这些语句多数没有调用点，
+            // 预取它们只会白烧一轮检索（实测 6 秒内同一语句重跑 4 轮）。
+            if (tag.name != "select") return
+            val paramType = tag.getAttributeValue("parameterType") ?: return
+            if (!paramType.endsWith("Example")) return
+            val id = tag.getAttributeValue("id") ?: return
+            val namespace = tag.parentTag?.getAttributeValue("namespace") ?: return
+            MbgExampleCallResolver.prefetch(tag.project, namespace, id)
+        }
+
+        /**
+         * F2（T-GutterFirstOpenDelay）：三条预热链的统一踢出点，[GutterWarmScheduler] 到点
+         * （或立即踢回退通道）时调用，顺序与原「首渲染直踢」一致；链内部各自去重、失败静默。
+         */
+        internal fun kickFileWarmers(tag: XmlTag) {
+            // T-PreviewOpenPerfM2 M11：MBG Example 语句的首次预览慢在 M2 引用检索（真机 1628~2042ms，
+            // 弹窗 2.7~4.6s），第二次起只有 200ms 级。渲染 gutter 时顺手在后台预取一次——用户从
+            // 「看到图标」到「点开」通常有秒级延迟，届时缓存已热；不改变任何交互，失败静默。
+            runCatching { prefetchMbgExample(tag) }
+            // §二十七：文件首次渲染 gutter 时后台预热一次「补全上下文」（实体解析冷态实测 13.3s）。
+            // 原来这笔成本压在点击预览里（pre-assembly:completion=13280ms）；挪到文件打开时，
+            // 用户真去点预览/补全时已经是热态。每个文件只做一次，dumb 期跳过（等下次渲染再试）。
+            runCatching { warmCompletionContextOnce(tag) }
+            // T-PreviewAssemblyWarm：同一信号再预热一次**装配**（只算不建 UI，结果丢弃）——把首次预览里
+            // 那 351ms 的冷类加载/JIT 提前消化掉；与上面 ctx 预热不同文件级去重、互不替代。
+            // 开关：Registry `sqlvis.preview.assemblyWarm`（默认开）；dumb 期跳过；失败静默。
+            runCatching { cn.song.mybatisplus.visualizer.ui.PreviewAssemblyWarm.warmOnce(tag) }
+        }
 
         /** §二十七：已预热过补全上下文的文件（按 VirtualFile.url，每文件一次）。 */
         private val warmedContextFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()

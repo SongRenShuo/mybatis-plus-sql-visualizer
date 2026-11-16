@@ -25,6 +25,7 @@
 |---|---|---|
 | `gitee-release.py` | Gitee 自动发行（建版 / 上传附件 / 回读校验 / `--replace` / `--verify-only` / `--delete-only`） | `python dev-support/gitee-release.py --version <ver> --notes <file>` |
 | `inspect-plugin-zip.py` | 发布前置检查：插件 zip 的内层 jar 名 / plugin.xml version / MANIFEST / change-notes 目标块与红线扫描 | `python dev-support/inspect-plugin-zip.py <zip>` |
+| `check-change-notes.py` | changeNotes 源码级判据：评分句全文 1 次 / 落最新块 / 无裸 @ / 首个 h2 为本版 / 本版块全角零命中 / preview 逐字一致（C7）与 version、downloadUrl 指向本版（C8）；零 Gradle、秒级，带 `--self-test` 9 条反向验证；产物级复核由 CI 在 `:buildPlugin` 后对发布 zip 跑 `inspect-plugin-zip.py` | `python -I dev-support/check-change-notes.py --version <ver>` / `--self-test` / `--print-version` |
 | `export_zcode_wiki_to_gitee.py` | 把 ZCode repo-wiki 导出为 Gitee/GitHub wiki 的 Markdown 布局 | `python dev-support/export_zcode_wiki_to_gitee.py` |
 
 ## 更新通道本地验证

@@ -36,6 +36,13 @@ import sys
 import tempfile
 import zipfile
 
+# Windows runner 的 stdout 默认 cp1252（2026-11-15 gate run 43667161444 实证），
+# 中文判据标签会抛 UnicodeEncodeError；入口显式重配 UTF-8，本机 GBK 控制台同样受益。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

@@ -93,14 +93,14 @@
 
 - `com.intellij.diff.contents.DiffContent` 在 262 只有 `getContentType() / getNavigatable() / onAssigned()` 三个方法，**没有 `getComponent()`**——「自定义 DiffContent 塞表格」这条路不存在。
 - 唯一公开的「自定义视图组件」入口是 `com.intellij.diff.FrameDiffTool$DiffViewer#getComponent(): JComponent`（262 `intellij.platform.diff.jar`）。
-- `DiffManagerImpl.getDiffTools()` 把 **EP 扩展排在平台内置 Simple/Unified/Binary/Dir 之前**，`canShow` 命中即被选中；`DefaultState.init()` 把 `viewer.getComponent()` 直接放进原生 diff 内容面板。
+- 243 实测（P0 探针首轮读数）：`DiffManagerEx.getDiffTools()` 里 **EP 工具不在清单最前**（探针下标 8/13，前面 7 个内置工具）——「EP 扩展排在内置之前」的说法对 243 不成立（262 的 DiffManagerImpl 归属未逐一核对）。选择正确性改由「唯一 canShow 命中」保证：`DiffRequestProcessor` 逐个 canShow 取第一个命中，内置工具对非 ContentDiffRequest 全部 say-no，探针排后仍被选中（探针测试以此为准）。
 - `TableDiffTool` / `TableDiffViewer` / `TableEditorHolder` 是 DataGrip（`intellij.database.impl.jar`）内部实现，绑死 `GridDataHookUp`/`DasTable`，且本仓对 DatabaseTools 是 optional 依赖——**不可复用**。
 
 **定案路线（B）**：
 
 1. `ui/diff/RollbackTableDiffRequest : DiffRequest`——携带两侧 `TableSnapshot`（列名、行、主键列、单元格状态）。
-2. `ui/diff/RollbackTableDiffTool : FrameDiffTool`——`canShow(request)` 只认上面的 request 类型；`createViewer(context, request)` 返回下面的 viewer。
-3. `ui/diff/RollbackTableDiffViewer : FrameDiffTool$DiffViewer`——`getComponent()` 返回「标题 + `JSplitPane` 两个只读 `JBTable`」；`init()` 返回 `ToolbarComponents`；`dispose()` 释放。
+2. `ui/diff/RollbackTableDiffTool : FrameDiffTool`——`canShow(context, request)` 只认上面的 request 类型；`createComponent(context, request)` 返回下面的 viewer。**方法名订正（P0 实证）**：243（app-client.jar）与 262（intellij.platform.diff.jar）的 `FrameDiffTool` 都是 `createComponent`（先前的 `createViewer` 说法有误，源于旧资料混入）；`getToolType(): DiffToolType` 两版都有默认实现，262 额外的 `getIcon()` 也是默认实现——按 243 基线编译的类在 262 运行只需实现 `createComponent`，跨版本无 AbstractMethodError 风险。
+3. `ui/diff/RollbackTableDiffViewer : FrameDiffTool$DiffViewer`——`getComponent()` 返回「标题 + `JSplitPane` 两个只读 `JBTable`」；`init()` 返回 `ToolbarComponents`（两版本都有公开 `()V` 无参构造）；`dispose()` 释放。
 4. `plugin.xml` 注册 `<diff.DiffTool implementation="…RollbackTableDiffTool"/>`（EP 名 `com.intellij.diff.DiffTool`，与 DataGrip 同架构，但只用 public 面，不依赖 `EditorHolder`/`TextEditorHolder` 这类 internal）。
 5. 行对齐自写：按主键做行匹配，空串/null/数值归一后逐格比较，产出 `EQUAL/CHANGED/ADDED/REMOVED`；同步滚动用共享 `JScrollBar` 或 viewport listener。
 6. 窗口形态：按需传 `DiffDialogHints.NON_MODAL`（`show.diff.as.frame` 未设时平台默认开 diff 标签页）。

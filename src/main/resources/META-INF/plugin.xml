@@ -233,6 +233,18 @@
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
 
+        <!-- F1''' T-GutterFirstOpenDelay 精华采纳刀：mapper XML namespace 自定义标量索引——
+             索引期摊平 namespace，Java→XML 跳转定位运行时毫秒级出答案（MPJ 反编译调研 Top1
+             可借鉴点，平台 EP 声明 dynamic="true" 非动态卸载屏障，热更新特性不受影响）。
+             索引器只读文件头提取根标签 namespace；正确性闸门在 PSI 侧（根 namespace+id 精确匹配）。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.log.MapperNamespaceIndex"/>
+        <!-- T-IbatisGutterPerf（2026-11-16）：iBatis 2.x <sqlMap> 的 namespace / 语句 id 自定义标量索引——
+             旧链要把全项目 XML 逐个 PSI 解析才筛出 sqlMap 文件（demo 根工程 2493 → 303，5s TTL 重扫），
+             本索引在索引期摊平三类键（all / ns: / stmt:），运行时一次 getContainingFiles 出候选文件。
+             只认根标签 sqlMap（与上面 MyBatis 侧 mapper 索引互斥、不扩面）；正确性闸门在 PSI 侧精确匹配。 -->
+        <fileBasedIndex
+                implementation="cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex"/>
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
@@ -501,11 +513,29 @@
              代码读取：ui/PreviewAssemblyWarm.enabledProvider。 -->
         <registryKey key="sqlvis.preview.assemblyWarm" defaultValue="true"
                      description="Warm up the SQL preview assembly in background when a mapper XML opens (no UI is created). Disable to build the preview only on click."/>
+        <!-- T-GutterFirstOpenDelay F2：gutter 首渲染三条预热链（MBG Example 预取 / 补全上下文 /
+             装配预热）的延迟量。工程 smart 后延迟 N 毫秒再踢一次，避免冷打开窗口里与快/慢趟 pass、
+             索引重建抢 BGT。0 = 旧行为（首渲染立即踢），回退通道。
+             代码读取：ui/gutter/GutterWarmScheduler.delayMsProvider。 -->
+        <registryKey key="sqlvis.gutter.warmDelayMs" defaultValue="5000"
+                     description="Delay (ms) before kicking the gutter warm-up chains (MBG Example prefetch, completion context, preview assembly) after the project enters smart mode. Set to 0 to restore the old behavior of kicking on first gutter render."/>
         <!-- T-PreviewExecWriteDefer：预览打开是否立即准备执行控制台（会写 mpsql-exec.sql；该文件带方言映射，
              写入会让平台重算语言替换并推文件属性 ⇒ 工程短暂进 dumb）。默认惰性：控制台在首次执行/切换
              数据源时由执行链准备。置 true 回到"打开即准备"的旧行为。 -->
         <registryKey key="sqlvis.preview.eagerConsole" defaultValue="false"
                      description="Prepare the execution console eagerly when the preview opens (writes the mapped exec SQL file, which can put the project into dumb mode briefly). Disable to prepare the console on first execution instead."/>
+        <!-- T-IbatisXmlArrowCallerGate：iBatis `<sqlMap>` 语句行的跳转箭头是否要求「Java 侧真的存在
+             调用点」。默认 true＝只有存在调用点才出箭头（改名/删调用后箭头消失，不制造点开必空的假图标）；
+             false＝回到旧行为（无条件出箭头，目标留到点击时查）。回退通道，下一版删除。
+             代码读取：ui/gutter/IbatisXmlToJavaLineMarkerProvider.requiresCallerProvider。 -->
+        <registryKey key="sqlvis.gutter.ibatisXmlArrowRequiresCaller" defaultValue="true"
+                     description="Show the iBatis XML-statement navigation arrow only when a Java call site actually references that statement. Disable to draw the arrow unconditionally (legacy behavior: the target is resolved on click)."/>
+        <!-- T-IndexScanSweep2 P1：补全候选「项目级名称清单」（跨文件 <sql id> / mybatis-config <properties> key）
+             是否走一次构建并缓存的服务。默认 true＝按索引状态失效、补全期零 PSI 全扫；false＝回到每次补全
+             现扫（FileTypeIndex 全项目 XML + 逐个建 PSI）的旧行为，供真机 A/B。回退通道，下一版删除。
+             代码读取：ui/highlight/XmlSymbolNameIndexCache.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true"
+                     description="Cache the project-wide completion name list (cross-file sql-id refs and mybatis-config properties keys) in a per-project service invalidated by index state. Disable to rescan all XML files on every completion (legacy behavior)."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

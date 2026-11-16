@@ -149,7 +149,8 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **证据**：2026-10-25 全量首跑 6 红（`BasePlatformTestCase` 派生的设置页布局类，档在项目记忆 pitfall-platform-ui-tests-not-in-testfast）；`f9341c3f`（2026-10-26，T-MagpieGems W2 脱敏分级改造的 6 红在分支潜伏两天，合并轮全量才暴露，master 侧全绿对照定性非合并引入）；**2026-11-07 T-SqlListCatchup 合 master `a0cc268e` 后 CI 三轮红 8 例**——券 A 给 `notifyUi` 加了 150ms 刷新窗（通知转 Alarm 延迟补刷），`SqlLogTailFollowTest`×5 / `SqlLogPanelFilterTest`×1 / `SqlListV179HeadlessTest`×1 断言的「动作后列表已同步刷新」全部失效（headless 泵不到未到点的 Alarm），另 `ReplayGuardStormVerdictTest` 未登记进元守卫。本战役六轮定向 + 244 例集成收口全绿，**一个都没抓到**，全靠 CI 全量。
 **正例**：动设置页 section 控件/面板布局/增删 JComboBox 等控件的提交，报告里写明「平台 UI 测试面，全量未跑＝not run 待收口」；**反例**：testFast 快桶绿就宣称设置页改动收口。
 **追加口径（2026-11-07）**：**引入「延迟/异步化」机制的改动与改布局同价**——任何把同步刷新改成延迟补刷（时间窗、节流、Alarm、invokeLater 链）的提交，都会让既有 UI 测试里的「动作后立即断言」失效；此类改动的定向面必须显式列出受影响的面板测试类（`SqlLogTailFollow*`/`SqlLogPanel*`/`SqlListV179*` 等）并逐个跑到，或直接以 CI 全量轮为准再收口。修复口径＝测试侧注入同步调度器（`manager.catchUpScheduler = { _, action -> action() }`，机制本身由专项用例覆盖），不要为了让测试变绿去放宽生产窗口。
-**Seen 3× (2026-10-25, 2026-10-26, 2026-11-07)**
+**追加口径（2026-11-14）**：**新增守卫/扫描类测试文件，定向清单必须含 `GuardSelfTestCoverageMetaGuardTest` 本身**——文件名含 `Guard`/`SourceScanTest` 就落在元守卫的文件名闭包扫描面（放 `convention/` 外的 `ui/gutter/` 也一样），漏登 `GUARD_CLASSES` 只在跑元守卫或 CI 全量时红。T-GutterFirstOpenDelay F1（`d3eb65079`）新增 `ui/gutter/MapperXmlSlowResolveFailGuardTest` 未登记，本地定向（含合并态四套件复跑）全绿，CI fast(1) `磁盘上存在未登记的守卫类` 才抓到（run 43606177980）；补登 `be43c4bf6` 同款先例已二现。
+**Seen 4× (2026-10-25, 2026-10-26, 2026-11-07, 2026-11-14)**
 
 ### L12 守卫的口径要以生产代码的实际契约为准，不能按「更严格更好」想象
 
@@ -250,10 +251,10 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L25 置顶 change-notes 新块时两件事同批做完并跑机器判据，且必须跑在打 tag 之前
 
-**规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（`dev-support/inspect-plugin-zip.py` 的同名断言）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
+**规则**：每次在 `gradle/plugin-change-notes.html` 加 `<h2>v{版本}</h2>` 块，同批做两件事并各跑一条机器判据——①**删掉上一块的「好用的话，欢迎到 Marketplace 页评分留言」**（`ChangeNotesRatingLineGuardTest` 断言全文只出现 1 次）；②**本版块内不得出现全角 `（ ） ：`**（现由 `dev-support/check-change-notes.py` 在 tag 前源码级判定，产物级再由 CI 在 `:buildPlugin` 后跑 `inspect-plugin-zip.py` 复核）。两条都要在 `git tag` 之前绿：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，`plugin-change-notes.html` 与 `update/preview.update.json` 两处文案还必须逐字一致。
 **证据**：2026-11-09 发行 v2026.11.9-beta.1 两处同时踩——①本地先跑守卫，`ChangeNotesRatingLineGuardTest` 1 红（评分引导句出现 2 次，`v2026.11.8` 历史块那行没删），改后 29/0/0/0；②自检放在**发布之后**才跑，`inspect-plugin-zip.py` 报 FAIL（第 3 条「新增中兴 GoldenDB 方言（第 15 种）…」的全角括号），此时 GitHub Release `438955517` 与 Gitee 发行版 `1290785` 已是带病产物，只能 tag 前移（`65e03bae` → `f9c5b0c3`）+ 重发一轮。
-**正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`inspect-plugin-zip.py` 跑在 `git tag` 之前，红了改文案重提交，代价是几十秒。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
-**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角判据在 `inspect-plugin-zip.py` 里、需要先有 zip——正确顺序是 tag 前**本地 `buildPlugin` 一次 + 跑检查器**（几十秒），而不是只跑守卫测试。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
+**正例**：把这两条判据串进「提交发行提交之前」的清单（`T-ReleaseChecklist-发行检查清单.md` RC-P3/RC-P5），`check-change-notes.py` 跑在 `git tag` 之前（秒级、零 Gradle），产物级 `inspect-plugin-zip.py` 由 CI 在 `:buildPlugin` 后对发布 zip 复核，红了改文案重提交。**反例**：先 tag、先发、再自检——代价是一整轮门禁 + 双通道重发 + tag 前移。
+**Seen 4× (2026-10-29, 2026-10-30, 2026-11-09 ×2)**——评分引导句累计三次被守卫抓到（前两次见 `ChangeNotesRatingLineGuardTest` 类内背景 KDoc：用户 2026-10-29 与 10-30 两度点名），本次起把「新块置顶同时删旧块那行」写成发行动作而非靠记性；全角标点 2×（2026-11-09 两例）：beta.1 是第 1 条目含全角括号；**v2026.11.10-beta.1 是第 2 例、形态不同**——全角**冒号**在条目中部（「预览参数可填值：动态条件…」），括号检查过了冒号没查。且本次即便**发版前跑了守卫测试（绿）也没用**：`ChangeNotesRatingLineGuardTest` 只管评分句，全角当时只在 `inspect-plugin-zip.py` 里、需要先有 zip，所以漏了。判据实现现已换成双轨：静态判据（评分句 / 最新块 / 裸 @ / 首个 h2 / 全角 / preview 逐字一致）由 `dev-support/check-change-notes.py` 在 tag 前秒级完成、零 Gradle 并带 `--self-test` 反向验证；产物级由 CI 在 `:buildPlugin` 之后对真正发布的那份 zip 跑 `inspect-plugin-zip.py`。两条文案判据仍须在 tag 前绿，本地 gates 虽不再跑 gradle，发行门禁（`releaseGate` / CI build）照常 `buildPlugin`，产物级复核挂在它后面——不是不需要 `buildPlugin`，更不是放行先发后检。本次 tag 两次前移（52f84f95→7d640980 夹具修正→44ab2393 文案）+ 双通道重发两轮。该半边继续留活跃区累计。评分句半边已按账本约定升级为 S11（`规范/编码与验收标准-规范.md`）。
 
 ### L26 用户报「多一个图标 / 点不跳」时按锚点矩阵逐格核，别只修截图指到的那一格
 
@@ -274,7 +275,7 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 
 ### L28 发行前置是「门禁绿」，不是「`buildPlugin` 成功」——`inspect-plugin-zip` 只证明包内自洽，不证明平台兼容
 
-**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip` 查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
+**规则**：`./gradlew buildPlugin` 出得了 zip、`inspect-plugin-zip.py` 全项 PASS，**都不构成发行判据**。打 tag 之前必须先有一条**门禁读数**：本地 `./gradlew releaseGate`（清单 RC-P1d 的默认路径，约 51 分钟）或 CI `build-plugin.yml` `mode=gate`（约 15 分钟，全面并行）。前者覆盖 `verifyPlugin` 三目标 + `verifyMarketplace` ×3 + 分片全量 + `e2eFakeIde`；后者同样跑 build / verifyplugin / verify×3 / marketplace×3 / test×5。缺这条就发版＝用「能打包」冒充「可发行」，用户装不装得上、平台兼不兼容全是未知。差别在**判据的对象**：`inspect-plugin-zip`（现由 CI 在 `:buildPlugin` 之后对真正发布的那份 zip 跑）查的是包内三方版本一致与文案，`verifyPlugin` 查的是**这一份字节**在 243/253/263 三个目标 IDE 上能不能加载。
 **证据**：2026-11-10 发行 `2026.11.11-beta.1` 时，本地只跑了 `buildPlugin` + `inspect-plugin-zip` + `ChangeNotesRatingLineGuardTest` + `BundlePlaceholderArityTest` 就打了 tag、建了 Gitee/GitHub 发行版（Gitee 1293976 / GitHub 440141088）；用户当场追问「你发行应该通过 CI 吧」。事后补派 `mode=gate`（run `42788614860` @ `9d32d936`，与 tag `308f5f96` 在 `src/` 零差异）。同一轮的前一版 `2026.11.10` 正式版是按规矩走的：release run `42758016138` 17/17、`verifyplugin` 验的就是待下发 zip。
 **正例**：按 RC-P1d 走——本地 `releaseGate` 为默认路径，需要干净环境才走 CI；要省时间用 RC-P1c 的「零代码改动复用」判据（相对上次全绿提交在 `src/main`/`src/test` 零差异可沿用分片读数），**但 `verifyGate` 不适用复用**：版本号进 `plugin.xml`，jar 变了必须在新产物上重验。**反例**：把「构建成功 + zip 内省 + 文案守卫绿」当发行门禁（本轮即此形态），三条都绿也换不来一句「能装在 243/253/263 上」。
 **Seen 1× (2026-11-10)**——用户点名「应该通过 CI」，同轮补派门禁。
@@ -688,6 +689,178 @@ Seen 3× (2026-10-09, 2026-10-23, 2026-10-24)。正文与后续复发检查见 [
 **正例**：先取证后重触发——实例没动、CI 9 分钟转绿；**反例**：一红就上服务器重启容器/调 `max_connections`（本轮水位 9/200，动了也白动），或者反过来「服务器故障红属正常」直接无视——两种都是不取证。
 
 **Seen 1× (2026-11-14)**
+
+### L71 CI 首次引入 Python 脚本先重配 stdout 为 UTF-8，别把编码红误诊成缺解释器
+
+**规则**：往 `.github/workflows/` 里加 `python xxx.py` 步骤时，脚本入口必须显式 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')`（stderr 同），因为 Windows runner 的 Python stdout 默认 **cp1252**，任何中文 `print` 都会抛 `UnicodeEncodeError: 'charmap' codec can't encode characters`；本机 Git Bash 控制台常见 GBK，同样受益。读文件本来就要显式 `encoding='utf-8'`（`mpv-release.gradle.kts:18-20` 的 GBK 教训同源）。判断失败原因要看日志里的解释器路径与栈：`C:\hostedtoolcache\windows\Python\3.12.10` 已存在就说明**不缺 Python**，别去加 `actions/setup-python`（加了也不解决编码，还多一个 job 步）。改完用 `PYTHONIOENCODING=cp1252 python -I <脚本>` 与 pwsh 双模拟复跑，再派一轮真 CI 取证。
+
+**证据**：2026-11-15 `mode=gate` run `43667161444` 的 build job 红在新增的「changeNotes 源码级判据」步——`check-change-notes.py` 打印 `[OK ] C1 评分引导句…` 时 cp1252 编码失败，连 `--self-test` 与后续产物自检一起被跳过；同轮 runner 自带 Python 3.12.10。修法＝两个脚本（`check-change-notes.py` / `inspect-plugin-zip.py`，后者也有中文 `[OK]/结果:` 行）入口各加重配（`83375e4b1`）；`PYTHONIOENCODING=cp1252` 与 pwsh 模拟全 PASS，复验 `mode=gate` run **`43668500925` conclusion=success（13 成功 / publish 按 gate 设计 skipped）**，日志里两步分别打印 `结果: PASS` 与 `反向读数: 9/9 条判据变红`、产物自检步正常执行。诊断中一度误判「缺 python 解释器」而加了 setup-python 步，读日志后撤销——**先取证再动手**的又一例。
+
+**正例**：读栈定位到 `encodings/cp1252.py` → 只改输出编码、不动判据逻辑；**反例**：见红就加 setup-python 或把脚本输出改成全 ASCII（判据标签可读性下降，且掩盖真实原因）。
+
+**Seen 1× (2026-11-15)**
+
+### L72 CI 提速先量「全局地板」再动刀：单腿变快≠整轮变快，放大共享缓存会连坐所有腿
+
+**规则**：动 CI 编排前，先用 `gh run view <id> --json jobs` 拉逐 job / 逐 step 的 `startedAt`/`completedAt`，找出**整轮关键路径**与**真地板**；只优化关键路径上的腿才可能省墙钟。任何改动都用同 workflow、只差一个变量的 `mode=gate` 轮做 A/B（不发布），并对比「整轮 conclusion 时刻」而非单腿耗时。两条已证伪的路线不要再试：①把最长测试腿切片并行——固定成本（缓存恢复/编译/demo）占大头，切片只省测试执行那一小段；②把 IDE 解包预置进共享 `gradle-transforms` 缓存——条目变大会让**所有** `cache-read-only` 腿的恢复一起变慢，省下的单腿 provisioning 被分摊开销吃光还倒赔。共享缓存逼近 10GB 上限时还会触发淘汰抖动。③连续多轮预热/淘汰会让共享缓存进入不健康态：此时「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，可能误判已解包而跳过 provisioning，随后 `verifyGate` 硬校验报「IDE 发行目录未在 transforms 找到」成片红——A/B 前先确认缓存状态干净，别在脏缓存上继续测。
+
+**证据**：2026-11-15 两轮真 CI A/B，基线 run `43668500925` 13.1 min（逐 step：`test(fast)` 11.27 是真地板；`verify(263)` 6.78 里 provisioning 占 3.82、验证本体仅 1.07；build 6.20 中缓存恢复 2.23）。① `test(fast)` 拆 `fast1/fast2`（`-PfastBucketSliceCount=2`）：run `43671286693` success，单腿降到 9.40/10.50，但 `test(1)` 11.52 接棒成新地板，整轮 12.9 min ≈ 无收益（`37dc0e617` → 已 revert）。② 一次性 263 缓存预热（独立 workflow 用可写 setup-gradle 跑 `:verifyPlugin -PverifyIdes=263 -x buildPlugin`）：run `43672377221` success，新 `gradle-transforms` 条目 6216.8MB（原 4662MB）；复验 run `43673292675` success 且 **verify(263) provisioning 3.82→0.02 min 确实命中**，但「配置 Gradle 缓存」1.52→3.07、`test(fast)` 11.27→**14.90**，整轮约 15.3 min，净负收益约 2.2 min（`07781a5d6`/`0ca427250` 已撤销，缓存由 build job 常规保存自动回落到 8.25→2.04GB）。两条改动均已 revert，`build-plugin.yml` 与基线逐字一致。第三次尝试「把 verify(263) 的 provisioning `:verifyPlugin` 与 `:verifyGate` 合进同一次 gradle 调用」在 run `43675893389` 上 failure：`verify(253)` / `verify(263)` 的 `:verifyGate` 报「IDE 发行目录未在 transforms 找到」——根因是反复预热/淘汰把共享缓存搞乱后，「确认 IDE 已解包」步的 `$found` 遍历与 `verifyGate` 的 `ideDir()` 口径不一致，误判已解包而跳过 provisioning；与合并改动本身无关（该轮 `$found=true`，走的是原分支）。已 revert，主 workflow 再次与基线逐字一致。
+
+**正例**：先量逐 step 耗时定位真地板，再用 `mode=gate` 同变量 A/B，负收益立即 revert；**反例**：只看「某条腿慢 3.82 min」就动手，或把「单腿变快」当成「整轮变快」写进结论。CI 编排历经 run#5 35.0 → run#19 13.4 min 的多轮优化，当前已接近地板，改动前先假设收益为 0 并用 A/B 证伪。
+
+**Seen 1× (2026-11-15)**
+
+### L73 「文本扫描 + PSI 预解析」的旁路必须随内容来源扩域，否则只在片段里失效
+
+**规则**：新增一类**文本来源**（跨文件 include 片段、注入片段、模板展开）时，所有「扫原文 + 查 PSI/索引」的预解析旁路都要在同一批扩域；判据是**渲染域 == 扫描域**，不是「编译过、渲染跑通」。这类漏项的现场读数是**差分形态**：同一条语句里本地写法生效、来自片段的一模一样的写法不生效——见到这种差分先查「这条内容由哪段文本承载、那段文本进没进扫描」，不要先怀疑常量类型/模块可见性/PSI 解析能力。
+
+**证据**：T-BindStaticRefCrossNs（2026-11-16，用户 `cyzc-platform` / IDEA 2026.3）：`T-IC-02` 加跨命名空间 include 后，`XmlPreviewService.preview` 的静态常量扫描仍只传 `fileText`；片段内 `<bind value="@com.cyzc...DicConstants@DIC_VALUE_STATION_CATEGORY_BIKE"/>` 因此漏出注入表 → `Ognl` 按 `类@字段` 键取到 null 且不报错 → `VarDeclSqlNode` 出「求值为空」红条；同语句本地 `@…DIC_VALUE_BIKE_ORDER_END` 正常回填 `3`，正是差分。修法（`ad1deacb0`）＝多文本入口（当前文件 + `crossNamespace.fragments.values`），顺带把 `findFieldByName(…, checkBases = true)` 对齐运行时反射 `Class.getField`（含继承）。读数：改前 3 红；改后定向 74/0/0/0；反向验证摘掉片段文本恰 2 红、退回 `checkBases=false` 恰 1 红。同轮横向核过 ew 占位（`rawText` 取的是展开后的 `element.textContent`，已覆盖）与参数类型（按方法签名，不涉文本）。
+
+**正例**：先按「渲染域」列内容来源清单，再逐个核对扫描域；**反例**：只修报障的那一处，或把「渲染能跑通」当成「预解析覆盖完整」。
+
+**Seen 1× (2026-11-16)**
+
+### L74 机制替换要覆盖「同形态的平行实现」，只修被点名的那条链等于没修
+
+**规则**：做**机制替换类**改动（全项目扫描→自定义索引、同步→异步、吞异常→上抛）时，落笔前先把
+「同形态的弟弟们」列全：同一入口语义、同一老实现样式（同样的 `FileTypeIndex` 全扫、同样的单槽 TTL、
+同样的 `runCatching{}.getOrDefault(emptyList())`）的平行类/函数。验收判据不是「报障文件好了」，
+而是「这份同类形态清单里不存在第二个老实现」，清单要写进计划文件（本项目在计划 §四 P4 横向审计表）。
+理由：机制替换通常只被一处故障触发，而报障往往下一次落在**没被点到**的那条平行链上，时间差几天，
+容易被当成新 bug 重新归因、从头再查一遍。
+
+**证据**：T-GutterFirstOpenDelay F1'''（`7dc6c1c73`，2026-11-15）把 MyBatis 侧的 `MapperXmlLocator`
+换成自定义索引 `MapperNamespaceIndex`，而未动 iBatis 侧**同形态**的 `IbatisXmlStatementTargets`
+（仍是 `FileTypeIndex` 全项目 XML + 逐个 PSI 解析筛 sqlMap 文件 + 5s TTL 单槽 + `runCatching` 吞取消）。
+次日（2026-11-16）用户在 `UserDaoImpl.java` 报「预览/跳转图标加载很慢，且出现过一次后无故不显示」：
+日志实测 demo 根工程 **2493 个 XML / 16.58 MB** 逐个解析才筛出 303 个 `<sqlMap>`，同进程三工程
+互相踢单槽；`09:03:19` / `09:06:02` 两次预览 `[M36] showSql len=0`（= `statementNotFound`）与
+`09:04:22`/`09:05:05`/`09:07:38` 的 `len=86/86/85` 好/坏交替，正是「取消被吞成空清单 + 慢趟结果固化」的指纹。
+修法（`b5ccf14c7` 索引 + `bcad37b84` 瘦身/兜底）＝同形态迁移，横向审计表另列 `MybatisXmlTargets`
+（同病，挂 reference 热路径）、`XmlCrossNsFragmentResolver`、`HbmXmlEntityResolver` 三面待办。
+
+**正例**：替换前 grep「老机制的指纹」（本次是 `FileTypeIndex.getFiles(XmlFileType` + `fileListTtlMs` +
+`getOrDefault(emptyList())`）得到全集，再逐个判定进不进热路径；**反例**：只改报障类，或改完只跑
+报障文件的用例（本次若止步于此，iBatis 侧要再等下一次用户报障）。
+
+**Seen 1× (2026-11-16)**
+
+### L75 构建/沙盒「静默结束」先读 hs_err 与 commit，别先怀疑代码或增量缓存
+
+**规则**：Gradle 构建或 runIde 出现「跑到某个 task 就结束、既无 `e:` 编译错误也无 `BUILD FAILED`
+段」这种**静默死亡**时，按进程级死因排查，顺序固定：① 在**工程根与启动目录**找当天的
+`hs_err_pid*.log`（JVM 崩溃必然落盘）；② 看首屏关键字——`There is insufficient memory` /
+`Native memory allocation (malloc) failed … Chunk::new` / `mmap failed … G1 virtual space` 一律是
+**提交量（commit）耗尽**，与源码无关；③ 采 commit 而不是 CPU（本机定例：`Get-Counter
+'\Memory\Committed Bytes'` 对比 `TotalVirtualMemorySize`）；④ 列本机 java 进程的**启动日期**，
+杀「今天之前启动且命令行含 `-Djps.java.compiling.tool=Javac`」的孤儿编译 worker（历史 runIde
+沙盒强关后的残留，单个 `-Xmx700m` 但会涨），杀前逐个打印 PID+启动时间；
+⑤ 先 `./gradlew --stop` 回收空闲 daemon；⑥ 复测 commit，再用 `./gradlew compileKotlin` 反证
+「源码本来就能编译」。
+
+**证据**：2026-11-16 用户启动沙盒失败，控制台停在 `> Task :compileKotlin` 后报「已失败 53 秒」，
+无任何编译错误行。根目录两份 `hs_err` 定死因：`hs_err_pid8456.log`（10:18）＝
+`Native memory allocation (mmap) failed to map 1023410176 bytes. Error detail: G1 virtual space`；
+`hs_err_pid17376.log`（10:23，正是该次 runIde 的 daemon）＝`malloc failed to allocate 1144816 bytes.
+Error detail: Chunk::new`（JIT arena）。清理前实测 **Commit 67.1GB / 上限 76.4GB（88%）**、空闲物理
+内存 8.5GB；本机共 11 个孤儿 JPS 编译进程（启动于 11-10 / 11-13 / 11-14 / 11-15，路径指
+`transforms/…/ideaIU-2024.3.7.1-win`）。`./gradlew --stop` + 按启动日期筛杀孤儿后：
+**Commit 45.3GB / 74.9GB、空闲 10.8GB**（空出 21.8GB）；随即 `./gradlew compileKotlin`
+**BUILD SUCCESSFUL**（2m21s，配置缓存正常存储），证明与本次代码改动无关。同族但不同的两笔已有账：
+L22/L23 记的是 prepareSandbox 的 **mmap 文件锁**（沙盒在跑），本条记的是**内存提交量**。
+
+**正例**：先 `hs_err` → commit → 进程清单，三步定性再动手；**反例**：把「停在 compileKotlin」当成
+Kotlin 增量编译坏了去 clean/重建，或在 88% commit 的状态下继续叠 verifyPlugin（一次 3 个 IDE
+verifier JVM）＋全量测试（多个 1GB 堆测试 JVM）＋runIde（2GB 级），必然再崩。用户要起沙盒前，
+本机不应同时跑全量/构建校验。
+
+**Seen 1× (2026-11-16)**
+
+### L76 抗抖动缓存的**收回条件**必须落在「查询成功且确认不存在」，不能靠「返回空」判
+
+**规则**：为了不让界面因瞬时失败而闪没，加「解析成功过就记住」的正缓存是正解；但这类缓存必须同时
+定义收回条件，且收回判据只有一个合法来源——**查询已经成功执行、且确认目标不存在**。三条推论：
+① 「返回值是否为空」不能当判据：它既可能是「确定没有」也可能是「这次没算完」，两者混用必然在
+「抗抖动」与「永不过期」之间二选一；
+② 内部实现要把这个区分**显式化**（三态 `Found / Absent / Unknown`），而不是靠调用方猜；
+③ 取消（`ProcessCanceledException`）永远算「没算完」，不得当作「不存在」。
+
+**证据**：T-IbatisGutterPerf 同一功能一个下午内两轮用户报障（2026-11-16）：第一轮报「图标一开始显示过
+后面无故不显示」→ 加会话级正缓存 `resolvedIbatisKeys`（只进不出）；第二轮（沙盒复验）用户把
+`User.xml` 的 `namespace="User"` 改掉，**图标不消失**——缓存给已不存在的目标续命。修法
+`8eca5211f`＝`lookupStatementAnchors` 三态（`Found` 入缓存 / `Unknown` 保留不摘 / `Absent` `remove`
+并摘图标），`IndexNotReadyException` 归 `Unknown`、PCE 仍上抛；守卫同时钉「`Absent` 分支必须
+`remove(`」。读数：定向 9 类 95/0/0/0；反向摘掉 `remove` 一行恰 2 红（矩阵 1 + 守卫 1）→ 恢复 0 红。
+同形态技术在 MyBatis 侧 `resolvedStatementKeys` 同样存在（已在 2026.11.16 发行），本轮按用户令
+「接着修」同批收口（`c0bc9b043`，T-MapperGutterEvict）：`MybatisXmlTargets.lookupInterfaceMethod` /
+`MapperXmlLocator.locateOrUnknown` 各出三态，两个 provider 改五段式（dumb 门前移 / Found 入缓存 /
+Unknown 保留 / Absent `remove` 并摘图标），`catch IndexNotReadyException` 收敛在 resolver 内、provider
+方法体零 catch；守卫新增「`Absent` 分支必须 `remove(`」强制项，反向摘掉 remove 一行恰 2 红。定向 93/0/0/0。
+
+**正例**：加缓存时同时写两段判据——「命中后什么时候**不**信它」与「什么时候**收回**它」，并各配一条
+反向用例；**反例**：用「空/非空」一个布尔承载两种语义（本轮两次都栽在这上面）。
+
+**Seen 2× (2026-11-16)**
+
+### L77 共用工作树里别家车道的在途文档别用 `git stash push` 挪开——pop 冲突窗口里对方会把冲突标记提交进去
+
+**规则**：多车道共用一个工作树时，给「别家正在改的共享文档」腾位，禁用 `git stash push -- <文件>`。stash 只把内容挪进你的 stash、文件在工作树里回到 HEAD 版本，而对方下一次 `git add`/commit 会把你 pop 出来的冲突块（`<<<<<<<` / `=======` / `>>>>>>>`）当成正常内容提交——冲突标记直接进主干。正路三条：等对方提交完再动同一文件；只用 `git apply --cached` 暂存自己那一段；或把自己的改动做成排在对方之后的独立小提交。附加坑：`git checkout --ours/--theirs` 在 stash pop 冲突上**并不解决问题**（当时 `git ls-files -u` 无条目，命令静默无效），别把它当兜底。
+
+**证据**：2026-11-16 本仓 master，用 `git stash push -- CHANGELOG.md` 给别家的 iBatis 落账行腾位，pop 时形成冲突块；同一分钟对方提交 `39203c4b5` 把带 `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes` 的 CHANGELOG 一并提交（`git log -S'<<<<<<< Updated upstream' -- CHANGELOG.md` 定位）。修复 `ba2b7ea41`：`git checkout 887882a42 -- CHANGELOG.md` 取回干净版，手工补回对方那格的哈希 `8eca5211f`，再全仓扫 `\n<<<<<<< ` 确认 0 命中。
+
+**正例**：对方提交完再动同一文件；**反例**：stash 挪开别家在途文档、或冲突后只 `checkout` 一侧就宣布解决。
+
+**Seen 1× (2026-11-16)**
+
+### L78 调度器/延迟派发体读 PSI 必须自带读动作，且**测试缝同步执行**会让这类缺陷永远不被单测发现
+
+**规则**：任何交给 `AppScheduledExecutorService` / 池线程的**延迟派发体**，只要摸 PSI（`isValid`、
+`containingFile`、`getAttributeValue`、`text`…），就必须在体内自带 `runReadAction`——**不能依赖调用方
+上下文**：同一段逻辑从「EDT/读动作里的立即踢」搬到「池线程上的到点踢」时，读权限会静默丢失。
+更要命的是这类缺陷**进不了单测**：把延迟派发改成同步执行的测试缝（`syncDispatchForTest` /
+unit-test 模式）会让延迟体跑在**已持读动作的测试线程**里，断言永远不触发——所以验收只能靠
+**源码扫描守卫**（钉「延迟体里有 runReadAction，且复检与干活都在它之后」），并按惯例配老形态自证。
+
+**证据**：2026-11-16 沙盒 `idea.log` 12:35:42 一次连出 3 条
+`SEVERE - #c.i.u.c.ThreadingAssertions - Read access is allowed from inside read-action only`，
+三帧同源 `GutterWarmScheduler.scheduleWarmIfDue$lambda$0`：`:126` 的 `tag.isValid`（到点复检）、
+`:130` 经 `kickFileWarmers` 进 `warmCompletionContextOnce` 与 `PreviewAssemblyWarm.warmOnce` 的
+`tag.containingFile`。F2（`7ad1d1a5d`，2026-11-14）把三条预热链从「首渲染直踢」改为「延迟派发」时丢了
+读动作；该缺陷带病过了 11-14 的验收与 11-16 的发行，直到用户沙盒跑够长才现形。修法（`e4b3fdd27`）＝
+「到点复检 + 踢出」整体包一次 `runReadAction`（三链内部重活各自开 `NonBlocking`）；守卫＝
+`GutterWarmSchedulerTest.延迟派发体必须包读动作`（含老形态自证）。**同族第二例**：同一份日志 11-13
+另有 41 条同类报错，来自 `XmlSqlCompletionContextResolver.warmCandidates`（面板线在工作线程上调用，
+已于 §二十四 补 `nonBlocking + inSmartMode`）——同一个「异步链没读动作」在两个链路上各栽一次。
+
+**正例**：延迟体整体包一次读动作，重活交给链内的 `nonBlocking`；守卫扫「复检/干活是否都在读动作之后」。
+**反例**：靠「调用方通常在 EDT」的隐含前提；只给点击/验收路径补；或以为「单测全绿＝这条链没问题」
+（本缺陷单测 7 例全绿）。
+
+**Seen 1× (2026-11-16)**
+
+### L79 「容错的尾缀匹配」在多命名空间语料里必然误命中——身份判定要锚定声明的命名空间
+
+**规则**：凡按「名字」找目标（语句 id、资源名、配置键），**先确定这个名字的身份域**（命名空间/
+模块/包），判定只在该域内做精确比较；**不要**为「兼容多种写法」放宽成「任意前缀 + 同名尾段」
+（`value.endsWith(".$name")`）——在只有一个命名空间的样例工程里它看似无害，在多命名空间语料里
+它把「同名的另一条语句」认成同一条。放宽匹配必须能说出**引擎侧的等价语义**（如 iBatis 的
+`namespace + "." + id`），说不出就不该放宽。
+
+**证据**：T-IbatisXmlArrowNamespace（2026-11-16 用户沙盒第三轮报障）：`sqlmap/User.xml:62` 的
+`<select id="selectById">` 点箭头跳到 `cust-big-demo` 的
+`com/demo/cust/order/dao/impl/OdLogistics60233DaoImpl.java:37`。`IbatisJavaCallSites.matches` 自券 B
+（`d04033aad`）起有第三条子句 `value.endsWith(".$statementId") && value.length > statementId.length + 1`；
+词索引按词（`selectById`）取候选，而 demo 的 `cust-order` 里遍地 `Od*.selectById`，`limit=1` 直接
+返回第一个命中 ⇒ 跨命名空间误跳。修法（`2eecbdcba`）＝只认「裸 `id`」与「`本文件 namespace.` + `id`」
+两种精确形态；同一函数的三处消费方（箭头点击、Ctrl+Click、箭头存在性门槛）一并修正。
+读数：定向 14 类 160/0/0/0；反向把尾缀子句加回恰 1 红。**同族提醒**：这一刀同时暴露
+「样例语料只有一个命名空间 → 宽松匹配永远测不出问题」，故新用例特意造了**两个命名空间 + 同名 id**
+的夹具（只靠 demo 语料仍会漏）。
+
+**正例**：判定入口先问「这个名字属于哪个域」，域内精确比较；跨域同名视为不同目标。
+**反例**：为了「兼容历史上见过的几种写法」加尾缀/正则通配，且没有引擎语义背书。
+
+**Seen 1× (2026-11-16)**
 
 ## 升级记录
 
