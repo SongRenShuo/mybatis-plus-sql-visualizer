@@ -4,8 +4,12 @@
 
 ## [Unreleased]
 
+## [2026.11.16-beta.2] - 2026-11-16
+
+> 同日第二个内测版，累计含 `2026.11.16-beta.1` 的全部内容；本版新增 T-IndexScanSweep2 P1（补全候选名称清单索引化）。
+
 ### Fixed
-- **mapper 补全的「跨文件片段名」与 mybatis-config 变量名不再每次按键都重扫全项目 XML（T-IndexScanSweep2 P1，`b77180ee6`）**：在 mapper XML 里写 `<include refid="…"/>` 时的跨文件片段候选、以及 `${…}`/`<if test>` 里来自 mybatis-config `<properties>` 的变量名，原本每次弹出补全都把项目内最多 500 个 XML 文件逐个解析一遍再拼清单（工程越大越慢，而清单内容几乎不变；实测同一清单连续两次调用耗时同量级＝每次全付）。现在改由项目级服务一次构建、按 IDE 索引状态失效（新增/删除/保存 mapper 或配置文件后立即生效，无 5 秒窗口），补全期不再解析全项目 XML，大工程连续补全只在首次建一次清单。想回到旧的「每次现扫」行为，可在 Registry 把 `sqlvis.completion.nameIndexCache` 置 false（回退通道下一版删除）
+- **mapper 补全的跨文件片段名与 config 变量名不再每次按键重扫全项目 XML（T-IndexScanSweep2 P1，`b77180ee6`）**：`<include refid="…"/>` 的跨文件片段候选与 `${…}` / `<if test>` 里来自 mybatis-config `<properties>` 的变量名，原本每次补全都把最多 500 个 XML 逐个解析拼清单（工程越大越慢、清单却几乎不变）。现在改由项目级服务一次构建、按 IDE 索引状态失效（新增/删除/保存 mapper 或配置即生效，无 5 秒窗口），大工程连续补全只首次建一次清单。Registry `sqlvis.completion.nameIndexCache=false` 可回到旧行为（回退通道下一版删除）
 
 ## [2026.11.16-beta.1] - 2026-11-16
 
