@@ -791,13 +791,16 @@ verifier JVM）＋全量测试（多个 1GB 堆测试 JVM）＋runIde（2GB 级�
 `8eca5211f`＝`lookupStatementAnchors` 三态（`Found` 入缓存 / `Unknown` 保留不摘 / `Absent` `remove`
 并摘图标），`IndexNotReadyException` 归 `Unknown`、PCE 仍上抛；守卫同时钉「`Absent` 分支必须
 `remove(`」。读数：定向 9 类 95/0/0/0；反向摘掉 `remove` 一行恰 2 红（矩阵 1 + 守卫 1）→ 恢复 0 红。
-同形态技术在 MyBatis 侧 `resolvedStatementKeys` 仍然存在（已在 2026.11.16 发行），已登记为
-本计划 §9.6 的「同族未修」项。
+同形态技术在 MyBatis 侧 `resolvedStatementKeys` 同样存在（已在 2026.11.16 发行），本轮按用户令
+「接着修」同批收口（`c0bc9b043`，T-MapperGutterEvict）：`MybatisXmlTargets.lookupInterfaceMethod` /
+`MapperXmlLocator.locateOrUnknown` 各出三态，两个 provider 改五段式（dumb 门前移 / Found 入缓存 /
+Unknown 保留 / Absent `remove` 并摘图标），`catch IndexNotReadyException` 收敛在 resolver 内、provider
+方法体零 catch；守卫新增「`Absent` 分支必须 `remove(`」强制项，反向摘掉 remove 一行恰 2 红。定向 93/0/0/0。
 
 **正例**：加缓存时同时写两段判据——「命中后什么时候**不**信它」与「什么时候**收回**它」，并各配一条
 反向用例；**反例**：用「空/非空」一个布尔承载两种语义（本轮两次都栽在这上面）。
 
-**Seen 1× (2026-11-16)**
+**Seen 2× (2026-11-16)**
 
 ### L77 共用工作树里别家车道的在途文档别用 `git stash push` 挪开——pop 冲突窗口里对方会把冲突标记提交进去
 

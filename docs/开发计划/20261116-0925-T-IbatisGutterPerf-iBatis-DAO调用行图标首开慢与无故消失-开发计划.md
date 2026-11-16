@@ -317,8 +317,33 @@ XML→Java 方向（`IbatisXmlToJavaLineMarkerProvider`）横向评估后决定�
 不是靠猜）。反向验证：摘掉 `resolvedIbatisKeys.remove(key)` 一行 → 30 例 **恰 2 红**
 （矩阵「确定不存在」+ 守卫），Edit 恢复后 **0 红**。
 
-**同族未修（登记）**：MyBatis 侧的 `MapperXmlToJavaLineMarkerProvider` / `MapperJavaToXmlLineMarkerProvider`
-用的是同一套「`resolvedStatementKeys` 只进不出」形态（删掉 mapper 方法 / 改 `<mapper namespace>`
-时图标同样会滞留）。本刀不动它：它已在 2026.11.16 发行并验收，改动面涉及两个 provider + `MybatisXmlTargets`
-+ `MapperXmlSlowResolveFailGuardTest`（该守卫还硬编码「方法体内不得出现 catch」，而 MyBatis 侧的
-三态化需要 catch `IndexNotReadyException`），须单独立项、单独一轮定向与真机复验。
+**同族（已于同日收口，见 §9.7）**：MyBatis 侧的 `MapperXmlToJavaLineMarkerProvider` /
+`MapperJavaToXmlLineMarkerProvider` 用的是同一套「`resolvedStatementKeys` 只进不出」形态（删掉 mapper
+方法 / 改 `<mapper namespace>` 时图标同样滞留），用户 2026-11-16 同一轮要求「接着修」，见下节。
+
+### 9.7 增补 T-MapperGutterEvict（2026-11-16 同日收口）：MyBatis 侧同族缓存收回
+
+**修法**（与 P2.1 同构，用户令「接着修，修完可以推」）：
+
+- `MybatisXmlTargets.lookupInterfaceMethod` → `MethodLookup.Found/Absent/Unknown`（`IndexNotReadyException` 归 Unknown）；
+- `MapperXmlLocator.locateOrUnknown` → `Lookup.Found/Absent/Unknown`（同上）；
+- 两个 provider 改五段式：**dumb 门前移**（避免索引重建期查索引）→ `Found` 入缓存 → `Unknown` 保留
+  缓存命中 → `Absent` `resolvedStatementKeys.remove` 并摘图标 → 其余不产出。
+- `catch` 只捕获 `IndexNotReadyException` 且**收敛在 resolver 内**，provider 方法体仍零 `catch`
+  （`BannedApiScanRuleTest` 与守卫的「禁 catch PCE」口径不变，PCE 照旧上抛）。
+
+**守卫改造**：`MapperXmlSlowResolveFailGuardTest` 锚点改为 `lookupInterfaceMethod(` /
+`MapperXmlLocator.locateOrUnknown(`；判定条件由「dumb 门与 contains 都在解析之后」改为
+「dumb 门在查询**之前** + contains **之后** + **remove 之后**」；自证语料扩到五向（修复后 /
+缓存只进不出 / 无兜底 / dumb 门错位 / 缓存先于查询），另加 Java 侧同构四向。
+
+**矩阵改造**：`MapperNavigationLineMarkerProvidersTest` 两条「失败 + 缓存命中」用例改走 Unknown 缝
+（`methodLookupOverrideForTest` / `lookupOverrideForTest`），新增 XML 侧与 Java 侧各一条
+「确定不存在 → 摘图标 + 收回缓存」；`resetResolvedCacheForTest` 一并复位两个缝。
+
+**读数**：定向 8 类 **93/0/0/0**（`MapperNavigationLineMarkerProvidersTest` 21、`MapperXmlSlowResolveFailGuardTest` 4、
+`MapperNavigationGutterGateTest` 11、`MapperXmlLocatorTest` 10、`GuardSelfTestCoverageMetaGuardTest` 8、
+iBatis 回归 28/2/9）。反向验证：摘掉 XML 侧 `resolvedStatementKeys.remove(key)` 一行 → 25 例 **恰 2 红**
+（矩阵「确定不存在」+ 守卫），Edit 恢复后 **0 红**。
+
+**提交**：`c0bc9b043`。
