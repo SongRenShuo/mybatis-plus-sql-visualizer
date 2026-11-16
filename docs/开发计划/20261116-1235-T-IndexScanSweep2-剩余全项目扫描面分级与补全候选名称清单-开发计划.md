@@ -94,4 +94,70 @@
 
 ## 八、实施记录
 
-（待实施后回填；若 C3 实测判定为「不做」，也在本节记账：探针读数 + 判定。）
+实施日期 2026-11-16；工作树 `.worktrees/t-index-scan-sweep2`（分支 `t-index-scan-sweep2`，基线 master `ba8b53dc5`）。按主控定例**不跑 verifyPlugin / 构建校验**（交 CI），只跑定向测试。
+
+### 8.1 P-1/P-2 证伪（先做，结论：**继续实施**）
+
+**静态证据**
+
+- 补全入口在**每次补全调用**都执行：`ui/highlight/XmlSqlCompletionContributor.kt:299-302` 的 `refid` 分支（`:301` 调 `XmlCompletionSymbols.crossFileSqlIds(project, enclosingTag.containingFile as? XmlFile)`）；该分支在 `addCompletions`（`:65-69` 起）的属性值分流里，每次弹窗/随输入重算都会走到。
+- 改造前 `XmlCompletionSymbols.kt:233-254` 的 `crossFileSqlIds` 体内**无任何缓存**（无 stamp、无 project user data），每次都是 `FileTypeIndex(XML)` → `take(500)` → 逐文件 `PsiManager.findFile` → `rootTag` → 遍历 `<sql>`。
+- 改造前 `configPropertyKeys`（`:299-317`）虽有缓存，但失效戳是 `PsiModificationTracker.modificationCount`（击键即失效，等于没有）。
+
+**定量证据**（临时 `BasePlatformTestCase` 探针，N=100/200/400 个 mapper XML；每档热身一次后连测两次，探针测后已删）
+
+| N | xmlFiles | size1 / size2 | ms1 / ms2 |
+|---|---|---|---|
+| 100 | 101 | 100 / 100 | 3.46 / 2.88 |
+| 200 | 201 | 200 / 200 | 44.69（首查含索引落地+JIT）/ 2.99 |
+| 400 | 401 | 200 / 200（CAP=200 截断） | 2.80 / 2.77 |
+
+判读：**第二次与第一次同量级 ⇒ 每次全付、无缓存**；耗时随 N 增长（100→200 档可见）。Light 夹具的 PSI 比真机便宜（绝对值 2~4ms），故按计划口径取**相对形态**作判据，不取绝对值 → **继续实施**。
+
+**P-3 前置事实（实测推翻计划里猜的签名，影响设计）**
+
+- `javap` 实证：243（`lib/app-client.jar`）与 262（`lib/intellij.platform.indexing.jar`）的 `com.intellij.util.indexing.FileBasedIndex` **没有** `getModificationStamp(Project, String)`；在册的是 **`getIndexModificationStamp(ID<K,V>, Project): long`**。
+- 运行期实测语义：该代戳只随**索引产出**变化——新增一个 XML 文件 +1；改已存在 mapper 的 `<sql id>`（namespace/根标签没变 ⇒ 索引键不变）**恒不变**（`before=401 after=401`）；同期该文件 `VirtualFile.modificationStamp` 由 `14 → 2112`。故本刀失效代戳＝索引代戳 **⊕** 逐文件 `VirtualFile.modificationStamp`，缺一不可。
+
+### 8.2 改动点与提交
+
+| 提交 | 内容 |
+|---|---|
+| `bf2f61010` | `log/MapperNamespaceIndex` v1→v2：新增 `#mapper` / `#config` 文件级标记键；新增 `rootElementName`（跳过 XML 声明/DOCTYPE/注释后首个元素名，修掉 `<mappers><mapper resource=…/>` 被老锚误判成 mapper 文件）；`getVersion()` 1→2；新增 `getMapperFiles` / `getConfigFiles` / `getIndexStamp`。既有 namespace 键语义零改动（`MapperXmlLocator` / `XmlCrossNsFragmentResolver` / `MybatisXmlTargets` 三消费方不动） |
+| `b77180ee6` | 新增 `ui/highlight/XmlSymbolNameIndexCache`（`@Service(Service.Level.PROJECT)`，懒建、`ReadAction.nonBlocking{}.inSmartMode(project).expireWith(project)`、按「索引代戳 ⊕ 逐文件 modStamp」失效、建好前返回空、不引 `PsiTreeChangeListener`/`EditorFactoryListener`）；`XmlCompletionSymbols.crossFileSqlIds` / `configPropertyKeys` 接线 + `legacyCrossFileSqlIds` / `legacyConfigPropertyKeys` 回退；`plugin.xml` 登记 `<registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true">`（英文 description，不引 bundle 键） |
+| `1184529a2` | `XmlSymbolNameIndexCacheTest`（8 例）+ `XmlCompletionNameIndexWiringTest`（2 例：方法体扫描 + 合成样本自证）+ `MapperFileLookupIndexTest` 注释同步（`XmlCompletionSymbols` 的扫描面改指新守卫） |
+| `8bb718909` | `CHANGELOG.md` `[Unreleased]` 回填 |
+| （本笔） | 本节 §八 实施记录回填 |
+
+### 8.3 定向读数（同批 98 例，全绿）
+
+| 测试类 | tests | failures | errors |
+|---|---|---|---|
+| `ui.highlight.XmlSymbolNameIndexCacheTest` | 8 | 0 | 0 |
+| `ui.highlight.XmlCompletionNameIndexWiringTest` | 2 | 0 | 0 |
+| `ui.highlight.XmlSqlCompletionW4W5CrossFileTest` | 7 | 0 | 0 |
+| `ui.highlight.XmlSqlCompletionW4W5Test` | 29 | 0 | 0 |
+| `log.MapperXmlLocatorTest` | 10 | 0 | 0 |
+| `ui.ref.MapperFileLookupIndexTest` | 2 | 0 | 0 |
+| `convention.GuardSelfTestCoverageMetaGuardTest` | 8 | 0 | 0 |
+| `i18n.BundleParityGuardTest` | 5 | 0 | 0 |
+| `config.PluginXmlExtensionPointResolutionTest` | 4 | 0 | 0 |
+| `config.PluginXmlStructureGuardTest` | 23 | 0 | 0 |
+
+覆盖的验收项：A1（候选逐项正确）/ A2（连续 5 次调用只构建 1 次，计数缝增量断言）/ A3（新增 mapper XML、改 `<sql id>`、改 properties 三项均立即生效）/ A4（dumb 态返回空不抛）/ A6（Registry 回退走现扫且不动用服务）。
+
+### 8.4 反向验证（两次读数）
+
+- **红**：① 把 `FileTypeIndex.getFiles(…)` 塞回 `crossFileSqlIds` 方法体；② 把 `signature()` 乘 0（失效做坏，恒返回 0）。
+  - `XmlCompletionNameIndexWiringTest`：2 例 / **1 失败**（`清单来源方法体不得回退现扫形态_且必须经名称清单服务` 点名 `FileTypeIndex`）。
+  - `XmlSymbolNameIndexCacheTest`：8 例 / **3 失败**（`testA3_新增mapperXML后立即可见` 只见 `NsA3a.fragA3a`、缺 `NsA3aNew.newFrag`；`testA3_修改已有mapper的sqlId后立即可见` 仍只见 `oldFrag`；`testA3_修改config_properties后立即可见` 仍只见 `p1`）。
+- **绿**：`git checkout --` 还原两处后重跑：`XmlCompletionNameIndexWiringTest` 2/0/0、`XmlSymbolNameIndexCacheTest` 8/0/0。
+
+### 8.5 偏离与未做项
+
+- **失效边界＝落盘**：`VirtualFile.modificationStamp` 只随保存变化，故「别的文件里**未保存**的编辑」要等保存才进清单；当前文件自身的 `<sql id>` 不受影响（同文件片段由 `localIds` 走活 PSI 补齐）。计划 §4.1「PSI 内容改动只在该文件属于清单来源时才重建」以落盘为界，已在服务 KDoc 与本节登记。
+- **排除当前文件的语义**：改造前按**文件身份**排除；现按**名字集合**排除——两个文件声明同一 `ns.sqlId`（同 namespace 重名属工程错误）会被一并排除；无 namespace 的 mapper 文件其裸 id 亦按名字排除。病态形态，正常工程逐项一致。
+- **生产首帧**：懒建，首次补全的极短窗口内跨文件候选为空（计划 §4.1 已认可）；单测/unit-test 模式同步构建以保证确定性（`syncForTest` / `isUnitTestMode` 两档）。
+- **测试基建补丁**：实测单测的 project 在同一测试类内会被复用，导致服务状态跨用例污染（某用例置 `enabledProvider=false` 后，后续用例静默走回退链）——故服务新增 `resetForTest()` 测试缝，用例同时用唯一文件/命名空间 + 计数增量断言。
+- **未做**：P3（C3 `HbmXmlEntityResolver` / C4 `ProjectDialectEvidence` / C5 `HibernateNamingConfigProbe`）按 §三 不做；C3 的「JPA 预览卡顿实测」未做（无卡顿报告，按计划留账）。
+- **构建校验**：按主控定例（全量门禁与构建校验交 CI）**未跑** `verifyPlugin` / `buildPlugin` / `verifyGate` / `verifySmoke`。
