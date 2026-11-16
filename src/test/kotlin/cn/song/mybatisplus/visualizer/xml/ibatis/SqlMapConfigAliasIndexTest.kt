@@ -52,10 +52,13 @@ class SqlMapConfigAliasIndexTest : BasePlatformTestCase() {
 
     fun test内核_属性序与引号形态() {
         val entries = SqlMapConfigAliasIndex.aliasEntriesFromText(
-            "<sqlMapConfig><settings/>
+            """
+            <sqlMapConfig><settings/>
 
-<typeAlias type=\"cn.x.B\" alias='B'/>
-<typeAlias alias=\"C\"  type='cn.x.C'/></sqlMapConfig>",
+            <typeAlias type="cn.x.B" alias='B'/>
+            <typeAlias alias="C"  type='cn.x.C'/>
+            </sqlMapConfig>
+            """.trimIndent(),
         )
         assertEquals("属性序任意 + 单双引号都认", mapOf("B" to "cn.x.B", "C" to "cn.x.C"), entries)
     }
