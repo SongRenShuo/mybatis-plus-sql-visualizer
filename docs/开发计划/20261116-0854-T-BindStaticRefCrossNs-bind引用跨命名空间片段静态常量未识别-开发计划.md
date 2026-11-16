@@ -209,6 +209,7 @@ python C:/Users/USER/.zcode/cli/parallel_tasks.py check
 | 反向验证 S1 | 把 `addAll(crossNamespace.fragments.values)` 改成 `addAll(emptyList())` ⇒ `XmlCrossNsFragmentResolverTest` **17 例中恰 2 红**（T1/T2），其余 15 绿 |
 | 反向验证 S2 | 把 `findFieldByName(fieldName, true)` 退回 `false` ⇒ `AnnotationPreviewServiceTest` **15 例中恰 1 红**（T3），其余 14 绿 |
 | 还原后复跑 | 74/0/0/0（同一命令重跑，确认提交内容即该绿态） |
+| CI 门禁 | 双仓推送后 GitHub `推送测试 · master @ 6c15d7f6` run **`43785965787`**，8/8 job success（`fast(1)`/`fast(2)` + `test(1)~test(5)` + `nightly-nudge`），01:23:16Z → 01:32:00Z |
 | P-3 性能 | 未单独计时：跨命名空间引用缺失时 `fragments` 为空表，扫描与改动前逐字节等价；命中时新增的是片段内**去重后**的 `findClass` 次数（本夹具 1 次） |
 | A1 真机验收 | **待用户复验**（`cyzc-platform` 预览 `selectOrderAggTwoPeriod`：红条消失、`#scopeCategoryBike` 回填 `1`） |
 | S3 未做 | `static {}` 块赋值、`Integer.valueOf(...)` 类非常量初始化式维持「解析不到 + 手填覆盖值」，已写入 `docs/架构设计/02-核心流程详解.md` §3 已知边界 |
