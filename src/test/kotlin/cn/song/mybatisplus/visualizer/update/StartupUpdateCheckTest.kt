@@ -31,6 +31,25 @@ class StartupUpdateCheckTest {
         assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = true))
     }
 
+    // ---------------- T-LocalUpdateDir：启动本地检测决策（纯函数） ----------------
+
+    @Test
+    fun localCheckRunsWhenDirConfiguredAndNotChecked() {
+        assertTrue(StartupUpdateCheck.shouldStartupCheckLocal("C:\\pkgs", alreadyCheckedLocal = false))
+        assertTrue(StartupUpdateCheck.shouldStartupCheckLocal("/srv/plugins-pkgs", alreadyCheckedLocal = false))
+    }
+
+    @Test
+    fun localCheckSkipsWhenDirBlank() {
+        assertFalse(StartupUpdateCheck.shouldStartupCheckLocal("", alreadyCheckedLocal = false))
+        assertFalse(StartupUpdateCheck.shouldStartupCheckLocal("   ", alreadyCheckedLocal = false))
+    }
+
+    @Test
+    fun localCheckSkipsWhenAlreadyChecked() {
+        assertFalse(StartupUpdateCheck.shouldStartupCheckLocal("C:\\pkgs", alreadyCheckedLocal = true))
+    }
+
     // ---------------- 通知内容（版本号行 + 变更日志有序列表） ----------------
 
     @Test

@@ -109,7 +109,8 @@ class XmlPreviewModelTest {
         val state = m.defaultState().copy(forEachNulls = setOf("ids"))
         val result = m.renderSql(state)
         assertEquals("SELECT * FROM t WHERE id IN", compact(result.sql))
-        assertTrue(result.errors.any { it.contains("evaluated to a null value") })
+        // T-MbgExamplePreview R6：文案已中文化（原 MyBatis 英文原文透传到中文 UI）
+        assertTrue(result.errors.any { it.contains("求值为 null") })
     }
 
     @Test

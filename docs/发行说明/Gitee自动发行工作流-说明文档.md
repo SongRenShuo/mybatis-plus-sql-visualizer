@@ -44,9 +44,9 @@ parallel_tasks check/register
 | 1 | `docs/发行说明/{YYYYMMDD}-{HHMM}-{主题}-发行说明.md` | 新建，完整发行说明（新增/修复/测试/兼容性/安装/反馈）；全文同时作为 Gitee 发行版正文 |
 | 2 | `CHANGELOG.md` | `[Unreleased]` → `[{版本}] - {日期}`，Keep a Changelog 格式 |
 | 3 | `gradle.properties` | `version=`；内测通道追加 `-beta.N` 后缀 |
-| 4 | `gradle/plugin-change-notes.html`（T-BuildScriptSplit 起外置，原 `build.gradle.kts` `patchPluginXml.changeNotes` 内联） | 新增 `<h2>v{版本}</h2>` 块置顶（红线：只主标题、无括号、无冒号副题） |
+| 4 | `gradle/plugin-change-notes.html`（T-BuildScriptSplit 起外置，原 `build.gradle.kts` `patchPluginXml.changeNotes` 内联） | 新增 `<h2>v{版本}</h2>` 块置顶（红线：只主标题、无括号、无冒号副题）；首个 `<h2>` 为本版 / 本版块全角零命中由 `check-change-notes.py` 的 C4/C6 在 tag 前源码级判定，产物级由 CI 对发布 zip 跑 `inspect-plugin-zip.py` 复核 |
 | 5 | `plugin.xml` `<description>` | 仅当出现新能力类别时并入一条；无新类别不动（「最近更新」节已整体移除，见下） |
-| 6 | `update/preview.update.json` | 新版本号 + downloadUrl + changeNotes（与 #4 同文案）+ publishDate + sinceBuild |
+| 6 | `update/preview.update.json` | 新版本号 + downloadUrl + changeNotes（与 #4 同文案）+ publishDate + sinceBuild；与 #4 逐字一致由 `check-change-notes.py` 的 C7 机器判据覆盖（不再是纯人工），version / downloadUrl 指向本版由 C8 覆盖 |
 | 7 | `marketplace-custom-page.html` | 功能矩阵行 + 「为什么选它」按能力类别判定；单源（docs 副本已删） |
 | 8 | `docs/MEMORY.md` + `docs/变更记录.md` | 发行说明索引最新在上；总册缺行按日期倒序补齐 |
 
@@ -100,9 +100,13 @@ Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者�
   否则半成品混进 zip。
 - 标签名 = `gradle.properties` 版本号逐字（含 `-beta.N`），不带 `v` 前缀；
   `git tag {ver} && git push origin master && git push origin {ver}`。
-- **打包后先自检产物再建发行版**：`python dev-support/inspect-plugin-zip.py --version {ver}`
+- **打包后先自检产物再建发行版**：`python -I dev-support/inspect-plugin-zip.py --version {ver}`
   核内层主 jar 名带版本号、`plugin.xml` 的 `<version>`、`MANIFEST.MF` 的 `Version`、
   `<change-notes>` 首个 `<h2>` 即本版且该块逐条扫「（ ） ：」零命中（任一不过退出码 1）。
+  这一步现也由 CI build job 在 `:buildPlugin` 之后对**本轮真正发布的那份 zip**跑（用
+  `check-change-notes.py --print-version` 取版本号），此前只在发行机本地跑、CI 从不跑；
+  源码级文案判据（含 preview 逐字一致）由 `check-change-notes.py` 在 tag 前零 Gradle 完成，
+  Kotlin 守卫 `ChangeNotesRatingLineGuardTest` 仍由 CI `testFast` 腿跑，CI 环节只增不减。
   需要证明「某修复确实进了产物」时，加 `--disasm {FQCN} --require-present {符号} --require-absent {符号}`
   反汇编内层 jar 里的类做符号断言——比看提交自述可靠（2026-10-08 实证：靠它确认
   `RecentExecutionsDialog` 已无 `getChildren` 调用）。

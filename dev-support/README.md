@@ -25,6 +25,7 @@
 |---|---|---|
 | `gitee-release.py` | Gitee 自动发行（建版 / 上传附件 / 回读校验 / `--replace` / `--verify-only` / `--delete-only`） | `python dev-support/gitee-release.py --version <ver> --notes <file>` |
 | `inspect-plugin-zip.py` | 发布前置检查：插件 zip 的内层 jar 名 / plugin.xml version / MANIFEST / change-notes 目标块与红线扫描 | `python dev-support/inspect-plugin-zip.py <zip>` |
+| `check-change-notes.py` | changeNotes 源码级判据：评分句全文 1 次 / 落最新块 / 无裸 @ / 首个 h2 为本版 / 本版块全角零命中 / preview 逐字一致（C7）与 version、downloadUrl 指向本版（C8）；零 Gradle、秒级，带 `--self-test` 9 条反向验证；产物级复核由 CI 在 `:buildPlugin` 后对发布 zip 跑 `inspect-plugin-zip.py` | `python -I dev-support/check-change-notes.py --version <ver>` / `--self-test` / `--print-version` |
 | `export_zcode_wiki_to_gitee.py` | 把 ZCode repo-wiki 导出为 Gitee/GitHub wiki 的 Markdown 布局 | `python dev-support/export_zcode_wiki_to_gitee.py` |
 
 ## 更新通道本地验证
@@ -44,6 +45,14 @@
 | `test-shard-aggregate.py` | `testShards` 聚合公式的仓外替身 |
 | `sleep-audit.py` | 固定 `sleep` 审计（扫 `src/test` 里的睡眠等待） |
 | `replay-r0-packing.py` | 重放 R0 冷启分片装配，恢复分片包含顺序 |
+
+## 测试服务器运维
+
+| 文件 | 用途 |
+|---|---|
+| `svbackup/` | 测试服务器备份体系的仓库事实源（采集/主流程/告警脚本 + systemd 单元 + 幂等部署脚本）；服务器副本由 `install-svbackup.sh` 部署，见其 `README.md` 与 `.agents/skills/srv-backup-restore/SKILL.md` |
+| `db-env/` | 测试服务器 13 个数据库容器的**声明式配方**（`docker-compose.yml` + `.env.example` + `README.md`）：轻档 10 个默认起、`--profile heavy` 再起 OceanBase 与磐维 A/B；只适用于全新机器，用法与后置步骤见其 `README.md` 与 skill §10 |
+| `db-lab/patch-panweidb-image.sh` | 磐维 PanWeiDB 容器镜像三处补丁（CPU 预检 / cgroup v2 探测 / listen_addresses 自愈） |
 
 ## 重构辅助（巨型文件拆分，T-M53-II）
 

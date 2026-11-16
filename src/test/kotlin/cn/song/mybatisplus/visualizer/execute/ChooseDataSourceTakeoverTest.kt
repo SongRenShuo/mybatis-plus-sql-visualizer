@@ -57,4 +57,23 @@ class ChooseDataSourceTakeoverTest : BasePlatformTestCase() {
         assertEquals("空事件必须委托原生组（不猜目标）", 1, original.childrenCalls)
         assertEquals("native", children.single().templateText)
     }
+
+    /**
+     * T-TemplatePresentationWarn：模板镜像走平台 `copyFrom`（合规通道）。
+     *
+     * 243 字节码实证：`templatePresentation.setEnabled/setVisible` 开头就 `assertNotTemplatePresentation`
+     * （查 TEMPLATE 位后 `warnInProduction`，真机日志每次 update 两条 WARN 带全栈）；而
+     * `copyFrom(Presentation)` 的私有实现直接 `BitUtil.set(myFlags, …)` 写 enabled/visible 位——
+     * 不经断言、还补发属性变化事件。本用例钉住「update 后模板呈现确实镜像到了文本/可用性」，
+     * 防止有人把 copyFrom 拆掉后按钮退化回纯图标（真机 2026-11-03 现象）。
+     */
+    fun testupdate把原生呈现镜像进模板() {
+        val group = ChooseDataSourceTakeoverGroup(StubGroup())
+        val e = emptyEvent()
+        e.presentation.setText("MySQL", false)
+        e.presentation.isEnabled = false
+        group.update(e)
+        assertEquals("数据源名必须镜像进模板呈现", "MySQL", group.templatePresentation.text)
+        assertEquals("可用性必须镜像进模板呈现（走 copyFrom 的旗标写入）", false, group.templatePresentation.isEnabled)
+    }
 }

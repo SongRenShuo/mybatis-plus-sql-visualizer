@@ -6,15 +6,18 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 
 /**
- * [MapperXmlLocator] 平台集成测试（T-M55-01 跳转双目标）：
+ * [MapperXmlLocator] 平台集成测试（T-M55-01 跳转双目标 + F1''' 索引化）：
  *
- * 在 LightPlatform 虚拟项目中创建真实 mapper XML（走 VirtualFile + PsiManager 全链路，
- * 仿 HbmXmlEntityResolverPlatformTest 先例），验证：
+ * 在 LightPlatform 虚拟项目中创建真实 mapper XML（走 VirtualFile + PsiManager 全链路），
+ * 验证：
  *  - 命中：namespace + 语句 id 匹配 → 定位到语句标签起始行（0-based）；
  *  - namespace 不匹配 → null（PSI 校验防线）；
  *  - 无 XML / 语句 id 不存在 → null（回退 Java 跳转，不劣化）；
  *  - 多模块同名 mapper（同 namespace 同 id）→ 取第一个，不抛不阻；
- *  - statementId 形态守卫：无点 / 空串 → null。
+ *  - statementId 形态守卫：无点 / 空串 → null；
+ *  - F1'''：定位链走自定义 fileBasedIndex（[MapperNamespaceIndex]）——索引期摊平 namespace、
+ *    运行时 getContainingFiles 毫秒级，失效全交平台增量（MPJ 精华采纳，见调研报告 20261115-0202）；
+ *    此前的单槽 TTL/头扫/异步重启机制整体退役，对应机制测试随之删除。
  */
 class MapperXmlLocatorTest : BasePlatformTestCase() {
 
@@ -50,44 +53,45 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
         addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
         val loc = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.insertUser")
         assertNotNull(loc)
-        assertEquals(expectedLineOf(mapperXml, "insertUser"), loc!!.line)
+        assertEquals(
+            expectedLineOf(mapperXml, "insertUser"),
+            loc!!.line,
+        )
     }
 
     fun testNamespace不匹配_返回null() {
         addMapperXml(
             "src/main/resources/mapper/OtherMapper.xml",
-            """<?xml version="1.0" encoding="UTF-8"?>
-            <mapper namespace="com.demo.mapper.OrderMapper">
-                <select id="selectById">SELECT 1</select>
-            </mapper>
-            """.trimIndent(),
+            mapperXml.replace("com.demo.mapper.UserMapper", "com.demo.mapper.OtherMapper"),
         )
-        // 同 id 但 namespace 不同：不得跨 namespace 误命中
-        assertNull("namespace 不匹配不应命中", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
+        assertNull(
+            "namespace 精确匹配防线：不匹配应 null",
+            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"),
+        )
     }
 
     fun test语句id不存在_返回null() {
         addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
         assertNull(
-            "同 namespace 但 id 不存在应返回 null",
-            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.deleteById"),
+            "同 namespace 但 id 不存在应 null",
+            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.notExists"),
         )
     }
 
     fun test无XML_返回null() {
-        assertNull("项目内无 mapper XML 应返回 null", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
+        assertNull("项目内无任何 mapper XML 应 null", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
     }
 
     fun test非Mapper根元素的XML不参与() {
         addMapperXml(
-            "src/main/resources/misc/notes.xml",
+            "src/main/resources/mapper/NotMapper.xml",
             """<?xml version="1.0" encoding="UTF-8"?>
-            <configuration>
-                <select id="selectById">SELECT 1</select>
-            </configuration>
-            """.trimIndent(),
+<configuration>
+    <select id="selectById">SELECT 1</select>
+</configuration>
+""",
         )
-        assertNull("根元素非 <mapper> 不应命中", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
+        assertNull("根元素非 <mapper> 的 XML 不参与定位", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
     }
 
     fun test多模块同名_取第一个不抛() {
@@ -110,58 +114,43 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
         )
     }
 
-    // ---------- T-PS5-05：文件列表缓存 ----------
+    // ------------------------------------------------------------------
+    // F1'''：索引器 namespace 提取内核（纯文本单测，索引期与运行期同源）
+    // ------------------------------------------------------------------
 
-    fun testT_P5_05_命中路径零索引遍历() {
-        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
-        MapperXmlLocator.clearFileListCacheForTest()
-        val before = MapperXmlLocator.indexScanCount.get()
-        val first = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-        assertNotNull(first)
-        assertEquals("首跳全扫一次", 1, MapperXmlLocator.indexScanCount.get() - before)
-        repeat(3) { MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById") }
-        assertEquals("TTL 窗口内二次跳转零索引遍历", 1, MapperXmlLocator.indexScanCount.get() - before)
-        // 结果与首跳一致（缓存不改语义）
-        val again = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-        assertEquals(first!!.virtualFile.path, again!!.virtualFile.path)
-        assertEquals(first.line, again.line)
-    }
-
-    fun testT_P5_05_TTL过期后重扫且结果一致() {
-        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
-        val realClock = MapperXmlLocator.clockMs
-        var now = 1_000_000L
-        try {
-            MapperXmlLocator.clearFileListCacheForTest()
-            MapperXmlLocator.clockMs = { now }
-            MapperXmlLocator.fileListTtlMs = 5_000L
-            val before = MapperXmlLocator.indexScanCount.get()
-            val a = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-            now += 5_001L // 越 TTL
-            val b = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
-            assertEquals("TTL 过期 → 重扫一次", 2, MapperXmlLocator.indexScanCount.get() - before)
-            assertEquals("重扫结果与首跳一致", a!!.line, b!!.line)
-            assertEquals(a.virtualFile.path, b.virtualFile.path)
-        } finally {
-            MapperXmlLocator.clockMs = realClock
-            MapperXmlLocator.fileListTtlMs = 5_000L
-            MapperXmlLocator.clearFileListCacheForTest()
-        }
-    }
-
-    fun testT_P5_05_缓存文件失效即重扫且不返回失效文件() {
-        val psi = myFixture.addFileToProject("src/main/resources/mapper/UserMapper.xml", mapperXml)
-        MapperXmlLocator.clearFileListCacheForTest()
-        assertNotNull("删除前命中", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
-        val before = MapperXmlLocator.indexScanCount.get()
-        com.intellij.openapi.application.WriteAction.compute<Unit, RuntimeException> {
-            psi.virtualFile.delete(this)
-        }
-        assertNull(
-            "缓存文件被删除 → isValid 校验失败 → 重扫后无命中（不得返回失效文件）",
-            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"),
+    fun testF1三撇_头扫内核_属性序与引号形态() {
+        // 正常形态：DOCTYPE 之后根标签带 namespace
+        assertEquals(
+            "com.demo.mapper.UserMapper",
+            MapperNamespaceIndex.namespaceFromHeadText(
+                "<?xml version=\"1.0\"?>\n" +
+                    "<!DOCTYPE mapper PUBLIC \"-//mybatis.org//DTD Mapper 3.0//EN\" \"x\">\n" +
+                    "<mapper namespace=\"com.demo.mapper.UserMapper\">\n" +
+                    "    <select id=\"a\">x</select>\n" +
+                    "</mapper>\n",
+            ),
         )
-        assertEquals("失效文件触发重扫一次", before + 1, MapperXmlLocator.indexScanCount.get())
-        MapperXmlLocator.clearFileListCacheForTest()
+        // namespace 属性在其它属性之后（非首属性）
+        assertEquals(
+            "com.demo.B",
+            MapperNamespaceIndex.namespaceFromHeadText("<mapper parameterType=\"x\" namespace=\"com.demo.B\">"),
+        )
+        // 单引号形态
+        assertEquals("com.demo.C", MapperNamespaceIndex.namespaceFromHeadText("<mapper namespace='com.demo.C'>"))
+    }
+
+    fun testF1三撇_头扫内核_非mapper与mappers前缀不误收() {
+        // 根元素不是 mapper（page 内嵌 mapper 子标签）→ 内层 mapper 标签无 namespace → null
+        assertNull(
+            MapperNamespaceIndex.namespaceFromHeadText(
+                "<page namespace=\"com.demo.UserMapper\"><mapper><select id=\"a\"/></mapper></page>",
+            ),
+        )
+        // `<mappers>`（MyBatis 配置根）内的 <mapper> 条目只带 resource/class 不带 namespace
+        assertNull(MapperNamespaceIndex.namespaceFromHeadText("<mappers><mapper resource=\"x.xml\"/></mappers>"))
+        // 无 mapper 标签
+        assertNull(MapperNamespaceIndex.namespaceFromHeadText("<foo namespace=\"x\"/>"))
+        // mapper 标签无 namespace 属性
+        assertNull(MapperNamespaceIndex.namespaceFromHeadText("<mapper><select id=\"a\"/></mapper>"))
     }
 }

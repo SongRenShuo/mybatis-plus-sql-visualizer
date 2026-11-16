@@ -1,0 +1,358 @@
+# 测试服务器「不大-北京-16G」数据库环境配方（docker compose）
+#
+# 事实源：2026-11-13 从 13 个在役容器的 `docker inspect` 逐字段抄录（镜像/端口/内存/shm/
+# ulimit/privileged/init/卷/env键），不是凭记忆写的。改配置先改这里，再在服务器上重放。
+#
+# 用法（详见同目录 README.md）：
+#   cp .env.example .env      # 真实口令填进 .env（或从 .local/db-env.env 拷，二者都不进仓）
+#   docker compose up -d      # 默认起「轻档」10 个（RSS ≈ 4.6G）
+#   docker compose up -d --profile heavy   # 连 heavy 档 3 个一起起（RSS ≈ 9.5G）
+#
+# 三条硬约束（2026-11-13 实测）：
+#  1. 宿主端口一律 20000-29999（安全组整段放行）；
+#  2. 已在役的命名卷必须 `external: true`（只写 name: 会报 already exists but was not created
+#     by Docker Compose 并试图创建它）；
+#  3. 内存 cap 用 2026-11-13 第二轮治理后的值（旧台账的 4g/8g 已作废）。
+#
+# ⚠️ 本文件只表达「容器骨架」：GaussDB 的 gs_initdb、Vastbase 初始化、磐维三处补丁、
+#    HighGo 口令直写、OceanBase 业务用户补建等**编排不出来的后置步骤**见 README「后置步骤」表。
+#
+# ⚠️ 只用于全新机器。在役机器上 `up` 会因 container_name 被非 compose 容器占用而撞 Conflict
+#    （compose 靠 com.docker.compose.* label 认领容器，在役容器没有这些 label）。在役机器只把
+#    本文件当「应然状态」参照，别执行 up。
+#
+# 13 个服务全部 network_mode: bridge —— 复用 Docker 默认 bridge（172.17.0.x）。去掉它会另建
+# db-env_default 网络、容器换网段，打断备份采集「借 xc3-mysql8 走 172.17.0.1 网关」的回退通道。
+
+services:
+  # ── 轻档（默认启动）────────────────────────────────────────────────────────
+  mariadb:
+    image: mariadb:10.11.11
+    container_name: xc3-mariadb
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 512m
+    memswap_limit: 512m
+    ports:
+      - "23306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASS:?set in .env}
+      MARIADB_DATABASE: xc3_test
+      MARIADB_USER: xc3
+      MARIADB_PASSWORD: ${MARIADB_XC3_PASS:?set in .env}
+    volumes:
+      - xc3_mariadb_data:/var/lib/mysql
+
+  mysql8:
+    # 必须 mysql:8.0-debian —— 默认 tag 是 Oracle Linux 9 基底，QEMU 虚机缺 x86-64-v2 会
+    # Fatal glibc error（skill §7）。初始化脚本首行必须 SET NAMES utf8mb4;（防中文双编码）。
+    image: mysql:8.0-debian
+    container_name: xc3-mysql8
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 768m
+    memswap_limit: 768m
+    ports:
+      - "25900:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL8_ROOT_PASS:?set in .env}
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: mpj_demo
+    volumes:
+      - qb0_odaus3_data:/var/lib/mysql
+      - /root/xc3-mysql8-init:/docker-entrypoint-initdb.d:ro
+
+  tidb:
+    # v6.5.x 是 Ubuntu 基底；v7.5+ 换 Rocky/OL9 基底，本机 QEMU 不可用（skill §7）。
+    # 镜像经轩辕域拉取后 tag 回 canonical 名：
+    #   docker pull docker.xuanyuan.run/pingcap/tidb:v6.5.6
+    #   docker tag  docker.xuanyuan.run/pingcap/tidb:v6.5.6 pingcap/tidb:v6.5.6
+    image: pingcap/tidb:v6.5.6
+    container_name: xc3-tidb
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 1536m
+    memswap_limit: 3072m
+    ports:
+      - "24000:4000"
+    environment:
+      TZ: Asia/Shanghai
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: xc3-mssql
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    ports:
+      - "21433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASS:?set in .env}
+      # 引擎内 max server memory 需手工压 512（默认无限）——见 README 后置步骤
+
+  highgo:
+    image: xuxuclassmate/highgo:6.0.1
+    container_name: xc3-highgo
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 512m
+    memswap_limit: 512m
+    ports:
+      - "25866:5866"
+    environment:
+      HIGHGO_PASSWORD: ${HIGHGO_SUPER_PASS:?set in .env}
+      PGDATA: /opt/HighGo6.0.1-cluster/data
+    volumes:
+      - xc3_highgo_data:/opt/HighGo6.0.1-cluster/data
+
+  vastbase:
+    image: apecloud/vastbase:v3.0.9.2-ape1
+    container_name: xc3-vastbase
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    shm_size: "2g"
+    ports:
+      - "25432:5432"
+    environment:
+      CLUSTERNAME: xc3-vastbase
+      DBTYPE: vastbase-g100
+      PRODUCT_PKG_ENV: Vastbase
+      DATABASE_VERSION: v3.0.9.2
+      REPLICAS: "1"
+      DBPORT: "5432"
+      SERVICEPORT: "5432"
+      HEARTBEATPORT: "5434"
+      CMPORT: "5435"
+      SSHPORT: "22"
+      HOST_IP: 127.0.0.1
+      INSTALLROOTPATH: /home/omm/vbdata
+      INSTALLPATH: /home/omm/vbdata/install/vastbase
+      DATAPATH: /home/omm/vbdata/data
+      LOGPATH: /home/omm/vbdata/log
+      BACKUPPATH: /home/omm/vbdata/backup
+      MEMTOTAL: "2"
+      INSTANCEID: dn_6001
+      AZNAME: az1
+      ARBITER: "false"
+      REPLCONNRECONSTRUCT: "false"
+      INITUSER: omm
+      INITPASSWORD: ${VASTBASE_PASS:?set in .env}
+      GSPASSWORD: ${VASTBASE_PASS:?set in .env}
+      GS_USERNAME: xc3
+      GS_USERPASSWORD: ${VASTBASE_PASS:?set in .env}
+      DBCOMPATIBILITY: A
+      DBGROUP: omm
+      DBUSER: omm
+      DBGROUPID: "1000"
+      DBUSERID: "1000"
+      LC_ALL: en_US.utf8
+      TZ: Asia/Shanghai
+      PKGPATH: /opt/pkg
+      SCRIPTPATH: /opt/script
+      XMLPATH: /opt/xml
+    volumes:
+      - /opt/xc3-vastbase:/home/omm/vbdata
+      - /opt/xc3-vastbase/configargs:/opt/configargs
+
+  vastbase-b:
+    # 兼容档是安装期参数，A/B 必须两个容器（skill §2）
+    image: apecloud/vastbase:v3.0.9.2-ape1
+    container_name: xc3-vastbase-b
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    shm_size: "1g"
+    ports:
+      - "25433:5432"
+    environment:
+      CLUSTERNAME: xc3-vastbase-b
+      DBTYPE: vastbase-g100
+      PRODUCT_PKG_ENV: Vastbase
+      DATABASE_VERSION: v3.0.9.2
+      REPLICAS: "1"
+      DBPORT: "5432"
+      SERVICEPORT: "5432"
+      HEARTBEATPORT: "5434"
+      CMPORT: "5435"
+      SSHPORT: "22"
+      HOST_IP: 127.0.0.1
+      INSTALLROOTPATH: /home/omm/vbdata
+      INSTALLPATH: /home/omm/vbdata/install/vastbase
+      DATAPATH: /home/omm/vbdata/data
+      LOGPATH: /home/omm/vbdata/log
+      BACKUPPATH: /home/omm/vbdata/backup
+      MEMTOTAL: "2"
+      INSTANCEID: dn_6001
+      AZNAME: az1
+      ARBITER: "false"
+      REPLCONNRECONSTRUCT: "false"
+      INITUSER: omm
+      INITPASSWORD: ${VASTBASE_PASS:?set in .env}
+      GSPASSWORD: ${VASTBASE_PASS:?set in .env}
+      GS_USERNAME: xc3
+      GS_USERPASSWORD: ${VASTBASE_PASS:?set in .env}
+      DBCOMPATIBILITY: B
+      DBGROUP: omm
+      DBUSER: omm
+      DBGROUPID: "1000"
+      DBUSERID: "1000"
+      LC_ALL: en_US.utf8
+      TZ: Asia/Shanghai
+      PKGPATH: /opt/pkg
+      SCRIPTPATH: /opt/script
+      XMLPATH: /opt/xml
+    volumes:
+      - /opt/xc3-vastbase-b:/home/omm/vbdata
+      - /opt/xc3-vastbase-b/configargs:/opt/configargs
+
+  gaussdb:
+    # 镜像无 entrypoint（CMD=bash）：compose 只能起常驻容器，gs_initdb/gs_ctl 见 README 后置步骤。
+    # init: true 必须（PID1 不能是 tail，否则僵尸不回收、gs_ctl restart 卡死）。
+    image: apecloud/gaussdb:2.23.01.200-r2
+    container_name: xc3-gaussdb-kernel503
+    restart: unless-stopped
+    network_mode: bridge
+    init: true
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    shm_size: "2g"
+    ports:
+      - "25882:5432"
+    entrypoint: ["/bin/bash", "-c", "tail -f /dev/null"]
+    environment:
+      GAUSSHOME: /opt/gaussdb/app
+      LANG: en_US.utf8
+    volumes:
+      - /www/xc3/gaussdb:/home/omm/probe
+
+  opengauss:
+    # 数据目录只能挂 /var/lib/opengauss/data（整目录覆盖会 ExitCode=127）。
+    # 初始超管是 opengauss（没有 omm）；业务用户 xc3 需手工建 + public schema 授权。
+    image: opengauss/opengauss:5.0.0
+    container_name: xc3-opengauss
+    restart: unless-stopped
+    network_mode: bridge
+    privileged: true
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    shm_size: "2g"
+    ports:
+      - "26000:5432"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      GS_PASSWORD: ${OPENGAUSS_PASS:?set in .env}
+      PGDATA: /var/lib/opengauss/data
+    volumes:
+      - /www/xc3/opengauss-official/data:/var/lib/opengauss/data
+
+  oracle-free:
+    image: gvenzl/oracle-free:23-slim
+    container_name: xc3-oracle-free
+    restart: unless-stopped
+    network_mode: bridge
+    mem_limit: 2500m
+    memswap_limit: 5000m
+    ports:
+      - "21521:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PROBE_PASS:?set in .env}
+      APP_USER: probe
+      APP_USER_PASSWORD: ${ORACLE_PROBE_PASS:?set in .env}
+    volumes:
+      - xc3_oracle_free_data:/opt/oracle/oradata
+    # 引擎内 SGA 需手工压 512/512/256（默认 1536/1536/512，scope=spfile 重启生效）
+
+  # ── heavy 档（默认不启：--profile heavy）────────────────────────────────────
+  # 三个加起来 RSS ≈ 4.9G。宿主 15G，轻档已在跑时直接 `up --profile heavy` 前先 free -m。
+  oceanbase:
+    image: oceanbase/oceanbase-ce:4.3.5-lts
+    container_name: xc3-oceanbase
+    restart: unless-stopped
+    network_mode: bridge
+    profiles: ["heavy"]
+    mem_limit: 5632m
+    memswap_limit: 5632m
+    ports:
+      - "25881:2881"
+    ulimits:
+      # 这两个 ulimit 是硬门槛不是调优：缺了 obd 前检失败，日志却仍打假 boot success!
+      nofile:
+        soft: 65535
+        hard: 65535
+      stack:
+        soft: -1
+        hard: -1
+    environment:
+      MODE: mini
+      OB_MEMORY_LIMIT: 5G
+      OB_DATAFILE_SIZE: 5G
+      OB_LOG_DISK_SIZE: 5G
+      OB_SYS_PASSWORD: ${OCEANBASE_SYS_PASS:?set in .env}
+      OB_TENANT_PASSWORD: ${OCEANBASE_TENANT_PASS:?set in .env}
+      OB_DATABASE: xc3_test
+    volumes:
+      - /www/xc3/oceanbase/ob:/root/ob
+      - /www/xc3/oceanbase/obd-cluster:/root/.obd/cluster
+    # MODE=mini 只自动建租户 test/库 xc3_test/root@test，不建业务用户 xc3（见 README 后置步骤）
+
+  panweidb-test:
+    # 第三方重打包镜像（非厂商官方分发，仅内部验证用）。首装约 10 分钟 + 三处补丁时序。
+    # dbcompatibility 经 systemd 传不进去，必须 .bashrc 注入（skill §2 磐维段）。
+    image: registry.cn-shenzhen.aliyuncs.com/shine_fei/panweidb:3.4.0
+    container_name: panweidb-test
+    restart: unless-stopped
+    network_mode: bridge
+    profiles: ["heavy"]
+    privileged: true
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    shm_size: "2g"
+    ports:
+      - "26100:17700"
+    environment:
+      dbcompatibility: B
+    volumes:
+      - /www/panweidb/data:/database
+
+  panweidb-ora:
+    image: registry.cn-shenzhen.aliyuncs.com/shine_fei/panweidb:3.4.0
+    container_name: panweidb-ora
+    restart: unless-stopped
+    network_mode: bridge
+    profiles: ["heavy"]
+    privileged: true
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    shm_size: "2g"
+    ports:
+      - "26101:17700"
+    environment:
+      dbcompatibility: A
+    volumes:
+      - /www/panweidb-ora/data:/database
+
+volumes:
+  # 已在役的三个卷必须标 external：compose 不"拥有"它们，标了才不会去创建同名卷、
+  # 也不会报 "already exists but was not created by Docker Compose"。`name:` 只是把名字钉死
+  # （不加 project 前缀），external 才是"别管它、直接用"。
+  xc3_highgo_data:
+    name: xc3_highgo_data
+    external: true
+  qb0_odaus3_data:
+    name: xc3-mysql8-data
+    external: true
+  xc3_oracle_free_data:
+    name: xc3-oracle-free-data
+    external: true
+  # MariaDB 在役是匿名卷（hash 名），配方改为命名卷 —— 首次 up 会新建空卷，
+  # 旧数据要保留的话先迁移（README §五 有命令）。
+  xc3_mariadb_data:
+    name: xc3-mariadb-data

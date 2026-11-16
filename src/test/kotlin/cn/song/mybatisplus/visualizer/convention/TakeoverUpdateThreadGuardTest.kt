@@ -105,6 +105,25 @@ class TakeoverUpdateThreadGuardTest {
             psiOffenders.any { it.contains("PsiManager") },
         )
 
+        // T-TemplatePresentationWarn：update 体里直写模板呈现的 setEnabled/setVisible 必被点名。
+        val templateWrite = """
+            internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
+                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+                override fun update(e: Any) {
+                    original.update(e)
+                    templatePresentation.setEnabled(e.presentation.isEnabled)
+                    templatePresentation.setVisible(e.presentation.isVisible)
+                }
+            }
+        """.trimIndent()
+        val templateOffenders = takeoverUpdateThreadOffenders(templateWrite)
+        assertTrue(
+            "模板呈现直写 setEnabled/setVisible 必须被点名：$templateOffenders",
+            templateOffenders.any { it.contains("templatePresentation.setEnabled") } &&
+                templateOffenders.any { it.contains("templatePresentation.setVisible") },
+        )
+
         val good = """
             internal class ChooseDataSourceTakeoverGroup(private val original: Any) : ActionGroup("", true) {
                 override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
@@ -112,6 +131,8 @@ class TakeoverUpdateThreadGuardTest {
                 override fun update(e: Any) {
                     original.update(e)
                     e.presentation.setPerformGroup(true)
+                    templatePresentation.setPerformGroup(true)
+                    templatePresentation.copyFrom(e.presentation)
                 }
             }
         """.trimIndent()
@@ -205,6 +226,14 @@ class TakeoverUpdateThreadGuardTest {
             "invokeLater" to "update 体只做呈现计算，不派发 EDT 任务",
             "WriteAction" to "update 体不得写模型/文档",
             "WriteCommandAction" to "update 体不得写模型/文档",
+            // T-TemplatePresentationWarn（2026-11-14 真机 243 日志 40 条 WARN）：模板呈现上直接
+            // setEnabled/setVisible 会被 243 `Presentation.assertNotTemplatePresentation` 点名
+            // （`warnInProduction` 带全栈，263 有升级为 error 的风险）。合规镜像通道是平台自己的
+            // `copyFrom(Presentation)`（私有实现直写 myFlags 位、不经断言、且补发属性变化事件）。
+            "templatePresentation.setEnabled" to "模板呈现的 setEnabled 是平台断言面" +
+                "（243 warnInProduction），镜像必须走 `templatePresentation.copyFrom(e.presentation)`",
+            "templatePresentation.setVisible" to "模板呈现的 setVisible 是平台断言面" +
+                "（243 warnInProduction），镜像必须走 `templatePresentation.copyFrom(e.presentation)`",
         )
     }
 }

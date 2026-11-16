@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
-import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisStatementKind
@@ -12,7 +11,6 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.psi.PsiElement
-import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
@@ -73,16 +71,10 @@ class IbatisXmlGutterLineMarkerProvider : LineMarkerProvider {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
             val project: Project = elt.project
             val tag = elt.parent as? XmlTag ?: return
-            val file = tag.containingFile as? XmlFile ?: return
             SqlPreviewService.previewAsync(project, {
-                // PSI 读取落在 previewAsync 的 ReadAction.compute 内（与 PagesXml/XmlInlineSql
-                // 两条既有链同款两段式：EDT 只取元素，文本与定位在后台读权限内完成）
-                IbatisXmlPreviewService.preview(
-                    fileText = file.text,
-                    statementId = tag.getAttributeValue("id"),
-                    statementTagName = tag.name,
-                    statementOrdinal = statementOrdinalOf(tag),
-                )
+                // T-IbatisCallPreview：装配收口到 IbatisStatementPreview.previewTag——Java 调用行
+                // 预览图标与快捷键/MCP 走同一份装配，产物逐字节同源（原实现内联了 file.text 与 ordinal）
+                IbatisStatementPreview.previewTag(tag)
             }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
@@ -90,7 +82,12 @@ class IbatisXmlGutterLineMarkerProvider : LineMarkerProvider {
     }
 
     companion object {
-        private val SQL_PREVIEW_ICON: Icon =
+        /**
+         * 预览图标（Java DAO 调用行预览图标复用同一实例——同一动作同一图标，避免两枚样式漂移）。
+         *
+         * T-IbatisCallPreview：本 provider 原为 `private`，调用行预览 marker 需要同一个图标实例。
+         */
+        internal val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", IbatisXmlGutterLineMarkerProvider::class.java)
 
         /**
@@ -114,22 +111,6 @@ class IbatisXmlGutterLineMarkerProvider : LineMarkerProvider {
          */
         internal fun isStatementAnchor(tag: XmlTag): Boolean {
             return tag.name in STATEMENT_TAGS && tag.parentTag?.name == SQL_MAP_TAG
-        }
-
-        /**
-         * 同标签名兄弟中的序号（0 起）——语句缺 `id` 属性（非法文件）时的定位回落。
-         * 纯 PSI 兄弟遍历，O(兄弟数)，不进热路径（只在小概率的无 id 分支调用）。
-         */
-        private fun statementOrdinalOf(tag: XmlTag): Int {
-            val name = tag.name
-            val siblings = tag.parentTag?.children ?: return 0
-            var ordinal = 0
-            for (child in siblings) {
-                if (child !is XmlTag || child.name != name) continue
-                if (child.textRange.startOffset >= tag.textRange.startOffset) break
-                ordinal++
-            }
-            return ordinal
         }
     }
 }

@@ -42,6 +42,13 @@ import com.intellij.openapi.util.TextRange
  *
  * 测试缝照 [EditorCopyShortcuts]：纯逻辑（行级切换）与 [DashLineCommentAction] 均 internal，
  * 单测可直接构造动作 + 自建 DataContext 驱动（不依赖真键盘分发）。
+ *
+ * **T-CommentShortcutKeymap（2026-11-13）**：换入/换回一律经 [replaceActionSilently]——先把自己的
+ * `ShortcutSet` 置为 [CustomShortcutSet.EMPTY] 再 `replaceAction`。平台 `registerAction` 每次注册都会
+ * 回填 `ProxyShortcutSet(actionId)`，而 `AnAction.setShortcutSet` 只对「当前集合恰为 EMPTY」放行，
+ * 否则在 PROJECT_OPENED 之后打 `ShortcutSet of global AnActions should not be changed outside of
+ * KeymapManager` 告警（真机日志实测 7 条，栈落在本类 install/uninstall）。判据与字节码偏移见
+ * `docs/开发计划/20261113-1045-T-CommentShortcutKeymap-*`。
  */
 internal object EditorCommentShortcuts {
 
@@ -67,7 +74,7 @@ internal object EditorCommentShortcuts {
             val original = manager.getAction(IdeActions.ACTION_COMMENT_LINE)
             if (original != null) {
                 val replacement = DashLineCommentAction(original)
-                manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement)
+                manager.replaceActionSilently(IdeActions.ACTION_COMMENT_LINE, replacement)
                 installedAction = replacement
                 refCount = 0
             }
@@ -86,13 +93,21 @@ internal object EditorCommentShortcuts {
                 val manager = ActionManager.getInstance()
                 // 只在当前在位的仍是本接管件时换回（防覆盖别的组件在期间的替换）
                 if (manager.getAction(IdeActions.ACTION_COMMENT_LINE) === replacement) {
-                    manager.replaceAction(IdeActions.ACTION_COMMENT_LINE, replacement.original)
+                    manager.replaceActionSilently(IdeActions.ACTION_COMMENT_LINE, replacement.original)
                 }
             }
             installedAction = null
             refCount = 0
         }
     }
+
+    /**
+     * 换入/换回统一走 [replaceActionSilently]（`util/ActionReplaceSilently.kt`）：先把自己的
+     * `ShortcutSet` 置为 `CustomShortcutSet.EMPTY` 再 `replaceAction`，从而不触发平台
+     * 「ShortcutSet of global AnActions should not be changed outside of KeymapManager」告警
+     * （判据见该文件 KDoc 与 20261113 开发计划 §二）。键位仍由平台回填的 `ProxyShortcutSet(id)`
+     * 按 keymap 惰性解析，行为不变。
+     */
 
     /** 该编辑器是否已被本接管打标（接线覆盖测试与排障用；判定与动作内一致）。 */
     internal fun isMarked(editor: Editor): Boolean = editor.getUserData(MARKER) == true

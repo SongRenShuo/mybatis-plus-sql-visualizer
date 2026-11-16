@@ -84,6 +84,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showGutterIcon: Boolean = true,
 
         /**
+         * T-PreviewExecWriteDefer：预览打开时「是否立即准备执行控制台」。
+         *
+         * 取值（[cn.song.mybatisplus.visualizer.ui.PreviewConsoleEager] 解析）：
+         *  - `LAZY`（默认）：不建控制台（不写带方言映射的 exec 文件 ⇒ 不进 dumb），绑定行给
+         *    「显示执行控制台」入口；
+         *  - `LAZY_SILENT`：同上但不放入口（极简派）；
+         *  - `EAGER`：打开即准备控制台（旧行为，每次预览会写 exec 文件）。
+         */
+        var consolePrepMode: String = "LAZY",
+
+        /**
          * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
          * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
@@ -265,6 +276,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 手动在设置页检查更新时不受影响。为空字符串表示无忽略。
          */
         var ignoredUpdateVersions: String = "",
+
+        /**
+         * 本地安装包目录（T-LocalUpdateDir）：把内网/共享盘构建的插件 zip 放这里，设置页与
+         * 启动检测自动识别最高版本并可直接安装（平台允许则热生效，243 等回退重启脚本）。
+         * 空字符串 = 关闭。已做 `~` 展开与 `Path` 归一（[cn.song.mybatisplus.visualizer.update.LocalUpdateDir]）；
+         * 机器相关，不进设置导出/导入（SettingsIO 硬编码清单，天然不含）。
+         */
+        var localUpdateDir: String = "",
 
         /**
          * SQL 反向转换的默认 Wrapper 形态（T-M36.3）：[REVERSE_AUTO] 自动 /
@@ -593,6 +612,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：**默认关**——EXPLAIN 默认走原生
          * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
          * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。
+         *
+         * R45 拍板收口（2026-11-11 用户定案）：**转正保留、维持默认关**——「保留一个版本周期，
+         * 下版再定摘除」的到期裁决就此关闭：结构化通道转正为常驻能力，摘除案废止；dev 侧 G4
+         * （project-dev-batch-20261031）曾试的「默认开」案同批废止（未回流 master，不追认）。
+         * 设置页开关行自 2026-10-01（0df4a311）起在册（组 1 SQL 预览，`explainStructuredCheck`），
+         * 「启用结构化并重试」通知写入 true 后用户可在设置页关回——单向门不存在，设置文案
+         * 同步去「实验特性」口径（转正后该说法失真）。
          */
         var explainStructuredRender: Boolean = false,
 
@@ -710,6 +736,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
          */
         var onboardingAnchorTipShown: Boolean = false,
+
+        // ---------- T-NotifyTune：主动通知触点调优（券 A 方言死路提示 / 券 B 首次捕获引导降频） ----------
+
+        /**
+         * 券 A：SQL 方言死路主动提示开关（默认开）——智能推断结果为 `UNAVAILABLE` 且无方言名时，
+         * 打开 SQL 承载文件经预览组弹一次「方言未能确定」指路；关闭后全程静默。
+         */
+        var dialectTipEnabled: Boolean = true,
+
+        /** 券 A：已对本项目永久抑制的方言提示集合（按项目路径哈希，见 DialectGapTip.projectKey）。 */
+        var dialectTipSuppressedProjects: MutableList<String> = mutableListOf(),
+
+        /** 券 A：方言提示已展示（每安装一次性持久化记忆，跨项目/跨会话不再出现）。 */
+        var dialectTipShown: Boolean = false,
+
+        /**
+         * 券 B：首次捕获引导开关（默认开）——关闭后首次捕获指路全程静默。
+         * 红线准入五问第 3 问要求「插件主动触点是带开关或一次性」，本开关与
+         * [firstCaptureGuideShown] 共同补齐该门禁。
+         */
+        var firstCaptureGuideEnabled: Boolean = true,
+
+        /**
+         * 券 B：首次捕获引导已展示（每安装一次性持久化记忆）。
+         * 取代此前「会话级 object 记忆」——那样每重启 IDE / 每拉起一次沙盒就再弹一次，属于高频。
+         */
+        var firstCaptureGuideShown: Boolean = false,
 
         /**
          * T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：

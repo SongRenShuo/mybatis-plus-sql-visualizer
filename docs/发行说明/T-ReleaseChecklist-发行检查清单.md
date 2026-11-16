@@ -24,14 +24,17 @@
 
 - `gradle/plugin-change-notes.html` 新增 `<h2>v{版本}</h2>` 块置顶：只主标题、无括号、无冒号副题。
 - 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言」，无激励、无模板评语）。
-- **两条机器判据必须跑在 `git tag` 之前**（2026-11-09 教训，见 `docs/LESSONS.md` L25）：
-  1. **新块置顶的同时删掉上一块那行评分引导句**——`./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.ChangeNotesRatingLineGuardTest"` 必须绿（全文只允许出现 1 次）。该守卫已三次抓到（2026-10-29 / 10-30 / 11-09）。
-  2. **本版块内禁全角 `（ ） ：`**——`python dev-support/inspect-plugin-zip.py --version {版本}` 的「本版块扫『（ ） ：』零命中」项必须 OK。
-  2 条与 `update/preview.update.json` 的 `changeNotes` 逐字一致；红了改文案重提交，别往下走。
+- **源码级机器判据必须跑在 `git tag` 之前**（2026-11-09 教训，见 `docs/LESSONS.md` L25）：
+  1. **新块置顶的同时删掉上一块那行评分引导句**——`python -I dev-support/check-change-notes.py --version {版本}` 必须绿（源码级、零 Gradle、秒级）。该脚本把评分句全文恰好 1 次 / 落在最新块 / 剥 `<code>` 后无裸 `@` / 首个 `<h2>` 为本版（C4）/ 本版块 `<li>` 数与全角 `（ ） ：` 零命中（C6）/ preview 逐字一致等判据合在一次跑完，并带 `--self-test`：9 条判据各造违规样本断言恰红、正对照 PASS。该守卫已三次抓到（2026-10-29 / 10-30 / 11-09）。
+  2. **本版块内禁全角 `（ ） ：`**——已由上面 `check-change-notes.py` 的 C6 在 tag 前静态覆盖（内容与 `patchPluginXml` 注入 `plugin.xml` 的同源，`mpv-release.gradle.kts:23-26`）。
+  `plugin-change-notes.html` 本版块与 `update/preview.update.json` 的 `changeNotes` 逐字一致——该判据现已由 `check-change-notes.py` 的 C7 机器覆盖，不再是纯人工；红了改文案重提交，别往下走。
+- **产物级判据由 CI 在 `:buildPlugin` 后对真正发布的那份 zip 再查一遍（额外防线，不是替代）**：`python -I dev-support/inspect-plugin-zip.py --version {版本}`（版本号由 `--print-version` 取），核 jar 名 / `plugin.xml <version>` / `MANIFEST Version` / change-notes 是否真的编进 zip / 本版块全角零命中。源码级过了不代表字节进了产物，两道都要绿。
 - **为什么卡在建版之前**：文案会被 `patchPluginXml` 编进 zip 内的 `plugin.xml`，发出去再发现只能 tag 前移 + 双通道重发。2026-11-09 实际发生——GitHub Release `438955517` / Gitee 发行版 `1290785` 带着全角括号文案上线，改文案后 tag 从 `65e03bae` 前移到 `f9c5b0c3` 并重跑门禁重发。
 - changeNotes / preview.update.json / CHANGELOG / 发行说明四处承担对外可见性；description 与市场页是纯能力陈列，不承担「最近更新」播报（2026-09-12 定案）。
 - **内测转正时删掉被正式版取代的内测块（2026-11-10 用户明确要求）**：正式版块一旦置顶，`gradle/plugin-change-notes.html` 里同批被吸收的 `<h2>v{版本}-beta.N</h2>` 块**不应继续存在**——用户口径「有正式版最新的了，beta 版本的就不应该存在了」；`CHANGELOG.md` 同批删掉对应的 `## [{版本}-beta.N]` 段（先例：`0692f222` 发 v2026.11.8 正式版时同时删了 `2026.11.8-beta.1` 两处）。**逐条细目靠 `docs/发行说明/` 的内测说明留档**，正式版块/段按能力面合并并在范围行指过去，别把内测块留在对外清单里。
 - **正式版的范围锚点＝上一个正式版的 tag，逐条核不重复（2026-11-10 用户指出重叠）**：`v2026.11.10` 的更新日志与 `v2026.11.8` 曾重叠两条（「日期族参数改用 ANSI 类型字面量」「2026.3 换源退化」——那两条是 11.8 的修复，却被写进了 11.10 的 changeNotes/发行说明/变更记录）。写 changeNotes、`CHANGELOG`、发行说明、`docs/变更记录.md` 四处之前，先 `git log {上一正式版tag}..HEAD --oneline` 拉清单，再对着上一版那四处的文案逐条比对；**只有本次提交范围内新修的才写进来**，同一任务族里的后续修复（如 `T-DateLiteralBackfill` 之后又修的「执行链只发 TIMESTAMP」）要写清是「后续修复」而不是重复上一版的条目。
+
+- **双轨判据（2026-11-15 实现改用 py）**：源码级由 `python -I dev-support/check-change-notes.py` 承担，`release-beta.ps1` 的 gates 在 `git tag` 之前跑「正常检查 + `--self-test` 反向验证」两条 py 命令，零 Gradle、秒级；原来 tag 前要跑 `./gradlew test --tests ...ChangeNotesRatingLineGuardTest` + `./gradlew buildPlugin` + `inspect-plugin-zip.py`，冷配置缓存约 3m35s，现在本地 tag 前不再跑任何 gradle。产物级由 `inspect-plugin-zip.py` 承担，改由 CI build job 在 `:buildPlugin` 之后对**本轮真正发布的那份 zip**跑——此前它只在发行机本地跑、CI 从不跑，全角 / 首个 `<h2>` / 三方版本一致 / 是否编进 zip 四条在 CI 是空档，现在补上；也不再本地产第二份 zip（本地包与 CI 包因 `MPV-Build` 时间戳必然不同哈希）。Kotlin 守卫 `ChangeNotesRatingLineGuardTest` **未删**，仍由 CI `testFast` 腿跑，本脚本只是本地 tag 前的等价预检，不是从 CI 测试集里删类。CI build job 是**新增两步**（源码级判据 + 产物级自检），原有 build / verifyplugin / verify×3 / marketplace / test×6 / gate / publish 全部保留，环节只增不减。preview 逐字一致与 version / downloadUrl 指向本版这两条原先纯人工的约定，现已由 `check-change-notes.py` 的 C7 / C8 机器判据覆盖。
 
 ### 1.2b 发布环境的审批口径（2026-11-09 改）
 
@@ -51,6 +54,7 @@
 ## 二、准备段（门禁与元数据）
 
 - [ ] RC-P1 权威门禁三关：`./gradlew releaseGate`（buildPlugin → verifyGate 三目标 243/253/263 → testShards 全量）。判据：BUILD SUCCESSFUL，且 `build/reports/pluginVerifierGate/IU-{243,253,263}/.../verification-verdict.txt` 三份均标 Compatible。注意：日常巡检脚本 `verify-full.ps1` 跑的 `verifyPlugin` 已降级为报告生成器，发版只认 `verifyGate`。
+  - **内测版不豁免（2026-11-11 用户明确要求）**：`-beta.N` 同样必须过 CI 门禁——正路是**打 tag 之前**派 `build-plugin.yml mode=gate`（L28 口径），绿了再发；若已先发了，**事后立刻补派一次** `mode=gate` 并把 run id 写进 `docs/变更记录.md` 的发行条目。定向测试 + 反向验证照做，但**不能替代**门禁：内测包同样会被用户当成「已修好」的凭据装进真实 IDE，而门禁（243/253/263 兼容 + 五片全量 + fast）是唯一覆盖跨版本兼容与全仓回归的读数。反例：`2026.11.12-beta.1` 只跑了定向就发了，发行说明里只能如实标「未跑 releaseGate」。
 - [ ] RC-P1b 真机方言验证（外部实例，2026-10-31 定例）：`./gradlew dialectExternalVerify`。判据：BUILD SUCCESSFUL，且 `build/reports/dialectExternalVerify/summary.md` 里**每个非 optional 实例均为 PASS**、保留字词表规模 ≥ 50；标了 `optional` 的 SKIP 项必须在发行说明里写明原因与实例口径（含版本号），**不得**把 SKIP 写成「已验证」。Docker 版 `DialectDockerVerificationTest` 默认关、不承担发版判据；DBX 只做临时探测，读数不作为门禁证据。
 - [ ] RC-P2 版本号核对：`gradle.properties` 满足 §1.1 三条硬约束；CHANGELOG `[Unreleased]` 已改名为 `[{版本}] - {日期}`。
 - [ ] RC-P2c **升级 IPGP 后必须同步 verifier-cli 钉子**（2026-11-05 定例，T-CiMarketSplit）：
@@ -63,7 +67,7 @@
     4. `./gradlew test --tests "cn.song.mybatisplus.visualizer.convention.VerifierCliVersionGuardTest"` 必须绿；
     5. 提交时在信息里写明「IPGP x.y.z → verifier-cli a.b.c」。
   - 判据：`VerifierCliVersionGuardTest` 绿（本机缓存里存在与钉子不同版本的 jar 时它会红并点名两边版本）。注意该守卫只在本机跑过 `:verifyPlugin`（缓存有 jar）时生效，CI 上因缓存不同会 skip——**它不是 CI 防线，是本地防线**。
-- [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线；**同批删掉上一块的评分引导句**，并跑 `ChangeNotesRatingLineGuardTest`（全文 1 次）与 `inspect-plugin-zip.py` 的全角标点判据——两条绿了才允许继续。
+- [ ] RC-P3 changeNotes：`gradle/plugin-change-notes.html` 新 `<h2>v{版本}</h2>` 块置顶，满足 §1.2 红线；**同批删掉上一块的评分引导句**，并在 `git tag` 之前跑 `python -I dev-support/check-change-notes.py --version {版本}` 与 `--self-test`（源码级，含评分句全文 1 次 / 最新块 / 裸 @ / 首个 h2 / 全角 / preview 逐字一致）——两条绿了才允许继续；产物级 `inspect-plugin-zip.py` 由 CI 在 `:buildPlugin` 后对本轮发布的那份 zip 跑（见 §1.2 双轨判据）。
 - [ ] RC-P4 发行 8 处同步（详见 `Gitee自动发行工作流-说明文档.md` 八处同步清单）：
 
 | # | 文件 | 内容 |
@@ -84,7 +88,8 @@
   - 代价对照（决定过、不再重议）：Gitee 改速览会丢安装与已知边界；GitHub 改全文要动 CI 模板且丢折叠历史与构建记录，收益与风险不成比例。
   - **发行说明尾部须带一行构建记录链接**（`构建记录：https://github.com/SongRenShuo/mybatis-plus-sql-visualizer/actions/runs/{run_id}`）——Gitee 正文是唯一没有构建记录的通道，靠这一行让 Gitee 读者也能核验「这版跑了哪一轮门禁」。
 
-- [ ] RC-P5 产物核对（**必须在建发行版之前跑**，2026-11-09 教训）：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。等价一键判据：`python dev-support/inspect-plugin-zip.py --version {版本}`（内层 jar 名 / `plugin.xml <version>` / `MANIFEST Version` / change-notes 首块与全角标点四项全 OK，退出码 0）。
+- [ ] RC-P4c **内测轮必须显式传 `notes`（2026-11-13 实测踩坑）**：CI 拼发行正文时只在 `docs/发行说明/*-发行说明.md` 里按版本号匹配（正式版命名），而内测说明按惯例叫 `-内测说明.md` ⇒ **内测轮 dispatch 必须带 `-f notes=docs/发行说明/{YYYYMMDD}-{HHMM}-{主题}-内测说明.md`**，否则 `publish` 报「在 docs/发行说明 下找不到正文含 v{版本} 的发行说明」。另：`mode=publish` 只接受**运行级结论 success** 的门禁轮（工作流里硬判 `if ($run.conclusion -ne 'success') throw`），所以首发轮 publish 失败后，带 notes 的重发只能走 `mode=release` 把门禁重跑一遍，不能拿 `publish` + `run_id` 复用那轮失败运行。
+- [ ] RC-P5 产物核对（**必须在建发行版之前跑**，2026-11-09 教训）：`unzip -l build/distributions/mybatis-plus-sql-visualizer-{版本}.zip`——应含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；不应含测试类或无关依赖。等价一键判据 `python -I dev-support/inspect-plugin-zip.py --version {版本}`（内层 jar 名 / `plugin.xml <version>` / `MANIFEST Version` / change-notes 首块与全角标点四项全 OK，退出码 0）现也由 CI build job 在 `:buildPlugin` 之后对**本轮真正发布的那份 zip**跑；源码级文案判据改由 `check-change-notes.py` 在 tag 前零 Gradle 完成（见 §1.2 双轨判据）。
 - [ ] RC-P6 沙盒冒烟：`./gradlew runIde`，zip 经 Settings → Plugins → ⚙ → Install Plugin from Disk 安装后验证 gutter 图标 / 右键转换 / 日志面板 / 设置页。
 - [ ] RC-P1c **分片读数复用判据**（2026-11-04 定例，实测省约 45 分钟）：若本次提交相对「上次 `testShards` 全量通过的那个提交」在 `src/main` 与 `src/test` 上**零差异**——`git diff --stat <上次提交> HEAD -- src/main src/test` 输出为空——可只重跑 `verifyGate`，分片读数沿用上次同代码状态的结论。三条约束缺一不可：①改动仅限版本号 / changeNotes / CHANGELOG / 发行说明 / bundle 文案（动任何 Kotlin 或测试代码即失效）；②受文案影响的守卫必须单独复跑并贴读数（`BundlePlaceholderArityTest`、`HardcodedUiTextGuardTest`）；③发行说明的「测试」段必须如实写明「分片读数沿用 `<上次提交>` 的同代码状态结论，本次未重跑全量」，**不得**写成「本版全量门禁跑通」。`verifyGate` 不适用本复用——版本号进 `plugin.xml`，jar 变了必须在转正产物上重验兼容性。
 - [ ] RC-P1d **门禁执行路径**（2026-11-05 定例，**默认走本地**）：
@@ -176,6 +181,11 @@
 
 ## 三、双通道发布段
 
+> **工具（2026-11-11 沉淀）**：CI 运行与发行版状态查询统一走 `python dev-support/ci-status.py`——
+> `runs` 看最近的 `build-plugin.yml` 运行、`run <id>` 看各 job、`wait <id>` 轮询到结束（退出码 0＝success，
+> 适合后台任务）、`release <tag>` 看 GitHub Release 的 id/prerelease/附件字节数、`pick-artifact <id>` 看门禁产物。
+> 此前每轮都在临时目录现写脚本查这些，收口后不必再写。
+
 - [ ] RC-R1 git tag：发行提交之后 `git tag {版本号}` → `git push origin {版本号}`。判据：tag 名与 `version=` 一字不差（§1.1 第 3 条）。
 - [ ] RC-R2 Gitee Release，两条路按发布来源二选一：
   - **CI 发布**（Actions `build-plugin.yml` mode=release/publish 已产出 GitHub Release）：
@@ -196,6 +206,10 @@
   `python dev-support/mirror-releases-to-github.py --tag {版本号}`（幂等，可反复跑；已存在则只补附件）。
   判据：`--verify-only` 通过、GitHub Releases 页出现同版本且附件 size 与本地 zip 一致。
   **注意上传走 `uploads.github.com`，不是 `api.github.com`（用后者返 404）**。
+  **清单缓存（T-CiMirrorTagMatch，2026-11-11）**：脚本默认读 `.local/gitee-releases.json`；该缓存**只保 30 分钟**
+  （一轮跑的时长），过期自动重拉；`--tag` 显式指定的场合**一律现场拉取**。此前缓存永不过期，
+  导致「刚建完发行版就镜像」被旧清单过滤成 `没有匹配的 tag`（看着像 tag 命名问题），批量模式还会
+  **静默漏镜像**缓存之后发布的版本。排障时先看脚本开头是否打印「拉取 Gitee releases…」。
 - [ ] RC-R3 update.json 收尾（**仅用户本人操作，AI 会话一律不得代改**）：发行后由用户独立单文件提交 `preview.update.json → update.json`（Gitee raw 为自更新清单源）。判据：`update/update.json` 的 version 与 downloadUrl 指向本版 tag 路径，浏览器打开 downloadUrl 能下载。会话侧的发行职责止于 RC-R2 + RC-R7 回读通过，报告里只写「update.json 待用户手改」。
 - [ ] RC-R4 Marketplace 上传：`build/distributions/*.zip` 经网页表单上传（首次必须网页手工；后续可 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…`）。表单：Apache-2.0 + 源码链接 **`https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`**（2026-10-22 起改填 GitHub 镜像；Gitee 仍为主仓）+ tags + 截图（1200×760）。
 - [ ] RC-R5 后台 listing 确认：上传后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变。
@@ -265,3 +279,5 @@ curl -s "https://gitee.com/api/v5/repos/SongRenShuo/mybatis-plus-sql-visualizer/
 ## 八、执行节奏参考
 
 正常发行：§二 → §三 → §四（第一档收口）→ N-24 破零三件套。审核退回：§五回路后回 §四。任何中断：§六先行。发行窗口、跟版与破零动作的调度口径见全景批次开发计划（P0-2 窗口）。
+
+**内测版一条命令（2026-11-12 起，`dev-support/release-beta.ps1`）**：`pwsh -File dev-support/release-beta.ps1 -Version 2026.11.x-beta.N -Notes "docs/发行说明/<本版内测说明>.md"`。它按顺序执行：前置闸门（干净树 / 分支 / `gradle.properties` 版本位 / 必须带 `-beta.N` / 说明文件存在，任一不满足即中止且不做任何对外动作）→ gates（`python -I dev-support/check-change-notes.py --version {版本}` + `--self-test`，源码级、零 Gradle，脚本本地不再跑 gradle）→ tag（已存在且指向别的提交就失败，**不静默前移**）→ `push-all.ps1 -Branch master -Tags` → dispatch `mode=release` 并按 `gh run view --json conclusion` 等结论（不取 `gh run watch` 的退出码，代理掐断会让它提前退出）→ `gitee-release.py --from-github --prerelease --yes` 与 `--verify-only` → 打印 done / CI run / tag / GitHub id / Gitee URL。`-DryRun` 只打印命令；`-SkipGates` / `-SkipCi` / `-SkipGitee` 供分步重跑；`-MarketplaceLite` 让 CI 的 marketplace 腿只跑 243（内测轮省约 5 分钟墙钟——那条腿挂在 `needs: build` 后面是整轮的地板，逐目标 API 兼容仍由 verify×3 全覆盖；正式版不要带）。CI 侧 build job 在 `:buildPlugin` 后**新增两步**覆盖源码级 + 产物级：`check-change-notes.py`（含 `--self-test`）与 `inspect-plugin-zip.py --version`（用 `--print-version` 取版本号），查本轮真正发布的那份 zip；Kotlin 守卫 `ChangeNotesRatingLineGuardTest` 仍由 `testFast` 腿跑，CI 环节只增不减。`update/update.json` 不在脚本内（归用户本人）。

@@ -90,7 +90,8 @@ class ForeachSqlNodeTest {
     fun `null集合默认报错记录`() {
         val result = render(foreach("list"), mapOf("list" to null))
         assertEquals("", result.sql)
-        assertTrue(result.errors.any { it.contains("evaluated to a null value") })
+        // T-MbgExamplePreview R6：文案已中文化（原 MyBatis 英文原文透传到中文 UI）
+        assertTrue(result.errors.any { it.contains("求值为 null") })
     }
 
     @Test

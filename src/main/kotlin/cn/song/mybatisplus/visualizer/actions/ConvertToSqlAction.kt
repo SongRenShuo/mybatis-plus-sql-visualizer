@@ -19,7 +19,9 @@ import cn.song.mybatisplus.visualizer.ui.XmlInlineSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
-import cn.song.mybatisplus.visualizer.ui.IbatisXmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTarget
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisCallTargets
+import cn.song.mybatisplus.visualizer.ui.gutter.IbatisStatementPreview
 import cn.song.mybatisplus.visualizer.ui.gutter.IbatisXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider
@@ -185,7 +187,9 @@ class ConvertToSqlAction : AnAction() {
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
-            } else if (!tryHqlFallback(service, project, element, sourceLocation)
+            } else if (!tryIbatisCallFallback(project, element, sourceLocation)
+                && !tryIbatisMethodFallback(project, element, sourceLocation)
+                && !tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
                 && !tryJdbcTemplateFallback(project, element, sourceLocation)
                 && !tryJpaFallback(service, project, element, sourceLocation)
@@ -197,6 +201,71 @@ class ConvertToSqlAction : AnAction() {
                 )
             }
             // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
+        }
+    }
+
+    /**
+     * T-IbatisCallPreview：光标在 iBatis `SqlMapExecutor` 调用行上 → 直接预览该语句的 SQL。
+     *
+     * 为什么必须排在 [tryJdbcTemplateFallback] 之前：`SqlMapExecutor` 的入口名
+     * （`queryForObject` / `queryForList` / `queryForMap` / `update` / `delete`）与 JDBC 模板白名单
+     * 完全重叠，而 `JdbcTemplateSqlLocator` **没有** iBatis 让位门（gutter 侧那道门在
+     * `JdbcTemplateSqlGutterLineMarkerProvider`）——此前该调用被 JDBC 通道认领后 `isLikelySql`
+     * 拒绝、通道又已 `return true`，用户只拿到「未找到可转换的 Wrapper」（错源提示）。
+     *
+     * 形状门复用 [IbatisCallTargets]（内部就是 `IbatisCallYieldGate`，与 gutter 让位同一函数）；
+     * 目标解析与渲染全部在 [SqlPreviewService.previewAsync] 的读权限内完成，EDT 只取字符串。
+     *
+     * 目标不存在时 [IbatisStatementPreview.previewResolved] 返回「语句未找到」可见失败——
+     * 形状命中即认领、不回落 JDBC（标识符形态首参本来就不是 SQL）。
+     */
+    private fun tryIbatisCallFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val target = IbatisCallTargets.resolve(element) ?: return false
+        previewIbatisTarget(project, target, sourceLocation)
+        return true
+    }
+
+    /**
+     * T-IbatisCallPreview：光标在方法定义行 / 方法体任意处 → 按方法体内的 iBatis 调用出候选
+     * （0 → 继续回落；1 → 直接预览；多 → [SqlSelectionDialog]）。
+     *
+     * 用户按快捷键时常把光标停在方法名上；不补这一档，定义行仍会落到
+     * [tryMethodBodyStringSqlFallback]（`collectMethodCandidates` 同样没有 iBatis 门）→ 同一个
+     * 错源提示。方法体扫描带「无引号 / 超长方法体」两道廉价预筛（[IbatisCallTargets.callsInMethod]）。
+     */
+    private fun tryIbatisMethodFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false) ?: return false
+        if (method.body == null) return false
+        val targets = IbatisCallTargets.callsInMethod(method)
+        if (targets.isEmpty()) return false
+        if (targets.size == 1) {
+            previewIbatisTarget(project, targets[0], sourceLocation)
+            return true
+        }
+        val rows = targets.map { target ->
+            val line = target.call.containingFile.viewProvider.document
+                ?.getLineNumber(target.call.textRange.startOffset)?.plus(1) ?: 0
+            val methodName = target.call.methodExpression.referenceName ?: "?"
+            SqlSelectionDialog.Row.of(
+                "$methodName(\"${target.statementId}\")（第 $line 行）",
+                target.call.text.trim(),
+            )
+        }
+        SqlSelectionDialog(project, targets, rows) { selected ->
+            previewIbatisTarget(project, selected, sourceLocation)
+        }.show()
+        return true
+    }
+
+    /** 预览一个 iBatis 调用目标（后台 ReadAction 内解析语句 + 渲染，EDT 只渲染结果）。 */
+    private fun previewIbatisTarget(project: Project, target: IbatisCallTarget, sourceLocation: String?) {
+        // 只把字符串带进后台块（PSI 元素不跨线程读；解析链自己持读锁）
+        val statementId = target.statementId
+        val ownerNamespace = target.ownerNamespace
+        SqlPreviewService.previewAsync(project, {
+            IbatisStatementPreview.previewResolved(project, statementId, ownerNamespace)
+        }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation)
         }
     }
 
@@ -507,7 +576,11 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (tags.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    // E2E 验收缺陷 D2：选区落在语句**内部**（典型：Ctrl+F 命中后自动选中语句 id、
+                    // 或用户双击 `selectByExample` 再按快捷键）时，按「startOffset 在选区内」收不到候选，
+                    // 旧行为直接报「未找到可预览的 SQL 源」——明明光标就在语句里。改为回落光标所在语句
+                    // （0 候选之外的语义与多候选一致，不牺牲已有分发）。全部无语句时仍走原提示。
+                    0 -> previewXmlStatement(project, file, editor, sourceLocation)
                     1 -> previewXmlTag(project, file, tags[0], sourceLocation)
                     else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
@@ -580,9 +653,11 @@ class ConvertToSqlAction : AnAction() {
     private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int? = null) {
         // T-Ibatis2Support 券 A 收尾：iBatis 语句走独立预览链——它没有 namespace / Mapper 接口 /
         // 实体注解，进 mapper 链只会拿到空上下文；且兜底通道已让位，不补这条就一个入口都没有。
+        // T-IbatisCallPreview：装配收口到 IbatisStatementPreview.previewTag（与 gutter / MCP 同源，
+        // 并补上无 id 语句的 ordinal 回落）。
         if (IbatisXmlGutterLineMarkerProvider.isStatementAnchor(tag)) {
             SqlPreviewService.previewAsync(project, {
-                IbatisXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), tag.name)
+                IbatisStatementPreview.previewTag(tag)
             }) { result ->
                 SqlPreviewService.showResult(project, result, sourceLocation)
             }

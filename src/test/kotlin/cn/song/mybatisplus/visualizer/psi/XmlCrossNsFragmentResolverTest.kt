@@ -195,55 +195,34 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
         """.trimIndent(),
     )
 
-    fun testT_P5_05_二次渲染零索引遍历() {
+// T-MechanismSweep（2026-11-16）：片段表改「按 namespace 查自定义索引」，
+    // T-PS5-05 的单槽缓存（TTL/targets 覆盖/文件 isValid）整套退役——下列用例改钉行为面。
+
+    fun test索引化_二次渲染结果一致() {
         addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
-        XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
-        val before = XmlCrossNsFragmentResolver.indexScanCount.get()
         val first = crossNsPreview("com.demo.BaseMapper.cols")
         assertNull("首跑命中：${first.warning}", first.warning)
-        assertEquals("首跑全扫一次", 1, XmlCrossNsFragmentResolver.indexScanCount.get() - before)
         val second = crossNsPreview("com.demo.BaseMapper.cols")
-        assertEquals("二次渲染命中缓存 → 零索引遍历", 1, XmlCrossNsFragmentResolver.indexScanCount.get() - before)
-        assertEquals("缓存不改渲染结果", first.sql, second.sql)
+        assertEquals("二次渲染结果必须与首跑一致", first.sql, second.sql)
     }
 
-    fun testT_P5_05_未覆盖targets重扫() {
+    fun test索引化_未声明的namespace给出失败原因() {
         addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
-        XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
-        val before = XmlCrossNsFragmentResolver.indexScanCount.get()
-        crossNsPreview("com.demo.BaseMapper.cols")
-        assertEquals(1, XmlCrossNsFragmentResolver.indexScanCount.get() - before)
-        // 换一个未被上次扫描覆盖的 namespace → 必须重扫（不得给出陈旧 miss）
         val other = crossNsPreview("com.demo.OtherMapper.cols")
-        assertTrue("未覆盖 namespace 仍给出准确失败原因", other.warning != null)
-        assertEquals("未覆盖 targets 触发重扫", 2, XmlCrossNsFragmentResolver.indexScanCount.get() - before)
+        assertTrue("不存在的 namespace 仍给出准确失败原因", other.warning != null)
     }
 
-    fun testT_P5_05_TTL过期后重扫且结果一致() {
+    /** 索引由平台增量维护：新增片段文件后同一会话内立即可见（旧链 5s TTL 内会漏）。 */
+    fun test索引化_新增片段文件立即可见() {
+        val beforeAdd = crossNsPreview("com.demo.BaseMapper.cols")
+        assertTrue("前置：此时确实还没有该片段", beforeAdd.warning != null)
         addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
-        val realClock = XmlCrossNsFragmentResolver.clockMs
-        var now = 1_000_000L
-        try {
-            XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
-            XmlCrossNsFragmentResolver.clockMs = { now }
-            XmlCrossNsFragmentResolver.fragmentCacheTtlMs = 5_000L
-            val before = XmlCrossNsFragmentResolver.indexScanCount.get()
-            val a = crossNsPreview("com.demo.BaseMapper.cols")
-            now += 5_001L
-            val b = crossNsPreview("com.demo.BaseMapper.cols")
-            assertEquals("TTL 过期 → 重扫一次", 2, XmlCrossNsFragmentResolver.indexScanCount.get() - before)
-            assertEquals("重扫结果与首跑一致", a.sql, b.sql)
-            assertNull(b.warning)
-        } finally {
-            XmlCrossNsFragmentResolver.clockMs = realClock
-            XmlCrossNsFragmentResolver.fragmentCacheTtlMs = 5_000L
-            XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
-        }
+        val afterAdd = crossNsPreview("com.demo.BaseMapper.cols")
+        assertNull("新增文件必须立即可见：${afterAdd.warning}", afterAdd.warning)
     }
 
-    fun testT_P5_05_文件删除后回退重扫() {
+    fun test索引化_文件删除后降级不沿用旧片段() {
         val psi = addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
-        XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
         val first = crossNsPreview("com.demo.BaseMapper.cols")
         assertNull("删除前命中：${first.warning}", first.warning)
         com.intellij.openapi.application.WriteAction.compute<Unit, RuntimeException> {
@@ -251,9 +230,52 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
         }
         val after = crossNsPreview("com.demo.BaseMapper.cols")
         assertTrue(
-            "缓存文件失效 → 重扫并按未找到降级（不得沿用失效文件的片段）",
+            "文件删除后必须按未找到降级（不得沿用失效文件的片段）",
             after.warning != null && after.warning!!.contains("BaseMapper"),
         )
-        XmlCrossNsFragmentResolver.clearFragmentCacheForTest()
+    }
+
+    // ===== T-BindStaticRefCrossNs：跨命名空间片段内的 bind 静态常量（用户语料 StationAuthScope.xml 形态）=====
+
+    private fun constsFixture(value: String) {
+        myFixture.addFileToProject(
+            "com/demo/Consts.java",
+            "package com.demo; public class Consts { public static final int IDLE = $value; }",
+        )
+    }
+
+    private fun scopeFragment(fieldName: String): String = """<mapper namespace="com.demo.ConstsMapper">
+          <sql id="scope"><bind name="scopeCategory" value="@com.demo.Consts@$fieldName"/>AND cat = #{scopeCategory}</sql>
+        </mapper>"""
+
+    private fun includeScope(): PreviewResult = preview(
+        """
+        <mapper namespace="com.demo.OrderMapper">
+          <select id="s1">SELECT * FROM t WHERE 1 = 1
+            <include refid="com.demo.ConstsMapper.scope"/></select>
+        </mapper>
+        """.trimIndent(),
+    )
+
+    fun testT_BindStaticRefCrossNs_片段内bind静态常量按项目PSI求值() {
+        constsFixture("7")
+        addMapper("src/main/resources/mapper/ConstsMapper.xml", scopeFragment("IDLE"))
+        val result = includeScope()
+        // 判别器：bind 求值结果进 bindValues（面板参数行据此回填）——只扫当前文件时此处恒 null
+        val rendered = result.xmlModel!!.renderSql()
+        assertEquals("7", rendered.bindValues["scopeCategory"])
+        assertTrue(
+            "片段内静态常量已解析时不得再报「求值为空」：${rendered.errors}",
+            rendered.errors.none { it.contains("求值为空") },
+        )
+        assertNull("解析成功不应有基线告警：${result.warning}", result.warning)
+    }
+
+    fun testT_BindStaticRefCrossNs_片段内字段不存在仍报警() {
+        constsFixture("7")
+        addMapper("src/main/resources/mapper/ConstsMapper.xml", scopeFragment("MISSING"))
+        val result = includeScope()
+        // 扫描域扩大后，解析不到的片段 ref 同样进基线告警（面板横幅），与同文件 ref 同口径
+        assertTrue("片段内解析不到须给出信号：${result.warning}", result.warning?.contains("MISSING") == true)
     }
 }

@@ -9,11 +9,13 @@ import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import java.io.File
 
 /**
  * T-PreviewLineCommentDash O-134/D136：预览行注释统一 `--` 接管件的行为契约。
@@ -308,5 +310,94 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
             EditorCommentShortcuts.uninstall(ed)
             EditorFactory.getInstance().releaseEditor(ed)
         }
+    }
+
+    /**
+     * T-CommentShortcutKeymap：换入/换回不得改动键盘绑定本身。
+     *
+     * 换入后平台会给新实例回填 `ProxyShortcutSet(actionId)`（按 keymap 惰性解析），所以键位数必须
+     * 与 keymap 对该 id 的映射一致——这同时是「先置 CustomShortcutSet.EMPTY」不丢键位的回归网。
+     */
+    fun test换入换回后快捷键绑定仍与keymap一致() {
+        val keymapKeys = KeymapManager.getInstance().activeKeymap
+            .getShortcuts(IdeActions.ACTION_COMMENT_LINE).size
+        val ed = editor("SELECT 1;")
+        try {
+            EditorCommentShortcuts.install(ed)
+            val installed = ActionManager.getInstance().getAction(IdeActions.ACTION_COMMENT_LINE)!!
+            assertEquals(
+                "换入后键位数应仍来自 keymap（ProxyShortcutSet 惰性解析）",
+                keymapKeys,
+                installed.shortcutSet.shortcuts.size,
+            )
+            EditorCommentShortcuts.uninstall(ed)
+            assertEquals(
+                "换回后原动作键位数应仍来自 keymap",
+                keymapKeys,
+                originalAction.shortcutSet.shortcuts.size,
+            )
+        } finally {
+            EditorCommentShortcuts.uninstall(ed)
+            EditorFactory.getInstance().releaseEditor(ed)
+        }
+    }
+
+    /**
+     * T-CommentShortcutKeymap 源码守卫（**全树**）：`src/main` 里 `replaceAction(` 只允许出现在共享助手
+     * `util/ActionReplaceSilently.kt` 内（且只有一处），并且必须排在「把快捷键集合置为 EMPTY」之后。
+     *
+     * 三条钉：
+     *  1. `replaceAction(` 只能由共享助手调用（其余接管点一律经 `replaceActionSilently`）；
+     *  2. 助手内「置 EMPTY」必须在 `replaceAction` 之前；
+     *  3. **`setShortcutSet(` 在 `src/main` 里一处都不许有**——它在平台是 `@ApiStatus.Internal`，
+     *     `verifyPlugin` 会判 INTERNAL_API_USAGES 并把发行轮打成红（2026.11.13 首发实测），
+     *     等价且公共的写法是 `registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)`。
+     *
+     * 行为级断言够不着——平台告警是 `Logger.warn(PluginException)`，仓内无日志捕获通道；而「忘了先置
+     * EMPTY」在功能上完全无感（键位照旧生效），只有真机日志里刷
+     * `ShortcutSet of global AnActions should not be changed outside of KeymapManager`。
+     * 故按 PerfSweep27StaticGuardTest 的 `File("src/main/kotlin/$rel")` 先例做结构钉。
+     *
+     * **为什么扫全树而不是单文件**：2026-11-13 真机日志按调用点归因后发现**两处**接管都在刷同一条告警
+     * （`EditorCommentShortcuts` 与 `ChooseDataSourceTakeover`），单文件守卫会漏掉后者（实测漏了 3 条）。
+     */
+    fun test源码守卫_全树只允许经replaceActionSilently换全局动作() {
+        val helperRel = "src/main/kotlin/cn/song/mybatisplus/visualizer/util/ActionReplaceSilently.kt"
+        fun stripped(file: File) = file.readText()
+            .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（KDoc 里会提到这些符号）
+            .replace(Regex("""(?m)^\s*//.*$"""), "")         // 剥行注释
+        val files = File("src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .toList()
+        val offenders = files
+            .mapNotNull { file ->
+                val hits = Regex("""\breplaceAction\(""").findAll(stripped(file)).count()
+                if (hits > 0) file.path.replace('\\', '/') to hits else null
+            }
+            .sortedBy { it.first }
+            .toList()
+        assertEquals(
+            "只有共享助手可以调 replaceAction（其余接管点一律经 replaceActionSilently）: $offenders",
+            listOf(helperRel),
+            offenders.map { it.first },
+        )
+        assertEquals("助手文件里只应有一处 replaceAction 调用", 1, offenders.single().second)
+        val helper = stripped(File(helperRel)).substringAfter("fun ActionManager.replaceActionSilently", "")
+        assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
+        val emptySet = helper.indexOf("registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)")
+        val replace = helper.indexOf("replaceAction(")
+        assertTrue(
+            "必须先 registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)（$emptySet）再 replaceAction（$replace）",
+            emptySet in 0 until replace,
+        )
+        val internalApiSites = files
+            .filter { stripped(it).contains("setShortcutSet(") }
+            .map { it.path.replace('\\', '/') }
+        assertEquals(
+            "setShortcutSet 是平台 Internal API，verifyPlugin 会判 INTERNAL_API_USAGES；" +
+                "改用 registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)：$internalApiSites",
+            emptyList<String>(),
+            internalApiSites,
+        )
     }
 }

@@ -8,6 +8,8 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.xml.XmlTag
@@ -17,6 +19,39 @@ import com.intellij.xml.util.XmlTagUtil
 
 /** Mapper XML statement 与 Mapper 接口方法之间的双向 gutter 导航。 */
 class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
+    // F1（T-GutterFirstOpenDelay，治 S2「MP 图标消失 3s 重现」）：
+    // createMarker 原本把 resolveInterfaceMethod 是否解析到当图标唯一开关——冷打开窗口 Java
+    // 索引未就绪/重建中时 findClass(allScope) 瞬时返回 null，该趟慢 pass 整趟换装把先前已
+    // 渲染的图标摘掉，索引就绪后下一趟才恢复（用户实测「消失 3s 重现」）。判定顺序改为：
+    //  ① 解析成功 → 产出并记入会话级正缓存 [resolvedStatementKeys]；
+    //  ② 解析失败 + 正缓存命中 → 照常产出（图标不摘；点击导航 handler 本就再解析一次且
+    //     null-safe，resolve 语义与旧行为一致）；
+    //  ③ 解析失败 + dumb 窗（F1-b）→ 乐观产出且不入缓存：dumb 期失败只是「还没查到」，
+    //     dumb 结束后下一趟重新判定，可自愈；成功路径照常入缓存（findClass 命中即真实存在）。
+    //  ④ 解析失败 + 其余 → 不产出（「真没有」语义与旧行为一致，负例不回归）。
+    //  不变式＝图标只在「确认真没有」时缺席，不在「还没查到」时缺席。
+    //  正缓存取舍（无失效）：会话级正缓存不设任何失效——接口方法删除等真变更依赖「文件改动
+    //  → daemon 重跑 → 解析成功路径刷新」覆盖不了的场景极少，且 XML 侧误留图标的代价
+    //  （点击后静默无跳转，handler null-safe）远小于冷窗误摘整批图标的代价，不对称偏向
+    //  「宁多不缺」。
+    companion object {
+        /** F1-a 会话级正缓存：本会话解析成功过的 `namespace#id`。无失效，取舍见类头注释。 */
+        internal val resolvedStatementKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /** 测试缝：dumb 判定（生产＝`DumbService.isDumb`，F1-b 乐观产出用），形态承 MbgExampleCallResolver。
+         *  F1' 起双侧共用（Java 侧 `MapperJavaToXmlLineMarkerProvider` 的失败分支同读此缝）。 */
+        internal var isDumbProvider: (Project) -> Boolean = { project ->
+            runCatching { DumbService.isDumb(project) }.getOrDefault(false)
+        }
+
+        internal fun resetResolvedCacheForTest() {
+            resolvedStatementKeys.clear()
+            // P2.1 三态测试缝一并复位，防跨用例泄漏（用例用它们驱动 Unknown/Absent 分支）
+            MybatisXmlTargets.methodLookupOverrideForTest = null
+            MapperXmlLocator.lookupOverrideForTest = null
+        }
+    }
+
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? = null
 
     override fun collectSlowLineMarkers(
@@ -53,20 +88,41 @@ class MapperXmlToJavaLineMarkerProvider : LineMarkerProvider {
         if (tag.parentTag?.name != "mapper") return null
         val namespace = MybatisXmlTargets.rootNamespace(tag.containingFile) ?: return null
         val id = tag.getAttributeValue("id")?.takeIf { it.isNotBlank() } ?: return null
-        if (MybatisXmlTargets.resolveInterfaceMethod(element.project, namespace, id) == null) return null
-        return LineMarkerInfo(
-            element, element.textRange, MpvsIcons.MapperStatement,
-            { MpSqlVisualizerBundle.message("gutter.mapperStatement.tooltip") },
-            { _, elt ->
-                val currentTag = elt.parent as? XmlTag ?: return@LineMarkerInfo
-                val currentNamespace = MybatisXmlTargets.rootNamespace(currentTag.containingFile) ?: return@LineMarkerInfo
-                val currentId = currentTag.getAttributeValue("id") ?: return@LineMarkerInfo
-                MybatisXmlTargets.resolveInterfaceMethod(elt.project, currentNamespace, currentId)?.navigate(true)
-            },
-            com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.mapperStatement.accessible.name") },
-        )
+        // T-MapperGutterEvict P2.1（2026-11-16）：五段判定——
+        // ① dumb 窗乐观产出（不查 Java 索引，不入缓存）
+        // ② 确定存在 → 入正缓存并产出
+        // ③ 暂时查不了（索引重建中）→ 缓存命中仍产出、不动缓存（F1-a/S2 兜底）
+        // ④ 确定不存在（接口方法删了 / namespace 改了）→ 收回缓存并摘图标（P2.1）
+        // ⑤ 其余不产出。注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
+        val key = "$namespace#$id"
+        val project = element.project
+        if (isDumbProvider(project)) return buildStatementMarker(element)
+        return when (MybatisXmlTargets.lookupInterfaceMethod(project, namespace, id)) {
+            is MybatisXmlTargets.MethodLookup.Found -> {
+                resolvedStatementKeys.add(key)
+                buildStatementMarker(element)
+            }
+            MybatisXmlTargets.MethodLookup.Unknown ->
+                if (resolvedStatementKeys.contains(key)) buildStatementMarker(element) else null
+            MybatisXmlTargets.MethodLookup.Absent -> {
+                resolvedStatementKeys.remove(key)
+                null
+            }
+        }
     }
+
+    private fun buildStatementMarker(element: XmlToken): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperStatement,
+        { MpSqlVisualizerBundle.message("gutter.mapperStatement.tooltip") },
+        { _, elt ->
+            val currentTag = elt.parent as? XmlTag ?: return@LineMarkerInfo
+            val currentNamespace = MybatisXmlTargets.rootNamespace(currentTag.containingFile) ?: return@LineMarkerInfo
+            val currentId = currentTag.getAttributeValue("id") ?: return@LineMarkerInfo
+            MybatisXmlTargets.resolveInterfaceMethod(elt.project, currentNamespace, currentId)?.navigate(true)
+        },
+        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.mapperStatement.accessible.name") },
+    )
 }
 
 /** Mapper 接口方法跳转到 namespace 对应 XML 中的同名 statement。 */
@@ -103,19 +159,41 @@ class MapperJavaToXmlLineMarkerProvider : LineMarkerProvider {
         val containingClass = method.containingClass ?: return null
         if (!containingClass.isInterface) return null
         val namespace = containingClass.qualifiedName ?: return null
-        if (MapperXmlLocator.locate(element.project, "$namespace.${method.name}") == null) return null
-        return LineMarkerInfo(
-            element, element.textRange, MpvsIcons.MapperMethod,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip") },
-            { _, elt ->
-                val currentMethod = elt.parent as? PsiMethod ?: return@LineMarkerInfo
-                val currentNamespace = currentMethod.containingClass?.qualifiedName ?: return@LineMarkerInfo
-                val target = MapperXmlLocator.locate(elt.project, "$currentNamespace.${currentMethod.name}") ?: return@LineMarkerInfo
-                val file = target.virtualFile.takeIf { it.isValid } ?: return@LineMarkerInfo
-                OpenFileDescriptor(elt.project, file, target.line, 0).navigate(true)
-            },
-            com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
-            { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
-        )
+        // F1 同构（T-GutterFirstOpenDelay，治 Java 侧 S2'：冷窗/索引临界期 MapperXmlLocator.locate
+        // 瞬时落空（XML 清单未就绪）→ 慢趟结果固化 → Java→XML 图标长期缺席，直到文件改动才恢复——
+        // 真机 2026-11-15 实证：CustChannelMapper/CustAddressMapper 全部方法行无图标，daemon 重跑即回。
+        // 与 XML 侧同不变式：图标只在「确认真没有」时缺席，不在「还没查到」时缺席。
+        // 注意不 catch ProcessCanceledException（平台契约禁吞 PCE；BannedApiScanRuleTest 会拦）。
+        val key = "$namespace#${method.name}"
+        val project = element.project
+        // T-MapperGutterEvict P2.1（2026-11-16）：与 XML 侧同构五段式——dumb 乐观 / 确定存在入缓存 /
+        // 暂时查不了保留缓存命中 / 确定不存在收回缓存并摘图标。dumb 门前移，避免在索引重建期查索引。
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider(project)) return buildMethodMarker(element)
+        return when (MapperXmlLocator.locateOrUnknown(project, "$namespace.${method.name}")) {
+            is MapperXmlLocator.Lookup.Found -> {
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key)
+                buildMethodMarker(element)
+            }
+            MapperXmlLocator.Lookup.Unknown ->
+                if (MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)) buildMethodMarker(element) else null
+            MapperXmlLocator.Lookup.Absent -> {
+                MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key)
+                null
+            }
+        }
     }
+
+    private fun buildMethodMarker(element: PsiElement): LineMarkerInfo<*> = LineMarkerInfo(
+        element, element.textRange, MpvsIcons.MapperMethod,
+        { MpSqlVisualizerBundle.message("gutter.mapperMethod.tooltip") },
+        { _, elt ->
+            val currentMethod = elt.parent as? PsiMethod ?: return@LineMarkerInfo
+            val currentNamespace = currentMethod.containingClass?.qualifiedName ?: return@LineMarkerInfo
+            val target = MapperXmlLocator.locate(elt.project, "$currentNamespace.${currentMethod.name}") ?: return@LineMarkerInfo
+            val file = target.virtualFile.takeIf { it.isValid } ?: return@LineMarkerInfo
+            OpenFileDescriptor(elt.project, file, target.line, 0).navigate(true)
+        },
+        com.intellij.openapi.editor.markup.GutterIconRenderer.Alignment.CENTER,
+        { MpSqlVisualizerBundle.message("gutter.mapperMethod.accessible.name") },
+    )
 }

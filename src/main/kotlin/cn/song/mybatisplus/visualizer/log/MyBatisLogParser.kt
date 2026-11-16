@@ -40,7 +40,9 @@ package cn.song.mybatisplus.visualizer.log
  * - **类型接入**：`Parameters:` 行先挂起（键 = pstm id），同 id 的 `Types:` 行按位置并入
  *   [LogSqlParam.type] 后闭合。**必须并入类型**：`00340025002200200006` 这类纯数字串在无类型
  *   启发式下会裸出成数值字面量（Oracle 模式语义错误）。兜底闭合点：同 id 的新 `Executing
- *   Statement`、`{conn-N} Preparing Statement:`、MyBatis `Preparing:` 语句行、[closePending]；
+ *   Statement`、`{conn-N} Preparing Statement:`、MyBatis `Preparing:` 语句行、[closePending]、
+ *   [flushSettled]（T-ConsoleFlushAlign：挂起组**自身**静默 ≥ 阈值才冲——Types 与 Parameters 同线程
+ *   相邻输出，间隔 1ms 量级，静默 1s 即判定 Types 行不会再来了，逐行喂行永不误撕参数组）；
  *   `Types:` 缺行时按无类型启发式渲染（现状口径），不伪造类型；
  * - **[takeEntries] 不冲刷挂起态**：生产桥每行喂入后都会调 [takeEntries]，若在此闭合，`Parameters:`
  *   行一落地就被取出、随后的 `Types:` 行永远无处并入；
@@ -64,7 +66,13 @@ class MyBatisLogParser(
     var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
 
     /**
-     * T-SAF-22：老化判定时钟（毫秒）。与 [LogThreadRouter] 共用同一时钟源（JdbcTemplate/
+     * T-ConsoleFlushAlign：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （`Parameters:` 行与 `Preparing:` 行同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private val settleMs: Long = DEFAULT_SETTLE_MS,
+
+    /**
+     * T-SAF-22 老化与 settle 判定共用时钟（毫秒）。与 [LogThreadRouter] 共用同一时钟源（JdbcTemplate/
      * ShardingSphere 先例）：驱动挂起桶与 iBatis 挂起态的老化淘汰判定；测试注入可控件以获得确定性。
      */
     private val clock: () -> Long = System::currentTimeMillis,
@@ -111,6 +119,7 @@ class MyBatisLogParser(
         // T-SAF-22：挂起桶老化——静默超阈值的未闭合语句在容量压力下强制闭合产出后淘汰
         // （isIdle 判据让挂起桶永无淘汰资格，64 上限被废掉、滞留随控制台无界增长）
         forceClose = { closePending(it) },
+        // 时钟与 [clock] 同源（flushSettled 的静默判定一致性；测试注入可控件，同 ShardingSphere 先例）
         clock = clock,
     )
 
@@ -119,6 +128,9 @@ class MyBatisLogParser(
      * 「语句行关闭 MyBatis 侧未闭合条目」时用到）。
      *
      * @param params null = `Parameters:` 行未到（仅 SQL 已知）；非 null = 参数已到、等 `Types:` 并入
+     * @param lastTouchMs T-ConsoleFlushAlign：该挂起组最近一次收到行的时钟毫秒（[flushSettled]
+     *   对挂起组做**自身**静默判定的判据——挂起组不归 [LogThreadRouter] 分桶管，路由器的
+     *   lastActivity 覆盖不到它，须自带）
      */
     private class IbatisPending(
         val sql: String,
@@ -126,6 +138,9 @@ class MyBatisLogParser(
         var params: List<LogSqlParam>? = null,
         /** T-SAF-22：挂起态创建时刻（毫秒）——老化淘汰判据（静默超 TTL 兜底闭合）。 */
         val createdAtMs: Long,
+
+        /** T-ConsoleFlushAlign：该挂起组最近一次收到行的时钟毫秒（[flushSettled] 对挂起组自身静默判定的判据）。 */
+        var lastTouchMs: Long = 0L,
     )
 
     /**
@@ -367,7 +382,7 @@ class MyBatisLogParser(
         // 语句行同时终止 MyBatis 侧的未闭合语句/续行（与分支 1 同语义）
         closePending(bucket)
         if (sql.isEmpty()) return
-        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line, createdAtMs = clock())
+        ibatisPending[id] = IbatisPending(sql.take(maxParseLength), line, createdAtMs = clock(), lastTouchMs = clock())
     }
 
     /**
@@ -401,9 +416,10 @@ class MyBatisLogParser(
             // 同 id 的第二条 Parameters（批处理 / 同语句多次执行）：上一批先按无类型闭合，本批另起一条
             ibatisPending.remove(id)
             emitIbatis(pending)
-            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params, createdAtMs = clock())
+            ibatisPending[id] = IbatisPending(pending.sql, pending.logLine, params, createdAtMs = clock(), lastTouchMs = clock())
         } else {
             pending.params = params
+            pending.lastTouchMs = clock() // T-ConsoleFlushAlign：Parameters 行刷新挂起组活动时间
         }
     }
 
@@ -567,6 +583,42 @@ class MyBatisLogParser(
         return result
     }
 
+    /**
+     * T-ConsoleFlushAlign：静默冲刷——闭合全部**已静默 ≥ [settleMs]** 的桶的待产出条目，随后冲刷
+     * 自身同样静默的 iBatis 挂起组；产出进 [entries]（由调用方随下一次 [takeEntries] 取走），返回本次
+     * 产出条数。
+     *
+     * 为什么必须有它：参数化语句的条目虽在 `Parameters:` 行到达即闭合（分支 4），但**无参语句**（MyBatis
+     * 不打 `Parameters:` 行）要等同线程的下一条语句行才闭合、日志截断尾的「`Preparing:` 已见 /
+     * `Parameters:` 未达」窗口则永远等不到参数行——实时链路从不调 [closePending]，这些语句在应用安静后
+     * 无限期滞留，`takeEntries()` 恒空。静默 ≥ 阈值即判定「后续行不会再来了」，此时闭合是安全的
+     * （同 [JdbcTemplateLogParser.flushSettled] 口径：宁交未还原形态，不整段丢弃）。
+     *
+     * iBatis 挂起组**不归桶管**（键 = pstm id，路由器的 lastActivity 覆盖不到），须按组内自带
+     * [IbatisPending.lastTouchMs] 判静默；无条件 `flushIbatis()` 会把「`Parameters:` → `Types:`（间隔
+     * 1ms 量级）」撕开、丢类型，故必须逐组判静默（T-PanweiInsertCapture 券 A/B 的类型并入约定不破）。
+     *
+     * 调用点两处：① [processConsoleLine] 逐行入口（同控制台线程，喂行后调用，当前行的桶刚被触达故
+     * 不被截断）；② 控制台桥的常规轮询 [SqlLogConsoleBridge.flushSettledEntries]（EDT）——应用之后
+     * 一行都不再打时，靠这一拍兜底。
+     */
+    fun flushSettled(nowMs: Long = clock()): Int {
+        var produced = 0
+        // iBatis 挂起组（不归桶管）：逐组判静默（LinkedHashMap 插入序，与 closePending 的 flushIbatis 同口径）
+        val settledIbatisKeys = ibatisPending.entries
+            .filter { nowMs - it.value.lastTouchMs >= settleMs }
+            .map { it.key }
+        for (key in settledIbatisKeys) {
+            val pending = ibatisPending.remove(key) ?: continue
+            emitIbatis(pending)
+            produced++
+        }
+        for (bucket in router.settledBuckets(settleMs, nowMs)) {
+            if (closePending(bucket) != null) produced++
+        }
+        return produced
+    }
+
     private fun extractAfterKeyword(line: String, keyword: String): String? {
         if (keyword.isEmpty()) return null
         val idx = if (mixedPrefix) line.indexOf(keyword) else {
@@ -618,6 +670,15 @@ class MyBatisLogParser(
 
         /** T-SAF-12：多来源判据的 token 追踪窗口（最近 N 个不同线程 token；有界防膨胀）。 */
         private const val MAX_TRACKED_TOKENS = 8
+
+        /**
+         * T-ConsoleFlushAlign：静默冲刷默认阈值（毫秒），对齐 [JdbcTemplateLogParser.DEFAULT_SETTLE_MS]。
+         *
+         * 取 1 秒的由来：`Parameters:` 行与 `Preparing:` 行由同一线程相邻打印，间隔 1ms 量级；1 秒的静默
+         * 足以判定「没有参数行可等」（无参语句 / 截断尾），而误伤（把参数行留在条目外）需要该线程在
+         * 两行之间卡住 1 秒以上。
+         */
+        const val DEFAULT_SETTLE_MS = 1000L
 
         // ---------- iBatis 2.x 标记（券 A/B） ----------
 

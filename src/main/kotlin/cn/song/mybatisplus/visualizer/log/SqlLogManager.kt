@@ -198,8 +198,8 @@ class SqlLogManager(private val project: Project) : Disposable {
         // T-UxOnboard T-UX-03：首次捕获成功指路同挂本出口（会话级一次性、历史非空跳过、
         // headless 静默）——零新增监听链，headless 下决策即短路。
         buffer.onEntryAccepted = {
-            autoShowBufferListener()
-            FirstCaptureGuide.onEntryAccepted(project, buffer)
+            val autoOpened = autoShowBufferListener()
+            FirstCaptureGuide.onEntryAccepted(project, buffer, autoOpened)
         }
 
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
@@ -245,8 +245,14 @@ class SqlLogManager(private val project: Project) : Disposable {
         processListenerActive = RunConfigurationProcessListener.subscribe(project, this)
     }
 
-    /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。 */
-    private fun maybeAutoShow() {
+    /**
+     * 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。
+     *
+     * @return 本次是否真的把展开请求交给了已注册的处理器（T-NotifyTune 券 B：首次捕获引导据此
+     *   避免与自动展开叠两条「看这里」信号；处理器未注册 = 面板未创建，窗口没被打开 → 返回 false，
+     *   由气球补位指路）。
+     */
+    private fun maybeAutoShow(): Boolean {
         val now = System.currentTimeMillis()
         if (!shouldAutoShow(
                 PluginSettings.getInstance().state.logAutoOpenOnCapture,
@@ -254,11 +260,13 @@ class SqlLogManager(private val project: Project) : Disposable {
                 autoShowSuppressedByUserClose,
             )
         ) {
-            return
+            return false
         }
         lastAutoShowAt = now
         LOG.info("[M37.3] 首条 SQL 自动展开日志工具窗（logAutoOpenOnCapture=true）")
-        onAutoShowRequest()
+        val handler = onAutoShowRequest
+        handler?.invoke()
+        return handler != null
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
