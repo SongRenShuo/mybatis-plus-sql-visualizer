@@ -150,7 +150,7 @@ git merge --no-ff dev
 |---|---|---|---|
 | 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
 | 第 0 步 fetch+建本地 | 已可用（master 本地引用在位，第 1 步 merge 直接受益） | | |
-| 第 1 步 master→dev | **已合并**（2026-11-17，merge commit `aba1e47ba`；实际冲突 20 文件＝预演清单逐个一致，无增减）；编译与定向测试读数见下补记 | `aba1e47ba` | 见下方逐文件裁决表 |
+| 第 1 步 master→dev | **已合并＋编译定向全绿**（2026-11-17，merge commit `aba1e47ba`；实际冲突 20 文件＝预演清单逐个一致，无增减）。编译：`compileKotlin` BUILD SUCCESSFUL 3m32s（`-Pkotlin.compiler.execution.strategy=in-process`）。定向 10 类合并一次 96 用例 0 失败 0 错误 0 跳过（PluginSettingsPersistence 24、GuardSelfTestCoverageMetaGuard 8、LastUsedWriteOnEdt 3、DumbModeClickChain 5、MapperXmlLocator 10、SqlPreviewServicePreview 16、DataSourceSelector 2、StartupUpdateCheck 10、PreviewConsoleEager 7、SqlLogPanelSortAndSlowQuery 11）。not run：全量门禁/verifyGate/testShards（本轮纪律单路收口由主控统一安排，本步只做定向）；复选框计数 46 预置经 PluginSettingsPersistenceTest 24 例实跑核对成立。补充修复 2 笔：`5bcfe2de6`（dumb 夹具退役缝引用随 F1''' 同步）+ `097474f1e`（dumb 态断言对齐 master 契约——locate 抛 IndexNotReadyException、locateOrUnknown 归 Lookup.Unknown；首跑 2 红修正后复跑绿） | `aba1e47ba` | 见下方逐文件裁决表 |
 
 **第 1 步逐文件裁决表（20 文件，实际清单＝预演清单）**
 
