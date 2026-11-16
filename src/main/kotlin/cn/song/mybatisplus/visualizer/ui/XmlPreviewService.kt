@@ -102,7 +102,18 @@ object XmlPreviewService {
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
             parsedRef = Triple(parsed.namespace, statement.id, statement.kind)
             val warnings = mutableListOf<String>()
-            val staticValues = resolveStaticFields(fileText, project, warnings)
+            // T-BindStaticRefCrossNs：静态常量扫描域必须与渲染域一致。跨命名空间 include 的片段在
+            // 解析期被展开进语句树（T-IC-02），但片段文本在**另一个文件**里——只扫当前文件会把
+            // 片段内 `<bind value="@类@字段"/>` 漏出注入表（表现：同语句里本地 bind 正常、
+            // 片段内 bind 求值为空）。无跨命名空间引用时 fragments 为空表，本次扫描与改动前一致。
+            val staticValues = resolveStaticFields(
+                buildList {
+                    add(fileText)
+                    addAll(crossNamespace.fragments.values)
+                },
+                project,
+                warnings,
+            )
             // T-M26-B（P-立项-03）：MP 占位展开（${ew.customSqlSegment} 等）——Java 关联 wrapper 实参 → 片段注入
             // O-77 T-EwStatementScope：占位按语句域扫描（statement.rawText），他语句占位不再记账到本语句
             val ewBindings = resolveEwPlaceholders(fileText, statement.rawText, parsed.namespace, statement.id, project, warnings)
@@ -287,11 +298,19 @@ object XmlPreviewService {
      * 静态字段引用解析（T-M25.2）：扫描文本中的 `@类全名@字段名`（OGNL 静态访问），
      * 经 PSI 定位用户项目中的常量类与字段初始值（computeConstantExpression）；
      * 无 project（纯文本测试环境）→ 空映射；类/字段缺失或非常量 → warning + 不注入。
+     *
+     * T-BindStaticRefCrossNs：多文本入口——调用方必须把**所有会被渲染的文本**传进来
+     * （当前 mapper 文件 + 跨命名空间 include 片段），保证扫描域与渲染域一致；
+     * 引用按 `类@字段` 跨文本去重，同一个常量只解析一次。
      */
-    internal fun resolveStaticFields(fileText: String, project: Project?, warnings: MutableList<String>): Map<String, Any?> {
+    internal fun resolveStaticFields(
+        texts: Collection<String>,
+        project: Project?,
+        warnings: MutableList<String>,
+    ): Map<String, Any?> {
         if (project == null) return emptyMap()
-        val refs = STATIC_REF_REGEX.findAll(fileText)
-            .map { "${it.groupValues[1]}@${it.groupValues[2]}" }
+        val refs = texts.asSequence()
+            .flatMap { text -> STATIC_REF_REGEX.findAll(text).map { "${it.groupValues[1]}@${it.groupValues[2]}" } }
             .toSet()
         if (refs.isEmpty()) return emptyMap()
         return refs.mapNotNull { ref ->
@@ -305,6 +324,13 @@ object XmlPreviewService {
             }
         }.toMap()
     }
+
+    /** 单文本入口（注解 `<script>` 链等只有一段文本的调用方）。 */
+    internal fun resolveStaticFields(
+        fileText: String,
+        project: Project?,
+        warnings: MutableList<String>,
+    ): Map<String, Any?> = resolveStaticFields(listOf(fileText), project, warnings)
 
     /**
      * T-MbgPreviewParityAndOpenPerf P5：装配分段耗时（总耗时低于阈值不打，正常路径零噪音）。
@@ -357,11 +383,17 @@ object XmlPreviewService {
         return if (isExample) XmlPreviewProfile.MBG_EXAMPLE else null
     }
 
-    /** 单字段求值：findClass → findFieldByName → 字段初始值常量求值。 */
+    /**
+     * 单字段求值：findClass → findFieldByName → 字段初始值常量求值。
+     *
+     * T-BindStaticRefCrossNs S2：常量可能声明在父类或接口上（`@子类@CONST` 这种写法在真机上能跑，
+     * 因为 MyBatis/OGNL 走反射 `Class.getField`，**含**继承的 public 字段）——故按 `checkBases = true`
+     * 查，与运行时口径一致。
+     */
     internal fun resolveStaticFieldValue(project: Project, className: String, fieldName: String): String? {
         val psiClass = JavaPsiFacade.getInstance(project)
             .findClass(className, GlobalSearchScope.allScope(project)) ?: return null
-        val field = psiClass.findFieldByName(fieldName, false) ?: return null
+        val field = psiClass.findFieldByName(fieldName, true) ?: return null
         val initializer = field.initializer ?: return null
         return JavaPsiFacade.getInstance(project)
             .constantEvaluationHelper.computeConstantExpression(initializer)?.toString()

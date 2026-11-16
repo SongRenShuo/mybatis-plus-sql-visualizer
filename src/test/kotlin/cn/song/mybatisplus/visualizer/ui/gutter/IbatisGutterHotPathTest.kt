@@ -42,9 +42,13 @@ class IbatisGutterHotPathTest {
     /**
      * T-Ibatis2Gap 券 B 扩面：两个跳转 provider 的扫描面。
      *
-     * 只扫**函数体**（`collectSlowLineMarkers` 慢趟门控 + `createMarker` 锚定判定），不做整文件扫描——
-     * 这两个文件里合法存在点击期目标解析（`IbatisJavaCallSites` 的词索引），整文件扫描会对着
-     * 点击路径误报。daemon 每趟真正跑的判定路径就是被扫的这两个函数。
+     * 只扫**函数体**（`collectSlowLineMarkers` 慢趟门控 + `createMarker` 锚定判定），不做整文件扫描。
+     * daemon 每趟真正跑的判定路径就是被扫的这两个函数。
+     *
+     * 禁用词表钉的是**裸平台 API**（`GlobalSearchScope`/`PsiSearchHelper`/`PsiTreeUtil`/`.resolve(`…）：
+     * T-IbatisXmlArrowCallerGate（2026-11-16）起，XML 侧 `createMarker` 会经
+     * `IbatisJavaCallSites.lookupCallSite(` 做一次**封装好的**调用点存在性查询（词索引，命中即缓存、
+     * 确认缺失即收回）——搜索能力只准从这一个收口走，仍不得在本 provider 里直接写搜索 API。
      */
     /**
      * 券 B 两个跳转 provider 被扫的 daemon 判定函数（慢趟门控 + 锚定判定）。
