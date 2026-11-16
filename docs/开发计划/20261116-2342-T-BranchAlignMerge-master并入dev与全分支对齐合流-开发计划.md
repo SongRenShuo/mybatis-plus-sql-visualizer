@@ -149,15 +149,15 @@ git merge --no-ff dev
 | 步骤 | 状态 | 合并哈希 | 冲突文件与裁决 |
 |---|---|---|---|
 | 第 0 步 清理 | **已做**（2026-11-16）：删 `t-standalone-hotreload`（悬置 `28531e967`）+ 删 demo 孤儿目录 | | |
-| 第 0 步 fetch+建本地 | 待做 | | |
-| 第 1 步 master→dev | 待做 | | |
-| 2.1 preview 吃 master | 待做 | | |
-| 2.2 dialects 吃 master | 待做 | | |
-| 2.3 rollback 吃 master | 待做 | | |
-| 2.4 security 吃 master | 待做 | | |
-| 2.5 hiddenbug 吃 master | 待做 | | |
-| 2.6 merge-route 吃 master | 待做 | | |
-| 2.7 insight 吃 dev | 待做 | | |
+| 第 0 步 fetch+建本地+四工作树 | **已做**（2026-11-17）：dialects/security/hiddenbug/merge-route 各建独立工作树；master 双仓推送成功（github 落后一笔补齐） | | |
+| 第 1 步 master→dev | 子代理执行中 | | |
+| 2.1 preview 吃 master | **完成**（合并 `054827e50`，编译绿，Standalone 定向 2 类绿，双仓已推） | `054827e50` | CHANGELOG（分支 Unreleased 条目保留+master 11.16 段接上）；plugin.xml（双方 registryKey 追加型双保留） |
+| 2.2 dialects 吃 master | **完成**（合并 `5e8baf493`，编译绿，双仓已推） | `5e8baf493` | CHANGELOG（同款）；架构 01 `sql` 行取分支侧（含 domestic/ 超集）、`ui`/`update` 行取 master；架构 03 取 master 四行、sql 行并成 25 方言并实测 61 类 |
+| 2.3 rollback 吃 master | **完成**（合并 `1028a117e`，编译绿，双仓已推） | `1028a117e` | CHANGELOG（Unreleased 快照/脚本 4 条保留；T-LocalDirPersist 已随 11.14 发行自动合并不丢） |
+| 2.4 security 吃 master | **完成**（合并 `7f1ec6d1d`，编译绿，双仓已推） | `7f1ec6d1d` | 两个解析器 6+2 hunk 双保留（分支 T-SAF-22 forceClose/createdAtMs/TTL + master T-ConsoleFlushAlign settleMs/lastTouchMs 全并存，LogThreadRouter 自动合并已含两侧 API）；LESSONS 取 master 整体+安全教训让号改 **L80** 追加；CHANGELOG 双保留并去 3 条已发行重复（T-DevUpdateChannel/T-HotSwapUnloadSafety/T-RuntimeSlotOptionalFill） |
+| 2.5 hiddenbug 吃 master | **完成**（合并 `41706930b`，编译后台，双仓待推） | `41706930b` | SqlPreviewPanel dispose 尾 `Disposer.dispose(this)`：分支券 Y2 删自处置 vs master T-PreviewEditorLeak 保留——按 master 基线保留 master 形态并加合流注记；架构 01/03 同 dialects 款（sql 行 65 类实测）；索引保 master 全表+分支 HiddenBugPerfScan 行按日期插入；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去已发行重复（DmlResult/LastUsedEdt/WorkspaceHeal 等） |
+| 2.6 merge-route 吃 master | **完成**（合并 `912dba4e2`，编译后台，双仓待推） | `912dba4e2` | LESSONS 取 master+安全教训改 L80（与 security 同款，该支并过 security）；索引保 master 表+BranchMergeRoute 行用分支侧新状态（前三支已实施）；CHANGELOG 保 Unreleased（方言 4 条+HiddenBugPerfScan 全券），去 LocalDirPersist 已发行条目 |
+| 2.7 insight 吃 dev | 预演完成：对当前 dev 仅 4 个 xml 引擎代码冲突（ForeachSqlNode/TrimSqlNode/XmlPreviewModel/XmlSqlRenderer），文档全自动合并；**正式合并等第 1 步 dev 合完** | | |
 
 ## 七、决策点（须用户拍板）
 
