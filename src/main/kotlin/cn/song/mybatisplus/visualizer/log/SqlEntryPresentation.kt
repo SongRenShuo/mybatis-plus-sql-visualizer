@@ -98,7 +98,7 @@ internal object SqlEntryPresentation {
             }
             if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
             addFragment(formatTimestampFragment(entry))
-            if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, false))
+            if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, false, entry.durationKind))
             addFragment(formatDatabaseFragment(entry, false))
             addFragment(formatMcpFragment(entry, false))
             addFragment(formatUpdateCountFragment(entry, false))
@@ -106,8 +106,8 @@ internal object SqlEntryPresentation {
     }
 
     /**
-     * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构。
-     * 两个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
+     * 动态徽章段（券01 每次算，不可缓存）：⨉去重 + ×N 同结构 + 疑似 N+1（D216）。
+     * 三个徽章的输入是面板级快照 map，随流式灌入每拍变化——进缓存会吞更新。
      */
     fun headerBadgeFragments(
         entry: LogSqlEntry,
@@ -119,6 +119,10 @@ internal object SqlEntryPresentation {
             add(SqlTextFragment("⨉$it ", secondaryAttributes))
         }
         formatTemplateCountFragment(entry, templateCounts, false)?.let {
+            add(SqlTextFragment(it.first, it.second))
+        }
+        // T-HdAbsorb D216：N+1 嫌疑徽章（阈值 ≥5 Registry 可调；与同模板计数徽章分层）
+        formatNplusOneSuspectFragment(entry, templateCounts, false)?.let {
             add(SqlTextFragment(it.first, it.second))
         }
     }
@@ -158,6 +162,8 @@ internal object SqlEntryPresentation {
             add(SqlTextFragment("⨉$it ", secondaryAttributes))
         }
         addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
+        // T-HdAbsorb D216：通栏注脚同步嫌疑徽章（存量测试直接断言 details() 的口径文档）
+        addFragment(formatNplusOneSuspectFragment(entry, templateCounts, selected))
     }
 
     fun metadata(
@@ -174,7 +180,7 @@ internal object SqlEntryPresentation {
 
         if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
         addFragment(formatTimestampFragment(entry))
-        if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, selected))
+        if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, selected, entry.durationKind))
         addFragment(formatDatabaseFragment(entry, selected))
         addFragment(formatMcpFragment(entry, selected))
         if (showLogDetails) {
@@ -186,6 +192,8 @@ internal object SqlEntryPresentation {
             }
         }
         addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
+        // T-HdAbsorb D216：元信息行同步嫌疑徽章（与 headerBadgeFragments 同口径）
+        addFragment(formatNplusOneSuspectFragment(entry, templateCounts, selected))
         addFragment(formatSourceFragment(entry, selected))
         // T-LogMethodName：与渲染器同一组合口径（来源在前、方法名在后），两处不得漂移
         addFragment(formatMethodFragment(entry, selected))

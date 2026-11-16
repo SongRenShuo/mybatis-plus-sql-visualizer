@@ -529,6 +529,18 @@
              代码读取：ui/highlight/XmlSymbolNameIndexCache.REGISTRY_KEY。 -->
         <registryKey key="sqlvis.completion.nameIndexCache" defaultValue="true"
                      description="Cache the project-wide completion name list (cross-file sql-id refs and mybatis-config properties keys) in a per-project service invalidated by index state. Disable to rescan all XML files on every completion (legacy behavior)."/>
+        <!-- T-HdAbsorb D216：N+1 嫌疑判定（第一刀）。同模板计数达 minCount 判嫌疑并显示红色
+             「疑似 N+1」徽章；总开关关掉即回到只有「×N 同模板」计数徽章的旧行为（回退通道）。
+             代码读取：log/NplusOneSuspect.REGISTRY_KEY / THRESHOLD_KEY。 -->
+        <registryKey key="sqlvis.log.nplusOneSuspect" defaultValue="true"
+                     description="Show a red 'suspected N+1' badge on SQL-log entries whose parameterized template repeats at least minCount times in the current buffer. Disable to keep only the amber same-shape count badge (legacy behavior)."/>
+        <registryKey key="sqlvis.log.nplusOneSuspect.minCount" defaultValue="5"
+                     description="Minimum same-template count that marks an entry as a suspected N+1 (D216)."/>
+        <!-- T-HdAbsorb D215：agent 耗时的调试器挂起补偿（吸收 Hibernate Debugger SuspensionLedger
+             思路）。默认开：断点挂起时段从 agent 耗时测量窗中扣减；关掉即原样墙钟（回退通道）。
+             代码读取：log/agent/DebuggerSuspendTracker.REGISTRY_KEY。 -->
+        <registryKey key="sqlvis.log.durationSuspendCompensation" defaultValue="true"
+                     description="Subtract debugger-suspend wall-clock overlaps from agent-measured SQL durations (breakpoint pauses inflate the wall clock). Disable to keep raw wall-clock durations."/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
