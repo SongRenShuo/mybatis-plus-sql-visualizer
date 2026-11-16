@@ -417,3 +417,20 @@ iBatis 回归 28/2/9）。反向验证：摘掉 XML 侧 `resolvedStatementKeys.r
 **性能取舍（如实记录，待真机观察）**：调用点存在性走词索引查询，**常见词命中面大**（`selectAll`
 在 Java 侧也是常见方法名）——按「命中入缓存 / 确认缺失收回」处理，稳态零查询；若真机出现可测的
 慢趟变慢，先看 `[gutter-perf]` 与慢趟时长，再决定是否收紧（回退通道已就位）。
+
+### 9.10 增补（2026-11-16 用户沙盒第三轮报障）：跨命名空间同名语句误认领
+
+用户复验 §9.9 时发现：`sqlmap/User.xml:62`（`<select id="selectById">`）点箭头跳到
+`com/demo/cust/order/dao/impl/OdLogistics60233DaoImpl.java:37`。修复 `2eecbdcba`。
+
+- **根因**：`IbatisJavaCallSites.matches` 的第三条子句「任意前缀的尾段 `.id`」
+  （`value.endsWith(".$statementId")`，自券 B `d04033aad` 引入）忽略了命名空间。词索引按**词**
+  （`selectById`）取候选，demo 的 `cust-order` 里存在 `OdLogistics60233.selectById`，于是
+  `User.xml` 的 `selectById` 被别的命名空间抢先命中；`findFirstCallLiteral(limit=1)` 直接返回它。
+- **口径**：命名空间是 iBatis 语句身份的一部分（引擎按 `namespace + "." + id` 组装运行期 id），
+  跨命名空间的同名 id 是**另一条语句**。只认精确形态：裸 `id`，或 `本文件 namespace.` + `id`。
+- **影响面**（同一函数三处消费方一并修正）：箭头点击跳转、`IbatisXmlStatementGotoDeclarationHandler`
+  的 Ctrl+Click、§9.9 新加的箭头存在性门槛（这也是用户「箭头出现过」的一半来源）。
+- 测试：`test同id不同namespace不得误命中`（只有 `order.selectById` 调用点时，`user` 命名空间必须
+  解析为空且 `User.xml` 不出箭头）+ `test裸id形态仍命中`（防收窄误伤）。
+- **读数**：定向 14 类 **160/0/0/0**；反向验证把旧尾缀子句加回 → 恰 1 红（新用例）→ 删除后 0 红。

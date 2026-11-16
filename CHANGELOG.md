@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **iBatis 语句行的箭头不再跳到别的命名空间的同名语句（`2eecbdcba`）**：多命名空间的工程里同名语句很常见（比如到处都有 `selectById`），旧实现对调用点字面量的匹配放宽到「任意前缀 + 同名尾段」，于是 `User.xml` 的 `selectById` 会跳到 `OdLogistics60233DaoImpl.java` 这类完全无关的文件。现在只认两种精确形态：裸 `id`（未开命名空间前缀的工程）或「本文件 `namespace.` + `id`」；点击箭头与 Ctrl+Click 同一口径
 - **iBatis 语句行的跳转箭头在没有调用点时不再显示（T-IbatisXmlArrowCallerGate，`e4b3fdd27`）**：把语句 `id` 改名（或删掉调用它的 Java 代码）之后，Java 调用行的图标会正确消失，但 XML 语句行上的箭头还挂着、点下去没有任何反应——一个「点开必空」的假图标。现在箭头与「Java 侧是否真的调用过这条语句」绑定：目标不在了箭头就消失，写了调用点又会回来；索引重建的短暂窗口内照旧先显示（不闪没）。想回到旧的「无条件显示」行为，可在 Registry 把 `sqlvis.gutter.ibatisXmlArrowRequiresCaller` 置 false
 - **打开 mapper 文件后不再往 IDE 日志刷「Read access is allowed from inside read-action only」报错（`e4b3fdd27`）**：打开 mapper XML 后延迟几秒做的那批后台预热（调用点预取 / 补全上下文 / 预览装配），到点执行时跑在后台线程池上、没有读权限却去读了 PSI，IDE 会把这条记成 SEVERE（实测一次连出 3 条）。现在这一步在正确的读权限内执行，预热的时机与内容不变
 - **改了公共片段之后预览不再有「5 秒旧值」窗口，mapper 文件定位也不再随项目里 XML 数量变慢（T-MechanismSweep，`501db7d89`）**：两处收尾——① 用 `<include refid="其它命名空间.片段名"/>` 复用公共片段时，片段表原本靠「5 秒缓存 + 全项目 XML 扫描」去找目标文件，刚改完公共片段再预览可能还是旧 SQL；② XML 里带命名空间的引用（`refid="别的ns.语句"`）解析挂在编辑期热路径上，每次都要重新筛一遍全项目 XML。现在两处都改为按 namespace 查 IDE 索引，改了片段立刻生效，也不再随项目 XML 数量变慢。同时删掉了 iBatis 语句定位里那个「内部 A/B 用」的全项目扫描回退开关（从未对外承诺）
