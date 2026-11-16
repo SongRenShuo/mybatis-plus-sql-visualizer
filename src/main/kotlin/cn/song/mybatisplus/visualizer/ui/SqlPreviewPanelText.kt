@@ -36,7 +36,6 @@ import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
-import cn.song.mybatisplus.visualizer.util.HtmlEscape
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -136,9 +135,14 @@ internal fun buildStackDigestInlineLine(digest: String?): String {
         } else {
             excerpt
         }
-    // T-SAF-10：栈帧文本是低信任数据（agent 上报/任意宿主进程），进 meta 行（<html> 包装态）
-    // 前转义。仅含 & < > " ' 的摘要在转义后显示不变，既有截断断言（纯字母数字 fixture）不受影响。
-    return "   " + label + " " + HtmlEscape.escape(summary)
+    // T-SAF-10 转义位置修正（2026-11-17，CI run 43925934655）：栈帧文本是低信任数据（agent 上报/
+    // 任意宿主进程），但 meta 行是 **plain / <html> 双形态**（perf 段在位才包 <html>，见
+    // SqlPreviewPanel.applyMetaTruncation / fullDisplayText 两处包装点）——在本组装点无条件转义
+    // 会让纯文本态用户看到字面 `&lt;-`（栈摘要分隔符恒含 `<-`，CI 5 例 ComparisonFailure 实证）。
+    // 转义已挪到真正的 HTML 包装边界（对 [cn.song.mybatisplus.visualizer.ui.metaLineDigest] 段
+    // 转义）：纯文本态无注入面、按原文显示；HTML 态转义后显示语义不变、注入被阻断。
+    // 本函数回归纯文本组装（P5 契约原样），截断预算也按原文度量。
+    return "   " + label + " " + summary
 }
 
 // ------------------------------------------------------------------

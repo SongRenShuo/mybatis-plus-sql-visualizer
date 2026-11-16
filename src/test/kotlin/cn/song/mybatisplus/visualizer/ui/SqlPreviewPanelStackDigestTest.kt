@@ -166,6 +166,46 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
         assertFalse("摘要不得以驱动帧开头", inline.contains("PgPreparedStatement"))
     }
 
+    /**
+     * T-SAF-10 转义位置修正回归（2026-11-17，CI run 43925934655）：meta 行是 plain / <html>
+     * 双形态（perf 段在位才包 <html>）——转义必须落在 HTML 包装边界而非组装点，否则纯文本态
+     * 用户看到字面 `&lt;-`（CI 5 例 ComparisonFailure）。本用例钉 **HTML 态**：
+     * perf 警告在位 + 恶意栈帧 → 可见行（<html> 包装）不得含未转义 `<img` 活 markup，
+     * 同时 `<-` 分隔符转义后显示语义不变（用户仍见箭头而非实体）。
+     */
+    fun testHTML包装态_恶意栈帧不进活markup且箭头转义后语义不变() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val payload = "<img src=http://127.0.0.1:1/probe.png>"
+            // 载荷放在首个「项目帧」之后——StackDigestFrames.projectExcerpt 会把头部非项目帧裁掉，
+            // 载荷须落在取景窗内才能真正测到 HTML 边界转义。
+            val digest = "com.corp.biz.Svc#m:1 <- $payload <- com.corp.biz.Svc#m:1"
+            val result = makeResult(digest).copy(
+                perfWarnings = listOf(
+                    cn.song.mybatisplus.visualizer.sql.perf.PerfWarning(
+                        "order_by_without_limit",
+                        cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity.WARN,
+                        "perf.order_by_without_limit",
+                    ),
+                ),
+            )
+            panel.showResult(result)
+            waitForEdt()
+            panel.applyMetaTruncationForTest()
+            waitForEdt()
+
+            val visible = panel.metaLabelForTest()
+            assertTrue("perf 段在位时可见行应为 <html> 包装态", visible.startsWith("<html>"))
+            assertFalse("可见行不得含未转义标记：$visible", visible.contains("<img"))
+            assertTrue("恶意帧应转义入行（HTML 态显示语义不变）: $visible", visible.contains("&lt;img"))
+            assertTrue("分隔符转义后显示语义不变（HTML 态用户仍见箭头）: $visible", visible.contains("&lt;-"))
+            assertFalse("可见行不得含完整链", visible.contains(digest))
+            assertEquals("完整链归悬停弹层（原文透传）", digest, panel.stackDigestForTest())
+        } finally {
+            panel.clear()
+        }
+    }
+
     // ------------------------------------------------------------------
     // 二、面板接线（真实 showResult → tooltip / 弹层数据）
     // ------------------------------------------------------------------
