@@ -105,7 +105,7 @@ git merge --no-ff dev
 | 2.4 | `t-rollback-preexec` | 其工作树 | ahead/dev=130，SQL 执行链文件交叠风险中 | 编译 + RollbackSnapshot 定向 |
 | 2.5 | `t-security-audit-fixes` | 主仓 | 守卫/构建链文件交叠风险中 | 编译 + 安全守卫定向 |
 | 2.6 | `t-hiddenbug-perf-scan` | 主仓（新建本地） | 与 security 同基、修复面交叠风险中 | 编译 + testFast 快桶定向 |
-| 2.7 | `t-branch-merge-route` | 主仓（新建本地） | 纯文档支，预计小 | 文档无编译面 |
+| 2.7 | `t-branch-merge-route` | 主仓（新建本地） | **非纯文档支**（20261116 复核实测：213 文件 +13064/−811，含 agent hook 等真实代码），冲突面预计中等 | 编译 |
 | 2.8 | `t-sql-insight` | mpsv-sql-insight 工作树 | ahead/dev=236、behind/dev=187，**最大**；硬前置见下 | 合并后编译 + 四件定向守卫 + NestGate 默认值重拍 |
 
 **insight 支硬前置**（沿用 T-BranchMergeRoute 在册结论）：
