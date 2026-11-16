@@ -3,16 +3,11 @@ package cn.song.mybatisplus.visualizer.ui.nav
 import cn.song.mybatisplus.visualizer.xml.ibatis.IbatisStatementKind
 import cn.song.mybatisplus.visualizer.xml.ibatis.SqlMapNamespaceIndex
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.registry.Registry
-import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import com.intellij.psi.search.FileTypeIndex
-import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlFile
@@ -52,8 +47,9 @@ import java.util.concurrent.ConcurrentHashMap
  *   旧实现用 `runCatching{}.getOrDefault(emptyList())` 把取消吞成「空清单」并当正常结果缓存，
  *   慢趟换装后图标粘性缺席（用户 2026-11-16 真机报障：图标出现过一次后无故不再显示）。
  *
- * 回退通道：Registry `sqlvis.gutter.ibatisIndexedResolve=false` 回旧的全项目 XML 扫描（A/B 用，
- * 下一版删除）；日志锚点 `[gutter-perf] ibatis resolve: source=index|scan …`。
+ * 索引化只有一条路（T-MechanismSweep，2026-11-16 删掉 P5 的 Registry 回退通道）：定位链不再有
+ * 「旧的全项目扫描」分支，回退只能靠版本回滚；日志锚点 `[gutter-perf] ibatis resolve:
+ * state=found|absent|unknown hits=… ms=…`。
  *
  * ## 落点口径
  *
@@ -64,9 +60,6 @@ internal object IbatisXmlStatementTargets {
 
     /** iBatis 语句映射文件根标签名（`sql-map-2.dtd`）。MyBatis 3 的根是 `mapper`——两者互斥。 */
     const val SQL_MAP_ROOT_TAG: String = "sqlMap"
-
-    /** 回退开关（T-IbatisGutterPerf P5）：false＝回旧的全项目 XML 扫描（A/B 用，下一版删除）。 */
-    private const val INDEXED_RESOLVE_REGISTRY_KEY = "sqlvis.gutter.ibatisIndexedResolve"
 
     private val LOG = Logger.getInstance(IbatisXmlStatementTargets::class.java)
 
@@ -196,10 +189,9 @@ internal object IbatisXmlStatementTargets {
         val statementId = rawStatementId.trim()
         if (project == null || statementId.isEmpty()) return Lookup.Absent
         lookupOverrideForTest?.let { override -> return override(project, statementId, preferredNamespace) }
-        val indexed = indexedResolveEnabled()
         // dumb / 索引未就绪：不查索引（查询会抛 IndexNotReadyException），按「未知」返回，
         // 且**不留任何负缓存**——这是旧链「空清单被固化」的反面（见类头「失败语义」）。
-        if (indexed && DumbService.isDumb(project)) return Lookup.Unknown
+        if (DumbService.isDumb(project)) return Lookup.Unknown
         val startedNs = System.nanoTime()
         val dot = statementId.lastIndexOf('.')
         val lookup = try {
@@ -207,15 +199,15 @@ internal object IbatisXmlStatementTargets {
                 val namespace = statementId.substring(0, dot).trim()
                 val id = statementId.substring(dot + 1).trim()
                 if (namespace.isEmpty() || id.isEmpty()) Lookup.Absent
-                else lookupByNamespace(project, namespace, id, indexed)
+                else lookupByNamespace(project, namespace, id)
             } else {
-                lookupByStatementId(project, statementId, preferredNamespace, indexed)
+                lookupByStatementId(project, statementId, preferredNamespace)
             }
         } catch (e: IndexNotReadyException) {
             // 索引重建中：这是「未知」不是「没有」（PCE 不在此列，它必须上抛让本趟作废）。
             Lookup.Unknown
         }
-        logPerf(statementId, lookup, indexed, startedNs)
+        logPerf(statementId, lookup, startedNs)
         return lookup
     }
 
@@ -228,13 +220,8 @@ internal object IbatisXmlStatementTargets {
         project: Project,
         namespace: String,
         id: String,
-        indexed: Boolean,
     ): Lookup {
-        val files = if (indexed) {
-            SqlMapNamespaceIndex.getSqlMapFilesByNamespace(project, namespace)
-        } else {
-            legacySqlMapFiles(project)
-        }
+        val files = SqlMapNamespaceIndex.getSqlMapFilesByNamespace(project, namespace)
         var psiUnavailable = false
         for (vf in files) {
             val file = PsiManager.getInstance(project).findFile(vf) as? XmlFile
@@ -254,13 +241,8 @@ internal object IbatisXmlStatementTargets {
         project: Project,
         id: String,
         preferredNamespace: String?,
-        indexed: Boolean,
     ): Lookup {
-        val files = if (indexed) {
-            SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, id)
-        } else {
-            legacySqlMapFiles(project)
-        }
+        val files = SqlMapNamespaceIndex.getSqlMapFilesByStatementId(project, id)
         val hits = ArrayList<Pair<String?, XmlAttributeValue>>()
         var psiUnavailable = false
         for (vf in files) {
@@ -280,7 +262,9 @@ internal object IbatisXmlStatementTargets {
         return Lookup.Found(ordered)
     }
 
-    /** `<sqlMap>` 直接子级里的语句标签（`id` 字面值命中全部返回，含 `<selectKey>` 之外的重复 id 变体）。 */
+    /**
+     * `<sqlMap>` 直接子级里的语句标签（`id` 字面值命中全部返回，含 `<selectKey>` 之外的重复 id 变体）。
+     */
     private fun statementAnchorsIn(file: XmlFile, id: String): List<XmlAttributeValue> {
         val root = file.rootTag ?: return emptyList()
         return root.subTags
@@ -288,37 +272,12 @@ internal object IbatisXmlStatementTargets {
             .mapNotNull { it.getAttribute("id")?.valueElement }
     }
 
-    /**
-     * 回退通道（Registry `sqlvis.gutter.ibatisIndexedResolve=false`）：旧的全项目 XML 扫描。
-     *
-     * 仅 A/B 与应急用，下一版删除。**不再包 `runCatching`**：取消/索引未就绪应当上抛或由调用方
-     * 的 dumb 门拦住，吞成空清单正是本任务要根治的缺陷（T-IbatisGutterPerf P3）。
-     */
-    private fun legacySqlMapFiles(project: Project): List<VirtualFile> {
-        val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
-        return FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
-            .asSequence()
-            .mapNotNull { vf -> PsiManager.getInstance(project).findFile(vf) as? XmlFile }
-            .filter { it.rootTag?.name == SQL_MAP_ROOT_TAG }
-            .mapNotNull { it.virtualFile }
-            .toList()
-    }
-
-    /** 索引化开关（生产＝`Registry.is(key, true)`；key 未注册时直接返回默认值）。 */
-    internal var indexedResolveEnabledProvider: () -> Boolean = {
-        // `is` 是 Kotlin 关键字，调 Java 侧 `Registry.is(String, boolean)` 必须加反引号。
-        runCatching { Registry.`is`(INDEXED_RESOLVE_REGISTRY_KEY, true) }.getOrDefault(true)
-    }
-
-    private fun indexedResolveEnabled(): Boolean = indexedResolveEnabledProvider()
-
-    /** 每条语句只记一次定位读数（source / 候选命中数 / 首个落点文件 / 耗时）。 */
+    /** 每条语句只记一次定位读数（候选命中数 / 首个落点文件 / 耗时 / 三态）。 */
     private val perfLoggedKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     private fun logPerf(
         statementId: String,
         lookup: Lookup,
-        indexed: Boolean,
         startedNs: Long,
     ) {
         if (!perfLoggedKeys.add(statementId)) return
@@ -331,8 +290,8 @@ internal object IbatisXmlStatementTargets {
         }
         val file = anchors?.firstOrNull()?.containingFile?.virtualFile?.path ?: "-"
         LOG.info(
-            "[gutter-perf] ibatis resolve: source=${if (indexed) "index" else "scan"} " +
-                "statementId=$statementId state=$state hits=${anchors?.size ?: 0} file=$file ms=$ms",
+            "[gutter-perf] ibatis resolve: statementId=$statementId state=$state " +
+                "hits=${anchors?.size ?: 0} file=$file ms=$ms",
         )
     }
 

@@ -580,17 +580,4 @@ class IbatisNavigationLineMarkerProvidersTest : BasePlatformTestCase() {
             IbatisJavaToXmlLineMarkerProvider.resolvedIbatisKeys.contains("selectBare@com.demo.UserDao"),
         )
     }
-
-    /** P5 回退通道：`sqlvis.gutter.ibatisIndexedResolve=false` 走旧的全项目扫描，功能不得退化。 */
-    fun testF1i_回退开关走旧扫描路径仍能解析() {
-        val original = IbatisXmlStatementTargets.indexedResolveEnabledProvider
-        IbatisXmlStatementTargets.indexedResolveEnabledProvider = { false }
-        try {
-            val dao = addDao()
-            addSqlMap()
-            assertEquals("回退到全项目扫描后功能不得退化", 2, markersForCall(dao, "user.selectById").size)
-        } finally {
-            IbatisXmlStatementTargets.indexedResolveEnabledProvider = original
-        }
-    }
 }
