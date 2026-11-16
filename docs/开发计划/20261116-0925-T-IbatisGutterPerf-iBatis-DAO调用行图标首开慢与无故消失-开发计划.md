@@ -347,3 +347,32 @@ iBatis 回归 28/2/9）。反向验证：摘掉 XML 侧 `resolvedStatementKeys.r
 （矩阵「确定不存在」+ 守卫），Edit 恢复后 **0 红**。
 
 **提交**：`c0bc9b043`。
+
+### 9.8 增补 T-MechanismSweep（2026-11-16 同日）：P4 横向审计落地 + 删 iBatis 回退通道
+
+用户令「下一批待办，现在做」。§四 P4 表的三面按「进不进热路径」逐一判：
+
+| 面 | 一审判定 | 本刀处置 | 依据 |
+|---|---|---|---|
+| `ui/ref/MybatisXmlTargets.findMapperFileByNamespace` | 进 reference 热路径 | **索引化** | 每个 `XmlAttributeValue` 的 resolve 都走；旧实现 `FileTypeIndex` 全项目 XML + 逐个 PSI 解析筛 `<mapper>`，配 5s TTL 单槽 |
+| `psi/XmlCrossNsFragmentResolver.mapperFragments` | 常见冷路径（每次预览渲染一次） | **索引化** | 旧实现同样全项目扫描 + 单槽 TTL；索引化后扫描面降到「目标 namespace 的 1~3 个文件」，缓存整套退役，顺带消掉「改公共片段后 5 秒内预览按旧片段表」的窗口 |
+| `psi/jpa/HbmXmlEntityResolver.findHbmXmlFiles` | 冷路径（JPA 预览） | **保留** | 复查发现它**不 PSI 解析非 hbm XML**（先用文件名后缀过滤再建 PSI），全项目 `FileTypeIndex` 只取一次文件列表；索引化要新增一套 `.hbm.xml` 实体索引，收益小于成本。留账待评估 |
+| `ui/highlight/XmlCompletionSymbols` | 补全上下文 | 保留 | 另有 dumb 闸，且不在本次报障面 |
+
+另删掉 T-IbatisGutterPerf P5 的 Registry 回退通道（`sqlvis.gutter.ibatisIndexedResolve` + `legacySqlMapFiles` + `indexedResolveEnabledProvider`，计划里约定只留一版）：索引化只有一条路，回退只能靠版本回滚。`[gutter-perf]` 日志同步去掉恒定的 `source=index` 字段（保留 `state/hits/file/ms`）。
+
+**防回退**：新增 `MapperFileLookupIndexTest`（源码扫描、剥注释）钉住两个文件「必须用
+`MapperNamespaceIndex.getMapperXmlFiles`、且不得再出现 `FileTypeIndex`」，自带老形态样本自证；
+文件名不含 `Guard`/`SourceScanTest`，无需登记元守卫。反向验证：把 `FileTypeIndex` import 加回
+`XmlCrossNsFragmentResolver` → **恰 1 红**，移除后 0 红。
+
+**测试迁移**：`MybatisXmlReferenceTest` 三条计数缝用例 → 行为面（同 ns 连续解析稳定 / 负结果不缓存 /
+新增文件立即可见）；`XmlCrossNsFragmentResolverTest` 四条 TTL/memo 用例 → 行为面（二次渲染一致 /
+未声明 ns 给失败原因 / 新增片段文件立即可见 / 删除后降级）；两个 goto 测试删掉已无意义的
+`clearFileListCacheForTest` 调用。
+
+**读数**：定向 25 类 **264/0/0/0**；`verifyPlugin` 三腿 **BUILD SUCCESSFUL**（243 腿报
+`Dynamic Plugin Eligibility: negative due to 1 restrictions — non-dynamic extensions: com.intellij.sql.dialect`，
+属**改造前既有**的方言映射 EP 限制，与本次无关）。净 diff：**-266 / +66 行**（三处状态机退役）。
+
+**提交**：`501db7d89`。
