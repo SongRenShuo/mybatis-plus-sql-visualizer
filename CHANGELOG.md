@@ -6,13 +6,18 @@
 
 ## [2026.11.16-beta.1] - 2026-11-16
 
-> 范围＝`v2026.11.14` 正式版之后到本版发行提交的全部用户可见增量。含 11-15 内测 `2026.11.15-beta.1` 的 T-GutterFirstOpenDelay（跳转图标首开提速五刀），以及 11-16 当天在主分支补入的图标收回 / iBatis 索引化 / 片段与常量 / 日志告警等一批修复（T-MapperGutterEvict、T-IbatisGutterPerf、T-MechanismSweep、T-BindStaticRefCrossNs、T-DebugLogNoise 等）。今天早些时候曾以 `2026.11.16` 发过正式版，因主分支随后补入上述修复，已撤回该正式版（Release / 发行版 / tag 全删），改发本内测版一次性纳入；本节按能力面把这些同源条目合并去重。逐条根因与读数见 `docs/发行说明/` 的 `20261115-0819` 内测说明与本版发行说明。
+> 范围＝`v2026.11.14` 正式版之后全部用户可见增量，含 11-15 内测 `2026.11.15-beta.1` 与 11-16 当天补入的一批修复。同日的 `2026.11.16` 正式版已撤回（补入的修复未进包），改发本内测版一次性纳入。逐条根因与读数见 `docs/发行说明/` 的 `20261115-0819` 内测说明与本版发行说明。
 
 ### Fixed
-- **Mapper 与 iBatis 的双向跳转图标：统一走 IDE 索引，冷开不闪没、目标没了会收回、iBatis 不误跳**：这一遍布跳转图标做了一次体系化收口，按能力面合并如下——① **定位改走自定义索引**：大工程（数千 mapper XML / sqlMap）里「跳到 XML 语句」原本每次全项目扫清单，出现慢甚至长期缺席；现在 MyBatis 的 `MapperNamespaceIndex`（F1'''）与 iBatis 的 `SqlMapNamespaceIndex`（T-IbatisGutterPerf）都把 namespace / 语句 id 在 IDE 索引期摊平成键，运行时一次查询毫秒级出答案，文件变更由平台增量管理，热更新（免重启装）不受影响；iBatis 只认 `<sqlMap>` 根标签，与 MyBatis 的 `<mapper>` 互斥，其它 ORM 不受影响。② **解析瞬时失败不摘图标**：索引未就绪时的那次解析失败不再被当成「真没有」——XML→Java（F1 `d3eb65079`）与 Java→XML（F1' `6bc12e9c8`）都改成会话级正缓存 + dumb 窗乐观产出，本会话确认过存在的语句不再闪没或长期缺席。③ **目标确定不存在则收回**：与「暂时查不了」分开判断，mapper 接口方法删除、`<mapper namespace>` 改名后，图标立即消失并清掉记忆（T-MapperGutterEvict `c0bc9b043`，iBatis 侧 `8eca5211f` 同族收口）；iBatis XML 语句行的箭头还加了「有调用点才出」的门槛，且只认裸 `id` 或「本文件 `namespace.` + `id`」两种精确形态，不再跨命名空间认领同名语句（T-IbatisXmlArrowCallerGate `e4b3fdd27` / `2eecbdcba`），想恢复旧行为可置 Registry `sqlvis.gutter.ibatisXmlArrowRequiresCaller=false`
-- **打开 mapper 的后台预热：延后到工程就绪后在正确读权限内执行**：首次渲染图标时顺带做的三件预热（调用点预取 / 补全上下文 / 预览装配）原本和索引重建挤在一起（实测首开后台扫描累计 3.3s + 15s），既拖慢图标落地也让闪没更容易发生（F2 `7ad1d1a5d`）；现在由 `GutterWarmScheduler` 统一延后到工程就绪后数秒再做，Registry `sqlvis.gutter.warmDelayMs` 可调、置 0 回旧行为。到点执行时那批预热曾跑在后台线程池、没有读权限却读 PSI，往 IDE 日志刷 SEVERE（`e4b3fdd27`）；现在这一步在正确的读权限内完成，时机与内容不变
-- **公共片段与常量：跨命名空间即时生效、片段里的 bind 常量能认出**：`<include refid="其它命名空间.片段名"/>` 复用公共片段原本靠「5 秒缓存 + 全项目 XML 扫描」找目标，刚改完片段再预览可能还是旧 SQL；带命名空间的引用解析也每次重筛全项目 XML（T-MechanismSweep `501db7d89`）。现在两处都改按 namespace 查 IDE 索引，改了片段立刻生效、也不再随项目 XML 数量变慢，并删掉了 iBatis 定位里那个内部 A/B 用的全项目扫描回退开关。配套地，被 include 进来的跨命名空间片段里的 `<bind value="@com.x.DicConstants@常量"/>` 此前一律求值为空（本文件自己的 bind 却正常），现在常量扫描覆盖这类片段，常量声明在父类或接口上时也支持按 `@子类@常量` 解析（T-BindStaticRefCrossNs `ad1deacb0`）
-- **SQL 日志工具窗首次打开少一条无害告警（T-DebugLogNoise，`c79026ea9`）**：工具窗第一次打开时，排序按钮那组工具栏会在真正显示前被手动刷新一次，IDE 忽略并记一条带堆栈的 `toolbar manual update is ignored` 告警；这次刷新本就不起作用（显示时会自行更新），去掉后按钮外观、排序提示与菜单勾选态都不变
+- **Mapper 跳转图标改走自定义索引（T-GutterFirstOpenDelay F1'''，`7dc6c1c73`）**：大工程里「跳到 XML 语句」的图标原本每次全项目扫清单，慢且长期缺席；现在 namespace 在 IDE 索引期摊平成键，运行时一次查询毫秒级出答案，热更新免重启不受影响
+- **冷打开时跳转图标不再闪没（F1 `d3eb65079` / F1' `6bc12e9c8`）**：索引未就绪时的瞬时解析失败不再被当成「真没有」，XML→Java 与 Java→XML 都加会话级正缓存 + dumb 乐观产出，本会话确认过存在的语句不再闪没或长期缺席
+- **Mapper 图标在目标删除或改名后消失（T-MapperGutterEvict，`c0bc9b043`）**：接口方法删掉或 `<mapper namespace>` 改名后立即摘图标并清记忆；「暂时查不了」与「确定没有」分开判断，iBatis 侧 `8eca5211f` 同族收口
+- **iBatis DAO 调用行图标索引化、不再慢半拍或无故消失（T-IbatisGutterPerf，`b5ccf14c7` / `bcad37b84`）**：sqlMap 的 namespace 与语句 id 改走自定义索引，一次查询即出、不再有 5 秒空窗；中途被打断也不再摘掉已显示的图标。只认 `<sqlMap>` 根标签，其它 ORM 不受影响
+- **iBatis XML 箭头不跨命名空间认领同名语句、无调用点不出（T-IbatisXmlArrowCallerGate，`e4b3fdd27` / `2eecbdcba`）**：只认裸 `id` 或「本文件 `namespace.` + `id`」两种形态，改名或删掉调用代码后箭头随之消失；Registry `sqlvis.gutter.ibatisXmlArrowRequiresCaller=false` 可恢复旧行为
+- **打开 mapper 的预热延后、不再刷读权限报错（F2 `7ad1d1a5d` / `e4b3fdd27`）**：三件预热（调用点预取 / 补全上下文 / 预览装配）推迟到工程就绪后数秒再做，`sqlvis.gutter.warmDelayMs` 可调；到点执行改在正确读权限内完成，不再往日志刷 SEVERE
+- **跨命名空间公共片段改了立刻生效（T-MechanismSweep，`501db7d89`）**：`<include refid="其它命名空间.片段名"/>` 与带命名空间的引用改按 namespace 查 IDE 索引，不再有「5 秒旧值」、不随项目 XML 数量变慢；删掉了 iBatis 定位里内部 A/B 用的全项目扫描回退开关
+- **跨文件片段里的 bind 静态常量能认出（T-BindStaticRefCrossNs，`ad1deacb0`）**：被 include 进来的片段里的 `@常量@` 此前一律求值为空，现覆盖这类片段；常量声明在父类或接口上时也支持按 `@子类@常量` 解析
+- **SQL 日志工具窗首次打开少一条无害告警（T-DebugLogNoise，`c79026ea9`）**：排序按钮工具栏在显示前被手动刷新发出的 `toolbar manual update is ignored` 告警已去掉，按钮外观与提示不变
 
 ## [2026.11.14] - 2026-11-14
 
