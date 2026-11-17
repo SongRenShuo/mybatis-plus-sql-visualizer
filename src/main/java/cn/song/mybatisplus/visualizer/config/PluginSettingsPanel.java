@@ -1610,7 +1610,8 @@ public class PluginSettingsPanel implements Disposable {
             || (sections.contains(SECTION_UI) && isModifiedUi(s))
             || (sections.contains(SECTION_SHORTCUTS) && isModifiedShortcuts())
             || (sections.contains(SECTION_UPDATE_DIAGNOSTICS)
-                && updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate());
+                && (updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate()
+                    || !updateSection.localDirField.getText().trim().equals(s.getLocalUpdateDir())));
     }
 
     private boolean isModifiedPreview(PluginSettings.State s) {
@@ -1948,6 +1949,10 @@ public class PluginSettingsPanel implements Disposable {
         }
         if (sections.contains(SECTION_UPDATE_DIAGNOSTICS)) {
             s.setAutoCheckUpdate(updateSection.getAutoCheckCheck().isSelected());
+            // T-LocalUpdateDir：可解析则存归一路径（~ 展开后 normalize），错误态存 trim 原文；
+            // 回写同步到输入框，保证 apply 后 isModified 归零（归一值 ≠ 原文时平台 Apply 会常亮）
+            s.setLocalUpdateDir(updateSection.normalizedDirForPersist());
+            updateSection.localDirField.setText(s.getLocalUpdateDir());
         }
         languagePending = false;
         // 强制触发持久化：原地修改 state 属性后，框架可能不检测引用变化导致 XML 未写入（实证：
