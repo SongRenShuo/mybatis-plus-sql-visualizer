@@ -7,6 +7,8 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.lang.Language;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -357,7 +359,19 @@ public final class DialectPreMapping {
         } else {
             configuredMatches = configured.equalsIgnoreCase(targetId);
         }
-        if (shouldSkip(inProcessMapped, configuredMatches)) {
+        String key = memoKey(project, vf);
+        String[] memo = mappedMemo.get(key);
+        boolean skipByPlatform = shouldSkip(inProcessMapped, configuredMatches);
+        // 探测不可用（configured == null）时看备忘：上一轮确实写成过目标方言就别再写——
+        // 每次重写都会 push-all ⇒ 工程进 dumb（真机 7/7 复现）。
+        boolean skipByOwnMemo = configured == null && skipByMemo(
+                null, targetId,
+                memo != null ? memo[0] : null,
+                memo != null ? System.currentTimeMillis() - Long.parseLong(memo[1]) : Long.MAX_VALUE);
+        if (skipByPlatform || skipByOwnMemo) {
+            LOG.info("[M36] dialect mapping skipped (already=" + (configured != null ? configured : "memo:"
+                    + (memo != null ? memo[0] : null)) + " target=" + (targetId != null ? targetId : "MySQL")
+                    + " byMemo=" + skipByOwnMemo + ") " + vf.getName());
             return true;
         }
         CountDownLatch done = new CountDownLatch(1);
@@ -383,6 +397,11 @@ public final class DialectPreMapping {
         if (!signaled) {
             LOG.warn("[M36] dialect EDT mapping dispatch timed out after " + waitMs + "ms (EDT busy?), continue findFile");
             return false;
+        }
+        if (mapped[0]) {
+            mappedMemo.put(key, new String[]{
+                    targetId != null ? targetId : ExecDialectRouting.MYSQL_LANGUAGE_ID,
+                    Long.toString(System.currentTimeMillis())});
         }
         return mapped[0];
     }
@@ -418,6 +437,9 @@ public final class DialectPreMapping {
     // T-SyncK2JMaster179 生产补漏：master DialectPreMapping.kt 的备忘纯判定函数/常量。
     // ==================================================================
 
+    /** 备忘：项目+路径 → (已写成的方言 id, 写成时刻毫秒)。探测不可用（null）时凭它跳过重写。 */
+    private static final Map<String, String[]> mappedMemo = new ConcurrentHashMap<>();
+
     /** 备忘有效期（10min）：过期后允许再写一次，避免永远跳过用户手动改的映射。 */
     public static final long MAPPING_MEMO_TTL_MS = 10L * 60 * 1000;
 
@@ -430,5 +452,15 @@ public final class DialectPreMapping {
         if (memoAgeMs < 0 || memoAgeMs >= MAPPING_MEMO_TTL_MS) return false;
         String target = targetId != null ? targetId : ExecDialectRouting.MYSQL_LANGUAGE_ID;
         return memoLangId.equalsIgnoreCase(target);
+    }
+
+    /** 备忘键（项目 + 映射目标路径——预览按目录、exec 按文件，各记一条）。 */
+    public static String memoKey(Project project, VirtualFile vf) {
+        return project.getLocationHash() + "|" + vf.getPath();
+    }
+
+    /** 测试缝：清空备忘。 */
+    public static void clearMemoForTest() {
+        mappedMemo.clear();
     }
 }

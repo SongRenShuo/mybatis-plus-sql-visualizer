@@ -82,16 +82,21 @@ class ExecSlowOpsRoutingTest {
      */
     @Test
     fun `备忘接线仍在ensureMapped的跳过判定与写入落账处`() {
+        // k2j 适配：生产为 100% Java（src/main/java），master 的 .kt 路径在本分支不存在；
+        // 守住同一行为（备忘接进 ensureMapped 跳过判定 + 写入落账）即可。
         val candidates = listOf(
-            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.kt"),
-            java.io.File("../src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.kt"),
+            java.io.File("src/main/java/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.java"),
+            java.io.File("../src/main/java/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.java"),
         )
         val source = candidates.firstOrNull { it.isFile }?.readText(Charsets.UTF_8)
-            ?: error("找不到 DialectPreMapping.kt（工作目录=${java.io.File(".").absolutePath}）")
+            ?: error("找不到 DialectPreMapping.java（工作目录=${java.io.File(".").absolutePath}）")
         val codeOnly = source
             .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("//[^\n]*"), "")
         assertTrue("跳过判定必须用上备忘", codeOnly.contains("skipByOwnMemo"))
-        assertTrue("写入成功后必须落备忘", codeOnly.contains("mappedMemo[key] ="))
+        assertTrue(
+            "写入成功后必须落备忘",
+            codeOnly.contains("mappedMemo.put(") || codeOnly.contains("mappedMemo[key] ="),
+        )
     }
 }
