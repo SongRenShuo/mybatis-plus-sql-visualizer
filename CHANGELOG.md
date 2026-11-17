@@ -6,7 +6,7 @@
 
 ### Added
 - **SQL 日志条目的耗时按测量来源分档：agent 精确计时恒原样，控制台日志解析的近似耗时带 `~` 前缀（T-HdAbsorb D215，`43a1d0a34`）**；同一时间窗内被调试器断点挂起时，agent 耗时按挂起区间与测量窗的交集扣减——断点不再把墙钟虚增成「超慢查询」。挂起补偿可在 Registry `sqlvis.log.durationSuspendCompensation` 关闭（回退通道）
-- **SQL 日志列表新增「疑似 N+1」红色徽标（T-HdAbsorb D216，`f0aa9b712`）**：同一参数化模板在当前列表累计 ≥5 条（Registry `sqlvis.log.nplusOneSuspect.minCount` 可调）即标红，与既有「同结构 N 条」琥珀计数徽章分层（计数提示 vs 行动建议）；Registry `sqlvis.log.nplusOneSuspect` 关闭即回到旧行为
+- **SQL 日志列表新增「疑似 N+1」红色徽标（T-HdAbsorb D216，`f0aa9b712` + 窗口判定收口 `6bd0cd9e3`）**：同一参数化模板累计 ≥5 条即标红，与既有「同结构 N 条」琥珀计数徽章分层（计数提示 vs 行动建议）；判定按**同线程 60 秒滑动窗**分桶——循环内逐条查询（同一线程短窗重复）命中，而同一模板分散在多个线程（如并发请求各自查一条）不再误报；无线程名的控制台回落条目按会话级窗口回落。Registry `sqlvis.log.nplusOneSuspect` 关闭即回到旧行为、`sqlvis.log.nplusOneSuspect.minCount` 可调阈值
 - **预览执行链的数据源记忆新增连接事实指纹兜底（T-HdAbsorb D218，`33d41d694`）**：数据源改名或 IDE 重建导致 UUID/名字两级 last-used 记忆全部落空时，按「URL+用户+库名」指纹唯一命中恢复静默复用，不再每次弹选择器；多条同指纹歧义一律交弹窗
 - **MCP 工具输出分档（T-HdAbsorb D219，`c8d797b5d`）**：`sqlv_render_logs` / `sqlv_history_search` 新增可选 `detail` 参数——默认不变（历史契约）；传 `detail=false` 得到摘要/紧凑清单（计数+短预览，AI 上下文预算紧张时用）
 
