@@ -10,6 +10,7 @@ import com.intellij.codeInsight.daemon.LineMarkerInfo;
 import com.intellij.codeInsight.daemon.LineMarkerProvider;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
+import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiIdentifier;
@@ -76,7 +77,33 @@ public class MapperJavaToXmlLineMarkerProvider implements LineMarkerProvider {
         if (!containingClass.isInterface()) return null;
         String namespace = containingClass.getQualifiedName();
         if (namespace == null) return null;
-        if (MapperXmlLocator.locate(element.getProject(), namespace + "." + method.getName()) == null) return null;
+        // F1' 同构（T-GutterFirstOpenDelay Java 侧）/ P2.1 五段式：与 XML 侧同不变式——图标只在
+        // 「确认真没有」时缺席，不在「还没查到」时缺席。复用 XML 侧共享的正缓存与 dumb 测试缝。
+        // 不 catch ProcessCanceledException（平台契约禁吞 PCE）。
+        String key = namespace + "#" + method.getName();
+        Project project = element.getProject();
+        // ① dumb 窗乐观产出（不查索引、不入缓存）
+        if (MapperXmlToJavaLineMarkerProvider.isDumbProvider.apply(project)) {
+            return buildMethodMarker(element);
+        }
+        // ② 确定存在入共享正缓存 / ③ Unknown 保留缓存命中 / ④ Absent 收回缓存并摘图标
+        MapperXmlLocator.Lookup lookup =
+                MapperXmlLocator.locateOrUnknown(project, namespace + "." + method.getName());
+        if (lookup instanceof MapperXmlLocator.Found) {
+            MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.add(key);
+            return buildMethodMarker(element);
+        }
+        if (lookup instanceof MapperXmlLocator.Unknown) {
+            return MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.contains(key)
+                    ? buildMethodMarker(element) : null;
+        }
+        // Absent：确定不存在 → 收回正缓存、摘图标
+        MapperXmlToJavaLineMarkerProvider.resolvedStatementKeys.remove(key);
+        return null;
+    }
+
+    @NotNull
+    private static LineMarkerInfo<PsiElement> buildMethodMarker(@NotNull PsiElement element) {
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return new LineMarkerInfo<PsiElement>(
                 element,
