@@ -3,17 +3,32 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简），2026-09-29（第二十一次精简），2026-09-30（第二十二次精简，零归档收拢轮），2026-10-01（第二十三次精简，零归档索引瘦身轮），2026-10-02~05（第二十四~二十七次精简，四连零归档读数刷新轮），2026-10-06（第二十八次精简，零归档勘正轮），2026-10-07（第二十九次精简，零归档勘正+双档去重轮），2026-10-08（第三十次精简，零归档勘正+双孤儿入册轮），2026-10-29（第三十一次精简，47 文件归档波次+索引瘦身 247→198 行），2026-11-07（第三十二次精简，51 文件归档波次+索引重建 304→236 行），2026-11-10（第三十三次精简，16 文件归档波次+孤儿 33 补册），2026-11-13（第三十四次精简，28 文件归档波次+孤儿 7 补册），2026-11-17（第三十五次精简，15 文件归档波次+孤儿 8 补册）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（126 个通用文件）
-> **项目记忆**：保留 332 个内容文件 + MEMORY.md 索引（第三十四次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（128 个 md，2026-11-17 实测）
+> **项目记忆**：保留 375 个内容文件 + MEMORY.md 索引（第三十五次精简后）
 
 ---
 
-## 已修复 Bug（289 个）
+## 已修复 Bug（304 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-branch-align-merge-20261116.md](bug-fixes/project-branch-align-merge-20261116.md) | T-BranchAlignMerge 全分支对齐合流终局（20261117 收官 `09f129ae5`）：八支全对齐（吃 master 组 6 支+insight 吃 dev）双仓已推、八轮 CI gate 全绿、修红账本四类根因五轮闭环；可复用＝分支级 CI dispatch（build-plugin.yml workflow_dispatch mode=gate，push-test 只挂 master）、NestGate 跨线显式裁决、并行车道推 master 前先 fetch 判祖先再 rebase、`gh run rerun --failed-jobs` 偶发不生效改派全新 run |
+| [project-index-scan-sweep2-20261116.md](bug-fixes/project-index-scan-sweep2-20261116.md) | T-IndexScanSweep2 已实施合 master（`978c7f289`，CI `43816779504` 8/8）：补全候选名称清单改项目级服务（`MapperNamespaceIndex` v2 加 `#mapper`/`#config`）；javap 推翻 `getModificationStamp(Project,String)` 存在性，改 `getIndexModificationStamp` ⊕ 逐文件 modStamp；C3~C5 判不做（回补按项目+结构版本缓存） |
+| [project-ibatis-gutter-perf-20261116.md](bug-fixes/project-ibatis-gutter-perf-20261116.md) | T-IbatisGutterPerf 全链收官（双仓已推、CI 六轮 8/8、用户复验通过）：iBatis 图标索引化（`b5ccf14c7`/`bcad37b84`）+三态缓存收回（`8eca5211f`）+MyBatis 同族（`c0bc9b043`）+P4 机制清扫（`501db7d89`）+延迟预热读动作+箭头门槛（`e4b3fdd27`）+跨命名空间精确匹配（`2eecbdcba`） |
+| [project-bind-static-ref-cross-ns-20261116.md](bug-fixes/project-bind-static-ref-cross-ns-20261116.md) | T-BindStaticRefCrossNs 已实施并验收（`ad1deacb0`，CI 8/8、用户复验正常）：include 片段 bind 静态常量求值为空＝常量扫描域只取当前文件文本（XmlPreviewService.kt:105）；S1 并入 crossNamespace.fragments.values、S2 findFieldByName(...,true)；定向 74/0/0/0、反向恰 2/1 红 |
+| [project-gutter-first-open-delay-20261114.md](bug-fixes/project-gutter-first-open-delay-20261114.md) | T-GutterFirstOpenDelay 全案收官（F1~F1''+头扫化五笔全进 master，随 11.14/11.16 发行）：XML 侧 F1 正缓存+optimistic（`d3eb65079`）、F2 预热调度 warmDelayMs（`7ad1d1a5d`）、CI 红补登元守卫（`a866b7d6c`）、F1' Java→XML 图标缺席＝慢趟 MISS 固化（`6bc12e9c8`）、F1'' 清单饿死（`81884a539`）、头扫化+测试隔离（`588d64604`） |
+| [project-preview-stmt-type-scope-20261112.md](bug-fixes/project-preview-stmt-type-scope-20261112.md) | T-PreviewStmtTypeScope 两轮修复已随 11.13-beta.1/11.14 发行（并 trio `1dde82c78`）：查询链预览被判 UPDATE/DELETE＝D-2 作用域+D-3 多目标切换+M1 依据可见+M3 接收者负门；`3731e2eed` 重新赋值锚点走变量路径+分段、`90e494b33` 实体更新 SET 逐列来源；合并态 31 类 191 例 0 红 |
+| [project-merge-preview-trio-20261113.md](bug-fixes/project-merge-preview-trio-20261113.md) | T-MergePreviewTrio 已合 master（`aaaec5544`）并完成 v2026.11.13-beta.1 双通道发行（GH prerelease + Gitee `id=1304101` 同 sha256、CI `43365621616` 14/14）：8 冲突逐 hunk；首发两红修 INTERNAL_API_USAGES（`f43068228`）+ tag 前移 force 推；远端 trio 分支已不存在（20261117 ls-remote 实测） |
+| [project-comment-shortcut-keymap-20261113.md](bug-fixes/project-comment-shortcut-keymap-20261113.md) | T-CommentShortcutKeymap 收官（真机日志零告警、`d25e2a653` 已合 master）：两处接管走 `replaceActionSilently`（置 EMPTY 再换）；`setShortcutSet` 是 Internal API 改公共 `registerCustomShortcutSet(EMPTY,null)`（首发轮被 verifyPlugin 拦过）；守卫全树扫描+禁 `setShortcutSet(` |
+| [project-preview-perf-extreme-20261114.md](bug-fixes/project-preview-perf-extreme-20261114.md) | 「性能做到极致」整轮（`c96759946`~`02bccd045` 全推双仓）：反查 resolve 3737~4737ms→0~34ms、request→dialog 稳定态 8~254ms、索引重建 4737→187ms、联表候选→0~2ms；诚实结论＝首开 695ms 里装配仅 9ms（引擎 EDT 排队为主）、console-visible 首 4.6s 里 1.07s 是平台建 DbConsole |
+| [project-release-20261114-beta1.md](bug-fixes/project-release-20261114-beta1.md) | v2026.11.14-beta.1+正式版同日收官（发行提交 `8191d0364`/落账 `8b996e14c`、tag 双仓一致、release run `43575726269` 16/16、GH `445153267`/Gitee `1308206` 同 sha256）：**Marketplace 首次上架**（回读 approve/listed=true，11.12 版连带补上）；范围锚点=v2026.11.12 |
+| [project-release-20261115-beta1.md](bug-fixes/project-release-20261115-beta1.md) | v2026.11.15-beta.1 内测发行收官（发行提交 `1c36c369c`、CI `43659175871` 14/14、GH `445715456`/Gitee `1310184` 同 sha256、落账 `a95c74231`）；发行主体主控执行+skill 草稿后台子代理并行备料的首轮实操 |
+| [project-release-20261116-beta1.md](bug-fixes/project-release-20261116-beta1.md) | 2026.11.16 同日撤回改内测事件收官：先发正式版（CI `43779431717` 16/16、GH `446479338`/Gitee `1313654`）后主线又并入 27 笔修复未进包 ⇒ 用户令撤回改发 beta.1；含撤回配方（gh release delete+tag 处理）与「更新日志一条一主题」纠偏源头；终局正式版已另行发行 |
+| [project-test-count-report-20261114.md](bug-fixes/project-test-count-report-20261114.md) | 成功腿不打印例数＝「静默跳过」与「全绿」同形（T-TestCountReport 已落码，20261114 起 MPV-TEST-COUNT 成功腿也有）：戳写 temporaryDir 不写 reports（`@OutputDirectory` 会毁 up-to-date）、只计本轮 mtime、JUnit XML 首行是声明须读前 5 行、失败腿交 Gradle 自带汇总 |
+| [project-startup-read-lock-freeze-20261113.md](bug-fixes/project-startup-read-lock-freeze-20261113.md) | T-StartupReadLockFreeze 两车道交付并合 master（最新 `acf503f83`，2026.11.12-beta.2 tag `866c6e651` 起效）：Linux 开工程即卡死＝MBG 预取在阻塞读锁里跑 ReferencesSearch 与 EDT 写升级互等；零成本自救+九轮修法（预算落检索/首开转后台/模型冷窗口/防自激/索引期让位/候选截断+TTL/补全回填/子句读文档）与 CI 序列、验收口径 |
+| [project-a08-nightly-redpoint-20261110.md](bug-fixes/project-a08-nightly-redpoint-20261110.md) | A-08 夜间轮红点巡检收官（20261113，`b52de7e2` 已合 master）：dialect 失败诊断+上传条件修复；实例侧四层（listen_addresses/hba/gs_ctl reload）修好后夜间 17/17 全绿、run `43337831586` 通过 4/0/0/0；「服务器故障红属正常」口径已过期；方法固化于 skill db-env-provisioning §4.5 + LESSONS L60 |
 | [project-dynamic-unload-barriers.md](bug-fixes/project-dynamic-unload-barriers.md) | 插件动态卸载根因分析与方案决策全档（2026-08-20 分析，闭环=T-DynUpdate 免重启热替换已交付并随 v2026.9.11 发行）——P0=自定义语言/FileType 结构性注册不可运行时移除（方案 A 移除、高亮改内置 SQL、Community 回落纯文本）；P1=EntityResolver 静态缓存持 PsiFile+PluginCacheManager 未接生命周期；P2=SqlPreviewService 非 Disposable。在役结论薄档留项目 memory（反射入口签名护栏等） |
 | [project-keyword-wrap-format.md](bug-fixes/project-keyword-wrap-format.md) | 关键字换行格式化交付档（2026-08-21 `4d2703d` + T-ListMode 延伸已交付 dev `bbcc300` 后随批次入库）——formatClauseLine 第三显示模式（子句顶格换行+同行压缩）、五轮迭代踩坑（AND/OR 双空格/depth 计数/括号内空格与逗号）；T-ListMode=三显示模式枚举+BasicHTML 空格折叠须 `&nbsp;`（同族 pitfall-swing-basichtml-whitespace-collapse 在 pitfalls/） |
 | [project-o77-ew-statement-scope.md](bug-fixes/project-o77-ew-statement-scope.md) | O-77 T-EwStatementScope 已交付（20260924 立项当日合并 `9464464` 并推送，master/dev/t-testperf5 三支均含）——XML 预览对无 ew 参数的普通语句误报「无 Wrapper 参数（ew）」红横幅：根因=MP 占位识别域（`XmlEwExpander.placeholders` 扫整文件）与解析域（当前语句）不一致，引入 `0f42a80b`（M26-B）起全 tag 受影响、发布版 2026.9.14 在内；修法=语句域扫描（`XmlStatement` 尾置默认字段 `rawText`，include 展开后 textContent 填充，null 回落 fileText），同族两形态（ew2 变量错配/跨命名空间 include 漏检）一并收敛；四轮读数含反向验证，详版=计划 §实施记录（`c3cb052`） |
@@ -516,11 +531,15 @@
 
 ---
 
+**第三十五次精简升级（2026-11-17，15 个归档 + 孤儿 8 补册 + 全局去重 1 + 状态刷新）**：归档判定全部先 git 实测——10 枚收官提交（`d25e2a653`/`978c7f289`/`aaaec5544`/`acf503f83`/`c96759946`/`02bccd045`/`ad1deacb0`/`28531e967`/`d3eb65079`/`81884a539`）经 `merge-base --is-ancestor` 全在 origin/master；v2026.11.16 正式版已发行落账（`9206b5d15`/`56753b1bf`）；远端 trio 分支已不存在（ls-remote 零命中）⇒ MergePreviewTrio 的「分支去留待定」自然闭合；master 本地 `092f54940`（架构文档五篇）领先 origin/master 属实＝该「未推」断言保留。归 **bug-fixes 15 个**（合流/索引化/修复收官战役 9：branch-align-merge-20261116、index-scan-sweep2、ibatis-gutter-perf、bind-static-ref-cross-ns、gutter-first-open-delay、preview-stmt-type-scope、merge-preview-trio、comment-shortcut-keymap、a08-nightly-redpoint；发行链 3：release-20261114-beta1、release-20261115-beta1、release-20261116-beta1；交付记录 2：test-count-report、startup-read-lock-freeze；性能整轮 1：preview-perf-extreme）。同轮：孤儿 8 补册（feedback-release-notes-one-topic-per-short-line → §四；pitfall-completion-main-entity-resolution / pitfall-dep-verify-cold-cache-whackamole / pitfall-new-setting-field-trips-three-guards / pitfall-scheduled-pool-callback-psi-needs-read-action → §五；project-seo-webmaster-platforms → §一；reference-ci-gate-dispatch-and-watch → §三；reference-force-push-master-after-squash → §七）；pitfall-acp-agent-auth-mode 删项目副本（global 详版 6.3KB 在役 + AGENTS.md 摘要承载）；pitfall-branch-merge-doc-adjudication 自「进行中」节搬入 §七（战役收官、套路留役）；MEMORY.md 双 BranchAlignMerge 条目随归档并删（收官条+过期「实施中」条）；project-sandbox-reuse「未推」订正（`28531e967` 已随 master 推双仓）；裸条目「v2026.11.12 正式版已双通道发行」删除（活状态由 pending-plans 承载）。项目 memory 391→375 内容文件；MEMORY.md 363→358 行 / 95.1KB→92.8KB。全量备份 memory-backup-20261117（395 文件）。
+
+---
+
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 333（含 MEMORY.md；内容文件 332） |
-| 全局记忆 global/ | 126 |
-| 归档 archive/ | 404（bug-fixes 289 + pitfalls 107 + methodology 1 + user-context 6 + README） |
-| **合计** | **863** |
+| 项目 memory（保留） | 376（含 MEMORY.md；内容文件 375） |
+| 全局记忆 global/ | 128 |
+| 归档 archive/ | 419（bug-fixes 304 + pitfalls 107 + methodology 1 + user-context 6 + README） |
+| **合计** | **923** |
