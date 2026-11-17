@@ -1863,16 +1863,24 @@ public final class DataSourceSelectorResultsKt {
             @Nullable String renderedDialectName,
             @NotNull Consumer<DataSourceSelector.TempPsiFile> onReady) {
         Application app = ApplicationManager.getApplication();
+        // T-PreviewOpenPerfM2 M7 / ExecTempFileEdtGuardTest：PSI 有效性校验（revalidateOnEdt 内
+        // psi.isValid → ensureIsUpToDate）是平台标注的慢操作，必须在**后台段**完成；EDT 上判会
+        // 触发 SlowOperations 断言并给插件记「Plugin to blame: SQL Visualizer」。回调只投递结果。
+        java.util.function.Supplier<Runnable> runSlow = () -> {
+            DataSourceSelector.TempPsiFile pair = createTempPsiFile(project, sql, renderedDialectName);
+            DataSourceSelector.TempPsiFile revalidated = revalidateOnEdt(project, pair);
+            return () -> onReady.accept(revalidated);
+        };
         if (!app.isDispatchThread()) {
             // 已是后台线程：慢段就地跑（合法），但回调仍回 EDT + write-safe——续接链是 UI + 文档写，
             // 不能让调用方线程直接承接（否则弹窗越线程、文档写无写安全资格）
-            DataSourceSelector.TempPsiFile pair = createTempPsiFile(project, sql, renderedDialectName);
-            app.invokeLater(() -> onReady.accept(revalidateOnEdt(project, pair)), ModalityState.nonModal());
+            Runnable report = runSlow.get();
+            app.invokeLater(report, ModalityState.nonModal());
             return;
         }
         app.executeOnPooledThread(() -> {
-            DataSourceSelector.TempPsiFile pair = createTempPsiFile(project, sql, renderedDialectName);
-            app.invokeLater(() -> onReady.accept(revalidateOnEdt(project, pair)), ModalityState.nonModal());
+            Runnable report = runSlow.get();
+            app.invokeLater(report, ModalityState.nonModal());
         });
     }
 
@@ -2322,9 +2330,13 @@ public final class DataSourceSelectorResultsKt {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
         if (app.isDispatchThread()) {
-            final boolean[] ok = {false};
-            DocWriteContext.runWriteSafe(project, "exec doc sync (edt direct)", () -> ok[0] = docWriteOnce(project, vf, sql));
-            return ok[0];
+            // T-StartupReadLockFreeze S4-a（master 同款）：EDT 分支不再就地写——就地 WriteAction 要在
+            // 本拍把写意图读锁升级为写锁，与后台阻塞读互等即冻结。改与 BGT 分支同构：nonModal 投递
+            // 一拍 + 有界等待；已在 EDT 时投递后立即交还（invokeLaterWriteSafeAndWait 自等保护）。
+            // 写体 docWriteOnce 幂等，延后一拍不改终态。
+            return DocWriteContext.invokeLaterWriteSafeAndWait(
+                    project, "exec doc sync (edt→nonModal, S4-a)", waitBudgetMs,
+                    () -> docWriteOnce(project, vf, sql));
         }
         if (waitBudgetMs <= 0L) {
             // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）

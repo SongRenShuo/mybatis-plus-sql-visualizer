@@ -40,17 +40,22 @@ import java.io.File
  */
 class ExecTempFileEdtGuardTest {
 
+    // k2j：生产树为 src/main/java/*.java（master 的 .kt 已整树翻译），路径换 .java 对应物。
     private val resultsPath =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt"
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java"
 
     /**
      * 判定内核（VIOLATIONS）：EDT 入口派发形态 + 慢段线程纪律 + 异步续接收口。
      *
-     * 输入为 `DataSourceSelectorResults.kt` 源码；函数体按名字定位（大括号配平），定位失败即
-     * 点名（改名/搬家后守卫必须同步跟进，不得静默空转）。
+     * 输入为 `DataSourceSelectorResultsKt.java` 源码；函数体按名字定位（大括号配平），定位失败即
+     * 点名（改名/搬家后守卫必须同步跟进，不得静默空转）。k2j 的 `revalidate` 落成 `revalidateOnEdt`
+     * （语义同 master：在后台段完成 PSI 有效性校验，回调只投递结果）。
      */
     internal fun tempPsiEdtOffenders(source: String): List<String> {
         val src = stripComments(source)
+        // k2j Java 名为 revalidateOnEdt，自证样本仍用 master 的 revalidate——按实际声明择一。
+        val revalidateFn = if (Regex("""\brevalidateOnEdt\s*\(""").containsMatchIn(src)) "revalidateOnEdt" else "revalidate"
+        val revalidateToken = "$revalidateFn("
         val out = ArrayList<String>()
 
         val choose = bodyOf(src, "chooseAndPrepare")
@@ -86,18 +91,18 @@ class ExecTempFileEdtGuardTest {
             if (async.contains("ModalityState.any()")) {
                 out += "createTempPsiFileAsync 用 ModalityState.any() 投递（any() 恒 write-unsafe）"
             }
-            if (!async.contains("revalidate(")) {
-                out += "createTempPsiFileAsync 回调未经 revalidate——异步窗口内 PSI 失效会硬抛" +
+            if (!async.contains(revalidateToken)) {
+                out += "createTempPsiFileAsync 回调未经 $revalidateFn——异步窗口内 PSI 失效会硬抛" +
                     "PsiInvalidElementAccessException"
-            } else if (async.indexOf("revalidate(") > async.indexOf("invokeLater(")) {
-                out += "revalidate 落在 invokeLater 回调里（EDT 上判 PSI 有效性＝平台慢操作，真机" +
+            } else if (async.indexOf(revalidateToken) > async.indexOf("invokeLater(")) {
+                out += "$revalidateFn 落在 invokeLater 回调里（EDT 上判 PSI 有效性＝平台慢操作，真机" +
                     " 2026-11-12 11:08:53 被记 Plugin to blame: SQL Visualizer）；必须在后台段完成"
             }
         }
 
-        val revalidate = bodyOf(src, "revalidate")
+        val revalidate = bodyOf(src, revalidateFn)
         if (revalidate == null) {
-            out += "未定位到 revalidate 函数体（PSI 失效兜底消失）"
+            out += "未定位到 $revalidateFn 函数体（PSI 失效兜底消失）"
         } else {
             val readLocks = Regex("""ReadAction\.compute""").findAll(revalidate).count()
             if (readLocks < 2) {
@@ -132,7 +137,9 @@ class ExecTempFileEdtGuardTest {
             if (!continuation.contains("failPrepareRequests(")) {
                 out += "continuePrepareAfterTempFile 丢失建链失败收口 failPrepareRequests"
             }
-            if (!continuation.contains("isPrepareActive(")) {
+            // k2j Java 把 master 的 `isPrepareActive()` 函数落成 `Supplier<Boolean> isPrepareActive`，
+            // 调用形态为 `isPrepareActive.get()`；两种形态都表示「迟到续接守卫」在场。
+            if (!continuation.contains("isPrepareActive(") && !continuation.contains("isPrepareActive.get()")) {
                 out += "continuePrepareAfterTempFile 丢失迟到续接守卫 isPrepareActive" +
                     "（异步窗口内门已易主仍会建第二条会话/控制台）"
             }
@@ -275,21 +282,32 @@ class ExecTempFileEdtGuardTest {
         }
     }
 
-    /** 函数声明点：`fun [接收者.]name(` 里 `(` 的下标；普通调用点不命中。 */
+    /**
+     * 函数声明点：`fun [接收者.]name(`（master Kotlin / 自证样本）或 k2j Java
+     * `[public|private|protected|static|final] <ReturnType> name(` 里 `(` 的下标；普通调用点不命中。
+     * Java 形态判据：名字前退到标识符起点后，同行更前面必须是「返回类型 + 修饰符」而非 `.`/`=` 等调用上下文。
+     */
+    private fun isDeclarationAt(src: String, at: Int): Boolean {
+        var back = at
+        while (back > 0 && (src[back - 1].isLetterOrDigit() || src[back - 1] == '.' || src[back - 1] == '_')) {
+            back--
+        }
+        var s = back
+        while (s > 0 && src[s - 1].isWhitespace()) s--
+        val kotlinDecl = s >= 3 && src.regionMatches(s - 3, "fun", 0, 3) &&
+            (s - 4 < 0 || !(src[s - 4].isLetterOrDigit() || src[s - 4] == '_'))
+        // Java：声明行「... <Type> name(」——前面是返回类型标识符（含泛型），且整行以函数签名收尾。
+        val lineStart = src.lastIndexOf('\n', s - 1) + 1
+        val prefix = src.substring(lineStart, s).trim()
+        val javaDecl = Regex("""^((?:public|private|protected|static|final|synchronized|internal)\s+)*[\w<>,\[\]?. ]+\s*$""")
+            .matches(prefix) && prefix.isNotBlank() && !prefix.contains("=") && !prefix.contains("return")
+        return kotlinDecl || javaDecl
+    }
+
     private fun declarationAt(src: String, fn: String): Int? {
         var at = src.indexOf("$fn(")
         while (at > 0) {
-            var back = at
-            while (back > 0 && (src[back - 1].isLetterOrDigit() || src[back - 1] == '.' || src[back - 1] == '_')) {
-                back--
-            }
-            var s = back
-            while (s > 0 && src[s - 1].isWhitespace()) s--
-            if (s >= 3 && src.regionMatches(s - 3, "fun", 0, 3) &&
-                (s - 4 < 0 || !(src[s - 4].isLetterOrDigit() || src[s - 4] == '_'))
-            ) {
-                return at
-            }
+            if (isDeclarationAt(src, at)) return at
             at = src.indexOf("$fn(", at + fn.length + 1)
         }
         return null
@@ -314,6 +332,20 @@ class ExecTempFileEdtGuardTest {
         return null
     }
 
-    private fun bodyOf(src: String, fn: String): String? =
-        declarationAt(src, fn)?.let { bodyRange(src, it) }?.let { src.substring(it.first, it.last + 1) }
+    /**
+     * 函数体文本。k2j 的 Java 重载（如 chooseAndPrepare 三个重载、createTempPsiFile 两个重载）里
+     * 转调重载与本体重载并存，守卫的令牌检查是「存在性」判定——把所有声明点的函数体拼接，
+     * 只要任一重载含目标令牌即视为具备（master 的 Kotlin 单声明形态下等价于原行为）。
+     */
+    private fun bodyOf(src: String, fn: String): String? {
+        val bodies = StringBuilder()
+        var at = src.indexOf("$fn(")
+        while (at > 0) {
+            if (isDeclarationAt(src, at)) {
+                bodyRange(src, at)?.let { bodies.append(src.substring(it.first, it.last + 1)).append('\n') }
+            }
+            at = src.indexOf("$fn(", at + fn.length + 1)
+        }
+        return bodies.takeIf { it.isNotEmpty() }?.toString()
+    }
 }

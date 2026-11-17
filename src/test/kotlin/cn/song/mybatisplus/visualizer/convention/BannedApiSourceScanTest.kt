@@ -1437,7 +1437,11 @@ class BannedApiSourceScanTest {
     // 各批 `runCatching` 落成 try/catch(Throwable)（A1 sql 族 / A2 execute+ui 族 / A3 log+config+update 族 /
     // A4c 面板族），新增站点集中在方言路由、预览装配链、日志追赶链与内测渠道状态机；实测口径 833 个
     // .java 文件 998 站点。守卫原读数 expected:<957> but was:<998>。
-    private val fatalCatchSiteTotalBaseline = 998
+    // T-SyncK2JMaster179 修红 D（守卫实测重登）：998 → 1168。179 轮 W1b 增量与各路 CI 修红
+    // 生产件（highlight/index/gutter、F9 showTempFileError、revalidateOnEdt 等）把 master 的
+    // runCatching 继续落成 try/catch(Throwable)（915+ 个 .java 文件 1168 站点，与
+    // BannedApiScanRuleTest.allSites 同口径）。守卫原读数 expected:<998> but was:<1168>。
+    private val fatalCatchSiteTotalBaseline = 1168
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

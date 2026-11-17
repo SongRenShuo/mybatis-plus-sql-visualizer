@@ -380,16 +380,14 @@ class EnumReachabilityGuardTest {
             // 缺口——缺口归既有 ExplainGate 轻通知（不重复进执行确认弹窗），消费点＝矩阵渲染。不是静默失效。
             "Capability.EXPLAIN" to
                 "有意保留的未产出位（R52）：矩阵单列 EXPLAIN 保完整，缺口归 ExplainGate 轻通知、不进确认弹窗",
-            // 以下四类是「产出点在未移植的预览降级/模板意图链」——落位后须删除本条目（守卫会红提示）。
+            // 以下是「产出点在未移植的预览降级/模板意图链」——落位后须删除本条目（守卫会红提示）。
+            // k2j：PSI_UNAVAILABLE / PRODUCT_CONSUMED / MEMORY_PSI_FAILED 已随 T-DegradedPreviewUx
+            // 移植落地产出点（SqlPreviewPanelEditorLifecycleKt 的 fallbackPreviewDocument 实参位 /
+            // :689 赋值位 / showDegradedBanner 实参位），守卫实测「已获产出点」要求删除本条，故删除；
+            // FILE_UNAVAILABLE / VFS_UNAVAILABLE 仍未移植，保留。
             "PreviewDegradationReason.FILE_UNAVAILABLE" to
                 "产出点在未移植的降级预览链（T-DegradedPreviewUx 侧），落位后删本条",
             "PreviewDegradationReason.VFS_UNAVAILABLE" to
-                "产出点在未移植的降级预览链，落位后删本条",
-            "PreviewDegradationReason.PSI_UNAVAILABLE" to
-                "产出点在未移植的降级预览链，落位后删本条",
-            "PreviewDegradationReason.PRODUCT_CONSUMED" to
-                "产出点在未移植的降级预览链，落位后删本条",
-            "PreviewDegradationReason.MEMORY_PSI_FAILED" to
                 "产出点在未移植的降级预览链，落位后删本条",
         )
     }

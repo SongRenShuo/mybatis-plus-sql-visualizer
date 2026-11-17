@@ -679,9 +679,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 降级——master 侧 runCatching 形态对本守卫不可见，Java 侧落成 catch 全数入表）。
         "src/main/java/cn/song/mybatisplus/visualizer/xml/OgnlEvaluator.java" to
             CatchExemption(6, "OGNL 求值器须把用户表达式的任何失败收敛为 Err/回落（同 McpSelectGuard fail-closed 族）"),
-        // 18 处：平台 DasModel/祖先链反射遍历形态差异探测：遍历失败 bail + warn（解析降级）。
+        // 18→19（T-SyncK2JMaster179 修红 D，守卫实测）：平台 DasModel/祖先链反射遍历形态差异探测
+        // 随 179 轮 highlight 族增量新增 1 处降级捕获（18→19），同源解析降级语义。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/highlight/DatabaseSchemaResolver.java" to
-            CatchExemption(18, "平台 DasModel/Schema 反射遍历形态差异探测：遍历失败 bail + warn（解析降级）"),
+            CatchExemption(19, "平台 DasModel/Schema 反射遍历形态差异探测：遍历失败 bail + warn（解析降级）"),
         // 5 处：渲染失败回「无图」语义（清画布 + currentModel，防每次缩放重复抛）。
         "src/main/java/cn/song/mybatisplus/visualizer/ui/diagram/DiagramPanel.java" to
             CatchExemption(5, "渲染失败回「无图」语义（清画布 + currentModel，防每次缩放重复抛）"),
@@ -854,12 +855,14 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             // T-SyncK2JMaster177（2026-11-08 守卫实测）：529 → 559 / 957 → 998。生产面 112 件全量同步
             // 把 master 侧各批 runCatching 落成 try/catch(Throwable)，新增降级站点 41 处（其中 11 处带
             // fatal 判定入落地集/豁免表，其余 30 处为未判定降级站点）。
-            559,
+            // T-SyncK2JMaster179 修红 D：179 轮各路增量（含 highlight/index/gutter 族与 F9/F4 回填）
+            // 继续把 master 的 runCatching 落成 try/catch(Throwable)，未判定降级站点 559→659。
+            659,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            998,
+            1168,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含

@@ -765,7 +765,7 @@ public final class SqlPreviewPanelExecutionKt {
                     p.lastDialectGateMessage = null;
                 },
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                errorMsg -> p.resultPanel.showError(errorMsg),
+                errorMsg -> showTempFileError(p, errorMsg),
                 null,
                 gateRequest,
                 verdict -> onExecutionDialectGate(p, verdict),
@@ -987,6 +987,106 @@ public final class SqlPreviewPanelExecutionKt {
         }
     }
 
+    /** 设置 → 编辑器 → 文件类型（EP id 由平台声明，2026.3 实证：{@code preferences.fileTypes}）。 */
+    private static final String FILE_TYPES_SETTING_ID = "preferences.fileTypes";
+
+    /** 13.10：打开「设置 → 编辑器 → 文件类型」（用户在那里能看到/改「忽略的文件和文件夹」）。 */
+    public static void openFileTypesSettings(@NotNull Project proj) {
+        boolean opened;
+        try {
+            com.intellij.ide.actions.ShowSettingsUtilImpl.showSettingsDialog(proj, FILE_TYPES_SETTING_ID, null);
+            opened = true;
+        } catch (Throwable t) {
+            opened = false;
+        }
+        if (!opened) {
+            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                    .showSettingsDialog(proj, FILE_TYPES_SETTING_ID);
+        }
+    }
+
+    /**
+     * T-ExecPsiGate 13.10 / F9：临时 SQL 文件失败的<b>富呈现</b>——红字 + 蓝色可点入口。
+     *
+     * <p>三种成因在报错上长得一模一样（都是 {@code findFile} 返回 null），按
+     * {@link cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.ExecPsiFailureCause} 把用户直接
+     * 送到修复点。用户 2026-11-11 定案：<b>不引导改 {@code .gitignore}</b>——忽略模式的可控入口统一指向
+     * Settings → Editor → File Types。没有 hint（普通 SQL 执行错误）时逐字退回
+     * {@link SqlResultPanel#showError}，不干扰既有文案。</p>
+     */
+    public static void showTempFileError(@NotNull SqlPreviewPanel p, @NotNull String errorMsg) {
+        cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.ExecPsiFailureCause cause =
+                cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt.resolveTempFileHintCause(errorMsg);
+        String shown = cn.song.mybatisplus.visualizer.execute.ExecPsiFailureHintKt
+                .parseExecHintMessage(errorMsg).text();
+        Project proj = p.project;
+        if (cause == null || proj == null) {
+            p.resultPanel.showError(shown);
+            return;
+        }
+        String settingsLabel = null;
+        String settingsTip = null;
+        Runnable settingsAction = null;
+        // 兜底只在「换落点真能解决」的成因上给——方言不可用时挪目录没用，给了等于误导
+        boolean allowFallback = true;
+        String hint;
+        switch (cause) {
+            case IGNORED_BY_FILE_TYPES: {
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.fileTypes");
+                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
+                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
+                settingsAction = () -> openFileTypesSettings(proj);
+                break;
+            }
+            case IGNORED_BY_VCS: {
+                // 不引导改 .gitignore——忽略模式的可控入口统一指向 Settings → Editor → File Types。
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.vcs");
+                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
+                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
+                settingsAction = () -> openFileTypesSettings(proj);
+                break;
+            }
+            case EXCLUDED_ROOT: {
+                // 243/2026.3 无稳定公开的项目结构对话框入口，不给设置页链接；落点兜底仍有效。
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.excluded");
+                break;
+            }
+            case DIALECT_UNAVAILABLE:
+            case NO_LANGUAGE: {
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dialect");
+                settingsLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings");
+                settingsTip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip");
+                settingsAction = () -> openSqlDialectSettings(proj);
+                allowFallback = false;
+                break;
+            }
+            case DIR_NOT_INDEXED: {
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.dirNotIndexed");
+                settingsLabel = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes");
+                settingsTip = MpSqlVisualizerBundle.message("execute.tempFile.action.fileTypes.tip");
+                settingsAction = () -> openFileTypesSettings(proj);
+                break;
+            }
+            default: {
+                // UNKNOWN——判不出成因不等于没有出路：兜底落点一定能用，文案把可自查的入口写出来。
+                hint = MpSqlVisualizerBundle.message("execute.tempFile.hint.unknown");
+                break;
+            }
+        }
+        p.resultPanel.showErrorWithActions(
+                shown + " — " + hint,
+                allowFallback ? MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot") : null,
+                allowFallback ? MpSqlVisualizerBundle.message("execute.tempFile.action.useProjectRoot.tip") : null,
+                allowFallback ? (Runnable) () -> {
+                    // 用户显式选了兜底：记住该项目（本会话内后续执行直接走备用落点），然后重试一次
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execRootFallbackProjects.add(proj);
+                    executeSql(p);
+                } : null,
+                settingsLabel,
+                settingsTip,
+                settingsAction);
+    }
+
     /**
      * 按 configurable EP <b>id</b> 取方言设置页，不实例化整棵设置树。
      *
@@ -1164,7 +1264,7 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> p.resultPanel.showError(errorMsg),
+                            errorMsg -> showTempFileError(p, errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             wholeScriptExec,
                             dialectGateRequest, null, receipt, false,
@@ -1184,7 +1284,7 @@ public final class SqlPreviewPanelExecutionKt {
             boolean executed = SqlExecutor.executePrepared(
                     proj,
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
-                    errorMsg -> p.resultPanel.showError(errorMsg),
+                    errorMsg -> showTempFileError(p, errorMsg),
                     info -> showErrorRichWithLocate(p, info),
                     wholeScriptExec,
                     dialectGateRequest, null, receipt);
@@ -1194,7 +1294,7 @@ public final class SqlPreviewPanelExecutionKt {
                 proj, sql, null, isQuery,
                 consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                errorMsg -> p.resultPanel.showError(errorMsg),
+                errorMsg -> showTempFileError(p, errorMsg),
                 info -> showErrorRichWithLocate(p, info),
                 wholeScriptExec,
                 dialectGateRequest, null, receipt, false,
@@ -1440,7 +1540,7 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> p.resultPanel.showError(errorMsg),
+                            errorMsg -> showTempFileError(p, errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             false,
                             dialectGateRequest,
@@ -1466,7 +1566,7 @@ public final class SqlPreviewPanelExecutionKt {
                     proj,
                     // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
                     fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE),
-                    errorMsg -> p.resultPanel.showError(errorMsg),
+                    errorMsg -> showTempFileError(p, errorMsg),
                     info -> showErrorRichWithLocate(p, info),
                     false,
                     dialectGateRequest,
@@ -1480,7 +1580,7 @@ public final class SqlPreviewPanelExecutionKt {
                 consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                 consoleEditor -> onNativeEditorReady(p, consoleEditor),
                 // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
-                errorMsg -> p.resultPanel.showError(errorMsg),
+                errorMsg -> showTempFileError(p, errorMsg),
                 info -> showErrorRichWithLocate(p, info),
                 false,
                 dialectGateRequest,
@@ -1731,7 +1831,7 @@ public final class SqlPreviewPanelExecutionKt {
                             proj, explainSql, null, true,
                             consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE),
                             consoleEditor -> onNativeEditorReady(p, consoleEditor),
-                            errorMsg -> p.resultPanel.showError(errorMsg),
+                            errorMsg -> showTempFileError(p, errorMsg),
                             info -> showErrorRichWithLocate(p, info),
                             false,
                             dialectGateRequest,

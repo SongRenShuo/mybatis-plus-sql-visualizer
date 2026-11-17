@@ -1254,7 +1254,17 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "convention/TakeoverUpdateThreadGuardTest.kt",
-                listOf(DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS)),
+                listOf(
+                    DecisionFn("takeoverUpdateThreadOffenders", FnKind.VIOLATIONS),
+                    // k2j 179 轮 W1b：BGT 声明判定拆成 Boolean 谓词（master 内联），判据 7 要求逐条登记。
+                    // HELPER：只判「ActionUpdateThread.BGT 声明」在场，非违规点集合；via 即内核调用点。
+                    DecisionFn(
+                        "declaresBgt",
+                        FnKind.HELPER,
+                        "BGT 声明在场谓词（Boolean），判定内核 takeoverUpdateThreadOffenders 的输入；自证经该转发边到达",
+                        via = listOf("takeoverUpdateThreadOffenders"),
+                    ),
+                ),
                 "T-ThreadFix A：控制台数据源下拉接管组的 update 线程契约守卫。真机 SEVERE：" +
                     "`'psi.File' is requested on EDT by ChooseDataSourceTakeoverGroup#presentation` + " +
                     "同链 9 条 SlowOperations（findFile → findDirectory → isUnderIgnored）。根因是本类覆写了 " +
@@ -1322,6 +1332,31 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "`自证_JavaSyntaxHighlighterFactory与自研EP类不得误伤`（判错面的负例）/ " +
                     "`自证_注释里的调用不算`。（k2j：源码清单走 BannedApiScanSupport.mainSources " +
                     "src/main/java 快照，允许点为 Java 路径。）",
+            ),
+            // ---- T-ExecSlowOps-BP：执行临时文件构建移出 EDT（master 同款登记，k2j 生产树 .java） ----
+            GuardEntry(
+                "convention/ExecTempFileEdtGuardTest.kt",
+                listOf(
+                    DecisionFn("tempPsiEdtOffenders", FnKind.VIOLATIONS),
+                    // k2j 修红 D：Java 重载声明点判定拆成 Boolean 谓词（Kotlin 原形态无此函数）；判据 7 要求登记。
+                    // HELPER：只判某 `name(` 出现点是否为函数声明（Kotlin fun / Java 修饰符+返回类型），
+                    // 供 bodyOf/declarationAt 定位函数体；自证经 tempPsiEdtOffenders 的转发调用到达。
+                    DecisionFn(
+                        "isDeclarationAt",
+                        FnKind.HELPER,
+                        "声明点判定谓词（Boolean），bodyOf/declarationAt 的输入（本机翻译新增的 Java 声明识别助手）",
+                        via = listOf("bodyOf", "declarationAt"),
+                    ),
+                ),
+                "T-ExecSlowOps-BP：执行临时文件构建的 EDT 慢操作守卫（master 真机一轮 36 条 " +
+                    "`Slow operations are prohibited on EDT`，栈 chooseAndPrepare → createTempPsiFile → " +
+                    "PsiManager.findFile → WorkspaceFileIndex.ensureIsUpToDate）。判据六条：chooseAndPrepare " +
+                    "不得直接调 createTempPsiFile（必须经 createTempPsiFileAsync）；async 三段式 + nonModal + " +
+                    "revalidateOnEdt 兜底（PSI 有效性校验须在后台段完成，不得落 invokeLater 回调）；" +
+                    "revalidate 两处 PSI 判定包 ReadAction；慢段 refresh 按线程分流（BGT 裸调防 WIRA 自锁）；" +
+                    "续接链保留 failPrepareRequests 与迟到守卫 isPrepareActive（Java 侧为 Supplier.get()）。" +
+                    "自证语料=「同步直调/any 投递/缺分流/丢收口必被点名」+「合规形态不误报」。" +
+                    "（k2j：扫描根 src/main/java，目标文件 DataSourceSelectorResultsKt.java。）",
             ),
             GuardEntry(
                 "sql/verify/DialectDocTableGuardTest.kt",

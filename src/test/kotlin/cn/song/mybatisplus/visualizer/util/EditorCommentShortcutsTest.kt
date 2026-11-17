@@ -362,12 +362,15 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
      * （`EditorCommentShortcuts` 与 `ChooseDataSourceTakeover`），单文件守卫会漏掉后者（实测漏了 3 条）。
      */
     fun test源码守卫_全树只允许经replaceActionSilently换全局动作() {
-        val helperRel = "src/main/kotlin/cn/song/mybatisplus/visualizer/util/ActionReplaceSilently.kt"
+        // k2j：生产树为 src/main/java/*.java（master 的 .kt 已整树翻译），共享助手落成
+        // util/ActionReplaceSilentlyKt.java（`fun ActionManager.replaceActionSilently` 顶层扩展 →
+        // 该类 public static 方法）。不变量不变：只有这一处可以调 replaceAction，且先置 EMPTY。
+        val helperRel = "src/main/java/cn/song/mybatisplus/visualizer/util/ActionReplaceSilentlyKt.java"
         fun stripped(file: File) = file.readText()
             .replace(Regex("""(?s)/\*.*?\*/"""), "")        // 剥块注释（KDoc 里会提到这些符号）
             .replace(Regex("""(?m)^\s*//.*$"""), "")         // 剥行注释
-        val files = File("src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+        val files = File("src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
             .toList()
         val offenders = files
             .mapNotNull { file ->
@@ -382,7 +385,7 @@ class EditorCommentShortcutsTest : BasePlatformTestCase() {
             offenders.map { it.first },
         )
         assertEquals("助手文件里只应有一处 replaceAction 调用", 1, offenders.single().second)
-        val helper = stripped(File(helperRel)).substringAfter("fun ActionManager.replaceActionSilently", "")
+        val helper = stripped(File(helperRel)).substringAfter("replaceActionSilently(", "")
         assertTrue("replaceActionSilently 必须存在（先置 EMPTY 的转调点）", helper.isNotEmpty())
         val emptySet = helper.indexOf("registerCustomShortcutSet(CustomShortcutSet.EMPTY, null)")
         val replace = helper.indexOf("replaceAction(")

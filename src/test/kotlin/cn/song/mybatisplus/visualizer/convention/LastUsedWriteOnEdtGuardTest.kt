@@ -23,19 +23,28 @@ class LastUsedWriteOnEdtGuardTest {
 
     private val writeFns = listOf("rememberRunner", "forgetLastRunner", "forgetAllLastUsed")
 
+    // k2j：生产树为 src/main/java/*.java（master 的 .kt 已整树翻译），路径与声明形态同步换形。
     private fun source(): String = File(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java",
     ).readText()
 
     /** 判定内核（VIOLATIONS）：返回缺 EDT 归位的写入口函数名。可注入合成源码自证。 */
     internal fun offendersOf(source: String): List<String> {
         val stripped = stripComments(source)
         return writeFns.filter { fn ->
-            val idx = stripped.indexOf("internal fun $fn(")
-            if (idx < 0) return@filter true   // 函数不见了也算异常（防被删）
+            // master 的 Kotlin `internal fun name(` → k2j Java `public static void name(`（含可能的注解/换行），
+            // 声明形态按「修饰符* 返回类型 函数名(」匹配，两种语言形态都收，合成样本沿用 Kotlin 形态。
+            // k2j 的 Java 重载（如 rememberRunner 3 参/4 参）里，纯转调重载不含归位块——真实写口必有一处含
+            // 归位，故按「任一声明点带归位即放行」判定（合成样本各只有一处声明，语义不变）。
+            val decl = Regex("""(?:internal\s+fun\s+$fn\s*\(|(?:public|private|protected)?\s*static\s+[\w<>,\[\] ?]+\s+$fn\s*\()""")
+            val sites = decl.findAll(stripped).toList()
+            if (sites.isEmpty()) return@filter true   // 函数不见了也算异常（防被删）
             // 取函数体前 1200 字符（足以覆盖注释 + 归位块 + runCatching 开头）
-            val seg = stripped.substring(idx, minOf(idx + 1200, stripped.length))
-            !(seg.contains("isDispatchThread") && seg.contains("invokeLater"))
+            val guarded = sites.any { m ->
+                val seg = stripped.substring(m.range.first, minOf(m.range.first + 1200, stripped.length))
+                seg.contains("isDispatchThread") && seg.contains("invokeLater")
+            }
+            !guarded
         }
     }
 

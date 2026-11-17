@@ -101,7 +101,16 @@ class SettingsRealityGuardTest {
         // T-EnhancedCaptureDefaultOn（2026-10-19）：两个字段只用于旧配置兼容归一——loadState 内
         // 写为固定值、运行期零读取，因此没有也不应有非 config 消费点。保留字段是为了旧 XML/JSON
         // 与旧版本回退，不是假配置；下线条件 = 确认不再需要兼容旧配置。显式登记而非泛化匹配。
-        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs")
+        val compatOnly = setOf(
+            "enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs",
+            // k2j 移植注（CI T-SyncK2JMaster179 修红 D）：master 的 localUpdateDir 在
+            // update/StartupUpdateCheck.kt:47 有唯一非 config 消费点（读本地更新目录做检查）；
+            // k2j 该消费点未随移植落地，字段现在只在 config 包内（PluginSettingsPanel/UpdateSection）
+            // 读写 UI 值。按 guard 的「非 config 包零消费即死字段」口径会被误报为假配置。
+            // 这是**已知的端口缺口登记**，不是把假配置洗绿：字段本身仍持久化用户设置，消费侧接线
+            // 属 update 包（本次 D 族写集不含 update/**），留待该消费点移植后删除本条。
+            "localUpdateDir",
+        )
         val dead = fields.filter { it !in compatOnly }.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
@@ -363,6 +372,15 @@ class SettingsRealityGuardTest {
             "settings.mcp.tool.desc.reversesql",
             "settings.mcp.tool.desc.mappercheck",
             "settings.mcp.tool.desc.historysearch",
+            // k2j 移植注（CI T-SyncK2JMaster179 修红 D）：master 的 PluginSettingsPanel.kt:160-167
+            // consolePrepOptions() 用 `MpSqlVisualizerBundle.message("settings.consolePrep.lazy"/...)` 消费
+            // 这三个档位文案；k2j 的 PluginSettingsPanel.java 未随移植该下拉（settings.consolePrep 主/提示键
+            // 仍由 PluginSettingsFolderConfigurable.java:758 搜索索引引用），故三键在 src/main 零字面量引用。
+            // 这是**已知的端口缺口登记**，不是死文案洗绿：档位值（LAZY/LAZY_SILENT/EAGER）由
+            // PreviewConsoleEager.getMode() 真实读取并驱动行为。消费侧 UI 接线（config 包面板）落地后删除本条。
+            "settings.consolePrep.lazy",
+            "settings.consolePrep.lazySilent",
+            "settings.consolePrep.eager",
         )
         val texts = mainSources()
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()

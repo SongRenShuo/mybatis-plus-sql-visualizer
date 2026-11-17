@@ -151,7 +151,7 @@ class ExecPsiFailureHintTest {
     @Test
     fun `落点不许自动改写_提示不许引导改 gitignore`() {
         val execSource = java.io.File(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java",
         ).readText()
         for (banned in listOf("shouldRelocateExecToRoot", "notifyExecRootFallbackOnce")) {
             assertFalse(
@@ -160,8 +160,8 @@ class ExecPsiFailureHintTest {
             )
         }
         for (uiFile in listOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycle.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycleKt.java",
         )) {
             val ui = java.io.File(uiFile).readText()
             assertFalse(
@@ -248,10 +248,14 @@ class ExecPsiFailureHintTest {
      */
     @Test
     fun `执行回调不得绕过 showTempFileError`() {
+        // k2j：生产树为 src/main/java/*.java（master 的 .kt 已整树翻译），路径换 .java 对应物。
+        // 原判据针对 master Kotlin 的具名实参形态 `onError = { errorMsg -> resultPanel.showError }`；
+        // Java 翻译后回调改 Positional lambda（无具名实参形态），故按 Java lambda 形态判同一反模式：
+        // `errorMsg -> p.resultPanel.showError(errorMsg)` 直接透传而不过富错误/成因入口。
         val src = java.io.File(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
         ).readText()
-        val bypass = Regex("""onError = \{\s*errorMsg ->\s*resultPanel\.showError""")
+        val bypass = Regex("""errorMsg\s*->\s*p\.resultPanel\.showError\s*\(""")
         assertFalse(
             "执行回调直连 resultPanel.showError 会丢掉临时文件失败的成因与蓝字入口",
             bypass.containsMatchIn(src),
